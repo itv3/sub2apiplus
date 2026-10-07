@@ -25,6 +25,7 @@
 * 入口便宜检查（B5a-09）：目标客户端除宿主机与 ``capture-cli`` 之外还要核对的容器、官方包的复核模块、``plan --audit-only``
   的参数模板（以 ``$`` 开头的项代入同名参数，其余照抄；Codex 为空，沿用脚本里的原形状），以及零请求 smoke 一步登记的
   工具身份摘要（smoke 依赖的模块落在哪几层，哪几层的摘要就要登记）；
+* 入口空跑（B5a-10）：结论文件名的客户端前缀（Codex 为空，结论文件名与改造前逐字相同；同一提交＋同一部署两客户端各一份）；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -149,6 +150,8 @@ _CODEX: Mapping[str, Any] = {
     "zero_request_smoke_module": _module("codex_upgrade_zero_request_smoke"),
     # 零请求 smoke 一步登记的工具身份摘要：Codex smoke 依赖的模块（provenance、账本与总账等）都在 control 层。
     "zero_request_smoke_identity": ("control_sha256",),
+    # 入口空跑结论文件名的客户端前缀（B5a-10）：Codex 为空，与改造前同名。
+    "dryrun_conclusion_prefix": "",
     "project_ledger_dir_name": "upgrade-project-ledger",
     # ---- 部署
     "deploy_receipt_glob": "codex-*-supervisor-enable-*.json",
@@ -241,6 +244,8 @@ _CLAUDE: Mapping[str, Any] = {
     "zero_request_smoke_module": _module("claude_upgrade_zero_request_smoke"),
     # Claude smoke 依赖的 provenance（claude_upgrade_live_request_provenance）在 Claude 身份的 evidence 层，其余在 control 层。
     "zero_request_smoke_identity": ("control_sha256", "evidence_semantics_sha256"),
+    # 入口空跑结论文件名带客户端前缀（B5a-10）：同一提交＋同一部署与 Codex 的结论各一份，互不顶替。
+    "dryrun_conclusion_prefix": "claude-",
     "project_ledger_dir_name": "upgrade-project-ledger-claude",
     # ---- 部署
     "deploy_receipt_glob": "claude-managed-deploy-*.json",
@@ -294,7 +299,6 @@ _CLAUDE: Mapping[str, Any] = {
         "step:job-rehearsal": "B2-10（Job 演练收据模块加适配器参数，Claude 签 official-client-job-rehearsal-receipt/v1）",
         "step:client-launch-probe": "B2-10（客户端启动探测 Claude 版）",
         "step:vc0-closeout": "B2-11（claude_upgrade_vc0_closeout：VC-0 收口续作与 P0 收据）",
-        "tool:entry-dryrun": "B5a-10（入口空跑按客户端起：结论文件名带客户端前缀、绑定该客户端的部署收据）",
         "tool:vc5-admission": "B4-01（Claude 候选采集的 VC-5 准入合同与运行画像路径）",
     },
 }

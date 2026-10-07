@@ -4,11 +4,16 @@
 步骤记成通过，再按方案 E2-05 的验收逐类各改一项（参数、测试文件、指南一行、驱动、部署收据、镜像），核对每次只有
 依赖它的步骤和它们的下游失效、原因写对；另有记录被改、上次失败、快照、产物被改、Job 演练收据不是通过、Formal 建成后
 冻结、账本绝不重建、受管事实算不出来、命令行与退出码。
+
+B5a-10：``deploy-check`` 核对本轮客户端之外每个已纳管客户端的部署也是测试树这一份（整树摘要按该客户端策略在测试树里现算、
+部署一致性各部分逐项比内容），入口门禁 ``--require-deployed-all`` 据此让一次门禁结论对两份部署收据都成立。
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import sys
@@ -532,6 +537,66 @@ class EntryStepsTableAndCliTests(unittest.TestCase):
         original = REPO_ROOT / "tools" / "ci" / "entry_steps.py"
         copy = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver" / "entry_steps.py"
         self.assertEqual(copy.read_bytes(), original.read_bytes())
+
+
+# 测试树里的身份模块替身：按客户端参数读 identity-<客户端>.txt 当整树摘要（真实计算由策略认证模块的用例覆盖）。
+STUB_CERTIFICATION = """
+from pathlib import Path
+def current_identity(client="codex"):
+    return {"tool_files_sha256": (Path(__file__).resolve().parents[2] / f"identity-{client}.txt").read_text().strip()}
+"""
+
+
+class DeployCheckOtherClientsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.tree, self.data = self.root / "tree", self.root / "data"
+        parts = {part for client in es.CT.CLIENTS for part in es.CT.spec(client)["deploy_consistency_parts"]}
+        for side in (self.tree, self.data):
+            for part in sorted(parts):
+                if part.endswith((".md", ".py")):
+                    _write(side / part, f"# {part}\n")
+                else:
+                    _write(side / part / "module.py", "# 受管\n")
+        for relative, content in {"tools/__init__.py": "", "tools/official_client_capture/__init__.py": "",
+                                  "tools/official_client_capture/codex_upgrade_policy_certification.py": STUB_CERTIFICATION,
+                                  "identity-claude.txt": "c" * 64, "identity-codex.txt": "a" * 64}.items():
+            _write(self.tree / relative, content)
+            _write(self.data / relative, content)
+        self.codex = _write(self.data / "control" / "codex-01600-supervisor-enable-20261007t000000z.json",
+                            json.dumps({"status": "passed", "tool_files_sha256": "a" * 64}))
+        self.claude = _write(self.data / "control" / "claude-managed-deploy-20261007t000000z.json",
+                             json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "c" * 64}}))
+
+    def test_other_managed_clients_must_match_the_test_tree(self) -> None:
+        self.assertEqual(es.managed_clients(self.data / "control"), ["codex", "claude"])
+        self.assertEqual(es.deploy_check(self.tree, self.data, except_client="codex"), {"claude": self.claude.name})
+        self.assertEqual(es.deploy_check(self.tree, self.data, except_client="claude"), {"codex": self.codex.name})
+        _write(self.data / "control" / "claude-managed-deploy-20261007t010000z.json",
+               json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "d" * 64}}))
+        _write(self.data / "docs" / "OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md", "# 旧文档\n")
+        with self.assertRaises(es.EntryStepsError) as caught:
+            es.deploy_check(self.tree, self.data, except_client="codex")
+        message = str(caught.exception)
+        self.assertIn("claude-managed-deploy-20261007t010000z.json 登记的整树摘要", message)
+        self.assertIn("部署一致性不符：docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md", message)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(es.main(["deploy-check", "--tree", str(self.tree), "--data-root", str(self.data), "--except", "codex"]), 1)
+        self.assertIn("整树摘要", stdout.getvalue())
+
+    def test_single_managed_client_has_nothing_else_to_check(self) -> None:
+        self.claude.unlink()
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(es.main(["deploy-check", "--tree", str(self.tree), "--data-root", str(self.data), "--except", "codex"]), 0)
+        self.assertEqual(stdout.getvalue().strip(), "")
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(es.main(["deploy-check", "--tree", str(self.tree), "--data-root", str(self.data), "--except", "claude"]), 0)
+        self.assertEqual(stdout.getvalue().strip(), f"codex={self.codex.name}")
 
 
 if __name__ == "__main__":

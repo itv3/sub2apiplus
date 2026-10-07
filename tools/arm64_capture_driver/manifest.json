@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "62f59b0475b34b63c59de80ee43c31609ceb3f76c9454c98d1d61c01cbfece7d",
+      "sha256": "4cc83ffd652118ac8c557d4245ec1b391c6c08a2b93348c20509c9c2323cf8a1",
       "mode": "0600",
-      "bytes": 81768
+      "bytes": 85340
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -22,15 +22,15 @@
     },
     {
       "path": "driver/background-validate.sh",
-      "sha256": "a68dc9061f476ca6aba7ab7579046eb55412cc06b68f6d126d45d0aeee125d92",
+      "sha256": "a3e8467a3dd0492e8dab847a9e3117a70b349d16e059a1cfa0d8d9358dcca5e2",
       "mode": "0700",
-      "bytes": 2530
+      "bytes": 3199
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "d3ea949b9179fb02bf1dcf7a097ed9963cecf9153f2b4b965b5d6138a701818f",
+      "sha256": "183ceea3b0a4871938aee7db28d5519bb4622c9841950f9f423a87c6e15ef5d4",
       "mode": "0700",
-      "bytes": 34808
+      "bytes": 51973
     },
     {
       "path": "driver/build.sh",
@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/client_table.py",
-      "sha256": "69ba33960f2658c2ef935ac5406f02bd83a05c06a2177173a4327f453cc22534",
+      "sha256": "c164bd103f323675713d99a73d8ca84644265aa54f81037c797d459c09aa51f8",
       "mode": "0700",
-      "bytes": 28703
+      "bytes": 29058
     },
     {
       "path": "driver/driver_config.py",
@@ -94,15 +94,15 @@
     },
     {
       "path": "driver/entry-dryrun.sh",
-      "sha256": "3a57345eef124909bf6059b836da6561abe5c813c10c3c1b988d6c4bf5ae002f",
+      "sha256": "de700e4a0e5517182235f530dfca7075e0f7f78b6a12724396f458e23d419e4a",
       "mode": "0700",
-      "bytes": 2950
+      "bytes": 3526
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "bca7b015ba199b7d4d29e130c3a287695750ad49c747ebc061181699168c7851",
+      "sha256": "bbc1cd02625ba8fba74efcda74af7c19847a58bfdfa878631d766b9a5d2fa11e",
       "mode": "0700",
-      "bytes": 39836
+      "bytes": 41408
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -118,9 +118,9 @@
     },
     {
       "path": "driver/entry_dryrun.py",
-      "sha256": "bf40585ccd543d8dce2113e3504d2082ce8c97f141894d7c812eb8bdb9b188ee",
+      "sha256": "9ad12cebb3e96ec620a586e47d39e534ec54a420ee1977654efe4efc526ee751",
       "mode": "0700",
-      "bytes": 26875
+      "bytes": 37212
     },
     {
       "path": "driver/entry_gates.py",
@@ -130,9 +130,9 @@
     },
     {
       "path": "driver/entry_housekeeping.py",
-      "sha256": "b33e1460b8549b4ed03ac24382cec4df5b981789aac7a065c23b09b99b151912",
+      "sha256": "057b6404296c7897e736ea3d2b894aa42f651d927978881ab9020a3946e6d1d5",
       "mode": "0700",
-      "bytes": 30476
+      "bytes": 34481
     },
     {
       "path": "driver/entry_orchestrator.py",
@@ -142,9 +142,9 @@
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "f164437889a9620f26c089c313af3c61f03bf912c8846fc79a65981477f33335",
+      "sha256": "b6f4f66fba26cd448e6e590d7cf216ebcf7fe8dfacb5dfc296a410f2ac501be4",
       "mode": "0700",
-      "bytes": 78824
+      "bytes": 85597
     },
     {
       "path": "driver/env.example.sh",
@@ -388,9 +388,9 @@
     },
     {
       "path": "driver/vc-batch.sh",
-      "sha256": "24269505c7e8a783563a06734b728f653422c02990d7eb3a9373783c35124c3f",
+      "sha256": "a94b32137e9efff2a24053392938afab73304ced10e3a238d948a0d1cb59e1e3",
       "mode": "0700",
-      "bytes": 3533
+      "bytes": 3881
     },
     {
       "path": "driver/vc0-gate-target.sh",
@@ -460,9 +460,9 @@
     },
     {
       "path": "driver/vc5-accept.sh",
-      "sha256": "360d3a59c1040883426c662cc4f658fd84ab5236f1ec510a23b6d988716031c5",
+      "sha256": "bfe7d7c8bbbc3abc326edeb4e92d06ded6effb79000bf5be6c8b53319feecf00",
       "mode": "0700",
-      "bytes": 6039
+      "bytes": 6236
     },
     {
       "path": "driver/vc5-all.sh",
@@ -549,5 +549,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "42e3be7a37f6f326ec88d2e8d068d27fd6e2fde4173892363c4a465decf1ed94"
+  "manifest_sha256": "bcee053bc7d2ed6e83854287b2f7aa5e1f46a8f5f34708cc61c0c1cf52cf9798"
 }

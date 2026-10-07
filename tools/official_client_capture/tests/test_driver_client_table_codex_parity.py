@@ -17,7 +17,8 @@
 
 基线提交读不到（浅克隆）时跳过并写明原因；某个驱动脚本在 B5a-06 之后又改过（内容摘要不再是 ``SHELL_DIGESTS`` 登记的
 那份）时，它的逐行对照跳过——以新的基线提交重新对照：B5a-09 改过的入口便宜检查以 B5a-09 开工时的提交
-（``B5A09_BASELINE_COMMIT``）为新基线再对照一次（``B5A09_SHELL_RESIDUALS``）。本模块读真实仓库的 git 历史，按
+（``B5A09_BASELINE_COMMIT``）为新基线再对照一次（``B5A09_SHELL_RESIDUALS``），B5a-10 改过的批次派发、VC-5 验收与入口门禁
+以 B5a-10 开工时的提交（``B5A10_BASELINE_COMMIT``）为新基线（``LATER_SHELL_BASELINES``）。本模块读真实仓库的 git 历史，按
 ``unit_records.GIT_READERS`` 登记。
 """
 
@@ -513,20 +514,68 @@ B5A09_SHELL_RESIDUALS: dict[str, list[str]] = {
 }
 
 
-class DriverScriptB5a09CodexParityTests(unittest.TestCase):
-    def test_scripts_with_codex_values_match_b5a09_start(self) -> None:
+# B5a-10 改了批次派发、VC-5 验收与入口门禁三个脚本（上面 B5a-06／B5a-08 的逐行对照因此跳过）：以 B5a-10 开工时的提交为新基线，
+# 代入 Codex 取值后再逐行对照。vc-batch.sh 与 vc5-accept.sh 只给后台验证的批次边界与 VC-5 前核对追加客户端参数（Codex 为空数组，
+# 代入后与基线逐字相同）；entry-gates.sh 只多下面登记的几处，每处 Codex 下都等价：
+# * 用法与初始化多了 --require-deployed-all 与它的三个变量（不给这个开关时恒为假或空）；
+# * 参数解析多一个分支（只认 --require-deployed-all）；
+# * 新增 check_deployed_others 与调用它的分支（只在给了 --require-deployed-all 时执行；只有 Codex 纳管的数据根上它也不核对
+#   任何别的客户端）；
+# * 导出门禁记录的来源多一个数组（没给开关时为空，命令行与基线相同）。
+B5A10_BASELINE_COMMIT = "3cf9c165e"
+B5A10_SHELL_DIGESTS: dict[str, str] = {
+    'vc-batch.sh': 'a94b32137e9efff2a24053392938afab73304ced10e3a238d948a0d1cb59e1e3',
+    'vc5-accept.sh': 'bfe7d7c8bbbc3abc326edeb4e92d06ded6effb79000bf5be6c8b53319feecf00',
+    'entry-gates.sh': 'bbc1cd02625ba8fba74efcda74af7c19847a58bfdfa878631d766b9a5d2fa11e',
+}
+B5A10_SHELL_RESIDUALS: dict[str, list[str]] = {
+    'vc-batch.sh': [],
+    'vc5-accept.sh': [],
+    'entry-gates.sh': [
+        '-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+        '-WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0',
+        '+WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0; REQUIRE_DEPLOYED_ALL=false; DEPLOY_OTHERS=""; DEPLOY_OTHERS_SOURCE=()',
+        '+    --require-deployed-all) REQUIRE_DEPLOYED=true; REQUIRE_DEPLOYED_ALL=true; shift ;;',
+        '+check_deployed_others() {',
+        '+  if ! DEPLOY_OTHERS=$(python3 -B "$DRV/entry_steps.py" deploy-check --tree "$TREE" --data-root "$D" --except codex --pycache "$PYC"); then',
+        '+    echo "其余已纳管客户端的部署不是本提交：${DEPLOY_OTHERS}：先受监督部署本提交（交换共享根的部署带上全部已纳管客户端），再跑入口门禁"',
+        '+    echo "ENTRY_GATES_ABORTED：部署与测试树不一致，没有门禁结论；主体目录 ${OUT}"',
+        '+    exit 3',
+        '+  fi',
+        '+  DEPLOY_OTHERS_SOURCE=(--source "deploy_receipts_others=$DEPLOY_OTHERS")',
+        '+}',
+        '+  if [ "$REQUIRE_DEPLOYED_ALL" = true ]; then',
+        '+    check_deployed_others',
+        '+    echo "其余已纳管客户端的部署也是本提交：${DEPLOY_OTHERS:-（没有其余已纳管客户端）}"',
+        '+  fi',
+        '-  --source "deploy_receipt=$DEPLOY" | cut -c1-600',
+        '+  --source "deploy_receipt=$DEPLOY" ${DEPLOY_OTHERS_SOURCE[@]+"${DEPLOY_OTHERS_SOURCE[@]}"} | cut -c1-600',
+    ],
+}
+# 之后各批的新基线（批次、基线提交、改动后的脚本摘要、代入 Codex 取值后的残差）：某个脚本再改过时它那一项跳过，以更新的
+# 一批重新对照。基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 已不再由客户端表给出，按 Codex 的空串代入（见 B5a-09 一段）。
+LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
+    ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
+)
+
+
+class DriverScriptLaterBatchCodexParityTests(unittest.TestCase):
+    def test_scripts_with_codex_values_match_later_batch_starts(self) -> None:
         values = {**_codex_shell_values(), "CT_PENDING_CHECK_PLAN_AUDIT": ""}
-        self.assertEqual(sorted(B5A09_SHELL_DIGESTS), sorted(B5A09_SHELL_RESIDUALS))
-        for name, digest in B5A09_SHELL_DIGESTS.items():
-            with self.subTest(name):
-                text = (DRIVER / name).read_text(encoding="utf-8")
-                if hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
-                    self.skipTest(f"{name} 在 B5a-09 之后又改过：以新的基线提交重新对照")
-                source = git_source(f"tools/arm64_capture_driver/driver/{name}", B5A09_BASELINE_COMMIT)
-                if source is None:
-                    self.skipTest(f"读不到基线提交 {B5A09_BASELINE_COMMIT} 的 {name}")
-                self.assertEqual(residual(codex_effective(source.decode("utf-8"), values), codex_effective(text, values)),
-                                 B5A09_SHELL_RESIDUALS[name])
+        for batch, commit, digests, residuals in LATER_SHELL_BASELINES:
+            self.assertEqual(sorted(digests), sorted(residuals), batch)
+            for name, digest in digests.items():
+                with self.subTest(batch=batch, script=name):
+                    text = (DRIVER / name).read_text(encoding="utf-8")
+                    if hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
+                        self.skipTest(f"{name} 在 {batch} 之后又改过：以新的基线提交重新对照")
+                    source = git_source(f"tools/arm64_capture_driver/driver/{name}", commit)
+                    if source is None:
+                        self.skipTest(f"读不到基线提交 {commit} 的 {name}")
+                    self.assertEqual(residual(codex_effective(source.decode("utf-8"), values), codex_effective(text, values)),
+                                     residuals[name])
 
 
 # ------------------------------------------------------------------------------------------------ 安装脚本与其它模块

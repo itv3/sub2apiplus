@@ -13,8 +13,9 @@
   取值后与基线的差异只有登记的新增与改写行；Codex 的入口步骤表与门禁项输入与基线逐字相同（Claude 的步骤声明只有
   ``STEP_CHANGES_AFTER_B5A08`` 登记的设计变化）。
 基线读不到（浅克隆）时跳过并写明原因；某个文件在 B5a-08 之后又改过（摘要不再是 ``SOURCE_DIGESTS`` 登记的那份）时，它的残差
-对照跳过——以新的基线提交重新对照：B5a-09 改过的入口步骤以 B5a-09 开工时的提交（``B5A09_BASELINE_COMMIT``）为新基线再核一次
-删改的行。本模块读真实仓库的 git 历史，按 ``unit_records.GIT_READERS`` 登记。
+对照跳过——以新的基线提交重新对照：B5a-09、B5a-10 改过的入口步骤分别以该批开工时的提交为新基线再核一次删改的行
+（``LATER_SOURCE_BASELINES``；入口门禁脚本在 B5a-10 之后的对照在 B5a-06 的对照模块里）。本模块读真实仓库的 git 历史，按
+``unit_records.GIT_READERS`` 登记。
 """
 
 from __future__ import annotations
@@ -460,6 +461,17 @@ B5A09_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         '            Input("managed", "identity", "control_sha256"), *tests_trees,',
     ],
 }
+# B5a-10 又改了入口步骤（上面 B5a-09 那一项因此跳过）：以 B5a-10 开工时的提交为新基线，只新增了部署核对的函数与子命令
+# （deploy-check，入口门禁 --require-deployed-all 用），没有删改任何已有的行。
+B5A10_BASELINE_COMMIT = "3cf9c165e"
+B5A10_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_steps.py": "b6f4f66fba26cd448e6e590d7cf216ebcf7fe8dfacb5dfc296a410f2ac501be4",
+}
+B5A10_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/ci/entry_steps.py": []}
+LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
+    ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
+)
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], str]]] = {
     "claude": {
@@ -491,17 +503,18 @@ class SourceResidualCodexParityTests(unittest.TestCase):
             with self.subTest(relative):
                 self.assertEqual(removed_lines(relative, self._source(relative)), expected)
 
-    def test_b5a09_only_rewrote_the_registered_lines(self) -> None:
-        self.assertEqual(sorted(B5A09_SOURCE_DIGESTS), sorted(B5A09_SOURCE_REMOVED_LINES))
+    def test_later_batches_only_rewrote_the_registered_lines(self) -> None:
         self.assertNotIn("codex", STEP_CHANGES_AFTER_B5A08, "Codex 的步骤声明不得改")
-        for relative, digest in B5A09_SOURCE_DIGESTS.items():
-            with self.subTest(relative):
-                if hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest() != digest:
-                    self.skipTest(f"{relative} 在 B5a-09 之后又改过：以新的基线提交重新对照")
-                source = git_source(relative, B5A09_BASELINE_COMMIT)
-                if source is None:
-                    self.skipTest(f"读不到基线提交 {B5A09_BASELINE_COMMIT} 的 {relative}")
-                self.assertEqual(removed_lines(relative, source.decode("utf-8")), B5A09_SOURCE_REMOVED_LINES[relative])
+        for batch, commit, digests, removed in LATER_SOURCE_BASELINES:
+            self.assertEqual(sorted(digests), sorted(removed), batch)
+            for relative, digest in digests.items():
+                with self.subTest(batch=batch, source=relative):
+                    if hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest() != digest:
+                        self.skipTest(f"{relative} 在 {batch} 之后又改过：以新的基线提交重新对照")
+                    source = git_source(relative, commit)
+                    if source is None:
+                        self.skipTest(f"读不到基线提交 {commit} 的 {relative}")
+                    self.assertEqual(removed_lines(relative, source.decode("utf-8")), removed[relative])
 
     def test_entry_gates_script_with_codex_values_differs_only_in_registered_lines(self) -> None:
         old = self._source(ENTRY_GATES)

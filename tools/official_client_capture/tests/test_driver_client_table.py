@@ -656,6 +656,45 @@ class EntryScriptClaudeTests(unittest.TestCase):
             self.assertIn("基线与目标源码树就位", codex.stdout)
             self.assertNotIn('"status"', codex.stdout, "Codex 不调用冻结复核")
 
+    def test_require_deployed_all_checks_every_other_managed_client(self) -> None:
+        """B5a-10：入口门禁 --require-deployed-all 在本轮客户端之外逐一核对已纳管客户端的部署（entry_steps.py deploy-check），
+        核对过的收据进总摘要来源 deploy_receipts_others；任一不符没有门禁结论（退出 3）。"""
+
+        gates = (DRIVER / "entry-gates.sh").read_text(encoding="utf-8")
+        self.assertIn("    --require-deployed-all) REQUIRE_DEPLOYED=true; REQUIRE_DEPLOYED_ALL=true; shift ;;", gates)
+        self.assertIn('--source "deploy_receipt=$DEPLOY" ${DEPLOY_OTHERS_SOURCE[@]+"${DEPLOY_OTHERS_SOURCE[@]}"}', gates)
+        stub = ("from pathlib import Path\ndef current_identity(client='codex'):\n"
+                "    return {'tool_files_sha256': (Path(__file__).resolve().parents[2] / f'identity-{client}.txt').read_text().strip()}\n")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tree, data = root / "tree", root / "data"
+            parts = {part for client in CT.CLIENTS for part in CT.spec(client)["deploy_consistency_parts"]}
+            for side in (tree, data):
+                for part in parts:
+                    target = side / part if part.endswith((".md", ".py")) else side / part / "module.py"
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(f"# {part}\n", encoding="utf-8")
+                for relative, content in {"tools/__init__.py": "", "tools/official_client_capture/__init__.py": "", "identity-claude.txt": "c" * 64,
+                                          "tools/official_client_capture/codex_upgrade_policy_certification.py": stub}.items():
+                    (side / relative).write_text(content, encoding="utf-8")
+            (data / "control").mkdir()
+            receipt = data / "control" / "claude-managed-deploy-20261007t000000z.json"
+            receipt.write_text(json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "c" * 64}}), encoding="utf-8")
+            (data / "control" / "codex-01600-supervisor-enable-20261007t000000z.json").write_text(
+                json.dumps({"status": "passed", "tool_files_sha256": "a" * 64}), encoding="utf-8")
+            body = (self.function("entry-gates.sh", "check_deployed_others") + 'DEPLOY_OTHERS_SOURCE=()\ncheck_deployed_others\n'
+                    'printf "%s\\n" "${DEPLOY_OTHERS_SOURCE[@]}"\n')
+            env = {"DRV": str(DRIVER), "TREE": str(tree), "D": str(data), "PYC": str(root / "pyc"), "OUT": str(root / "out"),
+                   "PYTHONDONTWRITEBYTECODE": "1"}
+            checked = self.shell(body, "codex", **env)
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            self.assertEqual(checked.stdout.splitlines(), ["--source", f"deploy_receipts_others=claude={receipt.name}"])
+            (data / "docs" / "CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md").write_text("# 旧指南\n", encoding="utf-8")
+            refused = self.shell(body, "codex", **env)
+            self.assertEqual(refused.returncode, 3, refused.stdout + refused.stderr)
+            self.assertIn("其余已纳管客户端的部署不是本提交", refused.stdout)
+            self.assertIn("docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md", refused.stdout)
+
     def test_entry_gates_and_guard_bind_the_client(self) -> None:
         gates = (DRIVER / "entry-gates.sh").read_text(encoding="utf-8")
         deployed = self.function("entry-gates.sh", "check_deployed")
@@ -810,7 +849,11 @@ class FixAndContinueDeployScopeTests(unittest.TestCase):
 
 
 class PendingToolsClaudeTests(unittest.TestCase):
-    def test_entry_dryrun_and_vc5_admission_refuse_claude_until_wired(self) -> None:
+    def test_entry_dryrun_is_wired_and_vc5_admission_still_refuses_claude(self) -> None:
+        """B5a-10 落实了入口空跑（客户端表不再登记 tool:entry-dryrun）：Claude 的空跑按 Claude 的部署收据起，数据根没有它时报的是
+        缺收据，不是「尚未接入」；VC-5 准入仍待 B4-01。"""
+
+        self.assertIsNone(CT.pending("claude", "tool:entry-dryrun"))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = driver_tests._DriverFixture(root)
@@ -818,9 +861,11 @@ class PendingToolsClaudeTests(unittest.TestCase):
             env.write_text(claude_env_text(fixture), encoding="utf-8")
             import argparse
             args = argparse.Namespace(runroot=fixture.runroot, data_root=fixture.data_root, vc_env=env, bundle=root / "x.bundle",
-                                      branch="claude/x", commit="a" * 40, opening=False, reexecute=False, to=None, entry=root / "entry.sh")
-            with self.assertRaisesRegex(dr.DryRunError, "入口空跑尚未接入：B5a-10"):
+                                      branch="claude/x", commit="a" * 40, opening=False, reexecute=False, to=None, entry=root / "entry.sh",
+                                      unit_inherit_request=None)
+            with self.assertRaisesRegex(Exception, "数据根没有受管工具部署收据") as caught:
                 dr.start(args)
+            self.assertEqual(type(caught.exception).__name__, "ValidationError")
             admission = driver_tests.load_script("vc5_admission")
             parser = load_parse_env()
             config = parser.parse(env.read_text(encoding="utf-8"))

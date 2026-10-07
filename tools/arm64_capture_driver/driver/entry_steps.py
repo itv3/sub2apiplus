@@ -36,6 +36,10 @@
 * ``deploy-consistency --tree <测试树> --data-root <数据根> [--client <客户端>]``：入口门禁在跑之前核对数据根部署的就是
   测试树这一份——受管整树（含测试，不计字节码）、指南、部署脚本副本逐项比内容摘要（整树身份不含测试目录，只比它会放过
   「测试改了、还没重新部署」）；比哪几项按客户端（缺省 codex）；一致退出 0，不一致退出 1 并列出不一致的项。
+* ``deploy-check --tree <测试树> --data-root <数据根> --except <客户端> [--pycache <目录>]``（B5a-10）：本轮客户端之外每个已纳管
+  客户端（数据根 control 里已有它的部署收据）的部署也是测试树这一份——它最新的部署收据登记的整树摘要等于测试树按它的策略
+  现算的整树摘要，部署一致性各部分也相同。入口门禁 ``--require-deployed-all``（两客户端都纳管时后台验证用）据此让一次门禁
+  结论对部署事务签出的每一份收据都成立。全部一致退出 0，打印「客户端=收据文件名」；任一不符退出 1 并写明哪一项。
 
 参数取自环境变量（驱动 ``source lib.sh`` 后由 ``parse_env.py`` 导出）；入口门禁的源码提交取参数 ``ENTRY_COMMIT``。
 退出码：0 全部沿用或冻结（实时类不计）；1 有步骤要重做；2 用法或配置错误；3 有步骤被阻塞。
@@ -754,6 +758,88 @@ def deploy_consistency(tree: Path, data_root: Path, client: str = "codex") -> li
     return mismatch
 
 
+# 测试树里按某个客户端的策略算整树摘要（与入口门禁 check_deployed 同一调用：不读身份记忆化，字节码进门禁的字节码目录）。
+TREE_TOOL_FILES_CODE = ("import sys; from tools.official_client_capture import codex_upgrade_policy_certification as pc; "
+                        "print(pc.current_identity(*sys.argv[1:])['tool_files_sha256'])")
+
+
+def managed_clients(control: Path) -> list[str]:
+    """已纳管的客户端：control 目录里已有它的部署收据（与驱动 install.py、受管部署器同一判据），按客户端表顺序。"""
+
+    return [client for client in CT.CLIENTS
+            if any(path.is_file() and not path.is_symlink() for path in Path(control).glob(CT.spec(client)["deploy_receipt_glob"]))]
+
+
+def latest_deploy_receipt(control: Path, client: str) -> tuple[Path, dict[str, Any]]:
+    """该客户端最新的部署收据（按文件名里的时间戳，规则与驱动 install.py 相同）及其内容；没有、同一时刻两份、不是 JSON 对象都报错。"""
+
+    spec = CT.spec(client)
+    separator = spec["deploy_receipt_stamp_separator"]
+    candidates = sorted((path for path in Path(control).glob(spec["deploy_receipt_glob"]) if path.is_file() and not path.is_symlink()),
+                        key=lambda path: path.name.split(separator, 1)[1].lower())
+    if not candidates:
+        raise EntryStepsError(f"control 目录没有 {client} 的部署收据：{control}")
+    if len(candidates) > 1 and (candidates[-1].name.split(separator, 1)[1].lower()
+                                == candidates[-2].name.split(separator, 1)[1].lower()):
+        raise EntryStepsError(f"{client} 同一时刻存在两份部署收据，无法唯一确定最新部署")
+    try:
+        payload = json.loads(candidates[-1].read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise EntryStepsError(f"部署收据不可读：{candidates[-1]}：{error}") from error
+    if not isinstance(payload, dict):
+        raise EntryStepsError(f"部署收据不是 JSON 对象：{candidates[-1]}")
+    return candidates[-1], payload
+
+
+def tree_tool_files_sha256(tree: Path, client: str, *, pycache: Path | None = None) -> str:
+    """测试树按客户端策略现算的整树摘要（子进程在测试树里运行，不读身份记忆化）。"""
+
+    environment = {key: value for key, value in os.environ.items() if key != "CODEX_UPGRADE_IDENTITY_MEMO"}
+    environment["PYTHONPATH"] = "."
+    if pycache is not None:
+        environment["PYTHONPYCACHEPREFIX"] = str(pycache)
+    else:
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    completed = subprocess.run([sys.executable, "-c", TREE_TOOL_FILES_CODE, *CT.spec(client)["identity_args"]], cwd=str(tree),
+                               env=environment, capture_output=True, text=True, timeout=900, stdin=subprocess.DEVNULL)
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if completed.returncode != 0 or not lines or not re.fullmatch(r"[0-9a-f]{64}", lines[-1]):
+        raise EntryStepsError(f"测试树里算不出 {client} 的整树摘要（退出码 {completed.returncode}）：{completed.stderr.strip()[-300:]}")
+    return lines[-1]
+
+
+def deploy_check(tree: Path, data_root: Path, *, except_client: str, pycache: Path | None = None) -> dict[str, str]:
+    """B5a-10：``except_client``（本轮客户端，入口门禁已按它核对过部署）之外每个已纳管客户端的部署也是测试树这一份。
+
+    逐客户端核对两件事：最新部署收据登记的整树摘要等于测试树按该客户端策略现算的整树摘要；部署一致性各部分（受管整树含
+    测试、指南、部署脚本副本）与测试树逐项相同。返回 客户端 → 部署收据文件名；任一不符抛 ``EntryStepsError``（列出全部）。"""
+
+    control = Path(data_root) / "control"
+    checked: dict[str, str] = {}
+    problems: list[str] = []
+    for client in managed_clients(control):
+        if client == except_client:
+            continue
+        try:
+            path, payload = latest_deploy_receipt(control, client)
+            key = CT.spec(client)["deploy_receipt_identity_key"]
+            identity = payload if key is None else payload.get(key)
+            recorded = identity.get("tool_files_sha256") if isinstance(identity, Mapping) else None
+            actual = tree_tool_files_sha256(Path(tree), client, pycache=pycache)
+        except EntryStepsError as error:
+            problems.append(str(error))
+            continue
+        if recorded != actual:
+            problems.append(f"{client} 的部署收据 {path.name} 登记的整树摘要（{recorded}）不是测试树的（{actual}）")
+        mismatch = deploy_consistency(Path(tree), Path(data_root), client)
+        if mismatch:
+            problems.append(f"{client} 的部署一致性不符：{' '.join(mismatch)}")
+        checked[client] = path.name
+    if problems:
+        raise EntryStepsError("；".join(problems))
+    return checked
+
+
 def _value_entry(item: Input, value: str, **detail: Any) -> dict[str, Any]:
     return {"category": item.category, "name": item.name, "sha256": _sha256_text(f"{item.name}={value}"),
             "detail": {"value": value[:300], **detail}}
@@ -1314,6 +1400,11 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     command.add_argument("--tree", required=True)
     command.add_argument("--data-root", required=True)
     command.add_argument("--client", choices=CT.CLIENTS, default=CT.DEFAULT_CLIENT, help="按哪个客户端的部署一致性各部分核对（缺省 codex）")
+    command = sub.add_parser("deploy-check", help="B5a-10：本轮客户端之外每个已纳管客户端的部署也是测试树这一份（整树摘要与部署一致性）")
+    command.add_argument("--tree", required=True)
+    command.add_argument("--data-root", required=True)
+    command.add_argument("--except", dest="except_client", choices=CT.CLIENTS, required=True, help="本轮客户端（入口门禁已核对过它）")
+    command.add_argument("--pycache", default=None, help="测试树算整树摘要时的字节码目录（入口门禁的 PYTHONPYCACHEPREFIX）")
     return parser.parse_args(argv)
 
 
@@ -1331,6 +1422,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             mismatch = deploy_consistency(Path(args.tree), Path(args.data_root), args.client)
             print(" ".join(mismatch) if mismatch else "一致：" + " ".join(CT.spec(args.client)["deploy_consistency_parts"]))
             return 1 if mismatch else 0
+        if args.command == "deploy-check":
+            try:
+                checked = deploy_check(Path(args.tree), Path(args.data_root), except_client=args.except_client,
+                                       pycache=Path(args.pycache) if args.pycache else None)
+            except EntryStepsError as error:
+                print(str(error))
+                return 1
+            print(" ".join(f"{client}={name}" for client, name in checked.items()))
+            return 0
         ctx = _context(args)
         if args.command == "inputs":
             print(json.dumps(resolve_inputs(_step(args.step, ctx), ctx), ensure_ascii=False, indent=2))

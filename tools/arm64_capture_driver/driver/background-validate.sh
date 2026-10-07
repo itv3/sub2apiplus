@@ -10,6 +10,10 @@
 #   stop [--reason <原因>]   停下在跑的后台验证（修复轮跑定向回归之前）
 #   check-boundary            批次边界：当前部署的结论 failed／aborted 退出 3（拒绝派发下一批），其余退出 0
 #   require-passed            VC-5 验收前：当前部署的结论是 passed 才退出 0，否则退出 3
+# 按客户端（B5a-10）：本轮客户端（参数 CLIENT）的部署收据决定 start 绑定哪一份、check-boundary／require-passed 取哪一份所绑定的
+#   结论（客户端参数取客户端表，Codex 为空，命令行与改造前相同）。两客户端都纳管时全量门禁只跑一次、结论绑定两份收据：
+#   另一客户端的轮次 start 时查到同一提交与部署已有在跑或已有结论就不再起，只登记自己的入口空跑，门禁通过后两客户端的
+#   入口空跑都接上（见 background_validation.py）。
 #   status                    打印全部结论
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -24,9 +28,10 @@ case "$command" in
     rest=()
     for arg in "$@"; do if [ "$arg" = --no-dryrun ]; then extra=(); else rest+=("$arg"); fi; done
     exec "${BV[@]}" start --runroot "$RUNROOT" --data-root "$D" --vc-env "$ARM64_VC_ENV" \
-      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${rest[@]+"${rest[@]}"} ;;
+      --bundle "$bundle" --branch "$branch" --commit "$commit" ${extra[@]+"${extra[@]}"} ${rest[@]+"${rest[@]}"} \
+      ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   stop) exec "${BV[@]}" stop --runroot "$RUNROOT" "$@" ;;
-  check-boundary|require-passed) exec "${BV[@]}" "$command" --runroot "$RUNROOT" --data-root "$D" ;;
+  check-boundary|require-passed) exec "${BV[@]}" "$command" --runroot "$RUNROOT" --data-root "$D" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} ;;
   status) exec "${BV[@]}" status --runroot "$RUNROOT" ;;
   *) echo "用法：bash background-validate.sh start|stop|check-boundary|require-passed|status …" >&2; exit 2 ;;
 esac

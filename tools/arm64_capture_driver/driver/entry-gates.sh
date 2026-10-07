@@ -13,6 +13,9 @@
 #   regression：定向回归（E4-01，修复轮的部署前提）：只含采集工具测试组，全集通过下只执行静态依赖闭包里有改动文件的测试
 #     单元；改动落在闭包选不出的地方（后端、前端、文档、出站规格）时用 --with-gates <门禁项,…> 人工补门禁项。
 # --with-gates（E4-01）：给任一组合补门禁项（pre-A3 除外），逗号分隔。
+# --require-deployed-all（B5a-10）：同 --require-deployed，另核对本轮客户端之外每个已纳管客户端的部署也是本提交（整树摘要与
+#   部署一致性，entry_steps.py deploy-check）；两客户端都纳管时后台验证用它，一次门禁结论对部署事务签出的每一份收据都成立，
+#   核对过的收据写进总摘要来源的 deploy_receipts_others。
 # --require-deployed（E4-01）：任一组合都先核对数据根部署的就是本提交（含 pre-A3 的组合本来就核对）；后台验证用它把结论
 #   绑定到这次部署。
 # --wait-lock <秒>（E4-01）：同一工作目录已有入口门禁在跑时排队等，最多等这么久（缺省 0：直接拒绝并发）；后台验证用。
@@ -45,7 +48,7 @@
 #
 # 用法（采集主机 root；make test 里有挂断检测用例，必须 setsid -f 启动，不能 nohup）：
 #   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] \
-#     [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
+#     [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
 #     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] \
 #     [--unit-inherit-request <JSON> | --unit-inherit-propose <新目录>] [--unit-inherit-stage pre-ledger|post-ledger|formal:<campaign_id>] \
@@ -60,13 +63,13 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
 PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
 AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=(); AUDIT_POLICY_ARGS=()
-WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0
+WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0; REQUIRE_DEPLOYED_ALL=false; DEPLOY_OTHERS=""; DEPLOY_OTHERS_SOURCE=()
 FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=(); GO_WARMUP=auto
 UNIT_INHERIT_REQUEST=""; UNIT_INHERIT_STAGE=pre-ledger; UNIT_INHERIT_ARGS=(); UNIT_INHERIT_PROPOSE=""
 while [ "$#" -gt 0 ]; do
@@ -86,6 +89,7 @@ while [ "$#" -gt 0 ]; do
     --input-scope) INPUT_SCOPE_ARGS+=(--input-scope "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
+    --require-deployed-all) REQUIRE_DEPLOYED=true; REQUIRE_DEPLOYED_ALL=true; shift ;;
     --wait-lock) WAIT_LOCK="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --policy-activation) POLICY_ACTIVATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-certification) PRE_A3_CERTIFICATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -268,6 +272,15 @@ PYDEPLOY
     exit 3
   fi
 }
+# B5a-10：--require-deployed-all 时本轮客户端之外每个已纳管客户端也核对（见文件头），核对过的收据记进总摘要来源。
+check_deployed_others() {
+  if ! DEPLOY_OTHERS=$(python3 -B "$DRV/entry_steps.py" deploy-check --tree "$TREE" --data-root "$D" --except "$CT_CLIENT" --pycache "$PYC"); then
+    echo "其余已纳管客户端的部署不是本提交：${DEPLOY_OTHERS}：先受监督部署本提交（交换共享根的部署带上全部已纳管客户端），再跑入口门禁"
+    echo "ENTRY_GATES_ABORTED：部署与测试树不一致，没有门禁结论；主体目录 ${OUT}"
+    exit 3
+  fi
+  DEPLOY_OTHERS_SOURCE=(--source "deploy_receipts_others=$DEPLOY_OTHERS")
+}
 PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_PARENT=""; DEPLOY=""
 # B5a-04：pre-A3 认证模块的 plan／find-reusable／issue／record-reuse 与策略认证按本轮客户端（参数 CLIENT，缺省 codex）。
 # B5a-06 起模块名与追加的客户端参数取客户端表（CT_PRE_A3_MODULE、CT_POLICY_CERTIFICATION_MODULE、CT_CLIENT_ARGV）：Codex
@@ -277,6 +290,10 @@ if [ "$PROFILE" != entry ] && [ "$PROFILE" != pre-a3 ] && [ "$REQUIRE_DEPLOYED" 
   echo "=== 部署绑定 $(utc_now)"
   check_deployed
   echo "数据根部署的就是本提交：部署收据 ${DEPLOY}"
+  if [ "$REQUIRE_DEPLOYED_ALL" = true ]; then
+    check_deployed_others
+    echo "其余已纳管客户端的部署也是本提交：${DEPLOY_OTHERS:-（没有其余已纳管客户端）}"
+  fi
 fi
 if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
   echo "=== pre-A3 认证：部署绑定与沿用判断 $(utc_now)"
@@ -397,7 +414,7 @@ python3 -B "$DRV/entry_gates.py" export --manifest "$OUT/gates-manifest.json" --
   --host "$(hostname -s)" --architecture "$(python3 -c 'import platform; print(platform.system().lower() + "/" + platform.machine())')" \
   --bytecode-cache "$PYC" --source "bundle=$PBUNDLE" --source "branch=$PBRANCH" --source "commit=$PCOMMIT" --source "tree_head=$TREE_HEAD" \
   --source "history_test_tree=$HISTORY_TEST_TREE" --source "node_modules_source=$NM_DIR/node_modules" --source "pre_a3=$PRE_A3_MODE" \
-  --source "deploy_receipt=$DEPLOY" | cut -c1-600
+  --source "deploy_receipt=$DEPLOY" ${DEPLOY_OTHERS_SOURCE[@]+"${DEPLOY_OTHERS_SOURCE[@]}"} | cut -c1-600
 GATES_STATUS=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['status'])" "$OUT/entry-gates.json")
 if [ "$PROFILE" = regression ]; then
   # 定向回归选出了哪些测试单元；一个都没选出时提示人工补门禁项（改动不在任何测试单元的静态依赖闭包里）。

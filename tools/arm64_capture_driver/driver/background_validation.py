@@ -23,6 +23,18 @@
 
 B-09 可提供当前上下文与结束时校时凭证，覆盖完整才签发全集收据；到期自动重跑，撤销后可用 ``--rerun-full-set``。
 
+两客户端都已纳管时（B5a-10；数据根 ``control`` 里两客户端都有部署收据）：仓库全量门禁两客户端只跑一次（测试集合已含 Claude
+测试），结论按「提交＋部署收据集合」绑定——集合是每个已纳管客户端最新的那一份（交换共享根的一次部署即该事务签出的每一份，
+B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘要换成集合摘要；入口门禁带 ``--require-deployed-all``，本轮
+客户端之外每个已纳管客户端的部署也核对是本提交，门禁结束时集合必须没变，否则判中止。两客户端的轮次各有自己的 RUNROOT，
+所以另在数据根 ``control/background-validation/`` 登记「提交＋集合 → 结论文件」：另一客户端（另一 RUNROOT）的 start 查到
+同一提交与集合已有在跑或已有结论就不再起，只把自己的入口空跑登记上（``.peer-<客户端>.json``），门禁通过后两客户端的入口
+空跑都接着起（已经通过的当场接上）；起新的一次时，登记里其它提交或集合的在跑验证一并停下（部署已经换了，它们不再有用）。
+搭上的轮次在自己的运行根 ``background-validation/attached/`` 留一个指向那份结论的指针（``background-validation-attached/v1``），
+``stop`` 与 ``status`` 也覆盖它：哪个客户端的修复轮跑定向回归前 ``stop``，都停得下本轮正在用的那一次验证。
+``check-boundary``／``require-passed`` 按 ``--client`` 取该客户端当前部署收据所绑定的结论：先找本 RUNROOT，再找数据根的登记。
+只有一个客户端纳管时结论、文件名与命令行与改造前逐字相同（不写 ``deployments``，不登记）。
+
 子命令：
 
 * ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：
@@ -32,10 +44,11 @@ B-09 可提供当前上下文与结束时校时凭证，覆盖完整才签发全
   有采集在跑就让路），结果记在本结论的 ``dryrun`` 字段。
 * ``run``（内部）：跑入口门禁，按结论写状态。收到 SIGTERM 时把它转给入口门禁（执行器会终止全部单元会话）。
 * ``stop --runroot [--reason]``：停下在跑的后台验证并标 superseded。修复轮跑定向回归之前用：同一台机器同一时间只能有
-  一个调度器，上一轮的验证也已作废。
-* ``check-boundary --runroot --data-root``：批次边界——取最新部署收据绑定的结论：failed／aborted 退出 3（拒绝派发下一批，
-  打印没通过的门禁与日志位置）；passed、running 退出 0；没有结论（没起、被停下或进程已经不在）退出 0 并提示先 start。
-* ``require-passed --runroot --data-root``：VC-5 验收前——最新部署绑定的结论是 passed 才退出 0，否则退出 3。
+  一个调度器，上一轮的验证也已作废。两客户端都纳管时连本运行根搭上的（别的运行根发起的）那一次一起停。
+* ``check-boundary --runroot --data-root [--client]``：批次边界——取该客户端（缺省 codex）最新部署收据绑定的结论：failed／
+  aborted 退出 3（拒绝派发下一批，打印没通过的门禁与日志位置）；passed、running 退出 0；没有结论（没起、被停下或进程已经
+  不在）退出 0 并提示先 start。
+* ``require-passed --runroot --data-root [--client]``：VC-5 验收前——该客户端最新部署绑定的结论是 passed 才退出 0，否则退出 3。
 * ``status --runroot``：打印全部结论（JSON）。
 
 退出码：0 通过或放行；2 用法或环境错误；3 拒绝（有失败结论、要求通过而没有通过结论）。
@@ -100,6 +113,15 @@ NICENESS = 10
 STOP_GRACE_SECONDS = 60.0
 # 同一后台工作目录的既有进程尚在收尾时，入口锁最多等这么久。
 WAIT_LOCK_SECONDS = 7200
+# 两客户端都纳管时（B5a-10）：数据根 control 下的跨轮次登记目录与登记文件合同。
+REGISTRY_DIRECTORY = "background-validation"
+REGISTRY_SCHEMA = "background-validation-registry/v1"
+PEER_SCHEMA = "background-validation-peer/v1"
+# 另一客户端搭同一次验证时只比这几项输入合同：参数文件、运行目录与是否接空跑本来就随客户端与轮次不同。
+CLIENT_SPECIFIC_INPUTS = frozenset({"vc_env_sha256", "work", "then_dryrun"})
+# 搭上的轮次在自己运行根留的指针（子目录，不混进本运行根的结论列表）。
+ATTACHED_DIRECTORY = "attached"
+ATTACHED_SCHEMA = "background-validation-attached/v1"
 
 
 class ValidationError(RuntimeError):
@@ -185,8 +207,97 @@ def latest_deployment(data_root: Path, client: str = "codex") -> dict[str, Any]:
     return {"receipt": path.name, "sha256": _sha256_file(path), "identity": {field: identity.get(field) for field in IDENTITY_FIELDS}}
 
 
-def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any]) -> Path:
-    return Path(runroot) / DIRECTORY / f"{commit[:12]}-{str(deployment['sha256'])[:12]}.json"
+def managed_clients(data_root: Path) -> list[str]:
+    """已纳管的客户端：数据根 control 里已有它的部署收据（与驱动 install.py、受管部署器同一判据），按客户端表顺序。"""
+
+    control = Path(data_root) / "control"
+    return [client for client in DEPLOY_CLIENTS
+            if any(path.is_file() and not path.is_symlink() for path in control.glob(DEPLOY_RECEIPT_GLOBS[client]))]
+
+
+def deployment_set(data_root: Path) -> dict[str, dict[str, Any]] | None:
+    """两个及以上客户端已纳管时，每个已纳管客户端最新的部署收据（B5a-10，见模块说明）；只有一个客户端纳管时返回 None。"""
+
+    clients = managed_clients(data_root)
+    if len(clients) < 2:
+        return None
+    return {client: latest_deployment(data_root, client) for client in clients}
+
+
+def set_sha256(deployments: Mapping[str, Mapping[str, Any]]) -> str:
+    """部署收据集合的摘要：客户端 → 收据摘要，按客户端排序后的规范 JSON。"""
+
+    canonical = json.dumps({client: str(item["sha256"]) for client, item in sorted(deployments.items())}, sort_keys=True,
+                           separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def binding_key(deployment: Mapping[str, Any], deployments: Mapping[str, Mapping[str, Any]] | None = None) -> str:
+    """结论文件名与后台工作目录用的部署摘要：只有一个客户端纳管时是那份部署收据的摘要（与改造前相同），否则是集合摘要。"""
+
+    return set_sha256(deployments) if deployments else str(deployment["sha256"])
+
+
+def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any],
+                deployments: Mapping[str, Mapping[str, Any]] | None = None) -> Path:
+    return Path(runroot) / DIRECTORY / f"{commit[:12]}-{binding_key(deployment, deployments)[:12]}.json"
+
+
+def registry_dir(data_root: Path) -> Path:
+    return Path(data_root) / "control" / REGISTRY_DIRECTORY
+
+
+def registry_path(data_root: Path, commit: str, deployments: Mapping[str, Mapping[str, Any]]) -> Path:
+    return registry_dir(data_root) / f"{commit[:12]}-{set_sha256(deployments)[:12]}.json"
+
+
+def _read_kind(path: Path, schema: str) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) and payload.get("schema_version") == schema else None
+
+
+def registrations(data_root: Path) -> list[tuple[Path, dict[str, Any]]]:
+    """数据根登记的全部「提交＋集合 → 结论文件」。"""
+
+    found = []
+    directory = registry_dir(data_root)
+    if directory.is_dir() and not directory.is_symlink():
+        for path in sorted(directory.glob("*.json")):
+            if ".peer-" in path.name:
+                continue
+            payload = _read_kind(path, REGISTRY_SCHEMA)
+            if payload is not None:
+                found.append((path, payload))
+    return found
+
+
+def peers(registration: Path) -> list[dict[str, Any]]:
+    """搭这次验证的其它客户端的入口空跑登记（``<登记名>.peer-<客户端>.json``）。"""
+
+    found = []
+    for path in sorted(Path(registration).parent.glob(f"{Path(registration).stem}.peer-*.json")):
+        payload = _read_kind(path, PEER_SCHEMA)
+        if payload is not None:
+            found.append(payload)
+    return found
+
+
+def attached(runroot: Path) -> list[tuple[Path, dict[str, Any]]]:
+    """本运行根搭上的、别的运行根发起的后台验证结论（指针在 ``attached/`` 下；只有两客户端都纳管时才会有）。"""
+
+    found = []
+    directory = Path(runroot) / DIRECTORY / ATTACHED_DIRECTORY
+    if directory.is_dir() and not directory.is_symlink():
+        for pointer in sorted(directory.glob("*.json")):
+            entry = _read_kind(pointer, ATTACHED_SCHEMA)
+            target = Path(str((entry or {}).get("result") or ""))
+            payload = _read(target) if entry is not None and target.is_absolute() else None
+            if payload is not None:
+                found.append((target, payload))
+    return found
 
 
 def results(runroot: Path) -> list[tuple[Path, dict[str, Any]]]:
@@ -207,11 +318,27 @@ def effective_status(payload: Mapping[str, Any]) -> str:
     return status
 
 
-def for_deployment(runroot: Path, deployment: Mapping[str, Any]) -> tuple[Path, dict[str, Any]] | None:
-    """绑定这次部署的结论（同一部署验证过多个提交时取最后开始的一份）。"""
+def _binds(payload: Mapping[str, Any], deployment: Mapping[str, Any], client: str | None) -> bool:
+    """结论是否绑定了这份部署收据：本身发起时绑定的那份，或两客户端都纳管时集合里该客户端的那份（B5a-10）。"""
 
-    bound = [(path, payload) for path, payload in results(runroot)
-             if (payload.get("deployment") or {}).get("sha256") == deployment["sha256"]]
+    if (payload.get("deployment") or {}).get("sha256") == deployment["sha256"]:
+        return True
+    bound = (payload.get("deployments") or {}).get(client) if client else None
+    return isinstance(bound, Mapping) and bound.get("sha256") == deployment["sha256"]
+
+
+def for_deployment(runroot: Path, deployment: Mapping[str, Any], *, client: str | None = None,
+                   data_root: Path | None = None) -> tuple[Path, dict[str, Any]] | None:
+    """绑定这次部署的结论（同一部署验证过多个提交时取最后开始的一份）。给了 ``client`` 时另认集合里该客户端的那份；本 RUNROOT
+    找不到而给了 ``data_root`` 时再按数据根的登记找（另一客户端的轮次发起的同一次验证，B5a-10）。"""
+
+    bound = [(path, payload) for path, payload in results(runroot) if _binds(payload, deployment, client)]
+    if not bound and data_root is not None and client is not None:
+        for _registration, entry in registrations(data_root):
+            target = Path(str(entry.get("result") or ""))
+            payload = _read(target) if target.is_absolute() else None
+            if payload is not None and _binds(payload, deployment, client):
+                bound.append((target, payload))
     return max(bound, key=lambda item: (str(item[1].get("started_at_utc")), item[0].name)) if bound else None
 
 
@@ -237,7 +364,8 @@ def _terminate(payload: Mapping[str, Any]) -> None:
 
 def stop(runroot: Path, reason: str, *, keep: Path | None = None, with_dryruns: bool = True) -> list[str]:
     """停下在跑的后台验证（``keep`` 除外），标 superseded；``with_dryruns`` 时连后台验证接上的入口空跑一起停（E4-02：空跑与
-    前台入口门禁共用调度器和入口门禁工作目录，不停会挡住修复轮的定向回归）。"""
+    前台入口门禁共用调度器和入口门禁工作目录，不停会挡住修复轮的定向回归）。两客户端都纳管时，本运行根搭上的（别的运行根
+    发起的）那一次也停（B5a-10）。"""
 
     stopped = []
     if with_dryruns and (HERE / "entry_dryrun.py").is_file():
@@ -248,7 +376,7 @@ def stop(runroot: Path, reason: str, *, keep: Path | None = None, with_dryruns: 
                 sys.modules["entry_dryrun_sibling"] = module
                 spec.loader.exec_module(module)
             stopped += [f"entry-dryrun/{name}" for name in module.stop(runroot, reason)]
-    for path, _payload in results(runroot):
+    for path, _payload in [*results(runroot), *attached(runroot)]:
         current = _read(path)   # 紧挨着写之前再读一次：刚写完结论的不再改
         if path == keep or current is None or current.get("status") != "running":
             continue
@@ -260,7 +388,8 @@ def stop(runroot: Path, reason: str, *, keep: Path | None = None, with_dryruns: 
 
 
 def start(args: argparse.Namespace) -> dict[str, Any]:
-    """同一运行根串行登记启动，避免两个入口同时读到空结论而重复派发。"""
+    """同一运行根串行登记启动，避免两个入口同时读到空结论而重复派发。两客户端都纳管时另取数据根登记目录的锁（先运行根、
+    后登记目录，顺序固定）：两个客户端的轮次各在自己的运行根里 start，也只起一次。"""
     root = Path(args.runroot) / DIRECTORY
     if any(path.is_symlink() for path in (root, *root.parents)):
         raise ValidationError("后台验证运行根不得含符号链接")
@@ -268,18 +397,85 @@ def start(args: argparse.Namespace) -> dict[str, Any]:
     fd = os.open(root / ".start.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
-        return _start_locked(args)
+        deployments = deployment_set(args.data_root)
+        if deployments is None:
+            return _start_locked(args)
+        registry = registry_dir(args.data_root)
+        if any(path.is_symlink() for path in (registry, *registry.parents)):
+            raise ValidationError("后台验证登记目录不得含符号链接")
+        registry.mkdir(mode=0o700, parents=True, exist_ok=True)
+        shared = os.open(registry / ".start.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(shared, fcntl.LOCK_EX)
+            return _start_locked(args, deployments=deployments)
+        finally:
+            os.close(shared)
     finally:
         os.close(fd)
 
 
-def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
+def _shared_contract(inputs: Any) -> dict[str, Any]:
+    return {key: value for key, value in (inputs or {}).items() if key not in CLIENT_SPECIFIC_INPUTS}
+
+
+def _register_peer(args: argparse.Namespace, registration: Path, client: str) -> dict[str, Any] | None:
+    """另一客户端搭这次验证：登记它的入口空跑（参数文件与运行根），门禁通过后据此接着空跑；不接空跑时不登记。"""
+
+    if not (args.vc_env and args.then_dryrun):
+        return None
+    peer = {"schema_version": PEER_SCHEMA, "client": client, "vc_env": str(args.vc_env), "runroot": str(args.runroot),
+            "data_root": str(args.data_root), "registered_at_utc": _utc_now()}
+    _write(registration.with_name(f"{registration.stem}.peer-{client}.json"), peer)
+    return peer
+
+
+def _attach(args: argparse.Namespace, registration: Path, target: Path, existing: Mapping[str, Any], client: str) -> dict[str, Any]:
+    """同一提交与集合已有另一客户端发起的在跑验证或结论：不再起，只登记本客户端的入口空跑；已经通过的当场接上。"""
+
+    peer = _register_peer(args, registration, client)
+    own = Path(args.runroot) / DIRECTORY
+    if target.parent != own:
+        # 本运行根留指针：本轮的修复轮跑定向回归前 stop 要停得下它，status 也列得出它。
+        _write(own / ATTACHED_DIRECTORY / f"{target.stem}.json",
+               {"schema_version": ATTACHED_SCHEMA, "result": str(target), "registration": str(registration), "client": client,
+                "attached_at_utc": _utc_now()})
+    # 先登记、再重读状态：后台 run 写下 passed 之后才读登记，这里登记之后才判状态，两边总有一边接上空跑（同一份空跑
+    # 已有就不重复起，两边都接也无妨）。
+    current = _read(target) or existing
+    status = effective_status(current)
+    outcome: dict[str, Any] = {"action": "exists", "result": str(target), "status": status, "attached": client}
+    if peer is not None and status == "passed":
+        outcome["dryrun"] = _chain_dryrun({**current, "vc_env": peer["vc_env"], "runroot": peer["runroot"],
+                                           "data_root": peer["data_root"]})
+    return outcome
+
+
+def stop_registered(data_root: Path, reason: str, *, keep: Path) -> list[str]:
+    """两客户端都纳管时：数据根登记里其它提交或集合的在跑验证（在别的运行根）一并停下，标 superseded。"""
+
+    stopped = []
+    for _registration, entry in registrations(data_root):
+        target = Path(str(entry.get("result") or ""))
+        if not target.is_absolute() or target == keep:
+            continue
+        current = _read(target)
+        if current is None or current.get("status") != "running":
+            continue
+        _write(target, {**current, "status": "superseded", "completed_at_utc": _utc_now(), "reason": reason})
+        _terminate(current)
+        stopped.append(str(target))
+    return stopped
+
+
+def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     client = getattr(args, "client", None) or "codex"
     deployment = latest_deployment(args.data_root, client)
-    path = result_path(args.runroot, args.commit, deployment)
+    if deployments is not None and deployments.get(client) != deployment:
+        raise ValidationError(f"部署收据集合里没有 {client} 当前的部署收据")
+    path = result_path(args.runroot, args.commit, deployment, deployments)
     # 后台编译缓存不再依赖操作者的 GOCACHE，也不与前台准入清理共用工作目录。
     isolated_root = Path(args.runroot) / DIRECTORY / "work"
-    bound_root = isolated_root / f"{args.commit}-{deployment['sha256']}"
+    bound_root = isolated_root / f"{args.commit}-{binding_key(deployment, deployments)}"
     work = args.work or bound_root
     work = Path(work)
     if (not work.is_absolute() or ".." in work.parts or not work.is_relative_to(bound_root)
@@ -297,6 +493,14 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
         raise ValidationError("B-09 签发须同时提供当前上下文和校时凭证")
     inputs["full_set_files"] = {key: _sha256_file(Path(value)) if value else None for key, value in full_set_paths.items()}
     existing = _read(path)
+    registration = registry_path(args.data_root, args.commit, deployments) if deployments is not None else None
+    if registration is not None and (existing is None or effective_status(existing) not in ("running", "passed", "failed")):
+        # 本运行根没有这次验证的结论：看另一客户端的轮次（另一运行根）是不是已经起了同一提交与集合的那一次。
+        entry = _read_kind(registration, REGISTRY_SCHEMA)
+        target = Path(str((entry or {}).get("result") or ""))
+        other = _read(target) if entry is not None and target.is_absolute() and target != path else None
+        if other is not None and other.get("commit") == args.commit and other.get("deployments") == deployments:
+            path, existing = target, other
     rerun = bool(getattr(args, "rerun_full_set", False))
     if existing is not None and existing.get("full_set_receipt", {}).get("status") == "issued":
         # 到期后必须新执行，不能被“同部署已有 passed”去重挡住；坏来源也先重跑。
@@ -312,11 +516,24 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
             rerun = True
     if existing is not None and effective_status(existing) == "running" and rerun:
         raise ValidationError("当前全集仍在运行，禁止另起重复执行")
+    if (registration is not None and existing is not None and not rerun and (existing.get("client") or "codex") != client
+            and effective_status(existing) in ("running", "passed", "failed")):
+        # B5a-10：另一客户端发起的同一次验证（同一提交、同一组部署收据）。只比与客户端无关的输入合同，相同即搭上它。
+        if _shared_contract(existing.get("input_contract")) != _shared_contract(inputs) or existing.get("commit") != args.commit:
+            raise ValidationError(f"同一提交与部署已有另一客户端发起的后台验证（{path}），输入合同不同：须先显式停止并重新验证")
+        return _attach(args, registration, path, existing, client)
     if existing is not None and not rerun and effective_status(existing) in ("running", "passed", "failed"):
         if existing.get("input_contract") != inputs or existing.get("commit") != args.commit or existing.get("deployment") != deployment:
             raise ValidationError("后台验证已有记录的输入或缓存隔离合同不同，须先显式停止并重新验证")
         return {"action": "exists", "result": str(path), "status": effective_status(existing)}
+    if registration is not None and path.parent != Path(args.runroot) / DIRECTORY:
+        # 登记里同一次验证在另一运行根、但没法搭（要重跑全集）：本运行根新起一次，登记改指向新的这一份。
+        path = result_path(args.runroot, args.commit, deployment, deployments)
+        existing = _read(path)
     superseded = stop(args.runroot, f"被提交 {args.commit[:12]} 在部署 {deployment['receipt']} 上的后台验证取代", keep=path)
+    if registration is not None:
+        superseded += stop_registered(args.data_root, f"被提交 {args.commit[:12]} 在部署集合 {registration.stem} 上的后台验证取代",
+                                      keep=path)
     out = path.parent / "runs" / f"{path.stem}-{time.time_ns()}"
     payload: dict[str, Any] = {
         "schema_version": SCHEMA, "commit": args.commit, "branch": args.branch, "bundle": str(args.bundle),
@@ -331,6 +548,8 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
         **full_set_paths,
         # B5a-01：只有非 Codex 的结论记录客户端，Codex 结论的字段逐字不变（读取时缺省按 codex）。
         **({"client": client} if client != "codex" else {}),
+        # B5a-10：两客户端都纳管时绑定部署收据集合（只有一个客户端纳管时不写，结论与改造前同形）。
+        **({"deployments": dict(deployments)} if deployments is not None else {}),
     }
     if existing is not None:
         # 当前状态文件可更新；每次重新开始前保留上一执行的完整终态，便于复核失败恢复。
@@ -339,6 +558,9 @@ def _start_locked(args: argparse.Namespace) -> dict[str, Any]:
         if not history.exists():
             _write(history, existing)
     _write(path, payload)
+    if registration is not None:
+        _write(registration, {"schema_version": REGISTRY_SCHEMA, "commit": args.commit, "deployments": dict(deployments),
+                              "result": str(path), "client": client, "runroot": str(args.runroot), "registered_at_utc": _utc_now()})
     argv = ["nice", "-n", str(NICENESS), sys.executable, "-B", str(Path(__file__).resolve()), "run", "--result", str(path)]
     environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **({"ARM64_VC_ENV": str(args.vc_env)} if args.vc_env else {})}
     log = Path(payload["log"])
@@ -365,8 +587,10 @@ def run(result: Path) -> int:
     payload = _read(path)
     if payload is None:
         raise ValidationError(f"后台验证结论文件不可读：{path}")
-    # 工作树和全部 Go 缓存使用本次后台验证的独立坐标；承接判断仍交给输入合同，不强行沿用前台记录。
-    argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], "--mode", "re-execute", "--require-deployed",
+    # 工作树和全部 Go 缓存使用本次后台验证的独立坐标；承接判断仍交给输入合同，不强行沿用前台记录。两客户端都纳管时
+    # （B5a-10）入口门禁核对每个已纳管客户端的部署（--require-deployed-all），只有一个客户端纳管时命令行与改造前相同。
+    require = "--require-deployed-all" if payload.get("deployments") else "--require-deployed"
+    argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], "--mode", "re-execute", require,
             "--wait-lock", str(WAIT_LOCK_SECONDS), "--out", payload["out"]]
     for flag, key in (("--record-store", "record_store"), ("--work", "work")):
         if payload.get(key):
@@ -385,7 +609,7 @@ def run(result: Path) -> int:
     expected_caches = {"GOCACHE": str(work / "go-build-cache"), "GOMODCACHE": str(work / "go-mod-cache"), "GOTMPDIR": str(work / "go-tmp")}
     try:
         isolated_root = Path(payload["runroot"]) / DIRECTORY / "work"
-        bound_root = isolated_root / f"{payload['commit']}-{payload['deployment']['sha256']}"
+        bound_root = isolated_root / f"{payload['commit']}-{binding_key(payload['deployment'], payload.get('deployments'))}"
         if (payload.get("cache_roots") != expected_caches or payload.get("input_contract", {}).get("work") != str(work)
                 or not work.is_relative_to(bound_root) or ".." in work.parts):
             raise ValidationError("后台缓存合同缺失或发生漂移")
@@ -414,14 +638,19 @@ def run(result: Path) -> int:
     failed = [str(gate.get("gate_id")) for gate in (summary or {}).get("gates") or [] if gate.get("status") != "passed"]
     try:
         deployment_matches = latest_deployment(Path(payload["data_root"]), payload.get("client") or "codex") == payload["deployment"]
+        if payload.get("deployments"):
+            deployment_matches = deployment_matches and deployment_set(Path(payload["data_root"])) == payload["deployments"]
     except (ValidationError, OSError, ValueError):
         deployment_matches = False
+    others_problem = _others_checked(payload, summary) if payload.get("deployments") and summary is not None else None
     if received:
         status, reason = "aborted", f"收到信号 {received[0]}"
     elif summary is None:
         status, reason = "aborted", f"入口门禁没有结论（退出码 {returncode}），日志 {payload.get('log')}"
     elif checked != bound or not deployment_matches:
         status, reason = "aborted", f"入口门禁核对的部署收据（{checked or '没有核对'}）不是开始时绑定的 {bound}：部署在验证途中换了"
+    elif others_problem:
+        status, reason = "aborted", others_problem
     elif returncode == 0 and not failed and summary.get("status") == "passed":
         status, reason = "passed", None
     else:
@@ -435,7 +664,28 @@ def run(result: Path) -> int:
     if status == "passed" and current.get("then_dryrun"):
         dryrun = _chain_dryrun(current)
         _write(path, {**(_read(path) or current), "dryrun": dryrun})
+    if status == "passed" and current.get("deployments"):
+        # B5a-10：搭这次验证的其它客户端的入口空跑一并接上（各用自己的参数文件与运行根；同一份空跑已有就不重复）。
+        chained = {}
+        for peer in peers(registry_path(Path(current["data_root"]), current["commit"], current["deployments"])):
+            if peer.get("client") != (current.get("client") or "codex"):
+                chained[str(peer.get("client"))] = _chain_dryrun({**current, "vc_env": peer.get("vc_env"), "runroot": peer.get("runroot"),
+                                                                  "data_root": peer.get("data_root")})
+        if chained:
+            _write(path, {**(_read(path) or current), "peer_dryruns": chained})
     return 0
+
+
+def _others_checked(payload: Mapping[str, Any], summary: Mapping[str, Any]) -> str | None:
+    """两客户端都纳管时，入口门禁必须逐一核对过本轮客户端之外每个绑定的部署收据（总摘要来源 deploy_receipts_others）。"""
+
+    own = payload.get("client") or "codex"
+    expected = {client: str(item.get("receipt")) for client, item in (payload.get("deployments") or {}).items() if client != own}
+    raw = str(((summary.get("source") or {}).get("deploy_receipts_others")) or "")
+    checked = dict(item.split("=", 1) for item in raw.split() if "=" in item)
+    if checked != expected:
+        return f"入口门禁没有逐一核对其余客户端绑定的部署收据（核对了 {checked or '没有'}，绑定的是 {expected}）"
+    return None
 
 
 def _issue_full_set(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -489,7 +739,7 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
     """批次边界（``require_passed`` 为假）或 VC-5 验收前（为真）的判定：（退出码，说明）。"""
 
     deployment = latest_deployment(data_root, client)
-    found = for_deployment(runroot, deployment)
+    found = for_deployment(runroot, deployment, client=client, data_root=data_root)
     if found is None:
         message = f"当前部署（{deployment['receipt']}）还没有后台验证：先 background-validate.sh start <bundle> <分支> <提交>"
         return (3, message) if require_passed else (0, "提示：" + message)
@@ -568,8 +818,11 @@ def main(argv: list[str] | None = None) -> int:
                                   client=args.client)
             print(message, flush=True)
             return code
-        print(json.dumps([{**payload, "effective_status": effective_status(payload), "path": str(path)}
-                          for path, payload in results(args.runroot)], ensure_ascii=False, indent=2))
+        listed = [{**payload, "effective_status": effective_status(payload), "path": str(path)} for path, payload in results(args.runroot)]
+        # 两客户端都纳管时另列本运行根搭上的那一次（标 attached；只有一个客户端纳管时没有，输出与改造前相同）。
+        listed += [{**payload, "effective_status": effective_status(payload), "path": str(path), "attached": True}
+                   for path, payload in attached(args.runroot)]
+        print(json.dumps(listed, ensure_ascii=False, indent=2))
         return 0
     except ValidationError as error:
         print(f"后台验证：{error}", file=sys.stderr)

@@ -3,6 +3,9 @@
 
 真实的 vc-batch.sh、lib.sh、background_validation.py 与 unit_executor.py；数据根里的编排器换成替身模块（记下被调用时
 整机预约的状态），执行器状态目录在临时目录里，不碰本机调度状态。
+
+Claude 批次（B5a-10）同样经它：两客户端都纳管时，批次边界按 Claude 的部署收据取后台验证结论（在本轮运行根或数据根登记里
+另一客户端轮次发起的那一份），失败即拒绝派发；整机预约两客户端共用；派发的是客户端表登记的 Claude 编排器。
 """
 
 from __future__ import annotations
@@ -120,6 +123,62 @@ class VcBatchBoundaryTests(unittest.TestCase):
         [call] = self.calls()
         self.assertEqual(call["argv"][call["argv"].index("--predecessor-checkpoint") + 1],
                          str(self.fixture.newdir / "control" / "vc" / "vc-4-checkpoint.json"))
+
+
+def _claude_env_text(fixture: driver_tests._DriverFixture) -> str:
+    """驱动夹具的 Codex 参数文件改成 Claude 轮次的：去掉 Codex 专属键，换版本与通用键。"""
+
+    lines = [line for line in fixture.env_file.read_text(encoding="utf-8").splitlines()
+             if line.split("=", 1)[0] not in {"KILO_BIN", "KILO_VERSION", "KILO_SHA256", "CODEX_BIN", "CODEX_BIN_SHA256", "CODEX_ACCOUNT_ID"}]
+    text = "CLIENT=claude\n" + "\n".join(lines) + "\n"
+    text = text.replace('BASELINE_VERSION="0.154.0"', 'BASELINE_VERSION="2.1.226"').replace('TARGET_VERSION="0.156.1"', 'TARGET_VERSION="2.1.285"')
+    return text + f'CLIENT_BIN="/opt/claude-2.1.285/claude"\nCLIENT_BIN_SHA256="{"c" * 64}"\nCLIENT_ACCOUNT_ID="17"\n'
+
+
+class ClaudeVcBatchBoundaryTests(VcBatchBoundaryTests):
+    """Claude 批次的边界与整机预约（B5a-10）：数据根里两客户端都已纳管，参数文件是 Claude 的，编排器替身是 claude_upgrade。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        (self.data / "tools" / "official_client_capture" / "claude_upgrade.py").write_text(STUB_ORCHESTRATOR, encoding="utf-8")
+        self.claude_receipt = self.data / "control" / "claude-managed-deploy-20261003t000000z.json"
+        self.claude_receipt.write_text(json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "f" * 64}}),
+                                       encoding="utf-8")
+        env_file = self.root / "claude-env.sh"
+        env_file.write_text(_claude_env_text(self.fixture), encoding="utf-8")
+        env_file.chmod(0o600)
+        self.env["ARM64_VC_ENV"] = str(env_file)
+
+    def validation(self, status: str, runroot: Path | None = None) -> None:
+        """Codex 轮次（或本轮）发起的那一次后台验证：绑定两份收据，Claude 的批次边界据此判定。"""
+
+        deployments = bv.deployment_set(self.data)
+        deployment = deployments["codex"]
+        path = bv.result_path(runroot or self.fixture.runroot, COMMIT, deployment, deployments)
+        bv._write(path, {"schema_version": bv.SCHEMA, "commit": COMMIT, "deployment": deployment, "deployments": deployments,
+                         "status": status, "pid": None, "started_at_utc": "2026-10-03T00:00:00Z",
+                         "failed_gates": ["test-capture-tools"] if status == "failed" else [], "reason": "测试" if status == "aborted" else None,
+                         "log": "/x/log"})
+        if runroot is not None:
+            bv._write(bv.registry_path(self.data, COMMIT, deployments), {
+                "schema_version": bv.REGISTRY_SCHEMA, "commit": COMMIT, "deployments": deployments, "result": str(path), "client": "codex",
+                "runroot": str(runroot), "registered_at_utc": "2026-10-03T00:00:00Z"})
+
+    def test_claude_batch_uses_the_claude_orchestrator_and_finds_another_rounds_validation(self) -> None:
+        codex_runroot = self.root / "codex-runroot"
+        codex_runroot.mkdir()
+        self.validation("passed", codex_runroot)
+        result = self.batch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("后台验证通过", result.stdout)
+        [call] = self.calls()
+        self.assertEqual(call["granted_owner"], f"vc-batch-{self.fixture.new}-7")
+        self.assertIn("compile-and-run-vc-batch", call["argv"])
+        self.validation("failed", codex_runroot)
+        refused = self.batch()
+        self.assertEqual(refused.returncode, 3, refused.stdout + refused.stderr)
+        self.assertIn("拒绝派发下一批", refused.stdout)
+        self.assertEqual(len(self.calls()), 1, "另一轮次发起的后台验证失败，Claude 批次同样不派发")
 
 
 if __name__ == "__main__":

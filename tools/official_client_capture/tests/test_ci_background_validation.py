@@ -2,6 +2,11 @@
 同一提交不重复起、新一轮取代旧一轮、停下时整组终止、部署在途中换了判中止。
 
 入口门禁用替身脚本（按环境变量决定结论、耗时与核对的部署收据），后台进程是真实的新会话子进程。
+
+两客户端都纳管（B5a-10）：一次全量门禁、结论绑定两份部署收据（集合摘要进文件名），入口门禁带 ``--require-deployed-all`` 并须
+逐一核对过其余客户端的收据；另一客户端的轮次（另一运行根）start 时搭上同一次验证、不再起；两客户端的批次边界与 VC-5 前
+核对各按自己的收据取到这份结论；新部署起新验证时，登记里旧集合的在跑验证一并停下；搭上的轮次 stop 也停得下它、status 列得出
+它。只有 Codex 纳管时不写集合、不登记。
 """
 
 from __future__ import annotations
@@ -309,6 +314,199 @@ class BackgroundValidationTests(unittest.TestCase):
         payload = self.wait(json.loads(result.stdout)["result"])
         self.assertEqual(payload["status"], "passed")
         self.assertEqual(payload["work"], str(work))
+
+
+# 两客户端都纳管时的入口门禁替身：记下部署核对开关与提交；总摘要来源写本轮客户端核对的收据，带 --require-deployed-all 时另写
+# FAKE_GATES_OTHERS 给出的「其余客户端=收据文件名」（没设这个变量时不写，模拟没有逐一核对）。
+FAKE_TWO_CLIENT_GATES = r"""#!/bin/bash
+set -euo pipefail
+OUT=""; ARGS=(); FLAG=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --out) OUT="$2"; shift 2 ;;
+    --profile|--mode|--record-store|--work|--wait-lock) shift 2 ;;
+    --require-deployed|--require-deployed-all) FLAG="$1"; shift ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+echo "$FLAG ${ARGS[2]}" >> "$FAKE_GATES_CALLS"
+sleep "${FAKE_GATES_SLEEP:-0}"
+mkdir -p "$OUT"
+python3 - "$OUT" "${FAKE_GATES_STATUS:-passed}" "$FAKE_GATES_RECEIPT" "${FAKE_GATES_OTHERS-__unset__}" "$FLAG" <<'PY'
+import json, sys
+out, status, receipt, others, flag = sys.argv[1:6]
+source = {"deploy_receipt": receipt}
+if flag == "--require-deployed-all" and others != "__unset__":
+    source["deploy_receipts_others"] = others
+json.dump({"status": status, "gates": [{"gate_id": "test-capture-tools", "status": status}], "source": source},
+          open(out + "/entry-gates.json", "w"))
+PY
+[ "${FAKE_GATES_STATUS:-passed}" = passed ]
+"""
+
+
+class TwoClientBackgroundValidationTests(unittest.TestCase):
+    """B5a-10：Codex 与 Claude 都已纳管，两客户端的轮次各有自己的运行根。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.data = self.root / "data"
+        (self.data / "control").mkdir(parents=True)
+        self.codex_run, self.claude_run = self.root / "codex-run", self.root / "claude-run"
+        for runroot in (self.codex_run, self.claude_run):
+            runroot.mkdir()
+        self.gates = self.root / "entry-gates.sh"
+        self.gates.write_text(FAKE_TWO_CLIENT_GATES, encoding="utf-8")
+        (self.root / "x.bundle").write_bytes(b"two-client-bundle")
+        self.calls = self.root / "calls.log"
+        self.codex_receipt, self.claude_receipt = self.deploy("20261007t000000z")
+        self.addCleanup(self.stop_all)
+
+    def stop_all(self) -> None:
+        for runroot in (self.codex_run, self.claude_run):
+            bv.stop(runroot, "测试收尾")
+
+    def deploy(self, stamp: str, *, files: str = "f") -> tuple[Path, Path]:
+        """一次交换共享根的部署：两份收据同一个时间戳（B5a-01）。"""
+
+        codex = self.data / "control" / f"codex-01600-supervisor-enable-{stamp}.json"
+        codex.write_text(json.dumps({"status": "passed", "tool_files_sha256": files * 64, "policy_version": 7}), encoding="utf-8")
+        claude = self.data / "control" / f"claude-managed-deploy-{stamp}.json"
+        claude.write_text(json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": files * 64,
+                                                                                           "policy_version": 2}}), encoding="utf-8")
+        return codex, claude
+
+    def gates_env(self, client: str, codex: Path | None = None, claude: Path | None = None) -> dict[str, str]:
+        codex, claude = codex or self.codex_receipt, claude or self.claude_receipt
+        own, other = (codex, claude) if client == "codex" else (claude, codex)
+        return {"FAKE_GATES_CALLS": str(self.calls), "FAKE_GATES_RECEIPT": str(own),
+                "FAKE_GATES_OTHERS": f"{'claude' if client == 'codex' else 'codex'}={other.name}"}
+
+    def cli(self, *argv: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([sys.executable, "-B", str(MODULE), *argv], capture_output=True, text=True, timeout=120,
+                              env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})})
+
+    def start(self, commit: str, runroot: Path, client: str = "codex", **env: str) -> dict:
+        argv = ["start", "--runroot", str(runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
+                "--branch", "claude/test", "--commit", commit, "--entry-gates", str(self.gates)]
+        if client != "codex":
+            argv += ["--client", client]
+        completed = self.cli(*argv, env={**self.gates_env(client), **env})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return json.loads(completed.stdout.strip().splitlines()[-1])
+
+    def boundary(self, runroot: Path, client: str, name: str = "check-boundary") -> tuple[int, str]:
+        completed = self.cli(name, "--runroot", str(runroot), "--data-root", str(self.data), "--client", client)
+        return completed.returncode, completed.stdout + completed.stderr
+
+    def wait(self, result: str, *, until: tuple[str, ...] = ("passed", "failed", "aborted", "superseded")) -> dict:
+        deadline = time.monotonic() + 60
+        while True:
+            payload = bv._read(Path(result)) or {}
+            if payload.get("status") in until:
+                return payload
+            self.assertLess(time.monotonic(), deadline, f"后台验证没有在时限内到达 {until}：{payload}")
+            time.sleep(0.05)
+
+    def test_one_run_serves_both_clients_from_their_own_runroots(self) -> None:
+        started = self.start(COMMIT_A, self.codex_run)
+        payload = self.wait(started["result"])
+        self.assertEqual(payload["status"], "passed", payload)
+        deployments = bv.deployment_set(self.data)
+        self.assertEqual(sorted(payload["deployments"]), ["claude", "codex"])
+        self.assertEqual(payload["deployments"], deployments)
+        self.assertEqual(Path(started["result"]).name, f"{COMMIT_A[:12]}-{bv.set_sha256(deployments)[:12]}.json", "文件名用集合摘要")
+        self.assertEqual(self.calls.read_text(encoding="utf-8").split(), ["--require-deployed-all", COMMIT_A], "核对每个已纳管客户端")
+        registration = bv.registry_path(self.data, COMMIT_A, deployments)
+        self.assertEqual(json.loads(registration.read_text(encoding="utf-8"))["result"], started["result"])
+        attached = self.start(COMMIT_A, self.claude_run, "claude")
+        self.assertEqual((attached["action"], attached["attached"], attached["status"], attached["result"]),
+                         ("exists", "claude", "passed", started["result"]), "另一客户端的轮次搭同一次验证，不再起")
+        self.assertEqual(self.calls.read_text(encoding="utf-8").split().count(COMMIT_A), 1, "全量门禁两客户端只跑一次")
+        for runroot, client in ((self.claude_run, "claude"), (self.codex_run, "claude"), (self.codex_run, "codex"), (self.claude_run, "codex")):
+            with self.subTest(runroot=runroot.name, client=client):
+                for name in ("check-boundary", "require-passed"):
+                    code, message = self.boundary(runroot, client, name)
+                    self.assertEqual(code, 0, message)
+                    self.assertIn("后台验证通过", message)
+
+    def test_failed_run_refuses_claude_batches_in_another_runroot(self) -> None:
+        payload = self.wait(self.start(COMMIT_A, self.codex_run, FAKE_GATES_STATUS="failed")["result"])
+        self.assertEqual(payload["status"], "failed")
+        code, message = self.boundary(self.claude_run, "claude")
+        self.assertEqual(code, 3, message)
+        self.assertIn("拒绝派发下一批", message)
+        self.assertEqual(self.boundary(self.claude_run, "claude", "require-passed")[0], 3)
+
+    def test_gates_must_check_every_other_bound_receipt(self) -> None:
+        for label, others in (("没有逐一核对", None), ("核对的不是绑定的那份", "claude=claude-managed-deploy-20261006t000000z.json")):
+            with self.subTest(label):
+                environment = self.gates_env("codex")
+                if others is None:
+                    environment.pop("FAKE_GATES_OTHERS")
+                else:
+                    environment["FAKE_GATES_OTHERS"] = others
+                commit = COMMIT_A if others is None else COMMIT_B
+                argv = ["start", "--runroot", str(self.codex_run), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
+                        "--branch", "claude/test", "--commit", commit, "--entry-gates", str(self.gates)]
+                completed = subprocess.run([sys.executable, "-B", str(MODULE), *argv], capture_output=True, text=True, timeout=120,
+                                           env={**{k: v for k, v in os.environ.items() if k != "FAKE_GATES_OTHERS"},
+                                                "PYTHONDONTWRITEBYTECODE": "1", **environment})
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                payload = self.wait(json.loads(completed.stdout.strip().splitlines()[-1])["result"])
+                self.assertEqual(payload["status"], "aborted", payload)
+                self.assertIn("没有逐一核对其余客户端绑定的部署收据", payload["reason"])
+                self.assertEqual(self.boundary(self.claude_run, "claude")[0], 3)
+
+    def test_new_deployment_starts_a_new_validation_and_stops_the_stale_one(self) -> None:
+        old = self.start(COMMIT_A, self.codex_run, FAKE_GATES_SLEEP="60")
+        pid = self.wait(old["result"], until=("running",))["pid"]
+        codex, claude = self.deploy("20261007t010000z", files="e")
+        environment = self.gates_env("claude", codex, claude)
+        argv = ["start", "--runroot", str(self.claude_run), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
+                "--branch", "claude/test", "--commit", COMMIT_B, "--entry-gates", str(self.gates), "--client", "claude"]
+        completed = self.cli(*argv, env=environment)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        new = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(new["action"], "started")
+        self.assertIn(old["result"], new["superseded"], "旧部署集合的在跑验证（另一运行根）一并停下")
+        self.assertEqual(bv._read(Path(old["result"]))["status"], "superseded")
+        self.assertFalse(bv._pid_alive(pid))
+        payload = self.wait(new["result"])
+        self.assertEqual((payload["status"], payload["client"]), ("passed", "claude"))
+        for runroot, client in ((self.claude_run, "claude"), (self.codex_run, "codex")):
+            with self.subTest(client=client):
+                code, message = self.boundary(runroot, client, "require-passed")
+                self.assertEqual(code, 0, message)
+                self.assertIn(Path(new["result"]).name, message)
+
+    def test_attached_round_can_stop_the_shared_run_before_its_regression(self) -> None:
+        # Codex 的轮次发起、Claude 的轮次搭上：Claude 的修复轮跑定向回归前 stop（只给自己的运行根）也要停得下这一次。
+        started = self.start(COMMIT_A, self.codex_run, FAKE_GATES_SLEEP="60")
+        pid = self.wait(started["result"], until=("running",))["pid"]
+        attached = self.start(COMMIT_A, self.claude_run, "claude")
+        self.assertEqual((attached["action"], attached["attached"], attached["result"]), ("exists", "claude", started["result"]))
+        [listed] = json.loads(self.cli("status", "--runroot", str(self.claude_run)).stdout)
+        self.assertEqual((listed["path"], listed["attached"], listed["effective_status"]), (started["result"], True, "running"),
+                         "搭上的轮次的 status 列出它正在用的那一次")
+        stopped = self.cli("stop", "--runroot", str(self.claude_run), "--reason", "Claude 修复轮跑定向回归前停下")
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.assertIn(Path(started["result"]).name, json.loads(stopped.stdout)["stopped"])
+        self.assertEqual(bv._read(Path(started["result"]))["status"], "superseded")
+        self.assertFalse(bv._pid_alive(pid), "Claude 轮次的 stop 停下了 Codex 轮次发起的那一次")
+        [own] = json.loads(self.cli("status", "--runroot", str(self.codex_run)).stdout)
+        self.assertEqual((own["effective_status"], "attached" in own), ("superseded", False), "发起方的 status 照旧只列自己的结论")
+
+    def test_claude_only_redeploy_needs_its_own_validation(self) -> None:
+        self.wait(self.start(COMMIT_A, self.codex_run)["result"])
+        (self.data / "control" / "claude-managed-deploy-20261007t020000z.json").write_text(
+            json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "9" * 64}}), encoding="utf-8")
+        code, message = self.boundary(self.claude_run, "claude", "require-passed")
+        self.assertEqual(code, 3, message)
+        self.assertIn("还没有后台验证", message)
+        self.assertEqual(self.boundary(self.codex_run, "codex", "require-passed")[0], 0, "Codex 的收据没变，原结论照样成立")
 
 
 if __name__ == "__main__":

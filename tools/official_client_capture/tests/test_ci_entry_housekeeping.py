@@ -3,6 +3,9 @@
 空跑只留最近几次、部署留下的旧暂存树每组只留最近两份（E4-03）、根盘停线与 guard.sh 同一条。
 
 记录库用 ``unit_records`` 的真实写入接口在临时目录里造，文件新旧用修改时间摆出来；清理时刻按参数给定，不依赖墙钟。
+
+B5a-10：逐单元承接目录（决策收据、撤销登记、消费登记与证据快照）跟着所属运行留或删，证据快照按引用逐层追到底；Claude 的
+pre-A3 v3 认证与 P0 v2 证据与 Codex 同形，同样钉住它引用的运行。
 """
 
 from __future__ import annotations
@@ -236,6 +239,111 @@ class RecordStoreCleanupTests(unittest.TestCase):
         with open(self.store_root / hk.GC_LOCK, "w", encoding="utf-8") as handle:
             fcntl.flock(handle, fcntl.LOCK_EX)
             self.assertEqual(self.gc()["status"], "busy", "两次清理不同时跑")
+
+
+class UnitInheritCleanupTests(unittest.TestCase):
+    """B5a-10：``unit-inherit/`` 目录纳入记录库清理。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+        self.store_root = self.base / "unit-records"
+        self.store = _Store(self.store_root)
+        self.refs = self.base / "data" / "control"
+        self.refs.mkdir(parents=True)
+        self.inherit = self.store_root / ur.UNIT_INHERIT_DIR
+
+    def evidence(self, payload: dict, when: float) -> dict:
+        """按内容寻址写一份证据快照（与 unit_inherit.put_evidence 同形），返回 ``{path, sha256}`` 引用。"""
+
+        data = (json.dumps(payload, ensure_ascii=False, indent=1, sort_keys=True) + "\n").encode("utf-8")
+        digest = ur.sha256_bytes(data)
+        path = self.inherit / "evidence" / f"{digest}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        _age(path, when)
+        return {"path": str(path), "sha256": digest}
+
+    def write(self, relative: str, payload: dict, when: float) -> Path:
+        path = self.inherit / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _age(path, when)
+        return path
+
+    def run_with(self, run_id: str, when: float, refs: list[dict]) -> dict[str, Path]:
+        s = self.store
+        record = s.record(f"capture:{run_id}", run_id, s.log(run_id, when), when)
+        s.manifest(run_id, when, executed=[record])
+        return {
+            "decision": self.write(f"decisions/{run_id}.json", {"schema_version": ur.UNIT_INHERIT_DECISION_SCHEMA, "run_id": run_id,
+                                                               "sealed_request": refs[0], "checkpoints": [{"consumer_clock": refs[1]}]}, when),
+            "consumption": self.write(f"consumptions/{run_id}/pre-a3-certification-20261001t000000z-ab12cd34.json",
+                                      {"run_id": run_id, "consumer_clock": refs[2], "revocation": refs[2]}, when),
+            "revocation": self.write(f"revocations/{run_id}.json", {"run_id": run_id, "reason": "测试"}, when),
+        }
+
+    def test_unit_inherit_directory_follows_the_runs_it_belongs_to(self) -> None:
+        nested = self.evidence({"kind": "approval"}, OLD)                 # 只被另一份证据快照引用
+        sealed = self.evidence({"kind": "sealed-request", "approvals": [nested]}, OLD)
+        clock = self.evidence({"kind": "clock"}, OLD)
+        consumed = self.evidence({"kind": "consumer-clock"}, OLD)
+        kept = self.run_with("r-claude", OLD, [sealed, clock, consumed])
+        # Claude 的 pre-A3 v3 认证（从逐单元承接运行签出，清单引用另带承接证明）钉住这次旧运行。
+        certification = self.refs / "policy-certification" / "claude-pre-a3-path-certification-20261001t000000z.json"
+        certification.parent.mkdir(parents=True)
+        certification.write_text(json.dumps({
+            "schema_version": "tool-pre-a3-path-certification/v3", "client": "claude", "status": "passed", "record_store": str(self.store_root),
+            "unit_manifest": {"run_id": "r-claude", "manifest_sha256": "0" * 64, "mode": "unit-inherit",
+                              "unit_inherit": {"consumption": {"path": str(kept["consumption"]), "sha256": "1" * 64}}}}), encoding="utf-8")
+        stale_refs = [self.evidence({"kind": f"stale-{n}"}, OLD) for n in range(3)]
+        stale = self.run_with("r-stale", OLD, stale_refs)
+        recent_ref = self.evidence({"kind": "recent-decision-ref"}, OLD)
+        recent = self.run_with("r-recent", RECENT, [recent_ref, recent_ref, recent_ref])
+        orphan = self.evidence({"kind": "orphan"}, OLD)
+        fresh = self.evidence({"kind": "fresh"}, RECENT)
+        temporary = self.inherit / "evidence" / ".x.json.123.ab.tmp"
+        temporary.write_text("", encoding="utf-8")
+        _age(temporary, NOW - 2 * DAY)
+
+        report = hk.gc_record_store(self.store_root, reference_roots=[self.refs.parent], now=NOW)
+        self.assertEqual((report["status"], report["referenced_runs"]), ("done", 1), report)
+        for path in (*kept.values(), *recent.values()):
+            self.assertTrue(path.exists(), f"保留下来的运行的承接登记要留：{path}")
+        for ref in (sealed, nested, clock, consumed, recent_ref, fresh):
+            self.assertTrue(Path(ref["path"]).exists(), f"该留的证据快照被删了：{ref}")
+        for path in stale.values():
+            self.assertFalse(path.exists(), f"没人引用的旧运行的承接登记要删：{path}")
+        for ref in (*stale_refs, orphan):
+            self.assertFalse(Path(ref["path"]).exists(), f"没人引用的旧证据快照要删：{ref}")
+        self.assertFalse(temporary.exists(), "承接目录里中断留下的临时文件也清掉")
+        counts = report["counts"]
+        self.assertEqual({kind: counts[kind]["removed"] for kind in ("unit_inherit_decisions", "unit_inherit_revocations",
+                                                                      "unit_inherit_consumptions", "unit_inherit_evidence")},
+                         {"unit_inherit_decisions": 1, "unit_inherit_revocations": 1, "unit_inherit_consumptions": 1,
+                          "unit_inherit_evidence": 4})
+        self.assertTrue(certification.exists())
+
+    def test_claude_p0_evidence_pins_its_run_and_trash_in_inherit_directories_is_put_back(self) -> None:
+        s = self.store
+        record = s.record("capture:claude-p0", "r-p0", s.log("p0", OLD), OLD)
+        s.manifest("r-p0", OLD, executed=[record])
+        evidence_root = self.base / "data" / "evidence" / "campaigns" / "claude-code-x" / "control" / "vc" / "receipts" / "p0"
+        evidence_root.mkdir(parents=True)
+        (evidence_root / "test-capture-tools.json").write_text(json.dumps({
+            "schema_version": "codex-p0-offline-gate-evidence/v2", "record_store": str(self.store_root),
+            "unit_manifest": {"run_id": "r-p0", "manifest_sha256": "0" * 64, "mode": "unit-inherit"},
+            "tool_identity": {"client": "claude"}}), encoding="utf-8")
+        ref = self.evidence({"kind": "kept-by-recent"}, RECENT)
+        path = Path(ref["path"])
+        trash = path.with_name(f".{path.name}{hk.TRASH_MARK}4242")
+        os.rename(path, trash)
+        report = hk.gc_record_store(self.store_root, reference_roots=[self.base / "data" / "control", self.base / "data" / "evidence"],
+                                    now=NOW)
+        self.assertTrue(s.record_file(record).exists(), "Claude 的 P0 v2 证据引用的运行留着")
+        self.assertEqual(report["restored_from_trash"], 1)
+        self.assertTrue(path.exists(), "承接目录里上次中断移走的文件放回并重新判定（保留期内，留着）")
 
 
 class GoCacheAndDryRunRetentionTests(unittest.TestCase):

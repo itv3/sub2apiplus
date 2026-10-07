@@ -320,9 +320,11 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   记录库还在原位。
 * 清理（E4-02，`driver/entry_housekeeping.py`，入口空跑开跑前自动做，也可 `entry-dryrun.sh housekeeping` 单独做）：保留期
   （默认 30 天，不得短于承接期限另加 1 天）内写入的运行清单、记录与日志都留着；数据根 `control`、`evidence`、`staging` 里
-  登记了本记录库的 v2 认证与 P0 v2 证据（含复用复制的认证、P0 收据证据根里的副本、演练根里的）引用的运行，连同清单列出的
-  全部记录、记录的日志与承接项的原运行清单都留着；其余早于保留期的删掉，目录不删。同样的日志内容寻址到同一个文件，发布方
-  遇到已有的同名文件会刷新修改时间，清理先移走再复查修改时间，期间被刷新的放回原处。
+  登记了本记录库的认证与 P0 v2 证据（Codex 的 pre-A3 v2、Claude 的 pre-A3 v3 与两客户端的 P0 v2 同一形状；含复用复制的认证、
+  P0 收据证据根里的副本、演练根里的）引用的运行，连同清单列出的全部记录、记录的日志与承接项的原运行清单都留着；逐单元承接
+  目录（`unit-inherit/`，B5a-10 纳入）跟着运行走：保留下来的运行的决策收据、撤销登记与消费登记，以及它们逐层引用的证据快照
+  都留着；其余早于保留期的删掉，目录不删。同样的日志与证据快照内容寻址到同一个文件，发布方遇到已有的同名文件会刷新修改
+  时间，清理先移走再复查修改时间，期间被刷新的放回原处。
 
 ## 读集审计（B-11，`driver/read_audit.py`）
 
@@ -494,6 +496,19 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
   空跑与收尾合入前用重新执行全集）。
 * 通过之后默认接着空跑入口到 pre-A3（见下一节；`start --no-dryrun` 不接），结果记在后台验证结论的 `dryrun` 字段。
+* 两客户端都纳管时（Claude 升级 B5a-10；数据根 `control` 里两客户端都有部署收据）：
+  * 仓库全量门禁两客户端只跑一次（测试集合已含 Claude 测试）。结论绑定部署收据集合（每个已纳管客户端最新的一份，交换共享根
+    的一次部署即该事务签出的两份），写进结论的 `deployments`，文件名的部署摘要换成集合摘要；入口门禁带
+    `--require-deployed-all`，本轮客户端之外每个已纳管客户端的部署也核对是本提交（`entry_steps.py deploy-check`：整树摘要按
+    该客户端策略在测试树里现算、部署一致性各部分逐项比内容），门禁结束时集合必须没变，否则 aborted。
+  * 两客户端的轮次各有 RUNROOT，所以另在数据根 `control/background-validation/` 登记「提交＋集合 → 结论文件」：另一客户端
+    的轮次 `start` 查到同一提交与集合已有在跑或已有结论就不再起，只登记自己的入口空跑；门禁通过后两客户端的入口空跑都接上
+    （验证进行中搭上的由后台 run 接，已通过时搭上的当场接）。起新的一次时，登记里旧集合的在跑验证（别的 RUNROOT）一并停下。
+    搭上的轮次在自己 RUNROOT 的 `background-validation/attached/` 留指针：它的 `stop`（修复轮跑定向回归前）也停得下这一次，
+    `status` 也列出它（标 `attached`）。
+  * `start`、`check-boundary`、`require-passed` 按本轮客户端（参数 `CLIENT`）取它的部署收据：Claude 的批次边界与 VC-5 前核对
+    取到的是绑定了 Claude 收据的那份结论（本 RUNROOT 找不到再找数据根登记）。只有一个客户端纳管时结论、文件名与命令行与
+    改造前逐字相同。
 
 ## 入口空跑（E4-02，`driver/entry-dryrun.sh`）
 
@@ -522,6 +537,14 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   这种空跑的默认终点时才带，后台验证接着的那次是 `-to-pre-a3`），状态 running／passed／
   failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置；同一提交＋同一部署（同一种空跑）
   已有在跑或已有结论就不重复跑。`status` 列出全部。演练根与空跑产物只留最近 5 次（日常维护自动清）。
+* 按客户端（Claude 升级 B5a-10）：本轮客户端取参数文件的 `CLIENT`，空跑绑定该客户端最新的部署收据，结论文件名带客户端表的
+  前缀（Codex 为空，与改造前同名同形；Claude 是 `claude-`），同一提交＋同一部署两客户端各一份；演练总账按该客户端建。Claude 的
+  结论另带没通过各步的分类 `failure_classes`：客户端表登记的待接入步骤（如 atomic-double）记 `registered_pending`；pre-A3 一步按
+  演练根里的 pre-A3 认证（没通过时是旁路文件）登记的记录库与运行清单逐场景读日志里的场景结果，链体停在登记占位上（指标
+  `pending`，如「等 B2-08」）、错误信息就是占位、零请求零网络、隔离没有降级的记 `scenario_pending`，其余记 `real`；被阻塞的
+  记 `blocked`。`real_failed_steps` 为空＝只差登记过的待接入与占位，没有真实失败。
+* 逐单元承接（B5a-08 合同）：`start … --unit-inherit-request <请求>` 把请求原样交给入口编排器，入口门禁与 pre-A3 只执行依赖变化
+  或缺少有效记录的单元；结论文件名另带 `-unit-inherit-<请求摘要前 12 位>`；与 `--opening`／`--reexecute` 互斥。
 
 ## 修好接着跑一条命令（`driver/fix-and-continue.sh`）
 
@@ -664,8 +687,9 @@ VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置
   提案（`context.json`、`sources.json`、`binding.json`）后退出 0，不执行、不导出、不签发（上下文含环境指纹，提案必须与
   正式运行同一环境）；`unit_inherit.py sample-clock`、`query-revocation`、`revoke`（登记撤销一次来源运行，只增）、
   `assemble-request`、`verify [--historical]`。
-* 尚未覆盖：记录库清理（`entry_housekeeping`）不处理 `unit-inherit/` 目录；入口空跑与后台验证尚未接入本模式（B5a-10）；
-  Formal 阶段的 Campaign 状态文件由谁维护留给建账本之后的工作项。
+* B5a-10 起：记录库清理按所属运行处理 `unit-inherit/` 目录（见上文「单元执行记录与承接」的清理）；入口空跑可带
+  `--unit-inherit-request` 按本模式承接。后台验证仍是重新执行全集（它本身就是 B-09 全集收据与本模式的来源运行），后台验证
+  接着的空跑不带请求。尚未覆盖：Formal 阶段的 Campaign 状态文件由谁维护留给建账本之后的工作项。
 
 ## 整机预约中止与重派（C-03）
 

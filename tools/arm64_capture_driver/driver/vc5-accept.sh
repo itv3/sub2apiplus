@@ -9,8 +9,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 vc5_require_admission
 G=$GATE_ROOT; AS=$ASSERTION_CONFIG_DIR
-# 修复轮规则（E4-01，指南「修好接着跑」）：验收前当前部署的后台验证必须已有通过的结论（全集通过）。
-if ! python3 -B "$DRV/background_validation.py" require-passed --runroot "$RUNROOT" --data-root "$D"; then
+# 修复轮规则（E4-01，指南「修好接着跑」）：验收前当前部署的后台验证必须已有通过的结论（全集通过）。按本轮客户端取它的部署
+# 收据所绑定的结论（B5a-10；客户端参数取客户端表，Codex 为空，命令行与改造前相同）。
+if ! python3 -B "$DRV/background_validation.py" require-passed --runroot "$RUNROOT" --data-root "$D" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}; then
   echo "VC-5 验收前要求当前部署的后台验证已通过：等它跑完，或修好、部署后重新起（background-validate.sh start）"; exit 3
 fi
 batch() { local seq="$1" plan="$2"; bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-5 "$seq" VC-4 "$plan" | grep -v "^$"; python3 - "$W/batch-$seq.out" <<'PY'

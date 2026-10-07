@@ -21,15 +21,27 @@
   结论 failed、没通过的一步记 ``disk``。维护报告摘要写进结论的 ``housekeeping``，全文在结论旁的 ``<结论名>.housekeeping.json``。
   环境变量 ``ENTRY_DRYRUN_HOUSEKEEPING=off`` 跳过维护（只给测试的替身环境用：不能碰开发机的 Go 缓存、不能看开发机的磁盘；
   驱动不设）。
-* 结论 ``entry-dryrun/v1``：``<RUNROOT>/entry-dryrun/<提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute][-to-<终点>].json``
-  （终点不是这种空跑的默认终点时才带，例如后台验证接着的那次是 ``-to-pre-a3``），状态 running／passed／
-  failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与日志位置。同一提交＋同一部署（同一种
-  空跑）已有在跑或已有结论就不重复跑。
+* 结论 ``entry-dryrun/v1``：``<RUNROOT>/entry-dryrun/<客户端前缀><提交前 12 位>-<部署收据摘要前 12 位>[-opening|-reexecute|
+  -unit-inherit-<请求摘要前 12 位>][-to-<终点>].json``（终点不是这种空跑的默认终点时才带，例如后台验证接着的那次是
+  ``-to-pre-a3``），状态 running／passed／failed／yielded，带编排器每一步的动作、结论与原因（没通过的几步一次列全）、演练根与
+  日志位置。同一提交＋同一部署（同一种空跑）已有在跑或已有结论就不重复跑。
+
+按客户端（Claude 升级 B5a-10）：本轮客户端取驱动参数文件的 ``CLIENT``（缺省 codex），空跑绑定该客户端最新的部署收据，结论
+文件名带客户端表登记的前缀（Codex 为空，结论与改造前同名同形；Claude 是 ``claude-``），同一提交＋同一部署两客户端各一份；
+演练总账按该客户端建。非 Codex 的结论另带 ``client`` 与没通过各步的分类（``failure_classes``、``real_failed_steps``）：
+客户端表登记为尚未接入的步骤记 ``registered_pending``（写明落实它的工作项）；pre-A3 一步按演练根里的 pre-A3 认证（没通过时
+是旁路文件 ``.failed-<UTC>.json``）登记的记录库与运行清单逐场景读日志里的场景结果——失败场景的链体登记了占位
+（指标 ``pending``，例如等待 B2-08）、错误信息就是该占位、零请求零网络、隔离没有降级的记 ``scenario_pending``，其余记
+``real``；被阻塞的步骤记 ``blocked``。``real_failed_steps`` 为空即「只差登记过的待接入与占位，没有真实失败」。
+
+逐单元承接（B5a-08 合同，B5a-10 接入）：``--unit-inherit-request <请求>`` 原样交给入口编排器（入口门禁与 pre-A3 按请求承接记录库
+里有效的单元，只执行依赖变化或缺少有效记录的单元；请求的批准与上下文核对都在入口门禁里做）；与 ``--opening``／
+``--reexecute``（重新执行全集）互斥。后台验证接着的空跑不带请求。
 
 子命令：
 
-* ``start --runroot --data-root --vc-env --bundle --branch --commit [--opening|--reexecute] [--to <步骤>] [--entry <entry.sh>]``：起一次空跑
-  （新会话、后台）；退出码 0 已起或已有结论，4 让路，2 用法或环境错误。
+* ``start --runroot --data-root --vc-env --bundle --branch --commit [--opening|--reexecute|--unit-inherit-request <请求>] [--to <步骤>]
+  [--entry <entry.sh>]``：起一次空跑（新会话、后台）；退出码 0 已起或已有结论，4 让路，2 用法或环境错误。
 * ``run --result``（内部）：建演练根与演练总账、写演练参数文件、跑编排器、写结论。
 * ``stop --runroot [--reason]``：停下在跑的空跑（先标 superseded 再整组终止，执行器收到 SIGTERM 会终止全部单元会话）。空跑与
   前台入口门禁共用调度器和入口门禁工作目录，修复轮跑定向回归之前要停下（后台验证的 ``stop`` 连空跑一起停）。
@@ -64,6 +76,11 @@ ALLOWED_TO = ("entry-preflight", "policy-compatibility", "policy-activation", "e
 # 演练参数文件里改写的坐标（其余键原样沿用本轮参数文件）。
 APPROVED_BY = "入口空跑（演练总账）"
 CLEAN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# 演练根里的 pre-A3 认证坐标（rehearsal_env 改写的那一份）与场景结果行的前缀（与受管 pre-A3 认证模块的 SCENARIO_RESULT_PREFIX
+# 同一行，测试核对两边一致）。
+PRE_A3_CERTIFICATION_NAME = "pre-a3-path-certification.json"
+PRE_A3_RESULT_PREFIX = "PRE_A3_SCENARIO_RESULT "
+PRE_A3_UNIT_PREFIX = "pre-a3:"
 
 
 class DryRunError(RuntimeError):
@@ -138,14 +155,16 @@ def capture_busy(state_dir: Path | None = None) -> str | None:
 
 
 def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool, reexecute: bool = False,
-                to: str | None = None) -> Path:
-    """结论文件：提交＋部署收据＋空跑种类（开工、冷跑计时）＋终点。终点不是这种空跑的默认终点时才写进名字：后台验证接着的
-    那次（到 pre-A3）与明确执行的那次（默认 atomic-double 或到 P0 收据）是不同的空跑，不能互相顶替。"""
+                to: str | None = None, client: str = "codex", unit_inherit: str | None = None) -> Path:
+    """结论文件：客户端前缀＋提交＋部署收据＋空跑种类（开工、冷跑计时、逐单元承接）＋终点。终点不是这种空跑的默认终点时才
+    写进名字：后台验证接着的那次（到 pre-A3）与明确执行的那次（默认 atomic-double 或到 P0 收据）是不同的空跑，不能互相顶替。
+    客户端前缀取客户端表（Codex 为空，与改造前同名）；带逐单元承接请求的空跑另带请求摘要（``unit_inherit``）。"""
 
-    kind = "-opening" if opening else "-reexecute" if reexecute else ""
+    prefix = _sibling("client_table").spec(client)["dryrun_conclusion_prefix"]
+    kind = "-opening" if opening else "-reexecute" if reexecute else f"-unit-inherit-{unit_inherit[:12]}" if unit_inherit else ""
     default = OPENING_TO if opening else DEFAULT_TO
     stop = f"-to-{to}" if to and to != default else ""
-    return Path(runroot) / DIRECTORY / f"{commit[:12]}-{str(deployment['sha256'])[:12]}{kind}{stop}.json"
+    return Path(runroot) / DIRECTORY / f"{prefix}{commit[:12]}-{str(deployment['sha256'])[:12]}{kind}{stop}.json"
 
 
 def results(runroot: Path) -> list[tuple[Path, dict[str, Any]]]:
@@ -189,7 +208,7 @@ def rehearsal_env(values: Mapping[str, str], *, root: Path, runroot: Path, stamp
         "POLICY_COMPAT_RECEIPT": str(certification / "policy-compatibility.json"),
         "POLICY_ACTIVATION": str(certification / "policy-activation.json"),
         "RELEASE_CERTIFICATION": str(certification / "release-certification.json"),
-        "PRE_A3_CERTIFICATION": str(certification / "pre-a3-path-certification.json"),
+        "PRE_A3_CERTIFICATION": str(certification / PRE_A3_CERTIFICATION_NAME),
         "ENTRY_BUNDLE": bundle, "ENTRY_BRANCH": branch, "ENTRY_COMMIT": commit, "ENTRY_ROOT": str(root),
     }
     return {**dict(values), **changed}
@@ -204,25 +223,36 @@ def _env_text(values: Mapping[str, str]) -> str:
 
 # ---------------------------------------------------------------- 启动与运行
 
-def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
-    bv = _bv()
-    # 客户端表把本客户端的入口空跑登记为尚未接入时拒绝（B5a-06：Claude 的空跑按客户端起、结论带客户端前缀与该客户端的
-    # 部署收据，由 B5a-10 接入）。参数文件解析不了时照旧起空跑、由运行时报出（与改造前相同）；Codex 不受影响。
+def _client(vc_env: Path) -> str:
+    """本轮客户端：驱动参数文件的 CLIENT（缺省 codex）。参数文件解析不了时按缺省客户端（错误照旧由运行时报出，与改造前相同）。"""
+
     table = _sibling("client_table")
     try:
-        client = table.client_of(_parse_env().parse(Path(args.vc_env).read_text(encoding="utf-8")))
+        return str(table.client_of(_parse_env().parse(Path(vc_env).read_text(encoding="utf-8"))))
     except (OSError, ValueError, UnicodeDecodeError):
-        client = table.DEFAULT_CLIENT
-    waiting = table.pending(client, "tool:entry-dryrun")
-    if waiting:
-        raise DryRunError(f"本轮客户端（{client}）的入口空跑尚未接入：{waiting}")
-    deployment = bv.latest_deployment(args.data_root)
+        return str(table.DEFAULT_CLIENT)
+
+
+def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    bv = _bv()
+    # B5a-10：按本轮客户端绑定它最新的部署收据，结论文件名带客户端表登记的前缀（Codex 为空，与改造前相同）。
+    client = _client(args.vc_env)
+    deployment = bv.latest_deployment(args.data_root, client)
+    request = getattr(args, "unit_inherit_request", None)
     if args.opening and args.reexecute:
         raise DryRunError("--opening 已含重新执行全集，不要再加 --reexecute")
+    if request is not None and (args.opening or args.reexecute):
+        raise DryRunError("逐单元承接请求不能与 --opening／--reexecute（重新执行全集）同用")
+    request_sha256 = None
+    if request is not None:
+        if not Path(request).is_absolute() or Path(request).is_symlink() or not Path(request).is_file():
+            raise DryRunError(f"逐单元承接请求必须是已有的普通文件（绝对路径）：{request}")
+        request_sha256 = bv._sha256_file(Path(request))
     to = args.to or (OPENING_TO if args.opening else DEFAULT_TO)
     if to not in ALLOWED_TO:
         raise DryRunError(f"--to 只能到 {ALLOWED_TO[-1]}（VC-0 收口会发正式请求，演练根里不做）：{to}")
-    path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute, to=to)
+    path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute, to=to, client=client,
+                       unit_inherit=request_sha256)
     existing = _read(path)
     if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
         return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
@@ -232,6 +262,9 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "data_root": str(args.data_root), "runroot": str(args.runroot), "entry": str(args.entry),
         "status": "running", "pid": None, "started_at_utc": _utc_now(), "completed_at_utc": None,
         "rehearsal_root": None, "log": None, "exit_code": None, "steps": [], "failed_steps": [], "reason": None,
+        # B5a-10：非 Codex 的结论记客户端；带逐单元承接请求的空跑记请求坐标与摘要（Codex 不带请求时结论与改造前同形）。
+        **({"client": client} if client != _sibling("client_table").DEFAULT_CLIENT else {}),
+        **({"unit_inherit_request": {"path": str(request), "sha256": request_sha256}} if request is not None else {}),
     }
     busy = capture_busy()
     if busy:
@@ -391,6 +424,8 @@ def run(result: Path) -> int:
         argv += ["--reexecute-gates", "--audit-reads"]
     elif payload.get("reexecute"):
         argv += ["--reexecute-gates"]
+    elif payload.get("unit_inherit_request"):
+        argv += ["--unit-inherit-request", str(payload["unit_inherit_request"]["path"])]
     log = runroot / "entry.out"
     with log.open("ab") as handle:
         returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
@@ -400,9 +435,111 @@ def run(result: Path) -> int:
     failed = [step for step in steps if step["status"] == "failed" or step["action"] in ("阻塞", "被阻塞")]
     status = "passed" if returncode == 0 and not failed and summary else "failed"
     reason = None if status == "passed" else (summary.get("stopped_because") or f"入口编排器退出码 {returncode}，日志 {log}")
+    extra: dict[str, Any] = {}
+    client = payload.get("client")
+    if client:
+        # B5a-10：非 Codex 的结论另带没通过各步的分类（见模块说明；Codex 的结论与改造前同形）。编排器没有给出没通过的步骤
+        # 却没有通过（编排器本身出错、没有运行汇总）时记一项真实失败 entry-orchestrator。
+        classes = classify_failures(client, failed, root)
+        if status == "failed" and not classes:
+            classes = {"entry-orchestrator": {"class": "real", "reasons": [str(reason)]}}
+        extra = {"failure_classes": classes, "real_failed_steps": [step for step, item in classes.items() if item["class"] == "real"]}
     _update(path, status=status, completed_at_utc=_utc_now(), exit_code=returncode, log=str(log), steps=steps,
-            failed_steps=[step["step_id"] for step in failed], reason=reason)
+            failed_steps=[step["step_id"] for step in failed], reason=reason, **extra)
     return 0
+
+
+# ---------------------------------------------------------------- 没通过各步的分类（B5a-10，非 Codex 的结论）
+
+def _scenario_verdict(result: Mapping[str, Any]) -> tuple[str, str]:
+    """一个 pre-A3 场景结果：通过、占位（链体登记了待落实的工作项并停在占位上）或真实失败，另给原因。"""
+
+    scenario = result.get("scenario") if isinstance(result.get("scenario"), Mapping) else {}
+    metrics = scenario.get("metrics") if isinstance(scenario.get("metrics"), Mapping) else {}
+    attempts = result.get("network_attempts")
+    if scenario.get("status") == "passed" and attempts == 0:
+        return "passed", ""
+    problems = []
+    pending = metrics.get("pending")
+    if not isinstance(pending, str) or not pending.strip():
+        problems.append("链体没有登记占位（指标 pending）")
+    elif pending not in str(scenario.get("error") or ""):
+        problems.append("场景错误信息不是登记的占位")
+    if attempts != 0 or metrics.get("upstream_requests", 0) != 0:
+        problems.append(f"请求或网络计数非零（场景 {attempts!r}，链体 {metrics.get('upstream_requests')!r}）")
+    if "isolation" in metrics and (metrics.get("isolation") != "namespace" or metrics.get("network_isolated") is not True):
+        problems.append(f"隔离降级（{metrics.get('isolation')}，network_isolated={metrics.get('network_isolated')}）")
+    if "returncode" in metrics and metrics.get("returncode") in (None, 0):
+        problems.append(f"链子进程退出码 {metrics.get('returncode')!r}（超时，或没失败却判失败）")
+    return ("pending", str(pending)) if not problems else ("real", "；".join(problems))
+
+
+def classify_pre_a3(certification: Path) -> dict[str, Any]:
+    """pre-A3 一步没通过时逐场景分类：读认证（没通过时是同目录最新的旁路文件 ``<名>.failed-<UTC>.json``）登记的记录库与运行
+    清单，逐个 pre-A3 单元取执行记录与日志里那一行场景结果。返回 ``{status, certification, scenarios, pending, real}``；读不到时
+    ``status`` 为 ``unavailable`` 并写明原因（按真实失败处理）。"""
+
+    certification = Path(certification)
+    candidates = [certification] if certification.is_file() else sorted(
+        certification.parent.glob(f"{certification.stem}.failed-*{certification.suffix}"))
+    if not candidates:
+        return {"status": "unavailable", "reason": f"找不到 pre-A3 认证或旁路文件：{certification}", "pending": [], "real": []}
+    source = candidates[-1]
+    records = _sibling("unit_records")
+    try:
+        receipt = json.loads(source.read_text(encoding="utf-8"))
+        store = records.RecordStore(Path(str(receipt["record_store"])))
+        manifest = records._read_json(Path(str(receipt["unit_manifest"]["path"])))
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return {"status": "unavailable", "certification": str(source), "reason": f"认证没有登记可读的记录库与运行清单：{error}",
+                "pending": [], "real": []}
+    if not isinstance(manifest, Mapping):
+        return {"status": "unavailable", "certification": str(source), "reason": "认证登记的运行清单读不到", "pending": [], "real": []}
+    scenarios: list[dict[str, Any]] = []
+    for entry in manifest.get("units") or []:
+        unit_id = str((entry or {}).get("unit_id") or "") if isinstance(entry, Mapping) else ""
+        if not unit_id.startswith(PRE_A3_UNIT_PREFIX):
+            continue
+        verdict, why = "real", "执行记录不在记录库里"
+        record = records._read_json(store.record_path(unit_id, str(entry.get("record_sha256") or "")))
+        if isinstance(record, Mapping):
+            log = store.log_path(str((record.get("log") or {}).get("sha256") or ""))
+            try:
+                lines = [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
+                         if line.startswith(PRE_A3_RESULT_PREFIX)]
+            except OSError:
+                lines = []
+            verdict, why = "real", f"日志里的场景结果行不是恰好一行（{len(lines)} 行）"
+            if len(lines) == 1:
+                try:
+                    verdict, why = _scenario_verdict(json.loads(lines[0][len(PRE_A3_RESULT_PREFIX):]))
+                except ValueError:
+                    verdict, why = "real", "场景结果行不是 JSON"
+        scenarios.append({"unit_id": unit_id, "verdict": verdict, "why": why[:300]})
+    return {"status": "classified", "certification": str(source), "scenarios": scenarios,
+            "pending": [item["unit_id"] for item in scenarios if item["verdict"] == "pending"],
+            "real": [item["unit_id"] for item in scenarios if item["verdict"] == "real"]}
+
+
+def classify_failures(client: str, failed: list[Mapping[str, Any]], root: Path) -> dict[str, dict[str, Any]]:
+    """没通过各步的分类（见模块说明）：``registered_pending``／``scenario_pending``／``blocked``／``real``。"""
+
+    table = _sibling("client_table")
+    classes: dict[str, dict[str, Any]] = {}
+    for step in failed:
+        step_id = str(step.get("step_id"))
+        waiting = table.pending(client, f"step:{step_id}")
+        if waiting:
+            classes[step_id] = {"class": "registered_pending", "work_item": waiting}
+        elif step.get("action") in ("阻塞", "被阻塞"):
+            classes[step_id] = {"class": "blocked", "reasons": list(step.get("reasons") or [])}
+        elif step_id == "pre-a3":
+            detail = classify_pre_a3(Path(root) / "control" / "policy-certification" / PRE_A3_CERTIFICATION_NAME)
+            only_pending = detail["status"] == "classified" and bool(detail["pending"]) and not detail["real"]
+            classes[step_id] = {"class": "scenario_pending" if only_pending else "real", "detail": detail}
+        else:
+            classes[step_id] = {"class": "real", "reasons": list(step.get("reasons") or [])}
+    return classes
 
 
 def _parse(argv: list[str]) -> argparse.Namespace:
@@ -417,6 +554,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--commit", required=True)
     p_start.add_argument("--opening", action="store_true", help="升级开工的空跑：重新执行全集并带读集审计，默认到 p0-receipt")
     p_start.add_argument("--reexecute", action="store_true", help="只重新执行全集、不带审计（冷跑计时用）")
+    p_start.add_argument("--unit-inherit-request", type=Path, default=None,
+                         help="B5a-08 逐单元承接请求（交给入口编排器；与 --opening／--reexecute 互斥）")
     p_start.add_argument("--to", default=None, help=f"编排器跑到哪一步（默认 {DEFAULT_TO}；--opening 默认 {OPENING_TO}）")
     p_start.add_argument("--entry", type=Path, default=HERE / "entry.sh")
     p_run = sub.add_parser("run", help="（内部）建演练根、跑编排器、写结论")

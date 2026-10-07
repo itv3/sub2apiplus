@@ -15,11 +15,18 @@
 
 * 保留期（默认 30 天，不得短于承接期限 7 天另加 1 天余量）：保留期内写入的运行清单、执行记录与日志都留着。
 * 被引用的运行：在引用根（默认是数据根的 ``control``、``evidence``、``staging``：认证坐标、P0 收据证据根与演练根都在这几处）
-  里找登记了本记录库的文档——JSON 对象顶层 ``record_store`` 是本库、带 ``unit_manifest.run_id``，即 pre-A3 v2 认证与 P0 v2
-  证据，连同复用时复制的认证与 P0 收据证据根里的副本。入口门禁在 RUNROOT 里导出的 P0 证据只是签发收据的原料，不算引用
+  里找登记了本记录库的文档——JSON 对象顶层 ``record_store`` 是本库、带 ``unit_manifest.run_id``，即 Codex 的 pre-A3 v2 认证、
+  Claude 的 pre-A3 v3 认证（B5a-10：两客户端同一形状，认证坐标都在 ``control/policy-certification``，演练根里的在 ``staging``）、
+  两客户端的 P0 v2 证据，以及从逐单元承接运行签出的认证（``unit_manifest`` 另带承接证明），连同复用时复制的认证与 P0 收据
+  证据根里的副本。入口门禁在 RUNROOT 里导出的 P0 证据只是签发收据的原料，不算引用
   （否则每次运行都被自己的产物钉住，记录库永远清不动）。它引用的运行清单与保留期内的运行清单一样整份保留：清单列出的全部记录（本次执行、承接、诊断）。
   保留下来的每条记录，它的日志和它所在运行（承接项的原运行）的清单也留着。pre-A3 v2 认证复核与复用查找、发布认证、P0 收据
   签发与 VC-0 收口要读的文件因此都在原位（E3-02、E3-03 发现的问题）。
+* 逐单元承接目录（``unit-inherit/``，B5a-08 合同，B5a-10 纳入清理）：保留下来的运行，它的决策收据
+  （``decisions/<run_id>.json``）、撤销登记（``revocations/<run_id>.json``）与消费登记（``consumptions/<run_id>/``）都留着；保留下来的
+  决策收据与消费登记引用的证据快照（``evidence/<sha256>.json``，连同快照里再引用的快照，逐层追到底）也留着——消费端按
+  决策收据重验形成期证明、按消费登记重放签发时的快照，都要读它们。保留期内写入的同样留着；其余删掉。证据快照与日志一样按
+  内容寻址、发布方遇到同名文件刷新修改时间，清理同样先移走再复查修改时间。
 * 其余写入时间早于保留期的清单、记录与日志删掉；发布中断留下的临时文件（``.*.tmp``）超过一天删掉。目录一律不删：发布方先建
   目录再写文件，删目录会和发布抢。
 * 与发布并发：同样的日志内容寻址到同一个文件，发布方遇到已有的同名文件时刷新它的修改时间（``unit_records._publish``）。清理先
@@ -274,11 +281,37 @@ def find_references(roots: Iterable[Path], store: Path) -> dict[str, list[str]]:
     return {run_id: sorted(paths) for run_id, paths in sorted(found.items())}
 
 
+def _store_directories(root: Path) -> list[Path]:
+    """记录库里放文件的目录：运行清单、日志、记录分桶，以及逐单元承接的证据、决策、撤销与按运行分的消费登记（B5a-10）。"""
+
+    inherit = root / _records().UNIT_INHERIT_DIR
+    return [root / "runs", root / "logs", *sorted((root / "records").glob("*")), inherit / "evidence", inherit / "decisions",
+            inherit / "revocations", *sorted((inherit / "consumptions").glob("*"))]
+
+
+def _evidence_refs(value: Any) -> set[str]:
+    """JSON 里引用的证据快照摘要：形如 ``{path, sha256}``、路径指向 ``evidence/<sha256>.json`` 的引用（逐单元承接合同的证据索引）。"""
+
+    found: set[str] = set()
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            digest, location = item.get("sha256"), item.get("path")
+            if (set(item) == {"path", "sha256"} and isinstance(digest, str) and SHA256.fullmatch(digest) and isinstance(location, str)
+                    and Path(location).name == f"{digest}.json" and Path(location).parent.name == "evidence"):
+                found.add(digest)
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return found
+
+
 def _restore_trash(root: Path) -> int:
     """上次清理中断留下的移走文件：原名空着就放回（交给本次重新判定），原名已有（发布方重写了）就删掉移走的那份。"""
 
     restored = 0
-    for directory in [root / "runs", root / "logs", *sorted((root / "records").glob("*"))]:
+    for directory in _store_directories(root):
         if not directory.is_dir() or directory.is_symlink():
             continue
         for path in directory.iterdir():
@@ -378,9 +411,37 @@ def gc_record_store(store: Path, *, reference_roots: Iterable[Path], retention_h
             if (_mtime(path) or 0.0) >= cutoff:
                 keep_record(path)
 
+        # 逐单元承接目录（B5a-10）：保留下来的运行的决策、撤销与消费登记，以及它们逐层引用的证据快照。
+        inherit = root / records.UNIT_INHERIT_DIR
+        kept_runs = {run_id for run_id, path in runs.items() if path in keep or (_mtime(path) or 0.0) >= cutoff}
+        decision_files = _plain_files(inherit / "decisions", "*.json")
+        revocation_files = _plain_files(inherit / "revocations", "*.json")
+        consumption_files = _plain_files(inherit / "consumptions", "*/*.json")
+        evidence_files = {path.stem: path for path in _plain_files(inherit / "evidence", "*.json")}
+        for path in (*decision_files, *revocation_files):
+            if path.stem in kept_runs:
+                keep.add(path)
+        for path in consumption_files:
+            if path.parent.name in kept_runs:
+                keep.add(path)
+        pending_refs: set[str] = set()
+        for path in (*decision_files, *consumption_files):
+            if path in keep or (_mtime(path) or 0.0) >= cutoff:
+                pending_refs |= _evidence_refs(records._read_json(path))
+        kept_evidence: set[str] = set()
+        while pending_refs:
+            digest = pending_refs.pop()
+            if digest in kept_evidence or digest not in evidence_files:
+                continue
+            kept_evidence.add(digest)
+            keep.add(evidence_files[digest])
+            pending_refs |= _evidence_refs(records._read_json(evidence_files[digest])) - kept_evidence
+
         counts: dict[str, dict[str, int]] = {}
         renewed = 0
-        for kind, files in (("runs", sorted(runs.values())), ("records", record_files), ("logs", log_files)):
+        for kind, files in (("runs", sorted(runs.values())), ("records", record_files), ("logs", log_files),
+                            ("unit_inherit_decisions", decision_files), ("unit_inherit_revocations", revocation_files),
+                            ("unit_inherit_consumptions", consumption_files), ("unit_inherit_evidence", sorted(evidence_files.values()))):
             row = {"total": len(files), "kept": 0, "removed": 0, "removed_bytes": 0}
             for path in files:
                 if path in keep or (_mtime(path) or 0.0) >= cutoff:
@@ -399,7 +460,7 @@ def gc_record_store(store: Path, *, reference_roots: Iterable[Path], retention_h
                     renewed += 1
             counts[kind] = row
         temporary = 0
-        for directory in [root / "runs", root / "logs", *sorted((root / "records").glob("*"))]:
+        for directory in _store_directories(root):
             if not directory.is_dir() or directory.is_symlink():
                 continue
             for path in directory.iterdir():
