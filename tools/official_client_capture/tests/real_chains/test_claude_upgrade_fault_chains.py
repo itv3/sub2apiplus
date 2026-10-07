@@ -60,6 +60,7 @@ from tools.official_client_capture.tests import managed_tree_copy as trees
 from tools.official_client_capture.tests import claude_chain_driver as chain_driver
 from tools.official_client_capture.tests import claude_late_stage_chain_driver as late_driver
 from tools.official_client_capture.tests import claude_late_control_chain_driver as late_control_driver
+from tools.official_client_capture.tests import claude_transient_chain_driver as transient_driver
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_predecessor as predecessor_tests
@@ -1680,6 +1681,13 @@ class _LateControlFaultScenarios(late_control_driver.ClaudeLateControlChainDrive
     def _scenario_control_and_delivery_in_one_campaign(self) -> None:
         records = self.exercise_control_and_delivery_faults()
         self.assertEqual(len(records), 6)
+
+
+class _TransientSegmentScenarios(transient_driver.ClaudeTransientChainDriver):
+    """恢复段未认证场景；定向串行验收完成前不加入外层完整链登记。"""
+
+    def _scenario_apply_run_seal_builder_in_one_campaign(self) -> None:
+        self.run_transient_chain()
 
 
 class ClaudeFaultChainTests(unittest.TestCase):
