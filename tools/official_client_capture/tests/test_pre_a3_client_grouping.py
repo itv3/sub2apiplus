@@ -528,5 +528,28 @@ class DecouplingTests(unittest.TestCase):
                          (("pre-a3-path-certification/v1", "pre-a3-path-certification/v2"), "pre-a3:", "tool-release-certification/v1"))
 
 
+class RuntimeBoundaryTests(unittest.TestCase):
+    """5a 收口：pre-A3 运行时模块不依赖测试目录；campaign-run 分批演练绑定只属于 Codex。"""
+
+    def test_runtime_module_does_not_import_tests_and_keeps_the_fixture_variable(self) -> None:
+        from tools.official_client_capture.tests import project_ledger_fixture
+
+        # 只核模块级导入：模块导入时就执行，测试目录缺失会让整个模块（连同依赖它的 Claude seal 链）导入失败；两处函数体内的
+        # 测试导入（串行认证与账务场景）只在运行对应场景时才执行，那时测试目录本来就要在。
+        tree = ast.parse(Path(pre_a3.__file__).read_text(encoding="utf-8"))
+        imported = {node.module for node in tree.body if isinstance(node, ast.ImportFrom) and node.module}
+        imported |= {alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names}
+        self.assertEqual(sorted(name for name in imported if ".tests" in name or name.startswith("tests")), [])
+        # 字面量与测试夹具同值：A2.5 路径认证切夹具总账为 fixture_only 靠的是同一个环境变量名。
+        self.assertEqual(pre_a3.FIXTURE_ONLY_ENV, project_ledger_fixture.FIXTURE_ONLY_ENV)
+
+    def test_claude_refuses_the_campaign_run_rehearsal_binding(self) -> None:
+        self.assertIsNone(pre_a3.REHEARSAL_BINDERS["claude"])
+        self.assertIsNotNone(pre_a3.REHEARSAL_BINDERS["codex"])
+        self.assertIsNone(pre_a3._bind_rehearsal_receipt(None, {}, "claude"))
+        with self.assertRaisesRegex(pre_a3.CertificationError, "只属于 Codex 的分批演练合同"):
+            pre_a3._bind_rehearsal_receipt(Path("rehearsal.json"), {}, "claude")
+
+
 if __name__ == "__main__":
     unittest.main()

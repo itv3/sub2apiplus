@@ -344,7 +344,11 @@ def _summary_for(manifest: dict, *, fail_units: set[str] = frozenset(), skipped:
 class EntryGatesPreA3InputsTests(unittest.TestCase):
     def test_runner_module_level_test_imports_are_declared_for_every_scenario(self) -> None:
         """场景运行器（pre-A3 认证模块）模块级导入的测试目录模块每个场景都会读（E3-04 读集审计实测），必须都在
-        PRE_A3_RUNNER_FIXTURES 里；运行器以后新增这类导入而忘了登记时这里失败。"""
+        PRE_A3_RUNNER_FIXTURES 里；运行器以后新增这类导入而忘了登记时这里失败。
+
+        5a 收口起运行器在模块级不再导入测试目录（``FIXTURE_ONLY_ENV`` 改为字面量，受管副本树去掉 tests 时照常导入），所以
+        模块级测试导入必须是空集、且只能是登记过的子集。PRE_A3_RUNNER_FIXTURES 仍声明总账夹具：运行器在每个场景里设置它的
+        fixture_only 开关，场景测试模块经它建总账、每个场景都会读；保留声明让 Codex 与 Claude 场景单元的输入声明逐字不变。"""
 
         import ast
 
@@ -356,8 +360,9 @@ class EntryGatesPreA3InputsTests(unittest.TestCase):
                 imported.update(f"tools/official_client_capture/tests/{alias.name}.py" for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("tools.official_client_capture.tests."):
                 imported.add(node.module.replace(".", "/") + ".py")
-        self.assertTrue(imported, "运行器应当在模块级导入了测试夹具（否则这条核对就没有意义了）")
-        self.assertEqual(imported, set(eg.PRE_A3_RUNNER_FIXTURES))
+        self.assertEqual(imported, set(), "运行器在模块级不得导入测试目录（5a 收口）")
+        self.assertTrue(imported <= set(eg.PRE_A3_RUNNER_FIXTURES))
+        self.assertEqual(eg.PRE_A3_RUNNER_FIXTURES, ("tools/official_client_capture/tests/project_ledger_fixture.py",))
         declared = eg.pre_a3_inputs("tools/official_client_capture/tests/test_x.py", [])
         self.assertTrue(set(eg.PRE_A3_RUNNER_FIXTURES) <= {item["path"] for item in declared["files"]})
 

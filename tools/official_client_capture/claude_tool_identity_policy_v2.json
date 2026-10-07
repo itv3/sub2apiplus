@@ -1,8 +1,8 @@
 {
   "schema_version": "tool-identity-policy/v3",
   "client": "claude",
-  "policy_version": 2,
-  "description": "Claude Code 升级受管工具身份策略（Claude 升级控制面设计 B1-08；v2 起 runtime_bindings 登记 node v24.21.0，B5a-03）。两个受管根，条目键为 <根目录名>/<相对路径>；Codex 专属文件进 ignored_prefixes，v3 引擎在闭包到达它们时失败关闭；与 Codex 共用的文件按 Codex 策略的同一层归层（codex_upgrade_vc0_closeout.py 因 host_layout 绑定归 control）；整文件计入的 wire／evidence 模块不得导入被忽略的文件；node 运行时在 B5a-03 冻结后登记。",
+  "policy_version": 3,
+  "description": "Claude Code 升级受管工具身份策略（Claude 升级控制面设计 B1-08；v2 起 runtime_bindings 登记 node v24.21.0，B5a-03；v3 起 Claude 控制面依赖的六个共享文件归 control 层、claude_21220 按用途归层，5a 收口）。两个受管根，条目键为 <根目录名>/<相对路径>；Codex 专属文件进 ignored_prefixes，v3 引擎在闭包到达它们时失败关闭；与 Codex 共用的文件按 Codex 策略的同一层归层（codex_upgrade_vc0_closeout.py 因 host_layout 绑定归 control）；Claude 控制面依赖的共享文件（候选构建、Job 演练、campaign-run 演练与派发前停线、零请求网络守护）不得留在忽略清单里，非忽略模块直接导入忽略文件只允许 tests/test_claude_tool_identity_policy 白名单里登记过理由的 Codex 专属路径；整文件计入的 wire／evidence 模块不得导入被忽略的文件；node 运行时在 B5a-03 冻结后登记。",
   "roots": [
     "tools/official_client_capture",
     "tools/official_client_control"
@@ -20,20 +20,15 @@
     "official_client_capture/codex_upgrade_rules_",
     "official_client_capture/codex_upgrade_evidence_labels_",
     "official_client_capture/codex_upgrade_campaign_disposition.py",
-    "official_client_capture/codex_upgrade_campaign_run_rehearsal_receipt.py",
-    "official_client_capture/codex_upgrade_candidate_build.py",
     "official_client_capture/codex_upgrade_candidate_readiness.py",
     "official_client_capture/codex_upgrade_environment_probe.py",
-    "official_client_capture/codex_upgrade_job_rehearsal_receipt.py",
     "official_client_capture/codex_upgrade_legacy_boundary.py",
     "official_client_capture/codex_upgrade_live_request_provenance.py",
     "official_client_capture/codex_upgrade_official_asset_receipt.py",
     "official_client_capture/codex_upgrade_official_attempt_audit.py",
-    "official_client_capture/codex_upgrade_predispatch_stop.py",
     "official_client_capture/codex_upgrade_receipt_finalizer.py",
     "official_client_capture/codex_upgrade_seal_rehearsal.py",
     "official_client_capture/codex_upgrade_time_reconciliation.py",
-    "official_client_capture/codex_upgrade_zero_request_smoke.py",
     "official_client_capture/codex_egress_profile.schema.json",
     "official_client_capture/codex_runtime_egress_",
     "official_client_capture/acceptance_contract.py",
@@ -65,8 +60,7 @@
     "official_client_capture/run_sub2api_",
     "official_client_capture/scenario_receipts.py",
     "official_client_capture/tool_identity_policy_v2.json",
-    "official_client_capture/analyze_claude_",
-    "official_client_capture/claude_21220/"
+    "official_client_capture/analyze_claude_"
   ],
   "layers": {
     "wire_producer": {
@@ -95,6 +89,9 @@
     "evidence_semantics": {
       "files": [
         "official_client_capture/candidate_evidence_guard.py",
+        "official_client_capture/claude_21220/hitcc_2_1_197_coverage.json",
+        "official_client_capture/claude_21220/rules_2_1_220.json",
+        "official_client_capture/claude_21220/source_2_1_88_coverage.json",
         "official_client_capture/claude_acceptance_contract.py",
         "official_client_capture/claude_build_rule_assertion_results.py",
         "official_client_capture/claude_build_runtime_audit.py",
@@ -133,16 +130,21 @@
       "files": [
         "__init__.py",
         "official_client_capture/certify_release.py",
+        "official_client_capture/claude_21220/check_coverage.py",
         "official_client_capture/claude_root_cause_codes.json",
         "official_client_capture/claude_tool_identity_policy.py",
         "official_client_capture/claude_tool_identity_policy_v2.json",
         "official_client_capture/claude_upgrade_client_adapter.py",
         "official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+        "official_client_capture/codex_upgrade_campaign_run_rehearsal_receipt.py",
+        "official_client_capture/codex_upgrade_candidate_build.py",
         "official_client_capture/codex_upgrade_evidence_permissions.py",
         "official_client_capture/codex_upgrade_gate_receipt.py",
         "official_client_capture/codex_upgrade_harden_evidence_permissions.py",
+        "official_client_capture/codex_upgrade_job_rehearsal_receipt.py",
         "official_client_capture/codex_upgrade_policy_certification.py",
         "official_client_capture/codex_upgrade_pre_a3_certification.py",
+        "official_client_capture/codex_upgrade_predispatch_stop.py",
         "official_client_capture/codex_upgrade_project_ledger.py",
         "official_client_capture/codex_upgrade_reconciler.py",
         "official_client_capture/codex_upgrade_root_cause.py",
@@ -153,6 +155,7 @@
         "official_client_capture/codex_upgrade_vc_artifacts.py",
         "official_client_capture/codex_upgrade_vc_receipt.py",
         "official_client_capture/codex_upgrade_wire_transition.py",
+        "official_client_capture/codex_upgrade_zero_request_smoke.py",
         "official_client_capture/incremental_recovery.py",
         "official_client_capture/post_run_secret_scan_receipt.py",
         "official_client_capture/runtime_host_receipt.py",

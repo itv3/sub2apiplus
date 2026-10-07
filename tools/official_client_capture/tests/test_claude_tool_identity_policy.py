@@ -29,6 +29,43 @@ from tools.official_client_capture import upgrade_client_adapter
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TOOL_ROOT.parents[1]
 CONTROL_ROOT = TOOL_ROOT.parent / "official_client_control"
+# 5a 收口（Claude 策略 v3）：Claude 控制面依赖、此前却在忽略清单里的共享文件，归 control 层。
+CONTROL_PLANE_SHARED_FILES = (
+    "codex_upgrade_campaign_run_rehearsal_receipt.py",
+    "codex_upgrade_candidate_build.py",
+    "codex_upgrade_job_rehearsal_receipt.py",
+    "codex_upgrade_predispatch_stop.py",
+    "codex_upgrade_zero_request_smoke.py",
+)
+# claude_21220 按用途归层：三份历史数据只被 evidence 层的 FW-E 完整 Campaign 与历史候选基线生成器读（基线产物本身在
+# evidence 层），归 evidence；历史一致性检查器只由测试运行，归 control。
+CLAUDE_21220_LAYERS = {
+    "check_coverage.py": "control",
+    "hitcc_2_1_197_coverage.json": "evidence_semantics",
+    "rules_2_1_220.json": "evidence_semantics",
+    "source_2_1_88_coverage.json": "evidence_semantics",
+}
+# 受管、非忽略模块直接导入被忽略文件的白名单：（导入方, 被导入方）→ 理由。都是共享控制模块里只服务 Codex 的路径。
+IGNORED_IMPORT_ALLOWLIST: dict[tuple[str, str], str] = {
+    ("codex_upgrade_reconciler.py", "codex_upgrade.py"): "对账器顶层导入 Codex 编排器，只在 Codex 分支使用；Claude 经适配器的编排器服务面",
+    ("codex_upgrade_vc0_closeout.py", "codex_upgrade.py"): "VC-0 收口顶层导入 Codex 编排器，Claude 收口经收口画像与编排器服务面（B2-11）",
+    ("codex_upgrade_reconciler.py", "codex_upgrade_live_request_provenance.py"): (
+        "顶层导入 Codex 的请求计量；对账时一律经适配器的 provenance 成员，Claude 绑定 claude_upgrade_live_request_provenance"
+    ),
+    ("codex_upgrade_supervisor.py", "build_assertion_bundle.py"): "Codex VC-5 断言证据包核验（ACC-02）；Claude VC-5 批次是否经过由 B4-06b 接批次时确认",
+    ("codex_upgrade_supervisor.py", "codex_upgrade_seal_rehearsal.py"): "Codex VC-5 seal 预演门禁；Claude VC-5 批次是否经过由 B4-06b 接批次时确认",
+    ("upgrade_control_plane.py", "codex_upgrade_seal_rehearsal.py"): "rehearse-candidate-seal 子命令（Codex 候选 seal 预演），Claude 不注册该子命令",
+    ("codex_upgrade_vc0_closeout.py", "model_condition_receipts.py"): "Codex VC-0 收口的中继请求逐帧计数，只在 Codex 收口画像路径上调用",
+    ("codex_upgrade_job_rehearsal_receipt.py", "build_evidence_catalog.py"): (
+        "Codex 证据标签声明（codex_upgrade_evidence_labels_*）的完整性核对，函数体内导入，只在 Codex 画像路径；Claude 画像自带标签绑定"
+    ),
+    # 零请求冒烟模块：Claude 只用它的 _NetworkGuard（pre-A3 逐场景执行时把 socket.connect 换成失败关闭），模块顶层导入的
+    # 下面四个 Codex 冒烟依赖只服务 Codex 的零请求冒烟本身。
+    ("codex_upgrade_zero_request_smoke.py", "codex_upgrade_campaign_disposition.py"): "Codex 零请求冒烟的 Campaign 处置，Claude 只用 _NetworkGuard",
+    ("codex_upgrade_zero_request_smoke.py", "codex_upgrade_live_request_provenance.py"): "Codex 零请求冒烟的请求计量，Claude 只用 _NetworkGuard",
+    ("codex_upgrade_zero_request_smoke.py", "codex_upgrade_official_attempt_audit.py"): "Codex 零请求冒烟的官方 attempt 审计，Claude 只用 _NetworkGuard",
+    ("codex_upgrade_zero_request_smoke.py", "codex_upgrade_time_reconciliation.py"): "Codex 零请求冒烟的时间对账，Claude 只用 _NetworkGuard",
+}
 POLICY: dict[str, Any] = {
     "schema_version": "tool-identity-policy/v3",
     "client": "claude",
@@ -360,7 +397,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 2))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 3))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
@@ -406,6 +443,41 @@ class ClaudePolicyFileTests(unittest.TestCase):
             targets = set(aliases.values()) | {owner for owner, _symbol in symbols.values()}
             with self.subTest(path=key):
                 self.assertEqual([target for target in sorted(targets) if v3.classify_path(self.policy, index[target]) is None], [])
+
+    def test_control_plane_dependencies_are_layered(self) -> None:
+        """5a 收口（策略 v3）：Claude 控制面依赖的六个共享文件归 control，claude_21220 按用途归层（历史数据归 evidence、
+        只被测试运行的历史检查器归 control），不再留在忽略清单里。"""
+
+        for name in CONTROL_PLANE_SHARED_FILES:
+            with self.subTest(path=name):
+                self.assertEqual(v3.classify_path(self.policy, f"official_client_capture/{name}"), "control")
+        for name, layer in CLAUDE_21220_LAYERS.items():
+            with self.subTest(path=name):
+                self.assertEqual(v3.classify_path(self.policy, f"official_client_capture/claude_21220/{name}"), layer)
+        self.assertEqual(
+            sorted(key.removeprefix("official_client_capture/claude_21220/") for key in self.digests if key.startswith("official_client_capture/claude_21220/")),
+            sorted(CLAUDE_21220_LAYERS),
+            "claude_21220 新增文件要在这里按用途登记层",
+        )
+
+    def test_non_ignored_modules_import_ignored_files_only_on_allowlist(self) -> None:
+        """防回归（5a 收口）：受管、非忽略的模块直接导入被忽略的文件，就是「Claude 依赖它、它的变化却不进 Claude 层摘要」的
+        身份盲区。只允许 ``IGNORED_IMPORT_ALLOWLIST`` 里登记过理由的 Codex 专属路径；其余一律在策略里归层或改经适配器。"""
+
+        index = v3._module_index(self.policy, self.digests)
+        modules = {key: module for module, key in index.items()}
+        found: set[tuple[str, str]] = set()
+        for key in sorted(self.digests):
+            if v3.classify_path(self.policy, key) is None or key not in modules:
+                continue
+            tree = ast.parse((REPOSITORY_ROOT / "tools" / key).read_text(encoding="utf-8"))
+            nodes = [node for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign))]
+            aliases, symbols = v3._resolve_imports(nodes, modules[key], index)
+            for target in set(aliases.values()) | {owner for owner, _symbol in symbols.values()}:
+                if v3.classify_path(self.policy, index[target]) is None:
+                    found.add((key.removeprefix("official_client_capture/"), index[target].removeprefix("official_client_capture/")))
+        self.assertEqual(sorted(found - set(IGNORED_IMPORT_ALLOWLIST)), [], "新的身份盲区：在策略里归层，或登记进白名单并写明理由")
+        self.assertEqual(sorted(set(IGNORED_IMPORT_ALLOWLIST) - found), [], "白名单里有已经不存在的导入，删掉")
 
     def test_typescript_binding_matches_makefile(self) -> None:
         makefile = (REPOSITORY_ROOT / "Makefile").read_text(encoding="utf-8")

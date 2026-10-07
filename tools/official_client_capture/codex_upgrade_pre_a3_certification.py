@@ -49,7 +49,6 @@ from tools.official_client_capture import codex_upgrade_policy_certification as 
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 from tools.official_client_capture import codex_upgrade_zero_request_smoke as smoke
 from tools.official_client_capture import upgrade_client_adapter
-from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
 # E3-02：从单元执行记录组装的新形状（v1 字段全部保留，另带逐场景的执行记录引用与运行清单引用）。
@@ -73,7 +72,9 @@ DEFAULT_CLIENT = "codex"
 # 修好接着跑第 19 项：跨部署复用既有 pre-A3 认证时登记的复用收据（write-once、按绑定内容幂等）。
 REUSE_SCHEMA_VERSION = "pre-a3-reuse-receipt/v1"
 REUSE_RECEIPT_PREFIX = "pre-a3-reuse-"
-FIXTURE_ONLY_ENV = project_ledger_fixture.FIXTURE_ONLY_ENV
+# 夹具总账切成 fixture_only 的环境变量（A2.5 路径认证）。与 tests/project_ledger_fixture.FIXTURE_ONLY_ENV 同值（测试锁定）：
+# 运行时模块不导入测试目录，受管副本树去掉 tests 时照常可用（5a 收口）。
+FIXTURE_ONLY_ENV = "CODEX_FIXTURE_LEDGER_FIXTURE_ONLY"
 # R13 分阶段登记：阶段 1 只要求 validation_only 连续链；R18 追加后段父失败注入链（VC-2／VC-4／VC-5）、
 # 0.156.1 录制证据零请求回放的 VC-1 取证链与 VC-1 连续恢复链。
 REAL_CHAIN_IDS = (
@@ -656,8 +657,9 @@ def _bind_codex_rehearsal_receipt(path: Path, identity: Mapping[str, Any]) -> di
     }
 
 
-# 可绑定原子演练收据的客户端 → 绑定函数。Claude 的原子演练收据（official-client-atomic-vc0-vc1-rehearsal/v1）由 B5a-09
-# 落实，此前给出即拒绝，不拿 Codex 的演练合同冒充。
+# 可绑定 campaign-run 分批演练收据的客户端 → 绑定函数。该绑定只属于 Codex 的分批演练合同；Claude 不接受（None），给出即
+# 拒绝，不拿 Codex 的演练合同冒充。Claude 的原子演练收据（official-client-atomic-vc0-vc1-rehearsal/v1）不经这里，由发布认证的
+# atomic-double 按客户端重放（B5a-09 续）。
 REHEARSAL_BINDERS: Mapping[str, Callable[[Path, Mapping[str, Any]], dict[str, Any]] | None] = {
     "codex": _bind_codex_rehearsal_receipt,
     "claude": None,
@@ -673,7 +675,7 @@ def _bind_rehearsal_receipt(
         return None
     binder = REHEARSAL_BINDERS[require_client(client)]
     if binder is None:
-        raise CertificationError(f"客户端 {client} 的原子演练收据合同尚未落实（B5a-09），不能绑定")
+        raise CertificationError(f"客户端 {client} 不接受 campaign-run 分批演练收据：该绑定只属于 Codex 的分批演练合同")
     return binder(Path(path), identity)
 
 

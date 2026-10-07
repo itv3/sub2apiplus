@@ -5341,8 +5341,8 @@ def assert_formal_compatible(
 ) -> None:
     """拒绝 Formal 使用不同 Job、工具、容器、二进制或运行镜像。
 
-    客户端按期望执行合同的合同名认（B2-10）：合同校验与 Formal 必需的探针摘要取该客户端的画像（Codex：存储路由与失败
-    生命周期两项；Claude 没有这两个探针）。
+    客户端按期望执行合同的合同名认（B2-10）：合同校验与 Formal 必需的探针摘要取该客户端的画像。两客户端都要求存储路由
+    与失败生命周期两项探针摘要（``FORMAL_PROBE_DIGESTS``）；Claude 的失败生命周期探针由 B2-11 第二部分补上。
     """
 
     profile = _document_adapter(_schema_of(expected_contract)).job_rehearsal_profile

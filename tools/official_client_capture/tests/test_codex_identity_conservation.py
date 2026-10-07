@@ -55,7 +55,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                               "重放经适配器成员，其余客户端差异经画像（Codex 画像就是本模块，各项取值是改造前写死的原值），"
                                               "四个依赖与容器探针加缺省为原值的参数；facts、收据与合同按合同名认客户端，Claude 签 "
                                               "official-client-job-rehearsal-*；命令行加 --client（缺省 codex）。本模块没有符号在评估读侧闭包内；"
-                                              "Codex 的合同、facts 校验、收据、重放与报错逐字不变（test_claude_upgrade_job_rehearsal 的 Codex 对照）",
+                                              "Codex 的合同、facts 校验、收据、重放与报错逐字不变（test_claude_upgrade_job_rehearsal 的 Codex 对照）；"
+                                              "5a 收口只改 assert_formal_compatible 的 docstring（两客户端都要求存储路由与失败生命周期两项探针摘要），"
+                                              "代码不变",
     "codex_upgrade_client_adapter.py": "B1-01 Codex 适配器成员取值（逐字等于改造前写死的名字）；B2-08 新增两个成员函数，取值逐字等于对账器原写法"
                                        "（after 探针加恢复收据、部署收据顶层五摘要）",
     "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同；B3-06 阶段审核后继协议"
@@ -87,7 +89,10 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                              "B5a-05 只填 Claude 的两张字面量登记表 CLAUDE_REAL_CHAIN_IDS、CLAUDE_SCENARIOS（最小恢复演练四条链），"
                                              "两者不在 Codex 评估读侧闭包内，Codex 场景表、单元与收据不变；"
                                              "B5a-05 收尾给派发秒数表 SCENARIO_SECONDS 追加 Claude 四条真实链的 ARM64 实测秒数（取整到秒，只决定"
-                                             "执行器派发顺序；Codex 七项不变，见 test_pre_a3_codex_parity），并改写 Claude 登记表上方已过时的「等 B2-08」注释",
+                                             "执行器派发顺序；Codex 七项不变，见 test_pre_a3_codex_parity），并改写 Claude 登记表上方已过时的「等 B2-08」注释；"
+                                             "5a 收口：模块级不再导入测试目录，FIXTURE_ONLY_ENV 改写为同值字面量（测试锁定两边同值）；REHEARSAL_BINDERS "
+                                             "注释与 Claude 分支的拒绝报错改为当前事实（campaign-run 分批演练绑定只属于 Codex，Claude 不接受），Codex 分支"
+                                             "与输出不变",
     "codex_upgrade_policy_certification.py": "B5a-04 策略认证按客户端：Claude 按 v3 引擎算身份、认 Claude 部署收据；编排器引用经适配器（Codex 合同与输出逐字不变）",
     "certify_release.py": "B5a-04 发布认证按客户端：Claude 签 tool-release-certification/v2（加 client）；编排器引用经适配器（Codex v1 逐字不变）；"
                           "B2-11 第二部分 Job 演练按认证的客户端重放（Codex 传 codex：合法收据的结果与报错不变，另一客户端的收据被拒），"

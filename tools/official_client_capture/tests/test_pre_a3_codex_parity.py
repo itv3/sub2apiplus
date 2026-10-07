@@ -15,6 +15,10 @@
 ``SCENARIO_SECONDS`` 补 Claude 四条真实链的实测秒数。按 AST 逐个顶层语句对照——除这两张表的赋值与秒数表以外，每个语句
 （Codex 场景表、全部函数与常量）与 B5a-08 提交逐字相同；秒数表的 Codex 七项逐项不变，新增的键恰好是 Claude 的真实链 ID；
 注释改写不进 AST，不影响判定。B5a-08 的源码残差对照因本文件在它之后又改过而跳过，这一项接着守住 Codex 部分不变。
+
+5a 收口（B5a-11）在此之外只许改三处顶层语句，逐项单独核对：去掉模块级 ``from tools.official_client_capture.tests import
+project_ledger_fixture``（运行时模块不导入测试目录）；``FIXTURE_ONLY_ENV`` 由引用夹具常量改为同值字面量；
+``_bind_rehearsal_receipt`` 只改 Claude 分支的拒绝报错文字（campaign-run 分批演练绑定只属于 Codex），其余逐字不变。
 """
 
 from __future__ import annotations
@@ -26,9 +30,11 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from typing import Any
 
 from tools.ci import entry_gates
 from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
+from tools.official_client_capture.tests import project_ledger_fixture
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASELINE_COMMIT = "68745c9dd"
@@ -38,6 +44,10 @@ B5A05_BASELINE_COMMIT = "c53571c7d"
 B5A05_CLAUDE_TABLES = ("CLAUDE_REAL_CHAIN_IDS", "CLAUDE_SCENARIOS")
 # B5a-05 收尾只许给派发秒数表追加 Claude 真实链的键（Codex 的键与秒数不变）。
 B5A05_SECONDS_TABLE = "SCENARIO_SECONDS"
+# 5a 收口（B5a-11）许改的三处顶层语句：去掉的测试目录导入、改成字面量的夹具环境变量、只改拒绝报错文字的绑定函数。
+B5A11_TESTS_IMPORT_MODULE = "tools.official_client_capture.tests"
+B5A11_FIXTURE_ENV_NAME = "FIXTURE_ONLY_ENV"
+B5A11_BIND_FUNCTION = "_bind_rehearsal_receipt"
 STAGING_PARENT = Path("/root/docker/capture-cli/data/staging/pre-a3-scenarios")
 WORKDIR = Path("/root/docker/capture-cli/data")
 
@@ -87,7 +97,8 @@ class PreA3CodexParityTests(unittest.TestCase):
                          "门禁记录里的字面命令相同")
 
     def test_b5a05_only_fills_the_claude_tables(self) -> None:
-        """B5a-05：除两张 Claude 登记表的赋值与秒数表里追加的 Claude 项外，认证模块的每个顶层语句与 B5a-08 提交逐字相同（AST 级）。"""
+        """B5a-05：除两张 Claude 登记表的赋值、秒数表里追加的 Claude 项与 5a 收口的三处外，认证模块的每个顶层语句与 B5a-08
+        提交逐字相同（AST 级）；5a 收口的三处逐项单独核对。"""
 
         relative = "tools/official_client_capture/codex_upgrade_pre_a3_certification.py"
         try:
@@ -96,29 +107,59 @@ class PreA3CodexParityTests(unittest.TestCase):
         except (OSError, subprocess.CalledProcessError):
             self.skipTest(f"读不到基线提交 {B5A05_BASELINE_COMMIT} 的认证模块（浅克隆或不在仓库内）")
 
-        def statements(text: str) -> tuple[list[str], dict[str, str], dict[str, float]]:
-            """顶层语句的 AST 转储：两张 Claude 表单独取出，秒数表取字面值，其余按原顺序。"""
+        def statements(text: str) -> tuple[list[str], dict[str, str], dict[str, float], dict[str, Any]]:
+            """顶层语句的 AST 转储：两张 Claude 表单独取出，秒数表取字面值，5a 收口的三处另取，其余按原顺序。"""
 
             others: list[str] = []
             tables: dict[str, str] = {}
             seconds: dict[str, float] = {}
+            closeout: dict[str, Any] = {"tests_imports": []}
             for node in ast.parse(text).body:
                 target = node.target if isinstance(node, ast.AnnAssign) else None
+                names = [item.id for item in node.targets if isinstance(item, ast.Name)] if isinstance(node, ast.Assign) else []
                 if isinstance(target, ast.Name) and target.id in B5A05_CLAUDE_TABLES:
                     tables[target.id] = ast.dump(node)
                 elif isinstance(target, ast.Name) and target.id == B5A05_SECONDS_TABLE:
                     # 注解与赋值形状不变，只比较字面值（追加的键另行核对）。
                     others.append(ast.dump(node.annotation))
                     seconds = ast.literal_eval(node.value)
+                elif isinstance(node, ast.ImportFrom) and node.module == B5A11_TESTS_IMPORT_MODULE:
+                    closeout["tests_imports"].append([alias.name for alias in node.names])
+                elif names == [B5A11_FIXTURE_ENV_NAME]:
+                    closeout["fixture_env"] = node.value
+                elif isinstance(node, ast.FunctionDef) and node.name == B5A11_BIND_FUNCTION:
+                    # 把函数里 raise 的报错参数换成占位，其余结构逐字比较；报错文字单独取出。
+                    messages: list[str] = []
+                    for raise_node in [item for item in ast.walk(node) if isinstance(item, ast.Raise)]:
+                        call = raise_node.exc
+                        if isinstance(call, ast.Call) and call.args:
+                            messages.append(ast.unparse(call.args[0]))
+                            call.args = [ast.Constant(value="<报错文字>")]
+                    closeout["bind_shape"] = ast.dump(node)
+                    closeout["bind_messages"] = messages
                 else:
                     others.append(ast.dump(node))
-            return others, tables, seconds
+            return others, tables, seconds, closeout
 
-        old_others, old_tables, old_seconds = statements(source)
-        new_others, new_tables, new_seconds = statements((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        old_others, old_tables, old_seconds, old_closeout = statements(source)
+        new_others, new_tables, new_seconds, new_closeout = statements((REPO_ROOT / relative).read_text(encoding="utf-8"))
         self.assertEqual(sorted(old_tables), sorted(B5A05_CLAUDE_TABLES))
         self.assertEqual(sorted(new_tables), sorted(B5A05_CLAUDE_TABLES))
-        self.assertEqual(new_others, old_others, "两张 Claude 登记表与秒数表以外的顶层语句与 B5a-08 提交逐字相同")
+        self.assertEqual(new_others, old_others,
+                         "两张 Claude 登记表、秒数表与 5a 收口三处以外的顶层语句与 B5a-08 提交逐字相同")
+        # 5a 收口①：基线在模块级导入测试夹具，现在不再导入测试目录。
+        self.assertEqual(old_closeout["tests_imports"], [["project_ledger_fixture"]])
+        self.assertEqual(new_closeout["tests_imports"], [])
+        # 5a 收口②：基线引用夹具常量，现在是与夹具同值的字面量。
+        self.assertEqual(ast.unparse(old_closeout["fixture_env"]), "project_ledger_fixture.FIXTURE_ONLY_ENV")
+        self.assertIsInstance(new_closeout["fixture_env"], ast.Constant)
+        self.assertEqual(new_closeout["fixture_env"].value, project_ledger_fixture.FIXTURE_ONLY_ENV)
+        # 5a 收口③：绑定函数除拒绝报错文字外逐字相同；只有一处报错，文字改成当前事实。
+        self.assertEqual(new_closeout["bind_shape"], old_closeout["bind_shape"])
+        self.assertEqual(len(old_closeout["bind_messages"]), 1)
+        self.assertEqual(len(new_closeout["bind_messages"]), 1)
+        self.assertIn("B5a-09", old_closeout["bind_messages"][0])
+        self.assertIn("只属于 Codex 的分批演练合同", new_closeout["bind_messages"][0])
         self.assertNotEqual(new_tables, old_tables, "B5a-05 填了两张 Claude 登记表")
         # 秒数表：Codex 的键与秒数逐项不变；新增的键恰好是 Claude 的真实链 ID，秒数是正数。
         self.assertTrue(old_seconds)
