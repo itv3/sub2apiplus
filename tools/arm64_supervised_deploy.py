@@ -325,8 +325,12 @@ from urllib.parse import urlsplit
 # codex-arm64-supervisor-enable/v1 的 22 个字段、文件名与单根三后缀摘要口径不变；Claude 另签
 # official-client-managed-deploy/v1（身份由 v3 引擎按 Claude 策略计算）。受管树只有 codex_upgrade_wire_transition.py 的
 # main 改经适配器取 _tool_identity（control 层，Codex 取值不变）；监督器与断言预处理器未变。
+# 2026-10-07（staging 派发门禁偶发的产品侧修复）：stop 等 monitor 收口时，monitor 还没写出首条 watchdog 心跳（冷启动）
+# 就最多等到父 run 起动后 30 秒，已写出的仍按 2 秒判卡住、到时处理不变（原先 no-op 批次在高负载下被误封
+# audit-incomplete，引导首批成为不可信前序）；campaign-run 返回值以落盘终态为准，不一致时附 requested_terminal。
+# control 层变化，监督器摘要随之变化；Codex 的 wire、evidence 与评估器摘要不变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "672cb15f1e796f40a7e2dd43ef60cb296199422514315009303b6f16fee8d5b7"
+    "b06295972d06a1d53c0ef2f2ef50eaa3cd5082da4f7e0ee6263b940e8bad8f33"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

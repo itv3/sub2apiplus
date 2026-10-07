@@ -71,6 +71,72 @@ def _campaign_process_alive(pid: object) -> bool:
     return True
 
 
+# 替身 monitor 的三种形态（stop 等 monitor 收口的冷启动宽限回归用）：
+# slow-start            先睡 delay_seconds 再 exec 真正的 monitor（同一 PID、同一会话），确定性地拖长冷启动；
+# hang-before-heartbeat 一直不写 watchdog 心跳也不处理 stop-request（冷启动卡死）；
+# hang-after-heartbeat  已就绪的 monitor 卡住：拉起替身之前由本进程同步写好一行 watchdog 心跳（start() 返回时
+#                       一定已就绪，不与 stop 计算等待上限竞争），替身本身只挂住。
+# 两种 hang 不持有任何监督器锁，owner 的超时分支能照常写事件、终止进程组；不用 SIGSTOP 冻结真实 monitor，
+# 因为它可能正好冻在持有 .supervisor.lock 的时刻，owner 写超时事件时会一起卡死。
+_MONITOR_STAND_IN_SCRIPTS = {
+    "slow-start": "import os, sys, time; time.sleep(float(sys.argv[1])); os.execv(sys.argv[2], sys.argv[2:])",
+    "hang-before-heartbeat": "import time; time.sleep(600)",
+    "hang-after-heartbeat": "import time; time.sleep(600)",
+}
+
+
+@contextlib.contextmanager
+def monitor_launch_stand_in(mode: str, *, delay_seconds: float = 0.0, launches: int | None = None):
+    """替换 SupervisorClient.start 拉起的 monitor 子进程（只改写 monitor 命令，动作子进程照常）。
+
+    ``launches`` 给出时只替换前几次 monitor 启动。退出上下文时结束仍存活的替身／monitor，不留残留进程。
+    """
+
+    script = _MONITOR_STAND_IN_SCRIPTS[mode]
+    original = subprocess.Popen
+    started: list[subprocess.Popen] = []
+    remaining = [launches]
+
+    class StandInPopen(original):  # type: ignore[misc, valid-type]
+        def __init__(self, args, *popen_args, **popen_kwargs):
+            is_monitor = (
+                isinstance(args, (list, tuple))
+                and len(args) >= 3
+                and str(args[1]).endswith("codex_upgrade_supervisor.py")
+                and args[2] == "monitor"
+            )
+            if is_monitor and (remaining[0] is None or remaining[0] > 0):
+                if remaining[0] is not None:
+                    remaining[0] -= 1
+                if mode == "slow-start":
+                    args = [sys.executable, "-c", script, str(delay_seconds), *args]
+                else:
+                    if mode == "hang-after-heartbeat":
+                        run_dir = Path(str(args[list(args).index("--state-dir") + 1]))
+                        heartbeats = run_dir / "watchdog-heartbeats.ndjson"
+                        descriptor = os.open(heartbeats, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                        try:
+                            os.write(descriptor, b"{}\n")
+                        finally:
+                            os.close(descriptor)
+                    args = [sys.executable, "-c", script]
+                super().__init__(args, *popen_args, **popen_kwargs)
+                started.append(self)
+                return
+            super().__init__(args, *popen_args, **popen_kwargs)
+
+    try:
+        with mock.patch.object(supervisor.subprocess, "Popen", StandInPopen):
+            yield started
+    finally:
+        for process in started:
+            if process.poll() is None:
+                with contextlib.suppress(OSError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                    process.wait(timeout=5)
+
+
 class SupervisorTests(unittest.TestCase):
     def setUp(self) -> None:
         # 本类只构造离线父动作与账本；实时出口的拒绝、竞态及清理在独立测试类验证。
@@ -390,6 +456,124 @@ class SupervisorTests(unittest.TestCase):
             report = _audit_command(client.run_dir)
             self.assertFalse(report["audit_incomplete"])
             self.assertGreaterEqual(report["event_count"], 4)
+
+    # ------------------------------------------------------------------
+    # stop 等 monitor 收口的冷启动宽限（2026-10-07 staging 派发门禁偶发失败的产品侧修复）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cold_start_client(root: Path) -> SupervisorClient:
+        """宽限回归用的客户端：截止放远、不允许看门狗终止 owner（owner 就是测试进程）。"""
+
+        return SupervisorClient(
+            root / "supervisor",
+            campaign_id="campaign",
+            phase="official",
+            deadline_at_epoch=time.time() + 120,
+            heartbeat_seconds=0.05,
+            watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
+            ledger_interval_seconds=0.05,
+            terminate_owner=False,
+        )
+
+    def test_stop_waits_for_cold_starting_monitor_instead_of_sealing_audit_incomplete(self) -> None:
+        """monitor 冷启动比 2 秒还慢（no-op 批次 start 之后立即 stop 的形态）：stop 等它处理完 stop-request，父 run 照常
+        stopped、收据与审计完整。修复前 2 秒一到就封 audit-incomplete(supervisor-stop-timeout)，no-op 引导首批因此
+        成为不可信前序，下一批报“前序 Campaign 批次没有可信终态”。"""
+
+        delay = supervisor.DEFAULT_STOP_WAIT_SECONDS + 1.0
+        with tempfile.TemporaryDirectory() as directory, monitor_launch_stand_in("slow-start", delay_seconds=delay):
+            client = self._cold_start_client(Path(directory))
+            client.start()
+            client.event_start("campaign:incremental-noop")
+            client.event_end("campaign:incremental-noop", metadata={"execute_count": 0})
+            began = time.monotonic()
+            client.stop(reason="incremental-noop", status="stopped")
+            waited = time.monotonic() - began
+            run_dir = client.run_dir
+            self.assertEqual(supervisor._read_state(run_dir)["state"], "stopped")
+            self.assertEqual(supervisor.read_stop_receipt(run_dir)["reason"], "incremental-noop")
+            self.assertFalse(_audit_command(run_dir)["audit_incomplete"])
+            self.assertGreater(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS)
+            self.assertLess(waited, supervisor.DEFAULT_MONITOR_STARTUP_GRACE_SECONDS)
+
+    def test_stop_keeps_two_second_timeout_for_started_monitor_that_hangs(self) -> None:
+        """已写出首条 watchdog 心跳的 monitor 不再处理 stop-request：仍按 2 秒判卡住，封存
+        audit-incomplete(supervisor-stop-timeout)、不写停线收据、终止 monitor 进程组——与改动前同一语义。"""
+
+        with tempfile.TemporaryDirectory() as directory, monitor_launch_stand_in("hang-after-heartbeat"):
+            client = self._cold_start_client(Path(directory))
+            client.start()
+            run_dir = client.run_dir
+            heartbeats = run_dir / "watchdog-heartbeats.ndjson"
+            deadline = time.monotonic() + 30
+            while not (heartbeats.is_file() and heartbeats.stat().st_size > 0):
+                self.assertLess(time.monotonic(), deadline, "替身 monitor 未在预算内写出心跳")
+                time.sleep(0.02)
+            began = time.monotonic()
+            client.stop(reason="normal-completion", status="stopped")
+            waited = time.monotonic() - began
+            self.assertEqual(supervisor._read_state(run_dir)["state"], "audit-incomplete")
+            last = supervisor.load_events(run_dir)[-1]
+            self.assertEqual((last["event_type"], last["reason"]), ("audit-incomplete", "supervisor-stop-timeout"))
+            self.assertFalse((run_dir / "stop-receipt.json").exists())
+            self.assertIsNotNone(client.process.poll())
+            self.assertGreaterEqual(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS)
+            self.assertLess(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS + 5)
+
+    def test_stop_cold_start_grace_is_bounded_by_run_start(self) -> None:
+        """冷启动宽限有绝对上限：monitor 一直没写出心跳时，等到父 run 起动后宽限秒数为止，到时照常封存
+        audit-incomplete(supervisor-stop-timeout) 并终止它（这里把宽限缩到 4 秒，验证走的是宽限而不是 2 秒）。"""
+
+        grace = 4
+        with tempfile.TemporaryDirectory() as directory, monitor_launch_stand_in("hang-before-heartbeat"), \
+                mock.patch.object(supervisor, "DEFAULT_MONITOR_STARTUP_GRACE_SECONDS", grace):
+            client = self._cold_start_client(Path(directory))
+            client.start()
+            began = time.monotonic()
+            client.stop(reason="normal-completion", status="stopped")
+            waited = time.monotonic() - began
+            run_dir = client.run_dir
+            self.assertEqual(supervisor._read_state(run_dir)["state"], "audit-incomplete")
+            self.assertEqual(supervisor.load_events(run_dir)[-1]["reason"], "supervisor-stop-timeout")
+            self.assertIsNotNone(client.process.poll())
+            self.assertGreater(waited, supervisor.DEFAULT_STOP_WAIT_SECONDS + 0.5)
+            self.assertLess(waited, grace + 5)
+
+    def test_campaign_run_returns_sealed_terminal_state_when_stop_cannot_confirm(self) -> None:
+        """campaign-run 的返回值以落盘终态为准：stop 等不到 monitor 而封存 audit-incomplete 时返回 1、落盘终态与封存
+        理由，并附 requested_terminal 说明原本请求的终态；修复前照旧返回 0／stopped，调用方把不可信父 run 当成已闭合。
+        终态一致时载荷不变：no-op 正常收口仍是 0／stopped／incremental-noop，不带 requested_terminal。"""
+
+        args = argparse.Namespace(
+            heartbeat_seconds=0.05,
+            watchdog_timeout_seconds=IN_PROCESS_WATCHDOG_SECONDS,
+            ledger_interval_seconds=0.05,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("normal", "unconfirmed"):
+                (root / name).mkdir(mode=0o700)
+            manifest = _campaign_run_manifest(self._write_campaign_run_manifest(root / "normal", actions=[], no_op=True))
+            returncode, payload = supervisor._campaign_run_locked(
+                args, manifest=manifest, state_dir=root / "normal" / "campaign"
+            )
+            self.assertEqual((returncode, payload["status"], payload["reason"]), (0, "stopped", "incremental-noop"))
+            self.assertNotIn("requested_terminal", payload)
+
+            manifest = _campaign_run_manifest(
+                self._write_campaign_run_manifest(root / "unconfirmed", actions=[], no_op=True)
+            )
+            # 替身 monitor 写出心跳后挂住：走 2 秒判卡住的原分支（这里缩到 0.2 秒），stop 封存 audit-incomplete。
+            with monitor_launch_stand_in("hang-after-heartbeat"), \
+                    mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", 0.2):
+                returncode, payload = supervisor._campaign_run_locked(
+                    args, manifest=manifest, state_dir=root / "unconfirmed" / "campaign"
+                )
+            self.assertEqual(returncode, 1)
+            self.assertEqual((payload["status"], payload["reason"]), ("audit-incomplete", "supervisor-stop-timeout"))
+            self.assertEqual(payload["requested_terminal"], {"status": "stopped", "reason": "incremental-noop"})
+            self.assertEqual(supervisor._read_state(Path(str(payload["run_dir"])))["state"], "audit-incomplete")
 
     def _minute_ledger_fixture(self, root: Path, start: float, end: float) -> None:
         """构造已终止的短运行，只检验账本写入与真实审计之间的精度合同。"""

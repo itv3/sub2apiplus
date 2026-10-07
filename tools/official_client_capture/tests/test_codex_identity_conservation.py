@@ -61,7 +61,11 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同；B3-06 阶段审核后继协议"
                                    "（_validate_batched_stage_review_successor，读侧闭包外）只对正要派发的直接后继复算实物，已执行过的"
                                    "历史后继只重放冻结许可（原先阶段内还有后续批次时，成功的后继不写账本事件，复算看到后继自己的产物"
-                                   "误判漂移，本阶段后续批次全被拒；直接后继的判定与报错不变）",
+                                   "误判漂移，本阶段后续批次全被拒；直接后继的判定与报错不变）；10-07 staging 派发门禁偶发的产品侧修复："
+                                   "stop 等 monitor 收口时，monitor 还没写出首条 watchdog 心跳（冷启动）就最多等到父 run 起动后 30 秒"
+                                   "（DEFAULT_MONITOR_STARTUP_GRACE_SECONDS、_monitor_watchdog_started），已写出的仍按 2 秒判卡住、到时处理不变；"
+                                   "campaign-run 返回值以落盘终态为准，与请求不一致时附 requested_terminal（_sealed_terminal_reason）。"
+                                   "改动与新增的符号都在 wire、evidence 与评估读侧闭包外",
     "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；读侧闭包内 7 个函数原位不动；B2-08 读侧闭包外的 _environment_facts、"
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "
                                    "campaign_deadline_at_utc（批准延期后同一对象能再对账，原先在这里失败关闭）",
@@ -70,7 +74,8 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "codex_upgrade.py": "B1-09 迁出 108 个不在任何身份闭包内的共享流程函数，原位留同名薄壳；随迁常量留别名",
     "upgrade_control_plane.py": "B1-09 新增共享控制流程：迁入函数经 adapter.orchestrator 访问编排器；B3-06 adapter_scope 同时设定对账器的"
                                 "客户端作用域（本模块直接调用的对账器内部函数随同一客户端，跨客户端即拒绝；Codex 设定的就是对账器缺省值，"
-                                "行为不变）",
+                                "行为不变）；10-07 staging 派发门禁偶发的产品侧修复：no-op 引导首批派发后核对首批父 run 的落盘终态必须是"
+                                " stopped，不是就当场失败并点名落盘终态（_bootstrap_noop_first_batch，读侧闭包外）",
     "codex_upgrade_wire_transition.py": "B5a-01 只改 main：当前工具身份经适配器取 _tool_identity（Codex 取值不变）；裁定函数与 DEPLOY_RECEIPT_GLOB 原位不动",
     "codex_upgrade_pre_a3_certification.py": "B5a-04 pre-A3 按客户端分组：场景表与真实链按客户端、单元前缀 pre-a3:claude:、Claude 签 v3；编排器引用经适配器（Codex 单元、命令与收据逐字不变）；"
                                              "B5a-08 签发与核验新增逐单元承接（unit-inherit）清单的形成期证明分支（新增函数），逐场景核验多一个缺省为全集通过的"

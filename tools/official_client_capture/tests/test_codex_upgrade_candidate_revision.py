@@ -49,10 +49,6 @@ class _ChainMixin:
     helper: test_codex_upgrade.CodexUpgradeTest
 
     def _fixture(self, root: Path) -> dict[str, object]:
-        # 父 run 收口时 SupervisorClient.stop() 只等 monitor 子进程退出 2 秒；no-op 引导首批等父 run 在 start 后
-        # 很快 stop，monitor 冷启动被门禁负载拖过 2 秒就被误封 audit-incomplete。与 test_codex_upgrade_staging_dispatch
-        # 的 SUPERVISOR_STOP_WAIT_SECONDS 同口径放宽到 30 秒（详细说明见那里）；正常路径不多等。
-        self.enterContext(mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", 30.0))
         return self.helper._vc_chain_fixture(root)
 
     @staticmethod

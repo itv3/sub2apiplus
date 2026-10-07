@@ -1280,9 +1280,16 @@ def _bootstrap_noop_first_batch(
         )
     except codex_upgrade_supervisor.SupervisorError as error:
         raise adapter.orchestrator.ConfigurationError(f"no-op 首批引导派发失败：{error}") from error
-    if returncode != 0 or run.get("reason") != "incremental-noop":
+    # 以落盘终态为准：首批父 run 要作为后续批次的可信前序，state.json 必须真正封存为 stopped。不是（例如 stop 等不到
+    # monitor 被封成 audit-incomplete）就当场失败并点名落盘终态，不把不可信前序留给下一批的批次历史校验。
+    try:
+        sealed_state = codex_upgrade_supervisor._read_state(Path(str(run["run_dir"]))).get("state")
+    except (KeyError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise adapter.orchestrator.ConfigurationError(f"no-op 首批引导派发的父 run 终态无法读取：{error}") from error
+    if returncode != 0 or run.get("reason") != "incremental-noop" or sealed_state != "stopped":
         raise adapter.orchestrator.ConfigurationError(
-            f"no-op 首批引导派发未闭合：status={run.get('status')} reason={run.get('reason')}"
+            f"no-op 首批引导派发未闭合：status={run.get('status')} reason={run.get('reason')} 落盘终态={sealed_state}；"
+            "该首批父 run 不能作为可信前序，后续批次会被批次历史校验拒绝，须先人工审计该 run"
         )
     return {
         "run_dir": run.get("run_dir"),

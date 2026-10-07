@@ -254,6 +254,12 @@ DEFAULT_POLL_SECONDS = 0.2
 # 判"预算状态无效"中止。连续失败持续这么久才判无效；容忍期间沿用已收紧的截止（只收紧不放宽），其余检查照常。
 BUDGET_STATE_TOLERANCE_SECONDS = 15.0
 DEFAULT_STOP_WAIT_SECONDS = 2
+# stop 等 monitor 收口时的冷启动宽限：monitor 还没写出首条 watchdog 心跳（新解释器、导入监督器、读 state 尚未完成）
+# 时不能按 2 秒判它卡住。no-op 批次在 start 之后立即 stop、staging 批次在 commit 回调里失败后很快 stop，高负载下
+# 冷启动超过 2 秒，父 run 就被误封 audit-incomplete(supervisor-stop-timeout)；no-op 引导首批因此成为不可信前序，
+# 后续批次全被历史校验拒绝（2026-10-07 ARM64 后台验证门禁实测）。冷启动中的 monitor 最多等到父 run 起动后这么久；
+# 已写出首条心跳的 monitor 仍按 DEFAULT_STOP_WAIT_SECONDS 判卡住，到时的处理不变。
+DEFAULT_MONITOR_STARTUP_GRACE_SECONDS = 30
 # v2 及后续批次必须在原始总截止前主动结束数据面动作，为 attempt after、
 # restoration、ARM64 after、timeout checkpoint 和父监督器终态留下固定窗口。
 # 这不是延长 deadline：数据面可用时间会相应缩短，原始绝对截止保持不变。
@@ -2509,6 +2515,20 @@ def _write_watchdog_heartbeat(
         ),
     }
     _append_jsonl(run_dir / "watchdog-heartbeats.ndjson", record)
+
+
+def _monitor_watchdog_started(run_dir: Path) -> bool:
+    """monitor 是否已写出首条 watchdog 心跳，即冷启动（新解释器、导入监督器、读 state）已经完成。
+
+    watchdog 心跳只由 monitor 写（启动时一条，之后按心跳间隔追加），run 目录由 owner 新建、不与别的 run 共用；
+    只看文件是普通文件且非空，不解析内容（追加中途读到半行也说明 monitor 已到这一步）。
+    """
+
+    try:
+        metadata = os.lstat(Path(run_dir) / "watchdog-heartbeats.ndjson")
+    except OSError:
+        return False
+    return stat.S_ISREG(metadata.st_mode) and metadata.st_size > 0
 
 
 def _stop_receipt(
@@ -4919,6 +4939,21 @@ class SupervisorClient:
                 if stream is not None:
                     stream.close()
 
+    def _monitor_stop_wait_seconds(self, run_dir: Path) -> float:
+        """stop 写出 stop-request 后等 monitor 收口并退出的上限（秒）。
+
+        monitor 已写出首条 watchdog 心跳：按 DEFAULT_STOP_WAIT_SECONDS 判它卡住（原语义不变）。还没写出：它仍在
+        冷启动，最多等到父 run 起动后 DEFAULT_MONITOR_STARTUP_GRACE_SECONDS，至少仍等 DEFAULT_STOP_WAIT_SECONDS。
+        起动时刻取 start() 记下的单调时钟（state.json 的 started_monotonic_ns），所以宽限有绝对上限：父 run
+        起动多久之后才 stop、monitor 却仍没写出心跳的，只剩常规的 2 秒。
+        """
+
+        wait_seconds = float(DEFAULT_STOP_WAIT_SECONDS)
+        if self._started_monotonic_ns is None or _monitor_watchdog_started(run_dir):
+            return wait_seconds
+        elapsed = (time.monotonic_ns() - self._started_monotonic_ns) / 1_000_000_000
+        return max(wait_seconds, float(DEFAULT_MONITOR_STARTUP_GRACE_SECONDS) - elapsed)
+
     def stop(self, *, reason: str = "normal-completion", status: str = "stopped") -> None:
         if self._stop_completed:
             return
@@ -4960,10 +4995,11 @@ class SupervisorClient:
 
         # 轮询只等待一个很小的上限；monitor 自身会先把 stop 事实 fsync，
         # 再退出。若它卡住，立即留下 audit-incomplete 并终止 monitor，
-        # 不能让 release 在这里阻塞数分钟。
+        # 不能让 release 在这里阻塞数分钟。还在冷启动的 monitor 不算卡住，
+        # 上限按 _monitor_stop_wait_seconds 放宽（父 run 起动后最多 30 秒）。
         if self.process is not None and self.process.poll() is None:
             try:
-                self.process.wait(timeout=DEFAULT_STOP_WAIT_SECONDS)
+                self.process.wait(timeout=self._monitor_stop_wait_seconds(run_dir))
             except subprocess.TimeoutExpired:
                 try:
                     self._event(
@@ -13333,6 +13369,31 @@ def _commit_prepared_run(
     }
 
 
+SEALED_TERMINAL_REASON_UNKNOWN = "terminal-state-diverged"
+
+
+def _sealed_terminal_reason(run_dir: Path, sealed_state: str) -> str:
+    """父 run 落盘终态与请求的终态不同时，取封存它的理由，供 campaign-run 返回值如实说明。
+
+    stop-receipt 的事件类型与落盘终态相同时取它的理由（monitor 封存 watchdog 终态、monitor 异常退出都写收据）；
+    否则取事件账本里最后一条同状态事件的理由（stop 等不到 monitor 时 owner 只追加一条 supervisor-stop-timeout
+    事件，不写收据；monitor 若已写了请求终态的收据才被终止，那份收据不描述落盘终态，不能用）。收据或事件账本
+    读不出时返回固定标记，落盘终态本身仍如实返回。
+    """
+
+    try:
+        if (Path(run_dir) / "stop-receipt.json").is_file():
+            receipt = read_stop_receipt(run_dir)
+            if receipt.get("event_type") == sealed_state:
+                return str(receipt["reason"])
+        for event in reversed(load_events(run_dir)):
+            if event.get("status") == sealed_state and isinstance(event.get("reason"), str) and event["reason"]:
+                return str(event["reason"])
+    except SupervisorError:
+        pass
+    return SEALED_TERMINAL_REASON_UNKNOWN
+
+
 def _campaign_run_locked(args: argparse.Namespace, *, manifest: Mapping[str, Any], state_dir: Path,
                          campaign_dir: Path | None = None, commit: Any | None = None,
                          owner_nonce: str | None = None, staging_binding: Mapping[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
@@ -13767,6 +13828,14 @@ def _campaign_run_with_budget_lock(
                 }
         if commit_failure is None:
             client.stop(reason=reason, status=status)
+        # 返回值以落盘终态为准：stop 等不到 monitor（supervisor-stop-timeout）、monitor 异常退出或抢先封存了别的终态
+        # 时，state.json 已不是请求的终态。照旧按请求值报成功，调用方（no-op 引导首批、原子派发入口、campaign-run
+        # 命令行）就会把不可信的父 run 当成已闭合，要到下一批的批次历史校验才失败。一致时载荷与原先逐字相同。
+        requested_terminal: dict[str, str] | None = None
+        sealed_state = str(_read_state(client._require_started()).get("state"))
+        if sealed_state != status:
+            requested_terminal = {"status": status, "reason": reason}
+            status, reason = sealed_state, _sealed_terminal_reason(client._require_started(), sealed_state)
         payload = {
             "campaign_id": manifest["campaign_id"],
             "run_dir": str(client.run_dir),
@@ -13776,6 +13845,8 @@ def _campaign_run_with_budget_lock(
             "execute_items": list(manifest.get("execute_items", [])),
             "reuse_items": list(manifest.get("reuse_items", [])),
         }
+        if requested_terminal is not None:
+            payload["requested_terminal"] = requested_terminal
         if commit_failure is not None:
             payload["commit_failure"] = dict(commit_failure)
         if campaign_dir is not None:

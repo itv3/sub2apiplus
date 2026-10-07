@@ -27,20 +27,10 @@ from tools.official_client_capture import codex_upgrade_timing_ledger as timing_
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture import codex_upgrade_predispatch_stop as predispatch_stop
 from tools.official_client_capture.tests import test_codex_upgrade
+from tools.official_client_capture.tests import test_codex_upgrade_supervisor as supervisor_tests
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ORDER = artifacts.VC_PHASES
-
-# 父 run 收口时 SupervisorClient.stop() 写出 stop-request 后，只等独立 monitor 子进程退出
-# DEFAULT_STOP_WAIT_SECONDS（2 秒），到时即把父 run 封成 audit-incomplete(supervisor-stop-timeout)，
-# 不再写 stop-receipt。派发链里有几处父 run 在 start 之后很快就 stop：原子入口代跑的 no-op 引导首批
-# （start 后立即 stop）、staging 批次在 commit 回调里失败（aborted_prepared／完整性异常）、合成动作秒退。
-# 这时 monitor 往往还在冷启动（新解释器、导入监督器、首轮重放三层预算），门禁高并发下超过 2 秒：
-# 首批被误封后，下一批的批次历史校验报“前序 Campaign 批次没有可信终态”（2026-10-07 ARM64 后台验证
-# 门禁实测）；commit 失败的父 run 则缺 stop-receipt。夹具把这一等待上限放宽到 30 秒：monitor 一处理完
-# stop-request 就退出，正常路径不多等；被测的派发、提交与对账路径不变。经子进程派发的 DRIVER 用同一数值。
-# 同夹具的 stage_recovery、candidate_revision、candidate_stage_replay、stage_replay_binding 模块同样放宽。
-SUPERVISOR_STOP_WAIT_SECONDS = 30.0
 
 # 子进程驱动：按配置 patch 入口内部函数（raise／exit_before／exit_after），再跑真实入口。
 DRIVER = r"""
@@ -56,9 +46,6 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
 from tools.official_client_capture.tests import runtime_egress_fixtures
-# 与父用例的 _fixture 一致：父 run 收口等待 monitor 退出的上限放宽（见模块常量 SUPERVISOR_STOP_WAIT_SECONDS）；
-# 子进程里同样会代跑 no-op 引导首批、走 commit 失败收口，monitor 冷启动被门禁负载拖过 2 秒就会被误封 audit-incomplete。
-supervisor.DEFAULT_STOP_WAIT_SECONDS = config["stop_wait_seconds"]
 modules = {"codex_upgrade": codex_upgrade, "supervisor": supervisor, "reconciler": reconciler}
 for item in config["patches"]:
     module = modules[item["module"]]
@@ -109,8 +96,6 @@ class StagingDispatchTests(unittest.TestCase):
         )
         self.helper.setUp()
         self.addCleanup(self.helper.doCleanups)
-        # 父 run 收口等待 monitor 退出的上限放宽到 30 秒，原因见模块常量 SUPERVISOR_STOP_WAIT_SECONDS。
-        self.enterContext(mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", SUPERVISOR_STOP_WAIT_SECONDS))
 
     def _fixture(self, root: Path) -> dict[str, object]:
         return self.helper._vc_chain_fixture(root)
@@ -174,7 +159,6 @@ class StagingDispatchTests(unittest.TestCase):
         config = {
             "patches": patches,
             "tmpdir": str(driver_tmp),
-            "stop_wait_seconds": SUPERVISOR_STOP_WAIT_SECONDS,
             "arguments": {key: (str(value) if isinstance(value, Path) else value) for key, value in vars(arguments).items()},
         }
         completed = subprocess.run(
@@ -1196,6 +1180,35 @@ class StagingDispatchTests(unittest.TestCase):
                 self._dispatch(fixture, root, "VC-2", 2, tag="-integrity-again")
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已终态|拒绝派发|stopped"):
                 self._dispatch(fixture, root, "VC-2", 3, tag="-integrity-next")
+
+    # ------------------------------------------------------------------
+    # no-op 引导首批收口未确认：引导派发当场失败，不把不可信前序留给第 2 批
+    # ------------------------------------------------------------------
+
+    def test_noop_bootstrap_whose_stop_cannot_confirm_fails_at_bootstrap_naming_sealed_state(self) -> None:
+        """no-op 引导首批收口时 stop 等不到 monitor、首批被封 audit-incomplete：campaign-run 返回落盘终态，引导派发
+        当场失败并点名落盘终态与封存理由；修复前返回 0／stopped，要到第 2 批的批次历史校验才报“前序 Campaign
+        批次没有可信终态”。失败发生在 prepare 之前，不产生任何 staging 写入。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            # 只替换首批的 monitor：写出心跳后挂住，stop 走 2 秒判卡住的原分支（缩到 0.2 秒）封存 audit-incomplete。
+            with supervisor_tests.monitor_launch_stand_in("hang-after-heartbeat", launches=1), \
+                    mock.patch.object(supervisor, "DEFAULT_STOP_WAIT_SECONDS", 0.2):
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "no-op 首批引导派发未闭合：status=audit-incomplete reason=supervisor-stop-timeout "
+                    "落盘终态=audit-incomplete",
+                ):
+                    self._dispatch(fixture, root, "VC-2", 2, tag="-bootstrap-unconfirmed")
+            runs = sorted(fixture["state_dir"].glob("run-*"))
+            self.assertEqual(len(runs), 1)
+            self.assertIsNone(supervisor._read_state(runs[0]).get("staging_binding"))
+            self.assertEqual(supervisor._read_state(runs[0])["state"], "audit-incomplete")
+            self.assertFalse(self._staging_dir(campaign_dir, 2, "VC-2").exists())
+            self.assertFalse(self._commit_path(campaign_dir, 2, "VC-2").exists())
 
     # ------------------------------------------------------------------
     # ABORT write-once + 内容核对
