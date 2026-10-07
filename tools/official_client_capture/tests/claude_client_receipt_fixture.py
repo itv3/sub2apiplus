@@ -73,14 +73,22 @@ def source_scope() -> Iterator[None]:
 
 
 def candidate_inputs(attempt_root: Path, values: Mapping[str, Any], client_id: str) -> dict[str, Any]:
-    """补齐最小测试世界的候选原件；既有 VC-4 世界沿用自己的构建和实际 Catalog。"""
+    """仅补齐无正式合同的历史夹具；真实 attempt 逐项验证，保持冻结原件字节不变。"""
     from tools.official_client_capture import claude_upgrade
 
+    path = attempt_root / "attempt.json"
+    attempt = contract.read_json(path) if path.exists() else {}
+    contract.require(isinstance(attempt.get("identity", {}), dict), "fixture attempt identity 必须是对象")
+    protected = "schema_version" in attempt or "attempt_digest" in attempt or "schema_version" in attempt.get("identity", {})
+    for key in contract.COORDINATES:
+        contract.require(key in values and (key not in attempt and not protected or attempt.get(key) == values[key]), f"fixture attempt 的 {key} 与调用坐标不符")
     campaign = next((parent for parent in attempt_root.parents if (parent / "campaign.json").is_file()), temporary_root(attempt_root))
     if not (campaign / "campaign.json").exists():
+        contract.require(not protected, "正式 attempt 缺少 Campaign 原件，不能由夹具补写")
         write(campaign / "campaign.json", {"campaign_id": values["campaign_id"]})
     build_path = campaign / "candidates" / values["candidate_id"] / "build-receipt.json"
     if not build_path.exists():
+        contract.require(not protected, "正式 attempt 缺少构建原件，不能由夹具补写")
         source_root = temporary_root(attempt_root) / "fixture-candidate-source" / values["candidate_id"]
         entries = [{"client_id": f"{client}-fixture", "product": "claude-desktop" if client == "claude-desktop" else "claude-code-vscode", "version": "fixture-cli-1", "platform": "darwin/arm64", "binary_sha256": "2" * 64} for client in contract.CLIENTS]
         write(source_root / "backend/internal/officialegress/catalogdata/claude/official-ingress-catalog.json", {"entries": entries})
@@ -89,14 +97,34 @@ def candidate_inputs(attempt_root: Path, values: Mapping[str, Any], client_id: s
     catalog = contract.read_json(Path(build["source"]["root"]) / "backend/internal/officialegress/catalogdata/claude/official-ingress-catalog.json")
     product = "claude-desktop" if client_id == "claude-desktop" else "claude-code-vscode"
     entry = next(row for row in catalog["entries"] if row["product"] == product and row["platform"] == "darwin/arm64")
-    path = attempt_root / "attempt.json"
-    attempt = contract.read_json(path) if path.exists() else {}
-    attempt.update(values)
-    identity = attempt.setdefault("identity", {})
-    identity.update({"candidate_revision": build["candidate_revision"], "source_tree_sha256": build["source"]["tree_sha256"], "manifest_digest": build["image"]["manifest_digest"], "profile_digest": build["profile"]["profile_digest"], "build_receipt": {"path": build_path.relative_to(campaign).as_posix(), "sha256": contract.binding(build_path, campaign)["sha256"]}})
-    attempt.setdefault("candidate_gateway", {"base_url": "http://candidate.invalid:8080"})
-    if not path.exists() or contract.read_json(path) != attempt:
-        write(path, attempt)
+    expected_identity = {"candidate_revision": build["candidate_revision"], "source_tree_sha256": build["source"]["tree_sha256"], "manifest_digest": build["image"]["manifest_digest"], "profile_digest": build["profile"]["profile_digest"]}
+    expected_build = {"path": build_path.relative_to(campaign).as_posix(), "sha256": contract.binding(build_path, campaign)["sha256"]}
+    identity = attempt.get("identity", {})
+    contract.require(isinstance(identity, dict), "fixture attempt identity 必须是对象")
+    for key, expected in expected_identity.items():
+        contract.require(key not in identity and not protected or identity.get(key) == expected, f"fixture attempt 的 {key} 与构建原件不符")
+    reference = identity.get("build_receipt", {})
+    contract.require(isinstance(reference, dict), "fixture attempt build_receipt 必须是对象")
+    for key, expected in expected_build.items():
+        contract.require(key not in reference and not protected or reference.get(key) == expected, f"fixture attempt 构建绑定的 {key} 不符")
+    if protected:
+        gateway = attempt.get("candidate_gateway", {})
+        contract.require(isinstance(gateway, dict) and bool(gateway.get("base_url")), "正式 attempt 缺少候选网关，不能由夹具补写")
+        if "attempt_digest" in attempt:
+            contract.require(attempt["attempt_digest"] == claude_upgrade._fingerprint({key: value for key, value in attempt.items() if key != "attempt_digest"}), "正式 attempt 自摘要不符，不能由夹具修复")
+    else:
+        # 历史最小夹具可以补缺字段；既有值和扩展绑定（例如 receipt_digest）始终保留。
+        for key in contract.COORDINATES:
+            attempt.setdefault(key, values[key])
+        identity = attempt.setdefault("identity", {})
+        for key, expected in expected_identity.items():
+            identity.setdefault(key, expected)
+        reference = identity.setdefault("build_receipt", {})
+        for key, expected in expected_build.items():
+            reference.setdefault(key, expected)
+        attempt.setdefault("candidate_gateway", {"base_url": "http://candidate.invalid:8080"})
+        if not path.exists() or contract.read_json(path) != attempt:
+            write(path, attempt)
     return contract.candidate_context(attempt_root, entry["client_id"])
 
 

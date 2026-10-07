@@ -54,6 +54,44 @@ class ClientReceiptContractTests(unittest.TestCase):
         self.assertEqual(request["host"], "candidate.invalid")
         self.assertEqual(request["identity_key"], provenance.identity_key(request["producer_run_id"], provenance.SOURCE_MAC_CANDIDATE, request["native_coordinate"]))
 
+    def test_fixture_reentry_preserves_published_attempt_bytes_and_extra_bindings(self) -> None:
+        from tools.official_client_capture import claude_upgrade, claude_upgrade_capture
+
+        path = self.attempt / "attempt.json"
+        published = contract.read_json(path)
+        published["schema_version"] = claude_upgrade_capture.CAPTURE_ATTEMPT_SCHEMA
+        published["identity"]["build_receipt"]["receipt_digest"] = "c" * 64
+        published["attempt_digest"] = claude_upgrade._fingerprint(published)
+        fixture.write(path, published)
+        before = path.read_bytes()
+        metadata = path.stat()
+        fixture.material(self.attempt, "claude-desktop", self.values)
+        fixture.write_receipt(self.attempt, "claude-vscode", self.values)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual((path.stat().st_ino, path.stat().st_mtime_ns), (metadata.st_ino, metadata.st_mtime_ns))
+        self.assertEqual(contract.read_json(path)["identity"]["build_receipt"]["receipt_digest"], "c" * 64)
+        self.assertEqual(contract.read_json(path)["attempt_digest"], published["attempt_digest"])
+        with self.assertRaisesRegex(ValueError, "run_nonce"):
+            fixture.candidate_inputs(self.attempt, {**self.values, "run_nonce": "wrong-nonce"}, "claude-desktop")
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_fixture_refuses_to_repair_incomplete_published_attempt(self) -> None:
+        from tools.official_client_capture import claude_upgrade, claude_upgrade_capture
+
+        path = self.attempt / "attempt.json"
+        original = contract.read_json(path)
+        for missing in ("build_receipt", "profile_digest"):
+            with self.subTest(missing=missing):
+                published = copy.deepcopy(original)
+                published["schema_version"] = claude_upgrade_capture.CAPTURE_ATTEMPT_SCHEMA
+                del published["identity"][missing]
+                published["attempt_digest"] = claude_upgrade._fingerprint(published)
+                fixture.write(path, published)
+                before = path.read_bytes()
+                with self.assertRaisesRegex(ValueError, "构建绑定|profile_digest"):
+                    fixture.candidate_inputs(self.attempt, self.values, "claude-desktop")
+                self.assertEqual(path.read_bytes(), before)
+
     def test_old_success_placeholder_is_rejected(self) -> None:
         receipt = fixture.write(self.attempt / "client-evidence" / "claude-desktop.json", {"client_id": "claude-desktop", **self.values, "status": "success"})
         with self.assertRaisesRegex(ValueError, "拒绝占位成功"):
