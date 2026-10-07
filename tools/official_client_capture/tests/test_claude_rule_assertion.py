@@ -186,7 +186,7 @@ class ProfileValidationTests(unittest.TestCase):
             self.assertEqual(loaded, self.profile)
             with self.assertRaisesRegex(assertion.AssertionConfigurationError, "与批准值不一致"):
                 assertion.load_profile(profile_path, expected_claude_version=fixture.TARGET_VERSION, expected_profile_sha256="0" * 64)
-            self.assertEqual(assertion.FROZEN_PROFILE_SHA256S, {})
+            self.assertNotIn(fixture.TARGET_VERSION, assertion.FROZEN_PROFILE_SHA256S)
             with self.assertRaisesRegex(assertion.AssertionConfigurationError, "没有登记仓库基线画像冻结摘要"):
                 assertion.load_profile(profile_path, expected_claude_version=fixture.TARGET_VERSION, verify_frozen_digest=True)
             with mock.patch.dict(assertion.FROZEN_PROFILE_SHA256S, {fixture.TARGET_VERSION: digest}):
@@ -211,7 +211,24 @@ class EvidenceParsingTests(unittest.TestCase):
     def test_bind_capture_manifest_requires_sealed_bindings(self) -> None:
         manifest = json.loads(self.side.manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["schema_version"], assertion.EVALUATION_MANIFEST_SCHEMA_VERSION)
-        self.assertEqual(len(manifest["artifacts"]), 7)
+        # 7 个带标签的 artifact，另补 5 个伴随文件：3 份上游响应字节、2 份中继连接索引，各自紧跟锚点。
+        self.assertEqual(len(manifest["artifacts"]), 12)
+        kinds = [(item["kind"], item["path"].rsplit("/", 1)[-1]) for item in manifest["artifacts"]]
+        self.assertEqual(
+            kinds[:6],
+            [
+                ("relay_manifest", "relay-manifest.json"),
+                ("relay_index", "relay.json"),
+                ("relay_binary", "conn001.client_to_upstream.bin"),
+                ("relay_response", "conn001.upstream_to_client.bin"),
+                ("relay_binary", "conn002.client_to_upstream.bin"),
+                ("relay_response", "conn002.upstream_to_client.bin"),
+            ],
+        )
+        response = next(item for item in manifest["artifacts"] if item["kind"] == "relay_response")
+        anchor = next(item for item in manifest["artifacts"] if item["path"] == response["path"].replace(".upstream_to_client.bin", ".client_to_upstream.bin"))
+        self.assertEqual((response["parser"], response["connection"], response["scenario_ids"], response["labels"]), ("h1_response_stream", anchor["connection"], anchor["scenario_ids"], anchor["labels"]))
+        self.assertNotIn("derive", response)
         self.assertTrue(all(set(item) >= assertion.ARTIFACT_REQUIRED_FIELDS for item in manifest["artifacts"]))
         bindings = {item["path"]: {"sha256": item["sha256"], "bytes": item["bytes"]} for item in manifest["artifacts"]}
         partial = dict(bindings)
@@ -220,6 +237,18 @@ class EvidenceParsingTests(unittest.TestCase):
             assertion.bind_capture_manifest(self.side.capture_manifest, partial, capture_id="x")
         with self.assertRaisesRegex(assertion.AssertionConfigurationError, "标签不一致"):
             assertion.bind_capture_manifest(dict(self.side.capture_manifest, label_mismatches=[{"probe": "print"}]), bindings, capture_id="x")
+        # 连接索引必须在封存里；上游响应字节缺了就不补（挂起不回包的连接）。
+        without_index = {path: value for path, value in bindings.items() if path != "job-main/print/relay/relay.json"}
+        with self.assertRaisesRegex(assertion.AssertionConfigurationError, "中继连接索引"):
+            assertion.bind_capture_manifest(self.side.capture_manifest, without_index, capture_id="x")
+        without_response = {path: value for path, value in bindings.items() if path != "job-main/print/relay/conn001.upstream_to_client.bin"}
+        rebound = assertion.bind_capture_manifest(self.side.capture_manifest, without_response, capture_id="x")
+        self.assertEqual(len(rebound["artifacts"]), 11)
+        # 标签声明不得自带伴随 kind。
+        smuggled = _copy(self.side.capture_manifest)
+        smuggled["artifacts"].append(dict(_copy(response), labels=dict(response["labels"])))
+        with self.assertRaisesRegex(assertion.AssertionConfigurationError, "不得自带伴随文件"):
+            assertion.bind_capture_manifest(smuggled, bindings, capture_id="x")
 
         def broken(change):
             payload = _copy(manifest)
@@ -230,7 +259,7 @@ class EvidenceParsingTests(unittest.TestCase):
             "不是规范相对路径": lambda p: p["artifacts"][0].update(path="job-main/../x.bin"),
             "路径重复": lambda p: p["artifacts"].append(_copy(p["artifacts"][0])),
             "kind／parser 组合未登记": lambda p: p["artifacts"][0].update(parser="jsonl"),
-            "只能出现在中继请求字节上": lambda p: next(a for a in p["artifacts"] if a["kind"] == "pcap").update(connection={"ordinal": 1, "connection_id": 1}),
+            "只能出现在中继请求／响应字节上": lambda p: next(a for a in p["artifacts"] if a["kind"] == "pcap").update(connection={"ordinal": 1, "connection_id": 1}),
             "h1_request_stream": lambda p: next(a for a in p["artifacts"] if a["kind"] == "relay_manifest").update(derive={"parser": "h1_request_stream", "kind": "process_trace"}),
             "labels 必须是字符串映射": lambda p: p["artifacts"][0].update(labels={"probe": 1}),
             "status 必须是 complete": lambda p: p.update(status="partial"),
@@ -255,7 +284,9 @@ class EvidenceParsingTests(unittest.TestCase):
         # 秘密头的取值一律替换，只留形态。
         self.assertEqual(plain["headers"][1], ["Authorization", assertion.REDACTED_VALUE])
         self.assertEqual(plain["header_values"]["authorization"], [assertion.REDACTED_VALUE])
-        self.assertEqual(plain["secret_headers"]["authorization"], {"scheme": "Bearer", "length": len(f"Bearer {secret}"), "scrubbed": True})
+        self.assertEqual(
+            plain["secret_headers"]["authorization"], {"scheme": "Bearer", "length": len(f"Bearer {secret}"), "scrubbed": True, "placeholder_form": True}
+        )
         self.assertNotIn(secret, json.dumps(requests))
         self.assertEqual((gzipped["content_encoding"], gzipped["body"], gzipped["body_json"]), ("gzip", {"model": "m", "messages": []}, True))
         self.assertGreater(gzipped["body_bytes"], 0)
@@ -282,21 +313,46 @@ class EvidenceParsingTests(unittest.TestCase):
         by_type: dict[str, list] = {}
         for item in observations:
             by_type.setdefault(item.record_type, []).append(item)
-        self.assertEqual({key: len(value) for key, value in by_type.items()}, {"claude_http_response": 1, "claude_http_request": 4, "relay_connection": 3, "runtime_receipt": 2, "tls_client_hello": 2})
-        response = by_type["claude_http_response"][0]
-        self.assertEqual((response.data["action"], response.data["request"], response.data["connection_id"]), ("status_529", "POST /v1/messages", 1))
+        self.assertEqual(
+            {key: len(value) for key, value in by_type.items()},
+            {"relay_intervention": 1, "claude_http_response": 4, "claude_http_request": 4, "relay_connection": 3, "probe_run": 3, "runtime_receipt": 2, "tls_client_hello": 2},
+        )
+        intervention = by_type["relay_intervention"][0]
+        self.assertEqual((intervention.data["action"], intervention.data["request"], intervention.data["connection_id"]), ("status_529", "POST /v1/messages", 1))
+        responses = {(item.labels["probe"], item.data["connection_id"], item.data["response_index"]): item for item in by_type["claude_http_response"]}
+        self.assertEqual(responses[("failure-529", 1, 1)].data["status"], 529)
+        self.assertEqual(responses[("failure-529", 1, 1)].data["json_body"]["error"]["type"], "overloaded_error")
+        chunked = responses[("failure-529", 2, 1)].data
+        self.assertEqual((chunked["status"], chunked["transfer_encoding"], chunked["event_types"]), (200, "chunked", ["message_start", "content_block_delta", "message_stop"]))
+        self.assertEqual(responses[("print", 1, 2)].data["request_endpoint"], "POST /v1/messages/count_tokens?beta=true")
         connections = {item.record_id: item for item in by_type["relay_connection"]}
         first = connections["job-main/failure-529/relay/conn001.client_to_upstream.bin#connection"]
-        self.assertEqual(first.data["intervention_actions"], ["status_529"])
+        self.assertEqual((first.data["intervention_actions"], first.data["response_statuses"], first.data["opened_at_unix_ms"]), (["status_529"], [529], 1787320443000))
         self.assertIn("job-main/failure-529/relay/intervention.jsonl", first.evidence_paths)
+        self.assertIn("job-main/failure-529/relay/relay.json", first.evidence_paths)
         self.assertEqual(connections["job-main/print/relay/conn001.client_to_upstream.bin#connection"].data["request_lines"], ["POST /v1/messages", "POST /v1/messages/count_tokens"])
+        requests = {(item.labels["probe"], item.data["probe_request_index"]): item.data for item in by_type["claude_http_request"]}
+        retry = requests[("failure-529", 1)]
+        self.assertEqual(
+            (retry["probe_endpoint_index"], retry["previous_same_endpoint_gap_ms"], retry["response"]["status"], retry["intervention_action"], retry["connection_client_alpn"]),
+            (1, 600, 200, None, "http/1.1"),
+        )
+        self.assertEqual((requests[("failure-529", 0)]["intervention_action"], requests[("failure-529", 0)]["response"]["status"]), ("status_529", 529))
+        self.assertEqual(retry["probe_env"], {"DISABLE_TELEMETRY": "1"})
+        self.assertEqual(requests[("print", 0)]["header_map"]["anthropic-version"], "2023-06-01")
+        self.assertEqual(requests[("print", 0)]["tools_sha256"], None)
+        runs = {item.labels["probe"]: item.data for item in by_type["probe_run"]}
+        self.assertEqual((runs["failure-529"]["message_response_statuses"], runs["failure-529"]["message_gaps_ms"], runs["failure-529"]["relay_mode"]), ([529, 200], [600], "synthetic"))
+        self.assertEqual(runs["print"]["endpoints"], ["POST /v1/messages?beta=true", "POST /v1/messages/count_tokens?beta=true"])
+        self.assertEqual(runs["failure-529"]["receipt"]["response_plan"], "status_529_then_pass")
+        self.assertEqual(runs["tls"]["request_count"], 0)
         hello = by_type["tls_client_hello"][0]
         self.assertEqual((hello.data["sni"], hello.data["extension_types"], hello.data["cipher_suite_count"], hello.data["alpn_protocols"]), ("api.anthropic.com", [0, 43], 4, []))
         self.assertEqual(hello.data["destination"], fixture.UPSTREAM_IP)
         receipt = next(item for item in by_type["runtime_receipt"] if item.labels["probe"] == "print")
         self.assertEqual((receipt.data["client_version"], receipt.data["relay_integrity_result"], receipt.data["manifest"]["probe_id"]), (fixture.TARGET_VERSION, "pass", "print"))
         # selector 可见的映射不含 evidence_paths。
-        self.assertNotIn("evidence_paths", response.as_mapping())
+        self.assertNotIn("evidence_paths", intervention.as_mapping())
         self.assertEqual(manifest["capture_id"], "eval-official")
 
     def test_alpn_and_tampered_evidence(self) -> None:
@@ -372,13 +428,78 @@ class AssertionEngineTests(unittest.TestCase):
             ({"operator": "all_list_all_different", "path": "data.list"}, True),
         ]
         operators = {case["operator"] for case, _expected in cases}
-        self.assertEqual(operators, set(assertion.ALLOWED_ASSERTION_OPERATORS))
+        self.assertEqual(operators, set(assertion.CODEX_ASSERTION_OPERATORS))
+        self.assertEqual(len(assertion.CODEX_ASSERTION_OPERATORS), 21)
         for case, expected in cases:
             with self.subTest(case=case):
                 passed, _actual = assertion._evaluate_assertion(records, case)
                 self.assertIs(passed, expected)
         # 空选择集上 all_* 一律不通过（没有证据不能当作满足）。
         self.assertFalse(assertion._evaluate_assertion([], {"operator": "all_equal", "path": "data.v", "value": "a"})[0])
+
+    def test_claude_operators(self) -> None:
+        records = [
+            self.observation(1, {"probe": "a", "n": 5, "gaps": [550, 600], "list": ["x", "y", "z"], "ids": ["u1"], "results": ["u1", "u2"], "s": "1", "label": "2-x", "body": {"m": 1, "s": True, "x": 9}}, "a.bin"),
+            self.observation(2, {"probe": "a", "n": 7, "gaps": [], "list": ["y", "z"], "ids": [], "results": [], "s": "1", "label": "2-x", "body": {"m": 1, "s": True, "x": 8}}, "b.bin"),
+            self.observation(3, {"probe": "b", "n": 9, "gaps": [700], "list": ["x", "y"], "ids": ["v"], "results": ["v"], "s": "2", "label": "2-x", "body": {"m": 1, "s": True, "x": 7}}, "c.bin"),
+        ]
+        reference_where = [{"path": "data.n", "operator": "equal", "value": 9}]
+        cases = [
+            ({"operator": "all_between", "path": "data.n", "minimum": 5, "maximum": 9}, True),
+            ({"operator": "all_between", "path": "data.n", "minimum": 6, "maximum": 9}, False),
+            ({"operator": "all_list_items_between", "path": "data.gaps", "minimum": 500, "maximum": 750}, True),
+            ({"operator": "all_list_items_equal", "path": "data.list", "value": "y"}, False),
+            ({"operator": "all_distinct", "path": "data.n"}, True),
+            ({"operator": "all_distinct", "path": "data.s"}, False),
+            ({"operator": "group_distinct_count_equal", "group_path": "data.probe", "path": "data.s", "value": 1}, True),
+            ({"operator": "group_distinct_count_equal", "group_path": "data.probe", "path": "data.n", "value": 1}, False),
+            ({"operator": "all_fields_compare", "left_path": "data.n", "right_path": "data.n", "comparison": "le"}, True),
+            ({"operator": "all_fields_compare", "left_path": "data.s", "right_path": "data.probe", "comparison": "lt"}, False),
+            ({"operator": "all_fields_subset", "left_path": "data.ids", "right_path": "data.results"}, True),
+            ({"operator": "all_nonempty", "path": "data.ids"}, False),
+            ({"operator": "any_contains", "path": "data.list", "value": "x"}, True),
+            ({"operator": "all_list_contains_run", "path": "data.list", "value": ["y", "z"]}, False),
+            ({"operator": "all_list_contains_run", "path": "data.list", "value": ["y"]}, True),
+            ({"operator": "all_equal_reference", "path": "data.body", "reference": {"where": reference_where}, "exclude_keys": ["x"]}, True),
+            ({"operator": "all_equal_reference", "path": "data.body", "reference": {"where": reference_where}}, False),
+            ({"operator": "none_equal_reference", "path": "data.body.x", "reference": {"where": reference_where}}, False),
+            ({"operator": "all_equal_reference", "path": "data.s", "reference": {"where": [{"path": "data.s", "operator": "equal", "value": "1"}]}}, False),
+            ({"operator": "all_in", "path": "data.s", "value": ["1", "2"]}, True),
+            ({"operator": "all_in", "path": "data.s", "value": ["1"]}, False),
+            ({"operator": "all_equal_reference", "path": "data.label", "reference": {"where": reference_where, "path": "data.s"}, "append": "-x"}, True),
+        ]
+        self.assertEqual({case["operator"] for case, _expected in cases}, set(assertion.CLAUDE_ASSERTION_OPERATORS))
+        for case, expected in cases:
+            with self.subTest(case=case):
+                assertion._validate_assertion(case, "测试", ["transport.http"])
+                passed, _actual = assertion._evaluate_assertion(
+                    records, case, observations=records, default_scenarios=["transport.http"], record_type="claude_http_request"
+                )
+                self.assertIs(passed, expected)
+        # 参照必须恰好一条：两条命中时不通过，并报告命中数。
+        ambiguous = {"operator": "all_equal_reference", "path": "data.s", "reference": {"where": [{"path": "data.s", "operator": "equal", "value": "1"}]}}
+        _passed, actual = assertion._evaluate_assertion(
+            records, ambiguous, observations=records, default_scenarios=["transport.http"], record_type="claude_http_request"
+        )
+        self.assertEqual(actual["reference_count"], 2)
+        # 参照比较按顶层键顺序：键序不同即不等（与 FW-F same_body_fields 同口径）。
+        reordered = [self.observation(4, {"n": 1, "body": {"s": True, "m": 1}}), self.observation(5, {"n": 2, "body": {"m": 1, "s": True}})]
+        case = {"operator": "all_equal_reference", "path": "data.body", "reference": {"where": [{"path": "data.n", "operator": "equal", "value": 2}]}}
+        self.assertFalse(assertion._evaluate_assertion(reordered[:1], case, observations=reordered, default_scenarios=["transport.http"], record_type="claude_http_request")[0])
+        # 参数闭集：缺参数、区间颠倒、比较符非法都在画像校验时拒绝。
+        for broken, message in (
+            ({"operator": "all_between", "path": "data.n", "minimum": 9, "maximum": 1}, "区间非法"),
+            ({"operator": "all_fields_compare", "left_path": "data.n", "right_path": "data.n", "comparison": "lte"}, "comparison"),
+            ({"operator": "all_distinct"}, "字段不闭合"),
+            ({"operator": "all_equal_reference", "path": "data.n", "reference": {"scenario_ids": ["failure.529"]}}, "规则场景的子集"),
+        ):
+            with self.subTest(broken=broken), self.assertRaisesRegex(assertion.AssertionConfigurationError, message):
+                assertion._validate_assertion(broken, "测试", ["transport.http"])
+        # 长取值在结果文档里只显示摘要。
+        long_value = "x" * (assertion.DISPLAY_LIMIT + 10)
+        shown = assertion._display(long_value)
+        self.assertEqual(set(shown["$summary"]), {"sha256", "length", "prefix"})
+        self.assertEqual(assertion._display("short"), "short")
 
 
 class CheckerCommandTests(unittest.TestCase):
@@ -446,7 +567,16 @@ class CheckerCommandTests(unittest.TestCase):
         self.assertEqual(failed, ["spec-hdr-001.version-header"])
         version_check = next(check for check in document["checks"] if check["id"] == "spec-hdr-001.version-header")
         self.assertEqual(version_check["actual"]["values"], [["2023-01-01"]])
-        self.assertEqual(version_check["evidence_paths"], ["job-main/print/relay/conn001.client_to_upstream.bin"])
+        # 请求记录的证据：请求字节，加上派生事实用到的配对响应、连接索引与中继清单（注入环境）。
+        self.assertEqual(
+            version_check["evidence_paths"],
+            [
+                "job-main/print/relay-manifest.json",
+                "job-main/print/relay/conn001.client_to_upstream.bin",
+                "job-main/print/relay/conn001.upstream_to_client.bin",
+                "job-main/print/relay/relay.json",
+            ],
+        )
 
     def test_projection_mode_binds_digests(self) -> None:
         projection = self.write_projection(self.official, "SPEC-TLS-001", "tls-input.json")
@@ -493,7 +623,7 @@ class CheckerCommandTests(unittest.TestCase):
         checks = assertion.evaluate_rule(self.profile, "SPEC-FAIL-001", observations, loaded)
         coverage = checks[0]
         self.assertEqual((coverage["id"], coverage["passed"]), (contract.COVERAGE_CHECK_ID, False))
-        self.assertEqual(coverage["actual"]["failure.529"], ["relay_binary", "relay_manifest"])
+        self.assertEqual(coverage["actual"]["failure.529"], ["relay_binary", "relay_index", "relay_manifest", "relay_response"])
 
 
 if __name__ == "__main__":

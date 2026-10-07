@@ -254,12 +254,17 @@ class ClaudeBuilderTests(unittest.TestCase):
         self.assertEqual((meta["validation_mode"], meta["official_authority"]), ("candidate_profile", fixture.AUTHORITY))
         self.assertNotIn("official_evidence_refs", meta)
         hdr = by_rule["SPEC-HDR-001"]
-        # 证据绑定覆盖全部 check 引用的文件（场景覆盖 check 引用规则场景下的全部 artifact），去重按路径排序。
+        # 证据绑定覆盖全部 check 引用的文件（场景覆盖 check 引用规则场景下的全部 artifact，含补绑的伴随文件），去重按路径排序。
         self.assertEqual(
             hdr["candidate_evidence_refs"],
             [
                 {"path": f"candidate-run/{relative}", "sha256": _sha256(self.fixture.candidate.evidence_root / relative)}
-                for relative in ("job-main/print/relay-manifest.json", "job-main/print/relay/conn001.client_to_upstream.bin")
+                for relative in (
+                    "job-main/print/relay-manifest.json",
+                    "job-main/print/relay/conn001.client_to_upstream.bin",
+                    "job-main/print/relay/conn001.upstream_to_client.bin",
+                    "job-main/print/relay/relay.json",
+                )
             ],
         )
         self.assertTrue(hdr["candidate_machine_result"]["path"].startswith(f"assertions/{CANDIDATE}/revisions/b2/machine/candidate/"))

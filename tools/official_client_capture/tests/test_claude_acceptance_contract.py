@@ -23,7 +23,11 @@ class ClaudeAcceptanceContractTests(unittest.TestCase):
         self.assertEqual(modes, {"SPEC-FAIL-001": "dual_wire", "SPEC-HDR-001": "dual_wire", "SPEC-META-001": "candidate_profile", "SPEC-TLS-001": "dual_wire"})
         # 线上记录类型与取证运行时记录类型互斥，合起来是 checker 认的全部记录类型。
         self.assertEqual(contract.WIRE_RECORD_TYPES & contract.INTERNAL_RECORD_TYPES, frozenset())
-        self.assertEqual(contract.KNOWN_RECORD_TYPES, {"claude_http_request", "claude_http_response", "relay_connection", "tls_client_hello", "runtime_receipt"})
+        self.assertEqual(
+            contract.KNOWN_RECORD_TYPES,
+            {"claude_http_request", "claude_http_response", "relay_connection", "relay_intervention", "probe_run", "tls_client_hello", "runtime_receipt"},
+        )
+        self.assertEqual(contract.INTERNAL_RECORD_TYPES, {"runtime_receipt"})
         # 一条线上规则只要多选一种取证运行时记录，就整条改为 candidate_profile。
         mutated = json.loads(json.dumps(self.profile))
         rule = next(item for item in mutated["rules"] if item["rule_id"] == "SPEC-TLS-001")
@@ -93,7 +97,8 @@ class ClaudeAcceptanceContractTests(unittest.TestCase):
             contract.expected_check_ids_for_side(contract.build_contract_payload(self.profile), "SPEC-TLS-001", "both")
 
     def test_frozen_contract_verification(self) -> None:
-        self.assertEqual(contract.FROZEN_CONTRACT_SHA256S, {})
+        # 只登记了仓库基线 2.1.226；合成夹具的版本没有登记。
+        self.assertEqual(set(contract.FROZEN_CONTRACT_SHA256S), {"2.1.226"})
         with self.assertRaisesRegex(contract.AcceptanceContractError, "没有登记"):
             contract.verify_frozen_contract(self.profile, fixture.TARGET_VERSION)
         digest = contract.contract_sha256(contract.build_contract_payload(self.profile))

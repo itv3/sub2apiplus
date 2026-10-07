@@ -7,9 +7,11 @@
 1. **validation_mode 分组**：一条规则的全部 check 只选线上可观测的记录（``WIRE_RECORD_TYPES``）即为 ``dual_wire``，
    官方／候选两侧各执行一次机器断言；出现任何取证运行时记录（``INTERNAL_RECORD_TYPES``）即为 ``candidate_profile``，
    只在候选侧执行机器断言，官方权威改为批准画像链（批准断言画像摘要、分类包摘要与联合审核摘要）。
-   Claude 的线上记录都经同一个 R 中继落盘：请求字节（``claude_http_request``）、ClientHello（``tls_client_hello``）、
-   连接（``relay_connection``）与中继按计划给出的合成响应（``claude_http_response``）；``runtime_receipt`` 是取证运行
-   自身的收据（注入环境、本地错误、中继完整性），两侧的含义不同，因此按内部记录处理。
+   Claude 的线上记录都经同一个 R 中继落盘：请求（``claude_http_request``）、上游响应（``claude_http_response``）、
+   连接（``relay_connection``）、中继按计划给出的合成动作（``relay_intervention``）、ClientHello（``tls_client_hello``）
+   与逐 probe 的聚合（``probe_run``，另带同 probe 的实验条件与客户端本地结果：两侧都由同一官方客户端按同一 probe
+   驱动，可以逐侧比对）；``runtime_receipt`` 是取证运行自身的完整收据（中继完整性、运行时镜像、上游主机等侧别相关
+   内容），按内部记录处理。
 2. **分侧覆盖矩阵**：候选侧必须覆盖全部规则引用场景的 ``required_artifact_kinds``；官方侧只须覆盖 ``dual_wire`` 规则
    引用场景的 ``required_artifact_kinds``。
 3. **check ID 全集**：每条规则应执行的 check 为画像 check 与通用 ``scenario-artifact-coverage`` 的并集；accept 按此复算，
@@ -47,14 +49,18 @@ SIDES = ("official", "candidate")
 # 侧别限定 check：{(规则, check): 适用侧}。当前没有任何登记（Claude 两侧都经同一 R 中继取证）。
 SIDE_RESTRICTED_CHECKS: dict[tuple[str, str], tuple[str, ...]] = {}
 
-WIRE_RECORD_TYPES = frozenset({"claude_http_request", "claude_http_response", "relay_connection", "tls_client_hello"})
+WIRE_RECORD_TYPES = frozenset(
+    {"claude_http_request", "claude_http_response", "relay_connection", "relay_intervention", "probe_run", "tls_client_hello"}
+)
 INTERNAL_RECORD_TYPES = frozenset({"runtime_receipt"})
 KNOWN_RECORD_TYPES = WIRE_RECORD_TYPES | INTERNAL_RECORD_TYPES
 
 # 仓库基线画像（claude_rule_expectations_<版本>.json）推导出的契约冻结摘要，按版本登记；由
 # ``python3 claude_acceptance_contract.py --profile <画像> --print-digest`` 生成，画像规则集变化时必然漂移，
 # 必须连同分组与覆盖矩阵一起重新审核后才能更新。
-FROZEN_CONTRACT_SHA256S: dict[str, str] = {}
+FROZEN_CONTRACT_SHA256S: dict[str, str] = {
+    "2.1.226": "0d9e5c0dfed617aba476b24f9399c39974ba716c7fc08bac80a2186c265b330e",
+}
 
 
 class AcceptanceContractError(RuntimeError):
