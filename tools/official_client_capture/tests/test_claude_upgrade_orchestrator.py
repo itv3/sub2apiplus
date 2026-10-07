@@ -163,10 +163,11 @@ class CommandLineAndBoundaryTests(unittest.TestCase):
         self.assertIn("compile-and-run-vc-batch", output.getvalue())
 
     def test_own_subcommands_report_pending(self) -> None:
-        # classify（B3-02）与 prepare-profile／stage-profile（B3-03）已落实，这里换成仍待实现的 plan-candidate-gates（B3-04）。
+        # classify（B3-02）、prepare-profile／stage-profile（B3-03）与 plan-candidate-gates（B3-04 第一步）已落实，
+        # 这里换成仍待实现的 record-candidate-build（B3-04 第三步）。
         error = io.StringIO()
         with contextlib.redirect_stderr(error):
-            code = claude_upgrade.main(["plan-candidate-gates", "--campaign-dir", "/nonexistent"])
+            code = claude_upgrade.main(["record-candidate-build", "--campaign-dir", "/nonexistent"])
         self.assertEqual(code, 1)
         self.assertIn("B3-04", error.getvalue())
 

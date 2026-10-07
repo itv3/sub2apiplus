@@ -169,6 +169,7 @@ class _ClassifyCase(unittest.TestCase):
         discovery: bytes | None = None,
         candidates: bytes | None = None,
         relay_overrides: dict[str, Any] | None = None,
+        control_receipts: dict[str, Any] | None = None,
     ) -> Path:
         scenarios = _scenarios(target)
         scratch = self.root / f"store-build-{campaign_id}"
@@ -198,7 +199,8 @@ class _ClassifyCase(unittest.TestCase):
             "created_at_utc": "2026-10-07T00:00:00Z", "campaign_mode": "formal", "campaign_purpose": "validation_only",
             "baseline_version": BASELINE, "target_version": target, "target_sha256": "a" * 64,
             "official_identity": {"npm": {}, "gcs": {}, "binary_sha256": "a" * 64, "binary_equivalence": "npm=gcs"},
-            "baseline_identity": {}, "tool_identity": self.tool_identity, "control_receipts": {},
+            # 控制收据缺省为空；候选级动作（B3-04）的夹具在这里绑定 Claude 计时账本。
+            "baseline_identity": {}, "tool_identity": self.tool_identity, "control_receipts": dict(control_receipts or {}),
             "inputs": {name: {"path": path.relative_to(campaign).as_posix(), "sha256": claude_upgrade.file_sha256(path)} for name, path in frozen.items()},
             "configuration": {
                 "platform": "linux/arm64",

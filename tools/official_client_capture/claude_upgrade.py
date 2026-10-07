@@ -4324,10 +4324,11 @@ def _candidate_identity_snapshot(
 
 
 def _path_in_candidate_source(path: Path, source_root: Path, label: str) -> Path:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（B3-04）：候选源码树内的制品路径（逐级拒绝符号链接）；实现在 ``claude_upgrade_candidate``。"""
 
-    del path, source_root, label
-    raise _pending("_path_in_candidate_source", "B3-04／B3-05（候选构建与 revision）")
+    from tools.official_client_capture import claude_upgrade_candidate
+
+    return claude_upgrade_candidate.path_in_candidate_source(path, source_root, label)
 
 
 def _candidate_failed_run_for_review(
@@ -4609,7 +4610,8 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     # prepare-profile、stage-profile 由 B3-03 落实（实现在 claude_upgrade_profile，见 ``main`` 的分派）；表项只用于注册子命令解析器。
     "prepare-profile": ("VC-3 目标画像派生：机器草案、修订与批准（EvidenceApprovalFact）", "B3-03（VC-3 画像 producer）"),
     "stage-profile": ("VC-3 联合制品：预览与批准（ProfileApprovalFact）", "B3-03（VC-3 画像 producer）"),
-    "plan-candidate-gates": ("VC-4 规划候选门禁", "B3-04（VC-4 候选构建与冻结）"),
+    # plan-candidate-gates 由 B3-04 第一步落实（实现在 claude_upgrade_candidate，见 ``main`` 的分派）；表项只用于注册子命令解析器。
+    "plan-candidate-gates": ("VC-4 门禁需求预览与门禁执行计划", "B3-04（VC-4 候选构建与冻结）"),
     "record-candidate-build": ("VC-4 登记候选构建收据", "B3-04（VC-4 候选构建与冻结）"),
     "capture-candidate": ("候选采集 attempt：run 或 seal", "B4-01／B4-02（候选采集与四阶段封存）"),
     "compare": ("只用封存证据离线比较", "B4-03（Claude 评估器）"),
@@ -4961,6 +4963,11 @@ def _build_parser() -> argparse.ArgumentParser:
                 claude_upgrade_profile.add_stage_arguments(target)
         if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build"}:
             target.add_argument("--candidate-id")
+        if name == "plan-candidate-gates":
+            # 候选源码树、树内映射与计划输出（与 Codex 同名同义；三者都不给时是需求预览），B3-04。
+            from tools.official_client_capture import claude_upgrade_candidate
+
+            claude_upgrade_candidate.add_plan_gates_arguments(target)
     return parser
 
 
@@ -5164,7 +5171,8 @@ def main(argv: list[str] | None = None) -> int:
     import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），capture-official
     seal 封存官方证据（B2-07），tool-evolution 与 ``RECOVERY_SUBCOMMANDS``（对账、恢复预览、resume --rerun-failed、
     status、环境清理与两类明确拒绝）由 B2-08 落实，plan --audit-only 只审计（B5a-09），classify 做 VC-2 规则分类
-    （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），其余 Claude 专属子命令在动作体落实前报未实现。
+    （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），plan-candidate-gates 做 VC-4 门禁计划（B3-04），
+    其余 Claude 专属子命令在动作体落实前报未实现。
 
     分派前先过项目总账消费者门禁（``_assert_consumer_admission``，与 Codex 主入口同一判据：达上限只挡该根因）；
     可处理异常与 Codex 主入口同一组，报错退出 1。租约、遗留入口拒绝与停线收据等 Codex 主入口的其余外层流程，
@@ -5220,6 +5228,10 @@ def main(argv: list[str] | None = None) -> int:
                 result, return_code = claude_upgrade_profile.prepare_profile_command(arguments)
             else:
                 result, return_code = claude_upgrade_profile.stage_profile_command(arguments)
+        elif arguments.command == "plan-candidate-gates":
+            from tools.official_client_capture import claude_upgrade_candidate
+
+            result, return_code = claude_upgrade_candidate.plan_candidate_gates_command(arguments)
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)
