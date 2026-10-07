@@ -12,7 +12,9 @@ VC-0 交接链）在 ``claude_upgrade_vc``。
 ============================================
 * ``capture-official``：B2-07 的 ``official/result.json``（``claude_upgrade_seal.load_stage_result``，B2-08 起用）。
 * ``classify``：B3-02 的 ``classification/result.json``（``claude_upgrade_classify.load_stage_result``），VC-2 checkpoint
-  必须已经绑定这份结果；阶段结果写出、checkpoint 尚未写出的半成品按「尚未封存」处理（重跑原批准命令收敛）。
+  必须已经绑定这份结果；阶段结果写出、checkpoint 尚未写出的半成品按「尚未封存」处理（重跑原批准命令收敛）。批准断言画像
+  冻结之后（B4-05a，``claude_upgrade_assertion_profile``），读出的视图附上 ``assertion_profile_manifest`` 与
+  ``joint_manifest_sha256`` 两项评估字段（与 Codex 分类收据同名同义），文件本身不变。
 * ``stage-profile``（别名 ``profile``）：B3-03 的 ``profile/result.json``（``claude_upgrade_profile.load_stage_result``），
   同样要求 VC-3 checkpoint 已绑定。Codex 的 VC-3 没有阶段结果，``_stage_path`` 照搬 Codex 不认识这个阶段，所以在这里
   先于 ``_stage_path`` 分流；``prepare-profile`` 的准备结果不是阶段结果，读侧是 ``claude_upgrade_profile.load_prepare_result``。
@@ -292,6 +294,12 @@ def load_stage_result(
     expected = {"path": path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(path)}
     if not isinstance(receipt, Mapping) or dict(receipt) != expected:
         raise ConfigurationError(f"{phase} checkpoint 没有绑定这份 {canonical} 阶段结果。")
+    if canonical == "classify":
+        # B4-05a：批准断言画像冻结之后，分类视图附上 Codex 分类收据同名的两项评估字段（冻结画像与 VC-3 联合摘要），
+        # 共享评估流程按它们取画像与官方权威；阶段结果文件与 checkpoint 绑定都不变，画像未冻结时不附。
+        from tools.official_client_capture import claude_upgrade_assertion_profile
+
+        payload = {**payload, **claude_upgrade_assertion_profile.classification_evaluation_fields(campaign_dir, current)}
     return payload
 
 

@@ -2340,10 +2340,16 @@ def _evaluation_failure_scope(
     evaluation_run: Mapping[str, Any],
     assertions_root: Path,
 ) -> tuple[dict[str, Any], str]:
-    """共享流程在 ``upgrade_control_plane._evaluation_failure_scope``；以 Claude 适配器转调。"""
+    """登记的薄壳分叉（B4-05a）：不转调共享实现。
 
-    with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
-        return upgrade_control_plane._evaluation_failure_scope(campaign_dir, candidate, attempt, evaluation_run, assertions_root)
+    共享 ``upgrade_control_plane._evaluation_failure_scope`` 沿 Codex 的 assertion bundle provenance 定位 Job；Claude 的评估用
+    manifest 条目直接带 ``job_id``，失败定位按「失败 check → evidence_paths → manifest 条目 → job_id」回溯，输出形状与共享实现
+    相同。实现与输入合同（``candidate_failure_scope_inputs``）在 ``claude_upgrade_evaluation_recovery``。
+    """
+
+    from tools.official_client_capture import claude_upgrade_evaluation_recovery
+
+    return claude_upgrade_evaluation_recovery.evaluation_failure_scope(campaign_dir, candidate, attempt, evaluation_run, assertions_root)
 
 
 def _evaluation_recover_locked(
@@ -2763,10 +2769,15 @@ def _verify_current_deployment_receipt(
     manifest: Mapping[str, Any],
     receipt_path: Path,
 ) -> dict[str, Any]:
-    """共享流程在 ``upgrade_control_plane._verify_current_deployment_receipt``；以 Claude 适配器转调。"""
+    """登记的薄壳分叉（B4-05a）：不转调共享实现。
 
-    with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
-        return upgrade_control_plane._verify_current_deployment_receipt(campaign_dir, manifest, receipt_path)
+    共享实现按 Codex 部署收据的形状读顶层五摘要；Claude 受管部署收据的五摘要在 ``identity`` 子键里（适配器成员
+    ``deploy_receipt_identity`` 同一口径），判据逐条相同。实现在 ``claude_upgrade_evaluation_recovery``。
+    """
+
+    from tools.official_client_capture import claude_upgrade_evaluation_recovery
+
+    return claude_upgrade_evaluation_recovery.verify_current_deployment_receipt(campaign_dir, manifest, receipt_path)
 
 
 def _verify_failed_run_reconciled(
@@ -3682,10 +3693,10 @@ def _attempt_recovery_segment_terminal_failed(
     attempt_id: str,
     segment_root: Path,
 ) -> bool:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
 
     del campaign_dir, candidate_id, attempt_id, segment_root
-    raise _pending("_attempt_recovery_segment_terminal_failed", "B4-05（评估失败局部恢复）")
+    raise _pending("_attempt_recovery_segment_terminal_failed", "B4-05b（候选恢复段，随 B4-01／B4-02）")
 
 
 def _authoritative_recovery_execute_jobs(
@@ -3693,10 +3704,10 @@ def _authoritative_recovery_execute_jobs(
     candidate_id: str,
     reservation: Mapping[str, Any],
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
 
     del campaign_dir, candidate_id, reservation
-    raise _pending("_authoritative_recovery_execute_jobs", "B4-05（评估失败局部恢复）")
+    raise _pending("_authoritative_recovery_execute_jobs", "B4-05b（候选恢复段，随 B4-01／B4-02）")
 
 
 def _load_attempt_recovery_reservation(
@@ -3707,10 +3718,10 @@ def _load_attempt_recovery_reservation(
     attempt_id: str,
     recovery_revision: str,
 ) -> dict[str, Any]:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
 
     del campaign_dir, segment_root, candidate_id, attempt_id, recovery_revision
-    raise _pending("_load_attempt_recovery_reservation", "B4-05（评估失败局部恢复）")
+    raise _pending("_load_attempt_recovery_reservation", "B4-05b（候选恢复段，随 B4-01／B4-02）")
 
 
 def _load_attempt_recovery_segment(
@@ -3719,10 +3730,10 @@ def _load_attempt_recovery_segment(
     attempt_id: str,
     recovery_revision: str,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）。"""
+    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
 
     del campaign_dir, candidate_id, attempt_id, recovery_revision
-    raise _pending("_load_attempt_recovery_segment", "B4-05（评估失败局部恢复）")
+    raise _pending("_load_attempt_recovery_segment", "B4-05b（候选恢复段，随 B4-01／B4-02）")
 
 
 def _require_recovery_preview_scope_equals_frozen_jobs(
@@ -3740,17 +3751,17 @@ def _require_recovery_preview_scope_equals_frozen_jobs(
 
 
 def recovery_segment_summary(*arguments: Any, **options: Any) -> Any:
-    """适配器成员 ``recovery_segment_summary``（候选恢复段摘要）：VC-1 官方路径不经过它，由 B4-05 落实。"""
+    """适配器成员 ``recovery_segment_summary``（候选恢复段摘要）：VC-1 官方路径不经过它，由 B4-05b（候选恢复段）落实。"""
 
     del arguments, options
-    raise _pending("recovery_segment_summary（候选恢复段）", "B4-05（评估失败局部恢复）")
+    raise _pending("recovery_segment_summary（候选恢复段）", "B4-05b（候选恢复段，随 B4-01／B4-02）")
 
 
 def segment_reuse_proofs(*arguments: Any, **options: Any) -> Any:
-    """适配器成员 ``segment_reuse_proofs``（候选恢复段复用证明）：VC-1 官方路径不经过它，由 B4-05 落实。"""
+    """适配器成员 ``segment_reuse_proofs``（候选恢复段复用证明）：VC-1 官方路径不经过它，由 B4-05b（候选恢复段）落实。"""
 
     del arguments, options
-    raise _pending("segment_reuse_proofs（候选恢复段）", "B4-05（评估失败局部恢复）")
+    raise _pending("segment_reuse_proofs（候选恢复段）", "B4-05b（候选恢复段，随 B4-01／B4-02）")
 
 
 def recovery_reuse_check(
@@ -4247,23 +4258,25 @@ def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, 
     return claude_upgrade_batch.campaign_stage_replay_facts(Path(campaign_dir), run_manifest)
 
 
-# B4-04／B4-05（VC-5 评估读侧的分类与画像视图；B3-02／B3-03 只落实了分类与画像的 producer，这六个成员只被 VC-5 评估流程调用）
+# B4-05a（分类读侧六个成员：批准断言画像与修订画像，实现在 ``claude_upgrade_assertion_profile``）
 
 
 def _classification_official_authority(
     classification: dict[str, Any],
 ) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
+    """服务面成员（B4-05a）：candidate_profile 行的官方权威三摘要；实现在 ``claude_upgrade_assertion_profile``。"""
 
-    del classification
-    raise _pending("_classification_official_authority", "B4-04／B4-05（VC-5 评估读侧）")
+    from tools.official_client_capture import claude_upgrade_assertion_profile
+
+    return claude_upgrade_assertion_profile.classification_official_authority(classification)
 
 
 def _effective_classification_view(campaign_dir: Path, candidate_id: str, classification: dict[str, Any]) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
+    """服务面成员（B4-05a）：按当前评估基线生效的批准断言画像投影分类视图；实现在 ``claude_upgrade_assertion_profile``。"""
 
-    del campaign_dir, candidate_id, classification
-    raise _pending("_effective_classification_view", "B4-04／B4-05（VC-5 评估读侧）")
+    from tools.official_client_capture import claude_upgrade_assertion_profile
+
+    return claude_upgrade_assertion_profile.effective_classification_view(campaign_dir, candidate_id, classification)
 
 
 def _approved_rules(
@@ -4272,31 +4285,35 @@ def _approved_rules(
     *,
     require_approved: bool,
 ) -> tuple[str, ...]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
+    """服务面成员（B4-05a）：批准的目标规则或冻结的基线规则；实现在 ``claude_upgrade_assertion_profile``。"""
 
-    del campaign_dir, manifest, require_approved
-    raise _pending("_approved_rules", "B4-04／B4-05（VC-5 评估读侧）")
+    from tools.official_client_capture import claude_upgrade_assertion_profile
+
+    return claude_upgrade_assertion_profile.approved_rules(campaign_dir, manifest, require_approved=require_approved)
 
 
 def _effective_assertion_profile(campaign_dir: Path, candidate_id: str, baseline: int) -> dict[str, Any] | None:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
+    """服务面成员（B4-05a）：基线生效的修订画像（没有修订为 None）；实现在 ``claude_upgrade_assertion_profile``。"""
 
-    del campaign_dir, candidate_id, baseline
-    raise _pending("_effective_assertion_profile", "B4-04／B4-05（VC-5 评估读侧）")
+    from tools.official_client_capture import claude_upgrade_assertion_profile
+
+    return claude_upgrade_assertion_profile.effective_assertion_profile(campaign_dir, candidate_id, baseline)
 
 
 def _approval_revision_baselines(campaign_dir: Path, candidate_id: str) -> list[int]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
+    """服务面成员（B4-05a）：已 COMMIT 的 approval-revision 基线编号；实现在 ``claude_upgrade_assertion_profile``。"""
 
-    del campaign_dir, candidate_id
-    raise _pending("_approval_revision_baselines", "B4-04／B4-05（VC-5 评估读侧）")
+    from tools.official_client_capture import claude_upgrade_assertion_profile
+
+    return claude_upgrade_assertion_profile.approval_revision_baselines(campaign_dir, candidate_id)
 
 
 def _approval_revision_delta(current_path: Path, revised_path: Path) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（VC-5 评估读侧） 落实）。"""
+    """服务面成员（B4-05a）：修订画像相对生效画像的变化判据；实现在 ``claude_upgrade_assertion_profile``。"""
 
-    del current_path, revised_path
-    raise _pending("_approval_revision_delta", "B4-04／B4-05（VC-5 评估读侧）")
+    from tools.official_client_capture import claude_upgrade_assertion_profile
+
+    return claude_upgrade_assertion_profile.approval_revision_delta(current_path, revised_path)
 
 
 # B3-04／B3-05（候选构建与 revision）
@@ -4492,10 +4509,11 @@ def _derive_b0_evaluation_run(
     classification: Mapping[str, Any],
     rules: Sequence[str],
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）：b0 失败定位用的派生评估索引。"""
+    """服务面成员（B4-05a）：Claude 没有需要派生的历史 b0 评估索引，一律拒绝；实现在 ``claude_upgrade_evaluation_recovery``。"""
 
-    del campaign_dir, manifest, candidate_id, revision, classification, rules
-    raise _pending("_derive_b0_evaluation_run", "B4-05（评估失败局部恢复）")
+    from tools.official_client_capture import claude_upgrade_evaluation_recovery
+
+    return claude_upgrade_evaluation_recovery.derive_b0_evaluation_run(campaign_dir, manifest, candidate_id, revision, classification, rules)
 
 
 # ---------------------------------------------------------------------------

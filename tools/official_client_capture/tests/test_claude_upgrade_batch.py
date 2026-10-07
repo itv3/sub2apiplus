@@ -611,110 +611,11 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
         head = project_ledger.replay_head(self.project_root)
         self.assertEqual((head["precise_total"], head["estimated_total"]), (0, 0))
 
+    def drive_vc3_vc4_to_candidate_sealed(self) -> Path:
+        """真实批次走完 VC-3 与 VC-4（revision-open r1、候选构建）到 Store ``candidate_sealed``；返回 Campaign 目录。
 
-@unittest.skipUnless(site.ENABLE_USER_SITE, "崩溃注入经 usercustomize 进入动作子进程，要求启用用户 site")
-class AtomicBatchChainTests(_RealTreeBatchCase):
-    def classify_action(self, action_id: str, argv: list[Any]) -> dict[str, Any]:
-        return batch.managed_action(action_id, f"VC-2:{action_id}", argv, item_ids=[action_id])
+        B4-05a 的评估恢复链从这里接着派发 VC-5 批次（``test_claude_upgrade_evaluation_recovery``）。"""
 
-    def test_vc2_first_batch_commits_and_n_plus_one_redispatch_converges(self) -> None:
-        campaign = self.campaign = self.build_batch_campaign()
-        facts_before = len(self.store_facts())
-
-        # 批次 2：VC-2 首批（机器草案）零请求派发；no-op 首批先被代跑成父 run 历史。
-        draft_argv = ["classify", "--campaign-dir", campaign]
-        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, [self.classify_action("vc2-classify-draft", draft_argv)]), 2, "VC-2")
-        self.assertEqual((result["bootstrap_noop_run"]["reason"], result["bootstrap_noop_run"]["batch_sequence"]), ("incremental-noop", 1))
-        events = [(item["event_type"], item["phase"]) for item in result["timing_ledger"]["events"]]
-        self.assertEqual(events, [("stage_started", "VC-1"), ("stage_completed", "VC-1"), ("stage_started", "VC-2")])
-        self.assertEqual(result["commit"]["ledger_event_ids"], [item["event_id"] for item in result["timing_ledger"]["events"]])
-        self.assertIsNone(result["timing_ledger"]["completion"])
-        state = timing.inspect_ledger(self.ledger_dir)
-        self.assertEqual((state["status"], state["active_phase"]), ("active", "VC-2"))
-        self.assertTrue((campaign / classify.DRAFT_ROOT / "rev-0001" / classify.DRAFT_RECEIPT_FILENAME).is_file())
-        self.assertEqual(len(self.store_facts()), facts_before)
-        staged = campaign / "control" / "vc" / "staging" / "0002-vc-2" / "attempt-1"
-        self.assertEqual(sorted(path.name for path in staged.iterdir()), sorted(["batch.json", "run-manifest.json", "PREPARED"]))
-
-        # 审核人处置草案；批次 3：修订。审核人在批次之外复跑同一修订命令读取 review_sha256（同内容复用，不写文件）。
-        directory = self.write_documents(self.resolved_documents(campaign / classify.DRAFT_ROOT / "rev-0001"), self.root / "vc2-resolved")
-        revise_argv = ["classify", "--campaign-dir", campaign, "--from-revision", "rev-0001", "--revision-input", directory]
-        self.assert_batch_passed(self.dispatch(campaign, "VC-2", 3, [self.classify_action("vc2-classify-revise", revise_argv)]), 3, "VC-2")
-        code, revised, stderr = self.revise(campaign, "rev-0001", directory)
-        self.assertEqual((code, revised["revision"], revised["reused"], revised["gate"]["reasons"]), (2, "rev-0002", True, []), stderr)
-
-        # 批次 4：批准；子进程在 Store 分类事实写入之后、批准目录发布之前被硬杀。
-        approve = [self.classify_action("vc2-classify-approve", self.approve_argv(campaign, "rev-0002", revised["review_sha256"]))]
-        inject = self.root / "inject"
-        inject.mkdir(mode=0o700)
-        (inject / "usercustomize.py").write_text(USERCUSTOMIZE, encoding="utf-8")
-        marker = self.root / "crashed.marker"
-        crash = {
-            "PYTHONPATH": str(inject), CRASH_ACTION_ENV: "vc2-classify-approve", CRASH_MARKER_ENV: str(marker),
-            CRASH_SUFFIX_ENV: "/classification/approved",
-        }
-        with mock.patch.dict(os.environ, crash):
-            code, failed, stderr = self.dispatch(campaign, "VC-2", 4, approve)
-        self.assertTrue(marker.is_file(), "崩溃注入没有生效（usercustomize 未被动作子进程加载）")
-        self.assertEqual((code, failed["campaign_run"]["reason"]), (1, "action-failed:vc2-classify-approve"), stderr)
-        failed_run = Path(failed["campaign_run"]["run_dir"])
-        classifications = [fact for fact in self.store_facts() if fact["fact_kind"] == "rule_classification_recorded"]
-        self.assertEqual(len(classifications), 1)
-        self.assertEqual(classifications[0]["producer_run"], {"run_dir": str(failed_run), "owner_nonce": supervisor._read_state(failed_run)["owner_nonce"], "action_id": "vc2-classify-approve"})
-        self.assertFalse((campaign / classify.APPROVED_ROOT).exists())
-        self.assertTrue(any(path.name.startswith(classify.APPROVED_TEMPORARY_PREFIX) for path in (campaign / "classification").iterdir()))
-        self.assertFalse(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-2").exists())
-        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "stage_review_required")
-        self.assertTrue((campaign / "control" / "vc" / "commits" / "0004-vc-2.json").is_file())
-
-        # 对账之前 N+1 被拒，零写入（没有 0005 的 staging）。
-        code, _result, stderr = self.dispatch(campaign, "VC-2", 5, approve)
-        self.assertEqual(code, 1)
-        self.assertIn("stage_review_required", stderr)
-        self.assertFalse((campaign / "control" / "vc" / "staging" / "0005-vc-2").exists())
-
-        # 对账：阶段幂等重派合同成立，写证明，账本重开 VC-2、下一动作逐字重派。
-        code, reconciled, stderr = run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
-        self.assertIsNotNone(reconciled, stderr)
-        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
-        proof = reconciled["stage_replay"]
-        self.assertEqual((proof["allowed"], proof["phase"], proof["next_action"]), (True, "VC-2", "redispatch-same-batch"))
-        self.assertEqual([item["action_id"] for item in proof["actions"]], ["vc2-classify-approve"])
-        self.assertTrue(any(key.startswith("classification/" + classify.APPROVED_TEMPORARY_PREFIX) for key in proof["actions"][0]["outputs"]))
-        state = timing.inspect_ledger(self.ledger_dir)
-        self.assertEqual((state["status"], state["active_phase"], state["next_action"]), ("active", "VC-2", "redispatch-same-batch"))
-        self.assertEqual(_read(campaign / "control" / "reconciliation" / f"run-{failed_run.name}" / "stage-replay.json"), proof)
-        # 重复对账幂等：证明逐字相同，账本不再追加。
-        code, again, stderr = run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
-        self.assertEqual((code, again["stage_replay"]), (0, proof), stderr)
-        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["head_sequence"], state["head_sequence"])
-
-        # N+1 逐字重派收敛：Store 事实复用（仍是第一次的 producer_run），批准目录、阶段结果与 VC-2 checkpoint 写出，阶段完成登记。
-        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 5, approve), 5, "VC-2")
-        self.assertEqual(result["timing_ledger"]["events"], [])
-        self.assertEqual(result["timing_ledger"]["completion"]["idempotent"], False)
-        classifications = [fact for fact in self.store_facts() if fact["fact_kind"] == "rule_classification_recorded"]
-        self.assertEqual(len(classifications), 1)
-        self.assertEqual(classifications[0]["producer_run"]["run_dir"], str(failed_run))
-        self.assertEqual(collections.Counter(fact["fact_kind"] for fact in self.store_facts())["rule_classification_recorded"], 1)
-        stage = claude_upgrade._load_stage_result(campaign, "classify")
-        self.assertEqual(stage["revision"], "rev-0002")
-        self.assertFalse(any(path.name.startswith(classify.APPROVED_TEMPORARY_PREFIX) for path in (campaign / "classification").iterdir()))
-        plan = claude_upgrade._vc_campaign_plan(campaign, claude_upgrade.load_campaign_manifest(campaign))
-        _path, checkpoint = claude_upgrade._replay_vc_checkpoint(campaign, plan, "VC-2")
-        self.assertEqual(checkpoint["metrics"], {"live_request_count": 0, "scanned_bytes": 0})
-        self.assertIn("VC-2", timing.phase_ledger_state(self.ledger_dir)["completed_phases"])
-        sequences = sorted(int(path.name[:4]) for path in (campaign / "control" / "vc" / "commits").iterdir())
-        self.assertEqual(sequences, [2, 3, 4, 5])
-
-        # VC-2 已封存：再编译 VC-2 批次被拒（不是阶段审核许可的逐字重派）。
-        code, _result, stderr = self.dispatch(campaign, "VC-2", 6, approve)
-        self.assertEqual(code, 1)
-        self.assertIn("VC-2", stderr)
-        self.assertFalse((campaign / "control" / "vc" / "commits" / "0006-vc-2.json").exists())
-        self.assert_zero_requests()
-
-    def test_vc3_and_vc4_batches_reach_candidate_sealed(self) -> None:
         campaign = self.campaign = self.build_batch_campaign()
         self.approve_vc2_directly(campaign, change=(profile_tests.CHANGE,), delete=(profile_tests.DELETE,))
         # Active 输入已在建 Campaign 时冻结进总计划（build_batch_campaign），准备草案不带 Active 参数。
@@ -844,6 +745,113 @@ class AtomicBatchChainTests(_RealTreeBatchCase):
         self.assertFalse(refused["allowed"])
         self.assertIn("已存在", refused["reasons"][0])
         self.assert_zero_requests()
+        return campaign
+
+
+@unittest.skipUnless(site.ENABLE_USER_SITE, "崩溃注入经 usercustomize 进入动作子进程，要求启用用户 site")
+class AtomicBatchChainTests(_RealTreeBatchCase):
+    def classify_action(self, action_id: str, argv: list[Any]) -> dict[str, Any]:
+        return batch.managed_action(action_id, f"VC-2:{action_id}", argv, item_ids=[action_id])
+
+    def test_vc2_first_batch_commits_and_n_plus_one_redispatch_converges(self) -> None:
+        campaign = self.campaign = self.build_batch_campaign()
+        facts_before = len(self.store_facts())
+
+        # 批次 2：VC-2 首批（机器草案）零请求派发；no-op 首批先被代跑成父 run 历史。
+        draft_argv = ["classify", "--campaign-dir", campaign]
+        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, [self.classify_action("vc2-classify-draft", draft_argv)]), 2, "VC-2")
+        self.assertEqual((result["bootstrap_noop_run"]["reason"], result["bootstrap_noop_run"]["batch_sequence"]), ("incremental-noop", 1))
+        events = [(item["event_type"], item["phase"]) for item in result["timing_ledger"]["events"]]
+        self.assertEqual(events, [("stage_started", "VC-1"), ("stage_completed", "VC-1"), ("stage_started", "VC-2")])
+        self.assertEqual(result["commit"]["ledger_event_ids"], [item["event_id"] for item in result["timing_ledger"]["events"]])
+        self.assertIsNone(result["timing_ledger"]["completion"])
+        state = timing.inspect_ledger(self.ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"]), ("active", "VC-2"))
+        self.assertTrue((campaign / classify.DRAFT_ROOT / "rev-0001" / classify.DRAFT_RECEIPT_FILENAME).is_file())
+        self.assertEqual(len(self.store_facts()), facts_before)
+        staged = campaign / "control" / "vc" / "staging" / "0002-vc-2" / "attempt-1"
+        self.assertEqual(sorted(path.name for path in staged.iterdir()), sorted(["batch.json", "run-manifest.json", "PREPARED"]))
+
+        # 审核人处置草案；批次 3：修订。审核人在批次之外复跑同一修订命令读取 review_sha256（同内容复用，不写文件）。
+        directory = self.write_documents(self.resolved_documents(campaign / classify.DRAFT_ROOT / "rev-0001"), self.root / "vc2-resolved")
+        revise_argv = ["classify", "--campaign-dir", campaign, "--from-revision", "rev-0001", "--revision-input", directory]
+        self.assert_batch_passed(self.dispatch(campaign, "VC-2", 3, [self.classify_action("vc2-classify-revise", revise_argv)]), 3, "VC-2")
+        code, revised, stderr = self.revise(campaign, "rev-0001", directory)
+        self.assertEqual((code, revised["revision"], revised["reused"], revised["gate"]["reasons"]), (2, "rev-0002", True, []), stderr)
+
+        # 批次 4：批准；子进程在 Store 分类事实写入之后、批准目录发布之前被硬杀。
+        approve = [self.classify_action("vc2-classify-approve", self.approve_argv(campaign, "rev-0002", revised["review_sha256"]))]
+        inject = self.root / "inject"
+        inject.mkdir(mode=0o700)
+        (inject / "usercustomize.py").write_text(USERCUSTOMIZE, encoding="utf-8")
+        marker = self.root / "crashed.marker"
+        crash = {
+            "PYTHONPATH": str(inject), CRASH_ACTION_ENV: "vc2-classify-approve", CRASH_MARKER_ENV: str(marker),
+            CRASH_SUFFIX_ENV: "/classification/approved",
+        }
+        with mock.patch.dict(os.environ, crash):
+            code, failed, stderr = self.dispatch(campaign, "VC-2", 4, approve)
+        self.assertTrue(marker.is_file(), "崩溃注入没有生效（usercustomize 未被动作子进程加载）")
+        self.assertEqual((code, failed["campaign_run"]["reason"]), (1, "action-failed:vc2-classify-approve"), stderr)
+        failed_run = Path(failed["campaign_run"]["run_dir"])
+        classifications = [fact for fact in self.store_facts() if fact["fact_kind"] == "rule_classification_recorded"]
+        self.assertEqual(len(classifications), 1)
+        self.assertEqual(classifications[0]["producer_run"], {"run_dir": str(failed_run), "owner_nonce": supervisor._read_state(failed_run)["owner_nonce"], "action_id": "vc2-classify-approve"})
+        self.assertFalse((campaign / classify.APPROVED_ROOT).exists())
+        self.assertTrue(any(path.name.startswith(classify.APPROVED_TEMPORARY_PREFIX) for path in (campaign / "classification").iterdir()))
+        self.assertFalse(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-2").exists())
+        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "stage_review_required")
+        self.assertTrue((campaign / "control" / "vc" / "commits" / "0004-vc-2.json").is_file())
+
+        # 对账之前 N+1 被拒，零写入（没有 0005 的 staging）。
+        code, _result, stderr = self.dispatch(campaign, "VC-2", 5, approve)
+        self.assertEqual(code, 1)
+        self.assertIn("stage_review_required", stderr)
+        self.assertFalse((campaign / "control" / "vc" / "staging" / "0005-vc-2").exists())
+
+        # 对账：阶段幂等重派合同成立，写证明，账本重开 VC-2、下一动作逐字重派。
+        code, reconciled, stderr = run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
+        self.assertIsNotNone(reconciled, stderr)
+        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
+        proof = reconciled["stage_replay"]
+        self.assertEqual((proof["allowed"], proof["phase"], proof["next_action"]), (True, "VC-2", "redispatch-same-batch"))
+        self.assertEqual([item["action_id"] for item in proof["actions"]], ["vc2-classify-approve"])
+        self.assertTrue(any(key.startswith("classification/" + classify.APPROVED_TEMPORARY_PREFIX) for key in proof["actions"][0]["outputs"]))
+        state = timing.inspect_ledger(self.ledger_dir)
+        self.assertEqual((state["status"], state["active_phase"], state["next_action"]), ("active", "VC-2", "redispatch-same-batch"))
+        self.assertEqual(_read(campaign / "control" / "reconciliation" / f"run-{failed_run.name}" / "stage-replay.json"), proof)
+        # 重复对账幂等：证明逐字相同，账本不再追加。
+        code, again, stderr = run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
+        self.assertEqual((code, again["stage_replay"]), (0, proof), stderr)
+        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["head_sequence"], state["head_sequence"])
+
+        # N+1 逐字重派收敛：Store 事实复用（仍是第一次的 producer_run），批准目录、阶段结果与 VC-2 checkpoint 写出，阶段完成登记。
+        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 5, approve), 5, "VC-2")
+        self.assertEqual(result["timing_ledger"]["events"], [])
+        self.assertEqual(result["timing_ledger"]["completion"]["idempotent"], False)
+        classifications = [fact for fact in self.store_facts() if fact["fact_kind"] == "rule_classification_recorded"]
+        self.assertEqual(len(classifications), 1)
+        self.assertEqual(classifications[0]["producer_run"]["run_dir"], str(failed_run))
+        self.assertEqual(collections.Counter(fact["fact_kind"] for fact in self.store_facts())["rule_classification_recorded"], 1)
+        stage = claude_upgrade._load_stage_result(campaign, "classify")
+        self.assertEqual(stage["revision"], "rev-0002")
+        self.assertFalse(any(path.name.startswith(classify.APPROVED_TEMPORARY_PREFIX) for path in (campaign / "classification").iterdir()))
+        plan = claude_upgrade._vc_campaign_plan(campaign, claude_upgrade.load_campaign_manifest(campaign))
+        _path, checkpoint = claude_upgrade._replay_vc_checkpoint(campaign, plan, "VC-2")
+        self.assertEqual(checkpoint["metrics"], {"live_request_count": 0, "scanned_bytes": 0})
+        self.assertIn("VC-2", timing.phase_ledger_state(self.ledger_dir)["completed_phases"])
+        sequences = sorted(int(path.name[:4]) for path in (campaign / "control" / "vc" / "commits").iterdir())
+        self.assertEqual(sequences, [2, 3, 4, 5])
+
+        # VC-2 已封存：再编译 VC-2 批次被拒（不是阶段审核许可的逐字重派）。
+        code, _result, stderr = self.dispatch(campaign, "VC-2", 6, approve)
+        self.assertEqual(code, 1)
+        self.assertIn("VC-2", stderr)
+        self.assertFalse((campaign / "control" / "vc" / "commits" / "0006-vc-2.json").exists())
+        self.assert_zero_requests()
+
+    def test_vc3_and_vc4_batches_reach_candidate_sealed(self) -> None:
+        self.drive_vc3_vc4_to_candidate_sealed()
 
 
 VC1_STUB_ACTIONS_ENV = "CLAUDE_VC1_TEST_STUB_ACTIONS"

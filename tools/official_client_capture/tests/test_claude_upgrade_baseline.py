@@ -326,17 +326,31 @@ class ReadingAndStoreLayerTests(_BaselineCase):
 
 
 class EvaluationRecoverWrapperTests(_BaselineCase):
-    def arguments(self, action: str, *, approve: str | None = "9" * 64) -> argparse.Namespace:
+    def arguments(self, action: str, *, approve: str | None = "9" * 64, root_cause_class: str | None = "evaluator-defect") -> argparse.Namespace:
         return argparse.Namespace(
             command="evaluation-recover", recover_action=action, campaign_dir=self.campaign.campaign_dir, candidate_id=CANDIDATE,
-            reviewer="boss", approve_sha256=approve, root_cause_class=None,
+            reviewer="boss", approve_sha256=approve, root_cause_class=root_cause_class,
         )
 
-    def run_wrapper(self, action: str, shared: Any, *, approve: str | None = "9" * 64) -> dict[str, Any]:
+    def run_wrapper(self, action: str, shared: Any, *, approve: str | None = "9" * 64, root_cause_class: str | None = "evaluator-defect") -> dict[str, Any]:
         with mock.patch.object(claude_upgrade, "_require_formal_campaign", return_value=dict(self.campaign.manifest)), mock.patch.object(
             upgrade_control_plane, "evaluation_recover", side_effect=shared
         ):
-            return baseline_module.evaluation_recover(self.arguments(action, approve=approve))
+            return baseline_module.evaluation_recover(self.arguments(action, approve=approve, root_cause_class=root_cause_class))
+
+    def test_redirect_apply_does_not_touch_store(self) -> None:
+        """B4-05a：裁定为 candidate-source／approval-inputs 的 apply 只返回 redirect，不做 Store 预检、不写基线事实。"""
+
+        for root_cause_class in ("candidate-source", "approval-inputs"):
+            with self.subTest(root_cause_class=root_cause_class):
+                shared = mock.Mock(return_value={"status": "redirect", "next_command": "x"})
+                with mock.patch.object(baseline_module, "precheck_store_for_new_baseline") as precheck:
+                    result = self.run_wrapper("apply", shared, root_cause_class=root_cause_class)
+                precheck.assert_not_called()
+                shared.assert_called_once()
+                self.assertEqual(result["status"], "redirect")
+                self.assertNotIn("store", result)
+        self.assertEqual(self.baseline_facts(), [])
 
     def test_applied_reevaluate_records_store_fact(self) -> None:
         commits: list[dict[str, Any]] = []

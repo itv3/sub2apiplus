@@ -51,6 +51,14 @@ FORKED_SHELLS = {
         "B4-04（设计 B4-03 风险③）：共享实现把演进 evaluator.to 钉死为两键，Claude 收据多 status、尚未建立时摘要为 null；"
         "与读侧闭包的 b0 授权共用一条授权链自实现，演进链全部已建立时与共享实现逐字相同（test_claude_upgrade_baseline）"
     ),
+    "_evaluation_failure_scope": (
+        "B4-05a：共享实现沿 Codex 的 assertion bundle provenance 定位 Job；Claude 评估用 manifest 条目直接带 job_id，按"
+        "「失败 check → evidence_paths → manifest 条目 → job_id」回溯，输出形状相同（test_claude_upgrade_evaluation_recovery）"
+    ),
+    "_verify_current_deployment_receipt": (
+        "B4-05a：共享实现读 Codex 部署收据顶层五摘要；Claude 受管部署收据的五摘要在 identity 子键（适配器 deploy_receipt_identity），"
+        "判据逐条相同（test_claude_upgrade_evaluation_recovery）"
+    ),
 }
 
 
@@ -128,7 +136,7 @@ class SurfaceContractTests(unittest.TestCase):
 
     def test_pending_members_name_their_work_item(self) -> None:
         # B2-08 落实官方阶段、B3-01 补 Campaign 级阶段结果与 b0 评估路径、B4-04 补 b≥1 评估路径：候选状态、候选级阶段结果与
-        # 候选恢复段仍各自报待实现。
+        # 候选恢复段（B4-05b）仍各自报待实现。
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status（候选阶段）：由 B4-01"):
             claude_upgrade.campaign_status(Path("/nonexistent"), "c1")
         for stage, work_item in (("capture-candidate", "B4-02"), ("compare", "B4-03"), ("accept", "B4-06")):
@@ -140,12 +148,14 @@ class SurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"评估基线 b1 没有 COMMIT") as caught:
             claude_upgrade._stage_read_source(Path("/nonexistent"), "c1", 1, "compare")
         self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_derive_b0_evaluation_run：由 B4-05"):
+        # B4-05a：Claude 没有历史 b0 形态，派生评估索引一律拒绝（配置错误，不是待实现）。
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"Claude 的 builder 批次结束必写该索引") as caught:
             claude_upgrade._derive_b0_evaluation_run(Path("/nonexistent"), {}, "c1", 1, {}, ())
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_attempt_recovery_segment：由 B4-05"):
+        self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_attempt_recovery_segment：由 B4-05b"):
             claude_upgrade._load_attempt_recovery_segment(Path("/nonexistent"), candidate_id="c1", attempt_id="a1", recovery_revision="ar1")
         for member in ("recovery_segment_summary", "segment_reuse_proofs"):
-            with self.subTest(member=member), self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"B4-05"):
+            with self.subTest(member=member), self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"B4-05b"):
                 getattr(uca.adapter_for("claude"), member)(Path("/nonexistent"), "c1", "a1", "ar1")
         self.assertTrue(issubclass(claude_upgrade.ClaudeOrchestratorPending, codex_upgrade.ConfigurationError))
 

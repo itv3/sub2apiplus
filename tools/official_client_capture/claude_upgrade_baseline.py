@@ -44,8 +44,9 @@
   等于编排器侧的 ``(K, COMMIT 摘要)``（b0 时 Store 也必须是 b0）；不一致即拒绝，提示以同一 ``evaluation-recover`` 命令重跑
   收敛。Store 当前 revision 属于别的候选时，本候选在 Store 里没有当前基线口径，只看编排器侧；
 * ``evaluation_recover``（``claude_upgrade`` 的 ``evaluation-recover`` 子命令走这里）：会写盘的动作（abandon，以及带
-  ``--approve-sha256`` 的 apply／reevaluate／approval-revision）先补写收敛——编排器侧已 COMMIT、账本已登记而 Store 还没有
-  对应事实时补写它（两步之间被强杀的情形）；再对 apply／reevaluate／approval-revision 做零写入预检：Store 工具身份是当前
+  ``--approve-sha256`` 开评估基线的动作：reevaluate、approval-revision 与裁定为 evaluator-defect／transient-environment 的
+  apply；裁定为 candidate-source／approval-inputs 的 apply 只返回 redirect，不写编排器侧也不碰 Store）先补写收敛——编排器侧
+  已 COMMIT、账本已登记而 Store 还没有对应事实时补写它（两步之间被强杀的情形）；再对开基线的动作做零写入预检：Store 工具身份是当前
   受管代码、Store 当前 revision 属于本候选、本候选在当前 revision 有冻结事实、已有 ValidationAttempt（Store 门禁要求开基线时
   候选已进入 VC-5）、没有交付事实（交付开始后不得再开基线）、两侧当前基线一致。预检不过即拒绝，编排器侧零写入，两份登记
   不会被预检挡出分叉。然后执行共享流程；共享流程返回 ``applied`` 时写 Store 事实：``{baseline, baseline_commit_sha256,
@@ -103,6 +104,8 @@ EVALUATOR_ENTRY_FIELDS = ("checker_sha256", "builder_sha256")
 EVALUATION_BASELINE_DIR_RE = re.compile(r"^b([1-9][0-9]*)$")
 # 会开评估基线的动作：带 --approve-sha256 时落盘并 COMMIT；abandon 只作废未 COMMIT 的 PREPARED，不影响 Store。
 COMMITTING_ACTIONS = frozenset({"apply", "reevaluate", "approval-revision"})
+# apply 只有裁定为这两类时才开评估基线；candidate-source／approval-inputs 返回 redirect，不写编排器侧也不碰 Store（B4-05a）。
+BASELINE_OPENING_CLASSES = frozenset({"evaluator-defect", "transient-environment"})
 COMMITTED_STATUS = "applied"
 CANDIDATE_ATTEMPTS_DIRNAME = "attempts"
 
@@ -642,14 +645,17 @@ def evaluation_recover(arguments: argparse.Namespace) -> dict[str, Any]:
     action = str(getattr(arguments, "recover_action", "") or "")
     candidate_id = str(getattr(arguments, "candidate_id", "") or "")
     approve = getattr(arguments, "approve_sha256", None)
-    writes = action == "abandon" or (action in COMMITTING_ACTIONS and approve is not None)
+    opens_baseline = approve is not None and action in COMMITTING_ACTIONS and (
+        action != "apply" or getattr(arguments, "root_cause_class", None) in BASELINE_OPENING_CLASSES
+    )
+    writes = action == "abandon" or opens_baseline
     converged: dict[str, Any] | None = None
     campaign_dir = Path(arguments.campaign_dir)
     if writes and orchestrator.SAFE_ID_RE.fullmatch(candidate_id):
         manifest = orchestrator._require_formal_campaign(campaign_dir)
         with orchestrator._campaign_lock(campaign_dir):
             converged = converge_store_baseline(campaign_dir, manifest, candidate_id)
-            if action in COMMITTING_ACTIONS:
+            if opens_baseline:
                 precheck_store_for_new_baseline(campaign_dir, manifest, candidate_id)
     try:
         result = upgrade_control_plane.evaluation_recover(arguments)
