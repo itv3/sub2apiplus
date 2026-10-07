@@ -163,13 +163,13 @@ class CommandLineAndBoundaryTests(unittest.TestCase):
         self.assertIn("compile-and-run-vc-batch", output.getvalue())
 
     def test_own_subcommands_report_pending(self) -> None:
-        # classify（B3-02）、prepare-profile／stage-profile（B3-03）与 plan-candidate-gates（B3-04 第一步）已落实，
-        # 这里换成仍待实现的 record-candidate-build（B3-04 第三步）。
+        # classify（B3-02）、prepare-profile／stage-profile（B3-03）、plan-candidate-gates 与 record-candidate-build（B3-04）已落实，
+        # 这里换成仍待实现的 compare（B4-03）。
         error = io.StringIO()
         with contextlib.redirect_stderr(error):
-            code = claude_upgrade.main(["record-candidate-build", "--campaign-dir", "/nonexistent"])
+            code = claude_upgrade.main(["compare", "--campaign-dir", "/nonexistent"])
         self.assertEqual(code, 1)
-        self.assertIn("B3-04", error.getvalue())
+        self.assertIn("B4-03", error.getvalue())
 
     def test_claude_orchestrator_does_not_import_codex_upgrade(self) -> None:
         tree = ast.parse((TOOL_ROOT / "claude_upgrade.py").read_text(encoding="utf-8"))

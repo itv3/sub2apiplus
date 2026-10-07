@@ -9,8 +9,11 @@
   写出、``stage_completed``、Store 分类事实仍只有一条且保留第一次的 producer_run（动作结果 WAL 第 ① 步）。之后再派发 VC-2
   被拒。
 * VC-3：准备草案 → 修订 → 准备批准 → 暂存预览 → 暂存批准五个批次，Store 到 ``profile_approved``、VC-3 checkpoint、
-  ``stage-profile`` 阶段结果可读、阶段重派证明按批准状态判定；VC-4 在候选 revision（B3-04／B3-05）落实前于派发前拒绝、不留
-  staging。
+  ``stage-profile`` 阶段结果可读、阶段重派证明按批准状态判定。
+* VC-4（B3-04）：没有候选 revision 时派发前拒绝、不留 staging；``revision-open --initial`` 之后两个批次——
+  ``plan-candidate-gates``（在候选源码副本上重新生成计划，与提交内计划逐字一致）与 ``record-candidate-build``（假 docker／go
+  在 PATH 最前，子进程里的构建复算落到它们）——Store 到 ``candidate_sealed``、VC-4 checkpoint 写出、阶段完成登记；VC-4 的
+  阶段幂等重派证明：构建动作可逐字重派并绑定 checkpoint，计划动作输出已存在即拒绝。
 * 接口与对照：checkpoint 坐标与重放（含 r≥2 与 VC-5 重开）与 Codex 逐项相同；队列清单除合同名与 ``client`` 外与 Codex 的
   staging 清单相同、重派身份（12 字段＋动作三元组）相等；``vc_control`` 语义；阶段结果读取；阶段幂等重派证明的形态闭合与
   schema；父监督器上下文的暂停点退出码与控制面命令拒绝。
@@ -24,6 +27,7 @@ import io
 import json
 import os
 import site
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,6 +47,7 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_capture.capturelib.model import ConfigurationError
+from tools.official_client_capture.tests import claude_candidate_build_fixture as build_fixture
 from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
 from tools.official_client_capture.tests import runtime_egress_fixtures
 from tools.official_client_capture.tests import test_claude_upgrade_classify as classify_tests
@@ -406,7 +411,7 @@ class StageResultAndReplayTests(_VC2Mixin, classify_tests._ClassifyCase):
     def test_vc2_replay_contract(self) -> None:
         campaign = self.build_campaign()
         candidates = ["classify", "--campaign-dir", campaign, "--candidates", self.candidates_path(campaign)]
-        for phase, reason in (("VC-1", batch.VC1_REPLAY_REASON), ("VC-4", batch.VC4_REPLAY_REASON), ("VC-5", "VC-5 没有阶段幂等重派合同")):
+        for phase, reason in (("VC-1", batch.VC1_REPLAY_REASON), ("VC-4", "VC-4 的动作 classify 没有阶段幂等合同"), ("VC-5", "VC-5 没有阶段幂等重派合同")):
             with self.subTest(phase=phase):
                 result = self.facts(campaign, phase, self.action("x", candidates))
                 self.assertEqual(result, {"phase": phase, "allowed": False, "actions": [], "reasons": [reason]})
@@ -693,7 +698,7 @@ class AtomicBatchChainTests(_RealTreeBatchCase):
         self.assertFalse((campaign / "control" / "vc" / "commits" / "0006-vc-2.json").exists())
         self.assert_zero_requests()
 
-    def test_vc3_batches_reach_profile_approved_and_vc4_waits_for_candidate_revision(self) -> None:
+    def test_vc3_and_vc4_batches_reach_candidate_sealed(self) -> None:
         campaign = self.campaign = self.build_batch_campaign()
         self.approve_vc2_directly(campaign, change=(profile_tests.CHANGE,), delete=(profile_tests.DELETE,))
         for source, name in ((profile_tests.ACTIVE_CATALOG, "active-release-catalog.json"), (profile_tests.ACTIVE_PROFILE, "active-profile.json")):
@@ -746,7 +751,7 @@ class AtomicBatchChainTests(_RealTreeBatchCase):
             self.assertFalse(result["allowed"])
             self.assertRegex(result["reasons"][0], pattern)
 
-        # VC-4：候选 revision（B3-04／B3-05）落实之前，派发前拒绝，不留 staging、账本不动。
+        # VC-4（B3-04）：没有候选 revision 时派发前拒绝，不留 staging、账本不动。
         head = timing.inspect_ledger(self.ledger_dir)["head_sequence"]
         plan = self.root / "action-plans" / "vc-4-synthetic.json"
         _write_json(plan, batch.action_plan([batch.managed_action("vc4-plan", "VC-4:plan", ["status", "--campaign-dir", campaign], item_ids=["vc4-plan"])], phase="VC-4"))
@@ -758,11 +763,72 @@ class AtomicBatchChainTests(_RealTreeBatchCase):
             ]
         )
         self.assertEqual(code, 1)
-        self.assertIn("B3-04", stderr)
+        self.assertIn("revision-open --initial", stderr)
         self.assertFalse((campaign / "control" / "vc" / "staging" / "0007-vc-4").exists())
         self.assertEqual(timing.inspect_ledger(self.ledger_dir)["head_sequence"], head)
-        self.assert_zero_requests()
 
+        # revision-open --initial：编排器侧（revision 目录＋账本 stage_revision）与 Store 侧两份登记。
+        candidate_id = "claude-cand-r1"
+        code, opened, stderr = run_main(["revision-open", "--campaign-dir", campaign, "--candidate-id", candidate_id, "--initial"])
+        self.assertEqual((code, opened["revision"], opened["store"]["payload"]["revision"]), (0, 1, 1), stderr)
+        # 候选源码链（基线 → 纳入暂存 Release 与门禁映射 → 门禁计划）、构建实物、source transition 与实现测试收据。
+        code, preview, stderr = run_main(["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", candidate_id])
+        self.assertEqual(code, 2, stderr)
+        fixture = build_fixture.CandidateBuildFixture(self.root / "build", campaign, candidate_id, run_main=run_main)
+        fixture.build_source(preview=preview)
+        fixture.build_artifacts()
+        fixture.build_transition()
+        fixture.build_implementation_receipt(preview["requirements"], f"{CAMPAIGN_ID}-ledger")
+
+        def vc4_action(action_id: str, argv: list[Any]) -> dict[str, Any]:
+            return batch.managed_action(action_id, f"VC-4:{action_id}", argv, item_ids=[action_id])
+
+        # 批次 7：plan-candidate-gates 在候选源码副本上重新生成计划（与驱动同一做法），与提交内计划逐字一致；VC-4 进行中。
+        plan_source = self.root / "plan-source"
+        subprocess.run(["git", "clone", "-q", str(fixture.source), str(plan_source)], check=True, capture_output=True, timeout=60)
+        lifecycle = fixture.lifecycle_dir.relative_to(fixture.source)
+        dispatched_plan = plan_source / lifecycle / "gate-plan-dispatch.json"
+        plan_action = vc4_action(
+            "vc4-plan-gates",
+            ["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", candidate_id, "--candidate-source", plan_source,
+             "--mapping", plan_source / lifecycle / "gate-mapping.json", "--output", dispatched_plan],
+        )
+        result = self.assert_batch_passed(self.dispatch(campaign, "VC-4", 7, [plan_action]), 7, "VC-4")
+        self.assertEqual([(item["event_type"], item["phase"]) for item in result["timing_ledger"]["events"]], [("stage_started", "VC-4")])
+        self.assertIsNone(result["timing_ledger"]["completion"])
+        self.assertEqual(dispatched_plan.read_bytes(), fixture.plan_path.read_bytes())
+        commit = vc_artifacts.validate_vc_commit(_read(campaign / "control" / "vc" / "commits" / "0007-vc-4.json"))
+        self.assertEqual(commit["phase"], "VC-4")
+        published = _read(campaign / "control" / "vc" / "run-manifests" / "0007-vc-4.json")
+        self.assertEqual((published["candidate_id"], published["candidate_revision"]), (candidate_id, 1))
+        # 批次 8：record-candidate-build（子进程里的 docker／go 落到假命令）：Store 到 candidate_sealed、VC-4 checkpoint、阶段完成。
+        record_action = vc4_action("vc4-record-build", fixture.argv())
+        bin_dir = fixture.install_fake_commands(self.root / "fake-bin")
+        with mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}):
+            result = self.assert_batch_passed(self.dispatch(campaign, "VC-4", 8, [record_action]), 8, "VC-4")
+        self.assertEqual(result["timing_ledger"]["events"], [])
+        self.assertEqual(result["timing_ledger"]["completion"]["idempotent"], False)
+        self.assertIn("VC-4", timing.phase_ledger_state(self.ledger_dir)["completed_phases"])
+        self.assertEqual(seal_tests.store_status(self.store_root, CAMPAIGN_ID), "candidate_sealed")
+        (frozen,) = [fact for fact in self.store_facts() if fact["fact_kind"] == "candidate_frozen"]
+        self.assertEqual(
+            (frozen["producer_run"]["run_dir"], frozen["producer_run"]["action_id"]), (result["campaign_run"]["run_dir"], "vc4-record-build")
+        )
+        manifest = claude_upgrade.load_campaign_manifest(campaign)
+        checkpoint_path, checkpoint = claude_upgrade_vc.replay_vc_checkpoint(campaign, claude_upgrade_vc.vc_campaign_plan(campaign, manifest), "VC-4", revision=1)
+        self.assertEqual(checkpoint["stage_receipt"]["path"], f"candidates/{candidate_id}/build-receipt.json")
+        self.assertTrue((claude_upgrade._candidate_revision_dir(campaign, 1) / "seal.json").is_file())
+        # VC-4 的阶段幂等重派证明：构建动作逐字重派绑定 checkpoint 与 Store 侧事实；计划动作输出已存在即拒绝。
+        run = {"phase": "VC-4", "candidate_id": candidate_id, "candidate_revision": 1}
+        replay = claude_upgrade._campaign_stage_replay_facts(campaign, {**run, "actions": [record_action]})
+        self.assertTrue(replay["allowed"], replay)
+        outputs = replay["actions"][0]["outputs"]
+        self.assertEqual(outputs["checkpoint"], claude_upgrade.file_sha256(checkpoint_path))
+        self.assertIn("control-store/candidate_frozen", outputs)
+        refused = claude_upgrade._campaign_stage_replay_facts(campaign, {**run, "actions": [plan_action]})
+        self.assertFalse(refused["allowed"])
+        self.assertIn("已存在", refused["reasons"][0])
+        self.assert_zero_requests()
 
 if __name__ == "__main__":
     unittest.main()

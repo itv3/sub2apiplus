@@ -4985,3 +4985,262 @@ def validate_candidate_delivery_receipt(value: Any) -> dict[str, Any]:
     if digest(unsigned) != recorded:
         raise VCArtifactError("Candidate 交付收据自摘要不一致")
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Claude 升级（B3-04）新增：客户端中立的候选构建收据合同，只由 Claude 编排器签发；
+# 上面 Codex 的 build_candidate_build_receipt／validate_candidate_build_receipt 原位不动。
+# ---------------------------------------------------------------------------
+
+OFFICIAL_CLIENT_CANDIDATE_BUILD_SCHEMA = "official-client-upgrade-candidate-build-receipt/v1"
+OFFICIAL_CLIENT_CANDIDATE_BUILD_CLIENTS = frozenset({"claude"})
+_OFFICIAL_CLIENT_BUILD_FIELDS = frozenset(
+    {
+        "schema_version", "client", "status", "campaign_id", "campaign_manifest_sha256", "candidate_id",
+        "candidate_revision", "candidate_purpose", "target_version", "deployed_version", "target_architecture",
+        "source", "binary", "image", "build", "profile", "catalog_stage", "source_transition", "gate_requirements",
+        "gate_plan", "implementation_tests", "build_inventory", "frontend_provenance", "image_inspection",
+        "capability_probe", "validation_scope_sha256", "store", "built_at_utc", "receipt_digest",
+    }
+)
+_OFFICIAL_CLIENT_MACHINE_FIELDS = ("build_inventory", "frontend_provenance", "image_inspection", "capability_probe")
+_OFFICIAL_CLIENT_STORE_REFS = {
+    "profile_approval_ref": ("fact", "approval"),
+    "release_artifact_ref": ("object", "release_artifact"),
+    "support_envelope_ref": ("object", "support_envelope"),
+    "model_capability_catalog_ref": ("object", "model_capability_catalog"),
+    "candidate_build_receipt_ref": ("receipt", "candidate_build"),
+    "candidate_frozen_ref": ("fact", "validation"),
+}
+
+
+def _official_client_store_ref(value: Any, kind: str, label: str) -> dict[str, Any]:
+    """Store 引用的形状（只核字段与类型；引用是否存在由 Store 读侧核对）。"""
+
+    expected = {
+        "fact": {"campaign_id", "dimension", "sequence", "sha256"},
+        "object": {"object_kind", "sha256"},
+        "receipt": {"receipt_kind", "sha256"},
+    }[kind]
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise VCArtifactError(f"{label} 引用字段不闭合")
+    _sha256(value.get("sha256"), f"{label}.sha256")
+    return dict(value)
+
+
+def build_official_client_candidate_build_receipt(
+    *,
+    client: str,
+    campaign_id: str,
+    campaign_manifest_sha256: str,
+    candidate_id: str,
+    candidate_revision: int,
+    candidate_purpose: str,
+    target_version: str,
+    deployed_version: str,
+    target_architecture: str,
+    source: Mapping[str, Any],
+    binary: Mapping[str, Any],
+    image: Mapping[str, Any],
+    build_id: str,
+    toolchain: Sequence[str],
+    build_parameters: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    catalog_stage: Mapping[str, Any],
+    source_transition: Mapping[str, Any],
+    gate_requirements: Mapping[str, Any],
+    gate_plan: Mapping[str, Any],
+    implementation_tests: Mapping[str, Any],
+    build_inventory: Mapping[str, Any],
+    frontend_provenance: Mapping[str, Any],
+    image_inspection: Mapping[str, Any],
+    capability_probe: Mapping[str, Any],
+    validation_scope_sha256: str,
+    store: Mapping[str, Any],
+    built_at_utc: str,
+    build_inputs: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """生成客户端中立的候选构建收据（合同 ``official-client-upgrade-candidate-build-receipt/v1``，带 ``client``）。
+
+    与 Codex v2 收据同一组身份层（源码、二进制、镜像、构建参数、门禁计划、实现测试与四份机器收据），另冻结候选
+    revision、源码的测试树与依赖锁摘要、画像与暂存 Release 身份、VC-4 验证闭集摘要，以及 Store 的批准、Release、
+    模型能力目录、CandidateBuildReceipt 与 candidate_frozen 引用。
+    """
+
+    payload = {
+        "schema_version": OFFICIAL_CLIENT_CANDIDATE_BUILD_SCHEMA,
+        "client": client,
+        "status": "complete",
+        "campaign_id": campaign_id,
+        "campaign_manifest_sha256": campaign_manifest_sha256,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "candidate_purpose": candidate_purpose,
+        "target_version": target_version,
+        "deployed_version": deployed_version,
+        "target_architecture": target_architecture,
+        "source": dict(source),
+        "binary": dict(binary),
+        "image": dict(image),
+        "build": {
+            "build_id": build_id,
+            "toolchain": list(toolchain),
+            "parameters": json.loads(json.dumps(dict(build_parameters), ensure_ascii=False)),
+            "parameters_sha256": digest(build_parameters),
+        },
+        "profile": dict(profile),
+        "catalog_stage": dict(catalog_stage),
+        "source_transition": dict(source_transition),
+        "gate_requirements": json.loads(json.dumps(dict(gate_requirements), ensure_ascii=False)),
+        "gate_plan": dict(gate_plan),
+        "implementation_tests": json.loads(json.dumps(dict(implementation_tests), ensure_ascii=False)),
+        "build_inventory": dict(build_inventory),
+        "frontend_provenance": dict(frontend_provenance),
+        "image_inspection": dict(image_inspection),
+        "capability_probe": dict(capability_probe),
+        "validation_scope_sha256": validation_scope_sha256,
+        "store": json.loads(json.dumps(dict(store), ensure_ascii=False)),
+        "built_at_utc": built_at_utc,
+    }
+    if build_inputs is not None:
+        payload["build"]["inputs"] = dict(build_inputs)
+    payload["receipt_digest"] = digest(payload)
+    return validate_official_client_candidate_build_receipt(payload)
+
+
+def validate_official_client_candidate_build_receipt(value: Any) -> dict[str, Any]:
+    """校验客户端中立的候选构建收据：字段闭集、各身份层形状、门禁计划与需求同源、Store 引用类型与自摘要。
+
+    只做收据内一致性（与 Codex ``validate_candidate_build_receipt`` 同一职责），不读源码树、证据根或 Store；
+    实物复算由签发方（编排器的 record-candidate-build）负责。
+    """
+
+    if not isinstance(value, Mapping) or set(value) != _OFFICIAL_CLIENT_BUILD_FIELDS:
+        raise VCArtifactError("客户端中立候选构建收据字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != OFFICIAL_CLIENT_CANDIDATE_BUILD_SCHEMA or payload.get("status") != "complete":
+        raise VCArtifactError("客户端中立候选构建收据 schema 或状态非法")
+    if payload.get("client") not in OFFICIAL_CLIENT_CANDIDATE_BUILD_CLIENTS:
+        raise VCArtifactError("客户端中立候选构建收据的 client 未登记")
+    for field in ("campaign_id", "candidate_id"):
+        _safe_id(payload.get(field), f"候选构建收据 {field}")
+    _sha256(payload.get("campaign_manifest_sha256"), "campaign_manifest_sha256")
+    revision = payload.get("candidate_revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise VCArtifactError("候选构建收据 candidate_revision 必须是正整数")
+    if payload.get("candidate_purpose") not in {"validation_only", "production_replacement"}:
+        raise VCArtifactError("候选构建用途非法")
+    target_version = _version(payload.get("target_version"), "候选构建收据 target_version")
+    if payload.get("deployed_version") != target_version:
+        raise VCArtifactError("候选构建收据 deployed_version 必须等于目标版本")
+    if not isinstance(payload.get("target_architecture"), str) or not ARCHITECTURE_RE.fullmatch(payload["target_architecture"]):
+        raise VCArtifactError("候选构建收据目标架构非法")
+    source = payload.get("source")
+    if not isinstance(source, Mapping) or set(source) != {
+        "root", "git_commit", "tree_sha256", "test_tree_sha256", "dependency_lock_sha256", "clean"
+    }:
+        raise VCArtifactError("候选构建收据 source 身份不闭合")
+    _absolute_path(source.get("root"), "候选 source root")
+    if not isinstance(source.get("git_commit"), str) or not re.fullmatch(r"[0-9a-f]{40}", source["git_commit"]):
+        raise VCArtifactError("候选构建收据 git_commit 必须是完整 commit")
+    for key in ("tree_sha256", "test_tree_sha256", "dependency_lock_sha256"):
+        _sha256(source.get(key), f"候选 source {key}")
+    if source.get("clean") is not True:
+        raise VCArtifactError("候选构建源码树必须处于 clean 状态")
+    binary = payload.get("binary")
+    if not isinstance(binary, Mapping) or set(binary) != {"path", "sha256", "bytes"}:
+        raise VCArtifactError("候选构建收据 binary 身份不闭合")
+    _binding(binary, "候选 binary", bytes_required=True)
+    _absolute_path(binary.get("path"), "候选 binary.path")
+    image = payload.get("image")
+    if not isinstance(image, Mapping) or set(image) != {"reference", "manifest_digest", "image_id"}:
+        raise VCArtifactError("候选构建收据 image 身份不闭合")
+    for key in ("manifest_digest", "image_id"):
+        if not isinstance(image.get(key), str) or not IMAGE_ID_RE.fullmatch(image[key]):
+            raise VCArtifactError(f"候选构建收据 image.{key} 非法")
+    reference = image.get("reference")
+    if not isinstance(reference, str) or not IMAGE_REFERENCE_RE.fullmatch(reference) or not reference.endswith(f"@{image['manifest_digest']}"):
+        raise VCArtifactError("候选构建收据 image reference 必须以 OCI manifest digest 结尾")
+    build = payload.get("build")
+    if not isinstance(build, Mapping) or set(build) not in (
+        {"build_id", "toolchain", "parameters", "parameters_sha256"},
+        {"build_id", "toolchain", "parameters", "parameters_sha256", "inputs"},
+    ):
+        raise VCArtifactError("候选构建收据 build 身份不闭合")
+    _safe_id(build.get("build_id"), "候选 build_id")
+    toolchain = build.get("toolchain")
+    if (
+        not isinstance(toolchain, list)
+        or not toolchain
+        or not all(isinstance(item, str) and item for item in toolchain)
+        or toolchain != sorted(set(toolchain))
+    ):
+        raise VCArtifactError("候选构建收据 toolchain 必须是排序去重的非空文字数组")
+    if not isinstance(build.get("parameters"), Mapping) or digest(build["parameters"]) != build.get("parameters_sha256"):
+        raise VCArtifactError("候选构建收据 build parameters 摘要不一致")
+    profile = payload.get("profile")
+    profile_fields = {
+        "profile_digest", "derivation_receipt_sha256", "wire_sha256", "model_capability_catalog_sha256", "release_sha256", "bundle_sha256"
+    }
+    if not isinstance(profile, Mapping) or set(profile) != profile_fields:
+        raise VCArtifactError("候选构建收据 profile 身份不闭合")
+    for key in sorted(profile_fields):
+        _sha256(profile.get(key), f"候选 profile.{key}")
+    catalog = payload.get("catalog_stage")
+    if not isinstance(catalog, Mapping) or set(catalog) != {"path", "sha256", "catalog_tree_sha256", "release_catalog_sha256"}:
+        raise VCArtifactError("候选构建收据 catalog_stage 绑定不闭合")
+    _absolute_path(catalog.get("path"), "候选 catalog_stage.path")
+    for key in ("sha256", "catalog_tree_sha256", "release_catalog_sha256"):
+        _sha256(catalog.get(key), f"候选 catalog_stage.{key}")
+    transition = payload.get("source_transition")
+    if not isinstance(transition, Mapping) or set(transition) != {"path", "sha256"}:
+        raise VCArtifactError("候选构建收据 source_transition 绑定不闭合")
+    _absolute_path(transition.get("path"), "候选 source_transition.path")
+    _sha256(transition.get("sha256"), "候选 source_transition.sha256")
+    requirements = payload.get("gate_requirements")
+    if not isinstance(requirements, Mapping) or set(requirements) != {"requirements_sha256", "vc2_stage_result", "vc3_stage_result"}:
+        raise VCArtifactError("候选构建收据 gate_requirements 绑定不闭合")
+    _sha256(requirements.get("requirements_sha256"), "候选 gate_requirements.requirements_sha256")
+    for key in ("vc2_stage_result", "vc3_stage_result"):
+        binding = _binding(requirements.get(key), f"候选 gate_requirements.{key}")
+        _relative_path(binding["path"], f"候选 gate_requirements.{key}.path")
+    gate_plan = payload.get("gate_plan")
+    if not isinstance(gate_plan, Mapping) or set(gate_plan) != {"path", "sha256", "plan_sha256", "requirements_sha256"}:
+        raise VCArtifactError("候选构建收据 gate_plan 绑定不闭合")
+    _absolute_path(gate_plan.get("path"), "候选 gate_plan.path")
+    for key in ("sha256", "plan_sha256", "requirements_sha256"):
+        _sha256(gate_plan.get(key), f"候选 gate_plan.{key}")
+    if gate_plan["requirements_sha256"] != requirements["requirements_sha256"]:
+        raise VCArtifactError("候选 gate plan 未绑定同一份 VC-3 门禁需求")
+    implementation = payload.get("implementation_tests")
+    if not isinstance(implementation, Mapping) or set(implementation) != {"evidence_root", "receipt", "receipt_digest"}:
+        raise VCArtifactError("候选构建收据 implementation_tests 绑定不闭合")
+    _absolute_path(implementation.get("evidence_root"), "候选 implementation_tests.evidence_root")
+    receipt_binding = _binding(implementation.get("receipt"), "候选 implementation_tests.receipt", bytes_required=True)
+    _relative_path(receipt_binding["path"], "候选 implementation_tests.receipt.path")
+    _sha256(implementation.get("receipt_digest"), "候选 implementation_tests.receipt_digest")
+    for name in _OFFICIAL_CLIENT_MACHINE_FIELDS:
+        machine = payload.get(name)
+        if not isinstance(machine, Mapping) or set(machine) != {"path", "sha256", "bytes", "receipt_digest"}:
+            raise VCArtifactError(f"候选构建收据 {name} 机器收据绑定不闭合")
+        _relative_path(machine.get("path"), f"候选 {name}.path")
+        _sha256(machine.get("sha256"), f"候选 {name}.sha256")
+        if not isinstance(machine.get("bytes"), int) or isinstance(machine.get("bytes"), bool) or machine["bytes"] <= 0:
+            raise VCArtifactError(f"候选 {name}.bytes 非法")
+        _sha256(machine.get("receipt_digest"), f"候选 {name}.receipt_digest")
+    _sha256(payload.get("validation_scope_sha256"), "候选 validation_scope_sha256")
+    store = payload.get("store")
+    if not isinstance(store, Mapping) or set(store) != set(_OFFICIAL_CLIENT_STORE_REFS):
+        raise VCArtifactError("候选构建收据 store 引用不闭合")
+    for key, (kind, expected) in _OFFICIAL_CLIENT_STORE_REFS.items():
+        reference = _official_client_store_ref(store.get(key), kind, f"候选 store.{key}")
+        actual = reference.get("dimension") if kind == "fact" else reference.get(f"{kind}_kind")
+        if actual != expected:
+            raise VCArtifactError(f"候选 store.{key} 类型错误")
+    _timestamp(payload.get("built_at_utc"), "候选 built_at_utc")
+    recorded = _sha256(payload.get("receipt_digest"), "候选 receipt_digest")
+    unsigned = dict(payload)
+    unsigned.pop("receipt_digest")
+    if digest(unsigned) != recorded:
+        raise VCArtifactError("客户端中立候选构建收据自摘要不一致")
+    return payload

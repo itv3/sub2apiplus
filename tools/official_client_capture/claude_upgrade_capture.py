@@ -2755,10 +2755,11 @@ def _active_unsealed_attempts(
 
     del _baseline
     if phase != "official":
-        candidates_root = campaign_dir / "candidates"
-        if not candidates_root.exists():
-            return []
-        raise claude_upgrade._pending("_active_unsealed_attempts（候选阶段）", "B4-01（候选采集 attempt）")
+        # 候选阶段：还没有任何候选 attempt 目录（VC-4 构建期、VC-5 首个 attempt 之前）时没有未封存的 attempt；出现候选
+        # attempt 之后的判定（预约收据、等待封存、评估基线）属于候选采集，随 B4-01 落实（B3-04：VC-4 重派证明在这里取空集）。
+        if any(scope == "candidate" for scope, _candidate, _root in _campaign_attempt_roots(campaign_dir)):
+            raise claude_upgrade._pending("_active_unsealed_attempts（候选阶段）", "B4-01（候选采集 attempt）")
+        return []
     sealed_attempt_id: str | None = None
     if _official_sealed(campaign_dir):
         stage = claude_upgrade._load_stage_result(campaign_dir, "capture-official", None, _verified_campaign_manifest=_manifest)

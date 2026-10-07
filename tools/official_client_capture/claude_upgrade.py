@@ -2442,10 +2442,11 @@ def _freeze_evaluation_output_bindings(
 
 
 def _implicit_r1_candidate_id(campaign_dir: Path, manifest: Mapping[str, Any]) -> str:
-    """共享流程在 ``upgrade_control_plane._implicit_r1_candidate_id``；以 Claude 适配器转调。"""
+    """服务面成员（B3-05 编排器部分）：Claude 没有隐含 r1，一律拒绝；实现在 ``claude_upgrade_revision``。"""
 
-    with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
-        return upgrade_control_plane._implicit_r1_candidate_id(campaign_dir, manifest)
+    from tools.official_client_capture import claude_upgrade_revision
+
+    return claude_upgrade_revision.implicit_r1_candidate_id(campaign_dir, manifest)
 
 
 def _incremental_noop_job_ids(attempt_root: Path, payload: Mapping[str, Any]) -> list[str]:
@@ -4270,30 +4271,33 @@ def _approval_revision_delta(current_path: Path, revised_path: Path) -> dict[str
 
 
 def _current_candidate_revision(campaign_dir: Path, manifest: Mapping[str, Any]) -> int | None:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（B3-05 编排器部分）：当前候选 revision；实现在 ``claude_upgrade_revision``。"""
 
-    del campaign_dir, manifest
-    raise _pending("_current_candidate_revision", "B3-04／B3-05（候选构建与 revision）")
+    from tools.official_client_capture import claude_upgrade_revision
+
+    return claude_upgrade_revision.current_candidate_revision(campaign_dir, manifest)
 
 
 def _current_candidate_revision_record(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
 ) -> tuple[int | None, dict[str, Any] | None]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（B3-05 编排器部分）：当前候选 revision 与 revision.json（编排器侧与 Store 侧一致）；实现在 ``claude_upgrade_revision``。"""
 
-    del campaign_dir, manifest
-    raise _pending("_current_candidate_revision_record", "B3-04／B3-05（候选构建与 revision）")
+    from tools.official_client_capture import claude_upgrade_revision
+
+    return claude_upgrade_revision.current_candidate_revision_record(campaign_dir, manifest)
 
 
 def _read_candidate_revision_record(
     campaign_dir: Path,
     revision: int,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（B3-05 编排器部分）：读 revision 目录；实现在 ``claude_upgrade_revision``。"""
 
-    del campaign_dir, revision
-    raise _pending("_read_candidate_revision_record", "B3-04／B3-05（候选构建与 revision）")
+    from tools.official_client_capture import claude_upgrade_revision
+
+    return claude_upgrade_revision.read_candidate_revision_record(campaign_dir, revision)
 
 
 def _require_candidate_revision(
@@ -4302,10 +4306,11 @@ def _require_candidate_revision(
     *,
     action: str,
 ) -> tuple[int, dict[str, Any] | None]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（B3-05 编排器部分）：没有激活的候选 revision 即拒绝；实现在 ``claude_upgrade_revision``。"""
 
-    del campaign_dir, manifest, action
-    raise _pending("_require_candidate_revision", "B3-04／B3-05（候选构建与 revision）")
+    from tools.official_client_capture import claude_upgrade_revision
+
+    return claude_upgrade_revision.require_candidate_revision(campaign_dir, manifest, action=action)
 
 
 def _candidate_identity_snapshot(
@@ -4313,10 +4318,11 @@ def _candidate_identity_snapshot(
     candidate_id: str,
     candidate_source: Path | None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（B3-05 编排器部分）：作废用的旧候选身份快照；实现在 ``claude_upgrade_revision``。"""
 
-    del campaign_dir, candidate_id, candidate_source
-    raise _pending("_candidate_identity_snapshot", "B3-04／B3-05（候选构建与 revision）")
+    from tools.official_client_capture import claude_upgrade_revision
+
+    return claude_upgrade_revision.candidate_identity_snapshot(campaign_dir, candidate_id, candidate_source)
 
 
 def _path_in_candidate_source(path: Path, source_root: Path, label: str) -> Path:
@@ -4333,28 +4339,32 @@ def _candidate_failed_run_for_review(
     candidate_id: str,
     review_event: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（B3-05 编排器部分）：由 candidate_review_required 事件定位失败父 run；逐字照搬 Codex，实现在
+    ``claude_upgrade_revision``。"""
 
-    del campaign_dir, manifest, candidate_id, review_event
-    raise _pending("_candidate_failed_run_for_review", "B3-04／B3-05（候选构建与 revision）")
+    from tools.official_client_capture import claude_upgrade_revision
+
+    return claude_upgrade_revision._candidate_failed_run_for_review(campaign_dir, manifest, candidate_id, review_event)
 
 
 def _apply_candidate_runtime_override(
     campaign_dir: Path, manifest: dict[str, Any], candidate_id: str | None
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-01（候选采集）落实）：只在候选 attempt 的 run／seal、评估恢复与环境隔离的
+    候选分支里调用，候选运行坐标覆盖的形状取决于 Claude 候选采集的配置合同。"""
 
     del campaign_dir, manifest, candidate_id
-    raise _pending("_apply_candidate_runtime_override", "B3-04／B3-05（候选构建与 revision）")
+    raise _pending("_apply_candidate_runtime_override", "B4-01（候选采集）")
 
 
 def _verify_candidate_attempt_identity(
     manifest: dict[str, Any], identity: dict[str, Any]
 ) -> None:
-    """服务面成员（Claude 编排器尚未实现，由 B3-04／B3-05（候选构建与 revision） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-01（候选采集）落实）：候选 attempt 的 seal 前重验源码树与运行容器，
+    依赖 Claude 候选 attempt 的身份投影。"""
 
     del manifest, identity
-    raise _pending("_verify_candidate_attempt_identity", "B3-04／B3-05（候选构建与 revision）")
+    raise _pending("_verify_candidate_attempt_identity", "B4-01（候选采集）")
 
 
 # B4-04／B4-05（评估基线与评估失败恢复）
@@ -4608,7 +4618,11 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     "stage-profile": ("VC-3 联合制品：预览与批准（ProfileApprovalFact）", "B3-03（VC-3 画像 producer）"),
     # plan-candidate-gates 由 B3-04 第一步落实（实现在 claude_upgrade_candidate，见 ``main`` 的分派）；表项只用于注册子命令解析器。
     "plan-candidate-gates": ("VC-4 门禁需求预览与门禁执行计划", "B3-04（VC-4 候选构建与冻结）"),
-    "record-candidate-build": ("VC-4 登记候选构建收据", "B3-04（VC-4 候选构建与冻结）"),
+    # record-candidate-build 由 B3-04 第三步落实（实现在 claude_upgrade_candidate，见 ``main`` 的分派）；表项只用于注册子命令解析器。
+    "record-candidate-build": (
+        "VC-4 候选构建复算、候选构建收据、Store 候选冻结、revision seal 与 VC-4 checkpoint（--preview 零写入预览）",
+        "B3-04（VC-4 候选构建与冻结）",
+    ),
     "capture-candidate": ("候选采集 attempt：run 或 seal", "B4-01／B4-02（候选采集与四阶段封存）"),
     "compare": ("只用封存证据离线比较", "B4-03（Claude 评估器）"),
     "accept": ("逐规则正式验收门禁", "B4-06（accept 门禁 Claude 版）"),
@@ -4964,6 +4978,11 @@ def _build_parser() -> argparse.ArgumentParser:
             from tools.official_client_capture import claude_upgrade_candidate
 
             claude_upgrade_candidate.add_plan_gates_arguments(target)
+        if name == "record-candidate-build":
+            # 与 Codex 同名同义的构建、Catalog stage、source transition、门禁计划与实现测试参数（B3-04 第三步）。
+            from tools.official_client_capture import claude_upgrade_candidate
+
+            claude_upgrade_candidate.add_record_build_arguments(target)
     return parser
 
 
@@ -5110,10 +5129,16 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
     with upgrade_control_plane.adapter_scope(adapter), _shared_reconciler_scope(arguments, adapter):
         if command == "compile-and-run-vc-batch":
             return upgrade_control_plane.compile_and_run_vc_batch(arguments)
+        # B3-05 编排器部分：revision-open 与 invalidate-candidate 在共享流程之外还要写 Store 侧（两份登记），
+        # 实现在 claude_upgrade_revision（内部仍调用共享流程，退出码口径不变）。
         if command == "revision-open":
-            return upgrade_control_plane.open_candidate_revision(arguments), 0
+            from tools.official_client_capture import claude_upgrade_revision
+
+            return claude_upgrade_revision.revision_open(arguments), 0
         if command == "invalidate-candidate":
-            result = upgrade_control_plane.invalidate_candidate(arguments)
+            from tools.official_client_capture import claude_upgrade_revision
+
+            result = claude_upgrade_revision.invalidate_candidate(arguments)
             return result, 0 if result.get("status") in {"preview", "applied"} else 3
         if command == "evaluation-recover":
             result = upgrade_control_plane.evaluation_recover(arguments)
@@ -5147,8 +5172,9 @@ def main(argv: list[str] | None = None) -> int:
     import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），capture-official
     seal 封存官方证据（B2-07），tool-evolution 与 ``RECOVERY_SUBCOMMANDS``（对账、恢复预览、resume --rerun-failed、
     status、环境清理与两类明确拒绝）由 B2-08 落实，plan --audit-only 只审计（B5a-09），classify 做 VC-2 规则分类
-    （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），plan-candidate-gates 做 VC-4 门禁计划（B3-04），
-    其余 Claude 专属子命令在动作体落实前报未实现。
+    （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），plan-candidate-gates 与 record-candidate-build 做 VC-4
+    门禁计划与候选构建冻结（B3-04），revision-open 与 invalidate-candidate 在共享流程之外写 Store 侧两份登记（B3-05 编排器
+    部分，``claude_upgrade_revision``），其余 Claude 专属子命令在动作体落实前报未实现。
 
     B3-01 起 VC-2～VC-6 经 ``compile-and-run-vc-batch`` 原子派发：父监督器（campaign-run）上下文里批次控制面命令一律
     拒绝，草案、修订与预览这类等审核的暂停点退出 0（``claude_upgrade_batch`` 第四、五节）。
@@ -5213,6 +5239,10 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_candidate
 
             result, return_code = claude_upgrade_candidate.plan_candidate_gates_command(arguments)
+        elif arguments.command == "record-candidate-build":
+            from tools.official_client_capture import claude_upgrade_candidate
+
+            result, return_code = claude_upgrade_candidate.record_candidate_build_command(arguments)
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)

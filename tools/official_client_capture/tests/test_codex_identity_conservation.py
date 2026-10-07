@@ -64,6 +64,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "（Codex 两种模式的结果与报错逐字不变，见 test_unit_inherit_codex_parity）",
     "codex_upgrade_gate_receipt.py": "B5a-08 只改钉住常量 TARGET_VERIFIER_SHA256S 里 unit_records.py 的摘要：常量在评估器读侧闭包内，按"
                                      " REGISTERED_EVALUATOR_READER_CHANGES 单独登记",
+    "codex_upgrade_vc_artifacts.py": "B3-04 只在文件末尾新增客户端中立候选构建收据合同 official-client-upgrade-candidate-build-receipt/v1"
+                                     "（两个函数与合同常量，只由 Claude 编排器签发）；Codex 的 build_candidate_build_receipt 与读侧闭包内的"
+                                     " validate_candidate_build_receipt 等既有符号原位不动，新增符号不被 Codex 任何身份闭包引用",
 }
 
 # 本项目登记的 Codex 评估器读侧变化（见模块说明）：键是工作项，值登记变化的符号（「模块:符号」→ 前后符号摘要）、两项读侧

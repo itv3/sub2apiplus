@@ -44,6 +44,10 @@ FORKED = {
     "_campaign_tool_evolutions": "B2-08：演进链读写改由 claude_upgrade_evolution 校验（共享链校验在 Codex 评估读侧闭包内，策略文件钉死为 Codex 的）",
     "_campaign_effective_tool_identity": "B2-08：同上，有效工具身份取 Claude 演进链",
 }
+# 登记的薄壳分叉（共享实现已迁入 upgrade_control_plane，Claude 不转调、改为自己的语义）：成员 → 理由。
+FORKED_SHELLS = {
+    "_implicit_r1_candidate_id": "B3-05：Claude 没有隐含 r1（revision 一律由 revision-open --initial 显式登记），一律拒绝",
+}
 
 
 class SurfaceContractTests(unittest.TestCase):
@@ -88,7 +92,9 @@ class SurfaceContractTests(unittest.TestCase):
             observed.append(upgrade_control_plane._adapter().client)
             return "shared"
 
-        shells = sorted(name for name in uca.ORCHESTRATOR_SURFACE if name in set(inventory.migrated_function_names()))
+        shells = sorted(
+            name for name in uca.ORCHESTRATOR_SURFACE if name in set(inventory.migrated_function_names()) and name not in FORKED_SHELLS
+        )
         self.assertGreater(len(shells), 50)
         for name in shells:
             with self.subTest(name=name), mock.patch.object(upgrade_control_plane, name, side_effect=fake) as patched:
@@ -102,6 +108,19 @@ class SurfaceContractTests(unittest.TestCase):
                         pass
                 self.assertEqual(patched.call_count, 1)
         self.assertEqual(set(observed), {"claude"})
+
+    def test_forked_shells_do_not_delegate(self) -> None:
+        """登记的薄壳分叉不转调共享实现，按 Claude 自己的语义拒绝（理由见 FORKED_SHELLS）。"""
+
+        self.assertLessEqual(set(FORKED_SHELLS), set(inventory.migrated_function_names()))
+        for name in FORKED_SHELLS:
+            with self.subTest(name=name), mock.patch.object(upgrade_control_plane, name) as patched:
+                function = getattr(claude_upgrade, name)
+                parameters = inspect.signature(function).parameters.values()
+                positional = [object() for item in parameters if item.default is inspect.Parameter.empty and item.kind in {item.POSITIONAL_ONLY, item.POSITIONAL_OR_KEYWORD}]
+                with self.assertRaises(claude_upgrade.ConfigurationError):
+                    function(*positional)
+                patched.assert_not_called()
 
     def test_pending_members_name_their_work_item(self) -> None:
         # B2-08 落实官方阶段、B3-01 补 Campaign 级阶段结果与 b0 评估路径：候选状态、候选级阶段结果、b≥1 评估路径与候选恢复段

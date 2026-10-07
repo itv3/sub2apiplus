@@ -24,7 +24,9 @@ revision 的上一阶段——与 Codex ``_replay_vc_checkpoint`` 同一判据�
 ========
 * ``complete_campaign_phase`` 只写 Campaign 级阶段 VC-1～VC-3 的 checkpoint：已存在时除 ``completed_at_utc`` 与自摘要外
   逐字段比较，相同即复用（重跑收敛），不同即拒绝（阶段输入漂移）——与 Codex ``_complete_vc_phase`` 同一判据；完成时间由
-  调用方给冻结值，重跑逐字相同。候选级阶段的完成器随 B3-04（VC-4 构建）、B4（VC-5／VC-6）落实。
+  调用方给冻结值，重跑逐字相同。
+* ``complete_candidate_phase`` 写候选级阶段 VC-4～VC-6 的 checkpoint，判据相同，按调用方显式给出的候选 revision 定位
+  （B3-04 起 VC-4 由 ``record-candidate-build`` 在构建收据写出之后调用；VC-5／VC-6 随 B4）。
 * ``write_first_formal_batch`` 写 VC-0 交接链的首批两件：``control/vc/batches/0001-vc-1.json`` 与同序号的队列清单，只写一次，
   返回两条文件绑定，供 VC-0 收口（B2-11）写进总计划 ``vc_control.first_formal_batch``／``first_campaign_run_manifest``。
   首批放哪些动作（官方采集、静态分析）、执行项与复用项怎么分由 B2-11 决定，这里只保证批次与清单的确定性编译关系。
@@ -286,12 +288,79 @@ def complete_campaign_phase(
 
     if phase not in CAMPAIGN_PHASES or phase == "VC-0":
         raise ConfigurationError(
-            "Campaign 级阶段完成器只接受 VC-1～VC-3（VC-0 只由收口写入，候选级阶段随 B3-04／B4 的完成器落实）。"
+            "Campaign 级阶段完成器只接受 VC-1～VC-3（VC-0 只由收口写入，候选级阶段用 complete_candidate_phase）。"
         )
-    output = vc_checkpoint_path(campaign_dir, phase)
+    return _complete_phase(
+        campaign_dir,
+        manifest,
+        phase=phase,
+        revision=None,
+        stage_receipt_path=stage_receipt_path,
+        completed_at_utc=completed_at_utc,
+        execute_item_ids=execute_item_ids,
+        reuse_item_ids=reuse_item_ids,
+        live_request_count=live_request_count,
+        scanned_bytes=scanned_bytes,
+    )
+
+
+def complete_candidate_phase(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    revision: int,
+    stage_receipt_path: Path,
+    completed_at_utc: str,
+    execute_item_ids: Iterable[str],
+    reuse_item_ids: Iterable[str],
+    live_request_count: int,
+    scanned_bytes: int,
+) -> dict[str, Any]:
+    """写候选级阶段 checkpoint（VC-4 由 B3-04 的 record-candidate-build 写，VC-5／VC-6 随 B4）：按候选 revision 定位
+    （r1 在原路径、r≥2 在 revision 目录、VC-5 重开在 ``reopen-b<K>/``），VC-4 的直接前序是 Campaign 级 VC-3、VC-5／VC-6
+    是同一 revision 的上一阶段；只写一次，重跑同输入复用、输入漂移拒绝（与 Codex ``_complete_vc_phase`` 的候选级分支
+    同一判据；revision 由调用方显式给出，Claude 不认隐含 r1）。"""
+
+    if phase not in CANDIDATE_PHASES:
+        raise ConfigurationError("候选级阶段完成器只接受 VC-4～VC-6。")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise ConfigurationError("候选级阶段完成器必须给出正整数候选 revision。")
+    return _complete_phase(
+        campaign_dir,
+        manifest,
+        phase=phase,
+        revision=revision,
+        stage_receipt_path=stage_receipt_path,
+        completed_at_utc=completed_at_utc,
+        execute_item_ids=execute_item_ids,
+        reuse_item_ids=reuse_item_ids,
+        live_request_count=live_request_count,
+        scanned_bytes=scanned_bytes,
+    )
+
+
+def _complete_phase(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    revision: int | None,
+    stage_receipt_path: Path,
+    completed_at_utc: str,
+    execute_item_ids: Iterable[str],
+    reuse_item_ids: Iterable[str],
+    live_request_count: int,
+    scanned_bytes: int,
+) -> dict[str, Any]:
+    """两个完成器的共同部分：重放直接前序、绑定阶段收据、只写一次（已存在时除完成时刻与自摘要外逐字段比较）。"""
+
+    output = vc_checkpoint_path(campaign_dir, phase, revision=revision)
     plan = vc_campaign_plan(campaign_dir, manifest)
-    previous = CAMPAIGN_PHASES[CAMPAIGN_PHASES.index(phase) - 1]
-    previous_path, previous_checkpoint = replay_vc_checkpoint(campaign_dir, plan, previous)
+    previous = VC_PHASES[VC_PHASES.index(phase) - 1]
+    previous_path, previous_checkpoint = replay_vc_checkpoint(
+        campaign_dir, plan, previous, revision=revision if previous in CANDIDATE_PHASES else None
+    )
     stage_binding = vc_control_binding(campaign_dir, Path(stage_receipt_path))
     try:
         checkpoint = codex_upgrade_vc_artifacts.build_vc_checkpoint(

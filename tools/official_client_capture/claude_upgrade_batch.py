@@ -40,8 +40,16 @@ b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 �
 * ``inputs`` 绑定文件旗标的摘要、修订输入目录的树摘要、被批准 revision 的草案收据与被批准联合清单；``outputs`` 绑定阶段
   产物目录（``classification/``、``profile/``）每个普通文件的摘要、本阶段 Store 事实的摘要与已封存 checkpoint（键
   ``checkpoint``，``_require_stage_replay_proof_for_checkpoint`` 按它核对）。
+* VC-4（B3-04）：``plan-candidate-gates`` 的生成计划形态（``--campaign-dir``、``--candidate-id``、``--candidate-source``、
+  ``--mapping``、``--output``）与 ``record-candidate-build`` 的十九个旗标（与 Codex 同名同义，见 ``claude_upgrade_candidate``
+  第四节），旗标闭集取共享 ``CANDIDATE_STAGE_REPLAY_FLAGS`` 的必需部分（Claude 这两个子命令不接受 watchdog 参数，没有
+  可选旗标；需求预览与 ``--preview`` 都不是批次动作，没有合同）。判定与绑定交给共享 ``_candidate_stage_replay_action_facts``
+  （候选属于当前 revision、未作废未被取代、没有候选 attempt；计划输出已存在即拒绝；构建输入文件与目录的摘要、已写的构建
+  收据、build-evidence 与 revision seal 的摘要，已写构建收据的候选与构建标识核对；VC-4 checkpoint 重放后绑定），Claude 在
+  其上补 Store 侧：Store 已冻结本候选的另一次构建（``build_id`` 或镜像摘要不同）即拒绝（逐字重派必然撞上 Store 的冻结），
+  本候选的 ``candidate_frozen`` 事实与 Store CandidateBuildReceipt 引用进 ``outputs``。
 * VC-1：Claude 没有阶段幂等重派合同（采集与已发布预约只走 ``reconcile-attempt``；seal 链零请求失败按 post-run-tooling
-  对账后由 N+1 重派协议承接）；VC-4：``plan-candidate-gates``／``record-candidate-build`` 的合同随 B3-04 落实；其余阶段没有。
+  对账后由 N+1 重派协议承接）；VC-5、VC-6 随 B4。
 
 四、父监督器上下文的退出码（``campaign_run_aware_exit_code``）
 =========================================================
@@ -82,6 +90,8 @@ from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
+from tools.official_client_capture import upgrade_client_adapter
+from tools.official_client_capture import upgrade_control_plane
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import file_sha256
 from tools.official_client_control.canonical import canonical_sha256
@@ -126,6 +136,15 @@ STAGE_REPLAY_CONTRACTS: Mapping[str, Mapping[str, Mapping[str, tuple[frozenset[s
             "approve": (frozenset({"--campaign-dir", "--approve-joint-sha256", "--approved-by"}), frozenset()),
         },
     },
+    # VC-4：两个子命令各只有一种形态；必需旗标与共享闭集相同，Claude 不接受 watchdog 参数（见模块说明第三节）。
+    "VC-4": {
+        "plan-candidate-gates": {
+            "plan": (upgrade_control_plane.CANDIDATE_STAGE_REPLAY_FLAGS["plan-candidate-gates"][0], frozenset()),
+        },
+        "record-candidate-build": {
+            "record": (upgrade_control_plane.CANDIDATE_STAGE_REPLAY_FLAGS["record-candidate-build"][0], frozenset()),
+        },
+    },
 }
 _PAIRED_OPTIONAL = frozenset({"--active-release-catalog", "--active-profile"})
 # 阶段产物目录与本阶段的 Store 事实种类（进 ``outputs``）。
@@ -136,9 +155,6 @@ STAGE_REPLAY_OUTPUTS: Mapping[str, tuple[str, tuple[str, ...]]] = {
 VC1_REPLAY_REASON = (
     "Claude VC-1 没有阶段幂等重派合同：采集与已发布预约只走 reconcile-attempt；"
     "seal 链零请求失败按 post-run-tooling 对账后由 N+1 重派协议承接"
-)
-VC4_REPLAY_REASON = (
-    "VC-4 零请求动作（plan-candidate-gates／record-candidate-build）的幂等重派合同随 B3-04 落实，维持候选审核"
 )
 
 # 四、父监督器上下文里的合法暂停点。
@@ -330,7 +346,9 @@ def _parse_contract(phase: str, argv: Sequence[str], campaign_dir: Path) -> tupl
     flags = dict(zip(keys, rest[1::2]))
     if len(flags) != len(keys) or any(not key.startswith("--") for key in keys):
         raise ConfigurationError(f"{subcommand} 的旗标重复或形态非法")
-    if "--approve-revision" in flags or "--approve-joint-sha256" in flags:
+    if len(contracts[subcommand]) == 1:
+        (mode,) = contracts[subcommand]
+    elif "--approve-revision" in flags or "--approve-joint-sha256" in flags:
         mode = "approve"
     elif "--from-revision" in flags or "--revision-input" in flags:
         mode = "revise"
@@ -582,6 +600,61 @@ def _phase_outputs(
     return outputs
 
 
+def _store_candidate_build_refs(campaign_dir: Path, manifest: Mapping[str, Any], candidate_id: str) -> list[dict[str, Any]]:
+    """只读打开受管 Store，取属于本候选的 CandidateBuildReceipt 引用（按摘要排序）。"""
+
+    root = claude_upgrade_store.campaign_store_root(campaign_dir)
+    try:
+        store = ControlStore.open_read_only(root)
+        references = [dict(reference) for reference in store.list_receipt_refs("candidate_build")]
+        owned = [reference for reference in references if store.load_receipt(reference).get("candidate_id") == candidate_id]
+    except ControlError as error:
+        raise ConfigurationError(f"Campaign 受管 Store 不可读：{error}") from error
+    return sorted(owned, key=lambda reference: str(reference.get("sha256")))
+
+
+def _candidate_stage_facts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    run_manifest: Mapping[str, Any],
+    argv: Sequence[str],
+    flags: Mapping[str, str],
+    facts: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """VC-4 两个零请求动作的前置判定与绑定：共享 ``_candidate_stage_replay_action_facts`` ＋ Claude 的 Store 侧（见模块说明第三节）。
+
+    ``_parse_contract`` 已确认 ``--campaign-dir`` 与本 Campaign 是同一目录；共享判定按字面比较，所以把命令里的字面值传给它。
+    """
+
+    adapter = upgrade_client_adapter.adapter_for("claude")
+    with upgrade_control_plane.adapter_scope(adapter):
+        inputs, outputs = upgrade_control_plane._candidate_stage_replay_action_facts(
+            Path(flags["--campaign-dir"]), run_manifest, [str(item) for item in argv]
+        )
+    if argv[0] != "record-candidate-build":
+        return dict(inputs), dict(outputs)
+    candidate_id = flags["--candidate-id"]
+    image_digest = "sha256:" + str(flags["--runtime-image"]).rsplit("sha256:", 1)[-1]
+    frozen = [
+        fact
+        for fact in _facts_of(facts, "candidate_frozen")
+        if isinstance(fact.get("payload"), Mapping) and fact["payload"].get("candidate_id") == candidate_id
+    ]
+    for fact in frozen:
+        payload = fact["payload"]
+        if payload.get("build_id") != flags["--build-id"] or payload.get("image_digest") != image_digest:
+            raise ConfigurationError(
+                f"Store 已冻结候选 {candidate_id} 的另一次构建（build_id {payload.get('build_id')}）：重派的 record-candidate-build 必然被拒绝"
+            )
+    outputs = dict(outputs)
+    if frozen:
+        outputs["control-store/candidate_frozen"] = canonical_sha256([dict(fact) for fact in frozen])
+    builds = _store_candidate_build_refs(campaign_dir, manifest, candidate_id)
+    if builds:
+        outputs["control-store/candidate_build"] = canonical_sha256(builds)
+    return dict(inputs), outputs
+
+
 def campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
     """服务面 ``_campaign_stage_replay_facts``：只读判定失败批次能否按原批次 N+1 重派（合同见模块说明第三节）。
 
@@ -594,26 +667,30 @@ def campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, A
     if phase == "VC-1":
         result["reasons"].append(VC1_REPLAY_REASON)
         return result
-    if phase in codex_upgrade_timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES:
-        result["reasons"].append(VC4_REPLAY_REASON)
-        return result
     if phase not in STAGE_REPLAY_CONTRACTS:
         result["reasons"].append(f"{phase} 没有阶段幂等重派合同")
         return result
     campaign_dir = Path(campaign_dir)
+    candidate_phase = phase in codex_upgrade_timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES
     try:
         orchestrator = _orchestrator()
         manifest = orchestrator._require_formal_campaign(campaign_dir)
-        plan = claude_upgrade_vc.vc_campaign_plan(campaign_dir, manifest)
         facts = _store_facts(campaign_dir, manifest)
-        outputs = _phase_outputs(campaign_dir, plan, phase, facts)
+        outputs: dict[str, str] = {}
+        if not candidate_phase:
+            plan = claude_upgrade_vc.vc_campaign_plan(campaign_dir, manifest)
+            outputs = _phase_outputs(campaign_dir, plan, phase, facts)
         for action in run_manifest.get("actions", []):
             command = [str(item) for item in action["command"]]
             argv = _orchestrator_argv(command)
             subcommand, mode, flags = _parse_contract(phase, argv, campaign_dir)
-            inputs = _MODE_FACTS[subcommand](campaign_dir, manifest, mode, flags, facts)
+            if candidate_phase:
+                inputs, action_outputs = _candidate_stage_facts(campaign_dir, manifest, run_manifest, argv, flags, facts)
+            else:
+                inputs = _MODE_FACTS[subcommand](campaign_dir, manifest, mode, flags, facts)
+                action_outputs = dict(outputs)
             result["actions"].append(
-                {"action_id": str(action["action_id"]), "command": command, "inputs": inputs, "outputs": dict(outputs)}
+                {"action_id": str(action["action_id"]), "command": command, "inputs": inputs, "outputs": action_outputs}
             )
         if not result["actions"]:
             raise ConfigurationError("失败批次没有可核验动作")
