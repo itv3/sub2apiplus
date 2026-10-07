@@ -171,9 +171,13 @@ class _ClassifyCase(unittest.TestCase):
         relay_overrides: dict[str, Any] | None = None,
         control_receipts: dict[str, Any] | None = None,
         wire_files: Mapping[str, Sequence[tuple[str, bytes, str, int | None]]] | None = None,
+        official_reuse: bool = False,
     ) -> Path:
         """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
-        目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。"""
+        目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。
+
+        ``official_reuse`` 为真时 VC-1 按只读复用前序证据的形态封存（B3-01 的原子批次链用）：中继证据在同一数据根下的
+        前序 Campaign 目录里，本 Campaign 没有官方 attempt，官方阶段结果为 ``predecessor_reuse``。缺省是采集路径形态。"""
 
         scenarios = _scenarios(target)
         scratch = self.root / f"store-build-{campaign_id}"
@@ -231,6 +235,11 @@ class _ClassifyCase(unittest.TestCase):
             probe: sorted(item["scenario_id"] for item in scenarios["evidence_scenarios"] if probe in item["probe_ids"]) for probe in probes
         }
         relay_overrides = relay_overrides or {}
+        evidence_attempt = (
+            self.data / "evidence" / "campaigns" / f"{campaign_id}-predecessor" / "official" / "attempts" / "attempt-fixture"
+            if official_reuse
+            else campaign / "official" / "attempts" / "attempt-fixture"
+        )
         relays: dict[str, Path] = {}
         for probe in probes:
             dimensions = [scenario for scenario in probe_scenarios[probe] if scenario in claude_fw_f_v5.OBSERVED_ONLY_DIMENSIONS]
@@ -243,7 +252,7 @@ class _ClassifyCase(unittest.TestCase):
                 },
             )
             relays[probe] = _write_json(
-                campaign / "official" / "attempts" / "attempt-fixture" / "evidence" / probe / "relay-manifest.json",
+                evidence_attempt / "evidence" / probe / "relay-manifest.json",
                 {"schema_version": evidence.RELAY_MANIFEST_SCHEMA, "probe_id": probe, "status": "complete", "dimension_evidence": dimension_evidence},
             )
         matrix_rows = []
@@ -257,7 +266,9 @@ class _ClassifyCase(unittest.TestCase):
                     "status": "covered" if covering_probes else "gap",
                 }
             )
-        evidence_dir = campaign / "official" / "attempts" / "attempt-fixture" / "evidence"
+        # Wire 证据与中继清单同在 VC-1 证据目录：只读复用形态下它在前序 Campaign 里，本 Campaign 不出现官方 attempt 目录
+        # （否则对账器按正式 attempt 读它的原子预约收据会失败关闭）。
+        evidence_dir = evidence_attempt / "evidence"
         wire_bindings: dict[str, list[dict[str, Any]]] = {}
         wire_artifacts: list[dict[str, Any]] = []
         for probe, files in sorted((wire_files or {}).items()):
@@ -343,25 +354,37 @@ class _ClassifyCase(unittest.TestCase):
         evidence_ref = store.append_fact(
             campaign_id, "evidence_recorded", {"discovery_fact_ref": discovery_ref, "evidence_package_ref": package_ref}, STAGE_TIME
         )
-        attempt = _write_json(campaign / "official" / "attempts" / "attempt-fixture" / "attempt.json", {"status": "awaiting_receipts"})
+        official_jobs = sorted(job["id"] for job in scenarios["capture_jobs"])
+        if official_reuse:
+            mode_fields: dict[str, Any] = {
+                "mode": "predecessor_reuse", "attempt": None, "seal": None,
+                "predecessor_reuse": {"mode": "read_only_reuse", "campaign_id": f"{campaign_id}-predecessor"},
+            }
+            execute_ids, reuse_ids = [], official_jobs
+        else:
+            attempt = _write_json(campaign / "official" / "attempts" / "attempt-fixture" / "attempt.json", {"status": "awaiting_receipts"})
+            mode_fields = {
+                "mode": "captured",
+                "attempt": {"path": attempt.relative_to(campaign).as_posix(), "sha256": claude_upgrade.file_sha256(attempt)},
+                "seal": {"generation": "g-fixture"}, "predecessor_reuse": None,
+            }
+            execute_ids, reuse_ids = official_jobs, []
         stage_path = _write_json(
             campaign / seal.STAGE_RESULT_RELATIVE,
             {
                 "schema_version": seal.STAGE_RESULT_SCHEMA, "client": "claude", "campaign_id": campaign_id, "stage": "capture-official",
-                "status": "complete", "mode": "captured",
-                "attempt": {"path": attempt.relative_to(campaign).as_posix(), "sha256": claude_upgrade.file_sha256(attempt)},
-                "seal": {"generation": "g-fixture"}, "predecessor_reuse": None,
+                "status": "complete", **mode_fields,
                 "store": {
                     "root": claude_upgrade_store.CAMPAIGN_STORE_DIRNAME, "campaign_id": campaign_id, "checkpoint": "evidence_recorded",
                     "discovery_fact_ref": discovery_ref, "evidence_fact_ref": evidence_ref, "evidence_package_ref": package_ref,
                 },
-                "execute_item_ids": sorted(job["id"] for job in scenarios["capture_jobs"]), "reuse_item_ids": [],
+                "execute_item_ids": execute_ids, "reuse_item_ids": reuse_ids,
                 "live_request_count": 0, "scanned_bytes": 0, "sealed_at_utc": STAGE_TIME,
             },
         )
         claude_upgrade_vc.complete_campaign_phase(
             campaign, manifest, phase="VC-1", stage_receipt_path=stage_path, completed_at_utc=STAGE_TIME,
-            execute_item_ids=sorted(job["id"] for job in scenarios["capture_jobs"]), reuse_item_ids=[], live_request_count=0, scanned_bytes=0,
+            execute_item_ids=execute_ids, reuse_item_ids=reuse_ids, live_request_count=0, scanned_bytes=0,
         )
         _write_bytes(
             campaign / "analysis" / "candidate-denominator.json",

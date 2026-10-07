@@ -85,8 +85,9 @@ scenario-only 组闭合、结果不得 ``blocked``、通道必须含 M 且含 R 
 
 五、幂等与崩溃收敛
 ==================
-* 运行在 Campaign 锁内，并要求 Campaign 静止（B2-08 的静止判据，与 seal 同一函数：停线租约视为静止，仍在执行或已过期的
-  active 租约拒绝）；不取得 ``CampaignLease``，被强杀后不留需要对账的过期租约。revision 与批准目录都先写进同级临时目录、写完再整体改名发布，半成品只会是被下次调用清掉的临时目录。
+* 运行在 Campaign 锁内，并要求 Campaign 静止（与 seal 同口径：active 租约拒绝、停线租约视为静止，未隔离的环境污染
+  拒绝；B3-01 对齐）；不取得 ``CampaignLease``，被强杀后不留需要对账的过期租约。revision 与批准目录都先写进同级临时
+  目录、写完再整体改名发布，半成品只会是被下次调用清掉的临时目录。
 * Store 写入经 ``claude_upgrade_seal._StoreSession``（进程内 CLI、对象 ``--allow-existing``、事实带
   ``fact_idempotency_key(逻辑动作, payload 摘要, 事实种类)``、父监督器上下文里带 ``--producer-run``）；事实时刻取被批准
   revision 的创建时刻（冻结值）。批准在任一步被强杀后，重跑同一批准命令逐步复用、事实数不增；已批准后再批准同一
@@ -94,7 +95,7 @@ scenario-only 组闭合、结果不得 ``blocked``、通道必须含 M 且含 R 
 
 六、交给后续工作项的接口
 ========================
-* B3-01（原子批次）：VC-2 的批准动作就是 ``claude_upgrade.py classify --campaign-dir <C> --approve-revision <rev>
+* B3-01（原子批次，已落实）：VC-2 的批准动作就是 ``claude_upgrade.py classify --campaign-dir <C> --approve-revision <rev>
   --approve-review-sha256 <sha>``（参数全是成对的旗标与值，离线零请求，可在 N+1 重派里逐字重跑并收敛）。阶段结果固定在
   ``classification/result.json``（``STAGE_RESULT_RELATIVE``，读侧 ``load_stage_result``），VC-2 checkpoint 由本模块经
   ``claude_upgrade_vc.complete_campaign_phase`` 写在 ``control/vc/vc-2-checkpoint.json``。批次身份、计时账本的阶段事件、
@@ -332,11 +333,13 @@ def classify_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
     campaign_dir = campaign_dir.resolve(strict=True)
     orchestrator._require_formal_campaign(campaign_dir)
     with orchestrator._campaign_lock(campaign_dir):
-        # B2-08 定的静止判据（与 seal 同一函数）：停线租约（执行者已退出）视为静止，仍在执行或已过期的 active 租约拒绝。
+        # 与 seal 同一口径（B2-08 定、B3-01 对齐）：仍在执行或已过期的 active 租约拒绝，停线租约（执行者已退出、
+        # 没有绑定待对账的 attempt）视为静止。记录过环境污染（标记文件）时按对账同一判据核对：未被隔离收据覆盖的
+        # 污染拒绝，已隔离的不再封锁（否则隔离、续跑并封存 VC-1 之后，标记会让 VC-2 永远无法开始）。
         orchestrator._require_quiescent_campaign_lease(campaign_dir, action="classify")
         manifest = orchestrator._require_formal_campaign(campaign_dir)
         if (campaign_dir / _capture().CONTAMINATION_MARKER).exists():
-            raise ConfigurationError("Campaign 已记录环境污染：先走环境隔离与恢复（B2-08），禁止分类。")
+            orchestrator._reject_contaminated_campaign(campaign_dir)
         if mode == "approve":
             return _approve(campaign_dir, manifest, str(arguments.approve_revision), str(arguments.approve_review_sha256)), 0
         if mode == "revise":

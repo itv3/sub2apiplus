@@ -83,11 +83,12 @@ SupportEnvelope 只覆盖 ``migrated_strict`` 入口、DeploymentPlan 的 Active
 
 五、幂等与崩溃收敛
 ==================
-运行在 Campaign 锁内并要求 Campaign 静止（B2-08 的静止判据，与 seal、classify 同一函数：停线租约视为静止）。revision、准备包与暂存代号目录都先写
-同级临时目录再整体改名发布，准备结果与阶段结果只写一次。Store 写入经 ``claude_upgrade_seal._StoreSession``：对象
-``--allow-existing``，事实带 ``fact_idempotency_key``（逻辑动作、payload 摘要、事实种类），父监督器上下文里带
-``--producer-run``；两条事实的时刻都取冻结值（第一次被批准的 revision 的创建时刻、联合清单的生成时刻），任一步被强杀后
-重跑同一命令逐步复用、事实数不增。EvidenceApprovalFact 每个 Campaign 只有一份：已存在时只核对它绑定的证据与分类引用，
+运行在 Campaign 锁内并要求 Campaign 静止（与 seal、classify 同口径：active 租约拒绝、停线租约视为静止，未隔离的
+环境污染拒绝；B3-01 对齐）。revision、准备包与暂存代号目录都先写同级临时目录再整体改名发布，准备结果与阶段结果
+只写一次。Store 写入经 ``claude_upgrade_seal._StoreSession``：对象 ``--allow-existing``，事实带
+``fact_idempotency_key``（逻辑动作、payload 摘要、事实种类），父监督器上下文里带 ``--producer-run``；两条事实的
+时刻都取冻结值（第一次被批准的 revision 的创建时刻、联合清单的生成时刻），任一步被强杀后重跑同一命令逐步复用、
+事实数不增。EvidenceApprovalFact 每个 Campaign 只有一份：已存在时只核对它绑定的证据与分类引用，
 不再追加（批准人与审核引用以第一次为准）。准备包已发布而结果未写时被强杀，重跑同一批准命令逐文件核对后补写结果；
 换一个 revision 批准则遗留的准备包不被采用（暂存只看 ``results/`` 里最新的一份）。ProfileApprovalFact 只批准一次：以不同
 批准人或不同联合摘要重复批准一律拒绝。
@@ -100,8 +101,9 @@ SupportEnvelope 只覆盖 ``migrated_strict`` 入口、DeploymentPlan 的 Active
   或等 VC-1 补模型能力取证作业。
 * 生产入口清单、出站处置清单的现状没有 VC-1 生产者（B2-07 补充项），这里由审核人在 ``joint-inputs.json`` 提供，按 Store
   合同与上面的门禁核对。
-* 留给 B3-01：``_stage_path``／``_load_stage_result`` 的 ``stage-profile`` 分支、VC-3 阶段重派证明、计时账本事件。批次动作即
-  ``claude_upgrade.py stage-profile --campaign-dir <C> --approve-joint-sha256 <sha> --approved-by <人>``（参数全是成对旗标）。
+* B3-01（已落实，见 ``claude_upgrade_batch``）：``_load_stage_result`` 的 ``stage-profile`` 分支、VC-3 阶段重派证明；计时账本
+  事件由共享原子入口登记。批次动作即 ``claude_upgrade.py stage-profile --campaign-dir <C> --approve-joint-sha256 <sha>
+  --approved-by <人>``（参数全是成对旗标）。
 
 本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层，不在 wire 与
 evidence 闭包里。
@@ -312,7 +314,7 @@ def add_stage_arguments(target: argparse.ArgumentParser) -> None:
 
 
 def _locked(campaign_dir_value: Any, action: Callable[[Path, dict[str, Any]], tuple[dict[str, Any], int]]) -> tuple[dict[str, Any], int]:
-    """Campaign 锁内执行：要求 Formal、Campaign 静止（B2-08 判据）、没有环境污染标记。"""
+    """Campaign 锁内执行：要求 Formal、Campaign 静止（与 seal、classify 同一口径）、没有未隔离的环境污染。"""
 
     orchestrator = _orchestrator()
     campaign_dir = Path(campaign_dir_value)
@@ -320,11 +322,12 @@ def _locked(campaign_dir_value: Any, action: Callable[[Path, dict[str, Any]], tu
     campaign_dir = campaign_dir.resolve(strict=True)
     orchestrator._require_formal_campaign(campaign_dir)
     with orchestrator._campaign_lock(campaign_dir):
-        # B2-08 定的静止判据（与 seal、classify 同一函数）：停线租约视为静止，仍在执行或已过期的 active 租约拒绝。
+        # B3-01 对齐 B2-08 的恢复协议：active 租约拒绝、停线租约视为静止；记录过环境污染时按对账同一判据核对，
+        # 已被隔离收据覆盖的污染不再封锁。
         orchestrator._require_quiescent_campaign_lease(campaign_dir, action="VC-3 画像")
         manifest = orchestrator._require_formal_campaign(campaign_dir)
         if (campaign_dir / _capture().CONTAMINATION_MARKER).exists():
-            raise ConfigurationError("Campaign 已记录环境污染：先走环境隔离与恢复（B2-08），禁止 VC-3。")
+            orchestrator._reject_contaminated_campaign(campaign_dir)
         return action(campaign_dir, manifest)
 
 

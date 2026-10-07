@@ -48,8 +48,10 @@ if __name__ == "__main__":
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256, secure_write_json
 from tools.official_client_capture import claude_tool_identity_policy
+from tools.official_client_capture import claude_upgrade_batch
 from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture import claude_upgrade_predecessor
+from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_project_ledger
@@ -1842,8 +1844,10 @@ def load_campaign_manifest(
     输入绑定。
 
     与 Codex 同签名。Claude 没有控制纪元，``_control_epoch_bootstrap`` 只能为假；控制收据的语义核验由 P0 收口
-    （B2-11）落实，VC 控制制品的语义重放由原子批次入口（B3-01）落实，这里只核两者的文件绑定；前序绑定（B2-09）
-    只核形状——``null`` 或冻结前序 Campaign 身份的只读复用声明，与前序 Store 的实际身份在导入时核对。"""
+    （B2-11）落实，这里只核文件绑定；VC 控制制品（``vc_control``）除文件绑定外还核语义（B3-01，
+    ``claude_upgrade_vc.validate_vc_control``：字段闭集、总计划身份与 staging 批次模型、VC-0 checkpoint、首批两件的确定性
+    编译关系）；前序绑定（B2-09）只核形状——``null`` 或冻结前序 Campaign 身份的只读复用声明，与前序 Store 的实际身份在
+    导入时核对。"""
 
     if _control_epoch_bootstrap:
         raise ConfigurationError("Claude Campaign 没有 control epoch。")
@@ -1883,6 +1887,7 @@ def load_campaign_manifest(
             _campaign_timing_ledger_dir(campaign_dir, manifest)
             group = {name: value for name, value in group.items() if name != "upgrade_timing"}
         _verify_campaign_file_bindings(campaign_dir, group, group_name)
+    claude_upgrade_vc.validate_vc_control(campaign_dir, manifest)
     return manifest
 
 
@@ -4037,24 +4042,22 @@ def _job_rehearsal_contract_from_manifest(
     raise _pending("_job_rehearsal_contract_from_manifest", "B2-10（Job 演练与客户端启动探测）")
 
 
-# B3-01（VC-2～VC-6 原子批次入口接入）
+# B3-01（VC-2～VC-6 原子批次入口接入）：VC 控制制品在 ``claude_upgrade_vc``，这里只注册与转调（签名与 Codex 逐项相同）。
 
 
 def _vc_campaign_plan(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：读取并重放总计划绑定的 VC 总计划，转调 ``claude_upgrade_vc.vc_campaign_plan``。"""
 
-    del campaign_dir, manifest
-    raise _pending("_vc_campaign_plan", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_vc.vc_campaign_plan(Path(campaign_dir), manifest)
 
 
 def _vc_checkpoint_path(campaign_dir: Path, phase: str, *, revision: int | None = None) -> Path:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：阶段 checkpoint 坐标（候选级按 revision 与 VC-5 重开），转调 ``claude_upgrade_vc``。"""
 
-    del campaign_dir, phase, revision
-    raise _pending("_vc_checkpoint_path", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_vc.vc_checkpoint_path(Path(campaign_dir), phase, revision=revision)
 
 
 def _vc_checkpoint_reference(
@@ -4062,10 +4065,9 @@ def _vc_checkpoint_reference(
     path: Path,
     checkpoint: Mapping[str, Any],
 ) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：后继阶段绑定前序 checkpoint 的引用，转调 ``claude_upgrade_vc``。"""
 
-    del campaign_dir, path, checkpoint
-    raise _pending("_vc_checkpoint_reference", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_vc.vc_checkpoint_reference(Path(campaign_dir), Path(path), checkpoint)
 
 
 def _replay_vc_checkpoint(
@@ -4075,10 +4077,9 @@ def _replay_vc_checkpoint(
     *,
     revision: int | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：逐级重放阶段 checkpoint 到 VC-0，转调 ``claude_upgrade_vc.replay_vc_checkpoint``。"""
 
-    del campaign_dir, plan, phase, revision
-    raise _pending("_replay_vc_checkpoint", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_vc.replay_vc_checkpoint(Path(campaign_dir), plan, phase, revision=revision)
 
 
 def _vc_run_manifest_from_batch(
@@ -4086,10 +4087,9 @@ def _vc_run_manifest_from_batch(
     *,
     batch_model: str = "legacy",
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：VC 批次确定性编译成 ``official-client-campaign-run/v1`` 队列清单（只认 staging 模型）。"""
 
-    del batch, batch_model
-    raise _pending("_vc_run_manifest_from_batch", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_vc.vc_run_manifest_from_batch(batch, batch_model=batch_model)
 
 
 # 阶段路径照搬 Codex（B2-08 起用，逐字一致由 COPIED 锁定）：Campaign 级阶段（capture-official／classify）路径固定；
@@ -4170,21 +4170,19 @@ def _load_stage_result(
     _verified_campaign_manifest: Mapping[str, Any] | None = None,
     _baseline: int | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（B2-08 的官方阶段最小实现，其余由 B3-01 落实）：读取并核对 ``official/result.json``。
+    """服务面成员（B2-08 官方阶段，B3-01 补 classify 与 stage-profile）：转调 ``claude_upgrade_batch.load_stage_result``。
 
-    官方阶段结果由 B2-07 的 seal 链写入（``claude_upgrade_seal.STAGE_RESULT_SCHEMA``）；这里只做共享入账与 attempt 读侧
-    需要的核对（合同、Campaign、阶段、完成状态与 attempt 绑定摘要），完整的阶段重放（VC-1 checkpoint 链、导入链与
-    机器收据）归 B3-01。没有阶段结果时报「尚未封存」（共享流程按这几个字区分）。
+    官方阶段读 ``official/result.json``（B2-07 的 seal 链写入），classify 读 ``classification/result.json``（B3-02），
+    stage-profile 读 ``profile/result.json``（B3-03）；三者都要求本阶段 checkpoint 已经绑定这份结果，没有阶段结果时报
+    「尚未封存」（共享流程按这几个字区分）。候选级阶段报待实现。Codex 专属的导入链、机器收据重放与历史控制参数在
+    Claude 没有对应物，保留签名、不使用。
     """
 
     del _import_chain, _replay_machine_receipts, _shallow, _ignore_checkpoint, _import_cache, _skip_evidence_scan
     del _historical_manifest_controls, _baseline
-    canonical, path = _stage_path(campaign_dir, stage, candidate_id)
-    if canonical != "capture-official":
-        raise _pending(f"_load_stage_result（{canonical}）", "B3-01（VC-2～VC-6 原子批次入口接入）")
-    from tools.official_client_capture import claude_upgrade_seal
-
-    return claude_upgrade_seal.load_stage_result(Path(campaign_dir), path, manifest=_verified_campaign_manifest)
+    return claude_upgrade_batch.load_stage_result(
+        Path(campaign_dir), stage, candidate_id, manifest=_verified_campaign_manifest
+    )
 
 
 def _stage_read_source(
@@ -4193,10 +4191,9 @@ def _stage_read_source(
     baseline: int,
     stage: str,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：评估阶段 b0 的读来源，转调 ``claude_upgrade_batch``；b≥1 随 B4-04 落实。"""
 
-    del campaign_dir, candidate_id, baseline, stage
-    raise _pending("_stage_read_source", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_batch.stage_read_source(Path(campaign_dir), candidate_id, baseline, stage)
 
 
 def _stage_write_target(
@@ -4205,17 +4202,16 @@ def _stage_write_target(
     baseline: int,
     stage: str,
 ) -> Path:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：评估阶段 b0 的写目标，转调 ``claude_upgrade_batch``；b≥1 随 B4-04 落实。"""
 
-    del campaign_dir, candidate_id, baseline, stage
-    raise _pending("_stage_write_target", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_batch.stage_write_target(Path(campaign_dir), candidate_id, baseline, stage)
 
 
 def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B3-01（VC-2～VC-6 原子批次入口接入） 落实）。"""
+    """服务面成员（B3-01）：阶段幂等重派证明的事实（VC-2 classify、VC-3 prepare-profile／stage-profile），
+    转调 ``claude_upgrade_batch.campaign_stage_replay_facts``。"""
 
-    del campaign_dir, run_manifest
-    raise _pending("_campaign_stage_replay_facts", "B3-01（VC-2～VC-6 原子批次入口接入）")
+    return claude_upgrade_batch.campaign_stage_replay_facts(Path(campaign_dir), run_manifest)
 
 
 # B3-02／B3-03（分类与画像 producer）
@@ -5174,6 +5170,9 @@ def main(argv: list[str] | None = None) -> int:
     （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），plan-candidate-gates 做 VC-4 门禁计划（B3-04），
     其余 Claude 专属子命令在动作体落实前报未实现。
 
+    B3-01 起 VC-2～VC-6 经 ``compile-and-run-vc-batch`` 原子派发：父监督器（campaign-run）上下文里批次控制面命令一律
+    拒绝，草案、修订与预览这类等审核的暂停点退出 0（``claude_upgrade_batch`` 第四、五节）。
+
     分派前先过项目总账消费者门禁（``_assert_consumer_admission``，与 Codex 主入口同一判据：达上限只挡该根因）；
     可处理异常与 Codex 主入口同一组，报错退出 1。租约、遗留入口拒绝与停线收据等 Codex 主入口的其余外层流程，
     随租约与锁（B1-09 续）一起落实。
@@ -5192,6 +5191,8 @@ def main(argv: list[str] | None = None) -> int:
         # 两渠道二进制不一致时冻结照常落盘，但退出码 2 提示 VC-0 不得据此建 Formal Campaign。
         return 0 if summary["binary_equivalence"] == "npm=gcs" else 2
     try:
+        # B3-01：批次控制面命令只能在两个批次之间由操作员执行，父监督器里的动作调用即拒绝（零写入）。
+        claude_upgrade_batch.reject_control_plane_in_campaign_run(str(arguments.command))
         _assert_consumer_admission(arguments)
         if arguments.command in SHARED_SUBCOMMANDS:
             result, return_code = _run_shared_subcommand(arguments)
@@ -5235,6 +5236,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)
+        # B3-01：父批次里草案、修订与预览是该批次的预期终点（退出 0）；直接 CLI 保持诊断码 2。
+        return_code = claude_upgrade_batch.campaign_run_aware_exit_code(result, return_code)
     except (ConfigurationError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         # 与 Codex 主入口同一组可处理异常（共享流程抛的总账、账本、对账器错误都是 ValueError 子类）：报错退出 1。
         print(f"Claude 升级失败：{error}", file=sys.stderr)

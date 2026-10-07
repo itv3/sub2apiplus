@@ -104,11 +104,17 @@ class SurfaceContractTests(unittest.TestCase):
         self.assertEqual(set(observed), {"claude"})
 
     def test_pending_members_name_their_work_item(self) -> None:
-        # B2-08 只落实官方阶段：候选状态、Campaign 级以外的阶段结果与候选恢复段仍各自报待实现。
+        # B2-08 落实官方阶段、B3-01 补 Campaign 级阶段结果与 b0 评估路径：候选状态、候选级阶段结果、b≥1 评估路径与候选恢复段
+        # 仍各自报待实现。
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status（候选阶段）：由 B2-11"):
             claude_upgrade.campaign_status(Path("/nonexistent"), "c1")
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_stage_result（classify）：由 B3-01"):
-            claude_upgrade._load_stage_result(Path("/nonexistent"), "classify")
+        for stage, work_item in (("capture-candidate", "B4-02"), ("compare", "B4-03"), ("accept", "B4-06")):
+            with self.subTest(stage=stage), self.assertRaisesRegex(
+                claude_upgrade.ClaudeOrchestratorPending, rf"_load_stage_result（{stage}）：由 {work_item}"
+            ):
+                claude_upgrade._load_stage_result(Path("/nonexistent"), stage, "c1")
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_stage_read_source（评估基线 b1）：由 B4-04"):
+            claude_upgrade._stage_read_source(Path("/nonexistent"), "c1", 1, "compare")
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_attempt_recovery_segment：由 B4-05"):
             claude_upgrade._load_attempt_recovery_segment(Path("/nonexistent"), candidate_id="c1", attempt_id="a1", recovery_revision="ar1")
         for member in ("recovery_segment_summary", "segment_reuse_proofs"):
