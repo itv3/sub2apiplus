@@ -278,9 +278,10 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
     """B2-06／B2-07 的取证与 seal 夹具（临时数据根、受管工具树、宿主边界替身）加候选 Campaign、Store 世界与两个接缝替身。"""
 
     def setUp(self) -> None:
-        super().setUp()
         from tools.official_client_capture.tests import claude_client_receipt_fixture
 
+        claude_client_receipt_fixture.install_staging_scope(self)
+        super().setUp()
         client_source = claude_client_receipt_fixture.source_patch()
         client_source.start()
         self.addCleanup(client_source.stop)

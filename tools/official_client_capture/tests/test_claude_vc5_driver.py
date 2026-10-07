@@ -697,7 +697,7 @@ class ClaudeVc5DriverChainTests(chain_tests.CompareAcceptChainTests):
         params = self.phase(world, mode="attempt", require_completion="VC-5")
         self.assertEqual((params["ACCEPT_READY"], params["ASSERTIONS_READY"], params["VC5_COMPLETE"]), ("1", "1", "1"))
         self.assertEqual(params["VC5_CHECKPOINT"], str(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-5", revision=1)))
-        self.assert_zero_requests()
+        self.assert_recorded_client_requests(world)
 
     def check_batch_plan(self, world: dict[str, Any], plan: dict[str, Any], *, accepted: bool) -> None:
         phase_context = driver_tests.load_script("phase_context")

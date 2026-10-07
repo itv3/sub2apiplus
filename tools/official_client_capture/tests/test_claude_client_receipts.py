@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +17,6 @@ from tools.official_client_capture import codex_upgrade_project_ledger as ledger
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture.tests import claude_client_receipt_fixture as fixture
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_seal_evidence as seal_fixture
-from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
 
 
 class ClientReceiptContractTests(unittest.TestCase):
@@ -30,7 +28,7 @@ class ClientReceiptContractTests(unittest.TestCase):
         self.attempt = self.campaign / "candidates" / "candidate-1" / "attempts" / "attempt-1"
         self.values = {"campaign_id": "campaign-1", "candidate_id": "candidate-1", "attempt_id": "attempt-1", "run_nonce": "nonce-1"}
         fixture.write(self.attempt / "attempt.json", self.values)
-        fixture.write(self.campaign / "campaign.json", {"campaign_id": "campaign-1"})
+        fixture.write(self.campaign / "campaign.json", {"campaign_id": "campaign-1", "client": "claude"})
         self.task_path, self.bundle, self.capture = fixture.material(self.attempt, "claude-desktop", self.values)
         self.task = contract.read_json(self.task_path)
         source = fixture.source_patch()
@@ -53,6 +51,37 @@ class ClientReceiptContractTests(unittest.TestCase):
         request = result["requests"][0]
         self.assertEqual(request["host"], "candidate.invalid")
         self.assertEqual(request["identity_key"], provenance.identity_key(request["producer_run_id"], provenance.SOURCE_MAC_CANDIDATE, request["native_coordinate"]))
+
+    def test_receipt_rejects_self_consistent_accounting_in_foreign_project(self) -> None:
+        project = fixture.fixture_ledger(self.attempt)
+        head = ledger.replay_head(project)
+        other = self.root / "staging" / "other-project"
+        other.mkdir(mode=0o700)
+        foreign = ledger.create_fixture_ledger(other, client="claude")
+        # 旁账内仍走真实 append/replay，使 task、accounting 与请求键彼此完全自洽；独立读侧必须查真实 Campaign 归属。
+        with mock.patch.object(fixture, "fixture_ledger", return_value=foreign):
+            receipt = fixture.write_receipt(self.attempt, "claude-desktop", self.values)
+        self.assertEqual(len(ledger.replay_head(foreign)["accounted_identity_index"]), 1)
+        with self.assertRaisesRegex(ValueError, "不是本 Campaign 的总账"):
+            contract.verify_client_receipt(self.attempt, "claude-desktop", receipt)
+        self.assertEqual(ledger.replay_head(project)["head_sha256"], head["head_sha256"])
+
+    def test_scenario_reuse_rejects_previous_task_accounted_in_foreign_project(self) -> None:
+        other = self.root / "staging" / "other-project"
+        other.mkdir(mode=0o700)
+        foreign = ledger.create_fixture_ledger(other, client="claude")
+        with mock.patch.object(fixture, "fixture_ledger", return_value=foreign):
+            fixture.write_receipt(self.attempt, "claude-desktop", self.values)
+        reuse = [{"root": str(self.attempt), "task": contract.binding(self.task_path, self.attempt), "source_manifest": contract.binding(self.bundle / "source-manifest.json", self.attempt), "scenario_ids": ["client-smoke"]}]
+        task_path, bundle, capture = fixture.material(self.attempt, "claude-desktop", self.values, nonce="reuse-foreign-accounting", scenario_reuse=reuse, issued_at_utc="2026-10-08T00:01:00Z")
+        with self.assertRaisesRegex(ValueError, "不是本 Campaign 的总账"):
+            contract.verify_client_bundle(contract.read_json(task_path), bundle, capture)
+
+    def test_fixture_reuses_campaign_ledger_without_creating_side_ledger(self) -> None:
+        project = ledger.find_project_ledger(self.campaign, client="claude")
+        self.assertIsNotNone(project)
+        self.assertEqual(fixture.fixture_ledger(self.attempt), project)
+        self.assertFalse((self.root / "staging" / "mac-client-fixture").exists())
 
     def test_fixture_reentry_preserves_published_attempt_bytes_and_extra_bindings(self) -> None:
         from tools.official_client_capture import claude_upgrade, claude_upgrade_capture
@@ -293,18 +322,7 @@ class FormalClientImportTests(seal_fixture._CandidateSealCase):
     """使用既有冻结 Campaign 输入源夹具；导入、outbox、项目总账和收据读侧全部执行真实代码。"""
 
     def setUp(self) -> None:
-        outer = tempfile.TemporaryDirectory()
-        self.addCleanup(outer.cleanup)
-        staging = Path(outer.name).resolve() / "staging"
-        staging.mkdir(mode=0o700)
-        original = tempfile.TemporaryDirectory
-
-        def temporary(*args, **kwargs):
-            kwargs.setdefault("dir", staging)
-            return original(*args, **kwargs)
-
-        with mock.patch.object(tempfile, "TemporaryDirectory", side_effect=temporary), mock.patch.dict(os.environ, {FIXTURE_ONLY_ENV: "1"}):
-            super().setUp()
+        super().setUp()
         self.attempt = self.campaign / "candidates" / seal_fixture.CANDIDATE / "attempts" / seal_fixture.ATTEMPT
         self.values = {"campaign_id": self.manifest["campaign_id"], "candidate_id": seal_fixture.CANDIDATE, "attempt_id": seal_fixture.ATTEMPT, "run_nonce": seal_fixture.RUN_NONCE}
         fixture.write(self.attempt / "attempt.json", {**self.values, "status": "awaiting_receipts", "evidence_roots": []})

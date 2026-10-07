@@ -139,6 +139,11 @@ def verify_task_attempt(attempt_root: Path, task: Mapping[str, Any]) -> None:
     require(all(current["attempt"].get(key) == task[key] for key in COORDINATES), "任务不是本候选 attempt")
     require(all(current[key] == task[key] for key in ("candidate_revision", "candidate", "catalog")), "任务候选身份或 Catalog 与当前构建不符")
     require(current["endpoint"] == task["execution"]["endpoint"], "任务 endpoint 不是当前候选网关")
+    if task["execution"]["source_scope"] == "formal":
+        from tools.official_client_capture import codex_upgrade_project_ledger as ledger
+
+        campaign = next(parent for parent in Path(attempt_root).parents if (parent / "campaign.json").is_file())
+        require(ledger.find_project_ledger(campaign, client="claude") == Path(task["execution"]["project_ledger"]), "任务项目总账不是本 Campaign 的总账")
 
 
 def validate_task(document: Mapping[str, Any]) -> dict[str, Any]:

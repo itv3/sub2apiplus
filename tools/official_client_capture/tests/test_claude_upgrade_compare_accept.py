@@ -64,7 +64,35 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
 
     # -- 世界 ------------------------------------------------------------------------------------------------
 
+    def assert_recorded_client_requests(self, world: dict[str, Any]) -> None:
+        """两条模拟 Mac 请求须精确进入原 Campaign 总账；上游实时零请求由离线来源与外壳网络隔离证明。"""
+        from tools.official_client_capture import claude_client_receipt_contract as contract
+        from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+        from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
+
+        root = world["materialized"]["attempt_root"]
+        self.assertEqual(project_ledger.find_project_ledger(world["campaign"], client="claude"), self.project_root)
+        keys: set[str] = set()
+        with client_fixture.source_scope():
+            for client_id, path in world["materialized"]["clients"]["client_bindings"].items():
+                verified = contract.verify_client_receipt(root, client_id, path)
+                keys.update(item["identity_key"] for item in verified["requests"])
+        head = project_ledger.replay_head(self.project_root)
+        self.assertEqual(len(keys), 2)
+        self.assertEqual(set(head["accounted_identity_index"]), keys)
+        self.assertEqual((head["precise_total"], head["estimated_total"]), (2, 0))
+
     def vc5_world(self, *, anthropic_version: str = "2023-06-01", profile_seam: bool = True) -> dict[str, Any]:
+        from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
+
+        # 本方法也供 VC-6 与连续链驱动借用；在首个 Campaign 建立前选择 staging，保留唯一真实项目总账。
+        if "staging" not in self.root.parts:
+            self.root = self.root / "staging"
+            self.data = self.root / "data"
+            (self.data / "evidence" / "campaigns").mkdir(parents=True, mode=0o700)
+        environment = mock.patch.dict(os.environ, {FIXTURE_ONLY_ENV: "1"})
+        environment.start()
+        self.addCleanup(environment.stop)
         campaign = self.drive_vc3_vc4_to_candidate_sealed()
         manifest = claude_upgrade.load_campaign_manifest(campaign)
         data_root = compare.data_root(campaign)
@@ -227,7 +255,7 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
             again = claude_upgrade.accept_campaign(campaign, CANDIDATE, None, world["gate_root"], Path(receipt))
         self.assertEqual(again["accepted_at_utc"], accepted["accepted_at_utc"])
         self.assertEqual((self.footprint(world), checkpoint_path.read_bytes()), before)
-        self.assert_zero_requests()
+        self.assert_recorded_client_requests(world)
 
     def test_failing_candidate_assert_batch_fails_and_accept_refuses_without_writes(self) -> None:
         world = self.vc5_world(anthropic_version="2023-01-01")
@@ -245,7 +273,7 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
             claude_upgrade.accept_campaign(campaign, CANDIDATE, None, world["gate_root"], Path(receipt))
         self.assertEqual(self.footprint(world), before)
         self.assertFalse((campaign / "acceptance").exists())
-        self.assert_zero_requests()
+        self.assert_recorded_client_requests(world)
 
     def test_failed_external_gate_records_round_without_accept_result(self) -> None:
         world = self.vc5_world()
@@ -281,7 +309,7 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
         profile = acceptance_contract.load_profile(campaign / frozen["path"])
         self.assertEqual(sorted(rule["rule_id"] for rule in profile["rules"]), sorted(world["approval"]["target_spec_ids"]))
         self.assertFalse((campaign / "comparisons").exists())
-        self.assert_zero_requests()
+        self.assert_recorded_client_requests(world)
 
 
 # ---------------------------------------------------------------------------
@@ -601,7 +629,7 @@ class RuntimeAuditAndClientReceiptTests(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.campaign = Path(directory.name).resolve() / "campaign"
+        self.campaign = Path(directory.name).resolve() / "staging" / "data" / "evidence" / "campaigns" / "claude-campaign"
         self.attempt_root = self.campaign / "seam" / "attempt-1"
         self.manifest = {"campaign_id": "claude-campaign", "target_version": evaluator_fixture.TARGET_VERSION}
         fact = chain.activation_fact(BUILD, evaluator_fixture.TARGET_VERSION)
@@ -655,6 +683,7 @@ class RuntimeAuditAndClientReceiptTests(unittest.TestCase):
         from tools.official_client_capture.tests import claude_client_receipt_fixture
 
         scenarios = chain._write_json(self.campaign / "inputs" / "scenarios.json", {"required_client_bindings": ["claude-desktop"], "required_boundary_checks": ["third-party-ingress-rejection"]})
+        chain._write_json(self.campaign / "campaign.json", {**self.manifest, "client": "claude"})
         values = {"campaign_id": "claude-campaign", "candidate_id": "cand-1", "attempt_id": "attempt-1", "run_nonce": "nonce-1"}
         chain._write_json(self.attempt_root / "attempt.json", {**self.attempt, "candidate_id": "cand-1"})
         desktop = claude_client_receipt_fixture.write_receipt(self.attempt_root, "claude-desktop", values)

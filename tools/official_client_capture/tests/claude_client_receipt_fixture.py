@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import os
 import tempfile
 from datetime import timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from unittest import mock
 
 from tools.official_client_capture import claude_client_receipt_contract as contract
 from tools.official_client_capture import codex_upgrade_project_ledger as ledger
+from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
 
 RECORDER = "fixture-recorded-client"
 NOW = "2026-10-08T00:00:00Z"
@@ -37,12 +39,39 @@ def temporary_root(path: Path) -> Path:
 
 
 def fixture_ledger(path: Path) -> Path:
+    """沿用 Campaign 实际账本；最小世界缺账本时只允许在其 staging 数据根原位创建。"""
     staging = temporary_root(path) / "staging"
-    campaigns = [parent for parent in path.parents if (parent / "campaign.json").is_file() and parent.parent.name == "campaigns" and parent.parent.parent.name == "evidence"]
-    data_root = campaigns[0].parents[2] if campaigns else None
-    root = data_root if data_root is not None and data_root.is_relative_to(staging) else staging / "mac-client-fixture"
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return ledger.create_fixture_ledger(root, client="claude")
+    campaign = next((parent for parent in path.parents if (parent / "campaign.json").is_file()), None)
+    contract.require(campaign is not None and campaign.is_relative_to(staging), "Mac 夹具 Campaign 必须在同一临时 staging 树")
+    root = ledger.find_project_ledger(campaign, client="claude")
+    if root is None:
+        data_root = campaign.parents[2] if campaign.parent.name == "campaigns" and campaign.parent.parent.name == "evidence" else campaign
+        data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        root = ledger.create_fixture_ledger(data_root, client="claude")
+    contract.require(root.is_relative_to(staging), "Mac 夹具不得改用 Campaign 之外的项目账本")
+    plan, _raw = ledger._load_plan(root)
+    contract.require(plan.get("fixture_only") is True and plan.get("client") == "claude", "Mac 夹具必须沿用 Campaign 的 Claude fixture_only 总账")
+    return root
+
+
+def install_staging_scope(test_case: Any) -> None:
+    """既有测试创建数据前启用 staging 临时根；账本仍由原 Campaign 注册流程建立。"""
+    outer = tempfile.TemporaryDirectory()
+    test_case.addCleanup(outer.cleanup)
+    staging = Path(outer.name).resolve() / "staging"
+    staging.mkdir(mode=0o700)
+    original = tempfile.TemporaryDirectory
+
+    def temporary(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("dir", staging)
+        return original(*args, **kwargs)
+
+    patch = mock.patch.object(tempfile, "TemporaryDirectory", side_effect=temporary)
+    patch.start()
+    test_case.addCleanup(patch.stop)
+    environment = mock.patch.dict(os.environ, {FIXTURE_ONLY_ENV: "1"})
+    environment.start()
+    test_case.addCleanup(environment.stop)
 
 
 class FixtureSourceAdapter:
@@ -85,7 +114,7 @@ def candidate_inputs(attempt_root: Path, values: Mapping[str, Any], client_id: s
     campaign = next((parent for parent in attempt_root.parents if (parent / "campaign.json").is_file()), temporary_root(attempt_root))
     if not (campaign / "campaign.json").exists():
         contract.require(not protected, "正式 attempt 缺少 Campaign 原件，不能由夹具补写")
-        write(campaign / "campaign.json", {"campaign_id": values["campaign_id"]})
+        write(campaign / "campaign.json", {"campaign_id": values["campaign_id"], "client": "claude"})
     build_path = campaign / "candidates" / values["candidate_id"] / "build-receipt.json"
     if not build_path.exists():
         contract.require(not protected, "正式 attempt 缺少构建原件，不能由夹具补写")

@@ -185,6 +185,7 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
     accept_action = compare_tests.CompareAcceptChainTests.accept_action
     gate_receipt = compare_tests.CompareAcceptChainTests.gate_receipt
     run_compare_and_assert = compare_tests.CompareAcceptChainTests.run_compare_and_assert
+    assert_recorded_client_requests = compare_tests.CompareAcceptChainTests.assert_recorded_client_requests
 
     # -- 世界与派发 -------------------------------------------------------------------------------------------
 
@@ -314,7 +315,7 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         code, _result, stderr = self.dispatch_vc6(world, 17, run)
         self.assertEqual(code, 1)
         self.assertIn("已登记 VC-6 在当前 revision 完成", stderr)
-        self.assert_zero_requests()
+        self.assert_recorded_client_requests(world)
 
 
 if __name__ == "__main__":
