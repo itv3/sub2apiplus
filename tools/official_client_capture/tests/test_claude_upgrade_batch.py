@@ -410,7 +410,8 @@ class StageResultAndReplayTests(_VC2Mixin, classify_tests._ClassifyCase):
 
     def test_vc2_replay_contract(self) -> None:
         campaign = self.build_campaign()
-        candidates = ["classify", "--campaign-dir", campaign, "--candidates", self.candidates_path(campaign)]
+        # 草案只有 --campaign-dir：分母与其它输入一律取 VC-1 封存（B2-07 补充项「VC-1 发现补全」）。
+        candidates = ["classify", "--campaign-dir", campaign]
         for phase, reason in (("VC-1", batch.VC1_REPLAY_REASON), ("VC-4", "VC-4 的动作 classify 没有阶段幂等合同"), ("VC-5", "VC-5 没有阶段幂等重派合同")):
             with self.subTest(phase=phase):
                 result = self.facts(campaign, phase, self.action("x", candidates))
@@ -420,7 +421,8 @@ class StageResultAndReplayTests(_VC2Mixin, classify_tests._ClassifyCase):
         self.assertEqual(set(draft), {"phase", "allowed", "actions", "reasons"})
         (only,) = draft["actions"]
         self.assertEqual(set(only), {"action_id", "command", "inputs", "outputs"})
-        self.assertEqual(only["inputs"], {"--candidates": claude_upgrade.file_sha256(self.candidates_path(campaign))})
+        official = campaign / "official" / "result.json"
+        self.assertEqual(only["inputs"], {"official/result.json": claude_upgrade.file_sha256(official)})
         self.assertNotIn("checkpoint", only["outputs"])
         # 形态不闭合：别的解释器、包装脚本、未登记旗标、重复旗标、别的 Campaign、未知子命令。
         other_python = self.root / "python3"
@@ -441,8 +443,9 @@ class StageResultAndReplayTests(_VC2Mixin, classify_tests._ClassifyCase):
         self.assertTrue(module_form["allowed"], module_form)
         for label, argv, pattern in (
             ("未登记旗标", [*candidates, "--approved-by", "x"], "没有精确闭合"),
-            ("重复旗标", [*candidates, "--candidates", self.candidates_path(campaign)], "重复"),
-            ("别的 Campaign", ["classify", "--campaign-dir", self.root, "--candidates", self.candidates_path(campaign)], "不是本 Campaign"),
+            ("重复旗标", [*candidates, "--campaign-dir", campaign], "重复"),
+            ("已取消的 --candidates", [*candidates, "--candidates", self.candidates_path(campaign)], "没有精确闭合"),
+            ("别的 Campaign", ["classify", "--campaign-dir", self.root], "不是本 Campaign"),
             ("未知子命令", ["stage-profile", "--campaign-dir", campaign], "没有阶段幂等合同"),
             ("参数不成对", [*candidates, "--dangling"], "不是成对"),
         ):
@@ -606,7 +609,7 @@ class AtomicBatchChainTests(_RealTreeBatchCase):
         facts_before = len(self.store_facts())
 
         # 批次 2：VC-2 首批（机器草案）零请求派发；no-op 首批先被代跑成父 run 历史。
-        draft_argv = ["classify", "--campaign-dir", campaign, "--candidates", self.candidates_path(campaign)]
+        draft_argv = ["classify", "--campaign-dir", campaign]
         result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, [self.classify_action("vc2-classify-draft", draft_argv)]), 2, "VC-2")
         self.assertEqual((result["bootstrap_noop_run"]["reason"], result["bootstrap_noop_run"]["batch_sequence"]), ("incremental-noop", 1))
         events = [(item["event_type"], item["phase"]) for item in result["timing_ledger"]["events"]]

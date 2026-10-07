@@ -15,10 +15,12 @@
 * **CaptureIndex**：逐 Job、逐 probe 复核中继清单（完整状态、probe 身份、客户端身份、运行镜像、M 绑定、秘密扫描、
   清理、中继完整性、响应模式），并列出不经 host 预过滤的全部 host／path 观测。请求计量不在这里：VC-1 checkpoint 的
   ``live_request_count`` 由控制流程按 B1-11（``claude_upgrade_live_request_provenance``）同一口径核算。
-* **DiscoveryInventory**（沿用 ``claude-code-fw-e-discovery-inventory/v1``）：目标 SinkInventory 的「未决」项
-  （``claude_target_inventory.unresolved_discovery_items``，处置 unclassified），再套用人工显式处置；只要还有
-  unclassified，闭合门禁就是 blocked。
-* **跨来源矩阵**：逐条必需规则绑定覆盖它的场景、probe 与证据项，缺证据即缺口；附 SinkInventory 与发现项摘要。
+* **DiscoveryInventory**（沿用 ``claude-code-fw-e-discovery-inventory/v1``）、**语义候选**与**正交候选分母**（B2-07 补充项
+  「VC-1 发现补全」，实现在 ``claude_upgrade_discovery``）：目标 SinkInventory 的每个 sink（AST 调用按 containment 精确调用
+  归并语义候选，词法命中按 containment 结构证据判定）、入口关系未决项，加冻结的历史候选基线逐项重放；再套用人工显式处置。
+  只要还有 unclassified，闭合门禁就是 blocked。三份都绑定进完整性清单，VC-2 直接从 VC-1 读取，不再要求显式输入分母。
+* **跨来源矩阵**：逐条必需规则绑定覆盖它的场景、probe 与证据项，缺证据即缺口；附 SinkInventory、历史候选基线、发现项、
+  语义候选与候选分母的摘要。
 * **EvidencePackage v3**：每个 probe 一个证据项（``EVIDENCE-<probe>``），只含 ``source_ids``（probe 所属场景）、外部
   证据绑定与适用条件，不含规则结论。深度扫描（``evidence_inventory``，seal 预览阶段唯一一次）之后才绑定摘要，
   并按 Store 的内容寻址算法预先算出流量观测策略、完整性清单与 EvidencePackage 的对象引用。
@@ -42,7 +44,7 @@ from typing import Any, Iterable, Mapping, Sequence
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tools.official_client_capture import claude_target_inventory
+from tools.official_client_capture import claude_upgrade_discovery
 from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, sha256_bytes
@@ -54,8 +56,9 @@ RELAY_MANIFEST_FILENAME = "relay-manifest.json"
 RELAY_INDEX_RELATIVE = Path("relay") / "relay.json"
 CAPTURE_MANIFEST_SCHEMA = "claude-upgrade-capture-manifest/v1"
 CAPTURE_INDEX_SCHEMA = "claude-upgrade-capture-index/v1"
-DISCOVERY_INVENTORY_SCHEMA = "claude-code-fw-e-discovery-inventory/v1"
-DISCOVERY_DISPOSITIONS_SCHEMA = "claude-upgrade-discovery-dispositions/v1"
+# 发现清单的合同名、条目字段、显式处置合同与词表定义在 ``claude_upgrade_discovery``（B2-07 补充项），这里沿用同名常量。
+DISCOVERY_INVENTORY_SCHEMA = claude_upgrade_discovery.DISCOVERY_INVENTORY_SCHEMA
+DISCOVERY_DISPOSITIONS_SCHEMA = claude_upgrade_discovery.DISCOVERY_DISPOSITIONS_SCHEMA
 CROSS_SOURCE_MATRIX_SCHEMA = "claude-upgrade-cross-source-matrix/v1"
 EVIDENCE_INVENTORY_SCHEMA = "claude-upgrade-evidence-inventory/v1"
 EVIDENCE_PACKAGE_V3_SCHEMA = "official-client-evidence-package/v3"
@@ -63,26 +66,16 @@ OPERATIONAL_EVIDENCE_SCHEMA = "official-client-operational-evidence/v1"
 COMPARISON_POLICY_MANIFEST_ID = "claude-upgrade-traffic-observation-policy"
 COMPLETENESS_MANIFEST_ID = "claude-upgrade-vc1-completeness"
 DISCOVERY_SOURCE = "claude-upgrade-vc1-official-seal"
-UNCLASSIFIED = "unclassified"
-# 人工显式处置可选的终态（沿用 FW-E 交叉矩阵的处置词表，去掉 unclassified）。
-EXPLICIT_DISPOSITIONS = frozenset(
-    {"mapped_historical", "mapped_managed", "record_only_disabled", "mapped_validation", "out_of_scope_proven", "catalogued_context"}
-)
-DISCOVERY_ITEM_FIELDS = (
-    "discovery_id",
-    "source_kind",
-    "proposition",
-    "disposition",
-    "semantic_candidate_ids",
-    "spec_ids",
-    "evidence_paths",
-    "rationale",
-)
+UNCLASSIFIED = claude_upgrade_discovery.UNCLASSIFIED
+EXPLICIT_DISPOSITIONS = claude_upgrade_discovery.EXPLICIT_DISPOSITIONS
+DISCOVERY_ITEM_FIELDS = claude_upgrade_discovery.DISCOVERY_ITEM_FIELDS
 # seal 草稿（写在 seal 目录的 drafts/ 下）：名字 → 文件名。
 DRAFT_FILES = {
     "capture_manifest": "capture-manifest.json",
     "capture_index": "capture-index.json",
     "discovery_inventory": "discovery-inventory.json",
+    "semantic_candidates": "semantic-candidates.json",
+    "candidate_denominator": "candidate-denominator.json",
     "cross_source_matrix": "cross-source-matrix.json",
 }
 # 完整性清单的固定绑定用途：名字 → 用途说明。路径由控制流程按 Campaign 坐标给出（``view["completeness_paths"]``），
@@ -90,9 +83,12 @@ DRAFT_FILES = {
 COMPLETENESS_PURPOSES = {
     "capture_manifest": "按证据标签逐连接贴标签的 capture manifest",
     "capture_index": "逐 Job／probe 复核中继清单与全 host／path 观测的 CaptureIndex",
-    "discovery_inventory": "含目标 SinkInventory 未决项的 DiscoveryInventory",
+    "discovery_inventory": "目标调用、历史原子、clue 与 Markdown 原子的完整 DiscoveryInventory",
+    "semantic_candidates": "以 source_ids 多对一归并的语义候选族（SemanticRuleCandidate）",
+    "candidate_denominator": "五组正交候选分母（目标发送点、语义候选族与三组历史候选）",
     "cross_source_matrix": "必需规则 × 场景 × 证据项的跨来源覆盖矩阵",
     "target_inventory": "VC-1 静态分析产出的目标 SinkInventory",
+    "sink_containment": "VC-1 静态分析对目标 SinkInventory 逐 sink 的 AST containment 结构证据",
     "dispositions": "发现项的人工显式处置",
     "attempt": "封存所依据的官方取证 attempt 收据",
     "evidence_labels": "Campaign 冻结的证据标签声明",
@@ -416,60 +412,31 @@ def _probe_checks(view: Mapping[str, Any], *, probe: str, context: Mapping[str, 
 # ---------------------------------------------------------------------------
 
 
-def build_discovery_inventory(view: Mapping[str, Any]) -> dict[str, Any]:
-    """目标 SinkInventory 的未决项（unclassified）套用人工显式处置；按 discovery_id 排序。"""
+def build_discovery_layers(view: Mapping[str, Any]) -> dict[str, Any]:
+    """完整 DiscoveryInventory、语义候选与正交候选分母（B2-07 补充项，算法在 ``claude_upgrade_discovery``）。
+
+    ``view["static"]`` 给出目标 SinkInventory（含文件摘要）、sink containment 证据与可选的人工显式处置；路径一律相对宿主
+    数据根。返回 ``discovery_inventory``、``semantic_candidates``、``candidate_denominator`` 与 ``historical_baseline`` 绑定。
+    """
 
     static = view["static"]
-    inventory = static["target_inventory"]
-    if inventory.get("target_version") != view["target_version"]:
-        raise SealEvidenceError("目标 SinkInventory 的版本与 Campaign 目标版本不一致。")
     try:
-        unresolved = claude_target_inventory.unresolved_discovery_items(dict(inventory), [static["target_inventory_path"]])
-    except (claude_target_inventory.TargetInventoryError, KeyError, TypeError) as error:
-        raise SealEvidenceError(f"目标 SinkInventory 不能给出未决发现项：{error}") from error
-    items: dict[str, dict[str, Any]] = {}
-    for raw in unresolved:
-        if set(raw) != set(DISCOVERY_ITEM_FIELDS) or raw["discovery_id"] in items:
-            raise SealEvidenceError(f"未决发现项字段不闭合或重复：{raw.get('discovery_id')}")
-        items[str(raw["discovery_id"])] = {field: raw[field] for field in DISCOVERY_ITEM_FIELDS}
-    dispositions = static.get("dispositions")
-    if dispositions is not None:
-        if (
-            set(dispositions) != {"schema_version", "target_version", "items"}
-            or dispositions.get("schema_version") != DISCOVERY_DISPOSITIONS_SCHEMA
-            or dispositions.get("target_version") != view["target_version"]
-            or not isinstance(dispositions.get("items"), list)
-        ):
-            raise SealEvidenceError("发现项显式处置文件的合同名、版本或 items 非法。")
-        seen: set[str] = set()
-        for raw in dispositions["items"]:
-            if not isinstance(raw, Mapping) or set(raw) != {"discovery_id", "disposition", "rationale"}:
-                raise SealEvidenceError("发现项显式处置条目字段不闭合。")
-            discovery_id = str(raw["discovery_id"])
-            if discovery_id in seen or discovery_id not in items:
-                raise SealEvidenceError(f"显式处置指向重复或不存在的发现项：{discovery_id}")
-            if raw["disposition"] not in EXPLICIT_DISPOSITIONS or not isinstance(raw["rationale"], str) or not raw["rationale"].strip():
-                raise SealEvidenceError(f"发现项 {discovery_id} 的显式处置非法（处置须是终态、理由不能为空）。")
-            seen.add(discovery_id)
-            items[discovery_id] = {
-                **items[discovery_id],
-                "disposition": raw["disposition"],
-                "rationale": raw["rationale"],
-                "evidence_paths": sorted({*items[discovery_id]["evidence_paths"], str(static["dispositions_path"])}),
-            }
-    ordered = [items[key] for key in sorted(items)]
-    return {
-        "schema_version": DISCOVERY_INVENTORY_SCHEMA,
-        "target_version": view["target_version"],
-        "item_count": len(ordered),
-        "counts_by_source_kind": dict(sorted(Counter(str(item["source_kind"]) for item in ordered).items())),
-        "counts_by_disposition": dict(sorted(Counter(str(item["disposition"]) for item in ordered).items())),
-        "items": ordered,
-        "rule_generation": "forbidden",
-    }
+        return claude_upgrade_discovery.build_discovery_layers(
+            campaign_id=str(view["campaign_id"]),
+            target_version=str(view["target_version"]),
+            inventory=static["target_inventory"],
+            inventory_path=str(static["target_inventory_path"]),
+            inventory_sha256=str(static["target_inventory_sha256"]),
+            containment=static["sink_containment"],
+            containment_path=str(static["sink_containment_path"]),
+            dispositions=static.get("dispositions"),
+            dispositions_path=static.get("dispositions_path"),
+        )
+    except claude_upgrade_discovery.DiscoveryCompletionError as error:
+        raise SealEvidenceError(str(error)) from error
 
 
-def _cross_source_matrix(view: Mapping[str, Any], evidence_probes: Mapping[str, Any], discovery: Mapping[str, Any]) -> dict[str, Any]:
+def _cross_source_matrix(view: Mapping[str, Any], evidence_probes: Mapping[str, Any], layers: Mapping[str, Any]) -> dict[str, Any]:
     scenarios = view["scenarios"]["evidence_scenarios"]
     rows = []
     for spec_id in view["required_rules"]:
@@ -487,23 +454,37 @@ def _cross_source_matrix(view: Mapping[str, Any], evidence_probes: Mapping[str, 
         )
     inventory = view["static"]["target_inventory"]
     sinks = inventory.get("sinks") if isinstance(inventory.get("sinks"), list) else []
+    discovery = layers["discovery_inventory"]
+    semantic = layers["semantic_candidates"]
+    denominator = layers["candidate_denominator"]
     return {
         "schema_version": CROSS_SOURCE_MATRIX_SCHEMA,
         "campaign_id": view["campaign_id"],
         "target_version": view["target_version"],
         "attempt_id": view["attempt"]["attempt_id"],
-        "sources": ["official_runtime_capture", "target_sink_inventory"],
+        "sources": ["historical_candidate_baseline", "official_runtime_capture", "sink_containment", "target_sink_inventory"],
         "rules": rows,
         "rule_gaps": [row["spec_id"] for row in rows if row["status"] == "gap"],
         "sinks": {
             "inventory_path": view["static"]["target_inventory_path"],
+            "containment_path": view["static"]["sink_containment_path"],
             "sink_count": len(sinks),
             "unresolved_entry_count": len(inventory.get("unresolved_entries") or []),
         },
+        "historical_baseline": dict(layers["historical_baseline"]),
         "discovery": {
             "item_count": discovery["item_count"],
+            "counts_by_source_kind": discovery["counts_by_source_kind"],
             "counts_by_disposition": discovery["counts_by_disposition"],
             "unclassified_ids": [item["discovery_id"] for item in discovery["items"] if item["disposition"] == UNCLASSIFIED],
+        },
+        "semantic_candidates": {
+            "candidate_count": semantic["candidate_count"],
+            "counts_by_evidence_level": semantic["counts_by_evidence_level"],
+        },
+        "candidate_denominator": {
+            "counts": denominator["counts"],
+            "total_orthogonal_candidates": denominator["total_orthogonal_candidates"],
         },
     }
 
@@ -577,8 +558,8 @@ def build_seal_drafts(view: Mapping[str, Any], *, inventory: Mapping[str, Any] |
     ``campaign_id``、``target_version``、``target_sha256``、``runtime_image``；``attempt``（``attempt_id``、``run_nonce``、
     ``started_at_utc``、``completed_at_utc``）；``jobs``（``job_id``、``evidence_root``、``probe_ids``）；``required_rules``；
     ``scenarios``（冻结的场景清单）与 ``labels_path``（冻结的证据标签，绝对路径）；``probes``／``surfaces``
-    （``scan_relay_evidence`` 的结果）；``static``（``target_inventory``、``target_inventory_path``、可选的 ``dispositions``
-    与 ``dispositions_path``）；``store``（Store Campaign 的 ``persona``、``official_artifacts``、``platforms``、
+    （``scan_relay_evidence`` 的结果）；``static``（``target_inventory``、``target_inventory_path``、``target_inventory_sha256``、
+    ``sink_containment``、``sink_containment_path``、可选的 ``dispositions`` 与 ``dispositions_path``）；``store``（Store Campaign 的 ``persona``、``official_artifacts``、``platforms``、
     ``entrypoints``、``default_conditions`` 与导出的 ``platform``、``privacy_mode``）；``tool_files_sha256``（Store
     有效工具身份）；``completeness_paths``（``COMPLETENESS_PURPOSES`` 各项的文件路径，可选项可为 None）。
     """
@@ -632,8 +613,9 @@ def build_seal_drafts(view: Mapping[str, Any], *, inventory: Mapping[str, Any] |
             )
         index_jobs.append({"job_id": job_id, "evidence_root": job["evidence_root"], "probes": index_probes})
     artifacts.sort(key=lambda item: (item["path"], json.dumps(item["labels"], sort_keys=True)))
-    discovery = build_discovery_inventory(view)
-    matrix = _cross_source_matrix(view, evidence_probes, discovery)
+    layers = build_discovery_layers(view)
+    discovery = layers["discovery_inventory"]
+    matrix = _cross_source_matrix(view, evidence_probes, layers)
     reasons = [
         reason
         for reason, present in (
@@ -670,6 +652,8 @@ def build_seal_drafts(view: Mapping[str, Any], *, inventory: Mapping[str, Any] |
             "result": "failed" if failures else "passed",
         },
         "discovery_inventory": discovery,
+        "semantic_candidates": layers["semantic_candidates"],
+        "candidate_denominator": layers["candidate_denominator"],
         "cross_source_matrix": matrix,
     }
     evidence_items = [
@@ -690,6 +674,8 @@ def build_seal_drafts(view: Mapping[str, Any], *, inventory: Mapping[str, Any] |
             "artifact_count": len(artifacts),
             "evidence_item_count": len(evidence_items),
             "discovery_item_count": discovery["item_count"],
+            "semantic_candidate_count": layers["semantic_candidates"]["candidate_count"],
+            "orthogonal_candidate_count": layers["candidate_denominator"]["total_orthogonal_candidates"],
         },
     }
     if inventory is not None:

@@ -9,9 +9,10 @@
 * 标签错位（有效连接顺序与证据标签不一致）在预览阶段即让闭合门禁 blocked，不能批准。
 * 只读复用路径（B2-09 挪来）：写本 Campaign 的 Discovery／Evidence（引用导入包）、阶段结果与 VC-1 checkpoint，补「VC-0
   完成、VC-1 开始、VC-1 完成」三条计时账本事件；冲突预检在任何 Store 写入之前拒绝；SIGKILL 后重跑收敛，事件不重复。
-* evidence 闭包涉及的模块集合锁定：只有编排器四个 evidence 根、``claude_upgrade_evidence``、``claude_upgrade_plan`` 的标签
-  加载与匹配、``canonical`` 三个函数与 ``ControlError``，加整文件的 ``claude_target_inventory`` 与 ``contracts``；seal 控制
-  流程、Store 写入与 ``load_campaign_manifest`` 都不在其中。
+* evidence 闭包涉及的模块集合锁定：只有编排器四个 evidence 根、``claude_upgrade_evidence``、发现补全
+  ``claude_upgrade_discovery``（B2-07 补充项）、``claude_upgrade_plan`` 的标签加载与匹配、``canonical`` 三个函数与
+  ``ControlError``，加整文件的 ``claude_target_inventory``、``contracts`` 与两个 FW-E 历史工具（语义候选目录与归并词表、
+  非流量结构结论闭集）；seal 控制流程、Store 写入与 ``load_campaign_manifest`` 都不在其中。
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from unittest import mock
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_capture as capture
+from tools.official_client_capture import claude_upgrade_discovery as discovery_module
 from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import claude_upgrade_seal as seal
@@ -139,10 +141,20 @@ with open(os.path.join(output, "relay-manifest.json"), "w", encoding="utf-8") as
 sys.exit(0)
 '''
 
+# 目标 SinkInventory：一个精确 AST 调用（归并语义候选）、一个被 containment 判为非流量的词法命中，加两个入口未决项。
 TARGET_INVENTORY = {
     "schema_version": "claude-code-target-sink-inventory/v1",
     "target_version": TARGET,
-    "sinks": [{"sink_id": "SINK-0001", "category": "network", "module": "0000-cli.js"}],
+    "sinks": [
+        {
+            "sink_id": "TN-SINK-0001-1", "source_kind": "ast_call", "category": "fetch_call", "module": "0000-cli.js",
+            "source_start": 100, "source_end": 160, "owner_symbol": "sendMessages",
+        },
+        {
+            "sink_id": "TN-LEX-0001", "source_kind": "lexical_only", "category": "lexical_candidate_messages_create",
+            "module": "0004-docs.js", "source_start": 500, "source_end": 500, "owner_symbol": "Ugh",
+        },
+    ],
     "unresolved_entries": [
         {"unresolved_id": "UNRESOLVED-EDGE-0001", "kind": "dynamic_edge", "module": "0000-cli.js", "source_start": 1234, "edge_kind": "require"},
         {"unresolved_id": "UNRESOLVED-MODULE-0001", "kind": "module", "module": "0003-chunk.js", "reason": "no_confirmed_entry_path"},
@@ -156,6 +168,28 @@ DISPOSITIONS = {
         {"discovery_id": "UNRESOLVED-MODULE-0001", "disposition": "catalogued_context", "rationale": "模块只含 UI 资源，不产生出站请求。"},
     ],
 }
+
+
+def sink_containment(inventory_path: Path) -> dict[str, Any]:
+    """对 ``TARGET_INVENTORY`` 的 containment 证据：绑定目标清单文件的摘要，精确调用带调用原文，词法命中判为非流量。"""
+
+    return {
+        "schema_version": discovery_module.CONTAINMENT_SCHEMA,
+        "target_version": TARGET,
+        "inventory": {"path": "analysis/target-inventory.json", "sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest()},
+        "completeness": {"target_sink_count": 2, "evidence_row_count": 2, "unmatched_sink_ids": [], "result": "passed"},
+        "evidence": [
+            {
+                "sink_id": "TN-SINK-0001-1", "source_kind": "ast_call", "category": "fetch_call", "module": "0000-cli.js",
+                "structural_finding": "exact_ast_call",
+                "call": {"excerpt": 'fetch(`${base}/v1/messages`,{method:"POST",headers:h})', "callee_tail": ["fetch"]},
+            },
+            {
+                "sink_id": "TN-LEX-0001", "source_kind": "lexical_only", "category": "lexical_candidate_messages_create",
+                "module": "0004-docs.js", "structural_finding": "non_executable_literal",
+            },
+        ],
+    }
 
 
 def _write_json(path: Path, payload: Any) -> Path:
@@ -277,6 +311,7 @@ class EvidenceClosureTests(unittest.TestCase):
             set(by_module),
             {
                 capture_package + "claude_upgrade",
+                capture_package + "claude_upgrade_discovery",
                 capture_package + "claude_upgrade_evidence",
                 capture_package + "claude_upgrade_plan",
                 control_package + "canonical",
@@ -285,8 +320,17 @@ class EvidenceClosureTests(unittest.TestCase):
         )
         self.assertEqual(
             {item["module"] for item in closure["modules"]},
-            {capture_package + "claude_target_inventory", control_package + "contracts"},
+            {
+                capture_package + "claude_fw_e_dispositions",
+                capture_package + "claude_fw_e_validation_closure",
+                capture_package + "claude_target_inventory",
+                control_package + "contracts",
+            },
         )
+        discovery_symbols = by_module[capture_package + "claude_upgrade_discovery"]
+        self.assertTrue({"build_discovery_layers", "load_historical_baseline", "target_discovery_items"} <= discovery_symbols)
+        # 冻结历史基线的生成命令只在一次性冻结时用，不在 evidence 闭包里。
+        self.assertFalse({"build_historical_baseline", "main"} & discovery_symbols)
         self.assertEqual(
             by_module[capture_package + "claude_upgrade"],
             {"scan_evidence", "_evidence_inventory", "_finalize_scenario_receipt", "_seal_capture_attempt"},
@@ -299,8 +343,12 @@ class EvidenceClosureTests(unittest.TestCase):
             self.assertNotIn(name, plan_symbols)
         evidence_symbols = by_module[capture_package + "claude_upgrade_evidence"]
         self.assertTrue({"build_seal_drafts", "scan_relay_evidence", "evidence_inventory", "relay_probe_view"} <= evidence_symbols)
-        for path in ("claude_upgrade_evidence.py", "claude_upgrade_seal.py", "claude_upgrade_vc.py"):
+        for path in ("claude_upgrade_evidence.py", "claude_upgrade_discovery.py", "claude_upgrade_seal.py", "claude_upgrade_vc.py"):
             self.assertEqual(claude_identity.classify_path(policy, f"official_client_capture/{path}"), "control")
+        # 冻结的历史候选基线是 evidence 层整文件：内容变化即 evidence 语义变化。
+        self.assertEqual(
+            claude_identity.classify_path(policy, f"official_client_capture/{discovery_module.BASELINE_FILENAME}"), "evidence_semantics"
+        )
         self.assertEqual(claude_identity.compute_identity(policy, REPOSITORY_ROOT)["defaulted_paths"], [])
 
     def test_finalize_scenario_receipt_fails_closed(self) -> None:
@@ -440,6 +488,7 @@ class _SealCampaignCase(capture_tests.CaptureFixture):
         # 合成 Store 的外部文件（官方产物、bootstrap 来源）放进宿主数据根：Store 外部证据重放以数据根为 external root。
         shutil.copytree(fixture.external_root, self.data, dirs_exist_ok=True)
         self.inventory_path = _write_json(campaign / "analysis" / "target-inventory.json", TARGET_INVENTORY)
+        self.containment_path = _write_json(campaign / "analysis" / "sink-containment.json", sink_containment(self.inventory_path))
         self.dispositions_path = _write_json(campaign / "analysis" / "discovery-dispositions.json", DISPOSITIONS)
         return campaign
 
@@ -450,7 +499,10 @@ class _SealCampaignCase(capture_tests.CaptureFixture):
         return str(result["attempt_id"])
 
     def seal_argv(self, campaign: Path, attempt_id: str, *extra: str, dispositions: bool = True) -> list[str]:
-        argv = ["capture-official", "seal", "--campaign-dir", str(campaign), "--attempt-id", attempt_id, "--target-inventory", str(self.inventory_path)]
+        argv = [
+            "capture-official", "seal", "--campaign-dir", str(campaign), "--attempt-id", attempt_id,
+            "--target-inventory", str(self.inventory_path), "--sink-containment", str(self.containment_path),
+        ]
         if dispositions:
             argv += ["--discovery-dispositions", str(self.dispositions_path)]
         return [*argv, *extra]
@@ -515,7 +567,31 @@ class CapturedSealChainTests(_SealCampaignCase):
             self.assertEqual(manifest_draft["label_mismatches"], [])
             self.assertEqual(len(draft["evidence_items"]), 42)
             self.assertEqual(matrix["rule_gaps"], [])
-            self.assertEqual(sorted(item["disposition"] for item in discovery["items"]), ["catalogued_context", "out_of_scope_proven"])
+            # 完整发现清单（B2-07 补充项）：目标 sink 两项、入口未决两项（已显式处置），加历史候选基线逐项重放。
+            history = discovery_module.load_historical_baseline()
+            by_id = {item["discovery_id"]: item for item in discovery["items"]}
+            self.assertEqual(discovery["item_count"], 4 + len(history["items"]))
+            self.assertEqual(
+                {key: by_id[key]["disposition"] for key in ("TN-SINK-0001-1", "TN-LEX-0001", "UNRESOLVED-EDGE-0001", "UNRESOLVED-MODULE-0001")},
+                {
+                    "TN-SINK-0001-1": "mapped_semantic_candidate", "TN-LEX-0001": "out_of_scope_proven",
+                    "UNRESOLVED-EDGE-0001": "out_of_scope_proven", "UNRESOLVED-MODULE-0001": "catalogued_context",
+                },
+            )
+            self.assertIn("CAND-EP-FULLSET", by_id["TN-SINK-0001-1"]["semantic_candidate_ids"])
+            self.assertTrue(all(by_id[item["discovery_id"]] == item for item in history["items"]))
+            denominator = json.loads((seal_dir / seal.DRAFTS_DIRNAME / "candidate-denominator.json").read_text(encoding="utf-8"))
+            semantic = json.loads((seal_dir / seal.DRAFTS_DIRNAME / "semantic-candidates.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                denominator["counts"],
+                {"historical_rules": 57, "hitcc_documents_2_1_197": 71, "semantic_candidate_families": 32, "source_mechanisms_2_1_88": 102, "target_send_points": 1},
+            )
+            self.assertEqual(semantic["candidate_count"], 32)
+            self.assertEqual(
+                (draft["metrics"]["discovery_item_count"], draft["metrics"]["orthogonal_candidate_count"]),
+                (discovery["item_count"], 263),
+            )
+            self.assertEqual(matrix["historical_baseline"], history["binding"])
             background = next(item for job in index["jobs"] for item in job["probes"] if item["probe_id"] == "v4-background")
             self.assertEqual(background["excluded_connection_ids"], self.sequences["probes"]["v4-background"]["excluded_connection_ids"])
             package = next(item for item in draft["seal"]["objects"] if item["name"] == "evidence_package")["payload"]

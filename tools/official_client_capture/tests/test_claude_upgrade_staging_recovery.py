@@ -147,7 +147,7 @@ class _StagingCase(batch_tests._RealTreeBatchCase):
     """B3-01 的批次夹具加上 P1～P4 需要的读取与驱动。"""
 
     def draft_actions(self, campaign: Path) -> list[dict[str, Any]]:
-        argv = ["classify", "--campaign-dir", campaign, "--candidates", self.candidates_path(campaign)]
+        argv = ["classify", "--campaign-dir", campaign]
         return [batch.managed_action("vc2-classify-draft", "VC-2:vc2-classify-draft", argv, item_ids=["vc2-classify-draft"])]
 
     def head(self) -> dict[str, Any]:

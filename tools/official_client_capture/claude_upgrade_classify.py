@@ -19,8 +19,9 @@
 
   两种草案：
 
-  - **机器草案**（``--candidates``）：由输入确定性生成且全部未决——每条基线规则的迁移决定与证据等级都是 ``blocked``，
-    每个发现项、候选与只记录事实的终态绑定都为空；不按旧结论、相同字符串或摘要相近预填 ``inherit``（指南 §4.2.1 第 2 步）。
+  - **机器草案**（只给 ``--campaign-dir``）：由 VC-1 封存的输入确定性生成且全部未决——每条基线规则的迁移决定与证据等级
+    都是 ``blocked``，每个发现项、候选与只记录事实的终态绑定都为空；不按旧结论、相同字符串或摘要相近预填 ``inherit``
+    （指南 §4.2.1 第 2 步）。
     只预填不构成结论的线索：跨来源矩阵给出的规则证据项、这些证据项共有的适用条件，以及 VC-1 处置、语义候选与 SPEC
     关联（原样抄录为只读字段）。同一输入重跑返回同一 revision。
   - **修订**（``--from-revision`` + ``--revision-input``）：审核人把某个 revision 的六个文件复制出去逐项处置，再整目录交回；
@@ -44,13 +45,13 @@
 * VC-1：``control/vc/vc-1-checkpoint.json`` 逐级重放到 VC-0，它绑定的阶段结果 ``official/result.json`` 给出 Store 的
   EvidenceFact 与 EvidencePackage 引用；Store 检查点必须是 ``evidence_recorded``，有效工具身份必须等于当前受管代码。
   VC-1 封存对象一律经 Store 取：EvidencePackage v3 → 完整性清单（``completeness_ref``）→ 按用途找到 DiscoveryInventory、
-  CaptureIndex、跨来源矩阵、目标 SinkInventory 与目标场景清单的绑定，按宿主数据根解析并逐个核摘要与字节数。采集路径与
-  前序只读复用路径（完整性清单来自前序 Campaign）走同一条读法。
+  正交候选分母、CaptureIndex、跨来源矩阵、目标 SinkInventory 与目标场景清单的绑定，按宿主数据根解析并逐个核摘要与字节数。
+  采集路径与前序只读复用路径（完整性清单来自前序 Campaign）走同一条读法。
 * 基线：总计划冻结了 ``inputs.baseline_rules`` 时用冻结副本，否则用受管工具根下的 ``claude_required_rules_<基线>.json``；
   规则编号必须与总计划 ``required_rules`` 逐条一致。
-* 语义候选分母：``--candidates`` 给出的 Campaign 内文件（``claude-code-fw-e-complete-candidate-denominator/v1``，按组列出
-  候选）。B2-07 的 VC-1 封存没有把语义候选纳入完整性清单，这里以显式输入承接，并把文件绑定写进每个 revision 的输入，
-  修订与批准时重核。
+* 语义候选分母：VC-1 封存的正交候选分母（``claude-code-fw-e-complete-candidate-denominator/v1``，按组列出候选；B2-07
+  补充项「VC-1 发现补全」起由 seal 的受管生成器产出并绑定进完整性清单），与其它 VC-1 对象一起进每个 revision 的输入绑定，
+  修订与批准时重核。原先的显式输入 ``--candidates`` 已取消：分母只有 VC-1 这一个来源。
 * 分母：发现项数＝DiscoveryInventory 条目数；候选数＝分母文件各组候选 ID 之并（各组声明的计数与总数必须与实际一致）；
   原子断言数与规则数＝基线清单的原子断言归属与 RequiredRules（机器草案的起点）；只记录事实数＝封存证据里识别出的条目数。
   2.1.226 夹具的草案分母因此等于历史清零收据（7368／593／110／40），换版时随目标证据变化。
@@ -212,7 +213,14 @@ SUPPORTING_FACT_OWNERS = frozenset({"required_rule", "profile_fact", "condition_
 OBSERVED_ABSENT_BINDINGS = frozenset({"supporting_fact_bound", "target_absent_proven"})
 
 # VC-1 完整性清单里 VC-2 要读的封存对象（名字取 claude_upgrade_evidence.COMPLETENESS_PURPOSES）。
-VC1_OBJECTS = ("discovery_inventory", "capture_index", "cross_source_matrix", "target_inventory", "target_scenarios")
+VC1_OBJECTS = (
+    "discovery_inventory",
+    "candidate_denominator",
+    "capture_index",
+    "cross_source_matrix",
+    "target_inventory",
+    "target_scenarios",
+)
 
 RULE_MANIFEST_FIELDS = frozenset(
     {
@@ -285,14 +293,6 @@ def _observed_only_catalog() -> tuple[Mapping[str, Mapping[str, str]], str]:
 def add_classify_arguments(target: argparse.ArgumentParser) -> None:
     """``classify`` 的参数（``--campaign-dir`` 由编排器统一添加）。"""
 
-    target.add_argument(
-        "--candidates",
-        type=Path,
-        help=(
-            f"机器草案：VC-1 语义候选分母（{CANDIDATE_DENOMINATOR_SCHEMA}，Campaign 目录内文件）；"
-            "修订与批准沿用 revision 绑定的同一文件。"
-        ),
-    )
     target.add_argument("--from-revision", help="修订：父 revision 编号（rev-NNNN）。")
     target.add_argument("--revision-input", type=Path, help="修订：审核人处置后的六个草案文件所在目录（可另含 draft.json，忽略）。")
     target.add_argument("--approve-revision", help="批准：要批准的 revision 编号。")
@@ -300,7 +300,6 @@ def add_classify_arguments(target: argparse.ArgumentParser) -> None:
 
 
 def _command_mode(arguments: argparse.Namespace) -> str:
-    candidates = getattr(arguments, "candidates", None)
     parent = getattr(arguments, "from_revision", None)
     revision_input = getattr(arguments, "revision_input", None)
     approve = getattr(arguments, "approve_revision", None)
@@ -308,17 +307,13 @@ def _command_mode(arguments: argparse.Namespace) -> str:
     if approve is not None or approve_sha is not None:
         if approve is None or approve_sha is None:
             raise ConfigurationError("批准必须同时给出 --approve-revision 与 --approve-review-sha256。")
-        if candidates is not None or parent is not None or revision_input is not None:
-            raise ConfigurationError("批准不接受 --candidates／--from-revision／--revision-input：输入一律取被批准 revision 的绑定。")
+        if parent is not None or revision_input is not None:
+            raise ConfigurationError("批准不接受 --from-revision／--revision-input：输入一律取被批准 revision 的绑定。")
         return "approve"
     if parent is not None or revision_input is not None:
         if parent is None or revision_input is None:
             raise ConfigurationError("修订必须同时给出 --from-revision 与 --revision-input。")
-        if candidates is not None:
-            raise ConfigurationError("修订沿用父 revision 的语义候选分母绑定，不接受 --candidates。")
         return "revise"
-    if candidates is None:
-        raise ConfigurationError("机器草案必须提供 --candidates（VC-1 语义候选分母）。")
     return "draft"
 
 
@@ -344,7 +339,7 @@ def classify_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
             return _approve(campaign_dir, manifest, str(arguments.approve_revision), str(arguments.approve_review_sha256)), 0
         if mode == "revise":
             return _revise(campaign_dir, manifest, str(arguments.from_revision), Path(arguments.revision_input)), 2
-        return _machine_draft(campaign_dir, manifest, Path(arguments.candidates)), 2
+        return _machine_draft(campaign_dir, manifest), 2
 
 
 # ---------------------------------------------------------------------------
@@ -671,10 +666,9 @@ def _discovery_rows(inventory: Mapping[str, Any], target_version: str) -> list[d
     return [rows[key] for key in sorted(rows)]
 
 
-def _candidate_rows(path: Path, target_version: str) -> list[dict[str, Any]]:
-    """语义候选分母 → 候选分区的只读字段（按 ID 排序）；各组计数与总数必须与实际候选一致。"""
+def _candidate_rows(payload: Mapping[str, Any], target_version: str) -> list[dict[str, Any]]:
+    """VC-1 正交候选分母 → 候选分区的只读字段（按 ID 排序）；各组计数与总数必须与实际候选一致。"""
 
-    payload = _read_json(path, "语义候选分母")
     if payload.get("schema_version") != CANDIDATE_DENOMINATOR_SCHEMA or payload.get("target_version") != target_version:
         raise ConfigurationError(f"语义候选分母的合同名或目标版本不符（需要 {CANDIDATE_DENOMINATOR_SCHEMA}、{target_version}）。")
     groups = payload.get("candidate_groups")
@@ -840,14 +834,7 @@ def _observed_only_facts(
     return [facts[key] for key in sorted(facts)], sources
 
 
-def _candidate_binding(campaign_dir: Path, path: Path) -> dict[str, Any]:
-    relative = _relative_to(path, campaign_dir)
-    if relative is None or path.is_symlink() or not path.is_file():
-        raise ConfigurationError(f"语义候选分母必须是 Campaign 目录内的可信普通文件：{path}")
-    return {"path": relative, "sha256": file_sha256(path), "bytes": path.stat().st_size}
-
-
-def collect_inputs(campaign_dir: Path, manifest: Mapping[str, Any], candidates_path: Path) -> ClassificationInputs:
+def collect_inputs(campaign_dir: Path, manifest: Mapping[str, Any]) -> ClassificationInputs:
     """读取并核对 VC-2 的全部输入（指南 §4.2.1 第 1 步）：任一输入漂移或 VC-1 未闭合都不得开始分类。"""
 
     orchestrator = _orchestrator()
@@ -924,8 +911,7 @@ def collect_inputs(campaign_dir: Path, manifest: Mapping[str, Any], candidates_p
     baseline_payload = _read_json(baseline_path, "基线 RequiredRules 清单")
     baseline = rule_manifest_view(baseline_payload, expected_version=baseline_version, label="基线 RequiredRules 清单")
     discoveries = _discovery_rows(objects["discovery_inventory"], target_version)
-    candidates_binding = _candidate_binding(campaign_dir, Path(candidates_path))
-    candidates = _candidate_rows(Path(candidates_path), target_version)
+    candidates = _candidate_rows(objects["candidate_denominator"], target_version)
     observed, observed_sources = _observed_only_facts(items, data_root, scenarios)
     classification = [
         fact
@@ -953,7 +939,6 @@ def collect_inputs(campaign_dir: Path, manifest: Mapping[str, Any], candidates_p
         },
         "vc1_objects": object_bindings,
         "baseline_rules": {"path": baseline_shown, "sha256": file_sha256(baseline_path)},
-        "candidates": candidates_binding,
         "observed_only_sources": observed_sources,
     }
     return ClassificationInputs(
@@ -1025,7 +1010,7 @@ def _ledger_sources(inputs: ClassificationInputs) -> dict[str, Any]:
         "cross_source_matrix": dict(objects["cross_source_matrix"]),
         "target_inventory": dict(objects["target_inventory"]),
         "evidence_package_ref": dict(inputs.evidence_package_ref),
-        "candidates": dict(inputs.bindings["candidates"]),
+        "candidates": dict(objects["candidate_denominator"]),
     }
 
 
@@ -1897,13 +1882,6 @@ def _read_revision_input(directory: Path) -> dict[str, bytes]:
     return files
 
 
-def _bound_candidates_path(campaign_dir: Path, receipt: Mapping[str, Any]) -> Path:
-    binding = (receipt.get("inputs") or {}).get("candidates")
-    if not isinstance(binding, Mapping) or not isinstance(binding.get("path"), str):
-        raise ConfigurationError("revision 收据缺少语义候选分母绑定。")
-    return campaign_dir / str(binding["path"])
-
-
 def _refuse_after_classification(campaign_dir: Path, inputs: ClassificationInputs | None = None) -> None:
     """已批准（或 Store 已记录分类事实）后不再生成草案：封存后变化须建立后继 Campaign 并从 VC-2 继续。"""
 
@@ -1953,11 +1931,9 @@ def _draft_summary(
     }
 
 
-def _machine_draft(campaign_dir: Path, manifest: Mapping[str, Any], candidates: Path) -> dict[str, Any]:
+def _machine_draft(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
     _refuse_after_classification(campaign_dir)
-    path = claude_upgrade_seal._campaign_input_file(campaign_dir, candidates, "语义候选分母（--candidates）")
-    assert path is not None
-    inputs = collect_inputs(campaign_dir, manifest, path)
+    inputs = collect_inputs(campaign_dir, manifest)
     _refuse_after_classification(campaign_dir, inputs)
     files = machine_draft_files(inputs)
     revision, receipt, reused = _publish_revision(campaign_dir, inputs, files, origin=MACHINE_DRAFT, parent=None)
@@ -1967,10 +1943,10 @@ def _machine_draft(campaign_dir: Path, manifest: Mapping[str, Any], candidates: 
 def _revise(campaign_dir: Path, manifest: Mapping[str, Any], parent: str, directory: Path) -> dict[str, Any]:
     _refuse_after_classification(campaign_dir)
     parent_receipt, _parent_files = load_revision(campaign_dir, str(manifest["campaign_id"]), parent)
-    inputs = collect_inputs(campaign_dir, manifest, _bound_candidates_path(campaign_dir, parent_receipt))
+    inputs = collect_inputs(campaign_dir, manifest)
     _refuse_after_classification(campaign_dir, inputs)
     if inputs.sha256 != parent_receipt["inputs_sha256"]:
-        raise ConfigurationError(f"父 revision {parent} 绑定的输入已漂移：不能在旧输入上修订，先重新生成机器草案（--candidates）。")
+        raise ConfigurationError(f"父 revision {parent} 绑定的输入已漂移：不能在旧输入上修订，先重新生成机器草案。")
     files = _read_revision_input(directory)
     revision, receipt, reused = _publish_revision(campaign_dir, inputs, files, origin=REVIEW_INPUT, parent=parent)
     return _draft_summary(campaign_dir, inputs, revision, receipt, files, reused=reused, mode=REVIEW_INPUT)
@@ -2021,7 +1997,7 @@ def _approve(campaign_dir: Path, manifest: Mapping[str, Any], revision: str, app
                 f"分类已批准 revision {existing.get('revision')}：禁止以 {revision} 覆盖；封存后变化须建立后继 Campaign。"
             )
     receipt, files = load_revision(campaign_dir, campaign_id, revision)
-    inputs = collect_inputs(campaign_dir, manifest, _bound_candidates_path(campaign_dir, receipt))
+    inputs = collect_inputs(campaign_dir, manifest)
     if inputs.sha256 != receipt["inputs_sha256"]:
         raise ConfigurationError(f"revision {revision} 绑定的输入已漂移，禁止批准：重新生成机器草案并审核。")
     gate = evaluate_revision(inputs, files)

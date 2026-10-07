@@ -4959,7 +4959,8 @@ def _build_parser() -> argparse.ArgumentParser:
             claude_upgrade_capture.add_capture_official_run_arguments(target)
             claude_upgrade_seal.add_seal_arguments(target)
         if name == "classify":
-            # 草案（--candidates）、修订（--from-revision、--revision-input）与批准（--approve-revision、--approve-review-sha256），B3-02。
+            # 草案（只有 --campaign-dir，分母取 VC-1 封存）、修订（--from-revision、--revision-input）与批准
+            # （--approve-revision、--approve-review-sha256），B3-02；B2-07 补充项起不再接受 --candidates。
             from tools.official_client_capture import claude_upgrade_classify
 
             claude_upgrade_classify.add_classify_arguments(target)

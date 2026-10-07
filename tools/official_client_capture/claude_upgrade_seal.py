@@ -6,8 +6,9 @@
   ``official/seal/<代号>/`` 下：
   ① ``client-checkpoint.json``：封存所依据的官方客户端身份（版本、二进制摘要、run 与 seal 两次二进制核验指纹）与
      attempt 绑定，首次写入时刻即 ``client_checkpoint_created``；
-  ② ``drafts/``：evidence 根 ``_seal_capture_attempt`` 生成 capture manifest、CaptureIndex、DiscoveryInventory（含目标
-     SinkInventory 的未决项）与跨来源矩阵；SinkInventory 由 VC-1 静态分析产出（``--target-inventory``），这里只绑定；
+  ② ``drafts/``：evidence 根 ``_seal_capture_attempt`` 生成 capture manifest、CaptureIndex、完整 DiscoveryInventory、语义
+     候选、正交候选分母与跨来源矩阵（B2-07 补充项「VC-1 发现补全」，见 ``claude_upgrade_discovery``）；SinkInventory 与它的
+     sink containment 证据由 VC-1 静态分析产出（``--target-inventory``、``--sink-containment``），这里只核对同源并绑定；
   ③ 预览：唯一一次深度扫描（evidence 根 ``_evidence_inventory``）写 ``evidence-manifest.json``，再由 evidence 根绑定摘要、
      算出 EvidencePackage v3 与 Store 写入计划，写 ``seal-draft.json``、``seal-preview.json``，返回 ``review_sha256``，
      退出码 2；
@@ -57,6 +58,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture import claude_target_inventory
+from tools.official_client_capture import claude_upgrade_discovery
 from tools.official_client_capture import claude_upgrade_evidence
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
 from tools.official_client_capture import claude_upgrade_plan
@@ -138,7 +140,15 @@ def add_seal_arguments(target: argparse.ArgumentParser) -> None:
     target.add_argument(
         "--target-inventory",
         type=Path,
-        help="seal：VC-1 静态分析产出的目标 SinkInventory（Campaign 目录内文件；未决项进 DiscoveryInventory）。",
+        help="seal：VC-1 静态分析产出的目标 SinkInventory（Campaign 目录内文件；每个 sink 与入口未决项都进 DiscoveryInventory）。",
+    )
+    target.add_argument(
+        "--sink-containment",
+        type=Path,
+        help=(
+            "seal：VC-1 静态分析对同一份目标 SinkInventory 生成的 sink containment 证据（Campaign 目录内文件；精确 AST 调用"
+            "据此归并语义候选，词法命中据此判定是否非流量）。"
+        ),
     )
     target.add_argument(
         "--discovery-dispositions",
@@ -538,14 +548,30 @@ def _static_inputs(campaign_dir: Path, arguments: argparse.Namespace, data_root:
     inventory_path = _campaign_input_file(campaign_dir, getattr(arguments, "target_inventory", None), "--target-inventory")
     if inventory_path is None:
         raise ConfigurationError("capture-official seal 必须提供 --target-inventory（VC-1 静态分析产出的目标 SinkInventory）。")
+    containment_path = _campaign_input_file(campaign_dir, getattr(arguments, "sink_containment", None), "--sink-containment")
+    if containment_path is None:
+        raise ConfigurationError(
+            "capture-official seal 必须提供 --sink-containment（VC-1 静态分析对同一份目标 SinkInventory 生成的 containment 证据）。"
+        )
     dispositions_path = _campaign_input_file(campaign_dir, getattr(arguments, "discovery_dispositions", None), "--discovery-dispositions")
     inventory = _read_json(inventory_path, "目标 SinkInventory")
     if inventory.get("schema_version") != claude_target_inventory.INVENTORY_SCHEMA or inventory.get("target_version") != target_version:
         raise ConfigurationError("--target-inventory 不是本 Campaign 目标版本的目标 SinkInventory。")
+    containment = _read_json(containment_path, "sink containment 证据")
+    # 与目标清单同源（containment 绑定的清单摘要）、逐 sink 无遗漏由 evidence 语义（发现补全）核对，这里只挡错文件。
+    if (
+        containment.get("schema_version") != claude_upgrade_discovery.CONTAINMENT_SCHEMA
+        or containment.get("target_version") != target_version
+    ):
+        raise ConfigurationError("--sink-containment 不是本 Campaign 目标版本的 sink containment 证据。")
     return {
         "target_inventory": inventory,
         "target_inventory_path": inventory_path.relative_to(data_root).as_posix(),
         "target_inventory_file": inventory_path,
+        "target_inventory_sha256": file_sha256(inventory_path),
+        "sink_containment": containment,
+        "sink_containment_path": containment_path.relative_to(data_root).as_posix(),
+        "sink_containment_file": containment_path,
         "dispositions": _read_json(dispositions_path, "发现项显式处置") if dispositions_path else None,
         "dispositions_path": dispositions_path.relative_to(data_root).as_posix() if dispositions_path else None,
         "dispositions_file": dispositions_path,
@@ -608,6 +634,7 @@ def _seal_captured_attempt(campaign_dir: Path, manifest: dict[str, Any], argumen
         "tool_files_sha256": tool_files_sha256,
         "evidence_semantics_sha256": current_tool["evidence_semantics_sha256"],
         "target_inventory": _binding(static["target_inventory_file"], data_root),
+        "sink_containment": _binding(static["sink_containment_file"], data_root),
         "dispositions": _binding(static["dispositions_file"], data_root) if static["dispositions_file"] else None,
         "evidence_labels": _binding(labels_path, data_root),
         "target_scenarios": _binding(scenarios_path, data_root),
@@ -714,12 +741,24 @@ def _preview_seal(
         "labels_path": str(labels_path),
         "probes": scanned["probes"],
         "surfaces": scanned["surfaces"],
-        "static": {key: static[key] for key in ("target_inventory", "target_inventory_path", "dispositions", "dispositions_path")},
+        "static": {
+            key: static[key]
+            for key in (
+                "target_inventory",
+                "target_inventory_path",
+                "target_inventory_sha256",
+                "sink_containment",
+                "sink_containment_path",
+                "dispositions",
+                "dispositions_path",
+            )
+        },
         "store": _store_identity(store_campaign),
         "tool_files_sha256": tool_files_sha256,
         "completeness_paths": {
             **{name: path.relative_to(data_root).as_posix() for name, path in draft_paths.items()},
             "target_inventory": static["target_inventory_path"],
+            "sink_containment": static["sink_containment_path"],
             "dispositions": static["dispositions_path"],
             "attempt": generation_key["attempt"]["path"],
             "evidence_labels": generation_key["evidence_labels"]["path"],
@@ -730,7 +769,15 @@ def _preview_seal(
     for name, path in draft_paths.items():
         _write_once_or_reuse(path, drafted["drafts"][name])
     # ③ 唯一一次深度扫描：Job 证据根、草稿与全部被绑定的静态与冻结输入。
-    scan_roots = [*roots, drafts_dir, static["target_inventory_file"], attempt_path, labels_path, scenarios_path]
+    scan_roots = [
+        *roots,
+        drafts_dir,
+        static["target_inventory_file"],
+        static["sink_containment_file"],
+        attempt_path,
+        labels_path,
+        scenarios_path,
+    ]
     if static["dispositions_file"] is not None:
         scan_roots.append(static["dispositions_file"])
     inventory = orchestrator._evidence_inventory(scan_roots, base=data_root)
@@ -988,7 +1035,7 @@ def align_reuse_timing(campaign_dir: Path, manifest: Mapping[str, Any]) -> list[
 def _seal_predecessor_reuse(campaign_dir: Path, manifest: dict[str, Any], arguments: argparse.Namespace) -> dict[str, Any]:
     """read_only_reuse：零请求写 Discovery／Evidence（引用导入包）、阶段结果与 VC-1 checkpoint，再补三条账本事件。"""
 
-    for name in ("attempt_id", "approve_seal_sha256", "target_inventory", "discovery_dispositions"):
+    for name in ("attempt_id", "approve_seal_sha256", "target_inventory", "sink_containment", "discovery_dispositions"):
         if getattr(arguments, name, None):
             raise ConfigurationError(
                 f"总计划冻结了前序只读复用：seal 走零请求复用路径，不接受 --{name.replace('_', '-')}。"

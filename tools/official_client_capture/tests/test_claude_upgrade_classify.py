@@ -292,6 +292,11 @@ class _ClassifyCase(unittest.TestCase):
             ),
             "capture_index": _write_json(drafts / "capture-index.json", {"schema_version": evidence.CAPTURE_INDEX_SCHEMA, "result": "passed"}),
             "discovery_inventory": discovery_path,
+            # 正交候选分母由 VC-1 封存（B2-07 补充项），与发现清单一起绑定进完整性清单。
+            "candidate_denominator": _write_bytes(
+                drafts / "candidate-denominator.json",
+                candidates if candidates is not None else json.dumps(CANDIDATES, ensure_ascii=False).encode("utf-8"),
+            ),
             "cross_source_matrix": _write_json(
                 drafts / "cross-source-matrix.json",
                 {
@@ -386,10 +391,6 @@ class _ClassifyCase(unittest.TestCase):
             campaign, manifest, phase="VC-1", stage_receipt_path=stage_path, completed_at_utc=STAGE_TIME,
             execute_item_ids=execute_ids, reuse_item_ids=reuse_ids, live_request_count=0, scanned_bytes=0,
         )
-        _write_bytes(
-            campaign / "analysis" / "candidate-denominator.json",
-            candidates if candidates is not None else json.dumps(CANDIDATES, ensure_ascii=False).encode("utf-8"),
-        )
         return campaign
 
     @staticmethod
@@ -404,10 +405,12 @@ class _ClassifyCase(unittest.TestCase):
         }
 
     def candidates_path(self, campaign: Path) -> Path:
-        return campaign / "analysis" / "candidate-denominator.json"
+        """VC-1 封存的正交候选分母（夹具代号 g-fixture 的草稿）。"""
+
+        return campaign / "official" / "seal" / "g-fixture" / "drafts" / "candidate-denominator.json"
 
     def draft(self, campaign: Path) -> dict[str, Any]:
-        code, result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
+        code, result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
         self.assertEqual(code, 2, stderr)
         return result
 
@@ -543,7 +546,7 @@ class MachineDraftTests(_ClassifyCase):
         self.assertEqual(sorted(path.name for path in (campaign / classify.DRAFT_ROOT).iterdir()), ["rev-0001"])
         # revision 只写一次：原地改动在加载时被拒绝。
         (draft_dir / "profile-patches.json").write_text("{}", encoding="utf-8")
-        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
+        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
         self.assertEqual(code, 1)
         self.assertIn("已被改动", stderr)
 
@@ -585,33 +588,32 @@ class MachineDraftTests(_ClassifyCase):
         ):
             with self.subTest(label=label):
                 campaign = self.build_campaign(campaign_id=f"claude-code-2_1_285-v5-{index}", relay_overrides=override)
-                code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
+                code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
                 self.assertEqual(code, 1)
                 self.assertIn(message, stderr)
                 self.assertFalse((campaign / classify.DRAFT_ROOT).exists())
 
     def test_inputs_are_verified_before_drafting(self) -> None:
-        campaign = self.build_campaign()
-        # 候选分母声明计数与实际不一致：分母必须由内容计算。
+        # VC-1 封存的候选分母声明计数与实际不一致：分母必须由内容计算。
         broken = copy.deepcopy(CANDIDATES)
         broken["total_orthogonal_candidates"] = 3
-        _write_json(self.candidates_path(campaign), broken)
-        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
+        campaign = self.build_campaign(campaign_id="claude-code-2_1_285-broken", candidates=json.dumps(broken, ensure_ascii=False).encode("utf-8"))
+        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
         self.assertEqual(code, 1)
         self.assertIn("total_orthogonal_candidates=3", stderr)
-        # VC-1 封存对象在 Store 绑定之后被改：摘要漂移即拒绝。
-        _write_json(self.candidates_path(campaign), CANDIDATES)
-        discovery = campaign / "official" / "seal" / "g-fixture" / "drafts" / "discovery-inventory.json"
-        discovery.write_text(discovery.read_text(encoding="utf-8") + " ", encoding="utf-8")
-        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
-        self.assertEqual(code, 1)
-        self.assertIn("VC-1 封存后漂移", stderr)
-        # 候选分母不在 Campaign 目录内：拒绝。
-        outside = _write_json(self.root / "outside.json", CANDIDATES)
-        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(outside)])
-        self.assertEqual(code, 1)
-        self.assertIn("Campaign 目录内", stderr)
-        # 参数组合：批准缺摘要、修订带候选。
+        # VC-1 封存对象（发现清单、候选分母）在 Store 绑定之后被改：摘要漂移即拒绝。
+        campaign = self.build_campaign()
+        for path in (campaign / "official" / "seal" / "g-fixture" / "drafts" / "discovery-inventory.json", self.candidates_path(campaign)):
+            original = path.read_bytes()
+            path.write_bytes(original + b" ")
+            code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
+            self.assertEqual(code, 1)
+            self.assertIn("VC-1 封存后漂移", stderr)
+            path.write_bytes(original)
+        # 分母只有 VC-1 一个来源：显式 --candidates 已取消（参数解析即拒绝）。
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
+        # 参数组合：批准缺摘要。
         code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--approve-revision", "rev-0001"])
         self.assertEqual(code, 1)
         self.assertIn("--approve-review-sha256", stderr)
@@ -694,7 +696,7 @@ class RevisionAndApprovalTests(_ClassifyCase):
         self.assertFalse((campaign / classify.STAGE_RESULT_RELATIVE).exists())
         self.assertFalse(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-2").exists())
         # 未收尾时不能再起草案。
-        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
+        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
         self.assertEqual(code, 1)
         self.assertIn("批准未收尾", stderr)
 
@@ -735,7 +737,7 @@ class RevisionAndApprovalTests(_ClassifyCase):
         code, _result, stderr = run_main(self.approve_argv(campaign, "rev-0001", draft["review_sha256"]))
         self.assertEqual(code, 1)
         self.assertIn("禁止以 rev-0001 覆盖", stderr)
-        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign), "--candidates", str(self.candidates_path(campaign))])
+        code, _result, stderr = run_main(["classify", "--campaign-dir", str(campaign)])
         self.assertEqual(code, 1)
         self.assertIn("后继 Campaign", stderr)
 
@@ -748,14 +750,14 @@ class RevisionAndApprovalTests(_ClassifyCase):
         self.assertEqual((code, revised["gate"]["reasons"]), (2, []), stderr)
         self.assertEqual(revised["gate"]["counts"]["affected_rules"], ["SPEC-BODY-001", "SPEC-TOOL-024"])
         self.assertEqual(revised["gate"]["counts"]["target_rule_count"], 39)
-        # 输入漂移：候选分母在审核后被改，批准拒绝。
+        # 输入漂移：VC-1 封存的候选分母在审核后被改，批准拒绝。
         original = self.candidates_path(campaign).read_bytes()
         changed = copy.deepcopy(CANDIDATES)
         changed["candidate_groups"]["semantic_candidate_families"][0]["proposition"] = "改过的命题。"
         _write_json(self.candidates_path(campaign), changed)
         code, _result, stderr = run_main(self.approve_argv(campaign, revised["revision"], revised["review_sha256"]))
         self.assertEqual(code, 1)
-        self.assertIn("输入已漂移", stderr)
+        self.assertIn("VC-1 封存后漂移", stderr)
         _write_bytes(self.candidates_path(campaign), original)
         code, approved, stderr = run_main(self.approve_argv(campaign, revised["revision"], revised["review_sha256"]))
         self.assertEqual((code, approved["affected_rules"]), (0, ["SPEC-BODY-001", "SPEC-TOOL-024"]), stderr)

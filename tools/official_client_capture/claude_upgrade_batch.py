@@ -29,7 +29,8 @@ b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 �
 
 * 只认受管 Python 对 ``claude_upgrade.py`` 的直接调用（脚本路径或 ``-m tools.official_client_capture.claude_upgrade``），
   参数全是成对的旗标与值、按模式精确闭合，``--campaign-dir`` 必须是本 Campaign。
-* VC-2：``classify`` 的草案（``--candidates``）、修订（``--from-revision``＋``--revision-input``）、批准
+* VC-2：``classify`` 的草案（只有 ``--campaign-dir``：分母等输入一律取 VC-1 封存，B2-07 补充项起）、修订
+  （``--from-revision``＋``--revision-input``）、批准
   （``--approve-revision``＋``--approve-review-sha256``）。VC-3：``prepare-profile`` 的草案（可带成对的 Active 输入）、修订、
   批准（另带 ``--approved-by``），``stage-profile`` 的预览与批准（``--approve-joint-sha256``＋``--approved-by``）。
 * 这些 producer 的落盘全部是只写一次或逐字复用、Store 事实带幂等键（动作结果 WAL 第 ① 步），任一步被强杀后重跑同一命令
@@ -117,7 +118,7 @@ STAGE_PHASES: Mapping[str, str] = {"capture-official": "VC-1", "classify": "VC-2
 STAGE_REPLAY_CONTRACTS: Mapping[str, Mapping[str, Mapping[str, tuple[frozenset[str], frozenset[str]]]]] = {
     "VC-2": {
         "classify": {
-            "draft": (frozenset({"--campaign-dir", "--candidates"}), frozenset()),
+            "draft": (frozenset({"--campaign-dir"}), frozenset()),
             "revise": (frozenset({"--campaign-dir", "--from-revision", "--revision-input"}), frozenset()),
             "approve": (frozenset({"--campaign-dir", "--approve-revision", "--approve-review-sha256"}), frozenset()),
         },
@@ -207,6 +208,12 @@ def _profile() -> Any:
     from tools.official_client_capture import claude_upgrade_profile
 
     return claude_upgrade_profile
+
+
+def _seal() -> Any:
+    from tools.official_client_capture import claude_upgrade_seal
+
+    return claude_upgrade_seal
 
 
 def _read_json(path: Path, label: str) -> dict[str, Any]:
@@ -456,7 +463,11 @@ def _classify_facts(
         if _facts_of(facts, "rule_classification_recorded"):
             raise ConfigurationError("Store 已记录规则分类事实：只能重跑原批准命令收敛，草案与修订不能重派")
         if mode == "draft":
-            inputs["--candidates"] = _campaign_input_file(campaign_dir, flags["--candidates"], "--candidates")
+            # 草案的输入全部来自 VC-1 封存（阶段结果绑定 Store 证据与完整性清单）：VC-1 没封存时草案必然被拒。
+            official = campaign_dir / _seal().STAGE_RESULT_RELATIVE
+            if official.is_symlink() or not official.is_file():
+                raise ConfigurationError("VC-1 官方阶段结果不存在：分类草案动作重派必然被拒绝")
+            inputs[_seal().STAGE_RESULT_RELATIVE.as_posix()] = file_sha256(official)
             return inputs
         parent = _require_revision_label(flags["--from-revision"], "--from-revision")
         classify.load_revision(campaign_dir, campaign_id, parent)
