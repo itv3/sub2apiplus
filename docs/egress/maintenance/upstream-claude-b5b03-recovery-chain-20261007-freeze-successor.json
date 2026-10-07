@@ -1,0 +1,86 @@
+{
+  "base_commit": "322d3ea62ba141227a6f485d0440cfd4e7f22360",
+  "changed_path_count": 8,
+  "current_commit": "fb6ad25e646c105f27e2fad113144339e5d0f2a5",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5863,
+  "frozen_path_count": 2015,
+  "identity_sha256": "13583de1cba8b661c86a49f452fab73b61e885fdfd4239adb003db8a880df311",
+  "issued_at_utc": "2026-10-07T19:39:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-b5b03-recovery-chain-20261007-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "961cbd0fa8a4ef498688f3663608e6d1b7da052fdb6db7710ce04ed9fb2356f2"
+      ],
+      "reason": "Claude 升级 B5b-03：Makefile 真实链门禁加入 Claude 故障恢复链模块 path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-a071-ci-executor-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a073-bytecode-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a074-identity-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b304a-vc4-driver-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-midpoint-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item69-audit-index-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item70-retained-profiles-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-01-unit-executor-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-entry-gates-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-make-test-dedup-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um19-gate-fast-first-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um20-capture-unit-executor-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0213-prep-frontend-critical-20261004-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "8201b2e6cb7adabc2964a33d39ca8f9c5253873782ca7a6ea5da6775516e74ec"
+    }
+  ],
+  "unregistered_path_count": 7,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py",
+    "tools/official_client_capture/tests/real_chains/test_claude_upgrade_fault_chains.py",
+    "tools/official_client_capture/tests/test_arm64_supervised_deploy_transaction.py",
+    "tools/official_client_capture/tests/test_claude_upgrade_recovery.py",
+    "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+    "tools/official_client_capture/tests/test_pre_a3_client_grouping.py",
+    "tools/official_client_capture/upgrade_control_plane.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
