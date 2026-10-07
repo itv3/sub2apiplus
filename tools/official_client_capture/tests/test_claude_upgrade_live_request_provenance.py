@@ -17,8 +17,10 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_tests
 
 FIXTURE_ENV = "CLAUDE_2_1_226_RELAY_FIXTURE"
 
@@ -445,6 +447,88 @@ class CampaignProvenanceTests(unittest.TestCase):
         again = provenance.collect_campaign_provenance(self.campaign, formal_campaign_id=self.CAMPAIGN_ID, observed_at_utc="2026-10-07T00:00:00Z")
         self.assertEqual(again, receipt)
 
+    def _job_root(self, job_id: str = "official-job") -> Path:
+        return self.data / "runs" / "claude-official" / self.CAMPAIGN_ID / job_id
+
+    def test_job_root_with_probe_runs_expands_per_probe(self) -> None:
+        """B2-06 布局：Job 证据根自身没有 relay/，probe 子目录才是中继运行根；逐 probe 展开，同坐标请求不撞键。"""
+
+        job_root = self._job_root()
+        _relay_root(job_root / "v4-a", {1: _messages()})
+        _relay_root(job_root / "v4-b", {1: _messages(), 2: _request("POST", "/v1/messages/count_tokens?beta=true", "api.anthropic.com", b"{}")})
+        archive = job_root.with_name(job_root.name + ".failed-attempt1")
+        _relay_root(archive / "v4-a", {1: _messages()})
+        self._campaign([{"id": "official-job", "phase": "official", "evidence_roots": [str(job_root)]}])
+        self._attempt("official-job", [job_root])
+        receipt = provenance.collect_campaign_provenance(self.campaign, formal_campaign_id=self.CAMPAIGN_ID, observed_at_utc="2026-10-07T00:00:00Z")
+        self.assertEqual((receipt["status"], receipt["precise_total"], receipt["unresolved_job_ids"]), ("complete", 4, []))
+        job = receipt["jobs"][0]
+        self.assertEqual((job["status"], job["precise_count"]), ("resolved", 4))
+        self.assertEqual([root["kind"] for root in job["roots"]], [provenance.RELAY_RUNS_KIND, provenance.RELAY_RUNS_KIND])
+        base = f"runs/claude-official/{self.CAMPAIGN_ID}"
+        self.assertEqual(
+            [(branch["run_root"], branch["producer_run_id"], branch["request_count"]) for branch in job["roots"][0]["branches"]],
+            [("v4-a", f"{base}/official-job/v4-a", 1), ("v4-b", f"{base}/official-job/v4-b", 2)],
+        )
+        self.assertEqual(
+            sorted({item["producer_run_id"] for item in receipt["requests"]}),
+            [f"{base}/official-job.failed-attempt1/v4-a", f"{base}/official-job/v4-a", f"{base}/official-job/v4-b"],
+        )
+        self.assertEqual(len({item["identity_key"] for item in receipt["requests"]}), 4)
+        # 离线核算同一个 Job 根：口径相同（相对各根公共父目录）。
+        summary = provenance.collect_root_provenance([job_root])
+        self.assertEqual((summary["precise_total"], summary["roots"][0]["kind"], summary["unresolved_roots"]), (3, provenance.RELAY_RUNS_KIND, []))
+
+    def test_job_root_entries_that_are_not_runs(self) -> None:
+        job_root = self._job_root()
+        _relay_root(job_root / "v4-a", {1: _messages()})
+        _write(job_root / "notes" / "readme.txt", "不是中继运行根")
+        self._campaign([{"id": "official-job", "phase": "official", "evidence_roots": [str(job_root)]}])
+        self._attempt("official-job", [job_root])
+        receipt = provenance.collect_campaign_provenance(self.campaign, formal_campaign_id=self.CAMPAIGN_ID)
+        self.assertEqual((receipt["status"], receipt["unresolved_job_ids"]), ("accounting_unresolved", ["official-job"]))
+        reasons = [branch.get("reason") for branch in receipt["jobs"][0]["roots"][0]["branches"] if branch["status"] == "unresolved"]
+        self.assertEqual(len(reasons), 1)
+        self.assertIn("不是中继运行根：['notes']", reasons[0])
+        # 一个运行根都没有：整根仍是 unsupported，由日志判定（这里没有日志，未决）。
+        lonely = self._job_root("official-lonely")
+        _write(lonely / "notes" / "readme.txt", "x")
+        self._campaign([{"id": "official-lonely", "phase": "official", "evidence_roots": [str(lonely)]}])
+        attempt = self.campaign / "official" / "attempts" / "a1"
+        for path in attempt.glob("job-*.json"):
+            path.unlink()
+        self._attempt("official-lonely", [lonely])
+        receipt = provenance.collect_campaign_provenance(self.campaign, formal_campaign_id=self.CAMPAIGN_ID)
+        self.assertEqual(receipt["jobs"][0]["reason"], "没有可识别的权威来源且日志不能证明请求前失败")
+
+    def test_job_root_run_names_and_links_fail_closed(self) -> None:
+        bad = self._job_root("official-bad")
+        _relay_root(bad / "bad name", {1: _messages()})
+        with self.assertRaisesRegex(provenance.ProvenanceError, "运行根名称非法"):
+            provenance.root_branches(bad, producer_run_id="b")
+        linked = self._job_root("official-linked")
+        _relay_root(linked / "v4-a", {1: _messages()})
+        (linked / "v4-b").symlink_to(linked / "v4-a")
+        with self.assertRaisesRegex(provenance.ProvenanceError, "符号链接"):
+            provenance.root_branches(linked, producer_run_id="l")
+
+    def test_empty_plan_jobs_fail_closed_when_attempts_registered_evidence(self) -> None:
+        """总计划没有冻结 Job：attempt 登记了证据根即未决；登记的证据根为空时才是零请求的 complete。"""
+
+        job_root = self._job_root()
+        _relay_root(job_root / "v4-a", {1: _messages()})
+        self._campaign([])
+        self._attempt("official-job", [job_root])
+        receipt = provenance.collect_campaign_provenance(self.campaign, formal_campaign_id=self.CAMPAIGN_ID)
+        self.assertEqual((receipt["status"], receipt["unresolved_job_ids"], receipt["precise_total"]), ("accounting_unresolved", ["official-job"], 0))
+        self.assertEqual(receipt["jobs"][0]["attempts"], ["official/attempts/a1"])
+        self.assertIn("总计划没有冻结任何 Job", receipt["jobs"][0]["reason"])
+        accounting = reconciler.request_accounting(receipt, head={}, initial_keys=set(), campaign_id=self.CAMPAIGN_ID)
+        self.assertEqual(accounting["unresolved_job_ids"], ["official-job"])
+        self._attempt("official-job", [])
+        receipt = provenance.collect_campaign_provenance(self.campaign, formal_campaign_id=self.CAMPAIGN_ID)
+        self.assertEqual((receipt["status"], receipt["precise_total"], receipt["jobs"]), ("complete", 0, []))
+
     def test_campaign_identity_is_checked(self) -> None:
         self._campaign([], client="codex")
         with self.assertRaisesRegex(provenance.ProvenanceError, "身份不一致"):
@@ -466,6 +550,46 @@ class RecordedRelayFixtureTests(unittest.TestCase):
         self.assertEqual(summary["unresolved_roots"], [])
         self.assertEqual(summary["model_requests_by_endpoint"], {"/v1/messages": 123, "/v1/messages/count_tokens": 36})
         self.assertEqual(summary["auxiliary_by_category"], {"token_refresh": 1})
+
+
+
+class B206LayoutCampaignAccountingTests(seal_tests._SealCampaignCase):
+    """验收：B2-07 的夹具（B2-06 的 run 真跑：7 个 Job、42 个 probe、97 次模型请求）在总计划冻结 Job 行之后，
+    Campaign 级核算全部 complete、精确数 97、没有未决与待定 Job，身份键唯一且两次核算逐字相同。"""
+
+    def test_campaign_accounting_counts_every_probe(self) -> None:
+        campaign = self.build_campaign()
+        manifest = claude_upgrade.load_campaign_manifest(campaign)
+        jobs = claude_upgrade._campaign_jobs(campaign, manifest, "official")
+        # B2-11 建 Campaign 时按 plan 报告冻结 Job 行；B2-07 的夹具总计划没有 Job 行，这里先补上再采集。
+        seal_tests.rewrite_manifest(
+            campaign, jobs=[{"id": job.job_id, "phase": job.phase, "evidence_roots": list(job.evidence_roots)} for job in jobs]
+        )
+        self.run_capture(campaign)
+        receipt = provenance.collect_campaign_provenance(
+            campaign, formal_campaign_id=seal_tests.CAMPAIGN_ID, observed_at_utc="2026-10-07T00:00:00Z"
+        )
+        self.assertEqual(self.expected_live_requests(), 97)
+        self.assertEqual(
+            (receipt["status"], receipt["precise_total"], receipt["unresolved_job_ids"], receipt["pending_job_ids"]),
+            ("complete", 97, [], []),
+        )
+        self.assertEqual(sorted(job["job_id"] for job in receipt["jobs"]), sorted(seal_tests.SEAL_JOBS))
+        self.assertEqual({job["status"] for job in receipt["jobs"]}, {"resolved"})
+        probes = {job.job_id: {str(step["probe_id"]) for step in job.steps} for job in jobs}
+        base = f"runs/claude-official/{seal_tests.CAMPAIGN_ID}/"
+        for request in receipt["requests"]:
+            self.assertTrue(request["producer_run_id"].startswith(base), request["producer_run_id"])
+            job_part, probe = request["producer_run_id"][len(base):].split("/")
+            self.assertEqual(job_part, request["job_id"])
+            self.assertIn(probe, probes[request["job_id"]])
+        self.assertEqual(len({item["identity_key"] for item in receipt["requests"]}), 97)
+        accounting = reconciler.request_accounting(receipt, head={}, initial_keys=set(), campaign_id=seal_tests.CAMPAIGN_ID)
+        self.assertEqual((len(accounting["new_keys"]), accounting["unresolved_job_ids"]), (97, []))
+        again = provenance.collect_campaign_provenance(
+            campaign, formal_campaign_id=seal_tests.CAMPAIGN_ID, observed_at_utc="2026-10-07T00:00:00Z"
+        )
+        self.assertEqual(again, receipt)
 
 
 if __name__ == "__main__":

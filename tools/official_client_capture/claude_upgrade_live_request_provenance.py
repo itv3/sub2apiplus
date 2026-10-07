@@ -35,6 +35,12 @@
 Campaign 布局与 Codex 共用（设计 D3）：``campaign.json``／``campaign.sha256``、``official/attempts/<attempt>``
 与 ``candidates/<id>/attempts/<attempt>`` 下的 ``reservation.json``、``job-<id>.json``、``logs/``，以及
 ``recovery/ar<k>`` 恢复段。宿主机路径与可信读取调用 ``codex_upgrade_vc0_closeout`` 的函数，只调用不修改。
+
+Claude 的 Job 证据根（B2-05／B2-06 布局）：一个 Job 一个证据根 ``<runs>/claude-official/<campaign>/<job>``，它自身
+不是运行根，每步的 FW-E 中继运行根是它下面以 probe 命名的子目录。这样的根按 ``relay_runs`` 展开成逐 probe 的
+relay 分支，``producer_run_id`` 取 ``<Job 根的 run id>/<probe>``（即子目录相对同一基准的路径，不同 probe 的同坐标
+请求不撞键），世代号沿用 Job 根（取代归档与失败归档都在 Job 根这一级）。Job 根下不是中继运行根的条目使该根未决。
+总计划没有冻结任何 Job、attempt 却登记了 Job 证据根时，这些 Job 未决（失败关闭）；两者都没有时才是零请求的 complete。
 """
 
 from __future__ import annotations
@@ -90,6 +96,8 @@ RELAY_HANDSHAKE_EXCLUSION_REASONS = frozenset(
 )
 ZERO_BYTE_RELAY_EXCLUDED = "relay_excluded"
 ZERO_BYTE_UNEXCLUDED = "unexcluded"
+# Claude Job 证据根（自身不是运行根、probe 子目录是 FW-E 中继运行根）展开后的证据根类别。
+RELAY_RUNS_KIND = "relay_runs"
 CAMPAIGN_SCHEMA = "official-client-upgrade-campaign/v1"
 # mitm 插件按路径分类写出的 HTTP 记录文件（addons/mitm_capture._classify）：模型端点在 claude，token refresh 在 misc。
 MITM_HTTP_FILES = ("claude-http.jsonl", "misc-http.jsonl")
@@ -618,10 +626,77 @@ def root_branches(root: Path, *, producer_run_id: str, generation: int = 0) -> t
     if len(kinds) > 1:
         raise ProvenanceError(f"证据根 {root} 同时具备多种权威来源：{kinds}")
     if not kinds:
-        return "unsupported", []
+        nested = _child_relay_run_roots(root)
+        if nested is None:
+            return "unsupported", []
+        return RELAY_RUNS_KIND, _relay_run_branches(root, nested, producer_run_id=producer_run_id, generation=generation)
     if kinds[0] == "relay":
         return "relay", _relay_branches(root, producer_run_id=producer_run_id, generation=generation)
     return "capture", _capture_branches(root, producer_run_id=producer_run_id, generation=generation)
+
+
+def _child_relay_run_roots(root: Path) -> tuple[list[Path], list[str]] | None:
+    """Claude Job 证据根的直接子目录里的 FW-E 中继运行根（含 ``relay/``），与不是运行根的条目名。
+
+    一个子运行根都没有时返回 None：整个根仍按 ``unsupported`` 处理（由日志判定是否请求前失败）。子目录名进入
+    ``producer_run_id``，必须是安全标识符；子运行根同时具备 capture 来源、或出现符号链接都失败关闭。capture 类子根
+    不在这里展开（同根估计按 subject／scenario 匹配，嵌套后会跨子根错配），作为不是运行根的条目处理。
+    """
+
+    if root.is_symlink() or not root.is_dir():
+        return None
+    runs: list[Path] = []
+    others: list[str] = []
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
+        if child.is_symlink():
+            raise ProvenanceError(f"Job 证据根下有符号链接：{child}")
+        if child.is_dir() and (child / "relay").exists():
+            if not SAFE_ID_RE.fullmatch(child.name):
+                raise ProvenanceError(f"Job 证据根下的中继运行根名称非法：{child.name!r}")
+            if (child / "manifest.json").exists():
+                raise ProvenanceError(f"中继运行根 {child} 同时具备 capture 来源")
+            runs.append(child)
+        else:
+            others.append(child.name)
+    if not runs:
+        return None
+    return runs, others
+
+
+def _relay_run_branches(
+    root: Path,
+    nested: tuple[list[Path], list[str]],
+    *,
+    producer_run_id: str,
+    generation: int,
+) -> list[dict[str, Any]]:
+    """逐 probe 展开 Job 证据根：每个子运行根一个 relay 分支（带 ``run_root`` 与它自己的 ``producer_run_id``）。"""
+
+    runs, others = nested
+    branches: list[dict[str, Any]] = []
+    for child in runs:
+        child_run_id = f"{producer_run_id}/{child.name}"
+        for branch in _relay_branches(child, producer_run_id=child_run_id, generation=generation):
+            branches.append({**branch, "run_root": child.name, "producer_run_id": child_run_id})
+    if others:
+        branches.append(
+            {
+                "branch": "relay",
+                "kind": SOURCE_RELAY,
+                "evidence": "relay",
+                "subject": "relay",
+                "scenario": "",
+                "production_forwarding_enabled": None,
+                "requests": [],
+                "auxiliary_requests": [],
+                "zero_client_byte_connections": [],
+                "run_root": None,
+                "producer_run_id": producer_run_id,
+                "status": "unresolved",
+                "reason": f"Job 证据根 {root.name} 下的条目不是中继运行根：{others}",
+            }
+        )
+    return branches
 
 
 def _producer_run_ids(roots: list[Path], base: Path) -> dict[Path, str]:
@@ -877,6 +952,29 @@ def _attempt_job_facts(
     return roots_by_job, logs_by_job, attempts_present
 
 
+def _undeclared_attempt_jobs(campaign_dir: Path) -> list[dict[str, Any]]:
+    """总计划没有冻结 Job 时，两个阶段的 attempt（含恢复段）里登记了证据根的 Job 收据，按 (阶段, Job) 合并。"""
+
+    found: dict[tuple[str, str], dict[str, Any]] = {}
+    for phase in ("official", "candidate"):
+        for attempt in _attempt_directories(campaign_dir, phase):
+            for job_path in sorted(attempt.glob("job-*.json")):
+                if job_path.is_symlink() or not job_path.is_file():
+                    raise ProvenanceError(f"Formal {phase} Job 收据不可信")
+                payload, _raw = closeout._load_json(job_path, f"Formal {phase} Job 收据")
+                job_id = payload.get("id")
+                if not isinstance(job_id, str) or not SAFE_ID_RE.fullmatch(job_id) or job_path.name != f"job-{job_id}.json":
+                    raise ProvenanceError(f"Formal {phase} Job 收据身份不一致")
+                evidence_roots = payload.get("evidence_roots")
+                if not isinstance(evidence_roots, list) or any(not isinstance(value, str) for value in evidence_roots):
+                    raise ProvenanceError(f"{job_id} Job 收据 evidence_roots 非字符串数组")
+                if not evidence_roots:
+                    continue
+                entry = found.setdefault((phase, job_id), {"phase": phase, "job_id": job_id, "attempts": []})
+                entry["attempts"].append(attempt.relative_to(campaign_dir).as_posix())
+    return [found[key] for key in sorted(found)]
+
+
 def collect_campaign_provenance(
     formal_campaign_dir: Path,
     *,
@@ -923,7 +1021,23 @@ def collect_campaign_provenance(
         "pre_request_zero_job_ids": [],
     }
     if not jobs:
-        receipt["status"] = "complete"
+        # 总计划没有冻结 Job 却有 attempt 登记了证据根：无法按 Job 核算，失败关闭；两者都没有才是零请求的 complete。
+        for item in _undeclared_attempt_jobs(campaign_dir):
+            receipt["jobs"].append(
+                {
+                    "job_id": item["job_id"],
+                    "phase": item["phase"],
+                    "roots": [],
+                    "attempts": item["attempts"],
+                    "precise_count": 0,
+                    "estimated_count": 0,
+                    "auxiliary_count": 0,
+                    "status": "unresolved",
+                    "reason": "总计划没有冻结任何 Job，attempt 却登记了这个 Job 的证据根",
+                }
+            )
+            receipt["unresolved_job_ids"].append(item["job_id"])
+        receipt["status"] = "accounting_unresolved" if receipt["unresolved_job_ids"] else "complete"
         receipt["identity_keys_sha256"] = _sha256(_canonical([]))
         return receipt
     configuration = manifest.get("configuration")
