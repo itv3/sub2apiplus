@@ -20,7 +20,8 @@ VC-0 交接链）在 ``claude_upgrade_vc``。
   先于 ``_stage_path`` 分流；``prepare-profile`` 的准备结果不是阶段结果，读侧是 ``claude_upgrade_profile.load_prepare_result``。
 * ``capture-candidate``：B4-02 的候选阶段结果（``claude_upgrade_candidate_seal.load_stage_result``），候选 seal 批准时先写
   Store（到 candidate_sealed）再写它，所以存在即已封存；路径按 ``_stage_path``（b≥1 按评估基线的读来源）。
-* compare／accept 两个候选级阶段报待实现，写明工作项（B4-03／B4-06）。
+* ``compare``／``accept``：B4-06b 的比较收据与 accept 阶段结果（``claude_upgrade_compare.load_stage_result``／
+  ``claude_upgrade_acceptance.load_stage_result``），路径同样按 ``_stage_path``（b≥1 按评估基线的读来源）。
 
 二、评估阶段路径（服务面 ``_stage_read_source``／``_stage_write_target``）
 =====================================================================
@@ -137,10 +138,8 @@ DEFAULT_ACTION_TIMEOUT_SECONDS = 900
 
 # 一、阶段结果
 PROFILE_STAGE_NAMES = frozenset({"stage-profile", "profile"})
-CANDIDATE_STAGE_WORK_ITEMS: Mapping[str, str] = {
-    "compare": "B4-03（Claude 评估器）",
-    "accept": "B4-06（accept 门禁 Claude 版）",
-}
+# 尚未落实读侧的候选级阶段 → 落实它的工作项（B4-06b 起全部落实，表为空；保留机制给后续阶段）。
+CANDIDATE_STAGE_WORK_ITEMS: Mapping[str, str] = {}
 STAGE_PHASES: Mapping[str, str] = {"capture-official": "VC-1", "classify": "VC-2", "stage-profile": "VC-3"}
 
 # 三、阶段幂等重派证明：阶段 → 子命令 → 模式 → (必备旗标, 可选旗标)。可选旗标成对出现（见 ``_PAIRED_OPTIONAL``）。
@@ -282,6 +281,17 @@ def load_stage_result(
         if not isinstance(candidate_id, str):
             raise ConfigurationError("capture-candidate 必须提供 candidate-id。")
         return claude_upgrade_candidate_seal.load_stage_result(campaign_dir, path, candidate_id, manifest=manifest)
+    if canonical in {"compare", "accept"}:
+        # B4-06b：比较收据与 accept 阶段结果（b≥1 按评估基线的读来源）。
+        if not isinstance(candidate_id, str):
+            raise ConfigurationError(f"{canonical} 必须提供 candidate-id。")
+        if canonical == "compare":
+            from tools.official_client_capture import claude_upgrade_compare
+
+            return claude_upgrade_compare.load_stage_result(campaign_dir, path, candidate_id, manifest=manifest)
+        from tools.official_client_capture import claude_upgrade_acceptance
+
+        return claude_upgrade_acceptance.load_stage_result(campaign_dir, path, candidate_id, manifest=manifest)
     if candidate_id is not None:
         raise ConfigurationError(f"{canonical} 是 Campaign 级阶段，不接受 candidate-id。")
     current = orchestrator._require_formal_campaign(campaign_dir, dict(manifest) if manifest is not None else None)

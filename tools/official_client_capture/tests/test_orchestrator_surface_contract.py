@@ -140,11 +140,11 @@ class SurfaceContractTests(unittest.TestCase):
         with self.assertRaises(codex_upgrade.ConfigurationError) as caught:
             claude_upgrade.campaign_status(Path("/nonexistent"), "c1")
         self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
-        for stage, work_item in (("compare", "B4-03"), ("accept", "B4-06")):
-            with self.subTest(stage=stage), self.assertRaisesRegex(
-                claude_upgrade.ClaudeOrchestratorPending, rf"_load_stage_result（{stage}）：由 {work_item}"
-            ):
+        # B4-06b 落实 compare 与 accept 的阶段结果：不存在的 Campaign 失败关闭（配置错误，不是待实现异常）。
+        for stage in ("compare", "accept"):
+            with self.subTest(stage=stage), self.assertRaises(codex_upgrade.ConfigurationError) as caught:
                 claude_upgrade._load_stage_result(Path("/nonexistent"), stage, "c1")
+            self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
         # B4-02 落实候选阶段结果：不存在的 Campaign 失败关闭（配置错误，不是待实现异常）。
         with self.assertRaises(codex_upgrade.ConfigurationError) as caught:
             claude_upgrade._load_stage_result(Path("/nonexistent"), "capture-candidate", "c1")

@@ -163,13 +163,19 @@ class CommandLineAndBoundaryTests(unittest.TestCase):
         self.assertIn("compile-and-run-vc-batch", output.getvalue())
 
     def test_own_subcommands_report_pending(self) -> None:
-        # classify（B3-02）、prepare-profile／stage-profile（B3-03）、plan-candidate-gates 与 record-candidate-build（B3-04）已落实，
-        # 这里换成仍待实现的 compare（B4-03）。
+        # classify（B3-02）、prepare-profile／stage-profile（B3-03）、plan-candidate-gates 与 record-candidate-build（B3-04）、
+        # compare 与 accept（B4-06b）已落实，这里换成仍待实现的 account-sealed-candidate（B4-02）。
         error = io.StringIO()
         with contextlib.redirect_stderr(error):
-            code = claude_upgrade.main(["compare", "--campaign-dir", "/nonexistent"])
+            code = claude_upgrade.main(["account-sealed-candidate", "--campaign-dir", "/nonexistent"])
         self.assertEqual(code, 1)
-        self.assertIn("B4-03", error.getvalue())
+        self.assertIn("B4-02", error.getvalue())
+        # compare 已落实：不存在的 Campaign 失败关闭（配置错误），不再报待实现。
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            code = claude_upgrade.main(["compare", "--campaign-dir", "/nonexistent", "--candidate-id", "c1"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("尚未实现", error.getvalue())
 
     def test_claude_orchestrator_does_not_import_codex_upgrade(self) -> None:
         tree = ast.parse((TOOL_ROOT / "claude_upgrade.py").read_text(encoding="utf-8"))

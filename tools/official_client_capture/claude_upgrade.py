@@ -4669,18 +4669,35 @@ def _seal_capture_attempt(view: Mapping[str, Any], *, inventory: Mapping[str, An
     return claude_upgrade_evidence.build_seal_drafts(view, inventory=inventory)
 
 
-def compare_campaign(*arguments: Any, **options: Any) -> Any:
-    """评估读侧根：离线比较（Claude 编排器尚未实现，由 B4-03（Claude 评估器） 落实）。"""
+def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
+    """评估读侧根（B4-06b）：只读封存材料离线比较，写比较收据、官方评估用 manifest 与 builder 配置；实现在
+    ``claude_upgrade_compare``（Claude 身份策略 ``evaluator.compare_reader_roots`` 从这里按函数级计算读侧闭包）。"""
 
-    del arguments, options
-    raise _pending("compare_campaign", "B4-03（Claude 评估器）")
+    from tools.official_client_capture import claude_upgrade_compare
+
+    return claude_upgrade_compare.compare_campaign(campaign_dir, candidate_id)
 
 
-def accept_campaign(*arguments: Any, **options: Any) -> Any:
-    """评估读侧根：正式验收（Claude 编排器尚未实现，由 B4-06（accept 门禁 Claude 版） 落实）。"""
+def accept_campaign(
+    campaign_dir: Path,
+    candidate_id: str,
+    assertions_path: Path | None,
+    external_gate_root: Path,
+    external_gate_path: Path,
+) -> dict[str, Any]:
+    """评估读侧根（B4-06b）：重放封存材料与外部门禁、写 Store 验收链、accept 阶段结果、验收证据封印与 VC-5 checkpoint；
+    实现在 ``claude_upgrade_acceptance``（Claude 身份策略 ``evaluator.accept_reader_roots`` 从这里按函数级计算读侧闭包）。
+    参数顺序与 Codex 同名根相同。"""
 
-    del arguments, options
-    raise _pending("accept_campaign", "B4-06（accept 门禁 Claude 版）")
+    from tools.official_client_capture import claude_upgrade_acceptance
+
+    return claude_upgrade_acceptance.accept_campaign(
+        campaign_dir,
+        candidate_id,
+        assertions_path=assertions_path,
+        external_gate_root=external_gate_root,
+        external_gate_receipt=external_gate_path,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4708,8 +4725,10 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
         "B3-04（VC-4 候选构建与冻结）",
     ),
     "capture-candidate": ("候选采集 attempt：run 或 seal", "B4-01／B4-02（候选采集与四阶段封存）"),
-    "compare": ("只用封存证据离线比较", "B4-03（Claude 评估器）"),
-    "accept": ("逐规则正式验收门禁", "B4-06（accept 门禁 Claude 版）"),
+    # compare 与 accept 由 B4-06b 落实（实现在 claude_upgrade_compare／claude_upgrade_acceptance，见 ``main`` 的分派）；表项只用于
+    # 注册子命令解析器。
+    "compare": ("只用封存证据离线比较", "B4-06b（compare／accept 读侧根）"),
+    "accept": ("逐规则正式验收门禁", "B4-06b（compare／accept 读侧根）"),
     "account-sealed-candidate": ("候选封存后的请求入账", "B4-02（候选证据四阶段封存）"),
     # deliver-candidate（run／finalize）与 delivery-stage-invalidate（preview／apply）由 B4-07 编排器部分落实（实现在
     # claude_upgrade_delivery，见 ``main`` 的分派）；表项只用于注册子命令解析器。
@@ -5073,6 +5092,11 @@ def _build_parser() -> argparse.ArgumentParser:
             from tools.official_client_capture import claude_upgrade_candidate_seal
 
             claude_upgrade_candidate_seal.add_seal_arguments(target)
+        if name == "accept":
+            # 断言结果与候选外部门禁收据（与 Codex 同名同义），B4-06b。
+            target.add_argument("--assertions", type=Path)
+            target.add_argument("--external-gate-root", type=Path, required=True, help="候选外部门禁收据所在的 0700 证据根")
+            target.add_argument("--external-gate-receipt", type=Path, required=True, help="由独立 finalizer 生成并可重放的候选外部门禁收据")
         if name == "plan-candidate-gates":
             # 候选源码树、树内映射与计划输出（与 Codex 同名同义；三者都不给时是需求预览），B3-04。
             from tools.official_client_capture import claude_upgrade_candidate
@@ -5293,7 +5317,8 @@ def main(argv: list[str] | None = None) -> int:
     门禁计划与候选构建冻结（B3-04），revision-open 与 invalidate-candidate 在共享流程之外写 Store 侧两份登记（B3-05 编排器
     部分，``claude_upgrade_revision``），plan 带控制收据时建 preflight_only Campaign、analyze-target 做 VC-1 静态分析
     （B2-11），deliver-candidate 与 delivery-stage-invalidate 做 VC-6 候选交付、交付恢复段与经批准的阶段失效（B4-07 编排器
-    部分，``claude_upgrade_delivery``），其余 Claude 专属子命令在动作体落实前报未实现。
+    部分，``claude_upgrade_delivery``），compare 与 accept 是 VC-5 的两个评估读侧根（B4-06b，``claude_upgrade_compare``／
+    ``claude_upgrade_acceptance``），其余 Claude 专属子命令在动作体落实前报未实现。
 
     B3-01 起 VC-2～VC-6 经 ``compile-and-run-vc-batch`` 原子派发：父监督器（campaign-run）上下文里批次控制面命令一律
     拒绝，草案、修订与预览这类等审核的暂停点退出 0（``claude_upgrade_batch`` 第四、五节）。
@@ -5378,6 +5403,19 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_delivery
 
             result, return_code = claude_upgrade_delivery.command(arguments)
+        elif arguments.command == "compare":
+            # B4-06b：比较收据写出即 0；覆盖不全等前提不成立时抛错、零写入（退出 1）。
+            result, return_code = compare_campaign(Path(arguments.campaign_dir), str(arguments.candidate_id)), 0
+        elif arguments.command == "accept":
+            # B4-06b：验收完成（VC-5 checkpoint 已写）为 0；外部门禁有失败门禁、只把这一轮定稿进 Store 时为 2。
+            result = accept_campaign(
+                Path(arguments.campaign_dir),
+                str(arguments.candidate_id),
+                arguments.assertions,
+                arguments.external_gate_root,
+                arguments.external_gate_receipt,
+            )
+            return_code = 0 if result.get("accepted") is True else 2
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)
