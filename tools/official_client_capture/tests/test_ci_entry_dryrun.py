@@ -8,10 +8,13 @@
 分类——客户端表登记的待接入记 registered_pending，pre-A3 按旁路认证登记的记录库逐场景读场景结果，链体停在登记占位上的记
 scenario_pending，隔离降级、有请求、错误信息不是占位、认证读不到的记 real；逐单元承接请求原样交给编排器；有采集在跑时
 同样让路（yielded）；两客户端都纳管时后台验证通过后两客户端的入口空跑都接上（另一客户端的轮次在验证进行中搭上）。
+空跑串行（10-07 B5a-10 验收发现）：两份空跑在入口门禁工作目录上排队，后到的等前一份跑完；排队期间被 stop 标为 superseded
+就放弃，超过上限结论 failed；只有一份空跑时结论里不出现排队字段（与改造前同形）。
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -157,8 +160,29 @@ class EntryDryRunTests(unittest.TestCase):
         for key in ("NEW", "IN", "UP", "CAND", "BASELINE_VERSION", "TARGET_VERSION", "D"):
             self.assertIn(f'{key}="{env[key]}"', original, f"{key} 原样沿用本轮参数")
         self.assertEqual(Path(outcome["result"]).name, f"{COMMIT[:12]}-{bv._sha256_file(next((self.data / 'control').glob('codex-*.json')))[:12]}.json")
+        self.assertNotIn("serial_lock_waited_seconds", payload, "只有一份空跑时不排队，结论与改造前同形")
         again = json.loads(self.start().stdout.strip().splitlines()[-1])
         self.assertEqual((again["action"], again["status"]), ("exists", "passed"), "同一提交＋同一部署不重复跑")
+
+    def test_serial_lock_gives_up_when_superseded_and_fails_past_the_limit(self) -> None:
+        lock = self.root / "entry-gates-work" / dr.SERIAL_LOCK_NAME
+        self.assertEqual(dr._serial_lock_path({"data_root": str(self.data)}), self.data.parent / "entry-gates-work" / dr.SERIAL_LOCK_NAME,
+                         "锁与 entry-gates.sh 缺省的入口门禁工作目录同一处")
+        lock.parent.mkdir()
+        holder = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        try:
+            self.assertIsNone(dr._acquire_serial_lock(lock, lambda: False, timeout=5, poll=0.05),
+                              "排队期间结论被 stop 标为 superseded 就放弃")
+            with self.assertRaisesRegex(dr.DryRunError, "超过"):
+                dr._acquire_serial_lock(lock, lambda: True, timeout=0.2, poll=0.05)
+        finally:
+            os.close(holder)
+        held = dr._acquire_serial_lock(lock, lambda: True, timeout=5, poll=0.05)
+        self.assertIsNotNone(held, "前一份释放后拿得到")
+        fd, waited = held
+        self.assertLess(waited, 1)
+        os.close(fd)
 
     def test_opening_dry_run_reexecutes_with_audit_up_to_p0_receipt(self) -> None:
         outcome = json.loads(self.start("--opening").stdout.strip().splitlines()[-1])
@@ -480,6 +504,19 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
                 self.assertIn("不能与 --opening／--reexecute", refused.stderr)
         missing = self.start_claude("--unit-inherit-request", str(self.root / "missing.json"))
         self.assertEqual(missing.returncode, 2)
+
+    def test_two_clients_dry_runs_queue_on_the_gate_work_directory(self) -> None:
+        # 两客户端都纳管时，后台验证通过后两份空跑几乎同时接上；编排器各跑 3 秒，后到的那份排队、两份都通过。
+        self.configure(sleep=3)
+        codex = json.loads(self.start().stdout.strip().splitlines()[-1])
+        claude = json.loads(self.start_claude().stdout.strip().splitlines()[-1])
+        self.assertEqual((codex["action"], claude["action"]), ("started", "started"))
+        results = [self.wait(codex["result"]), self.wait(claude["result"])]
+        self.assertEqual([item["status"] for item in results], ["passed", "passed"], results)
+        queued = [item for item in results if "serial_lock_waited_seconds" in item]
+        self.assertEqual(len(queued), 1, "恰有一份排过队")
+        self.assertGreaterEqual(queued[0]["serial_lock_waited_seconds"], 1)
+        self.assertEqual(len(self.calls()), 2, "两份都跑了编排器")
 
     def test_background_validation_chains_both_clients_dry_runs(self) -> None:
         codex_receipt = next((self.data / "control").glob("codex-*.json"))

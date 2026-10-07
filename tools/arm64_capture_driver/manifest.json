@@ -118,9 +118,9 @@
     },
     {
       "path": "driver/entry_dryrun.py",
-      "sha256": "9ad12cebb3e96ec620a586e47d39e534ec54a420ee1977654efe4efc526ee751",
+      "sha256": "8fba2bda972a4dd54c230d9e5eefef195ff24a0c9521592b1057edaf587df654",
       "mode": "0700",
-      "bytes": 37212
+      "bytes": 41109
     },
     {
       "path": "driver/entry_gates.py",
@@ -549,5 +549,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "bcee053bc7d2ed6e83854287b2f7aa5e1f46a8f5f34708cc61c0c1cf52cf9798"
+  "manifest_sha256": "02db8916760087e0b4f994dc549c49256535192d640ce554e8139a2f893dabdb"
 }

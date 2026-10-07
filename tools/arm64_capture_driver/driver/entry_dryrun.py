@@ -12,9 +12,16 @@
   （首批是真实官方取证），空跑最远到 ``p0-receipt``。
 * 跑：``env -i`` 干净环境里 ``nice`` 执行 ``entry.sh --to <步骤>``（默认 ``atomic-double``：建账本之前那一段；``p0-receipt`` 连
   建账本之后一起）；升级开工的空跑 ``--opening``：重新执行全集并带读集审计（``--reexecute-gates --audit-reads``），默认到
-  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库：刚由后台验证（E4-01）验过的单元输入没变就承接，不重复劳动。
+  ``p0-receipt``；``--reexecute``：只重新执行全集、不带审计（冷跑计时用，审计会多约两倍开销）。入口门禁与 pre-A3 用同一份单元执行记录库；默认重新执行全集（B-09），只有带 ``--unit-inherit-request`` 时才按 B5a-08 合同
+  逐单元承接。
 * 让路：有采集在跑（统一调度执行器的整机预约有存活的申请方）就不起，记 ``yielded``；空跑不申请整机，不能挡采集——门禁单元
   本来就会被采集预约停派。
+* 排队（10-07 B5a-10 ARM64 验收发现）：入口门禁工作目录（``entry-gates.sh`` 缺省的数据根上一级 ``entry-gates-work``）同一时刻
+  只许一次入口门禁，编排器调用它时不排队，并发的第二次以退出码 3 失败；两客户端都纳管时，后台验证通过后两客户端的空跑几乎
+  同时接上，必然撞上。所以空跑调用编排器之前，先在该工作目录里取一把空跑串行锁（``.entry-dryrun.lock``，flock），持有到编排器
+  结束：后到的空跑排队等前一份跑完（上限 3 小时，超时结论 failed）；排队期间结论被 stop 标为 superseded 就放弃、不跑编排器。
+  真的排过队（至少 1 秒）才在结论里写 ``serial_lock_waited_seconds``，只有一个客户端纳管时不会排队，结论与改造前同形。前台
+  入口与后台验证的入口门禁不经这把锁，行为不变。
 * 开跑前的日常维护（``entry_housekeeping.py``）：清 Go 编译缓存里 6 小时以上没用过的条目、清理单元执行记录库（保留期内与仍被
   v2 认证、P0 v2 证据引用的都留着）、只留最近 5 次空跑的演练根与产物、部署留下的旧暂存树每组只留最近 2 份（E4-03），再查
   根盘余量；越过停线（与派发前守卫同一条）就不跑，
@@ -52,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import importlib.util
 import json
 import os
@@ -61,7 +69,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 SCHEMA = "entry-dryrun/v1"
 DIRECTORY = "entry-dryrun"
@@ -81,6 +89,10 @@ CLEAN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PRE_A3_CERTIFICATION_NAME = "pre-a3-path-certification.json"
 PRE_A3_RESULT_PREFIX = "PRE_A3_SCENARIO_RESULT "
 PRE_A3_UNIT_PREFIX = "pre-a3:"
+# 空跑串行锁（见模块说明「排队」）：放在 entry-gates.sh 缺省的入口门禁工作目录里，上限 3 小时，每 2 秒试一次。
+SERIAL_LOCK_NAME = ".entry-dryrun.lock"
+SERIAL_LOCK_TIMEOUT = 3 * 3600
+SERIAL_LOCK_POLL = 2.0
 
 
 class DryRunError(RuntimeError):
@@ -390,6 +402,58 @@ def _update(path: Path, **fields: Any) -> dict[str, Any] | None:
     return updated
 
 
+def _serial_lock_path(payload: Mapping[str, Any]) -> Path:
+    """空跑串行锁的位置：与 entry-gates.sh 缺省的入口门禁工作目录（数据根上一级的 entry-gates-work）同一处。"""
+
+    return Path(str(payload["data_root"])).parent / "entry-gates-work" / SERIAL_LOCK_NAME
+
+
+def _acquire_serial_lock(lock_path: Path, still_running: Callable[[], bool], *, timeout: float, poll: float) -> tuple[int, float] | None:
+    """取空跑串行锁（见模块说明「排队」）。
+
+    拿到返回（文件描述符，排队秒数），调用方跑完编排器后关闭描述符即释放（进程退出也会释放）；排队期间 ``still_running()``
+    为假（结论被 stop 标为 superseded）返回 None；超过 ``timeout`` 秒抛 DryRunError。
+    """
+
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    started = time.monotonic()
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd, time.monotonic() - started
+            except BlockingIOError:
+                pass
+            if not still_running():
+                os.close(fd)
+                return None
+            if time.monotonic() - started >= timeout:
+                raise DryRunError(f"等前一份空跑释放入口门禁工作目录超过 {int(timeout)} 秒：{lock_path}")
+            time.sleep(poll)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        raise
+
+
+def _run_orchestrator(payload: Mapping[str, Any], runroot: Path, env_file: Path) -> tuple[int, Path]:
+    """在干净环境里跑入口编排器（``env -i``，按空跑种类带参数），返回（退出码，日志路径）。调用方持有空跑串行锁。"""
+
+    argv = ["env", "-i", "HOME=/root", "LANG=C.UTF-8", f"PATH={CLEAN_PATH}", f"ARM64_VC_ENV={env_file}",
+            "bash", str(payload["entry"]), "--to", payload["to"]]
+    if payload.get("opening"):
+        argv += ["--reexecute-gates", "--audit-reads"]
+    elif payload.get("reexecute"):
+        argv += ["--reexecute-gates"]
+    elif payload.get("unit_inherit_request"):
+        argv += ["--unit-inherit-request", str(payload["unit_inherit_request"]["path"])]
+    log = runroot / "entry.out"
+    with log.open("ab") as handle:
+        returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
+    return returncode, log
+
+
 def run(result: Path) -> int:
     path = Path(result)
     payload = _read(path)
@@ -418,17 +482,23 @@ def run(result: Path) -> int:
     payload = _update(path, rehearsal_root=str(root), dryrun_runroot=str(runroot), env_file=str(env_file))
     if payload is None:
         return 0
-    argv = ["env", "-i", "HOME=/root", "LANG=C.UTF-8", f"PATH={CLEAN_PATH}", f"ARM64_VC_ENV={env_file}",
-            "bash", str(payload["entry"]), "--to", payload["to"]]
-    if payload.get("opening"):
-        argv += ["--reexecute-gates", "--audit-reads"]
-    elif payload.get("reexecute"):
-        argv += ["--reexecute-gates"]
-    elif payload.get("unit_inherit_request"):
-        argv += ["--unit-inherit-request", str(payload["unit_inherit_request"]["path"])]
-    log = runroot / "entry.out"
-    with log.open("ab") as handle:
-        returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
+    try:
+        held = _acquire_serial_lock(_serial_lock_path(payload), lambda: (_read(path) or {}).get("status") == "running",
+                                    timeout=SERIAL_LOCK_TIMEOUT, poll=SERIAL_LOCK_POLL)
+    except (DryRunError, OSError) as error:
+        _update(path, status="failed", completed_at_utc=_utc_now(), reason=f"空跑排队没拿到串行锁：{error}")
+        return 0
+    if held is None:
+        return 0   # 排队期间已被 stop 标为 superseded
+    lock_fd, waited = held
+    try:
+        if waited >= 1:
+            payload = _update(path, serial_lock_waited_seconds=int(waited))
+            if payload is None:
+                return 0
+        returncode, log = _run_orchestrator(payload, runroot, env_file)
+    finally:
+        os.close(lock_fd)
     summary = _orchestrator_run(runroot) or {}
     steps = [{"step_id": step.get("step_id"), "action": step.get("action"), "status": step.get("status"),
               "reasons": list(step.get("reasons") or [])[:4]} for step in summary.get("steps") or []]
