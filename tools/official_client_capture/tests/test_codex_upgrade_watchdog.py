@@ -161,11 +161,23 @@ class WatchdogTests(unittest.TestCase):
                     campaign_id="lease-campaign",
                 )
                 lease.acquire()
-                time_module = __import__("time")
-                time_module.sleep(0.15)
-                with self.assertRaises(incremental_recovery.WallClockTimeoutError):
-                    lease.check("lease-test")
-                lease.release()
+                try:
+                    time_module = __import__("time")
+                    time_module.sleep(0.15)
+                    # 租约截止（0.08 秒）与监督器全局墙钟预算同时到期：看门狗线程先走 deadline 判定，就记
+                    # WallClockTimeoutError；若它已过判定、正在写心跳时预算到期（高负载下写盘变慢，2026-10-07 ARM64
+                    # 后台验证实测），监督器抛 SupervisorTimeout，租约按 heartbeat_write_failed 停线。两条路径都写停线
+                    # 收据，本用例断言的是停线收据，两种超时都接受。
+                    with self.assertRaises(
+                        (
+                            incremental_recovery.WallClockTimeoutError,
+                            codex_upgrade.codex_upgrade_supervisor.SupervisorTimeout,
+                        )
+                    ):
+                        lease.check("lease-test")
+                finally:
+                    # 断言失败时也要释放：租约留在进程里，会让同一进程后续用例都报「禁止嵌套可变操作」。
+                    lease.release()
             self.assertTrue(
                 list((campaign / codex_upgrade.CAMPAIGN_LEASE_STOP_DIRECTORY).glob("*.json"))
             )
