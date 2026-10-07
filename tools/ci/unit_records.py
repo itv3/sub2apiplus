@@ -28,6 +28,11 @@
   记录摘要，执行写不承接的原因），连同测试组全集与诊断执行。**自检**（``verify_manifest``）：执行＋承接＝全集、
   不重复；重新执行全集模式不得有承接项；每条承接都追到原始的正式执行记录并逐项重验；测试组全部记录的测试 ID
   并集等于全集。
+* **逐单元承接**（B5a-08，``--mode unit-inherit``，合同见同目录 ``unit_inherit.py``）：来源记录可来自多次运行、多个提交，
+  逐单元判定承接或重跑。清单另引用决策收据（``unit-inherit-decision/v1``，与清单一起发布进记录库的
+  ``unit-inherit/decisions/<run_id>.json``），自检另核对：承接项都要求读集覆盖闭合；决策收据在库、自摘要与清单登记的
+  相符、属于本次运行且三个复核点都通过；承接项的来源（运行与记录摘要）、执行项与决策收据逐单元一致，上下文与来源
+  集合摘要与决策收据相同。
 
 子命令：``verify --manifest <清单> [--store <记录库>]``（重验一次运行的清单，退出码 0 通过、1 不通过）。
 """
@@ -56,8 +61,14 @@ RECORD_SCHEMA = "unit-execution-record/v1"
 MANIFEST_SCHEMA = "unit-execution-manifest/v1"
 FULL_SET_PASS = "full-set-pass"
 RE_EXECUTE = "re-execute"
-MODES = (FULL_SET_PASS, RE_EXECUTE)
-MODE_LABELS = {FULL_SET_PASS: "全集通过", RE_EXECUTE: "重新执行全集"}
+# B5a-08：逐单元承接（合同见 unit_inherit.py）。清单另引用决策收据，决策收据放在记录库的 unit-inherit 目录。
+UNIT_INHERIT = "unit-inherit"
+MODES = (FULL_SET_PASS, RE_EXECUTE, UNIT_INHERIT)
+MODE_LABELS = {FULL_SET_PASS: "全集通过", RE_EXECUTE: "重新执行全集", UNIT_INHERIT: "逐单元承接"}
+INHERITING_MODES = frozenset({FULL_SET_PASS, UNIT_INHERIT})
+UNIT_INHERIT_DIR = "unit-inherit"
+UNIT_INHERIT_DECISION_SCHEMA = "unit-inherit-decision/v1"
+UNIT_INHERIT_CHECKPOINTS = ("queue", "lock", "publish")
 # 承接期限：默认 7 天（方案）；命令行只能调小，不能放宽。
 MAX_AGE_HOURS = 168.0
 PASSING_OUTCOMES = frozenset({"passed", "skipped", "expected_failure"})
@@ -65,7 +76,7 @@ MISSING = "missing"
 HERE = Path(__file__).resolve().parent
 # 执行器版本：执行器目录里参与调度、判定、输入解析与门禁编排的文件（存在的才算；字节码预编译工具另由执行器传入）。
 # 审计结论影响记录是否通过及覆盖是否闭合，审计合同必须进入执行器身份。
-EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "read_audit.py", "read_audit_runtime.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh", "full_set_receipt.py", "target_platform_gate.py")
+EXECUTOR_FILES = ("unit_executor.py", "unit_records.py", "read_audit.py", "read_audit_runtime.py", "entry_steps.py", "entry_gates.py", "entry-gates.sh", "full_set_receipt.py", "target_platform_gate.py", "unit_inherit.py")
 # 只决定缓存放在哪里的环境变量（内容按源码摘要校验或按整树摘要做键），不进环境指纹；执行器自己的控制变量也不进。
 ENV_CACHE_ONLY = frozenset({"PYTHONPYCACHEPREFIX", "CODEX_UPGRADE_IDENTITY_MEMO"})
 ENV_EXECUTOR_PREFIX = "UNIT_EXECUTOR_"
@@ -283,6 +294,8 @@ WHOLE_TESTS_READERS: dict[str, str] = {
     "test_arm64_supervised_deploy_transaction": "在受管树副本上真实部署：shutil.copytree 复制两个受管根（含测试目录），pre-A3 入口核对读取测试模块",
     "test_driver_client_table": "按 pre-A3 场景单元的输入声明展开测试模块的静态依赖闭包（unit_records.declared_inputs 读测试目录里的模块源码），"
                                 "核对第二受管根只让 Claude 场景单元失效（B5a-06）",
+    "test_ci_unit_inherit": "同 test_driver_client_table：按两客户端 pre-A3 场景单元的输入声明展开静态依赖闭包（读测试目录里的模块源码），"
+                            "核对只改第二受管根时 Claude 场景单元重跑、Codex 场景单元承接（B5a-08）",
 }
 # 人工核查确认的「读真实仓库 git 历史」的模块：模块名 → 原因（同一次核查；git 走 PATH 包装记录真实仓库上的调用）。
 # 这些模块读历史提交、对象或祖先关系，结论可能随提交变，加 HEAD 输入。不做自动识别：测试里的 git 命令绝大多数作用在
@@ -297,6 +310,8 @@ GIT_READERS: dict[str, str] = {
     "test_pre_a3_codex_parity": "对真实仓库 git show 读 B5a-04 开工基线提交的 pre-A3 认证模块与入口门禁，逐字对照 Codex 场景单元与输入声明",
     "test_driver_client_table_codex_parity": "对真实仓库 git show 读 B5a-06 开工基线提交的驱动与入口基础设施（参数解析、入口步骤与编排器、"
                                              "入口门禁、各驱动脚本），逐字对照 Codex 的派生、步骤判定与命令行",
+    "test_unit_inherit_codex_parity": "对真实仓库 git archive／git show 读 B5a-08 开工基线提交的 tools/ci、P0 收据与 pre-A3 认证模块、入口门禁脚本，"
+                                      "逐字对照 Codex 重新执行全集与 B-09 路径的产物、判定与源码残差",
 }
 # 读集审计（E3-04）实测、静态闭包漏掉的测试目录读取：模块名 → {测试目录相对路径: 原因}。来源都是受管模块之间的函数内
 # 导入（静态闭包按设计不追，见 TestDependencies 的说明）：被测代码运行时延迟导入别的受管模块，后者在模块级导入测试目录
@@ -751,6 +766,11 @@ class RecordStore:
     def manifest_path(self, run_id: str) -> Path:
         return self.root / "runs" / f"{run_id}.json"
 
+    def decision_path(self, run_id: str) -> Path:
+        """逐单元承接运行的决策收据（B5a-08）：与清单同一个运行 ID，只增不改。"""
+
+        return self.root / UNIT_INHERIT_DIR / "decisions" / f"{run_id}.json"
+
     def put_record(self, record: Mapping[str, Any]) -> Path:
         if not seal_ok(record, "record_sha256"):
             raise RecordsError("记录自摘要不符，拒绝入库")
@@ -985,7 +1005,8 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
     facts = RunFacts(policy_sha256=str(manifest.get("policy_sha256")), environment=list(manifest.get("environment") or []),
                      environment_sha256=str(manifest.get("environment_sha256")), executor=dict(manifest.get("executor") or {}),
                      max_age_hours=float(manifest.get("inheritance_max_age_hours") or 0),
-                     now=parse_utc(manifest.get("decided_at_utc")) or 0.0, historical_read_audit=historical)
+                     now=parse_utc(manifest.get("decided_at_utc")) or 0.0, historical_read_audit=historical,
+                     require_read_audit=mode == UNIT_INHERIT)
     if facts.environment_sha256 != entries_sha256(facts.environment):
         problems.append("清单的环境指纹与明细不符")
     if facts.max_age_hours > MAX_AGE_HOURS:
@@ -999,7 +1020,7 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
         if disposition not in ("executed", "inherited"):
             problems.append(f"{unit_id}：处置只能是本次执行或承接，实际是 {disposition!r}")
             continue
-        if disposition == "inherited" and mode != FULL_SET_PASS:
+        if disposition == "inherited" and mode not in INHERITING_MODES:
             problems.append(f"{unit_id}：重新执行全集模式不得有承接项")
         record_path = Path(str(entry.get("record_path") or ""))
         record = _read_json(record_path) if entry.get("record_path") else None
@@ -1046,6 +1067,48 @@ def verify_manifest(manifest: Mapping[str, Any], *, store: RecordStore | None, h
         record = _read_json(Path(str(entry.get("record_path") or ""))) if isinstance(entry, Mapping) else None
         if record is None or not seal_ok(record, "record_sha256") or record.get("kind") != "diagnostic":
             problems.append(f"诊断执行 {entry.get('unit_id') if isinstance(entry, Mapping) else entry}：记录缺失或不是诊断执行")
+    if mode == UNIT_INHERIT:
+        problems.extend(_unit_inherit_problems(manifest, entries, store))
+    return problems
+
+
+def _unit_inherit_problems(manifest: Mapping[str, Any], entries: list[Any], store: RecordStore | None) -> list[str]:
+    """逐单元承接清单与决策收据的一致性（B5a-08，见模块说明）。凭证与批准的时效由执行器的复核点与消费端
+    （unit_inherit.verify_published）判定，这里只核对两份文件说的是同一件事。"""
+
+    reference = manifest.get("unit_inherit_decision")
+    if not isinstance(reference, Mapping) or set(reference) != {"path", "decision_sha256", "context_sha256", "sources_sha256"}:
+        return ["逐单元承接清单缺少决策收据引用"]
+    if store is None:
+        return ["逐单元承接清单没有记录库可核验决策收据"]
+    path = store.decision_path(str(manifest.get("run_id")))
+    decision = _read_json(path) if str(reference["path"]) == str(path) else None
+    if (decision is None or decision.get("schema_version") != UNIT_INHERIT_DECISION_SCHEMA or not seal_ok(decision, "decision_sha256")
+            or decision.get("decision_sha256") != reference["decision_sha256"]):
+        return ["决策收据不在记录库的规定位置、自摘要不符或与清单登记的不是同一份"]
+    problems: list[str] = []
+    if decision.get("run_id") != manifest.get("run_id") or decision.get("action") != "inherit-matching-units":
+        problems.append("决策收据不属于本次运行，或不是三个复核点都通过的承接决策")
+    if decision.get("context_sha256") != reference["context_sha256"] or decision.get("sources_sha256") != reference["sources_sha256"]:
+        problems.append("清单登记的上下文或来源集合摘要与决策收据不一致")
+    checkpoints = decision.get("checkpoints") if isinstance(decision.get("checkpoints"), list) else []
+    if (tuple(item.get("checkpoint") if isinstance(item, Mapping) else None for item in checkpoints) != UNIT_INHERIT_CHECKPOINTS
+            or not all(item.get("authorized") is True for item in checkpoints)):
+        problems.append("决策收据的复核点不完整或有拒绝")
+    units = decision.get("units") if isinstance(decision.get("units"), Mapping) else {}
+    rows = {str(entry.get("unit_id")): entry for entry in entries if isinstance(entry, Mapping)}
+    if set(units) != set(rows):
+        problems.append("决策收据的单元集合与清单不同")
+    for unit_id, entry in sorted(rows.items()):
+        row = units.get(unit_id) if isinstance(units.get(unit_id), Mapping) else {}
+        source = row.get("source") if isinstance(row.get("source"), Mapping) else {}
+        if entry.get("disposition") == "inherited":
+            basis = entry.get("basis") if isinstance(entry.get("basis"), Mapping) else {}
+            if (row.get("disposition") != "inherited" or source.get("record_sha256") != entry.get("record_sha256")
+                    or source.get("run_id") != basis.get("run_id")):
+                problems.append(f"{unit_id}：承接项的来源与决策收据不一致")
+        elif row.get("disposition") != "executed":
+            problems.append(f"{unit_id}：执行项在决策收据里不是执行")
     return problems
 
 

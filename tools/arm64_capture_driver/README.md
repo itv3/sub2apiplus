@@ -630,6 +630,38 @@ VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置
 
 `go-compile-warmup.json` 记录提交、后端源码摘要、Go 二进制与环境摘要、三个缓存根、编译日志、退出码和耗时；对应准备执行器的目录为 `go-compile-warmup-executor/`。这是编译收据，不是测试通过凭证，不能承接测试结论。性能比较必须把预热和三组测试全部耗时相加，不只比较预热后的热跑部分。
 
+## B5a-08 逐单元承接（`driver/unit_inherit.py`）
+
+两客户端共用的受控承接入口：来源记录可来自多次运行、多个提交，逐单元判定，不能承接的单元只重跑它自己。缺省仍是
+`re-execute`；`full-set-pass` 与 B-09 保留给需要全集同源的场合。
+
+* 入口：`entry.sh --unit-inherit-request <JSON>`（与 `--full-set-request`、`--reexecute-gates` 互斥）或独立
+  `entry-gates.sh --mode unit-inherit --unit-inherit-request <JSON> [--unit-inherit-stage pre-ledger|post-ledger|formal:<id>]`。
+  没给请求时回退重新执行全集。与 B-09 一样核对部署、沿用能重放的原工作区、不做 Go 预热、通过后保留测试树；可带
+  `--audit-reads [--audit-strict]` 与读集合同，宿主输入清单与收窄提案只许 `re-execute`。编排器给了请求时，入口门禁与
+  pre-A3 两步另把请求文件与 `unit_inherit.py` 列入输入，请求一换两步都重做。
+* 当前上下文 `unit-inherit-context/v1`：客户端、入口阶段、测试树提交、`control` 里每个已纳管客户端最新的部署收据、环境
+  指纹、调度策略版本、执行器版本、门禁全集与组合、记录库。执行器在每个复核点现算，与请求登记的逐字段相同才承接。
+* 请求 `unit-inherit-request/v1`：`reuse_enabled`、`context`（文件索引）、`sources`（`unit-inherit-sources/v1`：承接单元 →
+  来源运行与记录摘要，来源运行 → 已发布清单摘要）、`consumer_clock`、`revocation`、两类 `approvals`（scope `unit-inherit/v1`，
+  `binding_sha256` 绑定上下文摘要与来源集合摘要）；可选 `max_age_hours`（只能调小）、`clock_source`（`chronyc` 缺省，或
+  `file:<绝对路径>`）、`campaign_status_source`（Formal 阶段必需，`file:<绝对路径>`）。缺任一项或任一项失效即整次重新执行。
+  工具不签批准。
+* 可承接＝`check_record` 全部通过且要求读集闭合、来源清单已发布且摘要与来源集合相符、在期限内、来源运行未撤销；来源记录
+  登记的宿主快照按 B-10 同法沿用并重新快照（测试树重建、文件元数据变化即判输入变了重跑）。
+* 复核点：排队前、取得调度锁后、发布清单前各一次，每次重新取校时样本与撤销查询（以新文件追加进记录库
+  `unit-inherit/evidence/`）、重读请求核对固定部分与批准原文件、重做每条承接记录的核对；锁后只缩不扩，发布前失败即不发布
+  清单（已执行单元的记录保留）。决策收据 `unit-inherit-decision/v1` 随清单发布到 `unit-inherit/decisions/<run_id>.json`。
+* 消费端：P0 收据签发与 VC-0 收口（`codex_upgrade_vc_receipt`）、pre-A3 签发（认证模块 `issue`）按决策收据重验形成期
+  证明并取消费时的校时、撤销与批准（写 `unit-inherit/consumptions/<run_id>/`）；认证核验按形成期快照与签发时刻历史重放。
+  验证器从仓库 `tools/ci` 或本目录 `driver/` 加载。请求与批准原文件在消费完成前必须留在原处；撤回批准＝改动或删除批准文件。
+* 工具：`entry-gates.sh <与正式运行相同的组合与坐标> --unit-inherit-propose <新目录>` 在同一执行环境里让执行器只判定、写出
+  提案（`context.json`、`sources.json`、`binding.json`）后退出 0，不执行、不导出、不签发（上下文含环境指纹，提案必须与
+  正式运行同一环境）；`unit_inherit.py sample-clock`、`query-revocation`、`revoke`（登记撤销一次来源运行，只增）、
+  `assemble-request`、`verify [--historical]`。
+* 尚未覆盖：记录库清理（`entry_housekeeping`）不处理 `unit-inherit/` 目录；入口空跑与后台验证尚未接入本模式（B5a-10）；
+  Formal 阶段的 Campaign 状态文件由谁维护留给建账本之后的工作项。
+
 ## 整机预约中止与重派（C-03）
 
 预约批准绑定完整请求摘要，同名 owner 的下一次请求不能复用旧批准。`reservation_grace_seconds` 默认 30、`reservation_stop_seconds` 默认 5；将前者设为 `null` 恢复等待自然结束。并行与独占段都在等待时观察预约；撤回的预约停止后续中止操作。

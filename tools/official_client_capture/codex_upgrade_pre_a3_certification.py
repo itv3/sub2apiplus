@@ -20,6 +20,10 @@ Claude 升级 B5a-04 起按客户端分组：场景表与真实链登记按客�
 是 ``pre-a3:claude:<场景>``，与 Codex 单元在同一记录库里按单元 ID 区分、互不承接；Claude 只从单元执行记录签发
 ``pre-a3-path-certification/v3``（v2 结构加 ``client``），场景集合为空时拒绝规划、签发与核验（场景由 B5a-05 登记）。
 对编排器的引用（指纹、文件摘要、补账命令、``ConfigurationError``）一律经客户端适配器取，本模块不再导入 ``codex_upgrade``。
+
+B5a-08 起认得逐单元承接（``unit-inherit``）的运行清单：从它签 v2／v3 时，场景记录照旧逐条重验，另按决策收据重验形成期证明并
+核对消费时的校时、撤销与批准（验证器是 tools/ci/unit_inherit.py，只从仓库同级目录或已安装驱动加载）；认证在
+``unit_manifest.unit_inherit`` 登记决策收据摘要与这次消费登记，核验认证时按形成期快照与签发时刻历史重放。
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -1244,19 +1249,21 @@ def _published_manifest(store: _RecordStore, path: Path) -> dict[str, Any]:
 
 
 def _scenario_from_records(store: _RecordStore, manifest: Mapping[str, Any], entry: Mapping[str, Any],
-                           name: str, client: str = DEFAULT_CLIENT) -> tuple[dict[str, Any] | None, int, list[str]]:
+                           name: str, client: str = DEFAULT_CLIENT, *,
+                           inheriting_mode: str = "full-set-pass") -> tuple[dict[str, Any] | None, int, list[str]]:
     """核验运行清单里一个场景的那一项，返回（带执行记录引用的场景记录、网络计数、问题）。问题非空即该场景失败。
 
     核对：处置是本次执行或承接（重新执行全集不得承接）；记录在库、文件名＝自摘要、是该场景的正式执行、规格与输入
     摘要等于清单、按原始字段判通过；本次执行的记录来自本次运行，承接的记录来自别的运行、原运行清单把它列为正式执行、
     没超过清单的承接期限；日志在库且摘要相符，日志里恰好一行场景结果、自摘要相符、场景名对、是正式执行、网络计数为 0、
-    场景通过。单元 ID 按客户端的前缀拼（Claude 的记录只认 ``pre-a3:claude:`` 单元，不承接 Codex 的同名记录）。"""
+    场景通过。单元 ID 按客户端的前缀拼（Claude 的记录只认 ``pre-a3:claude:`` 单元，不承接 Codex 的同名记录）。
+    ``inheriting_mode`` 是允许有承接项的模式：缺省全集通过；逐单元承接（B5a-08）的清单经它自己的分支传 ``unit-inherit``。"""
 
     unit_id = f"{scenario_unit_prefix(client)}{name}"
     disposition = entry.get("disposition")
     if disposition not in ("executed", "inherited"):
         return None, 0, [f"运行清单里的处置不是本次执行或承接：{disposition!r}"]
-    if disposition == "inherited" and manifest.get("mode") != "full-set-pass":
+    if disposition == "inherited" and manifest.get("mode") != inheriting_mode:
         return None, 0, ["重新执行全集的运行清单不得有承接项"]
     digest = str(entry.get("record_sha256") or "")
     record = store.read(store.record_path(unit_id, digest)) if _SHA256_TEXT.fullmatch(digest) else None
@@ -1323,7 +1330,7 @@ def _scenario_from_records(store: _RecordStore, manifest: Mapping[str, Any], ent
 
 
 def _scenarios_from_records(
-    store: _RecordStore, manifest: Mapping[str, Any], client: str = DEFAULT_CLIENT,
+    store: _RecordStore, manifest: Mapping[str, Any], client: str = DEFAULT_CLIENT, *, inheriting_mode: str = "full-set-pass",
 ) -> tuple[list[dict[str, Any]], list[str], int]:
     """按场景全集逐个核验运行清单，返回（逐场景报告、失败项、网络计数合计）。清单里该客户端全集之外的 pre-A3 单元
     同样让认证不通过（记在失败项）；别的客户端的 pre-A3 单元（另一前缀）不在本客户端的核验范围内。"""
@@ -1343,7 +1350,7 @@ def _scenarios_from_records(
             report.append(_placeholder_record(name, ["运行清单里没有该场景（缺报）" if not found else "运行清单里该场景出现多次"], None,
                                               client))
             continue
-        row, count, problems = _scenario_from_records(store, manifest, found[0], name, client)
+        row, count, problems = _scenario_from_records(store, manifest, found[0], name, client, inheriting_mode=inheriting_mode)
         attempts += count
         if problems or row is None:
             report.append(_placeholder_record(name, problems or ["场景执行记录核验不通过"], (row or {}).get("seconds"), client))
@@ -1352,6 +1359,92 @@ def _scenarios_from_records(
     failed = [item["name"] for item in report if item["status"] != "passed"]
     failed += [f"全集之外的执行单元：{unit_id}" for unit_id in stray]
     return report, failed, attempts
+
+
+# ---------------------------------------------------------------------------
+# B5a-08：逐单元承接（unit-inherit）运行清单的签发与核验分支
+# ---------------------------------------------------------------------------
+# 承接项来自多次运行、多个提交，签发时不能只放宽模式：场景记录照旧逐条重验，另按决策收据重验形成期证明（决策收据在记录库
+# 且自摘要相符、三个复核点按形成期快照成立、每条承接记录按决策收据登记的上下文重做 check_record），并取消费时的校时与撤销
+# 快照、核对两类批准此刻仍有效，任一不满足即拒签。核验已签的认证（find-reusable 等）按形成期快照与签发时刻历史重放，不再
+# 刷新凭证。验证器是 tools/ci/unit_inherit.py（与执行器同一份）：数据根里没有 tools/ci，只从仓库同级目录或已安装驱动这两个
+# 固定位置加载，不从清单或认证里的路径加载代码。
+UNIT_INHERIT_MODE = "unit-inherit"
+UNIT_INHERIT_VERIFIER_ROOTS = (Path(__file__).resolve().parents[1] / "ci", Path("/root/arm64-capture-driver/driver"))
+UNIT_INHERIT_VERIFIER_FILES = ("unit_inherit.py", "full_set_receipt.py", "unit_records.py", "read_audit.py",
+                               "read_audit_runtime.py", "client_table.py")
+UNIT_INHERIT_VERIFIER_MODULE = "_managed_unit_inherit_verifier"
+UNIT_INHERIT_PURPOSE = "pre-a3-certification"
+
+
+def _unit_inherit_verifier() -> Any:
+    """固定位置里第一处文件齐全（普通文件、不是符号链接）的验证器；同一进程按位置复用已加载的模块。"""
+
+    for root in UNIT_INHERIT_VERIFIER_ROOTS:
+        try:
+            if not root.is_dir() or any((root / name).is_symlink() or not (root / name).is_file()
+                                        for name in UNIT_INHERIT_VERIFIER_FILES):
+                continue
+        except OSError:
+            continue
+        location = (root / "unit_inherit.py").resolve()
+        loaded = sys.modules.get(UNIT_INHERIT_VERIFIER_MODULE)
+        if loaded is not None and Path(str(getattr(loaded, "__file__", ""))).resolve() == location:
+            return loaded
+        spec = importlib.util.spec_from_file_location(UNIT_INHERIT_VERIFIER_MODULE, location)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[UNIT_INHERIT_VERIFIER_MODULE] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(UNIT_INHERIT_VERIFIER_MODULE, None)
+            raise
+        return module
+    raise CertificationError("逐单元承接验证器缺失：仓库 tools/ci 与已安装驱动里都没有完整的 unit_inherit.py 及其依赖")
+
+
+def _published_unit_inherit_manifest(store: _RecordStore, path: Path) -> dict[str, Any]:
+    """逐单元承接运行的清单：与 ``_published_manifest`` 同样核对格式、自摘要与已发布，模式必须是 unit-inherit。"""
+
+    manifest = store.read(Path(path))
+    if manifest is None or manifest.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _seal_matches(manifest, "manifest_sha256"):
+        raise CertificationError("运行清单缺失、格式不对或自摘要不符")
+    if manifest.get("mode") != UNIT_INHERIT_MODE:
+        raise CertificationError(f"运行清单的模式不是逐单元承接：{manifest.get('mode')!r}")
+    run_id = str(manifest.get("run_id") or "")
+    published = store.read(store.manifest_path(run_id)) if _RUN_ID_TEXT.fullmatch(run_id) else None
+    if published is None or not _seal_matches(published, "manifest_sha256") or published.get("manifest_sha256") != manifest["manifest_sha256"]:
+        raise CertificationError("运行清单没有发布到记录库（清单自检没通过的运行不能签发）")
+    return published
+
+
+def _unit_inherit_issue_proof(store: _RecordStore, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """签发时的形成期证明与消费时凭证（留证）：返回写进认证 ``unit_manifest.unit_inherit`` 的登记。"""
+
+    verifier = _unit_inherit_verifier()
+    try:
+        proof = verifier.verify_published(manifest, store.root, purpose=UNIT_INHERIT_PURPOSE)
+    except verifier.ERRORS as error:
+        raise CertificationError(f"逐单元承接运行的形成期证明重验不通过：{error}") from error
+    return {"decision_sha256": proof["decision_sha256"], "consumption": proof["consumption"], "verifier": proof["verifier"]}
+
+
+def _unit_inherit_replay(store: _RecordStore, manifest: Mapping[str, Any], reference: Mapping[str, Any]) -> None:
+    """核验已签认证：按形成期快照与签发时那份消费登记历史重放（不刷新凭证）；登记缺失或与决策收据不符即无效。"""
+
+    proof = reference.get("unit_inherit") if isinstance(reference.get("unit_inherit"), Mapping) else None
+    if proof is None or not isinstance(proof.get("consumption"), Mapping):
+        raise CertificationError("逐单元承接来源的认证没有登记签发时的形成期证明")
+    verifier = _unit_inherit_verifier()
+    try:
+        replayed = verifier.verify_published(manifest, store.root, purpose=UNIT_INHERIT_PURPOSE, historical=True,
+                                             consumption=proof["consumption"])
+    except verifier.ERRORS as error:
+        raise CertificationError(f"逐单元承接来源的认证历史重放不通过：{error}") from error
+    if replayed["decision_sha256"] != proof.get("decision_sha256"):
+        raise CertificationError("认证登记的决策收据与记录库里的不是同一份")
 
 
 def issue_certification_from_records(
@@ -1381,13 +1474,19 @@ def issue_certification_from_records(
         store = _RecordStore(Path(record_store))
     except OSError as error:
         raise CertificationError(f"记录库不可读：{error}") from error
-    manifest = _published_manifest(store, Path(unit_manifest))
-    report, failed, attempts = _scenarios_from_records(store, manifest, client)
+    # B5a-08：逐单元承接运行的清单走它自己的分支（新增函数）：承接项按 unit-inherit 模式逐条核验，场景全部通过时另重验形成期证明。
+    raw = store.read(Path(unit_manifest))
+    unit_inherit = isinstance(raw, dict) and raw.get("mode") == UNIT_INHERIT_MODE
+    manifest = _published_unit_inherit_manifest(store, Path(unit_manifest)) if unit_inherit else _published_manifest(store, Path(unit_manifest))
+    report, failed, attempts = _scenarios_from_records(store, manifest, client,
+                                                       inheriting_mode=UNIT_INHERIT_MODE if unit_inherit else "full-set-pass")
     records = {
         "unit_manifest": {"path": str(store.manifest_path(str(manifest["run_id"]))), "manifest_sha256": manifest["manifest_sha256"],
                           "run_id": manifest["run_id"], "mode": manifest["mode"]},
         "record_store": str(store.root),
     }
+    if unit_inherit and not failed and not attempts:
+        records["unit_manifest"]["unit_inherit"] = _unit_inherit_issue_proof(store, manifest)
     return _build_receipt(root, bindings, report, failed, attempts, observed_at_utc, records=records, client=client)
 
 
@@ -1404,11 +1503,16 @@ def _verify_records_v2(payload: Mapping[str, Any], client: str = DEFAULT_CLIENT)
     if (manifest is None or manifest.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _seal_matches(manifest, "manifest_sha256")
             or manifest.get("manifest_sha256") != reference.get("manifest_sha256") or manifest.get("mode") != reference.get("mode")):
         raise CertificationError("v2 认证引用的运行清单在记录库里缺失，或与收据登记的不符")
-    report, failed, attempts = _scenarios_from_records(store, manifest, client)
+    unit_inherit = manifest.get("mode") == UNIT_INHERIT_MODE
+    report, failed, attempts = _scenarios_from_records(store, manifest, client,
+                                                       inheriting_mode=UNIT_INHERIT_MODE if unit_inherit else "full-set-pass")
     if failed or attempts:
         raise CertificationError(f"v2 认证的执行记录重验不通过：{failed[:3]}")
     if payload.get("scenarios") != report:
         raise CertificationError("v2 认证的逐场景结果与记录库重验结果不一致")
+    if unit_inherit:
+        # B5a-08：逐单元承接来源的认证另按形成期快照与签发时那份消费登记历史重放。
+        _unit_inherit_replay(store, manifest, reference)
 
 
 def write_certification(output: Path, receipt: Mapping[str, Any]) -> Path:

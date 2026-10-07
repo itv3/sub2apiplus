@@ -26,6 +26,13 @@
 #   $(dirname $D)/unit-records），执行器另写清单 executor/unit-manifest.json 并自检。门禁项里有承接的单元时两份 P0 证据
 #   写 v2（E3-03：以运行清单为证据，另登记记录库与测试树五摘要，签发与 VC-0 收口按记录库逐条重验）；记录库里没有已发布
 #   的清单、五摘要算不出来时不写，总摘要的 p0_evidence_withheld 写明原因。
+# 逐单元承接（B5a-08）：--mode unit-inherit --unit-inherit-request <JSON>（合同见驱动 unit_inherit.py）。来源记录可来自多次运行、
+#   多个提交，不能承接的单元只重跑它自己；没给请求时回退重新执行全集，不能与 B-09 全集请求同用。执行器现算承接上下文要本轮
+#   客户端、入口阶段（--unit-inherit-stage，缺省 pre-ledger）与数据根 control 目录里每个已纳管客户端最新的部署收据。与 B-09
+#   一样核对部署、沿用能重放的原工作区、不做 Go 预热、通过后保留测试树。可带 --audit-reads [--audit-strict]（执行的单元照常
+#   取证）与读集合同；宿主输入清单与收窄提案只许 re-execute。pre-A3 认证与 P0 证据照常取自这次运行，签发时按决策收据重验
+#   形成期证明。--unit-inherit-propose <新目录>：在同一个执行环境里只让执行器判定、写出承接提案（当前上下文、来源集合与批准
+#   要签的 binding.json）后退出 0，不执行单元、不导出、不签发；组合与认证坐标用正式运行的同一套（激活认证已在时不写任何文件）。
 # 环境（E3-01）：门禁清单生成与执行器都在白名单环境里运行（env -i 只放行 PATH、HOME、语言与时区、TMPDIR、代理与证书、
 #   Go／Docker／Node／pnpm 的变量，再显式给字节码、历史源码与 TypeScript 的设置）：单元能看到的环境就是环境指纹里的那一份，
 #   本轮参数文件导出的键（D、STAMP、各认证坐标……）不再进入单元环境。
@@ -40,7 +47,8 @@
 #   ARM64_VC_ENV=$RUNROOT/env.sh setsid -f bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] \
 #     [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <主体目录>] \
 #     [--work <测试树与缓存所在目录>] [--pycache <字节码缓存目录>] [--policy-activation <激活认证>] \
-#     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--full-set-request <JSON>] \
+#     [--pre-a3-certification <pre-A3 认证坐标>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] \
+#     [--unit-inherit-request <JSON> | --unit-inherit-propose <新目录>] [--unit-inherit-stage pre-ledger|post-ledger|formal:<campaign_id>] \
 #     [--record-store <单元执行记录库>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle> <分支> <40 位提交> [<前端依赖目录>] \
 #     > $RUNROOT/entry-gates.out 2>&1 < /dev/null
 #   后三个选项供入口编排器（entry.sh，E2-06）用：激活认证与 pre-A3 认证坐标覆盖参数文件里的值（重做时编排器给新坐标）；
@@ -52,7 +60,7 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute] [--full-set-request <JSON>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
@@ -60,11 +68,15 @@ PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_S
 AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=(); AUDIT_POLICY_ARGS=()
 WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0
 FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=(); GO_WARMUP=auto
+UNIT_INHERIT_REQUEST=""; UNIT_INHERIT_STAGE=pre-ledger; UNIT_INHERIT_ARGS=(); UNIT_INHERIT_PROPOSE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --go-warmup) GO_WARMUP="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --full-set-request) FULL_SET_REQUEST="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --unit-inherit-request) UNIT_INHERIT_REQUEST="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --unit-inherit-stage) UNIT_INHERIT_STAGE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --unit-inherit-propose) UNIT_INHERIT_PROPOSE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --mode) MODE_EXPLICIT=true; MODE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --record-store) STORE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --audit-reads) AUDIT_READS=true; shift ;;
@@ -93,7 +105,15 @@ if ! [[ "$WITH_GATES" =~ ^([a-z0-9-]+(,[a-z0-9-]+)*)?$ ]]; then echo "--with-gat
 if ! [[ "$WAIT_LOCK" =~ ^[0-9]+$ ]]; then echo "--wait-lock 是秒数：$WAIT_LOCK" >&2; exit 2; fi
 case "$GO_WARMUP" in auto|off) ;; *) echo "未知的 Go 预热模式：$GO_WARMUP" >&2; exit 2 ;; esac
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
-case "$MODE" in full-set-pass|re-execute) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
+case "$MODE" in full-set-pass|re-execute|unit-inherit) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
+# B5a-08：逐单元承接请求与 B-09 全集请求互斥；只写承接提案时两种请求都不给。
+if [ -n "$UNIT_INHERIT_REQUEST" ] && [ -n "$FULL_SET_REQUEST" ]; then echo "逐单元承接请求不能与 B-09 全集请求同用" >&2; exit 2; fi
+if [ -n "$UNIT_INHERIT_PROPOSE" ]; then
+  if [[ "$UNIT_INHERIT_PROPOSE" != /* ]] || [ -e "$UNIT_INHERIT_PROPOSE" ]; then echo "承接提案目录必须是尚不存在的绝对路径：$UNIT_INHERIT_PROPOSE" >&2; exit 2; fi
+  if [ -n "$UNIT_INHERIT_REQUEST" ] || [ -n "$FULL_SET_REQUEST" ]; then echo "写承接提案时不给承接请求" >&2; exit 2; fi
+  if [ "$MODE_EXPLICIT" = true ] && [ "$MODE" != unit-inherit ]; then echo "--unit-inherit-propose 只与 --mode unit-inherit 同用" >&2; exit 2; fi
+  MODE=unit-inherit; REQUIRE_DEPLOYED=true
+fi
 # B-09：入口的逐单元旧承接模式不能绕过全集准入。无请求时始终重新执行。
 if [ -n "$FULL_SET_REQUEST" ]; then
   REQUIRE_DEPLOYED=true
@@ -102,9 +122,27 @@ elif [ "$MODE" = full-set-pass ]; then
   echo "B-09：未提供全集承接请求，回退重新执行全集"
   MODE=re-execute
 fi
-if [ "$AUDIT_READS" = true ] && [ "$MODE" != re-execute ]; then echo "读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用" >&2; exit 2; fi
-if { [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ]; } && { [ "$AUDIT_READS" != true ] || [ "$AUDIT_STRICT" != true ] || [ "$MODE" != re-execute ]; } && [ -z "$FULL_SET_REQUEST" ]; then
+# B5a-08：有逐单元承接请求而没指定模式时取 unit-inherit；--mode unit-inherit 没有请求时回退重新执行全集。
+if [ -n "$UNIT_INHERIT_REQUEST" ]; then
+  if [[ "$UNIT_INHERIT_REQUEST" != /* ]]; then echo "逐单元承接请求必须是绝对路径：$UNIT_INHERIT_REQUEST" >&2; exit 2; fi
+  REQUIRE_DEPLOYED=true
+  if [ "$MODE_EXPLICIT" = false ]; then MODE=unit-inherit; fi
+  if [ "$MODE" != unit-inherit ]; then echo "--unit-inherit-request 只与 --mode unit-inherit 同用" >&2; exit 2; fi
+elif [ "$MODE" = unit-inherit ] && [ -z "$UNIT_INHERIT_PROPOSE" ]; then
+  echo "B5a-08：未提供逐单元承接请求，回退重新执行全集"
+  MODE=re-execute
+fi
+if [ "$MODE" = unit-inherit ] && ! [[ "$UNIT_INHERIT_STAGE" =~ ^(pre-ledger|post-ledger|formal:[A-Za-z0-9][A-Za-z0-9._-]*)$ ]]; then
+  echo "未知的入口阶段：$UNIT_INHERIT_STAGE" >&2; exit 2
+fi
+if [ "$AUDIT_READS" = true ] && [ "$MODE" != re-execute ] && [ "$MODE" != unit-inherit ]; then echo "读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用" >&2; exit 2; fi
+if { [ "$AUDIT_STRICT" = true ] || [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ] || [ "${#AUDIT_POLICY_ARGS[@]}" -gt 0 ]; } && { [ "$AUDIT_READS" != true ] || [ "$AUDIT_STRICT" != true ] || [ "$MODE" != re-execute ]; } && [ -z "$FULL_SET_REQUEST" ] && [ "$MODE" != unit-inherit ]; then
   echo "宿主输入与收窄提案必须使用 --audit-reads --audit-strict --mode re-execute" >&2; exit 2
+fi
+# B5a-08：逐单元承接可带读集合同（--audit-policy）与严格审计（要同时 --audit-reads）；宿主输入清单与收窄提案只许 re-execute。
+if [ "$MODE" = unit-inherit ]; then
+  if [ -n "$AUDIT_HOST_INPUTS" ] || [ "${#INPUT_SCOPE_ARGS[@]}" -gt 0 ]; then echo "逐单元承接不接受宿主输入清单与收窄提案（只许 --mode re-execute）" >&2; exit 2; fi
+  if [ "$AUDIT_STRICT" = true ] && [ "$AUDIT_READS" != true ]; then echo "严格读集审计必须同时启用 --audit-reads" >&2; exit 2; fi
 fi
 for file in "$POLICY_ACTIVATION" "$PRE_A3_CERTIFICATION"; do
   if [[ "$file" != /* ]]; then echo "认证坐标必须是绝对路径：$file" >&2; exit 2; fi
@@ -153,10 +191,12 @@ echo "bundle=${PBUNDLE} 分支=${PBRANCH} 提交=${PCOMMIT} 前端依赖=${NM_DI
 echo "=== 测试树（clone_test_tree，umask 022）$(utc_now)"
 umask 022
 REUSE_WORKSPACE=false
-if [ -n "$FULL_SET_REQUEST" ] && [ -d "$TREE" ]; then
+if { [ -n "$FULL_SET_REQUEST" ] || [ "$MODE" = unit-inherit ]; } && [ -d "$TREE" ]; then
   if python3 -B "$DRV/entry_gates.py" verify-scope-workspace --tree "$TREE" --bytecode-cache "$PYC" \
       --commit "$PCOMMIT" --bundle "$PBUNDLE" --branch "$PBRANCH" > "$OUT/workspace-check.json"; then
     REUSE_WORKSPACE=true
+  elif [ "$MODE" = unit-inherit ]; then
+    echo "B5a-08：原工作区无法重放，重建测试树（登记了宿主快照的来源记录按实际输入判失效，只重跑这些单元）"
   else
     echo "B-09：原工作区无法重放，重建并由准入判定全量重跑"
   fi
@@ -298,7 +338,7 @@ done
 EXEC_ENV+=(PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 "PYTHONPYCACHEPREFIX=$PYC" "CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT" "CAPTURE_TYPESCRIPT_MODULE=$TS")
 # C-02：三组后端测试共用一次生产包预编译；每个工作根独立缓存，承接入口不改动来源缓存。
 GO_WARMUP_ACTIVE=false
-if [ "$GO_WARMUP" = auto ] && [ -z "$FULL_SET_REQUEST" ] && { [ "$PLAN_PROFILE" = entry ] || [ "$PLAN_PROFILE" = full-gates ]; }; then
+if [ "$GO_WARMUP" = auto ] && [ -z "$FULL_SET_REQUEST" ] && [ "$MODE" != unit-inherit ] && { [ "$PLAN_PROFILE" = entry ] || [ "$PLAN_PROFILE" = full-gates ]; }; then
   GO_WARMUP_ACTIVE=true
   EXEC_ENV+=("GOCACHE=${GOCACHE:-$WORK/go-build-cache}" "GOMODCACHE=${GOMODCACHE:-$WORK/go-mod-cache}" "GOTMPDIR=${GOTMPDIR:-$WORK/go-tmp}")
 fi
@@ -328,9 +368,25 @@ if [ -n "$AUDIT_HOST_INPUTS" ]; then AUDIT_ARGS+=(--audit-host-inputs "$AUDIT_HO
 if [ -n "$FULL_SET_REQUEST" ]; then
   FULL_SET_ARGS=(--full-set-request "$FULL_SET_REQUEST" --full-set-deployment "$DEPLOY")
 fi
+# B5a-08：承接上下文要本轮客户端、入口阶段与 control 目录（执行器在每个复核点现算部署收据集合）；写提案时执行器只判定。
+if [ "$MODE" = unit-inherit ]; then
+  UNIT_INHERIT_ARGS=(--unit-inherit-client "$CT_CLIENT" --unit-inherit-stage "$UNIT_INHERIT_STAGE" --unit-inherit-control "$D/control")
+  if [ -n "$UNIT_INHERIT_PROPOSE" ]; then
+    UNIT_INHERIT_ARGS+=(--decide-only --unit-inherit-propose "$UNIT_INHERIT_PROPOSE")
+  else
+    UNIT_INHERIT_ARGS+=(--unit-inherit-request "$UNIT_INHERIT_REQUEST")
+  fi
+fi
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 "$DRV/unit_executor.py" run-gates --manifest "$OUT/gates-manifest.json" --out-dir "$OUT/executor" \
-    --mode "$MODE" --record-store "$STORE" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
+    --mode "$MODE" --record-store "$STORE" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
 tail -n 25 "$OUT/executor.log" | cut -c1-240
+if [ -n "$UNIT_INHERIT_PROPOSE" ]; then
+  if [ "$EXEC_RC" -ne 0 ] || [ ! -f "$UNIT_INHERIT_PROPOSE/binding.json" ]; then
+    echo "ENTRY_GATES_ABORTED：承接提案没写出（rc=${EXEC_RC}）；日志 ${OUT}/executor.log"; exit 3
+  fi
+  echo "UNIT_INHERIT_PROPOSAL ${UNIT_INHERIT_PROPOSE}：binding.json 的 binding_sha256 交两类批准签字（测试树与缓存保留在 ${WORK}）"
+  exit 0
+fi
 if [ "$EXEC_RC" -gt 1 ] || [ ! -f "$OUT/executor/summary.json" ]; then
   echo "ENTRY_GATES_ABORTED：执行器出错（rc=${EXEC_RC}），没有门禁结论；日志 ${OUT}/executor.log"
   exit 3
@@ -379,7 +435,7 @@ fi
 AFTER_STATUS=$(tree_status 5)
 trap - ERR
 if [ "$GATES_STATUS" = passed ] && [ "$PRE_A3_OK" = true ] && [ -z "$AFTER_STATUS" ]; then
-  if [ "$AUDIT_STRICT" = true ] || [ -n "$FULL_SET_REQUEST" ]; then
+  if [ "$AUDIT_STRICT" = true ] || [ -n "$FULL_SET_REQUEST" ] || [ "$MODE" = unit-inherit ]; then
     echo "入口门禁通过：总摘要 ${OUT}/entry-gates.json；保留严格审计的测试树与缓存供后续复核 ${WORK}"
   else
     rm -rf "$TREE" "$PYC"

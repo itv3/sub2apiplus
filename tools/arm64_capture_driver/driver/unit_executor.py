@@ -35,6 +35,11 @@
   全集核对与门禁聚合。每次 ``run-gates`` 运行写一份清单（``unit-manifest.json``：逐单元本次执行还是承接、依据或
   不承接的原因）并自检，自检不通过结论判失败。``run``／``run-commands``（``make test-capture-tools``、
   ``make check-egress-spec``、pre-A3 单独签发）一律全部执行、不入库。
+* **逐单元承接**（B5a-08，``--mode unit-inherit --unit-inherit-request <JSON>``，合同见同目录 ``unit_inherit.py``）：来源记录
+  可来自多次运行、多个提交，逐单元判定，不能承接的单元只重跑它自己。排队前、取得调度锁后、发布清单前各复核一次（每次
+  刷新校时与撤销查询快照、追加留证、重做授权与每条承接记录的核对）；排队前或锁后拒绝即整次重新执行，发布前拒绝即清单
+  不发布。决策收据随清单发布进记录库。执行的单元可以带读集审计（``--audit-reads``，承接的单元以来源记录的读集为准）。
+  ``--decide-only --unit-inherit-propose <目录>`` 写出当前上下文与来源集合提案，供两类批准签字。
 
 子命令：``plan``（列出单元与策略摘要，不执行）、``run``（执行并汇总；退出码 0 全部通过、1 有失败、2 用法或配置错误）、
 ``run-commands``（E2-03：按命令单元清单执行，每个单元一条命令）、``run-gates``（E2-04：按门禁清单执行——一个测试组与
@@ -132,6 +137,24 @@ def _records_module() -> Any:
         module = importlib.util.module_from_spec(spec)
         sys.modules[name] = module
         spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def _unit_inherit_module() -> Any:
+    """同目录的 unit_inherit.py（逐单元承接合同，B5a-08）：同样按路径加载，只在 ``--mode unit-inherit`` 时用到。"""
+
+    name = "unit_inherit_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "unit_inherit.py")
+        if spec is None or spec.loader is None:
+            raise ExecutorError("找不到同目录的 unit_inherit.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
     return sys.modules[name]
 
 
@@ -1019,6 +1042,8 @@ class ReadAuditor:
         self.currents = currents
         self.results: dict[str, dict[str, Any]] = {}
         self.strict = strict
+        # B5a-08：逐单元承接时承接的单元（不执行、没有轨迹；它们的读集已由 check_record 按来源记录的轨迹重放核过）。
+        self.inherited: frozenset[str] = frozenset()
 
     def trace_path(self, unit: Unit) -> Path:
         # 可读前缀不能保证唯一；完整单元 ID 摘要防止标点替换和长名称截断造成轨迹串用。
@@ -1111,12 +1136,15 @@ class ReadAuditor:
         flagged = sorted(unit_id for unit_id, result in self.results.items() if result.get("undeclared_count"))
         total = sum(int(result.get("undeclared_count") or 0) for result in self.results.values())
         skipped = sorted(unit_id for unit_id, result in self.results.items() if result.get("skipped"))
-        missing = sorted(set(self.currents) - set(self.results))
-        complete = (self.strict and bool(self.currents) and set(self.results) == set(self.currents)
+        # 要有审计结果的单元：本次执行的全部单元（没有承接时就是全部单元，与改造前相同）。
+        expected = set(self.currents) - set(self.inherited)
+        nonempty = bool(expected) or bool(self.inherited)
+        missing = sorted(expected - set(self.results))
+        complete = (self.strict and nonempty and set(self.results) == expected
                     and all(result.get("coverage_complete") is True and result.get("status") == "passed"
                             for result in self.results.values()))
         reexecute = sorted(unit_id for unit_id, result in self.results.items() if result.get("status") == "reexecute_required")
-        enforced = (self.strict and bool(self.currents) and not missing and set(self.results) == set(self.currents)
+        enforced = (self.strict and nonempty and not missing and set(self.results) == expected
                     and all((result.get("coverage_complete") is True and result.get("status") == "passed") or
                             (unit_id in reexecute and result.get("coverage_complete") is False
                              and self.currents[unit_id].inheritable is False
@@ -1125,12 +1153,15 @@ class ReadAuditor:
                                      for entry in self.currents[unit_id].inputs or []))
                             for unit_id, result in self.results.items()))
         path = self.dir / "read-audit.json"
-        _write_json(path, {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
-                           "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT),
-                           "data_root_exempt_patterns": dict(self.module.DATA_ROOT_EXEMPT_PATTERNS), "units": self.results,
-                           "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped,
-                           "coverage_complete": complete, "strict": self.strict, "missing_units": missing,
-                           "reexecute_required_units": reexecute, "reuse_boundary_enforced": enforced})
+        report = {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
+                  "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT),
+                  "data_root_exempt_patterns": dict(self.module.DATA_ROOT_EXEMPT_PATTERNS), "units": self.results,
+                  "units_with_findings": flagged, "undeclared_total": total, "skipped_whole_repo": skipped,
+                  "coverage_complete": complete, "strict": self.strict, "missing_units": missing,
+                  "reexecute_required_units": reexecute, "reuse_boundary_enforced": enforced}
+        if self.inherited:
+            report["inherited_units"] = sorted(self.inherited)
+        _write_json(path, report)
         return {"enabled": True, "report": str(path), "units": len(self.results) - len(skipped), "skipped_whole_repo": len(skipped),
                 "units_with_findings": flagged[:50], "undeclared_total": total,
                 "status": "failed" if total or (self.strict and not (complete or enforced)) else "passed",
@@ -1692,14 +1723,22 @@ def _parse(argv: list[str]) -> argparse.Namespace:
         if name == "run-gates":
             # E3-01：记录库与两种模式（方案 D12）。缺省重新执行全集；B-09 入口只有完整承接请求通过后才承接。
             p.add_argument("--record-store", type=Path, default=None, help="单元执行记录库：记录与日志入库，全集通过模式从这里找可承接的记录")
-            p.add_argument("--mode", choices=("re-execute", "full-set-pass"), default="re-execute",
-                           help="re-execute：重新执行全集，不承接；full-set-pass：全集通过，承接有效记录、只执行其余单元（要给记录库）")
+            p.add_argument("--mode", choices=("re-execute", "full-set-pass", "unit-inherit"), default="re-execute",
+                           help="re-execute：重新执行全集，不承接；full-set-pass：全集通过，承接有效记录、只执行其余单元（要给记录库）；"
+                                "unit-inherit：逐单元承接（B5a-08，要给 --unit-inherit-request 与记录库，合同见 unit_inherit.py）")
             p.add_argument("--inheritance-max-age-hours", type=float, default=168.0, help="承接期限（小时），默认 168（7 天），只能调小")
             p.add_argument("--decide-only", action="store_true",
                            help="只判定每个单元承接还是执行（写 decisions.json 并打印），不执行、不写记录、不占调度锁")
             p.add_argument("--target-platform-request", type=Path, help="B-10 目标平台单元承接请求；不得与 B-09 请求混用")
             p.add_argument("--full-set-request", type=Path, help="B-09 全集承接请求；任一条件失效则全量重跑")
             p.add_argument("--full-set-deployment", type=Path, help="入口本次核对的实际部署收据")
+            # B5a-08：逐单元承接。入口门禁 entry-gates.sh --mode unit-inherit 给出下面几项；没有请求时整次重新执行。
+            p.add_argument("--unit-inherit-request", type=Path, help="B5a-08 逐单元承接请求（unit-inherit-request/v1），只与 --mode unit-inherit 同用")
+            p.add_argument("--unit-inherit-client", default=None, help="本轮客户端（承接上下文的一项）")
+            p.add_argument("--unit-inherit-stage", default="pre-ledger", help="入口阶段：pre-ledger、post-ledger 或 formal:<campaign_id>")
+            p.add_argument("--unit-inherit-control", type=Path, default=None, help="数据根的 control 目录：现算当前部署收据集合")
+            p.add_argument("--unit-inherit-propose", type=Path, default=None,
+                           help="只判定时把承接提案（当前上下文、来源集合、批准要签的绑定）写到这个新目录")
             # E3-04：读集审计。真跑才有读集，只许与 --mode re-execute 同用；要求 PATH 里有 strace（Linux）。
             p.add_argument("--audit-reads", action="store_true",
                            help="读集审计：正式执行的单元包在 strace 下，核对实际读取都在声明的输入范围里，超出即判失败（只许 re-execute）")
@@ -2000,6 +2039,12 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
               file=sys.stderr)
         for problem in (manifest.get("problems") or [])[:10]:
             print(f"清单自检不通过：{problem}", file=sys.stderr)
+    verdict = summary.get("unit_inherit_decision") or {}
+    if verdict:
+        steps = "，".join(f"{item['checkpoint']}{'通过' if item['authorized'] else '拒绝'}" for item in verdict.get("checkpoints") or [])
+        reasons = [reason for item in verdict.get("checkpoints") or [] for reason in item.get("reasons") or []] + list(verdict.get("reasons") or [])
+        print(f"逐单元承接：{verdict.get('action')}（复核点：{steps or '无'}）" + (f"；原因：{'；'.join(reasons)[:600]}" if reasons else ""),
+              file=sys.stderr)
     print("-" * 70, file=sys.stderr)
     for gate in summary["gates"]:
         verdict = "通过" if gate["status"] == "passed" else f"未通过（失败单元 {len(gate['failed_units'])} 个：{gate['failed_units'][:5]}）"
@@ -2144,6 +2189,23 @@ def _unit_manifest(records: Any, *, run_id: str, mode: str, max_age: float, stor
     )
 
 
+def _check_unit_inherit_args(args: argparse.Namespace, records: Any, request_path: Path | None) -> None:
+    """逐单元承接（B5a-08）的参数核对：不与 B-09／B-10 请求混用，请求与提案只配 ``--mode unit-inherit``，要给记录库；有请求或
+    要写提案时另要客户端与 control 目录（现算上下文用）。没给请求的 ``unit-inherit`` 不要求这些——它整次重新执行。"""
+
+    if request_path:
+        raise ExecutorError("逐单元承接不能与 B-09／B-10 请求同时使用")
+    if args.mode != records.UNIT_INHERIT:
+        raise ExecutorError("--unit-inherit-request／--unit-inherit-propose 只与 --mode unit-inherit 同用")
+    if args.record_store is None:
+        raise ExecutorError("逐单元承接要给记录库：--record-store")
+    if args.unit_inherit_propose is not None and not args.decide_only:
+        raise ExecutorError("--unit-inherit-propose 只与 --decide-only 同用")
+    if (args.unit_inherit_request is not None or args.unit_inherit_propose is not None) and (
+            not args.unit_inherit_client or args.unit_inherit_control is None):
+        raise ExecutorError("逐单元承接要给客户端与 control 目录：--unit-inherit-client、--unit-inherit-control")
+
+
 def _run_gates(args: argparse.Namespace) -> int:
     """``run-gates``（E2-04）：一个测试组与若干命令单元同一次运行、同一套调度（额度、独占、预约、诊断、会话清理），
     全部跑完再按门禁项汇总——一个门禁项失败不影响别的门禁项照跑。测试组在执行器的工作目录下 discover。
@@ -2155,6 +2217,10 @@ def _run_gates(args: argparse.Namespace) -> int:
     if args.full_set_request and args.target_platform_request:
         raise ExecutorError("B-09 与 B-10 请求不能同时使用")
     request_path = args.target_platform_request or args.full_set_request
+    # B5a-08：逐单元承接（unit-inherit）只认自己的请求，与 B-09／B-10 不混用。
+    unit_inherit_mode = args.mode == records.UNIT_INHERIT
+    if unit_inherit_mode or args.unit_inherit_request is not None or args.unit_inherit_propose is not None:
+        _check_unit_inherit_args(args, records, request_path)
     target_mode = args.target_platform_request is not None
     decision_key = "target_platform_decision" if target_mode else "full_set_decision"
     decision_file = "target-platform-decision.json" if target_mode else "full-set-decision.json"
@@ -2214,7 +2280,8 @@ def _run_gates(args: argparse.Namespace) -> int:
             records.validate_audit_policy(audit_policy, {unit.unit_id for unit in command_units})
         except records.RecordsError as error:
             raise ExecutorError(str(error)) from error
-        if not args.decide_only and not request_path and (args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict):
+        if (not args.decide_only and not request_path and not unit_inherit_mode
+                and (args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict)):
             raise ExecutorError("读集合同登记须重新执行严格审计；当前只能只读预览承接集合")
         for item in manifest["units"]:
             if item["unit_id"] in audit_policy["units"] and item.get("inputs") != audit_policy["units"][item["unit_id"]]:
@@ -2251,7 +2318,8 @@ def _run_gates(args: argparse.Namespace) -> int:
                                               records.value_entry("policy", "require-read-audit", "all-file-paths/v1")])
             current.inputs_sha256 = records.entries_sha256(current.inputs)
     if args.audit_reads:
-        if args.mode != records.RE_EXECUTE:
+        # B5a-08：逐单元承接下执行的单元同样真跑，可以带读集审计（承接的单元以来源记录的读集为准）。
+        if args.mode != records.RE_EXECUTE and not unit_inherit_mode:
             raise ExecutorError("读集审计要真跑才有读集：--audit-reads 只许与 --mode re-execute 同用")
         if shutil.which("strace") is None:
             raise ExecutorError("读集审计要用 strace：PATH 里找不到（只在 Linux 上可用）")
@@ -2286,15 +2354,60 @@ def _run_gates(args: argparse.Namespace) -> int:
         if full_set_verdict["action"] not in ("inherit-full-set", "inherit-matching-units"):
             args.mode = records.RE_EXECUTE
         max_age = min(max_age, 24)
-    # B-11 登记策略下，B-09 拒绝后仍须按原严格审计合同重新执行。
-    if audit_policy is not None and full_set_verdict is not None and args.mode == records.RE_EXECUTE and not args.decide_only:
+    # B5a-08：逐单元承接的排队前复核（只判定时另可写承接提案）。运行目录提前确定：只判定时证据快照写在运行目录，不进记录库。
+    inherit = inherit_verdict = inherit_context = None
+    early_out_dir = None
+    if unit_inherit_mode:
+        early_out_dir = _out_dir(args)
+        inherit_module = _unit_inherit_module()
+
+        def inherit_context(current_facts: Any) -> dict[str, Any] | None:
+            """复核点现算的当前上下文；算不出（提交、部署收据集合不可读）时返回 None，复核按拒绝处理。"""
+
+            try:
+                return inherit_module.current_context(
+                    client=args.unit_inherit_client, stage=args.unit_inherit_stage, commit=inherit_module.tree_commit(Path.cwd()),
+                    deployments=inherit_module.deployment_set(args.unit_inherit_control),
+                    environment_sha256=current_facts.environment_sha256, policy_sha256=policy, executor_sha256=executor["sha256"],
+                    gate_ids=[gate.gate_id for gate in gates], profile=manifest.get("profile"), record_store=store.root)
+            except inherit_module.ERRORS as error:
+                print(f"逐单元承接：算不出当前上下文：{error}", file=sys.stderr)
+                return None
+
+        if args.unit_inherit_propose is not None:
+            context = inherit_context(facts)
+            if context is None:
+                raise ExecutorError("逐单元承接：算不出当前上下文，不能写承接提案")
+            proposal = inherit_module.write_proposal(args.unit_inherit_propose, context=context,
+                                                     sources=inherit_module.propose(store.root, currents, facts, max_age_hours=max_age))
+            print(f"逐单元承接提案：可承接 {proposal['units']} 个单元、来源运行 {proposal['runs']} 个；批准要签的 binding_sha256 "
+                  f"{proposal['binding_sha256']}（{args.unit_inherit_propose / 'binding.json'}）", file=sys.stderr)
+        if args.unit_inherit_request is None:
+            inherit_verdict = {"schema_version": records.UNIT_INHERIT_DECISION_SCHEMA, "action": "reexecute-all", "run_id": run_id,
+                               "reasons": ["没有给逐单元承接请求：整次重新执行"], "checkpoints": []}
+            args.mode = records.RE_EXECUTE
+        else:
+            inherit = inherit_module.Session(args.unit_inherit_request, store_root=store.root, run_id=run_id,
+                                             evidence_root=early_out_dir / "unit-inherit-evidence" if args.decide_only else None)
+            decisions = inherit.checkpoint("queue", currents, facts, inherit_context(facts), now=time.time())
+            if inherit.authorized and not any(decision.inherit for decision in decisions.values()):
+                inherit.fallback("排队前复核通过，但没有可承接的单元：整次重新执行")
+            if not inherit.authorized:
+                args.mode = records.RE_EXECUTE
+            inherit_verdict = inherit.verdict()
+            max_age = min(max_age, inherit.max_age_hours)
+    # B-11 登记策略下，B-09（以及 B5a-08 逐单元承接）拒绝后仍须按原严格审计合同重新执行。
+    if (audit_policy is not None and (full_set_verdict is not None or inherit_verdict is not None)
+            and args.mode == records.RE_EXECUTE and not args.decide_only):
         if shutil.which("strace") is None:
             raise ExecutorError("B-09 全集重跑仍要求原登记的严格审计，缺少 strace")
         args.audit_reads = args.audit_strict = True
     to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
-    out_dir = _out_dir(args)
+    out_dir = early_out_dir or _out_dir(args)
     if full_set_verdict is not None:
         _write_json(out_dir / decision_file, full_set_verdict)
+    if inherit_verdict is not None:
+        _write_json(out_dir / "unit-inherit-decision.json", inherit_verdict)
     if args.decide_only:
         # 只判定：每个单元承接还是执行、依据或原因；不执行、不写记录、不占调度锁。
         payload = {"mode": args.mode, "decided_at_utc": decided_at, "policy_sha256": policy, "environment_sha256": facts.environment_sha256,
@@ -2302,6 +2415,8 @@ def _run_gates(args: argparse.Namespace) -> int:
                    "inherit": len(units) - len(to_run), "execute": len(to_run),
                    "units": {unit.unit_id: {"inherit": decisions[unit.unit_id].inherit, "reasons": decisions[unit.unit_id].reasons,
                                             "record_sha256": (decisions[unit.unit_id].record or {}).get("record_sha256")} for unit in units}}
+        if inherit_verdict is not None:
+            payload["unit_inherit_decision"] = inherit_verdict
         _write_json(out_dir / "decisions.json", payload)
         print(f"只判定（{records.MODE_LABELS[args.mode]}）：承接 {payload['inherit']} 个、执行 {payload['execute']} 个；明细 {out_dir / 'decisions.json'}",
               file=sys.stderr)
@@ -2371,6 +2486,35 @@ def _run_gates(args: argparse.Namespace) -> int:
                                           currents=currents, strict=True)
                     scheduler.auditor = auditor
             _write_json(out_dir / decision_file, full_set_verdict)
+        # B5a-08：取得调度锁后复核（锁可能排队很久）：重算输入、环境与上下文，刷新凭证，承接集合只能缩小。
+        if inherit is not None and args.mode == records.UNIT_INHERIT:
+            current_now = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                                         manifest=manifest, timeout=config.unit_timeout_seconds)
+            original_resume_basis = resume_basis(current_now)
+            currents = current_now
+            recorder.currents = currents
+            fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
+            facts = replace(facts, environment=fresh_environment, environment_sha256=records.entries_sha256(fresh_environment),
+                            now=time.time())
+            environment = fresh_environment
+            recorder.environment = environment
+            recorder.environment_sha256 = facts.environment_sha256
+            decisions = inherit.checkpoint("lock", current_now, facts, inherit_context(facts), now=facts.now)
+            if inherit.authorized and not any(decision.inherit for decision in decisions.values()):
+                inherit.fallback("锁后复核通过，但承接集合已缩为空：整次重新执行")
+            to_run = [unit for unit in units if not decisions[unit.unit_id].inherit]
+            if not inherit.authorized:
+                args.mode = recorder.mode = records.RE_EXECUTE
+                if audit_policy is not None:
+                    if shutil.which("strace") is None:
+                        raise ExecutorError("锁后拒绝承接，重新执行原严格审计所需的 strace 不可用")
+                    auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root,
+                                          currents=currents, strict=True)
+                    scheduler.auditor = auditor
+            if auditor is not None:
+                auditor.currents = currents
+            inherit_verdict = inherit.verdict()
+            _write_json(out_dir / "unit-inherit-decision.json", inherit_verdict)
         started = time.monotonic()
         _write_json(out_dir / "plan.json", {
             "policy_sha256": policy, "scope": "gates", "parallelism": parallelism, "machine_cores": cores, "mode": args.mode, "run_id": run_id,
@@ -2388,6 +2532,8 @@ def _run_gates(args: argparse.Namespace) -> int:
             bytecode, identity_memo = _prepare_shared_caches(args, out_dir, scheduler)
         else:
             bytecode, identity_memo = {"status": "off", "prefix": None, "seconds": 0.0, "note": "全部承接，没有要执行的单元"}, None
+        if auditor is not None and args.mode == records.UNIT_INHERIT:
+            auditor.inherited = frozenset(unit.unit_id for unit in units if decisions[unit.unit_id].inherit)
         formal = scheduler.run_parallel([u for u in to_run if not u.exclusive], "formal")
         formal += scheduler.run_alone([u for u in to_run if u.exclusive], "formal")
         # 读集未闭合不能靠一次无审计的重跑补齐；仅执行本身失败才诊断重跑。
@@ -2402,7 +2548,34 @@ def _run_gates(args: argparse.Namespace) -> int:
         if full_set_verdict is not None:
             unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
                                           decision_key: full_set_verdict}, "manifest_sha256")
+        # B5a-08：发布前复核（重算输入与环境、刷新凭证、每条承接记录重做核对），决策收据先发布进记录库，再封进清单。复核
+        # 不通过时决策收据只留在运行目录，清单照样封装但自检不过、不发布；已执行单元的记录已经入库，保留。
+        inherit_problems: list[str] = []
+        if inherit is not None and args.mode == records.UNIT_INHERIT:
+            end_currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units,
+                                          manifest=manifest, timeout=config.unit_timeout_seconds)
+            end_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
+            end_facts = replace(facts, environment=end_environment, environment_sha256=records.entries_sha256(end_environment),
+                                now=time.time())
+            published = inherit.checkpoint("publish", end_currents, end_facts, inherit_context(end_facts), now=end_facts.now)
+            inherit_problems = inherit.publish_problems(published)
+            decision = inherit.build_decision(decisions)
+            _write_json(out_dir / "unit-inherit-decision.json", decision)
+            reference = {"path": str(store.decision_path(run_id)), "decision_sha256": decision["decision_sha256"],
+                         "context_sha256": decision["context_sha256"], "sources_sha256": decision["sources_sha256"]}
+            if not inherit_problems:
+                try:
+                    reference = inherit.publish_decision(decision)
+                except inherit_module.ERRORS as error:
+                    inherit_problems.append(f"决策收据发布失败：{error}")
+            unit_manifest = records.seal({**{key: value for key, value in unit_manifest.items() if key != "manifest_sha256"},
+                                          "unit_inherit_decision": reference}, "manifest_sha256")
+            inherit_verdict = inherit.verdict()
+        elif inherit is not None:
+            # 整次重新执行了：决策收据（拒绝原因、各复核点的快照）只留在运行目录。
+            _write_json(out_dir / "unit-inherit-decision.json", inherit.build_decision(decisions))
         problems = records.verify_manifest(unit_manifest, store=store)
+        problems.extend(inherit_problems)
         if target_mode and inherited:
             try:
                 request = full_set.read(request_path)
@@ -2434,6 +2607,8 @@ def _run_gates(args: argparse.Namespace) -> int:
             "unit_manifest": {"path": str(manifest_path), "manifest_sha256": unit_manifest["manifest_sha256"],
                               "self_check": "passed" if not problems else "failed", "problems": problems[:50]},
         })
+        if inherit_verdict is not None:
+            summary["unit_inherit_decision"] = inherit_verdict
         if bytecode["status"] == "failed" or problems:
             summary["status"] = "failed"
         if auditor is not None:

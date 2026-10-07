@@ -876,12 +876,14 @@ def export_records(
     withheld: dict[str, str] = {}
     p0_gates = [gate_id for gate_id in P0_GATES if gate_id in records]
     inherited_any = any(records[gate_id]["inherited_units"] for gate_id in p0_gates)
+    # 承接单元来自哪种模式（只影响说明文字）：全集通过（E3-01）或逐单元承接（B5a-08，签发时另按决策收据重验形成期证明）。
+    inherit_label = "逐单元承接模式" if mode == "unit-inherit" else "全集通过模式"
     v2: dict[str, Any] | None = None
     if inherited_any:
         v2, why = _p0_v2_context(summary, tree, tool_identity, client)
         if v2 is None:
             for gate_id in p0_gates:
-                withheld[gate_id] = (f"本次运行承接了 {len(records[gate_id]['inherited_units'])} 个单元（全集通过模式），要写以运行清单为证据的"
+                withheld[gate_id] = (f"本次运行承接了 {len(records[gate_id]['inherited_units'])} 个单元（{inherit_label}），要写以运行清单为证据的"
                                      f" v2 P0 证据，但{why}；要签 P0 收据请修好后重跑，或用重新执行全集（--mode re-execute）")
 
     def gate_members(gate_id: str) -> list[str]:
@@ -918,7 +920,7 @@ def export_records(
         }
         if v2 is not None:
             evidence.update(schema_version=P0_EVIDENCE_SCHEMA_V2, **v2_fields("test-capture-tools", CAPTURE_GROUP),
-                            executed_as="入口门禁一次运行（全集通过模式）：测试组全集由本次执行的单元与承接以往运行正式执行记录的单元"
+                            executed_as=f"入口门禁一次运行（{inherit_label}）：测试组全集由本次执行的单元与承接以往运行正式执行记录的单元"
                                         "合成，逐单元引用运行清单里的执行记录")
         p0["test-capture-tools"] = _write(out / "p0" / "test-capture-tools.json", evidence)
     if "check-egress-spec" in records and "check-egress-spec" not in withheld:
@@ -939,7 +941,7 @@ def export_records(
         }
         if v2 is not None:
             evidence.update(schema_version=P0_EVIDENCE_SCHEMA_V2, **v2_fields("check-egress-spec", None),
-                            executed_as="入口门禁一次运行（全集通过模式）：EGRESS_SPEC_CHECKS 子检查各一个单元，本次执行的与承接以往运行"
+                            executed_as=f"入口门禁一次运行（{inherit_label}）：EGRESS_SPEC_CHECKS 子检查各一个单元，本次执行的与承接以往运行"
                                         "正式执行记录的合成全集，逐单元引用运行清单里的执行记录")
         p0["check-egress-spec"] = _write(out / "p0" / "check-egress-spec.json", evidence)
     pre_a3_summary = None

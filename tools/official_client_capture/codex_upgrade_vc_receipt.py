@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -814,14 +815,16 @@ def _p0_v2_manifest(store: _UnitRecordStore, reference: Any) -> dict[str, Any]:
     return manifest
 
 
-def _p0_v2_record(store: _UnitRecordStore, manifest: Mapping[str, Any], entry: Mapping[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
-    """核验运行清单里的一个单元项，返回（执行记录，问题）。问题非空即拒绝签发。"""
+def _p0_v2_record(store: _UnitRecordStore, manifest: Mapping[str, Any], entry: Mapping[str, Any], *,
+                  inheriting_mode: str = UNIT_FULL_SET_PASS) -> tuple[dict[str, Any] | None, list[str]]:
+    """核验运行清单里的一个单元项，返回（执行记录，问题）。问题非空即拒绝签发。``inheriting_mode`` 是允许有承接项的模式：
+    缺省全集通过；逐单元承接（B5a-08）的清单经它自己的分支传 ``unit-inherit``（该分支先重验形成期证明）。"""
 
     unit_id = str(entry.get("unit_id"))
     disposition = entry.get("disposition")
     if disposition not in ("executed", "inherited"):
         return None, [f"{unit_id}：处置不是本次执行或承接（{disposition!r}）"]
-    if disposition == "inherited" and manifest.get("mode") != UNIT_FULL_SET_PASS:
+    if disposition == "inherited" and manifest.get("mode") != inheriting_mode:
         return None, [f"{unit_id}：重新执行全集的运行清单不得有承接项"]
     digest = entry.get("record_sha256")
     record = store.record(unit_id, digest)
@@ -885,8 +888,10 @@ def _verify_p0_gate_v2(
     payload: Mapping[str, Any],
     gate_id: str,
     release_identity: Mapping[str, str],
+    *,
+    inheriting_mode: str = UNIT_FULL_SET_PASS,
 ) -> dict[str, Any]:
-    """一份 v2 门禁证据的逐条重验（规则见本节说明），返回按记录重算的结果。"""
+    """一份 v2 门禁证据的逐条重验（规则见本节说明），返回按记录重算的结果。``inheriting_mode`` 原样交给逐条记录核验。"""
 
     evidence = _expect(payload, set(P0_V2_COMMON_FIELDS | P0_V2_GATE_FIELDS[gate_id]), f"P0 {gate_id} v2 证据")
     if evidence["gate_id"] != gate_id or evidence["command"] != ["make", gate_id]:
@@ -925,7 +930,7 @@ def _verify_p0_gate_v2(
     records: list[dict[str, Any]] = []
     problems: list[str] = []
     for entry in members:
-        record, found = _p0_v2_record(store, manifest, entry)
+        record, found = _p0_v2_record(store, manifest, entry, inheriting_mode=inheriting_mode)
         problems.extend(found)
         if record is not None:
             records.append(record)
@@ -966,6 +971,84 @@ def _verify_p0_gate_v2(
     return {"gate_id": gate_id, "units": len(members), **counts, "passed": passed, "approved_skip": skipped}
 
 
+# ---------------------------------------------------------------------------
+# B5a-08：逐单元承接（unit-inherit）运行清单的消费端分支
+# ---------------------------------------------------------------------------
+#
+# 入口门禁 ``--mode unit-inherit`` 的运行清单里，承接项来自多次运行、多个提交，不是 B-09 那种同源全集，所以不能只放宽模式：
+# 签发（finalize）与 VC-0 收口在上面的逐条重验（闭合、计数、五摘要与发布认证一致）之外，另按决策收据重验形成期证明——
+# 决策收据在记录库且自摘要相符、三个复核点各按形成期快照与判定时间成立、每条承接记录按决策收据登记的上下文重做
+# check_record（要求读集闭合）——并取消费时的校时与撤销快照、核对两类批准此刻仍有效（快照追加留证进记录库，另写一份
+# 消费登记）。任一不满足即拒签。这些规则的实现是 tools/ci/unit_inherit.py（与执行器同一份）：受管树部署不含 tools/ci，只从
+# 仓库同级目录或已安装驱动这两个固定位置加载，不从证据或收据里的路径加载代码；加载的验证器文件摘要写进消费登记留证。
+UNIT_INHERIT_MODE = "unit-inherit"
+UNIT_INHERIT_VERIFIER_ROOTS = (Path(__file__).resolve().parents[1] / "ci", Path("/root/arm64-capture-driver/driver"))
+UNIT_INHERIT_VERIFIER_FILES = ("unit_inherit.py", "full_set_receipt.py", "unit_records.py", "read_audit.py",
+                               "read_audit_runtime.py", "client_table.py")
+UNIT_INHERIT_VERIFIER_MODULE = "_managed_unit_inherit_verifier"
+P0_UNIT_INHERIT_PURPOSE = "p0-receipt"
+
+
+def _unit_inherit_verifier() -> Any:
+    """固定位置里第一处文件齐全（普通文件、不是符号链接）的验证器；同一进程按位置复用已加载的模块。"""
+
+    for root in UNIT_INHERIT_VERIFIER_ROOTS:
+        try:
+            if not root.is_dir() or any((root / name).is_symlink() or not (root / name).is_file()
+                                        for name in UNIT_INHERIT_VERIFIER_FILES):
+                continue
+        except OSError:
+            continue
+        location = (root / "unit_inherit.py").resolve()
+        loaded = sys.modules.get(UNIT_INHERIT_VERIFIER_MODULE)
+        if loaded is not None and Path(str(getattr(loaded, "__file__", ""))).resolve() == location:
+            return loaded
+        spec = importlib.util.spec_from_file_location(UNIT_INHERIT_VERIFIER_MODULE, location)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[UNIT_INHERIT_VERIFIER_MODULE] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(UNIT_INHERIT_VERIFIER_MODULE, None)
+            raise
+        return module
+    raise VCReceiptError("逐单元承接验证器缺失：仓库 tools/ci 与已安装驱动里都没有完整的 unit_inherit.py 及其依赖")
+
+
+def _p0_unit_inherit_manifest(store: _UnitRecordStore, reference: Any) -> dict[str, Any]:
+    """逐单元承接运行的清单：与 ``_p0_v2_manifest`` 同样核对发布、自摘要、登记的摘要与一一对应，模式必须是 unit-inherit。"""
+
+    reference = _expect(reference, {"run_id", "manifest_sha256", "mode"}, "P0 v2 证据 unit_manifest")
+    manifest = store.manifest(reference["run_id"])
+    if (manifest is None or manifest.get("schema_version") != UNIT_MANIFEST_SCHEMA or not _unit_sealed(manifest, "manifest_sha256")
+            or manifest.get("run_id") != reference["run_id"]):
+        raise VCReceiptError("P0 v2 证据引用的运行清单没有发布到记录库，或自摘要不符（清单自检没通过的运行不能签 P0）")
+    if manifest.get("manifest_sha256") != reference["manifest_sha256"] or manifest.get("mode") != reference["mode"]:
+        raise VCReceiptError("P0 v2 证据登记的清单摘要或模式与记录库里的运行清单不符")
+    if manifest.get("mode") != UNIT_INHERIT_MODE:
+        raise VCReceiptError(f"运行清单的模式不是逐单元承接：{manifest.get('mode')!r}")
+    planned, entries = manifest.get("planned_units"), manifest.get("units")
+    if (not isinstance(planned, list) or not isinstance(entries, list) or not all(isinstance(item, str) for item in planned)
+            or not all(isinstance(item, Mapping) for item in entries)):
+        raise VCReceiptError("运行清单缺少规划单元或单元项")
+    ids = [str(entry.get("unit_id")) for entry in entries]
+    if len(set(planned)) != len(planned) or len(set(ids)) != len(ids) or set(ids) != set(planned):
+        raise VCReceiptError("运行清单的单元项与规划单元不是一一对应（有缺、有多或有重复）")
+    return manifest
+
+
+def _p0_unit_inherit_proof(store: _UnitRecordStore, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """形成期证明重验与消费时凭证核对（留证）：验证器的结论原样返回（决策收据摘要、消费登记引用、验证器文件摘要）。"""
+
+    verifier = _unit_inherit_verifier()
+    try:
+        return verifier.verify_published(manifest, store.root, purpose=P0_UNIT_INHERIT_PURPOSE)
+    except verifier.ERRORS as error:
+        raise VCReceiptError(f"逐单元承接运行的形成期证明重验不通过：{error}") from error
+
+
 def verify_p0_manifest_evidence(root: Path, payload: Mapping[str, Any]) -> dict[str, Any] | None:
     """P0 两份离线门禁证据的形状判定与 v2 重验（E3-03）。
 
@@ -1002,9 +1085,13 @@ def verify_p0_manifest_evidence(root: Path, payload: Mapping[str, Any]) -> dict[
         raise VCReceiptError("发布认证没有登记工具五摘要，无法核对 P0 v2 证据的工具身份")
     release_identity = {name: identity[name] for name in P0_IDENTITY_FIELDS}
     store = _UnitRecordStore(egress.get("record_store"))
-    manifest = _p0_v2_manifest(store, egress.get("unit_manifest"))
+    # B5a-08：逐单元承接运行的清单走它自己的分支（新增函数）：承接项按 unit-inherit 模式逐条核验，最后另重验形成期证明。
+    reference = egress.get("unit_manifest")
+    unit_inherit = isinstance(reference, Mapping) and reference.get("mode") == UNIT_INHERIT_MODE
+    manifest = _p0_unit_inherit_manifest(store, reference) if unit_inherit else _p0_v2_manifest(store, reference)
+    inheriting_mode = UNIT_INHERIT_MODE if unit_inherit else UNIT_FULL_SET_PASS
     results = {
-        gate_id: _verify_p0_gate_v2(store, manifest, shapes[role], gate_id, release_identity)
+        gate_id: _verify_p0_gate_v2(store, manifest, shapes[role], gate_id, release_identity, inheriting_mode=inheriting_mode)
         for role, gate_id in P0_GATE_EVIDENCE_ROLES.items()
     }
     assertions = payload.get("assertions") if isinstance(payload.get("assertions"), Mapping) else {}
@@ -1015,7 +1102,7 @@ def verify_p0_manifest_evidence(root: Path, payload: Mapping[str, Any]) -> dict[
         gate = declared.get(gate_id)
         if gate is None or gate.get("passed") != result["passed"] or gate.get("approved_skip") != result["approved_skip"]:
             raise VCReceiptError(f"P0 断言里 {gate_id} 的通过数或跳过数与 v2 证据按记录重算的不一致")
-    return {
+    verified = {
         "schema_version": P0_GATE_EVIDENCE_V2_SCHEMA,
         "run_id": manifest["run_id"],
         "manifest_sha256": manifest["manifest_sha256"],
@@ -1023,6 +1110,9 @@ def verify_p0_manifest_evidence(root: Path, payload: Mapping[str, Any]) -> dict[
         "record_store": str(store.root),
         "gates": results,
     }
+    if unit_inherit:
+        verified["unit_inherit"] = _p0_unit_inherit_proof(store, manifest)
+    return verified
 
 
 def finalize(root: Path, facts_relative: str, output_relative: str) -> dict[str, Any]:

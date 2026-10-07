@@ -45,6 +45,10 @@
 本轮客户端取参数 ``CLIENT``（缺省 codex）。Codex 的步骤表与改造前逐字相同（输入声明的摘要不变，改造前写下的步骤记录照常
 沿用）；Claude 的步骤表另登记第二受管根（``tools/official_client_control``，含 ``schemas/``）、两客户端共用控制面的实现
 文档与客户端表本身。读哪个客户端的部署收据、受管五摘要按哪个客户端的策略算、VC-0 收口用哪个模块，同样按客户端取。
+
+逐单元承接（Claude 升级 B5a-08）：参数 ``UNIT_INHERIT_REQUEST``（入口编排器 ``--unit-inherit-request`` 给出）非空时，入口门禁与
+pre-A3 两步另把承接请求文件与承接合同模块 ``unit_inherit.py`` 列入输入——请求一换（来源集合、批准或凭证），两步都失效重做。
+不用这个模式时步骤表与改造前逐字相同（改造前写下的步骤记录照常沿用）；两张表只差这两步的这两项输入。
 """
 
 from __future__ import annotations
@@ -60,7 +64,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -391,6 +395,22 @@ STEP_BY_ID_BY_CLIENT: dict[str, dict[str, Step]] = {
 STEPS: tuple[Step, ...] = STEPS_BY_CLIENT["codex"]
 STEP_BY_ID: dict[str, Step] = STEP_BY_ID_BY_CLIENT["codex"]
 
+# B5a-08：逐单元承接时的步骤表（见模块说明）。
+UNIT_INHERIT_PARAM = "UNIT_INHERIT_REQUEST"
+UNIT_INHERIT_STEPS = ("entry-gates", "pre-a3")
+UNIT_INHERIT_INPUTS = (Input("upstream", "file", "{" + UNIT_INHERIT_PARAM + "}"), *_drivers("unit_inherit.py"))
+
+
+def _with_unit_inherit(steps: tuple[Step, ...]) -> tuple[Step, ...]:
+    return tuple(replace(step, inputs=step.inputs + UNIT_INHERIT_INPUTS) if step.step_id in UNIT_INHERIT_STEPS else step
+                 for step in steps)
+
+
+STEPS_BY_CLIENT_UNIT_INHERIT: dict[str, tuple[Step, ...]] = {client: _with_unit_inherit(steps) for client, steps in STEPS_BY_CLIENT.items()}
+STEP_BY_ID_BY_CLIENT_UNIT_INHERIT: dict[str, dict[str, Step]] = {
+    client: {step.step_id: step for step in steps} for client, steps in STEPS_BY_CLIENT_UNIT_INHERIT.items()
+}
+
 # 入口门禁每个门禁项的输入清单（方案 E2-05「每个门禁项都登记一份输入清单」；E3-01 的单元承接按它判断）。测试树里的门禁项
 # 共用：源码提交（测试树的全部内容）、驱动里的入口门禁脚本与执行器、内核；再按门禁项加工具链与前端依赖。pre-A3 同上面的
 # 步骤（按客户端）。范围从宽，由读集审计（E3-04）收窄。
@@ -432,7 +452,7 @@ def gate_inputs(gate_id: str, ctx: "Context") -> list[dict[str, Any]]:
 
 
 def _check_step_table() -> None:
-    for client, steps in STEPS_BY_CLIENT.items():
+    for client, steps in [*STEPS_BY_CLIENT.items(), *STEPS_BY_CLIENT_UNIT_INHERIT.items()]:
         seen: set[str] = set()
         for step in steps:
             if step.step_id in seen:
@@ -563,13 +583,19 @@ class Context:
         return CT.spec(self.client)
 
     @property
-    def steps(self) -> tuple[Step, ...]:
-        """本轮客户端的步骤表（步骤与依赖两客户端相同，输入声明按客户端）。"""
+    def unit_inherit(self) -> bool:
+        """本轮入口门禁是否走逐单元承接（参数 UNIT_INHERIT_REQUEST 非空，B5a-08）：决定用哪张步骤表。"""
 
-        return STEPS_BY_CLIENT[self.client]
+        return bool(self.params.get(UNIT_INHERIT_PARAM))
+
+    @property
+    def steps(self) -> tuple[Step, ...]:
+        """本轮客户端的步骤表（步骤与依赖两客户端相同，输入声明按客户端；逐单元承接时入口门禁与 pre-A3 另有两项输入）。"""
+
+        return (STEPS_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEPS_BY_CLIENT)[self.client]
 
     def step(self, step_id: str) -> Step:
-        steps = STEP_BY_ID_BY_CLIENT[self.client]
+        steps = (STEP_BY_ID_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEP_BY_ID_BY_CLIENT)[self.client]
         if step_id not in steps:
             raise EntryStepsError(f"步骤不认识：{step_id}（可选：{', '.join(steps)}）")
         return steps[step_id]
