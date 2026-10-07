@@ -1,0 +1,63 @@
+{
+  "base_commit": "72faffb2d15065714faf82eab32c2c16fce4a4fa",
+  "changed_path_count": 8,
+  "current_commit": "29e3eee6d1e98bd65c93b599b90e1914b5b550cf",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5859,
+  "frozen_path_count": 2015,
+  "identity_sha256": "ea3006cfa48796951794800c4738f12aca5311d37ee767c5853965c3fe708648",
+  "issued_at_utc": "2026-10-07T15:20:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-5a-closeout-policy-v3-20261007-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_job_rehearsal_receipt.py",
+      "predecessor_sha256s": [
+        "ec271fb06bc0bf5dd5567fde36c3da9e65ac3955826e83dfd2906271c715f150"
+      ],
+      "reason": "Claude 升级 5a 收口代码项：共享 Job 演练模块 assert_formal_compatible 的说明改为两客户端都要求两项探针摘要（代码不变） path=tools/official_client_capture/codex_upgrade_job_rehearsal_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-evidence-label-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-claude-midpoint-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a2-a3a-policy-reuse-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-failed-evidence-archive-route-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-job-rehearsal-entrypoint-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-label-coverage-compat-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r16-job-dependencies-20260925-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "d378a4644b0455369a176c807276d6495b7603ba1f86132185af8f8f7cd5b5cd"
+    }
+  ],
+  "unregistered_path_count": 7,
+  "unregistered_paths": [
+    "tools/official_client_capture/claude_tool_identity_policy_v2.json",
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py",
+    "tools/official_client_capture/tests/test_ci_entry_gates.py",
+    "tools/official_client_capture/tests/test_claude_tool_identity_policy.py",
+    "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+    "tools/official_client_capture/tests/test_pre_a3_client_grouping.py",
+    "tools/official_client_capture/tests/test_pre_a3_codex_parity.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
