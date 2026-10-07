@@ -517,7 +517,7 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 1. run：`vc5-claude-start.sh` 沿用 Codex 的锁、准入、`guard.sh pre-vc5` 与后台批次写法；`claude_vc5.py run-plan` 生成受管
    `capture-candidate run` 计划；`vc5-claude-switch.sh candidate <标签>` 从 compose 备份改写 compose：镜像换候选标签，环境变量块写入
    `GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED=true`、登记的隔离实例 `GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID=ARM64`（Go 只在登记的
-   隔离候选实例 DMIT、ARM64 放行候选开关）与激活事实那组 `GATEWAY_CLAUDE_EGRESS_ACTIVATION_*`（身份取 VC-4 构建收据，不写批准
+   隔离候选实例 ARM64 放行候选开关，生产实例 DMIT、BWG 均拒绝）与激活事实那组 `GATEWAY_CLAUDE_EGRESS_ACTIVATION_*`（身份取 VC-4 构建收据，不写批准
    摘要）；备份里已有这些变量即拒绝。起服务后 `activation-check` 核对激活事实是候选 Runtime 且与构建收据逐项一致，`precheck`
    只读调候选 run 的正式入口门。`restore` 交给 `vc5-switch.sh`（拷回备份，以上变量一并撤回）。
 2. seal 链：`vc5-claude-seal.sh <attempt>` 每步先由 `claude_vc5.py seal-state` 判定下一步：两项边界核对

@@ -109,9 +109,9 @@ func TestLoadOfficialEgressGuardDefaultsToFailClose(t *testing.T) {
 	require.Equal(t, "legacy", cfg.Gateway.ClaudeOfficialClientProfiles.Mode)
 }
 
-// Claude 候选开关只在登记的隔离候选实例（DMIT、ARM64）开启；其它实例（含对外服务的 BWG）与空值一律拒绝启动。
+// Claude 候选开关只在 ARM64 隔离候选实例开启；生产实例 DMIT、BWG、其它实例与空值一律拒绝启动。
 func TestLoadClaudeFWGCandidateRequiresRegisteredIsolatedInstance(t *testing.T) {
-	for _, instanceID := range []string{"DMIT", "ARM64", " arm64 ", "dmit"} {
+	for _, instanceID := range []string{"ARM64", " arm64 ", "\tARM64\n"} {
 		t.Run("登记实例可显式开启："+instanceID, func(t *testing.T) {
 			resetViperWithJWTSecret(t)
 			t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
@@ -123,7 +123,7 @@ func TestLoadClaudeFWGCandidateRequiresRegisteredIsolatedInstance(t *testing.T) 
 		})
 	}
 
-	for _, instanceID := range []string{"Vircs", "BWG", "ARM64-prod", ""} {
+	for _, instanceID := range []string{"DMIT", "dmit", "\tDMIT\n", "Vircs", "BWG", "ARM64-prod", ""} {
 		t.Run("未登记实例拒绝启动："+instanceID, func(t *testing.T) {
 			resetViperWithJWTSecret(t)
 			t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
@@ -131,31 +131,34 @@ func TestLoadClaudeFWGCandidateRequiresRegisteredIsolatedInstance(t *testing.T) 
 
 			_, err := Load()
 			require.ErrorContains(t, err, "只允许在登记的隔离候选实例开启")
-			require.ErrorContains(t, err, "DMIT、ARM64")
+			require.ErrorContains(t, err, "instance_id 取 ARM64 之一")
 		})
 	}
 
-	t.Run("候选开关关闭时实例 ID 不受限", func(t *testing.T) {
-		resetViperWithJWTSecret(t)
-		t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", "BWG")
+	for _, instanceID := range []string{"DMIT", "BWG"} {
+		t.Run("生产实例关闭候选开关可正常启动："+instanceID, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "false")
+			t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", instanceID)
 
-		cfg, err := Load()
-		require.NoError(t, err)
-		require.False(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
-	})
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.False(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
+		})
+	}
 }
 
 func TestClaudeCandidateIsolatedInstanceAllowlist(t *testing.T) {
-	require.Equal(t, []string{"DMIT", "ARM64"}, ClaudeCandidateIsolatedInstanceIDs())
+	require.Equal(t, []string{"ARM64"}, ClaudeCandidateIsolatedInstanceIDs())
 	// 返回的是副本：调用方改它不影响名单。
 	ids := ClaudeCandidateIsolatedInstanceIDs()
 	ids[0] = "BWG"
 	require.False(t, IsClaudeCandidateIsolatedInstance("BWG"))
-	require.True(t, IsClaudeCandidateIsolatedInstance("DMIT"))
-	for _, value := range []string{"", "   ", "Vircs", "BWG", "ARM"} {
+	require.True(t, IsClaudeCandidateIsolatedInstance("ARM64"))
+	for _, value := range []string{"", "   ", "DMIT", "dmit", "\tDMIT\n", "Vircs", "BWG", "ARM"} {
 		require.False(t, IsClaudeCandidateIsolatedInstance(value), value)
 	}
-	for _, value := range []string{"DMIT", "ARM64", "arm64", "\tDMIT\n"} {
+	for _, value := range []string{"ARM64", "arm64", "\tARM64\n"} {
 		require.True(t, IsClaudeCandidateIsolatedInstance(value), value)
 	}
 }
@@ -553,7 +556,7 @@ func TestClaudeOfficialClientProfilesValidationAndCandidateIsolation(t *testing.
 	require.NoError(t, cfg.Validate())
 	cfg.Gateway.ClaudeFWGCandidateEnabled = true
 	cfg.Gateway.OfficialEgressGuard.InstanceID = "DMIT"
-	require.ErrorContains(t, cfg.Validate(), "不能同时启用")
+	require.ErrorContains(t, cfg.Validate(), "只允许在登记的隔离候选实例开启")
 	cfg.Gateway.OfficialEgressGuard.InstanceID = "ARM64"
 	require.ErrorContains(t, cfg.Validate(), "不能同时启用")
 

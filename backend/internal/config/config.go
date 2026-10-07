@@ -57,11 +57,11 @@ const (
 )
 
 // claudeCandidateIsolatedInstanceIDs 是允许打开 Claude 候选开关（gateway.claude_fw_g_candidate_enabled）的
-// 隔离候选实例，取值对应 gateway.official_egress_guard.instance_id：DMIT 沿用改造前唯一的放行值（FW-G 2.1.226
-// 隔离验收时登记），ARM64 是升级控制面 VC-5 的隔离候选环境（候选验证期间由驱动切换网关时写入，恢复生产镜像时
-// 撤回）。新增登记只能是隔离候选环境；空值永远不在名单里。比较时去掉首尾空白、不区分大小写。名单是不导出的
+// 隔离候选实例，取值对应 gateway.official_egress_guard.instance_id：当前只允许 ARM64；DMIT 已承担生产服务，
+// 不再允许打开候选开关。ARM64 候选验证期间由驱动切换网关时写入实例 ID，恢复原镜像时撤回。
+// 新增登记只能是隔离候选环境；空值永远不在名单里。比较时去掉首尾空白、不区分大小写。名单是不导出的
 // 定长数组，包外只能经下面两个函数读取。
-var claudeCandidateIsolatedInstanceIDs = [...]string{"DMIT", "ARM64"}
+var claudeCandidateIsolatedInstanceIDs = [...]string{"ARM64"}
 
 // ClaudeCandidateIsolatedInstanceIDs 返回登记的隔离候选实例 ID（副本，按登记顺序）。
 func ClaudeCandidateIsolatedInstanceIDs() []string {
