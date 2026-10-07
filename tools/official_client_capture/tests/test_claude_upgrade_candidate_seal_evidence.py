@@ -57,6 +57,7 @@ from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
 from tools.official_client_capture import codex_upgrade_gate_receipt as gate_receipt
+from tools.official_client_capture.tests import claude_boundary_receipt_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_accept as accept_tests
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_seal as store_layer_tests
 from tools.official_client_capture.tests import test_claude_upgrade_capture as capture_tests
@@ -479,7 +480,8 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
         return boundary
 
     def write_client_evidence(self, attempt_root: Path) -> list[str]:
-        """两个 Mac 客户端收据与两条 attempt 级边界核对（最小绑定字段，占位合同）；返回 ``--client-evidence`` 参数。"""
+        """两个 Mac 客户端收据（最小绑定字段，占位合同）与两条 attempt 级边界核对（B4-01 f 的正式收据合同，按校验入口造的
+        合法收据与运行目录）；返回 ``--client-evidence`` 参数。"""
 
         directory = attempt_root / candidate_seal.CLIENT_EVIDENCE_DIRNAME
         binding = {"campaign_id": self.manifest["campaign_id"], "candidate_id": CANDIDATE, "attempt_id": ATTEMPT, "run_nonce": RUN_NONCE}
@@ -488,7 +490,7 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
             path = _write_json(directory / f"{client}.json", {"client_id": client, **binding, "status": "success"})
             argv += ["--client-evidence", f"{client}={path}"]
         for check in ("codex-final-wire-isolation", "third-party-ingress-rejection"):
-            _write_json(directory / f"{check}.json", {"check_id": check, **binding, "result": "pass"})
+            claude_boundary_receipt_fixture.write_boundary_receipt(attempt_root, check)
         return argv
 
     def seal_argv(self, *extra: str) -> list[str]:
@@ -972,17 +974,39 @@ class CandidateSealChainTests(_CandidateSealCase):
         value = json.loads(path.read_text(encoding="utf-8"))
         value["attempt_id"] = "another-attempt"
         _write_json(path, value)
-        boundary = attempt_root / candidate_seal.CLIENT_EVIDENCE_DIRNAME / "third-party-ingress-rejection.json"
-        value = json.loads(boundary.read_text(encoding="utf-8"))
-        value["result"] = "fail"
-        _write_json(boundary, value)
         code, result, stderr = self.run_seal(*client)
         self.assertEqual(code, 2, stderr)
         assert result is not None
-        self.assertEqual(result["closure"]["reasons"], ["client_binding_invalid", "boundary_check_failed"])
+        self.assertEqual(result["closure"]["reasons"], ["client_binding_invalid"])
         code, _approved, stderr = self.run_seal("--approve-seal-sha256", result["review_sha256"], "--approved-by", "reviewer-a", *client)
         self.assertEqual(code, 1)
         self.assertIn("闭合门禁 blocked", stderr)
+
+    def test_tampered_boundary_receipt_fails_closed(self) -> None:
+        """边界核对收据经 B4-01 f 的校验入口核对：结论、身份或证据绑定被改即 seal 失败关闭（不进闭合门禁）。"""
+
+        attempt_root = self.write_evidence_and_attempt()
+        client = self.write_client_evidence(attempt_root)
+        boundary = attempt_root / candidate_seal.CLIENT_EVIDENCE_DIRNAME / "third-party-ingress-rejection.json"
+        original = boundary.read_text(encoding="utf-8")
+        for field, value, message in (
+            ("result", "fail", "与 attempt 或合同不一致"),
+            ("attempt_id", "another-attempt", "与 attempt 或合同不一致"),
+            ("issued_at_utc", "2026-10-06T00:00:00Z", "早于 attempt 完成"),
+        ):
+            with self.subTest(field=field):
+                payload = json.loads(original)
+                payload[field] = value
+                _write_json(boundary, payload)
+                code, _result, stderr = self.run_seal(*client)
+                self.assertEqual(code, 1)
+                self.assertIn(message, stderr)
+        boundary.write_text(original, encoding="utf-8")
+        evidence_file = next((attempt_root / candidate_seal.CLIENT_EVIDENCE_DIRNAME / "third-party-ingress-rejection").rglob("relay_manifest.json"))
+        evidence_file.write_text("{}\n", encoding="utf-8")
+        code, _result, stderr = self.run_seal(*client)
+        self.assertEqual(code, 1)
+        self.assertIn("缺失或摘要漂移", stderr)
 
 
 

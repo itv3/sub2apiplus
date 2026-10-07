@@ -13,6 +13,10 @@ Claude 升级取证用，与 v4 同构，判定按场景清单冻结的版本事
 ``--fw-f-v5-catalog`` 指向本工具根 ``capturelib/`` 下的那一份按路径加载，源码里不静态 import：Codex 0.157.0／0.160.0
 场景清单经 ``capturelib/identity.py`` 的执行源清单把本文件及其 import 闭包登记为作业依赖（R16），多一条静态 import
 就要改那些 Codex 清单。v5 的版本事实文件由 ``--fw-f-v5-version-facts`` 与 ``--fw-f-v5-version-facts-sha256`` 钉住。
+
+``ingress-negative`` 子命令（Claude 升级 B4-01 f，attempt 级边界核对 third-party-ingress-rejection）只由宿主侧候选采集脚本
+以 ``GATEWAY_TRIGGER=ingress-negative`` 调用：connect 端口上只记录并拒绝连接、从不转发上游，向候选网关发一组固定的第三方与
+非法形态负例，判定每个负例被拒且监听期间零连接（见文件后部同名一节）。
 """
 
 from __future__ import annotations
@@ -2875,6 +2879,470 @@ def _capture_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
+# ---------------------------------------------------------------------------
+# 第三方入站负例（Claude 升级 B4-01 f：attempt 级边界核对 third-party-ingress-rejection）
+# ---------------------------------------------------------------------------
+#
+# 宿主脚本以 GATEWAY_TRIGGER=ingress-negative 搭好与 capture 相同的网关隔离（账号临时代理指向本中继的 connect 端口、
+# 服务重启让绑定生效）后调用 ``ingress-negative``：本中继在 connect 端口上只做一件事——接受连接、记下请求行（方法与
+# CONNECT 目标）、回 403 并关闭，从不转发上游；随后按固定清单向候选网关发第三方与非法形态请求。判定（本中继自己的
+# 结论，编排器另行复核）：每个负例都被拒（状态码在登记的期望集合里），且整个监听期间零连接——网关没有为任何负例
+# 读取 OAuth 凭据并发起上游出站。负例请求只打本机网关，真实上游请求恒为 0。
+
+SCHEMA_INGRESS_NEGATIVE = "claude-code-fw-e-ingress-negative/v1"
+SCHEMA_INGRESS_NEGATIVE_PLAN = "claude-code-fw-e-ingress-negative-plan/v1"
+INGRESS_NEGATIVE_PROBE_ID = "ingress-negative"
+INGRESS_NEGATIVE_MANIFEST = "ingress-negative-manifest.json"
+CANDIDATE_TRIGGER_INGRESS_NEGATIVE = "ingress-negative"
+# 最后一个负例之后继续监听的秒数：网关若异步出站，连接会在这段时间里落到监听端。
+INGRESS_NEGATIVE_GRACE_SECONDS = 3.0
+INGRESS_NEGATIVE_HEAD_LIMIT = 8192
+INGRESS_NEGATIVE_THIRD_PARTY_USER_AGENT = "curl/8.5.0"
+INGRESS_NEGATIVE_ANTHROPIC_VERSION = "2023-06-01"
+INGRESS_NEGATIVE_FORGED_TOKEN_PREFIX = "sk-ant-oat01-"
+_CONNECT_AUTHORITY_RE = re.compile(r"^[A-Za-z0-9.-]{1,253}:[0-9]{1,5}$")
+_REQUEST_METHOD_RE = re.compile(r"^[A-Z]{1,16}$")
+# 负例清单（顺序即执行顺序）。期望状态码依据网关代码：Claude OAuth 账号的 /v1/messages 与 count_tokens 在读取凭据前做
+# 官方入口校验（Catalog 未命中、query 不在 SupportEnvelope 一律 400 invalid_request_error），Chat Completions 与 Responses
+# 对 Claude OAuth 账号无条件 400；没有或伪造网关 API Key 由鉴权中间件 401。
+INGRESS_NEGATIVE_CASES: tuple[dict[str, Any], ...] = (
+    {
+        "case_id": "messages-third-party-user-agent",
+        "path": "/v1/messages",
+        "protocol": "anthropic-messages",
+        "user_agent": "third-party",
+        "credential": "gateway-api-key",
+        "expected_status": (400,),
+    },
+    {
+        "case_id": "messages-official-user-agent-without-official-headers",
+        "path": "/v1/messages",
+        "protocol": "anthropic-messages",
+        "user_agent": "official",
+        "credential": "gateway-api-key",
+        "expected_status": (400,),
+    },
+    {
+        "case_id": "messages-query-outside-envelope",
+        "path": "/v1/messages?beta=false",
+        "protocol": "anthropic-messages",
+        "user_agent": "official",
+        "credential": "gateway-api-key",
+        "expected_status": (400,),
+    },
+    {
+        "case_id": "count-tokens-third-party-user-agent",
+        "path": "/v1/messages/count_tokens",
+        "protocol": "anthropic-count-tokens",
+        "user_agent": "third-party",
+        "credential": "gateway-api-key",
+        "expected_status": (400,),
+    },
+    {
+        "case_id": "openai-chat-completions",
+        "path": "/v1/chat/completions",
+        "protocol": "openai-chat-completions",
+        "user_agent": "third-party",
+        "credential": "gateway-api-key-bearer",
+        "expected_status": (400,),
+    },
+    {
+        "case_id": "openai-responses",
+        "path": "/v1/responses",
+        "protocol": "openai-responses",
+        "user_agent": "third-party",
+        "credential": "gateway-api-key-bearer",
+        "expected_status": (400,),
+    },
+    {
+        "case_id": "messages-missing-api-key",
+        "path": "/v1/messages",
+        "protocol": "anthropic-messages",
+        "user_agent": "third-party",
+        "credential": "absent",
+        "expected_status": (401,),
+    },
+    {
+        "case_id": "messages-oauth-token-shaped-api-key",
+        "path": "/v1/messages",
+        "protocol": "anthropic-messages",
+        "user_agent": "third-party",
+        "credential": "forged-oauth-token",
+        "expected_status": (401,),
+    },
+)
+
+
+def ingress_negative_case_ids() -> list[str]:
+    return [str(case["case_id"]) for case in INGRESS_NEGATIVE_CASES]
+
+
+def _ingress_negative_plan_cases() -> list[dict[str, Any]]:
+    """负例清单的可公开视图（不含任何凭据值）。"""
+
+    return [
+        {**{key: value for key, value in case.items() if key != "expected_status"}, "expected_status": list(case["expected_status"])}
+        for case in INGRESS_NEGATIVE_CASES
+    ]
+
+
+class _RejectingConnectListener:
+    """connect 端口上的记录端：接受连接、读请求头（不超过 8 KiB、1 秒）、回 403 并关闭；只记录方法、CONNECT 目标与摘要。
+
+    不用线程：负例之间与收尾宽限期里按需 ``accept``。网关若在某个负例里发起上游出站，它的连接会先进内核等待队列，在下一次
+    ``drain`` 时被记录（那个负例要么等到网关自己的代理超时、要么本中继的请求超时，二者都会让判定失败）。
+    """
+
+    def __init__(self, port: int) -> None:
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.bind(("0.0.0.0", int(port)))
+        self._socket.listen(16)
+        self.connections: list[dict[str, Any]] = []
+        self.closed = False
+
+    def drain(self, wait_seconds: float = 0.0) -> None:
+        deadline = time.monotonic() + max(0.0, float(wait_seconds))
+        while True:
+            remaining = deadline - time.monotonic()
+            self._socket.settimeout(remaining if remaining > 0 else 0.0)
+            try:
+                connection, peer = self._socket.accept()
+            except (BlockingIOError, TimeoutError, socket.timeout):
+                return
+            self._record(connection, peer)
+
+    def _record(self, connection: socket.socket, peer: Any) -> None:
+        accepted = _utc_now()
+        head = b""
+        try:
+            connection.settimeout(1.0)
+            while b"\r\n\r\n" not in head and len(head) < INGRESS_NEGATIVE_HEAD_LIMIT:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                head += chunk
+        except OSError:
+            pass
+        line = head.split(b"\r\n", 1)[0].decode("latin-1", "replace").split(" ")
+        method = line[0] if line and _REQUEST_METHOD_RE.fullmatch(line[0]) else None
+        authority = line[1] if method == "CONNECT" and len(line) > 1 and _CONNECT_AUTHORITY_RE.fullmatch(line[1]) else None
+        try:
+            connection.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        except OSError:
+            pass
+        finally:
+            connection.close()
+        self.connections.append(
+            {
+                "accepted_at_utc": accepted,
+                "peer": str(peer[0]) if isinstance(peer, tuple) and peer else None,
+                "method": method,
+                "connect_authority": authority,
+                "head_bytes": len(head),
+                "head_sha256": _sha256_bytes(head),
+            }
+        )
+
+    def close(self) -> None:
+        try:
+            self._socket.close()
+        finally:
+            self.closed = True
+
+
+def _ingress_negative_request(
+    case: dict[str, Any], *, base_url: str, api_key: str, version: str, model: str, marker: str
+) -> tuple[str, dict[str, str], bytes]:
+    """一个负例的 URL、请求头与 body；凭据值只在内存里，清单只记凭据形态。"""
+
+    protocol = case["protocol"]
+    if protocol == "anthropic-messages":
+        body: dict[str, Any] = {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": marker}]}
+    elif protocol == "anthropic-count-tokens":
+        body = {"model": model, "messages": [{"role": "user", "content": marker}]}
+    elif protocol == "openai-chat-completions":
+        body = {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": marker}]}
+    elif protocol == "openai-responses":
+        body = {"model": model, "max_output_tokens": 16, "input": marker}
+    else:
+        raise ConfigurationError(f"未登记的负例协议：{protocol}")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": (
+            f"claude-cli/{version} (external, cli)" if case["user_agent"] == "official" else INGRESS_NEGATIVE_THIRD_PARTY_USER_AGENT
+        ),
+    }
+    if protocol.startswith("anthropic-"):
+        headers["anthropic-version"] = INGRESS_NEGATIVE_ANTHROPIC_VERSION
+    credential = case["credential"]
+    if credential == "gateway-api-key":
+        headers["x-api-key"] = api_key
+    elif credential == "gateway-api-key-bearer":
+        headers["Authorization"] = f"Bearer {api_key}"
+    elif credential == "forged-oauth-token":
+        headers["x-api-key"] = INGRESS_NEGATIVE_FORGED_TOKEN_PREFIX + secrets.token_urlsafe(72)
+    elif credential != "absent":
+        raise ConfigurationError(f"未登记的负例凭据形态：{credential}")
+    return base_url + str(case["path"]), headers, json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+
+def _ingress_negative_error_fields(payload: bytes) -> tuple[str | None, str | None]:
+    """应答里的错误类型与说明（Anthropic 与 OpenAI 的 error 对象、网关通用的 code／message）；解析不了时都为 None。"""
+
+    try:
+        document = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(document, dict):
+        return None, None
+    error = document.get("error")
+    if isinstance(error, dict):
+        kind, message = error.get("type") or error.get("code"), error.get("message")
+    else:
+        kind, message = document.get("code"), document.get("message")
+    return (
+        str(kind)[:120] if isinstance(kind, (str, int)) else None,
+        str(message)[:300] if isinstance(message, str) else None,
+    )
+
+
+def _send_ingress_negative_case(
+    case: dict[str, Any],
+    *,
+    runtime: dict[str, Any],
+    version: str,
+    model: str,
+    marker: str,
+    timeout: int,
+    redactions: Sequence[str],
+) -> dict[str, Any]:
+    url, headers, body = _ingress_negative_request(
+        case, base_url=runtime["base_url"], api_key=runtime["api_key"], version=version, model=model, marker=marker
+    )
+    request = urllib.request.Request(url, data=body, method="POST", headers=headers)
+    # 显式不走任何环境代理：负例只打候选网关本身。
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    started_at = _utc_now()
+    started = time.monotonic()
+    status: int | None = None
+    payload = b""
+    transport_error: str | None = None
+    try:
+        with opener.open(request, timeout=max(5, min(int(timeout), 300))) as response:
+            status = int(response.status)
+            payload = response.read(65536)
+    except urllib.error.HTTPError as failure:
+        status = int(failure.code)
+        try:
+            payload = failure.read(65536)
+        finally:
+            failure.close()
+    except (urllib.error.URLError, OSError, TimeoutError) as failure:
+        transport_error = type(failure).__name__
+    for secret in redactions:
+        if secret:
+            payload = payload.replace(secret.encode("utf-8"), b"<secret>")
+    error_type, error_message = _ingress_negative_error_fields(payload)
+    expected = [int(item) for item in case["expected_status"]]
+    return {
+        "case_id": case["case_id"],
+        "method": "POST",
+        "path": case["path"],
+        "protocol": case["protocol"],
+        "user_agent": case["user_agent"],
+        "credential": case["credential"],
+        "header_names": sorted(name.lower() for name in headers),
+        "expected_status": expected,
+        "http_status": status,
+        "rejected": status in expected and transport_error is None,
+        "transport_error": transport_error,
+        "error_type": error_type,
+        "error_message": error_message,
+        "response_bytes": len(payload),
+        "response_sha256": _sha256_bytes(payload),
+        "started_at_utc": started_at,
+        "ended_at_utc": _utc_now(),
+        "duration_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
+def _ingress_negative(arguments: argparse.Namespace) -> dict[str, Any]:
+    """第三方入站负例主流程；失败也写完整清单与秘密扫描事实。返回清单（判定未通过时抛 ``RelayEvidenceError``）。"""
+
+    validate_safe_name(arguments.run_id, "run_id")
+    if arguments.probe_id != INGRESS_NEGATIVE_PROBE_ID:
+        raise ConfigurationError(f"负例模式的 --probe-id 固定为 {INGRESS_NEGATIVE_PROBE_ID}。")
+    if not VERSION_RE.fullmatch(arguments.expected_version):
+        raise ConfigurationError("--expected-version 必须是精确三段版本号。")
+    validate_safe_name(arguments.model, "model")
+    if not RUNTIME_IMAGE_RE.fullmatch(arguments.runtime_image):
+        raise ConfigurationError("--runtime-image 必须是 repository@sha256。")
+    if not SHA256_RE.fullmatch(arguments.host_runtime_receipt_sha256):
+        raise ConfigurationError("--host-runtime-receipt-sha256 格式非法。")
+    if not SHA256_RE.fullmatch(arguments.run_nonce):
+        raise ConfigurationError("--run-nonce 格式非法。")
+    relay_port = arguments.candidate_relay_port
+    if not isinstance(relay_port, int) or not 1024 <= relay_port <= 65535:
+        raise ConfigurationError("--candidate-relay-port 必须是 1024～65535 的端口。")
+    if arguments.timeout <= 0:
+        raise ConfigurationError("--timeout 必须大于 0。")
+    _validate_output_root(arguments.output_root, create=arguments.execute)
+    plan_cases = _ingress_negative_plan_cases()
+    if arguments.dry_run:
+        return {
+            "schema_version": SCHEMA_INGRESS_NEGATIVE_PLAN,
+            "side": "candidate",
+            "run_id": arguments.run_id,
+            "probe_id": INGRESS_NEGATIVE_PROBE_ID,
+            "version": arguments.expected_version,
+            "model": arguments.model,
+            "capture_mode": "ingress-negative",
+            "relay_mode": "connect-reject",
+            "relay_listen_port": relay_port,
+            "candidate_trigger": CANDIDATE_TRIGGER_INGRESS_NEGATIVE,
+            "cases": plan_cases,
+            "upstream_ip": None,
+            "live_requests": False,
+            "production_forwarding_enabled": False,
+            "production_changes": False,
+        }
+    runtime = _load_candidate_runtime(
+        Path(arguments.candidate_runtime_dir),
+        probe_id=INGRESS_NEGATIVE_PROBE_ID,
+        run_id=arguments.run_id,
+        relay_port=relay_port,
+        trigger=CANDIDATE_TRIGGER_INGRESS_NEGATIVE,
+    )
+    run_root = arguments.output_root
+    manifest_path = run_root / INGRESS_NEGATIVE_MANIFEST
+    tool_root = Path(__file__).resolve().parent
+    tool_identity = _tool_identity(tool_root)
+    secrets_map = {"gateway_api_key": runtime["api_key"], **runtime["known_secrets"]}
+    receipt = _host_receipt(arguments, tool_identity["execution_sources"])
+    if not arguments.lock_file.is_absolute() or arguments.lock_file.is_symlink():
+        raise ConfigurationError("--lock-file 必须是非符号链接绝对路径。")
+    if not _port_available(relay_port):
+        raise ConfigurationError("候选 connect 端口已被占用。")
+    manifest: dict[str, Any] = {
+        "schema_version": SCHEMA_INGRESS_NEGATIVE,
+        "side": "candidate",
+        "run_id": arguments.run_id,
+        "probe_id": INGRESS_NEGATIVE_PROBE_ID,
+        "status": "running",
+        "started_at_utc": _utc_now(),
+        "ended_at_utc": None,
+        "version": arguments.expected_version,
+        "model": arguments.model,
+        "candidate_gateway": {
+            "base_url": runtime["base_url"],
+            "account_id": runtime["gateway"]["account_id"],
+            "api_key_id": runtime["gateway"]["api_key_id"],
+            "trigger": CANDIDATE_TRIGGER_INGRESS_NEGATIVE,
+            "oauth_credentials_read": False,
+        },
+        "runtime": {
+            "runtime_image_reference": arguments.runtime_image,
+            "host_runtime_receipt": receipt,
+            "capture_tools": tool_identity,
+        },
+        "upstream": {
+            "relay_mode": "connect-reject",
+            "relay_listen_port": relay_port,
+            "live_requests": False,
+            "production_forwarding_enabled": False,
+        },
+        "planned_cases": plan_cases,
+        "cases": [],
+        "relay_connections": [],
+        "listener": {"bound": False, "closed": False, "grace_seconds": INGRESS_NEGATIVE_GRACE_SECONDS},
+        "secret_scan": {"performed": False, "passed": False, "matches": []},
+        "m_binding": {"complete": False, "requirements": {}},
+        "artifacts": [],
+    }
+    secure_write_json(manifest_path, manifest)
+    listener: _RejectingConnectListener | None = None
+    cases: list[dict[str, Any]] = []
+    failure: BaseException | None = None
+    redactions = [runtime["api_key"], *runtime["known_secrets"].values()]
+    with CampaignLock(arguments.lock_file):
+        try:
+            listener = _RejectingConnectListener(relay_port)
+            manifest["listener"]["bound"] = True
+            # 绑定之前就已在等待的连接也计入（网关不该有任何经账号代理的出站）。
+            listener.drain(0.0)
+            for case in INGRESS_NEGATIVE_CASES:
+                marker = f"claude-upgrade boundary check {case['case_id']} {arguments.run_nonce[:16]}"
+                cases.append(
+                    _send_ingress_negative_case(
+                        case,
+                        runtime=runtime,
+                        version=arguments.expected_version,
+                        model=arguments.model,
+                        marker=marker,
+                        timeout=arguments.timeout,
+                        redactions=redactions,
+                    )
+                )
+                listener.drain(0.0)
+            listener.drain(INGRESS_NEGATIVE_GRACE_SECONDS)
+        except BaseException as error:  # 失败也必须写清单与秘密扫描事实
+            failure = error
+        finally:
+            if listener is not None:
+                listener.close()
+    connections = list(listener.connections) if listener is not None else []
+    manifest["cases"] = cases
+    manifest["relay_connections"] = connections
+    manifest["listener"]["closed"] = bool(listener is not None and listener.closed)
+    scan = scan_for_secrets(run_root, secrets_map)
+    failed_cases = [case["case_id"] for case in cases if case.get("rejected") is not True]
+    verdict = {
+        "cases_complete": [case["case_id"] for case in cases] == ingress_negative_case_ids(),
+        "all_rejected": bool(cases) and not failed_cases,
+        "failed_cases": failed_cases,
+        "relay_connection_count": len(connections),
+        "zero_relay_connections": listener is not None and not connections,
+        "live_request_count": 0,
+    }
+    requirements = {
+        "runtime_identity": receipt.get("container_runtime_binding", {}).get("verified") is True,
+        "capture_execution_sources": bool(tool_identity["execution_sources"].get("sha256")),
+        "candidate_runtime_bound": True,
+        "cases_complete": verdict["cases_complete"],
+        "all_rejected": verdict["all_rejected"],
+        "zero_relay_connections": verdict["zero_relay_connections"],
+        "listener_closed": manifest["listener"]["closed"],
+        "exact_secret_scan": scan.get("passed") is True,
+        "campaign_status": failure is None,
+    }
+    manifest.update(
+        {
+            "status": "complete" if failure is None and all(requirements.values()) else "failed",
+            "ended_at_utc": _utc_now(),
+            "verdict": verdict,
+            "secret_scan": scan,
+            "m_binding": {
+                "complete": all(requirements.values()),
+                "requirements": requirements,
+                "limitations": [key for key, satisfied in requirements.items() if not satisfied],
+            },
+        }
+    )
+    if failure is not None:
+        safe_error = str(failure)
+        for secret in secrets_map.values():
+            safe_error = redact_known_secret(safe_error, secret)
+        manifest["error"] = f"{type(failure).__name__}: {safe_error}"[:500]
+    manifest["artifacts"] = [item for item in inventory_artifacts(run_root) if item.get("path") != manifest_path.name]
+    secure_write_json(manifest_path, manifest)
+    if failure is not None:
+        raise RelayEvidenceError(str(manifest["error"])) from failure
+    if manifest["status"] != "complete":
+        raise RelayEvidenceError(f"第三方入站负例未通过：{manifest['m_binding']['limitations']}")
+    return manifest
+
+
 def _scan_group(
     root: Path,
     label: str,
@@ -3069,6 +3537,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="候选模式：connect 中继在抓包容器内的监听端口（网关账号临时代理指向它）",
     )
 
+    # 第三方入站负例（B4-01 f）：只由宿主侧 claude_run_candidate_capture.sh 以 GATEWAY_TRIGGER=ingress-negative 调用。
+    negative = commands.add_parser("ingress-negative", help="候选网关第三方入站负例：只拒不转发的 connect 监听＋固定负例")
+    negative_mode = negative.add_mutually_exclusive_group(required=True)
+    negative_mode.add_argument("--dry-run", action="store_true")
+    negative_mode.add_argument("--execute", action="store_true")
+    negative.add_argument("--run-id", required=True)
+    negative.add_argument("--probe-id", required=True)
+    negative.add_argument("--output-root", type=Path, required=True)
+    negative.add_argument("--expected-version", required=True, help="官方客户端目标版本（官方 User-Agent 形态的负例用）")
+    negative.add_argument("--model", required=True)
+    negative.add_argument("--host-runtime-receipt", type=Path, required=True)
+    negative.add_argument("--host-runtime-receipt-sha256", required=True)
+    negative.add_argument("--run-nonce", required=True)
+    negative.add_argument("--runtime-image", default=DEFAULT_RUNTIME_IMAGE)
+    negative.add_argument("--lock-file", type=Path, default=Path("/run/official-client-capture.lock"))
+    negative.add_argument("--timeout", type=int, default=60, help="单个负例请求的超时秒数")
+    negative.add_argument("--candidate-runtime-dir", type=Path, required=True)
+    negative.add_argument("--candidate-relay-port", type=int, required=True)
+
     index = commands.add_parser("index", help="闭合控制组与目标组 R 证据")
     index.add_argument("--control-root", type=Path, required=True)
     index.add_argument("--target-root", type=Path, required=True)
@@ -3086,6 +3573,8 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         return _capture(arguments)
     if arguments.command == "index":
         return _build_index(arguments)
+    if arguments.command == "ingress-negative":
+        return _ingress_negative(arguments)
     raise ConfigurationError(f"未处理命令：{arguments.command}")
 
 

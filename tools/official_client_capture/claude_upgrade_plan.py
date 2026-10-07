@@ -161,8 +161,10 @@ CANDIDATE_CAMPAIGN_VARIABLES = (
 # 三官方客户端正例里只能在 Mac 上驱动的两个（B4-01，已定）：不做成候选 Job，按 Codex 第三方客户端收据机制，由 Mac 侧
 # ``claude_drive_desktop.py`` 驱动并产出收据，候选 seal 用 ``--client-evidence`` 核对。CLI 正例由候选 Job 本身承担。
 REQUIRED_CLIENT_BINDINGS = frozenset({"claude-desktop", "claude-vscode"})
-# attempt 级边界核对（B4-01，已定）：候选 Job 之后、seal 之前执行，证据进 attempt 的 client 证据目录，由 seal 与 accept 核对。
-#   codex-final-wire-isolation：用现有 Codex 候选采集脚本（不改）跑最小场景，Codex checker 只读判定 final wire 零差异；
+# attempt 级边界核对（B4-01，已定；实现见 claude_upgrade_boundary_checks）：候选 Job 之后、seal 之前由
+# capture-candidate boundary-check 执行，证据进 attempt 的 client 证据目录，由 seal 与 accept 核对。
+#   codex-final-wire-isolation：structural（候选源码树与生产部署的 Codex 构建输入逐字节不变，零请求）＋ runtime（现有 Codex
+#     候选采集脚本不改、只跑 candidate-core-mitm，Codex checker 逐条判定，选中观测的检查全过）；
 #   third-party-ingress-rejection：第三方与非法形态请求在读取 OAuth 凭据前被拒（网关零出站）。
 REQUIRED_BOUNDARY_CHECKS = frozenset({"codex-final-wire-isolation", "third-party-ingress-rejection"})
 CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})

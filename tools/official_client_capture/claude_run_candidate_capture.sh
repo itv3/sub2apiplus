@@ -37,6 +37,12 @@ umask 077
 # 账号是否挂着它、临时 CA 在不在、keeper 是否被停），再走与 trap 同一段恢复与核验。恢复报告（claude-candidate-gateway-cleanup/v1）
 # 只打到 stdout，不写回原证据根（那里已经做过权限收口）；成功删除运行目录、退出 0，失败退出 97 并保留 restore/。
 # 编排器的 environment-cleanup 在明确批准下调用它，并把报告写进清理收据。
+#
+# 第三方入站负例（B4-01 f，attempt 级边界核对 third-party-ingress-rejection）：位置参数是中继的 ingress-negative 子命令
+# （docker exec <抓包容器> python3 <中继> ingress-negative ...）、GATEWAY_TRIGGER=ingress-negative，二者必须同时出现。网关隔离
+# 与 capture 完全相同（账号临时代理指向抓包容器里的 connect 监听、临时 CA、服务重启让代理绑定生效、keeper 停、调度门清零），
+# 中继向候选网关发一组固定负例，监听端只记录连接并一律拒绝、从不转发上游。负例模式另在中继执行前后各取一次账号令牌的
+# 数据库内摘要（值不出数据库），恢复报告多一个字段 account_tokens_unchanged；capture 模式的恢复报告字段不变。
 
 required_gate=YES_I_ACCEPT_CANDIDATE_GATEWAY_CAPTURE
 if [[ ${CLAUDE_CANDIDATE_CAPTURE:-} != "$required_gate" ]]; then
@@ -60,6 +66,9 @@ restored_hosts_hash=""
 restored_ca_hash=""
 restored_gate_equal=false
 restored_proxy_equal=false
+# 负例模式（GATEWAY_TRIGGER=ingress-negative）专用：账号令牌在中继执行前后的数据库内摘要与比较结论。
+tokens_before=""
+tokens_unchanged=""
 
 load_db_metadata() {
   db_user=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" | sed -n 's/^POSTGRES_USER=//p')
@@ -120,6 +129,11 @@ proxy_state() {
   db_query "select coalesce(proxy_id::text,'NULL') || '|' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id = $account_id"
 }
 
+# 账号 access／refresh 令牌的摘要：在 PostgreSQL 里算 sha256，令牌值不出数据库、不进本脚本变量。
+account_token_digest() {
+  db_query "select encode(sha256(convert_to(coalesce(credentials->>'access_token','') || '|' || coalesce(credentials->>'refresh_token',''),'UTF8')),'hex') from accounts where id = $account_id"
+}
+
 remove_runtime_secrets() {
   rm -f -- "$runtime_host/api-key" "$runtime_host/admin-token" "$runtime_host/known-secrets.json" \
     "$runtime_host/gateway.json"
@@ -131,11 +145,12 @@ write_report() {
   python3 - "$report_path" "$status" "$run_id" "$probe_id" "$account_id" "$api_key_id" "$gateway_trigger" \
     "$original_proxy_state" "$restored_proxy_equal" "$restored_gate_equal" "$original_hosts_hash" \
     "$restored_hosts_hash" "$original_ca_hash" "$restored_ca_hash" "$keeper_was_running" "$capture_exit_code" \
-    "$started_at" "$relay_port" <<'PY'
+    "$started_at" "$relay_port" "$tokens_unchanged" <<'PY'
 import json, os, sys, time
 
 (path, status, run_id, probe_id, account_id, api_key_id, trigger, original_proxy, proxy_equal, gate_equal,
- hosts_before, hosts_after, ca_before, ca_after, keeper_was_running, capture_exit_code, started_at, relay_port) = sys.argv[1:]
+ hosts_before, hosts_after, ca_before, ca_after, keeper_was_running, capture_exit_code, started_at, relay_port,
+ tokens_unchanged) = sys.argv[1:]
 report = {
     "schema_version": "claude-candidate-gateway-restoration/v1",
     "status": status,
@@ -156,6 +171,9 @@ report = {
     "started_at_utc": started_at,
     "ended_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
 }
+if trigger == "ingress-negative":
+    # 负例模式专用：中继执行前后账号令牌的数据库内摘要相等（没取到前值或后值都记 false）。
+    report["account_tokens_unchanged"] = tokens_unchanged == "true"
 descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
 with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
     json.dump(report, stream, ensure_ascii=False, indent=2, sort_keys=True)
@@ -230,6 +248,13 @@ restore_environment() {
   trap - EXIT ERR INT TERM
   set +e
   [[ -n $capture_exit_code ]] || capture_exit_code=$original_exit_code
+  # 负例模式：恢复之前取令牌后值（恢复不动 credentials）；前值没取到时一律记不相等。
+  if [[ $gateway_trigger == ingress-negative ]]; then
+    tokens_unchanged=false
+    if [[ $tokens_before =~ ^[0-9a-f]{64}$ && $(account_token_digest 2>/dev/null) == "$tokens_before" ]]; then
+      tokens_unchanged=true
+    fi
+  fi
   restore_gateway
 
   if [[ $restore_failed != 0 ]]; then
@@ -279,7 +304,7 @@ FIELDS = {
     "account_id": r"[1-9][0-9]{0,9}",
     "api_key_id": r"[1-9][0-9]{0,9}",
     "relay_port": r"[1-9][0-9]{3,4}",
-    "gateway_trigger": r"client|gateway-account-refresh",
+    "gateway_trigger": r"client|gateway-account-refresh|ingress-negative",
     "service_container": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
     "keeper_container": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
     "postgres_container": r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
@@ -449,9 +474,9 @@ if (( relay_port < 1024 || relay_port > 65535 )); then
   exit 2
 fi
 case "$gateway_trigger" in
-  client | gateway-account-refresh) ;;
+  client | gateway-account-refresh | ingress-negative) ;;
   *)
-    echo "GATEWAY_TRIGGER 只能是 client 或 gateway-account-refresh。" >&2
+    echo "GATEWAY_TRIGGER 只能是 client、gateway-account-refresh 或 ingress-negative。" >&2
     exit 2
     ;;
 esac
@@ -466,7 +491,7 @@ done
 
 # 位置参数：在隔离环境里执行的中继候选模式命令，必须与环境变量逐项对应（场景清单在 plan 时已核对同一合同）。
 if (( $# < 8 )) || [[ $1 != docker || $2 != exec || $4 != python3 ]]; then
-  echo "位置参数必须是 docker exec <抓包容器> python3 <中继> capture ... 命令。" >&2
+  echo "位置参数必须是 docker exec <抓包容器> python3 <中继> capture|ingress-negative ... 命令。" >&2
   exit 2
 fi
 # 位置参数里的目标是容器名（监督器只钉环境变量）；与 CAPTURE_CONTAINER 是否同一实例在只读前检里按容器 ID 核对。
@@ -475,8 +500,15 @@ if [[ ! $capture_name =~ $safe_name ]]; then
   echo "中继命令的目标容器名含非法字符。" >&2
   exit 2
 fi
-if [[ $5 != */claude_fw_e_relay.py || $6 != capture ]]; then
-  echo "位置参数必须调用 claude_fw_e_relay.py capture。" >&2
+if [[ $5 != */claude_fw_e_relay.py || ( $6 != capture && $6 != ingress-negative ) ]]; then
+  echo "位置参数必须调用 claude_fw_e_relay.py capture 或 ingress-negative。" >&2
+  exit 2
+fi
+# 中继子命令与触发方式一一对应：ingress-negative 子命令只配 GATEWAY_TRIGGER=ingress-negative，capture 不得用它。
+relay_action=$6
+if [[ $relay_action == ingress-negative && $gateway_trigger != ingress-negative ]] ||
+  [[ $relay_action != ingress-negative && $gateway_trigger == ingress-negative ]]; then
+  echo "中继子命令 $relay_action 与 GATEWAY_TRIGGER=$gateway_trigger 不对应。" >&2
   exit 2
 fi
 # 执行模式：恰有一个 --execute（正式取证）或恰有一个 --dry-run（零请求演练），二者不得同时出现。
@@ -511,8 +543,13 @@ argument_value() {
   [[ $count == 1 ]] || return 1
   printf '%s' "$found"
 }
-for pair in "--run-id=$run_id" "--probe-id=$probe_id" "--fw-f-v5-probe=$probe_id" "--output-root=$output_root" \
-  "--candidate-runtime-dir=$runtime_dir" "--candidate-relay-port=$relay_port" "--ca-cert=$ca_cert"; do
+# 负例模式的中继不跑客户端、不签叶证书：没有 --fw-f-v5-probe 与 --ca-cert（CA_CERT 仍按同一隔离装进服务容器）。
+flag_pairs=("--run-id=$run_id" "--probe-id=$probe_id" "--output-root=$output_root" \
+  "--candidate-runtime-dir=$runtime_dir" "--candidate-relay-port=$relay_port")
+if [[ $relay_action == capture ]]; then
+  flag_pairs+=("--fw-f-v5-probe=$probe_id" "--ca-cert=$ca_cert")
+fi
+for pair in "${flag_pairs[@]}"; do
   flag=${pair%%=*}
   expected=${pair#*=}
   actual=$(argument_value "$flag" "$@") || {
@@ -809,6 +846,15 @@ api_key=""
 access_token=""
 refresh_token=""
 admin_token=""
+
+# 负例模式：中继执行前取账号令牌摘要（数据库内计算）；取不到即不执行中继，按失败退出并照常恢复。
+if [[ $gateway_trigger == ingress-negative ]]; then
+  tokens_before=$(account_token_digest)
+  if [[ ! $tokens_before =~ ^[0-9a-f]{64}$ ]]; then
+    echo "无法读取账号令牌摘要（负例模式要比较中继前后令牌是否被刷新）。" >&2
+    exit 1
+  fi
+fi
 
 set +e
 "$@"

@@ -4724,7 +4724,7 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
         "VC-4 候选构建复算、候选构建收据、Store 候选冻结、revision seal 与 VC-4 checkpoint（--preview 零写入预览）",
         "B3-04（VC-4 候选构建与冻结）",
     ),
-    "capture-candidate": ("候选采集 attempt：run 或 seal", "B4-01／B4-02（候选采集与四阶段封存）"),
+    "capture-candidate": ("候选采集 attempt：run、boundary-check 或 seal", "B4-01／B4-02（候选采集、attempt 级边界核对与四阶段封存）"),
     # compare 与 accept 由 B4-06b 落实（实现在 claude_upgrade_compare／claude_upgrade_acceptance，见 ``main`` 的分派）；表项只用于
     # 注册子命令解析器。
     "compare": ("只用封存证据离线比较", "B4-06b（compare／accept 读侧根）"),
@@ -5058,7 +5058,9 @@ def _build_parser() -> argparse.ArgumentParser:
         target = subparsers.add_parser(name, help=f"{summary}（由 {work_item} 落实）")
         add_campaign_reference(target)
         if name in {"capture-official", "capture-candidate"}:
-            target.add_argument("capture_action", choices=("run", "seal"))
+            # capture-candidate 另有 boundary-check（B4-01 f 段：attempt 级边界核对，run 之后、seal 之前）。
+            actions = ("run", "boundary-check", "seal") if name == "capture-candidate" else ("run", "seal")
+            target.add_argument("capture_action", choices=actions)
         if name == "capture-official":
             # run 的参数（B2-06）：真实请求确认、零请求演练与 deadline；seal 的参数（B2-07）：attempt、批准摘要与静态输入。
             from tools.official_client_capture import claude_upgrade_capture
@@ -5092,6 +5094,10 @@ def _build_parser() -> argparse.ArgumentParser:
             from tools.official_client_capture import claude_upgrade_candidate_seal
 
             claude_upgrade_candidate_seal.add_seal_arguments(target)
+            # boundary-check 的参数（B4-01 f 段）：--check 与 Codex 那一项的轮次参数；其余与 run／seal 共用。
+            from tools.official_client_capture import claude_upgrade_boundary_checks
+
+            claude_upgrade_boundary_checks.add_boundary_check_arguments(target)
         if name == "accept":
             # 断言结果与候选外部门禁收据（与 Codex 同名同义），B4-06b。
             target.add_argument("--assertions", type=Path)
@@ -5217,7 +5223,8 @@ def _assert_consumer_admission(arguments: argparse.Namespace) -> None:
             upgrade_control_plane._assert_project_ledger_consumer(command, arguments)
         if (
             command in {"capture-official", "capture-candidate"}
-            and getattr(arguments, "capture_action", None) == "run"
+            # 发真实请求的边界核对（codex-final-wire-isolation）与 run 同一准入口径（B4-01 f 段）。
+            and getattr(arguments, "capture_action", None) in {"run", "boundary-check"}
             and getattr(arguments, "acknowledge_live_requests", False)
             and os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) != "1"
         ):
@@ -5368,6 +5375,10 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_capture
 
             result, return_code = claude_upgrade_capture.capture_candidate_run_command(arguments)
+        elif arguments.command == "capture-candidate" and arguments.capture_action == "boundary-check":
+            from tools.official_client_capture import claude_upgrade_boundary_checks
+
+            result, return_code = claude_upgrade_boundary_checks.boundary_check_command(arguments)
         elif arguments.command == "capture-official" and arguments.capture_action == "seal":
             from tools.official_client_capture import claude_upgrade_seal
 

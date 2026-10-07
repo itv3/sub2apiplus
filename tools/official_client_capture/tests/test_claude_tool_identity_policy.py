@@ -56,6 +56,10 @@ IGNORED_IMPORT_ALLOWLIST: dict[tuple[str, str], str] = {
     ("codex_upgrade_supervisor.py", "codex_upgrade_seal_rehearsal.py"): "Codex VC-5 seal 预演门禁；Claude VC-5 批次是否经过由 B4-06b 接批次时确认",
     ("upgrade_control_plane.py", "codex_upgrade_seal_rehearsal.py"): "rehearse-candidate-seal 子命令（Codex 候选 seal 预演），Claude 不注册该子命令",
     ("codex_upgrade_vc0_closeout.py", "model_condition_receipts.py"): "Codex VC-0 收口的中继请求逐帧计数，只在 Codex 收口画像路径上调用",
+    ("claude_upgrade_boundary_checks.py", "codex_upgrade_live_request_provenance.py"): (
+        "B4-01 f 边界核对 codex-final-wire-isolation 的真实请求精确计数：判 Codex 的 final wire 用 Codex 自己的 mitm 逐请求计数"
+        "（只调用、不改，Claude 侧不另写计数器），函数体内导入，只在这一项核对；判定工具一律以命令行调用，文件摘要记进运行报告"
+    ),
     ("codex_upgrade_job_rehearsal_receipt.py", "build_evidence_catalog.py"): (
         "Codex 证据标签声明（codex_upgrade_evidence_labels_*）的完整性核对，函数体内导入，只在 Codex 画像路径；Claude 画像自带标签绑定"
     ),

@@ -446,6 +446,9 @@ def sql(query):
     if q.startswith("select coalesce(string_agg(id::text"):
         name = re.search(r"where name = '([^']+)'", q).group(1)
         return ",".join(sorted(key for key, stored in state["proxies"].items() if f"'{name}'" in stored))
+    if "encode(sha256(convert_to(coalesce(credentials->>'access_token','')" in q:
+        # 负例模式（B4-01 f）的令牌摘要：数据库内计算，值不出数据库。
+        return state.get("token_digest", "a" * 64)
     if "select key from api_keys" in q:
         return "sk-candidate-key"
     if "coalesce(credentials->>'access_token','') from accounts" in q:
@@ -504,6 +507,9 @@ if command == "exec":
             state["dry_run_observed"] = {"runtime_exists": Path(os.environ["FAKE_RUNTIME_HOST"]).exists()}
             done(json.dumps({"schema_version": "claude-code-fw-e-relay-plan/v1", "side": "candidate"}) + "\n")
         runtime = Path(os.environ["FAKE_RUNTIME_HOST"])
+        if os.environ.get("FAKE_ROTATE_TOKENS") == "1":
+            # 仿真网关在中继执行期间刷新了账号令牌（负例模式要报出来）。
+            state["token_digest"] = "b" * 64
         files = sorted(item.name for item in runtime.iterdir() if item.is_file())
         state["capture_observed"] = {
             "proxy": state["proxy"], "custom_ca_present": state["custom_ca_present"], "keeper_running": state["keeper_running"],
@@ -667,6 +673,8 @@ class CandidateScriptTests(_CandidateScriptCase):
         self.assertEqual((report["status"], report["capture_exit_code"]), ("complete", 0))
         self.assertTrue(all(report[key] for key in ("account_proxy_restored_equal", "account_gate_restored_equal",
                                                     "hosts_sha256_equal", "ca_bundle_sha256_equal", "runtime_secrets_removed")))
+        # capture 模式的恢复报告字段不变（令牌比较只属于负例模式）。
+        self.assertNotIn("account_tokens_unchanged", report)
         self.assertNotIn("sk-candidate-key", result.stdout + result.stderr)
         # 服务容器重启全部经监督器出口维护声明：开 CA 一次、撤 CA 一次。
         self.assertEqual([call for call in state["calls"] if call[0] == "restart"], [["restart", "sub2apiplus"]] * 2)
@@ -882,6 +890,105 @@ class CandidateRestoreOnlyTests(_CandidateScriptCase):
         self.assertEqual(json.loads(result.stdout)["status"], "restoration_failed")
         self.assertEqual(self.final_state()["proxy"], "55")
         self.assertTrue((self.runtime_host / "restore" / "hosts.before").is_file())
+
+
+class CandidateIngressNegativeScriptTests(_CandidateScriptCase):
+    """负例模式（B4-01 f）：与 capture 同一网关隔离；中继子命令 ingress-negative 只配 GATEWAY_TRIGGER=ingress-negative；
+    恢复报告多一个 account_tokens_unchanged（数据库内令牌摘要前后比较）；--restore-only 认负例模式的原值。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.probe = "ingress-negative"
+        self.runtime_container = "/capture/runtime/claude-candidate/cid-ingress-negative"
+        self.runtime_host = self.data / "runtime" / "claude-candidate" / "cid-ingress-negative"
+        self.output_container = "/capture/evidence/campaigns/cid/client-evidence/run-1/relay"
+        self.environment.update(
+            {
+                "RUN_ID": "cid-ingress-negative",
+                "PROBE_ID": "ingress-negative",
+                "OUTPUT_ROOT": self.output_container,
+                "CANDIDATE_RUNTIME_DIR": self.runtime_container,
+                "GATEWAY_TRIGGER": "ingress-negative",
+                "FAKE_RUNTIME_HOST": str(self.runtime_host),
+            }
+        )
+
+    def command(self) -> list[str]:
+        return [
+            "docker", "exec", "capture-cli", "python3", "/root/oauth-capture/tools/official_client_capture/claude_fw_e_relay.py",
+            "ingress-negative", "--execute", "--run-id", "cid-ingress-negative", "--probe-id", "ingress-negative",
+            "--output-root", self.output_container, "--expected-version", "2.1.285", "--model", "claude-sonnet-5",
+            "--candidate-runtime-dir", self.runtime_container, "--candidate-relay-port", "18443",
+        ]
+
+    def report(self) -> dict:
+        path = self.campaign / "client-evidence" / "run-1" / "candidate-gateway" / "ingress-negative.json"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_negative_mode_isolates_like_capture_and_compares_tokens(self) -> None:
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        state = self.final_state()
+        observed = state["capture_observed"]
+        self.assertEqual((observed["proxy"], observed["custom_ca_present"], observed["keeper_running"]), ("77", True, False))
+        self.assertEqual(observed["files"], ["api-key", "gateway.json", "known-secrets.json"])
+        self.assertEqual((observed["gateway"]["trigger"], observed["gateway"]["probe_id"]), ("ingress-negative", "ingress-negative"))
+        self.assertIsNone(observed["admin"])
+        self.assertEqual(state["relay_target"], CAPTURE_ID)
+        self.assert_restored(state)
+        self.assertFalse(self.runtime_host.exists())
+        report = self.report()
+        self.assertEqual((report["status"], report["trigger"], report["probe_id"]), ("complete", "ingress-negative", "ingress-negative"))
+        self.assertIs(report["account_tokens_unchanged"], True)
+        self.assertEqual([call for call in state["calls"] if call[0] == "restart"], [["restart", "sub2apiplus"]] * 2)
+        # 令牌摘要只在数据库里算：两次查询，值不出数据库。
+        digests = [call[-1] for call in state["calls"] if call[0] == "exec" and "encode(sha256(convert_to(" in call[-1]]
+        self.assertEqual(len(digests), 2)
+        self.assertNotIn("tok-access", result.stdout + result.stderr)
+
+    def test_rotated_or_unreadable_tokens_are_reported(self) -> None:
+        result = self.run_script(environment={"FAKE_ROTATE_TOKENS": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIs(self.report()["account_tokens_unchanged"], False)
+        self.assert_restored(self.final_state())
+        for path in (self.campaign / "client-evidence").rglob("*.json"):
+            path.unlink()
+        # 取不到前值：不执行中继，按失败退出并照常恢复。
+        result = self.run_script(token_digest="")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("令牌摘要", result.stderr)
+        state = self.final_state()
+        self.assertNotIn("capture_observed", state)
+        self.assert_restored(state)
+        report = self.report()
+        self.assertEqual((report["status"], report["account_tokens_unchanged"]), ("capture_failed", False))
+
+    def test_relay_action_and_trigger_must_correspond(self) -> None:
+        capture_command = _CandidateScriptCase.command(self)
+        for label, environment, command, message in (
+            ("负例子命令配 client 触发", {"GATEWAY_TRIGGER": "client"}, None, "不对应"),
+            ("capture 子命令配负例触发", {}, capture_command, "不对应"),
+            ("未登记的子命令", {}, [*self.command()[:5], "index", *self.command()[6:]], "capture 或 ingress-negative"),
+        ):
+            with self.subTest(label=label):
+                result = self.run_script(environment=environment, command=command)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(self.final_state()["calls"], [])
+
+    def test_restore_only_accepts_negative_mode_state(self) -> None:
+        result = self.run_script(environment={"FAKE_KILL_SCRIPT": "1"})
+        self.assertEqual(result.returncode, -9, result.stderr)
+        state_file = self.runtime_host / "restore" / "state.json"
+        self.assertEqual(json.loads(state_file.read_text(encoding="utf-8"))["values"]["gateway_trigger"], "ingress-negative")
+        restored = subprocess.run(
+            ["bash", str(self.script), "--restore-only", str(self.runtime_host)],
+            env=self.environment, capture_output=True, text=True, timeout=120,
+        )
+        self.assertEqual(restored.returncode, 0, restored.stderr)
+        report = json.loads(restored.stdout)
+        self.assertEqual((report["status"], report["trigger"]), ("restored", "ingress-negative"))
+        self.assert_restored(self.final_state())
 
 
 class CandidateScriptStaticTests(unittest.TestCase):

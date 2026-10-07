@@ -74,6 +74,7 @@ if __package__ in {None, ""}:
 from tools.official_client_capture import claude_rule_assertion
 from tools.official_client_capture import claude_upgrade_accept
 from tools.official_client_capture import claude_upgrade_baseline
+from tools.official_client_capture import claude_upgrade_boundary_checks
 from tools.official_client_capture import claude_upgrade_evidence
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
 from tools.official_client_capture import claude_upgrade_plan
@@ -1083,6 +1084,7 @@ def _client_evidence(
         if path.is_symlink() or (path.exists() and not path.is_file()):
             raise ConfigurationError(f"边界核对收据不是可信普通文件：{path}")
         if path.is_file():
+            claude_upgrade_boundary_checks.verify_boundary_receipt(attempt_root, str(check), path)  # B4-01 f：收据内容与证据绑定，失败关闭
             checks[str(check)] = path
     return {"client_bindings": bindings, "boundary_checks": checks}
 
