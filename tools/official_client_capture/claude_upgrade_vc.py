@@ -29,7 +29,8 @@ revision 的上一阶段——与 Codex ``_replay_vc_checkpoint`` 同一判据�
   （B3-04 起 VC-4 由 ``record-candidate-build`` 在构建收据写出之后调用；VC-5／VC-6 随 B4）。
 * ``write_first_formal_batch`` 写 VC-0 交接链的首批两件：``control/vc/batches/0001-vc-1.json`` 与同序号的队列清单，只写一次，
   返回两条文件绑定，供 VC-0 收口（B2-11）写进总计划 ``vc_control.first_formal_batch``／``first_campaign_run_manifest``。
-  首批放哪些动作（官方采集、静态分析）、执行项与复用项怎么分由 B2-11 决定，这里只保证批次与清单的确定性编译关系。
+  首批的内容由建 Campaign 决定（B2-11，``claude_upgrade_campaign`` 第六节：采集路径恰一个 ``capture-official`` 动作，只读
+  复用前序是零请求 no-op），这里只保证批次与清单的确定性编译关系。
 
 四、VC 控制制品语义（``validate_vc_control``，总计划加载时调用）
 ==============================================================
@@ -37,7 +38,8 @@ revision 的上一阶段——与 Codex ``_replay_vc_checkpoint`` 同一判据�
 总计划存在时：身份五项（Campaign ID、模式、用途、基线与目标版本）与总计划相同，批次模型必须是 ``staging``（Claude 不支持
 legacy）；VC-0 checkpoint 绑定存在时必须指向规范坐标、完成、零请求零扫描；首批两件必须同时出现，批次是从 VC-0 checkpoint
 编译的 VC-1 序号 1，队列清单与 ``vc_run_manifest_from_batch`` 对它的确定性编译逐字相同。总计划与控制收据（P0、计时、
-ARM64、Job 演练）的摘要对照、VC-0 阶段收据与 P0 门禁收据的对照、首批动作内容归 B2-11。
+ARM64、Job 演练）的摘要对照、VC-0 阶段收据与 P0 门禁收据的对照在 ``claude_upgrade_campaign
+.verify_vc_control_correspondence``（B2-11，建 Campaign 自检时核）。
 
 本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层。
 """

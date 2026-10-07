@@ -318,27 +318,38 @@ def _frozen_input(campaign_dir: Path, manifest: Mapping[str, Any], name: str) ->
 # ---------------------------------------------------------------------------
 
 
-def _ensure_store_campaign(campaign_dir: Path, manifest: Mapping[str, Any]) -> tuple[Any, dict[str, Any]]:
-    """打开 Campaign 的受管 Store；总计划冻结了 Store 建立输入时先幂等建立（``campaign-create --schema v2 --allow-existing``）。
+def create_store_from_frozen_inputs(campaign_dir: Path, manifest: Mapping[str, Any]) -> bool:
+    """总计划冻结了 Store 建立输入时幂等建立 Store Campaign（``campaign-create --schema v2 --allow-existing``），返回是否声明了输入。
 
     ``inputs.store_bootstrap``（bootstrap 对象 payload）与 ``inputs.store_campaign``（Campaign v2）由建 Campaign（B2-11）
-    冻结；两者都没有时 Store Campaign 必须已经存在。
+    冻结；建 Campaign 时（总计划写出之前，传入内存里的总计划）与 seal 时共用这一组命令，重跑逐字复用。
     """
 
     inputs = manifest.get("inputs") or {}
     declared = [name for name in ("store_bootstrap", "store_campaign") if inputs.get(name) is not None]
-    if declared:
-        if len(declared) != 2:
-            raise ConfigurationError("总计划只冻结了 store_bootstrap 与 store_campaign 之一，无法幂等建立 Store Campaign。")
-        root = claude_upgrade_store.campaign_store_root(campaign_dir)
-        if not (root / "store.json").exists():
-            store_cli(["init-store", "--root", root, "--created-at", str(manifest["created_at_utc"])])
-        store_cli(
-            ["artifact-seal", "--store", root, "--kind", "bootstrap", "--input", _frozen_input(campaign_dir, manifest, "store_bootstrap"), "--allow-existing"]
-        )
-        store_cli(
-            ["campaign-create", "--store", root, "--input", _frozen_input(campaign_dir, manifest, "store_campaign"), "--schema", "v2", "--allow-existing"]
-        )
+    if not declared:
+        return False
+    if len(declared) != 2:
+        raise ConfigurationError("总计划只冻结了 store_bootstrap 与 store_campaign 之一，无法幂等建立 Store Campaign。")
+    root = claude_upgrade_store.campaign_store_root(campaign_dir)
+    if not (root / "store.json").exists():
+        store_cli(["init-store", "--root", root, "--created-at", str(manifest["created_at_utc"])])
+    store_cli(
+        ["artifact-seal", "--store", root, "--kind", "bootstrap", "--input", _frozen_input(campaign_dir, manifest, "store_bootstrap"), "--allow-existing"]
+    )
+    store_cli(
+        ["campaign-create", "--store", root, "--input", _frozen_input(campaign_dir, manifest, "store_campaign"), "--schema", "v2", "--allow-existing"]
+    )
+    return True
+
+
+def _ensure_store_campaign(campaign_dir: Path, manifest: Mapping[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """打开 Campaign 的受管 Store；总计划冻结了 Store 建立输入时先幂等建立（``create_store_from_frozen_inputs``）。
+
+    两份 Store 建立输入都没有时 Store Campaign 必须已经存在。
+    """
+
+    create_store_from_frozen_inputs(campaign_dir, manifest)
     # B2-08：编排器链已登记、Store 尚未登记的工具演进在这里补登（tool-evolution 批准后、Store 登记之前中断时），seal 两层
     # 核对同一身份。Store Campaign 本身必须在工具变化之前建立（VC-0 收口，B2-11），tool-evolution 在登记前核对。
     from tools.official_client_capture import claude_upgrade_evolution
@@ -544,15 +555,44 @@ def _verify_relay_checks(job: Any, result: Mapping[str, Any], layout: Any) -> li
     return directories
 
 
-def _static_inputs(campaign_dir: Path, arguments: argparse.Namespace, data_root: Path, target_version: str) -> dict[str, Any]:
+def _static_inputs(
+    campaign_dir: Path,
+    arguments: argparse.Namespace,
+    data_root: Path,
+    target_version: str,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """VC-1 静态输入：默认取 ``analyze-target`` 的规范产物（B2-11，``claude_upgrade_static``）；显式给出的
+    ``--target-inventory``／``--sink-containment`` 在规范产物存在时必须与之逐字节相同，规范产物不存在时照旧按显式值；
+    另返回规范收据与 Campaign 冻结的生产现状清单（都可缺，绑定进完整性清单）。"""
+
+    from tools.official_client_capture import claude_upgrade_static
+
+    canonical = claude_upgrade_static.canonical_outputs(campaign_dir, manifest)
     inventory_path = _campaign_input_file(campaign_dir, getattr(arguments, "target_inventory", None), "--target-inventory")
-    if inventory_path is None:
-        raise ConfigurationError("capture-official seal 必须提供 --target-inventory（VC-1 静态分析产出的目标 SinkInventory）。")
     containment_path = _campaign_input_file(campaign_dir, getattr(arguments, "sink_containment", None), "--sink-containment")
+    if canonical is not None:
+        for flag, given, default in (
+            ("--target-inventory", inventory_path, canonical["target_inventory"]),
+            ("--sink-containment", containment_path, canonical["sink_containment"]),
+        ):
+            if given is not None and file_sha256(given) != file_sha256(default):
+                raise ConfigurationError(f"{flag} 与 VC-1 静态分析的规范产物不一致：{given}")
+        inventory_path = inventory_path or canonical["target_inventory"]
+        containment_path = containment_path or canonical["sink_containment"]
+    if inventory_path is None:
+        raise ConfigurationError(
+            "capture-official seal 缺少目标 SinkInventory：先在 VC-1 批次里执行 analyze-target，或显式提供 --target-inventory。"
+        )
     if containment_path is None:
         raise ConfigurationError(
-            "capture-official seal 必须提供 --sink-containment（VC-1 静态分析对同一份目标 SinkInventory 生成的 containment 证据）。"
+            "capture-official seal 缺少 sink containment 证据：先在 VC-1 批次里执行 analyze-target，或显式提供 --sink-containment。"
         )
+    static_receipt = canonical["receipt"] if canonical is not None else None
+    inventory_reference = (manifest.get("inputs") or {}).get("production_inventory")
+    production_inventory = (
+        _frozen_input(campaign_dir, manifest, "production_inventory") if inventory_reference is not None else None
+    )
     dispositions_path = _campaign_input_file(campaign_dir, getattr(arguments, "discovery_dispositions", None), "--discovery-dispositions")
     inventory = _read_json(inventory_path, "目标 SinkInventory")
     if inventory.get("schema_version") != claude_target_inventory.INVENTORY_SCHEMA or inventory.get("target_version") != target_version:
@@ -575,6 +615,12 @@ def _static_inputs(campaign_dir: Path, arguments: argparse.Namespace, data_root:
         "dispositions": _read_json(dispositions_path, "发现项显式处置") if dispositions_path else None,
         "dispositions_path": dispositions_path.relative_to(data_root).as_posix() if dispositions_path else None,
         "dispositions_file": dispositions_path,
+        "static_analysis_file": static_receipt,
+        "static_analysis_path": static_receipt.relative_to(data_root).as_posix() if static_receipt else None,
+        "production_inventory_file": production_inventory.resolve(strict=True) if production_inventory else None,
+        "production_inventory_path": (
+            production_inventory.resolve(strict=True).relative_to(data_root).as_posix() if production_inventory else None
+        ),
     }
 
 
@@ -626,7 +672,7 @@ def _seal_captured_attempt(campaign_dir: Path, manifest: dict[str, Any], argumen
     tool_files_sha256 = _require_store_tool_current(store, store_campaign)
     labels_path = _frozen_input(campaign_dir, manifest, "evidence_labels")
     scenarios_path = _frozen_input(campaign_dir, manifest, "target_scenarios")
-    static = _static_inputs(campaign_dir, arguments, data_root, str(manifest["target_version"]))
+    static = _static_inputs(campaign_dir, arguments, data_root, str(manifest["target_version"]), manifest)
     attempt_path = attempt_root / "attempt.json"
     generation_key = {
         "attempt": _binding(attempt_path, data_root),
@@ -636,6 +682,12 @@ def _seal_captured_attempt(campaign_dir: Path, manifest: dict[str, Any], argumen
         "target_inventory": _binding(static["target_inventory_file"], data_root),
         "sink_containment": _binding(static["sink_containment_file"], data_root),
         "dispositions": _binding(static["dispositions_file"], data_root) if static["dispositions_file"] else None,
+        # B2-11 的两份可缺输入只在存在时进入代号（B2-07 以来的夹具 Campaign 代号不变）。
+        **{
+            name: _binding(static[f"{name}_file"], data_root)
+            for name in ("static_analysis", "production_inventory")
+            if static[f"{name}_file"] is not None
+        },
         "evidence_labels": _binding(labels_path, data_root),
         "target_scenarios": _binding(scenarios_path, data_root),
     }
@@ -760,6 +812,8 @@ def _preview_seal(
             "target_inventory": static["target_inventory_path"],
             "sink_containment": static["sink_containment_path"],
             "dispositions": static["dispositions_path"],
+            "static_analysis": static["static_analysis_path"],
+            "production_inventory": static["production_inventory_path"],
             "attempt": generation_key["attempt"]["path"],
             "evidence_labels": generation_key["evidence_labels"]["path"],
             "target_scenarios": generation_key["target_scenarios"]["path"],
@@ -778,8 +832,9 @@ def _preview_seal(
         labels_path,
         scenarios_path,
     ]
-    if static["dispositions_file"] is not None:
-        scan_roots.append(static["dispositions_file"])
+    for name in ("dispositions_file", "static_analysis_file", "production_inventory_file"):
+        if static[name] is not None:
+            scan_roots.append(static[name])
     inventory = orchestrator._evidence_inventory(scan_roots, base=data_root)
     bound = orchestrator._seal_capture_attempt(view, inventory=inventory)
     if bound["drafts"] != drafted["drafts"]:

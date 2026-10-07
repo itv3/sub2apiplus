@@ -4,7 +4,7 @@
   五项逐项通过，输出与 Codex 的审计同一组顶层字段，零写入（Campaign 目录不存在、冻结目录逐字不变）；
 * 一项失败其余照查：参数、官方包、清单、工具身份各自失败时只有该项（及依赖它的 Job 展开）不通过，退出码 1；
 * 编排器只做注册与转调：审计实现在 ``claude_upgrade_plan``，审计代码不进 Claude 的 wire／evidence 闭包；
-  ``--campaign-mode formal`` 也只审计、不建 Campaign（plan 本身对 formal 照旧报 B2-11 待接入）。
+  ``--campaign-mode formal`` 也只审计、不建 Campaign（plan 本身拒绝 formal：Formal 只由 VC-0 收口建立，B2-11）。
 """
 
 from __future__ import annotations
@@ -180,7 +180,7 @@ class PlanAuditTests(unittest.TestCase):
         argv = [item for item in self._argv(campaign_mode="formal") if item != "--audit-only"]
         code, result, stderr = _run(argv)
         self.assertEqual((code, result), (1, None))
-        self.assertIn("B2-11", stderr)
+        self.assertIn("VC-0 收口", stderr)
 
     def test_audit_code_stays_outside_wire_and_evidence_closures(self) -> None:
         policy = claude_identity.load_policy()

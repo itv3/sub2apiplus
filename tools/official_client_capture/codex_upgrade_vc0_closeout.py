@@ -11,11 +11,18 @@ deadline 或自行重试。
 副本这一段包在账本的收口 attempt 里（失败记 attempt 失败与根因，VC-0 保持打开）；Formal 建成后
 不重签、不重建，只补缺的事件后派发首批；首批已派发则不再派发、不重跑收口，交给 VC-1 已有的
 对账与恢复链。已写的事件不改，已经成功的请求不重发。
+
+客户端（Claude 升级控制面设计 B2-11）：收口流程按客户端作用域（``adapter_scope``）里的适配器取编排器
+（``adapter.orchestrator``）与收口画像（``adapter.closeout_profile``：合同名、四份输入校验、Formal plan 参数恢复与
+命令提示）。缺省是 Codex，Codex 画像就是本模块：合同名、``validate_inputs``、``recover_formal_plan_arguments`` 与改造前
+逐字相同；Claude 画像是 ``claude_upgrade_vc0_closeout``，由它的入口设定作用域后调用这里的同一套流程。两个历史修复子命令
+（``repair-failure-accounting``、``repair-failure-closure``）只服务 Codex 旧失败记录，不进入作用域。
 """
 
 from __future__ import annotations
 
 import argparse
+import contextvars
 import fcntl
 import fnmatch
 import hashlib
@@ -43,6 +50,7 @@ from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt
+from tools.official_client_capture import upgrade_client_adapter
 
 
 CLOSEOUT_RECEIPT_SCHEMA = "codex-upgrade-vc0-closeout-receipt/v1"
@@ -93,6 +101,30 @@ VC1_OWNED_STEPS = frozenset({"dispatch-vc1", "write-closeout-receipt"})
 # 收口续作需要人工批准或处置时的退出码（入口编排器据此标「被阻塞」，打印下一条命令）。
 EXIT_NEEDS_OPERATOR = 3
 FIX_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+# B2-11：Codex 收口画像的命令提示用的编排器模块（Claude 画像是 claude_upgrade）。
+ORCHESTRATOR_CLI_MODULE = "tools.official_client_capture.codex_upgrade"
+_ADAPTER: contextvars.ContextVar[Any] = contextvars.ContextVar("vc0_closeout_client_adapter", default=None)
+
+
+def _adapter() -> Any:
+    """当前客户端作用域的适配器；没有作用域时是 Codex（与改造前相同）。"""
+
+    adapter = _ADAPTER.get()
+    return adapter if adapter is not None else upgrade_client_adapter.adapter_for("codex")
+
+
+@contextmanager
+def adapter_scope(adapter: Any) -> Iterator[Any]:
+    """设定收口流程的客户端；嵌套作用域只能是同一客户端（与共享控制流程的作用域同一规则）。"""
+
+    outer = _ADAPTER.get()
+    if outer is not None and outer.client != adapter.client:
+        raise RuntimeError(f"VC-0 收口的客户端作用域冲突：{outer.client} 内进入 {adapter.client}")
+    token = _ADAPTER.set(adapter)
+    try:
+        yield adapter
+    finally:
+        _ADAPTER.reset(token)
 
 
 class VC0CloseoutError(RuntimeError):
@@ -554,12 +586,13 @@ def _tool_entry_sha256(manifest: Mapping[str, Any], relative: str) -> str:
 
 def _load_preflight(path: Path) -> tuple[Path, dict[str, Any]]:
     root = _private_directory(path, "preflight Campaign")
+    adapter = _adapter()
     try:
-        manifest = codex_upgrade.load_campaign_manifest(
+        manifest = adapter.orchestrator.load_campaign_manifest(
             root,
             _skip_control_validation=True,
         )
-    except (OSError, ValueError, codex_upgrade.ConfigurationError) as error:
+    except (OSError, ValueError, adapter.orchestrator.ConfigurationError) as error:
         raise VC0CloseoutError(f"preflight Campaign 重放失败：{error}") from error
     if manifest.get("campaign_mode") != "preflight_only":
         raise VC0CloseoutError("VC-0 收口只能消费 preflight_only Campaign")
@@ -2053,7 +2086,7 @@ def _write_failure(
         except BaseException:
             summary = None
     payload = {
-        "schema_version": CLOSEOUT_DIAGNOSTIC_SCHEMA,
+        "schema_version": _adapter().closeout_profile.CLOSEOUT_DIAGNOSTIC_SCHEMA,
         "status": "failed",
         "failed_at_utc": _utc_now(),
         "failed_step": step,
@@ -2646,9 +2679,10 @@ def _formal_facts(
         facts["problems"].append("Formal Campaign 路径不是普通目录")
         return facts
     facts["registration"] = _registration_state(formal_campaign_dir, formal_campaign_id)
+    adapter = _adapter()
     try:
-        manifest = codex_upgrade.load_campaign_manifest(formal_campaign_dir)
-    except (OSError, ValueError, codex_upgrade.ConfigurationError) as error:
+        manifest = adapter.orchestrator.load_campaign_manifest(formal_campaign_dir)
+    except (OSError, ValueError, adapter.orchestrator.ConfigurationError) as error:
         facts["replay_error"] = str(error)[:500]
     else:
         facts["replayable"] = True
@@ -2663,9 +2697,9 @@ def _formal_facts(
     attempts_root = formal_campaign_dir / "official" / "attempts"
     if attempts_root.is_dir() and not attempts_root.is_symlink():
         facts["activity"].extend(f"official/attempts/{child.name}" for child in sorted(attempts_root.iterdir()))
-    lease = formal_campaign_dir / codex_upgrade.CAMPAIGN_LEASE_FILENAME
+    lease = formal_campaign_dir / adapter.orchestrator.CAMPAIGN_LEASE_FILENAME
     if lease.exists() or lease.is_symlink():
-        facts["activity"].append(codex_upgrade.CAMPAIGN_LEASE_FILENAME)
+        facts["activity"].append(adapter.orchestrator.CAMPAIGN_LEASE_FILENAME)
     return facts
 
 
@@ -2879,7 +2913,7 @@ def inspect_site(
     else:
         kind = "fresh"
     return {
-        "schema_version": SITE_SCHEMA,
+        "schema_version": _adapter().closeout_profile.SITE_SCHEMA,
         "observed_at_utc": _utc_now(),
         "formal_campaign_id": formal_campaign_id,
         "site": kind,
@@ -2938,7 +2972,7 @@ def _closeout_locks(timing_root: Path, formal_campaign_dir: Path) -> Iterator[No
     监督器失败收口要非阻塞地取账本锁，预算暂停要取项目锁。
     """
 
-    project_root = codex_upgrade_project_ledger.find_project_ledger(formal_campaign_dir.parent)
+    project_root = codex_upgrade_project_ledger.find_project_ledger(formal_campaign_dir.parent, client=_adapter().client)
     if project_root is None:
         with _ledger_lock(timing_root):
             yield
@@ -3264,7 +3298,8 @@ def _assert_identity_matches_preflight(preflight_manifest: Mapping[str, Any]) ->
     frozen = preflight_manifest.get("tool_identity")
     if not isinstance(frozen, Mapping):
         raise VC0CloseoutError("preflight 缺少受管工具身份")
-    drift = _identity_drift(frozen, codex_upgrade._tool_identity(include_git=False))
+    adapter = _adapter()
+    drift = _identity_drift(frozen, adapter.orchestrator._tool_identity(include_git=False))
     if drift:
         raise VC0CloseoutError(
             "收口前预检：当前受管工具身份与预检 Campaign 冻结身份不一致（"
@@ -3276,18 +3311,19 @@ def _assert_identity_matches_preflight(preflight_manifest: Mapping[str, Any]) ->
 def _assert_identity_matches_formal(formal_campaign_dir: Path, formal_manifest: Mapping[str, Any]) -> None:
     """Formal 建成之后：当前工具身份必须等于 Formal 的有效身份（创建时冻结的，或最近一次登记的工具演进）。"""
 
+    adapter = _adapter()
     try:
-        effective = codex_upgrade._campaign_effective_tool_identity(formal_campaign_dir, formal_manifest)["identity"]
-    except (OSError, ValueError, codex_upgrade.ConfigurationError) as error:
+        effective = adapter.orchestrator._campaign_effective_tool_identity(formal_campaign_dir, formal_manifest)["identity"]
+    except (OSError, ValueError, adapter.orchestrator.ConfigurationError) as error:
         raise VC0CloseoutError(f"Formal 有效工具身份无法重放：{error}") from error
-    drift = _identity_drift(effective, codex_upgrade._tool_identity(include_git=False))
+    drift = _identity_drift(effective, adapter.orchestrator._tool_identity(include_git=False))
     if drift:
         raise CloseoutBlocked(
             "当前受管工具身份不等于 Formal 的有效身份（" + "、".join(drift) + "）：Formal 建成之后修工具不重签、不重建，"
             "先在这个 Formal 上登记工具演进，再续作",
             kind="tool-evolution-required",
             next_command=(
-                f"python3 -m tools.official_client_capture.codex_upgrade tool-evolution --campaign-dir {formal_campaign_dir} "
+                f"python3 -m {adapter.closeout_profile.ORCHESTRATOR_CLI_MODULE} tool-evolution --campaign-dir {formal_campaign_dir} "
                 "（先预览，再带 --approve-sha256 <review_sha256> --approved-by <批准人> 登记）"
             ),
         )
@@ -3297,7 +3333,7 @@ def _push_registration(formal_campaign_dir: Path, formal_campaign_id: str, progr
     """注册批次已 COMMIT 但还没推进总账时，用总账现有的补推入口补上；被拒绝则需人工处置。"""
 
     progress.step = "push-project-registration"
-    root = codex_upgrade_project_ledger.find_project_ledger(formal_campaign_dir.parent)
+    root = codex_upgrade_project_ledger.find_project_ledger(formal_campaign_dir.parent, client=_adapter().client)
     if root is None:
         return
     try:
@@ -3357,11 +3393,12 @@ def _closeout_once(
     返回 Formal 清单、控制产物副本与（Formal 未建时的）已校验输入。派发首批不在这里（要先放锁）。
     """
 
+    adapter = _adapter()
     validated: ValidatedInputs | None = None
     formal_manifest: dict[str, Any] | None = None
     if site["site"] in {"fresh", "pre-formal"}:
         progress.step = "validate-inputs"
-        validated = validate_inputs(
+        validated = adapter.closeout_profile.validate_inputs(
             preflight_campaign_dir=Path(arguments.preflight_campaign_dir),
             p0_gate_root=Path(arguments.p0_gate_root),
             p0_gate_receipt=Path(arguments.p0_gate_receipt),
@@ -3429,17 +3466,17 @@ def _closeout_once(
                 event_sequence = _ensure_receipt_event(timing_root, formal_campaign_id, target, event_ids, progress)
                 timing_relative = _ensure_checkpoint(timing_root, target, event_sequence, progress)
                 progress.step = "recover-formal-plan"
-                plan_arguments = recover_formal_plan_arguments(
+                plan_arguments = adapter.closeout_profile.recover_formal_plan_arguments(
                     validated,
                     formal_campaign_dir=formal_campaign_dir,
                     formal_campaign_id=formal_campaign_id,
                     timing_receipt=timing_root / timing_relative,
                 )
                 progress.step = "create-formal-campaign"
-                codex_upgrade.create_campaign(plan_arguments)
+                adapter.orchestrator.create_campaign(plan_arguments)
                 progress.created_formal = True
                 progress.step = "replay-formal-campaign"
-                formal_manifest = codex_upgrade.load_campaign_manifest(formal_campaign_dir)
+                formal_manifest = adapter.orchestrator.load_campaign_manifest(formal_campaign_dir)
                 if (
                     formal_manifest.get("campaign_id") != formal_campaign_id
                     or formal_manifest.get("campaign_mode") != "formal"
@@ -3570,7 +3607,7 @@ def _closeout_receipt(
         ]
     )
     return {
-        "schema_version": CLOSEOUT_RECEIPT_SCHEMA,
+        "schema_version": _adapter().closeout_profile.CLOSEOUT_RECEIPT_SCHEMA,
         "status": "passed",
         "completed_at_utc": _utc_now(),
         "preflight_campaign": {
@@ -3659,7 +3696,8 @@ def _ledger_resume_preview(
     at_limit = list(facts["at_limit_root_cause_ids"])
     if not at_limit or not set(at_limit) <= closeout_causes:
         raise VC0CloseoutError("达到上限的根因不全是本 Formal 收口 attempt 的失败，不能由收口恢复")
-    current = codex_upgrade._tool_identity(include_git=False)
+    adapter = _adapter()
+    current = adapter.orchestrator._tool_identity(include_git=False)
     try:
         deployment = reconciler._deployment_receipt(control_root, current, required=True)
     except (reconciler.ReconcilerError, VC0CloseoutError, OSError) as error:
@@ -3672,7 +3710,7 @@ def _ledger_resume_preview(
         raise VC0CloseoutError("部署收据早于最后一次失败；修复必须在失败之后受监督部署")
     regression = _trusted_file(Path(regression_receipt), "离线回归收据", maximum=MAX_RECEIPT_BYTES)
     preview: dict[str, Any] = {
-        "schema_version": LEDGER_RESUME_PREVIEW_SCHEMA,
+        "schema_version": adapter.closeout_profile.LEDGER_RESUME_PREVIEW_SCHEMA,
         "formal_campaign_id": formal_campaign_id,
         "root_cause_id": at_limit[0],
         "timing": {
@@ -3697,7 +3735,7 @@ def _ledger_resume_preview(
         "reason": reason,
         "live_request_count": 0,
     }
-    preview["review_sha256"] = codex_upgrade._fingerprint(preview)
+    preview["review_sha256"] = adapter.orchestrator._fingerprint(preview)
     return preview
 
 
@@ -3767,7 +3805,7 @@ def ledger_resume(
             "approved_by": approver,
             "approved_at_utc": _utc_now(),
         }
-        receipt["receipt_sha256"] = codex_upgrade._fingerprint(receipt)
+        receipt["receipt_sha256"] = _adapter().orchestrator._fingerprint(receipt)
         _ensure_private_tree(resume_root, timing_root)
         receipt_path = resume_root / f"resume-{preview['review_sha256']}.json"
         _write_once(receipt_path, receipt)
@@ -3875,9 +3913,10 @@ def _resolve_at_limit(
             argv += ["--control-root", str(control_root)]
         if approve:
             argv += ["--approve-sha256", str(approve), "--approved-by", str(approved_by or "")]
+        adapter = _adapter()
         try:
-            result = codex_upgrade._campaign_resume_command(codex_upgrade._build_parser().parse_args(argv))
-        except (OSError, ValueError, codex_upgrade.ConfigurationError) as error:
+            result = adapter.orchestrator._campaign_resume_command(adapter.orchestrator._build_parser().parse_args(argv))
+        except (OSError, ValueError, adapter.orchestrator.ConfigurationError) as error:
             raise VC0CloseoutError(f"campaign-resume 失败：{error}") from error
         if result.get("status") == "approval_required":
             raise CloseoutBlocked(
@@ -3959,7 +3998,7 @@ def _official_attempt_rows(formal_campaign_dir: Path) -> list[dict[str, Any]]:
 def _quiescence_problems(formal_campaign_dir: Path, supervisor: Mapping[str, Any]) -> list[str]:
     """续作已派发现场之前：首批父 run 与采集进程都必须已经结束（硬杀收口进程不会杀掉动作进程组）。"""
 
-    problems = list(codex_upgrade._tool_evolution_quiescence_problems(formal_campaign_dir))
+    problems = list(_adapter().orchestrator._tool_evolution_quiescence_problems(formal_campaign_dir))
     if supervisor.get("lock_busy"):
         problems.append("监督器状态目录的动作队列锁仍被占用（首批父 run 还在跑）")
     for run in supervisor.get("runs", []):
@@ -3974,7 +4013,7 @@ def _write_handover(timing_root: Path, formal_campaign_id: str, payload: Mapping
     root = _ensure_private_tree(_receipt_namespace(timing_root, formal_campaign_id) / "vc1-handover", timing_root)
     existing = sorted(int(path.stem) for path in root.glob("[0-9][0-9][0-9][0-9].json"))
     path = root / f"{(existing[-1] if existing else 0) + 1:04d}.json"
-    _write_once(path, {"schema_version": VC1_HANDOVER_SCHEMA, "recorded_at_utc": _utc_now(), **payload})
+    _write_once(path, {"schema_version": _adapter().closeout_profile.VC1_HANDOVER_SCHEMA, "recorded_at_utc": _utc_now(), **payload})
     return path
 
 
@@ -4030,13 +4069,14 @@ def _dispatch_recovery_batch(
 ) -> dict[str, Any]:
     """以 compile-and-run-vc-batch 派发一个 VC-1 恢复批次（序号接在已提交批次之后，前序 checkpoint 是 VC-0 的）。"""
 
-    sequence = max(codex_upgrade._committed_vc_sequences(formal_campaign_dir, formal_manifest), default=0) + 1
+    adapter = _adapter()
+    sequence = max(adapter.orchestrator._committed_vc_sequences(formal_campaign_dir, formal_manifest), default=0) + 1
     plans_root = audit_dir / "action-plans"
     if not plans_root.exists():
         plans_root.mkdir(mode=0o700)
     plan_path = plans_root / f"{sequence:04d}-{name}.json"
     _write_once(plan_path, plan)
-    result, returncode = codex_upgrade.compile_and_run_vc_batch(
+    result, returncode = adapter.orchestrator.compile_and_run_vc_batch(
         argparse.Namespace(
             campaign_dir=formal_campaign_dir,
             state_dir=supervisor_state_dir,
@@ -4130,7 +4170,7 @@ def _continue_dispatched(
                 "有派发痕迹，但找不到首批父 run，也没有已发布预约的官方 attempt",
                 kind="inconsistent",
             )
-    except (reconciler.ReconcilerError, codex_upgrade.ConfigurationError, OSError) as error:
+    except (reconciler.ReconcilerError, _adapter().orchestrator.ConfigurationError, OSError) as error:
         raise VC0CloseoutError(f"首批对账失败：{error}") from error
     preview_path = result.get("recovery_preview_path")
     review = (result.get("recovery_preview") or {}).get("review_sha256") if isinstance(result.get("recovery_preview"), Mapping) else None
@@ -4170,7 +4210,7 @@ def _continue_dispatched(
             formal_campaign_dir, str(target_attempt), control_root=control_root, approve_recovery_sha256=str(review)
         )
         authorized = reconciler.authorize_recovery_preview(formal_campaign_dir, str(target_attempt), Path(str(preview_path)))
-    except (reconciler.ReconcilerError, codex_upgrade.ConfigurationError, OSError) as error:
+    except (reconciler.ReconcilerError, _adapter().orchestrator.ConfigurationError, OSError) as error:
         raise VC0CloseoutError(f"批准或授权恢复预览失败：{error}") from error
     _first_path, first_manifest = _first_run_manifest(formal_campaign_dir, formal_manifest)
     progress.step = "vc1-recovery-preview"

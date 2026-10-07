@@ -93,8 +93,12 @@ COMPLETENESS_PURPOSES = {
     "attempt": "封存所依据的官方取证 attempt 收据",
     "evidence_labels": "Campaign 冻结的证据标签声明",
     "target_scenarios": "Campaign 冻结的目标场景清单",
+    # B2-11：VC-1 静态分析收据（冻结二进制、2.1.220 基线与 node／TypeScript 身份）与 Campaign 冻结的生产现状清单（前序
+    # ProfileApprovalFact 的入口与出站清单、目标处置，VC-2 据此校验受管出站绑定）。B2-11 之前建的 Campaign 没有这两份。
+    "static_analysis": "VC-1 静态分析收据（冻结二进制、基线与 AST 运行时身份及全部静态产物的绑定）",
+    "production_inventory": "Campaign 冻结的生产现状清单（前序批准画像的生产入口清单、出站处置清单与目标处置）",
 }
-OPTIONAL_COMPLETENESS = frozenset({"dispositions"})
+OPTIONAL_COMPLETENESS = frozenset({"dispositions", "static_analysis", "production_inventory"})
 
 
 class SealEvidenceError(ConfigurationError):

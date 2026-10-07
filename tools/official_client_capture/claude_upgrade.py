@@ -1843,8 +1843,10 @@ def load_campaign_manifest(
     """加载 Claude Campaign 总计划（``official-client-upgrade-campaign/v1``）：核对自摘要、归属客户端、必备字段与计划期
     输入绑定。
 
-    与 Codex 同签名。Claude 没有控制纪元，``_control_epoch_bootstrap`` 只能为假；控制收据的语义核验由 P0 收口
-    （B2-11）落实，这里只核文件绑定；VC 控制制品（``vc_control``）除文件绑定外还核语义（B3-01，
+    与 Codex 同签名。Claude 没有控制纪元，``_control_epoch_bootstrap`` 只能为假；控制收据（B2-11）这里只核形状——名字
+    闭集按模式、各绑定字段闭合，计时绑定另按账本规则核对目录与计划摘要（``claude_upgrade_campaign
+    .validate_control_receipts_shape``）；逐项语义重放在建 Campaign 自检与 VC-0 收口（``verify_control_receipts``）。
+    ``_skip_control_validation`` 跳过控制收据（预检读取时与 Codex 同语义）。VC 控制制品（``vc_control``）除文件绑定外还核语义（B3-01，
     ``claude_upgrade_vc.validate_vc_control``：字段闭集、总计划身份与 staging 批次模型、VC-0 checkpoint、首批两件的确定性
     编译关系）；前序绑定（B2-09）只核形状——``null`` 或冻结前序 Campaign 身份的只读复用声明，与前序 Store 的实际身份在
     导入时核对。"""
@@ -1878,15 +1880,15 @@ def load_campaign_manifest(
     configuration = manifest.get("configuration")
     if not isinstance(configuration, Mapping) or configuration.get("platform") != CAMPAIGN_PLATFORM:
         raise ConfigurationError(f"Claude Campaign 只支持 {CAMPAIGN_PLATFORM} 平台。")
-    groups = ("inputs", "vc_control") if _skip_control_validation else ("inputs", "vc_control", "control_receipts")
-    for group_name in groups:
-        group = manifest.get(group_name)
-        if group_name == "control_receipts" and isinstance(group, Mapping) and group.get("upgrade_timing") is not None:
-            # 计时账本绑定的是 Campaign 外的账本目录与计划摘要（不是 Campaign 内文件），按账本规则核对；其余控制收据照文件
-            # 绑定核对（B2-09 记录的绑定形状缺陷，对账与续跑要读账本，B2-08 先修；控制收据的完整语义仍归 B2-11）。
+    for group_name in ("inputs", "vc_control"):
+        _verify_campaign_file_bindings(campaign_dir, manifest.get(group_name), group_name)
+    if not _skip_control_validation:
+        # 控制收据绑定的是 Campaign 外的证据根（形状与 Codex 相同，B2-11）；计时账本按账本规则核对目录、计划摘要与归属。
+        from tools.official_client_capture import claude_upgrade_campaign
+
+        controls = claude_upgrade_campaign.validate_control_receipts_shape(manifest)
+        if controls.get("upgrade_timing") is not None:
             _campaign_timing_ledger_dir(campaign_dir, manifest)
-            group = {name: value for name, value in group.items() if name != "upgrade_timing"}
-        _verify_campaign_file_bindings(campaign_dir, group, group_name)
     claude_upgrade_vc.validate_vc_control(campaign_dir, manifest)
     return manifest
 
@@ -2879,10 +2881,14 @@ def recovery_preview_continuity(
 
 
 def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-11（VC-0 收口续作与 P0 收据） 落实）。"""
+    """服务面成员（B2-11）：在项目总账准入作用域内建立 Campaign 并注册；实现在 ``claude_upgrade_campaign.create_campaign``。
 
-    del arguments
-    raise _pending("create_campaign", "B2-11（VC-0 收口续作与 P0 收据）")
+    ``preflight_only`` 由命令行 ``plan`` 建立，``formal`` 只由 VC-0 收口经本接口建立（与 Codex 0.154 起同一口径）。
+    """
+
+    from tools.official_client_capture import claude_upgrade_campaign
+
+    return claude_upgrade_campaign.create_campaign(arguments)
 
 
 def campaign_status(
@@ -4037,10 +4043,30 @@ def _job_rehearsal_contract_from_manifest(
     _require_incremental_noop_preflight_active: bool = True,
     _allow_stopped_metadata_only: bool = False,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-10（Job 演练与客户端启动探测） 落实）。"""
+    """服务面成员（B2-11）：从已建 Campaign 复算完整 Job 演练执行合同（Claude 画像，B2-10 的 ``build_job_contract``）。
 
-    del campaign_dir, manifest, target_scenario_override, tool_files_sha256_override, recovery_rehearsal_receipt, control_receipts_override, _allow_historical_tool_identity, _allow_bound_evidence_label_digest, _require_incremental_noop_preflight_active, _allow_stopped_metadata_only
-    raise _pending("_job_rehearsal_contract_from_manifest", "B2-10（Job 演练与客户端启动探测）")
+    实现在 ``claude_upgrade_campaign.job_rehearsal_contract``：Campaign 冻结的目标场景清单副本加总计划。Codex 的恢复演练
+    承接（历史收据、控制纪元覆盖、证据标签摘要沿用、metadata-only 停线）属于 Codex successor 与评估恢复链，Claude 没有对应
+    流程（候选恢复归 B4），给出即拒绝；``_require_incremental_noop_preflight_active`` 只在那些分支里起作用。
+    """
+
+    del _require_incremental_noop_preflight_active
+    if (
+        recovery_rehearsal_receipt is not None
+        or control_receipts_override is not None
+        or _allow_historical_tool_identity
+        or _allow_bound_evidence_label_digest
+        or _allow_stopped_metadata_only
+    ):
+        raise _pending("_job_rehearsal_contract_from_manifest（恢复演练承接）", "B4（候选恢复与评估恢复）")
+    from tools.official_client_capture import claude_upgrade_campaign
+
+    return claude_upgrade_campaign.job_rehearsal_contract(
+        campaign_dir,
+        manifest,
+        target_scenario_override=target_scenario_override,
+        tool_files_sha256_override=tool_files_sha256_override,
+    )
 
 
 # B3-01（VC-2～VC-6 原子批次入口接入）：VC 控制制品在 ``claude_upgrade_vc``，这里只注册与转调（签名与 Codex 逐项相同）。
@@ -4611,6 +4637,8 @@ def accept_campaign(*arguments: Any, **options: Any) -> Any:
 CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     # run 由 B2-06、seal 由 B2-07 落实（见 ``main`` 的分派）；表项只用于注册子命令解析器。
     "capture-official": ("官方取证 attempt：run 或 seal", "B2-06／B2-07（取证 Job 动作体与 seal 链）"),
+    # analyze-target 由 B2-11 落实（实现在 claude_upgrade_static，见 ``main`` 的分派）；表项只用于注册子命令解析器。
+    "analyze-target": ("VC-1 静态分析：冻结官方二进制的 bundle 分析、目标 SinkInventory 与 sink containment", "B2-11（VC-1 静态分析动作）"),
     # classify 由 B3-02 落实（实现在 claude_upgrade_classify，见 ``main`` 的分派）；表项只用于注册子命令解析器。
     "classify": ("VC-2 规则分类：机器草案、修订与批准", "B3-02（VC-2 分类 producer）"),
     # prepare-profile、stage-profile 由 B3-03 落实（实现在 claude_upgrade_profile，见 ``main`` 的分派）；表项只用于注册子命令解析器。
@@ -4906,11 +4934,14 @@ def _build_parser() -> argparse.ArgumentParser:
     plan = subparsers.add_parser(
         "plan",
         help=(
-            "B2-05：按目标场景清单展开并校验全部取证 Job（preflight_only 零写入、输出展开结果）；"
-            "建 Campaign 与 formal 由 B2-11（VC-0 收口）落实"
+            "B2-05：按目标场景清单展开并校验全部取证 Job（不带控制收据时零写入、输出展开结果）；"
+            "B2-11：带计时账本与环境收据时建 preflight_only Campaign（Formal 只由 VC-0 收口建立）"
         ),
     )
     claude_upgrade_plan.add_plan_arguments(plan)
+    from tools.official_client_capture import claude_upgrade_campaign
+
+    claude_upgrade_campaign.add_campaign_arguments(plan)
 
     import_predecessor = subparsers.add_parser(
         "import-predecessor-evidence",
@@ -4988,14 +5019,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _plan_command(arguments: argparse.Namespace) -> dict[str, Any]:
-    """``plan``（B2-05）：校验参数，按目标场景清单展开全部取证 Job 并核对规则、标签与覆盖，输出零写入报告。
+    """``plan``：不带控制收据时是 B2-05 的零写入展开报告；带计时账本与 P0 环境收据时建 ``preflight_only`` Campaign（B2-11，
+    ``claude_upgrade_campaign``）。
 
-    建 Campaign（计时账本、环境收据、控制收据与总计划落盘）归 B2-11；Formal Campaign 只由 VC-0 收口创建，
-    这里直接拒绝 ``--campaign-mode formal``。
+    Formal Campaign 只由 VC-0 收口经 ``create_campaign`` 原子建立并立即派发首批，命令行 ``--campaign-mode formal`` 一律拒绝
+    （与 Codex 0.154 起同一口径）。
     """
 
+    from tools.official_client_capture import claude_upgrade_campaign
+
     if arguments.campaign_mode == "formal":
-        raise _pending("plan --campaign-mode formal（Formal Campaign 只由 VC-0 收口创建）", "B2-11（VC-0 收口续作与 P0 收据）")
+        raise ConfigurationError(
+            "Formal Campaign 只能由 VC-0 收口（claude_upgrade_vc0_closeout）原子创建并立即派发首批；命令行 plan 只建 preflight_only。"
+        )
+    if claude_upgrade_campaign.creating_campaign(arguments):
+        manifest = create_campaign(arguments)
+        return claude_upgrade_campaign.created_report(Path(arguments.campaign_dir), manifest)
     claude_upgrade_plan.prepare_plan_arguments(arguments)
     rules = claude_upgrade_plan.load_baseline_rules(arguments.rule_manifest, arguments.baseline_version)
     claude_upgrade_plan.verify_target_rules(arguments, rules)
@@ -5175,7 +5214,8 @@ def main(argv: list[str] | None = None) -> int:
     status、环境清理与两类明确拒绝）由 B2-08 落实，plan --audit-only 只审计（B5a-09），classify 做 VC-2 规则分类
     （B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），plan-candidate-gates 与 record-candidate-build 做 VC-4
     门禁计划与候选构建冻结（B3-04），revision-open 与 invalidate-candidate 在共享流程之外写 Store 侧两份登记（B3-05 编排器
-    部分，``claude_upgrade_revision``），其余 Claude 专属子命令在动作体落实前报未实现。
+    部分，``claude_upgrade_revision``），plan 带控制收据时建 preflight_only Campaign、analyze-target 做 VC-1 静态分析
+    （B2-11），其余 Claude 专属子命令在动作体落实前报未实现。
 
     B3-01 起 VC-2～VC-6 经 ``compile-and-run-vc-batch`` 原子派发：父监督器（campaign-run）上下文里批次控制面命令一律
     拒绝，草案、修订与预览这类等审核的暂停点退出 0（``claude_upgrade_batch`` 第四、五节）。
@@ -5225,6 +5265,10 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_seal
 
             result, return_code = claude_upgrade_seal.seal_command(arguments)
+        elif arguments.command == "analyze-target":
+            from tools.official_client_capture import claude_upgrade_static
+
+            result, return_code = claude_upgrade_static.analyze_target_command(arguments)
         elif arguments.command == "classify":
             from tools.official_client_capture import claude_upgrade_classify
 

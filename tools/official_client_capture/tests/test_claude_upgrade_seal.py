@@ -662,7 +662,9 @@ class CapturedSealChainTests(_SealCampaignCase):
             package = next(item for item in draft["seal"]["objects"] if item["name"] == "evidence_package")["payload"]
             self.assertEqual(package["schema_version"], evidence.EVIDENCE_PACKAGE_V3_SCHEMA)
             purposes = {entry["facts"]["purpose"] for item in draft["seal"]["objects"] if item["name"] == "completeness" for entry in item["payload"]["entries"]}
-            self.assertEqual(purposes, set(evidence.COMPLETENESS_PURPOSES.values()))
+            # B2-11 的两份可缺绑定（静态分析收据、冻结的生产现状清单）只在 B2-11 建的 Campaign 里有，本夹具总计划没有。
+            absent = {evidence.COMPLETENESS_PURPOSES[name] for name in ("static_analysis", "production_inventory")}
+            self.assertEqual(purposes, set(evidence.COMPLETENESS_PURPOSES.values()) - absent)
 
             # ④ 批准：discovery-record 之后硬杀，再在 evidence-record 之后硬杀（这一次在父监督器上下文里），重跑收敛。
             approve = self.seal_argv(campaign, attempt_id, "--approve-seal-sha256", preview["review_sha256"])

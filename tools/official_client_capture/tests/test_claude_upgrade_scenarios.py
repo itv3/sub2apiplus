@@ -566,7 +566,7 @@ class PlanExpansionTests(unittest.TestCase):
 
     def test_plan_rejections(self) -> None:
         cases = {
-            "formal 归 B2-11": (_plan_argv(self.campaign_dir)[:4] + ["formal"] + _plan_argv(self.campaign_dir)[5:], "B2-11"),
+            "formal 只由 VC-0 收口建立": (_plan_argv(self.campaign_dir)[:4] + ["formal"] + _plan_argv(self.campaign_dir)[5:], "VC-0 收口"),
             "私网上游": ([*_plan_argv(self.campaign_dir)[:-4], "--upstream-ip", "10.1.2.3", "--campaign-id", "claude-code-2_1_285-t1"], "ip_address"),
             "目标版本无清单": ([item if item != TARGET else "2.1.299" for item in _plan_argv(self.campaign_dir)], "场景清单"),
             "run-id 超长": (_plan_argv(self.campaign_dir, campaign_id="c" * 100), "run-id"),

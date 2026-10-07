@@ -74,7 +74,8 @@ v5 把 ``anthropic-usage-limit``、``anthropic-dispatch-id`` 两个灰度 Header
 四、清零门禁（指南 §4.2.4）
 ==========================
 发现项、候选、只记录事实：ID 集合与输入逐项相等、只读字段未被改写、每项至少一个合法终态绑定（终态与字段闭集见
-``TERMINAL_BINDINGS``）、``rule_bound`` 只指向迁移台账内的规则、``duplicate_bound`` 指向同分区另一项且链无环、终点已解决；
+``TERMINAL_BINDINGS``）、``rule_bound`` 只指向迁移台账内的规则、``managed_egress_bound`` 的出站 ID 都在 VC-1 封存的生产现状
+清单里（B2-11；Campaign 没有冻结生产现状清单时无法核对，失败关闭）、``duplicate_bound`` 指向同分区另一项且链无环、终点已解决；
 发现项与语义候选的来源引用必须双向闭合（输入层问题，只能回 VC-1 修正）。迁移：基线规则全集固定，每条规则恰有一个
 迁移决定（不得 ``blocked``）、``add／delete`` 与基线／目标成员关系一致、``delete`` 必须 ``superseded``、证据项都在只读
 EvidencePackage 里、``affected_rules／inherited_rules`` 由决定复算、理由不得保留草案占位、``production_replacement``
@@ -564,6 +565,8 @@ class ClassificationInputs:
     tool_files_sha256: str
     reference_problems: list[str]
     classification_fact: dict[str, Any] | None
+    # B2-11：VC-1 封存的生产现状清单里的出站 ID 全集（``managed_egress_bound`` 据此校验）；B2-11 之前的 Campaign 没有为 None。
+    production_egress_ids: frozenset[str] | None = None
 
 
 def _baseline_manifest_path(campaign_dir: Path, manifest: Mapping[str, Any]) -> tuple[Path, str]:
@@ -890,6 +893,17 @@ def collect_inputs(campaign_dir: Path, manifest: Mapping[str, Any]) -> Classific
         raise ConfigurationError("VC-1 跨来源矩阵的合同名不符或闭合门禁不是 closed。")
     if objects["target_inventory"].get("target_version") != target_version:
         raise ConfigurationError("VC-1 目标 SinkInventory 的版本与 Campaign 目标版本不一致。")
+    production_binding: dict[str, Any] | None = None
+    production_egress_ids: frozenset[str] | None = None
+    if found.get("production_inventory") is not None:
+        # B2-11：生产现状清单由 VC-1 seal 绑定进完整性清单，必须就是本 Campaign 冻结的那一份。
+        from tools.official_client_capture import claude_upgrade_campaign
+
+        production, production_binding = _read_bound_json(data_root, found["production_inventory"], "VC-1 封存的生产现状清单")
+        frozen = (manifest.get("inputs") or {}).get("production_inventory")
+        if not isinstance(frozen, Mapping) or frozen.get("sha256") != production_binding["sha256"]:
+            raise ConfigurationError("VC-1 封存的生产现状清单与本 Campaign 冻结的不一致。")
+        production_egress_ids = claude_upgrade_campaign.production_egress_ids(production)
     frozen_scenarios = claude_upgrade_seal._frozen_input(campaign_dir, manifest, "target_scenarios")
     if file_sha256(frozen_scenarios) != object_bindings["target_scenarios"]["sha256"]:
         raise ConfigurationError("VC-1 证据所依据的目标场景清单与本 Campaign 冻结的不一致。")
@@ -944,6 +958,9 @@ def collect_inputs(campaign_dir: Path, manifest: Mapping[str, Any]) -> Classific
         "baseline_rules": {"path": baseline_shown, "sha256": file_sha256(baseline_path)},
         "observed_only_sources": observed_sources,
     }
+    if production_binding is not None:
+        # 只在存在时进入输入摘要：B2-11 之前建的 Campaign 的分类输入摘要不变。
+        bindings["production_inventory"] = production_binding
     return ClassificationInputs(
         bindings=bindings,
         sha256=orchestrator._fingerprint(bindings),
@@ -967,6 +984,7 @@ def collect_inputs(campaign_dir: Path, manifest: Mapping[str, Any]) -> Classific
         tool_files_sha256=tool_files_sha256,
         reference_problems=_reference_problems(discoveries, candidates),
         classification_fact=classification[0] if classification else None,
+        production_egress_ids=production_egress_ids,
     )
 
 
@@ -1389,8 +1407,13 @@ def _binding_problems(
     partition_ids: set[str],
     rule_ids: set[str],
     target_ids: set[str],
+    production_egress_ids: frozenset[str] | None,
 ) -> list[tuple[str, str]]:
-    """一条终态绑定的合同校验：返回 (原因码, 明细)；空表示合法。"""
+    """一条终态绑定的合同校验：返回 (原因码, 明细)；空表示合法。
+
+    ``managed_egress_bound`` 的出站 ID 必须在 VC-1 封存的生产现状清单里（B2-11）；Campaign 没有冻结生产现状清单时无法
+    核对，记 ``managed_egress_unverifiable``（失败关闭，不按文字放行）。
+    """
 
     if not isinstance(binding, dict):
         return [("binding_invalid", "绑定必须是对象")]
@@ -1427,6 +1450,14 @@ def _binding_problems(
     elif kind == "managed_egress_bound":
         if not _sorted_unique_strings(binding["managed_egress_ids"], pattern=SAFE_ID_RE) or not _text(binding["disposition"]):
             problems.append(("binding_invalid", "managed_egress_bound 需要受管出站 ID 与处置"))
+        elif production_egress_ids is None:
+            problems.append(
+                ("managed_egress_unverifiable", "Campaign 没有冻结生产现状清单（VC-1 完整性清单未绑定），受管出站绑定无法核对")
+            )
+        else:
+            unknown = sorted(set(binding["managed_egress_ids"]) - production_egress_ids)
+            if unknown:
+                problems.append(("managed_egress_unknown", f"受管出站 ID 不在生产现状清单的出站处置清单里：{unknown}"))
     elif kind in {"non_egress_proven", "target_absent_proven"}:
         texts = ("proof_kind", "rationale") if kind == "non_egress_proven" else ("rationale",)
         if any(not _text(binding[field]) for field in texts) or not _sorted_unique_strings(binding["evidence_paths"]):
@@ -1449,6 +1480,7 @@ def _check_partition(
     *,
     rule_ids: set[str],
     target_ids: set[str],
+    production_egress_ids: frozenset[str] | None,
     problems: _Problems,
 ) -> tuple[dict[str, int], dict[str, int]]:
     """一个处置分区：ID 集合与只读字段、逐项终态绑定、duplicate 链；返回 (计数, 终态类型计数)。"""
@@ -1497,7 +1529,12 @@ def _check_partition(
         valid = True
         for binding in bindings:
             for code, detail in _binding_problems(
-                binding, own_id=identifier, partition_ids=set(expected), rule_ids=rule_ids, target_ids=target_ids
+                binding,
+                own_id=identifier,
+                partition_ids=set(expected),
+                rule_ids=rule_ids,
+                target_ids=target_ids,
+                production_egress_ids=production_egress_ids,
             ):
                 problems.add(code, f"{identifier}：{detail}")
                 valid = False
@@ -1565,7 +1602,15 @@ def _check_dispositions(
         ("observed_only", "observed_only_facts", "fact_id", inputs.observed, OBSERVED_FIXED_FIELDS),
     ):
         counts, types = _check_partition(
-            label, document[field], key, expected, fixed, rule_ids=rule_ids, target_ids=target_ids, problems=problems
+            label,
+            document[field],
+            key,
+            expected,
+            fixed,
+            rule_ids=rule_ids,
+            target_ids=target_ids,
+            production_egress_ids=inputs.production_egress_ids,
+            problems=problems,
         )
         result[label] = counts
         result["binding_type_counts"][label] = types

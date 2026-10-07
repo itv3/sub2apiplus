@@ -36,7 +36,13 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "tool_identity_policy_v2.json": "B1-07 策略 v8：三个共享新文件登记进 control 层，先于文件本身进入受管树",
     "upgrade_client_adapter.py": "B1-01 客户端适配接口、编排器服务面与注册表；B2-08 新增三个适配器成员（attempt 环境已恢复口径、部署收据五摘要"
                                  "所在对象、有效 wire 身份），Codex 绑定到原写法或原函数；B2-10 新增 Job 演练的四个适配器成员（画像模块、"
-                                 "执行合同构造、二进制表、合同重放），Codex 绑定到 Job 演练收据模块本身与它的原函数体",
+                                 "执行合同构造、二进制表、合同重放），Codex 绑定到 Job 演练收据模块本身与它的原函数体；B2-11 新增"
+                                 "收口画像成员 closeout_profile（模块型），Codex 绑定到 VC-0 收口模块本身",
+    "codex_upgrade_vc0_closeout.py": "B2-11 收口流程加客户端作用域（adapter_scope，缺省 Codex）：共享流程里 12 个编排器引用经服务面"
+                                     "（Codex 的 orchestrator 就是 codex_upgrade 模块本身，测试对它的替身照常生效），五个合同名与两个画像函数"
+                                     "（validate_inputs、recover_formal_plan_arguments）经收口画像（Codex 画像是本模块，取值与原值逐字相同），"
+                                     "两处项目总账查找显式给出客户端（Codex 给 codex，与缺省相同），新增命令提示用的 ORCHESTRATOR_CLI_MODULE；"
+                                     "Codex 专属的输入校验、Formal 参数恢复与两个历史修复子命令原样不动。本模块没有符号在评估读侧闭包内",
     "codex_upgrade_job_rehearsal_receipt.py": "B2-10 Job 演练收据模块加适配器参数：13 个编排器引用经服务面，执行合同构造、二进制表与合同"
                                               "重放经适配器成员，其余客户端差异经画像（Codex 画像就是本模块，各项取值是改造前写死的原值），"
                                               "四个依赖与容器探针加缺省为原值的参数；facts、收据与合同按合同名认客户端，Claude 签 "

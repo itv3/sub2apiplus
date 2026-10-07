@@ -385,6 +385,10 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     "build_job_contract": "callable",  # (manifest, target_scenario, extra_jobs) → 完整执行合同
     "binary_facts": "callable",  # (contract) → 宿主与容器里要核对的二进制标签与期望摘要表
     "job_contract_replay": "callable",  # (contract, facts) → 按执行合同核对 facts 里的二进制事实
+    # VC-0 收口（B2-11）：共享流程在 codex_upgrade_vc0_closeout（现场判定、收口 attempt、收据副本、建 Formal、首批派发与
+    # 续作）；客户端差异收进收口画像模块——合同名（收口收据、失败诊断、现场、上限后恢复预览、首批交接）、四份输入的校验
+    # ``validate_inputs``、从预检恢复 Formal plan 参数的 ``recover_formal_plan_arguments`` 与命令提示里的编排器模块名。
+    "closeout_profile": "module",
 })
 
 
@@ -422,6 +426,8 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "build_job_contract": ("codex_upgrade_job_rehearsal_receipt", "build_codex_job_contract"),
         "binary_facts": ("codex_upgrade_job_rehearsal_receipt", "codex_binary_facts"),
         "job_contract_replay": ("codex_upgrade_job_rehearsal_receipt", "codex_job_contract_replay"),
+        # B2-11：Codex 收口画像就是收口模块本身（合同名与两个函数是改造前的原值与原函数）。
+        "closeout_profile": ("codex_upgrade_vc0_closeout", None),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -451,6 +457,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "build_job_contract": ("claude_upgrade_job_rehearsal", "build_job_contract"),  # B2-10
         "binary_facts": ("claude_upgrade_job_rehearsal", "binary_facts"),  # B2-10
         "job_contract_replay": ("claude_upgrade_job_rehearsal", "job_contract_replay"),  # B2-10
+        "closeout_profile": ("claude_upgrade_vc0_closeout", None),  # B2-11
     }),
 })
 

@@ -6,8 +6,9 @@
 * Store Campaign 的冻结身份与总计划同源（设计 B2-11）：``target_version`` 与总计划相同，``platforms``／``entrypoints``
   各恰有一项且等于 ``configuration.platform``／``configuration.entrypoint``，``default_conditions`` 里唯一的 ``privacy=``
   条件等于 ``configuration.privacy_mode``，``oauth_org_id``、``model_catalog_sha256`` 与 ``configuration`` 相同。
-  比较口径取 Store 合同的七项身份导出（``contracts.derive_identity_conditions``）；第七项 ``official_artifacts`` 与
-  总计划 ``official_identity`` 的对应关系由 B2-11 建 Campaign 时定，这里不核。
+  比较口径取 Store 合同的七项身份导出（``contracts.derive_identity_conditions``）。第七项 ``official_artifacts``（B2-11 定）：
+  总计划 ``configuration`` 冻结了 B2-01 冻结收据坐标（``official_freeze_sha256``）时，Store 的官方制品绑定里必须有这份冻结
+  收据与目标二进制（``official_identity.binary_sha256``）；B2-11 之前的夹具总计划没有这个坐标，不核。
 
 Store 的 ``ControlError`` 在这里统一转成编排器的 ``ConfigurationError``，入口按同一口径报错退出。本文件被 Codex 身份
 策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层。
@@ -73,6 +74,15 @@ def require_store_campaign_matches_plan(manifest: Mapping[str, Any], campaign: M
     ]
     if mismatches:
         raise ConfigurationError("Store Campaign 的冻结身份与总计划不同源：" + "；".join(mismatches))
+    configuration = manifest.get("configuration")
+    freeze_sha256 = configuration.get("official_freeze_sha256") if isinstance(configuration, Mapping) else None
+    if freeze_sha256 is not None:
+        official = manifest.get("official_identity")
+        binary_sha256 = official.get("binary_sha256") if isinstance(official, Mapping) else None
+        bound = {str(item.get("sha256")) for item in campaign.get("official_artifacts") or [] if isinstance(item, Mapping)}
+        missing = [label for label, digest in (("冻结收据", freeze_sha256), ("目标二进制", binary_sha256)) if digest not in bound]
+        if missing:
+            raise ConfigurationError("Store Campaign 的官方制品绑定缺少总计划冻结的" + "、".join(missing) + "（第七项身份不同源）。")
 
 
 def open_campaign_store(campaign_dir: Path, manifest: Mapping[str, Any]) -> tuple[ControlStore, dict[str, Any]]:
