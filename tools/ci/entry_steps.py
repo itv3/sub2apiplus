@@ -33,18 +33,25 @@
 * ``evaluate``：全部步骤的判定与原因，``--json`` 另存机读结果；
 * ``snapshot``：把全部非实时步骤按当前输入记成通过（来源标为快照），验收逐类改动时作基准；
 * ``tree-digest``：目录内容摘要；
-* ``deploy-consistency --tree <测试树> --data-root <数据根>``：入口门禁在跑之前核对数据根部署的就是测试树这一份——受管整树
-  （含测试，不计字节码）、两份指南、部署脚本副本逐项比内容摘要（整树身份不含测试目录，只比它会放过「测试改了、还没
-  重新部署」）；一致退出 0，不一致退出 1 并列出不一致的项。
+* ``deploy-consistency --tree <测试树> --data-root <数据根> [--client <客户端>]``：入口门禁在跑之前核对数据根部署的就是
+  测试树这一份——受管整树（含测试，不计字节码）、指南、部署脚本副本逐项比内容摘要（整树身份不含测试目录，只比它会放过
+  「测试改了、还没重新部署」）；比哪几项按客户端（缺省 codex）；一致退出 0，不一致退出 1 并列出不一致的项。
 
 参数取自环境变量（驱动 ``source lib.sh`` 后由 ``parse_env.py`` 导出）；入口门禁的源码提交取参数 ``ENTRY_COMMIT``。
 退出码：0 全部沿用或冻结（实时类不计）；1 有步骤要重做；2 用法或配置错误；3 有步骤被阻塞。
+
+按客户端（Claude 升级 B5a-06）：步骤与依赖、判定规则两客户端相同，随客户端变的只有输入声明里的绑定——参数键、指南、受管
+根、策略文件、环境收据模块、目标客户端路径、追加给策略认证的 ``--client``——取自同目录的客户端表 ``client_table.py``，
+本轮客户端取参数 ``CLIENT``（缺省 codex）。Codex 的步骤表与改造前逐字相同（输入声明的摘要不变，改造前写下的步骤记录照常
+沿用）；Claude 的步骤表另登记第二受管根（``tools/official_client_control``，含 ``schemas/``）、两客户端共用控制面的实现
+文档与客户端表本身。读哪个客户端的部署收据、受管五摘要按哪个客户端的策略算、VC-0 收口用哪个模块，同样按客户端取。
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import platform
@@ -59,6 +66,27 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 HERE = Path(__file__).resolve().parent
+
+
+def _client_table() -> Any:
+    """同目录的客户端表 ``client_table.py``（B5a-06）：按路径加载，与驱动其它模块共用一个模块对象（``client_table_sibling``）。"""
+
+    name = "client_table_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "client_table.py")
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"找不到同目录的 client_table.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+CT = _client_table()
 RECORD_SCHEMA = "entry-step-record/v1"
 EVALUATION_SCHEMA = "entry-step-evaluation/v1"
 MISSING = "missing"
@@ -74,12 +102,13 @@ TREE_EXCLUDES = {
     "no_tests": frozenset({"__pycache__", "tests"}),
     "source": frozenset({".git", "target", "node_modules", "__pycache__"}),
 }
-DEPLOY_RECEIPT_GLOB = "codex-*-supervisor-enable-*.json"   # 与驱动 install.py 的 latest_deploy_receipt 同一规则
+DEPLOY_RECEIPT_GLOB = CT.spec("codex")["deploy_receipt_glob"]   # 与驱动 install.py 的 latest_deploy_receipt 同一规则
 # B5a-01：按参数 CLIENT（缺省 codex）选部署收据，规则与驱动 install.py 相同：文件名模式、时间戳前的分隔串（按部署顺序
-# 排序），以及工具身份所在的对象（Codex 收据是顶层，Claude 收据 official-client-managed-deploy/v1 是 identity）。
-DEPLOY_RECEIPT_GLOBS = {"codex": DEPLOY_RECEIPT_GLOB, "claude": "claude-managed-deploy-*.json"}
-DEPLOY_RECEIPT_STAMP_SEPARATORS = {"codex": "-supervisor-enable-", "claude": "claude-managed-deploy-"}
-DEPLOY_RECEIPT_IDENTITY_KEYS = {"codex": None, "claude": "identity"}
+# 排序），以及工具身份所在的对象（Codex 收据是顶层，Claude 收据 official-client-managed-deploy/v1 是 identity）。B5a-06 起
+# 取值来自客户端表，这几个名字保留作只读视图。
+DEPLOY_RECEIPT_GLOBS = {client: CT.spec(client)["deploy_receipt_glob"] for client in CT.CLIENTS}
+DEPLOY_RECEIPT_STAMP_SEPARATORS = {client: CT.spec(client)["deploy_receipt_stamp_separator"] for client in CT.CLIENTS}
+DEPLOY_RECEIPT_IDENTITY_KEYS = {client: CT.spec(client)["deploy_receipt_identity_key"] for client in CT.CLIENTS}
 TEMPLATE = re.compile(r"\{([A-Z_][A-Z0-9_]*)\}")
 
 
@@ -171,205 +200,264 @@ def _managed_files(*names: str) -> tuple[Input, ...]:
 IDENTITY = tuple(Input("managed", "identity", name) for name in IDENTITY_FIELDS)
 MANAGED_TREE = Input("managed", "tree", OCC, "no_tests")
 TESTS_TREE = Input("tests", "tree", f"{OCC}/tests", "pycache")
-GUIDES = (Input("docs", "file", "{D}/docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md"),
-          Input("docs", "file", "{D}/docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md"))
 MAINTENANCE = Input("docs", "tree", "{D}/docs/egress/maintenance", "pycache")
 # pre-A3 场景读、但测试树里没有或不保证与测试树一致的数据根内容：冻结台账目录、录制数据（含录制配置引用的源码树、画像与
 # 安装包）、alpine 镜像（E2-05 的三项）；断言打包脚本（vc1 录制回放链按生产布局调用数据根这一份）与项目总账的两处探测
 # 位置（场景从临时根往上最多六层找 upgrade-project-ledger，会探到 staging 与数据根顶层；那里出现总账时场景行为会变，现在
 # 都不存在，记为 missing）——后两类是 E3-04 读集审计实测补的。pre-A3 步骤与入口门禁的场景单元
-# （entry_gates.pre_a3_data_root_inputs）用同一份。
+# （entry_gates.pre_a3_data_root_inputs）用同一份。这是 Codex 的一份；其它客户端见 pre_a3_data_root。
 PRE_A3_DATA_ROOT = (
     MAINTENANCE, Input("environment", "recorded"), Input("environment", "image_ref", "alpine:3.21"),
     Input("managed", "file", "{D}/tools/prepare_assertion_bundle.sh"),
     Input("environment", "tree", "{D}/staging/upgrade-project-ledger", "pycache"),
     Input("environment", "tree", "{D}/upgrade-project-ledger", "pycache"),
 )
-# Codex 指南第二部分：预检 plan、Job 演练与收口只读这一节（按目标场景清单 source_spec 的锚点、受管模块同一算法算摘要）。
+# 指南第二部分：预检 plan、Job 演练与收口只读这一节（按目标场景清单 source_spec 的锚点、受管模块同一算法算摘要）。场景清单
+# 按客户端派生（参数 SCENARIOS_JSON），声明本身两客户端相同。
 GUIDE_PART2 = Input("docs", "section", "{SCENARIOS_JSON}")
 DEPLOY_RECEIPT = Input("upstream", "deploy_file")
 DEPLOY_TOOL_FILES = Input("upstream", "deploy_field", "tool_files_sha256")
 COMMON_DRIVER = _drivers("lib.sh", "parse_env.py")
-JOB_CONTAINERS = ("capture-cli", "sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "sub2apiplus-redis")
+# 驱动输入里随客户端多出的文件（B5a-06）：参数解析与 lib.sh 都读客户端表，Claude 的步骤声明从一开始就登记它；Codex 的声明
+# 逐字不变，改造前写下的步骤记录照常沿用（客户端表里 Codex 一行的取值由逐字对照测试锁定）。
+DRIVER_EXTRAS: dict[str, tuple[str, ...]] = {"codex": (), "claude": ("client_table.py",)}
+# 以下四个名字是 Codex 的取值（只读视图；按客户端的取值见客户端表）。
+GUIDES = tuple(Input("docs", "file", "{D}/docs/" + name) for name in CT.spec("codex")["entry_guides"])
+JOB_CONTAINERS = tuple(CT.spec("codex")["job_containers"])
 # 入口便宜检查「后续阶段要用的身份参数」一项逐个核对的键（entry-preflight.sh 的 required_parameters）。
-PREFLIGHT_REQUIRED = ("TARGET_CODE_MODE_HOST_SHA256", "CAPTURE_RUNTIME_IMAGE", "CODEX_BIN", "CODEX_BIN_SHA256",
-                      "OFFICIAL_ASSET_SHA256", "TARGET_PACKAGE", "TARGET_SOURCE", "BASELINE_SOURCE", "ACTIVE_PROFILE",
-                      "MAIN_MODEL", "LITE_MODEL", "CODEX_ACCOUNT_ID", "API_KEY_ID", "COMPOSE_DIR", "PROJECT_DEADLINE_UTC",
-                      "STAGE_BUDGETS", "POLICY_COMPAT_RECEIPT", "POLICY_ACTIVATION", "PRE_A3_CERTIFICATION",
-                      "P0_ROLLBACK_EVIDENCE")
-PLAN_PARAMS = ("BASELINE_VERSION", "TARGET_VERSION", "BASELINE_SOURCE", "TARGET_SOURCE", "ACTIVE_PROFILE", "CODEX_BIN",
-               "CODEX_BIN_SHA256", "TARGET_PACKAGE", "OFFICIAL_ASSET_SHA256", "TARGET_CODE_MODE_HOST_SHA256",
-               "CAPTURE_RUNTIME_IMAGE", "MAIN_MODEL", "LITE_MODEL", "CODEX_ACCOUNT_ID", "API_KEY_ID", "COMPOSE_DIR",
-               "CAMPAIGN_PREFIX", "UP")
+PREFLIGHT_REQUIRED = tuple(CT.spec("codex")["preflight_required"])
+PLAN_PARAMS = tuple(CT.spec("codex")["plan_params"])
 
-# 步骤表：顺序即依赖顺序（上游一律排在前面，导入时核对）。依据见各步骤的注释与方案 E2-05、E2-06。
-STEPS: tuple[Step, ...] = (
-    # 便宜检查七项合成一个实时步骤：每次几十秒内重跑，记下输入只供复盘。
-    Step("entry-preflight", "入口便宜检查", "cheap", live=True, creation_chain=False, inputs=(
-        *_params("ROUND", "STAMP", "UP", "BASELINE_VERSION", "TARGET_VERSION", "MIN_FREE_GIB", *PREFLIGHT_REQUIRED),
-        *IDENTITY, DEPLOY_RECEIPT, GUIDE_PART2,
-        *_drivers("entry-preflight.sh", "guard.sh", "../install.py", "bytecode_cache.py"), *COMMON_DRIVER,
-        *_env("kernel", "python"), Input("environment", "file", "{CODEX_BIN}"), Input("environment", "file", "{TARGET_PACKAGE}"),
-    )),
-    # 兼容收据的有效性只取决于两份策略文件（激活认证只核它的当前策略字段）；取整树会在策略没变时被拒签而卡死。
-    Step("policy-compatibility", "策略兼容收据", "cheap", inputs=(
-        *_params("PREVIOUS_POLICY", "POLICY_COMPAT_RECEIPT"),
-        *_managed_files("tool_identity_policy_v2.json"), Input("managed", "file", "{PREVIOUS_POLICY}"),
-        *COMMON_DRIVER, Input("command", "command", "codex_upgrade_policy_certification compatibility"),
-    ), products=(Product("compatibility", "{POLICY_COMPAT_RECEIPT}"),)),
-    # 激活认证绑定部署收据的路径与摘要（指南要求每次部署签一次）：换部署收据即失效。
-    Step("policy-activation", "策略激活认证", "cheap", upstream=("policy-compatibility",), inputs=(
-        *_params("POLICY_ACTIVATION"), *IDENTITY, DEPLOY_RECEIPT,
-        *COMMON_DRIVER, Input("command", "command", "codex_upgrade_policy_certification activation"),
-    ), products=(Product("activation", "{POLICY_ACTIVATION}"),)),
-    # 入口门禁（测试树部分）：源码提交确定测试树的全部内容（源码、测试、文档、Makefile、CI 定义、权重表与耗时表）；
-    # 前端依赖、历史门禁源码、工具链和执行器另列。部署收据只取整树摘要字段（核对数据根已部署本提交）。两份 P0 证据
-    # 可以没有：全集通过模式承接了单元时写 v2（E3-03），记录库里没有已发布的清单、测试树五摘要算不出来时不写，P0 收据
-    # 步骤据总摘要报原因。
-    Step("entry-gates", "入口门禁", "pre_ledger", inputs=(
-        Input("tests", "source_commit", "ENTRY_COMMIT"),
-        *_params("HISTORY_TEST_TREE", "HISTORICAL_SOURCE_ROOT"), DEPLOY_TOOL_FILES,
-        *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "bytecode_cache.py", "full_set_receipt.py"),
-        *COMMON_DRIVER,
-        *_env("kernel", "python", "go", "node", "golangci_lint", "docker"),
-        Input("environment", "tree", "{HISTORICAL_SOURCE_ROOT}", "pycache"),
-        Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/pnpm-lock.yaml"),
-        Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/node_modules/typescript/lib/typescript.js"),
-    ), products=(Product("summary"), Product("p0-test-capture-tools", optional=True), Product("p0-check-egress-spec", optional=True))),
-    # pre-A3：场景在数据根生产布局里跑，读受管整树（含测试、指纹代理、运行时镜像定义）、部署脚本副本、两份指南（真实链
-    # 副本树复制它们），以及 PRE_A3_DATA_ROOT 那几项（冻结台账目录、录制数据、断言打包脚本、项目总账探测位置等）。部署收据
-    # 不取文件摘要、激活认证只取策略摘要字段（第 19 项：工具五摘要与策略没变时跨部署复用）。
-    Step("pre-a3", "pre-A3 路径认证", "pre_ledger", inputs=(
-        *_params("PRE_A3_CERTIFICATION"), *IDENTITY, MANAGED_TREE, TESTS_TREE,
-        Input("managed", "file", "{D}/tools/arm64_supervised_deploy.py"), *GUIDES, *PRE_A3_DATA_ROOT,
-        Input("upstream", "json_field", "{POLICY_ACTIVATION}", "policy_sha256"),
-        *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "pre-a3.sh"), *COMMON_DRIVER,
-        *_env("kernel", "python"),
-    ), products=(Product("certification", "{PRE_A3_CERTIFICATION}"), Product("reuse-receipt", optional=True))),
-    # 零请求 smoke：经 provenance 传递导入编排器但只导入不调用（control 层），运行时导入测试模块与夹具。
-    Step("zero-request-smoke", "零请求 smoke", "pre_ledger", inputs=(
-        Input("managed", "identity", "control_sha256"), TESTS_TREE,
-        *_drivers("stage1.sh"), *COMMON_DRIVER, *_env("python"),
-    ), products=(Product("receipt", "{D}/audit/zero-request-smoke-{STAMP}.json"),)),
-    # atomic-double 在 capture-cli 容器里跑：导入链没有逐一核实，受管工具按整树摘要从宽。
-    Step("atomic-double", "atomic-double 收据", "pre_ledger", inputs=(
-        Input("managed", "identity", "tool_files_sha256"),
-        *_drivers("stage1-finish.sh"), *COMMON_DRIVER,
-        *_containers("capture-cli"), Input("environment", "container_python", "capture-cli"),
-    ), products=(Product("receipt"),)),
-    # 计时账本：只认决定「这本账属于哪次升级」的参数。截止时间只在建账本时折算总预算，之后的延期记在账本事件里
-    # （deadline-extend），参数文件里的截止时间改了不影响已建账本，所以不列。工具改了不影响已建账本（生成器摘要漂移
-    # 由账本自己的承接收据处理）。
-    Step("ledger", "计时账本", "post_ledger", ledger=True, inputs=(
-        *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS"),
-    ), products=(Product("ledger", "{ENTRY_ROOT}/control/{UP}-timing-ledger/ledger.json"),)),
-    # 环境收据：采集器与增量恢复两个受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。
-    Step("environment-p0", "ARM64 环境收据（p0）", "post_ledger", inputs=(
-        *_params("UP", "TARGET_VERSION"),
-        *_managed_files("codex_upgrade_arm64_environment_receipt.py", "incremental_recovery.py"),
-        *_drivers("stage1.sh"), *COMMON_DRIVER,
-        *_env("hostname", "arch"), *_containers("capture-cli", "sub2apiplus"),
-        Input("environment", "file", "/etc/sub2api-egress/policy.json"),
-        Input("environment", "file", "/opt/codex-{TARGET_VERSION}/bin/codex"),
-    ), products=(Product("receipt"),)),
-    Step("ledger-checkpoint", "账本 checkpoint", "post_ledger", upstream=("ledger",), inputs=(
-        *_managed_files("codex_upgrade_timing_ledger.py"), *_drivers("stage1.sh"), *COMMON_DRIVER,
-    ), products=(Product("checkpoint"),)),
-    # 预检 plan 冻结完整工具身份；读指南第二部分、两棵官方源码树、官方包、Active 画像、compose 文件与采集镜像。
-    Step("preflight-plan", "预检 plan", "post_ledger", upstream=("ledger", "ledger-checkpoint", "environment-p0"), inputs=(
-        *_params(*PLAN_PARAMS), *IDENTITY, GUIDE_PART2, DEPLOY_TOOL_FILES,
-        *_drivers("stage1.sh"), *COMMON_DRIVER,
-        Input("environment", "tree", "{BASELINE_SOURCE}", "source"), Input("environment", "tree", "{TARGET_SOURCE}", "source"),
-        Input("environment", "file", "{TARGET_PACKAGE}"), Input("upstream", "file", "{ACTIVE_PROFILE}"),
-        Input("environment", "file", "{COMPOSE_DIR}/docker-compose.yml"),
-        Input("environment", "image_ref", "{CAPTURE_RUNTIME_IMAGE}"),
-    ), products=(Product("campaign"),)),
-    # Job 演练：五个容器的镜像、目标客户端二进制、采集镜像；收据可能是失败的，沿用前要核对状态是通过。
-    Step("job-rehearsal", "Job 演练收据", "post_ledger", upstream=("preflight-plan",), inputs=(
-        *IDENTITY, GUIDE_PART2, *_params("CODEX_BIN", "TARGET_CODE_MODE_HOST_SHA256", "CAPTURE_RUNTIME_IMAGE"),
-        *_drivers("stage1-finish.sh"), *COMMON_DRIVER,
-        *_containers(*JOB_CONTAINERS), Input("environment", "file", "{CODEX_BIN}"),
-        Input("environment", "image_ref", "{CAPTURE_RUNTIME_IMAGE}"),
-    ), products=(Product("receipt", content="status_passed"),)),
-    # 启动探测按指南每次重跑（反映修复后的最新环境）；报告登记进记录，收口前预检按它再核验一次（E2-07）。
-    Step("client-launch-probe", "客户端启动探测", "post_ledger", live=True, creation_chain=False, upstream=("preflight-plan",), inputs=(
-        *IDENTITY, *_drivers("client_launch_probe.py", "client_launch_probe_runner.py", "stage1-finish.sh"), *COMMON_DRIVER,
-        *_containers("capture-cli"),
-    ), products=(Product("report"),)),
-    # 发布认证：导入期经 pre-A3 认证模块读测试夹具，测试目录从宽整体列入；绑定部署收据、pre-A3、激活认证、Job 演练、atomic。
-    Step("release-certification", "发布认证", "post_ledger",
-         upstream=("pre-a3", "policy-activation", "job-rehearsal", "atomic-double"), inputs=(
-        *_params("RELEASE_CERTIFICATION"), *IDENTITY, TESTS_TREE, DEPLOY_RECEIPT,
-        *_drivers("stage2.sh"), *COMMON_DRIVER, *_env("arch", "go", "docker"),
-    ), products=(Product("certification", "{RELEASE_CERTIFICATION}"),)),
-    # P0 收据：收据模块只依赖标准库；证据取自入口门禁那一次运行，绑定发布认证、回退依据与账本的升级 ID。入口门禁承接了
-    # 单元时证据是 v2（E3-03），签发时按证据登记的记录库逐条重验——记录库是入口门禁步骤的产物，随上游一起失效。
-    Step("p0-receipt", "P0 收据", "post_ledger", upstream=("entry-gates", "release-certification", "ledger"), inputs=(
-        *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "P0_ROLLBACK_EVIDENCE"), *_managed_files("codex_upgrade_vc_receipt.py"),
-        Input("upstream", "file", "{P0_ROLLBACK_EVIDENCE}"), *_drivers("entry_orchestrator.py"),
-    ), products=(Product("receipt"),)),
-    # VC-0 收口（E2-07）：Formal 建成前后都要执行（建成后是续作：补阶段事件派发首批，或交给 VC-1 对账恢复链），所以不随
-    # 创建链冻结；收口完成（记录通过）且输入没变就沿用。建成之后修工具登记演进，工具身份一变这一步就重做（续作）。
-    Step("vc0-closeout", "VC-0 收口", "post_ledger", creation_chain=False,
-         upstream=("preflight-plan", "ledger", "ledger-checkpoint", "environment-p0", "release-certification",
-                   "job-rehearsal", "p0-receipt"), inputs=(
-        *_params("NEW", "RELEASE_CERTIFICATION"), *IDENTITY, TESTS_TREE, GUIDE_PART2, *GUIDES, DEPLOY_RECEIPT,
-        Input("managed", "file", "{D}/tools/prepare_assertion_bundle.sh"), *_drivers("entry_orchestrator.py"), *_env("arch"),
-    ), products=(Product("receipt"),)),
-)
-STEP_BY_ID: dict[str, Step] = {step.step_id: step for step in STEPS}
+
+def _module_file(module: str) -> str:
+    """受管模块（包路径）在受管树里的文件名。"""
+
+    return module.rsplit(".", 1)[1] + ".py"
+
+
+def pre_a3_data_root(client: str) -> tuple[Input, ...]:
+    """pre-A3 场景读的数据根内容（见 PRE_A3_DATA_ROOT）：项目总账的两处探测位置按客户端的总账目录名补上（Claude 场景从临时根
+    往上找 upgrade-project-ledger-claude），Codex 的原有各项照样保留（从宽，方案 D3）。Codex 补不出新项，与原表逐字相同。"""
+
+    name = CT.spec(client)["project_ledger_dir_name"]
+    probes = (Input("environment", "tree", f"{{D}}/staging/{name}", "pycache"), Input("environment", "tree", f"{{D}}/{name}", "pycache"))
+    return PRE_A3_DATA_ROOT + tuple(item for item in probes if item not in PRE_A3_DATA_ROOT)
+
+
+def build_steps(client: str) -> tuple[Step, ...]:
+    """客户端的步骤表：顺序即依赖顺序（上游一律排在前面，导入时核对）。依据见各步骤的注释与方案 E2-05、E2-06。
+
+    随客户端变的输入都从客户端表取（B5a-06）：参数键、入口读的文档、受管根与各根的测试目录、身份策略文件、环境收据登记的
+    受管文件、宿主机目标客户端路径、追加给策略认证命令的 ``--client``、驱动输入里的客户端表。Codex 代入后与改造前的步骤表
+    逐字相同。"""
+
+    spec = CT.spec(client)
+    binary = "{" + spec["binary_key"] + "}"
+    guides = tuple(Input("docs", "file", "{D}/docs/" + name) for name in spec["entry_guides"])
+    # 受管根整树（不计测试，测试目录单列）：Codex 只有 official_client_capture；Claude 另有 official_client_control（含
+    # schemas/），任何一根的受管文件或 schema 变了，读它的步骤都失效。
+    managed_trees = tuple(Input("managed", "tree", "{D}/" + root, "no_tests") for root in spec["managed_roots"])
+    tests_trees = tuple(Input("tests", "tree", "{D}/" + root + "/tests", "pycache") for root in spec["managed_roots"])
+    common_driver = (*COMMON_DRIVER, *_drivers(*DRIVER_EXTRAS[client]))
+    certification = spec["policy_certification_module"].rsplit(".", 1)[1]
+
+    def certification_command(action: str) -> Input:
+        return Input("command", "command", " ".join((certification, action, *spec["client_argv"])))
+
+    host_binary = spec["host_binary"].format(version="{TARGET_VERSION}")
+    return (
+        # 便宜检查七项合成一个实时步骤：每次几十秒内重跑，记下输入只供复盘。
+        Step("entry-preflight", "入口便宜检查", "cheap", live=True, creation_chain=False, inputs=(
+            *_params("ROUND", "STAMP", "UP", "BASELINE_VERSION", "TARGET_VERSION", "MIN_FREE_GIB", *spec["preflight_required"]),
+            *IDENTITY, DEPLOY_RECEIPT, GUIDE_PART2,
+            *_drivers("entry-preflight.sh", "guard.sh", "../install.py", "bytecode_cache.py"), *common_driver,
+            *_env("kernel", "python"), Input("environment", "file", binary), Input("environment", "file", "{TARGET_PACKAGE}"),
+        )),
+        # 兼容收据的有效性只取决于两份策略文件（激活认证只核它的当前策略字段）；取整树会在策略没变时被拒签而卡死。
+        Step("policy-compatibility", "策略兼容收据", "cheap", inputs=(
+            *_params("PREVIOUS_POLICY", "POLICY_COMPAT_RECEIPT"),
+            *_managed_files(spec["identity_policy_file"]), Input("managed", "file", "{PREVIOUS_POLICY}"),
+            *common_driver, certification_command("compatibility"),
+        ), products=(Product("compatibility", "{POLICY_COMPAT_RECEIPT}"),)),
+        # 激活认证绑定部署收据的路径与摘要（指南要求每次部署签一次）：换部署收据即失效。
+        Step("policy-activation", "策略激活认证", "cheap", upstream=("policy-compatibility",), inputs=(
+            *_params("POLICY_ACTIVATION"), *IDENTITY, DEPLOY_RECEIPT,
+            *common_driver, certification_command("activation"),
+        ), products=(Product("activation", "{POLICY_ACTIVATION}"),)),
+        # 入口门禁（测试树部分）：源码提交确定测试树的全部内容（源码、测试、文档、Makefile、CI 定义、权重表与耗时表）；
+        # 前端依赖、历史门禁源码、工具链和执行器另列。部署收据只取整树摘要字段（核对数据根已部署本提交）。两份 P0 证据
+        # 可以没有：全集通过模式承接了单元时写 v2（E3-03），记录库里没有已发布的清单、测试树五摘要算不出来时不写，P0 收据
+        # 步骤据总摘要报原因。
+        Step("entry-gates", "入口门禁", "pre_ledger", inputs=(
+            Input("tests", "source_commit", "ENTRY_COMMIT"),
+            *_params("HISTORY_TEST_TREE", "HISTORICAL_SOURCE_ROOT"), DEPLOY_TOOL_FILES,
+            *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "bytecode_cache.py", "full_set_receipt.py"),
+            *common_driver,
+            *_env("kernel", "python", "go", "node", "golangci_lint", "docker"),
+            Input("environment", "tree", "{HISTORICAL_SOURCE_ROOT}", "pycache"),
+            Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/pnpm-lock.yaml"),
+            Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/node_modules/typescript/lib/typescript.js"),
+        ), products=(Product("summary"), Product("p0-test-capture-tools", optional=True), Product("p0-check-egress-spec", optional=True))),
+        # pre-A3：场景在数据根生产布局里跑，读受管整树（含测试、指纹代理、运行时镜像定义）、部署脚本副本、指南（真实链
+        # 副本树复制它们），以及数据根那几项（冻结台账目录、录制数据、断言打包脚本、项目总账探测位置等）。部署收据
+        # 不取文件摘要、激活认证只取策略摘要字段（第 19 项：工具五摘要与策略没变时跨部署复用）。
+        Step("pre-a3", "pre-A3 路径认证", "pre_ledger", inputs=(
+            *_params("PRE_A3_CERTIFICATION"), *IDENTITY, *managed_trees, *tests_trees,
+            Input("managed", "file", "{D}/tools/arm64_supervised_deploy.py"), *guides, *pre_a3_data_root(client),
+            Input("upstream", "json_field", "{POLICY_ACTIVATION}", "policy_sha256"),
+            *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "pre-a3.sh"), *common_driver,
+            *_env("kernel", "python"),
+        ), products=(Product("certification", "{PRE_A3_CERTIFICATION}"), Product("reuse-receipt", optional=True))),
+        # 零请求 smoke：经 provenance 传递导入编排器但只导入不调用（control 层），运行时导入测试模块与夹具。
+        Step("zero-request-smoke", "零请求 smoke", "pre_ledger", inputs=(
+            Input("managed", "identity", "control_sha256"), *tests_trees,
+            *_drivers("stage1.sh"), *common_driver, *_env("python"),
+        ), products=(Product("receipt", "{D}/audit/zero-request-smoke-{STAMP}.json"),)),
+        # atomic-double 在 capture-cli 容器里跑：导入链没有逐一核实，受管工具按整树摘要从宽。
+        Step("atomic-double", "atomic-double 收据", "pre_ledger", inputs=(
+            Input("managed", "identity", "tool_files_sha256"),
+            *_drivers("stage1-finish.sh"), *common_driver,
+            *_containers("capture-cli"), Input("environment", "container_python", "capture-cli"),
+        ), products=(Product("receipt"),)),
+        # 计时账本：只认决定「这本账属于哪次升级」的参数。截止时间只在建账本时折算总预算，之后的延期记在账本事件里
+        # （deadline-extend），参数文件里的截止时间改了不影响已建账本，所以不列。工具改了不影响已建账本（生成器摘要漂移
+        # 由账本自己的承接收据处理）。
+        Step("ledger", "计时账本", "post_ledger", ledger=True, inputs=(
+            *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS"),
+        ), products=(Product("ledger", "{ENTRY_ROOT}/control/{UP}-timing-ledger/ledger.json"),)),
+        # 环境收据：采集器与增量恢复的受管文件；环境取稳定的部分（主机、架构、两个容器的镜像、出口策略、目标客户端）。
+        Step("environment-p0", "ARM64 环境收据（p0）", "post_ledger", inputs=(
+            *_params("UP", "TARGET_VERSION"),
+            *_managed_files(*spec["environment_receipt_files"]),
+            *_drivers("stage1.sh"), *common_driver,
+            *_env("hostname", "arch"), *_containers("capture-cli", "sub2apiplus"),
+            Input("environment", "file", "/etc/sub2api-egress/policy.json"),
+            Input("environment", "file", host_binary),
+        ), products=(Product("receipt"),)),
+        Step("ledger-checkpoint", "账本 checkpoint", "post_ledger", upstream=("ledger",), inputs=(
+            *_managed_files(_module_file(spec["timing_ledger_module"])), *_drivers("stage1.sh"), *common_driver,
+        ), products=(Product("checkpoint"),)),
+        # 预检 plan 冻结完整工具身份；读指南第二部分、两棵官方来源（Codex 是源码树，Claude 是 B2-01 冻结目录）、官方包、
+        # Active 画像、compose 文件与采集镜像。
+        Step("preflight-plan", "预检 plan", "post_ledger", upstream=("ledger", "ledger-checkpoint", "environment-p0"), inputs=(
+            *_params(*spec["plan_params"]), *IDENTITY, GUIDE_PART2, DEPLOY_TOOL_FILES,
+            *_drivers("stage1.sh"), *common_driver,
+            Input("environment", "tree", "{BASELINE_SOURCE}", "source"), Input("environment", "tree", "{TARGET_SOURCE}", "source"),
+            Input("environment", "file", "{TARGET_PACKAGE}"), Input("upstream", "file", "{ACTIVE_PROFILE}"),
+            Input("environment", "file", "{COMPOSE_DIR}/docker-compose.yml"),
+            Input("environment", "image_ref", "{CAPTURE_RUNTIME_IMAGE}"),
+        ), products=(Product("campaign"),)),
+        # Job 演练：五个容器的镜像、目标客户端二进制、采集镜像；收据可能是失败的，沿用前要核对状态是通过。
+        Step("job-rehearsal", "Job 演练收据", "post_ledger", upstream=("preflight-plan",), inputs=(
+            *IDENTITY, GUIDE_PART2, *_params(*spec["job_rehearsal_params"]),
+            *_drivers("stage1-finish.sh"), *common_driver,
+            *_containers(*spec["job_containers"]), Input("environment", "file", binary),
+            Input("environment", "image_ref", "{CAPTURE_RUNTIME_IMAGE}"),
+        ), products=(Product("receipt", content="status_passed"),)),
+        # 启动探测按指南每次重跑（反映修复后的最新环境）；报告登记进记录，收口前预检按它再核验一次（E2-07）。
+        Step("client-launch-probe", "客户端启动探测", "post_ledger", live=True, creation_chain=False, upstream=("preflight-plan",), inputs=(
+            *IDENTITY, *_drivers("client_launch_probe.py", "client_launch_probe_runner.py", "stage1-finish.sh"), *common_driver,
+            *_containers("capture-cli"),
+        ), products=(Product("report"),)),
+        # 发布认证：导入期经 pre-A3 认证模块读测试夹具，测试目录从宽整体列入；绑定部署收据、pre-A3、激活认证、Job 演练、atomic。
+        Step("release-certification", "发布认证", "post_ledger",
+             upstream=("pre-a3", "policy-activation", "job-rehearsal", "atomic-double"), inputs=(
+            *_params("RELEASE_CERTIFICATION"), *IDENTITY, *tests_trees, DEPLOY_RECEIPT,
+            *_drivers("stage2.sh"), *common_driver, *_env("arch", "go", "docker"),
+        ), products=(Product("certification", "{RELEASE_CERTIFICATION}"),)),
+        # P0 收据：收据模块只依赖标准库；证据取自入口门禁那一次运行，绑定发布认证、回退依据与账本的升级 ID。入口门禁承接了
+        # 单元时证据是 v2（E3-03），签发时按证据登记的记录库逐条重验——记录库是入口门禁步骤的产物，随上游一起失效。
+        Step("p0-receipt", "P0 收据", "post_ledger", upstream=("entry-gates", "release-certification", "ledger"), inputs=(
+            *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "P0_ROLLBACK_EVIDENCE"),
+            *_managed_files(_module_file(spec["p0_receipt_module"])),
+            Input("upstream", "file", "{P0_ROLLBACK_EVIDENCE}"), *_drivers("entry_orchestrator.py"),
+        ), products=(Product("receipt"),)),
+        # VC-0 收口（E2-07）：Formal 建成前后都要执行（建成后是续作：补阶段事件派发首批，或交给 VC-1 对账恢复链），所以不随
+        # 创建链冻结；收口完成（记录通过）且输入没变就沿用。建成之后修工具登记演进，工具身份一变这一步就重做（续作）。
+        Step("vc0-closeout", "VC-0 收口", "post_ledger", creation_chain=False,
+             upstream=("preflight-plan", "ledger", "ledger-checkpoint", "environment-p0", "release-certification",
+                       "job-rehearsal", "p0-receipt"), inputs=(
+            *_params("NEW", "RELEASE_CERTIFICATION"), *IDENTITY, *tests_trees, GUIDE_PART2, *guides, DEPLOY_RECEIPT,
+            Input("managed", "file", "{D}/tools/prepare_assertion_bundle.sh"), *_drivers("entry_orchestrator.py"), *_env("arch"),
+        ), products=(Product("receipt"),)),
+    )
+
+
+STEPS_BY_CLIENT: dict[str, tuple[Step, ...]] = {client: build_steps(client) for client in CT.CLIENTS}
+STEP_BY_ID_BY_CLIENT: dict[str, dict[str, Step]] = {
+    client: {step.step_id: step for step in steps} for client, steps in STEPS_BY_CLIENT.items()
+}
+# Codex 的步骤表（只读视图，沿用改造前的名字）；按客户端取用 Context.steps／Context.step。
+STEPS: tuple[Step, ...] = STEPS_BY_CLIENT["codex"]
+STEP_BY_ID: dict[str, Step] = STEP_BY_ID_BY_CLIENT["codex"]
 
 # 入口门禁每个门禁项的输入清单（方案 E2-05「每个门禁项都登记一份输入清单」；E3-01 的单元承接按它判断）。测试树里的门禁项
 # 共用：源码提交（测试树的全部内容）、驱动里的入口门禁脚本与执行器、内核；再按门禁项加工具链与前端依赖。pre-A3 同上面的
-# 步骤。范围从宽，由读集审计（E3-04）收窄。
+# 步骤（按客户端）。范围从宽，由读集审计（E3-04）收窄。
 _GATE_COMMON = (Input("tests", "source_commit", "ENTRY_COMMIT"),
                 *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json"), *_env("kernel"))
 _FRONTEND = (*_env("node"), Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/pnpm-lock.yaml"))
 _TYPESCRIPT = Input("environment", "file", "{HISTORY_TEST_TREE}/frontend/node_modules/typescript/lib/typescript.js")
-GATE_INPUTS: dict[str, tuple[Input, ...]] = {
-    "backend-go-test": (*_GATE_COMMON, *_env("go")),
-    "backend-unit": (*_GATE_COMMON, *_env("go")),
-    "backend-integration": (*_GATE_COMMON, *_env("go", "docker")),
-    "backend-lint": (*_GATE_COMMON, *_env("go", "golangci_lint")),
-    "lint-unit": (*_GATE_COMMON, *_env("go", "golangci_lint")),
-    "lint-integration": (*_GATE_COMMON, *_env("go", "golangci_lint")),
-    "frontend-lint": (*_GATE_COMMON, *_FRONTEND),
-    "frontend-typecheck": (*_GATE_COMMON, *_FRONTEND),
-    "frontend-critical": (*_GATE_COMMON, *_FRONTEND),
-    "test-capture-tools": (*_GATE_COMMON, *_env("python", "node"), _TYPESCRIPT),
-    "test-official-client-control": (*_GATE_COMMON, *_env("python")),
-    "check-egress-spec": (*_GATE_COMMON, *_env("python", "go"), *_params("HISTORICAL_SOURCE_ROOT"),
-                          Input("environment", "tree", "{HISTORICAL_SOURCE_ROOT}", "pycache")),
-    "deploy-scripts": (*_GATE_COMMON, *_env("bash")),
-    "pre-a3": STEP_BY_ID["pre-a3"].inputs,
-}
+
+
+def _gate_inputs_table(client: str) -> dict[str, tuple[Input, ...]]:
+    return {
+        "backend-go-test": (*_GATE_COMMON, *_env("go")),
+        "backend-unit": (*_GATE_COMMON, *_env("go")),
+        "backend-integration": (*_GATE_COMMON, *_env("go", "docker")),
+        "backend-lint": (*_GATE_COMMON, *_env("go", "golangci_lint")),
+        "lint-unit": (*_GATE_COMMON, *_env("go", "golangci_lint")),
+        "lint-integration": (*_GATE_COMMON, *_env("go", "golangci_lint")),
+        "frontend-lint": (*_GATE_COMMON, *_FRONTEND),
+        "frontend-typecheck": (*_GATE_COMMON, *_FRONTEND),
+        "frontend-critical": (*_GATE_COMMON, *_FRONTEND),
+        "test-capture-tools": (*_GATE_COMMON, *_env("python", "node"), _TYPESCRIPT),
+        "test-official-client-control": (*_GATE_COMMON, *_env("python")),
+        "check-egress-spec": (*_GATE_COMMON, *_env("python", "go"), *_params("HISTORICAL_SOURCE_ROOT"),
+                              Input("environment", "tree", "{HISTORICAL_SOURCE_ROOT}", "pycache")),
+        "deploy-scripts": (*_GATE_COMMON, *_env("bash")),
+        "pre-a3": STEP_BY_ID_BY_CLIENT[client]["pre-a3"].inputs,
+    }
+
+
+GATE_INPUTS_BY_CLIENT: dict[str, dict[str, tuple[Input, ...]]] = {client: _gate_inputs_table(client) for client in CT.CLIENTS}
+GATE_INPUTS: dict[str, tuple[Input, ...]] = GATE_INPUTS_BY_CLIENT["codex"]
 
 
 def gate_inputs(gate_id: str, ctx: "Context") -> list[dict[str, Any]]:
-    """门禁项当前的输入明细（没登记的门禁项按测试树门禁项的共用部分从宽）。"""
+    """门禁项当前的输入明细（没登记的门禁项按测试树门禁项的共用部分从宽）；pre-A3 按本轮客户端取。"""
 
-    return sorted((resolve(item, ctx) for item in GATE_INPUTS.get(gate_id, _GATE_COMMON)), key=lambda entry: entry["name"])
+    table = GATE_INPUTS_BY_CLIENT[ctx.client]
+    return sorted((resolve(item, ctx) for item in table.get(gate_id, _GATE_COMMON)), key=lambda entry: entry["name"])
 
 
 def _check_step_table() -> None:
-    seen: set[str] = set()
-    for step in STEPS:
-        if step.step_id in seen:
-            raise EntryStepsError(f"步骤重复：{step.step_id}")
-        if step.segment not in SEGMENTS:
-            raise EntryStepsError(f"步骤 {step.step_id} 的段不认识：{step.segment}")
-        for upstream in step.upstream:
-            if upstream not in seen:
-                raise EntryStepsError(f"步骤 {step.step_id} 的上游 {upstream} 没有排在它前面")
-            if STEP_BY_ID[upstream].live:
-                raise EntryStepsError(f"实时类步骤 {upstream} 不能当上游（没有可沿用的产物）")
-        for item in step.inputs:
-            if item.category not in CATEGORIES:
-                raise EntryStepsError(f"步骤 {step.step_id} 的输入类别不认识：{item.category}")
-        names = [item.name for item in step.all_inputs()]
-        if len(set(names)) != len(names):
-            raise EntryStepsError(f"步骤 {step.step_id} 的输入重复")
-        seen.add(step.step_id)
+    for client, steps in STEPS_BY_CLIENT.items():
+        seen: set[str] = set()
+        for step in steps:
+            if step.step_id in seen:
+                raise EntryStepsError(f"{client} 步骤重复：{step.step_id}")
+            if step.segment not in SEGMENTS:
+                raise EntryStepsError(f"{client} 步骤 {step.step_id} 的段不认识：{step.segment}")
+            for upstream in step.upstream:
+                if upstream not in seen:
+                    raise EntryStepsError(f"{client} 步骤 {step.step_id} 的上游 {upstream} 没有排在它前面")
+                if STEP_BY_ID_BY_CLIENT[client][upstream].live:
+                    raise EntryStepsError(f"实时类步骤 {upstream} 不能当上游（没有可沿用的产物）")
+            for item in step.inputs:
+                if item.category not in CATEGORIES:
+                    raise EntryStepsError(f"{client} 步骤 {step.step_id} 的输入类别不认识：{item.category}")
+            names = [item.name for item in step.all_inputs()]
+            if len(set(names)) != len(names):
+                raise EntryStepsError(f"{client} 步骤 {step.step_id} 的输入重复")
+            seen.add(step.step_id)
+        # 步骤、段、上游与产物两客户端完全相同：只有输入声明随客户端变（编排器按同一张顺序表执行）。
+        structure = [(step.step_id, step.segment, step.upstream, step.products, step.live, step.ledger, step.creation_chain)
+                     for step in steps]
+        codex = [(step.step_id, step.segment, step.upstream, step.products, step.live, step.ledger, step.creation_chain)
+                 for step in STEPS_BY_CLIENT["codex"]]
+        if structure != codex:
+            raise EntryStepsError(f"{client} 的步骤结构与 codex 不同（只允许输入声明随客户端变）")
 
 
 _check_step_table()
@@ -400,7 +488,7 @@ request = json.loads(sys.argv[1])
 out = {}
 if request.get("identity"):
     from tools.official_client_capture import codex_upgrade_policy_certification as pc
-    out["identity"] = pc.current_identity()
+    out["identity"] = pc.current_identity(*request.get("identity_args", []))
 sections = request.get("sections") or []
 if sections:
     from tools.official_client_capture.candidate_rule_assertion import source_spec_section_sha256
@@ -460,12 +548,31 @@ class Context:
 
     @property
     def client(self) -> str:
-        """本轮客户端（参数 CLIENT，缺省 codex）：决定读哪个客户端的部署收据（B5a-01）；不认识的值失败关闭。"""
+        """本轮客户端（参数 CLIENT，缺省 codex）：决定步骤表、读哪个客户端的部署收据（B5a-01）与按哪个客户端的策略算五摘要
+        （B5a-06）；不认识的值失败关闭。"""
 
-        value = self.params.get("CLIENT") or "codex"
-        if value not in DEPLOY_RECEIPT_GLOBS:
-            raise EntryStepsError(f"参数 CLIENT 不认识：{value!r}（可选：{sorted(DEPLOY_RECEIPT_GLOBS)}）")
-        return value
+        try:
+            return CT.client_of(self.params)
+        except CT.ClientTableError as error:
+            raise EntryStepsError(str(error)) from error
+
+    @property
+    def client_spec(self) -> Mapping[str, Any]:
+        """本轮客户端在客户端表里的整行。"""
+
+        return CT.spec(self.client)
+
+    @property
+    def steps(self) -> tuple[Step, ...]:
+        """本轮客户端的步骤表（步骤与依赖两客户端相同，输入声明按客户端）。"""
+
+        return STEPS_BY_CLIENT[self.client]
+
+    def step(self, step_id: str) -> Step:
+        steps = STEP_BY_ID_BY_CLIENT[self.client]
+        if step_id not in steps:
+            raise EntryStepsError(f"步骤不认识：{step_id}（可选：{', '.join(steps)}）")
+        return steps[step_id]
 
     def expand(self, template: str) -> str:
         def replace(match: re.Match[str]) -> str:
@@ -495,8 +602,13 @@ class Context:
             raise FactUnavailable(f"受管事实输出不是 JSON：{out.strip()[-300:]}") from error
 
     def identity(self) -> dict[str, Any]:
+        """受管五摘要：按本轮客户端的策略算（Codex 调用与改造前相同，不带参数；Claude 带客户端名走 v3 引擎）。"""
+
         if "identity" not in self.cache:
-            self.cache["identity"] = self.managed_facts({"identity": True})["identity"]
+            request: dict[str, Any] = {"identity": True}
+            if self.client_spec["identity_args"]:
+                request["identity_args"] = list(self.client_spec["identity_args"])
+            self.cache["identity"] = self.managed_facts(request)["identity"]
         return self.cache["identity"]
 
     def recorded_facts(self) -> dict[str, Any]:
@@ -523,8 +635,8 @@ class Context:
     def latest_deploy_receipt(self) -> Path | None:
         if "deploy" not in self.cache:
             control = self.data_root / "control"
-            separator = DEPLOY_RECEIPT_STAMP_SEPARATORS[self.client]
-            candidates = sorted((path for path in control.glob(DEPLOY_RECEIPT_GLOBS[self.client])
+            separator = self.client_spec["deploy_receipt_stamp_separator"]
+            candidates = sorted((path for path in control.glob(self.client_spec["deploy_receipt_glob"])
                                  if path.is_file() and not path.is_symlink()),
                                 key=lambda path: path.name.split(separator, 1)[1].lower())
             self.cache["deploy"] = candidates[-1] if candidates else None
@@ -591,13 +703,14 @@ def tree_digest(root: Path, exclude: frozenset[str]) -> tuple[str, int]:
     return total.hexdigest(), count
 
 
-# 入口门禁在测试树里验、pre-A3 在数据根里跑的那几份：必须是同一份内容。
-DEPLOY_CONSISTENCY_PARTS = ("tools/official_client_capture", "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
-                            "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md", "tools/arm64_supervised_deploy.py")
+# 入口门禁在测试树里验、pre-A3 在数据根里跑的那几份：必须是同一份内容。按客户端取（B5a-06：Claude 另比第二受管根、
+# Claude 指南与共享控制面文档）；这个名字是 Codex 的一份（只读视图）。
+DEPLOY_CONSISTENCY_PARTS = tuple(CT.spec("codex")["deploy_consistency_parts"])
 
 
-def deploy_consistency(tree: Path, data_root: Path) -> list[str]:
-    """测试树与数据根在 ``DEPLOY_CONSISTENCY_PARTS`` 上逐项比内容，返回不一致（或任一边缺失）的项。"""
+def deploy_consistency(tree: Path, data_root: Path, client: str = "codex") -> list[str]:
+    """测试树与数据根在客户端的部署一致性各部分（客户端表 ``deploy_consistency_parts``）上逐项比内容，返回不一致（或任一边
+    缺失）的项。"""
 
     def digest(path: Path) -> str | None:
         if path.is_symlink():
@@ -607,7 +720,7 @@ def deploy_consistency(tree: Path, data_root: Path) -> list[str]:
         return file_sha256(path) if path.is_file() else None
 
     mismatch = []
-    for part in DEPLOY_CONSISTENCY_PARTS:
+    for part in CT.spec(client)["deploy_consistency_parts"]:
         left, right = digest(tree / part), digest(data_root / part)
         if left is None or left != right:
             mismatch.append(part)
@@ -727,7 +840,7 @@ def _resolve(item: Input, ctx: Context) -> dict[str, Any]:
         receipt = ctx.latest_deploy_receipt()
         if receipt is None:
             return _missing(item)
-        container = DEPLOY_RECEIPT_IDENTITY_KEYS[ctx.client] if item.arg in IDENTITY_FIELDS else None
+        container = ctx.client_spec["deploy_receipt_identity_key"] if item.arg in IDENTITY_FIELDS else None
         return _json_field(item, receipt, item.arg, container=container)
     if kind == "json_field":
         return _json_field(item, Path(ctx.expand(item.arg)), item.option)
@@ -944,7 +1057,7 @@ def formal_built(ctx: Context) -> bool:
         return False
     key = ("formal-built", str(formal))
     if key not in ctx.cache:
-        argv = [sys.executable, "-B", "-m", "tools.official_client_capture.codex_upgrade_vc0_closeout", "inspect",
+        argv = [sys.executable, "-B", "-m", ctx.client_spec["closeout_module"], "inspect",
                 "--timing-ledger-dir", str(root / "control" / f"{ctx.params.get('UP')}-timing-ledger"),
                 "--formal-campaign-dir", str(formal), "--formal-campaign-id", str(new),
                 "--supervisor-state-dir", str(root / "control" / f"{new}-supervisor")]
@@ -1085,7 +1198,7 @@ def evaluate(ctx: Context, *, is_formal_built: bool, accept_snapshot: bool = Fal
     """全部步骤的判定。``force``：步骤 → 原因，要求这些步骤重做（账本步骤不受影响；Formal 建成后创建链照样冻结）。"""
 
     decisions: dict[str, dict[str, Any]] = {}
-    for step in STEPS:
+    for step in ctx.steps:
         decisions[step.step_id] = evaluate_step(step, ctx, decisions, is_formal_built=is_formal_built,
                                                 accept_snapshot=accept_snapshot, force=force)
     counts: dict[str, int] = {}
@@ -1128,10 +1241,8 @@ def _context(args: argparse.Namespace) -> Context:
     return Context(params=params, driver_dir=Path(driver_dir), steps_dir=Path(steps_dir))
 
 
-def _step(step_id: str) -> Step:
-    if step_id not in STEP_BY_ID:
-        raise EntryStepsError(f"步骤不认识：{step_id}（可选：{', '.join(STEP_BY_ID)}）")
-    return STEP_BY_ID[step_id]
+def _step(step_id: str, ctx: Context) -> Step:
+    return ctx.step(step_id)
 
 
 def _product_overrides(values: Sequence[str], *, prefixed: bool = False) -> dict[str, dict[str, str]]:
@@ -1175,6 +1286,7 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     command = sub.add_parser("deploy-consistency", help="核对数据根部署的就是测试树这一份（受管整树含测试、指南、部署脚本副本）")
     command.add_argument("--tree", required=True)
     command.add_argument("--data-root", required=True)
+    command.add_argument("--client", choices=CT.CLIENTS, default=CT.DEFAULT_CLIENT, help="按哪个客户端的部署一致性各部分核对（缺省 codex）")
     return parser.parse_args(argv)
 
 
@@ -1189,19 +1301,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"root": str(root), "exclude": args.exclude, "sha256": digest, "files": count}, ensure_ascii=False))
             return 0
         if args.command == "deploy-consistency":
-            mismatch = deploy_consistency(Path(args.tree), Path(args.data_root))
-            print(" ".join(mismatch) if mismatch else "一致：" + " ".join(DEPLOY_CONSISTENCY_PARTS))
+            mismatch = deploy_consistency(Path(args.tree), Path(args.data_root), args.client)
+            print(" ".join(mismatch) if mismatch else "一致：" + " ".join(CT.spec(args.client)["deploy_consistency_parts"]))
             return 1 if mismatch else 0
         ctx = _context(args)
         if args.command == "inputs":
-            print(json.dumps(resolve_inputs(_step(args.step), ctx), ensure_ascii=False, indent=2))
+            print(json.dumps(resolve_inputs(_step(args.step, ctx), ctx), ensure_ascii=False, indent=2))
             return 0
         if args.command == "begin":
-            pending = begin(_step(args.step), ctx)
+            pending = begin(_step(args.step, ctx), ctx)
             print(f"ENTRY_STEP_BEGIN {args.step} 输入 {len(pending['inputs'])} 项")
             return 0
         if args.command in {"finish", "record"}:
-            step = _step(args.step)
+            step = _step(args.step, ctx)
             if args.command == "record":
                 begin(step, ctx)
             record = finish(step, ctx, status=args.status, products=_product_overrides(args.product).get("", {}))
@@ -1216,10 +1328,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return exit_code(result)
         if args.command == "snapshot":
             overrides = _product_overrides(args.product, prefixed=True)
-            unknown = sorted(set(overrides) - set(STEP_BY_ID))
+            unknown = sorted(set(overrides) - {step.step_id for step in ctx.steps})
             if unknown:
                 raise EntryStepsError(f"--product 里的步骤不认识：{unknown}")
-            for step in STEPS:
+            for step in ctx.steps:
                 if step.live:
                     continue
                 begin(step, ctx)

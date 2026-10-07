@@ -25,11 +25,20 @@
 Claude 升级 B5a-01 起两处补充：``control/`` 下有受监督部署的事务日志（``managed-deploy-*.journal``，部署进行中或
 中断后尚未恢复）时 ``install`` 与 ``verify`` 一律拒绝——生产树可能处在半交换状态，只认已写出的收据；``install``／
 ``verify`` 加 ``--client``（缺省 codex），按客户端选部署收据的文件名模式与合同，Codex 的行为逐字不变。
+
+B5a-06 起安装收据绑定**全部已纳管客户端**（``control/`` 里已有其部署收据的客户端，与受管部署器同一判据）各自最新的
+部署收据：只有一个客户端纳管时照旧写 v1（单个 ``deployment_receipt``，只有 Codex 纳管时与改造前逐字相同）；两客户端都已
+纳管时写 ``arm64-capture-driver-install/v2``（``deployment_receipts``：客户端 → 绑定）。这样交换共享根的一次部署（两份
+收据）之后只需重装一次驱动，两客户端的守卫都能复验。``install --client <客户端>`` 显式给出时只绑定该客户端（v1，B5a-01
+的用法）。``verify`` 按 ``--client``（缺省 codex）取该客户端当前最新的部署收据，在 v1／v2 安装收据里找绑定了它的那份；
+v1 收据绑定的是哪个客户端按收据文件名模式判定。本文件是驱动完整性的复验者，不在复验前加载被复验的驱动文件
+（``driver/client_table.py``），客户端规则在这里另存一份，测试核对与客户端表一致。
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -44,6 +53,8 @@ from typing import Any, Mapping
 
 MANIFEST_SCHEMA = "arm64-capture-driver-manifest/v1"
 INSTALL_RECEIPT_SCHEMA = "arm64-capture-driver-install/v1"
+# B5a-06：两客户端都已纳管时的安装收据（绑定每个已纳管客户端最新的部署收据）。
+INSTALL_RECEIPT_SCHEMA_V2 = "arm64-capture-driver-install/v2"
 MANIFEST_NAME = "manifest.json"
 DEPLOY_RECEIPT_GLOB = "codex-*-supervisor-enable-*.json"
 # B5a-01：按客户端选部署收据（与受管部署器 DEPLOY_RECEIPT_GLOBS、各客户端适配器 deploy_receipt_glob 同值）。文件名里
@@ -296,19 +307,56 @@ def _deploy_binding(control_root: Path, client: str = "codex") -> dict[str, Any]
     }
 
 
+def managed_clients(control_root: Path) -> list[str]:
+    """已纳管的客户端：control 目录里已有它的已写部署收据（与受管部署器 managed_clients 同一判据），按客户端表顺序。"""
+
+    return [client for client in DEPLOY_CLIENTS
+            if any(path.is_file() and not path.is_symlink() for path in Path(control_root).glob(DEPLOY_RECEIPT_GLOBS[client]))]
+
+
+def _binding_client(binding: Mapping[str, Any]) -> str | None:
+    """v1 安装收据绑定的部署收据属于哪个客户端（按文件名模式判定；认不出为 None）。"""
+
+    name = str(binding.get("path") or "")
+    matches = [client for client in DEPLOY_CLIENTS if fnmatch.fnmatchcase(name, DEPLOY_RECEIPT_GLOBS[client])]
+    return matches[0] if len(matches) == 1 else None
+
+
+def receipt_bindings(receipt: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    """安装收据绑定的部署收据：客户端 → 绑定。v1 只有一份（按文件名判客户端），v2 是 deployment_receipts。"""
+
+    if receipt.get("schema_version") == INSTALL_RECEIPT_SCHEMA_V2:
+        return dict(receipt["deployment_receipts"])
+    client = _binding_client(receipt["deployment_receipt"])
+    return {client: receipt["deployment_receipt"]} if client is not None else {}
+
+
 def _install_receipts(control_root: Path) -> list[Path]:
     return sorted(p for p in Path(control_root).glob(f"{INSTALL_RECEIPT_PREFIX}*.json") if p.is_file() and not p.is_symlink())
 
 
 def validate_install_receipt(payload: Mapping[str, Any]) -> dict[str, Any]:
-    expected_keys = {"schema_version", "installed_at_utc", "install_target", "manifest_sha256", "file_count", "files", "deployment_receipt", "receipt_sha256"}
-    if not isinstance(payload, Mapping) or set(payload) != expected_keys:
+    common = {"schema_version", "installed_at_utc", "install_target", "manifest_sha256", "file_count", "files", "receipt_sha256"}
+    binding_keys = {"path", "sha256", "status", "tool_files_sha256", "supervisor_sha256"}
+    if not isinstance(payload, Mapping):
         raise DriverError("安装收据字段不闭合。")
-    if payload["schema_version"] != INSTALL_RECEIPT_SCHEMA:
-        raise DriverError("安装收据 schema 不受支持。")
-    binding = payload["deployment_receipt"]
-    if not isinstance(binding, Mapping) or set(binding) != {"path", "sha256", "status", "tool_files_sha256", "supervisor_sha256"}:
-        raise DriverError("安装收据的部署收据绑定字段不闭合。")
+    if payload.get("schema_version") == INSTALL_RECEIPT_SCHEMA_V2:
+        # v2（B5a-06）：每个已纳管客户端一份绑定，至少两个客户端（只有一个客户端纳管时写 v1）。
+        if set(payload) != common | {"deployment_receipts"}:
+            raise DriverError("安装收据字段不闭合。")
+        bindings = payload["deployment_receipts"]
+        if (not isinstance(bindings, Mapping) or len(bindings) < 2 or not set(bindings) <= set(DEPLOY_CLIENTS)
+                or not all(isinstance(item, Mapping) and set(item) == binding_keys for item in bindings.values())):
+            raise DriverError("安装收据的部署收据绑定字段不闭合。")
+    else:
+        expected_keys = common | {"deployment_receipt"}
+        if set(payload) != expected_keys:
+            raise DriverError("安装收据字段不闭合。")
+        if payload["schema_version"] != INSTALL_RECEIPT_SCHEMA:
+            raise DriverError("安装收据 schema 不受支持。")
+        binding = payload["deployment_receipt"]
+        if not isinstance(binding, Mapping) or set(binding) != binding_keys:
+            raise DriverError("安装收据的部署收据绑定字段不闭合。")
     unsigned = {key: value for key, value in payload.items() if key != "receipt_sha256"}
     if payload["receipt_sha256"] != _sha256_bytes(_canonical(unsigned)):
         raise DriverError("安装收据自摘要不一致。")
@@ -356,7 +404,11 @@ def cmd_install(arguments: argparse.Namespace) -> int:
         raise DriverError(f"安装目标不得是符号链接：{target}")
     manifest = load_manifest(source)
     verify_tree(source, manifest, check_mode=False, require_root_owner=False)
-    deploy = _deploy_binding(control_root, getattr(arguments, "client", "codex"))
+    # 绑定哪些客户端（B5a-06）：显式 --client 只绑定它；否则绑定全部已纳管客户端（只有 Codex 纳管时与改造前相同；
+    # 一个都没有时照旧按 Codex 报「没有部署收据」）。
+    requested = getattr(arguments, "client", None)
+    clients = [requested] if requested else (managed_clients(control_root) or ["codex"])
+    deploys = {client: _deploy_binding(control_root, client) for client in clients}
     stamp = _stamp()
     staging = target.parent / f"{target.name}.staging-{stamp}"
     backup = target.parent / f"{target.name}.previous-{stamp}"
@@ -380,8 +432,12 @@ def cmd_install(arguments: argparse.Namespace) -> int:
         "manifest_sha256": manifest["manifest_sha256"],
         "file_count": manifest["file_count"],
         "files": files,
-        "deployment_receipt": deploy,
     }
+    if len(deploys) == 1:
+        receipt["deployment_receipt"] = next(iter(deploys.values()))
+    else:
+        receipt["schema_version"] = INSTALL_RECEIPT_SCHEMA_V2
+        receipt["deployment_receipts"] = deploys
     receipt["receipt_sha256"] = _sha256_bytes(_canonical(receipt))
     receipt_path = control_root / f"{INSTALL_RECEIPT_PREFIX}{stamp}.json"
     if receipt_path.exists():
@@ -389,7 +445,8 @@ def cmd_install(arguments: argparse.Namespace) -> int:
     fd = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n")
-    print(json.dumps({"status": "installed", "install_target": str(target), "previous": str(backup) if backup.exists() else None, "receipt": str(receipt_path), "manifest_sha256": manifest["manifest_sha256"], "deployment_receipt": deploy["path"]}, ensure_ascii=False))
+    bound = next(iter(deploys.values()))["path"] if len(deploys) == 1 else {client: item["path"] for client, item in deploys.items()}
+    print(json.dumps({"status": "installed", "install_target": str(target), "previous": str(backup) if backup.exists() else None, "receipt": str(receipt_path), "manifest_sha256": manifest["manifest_sha256"], "deployment_receipt": bound}, ensure_ascii=False))
     return 0
 
 
@@ -413,11 +470,14 @@ def verify_install(target: Path, data_root: Path, client: str = "codex") -> dict
             raise DriverError(f"安装收据不可读：{path}：{error}") from error
         if receipt["manifest_sha256"] != manifest["manifest_sha256"] or Path(receipt["install_target"]) != target:
             continue
-        bound = receipt["deployment_receipt"]
-        if bound["path"] == deploy["path"] and bound["sha256"] == deploy["sha256"] and bound["tool_files_sha256"] == deploy["tool_files_sha256"]:
+        # 按客户端取绑定（B5a-06）：v1 收据绑定的是另一个客户端时，这份收据不证明本客户端的部署，照旧记作过期。
+        bindings = receipt_bindings(receipt)
+        bound = bindings.get(client) or (receipt.get("deployment_receipt") or {})
+        if (client in bindings and bound["path"] == deploy["path"] and bound["sha256"] == deploy["sha256"]
+                and bound["tool_files_sha256"] == deploy["tool_files_sha256"]):
             matched = {**receipt, "receipt_path": path.name}
             break
-        stale.append(bound["path"])
+        stale.append(str(bound.get("path") or sorted(item["path"] for item in bindings.values())))
     if matched is None:
         if stale:
             raise DriverError(
@@ -454,7 +514,8 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--source", required=True)
     install.add_argument("--target", required=True)
     install.add_argument("--data-root", required=True)
-    install.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="按哪个客户端的部署收据绑定（缺省 codex）")
+    install.add_argument("--client", choices=DEPLOY_CLIENTS, default=None,
+                         help="只绑定这个客户端的部署收据（缺省绑定全部已纳管客户端；只有 Codex 纳管时与改造前相同）")
     install.set_defaults(func=cmd_install)
     verify = sub.add_parser("verify", help="复验安装目标与安装收据")
     verify.add_argument("--target", required=True)

@@ -3,13 +3,15 @@
 #   journal   受监督部署的写前意图日志（control/managed-deploy-*.journal）存在即停止：部署进行中或中断后尚未恢复，生产树
 #             可能处在半交换状态，只认已写出的部署收据（Claude 升级 B5a-01；install.py verify 同样拒绝，这里先给出明确原因）
 #   driver    以安装目标内的 install.py verify 复验驱动脚本清单：逐文件 SHA／权限／属主与安装收据绑定的部署收据
-#             必须是 control/ 下当前最新的 codex-*-supervisor-enable 收据（工具重新部署后驱动必须重新安装确认）
+#             必须是 control/ 下本轮客户端当前最新的部署收据（Codex 是 codex-*-supervisor-enable；工具重新部署后驱动必须重新安装确认）
 #   disk      根盘：used ≤ 69% 且 available ≥ 30 GiB（候选就绪门禁策略 root-69-percent-and-30-gib/v1）且 available ≥ 操作员阈值
 #             操作员阈值固定最低 40 GiB，参数文件 MIN_FREE_GIB 只能把它设得更高
 #   project   项目总账：blocked=false、root_causes_at_limit=[]；remaining_live_requests 为 null（本项目无固定请求上限）合法，非空且 ≤0 拒绝
 #   campaign  （pre-vc4／pre-vc5）以受管工具从 Campaign 清单解析并验证精确绑定的 UpgradeTimingLedger，要求 status=active
 #             （pre-vc5）再以受管工具 _current_candidate_revision_record + _replay_vc_checkpoint 完整重放当前 revision 的 VC-4 checkpoint
 #   pre-vc4／pre-vc5 先清可再生的 Go build cache 再做磁盘检查
+# 按客户端（Claude 升级 B5a-06）：驱动复验绑定的部署收据、出口实时准入的环境收据模块、项目总账的模块与目录、Campaign 检查的
+#   编排器与计时账本模块取客户端表（lib.sh 给出 CT_ 变量）；Codex 的取值与改造前逐字相同。
 # 用法：bash guard.sh pre-plan | pre-vc4 <campaign_dir> | pre-vc5 <campaign_dir>
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
@@ -19,9 +21,9 @@ if [ "$MODE" != pre-plan ] && [ -z "$CAMPAIGN" ]; then echo "guard: $MODE 需要
 if compgen -G "$D/control/managed-deploy-*.journal" > /dev/null; then
   echo "guard/deploy-journal: FAIL — control 下有未完成的受监督部署事务日志，重新执行受监督部署完成恢复后再派发"; exit 1
 fi
-python3 "$DRV/../install.py" verify --target "$(dirname "$DRV")" --data-root "$D" || { echo "guard/driver: FAIL — 驱动安装复验未通过，停止"; exit 1; }
+python3 "$DRV/../install.py" verify --target "$(dirname "$DRV")" --data-root "$D" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} || { echo "guard/driver: FAIL — 驱动安装复验未通过，停止"; exit 1; }
 # 出口准入必须来自持续守护的当前状态；旧环境收据或发布认证不能替代它。
-python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt egress-check || { echo "guard/egress: FAIL — 指定出口未通过实时准入，停止派发"; exit 1; }
+python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" egress-check || { echo "guard/egress: FAIL — 指定出口未通过实时准入，停止派发"; exit 1; }
 MIN_FREE_GIB=$(python3 -c "
 import sys
 raw = sys.argv[1]
@@ -42,9 +44,9 @@ print(f"guard/disk: used={used:.1f}% free={free_gib:.1f}GiB (policy ≤69% & ≥
 if used > 69 or free_gib < 30 or free_gib < need:
     sys.exit("guard/disk: FAIL — 根盘不满足派发条件，停止")
 PY
-python3 -m tools.official_client_capture.codex_upgrade_project_ledger status --ledger-dir "$D/evidence/campaigns/upgrade-project-ledger" | python3 -c "
-import sys, json
-from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+python3 -m "$CT_PROJECT_LEDGER_MODULE" status --ledger-dir "$D/evidence/campaigns/$CT_PROJECT_LEDGER_DIR_NAME" | python3 -c "
+import importlib, sys, json
+project_ledger = importlib.import_module(sys.argv[2])
 d = json.loads(sys.stdin.read()); h = d.get('head', d)
 remaining = h.get('remaining_live_requests')
 # 根因上限按本轮目标版本取（共同底数 + 该版本入账）；变量缺失时退回全局口径，仍失败关闭。
@@ -57,13 +59,14 @@ if at_limit:
     sys.exit('guard/project: FAIL — 本版本有根因达同根因重试上限，停止')
 if remaining is not None and (not isinstance(remaining, (int, float)) or isinstance(remaining, bool) or remaining <= 0):
     sys.exit('guard/project: FAIL — 剩余请求预算非空且 ≤0（或非数值），停止')
-" "${TARGET_VERSION:-}"
+" "${TARGET_VERSION:-}" "$CT_PROJECT_LEDGER_MODULE"
 if [ "$MODE" = pre-vc4 ] || [ "$MODE" = pre-vc5 ]; then
-  python3 - "$CAMPAIGN" "$MODE" <<'PY'
-import sys
+  python3 - "$CAMPAIGN" "$MODE" "$CT_ORCHESTRATOR_MODULE" "$CT_TIMING_LEDGER_MODULE" <<'PY'
+import importlib, sys
 from pathlib import Path
-from tools.official_client_capture import codex_upgrade as cu
-from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
+# 编排器与计时账本模块取客户端表（Codex：codex_upgrade 与 codex_upgrade_timing_ledger，与改造前相同）。
+cu = importlib.import_module(sys.argv[3])
+timing_ledger = importlib.import_module(sys.argv[4])
 campaign_dir = Path(sys.argv[1]).resolve(strict=True); mode = sys.argv[2]
 manifest = cu._require_formal_campaign(campaign_dir)
 ledger_dir = cu._campaign_timing_ledger_dir(campaign_dir, manifest)   # 从清单解析并校验 ledger_plan_sha256 绑定

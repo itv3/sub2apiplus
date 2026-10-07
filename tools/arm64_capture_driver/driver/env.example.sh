@@ -1,6 +1,9 @@
 # 每轮参数模板：复制后填写 ARM64_VC_ENV；parse_env.py 只解析赋值，不执行文件。
 # 只允许必填／可选键及对前面已定义键的引用。REPLACE_* 必须替换，模板原样执行会拒绝。
 # 下面版本仅演示目录关系，实际版本、模型、账号、摘要、认证与来源由本轮批准输入确定。
+# 客户端（Claude 升级 B5a-06）：CLIENT=codex（缺省，可省略）或 claude，决定必填键、派生坐标与驱动调用的模块（driver/client_table.py）。
+# 下面是 Codex 的写法；Claude 的写法见文件末尾注释，凡是取值里带 codex 的键都按那里替换。
+CLIENT=codex
 ROUND=round1
 STAMP=YYYYMMDDtHHMMSSz
 BASELINE_VERSION=9.0.0
@@ -38,16 +41,19 @@ MIN_FREE_GIB=40
 FRONTEND_DEVIATION_APPROVED_BY="REPLACE_本轮批准人日期和ARM64隔离候选适用范围"
 PROFILE_ID=$TARGET_PROFILE_ID
 PROFILE_DIGEST=REPLACE_APPROVED_PROFILE_SHA256
-CODEX_BIN=/opt/codex-$TARGET_VERSION/bin/codex
-CODEX_BIN_SHA256=REPLACE_OFFICIAL_CODEX_SHA256
+# 目标客户端的二进制、摘要与账号用通用键 CLIENT_BIN／CLIENT_BIN_SHA256／CLIENT_ACCOUNT_ID。Codex 的旧键 CODEX_BIN／
+# CODEX_BIN_SHA256／CODEX_ACCOUNT_ID 仍可用（通用键是它们的别名，二选一），解析后按旧键导出；Claude 只认通用键。
+CLIENT_BIN=/opt/codex-$TARGET_VERSION/bin/codex
+CLIENT_BIN_SHA256=REPLACE_OFFICIAL_CODEX_SHA256
 OFFICIAL_ASSET_SHA256=REPLACE_OFFICIAL_PACKAGE_SHA256
 MAIN_MODEL=REPLACE_MAIN_MODEL
 LITE_MODEL=REPLACE_LITE_MODEL
-CODEX_ACCOUNT_ID=REPLACE_CODEX_ACCOUNT_ID
+CLIENT_ACCOUNT_ID=REPLACE_CODEX_ACCOUNT_ID
 API_KEY_ID=REPLACE_API_KEY_ID
 POLICY_COMPAT_RECEIPT=$D/control/policy-certification/REPLACE_COMPATIBILITY.json
 POLICY_ACTIVATION=$D/control/policy-certification/REPLACE_ACTIVATION.json
 RELEASE_CERTIFICATION=$D/control/policy-certification/REPLACE_RELEASE.json
+# Kilo 三项只有 Codex 需要（Codex 画像的第三方客户端用例），Claude 参数文件里不写。
 KILO_BIN=$D/private-tools/REPLACE_KILO/bin/kilo
 KILO_VERSION=REPLACE_KILO_VERSION
 KILO_SHA256=REPLACE_KILO_SHA256
@@ -82,3 +88,20 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 # VC-4 默认使用 Docker 默认网络；R15 阻断时先获取绑定本轮 bundle／提交／主机／驱动的专项批准，再明确选择 host。
 # VC4_BUILD_NETWORK=host
 # VC4_BUILD_NETWORK_APPROVAL=$RUNROOT/REPLACE_BUILD_NETWORK_APPROVAL.json
+# Claude 的写法（CLIENT=claude；设计 D3／B5a-07：目标客户端装在宿主机 /opt/claude-<版本>/claude，采集容器内同路径）：
+#   CLIENT=claude
+#   TARGET_PROFILE_ID=claude-code-$TARGET_VERSION-official
+#   NEW=claude-code-$TARGET_VERSION-formal-$ROUND-$STAMP
+#   IN=claude-code-$TARGET_VERSION-inputs-$ROUND-$STAMP
+#   UP=claude-code-$BASELINE_VERSION-to-$TARGET_VERSION-$ROUND-$STAMP
+#   CAND=claude-code-$TARGET_VERSION-candidate-$ROUND
+#   BUNDLE_BRANCH=claude/REPLACE_CANDIDATE_BRANCH
+#   CLIENT_BIN=/opt/claude-$TARGET_VERSION/claude
+#   CLIENT_BIN_SHA256=REPLACE_OFFICIAL_CLAUDE_SHA256
+#   CLIENT_ACCOUNT_ID=REPLACE_CLAUDE_ACCOUNT_ID
+#   不写 KILO_BIN、KILO_VERSION、KILO_SHA256 与 TARGET_CODE_MODE_HOST_SHA256（Codex 专属）。
+#   官方来源是 B2-01 冻结目录（claude_upgrade_freeze --output-root），缺省布局：
+#   BASELINE_SOURCE=$D/official/claude-code-$BASELINE_VERSION
+#   TARGET_SOURCE=$D/official/claude-code-$TARGET_VERSION
+#   TARGET_PACKAGE=$D/official/claude-code-$TARGET_VERSION/freeze.json（OFFICIAL_ASSET_SHA256 是它的 SHA-256）
+#   ENTRY_BRANCH=claude/REPLACE_TOOL_BRANCH

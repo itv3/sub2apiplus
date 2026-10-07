@@ -30,6 +30,8 @@ from typing import Any
 
 sys.dont_write_bytecode = True
 
+# 准入报告与批准件的合同（Codex 的取值；按客户端取客户端表，B5a-06）。Claude 的 VC-5 准入合同由候选采集落实（客户端表
+# pending 的 tool:vc5-admission），在那之前 Claude 参数文件的准入一律拒绝，不拿 Codex 合同顶替。
 SCHEMA = "codex-vc5-admission/v1"
 APPROVAL_SCHEMA = "codex-vc5-admission-approval/v1"
 CONTRACT_SCHEMA = "sub2api-admin-jwt/v1"
@@ -191,6 +193,29 @@ def verify_token(raw: bytes, secret: str, email: str, minimum: int, *, now: int 
     }
 
 
+def _client_spec(config: dict[str, str]) -> Any:
+    """本轮客户端在客户端表里的整行（B5a-06；客户端表随参数解析加载）。"""
+
+    try:
+        from .parse_env import client_spec
+    except ImportError:
+        from parse_env import client_spec
+    return client_spec(config)
+
+
+def _require_client_admission(config: dict[str, str]) -> None:
+    """客户端表把本客户端的 VC-5 准入登记为尚未接入时拒绝（Claude 由候选采集落实合同与运行画像路径）。"""
+
+    try:
+        from .parse_env import client_table
+    except ImportError:
+        from parse_env import client_table
+    spec = _client_spec(config)
+    waiting = client_table().pending(spec["client"], "tool:vc5-admission")
+    if waiting:
+        raise AdmissionError(f"client_admission_pending: {spec['client']} 的 VC-5 准入尚未接入（{waiting}）")
+
+
 class ManagedFacts:
     """正式路径只调用现有收据重放器；测试替身不能由命令行或环境启用。"""
 
@@ -198,7 +223,8 @@ class ManagedFacts:
         self.config = config
         sys.path.insert(0, config["D"])
         os.environ.pop("CODEX_UPGRADE_IDENTITY_MEMO", None)
-        self.upgrade = importlib.import_module("tools.official_client_capture.codex_upgrade")
+        # 编排器按本轮客户端取客户端表（B5a-06；Codex 即 codex_upgrade）。
+        self.upgrade = importlib.import_module(_client_spec(config)["orchestrator_module"])
 
     def catalog(self) -> dict[str, Any]:
         c, cu = self.config, self.upgrade
@@ -266,9 +292,10 @@ class ManagedFacts:
         c, cu = self.config, self.upgrade
         campaign = Path(c["D"]) / "evidence/campaigns" / c["NEW"]
         manifest = cu._require_formal_campaign(campaign)
-        ledger = importlib.import_module("tools.official_client_capture.codex_upgrade_timing_ledger")
-        project = importlib.import_module("tools.official_client_capture.codex_upgrade_project_ledger")
-        supervisor = importlib.import_module("tools.official_client_capture.codex_upgrade_supervisor")
+        spec = _client_spec(c)
+        ledger = importlib.import_module(spec["timing_ledger_module"])
+        project = importlib.import_module(spec["project_ledger_module"])
+        supervisor = importlib.import_module(spec["supervisor_module"])
         summary = ledger.inspect_ledger(cu._campaign_timing_ledger_dir(campaign, manifest))
         if summary.get("status") != "active":
             raise AdmissionError("campaign_ledger_not_active")
@@ -368,8 +395,12 @@ class Admission:
 
     def __init__(self, config: dict[str, str], facts: Any):
         self.config, self.facts = config, facts
+        spec = _client_spec(config)
+        # 准入报告与批准件的合同、运行画像副本路径取客户端表（Codex 与改造前相同：SCHEMA、APPROVAL_SCHEMA、
+        # runtime/codex-profile-<版本>.json）。
+        self.schema, self.approval_schema = spec["vc5_admission_schema"], spec["vc5_admission_approval_schema"]
         self.root = Path(config["RUNROOT"])
-        self.profile = Path(config["D"]) / "runtime" / f"codex-profile-{config['TARGET_VERSION']}.json"
+        self.profile = Path(config["D"]) / spec["runtime_profile"].format(version=config["TARGET_VERSION"])
         self.token = Path(config["D"]) / "state" / config["UP"] / "admin-token"
         self.receipt = self.root / "vc5-admission.json"
         self.effective = self.root / "vc5-effective-parameters.json"
@@ -478,7 +509,7 @@ class Admission:
                         "minimum_token_ttl_seconds": self.minimum,
                         "paths_sha256": digest({"profile": str(self.profile), "token": str(self.token), "runroot": str(self.root),
                                                 "source": c["B"], "signer": c["JWTGEN_BIN"], "compose": c["COMPOSE_DIR"]})}
-        report = {"schema_version": SCHEMA, "checked_at_utc": utc_now(), "checks": checks, "bindings": bindings,
+        report = {"schema_version": self.schema, "checked_at_utc": utc_now(), "checks": checks, "bindings": bindings,
                   "admission_key": digest(bindings) if bindings else None, "effective_parameters": effective,
                   "credential": credential, "issuer_contract": values.get("contract"), "actions": sorted(actions),
                   "profile_file_sha256": values.get("catalog", {}).get("profile_sha256"),
@@ -494,7 +525,7 @@ class Admission:
         receipt = read_json(self.receipt, private=True)
         unsigned = dict(receipt)
         receipt_digest = unsigned.pop("receipt_sha256", None)
-        if digest(unsigned) != receipt_digest or receipt.get("schema_version") != SCHEMA:
+        if digest(unsigned) != receipt_digest or receipt.get("schema_version") != self.schema:
             raise AdmissionError("admission_receipt_integrity_invalid")
         if receipt.get("bindings") != report["bindings"] or receipt.get("credential") != report["credential"]:
             raise AdmissionError("admission_receipt_binding_drift")
@@ -519,7 +550,7 @@ class Admission:
             raise AdmissionError("admission_has_blockers")
         approval_bytes = read_private(approval_path)
         approval = json.loads(approval_bytes)
-        if not isinstance(approval, dict) or approval.get("schema_version") != APPROVAL_SCHEMA:
+        if not isinstance(approval, dict) or approval.get("schema_version") != self.approval_schema:
             raise AdmissionError("approval_schema_invalid")
         try:
             approved = datetime.fromisoformat(approval["approved_at_utc"].replace("Z", "+00:00"))
@@ -615,6 +646,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from driver_config import load_config
         config = load_config()
+        _require_client_admission(config)
         admission = Admission(config, ManagedFacts(config))
         if args.dry_run:
             report = admission.inspect()

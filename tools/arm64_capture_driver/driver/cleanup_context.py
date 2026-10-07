@@ -12,11 +12,11 @@ import sys
 sys.dont_write_bytecode = True
 try:
     from . import phase_context, round_context
-    from .parse_env import derive, parse
+    from .parse_env import client_spec, derive, parse
 except ImportError:
     import phase_context
     import round_context
-    from parse_env import derive, parse
+    from parse_env import client_spec, derive, parse
 
 SCHEMA = "arm64-cleanup-context/v1"
 
@@ -46,7 +46,8 @@ def resolve(config, *, upgrade=None):
             if path.is_absolute():
                 raise ValueError("canonical 来源必须使用 Campaign 内相对路径")
             path = context.path(context.campaign / path)
-            command = [sys.executable, str(Path(config["TOOLS"]) / "codex_upgrade.py"), "canonical-advance",
+            # 编排器 CLI 文件按本轮客户端取客户端表（B5a-06；Codex 即 codex_upgrade.py）。
+            command = [sys.executable, str(Path(config["TOOLS"]) / client_spec(config)["orchestrator_file"]), "canonical-advance",
                        "--campaign-dir", str(context.campaign), "--candidate-id", context.candidate,
                        "--attempt-id", context.parameters["ATT"], "--canonical-step", step,
                        "--step-receipt", str(path)]

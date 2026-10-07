@@ -2,6 +2,7 @@
 # VC-5 compare 之后到 accept：断言配置 → 批次 assert-rules（改造 5：builder 必须由父监督器派发并冻结当前基线/evaluator 摘要）
 #   → 目标平台门禁（gate_before/make test/gate_after；失败自动归档后重跑，不进入 seal 链）→ 门禁 facts/收据 → 批次 accept。
 # 用法：bash vc5-accept.sh <attempt_id>（要求本机门禁六件套已注入 $G/local；当前部署的后台验证已通过）
+# 门禁收据与计时账本模块取客户端表（Claude 升级 B5a-06；两客户端共用这两个模块，取值与改造前相同）。
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1")
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
@@ -54,8 +55,8 @@ fi
 python3 -c "import json; d=json.load(open('$G/logs/target-platform.gate.json')); print('target-platform:', d.get('exit_code'), d.get('started_at_utc'), d.get('completed_at_utc'))"
 test "$(python3 -c "import json; print(json.load(open('$G/logs/target-platform.gate.json'))['exit_code'])")" = 0
 echo "=== 门禁 facts 与收据"; [ -f "$G/candidate-gates.facts.json" ] || python3 "$DRV/build_gate_facts.py" "$G" "$ATT" "$NEWDIR/campaign.json" "$CAPTURE_RESULT" "$BUILD_RECEIPT" "$G/local" "$G/logs" | tail -n 2 | cut -c1-200
-[ -f "$G/candidate-gates.receipt.json" ] || python3 -m tools.official_client_capture.codex_upgrade_gate_receipt finalize --evidence-root "$G" --facts candidate-gates.facts.json --output candidate-gates.receipt.json | cut -c1-200
-python3 -m tools.official_client_capture.codex_upgrade_gate_receipt replay --evidence-root "$G" --receipt candidate-gates.receipt.json | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('replay:', d.get('status'), d.get('receipt_digest') or d.get('receipt_sha256'))"
+[ -f "$G/candidate-gates.receipt.json" ] || python3 -m "$CT_GATE_RECEIPT_MODULE" finalize --evidence-root "$G" --facts candidate-gates.facts.json --output candidate-gates.receipt.json | cut -c1-200
+python3 -m "$CT_GATE_RECEIPT_MODULE" replay --evidence-root "$G" --receipt candidate-gates.receipt.json | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('replay:', d.get('status'), d.get('receipt_digest') or d.get('receipt_sha256'))"
 closeout_control "$G"; closeout_control "$AS"
 if [ "$ACCEPT_READY" != 1 ]; then
   # 承接判断不能被 facts／收据文件已存在绕过；派发 accept 之前再次核对。
@@ -65,5 +66,5 @@ fi
 phase_require --mode attempt --attempt-id "$ATT"
 python3 -c "import json; d=json.load(open('$ACCEPT_RESULT')); print('acceptance:', {k:(str(d.get(k))[:80]) for k in ('status','accepted','decision','summary','package_digest') if k in d})"
 ls "$NEWDIR/control/vc/" | tr "\n" " "; echo
-python3 -m tools.official_client_capture.codex_upgrade_timing_ledger status --ledger-dir "$L" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('账本:', {k:d.get(k) for k in ('status','active_phase','head_sequence')})"
+python3 -m "$CT_TIMING_LEDGER_MODULE" status --ledger-dir "$L" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('账本:', {k:d.get(k) for k in ('status','active_phase','head_sequence')})"
 echo "ACCEPT_DONE"

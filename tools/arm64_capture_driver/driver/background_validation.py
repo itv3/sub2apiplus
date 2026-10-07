@@ -62,17 +62,39 @@ from typing import Any, Mapping
 SCHEMA = "background-validation/v1"
 DIRECTORY = "background-validation"
 DEFAULT_PROFILE = "full-gates"
+HERE = Path(__file__).resolve().parent
+
+
+def _client_table() -> Any:
+    """同目录的客户端表 client_table.py（B5a-06）：按路径加载，与驱动其它模块共用一个模块对象（client_table_sibling）。"""
+
+    name = "client_table_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "client_table.py")
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"找不到同目录的 client_table.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+_CT = _client_table()
 # 与驱动 install.py 的 latest_deploy_receipt 同一规则（按文件名里的时间戳取最新）。
-DEPLOY_RECEIPT_GLOB = "codex-*-supervisor-enable-*.json"
+DEPLOY_RECEIPT_GLOB = _CT.spec("codex")["deploy_receipt_glob"]
 # B5a-01：按客户端（--client，缺省 codex）选部署收据，规则与驱动 install.py 相同；Claude 收据的工具身份在 identity
 # 对象里。Codex 的结论文件逐字不变（不写 client 字段），Claude 的结论写 client，run 与边界判定据此取同一客户端的收据。
-DEPLOY_RECEIPT_GLOBS = {"codex": DEPLOY_RECEIPT_GLOB, "claude": "claude-managed-deploy-*.json"}
-DEPLOY_RECEIPT_STAMP_SEPARATORS = {"codex": "-supervisor-enable-", "claude": "claude-managed-deploy-"}
-DEPLOY_RECEIPT_IDENTITY_KEYS = {"codex": None, "claude": "identity"}
-DEPLOY_CLIENTS = tuple(DEPLOY_RECEIPT_GLOBS)
+# B5a-06 起取值来自客户端表，这几个名字保留作只读视图。
+DEPLOY_RECEIPT_GLOBS = {client: _CT.spec(client)["deploy_receipt_glob"] for client in _CT.CLIENTS}
+DEPLOY_RECEIPT_STAMP_SEPARATORS = {client: _CT.spec(client)["deploy_receipt_stamp_separator"] for client in _CT.CLIENTS}
+DEPLOY_RECEIPT_IDENTITY_KEYS = {client: _CT.spec(client)["deploy_receipt_identity_key"] for client in _CT.CLIENTS}
+DEPLOY_CLIENTS = tuple(_CT.CLIENTS)
 IDENTITY_FIELDS = ("policy_version", "policy_sha256", "tool_files_sha256", "wire_producer_sha256", "evidence_semantics_sha256",
                    "control_sha256")
-HERE = Path(__file__).resolve().parent
 NICENESS = 10
 # 停下后台验证时给入口门禁与执行器的清理时间（执行器收到 SIGTERM 终止全部单元会话），超时再 SIGKILL 整组。
 STOP_GRACE_SECONDS = 60.0

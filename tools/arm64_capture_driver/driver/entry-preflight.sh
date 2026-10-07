@@ -11,6 +11,9 @@
 #   official-package     官方包摘要等于登记值，基线与目标源码树就位；
 #   plan-audit           plan --audit-only：参数、官方包、源码、规则与场景清单、作业 covers、覆盖计划、基线证据、执行副本；
 #   environment-probe    ARM64 环境收据在临时目录试采并封存（采集器与出口、磁盘、TLS 探针当下可用）。
+# 按客户端（Claude 升级 B5a-06）：必填参数、部署收据与五摘要、目标客户端的参数键、环境收据模块与探针版本参数取客户端表
+#   （lib.sh 给出 CT_ 变量）；Codex 的取值与改造前逐字相同。客户端表登记为尚未接入的检查项（Claude 的 plan-audit）直接判
+#   未通过并写明落实它的工作项，其余各项照查。
 # 用法：ARM64_VC_ENV=$RUNROOT/env.sh bash entry-preflight.sh（由 pre-a3.sh、stage1.sh 与入口编排器 entry.sh 开头调用，也可单独运行）
 # 输出目录默认 $RUNROOT/entry-preflight/<UTC>，环境变量 ENTRY_PREFLIGHT_OUT 可指定（编排器用）；结束时写 summary.json（逐项状态，
 # 编排器据此判断哪些步骤被阻塞，例如部署绑定没过时依赖它的认证与门禁）。
@@ -42,10 +45,8 @@ check() { # <名称> <函数>：各项互不依赖，一项失败不中断其余
 
 required_parameters() {
   local key missing=()
-  for key in TARGET_CODE_MODE_HOST_SHA256 CAPTURE_RUNTIME_IMAGE CODEX_BIN CODEX_BIN_SHA256 OFFICIAL_ASSET_SHA256 \
-             TARGET_PACKAGE TARGET_SOURCE BASELINE_SOURCE ACTIVE_PROFILE MAIN_MODEL LITE_MODEL CODEX_ACCOUNT_ID API_KEY_ID \
-             COMPOSE_DIR PROJECT_DEADLINE_UTC STAGE_BUDGETS POLICY_COMPAT_RECEIPT POLICY_ACTIVATION PRE_A3_CERTIFICATION \
-             P0_ROLLBACK_EVIDENCE; do
+  # 逐个核对的键取客户端表（Codex 即改造前这一份：code-mode-host、采集镜像、CODEX_BIN 三项……P0_ROLLBACK_EVIDENCE）。
+  for key in "${CT_PREFLIGHT_REQUIRED[@]}"; do
     if [ -z "${!key:-}" ] || [[ ${!key} == REPLACE_* ]] || [[ ${!key} == */REPLACE_* ]]; then missing+=("$key"); fi
   done
   if [ "${#missing[@]}" != 0 ]; then echo "参数文件缺少或仍是占位：${missing[*]}"; return 1; fi
@@ -60,35 +61,38 @@ required_parameters() {
 guard_pre_plan() { bash "$DRV/guard.sh" pre-plan; }
 
 latest_deploy() {
-  python3 -B - "$DRV/../install.py" "$D" <<'PY'
+  python3 -B - "$DRV/../install.py" "$D" "$CT_CLIENT" <<'PY'
 import importlib.util, sys
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("installed_driver", sys.argv[1])
 module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-print(module.latest_deploy_receipt(Path(sys.argv[2]) / "control")[0])
+print(module.latest_deploy_receipt(Path(sys.argv[2]) / "control", sys.argv[3])[0])
 PY
 }
 
 deployment_identity() {
   local deploy
   deploy=$(latest_deploy) || return 1
-  python3 -B - "$deploy" <<'PY'
+  python3 -B - "$deploy" ${CT_IDENTITY_ARGS[@]+"${CT_IDENTITY_ARGS[@]}"} <<'PY'
 import sys
 from pathlib import Path
 from tools.official_client_capture import codex_upgrade_policy_certification as certification
-identity = certification.current_identity()
-receipt = certification.load_deployment_receipt(Path(sys.argv[1]), expected_identity=identity)
+# 本轮客户端（Codex 不带参数：调用与改造前相同；Claude 按 v3 引擎算身份、按 Claude 部署收据合同核对）。
+client = sys.argv[2:]
+identity = certification.current_identity(*client)
+receipt = certification.load_deployment_receipt(Path(sys.argv[1]), expected_identity=identity, **({"client": client[0]} if client else {}))
 print("最新部署收据与当前受管工具树一致：", sys.argv[1], receipt.get("created_at_utc"), identity["tool_files_sha256"][:12])
 PY
 }
 
 target_client() {
-  local host container version
-  host=$(sha256sum "$CODEX_BIN" | cut -c1-64) || return 1
-  container=$(docker exec capture-cli sha256sum "$CODEX_BIN" | cut -c1-64) || return 1
-  version=$("$CODEX_BIN" --version 2>&1 | head -n 1) || return 1
-  echo "宿主机 ${host}；采集容器 ${container}；登记 ${CODEX_BIN_SHA256}；版本 ${version}"
-  [ "$host" = "$CODEX_BIN_SHA256" ] && [ "$container" = "$CODEX_BIN_SHA256" ] && [[ $version == *"$TARGET_VERSION"* ]]
+  # 二进制与摘要的参数键取客户端表（Codex：CODEX_BIN／CODEX_BIN_SHA256；Claude：CLIENT_BIN／CLIENT_BIN_SHA256）。
+  local host container version binary=${!CT_BINARY_KEY} expected=${!CT_BINARY_SHA256_KEY}
+  host=$(sha256sum "$binary" | cut -c1-64) || return 1
+  container=$(docker exec capture-cli sha256sum "$binary" | cut -c1-64) || return 1
+  version=$("$binary" --version 2>&1 | head -n 1) || return 1
+  echo "宿主机 ${host}；采集容器 ${container}；登记 ${expected}；版本 ${version}"
+  [ "$host" = "$expected" ] && [ "$container" = "$expected" ] && [[ $version == *"$TARGET_VERSION"* ]]
 }
 
 official_package() {
@@ -100,9 +104,12 @@ official_package() {
 }
 
 plan_audit() {
+  # 客户端表登记为尚未接入时不调用（Claude 的 plan --audit-only 由 B5a-09 接入），判未通过并写明工作项。
+  if [ -n "$CT_PENDING_CHECK_PLAN_AUDIT" ]; then echo "本轮客户端（${CT_CLIENT}）的 plan-audit 尚未接入：${CT_PENDING_CHECK_PLAN_AUDIT}"; return 1; fi
   # 拟定路径只作作业坐标与输出路径校验，不会被创建；审计不读账本与环境收据（建账本之后才有）。
   # 参数文件可缺省的两个身份参数缺了时传空值：审计的参数项报出来，清单、源码等其余各项照查（不能因缺参数跳过 covers 等）。
-  python3 -m tools.official_client_capture.codex_upgrade plan --audit-only \
+  # 下面是 Codex 编排器 plan 的参数形状（编排器模块取客户端表）。
+  python3 -m "$CT_ORCHESTRATOR_MODULE" plan --audit-only \
     --campaign-dir "$D/staging/entry-preflight-$(date -u +%Y%m%dt%H%M%Sz)/campaign" --campaign-id "${CAMPAIGN_PREFIX}-plan-audit" \
     --baseline-version "$BASELINE_VERSION" --target-version "$TARGET_VERSION" \
     --campaign-mode preflight_only --campaign-purpose production_replacement \
@@ -128,9 +135,10 @@ PY
 environment_probe() {
   local probe rc=0
   probe=$(mktemp -d "$D/staging/entry-preflight-env-XXXXXX") || return 1
-  python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$probe" --output facts.json --phase p0 --subject-id "$UP-entry-preflight" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160 || rc=$?
+  # 采集器与探针的版本参数取客户端表（Codex：--rust-tls-codex-version；Claude：--claude-version），都交本轮 TARGET_VERSION。
+  python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" collect --evidence-root "$probe" --output facts.json --phase p0 --subject-id "$UP-entry-preflight" "$CT_ENVIRONMENT_PROBE_VERSION_OPTION" "$TARGET_VERSION" | cut -c1-160 || rc=$?
   if [ "$rc" = 0 ]; then
-    python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$probe" --facts facts.json --output receipt.json | cut -c1-160 || rc=$?
+    python3 -m "$CT_ENVIRONMENT_RECEIPT_MODULE" finalize --evidence-root "$probe" --facts facts.json --output receipt.json | cut -c1-160 || rc=$?
   fi
   rm -rf "$probe"
   return "$rc"

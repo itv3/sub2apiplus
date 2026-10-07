@@ -197,19 +197,23 @@ fi
 
 # 部署绑定：数据根部署的必须就是本提交。含 pre-A3 的组合必做（入口门禁验的是测试树，pre-A3 跑的是数据根的受管树）；
 # 其余组合带 --require-deployed 时也做（后台验证据此把结论绑定到这次部署，E4-01）。设置 DEPLOY（最新部署收据）。
+# B5a-06：按本轮客户端（客户端表，lib.sh 给出 CT_ 变量）取部署收据、算测试树的整树摘要（Claude 按 v3 引擎算两根身份，
+# 收据里的身份在 identity 对象下）、比部署一致性的各部分；Codex 的取值与调用和改造前相同。
 check_deployed() {
-  DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
+  DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" "$CT_CLIENT" <<'PYDEPLOY'
 import importlib.util, sys
 from pathlib import Path
 spec=importlib.util.spec_from_file_location('installed_driver', sys.argv[1])
 module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-print(module.latest_deploy_receipt(Path(sys.argv[2])/'control')[0])
+print(module.latest_deploy_receipt(Path(sys.argv[2])/'control', sys.argv[3])[0])
 PYDEPLOY
 )
   # 部署收据的整树摘要等于测试树受管树。
   TREE_FILES=$(cd "$TREE" && env -u CODEX_UPGRADE_IDENTITY_MEMO PYTHONPATH=. PYTHONPYCACHEPREFIX="$PYC" python3 -c \
-    "from tools.official_client_capture import codex_upgrade_policy_certification as pc; print(pc.current_identity()['tool_files_sha256'])")
-  DEPLOY_FILES=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['tool_files_sha256'])" "$DEPLOY")
+    "import sys; from tools.official_client_capture import codex_upgrade_policy_certification as pc; print(pc.current_identity(*sys.argv[1:])['tool_files_sha256'])" \
+    ${CT_IDENTITY_ARGS[@]+"${CT_IDENTITY_ARGS[@]}"})
+  DEPLOY_FILES=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print((d[sys.argv[2]] if sys.argv[2] else d)['tool_files_sha256'])" \
+    "$DEPLOY" "$CT_DEPLOY_RECEIPT_IDENTITY_KEY")
   if [ "$TREE_FILES" != "$DEPLOY_FILES" ]; then
     echo "数据根部署的受管树（${DEPLOY_FILES}）不是本提交（测试树受管树 ${TREE_FILES}）：先受监督部署本提交，再跑入口门禁"
     echo "ENTRY_GATES_ABORTED：部署与测试树不一致，没有门禁结论；主体目录 ${OUT}"
@@ -218,17 +222,17 @@ PYDEPLOY
   # E2-05：整树摘要不含测试目录，也不含指南与部署脚本副本，只比它会放过「测试改了、还没重新部署」（10-02 实测数据根
   # 的测试比测试树旧两个文件，整树摘要却相等）。入口门禁在测试树验过的，必须就是数据根实际部署的那一份：受管
   # 整树（含测试，不计字节码）、两份指南、部署脚本副本逐项比内容摘要。
-  if ! MISMATCH=$(python3 -B "$DRV/entry_steps.py" deploy-consistency --tree "$TREE" --data-root "$D"); then
+  if ! MISMATCH=$(python3 -B "$DRV/entry_steps.py" deploy-consistency --tree "$TREE" --data-root "$D" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}); then
     echo "数据根与本提交不一致：${MISMATCH}（整树摘要相同也不行）：先受监督部署本提交并同步部署脚本副本，再跑入口门禁"
     echo "ENTRY_GATES_ABORTED：部署与测试树不一致，没有门禁结论；主体目录 ${OUT}"
     exit 3
   fi
 }
 PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_PARENT=""; DEPLOY=""
-# B5a-04：pre-A3 认证模块的 plan／find-reusable／issue／record-reuse 按本轮客户端（参数 CLIENT，缺省 codex）。Codex 不带参数，
-# 命令行与改造前逐字相同；其余客户端带 --client（场景单元 ID 前缀、身份、部署收据与认证合同随之按客户端，记录库里互不承接）。
-PA3_CLIENT_ARGS=()
-if [ "${CLIENT:-codex}" != codex ]; then PA3_CLIENT_ARGS=(--client "$CLIENT"); fi
+# B5a-04：pre-A3 认证模块的 plan／find-reusable／issue／record-reuse 与策略认证按本轮客户端（参数 CLIENT，缺省 codex）。
+# B5a-06 起模块名与追加的客户端参数取客户端表（CT_PRE_A3_MODULE、CT_POLICY_CERTIFICATION_MODULE、CT_CLIENT_ARGV）：Codex
+# 的客户端参数为空，命令行与改造前逐字相同；Claude 带 --client claude（场景单元 ID 前缀、身份、部署收据与认证合同随之按
+# 客户端，记录库里互不承接）。客户端参数追加在每条命令末尾（驱动测试按字面核对命令前缀）。
 if [ "$PROFILE" != entry ] && [ "$PROFILE" != pre-a3 ] && [ "$REQUIRE_DEPLOYED" = true ]; then
   echo "=== 部署绑定 $(utc_now)"
   check_deployed
@@ -239,15 +243,15 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
   check_deployed
   # 激活认证缺失时才签（先补兼容收据）；编排器传入现成的激活认证时这里什么都不写。
   if [ ! -f "$POLICY_ACTIVATION" ]; then
-    [ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" | cut -c1-160
-    python3 -m tools.official_client_capture.codex_upgrade_policy_certification activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" | cut -c1-160
+    [ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m "$CT_POLICY_CERTIFICATION_MODULE" compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-160
+    python3 -m "$CT_POLICY_CERTIFICATION_MODULE" activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-160
   fi
   # E3-02：场景父目录固定，单元命令只带稳定内容（入口门禁据此承接已通过的场景），本次各场景的临时根在父目录下新建；
   # 数据根才有、或不保证与测试树一致的输入（冻结台账、录制数据、alpine 镜像）由门禁清单生成时在数据根算好。
   plan_pre_a3_run() {
     PRE_A3_MODE=run
     UNITS="$OUT/pre-a3-units.json"
-    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} \
+    PA3_PARENT=$(python3 -m "$CT_PRE_A3_MODULE" plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} \
       | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_parent"])')
     PRE_A3_ARGS=(--pre-a3-units "$UNITS" --pre-a3-data-root "$D" --pre-a3-env "PYTHONPATH=." --pre-a3-env "CODEX_UPGRADE_IDENTITY_MEMO=$CODEX_UPGRADE_IDENTITY_MEMO")
     if [ -d "$PYC_MANAGED" ]; then PRE_A3_ARGS+=(--pre-a3-env "PYTHONPYCACHEPREFIX=$PYC_MANAGED"); fi
@@ -258,11 +262,11 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
     plan_pre_a3_run
   elif [ -f "$PRE_A3_CERTIFICATION" ]; then
     # 已有的本轮认证先按 stage1 同一口径复核（无效即在跑门禁之前停下，不白跑一遍）。
-    python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} >/dev/null
+    python3 -m "$CT_PRE_A3_MODULE" find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} >/dev/null
     PRE_A3_MODE=present; echo "PRE_A3_PRESENT $PRE_A3_CERTIFICATION（不纳入本次运行）"
   elif [ "$PRE_A3_SOURCE" = present ]; then
     echo "ENTRY_GATES_ABORTED：--pre-a3-mode present 要求认证已在：${PRE_A3_CERTIFICATION}"; exit 3
-  elif REUSE=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --search-root "$(dirname "$PRE_A3_CERTIFICATION")" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"}); then
+  elif REUSE=$(python3 -m "$CT_PRE_A3_MODULE" find-reusable --search-root "$(dirname "$PRE_A3_CERTIFICATION")" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}); then
     cp -p "$REUSE" "$PRE_A3_CERTIFICATION"; chmod 600 "$PRE_A3_CERTIFICATION"
     PRE_A3_MODE=reused; echo "PRE_A3_REUSED $REUSE（不纳入本次运行）"
   else
@@ -360,7 +364,7 @@ if [ "$PRE_A3_MODE" = run ]; then
   # E3-02：从本次运行的清单与记录库组装 v2 认证（每个场景恰好一条通过的正式执行记录，本次执行或承接；网络计数为 0）。
   # 清单只在执行器自检通过后才发布进记录库，没发布的运行签不出认证。
   echo "=== pre-A3 认证签发（从单元执行记录组装，核对场景全集与网络计数）$(utc_now)"
-  if ! python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification issue --staging-root "$PA3_PARENT" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} \
+  if ! python3 -m "$CT_PRE_A3_MODULE" issue --staging-root "$PA3_PARENT" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} \
       --unit-manifest "$OUT/executor/unit-manifest.json" --record-store "$STORE" \
       --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --output "$PRE_A3_CERTIFICATION" | cut -c1-300; then
     PRE_A3_OK=false
@@ -368,8 +372,8 @@ if [ "$PRE_A3_MODE" = run ]; then
 fi
 if [ "$PRE_A3_MODE" != none ] && [ "$PRE_A3_OK" = true ]; then
   # 与 stage1 建账本前同一口径复核本轮坐标；跨部署复用登记复用收据（同一组绑定不重复写）。
-  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} >/dev/null
-  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"} | cut -c1-300
+  python3 -m "$CT_PRE_A3_MODULE" find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} >/dev/null
+  python3 -m "$CT_PRE_A3_MODULE" record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-300
   echo "PRE_A3_DONE $PRE_A3_CERTIFICATION（${PRE_A3_MODE}）"
 fi
 AFTER_STATUS=$(tree_status 5)

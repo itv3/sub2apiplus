@@ -4,7 +4,7 @@
 import os
 from pathlib import Path
 
-from parse_env import OPTIONAL_KEYS, derive, parse
+from parse_env import client_table, derive, parse, stale_keys
 
 
 def load_config(*, require_current: bool = False) -> dict[str, str]:
@@ -16,9 +16,9 @@ def load_config(*, require_current: bool = False) -> dict[str, str]:
     if require_current:
         from round_context import resolve
         result.update(resolve(result)["parameters"])
-    for key in OPTIONAL_KEYS:
-        if key not in result:
-            os.environ.pop(key, None)
+    # 与 parse_env.py 主程序同一清理集合（stale_keys）：没出现的可选键，以及另一客户端的专属键（B5a-06）。
+    for key in stale_keys(result, client_table().client_of(values)):
+        os.environ.pop(key, None)
     os.environ.update(result)
     return result
 

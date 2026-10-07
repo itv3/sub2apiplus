@@ -12,6 +12,10 @@
   `python3 <仓库副本>/tools/arm64_capture_driver/install.py install --source <仓库副本>/tools/arm64_capture_driver --target /root/arm64-capture-driver --data-root /root/docker/capture-cli/data`；
   安装收据落 `<data-root>/control/arm64-capture-driver-install-<stamp>.json`。受管工具每次重新部署后必须重新
   `install`（安装收据绑定的部署收据不再是最新时 `verify` 失败、guard 停止）。
+* 按客户端（Claude 升级 B5a-06）：`install` 绑定全部已纳管客户端（`control/` 里已有其部署收据）各自最新的部署收据——只有
+  一个客户端纳管时照旧写 v1，两客户端都已纳管时写 `arm64-capture-driver-install/v2`（`deployment_receipts`），交换共享根的
+  一次部署之后重装一次即可；`install --client <客户端>` 只绑定该客户端。`verify --client`（缺省 codex）取该客户端当前
+  最新的部署收据判定，guard 按本轮 `CLIENT` 传它。
 * 开发侧改动脚本后必须 `python3 tools/arm64_capture_driver/install.py build-manifest --root tools/arm64_capture_driver`
   刷新清单；`tests/test_arm64_capture_driver.py` 以 `--check` 门禁清单与目录一致。
 * 顶层精确闭合：根目录只允许 `install.py`、`README.md`、`manifest.json`、`driver/`，多任何一项（含 `__pycache__`）
@@ -405,8 +409,13 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   `CODEX_BIN_SHA256`、`OFFICIAL_ASSET_SHA256`、`MAIN_MODEL`、`LITE_MODEL`、`CODEX_ACCOUNT_ID`、`API_KEY_ID`、
   `PREDECESSOR_CAMPAIGN`、`POLICY_COMPAT_RECEIPT`、`POLICY_ACTIVATION`、`RELEASE_CERTIFICATION`。
   任一缺失都拒绝；模板中的 `REPLACE_*` 是待填写占位符，不能直接执行。`PROFILE_ID` 必须与目标画像一致。
-* `parse_env.py` 集中派生规则／场景／补丁路径、Campaign 前缀、lifecycle 目录和候选镜像仓库；Python 与 shell
-  使用同一解析结果。来源目录、官方包、基线画像可按模板可选键覆盖；不可从路径推导制品摘要或账号。
+* 按客户端（Claude 升级 B5a-06）：参数 `CLIENT`（缺省 codex，可省略）选择 `driver/client_table.py` 的一行——编排器与各收据
+  模块名、二进制与账号参数键、总账目录、部署收据规则、指南、追加给共享模块的 `--client` 等。目标客户端的二进制、摘要与账号
+  通用化为 `CLIENT_BIN`／`CLIENT_BIN_SHA256`／`CLIENT_ACCOUNT_ID`：Claude 只认通用键、不要求 Kilo 三项与 `CODEX_*`（写了即
+  拒绝）；Codex 的旧键照旧有效，通用键是它们的别名、解析后按旧键导出。`lib.sh` 解析参数后以不导出的 `CT_` 变量给各脚本
+  用客户端表；Claude 尚未接入的入口步骤、便宜检查项与驱动工具登记在表的 `pending`，执行到即失败关闭并写明工作项。
+* `parse_env.py` 集中派生规则／场景／补丁路径、Campaign 前缀、lifecycle 目录和候选镜像仓库（随客户端的部分取客户端表的
+  模板）；Python 与 shell 使用同一解析结果。来源目录、官方包、基线画像可按模板可选键覆盖；不可从路径推导制品摘要或账号。
   `stage1.sh` 还要求 `TARGET_CODE_MODE_HOST_SHA256` 与 `CAPTURE_RUNTIME_IMAGE`，由正式 plan 校验制品和镜像。
 * `stage2.sh` 仅接受 `EVIDENCE_DECISION=reuse`，且前序 Campaign 必须与本轮目标版本相同；首次升级用 `recapture`。
   认证输入按显式路径使用；需要新签兼容收据时必须提供 `PREVIOUS_POLICY`。最新部署按跨版本收据时间戳判定，

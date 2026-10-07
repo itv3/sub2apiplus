@@ -150,6 +150,9 @@ DEPLOY_RECEIPT_IDENTITY_FIELDS = (
     "tool_files_sha256", "policy_version", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256",
     "control_sha256",
 )
+# 受监督部署器的缺省事务范围（arm64_supervised_deploy 的 DEFAULT_CLIENTS，交换 DEFAULT_MANAGED_ROOTS）：签收据的客户端
+# 正好是它时，部署命令不带范围参数，与改造前逐字相同（B5a-06）。
+DEPLOYER_DEFAULT_CLIENTS = ("codex",)
 DEFAULT_GUARD_STATUS = "/run/sub2api-egress/status.json"
 AUTHORIZABLE_LEDGER_STATES = frozenset({"recovery_required", "stage_review_required", "candidate_review_required"})
 CANDIDATE_RECOVER_SCRIPT = "vc5-recover.sh"
@@ -560,6 +563,28 @@ def _install_module() -> Any:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def deploy_scope(params: Mapping[str, str]) -> tuple[list[str], list[str]]:
+    """受监督部署的事务范围参数与暂存树要归档的仓库文档（B5a-06，B5a-01／B5a-04 留下的修复轮部署尾巴）。
+
+    签收据的客户端＝已纳管的客户端（control 目录里已有其部署收据，与部署器同一判据；一个都没有时按部署器缺省）。部署器
+    要求交换的根影响到的已纳管客户端一并签收据：Claude 纳管之后交换 official_client_capture 必须同时签 Codex 与 Claude
+    收据（``--client codex claude``），并交换签收据客户端身份覆盖的全部受管根（``--managed-roots``，Claude 的身份覆盖
+    official_client_control，收据要如实描述生产身份）。签收据的客户端正好是部署器缺省时不带参数——只有 Codex 纳管时与改造前
+    逐字相同。归档文档是签收据各客户端的活动文档（客户端表 repository_documents）：签 Claude 收据时暂存树的
+    docs/repository-docs 也要放 Claude 指南与共享控制面文档（10-07 ARM64 首次实部署因缺这两份在预检被拒）。"""
+
+    table = parse_env.client_table()
+    signing = _install_module().managed_clients(Path(params["D"]) / "control") or list(DEPLOYER_DEFAULT_CLIENTS)
+    documents: list[str] = []
+    roots: list[str] = []
+    for client in signing:
+        spec = table.spec(client)
+        documents += [name for name in spec["repository_documents"] if name not in documents]
+        roots += [root for root in spec["managed_roots"] if root not in roots]
+    arguments = [] if tuple(signing) == DEPLOYER_DEFAULT_CLIENTS else ["--client", *signing, "--managed-roots", *roots]
+    return arguments, documents
 
 
 def deploy_client(params: Mapping[str, str]) -> str:
@@ -1240,8 +1265,10 @@ def _deploy_state(params: dict[str, str], args: argparse.Namespace) -> tuple[int
                     summary={"receipt": str(receipt_path), "receipt_sha256": _sha256_file(receipt_path)}), {}
     reuse = "1" if head == params["HEAD_COMMIT"] and clean else "0"
     note(params, step, staging_head_before=head, staging_clean_before=clean, reuse_staging=reuse == "1")
+    scope, documents = deploy_scope(params)
     return _ok(ACTION="deploy", REUSE_STAGING=reuse,
-               LOG=out / "raw" / f"{stamp}-deploy.log", PIDF=out / "raw" / f"{stamp}-deploy.pid")
+               LOG=out / "raw" / f"{stamp}-deploy.log", PIDF=out / "raw" / f"{stamp}-deploy.pid",
+               DEPLOY_SCOPE=" ".join(scope), REPOSITORY_DOCS=" ".join(documents))
 
 
 @decider("deploy-launch")
@@ -1433,7 +1460,7 @@ def self_digest() -> str:
     """本脚本自身（入口、辅助与共用解析／等待模块）的摘要：驱动被本轮重装更新后须用新驱动续跑。"""
 
     parts = []
-    for name in ("fix-and-continue.sh", "fix_and_continue.py", "fix_safety.py", "parse_env.py", "wait_state.py"):
+    for name in ("fix-and-continue.sh", "fix_and_continue.py", "fix_safety.py", "parse_env.py", "wait_state.py", "client_table.py"):
         path = DRV / name
         parts.append(f"{name}:{_sha256_file(path) if path.is_file() else '-'}")
     return _sha256_bytes("\n".join(parts).encode("utf-8"))

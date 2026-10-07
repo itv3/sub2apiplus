@@ -8,11 +8,12 @@ esac
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 IMAGE_ID="$1"; BUILD_ID="$2"
 vc5_require_admission
-python3 - "$NEWDIR" "$CAND" "$B/source" "$IMAGE_ID" "$BUILD_ID" "$PROFILE_ID" "$PROFILE_DIGEST" <<'PY'
-import argparse, json, sys, os
+python3 - "$NEWDIR" "$CAND" "$B/source" "$IMAGE_ID" "$BUILD_ID" "$PROFILE_ID" "$PROFILE_DIGEST" "$CT_ORCHESTRATOR_MODULE" <<'PY'
+import argparse, importlib, json, sys, os
 from pathlib import Path
-from tools.official_client_capture import codex_upgrade as cu
-NEW, CAND, SRC, IMAGE_ID, BUILD_ID, PROFILE_ID, PROFILE_DIGEST = sys.argv[1:]
+# 编排器模块取客户端表（Claude 升级 B5a-06；Codex 即 codex_upgrade，与改造前相同）。
+NEW, CAND, SRC, IMAGE_ID, BUILD_ID, PROFILE_ID, PROFILE_DIGEST, ORCHESTRATOR = sys.argv[1:]
+cu = importlib.import_module(ORCHESTRATOR)
 campaign_dir = Path(NEW); manifest = cu._require_formal_campaign(campaign_dir)
 classification = cu._load_stage_result(campaign_dir, "classify"); print("classify:", classification.get("status"))
 build_receipt, binding = cu._replay_candidate_build_receipt(campaign_dir, manifest, CAND, campaign_dir / "candidates" / CAND / "build-receipt.json"); print("build-receipt 重放通过:", build_receipt["receipt_digest"][:12])

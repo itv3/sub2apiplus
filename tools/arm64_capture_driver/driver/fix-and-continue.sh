@@ -14,7 +14,9 @@
 #
 # 步骤（按序；每步幂等，--from <步骤> 续跑时前序步骤在本轮必须有 passed／skipped 记录）：
 #   deploy            bundle 校验 → 取分支核对 HEAD → staging 干净检出 → 仓库文档 → 属主收口 → 后台受监督部署并等待；
-#                     staging 已是同 HEAD 干净检出且最新部署收据 passed、摘要与 EXPECT 一致则跳过
+#                     staging 已是同 HEAD 干净检出且最新部署收据 passed、摘要与 EXPECT 一致则跳过。事务范围按纳管状态（B5a-06）：
+#                     Claude 已纳管（control 里已有它的部署收据）时带 --client codex claude 与两个受管根，并把两客户端的
+#                     活动文档都放进 staging 的 docs/repository-docs；只有 Codex 纳管时命令与文档与改造前相同
 #   postdeploy        部署收据与期望摘要（整树／五摘要／监督器）、数据根监督器文件与 wire 闭包 → 同步数据根部署脚本副本
 #                     → 出口守护代码与状态核对（守护逻辑变了只停下，不重装守护）→ 驱动重装与复验 → 入口断言
 #   regression        定向回归（E4-01）：先停下上一轮还在跑的后台验证，再跑入口门禁 regression 组合（全集通过，只执行静态依赖
@@ -192,13 +194,18 @@ step_deploy() {
     if [ "$(git -C "$ST" rev-parse HEAD)" != "$HEAD_COMMIT" ] || [ -n "$(git -C "$ST" status --porcelain)" ]; then
       fail_step "staging 树不是 $HEAD_COMMIT 的干净检出" "人工核对 $ST"
     fi
+    # 签收据各客户端的活动文档（判定 deploy-state 按纳管状态给出 REPOSITORY_DOCS；只有 Codex 纳管时是框架文档与 Codex 指南）。
+    local -a repository_docs scope_args
+    read -r -a repository_docs <<< "$REPOSITORY_DOCS"
+    read -r -a scope_args <<< "$DEPLOY_SCOPE"
     ( umask 022 && install -d -m 755 "$ST/docs/repository-docs" \
-      && cp -p "$ST/docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md" "$ST/docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md" "$ST/docs/repository-docs/" \
+      && for doc in ${repository_docs[@]+"${repository_docs[@]}"}; do cp -p "$ST/docs/$doc" "$ST/docs/repository-docs/" || exit 1; done \
       && chmod 644 "$ST"/docs/repository-docs/*.md ) || fail_step "复制仓库文档到 staging 失败" "核对 staging 树 docs/"
     { chown -R root:root "$ST" && chmod -R go-w "$ST"; } || fail_step "staging 属主／权限收口失败" "人工核对 $ST"
     decide deploy-launch --log "$LOG" --pid-file "$PIDF"
-    setsid -f bash -c 'echo "$$" > "$2"; cd "$0" && python3 tools/arm64_supervised_deploy.py --staging-root "$0" --production-root "$3/tools/official_client_capture" --production-doc-root "$3/docs" --control-root "$3/control" > "$1" 2>&1; echo "exit=$?" >> "$1"' \
-      "$ST" "$LOG" "$PIDF" "$D" < /dev/null > /dev/null 2>&1 9>&-
+    # 事务范围参数（"${@:4}"）：Claude 已纳管时是 --client codex claude --managed-roots <两个受管根>，只有 Codex 纳管时为空。
+    setsid -f bash -c 'echo "$$" > "$2"; cd "$0" && python3 tools/arm64_supervised_deploy.py --staging-root "$0" --production-root "$3/tools/official_client_capture" --production-doc-root "$3/docs" --control-root "$3/control" "${@:4}" > "$1" 2>&1; echo "exit=$?" >> "$1"' \
+      "$ST" "$LOG" "$PIDF" "$D" ${scope_args[@]+"${scope_args[@]}"} < /dev/null > /dev/null 2>&1 9>&-
     echo "  [deploy] 受监督部署已在后台启动：$LOG"
   fi
   if [ "$ACTION" != verify ]; then

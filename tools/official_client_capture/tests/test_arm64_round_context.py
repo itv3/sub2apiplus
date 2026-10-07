@@ -199,7 +199,7 @@ class RoundContextTests(unittest.TestCase):
     def test_standalone_init_without_bytecode_flags_stays_read_only(self):
         driver = self.root / "standalone"
         driver.mkdir()
-        for name in ("parse_env.py", "round_context.py"):
+        for name in ("parse_env.py", "client_table.py", "round_context.py"):
             (driver / name).write_bytes((SCRIPTS / name).read_bytes())
         path = self.root / "new.env"
         path.write_text(self.fixture.env_file.read_text().replace(self.fixture.new, "uncreated-campaign"))

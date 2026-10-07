@@ -62,7 +62,6 @@ ALLOWED_TO = ("entry-preflight", "policy-compatibility", "policy-activation", "e
               "atomic-double", "ledger", "environment-p0", "ledger-checkpoint", "preflight-plan", "job-rehearsal",
               "client-launch-probe", "release-certification", "p0-receipt")
 # 演练参数文件里改写的坐标（其余键原样沿用本轮参数文件）。
-LEDGER_MODULE = "tools.official_client_capture.codex_upgrade_project_ledger"
 APPROVED_BY = "入口空跑（演练总账）"
 CLEAN_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -92,6 +91,10 @@ def _sibling(name: str) -> Any:
 
 def _bv() -> Any:
     return _sibling("background_validation")
+
+
+# 演练总账的模块与目录名取客户端表（B5a-06；按本轮参数文件的 CLIENT）。这个名字是 Codex 的模块（只读视图）。
+LEDGER_MODULE = _sibling("client_table").spec("codex")["project_ledger_module"]
 
 
 def _parse_env() -> Any:
@@ -203,6 +206,16 @@ def _env_text(values: Mapping[str, str]) -> str:
 
 def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     bv = _bv()
+    # 客户端表把本客户端的入口空跑登记为尚未接入时拒绝（B5a-06：Claude 的空跑按客户端起、结论带客户端前缀与该客户端的
+    # 部署收据，由 B5a-10 接入）。参数文件解析不了时照旧起空跑、由运行时报出（与改造前相同）；Codex 不受影响。
+    table = _sibling("client_table")
+    try:
+        client = table.client_of(_parse_env().parse(Path(args.vc_env).read_text(encoding="utf-8")))
+    except (OSError, ValueError, UnicodeDecodeError):
+        client = table.DEFAULT_CLIENT
+    waiting = table.pending(client, "tool:entry-dryrun")
+    if waiting:
+        raise DryRunError(f"本轮客户端（{client}）的入口空跑尚未接入：{waiting}")
     deployment = bv.latest_deployment(args.data_root)
     if args.opening and args.reexecute:
         raise DryRunError("--opening 已含重新执行全集，不要再加 --reexecute")
@@ -257,11 +270,19 @@ def _prepare(payload: Mapping[str, Any]) -> tuple[Path, Path, Path]:
     for directory in (root / "evidence" / "campaigns", root / "control" / "policy-certification", runroot):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     deadline = (datetime.now(timezone.utc) + timedelta(hours=30)).strftime("%Y-%m-%dT%H:00:00Z")
+    # 演练总账按本轮客户端建（客户端表：总账模块、目录名与 --client；Codex 与改造前相同）。参数文件解析不了时按缺省客户端
+    # 建，错误照旧由下面建完总账之后的解析报出（与改造前同一顺序）。
+    table = _sibling("client_table")
+    try:
+        client = table.client_of(_parse_env().parse(Path(payload["vc_env"]).read_text(encoding="utf-8")))
+    except (OSError, ValueError, UnicodeDecodeError):
+        client = table.DEFAULT_CLIENT
+    spec = table.spec(client)
     completed = subprocess.run(
-        [sys.executable, "-B", "-m", LEDGER_MODULE, "create-project-ledger",
-         "--ledger-dir", str(root / "evidence" / "campaigns" / "upgrade-project-ledger"), "--project-id", f"entry-dryrun-{stamp}",
+        [sys.executable, "-B", "-m", spec["project_ledger_module"], "create-project-ledger",
+         "--ledger-dir", str(root / "evidence" / "campaigns" / spec["project_ledger_dir_name"]), "--project-id", f"entry-dryrun-{stamp}",
          "--absolute-deadline-utc", deadline, "--deadline-approved-by", APPROVED_BY, "--estimation-policy", "none",
-         "--estimation-policy-approved-by", APPROVED_BY, "--fixture-only"],
+         "--estimation-policy-approved-by", APPROVED_BY, "--fixture-only", *spec["client_argv"]],
         cwd=str(data_root), env={**os.environ, "PYTHONPATH": str(data_root), "PYTHONDONTWRITEBYTECODE": "1"},
         capture_output=True, text=True, timeout=300)
     if completed.returncode != 0:

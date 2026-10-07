@@ -13,10 +13,10 @@ import sys
 sys.dont_write_bytecode = True
 try:
     from . import round_context
-    from .parse_env import derive, parse, plain_path
+    from .parse_env import client_spec, derive, parse, plain_path
 except ImportError:
     import round_context
-    from parse_env import derive, parse, plain_path
+    from parse_env import client_spec, derive, parse, plain_path
 
 
 STAGES = {"capture-candidate": "CAPTURE", "compare": "COMPARE", "accept": "ACCEPT", "assertions": "ASSERTIONS"}
@@ -27,7 +27,9 @@ class Context:
 
     def __init__(self, config, *, candidate=True, upgrade=None):
         self.config = config
-        self.cu = upgrade if upgrade is not None else round_context._managed_upgrade(Path(config["D"]))
+        # 编排器按本轮客户端取（B5a-06）；VC 制品模块两客户端共用，经所选编排器的模块属性 codex_upgrade_vc_artifacts 访问
+        # （两编排器都在模块级导入它）。
+        self.cu = upgrade if upgrade is not None else round_context._managed_upgrade(Path(config["D"]), client_spec(config)["client"])
         self.roots = round_context.resolve(config, mode="candidate" if candidate else "campaign", upgrade=self.cu)
         self.parameters = dict(self.roots["parameters"])
         self.campaign = Path(self.parameters["NEWDIR"])

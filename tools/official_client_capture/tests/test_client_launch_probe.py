@@ -737,7 +737,7 @@ class Stage1FinishResumeTests(unittest.TestCase):
         fixture = _RoundFixture(root)
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "wait_state.py", "stage1-finish.sh"):
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "wait_state.py", "stage1-finish.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         (drv / "client_launch_probe.py").write_text(STUB_PROBE.format(python=sys.executable), encoding="utf-8")
         tools = fixture.data_root / "tools" / "official_client_capture"

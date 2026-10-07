@@ -11,15 +11,26 @@
 
 输出：每键一行 ``export KEY='value'``（``shlex.quote``），lib.sh 只 ``eval`` 这些赋值。任何问题以退出码 2
 失败并把原因写到 stderr（lib.sh 先捕获输出再 eval，失败即退出）。
+
+Claude 升级 B5a-06 起按客户端解析：可选键 ``CLIENT``（缺省 codex）决定必填键、逐键格式核对与派生坐标，取值来自同目录的
+客户端表 ``client_table.py``。目标客户端的二进制、摘要与账号键通用化为 ``CLIENT_BIN``／``CLIENT_BIN_SHA256``／
+``CLIENT_ACCOUNT_ID``：Claude 只认通用键；Codex 的旧键 ``CODEX_BIN``／``CODEX_BIN_SHA256``／``CODEX_ACCOUNT_ID`` 照旧
+有效，通用键在 Codex 参数文件里是它们的别名，解析后归一成旧名导出（各阶段脚本读旧名）。一个客户端的参数文件里出现另一
+客户端的专属键即拒绝。改造前的 Codex 参数文件（没有 ``CLIENT``）解析与派生结果逐字不变；主程序只在末尾多输出新可选键
+的 ``unset``（清掉外层环境残留的另一客户端参数）。
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import shlex
 import sys
 from pathlib import Path
+from typing import Any
 
+# Codex 的必填键（改造前的全集，顺序即缺键报错的顺序）。其它客户端的必填键由它去掉 Codex 专属键、加上该客户端的
+# 专属键得到（``required_keys``；专属键见客户端表 exclusive_required_keys）。
 REQUIRED_KEYS = (
     "ROUND", "STAMP", "D", "RUNROOT", "NEW", "IN", "UP", "CAND", "PREV_CANDIDATE", "HISTORY_TEST_TREE",
     "C", "DC", "RECEIPT", "BUNDLE", "BUNDLE_BRANCH", "OFFICIAL_CAMPAIGN", "OFFICIAL_STOP_LEDGER", "OFFICIAL_STOP_RECEIPT",
@@ -48,6 +59,9 @@ OPTIONAL_KEYS = (
     "VC5_TARGET_REQUEST", "VC5_TARGET_TREE", "VC5_TARGET_PYCACHE", "VC5_TARGET_RECORD_STORE",
     # VC-4 只接受本轮显式网络模式和专项批准，不承接外层残留的 host 网络开关。
     "VC4_BUILD_NETWORK", "VC4_BUILD_NETWORK_APPROVAL",
+    # B5a-06：本轮客户端与目标客户端的通用键。对 Codex 它们可缺省（通用键是旧键的别名），对 Claude 后三个必填（见
+    # required_keys）；放在可选键里，没有出现时主程序照样 unset，外层环境残留的另一客户端参数不会被带进本轮。
+    "CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID",
 )
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
@@ -56,6 +70,62 @@ FORBIDDEN = set("`;&|<>()\\\r\n")
 
 class EnvFileError(ValueError):
     pass
+
+
+def client_table() -> Any:
+    """同目录的客户端表 ``client_table.py``：按路径加载（不受当前目录与 PYTHONPATH 影响），各模块共用一个模块对象。
+
+    驱动各处（本模块、入口步骤与编排器、入口门禁……）都以 ``client_table_sibling`` 登记同一份；``tools/ci`` 与驱动里的
+    两份副本逐字相同，先加载的那份为准。只在用到时加载：导入本模块不读客户端表。"""
+
+    name = "client_table_sibling"
+    module = sys.modules.get(name)
+    if module is not None:
+        return module
+    path = Path(__file__).resolve().with_name("client_table.py")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None or not path.is_file():
+        raise EnvFileError(f"驱动缺少客户端表：{path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+    return module
+
+
+def client_spec(values: dict[str, str]) -> Any:
+    """参数所属客户端在客户端表里的整行；``CLIENT`` 不认识即拒绝。"""
+
+    table = client_table()
+    try:
+        return table.spec(table.client_of(values))
+    except table.ClientTableError as error:
+        raise EnvFileError(str(error)) from error
+
+
+def required_keys(client: str) -> tuple[str, ...]:
+    """客户端的必填键：Codex 即 ``REQUIRED_KEYS``（逐字不变）；其它客户端去掉别的客户端的专属键、加上自己的专属键。"""
+
+    table = client_table()
+    own = table.spec(client)
+    foreign = set(table.foreign_keys(client))
+    return (*(key for key in REQUIRED_KEYS if key not in foreign),
+            *(key for key in own["exclusive_required_keys"] if key not in REQUIRED_KEYS))
+
+
+def stale_keys(exported: dict[str, str], client: str) -> list[str]:
+    """本轮没有导出、要从调用方环境里清掉的键：可选键（原顺序）加上另一客户端的专属键。
+
+    同一个 shell 先加载过别的参数文件时，上一轮的认证坐标、源码提交、身份参数会被悄悄带进本轮（10-02 E2-06 验收时，删掉
+    的必填身份参数就是这样从外层环境继承回来的）；B5a-06 起另一客户端的参数（例如 Claude 轮次之后的 CODEX_BIN 残留）
+    同理清掉。Codex 的另一客户端专属键都已在可选键里，清理集合只比改造前多出新增的四个可选键。"""
+
+    keys = [key for key in OPTIONAL_KEYS if key not in exported]
+    keys += [key for key in client_table().foreign_keys(client) if key not in exported and key not in keys]
+    return keys
 
 
 def plain_path(value: str, label: str) -> Path:
@@ -148,9 +218,28 @@ def parse_assignments(text: str, allowed_keys: tuple[str, ...] | list[str] | set
     return values
 
 
+def _normalize_aliases(values: dict[str, str], aliases: Any) -> dict[str, str]:
+    """把本客户端的别名键归一成规范键（Codex：通用键 → 旧键），保持参数文件里的先后位置；同一参数两处写了不同值即拒绝。"""
+
+    for alias, canonical in aliases.items():
+        if alias in values and canonical in values and values[alias] != values[canonical]:
+            raise EnvFileError(f"{alias} 是 {canonical} 的别名，两处取值不同")
+    normalized: dict[str, str] = {}
+    for key, value in values.items():
+        normalized.setdefault(aliases.get(key, key), value)
+    return normalized
+
+
 def parse(text: str) -> dict[str, str]:
     values = parse_assignments(text, (*REQUIRED_KEYS, *OPTIONAL_KEYS))
-    missing = [key for key in REQUIRED_KEYS if key not in values]
+    # B5a-06：先定客户端（CLIENT 缺省 codex），再按客户端核对。没有 CLIENT、也没写通用键的 Codex 参数文件，下面每一步
+    # 的结果与改造前相同（别名归一不改动、另一客户端专属键为空集、必填键与逐键核对的键和顺序不变）。
+    spec = client_spec(values)
+    values = _normalize_aliases(values, spec["key_aliases"])
+    foreign = [key for key in client_table().foreign_keys(spec["client"]) if key in values]
+    if foreign:
+        raise EnvFileError(f"CLIENT={spec['client']} 的参数文件不得含其它客户端的专属键：{foreign}")
+    missing = [key for key in required_keys(spec["client"]) if key not in values]
     if missing:
         raise EnvFileError(f"参数文件缺少键：{missing}")
     for key in ("C", "DC"):
@@ -159,12 +248,12 @@ def parse(text: str) -> dict[str, str]:
     for key in ("BASELINE_VERSION", "TARGET_VERSION"):
         if not re.fullmatch(r"\d+\.\d+\.\d+", values[key]):
             raise EnvFileError(f"{key} 必须是明确的三段版本号")
-    for key in ("CODEX_BIN_SHA256", "OFFICIAL_ASSET_SHA256", "PROFILE_DIGEST", "KILO_SHA256"):
+    for key in (spec["binary_sha256_key"], "OFFICIAL_ASSET_SHA256", "PROFILE_DIGEST", *spec["extra_sha256_keys"]):
         if not re.fullmatch(r"[0-9a-f]{64}", values[key]):
             raise EnvFileError(f"{key} 必须是本轮审核的完整 SHA-256")
     if "TARGET_CODE_MODE_HOST_SHA256" in values and not re.fullmatch(r"[0-9a-f]{64}", values["TARGET_CODE_MODE_HOST_SHA256"]):
         raise EnvFileError("TARGET_CODE_MODE_HOST_SHA256 必须是本轮审核的完整 SHA-256")
-    for key in ("CODEX_ACCOUNT_ID", "API_KEY_ID"):
+    for key in (spec["account_key"], "API_KEY_ID"):
         if not re.fullmatch(r"[1-9][0-9]*", values[key]):
             raise EnvFileError(f"{key} 必须是本轮明确指定的正整数")
     if values["PROFILE_ID"] != values["TARGET_PROFILE_ID"]:
@@ -214,27 +303,32 @@ def parse(text: str) -> dict[str, str]:
 
 
 def derive(values: dict[str, str]) -> dict[str, str]:
-    """只从已校验参数派生坐标；不自动选择账号、制品摘要或先前发布认证。"""
+    """只从已校验参数派生坐标；不自动选择账号、制品摘要或先前发布认证。
+
+    随客户端变的派生（Campaign 与轮次前缀、清单文件名、候选生命周期目录、官方制品布局、pre-A3 认证文件名）取客户端表的
+    模板，键与键的先后与改造前相同；Codex 的模板代入后与改造前写死的字面逐字相同。"""
 
     data, target, baseline = values["D"], values["TARGET_VERSION"], values["BASELINE_VERSION"]
+    spec = client_spec(values)
+    current, previous = client_table().format_fields(target), client_table().format_fields(baseline)
     tools = f"{data}/tools/official_client_capture"
-    suffix = target.replace(".", "_")
-    prefix = "c" + target.replace(".", "")
+    prefix = spec["campaign_prefix"].format(**current)
+    certification = spec["pre_a3_certification_name"].format(stamp=values["STAMP"])
     result = {
-        "CAMPAIGN_PREFIX": prefix, "TARGET_TAG": "codex-" + target.replace(".", ""),
-        "RULES_JSON": f"{tools}/codex_upgrade_rules_{suffix}.json",
-        "BASELINE_RULES_JSON": f"{tools}/codex_upgrade_rules_{baseline.replace('.', '_')}.json",
-        "SCENARIOS_JSON": f"{tools}/codex_upgrade_scenarios_{suffix}.json",
-        "BASELINE_SCENARIOS_JSON": f"{tools}/codex_upgrade_scenarios_{baseline.replace('.', '_')}.json",
-        "EXPECTATIONS_JSON": f"{tools}/candidate_rule_expectations_{suffix}.json",
-        "PROFILE_PATCH_JSON": f"{tools}/profile_rule_patches_{suffix}.json",
-        "LIFECYCLE_DIR": f"docs/egress/lifecycle/codex-{target.replace('.', '')}-candidate",
+        "CAMPAIGN_PREFIX": prefix, "TARGET_TAG": spec["target_tag"].format(**current),
+        "RULES_JSON": f"{tools}/{spec['rules_manifest'].format(**current)}",
+        "BASELINE_RULES_JSON": f"{tools}/{spec['rules_manifest'].format(**previous)}",
+        "SCENARIOS_JSON": f"{tools}/{spec['scenarios_manifest'].format(**current)}",
+        "BASELINE_SCENARIOS_JSON": f"{tools}/{spec['scenarios_manifest'].format(**previous)}",
+        "EXPECTATIONS_JSON": f"{tools}/{spec['expectations_manifest'].format(**current)}",
+        "PROFILE_PATCH_JSON": f"{tools}/{spec['profile_patch_manifest'].format(**current)}",
+        "LIFECYCLE_DIR": spec["lifecycle_dir"].format(**current),
         "CANDIDATE_IMAGE_REPOSITORY": f"sub2apiplus-{prefix}-candidate",
-        "BASELINE_SOURCE": f"{data}/official/codex-{baseline}/source-rust-v{baseline}/codex-rs",
-        "TARGET_SOURCE": f"{data}/official/codex-{target}/source-rust-v{target}/codex-rs",
-        "TARGET_PACKAGE": f"{data}/official/codex-{target}/assets/codex-package-aarch64-unknown-linux-musl.tar.gz",
+        "BASELINE_SOURCE": f"{data}/{spec['official_source'].format(**previous)}",
+        "TARGET_SOURCE": f"{data}/{spec['official_source'].format(**current)}",
+        "TARGET_PACKAGE": f"{data}/{spec['official_package'].format(**current)}",
         "ACTIVE_PROFILE": f"{data}/control/{values['IN']}/baseline-profile.json",
-        "PRE_A3_CERTIFICATION": f"{data}/control/policy-certification/pre-a3-path-certification-{values['STAMP']}.json",
+        "PRE_A3_CERTIFICATION": f"{data}/control/policy-certification/{certification}",
         "HISTORICAL_SOURCE_ROOT": f"{data}/official/historical-gate-source",
         "JWTGEN_BIN": f"{data}/private-tools/jwtgen",
         "EVIDENCE_DECISION": "recapture",
@@ -261,11 +355,9 @@ def main(argv: list[str]) -> int:
     exported = {**values, **derive(values)}
     for key, value in exported.items():
         sys.stdout.write(f"export {key}={shlex.quote(value)}\n")
-    # 参数文件里没有、也没有派生默认值的可选键：清掉调用方环境里残留的旧值。同一个 shell 先加载过别的参数文件时，上一轮的
-    # 认证坐标、源码提交、身份参数会被悄悄带进本轮（10-02 E2-06 验收时，删掉的必填身份参数就是这样从外层环境继承回来的）。
-    for key in OPTIONAL_KEYS:
-        if key not in exported:
-            sys.stdout.write(f"unset {key}\n")
+    # 参数文件里没有、也没有派生默认值的可选键，以及另一客户端的专属键：清掉调用方环境里残留的旧值（见 stale_keys）。
+    for key in stale_keys(exported, client_table().client_of(values)):
+        sys.stdout.write(f"unset {key}\n")
     return 0
 
 

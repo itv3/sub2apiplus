@@ -33,6 +33,25 @@ EXECUTOR = HERE / "unit_executor.py"
 COMMANDS_SCHEMA = "unit-executor-commands/v1"
 EGRESS_SPEC_UNIT_PREFIX = "egress-spec:"
 
+
+def _client_table() -> Any:
+    """同目录的客户端表 client_table.py（B5a-06）：按路径加载，与驱动其它模块共用一个模块对象（client_table_sibling）。"""
+
+    name = "client_table_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "client_table.py")
+        if spec is None or spec.loader is None:
+            raise ValueError(f"找不到同目录的 client_table.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
 # check-egress-spec 子检查的额度与预计秒数。只做 Python 静态检查的子检查占 1 核、1 GB；其余要编译 Go（go run／test／
 # vet／build、扫描器）的占 2 核、3～4 GB（GOMAXPROCS 随额度下发，编译并行度跟着它）。没登记的子检查按 Go 类保守估计。
 LIGHT_CHECKS = frozenset({
@@ -276,10 +295,11 @@ GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
     "deploy-scripts": (["deploy-scripts"], "."),
     "pre-a3": (["python3", "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification", "run-scenario"], "."),
 }
-# pre-A3 门禁项按客户端的字面命令（B5a-04）：Codex 就是上表那一条（逐字不变），Claude 的场景单元命令另带 --client claude。
+# pre-A3 门禁项按客户端的字面命令（B5a-04）：Codex 就是上表那一条（逐字不变），Claude 的场景单元命令另带 --client claude
+# （B5a-06 起取客户端表的 client_argv，Codex 为空）。
 PRE_A3_GATE_COMMANDS: dict[str, tuple[list[str], str]] = {
-    "codex": GATE_COMMANDS["pre-a3"],
-    "claude": ([*GATE_COMMANDS["pre-a3"][0], "--client", "claude"], GATE_COMMANDS["pre-a3"][1]),
+    client: ([*GATE_COMMANDS["pre-a3"][0], *_client_table().spec(client)["client_argv"]], GATE_COMMANDS["pre-a3"][1])
+    for client in _client_table().CLIENTS
 }
 
 
@@ -422,26 +442,54 @@ def historical_source_input(root: str | None) -> dict[str, Any]:
     return steps.resolve(steps.Input("environment", "tree", root or "/nonexistent-historical-source-root", "pycache"), ctx)
 
 
-def pre_a3_data_root_inputs(data_root: Path) -> list[dict[str, Any]]:
+def pre_a3_data_root_inputs(data_root: Path, client: str = "codex") -> list[dict[str, Any]]:
     """pre-A3 场景读、但测试树里没有或不保证与测试树一致的数据根内容：与 E2-05 的 pre-A3 步骤同一份
-    （``entry_steps.PRE_A3_DATA_ROOT``：冻结台账目录、录制数据、alpine 镜像、断言打包脚本、项目总账探测位置）。门禁清单
-    生成时在数据根算好，作为已算明细（``resolved``）带给每个场景单元。"""
+    （``entry_steps.pre_a3_data_root``：冻结台账目录、录制数据、alpine 镜像、断言打包脚本、项目总账探测位置；Claude 另加
+    它自己的总账目录的两处探测位置，B5a-06）。门禁清单生成时在数据根算好，作为已算明细（``resolved``）带给每个场景单元。"""
 
     steps = _entry_steps_module()
     ctx = steps.Context(params={"D": str(Path(data_root).resolve())}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
-    return [steps.resolve(item, ctx) for item in steps.PRE_A3_DATA_ROOT]
+    return [steps.resolve(item, ctx) for item in steps.pre_a3_data_root(client)]
 
 
-def pre_a3_inputs(test_file: str, data_root_inputs: list[dict[str, Any]] | None) -> dict[str, Any]:
+def pre_a3_units_client(units: Path) -> str:
+    """pre-A3 场景清单属于哪个客户端（按单元 ID 前缀）：没有可认的单元按 codex；混有多个客户端即拒绝（同 plan_gates）。"""
+
+    payload = json.loads(Path(units).read_text(encoding="utf-8"))
+    clients = {pre_a3_unit_client(unit.get("unit_id", "")) for unit in payload.get("units") or [] if isinstance(unit, dict)} - {None}
+    if len(clients) > 1:
+        raise ValueError(f"pre-A3 场景清单混有多个客户端的单元：{sorted(clients)}")
+    return clients.pop() if clients else "codex"
+
+
+def _extra_root_ranges(client: str) -> list[dict[str, Any]]:
+    """客户端身份覆盖、但不在标准范围里的受管根（Claude 的 tools/official_client_control，B5a-06）：受管部分（含 schemas/，
+    不含测试）与测试目录各一个范围。Codex 只有 official_client_capture（标准范围已覆盖），这里为空。"""
+
+    ranges = []
+    for root in _client_table().spec(client)["managed_roots"]:
+        if root == MANAGED_TREE:
+            continue
+        prefix, name = root.strip("/") + "/", Path(root).name
+        ranges.append({"category": "managed", "name": f"repo:{name}", "include": [prefix], "exclude": [f"{prefix}tests/"]})
+        ranges.append({"category": "tests", "name": f"repo:{name}-tests", "include": [f"{prefix}tests/"], "exclude": []})
+    return ranges
+
+
+def pre_a3_inputs(test_file: str, data_root_inputs: list[dict[str, Any]] | None, client: str = "codex") -> dict[str, Any]:
     """pre-A3 场景单元的输入声明（E3-02）：按 E2-05 的 pre-A3 输入范围，测试按场景收窄。
 
     受管树（不含测试）、夹具、文档（两份指南在 docs/ 下）、部署脚本副本、场景运行器模块级导入的测试夹具
     （``PRE_A3_RUNNER_FIXTURES``）、场景测试模块的静态依赖闭包（执行器展开），加数据根算好的几项。前几样按测试树内容算：
     入口门禁跑 pre-A3 之前已核对数据根部署的受管树、指南与部署脚本就是测试树这一份。不含 HEAD 与仓库其余部分：场景在
-    数据根运行，读不到 git，也没有后端、前端。"""
+    数据根运行，读不到 git，也没有后端、前端。
+
+    B5a-06：Claude 场景单元另声明第二受管根 ``tools/official_client_control``（受管部分含 ``schemas/``，测试目录单列）：只改
+    它的 ``store.py`` 或任一 schema，Claude 场景单元的输入摘要随之变化、场景失效重跑；Codex 场景单元不声明它，不受影响。
+    Codex 的声明与改造前逐字相同。"""
 
     ranges = _unit_records_module().standard_ranges(MANAGED_TREE)
-    return {"ranges": [ranges["managed"], ranges["tests-fixtures"], ranges["docs"]],
+    return {"ranges": [ranges["managed"], ranges["tests-fixtures"], ranges["docs"], *_extra_root_ranges(client)],
             "files": [{"category": "managed", "path": PRE_A3_DEPLOY_SCRIPT},
                       *({"category": "tests", "path": fixture} for fixture in PRE_A3_RUNNER_FIXTURES)],
             "test_modules": [test_file], "resolved": list(data_root_inputs or [])}
@@ -564,7 +612,7 @@ def plan_gates(
                 merged.update(cores=cores, memory_mb=PRE_A3_MEMORY_MB)
                 test_file = unit.get("scenario_test_file")
                 if isinstance(test_file, str) and test_file:
-                    merged["inputs"] = pre_a3_inputs(test_file, pre_a3_data_inputs)
+                    merged["inputs"] = pre_a3_inputs(test_file, pre_a3_data_inputs, pre_a3_unit_client(unit["unit_id"]) or "codex")
                 else:
                     merged.update(inheritable=False, not_inheritable_reason=PRE_A3_NOT_INHERITABLE)
                 if seconds is not None:
@@ -684,20 +732,23 @@ def _write(path: Path, payload: Any) -> str:
 
 # 测试树受管工具的五摘要：与发布认证、pre-A3 认证用同一个函数（codex_upgrade_policy_certification.current_identity）。
 IDENTITY_FIELDS = ("policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256", "tool_files_sha256")
+# B5a-06：按客户端算（Claude 由 v3 引擎按 Claude 策略算两根身份）——客户端名作为位置参数传给 current_identity；Codex 不带参数，
+# 调用与改造前相同。
 _TREE_IDENTITY_SNIPPET = (
-    "import json\n"
+    "import json, sys\n"
     "from tools.official_client_capture import codex_upgrade_policy_certification as certification\n"
-    "identity = certification.current_identity()\n"
+    "identity = certification.current_identity(*sys.argv[1:])\n"
     "print(json.dumps({name: identity[name] for name in certification.IDENTITY_FIELDS}))\n"
 )
 TREE_IDENTITY_TIMEOUT_SECONDS = 900
 
 
-def tree_tool_identity(tree: str) -> dict[str, str]:
+def tree_tool_identity(tree: str, client: str = "codex") -> dict[str, str]:
     """测试树受管工具的五摘要（v2 P0 证据绑定，E3-03）：在测试树里起子进程算，不写字节码。签发时与发布认证登记的
     身份比对——入口门禁跑之前已核对数据根部署的受管树就是测试树这一份，两边应当相等。"""
 
-    completed = subprocess.run([sys.executable, "-B", "-c", _TREE_IDENTITY_SNIPPET], cwd=tree, capture_output=True, text=True,
+    completed = subprocess.run([sys.executable, "-B", "-c", _TREE_IDENTITY_SNIPPET, *_client_table().spec(client)["identity_args"]],
+                               cwd=tree, capture_output=True, text=True,
                                stdin=subprocess.DEVNULL, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
                                timeout=TREE_IDENTITY_TIMEOUT_SECONDS)
     lines = completed.stdout.strip().splitlines()
@@ -710,7 +761,7 @@ def tree_tool_identity(tree: str) -> dict[str, str]:
     return identity
 
 
-def _p0_v2_context(summary: dict[str, Any], tree: str, tool_identity: Any) -> tuple[dict[str, Any] | None, str]:
+def _p0_v2_context(summary: dict[str, Any], tree: str, tool_identity: Any, client: str = "codex") -> tuple[dict[str, Any] | None, str]:
     """v2 P0 证据的共同部分（运行清单引用、记录库、测试树五摘要）；条件不满足时返回（None, 原因）。
 
     条件：执行器给了记录库、清单自检通过且已发布进记录库（发布的那一份摘要等于汇总登记的）、测试树五摘要算得出。"""
@@ -728,7 +779,7 @@ def _p0_v2_context(summary: dict[str, Any], tree: str, tool_identity: Any) -> tu
     if not isinstance(payload, dict) or payload.get("manifest_sha256") != manifest.get("manifest_sha256"):
         return None, f"运行清单没有发布进记录库，或发布的不是本次运行的那一份：{published}"
     try:
-        identity = (tool_identity or tree_tool_identity)(tree)
+        identity = tool_identity(tree) if tool_identity else tree_tool_identity(tree, client)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return None, f"测试树的工具五摘要算不出来：{error}"
     return {"unit_manifest": {"run_id": run_id, "manifest_sha256": manifest["manifest_sha256"], "mode": summary.get("mode")},
@@ -781,6 +832,11 @@ def export_records(
     steps = _entry_steps_module()
     inputs_ctx = steps.Context(params={**os.environ, "ENTRY_COMMIT": str(source.get("tree_head") or source.get("commit") or "")},
                                driver_dir=HERE, steps_dir=out)
+    # 本轮客户端（参数 CLIENT，B5a-06）：pre-A3 门禁项的输入清单与 v2 P0 证据的测试树五摘要按它取。
+    try:
+        client = inputs_ctx.client
+    except steps.EntryStepsError as error:
+        raise ValueError(str(error)) from error
 
     def gate_record(gate_id: str, exit_code: int, started: str | None, completed: str | None, extra: dict[str, Any]) -> dict[str, Any]:
         argv, workdir = gate_literal_command(
@@ -822,7 +878,7 @@ def export_records(
     inherited_any = any(records[gate_id]["inherited_units"] for gate_id in p0_gates)
     v2: dict[str, Any] | None = None
     if inherited_any:
-        v2, why = _p0_v2_context(summary, tree, tool_identity)
+        v2, why = _p0_v2_context(summary, tree, tool_identity, client)
         if v2 is None:
             for gate_id in p0_gates:
                 withheld[gate_id] = (f"本次运行承接了 {len(records[gate_id]['inherited_units'])} 个单元（全集通过模式），要写以运行清单为证据的"
@@ -1008,7 +1064,8 @@ def main(argv: list[str] | None = None) -> int:
             launcher = json.loads(args.launcher_json)
             if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):
                 raise ValueError("--launcher-json 必须是非空字符串组成的列表")
-            data_inputs = pre_a3_data_root_inputs(args.pre_a3_data_root) if args.pre_a3_data_root is not None else None
+            client = pre_a3_units_client(args.pre_a3_units) if args.pre_a3_units is not None else "codex"
+            data_inputs = pre_a3_data_root_inputs(args.pre_a3_data_root, client) if args.pre_a3_data_root is not None else None
             with_gates = [gate for gate in args.with_gates.split(",") if gate]
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
                                   input_scopes=[json.loads(path.read_text()) for path in args.input_scope],

@@ -239,18 +239,25 @@ class EntryGatesTests(unittest.TestCase):
                                        pre_a3_data_inputs=[], platform="linux")
 
     def test_entry_gates_script_passes_client_only_when_not_codex(self) -> None:
+        """B5a-06 起模块名与客户端参数取驱动的客户端表（lib.sh 解析参数后给出 CT_ 变量）：Codex 的客户端参数为空、模块是
+        原来那一个，Claude 为 --client claude；六条认证命令都在末尾追加它。"""
+
         lines = ENTRY_GATES_SCRIPT.read_text(encoding="utf-8").splitlines()
-        start = next(index for index, line in enumerate(lines) if line.startswith("PA3_CLIENT_ARGS=()"))
-        snippet = "set -Eeuo pipefail\n" + "\n".join(lines[start:start + 2]) + '\nprintf "[%s]" ${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"}\n'
-        for client, expected in ((None, "[]"), ("codex", "[]"), ("claude", "[--client][claude]")):
+        table = ENTRY_GATES_SCRIPT.with_name("client_table.py")
+        snippet = ('set -Eeuo pipefail\neval "$(python3 -B "$1" shell)"\n'
+                   'printf "%s|" "$CT_PRE_A3_MODULE"; printf "[%s]" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}\n')
+        module = "tools.official_client_capture.codex_upgrade_pre_a3_certification"
+        for client, expected in ((None, f"{module}|[]"), ("codex", f"{module}|[]"), ("claude", f"{module}|[--client][claude]")):
             environment = {key: value for key, value in os.environ.items() if key != "CLIENT"}
             if client is not None:
                 environment["CLIENT"] = client
-            result = subprocess.run(["bash", "-c", snippet], env=environment, capture_output=True, text=True)
+            result = subprocess.run(["bash", "-c", snippet, "entry-gates-client", str(table)], env=environment,
+                                    capture_output=True, text=True)
             self.assertEqual((result.returncode, result.stdout), (0, expected), client)
-        calls = [line for line in lines if "codex_upgrade_pre_a3_certification" in line and "python3 -m" in line]
+        calls = [line for line in lines if '"$CT_PRE_A3_MODULE"' in line and "python3 -m" in line]
         self.assertEqual(len(calls), 6, "plan、find-reusable×3、issue、record-reuse")
-        self.assertTrue(all('${PA3_CLIENT_ARGS[@]+"${PA3_CLIENT_ARGS[@]}"}' in line for line in calls))
+        self.assertTrue(all('${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}' in line for line in calls))
+        self.assertFalse([line for line in lines if "codex_upgrade_pre_a3_certification" in line], "模块名只从客户端表取")
 
 
 class ClaudePolicyCertificationTests(_IdentityMemo):

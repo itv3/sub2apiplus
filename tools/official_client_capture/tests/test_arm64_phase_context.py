@@ -417,7 +417,7 @@ class PhaseContextTests(unittest.TestCase):
 
     def test_standalone_without_bytecode_flag_keeps_driver_read_only(self):
         driver = self.root / "standalone"; driver.mkdir()
-        for name in ("phase_context.py", "round_context.py", "parse_env.py"):
+        for name in ("phase_context.py", "round_context.py", "parse_env.py", "client_table.py"):
             (driver / name).write_bytes((SCRIPTS / name).read_bytes())
         environment = {key: value for key, value in os.environ.items()
                        if key not in {"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX", "PYTHONPATH"}}

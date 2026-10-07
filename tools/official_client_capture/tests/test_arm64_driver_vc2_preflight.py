@@ -262,7 +262,7 @@ print("isolated-report.json")
             fixture = _DriverFixture(root)
             installed = root / "installed/driver"
             installed.mkdir(parents=True)
-            for name in ("vc2_assertion_preflight.py", "driver_config.py", "parse_env.py"):
+            for name in ("vc2_assertion_preflight.py", "driver_config.py", "parse_env.py", "client_table.py"):
                 shutil.copy2(SCRIPTS / name, installed / name)
             values = load_script("parse_env").parse(fixture.env_file.read_text())
             data = Path(values["D"])

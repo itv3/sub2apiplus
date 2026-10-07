@@ -102,7 +102,7 @@ class BuildNetworkContractTests(unittest.TestCase):
         # 驱动安装目录位于仓库之外，不能用 __file__ 的父目录猜测受管工具坐标。
         copied = self.root / "installed/driver"
         copied.mkdir(parents=True)
-        for name in ("vc4_contract.py", "driver_config.py", "parse_env.py", "build.sh"):
+        for name in ("vc4_contract.py", "driver_config.py", "parse_env.py", "client_table.py", "build.sh"):
             shutil.copy2(SCRIPTS / name, copied / name)
         shutil.rmtree(self.fixture.data_root / "tools")
         # A-08.1 要求受管根无符号链接；安装夹具使用独立普通目录。
@@ -254,7 +254,7 @@ class TreePreparationTests(unittest.TestCase):
         shutil.copytree(REPO_ROOT / "tools", fixture.data_root / "tools", ignore=shutil.ignore_patterns("__pycache__"))
         drv = root / "driver"
         drv.mkdir()
-        for name in ("lib.sh", "parse_env.py", "driver_config.py", "vc4_contract.py", "trees.sh", "build.sh"):
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "driver_config.py", "vc4_contract.py", "trees.sh", "build.sh"):
             shutil.copy2(SCRIPTS / name, drv / name)
         parser = load_script("parse_env")
         values = parser.parse(fixture.env_file.read_text())

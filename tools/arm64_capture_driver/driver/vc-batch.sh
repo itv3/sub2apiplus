@@ -6,6 +6,7 @@
 # 已失败或中止就拒绝派发、退出 3；还在跑或没有结论照常派发。然后向统一调度执行器申请整机（unit_executor.py acquire）：
 # 后台验证停派、等在跑单元结束才批准，批次结束（含失败退出）归还，后台接着跑。等批准的上限 VC_ACQUIRE_TIMEOUT 秒
 # （默认 3600），超时不派发、退出 3。
+# 编排器模块取客户端表（Claude 升级 B5a-06；lib.sh 给出 CT_ORCHESTRATOR_MODULE，Codex 即 codex_upgrade，命令行与改造前相同）。
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode batch --campaign-id "$1" --inputs "$2" --phase "$3" --predecessor "$5" --plan-name "$6")
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
@@ -24,7 +25,7 @@ fi
 trap 'python3 -B "$DRV/unit_executor.py" release --owner "$OWNER" > /dev/null 2>&1 || true' EXIT
 echo "整机已批准：$(cut -c1-200 "$WDIR/batch-$SEQ.acquire.json")"
 set +e
-python3 -m tools.official_client_capture.codex_upgrade compile-and-run-vc-batch --campaign-dir "$CDIR" --state-dir "$STATE" --phase "$PHASE" --sequence "$SEQ" --predecessor-checkpoint "$PRED_CKPT" --action-plan "$WDIR/$PLAN" > "$WDIR/batch-$SEQ.out" 2> "$WDIR/batch-$SEQ.err"
+python3 -m "$CT_ORCHESTRATOR_MODULE" compile-and-run-vc-batch --campaign-dir "$CDIR" --state-dir "$STATE" --phase "$PHASE" --sequence "$SEQ" --predecessor-checkpoint "$PRED_CKPT" --action-plan "$WDIR/$PLAN" > "$WDIR/batch-$SEQ.out" 2> "$WDIR/batch-$SEQ.err"
 RC=$?
 set -e
 echo "rc=$RC"

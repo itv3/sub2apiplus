@@ -477,7 +477,7 @@ class EntryOrderingTests(unittest.TestCase):
             fixture = _DriverFixture(root)
             drv = root / "drv"
             drv.mkdir()
-            for name in ("lib.sh", "parse_env.py", "driver_config.py", "vc5_admission.py", "vc5-start.sh"):
+            for name in ("lib.sh", "parse_env.py", "client_table.py", "driver_config.py", "vc5_admission.py", "vc5-start.sh"):
                 shutil.copy(SCRIPTS / name, drv / name)
             from tools.official_client_capture.tests.test_arm64_capture_driver import _stub_phase_context
             _stub_phase_context(drv)
@@ -567,7 +567,7 @@ with mock.patch.object(module,"ManagedFacts",return_value=facts):
             fixture = _DriverFixture(root)
             drv = root / "drv"
             drv.mkdir()
-            for name in ("lib.sh", "parse_env.py"):
+            for name in ("lib.sh", "parse_env.py", "client_table.py"):
                 shutil.copy(SCRIPTS / name, drv / name)
             pid_file = root / "child.pid"
             ready = root / "ready"
@@ -648,7 +648,7 @@ with mock.patch.object(module,"ManagedFacts",return_value=facts):
                 (root / "compose").mkdir()
                 drv = root / "drv"
                 drv.mkdir()
-                for file in ("lib.sh", "parse_env.py", name):
+                for file in ("lib.sh", "parse_env.py", "client_table.py", name):
                     shutil.copy(SCRIPTS / file, drv / file)
                 from tools.official_client_capture.tests.test_arm64_capture_driver import _stub_phase_context
                 _stub_phase_context(drv)

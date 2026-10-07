@@ -281,6 +281,8 @@ WHOLE_TESTS_READERS: dict[str, str] = {
     "test_codex_upgrade_pre_a3_certification": "按 pre-A3 认证模块的场景表在运行时导入并执行测试模块",
     "test_claude_fw_e_complete_campaign": "本地忽略区有证据数据时 freeze_campaign 整树复制受管工具树（含测试目录）；没有数据时整类跳过，拿不准，从宽",
     "test_arm64_supervised_deploy_transaction": "在受管树副本上真实部署：shutil.copytree 复制两个受管根（含测试目录），pre-A3 入口核对读取测试模块",
+    "test_driver_client_table": "按 pre-A3 场景单元的输入声明展开测试模块的静态依赖闭包（unit_records.declared_inputs 读测试目录里的模块源码），"
+                                "核对第二受管根只让 Claude 场景单元失效（B5a-06）",
 }
 # 人工核查确认的「读真实仓库 git 历史」的模块：模块名 → 原因（同一次核查；git 走 PATH 包装记录真实仓库上的调用）。
 # 这些模块读历史提交、对象或祖先关系，结论可能随提交变，加 HEAD 输入。不做自动识别：测试里的 git 命令绝大多数作用在
@@ -293,6 +295,8 @@ GIT_READERS: dict[str, str] = {
     "test_codex_01491_terminal_state": "经 tools/check_ledger_completeness 对真实仓库 git log、git show",
     "test_arm64_supervised_deploy_codex_parity": "对真实仓库 git show 读 B5a-01 开工基线提交的部署脚本，与改造后逐字节对照 Codex 收据",
     "test_pre_a3_codex_parity": "对真实仓库 git show 读 B5a-04 开工基线提交的 pre-A3 认证模块与入口门禁，逐字对照 Codex 场景单元与输入声明",
+    "test_driver_client_table_codex_parity": "对真实仓库 git show 读 B5a-06 开工基线提交的驱动与入口基础设施（参数解析、入口步骤与编排器、"
+                                             "入口门禁、各驱动脚本），逐字对照 Codex 的派生、步骤判定与命令行",
 }
 # 读集审计（E3-04）实测、静态闭包漏掉的测试目录读取：模块名 → {测试目录相对路径: 原因}。来源都是受管模块之间的函数内
 # 导入（静态闭包按设计不追，见 TestDependencies 的说明）：被测代码运行时延迟导入别的受管模块，后者在模块级导入测试目录

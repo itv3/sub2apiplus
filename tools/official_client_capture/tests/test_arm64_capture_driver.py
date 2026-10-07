@@ -383,7 +383,7 @@ class PermissionCloseoutTests(unittest.TestCase):
             env = {**fixture.env, "PATH": f"{bin_dir}:{os.environ['PATH']}", "CLOSEOUT_OWNER": pwd.getpwuid(os.getuid()).pw_name}
             driver = root / "driver"
             driver.mkdir()
-            for name in ("lib.sh", "parse_env.py", "vc5-seal-receipts.sh", "vc5-permission-closeout.sh"):
+            for name in ("lib.sh", "parse_env.py", "client_table.py", "vc5-seal-receipts.sh", "vc5-permission-closeout.sh"):
                 (driver / name).write_bytes((SCRIPTS / name).read_bytes())
             _stub_phase_context(driver)
             result = _run(driver / "vc5-seal-receipts.sh", attempt.name, "2026-09-22T00:10:00Z", env=env, cwd=fixture.data_root)
@@ -502,7 +502,7 @@ class Vc5AllResumeTests(unittest.TestCase):
     def _stub_driver(self, root: Path, fixture: _DriverFixture, *, accept_creates_result: bool) -> tuple[Path, Path]:
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "wait_state.py", "vc5-all.sh"):
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "wait_state.py", "vc5-all.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         _stub_phase_context(drv)
         calls = root / "stub-calls.log"
@@ -656,7 +656,7 @@ class EnvFileParserTests(unittest.TestCase):
             marker = root / "marker"
             drv = root / "drv"
             drv.mkdir(mode=0o700)
-            for name in ("lib.sh", "parse_env.py", "vc5-permission-closeout.sh"):
+            for name in ("lib.sh", "parse_env.py", "client_table.py", "vc5-permission-closeout.sh"):
                 (drv / name).write_bytes((SCRIPTS / name).read_bytes())
             probe = drv / "probe.sh"
             probe.write_text("#!/bin/bash\nset -Eeuo pipefail\nsource \"$(dirname \"${BASH_SOURCE[0]}\")/lib.sh\"\necho \"PROBE_OK ROUND=$ROUND\"\n", encoding="utf-8")
@@ -709,7 +709,7 @@ class Vc5SealReadOnlyTests(unittest.TestCase):
     def _stub_driver(self, root: Path) -> tuple[Path, Path]:
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "vc5-seal.sh"):
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "vc5-seal.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         _stub_phase_context(drv)
         calls = root / "stub-calls.log"
@@ -1355,7 +1355,7 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
         fixture = _DriverFixture(root)
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "vc5-gate-target.sh", "bytecode_cache.py"):
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "vc5-gate-target.sh", "bytecode_cache.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         package = fixture.data_root / "tools" / "official_client_capture"
         (fixture.data_root / "tools" / "__init__.py").write_text("", encoding="utf-8")
@@ -1521,7 +1521,7 @@ class ManagedSharedCacheTests(unittest.TestCase):
         fixture = _DriverFixture(root)
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py"):
+        for name in ("lib.sh", "parse_env.py", "client_table.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         (drv / "bytecode_cache.py").write_text(_FAKE_BYTECODE_HELPER, encoding="utf-8")
         (fixture.data_root / "tools" / "official_client_capture" / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -1653,7 +1653,7 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
         _git(root, "clone", "-q", str(hist), str(work))
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "vc0-gate-target.sh", "vc5-gate-target.sh", "gates.sh", "bytecode_cache.py",
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "vc0-gate-target.sh", "vc5-gate-target.sh", "gates.sh", "bytecode_cache.py",
                      "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         (drv / "unit_executor.py").write_text(_EXECUTOR_STUB, encoding="utf-8")
@@ -1965,7 +1965,7 @@ class Arm64GateScriptTests(unittest.TestCase):
         _git(root, "clone", "-q", str(hist), str(work))
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "arm64-full-gates.sh", "arm64-vc4-gates.sh", "bytecode_cache.py", "upload_manifest.py",
                      "entry-gates.sh", "entry_gates.py", "entry_steps.py", "unit_records.py", "go_compile_warmup.py"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         # 全量门禁经入口门禁一次运行：执行器用替身（记下清单与环境、按清单合成结论）；VC-4 门禁仍经 isolated_run（unshare 垫片）。

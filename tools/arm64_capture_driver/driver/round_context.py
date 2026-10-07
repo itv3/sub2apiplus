@@ -20,9 +20,9 @@ import sys
 sys.dont_write_bytecode = True
 
 try:
-    from .parse_env import coordinates, derive, parse, plain_path
+    from .parse_env import client_spec, coordinates, derive, parse, plain_path
 except ImportError:
-    from parse_env import coordinates, derive, parse, plain_path
+    from parse_env import client_spec, coordinates, derive, parse, plain_path
 
 
 def binding(path: Path) -> dict:
@@ -33,12 +33,14 @@ def binding(path: Path) -> dict:
     return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
 
-def _managed_upgrade(data: Path):
-    """独立入口只加载本轮受管根；不继承调用方预先导入的另一份工具。"""
+def _managed_upgrade(data: Path, client: str = "codex"):
+    """独立入口只加载本轮受管根；不继承调用方预先导入的另一份工具。编排器按本轮客户端取客户端表（B5a-06：Codex 即
+    codex_upgrade，与改造前相同）。"""
 
+    spec = client_spec({"CLIENT": client})
     sys.path.insert(0, str(data))
-    module = importlib.import_module("tools.official_client_capture.codex_upgrade")
-    expected = data / "tools" / "official_client_capture" / "codex_upgrade.py"
+    module = importlib.import_module(spec["orchestrator_module"])
+    expected = data / "tools" / "official_client_capture" / spec["orchestrator_file"]
     plain_path(str(expected), "受管解析器")
     if Path(module.__file__).resolve() != expected:
         raise ValueError("Campaign 解析器不属于本轮 D 的受管工具")
@@ -66,7 +68,7 @@ def resolve(config: dict[str, str], *, mode: str = "candidate", upgrade=None) ->
     report["bindings"]["campaign_digest"] = binding(campaign / "campaign.sha256")
     memo = os.environ.pop("CODEX_UPGRADE_IDENTITY_MEMO", None)
     try:
-        cu = upgrade if upgrade is not None else _managed_upgrade(Path(config["D"]))
+        cu = upgrade if upgrade is not None else _managed_upgrade(Path(config["D"]), client_spec(config)["client"])
         manifest = cu._require_formal_campaign(campaign)
         for field, key in (("campaign_id", "NEW"), ("baseline_version", "BASELINE_VERSION"),
                            ("target_version", "TARGET_VERSION")):

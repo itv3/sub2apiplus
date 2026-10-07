@@ -48,7 +48,7 @@ class VcBatchBoundaryTests(unittest.TestCase):
         self.data = self.fixture.data_root
         self.drv = self.root / "drv"
         self.drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "vc-batch.sh", "background_validation.py", "unit_executor.py", "unit_records.py",
+        for name in ("lib.sh", "parse_env.py", "client_table.py", "vc-batch.sh", "background_validation.py", "unit_executor.py", "unit_records.py",
                      "read_audit.py", "unit_executor.json"):
             (self.drv / name).write_bytes((SCRIPTS / name).read_bytes())
         driver_tests._stub_phase_context(self.drv)

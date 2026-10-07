@@ -10,6 +10,11 @@ export DRV=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${ARM64_VC_ENV:?ARM64_VC_ENV 未设置（指向本轮 env.sh，见 env.example.sh）}"
 ARM64_VC_ENV_EXPORTS=$(python3 "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }
 eval "$ARM64_VC_ENV_EXPORTS"; unset ARM64_VC_ENV_EXPORTS
+# 客户端表（Claude 升级 B5a-06）：本轮客户端（参数 CLIENT，缺省 codex）在驱动里的绑定——编排器与各收据模块名、二进制与
+# 账号参数键、总账目录、便宜检查的必填键、追加给共享模块的 --client 等——取自同目录的 client_table.py，以 CT_ 前缀的
+# shell 变量给各脚本用（只赋值、不导出：子进程与各步骤判定读的环境不变）。不认识的客户端失败关闭。
+CLIENT_TABLE_ASSIGNMENTS=$(python3 -B "$DRV/client_table.py" shell) || { echo "客户端表拒绝加载：CLIENT=${CLIENT:-}"; exit 2; }
+eval "$CLIENT_TABLE_ASSIGNMENTS"; unset CLIENT_TABLE_ASSIGNMENTS
 # 阶段入口先只读解析；错误必须先于目录、预约或网络副作用。
 phase_require() {
   local exports

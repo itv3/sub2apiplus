@@ -32,6 +32,11 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 记录、单元一个都不承接；不带时入口门禁用全集通过模式（承接有效的单元执行记录，E3-01）。``--audit-reads``（要和
 ``--reexecute-gates`` 一起带）：入口门禁带读集审计（E3-04），每个单元的实际读取都要落在声明的输入范围里。
 运行锁 ``$RUNROOT/.entry.lock``；每步日志与运行汇总在 ``$RUNROOT/entry-runs/<UTC>/``。
+
+按客户端（Claude 升级 B5a-06）：执行顺序与续跑规则两客户端相同；各步骤调用的模块、合同、目录与追加给共享模块的
+``--client`` 取客户端表（``client_table.py``，本轮客户端取参数 ``CLIENT``，缺省 codex），Codex 的命令行与改造前逐字相同。
+客户端表登记为尚未接入的步骤（Claude 的零请求 smoke、atomic-double、预检 plan、Job 演练、启动探测与 VC-0 收口）不执行，
+记失败并写明落实它的工作项（``--plan`` 也列出），不拿 Codex 的实现顶替。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
 """
@@ -55,13 +60,8 @@ from typing import Any, Callable, Mapping, Sequence
 
 HERE = Path(__file__).resolve().parent
 RUN_SCHEMA = "entry-orchestrator-run/v1"
-PRE_A3_MODULE = "tools.official_client_capture.codex_upgrade_pre_a3_certification"
-POLICY_MODULE = "tools.official_client_capture.codex_upgrade_policy_certification"
-CLOSEOUT_MODULE = "tools.official_client_capture.codex_upgrade_vc0_closeout"
 # VC-0 收口派发 VC-1 首批前申请整机，等调度器批准的上限（秒；后台验证在跑的重单元要先结束）。
 MACHINE_ACQUIRE_TIMEOUT_SECONDS = 3600
-VC_RECEIPT_MODULE = "tools.official_client_capture.codex_upgrade_vc_receipt"
-P0_FACTS_SCHEMA = "codex-upgrade-vc-receipt-facts/v1"
 # 收口模块的退出码 3：需要批准或人工处置（不是失败），这一步标「阻塞」。
 CLOSEOUT_NEEDS_OPERATOR = 3
 
@@ -81,6 +81,16 @@ def _entry_steps_module() -> Any:
 
 
 ES = _entry_steps_module()
+# 客户端表（B5a-06）：与入口步骤同一个模块对象。各步骤按本轮客户端（参数 CLIENT，缺省 codex）取模块名、合同名、目录与
+# 追加给共享模块命令行的 --client（Codex 为空，命令行与改造前逐字相同）；Claude 尚未接入的步骤（表里的 pending）不执行，
+# 记失败并写明落实它的工作项，不拿 Codex 的实现顶替。
+CT = ES.CT
+# 以下是 Codex 的取值（只读视图，沿用改造前的名字）。
+PRE_A3_MODULE = CT.spec("codex")["pre_a3_module"]
+POLICY_MODULE = CT.spec("codex")["policy_certification_module"]
+CLOSEOUT_MODULE = CT.spec("codex")["closeout_module"]
+VC_RECEIPT_MODULE = CT.spec("codex")["p0_receipt_module"]
+P0_FACTS_SCHEMA = CT.spec("codex")["p0_facts_schema"]
 
 # E2-06 的执行顺序，末尾两步（P0 收据、VC-0 收口）由 E2-07 接上。
 ORDER = ("entry-preflight", "policy-compatibility", "policy-activation", "entry-gates", "pre-a3", "zero-request-smoke",
@@ -197,7 +207,19 @@ class Orchestrator:
 
     @property
     def project_ledger(self) -> Path:
-        return self.root / "evidence" / "campaigns" / "upgrade-project-ledger"
+        return self.root / "evidence" / "campaigns" / self.spec["project_ledger_dir_name"]
+
+    @property
+    def spec(self) -> Mapping[str, Any]:
+        """本轮客户端在客户端表里的整行（B5a-06）。"""
+
+        return self.ctx.client_spec
+
+    @property
+    def client_argv(self) -> list[str]:
+        """追加给共享模块命令行的客户端参数：Codex 为空（与改造前逐字相同），Claude 是 --client claude。"""
+
+        return list(self.spec["client_argv"])
 
     def record_product(self, step_id: str, name: str) -> Path:
         record = ES.read_record(self.steps_dir, step_id)
@@ -250,15 +272,16 @@ class Orchestrator:
 
     def step_policy_compatibility(self) -> tuple[bool, dict[str, str]]:
         out = fresh(Path(self.p("POLICY_COMPAT_RECEIPT")))
-        rc = self.run("policy-compatibility", self.py(POLICY_MODULE, "compatibility", "--previous-policy", self.p("PREVIOUS_POLICY"),
-                                                      "--output", str(out)))
+        rc = self.run("policy-compatibility", self.py(self.spec["policy_certification_module"], "compatibility", "--previous-policy",
+                                                      self.p("PREVIOUS_POLICY"), "--output", str(out), *self.client_argv))
         return rc == 0 and out.is_file(), {"compatibility": str(out)}
 
     def step_policy_activation(self) -> tuple[bool, dict[str, str]]:
         out = fresh(Path(self.p("POLICY_ACTIVATION")))
-        rc = self.run("policy-activation", self.py(POLICY_MODULE, "activation", "--deployment-receipt", str(self.latest_deploy()),
+        rc = self.run("policy-activation", self.py(self.spec["policy_certification_module"], "activation", "--deployment-receipt",
+                                                   str(self.latest_deploy()),
                                                    "--compatibility-receipt", str(self.record_product("policy-compatibility", "compatibility")),
-                                                   "--output", str(out)))
+                                                   "--output", str(out), *self.client_argv))
         return rc == 0 and out.is_file(), {"activation": str(out)}
 
     def entry_gates_and_pre_a3(self, gates_run: bool, pre_a3_run: bool) -> None:
@@ -268,7 +291,7 @@ class Orchestrator:
 
         steps = [step for step, needed in (("entry-gates", gates_run), ("pre-a3", pre_a3_run)) if needed]
         for step in steps:
-            ES.begin(ES.STEP_BY_ID[step], self.ctx)
+            ES.begin(self.ctx.step(step), self.ctx)
         try:
             activation = self.record_product("policy-activation", "activation")
             certification = (fresh(Path(self.p("PRE_A3_CERTIFICATION"))) if pre_a3_run
@@ -324,17 +347,17 @@ class Orchestrator:
             output = self.data / "audit" / f"zero-request-smoke-{stamp}{suffix}.json"
             if not os.path.lexists(staging) and not os.path.lexists(output):
                 break
-        rc = self.run("zero-request-smoke", self.py("tools.official_client_capture.codex_upgrade_zero_request_smoke",
+        rc = self.run("zero-request-smoke", self.py(self.spec["zero_request_smoke_module"],
                                                     "--staging-root", str(staging), "--output", str(output)))
         return rc == 0 and output.is_file(), {"receipt": str(output)}
 
     def step_atomic_double(self) -> tuple[bool, dict[str, str]]:
-        root = fresh(self.data / "staging" / f"codex-atomic-vc0-vc1-{self.p('ROUND')}-{self.p('STAMP')}")
+        root = fresh(self.data / "staging" / f"{self.spec['atomic_root_prefix']}{self.p('ROUND')}-{self.p('STAMP')}")
         root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         root.mkdir(mode=0o700)
         rc = self.run("atomic-double", ["docker", "exec", "--env", "PYTHONPATH=/capture", "--env", "PYTHONDONTWRITEBYTECODE=1",
                                         "--workdir", "/capture", "capture-cli", "python3", "-m",
-                                        "tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt",
+                                        self.spec["atomic_rehearsal_module"],
                                         "atomic-double-collect", "--evidence-root", f"/capture/staging/{root.name}",
                                         "--output", "receipt.json"])
         receipt = root / "receipt.json"
@@ -345,12 +368,13 @@ class Orchestrator:
         total = int((deadline - datetime.now(timezone.utc)).total_seconds() // 60) - 5   # 留 5 分钟余量（同 stage1.sh）
         budgets = [argument for item in self.params.get("STAGE_BUDGETS", "").split() for argument in ("--stage-budget-minutes", item)]
         self.ledger_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        rc = self.run("ledger", self.py("tools.official_client_capture.codex_upgrade_timing_ledger", "create",
+        rc = self.run("ledger", self.py(self.spec["timing_ledger_module"], "create",
                                         "--ledger-dir", str(self.ledger_dir), "--upgrade-id", self.p("UP"),
                                         "--baseline-version", self.p("BASELINE_VERSION"), "--target-version", self.p("TARGET_VERSION"),
                                         "--campaign-purpose", "production_replacement",
                                         "--evidence-decision", self.params.get("EVIDENCE_DECISION") or "recapture",
-                                        "--project-ledger-dir", str(self.project_ledger), "--total-budget-minutes", str(total), *budgets))
+                                        "--project-ledger-dir", str(self.project_ledger), "--total-budget-minutes", str(total), *budgets,
+                                        *self.client_argv))
         ledger = self.ledger_dir / "ledger.json"
         return rc == 0 and ledger.is_file(), {"ledger": str(ledger)}
 
@@ -358,10 +382,10 @@ class Orchestrator:
         root = fresh(self.root / "environment" / f"{self.p('UP')}-p0")
         root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         root.mkdir(mode=0o700)
-        module = "tools.official_client_capture.codex_upgrade_arm64_environment_receipt"
+        module = self.spec["environment_receipt_module"]
         rc = self.run("environment-p0", self.py(module, "collect", "--evidence-root", str(root), "--output", "facts.json",
                                                 "--phase", "p0", "--subject-id", self.p("UP"),
-                                                "--rust-tls-codex-version", self.p("TARGET_VERSION")))
+                                                self.spec["environment_probe_version_option"], self.p("TARGET_VERSION")))
         if rc == 0:
             rc = self.run("environment-p0", self.py(module, "finalize", "--evidence-root", str(root), "--facts", "facts.json",
                                                     "--output", "receipt.json"))
@@ -371,7 +395,7 @@ class Orchestrator:
     def step_ledger_checkpoint(self) -> tuple[bool, dict[str, str]]:
         ledger_dir = self.record_product("ledger", "ledger").parent
         checkpoint = fresh(ledger_dir / "receipts" / f"vc0-input-{self.p('ROUND')}-preflight-{self.p('STAMP')}.json")
-        rc = self.run("ledger-checkpoint", self.py("tools.official_client_capture.codex_upgrade_timing_ledger", "checkpoint",
+        rc = self.run("ledger-checkpoint", self.py(self.spec["timing_ledger_module"], "checkpoint",
                                                    "--ledger-dir", str(ledger_dir),
                                                    "--output", checkpoint.relative_to(ledger_dir).as_posix()))
         return rc == 0 and checkpoint.is_file(), {"checkpoint": str(checkpoint)}
@@ -380,12 +404,16 @@ class Orchestrator:
         ledger_dir = self.record_product("ledger", "ledger").parent
         checkpoint = self.record_product("ledger-checkpoint", "checkpoint")
         environment = self.record_product("environment-p0", "receipt")
-        headsha = str(json.loads(self.latest_deploy().read_text(encoding="utf-8"))["tool_files_sha256"])[:9]
+        receipt = json.loads(self.latest_deploy().read_text(encoding="utf-8"))
+        container = self.spec["deploy_receipt_identity_key"]
+        headsha = str((receipt if container is None else receipt[container])["tool_files_sha256"])[:9]
         campaigns = self.root / "evidence" / "campaigns"
         campaigns.mkdir(parents=True, exist_ok=True, mode=0o700)
         pre = fresh(campaigns / f"{self.p('CAMPAIGN_PREFIX')}-preflight-vc5-{self.p('ROUND')}-{headsha}-{self.p('STAMP')}")
         p = self.p
-        argv = self.py("tools.official_client_capture.codex_upgrade", "plan",
+        # 下面是 Codex 编排器 plan 的参数形状（code-mode-host、capture／relay 两处 codex 二进制、Codex 账号）。Claude 的
+        # plan 参数表由 B2-11 落实，在那之前这一步对 Claude 登记为尚未接入（客户端表 pending），执行不到这里。
+        argv = self.py(self.spec["orchestrator_module"], "plan",
                        "--campaign-dir", str(pre), "--campaign-id", pre.name, "--baseline-version", p("BASELINE_VERSION"),
                        "--target-version", p("TARGET_VERSION"), "--campaign-mode", "preflight_only",
                        "--campaign-purpose", "production_replacement", "--timing-ledger-dir", str(ledger_dir),
@@ -418,7 +446,7 @@ class Orchestrator:
         root = fresh(base)
         root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         root.mkdir(mode=0o700)
-        module = "tools.official_client_capture.codex_upgrade_job_rehearsal_receipt"
+        module = self.spec["job_rehearsal_module"]
         rc = self.run("job-rehearsal", self.py(module, "collect", "--campaign-dir", str(campaign), "--evidence-root", str(root),
                                                "--output", "facts.json", *previous))
         if rc == 0:
@@ -454,8 +482,8 @@ class Orchestrator:
         out = fresh(Path(self.p("RELEASE_CERTIFICATION")))
         # pre-A3 认证是跨部署复用来的时，发布认证要绑定复用收据（同 stage2.sh：record-reuse 幂等，本次部署下签发的为空）。
         rc, reused = self.run_json("release-certification", "reuse", self.py(
-            PRE_A3_MODULE, "record-reuse", "--certification", str(pre_a3), "--deployment-receipt", str(deploy),
-            "--policy-activation", str(activation), "--receipt-root", str(pre_a3.parent)))
+            self.spec["pre_a3_module"], "record-reuse", "--certification", str(pre_a3), "--deployment-receipt", str(deploy),
+            "--policy-activation", str(activation), "--receipt-root", str(pre_a3.parent), *self.client_argv))
         if rc != 0:
             self.outcomes["release-certification"].reasons.append("pre-A3 复用收据登记失败，见日志")
             return False, {"certification": str(out)}
@@ -464,11 +492,11 @@ class Orchestrator:
                      *(["--pre-a3-reuse-receipt", reuse] if reuse else []), "--policy-activation", str(activation),
                      "--job-rehearsal-root", str(job.parent), "--job-rehearsal-receipt", job.name,
                      "--atomic-rehearsal-root", str(atomic.parent), "--atomic-rehearsal-receipt", atomic.name,
-                     "--atomic-container", "capture-cli", "--data-root", str(self.data), "--output", str(out)]
-        rc = self.run("release-certification", self.py("tools.official_client_capture.certify_release", *arguments))
+                     "--atomic-container", "capture-cli", "--data-root", str(self.data), "--output", str(out), *self.client_argv]
+        rc = self.run("release-certification", self.py(self.spec["release_certification_module"], *arguments))
         if rc == 0:
-            rc = self.run("release-certification", self.py("tools.official_client_capture.certify_release", "verify",
-                                                           "--certification", str(out)))
+            rc = self.run("release-certification", self.py(self.spec["release_certification_module"], "verify",
+                                                           "--certification", str(out), *self.client_argv))
         return rc == 0 and out.is_file(), {"certification": str(out)}
 
     def step_p0_receipt(self) -> tuple[bool, dict[str, str]]:
@@ -513,7 +541,7 @@ class Orchestrator:
                               "unexpected_skip": 0}
         release_sha256 = hashlib.sha256((root / "evidence" / "release-certification.json").read_bytes()).hexdigest()
         facts = {
-            "schema_version": P0_FACTS_SCHEMA,
+            "schema_version": self.spec["p0_facts_schema"],
             "kind": "p0_gate",
             "subject": {"upgrade_id": plan["upgrade_id"], "campaign_id": None, "campaign_purpose": plan["campaign_purpose"],
                         "baseline_version": plan["baseline_version"], "target_version": plan["target_version"],
@@ -530,10 +558,10 @@ class Orchestrator:
         facts_path = root / "p0-facts.json"
         facts_path.write_text(json.dumps(facts, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         facts_path.chmod(0o600)
-        rc = self.run("p0-receipt", self.py(VC_RECEIPT_MODULE, "finalize", "--evidence-root", str(root), "--facts", "p0-facts.json",
-                                            "--output", "p0-receipt.json"))
+        rc = self.run("p0-receipt", self.py(self.spec["p0_receipt_module"], "finalize", "--evidence-root", str(root),
+                                            "--facts", "p0-facts.json", "--output", "p0-receipt.json"))
         if rc == 0:
-            rc = self.run("p0-receipt", self.py(VC_RECEIPT_MODULE, "replay", "--evidence-root", str(root),
+            rc = self.run("p0-receipt", self.py(self.spec["p0_receipt_module"], "replay", "--evidence-root", str(root),
                                                 "--receipt", "p0-receipt.json"))
         receipt = root / "p0-receipt.json"
         return rc == 0 and receipt.is_file(), {"receipt": str(receipt)}
@@ -589,7 +617,7 @@ class Orchestrator:
             self.outcomes["vc0-closeout"].reasons.append("向统一调度执行器申请整机没有批准（超时或已有其它采集占用），没有收口")
             return False, {}
         try:
-            rc, result = self.run_json("vc0-closeout", "closeout", self.py(CLOSEOUT_MODULE, *arguments))
+            rc, result = self.run_json("vc0-closeout", "closeout", self.py(self.spec["closeout_module"], *arguments))
         finally:
             self.run_json("vc0-closeout", "release", [*executor, "release", "--owner", owner])
         receipt = audit / "receipt.json"
@@ -612,7 +640,7 @@ class Orchestrator:
         outcome.log = str(self.run_dir / f"{step_id}.log")
         if not passed and not outcome.reasons:
             outcome.reasons.append("执行失败，见日志")
-        step = ES.STEP_BY_ID[step_id]
+        step = self.ctx.step(step_id)
         record_products = {name: path for name, path in products.items() if not passed or Path(path).exists()}
         try:
             ES.finish(step, self.ctx, status=outcome.status, products=record_products)
@@ -623,8 +651,14 @@ class Orchestrator:
             ES.finish(step, self.ctx, status="failed", products=record_products)
 
     def execute(self, step_id: str) -> None:
-        step = ES.STEP_BY_ID[step_id]
+        step = self.ctx.step(step_id)
         ES.begin(step, self.ctx)
+        waiting = CT.pending(self.ctx.client, f"step:{step_id}")
+        if waiting:
+            # 客户端表登记为尚未接入（B5a-06）：不执行，记失败并写明落实它的工作项；接入后从表里删去即照常执行。
+            self.outcomes[step_id].reasons.append(f"本轮客户端（{self.ctx.client}）的这一步尚未接入：{waiting}")
+            self._finish(step_id, False, {})
+            return
         handler = getattr(self, "step_" + step_id.replace("-", "_"))
         try:
             passed, products = handler()
@@ -634,7 +668,7 @@ class Orchestrator:
         self._finish(step_id, passed, products)
 
     def blocked_by(self, step_id: str) -> list[str]:
-        deps = list(ES.STEP_BY_ID[step_id].upstream) + list(EXEC_DEPS.get(step_id, ()))
+        deps = list(self.ctx.step(step_id).upstream) + list(EXEC_DEPS.get(step_id, ()))
         blockers = [dep for dep in deps if dep in self.outcomes and
                     (self.outcomes[dep].status == "failed" or self.outcomes[dep].action in {"被阻塞", "阻塞"})]
         blockers += [f"便宜检查 {check}" for check, steps in PREFLIGHT_BLOCKS.items()
@@ -654,6 +688,9 @@ class Orchestrator:
         for index, step_id in enumerate(ORDER):
             decision = decisions[step_id]
             self.outcomes[step_id] = Outcome(step_id, decision["decision"], reasons=list(decision["reasons"]))
+            waiting = CT.pending(self.ctx.client, f"step:{step_id}")
+            if waiting and decision["decision"] in {"run", "live"}:
+                self.outcomes[step_id].reasons.append(f"本轮客户端（{self.ctx.client}）的这一步尚未接入：{waiting}")
             if index < start and decision["decision"] in {"run", "blocked"}:
                 raise OrchestratorError(f"起点 {from_step} 之前的步骤 {step_id} 要重做（{'；'.join(decision['reasons'])}），不能从这里开始")
         result = {"schema_version": RUN_SCHEMA, "started_at_utc": _now(), "formal_built": is_formal, "plan_only": plan_only,

@@ -54,6 +54,8 @@ def source_identity(args):
     paths = [Path(__file__), ROOT / "tools/ci/capture_test_shards.py", ROOT / "tools/ci/unit_executor.py",
              ROOT / "tools/ci/unit_records.py", ROOT / "tools/arm64_capture_driver/driver/bytecode_cache.py",
              ROOT / "tools/official_client_capture/codex_upgrade_tool_identity_policy.py",
+             # B5a-06：Claude 身份引擎复用同一个身份记忆化（CODEX_UPGRADE_IDENTITY_MEMO，B1-07），它的源码同样决定缓存命中。
+             ROOT / "tools/official_client_capture/claude_tool_identity_policy.py",
              args.weights, args.config, args.durations]
     paths += sorted(args.start.rglob("*.py"))
     parser = os.environ.get("CLAUDE_AST_TYPESCRIPT_MODULE")

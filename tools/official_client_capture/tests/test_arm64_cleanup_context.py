@@ -106,7 +106,7 @@ class CleanupContextTests(unittest.TestCase):
     def test_standalone_missing_env_has_no_bytecode_or_output_files(self):
         driver = self.fixture.root / "standalone"
         driver.mkdir()
-        for name in ("cleanup_context.py", "phase_context.py", "round_context.py", "parse_env.py"):
+        for name in ("cleanup_context.py", "phase_context.py", "round_context.py", "parse_env.py", "client_table.py"):
             (driver / name).write_bytes((phases.SCRIPTS / name).read_bytes())
         before = self.fixture.base.snapshot()
         environment = {key: value for key, value in os.environ.items()
