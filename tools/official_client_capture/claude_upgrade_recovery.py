@@ -304,6 +304,7 @@ def _verify_reusable_evidence(
     *,
     phase: str = PHASE,
     candidate_id: str | None = None,
+    _producer_root: Path | None = None,
 ) -> None:
     """复用前逐项复核证据：Job 闭环收据摘要、Job 级权限收口重放、relay 清单摘要；候选另核每步恢复报告摘要（任一不成立即
     失败关闭）。"""
@@ -333,7 +334,17 @@ def _verify_reusable_evidence(
     if closure_path.is_symlink() or not closure_path.is_file() or file_sha256(closure_path) != binding.get("sha256"):
         raise ConfigurationError(f"复用 Job {job_id} 的闭环收据缺失或摘要漂移。")
     closure = claude_upgrade._read_json(closure_path, "Job 闭环收据")
-    producer_root = _attempt_root(producer_campaign_dir, str(producer["attempt_id"]), phase, producer_candidate_id)
+    producer_root = _attempt_root(producer_campaign_dir, str(producer["attempt_id"]), phase, producer_candidate_id) if _producer_root is None else _producer_root
+    if _producer_root is not None:
+        # B4-05b：恢复段复用由专属读侧传入原产出段，仍强制核对规范坐标，不能借内部参数绕过 Campaign／候选边界。
+        from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+        revision = claude_upgrade_attempt_recovery.require_recovery_revision(producer_root.name)
+        original_id = producer_root.parent.parent.name
+        expected = _attempt_root(producer_campaign_dir, original_id, phase, producer_candidate_id) / claude_upgrade.ATTEMPT_RECOVERY_DIRNAME / revision
+        if phase != CANDIDATE_PHASE or origin is not None or producer_root != expected or producer["attempt_id"] != f"{original_id}.{revision}":
+            raise ConfigurationError("恢复段复用的 Job 产出坐标与声明身份不一致。")
+        claude_upgrade._reject_symlink_components(producer_root, producer_campaign_dir, "恢复段 Job 产出目录")
     job_root = closure_path.parent
     if (
         closure.get("schema_version") != capture.JOB_CLOSURE_SCHEMA
@@ -1052,8 +1063,6 @@ def _restore_gateway_residue(
 def reconcile_attempt_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     """``reconcile-attempt``：共享对账之后识别两个采集容器里的残留取证进程（只读探针留证）。"""
 
-    if getattr(arguments, "recovery_revision", None) is not None:
-        raise claude_upgrade._pending("reconcile-attempt --recovery-revision（候选恢复段）", "B4-05（评估失败局部恢复）")
     campaign_dir = _resolved_campaign(arguments.campaign_dir)
     arguments.campaign_dir = campaign_dir
     with upgrade_control_plane.adapter_scope(_adapter()):

@@ -3703,10 +3703,11 @@ def _attempt_recovery_segment_terminal_failed(
     attempt_id: str,
     segment_root: Path,
 ) -> bool:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
+    """B4-05b 候选恢复段读侧：由 Claude 专属实现重放控制链与证据合同。"""
 
-    del campaign_dir, candidate_id, attempt_id, segment_root
-    raise _pending("_attempt_recovery_segment_terminal_failed", "B4-05b（候选恢复段，随 B4-01／B4-02）")
+    from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+    return claude_upgrade_attempt_recovery.terminal_failed(campaign_dir, candidate_id=candidate_id, attempt_id=attempt_id, segment_root=segment_root)
 
 
 def _authoritative_recovery_execute_jobs(
@@ -3714,10 +3715,11 @@ def _authoritative_recovery_execute_jobs(
     candidate_id: str,
     reservation: Mapping[str, Any],
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
+    """B4-05b 候选恢复段读侧：由 Claude 专属实现重放控制链与证据合同。"""
 
-    del campaign_dir, candidate_id, reservation
-    raise _pending("_authoritative_recovery_execute_jobs", "B4-05b（候选恢复段，随 B4-01／B4-02）")
+    from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+    return claude_upgrade_attempt_recovery.authoritative_execute_jobs(campaign_dir, candidate_id, reservation)
 
 
 def _load_attempt_recovery_reservation(
@@ -3728,10 +3730,11 @@ def _load_attempt_recovery_reservation(
     attempt_id: str,
     recovery_revision: str,
 ) -> dict[str, Any]:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
+    """B4-05b 候选恢复段读侧：由 Claude 专属实现重放控制链与证据合同。"""
 
-    del campaign_dir, segment_root, candidate_id, attempt_id, recovery_revision
-    raise _pending("_load_attempt_recovery_reservation", "B4-05b（候选恢复段，随 B4-01／B4-02）")
+    from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+    return claude_upgrade_attempt_recovery.load_reservation(campaign_dir, segment_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision)
 
 
 def _load_attempt_recovery_segment(
@@ -3740,10 +3743,11 @@ def _load_attempt_recovery_segment(
     attempt_id: str,
     recovery_revision: str,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    """服务面成员（候选 attempt 恢复段，Claude 编排器尚未实现，由 B4-05b（候选恢复段，随 B4-01／B4-02） 落实）。"""
+    """B4-05b 候选恢复段读侧：由 Claude 专属实现重放控制链与证据合同。"""
 
-    del campaign_dir, candidate_id, attempt_id, recovery_revision
-    raise _pending("_load_attempt_recovery_segment", "B4-05b（候选恢复段，随 B4-01／B4-02）")
+    from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+    return claude_upgrade_attempt_recovery.load_segment(campaign_dir, candidate_id, attempt_id, recovery_revision)
 
 
 def _require_recovery_preview_scope_equals_frozen_jobs(
@@ -3761,17 +3765,19 @@ def _require_recovery_preview_scope_equals_frozen_jobs(
 
 
 def recovery_segment_summary(*arguments: Any, **options: Any) -> Any:
-    """适配器成员 ``recovery_segment_summary``（候选恢复段摘要）：VC-1 官方路径不经过它，由 B4-05b（候选恢复段）落实。"""
+    """B4-05b 候选恢复段读侧：由 Claude 专属实现重放控制链与证据合同。"""
 
-    del arguments, options
-    raise _pending("recovery_segment_summary（候选恢复段）", "B4-05b（候选恢复段，随 B4-01／B4-02）")
+    from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+    return claude_upgrade_attempt_recovery.recovery_segment_summary(*arguments, **options)
 
 
 def segment_reuse_proofs(*arguments: Any, **options: Any) -> Any:
-    """适配器成员 ``segment_reuse_proofs``（候选恢复段复用证明）：VC-1 官方路径不经过它，由 B4-05b（候选恢复段）落实。"""
+    """B4-05b 候选恢复段读侧：由 Claude 专属实现重放控制链与证据合同。"""
 
-    del arguments, options
-    raise _pending("segment_reuse_proofs（候选恢复段）", "B4-05b（候选恢复段，随 B4-01／B4-02）")
+    from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+    return claude_upgrade_attempt_recovery.segment_reuse_proofs(*arguments, **options)
 
 
 def recovery_reuse_check(
@@ -3912,7 +3918,7 @@ def _campaign_contamination_facts(
     写下这两项；残留进程即污染这一判定不在这里放宽。候选 attempt（B4-02）与官方同一口径：预约收据必须可读，attempt 收据
     状态为 ``environment_contaminated`` 即记 ``<candidate>:<attempt>:attempt``。Claude 的候选 seal 是零请求封存、没有 Codex
     那种 Kilo 后环境恢复门禁，不产出 seal 失败收据：任一 attempt 下出现 ``seal-failure.json`` 即失败关闭、先人工审计。候选
-    attempt 恢复段的污染事实随 B4-05b 落实，出现恢复段目录即报待实现。
+    attempt 恢复段的污染事实由 B4-05b 专属读侧重放预约与摘要，保留段号供隔离精确覆盖。
     """
 
     facts: list[dict[str, Any]] = []
@@ -3936,8 +3942,10 @@ def _campaign_contamination_facts(
             )
         )
     for phase, current_candidate_id, attempt_root in _campaign_attempt_roots(campaign_dir):
-        if phase != "official" and (attempt_root / ATTEMPT_RECOVERY_DIRNAME).exists():
-            raise _pending("候选 attempt 恢复段的环境污染事实", "B4-05b（候选 attempt 恢复段）")
+        if phase == "candidate" and current_candidate_id is not None:
+            from tools.official_client_capture import claude_upgrade_attempt_recovery
+
+            facts.extend(claude_upgrade_attempt_recovery.contamination_facts(campaign_dir, attempt_root, candidate_id=current_candidate_id))
         _load_capture_reservation(
             campaign_dir,
             attempt_root,

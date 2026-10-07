@@ -97,7 +97,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "改动与新增的符号都在 wire、evidence 与评估读侧闭包外",
     "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；读侧闭包内 7 个函数原位不动；B2-08 读侧闭包外的 _environment_facts、"
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "
-                                   "campaign_deadline_at_utc（批准延期后同一对象能再对账，原先在这里失败关闭）",
+                                   "campaign_deadline_at_utc（批准延期后同一对象能再对账，原先在这里失败关闭）；B4-05b-2 的"
+                                   " validate_segment_reuse_preview 改调用现有 adapter.segment_reuse_proofs，与生成预览时取同一客户端实现；"
+                                   "Codex 仍绑定本模块原函数，原判定、报错与扫描统计由 test_claude_upgrade_attempt_recovery 对照原源码",
     "codex_upgrade_project_ledger.py": "B1-04 项目总账客户端维度：Claude v2 plan 带 client，码表、目录名与计量类别经适配器；Codex v1 逐字不变",
     "codex_upgrade_timing_ledger.py": (
         "B1-05 计时账本客户端维度：Claude v2 计划带 client，默认预算、承接表与总账目录名按客户端；Codex v1 逐字不变；"

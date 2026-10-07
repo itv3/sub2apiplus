@@ -157,11 +157,14 @@ class SurfaceContractTests(unittest.TestCase):
         with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"Claude 的 builder 批次结束必写该索引") as caught:
             claude_upgrade._derive_b0_evaluation_run(Path("/nonexistent"), {}, "c1", 1, {}, ())
         self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_attempt_recovery_segment：由 B4-05b"):
+        with self.assertRaises(codex_upgrade.ConfigurationError) as caught:
             claude_upgrade._load_attempt_recovery_segment(Path("/nonexistent"), candidate_id="c1", attempt_id="a1", recovery_revision="ar1")
+        self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
         for member in ("recovery_segment_summary", "segment_reuse_proofs"):
-            with self.subTest(member=member), self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"B4-05b"):
-                getattr(uca.adapter_for("claude"), member)(Path("/nonexistent"), "c1", "a1", "ar1")
+            with self.subTest(member=member), self.assertRaises(codex_upgrade.ConfigurationError) as caught:
+                extra = ([],) if member == "segment_reuse_proofs" else ()
+                getattr(uca.adapter_for("claude"), member)(Path("/nonexistent"), "c1", "a1", "ar1", *extra)
+            self.assertNotIsInstance(caught.exception, claude_upgrade.ClaudeOrchestratorPending)
         self.assertTrue(issubclass(claude_upgrade.ClaudeOrchestratorPending, codex_upgrade.ConfigurationError))
 
 
