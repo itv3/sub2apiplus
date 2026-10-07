@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import gzip
 import hashlib
 import io
 import json
@@ -54,13 +55,21 @@ def _elf(interpreter: str | None, *, machine: int = 183, payload: bytes = b"bun-
 
 
 def _tarball(files: dict[str, bytes]) -> bytes:
+    """确定性的 tar.gz：同样的文件每次打出逐字节相同的包。
+
+    ``tarfile`` 的 ``w:gz`` 会把当前时间写进 gzip 头；Registry 替身每次请求都重新打包，packument 里的 integrity 与随后
+    下载的 tarball 若恰好跨过秒边界，字节就对不上，测试因此偶发失败。这里显式用 ``GzipFile(mtime=0)``；tar 成员的
+    ``TarInfo.mtime`` 缺省就是 0。
+    """
+
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        for name, content in files.items():
-            info = tarfile.TarInfo(name)
-            info.size = len(content)
-            info.mode = 0o755 if name.endswith("/claude") else 0o644
-            archive.addfile(info, io.BytesIO(content))
+    with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w") as archive:
+            for name, content in files.items():
+                info = tarfile.TarInfo(name)
+                info.size = len(content)
+                info.mode = 0o755 if name.endswith("/claude") else 0o644
+                archive.addfile(info, io.BytesIO(content))
     return buffer.getvalue()
 
 
