@@ -89,6 +89,7 @@
 | `job_rehearsal_profile` | 模块 | `codex_upgrade_job_rehearsal_receipt` | `claude_upgrade_job_rehearsal` |
 | `build_job_contract`、`binary_facts`、`job_contract_replay` | 函数 | 委托原执行合同构造器与二进制核对 | Claude 执行合同 `official-client-job-rehearsal-contract/v1` 的构造、二进制表与重放 |
 | `closeout_profile` | 模块 | `codex_upgrade_vc0_closeout` | `claude_upgrade_vc0_closeout` |
+| `atomic_rehearsal_profile` | 模块 | `codex_upgrade_campaign_run_rehearsal_receipt` | `claude_upgrade_atomic_rehearsal` |
 
 子命令名与阶段名两客户端相同（Claude 子命令与 Codex 同名），共享代码按字面书写，不经适配器。动作 ID 由各自的
 动作计划给出：Claude 的 VC-1 封存批次用 `vc1-01-analyze-target`、`vc1-02-seal-preview`、`vc1-03-seal-approve`，不用
@@ -154,6 +155,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | VC-0 收口收据组（收口收据、失败诊断、现场、上限后恢复预览、首批交接） | `codex-upgrade-vc0-closeout-receipt/v1` 等 | `official-client-vc0-closeout-*/v1` 同组 |
 | Job 演练收据组（facts、收据、执行合同、采集器） | `codex-upgrade-job-rehearsal-*`（执行合同 v2） | `official-client-job-rehearsal-*/v1` 同组 |
 | 失败生命周期探针 | `codex-upgrade-failure-lifecycle-probe/v1` | `official-client-failure-lifecycle-probe/v1` |
+| atomic-double 收据（动作事实、合成 VC-0 阶段事实同组） | `codex-atomic-vc0-vc1-rehearsal/v2` | `official-client-atomic-vc0-vc1-rehearsal/v1`（v2 字段加 `client`）同组 |
 | 编排器候选构建收据 | `codex-upgrade-candidate-build-receipt/v2` | `official-client-upgrade-candidate-build-receipt/v1`（带 `client`） |
 | 候选 revision seal、被取代失效标记 | `codex-upgrade-candidate-revision-seal/v1`、`codex-upgrade-candidate-superseded/v1` | seal 同左；失效标记 `claude-upgrade-candidate-superseded/v1` |
 | 请求账务 | `live-request-provenance/v2` | 同左（计量单位不同，见 Claude 指南） |
@@ -204,7 +206,7 @@ def compile_and_run_vc_batch(arguments):
 | 迁入薄壳 | 在 Claude 适配器作用域里转调 `upgrade_control_plane` |
 | 照搬 | 两客户端语义相同的通用函数（读写、摘要、路径、租约读取、证据根取代归档与冲突隔离读取、阶段路径等），逐字取 Codex 实现，由 `tests/test_orchestrator_surface_contract.py` 的照搬清单锁定逐字一致；先照搬后因 Claude 语义分叉的成员另行登记 |
 | 自实现 | Claude 语义不同的成员，实现在 `claude_upgrade_*` 子模块：总计划读取与建立、取证 attempt、封存、VC-1 恢复、工具演进、阶段结果与批次、分类、画像、候选 revision 与候选构建等 |
-| 待实现 | 调用即报 `ClaudeOrchestratorPending` 并写明原因，不伪造行为；集中在候选采集与候选封存、评估基线与评估恢复、候选恢复段 |
+| 待实现 | 调用即报 `ClaudeOrchestratorPending` 并写明原因，不伪造行为；集中在候选采集与候选封存、评估失败恢复与候选恢复段、VC-5 评估用的分类与画像视图 |
 
 另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。命令行子命令与 Codex 同名：13 个共享流程
 子命令照搬 Codex 的参数定义并在 Claude 适配器作用域里转调共享实现，对账器同时进入 Claude 作用域；其中
@@ -460,10 +462,9 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
   不满足即失败。Claude 场景单元另声明第二受管根：只改 `tools/official_client_control` 时 Claude 场景单元失效，Codex
   场景单元不受影响。
 - 发布认证绑定当前部署收据的五摘要、pre-A3 认证（跨部署沿用时另绑复用收据）、Job 演练与 atomic-double 收据；Job 演练
-  按客户端合同重放，两客户端同样要求存储与失败生命周期两项探针摘要；只能在具备 Go 与 Docker 的 Linux ARM64 上签发。
-  各客户端能重放的 atomic-double 合同登记在 `certify_release.CLIENT_ATOMIC_DOUBLE_REPLAY`：Claude 一项为假，Claude 签发
-  在核完 pre-A3、复用收据与 Job 演练之后失败关闭，不拿 Codex 的演练合同顶替。pre-A3 认证可选绑定的分批演练收据只属于
-  Codex，Claude 给出即拒绝。
+  按客户端合同重放，两客户端同样要求存储与失败生命周期两项探针摘要；atomic-double 收据按客户端的合同名与工具身份核对，
+  容器内重放对 Claude 追加 `--client claude`；只能在具备 Go 与 Docker 的 Linux ARM64 上签发。pre-A3 认证可选绑定的分批
+  演练收据只属于 Codex，Claude 给出即拒绝。
 
 ## 10 升级入口
 
@@ -499,7 +500,7 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
 | `policy-compatibility`、`policy-activation` | `codex_upgrade_policy_certification` | 同一模块加 `--client claude` |
 | `entry-gates`、`pre-a3` | `entry-gates.sh` 同一次运行；pre-A3 v2 | 同一入口门禁；pre-A3 v3 |
 | `zero-request-smoke` | `codex_upgrade_zero_request_smoke` | `claude_upgrade_zero_request_smoke` |
-| `atomic-double` | `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` | 客户端表 `pending`：执行即失败 |
+| `atomic-double` | `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect`（证据根前缀 `codex-atomic-vc0-vc1-`） | 同一模块加 `--client claude`，经适配器取 Claude 画像 `claude_upgrade_atomic_rehearsal`（证据根前缀 `claude-atomic-vc0-vc1-`） |
 | `ledger` | `codex_upgrade_timing_ledger create`（计划 v1） | 同一模块加 `--client claude`（计划 v2）；项目总账目录 `upgrade-project-ledger-claude` |
 | `environment-p0` | `codex_upgrade_arm64_environment_receipt`（`--rust-tls-codex-version`） | `claude_upgrade_arm64_environment_receipt`（`--claude-version`） |
 | `ledger-checkpoint` | 计时账本 checkpoint | 同左 |

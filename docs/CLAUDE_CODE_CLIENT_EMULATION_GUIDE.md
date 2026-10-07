@@ -1400,8 +1400,11 @@ Claude 的 pre-A3 场景是登记的四条真实链，单元 ID 为 `pre-a3:clau
 重跑，Codex 场景单元不受影响。跨部署沿用 pre-A3 时由 `record-reuse` 登记复用收据并纳入发布认证，无有效证明就
 重跑。旧认证按冻结合同只读重放，不追改历史字节。
 
-Claude 发布认证：待认证。当前签发在核完 pre-A3 与 Job 演练之后失败关闭（Claude 的 atomic-double 收据尚不能被
-发布认证重放），VC-0 收口要求的 Claude 发布认证因此还签不出来。
+Claude 的 atomic-double 由同一共享收据模块加 `--client claude` 执行，在 `capture-cli` 里两个独立新根中各建一个合成
+Formal Campaign，经原子入口完成一次 VC-0→VC-1 与失败父 run 收口及四个负例，零请求，签
+`official-client-atomic-vc0-vc1-rehearsal/v1`；发布认证按 Claude 合同重放它，容器内重放追加 `--client claude`。
+
+Claude 发布认证：待认证。
 
 <a id="claude-vc-1"></a>
 ## 4.1 VC-1 收集目标证据
