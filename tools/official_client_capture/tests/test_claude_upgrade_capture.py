@@ -405,8 +405,11 @@ class CampaignJobsTests(CaptureFixture):
         same = self.write_campaign(payload, campaign_id="claude-code-2_1_285-t5", configuration={"synthetic_capture_container": CAPTURE})
         with self.assertRaisesRegex(ConfigurationError, "独立的断网容器"):
             claude_upgrade._campaign_jobs(same, claude_upgrade.load_campaign_manifest(same), "official")
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, "B4-01"):
+        # 候选阶段（B4-01b）：没有冻结候选变量的总计划不能展开候选任务；批准场景的展开不在 B4-01 范围内。
+        with self.assertRaisesRegex(ConfigurationError, "没有冻结候选变量"):
             claude_upgrade._campaign_jobs(campaign, claude_upgrade.load_campaign_manifest(campaign), "candidate", candidate_id="c1")
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, "B4-04"):
+            claude_upgrade._campaign_jobs(campaign, claude_upgrade.load_campaign_manifest(campaign), "official", use_approved_scenario=True)
 
     def test_campaign_arguments_reads_only_the_given_manifest(self) -> None:
         campaign = self.write_campaign(_reduced_payload({SMALL_SYNTHETIC_JOB}))

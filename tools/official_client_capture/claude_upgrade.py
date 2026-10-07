@@ -4403,21 +4403,23 @@ def _candidate_failed_run_for_review(
 def _apply_candidate_runtime_override(
     campaign_dir: Path, manifest: dict[str, Any], candidate_id: str | None
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-01（候选采集）落实）：只在候选 attempt 的 run／seal、评估恢复与环境隔离的
-    候选分支里调用，候选运行坐标覆盖的形状取决于 Claude 候选采集的配置合同。"""
+    """服务面成员（B4-01b）：候选运行坐标覆盖；Claude 没有登记覆盖的命令，没有覆盖收据时原样返回、有即失败关闭。
+    实现在 ``claude_upgrade_candidate_capture``。"""
 
-    del campaign_dir, manifest, candidate_id
-    raise _pending("_apply_candidate_runtime_override", "B4-01（候选采集）")
+    from tools.official_client_capture import claude_upgrade_candidate_capture
+
+    return claude_upgrade_candidate_capture.apply_runtime_override(campaign_dir, manifest, candidate_id)
 
 
 def _verify_candidate_attempt_identity(
     manifest: dict[str, Any], identity: dict[str, Any]
 ) -> None:
-    """服务面成员（Claude 编排器尚未实现，由 B4-01（候选采集）落实）：候选 attempt 的 seal 前重验源码树与运行容器，
-    依赖 Claude 候选 attempt 的身份投影。"""
+    """服务面成员（B4-01b）：seal 与恢复前重验候选 attempt 身份（用途、服务容器坐标、源码树摘要、服务镜像与 RepoDigests）。
+    实现在 ``claude_upgrade_candidate_capture``。"""
 
-    del manifest, identity
-    raise _pending("_verify_candidate_attempt_identity", "B4-01（候选采集）")
+    from tools.official_client_capture import claude_upgrade_candidate_capture
+
+    claude_upgrade_candidate_capture.verify_attempt_identity(manifest, identity)
 
 
 # B4-04（评估基线 b<K> 与评估器授权，实现在 ``claude_upgrade_baseline``）／B4-05（评估失败恢复）
@@ -5027,6 +5029,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
             claude_upgrade_capture.add_capture_official_run_arguments(target)
             claude_upgrade_seal.add_seal_arguments(target)
+        if name == "capture-candidate":
+            # run 的参数（B4-01b）：真实请求确认、零请求演练与 deadline；--candidate-id 与 seal 的参数（B4-02）在下面登记。
+            from tools.official_client_capture import claude_upgrade_candidate_capture
+
+            claude_upgrade_candidate_capture.add_run_arguments(target)
         if name == "classify":
             # 草案（只有 --campaign-dir，分母取 VC-1 封存）、修订（--from-revision、--revision-input）与批准
             # （--approve-revision、--approve-review-sha256），B3-02；B2-07 补充项起不再接受 --candidates。
@@ -5167,7 +5174,7 @@ def _assert_consumer_admission(arguments: argparse.Namespace) -> None:
         with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
             upgrade_control_plane._assert_project_ledger_consumer(command, arguments)
         if (
-            command == "capture-official"
+            command in {"capture-official", "capture-candidate"}
             and getattr(arguments, "capture_action", None) == "run"
             and getattr(arguments, "acknowledge_live_requests", False)
             and os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) != "1"
@@ -5314,6 +5321,10 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_capture
 
             result, return_code = claude_upgrade_capture.capture_official_run_command(arguments)
+        elif arguments.command == "capture-candidate" and arguments.capture_action == "run":
+            from tools.official_client_capture import claude_upgrade_capture
+
+            result, return_code = claude_upgrade_capture.capture_candidate_run_command(arguments)
         elif arguments.command == "capture-official" and arguments.capture_action == "seal":
             from tools.official_client_capture import claude_upgrade_seal
 

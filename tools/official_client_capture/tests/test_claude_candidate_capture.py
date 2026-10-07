@@ -31,6 +31,8 @@ from tools.official_client_capture import claude_upgrade_plan as plan
 ROOT = Path(__file__).resolve().parents[3]
 TOOL_ROOT = ROOT / "tools" / "official_client_capture"
 SCRIPT = TOOL_ROOT / "claude_run_candidate_capture.sh"
+# 抓包容器的 64 位 ID：出口守护下监督器把 CAPTURE_CONTAINER 钉成它，位置参数里仍是容器名。
+CAPTURE_ID = "c" * 64
 V5_CATALOG = TOOL_ROOT / "capturelib" / "claude_fw_f_v5.py"
 V5_FACTS = TOOL_ROOT / "capturelib" / "claude_fw_f_v5_version_facts_2_1_285.json"
 
@@ -456,7 +458,12 @@ if command == "inspect":
     if "Config.Env" in fmt:
         done("POSTGRES_USER=sub2api\nPOSTGRES_DB=sub2api\n" if target == "sub2apiplus-postgres" else "SERVER_PORT=8080\n")
     if fmt == "{{.Id}}":
-        done(state["service_id"] + "\n")
+        # 服务容器按 state 的 service_id；抓包容器的名字与 64 位 ID 都解析到同一个 ID（监督器钉住环境变量后脚本按 ID 核对）。
+        if target == "sub2apiplus":
+            done(state["service_id"] + "\n")
+        if target in state["capture_ids"]:
+            done(state["capture_ids"][target] + "\n")
+        done(code=1)
     if fmt == "{{.State.Running}}":
         done(("true" if state["keeper_running"] else "false") + "\n")
     if "State.Health" in fmt:
@@ -483,6 +490,10 @@ if command == "exec":
         content = state["hosts"] if rest[1] == "/etc/hosts" else state["ca_bundle"]
         done(hashlib.sha256(content.encode()).hexdigest() + "  " + rest[1] + "\n")
     if rest[0] == "python3" and rest[1].endswith("/claude_fw_e_relay.py"):
+        state["relay_target"] = container
+        if "--dry-run" in rest:
+            state["dry_run_observed"] = {"runtime_exists": Path(os.environ["FAKE_RUNTIME_HOST"]).exists()}
+            done(json.dumps({"schema_version": "claude-code-fw-e-relay-plan/v1", "side": "candidate"}) + "\n")
         runtime = Path(os.environ["FAKE_RUNTIME_HOST"])
         files = sorted(item.name for item in runtime.iterdir() if item.is_file())
         state["capture_observed"] = {
@@ -502,7 +513,7 @@ if command == "cp":
         content = state["hosts"] if source.endswith("/etc/hosts") else state["ca_bundle"]
         Path(target).write_text(content)
         done()
-    if source.startswith("capture-cli:"):
+    if source.split(":", 1)[0] == state["capture_ids"]["capture-cli"]:
         Path(target).write_text("CAPTURE-CA\n")
         done()
     if target.startswith("sub2apiplus:"):
@@ -565,6 +576,7 @@ class CandidateScriptTests(unittest.TestCase):
             "calls": [], "account_shape": "anthropic|oauth|NULL|live", "eligible": "7", "proxy": "3", "fallback": None,
             "gate": "|", "proxies": {}, "next_proxy": 77, "service_id": "svc-1", "keeper_running": True,
             "custom_ca_present": False, "hosts": self.original_hosts, "staged_hosts": "", "ca_bundle": "BUNDLE\n",
+            "capture_ids": {"capture-cli": CAPTURE_ID, CAPTURE_ID: CAPTURE_ID, "capture-cli-other": "e" * 64},
         }
         self.probe = "v4-replay-baseline"
         self.runtime_container = f"/capture/runtime/claude-candidate/cid-{self.probe}"
@@ -683,7 +695,8 @@ class CandidateScriptTests(unittest.TestCase):
             "账号 ID 为空": ({"ACCOUNT_ID": ""}, None, "ACCOUNT_ID"),
             "中继命令与环境不一致": ({}, mismatched, "--run-id 与环境变量不一致"),
             "带官方凭据": ({}, [*self.command(), "--claude-credentials-file", "/x"], "--claude-credentials-file"),
-            "不经抓包容器": ({}, ["docker", "exec", "other", *self.command()[3:]], "docker exec"),
+            # 目标容器不是抓包容器实例的拒绝在只读的容器 ID 核对里（见 test_container_identity_mismatch_is_refused_read_only）。
+            "不是 docker exec": ({}, ["podman", "exec", *self.command()[2:]], "docker exec"),
             "Campaign 目录不规范": ({"CAMPAIGN_DIR": str(self.root / "x" / "cid")}, None, "evidence/campaigns"),
             "刷新触发缺管理凭据": ({"GATEWAY_TRIGGER": "gateway-account-refresh"}, None, "管理凭据"),
         }
@@ -692,6 +705,67 @@ class CandidateScriptTests(unittest.TestCase):
                 result = self.run_script(environment=environment, command=command)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(message, result.stderr)
+                self.assertEqual(self.final_state()["calls"], [])
+
+    def test_supervisor_pinned_container_id_is_honoured(self) -> None:
+        """监督器把 CAPTURE_CONTAINER 钉成 64 位 ID、位置参数仍是容器名：按 ID 核对同一实例，中继命令改打 ID，代理 host 用名字。"""
+
+        for label, environment in (("钉住的 ID", {"CAPTURE_CONTAINER": CAPTURE_ID}), ("未钉住的名字", {})):
+            with self.subTest(label=label):
+                result = self.run_script(environment=environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                state = self.final_state()
+                self.assertEqual(state["relay_target"], CAPTURE_ID)
+                inserts = [call[-1] for call in state["calls"] if call[0] == "exec" and "insert into proxies" in call[-1]]
+                self.assertEqual(len(inserts), 1)
+                self.assertIn("'capture-cli'", inserts[0])
+                self.assertIn(["cp", f"{CAPTURE_ID}:/opt/mitm/mitmproxy-ca-cert.pem"], [call[:2] for call in state["calls"]])
+                self.assert_restored(state)
+                for path in (self.data / "runs").rglob("*.json"):
+                    path.unlink()
+
+    def test_container_identity_mismatch_is_refused_read_only(self) -> None:
+        command = ["docker", "exec", "capture-cli-other", *self.command()[3:]]
+        for label, environment in (("名字指向别的实例", {}), ("钉住的 ID 不是该名字", {"CAPTURE_CONTAINER": "d" * 64})):
+            with self.subTest(label=label):
+                result = self.run_script(environment=environment, command=command if not environment else None)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("不是同一个容器实例", result.stderr)
+                calls = self.final_state()["calls"]
+                self.assertTrue(calls)
+                self.assertTrue(all(call[0] == "inspect" for call in calls))
+                self.assertFalse(self.runtime_host.exists())
+
+    def test_dry_run_rehearsal_is_zero_modification(self) -> None:
+        """零请求演练：只读前检后直接执行中继 dry-run；不取锁、不建目录、不写恢复报告、不改任何状态。"""
+
+        command = [item for item in self.command() if item != "--acknowledge-live-requests"]
+        command[command.index("--execute")] = "--dry-run"
+        result = self.run_script(command=command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["side"], "candidate")
+        state = self.final_state()
+        self.assertEqual(state["relay_target"], CAPTURE_ID)
+        self.assertEqual(state["dry_run_observed"], {"runtime_exists": False})
+        self.assertNotIn("capture_observed", state)
+        mutating = {"stop", "start", "restart", "cp"}
+        self.assertFalse([call for call in state["calls"] if call[0] in mutating])
+        queries = [call[-1] for call in state["calls"] if call[0] == "exec" and call[2] == "psql"]
+        self.assertTrue(queries)
+        self.assertTrue(all(" ".join(query.split()).lower().startswith("select") for query in queries), queries)
+        self.assertEqual((state["proxy"], state["proxies"], state["keeper_running"], state["custom_ca_present"]), ("3", {}, True, False))
+        self.assertFalse((self.data / "runtime").exists())
+        self.assertFalse((self.data / "runs").exists())
+
+    def test_execute_and_dry_run_are_exclusive(self) -> None:
+        for label, command in (
+            ("两者都有", [*self.command(), "--dry-run"]),
+            ("两者都没有", [item for item in self.command() if item != "--execute"]),
+        ):
+            with self.subTest(label=label):
+                result = self.run_script(command=command)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("恰有一个", result.stderr)
                 self.assertEqual(self.final_state()["calls"], [])
 
     def test_refresh_trigger_hands_admin_token_to_runtime_dir(self) -> None:

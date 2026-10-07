@@ -401,24 +401,62 @@ def _campaign_jobs(
     """服务面成员：从 Campaign 冻结的场景清单副本展开某阶段的 Job（B2-05 的 ``read_scenario_manifest`` 加
     ``expand_scenario_jobs``；可变总手册之后的改动不击穿已建 Campaign，规格章节摘要不再复核）。
 
-    候选阶段与批准场景（分类之后）的展开依赖 VC-2／VC-4 的产物，由 B4-01 落实；这里不猜测其语义。
+    候选阶段（B4-01b）只需要 ``candidate_id``：Claude 候选步骤只引用 Campaign 变量（候选五个变量与官方取证坐标），
+    ``campaign_id`` 展开成 ``<campaign_id>-<candidate_id>``；共享流程按 Codex 习惯传入的候选身份参数（运行镜像、画像、
+    构建 ID 等）在 Claude 一律不参与展开，免得 run 与 seal 因传参不同得到不同的 Job。冻结行核对先按不带候选 ID 的展开
+    （与 plan 时同一上下文）逐项比较执行摘要，证明冻结模板没变，再返回带候选 ID 的展开。
+
+    批准场景（分类之后）的展开依赖 VC-2 的产物，不在 B4-01 范围内，这里不猜测其语义。
     """
 
-    if phase != "official" or candidate_id is not None or use_approved_scenario:
-        raise claude_upgrade._pending("_campaign_jobs（候选阶段或批准场景）", "B4-01（候选采集 attempt）")
-    arguments = claude_upgrade._campaign_arguments(
-        campaign_dir,
-        manifest,
-        candidate_id=candidate_id,
-        runtime_image=runtime_image,
-        profile_id=profile_id,
-        profile_digest=profile_digest,
-        build_id=build_id,
-        deployed_version=deployed_version,
-        candidate_image_id=candidate_image_id,
-        source_tree_sha256=source_tree_sha256,
-        candidate_purpose=candidate_purpose,
-    )
+    if use_approved_scenario:
+        raise claude_upgrade._pending("_campaign_jobs（批准场景）", "B4-04／B4-05（VC-5 评估读侧）")
+    if phase not in {"official", "candidate"}:
+        raise ConfigurationError(f"未知取证阶段：{phase}")
+    if phase == "official":
+        if candidate_id is not None:
+            raise ConfigurationError("official 阶段展开不得携带 candidate-id。")
+        selected = _expand_phase_jobs(
+            campaign_dir,
+            manifest,
+            phase,
+            candidate_id=None,
+            runtime_image=runtime_image,
+            profile_id=profile_id,
+            profile_digest=profile_digest,
+            build_id=build_id,
+            deployed_version=deployed_version,
+            candidate_image_id=candidate_image_id,
+            source_tree_sha256=source_tree_sha256,
+            candidate_purpose=candidate_purpose,
+        )
+        _verify_plan_job_rows(manifest, selected, phase)
+        return selected
+    if not isinstance(candidate_id, str) or not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("candidate 阶段展开必须给出合法的 candidate-id。")
+    missing = [
+        name
+        for name in claude_upgrade_plan.CANDIDATE_CAMPAIGN_VARIABLES
+        if not isinstance((manifest.get("configuration") or {}).get(name), str) or not manifest["configuration"][name]
+    ]
+    if missing:
+        raise ConfigurationError(f"Claude Campaign 没有冻结候选变量 {missing}，不能展开 candidate 阶段任务。")
+    del runtime_image, profile_id, profile_digest, build_id, deployed_version, candidate_image_id, source_tree_sha256, candidate_purpose
+    _verify_plan_job_rows(manifest, _expand_phase_jobs(campaign_dir, manifest, phase, candidate_id=None), phase)
+    return _expand_phase_jobs(campaign_dir, manifest, phase, candidate_id=candidate_id)
+
+
+def _expand_phase_jobs(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    phase: str,
+    *,
+    candidate_id: str | None,
+    **identity: Any,
+) -> list[claude_upgrade.Job]:
+    """按冻结场景清单副本展开全部 Job 并校验，返回指定阶段的 Job（``identity`` 是 official 阶段沿用的 Codex 同名参数）。"""
+
+    arguments = claude_upgrade._campaign_arguments(campaign_dir, manifest, candidate_id=candidate_id, **identity)
     rules = _campaign_rules(manifest)
     path = Path(arguments.scenario_manifest)
     if path.is_symlink() or not path.is_file() or file_sha256(path) != arguments.scenario_manifest_sha256:
@@ -433,7 +471,6 @@ def _campaign_jobs(
     selected = [job for job in jobs if job.phase == phase]
     if not selected:
         raise ConfigurationError(f"Claude 场景清单没有 {phase} 阶段任务。")
-    _verify_plan_job_rows(manifest, selected, phase)
     return selected
 
 
@@ -642,6 +679,16 @@ def _step_route(argv: Sequence[str], layout: CaptureLayout) -> tuple[str, str]:
     """
 
     command = [str(item) for item in argv]
+    if _is_candidate_step(command):
+        # 候选步骤（B4-01b）：宿主侧候选采集脚本包着中继候选模式命令，一律在联网的抓包容器里执行（网关经 Docker 网络连
+        # 容器内的 connect 中继；合成计划的隔离由中继合成画像与网关账号临时代理保证，见 claude_upgrade_plan）。
+        inner = command[2:]
+        expected = layout.capture_container
+        if command[1] != f"{layout.capture_tool_root}/{claude_upgrade_plan.CANDIDATE_SCRIPT}":
+            raise ConfigurationError("候选步骤的宿主脚本不是冻结的工具执行副本里的候选采集脚本。")
+        if len(inner) < 4 or Path(inner[0]).name != "docker" or inner[1] != "exec" or inner[2] != expected:
+            raise ConfigurationError(f"候选步骤的中继命令必须在容器 {expected} 里执行。")
+        return ROLE_CAPTURE, expected
     if len(command) < 4 or Path(command[0]).name != "docker" or command[1] != "exec":
         raise ConfigurationError("取证步骤必须以 docker exec <容器> 执行。")
     live = _argument_value(command, "--upstream-ip") is not None
@@ -651,6 +698,28 @@ def _step_route(argv: Sequence[str], layout: CaptureLayout) -> tuple[str, str]:
         kind = "真实上游" if live else "合成"
         raise ConfigurationError(f"{kind}步骤必须在容器 {expected} 里执行，实际目标 {command[2]}。")
     return role, expected
+
+
+def _is_candidate_step(argv: Sequence[str]) -> bool:
+    """候选步骤的外形：``bash <工具根>/claude_run_candidate_capture.sh docker exec …``（B2-05 的候选步骤合同）。"""
+
+    return (
+        len(argv) >= 2
+        and Path(str(argv[0])).name == "bash"
+        and PurePosixPath(str(argv[1])).name == claude_upgrade_plan.CANDIDATE_SCRIPT
+    )
+
+
+def _host_step_argv(argv: Sequence[str], layout: CaptureLayout) -> list[str]:
+    """执行用的 argv：候选步骤的宿主脚本是容器坐标（工具执行副本），映射到同一副本的宿主坐标后在宿主执行；其余原样。
+
+    执行树核验（``_verify_execution_tree``）保证这份副本与受管树逐字一致；脚本经 ``dirname`` 找同一副本里的共享监督器。
+    """
+
+    command = [str(item) for item in argv]
+    if not _is_candidate_step(command):
+        return command
+    return [command[0], str(_host_path(command[1], layout)), *command[2:]]
 
 
 def _host_path(container_path: str | PurePosixPath, layout: CaptureLayout) -> Path:
@@ -1467,6 +1536,7 @@ def _container_preconditions(
     jobs: Sequence[Any] = (),
     deadline: Any | None,
     heartbeat: Any | None,
+    phase: str = "official",
 ) -> dict[str, Any]:
     """两个采集容器里取证必需文件的存在性，以及全局状态在两边是否相同。正式 run 缺任一项或不同即在预约前失败；演练只记录。
 
@@ -1474,15 +1544,21 @@ def _container_preconditions(
       OAuth refresh probe 都要它）：``test -f``，只看是否存在；
     * 全局状态不在共享挂载里（容器私有层），两个容器各有一份：两边都在时各在容器内取 sha256 比较，结果只记布尔值，
       不记内容或摘要。凭据与 CA 在共享挂载里，同一份由断网容器的挂载核对（``_verify_official_binaries``）保证。
+    * 候选阶段（B4-01b）：候选步骤只在抓包容器里执行，客户端只持有网关 API Key、TUI 用内存临时 home，不读官方凭据与
+      全局状态；只核抓包容器里的 CA 签名 PEM 与 CA 证书（connect 中继签叶证书、宿主脚本把 CA 装进服务容器）。
     """
 
     configuration = manifest["configuration"]
-    global_state = _planned_global_state_file(jobs)
-    files = {name: str(configuration[name]) for name in ("credentials_file", "ca_signing_pem", "ca_cert")}
-    files["global_state"] = global_state
+    candidate = phase == "candidate"
+    global_state = CLAUDE_GLOBAL_STATE_FILE if candidate else _planned_global_state_file(jobs)
+    names = ("ca_signing_pem", "ca_cert") if candidate else ("credentials_file", "ca_signing_pem", "ca_cert")
+    files = {name: str(configuration[name]) for name in names}
+    if not candidate:
+        files["global_state"] = global_state
+    roles = {ROLE_CAPTURE: layout.capture_container} if candidate else layout.containers()
     targets: dict[str, Any] = {}
     missing: list[str] = []
-    for role, container in layout.containers().items():
+    for role, container in roles.items():
         observed: dict[str, Any] = {}
         for name, path in files.items():
             completed = _run_probe_command(
@@ -1497,6 +1573,10 @@ def _container_preconditions(
                 missing.append(f"{role}:{name}")
         targets[role] = {"container": container, "files": observed}
     identical: bool | None = None
+    if candidate:
+        if mode == MODE_FORMAL and missing:
+            raise ConfigurationError(f"抓包容器缺少候选取证必需文件：{sorted(missing)}。")
+        return {"targets": targets, "global_state": None, "missing": sorted(missing), "enforced": mode == MODE_FORMAL}
     if all(targets[role]["files"]["global_state"]["present"] for role in targets):
         digests = {
             _container_file_sha256(
@@ -1682,8 +1762,13 @@ def _relay_manifest_check(
     layout: CaptureLayout,
     *,
     receipt: Mapping[str, Any] | None,
+    candidate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """正式执行后核对 relay 清单：完成、完整 M、终态秘密扫描、hosts 恢复与中继停止、客户端身份与本步凭据绑定。"""
+    """正式执行后核对 relay 清单：完成、完整 M、终态秘密扫描、hosts 恢复与中继停止、客户端身份与本步凭据绑定。
+
+    ``candidate`` 是候选步骤的期望（B4-01b，``claude_upgrade_candidate_capture.relay_manifest_expectation``）：另核清单是
+    候选侧、网关账号与 API Key 一致、没有读官方 OAuth 凭据、上游是 connect 中继。
+    """
 
     output_root = PurePosixPath(str(coordinates["output_root"]))
     manifest_path = _host_path(output_root / "relay-manifest.json", layout)
@@ -1726,12 +1811,20 @@ def _relay_manifest_check(
         if not passed:
             row["failure_code"] = failure_code
             return row
+    if candidate is not None:
+        from tools.official_client_capture import claude_upgrade_candidate_capture
+
+        failure = claude_upgrade_candidate_capture.candidate_manifest_failure(payload, candidate)
+        if failure is not None:
+            row["failure_code"] = failure
+            return row
     row["status"] = "passed"
     return row
 
 
-def _relay_plan_check(coordinates: Mapping[str, Any], log_path: Path) -> dict[str, Any]:
-    """零请求演练后核对 relay 计划回显：计划 schema、身份、版本、零生产改动、真实请求意图与冻结参数一致。"""
+def _relay_plan_check(coordinates: Mapping[str, Any], log_path: Path, *, candidate: bool = False) -> dict[str, Any]:
+    """零请求演练后核对 relay 计划回显：计划 schema、身份、版本、零生产改动、真实请求意图与冻结参数一致（候选步骤另核
+    计划是候选侧的 connect 中继）。"""
 
     row: dict[str, Any] = {"probe_id": coordinates["probe_id"], "status": "failed"}
     try:
@@ -1756,6 +1849,13 @@ def _relay_plan_check(coordinates: Mapping[str, Any], log_path: Path) -> dict[st
     if not all(checks):
         row["failure_code"] = "plan-mismatch"
         return row
+    if candidate:
+        from tools.official_client_capture import claude_upgrade_candidate_capture
+
+        failure = claude_upgrade_candidate_capture.candidate_plan_failure(plan)
+        if failure is not None:
+            row["failure_code"] = failure
+            return row
     row["status"] = "passed"
     return row
 
@@ -1860,6 +1960,8 @@ class ScenarioReceiptContext:
                 raise ConfigurationError(f"取证步骤的操作名必须以 {LIVE_STEP_OPERATION_PREFIX} 开头：{operation}")
             if role == ROLE_SYNTHETIC:
                 operation = SYNTHETIC_STEP_OPERATION_PREFIX + operation[len(LIVE_STEP_OPERATION_PREFIX):]
+            # 候选步骤的宿主脚本在宿主执行：容器坐标映射到同一工具执行副本的宿主坐标（收据里的 argv 仍记冻结的容器坐标）。
+            argv = _host_step_argv(argv, self.layout)
         with log_path.open("w", encoding="utf-8") as log:
             os.chmod(log_path, 0o600)
             return _run_step_command(
@@ -2018,19 +2120,38 @@ def _finalize_job_result(
 
     正式执行：证据根必须存在且非空，每个成功的 relay 步骤都要有完成、闭合且与本步凭据绑定一致的 relay 清单；
     零请求演练：每步计划回显必须与冻结参数一致、零生产改动，证据根必须保持不存在。
+
+    候选 Job（B4-01b）：relay 清单另核候选身份（``claude_upgrade_candidate_capture.candidate_manifest_failure``）；正式执行
+    的每个执行过的步骤（成败都算）另核宿主脚本的恢复报告，结果放在 ``restoration_checks``，任一失败即环境污染（由
+    ``_run_job_with_retry`` 停止补跑与后续 Job）。演练不改任何东西、不写恢复报告，``restoration_checks`` 为空。
     """
 
     layout = context.layout
+    candidate_job = job.phase == "candidate"
+    candidate_expectation: dict[str, Any] | None = None
+    if candidate_job and layout is not None and context.manifest is not None:
+        from tools.official_client_capture import claude_upgrade_candidate_capture
+
+        candidate_expectation = claude_upgrade_candidate_capture.relay_manifest_expectation(context.manifest)
     observations: list[dict[str, str]] = [dict(item) for item in raw.get("failure_observations") or []]
     relay_checks: list[dict[str, Any]] = []
+    restoration_checks: list[dict[str, Any]] = []
     for row in raw.get("steps") or []:
+        if candidate_expectation is not None and context.mode == MODE_FORMAL:
+            restoration = claude_upgrade_candidate_capture.restoration_check(row, layout, context.manifest)
+            if restoration is not None:
+                restoration_checks.append(restoration)
+                if restoration["status"] == "failed":
+                    observations.append(
+                        {"check_id": f"job.{job.job_id}.restoration.{restoration['probe_id']}", "failure_code": str(restoration["failure_code"])}
+                    )
         if row.get("return_code") != 0 or layout is None:
             continue
         coordinates = _relay_step_coordinates(row["argv"])
         check = (
-            _relay_plan_check(coordinates, Path(str(row["log"])))
+            _relay_plan_check(coordinates, Path(str(row["log"])), candidate=candidate_job)
             if context.mode == MODE_REHEARSAL
-            else _relay_manifest_check(coordinates, layout, receipt=row.get("host_runtime_receipt"))
+            else _relay_manifest_check(coordinates, layout, receipt=row.get("host_runtime_receipt"), candidate=candidate_expectation)
         )
         relay_checks.append(check)
         if check["status"] != "passed":
@@ -2060,8 +2181,9 @@ def _finalize_job_result(
     if unexpected:
         observations.append({"check_id": f"job.{job.job_id}.evidence", "failure_code": "unexpected-in-rehearsal"})
     checks_ok = layout is None or all(item["status"] == "passed" for item in relay_checks)
-    complete = raw.get("status") == "complete" and checks_ok and not missing and not empty and not unexpected
-    return {
+    restored_ok = all(item["status"] != "failed" for item in restoration_checks)
+    complete = raw.get("status") == "complete" and checks_ok and restored_ok and not missing and not empty and not unexpected
+    result = {
         "id": job.job_id,
         "phase": job.phase,
         "required": job.required,
@@ -2095,6 +2217,9 @@ def _finalize_job_result(
         "dependency_sha256": incremental["dependency_sha256"],
         "incremental_result_key": incremental["result_key"],
     }
+    if candidate_job:
+        result["restoration_checks"] = restoration_checks
+    return result
 
 
 def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> list[str]:
@@ -2334,6 +2459,11 @@ def _run_job_with_retry(
             )
             result["status"] = "failed"
             return finish(result, archive=True, contaminated=True)
+        if any(item.get("status") == "failed" for item in result.get("restoration_checks") or []):
+            # 候选网关隔离没能证明精确恢复（恢复报告缺失、恢复失败或任一项不等）：生产形态的网关状态未知，按环境污染
+            # 处理——不补跑、归档证据、停止后续 Job（观测已在 _finalize_job_result 里记下）。
+            result["status"] = "failed"
+            return finish(result, archive=True, contaminated=True)
         if result.get("status") == "complete":
             return finish(result, archive=False)
         if not job.required or attempt_index > int(claude_upgrade.JOB_RETRY_LIMIT):
@@ -2423,8 +2553,11 @@ def _close_job(
 # ---------------------------------------------------------------------------
 
 
-def _attempt_relative(mode: str) -> Path:
-    return claude_upgrade._capture_attempt_relative("official", None) if mode == MODE_FORMAL else Path(REHEARSAL_DIRNAME) / "official"
+def _attempt_relative(mode: str, phase: str = "official", candidate_id: str | None = None) -> Path:
+    """attempt 的阶段相对目录：正式 run 在 ``official``／``candidates/<cid>``，演练在 ``rehearsal/`` 下同名（正式读侧看不到）。"""
+
+    relative = claude_upgrade._capture_attempt_relative(phase, candidate_id)
+    return relative if mode == MODE_FORMAL else Path(REHEARSAL_DIRNAME) / relative
 
 
 def _attempt_failure_facts(
@@ -2653,7 +2786,8 @@ def _verify_attempt_document(
         or payload.get("campaign_manifest_sha256") != file_sha256(campaign_dir / "campaign.json")
         or payload.get("attempt_id") != attempt_root.name
         or payload.get("phase") != phase
-        or payload.get("candidate_id") is not None
+        or payload.get("candidate_id") != reservation.get("candidate_id")
+        or payload.get("candidate_purpose") != reservation.get("candidate_purpose")
         or payload.get("run_nonce") != reservation.get("run_nonce")
         or payload.get("started_at_utc") != reservation.get("started_at_utc")
         or not claude_upgrade._is_rfc3339_timestamp(payload.get("completed_at_utc"))
@@ -2679,6 +2813,11 @@ def _verify_attempt_document(
             if path.is_symlink() or not path.is_file() or file_sha256(path) != closure.get("sha256"):
                 raise ConfigurationError(f"Job {result.get('id')} 的闭环收据缺失或摘要漂移。")
     _validate_attempt_failure_facts(payload)
+    if phase == "candidate":
+        # 候选 attempt（B4-01b）：网关前后快照、恢复核验与 selector 观察文件逐个绑定，运行条件字段闭合。
+        from tools.official_client_capture import claude_upgrade_candidate_capture
+
+        claude_upgrade_candidate_capture.verify_attempt_bindings(attempt_root, payload)
     watchdog = payload.get("watchdog") if isinstance(payload.get("watchdog"), Mapping) else {}
     for field in ("heartbeat", "timeout_checkpoint"):
         binding = watchdog.get(field)
@@ -2718,8 +2857,10 @@ def _load_capture_attempt(
         else claude_upgrade.load_campaign_manifest(campaign_dir)
     )
     claude_upgrade._require_formal_campaign(campaign_dir, manifest)
-    if phase != "official" or candidate_id is not None:
-        raise claude_upgrade._pending("_load_capture_attempt（候选阶段）", "B4-01（候选采集 attempt）")
+    if phase == "official" and candidate_id is not None:
+        raise ConfigurationError("official attempt 不得携带 candidate-id。")
+    if phase not in {"official", "candidate"}:
+        raise ConfigurationError(f"未知取证阶段：{phase}")
     if not SAFE_ID_RE.fullmatch(str(attempt_id)):
         raise ConfigurationError("attempt-id 非法。")
     attempt_root = campaign_dir / claude_upgrade._capture_attempt_relative(phase, candidate_id) / "attempts" / attempt_id
@@ -2780,12 +2921,10 @@ def _active_unsealed_attempts(
     """
 
     del _baseline
+    if phase == "candidate":
+        return _active_unsealed_candidate_attempts(campaign_dir, _manifest=_manifest)
     if phase != "official":
-        # 候选阶段：还没有任何候选 attempt 目录（VC-4 构建期、VC-5 首个 attempt 之前）时没有未封存的 attempt；出现候选
-        # attempt 之后的判定（预约收据、等待封存、评估基线）属于候选采集，随 B4-01 落实（B3-04：VC-4 重派证明在这里取空集）。
-        if any(scope == "candidate" for scope, _candidate, _root in _campaign_attempt_roots(campaign_dir)):
-            raise claude_upgrade._pending("_active_unsealed_attempts（候选阶段）", "B4-01（候选采集 attempt）")
-        return []
+        raise ConfigurationError(f"未知取证阶段：{phase}")
     sealed_attempt_id: str | None = None
     if _official_sealed(campaign_dir):
         stage = claude_upgrade._load_stage_result(campaign_dir, "capture-official", None, _verified_campaign_manifest=_manifest)
@@ -2817,18 +2956,66 @@ def _active_unsealed_attempts(
     return active
 
 
-def _failed_capture_attempts(campaign_dir: Path, *, manifest: Mapping[str, Any]) -> list[str]:
-    """尚未经显式 resume（B2-08）处理的失败或污染正式 attempt。"""
+def _active_unsealed_candidate_attempts(campaign_dir: Path, *, _manifest: Mapping[str, Any] | None) -> list[str]:
+    """候选阶段的未完成预约或等待封存 attempt（B4-01b，与 Codex 同一判据与 ``<candidate-id>:<attempt-id>`` 写法）。
 
-    failed: list[str] = []
+    已封存的候选以 b0 阶段结果（``candidates/<cid>/result.json``）绑定的 attempt 为准；候选阶段结果的读取由 B4-02 落实，
+    在那之前存在阶段结果即按待实现失败关闭。只读核对状态，不重放证据边界。
+    """
+
+    from tools.official_client_capture import claude_upgrade_candidate_capture
+
+    invalidated = _invalidated_attempts(campaign_dir)
+    active: list[str] = []
+    sealed: dict[str, str | None] = {}
     for current_phase, candidate_id, attempt_root in claude_upgrade._campaign_attempt_roots(campaign_dir):
-        if current_phase != "official" or not (attempt_root / "attempt.json").is_file():
+        if current_phase != "candidate" or candidate_id is None:
+            continue
+        if candidate_id not in sealed:
+            sealed[candidate_id] = None
+            result_path = claude_upgrade_candidate_capture.legacy_stage_result_path(campaign_dir, candidate_id)
+            if result_path.exists() or result_path.is_symlink():
+                stage = claude_upgrade._load_stage_result(campaign_dir, "capture-candidate", candidate_id, _verified_campaign_manifest=_manifest)
+                reference = stage.get("attempt")
+                if not isinstance(reference, Mapping):
+                    raise ConfigurationError("已封存候选阶段缺少 attempt 绑定。")
+                sealed[candidate_id] = Path(str(reference.get("path", ""))).parent.name
+        claude_upgrade._load_capture_reservation(campaign_dir, attempt_root, phase="candidate", candidate_id=candidate_id, _manifest=_manifest)
+        if not (attempt_root / "attempt.json").exists():
+            if _attempt_reconciled_terminal(campaign_dir, attempt_root.name) is not None:
+                continue
+            active.append(f"{candidate_id}:{attempt_root.name}:reserved_or_interrupted")
             continue
         _root, attempt = claude_upgrade._load_capture_attempt(
-            campaign_dir, "official", candidate_id, attempt_root.name, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
+            campaign_dir, "candidate", candidate_id, attempt_root.name, _verified_campaign_manifest=_manifest, _replay_evidence_permissions=False
+        )
+        if (
+            attempt.get("status") == "awaiting_receipts"
+            and attempt_root.name != sealed[candidate_id]
+            and ("candidate", candidate_id, attempt_root.name) not in invalidated
+        ):
+            active.append(f"{candidate_id}:{attempt_root.name}")
+    return active
+
+
+def _failed_capture_attempts(
+    campaign_dir: Path,
+    *,
+    manifest: Mapping[str, Any],
+    phase: str = "official",
+    candidate_id: str | None = None,
+) -> list[str]:
+    """尚未经显式 resume（B2-08；候选续跑属 B4-01c）处理的失败或污染正式 attempt（候选阶段只看本候选）。"""
+
+    failed: list[str] = []
+    for current_phase, current_candidate, attempt_root in claude_upgrade._campaign_attempt_roots(campaign_dir):
+        if current_phase != phase or current_candidate != candidate_id or not (attempt_root / "attempt.json").is_file():
+            continue
+        _root, attempt = claude_upgrade._load_capture_attempt(
+            campaign_dir, phase, current_candidate, attempt_root.name, _verified_campaign_manifest=manifest, _replay_evidence_permissions=False
         )
         if attempt.get("status") in {"failed", "environment_contaminated"}:
-            failed.append(f"official:{attempt_root.name}")
+            failed.append(f"{current_candidate or 'official'}:{attempt_root.name}")
     return failed
 
 
@@ -2859,14 +3046,35 @@ def _reserve_capture_attempt(
     jobs: Sequence[claude_upgrade.Job],
     deadline: incremental_recovery.WallClockDeadline,
     lease: Any | None,
+    phase: str = "official",
+    candidate_id: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """在 Campaign 锁内原子发布预约（隐藏临时目录 + rename），关闭 check-then-create 与空目录窗口。"""
+    """在 Campaign 锁内原子发布预约（隐藏临时目录 + rename），关闭 check-then-create 与空目录窗口。
+
+    候选阶段（B4-01b）在锁内复核：本候选未封存、Campaign 没有未封存的预约或 attempt（官方与候选）、本候选没有待续跑的
+    失败或污染 attempt（候选续跑属于 B4-01c）。
+    """
 
     deadline.check("attempt:reserve:start")
     if lease is not None:
         lease.check("attempt:reserve:start")
+    if phase not in {"official", "candidate"} or (phase == "candidate") != bool(candidate_id):
+        raise ConfigurationError("预约的阶段与 candidate-id 不一致。")
     with claude_upgrade._campaign_lock(campaign_dir, deadline=deadline):
-        if mode == MODE_FORMAL:
+        if mode == MODE_FORMAL and phase == "candidate":
+            from tools.official_client_capture import claude_upgrade_candidate_capture
+
+            claude_upgrade_candidate_capture.require_unsealed(campaign_dir, str(candidate_id), revision=None)
+            active = [
+                *claude_upgrade._active_unsealed_attempts(campaign_dir, "official", _manifest=manifest),
+                *claude_upgrade._active_unsealed_attempts(campaign_dir, "candidate", _manifest=manifest),
+            ]
+            if active:
+                raise ConfigurationError(f"Campaign 存在未封存预约或 attempt，禁止并行 run：{active}")
+            failed = _failed_capture_attempts(campaign_dir, manifest=manifest, phase="candidate", candidate_id=candidate_id)
+            if failed:
+                raise ConfigurationError(f"候选存在失败或污染 attempt；候选续跑由 B4-01c 落实，禁止直接再跑 capture-candidate run：{failed}")
+        elif mode == MODE_FORMAL:
             if _official_sealed(campaign_dir):
                 raise ConfigurationError("官方证据已经封存，禁止创建新 attempt。")
             active = claude_upgrade._active_unsealed_attempts(campaign_dir, "official", _manifest=manifest)
@@ -2887,7 +3095,7 @@ def _reserve_capture_attempt(
                 "owner_nonce": str(payload.get("owner_nonce")),
                 "deadline_at_utc": str(payload.get("deadline_at_utc")),
             }
-        attempts_root = _private_directory(campaign_dir / _attempt_relative(mode) / "attempts", campaign_dir)
+        attempts_root = _private_directory(campaign_dir / _attempt_relative(mode, phase, candidate_id) / "attempts", campaign_dir)
         attempt_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + f"-{secrets.token_hex(8)}"
         if lease is not None:
             lease.bind_attempt(attempt_id)
@@ -2902,9 +3110,9 @@ def _reserve_capture_attempt(
             "campaign_mode": manifest["campaign_mode"],
             "campaign_purpose": manifest["campaign_purpose"],
             "campaign_manifest_sha256": file_sha256(campaign_dir / "campaign.json"),
-            "phase": "official",
-            "candidate_id": None,
-            "candidate_purpose": None,
+            "phase": phase,
+            "candidate_id": candidate_id if phase == "candidate" else None,
+            "candidate_purpose": manifest["campaign_purpose"] if phase == "candidate" else None,
             "attempt_id": attempt_id,
             "run_nonce": secrets.token_hex(32),
             "started_at_utc": claude_upgrade._utc_now(),
@@ -3002,7 +3210,7 @@ def _campaign_for_mode(campaign_dir: Path, mode: str) -> dict[str, Any]:
     return manifest
 
 
-def _run_mode(arguments: argparse.Namespace) -> str:
+def _run_mode(arguments: argparse.Namespace, phase: str = "official") -> str:
     rehearsal = bool(getattr(arguments, "zero_request_rehearsal", False))
     live = bool(getattr(arguments, "acknowledge_live_requests", False))
     if rehearsal and live:
@@ -3010,7 +3218,7 @@ def _run_mode(arguments: argparse.Namespace) -> str:
     if not rehearsal and not live:
         raise ConfigurationError("抓包会产生真实请求，必须同时确认 --acknowledge-live-requests（零请求演练用 --zero-request-rehearsal）。")
     if getattr(arguments, "job_id", None) and not rehearsal:
-        raise ConfigurationError("--job-id 只用于零请求演练；正式 run 执行冻结的全部 official Job，续跑由 resume（B2-08）处理。")
+        raise ConfigurationError(f"--job-id 只用于零请求演练；正式 run 执行冻结的全部 {phase} Job，续跑由 resume 处理。")
     if rehearsal and not getattr(arguments, "job_id", None):
         raise ConfigurationError("零请求演练必须用 --job-id 指定一个 Job。")
     return MODE_REHEARSAL if rehearsal else MODE_FORMAL
@@ -3055,16 +3263,21 @@ def run_capture_attempt(
     attempt 收据（中断信号在写完收据后再抛出）。
     """
 
-    if phase != "official":
-        raise claude_upgrade._pending("capture-candidate run", "B4-01（候选采集 attempt）")
-    mode = _run_mode(arguments)
+    if phase not in {"official", "candidate"}:
+        raise ConfigurationError(f"未知取证阶段：{phase}")
+    mode = _run_mode(arguments, phase)
+    candidate_id: str | None = None
+    if phase == "candidate":
+        from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
+
+        candidate_id = candidate_capture.require_candidate_id(arguments)
     campaign_dir = Path(arguments.campaign_dir)
     claude_upgrade._validate_existing_campaign_path(campaign_dir)
     # 一律用解析后的真实路径：权限收口按路径字符串绑定内部根，收据重放必须得到同一组字符串。
     campaign_dir = campaign_dir.resolve(strict=True)
     active = claude_upgrade._ACTIVE_CAMPAIGN_LEASE
     if _lease is None and active is not None:
-        if not claude_upgrade._lease_identity_matches(active, campaign_dir, phase=phase, candidate_id=None):
+        if not claude_upgrade._lease_identity_matches(active, campaign_dir, phase=phase, candidate_id=candidate_id):
             raise ConfigurationError("capture attempt 与当前 Campaign lease 的 phase／candidate 不一致。")
         _lease = active
         _deadline = _bind_attempt_deadline_metadata(_deadline or active.deadline, phase)
@@ -3074,7 +3287,7 @@ def run_capture_attempt(
         with claude_upgrade.CampaignLease(
             campaign_dir,
             phase=phase,
-            candidate_id=None,
+            candidate_id=candidate_id,
             deadline=deadline,
             command=f"capture-{phase}",
             allow_stale_recovery=False,
@@ -3089,28 +3302,56 @@ def run_capture_attempt(
         if mode == MODE_FORMAL:
             claude_upgrade._reject_contaminated_campaign(campaign_dir)
         raise ConfigurationError("Campaign 已记录环境污染；演练 Campaign 请重新生成，正式 Campaign 走环境隔离（B2-08）。")
-    if mode == MODE_FORMAL and _official_sealed(campaign_dir):
+    if mode == MODE_FORMAL and phase == "official" and _official_sealed(campaign_dir):
         raise ConfigurationError("官方证据已经封存，禁止重复抓包。")
     current_tool = claude_upgrade._tool_identity(include_git=False)
-    claude_upgrade._require_tool_evolution_registered(campaign_dir, manifest, current=current_tool, action="capture-official run")
-    jobs = claude_upgrade._campaign_jobs(campaign_dir, manifest, "official")
+    claude_upgrade._require_tool_evolution_registered(campaign_dir, manifest, current=current_tool, action=f"capture-{phase} run")
+    admission: Any | None = None
+    selector_observation: dict[str, Any] | None = None
+    if phase == "candidate":
+        # 候选入口门（B4-01b，见 claude_upgrade_candidate_capture 第一节）：正式 run 依次核 VC-4、Store、构建收据、服务镜像、
+        # 运行坐标覆盖与未封存；演练只核候选变量与覆盖收据。之后全程使用入口门给出的生效清单。
+        admit = candidate_capture.formal_admission if mode == MODE_FORMAL else candidate_capture.rehearsal_admission
+        admission = admit(campaign_dir, manifest, str(candidate_id), deadline=deadline)
+        manifest = admission.manifest
+    jobs = claude_upgrade._campaign_jobs(campaign_dir, manifest, phase, candidate_id=candidate_id)
     requested_job = getattr(arguments, "job_id", None)
     if mode == MODE_REHEARSAL:
         jobs = [job for job in jobs if job.job_id == requested_job]
         if len(jobs) != 1:
-            raise ConfigurationError(f"冻结的 official Job 里没有 {requested_job}。")
+            raise ConfigurationError(f"冻结的 {phase} Job 里没有 {requested_job}。")
     layout = _capture_layout(campaign_dir, manifest)
     host_tool_parent = _host_path(layout.capture_tool_root, layout).parents[1]
     claude_upgrade._verify_execution_tree(host_tool_parent)
     binary_verification = claude_upgrade._verify_official_binaries(manifest, deadline=deadline)
-    preconditions = _container_preconditions(manifest, layout, mode=mode, jobs=jobs, deadline=deadline, heartbeat=None)
-    identity = _attempt_identity(manifest, layout, mode)
+    preconditions = _container_preconditions(manifest, layout, mode=mode, jobs=jobs, deadline=deadline, heartbeat=None, phase=phase)
+    if admission is not None:
+        identity = candidate_capture.attempt_identity(manifest, layout, mode, admission)
+        # 账号刷新触发的步骤（演练时宿主脚本的只读前检同样核管理凭据）：预约前确认环境里给出了管理凭据。
+        candidate_capture.require_admin_token_for(jobs)
+        # 网关只读就绪核对（不落盘）：残留临时代理、临时 CA、运行目录或账号形态不对时在预约前拒绝，不留失败 attempt。
+        readiness = candidate_capture.probe_gateway_environment(manifest, layout.host_data_root, "readiness", deadline=deadline)
+        not_ready = candidate_capture.readiness_failures(readiness)
+        if not_ready:
+            raise ConfigurationError(f"候选网关环境未就绪：{not_ready}（先清理上一轮残留或修正专用账号与 API Key）。")
+        # 生产 selector 只读观察：正式 run 必须有 Campaign 冻结的 Active Release 目录（预约前读一次，预约后原样落盘）。
+        selector_observation = candidate_capture.observe_selectors(campaign_dir, manifest, required=mode == MODE_FORMAL)
+    else:
+        identity = _attempt_identity(manifest, layout, mode)
     for job in jobs:
         _job_tool_dependency_files(job, current_tool)
     _require_capture_budget(deadline, operation="attempt:reservation-admission", reservation=True)
     # —— 原子预约（此后一律写 attempt 收据） ——
     attempt_root, reservation = _reserve_capture_attempt(
-        campaign_dir, manifest, mode=mode, identity=identity, jobs=jobs, deadline=deadline, lease=_lease
+        campaign_dir,
+        manifest,
+        mode=mode,
+        identity=identity,
+        jobs=jobs,
+        deadline=deadline,
+        lease=_lease,
+        phase=phase,
+        candidate_id=candidate_id,
     )
     log_root = _private_directory(attempt_root / "logs", campaign_dir)
     evidence_root = _private_directory(attempt_root / "evidence", campaign_dir)
@@ -3141,6 +3382,13 @@ def run_capture_attempt(
     checkpoint_store: incremental_recovery.CheckpointStore | None = None
     timeout_checkpoint_path: Path | None = None
     contaminated = False
+    # 候选阶段（B4-01b）：网关前后快照、漂移字段、selector 观察文件与网关坐标。
+    gateway_before: dict[str, Any] | None = None
+    gateway_before_path: Path | None = None
+    gateway_after_path: Path | None = None
+    gateway_drifted: list[str] = []
+    selector_path: Path | None = None
+    gateway: dict[str, Any] | None = None
     try:
         checkpoint_store = incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
         _write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt:reserved", force=True, attempt_root=attempt_root)
@@ -3149,6 +3397,20 @@ def run_capture_attempt(
         if before_manifest.get("capture_processes"):
             attempt_observations.append({"check_id": "attempt.environment.processes", "failure_code": "residual"})
             raise ConfigurationError("采集容器（抓包或断网）存在残留取证进程，环境不干净，拒绝执行任何 Job。")
+        if admission is not None:
+            deadline.check("attempt:gateway-before")
+            gateway_before = candidate_capture.probe_gateway_environment(
+                manifest, layout.host_data_root, "before", deadline=deadline, heartbeat=heartbeat
+            )
+            gateway_before_path = candidate_capture.write_gateway_snapshot(environment_root, gateway_before)
+            gateway = candidate_capture.gateway_coordinates(admission.variables, service_port=gateway_before["service"]["port"])
+            not_ready = candidate_capture.readiness_failures(gateway_before)
+            if not_ready:
+                attempt_observations.extend({"check_id": f"attempt.gateway.{code}", "failure_code": "not-ready"} for code in not_ready)
+                raise ConfigurationError(f"候选网关环境未就绪：{not_ready}，拒绝执行任何 Job。")
+            if selector_observation is not None:
+                selector_path = environment_root / candidate_capture.SELECTOR_FILENAME
+                claude_upgrade._secure_write_json_once(selector_path, selector_observation)
         for job in jobs:
             _require_capture_budget(deadline, operation=f"job:{job.job_id}:admission")
             _write_attempt_heartbeat(heartbeat_path, deadline, operation=f"job:{job.job_id}:start", attempt_root=attempt_root)
@@ -3225,6 +3487,22 @@ def run_capture_attempt(
             if before_manifest is not None:
                 contaminated = True
                 attempt_observations.append({"check_id": "attempt.environment.after-probe", "failure_code": "probe-failed"})
+        if admission is not None and gateway_before is not None:
+            # 候选网关 after 快照：与 before 逐字段比较（GATEWAY_COMPARED_FIELDS），漂移或采不到都判环境污染。deadline 到期
+            # 也要采（每条只读命令各有 30 秒上限）：生产形态的网关状态不能因为预算用完就不核验。
+            try:
+                gateway_after = candidate_capture.probe_gateway_environment(manifest, layout.host_data_root, "after")
+                gateway_after_path = candidate_capture.write_gateway_snapshot(environment_root, gateway_after)
+                gateway_drifted = candidate_capture.gateway_drift(gateway_before, gateway_after)
+                if gateway_drifted:
+                    contaminated = True
+                    attempt_observations.extend(
+                        {"check_id": f"attempt.gateway.{name}", "failure_code": "drifted"} for name in gateway_drifted
+                    )
+            except BaseException as error:
+                restoration_error = restoration_error or error
+                contaminated = True
+                attempt_observations.append({"check_id": "attempt.gateway.after-probe", "failure_code": "probe-failed"})
 
     if isinstance(execution_error, incremental_recovery.WallClockTimeoutError) or deadline.expired:
         try:
@@ -3237,6 +3515,70 @@ def run_capture_attempt(
             )
         except BaseException as error:
             execution_error = execution_error or error
+
+    # 候选阶段（B4-01b）：网关隔离恢复核验在权限收口之前落盘（收口边界要包含它）；结果已是归档改写之后的终值。
+    candidate_fields: dict[str, Any] = {}
+    if admission is not None:
+        gateway_recovery: dict[str, Any] = {"schema_version": candidate_capture.GATEWAY_RECOVERY_SCHEMA, "status": "failed", "file": None}
+        recovery_path: Path | None = None
+        recovery_status = "failed"
+        try:
+            recovery_path, recovery_status = candidate_capture.write_recovery(
+                environment_root,
+                results,
+                before=gateway_before_path,
+                after=gateway_after_path,
+                drifted=gateway_drifted,
+                evidence_root=evidence_root,
+            )
+            gateway_recovery = {
+                "schema_version": candidate_capture.GATEWAY_RECOVERY_SCHEMA,
+                "status": recovery_status,
+                "file": _probe_binding(evidence_root, recovery_path),
+            }
+        except BaseException as error:
+            execution_error = execution_error or error
+        candidate_fields = {
+            "gateway": gateway,
+            "gateway_environment": {
+                "schema_version": candidate_capture.GATEWAY_ENVIRONMENT_SCHEMA,
+                "before": _probe_binding(evidence_root, gateway_before_path) if gateway_before_path is not None else None,
+                "after": _probe_binding(evidence_root, gateway_after_path) if gateway_after_path is not None else None,
+                "compared_fields": list(candidate_capture.GATEWAY_COMPARED_FIELDS),
+                "drifted_fields": list(gateway_drifted),
+            },
+            "gateway_recovery": gateway_recovery,
+            "selector_observed": (
+                {"schema_version": candidate_capture.SELECTOR_OBSERVATION_SCHEMA, **_probe_binding(evidence_root, selector_path)}
+                if selector_path is not None
+                else None
+            ),
+            # 与 B4-02 证据侧约定的字段（见 claude_upgrade_candidate_capture.candidate_gateway_facts）。
+            "candidate_gateway": candidate_capture.candidate_gateway_facts(
+                evidence_root=evidence_root,
+                gateway=gateway,
+                run_conditions=candidate_capture.run_condition_digests(
+                    manifest=manifest,
+                    gateway=gateway or {},
+                    capture_before=(environment_root / "before" / PROBE_MANIFEST_NAME) if before_manifest else None,
+                    gateway_before=gateway_before_path,
+                ),
+                capture_before=(environment_root / "before" / PROBE_MANIFEST_NAME) if before_manifest else None,
+                capture_after=(environment_root / "after" / PROBE_MANIFEST_NAME) if after_manifest else None,
+                capture_drifted=attempt_drift,
+                gateway_before=gateway_before_path,
+                gateway_after=gateway_after_path,
+                gateway_drifted=gateway_drifted,
+                results=results,
+                recovery=recovery_path,
+                recovery_status=recovery_status,
+                selector=(
+                    candidate_capture.runtime_catalog_snapshot(selector_observation, admission.persona)
+                    if selector_path is not None and selector_observation is not None and admission.persona is not None
+                    else None
+                ),
+            ),
+        }
 
     container_roots = sorted(
         {
@@ -3310,13 +3652,17 @@ def run_capture_attempt(
         "drifted_kinds": attempt_drift,
         "continuity_probe_kinds": list(CONTINUITY_PROBE_KINDS),
     }
+    if admission is not None:
+        # 与 Codex 候选 attempt 同名的恢复收据绑定（共享的候选恢复准入读 environment.restoration_report）：Claude 取网关
+        # 隔离恢复核验文件，路径相对 <attempt>/evidence。
+        environment["restoration_report"] = candidate_fields["gateway_recovery"]["file"]
     attempt = _write_capture_attempt(
         campaign_dir,
         attempt_root,
         {
             "campaign_id": manifest["campaign_id"],
             "phase": phase,
-            "candidate_id": None,
+            "candidate_id": candidate_id,
             "status": status,
             "identity": identity,
             "results": results,
@@ -3345,12 +3691,14 @@ def run_capture_attempt(
             "restoration_error": _error_record(restoration_error),
             "live_request_count_planned": 0 if mode == MODE_REHEARSAL else None,
             "next_gate": (
-                "capture-official seal（B2-07）" if status == "awaiting_receipts"
+                f"capture-{phase} seal（{'B2-07' if phase == 'official' else 'B4-02'}）" if status == "awaiting_receipts"
                 else "复核 verify-rehearsal" if status == "rehearsal_passed"
                 else "环境隔离与恢复（B2-08）" if status == "environment_contaminated"
-                else "resume --rerun-failed（B2-08）" if mode == MODE_FORMAL
+                else "resume --rerun-failed（B2-08）" if mode == MODE_FORMAL and phase == "official"
+                else "候选续跑（B4-01c）" if mode == MODE_FORMAL
                 else "修复后重新演练"
             ),
+            **candidate_fields,
         },
         manifest=manifest,
         reservation=reservation,
@@ -3368,6 +3716,11 @@ def run_capture_attempt(
                     "attempt_id": attempt_root.name,
                     "drifted_kinds": attempt_drift,
                     "contaminated_jobs": sorted(str(item.get("id")) for item in results if item.get("environment_contaminated")),
+                    **(
+                        {"candidate_id": candidate_id, "gateway_drifted_fields": list(gateway_drifted)}
+                        if phase == "candidate"
+                        else {}
+                    ),
                     "recorded_at_utc": claude_upgrade._utc_now(),
                 },
             )
@@ -3380,6 +3733,7 @@ def run_capture_attempt(
         "status": status,
         "mode": mode,
         "phase": phase,
+        **({"candidate_id": candidate_id} if phase == "candidate" else {}),
         "attempt_id": attempt_root.name,
         "attempt": str(attempt_root),
         "attempt_digest": attempt["attempt_digest"],
@@ -3417,6 +3771,25 @@ def add_capture_official_run_arguments(target: argparse.ArgumentParser) -> None:
         help=f"一次受管命令的单调墙钟预算（默认 {claude_upgrade.DEFAULT_ATTEMPT_WALL_SECONDS} 秒）。",
     )
     target.add_argument("--heartbeat-seconds", type=int, default=None, help="watchdog heartbeat 间隔（秒）。")
+
+
+def capture_candidate_run_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
+    """``claude_upgrade.py capture-candidate run``（B4-01b）：返回 (摘要, 退出码)，退出码口径与 ``capture-official run`` 相同。
+
+    ``awaiting_receipts`` 在父批次（campaign-run）里是合法暂停点记 0、直接 CLI 记诊断码 2；演练通过记 0；预约之前的拒绝以
+    ``ConfigurationError`` 抛出（入口记 1）。run 不写 Store：候选三类 Store 事实都由 seal（B4-02）一次写完。
+    """
+
+    try:
+        result = run_capture_attempt(arguments, "candidate")
+    except (incremental_recovery.IncrementalRecoveryError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError(f"capture-candidate run 在预约前停止：{type(error).__name__}：{error}") from error
+    status = result.get("status")
+    if status == "rehearsal_passed":
+        return result, 0
+    if status == "awaiting_receipts" and os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1":
+        return result, 0
+    return result, 2
 
 
 def capture_official_run_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -3474,6 +3847,12 @@ def build_rehearsal_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         ("--credentials-file", arguments.credentials_file),
         ("--ca-signing-pem", arguments.ca_signing_pem),
         ("--ca-cert", arguments.ca_cert),
+        # 候选五个变量（B4-01b）：给出时演练 Campaign 也能做候选零请求演练（capture-candidate run --zero-request-rehearsal）。
+        ("--service-container", getattr(arguments, "service_container", None)),
+        ("--keeper-container", getattr(arguments, "keeper_container", None)),
+        ("--postgres-container", getattr(arguments, "postgres_container", None)),
+        ("--claude-account-id", getattr(arguments, "claude_account_id", None)),
+        ("--api-key-id", getattr(arguments, "api_key_id", None)),
     ):
         if value:
             plan_argv += [flag, str(value)]
@@ -3545,11 +3924,18 @@ def build_rehearsal_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         "next_command": (
             f"claude_upgrade.py capture-official run --campaign-dir {campaign_dir} --zero-request-rehearsal --job-id <Job ID>"
         ),
+        "next_candidate_command": (
+            f"claude_upgrade.py capture-candidate run --campaign-dir {campaign_dir} --candidate-id <候选 ID> "
+            "--zero-request-rehearsal --job-id <candidate Job ID>"
+        ),
     }
 
 
-def verify_rehearsal_attempt(campaign_dir: Path, attempt_id: str) -> dict[str, Any]:
-    """只读复核一次零请求演练：收据身份与摘要、checkpoint 链、两级权限收口重放、探针前后一致、零请求事实。"""
+def verify_rehearsal_attempt(campaign_dir: Path, attempt_id: str, candidate_id: str | None = None) -> dict[str, Any]:
+    """只读复核一次零请求演练：收据身份与摘要、checkpoint 链、两级权限收口重放、探针前后一致、零请求事实。
+
+    给出 ``candidate_id`` 时复核候选演练（B4-01b）：另核网关前后快照逐字段相等、没有写任何恢复报告。
+    """
 
     campaign_dir = Path(campaign_dir)
     claude_upgrade._validate_existing_campaign_path(campaign_dir)
@@ -3557,16 +3943,17 @@ def verify_rehearsal_attempt(campaign_dir: Path, attempt_id: str) -> dict[str, A
     manifest = _campaign_for_mode(campaign_dir, MODE_REHEARSAL)
     if not SAFE_ID_RE.fullmatch(str(attempt_id)):
         raise ConfigurationError("attempt-id 非法。")
-    attempt_root = campaign_dir / _attempt_relative(MODE_REHEARSAL) / "attempts" / attempt_id
+    phase = "candidate" if candidate_id is not None else "official"
+    attempt_root = campaign_dir / _attempt_relative(MODE_REHEARSAL, phase, candidate_id) / "attempts" / attempt_id
     payload = claude_upgrade._read_json(attempt_root / "attempt.json", "演练 attempt 收据")
-    reservation = _load_reservation(campaign_dir, attempt_root, phase="official", candidate_id=None, manifest=manifest, mode=MODE_REHEARSAL)
+    reservation = _load_reservation(campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id, manifest=manifest, mode=MODE_REHEARSAL)
     checks: list[dict[str, Any]] = []
 
     def check(name: str, passed: bool, detail: str = "") -> None:
         checks.append({"check": name, "passed": bool(passed), "detail": detail})
 
     try:
-        _verify_attempt_document(campaign_dir, attempt_root, payload, reservation, manifest, phase="official", mode=MODE_REHEARSAL)
+        _verify_attempt_document(campaign_dir, attempt_root, payload, reservation, manifest, phase=phase, mode=MODE_REHEARSAL)
         check("attempt-document", True)
     except ConfigurationError as error:
         check("attempt-document", False, str(error))
@@ -3586,7 +3973,7 @@ def verify_rehearsal_attempt(campaign_dir: Path, attempt_id: str) -> dict[str, A
     except (OSError, codex_upgrade_evidence_permissions.EvidencePermissionError) as error:
         check("attempt-permission-closeout-replay", False, str(error))
     layout = _capture_layout(campaign_dir, manifest)
-    declared_roots = {job.job_id: job.evidence_roots for job in claude_upgrade._campaign_jobs(campaign_dir, manifest, "official")}
+    declared_roots = {job.job_id: job.evidence_roots for job in claude_upgrade._campaign_jobs(campaign_dir, manifest, phase, candidate_id=candidate_id)}
     for result in payload.get("results") or []:
         job_id = str(result.get("id"))
         closure_binding = result.get("job_closure") or {}
@@ -3639,6 +4026,17 @@ def verify_rehearsal_attempt(campaign_dir: Path, attempt_id: str) -> dict[str, A
         check("job-checkpoint-chain", False, str(error))
     environment = payload.get("environment") or {}
     check("attempt-environment-stable", bool(environment.get("before_probe")) and bool(environment.get("after_probe")) and not environment.get("drifted_kinds"))
+    if phase == "candidate":
+        gateway_environment = payload.get("gateway_environment") or {}
+        check(
+            "gateway-environment-stable",
+            bool(gateway_environment.get("before")) and bool(gateway_environment.get("after")) and not gateway_environment.get("drifted_fields"),
+        )
+        check(
+            "gateway-untouched",
+            (payload.get("gateway_recovery") or {}).get("status") == "passed"
+            and all(not result.get("restoration_checks") for result in payload.get("results") or []),
+        )
     verification = payload.get("binary_verification") if isinstance(payload.get("binary_verification"), Mapping) else {}
     synthetic = verification.get("synthetic_container") if isinstance(verification.get("synthetic_container"), Mapping) else {}
     check(
@@ -3677,9 +4075,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--synthetic-capture-container", "--credentials-file", "--ca-signing-pem", "--ca-cert",
     ):
         rehearsal.add_argument(flag, default=None)
+    for flag in ("--service-container", "--keeper-container", "--postgres-container", "--claude-account-id", "--api-key-id"):
+        rehearsal.add_argument(flag, default=None, help="候选零请求演练用的候选变量（可选，B4-01b）")
     verify = commands.add_parser("verify-rehearsal", help="只读复核一次零请求演练 attempt")
     verify.add_argument("--campaign-dir", type=Path, required=True)
     verify.add_argument("--attempt-id", required=True)
+    verify.add_argument("--candidate-id", default=None, help="复核候选演练 attempt 时给出候选 ID（B4-01b）")
     return parser
 
 
@@ -3689,7 +4090,7 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.command == "rehearsal-campaign":
             result, code = build_rehearsal_campaign(arguments), 0
         else:
-            result = verify_rehearsal_attempt(arguments.campaign_dir, arguments.attempt_id)
+            result = verify_rehearsal_attempt(arguments.campaign_dir, arguments.attempt_id, arguments.candidate_id)
             code = 0 if result["verdict"] == "passed" else 2
     except ConfigurationError as error:
         print(f"Claude 取证演练失败：{error}", file=sys.stderr)

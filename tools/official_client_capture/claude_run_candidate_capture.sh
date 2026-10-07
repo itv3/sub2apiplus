@@ -21,6 +21,14 @@ umask 077
 #   4. 网关 API Key、账号令牌与管理凭据只写进本次私有运行目录（0700／0600），中继只在内存里使用并做逐字节秘密扫描，
 #      本脚本退出前无论成败都删除这些文件；
 #   5. 账号令牌只读取用于秘密扫描，不改写 credentials；一次只允许一个候选取证持有锁。
+#
+# 抓包容器身份（B4-01b）：编排器经共享监督器执行本脚本，出口守护下监督器把环境变量 CAPTURE_CONTAINER 钉成准入时的 64 位
+# 容器 ID（只改写以 docker exec 开头的命令，本脚本的位置参数不动，仍是容器名）。所以两边都解析成容器 ID 再比较：
+#   * 容器名（位置参数第 3 项）只用于 Docker 网络内的名字解析（网关临时代理的 host、getent 前检）；
+#   * 实际 docker exec／docker cp 一律打到钉住的容器 ID，中继命令的目标也改写成这个 ID，名字在中途被重新绑定也打不偏。
+#
+# 零请求演练（B4-01b）：中继命令带 --dry-run（编排器的零请求演练把 --execute 换成 --dry-run）时，本脚本只做全部只读前检，
+# 不取锁、不建运行目录、不写恢复报告、不改 keeper／账号／代理／CA，随后直接执行中继的 dry-run（只回显计划）。
 
 required_gate=YES_I_ACCEPT_CANDIDATE_GATEWAY_CAPTURE
 if [[ ${CLAUDE_CANDIDATE_CAPTURE:-} != "$required_gate" ]]; then
@@ -81,12 +89,36 @@ for pair in "CAMPAIGN_DIR=$campaign_dir" "CAPTURE_ROOT=$capture_root" "OUTPUT_RO
 done
 
 # 位置参数：在隔离环境里执行的中继候选模式命令，必须与环境变量逐项对应（场景清单在 plan 时已核对同一合同）。
-if (( $# < 8 )) || [[ $1 != docker || $2 != exec || $3 != "$capture_container" || $4 != python3 ]]; then
-  echo "位置参数必须是 docker exec \$CAPTURE_CONTAINER python3 <中继> capture ... 命令。" >&2
+if (( $# < 8 )) || [[ $1 != docker || $2 != exec || $4 != python3 ]]; then
+  echo "位置参数必须是 docker exec <抓包容器> python3 <中继> capture ... 命令。" >&2
+  exit 2
+fi
+# 位置参数里的目标是容器名（监督器只钉环境变量）；与 CAPTURE_CONTAINER 是否同一实例在只读前检里按容器 ID 核对。
+capture_name=$3
+if [[ ! $capture_name =~ $safe_name ]]; then
+  echo "中继命令的目标容器名含非法字符。" >&2
   exit 2
 fi
 if [[ $5 != */claude_fw_e_relay.py || $6 != capture ]]; then
   echo "位置参数必须调用 claude_fw_e_relay.py capture。" >&2
+  exit 2
+fi
+# 执行模式：恰有一个 --execute（正式取证）或恰有一个 --dry-run（零请求演练），二者不得同时出现。
+execute_count=0
+dry_run_count=0
+for item in "$@"; do
+  if [[ $item == --execute ]]; then
+    execute_count=$((execute_count + 1))
+  elif [[ $item == --dry-run ]]; then
+    dry_run_count=$((dry_run_count + 1))
+  fi
+done
+if [[ $execute_count == 1 && $dry_run_count == 0 ]]; then
+  dry_run=0
+elif [[ $execute_count == 0 && $dry_run_count == 1 ]]; then
+  dry_run=1
+else
+  echo "中继命令必须恰有一个 --execute（正式取证）或恰有一个 --dry-run（零请求演练）。" >&2
   exit 2
 fi
 argument_value() {
@@ -189,12 +221,15 @@ if not isinstance(exp, int) or exp - int(time.time()) < int(os.environ["MIN_TTL"
 PY
 fi
 
-lock_dir="$host_data_root/runtime/claude-candidate"
-install -d -m 0700 "$lock_dir"
-exec 8>"$lock_dir/.capture.lock"
-if ! flock -n 8; then
-  echo "另一个 Claude 候选取证正持有锁，拒绝并发执行。" >&2
-  exit 2
+if [[ $dry_run == 0 ]]; then
+  # 零请求演练不取锁、不建目录（宿主上不留任何文件）；正式取证一次只允许一个候选取证持有锁。
+  lock_dir="$host_data_root/runtime/claude-candidate"
+  install -d -m 0700 "$lock_dir"
+  exec 8>"$lock_dir/.capture.lock"
+  if ! flock -n 8; then
+    echo "另一个 Claude 候选取证正持有锁，拒绝并发执行。" >&2
+    exit 2
+  fi
 fi
 if [[ -e $runtime_host || -L $runtime_host ]]; then
   echo "候选运行目录已存在（上一轮未清理或并发残留），拒绝覆盖：$runtime_host" >&2
@@ -204,6 +239,16 @@ if [[ -e $output_host || -L $output_host ]]; then
   echo "证据输出目录已存在，拒绝覆盖：$output_host" >&2
   exit 2
 fi
+
+# 抓包容器实例：CAPTURE_CONTAINER（出口守护下是监督器钉住的 64 位 ID）与中继命令里的容器名必须解析到同一个容器 ID；
+# 此后 docker exec／cp 一律用这个 ID，中继命令的目标也改写成它。
+capture_id=$(docker inspect -f '{{.Id}}' "$capture_container" 2>/dev/null || true)
+named_capture_id=$(docker inspect -f '{{.Id}}' "$capture_name" 2>/dev/null || true)
+if [[ ! $capture_id =~ ^[0-9a-f]{64}$ || $capture_id != "$named_capture_id" ]]; then
+  echo "中继命令的目标容器 $capture_name 与 CAPTURE_CONTAINER 不是同一个容器实例。" >&2
+  exit 2
+fi
+set -- docker exec "$capture_id" "${@:4}"
 
 db_user=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" | sed -n 's/^POSTGRES_USER=//p')
 db_name=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" | sed -n 's/^POSTGRES_DB=//p')
@@ -306,11 +351,11 @@ if [[ ! $original_gate_state =~ ^[0-9a-f]*\|[0-9a-f]*$ ]]; then
   echo "无法读取账号 #$account_id 的调度门初始状态。" >&2
   exit 1
 fi
-if ! docker exec "$service_container" getent hosts "$capture_container" >/dev/null; then
+if ! docker exec "$service_container" getent hosts "$capture_name" >/dev/null; then
   echo "候选服务容器无法解析受控抓包容器（connect 中继不可达）。" >&2
   exit 1
 fi
-if ! docker exec "$capture_container" getent hosts "$service_container" >/dev/null; then
+if ! docker exec "$capture_id" getent hosts "$service_container" >/dev/null; then
   echo "抓包容器无法解析候选服务容器（客户端打不到网关）。" >&2
   exit 1
 fi
@@ -325,12 +370,17 @@ if docker exec "$service_container" test -e "$custom_ca_path"; then
   exit 1
 fi
 
+# ---- 零请求演练到此为止：只读前检全部通过后直接执行中继 dry-run（只回显计划），不做任何修改、不写恢复报告 ----------
+if [[ $dry_run == 1 ]]; then
+  exec "$@"
+fi
+
 install -d -m 0700 "$runtime_host" "$runtime_host/restore"
 # 快照阶段还没有任何修改：失败时只删掉本轮运行目录，不能留下让下一轮拒绝启动的残留。
 trap 'rm -rf -- "$runtime_host"' EXIT ERR INT TERM
 docker cp "$service_container:/etc/hosts" "$runtime_host/restore/hosts.before" >/dev/null
 docker cp "$service_container:/etc/ssl/certs/ca-certificates.crt" "$runtime_host/restore/ca-certificates.before" >/dev/null
-docker cp "$capture_container:$ca_cert" "$runtime_host/restore/capture-ca.crt" >/dev/null
+docker cp "$capture_id:$ca_cert" "$runtime_host/restore/capture-ca.crt" >/dev/null
 chmod 0600 "$runtime_host"/restore/*
 service_container_id_before=$(docker inspect -f '{{.Id}}' "$service_container")
 original_hosts_hash=$(sha256sum "$runtime_host/restore/hosts.before" | awk '{print $1}')
@@ -480,7 +530,7 @@ fi
 
 proxy_id=$(db_query "
 insert into proxies (name,protocol,host,port,status,fallback_mode)
-values ('claude-candidate-${run_id:0:64}','http','$capture_container',$relay_port,'active','none')
+values ('claude-candidate-${run_id:0:64}','http','$capture_name',$relay_port,'active','none')
 returning id")
 if [[ ! $proxy_id =~ ^[0-9]+$ ]]; then
   echo "创建临时受控代理失败。" >&2
