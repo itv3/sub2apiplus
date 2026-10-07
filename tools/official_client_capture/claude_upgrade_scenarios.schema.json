@@ -15,7 +15,9 @@
     "version_facts",
     "variable_contract",
     "evidence_scenarios",
-    "capture_jobs"
+    "capture_jobs",
+    "required_client_bindings",
+    "required_boundary_checks"
   ],
   "properties": {
     "$schema": {"type": "string", "minLength": 1},
@@ -41,6 +43,22 @@
       "type": "array",
       "minItems": 1,
       "items": {"$ref": "#/$defs/captureJob"}
+    },
+    "required_client_bindings": {
+      "description": "B4-01：三官方客户端正例里只能在 Mac 上驱动的两个，按 Codex 第三方客户端收据机制由 Mac 侧 claude_drive_desktop.py 驱动并产出收据，候选 seal 用 --client-evidence 核对；CLI 正例由候选 Job 承担。排序去重，恰好是这两项。",
+      "type": "array",
+      "items": {"enum": ["claude-desktop", "claude-vscode"]},
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true
+    },
+    "required_boundary_checks": {
+      "description": "B4-01：attempt 级边界核对，候选 Job 之后、seal 之前执行，证据进 attempt 的 client 证据目录。codex-final-wire-isolation 用现有 Codex 候选采集脚本（不改）跑最小场景、Codex checker 只读判定零差异；third-party-ingress-rejection 核第三方与非法形态请求在读取 OAuth 凭据前被拒。排序去重，恰好是这两项。",
+      "type": "array",
+      "items": {"enum": ["codex-final-wire-isolation", "third-party-ingress-rejection"]},
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true
     }
   },
   "$defs": {
@@ -146,6 +164,18 @@
         "timeout_seconds": {"type": "integer", "minimum": 1}
       }
     },
+    "candidateCommandStep": {
+      "description": "B4-01 候选步骤：argv 以 bash {capture_tool_root}/claude_run_candidate_capture.sh 开头，其后是在网关隔离环境里执行的中继候选模式命令 docker exec {capture_container} python3 {capture_tool_root}/claude_fw_e_relay.py capture --execute …（镜像主模型 official 步骤：同一 probe，--output-root 换到 runs/claude-candidate，去掉 --claude-credentials-file，加 --candidate-runtime-dir 与 --candidate-relay-port 18443）；environment 逐字给出脚本参数（CLAUDE_CANDIDATE_CAPTURE 开关、Campaign 目录、数据根、四个容器、候选账号与 API Key 的 ID、run-id、probe、输出根、运行目录、中继端口、触发方式与抓包 CA），与中继命令逐项一致。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["probe_id", "argv", "environment", "timeout_seconds"],
+      "properties": {
+        "probe_id": {"$ref": "#/$defs/safeId"},
+        "argv": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonEmptyText"}},
+        "environment": {"type": "object", "additionalProperties": {"type": "string"}},
+        "timeout_seconds": {"type": "integer", "minimum": 1}
+      }
+    },
     "captureJob": {
       "type": "object",
       "additionalProperties": false,
@@ -165,14 +195,18 @@
       "properties": {
         "id": {"$ref": "#/$defs/safeId"},
         "phase": {
-          "description": "当前只接受 official；候选取证 Job 由 B4-01 落实后放开。",
+          "description": "official：官方客户端直连取证（commandStep）；candidate（B4-01）：逐一镜像主模型 official probe 的候选网关取证（candidateCommandStep），按阶段各自闭合。",
           "enum": ["official", "candidate"]
         },
         "suites": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["core", "full"]}},
         "scenario_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/scenarioId"}},
         "description": {"$ref": "#/$defs/nonEmptyText"},
         "required": {"type": "boolean"},
-        "steps": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/commandStep"}},
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"anyOf": [{"$ref": "#/$defs/commandStep"}, {"$ref": "#/$defs/candidateCommandStep"}]}
+        },
         "evidence_roots": {
           "description": "恰好一个证据根；各步 --output-root 是它下面以 probe 命名的子目录。",
           "type": "array",

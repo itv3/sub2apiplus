@@ -104,6 +104,67 @@ VARIABLE_SCOPES = frozenset({"campaign", "step_runtime"})
 SCENARIO_PURPOSES = frozenset({"rule_evidence", "discovery"})
 JOB_PHASES = frozenset({"official", "candidate"})
 JOB_SUITES = frozenset({"core", "full"})
+# 候选取证（B4-01）：每一步是宿主侧候选采集脚本包着同一份中继的候选模式——脚本在网关隔离环境（账号临时代理、服务容器
+# 临时信任抓包 CA、keeper 停、调度门清零）里转调 ``docker exec {capture_container} python3 …claude_fw_e_relay.py capture``，
+# 退出前精确恢复并核验。候选步骤逐一镜像某个主模型 official probe（同一 probe ID），由同一官方客户端驱动，只是客户端经
+# base URL 加专用 API Key 打候选网关，中继以 connect 模式记录网关的最终出站字节，两侧证据因此可以按同一 probe 配对。
+CANDIDATE_SCRIPT = "claude_run_candidate_capture.sh"
+CANDIDATE_CAPTURE_GATE = "YES_I_ACCEPT_CANDIDATE_GATEWAY_CAPTURE"
+CANDIDATE_RUNTIME_DIR_FLAG = "--candidate-runtime-dir"
+CANDIDATE_RELAY_PORT_FLAG = "--candidate-relay-port"
+# 中继在抓包容器内的 connect 端口（网关账号临时代理指向它）；冻结在步骤里，脚本与中继逐字核对。
+CANDIDATE_RELAY_PORT = "18443"
+# 候选步骤的触发方式：client 由官方客户端驱动；gateway-account-refresh 由中继在抓包窗口内调用网关管理接口刷新账号令牌
+# （官方 probe 的驱动是客户端自己的 OAuth 刷新，经网关时客户端只持有 API Key，对应的候选出站是网关自己的刷新请求）。
+CANDIDATE_TRIGGER_CLIENT = "client"
+CANDIDATE_TRIGGER_ACCOUNT_REFRESH = "gateway-account-refresh"
+CANDIDATE_ENVIRONMENT_KEYS = frozenset(
+    {
+        "CLAUDE_CANDIDATE_CAPTURE",
+        "CAMPAIGN_DIR",
+        "CAPTURE_ROOT",
+        "CAPTURE_CONTAINER",
+        "SERVICE_CONTAINER",
+        "KEEPER_CONTAINER",
+        "POSTGRES_CONTAINER",
+        "ACCOUNT_ID",
+        "API_KEY_ID",
+        "RUN_ID",
+        "PROBE_ID",
+        "OUTPUT_ROOT",
+        "CANDIDATE_RUNTIME_DIR",
+        "RELAY_PORT",
+        "GATEWAY_TRIGGER",
+        "CA_CERT",
+    }
+)
+# 候选步骤环境里取 Campaign 变量的键（值必须逐字是这个占位）。
+CANDIDATE_ENVIRONMENT_TEMPLATES: Mapping[str, str] = {
+    "CAMPAIGN_DIR": "{campaign_dir}",
+    "CAPTURE_ROOT": "{capture_root}",
+    "CAPTURE_CONTAINER": LIVE_CONTAINER_PLACEHOLDER,
+    "SERVICE_CONTAINER": "{service_container}",
+    "KEEPER_CONTAINER": "{keeper_container}",
+    "POSTGRES_CONTAINER": "{postgres_container}",
+    "ACCOUNT_ID": "{claude_account_id}",
+    "API_KEY_ID": "{api_key_id}",
+}
+# 候选阶段专用的 Campaign 变量：只被候选步骤引用。official-only 的 Campaign（预检、只取官方证据）可以为空，候选 run
+# 之前由编排器失败关闭核对非空；它们不进 ``CAMPAIGN_VARIABLES``，因此不改变官方 Job 的启动合同与 Job 演练合同。
+CANDIDATE_CAMPAIGN_VARIABLES = (
+    "service_container",
+    "keeper_container",
+    "postgres_container",
+    "claude_account_id",
+    "api_key_id",
+)
+# 三官方客户端正例里只能在 Mac 上驱动的两个（B4-01，已定）：不做成候选 Job，按 Codex 第三方客户端收据机制，由 Mac 侧
+# ``claude_drive_desktop.py`` 驱动并产出收据，候选 seal 用 ``--client-evidence`` 核对。CLI 正例由候选 Job 本身承担。
+REQUIRED_CLIENT_BINDINGS = frozenset({"claude-desktop", "claude-vscode"})
+# attempt 级边界核对（B4-01，已定）：候选 Job 之后、seal 之前执行，证据进 attempt 的 client 证据目录，由 seal 与 accept 核对。
+#   codex-final-wire-isolation：用现有 Codex 候选采集脚本（不改）跑最小场景，Codex checker 只读判定 final wire 零差异；
+#   third-party-ingress-rejection：第三方与非法形态请求在读取 OAuth 凭据前被拒（网关零出站）。
+REQUIRED_BOUNDARY_CHECKS = frozenset({"codex-final-wire-isolation", "third-party-ingress-rejection"})
 CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})
 CAMPAIGN_PURPOSES = frozenset({"validation_only", "production_replacement"})
 # Claude 尚未登记需要场景真实性收据的目标场景；字段为对齐 Codex 结构而保留，只能为空。
@@ -135,6 +196,8 @@ _SCENARIO_TOP_FIELDS = frozenset(
         "variable_contract",
         "evidence_scenarios",
         "capture_jobs",
+        "required_client_bindings",
+        "required_boundary_checks",
     }
 )
 _VARIABLE_FIELDS = frozenset({"name", "type", "required", "sensitive", "scope", "description"})
@@ -500,6 +563,90 @@ def step_model(probe_id: str, argv: Sequence[str]) -> str | None:
     return _argument_value(argv, "--model")
 
 
+def candidate_trigger(probe_id: str) -> str:
+    """候选步骤的触发方式：官方 probe 的驱动是客户端 OAuth 刷新时由网关自己刷新账号令牌，其余由官方客户端驱动。"""
+
+    probe = _fw_f_v5().get_probe(probe_id)
+    return CANDIDATE_TRIGGER_ACCOUNT_REFRESH if probe.driver == "oauth-refresh" else CANDIDATE_TRIGGER_CLIENT
+
+
+def _validate_candidate_step(job_id: str, step_index: int, step: Any, *, catalog_arguments: Mapping[str, str]) -> str:
+    """候选步骤合同：宿主侧候选采集脚本包着中继候选模式的 capture 命令，脚本参数全部经环境变量逐字给出。"""
+
+    if not isinstance(step, dict) or set(step) != _STEP_FIELDS:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 字段不闭合。")
+    probe_id = step.get("probe_id")
+    argv = step.get("argv")
+    environment = step.get("environment")
+    timeout = step.get("timeout_seconds")
+    if not isinstance(probe_id, str) or not SAFE_ID_RE.fullmatch(probe_id):
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 probe_id 非法。")
+    if not isinstance(argv, list) or not argv or not all(isinstance(item, str) and item for item in argv):
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 argv 非法。")
+    if not isinstance(environment, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in environment.items()
+    ):
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 environment 非法。")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 timeout_seconds 非法。")
+    if list(argv[:2]) != ["bash", f"{TOOL_ROOT_PLACEHOLDER}/{CANDIDATE_SCRIPT}"]:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 必须以 bash {TOOL_ROOT_PLACEHOLDER}/{CANDIDATE_SCRIPT} 执行。")
+    inner = list(argv[2:])
+    # 候选步骤一律在联网的抓包容器里执行：网关经 docker 网络连接容器内的 connect 中继，断网容器连不到。合成计划的
+    # 生产隔离由中继的合成画像（没有任何上游配置，未知 host/path 本地 421）与网关账号临时代理共同保证。
+    if inner[:3] != ["docker", "exec", LIVE_CONTAINER_PLACEHOLDER]:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的中继命令必须以 docker exec {LIVE_CONTAINER_PLACEHOLDER} 执行。")
+    if not any(item.endswith(f"/{RELAY_SCRIPT}") for item in inner) or "capture" not in inner or "--execute" not in inner:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 不是 {RELAY_SCRIPT} capture --execute 动作体。")
+    relay_probe = step_relay_probe(probe_id, inner)
+    if relay_probe != probe_id:
+        # 候选只镜像主模型 probe：probe_id、--probe-id 与 --fw-f-v5-probe 三者相等，--model 是 Campaign 主模型变量。
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 --probe-id／{FW_F_PROBE_FLAG} 必须等于 probe_id 且 --model 为 {MODEL_VARIABLE_PLACEHOLDER}。")
+    if any(flag in inner for flag in LEGACY_PROBE_FLAGS):
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 只能用 FW-F v5 目录，不得再带 {list(LEGACY_PROBE_FLAGS)}。")
+    if relay_probe not in _fw_f_v5().PROBE_IDS:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 probe {relay_probe} 不在 FW-F v5 目录里。")
+    for flag, expected in catalog_arguments.items():
+        if _argument_value(inner, flag) != expected:
+            raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 {flag} 必须是 {expected}。")
+    live = "--acknowledge-live-requests" in inner
+    synthetic = "--acknowledge-synthetic-responses" in inner
+    if live == synthetic:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 必须且只能确认真实请求或合成响应之一。")
+    if live != ("--upstream-ip" in inner):
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 --upstream-ip 与请求确认方式不一致。")
+    if bool(_fw_f_v5().get_probe(probe_id).response_plan) != synthetic:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的请求确认方式与 probe 的合成计划不一致。")
+    # 候选客户端只持有网关 API Key，绝不读取官方 OAuth 凭据。
+    if "--claude-credentials-file" in inner:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 是候选步骤，不得携带 --claude-credentials-file。")
+    runtime_dir = _argument_value(inner, CANDIDATE_RUNTIME_DIR_FLAG)
+    if runtime_dir is None or _argument_value(inner, CANDIDATE_RELAY_PORT_FLAG) != CANDIDATE_RELAY_PORT:
+        raise ConfigurationError(
+            f"{job_id} 步骤 {step_index} 必须带 {CANDIDATE_RUNTIME_DIR_FLAG} 与 {CANDIDATE_RELAY_PORT_FLAG} {CANDIDATE_RELAY_PORT}。"
+        )
+    if set(environment) != CANDIDATE_ENVIRONMENT_KEYS:
+        raise ConfigurationError(
+            f"{job_id} 步骤 {step_index} 的 environment 键必须恰好是 {sorted(CANDIDATE_ENVIRONMENT_KEYS)}。"
+        )
+    expected_environment = {
+        **CANDIDATE_ENVIRONMENT_TEMPLATES,
+        "CLAUDE_CANDIDATE_CAPTURE": CANDIDATE_CAPTURE_GATE,
+        "RUN_ID": _argument_value(inner, "--run-id"),
+        "PROBE_ID": probe_id,
+        "OUTPUT_ROOT": _argument_value(inner, "--output-root"),
+        "CANDIDATE_RUNTIME_DIR": runtime_dir,
+        "RELAY_PORT": CANDIDATE_RELAY_PORT,
+        "GATEWAY_TRIGGER": candidate_trigger(probe_id),
+        # 候选脚本把中继签叶证书用的同一张抓包 CA 装进服务容器（网关才肯信任 connect 中继）。
+        "CA_CERT": _argument_value(inner, "--ca-cert"),
+    }
+    drift = sorted(key for key, value in expected_environment.items() if environment.get(key) != value)
+    if drift:
+        raise ConfigurationError(f"{job_id} 步骤 {step_index} 的 environment 与中继命令或合同不一致：{drift}")
+    return probe_id
+
+
 def _validate_capture_job(index: int, job: Any, seen: set[str], *, catalog_arguments: Mapping[str, str]) -> None:
     if not isinstance(job, dict) or set(job) != _JOB_FIELDS:
         raise ConfigurationError(f"场景任务 {index} 字段不闭合（tool_dependencies 必须逐作业声明）。")
@@ -508,9 +655,6 @@ def _validate_capture_job(index: int, job: Any, seen: set[str], *, catalog_argum
         raise ConfigurationError(f"场景任务 {index} id 非法或重复。")
     if job.get("phase") not in JOB_PHASES:
         raise ConfigurationError(f"{job_id} 的 phase 非法。")
-    if job["phase"] != "official":
-        # 候选取证 Job 的动作体与证据布局由 B4-01 落实；在那之前清单只能声明 official Job。
-        raise ConfigurationError(f"{job_id}：Claude 候选取证 Job 由 B4-01 落实，当前场景清单只接受 official Job。")
     suites = job.get("suites")
     if not _unique_strings(suites) or not set(suites).issubset(JOB_SUITES):
         raise ConfigurationError(f"{job_id} 的 suites 非法。")
@@ -521,8 +665,9 @@ def _validate_capture_job(index: int, job: Any, seen: set[str], *, catalog_argum
     steps = job.get("steps")
     if not isinstance(steps, list) or not steps:
         raise ConfigurationError(f"{job_id} 没有可执行步骤。")
+    validate = _validate_step if job["phase"] == "official" else _validate_candidate_step
     for step_index, step in enumerate(steps, 1):
-        _validate_step(job_id, step_index, step, catalog_arguments=catalog_arguments)
+        validate(job_id, step_index, step, catalog_arguments=catalog_arguments)
     # Claude 每个 Job 只有一个证据根，各步输出根都是它下面以 probe 命名的子目录。
     if not _unique_strings(job.get("evidence_roots")) or len(job["evidence_roots"]) != 1:
         raise ConfigurationError(f"{job_id} 的 evidence_roots 必须恰好一个。")
@@ -616,16 +761,19 @@ def validate_scenario_manifest(payload: Any) -> None:
     for index, job in enumerate(jobs, 1):
         _validate_capture_job(index, job, job_ids, catalog_arguments=catalog_arguments)
 
-    # 场景、probe 与 Job 的绑定闭合：每个 probe 恰好由一步执行；被执行的 probe 都属于某个场景，场景列出的 probe
-    # 都被执行；Job 的 scenario_ids 等于其各步 probe 所属场景之并，covers 不超出这些场景的 covers。
+    # 场景、probe 与 Job 的绑定闭合（按阶段）：official 阶段每个 probe 恰好由一步执行，被执行的 probe 都属于某个场景，
+    # 场景列出的 probe 都被执行；候选阶段每个 probe 至多一步，且只能镜像 official 已执行的主模型 probe（两侧按同一 probe
+    # 配对）。Job 的 scenario_ids 等于其各步 probe 所属场景之并，covers 不超出这些场景的 covers。
     scenario_by_id = {item["scenario_id"]: item for item in scenarios}
     probe_scenarios: dict[str, set[str]] = {}
     for item in scenarios:
         for probe in item["probe_ids"]:
             probe_scenarios.setdefault(probe, set()).add(item["scenario_id"])
-    executed: list[str] = [step["probe_id"] for job in jobs for step in job["steps"]]
+    official_jobs = [job for job in jobs if job["phase"] == "official"]
+    candidate_jobs = [job for job in jobs if job["phase"] == "candidate"]
+    executed: list[str] = [step["probe_id"] for job in official_jobs for step in job["steps"]]
     if len(executed) != len(set(executed)):
-        raise ConfigurationError("同一 probe 只能由一个取证步骤执行。")
+        raise ConfigurationError("同一 probe 只能由一个 official 取证步骤执行。")
     if set(executed) != set(probe_scenarios):
         raise ConfigurationError(
             "场景声明的 probe 与 Job 执行的 probe 不一致："
@@ -633,9 +781,17 @@ def validate_scenario_manifest(payload: Any) -> None:
         )
     # probe_catalog.probe_count 是 FW-F v5 目录的 probe 数，对应主模型步骤；非主模型（模型能力取证）步骤复用主模型已执行的
     # 基础 probe（标签规则也照主模型步骤复制），不计入目录数。
-    primary_relay = {step["probe_id"] for job in jobs for step in job["steps"] if step_model(step["probe_id"], step["argv"]) is None}
+    primary_relay = {
+        step["probe_id"] for job in official_jobs for step in job["steps"] if step_model(step["probe_id"], step["argv"]) is None
+    }
     if catalog["probe_count"] != len(primary_relay):
         raise ConfigurationError("场景清单 probe_catalog.probe_count 与主模型执行的 probe 数不一致。")
+    mirrored = [step["probe_id"] for job in candidate_jobs for step in job["steps"]]
+    if len(mirrored) != len(set(mirrored)):
+        raise ConfigurationError("同一 probe 只能由一个候选取证步骤执行。")
+    unpaired = sorted(set(mirrored) - primary_relay)
+    if unpaired:
+        raise ConfigurationError(f"候选步骤只能镜像 official 已执行的主模型 probe：{unpaired}")
     for job in jobs:
         for step in job["steps"]:
             relay_probe = step_relay_probe(step["probe_id"], step["argv"])
@@ -665,6 +821,41 @@ def validate_scenario_manifest(payload: Any) -> None:
     roots = [root for job in jobs for root in job["evidence_roots"]]
     if len(roots) != len(set(roots)):
         raise ConfigurationError("同一证据根只能由单一 Job 独占。")
+    # VC-3 ScenarioPlan 的场景全集就是覆盖目标规则的证据场景（rule_evidence）；Store 封存 CandidateEvidencePackage 时要求
+    # 候选场景批准唯一覆盖它，因此只要清单声明了候选 Job，每个套件里的必需候选 Job 都必须覆盖全部 rule_evidence 场景。
+    if candidate_jobs:
+        plan_scenarios = {item["scenario_id"] for item in scenarios if item["covers"]}
+        for suite in sorted(JOB_SUITES):
+            covered = {
+                scenario_id
+                for job in candidate_jobs
+                if job["required"] and suite in job["suites"]
+                for scenario_id in job["scenario_ids"]
+            }
+            missing = sorted(plan_scenarios - covered)
+            if missing:
+                raise ConfigurationError(f"{suite} 套件的必需候选 Job 没有覆盖 VC-3 ScenarioPlan 场景：{missing}")
+    _validate_attempt_requirements(payload)
+
+
+def _validate_attempt_requirements(payload: Mapping[str, Any]) -> None:
+    """attempt 级证据要求（B4-01）：三官方客户端正例里的 Mac 两项走客户端收据，边界核对两项走 attempt 级收据。
+
+    两个字段在 Formal plan 之前随清单冻结；词表闭合，必需项缺一即失败关闭（产出方与核对方分别在候选驱动、seal 与 accept）。
+    """
+
+    for field, required in (
+        ("required_client_bindings", REQUIRED_CLIENT_BINDINGS),
+        ("required_boundary_checks", REQUIRED_BOUNDARY_CHECKS),
+    ):
+        value = payload.get(field)
+        if (
+            not _unique_strings(value)
+            or any(not SAFE_ID_RE.fullmatch(item) for item in value)
+            or value != sorted(value)
+            or set(value) != required
+        ):
+            raise ConfigurationError(f"场景清单 {field} 必须是排序去重的 {sorted(required)}。")
 
 
 # ---------------------------------------------------------------------------
@@ -723,7 +914,12 @@ def validate_campaign_context(payload: Mapping[str, Any], context: Mapping[str, 
 
     contract = _variable_contract(payload)
     runtime = runtime_variable_types(payload)
-    unexpected = sorted(set(context) - set(contract))
+    # 候选阶段变量（B4-01）在没有候选 Job 的旧清单副本里没有声明：取值为空时视同不存在，有取值则照常拒绝。
+    unexpected = sorted(
+        name
+        for name in set(context) - set(contract)
+        if not (name in CANDIDATE_CAMPAIGN_VARIABLES and not str(context.get(name) or ""))
+    )
     if unexpected:
         raise ConfigurationError(f"Campaign 取值含变量合同外的名字：{unexpected}")
     bound_runtime = sorted(set(context) & set(runtime))
@@ -788,6 +984,11 @@ def _validate_expanded_step(job_id: str, evidence_root: str, step: Mapping[str, 
         or output_root != f"{evidence_root}/{step['probe_id']}"
     ):
         raise ConfigurationError(f"{job_id}／{step['probe_id']} 的 --output-root 必须是本 Job 证据根下以 probe 命名的子目录。")
+    if CANDIDATE_RUNTIME_DIR_FLAG in argv:
+        # 候选步骤的私有运行目录（网关 API Key、待扫描的账号令牌等只在执行期存在的文件）：展开后必须是安全绝对路径。
+        runtime_dir = _argument_value(argv, CANDIDATE_RUNTIME_DIR_FLAG)
+        if runtime_dir is None or not SAFE_ABSOLUTE_PATH_RE.fullmatch(runtime_dir) or ".." in PurePosixPath(runtime_dir).parts:
+            raise ConfigurationError(f"{job_id}／{step['probe_id']} 的 {CANDIDATE_RUNTIME_DIR_FLAG} 展开后不是安全绝对路径。")
 
 
 def expand_scenario_jobs(
@@ -945,17 +1146,19 @@ def coverage_plan(jobs: Sequence[Any], rules: Sequence[str]) -> dict[str, Any]:
     return {
         "required_rule_count": len(rules),
         "official_unmapped": sorted(set(rules) - mapped["official"]),
-        # 候选取证 Job 由 B4-01 落实；在那之前候选侧全部未映射，如实列出。
         "candidate_unmapped": sorted(set(rules) - mapped["candidate"]),
     }
 
 
-def validate_official_coverage(jobs: Sequence[Any], rules: Sequence[str]) -> None:
-    """full 套件：official 必需 Job 的 covers 必须覆盖规则全集（候选侧覆盖随 B4-01 的候选 Job 一并校验）。"""
+def validate_full_coverage(jobs: Sequence[Any], rules: Sequence[str]) -> None:
+    """full 套件：official 与候选两个阶段的必需 Job 各自的 covers 都必须覆盖规则全集（与 Codex 同一口径，B4-01 起）。"""
 
-    missing = coverage_plan(jobs, rules)["official_unmapped"]
-    if missing:
-        raise ConfigurationError(f"full 场景清单存在 official 未映射规则：{missing}")
+    plan = coverage_plan(jobs, rules)
+    incomplete = {
+        phase: plan[f"{phase}_unmapped"] for phase in ("official", "candidate") if plan[f"{phase}_unmapped"]
+    }
+    if incomplete:
+        raise ConfigurationError(f"full 场景清单存在未映射规则：{incomplete}")
 
 
 def scenario_job_execution_contract(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -978,18 +1181,19 @@ def scenario_job_execution_contract(payload: Mapping[str, Any]) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 
-def _step_probes(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    """probe → {job_id, synthetic, scenarios}（来自已校验的场景清单）。"""
+def _job_step_probes(payload: Mapping[str, Any]) -> dict[str, dict[str, dict[str, Any]]]:
+    """Job → probe → {synthetic, scenarios}（来自已校验的场景清单）。
+
+    按 Job 分开：候选步骤与它镜像的 official 步骤是同一个 probe ID，按 probe 单键会互相覆盖。"""
 
     scenarios: dict[str, set[str]] = {}
     for item in payload["evidence_scenarios"]:
         for probe in item["probe_ids"]:
             scenarios.setdefault(probe, set()).add(item["scenario_id"])
-    probes: dict[str, dict[str, Any]] = {}
+    probes: dict[str, dict[str, dict[str, Any]]] = {}
     for job in payload["capture_jobs"]:
         for step in job["steps"]:
-            probes[step["probe_id"]] = {
-                "job_id": job["id"],
+            probes.setdefault(job["id"], {})[step["probe_id"]] = {
                 "synthetic": "--acknowledge-synthetic-responses" in step["argv"],
                 "scenarios": scenarios[step["probe_id"]],
             }
@@ -1000,6 +1204,12 @@ def _validate_connection(probe: str, connection: Any, *, synthetic: bool) -> dic
     if not isinstance(connection, dict):
         raise ConfigurationError(f"{probe} 的连接规则必须是对象。")
     keys = set(connection)
+    if keys == {"order"}:
+        # 候选侧零出站（B4-01）：官方 probe 的请求全是网关不转发的端点（本地拒绝、只打 hello／settings 等），网关
+        # 不应产生任何上游连接；出现任何有效连接即失败关闭。
+        if connection.get("order") != "none":
+            raise ConfigurationError(f"{probe} 的零连接规则只能是 order=none。")
+        return {"mode": "none"}
     if keys == {"order", "requests"}:
         requests = connection.get("requests")
         if connection.get("order") != "unordered" or not _unique_strings(requests) or any(
@@ -1048,9 +1258,15 @@ def _validate_connection(probe: str, connection: Any, *, synthetic: bool) -> dic
 def connection_plan(rules: Sequence[tuple[int, Mapping[str, Any]]]) -> dict[str, Any]:
     """一个 probe 的中继请求连接规则（(规则下标, 已校验规则) 列表）→ 逐连接计划。
 
-    只有两种合法形态：一条无序规则独占；或逐序号规则 1..k 连续且唯一，加至多一条从 k+1 起的尾部规则。
+    只有三种合法形态：一条零连接规则独占（候选侧零出站）；一条无序规则独占；或逐序号规则 1..k 连续且唯一，加至多一条
+    从 k+1 起的尾部规则。
     """
 
+    empty = [(index, rule) for index, rule in rules if rule["mode"] == "none"]
+    if empty:
+        if len(rules) != 1:
+            raise ConfigurationError("零连接规则必须是该 probe 唯一的连接规则。")
+        return {"mode": "none", "rule_index": empty[0][0]}
     unordered = [(index, rule) for index, rule in rules if rule["mode"] == "unordered"]
     if unordered:
         if len(rules) != 1:
@@ -1090,7 +1306,7 @@ def load_evidence_labels(path: Path, *, expected_version: str, scenario_payload:
     entries = document.get("entries")
     if not isinstance(entries, list) or not entries:
         raise ConfigurationError("证据标签声明 entries 不能为空。")
-    probes = _step_probes(scenario_payload)
+    job_steps = _job_step_probes(scenario_payload)
     job_phases = {job["id"]: job["phase"] for job in scenario_payload["capture_jobs"]}
     job_probes = {job["id"]: [step["probe_id"] for step in job["steps"]] for job in scenario_payload["capture_jobs"]}
     plans: dict[str, dict[str, Any]] = {}
@@ -1135,7 +1351,7 @@ def load_evidence_labels(path: Path, *, expected_version: str, scenario_payload:
             ):
                 raise ConfigurationError(f"{job_id}／{probe} 的 derive 非法。")
             scenario_ids = rule.get("scenario_ids")
-            if not _unique_strings(scenario_ids) or not set(scenario_ids).issubset(probes[probe]["scenarios"]):
+            if not _unique_strings(scenario_ids) or not set(scenario_ids).issubset(job_steps[job_id][probe]["scenarios"]):
                 raise ConfigurationError(f"{job_id}／{probe} 的 scenario_ids 必须是该 probe 所属场景的子集。")
             labels = rule.get("labels")
             if (
@@ -1152,7 +1368,11 @@ def load_evidence_labels(path: Path, *, expected_version: str, scenario_payload:
             slot = by_probe.setdefault(probe, {"connections": [], "kinds": []})
             slot["kinds"].append(kind)
             if is_request:
-                slot["connections"].append((index, _validate_connection(probe, rule["connection"], synthetic=probes[probe]["synthetic"])))
+                connection = _validate_connection(probe, rule["connection"], synthetic=job_steps[job_id][probe]["synthetic"])
+                if connection["mode"] == "none" and entry["side"] != "candidate":
+                    # 官方客户端直连时每个 probe 至少有启动序列连接；零连接形态只给候选侧（网关不转发的端点）。
+                    raise ConfigurationError(f"{job_id}／{probe} 是 official 侧，不得声明零连接规则。")
+                slot["connections"].append((index, connection))
         job_plans: dict[str, Any] = {}
         for probe in job_probes[job_id]:
             slot = by_probe.get(probe)
@@ -1160,7 +1380,7 @@ def load_evidence_labels(path: Path, *, expected_version: str, scenario_payload:
                 raise ConfigurationError(f"{job_id}／{probe} 缺少中继请求的逐连接标签。")
             if "relay_manifest" not in slot["kinds"]:
                 raise ConfigurationError(f"{job_id}／{probe} 缺少 relay_manifest 标签。")
-            if probes[probe]["synthetic"] != ("synthetic_intervention" in slot["kinds"]):
+            if job_steps[job_id][probe]["synthetic"] != ("synthetic_intervention" in slot["kinds"]):
                 raise ConfigurationError(f"{job_id}／{probe} 的合成干预记录标签与请求确认方式不一致。")
             job_plans[probe] = connection_plan(slot["connections"])
         plans[job_id] = job_plans
@@ -1196,6 +1416,10 @@ def match_relay_connections(plan: Mapping[str, Any], connections: Sequence[Mappi
     if len({item[0] for item in records}) != len(records):
         raise LabelSequenceMismatch("中继连接号重复。")
     matches: list[dict[str, Any]] = []
+    if plan["mode"] == "none":
+        if records:
+            raise LabelSequenceMismatch(f"零连接规则不允许任何有效连接，实际 {len(records)} 条：{[item[0] for item in records]}")
+        return matches
     if plan["mode"] == "unordered":
         allowed = plan["requests"]
         for ordinal, (connection_id, requests, _intervention) in enumerate(records, 1):
@@ -1286,6 +1510,12 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         "--ca-cert",
     ):
         parser.add_argument(flag, default=None)
+    # 候选阶段（B4-01）：网关侧容器名缺省取变量合同 default；候选账号与 ingress API Key 的数据库 ID 只有候选 run 需要，
+    # official-only 的 Campaign 可以不给（候选 run 之前由编排器失败关闭核对非空）。清单里只登记 ID，不保存 key 值。
+    for flag in ("--service-container", "--keeper-container", "--postgres-container"):
+        parser.add_argument(flag, default=None)
+    parser.add_argument("--claude-account-id", default="", help="候选阶段专用 Anthropic OAuth 验收账号的数据库 ID")
+    parser.add_argument("--api-key-id", default="", help="候选阶段专用 ingress API Key 的数据库 ID（单账号隔离分组）")
     # B5a-09：官方包与只审计。官方包是 B2-01 冻结收据 freeze.json（驱动参数 TARGET_PACKAGE），摘要为本轮登记的
     # OFFICIAL_ASSET_SHA256；--audit-only 只审参数、官方包、清单与工具身份，不建 Campaign、不写任何文件。
     parser.add_argument("--target-package", type=Path, default=None, help="B2-01 冻结收据 freeze.json（绝对路径）")
@@ -1341,6 +1571,13 @@ def prepare_plan_arguments(arguments: argparse.Namespace) -> dict[str, Any]:
             raise ConfigurationError(f"场景清单变量合同缺少 Campaign 变量 {name}。")
         if getattr(arguments, name, None) in (None, "") and "default" in contract[name]:
             setattr(arguments, name, str(contract[name]["default"]))
+    for name in CANDIDATE_CAMPAIGN_VARIABLES:
+        # 候选变量在没有候选 Job 的旧清单里可以缺席；声明了就同样取 default，并必须是 Campaign 作用域。
+        if name in contract:
+            if contract[name]["scope"] != "campaign":
+                raise ConfigurationError(f"场景清单变量 {name} 必须是 Campaign 作用域。")
+            if getattr(arguments, name, None) in (None, "") and "default" in contract[name]:
+                setattr(arguments, name, str(contract[name]["default"]))
     if not arguments.claude_bin:
         arguments.claude_bin = f"/opt/claude-{arguments.target_version}/claude"
     # 与 Codex plan 同一约束：模型与容器名只能是安全标识（进入 argv 与运行坐标）。
@@ -1353,6 +1590,18 @@ def prepare_plan_arguments(arguments: argparse.Namespace) -> dict[str, Any]:
             raise ConfigurationError(f"{flag} 格式非法。")
     if arguments.synthetic_capture_container == arguments.capture_container:
         raise ConfigurationError("--synthetic-capture-container 必须是独立的断网容器，不能与 --capture-container 相同。")
+    for flag, name in (
+        ("--service-container", "service_container"),
+        ("--keeper-container", "keeper_container"),
+        ("--postgres-container", "postgres_container"),
+    ):
+        value = str(getattr(arguments, name, None) or "")
+        if value and not SAFE_ID_RE.fullmatch(value):
+            raise ConfigurationError(f"{flag} 格式非法。")
+    for flag, name in (("--claude-account-id", "claude_account_id"), ("--api-key-id", "api_key_id")):
+        value = str(getattr(arguments, name, None) or "")
+        if value and not (value.isdecimal() and int(value) > 0):
+            raise ConfigurationError(f"{flag} 必须是正整数。")
     return payload
 
 
@@ -1360,7 +1609,7 @@ def plan_context(arguments: argparse.Namespace) -> dict[str, str]:
     """Campaign 作用域变量的实际取值（字符串）；运行期变量不在其中。"""
 
     context: dict[str, str] = {}
-    for name in CAMPAIGN_VARIABLES:
+    for name in (*CAMPAIGN_VARIABLES, *CANDIDATE_CAMPAIGN_VARIABLES):
         value = getattr(arguments, name, None)
         context[name] = "" if value is None else str(value)
     return context
@@ -1398,7 +1647,7 @@ def plan_jobs(
     jobs = expand_scenario_jobs(payload, context, job_factory=job_factory, suite=arguments.suite)
     validate_jobs(jobs, rules)
     if arguments.suite == "full":
-        validate_official_coverage(jobs, rules)
+        validate_full_coverage(jobs, rules)
     inputs = {
         "baseline_rules": _binding(arguments.rule_manifest),
         "target_rules": _binding(target_rules_path),
@@ -1440,9 +1689,13 @@ def plan_report(
         "inputs": dict(inputs),
         # 容器内坐标与取证参数（B2-11 写进 Campaign 总计划 configuration；B1-11 计量按 capture_root 映射证据根）。
         "configuration": {
-            name: str(getattr(arguments, name))
-            for name in CAMPAIGN_VARIABLES
-            if name not in {"campaign_id", "campaign_dir", "target_version", "target_sha256"}
+            **{
+                name: str(getattr(arguments, name))
+                for name in CAMPAIGN_VARIABLES
+                if name not in {"campaign_id", "campaign_dir", "target_version", "target_sha256"}
+            },
+            # 候选阶段变量（B4-01）：official-only 的 Campaign 可以为空字符串，候选 run 之前核对非空。
+            **{name: str(getattr(arguments, name, None) or "") for name in CANDIDATE_CAMPAIGN_VARIABLES},
         },
         "required_rules": list(rules),
         "coverage_plan": coverage_plan(jobs, rules),
@@ -1579,6 +1832,7 @@ def plan_audit(
             "job_count": len(jobs),
             "step_count": sum(len(job.steps) for job in jobs),
             "official_unmapped": coverage["official_unmapped"],
+            "candidate_unmapped": coverage["candidate_unmapped"],
             "inputs": inputs,
         }
 

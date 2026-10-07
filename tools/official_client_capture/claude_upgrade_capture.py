@@ -325,6 +325,13 @@ def _campaign_arguments(
     reference = _scenario_binding(manifest)
     run_id = str(manifest["campaign_id"]) + (f"-{candidate_id}" if candidate_id else "")
     values = {name: str(configuration[name]) for name in CONFIGURATION_VARIABLES}
+    # 候选阶段变量（B4-01）：B4-01 之前建立的总计划没有这几项，official-only 的 Campaign 允许为空字符串；候选 run 之前另行
+    # 失败关闭核对非空。这里只读不补默认值。
+    for name in claude_upgrade_plan.CANDIDATE_CAMPAIGN_VARIABLES:
+        value = configuration.get(name, "")
+        if not isinstance(value, str):
+            raise ConfigurationError(f"Claude Campaign configuration.{name} 必须是字符串。")
+        values[name] = value
     if runtime_image:
         values["runtime_image"] = str(runtime_image)
     return argparse.Namespace(
@@ -3487,7 +3494,7 @@ def build_rehearsal_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     jobs = claude_upgrade_plan.expand_scenario_jobs(payload, context, job_factory=claude_upgrade.Job, suite=plan_arguments.suite)
     claude_upgrade_plan.validate_jobs(jobs, rules)
     if plan_arguments.suite == "full":
-        claude_upgrade_plan.validate_official_coverage(jobs, rules)
+        claude_upgrade_plan.validate_full_coverage(jobs, rules)
     inputs = {"target_scenarios": claude_upgrade_plan._binding(Path(plan_arguments.scenario_manifest))}
     report = claude_upgrade_plan.plan_report(plan_arguments, jobs, rules, inputs)
     campaign_dir.mkdir(mode=0o700)

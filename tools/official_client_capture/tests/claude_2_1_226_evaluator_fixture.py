@@ -112,7 +112,10 @@ def label_campaign(campaign_root: Path) -> dict[str, Any]:
     scenarios = _load(SCENARIOS_PATH)
     labels = plan_module.load_evidence_labels(LABELS_PATH, expected_version=LABEL_VERSION, scenario_payload=scenarios)
     job_rules = {entry["job_id"]: entry["rules"] for entry in labels["document"]["entries"]}
-    probe_job = {step["probe_id"]: job["id"] for job in scenarios["capture_jobs"] for step in job["steps"]}
+    # 只取 official Job：候选 Job（B4-01）镜像同一 probe ID，按 probe 单键会把官方证据错配到候选标签。
+    probe_job = {
+        step["probe_id"]: job["id"] for job in scenarios["capture_jobs"] if job["phase"] == "official" for step in job["steps"]
+    }
     base = evidence_root(campaign_root)
     artifacts: list[dict[str, Any]] = []
     for probe, attempt in probe_attempts(campaign_root):

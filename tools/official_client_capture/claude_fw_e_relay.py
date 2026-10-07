@@ -34,9 +34,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
+from urllib.parse import urlsplit
+from contextlib import contextmanager
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -44,6 +48,8 @@ if __package__ in {None, ""}:
 from tools.official_client_capture.capture import _load_host_runtime_receipt  # noqa: E402
 from tools.official_client_capture.capturelib.environment import (  # noqa: E402
     PRIVACY_ENV,
+    _read_private_state_file,
+    _write_private_state_file,
     clean_environment,
     parse_injected_env,
     prepare_claude_oauth_state,
@@ -59,6 +65,7 @@ from tools.official_client_capture.capturelib.claude_fw_f_v3 import (  # noqa: E
 from tools.official_client_capture.capturelib.claude_fw_f_v4 import (  # noqa: E402
     PROBE_IDS as FW_F_V4_PROBE_IDS,
     ClaudeFWFCompleteProbeError,
+    _parse_wire_requests as _parse_v4_wire_requests,
     get_probe as get_fw_f_v4_probe,
     run_claude_fw_f_complete_probe,
     validate_complete_probe_evidence,
@@ -527,15 +534,19 @@ def _stop_process(process: subprocess.Popen[bytes] | None) -> bool:
     return process.poll() is not None
 
 
-def _start_pcap(path: Path, log_path: Path) -> tuple[subprocess.Popen[bytes], dict[str, Any]]:
-    """在当前隔离容器 loopback 被动采集客户端到本地中继的 ClientHello。"""
+def _start_pcap(
+    path: Path, log_path: Path, *, interface: str = "lo", port: int = 443
+) -> tuple[subprocess.Popen[bytes], dict[str, Any]]:
+    """被动采集到本地中继的 ClientHello：官方取证在隔离容器 loopback 上抓客户端到中继 443 的连接；候选取证（B4-01）
+    在容器全部接口上抓网关经 docker 网络到中继 connect 端口的连接。"""
 
     tcpdump = Path(shutil.which("tcpdump") or "")
     _validate_static_file(tcpdump, "tcpdump", executable=True)
+    capture_filter = f"tcp dst port {int(port)}"
     command = [
         str(tcpdump),
         "-i",
-        "lo",
+        interface,
         "-s",
         "0",
         "-U",
@@ -543,7 +554,7 @@ def _start_pcap(path: Path, log_path: Path) -> tuple[subprocess.Popen[bytes], di
         "root",
         "-w",
         str(path),
-        "tcp dst port 443",
+        capture_filter,
     ]
     log_stream = log_path.open("wb")
     try:
@@ -562,8 +573,8 @@ def _start_pcap(path: Path, log_path: Path) -> tuple[subprocess.Popen[bytes], di
         raise RelayEvidenceError("TLS P 通道 tcpdump 启动失败。")
     return process, {
         "required": True,
-        "interface": "lo",
-        "filter": "tcp dst port 443",
+        "interface": interface,
+        "filter": capture_filter,
         "privilege_user": "root",
         "tool": {"path": str(tcpdump), "sha256": file_sha256(tcpdump)},
         "invocation": argv_manifest_view(command),
@@ -587,8 +598,8 @@ def _stop_pcap(process: subprocess.Popen[bytes] | None) -> bool:
     return process.poll() is not None
 
 
-def _parse_pcap(path: Path, target_host: str) -> dict[str, Any]:
-    """解析 v4 TLS P 通道并要求至少一个匹配目标 SNI 的 ClientHello。"""
+def _parse_pcap(path: Path, target_host: str, *, destination_port: int = 443) -> dict[str, Any]:
+    """解析 v4 TLS P 通道并要求至少一个匹配目标 SNI 的 ClientHello（候选取证的目的端口是中继 connect 端口）。"""
 
     if path.is_symlink() or not path.is_file() or path.stat().st_size <= 24:
         raise RelayEvidenceError("TLS P 通道没有生成可信 pcap。")
@@ -603,8 +614,8 @@ def _parse_pcap(path: Path, target_host: str) -> dict[str, Any]:
         parsed = tcp_payload(link, data)
         if not parsed:
             continue
-        _destination, destination_port, payload = parsed
-        if destination_port != 443:
+        _destination, packet_port, payload = parsed
+        if packet_port != destination_port:
             continue
         hello = parse_client_hello(payload)
         if not hello:
@@ -1046,15 +1057,26 @@ def _validate_relay_integrity(
     synthetic_profile: str | None = None,
     message_request_expectation: str = "at-least-one",
     target_host: str = UPSTREAM_HOST,
+    relay_mode: str = "direct",
+    candidate: bool = False,
 ) -> dict[str, Any]:
+    """中继证据的结构完整性与生产隔离（官方与候选共用）。
+
+    ``candidate`` 为真时（B4-01 候选取证：中继以 connect 模式记录网关的最终出站）只把结构完整性、等长脱敏与合成计划的
+    生产隔离当作失败条件；messages 请求数与合成计划的逐次动作闭合是网关行为，记录为观测交给评估器逐规则判定，不在取证时
+    提前判成取证失败。网关不转发的端点构成零出站的 probe，候选侧允许零连接。
+    """
+
     if message_request_expectation not in {"at-least-one", "zero"}:
         raise RelayEvidenceError("R messages 请求期望值非法。")
+    if relay_mode not in {"direct", "connect"} or (relay_mode == "connect") != candidate:
+        raise RelayEvidenceError("relay 模式与取证侧别不一致（官方 direct，候选 connect）。")
     if synthetic_plan and synthetic_profile is None:
         synthetic_profile = "claude-fw-f-v3"
     manifest = _load_json(relay_root / "relay.json", "relay manifest")
     if manifest.get("schema_version") != "byte-relay/v1":
         raise RelayEvidenceError("relay manifest schema 不匹配。")
-    if manifest.get("mode") != "direct" or manifest.get("upstream_host") != target_host:
+    if manifest.get("mode") != relay_mode or manifest.get("upstream_host") != target_host:
         raise RelayEvidenceError("relay 没有绑定 Claude 官方域名。")
     if synthetic_plan:
         if (
@@ -1071,7 +1093,7 @@ def _validate_relay_integrity(
     if not isinstance(scrubbing, dict) or scrubbing.get("byte_offsets_preserved") is not True:
         raise RelayEvidenceError("relay manifest 缺少等长脱敏证明。")
     connections = manifest.get("connections")
-    if not isinstance(connections, list) or not connections:
+    if not isinstance(connections, list) or (not connections and not candidate):
         raise RelayEvidenceError("relay 未记录任何连接。")
     request_stream = b""
     request_attempts: list[dict[str, Any]] = []
@@ -1079,9 +1101,18 @@ def _validate_relay_integrity(
     excluded: list[dict[str, Any]] = []
     one_sided_shutdown_count = 0
     connection_ids: set[int] = set()
-    for item in connections:
-        if not isinstance(item, dict):
+    connect_request_lines: list[dict[str, Any]] = []
+    for raw_item in connections:
+        if not isinstance(raw_item, dict):
             raise RelayEvidenceError("relay connection 必须是对象。")
+        item = raw_item
+        if relay_mode == "connect":
+            # connect 模式多一个隧道请求行字段；剥掉后与 direct 模式按同一闭合键集核对。
+            item = {key: value for key, value in raw_item.items() if key != "connect_request_line"}
+            line = raw_item.get("connect_request_line")
+            if not isinstance(line, str) or not line.upper().startswith("CONNECT "):
+                raise RelayEvidenceError("connect 模式的连接缺少 CONNECT 隧道请求行。")
+            connect_request_lines.append({"connection_id": raw_item.get("connection_id"), "request_line": line})
         connection_id = item.get("connection_id")
         if not isinstance(connection_id, int) or connection_id <= 0:
             raise RelayEvidenceError("relay connection_id 非法。")
@@ -1281,9 +1312,13 @@ def _validate_relay_integrity(
         rows.append(verified)
     messages = request_stream.count(b"POST /v1/messages?beta=true HTTP/1.1\r\n")
     hello = request_stream.count(b"HEAD /api/hello HTTP/1.1\r\n")
-    if message_request_expectation == "at-least-one" and messages < 1:
-        raise RelayEvidenceError("R 证据中没有官方 messages 请求。")
-    if message_request_expectation == "zero" and messages != 0:
+    expectation_met = not (
+        (message_request_expectation == "at-least-one" and messages < 1)
+        or (message_request_expectation == "zero" and messages != 0)
+    )
+    if not expectation_met and not candidate:
+        if message_request_expectation == "at-least-one":
+            raise RelayEvidenceError("R 证据中没有官方 messages 请求。")
         raise RelayEvidenceError("本地拒绝场景仍发出了 messages 请求。")
     result = {
         "result": "passed",
@@ -1298,7 +1333,32 @@ def _validate_relay_integrity(
         "connections": rows,
         "manifest_sha256": file_sha256(relay_root / "relay.json"),
     }
-    if synthetic_plan:
+    if candidate:
+        result["relay_mode"] = relay_mode
+        result["connect_request_lines"] = connect_request_lines
+        result["message_request_expectation_met"] = expectation_met
+    if synthetic_plan and candidate:
+        interventions = _read_interventions(relay_root) if (relay_root / "intervention.jsonl").exists() else []
+        result["synthetic_isolation"] = _candidate_synthetic_isolation(
+            interventions, plan=synthetic_plan, synthetic_profile=str(synthetic_profile)
+        )
+        try:
+            result["synthetic_plan"] = _validate_synthetic_plan(
+                plan=synthetic_plan,
+                attempts=request_attempts,
+                interventions=interventions,
+                synthetic_profile=str(synthetic_profile),
+            )
+            result["synthetic_plan_closed"] = True
+        except RelayEvidenceError as error:
+            result["synthetic_plan"] = {
+                "plan": synthetic_plan,
+                "attempts": request_attempts,
+                "production_forwarding_enabled": False,
+                "closure_error": str(error),
+            }
+            result["synthetic_plan_closed"] = False
+    elif synthetic_plan:
         result["synthetic_plan"] = _validate_synthetic_plan(
             plan=synthetic_plan,
             attempts=request_attempts,
@@ -1306,6 +1366,29 @@ def _validate_relay_integrity(
             synthetic_profile=str(synthetic_profile),
         )
     return result
+
+
+def _candidate_synthetic_isolation(
+    interventions: list[dict[str, Any]], *, plan: str, synthetic_profile: str
+) -> dict[str, Any]:
+    """候选合成计划的生产隔离（失败关闭）：每条受控干预都必须是本计划的合成响应且 production_forwarded=false。
+
+    逐次动作是否与官方客户端直连时一样闭合属于网关行为（见 ``_validate_relay_integrity``），这里只核隔离。
+    """
+
+    for item in interventions:
+        if item.get("production_forwarded") is not False:
+            raise RelayEvidenceError("候选合成干预没有证明 production_forwarded=false。")
+        if item.get("type") != "synthetic_claude_response":
+            raise RelayEvidenceError("候选合成 R 含非受管干预类型。")
+        if item.get("profile") != synthetic_profile or item.get("plan") != plan:
+            raise RelayEvidenceError("候选合成干预身份与冻结计划不一致。")
+    return {
+        "plan": plan,
+        "synthetic_profile": synthetic_profile,
+        "intervention_count": len(interventions),
+        "production_forwarding_enabled": False,
+    }
 
 
 def _manifest_binding(path: Path, root: Path) -> dict[str, Any]:
@@ -1428,6 +1511,13 @@ def _invocation_binding_complete(
 
 
 def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
+    if (
+        getattr(arguments, "candidate_runtime_dir", None) is not None
+        or getattr(arguments, "candidate_relay_port", None) is not None
+    ):
+        return _capture_candidate(arguments)
+    if getattr(arguments, "claude_credentials_file", None) is None:
+        raise ConfigurationError("官方取证必须提供 --claude-credentials-file。")
     validate_safe_name(arguments.run_id, "run_id")
     validate_safe_name(arguments.probe_id, "probe_id")
     if not VERSION_RE.fullmatch(arguments.expected_version):
@@ -2087,6 +2177,704 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
+# ---------------------------------------------------------------------------
+# 候选取证（Claude 升级控制面设计 B4-01）
+# ---------------------------------------------------------------------------
+#
+# 宿主侧 ``claude_run_candidate_capture.sh`` 先把候选网关放进隔离环境（专用账号临时代理指向本容器的 connect 中继、
+# 服务容器临时信任抓包 CA、keeper 停、调度门清零），在私有运行目录写好网关坐标、API Key 与待扫描令牌，再以
+# ``--candidate-runtime-dir``／``--candidate-relay-port`` 调用本工具。与官方取证相比：
+#
+# * 客户端不改 hosts、不读官方 OAuth 凭据，经 ``ANTHROPIC_BASE_URL`` 加 ``ANTHROPIC_AUTH_TOKEN``（网关 API Key）打
+#   候选网关；同一官方客户端按同一 FW-F v5 probe 驱动，两侧证据按 probe 配对；
+# * 中继以 connect 模式只记录网关的最终出站（网关账号的代理就是它），P 通道在容器全部接口上抓网关的 ClientHello；
+# * 官方 probe 的驱动是客户端自己的 OAuth 刷新时，候选侧由本工具在抓包窗口内调用网关管理接口刷新账号令牌，记录
+#   网关自己的刷新请求（合成计划拒绝，绝不转发生产）；
+# * 结构完整性、等长脱敏、秘密扫描与合成生产隔离照旧失败关闭；客户端结局、messages 请求数与合成计划逐次闭合是网关
+#   行为，只记录为观测，由评估器逐规则判定（见 ``_validate_relay_integrity``）。
+
+CANDIDATE_RUNTIME_SCHEMA = "claude-candidate-gateway-runtime/v1"
+CANDIDATE_TRIGGER_RESULT_SCHEMA = "claude-candidate-gateway-trigger/v1"
+CANDIDATE_TRIGGER_CLIENT = "client"
+CANDIDATE_TRIGGER_ACCOUNT_REFRESH = "gateway-account-refresh"
+CANDIDATE_RUNTIME_FIELDS = frozenset(
+    {"schema_version", "run_id", "probe_id", "base_url", "account_id", "api_key_id", "relay_port", "trigger"}
+)
+CANDIDATE_SECRET_KEYS = frozenset({"gateway_account_access_token", "gateway_account_refresh_token"})
+CANDIDATE_PCAP_INTERFACE = "any"
+CANDIDATE_HOSTS_RECOVERY = {"scope": "candidate-no-hosts-override", "restored": True}
+_CANDIDATE_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
+
+
+def candidate_trigger_for_probe(driver: str) -> str:
+    """候选步骤的触发方式（与场景清单合同 ``claude_upgrade_plan.candidate_trigger`` 同一规则）。"""
+
+    return CANDIDATE_TRIGGER_ACCOUNT_REFRESH if driver == "oauth-refresh" else CANDIDATE_TRIGGER_CLIENT
+
+
+def _private_runtime_bytes(path: Path, label: str, *, required: bool = True) -> bytes | None:
+    """读取候选私有运行目录里的一个文件：本用户所有、0600 以内、普通文件、非空。"""
+
+    if not path.exists() and not path.is_symlink():
+        if required:
+            raise ConfigurationError(f"候选运行目录缺少{label}。")
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise ConfigurationError(f"候选运行目录的{label}不是可信普通文件。")
+    metadata = path.stat()
+    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+        raise ConfigurationError(f"候选运行目录的{label}属主或权限不安全。")
+    value = path.read_bytes()
+    if not value:
+        raise ConfigurationError(f"候选运行目录的{label}为空。")
+    return value
+
+
+def _load_candidate_runtime(
+    runtime_dir: Path, *, probe_id: str, run_id: str, relay_port: int, trigger: str
+) -> dict[str, Any]:
+    """读取并核对宿主脚本写好的候选运行目录；返回网关坐标与只在内存里使用的秘密值。"""
+
+    directory = Path(runtime_dir)
+    if not directory.is_absolute() or directory.is_symlink() or not directory.is_dir():
+        raise ConfigurationError("--candidate-runtime-dir 必须是已存在的可信绝对目录。")
+    metadata = directory.stat()
+    if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise ConfigurationError("候选运行目录属主或权限不安全（必须本用户所有且 0700）。")
+    try:
+        gateway = json.loads(_private_runtime_bytes(directory / "gateway.json", "网关坐标") or b"")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError("候选运行目录的网关坐标不是合法 JSON。") from error
+    if not isinstance(gateway, dict) or set(gateway) != CANDIDATE_RUNTIME_FIELDS:
+        raise ConfigurationError("候选运行目录的网关坐标字段不闭合。")
+    if gateway.get("schema_version") != CANDIDATE_RUNTIME_SCHEMA:
+        raise ConfigurationError("候选运行目录的网关坐标 schema_version 不受支持。")
+    if gateway.get("probe_id") != probe_id or gateway.get("run_id") != run_id:
+        raise ConfigurationError("候选运行目录的 probe／run-id 与本次取证不一致。")
+    if gateway.get("relay_port") != relay_port or gateway.get("trigger") != trigger:
+        raise ConfigurationError("候选运行目录的中继端口或触发方式与本次取证不一致。")
+    for field in ("account_id", "api_key_id"):
+        value = gateway.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ConfigurationError(f"候选运行目录的 {field} 必须是正整数。")
+    base_url = str(gateway.get("base_url", ""))
+    parts = urlsplit(base_url)
+    try:
+        port = parts.port
+    except ValueError as error:
+        raise ConfigurationError("候选网关 base_url 端口非法。") from error
+    if (
+        parts.scheme != "http"
+        or not parts.hostname
+        or not _CANDIDATE_HOST_RE.fullmatch(parts.hostname)
+        or port is None
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+        or parts.username
+        or parts.password
+    ):
+        raise ConfigurationError("候选网关 base_url 必须是 http://<主机>:<端口>，不得带路径、查询或凭据。")
+    api_key = (_private_runtime_bytes(directory / "api-key", "网关 API Key") or b"").decode("utf-8", "strict").strip()
+    if not api_key or len(api_key) > 512 or any(character.isspace() for character in api_key):
+        raise ConfigurationError("候选运行目录的网关 API Key 非法。")
+    raw_secrets = _private_runtime_bytes(directory / "known-secrets.json", "待扫描令牌", required=False)
+    known: dict[str, str] = {}
+    if raw_secrets is not None:
+        try:
+            loaded = json.loads(raw_secrets)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ConfigurationError("候选运行目录的待扫描令牌不是合法 JSON。") from error
+        if (
+            not isinstance(loaded, dict)
+            or not set(loaded) <= CANDIDATE_SECRET_KEYS
+            or not all(isinstance(value, str) and value for value in loaded.values())
+        ):
+            raise ConfigurationError("候选运行目录的待扫描令牌字段非法。")
+        known = dict(loaded)
+    admin_token = None
+    raw_admin = _private_runtime_bytes(directory / "admin-token", "管理凭据", required=False)
+    if trigger == CANDIDATE_TRIGGER_ACCOUNT_REFRESH:
+        if raw_admin is None:
+            raise ConfigurationError("账号刷新触发必须由宿主脚本提供管理凭据。")
+        admin_token = raw_admin.decode("utf-8", "strict").strip()
+        if not admin_token or any(character.isspace() for character in admin_token):
+            raise ConfigurationError("候选运行目录的管理凭据非法。")
+    elif raw_admin is not None:
+        raise ConfigurationError("只有账号刷新触发才允许提供管理凭据。")
+    return {
+        "gateway": {key: gateway[key] for key in sorted(gateway)},
+        "base_url": base_url.rstrip("/"),
+        "api_key": api_key,
+        "known_secrets": known,
+        "admin_token": admin_token,
+    }
+
+
+def _candidate_global_state(value: bytes, expected_version: str) -> tuple[bytes, list[str]]:
+    """候选 TUI 的全局状态副本：去掉官方 oauthAccount（客户端只持有网关 API Key），并固定目标版本已完成引导。"""
+
+    try:
+        state = json.loads(value)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError("Claude TUI 全局状态必须是合法 JSON。") from error
+    if not isinstance(state, dict):
+        raise ConfigurationError("Claude TUI 全局状态顶层必须是对象。")
+    normalized: list[str] = []
+    if "oauthAccount" in state:
+        state.pop("oauthAccount")
+        normalized.append("oauthAccount")
+    for field, field_value in (
+        ("theme", "dark"),
+        ("hasCompletedOnboarding", True),
+        ("lastOnboardingVersion", expected_version),
+    ):
+        if state.get(field) != field_value:
+            state[field] = field_value
+            normalized.append(field)
+    encoded = (json.dumps(state, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    return encoded, normalized
+
+
+@contextmanager
+def _candidate_tui_home(
+    global_state_file: Path,
+    *,
+    expected_version: str,
+    trust_paths: Sequence[str],
+    memory_root: Path = Path("/dev/shm"),
+) -> Iterator[tuple[Path, dict[str, Any]]]:
+    """候选 TUI 的一次性 HOME：只有引导完成的全局状态与隐私设置，不复制任何 OAuth 凭据；终态删除。"""
+
+    if not memory_root.is_absolute() or memory_root.is_symlink() or not memory_root.is_dir():
+        raise ConfigurationError("TUI 短期状态根必须是可信绝对目录。")
+    state, normalized = _candidate_global_state(
+        _read_private_state_file(global_state_file, "Claude TUI 全局状态"), expected_version
+    )
+    home = Path(tempfile.mkdtemp(prefix="claude-candidate-tui-", dir=memory_root))
+    home.chmod(0o700)
+    receipt: dict[str, Any] = {
+        "required": True,
+        "storage_scope": "memory-backed-temporary-home",
+        "credentials_copied": False,
+        "global_state_copied": False,
+        "oauth_account_removed": "oauthAccount" in normalized,
+        "privacy_settings_written": False,
+        "onboarding_normalized_fields": [field for field in normalized if field != "oauthAccount"],
+        "archived_in_evidence": False,
+        "removed": False,
+    }
+    try:
+        config_dir = home / ".claude"
+        config_dir.mkdir(mode=0o700)
+        _write_private_state_file(home / ".claude.json", state)
+        receipt["global_state_copied"] = True
+        secure_write_text(
+            config_dir / "settings.json",
+            json.dumps({"skipWebFetchPreflight": True, "env": PRIVACY_ENV}, ensure_ascii=False, indent=2) + "\n",
+        )
+        receipt["privacy_settings_written"] = True
+        receipt["workspace_trust_seeded"] = bool(_seed_tui_workspace_trust(home, trust_paths))
+        yield home, receipt
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
+        receipt["removed"] = not home.exists()
+        if not receipt["removed"]:
+            raise ConfigurationError("候选 TUI 短期 HOME 未能彻底删除。")
+
+
+def _trigger_gateway_account_refresh(runtime: dict[str, Any], result_root: Path, timeout: int) -> dict[str, Any]:
+    """在抓包窗口内请网关刷新候选账号令牌：网关自己的刷新请求经账号临时代理到达本中继（合成拒绝，不转发生产）。
+
+    网关应答本身（刷新被拒的错误）只是触发结局，不是证据主体；结果文件不含任何凭据。
+    """
+
+    gateway = runtime["gateway"]
+    url = f"{runtime['base_url']}/api/v1/admin/accounts/{int(gateway['account_id'])}/refresh"
+    request = urllib.request.Request(
+        url,
+        data=b"{}",
+        method="POST",
+        headers={"Authorization": f"Bearer {runtime['admin_token']}", "Content-Type": "application/json"},
+    )
+    started = _utc_now()
+    status: int | None = None
+    body = b""
+    error: str | None = None
+    try:
+        with urllib.request.urlopen(request, timeout=max(10, min(int(timeout), 300))) as response:  # noqa: S310
+            status = int(response.status)
+            body = response.read(65536)
+    except urllib.error.HTTPError as failure:
+        status = int(failure.code)
+        body = failure.read(65536)
+    except (urllib.error.URLError, OSError, TimeoutError) as failure:
+        error = type(failure).__name__
+    for secret in (runtime["api_key"], runtime["admin_token"], *runtime["known_secrets"].values()):
+        if secret:
+            body = body.replace(secret.encode("utf-8"), b"<secret>")
+    result = {
+        "schema_version": CANDIDATE_TRIGGER_RESULT_SCHEMA,
+        "trigger": CANDIDATE_TRIGGER_ACCOUNT_REFRESH,
+        "endpoint": "POST /api/v1/admin/accounts/{account_id}/refresh",
+        "account_id": int(gateway["account_id"]),
+        "started_at_utc": started,
+        "ended_at_utc": _utc_now(),
+        "http_status": status,
+        "response_sha256": _sha256_bytes(body),
+        "response_bytes": len(body),
+        "transport_error": error,
+        # 触发是否送达：拿到 HTTP 应答即送达（刷新被合成计划拒绝时网关返回错误是预期结局）。
+        "valid": status is not None,
+    }
+    secure_write_json(result_root / "gateway-trigger.json", result)
+    return result
+
+
+def _candidate_wire_record(
+    catalog: ModuleType,
+    probe_id: str,
+    relay_root: Path,
+    scenario_summary: dict[str, Any] | None,
+    relay_integrity: dict[str, Any],
+    pcap_receipt: dict[str, Any],
+    version_facts: dict[str, Any],
+) -> dict[str, Any]:
+    """候选侧的逐请求清单与维度观测：维度判定照官方口径记录，但结果只是观测，取证不因它失败。"""
+
+    try:
+        evidence = catalog.validate_v5_probe_evidence(
+            probe_id=probe_id,
+            relay_root=relay_root,
+            scenario_summary=scenario_summary or {},
+            relay_integrity=relay_integrity,
+            pcap_receipt=pcap_receipt,
+            version_facts=version_facts,
+        )
+        evidence = dict(evidence)
+        evidence["observation_error"] = None
+    except Exception as error:  # noqa: BLE001 - 观测失败只记录类型，证据清单另行生成
+        evidence = {
+            "schema_version": getattr(catalog, "SCHEMA_DIMENSION_EVIDENCE", "claude-code-fw-f-v5-dimension-evidence/v1"),
+            "probe_id": probe_id,
+            "actual_wire_inventory": catalog._wire_inventory(_parse_v4_wire_requests(relay_root)),
+            "dimension_assertions": [],
+            "failed_dimensions": [],
+            "result": "not_evaluated",
+            "observation_error": type(error).__name__,
+        }
+    evidence["side"] = "candidate"
+    evidence["observation_only"] = True
+    return evidence
+
+
+def _capture_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
+    """候选取证主流程（只接受 FW-F v5 probe）；失败也写完整清单、恢复与秘密扫描事实。"""
+
+    validate_safe_name(arguments.run_id, "run_id")
+    validate_safe_name(arguments.probe_id, "probe_id")
+    if not VERSION_RE.fullmatch(arguments.expected_version):
+        raise ConfigurationError("--expected-version 必须是精确三段版本号。")
+    if not SHA256_RE.fullmatch(arguments.expected_sha256):
+        raise ConfigurationError("--expected-sha256 格式非法。")
+    if not RUNTIME_IMAGE_RE.fullmatch(arguments.runtime_image):
+        raise ConfigurationError("--runtime-image 必须是 repository@sha256。")
+    if not SHA256_RE.fullmatch(arguments.host_runtime_receipt_sha256):
+        raise ConfigurationError("--host-runtime-receipt-sha256 格式非法。")
+    if not SHA256_RE.fullmatch(arguments.run_nonce):
+        raise ConfigurationError("--run-nonce 格式非法。")
+    if any(getattr(arguments, name, None) for name in ("fw_f_probe", "fw_f_v4_probe", "scenario")):
+        raise ConfigurationError("候选取证只接受 --fw-f-v5-probe。")
+    probe_id = getattr(arguments, "fw_f_v5_probe", None)
+    if not probe_id or arguments.probe_id != probe_id:
+        raise ConfigurationError("候选取证必须给出 --fw-f-v5-probe，且 --probe-id 等于它。")
+    if arguments.inject_env:
+        raise ConfigurationError("候选取证禁止额外 --inject-env。")
+    if getattr(arguments, "claude_credentials_file", None) is not None:
+        raise ConfigurationError("候选取证不得读取官方 OAuth 凭据（禁止 --claude-credentials-file）。")
+    runtime_dir = getattr(arguments, "candidate_runtime_dir", None)
+    relay_port = getattr(arguments, "candidate_relay_port", None)
+    if runtime_dir is None or relay_port is None:
+        raise ConfigurationError("候选取证必须同时给出 --candidate-runtime-dir 与 --candidate-relay-port。")
+    if not isinstance(relay_port, int) or not 1024 <= relay_port <= 65535:
+        raise ConfigurationError("--candidate-relay-port 必须是 1024～65535 的端口。")
+    if arguments.port != 443:
+        raise ConfigurationError("候选取证不使用 --port（connect 端口由 --candidate-relay-port 给出）。")
+    if arguments.timeout <= 0:
+        raise ConfigurationError("--timeout 必须大于 0。")
+    catalog, catalog_binding = _load_fw_f_v5_catalog(getattr(arguments, "fw_f_v5_catalog", None))
+    if probe_id not in catalog.PROBE_IDS:
+        raise ConfigurationError("--fw-f-v5-probe 非法。")
+    facts_path = getattr(arguments, "fw_f_v5_version_facts", None)
+    facts_sha256 = getattr(arguments, "fw_f_v5_version_facts_sha256", None)
+    if facts_path is None or facts_sha256 is None:
+        raise ConfigurationError("--fw-f-v5-probe 必须提供 --fw-f-v5-version-facts 与 --fw-f-v5-version-facts-sha256。")
+    version_facts, version_facts_binding = catalog.load_version_facts(
+        Path(facts_path), str(facts_sha256), expected_version=arguments.expected_version
+    )
+    _validate_static_file(Path(facts_path), "FW-F v5 版本事实文件")
+    probe = catalog.get_probe(probe_id)
+    injected = probe.env_dict()
+    response_plan = probe.response_plan
+    message_request_expectation = probe.message_request_expectation
+    target_host = probe.target_host
+    synthetic_profile = "claude-fw-f-v4" if response_plan else None
+    synthetic_success_marker = (
+        "FW_F_V3_OK" if response_plan and probe.source_v3_probe else "FW_F_V4_OK" if response_plan else None
+    )
+    trigger = candidate_trigger_for_probe(probe.driver)
+    source_v3 = get_fw_f_probe(str(probe.source_v3_probe)) if probe.source_v3_probe else None
+    requires_tui_state = bool(
+        trigger == CANDIDATE_TRIGGER_CLIENT
+        and (probe.driver == "tui" or probe.requires_account_state or (source_v3 is not None and source_v3.driver == "tui"))
+    )
+    upstream_value = getattr(arguments, "upstream_ip", None)
+    if response_plan:
+        if upstream_value:
+            raise ConfigurationError("候选合成场景禁止配置 --upstream-ip。")
+        upstream_ip = None
+        live_requests = False
+    else:
+        if not upstream_value:
+            raise ConfigurationError("候选真实上游场景必须提供 --upstream-ip。")
+        upstream_ip = _validate_upstream_ip(upstream_value)
+        live_requests = True
+    _validate_output_root(arguments.output_root, create=arguments.execute)
+    if arguments.dry_run:
+        return {
+            "schema_version": "claude-code-fw-e-relay-plan/v1",
+            "side": "candidate",
+            "run_id": arguments.run_id,
+            "probe_id": probe_id,
+            "version": arguments.expected_version,
+            "capture_mode": "fw-f-v5",
+            "fw_f_v5_probe": probe_id,
+            "fw_f_v5_catalog": catalog_binding,
+            "fw_f_v5_version_facts": version_facts_binding,
+            "response_plan": response_plan,
+            "synthetic_success_marker": synthetic_success_marker,
+            "message_request_expectation": message_request_expectation,
+            "model": arguments.model,
+            "upstream_host": target_host,
+            "upstream_ip": upstream_ip,
+            "relay_mode": "connect",
+            "relay_listen_port": relay_port,
+            "candidate_trigger": trigger,
+            "injected_probe_env": injected,
+            "live_requests": live_requests,
+            "production_forwarding_enabled": live_requests,
+            "production_changes": False,
+        }
+    acknowledge_synthetic = getattr(arguments, "acknowledge_synthetic_responses", False)
+    if live_requests:
+        if not arguments.acknowledge_live_requests or acknowledge_synthetic:
+            raise ConfigurationError("真实上游 --execute 必须只确认 --acknowledge-live-requests。")
+    elif not acknowledge_synthetic or arguments.acknowledge_live_requests:
+        raise ConfigurationError("合成故障 --execute 必须只确认 --acknowledge-synthetic-responses。")
+    runtime = _load_candidate_runtime(
+        Path(runtime_dir), probe_id=probe_id, run_id=arguments.run_id, relay_port=relay_port, trigger=trigger
+    )
+
+    run_root = arguments.output_root
+    manifest_path = run_root / "relay-manifest.json"
+    raw_root = run_root / "relay-raw-pending"
+    relay_root = run_root / "relay"
+    result_root = ensure_private_directory(run_root / "results", run_root)
+    client_home = prepare_claude_oauth_state(run_root)
+    tui_state_receipt: dict[str, Any] = {
+        "required": requires_tui_state,
+        "storage_scope": "memory-backed-temporary-home",
+        "credentials_copied": False,
+        "global_state_copied": False,
+        "archived_in_evidence": False,
+        "removed": not requires_tui_state,
+    }
+    pcap_required = bool(probe.require_pcap)
+    pcap_receipt: dict[str, Any] = {"required": pcap_required, "stopped": not pcap_required, "parsed": not pcap_required}
+    tool_root = Path(__file__).resolve().parent
+    tool_identity = _tool_identity(tool_root)
+    client = _client_identity(arguments.claude_bin, arguments.expected_version, arguments.expected_sha256)
+    secrets = {"gateway_api_key": runtime["api_key"], **runtime["known_secrets"]}
+    if runtime["admin_token"]:
+        secrets["gateway_admin_token"] = runtime["admin_token"]
+    receipt = _host_receipt(arguments, tool_identity["execution_sources"])
+    _validate_static_file(arguments.ca_signing_pem, "MITM CA signing PEM")
+    _validate_static_file(arguments.ca_cert, "MITM CA certificate")
+    if not arguments.lock_file.is_absolute() or arguments.lock_file.is_symlink():
+        raise ConfigurationError("--lock-file 必须是非符号链接绝对路径。")
+    if not _port_available(relay_port):
+        raise ConfigurationError("候选 connect 中继端口已被占用。")
+
+    manifest: dict[str, Any] = {
+        "schema_version": SCHEMA_RUN,
+        "side": "candidate",
+        "run_id": arguments.run_id,
+        "probe_id": probe_id,
+        "status": "running",
+        "started_at_utc": _utc_now(),
+        "ended_at_utc": None,
+        "client": client,
+        "capture_mode": "fw-f-v5",
+        "scenario": None,
+        "fw_f_probe": None,
+        "fw_f_v4_probe": None,
+        "fw_f_v5_probe": probe_id,
+        "fw_f_v5_catalog": catalog_binding,
+        "fw_f_v5_version_facts": {**version_facts_binding, "facts": version_facts},
+        "response_plan": response_plan,
+        "synthetic_success_marker": synthetic_success_marker,
+        "message_request_expectation": message_request_expectation,
+        "model": arguments.model,
+        "injected_probe_env": injected,
+        "candidate_gateway": {
+            "base_url": runtime["base_url"],
+            "account_id": runtime["gateway"]["account_id"],
+            "api_key_id": runtime["gateway"]["api_key_id"],
+            "trigger": trigger,
+            "client_authentication": "ANTHROPIC_AUTH_TOKEN",
+            "oauth_credentials_read": False,
+        },
+        "runtime": {
+            "runtime_image_reference": arguments.runtime_image,
+            "host_runtime_receipt": receipt,
+            "capture_tools": tool_identity,
+        },
+        "upstream": {
+            "host": target_host,
+            "ip": upstream_ip,
+            "port": 443,
+            "relay_mode": "connect",
+            "relay_listen_port": relay_port,
+            "assumed_alpn": ["http/1.1"],
+            "live_requests": live_requests,
+            "production_forwarding_enabled": live_requests,
+        },
+        "cleanup": {"relay_stopped": False, "hosts_restored": True},
+        "hosts_recovery": dict(CANDIDATE_HOSTS_RECOVERY),
+        "secret_scan": {"performed": False, "passed": False, "matches": []},
+        "tui_temporary_state": tui_state_receipt,
+        "oauth_refresh_temporary_state": {"required": False, "removed": True, "archived_in_evidence": False},
+        "tls_p_channel": pcap_receipt,
+        "m_binding": {"complete": False, "requirements": {}},
+        "artifacts": [],
+    }
+    secure_write_json(manifest_path, manifest)
+
+    relay_process: subprocess.Popen[bytes] | None = None
+    pcap_process: subprocess.Popen[bytes] | None = None
+    relay_stopped = False
+    scenario_summary: dict[str, Any] | None = None
+    relay_integrity: dict[str, Any] | None = None
+    dimension_evidence: dict[str, Any] | None = None
+    scrubbing: dict[str, Any] | None = None
+    failure: BaseException | None = None
+    with CampaignLock(arguments.lock_file):
+        try:
+            with tempfile.TemporaryDirectory(prefix="claude-fw-e-candidate-") as temporary:
+                chain, leaf_key = _generate_leaf_certificate(
+                    Path(temporary),
+                    arguments.ca_signing_pem,
+                    arguments.ca_cert,
+                    Path(tool_identity["openssl"]["path"]),
+                    target_host,
+                )
+                ensure_private_directory(raw_root, run_root)
+                relay_command = [
+                    sys.executable,
+                    str(tool_root / "upstream_byte_relay.py"),
+                    "--cert",
+                    str(chain),
+                    "--key",
+                    str(leaf_key),
+                    "--mode",
+                    "connect",
+                    "--port",
+                    str(relay_port),
+                    "--upstream-host",
+                    target_host,
+                    "--assume-alpn",
+                    "http/1.1",
+                    "--mirror-selected-alpn",
+                    "--output",
+                    str(raw_root),
+                    "--timeout",
+                    str(arguments.timeout + 60),
+                ]
+                if response_plan:
+                    relay_command.extend(
+                        (
+                            "--synthetic-profile",
+                            str(synthetic_profile),
+                            "--allow-synthetic-responses",
+                            "--claude-version",
+                            arguments.expected_version,
+                            "--claude-fault-plan",
+                            response_plan,
+                            "--claude-success-marker",
+                            str(synthetic_success_marker),
+                        )
+                    )
+                else:
+                    relay_command.extend(("--upstream-ip", str(upstream_ip)))
+                secure_write_json(run_root / "relay-invocation.json", argv_manifest_view(relay_command))
+                relay_stdout = (run_root / "relay.stdout.log").open("wb")
+                relay_stderr = (run_root / "relay.stderr.log").open("wb")
+                try:
+                    relay_process = subprocess.Popen(
+                        relay_command,
+                        env=clean_environment(),
+                        stdin=subprocess.DEVNULL,
+                        stdout=relay_stdout,
+                        stderr=relay_stderr,
+                        **_popen_safety_options(),
+                    )
+                    time.sleep(1)
+                    if relay_process.poll() is not None:
+                        raise RelayEvidenceError("候选 connect 中继启动失败。")
+                    if pcap_required:
+                        pcap_process, pcap_receipt = _start_pcap(
+                            run_root / "tls-clienthello.pcap",
+                            run_root / "tcpdump.log",
+                            interface=CANDIDATE_PCAP_INTERFACE,
+                            port=relay_port,
+                        )
+                    environment = clean_environment(os.environ, injected)
+                    environment.update(PRIVACY_ENV)
+                    environment["ANTHROPIC_BASE_URL"] = runtime["base_url"]
+                    environment["ANTHROPIC_AUTH_TOKEN"] = runtime["api_key"]
+                    environment["CLAUDE_CONFIG_DIR"] = str(client_home)
+                    environment["HOME"] = str(client_home)
+
+                    def execute_probe(selected_environment: dict[str, str]) -> dict[str, Any]:
+                        return catalog.run_claude_fw_f_v5_probe(
+                            claude_bin=str(arguments.claude_bin),
+                            model=arguments.model,
+                            probe_id=probe_id,
+                            environment=selected_environment,
+                            output_dir=result_root,
+                            timeout=arguments.timeout,
+                            known_secrets=secrets,
+                            version_facts=version_facts or {},
+                        )
+
+                    if trigger == CANDIDATE_TRIGGER_ACCOUNT_REFRESH:
+                        scenario_summary = _trigger_gateway_account_refresh(runtime, result_root, arguments.timeout)
+                    elif requires_tui_state:
+                        with _candidate_tui_home(
+                            arguments.claude_global_state_file,
+                            expected_version=arguments.expected_version,
+                            trust_paths=_tui_trust_paths(result_root, Path.cwd()),
+                        ) as (tui_home, state_receipt):
+                            tui_state_receipt = state_receipt
+                            environment.pop("CLAUDE_CONFIG_DIR", None)
+                            environment["HOME"] = str(tui_home)
+                            scenario_summary = execute_probe(environment)
+                    else:
+                        scenario_summary = execute_probe(environment)
+                finally:
+                    relay_stopped = _stop_process(relay_process)
+                    pcap_receipt["stopped"] = _stop_pcap(pcap_process)
+                    relay_stdout.close()
+                    relay_stderr.close()
+                if not relay_stopped:
+                    raise RelayEvidenceError("候选 connect 中继未能停止。")
+                if not pcap_receipt.get("stopped"):
+                    raise RelayEvidenceError("TLS P 通道 tcpdump 未能停止。")
+                if pcap_required:
+                    pcap_receipt.update(
+                        _parse_pcap(run_root / "tls-clienthello.pcap", target_host, destination_port=relay_port)
+                    )
+                scrubbing = _scrub_relay(tool_root, raw_root, relay_root, run_root / "scrub.log")
+                relay_integrity = _validate_relay_integrity(
+                    relay_root,
+                    synthetic_plan=response_plan,
+                    synthetic_profile=synthetic_profile,
+                    message_request_expectation=message_request_expectation,
+                    target_host=target_host,
+                    relay_mode="connect",
+                    candidate=True,
+                )
+                dimension_evidence = _candidate_wire_record(
+                    catalog, probe_id, relay_root, scenario_summary, relay_integrity, pcap_receipt, version_facts or {}
+                )
+                secure_write_json(run_root / "dimension-evidence.json", dimension_evidence)
+        except BaseException as error:  # 失败也必须写恢复和秘密扫描事实
+            failure = error
+            relay_stopped = _stop_process(relay_process)
+            pcap_receipt["stopped"] = _stop_pcap(pcap_process)
+            if raw_root.is_dir() and (raw_root / "relay.json").is_file() and not relay_root.exists():
+                try:
+                    scrubbing = _scrub_relay(tool_root, raw_root, relay_root, run_root / "scrub.log")
+                except BaseException:
+                    pass
+
+    scan = scan_for_secrets(run_root, secrets)
+    synthetic_isolation = (relay_integrity or {}).get("synthetic_isolation") or {}
+    requirements = {
+        "runtime_identity": receipt.get("container_runtime_binding", {}).get("verified") is True,
+        "client_identity": bool(client.get("sha256")),
+        "capture_execution_sources": bool(tool_identity["execution_sources"].get("sha256")),
+        "candidate_runtime_bound": True,
+        "client_outcome_recorded": scenario_summary is not None,
+        "production_forwarding_boundary": live_requests
+        or synthetic_isolation.get("production_forwarding_enabled") is False,
+        "relay_integrity": bool(relay_integrity and relay_integrity.get("result") == "passed"),
+        "wire_inventory_recorded": bool(
+            dimension_evidence and isinstance(dimension_evidence.get("actual_wire_inventory"), list)
+        ),
+        "equal_length_scrubbing": bool(scrubbing and scrubbing.get("verified")),
+        "exact_secret_scan": scan.get("passed") is True,
+        "tui_temporary_state_cleanup": bool(
+            tui_state_receipt.get("removed") is True
+            and tui_state_receipt.get("archived_in_evidence") is False
+            and tui_state_receipt.get("credentials_copied") is False
+            and (tui_state_receipt.get("required") is not True or tui_state_receipt.get("global_state_copied") is True)
+        ),
+        "tls_p_channel": bool(pcap_receipt.get("stopped") is True and pcap_receipt.get("parsed") is True),
+        "relay_stopped": relay_stopped,
+        "hosts_restored": True,
+        "campaign_status": failure is None,
+    }
+    manifest.update(
+        {
+            "status": "complete" if failure is None else "failed",
+            "ended_at_utc": _utc_now(),
+            "scenario_result": scenario_summary,
+            "relay_integrity": relay_integrity,
+            "dimension_evidence": dimension_evidence,
+            "credential_scrubbing": scrubbing,
+            "cleanup": {"relay_stopped": relay_stopped, "hosts_restored": True},
+            "secret_scan": scan,
+            "tui_temporary_state": tui_state_receipt,
+            "tls_p_channel": pcap_receipt,
+            # 网关行为观测（不是取证失败条件）：客户端结局、messages 请求期望、合成计划逐次闭合与维度判定。
+            "candidate_observation": {
+                "client_outcome_valid": bool(scenario_summary and scenario_summary.get("valid") is True),
+                "message_request_expectation_met": (relay_integrity or {}).get("message_request_expectation_met"),
+                "synthetic_plan_closed": (relay_integrity or {}).get("synthetic_plan_closed"),
+                "dimension_result": (dimension_evidence or {}).get("result"),
+            },
+            "m_binding": {
+                "complete": all(requirements.values()),
+                "requirements": requirements,
+                "limitations": [key for key, satisfied in requirements.items() if not satisfied],
+            },
+        }
+    )
+    if failure is not None:
+        safe_error = str(failure)
+        for secret in secrets.values():
+            safe_error = redact_known_secret(safe_error, secret)
+        manifest["error"] = safe_error
+    manifest["artifacts"] = [item for item in inventory_artifacts(run_root) if item.get("path") != manifest_path.name]
+    secure_write_json(manifest_path, manifest)
+    if failure is not None:
+        raise RelayEvidenceError(str(manifest.get("error", "候选 R 取证失败"))) from failure
+    if manifest["m_binding"]["complete"] is not True:
+        raise RelayEvidenceError("候选 R 取证完整 M 门禁未闭合。")
+    return manifest
+
+
 def _scan_group(
     root: Path,
     label: str,
@@ -2232,7 +3020,8 @@ def _build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--claude-bin", type=Path, required=True)
     capture.add_argument("--expected-version", required=True)
     capture.add_argument("--expected-sha256", required=True)
-    capture.add_argument("--claude-credentials-file", type=Path, required=True)
+    # 官方取证必填；候选取证（B4-01）禁止：候选客户端只持有网关 API Key，绝不读取官方 OAuth 凭据。
+    capture.add_argument("--claude-credentials-file", type=Path, default=None)
     capture.add_argument(
         "--claude-global-state-file",
         type=Path,
@@ -2266,6 +3055,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     capture.add_argument("--port", type=int, default=443)
     capture.add_argument("--timeout", type=int, default=300)
+    # 候选取证（B4-01）：宿主侧 claude_run_candidate_capture.sh 在网关隔离环境里调用；两项都给出才进入候选模式。
+    capture.add_argument(
+        "--candidate-runtime-dir",
+        type=Path,
+        default=None,
+        help="候选模式：宿主脚本写好的私有运行目录（网关坐标、API Key、待扫描令牌），只在执行期存在",
+    )
+    capture.add_argument(
+        "--candidate-relay-port",
+        type=int,
+        default=None,
+        help="候选模式：connect 中继在抓包容器内的监听端口（网关账号临时代理指向它）",
+    )
 
     index = commands.add_parser("index", help="闭合控制组与目标组 R 证据")
     index.add_argument("--control-root", type=Path, required=True)

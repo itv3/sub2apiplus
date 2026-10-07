@@ -414,7 +414,9 @@ class CampaignJobsTests(CaptureFixture):
         with mock.patch.object(claude_upgrade, "load_campaign_manifest", side_effect=AssertionError("wire 根不得读总计划")):
             arguments = claude_upgrade._campaign_arguments(campaign, manifest)
             context = claude_upgrade._job_context(arguments)
-        self.assertEqual(set(context), set(plan.CAMPAIGN_VARIABLES))
+        # 候选阶段变量（B4-01）也在上下文里：这份总计划没有它们，取值是空字符串（official 展开不受影响）。
+        self.assertEqual(set(context), set(plan.CAMPAIGN_VARIABLES) | set(plan.CANDIDATE_CAMPAIGN_VARIABLES))
+        self.assertEqual({context[name] for name in plan.CANDIDATE_CAMPAIGN_VARIABLES}, {""})
         self.assertEqual(context["capture_tool_root"], str(self.tool_copy))
         with self.assertRaisesRegex(ConfigurationError, "越过|非法"):
             capture._campaign_relative_file(campaign, "../escape.json")

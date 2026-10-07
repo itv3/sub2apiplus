@@ -1,14 +1,15 @@
 {
   "schema_version": "claude-upgrade-evidence-labels/v1",
   "claude_version": "2.1.285",
-  "description": "把 Claude Code 2.1.285 每个 official 取证 Job 的证据子路径映射到冻结场景、artifact kind、parser 与实验条件标签。中继请求按「有效连接序号」逐连接贴标签；连接序列模型取 2.1.226 实测，VC-1 封存时逐连接核对。",
+  "description": "把 Claude Code 2.1.285 每个取证 Job（official 与候选）的证据子路径映射到冻结场景、artifact kind、parser 与实验条件标签。中继请求按「有效连接序号」逐连接贴标签；连接序列模型取 2.1.226 实测，VC-1 封存时逐连接核对。",
   "authority": [
     "标签只由 probe 的冻结参数（驱动、入口、合成响应计划、会话形态）与连接序列模型推出，不得由被判据检验的属性（Header、Body、查询串等）反推。",
     "中继请求按有效连接序号贴标签：序号按中继连接号升序、剔除中继清单登记的握手前断开连接后从 1 起算；每条有效连接必须恰好命中一条规则，声明的序号必须全部出现，尾部规则的最少连接数必须满足，否则失败关闭，不得静默错标。",
     "每条连接规则声明请求方法与路径（不含查询串）；封存编目时按中继自身记录逐条核对，合成计划另核对干预动作；不一致即失败关闭，须修订本声明并登记演进后重评，不得改动证据。",
     "本声明属于 evidence semantics：修改只追加 evaluation epoch，不触发重采；plan 阶段随场景清单冻结摘要。",
     "2.1.285 的连接序列以 2.1.226 实测为初始模型；VC-1 实测不同即按上一条失败关闭并修订。",
-    "非主模型的模型能力取证（aux.model_capability）照主模型同名基础 probe 的规则复制，标签另加 model：连接序列模型沿用主模型的冻结参数推出的序列；2.1.226 模型能力 Campaign 实测与之不同的已知例外（TUI 两个 probe 缺 oauth_profile 启动连接）不改初始模型，VC-1 实测不同即按上面的规则失败关闭并修订。"
+    "非主模型的模型能力取证（aux.model_capability）照主模型同名基础 probe 的规则复制，标签另加 model：连接序列模型沿用主模型的冻结参数推出的序列；2.1.226 模型能力 Campaign 实测与之不同的已知例外（TUI 两个 probe 缺 oauth_profile 启动连接）不改初始模型，VC-1 实测不同即按上面的规则失败关闭并修订。",
+    "候选 Job（B4-01）逐一镜像主模型 official Job，标签 egress=candidate-gateway；中继以 connect 模式只记录网关的最终出站。网关只转发 messages 与 count_tokens（账号刷新触发另记网关自己的 OAuth 刷新），连接条数与复用由网关连接池决定，因此每个候选 probe 用无序规则列出允许的请求行；官方序列里没有可转发请求的 probe 用零连接规则（order=none）。零连接规则只用于候选侧。"
   ],
   "entries": [
     {
@@ -7452,6 +7453,2615 @@
           "parser": "claude_relay_manifest",
           "labels": {"probe": "claude-fable-5-v4-tui-count-tokens", "model": "claude-fable-5", "response_mode": "live", "channel": "M"},
           "rationale": "claude-fable-5 模型能力取证，照主模型 v4-tui-count-tokens 的规则：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-transport-baseline",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-native-tls-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": [
+            "entrypoint.sdk_cli",
+            "privacy.nonessential_disabled",
+            "privacy.telemetry_disabled",
+            "transport.alpn",
+            "transport.http",
+            "transport.native_tls"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-native-tls-baseline",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-native-tls-baseline/relay-manifest.json",
+          "scenario_ids": [
+            "entrypoint.sdk_cli",
+            "privacy.nonessential_disabled",
+            "privacy.telemetry_disabled",
+            "transport.alpn",
+            "transport.http",
+            "transport.native_tls"
+          ],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-native-tls-baseline",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-native-tls-baseline/tls-clienthello.pcap",
+          "scenario_ids": [
+            "entrypoint.sdk_cli",
+            "privacy.nonessential_disabled",
+            "privacy.telemetry_disabled",
+            "transport.alpn",
+            "transport.http",
+            "transport.native_tls"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "probe": "v4-native-tls-baseline",
+            "response_mode": "live",
+            "channel": "P",
+            "surface": "client_hello",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：P 通道是网关经 docker 网络连到 connect 中继的 ClientHello（中继终结 TLS 前在容器全部接口上抓取）。"
+        },
+        {
+          "glob": "v4-connection-reuse/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["transport.connection_reuse", "transport.http"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-connection-reuse",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-connection-reuse/relay-manifest.json",
+          "scenario_ids": ["transport.connection_reuse", "transport.http"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-connection-reuse",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-connection-reuse/tls-clienthello.pcap",
+          "scenario_ids": ["transport.connection_reuse", "transport.http"],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "probe": "v4-connection-reuse",
+            "response_mode": "live",
+            "channel": "P",
+            "surface": "client_hello",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：P 通道是网关经 docker 网络连到 connect 中继的 ClientHello（中继终结 TLS 前在容器全部接口上抓取）。"
+        },
+        {
+          "glob": "v4-replay-baseline/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.foreground", "entrypoint.sdk_cli", "transport.http"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-baseline",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-baseline/relay-manifest.json",
+          "scenario_ids": ["agency.foreground", "entrypoint.sdk_cli", "transport.http"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-baseline",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-models-privacy-state/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["aux.models", "privacy.nonessential_disabled", "privacy.telemetry_disabled"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-models-privacy-state",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-models-privacy-state/relay-manifest.json",
+          "scenario_ids": ["aux.models", "privacy.nonessential_disabled", "privacy.telemetry_disabled"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-models-privacy-state",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-entrypoint-identity",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-replay-agent-sdk/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["entrypoint.agent_sdk"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-agent-sdk",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-agent-sdk/relay-manifest.json",
+          "scenario_ids": ["entrypoint.agent_sdk"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-agent-sdk",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-workload/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["entrypoint.workload"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-workload",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-workload/relay-manifest.json",
+          "scenario_ids": ["entrypoint.workload"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-workload",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-header-combination/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.remote", "entrypoint.agent_sdk", "entrypoint.workload"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-header-combination",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-header-combination/relay-manifest.json",
+          "scenario_ids": ["agency.remote", "entrypoint.agent_sdk", "entrypoint.workload"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-header-combination",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-remote-container/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.remote"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-remote-container",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-remote-container/relay-manifest.json",
+          "scenario_ids": ["agency.remote"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-remote-container",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-remote-session/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.remote"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-remote-session",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-remote-session/relay-manifest.json",
+          "scenario_ids": ["agency.remote"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-remote-session",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-client-app/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.client_identity"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-client-app",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-client-app/relay-manifest.json",
+          "scenario_ids": ["condition.client_identity"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-client-app",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-additional-protection/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.client_identity"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-additional-protection",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-additional-protection/relay-manifest.json",
+          "scenario_ids": ["condition.client_identity"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-additional-protection",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-attribution-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.client_identity"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-attribution-disabled",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-attribution-disabled/relay-manifest.json",
+          "scenario_ids": ["condition.client_identity"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-attribution-disabled",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-header-conditions",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-replay-custom-header-grammar/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["header.custom"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-custom-header-grammar",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-custom-header-grammar/relay-manifest.json",
+          "scenario_ids": ["header.custom"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-custom-header-grammar",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-custom-header-invalid-name/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "none"},
+          "scenario_ids": ["header.custom"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-custom-header-invalid-name",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：官方序列里没有网关会转发的请求（本地拒绝或只打 hello／settings 等启动端点），网关不应产生任何上游连接；出现任何有效连接即失败关闭。"
+        },
+        {
+          "glob": "v4-replay-custom-header-invalid-name/relay-manifest.json",
+          "scenario_ids": ["header.custom"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-custom-header-invalid-name",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-extra-metadata/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["header.metadata"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-extra-metadata",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-extra-metadata/relay-manifest.json",
+          "scenario_ids": ["header.metadata"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-extra-metadata",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-beta-deduplicate/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["header.beta"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-beta-deduplicate",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-beta-deduplicate/relay-manifest.json",
+          "scenario_ids": ["header.beta"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-beta-deduplicate",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-dispatch-account-negative/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["header.dispatch_id"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-dispatch-account-negative",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-dispatch-account-negative/relay-manifest.json",
+          "scenario_ids": ["header.dispatch_id"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-dispatch-account-negative",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-body-context-cache",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-replay-custom-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.system"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-custom-system",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-custom-system/relay-manifest.json",
+          "scenario_ids": ["body.system"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-custom-system",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-append-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.system"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-append-system",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-append-system/relay-manifest.json",
+          "scenario_ids": ["body.system"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-append-system",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-exclude-dynamic-system/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.context", "body.system"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-exclude-dynamic-system",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-exclude-dynamic-system/relay-manifest.json",
+          "scenario_ids": ["body.context", "body.system"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-exclude-dynamic-system",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-context-claude-md/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.context", "body.system"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-context-claude-md",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-context-claude-md/relay-manifest.json",
+          "scenario_ids": ["body.context", "body.system"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-context-claude-md",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-cache-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.cache_breakpoint"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-cache-disabled",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-cache-disabled/relay-manifest.json",
+          "scenario_ids": ["body.cache_breakpoint"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-cache-disabled",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-cache-sonnet-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.cache_breakpoint"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-cache-sonnet-disabled",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-cache-sonnet-disabled/relay-manifest.json",
+          "scenario_ids": ["body.cache_breakpoint"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-cache-sonnet-disabled",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-cache-one-hour/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.cache_breakpoint"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-cache-one-hour",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-cache-one-hour/relay-manifest.json",
+          "scenario_ids": ["body.cache_breakpoint"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-cache-one-hour",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-gzip-request/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.request_gzip"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-gzip-request",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-gzip-request/relay-manifest.json",
+          "scenario_ids": ["condition.request_gzip"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-gzip-request",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-extra-body/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.output_controls"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-extra-body",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-extra-body/relay-manifest.json",
+          "scenario_ids": ["condition.output_controls"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-extra-body",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-json-schema/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.structured_output"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-json-schema",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-json-schema/relay-manifest.json",
+          "scenario_ids": ["condition.structured_output"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-json-schema",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-max-output-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.output_controls"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-max-output-tokens",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-max-output-tokens/relay-manifest.json",
+          "scenario_ids": ["condition.output_controls"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-max-output-tokens",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-generation-params",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-replay-effort-low/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-effort-low",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-effort-low/relay-manifest.json",
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-effort-low",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-effort-medium/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-effort-medium",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-effort-medium/relay-manifest.json",
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-effort-medium",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-effort-max/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-effort-max",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-effort-max/relay-manifest.json",
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-effort-max",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-effort-xhigh/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-effort-xhigh",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-effort-xhigh/relay-manifest.json",
+          "scenario_ids": ["condition.effort"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-effort-xhigh",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-thinking-disabled",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-thinking-disabled/relay-manifest.json",
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-thinking-disabled",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-adaptive-thinking-disabled/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-adaptive-thinking-disabled",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-adaptive-thinking-disabled/relay-manifest.json",
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-adaptive-thinking-disabled",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-thinking-display-omitted/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-thinking-display-omitted",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-thinking-display-omitted/relay-manifest.json",
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-thinking-display-omitted",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-thinking-display-summarized/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-thinking-display-summarized",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-thinking-display-summarized/relay-manifest.json",
+          "scenario_ids": ["condition.thinking"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-thinking-display-summarized",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-agency-subagent",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-agent-depth1/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.subagent", "tool.agent"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-agent-depth1",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-agent-depth1/relay-manifest.json",
+          "scenario_ids": ["agency.subagent", "tool.agent"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-agent-depth1", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-agent-depth2/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.nested_subagent", "tool.agent"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-agent-depth2",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-agent-depth2/relay-manifest.json",
+          "scenario_ids": ["agency.nested_subagent", "tool.agent"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-agent-depth2", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-agent-depth3/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.nested_subagent", "tool.agent"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-agent-depth3",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-agent-depth3/relay-manifest.json",
+          "scenario_ids": ["agency.nested_subagent", "tool.agent"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-agent-depth3", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-background-subagent/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.background", "agency.subagent", "tool.agent"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-background-subagent",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-background-subagent/relay-manifest.json",
+          "scenario_ids": ["agency.background", "agency.subagent", "tool.agent"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-background-subagent",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-agent-usage-limit/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.subagent", "header.usage_limit", "tool.agent"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-agent-usage-limit",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-agent-usage-limit/relay-manifest.json",
+          "scenario_ids": ["agency.subagent", "header.usage_limit", "tool.agent"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-agent-usage-limit",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-custom-agent/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.custom_agent"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-custom-agent",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-custom-agent/relay-manifest.json",
+          "scenario_ids": ["condition.custom_agent"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-custom-agent",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-custom-agent-safe-mode/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "none"},
+          "scenario_ids": ["condition.custom_agent"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-custom-agent-safe-mode",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：官方序列里没有网关会转发的请求（本地拒绝或只打 hello／settings 等启动端点），网关不应产生任何上游连接；出现任何有效连接即失败关闭。"
+        },
+        {
+          "glob": "v4-replay-custom-agent-safe-mode/relay-manifest.json",
+          "scenario_ids": ["condition.custom_agent"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-custom-agent-safe-mode",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-agency-session",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-bash/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["tool.bash"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-bash",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-bash/relay-manifest.json",
+          "scenario_ids": ["tool.bash"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-bash", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-hook/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.hook", "body.context", "tool.bash"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-hook",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-hook/relay-manifest.json",
+          "scenario_ids": ["agency.hook", "body.context", "tool.bash"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-hook", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-background/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.background"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-background",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-background/relay-manifest.json",
+          "scenario_ids": ["agency.background"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-background", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-session-fork/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.fork"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-session-fork",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-session-fork/relay-manifest.json",
+          "scenario_ids": ["agency.fork"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-session-fork",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-session-resume/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.session_resume"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-session-resume",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-session-resume/relay-manifest.json",
+          "scenario_ids": ["condition.session_resume"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-session-resume",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-tools",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-mcp-tool/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["tool.mcp"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-mcp-tool",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-mcp-tool/relay-manifest.json",
+          "scenario_ids": ["tool.mcp"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-mcp-tool", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-mcp-deferred/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["tool.deferred", "tool.extended", "tool.mcp"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-mcp-deferred",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-mcp-deferred/relay-manifest.json",
+          "scenario_ids": ["tool.deferred", "tool.extended", "tool.mcp"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-mcp-deferred", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-web-search/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["tool.extended", "tool.web_search"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-web-search",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-web-search/relay-manifest.json",
+          "scenario_ids": ["tool.extended", "tool.web_search"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-web-search", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-advisor-default-negative/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["tool.advisor", "tool.extended"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-advisor-default-negative",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-advisor-default-negative/relay-manifest.json",
+          "scenario_ids": ["tool.advisor", "tool.extended"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-advisor-default-negative",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-advisor-enabled-positive/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["tool.advisor", "tool.extended"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-advisor-enabled-positive",
+            "entrypoint": "sdk-cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-advisor-enabled-positive/relay-manifest.json",
+          "scenario_ids": ["tool.advisor", "tool.extended"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-advisor-enabled-positive",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-advisor-enabled-positive/results/debug.log",
+          "scenario_ids": ["tool.advisor", "tool.extended"],
+          "kind": "debug_log",
+          "parser": "opaque_bound_source",
+          "labels": {
+            "probe": "v4-advisor-enabled-positive",
+            "response_mode": "live",
+            "channel": "D",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：官方 --debug 日志（已等长脱敏），用于 runtime 结论的负例证据。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-tui",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-replay-tui/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["entrypoint.tui"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-tui",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-tui/relay-manifest.json",
+          "scenario_ids": ["entrypoint.tui"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-replay-tui", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-tui-attachment/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["body.attachment", "body.context", "entrypoint.tui"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-tui-attachment",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-tui-attachment/relay-manifest.json",
+          "scenario_ids": ["body.attachment", "body.context", "entrypoint.tui"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-tui-attachment",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-tui-compact/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["agency.compact", "body.cache_breakpoint", "entrypoint.tui"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-tui-compact",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-tui-compact/relay-manifest.json",
+          "scenario_ids": ["agency.compact", "body.cache_breakpoint", "entrypoint.tui"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-tui-compact", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-tui-count-tokens/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages/count_tokens"]},
+          "scenario_ids": ["aux.count_tokens", "entrypoint.tui"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-tui-count-tokens",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-tui-count-tokens/relay-manifest.json",
+          "scenario_ids": ["aux.count_tokens", "entrypoint.tui"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-tui-count-tokens",
+            "response_mode": "live",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-tui-usage/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "none"},
+          "scenario_ids": ["aux.usage", "entrypoint.tui"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-tui-usage",
+            "entrypoint": "cli",
+            "response_mode": "live",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：官方序列里没有网关会转发的请求（本地拒绝或只打 hello／settings 等启动端点），网关不应产生任何上游连接；出现任何有效连接即失败关闭。"
+        },
+        {
+          "glob": "v4-tui-usage/relay-manifest.json",
+          "scenario_ids": ["aux.usage", "entrypoint.tui"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {"probe": "v4-tui-usage", "response_mode": "live", "channel": "M", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-tui-usage/results/debug.log",
+          "scenario_ids": ["aux.usage", "entrypoint.tui"],
+          "kind": "debug_log",
+          "parser": "opaque_bound_source",
+          "labels": {"probe": "v4-tui-usage", "response_mode": "live", "channel": "D", "egress": "candidate-gateway"},
+          "rationale": "候选网关镜像：官方 --debug 日志（已等长脱敏），用于 runtime 结论的负例证据。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-synthetic-retry",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-replay-retry-401/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.401"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-401",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-401",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-401/relay-manifest.json",
+          "scenario_ids": ["failure.401"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-401",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-401/relay/intervention.jsonl",
+          "scenario_ids": ["failure.401"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-401",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-401",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-408/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.408"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-408",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-408",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-408/relay-manifest.json",
+          "scenario_ids": ["failure.408"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-408",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-408/relay/intervention.jsonl",
+          "scenario_ids": ["failure.408"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-408",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-408",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-409/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.409"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-409",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-409",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-409/relay-manifest.json",
+          "scenario_ids": ["failure.409"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-409",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-409/relay/intervention.jsonl",
+          "scenario_ids": ["failure.409"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-409",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-409",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-429/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.429"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-429",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-429",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-429/relay-manifest.json",
+          "scenario_ids": ["failure.429"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-429",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-429/relay/intervention.jsonl",
+          "scenario_ids": ["failure.429"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-429",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-429",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-500/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.5xx"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-500",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-500",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-500/relay-manifest.json",
+          "scenario_ids": ["failure.5xx"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-500",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-500/relay/intervention.jsonl",
+          "scenario_ids": ["failure.5xx"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-500",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-500",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-502/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.5xx"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-502",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-502",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-502/relay-manifest.json",
+          "scenario_ids": ["failure.5xx"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-502",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-502/relay/intervention.jsonl",
+          "scenario_ids": ["failure.5xx"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-502",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-502",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-503/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.5xx"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-503",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-503",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-503/relay-manifest.json",
+          "scenario_ids": ["failure.5xx"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-503",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-503/relay/intervention.jsonl",
+          "scenario_ids": ["failure.5xx"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-503",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-503",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-529/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.529"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-529",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-529",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-529/relay-manifest.json",
+          "scenario_ids": ["failure.529"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-529",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-529/relay/intervention.jsonl",
+          "scenario_ids": ["failure.529"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-529",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-529",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-after-seconds/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.retry_after"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-after-seconds",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-429-after-seconds",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-after-seconds/relay-manifest.json",
+          "scenario_ids": ["failure.retry_after"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-after-seconds",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-after-seconds/relay/intervention.jsonl",
+          "scenario_ids": ["failure.retry_after"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-after-seconds",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-429-after-seconds",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-after-date/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.retry_after"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-after-date",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "retry-429-after-date",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-after-date/relay-manifest.json",
+          "scenario_ids": ["failure.retry_after"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-after-date",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-after-date/relay/intervention.jsonl",
+          "scenario_ids": ["failure.retry_after"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-after-date",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "retry-429-after-date",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-retry-limit/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-retry-limit",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "always-529",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-retry-limit/relay-manifest.json",
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-retry-limit",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-retry-limit/relay/intervention.jsonl",
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-retry-limit",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "always-529",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-nonretry-400/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-nonretry-400",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "nonretry-400",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-nonretry-400/relay-manifest.json",
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-nonretry-400",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-nonretry-400/relay/intervention.jsonl",
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-nonretry-400",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "nonretry-400",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-nonretry-403/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.403"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-nonretry-403",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "nonretry-403",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-nonretry-403/relay-manifest.json",
+          "scenario_ids": ["failure.403"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-nonretry-403",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-nonretry-403/relay/intervention.jsonl",
+          "scenario_ids": ["failure.403"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-nonretry-403",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "nonretry-403",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-synthetic-stream",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-replay-disconnect-retry/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.disconnect"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-disconnect-retry",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "disconnect-retry",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-disconnect-retry/relay-manifest.json",
+          "scenario_ids": ["failure.disconnect"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-disconnect-retry",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-disconnect-retry/relay/intervention.jsonl",
+          "scenario_ids": ["failure.disconnect"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-disconnect-retry",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "disconnect-retry",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-fallback-model/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.fallback"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-fallback-model",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "fallback-model",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-fallback-model/relay-manifest.json",
+          "scenario_ids": ["failure.fallback"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-fallback-model",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-fallback-model/relay/intervention.jsonl",
+          "scenario_ids": ["failure.fallback"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-fallback-model",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "fallback-model",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-stream-404-fallback/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.non_stream"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-stream-404-fallback",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "stream-404-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-stream-404-fallback/relay-manifest.json",
+          "scenario_ids": ["failure.non_stream"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-stream-404-fallback",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-stream-404-fallback/relay/intervention.jsonl",
+          "scenario_ids": ["failure.non_stream"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-stream-404-fallback",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "stream-404-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-stream-404-disable-flag/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.non_stream"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-stream-404-disable-flag",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "stream-404-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-stream-404-disable-flag/relay-manifest.json",
+          "scenario_ids": ["failure.non_stream"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-stream-404-disable-flag",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-stream-404-disable-flag/relay/intervention.jsonl",
+          "scenario_ids": ["failure.non_stream"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-stream-404-disable-flag",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "stream-404-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-stream-interrupt/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.disconnect", "failure.non_stream"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-stream-interrupt",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "stream-interrupt-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-stream-interrupt/relay-manifest.json",
+          "scenario_ids": ["failure.disconnect", "failure.non_stream"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-stream-interrupt",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-stream-interrupt/relay/intervention.jsonl",
+          "scenario_ids": ["failure.disconnect", "failure.non_stream"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-stream-interrupt",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "stream-interrupt-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-stream-interrupt-no-fallback/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["failure.disconnect", "failure.non_stream"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-stream-interrupt-no-fallback",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "stream-interrupt-no-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-stream-interrupt-no-fallback/relay-manifest.json",
+          "scenario_ids": ["failure.disconnect", "failure.non_stream"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-stream-interrupt-no-fallback",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-stream-interrupt-no-fallback/relay/intervention.jsonl",
+          "scenario_ids": ["failure.disconnect", "failure.non_stream"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-stream-interrupt-no-fallback",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "stream-interrupt-no-fallback",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        },
+        {
+          "glob": "v4-replay-timeout/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/messages"]},
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-replay-timeout",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "stall",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：网关只把 messages 与 count_tokens 转发上游（hello、policy_limits、settings、oauth/profile、mcp_servers 不转发），连接条数与复用由网关的上游连接池决定，按无序规则逐条核对请求行；出现官方序列以外的请求行即失败关闭、修订本声明。"
+        },
+        {
+          "glob": "v4-replay-timeout/relay-manifest.json",
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-replay-timeout",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-replay-timeout/relay/intervention.jsonl",
+          "scenario_ids": ["condition.retry_budget"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-replay-timeout",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "stall",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-synthetic-oauth-refresh",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "v4-oauth-refresh/relay/conn*.client_to_upstream.bin",
+          "connection": {"order": "unordered", "requests": ["POST /v1/oauth/token"]},
+          "scenario_ids": ["aux.oauth_refresh"],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {"parser": "h1_request_stream", "kind": "process_trace"},
+          "labels": {
+            "probe": "v4-oauth-refresh",
+            "entrypoint": "sdk-cli",
+            "response_mode": "synthetic",
+            "response_plan": "oauth-refresh-reject",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：官方 probe 是客户端自己的 OAuth 刷新；候选侧由中继在抓包窗口内调用网关管理接口刷新专用账号令牌，只记录网关自己的刷新请求（合成计划拒绝，不转发生产）。"
+        },
+        {
+          "glob": "v4-oauth-refresh/relay-manifest.json",
+          "scenario_ids": ["aux.oauth_refresh"],
+          "kind": "relay_manifest",
+          "parser": "claude_relay_manifest",
+          "labels": {
+            "probe": "v4-oauth-refresh",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：R 取证运行清单：客户端身份、调用与环境、宿主运行凭据、中继完整性与清理，构成 M 绑定。"
+        },
+        {
+          "glob": "v4-oauth-refresh/relay/intervention.jsonl",
+          "scenario_ids": ["aux.oauth_refresh"],
+          "kind": "synthetic_intervention",
+          "parser": "jsonl",
+          "labels": {
+            "probe": "v4-oauth-refresh",
+            "response_mode": "synthetic",
+            "channel": "M",
+            "response_plan": "oauth-refresh-reject",
+            "egress": "candidate-gateway"
+          },
+          "rationale": "候选网关镜像：合成计划逐连接干预记录：每条连接的应答动作，决定重试与回退语义。"
         }
       ]
     }

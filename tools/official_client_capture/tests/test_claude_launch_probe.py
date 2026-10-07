@@ -75,12 +75,17 @@ def _context() -> dict[str, str]:
         "capture_tool_root": TOOL_ROOT, "capture_container": "capture-cli", "synthetic_capture_container": "capture-cli-synthetic",
         "claude_bin": f"/opt/claude-{TARGET}/claude", "model": "claude-sonnet-5", "upstream_ip": "160.79.104.10",
         "credentials_file": "/root/.claude/.credentials.json", "ca_signing_pem": "/opt/mitm/ca.pem", "ca_cert": "/opt/mitm/ca-cert.pem",
+        # 候选阶段变量（B4-01）：编排器的 Job 上下文总带着它们（预检 Campaign 的账号与 API Key 为空）。
+        "service_container": "sub2apiplus", "keeper_container": "sub2apiplus-keeper", "postgres_container": "sub2apiplus-postgres",
+        "claude_account_id": "", "api_key_id": "",
     }
 
 
 def _jobs() -> list:
     payload = json.loads(plan.scenario_manifest_path(TARGET).read_text(encoding="utf-8"))
-    return plan.expand_scenario_jobs(payload, _context(), job_factory=claude_upgrade.Job, suite="full")
+    jobs = plan.expand_scenario_jobs(payload, _context(), job_factory=claude_upgrade.Job, suite="full")
+    # 与生产同口径：启动探测经编排器按 Job 演练的阶段（official）取 Job，候选 Job（B4-01）不在其中。
+    return [job for job in jobs if job.phase == "official"]
 
 
 def _tui_probe_ids() -> list[str]:

@@ -9,6 +9,10 @@
 * 验收二：证据标签逐连接顺序测试——每个 probe 的逐连接标签与 2.1.226 实测的中继有效连接序列逐条匹配（方法与
   路径、单连接请求数、合成计划的干预动作），任何错位都失败关闭；非主模型 probe 的标签照主模型复制，另与 2.1.226
   模型能力 Campaign 的实测序列逐条核对，已知例外写死。
+* 候选 Job（B4-01）：12 个候选 Job 逐一镜像主模型 official Job（同一 probe，动作体换成宿主侧候选采集脚本包着中继候选
+  模式），候选变量、attempt 级要求两个字段与 Job 合同逐项核对；候选标签顺序测试——由 2.1.226 实测序列推出网关应有的
+  最终出站（只留网关转发的 messages／count_tokens，账号刷新触发另记 OAuth 刷新），逐连接与连接池两种形态都命中候选
+  标签计划，出现不转发的端点或零连接 probe 出现连接即失败关闭。
 """
 
 from __future__ import annotations
@@ -54,6 +58,11 @@ DESIGN_VARIABLES = {
     "model", "upstream_ip", "credentials_file", "ca_signing_pem", "ca_cert", "host_runtime_receipt", "run_nonce",
 }
 SUPPLEMENTED_VARIABLES = {"capture_root", "capture_tool_root", "host_runtime_receipt_sha256", "synthetic_capture_container"}
+# 候选阶段变量（B4-01）：只被候选 Job 引用，official-only 的 Campaign 可以为空。
+CANDIDATE_VARIABLES = set(plan.CANDIDATE_CAMPAIGN_VARIABLES)
+CANDIDATE_JOB_PREFIX = "candidate-"
+# 网关转发上游的端点（其余官方端点网关不转发）。
+GATEWAY_FORWARDED = {"POST /v1/messages", "POST /v1/messages/count_tokens"}
 RUNTIME_VARIABLES = {"host_runtime_receipt", "host_runtime_receipt_sha256", "run_nonce"}
 SHA_A = "a" * 64
 IMAGE = "oauth-egress-capture-capture-cli@sha256:" + "b" * 64
@@ -61,6 +70,14 @@ IMAGE = "oauth-egress-capture-capture-cli@sha256:" + "b" * 64
 
 def _scenario_payload() -> dict:
     return json.loads(plan.scenario_manifest_path(TARGET).read_text(encoding="utf-8"))
+
+
+def _official_jobs(payload: dict) -> list[dict]:
+    return [job for job in payload["capture_jobs"] if job["phase"] == "official"]
+
+
+def _candidate_jobs(payload: dict) -> list[dict]:
+    return [job for job in payload["capture_jobs"] if job["phase"] == "candidate"]
 
 
 def _baseline_rules() -> tuple[str, ...]:
@@ -114,21 +131,41 @@ class ScenarioManifestTests(unittest.TestCase):
         self.assertEqual(payload["rule_manifest"]["path"], f"tools/official_client_capture/claude_upgrade_rules_{TARGET.replace('.', '_')}.json")
         guide = REPOSITORY_ROOT / payload["source_spec"]["path"]
         self.assertEqual(plan.guide_section_sha256(guide, "第二部分"), payload["source_spec"]["sha256"])
-        # 12 个主模型 Job 加 2 个非主模型的模型能力取证 Job（claude-opus-5、claude-fable-5）。
-        self.assertEqual(len(payload["capture_jobs"]), 14)
+        # official：12 个主模型 Job 加 2 个非主模型的模型能力取证 Job（claude-opus-5、claude-fable-5）；候选：逐一镜像
+        # 12 个主模型 Job（B4-01），排在全部 official Job 之后。
+        official = _official_jobs(payload)
+        self.assertEqual((len(payload["capture_jobs"]), len(official)), (26, 14))
+        self.assertEqual(payload["capture_jobs"][:14], official)
         self.assertEqual(
-            [job["id"] for job in payload["capture_jobs"] if job["id"].startswith(MODEL_JOB_PREFIX)],
+            [job["id"] for job in official if job["id"].startswith(MODEL_JOB_PREFIX)],
             [f"{MODEL_JOB_PREFIX}claude-opus-5", f"{MODEL_JOB_PREFIX}claude-fable-5"],
         )
-        self.assertTrue(all(job["phase"] == "official" for job in payload["capture_jobs"]))
+        self.assertEqual(
+            [job["id"] for job in _candidate_jobs(payload)],
+            [CANDIDATE_JOB_PREFIX + job["id"][len("official-"):] for job in official if not job["id"].startswith(MODEL_JOB_PREFIX)],
+        )
+        self.assertEqual(payload["required_client_bindings"], ["claude-desktop", "claude-vscode"])
+        self.assertEqual(payload["required_boundary_checks"], ["codex-final-wire-isolation", "third-party-ingress-rejection"])
 
     def test_variable_contract_covers_design_and_scopes(self) -> None:
         contract = {item["name"]: item for item in _scenario_payload()["variable_contract"]}
-        self.assertEqual(set(contract), DESIGN_VARIABLES | SUPPLEMENTED_VARIABLES)
+        self.assertEqual(set(contract), DESIGN_VARIABLES | SUPPLEMENTED_VARIABLES | CANDIDATE_VARIABLES)
         self.assertEqual({name for name, item in contract.items() if item["scope"] == "step_runtime"}, RUNTIME_VARIABLES)
         self.assertTrue(all(item["sensitive"] is False for item in contract.values()))
-        self.assertEqual(set(plan.CAMPAIGN_VARIABLES), {name for name, item in contract.items() if item["scope"] == "campaign"})
+        self.assertEqual(
+            set(plan.CAMPAIGN_VARIABLES) | CANDIDATE_VARIABLES,
+            {name for name, item in contract.items() if item["scope"] == "campaign"},
+        )
+        self.assertFalse(set(plan.CAMPAIGN_VARIABLES) & CANDIDATE_VARIABLES)
         self.assertEqual(contract["upstream_ip"]["type"], "ip_address")
+        # 候选变量都不必填：容器名有缺省，账号与 API Key 的 ID 只登记 ID、没有缺省（候选 run 之前失败关闭核对）。
+        self.assertTrue(all(contract[name]["required"] is False for name in CANDIDATE_VARIABLES))
+        self.assertEqual(
+            {name: contract[name].get("default") for name in ("service_container", "keeper_container", "postgres_container")},
+            {"service_container": "sub2apiplus", "keeper_container": "sub2apiplus-keeper", "postgres_container": "sub2apiplus-postgres"},
+        )
+        for name in ("claude_account_id", "api_key_id"):
+            self.assertEqual((contract[name]["type"], "default" in contract[name]), ("integer", False))
 
     def test_schema_file_mirrors_validator(self) -> None:
         schema = json.loads((TOOL_ROOT / "claude_upgrade_scenarios.schema.json").read_text(encoding="utf-8"))
@@ -136,6 +173,10 @@ class ScenarioManifestTests(unittest.TestCase):
         self.assertEqual(set(schema["required"]), set(plan._SCENARIO_TOP_FIELDS))
         self.assertEqual(set(definitions["captureJob"]["required"]), set(plan._JOB_FIELDS))
         self.assertEqual(set(definitions["commandStep"]["required"]), set(plan._STEP_FIELDS))
+        self.assertEqual(set(definitions["candidateCommandStep"]["required"]), set(plan._STEP_FIELDS))
+        properties = schema["properties"]
+        self.assertEqual(set(properties["required_client_bindings"]["items"]["enum"]), set(plan.REQUIRED_CLIENT_BINDINGS))
+        self.assertEqual(set(properties["required_boundary_checks"]["items"]["enum"]), set(plan.REQUIRED_BOUNDARY_CHECKS))
         self.assertEqual(set(definitions["evidenceScenario"]["required"]), set(plan._SCENARIO_FIELDS))
         self.assertEqual(set(definitions["variable"]["required"]), set(plan._VARIABLE_FIELDS))
         self.assertEqual(set(definitions["variable"]["properties"]["type"]["enum"]), set(plan.VARIABLE_TYPES))
@@ -175,6 +216,25 @@ class ScenarioManifestTests(unittest.TestCase):
         def capability_as_rule_evidence(payload):
             scenario(payload, plan.MODEL_CAPABILITY_SCENARIO).update(purpose="rule_evidence", covers=["SPEC-BODY-001"])
 
+        # 候选 Job（B4-01）：第一个候选 Job 的第一步（真实上游）与合成重试候选 Job 的第一步。
+        candidate_job = lambda payload: _candidate_jobs(payload)[0]  # noqa: E731
+        candidate_step = lambda payload: candidate_job(payload)["steps"][0]  # noqa: E731
+        synthetic_candidate_step = lambda payload: next(  # noqa: E731
+            job for job in _candidate_jobs(payload) if job["id"] == "candidate-synthetic-retry"
+        )["steps"][0]
+
+        def set_inner(step, flag, value):
+            step["argv"][step["argv"].index(flag) + 1] = value
+
+        def drop_inner(step, flag):
+            position = step["argv"].index(flag)
+            del step["argv"][position:position + 2]
+
+        def mirror_model_probe(payload):
+            # 候选步骤去镜像非主模型 probe：probe_id 与中继 probe 不再相等。
+            step = candidate_step(payload)
+            step["probe_id"] = "claude-opus-5-" + step["probe_id"]
+
         cases = {
             "顶层多字段": (lambda p: p.update(extra=1), "顶层字段不闭合"),
             "敏感变量": (lambda p: p["variable_contract"][0].update(sensitive=True), "sensitive"),
@@ -186,7 +246,7 @@ class ScenarioManifestTests(unittest.TestCase):
                 lambda p: next(s for s in p["evidence_scenarios"] if s["purpose"] == "discovery")["covers"].append("SPEC-BODY-001"),
                 "purpose 与 covers",
             ),
-            "候选 Job": (lambda p: first_job(p).update(phase="candidate"), "B4-01"),
+            "official 步骤冒充候选 Job": (lambda p: first_job(p).update(phase="candidate"), "claude_run_candidate_capture.sh"),
             "fw-f-v5-probe 与 probe_id 不符": (
                 lambda p: first_step(p)["argv"].__setitem__(first_step(p)["argv"].index("--fw-f-v5-probe") + 1, "v4-other"),
                 "fw-f-v5-probe",
@@ -222,7 +282,7 @@ class ScenarioManifestTests(unittest.TestCase):
             "真实步骤缺上游 IP": (lambda p: drop_flag(p, "--upstream-ip"), "upstream-ip"),
             "probe 执行两次": (
                 lambda p: p["capture_jobs"][1]["steps"].append(copy.deepcopy(first_step(p))),
-                "只能由一个取证步骤",
+                "只能由一个 official 取证步骤",
             ),
             "scenario_ids 与步骤不符": (lambda p: first_job(p)["scenario_ids"].pop(), "scenario_ids 必须等于"),
             "covers 超出场景": (lambda p: p["capture_jobs"][-1]["covers"].append("SPEC-TLS-001"), "未被绑定场景证明"),
@@ -256,6 +316,58 @@ class ScenarioManifestTests(unittest.TestCase):
             "模型能力场景证明规则": (capability_as_rule_evidence, "发现项"),
             "不覆盖规则的 Job 承载规则场景": (lambda p: first_job(p).update(covers=[]), "只能承载发现项场景"),
             "目录 probe 数计入非主模型步骤": (lambda p: p["probe_catalog"].update(probe_count=112), "probe_count"),
+            # 候选合同（B4-01）。
+            "候选步骤不经候选采集脚本": (
+                lambda p: candidate_step(p).update(argv=candidate_step(p)["argv"][2:]), "claude_run_candidate_capture.sh"
+            ),
+            "候选步骤进断网容器": (
+                lambda p: synthetic_candidate_step(p)["argv"].__setitem__(4, "{synthetic_capture_container}"),
+                "docker exec {capture_container}",
+            ),
+            "候选步骤读取官方凭据": (
+                lambda p: candidate_step(p)["argv"].extend(["--claude-credentials-file", "{credentials_file}"]),
+                "不得携带 --claude-credentials-file",
+            ),
+            "候选步骤缺运行目录": (lambda p: drop_inner(candidate_step(p), "--candidate-runtime-dir"), "--candidate-runtime-dir"),
+            "候选中继端口漂移": (lambda p: set_inner(candidate_step(p), "--candidate-relay-port", "18444"), "--candidate-relay-port"),
+            "候选环境少一个键": (lambda p: candidate_step(p)["environment"].pop("CA_CERT"), "environment 键"),
+            "候选环境与命令不一致": (
+                lambda p: candidate_step(p)["environment"].update(OUTPUT_ROOT="{capture_root}/runs/elsewhere"), "OUTPUT_ROOT"
+            ),
+            "候选环境开关被改": (
+                lambda p: candidate_step(p)["environment"].update(CLAUDE_CANDIDATE_CAPTURE="yes"), "CLAUDE_CANDIDATE_CAPTURE"
+            ),
+            "候选账号引用别的变量": (
+                lambda p: candidate_step(p)["environment"].update(ACCOUNT_ID="{api_key_id}"), "ACCOUNT_ID"
+            ),
+            "候选触发方式漂移": (
+                lambda p: candidate_step(p)["environment"].update(GATEWAY_TRIGGER="gateway-account-refresh"), "GATEWAY_TRIGGER"
+            ),
+            "候选合成步骤冒充真实请求": (
+                lambda p: [
+                    synthetic_candidate_step(p)["argv"].__setitem__(
+                        synthetic_candidate_step(p)["argv"].index("--acknowledge-synthetic-responses"), "--acknowledge-live-requests"
+                    ),
+                    synthetic_candidate_step(p)["argv"].extend(["--upstream-ip", "{upstream_ip}"]),
+                ],
+                "合成计划不一致",
+            ),
+            "候选镜像非主模型 probe": (mirror_model_probe, "必须等于 probe_id"),
+            "同一 probe 两个候选步骤": (
+                lambda p: _candidate_jobs(p)[1]["steps"].append(copy.deepcopy(candidate_step(p))),
+                "只能由一个候选取证步骤",
+            ),
+            "候选 Job 漏掉 ScenarioPlan 场景": (
+                lambda p: [job for job in _candidate_jobs(p) if job["id"] == "candidate-tui"][0].update(required=False),
+                "没有覆盖 VC-3 ScenarioPlan 场景",
+            ),
+            "缺 Mac 客户端收据要求": (lambda p: p["required_client_bindings"].pop(), "required_client_bindings"),
+            "未登记的客户端收据": (
+                lambda p: p.update(required_client_bindings=["claude-desktop", "claude-vscode", "kilo-compatible"]),
+                "required_client_bindings",
+            ),
+            "边界核对未排序": (lambda p: p["required_boundary_checks"].reverse(), "required_boundary_checks"),
+            "缺边界核对字段": (lambda p: p.pop("required_boundary_checks"), "顶层字段不闭合"),
         }
         for label, (change, message) in cases.items():
             with self.subTest(label=label):
@@ -295,6 +407,17 @@ class ScenarioManifestTests(unittest.TestCase):
         root_runtime["capture_jobs"][0]["evidence_roots"] = ["{capture_root}/runs/{run_nonce}"]
         with self.assertRaisesRegex(ConfigurationError, "证据根不得引用运行期变量"):
             plan.validate_campaign_context(root_runtime, context)
+        # 候选变量（B4-01）：取值按声明类型核对；没有候选变量声明的旧清单副本只容忍空取值。
+        candidate_context = {**context, "service_container": "sub2apiplus", "claude_account_id": "7", "api_key_id": "9"}
+        plan.validate_campaign_context(payload, candidate_context)
+        with self.assertRaisesRegex(ConfigurationError, "integer"):
+            plan.validate_campaign_context(payload, {**candidate_context, "claude_account_id": "seven"})
+        legacy = copy.deepcopy(payload)
+        legacy["capture_jobs"] = _official_jobs(legacy)
+        legacy["variable_contract"] = [item for item in legacy["variable_contract"] if item["name"] not in CANDIDATE_VARIABLES]
+        plan.validate_campaign_context(legacy, {**context, **{name: "" for name in CANDIDATE_VARIABLES}})
+        with self.assertRaisesRegex(ConfigurationError, "变量合同外"):
+            plan.validate_campaign_context(legacy, {**context, "claude_account_id": "7"})
 
 
 class VersionFactsBindingTests(unittest.TestCase):
@@ -372,7 +495,7 @@ class CatalogConsistencyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.payload = _scenario_payload()
-        cls.steps = {step["probe_id"]: (job, step) for job in cls.payload["capture_jobs"] for step in job["steps"]}
+        cls.steps = {step["probe_id"]: (job, step) for job in _official_jobs(cls.payload) for step in job["steps"]}
         cls.scenarios = {item["scenario_id"]: item for item in cls.payload["evidence_scenarios"]}
         cls.primary = {probe: pair for probe, pair in cls.steps.items() if plan.step_model(probe, pair[1]["argv"]) is None}
         cls.capability = {probe: pair for probe, pair in cls.steps.items() if probe not in cls.primary}
@@ -381,7 +504,7 @@ class CatalogConsistencyTests(unittest.TestCase):
         return str(plan.step_relay_probe(probe_id, self.steps[probe_id][1]["argv"]))
 
     def test_every_probe_runs_exactly_once(self) -> None:
-        executed = [step["probe_id"] for job in self.payload["capture_jobs"] for step in job["steps"]]
+        executed = [step["probe_id"] for job in _official_jobs(self.payload) for step in job["steps"]]
         self.assertEqual(len(executed), len(set(executed)))
         self.assertEqual(sorted(self.primary), sorted(v5.PROBE_IDS))
         self.assertEqual(v5.PROBE_IDS, v4.PROBE_IDS)
@@ -479,11 +602,13 @@ class RuleCoverageTests(unittest.TestCase):
                         plan.load_target_rules(path, target_version=TARGET, baseline_rules=rules,
                                                baseline_manifest=plan.baseline_rule_manifest_path(BASELINE))
 
-    def test_official_jobs_cover_all_rules(self) -> None:
+    def test_official_and_candidate_jobs_cover_all_rules(self) -> None:
         rules = _baseline_rules()
         payload = _scenario_payload()
-        covered = {rule for job in payload["capture_jobs"] for rule in job["covers"]}
-        self.assertEqual(covered, set(rules))
+        for phase, jobs in (("official", _official_jobs(payload)), ("candidate", _candidate_jobs(payload))):
+            with self.subTest(phase=phase):
+                covered = {rule for job in jobs if job["required"] for rule in job["covers"]}
+                self.assertEqual(covered, set(rules))
         scenario_covers = {rule for item in payload["evidence_scenarios"] for rule in item["covers"]}
         self.assertEqual(scenario_covers, set(rules))
 
@@ -521,10 +646,18 @@ class PlanExpansionTests(unittest.TestCase):
         self.assertEqual((report["campaign_created"], report["files_written"], report["live_request_count"]), (False, 0, 0))
         self.assertFalse(self.campaign_dir.exists())
         self.assertEqual([job["id"] for job in report["jobs"]], [job["id"] for job in payload["capture_jobs"]])
-        self.assertEqual((report["job_count"], report["step_count"]), (14, 112))
-        probes = [step["probe_id"] for job in report["jobs"] for step in job["steps"]]
-        self.assertEqual(sorted(probes), sorted([*v5.PROBE_IDS, *_model_capability_probes()]))
-        self.assertEqual(report["coverage_plan"]["official_unmapped"], [])
+        self.assertEqual((report["job_count"], report["step_count"]), (26, 191))
+        official_probes = [step["probe_id"] for job in report["jobs"] if job["phase"] == "official" for step in job["steps"]]
+        self.assertEqual(sorted(official_probes), sorted([*v5.PROBE_IDS, *_model_capability_probes()]))
+        candidate_probes = [step["probe_id"] for job in report["jobs"] if job["phase"] == "candidate" for step in job["steps"]]
+        self.assertEqual(sorted(candidate_probes), sorted(v5.PROBE_IDS))
+        self.assertEqual((report["coverage_plan"]["official_unmapped"], report["coverage_plan"]["candidate_unmapped"]), ([], []))
+        # 候选变量写进 configuration：容器名取变量合同缺省，账号与 API Key 的 ID 没给就是空字符串（预检 Campaign 允许）。
+        self.assertEqual(
+            {name: report["configuration"][name] for name in sorted(CANDIDATE_VARIABLES)},
+            {"api_key_id": "", "claude_account_id": "", "keeper_container": "sub2apiplus-keeper",
+             "postgres_container": "sub2apiplus-postgres", "service_container": "sub2apiplus"},
+        )
         self.assertEqual(report["required_rules"], list(_baseline_rules()))
         self.assertEqual(report["configuration"]["claude_bin"], f"/opt/claude-{TARGET}/claude")
         self.assertEqual(report["configuration"]["capture_root"], "/capture")
@@ -540,7 +673,8 @@ class PlanExpansionTests(unittest.TestCase):
         ):
             self.assertEqual(report["inputs"][name]["sha256"], plan.file_sha256(path), name)
         for job in report["jobs"]:
-            self.assertEqual(job["evidence_roots"], [f"/capture/runs/claude-official/claude-code-2_1_285-t1/{job['id']}"])
+            side = "claude-official" if job["phase"] == "official" else "claude-candidate"
+            self.assertEqual(job["evidence_roots"], [f"/capture/runs/{side}/claude-code-2_1_285-t1/{job['id']}"])
             for step in job["steps"]:
                 with self.subTest(probe=step["probe_id"]):
                     self.assertEqual(set(step["runtime_variables"]), RUNTIME_VARIABLES)
@@ -579,6 +713,8 @@ class PlanExpansionTests(unittest.TestCase):
                 [item if item != "claude-sonnet-5" else "claude-fable-5" for item in _plan_argv(self.campaign_dir)],
                 "与 Campaign 主模型 claude-fable-5 相同",
             ),
+            "候选账号 ID 非整数": (_plan_argv(self.campaign_dir, "--claude-account-id", "acct-7"), "--claude-account-id 必须是正整数"),
+            "候选服务容器名非法": (_plan_argv(self.campaign_dir, "--service-container", "bad name"), "--service-container 格式非法"),
         }
         for label, (argv, message) in cases.items():
             with self.subTest(label=label):
@@ -600,7 +736,7 @@ class PlanExpansionTests(unittest.TestCase):
         arguments = parser.parse_args(_plan_argv(self.campaign_dir))
         plan.prepare_plan_arguments(arguments)
         context = claude_upgrade._job_context(arguments)
-        self.assertEqual(set(context), set(plan.CAMPAIGN_VARIABLES))
+        self.assertEqual(set(context), set(plan.CAMPAIGN_VARIABLES) | CANDIDATE_VARIABLES)
         self.assertFalse(set(context) & RUNTIME_VARIABLES)
         jobs, inputs = claude_upgrade._load_plan_jobs(arguments, _baseline_rules())
         self.assertTrue(all(isinstance(job, claude_upgrade.Job) for job in jobs))
@@ -625,7 +761,20 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.payload = _scenario_payload()
         cls.labels = plan.load_evidence_labels(plan.evidence_labels_path(TARGET), expected_version=TARGET, scenario_payload=cls.payload)
-        cls.plans = {probe: probe_plan for job_plans in cls.labels["plans"].values() for probe, probe_plan in job_plans.items()}
+        # official 与候选按 Job 分开：候选步骤镜像同一 probe ID，按 probe 单键会互相覆盖。
+        official_ids = {job["id"] for job in _official_jobs(cls.payload)}
+        cls.plans = {
+            probe: probe_plan
+            for job_id, job_plans in cls.labels["plans"].items()
+            if job_id in official_ids
+            for probe, probe_plan in job_plans.items()
+        }
+        cls.candidate_plans = {
+            probe: probe_plan
+            for job_id, job_plans in cls.labels["plans"].items()
+            if job_id not in official_ids
+            for probe, probe_plan in job_plans.items()
+        }
         cls.fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
         cls.model_fixture = json.loads(MODEL_FIXTURE.read_text(encoding="utf-8"))
         cls.rules = {
@@ -652,6 +801,7 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
     def test_every_job_and_probe_has_labels(self) -> None:
         self.assertEqual(set(self.labels["plans"]), {job["id"] for job in self.payload["capture_jobs"]})
         self.assertEqual(sorted(self.plans), sorted([*v5.PROBE_IDS, *_model_capability_probes()]))
+        self.assertEqual(sorted(self.candidate_plans), sorted(v5.PROBE_IDS))
 
     def test_label_sequences_match_observed_connections(self) -> None:
         """逐连接顺序：每个主模型 probe 的有效连接逐条命中标签规则（方法与路径、单连接请求数、合成干预动作）。"""
@@ -672,7 +822,7 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
 
         primary_rules: dict[str, list[dict]] = {}
         for entry in self.labels["document"]["entries"]:
-            if not entry["job_id"].startswith(MODEL_JOB_PREFIX):
+            if entry["side"] == "official" and not entry["job_id"].startswith(MODEL_JOB_PREFIX):
                 for rule in entry["rules"]:
                     primary_rules.setdefault(rule["labels"]["probe"], []).append(rule)
         for entry in self.labels["document"]["entries"]:
@@ -802,6 +952,99 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
             connection["connection_id"] = number
         self.assertEqual(len(plan.match_relay_connections(self.plans["v4-replay-baseline"], with_query)), 4)
 
+    def candidate_expectations(self) -> dict[str, set[str]]:
+        """候选 probe → 网关应有的上游请求行：官方序列里网关转发的端点；账号刷新触发只记网关自己的 OAuth 刷新。"""
+
+        expected: dict[str, set[str]] = {}
+        for probe_id in v5.PROBE_IDS:
+            requests = {
+                line.split("?", 1)[0]
+                for connection in self.fixture["probes"][probe_id]["connections"]
+                for line in connection["requests"]
+            }
+            if v5.PROBES[probe_id].driver == "oauth-refresh":
+                expected[probe_id] = {"POST /v1/oauth/token"}
+            else:
+                expected[probe_id] = requests & GATEWAY_FORWARDED
+        return expected
+
+    def test_candidate_labels_mirror_official_rules(self) -> None:
+        """候选标签：请求规则换成无序（网关转发的请求行）或零连接；其余规则逐字照抄官方，只加 egress 标签与说明前缀。"""
+
+        official_rules = {
+            (rule["labels"]["probe"], rule["glob"], rule["kind"]): rule
+            for entry in self.labels["document"]["entries"]
+            if entry["side"] == "official" and not entry["job_id"].startswith(MODEL_JOB_PREFIX)
+            for rule in entry["rules"]
+            if "connection" not in rule
+        }
+        expected = self.candidate_expectations()
+        for entry in self.labels["document"]["entries"]:
+            if entry["side"] != "candidate":
+                continue
+            for rule in entry["rules"]:
+                probe_id = rule["labels"]["probe"]
+                with self.subTest(job=entry["job_id"], glob=rule["glob"]):
+                    self.assertEqual(rule["labels"]["egress"], "candidate-gateway")
+                    if "connection" in rule:
+                        allowed = expected[probe_id]
+                        self.assertEqual(
+                            rule["connection"],
+                            {"order": "unordered", "requests": sorted(allowed)} if allowed else {"order": "none"},
+                        )
+                        self.assertNotIn("endpoint", rule["labels"])
+                        continue
+                    official = official_rules[(probe_id, rule["glob"], rule["kind"])]
+                    copied = copy.deepcopy(official)
+                    copied["labels"]["egress"] = "candidate-gateway"
+                    self.assertEqual({key: value for key, value in rule.items() if key != "rationale"},
+                                     {key: value for key, value in copied.items() if key != "rationale"})
+                    self.assertTrue(rule["rationale"].startswith("候选网关镜像："))
+        zero = sorted(probe for probe, allowed in expected.items() if not allowed)
+        self.assertEqual(zero, ["v4-replay-custom-agent-safe-mode", "v4-replay-custom-header-invalid-name", "v4-tui-usage"])
+
+    def test_candidate_label_sequences_match_gateway_egress(self) -> None:
+        """候选标签顺序测试：由 2.1.226 实测序列推出的网关出站，逐连接与连接池两种形态都命中候选计划。"""
+
+        for probe_id, allowed in sorted(self.candidate_expectations().items()):
+            probe_plan = self.candidate_plans[probe_id]
+            with self.subTest(probe=probe_id):
+                lines = [
+                    line.split("?", 1)[0]
+                    for connection in self.fixture["probes"][probe_id]["connections"]
+                    for line in connection["requests"]
+                    if line.split("?", 1)[0] in allowed
+                ] or (sorted(allowed) if allowed else [])
+                if not allowed:
+                    self.assertEqual(plan.match_relay_connections(probe_plan, []), [])
+                    with self.assertRaisesRegex(plan.LabelSequenceMismatch, "零连接规则"):
+                        plan.match_relay_connections(
+                            probe_plan, [{"connection_id": 1, "requests": ["POST /v1/messages"], "intervention": None}]
+                        )
+                    continue
+                separate = [
+                    {"connection_id": index, "requests": [line], "intervention": None} for index, line in enumerate(lines, 1)
+                ]
+                pooled = [{"connection_id": 3, "requests": lines, "intervention": None}]
+                for connections in (separate, pooled):
+                    matches = plan.match_relay_connections(probe_plan, connections)
+                    self.assertEqual([item["connection_id"] for item in matches], [c["connection_id"] for c in connections])
+
+    def test_candidate_mismatches_fail_closed(self) -> None:
+        baseline = self.candidate_plans["v4-replay-baseline"]
+        cases = {
+            "网关转发了不转发的端点": ([{"connection_id": 1, "requests": ["HEAD /api/hello"], "intervention": None}], "未声明"),
+            "启动端点混进推理连接": (
+                [{"connection_id": 1, "requests": ["POST /v1/messages", "GET /api/claude_code/settings"], "intervention": None}],
+                "未声明",
+            ),
+            "网关零出站": ([], "至少要有一条"),
+        }
+        for label, (connections, message) in cases.items():
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(plan.LabelSequenceMismatch, message):
+                    plan.match_relay_connections(baseline, connections)
+
     def test_label_declaration_rejections(self) -> None:
         original = json.loads(plan.evidence_labels_path(TARGET).read_text(encoding="utf-8"))
 
@@ -810,6 +1053,15 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
                 for rule in entry["rules"]:
                     if rule["labels"].get("probe") == probe_id and "connection" in rule:
                         return entry, rule
+            raise AssertionError(probe_id)
+
+        def candidate_rule(document, probe_id):
+            for entry in document["entries"]:
+                if entry["side"] != "candidate":
+                    continue
+                for rule in entry["rules"]:
+                    if rule["labels"].get("probe") == probe_id and "connection" in rule:
+                        return rule
             raise AssertionError(probe_id)
 
         cases = {
@@ -824,6 +1076,18 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
             "非主模型标签越出模型能力场景": (
                 lambda d: first_rule(d, "claude-opus-5-v4-replay-tui")[1]["scenario_ids"].append("entrypoint.tui"), "子集"
             ),
+            "official 侧声明零连接": (
+                lambda d: [
+                    rule.update(connection={"order": "none"})
+                    for rule in d["entries"][0]["rules"]
+                    if rule["labels"].get("probe") == "v4-native-tls-baseline" and "connection" in rule
+                ],
+                "零连接规则必须是该 probe 唯一|不得声明零连接",
+            ),
+            "零连接规则 order 非法": (
+                lambda d: candidate_rule(d, "v4-tui-usage").update(connection={"order": "unordered"}), "零连接规则只能是 order=none"
+            ),
+            "候选 side 写成 official": (lambda d: d["entries"][-1].update(side="official"), "side 与 Job 阶段不一致"),
         }
         with tempfile.TemporaryDirectory() as directory:
             for label, (change, message) in cases.items():
@@ -834,6 +1098,86 @@ class EvidenceLabelSequenceTests(unittest.TestCase):
                     path.write_text(json.dumps(document, ensure_ascii=False), encoding="utf-8")
                     with self.assertRaisesRegex(ConfigurationError, message):
                         plan.load_evidence_labels(path, expected_version=TARGET, scenario_payload=self.payload)
+
+
+class CandidateMirrorTests(unittest.TestCase):
+    """候选 Job（B4-01）逐一镜像主模型 official Job：同一 probe、同一覆盖，动作体换成宿主侧候选采集脚本包着中继候选模式。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.payload = _scenario_payload()
+        cls.official = {job["id"]: job for job in _official_jobs(cls.payload) if not job["id"].startswith(MODEL_JOB_PREFIX)}
+        cls.candidates = _candidate_jobs(cls.payload)
+
+    @staticmethod
+    def expected_step(official_job_id: str, candidate_job_id: str, step: dict) -> dict:
+        """独立复算候选步骤：容器固定联网抓包容器，去掉官方凭据，输出根换到 claude-candidate，加运行目录与中继端口。"""
+
+        probe = step["probe_id"]
+        inner = ["docker", "exec", "{capture_container}", *step["argv"][3:]]
+        position = inner.index("--claude-credentials-file")
+        del inner[position:position + 2]
+        output_root = f"{{capture_root}}/runs/claude-candidate/{{campaign_id}}/{candidate_job_id}/{probe}"
+        self_check = inner[inner.index("--output-root") + 1]
+        assert self_check == f"{{capture_root}}/runs/claude-official/{{campaign_id}}/{official_job_id}/{probe}", self_check
+        inner[inner.index("--output-root") + 1] = output_root
+        runtime_dir = f"{{capture_root}}/runtime/claude-candidate/{{campaign_id}}-{probe}"
+        inner += ["--candidate-runtime-dir", runtime_dir, "--candidate-relay-port", "18443"]
+        trigger = "gateway-account-refresh" if v5.PROBES[probe].driver == "oauth-refresh" else "client"
+        return {
+            "probe_id": probe,
+            "argv": ["bash", "{capture_tool_root}/claude_run_candidate_capture.sh", *inner],
+            "environment": {
+                "CLAUDE_CANDIDATE_CAPTURE": "YES_I_ACCEPT_CANDIDATE_GATEWAY_CAPTURE",
+                "CAMPAIGN_DIR": "{campaign_dir}",
+                "CAPTURE_ROOT": "{capture_root}",
+                "CAPTURE_CONTAINER": "{capture_container}",
+                "SERVICE_CONTAINER": "{service_container}",
+                "KEEPER_CONTAINER": "{keeper_container}",
+                "POSTGRES_CONTAINER": "{postgres_container}",
+                "ACCOUNT_ID": "{claude_account_id}",
+                "API_KEY_ID": "{api_key_id}",
+                "RUN_ID": f"{{campaign_id}}-{probe}",
+                "PROBE_ID": probe,
+                "OUTPUT_ROOT": output_root,
+                "CANDIDATE_RUNTIME_DIR": runtime_dir,
+                "RELAY_PORT": "18443",
+                "GATEWAY_TRIGGER": trigger,
+                "CA_CERT": "{ca_cert}",
+            },
+            "timeout_seconds": step["timeout_seconds"] + 600,
+        }
+
+    def test_jobs_mirror_primary_official_jobs(self) -> None:
+        self.assertEqual(len(self.candidates), len(self.official))
+        for candidate in self.candidates:
+            official_id = "official-" + candidate["id"][len(CANDIDATE_JOB_PREFIX):]
+            official = self.official[official_id]
+            with self.subTest(job=candidate["id"]):
+                for field in ("suites", "scenario_ids", "covers", "required", "required_scenario_receipts"):
+                    self.assertEqual(candidate[field], official[field], field)
+                self.assertEqual(candidate["evidence_roots"], [f"{{capture_root}}/runs/claude-candidate/{{campaign_id}}/{candidate['id']}"])
+                self.assertEqual(
+                    candidate["steps"], [self.expected_step(official_id, candidate["id"], step) for step in official["steps"]]
+                )
+                self.assertIn(plan.CANDIDATE_SCRIPT, candidate["tool_dependencies"])
+
+    def test_triggers_and_plan_contract_agree(self) -> None:
+        refresh = [
+            step["probe_id"]
+            for job in self.candidates
+            for step in job["steps"]
+            if step["environment"]["GATEWAY_TRIGGER"] == plan.CANDIDATE_TRIGGER_ACCOUNT_REFRESH
+        ]
+        self.assertEqual(refresh, ["v4-oauth-refresh"])
+        for job in self.candidates:
+            for step in job["steps"]:
+                with self.subTest(probe=step["probe_id"]):
+                    self.assertEqual(step["environment"]["GATEWAY_TRIGGER"], plan.candidate_trigger(step["probe_id"]))
+                    synthetic = "--acknowledge-synthetic-responses" in step["argv"]
+                    self.assertEqual(synthetic, bool(v5.PROBES[step["probe_id"]].response_plan))
+                    self.assertEqual("--upstream-ip" in step["argv"], not synthetic)
+                    self.assertNotIn("{credentials_file}", step["argv"])
 
 
 class IdentityLayerTests(unittest.TestCase):
@@ -847,6 +1191,8 @@ class IdentityLayerTests(unittest.TestCase):
             "claude_upgrade_rules_2_1_285.json": "control",
             "claude_upgrade_plan.py": "control",
             "claude_upgrade_scenarios.schema.json": "control",
+            "claude_run_candidate_capture.sh": "wire_producer",
+            "claude_fw_e_relay.py": "wire_producer",
         }
         for name, layer in expected.items():
             with self.subTest(name=name):
