@@ -35,7 +35,8 @@ node 与 TypeScript 取宿主数据根下的受管运行时（Claude 身份策�
 * 批准批次：只有 seal 批准 ``vc1-03-seal-approve``（带预览给出的 review_sha256）。
 
 动作 ID 不用 Codex 的 ``seal-official-preview``／``seal-official-approve``：监督器按那两个名字执行 Codex 的断言证据包门禁，
-Claude 没有断言包。VC-1 seal 不给 ``--target-inventory``／``--sink-containment`` 时取本动作的规范产物（``canonical_outputs``）；
+Claude 没有断言包。监督器的 post-run-tooling 判据与 seal 链续派协议经适配器认这三个动作 ID（``claude_upgrade_client_adapter``
+的 ``OFFICIAL_POST_RUN_TOOLING_ITEM_IDS`` 与 ``official_attempt_free_post_run_action``：静态分析不指向 attempt）。VC-1 seal 不给 ``--target-inventory``／``--sink-containment`` 时取本动作的规范产物（``canonical_outputs``）；
 显式给出且规范产物存在时两者必须逐字节相同。
 
 本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层；分析本身在

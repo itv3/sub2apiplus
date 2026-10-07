@@ -60,6 +60,10 @@ ROOT_CAUSE_CODES_PATH = Path(__file__).resolve().parent / "claude_root_cause_cod
 PROJECT_LEDGER_DIR_NAME = "upgrade-project-ledger-claude"
 # Claude 候选就绪探针在项目总账里的请求计量类别（B1-04 先定名；B4 落实 Claude 候选就绪探针时核对）。
 CANDIDATE_PROBE_ACCOUNTING_CATEGORY = "claude_candidate_readiness_probe/v1"
+# VC-1 封存批次（``claude_upgrade_static.vc1_seal_actions``）的零请求后处理阶段项：静态分析、seal 预览、seal 批准。
+# 监督器 post-run-tooling 判据与 seal 链续派协议经适配器认它们（修好接着跑：VC-1 续跑路径）；动作 ID 与静态分析模块的
+# 常量逐字相同（测试核对），这里写字面量，免得适配器一导入就加载静态分析模块。
+OFFICIAL_POST_RUN_TOOLING_ITEM_IDS = frozenset({"vc1-01-analyze-target", "vc1-02-seal-preview", "vc1-03-seal-approve"})
 # Claude Campaign ID（如 ``claude-code-2_1_226-fw-g-production-replacement-v2-20260821``）不匹配根因模块的 Codex
 # Campaign ID 模式，必须在调用根因 API 前由适配器拒绝；版本号分隔符兼容点与下划线。
 CLAUDE_CAMPAIGN_ID_RE = re.compile(r"claude-code-\d+[._]\d+[._]\d+")
@@ -106,3 +110,31 @@ def deploy_receipt_identity(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 
     identity = payload.get("identity") if payload.get("client") == "claude" else None
     return identity if isinstance(identity, Mapping) else {}
+
+
+def official_attempt_free_post_run_action(action: Any, campaign_dir: Any) -> bool:
+    """VC-1 动作是否是不绑定 attempt 的零请求后处理动作：只有封存批次的静态分析（修好接着跑：VC-1 续跑路径）。
+
+    静态分析（``vc1-01-analyze-target``）读 Campaign 冻结的官方二进制、只写 ``official/static-analysis/``，不指向任何官方
+    attempt，监督器据此把它从「全部动作指向同一 attempt」的目标解析里排除。认定按形态精确闭合，与阶段幂等重派合同同一
+    判定（``claude_upgrade_batch._vc1_seal_action_shape``）：action_id 与唯一 item_id 都是该动作 ID，命令是受管 Python
+    对 ``claude_upgrade.py`` 的直接调用 ``analyze-target --campaign-dir <本 Campaign>``，没有别的参数——给别的命令套上
+    这个项名换不来可恢复分类。任何结构非法或判定失败都返回假（监督器的判据只能因此不成立，不会因此抛错）。
+    """
+
+    try:
+        if __package__ in {None, ""}:
+            import claude_upgrade_batch
+        else:
+            from . import claude_upgrade_batch
+
+        action_id = claude_upgrade_batch._static().ACTION_ID
+        if not isinstance(action, Mapping) or action.get("action_id") != action_id or action.get("item_ids") != [action_id]:
+            return False
+        command = action.get("command")
+        if not isinstance(command, list) or not command or not all(isinstance(value, str) for value in command):
+            return False
+        kind, _flags = claude_upgrade_batch._vc1_seal_action_shape(claude_upgrade_batch._orchestrator_argv(command), Path(campaign_dir))
+    except Exception:  # noqa: BLE001 —— 判定失败一律按「不是」处理，由监督器沿用原分类
+        return False
+    return kind == action_id

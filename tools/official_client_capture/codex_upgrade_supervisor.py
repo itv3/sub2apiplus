@@ -1757,10 +1757,23 @@ def _official_post_run_tooling_facts(
         return {"qualifies": False, "reasons": reasons, "facts": facts}
 
     facts["side"] = "official"
-    if not all(item in OFFICIAL_POST_RUN_TOOLING_ITEM_IDS for item in facts["execute_items"]):
+    # Claude 升级（修好接着跑：VC-1 续跑路径）：阶段项闭集与「不绑定 attempt 的零请求后处理动作」按清单归属客户端经适配器
+    # 取（D4，不写客户端分支）。Codex 的闭集就是本模块常量 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS，Codex 没有不绑定 attempt
+    # 的动作（判定恒为假），判据、事实结构与原因文案逐字不变。Claude 的静态分析（vc1-01-analyze-target）不指向 attempt，
+    # 由适配器按命令形态精确认定后从目标解析里排除；其余动作照旧必须指向本 Campaign 同一个官方 attempt。
+    try:
+        adapter = upgrade_client_adapter.adapter_for(run_manifest_client(inner_manifest))
+    except SupervisorError as error:
+        return fail(str(error))
+    if not all(item in adapter.official_post_run_tooling_item_ids for item in facts["execute_items"]):
         return fail("execute_items 含非官方 seal 链阶段项")
     actions = inner_manifest.get("actions")
-    targets = [_seal_chain_attempt_target(action) for action in actions] if isinstance(actions, list) and actions else [None]
+    chain_actions = (
+        [action for action in actions if not adapter.official_attempt_free_post_run_action(action, campaign_dir)]
+        if isinstance(actions, list) and actions
+        else []
+    )
+    targets = [_seal_chain_attempt_target(action) for action in chain_actions] if chain_actions else [None]
     if any(target is None for target in targets) or len(set(targets)) != 1:
         return fail("动作不全是指向同一 attempt 的官方 seal 链动作")
     target_campaign, side, _candidate, attempt_id = targets[0]  # type: ignore[misc]
@@ -9805,15 +9818,29 @@ def _validate_batched_seal_chain_successor(
     successor_actions = successor_manifest.get("actions")
     if not isinstance(prior_actions, list) or not prior_actions or not isinstance(successor_actions, list) or not successor_actions:
         return _protocol_reject("前序或后继批次没有动作")
-    prior_targets = {_seal_chain_attempt_target(action) for action in prior_actions}
-    successor_targets = {_seal_chain_attempt_target(action) for action in successor_actions}
+    # Claude 升级（修好接着跑：VC-1 续跑路径）：VC-1 的阶段项闭集与「不绑定 attempt 的零请求后处理动作」经清单归属客户端
+    # 的适配器取（D4；前后同客户端已由 _same_client_batched_runs 保证）。Codex 的闭集就是 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS、
+    # 没有不绑定 attempt 的动作，判定逐字不变；Claude 的静态分析不指向 attempt，从目标解析里排除，排除后前序与后继都还要
+    # 有指向同一 attempt 的 seal 链动作。VC-5／VC-6 不经适配器，判定不变。
+    adapter = upgrade_client_adapter.adapter_for(run_manifest_client(successor_manifest)) if phase == "VC-1" else None
+    if adapter is not None:
+        prior_chain = [action for action in prior_actions if not adapter.official_attempt_free_post_run_action(action, campaign_dir)]
+        successor_chain = [
+            action for action in successor_actions if not adapter.official_attempt_free_post_run_action(action, campaign_dir)
+        ]
+        if not prior_chain or not successor_chain:
+            return _protocol_reject("前序或后继没有指向 attempt 的 seal 链动作")
+    else:
+        prior_chain, successor_chain = prior_actions, successor_actions
+    prior_targets = {_seal_chain_attempt_target(action) for action in prior_chain}
+    successor_targets = {_seal_chain_attempt_target(action) for action in successor_chain}
     if None in prior_targets or None in successor_targets:
         return _protocol_reject("前序或后继含非 seal 链（含 canonical）动作")
     label = f"{phase} seal 链续派"
     if len(prior_targets) != 1 or successor_targets != prior_targets:
         raise SupervisorError(f"{label}：后继 seal 链动作必须与失败批次指向同一个 attempt。")
     target_campaign, side, candidate_id, attempt_id = next(iter(prior_targets))
-    allowed_items = OFFICIAL_POST_RUN_TOOLING_ITEM_IDS if phase == "VC-1" else None
+    allowed_items = adapter.official_post_run_tooling_item_ids if adapter is not None else None
     execute = successor_manifest.get("execute_items")
     if (
         not isinstance(execute, list)

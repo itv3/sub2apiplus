@@ -329,8 +329,12 @@ from urllib.parse import urlsplit
 # 就最多等到父 run 起动后 30 秒，已写出的仍按 2 秒判卡住、到时处理不变（原先 no-op 批次在高负载下被误封
 # audit-incomplete，引导首批成为不可信前序）；campaign-run 返回值以落盘终态为准，不一致时附 requested_terminal。
 # control 层变化，监督器摘要随之变化；Codex 的 wire、evidence 与评估器摘要不变。
+# 2026-10-07（修好接着跑：Claude VC-1 续跑路径）：VC-1 post-run-tooling 判据（_official_post_run_tooling_facts）与 seal 链
+# 续派协议（_validate_batched_seal_chain_successor）的阶段项闭集、不绑定 attempt 的零请求后处理动作改经适配器按清单归属
+# 客户端取（Codex 取原常量、判定恒为假，判定逐字不变；Claude 认封存批次三个动作，静态分析按形态精确认定）。control 层变化，
+# 监督器摘要随之变化；Codex 的 wire、evidence 与评估器摘要不变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "b06295972d06a1d53c0ef2f2ef50eaa3cd5082da4f7e0ee6263b940e8bad8f33"
+    "413c3e1b02ac444be5c1a6e05a9138bed9da51049e95a803733323735c4693f4"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

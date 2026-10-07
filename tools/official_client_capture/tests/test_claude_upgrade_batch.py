@@ -15,8 +15,8 @@
   在 PATH 最前，子进程里的构建复算落到它们）——Store 到 ``candidate_sealed``、VC-4 checkpoint 写出、阶段完成登记；VC-4 的
   阶段幂等重派证明：构建动作可逐字重派并绑定 checkpoint，计划动作输出已存在即拒绝。
 * VC-1 封存批次续跑（``Vc1SealBatchReplayTests``）：总计划冻结前序只读复用、VC-1 未封存的 Campaign 派发驱动用的
-  ``vc1_seal_actions`` 预览批次，静态分析真实失败 → 按 execution-failure 收账进阶段审核（共享 post-run-tooling 判据只认
-  Codex 阶段项名）、对账前 N+1 被拒 → ``reconcile-supervisor-run`` 按 VC-1 封存批次合同写证明 → N+1 逐字重派（动作子进程
+  ``vc1_seal_actions`` 预览批次，静态分析真实失败 → 按 execution-failure 收账进阶段审核（只读复用路径没有官方 attempt，
+  post-run-tooling 判据不成立）、对账前 N+1 被拒 → ``reconcile-supervisor-run`` 按 VC-1 封存批次合同写证明 → N+1 逐字重派（动作子进程
   替身成功）由共享阶段审核协议承接。采集路径的合同判据见 ``test_claude_upgrade_recovery.Vc1SealBatchContractTests``。
 * 接口与对照：checkpoint 坐标与重放（含 r≥2 与 VC-5 重开）与 Codex 逐项相同；队列清单除合同名与 ``client`` 外与 Codex 的
   staging 清单相同、重派身份（12 字段＋动作三元组）相等；``vc_control`` 语义；阶段结果读取；阶段幂等重派证明的形态闭合与
@@ -886,7 +886,8 @@ class Vc1SealBatchReplayTests(_RealTreeBatchCase):
             [item["action_id"] for item in actions], [claude_upgrade_static.ACTION_ID, claude_upgrade_static.SEAL_PREVIEW_ACTION_ID]
         )
 
-        # 批次 2：静态分析真实失败，账本进阶段审核（不是 post-run-tooling：共享判据只认 Codex 阶段项）。
+        # 批次 2：静态分析真实失败，账本进阶段审核（不是 post-run-tooling：只读复用路径没有官方 attempt，判据不成立；采集路径的
+        # 封存批次失败归 post-run-tooling，见 test_claude_upgrade_recovery.SupervisorRunReconcileTests）。
         code, failed, stderr = self.dispatch(campaign, "VC-1", 2, actions)
         self.assertIsNotNone(failed, stderr)
         self.assertEqual((code, failed["campaign_run"]["reason"]), (1, f"action-failed:{claude_upgrade_static.ACTION_ID}"), stderr)

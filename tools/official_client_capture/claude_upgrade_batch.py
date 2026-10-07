@@ -55,9 +55,11 @@ b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 �
   本候选的 ``candidate_frozen`` 事实与 Store CandidateBuildReceipt 引用进 ``outputs``。
 * VC-1：首批之后的封存批次（``claude_upgrade_static.vc1_seal_actions``：预览批次 ``vc1-01-analyze-target`` →
   ``vc1-02-seal-preview``，批准批次 ``vc1-03-seal-approve``）有合同，与 Codex D-10（``_official_seal_chain_stage_replay_actions``）
-  同构。为什么放在这里：共享监督器的 VC-1 post-run-tooling 判据与 seal 链续派协议只认 Codex 的阶段项名，Claude 故意不用
-  那几个名字（避开 Codex 的断言证据包门禁），所以 Claude 封存批次失败一律按 execution-failure 收账、进阶段审核，只能经本合同
-  取得重派许可。判据：
+  同构。和共享监督器的分工：监督器的 VC-1 post-run-tooling 判据与 seal 链续派协议经适配器认 Claude 封存批次的阶段项名
+  （``official_post_run_tooling_item_ids``，静态分析经 ``official_attempt_free_post_run_action`` 按形态认定为不绑定 attempt
+  的零请求后处理），采集路径的封存批次失败满足五条文件事实时升级为 post-run-tooling：对账后逐字重派，或改派同一 attempt
+  的新预览批次。不满足的情形——只读复用路径（没有 attempt）、超时或被杀等不可升级的失败——按 execution-failure 进阶段
+  审核，由本合同判定能否原样重派。判据：
 
   - 形态：action_id 与唯一 item_id 等于命令形态判定的种类——``analyze-target --campaign-dir``；``capture-official seal
     --campaign-dir`` 可带 ``--attempt-id``、``--discovery-dispositions``，带 ``--approve-seal-sha256`` 即批准；种类不重复，
@@ -75,8 +77,8 @@ b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 �
   或 ``official/seal/`` 下每个普通文件、官方阶段结果与本 Campaign 的 Discovery／Evidence 事实（seal 动作）。静态分析与 seal
   的落盘都是只写一次或重放复用，逐字重派在已写半成品上续作。
 
-  剩余缺口：批准批次失败、修复又改变了 seal 代号时，后继要换成新的预览批次——那不是逐字重派，阶段审核协议不承接，共享 seal
-  链续派协议又只认 Codex 阶段项，目前只能显式停线。VC-5、VC-6 随 B4。
+  阶段审核只承接原样重派：经本合同进审核的批准批次若修复又改变了 seal 代号，本合同拒绝（旧预览不能再批准），只能显式
+  停线；同样的情形经 post-run-tooling 收账时由 seal 链续派协议改派新的预览批次。VC-5、VC-6 随 B4。
 
 四、父监督器上下文的退出码（``campaign_run_aware_exit_code``）
 =========================================================
@@ -823,7 +825,8 @@ def _vc1_frozen_preview(campaign_dir: Path, attempt_id: str, approve: str, dispo
     current_semantics = _orchestrator()._tool_identity(include_git=False)["evidence_semantics_sha256"]
     if key.get("tool_files_sha256") != current_files or key.get("evidence_semantics_sha256") != current_semantics:
         raise ConfigurationError(
-            "冻结 seal 预览的工具身份与当前受管代码不一致（修复改变了 seal 代号）：批准逐字重派必然被拒绝，须重新预览"
+            "冻结 seal 预览的工具身份与当前受管代码不一致（修复改变了 seal 代号）：批准逐字重派必然被拒绝；须改派同一 attempt"
+            "的新预览批次，阶段审核不承接非逐字后继"
         )
     return {item.relative_to(campaign_dir).as_posix(): file_sha256(item) for item in (path, draft)}
 

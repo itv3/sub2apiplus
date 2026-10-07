@@ -53,3 +53,13 @@ def deploy_receipt_identity(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     """Codex 部署收据的工具五摘要就在收据顶层（原写死在对账器 ``_deployment_receipt`` 里，取值逐字不变）。"""
 
     return payload
+
+
+def official_attempt_free_post_run_action(action: Any, campaign_dir: Any) -> bool:
+    """VC-1 官方零请求后处理批次里不绑定 attempt 的动作：Codex 没有（断言包与 seal 动作都指向同一个官方 attempt），恒为假。
+
+    监督器 post-run-tooling 判据与 seal 链续派协议经适配器调用它；恒为假时两处判定与改造前逐字相同。
+    """
+
+    del action, campaign_dir
+    return False

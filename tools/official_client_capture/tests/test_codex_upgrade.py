@@ -19587,6 +19587,61 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(supervisor.SupervisorError, "同一个 attempt"):
                 supervisor._validate_batched_seal_chain_successor(prior_state, inner, run_dir, crossed, campaign_dir=campaign_dir)
 
+    def test_b0_vc1_post_run_tooling_codex_unchanged_by_client_adapter(self) -> None:
+        """修好接着跑（Claude VC-1 续跑路径）：监督器 VC-1 post-run-tooling 判据与 seal 链续派协议改经适配器取阶段项闭集
+        与「不绑定 attempt 的零请求后处理动作」，Codex 行为逐字不变——Codex 闭集就是监督器原常量，不绑定 attempt 的判定
+        恒为假；Claude 封存批次的静态分析混进 Codex 清单时，两处判定与原因文案都与改造前相同。"""
+
+        from tools.official_client_capture import upgrade_client_adapter
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        adapter = upgrade_client_adapter.adapter_for("codex")
+        self.assertIs(adapter.official_post_run_tooling_item_ids, supervisor.OFFICIAL_POST_RUN_TOOLING_ITEM_IDS)
+        self.assertEqual(
+            supervisor.OFFICIAL_POST_RUN_TOOLING_ITEM_IDS,
+            frozenset({"prepare-official-assertion-bundle", "seal-official-preview", "seal-official-approve"}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            data_root = mock.patch.object(
+                codex_upgrade.codex_upgrade_evidence_permissions, "_managed_data_root",
+                return_value=Path(fixture["data"]).resolve(strict=True),
+            )
+            data_root.start()
+            self.addCleanup(data_root.stop)
+            campaign_dir = fixture["campaign_dir"]
+            attempt_root = self._b0_completed_official_attempt(fixture, job_evidence=True)
+            inner = self._b0_vc1_seal_batch_manifest(fixture, attempt_root.name)
+            later = supervisor._epoch_to_utc(time.time() + 5)
+            self.assertTrue(supervisor.post_run_tooling_facts(campaign_dir, inner, run_started_at_utc=later)["qualifies"])
+            # Claude 封存批次的静态分析（受管 Python 直接调 claude_upgrade.py analyze-target，形态与 Claude 驱动生成的相同）：
+            # Codex 适配器不认它是不绑定 attempt 的动作。
+            analyze = {
+                "action_id": "vc1-01-analyze-target", "operation": "VC-1:vc1-01-analyze-target", "timeout_seconds": 5.0,
+                "item_ids": ["vc1-01-analyze-target"],
+                "command": [sys.executable, str(Path(codex_upgrade.__file__).with_name("claude_upgrade.py")),
+                            "analyze-target", "--campaign-dir", str(campaign_dir)],
+            }
+            self.assertFalse(adapter.official_attempt_free_post_run_action(analyze, campaign_dir))
+            for label, manifest, reason in (
+                ("项名不在 Codex 闭集",
+                 dict(inner, actions=[analyze, *inner["actions"]], execute_items=["vc1-01-analyze-target", *inner["execute_items"]]),
+                 "execute_items 含非官方 seal 链阶段项"),
+                ("动作不指向 attempt", dict(inner, actions=[analyze, *inner["actions"]]), "动作不全是指向同一 attempt 的官方 seal 链动作"),
+            ):
+                with self.subTest(label=label):
+                    result = supervisor.post_run_tooling_facts(campaign_dir, manifest, run_started_at_utc=later)
+                    self.assertEqual((result["qualifies"], result["reasons"]), (False, [reason]))
+            # seal 链续派：前序或后继混进不指向 attempt 的动作即形态不符，返回 False 交给其它协议（在任何对账核对之前）。
+            successor = dict(inner, batch_sequence=3, actions=[analyze, inner["actions"][1]])
+            self.assertFalse(supervisor._validate_batched_seal_chain_successor({}, inner, root, successor, campaign_dir=campaign_dir))
+            mixed_prior = dict(inner, actions=[analyze, *inner["actions"]])
+            only_preview = dict(inner, batch_sequence=3, actions=[inner["actions"][1]])
+            self.assertFalse(
+                supervisor._validate_batched_seal_chain_successor({}, mixed_prior, root, only_preview, campaign_dir=campaign_dir)
+            )
+
     def _evolution_patches(
         self,
         invalidated: list[str],

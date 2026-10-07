@@ -206,6 +206,11 @@ class CodexMemberValueTests(unittest.TestCase):
         self.assertEqual(self.adapter.project_ledger_dir_name, "upgrade-project-ledger")
         self.assertEqual(self.adapter.project_ledger_plan_schema, "upgrade-project-ledger-plan/v1")
         self.assertEqual(self.adapter.candidate_probe_accounting_category, "candidate_readiness_models_probe/v1")
+        # VC-1 续跑路径：阶段项闭集就是监督器原常量本身，Codex 没有不绑定 attempt 的零请求后处理动作。
+        from tools.official_client_capture import codex_upgrade_supervisor
+
+        self.assertIs(self.adapter.official_post_run_tooling_item_ids, codex_upgrade_supervisor.OFFICIAL_POST_RUN_TOOLING_ITEM_IDS)
+        self.assertFalse(self.adapter.official_attempt_free_post_run_action({"action_id": "vc1-01-analyze-target"}, Path("/")))
 
     def test_member_patches_are_visible_through_adapter(self) -> None:
         from tools.official_client_capture import codex_upgrade_reconciler
@@ -235,6 +240,43 @@ class ClaudeBindingTests(unittest.TestCase):
         self.assertEqual(adapter.root_cause_codes_path, claude.ROOT_CAUSE_CODES_PATH)
         self.assertTrue(adapter.requires_project_ledger("formal", "2.1.286"))
         self.assertFalse(adapter.requires_project_ledger("preflight_only", "2.1.286"))
+
+    def test_claude_vc1_post_run_tooling_members(self) -> None:
+        """VC-1 续跑路径：阶段项闭集等于封存批次三个动作 ID；不绑定 attempt 的动作只有形态精确闭合的静态分析。"""
+
+        from tools.official_client_capture import claude_upgrade_batch as batch
+        from tools.official_client_capture import claude_upgrade_static as static
+
+        adapter = uca.adapter_for("claude")
+        self.assertEqual(
+            adapter.official_post_run_tooling_item_ids,
+            frozenset({static.ACTION_ID, static.SEAL_PREVIEW_ACTION_ID, static.SEAL_APPROVE_ACTION_ID}),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory).resolve() / "campaign"
+            other = Path(directory).resolve() / "other"
+            campaign.mkdir()
+            other.mkdir()
+            analyze = batch.managed_action(static.ACTION_ID, "VC-1:a", ["analyze-target", "--campaign-dir", campaign], item_ids=[static.ACTION_ID])
+            self.assertTrue(adapter.official_attempt_free_post_run_action(analyze, campaign))
+            seal = batch.managed_action(
+                static.ACTION_ID, "VC-1:s", ["capture-official", "seal", "--campaign-dir", campaign, "--attempt-id", "a1"],
+                item_ids=[static.ACTION_ID],
+            )
+            refused = {
+                "不是映射": [analyze],
+                "别的项名": dict(analyze, item_ids=["vc1-02-seal-preview"]),
+                "别的动作 ID": dict(analyze, action_id="vc1-02-seal-preview"),
+                "别的 Campaign": dict(analyze, command=[*analyze["command"][:-1], str(other)]),
+                "多余参数": dict(analyze, command=[*analyze["command"], "--extra", "x"]),
+                "别的解释器": dict(analyze, command=["/bin/sh", *analyze["command"][1:]]),
+                "seal 命令套项名": seal,
+                "命令不是字符串列表": dict(analyze, command=[*analyze["command"][:-1], 1]),
+            }
+            for label, action in refused.items():
+                with self.subTest(refused=label):
+                    self.assertFalse(adapter.official_attempt_free_post_run_action(action, campaign))
+            self.assertFalse(adapter.official_attempt_free_post_run_action(analyze, None))
 
     def test_facade_exposes_only_surface_names(self) -> None:
         facade = uca.OrchestratorFacade("claude")

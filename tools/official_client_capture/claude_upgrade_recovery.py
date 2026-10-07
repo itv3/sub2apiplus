@@ -8,11 +8,14 @@
   不一致即拒绝批准 → 操作员 ``reconcile-attempt --approve-recovery-sha256`` 批准 → ``resume --rerun-failed --recovery-preview``
   在 Campaign 租约下建新 attempt：复用已完成作业（只读承接原证据），只执行预览冻结的执行集合。
 * 无预约（父监督器 run 在预约之前失败）：``reconcile-supervisor-run``（共享）入账判定，按提示以 N+1 批次重派。
-* 封存批次（首批之后的静态分析与 seal，``vc1-claude.sh`` 派发）零请求失败：共享监督器的 post-run-tooling 判据只认 Codex
-  的阶段项名，Claude 的 ``vc1-0X-*`` 动作失败按 execution-failure 收账、账本进 ``stage_review_required``；
-  ``reconcile-supervisor-run`` 按 ``claude_upgrade_batch`` 的 VC-1 封存批次阶段幂等重派合同写证明、重开 VC-1，再重跑
-  ``vc1-claude.sh`` 以 N+1 逐字重派同一批次（共享阶段审核协议承接）。合同不成立时（attempt 被隔离或作废、仍有失败 Job、
-  已封存、修复改变了 seal 代号等）留在阶段审核，按对账提示走 ``reconcile-attempt`` 或显式停线。
+* 封存批次（首批之后的静态分析与 seal，``vc1-claude.sh`` 派发）零请求失败，分两种收账：
+  - 采集路径、失败可升级（动作报错或非零退出）且五条文件事实成立：共享监督器经适配器认 Claude 的 ``vc1-0X-*`` 阶段项
+    （静态分析按形态认定为不绑定 attempt 的零请求后处理），升级为 post-run-tooling；``reconcile-supervisor-run`` 入账后
+    逐字重派同一批次，或修复改变了 seal 预览时改派同一 attempt 的新预览批次（共享 seal 链续派协议承接）。
+  - 其余（只读复用路径没有 attempt、超时或被杀等不可升级的失败）：按 execution-failure 收账、账本进
+    ``stage_review_required``；``reconcile-supervisor-run`` 按 ``claude_upgrade_batch`` 的 VC-1 封存批次阶段幂等重派合同写
+    证明、重开 VC-1，再重跑 ``vc1-claude.sh`` 以 N+1 逐字重派（共享阶段审核协议承接）。合同不成立时（attempt 被隔离或
+    作废、仍有失败 Job、已封存、修复改变了 seal 代号等）留在阶段审核，按对账提示走 ``reconcile-attempt`` 或显式停线。
 * 封存后：``account-sealed-official``（共享）把已封存官方阶段的请求写入项目总账；只读复用封存（零请求）没有可入账的请求。
 
 二、续跑闭集（与共享恢复预览同一公式，``recovery_plan``）

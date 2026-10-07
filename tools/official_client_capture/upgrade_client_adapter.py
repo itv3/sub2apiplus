@@ -394,6 +394,12 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     # 事实）、合成 Campaign 的版本与归属字段、父 run 队列清单合同、动作命令的客户端参数、工具身份额外绑定的文件、失败父 run 的
     # 清单形状。
     "atomic_rehearsal_profile": "module",
+    # VC-1 官方零请求后处理（修好接着跑：VC-1 续跑路径）：监督器 post-run-tooling 判据与 seal 链续派协议认的阶段项闭集
+    # （Codex 是断言包、seal 预览与 seal 批准三项，Claude 是封存批次的静态分析、seal 预览与 seal 批准三项），以及
+    # (action, campaign_dir) → 该 VC-1 动作是否不绑定 attempt 的零请求后处理动作（Codex 没有，恒为假；Claude 只有命令
+    # 形态精确闭合的静态分析）。
+    "official_post_run_tooling_item_ids": "value",
+    "official_attempt_free_post_run_action": "callable",
 })
 
 
@@ -435,6 +441,9 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "closeout_profile": ("codex_upgrade_vc0_closeout", None),
         # B5a-09 续：Codex 原子双跑画像就是共享模块本身（合同名与取值是改造前写死的原值）。
         "atomic_rehearsal_profile": ("codex_upgrade_campaign_run_rehearsal_receipt", None),
+        # VC-1 续跑路径：Codex 的阶段项闭集就是监督器原常量（原位不动），不绑定 attempt 的动作判定恒为假。
+        "official_post_run_tooling_item_ids": ("codex_upgrade_supervisor", "OFFICIAL_POST_RUN_TOOLING_ITEM_IDS"),
+        "official_attempt_free_post_run_action": ("codex_upgrade_client_adapter", "official_attempt_free_post_run_action"),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -466,6 +475,8 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "job_contract_replay": ("claude_upgrade_job_rehearsal", "job_contract_replay"),  # B2-10
         "closeout_profile": ("claude_upgrade_vc0_closeout", None),  # B2-11
         "atomic_rehearsal_profile": ("claude_upgrade_atomic_rehearsal", None),  # B5a-09 续
+        "official_post_run_tooling_item_ids": ("claude_upgrade_client_adapter", "OFFICIAL_POST_RUN_TOOLING_ITEM_IDS"),  # VC-1 续跑路径
+        "official_attempt_free_post_run_action": ("claude_upgrade_client_adapter", "official_attempt_free_post_run_action"),  # VC-1 续跑路径
     }),
 })
 

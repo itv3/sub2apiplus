@@ -38,7 +38,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                  "所在对象、有效 wire 身份），Codex 绑定到原写法或原函数；B2-10 新增 Job 演练的四个适配器成员（画像模块、"
                                  "执行合同构造、二进制表、合同重放），Codex 绑定到 Job 演练收据模块本身与它的原函数体；B2-11 新增"
                                  "收口画像成员 closeout_profile（模块型），Codex 绑定到 VC-0 收口模块本身；B5a-09 续新增原子双跑画像成员 "
-                                 "atomic_rehearsal_profile（模块型），Codex 绑定到原子双跑收据模块本身",
+                                 "atomic_rehearsal_profile（模块型），Codex 绑定到原子双跑收据模块本身；VC-1 续跑路径新增两个成员"
+                                 "（official_post_run_tooling_item_ids 值型、official_attempt_free_post_run_action 可调用型），Codex "
+                                 "绑定到监督器原常量 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS 与恒为假的新函数",
     "codex_upgrade_vc0_closeout.py": "B2-11 收口流程加客户端作用域（adapter_scope，缺省 Codex）：共享流程里 12 个编排器引用经服务面"
                                      "（Codex 的 orchestrator 就是 codex_upgrade 模块本身，测试对它的替身照常生效），五个合同名与两个画像函数"
                                      "（validate_inputs、recover_formal_plan_arguments）经收口画像（Codex 画像是本模块，取值与原值逐字相同），"
@@ -59,7 +61,8 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                               "5a 收口只改 assert_formal_compatible 的 docstring（两客户端都要求存储路由与失败生命周期两项探针摘要），"
                                               "代码不变",
     "codex_upgrade_client_adapter.py": "B1-01 Codex 适配器成员取值（逐字等于改造前写死的名字）；B2-08 新增两个成员函数，取值逐字等于对账器原写法"
-                                       "（after 探针加恢复收据、部署收据顶层五摘要）",
+                                       "（after 探针加恢复收据、部署收据顶层五摘要）；VC-1 续跑路径新增 official_attempt_free_post_run_action"
+                                       "（恒为假：Codex 的 VC-1 seal 链动作都指向同一个官方 attempt）",
     "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同；B3-06 阶段审核后继协议"
                                    "（_validate_batched_stage_review_successor，读侧闭包外）只对正要派发的直接后继复算实物，已执行过的"
                                    "历史后继只重放冻结许可（原先阶段内还有后续批次时，成功的后继不写账本事件，复算看到后继自己的产物"
@@ -67,6 +70,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "stop 等 monitor 收口时，monitor 还没写出首条 watchdog 心跳（冷启动）就最多等到父 run 起动后 30 秒"
                                    "（DEFAULT_MONITOR_STARTUP_GRACE_SECONDS、_monitor_watchdog_started），已写出的仍按 2 秒判卡住、到时处理不变；"
                                    "campaign-run 返回值以落盘终态为准，与请求不一致时附 requested_terminal（_sealed_terminal_reason）。"
+                                   "VC-1 续跑路径：_official_post_run_tooling_facts 与 _validate_batched_seal_chain_successor 的阶段项闭集、"
+                                   "不绑定 attempt 的零请求后处理动作改经适配器按清单归属客户端取（Codex 取原常量、判定恒为假，判定、"
+                                   "事实结构与原因文案逐字不变）；常量 OFFICIAL_POST_RUN_TOOLING_ITEM_IDS 原位不动。"
                                    "改动与新增的符号都在 wire、evidence 与评估读侧闭包外",
     "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；读侧闭包内 7 个函数原位不动；B2-08 读侧闭包外的 _environment_facts、"
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "

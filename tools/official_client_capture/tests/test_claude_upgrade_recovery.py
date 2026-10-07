@@ -642,25 +642,110 @@ class SupervisorRunReconcileTests(RecoveryChainCase):
             again = self.run_main(["reconcile-supervisor-run", "--campaign-dir", str(campaign), "--run-dir", str(run_dir)])[1]
         self.assertTrue(again["batch"]["reused"])
 
+    def _claude_batch(self, actions: list[dict[str, Any]], *, sequence: int) -> dict[str, Any]:
+        """Claude 新合同（official-client-campaign-run）的 VC-1 父 run 内层清单：动作按 action_id 排序，执行项是动作项的并集。"""
+
+        ordered = sorted((dict(action) for action in actions), key=lambda action: str(action["action_id"]))
+        return {
+            "schema_version": supervisor.OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA,
+            "client": "claude",
+            "campaign_id": CAMPAIGN_ID,
+            "phase": "VC-1",
+            "batch_sequence": sequence,
+            "batch_sha256": str(sequence) * 64,
+            "deadline_seconds": 3600,
+            "no_op": False,
+            "execute_items": sorted({item for action in ordered for item in action["item_ids"]}),
+            "reuse_items": [],
+            "actions": ordered,
+        }
+
     def test_seal_chain_zero_request_failure_is_post_run_tooling(self) -> None:
-        """共享 post-run-tooling 判据认得 Claude 的 seal 命令与 attempt 布局（动作取 Codex 阶段项名时）。Claude 驱动的封存批次
-        不用这些名字（``vc1-0X-*``），失败按 execution-failure 进阶段审核，由 ``Vc1SealBatchContractTests`` 的合同承接。"""
+        """Claude 封存批次（驱动生成的 ``vc1-0X-*`` 动作、Claude 新合同清单）零请求失败：监督器经适配器认 Claude 的阶段项，
+        静态分析按形态认定为不绑定 attempt 的零请求后处理，归为 post-run-tooling；批准批次失败对账后，seal 链续派协议承接
+        同一 attempt 的 N+1 新预览批次（修复改变了 seal 代号的情形），拒绝指向别的 attempt 或含未登记阶段项的后继。"""
 
         campaign = self.build_recovery_campaign()
         attempt = self.capture_run(campaign)
         self.assertEqual(attempt["status"], "awaiting_receipts")
-        command = ["python3", "claude_upgrade.py", *self.seal_argv(campaign, attempt["attempt_id"])]
+        attempt_id = attempt["attempt_id"]
+        with self.chain_patched():
+            preview_actions = static.vc1_seal_actions(campaign)
+            approve_actions = static.vc1_seal_actions(campaign, approve_seal_sha256="a" * 64)
+        preview_batch = self._claude_batch(preview_actions, sequence=2)
+        approve_batch = self._claude_batch(approve_actions, sequence=3)
+        later = supervisor._epoch_to_utc(time.time() + 5)
+        for label, inner in (("预览批次", preview_batch), ("批准批次", approve_batch)):
+            with self.subTest(batch=label):
+                facts = supervisor.post_run_tooling_facts(campaign, inner, run_started_at_utc=later)
+                self.assertTrue(facts["qualifies"], facts["reasons"])
+                self.assertEqual((facts["facts"]["side"], facts["facts"]["attempt_id"]), ("official", attempt_id))
+        # 静态分析的认定按形态精确闭合：别的 Campaign、套上项名的采集命令（会发真实请求）、多余参数都不算不绑定 attempt 的
+        # 动作，它们又不指向 attempt，判据不成立；Codex 归属的清单不认 Claude 项名。
+        analyze, seal_preview = preview_batch["actions"]
+        forged = {
+            "别的 Campaign": dict(analyze, command=[*analyze["command"][:-1], str(self.root)]),
+            "采集命令套项名": batch.managed_action(
+                static.ACTION_ID, "VC-1:x", ["capture-official", "run", "--campaign-dir", campaign, "--acknowledge-live-requests"],
+                item_ids=[static.ACTION_ID],
+            ),
+            "多余参数": dict(analyze, command=[*analyze["command"], "--extra", "x"]),
+        }
+        for label, action in forged.items():
+            with self.subTest(forged=label):
+                manifest = self._claude_batch([action, seal_preview], sequence=2)
+                facts = supervisor.post_run_tooling_facts(campaign, manifest, run_started_at_utc=later)
+                self.assertFalse(facts["qualifies"])
+        codex_owned = dict(preview_batch, schema_version=supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA)
+        codex_owned.pop("client")
+        self.assertEqual(
+            supervisor.post_run_tooling_facts(campaign, codex_owned, run_started_at_utc=later)["reasons"],
+            ["execute_items 含非官方 seal 链阶段项"],
+        )
+
+        # 批准批次失败 → post-run-tooling 收账 → 对账。
         run_dir = _vc1_run_dir(
-            self, campaign, "seal", inner=self._batch(campaign, "seal-official-preview", command, ["seal-official-preview"]),
-            action_id="seal-official-preview", started_offset_seconds=1.0, post_run_tooling=True,
+            self, campaign, "approve", inner=approve_batch, action_id=static.SEAL_APPROVE_ACTION_ID,
+            started_offset_seconds=1.0, post_run_tooling=True,
         )
         with self.chain_patched(), self.segment_paths_forbidden():
             code, result, stderr = self.run_main(["reconcile-supervisor-run", "--campaign-dir", str(campaign), "--run-dir", str(run_dir)])
+        self.assertIsNotNone(result, stderr)
         self.assertEqual((code, result["status"]), (0, "recoverable"), stderr)
         receipt = _read(campaign / result["reconciliation_receipt"]["path"])
         self.assertEqual(receipt["failure_class"], "post-run-tooling")
-        self.assertEqual(receipt["run"]["action_diagnostic"]["post_run_tooling"]["attempt_id"], attempt["attempt_id"])
-        self.assertIn("官方 seal 链零请求失败已对账", result["next_command"])
+        self.assertEqual(receipt["run"]["action_diagnostic"]["post_run_tooling"]["attempt_id"], attempt_id)
+        self.assertIn("重新预览批次", result["next_command"])
+
+        # seal 链续派：N+1 换成同一 attempt 的新预览批次（静态分析不绑定 attempt，从目标解析里排除）。
+        prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        repreview = self._claude_batch(preview_actions, sequence=4)
+        with self.chain_patched():
+            self.assertTrue(
+                supervisor._validate_batched_seal_chain_successor(prior_state, approve_batch, run_dir, repreview, campaign_dir=campaign)
+            )
+            # 逐字相同的后继交给逐字重派协议（这里返回 False）。
+            self.assertFalse(
+                supervisor._validate_batched_seal_chain_successor(
+                    prior_state, approve_batch, run_dir, dict(approve_batch, batch_sequence=4), campaign_dir=campaign
+                )
+            )
+            other = dict(seal_preview, command=[token if token != attempt_id else "attempt-other" for token in seal_preview["command"]])
+            with self.assertRaisesRegex(supervisor.SupervisorError, "同一个 attempt"):
+                supervisor._validate_batched_seal_chain_successor(
+                    prior_state, approve_batch, run_dir, self._claude_batch([analyze, other], sequence=4), campaign_dir=campaign
+                )
+            unregistered = dict(seal_preview, action_id="seal-official-preview", item_ids=["seal-official-preview"])
+            with self.assertRaisesRegex(supervisor.SupervisorError, "只能含零请求 seal 链阶段项"):
+                supervisor._validate_batched_seal_chain_successor(
+                    prior_state, approve_batch, run_dir, self._claude_batch([analyze, unregistered], sequence=4), campaign_dir=campaign
+                )
+            # 只剩静态分析（没有指向 attempt 的 seal 链动作）的后继形态不符。
+            self.assertFalse(
+                supervisor._validate_batched_seal_chain_successor(
+                    prior_state, approve_batch, run_dir, self._claude_batch([analyze], sequence=4), campaign_dir=campaign
+                )
+            )
 
 
 class Vc1SealBatchContractTests(RecoveryChainCase):
