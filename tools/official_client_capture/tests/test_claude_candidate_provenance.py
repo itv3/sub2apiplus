@@ -74,7 +74,7 @@ class CandidateRestorationAccountingTests(unittest.TestCase):
         _write(campaign / "campaign.sha256", hashlib.sha256(raw).hexdigest() + "\n")
 
     def _collect(self, campaign: Path) -> dict:
-        return provenance.collect_campaign_provenance(campaign, formal_campaign_id=self.CAMPAIGN_ID)
+        return provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
 
     def test_bound_restoration_reports_preserve_candidate_accounting(self) -> None:
         self.assertEqual(provenance.CANDIDATE_RESTORATION_DIRNAME, candidate_capture.RESTORATION_REPORT_DIRNAME)
@@ -156,3 +156,98 @@ class CandidateRestorationAccountingTests(unittest.TestCase):
         receipt = self._collect(campaign)
         self.assertEqual((receipt["status"], receipt["precise_total"], receipt["unresolved_job_ids"]),
                          ("accounting_unresolved", 2, [self.JOB_ID]))
+
+    def _cross_campaign_fixture(self) -> tuple[Path, Path, Path, Path, Path, dict]:
+        """先真实收口来源证据，再按 c3 的原样保留合同建立后继 Job 收据，不替换任何核验函数。"""
+
+        source, root, source_job, report, _payload, result = self._fixture()
+        data = source.parent.parent.parent
+        job_root = source_job.parent / "evidence" / "jobs" / self.JOB_ID
+        for name in ("evidence", "logs"):
+            (job_root / name).mkdir(parents=True, mode=0o700)
+        permissions = provenance.evidence_permissions
+        path, _receipt = permissions.close_evidence_permissions(
+            job_root, [job_root / "evidence", job_root / "logs", root],
+            managed_data_root=data, logical_runs_roots=(data / "runs",),
+        )
+        binding = permissions.receipt_binding(job_root, path)
+        closure = {
+            "schema_version": "claude-upgrade-job-closure/v1", "client": "claude", "mode": "formal",
+            "campaign_id": source.name, "attempt_id": "a1", "job_id": self.JOB_ID, "execution_sha256": "a" * 64,
+            "status": "complete", "environment_contaminated": False, "evidence_roots": result["evidence_roots"],
+            "host_evidence_roots": [str(root)], "evidence_permission_closeout": {
+                **binding, "path": path.relative_to(source_job.parent).as_posix(),
+            },
+        }
+        closure_path = job_root / "job-closure.json"
+        _write(closure_path, json.dumps(closure))
+        closure_binding = {"path": closure_path.relative_to(source).as_posix(),
+                           "sha256": hashlib.sha256(closure_path.read_bytes()).hexdigest()}
+        result.update(status="complete", disposition="executed", execution_sha256="a" * 64, job_closure={
+            **closure_binding, "path": closure_path.relative_to(source_job.parent).as_posix(),
+        })
+        _write(source_job, json.dumps(result))
+        origin = {"campaign_dir": str(source), "campaign_id": source.name, "candidate_id": self.CANDIDATE_ID,
+                  "campaign_manifest_sha256": hashlib.sha256((source / "campaign.json").read_bytes()).hexdigest()}
+        campaign = source.with_name("claude-successor")
+        manifest = json.loads((source / "campaign.json").read_bytes())
+        manifest["campaign_id"] = campaign.name
+        self._manifest(campaign, manifest)
+        result = json.loads(json.dumps(result))
+        result.update(disposition="reused", execution_sha256="b" * 64, job_closure=None, reused_from={
+            "campaign": origin, "job_receipt": {"path": source_job.relative_to(source).as_posix(),
+                                                 "sha256": hashlib.sha256(source_job.read_bytes()).hexdigest()},
+            "producer": {"campaign": origin, "attempt_id": "a1", "execution_sha256": "a" * 64,
+                         "job_closure": closure_binding},
+        })
+        job = campaign / "candidates" / "candidate-r2" / "attempts" / "a2" / f"job-{self.JOB_ID}.json"
+        _write(job.parent / "reservation.json", "{}")
+        _write(job, json.dumps(result))
+        return campaign, job, source, report, closure_path, result
+
+    def test_cross_campaign_original_producer_and_later_reuse_are_verified(self) -> None:
+        campaign, job, _source, _report, _closure, result = self._cross_campaign_fixture()
+        self.assertEqual((self._collect(campaign)["status"], self._collect(campaign)["precise_total"]), ("complete", 1))
+        # 同 Campaign 再续跑：即时来源已经是复用结果，原生产者仍是前序 Campaign。
+        again = json.loads(json.dumps(result))
+        again["reused_from"] = {
+            "producer": result["reused_from"]["producer"],
+            "job_receipt": {"path": job.relative_to(campaign).as_posix(), "sha256": hashlib.sha256(job.read_bytes()).hexdigest()},
+        }
+        successor = job.parent.with_name("a3")
+        _write(successor / "reservation.json", "{}")
+        _write(successor / job.name, json.dumps(again))
+        receipt = self._collect(campaign)
+        self.assertEqual((receipt["status"], receipt["precise_total"], receipt["unresolved_job_ids"]), ("complete", 1, []))
+
+    def test_cross_campaign_forged_or_drifted_producer_stays_unresolved(self) -> None:
+        for case in ("来源身份", "总计划摘要", "闭环摘要", "闭环路径", "执行摘要", "源收据摘要", "缺源收据", "源报告篡改", "闭环范围"):
+            with self.subTest(case=case):
+                campaign, job, source, report, closure, result = self._cross_campaign_fixture()
+                producer = result["reused_from"]["producer"]
+                if case == "来源身份":
+                    producer["campaign"]["candidate_id"] = "forged-candidate"
+                elif case == "总计划摘要":
+                    producer["campaign"]["campaign_manifest_sha256"] = "0" * 64
+                elif case == "闭环摘要":
+                    producer["job_closure"]["sha256"] = "0" * 64
+                elif case == "闭环路径":
+                    producer["job_closure"]["path"] = "forged/job-closure.json"
+                elif case == "执行摘要":
+                    producer["execution_sha256"] = "0" * 64
+                elif case == "源收据摘要":
+                    result["reused_from"]["job_receipt"]["sha256"] = "0" * 64
+                elif case == "缺源收据":
+                    (source / result["reused_from"]["job_receipt"]["path"]).unlink()
+                elif case == "源报告篡改":
+                    report.chmod(0o600)
+                    _write(report, "{}")
+                elif case == "闭环范围":
+                    payload = json.loads(closure.read_bytes())
+                    payload["host_evidence_roots"] = []
+                    _write(closure, json.dumps(payload))
+                    producer["job_closure"]["sha256"] = hashlib.sha256(closure.read_bytes()).hexdigest()
+                _write(job, json.dumps(result))
+                receipt = self._collect(campaign)
+                self.assertEqual((receipt["status"], receipt["precise_total"], receipt["unresolved_job_ids"]),
+                                 ("accounting_unresolved", 1, [self.JOB_ID]))

@@ -952,6 +952,14 @@ def _candidate_restoration_bindings(
         return argv[argv.index(name) + 1]
 
     try:
+        reused_from = payload.get("reused_from")
+        producer = reused_from.get("producer") if isinstance(reused_from, Mapping) else None
+        if isinstance(producer, Mapping) and "campaign" in producer:
+            if payload.get("disposition") != "reused":
+                return None
+            campaign_dir, attempt, configuration = _restoration_producer_context(
+                campaign_dir, payload, producer, configuration=configuration, host_data_root=host_data_root
+            )
         parts = attempt.relative_to(campaign_dir).parts
         if len(parts) not in {4, 6} or parts[0] != "candidates" or parts[2] != "attempts":
             return None
@@ -1024,8 +1032,122 @@ def _candidate_restoration_bindings(
                 return None
             reports[path.name] = str(binding["sha256"])
         return (root, reports) if reports else None
-    except (OSError, ValueError, TypeError, KeyError, closeout.VC0CloseoutError):
+    except (OSError, ValueError, TypeError, KeyError, closeout.VC0CloseoutError, evidence_permissions.EvidencePermissionError):
         return None
+
+
+def _restoration_producer_context(
+    campaign_dir: Path, payload: Mapping[str, Any], producer: Mapping[str, Any], *,
+    configuration: Mapping[str, Any], host_data_root: Path,
+) -> tuple[Path, Path, Mapping[str, Any]]:
+    """后继候选沿原生产者读取：总计划摘要、候选坐标、闭环摘要及权限收口全部通过才采用来源坐标。
+
+    这里只复核请求核算需要的不可变来源，复用许可仍由正式复用入口验证。不能仅凭 producer 自述的 Campaign ID
+    改写当前上下文，也不能把一个有效闭环用于它没有收口的外部证据根。
+    """
+
+    origin, binding = producer.get("campaign"), producer.get("job_closure")
+    if not isinstance(origin, Mapping) or not isinstance(binding, Mapping):
+        raise ProvenanceError("候选原生产者缺少总计划或闭环绑定")
+    for name, value in (("campaign_id", origin.get("campaign_id")), ("candidate_id", origin.get("candidate_id")),
+                        ("attempt_id", producer.get("attempt_id"))):
+        if not isinstance(value, str) or not SAFE_ID_RE.fullmatch(value):
+            raise ProvenanceError(f"候选原生产者 {name} 非法")
+    source = Path(str(origin.get("campaign_dir", "")))
+    if source != campaign_dir.parent / str(origin["campaign_id"]) or source.resolve(strict=True) != source:
+        raise ProvenanceError("候选原生产者不在同一宿主 Campaign 根")
+    manifest, raw = closeout._load_json(source / "campaign.json", "候选原生产者总计划")
+    digest = closeout._read_stable_file(source / "campaign.sha256", "候选原生产者总计划摘要", maximum=128)
+    source_configuration = manifest.get("configuration")
+    if (manifest.get("schema_version") != CAMPAIGN_SCHEMA or manifest.get("client") != CLIENT
+            or manifest.get("campaign_mode") != "formal" or manifest.get("campaign_id") != origin["campaign_id"]
+            or _sha256(raw) != origin.get("campaign_manifest_sha256") or digest.decode("ascii").strip() != _sha256(raw)
+            or not isinstance(source_configuration, Mapping)
+            or source_configuration.get("capture_root") != configuration.get("capture_root")):
+        raise ProvenanceError("候选原生产者总计划身份或摘要漂移")
+    source_jobs = manifest.get("jobs")
+    if not isinstance(source_jobs, list) or not any(
+        isinstance(row, Mapping) and row.get("id") == payload.get("id") and row.get("phase") == "candidate"
+        for row in source_jobs
+    ):
+        raise ProvenanceError("候选原生产者总计划未冻结该候选 Job")
+    attempt = source / "candidates" / str(origin["candidate_id"]) / "attempts" / str(producer["attempt_id"])
+    job_root = attempt / "evidence" / "jobs" / str(payload["id"])
+    closure_path = job_root / "job-closure.json"
+    if binding.get("path") != closure_path.relative_to(source).as_posix() or closure_path.resolve(strict=True) != closure_path:
+        raise ProvenanceError("候选原生产者闭环路径不一致")
+    closure, closure_raw = closeout._load_json(closure_path, "候选原生产者 Job 闭环")
+    wanted = {
+        "schema_version": "claude-upgrade-job-closure/v1", "client": CLIENT, "mode": "formal",
+        "campaign_id": origin["campaign_id"], "attempt_id": producer["attempt_id"], "job_id": payload["id"],
+        "execution_sha256": producer.get("execution_sha256"), "status": "complete", "environment_contaminated": False,
+        "evidence_roots": payload.get("evidence_roots"),
+    }
+    if (_sha256(closure_raw) != binding.get("sha256")
+            or not re.fullmatch(r"[0-9a-f]{64}", str(producer.get("execution_sha256", "")))
+            or any(type(closure.get(name)) is not type(value) or closure.get(name) != value for name, value in wanted.items())):
+        raise ProvenanceError("候选原生产者闭环身份、范围或摘要不一致")
+    _verify_restoration_receipt_chain(campaign_dir, payload, attempt / f"job-{payload['id']}.json", producer)
+    permission = closure.get("evidence_permission_closeout")
+    filename = evidence_permissions.RECEIPT_FILENAME
+    if not isinstance(permission, Mapping) or permission.get("path") != (job_root / filename).relative_to(attempt).as_posix():
+        raise ProvenanceError("候选原生产者权限收口绑定非法")
+    external = closure.get("host_evidence_roots")
+    if not isinstance(external, list) or any(not isinstance(value, str) for value in external):
+        raise ProvenanceError("候选原生产者外部证据根非法")
+    mapped_roots = [_map_root(value, configuration=source_configuration, host_data_root=host_data_root)
+                    for value in payload.get("evidence_roots") or []]
+    if not mapped_roots or not set(mapped_roots).issubset({Path(value) for value in external}):
+        raise ProvenanceError("候选原生产者没有收口当前证据根")
+    evidence_permissions.replay_evidence_permission_closeout(
+        job_root, [job_root / "evidence", job_root / "logs", *(Path(value) for value in external)],
+        {"path": filename, "sha256": permission.get("sha256"), "bytes": permission.get("bytes")},
+        managed_data_root=host_data_root, logical_runs_roots=(host_data_root / "runs",),
+    )
+    return source, attempt, source_configuration
+
+
+def _verify_restoration_receipt_chain(
+    campaign_dir: Path, payload: Mapping[str, Any], expected: Path, producer: Mapping[str, Any],
+) -> None:
+    """逐跳重放 Job 收据摘要，直到原生产者；每跳取证步骤与报告绑定都必须原样保留，禁止自造 producer 旁路。"""
+
+    current, directory = payload, campaign_dir
+    seen: set[Path] = set()
+    while current.get("disposition") == "reused":
+        reused = current.get("reused_from")
+        if not isinstance(reused, Mapping) or not isinstance(reused.get("job_receipt"), Mapping):
+            raise ProvenanceError("候选复用链缺少来源 Job 收据")
+        origin = reused.get("campaign")
+        if origin is not None:
+            if not isinstance(origin, Mapping):
+                raise ProvenanceError("候选复用链来源 Campaign 非法")
+            directory = Path(str(origin.get("campaign_dir", "")))
+            if directory != campaign_dir.parent / str(origin.get("campaign_id", "")) or directory.resolve(strict=True) != directory:
+                raise ProvenanceError("候选复用链来源越过同一宿主 Campaign 根")
+            manifest_raw = closeout._read_stable_file(directory / "campaign.json", "候选复用链总计划", maximum=closeout.MAX_JSON_BYTES)
+            if _sha256(manifest_raw) != origin.get("campaign_manifest_sha256"):
+                raise ProvenanceError("候选复用链总计划摘要漂移")
+        binding = reused["job_receipt"]
+        relative = Path(str(binding.get("path", "")))
+        path = directory / relative
+        if (relative.is_absolute() or ".." in relative.parts or path.name != f"job-{payload['id']}.json"
+                or path.resolve(strict=True) != path or path in seen or len(seen) >= 128):
+            raise ProvenanceError("候选复用链 Job 收据路径非法或成环")
+        seen.add(path)
+        previous, raw = closeout._load_json(path, "候选复用链 Job 收据")
+        if (_sha256(raw) != binding.get("sha256") or previous.get("id") != payload["id"]
+                or previous.get("phase") != "candidate" or previous.get("mode") != "formal" or previous.get("status") != "complete"
+                or any(previous.get(name) != current.get(name) for name in ("steps", "restoration_checks", "evidence_roots"))):
+            raise ProvenanceError("候选复用链取证步骤、恢复绑定或收据摘要漂移")
+        current = previous
+    closure = current.get("job_closure")
+    if (not seen or path != expected or current.get("disposition") != "executed"
+            or current.get("execution_sha256") != producer.get("execution_sha256")
+            or not isinstance(closure, Mapping)
+            or closure.get("path") != "evidence/jobs/" + str(payload["id"]) + "/job-closure.json"
+            or closure.get("sha256") != producer["job_closure"].get("sha256")):
+        raise ProvenanceError("候选复用链未闭合到原生产者 Job")
 
 
 def _attempt_job_facts(
