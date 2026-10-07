@@ -12,8 +12,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
-// claudeFWGWireDigest 只保留历史收据和测试的源码兼容性。
-var claudeFWGWireDigest = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().WireDigest()
+// claudeFWGWireDigest 只保留历史收据和测试的源码兼容性，钉住历史 Release（见 claude_release_pin.go）。
+var claudeFWGWireDigest = claudeFWGHistoricalRelease().WireDigest()
 
 type claudeWireTLSVector struct {
 	CipherSuites        []uint16 `json:"cipher_suites"`
@@ -240,10 +240,13 @@ type claudeWireArtifact struct {
 	} `json:"transports"`
 }
 
+// loadClaudeFWGWire 加载钉住的历史 Release 的 Wire，供历史收据与测试使用。
 func loadClaudeFWGWire() (claudeWireArtifact, error) {
-	return loadClaudeWire(
-		DefaultClaudeReleaseCatalog().ValidationCandidate().Release(),
-	)
+	release, err := claudeFWGHistoricalReleaseFrom(DefaultClaudeReleaseCatalog())
+	if err != nil {
+		return claudeWireArtifact{}, err
+	}
+	return loadClaudeWire(release)
 }
 
 func loadClaudeWire(release ResolvedClaudeRelease) (claudeWireArtifact, error) {

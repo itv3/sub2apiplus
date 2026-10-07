@@ -78,7 +78,7 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 	endpointBindings := make([]EndpointBindingCatalog, 0, 2)
 	var claudeProfile claudeFWGProfile
 	if sinkCatalogHasClaudeProfile(sinks) {
-		claudeProfile, err = loadClaudeFWGProfile()
+		claudeProfile, err = loadClaudeValidationCandidateProfile()
 		if err != nil {
 			return OfficialRouteCatalog{}, err
 		}

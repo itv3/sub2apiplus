@@ -18,13 +18,14 @@ const (
 	ClaudeTokenIssuerID       ExecutorID = "claude-finalization-token"
 )
 
-// 以下历史名称只保留现有收据和测试的源码兼容性。它们从 Catalog 的
-// validation_candidate 派生，不再拥有生产 selector 的选择权。
+// 以下历史名称只保留现有收据和测试的源码兼容性。它们钉住 claudeFWGHistoricalReleaseDigest
+// 指向的那条不可变 Release（见 claude_release_pin.go），不跟随 validation_candidate selector，
+// 也不拥有任何生产 selector 的选择权。
 var (
-	ClaudeFWGVersion       = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().Version()
-	ClaudeFWGProfileDigest = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().ProfileDigest()
-	ClaudeFWGReleaseDigest = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().ReleaseDigest()
-	ClaudeFWGBundleDigest  = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().BundleDigest()
+	ClaudeFWGVersion       = claudeFWGHistoricalRelease().Version()
+	ClaudeFWGProfileDigest = claudeFWGHistoricalRelease().ProfileDigest()
+	ClaudeFWGReleaseDigest = claudeFWGHistoricalRelease().ReleaseDigest()
+	ClaudeFWGBundleDigest  = claudeFWGHistoricalRelease().BundleDigest()
 )
 
 type claudeProfileEndpointDocument struct {
@@ -132,7 +133,18 @@ type claudeFWGProfile struct {
 	rules     map[string]claudeRuleDocument
 }
 
+// loadClaudeFWGProfile 加载钉住的历史 Release 的 Profile，供历史收据与测试使用。
 func loadClaudeFWGProfile() (claudeFWGProfile, error) {
+	release, err := claudeFWGHistoricalReleaseFrom(DefaultClaudeReleaseCatalog())
+	if err != nil {
+		return claudeFWGProfile{}, err
+	}
+	return loadClaudeProfile(release)
+}
+
+// loadClaudeValidationCandidateProfile 加载 validation_candidate selector 当前选中 Release 的 Profile。
+// 路由目录用它绑定 Claude 路由与 endpoint，随候选 selector 换版（与历史锚点解耦前的行为相同）。
+func loadClaudeValidationCandidateProfile() (claudeFWGProfile, error) {
 	return loadClaudeProfile(
 		DefaultClaudeReleaseCatalog().ValidationCandidate().Release(),
 	)

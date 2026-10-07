@@ -23,8 +23,10 @@ const (
 // 实际选择的批准摘要；历史收据必须使用各自的固定常量。
 var ClaudeFWHProductionApprovalDigest = DefaultClaudeReleaseCatalog().ProductionActive().ApprovalDigest()
 
+// ClaudeFWGWireDigest 是历史名称，返回钉住的历史 Release 的 Wire 摘要（见 claude_release_pin.go），
+// 不跟随 validation_candidate selector。
 func ClaudeFWGWireDigest() string {
-	return DefaultClaudeReleaseCatalog().ValidationCandidate().Release().WireDigest()
+	return claudeFWGHistoricalRelease().WireDigest()
 }
 
 // ResolvedClaudeProductionRelease 是 Claude 自有发布源向共享运行时暴露的只读坐标。
