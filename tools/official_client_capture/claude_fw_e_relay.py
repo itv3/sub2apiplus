@@ -1362,10 +1362,11 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             raise ConfigurationError("--fw-f-v4-probe 非法。")
         if arguments.probe_id != fw_f_v4_probe_id:
             raise ConfigurationError("FW-F v4 的 --probe-id 必须等于 --fw-f-v4-probe。")
-        if arguments.expected_version != FW_F_V3_VERSION:
-            raise ConfigurationError(
-                f"FW-F v4 场景只绑定 Claude Code {FW_F_V3_VERSION}。"
-            )
+        # v4 是升级取证的场景目录，接受场景清单冻结的目标版本（Claude 升级 B2-06），这里只校验版本号合法；
+        # 版本与实际执行的二进制是否一致，由执行前的 _client_identity（二进制 SHA-256 等于 --expected-sha256、
+        # 自报版本等于 --expected-version）与宿主运行收据保证。v3 合成目录仍只绑定 2.1.226。
+        if not VERSION_RE.fullmatch(arguments.expected_version):
+            raise ConfigurationError("FW-F v4 场景的 --expected-version 必须是精确三段版本号。")
         if arguments.inject_env:
             raise ConfigurationError("FW-F v4 场景禁止额外 --inject-env。")
         fw_f_v4_probe = get_fw_f_v4_probe(fw_f_v4_probe_id)

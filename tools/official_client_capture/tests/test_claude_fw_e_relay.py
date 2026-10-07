@@ -1149,5 +1149,83 @@ class ClaudeFWERelayTests(unittest.TestCase):
                 _build_index(arguments)
 
 
+class ClaudeFWEVersionBindingTests(unittest.TestCase):
+    """Claude 升级 B2-06：v4 场景接受场景清单冻结的目标版本，v3 合成目录仍只绑定 2.1.226。
+
+    dry-run 在读取凭据、改写 hosts、启动中继与客户端之前返回计划，所以这里的正反用例都不发请求、不碰真实路径。
+    """
+
+    def _dry_run(self, *, version: str, probe_flag: str, probe_id: str, live: bool) -> dict:
+        with tempfile.TemporaryDirectory() as directory:
+            argv = [
+                "capture",
+                "--dry-run",
+                "--run-id",
+                f"{probe_id}-run",
+                "--probe-id",
+                probe_id,
+                probe_flag,
+                probe_id,
+                "--output-root",
+                str(Path(directory) / "new-run"),
+                "--claude-bin",
+                "/opt/claude",
+                "--expected-version",
+                version,
+                "--expected-sha256",
+                "a" * 64,
+                "--claude-credentials-file",
+                "/run/credentials.json",
+                "--ca-signing-pem",
+                "/run/ca.pem",
+                "--ca-cert",
+                "/run/ca.crt",
+                "--host-runtime-receipt",
+                "/run/receipt.json",
+                "--host-runtime-receipt-sha256",
+                "b" * 64,
+                "--run-nonce",
+                "c" * 64,
+            ]
+            if live:
+                argv += ["--upstream-ip", "160.79.104.10"]
+            return _capture(_build_parser().parse_args(argv))
+
+    def test_v4_accepts_frozen_target_version(self) -> None:
+        live = self._dry_run(version="2.1.285", probe_flag="--fw-f-v4-probe", probe_id="v4-native-tls-baseline", live=True)
+        self.assertEqual((live["capture_mode"], live["version"]), ("fw-f-v4", "2.1.285"))
+        self.assertTrue(live["live_requests"])
+        self.assertFalse(live["production_changes"])
+        synthetic = self._dry_run(version="2.1.285", probe_flag="--fw-f-v4-probe", probe_id="v4-oauth-refresh", live=False)
+        self.assertEqual((synthetic["capture_mode"], synthetic["live_requests"]), ("fw-f-v4", False))
+
+    def test_v4_rejects_malformed_versions(self) -> None:
+        for version in ("2.1", "2.1.285-beta", "v2.1.285", "2.1.285 (Claude Code)"):
+            with self.subTest(version=version), self.assertRaisesRegex(Exception, "三段版本号"):
+                self._dry_run(version=version, probe_flag="--fw-f-v4-probe", probe_id="v4-native-tls-baseline", live=True)
+
+    def test_v3_still_binds_2_1_226_only(self) -> None:
+        accepted = self._dry_run(version="2.1.226", probe_flag="--fw-f-probe", probe_id="v3-retry-500", live=False)
+        self.assertEqual(accepted["capture_mode"], "fw-f-v3")
+        with self.assertRaisesRegex(Exception, "FW-F v3 场景只绑定 Claude Code 2.1.226"):
+            self._dry_run(version="2.1.285", probe_flag="--fw-f-probe", probe_id="v3-retry-500", live=False)
+
+    def test_execute_path_verifies_binary_digest_and_version_before_requests(self) -> None:
+        """版本放开后，二进制一致性由执行前核验保证：摘要不符、自报版本不符都在读取凭据之前拒绝。"""
+
+        from tools.official_client_capture import claude_fw_e_relay as relay
+
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "claude"
+            binary.write_bytes(b"#!/bin/sh\necho '2.1.285 (Claude Code)'\n")
+            binary.chmod(0o700)
+            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+            self.assertEqual(relay._client_identity(binary, "2.1.285", digest)["sha256"], digest)
+            with self.assertRaisesRegex(Exception, "SHA-256"):
+                relay._client_identity(binary, "2.1.285", "f" * 64)
+            with self.assertRaisesRegex(Exception, "版本不符"):
+                relay._client_identity(binary, "2.1.286", digest)
+
+
 if __name__ == "__main__":
     unittest.main()

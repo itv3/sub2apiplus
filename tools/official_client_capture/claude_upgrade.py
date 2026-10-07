@@ -74,7 +74,8 @@ CANDIDATE_INVALIDATION_FILENAME = "invalidation.json"
 CANDIDATE_VC_PHASES = codex_upgrade_vc_artifacts.CANDIDATE_PHASES
 CANONICAL_DIRECTORY = "canonical"
 CANONICAL_IMPORT_RECEIPT_FILENAME = "import-receipt.json"
-CONTINUITY_PROBE_KINDS = ("service", "containers", "account", "configuration")
+# Claude 探针的连续性比较种类（B2-06）：采集容器、配置（hosts／DNS／CA）、客户端状态；取证进程与监听端口只在 Job 前后比较。
+CONTINUITY_PROBE_KINDS = ("containers", "configuration", "client")
 ENVIRONMENT_ISOLATION_DIR = Path("control") / "environment"
 ENVIRONMENT_ISOLATION_SCHEMA = "environment-isolation/v1"
 EVALUATION_BASELINE_ABANDON_FILENAME = "ABANDON"
@@ -2886,7 +2887,8 @@ def _tool_evolution_preview(
     raise _pending("_tool_evolution_preview", "B2-08（工具演进预览）")
 
 
-# B2-06（取证 Job 动作体与环境闭环）
+# B2-06（取证 Job 动作体与环境闭环）：实现在 ``claude_upgrade_capture``，这里是同名同签名的薄壳（延迟导入，避免与
+# 子模块循环导入；子模块在调用时经本模块属性取常量与互调成员，测试与 Job 演练对本模块的改写照样生效）。
 
 
 def _campaign_jobs(
@@ -2905,27 +2907,44 @@ def _campaign_jobs(
     candidate_purpose: str | None = None,
     use_approved_scenario: bool | None = None,
 ) -> list[Job]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：从 Campaign 冻结的场景清单副本展开某阶段的 Job；实现在 ``claude_upgrade_capture``。"""
 
-    del campaign_dir, manifest, phase, candidate_id, runtime_image, profile_id, profile_digest, build_id, deployed_version, candidate_image_id, source_tree_sha256, candidate_purpose, use_approved_scenario
-    raise _pending("_campaign_jobs", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._campaign_jobs(
+        campaign_dir,
+        manifest,
+        phase,
+        candidate_id=candidate_id,
+        runtime_image=runtime_image,
+        profile_id=profile_id,
+        profile_digest=profile_digest,
+        build_id=build_id,
+        deployed_version=deployed_version,
+        candidate_image_id=candidate_image_id,
+        source_tree_sha256=source_tree_sha256,
+        candidate_purpose=candidate_purpose,
+        use_approved_scenario=use_approved_scenario,
+    )
 
 
 def _job_execution_sha256(job: Job) -> str:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：Job 执行定义的摘要；实现在 ``claude_upgrade_capture``。"""
 
-    del job
-    raise _pending("_job_execution_sha256", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._job_execution_sha256(job)
 
 
 def _job_tool_dependency_files(
     job: Job,
     tool_identity: Mapping[str, Any],
 ) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：Job 显式声明的工具依赖 → 文件摘要；实现在 ``claude_upgrade_capture``。"""
 
-    del job, tool_identity
-    raise _pending("_job_tool_dependency_files", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._job_tool_dependency_files(job, tool_identity)
 
 
 def _run_job_with_retry(
@@ -2938,10 +2957,13 @@ def _run_job_with_retry(
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：同一 attempt 内对失败 Job 有限补跑并做环境闭环；实现在 ``claude_upgrade_capture``。"""
 
-    del job, log_root, scenario_context, identity, tool_identity, deadline, heartbeat
-    raise _pending("_run_job_with_retry", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._run_job_with_retry(
+        job, log_root, scenario_context, identity=identity, tool_identity=tool_identity, deadline=deadline, heartbeat=heartbeat
+    )
 
 
 def _probe_capture_environment(
@@ -2952,17 +2974,19 @@ def _probe_capture_environment(
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：Claude 只读环境探针；实现在 ``claude_upgrade_capture``。"""
 
-    del manifest, output_dir, phase, deadline, heartbeat
-    raise _pending("_probe_capture_environment", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._probe_capture_environment(manifest, output_dir, phase, deadline=deadline, heartbeat=heartbeat)
 
 
 def _probe_snapshot_digests(manifest: Mapping[str, Any]) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：探针清单的快照种类 → 摘要；实现在 ``claude_upgrade_capture``。"""
 
-    del manifest
-    raise _pending("_probe_snapshot_digests", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._probe_snapshot_digests(manifest)
 
 
 def _verify_official_binaries(
@@ -2971,36 +2995,40 @@ def _verify_official_binaries(
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：目标客户端两处安装与运行镜像核验；实现在 ``claude_upgrade_capture``。"""
 
-    del manifest, deadline, heartbeat
-    raise _pending("_verify_official_binaries", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._verify_official_binaries(manifest, deadline=deadline, heartbeat=heartbeat)
 
 
 def _verify_execution_tree(capture_root: Path | None) -> None:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：采集执行副本与受管树逐字一致；实现在 ``claude_upgrade_capture``。"""
 
-    del capture_root
-    raise _pending("_verify_execution_tree", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._verify_execution_tree(capture_root)
 
 
 def _attempt_deadline(
     arguments: argparse.Namespace,
     phase: str,
 ) -> incremental_recovery.WallClockDeadline:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：一次 attempt 的全阶段 deadline；实现在 ``claude_upgrade_capture``。"""
 
-    del arguments, phase
-    raise _pending("_attempt_deadline", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._attempt_deadline(arguments, phase)
 
 
 def _attempt_failure_facts(
     payload: Mapping[str, Any],
 ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：attempt 失败观测与根因（Claude 根因码表）；实现在 ``claude_upgrade_capture``。"""
 
-    del payload
-    raise _pending("_attempt_failure_facts", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._attempt_failure_facts(payload)
 
 
 def _load_capture_attempt(
@@ -3013,10 +3041,19 @@ def _load_capture_attempt(
     _verified_campaign_manifest: Mapping[str, Any] | None = None,
     _replay_evidence_permissions: bool = True,
 ) -> tuple[Path, dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：读取并重验正式 attempt；实现在 ``claude_upgrade_capture``。"""
 
-    del campaign_dir, phase, candidate_id, attempt_id, _historical_manifest_controls, _verified_campaign_manifest, _replay_evidence_permissions
-    raise _pending("_load_capture_attempt", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._load_capture_attempt(
+        campaign_dir,
+        phase,
+        candidate_id,
+        attempt_id,
+        _historical_manifest_controls=_historical_manifest_controls,
+        _verified_campaign_manifest=_verified_campaign_manifest,
+        _replay_evidence_permissions=_replay_evidence_permissions,
+    )
 
 
 def _load_capture_reservation(
@@ -3028,10 +3065,18 @@ def _load_capture_reservation(
     _manifest: Mapping[str, Any] | None = None,
     _historical_manifest_controls: bool = False,
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：读取正式 attempt 的原子预约收据；实现在 ``claude_upgrade_capture``。"""
 
-    del campaign_dir, attempt_root, phase, candidate_id, _manifest, _historical_manifest_controls
-    raise _pending("_load_capture_reservation", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._load_capture_reservation(
+        campaign_dir,
+        attempt_root,
+        phase=phase,
+        candidate_id=candidate_id,
+        _manifest=_manifest,
+        _historical_manifest_controls=_historical_manifest_controls,
+    )
 
 
 def _ordered_capture_attempts(
@@ -3042,10 +3087,13 @@ def _ordered_capture_attempts(
     _historical_manifest_controls: bool = False,
     _manifest: Mapping[str, Any] | None = None,
 ) -> list[tuple[Path, dict[str, Any]]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：按预约时间倒序列出正式 attempt；实现在 ``claude_upgrade_capture``。"""
 
-    del campaign_dir, phase, candidate_id, _historical_manifest_controls, _manifest
-    raise _pending("_ordered_capture_attempts", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._ordered_capture_attempts(
+        campaign_dir, phase, candidate_id, _historical_manifest_controls=_historical_manifest_controls, _manifest=_manifest
+    )
 
 
 def _active_unsealed_attempts(
@@ -3055,19 +3103,21 @@ def _active_unsealed_attempts(
     _manifest: Mapping[str, Any] | None = None,
     _baseline: int | None = None,
 ) -> list[str]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：未完成预约或等待封存的正式 attempt；实现在 ``claude_upgrade_capture``。"""
 
-    del campaign_dir, phase, _manifest, _baseline
-    raise _pending("_active_unsealed_attempts", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._active_unsealed_attempts(campaign_dir, phase, _manifest=_manifest, _baseline=_baseline)
 
 
 def _campaign_attempt_roots(
     campaign_dir: Path,
 ) -> list[tuple[str, str | None, Path]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：枚举 Campaign 内全部正式 attempt 目录；实现在 ``claude_upgrade_capture``。"""
 
-    del campaign_dir
-    raise _pending("_campaign_attempt_roots", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._campaign_attempt_roots(campaign_dir)
 
 
 def _capture_stage_attempt_context(
@@ -3077,17 +3127,19 @@ def _capture_stage_attempt_context(
     phase: str,
     candidate_id: str | None,
 ) -> tuple[Path, dict[str, Any]]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：阶段结果绑定的 attempt；实现在 ``claude_upgrade_capture``。"""
 
-    del campaign_dir, stage, phase, candidate_id
-    raise _pending("_capture_stage_attempt_context", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._capture_stage_attempt_context(campaign_dir, stage, phase=phase, candidate_id=candidate_id)
 
 
 def _wait_for_monitor_finalization(run_dir: Path, state: Mapping[str, Any]) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+    """服务面成员（B2-06）：monitor 在线时有界等待其封存终态；实现在 ``claude_upgrade_capture``。"""
 
-    del run_dir, state
-    raise _pending("_wait_for_monitor_finalization", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._wait_for_monitor_finalization(run_dir, state)
 
 
 # B2-07（seal 链幂等与四阶段化）
@@ -3748,18 +3800,64 @@ def _job_context(arguments: argparse.Namespace) -> dict[str, str]:
     return claude_upgrade_plan.plan_context(arguments)
 
 
-def _campaign_arguments(*arguments: Any, **options: Any) -> Any:
-    """wire 根：Campaign 级采集参数（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+def _campaign_arguments(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str | None = None,
+    runtime_image: str | None = None,
+    profile_id: str | None = None,
+    profile_digest: str | None = None,
+    build_id: str | None = None,
+    deployed_version: str | None = None,
+    candidate_image_id: str | None = None,
+    source_tree_sha256: str | None = None,
+    candidate_purpose: str | None = None,
+) -> argparse.Namespace:
+    """wire 根（B2-06）：把已校验的总计划映射成 Job 展开参数；只读传入的字典，不调用 control 函数。"""
 
-    del arguments, options
-    raise _pending("_campaign_arguments", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._campaign_arguments(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        runtime_image=runtime_image,
+        profile_id=profile_id,
+        profile_digest=profile_digest,
+        build_id=build_id,
+        deployed_version=deployed_version,
+        candidate_image_id=candidate_image_id,
+        source_tree_sha256=source_tree_sha256,
+        candidate_purpose=candidate_purpose,
+    )
 
 
-def _run_job_impl(*arguments: Any, **options: Any) -> Any:
-    """wire 根：执行单个取证 Job（Claude 编排器尚未实现，由 B2-06（取证 Job 动作体与环境闭环） 落实）。"""
+def _run_job_impl(
+    job: Job,
+    log_root: Path,
+    attempt_index: int = 1,
+    scenario_context: Any | None = None,
+    *,
+    identity: Mapping[str, Any] | None = None,
+    tool_identity: Mapping[str, Any] | None = None,
+    deadline: Any | None = None,
+    heartbeat: Any | None = None,
+) -> dict[str, Any]:
+    """wire 根（B2-06）：按已展开的 Job 执行一次；只接收 Job 与执行上下文，实现在 ``claude_upgrade_capture``。"""
 
-    del arguments, options
-    raise _pending("_run_job_impl", "B2-06（取证 Job 动作体与环境闭环）")
+    from tools.official_client_capture import claude_upgrade_capture
+
+    return claude_upgrade_capture._run_job_impl(
+        job,
+        log_root,
+        attempt_index,
+        scenario_context,
+        identity=identity,
+        tool_identity=tool_identity,
+        deadline=deadline,
+        heartbeat=heartbeat,
+    )
 
 
 def _scenario_job_execution_contract(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -4125,6 +4223,11 @@ def _build_parser() -> argparse.ArgumentParser:
         add_campaign_reference(target)
         if name in {"capture-official", "capture-candidate"}:
             target.add_argument("capture_action", choices=("run", "seal"))
+        if name == "capture-official":
+            # run 的参数（B2-06）：真实请求确认、零请求演练与 deadline；seal 的参数由 B2-07 增加。
+            from tools.official_client_capture import claude_upgrade_capture
+
+            claude_upgrade_capture.add_capture_official_run_arguments(target)
         if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build"}:
             target.add_argument("--candidate-id")
     return parser
@@ -4211,7 +4314,8 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 
 def main(argv: list[str] | None = None) -> int:
     """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），
-    import-predecessor-evidence 导入前序证据（B2-09），其余 Claude 专属子命令在动作体落实前报未实现。
+    import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），其余 Claude
+    专属子命令在动作体落实前报未实现。
 
     租约、遗留入口拒绝与停线收据等 Codex 主入口的外层流程，随租约与锁（B1-09 续）一起落实。
     """
@@ -4235,6 +4339,10 @@ def main(argv: list[str] | None = None) -> int:
             result, return_code = _plan_command(arguments), 0
         elif arguments.command == "import-predecessor-evidence":
             result, return_code = _import_predecessor_command(arguments), 0
+        elif arguments.command == "capture-official" and arguments.capture_action == "run":
+            from tools.official_client_capture import claude_upgrade_capture
+
+            result, return_code = claude_upgrade_capture.capture_official_run_command(arguments)
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)

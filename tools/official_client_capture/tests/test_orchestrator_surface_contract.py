@@ -88,8 +88,8 @@ class SurfaceContractTests(unittest.TestCase):
     def test_pending_members_name_their_work_item(self) -> None:
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"campaign_status：由 B2-11"):
             claude_upgrade.campaign_status(Path("/nonexistent"))
-        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_campaign_jobs：由 B2-06"):
-            claude_upgrade._campaign_jobs(Path("/nonexistent"), {}, "official")
+        with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"_load_stage_result：由 B3-01"):
+            claude_upgrade._load_stage_result(Path("/nonexistent"), "capture-official")
         with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, r"scan_evidence：由 B2-07"):
             claude_upgrade.scan_evidence(Path("/nonexistent"))
         self.assertTrue(issubclass(claude_upgrade.ClaudeOrchestratorPending, codex_upgrade.ConfigurationError))
