@@ -652,9 +652,14 @@ class RuntimeAuditAndClientReceiptTests(unittest.TestCase):
                 self.audit(attempt, build)
 
     def client_world(self, payload_changes: dict[str, Any] | None = None) -> dict[str, Any]:
+        from tools.official_client_capture.tests import claude_client_receipt_fixture
+
         scenarios = chain._write_json(self.campaign / "inputs" / "scenarios.json", {"required_client_bindings": ["claude-desktop"], "required_boundary_checks": ["third-party-ingress-rejection"]})
         values = {"campaign_id": "claude-campaign", "candidate_id": "cand-1", "attempt_id": "attempt-1", "run_nonce": "nonce-1"}
-        desktop = chain._write_json(self.attempt_root / "client-evidence" / "claude-desktop.json", {"client_id": "claude-desktop", **values, "status": "success", **(payload_changes or {})})
+        chain._write_json(self.attempt_root / "attempt.json", {**self.attempt, "candidate_id": "cand-1"})
+        desktop = claude_client_receipt_fixture.write_receipt(self.attempt_root, "claude-desktop", values)
+        if payload_changes:
+            chain._write_json(desktop, {**json.loads(desktop.read_bytes()), **payload_changes})
         boundary = chain._write_json(self.attempt_root / "client-evidence" / "boundary.json", {"check_id": "third-party-ingress-rejection", **values, "result": "pass"})
         candidate = {
             "candidate_id": "cand-1",
@@ -667,7 +672,9 @@ class RuntimeAuditAndClientReceiptTests(unittest.TestCase):
         return candidate
 
     def receipts(self, candidate: dict[str, Any]) -> dict[str, Any]:
-        with mock.patch.object(acceptance.claude_upgrade_seal, "_frozen_input", return_value=self.scenarios_path):
+        from tools.official_client_capture.tests import claude_client_receipt_fixture
+
+        with claude_client_receipt_fixture.source_scope(), mock.patch.object(acceptance.claude_upgrade_seal, "_frozen_input", return_value=self.scenarios_path):
             return acceptance.client_receipts(self.campaign, self.manifest, candidate, self.attempt)
 
     def test_client_receipts(self) -> None:

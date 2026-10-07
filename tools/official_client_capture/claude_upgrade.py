@@ -5072,7 +5072,7 @@ def _build_parser() -> argparse.ArgumentParser:
         add_campaign_reference(target)
         if name in {"capture-official", "capture-candidate"}:
             # capture-candidate 另有 boundary-check（B4-01 f 段：attempt 级边界核对，run 之后、seal 之前）。
-            actions = ("run", "boundary-check", "seal") if name == "capture-candidate" else ("run", "seal")
+            actions = ("run", "boundary-check", "seal", "client-evidence") if name == "capture-candidate" else ("run", "seal")
             target.add_argument("capture_action", choices=actions)
         if name == "capture-official":
             # run 的参数（B2-06）：真实请求确认、零请求演练与 deadline；seal 的参数（B2-07）：attempt、批准摘要与静态输入。
@@ -5113,6 +5113,9 @@ def _build_parser() -> argparse.ArgumentParser:
             from tools.official_client_capture import claude_upgrade_boundary_checks
 
             claude_upgrade_boundary_checks.add_boundary_check_arguments(target)
+            from tools.official_client_capture import claude_upgrade_client_receipts
+
+            claude_upgrade_client_receipts.add_arguments(target)
         if name == "accept":
             # 断言结果与候选外部门禁收据（与 Codex 同名同义），B4-06b。
             target.add_argument("--assertions", type=Path)
@@ -5393,6 +5396,12 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_capture
 
             result, return_code = claude_upgrade_capture.capture_candidate_run_command(arguments)
+        elif arguments.command == "capture-candidate" and arguments.capture_action == "client-evidence":
+            from tools.official_client_capture import claude_upgrade_client_receipts
+
+            if os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1":
+                raise ConfigurationError("client-evidence 是批次之间的离线控制入口，不能由父批次执行。")
+            result, return_code = claude_upgrade_client_receipts.command(arguments)
         elif arguments.command == "capture-candidate" and arguments.capture_action == "boundary-check":
             from tools.official_client_capture import claude_upgrade_boundary_checks
 

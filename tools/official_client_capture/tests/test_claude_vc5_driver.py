@@ -326,9 +326,28 @@ class ClaudeVc5HelperTests(unittest.TestCase):
             state = self.module.seal_state()
             self.assertEqual(state["boundary_missing"], ["third-party-ingress-rejection", "codex-final-wire-isolation"])
 
+    def test_seal_state_rejects_placeholder_client_success(self) -> None:
+        from tools.official_client_capture.tests import claude_client_receipt_fixture
+
+        attempt = self.root / "attempt"
+        receipt = claude_client_receipt_fixture.write(attempt / "client-evidence" / "claude-desktop.json", {"client_id": "claude-desktop", "status": "success"})
+        files = {"client_bindings": {"claude-desktop": receipt}, "boundary_checks": {}}
+        with self.env(ATT="attempt-1", A=str(attempt), CAPTURE_RESULT=str(self.root / "missing-result.json")), \
+                mock.patch.object(self.module, "_client_files", return_value=files), \
+                mock.patch.object(self.module, "gate_overrides", return_value={}):
+            state = self.module.seal_state()
+        self.assertEqual(state["next"], "clients_invalid")
+        self.assertIn("拒绝占位成功", state["clients_invalid"]["claude-desktop"])
+
     def test_seal_approval_needs_reviewed_digest_and_approver(self) -> None:
-        files = {"client_bindings": {"claude-desktop": self.root / "d.json"}, "boundary_checks": {"third-party-ingress-rejection": self.root / "b.json"}}
-        with self.env(ATT="attempt-1"), mock.patch.object(self.module, "_client_files", return_value=files), \
+        from tools.official_client_capture.tests import claude_client_receipt_fixture
+
+        attempt = self.root / "attempt"
+        values = {"campaign_id": "fixture-campaign", "candidate_id": "candidate-1", "attempt_id": "attempt-1", "run_nonce": "nonce-1"}
+        claude_client_receipt_fixture.write(attempt / "attempt.json", values)
+        receipt = claude_client_receipt_fixture.write_receipt(attempt, "claude-desktop", values)
+        files = {"client_bindings": {"claude-desktop": receipt}, "boundary_checks": {"third-party-ingress-rejection": self.root / "b.json"}}
+        with claude_client_receipt_fixture.source_scope(), self.env(ATT="attempt-1", A=str(attempt)), mock.patch.object(self.module, "_client_files", return_value=files), \
                 mock.patch.object(self.module, "gate_overrides", return_value={"target-platform": {"host_id": "h", "architecture": "linux/aarch64"}}), \
                 mock.patch.object(self.module, "_candidate_job_ids", return_value=JOBS), contextlib.redirect_stdout(io.StringIO()):
             for approve, approver in ((None, "reviewer-a"), ("0" * 64, None), ("not-a-digest", "reviewer-a"), ("0" * 64, "  ")):
@@ -344,7 +363,7 @@ class ClaudeVc5HelperTests(unittest.TestCase):
         argv = plan["actions"][0]["command"][2:]
         self.assertIn("--gate-execution-overrides", argv)
         self.assertEqual(argv[argv.index("--approve-seal-sha256") + 1:], ["a" * 64, "--approved-by", "reviewer-a"])
-        self.assertIn(f"claude-desktop={self.root / 'd.json'}", argv)
+        self.assertIn(f"claude-desktop={receipt}", argv)
         missing = {"client_bindings": {"claude-desktop": None}, "boundary_checks": {}}
         with self.env(ATT="attempt-1"), mock.patch.object(self.module, "_client_files", return_value=missing), \
                 self.assertRaisesRegex(ValueError, "还没就位：claude-desktop"):

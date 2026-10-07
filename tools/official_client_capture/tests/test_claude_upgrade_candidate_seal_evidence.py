@@ -279,6 +279,11 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
 
     def setUp(self) -> None:
         super().setUp()
+        from tools.official_client_capture.tests import claude_client_receipt_fixture
+
+        client_source = claude_client_receipt_fixture.source_patch()
+        client_source.start()
+        self.addCleanup(client_source.stop)
         self.payload, self.labels = reduced_inputs()
         PlanScenarioCampaign.plan_scenarios = plan_scenario_ids(self.payload)
         with mock.patch.object(accept_tests, "SyntheticCampaign", PlanScenarioCampaign):
@@ -482,14 +487,15 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
         return boundary
 
     def write_client_evidence(self, attempt_root: Path) -> list[str]:
-        """两个 Mac 客户端收据（最小绑定字段，占位合同）与两条 attempt 级边界核对（B4-01 f 的正式收据合同，按校验入口造的
-        合法收据与运行目录）；返回 ``--client-evidence`` 参数。"""
+        """两个完整离线 Mac 客户端附件包与正式边界核对夹具；读侧执行同一正式合同。"""
+
+        from tools.official_client_capture.tests import claude_client_receipt_fixture
 
         directory = attempt_root / candidate_seal.CLIENT_EVIDENCE_DIRNAME
         binding = {"campaign_id": self.manifest["campaign_id"], "candidate_id": CANDIDATE, "attempt_id": ATTEMPT, "run_nonce": RUN_NONCE}
         argv: list[str] = []
         for client in ("claude-desktop", "claude-vscode"):
-            path = _write_json(directory / f"{client}.json", {"client_id": client, **binding, "status": "success"})
+            path = claude_client_receipt_fixture.write_receipt(attempt_root, client, binding)
             argv += ["--client-evidence", f"{client}={path}"]
         for check in ("codex-final-wire-isolation", "third-party-ingress-rejection"):
             claude_boundary_receipt_fixture.write_boundary_receipt(attempt_root, check)
@@ -1105,12 +1111,9 @@ class CandidateSealChainTests(_CandidateSealCase):
         value["attempt_id"] = "another-attempt"
         _write_json(path, value)
         code, result, stderr = self.run_seal(*client)
-        self.assertEqual(code, 2, stderr)
-        assert result is not None
-        self.assertEqual(result["closure"]["reasons"], ["client_binding_invalid"])
-        code, _approved, stderr = self.run_seal("--approve-seal-sha256", result["review_sha256"], "--approved-by", "reviewer-a", *client)
         self.assertEqual(code, 1)
-        self.assertIn("闭合门禁 blocked", stderr)
+        self.assertIsNone(result)
+        self.assertIn("收据与任务身份不符", stderr)
 
     def test_tampered_boundary_receipt_fails_closed(self) -> None:
         """边界核对收据经 B4-01 f 的校验入口核对：结论、身份或证据绑定被改即 seal 失败关闭（不进闭合门禁）。"""

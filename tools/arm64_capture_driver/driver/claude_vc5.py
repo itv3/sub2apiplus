@@ -402,8 +402,21 @@ def _client_files() -> dict[str, dict[str, Path | None]]:
                 # 已存在的非法收据（含悬空符号链接、目录）必须交给正式校验入口拒绝，不能当成缺失自动重跑。
                 found[group][str(item)] = path if path.exists() or path.is_symlink() else None
             else:
-                found[group][str(item)] = path if path.is_file() and not path.is_symlink() else None
+                found[group][str(item)] = path if path.exists() or path.is_symlink() else None
     return found
+
+
+def client_receipt_problems(files: dict[str, dict[str, Path | None]]) -> dict[str, str]:
+    """缺失才等待；已存在但不合法的客户端证据保留现场，禁止静默当成缺失。"""
+    problems = {}
+    verifier = _managed("claude_client_receipt_contract")
+    for client_id, path in files["client_bindings"].items():
+        if path is not None:
+            try:
+                verifier.verify_client_receipt(Path(os.environ["A"]), client_id, path)
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                problems[client_id] = str(error)
+    return problems
 
 
 def _relative_binding(path: Path, base: Path) -> dict[str, Any]:
@@ -469,6 +482,7 @@ def seal_state() -> dict[str, Any]:
         # 按派发顺序（BOUNDARY_CHECKS）列出缺的边界核对；场景清单登记之外的不派发。
         "boundary_missing": [item for item in BOUNDARY_CHECKS if item in files["boundary_checks"] and files["boundary_checks"][item] is None],
         "boundary_invalid": {},
+        "clients_invalid": client_receipt_problems(files),
         "clients_missing": sorted(item for item, path in files["client_bindings"].items() if path is None),
         "client_argv": _client_argv(files),
         "gate_execution_overrides": overrides,
@@ -477,7 +491,9 @@ def seal_state() -> dict[str, Any]:
     }
     if not state["sealed"]:
         state["boundary_invalid"] = boundary_receipt_problems(files)
-    if state["sealed"]:
+    if state["clients_invalid"]:
+        state["next"] = "clients_invalid"
+    elif state["sealed"]:
         state["next"] = "compare"
     elif state["boundary_invalid"]:
         state["next"] = "boundary_invalid"
@@ -502,6 +518,9 @@ def seal_plan(step: str, output: Path, *, approve: str | None = None, approved_b
     missing = sorted(item for group in files.values() for item, path in group.items() if path is None)
     if missing:
         raise ValueError(f"客户端收据或边界核对收据还没就位：{'、'.join(missing)}")
+    invalid = client_receipt_problems(files)
+    if invalid:
+        raise ValueError(f"客户端收据不合法，保留现场并人工审计：{invalid}")
     base = ["capture-candidate", "seal", *_ref(), "--attempt-id", _attempt_id(), *_client_argv(files),
             "--gate-execution-overrides", json.dumps(gate_overrides(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))]
     if step == "preview":

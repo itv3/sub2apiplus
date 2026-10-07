@@ -50,6 +50,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture import claude_upgrade_discovery
+from tools.official_client_capture import claude_client_receipt_contract
 from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, sha256_bytes
@@ -1098,6 +1099,14 @@ def _candidate_client_evidence(view: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             wanted = {identity: item, **binding, outcome[0]: outcome[1]}
             failed = sorted(field for field, value in wanted.items() if not _strict_equal(entry["payload"].get(field), value))
+            if group == "client_bindings":
+                try:
+                    claude_client_receipt_contract.verify_client_receipt(
+                        Path(str(view.get("attempt_root", ""))), str(item),
+                        Path(str(view.get("evidence_data_root", ""))) / str(entry["path"]),
+                    )
+                except (ConfigurationError, ValueError, OSError, KeyError, TypeError):
+                    failed.append("client_receipt_contract")
             if failed:
                 reasons.append(invalid)
             summary[group][item] = {"path": entry["path"], "failed_fields": failed}

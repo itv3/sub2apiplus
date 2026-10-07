@@ -74,6 +74,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture import claude_rule_assertion
+from tools.official_client_capture import claude_client_receipt_contract
 from tools.official_client_capture import claude_upgrade_accept
 from tools.official_client_capture import claude_upgrade_baseline
 from tools.official_client_capture import claude_upgrade_boundary_checks
@@ -1152,7 +1153,7 @@ def _client_evidence(
     scenarios: Mapping[str, Any],
     values: Sequence[str],
 ) -> dict[str, dict[str, Path]]:
-    """``--client-evidence CLIENT=PATH`` 与 attempt 级边界核对收据（``<客户端证据目录>/<check>.json``，占位）的文件。"""
+    """客户端完整附件收据与 attempt 边界核对收据；已存在的占位或损坏材料直接拒绝。"""
 
     directory = attempt_root / CLIENT_EVIDENCE_DIRNAME
     bindings: dict[str, Path] = {}
@@ -1167,6 +1168,7 @@ def _client_evidence(
             path = Path.cwd() / path
         if path.is_symlink() or not path.is_file() or path.resolve(strict=True).parent != directory.resolve(strict=False):
             raise ConfigurationError(f"客户端 {client_id} 的收据必须是 attempt 客户端证据目录内的普通文件：{raw}")
+        claude_client_receipt_contract.verify_client_receipt(attempt_root, client_id, path.resolve(strict=True))
         bindings[client_id] = path.resolve(strict=True)
     checks: dict[str, Path] = {}
     for check in scenarios["required_boundary_checks"]:
@@ -1386,6 +1388,8 @@ def _preview_candidate_seal(
     draft_paths = {name: drafts_dir / filename for name, filename in claude_upgrade_evidence.CANDIDATE_DRAFT_FILES.items()}
     view = {
         "side": claude_upgrade_evidence.CANDIDATE_SIDE,
+        "attempt_root": str(attempt_root),
+        "evidence_data_root": str(data_root),
         "campaign_id": manifest["campaign_id"],
         "candidate_id": candidate_id,
         "target_version": manifest["target_version"],
@@ -1769,6 +1773,12 @@ def _load_round_document(
         target = orchestrator._campaign_file(campaign_dir, str(binding["path"]))
         if target.is_symlink() or not target.is_file() or file_sha256(target) != binding["sha256"]:
             raise ConfigurationError(f"{label}缺失或摘要漂移。")
+    client_bindings = stage.get("client_evidence", {}).get("client_bindings", {})
+    for client_id, binding in client_bindings.items():
+        target = orchestrator._campaign_file(campaign_dir, str(binding["path"]))
+        if file_sha256(target) != binding["sha256"]:
+            raise ConfigurationError("封存后的客户端收据摘要漂移。")
+        claude_client_receipt_contract.verify_client_receipt(target.parent.parent, str(client_id), target)
     return stage
 
 

@@ -95,6 +95,7 @@
         "official_client_capture/claude_acceptance_contract.py",
         "official_client_capture/claude_build_rule_assertion_results.py",
         "official_client_capture/claude_build_runtime_audit.py",
+        "official_client_capture/claude_client_receipt_contract.py",
         "official_client_capture/claude_bundle_ast.mjs",
         "official_client_capture/claude_bundle_reachability.py",
         "official_client_capture/claude_generation_policy.py",

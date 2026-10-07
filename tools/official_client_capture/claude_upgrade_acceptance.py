@@ -67,6 +67,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture import claude_acceptance_contract as acceptance_contract
+from tools.official_client_capture import claude_client_receipt_contract
 from tools.official_client_capture import claude_build_runtime_audit as runtime_audit_module
 from tools.official_client_capture import claude_upgrade_accept
 from tools.official_client_capture import claude_upgrade_baseline
@@ -366,6 +367,8 @@ def client_receipts(campaign_dir: Path, manifest: Mapping[str, Any], candidate: 
             failed = sorted(field for field, value in wanted.items() if payload.get(field) != value)
             if failed:
                 raise ConfigurationError(f"{group} 收据 {item} 的字段不符：{'、'.join(failed)}。")
+            if group == "client_bindings":
+                claude_client_receipt_contract.verify_client_receipt(path.parent.parent, str(item), path)
             summary[group][item] = {"path": path.relative_to(Path(campaign_dir)).as_posix(), "sha256": file_sha256(path)}
     return summary
 

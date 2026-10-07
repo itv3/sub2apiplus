@@ -55,6 +55,8 @@ for round in 1 2 3 4 5 6; do
   NEXT=$(state_field next)
   echo "=== seal 链下一步：$NEXT"
   case "$NEXT" in
+    clients_invalid)
+      echo "SEAL_ABORT 客户端收据不合法（人工审计，不自动删除或重跑）：$(state_field clients_invalid)"; exit 3 ;;
     boundary_invalid)
       echo "SEAL_ABORT 边界核对收据不合法（人工审计，不自动删除或重跑）：$(state_field boundary_invalid)"; exit 3 ;;
     boundary)

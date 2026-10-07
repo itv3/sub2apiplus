@@ -42,6 +42,7 @@ from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import codex_upgrade_gate_receipt as gate_receipt
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests import claude_evaluator_fixture as evaluator_fixture
+from tools.official_client_capture.tests import claude_client_receipt_fixture
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SEAM_CONFIG_ENV = "CLAUDE_VC5_CHAIN_SEAMS"
@@ -172,7 +173,7 @@ def patchers(config: Mapping[str, Any]) -> list[Any]:
     from tools.official_client_capture import claude_upgrade
     from tools.official_client_capture import claude_upgrade_compare
 
-    result: list[Any] = []
+    result: list[Any] = [claude_client_receipt_fixture.source_patch()]
     if config.get("official_source"):
         source = json.loads(Path(config["official_source"]).read_text(encoding="utf-8"))
         result.append(mock.patch.object(claude_upgrade_compare, "official_evaluation_source", side_effect=lambda *a, **k: copy.deepcopy(source)))
@@ -317,16 +318,6 @@ def materialize_candidate(
     sealed_manifest = _write_json(attempt_root / "evidence-manifest.json", {"seam": "B4-06b 合成封存证据清单"})
     values = {"campaign_id": manifest["campaign_id"], "candidate_id": candidate_id, "attempt_id": attempt_id, "run_nonce": run_nonce}
     client_dir = attempt_root / "client-evidence"
-    clients = {
-        "client_bindings": {
-            client: _write_json(client_dir / f"{client}.json", {"client_id": client, **values, "status": "success"})
-            for client in ("claude-desktop", "claude-vscode")
-        },
-        "boundary_checks": {
-            check: _write_json(client_dir / f"{check}.json", {"check_id": check, **values, "result": "pass"})
-            for check in ("codex-final-wire-isolation", "third-party-ingress-rejection")
-        },
-    }
     attempt = {
         "attempt_id": attempt_id,
         "candidate_id": candidate_id,
@@ -357,6 +348,17 @@ def materialize_candidate(
         },
     }
     attempt_path = _write_json(attempt_root / "attempt.json", attempt)
+    clients = {
+        "client_bindings": {
+            client: claude_client_receipt_fixture.write_receipt(attempt_root, client, values)
+            for client in ("claude-desktop", "claude-vscode")
+        },
+        "boundary_checks": {
+            check: _write_json(client_dir / f"{check}.json", {"check_id": check, **values, "result": "pass"})
+            for check in ("codex-final-wire-isolation", "third-party-ingress-rejection")
+        },
+    }
+    attempt = json.loads(attempt_path.read_bytes())
     raw = [
         {"path": path, **inventory[path]}
         for path in sorted(inventory)

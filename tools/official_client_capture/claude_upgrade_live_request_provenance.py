@@ -81,6 +81,7 @@ ESTIMATION_POLICIES = ("none", "upper_bound_from_sibling", "upper_bound_from_sib
 SOURCE_RELAY = "claude_relay"
 SOURCE_MITM = "claude_mitm"
 SOURCE_DIRECT = "claude_direct"
+SOURCE_MAC_CANDIDATE = "claude_mac_candidate"
 CAPTURE_MANIFEST_SCHEMA = "official-client-capture/v1"
 RELAY_MANIFEST_SCHEMA = "byte-relay/v1"
 # FW-E 中继运行根上的中继清单（claude_fw_e_relay 的 SCHEMA_RUN）：只读其中的中继完整性登记。
@@ -1502,7 +1503,7 @@ def collect_campaign_provenance(
             receipt["unresolved_job_ids"].append(item["job_id"])
         receipt["status"] = "accounting_unresolved" if receipt["unresolved_job_ids"] else "complete"
         receipt["identity_keys_sha256"] = _sha256(_canonical([]))
-        return receipt
+        return _append_client_runs(campaign_dir, receipt)
     configuration = manifest.get("configuration")
     if not isinstance(configuration, Mapping):
         raise ProvenanceError("Formal Campaign 缺少 configuration")
@@ -1644,6 +1645,32 @@ def collect_campaign_provenance(
     receipt["auxiliary_total"] = len(receipt["auxiliary_requests"])
     receipt["status"] = "accounting_unresolved" if receipt["unresolved_job_ids"] else "complete"
     receipt["identity_keys_sha256"] = _sha256(_canonical(sorted(item["identity_key"] for item in receipt["requests"])))
+    return _append_client_runs(campaign_dir, receipt)
+
+
+def _append_client_runs(campaign_dir: Path, receipt: dict[str, Any]) -> dict[str, Any]:
+    """把候选完成后单独归档的 Mac 运行并入同一本请求 provenance；夹具来源不会进入正式预算。"""
+    from tools.official_client_capture import claude_upgrade_client_receipts
+
+    keys = {item["identity_key"] for item in receipt["requests"]}
+    auxiliary_keys = {item["identity_key"] for item in receipt["auxiliary_requests"]}
+    for run in claude_upgrade_client_receipts.collect_campaign_runs(campaign_dir):
+        entry = {key: value for key, value in run.items() if key not in {"requests", "auxiliary_requests"}}
+        entry["precise_count"] = entry["auxiliary_count"] = 0
+        for field, seen, count in (("requests", keys, "precise_count"), ("auxiliary_requests", auxiliary_keys, "auxiliary_count")):
+            for request in run[field]:
+                # Mac 原生键与历史 relay/mitm 算法相同；源 producer 保留，不使用导入目录或时间生成键。
+                if request["identity_key"] not in seen:
+                    seen.add(request["identity_key"])
+                    receipt[field].append(request)
+                    entry[count] += 1
+        if entry["status"] == "unresolved":
+            receipt["unresolved_job_ids"].append(entry["job_id"])
+        receipt["jobs"].append(entry)
+    receipt["precise_total"] = len(receipt["requests"])
+    receipt["auxiliary_total"] = len(receipt["auxiliary_requests"])
+    receipt["status"] = "accounting_unresolved" if receipt["unresolved_job_ids"] else "complete"
+    receipt["identity_keys_sha256"] = _sha256(_canonical(sorted(keys)))
     return receipt
 
 
