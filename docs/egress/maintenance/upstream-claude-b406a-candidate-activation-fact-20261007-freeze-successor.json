@@ -1,0 +1,54 @@
+{
+  "base_commit": "0a89f223a14163550e6e7cc61721d24d7ad5b1da",
+  "changed_path_count": 6,
+  "current_commit": "ab24ad683086f700b43c56c1252fd94ca4573e32",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5858,
+  "frozen_path_count": 2015,
+  "identity_sha256": "f52db3b6bb70db7b1c911e9097956de09b98184b1fced595a68915ee08a4a618",
+  "issued_at_utc": "2026-10-07T14:23:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-b406a-candidate-activation-fact-20261007-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/claude_official_egress_activation_fact.go",
+      "predecessor_sha256s": [
+        "3e29005dfc4c61aa0a373a7fbd61271b8ec2bd80977b6044951bfed5b96a28e5"
+      ],
+      "reason": "Claude 升级 B4-06a：Go 激活事实在 FW-G 候选 Runtime 生效时写 validation_candidate 与候选画像链摘要（schema v1 不变） path=backend/internal/service/claude_official_egress_activation_fact.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b3ecb143396bb3313f934c82b919533912ef76a50de11ab2952576ace78ff8c7"
+    }
+  ],
+  "unregistered_path_count": 5,
+  "unregistered_paths": [
+    "backend/internal/service/claude_official_egress_activation_fact_test.go",
+    "tools/official_client_capture/claude_build_runtime_audit.py",
+    "tools/official_client_capture/claude_upgrade_accept.py",
+    "tools/official_client_capture/tests/test_claude_build_runtime_audit.py",
+    "tools/official_client_capture/tests/test_claude_upgrade_accept.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
