@@ -35,7 +35,9 @@ class SegmentReuseChainTests(unittest.TestCase):
             trees.replace_once(tree, 'tests/evaluation_chain_driver.py',
                 'if (Path(state["root"]) / AR_FAIL_FLAG).exists():',
                 'if (Path(state["root"]) / AR_FAIL_FLAG).exists() and job.job_id == JOB_B:')
-            trees.replace_once(tree, 'codex_upgrade.py',
+            # 恢复段摘要写入（_write_attempt_recovery_summary）已随共享控制流程迁入 upgrade_control_plane.py
+            # （B1-09，2ec840764），中断点注入跟随它所在的文件。
+            trees.replace_once(tree, 'upgrade_control_plane.py',
                 '    planned = {item["id"]: item["execution_sha256"] for item in reservation["planned_jobs"]}\n',
                 '    if reservation["recovery_revision"] == "ar2":\n'
                 '        import signal\n'

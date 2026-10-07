@@ -283,7 +283,8 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             fixture = driver_tests._DriverFixture(root)
             scripts = root / "driver"
             scripts.mkdir()
-            for name in ("vc4-all.sh", "lib.sh", "parse_env.py", "wait_state.py"):
+            # lib.sh 解析参数后加载同目录的客户端表（B5a-06 起），驱动副本要带上它。
+            for name in ("vc4-all.sh", "lib.sh", "parse_env.py", "client_table.py", "wait_state.py"):
                 shutil.copy2(driver_tests.SCRIPTS / name, scripts / name)
             # 本例只验证父子进程与等待控制，构建前置用零请求替身；输入合同由专项测试实际复算。
             # 首个 revision 的真实裁定是 early-test-mode=full（门禁与前端并行）；guard.sh 准入与
@@ -337,6 +338,8 @@ class DriverResumeChainTests(unittest.TestCase):
             log.write_text("run started\n")
             for fault in ("dead-run", "stale-heartbeat"):
                 with self.subTest(fault=fault):
+                    # 两个子例共用同一驱动副本与替身调用记录，每个子例开始前清空，只核本子例的调用。
+                    calls.write_text("")
                     child = subprocess.Popen(["sleep", "30"])
                     try:
                         pid = fixture.runroot / "vc5-run-batch.pid"
@@ -355,7 +358,10 @@ class DriverResumeChainTests(unittest.TestCase):
                         result = subprocess.run(["bash", str(scripts / "vc5-all.sh")], env={**os.environ, **fixture.env},
                                                 capture_output=True, text=True, timeout=6)
                         self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
-                        self.assertEqual(calls.read_text(), "")
+                        # vc5-all.sh 开头先经 lib.sh 的 vc5_require_admission 消费 VC-5 准入（1078370e5 起），之后才等待
+                        # run 批次；等待失败时除这一次准入消费外，不得调用任何阶段脚本（seal、accept、canonical2 等）。
+                        self.assertEqual(calls.read_text().splitlines(), ["vc5-precheck.sh --consume --export-parameters"],
+                                         "等待失败前只允许消费准入，不得进入任何阶段")
                         self.assertIn("子进程已退出" if fault == "dead-run" else "监督器心跳", result.stderr)
                     finally:
                         if child.poll() is None:
@@ -366,19 +372,25 @@ class DriverResumeChainTests(unittest.TestCase):
 
     def test_upload_timeout_resume_and_changed_inputs_rerun_only_required_stages(self):
         driver_tests, wait_tests = _driver_test_modules()
+        # 续跑输入夹具的完整历史仓库在类级建立（A-02 起）：借用它的实例之前先建好，用完按类清理。
+        wait_tests.ResumeInputTests.setUpClass()
+        self.addCleanup(wait_tests.ResumeInputTests.doClassCleanups)
         helper = wait_tests.ResumeInputTests()
         helper.setUp()
         self.addCleanup(helper.doCleanups)
         root = helper.root
         fixture = driver_tests._DriverFixture(root / "harness")
         values = wait_tests.load("parse_env").parse(fixture.env_file.read_text())
-        values.update(B=str(root), C=helper.commit, CAND=wait_tests.build_tests.CANDIDATE_ID,
-                      UP="fixture-upgrade", NEW=helper.manifest["campaign_id"], STAGE_BUDGETS="VC-4=0.02 VC-5=1",
-                      FRONTEND_DEVIATION_APPROVED_BY="测试授权")
+        # A-02 起候选目录按数据根定位（B 必须是 D/candidates/CAND），建树与构建网络收据绑定本轮 bundle：数据根与 bundle
+        # 取续跑夹具的那一份，数据根的控制目录先建好（证据根建在 $D/control 下）。
+        (Path(helper.env["D"]) / "control").mkdir(exist_ok=True)
+        values.update(D=helper.env["D"], BUNDLE=helper.env["BUNDLE"], B=str(root), C=helper.commit,
+                      CAND=wait_tests.build_tests.CANDIDATE_ID, UP="fixture-upgrade", NEW=helper.manifest["campaign_id"],
+                      STAGE_BUDGETS="VC-4=0.02 VC-5=1", FRONTEND_DEVIATION_APPROVED_BY="测试授权")
         fixture.env_file.write_text("".join(f'{key}="{value}"\n' for key, value in values.items()))
         scripts = root / "driver-fixture"
         scripts.mkdir()
-        for name in ("vc4-all.sh", "lib.sh", "parse_env.py", "wait_state.py", "upload_manifest.py"):
+        for name in ("vc4-all.sh", "lib.sh", "parse_env.py", "client_table.py", "wait_state.py", "upload_manifest.py"):
             shutil.copy2(driver_tests.SCRIPTS / name, scripts / name)
         calls = root / "stage-calls.log"
         calls.touch()
@@ -411,11 +423,22 @@ class DriverResumeChainTests(unittest.TestCase):
             "trees.sh": "echo TREES_DONE\n",
             "frontend.sh": "echo 'FRONTEND_DONE now'\n",
             "vc4-gates.sh": f'mkdir -p "$1/logs"\ncp "{helper.evidence}/logs/implementation.log" "$1/logs/implementation.log"\necho "GATES_DONE now"\n',
-            "build.sh": f'cp "{golden_parameters}" "{root}/artifacts/build-parameters.json"\necho BUILD_DONE\n',
+            "build.sh": (f'cp "{golden_parameters}" "{root}/artifacts/build-parameters.json"\n'
+                         f'rm -f "{root}/artifacts/build-network-receipt.json"\n'
+                         f'python3 "{scripts}/record_network.py" "$(cat "$RUNROOT/E.txt")/pre-build.json"\necho BUILD_DONE\n'),
             "guard.sh": "echo GUARD_OK\n",
         }
         for name, body in bodies.items():
             (scripts / name).write_text(f'#!/bin/bash\nset -e\necho {name} >> "{calls}"\n' + body)
+        # 构建网络收据：真实 vc4_contract 按本轮参数与本次 pre-build 登记（绑定命令、镜像与 docker 构建日志）。
+        (scripts / "record_network.py").write_text(
+            "import os,sys\nfrom datetime import datetime,timezone\nfrom pathlib import Path\n"
+            f"sys.path.insert(0, {str(driver_tests.REPO_ROOT)!r}); sys.path.insert(0, {str(driver_tests.SCRIPTS)!r})\n"
+            "import vc4_contract\n"
+            f"base=Path({str(root)!r})\n"
+            "vc4_contract.record_network(base, dict(os.environ), Path(sys.argv[1]), exit_code=0, "
+            f"image_id={wait_tests.build_tests.IMAGE_ID!r}, started_at=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'), "
+            "command=['docker', 'build', str(base / 'artifacts/ctx')])\n")
         # 首个 revision 没有前序构建收据，正式 plan-retest 的裁定恒为 full；该裁定逻辑由 R2 专项测试复算。
         (scripts / "implementation_gates.py").write_text(
             "import json,sys\nfrom pathlib import Path\n"
