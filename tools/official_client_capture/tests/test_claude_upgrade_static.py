@@ -3,6 +3,7 @@
 * 在 Campaign 的 ``official/`` 下临时目录里分析、写收据后整目录改名到 ``official/static-analysis``；收据绑定冻结收据、基线
   两件、运行时两件与全部产物；重跑只重放收据、不再分析；被中断留下的临时目录先清掉；产物被改动即重放失败（不覆盖）；
 * 批次动作：``vc1-01-analyze-target``（排在同批 seal 动作之前），命令是受管 Python 直接调用 ``claude_upgrade.py analyze-target --campaign-dir``；
+  首批之后的两种 VC-1 封存批次（B2-11 第二部分）：预览批次静态分析在 seal 预览之前，批准批次只有 seal 批准；
 * seal 不给静态参数时取规范产物，显式给出的与规范产物不同即拒绝；规范收据与冻结的生产现状清单一并交给完整性清单；
 * VC-2 分类：``managed_egress_bound`` 的出站 ID 必须在 VC-1 封存的生产现状清单里，没有清单时无法核对（失败关闭）。
 
@@ -127,6 +128,54 @@ class StaticAnalysisTests(CampaignWorldTestCase):
         self.assertEqual((action["action_id"], action["operation"], action["item_ids"]), (static.ACTION_ID, static.ACTION_OPERATION, [static.ACTION_ID]))
         self.assertEqual(action["command"][2:], ["analyze-target", "--campaign-dir", str(self.campaign.resolve())])
         self.assertEqual(Path(action["command"][1]).name, "claude_upgrade.py")
+
+    def test_vc1_seal_batches_put_static_analysis_before_seal(self) -> None:
+        """B2-11 第二部分：首批之后的两种 VC-1 封存批次——预览批次静态分析在 seal 预览之前，批准批次只有 seal 批准；动作名
+        不触发 Codex 的断言证据包门禁，seal 动作仍被共享的封存链预检认出（要封存的 attempt）。"""
+
+        from tools.official_client_capture import claude_upgrade
+        from tools.official_client_capture import claude_upgrade_batch
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        campaign = self.campaign.resolve()
+        awaiting = {"status": "official_awaiting_receipts", "official_attempt": {"attempt_id": "attempt-0001"}, "next_command": "seal"}
+        dispositions = campaign / "analysis" / "discovery-dispositions.json"
+        formal = mock.patch.object(claude_upgrade, "_require_formal_campaign", return_value={"predecessor": None})
+        with formal, mock.patch.object(claude_upgrade, "campaign_status", return_value=awaiting):
+            preview = static.vc1_seal_actions(campaign)
+            approve = static.vc1_seal_actions(campaign, approve_seal_sha256="a" * 64, discovery_dispositions=dispositions)
+            with self.assertRaisesRegex(ConfigurationError, "review_sha256"):
+                static.vc1_seal_actions(campaign, approve_seal_sha256="A" * 64)
+        plan = claude_upgrade_batch.action_plan(preview, phase="VC-1")
+        self.assertEqual([action["action_id"] for action in plan["actions"]], [static.ACTION_ID, static.SEAL_PREVIEW_ACTION_ID])
+        self.assertEqual(plan["execute_item_ids"], sorted([static.ACTION_ID, static.SEAL_PREVIEW_ACTION_ID]))
+        seal = plan["actions"][1]
+        self.assertEqual(seal["command"][2:], ["capture-official", "seal", "--campaign-dir", str(campaign), "--attempt-id", "attempt-0001"])
+        self.assertEqual(seal["operation"], f"VC-1:{static.SEAL_PREVIEW_ACTION_ID}")
+        [approval] = approve
+        self.assertEqual(approval["action_id"], static.SEAL_APPROVE_ACTION_ID)
+        self.assertEqual(approval["command"][-4:], ["--discovery-dispositions", str(dispositions), "--approve-seal-sha256", "a" * 64])
+        claude_upgrade_batch.action_plan(approve, phase="VC-1")
+        names = {action["action_id"] for action in [*preview, *approve]}
+        self.assertFalse(names & {"prepare-official-assertion-bundle", "seal-official-preview", "seal-official-approve"},
+                         "不用 Codex 的封存链动作名（那两个名字会触发 Codex 的断言证据包门禁）")
+        self.assertIsNone(supervisor._validate_vc1_assertion_seal_gate(
+            schema_version=supervisor.OFFICIAL_CLIENT_CAMPAIGN_RUN_SCHEMA, campaign_id="c1", phase="VC-1", actions=plan["actions"],
+            require_bound_files=True))
+        self.assertEqual(supervisor._seal_chain_attempt_target(seal), (str(campaign), "official", None, "attempt-0001"),
+                         "共享的封存链预检（工具演进作废、隔离）照样认出要封存的 attempt")
+        # 官方 attempt 不在等封存：按状态给出的下一步处理，这里拒绝。
+        failed = {"status": "official_capture_failed", "official_attempt": {"attempt_id": "attempt-0001"}, "next_command": "reconcile-attempt"}
+        with formal, mock.patch.object(claude_upgrade, "campaign_status", return_value=failed):
+            with self.assertRaisesRegex(ConfigurationError, "awaiting_receipts.*reconcile-attempt"):
+                static.vc1_seal_actions(campaign)
+        # 只读复用前序：没有 attempt，seal 在预览批次里直接完成，不接受批准摘要。
+        reuse = mock.patch.object(claude_upgrade, "_require_formal_campaign", return_value={"predecessor": {"mode": "read_only_reuse"}})
+        with reuse, mock.patch.object(claude_upgrade, "campaign_status", side_effect=AssertionError("复用不读 attempt")):
+            reused = static.vc1_seal_actions(campaign)
+            with self.assertRaisesRegex(ConfigurationError, "不接受批准摘要"):
+                static.vc1_seal_actions(campaign, approve_seal_sha256="a" * 64)
+        self.assertEqual(reused[1]["command"][2:], ["capture-official", "seal", "--campaign-dir", str(campaign)])
 
     def test_runtime_tools_must_match_policy_digests(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "缺少受管运行时 node"):

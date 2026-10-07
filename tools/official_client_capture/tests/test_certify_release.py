@@ -189,6 +189,27 @@ class CertifyReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "自摘要不一致"):
                 certify_release.verify(path)
 
+    def test_job_rehearsal_replay_is_bound_to_the_certified_client(self) -> None:
+        """B2-11 第二部分：Job 演练按本次认证的客户端重放——Codex 认证不接受 Claude 的 Job 演练收据，两客户端各传自己的名字。"""
+
+        from tools.official_client_capture import claude_upgrade_job_rehearsal as claude_profile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            receipt = root / "receipt.json"
+            receipt.write_text(json.dumps({"schema_version": claude_profile.RECEIPT_SCHEMA, "facts": {"path": "facts.json"}}),
+                               encoding="utf-8")
+            receipt.chmod(0o600)
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "schema_version 不匹配"):
+                certify_release.replay_job_rehearsal(root, receipt)
+            with mock.patch.object(job_rehearsal, "replay", side_effect=job_rehearsal.JobRehearsalReceiptError("替身拒绝")) as replay:
+                for client in ("codex", "claude"):
+                    with self.subTest(client=client):
+                        with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "替身拒绝"):
+                            certify_release.replay_job_rehearsal(root, receipt, client)
+                        self.assertEqual(replay.call_args.kwargs, {"client": client})
+
     def test_issue_can_delegate_atomic_replay_to_capture_container(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

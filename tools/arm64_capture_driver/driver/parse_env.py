@@ -66,7 +66,21 @@ OPTIONAL_KEYS = (
     # B5a-09：Claude 场景清单的必需 Campaign 变量 upstream_ip（api.anthropic.com 的冻结公开上游 IP）。参数文件可缺省，
     # Claude 的入口便宜检查（required-parameters）报缺；写了就必须是 IP 地址。
     "UPSTREAM_IP",
+    # B2-11 第二部分：Claude 预检 plan（建 preflight_only Campaign）的参数——Active Release 目录与静态分析的基线词法锚点／索引（冻结
+    # 进 Campaign inputs）、生产现状清单所在的前序 Store 与批准画像的 Campaign、只读复用的前序 Store 与 Campaign（证据决定
+    # 为 reuse 时）、Store 身份的入口／隐私模式／OAuth 组织与模型目录摘要。参数文件可缺省，Claude 的入口便宜检查与预检 plan
+    # 报缺；写了就核格式，成对的两项必须同时给出。
+    "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY",
+    "PRODUCTION_INVENTORY_STORE", "PRODUCTION_INVENTORY_CAMPAIGN", "PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN",
+    "ENTRYPOINT", "PRIVACY_MODE", "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256",
 )
+# B2-11 第二部分的新键里：绝对路径、安全标识与成对出现的几组。
+PLAN_PATH_KEYS = (
+    "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY", "PRODUCTION_INVENTORY_STORE",
+    "PREDECESSOR_STORE",
+)
+PLAN_ID_KEYS = ("PRODUCTION_INVENTORY_CAMPAIGN", "PREDECESSOR_STORE_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE", "OAUTH_ORG_ID")
+PLAN_PAIRED_KEYS = (("PRODUCTION_INVENTORY_STORE", "PRODUCTION_INVENTORY_CAMPAIGN"), ("PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN"))
 ASSIGNMENT = re.compile(r"^([A-Z_][A-Z0-9_]*)=(.*)$")
 REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}|\$([A-Z_][A-Z0-9_]*)")
 FORBIDDEN = set("`;&|<>()\\\r\n")
@@ -300,6 +314,17 @@ def parse(text: str) -> dict[str, str]:
             ipaddress.ip_address(values["UPSTREAM_IP"])
         except ValueError:
             raise EnvFileError("UPSTREAM_IP 必须是 IP 地址") from None
+    for key in PLAN_PATH_KEYS:
+        if key in values and (not values[key].startswith("/") or ".." in values[key].split("/")):
+            raise EnvFileError(f"{key} 必须是不含 .. 的绝对路径")
+    for key in PLAN_ID_KEYS:
+        if key in values and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", values[key]):
+            raise EnvFileError(f"{key} 必须是安全标识（字母或数字开头，只含字母、数字与 ._-，最长 128 个字符）")
+    if "MODEL_CATALOG_SHA256" in values and not re.fullmatch(r"[0-9a-f]{64}", values["MODEL_CATALOG_SHA256"]):
+        raise EnvFileError("MODEL_CATALOG_SHA256 必须是完整 SHA-256")
+    for first, second in PLAN_PAIRED_KEYS:
+        if (first in values) != (second in values):
+            raise EnvFileError(f"{first} 与 {second} 必须同时给出")
     if values.get("VC4_BUILD_NETWORK", "default") not in {"default", "none", "host"}:
         raise EnvFileError("VC4_BUILD_NETWORK 只能是 default、none 或 host")
     if "VC4_BUILD_NETWORK_APPROVAL" in values and (

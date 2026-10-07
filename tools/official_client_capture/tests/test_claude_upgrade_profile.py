@@ -723,5 +723,29 @@ class PointerAndDiffTests(unittest.TestCase):
                     profile.apply_op(copy.deepcopy(document), op)
 
 
+class ActiveInputSourceTests(unittest.TestCase):
+    """Active 输入的来源（B2-11 第二部分）：冻结副本优先；带控制收据的 Campaign 没有冻结副本即拒绝，不接受命令行回退；
+    只有不带控制收据的旧形状 Campaign 用命令行给出的 Campaign 内文件。"""
+
+    def test_control_receipt_campaigns_never_fall_back_to_the_command_line(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory).resolve() / "campaign"
+            (campaign / "analysis").mkdir(parents=True)
+            catalog = campaign / "analysis" / "active-release-catalog.json"
+            active = campaign / "analysis" / "active-profile.json"
+            catalog.write_text("{}", encoding="utf-8")
+            active.write_text("{}", encoding="utf-8")
+            legacy = {"campaign_id": "c1", "inputs": {}, "control_receipts": {}}
+            self.assertEqual(profile._active_paths(campaign, legacy, catalog, active), (catalog, active), "旧形状 Campaign 照旧取命令行文件")
+            with self.assertRaisesRegex(ConfigurationError, "必须提供 --active-release-catalog"):
+                profile._active_paths(campaign, legacy, None, None)
+            created = {**legacy, "control_receipts": {"upgrade_timing": {"receipt": "x"}}}
+            for given in ((catalog, active), (None, None)):
+                with self.subTest(given=bool(given[0])), self.assertRaisesRegex(ConfigurationError, "不接受命令行回退"):
+                    profile._active_paths(campaign, created, *given)
+
+
 if __name__ == "__main__":
     unittest.main()

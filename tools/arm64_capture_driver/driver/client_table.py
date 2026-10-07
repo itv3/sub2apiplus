@@ -25,9 +25,14 @@
 * 入口便宜检查（B5a-09）：目标客户端除宿主机与 ``capture-cli`` 之外还要核对的容器、官方包的复核模块、``plan --audit-only``
   的参数模板（以 ``$`` 开头的项代入同名参数，其余照抄；Codex 为空，沿用脚本里的原形状），以及零请求 smoke 一步登记的
   工具身份摘要（smoke 依赖的模块落在哪几层，哪几层的摘要就要登记）；
+* 预检 plan（B2-11 第二部分）：建 ``preflight_only`` Campaign 的参数模板（写法同 ``plan --audit-only`` 的模板；Codex 为空，
+  入口编排器沿用原来的 Codex 参数形状）、证据决定为 ``reuse`` 时追加的前序参数模板，以及这一步另读的文件与目录
+  （``kind:模板``，``file``／``tree``；Codex 为空，步骤表逐字不变）；
 * 入口空跑（B5a-10）：结论文件名的客户端前缀（Codex 为空，结论文件名与改造前逐字相同；同一提交＋同一部署两客户端各一份）；
 * VC-4（B3-04a）：门禁需求的来源（``local-chain``：本机候选链经 ssh 在采集主机现算；``arm64-preview``：采集主机小步骤
   ``vc4-requirements.sh`` 经编排器的需求预览写进本轮 RUNROOT，本机候选链只读取）与 VC-4 总控最后一步的派发脚本；
+* VC-1（B2-11 第二部分）：首批之后的 VC-1 封存批次（静态分析在 seal 预览之前、seal 批准）的派发脚本（Codex 为空：Codex 的
+  VC-1 封存链不经这里）；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -174,6 +179,10 @@ _CODEX: Mapping[str, Any] = {
     "binary_extra_containers": (),
     "official_package_verifier": None,
     "plan_audit_argv": (),
+    # ---- 预检 plan（B2-11 第二部分）：Codex 三项为空，入口编排器的预检 plan 命令行与步骤输入和改造前逐字相同。
+    "preflight_plan_argv": (),
+    "preflight_plan_reuse_argv": (),
+    "preflight_plan_inputs": (),
     # ---- 其它
     "identity_policy_file": "tool_identity_policy_v2.json",
     # Job 演练的五个容器（入口步骤 job-rehearsal 登记它们的镜像）。
@@ -184,11 +193,23 @@ _CODEX: Mapping[str, Any] = {
     # vc4.sh（与改造前相同）。
     "vc4_requirements_source": "local-chain",
     "vc4_dispatch_script": "vc4.sh",
+    # VC-1 首批之后的封存批次派发脚本（B2-11 第二部分）：Codex 没有这一项。
+    "vc1_dispatch_script": None,
     "vc5_admission_schema": "codex-vc5-admission/v1",
     "vc5_admission_approval_schema": "codex-vc5-admission-approval/v1",
     "runtime_profile": "runtime/codex-profile-{version}.json",
     "pending": {},
 }
+
+# Claude plan 的参数模板：plan-audit（B5a-09）与预检 plan（B2-11 第二部分）共用这一份，两处不会各改各的。
+_CLAUDE_PLAN_ARGV = (
+    "--campaign-mode", "preflight_only", "--campaign-purpose", "production_replacement",
+    "--baseline-version", "$BASELINE_VERSION", "--target-version", "$TARGET_VERSION",
+    "--target-sha256", "$CLIENT_BIN_SHA256", "--target-package", "$TARGET_PACKAGE",
+    "--target-package-sha256", "$OFFICIAL_ASSET_SHA256", "--runtime-image", "$CAPTURE_RUNTIME_IMAGE",
+    "--scenario-manifest", "$SCENARIOS_JSON", "--claude-bin", "$CLIENT_BIN", "--model", "$MAIN_MODEL",
+    "--upstream-ip", "$UPSTREAM_IP", "--suite", "full",
+)
 
 _CLAUDE: Mapping[str, Any] = {
     **_SHARED,
@@ -208,12 +229,22 @@ _CLAUDE: Mapping[str, Any] = {
         "TARGET_SOURCE", "BASELINE_SOURCE", "ACTIVE_PROFILE", "MAIN_MODEL", "LITE_MODEL", "CLIENT_ACCOUNT_ID", "API_KEY_ID",
         "COMPOSE_DIR", "PROJECT_DEADLINE_UTC", "STAGE_BUDGETS", "POLICY_COMPAT_RECEIPT", "POLICY_ACTIVATION",
         "PRE_A3_CERTIFICATION", "P0_ROLLBACK_EVIDENCE", "UPSTREAM_IP",
+        # B2-11 第二部分：预检 plan 建 Campaign 必需的输入（Active Release 目录、静态分析的基线词法锚点与索引、生产现状清单所在的
+        # 前序 Store 与批准画像的 Campaign、Store 身份四项）。只读复用的前序（PREDECESSOR_STORE／_CAMPAIGN）只在证据决定为
+        # reuse 时需要，不在这里报缺，由预检 plan 一步报出。
+        "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY", "PRODUCTION_INVENTORY_STORE",
+        "PRODUCTION_INVENTORY_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE", "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256",
     ),
-    # 按 Codex 同一组映射（B2-11 落实 claude_upgrade plan 的参数表时核对）。
+    # 预检 plan 实际读的参数键（B2-11 第二部分核对）：参数模板代入的键、证据决定与前序、来源提交、Campaign 命名用的前缀与
+    # 升级 ID，以及冻结目录两棵（官方包在目标冻结目录里）。Codex 那组里的 LITE_MODEL、CLIENT_ACCOUNT_ID、API_KEY_ID、
+    # COMPOSE_DIR 不被 Claude plan 读取，不登记，免得无关参数变动让预检及其下游 Job 演练重做。
     "plan_params": (
         "BASELINE_VERSION", "TARGET_VERSION", "BASELINE_SOURCE", "TARGET_SOURCE", "ACTIVE_PROFILE", "CLIENT_BIN",
-        "CLIENT_BIN_SHA256", "TARGET_PACKAGE", "OFFICIAL_ASSET_SHA256", "CAPTURE_RUNTIME_IMAGE", "MAIN_MODEL",
-        "LITE_MODEL", "CLIENT_ACCOUNT_ID", "API_KEY_ID", "COMPOSE_DIR", "CAMPAIGN_PREFIX", "UP",
+        "CLIENT_BIN_SHA256", "TARGET_PACKAGE", "OFFICIAL_ASSET_SHA256", "CAPTURE_RUNTIME_IMAGE", "SCENARIOS_JSON", "MAIN_MODEL",
+        "UPSTREAM_IP", "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY",
+        "PRODUCTION_INVENTORY_STORE", "PRODUCTION_INVENTORY_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE", "OAUTH_ORG_ID",
+        "MODEL_CATALOG_SHA256", "ENTRY_COMMIT", "EVIDENCE_DECISION", "PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN",
+        "CAMPAIGN_PREFIX", "UP",
     ),
     "job_rehearsal_params": ("CLIENT_BIN", "CAPTURE_RUNTIME_IMAGE"),
     # ---- 派生模板。Campaign 前缀落在 Claude Campaign ID 的形态里（claude-code-<版本，点换下划线>，适配器据此把它认作
@@ -278,13 +309,22 @@ _CLAUDE: Mapping[str, Any] = {
     # 两客户端同一形式，在脚本里给出）。
     "binary_extra_containers": ("capture-cli-synthetic",),
     "official_package_verifier": _module("claude_upgrade_freeze"),
-    "plan_audit_argv": (
-        "--campaign-mode", "preflight_only", "--campaign-purpose", "production_replacement",
-        "--baseline-version", "$BASELINE_VERSION", "--target-version", "$TARGET_VERSION",
-        "--target-sha256", "$CLIENT_BIN_SHA256", "--target-package", "$TARGET_PACKAGE",
-        "--target-package-sha256", "$OFFICIAL_ASSET_SHA256", "--runtime-image", "$CAPTURE_RUNTIME_IMAGE",
-        "--scenario-manifest", "$SCENARIOS_JSON", "--claude-bin", "$CLIENT_BIN", "--model", "$MAIN_MODEL",
-        "--upstream-ip", "$UPSTREAM_IP", "--suite", "full",
+    "plan_audit_argv": _CLAUDE_PLAN_ARGV,
+    # ---- 预检 plan（B2-11 第二部分）：plan-audit 那份参数加建 Campaign 的参数（Active 两份、静态基线两份、生产现状清单
+    # 来源、Store 身份四项、来源提交）；计时账本、checkpoint、环境收据与 campaign-dir/id 由入口编排器按前序步骤记录给出。
+    # 证据决定为 reuse 时另带只读复用的前序 Store 与 Campaign。另读的文件与 Store 目录登记进预检 plan 一步的输入。
+    "preflight_plan_argv": (
+        *_CLAUDE_PLAN_ARGV,
+        "--active-release-catalog", "$ACTIVE_RELEASE_CATALOG", "--active-profile", "$ACTIVE_PROFILE",
+        "--static-baseline-anchors", "$STATIC_BASELINE_ANCHORS", "--static-baseline-reachability", "$STATIC_BASELINE_REACHABILITY",
+        "--production-inventory-store", "$PRODUCTION_INVENTORY_STORE", "--production-inventory-campaign", "$PRODUCTION_INVENTORY_CAMPAIGN",
+        "--entrypoint", "$ENTRYPOINT", "--privacy-mode", "$PRIVACY_MODE", "--oauth-org-id", "$OAUTH_ORG_ID",
+        "--model-catalog-sha256", "$MODEL_CATALOG_SHA256", "--source-commit", "$ENTRY_COMMIT",
+    ),
+    "preflight_plan_reuse_argv": ("--predecessor-store", "$PREDECESSOR_STORE", "--predecessor-campaign", "$PREDECESSOR_STORE_CAMPAIGN"),
+    "preflight_plan_inputs": (
+        "file:{ACTIVE_RELEASE_CATALOG}", "file:{STATIC_BASELINE_ANCHORS}", "file:{STATIC_BASELINE_REACHABILITY}",
+        "tree:{PRODUCTION_INVENTORY_STORE}", "tree:{PREDECESSOR_STORE}",
     ),
     # ---- 其它
     "identity_policy_file": "claude_tool_identity_policy_v2.json",
@@ -302,6 +342,10 @@ _CLAUDE: Mapping[str, Any] = {
     # record-candidate-build 用 --preview 零写入预览代替 Codex 那种替换内部写点的预演）。
     "vc4_requirements_source": "arm64-preview",
     "vc4_dispatch_script": "vc4-claude.sh",
+    # VC-1（B2-11 第二部分）：VC-0 收口只派发首批 capture-official；首批之后由 vc1-claude.sh 派发两种 VC-1 封存批次——静态分析
+    # vc1-01-analyze-target 在 seal 预览 vc1-02-seal-preview 之前，审核后 seal 批准 vc1-03-seal-approve（动作取受管
+    # claude_upgrade_static.vc1_seal_actions，经 claude_vc1.py 写计划、vc-batch.sh 派发）。
+    "vc1_dispatch_script": "vc1-claude.sh",
     # VC-5 准入合同与运行画像路径由 Claude 候选采集落实（见 pending 的 tool:vc5-admission），未定之前为空。
     "vc5_admission_schema": None,
     "vc5_admission_approval_schema": None,
@@ -312,8 +356,6 @@ _CLAUDE: Mapping[str, Any] = {
         # 在那之前不拿 Codex 的合同顶替（B5a-09 调研结论）。
         "step:atomic-double": "B5a-09 续（atomic-double 收据模块加适配器参数，Claude 签 official-client-atomic-vc0-vc1-rehearsal/v1；"
                               "依赖 B3-01 的 Claude 批次入口、B2-11 的总计划控制收据读回与 Claude 身份策略覆盖收据模块）",
-        "step:preflight-plan": "B2-11（claude_upgrade plan --campaign-mode preflight_only）",
-        "step:vc0-closeout": "B2-11（claude_upgrade_vc0_closeout：VC-0 收口续作与 P0 收据）",
         "tool:vc5-admission": "B4-01（Claude 候选采集的 VC-5 准入合同与运行画像路径）",
     },
 }
@@ -334,7 +376,7 @@ SHELL_ENTRIES = (
     "environment_probe_version_option", "timing_ledger_module", "project_ledger_module", "project_ledger_dir_name",
     "gate_receipt_module", "vc_artifacts_module", "binary_key", "binary_sha256_key", "account_key",
     "deploy_receipt_identity_key", "preflight_required", "binary_extra_containers", "official_package_verifier",
-    "plan_audit_argv", "job_rehearsal_module", "vc4_requirements_source", "vc4_dispatch_script",
+    "plan_audit_argv", "job_rehearsal_module", "vc4_requirements_source", "vc4_dispatch_script", "vc1_dispatch_script",
 )
 
 

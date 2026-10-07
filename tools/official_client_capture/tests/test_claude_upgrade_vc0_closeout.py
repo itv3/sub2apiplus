@@ -92,6 +92,8 @@ class ClaudeCloseoutTestCase(CampaignWorldTestCase):
             "job_set_sha256": "1" * 64,
             "runtime_identity_sha256": "2" * 64,
             "storage_probe_sha256": "3" * 64,
+            # B2-11 第二部分起 Claude Job 演练与 Codex 同样要求失败生命周期探针摘要（Formal 必需）。
+            "failure_lifecycle_probe_sha256": "5" * 64,
             "preflight_campaign": {
                 "path": str(self.preflight),
                 "campaign_id": PREFLIGHT_ID,
@@ -106,7 +108,8 @@ class ClaudeCloseoutTestCase(CampaignWorldTestCase):
             "policy_version": identity["policy_version"],
             "identity": {field: policy_certification.current_identity("claude")[field] for field in policy_certification.IDENTITY_FIELDS},
             "deployment_receipt": {"path": str(self.deploy), "sha256": _sha256(self.deploy)},
-            "job_rehearsal": {"evidence_root": str(self.job_root), "receipt": "receipt.json", "sha256": _sha256(self.job_path)},
+            "job_rehearsal": {"evidence_root": str(self.job_root), "receipt": "receipt.json", "sha256": _sha256(self.job_path),
+                              "failure_lifecycle_probe_sha256": "5" * 64},
         }
         # P0 门禁收据：两客户端同一合同，主体是 Claude 的升级与这份发布认证（真实生成与重放）。
         self.p0 = create_p0_gate_receipt(
@@ -239,6 +242,11 @@ class ClaudeCloseoutEndToEndTests(ClaudeCloseoutTestCase):
         self.assertIn("未绑定当前 preflight", stderr)
         drifted_contract = {**self.job_receipt, "execution_contract": {**self.contract, "suite": "core"}}
         code, _result, stderr = self.run_closeout(self.argv("audit-c"), job_receipt=drifted_contract)
+        self.assertEqual(code, 1)
+        self.assertIn("Job rehearsal 收据重放失败", stderr)
+        # B2-11 第二部分：没有失败生命周期探针摘要的 Claude Job 演练（补探针之前的收据）不能用来建 Formal。
+        without_lifecycle = {key: value for key, value in self.job_receipt.items() if key != "failure_lifecycle_probe_sha256"}
+        code, _result, stderr = self.run_closeout(self.argv("audit-d"), job_receipt=without_lifecycle)
         self.assertEqual(code, 1)
         self.assertIn("Job rehearsal 收据重放失败", stderr)
         self.assertEqual(self.event_ids(), before)

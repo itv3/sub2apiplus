@@ -28,9 +28,15 @@ node 与 TypeScript 取宿主数据根下的受管运行时（Claude 身份策�
 ==================
 首批（VC-1 序号 1）恰有一个 ``capture-official`` 动作（共享监督器的 VC-1 普通恢复链要求，见 ``claude_upgrade_campaign``
 第六节）；静态分析是首批之后、seal 之前的 VC-1 批次动作（``static_action``：动作 ``vc1-01-analyze-target``，项同名）。批次
-按 action_id 排序执行：与 seal 预览同批时 seal 动作要排在它后面（例如 ``vc1-02-seal-preview``），或者单独成批先派。
-VC-1 seal 不给 ``--target-inventory``／``--sink-containment`` 时取本动作的规范产物（``canonical_outputs``）；显式给出且
-规范产物存在时两者必须逐字节相同。
+按 action_id 排序执行，``vc1_seal_actions`` 给出驱动派发的两种 VC-1 封存批次（B2-11 第二部分）：
+
+* 预览批次：静态分析 ``vc1-01-analyze-target`` 在前、seal 预览 ``vc1-02-seal-preview`` 在后（预览停在等批准，是批次内的
+  合法暂停点）；只读复用前序的 Campaign 没有预览，同一批次里 seal 直接完成；
+* 批准批次：只有 seal 批准 ``vc1-03-seal-approve``（带预览给出的 review_sha256）。
+
+动作 ID 不用 Codex 的 ``seal-official-preview``／``seal-official-approve``：监督器按那两个名字执行 Codex 的断言证据包门禁，
+Claude 没有断言包。VC-1 seal 不给 ``--target-inventory``／``--sink-containment`` 时取本动作的规范产物（``canonical_outputs``）；
+显式给出且规范产物存在时两者必须逐字节相同。
 
 本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层；分析本身在
 evidence 层的 ``claude_fw_e``（只调用、不修改）。
@@ -252,6 +258,59 @@ def static_action(campaign_dir: Path) -> dict[str, Any]:
         item_ids=[ACTION_ID],
         timeout_seconds=ACTION_TIMEOUT_SECONDS,
     )
+
+
+SEAL_PREVIEW_ACTION_ID = "vc1-02-seal-preview"
+SEAL_APPROVE_ACTION_ID = "vc1-03-seal-approve"
+SEAL_TIMEOUT_SECONDS = 3600
+SHA256_LENGTH = 64
+
+
+def vc1_seal_actions(
+    campaign_dir: Path,
+    *,
+    approve_seal_sha256: str | None = None,
+    discovery_dispositions: Path | None = None,
+) -> list[dict[str, Any]]:
+    """首批之后的 VC-1 封存批次动作（驱动生成动作计划用）：预览批次是 [静态分析, seal 预览]，批准批次是 [seal 批准]。
+
+    要封存的 attempt 取 Campaign 状态里处于 ``official_awaiting_receipts`` 的那个正式 attempt（别的状态按状态给出的下一步
+    处理，这里拒绝）；只读复用前序的 Campaign 没有 attempt，seal 也没有预览与批准，只有预览批次一种。
+    ``discovery_dispositions`` 是发现项的人工处置文件（Campaign 内），预览与批准要给同一份。
+    """
+
+    from tools.official_client_capture import claude_upgrade
+    from tools.official_client_capture import claude_upgrade_batch
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    manifest = claude_upgrade._require_formal_campaign(campaign_dir)
+    seal_argv = ["capture-official", "seal", "--campaign-dir", str(campaign_dir)]
+    if manifest.get("predecessor") is None:
+        status = claude_upgrade.campaign_status(campaign_dir)
+        attempt = status.get("official_attempt") or {}
+        if status.get("status") != "official_awaiting_receipts" or not attempt.get("attempt_id"):
+            raise ConfigurationError(
+                f"VC-1 封存批次要求官方 attempt 处于 awaiting_receipts，当前 {status.get('status')}：{status.get('next_command')}"
+            )
+        seal_argv += ["--attempt-id", str(attempt["attempt_id"])]
+    elif approve_seal_sha256 is not None:
+        raise ConfigurationError("只读复用前序的 Campaign 的 seal 没有预览与批准，不接受批准摘要。")
+    if discovery_dispositions is not None:
+        seal_argv += ["--discovery-dispositions", str(discovery_dispositions)]
+    if approve_seal_sha256 is None:
+        preview = claude_upgrade_batch.managed_action(
+            SEAL_PREVIEW_ACTION_ID, f"VC-1:{SEAL_PREVIEW_ACTION_ID}", seal_argv,
+            item_ids=[SEAL_PREVIEW_ACTION_ID], timeout_seconds=SEAL_TIMEOUT_SECONDS,
+        )
+        return [static_action(campaign_dir), preview]
+    if len(approve_seal_sha256) != SHA256_LENGTH or any(character not in "0123456789abcdef" for character in approve_seal_sha256):
+        raise ConfigurationError("seal 批准摘要必须是 64 位小写十六进制 review_sha256。")
+    return [
+        claude_upgrade_batch.managed_action(
+            SEAL_APPROVE_ACTION_ID, f"VC-1:{SEAL_APPROVE_ACTION_ID}", [*seal_argv, "--approve-seal-sha256", approve_seal_sha256],
+            item_ids=[SEAL_APPROVE_ACTION_ID], timeout_seconds=SEAL_TIMEOUT_SECONDS,
+        )
+    ]
 
 
 def _remove_stale_temporaries(official_root: Path) -> list[str]:

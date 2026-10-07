@@ -107,4 +107,17 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 #   入口便宜检查的 official-package 一项按 B2-01 冻结合同复核目标版本的冻结目录（B5a-09），基线版本的冻结目录不核对。
 #   UPSTREAM_IP=REPLACE_API_ANTHROPIC_COM_IP（api.anthropic.com 的冻结公开上游 IP：场景清单的必需 Campaign 变量 upstream_ip，
 #   入口便宜检查的 plan-audit 与之后的 plan 都用它；不写时 required-parameters 一项报缺）
+#   预检 plan 建 Campaign 的输入（B2-11 第二部分；不写时 required-parameters 一项报缺，前序复用两项只在证据决定为 reuse 时
+#   由预检 plan 一步报缺）。Active 画像沿用上面 Codex 同一个缺省布局；来源提交取 ENTRY_COMMIT（生产工具树不是 git 仓库）：
+#   ACTIVE_RELEASE_CATALOG=$D/control/$IN/active-release-catalog.json（production_active 的 Release 目录，冻结进 Campaign）
+#   STATIC_BASELINE_ANCHORS=$D/control/$IN/static-baseline-anchors.json（VC-1 静态分析的基线词法锚点）
+#   STATIC_BASELINE_REACHABILITY=$D/control/$IN/static-baseline-reachability.json（VC-1 静态分析的基线词法索引）
+#   PRODUCTION_INVENTORY_STORE=$D/evidence/campaigns/REPLACE_ACTIVE_CAMPAIGN/control-store（生产现状清单取它最新的画像批准）
+#   PRODUCTION_INVENTORY_CAMPAIGN=REPLACE_ACTIVE_CAMPAIGN
+#   PREDECESSOR_STORE=$D/evidence/campaigns/REPLACE_PREDECESSOR_CAMPAIGN/control-store（reuse：只读复用同一目标版本前序的官方证据）
+#   PREDECESSOR_STORE_CAMPAIGN=REPLACE_PREDECESSOR_CAMPAIGN
+#   ENTRYPOINT=REPLACE_STORE_ENTRYPOINT（Store 身份：入口、隐私模式、OAuth 组织与模型目录摘要）
+#   PRIVACY_MODE=REPLACE_STORE_PRIVACY_MODE
+#   OAUTH_ORG_ID=REPLACE_OAUTH_ORG_ID
+#   MODEL_CATALOG_SHA256=REPLACE_MODEL_CATALOG_SHA256
 #   ENTRY_BRANCH=claude/REPLACE_TOOL_BRANCH

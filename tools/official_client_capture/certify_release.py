@@ -10,8 +10,10 @@
 
 Claude 升级 B5a-04 起按客户端分组：``issue／verify --client``（缺省 codex，签 ``tool-release-certification/v1``，字段与
 内容逐字不变）；Claude 签 ``…/v2``（v1 字段加 ``client``），绑定 Claude 部署收据、Claude 的 pre-A3 v3 认证与 Claude 身份。
-Claude 的 Job 演练（B2-10）与 atomic-double（B5a-09）收据合同落实之前，Claude 签发在核完 pre-A3 后失败关闭；pre-A3
-场景集合为空时更早被 pre-A3 拒绝。对编排器的引用（指纹、文件摘要）经客户端适配器取，本模块不再导入 ``codex_upgrade``。
+Job 演练按客户端的合同重放（收据必须属于本次认证的客户端），两客户端同样要求存储与失败生命周期两项探针摘要（Claude 的
+失败生命周期探针由 B2-11 第二部分补上，见 ``claude_upgrade_failure_lifecycle``）。Claude 的 atomic-double 收据合同（B5a-09
+续）落实之前，Claude 签发在核完 pre-A3 与 Job 演练之后失败关闭；pre-A3 场景集合为空时更早被 pre-A3 拒绝。对编排器的引用
+（指纹、文件摘要）经客户端适配器取，本模块不再导入 ``codex_upgrade``。
 """
 
 from __future__ import annotations
@@ -108,12 +110,15 @@ def _relative_inside(root: Path, receipt: Path, label: str) -> str:
     return relative
 
 
-def replay_job_rehearsal(root: Path, receipt: Path) -> dict[str, Any]:
-    """重放 ARM64 全量 Job 演练收据，并要求失败生命周期探针已登记。"""
+def replay_job_rehearsal(root: Path, receipt: Path, client: str = DEFAULT_CLIENT) -> dict[str, Any]:
+    """重放 ARM64 全量 Job 演练收据，并要求存储与失败生命周期两项探针已登记。
+
+    收据按 ``client`` 的合同重放（B2-11 第二部分）：另一客户端的收据即拒绝，不会因为字段齐全被绑进本客户端的认证；
+    Codex 的合法收据结果与改造前相同。"""
 
     relative = _relative_inside(root, receipt, "Job rehearsal 收据")
     try:
-        replayed = job_rehearsal.replay(Path(root).resolve(strict=True), relative)
+        replayed = job_rehearsal.replay(Path(root).resolve(strict=True), relative, client=require_client(client))
     except (OSError, ValueError, job_rehearsal.JobRehearsalReceiptError) as error:
         raise ReleaseCertificationError(f"Job rehearsal 收据重放失败：{error}") from error
     preflight = replayed.get("preflight_campaign")
@@ -124,7 +129,7 @@ def replay_job_rehearsal(root: Path, receipt: Path) -> dict[str, Any]:
         or not isinstance(preflight, Mapping)
     ):
         raise ReleaseCertificationError("Job rehearsal 收据未通过或缺少失败生命周期探针")
-    binding = _bind_file(Path(root).resolve(strict=True) / relative, "Job rehearsal 收据")
+    binding = _bind_file(Path(root).resolve(strict=True) / relative, "Job rehearsal 收据", client)
     return {
         "evidence_root": str(Path(root).resolve(strict=True)),
         "receipt": relative,
@@ -287,10 +292,11 @@ def compose_certification(
     return {**core, "receipt_sha256": _fingerprint(core, client)}
 
 
-# 各客户端能重放的演练收据合同。Codex：Job 演练、atomic-double、campaign-run 演练（现行合同）。Claude 的同组合同
-# （official-client-job-rehearsal-receipt/v1、official-client-atomic-vc0-vc1-rehearsal/v1）由 B2-10、B5a-09 落实，此前
-# 签发 Claude 发布认证在核完 pre-A3 与复用收据之后失败关闭，不拿 Codex 的演练合同冒充。
-CLIENT_REHEARSAL_REPLAY: Mapping[str, bool] = {"codex": True, "claude": False}
+# 各客户端能重放的 atomic-double 收据合同。Job 演练两客户端都已落实（Codex 现行合同；Claude 是 B2-10 的
+# official-client-job-rehearsal-receipt/v1，B2-11 第二部分补上失败生命周期探针），按客户端重放、同一组探针摘要要求。
+# Claude 的 official-client-atomic-vc0-vc1-rehearsal/v1 由 B5a-09 续落实：此前签发 Claude 发布认证在核完 pre-A3、复用收据
+# 与 Job 演练之后失败关闭，不拿 Codex 的演练合同冒充。
+CLIENT_ATOMIC_DOUBLE_REPLAY: Mapping[str, bool] = {"codex": True, "claude": False}
 
 
 def _require_release_platform() -> None:
@@ -382,9 +388,12 @@ def build_certification(
             "reused_at_utc": reuse_payload.get("reused_at_utc"),
             "bound_deployment_receipt_sha256": (reuse_payload.get("reused_certification") or {}).get("bound_deployment_receipt_sha256"),
         }
-    if not CLIENT_REHEARSAL_REPLAY[client]:
+    if not CLIENT_ATOMIC_DOUBLE_REPLAY[client]:
+        # Job 演练合同已落实：先逐项重放（含失败生命周期探针），Job 演练有问题时先报它；atomic-double 合同落实之前在这里
+        # 失败关闭。
+        replay_job_rehearsal(job_rehearsal_root, job_rehearsal_receipt, client)
         raise ReleaseCertificationError(
-            f"客户端 {client} 的 Job 演练与 atomic-double 收据合同尚未落实（B2-10、B5a-09），不能签发发布认证"
+            f"客户端 {client} 的 atomic-double 收据合同尚未落实（B5a-09 续），不能签发发布认证（Job 演练收据已逐项重放通过）"
         )
     campaign_run: dict[str, Any] | None = None
     if (campaign_run_rehearsal_root is None) != (campaign_run_rehearsal_receipt is None):
@@ -414,7 +423,7 @@ def build_certification(
             "scenario_count": pre_a3_payload.get("scenario_count"),
         },
         policy_activation=activation_binding,
-        job_rehearsal=replay_job_rehearsal(job_rehearsal_root, job_rehearsal_receipt),
+        job_rehearsal=replay_job_rehearsal(job_rehearsal_root, job_rehearsal_receipt, client),
         atomic_double_rehearsal=atomic_binding,
         campaign_run_rehearsal=campaign_run,
         issued_at_utc=issued_at_utc,

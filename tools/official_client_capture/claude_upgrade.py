@@ -2895,7 +2895,7 @@ def campaign_status(
     campaign_dir: Path,
     candidate_id: str | None = None,
 ) -> dict[str, Any]:
-    """服务面成员（B2-08 落实 VC-1 resume 必需的官方阶段部分，候选阶段与其余状态由 B2-11 完善）：从不可变收据推导状态。
+    """服务面成员（B2-08 落实 VC-1 resume 必需的官方阶段部分，候选阶段的状态随候选采集 attempt 由 B4-01 完善）：从不可变收据推导状态。
 
     实现在 ``claude_upgrade_recovery.campaign_status``。
     """

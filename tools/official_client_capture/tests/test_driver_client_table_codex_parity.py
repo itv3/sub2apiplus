@@ -4,8 +4,8 @@
 模块对象加载，与改造后的模块在同一组输入下各算一次：
 
 * 参数解析（``parse_env.py``）：同一份 Codex 参数文件（驱动测试夹具与改造前的参数模板）``parse`` 与 ``derive`` 的结果逐字
-  相同（含键的先后），主程序输出等于改造前的输出再加上新增可选键（B5a-06 四个、B5a-09 的 ``UPSTREAM_IP``）的 ``unset``
-  （清掉外层环境残留的另一客户端参数）；
+  相同（含键的先后），主程序输出等于改造前的输出再加上新增可选键（B5a-06 四个、B5a-09 的 ``UPSTREAM_IP``、B2-11 第二部分
+  Claude 预检 plan 的十一个）的 ``unset``（清掉外层环境残留的另一客户端参数）；
   一组非法改写的报错逐字相同；用通用键（``CLIENT_BIN`` 等）写的 Codex 参数文件与用旧键写的解析结果相同；
 * 入口步骤（``entry_steps.py``）：Codex 步骤表的输入声明与摘要、门禁项输入清单逐字相同；同一夹具上无记录、改造前写的
   记录、改造后写的记录、逐类改动输入、Formal 已建与强制重做各情形下 ``evaluate`` 的结果逐字相同；
@@ -50,8 +50,14 @@ from tools.official_client_capture.tests.test_ci_entry_steps import Fixture
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASELINE_COMMIT = "f28c0250a"
 DRIVER = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
-# 新增可选键的 unset：B5a-06 的四个通用键，B5a-09 的 UPSTREAM_IP（Claude 场景清单的必需 Campaign 变量，Codex 参数文件不写）。
-NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in ("CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID", "UPSTREAM_IP"))
+# 新增可选键的 unset：B5a-06 的四个通用键，B5a-09 的 UPSTREAM_IP（Claude 场景清单的必需 Campaign 变量，Codex 参数文件不写），
+# B2-11 第二部分 Claude 预检 plan 的十一个键（Codex 参数文件同样不写）。
+NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in (
+    "CLIENT", "CLIENT_BIN", "CLIENT_BIN_SHA256", "CLIENT_ACCOUNT_ID", "UPSTREAM_IP",
+    "ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY", "PRODUCTION_INVENTORY_STORE",
+    "PRODUCTION_INVENTORY_CAMPAIGN", "PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE",
+    "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256",
+))
 
 
 def git_source(relative: str, commit: str = BASELINE_COMMIT) -> bytes | None:

@@ -480,6 +480,10 @@ STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]]
         "client-launch-probe": (["driver:claude_launch_probe_runner.py"], ["driver:client_launch_probe_runner.py"],
                                 "B2-10：启动探测运行器按客户端表取（launch_probe_runner），Claude 用 claude_launch_probe_runner.py；"
                                 "Codex 仍是 client_launch_probe_runner.py"),
+        "preflight-plan": (["file:{ACTIVE_RELEASE_CATALOG}", "file:{STATIC_BASELINE_ANCHORS}", "file:{STATIC_BASELINE_REACHABILITY}",
+                            "tree:{PRODUCTION_INVENTORY_STORE}#pycache", "tree:{PREDECESSOR_STORE}#pycache"], [],
+                           "B2-11 第二部分：Claude 预检 plan 另读的文件与 Store 目录取客户端表 preflight_plan_inputs（Active Release 目录、"
+                           "静态基线两份、生产现状清单所在的前序 Store 与只读复用的前序 Store）；Codex 这一项为空，步骤表不变"),
     },
 }
 

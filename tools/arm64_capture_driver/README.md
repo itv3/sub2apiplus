@@ -452,6 +452,22 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   canonical 必须提供 `RETIRE_VERSION`；本机历史门禁须显式设置本机路径 `HISTORICAL_SOURCE_ROOT`，ARM64
   可在本轮参数文件中覆盖其远端路径。保留历史测试接口变量名，不固定其来源目录。
 
+## Claude 的 VC-1 封存批次（Claude 升级 B2-11 第二部分）
+
+`CLIENT=claude` 的轮次：`entry.sh` 的 VC-0 收口只派发 VC-1 首批（恰一个 `capture-official run`，共享监督器的 VC-1 普通恢复链
+要求首批恰有一个动作）。首批完成、官方 attempt 处于 awaiting_receipts 之后，在采集主机运行 `vc1-claude.sh`（客户端表
+`vc1_dispatch_script`，Codex 没有这一项）：
+
+1. 不带参数：预览批次——静态分析 `vc1-01-analyze-target`（seal 要的目标 SinkInventory 与 sink containment）在前，seal 预览
+   `vc1-02-seal-preview` 在后；预览停在等批准（批次内的合法暂停点）。只读复用前序的 Campaign 在这一批里直接封存完成。
+2. 审核 `claude_vc1.py summary` 打印的 seal 预览（闭合状态与 review_sha256）后，`vc1-claude.sh <review_sha256>` 派发批准批次
+   `vc1-03-seal-approve`，写 VC-1 checkpoint。发现项要人工处置时用环境变量 `DISCOVERY_DISPOSITIONS` 给出 Campaign 内的处置
+   文件，预览与批准给同一份。
+
+动作取受管 `claude_upgrade_static.vc1_seal_actions`（受管 Python 直接调 `claude_upgrade.py`），`claude_vc1.py plan` 按共享合同
+校验后写进本轮输入目录 W，经 `vc-batch.sh <NEW> <IN> VC-1 <序号> VC-0` 派发；动作名不用 Codex 的 `seal-official-*`（那两个
+名字会触发 Codex 的断言证据包门禁）。
+
 ## Claude 的 VC-4 候选链（Claude 升级 B3-04a）
 
 `CLIENT=claude` 的轮次按客户端表 `vc4_requirements_source=arm64-preview`、`vc4_dispatch_script=vc4-claude.sh` 走下面的顺序（Codex

@@ -35,8 +35,9 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 
 按客户端（Claude 升级 B5a-06）：执行顺序与续跑规则两客户端相同；各步骤调用的模块、合同、目录与追加给共享模块的
 ``--client`` 取客户端表（``client_table.py``，本轮客户端取参数 ``CLIENT``，缺省 codex），Codex 的命令行与改造前逐字相同。
-客户端表登记为尚未接入的步骤（Claude 的 atomic-double、预检 plan 与 VC-0 收口）不执行，
-记失败并写明落实它的工作项（``--plan`` 也列出），不拿 Codex 的实现顶替。
+客户端表登记为尚未接入的步骤（Claude 的 atomic-double）不执行，记失败并写明落实它的工作项（``--plan`` 也列出），不拿 Codex
+的实现顶替。预检 plan 的参数形状按客户端表的模板展开（B2-11 第二部分：Claude 的 ``claude_upgrade plan`` 参数；Codex 的模板为空，
+沿用下面写死的 Codex 参数形状）；VC-0 收口按客户端表的收口模块执行（两客户端同一组参数）。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
 """
@@ -251,6 +252,11 @@ class Orchestrator:
     def py(self, module: str, *arguments: str) -> list[str]:
         return [sys.executable, "-B", "-m", module, *arguments]
 
+    def template_argv(self, template: Sequence[str]) -> list[str]:
+        """客户端表的参数模板：以 ``$`` 开头的项代入同名参数（没有即报「参数里没有 X」），其余照抄。"""
+
+        return [self.p(item[1:]) if item.startswith("$") else item for item in template]
+
     def run_json(self, step_id: str, label: str, argv: Sequence[str]) -> tuple[int, dict[str, Any]]:
         """执行一条输出 JSON 的子命令（单独一份日志，不加验收注入），取日志里最后一个 JSON 行。"""
 
@@ -427,8 +433,22 @@ class Orchestrator:
         campaigns.mkdir(parents=True, exist_ok=True, mode=0o700)
         pre = fresh(campaigns / f"{self.p('CAMPAIGN_PREFIX')}-preflight-vc5-{self.p('ROUND')}-{headsha}-{self.p('STAMP')}")
         p = self.p
-        # 下面是 Codex 编排器 plan 的参数形状（code-mode-host、capture／relay 两处 codex 二进制、Codex 账号）。Claude 的
-        # plan 参数表由 B2-11 落实，在那之前这一步对 Claude 登记为尚未接入（客户端表 pending），执行不到这里。
+        template = tuple(self.spec["preflight_plan_argv"])
+        if template:
+            # 客户端表给出了模板的客户端（Claude，B2-11 第二部分）：账本、checkpoint、环境收据与作业坐标由这里按前序步骤
+            # 记录给出，其余参数按模板代入；证据决定为 reuse 时追加只读复用的前序。
+            argv = self.py(self.spec["orchestrator_module"], "plan",
+                           "--campaign-dir", str(pre), "--campaign-id", pre.name, "--timing-ledger-dir", str(ledger_dir),
+                           "--timing-receipt", checkpoint.relative_to(ledger_dir).as_posix(),
+                           "--arm64-environment-root", str(environment.parent), "--arm64-environment-receipt", environment.name,
+                           *self.template_argv(template))
+            if (self.params.get("EVIDENCE_DECISION") or "recapture") == "reuse":
+                argv += self.template_argv(self.spec["preflight_plan_reuse_argv"])
+            rc = self.run("preflight-plan", argv)
+            manifest = pre / "campaign.json"
+            return rc == 0 and manifest.is_file(), {"campaign": str(manifest)}
+        # 下面是 Codex 编排器 plan 的参数形状（code-mode-host、capture／relay 两处 codex 二进制、Codex 账号）；Codex 的模板为空，
+        # 命令行与改造前逐字相同。
         argv = self.py(self.spec["orchestrator_module"], "plan",
                        "--campaign-dir", str(pre), "--campaign-id", pre.name, "--baseline-version", p("BASELINE_VERSION"),
                        "--target-version", p("TARGET_VERSION"), "--campaign-mode", "preflight_only",

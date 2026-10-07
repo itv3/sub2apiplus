@@ -9,13 +9,19 @@
 * 模块型成员 ``job_rehearsal_profile``（本模块）：合同名组（facts、收据、合同、采集器同组 ``official-client-job-rehearsal-*``）、
   场景清单在总计划里的输入名（``target_scenarios``）、要展开的阶段（只有 official；候选阶段的展开归 B4-01）、两个采集容器
   （联网的抓包容器与断网容器 ``capture-cli-synthetic``）各自的工具树、命令依赖与步骤启动器、执行副本坐标（总计划
-  ``capture_tool_root`` 映射到宿主）、运行时探针（两个容器的证据 runs 根是同一个可写目录）与采集器身份。
+  ``capture_tool_root`` 映射到宿主）、运行时探针（两个容器的证据 runs 根是同一个可写目录；B2-11 起加失败生命周期探针，
+  见 ``claude_upgrade_failure_lifecycle``）与采集器身份。
 
 演练只做离线检查，不发任何请求，也不读凭据：工具树三处（受管、宿主执行副本、两个容器内）逐文件一致且当前有效 wire 与策略
 身份等于总计划登记的身份；两个容器在运行、命令依赖齐全；目标客户端在抓包容器、断网容器与宿主三处摘要等于 ``target_sha256``
 （编排器服务面 ``_verify_official_binaries``）；每一步的启动器与执行容器相符（真实上游步骤只在抓包容器、合成步骤只在断网
 容器），动作体是受管中继，目录模块与版本事实文件在执行容器里存在、版本事实摘要等于步骤声明，运行期变量的占位与声明一致。
 ARM64 还没有做 Claude OAuth 登录时也能通过：凭据、CA 与全局状态文件属于正式取证的前提（B2-06 预约前门禁），这里不看。
+
+失败生命周期探针（B2-11 第二部分）：发布认证与 Formal 都要求 Job 演练绑定 ``failure_lifecycle_probe_sha256``（两客户端同一
+字段）。Claude 的有限补跑与失败证据归档是自己的一份实现，这里在二进制核验之前用真实 ``campaign-run`` 父监督器与 Claude
+父租约演练一遍完整的失败、补跑与归档链（断网容器里执行、零请求），采集与校验在 ``claude_upgrade_failure_lifecycle``。
+加入之前生成的收据（probes 只有 runs 根一项）仍按原字节只读重放，但没有这项摘要，不能作为 Formal 或发布认证的证明。
 
 本模块属 Claude 身份策略的 control 层（``claude_upgrade_`` 前缀），被 Codex 身份策略忽略（``claude_`` 前缀）。
 """
@@ -55,8 +61,8 @@ CONTAINER_TREE_FIELDS: Mapping[str, str] = {
 }
 CONTAINER_TREE_NAMES = tuple(CONTAINER_TREE_FIELDS)
 CONTAINER_FIELDS = ("capture_container", "synthetic_capture_container")
-# Formal 必需的探针摘要：只有证据 runs 根探针（沙箱、zstd 与失败生命周期探针属于 Codex 取证链）。
-FORMAL_PROBE_DIGESTS = ("storage_probe_sha256",)
+# Formal 必需的探针摘要：证据 runs 根探针与失败生命周期探针（B2-11 第二部分；沙箱与 zstd 探针属于 Codex 取证链）。
+FORMAL_PROBE_DIGESTS = ("storage_probe_sha256", "failure_lifecycle_probe_sha256")
 # facts 的额外字段：采集当时的有效工具身份（整树、wire、策略三摘要），重放时与执行合同登记的身份核对。
 EXTRA_FACT_FIELDS = frozenset({"tool_identity"})
 TOOL_IDENTITY_FIELDS = ("files_sha256", "wire_producer_sha256", "policy_sha256")
@@ -485,10 +491,14 @@ def _validate_runs_root_probe(value: Any, configuration: Mapping[str, Any]) -> d
 
 
 def rehearsal_early_probes(jobs: list[Any], configuration: Mapping[str, Any]) -> dict[str, Any]:
-    """二进制核验之前的运行时探针：两个容器的证据 runs 根（真实上游与合成步骤的证据都写在这里）。"""
+    """二进制核验之前的运行时探针：两个容器的证据 runs 根（真实上游与合成步骤的证据都写在这里），再演练失败生命周期
+    （真实父监督器、Claude 有限补跑与失败证据归档，见 ``claude_upgrade_failure_lifecycle``）。"""
+
+    from tools.official_client_capture import claude_upgrade_failure_lifecycle
 
     del jobs
-    return {"storage": _runs_root_probe(configuration)}
+    storage = _runs_root_probe(configuration)
+    return {"storage": storage, "failure_lifecycle": claude_upgrade_failure_lifecycle.capture_probe(configuration)}
 
 
 def _argument_value(argv: Iterable[str], flag: str) -> str | None:
@@ -651,10 +661,10 @@ def rehearsal_dependency_facts(configuration: Mapping[str, Any]) -> dict[str, An
 
 
 def rehearsal_probe_facts(configuration: Mapping[str, Any], container_root: str, early: Mapping[str, Any]) -> dict[str, Any]:
-    """facts 的 probes：只有二进制核验之前跑好的证据 runs 根探针。"""
+    """facts 的 probes：二进制核验之前跑好的证据 runs 根探针与失败生命周期探针。"""
 
     del configuration, container_root
-    return {"storage": early["storage"]}
+    return {"failure_lifecycle": early["failure_lifecycle"], "storage": early["storage"]}
 
 
 def rehearsal_producer() -> dict[str, str]:
@@ -710,12 +720,22 @@ def rehearsal_validate_probes(
     *,
     allow_collector_drift: bool,
 ) -> tuple[str | None, str | None]:
-    """probes 只有证据 runs 根一项；返回它的摘要（作为 ``storage_probe_sha256``），没有失败生命周期探针。"""
+    """probes 是证据 runs 根与失败生命周期两项，返回两项的摘要（``storage_probe_sha256``、``failure_lifecycle_probe_sha256``）。
 
-    del allow_collector_drift
-    probes = job_rehearsal._expect(raw_probes, {"storage"}, "probes")
-    storage = _validate_runs_root_probe(probes.get("storage"), contract["configuration"])
-    return job_rehearsal._fingerprint(storage), None
+    失败生命周期探针加入之前生成的收据（probes 只有 runs 根一项）只在重放时按原字节接受（``allow_collector_drift``），
+    失败生命周期摘要为空——它只证明 runs 根，不能作为 Formal 或发布认证的完整证明（Formal 必需摘要会拒绝它）。
+    """
+
+    from tools.official_client_capture import claude_upgrade_failure_lifecycle
+
+    configuration = contract["configuration"]
+    if allow_collector_drift and isinstance(raw_probes, dict) and set(raw_probes) == {"storage"}:
+        storage = _validate_runs_root_probe(raw_probes.get("storage"), configuration)
+        return job_rehearsal._fingerprint(storage), None
+    probes = job_rehearsal._expect(raw_probes, {"failure_lifecycle", "storage"}, "probes")
+    storage = _validate_runs_root_probe(probes.get("storage"), configuration)
+    lifecycle = claude_upgrade_failure_lifecycle.validate_probe(probes.get("failure_lifecycle"), configuration)
+    return job_rehearsal._fingerprint(storage), job_rehearsal._fingerprint(lifecycle)
 
 
 def rehearsal_validate_extra(facts: Mapping[str, Any], contract: Mapping[str, Any]) -> None:

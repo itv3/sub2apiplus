@@ -45,10 +45,12 @@ Store。全程离线、零请求，不改 Active／Rollback、生产 selector �
   逐级重放；Store 里唯一的 ``rule_classification_recorded`` 必须与阶段结果登记的引用逐字相同。
 * Store：Campaign v2、有效工具身份等于当前受管代码；准备阶段要求检查点是 ``evidence_recorded`` 或 ``official_sealed``
   （已批准 revision 的重放还可以是 ``profile_approved``），暂存阶段要求 ``official_sealed``（批准重入时可为 ``profile_approved``）。
-* 当前 Active：VC-0 应冻结 Active／Rollback 身份；Claude 的 VC-0 收口（B2-11）还没落地，这里取总计划
-  ``inputs.active_release_catalog``／``inputs.active_profile`` 的冻结副本，没有时取命令行给出的 Campaign 内文件——Release
-  目录 ``official-egress-claude-release-catalog/v1`` 的 ``production_active`` 选择器指向的 Release，其画像摘要必须等于给出
-  的画像文件。两者的绑定写进 Profile policy，后续每次调用逐字重核。
+* 当前 Active：取总计划 ``inputs.active_release_catalog``／``inputs.active_profile`` 的冻结副本——B2-11 起 plan 建的预检
+  Campaign 与 VC-0 收口建的 Formal 一律在建立时冻结这两份，命令行不得另给；带控制收据（``control_receipts`` 非空，即由
+  plan 或 VC-0 收口建立）的 Campaign 没有冻结副本即拒绝，不接受命令行回退；只有不带控制收据的旧形状 Campaign（B2-05 形状
+  的测试夹具）才取命令行给出的 Campaign 内文件。Release 目录 ``official-egress-claude-release-catalog/v1`` 的
+  ``production_active`` 选择器指向的 Release，其画像摘要必须等于给出的画像文件。两者的绑定写进 Profile policy，后续每次
+  调用逐字重核。
 * Wire 投影（B3-03 补充项）：VC-1 封存的 capture manifest、CaptureIndex 与 EvidencePackage 外部绑定（``claude_upgrade_release.
   load_release_evidence``），受管树里 Active 版本的 Wire 投影策略 ``claude_upgrade_wire_projection_<版本>.json``（没有即拒绝；
   绑定写进 Profile policy），VC-2 批准的目标规则清单副本摘要与 Store 原子断言台账按 ``owner_kind`` 的计数。
@@ -627,7 +629,8 @@ def _campaign_file_binding(campaign_dir: Path, path: Path, label: str) -> dict[s
 
 
 def _active_paths(campaign_dir: Path, manifest: Mapping[str, Any], catalog: Path | None, profile: Path | None) -> tuple[Path, Path]:
-    """Active 输入：总计划冻结了就用冻结副本（命令行不得另给），否则用命令行给出的 Campaign 内文件。"""
+    """Active 输入：总计划冻结了就用冻结副本（命令行不得另给）；带控制收据的 Campaign（由 plan 或 VC-0 收口建立，B2-11 起
+    一律冻结）没有冻结副本即拒绝、不接受命令行回退；只有不带控制收据的旧形状 Campaign 才用命令行给出的 Campaign 内文件。"""
 
     inputs = manifest.get("inputs") or {}
     frozen = [name for name in ("active_release_catalog", "active_profile") if inputs.get(name) is not None]
@@ -639,6 +642,11 @@ def _active_paths(campaign_dir: Path, manifest: Mapping[str, Any], catalog: Path
         return (
             claude_upgrade_seal._frozen_input(campaign_dir, manifest, "active_release_catalog"),
             claude_upgrade_seal._frozen_input(campaign_dir, manifest, "active_profile"),
+        )
+    if manifest.get("control_receipts"):
+        raise ConfigurationError(
+            "总计划带控制收据（由 plan 或 VC-0 收口建立）却没有冻结 Active 输入：这类 Campaign 一律在建立时冻结 "
+            "active_release_catalog 与 active_profile，不接受命令行回退。"
         )
     if catalog is None or profile is None:
         raise ConfigurationError("机器草案必须提供 --active-release-catalog 与 --active-profile（总计划没有冻结 Active 输入）。")

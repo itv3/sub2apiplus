@@ -6,7 +6,9 @@
 * 数据根下的 ``tools`` 指向仓库的 ``tools``：宿主执行副本与受管树是同一份，「容器内」执行副本经 ``docker`` 替身在本机读同一
   路径（测试里容器坐标即宿主坐标）；
 * ``docker`` 替身：``exec <容器> <命令…>`` 记下容器后在本机执行命令，``inspect`` 回两个采集容器在运行；
-* 目标客户端三处核验（服务面 ``_verify_official_binaries``）换成按真实返回形状构造的替身。
+* 目标客户端三处核验（服务面 ``_verify_official_binaries``）换成按真实返回形状构造的替身；
+* 失败生命周期探针（B2-11 第二部分）换成按 Claude 合同与当前登记坐标构造的合规事实（``test_claude_upgrade_failure_lifecycle``
+  的 ``fake_probe``）；真实父监督器与 worker 的演练在那个模块的端到端用例里跑。
 
 覆盖：执行合同（真实清单、拒绝项、合同名与客户端认法）；完整演练零请求通过、封存与逐字重放、Formal 与恢复兼容、增量复用；
 合成 Job 的步骤只在断网容器里探；失败只重跑失败的 Job；facts 被改的各类拒绝；命令行 ``--client``；Codex 合同接口与画像取值
@@ -29,11 +31,13 @@ from unittest import mock
 
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_capture as capture
+from tools.official_client_capture import claude_upgrade_failure_lifecycle as lifecycle
 from tools.official_client_capture import claude_upgrade_job_rehearsal as claude_profile
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as receipt
 from tools.official_client_capture import upgrade_client_adapter as uca
+from tools.official_client_capture.tests.test_claude_upgrade_failure_lifecycle import fake_probe
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TOOL_ROOT.parents[1]
@@ -107,6 +111,7 @@ class ClaudeRehearsalFixture(unittest.TestCase):
         self.evidence = self.root / "evidence"
         self.evidence.mkdir(mode=0o700)
         self.binary_calls = 0
+        self.lifecycle_calls = 0
 
     def write_campaign(self, *, campaign_id: str = "claude-code-2_1_285-jr1", configuration: dict | None = None) -> Path:
         campaign = self.data / "evidence" / "campaigns" / campaign_id
@@ -169,6 +174,12 @@ class ClaudeRehearsalFixture(unittest.TestCase):
             "verified_at_utc": "2026-10-07T00:00:00Z",
         }
 
+    def fake_lifecycle(self, configuration):
+        """失败生命周期探针的替身：记次数，返回按当前登记坐标构造、已过 ``validate_probe`` 的合规事实。"""
+
+        self.lifecycle_calls += 1
+        return fake_probe(configuration)
+
     @contextlib.contextmanager
     def patched(self, *, fail_step_container: str | None = None):
         runs = self.data / "runs"
@@ -189,6 +200,7 @@ class ClaudeRehearsalFixture(unittest.TestCase):
                 )
             )
             stack.enter_context(mock.patch.object(claude_upgrade, "_verify_official_binaries", self.fake_binaries))
+            stack.enter_context(mock.patch.object(lifecycle, "capture_probe", self.fake_lifecycle))
             stack.enter_context(mock.patch.object(claude_profile, "CONTAINER_REQUIRED_COMMANDS", TEST_CONTAINER_COMMANDS))
             stack.enter_context(mock.patch.object(receipt.platform, "machine", return_value="aarch64"))
             stack.enter_context(mock.patch.object(receipt.platform, "system", return_value="linux"))
@@ -283,7 +295,8 @@ class ClaudeContractTests(ClaudeRehearsalFixture):
         self.assertEqual(claude_profile.CONTAINER_REQUIRED_COMMANDS, ("openssl", "python3", "sha256sum", "tcpdump", "test"))
         self.assertEqual(claude_profile.HOST_REQUIRED_COMMANDS, ("docker", "python3"))
         self.assertEqual(set(claude_profile.LAUNCHER_CONTAINER_FIELDS.values()), set(claude_profile.CONTAINER_FIELDS))
-        self.assertEqual(claude_profile.FORMAL_PROBE_DIGESTS, ("storage_probe_sha256",))
+        self.assertEqual(claude_profile.FORMAL_PROBE_DIGESTS, ("storage_probe_sha256", "failure_lifecycle_probe_sha256"),
+                         "与 Codex 同一组 Formal 必需摘要（B2-11 第二部分补上失败生命周期探针）")
         self.assertEqual(
             {"schema_version", "tool", "tool_sha256", "version", "profile", "profile_sha256"}, set(claude_profile.rehearsal_producer())
         )
@@ -307,7 +320,8 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
         self.assertEqual(facts["summary"]["executed_job_ids"], sorted(facts["execution_contract"]["job_ids"]))
         self.assertEqual(set(facts["tool_trees"]), {"managed_host", "execution_host", "execution_container", "execution_synthetic_container"})
         self.assertEqual(facts["tool_identity"], {field: self.tool_identity[field] for field in claude_profile.TOOL_IDENTITY_FIELDS})
-        self.assertEqual(set(facts["probes"]), {"storage"})
+        self.assertEqual(set(facts["probes"]), {"failure_lifecycle", "storage"})
+        self.assertEqual(self.lifecycle_calls, 1, "失败生命周期探针在二进制核验之前跑一次")
         self.assertEqual(set(facts["dependencies"]), {"host", "capture_container", "synthetic_container"})
         self.assertEqual([item["name"] for item in facts["containers"]], [CAPTURE, SYNTHETIC])
         self.assertEqual(self.binary_calls, 1)
@@ -323,14 +337,15 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
         self.assertEqual(sealed["schema_version"], claude_profile.RECEIPT_SCHEMA)
         self.assertEqual(sealed["status"], "passed")
         self.assertIn("storage_probe_sha256", sealed)
-        self.assertNotIn("failure_lifecycle_probe_sha256", sealed)
+        self.assertEqual(sealed["failure_lifecycle_probe_sha256"], receipt._fingerprint(facts["probes"]["failure_lifecycle"]))
         self.assertEqual(replayed, sealed)
         self.assertEqual(sealed["execution_contract"], contract)
         receipt.assert_formal_compatible(sealed, contract)
         self.assertEqual(receipt.assert_recovery_compatible(sealed, contract), sealed)
-        # Formal 必需的探针摘要按画像取：Claude 只要证据 runs 根一项，缺了即拒绝。
-        with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "未通过"):
-            receipt.assert_formal_compatible({key: value for key, value in sealed.items() if key != "storage_probe_sha256"}, contract)
+        # Formal 必需的探针摘要按画像取：Claude 要证据 runs 根与失败生命周期两项，缺任何一项即拒绝。
+        for digest in claude_profile.FORMAL_PROBE_DIGESTS:
+            with self.subTest(digest=digest), self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "未通过"):
+                receipt.assert_formal_compatible({key: value for key, value in sealed.items() if key != digest}, contract)
         with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "不一致"):
             receipt.assert_formal_compatible(sealed, dict(contract, suite="core"))
         # 证据 runs 根探针：两个容器看到的是同一个可写目录。
@@ -351,6 +366,30 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
         self.assertEqual(source, sealed)
         with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "incremental-noop"):
             receipt.assert_formal_compatible(noop_receipt, contract)
+
+    def test_receipts_before_the_failure_lifecycle_probe_replay_but_are_not_formal(self) -> None:
+        """B2-11 第二部分之前的 Claude 收据（probes 只有 runs 根）：照样按原字节重放，但不能再新封存，也不能用于 Formal。"""
+
+        campaign = self.write_campaign()
+        with self.patched():
+            facts = self.collect(campaign, "facts.json")
+            old = copy.deepcopy(facts)
+            old["probes"].pop("failure_lifecycle")
+            # 当时的采集器同样按 probes 算运行时身份摘要：去掉探针后照原算法重算（只模拟旧收据，不改任何校验）。
+            old["runtime_identity_sha256"] = receipt._runtime_identity(old)
+            path = self.evidence / "old-facts.json"
+            path.write_bytes(receipt._canonical(old))
+            path.chmod(0o600)
+            with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "probes字段不闭合"):
+                receipt.finalize(self.evidence, "old-facts.json", "old-receipt.json", client="claude")
+            sealed = receipt.build_receipt(self.evidence, "old-facts.json", allow_collector_drift=True)
+            receipt._write_once(self.evidence / "old-receipt.json", sealed)
+            replayed = receipt.replay(self.evidence, "old-receipt.json", client="claude")
+        self.assertEqual(replayed, sealed)
+        self.assertIn("storage_probe_sha256", sealed)
+        self.assertNotIn("failure_lifecycle_probe_sha256", sealed)
+        with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "未通过"):
+            receipt.assert_formal_compatible(sealed, facts["execution_contract"])
 
     def test_failed_synthetic_steps_are_sealed_and_only_they_rerun(self) -> None:
         campaign = self.write_campaign()
@@ -403,6 +442,11 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
             "Codex 二进制形状": (binary("passed", True), "核验事实"),
             "runs 根不同目录": (lambda value: value["probes"]["storage"]["containers"]["synthetic_container"].__setitem__("inode", 1), "同一个目录"),
             "Codex 探针": (lambda value: value["probes"].__setitem__("bubblewrap", {}), "probes"),
+            "缺失败生命周期探针": (lambda value: value["probes"].pop("failure_lifecycle"), "probes"),
+            "失败生命周期补跑上限": (lambda value: value["probes"]["failure_lifecycle"].__setitem__("retry_limit", 1), "失败生命周期探针"),
+            "失败生命周期在抓包容器执行": (
+                lambda value: value["probes"]["failure_lifecycle"].__setitem__("execution_container", CAPTURE), "失败生命周期探针"),
+            "失败生命周期少一次归档": (lambda value: value["probes"]["failure_lifecycle"]["archives"].pop(), "归档数量"),
             "采集器": (lambda value: value["collector"].pop("profile"), "collector"),
             "C2PA": (lambda value: value["jobs"][0].__setitem__("c2pa_identity", {"x": 1}), "C2PA"),
             "运行时摘要": (lambda value: value.__setitem__("runtime_identity_sha256", "0" * 64), "运行时身份摘要"),

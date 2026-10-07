@@ -252,6 +252,23 @@ def pre_a3_data_root(client: str) -> tuple[Input, ...]:
     return PRE_A3_DATA_ROOT + tuple(item for item in probes if item not in PRE_A3_DATA_ROOT)
 
 
+# 客户端表里 ``kind:模板`` 形式的额外输入声明的种类（B2-11 第二部分：Claude 预检 plan 另读的文件与 Store 目录）。
+TABLE_INPUT_KINDS = ("file", "tree")
+
+
+def table_inputs(entries: Sequence[str]) -> tuple[Input, ...]:
+    """客户端表里 ``file:模板``／``tree:模板`` 的输入声明 → 上游产物类输入（前序升级留下或操作员备好的文件与目录）。"""
+
+    items: list[Input] = []
+    for entry in entries:
+        kind, _, template = str(entry).partition(":")
+        # 模板必须以参数引用开头（路径来自本轮参数文件，不在表里写死任何坐标）。
+        if kind not in TABLE_INPUT_KINDS or TEMPLATE.match(template) is None:
+            raise EntryStepsError(f"客户端表的输入声明不认识：{entry}")
+        items.append(Input("upstream", "file", template) if kind == "file" else Input("upstream", "tree", template, "pycache"))
+    return tuple(items)
+
+
 def build_steps(client: str) -> tuple[Step, ...]:
     """客户端的步骤表：顺序即依赖顺序（上游一律排在前面，导入时核对）。依据见各步骤的注释与方案 E2-05、E2-06。
 
@@ -347,7 +364,8 @@ def build_steps(client: str) -> tuple[Step, ...]:
             *_managed_files(_module_file(spec["timing_ledger_module"])), *_drivers("stage1.sh"), *common_driver,
         ), products=(Product("checkpoint"),)),
         # 预检 plan 冻结完整工具身份；读指南第二部分、两棵官方来源（Codex 是源码树，Claude 是 B2-01 冻结目录）、官方包、
-        # Active 画像、compose 文件与采集镜像。
+        # Active 画像、compose 文件与采集镜像。Claude 另读客户端表登记的文件与 Store 目录（B2-11 第二部分：Active Release
+        # 目录、静态基线两份、生产现状清单所在的前序 Store 与只读复用的前序 Store；Codex 没有，步骤表逐字不变）。
         Step("preflight-plan", "预检 plan", "post_ledger", upstream=("ledger", "ledger-checkpoint", "environment-p0"), inputs=(
             *_params(*spec["plan_params"]), *IDENTITY, GUIDE_PART2, DEPLOY_TOOL_FILES,
             *_drivers("stage1.sh"), *common_driver,
@@ -355,6 +373,7 @@ def build_steps(client: str) -> tuple[Step, ...]:
             Input("environment", "file", "{TARGET_PACKAGE}"), Input("upstream", "file", "{ACTIVE_PROFILE}"),
             Input("environment", "file", "{COMPOSE_DIR}/docker-compose.yml"),
             Input("environment", "image_ref", "{CAPTURE_RUNTIME_IMAGE}"),
+            *table_inputs(spec["preflight_plan_inputs"]),
         ), products=(Product("campaign"),)),
         # Job 演练：五个容器的镜像、目标客户端二进制、采集镜像；收据可能是失败的，沿用前要核对状态是通过。
         Step("job-rehearsal", "Job 演练收据", "post_ledger", upstream=("preflight-plan",), inputs=(

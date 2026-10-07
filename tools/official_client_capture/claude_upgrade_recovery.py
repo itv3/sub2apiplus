@@ -863,7 +863,7 @@ def account_sealed_official_command(arguments: argparse.Namespace) -> tuple[dict
 
 
 # ---------------------------------------------------------------------------
-# campaign_status（官方阶段；候选阶段与其余状态由 B2-11 完善）
+# campaign_status（官方阶段；候选阶段的状态随候选采集 attempt 由 B4-01 完善）
 # ---------------------------------------------------------------------------
 
 STATUS_SCHEMA = "claude-upgrade-status/v1"
@@ -905,7 +905,7 @@ def campaign_status(campaign_dir: Path, candidate_id: str | None = None) -> dict
     """官方阶段的 Campaign 状态与下一命令（只读浅检查）；状态名与 Codex ``campaign_status`` 的官方阶段一致。"""
 
     if candidate_id is not None:
-        raise claude_upgrade._pending("campaign_status（候选阶段）", "B2-11（VC-0 收口续作与 P0 收据）")
+        raise claude_upgrade._pending("campaign_status（候选阶段）", "B4-01（候选采集 attempt）")
     campaign_dir = Path(campaign_dir)
     manifest = claude_upgrade.load_campaign_manifest(campaign_dir)
     mode, purpose = claude_upgrade._campaign_coordinates(manifest)
@@ -918,10 +918,14 @@ def campaign_status(campaign_dir: Path, candidate_id: str | None = None) -> dict
         "live_request_count": 0,
     }
     if mode != "formal":
-        return {**base, "status": "preflight_complete", "next_command": "Formal Campaign 只由 VC-0 收口创建（B2-11）"}
+        return {
+            **base,
+            "status": "preflight_complete",
+            "next_command": "Formal Campaign 只由 VC-0 收口创建：python3 -m tools.official_client_capture.claude_upgrade_vc0_closeout",
+        }
     candidates_root = campaign_dir / "candidates"
     if candidates_root.is_dir() and not candidates_root.is_symlink() and any(child.is_dir() for child in candidates_root.iterdir()):
-        raise claude_upgrade._pending("campaign_status（候选阶段已开始）", "B2-11（VC-0 收口续作与 P0 收据）")
+        raise claude_upgrade._pending("campaign_status（候选阶段已开始）", "B4-01（候选采集 attempt）")
     decision = claude_upgrade._campaign_environment_decision(campaign_dir, _manifest=manifest)
     sealed = capture._official_sealed(campaign_dir)
     ordered = claude_upgrade._ordered_capture_attempts(campaign_dir, PHASE, None, _manifest=manifest)
@@ -1057,7 +1061,7 @@ def resume_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
             raise ConfigurationError("resume --rerun-failed 必须提供 --recovery-preview（已批准的 recovery-preview/v1）。")
         result = _run_with_lease(campaign_dir, manifest, arguments)
     else:
-        raise claude_upgrade._pending(f"resume（Campaign 状态 {current}）", "B2-11（VC-0 收口续作与 P0 收据：campaign_status）")
+        raise claude_upgrade._pending(f"resume（Campaign 状态 {current}）", "B4-01（候选采集 attempt：候选阶段的状态与续跑）")
     in_campaign_run = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
     return result, 0 if result.get("status") == "awaiting_receipts" and in_campaign_run else 2
 

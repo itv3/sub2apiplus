@@ -1138,7 +1138,7 @@ class ReuseCheckAndStatusTests(RecoveryChainCase):
             self.assertIn("复用判定不一致", stderr)
         with self.chain_patched():
             self.assertEqual(claude_upgrade.campaign_status(campaign)["status"], "official_capture_failed")
-            with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, "B2-11"):
+            with self.assertRaisesRegex(claude_upgrade.ClaudeOrchestratorPending, "B4-01"):
                 claude_upgrade.campaign_status(campaign, "c1")
 
         # 收口之后证据被改动：读取 attempt 时的权限收口重放失败关闭，对账不写任何收据。

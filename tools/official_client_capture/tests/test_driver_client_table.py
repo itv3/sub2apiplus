@@ -53,6 +53,10 @@ DRIVER = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
 OCC = REPO_ROOT / "tools" / "official_client_capture"
 CT = es.CT
 BASELINE, TARGET = "2.1.226", "2.1.245"
+# B2-11 第二部分：Claude 预检 plan 的参数键（参数模板里有写法；入口便宜检查与预检 plan 一步按客户端表报缺）。
+PLAN_KEYS = ("ACTIVE_RELEASE_CATALOG", "STATIC_BASELINE_ANCHORS", "STATIC_BASELINE_REACHABILITY", "PRODUCTION_INVENTORY_STORE",
+             "PRODUCTION_INVENTORY_CAMPAIGN", "PREDECESSOR_STORE", "PREDECESSOR_STORE_CAMPAIGN", "ENTRYPOINT", "PRIVACY_MODE",
+             "OAUTH_ORG_ID", "MODEL_CATALOG_SHA256")
 
 
 def claude_env_text(fixture: driver_tests._DriverFixture) -> str:
@@ -73,6 +77,12 @@ def claude_env_text(fixture: driver_tests._DriverFixture) -> str:
 
 def load_parse_env():
     return driver_tests.load_script("parse_env")
+
+
+def _write_text(path: Path, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
 class ClientTableStructureTests(unittest.TestCase):
@@ -247,8 +257,8 @@ class ParseEnvClaudeTests(unittest.TestCase):
         template = (DRIVER / "env.example.sh").read_text(encoding="utf-8")
         overrides = dict(re.findall(r"^#   ([A-Z_][A-Z0-9_]*)=([^\s（]+)", template, flags=re.M))
         self.assertEqual({"CLIENT", "TARGET_PROFILE_ID", "NEW", "IN", "UP", "CAND", "BUNDLE_BRANCH", "CLIENT_BIN", "CLIENT_BIN_SHA256",
-                          "CLIENT_ACCOUNT_ID", "BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "ENTRY_BRANCH", "UPSTREAM_IP"},
-                         set(overrides))
+                          "CLIENT_ACCOUNT_ID", "BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "ENTRY_BRANCH", "UPSTREAM_IP",
+                          *PLAN_KEYS}, set(overrides))
         lines = []
         for line in template.splitlines():
             key = line.split("=", 1)[0]
@@ -256,10 +266,11 @@ class ParseEnvClaudeTests(unittest.TestCase):
                 continue
             lines.append(f"{key}={overrides[key]}" if key in overrides and not line.startswith("#") else line)
         lines += [f"{key}={value}" for key, value in overrides.items()
-                  if key in {"BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "UPSTREAM_IP"}]
+                  if key in {"BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "UPSTREAM_IP", *PLAN_KEYS}]
         text = "\n".join(lines) + "\n"
         text = text.replace("REPLACE_API_ANTHROPIC_COM_IP", "160.79.104.10")
-        for placeholder in ("REPLACE_APPROVED_PROFILE_SHA256", "REPLACE_OFFICIAL_CLAUDE_SHA256", "REPLACE_OFFICIAL_PACKAGE_SHA256"):
+        for placeholder in ("REPLACE_APPROVED_PROFILE_SHA256", "REPLACE_OFFICIAL_CLAUDE_SHA256", "REPLACE_OFFICIAL_PACKAGE_SHA256",
+                            "REPLACE_MODEL_CATALOG_SHA256"):
             text = text.replace(placeholder, "a" * 64)
         text = text.replace("REPLACE_CLAUDE_ACCOUNT_ID", "17").replace("REPLACE_API_KEY_ID", "92").replace("/root/", f"{self.root}/")
         (self.root / "docker/capture-cli/data").mkdir(parents=True, exist_ok=True)
@@ -271,6 +282,21 @@ class ParseEnvClaudeTests(unittest.TestCase):
         self.assertEqual(values["UPSTREAM_IP"], "160.79.104.10")
         with self.assertRaisesRegex(self.parser.EnvFileError, "UPSTREAM_IP 必须是 IP 地址"):
             self.parser.parse(text.replace("UPSTREAM_IP=160.79.104.10", "UPSTREAM_IP=api.anthropic.com"))
+        # B2-11 第二部分的预检 plan 键：模板里的写法能解析，格式与成对规则拒绝写错的。
+        self.assertEqual(values["MODEL_CATALOG_SHA256"], "a" * 64)
+        self.assertTrue(values["PRODUCTION_INVENTORY_STORE"].endswith("/control-store"))
+        self.assertEqual(values["PREDECESSOR_STORE_CAMPAIGN"], "REPLACE_PREDECESSOR_CAMPAIGN")
+        # 只改真正的赋值行（行首），模板注释里的同名写法不动。
+        for label, (before, after, message) in {
+            "相对路径": ("\nACTIVE_RELEASE_CATALOG=", "\nACTIVE_RELEASE_CATALOG=relative/", "绝对路径"),
+            "非法标识": ("\nENTRYPOINT=REPLACE_STORE_ENTRYPOINT", "\nENTRYPOINT=-bad", "安全标识"),
+            "摘要": ("\nMODEL_CATALOG_SHA256=" + "a" * 64, "\nMODEL_CATALOG_SHA256=xyz", "SHA-256"),
+            "缺成对": ("\nPREDECESSOR_STORE_CAMPAIGN=REPLACE_PREDECESSOR_CAMPAIGN\n", "\n", "必须同时给出"),
+        }.items():
+            with self.subTest(label):
+                self.assertEqual(text.count(before), 1, before)
+                with self.assertRaisesRegex(self.parser.EnvFileError, message):
+                    self.parser.parse(text.replace(before, after))
 
     def test_plan_audit_template_uses_exported_parameters_and_real_plan_flags(self) -> None:
         """B5a-09：Claude 的 plan-audit 参数模板只引用参数文件导出的键（UPSTREAM_IP 可缺省、由必填项报缺），展开后是 Claude
@@ -355,7 +381,15 @@ class EntryStepsClaudeTests(unittest.TestCase):
         self.assertIn("file:/opt/claude-{TARGET_VERSION}/claude", names["environment-p0"])
         self.assertIn("file:{D}/tools/official_client_capture/claude_upgrade_arm64_environment_receipt.py", names["environment-p0"])
         self.assertIn("file:{CLIENT_BIN}", names["entry-preflight"] & names["job-rehearsal"])
-        self.assertTrue({"param:CLIENT_BIN", "param:CLIENT_BIN_SHA256", "param:CLIENT_ACCOUNT_ID"} <= names["preflight-plan"])
+        self.assertTrue({"param:CLIENT_BIN", "param:CLIENT_BIN_SHA256", "param:UPSTREAM_IP", "param:ENTRY_COMMIT"} <= names["preflight-plan"])
+        # B2-11 第二部分：预检 plan 登记 Claude plan 实际读的参数与另读的文件、Store 目录；Claude plan 不读的 Codex 那几项不登记。
+        self.assertTrue({"param:ACTIVE_RELEASE_CATALOG", "param:PRODUCTION_INVENTORY_STORE", "param:PREDECESSOR_STORE",
+                         "file:{ACTIVE_RELEASE_CATALOG}", "file:{STATIC_BASELINE_ANCHORS}", "file:{STATIC_BASELINE_REACHABILITY}",
+                         "tree:{PRODUCTION_INVENTORY_STORE}#pycache", "tree:{PREDECESSOR_STORE}#pycache"} <= names["preflight-plan"])
+        self.assertFalse({"param:LITE_MODEL", "param:CLIENT_ACCOUNT_ID", "param:API_KEY_ID", "param:COMPOSE_DIR"} & names["preflight-plan"])
+        codex_names = {item.name for item in codex["preflight-plan"].inputs}
+        self.assertFalse({name for name in codex_names if "ACTIVE_RELEASE_CATALOG" in name or "PRODUCTION_INVENTORY" in name},
+                         "Codex 的预检 plan 输入不变")
         self.assertFalse({name for name in set().union(*names.values()) if "CODEX_" in name or "TARGET_CODE_MODE_HOST" in name})
         self.assertTrue(all("driver:client_table.py" in names[step_id] for step_id, step in claude.items()
                             if any(item.name == "driver:lib.sh" for item in step.inputs)), "Claude 的步骤登记客户端表")
@@ -473,6 +507,254 @@ class EntryOrchestratorClaudeTests(unittest.TestCase):
         self.assertEqual(environment[3], "tools.official_client_capture.claude_upgrade_arm64_environment_receipt")
         self.assertEqual(_option(environment, "--claude-version"), self.fx.params["TARGET_VERSION"])
         self.assertNotIn("--rust-tls-codex-version", environment)
+
+
+class EntryOrchestratorClaudeBackHalfTests(unittest.TestCase):
+    """B2-11 第二部分：入口后半段四步对 Claude 接入——预检 plan 按客户端表模板展开（真实 Claude 解析器解析）、发布认证与 P0
+    收据按客户端表执行、VC-0 收口跑 Claude 收口模块并按三态（通过、需要处理即退出 3、失败）收尾。前序步骤的记录按 Claude 的
+    步骤表写（各步骤方法只从记录取产物）。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.fx = Fixture(self.root)
+        shutil.rmtree(self.fx.data / "control" / f"{self.fx.params['UP']}-timing-ledger")
+        self.fx.images.update({"capture-cli-synthetic": "sha256:" + "9" * 64})
+        inputs = self.root / "claude-inputs"
+        store = inputs / "active-store"
+        store.mkdir(parents=True)
+        self.claude = {
+            "CLIENT": "claude", "CLIENT_BIN": "/opt/claude-x/claude", "CLIENT_BIN_SHA256": "c" * 64, "UPSTREAM_IP": "160.79.104.10",
+            "ACTIVE_RELEASE_CATALOG": str(_write_text(inputs / "active-release-catalog.json", "{}")),
+            "STATIC_BASELINE_ANCHORS": str(_write_text(inputs / "anchors.json", "{}")),
+            "STATIC_BASELINE_REACHABILITY": str(_write_text(inputs / "reachability.json", "{}")),
+            "PRODUCTION_INVENTORY_STORE": str(store), "PRODUCTION_INVENTORY_CAMPAIGN": "claude-code-active",
+            "ENTRYPOINT": "sdk-cli", "PRIVACY_MODE": "essential-traffic", "OAUTH_ORG_ID": "claude-org", "MODEL_CATALOG_SHA256": "e" * 64,
+            "RUNROOT": str(self.root / "run"), "CAMPAIGN_PREFIX": "claude-code-2_1_245",
+        }
+        self.fx.params.update(self.claude)
+        (self.fx.data / "control" / "claude-managed-deploy-20261005t000000z.json").write_text(
+            json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "f" * 64}}), encoding="utf-8")
+        self.ledger_dir = self.fx.data / "control" / f"{self.fx.params['UP']}-timing-ledger"
+        self.commands = Commands(self.fx)
+        self.calls: list[list[str]] = []
+        self.closeout_results: list[tuple[int, dict]] = []
+
+    def runner(self, argv, cwd, env, log):
+        argv = list(argv)
+        self.calls.append(argv)
+        if argv[:4] == [sys.executable, "-B", "-m", CT.spec("claude")["orchestrator_module"]] and argv[4] == "plan":
+            campaign = Path(_option(argv, "--campaign-dir"))
+            campaign.mkdir()
+            (campaign / "campaign.json").write_text(json.dumps({"campaign_id": _option(argv, "--campaign-id")}), encoding="utf-8")
+            return 0
+        if argv[:4] == [sys.executable, "-B", "-m", CT.spec("claude")["closeout_module"]]:
+            rc, payload = self.closeout_results.pop(0) if self.closeout_results else (0, {"status": "passed"})
+            if rc == 0:
+                _write_text(Path(_option(argv, "--audit-dir")) / "receipt.json", json.dumps(payload))
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            return rc
+        return self.commands(argv, cwd, env, log)
+
+    def orchestrator(self) -> eo.Orchestrator:
+        return eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.root / "runs", steps_dir=self.fx.steps_dir,
+                               runner=self.runner, es_runner=self.fx.runner)
+
+    def record(self, step_id: str, products: dict[str, str]) -> None:
+        ctx = es.Context(params=dict(self.fx.params), driver_dir=self.fx.driver, steps_dir=self.fx.steps_dir, runner=self.fx.runner)
+        step = ctx.step(step_id)
+        es.begin(step, ctx)
+        es.finish(step, ctx, status="passed", products=products)
+
+    def ledger_records(self) -> None:
+        ledger = _write_text(self.ledger_dir / "ledger.json", json.dumps({
+            "schema_version": "upgrade-timing-ledger-plan/v2", "client": "claude", "upgrade_id": self.fx.params["UP"],
+            "campaign_purpose": "production_replacement", "baseline_version": BASELINE, "target_version": TARGET}))
+        checkpoint = _write_text(self.ledger_dir / "receipts" / "vc0-input-r1-preflight.json", "{}")
+        environment = _write_text(self.root / "environment" / "p0" / "receipt.json", "{}")
+        self.record("ledger", {"ledger": str(ledger)})
+        self.record("ledger-checkpoint", {"checkpoint": str(checkpoint)})
+        self.record("environment-p0", {"receipt": str(environment)})
+
+    def plan_call(self) -> list[str]:
+        [call] = [call for call in self.calls if call[3:5] == [CT.spec("claude")["orchestrator_module"], "plan"]]
+        return call
+
+    def test_preflight_plan_follows_the_claude_template_and_real_parser(self) -> None:
+        from tools.official_client_capture import claude_upgrade
+        from tools.official_client_capture import claude_upgrade_campaign
+
+        self.assertIsNone(CT.pending("claude", "step:preflight-plan"))
+        self.assertIsNone(CT.pending("claude", "step:vc0-closeout"))
+        self.ledger_records()
+        passed, products = self.orchestrator().step_preflight_plan()
+        self.assertTrue(passed)
+        argv = self.plan_call()
+        self.assertFalse({"--capture-codex-bin", "--codex-account-id", "--baseline-source"} & set(argv), "不拿 Codex 的参数形状顶替")
+        parsed = claude_upgrade._build_parser().parse_args(argv[4:])
+        campaign = Path(products["campaign"]).parent
+        self.assertEqual((parsed.campaign_dir, parsed.campaign_id, parsed.campaign_mode), (campaign, campaign.name, "preflight_only"))
+        self.assertTrue(campaign.name.startswith("claude-code-2_1_245-preflight-vc5-r1-fffffffff-"))
+        self.assertTrue(claude_upgrade_campaign.creating_campaign(parsed), "预检的四个控制收据参数齐全")
+        self.assertEqual((parsed.timing_ledger_dir, str(parsed.timing_receipt)), (self.ledger_dir, "receipts/vc0-input-r1-preflight.json"))
+        self.assertEqual((parsed.arm64_environment_root, str(parsed.arm64_environment_receipt)),
+                         (self.root / "environment" / "p0", "receipt.json"))
+        expected = {
+            "target_sha256": self.claude["CLIENT_BIN_SHA256"], "claude_bin": self.claude["CLIENT_BIN"], "upstream_ip": "160.79.104.10",
+            "active_release_catalog": Path(self.claude["ACTIVE_RELEASE_CATALOG"]), "active_profile": Path(self.fx.params["ACTIVE_PROFILE"]),
+            "static_baseline_anchors": Path(self.claude["STATIC_BASELINE_ANCHORS"]),
+            "static_baseline_reachability": Path(self.claude["STATIC_BASELINE_REACHABILITY"]),
+            "production_inventory_store": Path(self.claude["PRODUCTION_INVENTORY_STORE"]),
+            "production_inventory_campaign": "claude-code-active", "entrypoint": "sdk-cli", "privacy_mode": "essential-traffic",
+            "oauth_org_id": "claude-org", "model_catalog_sha256": "e" * 64, "source_commit": self.fx.params["ENTRY_COMMIT"],
+            "predecessor_store": None, "predecessor_campaign": None,
+        }
+        self.assertEqual({key: getattr(parsed, key) for key in expected}, expected)
+        claude_upgrade_campaign._require_create_arguments(parsed)
+
+    def test_preflight_plan_reuse_and_missing_parameters(self) -> None:
+        from tools.official_client_capture import claude_upgrade
+
+        self.ledger_records()
+        self.fx.params["EVIDENCE_DECISION"] = "reuse"
+        with self.assertRaisesRegex(eo.OrchestratorError, "参数里没有 PREDECESSOR_STORE"):
+            self.orchestrator().step_preflight_plan()
+        predecessor = self.root / "predecessor-store"
+        predecessor.mkdir()
+        self.fx.params.update({"PREDECESSOR_STORE": str(predecessor), "PREDECESSOR_STORE_CAMPAIGN": "claude-code-2_1_245-old"})
+        self.assertTrue(self.orchestrator().step_preflight_plan()[0])
+        parsed = claude_upgrade._build_parser().parse_args(self.plan_call()[4:])
+        self.assertEqual((parsed.predecessor_store, parsed.predecessor_campaign), (predecessor, "claude-code-2_1_245-old"))
+        del self.fx.params["ENTRYPOINT"]
+        with self.assertRaisesRegex(eo.OrchestratorError, "参数里没有 ENTRYPOINT"):
+            self.orchestrator().step_preflight_plan()
+
+    def test_release_certification_and_p0_receipt_follow_the_table(self) -> None:
+        products = self.fx.products
+        self.ledger_records()
+        self.record("policy-activation", {"activation": self.fx.params["POLICY_ACTIVATION"]})
+        self.record("pre-a3", {"certification": self.fx.params["PRE_A3_CERTIFICATION"]})
+        self.record("job-rehearsal", products["job-rehearsal"])
+        self.record("atomic-double", products["atomic-double"])
+        orchestrator = self.orchestrator()
+        passed, release = orchestrator.step_release_certification()
+        self.assertTrue(passed)
+        certify = [call for call in self.calls if CT.spec("claude")["release_certification_module"] in call]
+        self.assertEqual([call[4] for call in certify], ["issue", "verify"])
+        self.assertEqual([call[-2:] for call in certify], [["--client", "claude"]] * 2)
+        reuse = [call for call in self.calls if "record-reuse" in call]
+        self.assertEqual(reuse[0][-2:], ["--client", "claude"])
+        self.assertTrue(_option(certify[0], "--deployment-receipt").endswith("claude-managed-deploy-20261005t000000z.json"))
+        # P0 收据：两客户端同一合同，subject 取 Claude 的计时账本计划。
+        for gate_id in ("test-capture-tools", "check-egress-spec"):
+            _write_text(Path(products["entry-gates"][f"p0-{gate_id}"]), json.dumps({
+                "gate_id": gate_id, "status": "passed", "exit_code": 0, "passed": 3, "failed": 0, "approved_skip": 0,
+                "unexpected_skip": 0}))
+        self.record("entry-gates", products["entry-gates"])
+        self.record("release-certification", release)
+        passed, receipt = orchestrator.step_p0_receipt()
+        self.assertTrue(passed, orchestrator.outcomes)
+        facts = self.commands.p0_facts
+        self.assertEqual((facts["schema_version"], facts["subject"]["upgrade_id"], facts["subject"]["target_version"]),
+                         (CT.spec("claude")["p0_facts_schema"], self.fx.params["UP"], TARGET))
+        self.assertTrue(receipt["receipt"].endswith("/p0-receipt.json"))
+
+    def closeout_ready(self) -> eo.Orchestrator:
+        products = self.fx.products
+        campaign = self.root / "preflight" / "campaign.json"
+        _write_text(campaign, "{}")
+        report = _write_text(self.root / "probe" / "report.json", json.dumps({"status": "passed"}))
+        self.record("preflight-plan", {"campaign": str(campaign)})
+        self.record("client-launch-probe", {"report": str(report)})
+        self.record("p0-receipt", products["p0-receipt"])
+        self.record("release-certification", {"certification": self.fx.params["RELEASE_CERTIFICATION"]})
+        self.record("entry-gates", products["entry-gates"])
+        orchestrator = self.orchestrator()
+        # 只执行收口一步：其余步骤的结果按「沿用」占位，汇总（_after_closeout）照常列出全部步骤。
+        orchestrator.outcomes = {step_id: eo.Outcome(step_id, "reuse", action="沿用") for step_id in eo.ORDER}
+        orchestrator.outcomes["vc0-closeout"] = eo.Outcome("vc0-closeout", "run")
+        return orchestrator
+
+    def test_vc0_closeout_runs_the_claude_module_in_three_states(self) -> None:
+        orchestrator = self.closeout_ready()
+        orchestrator.execute("vc0-closeout")
+        outcome = orchestrator.outcomes["vc0-closeout"]
+        self.assertEqual((outcome.action, outcome.status), ("执行", "passed"), outcome.reasons)
+        [closeout] = [call for call in self.calls if CT.spec("claude")["closeout_module"] in call]
+        self.assertEqual(_option(closeout, "--formal-campaign-id"), self.fx.params["NEW"])
+        self.assertEqual(_option(closeout, "--preflight-campaign-dir"), str(self.root / "preflight"))
+        probe = [call for call in self.calls if "client_launch_probe.py" in " ".join(call)]
+        self.assertEqual(probe[0][-2:], ["--client", "claude"], "收口前复核启动探测报告按 Claude")
+        self.assertEqual(orchestrator._after_closeout({})["exit_code"], 0)
+        # 需要批准：退出 3，标「阻塞」并给出下一条命令（不是失败）。
+        self.closeout_results = [(3, {"status": "blocked", "kind": "approval", "message": "首批恢复预览等待批准",
+                                      "next_command": "entry.sh --approve-sha256 <摘要> --approved-by <批准人>"})]
+        orchestrator = self.closeout_ready()
+        orchestrator.execute("vc0-closeout")
+        result = orchestrator._after_closeout({})
+        self.assertEqual(result["exit_code"], 3)
+        outcome = orchestrator.outcomes["vc0-closeout"]
+        self.assertEqual(outcome.action, "阻塞")
+        self.assertIn("首批恢复预览等待批准", outcome.reasons)
+        self.assertTrue(any(reason.startswith("下一步：entry.sh --approve-sha256") for reason in outcome.reasons))
+        # 收口失败：退出 1。
+        self.closeout_results = [(1, {"status": "failed"})]
+        orchestrator = self.closeout_ready()
+        orchestrator.execute("vc0-closeout")
+        self.assertEqual(orchestrator._after_closeout({})["exit_code"], 1)
+        self.assertTrue(any("收口失败" in reason for reason in orchestrator.outcomes["vc0-closeout"].reasons))
+
+
+class ClaudeVc1DriverTests(unittest.TestCase):
+    """B2-11 第二部分：VC-1 首批之后的封存批次由 vc1-claude.sh／claude_vc1.py 派发（客户端表 vc1_dispatch_script，Codex 没有）。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.campaign = self.root / "campaign"
+        self.inputs = self.root / "inputs"
+        for path in (self.campaign, self.inputs):
+            path.mkdir()
+        self.module = driver_tests.load_script("claude_vc1")
+
+    def environment(self, client: str):
+        return mock.patch.dict(os.environ, {"CLIENT": client, "NEWDIR": str(self.campaign), "W": str(self.inputs)})
+
+    def test_table_and_script_bind_the_claude_dispatch(self) -> None:
+        self.assertEqual((CT.spec("codex")["vc1_dispatch_script"], CT.spec("claude")["vc1_dispatch_script"]), (None, "vc1-claude.sh"))
+        script = (DRIVER / "vc1-claude.sh").read_text(encoding="utf-8")
+        self.assertIn('"$CT_VC1_DISPATCH_SCRIPT" != vc1-claude.sh', script)
+        self.assertIn('bash "$DRV/vc-batch.sh" "$NEW" "$IN" VC-1 "$SEQ" VC-0 "$PLAN"', script, "阶段 VC-1、前序 VC-0")
+        self.assertTrue(os.access(DRIVER / "vc1-claude.sh", os.X_OK))
+
+    def test_plan_writes_the_checked_batch_plan_and_rejects_other_clients(self) -> None:
+        from tools.official_client_capture import claude_upgrade_batch
+        from tools.official_client_capture import claude_upgrade_static
+
+        actions = [
+            claude_upgrade_batch.managed_action("vc1-02-seal-preview", "VC-1:vc1-02-seal-preview",
+                                                ["capture-official", "seal", "--campaign-dir", str(self.campaign), "--attempt-id", "a1"],
+                                                item_ids=["vc1-02-seal-preview"]),
+            claude_upgrade_static.static_action(self.campaign),
+        ]
+        output = self.inputs / "action-plan-vc1-seal-preview.json"
+        with self.environment("claude"), mock.patch.object(claude_upgrade_static, "vc1_seal_actions", return_value=actions) as seal, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.module.main(["plan", "--output", str(output)]), 0)
+        self.assertEqual(seal.call_args.kwargs, {"approve_seal_sha256": None, "discovery_dispositions": None})
+        plan = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual([item["action_id"] for item in plan["actions"]], ["vc1-01-analyze-target", "vc1-02-seal-preview"],
+                         "按 action_id 排序：静态分析先于 seal 预览")
+        self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+        with self.environment("claude"), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(self.module.main(["plan", "--output", str(self.root / "elsewhere.json")]), 3)
+        self.assertIn("派发拒绝", stderr.getvalue())
+        with self.environment("codex"), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(self.module.main(["plan", "--output", str(output)]), 3)
+        self.assertIn("不是 vc1-claude.sh", stderr.getvalue())
 
 
 class EntryGatesClaudeTests(unittest.TestCase):

@@ -356,7 +356,8 @@ class ClaudePolicyCertificationTests(_IdentityMemo):
 
 
 class ClaudeRecordCertificationTests(_IdentityMemo):
-    """Claude 的 pre-A3 v3：从执行记录签发、核验、复用；发布认证 v2 的组装与核验；签发在演练合同落实前失败关闭。"""
+    """Claude 的 pre-A3 v3：从执行记录签发、核验、复用；发布认证 v2 的组装与核验；签发先按 Claude 合同重放 Job 演练，在
+    atomic-double 合同落实前失败关闭。"""
 
     def _issue(self, root: Path, deployment: Path, activation: Path) -> tuple[Path, dict, pre_a3_tests._SyntheticStore]:
         store = pre_a3_tests._SyntheticStore(root)
@@ -397,13 +398,32 @@ class ClaudeRecordCertificationTests(_IdentityMemo):
                 self.assertEqual(reuse["status"], "not_needed", "同一部署下签发的认证不需要复用收据")
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(pre_a3.main(["verify", "--client", "claude", "--certification", str(path)]), 0)
-                # 发布认证：Claude 签发在核完 pre-A3 后，因 Job 演练与 atomic-double 合同未落实而失败关闭。
+                # 发布认证：Claude 签发在核完 pre-A3 后先按 Claude 合同逐项重放 Job 演练（收据缺失即报 Job 演练），Job 演练
+                # 通过后因 atomic-double 合同未落实（B5a-09 续）失败关闭（B2-11 第二部分）。
                 with mock.patch.object(certify_release, "_require_release_platform"):
-                    with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "B2-10、B5a-09"):
+                    with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "Job rehearsal 收据"):
                         certify_release.build_certification(
                             deployment_receipt=deployment, pre_a3_certification=path, policy_activation=activation,
                             job_rehearsal_root=root, job_rehearsal_receipt=Path("job.json"), atomic_rehearsal_root=root,
                             atomic_rehearsal_receipt=Path("atomic.json"), client="claude")
+                    job_receipt = policy_tests._write_json(root / "job-claude.json", {"synthetic": "claude-job-rehearsal"})
+                    replayed = {"status": "passed", "job_count": 14, "storage_probe_sha256": "b" * 64,
+                                "failure_lifecycle_probe_sha256": "a" * 64, "preflight_campaign": {"campaign_id": "claude-pre"}}
+                    with mock.patch.object(certify_release.job_rehearsal, "replay", return_value=replayed) as replay:
+                        with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "atomic-double 收据合同尚未落实（B5a-09 续）"):
+                            certify_release.build_certification(
+                                deployment_receipt=deployment, pre_a3_certification=path, policy_activation=activation,
+                                job_rehearsal_root=root, job_rehearsal_receipt=Path(job_receipt.name), atomic_rehearsal_root=root,
+                                atomic_rehearsal_receipt=Path("atomic.json"), client="claude")
+                    self.assertEqual(replay.call_args.kwargs, {"client": "claude"}, "Job 演练按 Claude 的合同重放")
+                    # 缺失败生命周期探针的 Job 演练（B2-11 之前的 Claude 收据）不能进发布认证。
+                    without_probe = {key: value for key, value in replayed.items() if key != "failure_lifecycle_probe_sha256"}
+                    with mock.patch.object(certify_release.job_rehearsal, "replay", return_value=without_probe):
+                        with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "缺少失败生命周期探针"):
+                            certify_release.build_certification(
+                                deployment_receipt=deployment, pre_a3_certification=path, policy_activation=activation,
+                                job_rehearsal_root=root, job_rehearsal_receipt=Path(job_receipt.name), atomic_rehearsal_root=root,
+                                atomic_rehearsal_receipt=Path("atomic.json"), client="claude")
                 # 发布认证 v2 的组装与核验（演练绑定用占位文件，校验只核路径与摘要）。
                 release = self._compose_release(root, identity, deployment, path, receipt)
                 self.assertEqual((release["schema_version"], release["client"]), (certify_release.SCHEMA_VERSION_V2, "claude"))
