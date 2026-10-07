@@ -1,5 +1,7 @@
 #!/bin/bash
 # 前阶段 1 收尾（R19）：Job 演练收据 → 客户端启动探测 → atomic-double 收据 → 写 stage1.env。
+# 按客户端（B2-10）：Job 演练模块与追加给共享模块的 --client、启动探测的 --client 取客户端表（lib.sh 加载）；Codex 的命令行
+# 与改造前相同。atomic-double 的 Claude 一侧尚未接入（客户端表 pending），Claude 跑到那一步即停。
 # stage1.sh 建好预检 Campaign 后写出 $RUNROOT/stage1.partial.env 并调用本脚本。本段任一步失败时，
 # 修复环境后单独重跑本脚本即可续跑：不重做 stage1 前面各步、不新建账本；已有收据的 Job 演练与
 # atomic-double 直接沿用，半途中断留下的目录原样保留、换带时间后缀的新目录重做；
@@ -30,15 +32,19 @@ else
   JR="$JR_BASE"
   if [ -e "$JR" ]; then JR="$JR_BASE-r$(date -u +%H%M%S)"; fi
   mkdir -m 0700 "$JR"
-  python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt collect --campaign-dir "$PRE" --evidence-root "$JR" --output facts.json | cut -c1-160
-  python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt finalize --evidence-root "$JR" --facts facts.json --output receipt.json | cut -c1-160
+  # 收据模块与 --client 取客户端表（B2-10；Codex 即原模块、参数为空）。
+  python3 -m "$CT_JOB_REHEARSAL_MODULE" collect --campaign-dir "$PRE" --evidence-root "$JR" --output facts.json ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-160
+  python3 -m "$CT_JOB_REHEARSAL_MODULE" finalize --evidence-root "$JR" --facts facts.json --output receipt.json ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-160
   if [ "$(receipt_status "$JR")" != passed ]; then echo "Job 演练收据不是通过（status=$(receipt_status "$JR")）：修好后重跑本脚本（会换新目录）"; exit 1; fi
 fi
 
 # R19：取证前用目标客户端按各 TUI 作业的真实参数启动一次（私有命名空间、本地替身、零真实请求）。
 PROBE="$D/control/${CAMPAIGN_PREFIX}-client-launch-probe-$ROUND-$STAMP"
-python3 -B "$DRV/client_launch_probe.py" run --campaign-dir "$PRE" --output-dir "$PROBE" --data-root "$D" | cut -c1-400
-python3 -B "$DRV/client_launch_probe.py" verify --output-dir "$PROBE" --campaign-dir "$PRE" | cut -c1-200
+python3 -B "$DRV/client_launch_probe.py" run --campaign-dir "$PRE" --output-dir "$PROBE" --data-root "$D" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-400
+python3 -B "$DRV/client_launch_probe.py" verify --output-dir "$PROBE" --campaign-dir "$PRE" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-200
+
+# atomic-double 按客户端表：本轮客户端尚未接入时停在这里（不拿 Codex 的实现顶替，也不写 stage1.env）。
+if [ -n "$CT_PENDING_STEP_ATOMIC_DOUBLE" ]; then echo "本轮客户端（$CT_CLIENT）的 atomic-double 尚未接入：$CT_PENDING_STEP_ATOMIC_DOUBLE"; exit 1; fi
 
 AT_BASE="codex-atomic-vc0-vc1-$ROUND-$STAMP"
 AT=""

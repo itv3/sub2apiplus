@@ -363,6 +363,20 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   其余 404。报告只记录请求的主机、方法、路径与头部名称，不记录任何头部取值。
 * 验收参数：`--test-mutation untrust:<目录>`／`unack_migration:<模型>` 只改覆盖层里的 config.toml 副本，
   `--only-scenario` 只探测指定场景；带这两类参数的报告一律不能作为放行依据。
+* Claude（`CLIENT=claude`，B2-10）：`stage1-finish.sh` 与入口编排给 Job 演练收据模块和启动探测都追加 `--client claude`
+  （取客户端表；Codex 不追加，命令行不变）。Job 演练由共享收据模块经客户端适配器取 Claude 画像，签
+  `official-client-job-rehearsal-receipt/v1`：核对抓包容器与断网容器 `capture-cli-synthetic` 两份执行副本、命令依赖与
+  证据 runs 根，目标客户端三处摘要，逐步核对真实上游步骤只进抓包容器、合成步骤只进断网容器，受管中继与目录文件在
+  执行容器里可用；不读凭据，ARM64 还没做 Claude OAuth 登录时也能通过。启动探测的组合来自中继步骤
+  `--fw-f-v5-probe` 指向的 TUI probe（按启动身份去重），运行器 `claude_launch_probe_runner.py` 经受管驱动入口
+  `claude_drive_tui_cli.py` 启动 TUI：工作目录与夹具用中继同一函数建，私有 HOME 在覆盖层 `/work/probe-home`
+  （合成凭据、隐私设置、全局状态 `/root/.claude.json` 的规范化副本；文件不存在时从空对象开始），`/dev/shm` 换成
+  私有 tmpfs，本地替身终结 `api.anthropic.com` 与 `platform.claude.com`，替身收到正文含口令的 `POST /v1/messages`
+  才算通过（其余回 404）。会话文本里识别信任目录、登录、onboarding、主题、模型迁移等交互屏：驱动能自动确认的屏
+  （例如信任目录）照常通过并记在 `detected_screens`，拦住首帧的屏判失败并以 48×160 窗口复跑诊断。前后指纹另覆盖
+  `/root/.claude`（凭据文件只记元数据，不读内容）与 `/root/.claude.json`。验收参数 `--test-mutation untrust:<目录>`
+  撤销探测工作目录或其上级的信任确认，`--only-scenario` 取 TUI probe 编号；报告合同 `official-client-launch-probe/v1`，
+  `verify` 要带 `--client claude`。atomic-double 的 Claude 一侧尚未接入（客户端表 pending），`stage1-finish.sh` 跑到那一步即停。
 
 ## VC-0 预跑目标平台门禁（`driver/vc0-gate-target.sh`）
 

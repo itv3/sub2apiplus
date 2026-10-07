@@ -21,7 +21,7 @@
 * 部署：部署收据的文件名模式、时间戳之前的分隔串、工具身份所在对象与合同名，客户端身份覆盖的受管根，部署事务归档的
   活动文档（与受管部署器 ``arm64_supervised_deploy`` 的同名表一致，测试核对）；
 * 文档：指南文件名与第二部分标题、入口步骤读的文档、部署一致性核对的部分；
-* 身份策略文件名、环境收据步骤登记的受管文件、Job 演练的容器、VC-5 准入合同与运行画像路径；
+* 身份策略文件名、环境收据步骤登记的受管文件、Job 演练的容器、启动探测的运行器（B2-10）、VC-5 准入合同与运行画像路径；
 * 入口便宜检查（B5a-09）：目标客户端除宿主机与 ``capture-cli`` 之外还要核对的容器、官方包的复核模块、``plan --audit-only``
   的参数模板（以 ``$`` 开头的项代入同名参数，其余照抄；Codex 为空，沿用脚本里的原形状），以及零请求 smoke 一步登记的
   工具身份摘要（smoke 依赖的模块落在哪几层，哪几层的摘要就要登记）；
@@ -176,6 +176,8 @@ _CODEX: Mapping[str, Any] = {
     "identity_policy_file": "tool_identity_policy_v2.json",
     # Job 演练的五个容器（入口步骤 job-rehearsal 登记它们的镜像）。
     "job_containers": ("capture-cli", "sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "sub2apiplus-redis"),
+    # 启动探测的运行器（B2-10）：宿主侧 client_launch_probe.py 按 --client 选它，入口步骤 client-launch-probe 登记它。
+    "launch_probe_runner": "client_launch_probe_runner.py",
     "vc5_admission_schema": "codex-vc5-admission/v1",
     "vc5_admission_approval_schema": "codex-vc5-admission-approval/v1",
     "runtime_profile": "runtime/codex-profile-{version}.json",
@@ -280,11 +282,14 @@ _CLAUDE: Mapping[str, Any] = {
     ),
     # ---- 其它
     "identity_policy_file": "claude_tool_identity_policy_v2.json",
-    # Job 演练的容器：Codex 的五个加断网合成容器（B2-06 起合成 probe 在那里跑；入口步骤 job-rehearsal 登记镜像，B2-10 的
-    # Job 演练按这一份核对）。
+    # Job 演练的容器：Codex 的五个加断网合成容器（B2-06 起合成 probe 在那里跑；入口步骤 job-rehearsal 登记它们的镜像）。
+    # B2-10 的 Claude Job 演练实际核对的是其中的抓包容器与断网容器（Claude 总计划只有这两个容器坐标，official Job 也只在
+    # 它们里执行）；其余四个只作步骤输入，镜像变了这一步照样重做（从宽）。
     "job_containers": (
         "capture-cli", "capture-cli-synthetic", "sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "sub2apiplus-redis",
     ),
+    # 启动探测的 Claude 运行器（B2-10）：经受管驱动入口 claude_drive_tui_cli.py 启动 TUI，私有 HOME 用合成凭据。
+    "launch_probe_runner": "claude_launch_probe_runner.py",
     # VC-5 准入合同与运行画像路径由 Claude 候选采集落实（见 pending 的 tool:vc5-admission），未定之前为空。
     "vc5_admission_schema": None,
     "vc5_admission_approval_schema": None,
@@ -296,8 +301,6 @@ _CLAUDE: Mapping[str, Any] = {
         "step:atomic-double": "B5a-09 续（atomic-double 收据模块加适配器参数，Claude 签 official-client-atomic-vc0-vc1-rehearsal/v1；"
                               "依赖 B3-01 的 Claude 批次入口、B2-11 的总计划控制收据读回与 Claude 身份策略覆盖收据模块）",
         "step:preflight-plan": "B2-11（claude_upgrade plan --campaign-mode preflight_only）",
-        "step:job-rehearsal": "B2-10（Job 演练收据模块加适配器参数，Claude 签 official-client-job-rehearsal-receipt/v1）",
-        "step:client-launch-probe": "B2-10（客户端启动探测 Claude 版）",
         "step:vc0-closeout": "B2-11（claude_upgrade_vc0_closeout：VC-0 收口续作与 P0 收据）",
         "tool:vc5-admission": "B4-01（Claude 候选采集的 VC-5 准入合同与运行画像路径）",
     },
@@ -319,7 +322,7 @@ SHELL_ENTRIES = (
     "environment_probe_version_option", "timing_ledger_module", "project_ledger_module", "project_ledger_dir_name",
     "gate_receipt_module", "vc_artifacts_module", "binary_key", "binary_sha256_key", "account_key",
     "deploy_receipt_identity_key", "preflight_required", "binary_extra_containers", "official_package_verifier",
-    "plan_audit_argv",
+    "plan_audit_argv", "job_rehearsal_module",
 )
 
 

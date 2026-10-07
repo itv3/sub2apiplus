@@ -21,6 +21,16 @@ Job 演练是零请求的，只核作业定义与二进制，不在作业的真�
 
 退出码：run 通过 0、探测失败 4、参数或环境错误 2；verify 通过 0、否则 1。
 ``--test-mutation``／``--only-scenario`` 只用于验收，带它们的报告 verify 一律拒绝。
+
+按客户端（Claude 升级控制面设计 B2-10）：``--client``（缺省 codex，不带它时命令行、运行器参数与报告和改造前相同）选
+客户端画像——运行器、受管驱动、替身域名、覆盖层目标、状态目录与指纹范围、组合展开与运行器参数、报告合同。作业展开经
+客户端适配器（``adapter.orchestrator.load_campaign_manifest``／``_campaign_jobs``，阶段取 Job 演练画像的 ``JOB_PHASES``），
+与 Job 演练同一入口。Claude 的组合来自中继 ``claude_fw_e_relay.py capture`` 步骤里 ``--fw-f-v5-probe`` 指向的 TUI probe
+（受管目录 ``capturelib/claude_fw_f_v5``），按启动身份（容器、工具根、客户端、模型、全局状态文件、夹具、safe-mode、调试
+日志、客户端参数与注入环境）去重；运行器 ``claude_launch_probe_runner.py`` 经受管驱动入口 ``claude_drive_tui_cli.py``
+启动 TUI，私有 HOME 建在覆盖层 ``/work/probe-home``（合成凭据，不读真实凭据）。验收变更只有 ``untrust:<目录>``（撤销
+工作目录或其上级的信任确认，信任目录交互屏必然出现）；``--only-scenario`` 取 TUI probe 编号。前后指纹另覆盖
+``/root/.claude``（逐文件内容摘要，凭据文件只记元数据）与 ``/root/.claude.json``。
 """
 
 from __future__ import annotations
@@ -37,6 +47,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, Iterable, Mapping
 
 REPORT_SCHEMA = "arm64-client-launch-probe/v1"
@@ -122,6 +133,34 @@ FEATURE_RE = re.compile(r"^[A-Za-z0-9_]+$")
 SAFE_VALUE_RE = re.compile(r"^[A-Za-z0-9_./:@+=-]+$")
 MUTATION_RE = re.compile(r"^(untrust|unack_migration):[A-Za-z0-9_./-]+$")
 UNSHARE = ["unshare", "--net", "--mount", "--pid", "--fork", "--mount-proc", "--propagation", "private"]
+DEFAULT_CLIENT = "codex"
+
+# ---- Claude 画像（B2-10）。报告合同与 Claude 的其它控制面合同同组（official-client-*），带 client。
+CLAUDE_REPORT_SCHEMA = "official-client-launch-probe/v1"
+CLAUDE_RUNNER_PATH = Path(__file__).resolve().with_name("claude_launch_probe_runner.py")
+CLAUDE_RELAY_SCRIPT = "claude_fw_e_relay.py"
+CLAUDE_PROBE_FLAG = "--fw-f-v5-probe"
+# 中继 capture 子命令 --claude-global-state-file 的缺省值（静态测试对照中继命令行）。
+CLAUDE_GLOBAL_STATE_DEFAULT = "/root/.claude.json"
+# 容器内实际执行、宿主核对与数据根部署版本一致的两份受管驱动：命令行入口与它调用的 TUI 状态机。
+CLAUDE_DRIVE_FILES = ("claude_drive_tui_cli.py", "drive_claude_tui.py")
+CLAUDE_STUB_HOSTS = ["api.anthropic.com", "platform.claude.com"]
+# 覆盖层目标：私有 HOME 与工作目录都在 /work 下（运行器另把 /dev/shm 换成私有 tmpfs）。不改系统证书目录：客户端经
+# NODE_EXTRA_CA_CERTS 信任替身 CA，与中继 TUI 路径同一机制。
+CLAUDE_OVERLAY_TARGETS = ["/tmp", "/var/tmp", "/work"]
+CLAUDE_STATE_DIR = "/root/.claude"
+CLAUDE_CREDENTIALS_FILE = "/root/.claude/.credentials.json"
+# 指纹范围 [条目根, 内容文件, 内容根, 只记元数据的文件]：覆盖层目标、/dev/shm 与状态目录记全部条目的元数据；hosts、
+# 全局状态文件与状态目录里除凭据外的文件记内容摘要（凭据文件只记元数据，不读取）。
+CLAUDE_FINGERPRINT_SCOPE = [
+    [*CLAUDE_OVERLAY_TARGETS, "/dev/shm", CLAUDE_STATE_DIR],
+    ["/etc/hosts", CLAUDE_GLOBAL_STATE_DEFAULT],
+    [CLAUDE_STATE_DIR],
+    [CLAUDE_CREDENTIALS_FILE],
+]
+CLAUDE_MUTATION_RE = re.compile(r"^untrust:/[A-Za-z0-9_./-]*$")
+CLAUDE_DEADLINE_SECONDS = 90
+CLAUDE_QUIET_AFTER_SECONDS = 5
 
 
 class ProbeConfigError(ValueError):
@@ -243,17 +282,118 @@ def tui_combos(jobs: Iterable[Any]) -> list[dict[str, Any]]:
     return [combos[key] for key in sorted(combos)]
 
 
-def load_campaign_jobs(campaign_dir: Path) -> tuple[dict[str, Any], list[Any]]:
-    """与 Job 演练同一入口展开预检 Campaign 的全部作业（只读）。"""
+def load_campaign_jobs(campaign_dir: Path, client: str = DEFAULT_CLIENT) -> tuple[dict[str, Any], list[Any]]:
+    """与 Job 演练同一入口展开预检 Campaign 的全部作业（只读）：编排器经客户端适配器，阶段取 Job 演练画像的 ``JOB_PHASES``
+    （Codex 依次 official、candidate，调用与改造前相同；Claude 只有 official）。"""
 
-    from tools.official_client_capture import codex_upgrade  # noqa: PLC0415 - 只在采集主机上运行时导入
+    from tools.official_client_capture import upgrade_client_adapter  # noqa: PLC0415 - 只在采集主机上运行时导入
 
-    manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+    adapter = upgrade_client_adapter.adapter_for(client)
+    manifest = adapter.orchestrator.load_campaign_manifest(campaign_dir)
     jobs = [
-        *codex_upgrade._campaign_jobs(campaign_dir, manifest, "official", use_approved_scenario=False),
-        *codex_upgrade._campaign_jobs(campaign_dir, manifest, "candidate", use_approved_scenario=False),
+        job
+        for phase in adapter.job_rehearsal_profile.JOB_PHASES
+        for job in adapter.orchestrator._campaign_jobs(campaign_dir, manifest, phase, use_approved_scenario=False)
     ]
     return manifest, jobs
+
+
+# ---------------------------------------------------------------------------
+# Claude：组合展开与运行器参数（B2-10）
+# ---------------------------------------------------------------------------
+
+
+def _argument(argv: list[str], flag: str) -> str | None:
+    """取 argv 里某个开关的唯一取值；没有或出现多次时为 None。"""
+
+    positions = [index for index, item in enumerate(argv) if item == flag]
+    if len(positions) != 1 or positions[0] + 1 >= len(argv):
+        return None
+    return argv[positions[0] + 1]
+
+
+def claude_launch_identity(probe: Any) -> dict[str, Any]:
+    """一个 TUI probe 的启动身份：决定客户端命令行、工作目录夹具与环境的字段（提示词、输入序列与等待时间只影响交互
+    流程，不在此列）。与运行器 ``probe_launch`` 同一口径。"""
+
+    return {
+        "fixture": probe.fixture,
+        "safe_mode": bool(probe.safe_mode),
+        "debug_log": bool(probe.require_debug_log),
+        "cli_args": [str(item) for item in probe.cli_args],
+        "injected_env": dict(sorted(probe.env_dict().items())),
+    }
+
+
+def claude_tui_probe_ids() -> list[str]:
+    """受管 FW-F v5 目录里驱动为 TUI 的 probe（``--only-scenario`` 的取值范围）。"""
+
+    from tools.official_client_capture.capturelib import claude_fw_f_v5  # noqa: PLC0415
+
+    return [probe_id for probe_id in claude_fw_f_v5.PROBE_IDS if claude_fw_f_v5.get_probe(probe_id).driver == "tui"]
+
+
+def claude_tui_combos(jobs: Iterable[Any]) -> list[dict[str, Any]]:
+    """从已展开的作业里挑出中继 TUI probe 的步骤，按启动身份去重（``probe_ids``／``job_ids`` 逐步登记）。"""
+
+    from tools.official_client_capture.capturelib import claude_fw_f_v5  # noqa: PLC0415
+
+    combos: dict[str, dict[str, Any]] = {}
+    for job in jobs:
+        for index, step in enumerate(job.steps, 1):
+            argv = step.get("argv")
+            if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+                raise ProbeConfigError(f"{job.job_id} 第 {index} 步命令非法")
+            scripts = [item for item in argv if PurePosixPath(item).name == CLAUDE_RELAY_SCRIPT]
+            if not scripts:
+                continue
+            probe_id = _argument(argv, CLAUDE_PROBE_FLAG)
+            if len(scripts) != 1 or probe_id is None or len(argv) < 3 or argv[:2] != ["docker", "exec"]:
+                raise ProbeConfigError(f"{job.job_id} 第 {index} 步不是 docker exec 下的 FW-F v5 中继步骤")
+            probe = claude_fw_f_v5.get_probe(probe_id)
+            if probe.driver != "tui":
+                continue
+            identity = {
+                "container": argv[2],
+                "tool_root": str(PurePosixPath(scripts[0]).parent),
+                "claude_bin": _argument(argv, "--claude-bin") or "",
+                "model": _argument(argv, "--model") or "",
+                "target_version": _argument(argv, "--expected-version") or "",
+                "global_state_file": _argument(argv, "--claude-global-state-file") or CLAUDE_GLOBAL_STATE_DEFAULT,
+                "launch": claude_launch_identity(probe),
+            }
+            for key in ("container", "model", "target_version"):
+                if not SAFE_VALUE_RE.fullmatch(identity[key]):
+                    raise ProbeConfigError(f"{job.job_id} 的 {key} 含非法字符：{identity[key]!r}")
+            for key in ("tool_root", "claude_bin", "global_state_file"):
+                path = identity[key]
+                if not path.startswith("/") or ".." in path.split("/") or not SAFE_VALUE_RE.fullmatch(path):
+                    raise ProbeConfigError(f"{job.job_id} 的 {key} 必须是绝对路径：{path!r}")
+            combo_id = f"tui-{_sha256_bytes(_canonical(identity))[:12]}"
+            combo = combos.setdefault(combo_id, {"combo_id": combo_id, "scenario": probe_id, **identity, "probe_ids": [], "job_ids": []})
+            combo["probe_ids"].append(probe_id)
+            combo["job_ids"].append(str(job.job_id))
+    return [combos[key] for key in sorted(combos)]
+
+
+def claude_runner_config(combo: Mapping[str, Any], *, token: str, test_mutations: list[str], diagnostic_window: list[int] | None) -> dict[str, Any]:
+    return {
+        "combo_id": combo["combo_id"],
+        "tool_root": combo["tool_root"],
+        "claude_bin": combo["claude_bin"],
+        "model": combo["model"],
+        "target_version": combo["target_version"],
+        "global_state_file": combo["global_state_file"],
+        "probe_id": combo["probe_ids"][0],
+        "launch": dict(combo["launch"]),
+        "token": token,
+        "deadline_seconds": CLAUDE_DEADLINE_SECONDS,
+        "quiet_after_seconds": CLAUDE_QUIET_AFTER_SECONDS,
+        "overlay_targets": list(CLAUDE_OVERLAY_TARGETS),
+        "stub_hosts": list(CLAUDE_STUB_HOSTS),
+        "test_mutations": list(test_mutations),
+        "diagnostic_window": diagnostic_window,
+    }
 
 
 def new_token() -> str:
@@ -313,7 +453,8 @@ def invoke_runner(container: str, config: Mapping[str, Any], runner: bytes) -> d
 
 FINGERPRINT_SCRIPT = r'''
 import hashlib, json, os, sys
-roots, files = json.loads(sys.argv[1])
+roots, files, *rest = json.loads(sys.argv[1])
+content_roots, content_skip = rest if rest else ([], [])
 entries = {}
 for root in roots:
     if not os.path.isdir(root):
@@ -336,14 +477,29 @@ for path in files:
         entries["sha256:" + path] = hashlib.sha256(open(path, "rb").read()).hexdigest()
     except OSError:
         entries["sha256:" + path] = "unreadable"
+for root in content_roots:
+    for current, dirs, names in os.walk(root):
+        dirs.sort()
+        for name in sorted(names):
+            path = os.path.join(current, name)
+            if path in content_skip or not os.path.isfile(path) or os.path.islink(path):
+                continue
+            try:
+                entries["sha256:" + path] = hashlib.sha256(open(path, "rb").read()).hexdigest()
+            except OSError:
+                entries["sha256:" + path] = "unreadable"
 print(json.dumps({"entries": entries}))
 '''
 
 
-def container_fingerprint(container: str) -> dict[str, Any]:
-    """命名空间外对容器真实状态取指纹（覆盖层目标的全部条目 + 关键文件内容摘要）。"""
+def container_fingerprint(container: str, scope: list[list[str]] | None = None) -> dict[str, Any]:
+    """命名空间外对容器真实状态取指纹（覆盖层目标的全部条目 + 关键文件内容摘要）。
 
-    argv = ["docker", "exec", "-i", container, "python3", "-", json.dumps([OVERLAY_TARGETS, FINGERPRINT_FILES])]
+    ``scope`` 是客户端画像的指纹范围（``[条目根, 内容文件, 内容根, 只记元数据的文件]``）；缺省为 Codex 的
+    ``[OVERLAY_TARGETS, FINGERPRINT_FILES]``，与改造前相同。
+    """
+
+    argv = ["docker", "exec", "-i", container, "python3", "-", json.dumps(scope if scope is not None else [OVERLAY_TARGETS, FINGERPRINT_FILES])]
     completed = subprocess.run(argv, input=FINGERPRINT_SCRIPT.encode("utf-8"), capture_output=True, timeout=300, check=False)
     if completed.returncode != 0:
         raise ProbeConfigError(f"容器状态指纹失败：{completed.stderr.decode('utf-8', 'replace')[-300:]}")
@@ -394,6 +550,8 @@ def _summarize_run(result: Mapping[str, Any]) -> dict[str, Any]:
         "drive_codex_tui_sha256", "models_catalog", "diagnostic_window", "drive_exit_code", "token_request",
         "stub_requests", "detected_screens", "tui_log_bytes", "tui_visible_tail", "drive_output_tail",
         "exit_code", "stderr_tail", "daemon_prepare", "daemon",
+        # Claude 运行器另有的键（Codex 运行结果里没有，摘要不变）。
+        "private_shm", "private_home", "drive_sha256", "cli_exit_code", "driver", "transcript_bytes",
     )
     return {key: result[key] for key in keys if key in result}
 
@@ -430,23 +588,90 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _codex_host_drive(data_root: Path | None) -> tuple[str, Any]:
+    host_drive = data_root / TOOL_ROOT_SUFFIX / "drive_codex_tui.py" if data_root else None
+    return "host_drive_codex_tui_sha256", (_sha256_bytes(host_drive.read_bytes()) if host_drive and host_drive.is_file() else None)
+
+
+def _codex_drive_mismatch(report: Mapping[str, Any], results: list[Mapping[str, Any]]) -> tuple[str, bool]:
+    # 容器内实际执行的受管驱动必须就是数据根里部署的那一份。
+    drive_hashes = {combo["run"].get("drive_codex_tui_sha256") for combo in results} - {None}
+    return "drive_codex_tui_mismatch", bool(
+        report["host_drive_codex_tui_sha256"] and drive_hashes and drive_hashes != {report["host_drive_codex_tui_sha256"]}
+    )
+
+
+def _claude_host_drive(data_root: Path | None) -> tuple[str, Any]:
+    values: dict[str, str | None] = {}
+    for name in CLAUDE_DRIVE_FILES:
+        path = data_root / TOOL_ROOT_SUFFIX / name if data_root else None
+        values[name] = _sha256_bytes(path.read_bytes()) if path and path.is_file() else None
+    return "host_drive_sha256", values
+
+
+def _claude_drive_mismatch(report: Mapping[str, Any], results: list[Mapping[str, Any]]) -> tuple[str, bool]:
+    host = report["host_drive_sha256"]
+    mismatched = False
+    for combo in results:
+        observed = combo["run"].get("drive_sha256")
+        if isinstance(observed, Mapping):
+            mismatched = mismatched or any(host.get(name) and value and value != host[name] for name, value in observed.items())
+    return "drive_mismatch", mismatched
+
+
+# 一个客户端的启动探测画像（B2-10）：``run``／``verify`` 按 ``--client`` 取，流程两客户端相同。字段：报告合同名
+# ``report_schema``、运行器 ``runner_path()``、验收变更格式 ``mutation_re()``、``--only-scenario`` 的取值范围
+# ``scenario_names()``、组合展开 ``combos(jobs)`` 与筛选 ``combo_selected(组合, 场景表)``、运行器参数 ``runner_config``、
+# 指纹范围 ``fingerprint_scope()``（None 即 Codex 原范围）、数据根受管驱动摘要 ``host_drive(数据根)`` 与驱动不一致判定
+# ``drive_mismatch(报告, 结果)``（各返回报告键与取值）、报告额外字段 ``report_extra``。画像里的取值一律调用时现取模块
+# 属性（测试对模块常量与函数的替换照常生效）；Codex 一行与改造前写死的取值逐项相同。
+ClientProfile = SimpleNamespace
+PROFILES: Mapping[str, Any] = {
+    "codex": ClientProfile(
+        report_schema=REPORT_SCHEMA,
+        runner_path=lambda: RUNNER_PATH,
+        mutation_re=lambda: MUTATION_RE,
+        scenario_names=lambda: TUI_SCENARIOS,
+        combos=lambda jobs: tui_combos(jobs),
+        combo_selected=lambda combo, only: not only or combo["scenario"] in only,
+        runner_config=lambda combo, **options: runner_config(combo, **options),
+        fingerprint_scope=lambda: None,
+        host_drive=lambda data_root: _codex_host_drive(data_root),
+        drive_mismatch=lambda report, results: _codex_drive_mismatch(report, results),
+        report_extra={},
+    ),
+    "claude": ClientProfile(
+        report_schema=CLAUDE_REPORT_SCHEMA,
+        runner_path=lambda: CLAUDE_RUNNER_PATH,
+        mutation_re=lambda: CLAUDE_MUTATION_RE,
+        scenario_names=lambda: claude_tui_probe_ids(),
+        combos=lambda jobs: claude_tui_combos(jobs),
+        combo_selected=lambda combo, only: not only or bool(set(combo["probe_ids"]) & set(only)),
+        runner_config=lambda combo, **options: claude_runner_config(combo, **options),
+        fingerprint_scope=lambda: CLAUDE_FINGERPRINT_SCOPE,
+        host_drive=lambda data_root: _claude_host_drive(data_root),
+        drive_mismatch=lambda report, results: _claude_drive_mismatch(report, results),
+        report_extra={"client": "claude"},
+    ),
+}
+
+
 def cmd_run(arguments: argparse.Namespace) -> int:
+    profile = PROFILES[arguments.client]
     campaign_dir = arguments.campaign_dir.resolve(strict=True)
     for mutation in arguments.test_mutation:
-        if not MUTATION_RE.fullmatch(mutation):
+        if not profile.mutation_re().fullmatch(mutation):
             raise ProbeConfigError(f"不支持的验收变更：{mutation}")
+    known = set(profile.scenario_names())
     for scenario in arguments.only_scenario:
-        if scenario not in TUI_SCENARIOS:
+        if scenario not in known:
             raise ProbeConfigError(f"未知 TUI 场景：{scenario}")
-    manifest, jobs = load_campaign_jobs(campaign_dir)
-    combos = [
-        combo for combo in tui_combos(jobs)
-        if not arguments.only_scenario or combo["scenario"] in arguments.only_scenario
-    ]
+    manifest, jobs = load_campaign_jobs(campaign_dir, arguments.client)
+    combos = [combo for combo in profile.combos(jobs) if profile.combo_selected(combo, arguments.only_scenario)]
     containers = sorted({combo["container"] for combo in combos})
     if len(containers) > 1:
         raise ProbeConfigError(f"TUI 作业分布在多个容器：{containers}")
-    runner = RUNNER_PATH.read_bytes()
+    runner = profile.runner_path().read_bytes()
     output = arguments.output_dir
     output.mkdir(mode=0o700, parents=True, exist_ok=True)
     attempt = output / "attempts" / datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%S%fz")
@@ -455,11 +680,12 @@ def cmd_run(arguments: argparse.Namespace) -> int:
     tokens: list[str] = []
     results = []
     quiescence_wait = wait_for_quiescence(containers[0], timeout_seconds=QUIESCENCE_TIMEOUT_SECONDS) if containers else 0.0
-    before = container_fingerprint(containers[0]) if containers else {}
+    scope = profile.fingerprint_scope()
+    before = container_fingerprint(containers[0], scope) if containers else {}
     for combo in combos:
         token = new_token()
         tokens.append(token)
-        run = invoke_runner(combo["container"], runner_config(combo, token=token, test_mutations=arguments.test_mutation, diagnostic_window=None), runner)
+        run = invoke_runner(combo["container"], profile.runner_config(combo, token=token, test_mutations=arguments.test_mutation, diagnostic_window=None), runner)
         diagnostic = None
         if run.get("status") != "passed":
             # 判定只看真实条件那次；失败后在全新命名空间里以可读窗口复跑，只取交互屏诊断。
@@ -467,18 +693,18 @@ def cmd_run(arguments: argparse.Namespace) -> int:
             tokens.append(diagnostic_token)
             diagnostic = _summarize_run(invoke_runner(
                 combo["container"],
-                runner_config(combo, token=diagnostic_token, test_mutations=arguments.test_mutation, diagnostic_window=DIAGNOSTIC_WINDOW),
+                profile.runner_config(combo, token=diagnostic_token, test_mutations=arguments.test_mutation, diagnostic_window=DIAGNOSTIC_WINDOW),
                 runner,
             ))
         results.append({**combo, "run": _summarize_run(run), "diagnostic": diagnostic})
         print(json.dumps({"combo_id": combo["combo_id"], "status": run.get("status"), "reason": run.get("reason"),
                           "screens": (diagnostic or {}).get("detected_screens", run.get("detected_screens"))}, ensure_ascii=False), flush=True)
-    after = container_fingerprint(containers[0]) if containers else {}
+    after = container_fingerprint(containers[0], scope) if containers else {}
     leftovers = leftover_processes(containers[0], tokens) if containers else []
-    data_root = arguments.data_root
-    host_drive = data_root / TOOL_ROOT_SUFFIX / "drive_codex_tui.py" if data_root else None
+    drive_key, drive_value = profile.host_drive(arguments.data_root)
     report: dict[str, Any] = {
-        "schema_version": REPORT_SCHEMA,
+        "schema_version": profile.report_schema,
+        **profile.report_extra,
         "campaign_id": manifest.get("campaign_id"),
         "campaign_dir": str(campaign_dir),
         "baseline_version": manifest.get("baseline_version"),
@@ -487,7 +713,7 @@ def cmd_run(arguments: argparse.Namespace) -> int:
         "completed_at_utc": _utc_now(),
         "probe_tool_sha256": _sha256_bytes(Path(__file__).resolve().read_bytes()),
         "runner_sha256": _sha256_bytes(runner),
-        "host_drive_codex_tui_sha256": _sha256_bytes(host_drive.read_bytes()) if host_drive and host_drive.is_file() else None,
+        drive_key: drive_value,
         "tui_job_count": sum(len(combo["job_ids"]) for combo in combos),
         "quiescence_wait_seconds": quiescence_wait,
         "combos": results,
@@ -501,13 +727,10 @@ def cmd_run(arguments: argparse.Namespace) -> int:
         "test_mutations": list(arguments.test_mutation),
         "only_scenarios": list(arguments.only_scenario),
     }
-    # 容器内实际执行的受管驱动必须就是数据根里部署的那一份。
-    drive_hashes = {combo["run"].get("drive_codex_tui_sha256") for combo in results} - {None}
-    report["drive_codex_tui_mismatch"] = bool(
-        report["host_drive_codex_tui_sha256"] and drive_hashes and drive_hashes != {report["host_drive_codex_tui_sha256"]}
-    )
+    mismatch_key, mismatch = profile.drive_mismatch(report, results)
+    report[mismatch_key] = mismatch
     problems = evaluate(report)
-    if report["drive_codex_tui_mismatch"]:
+    if mismatch:
         problems.append("容器内受管驱动与数据根部署版本不一致")
     report["problems"] = problems
     report["status"] = "passed" if not problems else "failed"
@@ -519,24 +742,32 @@ def cmd_run(arguments: argparse.Namespace) -> int:
     return 0 if report["status"] == "passed" else 4
 
 
-def verify_report(output: Path, campaign_dir: Path | None) -> dict[str, Any]:
+def verify_report(output: Path, campaign_dir: Path | None, client: str = DEFAULT_CLIENT) -> dict[str, Any]:
+    """复核最新报告：合同名必须是本客户端的（Claude 报告另核 ``client``），自摘要一致、通过且不带验收参数，并与预检
+    Campaign 身份一致（总计划经客户端适配器读）。"""
+
+    profile = PROFILES[client]
     path = output / REPORT_NAME
     if not path.is_file() or path.is_symlink():
         raise ProbeConfigError(f"缺少探测报告：{path}")
     report = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(report, dict) or report.get("schema_version") != REPORT_SCHEMA:
+    if (
+        not isinstance(report, dict)
+        or report.get("schema_version") != profile.report_schema
+        or any(report.get(key) != value for key, value in profile.report_extra.items())
+    ):
         raise ProbeConfigError("探测报告版本非法")
     if seal_report({key: value for key, value in report.items() if key != "report_sha256"}) != report:
         raise ProbeConfigError("探测报告自摘要不一致")
     problems = evaluate(report)
-    if report.get("drive_codex_tui_mismatch"):
+    if report.get("drive_codex_tui_mismatch") or report.get("drive_mismatch"):
         problems.append("容器内受管驱动与数据根部署版本不一致")
     if report.get("status") != "passed" or problems or report.get("problems"):
         raise ProbeConfigError(f"客户端启动探测未通过：{problems or report.get('problems')}")
     if campaign_dir is not None:
-        from tools.official_client_capture import codex_upgrade  # noqa: PLC0415
+        from tools.official_client_capture import upgrade_client_adapter  # noqa: PLC0415
 
-        manifest = codex_upgrade.load_campaign_manifest(campaign_dir.resolve(strict=True))
+        manifest = upgrade_client_adapter.adapter_for(client).orchestrator.load_campaign_manifest(campaign_dir.resolve(strict=True))
         if manifest.get("campaign_id") != report.get("campaign_id") or manifest.get("target_version") != report.get("target_version"):
             raise ProbeConfigError("探测报告与预检 Campaign 身份不一致")
     return report
@@ -544,7 +775,7 @@ def verify_report(output: Path, campaign_dir: Path | None) -> dict[str, Any]:
 
 def cmd_verify(arguments: argparse.Namespace) -> int:
     try:
-        report = verify_report(arguments.output_dir, arguments.campaign_dir)
+        report = verify_report(arguments.output_dir, arguments.campaign_dir, arguments.client)
     except (ProbeConfigError, OSError, ValueError, KeyError, TypeError) as error:
         print(json.dumps({"status": "failed", "error": str(error)}, ensure_ascii=False))
         return 1
@@ -557,13 +788,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="对预检 Campaign 的全部 TUI 作业组合执行启动探测")
+    run.add_argument("--client", choices=tuple(PROFILES), default=DEFAULT_CLIENT, help=f"客户端（缺省 {DEFAULT_CLIENT}）")
     run.add_argument("--campaign-dir", type=Path, required=True)
     run.add_argument("--output-dir", type=Path, required=True)
     run.add_argument("--data-root", type=Path, default=None, help="数据根（核对容器内受管驱动与部署版本一致）")
-    run.add_argument("--test-mutation", action="append", default=[], help="仅验收：在覆盖层 config.toml 上制造缺陷")
-    run.add_argument("--only-scenario", action="append", default=[], help="仅验收：只探测指定场景")
+    run.add_argument("--test-mutation", action="append", default=[],
+                     help="仅验收：在覆盖层里的客户端状态上制造缺陷（Codex 改 config.toml，Claude 改私有 HOME 的 .claude.json）")
+    run.add_argument("--only-scenario", action="append", default=[], help="仅验收：只探测指定场景（Claude 为 TUI probe 编号）")
     run.set_defaults(handler=cmd_run)
     verify = commands.add_parser("verify", help="复核最新探测报告已通过")
+    verify.add_argument("--client", choices=tuple(PROFILES), default=DEFAULT_CLIENT, help=f"客户端（缺省 {DEFAULT_CLIENT}）")
     verify.add_argument("--output-dir", type=Path, required=True)
     verify.add_argument("--campaign-dir", type=Path, default=None)
     verify.set_defaults(handler=cmd_verify)

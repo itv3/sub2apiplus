@@ -35,7 +35,7 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 
 按客户端（Claude 升级 B5a-06）：执行顺序与续跑规则两客户端相同；各步骤调用的模块、合同、目录与追加给共享模块的
 ``--client`` 取客户端表（``client_table.py``，本轮客户端取参数 ``CLIENT``，缺省 codex），Codex 的命令行与改造前逐字相同。
-客户端表登记为尚未接入的步骤（Claude 的零请求 smoke、atomic-double、预检 plan、Job 演练、启动探测与 VC-0 收口）不执行，
+客户端表登记为尚未接入的步骤（Claude 的 atomic-double、预检 plan 与 VC-0 收口）不执行，
 记失败并写明落实它的工作项（``--plan`` 也列出），不拿 Codex 的实现顶替。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
@@ -463,11 +463,12 @@ class Orchestrator:
         root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         root.mkdir(mode=0o700)
         module = self.spec["job_rehearsal_module"]
+        # 共享收据模块按 --client 取客户端适配器（B2-10；Codex 为空，命令行与改造前相同）。
         rc = self.run("job-rehearsal", self.py(module, "collect", "--campaign-dir", str(campaign), "--evidence-root", str(root),
-                                               "--output", "facts.json", *previous))
+                                               "--output", "facts.json", *previous, *self.client_argv))
         if rc == 0:
             rc = self.run("job-rehearsal", self.py(module, "finalize", "--evidence-root", str(root), "--facts", "facts.json",
-                                                   "--output", "receipt.json"))
+                                                   "--output", "receipt.json", *self.client_argv))
         receipt = root / "receipt.json"
         # 有作业失败时工具照样写收据并退出 0：结论按收据里的状态（沿用前同样核对，E2-05）。
         try:
@@ -483,10 +484,10 @@ class Orchestrator:
         probe = self.root / "control" / f"{self.p('CAMPAIGN_PREFIX')}-client-launch-probe-{self.p('ROUND')}-{self.p('STAMP')}"
         script = self.driver_dir / "client_launch_probe.py"
         rc = self.run("client-launch-probe", [sys.executable, "-B", str(script), "run", "--campaign-dir", str(campaign),
-                                              "--output-dir", str(probe), "--data-root", str(self.data)])
+                                              "--output-dir", str(probe), "--data-root", str(self.data), *self.client_argv])
         if rc == 0:
             rc = self.run("client-launch-probe", [sys.executable, "-B", str(script), "verify", "--output-dir", str(probe),
-                                                  "--campaign-dir", str(campaign)])
+                                                  "--campaign-dir", str(campaign), *self.client_argv])
         # 报告登记进步骤记录（E2-07）：收口前预检按记录里的这份报告再核验一次。
         return rc == 0, {"report": str(probe / "report.json")}
 
@@ -600,7 +601,7 @@ class Orchestrator:
         if not ES.formal_built(self.ctx):
             report = self.record_product("client-launch-probe", "report")
             rc = self.run("vc0-closeout", [sys.executable, "-B", str(self.driver_dir / "client_launch_probe.py"), "verify",
-                                           "--output-dir", str(report.parent), "--campaign-dir", str(preflight)])
+                                           "--output-dir", str(report.parent), "--campaign-dir", str(preflight), *self.client_argv])
             if rc != 0:
                 self.outcomes["vc0-closeout"].reasons.append("收口前预检：启动探测报告复核没过")
                 return False, {}

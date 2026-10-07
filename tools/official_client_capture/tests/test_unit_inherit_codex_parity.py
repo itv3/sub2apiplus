@@ -472,11 +472,14 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
 )
-# B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 理由)。Codex 一侧不得出现。
-STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], str]]] = {
+# B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
+STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {
     "claude": {
-        "zero-request-smoke": (["identity:evidence_semantics_sha256"],
+        "zero-request-smoke": (["identity:evidence_semantics_sha256"], [],
                                "B5a-09：Claude smoke 依赖的 provenance 在 Claude 身份的 evidence 层，登记的身份摘要取客户端表"),
+        "client-launch-probe": (["driver:claude_launch_probe_runner.py"], ["driver:client_launch_probe_runner.py"],
+                                "B2-10：启动探测运行器按客户端表取（launch_probe_runner），Claude 用 claude_launch_probe_runner.py；"
+                                "Codex 仍是 client_launch_probe_runner.py"),
     },
 }
 
@@ -538,7 +541,7 @@ class SourceResidualCodexParityTests(unittest.TestCase):
                         now_items, before_items = [item.as_json() for item in now.inputs], [item.as_json() for item in before.inputs]
                         added = [item.name for item in now.inputs if item.as_json() not in before_items]
                         removed = [item.name for item in before.inputs if item.as_json() not in now_items]
-                        self.assertEqual((added, removed), (changed[now.step_id][0], []), now.step_id)
+                        self.assertEqual((added, removed), (changed[now.step_id][0], changed[now.step_id][1]), now.step_id)
                         continue
                     self.assertEqual(now.spec_sha256(), before.spec_sha256(), f"不用逐单元承接时步骤表逐字相同：{now.step_id}")
                 as_json = lambda table: {key: [item.as_json() for item in value] for key, value in table.items()}  # noqa: E731

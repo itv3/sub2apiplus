@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""在 ARM64 上离线演练 Codex 升级全部 Job，并封存可重放收据。"""
+"""在 ARM64 上离线演练升级全部 Job，并封存可重放收据（Codex 与 Claude 共用，按 ``--client`` 选客户端）。
+
+客户端适配（Claude 升级控制面设计 B2-10）：增量计划、checkpoint、逐 Job 执行与复用、收据封存与重放、Formal／恢复兼容
+这些流程两客户端共用一份；随客户端变的部分都经客户端适配器取（``upgrade_client_adapter.adapter_for(client)``）：
+
+* 编排器引用（展开 Job、补跑与归档、Job 类、Campaign 租约、执行副本与官方二进制核验、总计划读取、工具身份、失败证据
+  归档坐标与补跑常量、受管树位置）经编排器服务面 ``adapter.orchestrator.<原名>``；
+* 执行合同的构造、要核对的二进制表与合同重放经适配器成员 ``build_job_contract``／``binary_facts``／``job_contract_replay``；
+* 其余客户端画像（合同名组、场景清单在总计划里的输入名、要展开的阶段、容器与依赖集合、执行副本坐标、运行时探针、
+  步骤启动器、Formal 必需的探针摘要）经模块型成员 ``job_rehearsal_profile``。Codex 的画像就是本模块（名字与取值都是
+  改造前的原样），Claude 的画像在 ``claude_upgrade_job_rehearsal``，签 ``official-client-job-rehearsal-*`` 同组合同。
+
+facts、收据与执行合同按各自的合同名认客户端；认不出合同名时按 Codex 处理，报错与改造前相同。不带 ``--client``（缺省
+codex）时命令行与执行合同和改造前逐字节相同，facts 与收据的结构、校验、重放与报错不变（采集器身份记的是本文件摘要，
+与任何一次修改本文件一样随之变化）。
+"""
 
 from __future__ import annotations
 
@@ -24,8 +39,13 @@ from typing import Any, Iterable, Mapping
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+# 作为主程序运行（``python -m`` 或按路径）时让包路径也指向这一份：客户端适配器按包路径解析 Codex 画像与适配器成员，
+# 取到的必须是同一个模块对象（同一组模块级 deadline 状态与同一个异常类），否则探针拿不到本次 deadline、报错也接不住。
+if __name__ == "__main__":
+    sys.modules.setdefault("tools.official_client_capture.codex_upgrade_job_rehearsal_receipt", sys.modules[__name__])
 
 from tools.official_client_capture import incremental_recovery
+from tools.official_client_capture import upgrade_client_adapter
 
 
 FACTS_SCHEMA = "codex-upgrade-job-rehearsal-facts/v1"
@@ -33,6 +53,19 @@ RECEIPT_SCHEMA = "codex-upgrade-job-rehearsal-receipt/v1"
 EXECUTION_CONTRACT_SCHEMA = "codex-upgrade-job-rehearsal-contract/v2"
 PRODUCER_SCHEMA = "codex-upgrade-job-rehearsal-producer/v1"
 PRODUCER_VERSION = "1"
+# 客户端适配（B2-10）：命令行缺省客户端，以及本模块作为 Codex 画像（``adapter.job_rehearsal_profile``）提供的名字——
+# 取值都是改造前写死在流程里的原样；Claude 画像（``claude_upgrade_job_rehearsal``）提供同名的一组。
+DEFAULT_CLIENT = "codex"
+CLI_LABEL = "Codex"
+PRODUCER_FIELDS = frozenset({"schema_version", "tool", "tool_sha256", "version"})
+# 总计划 inputs 里目标场景清单的输入名、要展开的阶段（展开顺序即调用编排器 _campaign_jobs 的顺序）。
+TARGET_SCENARIO_INPUT = "target_discovery_scenarios"
+JOB_PHASES = ("official", "candidate")
+# facts 里除宿主两份之外的容器内工具树、步骤启动器、Formal 必需的探针摘要与本画像额外的 facts 字段。
+CONTAINER_TREE_NAMES = ("execution_container",)
+STEP_LAUNCHERS = frozenset({"host", "capture_container"})
+FORMAL_PROBE_DIGESTS = ("storage_probe_sha256", "failure_lifecycle_probe_sha256")
+EXTRA_FACT_FIELDS: frozenset[str] = frozenset()
 INCREMENTAL_NOOP_SCHEMA = "codex-upgrade-incremental-noop/v1"
 INCREMENTAL_NOOP_STATUS = "incremental-noop"
 EXPECTED_ARCHITECTURE = "linux/arm64"
@@ -688,7 +721,7 @@ def build_execution_contract(
 
 
 def execution_contract_sha256(contract: Mapping[str, Any]) -> str:
-    validate_execution_contract(dict(contract))
+    _validate_contract(dict(contract))
     return _fingerprint(contract)
 
 
@@ -790,6 +823,308 @@ def validate_execution_contract(contract: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(c2pa, dict):
         raise JobRehearsalReceiptError("execution_contract C2PA 身份非法")
     return contract
+
+
+# ---------------------------------------------------------------------------
+# 客户端适配（B2-10）：取适配器、按合同名认客户端；本模块作为 Codex 画像与 Codex 适配器成员的实现
+# ---------------------------------------------------------------------------
+
+
+def _adapter(client: str) -> Any:
+    """命令行或采集入口给出的客户端的适配器；未知客户端即拒绝，不默认成 codex。"""
+
+    try:
+        return upgrade_client_adapter.adapter_for(client)
+    except upgrade_client_adapter.ClientAdapterError as error:
+        raise JobRehearsalReceiptError(str(error)) from error
+
+
+def _schema_of(document: Any) -> Any:
+    return document.get("schema_version") if isinstance(document, Mapping) else None
+
+
+def _document_adapter(schema: Any) -> Any:
+    """按文档自带的合同名（facts、收据或执行合同）认客户端；认不出时按 Codex 处理，报错与改造前相同。"""
+
+    for client in upgrade_client_adapter.CLIENTS:
+        adapter = upgrade_client_adapter.adapter_for(client)
+        profile = adapter.job_rehearsal_profile
+        if schema in (profile.FACTS_SCHEMA, profile.RECEIPT_SCHEMA, profile.EXECUTION_CONTRACT_SCHEMA):
+            return adapter
+    return upgrade_client_adapter.adapter_for(DEFAULT_CLIENT)
+
+
+def _validate_contract(contract: Any) -> dict[str, Any]:
+    """按执行合同自带的合同名取画像校验；Codex 合同（以及认不出合同名的）即 ``validate_execution_contract``。"""
+
+    return _document_adapter(_schema_of(contract)).job_rehearsal_profile.validate_execution_contract(contract)
+
+
+def build_codex_job_contract(
+    manifest: Mapping[str, Any],
+    target_scenario: Mapping[str, Any],
+    extra_jobs: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """适配器成员 ``build_job_contract`` 的 Codex 实现：改造前写在采集流程里的那次 ``build_execution_contract`` 调用原样。"""
+
+    return build_execution_contract(
+        target_version=manifest["target_version"],
+        target_sha256=manifest["target_sha256"],
+        target_package_sha256=manifest["official_identity"]["package"]["asset_sha256"],
+        target_code_mode_host_sha256=manifest["official_identity"]["package"]["code_mode_host_sha256"],
+        suite=manifest["suite"],
+        tool_files_sha256=manifest["tool_identity"]["files_sha256"],
+        configuration=manifest["configuration"],
+        target_scenario=target_scenario,
+        extra_jobs=extra_jobs,
+        wire_producer_sha256=manifest["tool_identity"].get("wire_producer_sha256"),
+        policy_sha256=manifest["tool_identity"].get("policy_sha256"),
+    )
+
+
+# Codex 要核对的两套二进制：主程序（capture／relay 两处容器内与宿主 relay）与 code-mode-host 辅助程序。
+CODEX_BINARY_IDENTITY_LABELS = ("container:capture_codex_bin", "container:relay_codex_bin", "host:relay_codex_bin")
+CODEX_HELPER_IDENTITY_LABELS = (
+    "container:capture_code_mode_host_bin",
+    "container:relay_code_mode_host_bin",
+    "host:relay_code_mode_host_bin",
+)
+
+
+def codex_binary_facts(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """适配器成员 ``binary_facts`` 的 Codex 实现：宿主与容器里要核对的二进制标签与期望摘要、官方包与运行镜像。"""
+
+    return {
+        "expected_version": contract["target_version"],
+        "identities": {label: contract["target_sha256"] for label in CODEX_BINARY_IDENTITY_LABELS},
+        "helpers": {label: contract["target_code_mode_host_sha256"] for label in CODEX_HELPER_IDENTITY_LABELS},
+        "package": {
+            "asset_sha256": contract["target_package_sha256"],
+            "code_mode_host_sha256": contract["target_code_mode_host_sha256"],
+        },
+        "runtime_image_reference": contract["configuration"]["runtime_image"],
+    }
+
+
+def codex_job_contract_replay(contract: Mapping[str, Any], facts: Mapping[str, Any]) -> dict[str, Any]:
+    """适配器成员 ``job_contract_replay`` 的 Codex 实现：按执行合同核对 facts 里的二进制探针（改造前 facts 校验里的原样）。"""
+
+    expected = codex_binary_facts(contract)
+    binary = facts.get("binary_verification")
+    if (
+        not isinstance(binary, dict)
+        or binary.get("passed") is not True
+        or binary.get("expected_version") != expected["expected_version"]
+        or binary.get("expected_sha256") != contract["target_sha256"]
+        or binary.get("runtime_image_reference")
+        != expected["runtime_image_reference"]
+        or not IMAGE_ID_RE.fullmatch(str(binary.get("runtime_image_id", "")))
+    ):
+        raise JobRehearsalReceiptError("Codex 二进制或运行镜像探针非法")
+    package = binary.get("package")
+    if (
+        not isinstance(package, dict)
+        or package.get("asset_sha256") != expected["package"]["asset_sha256"]
+        or package.get("code_mode_host_sha256")
+        != expected["package"]["code_mode_host_sha256"]
+    ):
+        raise JobRehearsalReceiptError("Codex package 探针非法")
+    identities = binary.get("identities")
+    helpers = binary.get("helpers")
+    if (
+        not isinstance(identities, list)
+        or {item.get("label") for item in identities if isinstance(item, dict)}
+        != set(expected["identities"])
+        or any(item.get("sha256") != contract["target_sha256"] for item in identities)
+        or not isinstance(helpers, list)
+        or {item.get("label") for item in helpers if isinstance(item, dict)}
+        != set(expected["helpers"])
+        or any(
+            item.get("sha256") != contract["target_code_mode_host_sha256"]
+            for item in helpers
+        )
+    ):
+        raise JobRehearsalReceiptError("Codex 主程序或 code-mode-host 身份未闭合")
+    return {"binary_facts": expected}
+
+
+def rehearsal_execution_roots(campaign_dir: Path, manifest: Mapping[str, Any]) -> tuple[Path, Path, str]:
+    """Codex 画像：执行副本的核验根、宿主执行副本与容器内执行副本路径（Codex 宿主与容器是同一路径
+    ``<capture_root>/tools/official_client_capture``）。"""
+
+    del campaign_dir
+    capture_root = Path(str(manifest["configuration"]["capture_root"]))
+    execution_root = capture_root / "tools" / "official_client_capture"
+    return capture_root, execution_root, str(execution_root)
+
+
+def rehearsal_container_tool_trees(configuration: Mapping[str, Any], container_root: str) -> dict[str, Any]:
+    """Codex 画像：容器内执行副本的工具树（只有 capture-cli 一个容器）。"""
+
+    return {"execution_container": _container_tool_tree(str(configuration["capture_container"]), container_root)}
+
+
+def rehearsal_tree_matches_contract(tree: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
+    """Codex 画像：受管树的整树摘要就是执行合同登记的 ``tool_files_sha256``。"""
+
+    return tree["files_sha256"] == contract["tool_files_sha256"]
+
+
+def rehearsal_extra_facts(contract: Mapping[str, Any], adapter: Any) -> dict[str, Any]:
+    """Codex 画像：facts 没有额外字段（Claude 画像在这里记录采集当时的有效工具身份）。"""
+
+    del contract, adapter
+    return {}
+
+
+def rehearsal_early_probes(jobs: list[Any], configuration: Mapping[str, Any]) -> dict[str, Any]:
+    """Codex 画像：二进制核验之前的两个运行时探针（存储路由、失败生命周期），顺序同改造前。"""
+
+    storage_probe = _capture_storage_probe(jobs, configuration)
+    failure_lifecycle_probe = _capture_failure_lifecycle_probe(
+        configuration,
+        Path(EXPECTED_HOST_DATA_ROOT) / "runs",
+    )
+    return {"storage": storage_probe, "failure_lifecycle": failure_lifecycle_probe}
+
+
+def rehearsal_job_probe(job: Any, configuration: Mapping[str, Any], *, component_summary: Mapping[str, Any]) -> dict[str, Any]:
+    """Codex 画像：逐 Job 的启动器与路径探针（步骤只许在宿主或 capture-cli 里启动）。"""
+
+    return _job_probe(job, str(configuration["capture_container"]), component_summary=component_summary)
+
+
+def rehearsal_container_facts(configuration: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Codex 画像：Job 依赖的五个容器的运行状态与身份。"""
+
+    return _container_facts(configuration)
+
+
+def rehearsal_dependency_facts(configuration: Mapping[str, Any]) -> dict[str, Any]:
+    """Codex 画像：宿主与 capture-cli 的命令依赖（先宿主后容器，顺序同改造前）。"""
+
+    return {
+        "host": _host_dependencies(),
+        "capture_container": _container_dependencies(str(configuration["capture_container"])),
+    }
+
+
+def rehearsal_probe_facts(configuration: Mapping[str, Any], container_root: str, early: Mapping[str, Any]) -> dict[str, Any]:
+    """Codex 画像：facts 的 probes（bubblewrap 与 zstd 在这里现跑，存储路由与失败生命周期取二进制核验之前跑好的）。"""
+
+    return {
+        "bubblewrap": _bwrap_probe(str(configuration["capture_container"])),
+        "failure_lifecycle": early["failure_lifecycle"],
+        "storage": early["storage"],
+        "zstd": _zstd_probe(str(configuration["capture_container"]), container_root),
+    }
+
+
+def rehearsal_producer() -> dict[str, str]:
+    """Codex 画像：采集器身份（本模块）。"""
+
+    return _producer()
+
+
+def rehearsal_validate_containers(containers: Any, contract: Mapping[str, Any]) -> None:
+    """Codex 画像：facts 的容器集合必须正好覆盖执行合同登记的五个容器，且都在运行。"""
+
+    configuration = contract["configuration"]
+    expected_containers = sorted({str(configuration[field]) for field in CODEX_CONTAINER_FIELDS})
+    if not isinstance(containers, list):
+        raise JobRehearsalReceiptError("containers 必须是数组")
+    container_names: list[str] = []
+    for item in containers:
+        current = _expect(
+            item, {"name", "container_id", "image_id", "running"}, "containers"
+        )
+        if (
+            current.get("running") is not True
+            or not CONTAINER_ID_RE.fullmatch(str(current.get("container_id", "")))
+            or not IMAGE_ID_RE.fullmatch(str(current.get("image_id", "")))
+        ):
+            raise JobRehearsalReceiptError("容器未运行或身份非法")
+        container_names.append(str(current.get("name", "")))
+    if container_names != expected_containers:
+        raise JobRehearsalReceiptError("容器集合未完整覆盖 Job 依赖")
+
+
+def rehearsal_validate_dependencies(value: Any) -> None:
+    """Codex 画像：宿主与 capture-cli 的命令依赖闭集。"""
+
+    dependencies = _expect(value, {"host", "capture_container"}, "dependencies")
+    _validate_dependencies(
+        dependencies["host"], HOST_REQUIRED_COMMANDS, "dependencies.host"
+    )
+    _validate_dependencies(
+        dependencies["capture_container"],
+        CAPTURE_CONTAINER_REQUIRED_COMMANDS,
+        "dependencies.capture_container",
+    )
+
+
+def rehearsal_validate_probes(
+    raw_probes: Any,
+    contract: Mapping[str, Any],
+    *,
+    allow_collector_drift: bool,
+) -> tuple[str | None, str | None]:
+    """Codex 画像：probes 的四项（历史收据按原结构只读重放），返回存储路由与失败生命周期探针的摘要。"""
+
+    if not isinstance(raw_probes, dict):
+        raise JobRehearsalReceiptError("probes必须是对象")
+    probe_fields = set(raw_probes)
+    legacy_probe_fields = {"bubblewrap", "zstd"}
+    storage_probe_fields = {*legacy_probe_fields, "storage"}
+    current_probe_fields = {*storage_probe_fields, "failure_lifecycle"}
+    if probe_fields == legacy_probe_fields and allow_collector_drift:
+        # 历史收据继续按原字节只读重放，但不能再作为新 Formal 的 P0 证明。
+        probes = raw_probes
+        storage_probe_sha256: str | None = None
+        failure_lifecycle_probe_sha256: str | None = None
+    elif probe_fields == storage_probe_fields and allow_collector_drift:
+        # 失败生命周期门禁加入前生成的收据仍可逐字重放；它只证明旧版
+        # storage 路由，不能作为当前 Formal 的完整 P0 证明。
+        probes = raw_probes
+        storage_probe = _validate_storage_probe(probes.get("storage"), contract)
+        storage_probe_sha256 = _fingerprint(storage_probe)
+        failure_lifecycle_probe_sha256 = None
+    else:
+        probes = _expect(raw_probes, current_probe_fields, "probes")
+        storage_probe = _validate_storage_probe(probes.get("storage"), contract)
+        storage_probe_sha256 = _fingerprint(storage_probe)
+        failure_lifecycle_probe = _validate_failure_lifecycle_probe(
+            probes.get("failure_lifecycle"), contract
+        )
+        failure_lifecycle_probe_sha256 = _fingerprint(failure_lifecycle_probe)
+    bubblewrap = _expect(
+        probes.get("bubblewrap"),
+        {"status", "version", "network_isolated"},
+        "probes.bubblewrap",
+    )
+    zstd = _expect(
+        probes.get("zstd"),
+        {"status", "input_sha256", "output_sha256", "output"},
+        "probes.zstd",
+    )
+    if (
+        bubblewrap.get("status") != "passed"
+        or bubblewrap.get("network_isolated") is not True
+        or not isinstance(bubblewrap.get("version"), str)
+        or not bubblewrap["version"]
+        or zstd.get("status") != "passed"
+        or zstd.get("input_sha256") != _sha256_bytes(ZSTD_FRAME)
+        or zstd.get("output_sha256") != _sha256_bytes(ZSTD_OUTPUT)
+        or zstd.get("output") != ZSTD_OUTPUT.decode("ascii")
+    ):
+        raise JobRehearsalReceiptError("bubblewrap 或 zstd 离线探针失败")
+    return storage_probe_sha256, failure_lifecycle_probe_sha256
+
+
+def rehearsal_validate_extra(facts: Mapping[str, Any], contract: Mapping[str, Any]) -> None:
+    """Codex 画像：没有额外字段要核对。"""
+
+    del facts, contract
 
 
 def _host_tool_entries(root: Path) -> tuple[list[dict[str, str]], list[str]]:
@@ -911,19 +1246,25 @@ def _contract_reuse_identity(contract: Mapping[str, Any]) -> dict[str, Any]:
     Job 的输入／环境／组件依赖键决定。目标二进制和运行配置仍属于共享前提，
     变化时全部结果失效；证据标签只影响已封存证据的离线编目，不属于请求
     生产合同。
+
+    稳定字段按执行合同的客户端画像取（B2-10）；Codex 是 ``CONTRACT_REUSE_FIELDS``，与改造前写在这里的元组相同。
     """
 
-    stable_fields = (
-        "schema_version",
-        "target_version",
-        "target_sha256",
-        "target_package_sha256",
-        "target_code_mode_host_sha256",
-        "suite",
-        "configuration",
-        "c2pa_job_identities",
-    )
+    stable_fields = _document_adapter(_schema_of(contract)).job_rehearsal_profile.CONTRACT_REUSE_FIELDS
     return {field: contract.get(field) for field in stable_fields}
+
+
+# Codex 画像：跨工具修复可比较的执行坐标（见 _contract_reuse_identity）。
+CONTRACT_REUSE_FIELDS = (
+    "schema_version",
+    "target_version",
+    "target_sha256",
+    "target_package_sha256",
+    "target_code_mode_host_sha256",
+    "suite",
+    "configuration",
+    "c2pa_job_identities",
+)
 
 
 def _facts_component_summary(facts: Mapping[str, Any]) -> dict[str, Any]:
@@ -1071,7 +1412,9 @@ def _load_checkpoint_results(
     return output
 
 
-def _container_tool_tree(container: str, root: str) -> dict[str, Any]:
+def _container_tool_tree(container: str, root: str, *, label: str = "capture-cli") -> dict[str, Any]:
+    """容器内执行副本的工具树摘要；``label`` 只进报错文字（B2-10 起 Claude 画像也用它探断网容器，缺省即改造前原文）。"""
+
     probe = r'''
 import hashlib,json,pathlib,sys
 root=pathlib.Path(sys.argv[1])
@@ -1091,7 +1434,7 @@ print(json.dumps({"root":str(root.resolve()),"entries":entries,"symlinks":symlin
 '''
     raw = _run(
         ["docker", "exec", container, "python3", "-c", probe, root],
-        "capture-cli 容器工具树探针",
+        f"{label} 容器工具树探针",
     )
     try:
         payload = json.loads(raw)
@@ -1125,9 +1468,11 @@ def _command_binding(name: str, path: Path) -> dict[str, Any]:
     }
 
 
-def _host_dependencies() -> list[dict[str, Any]]:
+def _host_dependencies(commands: Iterable[str] = HOST_REQUIRED_COMMANDS) -> list[dict[str, Any]]:
+    """宿主命令依赖；``commands`` 缺省为 Codex 的宿主命令表（B2-10 起 Claude 画像传自己的表）。"""
+
     output: list[dict[str, Any]] = []
-    for name in HOST_REQUIRED_COMMANDS:
+    for name in commands:
         path = shutil.which(name)
         if not path:
             raise JobRehearsalReceiptError(f"ARM64 宿主缺少依赖：{name}")
@@ -1135,7 +1480,14 @@ def _host_dependencies() -> list[dict[str, Any]]:
     return output
 
 
-def _container_dependencies(container: str) -> list[dict[str, Any]]:
+def _container_dependencies(
+    container: str,
+    commands: Iterable[str] = CAPTURE_CONTAINER_REQUIRED_COMMANDS,
+    *,
+    label: str = "capture-cli",
+) -> list[dict[str, Any]]:
+    """容器内命令依赖；缺省为 Codex capture-cli 的命令表与报错文字（B2-10 起 Claude 画像传自己的表与容器名）。"""
+
     probe = r'''
 import hashlib,json,os,pathlib,shutil,sys
 output=[]
@@ -1155,30 +1507,39 @@ print(json.dumps(output,sort_keys=True))
             "python3",
             "-c",
             probe,
-            *CAPTURE_CONTAINER_REQUIRED_COMMANDS,
+            *commands,
         ],
-        "capture-cli 依赖探针",
+        f"{label} 依赖探针",
     )
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as error:
-        raise JobRehearsalReceiptError("capture-cli 依赖探针输出非法") from error
+        raise JobRehearsalReceiptError(f"{label} 依赖探针输出非法") from error
     if not isinstance(payload, list):
-        raise JobRehearsalReceiptError("capture-cli 依赖探针结果不是数组")
+        raise JobRehearsalReceiptError(f"{label} 依赖探针结果不是数组")
     return payload
 
 
-def _container_facts(configuration: Mapping[str, Any]) -> list[dict[str, Any]]:
+# Codex Job 依赖的五个容器在总计划 configuration 里的字段名。
+CODEX_CONTAINER_FIELDS = (
+    "capture_container",
+    "service_container",
+    "keeper_container",
+    "postgres_container",
+    "redis_container",
+)
+
+
+def _container_facts(
+    configuration: Mapping[str, Any],
+    fields: Iterable[str] = CODEX_CONTAINER_FIELDS,
+) -> list[dict[str, Any]]:
+    """Job 依赖容器的运行状态与身份；``fields`` 缺省为 Codex 的五个容器字段（B2-10 起 Claude 画像传两个采集容器）。"""
+
     names = sorted(
         {
             str(configuration[field])
-            for field in (
-                "capture_container",
-                "service_container",
-                "keeper_container",
-                "postgres_container",
-                "redis_container",
-            )
+            for field in fields
         }
     )
     raw = _run(["docker", "inspect", *names], "Job 依赖容器状态探针")
@@ -1471,9 +1832,13 @@ def _cleanup_failure_lifecycle_artifacts(
 
 
 def _failure_lifecycle_worker(arguments: argparse.Namespace) -> dict[str, Any]:
-    """在 campaign-run 子进程内走完真实 Job 失败、重试和归档链。"""
+    """在 campaign-run 子进程内走完真实 Job 失败、重试和归档链。
 
-    from tools.official_client_capture import codex_upgrade
+    失败生命周期探针只属于 Codex 画像（Claude 的失败归档由 B2-06／B2-08 的取证与恢复链验收）；编排器符号经适配器服务面
+    ``adapter.orchestrator.<原名>`` 取（B2-10），Codex 服务面就是编排器模块本身，本进程内对补跑常量的改写照旧生效。
+    """
+
+    adapter = _adapter(DEFAULT_CLIENT)
 
     campaign_id = _safe_id(arguments.campaign_id, "campaign_id")
     source_name = _safe_id(arguments.source_name, "source_name")
@@ -1601,16 +1966,16 @@ if any(path.exists() or path.is_symlink() for path in paths):
     raise SystemExit('cleanup-incomplete')
 '''
 
-    codex_upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT = host_runs_root
-    codex_upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS = tuple(
+    adapter.orchestrator.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT = host_runs_root
+    adapter.orchestrator.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS = tuple(
         alias / "runs" for alias in aliases
     )
-    if codex_upgrade.JOB_RETRY_LIMIT != 2:
+    if adapter.orchestrator.JOB_RETRY_LIMIT != 2:
         raise JobRehearsalReceiptError("生产 Job 重试上限不再是两次")
     # 只在这个独立、零网络 worker 进程中消除 30 秒退避；生产常量和调用方
     # 进程均不改变，演练仍完整执行首次加两次重试。
-    codex_upgrade.JOB_RETRY_DELAY_SECONDS = 0
-    job = codex_upgrade.Job(
+    adapter.orchestrator.JOB_RETRY_DELAY_SECONDS = 0
+    job = adapter.orchestrator.Job(
         job_id=FAILURE_LIFECYCLE_JOB_ID,
         phase="official",
         suites=("full",),
@@ -1656,7 +2021,7 @@ if any(path.exists() or path.is_symlink() for path in paths):
     )
     worker_result: dict[str, Any] | None = None
     try:
-        with codex_upgrade.CampaignLease(
+        with adapter.orchestrator.CampaignLease(
             campaign_dir,
             phase="official",
             candidate_id=None,
@@ -1665,7 +2030,7 @@ if any(path.exists() or path.is_symlink() for path in paths):
             command="failure-lifecycle-worker",
             campaign_id=campaign_id,
         ) as lease:
-            result = codex_upgrade._run_job_with_retry(
+            result = adapter.orchestrator._run_job_with_retry(
                 job,
                 log_root,
                 deadline=deadline,
@@ -1780,7 +2145,7 @@ if any(path.exists() or path.is_symlink() for path in paths):
                 "capture_container": container,
                 "capture_root": str(capture_root),
                 "host_runs_root": str(host_runs_root),
-                "retry_limit": codex_upgrade.JOB_RETRY_LIMIT,
+                "retry_limit": adapter.orchestrator.JOB_RETRY_LIMIT,
                 "attempt_count": FAILURE_LIFECYCLE_ATTEMPT_COUNT,
                 "network_isolated": True,
                 "live_request_count": 0,
@@ -2748,6 +3113,9 @@ def _producer() -> dict[str, str]:
 
 
 def _runtime_identity(facts: Mapping[str, Any]) -> str:
+    """运行时身份摘要。画像额外记录的有效工具身份（Claude 的 ``tool_identity``）只在 facts 带它时计入，Codex facts 的摘要
+    与改造前逐字节相同。"""
+
     return _fingerprint(
         {
             "host": facts["host"],
@@ -2758,6 +3126,7 @@ def _runtime_identity(facts: Mapping[str, Any]) -> str:
             "probes": facts["probes"],
             "jobs": facts["jobs"],
             "tool_components": facts.get("tool_components"),
+            **({"tool_identity": facts["tool_identity"]} if "tool_identity" in facts else {}),
         }
     )
 
@@ -2765,17 +3134,23 @@ def _runtime_identity(facts: Mapping[str, Any]) -> str:
 def _load_previous_rehearsal(
     root: Path,
     receipt_relative: str,
+    *,
+    profile: Any | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """读取并校验前序演练；校验不要求当前采集器版本相同。
 
     旧收据是只读输入。只要自身摘要链和事实结构合法，即使本次修复改了
     evaluator／collector，也不能因此把历史结果判成损坏。
+
+    ``profile`` 是本次采集的客户端画像（B2-10）：前序收据与 facts 必须是同一客户端的合同；缺省为 Codex 画像。
     """
 
+    if profile is None:
+        profile = upgrade_client_adapter.adapter_for(DEFAULT_CLIENT).job_rehearsal_profile
     root = _private_root(root)
     receipt_path = _relative(root, receipt_relative, "前序 Job 收据")
     receipt, receipt_raw = _load_json(receipt_path, "前序 Job 收据")
-    if receipt.get("schema_version") != RECEIPT_SCHEMA:
+    if receipt.get("schema_version") != profile.RECEIPT_SCHEMA:
         raise JobRehearsalReceiptError("前序 Job 收据版本不受支持")
     if receipt.get("status") == INCREMENTAL_NOOP_STATUS:
         raise JobRehearsalReceiptError(
@@ -2791,7 +3166,7 @@ def _load_previous_rehearsal(
         or len(raw) != facts_reference.get("bytes")
     ):
         raise JobRehearsalReceiptError("前序 Job facts 摘要漂移")
-    if facts.get("schema_version") != FACTS_SCHEMA:
+    if facts.get("schema_version") != profile.FACTS_SCHEMA:
         raise JobRehearsalReceiptError("前序 Job facts 版本不受支持")
     if facts.get("status") == INCREMENTAL_NOOP_STATUS or facts.get(
         "incremental_noop"
@@ -3047,14 +3422,19 @@ def _build_incremental_noop_facts(
     previous_facts: Mapping[str, Any],
     previous_source: Mapping[str, Any],
     previous_receipt_root: Path,
+    profile: Any | None = None,
 ) -> dict[str, Any]:
     """构造不触碰运行时探针的增量空操作事实。
 
     ``incremental-noop`` 只表示本轮没有需要执行的 Job。它不复制或重新声明
     宿主、容器、二进制、bubblewrap、zstd 等运行事实，也不生成新的通过结论；
     后续 Formal 必须继续绑定 ``source_receipt`` 指向的原有通过收据。
+
+    ``profile`` 是本次采集的客户端画像（B2-10，决定 facts 合同名与采集器身份）；缺省为 Codex 画像。
     """
 
+    if profile is None:
+        profile = upgrade_client_adapter.adapter_for(DEFAULT_CLIENT).job_rehearsal_profile
     planned = sorted(str(item) for item in contract.get("job_ids", []))
     execute = sorted(str(item) for item in plan.get("execute_job_ids", []))
     reused = sorted(str(item) for item in plan.get("reused_job_ids", []))
@@ -3106,7 +3486,7 @@ def _build_incremental_noop_facts(
         "recorded_at_utc": _utc_now(),
     }
     return {
-        "schema_version": FACTS_SCHEMA,
+        "schema_version": profile.FACTS_SCHEMA,
         "status": INCREMENTAL_NOOP_STATUS,
         "observed_at_utc": _utc_now(),
         "preflight_campaign": {
@@ -3120,7 +3500,7 @@ def _build_incremental_noop_facts(
         "incremental_plan": incremental_plan,
         "tool_components": dict(component_summary),
         "incremental_noop": noop,
-        "collector": _producer(),
+        "collector": profile.rehearsal_producer(),
     }
 
 
@@ -3133,15 +3513,20 @@ def _collect_facts(
     checkpoint_root: Path | None = None,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     """展开 preflight Job，并按前序收据只执行失败／受影响项。
 
     该函数只做离线路径、依赖和运行时探针，不发送官方请求。没有前序收据时
     执行全部 Job；有前序收据时，已通过且结果键未变的 Job 仅写入 ``reused``
     记录，失败项和组件依赖变化项才重新探测。
+
+    ``client`` 选客户端适配器（B2-10）：编排器引用经服务面，执行合同经 ``build_job_contract``，其余客户端差异经
+    画像 ``job_rehearsal_profile``；Codex 的调用顺序与参数和改造前逐项相同。
     """
 
-    from tools.official_client_capture import codex_upgrade
+    adapter = _adapter(client)
+    profile = adapter.job_rehearsal_profile
 
     if deadline is not None:
         deadline.check("job-rehearsal:start")
@@ -3156,14 +3541,14 @@ def _collect_facts(
         )
 
     campaign_dir = campaign_dir.resolve(strict=True)
-    manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+    manifest = adapter.orchestrator.load_campaign_manifest(campaign_dir)
     if manifest.get("campaign_mode") != "preflight_only":
         raise JobRehearsalReceiptError("完整 Job 演练只能消费 preflight_only Campaign")
     machine = platform.machine().lower()
     if platform.system().lower() != "linux" or machine not in {"aarch64", "arm64"}:
         raise JobRehearsalReceiptError("完整 Job 演练只能在 ARM64 Linux 宿主执行")
     inputs = manifest["inputs"]
-    scenario_reference = inputs.get("target_discovery_scenarios")
+    scenario_reference = inputs.get(profile.TARGET_SCENARIO_INPUT)
     if not isinstance(scenario_reference, dict):
         raise JobRehearsalReceiptError("preflight 缺少 target 场景清单")
     target_scenario = json.loads(
@@ -3176,38 +3561,22 @@ def _collect_facts(
         else None
     )
     configuration = manifest["configuration"]
-    contract = build_execution_contract(
-        target_version=manifest["target_version"],
-        target_sha256=manifest["target_sha256"],
-        target_package_sha256=manifest["official_identity"]["package"]["asset_sha256"],
-        target_code_mode_host_sha256=manifest["official_identity"]["package"]["code_mode_host_sha256"],
-        suite=manifest["suite"],
-        tool_files_sha256=manifest["tool_identity"]["files_sha256"],
-        configuration=configuration,
-        target_scenario=target_scenario,
-        extra_jobs=extra_jobs,
-        wire_producer_sha256=manifest["tool_identity"].get("wire_producer_sha256"),
-        policy_sha256=manifest["tool_identity"].get("policy_sha256"),
-    )
+    contract = adapter.build_job_contract(manifest, target_scenario, extra_jobs)
     jobs = [
-        *codex_upgrade._campaign_jobs(
+        job
+        for phase in profile.JOB_PHASES
+        for job in adapter.orchestrator._campaign_jobs(
             campaign_dir,
             manifest,
-            "official",
+            phase,
             use_approved_scenario=False,
-        ),
-        *codex_upgrade._campaign_jobs(
-            campaign_dir,
-            manifest,
-            "candidate",
-            use_approved_scenario=False,
-        ),
+        )
     ]
     if sorted(job.job_id for job in jobs) != contract["job_ids"]:
         raise JobRehearsalReceiptError("展开 Job 集与目标模板不一致")
     # 计划阶段只读取 manifest、场景、Job 合同和当前受管工具树。任何可能触碰
     # Docker、官方二进制、执行副本、环境或运行容器的探针都必须放在空集判断之后。
-    managed_root = Path(codex_upgrade.__file__).resolve().parent
+    managed_root = Path(adapter.orchestrator.__file__).resolve().parent
     managed_tree = _tool_tree_summary(managed_root)
     # 工具树摘要只由当前受管树生成，不能从前序收据复制，避免把旧工具身份误当成当前身份。
     component_summary = _component_summary(managed_tree)
@@ -3231,6 +3600,7 @@ def _collect_facts(
         previous_facts, previous_source = _load_previous_rehearsal(
             source_root,
             previous_relative,
+            profile=profile,
         )
         previous_contract = previous_facts.get("execution_contract")
         if isinstance(previous_contract, Mapping):
@@ -3265,33 +3635,30 @@ def _collect_facts(
             previous_facts=previous_facts,
             previous_source=previous_source,
             previous_receipt_root=source_root,
+            profile=profile,
         )
 
     # 从这里开始确实存在需要探针的 Job，才允许校验实际执行树、容器和二进制。
-    capture_root = Path(str(configuration["capture_root"]))
-    execution_root = capture_root / "tools" / "official_client_capture"
-    codex_upgrade._verify_execution_tree(capture_root)
+    # 执行副本坐标与容器内工具树按客户端画像取（Codex：<capture_root>/tools/official_client_capture，只有 capture-cli；
+    # Claude：configuration.capture_tool_root 映射到宿主，抓包与断网两个容器）。
+    verify_root, execution_root, container_root = profile.rehearsal_execution_roots(campaign_dir, manifest)
+    adapter.orchestrator._verify_execution_tree(verify_root)
     execution_tree = _tool_tree_summary(execution_root)
-    container_tree = _container_tool_tree(
-        str(configuration["capture_container"]), str(execution_root)
-    )
+    container_trees = profile.rehearsal_container_tool_trees(configuration, container_root)
     if not (
-        managed_tree["entries"]
-        == execution_tree["entries"]
-        == container_tree["entries"]
-        and _contract_tool_matches(contract, managed_tree["files_sha256"], codex_upgrade._tool_identity(include_git=False))
+        all(
+            managed_tree["entries"] == tree["entries"]
+            for tree in (execution_tree, *container_trees.values())
+        )
+        and _contract_tool_matches(contract, managed_tree["files_sha256"], adapter.orchestrator._tool_identity(include_git=False))
     ):
         execute = list(plan["execute_job_ids"])
         raise JobRehearsalReceiptError(
             "受管、执行和 capture-cli 工具树不一致；"
             f"execute_count={len(execute)}，execute_job_ids={execute[:10]}"
         )
-    storage_probe = _capture_storage_probe(jobs, configuration)
-    failure_lifecycle_probe = _capture_failure_lifecycle_probe(
-        configuration,
-        Path(EXPECTED_HOST_DATA_ROOT) / "runs",
-    )
-    binary_verification = codex_upgrade._verify_official_binaries(
+    early_probes = profile.rehearsal_early_probes(jobs, configuration)
+    binary_verification = adapter.orchestrator._verify_official_binaries(
         manifest,
         deadline=deadline,
         heartbeat=heartbeat,
@@ -3427,9 +3794,9 @@ def _collect_facts(
             result = reused
         else:
             try:
-                result = _job_probe(
+                result = profile.rehearsal_job_probe(
                     job,
-                    str(configuration["capture_container"]),
+                    configuration,
                     component_summary=component_summary,
                 )
             except (JobRehearsalReceiptError, OSError, subprocess.SubprocessError) as error:
@@ -3467,7 +3834,7 @@ def _collect_facts(
                 }
             )
     facts: dict[str, Any] = {
-        "schema_version": FACTS_SCHEMA,
+        "schema_version": profile.FACTS_SCHEMA,
         "observed_at_utc": _utc_now(),
         "preflight_campaign": {
             "path": str(campaign_dir),
@@ -3492,27 +3859,15 @@ def _collect_facts(
             "architecture": EXPECTED_ARCHITECTURE,
             "machine": machine,
         },
-        "containers": _container_facts(configuration),
+        "containers": profile.rehearsal_container_facts(configuration),
         "tool_trees": {
             "managed_host": managed_tree,
             "execution_host": execution_tree,
-            "execution_container": container_tree,
+            **container_trees,
         },
-        "dependencies": {
-            "host": _host_dependencies(),
-            "capture_container": _container_dependencies(
-                str(configuration["capture_container"])
-            ),
-        },
+        "dependencies": profile.rehearsal_dependency_facts(configuration),
         "binary_verification": binary_verification,
-        "probes": {
-            "bubblewrap": _bwrap_probe(str(configuration["capture_container"])),
-            "failure_lifecycle": failure_lifecycle_probe,
-            "storage": storage_probe,
-            "zstd": _zstd_probe(
-                str(configuration["capture_container"]), str(execution_root)
-            ),
-        },
+        "probes": profile.rehearsal_probe_facts(configuration, container_root, early_probes),
         "jobs": job_results,
         "summary": {
             "job_count": len(job_results),
@@ -3558,7 +3913,9 @@ def _collect_facts(
                 if item.get("status") == "failed"
             ],
         },
-        "collector": _producer(),
+        "collector": profile.rehearsal_producer(),
+        # 画像额外的 facts 字段（Codex 没有；Claude 记录采集当时的有效工具身份）。
+        **profile.rehearsal_extra_facts(contract, adapter),
     }
     if checkpoint is not None:
         records = checkpoint.records()
@@ -3584,8 +3941,9 @@ def collect_facts(
     checkpoint_root: Path | None = None,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
-    """运行完整 Job 演练，并把所有内部探针绑定到同一条 deadline。"""
+    """运行完整 Job 演练，并把所有内部探针绑定到同一条 deadline（``client`` 选客户端适配器，缺省 codex）。"""
 
     global _ACTIVE_DEADLINE, _ACTIVE_HEARTBEAT
     previous_deadline = _ACTIVE_DEADLINE
@@ -3601,6 +3959,7 @@ def collect_facts(
             checkpoint_root=checkpoint_root,
             deadline=deadline,
             heartbeat=heartbeat,
+            client=client,
         )
     finally:
         _ACTIVE_DEADLINE = previous_deadline
@@ -4258,8 +4617,11 @@ def _validate_incremental_noop_facts(
     no-op 不携带运行时探针、容器身份或 Job 结果正文；这些事实只能从
     ``source_receipt`` 指向的原有 passed 收据读取。将 no-op 单独校验，避免
     把“没有需要执行”误判成一轮新的完整 ARM64 演练。
+
+    客户端按 facts 自带的合同名认（B2-10）：合同名、执行合同校验与采集器身份取该客户端的画像；认不出时按 Codex。
     """
 
+    profile = _document_adapter(_schema_of(facts)).job_rehearsal_profile
     required = {
         "schema_version",
         "status",
@@ -4275,7 +4637,7 @@ def _validate_incremental_noop_facts(
     if not isinstance(facts, Mapping) or set(facts) != required:
         raise JobRehearsalReceiptError("incremental-noop facts字段不闭合")
     if (
-        facts.get("schema_version") != FACTS_SCHEMA
+        facts.get("schema_version") != profile.FACTS_SCHEMA
         or facts.get("status") != INCREMENTAL_NOOP_STATUS
     ):
         raise JobRehearsalReceiptError("incremental-noop facts身份非法")
@@ -4293,7 +4655,7 @@ def _validate_incremental_noop_facts(
         or not SHA256_RE.fullmatch(str(campaign.get("manifest_sha256", "")))
     ):
         raise JobRehearsalReceiptError("incremental-noop Campaign 绑定非法")
-    contract = validate_execution_contract(
+    contract = profile.validate_execution_contract(
         dict(facts.get("execution_contract") or {})
     )
     contract_sha = execution_contract_sha256(contract)
@@ -4388,10 +4750,10 @@ def _validate_incremental_noop_facts(
     _rfc3339(noop.get("recorded_at_utc"), "incremental-noop.recorded_at_utc")
     collector = _expect(
         facts.get("collector"),
-        {"schema_version", "tool", "tool_sha256", "version"},
+        set(profile.PRODUCER_FIELDS),
         "incremental-noop.collector",
     )
-    if not allow_collector_drift and collector != _producer():
+    if not allow_collector_drift and collector != profile.rehearsal_producer():
         raise JobRehearsalReceiptError("incremental-noop 采集器身份漂移")
     return {
         "execution_contract_sha256": contract_sha,
@@ -4409,7 +4771,12 @@ def validate_facts(
     *,
     allow_collector_drift: bool = False,
 ) -> dict[str, Any]:
-    """严格校验离线演练事实，并返回收据摘要。"""
+    """严格校验离线演练事实，并返回收据摘要。
+
+    客户端按 facts 自带的合同名认（B2-10）：字段闭集、执行合同、容器与工具树集合、命令依赖、二进制事实（适配器成员
+    ``job_contract_replay``）、运行时探针、步骤启动器与采集器身份都取该客户端的画像；认不出合同名时按 Codex，检查项、
+    顺序与报错都与改造前相同。
+    """
 
     # no-op facts 使用严格的最小字段集；不能落入完整演练校验并被当作新通过事实。
     if (
@@ -4424,6 +4791,8 @@ def validate_facts(
             allow_collector_drift=allow_collector_drift,
         )
 
+    adapter = _document_adapter(_schema_of(facts))
+    profile = adapter.job_rehearsal_profile
     required_fact_fields = {
         "schema_version",
         "observed_at_utc",
@@ -4440,6 +4809,7 @@ def validate_facts(
         "summary",
         "runtime_identity_sha256",
         "collector",
+        *profile.EXTRA_FACT_FIELDS,
     }
     optional_fact_fields = {"tool_components", "incremental_plan", "checkpoint"}
     if (
@@ -4448,7 +4818,7 @@ def validate_facts(
         or not set(facts).issubset(required_fact_fields | optional_fact_fields)
     ):
         raise JobRehearsalReceiptError("facts字段不闭合")
-    if facts.get("schema_version") != FACTS_SCHEMA:
+    if facts.get("schema_version") != profile.FACTS_SCHEMA:
         raise JobRehearsalReceiptError("facts.schema_version 不匹配")
     _rfc3339(facts.get("observed_at_utc"), "facts.observed_at_utc")
     campaign = _expect(
@@ -4464,7 +4834,7 @@ def validate_facts(
         or not SHA256_RE.fullmatch(str(campaign.get("manifest_sha256", "")))
     ):
         raise JobRehearsalReceiptError("preflight Campaign 绑定非法")
-    contract = validate_execution_contract(facts.get("execution_contract"))
+    contract = profile.validate_execution_contract(facts.get("execution_contract"))
     contract_sha = execution_contract_sha256(contract)
     if facts.get("execution_contract_sha256") != contract_sha:
         raise JobRehearsalReceiptError("execution contract 摘要漂移")
@@ -4474,155 +4844,34 @@ def validate_facts(
         "arm64",
     }:
         raise JobRehearsalReceiptError("演练宿主不是 ARM64 Linux")
-    configuration = contract["configuration"]
-    expected_containers = sorted(
-        {
-            str(configuration[field])
-            for field in (
-                "capture_container",
-                "service_container",
-                "keeper_container",
-                "postgres_container",
-                "redis_container",
-            )
-        }
-    )
-    containers = facts.get("containers")
-    if not isinstance(containers, list):
-        raise JobRehearsalReceiptError("containers 必须是数组")
-    container_names: list[str] = []
-    for item in containers:
-        current = _expect(
-            item, {"name", "container_id", "image_id", "running"}, "containers"
-        )
-        if (
-            current.get("running") is not True
-            or not CONTAINER_ID_RE.fullmatch(str(current.get("container_id", "")))
-            or not IMAGE_ID_RE.fullmatch(str(current.get("image_id", "")))
-        ):
-            raise JobRehearsalReceiptError("容器未运行或身份非法")
-        container_names.append(str(current.get("name", "")))
-    if container_names != expected_containers:
-        raise JobRehearsalReceiptError("容器集合未完整覆盖 Job 依赖")
+    profile.rehearsal_validate_containers(facts.get("containers"), contract)
+    tree_names = ("managed_host", "execution_host", *profile.CONTAINER_TREE_NAMES)
     trees = _expect(
         facts.get("tool_trees"),
-        {"managed_host", "execution_host", "execution_container"},
+        set(tree_names),
         "tool_trees",
     )
     tree_values = [
         _validate_tree(trees[name], f"tool_trees.{name}")
-        for name in ("managed_host", "execution_host", "execution_container")
+        for name in tree_names
     ]
     if (
         not all(tree["entries"] == tree_values[0]["entries"] for tree in tree_values)
-        or tree_values[0]["files_sha256"] != contract["tool_files_sha256"]
+        or not profile.rehearsal_tree_matches_contract(tree_values[0], contract)
     ):
-        raise JobRehearsalReceiptError("三份工具树或 Campaign 工具摘要不一致")
+        copies = {3: "三份", 4: "四份"}.get(len(tree_names), f"{len(tree_names)} 份")
+        raise JobRehearsalReceiptError(f"{copies}工具树或 Campaign 工具摘要不一致")
     component_summary = facts.get("tool_components")
     if component_summary is not None:
         _validate_component_summary(component_summary, "tool_components")
-    dependencies = _expect(
-        facts.get("dependencies"), {"host", "capture_container"}, "dependencies"
+    profile.rehearsal_validate_dependencies(facts.get("dependencies"))
+    # 二进制事实经适配器成员按执行合同核对（Codex：改造前写在这里的三段检查原样）。
+    adapter.job_contract_replay(contract, facts)
+    storage_probe_sha256, failure_lifecycle_probe_sha256 = profile.rehearsal_validate_probes(
+        facts.get("probes"),
+        contract,
+        allow_collector_drift=allow_collector_drift,
     )
-    _validate_dependencies(
-        dependencies["host"], HOST_REQUIRED_COMMANDS, "dependencies.host"
-    )
-    _validate_dependencies(
-        dependencies["capture_container"],
-        CAPTURE_CONTAINER_REQUIRED_COMMANDS,
-        "dependencies.capture_container",
-    )
-    binary = facts.get("binary_verification")
-    if (
-        not isinstance(binary, dict)
-        or binary.get("passed") is not True
-        or binary.get("expected_version") != contract["target_version"]
-        or binary.get("expected_sha256") != contract["target_sha256"]
-        or binary.get("runtime_image_reference")
-        != configuration["runtime_image"]
-        or not IMAGE_ID_RE.fullmatch(str(binary.get("runtime_image_id", "")))
-    ):
-        raise JobRehearsalReceiptError("Codex 二进制或运行镜像探针非法")
-    package = binary.get("package")
-    if (
-        not isinstance(package, dict)
-        or package.get("asset_sha256") != contract["target_package_sha256"]
-        or package.get("code_mode_host_sha256")
-        != contract["target_code_mode_host_sha256"]
-    ):
-        raise JobRehearsalReceiptError("Codex package 探针非法")
-    identities = binary.get("identities")
-    helpers = binary.get("helpers")
-    if (
-        not isinstance(identities, list)
-        or {item.get("label") for item in identities if isinstance(item, dict)}
-        != {
-            "container:capture_codex_bin",
-            "container:relay_codex_bin",
-            "host:relay_codex_bin",
-        }
-        or any(item.get("sha256") != contract["target_sha256"] for item in identities)
-        or not isinstance(helpers, list)
-        or {item.get("label") for item in helpers if isinstance(item, dict)}
-        != {
-            "container:capture_code_mode_host_bin",
-            "container:relay_code_mode_host_bin",
-            "host:relay_code_mode_host_bin",
-        }
-        or any(
-            item.get("sha256") != contract["target_code_mode_host_sha256"]
-            for item in helpers
-        )
-    ):
-        raise JobRehearsalReceiptError("Codex 主程序或 code-mode-host 身份未闭合")
-    raw_probes = facts.get("probes")
-    if not isinstance(raw_probes, dict):
-        raise JobRehearsalReceiptError("probes必须是对象")
-    probe_fields = set(raw_probes)
-    legacy_probe_fields = {"bubblewrap", "zstd"}
-    storage_probe_fields = {*legacy_probe_fields, "storage"}
-    current_probe_fields = {*storage_probe_fields, "failure_lifecycle"}
-    if probe_fields == legacy_probe_fields and allow_collector_drift:
-        # 历史收据继续按原字节只读重放，但不能再作为新 Formal 的 P0 证明。
-        probes = raw_probes
-        storage_probe_sha256: str | None = None
-        failure_lifecycle_probe_sha256: str | None = None
-    elif probe_fields == storage_probe_fields and allow_collector_drift:
-        # 失败生命周期门禁加入前生成的收据仍可逐字重放；它只证明旧版
-        # storage 路由，不能作为当前 Formal 的完整 P0 证明。
-        probes = raw_probes
-        storage_probe = _validate_storage_probe(probes.get("storage"), contract)
-        storage_probe_sha256 = _fingerprint(storage_probe)
-        failure_lifecycle_probe_sha256 = None
-    else:
-        probes = _expect(raw_probes, current_probe_fields, "probes")
-        storage_probe = _validate_storage_probe(probes.get("storage"), contract)
-        storage_probe_sha256 = _fingerprint(storage_probe)
-        failure_lifecycle_probe = _validate_failure_lifecycle_probe(
-            probes.get("failure_lifecycle"), contract
-        )
-        failure_lifecycle_probe_sha256 = _fingerprint(failure_lifecycle_probe)
-    bubblewrap = _expect(
-        probes.get("bubblewrap"),
-        {"status", "version", "network_isolated"},
-        "probes.bubblewrap",
-    )
-    zstd = _expect(
-        probes.get("zstd"),
-        {"status", "input_sha256", "output_sha256", "output"},
-        "probes.zstd",
-    )
-    if (
-        bubblewrap.get("status") != "passed"
-        or bubblewrap.get("network_isolated") is not True
-        or not isinstance(bubblewrap.get("version"), str)
-        or not bubblewrap["version"]
-        or zstd.get("status") != "passed"
-        or zstd.get("input_sha256") != _sha256_bytes(ZSTD_FRAME)
-        or zstd.get("output_sha256") != _sha256_bytes(ZSTD_OUTPUT)
-        or zstd.get("output") != ZSTD_OUTPUT.decode("ascii")
-    ):
-        raise JobRehearsalReceiptError("bubblewrap 或 zstd 离线探针失败")
     jobs = facts.get("jobs")
     if not isinstance(jobs, list) or len(jobs) != contract["job_count"]:
         raise JobRehearsalReceiptError("Job 演练结果数量不完整")
@@ -4742,7 +4991,7 @@ def validate_facts(
                 }
                 or step.get("index") != step_index
                 or step.get("status") != "passed"
-                or step.get("launcher") not in {"host", "capture_container"}
+                or step.get("launcher") not in profile.STEP_LAUNCHERS
                 or not SHA256_RE.fullmatch(str(step.get("argv_sha256", "")))
                 or not SHA256_RE.fullmatch(str(step.get("environment_sha256", "")))
                 or not isinstance(step.get("timeout_seconds"), int)
@@ -4753,7 +5002,8 @@ def validate_facts(
                 or not step["dependencies"]
             ):
                 raise JobRehearsalReceiptError(f"{job_id} 步骤演练不完整")
-        expected_c2pa = contract["c2pa_job_identities"].get(job_id)
+        # 没有 C2PA 正负 Job 的客户端（Claude）执行合同不登记该表，逐 Job 身份恒为 None。
+        expected_c2pa = (contract.get("c2pa_job_identities") or {}).get(job_id)
         if current.get("c2pa_identity") != expected_c2pa:
             raise JobRehearsalReceiptError(f"{job_id} C2PA 身份不一致")
         seen.append(job_id)
@@ -4844,11 +5094,13 @@ def validate_facts(
             raise JobRehearsalReceiptError("checkpoint摘要非法")
     collector = _expect(
         facts.get("collector"),
-        {"schema_version", "tool", "tool_sha256", "version"},
+        set(profile.PRODUCER_FIELDS),
         "collector",
     )
-    if not allow_collector_drift and collector != _producer():
+    if not allow_collector_drift and collector != profile.rehearsal_producer():
         raise JobRehearsalReceiptError("Job 演练采集器身份漂移")
+    # 画像额外的 facts 字段（Codex 没有；Claude 核对采集当时的有效工具身份与执行合同一致）。
+    profile.rehearsal_validate_extra(facts, contract)
     runtime_sha = _runtime_identity(facts)
     if facts.get("runtime_identity_sha256") != runtime_sha:
         raise JobRehearsalReceiptError("Job 演练运行时身份摘要漂移")
@@ -4880,6 +5132,8 @@ def build_receipt(
         facts,
         allow_collector_drift=allow_collector_drift,
     )
+    # 收据合同名与签发者身份取 facts 所属客户端的画像（B2-10；Codex 即本模块的原值）。
+    profile = _document_adapter(_schema_of(facts)).job_rehearsal_profile
     campaign = facts["preflight_campaign"]
     if validated["status"] == INCREMENTAL_NOOP_STATUS:
         # no-op 收据保留当前计划和原有 passed 收据绑定，但明确不能作为
@@ -4888,7 +5142,7 @@ def build_receipt(
         if not isinstance(noop, Mapping):
             raise JobRehearsalReceiptError("incremental-noop facts 缺少事实标记")
         receipt = {
-            "schema_version": RECEIPT_SCHEMA,
+            "schema_version": profile.RECEIPT_SCHEMA,
             "status": INCREMENTAL_NOOP_STATUS,
             "observed_at_utc": facts["observed_at_utc"],
             "preflight_campaign": campaign,
@@ -4902,7 +5156,7 @@ def build_receipt(
                 "sha256": _sha256_bytes(raw),
                 "bytes": len(raw),
             },
-            "producer": facts["collector"] if allow_collector_drift else _producer(),
+            "producer": facts["collector"] if allow_collector_drift else profile.rehearsal_producer(),
             "failed_job_ids": [],
             "executed_job_ids": [],
             "reused_job_ids": list(noop["reused_job_ids"]),
@@ -4914,7 +5168,7 @@ def build_receipt(
     summary = facts.get("summary", {})
     jobs = facts.get("jobs", [])
     receipt = {
-        "schema_version": RECEIPT_SCHEMA,
+        "schema_version": profile.RECEIPT_SCHEMA,
         "status": validated["status"],
         "observed_at_utc": facts["observed_at_utc"],
         "preflight_campaign": campaign,
@@ -4928,7 +5182,7 @@ def build_receipt(
             "sha256": _sha256_bytes(raw),
             "bytes": len(raw),
         },
-        "producer": facts["collector"] if allow_collector_drift else _producer(),
+        "producer": facts["collector"] if allow_collector_drift else profile.rehearsal_producer(),
     }
     storage_probe_sha256 = validated.get("storage_probe_sha256")
     if storage_probe_sha256 is not None:
@@ -4966,6 +5220,7 @@ def collect(
     checkpoint_relative: str | None = None,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
+    client: str = DEFAULT_CLIENT,
 ) -> dict[str, Any]:
     root = _private_root(root)
     output = _relative(root, output_relative, "facts output")
@@ -4990,6 +5245,7 @@ def collect(
         checkpoint_root=checkpoint_root,
         deadline=deadline,
         heartbeat=heartbeat,
+        client=client,
     )
     _write_once(output, facts)
     return facts
@@ -5038,19 +5294,34 @@ def _deadline_from_cli(arguments: argparse.Namespace) -> incremental_recovery.Wa
     return deadline
 
 
-def finalize(root: Path, facts_relative: str, output_relative: str) -> dict[str, Any]:
+def finalize(
+    root: Path,
+    facts_relative: str,
+    output_relative: str,
+    *,
+    client: str | None = None,
+) -> dict[str, Any]:
+    """封存收据；给出 ``client`` 时（命令行 ``--client``）facts 必须是该客户端的合同，否则不写收据。"""
+
     root = _private_root(root)
     output = _relative(root, output_relative, "receipt output")
     receipt = build_receipt(root, facts_relative)
+    if client is not None and receipt.get("schema_version") != _adapter(client).job_rehearsal_profile.RECEIPT_SCHEMA:
+        raise JobRehearsalReceiptError(f"facts 不是 {client} 的 Job 演练合同")
     _write_once(output, receipt)
     return receipt
 
 
-def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
+def replay(root: Path, receipt_relative: str, *, client: str | None = None) -> dict[str, Any]:
+    """独立重放收据。给出 ``client`` 时收据必须是该客户端的合同；不给时按收据自带的合同名认客户端（认不出按 Codex）。"""
+
     root = _private_root(root)
     path = _relative(root, receipt_relative, "receipt")
     receipt, raw = _load_json(path, "receipt")
-    if receipt.get("schema_version") != RECEIPT_SCHEMA:
+    profile = (
+        _adapter(client) if client is not None else _document_adapter(_schema_of(receipt))
+    ).job_rehearsal_profile
+    if receipt.get("schema_version") != profile.RECEIPT_SCHEMA:
         raise JobRehearsalReceiptError("receipt.schema_version 不匹配")
     facts = receipt.get("facts")
     if not isinstance(facts, dict) or not isinstance(facts.get("path"), str):
@@ -5068,17 +5339,22 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
 def assert_formal_compatible(
     receipt: Mapping[str, Any], expected_contract: Mapping[str, Any]
 ) -> None:
-    """拒绝 Formal 使用不同 Job、工具、容器、二进制或运行镜像。"""
+    """拒绝 Formal 使用不同 Job、工具、容器、二进制或运行镜像。
 
+    客户端按期望执行合同的合同名认（B2-10）：合同校验与 Formal 必需的探针摘要取该客户端的画像（Codex：存储路由与失败
+    生命周期两项；Claude 没有这两个探针）。
+    """
+
+    profile = _document_adapter(_schema_of(expected_contract)).job_rehearsal_profile
     if receipt.get("status") == INCREMENTAL_NOOP_STATUS:
         raise JobRehearsalReceiptError(
             "incremental-noop 不是完整 Job 演练通过事实，Formal 必须绑定原有 passed 收据"
         )
-    validate_execution_contract(dict(expected_contract))
+    profile.validate_execution_contract(dict(expected_contract))
     actual = receipt.get("execution_contract")
     if not isinstance(actual, dict):
         raise JobRehearsalReceiptError("Job 演练收据缺少 execution_contract")
-    validate_execution_contract(actual)
+    profile.validate_execution_contract(actual)
     if actual != dict(expected_contract):
         raise JobRehearsalReceiptError("Formal 执行合同与 ARM64 完整 Job 演练不一致")
     if (
@@ -5086,11 +5362,9 @@ def assert_formal_compatible(
         or receipt.get("execution_contract_sha256")
         != execution_contract_sha256(dict(expected_contract))
         or receipt.get("job_count") != expected_contract.get("job_count")
-        or not SHA256_RE.fullmatch(
-            str(receipt.get("storage_probe_sha256", ""))
-        )
-        or not SHA256_RE.fullmatch(
-            str(receipt.get("failure_lifecycle_probe_sha256", ""))
+        or any(
+            not SHA256_RE.fullmatch(str(receipt.get(field, "")))
+            for field in profile.FORMAL_PROBE_DIGESTS
         )
     ):
         raise JobRehearsalReceiptError("Formal 所需完整 Job 演练收据未通过")
@@ -5111,13 +5385,15 @@ def assert_recovery_compatible(
         assert_formal_compatible(receipt, expected_contract)
         return dict(receipt)
 
-    validate_execution_contract(dict(expected_contract))
+    # 客户端按期望执行合同的合同名认（B2-10），同 assert_formal_compatible。
+    profile = _document_adapter(_schema_of(expected_contract)).job_rehearsal_profile
+    profile.validate_execution_contract(dict(expected_contract))
     actual = receipt.get("execution_contract")
     if not isinstance(actual, dict):
         raise JobRehearsalReceiptError(
             "恢复 incremental-noop 缺少 execution_contract"
         )
-    validate_execution_contract(actual)
+    profile.validate_execution_contract(actual)
     expected = dict(expected_contract)
     if (
         actual != expected
@@ -5160,7 +5436,7 @@ def assert_recovery_compatible(
     source_contract = source.get("execution_contract")
     if not isinstance(source_contract, dict):
         raise JobRehearsalReceiptError("原始通过收据缺少执行合同")
-    validate_execution_contract(source_contract)
+    profile.validate_execution_contract(source_contract)
     runtime_identity = source.get("runtime_identity_sha256")
     if (
         source.get("status") != "passed"
@@ -5171,11 +5447,9 @@ def assert_recovery_compatible(
         or source.get("job_count") != noop.get("source_job_count")
         or source.get("job_set_sha256") != noop.get("source_job_set_sha256")
         or not SHA256_RE.fullmatch(str(runtime_identity or ""))
-        or not SHA256_RE.fullmatch(
-            str(source.get("storage_probe_sha256", ""))
-        )
-        or not SHA256_RE.fullmatch(
-            str(source.get("failure_lifecycle_probe_sha256", ""))
+        or any(
+            not SHA256_RE.fullmatch(str(source.get(field, "")))
+            for field in profile.FORMAL_PROBE_DIGESTS
         )
     ):
         raise JobRehearsalReceiptError(
@@ -5184,10 +5458,22 @@ def assert_recovery_compatible(
     return dict(source)
 
 
+def _add_client_argument(parser: argparse.ArgumentParser) -> None:
+    """``--client``（B2-10）：选客户端适配器；缺省 codex，不带它时命令行与改造前相同。"""
+
+    parser.add_argument(
+        "--client",
+        choices=upgrade_client_adapter.CLIENTS,
+        default=DEFAULT_CLIENT,
+        help=f"客户端（缺省 {DEFAULT_CLIENT}）",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     collect_parser = commands.add_parser("collect", help="在 ARM64 离线演练全部 Job")
+    _add_client_argument(collect_parser)
     collect_parser.add_argument("--campaign-dir", type=Path, required=True)
     collect_parser.add_argument("--evidence-root", type=Path, required=True)
     collect_parser.add_argument("--output", required=True)
@@ -5228,10 +5514,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     finalize_parser = commands.add_parser("finalize", help="封存完整 Job 演练收据")
+    _add_client_argument(finalize_parser)
     finalize_parser.add_argument("--evidence-root", type=Path, required=True)
     finalize_parser.add_argument("--facts", required=True)
     finalize_parser.add_argument("--output", required=True)
     replay_parser = commands.add_parser("replay", help="独立重放完整 Job 演练收据")
+    _add_client_argument(replay_parser)
     replay_parser.add_argument("--evidence-root", type=Path, required=True)
     replay_parser.add_argument("--receipt", required=True)
     worker_parser = commands.add_parser(
@@ -5264,13 +5552,14 @@ def main(argv: list[str] | None = None) -> int:
                 rerun_failed=arguments.rerun_failed,
                 checkpoint_relative=arguments.checkpoint_root,
                 deadline=deadline,
+                client=arguments.client,
             )
         elif arguments.command == "finalize":
             result = finalize(
-                arguments.evidence_root, arguments.facts, arguments.output
+                arguments.evidence_root, arguments.facts, arguments.output, client=arguments.client
             )
         elif arguments.command == "replay":
-            result = replay(arguments.evidence_root, arguments.receipt)
+            result = replay(arguments.evidence_root, arguments.receipt, client=arguments.client)
         else:
             try:
                 result = _failure_lifecycle_worker(arguments)
@@ -5294,7 +5583,8 @@ def main(argv: list[str] | None = None) -> int:
         JobRehearsalReceiptError,
         incremental_recovery.IncrementalRecoveryError,
     ) as error:
-        print(f"Codex 完整 Job 离线演练失败：{error}", file=sys.stderr)
+        label = _adapter(getattr(arguments, "client", DEFAULT_CLIENT)).job_rehearsal_profile.CLI_LABEL
+        print(f"{label} 完整 Job 离线演练失败：{error}", file=sys.stderr)
         return 1
     print(
         json.dumps(

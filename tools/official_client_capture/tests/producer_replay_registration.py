@@ -314,10 +314,10 @@ STRICT_SELF_DIGEST_WITHOUT_REGISTRY: Mapping[str, str] = {
         "原子演练收据按设计必须由当前工具树重做：pre-A3 认证（_bind_rehearsal_receipt）与发布认证"
         "都要求其工具身份等于当前树，工具一变就重做演练，不承接旧版本"
     ),
-    "tools/official_client_capture/codex_upgrade_job_rehearsal_receipt.py": (
-        "静态调用图的保守误报：replay 以 allow_collector_drift=True 调用 validate_facts，承接 facts 中"
-        "记录的生成器身份，不要求等于当前摘要"
-    ),
+    # codex_upgrade_job_rehearsal_receipt.py 原先在这里（静态调用图的保守误报：replay 以 allow_collector_drift=True 调用
+    # validate_facts，承接 facts 中记录的生成器身份，不要求等于当前摘要）。Claude 升级 B2-10 起采集器身份经客户端画像取
+    # （profile.rehearsal_producer），静态调用图不再把 validate_facts 连到 _producer，误报消失，条目按本表规则删去；
+    # 重放语义不变。
     "tools/official_client_capture/codex_upgrade_official_asset_receipt.py": (
         "官方 Release 下载前生成并立即离线重放，生成与重放在同一工具版本内完成；仓库内没有跨工具"
         "版本重放它的调用方"

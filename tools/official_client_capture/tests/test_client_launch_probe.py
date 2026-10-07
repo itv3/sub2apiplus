@@ -857,7 +857,7 @@ class DriverWiringTests(unittest.TestCase):
         self.assertNotIn("atomic-double-collect", stage1)
         self.assertLess(stage1.index("stage1.partial.env"), stage1.index('bash "$DRV/stage1-finish.sh"'))
         finish = (SCRIPTS / "stage1-finish.sh").read_text(encoding="utf-8")
-        self.assertLess(finish.index("codex_upgrade_job_rehearsal_receipt"), finish.index("client_launch_probe.py\" run"))
+        self.assertLess(finish.index('python3 -m "$CT_JOB_REHEARSAL_MODULE" collect'), finish.index("client_launch_probe.py\" run"))
         self.assertLess(finish.index("client_launch_probe.py\" verify"), finish.index("atomic-double-collect"))
         stage2 = (SCRIPTS / "stage2.sh").read_text(encoding="utf-8")
         self.assertLess(stage2.index("client_launch_probe.py\" verify"), stage2.index("codex_upgrade_policy_certification"))

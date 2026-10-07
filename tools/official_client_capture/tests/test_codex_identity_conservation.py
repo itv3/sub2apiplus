@@ -35,7 +35,13 @@ SHARED_CONTROL_PLANE = "upgrade_control_plane.py"
 REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "tool_identity_policy_v2.json": "B1-07 策略 v8：三个共享新文件登记进 control 层，先于文件本身进入受管树",
     "upgrade_client_adapter.py": "B1-01 客户端适配接口、编排器服务面与注册表；B2-08 新增三个适配器成员（attempt 环境已恢复口径、部署收据五摘要"
-                                 "所在对象、有效 wire 身份），Codex 绑定到原写法或原函数",
+                                 "所在对象、有效 wire 身份），Codex 绑定到原写法或原函数；B2-10 新增 Job 演练的四个适配器成员（画像模块、"
+                                 "执行合同构造、二进制表、合同重放），Codex 绑定到 Job 演练收据模块本身与它的原函数体",
+    "codex_upgrade_job_rehearsal_receipt.py": "B2-10 Job 演练收据模块加适配器参数：13 个编排器引用经服务面，执行合同构造、二进制表与合同"
+                                              "重放经适配器成员，其余客户端差异经画像（Codex 画像就是本模块，各项取值是改造前写死的原值），"
+                                              "四个依赖与容器探针加缺省为原值的参数；facts、收据与合同按合同名认客户端，Claude 签 "
+                                              "official-client-job-rehearsal-*；命令行加 --client（缺省 codex）。本模块没有符号在评估读侧闭包内；"
+                                              "Codex 的合同、facts 校验、收据、重放与报错逐字不变（test_claude_upgrade_job_rehearsal 的 Codex 对照）",
     "codex_upgrade_client_adapter.py": "B1-01 Codex 适配器成员取值（逐字等于改造前写死的名字）；B2-08 新增两个成员函数，取值逐字等于对账器原写法"
                                        "（after 探针加恢复收据、部署收据顶层五摘要）",
     "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同；B3-06 阶段审核后继协议"

@@ -365,7 +365,7 @@ def build_steps(client: str) -> tuple[Step, ...]:
         ), products=(Product("receipt", content="status_passed"),)),
         # 启动探测按指南每次重跑（反映修复后的最新环境）；报告登记进记录，收口前预检按它再核验一次（E2-07）。
         Step("client-launch-probe", "客户端启动探测", "post_ledger", live=True, creation_chain=False, upstream=("preflight-plan",), inputs=(
-            *IDENTITY, *_drivers("client_launch_probe.py", "client_launch_probe_runner.py", "stage1-finish.sh"), *common_driver,
+            *IDENTITY, *_drivers("client_launch_probe.py", spec["launch_probe_runner"], "stage1-finish.sh"), *common_driver,
             *_containers("capture-cli"),
         ), products=(Product("report"),)),
         # 发布认证：导入期经 pre-A3 认证模块读测试夹具，测试目录从宽整体列入；绑定部署收据、pre-A3、激活认证、Job 演练、atomic。
