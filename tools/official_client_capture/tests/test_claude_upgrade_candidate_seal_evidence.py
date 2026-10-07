@@ -22,7 +22,15 @@ B4-01 b 段（候选 attempt.json、环境快照、恢复核验、selector 快�
 * 封存后的证据边界（B4-02 收尾）：批准时在 attempt 根写共享合同的封存证据清单；封存后证据被复制回原路径（只有
   inode／mtime／ctime 漂移）时，封存后的读侧与批准重跑报可恢复的元数据漂移，``harden-evidence-permissions rebind-boundary``
   重绑后读侧、失败定位输入与批准重跑都恢复，没有新漂移时不重绑；同大小的内容改写读侧先见元数据漂移、重绑复算内容即拒绝，
-  大小变化读侧直接判完整性异常；未封存或缺 ``--candidate-id`` 拒绝。
+  大小变化读侧直接判完整性异常；未封存或缺 ``--candidate-id`` 拒绝；
+* 半封存（批准写完封存证据清单、写 Store 之前被打断，期间证据被复制回原路径）：测试替身按真实收口同一判据模拟 run 末收口
+  重放（inode／mtime 变即失败），复现修复前重跑批准卡在收口重放；修复后重跑批准报元数据漂移与重绑命令、一条不写，
+  rebind-boundary 接受半封存，重绑后批准走完；重绑别的 attempt 拒绝；
+* 门禁重试链：第 1 轮门禁未失败时 ``--revalidate`` 拒绝；第 1 轮 v4 收据失败只能经 ``record_failed_gate_round`` 写进 Store
+  （通过的 pass、失败的 failed，幂等；全部通过的收据、subject 不符、同一 attempt 换结果都拒绝且一条不写）；
+  ``--revalidate`` 出第 2 轮（失败门禁重跑并绑最近失败收据、其余复用原收据，复用第 1 轮 selector 前态、换新
+  ValidationAttempt／场景四阶段／证据包，零请求）；读侧取最大轮次；第 2 轮重复调用逐字复用；B4-06a 写入链用补跑收据在第 2 轮
+  走到 ready，之后再重试只复用第 2 轮。
 """
 
 from __future__ import annotations
@@ -37,6 +45,7 @@ from typing import Any
 from unittest import mock
 
 from tools.official_client_capture import claude_rule_assertion
+from tools.official_client_capture import claude_upgrade_accept as accept
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
 from tools.official_client_capture import claude_upgrade_capture as capture_module
@@ -47,10 +56,12 @@ from tools.official_client_capture import claude_upgrade_seal
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
+from tools.official_client_capture import codex_upgrade_gate_receipt as gate_receipt
 from tools.official_client_capture.tests import test_claude_upgrade_accept as accept_tests
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_seal as store_layer_tests
 from tools.official_client_capture.tests import test_claude_upgrade_capture as capture_tests
 from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_tests
+from tools.official_client_control.canonical import canonical_sha256
 from tools.official_client_control.tests.fixtures import SyntheticCampaign
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
@@ -281,6 +292,10 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
             if phase != "candidate":
                 return real_load(campaign_dir, phase, candidate_id, attempt_id, **options)
             root = Path(campaign_dir) / "candidates" / str(candidate_id) / "attempts" / attempt_id
+            if options.get("_replay_evidence_permissions", True):
+                # 模拟 run 末收口重放：收口边界含 inode 与 mtime，证据被复制回原路径即重放失败（与真实收口同一判据）。
+                if self.closeout_boundary(root) != self.closeout_snapshot:
+                    raise codex_upgrade.ConfigurationError("证据权限收口收据未通过：权限收口后的证据元数据边界漂移。")
             return root, json.loads((root / "attempt.json").read_text(encoding="utf-8"))
 
         def campaign_jobs(campaign_dir: Path, manifest: dict[str, Any], phase: str, **options: Any) -> Any:
@@ -448,7 +463,20 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
         reservation["reservation_digest"] = claude_upgrade._fingerprint(dict(reservation))
         _write_json(attempt_root / "reservation.json", reservation)
         (attempt_root / candidate_seal.CLIENT_EVIDENCE_DIRNAME).mkdir(mode=0o700)
+        self.closeout_snapshot = self.closeout_boundary(attempt_root)
         return attempt_root
+
+    def closeout_boundary(self, attempt_root: Path) -> dict[str, tuple[int, int]]:
+        """run 末收口登记的证据根下每个文件的 inode 与 mtime（模拟收口边界）。"""
+
+        attempt = json.loads((attempt_root / "attempt.json").read_text(encoding="utf-8"))
+        boundary: dict[str, tuple[int, int]] = {}
+        for root in attempt["evidence_roots"]:
+            for path in sorted(Path(root).rglob("*")):
+                if path.is_file():
+                    metadata = path.stat()
+                    boundary[str(path)] = (metadata.st_ino, metadata.st_mtime_ns)
+        return boundary
 
     def write_client_evidence(self, attempt_root: Path) -> list[str]:
         """两个 Mac 客户端收据与两条 attempt 级边界核对（最小绑定字段，占位合同）；返回 ``--client-evidence`` 参数。"""
@@ -472,6 +500,42 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
 
     def store_footprint(self) -> tuple[dict[str, int], dict[str, int]]:
         return self.world.store_footprint()
+
+    def seal_candidate(self) -> tuple[Path, list[str], dict[str, Any]]:
+        """预览、批准一次走完；返回 (attempt 根, 客户端收据参数, 批准结果)。"""
+
+        attempt_root = self.write_evidence_and_attempt()
+        client = self.write_client_evidence(attempt_root)
+        code, preview, stderr = self.run_seal(*client)
+        self.assertEqual(code, 2, stderr)
+        assert preview is not None
+        code, sealed, stderr = self.run_seal("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
+        self.assertEqual(code, 0, stderr)
+        assert sealed is not None
+        self.approve_argv = ("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
+        return attempt_root, client, sealed
+
+    def job_root(self, job_id: str) -> Path:
+        return Path(next(job for job in self.candidate_jobs(self.campaign, self.manifest, CANDIDATE) if job.job_id == job_id).evidence_roots[0])
+
+    def read_sealed_attempt(self) -> tuple[Path, dict[str, Any]]:
+        stage = claude_upgrade._load_stage_result(self.campaign, "capture-candidate", CANDIDATE)
+        with self.seal_patched():
+            return claude_upgrade._capture_stage_attempt_context(self.campaign, stage, phase="candidate", candidate_id=CANDIDATE)
+
+    def rebind(self, *extra: str) -> tuple[int, dict | None, str]:
+        argv = ["harden-evidence-permissions", "rebind-boundary", "--campaign-dir", str(self.campaign), "--attempt-id", ATTEMPT, *extra]
+        with self.seal_patched():
+            return seal_tests.run_main(argv)
+
+    def copy_back(self, job_id: str, relative: str) -> None:
+        """封存后把一个证据文件「复制回原路径」：内容不变，inode／mtime／ctime 变化。"""
+
+        target = self.job_root(job_id) / relative
+        content = target.read_bytes()
+        target.unlink()
+        target.write_bytes(content)
+        target.chmod(0o600)
 
 
 # ---------------------------------------------------------------------------
@@ -773,33 +837,6 @@ class CandidateSealChainTests(_CandidateSealCase):
         self.assertEqual(self.store_footprint(), after_store)
         self.assertTrue(stage_path.is_file())
 
-    def seal_candidate(self) -> tuple[Path, list[str], dict[str, Any]]:
-        """预览、批准一次走完；返回 (attempt 根, 客户端收据参数, 批准结果)。"""
-
-        attempt_root = self.write_evidence_and_attempt()
-        client = self.write_client_evidence(attempt_root)
-        code, preview, stderr = self.run_seal(*client)
-        self.assertEqual(code, 2, stderr)
-        assert preview is not None
-        code, sealed, stderr = self.run_seal("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
-        self.assertEqual(code, 0, stderr)
-        assert sealed is not None
-        self.approve_argv = ("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
-        return attempt_root, client, sealed
-
-    def job_root(self, job_id: str) -> Path:
-        return Path(next(job for job in self.candidate_jobs(self.campaign, self.manifest, CANDIDATE) if job.job_id == job_id).evidence_roots[0])
-
-    def read_sealed_attempt(self) -> tuple[Path, dict[str, Any]]:
-        stage = claude_upgrade._load_stage_result(self.campaign, "capture-candidate", CANDIDATE)
-        with self.seal_patched():
-            return claude_upgrade._capture_stage_attempt_context(self.campaign, stage, phase="candidate", candidate_id=CANDIDATE)
-
-    def rebind(self, *extra: str) -> tuple[int, dict | None, str]:
-        argv = ["harden-evidence-permissions", "rebind-boundary", "--campaign-dir", str(self.campaign), "--attempt-id", ATTEMPT, *extra]
-        with self.seal_patched():
-            return seal_tests.run_main(argv)
-
     def test_metadata_drift_after_seal_is_rebound_and_readers_recover(self) -> None:
         self.seal_candidate()
         self.read_sealed_attempt()
@@ -872,6 +909,48 @@ class CandidateSealChainTests(_CandidateSealCase):
                 self.assertEqual(code, 1)
                 self.assertIn(message, stderr)
 
+    def test_half_sealed_interruption_with_metadata_drift_is_rebound_and_approval_finishes(self) -> None:
+        attempt_root = self.write_evidence_and_attempt()
+        client = self.write_client_evidence(attempt_root)
+        code, preview, stderr = self.run_seal(*client)
+        self.assertEqual(code, 2, stderr)
+        assert preview is not None
+        approve = ("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
+        before = self.store_footprint()
+        # 批准写完封存证据清单、写 Store 之前被打断：半封存（清单在、阶段结果与 Store 写入都没有）。
+        with mock.patch.object(candidate_seal, "record_candidate_seal_chain", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_seal(*approve)
+        self.assertTrue((attempt_root / candidate_seal.SEALED_EVIDENCE_MANIFEST_FILENAME).is_file())
+        self.assertFalse((self.campaign / "candidates" / CANDIDATE / "result.json").exists())
+        self.assertEqual(self.store_footprint(), before)
+        # 期间证据被复制回原路径：run 末收口重放从此过不去（修复前重跑批准就卡在这里）。
+        self.copy_back("candidate-transport-baseline", f"v4-native-tls-baseline/{evidence.RELAY_MANIFEST_FILENAME}")
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "证据权限收口收据未通过"):
+            claude_upgrade._load_capture_attempt(self.campaign, "candidate", CANDIDATE, ATTEMPT)
+        # 重跑批准改按封存证据清单加重绑链核对：报可恢复的元数据漂移并给出重绑命令，一条不写。
+        code, _result, stderr = self.run_seal(*approve)
+        self.assertEqual(code, 1)
+        self.assertIn(f"rebind-boundary --attempt-id {ATTEMPT} --candidate-id {CANDIDATE}", stderr)
+        self.assertNotIn("证据权限收口收据未通过", stderr)
+        self.assertEqual(self.store_footprint(), before)
+        # 重绑接受半封存状态；之后重跑批准走完（Store 到 candidate_sealed、阶段结果写出），封存后读侧通过。
+        code, record, stderr = self.rebind("--candidate-id", CANDIDATE)
+        self.assertEqual(code, 0, stderr)
+        assert record is not None
+        self.assertEqual((record["status"], record["drifted_entry_count"]), ("rebound", 1))
+        code, sealed, stderr = self.run_seal(*approve)
+        self.assertEqual(code, 0, stderr)
+        assert sealed is not None
+        self.assertEqual((sealed["reused"], sealed["store"]["checkpoint"]), (False, "candidate_sealed"))
+        self.read_sealed_attempt()
+
+    def test_half_sealed_rebind_refuses_another_sealed_attempt(self) -> None:
+        self.seal_candidate()
+        code, _record, stderr = self.rebind("--candidate-id", CANDIDATE, "--attempt-id", "other-attempt")
+        self.assertEqual(code, 1)
+        self.assertIn(f"封存的是 attempt {ATTEMPT}", stderr)
+
     def test_client_evidence_must_be_registered_and_inside_the_attempt_directory(self) -> None:
         attempt_root = self.write_evidence_and_attempt()
         self.write_client_evidence(attempt_root)
@@ -905,3 +984,206 @@ class CandidateSealChainTests(_CandidateSealCase):
         self.assertEqual(code, 1)
         self.assertIn("闭合门禁 blocked", stderr)
 
+
+
+# ---------------------------------------------------------------------------
+# 门禁重试链：第 1 轮外部门禁失败 → 写失败轮次 → --revalidate 出第 2 轮 → B4-06a 写入链在第 2 轮到 ready
+# ---------------------------------------------------------------------------
+
+FAILED_GATE = "check-egress-spec"
+
+
+def _write_private_json(gate_root: Path, path: Path, payload: Any) -> Path:
+    """门禁收据根要求的私有文件：文件 0600，根以下的目录 0700（只动门禁收据根内）。"""
+
+    _write_json(path, payload)
+    path.chmod(0o600)
+    for parent in path.relative_to(gate_root).parents:
+        (gate_root / parent).chmod(0o700)
+    return path
+ROOT_CAUSE = "candidate-gate-check-egress-spec"
+
+
+def write_gate_receipt(
+    gate_root: Path,
+    name: str,
+    subject: dict[str, Any],
+    *,
+    failed: frozenset[str],
+    hour: int,
+    previous: str | None = None,
+) -> str:
+    """用 codex_upgrade_gate_receipt 原样生成候选外部门禁 v4 收据：``failed`` 里的门禁失败；``previous`` 给出时是补跑收据
+    （只执行前序失败项、其余携带），返回证据根内的相对路径。"""
+
+    stem = Path(name).stem
+    gate_ids = sorted(gate_receipt.CANDIDATE_COMMANDS)
+    if previous is not None:
+        gate_ids = list(json.loads((gate_root / previous).read_text(encoding="utf-8"))["failed_gate_ids"])
+    gates: list[dict[str, Any]] = []
+    for index, gate_id in enumerate(gate_ids):
+        working_directory, command = gate_receipt.CANDIDATE_COMMANDS[gate_id]
+        passed = gate_id not in failed
+        evidence_path = _write_private_json(gate_root, gate_root / "evidence" / f"{stem}-{gate_id}.json", {"gate_id": gate_id, "passed": passed})
+        gates.append(
+            {
+                "gate_id": gate_id, "command": list(command), "working_directory": working_directory, "host": accept_tests.HOST,
+                "architecture": accept_tests.ARCHITECTURE, "started_at_utc": f"2026-10-07T{hour:02d}:{index:02d}:00Z",
+                "completed_at_utc": f"2026-10-07T{hour:02d}:{index:02d}:30Z", "exit_code": 0 if passed else 1,
+                "status": "passed" if passed else "failed", "passed_count": 1 if passed else 0, "failed_count": 0 if passed else 1,
+                "skipped_count": 0, "stdout_sha256": "6" * 64, "stderr_sha256": "7" * 64,
+                "evidence": [{"path": evidence_path.relative_to(gate_root).as_posix(), "sha256": codex_upgrade.file_sha256(evidence_path)}],
+            }
+        )
+    attempt_id = f"gate-{stem}"
+    environment = {}
+    for role in ("before", "after"):
+        path = _write_private_json(gate_root, gate_root / "environment" / f"{attempt_id}-{role}.json", {"attempt_id": attempt_id, "role": role})
+        environment[role] = {"path": path.relative_to(gate_root).as_posix(), "sha256": codex_upgrade.file_sha256(path)}
+    previous_binding = None
+    if previous is not None:
+        previous_binding = {"path": previous, "sha256": codex_upgrade.file_sha256(gate_root / previous)}
+    facts = {
+        "schema_version": gate_receipt.FACTS_SCHEMA, "phase": gate_receipt.CANDIDATE_PHASE,
+        "attempt": {"attempt_id": attempt_id, "root_cause_id": ROOT_CAUSE, "previous_receipt": previous_binding},
+        "subject": subject, "inputs": [], "gate_plan": None, "environment": environment, "gates": gates,
+    }
+    _write_private_json(gate_root, gate_root / f"{stem}-facts.json", facts)
+    gate_receipt.finalize(gate_root, f"{stem}-facts.json", name)
+    return name
+
+
+class CandidateRevalidateTests(_CandidateSealCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # 环境收据替身（与 B4-06a 验收测试、Codex 门禁收据测试同一做法）：前后两份都按 attempt 身份通过、连续性摘要相同。
+        environment = gate_receipt.codex_upgrade_arm64_environment_receipt
+        for name, side_effect in (
+            ("replay", accept_tests._AcceptCase._replay_environment),
+            ("receipts_equivalent", lambda left_root, left, right_root, right: left["continuity_identity_sha256"] == right["continuity_identity_sha256"]),
+        ):
+            patcher = mock.patch.object(environment, name, side_effect=side_effect)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.gate_root = self.root / "gate-evidence"
+        self.gate_root.mkdir(mode=0o700)
+        subject = accept.expected_gate_subject(self.manifest, self.world.candidate_payload, accept_tests.IDENTITY)
+        self.subject = {**subject, "production_tree_sha256": None, "acceptance_sha256": None, "promotion_receipt_sha256": None}
+
+    def external_gate(self, receipt: str) -> dict[str, Any]:
+        return {"evidence_root": str(self.gate_root), "receipt_path": receipt, "identity": dict(accept_tests.IDENTITY)}
+
+    def revalidate(self) -> tuple[int, dict | None, str]:
+        return self.run_seal("--revalidate")
+
+    def gate_receipts(self, attempt_ref: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        store = self.world.store
+        receipts = [store.load_receipt(reference) for reference in store.list_receipt_refs("validation_gate")]
+        return {item["gate_id"]: item for item in receipts if item["validation_attempt_ref"] == attempt_ref}
+
+    def test_failed_round_revalidates_to_round_two_and_accept_reaches_ready(self) -> None:
+        _attempt_root, _client, sealed = self.seal_candidate()
+        round_one = sealed["store"]
+        # 第 1 轮还没有失败门禁：门禁重试拒绝。
+        code, _result, stderr = self.revalidate()
+        self.assertEqual(code, 1)
+        self.assertIn("还没有全部定稿或没有失败门禁", stderr)
+        # 第 1 轮外部门禁失败：v4 收据只能经 record_failed_gate_round 写进 Store（通过的记 pass、失败的记 failed），
+        # 全部通过的写入链拒绝它。
+        failed_receipt = write_gate_receipt(self.gate_root, "round-1-receipt.json", self.subject, failed=frozenset({FAILED_GATE}), hour=1)
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不是全部通过"):
+            accept.candidate_external_gate_binding(evidence_root=self.gate_root, receipt_path=Path(failed_receipt), expected_subject=accept.expected_gate_subject(self.manifest, self.world.candidate_payload, accept_tests.IDENTITY))
+        before = self.store_footprint()
+        request = {"candidate_id": CANDIDATE, "validation_attempt_ref": round_one["validation_attempt_ref"], "external_gate": self.external_gate(failed_receipt)}
+        recorded = accept.record_failed_gate_round(self.campaign, self.manifest, request)
+        self.assertEqual((recorded["status"], recorded["failed_gate_ids"]), ("failed", [FAILED_GATE]))
+        self.assertEqual({item["gate_id"]: item["result"] for item in recorded["gate_receipts"]}, {gate: ("failed" if gate == FAILED_GATE else "pass") for gate in gate_receipt.CANDIDATE_COMMANDS})
+        facts_after_failure = self.store_footprint()
+        self.assertEqual(facts_after_failure[0], before[0])
+        # 失败轮次写入幂等：同一收据重写逐条复用。
+        again = accept.record_failed_gate_round(self.campaign, self.manifest, request)
+        self.assertTrue(all(item["reused"] for item in again["gate_receipts"]))
+        round_one_gates = self.gate_receipts(round_one["validation_attempt_ref"])
+        # 门禁重试：第 2 轮的执行计划——已通过的门禁复用原收据，失败的重跑并绑定最近一份失败收据；零请求、不重扫。
+        code, revalidated, stderr = self.revalidate()
+        self.assertEqual(code, 0, stderr)
+        assert revalidated is not None
+        self.assertEqual((revalidated["validation_round"], revalidated["reused"], revalidated["live_request_count"]), (2, False, 0))
+        self.assertEqual(revalidated["store"]["validation_attempt_id"], f"{ATTEMPT}-v2")
+        refs = {item["gate_id"]: ref for item in recorded["gate_receipts"] for ref in [item["receipt_ref"]]}
+        gates = {item["gate_id"]: item for item in revalidated["store"]["external_gates"]}
+        self.assertEqual(gates[FAILED_GATE]["source"], "execute")
+        self.assertEqual(gates[FAILED_GATE]["previous_failed_receipt_ref"], refs[FAILED_GATE])
+        for gate_id in set(gates) - {FAILED_GATE}:
+            self.assertEqual((gates[gate_id]["source"], gates[gate_id]["reused_receipt_ref"]), ("reuse", refs[gate_id]))
+        self.assertEqual(round_one_gates[FAILED_GATE]["result"], "failed")
+        plan = self.world.store.load_object(revalidated["store"]["validation_execution_plan_ref"])["payload"]
+        self.assertEqual(plan["reuse_item_ids"], sorted(set(gates) - {FAILED_GATE}))
+        self.assertIn(FAILED_GATE, plan["execute_item_ids"])
+        # 复用第 1 轮 selector 前态；换新 ValidationAttempt、场景四阶段与证据包。
+        self.assertEqual(revalidated["store"]["selector_before_ref"], round_one["selector_before_ref"])
+        self.assertNotEqual(revalidated["store"]["candidate_evidence_package_ref"], round_one["candidate_evidence_package_ref"])
+        # 读侧取最大轮次：第 2 轮结果承接第 1 轮、绑定同一 attempt 与同一份评估用 manifest。
+        stage = claude_upgrade._load_stage_result(self.campaign, "capture-candidate", CANDIDATE)
+        self.assertEqual((stage["validation_round"], stage["store"]["validation_attempt_id"]), (2, f"{ATTEMPT}-v2"))
+        self.assertTrue((self.campaign / "candidates" / CANDIDATE / "validation-rounds" / "v2" / "result.json").is_file())
+        round_one_doc = json.loads((self.campaign / "candidates" / CANDIDATE / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(stage[candidate_seal.ASSERTION_CONTEXT_FIELD], round_one_doc[candidate_seal.ASSERTION_CONTEXT_FIELD])
+        self.read_sealed_attempt()
+        # 第 2 轮重复调用：Store 写入与结果逐字复用。
+        footprint = self.store_footprint()
+        result_bytes = (self.campaign / "candidates" / CANDIDATE / "validation-rounds" / "v2" / "result.json").read_bytes()
+        code, repeated, stderr = self.revalidate()
+        self.assertEqual(code, 0, stderr)
+        assert repeated is not None
+        self.assertEqual((repeated["validation_round"], repeated["reused"]), (2, True))
+        self.assertEqual(self.store_footprint(), footprint)
+        self.assertEqual((self.campaign / "candidates" / CANDIDATE / "validation-rounds" / "v2" / "result.json").read_bytes(), result_bytes)
+        # B4-06a 写入链在第 2 轮：补跑收据只执行前序失败项、携带其余；门禁定稿复用第 1 轮通过的收据，Store 到 ready。
+        retry_receipt = write_gate_receipt(self.gate_root, "round-2-receipt.json", self.subject, failed=frozenset(), hour=2, previous=failed_receipt)
+        row = dict(self.world.rows()[0], scenario_approval_refs=[sorted(stage["store"]["scenario_approval_refs"].values(), key=canonical_sha256)[0]])
+        accepted = accept.record_acceptance_chain(
+            self.campaign,
+            self.manifest,
+            {
+                "candidate_id": CANDIDATE,
+                "validation_attempt_ref": stage["store"]["validation_attempt_ref"],
+                "candidate_evidence_package_ref": stage["store"]["candidate_evidence_package_ref"],
+                "pair_rows": [row],
+                "external_gate": self.external_gate(retry_receipt),
+                "inventory_assertion_refs": [self.world.refs["operational-evidence"]],
+                "selector_after_snapshot_ref": self.world.refs["runtime-before"],
+                "issued_at_utc": "2026-10-07T03:00:00Z",
+            },
+        )
+        self.assertEqual(sorted(record["gate_id"] for record in accepted["gate_receipts"]), sorted(gate_receipt.CANDIDATE_COMMANDS))
+        self.assertEqual(self.world.status()["checkpoint"], "ready")
+        # 第 2 轮门禁已全部通过：再门禁重试只会复用第 2 轮（不会开第 3 轮）。
+        code, final, stderr = self.revalidate()
+        self.assertEqual(code, 0, stderr)
+        assert final is not None
+        self.assertEqual((final["validation_round"], final["reused"]), (2, True))
+
+    def test_failed_round_rejects_passed_receipts_and_writes_nothing_on_conflict(self) -> None:
+        _attempt_root, _client, sealed = self.seal_candidate()
+        attempt_ref = sealed["store"]["validation_attempt_ref"]
+        passed = write_gate_receipt(self.gate_root, "all-passed.json", self.subject, failed=frozenset(), hour=1)
+        before = self.store_footprint()
+        receipts_before = len(self.world.store.list_receipt_refs("validation_gate"))
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "全部通过的收据走 record_acceptance_chain"):
+            accept.record_failed_gate_round(self.campaign, self.manifest, {"candidate_id": CANDIDATE, "validation_attempt_ref": attempt_ref, "external_gate": self.external_gate(passed)})
+        wrong = dict(accept_tests.IDENTITY, profile_digest="9" * 64)
+        failed = write_gate_receipt(self.gate_root, "round-1-receipt.json", self.subject, failed=frozenset({FAILED_GATE}), hour=1)
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "subject 与 Campaign／候选身份不一致"):
+            accept.record_failed_gate_round(
+                self.campaign, self.manifest,
+                {"candidate_id": CANDIDATE, "validation_attempt_ref": attempt_ref, "external_gate": dict(self.external_gate(failed), identity=wrong)},
+            )
+        self.assertEqual((self.store_footprint(), len(self.world.store.list_receipt_refs("validation_gate"))), (before, receipts_before))
+        accept.record_failed_gate_round(self.campaign, self.manifest, {"candidate_id": CANDIDATE, "validation_attempt_ref": attempt_ref, "external_gate": self.external_gate(failed)})
+        # 同一 attempt 换一份结果不同的失败收据：门禁收据不得覆盖，一条不写。
+        other = write_gate_receipt(self.gate_root, "round-1-other.json", self.subject, failed=frozenset({FAILED_GATE, "full-regression"}), hour=4)
+        count = len(self.world.store.list_receipt_refs("validation_gate"))
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已有不同结果"):
+            accept.record_failed_gate_round(self.campaign, self.manifest, {"candidate_id": CANDIDATE, "validation_attempt_ref": attempt_ref, "external_gate": self.external_gate(other)})
+        self.assertEqual(len(self.world.store.list_receipt_refs("validation_gate")), count)

@@ -38,6 +38,12 @@ selector 后态 → ``validation-finalize``。
   与执行计划；门禁收据历史（新 attempt 不得重跑已通过门禁、重试必须绑定最近一份失败收据，与 Store 定稿同一规则）；规则行
   合同与覆盖；selector 前后态的 Active／Rollback／Catalog 不变；inventory 断言对象存在。任一不符即拒绝、一条不写。
 
+三、外部门禁失败轮次（B4-02 门禁重试链的前提）
+==============================================
+``record_failed_gate_round``：某一轮 v4 收据未通过时，只把这一轮的门禁结果定稿进 Store（通过的记 pass、失败的记 failed，
+都绑当前 ValidationAttempt），不写 PAIR、AcceptanceFact 与 selector 后态；预检、幂等与门禁历史规则同第二节。下一轮由候选
+seal 的 ``--revalidate`` 从 Store 门禁收据历史组出；B4-06b 的 accept 读侧遇到失败收据直接调它。
+
 调用方必须持有 Campaign 锁（写入链本身不加锁，避免与 accept 读侧根的锁嵌套）。
 
 本文件在 Claude 身份策略里按 ``claude_upgrade_`` 前缀归 control 层；Codex 身份策略忽略它（``claude_`` 前缀）。
@@ -835,4 +841,154 @@ def record_acceptance_chain(campaign_dir: Path, manifest: Mapping[str, Any], req
         "acceptance": acceptance_record,
         "selector_after": selector_record,
         "validation_completed": completed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 三、外部门禁失败轮次（B4-02 门禁重试链的前提）
+# ---------------------------------------------------------------------------
+#
+# ``record_acceptance_chain`` 只接受全部通过的 v4 收据。某一轮外部门禁未通过时，由 ``record_failed_gate_round`` 把这一轮的门禁
+# 结果写进 Store：通过的记 pass、失败的记 failed，都定稿到当前 ValidationAttempt，不写 PAIR、AcceptanceFact 与 selector 后态。
+# 之后 ``capture-candidate seal --revalidate``（``claude_upgrade_candidate_seal``）从 Store 门禁收据历史组出下一轮执行计划（已
+# 通过的门禁复用原收据、失败的重跑并绑定最近一份失败收据）；B4-06b 的 accept 读侧遇到失败收据也直接调这里。
+#
+# 规则与 ``record_acceptance_chain`` 的门禁部分相同：收据独立重放并逐字段核 subject；有效门禁与执行计划逐项核对
+# （``gate_result_inputs``）；同一 attempt 同一门禁已有收据时逐字段相同即复用、不同失败关闭；新定稿门禁先按 Store 同一判据核
+# 门禁历史。全部在任何写入之前完成（零写入预检），调用方持有 Campaign 锁。
+
+FAILED_GATE_ROUND_REQUEST_FIELDS = frozenset({"candidate_id", "validation_attempt_ref", "external_gate"})
+
+
+def failed_candidate_external_gate_binding(
+    *,
+    evidence_root: Path,
+    receipt_path: Path,
+    expected_subject: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """独立重放一份未通过的候选外部门禁收据（候选阶段、``failed``、至少一条失败门禁），subject 逐字段核对；返回 ``(绑定, 收据)``。"""
+
+    if set(expected_subject) != set(EXTERNAL_GATE_SUBJECT_FIELDS):
+        raise ConfigurationError("外部门禁 subject 期望值的字段不闭合。")
+    try:
+        root = Path(evidence_root).resolve(strict=True)
+        receipt = Path(receipt_path)
+        resolved = (receipt if receipt.is_absolute() else root / receipt).resolve(strict=True)
+        relative = resolved.relative_to(root).as_posix()
+        payload = gate_receipt.replay(root, relative)
+    except (OSError, RuntimeError, ValueError, gate_receipt.GateReceiptError) as error:
+        raise ConfigurationError(f"候选外部门禁收据无法重放：{error}") from error
+    subject = payload.get("subject")
+    failed = payload.get("failed_gate_ids")
+    if (
+        payload.get("phase") != gate_receipt.CANDIDATE_PHASE
+        or payload.get("status") != "failed"
+        or not isinstance(failed, list)
+        or not failed
+        or not isinstance(subject, Mapping)
+    ):
+        raise ConfigurationError("候选外部门禁收据不是有失败门禁的候选阶段收据（全部通过的收据走 record_acceptance_chain）。")
+    drift = [field for field in EXTERNAL_GATE_SUBJECT_FIELDS if subject.get(field) != expected_subject[field]]
+    if drift:
+        raise ConfigurationError(f"候选外部门禁收据的 subject 与 Campaign／候选身份不一致（{'、'.join(drift)}）。")
+    binding = {
+        "evidence_root": str(root),
+        "receipt": {"path": relative, "sha256": file_sha256(resolved), "bytes": resolved.stat().st_size},
+    }
+    return binding, payload
+
+
+def _failed_round_context(store: Any, campaign: Mapping[str, Any], manifest: Mapping[str, Any], request: Mapping[str, Any]) -> dict[str, Any]:
+    """候选（当前 revision）、ValidationAttempt 与执行计划的身份闭合（零写入）；失败轮次不涉及证据包与画像批准。"""
+
+    candidate_id = str(request["candidate_id"])
+    revision, revision_candidate = claude_upgrade_baseline._store_revision(store, campaign)
+    if revision_candidate is not None and revision_candidate != candidate_id:
+        raise ConfigurationError(f"Store 当前候选 revision r{revision} 的候选是 {revision_candidate}，不是 {candidate_id}。")
+    candidate = claude_upgrade_baseline._store_candidate_fact(store, campaign, candidate_id, revision)
+    if candidate is None:
+        raise ConfigurationError(f"Store 没有候选 {candidate_id} 在 r{revision} 的冻结事实。")
+    candidate_payload = dict(candidate["payload"])
+    if candidate_payload.get("schema_version") is None:
+        raise ConfigurationError("VC-5 外部门禁只适用于严格 v2 Candidate。")
+    candidate_ref = dict(store.fact_ref(candidate))
+    if manifest.get("campaign_purpose") != candidate_payload.get("candidate_purpose"):
+        raise ConfigurationError(f"Campaign 用途 {manifest.get('campaign_purpose')} 与候选用途 {candidate_payload.get('candidate_purpose')} 不一致。")
+    attempt_ref = dict(request["validation_attempt_ref"])
+    attempt = _load_fact(store, attempt_ref, "validation_attempt_created", "ValidationAttempt ")
+    if attempt["campaign_id"] != campaign["campaign_id"] or attempt["payload"]["candidate_ref"] != candidate_ref:
+        raise ConfigurationError("ValidationAttempt 不属于本 Campaign 的当前候选。")
+    plan = _load_object(store, attempt["payload"]["validation_execution_plan_ref"], "validation_execution_plan", "执行计划")
+    return {
+        "candidate_id": candidate_id,
+        "candidate_ref": candidate_ref,
+        "candidate_payload": candidate_payload,
+        "attempt_ref": attempt_ref,
+        "attempt_payload": dict(attempt["payload"]),
+        "plan": plan,
+    }
+
+
+def record_failed_gate_round(campaign_dir: Path, manifest: Mapping[str, Any], request: Mapping[str, Any]) -> dict[str, Any]:
+    """一轮未通过的候选外部门禁写进 Store（见本节说明）：零写入预检 → 每条门禁 ``validation-gate-finalize``（已有同结果收据
+    即复用）。请求字段：``candidate_id``、``validation_attempt_ref``、``external_gate``（``evidence_root``、``receipt_path``、
+    ``identity``，与 ``record_acceptance_chain`` 同形）。返回门禁收据引用与本轮失败门禁；调用方持有 Campaign 锁。"""
+
+    if not isinstance(request, Mapping) or set(request) != FAILED_GATE_ROUND_REQUEST_FIELDS:
+        raise ConfigurationError(f"失败门禁轮次请求的字段必须恰好是 {'、'.join(sorted(FAILED_GATE_ROUND_REQUEST_FIELDS))}。")
+    external = request["external_gate"]
+    if not isinstance(external, Mapping) or set(external) != EXTERNAL_GATE_REQUEST_FIELDS:
+        raise ConfigurationError(f"外部门禁请求的字段必须恰好是 {'、'.join(sorted(EXTERNAL_GATE_REQUEST_FIELDS))}。")
+    campaign_dir = Path(campaign_dir)
+    store, campaign = claude_upgrade_store.open_campaign_store(campaign_dir, manifest)
+    claude_upgrade_seal._require_store_tool_current(store, campaign)
+
+    # 零写入预检。
+    context = _failed_round_context(store, campaign, manifest, request)
+    subject = expected_gate_subject(manifest, context["candidate_payload"], external["identity"])
+    gate_binding, gate_payload = failed_candidate_external_gate_binding(
+        evidence_root=Path(external["evidence_root"]), receipt_path=Path(external["receipt_path"]), expected_subject=subject
+    )
+    gate_inputs = gate_result_inputs(gate_payload, context["plan"]["external_gates"])
+    campaign_id = str(campaign["campaign_id"])
+    existing = _existing_gate_receipts(store, context["attempt_ref"])
+    planned_by_id = {str(item["gate_id"]): item for item in context["plan"]["external_gates"]}
+    actions: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    for item in gate_inputs:
+        gate_id = str(item["gate_id"])
+        current = existing.get(gate_id)
+        if current is not None:
+            reference, receipt = current
+            drift = [key for key in GATE_RESULT_FIELDS[1:] if receipt[key] != item[key]]
+            if drift:
+                raise ConfigurationError(
+                    f"ValidationAttempt 的外部门禁 {gate_id} 已有不同结果（{'、'.join(drift)}）：门禁收据不得覆盖，门禁重跑须新建 ValidationAttempt。"
+                )
+            actions.append((dict(item), reference))
+            continue
+        try:
+            store_receipts.build_validation_gate_receipt(store, campaign_id, dict(context["attempt_ref"]), dict(item))
+        except ControlError as error:
+            raise ConfigurationError(f"外部门禁 {gate_id} 不能定稿：{error}") from error
+        _require_gate_history(store, campaign_id, context, planned_by_id[gate_id])
+        actions.append((dict(item), None))
+    extra = sorted(set(existing) - {str(item["gate_id"]) for item in gate_inputs})
+    if extra:
+        raise ConfigurationError(f"ValidationAttempt 已有执行计划之外的门禁收据：{'、'.join(extra)}。")
+
+    session = _AcceptStoreSession(Path(store.root), campaign_id, campaign_dir / STORE_SCRATCH_RELATIVE)
+    records: list[dict[str, Any]] = []
+    for item, reference in actions:
+        if reference is None:
+            records.append({"gate_id": item["gate_id"], "result": item["result"], "receipt_ref": session.finalize_gate(context["attempt_ref"], item), "reused": False})
+        else:
+            records.append({"gate_id": item["gate_id"], "result": item["result"], "receipt_ref": reference, "reused": True})
+    return {
+        "candidate_id": context["candidate_id"],
+        "validation_attempt_ref": dict(context["attempt_ref"]),
+        "validation_attempt_id": context["attempt_payload"]["attempt_id"],
+        "external_gate": gate_binding,
+        "status": "failed",
+        "failed_gate_ids": sorted(record["gate_id"] for record in records if record["result"] == "failed"),
+        "gate_receipts": records,
     }

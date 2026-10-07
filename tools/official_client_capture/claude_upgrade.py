@@ -3949,12 +3949,20 @@ def _campaign_contamination_facts(
         if attempt_path.exists() or attempt_path.is_symlink():
             if attempt_path.is_symlink() or not attempt_path.is_file():
                 raise ConfigurationError("抓包 attempt 收据路径不可信。")
+            replay = True
+            if phase != "official":
+                from tools.official_client_capture import claude_upgrade_candidate_seal
+
+                # 已封存或半封存的候选 attempt：封存后的证据边界归封存证据清单加重绑链（候选 seal 第六节），这里只读 attempt
+                # 状态，不重放 run 末收口（否则封存后的元数据漂移会让每条命令都卡在污染扫描、重绑也解不开）。
+                replay = not claude_upgrade_candidate_seal.has_sealed_evidence_manifest(attempt_root)
             _, attempt = _load_capture_attempt(
                 campaign_dir,
                 phase,
                 current_candidate_id,
                 attempt_root.name,
                 _verified_campaign_manifest=_manifest,
+                _replay_evidence_permissions=replay,
             )
             if attempt.get("status") == "environment_contaminated":
                 facts.append(

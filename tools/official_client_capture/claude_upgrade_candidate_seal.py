@@ -1,9 +1,11 @@
 """Claude 候选证据封存（Claude 升级控制面设计 B4-02）：``capture-candidate seal`` 的预览、批准与 Store 写入层。
 
-两层：第一至第三节是 Store 写入层（B4-02 第一步，不依赖证据格式，用 Store 夹具验收）；第四、五节是证据侧（B4-02
-第二步，按 B4-01a 的候选清单合同）——预览（客户端检查点、候选证据视图与草稿、唯一一次深度扫描、评估用 manifest）、
-批准（把证据侧算好的结果组装成第一节的请求，写 Store 后写候选阶段结果）与候选阶段结果的读侧。证据语义经编排器的
-evidence 根在 ``claude_upgrade_evidence`` 的候选一节。run 不碰 Store：VC-5 入口的三类 Store 事实都在批准时一次写完。
+两层：第一至第三节是 Store 写入层（B4-02 第一步，不依赖证据格式，用 Store 夹具验收；第三节的门禁重试轮次随收尾放开）；
+第四、五节是证据侧（B4-02 第二步，按 B4-01a 的候选清单合同）——预览（客户端检查点、候选证据视图与草稿、唯一一次深度
+扫描、评估用 manifest）、批准（把证据侧算好的结果组装成第一节的请求，写 Store 后写候选阶段结果）与候选阶段结果的读侧
+（各轮取最大轮次）；第六节是封存后的证据边界与元数据漂移重绑（含批准被打断的半封存），第七节是门禁重试链
+（``--revalidate``）。证据语义经编排器的 evidence 根在 ``claude_upgrade_evidence`` 的候选一节。run 不碰 Store：VC-5 入口的
+三类 Store 事实都在批准时一次写完。
 
 一、写入链（``record_candidate_seal_chain``，顺序固定、每步幂等）
 ==================================================================
@@ -38,20 +40,21 @@ revision 且未作废、严格 v2 候选、Campaign 用途与候选一致、请�
 * 返回值给出 ``scenario_approval_refs``（场景 → 批准引用）：B4-06b 填每条规则 PAIR 的场景批准时直接取 ScenarioPlan 里
   spec_ids 含该规则的场景，不必重算。
 
-三、为门禁重试留的余地（这一层现在只接受第 1 轮）
-================================================
+三、门禁重试链（第 N 轮，N≥2）
+==============================
 Store 规定外部门禁失败后不能在原 attempt 重跑，必须新建 ValidationAttempt；Acceptance 又要求证据包与场景批准链绑定同一个
-attempt。所以将来门禁失败时，要用同一份原始证据零请求地重新封存到新 attempt 上：
+attempt。所以门禁失败后，用同一份原始证据零请求地重新封存到新 attempt 上：
 
-* 请求带 ``validation_round``（第 1 轮＝首次封存；第 N 轮＝第 N-1 次门禁失败后的重新封存），ValidationAttempt ID 是
+* 请求带 ``validation_round``（第 1 轮＝首次封存；第 N 轮＝第 N-1 轮门禁失败后的重新封存），ValidationAttempt ID 是
   ``<候选采集 attempt>-v<N>``，逻辑动作都带这个 ID，所以每一轮的计划、attempt、场景四阶段与证据包都是新的事实与对象；
 * 复用不换新的：候选采集 attempt、原始证据、各场景证据清单与封存清单、审核清单、四份运行证据（清单 ID 只带采集 attempt，
-  内容相同即同一对象）、selector 前态事实（第 1 轮写下，后续轮次沿用同一引用）；
-* 换新的：ValidationExecutionPlan（外部门禁按 Store 门禁收据历史生成：已通过的记 ``reuse``＋``reused_receipt_refs``，失败的
-  记 ``execute``＋``previous_failed_receipt_refs``，仍经 ``candidate_external_gate_plan_entries``）、``validation_attempt_created``、
-  场景四阶段、CandidateEvidencePackage；
-* 入口将是 ``capture-candidate seal --attempt-id <采集 attempt> --revalidate``（零请求、不重新扫描，读第 1 轮的封存与 Store
-  门禁收据历史组装请求）。本层收到 ``validation_round > 1`` 时报待实现。
+  内容相同即同一对象）、selector 前态事实（第 1 轮写下，逻辑动作只带采集 attempt，后续轮次按幂等键复用同一引用）；
+* 换新的：ValidationExecutionPlan、``validation_attempt_created``、场景四阶段、CandidateEvidencePackage。外部门禁由本层从
+  Store 门禁收据历史推出（``_gate_history``）：已通过的记 ``reuse``＋原收据，失败的记 ``execute``＋最近一份失败收据，仍经
+  ``candidate_external_gate_plan_entries``；前提是上一轮的门禁已全部定稿且至少一条失败（失败轮次由
+  ``claude_upgrade_accept.record_failed_gate_round`` 写入）；
+* 入口 ``capture-candidate seal --attempt-id <采集 attempt> --revalidate``（第七节）：零请求、不重新扫描，读第 1 轮的封存产物
+  组装请求，第 N 轮结果写 ``candidates/<cid>/validation-rounds/v<N>/result.json``，候选阶段结果的读侧返回最大轮次。
 
 本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层。
 """
@@ -61,6 +64,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -104,7 +108,6 @@ OPERATIONAL_EVIDENCE_SCHEMA = "official-client-operational-evidence/v1"
 PRODUCTION_STATE = {"ownership": "operator_managed", "verification": "unverified", "action": "not_touched"}
 SELECTOR_OBSERVATION_KIND = "read_only"
 FIRST_ROUND = 1
-REVALIDATE_WORK_ITEM = "B4-02 门禁重试链（外部门禁失败后零请求重新封存到新 ValidationAttempt）"
 REQUEST_FIELDS = frozenset(
     {
         "candidate_id",
@@ -213,8 +216,6 @@ def normalize_request(request: Any) -> dict[str, Any]:
     validation_round = request["validation_round"]
     if isinstance(validation_round, bool) or not isinstance(validation_round, int) or validation_round < 1:
         raise ConfigurationError("validation_round 必须是正整数。")
-    if validation_round != FIRST_ROUND:
-        raise _orchestrator()._pending(f"候选封存第 {validation_round} 轮（门禁重试）", REVALIDATE_WORK_ITEM)
     try:
         issued_at = expect_rfc3339(request["issued_at_utc"], "issued_at_utc")
     except ControlError as error:
@@ -514,8 +515,13 @@ def plan_candidate_seal_chain(campaign_dir: Path, manifest: Mapping[str, Any], r
     refs = {name: _object_ref(kind, payload) for name, (kind, payload) in objects.items()}
     # 执行计划的外部门禁（与 B4-06a 定稿同一处定义）。
     gate = normalized["gate_execution"]
+    reused_refs, previous_refs = _gate_history(store, campaign, context, capture_attempt, normalized["validation_round"])
     external_gates = claude_upgrade_accept.candidate_external_gate_plan_entries(
-        host_id=str(gate["host_id"]), architecture=str(gate["architecture"]), overrides=gate.get("overrides")
+        host_id=str(gate["host_id"]),
+        architecture=str(gate["architecture"]),
+        overrides=gate.get("overrides"),
+        reused_receipt_refs=reused_refs,
+        previous_failed_receipt_refs=previous_refs,
     )
     gate_execute = [item["gate_id"] for item in external_gates if item["source"] == "execute"]
     gate_reuse = [item["gate_id"] for item in external_gates if item["source"] == "reuse"]
@@ -560,6 +566,71 @@ def plan_candidate_seal_chain(campaign_dir: Path, manifest: Mapping[str, Any], r
         "existing_attempt": existing,
         "closure": {"status": "blocked" if reasons else "closed", "reasons": reasons},
     }
+
+
+def _gate_history(
+    store: Any,
+    campaign: Mapping[str, Any],
+    context: Mapping[str, Any],
+    capture_attempt: str,
+    validation_round: int,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """第 N 轮（N≥2）外部门禁的复用与前序失败绑定，全部由 Store 门禁收据历史推出（第三节；第 1 轮恒为空）。
+
+    前提：第 N-1 轮 ValidationAttempt 存在，它执行计划里的每条门禁都已定稿，且至少一条失败（失败轮次由
+    ``claude_upgrade_accept.record_failed_gate_round`` 写入）。历史取本候选的全部门禁收据，但不含本采集 attempt 第 N 轮及
+    以后各轮的（重跑同一轮时与首次规划逐字相同）：某门禁已有通过收据即复用它；否则重跑并绑定最近一份失败收据（与 Store
+    ``finalize_validation_gate`` 同一判据）。
+    """
+
+    if validation_round == FIRST_ROUND:
+        return {}, {}
+    previous_fact = _existing_validation_attempt(store, campaign, validation_attempt_id(capture_attempt, validation_round - 1))
+    if previous_fact is None:
+        raise ConfigurationError(f"第 {validation_round - 1} 轮 ValidationAttempt 不存在：门禁重试只能接在上一轮之后。")
+    previous_ref = dict(store.fact_ref(previous_fact))
+    previous_plan = _load_object(store, previous_fact["payload"]["validation_execution_plan_ref"], "validation_execution_plan", "上一轮执行计划 ")
+    later = set()
+    for fact in store.list_facts(str(campaign["campaign_id"]), "validation"):
+        if fact["fact_kind"] != "validation_attempt_created":
+            continue
+        attempt_id = str(fact["payload"].get("attempt_id"))
+        prefix = f"{capture_attempt}-v"
+        if attempt_id.startswith(prefix) and attempt_id[len(prefix):].isdecimal() and int(attempt_id[len(prefix):]) >= validation_round:
+            later.add(canonical_sha256(dict(store.fact_ref(fact))))
+    receipts: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for reference in store.list_receipt_refs("validation_gate"):
+        receipt = store.load_receipt(reference)
+        if (
+            receipt["campaign_id"] != campaign["campaign_id"]
+            or receipt["candidate_ref"] != context["candidate_ref"]
+            or canonical_sha256(dict(receipt["validation_attempt_ref"])) in later
+        ):
+            continue
+        receipts.append((dict(reference), receipt))
+    previous_round = {str(receipt["gate_id"]): receipt for _reference, receipt in receipts if receipt["validation_attempt_ref"] == previous_ref}
+    planned = sorted(str(item["gate_id"]) for item in previous_plan["external_gates"])
+    if sorted(previous_round) != planned or all(receipt["result"] != "failed" for receipt in previous_round.values()):
+        raise ConfigurationError(
+            f"第 {validation_round - 1} 轮外部门禁还没有全部定稿或没有失败门禁：先用 record_failed_gate_round 写入失败轮次，再做门禁重试。"
+        )
+    reused: dict[str, dict[str, Any]] = {}
+    previous: dict[str, dict[str, Any]] = {}
+    for gate_id in planned:
+        rows = [(reference, receipt) for reference, receipt in receipts if receipt["gate_id"] == gate_id]
+        passed = [reference for reference, receipt in rows if receipt["result"] == "pass"]
+        if len(passed) > 1:
+            raise ConfigurationError(f"门禁 {gate_id} 在本候选下有多份通过收据，历史已不一致。")
+        if passed:
+            reused[gate_id] = passed[0]
+            continue
+        failures = sorted(
+            ((reference, receipt) for reference, receipt in rows if receipt["result"] == "failed"),
+            key=lambda item: datetime.fromisoformat(str(item[1]["completed_at_utc"]).replace("Z", "+00:00")),
+        )
+        if failures:
+            previous[gate_id] = failures[-1][0]
+    return reused, previous
 
 
 def _existing_validation_attempt(store: Any, campaign: Mapping[str, Any], attempt_id: str) -> dict[str, Any] | None:
@@ -799,6 +870,9 @@ EVALUATION_MANIFEST_FIELD = "evaluation_manifest"
 SEALED_EVIDENCE_MANIFEST_FILENAME = "evidence-manifest.json"
 SEALED_EVIDENCE_CHECKPOINT_FILENAME = "sealed-evidence-scan-checkpoint.json"
 SEALED_EVIDENCE_MANIFEST_FIELD = "sealed_evidence_manifest"
+# 门禁重试的第 N 轮（N≥2）结果目录与它比第 1 轮多的两个字段（第七节）。
+VALIDATION_ROUNDS_DIRNAME = "validation-rounds"
+ROUND_DIR_RE = re.compile(r"^v([1-9][0-9]*)$")
 STAGE_RESULT_FIELDS = frozenset(
     {
         "schema_version",
@@ -820,6 +894,7 @@ STAGE_RESULT_FIELDS = frozenset(
         "sealed_at_utc",
     }
 )
+ROUND_RESULT_FIELDS = STAGE_RESULT_FIELDS | {"validation_round", "round_one_result"}
 
 
 def add_seal_arguments(target: Any) -> None:
@@ -835,6 +910,11 @@ def add_seal_arguments(target: Any) -> None:
         metavar="CLIENT=PATH",
         help="seal：场景清单登记的客户端收据（claude-desktop／claude-vscode，Mac 侧驱动产出），文件必须在 attempt 的客户端证据目录内。",
     )
+    target.add_argument(
+        "--revalidate",
+        action="store_true",
+        help="seal：外部门禁失败后的门禁重试——零请求、不重扫，用第 1 轮的封存产物与 Store 门禁收据历史封存下一轮（第七节）。",
+    )
 
 
 def seal_command(arguments: Any) -> tuple[dict[str, Any], int]:
@@ -847,6 +927,9 @@ def seal_command(arguments: Any) -> tuple[dict[str, Any], int]:
     attempt_id = _safe_id(getattr(arguments, "attempt_id", None), "--attempt-id")
     approve = getattr(arguments, "approve_seal_sha256", None)
     approved_by = getattr(arguments, "approved_by", None)
+    revalidate = bool(getattr(arguments, "revalidate", False))
+    if revalidate and (approve is not None or approved_by is not None or getattr(arguments, "client_evidence", None)):
+        raise ConfigurationError("--revalidate 不接受 --approve-seal-sha256、--approved-by 或 --client-evidence：批准与客户端收据沿用第 1 轮。")
     if approve is not None:
         _sha256(approve, "--approve-seal-sha256")
         if not isinstance(approved_by, str) or not approved_by.strip():
@@ -861,6 +944,8 @@ def seal_command(arguments: Any) -> tuple[dict[str, Any], int]:
     with orchestrator._campaign_lock(campaign_dir):
         orchestrator._require_quiescent_campaign_lease(campaign_dir, action="seal", attempt_id=attempt_id)
         manifest = orchestrator._require_formal_campaign(campaign_dir)
+        if revalidate:
+            return _revalidate_candidate_seal(campaign_dir, manifest, candidate_id=candidate_id, attempt_id=attempt_id), 0
         return _seal_candidate_attempt(
             campaign_dir,
             manifest,
@@ -1039,6 +1124,9 @@ def _seal_candidate_attempt(
     if sealed_stage is not None:
         # 已封存：与其余封存后读侧同一口径，按封存证据清单加重绑链核对边界（不再重放 run 末收口）。
         attempt_root, attempt = sealed_attempt_context(campaign_dir, sealed_stage, candidate_id=candidate_id)
+    elif _half_sealed(campaign_dir, candidate_id, attempt_id):
+        # 半封存（批准写完封存证据清单、阶段结果未写时被打断）：同样按清单加重绑链核对边界，批准重跑接着走完。
+        attempt_root, attempt = half_sealed_attempt_context(campaign_dir, candidate_id, attempt_id, manifest=manifest)
     else:
         attempt_root, attempt = orchestrator._load_capture_attempt(
             campaign_dir, "candidate", candidate_id, attempt_id, _verified_campaign_manifest=manifest
@@ -1515,13 +1603,16 @@ def _approve_candidate_seal(
 # ---------------------------------------------------------------------------
 
 
-def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, manifest: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """读取并核对候选阶段结果（``_load_stage_result("capture-candidate")`` 的 Claude 实现）。
-
-    核对合同、字段闭集、Campaign、候选、阶段与完成状态，以及 attempt 收据与评估用 manifest 两个绑定的摘要。Store 写入在阶段
-    结果之前完成（批准时先写 Store 再写阶段结果），所以阶段结果存在即 Store 已到 candidate_sealed；没有阶段结果时报
-    「尚未封存」（共享流程按这几个字区分）。
-    """
+def _load_round_document(
+    campaign_dir: Path,
+    path: Path,
+    candidate_id: str,
+    *,
+    manifest: Mapping[str, Any] | None,
+    validation_round: int,
+) -> dict[str, Any]:
+    """读取并核对一轮的候选阶段结果：合同、字段闭集、Campaign、候选、阶段与完成状态，attempt、评估用 manifest 与封存证据清单
+    三个绑定的摘要；第 2 轮起另核轮次号与它承接的第 1 轮结果。"""
 
     orchestrator = _orchestrator()
     campaign_dir = Path(campaign_dir)
@@ -1531,8 +1622,9 @@ def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, mani
         raise ConfigurationError(f"阶段尚未封存：{STAGE_NAME}（{path.relative_to(campaign_dir).as_posix()} 不存在）")
     stage = orchestrator._read_json(path, "候选阶段结果")
     campaign_id = (manifest or orchestrator._read_json(campaign_dir / "campaign.json", "Campaign 核心清单")).get("campaign_id")
+    fields = STAGE_RESULT_FIELDS if validation_round == FIRST_ROUND else ROUND_RESULT_FIELDS
     if (
-        set(stage) != STAGE_RESULT_FIELDS
+        set(stage) != fields
         or stage.get("schema_version") != STAGE_RESULT_SCHEMA
         or stage.get("client") != "claude"
         or stage.get("campaign_id") != campaign_id
@@ -1540,19 +1632,81 @@ def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, mani
         or stage.get("candidate_id") != candidate_id
         or stage.get("status") != "complete"
         or not orchestrator._is_rfc3339_timestamp(stage.get("sealed_at_utc"))
+        or (validation_round != FIRST_ROUND and stage.get("validation_round") != validation_round)
     ):
-        raise ConfigurationError("候选阶段结果合同、Campaign、候选或状态不一致。")
+        raise ConfigurationError(f"候选阶段结果（第 {validation_round} 轮）合同、Campaign、候选、轮次或状态不一致。")
     context = stage.get(ASSERTION_CONTEXT_FIELD)
-    for label, binding in (
+    bindings = [
         ("候选阶段结果 attempt", stage.get("attempt")),
         ("候选评估用 manifest", context.get(EVALUATION_MANIFEST_FIELD) if isinstance(context, Mapping) else None),
         ("候选封存证据清单", stage.get(SEALED_EVIDENCE_MANIFEST_FIELD)),
-    ):
+    ]
+    if validation_round != FIRST_ROUND:
+        bindings.append(("第 1 轮候选阶段结果", stage.get("round_one_result")))
+    for label, binding in bindings:
         orchestrator._require_file_binding(binding, label)
         target = orchestrator._campaign_file(campaign_dir, str(binding["path"]))
         if target.is_symlink() or not target.is_file() or file_sha256(target) != binding["sha256"]:
             raise ConfigurationError(f"{label}缺失或摘要漂移。")
     return stage
+
+
+def _round_result_path(campaign_dir: Path, candidate_id: str, validation_round: int) -> Path:
+    return Path(campaign_dir) / "candidates" / candidate_id / VALIDATION_ROUNDS_DIRNAME / f"v{int(validation_round)}" / "result.json"
+
+
+def _existing_rounds(campaign_dir: Path, candidate_id: str) -> list[int]:
+    """已写出结果的第 2 轮起各轮轮次号（升序，必须从 2 连续）；目录里有别的条目或轮次不连续即失败关闭。"""
+
+    root = Path(campaign_dir) / "candidates" / candidate_id / VALIDATION_ROUNDS_DIRNAME
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise ConfigurationError("候选门禁重试轮次目录不可信。")
+    if not root.exists():
+        return []
+    rounds: list[int] = []
+    for child in sorted(root.iterdir()):
+        match = ROUND_DIR_RE.fullmatch(child.name)
+        if child.is_symlink() or not child.is_dir() or match is None or int(match.group(1)) < 2:
+            raise ConfigurationError(f"候选门禁重试轮次目录里有不认识的条目：{child.name}")
+        if (child / "result.json").exists() or (child / "result.json").is_symlink():
+            rounds.append(int(match.group(1)))
+    rounds.sort()
+    if rounds != list(range(2, 2 + len(rounds))):
+        raise ConfigurationError(f"候选门禁重试轮次不连续：{rounds}")
+    return rounds
+
+
+def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, manifest: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """读取并核对候选阶段结果（``_load_stage_result("capture-candidate")`` 的 Claude 实现），返回最大轮次的那一份。
+
+    第 1 轮是 ``path``（``candidates/<cid>/result.json``），第 2 轮起是 ``candidates/<cid>/validation-rounds/v<N>/result.json``
+    （门禁重试，第七节）；各轮逐份核对（见 ``_load_round_document``），第 N 轮必须承接这一份第 1 轮结果、绑定同一 attempt。
+    Store 写入在阶段结果之前完成（批准与重试都先写 Store 再写结果），所以结果存在即该轮 Store 写入链已走完；第 1 轮结果不存在
+    时报「尚未封存」（共享流程按这几个字区分）。
+    """
+
+    stage = _load_round_document(Path(campaign_dir), Path(path), candidate_id, manifest=manifest, validation_round=FIRST_ROUND)
+    round_one_sha256 = file_sha256(Path(path))
+    latest = stage
+    for validation_round in _existing_rounds(Path(campaign_dir), candidate_id):
+        document = _load_round_document(
+            Path(campaign_dir),
+            _round_result_path(Path(campaign_dir), candidate_id, validation_round),
+            candidate_id,
+            manifest=manifest,
+            validation_round=validation_round,
+        )
+        if document["round_one_result"]["sha256"] != round_one_sha256 or document["attempt"] != stage["attempt"]:
+            raise ConfigurationError(f"第 {validation_round} 轮候选阶段结果没有承接这一份第 1 轮结果。")
+        latest = document
+    return latest
+
+
+def load_round_one_result(campaign_dir: Path, candidate_id: str, *, manifest: Mapping[str, Any] | None = None) -> tuple[Path, dict[str, Any]]:
+    """第 1 轮候选阶段结果（门禁重试的底）：固定在 b0 路径，与评估基线无关。"""
+
+    path = _orchestrator()._legacy_stage_path(Path(campaign_dir), STAGE_NAME, candidate_id)[1]
+    return path, _load_round_document(Path(campaign_dir), path, candidate_id, manifest=manifest, validation_round=FIRST_ROUND)
 
 
 # ---------------------------------------------------------------------------
@@ -1570,7 +1724,11 @@ def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, mani
 #   mtime／ctime／inode 漂移时报可恢复的元数据漂移（附重绑命令），其余漂移是完整性异常、不可恢复。
 # * ``harden-evidence-permissions rebind-boundary --attempt-id … --candidate-id …``（``rebind_sealed_boundary``）直接转调共享
 #   的 ``codex_upgrade_harden_evidence_permissions.rebind_boundary``：逐文件复算内容与清单一致后写 write-once 的重绑收据，
-#   重绑后按读侧同一口径复核。只认已封存的候选 attempt。
+#   重绑后按读侧同一口径复核。只认已封存或半封存的候选 attempt。
+# * 半封存：批准写完封存证据清单、写出阶段结果之前被打断（Store 写入链可能也没走完）。此时 attempt 根已有清单、没有阶段
+#   结果；重跑预览或批准读 attempt 时同样不重放收口、按清单加重绑链核对（``half_sealed_attempt_context``），批准接着把清单与
+#   预览的深度扫描逐文件比对后走完；rebind-boundary 也接受这个状态。环境污染扫描读到带清单的候选 attempt 时也只读状态、
+#   不重放收口。
 #
 # 官方阶段不受影响：官方 seal 不写这份清单，官方的封存后读侧照旧重放收口。
 #
@@ -1734,8 +1892,47 @@ def sealed_attempt_context(campaign_dir: Path, stage: Mapping[str, Any], *, cand
     return attempt_root, attempt
 
 
+def _attempt_root(campaign_dir: Path, candidate_id: str, attempt_id: str) -> Path:
+    return Path(campaign_dir) / _orchestrator()._capture_attempt_relative("candidate", candidate_id) / "attempts" / attempt_id
+
+
+def has_sealed_evidence_manifest(attempt_root: Path) -> bool:
+    """attempt 根下有封存证据清单（已封存或半封存）：此后它的证据边界归清单加重绑链，读 attempt 不再重放 run 末收口。"""
+
+    path = Path(attempt_root) / SEALED_EVIDENCE_MANIFEST_FILENAME
+    return path.exists() or path.is_symlink()
+
+
+def _half_sealed(campaign_dir: Path, candidate_id: str, attempt_id: str) -> bool:
+    """半封存：attempt 根已有封存证据清单（批准写的），候选阶段结果还没写出（调用方已确认没有阶段结果）。"""
+
+    return has_sealed_evidence_manifest(_attempt_root(campaign_dir, candidate_id, attempt_id))
+
+
+def half_sealed_attempt_context(
+    campaign_dir: Path,
+    candidate_id: str,
+    attempt_id: str,
+    *,
+    manifest: Mapping[str, Any] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """半封存的读侧：不重放 run 末收口，证据边界按 attempt 根的封存证据清单加重绑链核对（清单本身由批准重跑再与预览的
+    深度扫描逐文件比对，伪造的清单过不了那一关）。"""
+
+    options: dict[str, Any] = {"_replay_evidence_permissions": False}
+    if manifest is not None:
+        options["_verified_campaign_manifest"] = manifest
+    attempt_root, attempt = _orchestrator()._load_capture_attempt(Path(campaign_dir), "candidate", candidate_id, attempt_id, **options)
+    path = attempt_root / SEALED_EVIDENCE_MANIFEST_FILENAME
+    if path.is_symlink() or not path.is_file():
+        raise ConfigurationError(f"半封存的封存证据清单不是可信普通文件：{path}")
+    _verify_sealed_manifest(path, _sealed_evidence_roots(Path(campaign_dir), attempt_id, candidate_id), attempt_id=attempt_id, candidate_id=candidate_id)
+    return attempt_root, attempt
+
+
 def rebind_sealed_boundary(campaign_dir: Path, attempt_id: str, *, candidate_id: str | None, operator: str | None) -> dict[str, Any]:
-    """``harden-evidence-permissions rebind-boundary``：已封存候选 attempt 只有元数据漂移时转调共享重绑，再按读侧复核。"""
+    """``harden-evidence-permissions rebind-boundary``：已封存或半封存的候选 attempt 只有元数据漂移时转调共享重绑，再按读侧
+    同一口径复核。已封存＝候选阶段结果绑定这个 attempt；半封存＝没有阶段结果、attempt 根已有封存证据清单。"""
 
     orchestrator = _orchestrator()
     if candidate_id is None:
@@ -1747,10 +1944,16 @@ def rebind_sealed_boundary(campaign_dir: Path, attempt_id: str, *, candidate_id:
     campaign_dir = campaign_dir.resolve(strict=True)
     manifest = orchestrator._require_formal_campaign(campaign_dir)
     stage_path = orchestrator._stage_path(campaign_dir, STAGE_NAME, candidate_id)[1]
-    stage = load_stage_result(campaign_dir, stage_path, candidate_id, manifest=manifest)
-    attempt_path = orchestrator._campaign_file(campaign_dir, str(stage["attempt"]["path"]))
-    if attempt_path.parent.name != attempt_id:
-        raise ConfigurationError(f"候选 {candidate_id} 封存的是 attempt {attempt_path.parent.name}，不是 {attempt_id}。")
+    stage: dict[str, Any] | None = None
+    if stage_path.exists() or stage_path.is_symlink():
+        stage = load_stage_result(campaign_dir, stage_path, candidate_id, manifest=manifest)
+        sealed_attempt = orchestrator._campaign_file(campaign_dir, str(stage["attempt"]["path"])).parent.name
+        if sealed_attempt != attempt_id:
+            raise ConfigurationError(f"候选 {candidate_id} 封存的是 attempt {sealed_attempt}，不是 {attempt_id}。")
+    elif not _half_sealed(campaign_dir, candidate_id, attempt_id):
+        raise ConfigurationError(
+            f"阶段尚未封存：候选 {candidate_id} 没有阶段结果，attempt {attempt_id} 根下也没有封存证据清单，没有可重绑的边界。"
+        )
     harden = _harden()
     try:
         record = harden.rebind_boundary(
@@ -1758,5 +1961,130 @@ def rebind_sealed_boundary(campaign_dir: Path, attempt_id: str, *, candidate_id:
         )
     except (harden.HardenError, OSError, ValueError, RuntimeError) as error:
         raise ConfigurationError(f"证据边界重绑失败：{error}") from error
-    verify_sealed_boundary(campaign_dir, stage, attempt_path.parent, candidate_id=candidate_id)
+    if stage is not None:
+        verify_sealed_boundary(campaign_dir, stage, _attempt_root(campaign_dir, candidate_id, attempt_id), candidate_id=candidate_id)
+    else:
+        half_sealed_attempt_context(campaign_dir, candidate_id, attempt_id, manifest=manifest)
     return dict(record)
+
+
+# ---------------------------------------------------------------------------
+# 七、门禁重试链：capture-candidate seal --revalidate（B4-02 收尾）
+# ---------------------------------------------------------------------------
+#
+# 第 N 轮外部门禁失败（``claude_upgrade_accept.record_failed_gate_round`` 已把这一轮定稿进 Store）后，零请求、不重扫地封存
+# 第 N+1 轮：读第 1 轮的封存产物（seal 草稿里冻结的 Store 请求、预览的审核摘要与批准人），封存后的证据边界照第六节核对，
+# 只把 ``validation_round`` 换成下一轮、事实时刻取上一轮门禁收据里最晚的完成时刻，交第一节的写入链——外部门禁由第三节从
+# Store 门禁收据历史推出。复用：采集 attempt、原始证据与 seal 代号目录、按采集 attempt 命名的对象、第 1 轮 selector 前态；换新：
+# 执行计划、ValidationAttempt ``-v<N>``、场景四阶段、CandidateEvidencePackage 与 ``validation-rounds/v<N>/result.json``。
+#
+# 轮次判定：已写出结果的最大轮次 R 的门禁已全部定稿且有失败 → 封存第 R+1 轮；否则（R≥2）重跑第 R 轮——Store 写入逐步复用、
+# 结果逐字复用；第 1 轮还没有失败门禁时拒绝。第 N 轮的 Store 写入完成、结果未写时被打断，重跑落到同一轮、收敛。
+
+
+def _round_attempt_fact(store: Any, campaign: Mapping[str, Any], capture_attempt: str, validation_round: int) -> dict[str, Any] | None:
+    return _existing_validation_attempt(store, campaign, validation_attempt_id(capture_attempt, validation_round))
+
+
+def _round_gate_receipts(store: Any, attempt_ref: Mapping[str, Any]) -> list[dict[str, Any]]:
+    receipts: list[dict[str, Any]] = []
+    for reference in store.list_receipt_refs("validation_gate"):
+        receipt = store.load_receipt(reference)
+        if receipt["validation_attempt_ref"] == dict(attempt_ref):
+            receipts.append(receipt)
+    return receipts
+
+
+def _round_closed_failed(store: Any, campaign: Mapping[str, Any], capture_attempt: str, validation_round: int) -> bool:
+    """这一轮的 ValidationAttempt 存在、执行计划里的门禁都已定稿，且至少一条失败。"""
+
+    fact = _round_attempt_fact(store, campaign, capture_attempt, validation_round)
+    if fact is None:
+        return False
+    plan = _load_object(store, fact["payload"]["validation_execution_plan_ref"], "validation_execution_plan", "执行计划 ")
+    receipts = _round_gate_receipts(store, store.fact_ref(fact))
+    planned = sorted(str(item["gate_id"]) for item in plan["external_gates"])
+    return sorted(str(item["gate_id"]) for item in receipts) == planned and any(item["result"] == "failed" for item in receipts)
+
+
+def _round_issued_at(store: Any, campaign: Mapping[str, Any], capture_attempt: str, validation_round: int) -> str:
+    """第 N 轮事实的时刻：第 N-1 轮门禁收据里最晚的完成时刻（只由 Store 历史决定，重跑同一轮逐字相同）。"""
+
+    fact = _round_attempt_fact(store, campaign, capture_attempt, validation_round - 1)
+    if fact is None:
+        raise ConfigurationError(f"第 {validation_round - 1} 轮 ValidationAttempt 不存在。")
+    receipts = _round_gate_receipts(store, store.fact_ref(fact))
+    if not receipts:
+        raise ConfigurationError(f"第 {validation_round - 1} 轮没有门禁收据。")
+    return max(
+        (str(item["completed_at_utc"]) for item in receipts),
+        key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00")),
+    )
+
+
+def _revalidate_candidate_seal(campaign_dir: Path, manifest: Mapping[str, Any], *, candidate_id: str, attempt_id: str) -> dict[str, Any]:
+    orchestrator = _orchestrator()
+    orchestrator._reject_contaminated_campaign(campaign_dir)
+    round_one_path, round_one = load_round_one_result(campaign_dir, candidate_id, manifest=manifest)
+    sealed_attempt = orchestrator._campaign_file(campaign_dir, str(round_one["attempt"]["path"])).parent.name
+    if sealed_attempt != attempt_id:
+        raise ConfigurationError(f"候选 {candidate_id} 第 1 轮封存的是 attempt {sealed_attempt}，不是 {attempt_id}。")
+    # 封存后的证据边界照第六节核对（元数据漂移先重绑）；不重新扫描。
+    sealed_attempt_context(campaign_dir, round_one, candidate_id=candidate_id)
+    verify = claude_upgrade_seal._verify_bound_file
+    draft = orchestrator._read_json(verify(campaign_dir, round_one["seal"]["seal_draft"], "候选 seal 草稿"), "候选 seal 草稿")
+    store, store_campaign = claude_upgrade_store.open_campaign_store(campaign_dir, manifest)
+    rounds = _existing_rounds(campaign_dir, candidate_id)
+    latest = max([FIRST_ROUND, *rounds])
+    if _round_closed_failed(store, store_campaign, attempt_id, latest):
+        target = latest + 1
+    elif latest > FIRST_ROUND:
+        target = latest
+    else:
+        raise ConfigurationError(
+            "第 1 轮外部门禁还没有全部定稿或没有失败门禁：门禁失败轮次先用 claude_upgrade_accept.record_failed_gate_round 写入 Store。"
+        )
+    request = dict(draft["store_request"])
+    request["validation_round"] = target
+    request["issued_at_utc"] = _round_issued_at(store, store_campaign, attempt_id, target)
+    request["seal"] = {**request["seal"], "review_sha256": round_one["seal"]["review_sha256"], "reviewer": round_one["seal"]["reviewer"]}
+    recorded = record_candidate_seal_chain(campaign_dir, manifest, request)
+    status = claude_upgrade_seal.store_cli(["status", "--store", Path(store.root), "--campaign", str(store_campaign["campaign_id"])])
+    store_summary = {
+        "root": claude_upgrade_store.CAMPAIGN_STORE_DIRNAME,
+        "campaign_id": str(store_campaign["campaign_id"]),
+        "checkpoint": status.get("checkpoint"),
+        "validation_attempt_id": recorded["validation_attempt_id"],
+        "validation_attempt_ref": recorded["validation_attempt_ref"],
+        "validation_execution_plan_ref": recorded["validation_execution_plan_ref"],
+        "selector_before_ref": recorded["selector_before"]["fact_ref"],
+        "candidate_evidence_package_ref": recorded["candidate_evidence_package_ref"],
+        "scenario_approval_refs": {scenario: dict(ref) for scenario, ref in sorted(recorded["scenario_approval_refs"].items())},
+        "external_gates": recorded["external_gates"],
+    }
+    path = _round_result_path(campaign_dir, candidate_id, target)
+    existed = path.exists() or path.is_symlink()
+    payload = {
+        **{key: value for key, value in round_one.items() if key not in {"store", "sealed_at_utc"}},
+        "store": {key: value for key, value in store_summary.items() if key != "checkpoint"},
+        "validation_round": target,
+        "round_one_result": _stage_binding(round_one_path, campaign_dir),
+        "sealed_at_utc": orchestrator._utc_now(),
+    }
+    claude_upgrade_seal._write_once_or_reuse(path, payload, ignore=("sealed_at_utc",))
+    reused = existed and all(
+        [recorded["selector_before"]["reused"], recorded["validation_attempt"]["reused"], *(all(stages.values()) for stages in recorded["scenario_facts_reused"].values())]
+    )
+    return {
+        "schema_version": SEAL_RESULT_SCHEMA,
+        "status": "complete",
+        "mode": "revalidate",
+        "reused": reused,
+        "campaign_id": manifest["campaign_id"],
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "validation_round": target,
+        "store": store_summary,
+        "stage_result": str(path),
+        "live_request_count": 0,
+    }
