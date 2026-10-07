@@ -4219,8 +4219,9 @@ CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
     "capture-official": ("官方取证 attempt：run 或 seal", "B2-06／B2-07（取证 Job 动作体与 seal 链）"),
     # classify 由 B3-02 落实（实现在 claude_upgrade_classify，见 ``main`` 的分派）；表项只用于注册子命令解析器。
     "classify": ("VC-2 规则分类：机器草案、修订与批准", "B3-02（VC-2 分类 producer）"),
-    "prepare-profile": ("VC-3 准备画像草案", "B3-03（VC-3 画像 producer）"),
-    "stage-profile": ("VC-3 暂存画像", "B3-03（VC-3 画像 producer）"),
+    # prepare-profile、stage-profile 由 B3-03 落实（实现在 claude_upgrade_profile，见 ``main`` 的分派）；表项只用于注册子命令解析器。
+    "prepare-profile": ("VC-3 目标画像派生：机器草案、修订与批准（EvidenceApprovalFact）", "B3-03（VC-3 画像 producer）"),
+    "stage-profile": ("VC-3 联合制品：预览与批准（ProfileApprovalFact）", "B3-03（VC-3 画像 producer）"),
     "plan-candidate-gates": ("VC-4 规划候选门禁", "B3-04（VC-4 候选构建与冻结）"),
     "record-candidate-build": ("VC-4 登记候选构建收据", "B3-04（VC-4 候选构建与冻结）"),
     "capture-candidate": ("候选采集 attempt：run 或 seal", "B4-01／B4-02（候选采集与四阶段封存）"),
@@ -4538,6 +4539,14 @@ def _build_parser() -> argparse.ArgumentParser:
             from tools.official_client_capture import claude_upgrade_classify
 
             claude_upgrade_classify.add_classify_arguments(target)
+        if name in {"prepare-profile", "stage-profile"}:
+            # 准备：Active 输入、修订与批准参数；暂存：联合摘要与批准人（B3-03）。
+            from tools.official_client_capture import claude_upgrade_profile
+
+            if name == "prepare-profile":
+                claude_upgrade_profile.add_prepare_arguments(target)
+            else:
+                claude_upgrade_profile.add_stage_arguments(target)
         if name in {"capture-candidate", "compare", "accept", "plan-candidate-gates", "record-candidate-build"}:
             target.add_argument("--candidate-id")
     return parser
@@ -4634,7 +4643,8 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 def main(argv: list[str] | None = None) -> int:
     """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），
     import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），capture-official
-    seal 封存官方证据（B2-07），classify 做 VC-2 规则分类（B3-02），其余 Claude 专属子命令在动作体落实前报未实现。
+    seal 封存官方证据（B2-07），classify 做 VC-2 规则分类（B3-02），prepare-profile／stage-profile 做 VC-3 画像（B3-03），
+    其余 Claude 专属子命令在动作体落实前报未实现。
 
     租约、遗留入口拒绝与停线收据等 Codex 主入口的外层流程，随租约与锁（B1-09 续）一起落实。
     """
@@ -4674,6 +4684,13 @@ def main(argv: list[str] | None = None) -> int:
             from tools.official_client_capture import claude_upgrade_classify
 
             result, return_code = claude_upgrade_classify.classify_command(arguments)
+        elif arguments.command in {"prepare-profile", "stage-profile"}:
+            from tools.official_client_capture import claude_upgrade_profile
+
+            if arguments.command == "prepare-profile":
+                result, return_code = claude_upgrade_profile.prepare_profile_command(arguments)
+            else:
+                result, return_code = claude_upgrade_profile.stage_profile_command(arguments)
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)

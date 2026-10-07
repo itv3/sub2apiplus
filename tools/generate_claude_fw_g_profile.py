@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""从 FW-F 受批 Snapshot 与目标版本原生证据生成 FW-G 内容寻址制品。"""
+"""从 FW-F 受批 Snapshot 与目标版本原生证据生成 FW-G 内容寻址制品。
+
+确定性投影（Claude 升级控制面设计 B3-03）：同一组冻结输入在任何工作目录、任何时间重跑得到逐字相同的输出——
+
+* 版本、平台与时间不再写死：平台取已校验 Snapshot 的 ``identity.platform``，迁移收据的日期由 ``--receipt-date``
+  显式给出，Release 的 persona 与收据阶段是本生成器合同的具名常量；
+* 输出里记录的证据与制品路径一律是仓库相对路径（``repository_relative``），与调用方传绝对路径还是相对路径无关；
+* 输出只写一次：目标已存在且内容相同即复用，内容不同即拒绝覆盖；
+* 迁移收据里源码 transition 的「之后」摘要取 ``--source-commit`` 指定提交里的 blob，不读工作树源码；本次生成的
+  Profile、Wire 直接用内存里的摘要，不回读落盘文件。
+"""
 
 from __future__ import annotations
 
@@ -7,9 +17,12 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
 import struct
+import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +69,11 @@ MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS: int
 MODEL_CAPABILITY_FAILED_ATTEMPTS: set[str]
 MODEL_CAPABILITY_BASE_COMMIT: str
 EMPTY_FILE_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+# 本生成器合同的固定身份（不随版本变化）：Release bundle 的 persona 与迁移收据的阶段名。
+RELEASE_BUNDLE_PERSONA = "claude-code-oauth"
+RECEIPT_PHASE = "FW-G"
+RECEIPT_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 MODEL_CAPABILITY_PRIOR_TRANSITIONS: tuple[tuple[str, str], ...]
 MODEL_CAPABILITY_SOURCE_TRANSITIONS: tuple[tuple[str, str, str], ...]
 
@@ -201,17 +219,72 @@ def sha256_hex(raw: bytes) -> str:
 
 
 def repository_relative(path: Path) -> str:
+    """输出里记录的路径：一律换算成仓库相对路径，不随调用方的工作目录或传参形式变化。"""
+
     absolute = path.resolve() if path.is_absolute() else (Path.cwd() / path).resolve()
     try:
         return absolute.relative_to(ROOT).as_posix()
     except ValueError as exc:
-        raise SystemExit(f"模型能力制品不在仓库内：{absolute}") from exc
+        raise SystemExit(f"制品或证据路径不在仓库内：{absolute}") from exc
+
+
+def write_once(path: Path, raw: bytes) -> str:
+    """只写一次：不存在时独占新建；已存在且逐字相同返回 ``reused``，内容不同即拒绝覆盖。"""
+
+    if path.is_symlink():
+        raise SystemExit(f"输出路径是符号链接，拒绝写入：{path}")
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != raw:
+            raise SystemExit(f"输出已存在且内容不同，禁止覆盖：{path}")
+        return "reused"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    try:
+        view = memoryview(raw)
+        while view:
+            view = view[os.write(descriptor, view):]
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return "generated"
+
+
+def git_blob_digest_reader(commit: str) -> Callable[[str], str]:
+    """返回「仓库相对路径 → 该提交里 blob 的 SHA-256」的读取器；读 Git 对象库，不读工作树。"""
+
+    if not GIT_COMMIT_RE.fullmatch(commit):
+        raise SystemExit(f"--source-commit 必须是 40 位小写提交号：{commit!r}")
+
+    def digest(path: str) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(ROOT), "cat-file", "blob", f"{commit}:{path}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise SystemExit(f"模型能力源码 transition 在 {commit} 缺少文件：{path}")
+        return sha256_hex(completed.stdout)
+
+    return digest
 
 
 def build_model_capability_source_transitions(
     profile_path: Path,
+    profile_digest: str,
     wire_path: Path,
+    wire_digest: str,
+    source_digest: Callable[[str], str],
 ) -> list[dict[str, str]]:
+    """迁移收据的 transition：策略登记的源码取冻结提交里的摘要，本次生成的 Profile、Wire 取内存摘要。
+
+    不读工作树：工作树随后续开发变化，读它会让同一组输入在不同时刻得到不同收据。
+    """
+
+    generated = {
+        repository_relative(profile_path): profile_digest,
+        repository_relative(wire_path): wire_digest,
+    }
     specs = list(MODEL_CAPABILITY_SOURCE_TRANSITIONS)
     specs.extend(
         [
@@ -232,10 +305,7 @@ def build_model_capability_source_transitions(
         raise SystemExit("模型能力源码 transition 路径重复")
     transitions: list[dict[str, str]] = []
     for path, before_digest, reason in sorted(specs):
-        source_path = ROOT / path
-        if not source_path.is_file():
-            raise SystemExit(f"模型能力源码 transition 缺少文件：{path}")
-        after_digest = sha256_hex(source_path.read_bytes())
+        after_digest = generated[path] if path in generated else source_digest(path)
         if before_digest == after_digest:
             raise SystemExit(f"模型能力源码 transition 未发生变化：{path}")
         transitions.append(
@@ -601,7 +671,7 @@ def load_scenario_messages(
             if raw_sha256 not in allowed_raw_sha256s:
                 raise SystemExit(f"{scenario} 请求未绑定 MeasuredRuleLedger：{raw_sha256}")
             request = dict(request)
-            request["evidence_path"] = path.as_posix()
+            request["evidence_path"] = repository_relative(path)
             requests.append(request)
     if not requests:
         raise SystemExit(f"{scenario} 没有 messages R 通道")
@@ -650,7 +720,7 @@ def build_thinking_display_policy(
                 if request.get("request_target") != "/v1/messages?beta=true":
                     continue
                 request = dict(request)
-                request["evidence_path"] = path.as_posix()
+                request["evidence_path"] = repository_relative(path)
                 requests.append(request)
         if len(requests) != 1:
             raise SystemExit(f"{probe} messages R 通道数量不是 1")
@@ -674,7 +744,7 @@ def build_thinking_display_policy(
     if production.get("result") != "passed" or production.get("differences") != []:
         raise SystemExit("thinking.display 补充 Campaign 影响了生产环境")
     evidence["production_change_receipt"] = {
-        "path": production_receipt.as_posix(),
+        "path": repository_relative(production_receipt),
         "sha256": sha256_hex(production_receipt.read_bytes()),
     }
     return {
@@ -958,7 +1028,7 @@ def build_implementation_policy(
     return {
         "schema_version": "claude-code-fw-g-implementation-policy/v2",
         "evidence_ledger": {
-            "path": ledger_path.as_posix(),
+            "path": repository_relative(ledger_path),
             "sha256": sha256_hex(ledger_path.read_bytes()),
         },
         "scenarios": {
@@ -1102,12 +1172,12 @@ def successful_model_attempts(campaign_root: Path) -> tuple[dict[str, Path], dic
     if production.get("identical") is not True or production.get("changed_fields") != []:
         raise SystemExit("模型能力 Campaign 改变了 Vircs 生产服务")
     evidence = {
-        "campaign_root": campaign_root.as_posix(),
+        "campaign_root": repository_relative(campaign_root),
         "successful_attempts": complete_count,
         "historical_failed_attempts": len(failed),
         "attempts": attempt_receipts,
         "production_diff": {
-            "path": production_path.as_posix(),
+            "path": repository_relative(production_path),
             "sha256": sha256_hex(production_path.read_bytes()),
             "identical": True,
         },
@@ -1122,7 +1192,7 @@ def load_attempt_requests(attempt_root: Path, scenario: str) -> list[dict[str, A
     for path in sorted((attempt_root / "relay").glob("conn*.client_to_upstream.bin")):
         for request in parse_http_stream(path.read_bytes(), scenario):
             request = dict(request)
-            request["evidence_path"] = path.as_posix()
+            request["evidence_path"] = repository_relative(path)
             requests.append(request)
     return requests
 
@@ -1461,6 +1531,7 @@ def build_wire_artifact(
     thinking_display_campaign_root: Path,
     profile_digest: str,
     model_catalog: dict[str, Any],
+    platform: str,
 ) -> dict[str, Any]:
     raw_request = messages_path.read_bytes()
     if sha256_hex(raw_request) != EXPECTED_MESSAGES_EVIDENCE_DIGEST:
@@ -1505,7 +1576,7 @@ def build_wire_artifact(
         "schema_version": "claude-code-fw-g-wire-artifact/v3",
         "identity": {
             "version": EXPECTED_VERSION,
-            "platform": "linux/amd64",
+            "platform": platform,
             "profile_digest": profile_digest,
             "model_capability_catalog_digest": sha256_hex(
                 canonical_bytes(model_catalog)
@@ -1513,13 +1584,13 @@ def build_wire_artifact(
         },
         "evidence": {
             "messages_request": {
-                "path": messages_path.as_posix(),
+                "path": repository_relative(messages_path),
                 "sha256": EXPECTED_MESSAGES_EVIDENCE_DIGEST,
                 "bytes": len(raw_request),
             },
             "messages_body_sha256": EXPECTED_MESSAGES_BODY_DIGEST,
             "tls_pcap": {
-                "path": tls_path.as_posix(),
+                "path": repository_relative(tls_path),
                 "sha256": EXPECTED_TLS_PCAP_DIGEST,
                 "bytes": len(tls_pcap),
             },
@@ -1562,11 +1633,12 @@ def build_model_capability_release_identity(
     profile_digest: str,
     wire_digest: str,
     model_catalog_digest: str,
+    platform: str,
 ) -> tuple[str, str]:
     release = {
         "schema_version": "claude-code-fw-g-model-capability-release/v1",
         "version": EXPECTED_VERSION,
-        "platform": "linux/amd64",
+        "platform": platform,
         "profile_sha256": profile_digest,
         "wire_sha256": wire_digest,
         "model_capability_catalog_sha256": model_catalog_digest,
@@ -1576,7 +1648,7 @@ def build_model_capability_release_identity(
     release_digest = sha256_hex(canonical_bytes(release))
     bundle = {
         "schema_version": "claude-code-fw-g-model-capability-bundle/v1",
-        "persona": "claude-code-oauth",
+        "persona": RELEASE_BUNDLE_PERSONA,
         "release_sha256": release_digest,
         "profile_sha256": profile_digest,
         "wire_sha256": wire_digest,
@@ -1592,12 +1664,18 @@ def build_model_capability_receipt(
     wire_digest: str,
     release_digest: str,
     bundle_digest: str,
+    *,
+    receipt_date: str,
+    platform: str,
+    source_digest: Callable[[str], str],
 ) -> dict[str, Any]:
+    if not RECEIPT_DATE_RE.fullmatch(receipt_date):
+        raise SystemExit(f"--receipt-date 必须是 YYYY-MM-DD：{receipt_date!r}")
     model_catalog_digest = sha256_hex(canonical_bytes(model_catalog))
     return {
         "schema_version": "official-egress-claude-model-capability-source-transition/v1",
-        "date": "2026-08-21",
-        "phase": "FW-G",
+        "date": receipt_date,
+        "phase": RECEIPT_PHASE,
         "base_commit": MODEL_CAPABILITY_BASE_COMMIT,
         "prior_transitions": [
             {"path": path, "sha256": digest}
@@ -1606,7 +1684,7 @@ def build_model_capability_receipt(
         "target": {
             "product": "claude-code",
             "version": EXPECTED_VERSION,
-            "platform": "linux/amd64",
+            "platform": platform,
             "models": list(MODEL_CAPABILITY_MODELS),
         },
         "invariants": {
@@ -1627,9 +1705,9 @@ def build_model_capability_receipt(
                 "bundle_sha256": PREVIOUS_BUNDLE_DIGEST,
             },
             "after": {
-                "profile": profile_path.as_posix(),
+                "profile": repository_relative(profile_path),
                 "profile_sha256": profile_digest,
-                "wire": wire_path.as_posix(),
+                "wire": repository_relative(wire_path),
                 "wire_sha256": wire_digest,
                 "release_sha256": release_digest,
                 "bundle_sha256": bundle_digest,
@@ -1637,7 +1715,10 @@ def build_model_capability_receipt(
         },
         "transitions": build_model_capability_source_transitions(
             profile_path,
+            profile_digest,
             wire_path,
+            wire_digest,
+            source_digest,
         ),
         "safety": {
             "vircs_production_changed": False,
@@ -1669,6 +1750,14 @@ def main() -> int:
     parser.add_argument("--thinking-display-campaign-root", type=Path)
     parser.add_argument("--model-capability-campaign-root", type=Path)
     parser.add_argument("--model-capability-receipt-output", type=Path)
+    parser.add_argument(
+        "--receipt-date",
+        help="写迁移收据时必填：收据日期（YYYY-MM-DD），由调用方按批准时刻给出，生成器不取当前时间",
+    )
+    parser.add_argument(
+        "--source-commit",
+        help="写迁移收据时必填：源码 transition 的「之后」摘要所取的冻结提交（40 位），不读工作树",
+    )
     args = parser.parse_args()
 
     configure_generation_policy(args.generation_policy)
@@ -1703,6 +1792,9 @@ def main() -> int:
     )
     if document.get("identity", {}).get("version") != EXPECTED_VERSION:
         raise SystemExit(f"Snapshot 目标版本不是 {EXPECTED_VERSION}")
+    platform = document.get("identity", {}).get("platform")
+    if not isinstance(platform, str) or not platform:
+        raise SystemExit("Snapshot 缺少 identity.platform")
 
     model_catalog = None
     if args.model_capability_campaign_root is not None:
@@ -1726,9 +1818,8 @@ def main() -> int:
     if model_catalog is None and digest != EXPECTED_PROFILE_DIGEST:
         raise SystemExit(f"画像摘要不一致：{digest}")
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_bytes(raw)
-    print(f"generated {args.output} sha256={digest} bytes={len(raw)}")
+    state = write_once(args.output, raw)
+    print(f"{state} {args.output} sha256={digest} bytes={len(raw)}")
     wire_args = (
         args.messages_evidence,
         args.tls_pcap,
@@ -1743,6 +1834,9 @@ def main() -> int:
     if all(wire_args):
         if model_catalog is None:
             raise SystemExit("生成新版 wire artifact 时缺少模型能力目录")
+        if not args.receipt_date or not args.source_commit:
+            raise SystemExit("写迁移收据时必须提供 --receipt-date 与 --source-commit")
+        source_digest = git_blob_digest_reader(args.source_commit)
         wire_document = build_wire_artifact(
             args.messages_evidence,
             args.tls_pcap,
@@ -1751,18 +1845,18 @@ def main() -> int:
             args.thinking_display_campaign_root,
             digest,
             model_catalog,
+            platform,
         )
         wire_raw = canonical_bytes(wire_document)
         wire_digest = sha256_hex(wire_raw)
-        args.wire_output.parent.mkdir(parents=True, exist_ok=True)
-        args.wire_output.write_bytes(wire_raw)
+        state = write_once(args.wire_output, wire_raw)
         print(
-            f"generated {args.wire_output} sha256={wire_digest} "
+            f"{state} {args.wire_output} sha256={wire_digest} "
             f"bytes={len(wire_raw)}"
         )
         model_catalog_digest = sha256_hex(canonical_bytes(model_catalog))
         release_digest, bundle_digest = build_model_capability_release_identity(
-            digest, wire_digest, model_catalog_digest
+            digest, wire_digest, model_catalog_digest, platform
         )
         receipt = build_model_capability_receipt(
             model_catalog,
@@ -1772,12 +1866,14 @@ def main() -> int:
             wire_digest,
             release_digest,
             bundle_digest,
+            receipt_date=args.receipt_date,
+            platform=platform,
+            source_digest=source_digest,
         )
         receipt_raw = canonical_bytes(receipt)
-        args.model_capability_receipt_output.parent.mkdir(parents=True, exist_ok=True)
-        args.model_capability_receipt_output.write_bytes(receipt_raw)
+        state = write_once(args.model_capability_receipt_output, receipt_raw)
         print(
-            f"generated {args.model_capability_receipt_output} "
+            f"{state} {args.model_capability_receipt_output} "
             f"sha256={sha256_hex(receipt_raw)} bytes={len(receipt_raw)}"
         )
         print(f"release_sha256={release_digest} bundle_sha256={bundle_digest}")
