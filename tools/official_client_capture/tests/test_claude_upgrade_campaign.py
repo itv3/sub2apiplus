@@ -452,5 +452,74 @@ class FirstBatchShapeTests(unittest.TestCase):
         self.assertEqual(campaign_module.first_batch_timeout(30, remaining_seconds=1000), 1000)
 
 
+
+# 模型目录摘要的定义（10-08 定）固定在下面这个值上：production_active Release 登记 claude-sonnet-5、claude-opus-5、
+# claude-fable-5 三个模型（按此顺序）。用内联最小目录固定，不对入库目录固定值——VC-6 切换 production_active 后入库目录会变，
+# 那时参数文件的 MODEL_CATALOG_SHA256 随之重算，这条不该挡住主线。
+CURRENT_MODELS = ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"]
+CURRENT_MODEL_CATALOG_SHA256 = "49096e9db8faff6786f7cf92cb4a209de038b8ce1265c30b8ce8bb940e9a29ea"
+REPOSITORY_RELEASE_CATALOG = (
+    Path(__file__).resolve().parents[3] / "backend" / "internal" / "officialegress" / "catalogdata" / "claude" / "release-catalog.json"
+)
+
+
+def minimal_release_catalog(models: Any = None, **overrides: Any) -> dict[str, Any]:
+    """只含选择与模型字段的最小 Release 目录：production_active 指向第一个 Release，另有一个不被选中的 Release。"""
+
+    catalog = {
+        "schema_version": "official-egress-claude-release-catalog/v1",
+        "releases": [
+            {"release_sha256": "a" * 64, "models": list(CURRENT_MODELS) if models is None else models},
+            {"release_sha256": "b" * 64, "models": ["claude-other-5"]},
+        ],
+        "selectors": {
+            "production_active": {"kind": "release", "release_sha256": "a" * 64},
+            "validation_candidate": {"kind": "release", "release_sha256": "b" * 64},
+        },
+    }
+    catalog.update(overrides)
+    return catalog
+
+
+class ReleaseModelCatalogDigestTests(unittest.TestCase):
+    def test_definition_fixes_the_current_value(self) -> None:
+        self.assertEqual(campaign_module.release_model_catalog_sha256(minimal_release_catalog()), CURRENT_MODEL_CATALOG_SHA256)
+        # 只看 production_active 指向的 Release；列表顺序参与摘要。
+        moved = minimal_release_catalog()
+        moved["selectors"]["production_active"]["release_sha256"] = "b" * 64
+        self.assertNotEqual(campaign_module.release_model_catalog_sha256(moved), CURRENT_MODEL_CATALOG_SHA256)
+        reordered = minimal_release_catalog(list(reversed(CURRENT_MODELS)))
+        self.assertNotEqual(campaign_module.release_model_catalog_sha256(reordered), CURRENT_MODEL_CATALOG_SHA256)
+
+    def test_repository_catalog_is_accepted(self) -> None:
+        catalog = json.loads(REPOSITORY_RELEASE_CATALOG.read_text(encoding="utf-8"))
+        self.assertRegex(campaign_module.release_model_catalog_sha256(catalog), r"^[0-9a-f]{64}$")
+
+    def test_malformed_catalogs_are_rejected(self) -> None:
+        missing = minimal_release_catalog()
+        missing["selectors"]["production_active"]["release_sha256"] = "c" * 64
+        duplicated = minimal_release_catalog()
+        duplicated["releases"].append(dict(duplicated["releases"][0]))
+        operational = minimal_release_catalog()
+        operational["selectors"]["production_active"] = {"kind": "operational-deployment"}
+        cases = {
+            "不是目录合同": (minimal_release_catalog(schema_version="official-egress-release-catalog/v1"), "不是"),
+            "没有 Release 列表": (minimal_release_catalog(releases={}), "不是"),
+            "选择器不是 Release": (operational, "不是 Release"),
+            "没有选择器": (minimal_release_catalog(selectors={}), "不是 Release"),
+            "指向不存在的 Release": (missing, "不唯一或不存在"),
+            "指向两个 Release": (duplicated, "不唯一或不存在"),
+            "模型列表为空": (minimal_release_catalog([]), "模型列表"),
+            "模型列表不是列表": (minimal_release_catalog("claude-sonnet-5"), "模型列表"),
+            "含非字符串": (minimal_release_catalog(["claude-sonnet-5", 5]), "模型列表"),
+            "含空串": (minimal_release_catalog(["claude-sonnet-5", ""]), "模型列表"),
+            "有重复": (minimal_release_catalog(["claude-sonnet-5", "claude-sonnet-5"]), "模型列表"),
+        }
+        for label, (catalog, pattern) in cases.items():
+            with self.subTest(label):
+                with self.assertRaisesRegex(ConfigurationError, pattern):
+                    campaign_module.release_model_catalog_sha256(catalog)
+
+
 if __name__ == "__main__":
     unittest.main()

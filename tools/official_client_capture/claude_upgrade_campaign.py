@@ -74,6 +74,14 @@ official Job），与 Codex 同形：共享监督器的 VC-1 普通恢复链与 
 ``require_campaign_client_roots``：总计划、Store Campaign、项目总账计划与计时账本计划四处 ``client`` 一致（入口原先只核前
 两处）。
 
+八、Store 身份的模型目录摘要（``release_model_catalog_sha256``，10-08 定）
+=====================================================================
+``configuration.model_catalog_sha256``（预检 plan 的 ``--model-catalog-sha256``，轮次参数 ``MODEL_CATALOG_SHA256``）的定义：
+Active Release 目录（``official-egress-claude-release-catalog/v1``）里 ``production_active`` 选择器指向的那个 Release 登记的
+模型列表 ``models``，按 Store 规范 JSON 取 SHA-256（``canonical_sha256``，保留列表顺序）。它冻结进 Store Campaign v2 的身份，
+前序只读复用按七项身份逐项比对，所以只有这一个算法：准备轮次参数的打包脚本调用本函数，不另算。建 Campaign 时仍只核格式，
+不从冻结的 Active Release 目录复算比对。
+
 本文件被 Codex 身份策略忽略（``claude_`` 前缀），在 Claude 策略里按 ``claude_upgrade_`` 前缀归 control 层，不在 wire 与
 evidence 闭包里（只调用 wire 根 ``_load_plan_jobs``，不被闭包根调用）。
 """
@@ -783,6 +791,43 @@ def official_artifact_bindings(verification: Mapping[str, Any], data_root: Path)
             {"path": _data_relative(path, data_root, "官方冻结目录"), "sha256": file_sha256(path), "bytes": path.stat().st_size}
         )
     return sorted(rows, key=lambda row: row["path"])
+
+
+# ---------------------------------------------------------------------------
+# 八、Store 身份的模型目录摘要
+# ---------------------------------------------------------------------------
+
+
+def release_model_catalog_sha256(catalog: Mapping[str, Any]) -> str:
+    """Store 身份的模型目录摘要（定义见模块说明第八节）：``production_active`` Release 的 ``models`` 的规范 JSON 摘要。
+
+    目录不是 ``official-egress-claude-release-catalog/v1``、``production_active`` 不是指向唯一一个 Release 的选择器、模型列表
+    为空或含非字符串、空串与重复项时拒绝（失败关闭，不退回别的算法）。
+    """
+
+    from tools.official_client_capture import claude_upgrade_profile
+
+    schema = claude_upgrade_profile.RELEASE_CATALOG_SCHEMA
+    if not isinstance(catalog, Mapping) or catalog.get("schema_version") != schema or not isinstance(catalog.get("releases"), list):
+        raise ConfigurationError(f"Active Release 目录不是 {schema}。")
+    selectors = catalog.get("selectors")
+    selector = selectors.get("production_active") if isinstance(selectors, Mapping) else None
+    if not isinstance(selector, Mapping) or selector.get("kind") != "release":
+        raise ConfigurationError("Active Release 目录的 production_active 选择器不是 Release。")
+    matches = [
+        item for item in catalog["releases"] if isinstance(item, Mapping) and item.get("release_sha256") == selector.get("release_sha256")
+    ]
+    if len(matches) != 1:
+        raise ConfigurationError("production_active 选择器指向的 Release 不唯一或不存在。")
+    models = matches[0].get("models")
+    if (
+        not isinstance(models, list)
+        or not models
+        or any(not isinstance(model, str) or not model for model in models)
+        or len(set(models)) != len(models)
+    ):
+        raise ConfigurationError("production_active Release 的模型列表必须是不重复的非空字符串列表。")
+    return canonical_sha256(list(models))
 
 
 # ---------------------------------------------------------------------------
