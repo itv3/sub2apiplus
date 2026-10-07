@@ -390,8 +390,8 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
 # B5a-04：Claude 的场景表与真实链登记，形状与 Codex 相同；集合为空时 Claude 的规划、签发与核验一律拒绝（不签出零场景的
 # 认证）。场景名不得与 Codex 重名，也不得以客户端单元前缀开头。
 # B5a-05：登记最小恢复演练四条链（全部是真实链，零请求、隔离副本树；Linux root 上在 unshare -m -n 命名空间里运行）。
-# 两张表必须是纯字面量：部署脚本 verify_claude_pre_a3_entries 只做 AST 静态求值，不导入本模块。依赖 B2-08 的步骤在链里
-# 是明确的失败占位（「等 B2-08」），B2-08 落地之前这四条不会通过、Claude 的 pre-A3 v3 也签不出来，这是有意的。
+# 两张表必须是纯字面量：部署脚本 verify_claude_pre_a3_entries 只做 AST 静态求值，不导入本模块。第二部分（f0a9beec6）起四条链
+# 复用 B2-08 的验收方法跑完真实步骤，本机与 ARM64 私有命名空间预跑都已通过；Claude 的 pre-A3 v3 由正式入口门禁签出。
 CLAUDE_REAL_CHAIN_IDS: tuple[str, ...] = (
     "vc-chain.claude-reconcile",
     "vc-chain.claude-deadline",
@@ -877,7 +877,9 @@ EXECUTOR_COMMANDS_SCHEMA = "unit-executor-commands/v1"
 EXECUTOR_SUMMARY_SCHEMA = "unit-executor-commands-summary/v1"
 RESULTS_DIR_NAME = "results"
 SCENARIO_ROOTS_DIR_NAME = "scenarios"
-# 执行器从长到短派发用的预计秒数：ARM64 实测（E2-02 部署后，七条重链 3 路并行）；没列的按 30 秒。
+# 执行器从长到短派发用的预计秒数：ARM64 实测、取整到秒，不另加余量；没列的按 30 秒。Codex 七条是 E2-02 部署后七条重链
+# 3 路并行的实测；Claude 四条真实链是 B5a-05 第二部分（f0a9beec6）在 ARM64 私有挂载命名空间里的预跑实测（含复制候选
+# 副本树约 4.3 秒）。秒数只决定派发顺序，不影响场景判定。
 SCENARIO_SECONDS: dict[str, float] = {
     "vc-chain.vc1-recovery-chain": 456.0,
     "vc-chain.vc1-capture": 211.0,
@@ -886,6 +888,11 @@ SCENARIO_SECONDS: dict[str, float] = {
     "vc-chain.late-stage-faults": 63.0,
     "vc-chain.full-validation-only": 38.0,
     "stage-recovery.committed-classify": 19.0,
+    # Claude（B5a-05 收尾）：实测 106.719、77.913、72.476、56.789 秒。
+    "vc-chain.claude-deadline": 107.0,
+    "vc-chain.claude-tool-evolution": 78.0,
+    "vc-chain.claude-root-cause": 72.0,
+    "vc-chain.claude-reconcile": 57.0,
 }
 # 单元超时只作安全网（超时即判该场景崩溃、不签发）：真实链 40 分钟，其余 15 分钟。
 REAL_CHAIN_TIMEOUT_SECONDS = 2400

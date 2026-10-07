@@ -62,7 +62,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                              "B5a-08 签发与核验新增逐单元承接（unit-inherit）清单的形成期证明分支（新增函数），逐场景核验多一个缺省为全集通过的"
                                              " inheriting_mode 参数（Codex 的 v1／v2 签发与核验逐字不变，见 test_unit_inherit_codex_parity）；"
                                              "B5a-05 只填 Claude 的两张字面量登记表 CLAUDE_REAL_CHAIN_IDS、CLAUDE_SCENARIOS（最小恢复演练四条链），"
-                                             "两者不在 Codex 评估读侧闭包内，Codex 场景表、单元与收据不变",
+                                             "两者不在 Codex 评估读侧闭包内，Codex 场景表、单元与收据不变；"
+                                             "B5a-05 收尾给派发秒数表 SCENARIO_SECONDS 追加 Claude 四条真实链的 ARM64 实测秒数（取整到秒，只决定"
+                                             "执行器派发顺序；Codex 七项不变，见 test_pre_a3_codex_parity），并改写 Claude 登记表上方已过时的「等 B2-08」注释",
     "codex_upgrade_policy_certification.py": "B5a-04 策略认证按客户端：Claude 按 v3 引擎算身份、认 Claude 部署收据；编排器引用经适配器（Codex 合同与输出逐字不变）",
     "certify_release.py": "B5a-04 发布认证按客户端：Claude 签 tool-release-certification/v2（加 client）；编排器引用经适配器（Codex v1 逐字不变）",
     "codex_upgrade_vc_receipt.py": "B5a-08 P0 v2 重验新增逐单元承接（unit-inherit）清单的形成期证明分支（新增函数，验证器只从仓库 tools/ci 或"

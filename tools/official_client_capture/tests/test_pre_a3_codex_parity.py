@@ -11,9 +11,10 @@
 基线提交读不到（浅克隆）或基线之后 Codex 场景表已变（同一输入不再成立）时跳过并写明原因。本模块读真实仓库的 git 历史，
 按 ``unit_records.GIT_READERS`` 登记。
 
-另核 B5a-05：认证模块相对 B5a-08 提交只填了 Claude 的两张登记表（真实链 ID 与场景表）。按 AST 逐个顶层语句对照——除这两张
-表的赋值以外，每个语句（Codex 场景表、全部函数与常量）与 B5a-08 提交逐字相同；注释改写不进 AST，不影响判定。B5a-08 的源码
-残差对照因本文件在它之后又改过而跳过，这一项接着守住 Codex 部分不变。
+另核 B5a-05：认证模块相对 B5a-08 提交只填了 Claude 的两张登记表（真实链 ID 与场景表），收尾时再给派发秒数表
+``SCENARIO_SECONDS`` 补 Claude 四条真实链的实测秒数。按 AST 逐个顶层语句对照——除这两张表的赋值与秒数表以外，每个语句
+（Codex 场景表、全部函数与常量）与 B5a-08 提交逐字相同；秒数表的 Codex 七项逐项不变，新增的键恰好是 Claude 的真实链 ID；
+注释改写不进 AST，不影响判定。B5a-08 的源码残差对照因本文件在它之后又改过而跳过，这一项接着守住 Codex 部分不变。
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ BASELINE_COMMIT = "68745c9dd"
 B5A05_BASELINE_COMMIT = "c53571c7d"
 # B5a-05 只许改这两张表的赋值（Claude 的真实链登记与场景表）。
 B5A05_CLAUDE_TABLES = ("CLAUDE_REAL_CHAIN_IDS", "CLAUDE_SCENARIOS")
+# B5a-05 收尾只许给派发秒数表追加 Claude 真实链的键（Codex 的键与秒数不变）。
+B5A05_SECONDS_TABLE = "SCENARIO_SECONDS"
 STAGING_PARENT = Path("/root/docker/capture-cli/data/staging/pre-a3-scenarios")
 WORKDIR = Path("/root/docker/capture-cli/data")
 
@@ -84,7 +87,7 @@ class PreA3CodexParityTests(unittest.TestCase):
                          "门禁记录里的字面命令相同")
 
     def test_b5a05_only_fills_the_claude_tables(self) -> None:
-        """B5a-05：除两张 Claude 登记表的赋值外，认证模块的每个顶层语句与 B5a-08 提交逐字相同（AST 级）。"""
+        """B5a-05：除两张 Claude 登记表的赋值与秒数表里追加的 Claude 项外，认证模块的每个顶层语句与 B5a-08 提交逐字相同（AST 级）。"""
 
         relative = "tools/official_client_capture/codex_upgrade_pre_a3_certification.py"
         try:
@@ -93,25 +96,35 @@ class PreA3CodexParityTests(unittest.TestCase):
         except (OSError, subprocess.CalledProcessError):
             self.skipTest(f"读不到基线提交 {B5A05_BASELINE_COMMIT} 的认证模块（浅克隆或不在仓库内）")
 
-        def statements(text: str) -> tuple[list[str], dict[str, str]]:
-            """顶层语句的 AST 转储：两张 Claude 表单独取出，其余按原顺序。"""
+        def statements(text: str) -> tuple[list[str], dict[str, str], dict[str, float]]:
+            """顶层语句的 AST 转储：两张 Claude 表单独取出，秒数表取字面值，其余按原顺序。"""
 
             others: list[str] = []
             tables: dict[str, str] = {}
+            seconds: dict[str, float] = {}
             for node in ast.parse(text).body:
                 target = node.target if isinstance(node, ast.AnnAssign) else None
                 if isinstance(target, ast.Name) and target.id in B5A05_CLAUDE_TABLES:
                     tables[target.id] = ast.dump(node)
+                elif isinstance(target, ast.Name) and target.id == B5A05_SECONDS_TABLE:
+                    # 注解与赋值形状不变，只比较字面值（追加的键另行核对）。
+                    others.append(ast.dump(node.annotation))
+                    seconds = ast.literal_eval(node.value)
                 else:
                     others.append(ast.dump(node))
-            return others, tables
+            return others, tables, seconds
 
-        old_others, old_tables = statements(source)
-        new_others, new_tables = statements((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        old_others, old_tables, old_seconds = statements(source)
+        new_others, new_tables, new_seconds = statements((REPO_ROOT / relative).read_text(encoding="utf-8"))
         self.assertEqual(sorted(old_tables), sorted(B5A05_CLAUDE_TABLES))
         self.assertEqual(sorted(new_tables), sorted(B5A05_CLAUDE_TABLES))
-        self.assertEqual(new_others, old_others, "两张 Claude 登记表以外的顶层语句与 B5a-08 提交逐字相同")
+        self.assertEqual(new_others, old_others, "两张 Claude 登记表与秒数表以外的顶层语句与 B5a-08 提交逐字相同")
         self.assertNotEqual(new_tables, old_tables, "B5a-05 填了两张 Claude 登记表")
+        # 秒数表：Codex 的键与秒数逐项不变；新增的键恰好是 Claude 的真实链 ID，秒数是正数。
+        self.assertTrue(old_seconds)
+        self.assertEqual({name: value for name, value in new_seconds.items() if name in old_seconds}, old_seconds)
+        self.assertEqual(sorted(set(new_seconds) - set(old_seconds)), sorted(pre_a3.CLAUDE_REAL_CHAIN_IDS))
+        self.assertTrue(all(isinstance(value, float) and value > 0 for value in new_seconds.values()))
 
 
 if __name__ == "__main__":
