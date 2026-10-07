@@ -84,7 +84,8 @@ class ClaudeCampaignInfrastructureTests(unittest.TestCase):
             "client 不符": ({"client": "codex"}, "不是 Claude Campaign"),
             "缺字段": ({"coverage_plan": None}, None),
             "平台不符": ({"configuration": {"platform": "linux/amd64"}}, "linux/arm64"),
-            "前序绑定": ({"predecessor": {"campaign_id": "x"}}, "B2-09"),
+            # B2-09 起前序绑定只接受 null 或 {mode, campaign_id, campaign_identity_sha256}（合法形状见 test_claude_upgrade_predecessor）。
+            "前序绑定": ({"predecessor": {"campaign_id": "x"}}, "predecessor 必须为 null"),
             "工具身份归属": ({"tool_identity": {}}, "工具身份"),
         }
         for index, (label, (overrides, message)) in enumerate(cases.items()):

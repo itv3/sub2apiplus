@@ -49,6 +49,7 @@ from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256, secure_write_json
 from tools.official_client_capture import claude_tool_identity_policy
 from tools.official_client_capture import claude_upgrade_plan
+from tools.official_client_capture import claude_upgrade_predecessor
 from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
@@ -1825,8 +1826,8 @@ def load_campaign_manifest(
     输入绑定。
 
     与 Codex 同签名。Claude 没有控制纪元，``_control_epoch_bootstrap`` 只能为假；控制收据的语义核验由 P0 收口
-    （B2-11）落实，VC 控制制品的语义重放由原子批次入口（B3-01）落实，这里只核两者的文件绑定；前序绑定由导入路径
-    （B2-09）落实，此前只接受空值。"""
+    （B2-11）落实，VC 控制制品的语义重放由原子批次入口（B3-01）落实，这里只核两者的文件绑定；前序绑定（B2-09）
+    只核形状——``null`` 或冻结前序 Campaign 身份的只读复用声明，与前序 Store 的实际身份在导入时核对。"""
 
     if _control_epoch_bootstrap:
         raise ConfigurationError("Claude Campaign 没有 control epoch。")
@@ -1848,8 +1849,9 @@ def load_campaign_manifest(
     _campaign_coordinates(manifest)
     if not SAFE_ID_RE.fullmatch(str(manifest.get("campaign_id", ""))):
         raise ConfigurationError("Claude Campaign ID 非法。")
-    if manifest.get("predecessor") is not None:
-        raise ConfigurationError("Claude Campaign 前序绑定由导入路径（B2-09）落实，当前只接受空值。")
+    claude_upgrade_predecessor.validate_predecessor_binding(
+        manifest.get("predecessor"), campaign_id=str(manifest["campaign_id"])
+    )
     identity = manifest.get("tool_identity")
     if not isinstance(identity, Mapping) or identity.get("client") != "claude":
         raise ConfigurationError("Claude Campaign 工具身份缺少 client 或归属不符。")
@@ -3813,9 +3815,9 @@ def accept_campaign(*arguments: Any, **options: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 # Claude 专属子命令：子命令 → (说明, 落实它的工作项)。动作体落实之前，执行即报 ClaudeOrchestratorPending。
-# ``plan`` 已由 B2-05 落实展开与校验（见 ``_plan_command``），不在此表。
+# ``plan`` 已由 B2-05 落实展开与校验（见 ``_plan_command``），``import-predecessor-evidence`` 已由 B2-09 落实（见
+# ``_import_predecessor_command``），不在此表。
 CLAUDE_OWN_SUBCOMMANDS: Mapping[str, tuple[str, str]] = {
-    "import-predecessor-evidence": ("导入前序 Store 证据（read_only_reuse 或 regression_fixture）", "B2-09（两条导入路径）"),
     "capture-official": ("官方取证 attempt：run 或 seal", "B2-06／B2-07（取证 Job 动作体与 seal 链）"),
     "classify": ("VC-2 规则分类", "B3-02（VC-2 分类 producer）"),
     "prepare-profile": ("VC-3 准备画像草案", "B3-03（VC-3 画像 producer）"),
@@ -4104,6 +4106,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     claude_upgrade_plan.add_plan_arguments(plan)
 
+    import_predecessor = subparsers.add_parser(
+        "import-predecessor-evidence",
+        help=(
+            "B2-09：把前序 Store 的 VC-1 官方证据导入本 Campaign 的受管 Store（read_only_reuse 授权 VC-1 零请求复用，"
+            "只用于总计划冻结的前序；regression_fixture 只登记回归夹具，不授予正式引用权限）"
+        ),
+    )
+    claude_upgrade_predecessor.add_import_arguments(import_predecessor)
+
     freeze = subparsers.add_parser("freeze", help=CLAUDE_OFFLINE_SUBCOMMANDS["freeze"])
     freeze.add_argument("--output-root", type=Path, required=True, help="冻结输出目录（绝对路径，必须不存在）")
     freeze.add_argument("--dist-tag", default="stable", help="npm 主包的 dist-tag，默认 stable")
@@ -4135,6 +4146,26 @@ def _plan_command(arguments: argparse.Namespace) -> dict[str, Any]:
     # 证据标签属于 evidence 语义：在 wire 根之外校验并绑定，标签校验代码的变化不改变 wire 身份。
     labels = claude_upgrade_plan.evidence_labels_binding(arguments, rules)
     return claude_upgrade_plan.plan_report(arguments, jobs, rules, {**inputs, "evidence_labels": labels})
+
+
+def _import_predecessor_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """``import-predecessor-evidence``（B2-09）：Campaign 锁内、没有未释放的执行租约时导入；实现在 ``claude_upgrade_predecessor``。"""
+
+    campaign_dir = Path(arguments.campaign_dir)
+    load_campaign_manifest(campaign_dir)
+    with _campaign_lock(campaign_dir):
+        lease = _read_campaign_lease(campaign_dir)
+        if lease is not None and lease.get("state") != "released":
+            raise ConfigurationError("Campaign 有未释放的执行租约，前序证据导入要求 Campaign 静止：先按恢复协议对账。")
+        manifest = load_campaign_manifest(campaign_dir)
+        return claude_upgrade_predecessor.import_predecessor_evidence(
+            campaign_dir,
+            manifest,
+            predecessor_store=Path(arguments.predecessor_store),
+            predecessor_campaign=str(arguments.predecessor_campaign),
+            mode=str(arguments.mode),
+            approved_by=str(arguments.approved_by),
+        )
 
 
 def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -4179,8 +4210,8 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），其余 Claude
-    专属子命令在动作体落实前报未实现。
+    """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），
+    import-predecessor-evidence 导入前序证据（B2-09），其余 Claude 专属子命令在动作体落实前报未实现。
 
     租约、遗留入口拒绝与停线收据等 Codex 主入口的外层流程，随租约与锁（B1-09 续）一起落实。
     """
@@ -4202,6 +4233,8 @@ def main(argv: list[str] | None = None) -> int:
             result, return_code = _run_shared_subcommand(arguments)
         elif arguments.command == "plan":
             result, return_code = _plan_command(arguments), 0
+        elif arguments.command == "import-predecessor-evidence":
+            result, return_code = _import_predecessor_command(arguments), 0
         else:
             summary, work_item = CLAUDE_OWN_SUBCOMMANDS[str(arguments.command)]
             raise _pending(f"子命令 {arguments.command}（{summary}）", work_item)
