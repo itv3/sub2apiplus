@@ -58,6 +58,7 @@ from unittest import mock
 
 from tools.official_client_capture.tests import managed_tree_copy as trees
 from tools.official_client_capture.tests import claude_chain_driver as chain_driver
+from tools.official_client_capture.tests import claude_late_stage_chain_driver as late_driver
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_predecessor as predecessor_tests
@@ -1662,6 +1663,14 @@ RECOVERY_CHAIN_GROUPS: tuple[tuple[str, Mapping[str, str]], ...] = (
         "_PredecessorMisuseScenarios._scenario_misuse_fixture_as_formal": "跨客户端误用：夹具收据冒充正式引用",
     }),
 )
+
+
+class _LateStageFaultScenarios(late_driver.ClaudeLateStageChainDriver):
+    """A 组未认证场景；单独定向验收后才能加入外层完整链登记。"""
+
+    def _scenario_delivery_faults_in_one_campaign(self) -> None:
+        records = self.exercise_delivery_faults()
+        self.assertEqual(len(records), 4)
 
 
 class ClaudeFaultChainTests(unittest.TestCase):
