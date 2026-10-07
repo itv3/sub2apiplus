@@ -67,14 +67,35 @@ PLANNED = {
     ),
 }
 INGRESSES = {"official-count-tokens-oauth": "/v1/messages/count_tokens", "official-messages-oauth": "/v1/messages"}
+# 当前 Active 的两份输入：总计划冻结名 → 仓库里的跟踪文件。
+ACTIVE_INPUT_SOURCES = {"active_release_catalog": ACTIVE_CATALOG, "active_profile": ACTIVE_PROFILE}
 
 
 def run_main(argv: list[str]) -> tuple[int, dict | None, str]:
     return classify_tests.run_main(argv)
 
 
+def active_frozen_files() -> dict[str, bytes]:
+    """建 Campaign 时冻结进总计划 ``inputs`` 的 Active 输入（名字 → 字节，取仓库里真实的 2.1.226 Active）。
+
+    B2-11（db6a57aab）起，带控制收据的 Campaign（由 plan 或 VC-0 收口建立）一律在建立时冻结这两份输入，``prepare-profile``
+    只读冻结副本、不接受 ``--active-release-catalog``／``--active-profile`` 回退；夹具按同一形状建立。"""
+
+    return {name: path.read_bytes() for name, path in ACTIVE_INPUT_SOURCES.items()}
+
+
+def active_inputs_frozen(campaign: Path) -> bool:
+    """总计划是否已冻结 Active 输入（两份都在 ``inputs`` 里）。"""
+
+    inputs = json.loads((campaign / "campaign.json").read_text(encoding="utf-8")).get("inputs") or {}
+    return all(inputs.get(name) is not None for name in ACTIVE_INPUT_SOURCES)
+
+
 class _ProfileCase(classify_tests._ClassifyCase):
-    """在 B3-02 夹具上走完 VC-2，并把真实的 2.1.226 Active 复制进 Campaign。
+    """在 B3-02 夹具上走完 VC-2，并把真实的 2.1.226 Active 交给 ``prepare-profile``。
+
+    Active 的来源按 Campaign 形状分两种（B2-11 起）：带控制收据的 Campaign 在建立时把 Active 冻结进总计划 ``inputs``，
+    ``prepare-profile`` 不带 Active 参数；不带控制收据的旧形状 Campaign 把 Active 复制到 ``analysis/``，命令行给出。
 
     VC-1 证据缺省另带主模型 23 个 probe 的合成请求字节与 P 通道（``claude_wire_fixture``），供 Wire 投影；投影策略的机器
     草案取受管树里 2.1.226 的那一份（三个模型），审核人替身改成只保留主模型（夹具缺省不合成非主模型证据；三模型投影见
@@ -90,6 +111,9 @@ class _ProfileCase(classify_tests._ClassifyCase):
         if "wire_files" not in kwargs:
             builder = wire_fixture.WireEvidenceBuilder(wire_fixture.single_model_policy(self.projection_policy()), classify_tests.TARGET)
             kwargs["wire_files"] = builder.files()
+        if kwargs.get("control_receipts"):
+            # 带控制收据的 Campaign 由 plan 或 VC-0 收口建立：建立时一律冻结 Active 输入（B2-11，db6a57aab）。
+            kwargs.setdefault("frozen_files", active_frozen_files())
         return super().build_campaign(**kwargs)
 
     def approved_vc2(self, **kwargs: Any) -> Path:
@@ -102,13 +126,19 @@ class _ProfileCase(classify_tests._ClassifyCase):
         self.assertEqual((code, revised["gate"]["reasons"]), (2, []), stderr)
         code, approved, stderr = run_main(self.approve_argv(campaign, revised["revision"], revised["review_sha256"]))
         self.assertEqual(code, 0, stderr)
-        shutil.copyfile(ACTIVE_CATALOG, campaign / "analysis" / "active-release-catalog.json")
-        shutil.copyfile(ACTIVE_PROFILE, campaign / "analysis" / "active-profile.json")
+        if not active_inputs_frozen(campaign):
+            # 旧形状 Campaign：Active 由命令行给出的 Campaign 内文件提供。
+            shutil.copyfile(ACTIVE_CATALOG, campaign / "analysis" / "active-release-catalog.json")
+            shutil.copyfile(ACTIVE_PROFILE, campaign / "analysis" / "active-profile.json")
         return campaign
 
     def prepare_draft_argv(self, campaign: Path) -> list[str]:
+        argv = ["prepare-profile", "--campaign-dir", str(campaign)]
+        if active_inputs_frozen(campaign):
+            # 总计划已冻结 Active 输入：只读冻结副本，命令行不得另给。
+            return argv
         return [
-            "prepare-profile", "--campaign-dir", str(campaign),
+            *argv,
             "--active-release-catalog", str(campaign / "analysis" / "active-release-catalog.json"),
             "--active-profile", str(campaign / "analysis" / "active-profile.json"),
         ]

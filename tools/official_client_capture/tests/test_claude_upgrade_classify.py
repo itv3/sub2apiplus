@@ -34,6 +34,7 @@ from typing import Any, Mapping, Sequence
 
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
+from tools.official_client_capture import claude_upgrade_campaign
 from tools.official_client_capture import claude_upgrade_classify as classify
 from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_plan as plan
@@ -174,6 +175,7 @@ class _ClassifyCase(unittest.TestCase):
         wire_files: Mapping[str, Sequence[tuple[str, bytes, str, int | None]]] | None = None,
         official_reuse: bool = False,
         relay_identities: Mapping[str, Mapping[str, Any]] | None = None,
+        frozen_files: Mapping[str, bytes] | None = None,
     ) -> Path:
         """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
         目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。
@@ -183,7 +185,12 @@ class _ClassifyCase(unittest.TestCase):
 
         中继清单的身份字段与真实 relay 同形：``probe_id`` 记中继跑的基础 probe，非主模型（模型能力取证，B2-07 补充项）
         步骤另记 ``model``，步骤身份「<模型>-<基础 probe>」由它推出。``relay_identities``：probe → 覆盖这两个字段的值
-        （失败关闭用例用）。"""
+        （失败关闭用例用）。
+
+        ``frozen_files``：额外冻结进总计划 ``inputs`` 的输入（名字 → 字节），按正式建 Campaign 时同名的 Campaign 内文件
+        （``claude_upgrade_campaign.FROZEN_INPUT_FILES``）写出并绑定摘要。带控制收据的 Campaign 由 plan 或 VC-0 收口建立，
+        B2-11（db6a57aab）起建立时一律冻结 Active 输入、不接受命令行回退，这类夹具经这里冻结 ``active_release_catalog``
+        与 ``active_profile``；缺省不冻结，不带控制收据的旧形状用例不受影响。"""
 
         scenarios = _scenarios(target)
         scratch = self.root / f"store-build-{campaign_id}"
@@ -207,6 +214,8 @@ class _ClassifyCase(unittest.TestCase):
             ),
             "store_campaign": _write_json(campaign / "inputs" / "store-campaign.json", fixture.campaign_document),
         }
+        for name, data in sorted((frozen_files or {}).items()):
+            frozen[name] = _write_bytes(campaign / claude_upgrade_campaign.FROZEN_INPUT_FILES[name], data)
         rules = list(plan.load_baseline_rules(plan.baseline_rule_manifest_path(BASELINE), BASELINE))
         manifest = {
             "schema_version": "official-client-upgrade-campaign/v1", "client": "claude", "campaign_id": campaign_id,

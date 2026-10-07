@@ -525,7 +525,9 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
         no-op，复用全部官方作业）＋ Claude 计时账本（VC-0 完成）＋ 项目总账注册 ＋ 当前工具身份的受管部署收据 ＋ 规范坐标的
         监督器状态目录。"""
 
-        campaign = self.build_campaign(official_reuse=True)
+        # 下面补写控制收据，按 VC-0 收口建立的 Campaign 形状在建立时就冻结 Active 输入（B2-11，db6a57aab：带控制收据的
+        # Campaign 不接受命令行回退）。
+        campaign = self.build_campaign(official_reuse=True, frozen_files=profile_tests.active_frozen_files())
         # 只读复用形态：VC-1 证据（中继清单与 Wire 证据）都在前序 Campaign 里，本 Campaign 没有官方 attempt 目录；
         # 对账器会按正式 attempt 读这里每个目录的原子预约收据，夹具不得留下半个 attempt。
         self.assertFalse((campaign / "official" / "attempts").exists(), "只读复用形态的 Campaign 不得出现官方 attempt 目录")
@@ -704,9 +706,8 @@ class AtomicBatchChainTests(_RealTreeBatchCase):
     def test_vc3_and_vc4_batches_reach_candidate_sealed(self) -> None:
         campaign = self.campaign = self.build_batch_campaign()
         self.approve_vc2_directly(campaign, change=(profile_tests.CHANGE,), delete=(profile_tests.DELETE,))
-        for source, name in ((profile_tests.ACTIVE_CATALOG, "active-release-catalog.json"), (profile_tests.ACTIVE_PROFILE, "active-profile.json")):
-            (campaign / "analysis" / name).write_bytes(source.read_bytes())
-            (campaign / "analysis" / name).chmod(0o600)
+        # Active 输入已在建 Campaign 时冻结进总计划（build_batch_campaign），准备草案不带 Active 参数。
+        self.assertTrue(profile_tests.active_inputs_frozen(campaign))
 
         def action(action_id: str, argv: list[Any]) -> dict[str, Any]:
             return batch.managed_action(action_id, f"VC-3:{action_id}", argv, item_ids=[action_id])

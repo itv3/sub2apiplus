@@ -428,9 +428,8 @@ class Vc3StoreWriteIdempotencyTests(_StagingCase):
     def _vc3_ready(self) -> Path:
         campaign = self.campaign = self.build_batch_campaign()
         self.approve_vc2_directly(campaign, change=(profile_tests.CHANGE,), delete=(profile_tests.DELETE,))
-        for source, name in ((profile_tests.ACTIVE_CATALOG, "active-release-catalog.json"), (profile_tests.ACTIVE_PROFILE, "active-profile.json")):
-            (campaign / "analysis" / name).write_bytes(source.read_bytes())
-            (campaign / "analysis" / name).chmod(0o600)
+        # Active 输入已在建 Campaign 时冻结进总计划（build_batch_campaign，B2-11 起不接受命令行回退），准备草案不带 Active 参数。
+        self.assertTrue(profile_tests.active_inputs_frozen(campaign))
         return campaign
 
     def _action(self, action_id: str, argv: list[Any]) -> dict[str, Any]:
