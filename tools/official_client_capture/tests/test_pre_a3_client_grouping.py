@@ -255,6 +255,39 @@ class ScenarioTableTests(unittest.TestCase):
 
 
 class EntryGatesTests(unittest.TestCase):
+    def test_claude_measured_quota_uses_full_client_prefix_and_keeps_unmeasured_default(self) -> None:
+        """已测 Claude 场景使用实测表；未测场景仍沿用计划秒数与默认额度，不伪造实测值。"""
+
+        with tempfile.TemporaryDirectory() as directory, claude_registered():
+            root = Path(directory)
+            units = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=root, client="claude")
+            path = root / "claude-units.json"
+            path.write_text(json.dumps(units), encoding="utf-8")
+            for measured, expected in (({}, (entry_gates.PRE_A3_DEFAULT_CORES, units["units"][0]["weight"])),
+                                       ({CLAUDE_FAKE_NAME: (123.0, 0.61)}, (0.75, 123.0))):
+                with self.subTest(measured=bool(measured)), mock.patch.dict(entry_gates.PRE_A3_MEASURED, measured, clear=True):
+                    manifest = entry_gates.plan_gates(root, profile="pre-a3", launcher=[], pre_a3_units=path,
+                                                     pre_a3_data_inputs=[], platform="linux")
+                    unit = manifest["units"][0]
+                    self.assertEqual((unit["cores"], unit["weight"]), expected)
+                    self.assertEqual(unit["unit_id"], f"pre-a3:claude:{CLAUDE_FAKE_NAME}")
+
+    def test_codex_measured_quota_keeps_existing_scenario_names(self) -> None:
+        """同一个规划入口下，Codex 的全部场景仍取原名称、原额度和原秒数。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            units = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=root)
+            path = root / "codex-units.json"
+            path.write_text(json.dumps(units), encoding="utf-8")
+            manifest = entry_gates.plan_gates(root, profile="pre-a3", launcher=[], pre_a3_units=path,
+                                             pre_a3_data_inputs=[], platform="linux")
+            for original, unit in zip(units["units"], manifest["units"], strict=True):
+                with self.subTest(unit=unit["unit_id"]):
+                    cores, seconds = entry_gates.pre_a3_quota(unit["unit_id"].removeprefix("pre-a3:"))
+                    self.assertEqual(unit["cores"], cores)
+                    self.assertEqual(unit["weight"], seconds if seconds is not None else original["weight"])
+
     def test_pre_a3_gate_command_follows_the_units_client(self) -> None:
         codex_ids = [f"pre-a3:{name}" for name in pre_a3.scenario_names()]
         self.assertEqual(entry_gates.gate_literal_command("pre-a3", codex_ids), entry_gates.GATE_COMMANDS["pre-a3"])

@@ -166,9 +166,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "7903c17a9c1fc86a788b87027ffacb6fabe0a8b1a649fdcf1dbd3012f65ad8f0",
+      "sha256": "8d220e8011560be5a8b8fcc78921070adf1ad98957219e2596f7ecd0679b2c7b",
       "mode": "0700",
-      "bytes": 73438
+      "bytes": 73667
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -657,5 +657,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "0dc94d41d636df16237c70910f79ef038646c89a61b70d01c9cdb3dce69441e0"
+  "manifest_sha256": "9de410396bf962a844cd468c4873873532a0237646c05e3d7ad3f362d921cc0d"
 }

@@ -608,7 +608,9 @@ def plan_gates(
                 if not str(unit.get("unit_id", "")).startswith(PRE_A3_PREFIX):
                     raise ValueError(f"pre-A3 场景清单里有非 pre-A3 单元：{unit.get('unit_id')}")
                 merged = {key: value for key, value in unit.items() if key != "scenario_test_file"}
-                cores, seconds = pre_a3_quota(str(unit["unit_id"]).removeprefix(PRE_A3_PREFIX))
+                # 按客户端去掉完整前缀；Claude 场景名不能残留 claude:，否则已测额度永远匹配不上。
+                unit_prefix = PRE_A3_CLIENT_PREFIXES[pre_a3_unit_client(unit["unit_id"]) or "codex"]
+                cores, seconds = pre_a3_quota(str(unit["unit_id"]).removeprefix(unit_prefix))
                 merged.update(cores=cores, memory_mb=PRE_A3_MEMORY_MB)
                 test_file = unit.get("scenario_test_file")
                 if isinstance(test_file, str) and test_file:

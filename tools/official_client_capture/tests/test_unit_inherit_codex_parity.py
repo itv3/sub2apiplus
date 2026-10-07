@@ -546,6 +546,17 @@ B5B03B_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         '    "vc-chain.claude-recovery-chain": 85.0,',
     ],
 }
+# B5b-05a 只修正 Claude 场景名的完整前缀解析；Codex 仍移除原 pre-a3:。
+# 实测表与调度策略表保持原值，全部 Codex 场景的规划额度由客户端分组测试逐项核对。
+B5B05A_BASELINE_COMMIT = "bfa0b1923e15d4c68b5fdfc1d721b6d04eaa1d7b"
+B5B05A_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_gates.py": "8d220e8011560be5a8b8fcc78921070adf1ad98957219e2596f7ecd0679b2c7b",
+}
+B5B05A_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_gates.py": [
+        '                cores, seconds = pre_a3_quota(str(unit["unit_id"]).removeprefix(PRE_A3_PREFIX))',
+    ],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
@@ -554,6 +565,7 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
     ("B5b-03", B5B03_BASELINE_COMMIT, B5B03_SOURCE_DIGESTS, B5B03_SOURCE_REMOVED_LINES),
     ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SOURCE_DIGESTS, B405B1_SOURCE_REMOVED_LINES),
     ("B5b-03 B 组", B5B03B_BASELINE_COMMIT, B5B03B_SOURCE_DIGESTS, B5B03B_SOURCE_REMOVED_LINES),
+    ("B5b-05a", B5B05A_BASELINE_COMMIT, B5B05A_SOURCE_DIGESTS, B5B05A_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {
