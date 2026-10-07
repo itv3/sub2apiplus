@@ -146,6 +146,35 @@ class DriverInstallTests(unittest.TestCase):
         _write_json(path, {"status": "enabled", "tool_files_sha256": tool_sha, "supervisor_sha256": "s" * 64})
         return path
 
+    def test_driver_commands_leave_no_bytecode_and_install_still_verifies(self) -> None:
+        """m9 入口空跑失败的回归：在没有 PYTHONDONTWRITEBYTECODE 的环境里执行驱动命令（后台验证 status 先 source lib.sh 解析
+        参数文件、加载客户端表；操作员直接调用参数解析器）之后，安装目标里不得出现 __pycache__，install verify 照常通过——
+        否则下一次入口空跑的 guard-pre-plan 报「驱动目录不得含 __pycache__」。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            control = fixture.data_root / "control"
+            control.chmod(0o700)
+            self._deploy_receipt(control, "20260922t000000z", "a" * 64)
+            target = root / "arm64-capture-driver"
+            with mock.patch.object(driver, "_running_as_root", return_value=False), mock.patch.object(driver, "_require_root", return_value=None):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    rc = driver.main(["install", "--source", str(DRIVER_ROOT), "--target", str(target), "--data-root", str(fixture.data_root)])
+                self.assertEqual(rc, 0)
+                # 复现 ARM64 上的环境：操作员的 shell 没有导出 PYTHONDONTWRITEBYTECODE 与共享字节码前缀。
+                environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX"}}
+                environment.update(fixture.env)
+                scripts = target / "driver"
+                for argv in (["bash", str(scripts / "background-validate.sh"), "status"], [sys.executable, str(scripts / "parse_env.py"), str(fixture.env_file)]):
+                    with self.subTest(command=Path(argv[1]).name):
+                        completed = subprocess.run(argv, env=environment, cwd=root, capture_output=True, text=True, timeout=120,
+                                                   stdin=subprocess.DEVNULL)
+                        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+                self.assertEqual(sorted(path.relative_to(target).as_posix() for path in target.rglob("__pycache__")), [])
+                self.assertEqual(driver.verify_install(target, fixture.data_root)["status"], "verified")
+
     def test_install_and_verify_bind_latest_deployment_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

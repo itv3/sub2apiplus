@@ -7,8 +7,12 @@
 # 用法：source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 if [ -z "${BASH_SOURCE[1]:-}" ]; then echo "lib.sh 只能被 source"; exit 2; fi
 export DRV=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# 驱动里的 python 一律不写字节码：驱动目录不得出现 __pycache__（安装清单精确闭合，install verify 与入口空跑的 guard-pre-plan
+# 都会拒绝）。解析参数文件时就会按需加载同目录的客户端表，所以在任何 python 调用之前导出、解析器调用再带 -B（m9：原先到下面
+# 导出 D 时才导出，后台验证 status 等命令的参数解析写出了 driver/__pycache__/client_table.*.pyc，下一次入口空跑因此失败）。
+export PYTHONDONTWRITEBYTECODE=1
 : "${ARM64_VC_ENV:?ARM64_VC_ENV 未设置（指向本轮 env.sh，见 env.example.sh）}"
-ARM64_VC_ENV_EXPORTS=$(python3 "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }
+ARM64_VC_ENV_EXPORTS=$(python3 -B "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }
 eval "$ARM64_VC_ENV_EXPORTS"; unset ARM64_VC_ENV_EXPORTS
 # 客户端表（Claude 升级 B5a-06）：本轮客户端（参数 CLIENT，缺省 codex）在驱动里的绑定——编排器与各收据模块名、二进制与
 # 账号参数键、总账目录、便宜检查的必填键、追加给共享模块的 --client 等——取自同目录的 client_table.py，以 CT_ 前缀的

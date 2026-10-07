@@ -747,12 +747,26 @@ B5B01A_SHELL_RESIDUALS: dict[str, list[str]] = {
 # 之后各批的新基线（批次、基线提交、改动后的脚本摘要、代入 Codex 取值后的残差）：某个脚本再改过时它那一项改为核对接管（当前
 # 内容由更新的一批登记），改了驱动脚本的批次在末尾追加一项。基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 已不再由客户端
 # 表给出，按 Codex 的空串代入（见 B5a-09 一段）。
+# m9 修复（入口空跑 guard-pre-plan 报「驱动目录不得含 __pycache__」）：lib.sh 在任何 python 调用之前导出
+# PYTHONDONTWRITEBYTECODE=1，参数解析器调用加 -B。两处只决定字节码写不写，命令与输出不变（原先到导出 D 时也会导出同一个变量）。
+M9_BYTECODE_BASELINE_COMMIT = "6097da0d16ccecd552f657052179a9906e12d0e8"
+M9_BYTECODE_SHELL_DIGESTS: dict[str, str] = {
+    "lib.sh": "b2543fed5635b04ec5396fc1c7edf76b1f0ef3b3e9e1d3d05016510b5cfb05df",
+}
+M9_BYTECODE_SHELL_RESIDUALS: dict[str, list[str]] = {
+    "lib.sh": [
+        "+export PYTHONDONTWRITEBYTECODE=1",
+        '-ARM64_VC_ENV_EXPORTS=$(python3 "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }',
+        '+ARM64_VC_ENV_EXPORTS=$(python3 -B "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }',
+    ],
+}
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
     ("B3-04a", B304A_BASELINE_COMMIT, B304A_SHELL_DIGESTS, B304A_SHELL_RESIDUALS),
     ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SHELL_DIGESTS, B5A11_SHELL_RESIDUALS),
     ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SHELL_DIGESTS, B5B01A_SHELL_RESIDUALS),
+    ("m9-bytecode", M9_BYTECODE_BASELINE_COMMIT, M9_BYTECODE_SHELL_DIGESTS, M9_BYTECODE_SHELL_RESIDUALS),
 )
 
 

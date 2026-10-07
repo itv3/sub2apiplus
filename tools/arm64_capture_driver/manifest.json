@@ -274,9 +274,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "e10f364e823194d5deb596d1cadd944b253d5cfb5c241446697fbb756d080431",
+      "sha256": "b2543fed5635b04ec5396fc1c7edf76b1f0ef3b3e9e1d3d05016510b5cfb05df",
       "mode": "0700",
-      "bytes": 19211
+      "bytes": 19746
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -316,9 +316,9 @@
     },
     {
       "path": "driver/parse_env.py",
-      "sha256": "c0bb720826e596aa9e70862bd7f66d73bb8527f0efa41b0e2ef27a886e0821e5",
+      "sha256": "92991e27f9c1dc788c0f63e380c11d7be7eb77a5c0610da255d9f3122b03c35f",
       "mode": "0700",
-      "bytes": 25861
+      "bytes": 26188
     },
     {
       "path": "driver/phase_context.py",
@@ -621,5 +621,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "31555964d2e27a289b3186e803acb870ec0cc08a788ae9b8e96ad1e7dae06f7d"
+  "manifest_sha256": "c65269a41018d32818fff12eb13e1da5a7fc3d5b137536712a0bb4f84327ba5e"
 }

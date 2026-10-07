@@ -55,7 +55,8 @@ func TestOpenAIWSReplayWorkingBytesBoundsSerializedBody(t *testing.T) {
 			rebuilt, err := setOpenAIWSPayloadInputSequence(tt.payload, tt.items, true)
 			require.NoError(t, err)
 			require.GreaterOrEqual(t, openAIWSReplayWorkingBytes(tt.payload, state), int64(len(rebuilt)), "分配前估算必须覆盖实际重建结果")
-			require.Zero(t, testing.AllocsPerRun(10, func() { _ = openAIWSReplayWorkingBytes(tt.payload, state) }), "估算不得提前生成另一份正文")
+			// 同包 minAllocsPerRun：多轮取最小值，滤掉包内后台 goroutine 落进测量窗口的突发分配。
+			require.Zero(t, minAllocsPerRun(5, 10, func() { _ = openAIWSReplayWorkingBytes(tt.payload, state) }), "估算不得提前生成另一份正文")
 		})
 	}
 }

@@ -410,4 +410,7 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # 直接执行（lib.sh、操作员手动调用）时不写字节码：按需加载的客户端表会在驱动目录留下 __pycache__，安装复验与入口空跑的
+    # guard-pre-plan 因此失败（m9）。被别的模块导入时由调用方负责（驱动入口都已设置）。
+    sys.dont_write_bytecode = True
     sys.exit(main(sys.argv))
