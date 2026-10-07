@@ -25,8 +25,10 @@ Codex 的策略文件名 ``tool_identity_policy_v2.json``，Claude 的策略演�
 
 评估器（4a，协调方 10-07 定）：Claude 的 checker／builder 由 B4-03 建立，之前不在受管树里。两者都不存在时评估器摘要显式记为
 「尚未建立」（摘要为 null，``status`` 为 ``not_established``），不失败；两次都尚未建立算不变；从尚未建立到建立的那次演进记
-一次「评估器建立」（两项都列为变化）；只建立了一个即失败关闭。候选侧（b0 授权迁移、已封存候选的影响）由 B4-01／B4-04
-落实，出现候选目录即报待实现。
+一次「评估器建立」（两项都列为变化）；只建立了一个即失败关闭。候选侧（B4-04）：按 Codex 同一口径扫描 ``candidates/``，
+有作废记录或被取代标记的候选记入 ``impact.inactive_candidates``；活跃候选在 ``evaluator.candidates`` 记当前评估基线、b0 已有
+评估产出与 ``b0_authorization_moved``（b0 且没有产出时 b0 授权随本次演进迁移，见 ``claude_upgrade_baseline``）。候选已有
+取证 attempt 时它的作业影响由 B4-01（候选采集）落实，此时报待实现。
 
 策略演进（4b）：当前策略与有效策略不同时只允许「只改策略文件」的演进，绑定按 Claude v3 引擎出具的兼容收据与激活认证
 （``codex_upgrade_policy_certification`` 的 ``client="claude"`` 口径），判据与 Codex 的 ``_policy_evolution_transition`` 相同。
@@ -492,11 +494,14 @@ def tool_evolution_preview(
     impact_paths = sorted(set(drift["wire_producer"]))
     evaluation_paths = sorted(set(drift["evidence_semantics"]))
 
-    candidates_root = campaign_dir / "candidates"
-    if candidates_root.is_dir() and not candidates_root.is_symlink() and any(
-        child.is_dir() and not child.is_symlink() for child in candidates_root.iterdir()
-    ):
-        raise orchestrator._pending("候选阶段的工具演进影响与评估器授权迁移", "B4-01／B4-04（候选采集与评估基线）")
+    # 候选侧（B4-04）：活跃候选的评估器授权迁移按 Codex 同一口径记录；候选已有取证 attempt 时它的作业影响由 B4-01 落实。
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    active_candidates, inactive_candidates = claude_upgrade_baseline.evolution_candidates(campaign_dir)
+    for candidate_id in active_candidates:
+        if claude_upgrade_baseline.candidate_has_capture_attempts(campaign_dir, candidate_id):
+            raise orchestrator._pending(f"候选 {candidate_id} 取证作业的工具演进影响", "B4-01（候选采集）")
+    evaluator_candidates = claude_upgrade_baseline.evaluator_candidate_records(campaign_dir, active_candidates)
     official_jobs = orchestrator._campaign_jobs(campaign_dir, manifest, "official")
     path_map: dict[str, set[str]] = {}
     for job in official_jobs:
@@ -554,7 +559,7 @@ def tool_evolution_preview(
             "wire_closure_changed": wire_closure_changed,
             "evidence_closure_changed": from_summary["evidence_closure_sha256"] != to_summary["evidence_closure_sha256"],
         },
-        "impact": {"official": official_part, "candidates": {}, "inactive_candidates": []},
+        "impact": {"official": official_part, "candidates": {}, "inactive_candidates": inactive_candidates},
         "evaluator": {
             "from": from_evaluator,
             "to": to_evaluator,
@@ -562,7 +567,7 @@ def tool_evolution_preview(
             "established_in_this_evolution": (
                 from_evaluator["status"] == EVALUATOR_NOT_ESTABLISHED and to_evaluator["status"] == EVALUATOR_ESTABLISHED
             ),
-            "candidates": {},
+            "candidates": evaluator_candidates,
         },
         "bindings": {"fix_commit": str(fix_commit), "deployment_receipt": dict(deployment)},
         **({"policy_transition": policy_transition} if policy_transition is not None else {}),

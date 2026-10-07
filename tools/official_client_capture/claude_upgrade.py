@@ -2119,10 +2119,16 @@ def _b0_evaluator_authorized_digest_history(
     manifest: Mapping[str, Any],
     candidate_id: str,
 ) -> list[dict[str, str]]:
-    """共享流程在 ``upgrade_control_plane._b0_evaluator_authorized_digest_history``；以 Claude 适配器转调。"""
+    """登记的薄壳分叉（B4-04，设计 B4-03 风险③）：不转调共享实现。
 
-    with upgrade_control_plane.adapter_scope(upgrade_client_adapter.adapter_for("claude")):
-        return upgrade_control_plane._b0_evaluator_authorized_digest_history(campaign_dir, manifest, candidate_id)
+    共享 ``upgrade_control_plane._b0_evaluator_authorized_digest_history`` 把演进收据的 ``evaluator.to`` 钉死为恰好两键，Claude
+    收据多一个 ``status``、评估器尚未建立时摘要为 null；Claude 与读侧闭包的 b0 授权共用一条授权链自实现，演进链全部已建立时
+    与共享实现逐字相同（合同测试锁定）。实现在 ``claude_upgrade_baseline``。
+    """
+
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.b0_evaluator_authorized_digest_history(campaign_dir, manifest, candidate_id)
 
 
 def _bootstrap_noop_first_batch(
@@ -4120,7 +4126,7 @@ def _vc_run_manifest_from_batch(
 
 
 # 阶段路径照搬 Codex（B2-08 起用，逐字一致由 COPIED 锁定）：Campaign 级阶段（capture-official／classify）路径固定；
-# 候选级阶段按当前评估基线解析，评估基线（B4-04）落实之前候选阶段一律报未实现。
+# 候选级阶段按当前评估基线解析（B4-04 起 b≥1 按评估基线 COMMIT 的 stage_sources，实现在 claude_upgrade_baseline）。
 _STAGE_ALIASES = {
     "official": "capture-official",
     "candidate": "capture-candidate",
@@ -4218,7 +4224,7 @@ def _stage_read_source(
     baseline: int,
     stage: str,
 ) -> dict[str, Any]:
-    """服务面成员（B3-01）：评估阶段 b0 的读来源，转调 ``claude_upgrade_batch``；b≥1 随 B4-04 落实。"""
+    """服务面成员（B3-01／B4-04）：评估阶段的读来源，转调 ``claude_upgrade_batch``（b≥1 再转 ``claude_upgrade_baseline``）。"""
 
     return claude_upgrade_batch.stage_read_source(Path(campaign_dir), candidate_id, baseline, stage)
 
@@ -4229,7 +4235,7 @@ def _stage_write_target(
     baseline: int,
     stage: str,
 ) -> Path:
-    """服务面成员（B3-01）：评估阶段 b0 的写目标，转调 ``claude_upgrade_batch``；b≥1 随 B4-04 落实。"""
+    """服务面成员（B3-01／B4-04）：评估阶段的写目标，转调 ``claude_upgrade_batch``（b≥1 再转 ``claude_upgrade_baseline``）。"""
 
     return claude_upgrade_batch.stage_write_target(Path(campaign_dir), candidate_id, baseline, stage)
 
@@ -4393,47 +4399,52 @@ def _verify_candidate_attempt_identity(
     raise _pending("_verify_candidate_attempt_identity", "B4-01（候选采集）")
 
 
-# B4-04／B4-05（评估基线与评估失败恢复）
+# B4-04（评估基线 b<K> 与评估器授权，实现在 ``claude_upgrade_baseline``）／B4-05（评估失败恢复）
 
 
 def _assertions_root(campaign_dir: Path, candidate_id: str) -> Path:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：当前基线的断言目录；实现在 ``claude_upgrade_baseline``。"""
 
-    del campaign_dir, candidate_id
-    raise _pending("_assertions_root", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.assertions_root(campaign_dir, candidate_id)
 
 
 def _current_evaluation_baseline(
     campaign_dir: Path,
     candidate_id: str,
 ) -> tuple[int, dict[str, Any] | None]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：当前评估基线（账本＋COMMIT，并核 Store 两份登记一致）；实现在 ``claude_upgrade_baseline``。"""
 
-    del campaign_dir, candidate_id
-    raise _pending("_current_evaluation_baseline", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.current_evaluation_baseline(campaign_dir, candidate_id)
 
 
 def _evaluation_baseline_has_outputs(campaign_dir: Path, candidate_id: str, baseline: int) -> list[str]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：当前评估基线已有的评估产出；实现在 ``claude_upgrade_baseline``。"""
 
-    del campaign_dir, candidate_id, baseline
-    raise _pending("_evaluation_baseline_has_outputs", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.evaluation_baseline_has_outputs(campaign_dir, candidate_id, baseline)
 
 
 def _evaluation_baseline_states(campaign_dir: Path, candidate_id: str) -> dict[int, dict[str, bool]]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：各评估基线目录的 PREPARED／AUTHORIZATION／COMMIT／ABANDON 状态；实现在 ``claude_upgrade_baseline``。"""
 
-    del campaign_dir, candidate_id
-    raise _pending("_evaluation_baseline_states", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.evaluation_baseline_states(campaign_dir, candidate_id)
 
 
 def _load_evaluation_baseline_recovery(
     campaign_dir: Path, candidate_id: str, baseline: int
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：读并校验 b<K>/recovery.json；实现在 ``claude_upgrade_baseline``。"""
 
-    del campaign_dir, candidate_id, baseline
-    raise _pending("_load_evaluation_baseline_recovery", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
 
 
 def _authorized_evaluator_digests(
@@ -4442,10 +4453,11 @@ def _authorized_evaluator_digests(
     candidate_id: str,
     baseline: int,
 ) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：评估基线授权的 evaluator 摘要口径；实现在 ``claude_upgrade_baseline``。"""
 
-    del campaign_dir, manifest, candidate_id, baseline
-    raise _pending("_authorized_evaluator_digests", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.authorized_evaluator_digests(campaign_dir, manifest, candidate_id, baseline)
 
 
 def _verify_evaluator_digests_authorized(
@@ -4457,17 +4469,19 @@ def _verify_evaluator_digests_authorized(
     *,
     label: str,
 ) -> None:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：evaluator 摘要必须等于基线授权口径；实现在 ``claude_upgrade_baseline``。"""
 
-    del campaign_dir, manifest, candidate_id, baseline, digests, label
-    raise _pending("_verify_evaluator_digests_authorized", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    claude_upgrade_baseline.verify_evaluator_digests_authorized(campaign_dir, manifest, candidate_id, baseline, digests, label=label)
 
 
 def _plan_evaluator_entry_digests(manifest: Mapping[str, Any]) -> dict[str, str]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（B4-04）：plan 冻结的 checker／builder 摘要；实现在 ``claude_upgrade_baseline``。"""
 
-    del manifest
-    raise _pending("_plan_evaluator_entry_digests", "B4-04／B4-05（评估基线与评估失败恢复）")
+    from tools.official_client_capture import claude_upgrade_baseline
+
+    return claude_upgrade_baseline.plan_evaluator_entry_digests(manifest)
 
 
 def _derive_b0_evaluation_run(
@@ -4478,10 +4492,10 @@ def _derive_b0_evaluation_run(
     classification: Mapping[str, Any],
     rules: Sequence[str],
 ) -> dict[str, Any]:
-    """服务面成员（Claude 编排器尚未实现，由 B4-04／B4-05（评估基线与评估失败恢复） 落实）。"""
+    """服务面成员（Claude 编排器尚未实现，由 B4-05（评估失败局部恢复） 落实）：b0 失败定位用的派生评估索引。"""
 
     del campaign_dir, manifest, candidate_id, revision, classification, rules
-    raise _pending("_derive_b0_evaluation_run", "B4-04／B4-05（评估基线与评估失败恢复）")
+    raise _pending("_derive_b0_evaluation_run", "B4-05（评估失败局部恢复）")
 
 
 # ---------------------------------------------------------------------------
@@ -5180,8 +5194,12 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
 
             result = claude_upgrade_revision.invalidate_candidate(arguments)
             return result, 0 if result.get("status") in {"preview", "applied"} else 3
+        # B4-04：评估基线有编排器与 Store 两份登记，evaluation-recover 在共享流程之外还要补写收敛、预检与写 Store 事实，
+        # 实现在 claude_upgrade_baseline（内部仍调用共享流程，退出码口径不变）。
         if command == "evaluation-recover":
-            result = upgrade_control_plane.evaluation_recover(arguments)
+            from tools.official_client_capture import claude_upgrade_baseline
+
+            result = claude_upgrade_baseline.evaluation_recover(arguments)
             return result, 0 if result.get("status") in {"preview", "applied", "abandoned", "redirect"} else 3
         if command == "evaluation-epoch":
             return upgrade_control_plane._evaluation_epoch_command(arguments), 0

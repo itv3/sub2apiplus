@@ -19,7 +19,8 @@ VC-0 交接链）在 ``claude_upgrade_vc``。
 
 二、评估阶段路径（服务面 ``_stage_read_source``／``_stage_write_target``）
 =====================================================================
-b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 的 ``stage_sources`` 递归解析依赖评估基线 COMMIT，随 B4-04 落实。
+b0（没有评估基线）按原路径解析，与 Codex 同一坐标；b≥1 按评估基线 COMMIT 冻结的 ``stage_sources`` 递归解析，实现在
+``claude_upgrade_baseline``（B4-04）。
 
 三、阶段幂等重派证明（服务面 ``_campaign_stage_replay_facts``）
 ==========================================================
@@ -289,12 +290,14 @@ def _evaluation_stage(stage: str, candidate_id: str, baseline: int) -> str:
 
 
 def stage_read_source(campaign_dir: Path, candidate_id: str, baseline: int, stage: str) -> dict[str, Any]:
-    """服务面 ``_stage_read_source``：b0 的读来源（原路径）；b≥1 随 B4-04 落实。"""
+    """服务面 ``_stage_read_source``：b0 的读来源（原路径）；b≥1 转调 ``claude_upgrade_baseline``（B4-04）。"""
 
     orchestrator = _orchestrator()
     canonical = _evaluation_stage(stage, candidate_id, baseline)
     if baseline != 0:
-        raise orchestrator._pending(f"_stage_read_source（评估基线 b{baseline}）", "B4-04（评估基线 b<K>）")
+        from tools.official_client_capture import claude_upgrade_baseline
+
+        return claude_upgrade_baseline.stage_read_source(Path(campaign_dir), candidate_id, baseline, canonical)
     if canonical == "assertions":
         path = Path(campaign_dir) / "assertions" / candidate_id / "results.json"
     else:
@@ -309,12 +312,14 @@ def stage_read_source(campaign_dir: Path, candidate_id: str, baseline: int, stag
 
 
 def stage_write_target(campaign_dir: Path, candidate_id: str, baseline: int, stage: str) -> Path:
-    """服务面 ``_stage_write_target``：b0 的写目标（原路径；断言阶段是候选的断言目录）；b≥1 随 B4-04 落实。"""
+    """服务面 ``_stage_write_target``：b0 的写目标（原路径；断言阶段是候选的断言目录）；b≥1 转调 ``claude_upgrade_baseline``。"""
 
     orchestrator = _orchestrator()
     canonical = _evaluation_stage(stage, candidate_id, baseline)
     if baseline != 0:
-        raise orchestrator._pending(f"_stage_write_target（评估基线 b{baseline}）", "B4-04（评估基线 b<K>）")
+        from tools.official_client_capture import claude_upgrade_baseline
+
+        return claude_upgrade_baseline.stage_write_target(Path(campaign_dir), candidate_id, baseline, canonical)
     if canonical == "assertions":
         return Path(campaign_dir) / "assertions" / candidate_id
     return orchestrator._legacy_stage_path(Path(campaign_dir), canonical, candidate_id)[1]
