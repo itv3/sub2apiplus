@@ -17,7 +17,8 @@
   ``staging`` 一段，供仅夹具总账使用），再起子进程在副本树里跑链体；核对子进程结果、每条不超过 15 分钟，并把耗时与
   隔离方式写进 ``real_chain_metrics``（pre-A3 场景记录照收）。
 * **链体**（四个 ``_exercise_*`` 方法）：只在副本树子进程里运行（``PYTHONPATH`` 只含副本根，模块不得回落到原仓库），
-  在子进程内装替身（中继、docker、宿主命令边界由批次 2 的取证夹具提供），全部 CLI 经真实入口执行。
+  在子进程内装替身（中继、docker、宿主命令边界由批次 2 的取证夹具提供），全部 CLI 经真实入口执行。链体先跑本模块自己
+  的步骤，再复用 B2-08 写好的验收链（见下文）。
 
 隔离规则：
 
@@ -27,12 +28,23 @@
 * 其余环境（本机 macOS、非 root 的 Linux）降级为「副本树加替身」：同一套链体照常跑完全部逻辑断言，指标里记
   ``isolation=degraded``。pre-A3 只在 ARM64 上签发，降级结果进不了认证。
 
-依赖 B2-08 的步骤（对账、resume、入口总账准入、编排器侧工具演进登记）在链体里是明确的失败占位：先跑完不依赖 B2-08 的
-全部步骤与断言，到占位处以「等 B2-08：<缺的步骤>」失败——不跳过、不静默通过。所以 B2-08 落地之前四条链都不会通过，
-Claude 的 pre-A3 v3 也签不出来，这是有意的；B2-08 落地后把占位替换成真实步骤。
+复用 B2-08 的验收链（第二部分，替换第一部分里「等 B2-08」的失败占位）：对账、resume、入口总账准入、编排器侧工具演进
+登记这些步骤由 B2-08 落实，它的验收链写成自带夹具的方法（``test_claude_upgrade_recovery`` 的 ``_exercise_*`` 等，``setUp``
+建临时数据根），按设计以 ``python -m unittest <模块>.<类>.<方法>`` 直接复用。链体跑完本模块的步骤后，在同一副本树、同一
+隔离里起子进程逐组运行它们（环境与链体相同：同一命名空间、``PYTHONPATH`` 只含副本根、同一 ``TMPDIR`` 与仅夹具总账开关；
+超时整组终止），全部通过才记一步，失败、出错、跳过或超时都判链体失败：
 
-零请求：命名空间模式由构造保证（没有可用的网络接口）；两种模式下取证都走替身中继与替身 docker，截止链只跑本地命令，
-Store 子链不涉及网络。本文件位于 tests/，不进任何受管身份。
+* reconcile：``ReconcileResumeChainTests._exercise_reconcile_resume_failed_job``；无预约时 ``SupervisorRunReconcileTests``
+  两例（预约前失败 N+1 重派、seal 链零请求失败按 post-run-tooling）；
+* deadline：``DeadlineExtensionReconcileTests._exercise_expired_deadline_pause_extend_reconcile``（真实等总预算到期，约一分钟）；
+* root-cause：``RootCauseLimitRepairTests._exercise_root_cause_limit_repair_resume``（campaign-resume 一步写修复收据、清零根因），
+  加 ``ConsumerAdmissionTests`` 的「只挡该根因」；
+* tool-evolution：``ControlEvolutionSealTests._exercise_control_evolution_seal``（与本模块同形态的 control 层演进；Store Campaign
+  先于工具变化建立，B2-08 规定登记演进前 Store Campaign 必须已建）与它的反例（晚于工具变化时登记零写入拒绝），加 wire
+  形态的 ``ToolEvolutionChainTests._exercise_tool_evolution_resume``。
+
+零请求：命名空间模式由构造保证（没有可用的网络接口）；两种模式下取证都走替身中继与替身 docker（复用的 B2-08 验收链
+同样如此），截止链只跑本地命令，Store 子链不涉及网络。本文件位于 tests/，不进任何受管身份。
 """
 
 from __future__ import annotations
@@ -82,8 +94,11 @@ IDENTITY_MEMO_ENV = "CODEX_UPGRADE_IDENTITY_MEMO"
 
 # 链体在标准输出写一行指标（最后一行有效）；外层解析后并入 real_chain_metrics。
 METRICS_PREFIX = "CLAUDE_CONTROL_CHAIN_METRICS "
-# 依赖 B2-08 的步骤：失败信息一律以这几个字开头，外层据此把「占位失败」与其它失败区分开。
-PENDING_PREFIX = "等 B2-08"
+
+# 链体复用的 B2-08 验收链所在模块（见模块说明）。每组复用的子进程超时取链体剩余预算再减去这段余量，留给链体写指标、
+# 外层收尾。
+B208_MODULE = "tools.official_client_capture.tests.test_claude_upgrade_recovery"
+B208_MARGIN_SECONDS = 30.0
 
 # 采集主机的宿主数据根（pre-A3 场景就在它的生产布局里运行）与 Codex 的生产执行副本。命名空间里前者只读、后者遮住。
 HOST_DATA_ROOT = Path("/root/docker/capture-cli/data")
@@ -177,7 +192,8 @@ def _parse_metrics(stdout: str) -> dict[str, Any]:
 
 
 class _ChainRecorder:
-    """链体的步骤与事实记录；``emit`` 在标准输出写一行指标（占位失败之前也写，外层据此报告已通过的步骤）。"""
+    """链体的步骤与事实记录；``emit`` 在标准输出写一行指标（链体跑完写一次；中途失败之前也写，外层据此报告已通过的
+    步骤）。"""
 
     def __init__(self, chain: str) -> None:
         self.chain = chain
@@ -188,23 +204,53 @@ class _ChainRecorder:
     def step(self, name: str) -> None:
         self.steps.append(name)
 
-    def emit(self, *, pending: str | None = None) -> None:
+    def emit(self) -> None:
         payload = {
             "chain": self.chain,
             "steps": self.steps,
-            "pending": pending,
             "exercise_seconds": round(time.monotonic() - self.started, 3),
             **self.facts,
         }
         print(METRICS_PREFIX + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
-def _await_b208(case: unittest.TestCase, recorder: _ChainRecorder, missing: str) -> None:
-    """依赖 B2-08 的步骤：跑到这里一律失败（不跳过、不静默通过），失败信息写明「等 B2-08」和缺的步骤。"""
+def _run_b208(case: unittest.TestCase, recorder: _ChainRecorder, tests: tuple[str, ...], step: str) -> None:
+    """复用 B2-08 的一组验收方法（``类.方法``，同一子进程里依次运行，各自的类夹具与实例夹具照常建、拆）。
 
-    message = f"{PENDING_PREFIX}：{missing}"
-    recorder.emit(pending=message)
-    case.fail(message)
+    子进程在副本树里运行，环境与链体相同（同一命名空间、``PYTHONPATH`` 只含副本根、同一 ``TMPDIR`` 与仅夹具总账开关），
+    单独成一个进程组：超时整组终止，不留下它起的监督器或替身进程。全部通过（正好运行 ``len(tests)`` 项、没有跳过）才记
+    ``step``；否则先写指标再判链体失败，失败信息带子进程输出的末尾。"""
+
+    remaining = CHAIN_TIMEOUT_SECONDS - B208_MARGIN_SECONDS - (time.monotonic() - recorder.started)
+    started = time.monotonic()
+    process = subprocess.Popen(
+        [sys.executable, "-m", "unittest", "-v", *(f"{B208_MODULE}.{test}" for test in tests)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=str(_tree_root()), env=dict(os.environ),
+        stdin=subprocess.DEVNULL, start_new_session=True,
+    )
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=max(remaining, 1.0))
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
+    seconds = round(time.monotonic() - started, 3)
+    recorder.facts.setdefault("b208_exercises", []).append(
+        {"tests": list(tests), "seconds": seconds, "returncode": None if timed_out else process.returncode}
+    )
+    lines = stderr.rstrip().splitlines()
+    ran = f"Ran {len(tests)} test{'s' if len(tests) > 1 else ''} in "
+    passed = (not timed_out and process.returncode == 0 and bool(lines) and lines[-1] == "OK"
+              and any(line.startswith(ran) for line in lines))
+    if not passed:
+        recorder.emit()
+        reason = f"超时（{seconds} 秒，链体剩余预算 {round(remaining, 1)} 秒）" if timed_out else f"退出码 {process.returncode}"
+        case.fail(f"复用的 B2-08 验收链没有通过（{reason}）：{', '.join(tests)}\n{stdout[-2000:]}\n{stderr[-6000:]}")
+    recorder.step(step)
 
 
 def _tree_root() -> Path:
@@ -378,7 +424,7 @@ class _DeadlineSite:
 def _claude_deploy_receipt(control: Path, identity: Mapping[str, Any]) -> Path:
     """新身份的 Claude 部署收据（``official-client-managed-deploy/v1`` 的最小形状，身份在 ``identity`` 对象里）。
 
-    表示「修好的工具已受监督部署」：编排器的工具演进预览要绑定当前五摘要的部署收据（B2-08 落实时按 ``identity`` 读）。"""
+    表示「修好的工具已受监督部署」：编排器的工具演进预览要绑定当前五摘要的部署收据（B2-08 起经适配器按 ``identity`` 读）。"""
 
     from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
 
@@ -486,6 +532,10 @@ class ClaudeControlChainTests(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix=f"claude-control-chain-{chain}-", dir=_scratch_root()) as directory:
                 staging = Path(directory).resolve() / "staging"
                 staging.mkdir(mode=0o700)
+                # macOS（BSD 语义）新建目录的属组取父目录的，不取本进程的有效组：临时根落在别的属组目录下（例如 /private/tmp
+                # 下属 wheel 组）时，取证的证据权限收口会把 attempt 根判成属主漂移。staging 的属组改成本进程的有效组，其下
+                # 新建的目录随之一致；Linux 上新建目录本来就取有效组，这一步不改变任何东西。
+                os.chown(staging, -1, os.getegid())
                 tree = _copy_two_root_tree(staging / "tree")
                 copy_seconds = round(time.monotonic() - started, 3)
                 environment = trees.subprocess_env(tree, {
@@ -521,15 +571,11 @@ class ClaudeControlChainTests(unittest.TestCase):
         if timed_out or elapsed >= CHAIN_BUDGET_SECONDS:
             self.fail(f"{spec['scenario']} 超过 {CHAIN_BUDGET_SECONDS} 秒（实测 {elapsed} 秒）：每条链的验收上限是 15 分钟")
         assert completed is not None
-        pending = metrics.get("pending")
         if completed.returncode != 0:
-            if isinstance(pending, str) and pending.startswith(PENDING_PREFIX) and PENDING_PREFIX in completed.stderr:
-                self.fail(f"{spec['scenario']}：{pending}（占位之前的步骤已通过：{'、'.join(metrics.get('steps') or [])}；"
-                          f"隔离={mode}；耗时 {elapsed} 秒）")
-            self.fail(f"{spec['scenario']} 子进程失败（退出码 {completed.returncode}，隔离={mode}）：\n"
-                      f"{completed.stdout[-3000:]}\n{completed.stderr[-6000:]}")
+            self.fail(f"{spec['scenario']} 子进程失败（退出码 {completed.returncode}，隔离={mode}，耗时 {elapsed} 秒；已通过的步骤："
+                      f"{'、'.join(metrics.get('steps') or []) or '没有'}）：\n{completed.stdout[-3000:]}\n{completed.stderr[-6000:]}")
         self.assertNotIn("skipped=", completed.stderr, "链体不得跳过")
-        self.assertIsNone(pending, "通过的链不能还留着占位")
+        self.assertTrue(metrics.get("steps"), "通过的链必须写出指标与已通过的步骤")
         self.assertEqual(metrics.get("upstream_requests"), 0, "链体必须零请求")
 
     # ---- 链体：reconcile ----
@@ -538,9 +584,13 @@ class ClaudeControlChainTests(unittest.TestCase):
         recorder = _ChainRecorder("reconcile")
         _assert_isolation(self, recorder)
         self._failed_first_batch(recorder)
-        _await_b208(self, recorder,
-                    "reconcile-attempt 对账失败 attempt 并给出恢复预览 → 批准预览 → resume --rerun-failed --recovery-preview "
-                    "只重跑失败 Job；无预约时 reconcile-supervisor-run → N+1 重派")
+        _run_b208(self, recorder, ("ReconcileResumeChainTests._exercise_reconcile_resume_failed_job",),
+                  "B2-08 验收链：首批有 Job 失败 → reconcile-attempt 零请求入账、恢复预览只执行失败 Job（R17 复算一致）→ 未批准不能"
+                  " resume、批准后 resume --rerun-failed 只重跑失败 Job、其余只读复用 → 新 attempt 可进 seal 预览")
+        _run_b208(self, recorder, ("SupervisorRunReconcileTests.test_prereservation_failure_reconciles_for_redispatch",
+                                   "SupervisorRunReconcileTests.test_seal_chain_zero_request_failure_is_post_run_tooling"),
+                  "无预约时 reconcile-supervisor-run：预约前失败入账、阶段保持 active，N+1 重派；seal 链零请求失败按 post-run-tooling")
+        recorder.emit()
 
     def _failed_first_batch(self, recorder: _ChainRecorder) -> tuple[Any, Path, dict[str, Any], dict[str, Any]]:
         """首批采集失败（B2-06 已落实）：合成 probe 每次都失败，补跑两次后归档，attempt 以 failed 收口并记下带 client
@@ -650,7 +700,8 @@ class ClaudeControlChainTests(unittest.TestCase):
             time.sleep(min(.25, max(.01, expired.timestamp() - time.time() + .01)))
         paused = project.pause_campaign_deadline(site.campaign)
         self.assertEqual((paused["status"], paused["paused_scopes"]), ("deadline_paused", ["stage"]))
-        # 暂停期间各消费入口的总账准入一律拒绝（Claude 入口接入总账准入是 B2-08 的事，这里直接核准入函数本身）。
+        # 暂停期间各消费入口的总账准入一律拒绝（这里直接核准入函数本身；Claude 入口命令接入总账准入后的拒绝由下面复用的
+        # B2-08 验收链核对）。
         for command in ("campaign-run", "resume", "reuse-official-evidence", "seal"):
             with self.subTest(command=command), self.assertRaisesRegex(project.ProjectLedgerError, "暂停"):
                 project.assert_campaign_admitted(site.campaign, command=command, require=True)
@@ -697,9 +748,11 @@ class ClaudeControlChainTests(unittest.TestCase):
         recorder.facts.update(sigkill_count=1, project_extension_events=1, campaign_extension_events=1)
         recorder.step("重跑批准两次：第一次补齐 Campaign 账本、第二次幂等；计数与原始字节不变，账本回到 active、准入放行")
 
-        _await_b208(self, recorder,
-                    "延期后在原 Campaign 续跑（resume）；入口总账准入门禁（暂停期间 capture-official run／seal 被拒）；"
-                    "到期的 attempt 经 reconcile-attempt 入账后只暂停")
+        # ④ 有 attempt 的 Campaign 上：到期的 attempt 经对账入账后只暂停，入口拒绝 run 与 seal，延期后在原 Campaign resume。
+        _run_b208(self, recorder, ("DeadlineExtensionReconcileTests._exercise_expired_deadline_pause_extend_reconcile",),
+                  "B2-08 验收链：总预算真实到期 → reconcile-attempt 入账后只暂停（写暂停事实）→ 暂停期间入口总账准入拒绝 "
+                  "capture-official run 与 seal、不写 attempt → 总预算与 VC-1 阶段两层延期 → 再对账、批准预览 → 在原 Campaign resume")
+        recorder.emit()
 
     # ---- 链体：root-cause ----
 
@@ -711,9 +764,13 @@ class ClaudeControlChainTests(unittest.TestCase):
         self.assertTrue(identifiers and all(identifiers), "根因必须带稳定 ID（同根因累计按它计数）")
         recorder.facts["root_cause_ids"] = identifiers
         recorder.step("第一次失败的根因已形成稳定 ID")
-        _await_b208(self, recorder,
-                    "reconcile-attempt 把两次同根因失败入账 → 总账同根因达上限只暂停（root_cause_repair，不写终态）、"
-                    "入口准入只挡该根因 → record-root-cause-repair 修复收据 → campaign-resume 放行续跑")
+        _run_b208(self, recorder, ("RootCauseLimitRepairTests._exercise_root_cause_limit_repair_resume",),
+                  "B2-08 验收链：同根因两次失败入账 → 达上限只暂停（root_cause_repair、不写终态，账本 stop_required）、入口准入挡住"
+                  "该根因 → campaign-resume 拒绝早于停线的部署收据，凭新部署收据与回归收据放行（写修复收据、两本账清零该根因）→ "
+                  "再对账 → resume 只重跑失败 Job")
+        _run_b208(self, recorder, ("ConsumerAdmissionTests.test_root_cause_limit_blocks_only_the_retried_cause",),
+                  "入口准入只挡该根因：resume 只挡与本恢复预览根因相交的达上限根因，别的根因达上限不挡；正式 run 与 seal 整版本保守挡")
+        recorder.emit()
 
     # ---- 链体：tool-evolution ----
 
@@ -791,7 +848,8 @@ class ClaudeControlChainTests(unittest.TestCase):
                          "run 拒绝在预约之前：不写 attempt")
         self.assertEqual(_tree_snapshot(fixture.data / "runs"), runs_before, "run 拒绝时证据根零写入")
         lease = json.loads((campaign / ".campaign-lease.json").read_text(encoding="utf-8"))
-        # run 的拒绝发生在执行租约之内：共享租约把异常退出记成停线（与 Codex 同一语义），恢复要经 B2-08 的对账。
+        # run 的拒绝发生在执行租约之内：共享租约把异常退出记成停线（与 Codex 同一语义）。停线租约不挡后面的恢复：B2-08 起
+        # seal 与前序导入把它视为静止，resume 照常取得租约（见下面复用的 B2-08 验收链），不需要先对账。
         self.assertEqual(lease.get("state"), "stop_the_line")
         recorder.facts.update(relay_calls=len(fixture.relay_calls()), lease_after_rejected_run=lease.get("state"))
         recorder.step("编排器层未登记即拒绝：seal 零写入、tool-evolution-status 报 control 漂移、run 预约前被拒")
@@ -799,8 +857,8 @@ class ClaudeControlChainTests(unittest.TestCase):
         # ② Store 层：finalizer 未登记即拒，登记演进后有效身份更新、finalizer 通过，旧收据按形成期重放仍通过。
         with self.assertRaisesRegex(ControlError, "工具身份未登记演进：先执行 tool-evolution"):
             finalize_predecessor_import(target.store, import_second, target._time())
-        # 这里直接经 Store 登记演进（Store 层子链的替身登记）；B2-08 落实后由编排器 tool-evolution 批准时写出这份登记，
-        # evolution_receipt 指向编排器的演进收据。
+        # 这里的目标 Store Campaign 是合成的（不挂编排器 Campaign），直接经 Store 登记演进；编排器 tool-evolution 批准时
+        # 编排器与 Store 两侧同时登记的路径由下面复用的 B2-08 验收链覆盖。
         registration = target.register_evolution()
         store_campaign = target.store.load_campaign(STORE_TARGET_ID)
         effective = effective_tool_identity(target.store, store_campaign)
@@ -817,9 +875,15 @@ class ClaudeControlChainTests(unittest.TestCase):
         recorder.facts["store_tool_identity_index"] = 1
         recorder.step("Store 层：finalizer 未登记即拒，登记演进后通过，旧收据按形成期重放、全库重放通过")
 
-        _await_b208(self, recorder,
-                    "编排器 tool-evolution 登记（_tool_evolution_preview，批准时同时登记 Store 的 tool_evolution_registration，"
-                    "两侧目前没有衔接）→ 登记后 capture-official seal 两层放行；run 被拒留下的停线租约经对账恢复")
+        # ③ 编排器 Campaign 带 Store（Store Campaign 先于工具变化建立）：tool-evolution 批准时两侧登记，seal 两层放行。
+        _run_b208(self, recorder, ("ControlEvolutionSealTests._exercise_control_evolution_seal",
+                                   "ControlEvolutionSealTests.test_tool_evolution_refused_without_store_campaign"),
+                  "B2-08 验收链（只改 control 层，Store Campaign 先于工具变化建立）：未登记时 seal 与 run 被拒、留下停线租约 → "
+                  "tool-evolution 预览（不作废作业）、批准时编排器与 Store 两侧登记 → seal 两层放行、停线租约不挡 → 封存完成；"
+                  "Store Campaign 晚于工具变化时登记零写入拒绝")
+        _run_b208(self, recorder, ("ToolEvolutionChainTests._exercise_tool_evolution_resume",),
+                  "wire 层演进：登记后被作废的作业只重跑它们（对账 → 批准预览 → resume），新 attempt 的 seal 两层放行")
+        recorder.emit()
 
 
 if __name__ == "__main__":
