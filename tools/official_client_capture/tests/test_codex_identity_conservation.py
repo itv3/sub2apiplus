@@ -91,7 +91,10 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
     "upgrade_control_plane.py": "B1-09 新增共享控制流程：迁入函数经 adapter.orchestrator 访问编排器；B3-06 adapter_scope 同时设定对账器的"
                                 "客户端作用域（本模块直接调用的对账器内部函数随同一客户端，跨客户端即拒绝；Codex 设定的就是对账器缺省值，"
                                 "行为不变）；10-07 staging 派发门禁偶发的产品侧修复：no-op 引导首批派发后核对首批父 run 的落盘终态必须是"
-                                " stopped，不是就当场失败并点名落盘终态（_bootstrap_noop_first_batch，读侧闭包外）",
+                                " stopped，不是就当场失败并点名落盘终态（_bootstrap_noop_first_batch，读侧闭包外）；B5b-03 补账预览"
+                                "（_accounting_resolve_preview，读侧闭包外）的来源核算改经 adapter.provenance 取模块：Claude 作用域下"
+                                "原先误用 Codex 计量规则、与对账结论相反；Codex 下 adapter.provenance 就是 reconciler.provenance 同一个"
+                                "模块对象，行为不变",
     "codex_upgrade_wire_transition.py": "B5a-01 只改 main：当前工具身份经适配器取 _tool_identity（Codex 取值不变）；裁定函数与 DEPLOY_RECEIPT_GLOB 原位不动",
     "codex_upgrade_pre_a3_certification.py": "B5a-04 pre-A3 按客户端分组：场景表与真实链按客户端、单元前缀 pre-a3:claude:、Claude 签 v3；编排器引用经适配器（Codex 单元、命令与收据逐字不变）；"
                                              "B5a-08 签发与核验新增逐单元承接（unit-inherit）清单的形成期证明分支（新增函数），逐场景核验多一个缺省为全集通过的"
@@ -102,7 +105,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                              "执行器派发顺序；Codex 七项不变，见 test_pre_a3_codex_parity），并改写 Claude 登记表上方已过时的「等 B2-08」注释；"
                                              "5a 收口：模块级不再导入测试目录，FIXTURE_ONLY_ENV 改写为同值字面量（测试锁定两边同值）；REHEARSAL_BINDERS "
                                              "注释与 Claude 分支的拒绝报错改为当前事实（campaign-run 分批演练绑定只属于 Codex，Claude 不接受），Codex 分支"
-                                             "与输出不变",
+                                             "与输出不变；B5b-03 在 Claude 两张字面量登记表追加故障恢复链 vc-chain.claude-recovery-chain，"
+                                             "SCENARIO_SECONDS 追加它的派发秒数（暂按本机实测，ARM64 预跑后替换；只决定派发顺序），"
+                                             "Codex 场景表、单元、秒数与收据不变",
     "codex_upgrade_policy_certification.py": "B5a-04 策略认证按客户端：Claude 按 v3 引擎算身份、认 Claude 部署收据；编排器引用经适配器（Codex 合同与输出逐字不变）",
     "certify_release.py": "B5a-04 发布认证按客户端：Claude 签 tool-release-certification/v2（加 client）；编排器引用经适配器（Codex v1 逐字不变）；"
                           "B2-11 第二部分 Job 演练按认证的客户端重放（Codex 传 codex：合法收据的结果与报错不变，另一客户端的收据被拒），"

@@ -1241,6 +1241,47 @@ class RootCauseLimitRepairTests(RecoveryChainCase):
         self.assertEqual({item["reused_from"]["producer"]["attempt_id"] for item in reused}, {first["attempt_id"]})
 
 
+class AccountingResolveConsistencyTests(RecoveryChainCase):
+    """账务未决（B5b-03 回归）：补账预览与对账对同一批证据按同一套 Claude 计量规则核算，未决作业集合一致。
+
+    修复前共享补账预览直接用 ``reconciler.provenance``（固定是 Codex 的计量模块），对账却经适配器用 Claude 的：对账判未决的
+    作业，补账预览说「已全部核清」并拒绝批准上界，Claude 的账务未决走不通。"""
+
+    def test_accounting_resolve_preview_agrees_with_reconcile(self) -> None:
+        campaign = self.build_recovery_campaign()
+        with self.chain_patched():
+            status = OrphanAttemptTests._kill_during_second_job(self, campaign)
+        self.assertTrue(os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL, status)
+        (orphan,) = sorted((campaign / "official" / "attempts").iterdir())
+        completed = {path.name[len("job-"):-len(".json")] for path in orphan.glob("job-*.json")}
+        manifest = claude_upgrade.load_campaign_manifest(campaign)
+        with self.chain_patched():
+            layout = capture._capture_layout(campaign, manifest)
+            roots = {job.job_id: capture._host_path(job.evidence_roots[0], layout) for job in claude_upgrade._campaign_jobs(campaign, manifest, "official")}
+        (interrupted,) = [job for job, root in roots.items() if job not in completed and root.is_dir() and any(root.iterdir())]
+        # 中继在写客户端字节时被杀：登记为有效的连接缺少原始字节，Claude 计量判该作业未决。
+        sorted(roots[interrupted].rglob("*.client_to_upstream.bin"))[0].unlink()
+        with self.chain_patched():
+            code, paused, stderr = self.run_main(["reconcile-attempt", "--campaign-dir", str(campaign), "--attempt-id", orphan.name])
+        self.assertIsNotNone(paused, stderr)
+        self.assertEqual((code, paused["status"], paused["decision"]["pause_kinds"]), (3, "paused", ["accounting"]), stderr)
+        unresolved = _read(campaign / paused["provenance_receipt"]["path"])["unresolved_job_ids"]
+        self.assertEqual(unresolved, [interrupted])
+        evidence = self.root / "provenance-audit.txt"
+        evidence.write_text(f"{interrupted} 缺客户端字节，按上界估计。\n", encoding="utf-8")
+        argv = ["accounting-resolve", "--campaign-dir", str(campaign), "--operation-id", f"reconcile-attempt:{orphan.name}",
+                "--estimated-count", "3", "--evidence", str(evidence), "--reason", "补账预览与对账一致性回归"]
+        with self.chain_patched():
+            code, preview, stderr = self.run_main(argv)
+            self.assertIsNotNone(preview, stderr)
+            self.assertEqual((code, preview["status"], preview["resolution_mode"]), (0, "approval_required", "estimated_upper_bound"), stderr)
+            self.assertEqual([item["job_id"] for item in preview["covered_unresolved"]], unresolved, "补账预览的未决作业必须等于对账的")
+            # 不给上界时同样按 Claude 计量判定「仍有无法核清的作业」，而不是误判已核清。
+            code, _result, stderr = self.run_main([item for item in argv if item not in {"--estimated-count", "3", "--evidence", str(evidence)}])
+        self.assertEqual(code, 1)
+        self.assertIn(f"仍有按当前证据无法核清的作业 {unresolved}", stderr)
+
+
 class SealedAccountingTests(RecoveryChainCase):
     """官方阶段封存后的请求入账（account-sealed-official）：采集路径经共享流程写入 Claude 项目总账、同一 attempt 幂等；只读
     复用封存零请求，没有可入账的请求。"""

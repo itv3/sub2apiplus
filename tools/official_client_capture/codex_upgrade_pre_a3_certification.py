@@ -393,11 +393,14 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
 # B5a-05：登记最小恢复演练四条链（全部是真实链，零请求、隔离副本树；Linux root 上在 unshare -m -n 命名空间里运行）。
 # 两张表必须是纯字面量：部署脚本 verify_claude_pre_a3_entries 只做 AST 静态求值，不导入本模块。第二部分（f0a9beec6）起四条链
 # 复用 B2-08 的验收方法跑完真实步骤，本机与 ARM64 私有命名空间预跑都已通过；Claude 的 pre-A3 v3 由正式入口门禁签出。
+# B5b-03：登记故障恢复链 recovery-chain（模块 test_claude_upgrade_fault_chains，逐场景核对六项）；后段故障链
+# late-stage-faults 等 B4-06b 与 B4-07 收尾合入后补，补时再登记。pre-A3 v3 在 B5b-04 随 B5b-02 的链一并重签。
 CLAUDE_REAL_CHAIN_IDS: tuple[str, ...] = (
     "vc-chain.claude-reconcile",
     "vc-chain.claude-deadline",
     "vc-chain.claude-root-cause",
     "vc-chain.claude-tool-evolution",
+    "vc-chain.claude-recovery-chain",
 )
 CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
@@ -428,6 +431,14 @@ CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain",
         "ClaudeControlChainTests",
         "test_tool_evolution_registration_moves_effective_identity",
+    ),
+    (
+        "vc-chain.claude-recovery-chain",
+        "故障恢复链：父进程中断、预约后中断、seal 失败、提交中崩溃两层、账务未决、预算到期、同根因暂停、工具演进后旧链重放、"
+        "多根部署各故障点与四类跨客户端误用，逐场景核对可信结果保留、合法闭集、不重复入账、累计时间不重置、历史不覆盖与续跑入口",
+        "tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains",
+        "ClaudeFaultChainTests",
+        "test_recovery_chain_keeps_trusted_results_and_resumes_every_fault",
     ),
 )
 # 按客户端分组的登记表（设计 B5a-04）。值引用上面的模块常量，部署脚本据此静态核对场景入口随树部署
@@ -895,6 +906,8 @@ SCENARIO_SECONDS: dict[str, float] = {
     "vc-chain.claude-tool-evolution": 78.0,
     "vc-chain.claude-root-cause": 72.0,
     "vc-chain.claude-reconcile": 57.0,
+    # B5b-03：recovery-chain 暂按本机降级模式实测（约 85 秒，取整）登记，ARM64 私有命名空间预跑后按实测替换。
+    "vc-chain.claude-recovery-chain": 85.0,
 }
 # 单元超时只作安全网（超时即判该场景崩溃、不签发）：真实链 40 分钟，其余 15 分钟。
 REAL_CHAIN_TIMEOUT_SECONDS = 2400

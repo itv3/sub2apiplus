@@ -7040,7 +7040,9 @@ def _accounting_resolve_preview(
         str(item) for item in (original_payload.get("request") or {}).get("unresolved_job_ids", [])
     }
     try:
-        receipt = reconciler.provenance.collect_campaign_provenance(
+        # 来源核算模块按客户端取（与对账器同一来源 adapter.provenance）：Claude 作用域下是 Claude 的计量规则，补账预览与对账
+        # 对同一批证据的结论才一致；Codex 下它就是 reconciler.provenance 同一个模块对象，行为不变。
+        receipt = adapter.provenance.collect_campaign_provenance(
             campaign_dir,
             formal_campaign_id=campaign_id,
             estimation_policy=str(plan["estimation_policy"]),

@@ -3,7 +3,7 @@
 * 场景表按客户端：Codex 的场景表、单元 ID、命令与改造前相同（与改造前脚本逐字对照见 ``test_pre_a3_codex_parity``）；Claude
   集合为空时规划、签发（含 ``issue --client claude``）、核验与串行认证一律拒绝（B5a-05 登记四条链之后，用替身清空两张表
   验证）；登记了 Claude 场景时单元 ID 带 ``pre-a3:claude:``、命令带 ``--client claude``，两客户端的单元在同一份运行清单里
-  互不承接、互不算作全集之外；B5a-05 登记的最小恢复演练四条链按真实链规划（超时 2400 秒、测试文件按模块路径）；
+  互不承接、互不算作全集之外；B5a-05 登记的最小恢复演练四条链与 B5b-03 的故障恢复链按真实链规划（超时 2400 秒、测试文件按模块路径）；
 * 策略认证对 Claude 按 v3 引擎算身份：兼容收据、激活认证与 Claude 部署收据合同，客户端混用即拒绝；
 * 从单元执行记录签发 Claude 的 pre-A3 v3（带 client）并核验、复用；发布认证 v2 的组装与核验；Claude 发布认证签发在核完
   pre-A3 之后因演练合同未落实而失败关闭，Claude 场景集合为空时更早被 pre-A3 拒绝；
@@ -62,12 +62,13 @@ def claude_unregistered():
         yield
 
 
-# B5a-05 登记的 Claude 最小恢复演练四条链（场景 ID；模块与测试入口取登记表本身，不在这里写模块名）。
+# B5a-05 登记的 Claude 最小恢复演练四条链与 B5b-03 的故障恢复链（场景 ID；模块与测试入口取登记表本身，不在这里写模块名）。
 CLAUDE_CHAIN_IDS = (
     "vc-chain.claude-reconcile",
     "vc-chain.claude-deadline",
     "vc-chain.claude-root-cause",
     "vc-chain.claude-tool-evolution",
+    "vc-chain.claude-recovery-chain",
 )
 
 
@@ -135,9 +136,10 @@ class ScenarioTableTests(unittest.TestCase):
         self.assertIs(pre_a3.REAL_CHAIN_IDS_BY_CLIENT["codex"], pre_a3.REAL_CHAIN_IDS)
         self.assertIs(pre_a3.SCENARIOS_BY_CLIENT["claude"], pre_a3.CLAUDE_SCENARIOS)
         self.assertIs(pre_a3.REAL_CHAIN_IDS_BY_CLIENT["claude"], pre_a3.CLAUDE_REAL_CHAIN_IDS)
-        self.assertEqual(pre_a3.CLAUDE_REAL_CHAIN_IDS, CLAUDE_CHAIN_IDS, "B5a-05 登记最小恢复演练四条链")
-        self.assertEqual([row[0] for row in pre_a3.CLAUDE_SCENARIOS], list(CLAUDE_CHAIN_IDS), "四条都是真实链，场景表与登记一一对应")
-        self.assertEqual(len({(row[2], row[3]) for row in pre_a3.CLAUDE_SCENARIOS}), 1, "四条链在同一个真实链模块的同一个类里")
+        self.assertEqual(pre_a3.CLAUDE_REAL_CHAIN_IDS, CLAUDE_CHAIN_IDS, "B5a-05 的四条最小恢复演练链与 B5b-03 的故障恢复链")
+        self.assertEqual([row[0] for row in pre_a3.CLAUDE_SCENARIOS], list(CLAUDE_CHAIN_IDS), "都是真实链，场景表与登记一一对应")
+        self.assertEqual(len({(row[2], row[3]) for row in pre_a3.CLAUDE_SCENARIOS}), 2,
+                         "B5a-05 四条在控制链模块的同一个类里，B5b-03 的链在故障链模块里")
         self.assertTrue(all(".real_chains." in row[2] and row[4].startswith("test_") for row in pre_a3.CLAUDE_SCENARIOS))
         self.assertEqual(set(pre_a3.SCENARIOS_BY_CLIENT), set(upgrade_client_adapter.CLIENTS))
         self.assertIs(pre_a3.scenarios_for(), pre_a3.SCENARIOS)
@@ -190,7 +192,7 @@ class ScenarioTableTests(unittest.TestCase):
             self.assertIn("E2-03 旧路径", stderr.getvalue())
 
     def test_registered_claude_chains_plan_as_real_chain_units(self) -> None:
-        """B5a-05：真实登记的四条链规划成 Claude 场景单元——前缀、命令、真实链超时与测试文件；Codex 清单不受影响。"""
+        """B5a-05／B5b-03：真实登记的链规划成 Claude 场景单元——前缀、命令、真实链超时与测试文件；Codex 清单不受影响。"""
 
         codex_before = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=Path("/data"))
         plan = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=Path("/data"), client="claude")
@@ -206,7 +208,7 @@ class ScenarioTableTests(unittest.TestCase):
                 self.assertEqual(pre_a3.scenario_test_module(name, "claude"), rows[name][2])
         self.assertEqual(pre_a3.real_chain_registration("claude"),
                          [{"id": name, "test": f"{rows[name][2]}:{rows[name][3]}.{rows[name][4]}"} for name in CLAUDE_CHAIN_IDS])
-        self.assertEqual(pre_a3.require_scenarios("claude"), list(CLAUDE_CHAIN_IDS), "Claude 没有进程内场景，全集就是四条链")
+        self.assertEqual(pre_a3.require_scenarios("claude"), list(CLAUDE_CHAIN_IDS), "Claude 没有进程内场景，全集就是登记的真实链")
 
     def test_claude_units_carry_their_prefix_and_client_argument(self) -> None:
         codex_before = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=Path("/data"))
@@ -476,7 +478,7 @@ class ClaudeRecordCertificationTests(_IdentityMemo):
             self.assertEqual(code, 2)
             self.assertIn("场景集合为空", stderr.getvalue())
             self.assertFalse((root / "release-issued.json").exists())
-            # 真实登记（B5a-05 的四条链）下，替身链签出的 v3 认证与当前登记集合不一致：链覆盖校验拒绝，不当成已认证。
+            # 真实登记（B5a-05 的四条链与 B5b-03 的故障恢复链）下，替身链签出的 v3 认证与当前登记集合不一致：链覆盖校验拒绝，不当成已认证。
             with self.assertRaisesRegex(pre_a3.CertificationError, "真实链登记集合与当前发布包不一致"):
                 pre_a3.real_chain_coverage(receipt, client="claude")
 
