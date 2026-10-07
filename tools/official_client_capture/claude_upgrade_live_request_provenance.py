@@ -15,6 +15,12 @@
 * ``claude_relay``：证据根下 ``relay/connNNN.client_to_upstream.bin``，按 Content-Length／chunked 严格切分
   HTTP/1.1 请求，坐标 ``{connection, transport, message_ordinal, direction}``。``relay/relay.json`` 登记为有效的
   连接缺少原始字节、或字节无法切分时，该分支未决。
+  计数只看客户端字节：``relay.json`` 记为零字节形态（``bytes``、``sha256`` 为空对象、``segments`` 为空数组，且两个
+  方向都没有字节文件）的连接没有发出任何请求，计零，逐条留证在分支的 ``zero_client_byte_connections`` 里——
+  中继完整性登记为握手前断开的（运行根 ``relay-manifest.json`` 的 ``relay_integrity.excluded_connections``，其中
+  live 空握手在 ``relay.json`` 里也记 ``valid: true``）分类 ``relay_excluded``，没有登记的分类 ``unexcluded``。
+  中继登记与字节互相矛盾（登记的连接有客户端字节、登记的连接不在 ``relay.json``、登记的连接不是零字节形态、
+  零客户端字节却有上游字节）或登记了未知原因时，该分支未决。
 * ``claude_mitm``：capture 类证据根（``manifest.json`` 为 ``official-client-capture/v1``）的 mitm 分支，读
   ``mitm/<subject>/<scenario>/`` 下 mitm 插件写出的 ``claude-http.jsonl`` 与 ``misc-http.jsonl``，坐标
   ``{evidence, subject, scenario, file, record_index, transport, flow_id}``。
@@ -40,6 +46,7 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -68,6 +75,21 @@ SOURCE_MITM = "claude_mitm"
 SOURCE_DIRECT = "claude_direct"
 CAPTURE_MANIFEST_SCHEMA = "official-client-capture/v1"
 RELAY_MANIFEST_SCHEMA = "byte-relay/v1"
+# FW-E 中继运行根上的中继清单（claude_fw_e_relay 的 SCHEMA_RUN）：只读其中的中继完整性登记。
+RELAY_RUN_MANIFEST_FILENAME = "relay-manifest.json"
+RELAY_RUN_MANIFEST_SCHEMA = "claude-code-fw-e-relay-run/v1"
+# 中继完整性登记的握手前断开原因（与 claude_fw_e_relay 的四个 *_TERMINATION_REASON 逐字相同，由测试锁定）：
+# 这些连接在 TLS 握手阶段就结束，客户端没有发出任何应用数据。中继新增原因时这里必须同步登记，否则失败关闭。
+RELAY_HANDSHAKE_EXCLUSION_REASONS = frozenset(
+    {
+        "client_tls_handshake_terminated_before_application_data",
+        "relay_shutdown_terminated_handshake_before_application_data",
+        "client_reset_transport_before_tls_handshake",
+        "live_client_closed_tls_handshake_before_application_data",
+    }
+)
+ZERO_BYTE_RELAY_EXCLUDED = "relay_excluded"
+ZERO_BYTE_UNEXCLUDED = "unexcluded"
 CAMPAIGN_SCHEMA = "official-client-upgrade-campaign/v1"
 # mitm 插件按路径分类写出的 HTTP 记录文件（addons/mitm_capture._classify）：模型端点在 claude，token refresh 在 misc。
 MITM_HTTP_FILES = ("claude-http.jsonl", "misc-http.jsonl")
@@ -282,6 +304,110 @@ def _record(
     }
 
 
+def _relay_handshake_exclusions(root: Path) -> dict[int, str]:
+    """运行根 ``relay-manifest.json`` 里中继完整性登记的握手前断开连接：连接号 → 原因。
+
+    没有中继清单（非 FW-E 运行根）、或中继完整性没有通过（失败 run 的 ``relay_integrity`` 为 null，或结果不是
+    passed）时没有可用的登记，返回空表；清单存在但合同名或登记形态非法即失败关闭。原因是否已登记由调用方判定。
+    """
+
+    path = root / RELAY_RUN_MANIFEST_FILENAME
+    if not path.exists() and not path.is_symlink():
+        return {}
+    manifest, _raw = closeout._load_json(path, "中继清单")
+    if manifest.get("schema_version") != RELAY_RUN_MANIFEST_SCHEMA:
+        raise ProvenanceError(f"中继清单 schema 非预期：{path}")
+    integrity = manifest.get("relay_integrity")
+    if not isinstance(integrity, Mapping) or integrity.get("result") != "passed":
+        return {}
+    rows = integrity.get("excluded_connections")
+    if rows is None:
+        return {}
+    if not isinstance(rows, list):
+        raise ProvenanceError(f"中继清单 excluded_connections 不是数组：{path}")
+    exclusions: dict[int, str] = {}
+    for row in rows:
+        connection_id = row.get("connection_id") if isinstance(row, Mapping) else None
+        reason = row.get("reason") if isinstance(row, Mapping) else None
+        if (
+            not isinstance(connection_id, int)
+            or isinstance(connection_id, bool)
+            or connection_id <= 0
+            or not isinstance(reason, str)
+            or not reason
+        ):
+            raise ProvenanceError(f"中继清单的握手前断开登记形态非法：{path}")
+        if connection_id in exclusions:
+            raise ProvenanceError(f"中继清单重复登记握手前断开连接 {connection_id}：{path}")
+        exclusions[connection_id] = reason
+    return exclusions
+
+
+def _zero_client_byte_record(item: Mapping[str, Any]) -> bool:
+    """``relay.json`` 的连接记录是否为零字节形态：中继记下的字节数、摘要与分段全部为空。"""
+
+    return item.get("bytes") == {} and item.get("sha256") == {} and item.get("segments") == []
+
+
+def _classify_connections_without_client_bytes(
+    relay_root: Path,
+    connections: list[Any],
+    present: set[int],
+    exclusions: Mapping[int, str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """逐连接核对中继登记与客户端字节：返回 (零客户端字节连接的留证, 使分支未决的问题)。
+
+    计数只看客户端字节：零字节形态且两个方向都没有字节文件的连接没有发出任何请求，计零并留证（有中继完整性登记的
+    分类 ``relay_excluded``，没有的分类 ``unexcluded``）；``valid`` 为真却缺少字节（未知或非零字节数）仍是未决。
+    中继登记与字节互相矛盾、或登记了未知原因时，不据登记剔除，也不只信字节，整个分支未决。
+    """
+
+    registered: dict[int, Mapping[str, Any]] = {}
+    duplicated: set[int] = set()
+    for item in connections:
+        if isinstance(item, Mapping) and isinstance(item.get("connection_id"), int) and not isinstance(item.get("connection_id"), bool):
+            connection_id = int(item["connection_id"])
+            if connection_id in registered:
+                duplicated.add(connection_id)
+            registered.setdefault(connection_id, item)
+    zero_bytes: list[dict[str, Any]] = []
+    problems: list[str] = [f"relay.json 重复登记连接号：{sorted(duplicated)}"] if duplicated else []
+    missing: list[int] = []
+    for connection_id in sorted(registered):
+        item = registered[connection_id]
+        reason = exclusions.get(connection_id)
+        if connection_id in present:
+            if reason is not None:
+                problems.append(f"中继清单登记为握手前断开的连接 {connection_id} 存在客户端字节")
+            continue
+        if not _zero_client_byte_record(item):
+            if reason is not None:
+                problems.append(f"中继清单登记为握手前断开的连接 {connection_id} 不是零字节形态，缺少客户端原始字节")
+            elif item.get("valid") is True:
+                missing.append(connection_id)
+            continue
+        if (relay_root / f"conn{connection_id:03d}.upstream_to_client.bin").exists():
+            problems.append(f"连接 {connection_id} 没有客户端字节却有上游字节")
+            continue
+        if reason is not None and reason not in RELAY_HANDSHAKE_EXCLUSION_REASONS:
+            problems.append(f"中继清单登记了未登记的握手前断开原因：{reason}（连接 {connection_id}）")
+            continue
+        zero_bytes.append(
+            {
+                "connection_id": connection_id,
+                "valid": item.get("valid"),
+                "classification": ZERO_BYTE_RELAY_EXCLUDED if reason is not None else ZERO_BYTE_UNEXCLUDED,
+                "reason": reason,
+            }
+        )
+    if missing:
+        problems.append(f"relay 登记为有效的连接缺少客户端原始字节：{missing}")
+    stray = sorted(set(exclusions) - set(registered))
+    if stray:
+        problems.append(f"中继清单登记的握手前断开连接 {stray} 不在 relay.json")
+    return zero_bytes, problems
+
+
 def _relay_branches(root: Path, *, producer_run_id: str, generation: int) -> list[dict[str, Any]]:
     relay_root = root / "relay"
     if relay_root.is_symlink() or not relay_root.is_dir():
@@ -307,18 +433,19 @@ def _relay_branches(root: Path, *, producer_run_id: str, generation: int) -> lis
     if manifest is not None and not isinstance(connections, list):
         raise ProvenanceError("relay manifest connections 不是数组")
     present = {int(CONN_FILE_RE.fullmatch(path.name).group(2)) for path in conn_paths}  # type: ignore[union-attr]
-    missing = sorted(
-        int(item["connection_id"])
-        for item in connections or []
-        if isinstance(item, Mapping) and item.get("valid") is True and isinstance(item.get("connection_id"), int)
-        and int(item["connection_id"]) not in present
+    zero_bytes, problems = _classify_connections_without_client_bytes(
+        relay_root, connections or [], present, _relay_handshake_exclusions(root)
     )
-    if missing:
-        branch.update(status="unresolved", reason=f"relay 登记为有效的连接缺少客户端原始字节：{missing}")
+    branch["zero_client_byte_connections"] = zero_bytes
+    if problems:
+        branch.update(status="unresolved", reason="；".join(problems))
         return [branch]
     if not conn_paths:
         if connections == []:
             branch.update(status="resolved", authority_source="relay_zero_connections")
+        elif isinstance(connections, list) and len(zero_bytes) == len(connections):
+            # 登记的每条连接都是零客户端字节：这个运行根没有发出任何请求。
+            branch.update(status="resolved", authority_source="relay_zero_client_bytes")
         else:
             branch.update(status="unresolved", reason="relay 没有客户端原始字节，且 relay.json 未登记零连接")
         return [branch]
@@ -587,8 +714,17 @@ def collect_root_provenance(roots: list[Path], *, estimation_policy: str = "none
     keys: set[str] = set()
     for root, kind, branches in collected:
         statuses = sorted({str(branch["status"]) for branch in branches}) or ["unsupported"]
+        zero_bytes = Counter(
+            str(item["classification"]) for branch in branches for item in branch.get("zero_client_byte_connections", [])
+        )
         summary["roots"].append(
-            {"root": str(root), "producer_run_id": run_ids[root], "kind": kind, "branch_statuses": statuses}
+            {
+                "root": str(root),
+                "producer_run_id": run_ids[root],
+                "kind": kind,
+                "branch_statuses": statuses,
+                "zero_client_byte_connections": dict(sorted(zero_bytes.items())),
+            }
         )
         if kind == "unsupported" or "unresolved" in statuses:
             summary["unresolved_roots"].append(str(root))

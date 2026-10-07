@@ -183,6 +183,214 @@ class EvidenceRootTests(unittest.TestCase):
         self.assertEqual(sibling["roots"][0]["branch_statuses"], ["estimated", "resolved", "unresolved"])
 
 
+LIVE_EMPTY_HANDSHAKE = "live_client_closed_tls_handshake_before_application_data"
+CLIENT_RESET = "client_reset_transport_before_tls_handshake"
+
+
+def _connection_record(connection_id: int, raw: bytes | None, *, valid: Any = True) -> dict[str, Any]:
+    """中继 ``relay.json`` 的连接记录：有客户端字节时记字节数、摘要与分段；``raw`` 为 None 时是零字节握手形态。
+
+    零字节形态与中继写出的 live 空握手逐字段相同（``bytes``／``sha256`` 为空对象、``segments`` 为空数组），
+    这种连接在 ``relay.json`` 里记 ``valid: true``，但没有任何客户端字节文件。
+    """
+
+    record: dict[str, Any] = {
+        "connection_id": connection_id,
+        "client_alpn_offer": ["http/1.1"],
+        "alpn_source": "assumed",
+        "client_alpn": None,
+        "sni": "api.anthropic.com",
+        "valid": valid,
+        "opened_at_unix_ms": 1,
+        "closed_at_unix_ms": 2,
+    }
+    if raw is None:
+        record.update({"upstream_alpn_offer": None, "upstream_alpn": None, "bytes": {}, "sha256": {}, "segments": []})
+    else:
+        record.update(
+            {
+                "client_alpn": "http/1.1",
+                "upstream_alpn": "http/1.1",
+                "bytes": {"client_to_upstream": len(raw)},
+                "sha256": {"client_to_upstream": hashlib.sha256(raw).hexdigest()},
+                "segments": [{"direction": "client_to_upstream", "offset": 0, "length": len(raw)}],
+            }
+        )
+    return record
+
+
+def _fw_e_root(
+    root: Path,
+    connections: dict[int, bytes | None],
+    *,
+    excluded: dict[int, str] | None = None,
+    valid: dict[int, Any] | None = None,
+    records: dict[int, dict[str, Any]] | None = None,
+    run_manifest: dict[str, Any] | None | bool = True,
+) -> Path:
+    """FW-E 中继运行根（probe 目录）：``relay/`` 字节与连接索引，加运行根上的中继清单 ``relay-manifest.json``。
+
+    ``excluded`` 是中继完整性登记的握手前断开连接（连接号 → 原因）；``run_manifest`` 为 False 时不写中继清单，
+    给出字典时原样写入（用来造非法清单）。
+    """
+
+    rows = []
+    for connection_id, raw in connections.items():
+        if raw is not None:
+            _write(root / "relay" / f"conn{connection_id:03d}.client_to_upstream.bin", raw)
+        row = _connection_record(connection_id, raw, valid=(valid or {}).get(connection_id, True))
+        row.update((records or {}).get(connection_id, {}))
+        rows.append(row)
+    _write(root / "relay" / "relay.json", json.dumps({"schema_version": provenance.RELAY_MANIFEST_SCHEMA, "connections": rows}))
+    if run_manifest is True:
+        run_manifest = {
+            "schema_version": provenance.RELAY_RUN_MANIFEST_SCHEMA,
+            "relay_integrity": {
+                "result": "passed",
+                "excluded_connections": [
+                    {"connection_id": key, "reason": reason, "manifest_error": None} for key, reason in (excluded or {}).items()
+                ],
+            },
+        }
+    if isinstance(run_manifest, dict):
+        _write(root / "relay-manifest.json", json.dumps(run_manifest))
+    return root
+
+
+class RelayHandshakeExclusionTests(unittest.TestCase):
+    """中继登记的握手前断开连接（含 relay.json 记 ``valid: true`` 的 live 空握手）不再让证据根未决，且逐条留证。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.base = Path(directory.name).resolve()
+
+    def branch(self, root: Path) -> dict[str, Any]:
+        kind, branches = provenance.root_branches(root, producer_run_id=root.name)
+        self.assertEqual(kind, "relay")
+        return branches[0]
+
+    def test_live_empty_handshake_excluded_by_relay_manifest(self) -> None:
+        """复现：live 空握手（valid 为真、零字节、无字节文件）曾让整个证据根未决；按中继清单的排除登记剔除后照常计数。"""
+
+        root = _fw_e_root(
+            self.base / "v4-background",
+            {1: _messages(), 2: None, 3: None, 4: _messages("claude-haiku-4-5")},
+            excluded={2: LIVE_EMPTY_HANDSHAKE, 3: CLIENT_RESET},
+            valid={3: False},
+        )
+        branch = self.branch(root)
+        self.assertEqual(branch["status"], "resolved", branch.get("reason"))
+        self.assertEqual([item["native_coordinate"]["connection"] for item in branch["requests"]], ["conn001", "conn004"])
+        self.assertEqual(
+            branch["zero_client_byte_connections"],
+            [
+                {"connection_id": 2, "valid": True, "classification": "relay_excluded", "reason": LIVE_EMPTY_HANDSHAKE},
+                {"connection_id": 3, "valid": False, "classification": "relay_excluded", "reason": CLIENT_RESET},
+            ],
+        )
+        summary = provenance.collect_root_provenance([root])
+        self.assertEqual((summary["precise_total"], summary["unresolved_roots"]), (2, []))
+        self.assertEqual(summary["roots"][0]["zero_client_byte_connections"], {"relay_excluded": 2})
+
+    def test_unexcluded_zero_byte_connection_counts_zero_and_is_recorded(self) -> None:
+        """不在排除清单里、valid 为真且零字节：没有客户端字节就没有请求，计零并逐条留证，不悄悄丢掉。"""
+
+        for label, run_manifest in (("中继清单没有登记", True), ("没有中继清单", False)):
+            with self.subTest(label=label):
+                root = _fw_e_root(self.base / label, {1: _messages(), 2: None}, run_manifest=run_manifest)
+                branch = self.branch(root)
+                self.assertEqual((branch["status"], len(branch["requests"])), ("resolved", 1))
+                self.assertEqual(
+                    branch["zero_client_byte_connections"],
+                    [{"connection_id": 2, "valid": True, "classification": "unexcluded", "reason": None}],
+                )
+                summary = provenance.collect_root_provenance([root])
+                self.assertEqual(summary["roots"][0]["zero_client_byte_connections"], {"unexcluded": 1})
+
+    def test_handshake_only_root_resolves_to_zero_requests(self) -> None:
+        root = _fw_e_root(self.base / "handshake-only", {1: None, 2: None}, excluded={1: LIVE_EMPTY_HANDSHAKE}, valid={2: False})
+        branch = self.branch(root)
+        self.assertEqual((branch["status"], branch["authority_source"], branch["requests"]), ("resolved", "relay_zero_client_bytes", []))
+        self.assertEqual([item["classification"] for item in branch["zero_client_byte_connections"]], ["relay_excluded", "unexcluded"])
+
+    def test_contradictions_stay_unresolved(self) -> None:
+        cases = {
+            # 排除登记的连接却有客户端字节：中继清单与字节互相矛盾，不能据清单剔除，也不能只信字节。
+            "排除登记的连接有客户端字节": ({1: _messages()}, {1: LIVE_EMPTY_HANDSHAKE}, {}, "存在客户端字节"),
+            # 排除登记了连接索引里没有的连接号。
+            "排除登记不在连接索引": ({1: _messages()}, {7: LIVE_EMPTY_HANDSHAKE}, {}, "不在 relay.json"),
+            # 排除登记了，但 relay.json 声明了非零客户端字节（字节文件丢失）。
+            "排除登记但声明了字节": (
+                {1: _messages(), 2: None}, {2: LIVE_EMPTY_HANDSHAKE}, {2: {"bytes": {"client_to_upstream": 10}}}, "缺少客户端原始字节"
+            ),
+            # 没有排除登记、valid 为真，声明了非零字节却没有文件：仍是缺字节。
+            "未登记且声明了字节": ({1: _messages(), 2: None}, {}, {2: {"bytes": {"client_to_upstream": 10}}}, "缺少客户端原始字节"),
+            # 只有上游方向的字节文件：零客户端字节却有响应，形态异常。
+            "零客户端字节却有上游字节": ({1: _messages(), 2: None}, {2: LIVE_EMPTY_HANDSHAKE}, {}, "上游字节"),
+            # 未登记的排除原因：中继新增原因时计量必须同步登记，失败关闭。
+            "未知排除原因": ({1: _messages(), 2: None}, {2: "new_reason_from_future_relay"}, {}, "未登记的握手前断开原因"),
+        }
+        for index, (label, (connections, excluded, records, message)) in enumerate(cases.items()):
+            with self.subTest(label=label):
+                root = _fw_e_root(self.base / f"case-{index}", connections, excluded=excluded, records=records)
+                if label == "零客户端字节却有上游字节":
+                    _write(root / "relay" / "conn002.upstream_to_client.bin", b"HTTP/1.1 200 OK\r\n\r\n")
+                branch = self.branch(root)
+                self.assertEqual(branch["status"], "unresolved", label)
+                self.assertIn(message, branch["reason"])
+
+    def test_invalid_run_manifest_fails_closed(self) -> None:
+        cases = {
+            "schema 不符": {"schema_version": "byte-relay/v1", "relay_integrity": None},
+            "排除记录不是对象": {"schema_version": provenance.RELAY_RUN_MANIFEST_SCHEMA, "relay_integrity": {"result": "passed", "excluded_connections": [7]}},
+            "排除记录缺原因": {
+                "schema_version": provenance.RELAY_RUN_MANIFEST_SCHEMA,
+                "relay_integrity": {"result": "passed", "excluded_connections": [{"connection_id": 2}]},
+            },
+            "排除连接号重复": {
+                "schema_version": provenance.RELAY_RUN_MANIFEST_SCHEMA,
+                "relay_integrity": {
+                    "result": "passed",
+                    "excluded_connections": [
+                        {"connection_id": 2, "reason": LIVE_EMPTY_HANDSHAKE}, {"connection_id": 2, "reason": LIVE_EMPTY_HANDSHAKE},
+                    ],
+                },
+            },
+        }
+        for index, (label, manifest) in enumerate(cases.items()):
+            with self.subTest(label=label):
+                root = _fw_e_root(self.base / f"bad-{index}", {1: _messages(), 2: None}, run_manifest=manifest)
+                with self.assertRaises(provenance.ProvenanceError):
+                    provenance.root_branches(root, producer_run_id=root.name)
+
+    def test_failed_relay_run_does_not_supply_exclusions(self) -> None:
+        """中继完整性没有通过（失败 run 的 relay_integrity 为 null）时没有排除登记，零字节连接按未登记处理。"""
+
+        root = _fw_e_root(
+            self.base / "failed-run",
+            {1: _messages(), 2: None},
+            run_manifest={"schema_version": provenance.RELAY_RUN_MANIFEST_SCHEMA, "status": "failed", "relay_integrity": None},
+        )
+        branch = self.branch(root)
+        self.assertEqual(branch["status"], "resolved")
+        self.assertEqual([item["classification"] for item in branch["zero_client_byte_connections"]], ["unexcluded"])
+
+    def test_exclusion_reasons_match_relay_constants(self) -> None:
+        from tools.official_client_capture import claude_fw_e_relay as relay
+
+        self.assertEqual(
+            provenance.RELAY_HANDSHAKE_EXCLUSION_REASONS,
+            {
+                relay.EMPTY_HANDSHAKE_TERMINATION_REASON,
+                relay.RELAY_SHUTDOWN_HANDSHAKE_TERMINATION_REASON,
+                relay.CLIENT_RESET_HANDSHAKE_TERMINATION_REASON,
+                relay.LIVE_EMPTY_HANDSHAKE_TERMINATION_REASON,
+            },
+        )
+        self.assertEqual(provenance.RELAY_RUN_MANIFEST_SCHEMA, relay.SCHEMA_RUN)
+
+
 class CampaignProvenanceTests(unittest.TestCase):
     CAMPAIGN_ID = "claude-campaign-test"
 

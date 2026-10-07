@@ -104,7 +104,9 @@ for item in connections:
     rows.append({"connection_id": number, "valid": True, "intervention": item["intervention"]})
 excluded = []
 for number in record["excluded_connection_ids"]:
-    rows.append({"connection_id": number, "valid": False, "error": "ConnectionResetError: "})
+    # 与中继真实的客户端握手前重置记录逐字段同形（零字节、零摘要、零分段，valid 为假）。
+    rows.append({"connection_id": number, "client_alpn_offer": ["http/1.1"], "alpn_source": "assumed", "bytes": {}, "sha256": {},
+                 "segments": [], "opened_at_unix_ms": 1, "closed_at_unix_ms": 2, "error": "ConnectionResetError: ", "valid": False})
     excluded.append({"connection_id": number, "reason": "client_reset_transport_before_tls_handshake",
                      "manifest_error": "ConnectionResetError: "})
 rows.sort(key=lambda row: row["connection_id"])
