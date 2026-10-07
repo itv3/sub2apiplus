@@ -18,7 +18,8 @@
 基线提交读不到（浅克隆）时跳过并写明原因；某个驱动脚本在 B5a-06 之后又改过（内容摘要不再是 ``SHELL_DIGESTS`` 登记的
 那份）时，它的逐行对照跳过——以新的基线提交重新对照：B5a-09 改过的入口便宜检查以 B5a-09 开工时的提交
 （``B5A09_BASELINE_COMMIT``）为新基线再对照一次（``B5A09_SHELL_RESIDUALS``），B5a-10 改过的批次派发、VC-5 验收与入口门禁
-以 B5a-10 开工时的提交（``B5A10_BASELINE_COMMIT``）为新基线（``LATER_SHELL_BASELINES``）。本模块读真实仓库的 git 历史，按
+以 B5a-10 开工时的提交（``B5A10_BASELINE_COMMIT``）为新基线，B3-04a 改过的 VC-4 总控以 B3-04a 开工时的提交
+（``B304A_BASELINE_COMMIT``）为新基线（``LATER_SHELL_BASELINES``）。本模块读真实仓库的 git 历史，按
 ``unit_records.GIT_READERS`` 登记。
 """
 
@@ -553,11 +554,20 @@ B5A10_SHELL_RESIDUALS: dict[str, list[str]] = {
         '+  --source "deploy_receipt=$DEPLOY" ${DEPLOY_OTHERS_SOURCE[@]+"${DEPLOY_OTHERS_SOURCE[@]}"} | cut -c1-600',
     ],
 }
+# B3-04a（Claude 版候选链驱动）改了 VC-4 总控：以 B3-04a 开工时的提交为基线，最后一步的派发脚本改取客户端表
+# vc4_dispatch_script（Codex 即 vc4.sh），代入 Codex 取值后非注释行与基线逐行相同，没有残差。Claude 专用的 vc4-requirements.sh、
+# vc4-claude.sh 与本机 local-claude-candidate-chain.sh 是新文件，Codex 流程不经过它们。
+B304A_BASELINE_COMMIT = "8015c1a78"
+B304A_SHELL_DIGESTS: dict[str, str] = {
+    "vc4-all.sh": "bd8faf3250a7e093d83b1dcdf11165014fcc684cfe725adc30d25136c2a051de",
+}
+B304A_SHELL_RESIDUALS: dict[str, list[str]] = {"vc4-all.sh": []}
 # 之后各批的新基线（批次、基线提交、改动后的脚本摘要、代入 Codex 取值后的残差）：某个脚本再改过时它那一项跳过，以更新的
 # 一批重新对照。基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 已不再由客户端表给出，按 Codex 的空串代入（见 B5a-09 一段）。
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
+    ("B3-04a", B304A_BASELINE_COMMIT, B304A_SHELL_DIGESTS, B304A_SHELL_RESIDUALS),
 )
 
 

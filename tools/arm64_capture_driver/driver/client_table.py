@@ -26,6 +26,8 @@
   的参数模板（以 ``$`` 开头的项代入同名参数，其余照抄；Codex 为空，沿用脚本里的原形状），以及零请求 smoke 一步登记的
   工具身份摘要（smoke 依赖的模块落在哪几层，哪几层的摘要就要登记）；
 * 入口空跑（B5a-10）：结论文件名的客户端前缀（Codex 为空，结论文件名与改造前逐字相同；同一提交＋同一部署两客户端各一份）；
+* VC-4（B3-04a）：门禁需求的来源（``local-chain``：本机候选链经 ssh 在采集主机现算；``arm64-preview``：采集主机小步骤
+  ``vc4-requirements.sh`` 经编排器的需求预览写进本轮 RUNROOT，本机候选链只读取）与 VC-4 总控最后一步的派发脚本；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -178,6 +180,10 @@ _CODEX: Mapping[str, Any] = {
     "job_containers": ("capture-cli", "sub2apiplus", "sub2apiplus-keeper", "sub2apiplus-postgres", "sub2apiplus-redis"),
     # 启动探测的运行器（B2-10）：宿主侧 client_launch_probe.py 按 --client 选它，入口步骤 client-launch-probe 登记它。
     "launch_probe_runner": "client_launch_probe_runner.py",
+    # VC-4（B3-04a）：门禁需求由本机候选链 local-candidate-chain.sh 经 ssh 在采集主机现算；总控 vc4-all.sh 最后一步派发
+    # vc4.sh（与改造前相同）。
+    "vc4_requirements_source": "local-chain",
+    "vc4_dispatch_script": "vc4.sh",
     "vc5_admission_schema": "codex-vc5-admission/v1",
     "vc5_admission_approval_schema": "codex-vc5-admission-approval/v1",
     "runtime_profile": "runtime/codex-profile-{version}.json",
@@ -290,6 +296,12 @@ _CLAUDE: Mapping[str, Any] = {
     ),
     # 启动探测的 Claude 运行器（B2-10）：经受管驱动入口 claude_drive_tui_cli.py 启动 TUI，私有 HOME 用合成凭据。
     "launch_probe_runner": "claude_launch_probe_runner.py",
+    # VC-4（B3-04a，设计 B3-04「Claude 版候选链驱动」）：门禁需求由采集主机小步骤 vc4-requirements.sh 经 claude_upgrade 的需求
+    # 预览（plan-candidate-gates 只给 Campaign 与候选，零写入）写进 $RUNROOT，本机候选链 local-claude-candidate-chain.sh
+    # 只读取；总控 vc4-all.sh 最后一步派发 vc4-claude.sh（两个批次的动作计划经 claude_upgrade_batch 的受管动作生成，
+    # record-candidate-build 用 --preview 零写入预览代替 Codex 那种替换内部写点的预演）。
+    "vc4_requirements_source": "arm64-preview",
+    "vc4_dispatch_script": "vc4-claude.sh",
     # VC-5 准入合同与运行画像路径由 Claude 候选采集落实（见 pending 的 tool:vc5-admission），未定之前为空。
     "vc5_admission_schema": None,
     "vc5_admission_approval_schema": None,
@@ -322,7 +334,7 @@ SHELL_ENTRIES = (
     "environment_probe_version_option", "timing_ledger_module", "project_ledger_module", "project_ledger_dir_name",
     "gate_receipt_module", "vc_artifacts_module", "binary_key", "binary_sha256_key", "account_key",
     "deploy_receipt_identity_key", "preflight_required", "binary_extra_containers", "official_package_verifier",
-    "plan_audit_argv", "job_rehearsal_module",
+    "plan_audit_argv", "job_rehearsal_module", "vc4_requirements_source", "vc4_dispatch_script",
 )
 
 

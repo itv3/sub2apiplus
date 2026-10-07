@@ -2,6 +2,9 @@
 # VC-4：登记当前 revision → 四树与构建 → 依据真实输入决定实现测试重跑范围 → 收据与正式派发。
 # 用法：ARM64_VC_ENV=… setsid -f bash vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null
 #   本机随后把实现测试日志上传到 $RUNROOT/impl-logs/（check-egress-spec.log、cross-check/、READY）。
+# 按客户端（Claude 升级 B3-04a）：续跑凭证与实现门禁经 vc4_client 取本轮客户端的绑定；最后一步的派发脚本取客户端表
+#   vc4_dispatch_script（Codex 即 vc4.sh，与改造前相同；Claude 是 vc4-claude.sh）。Claude 在本机候选链之前先跑
+#   vc4-requirements.sh（revision 已登记，这里的 open-revision 幂等）。
 set -Eeuo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$D"
@@ -88,5 +91,5 @@ cp "$IMPL/cross-check/check-egress-spec.C-only.local.log" "$E/logs/cross-check/c
 chown -R root:root "$E"; find "$E" -type f -exec chmod 600 {} +; find "$E" -type d -exec chmod 700 {} +
 fi
 echo "=== 派发前检查（驱动/磁盘/总账/账本）"; bash "$DRV/guard.sh" pre-vc4 "$NEWDIR"
-bash "$DRV/vc4.sh" "$E" 2>&1 | grep -E "逐字一致|预演结果|rc=|actions:|TREE=|VC-4 checkpoint|build-receipt|账本|gates:|replay:|VC4_DONE|Error|Traceback|拒绝|失败|BATCH" | cut -c1-260
+bash "$DRV/$CT_VC4_DISPATCH_SCRIPT" "$E" 2>&1 | grep -E "逐字一致|预演结果|rc=|actions:|TREE=|VC-4 checkpoint|build-receipt|账本|gates:|replay:|VC4_DONE|Error|Traceback|拒绝|失败|BATCH" | cut -c1-260
 echo "VC4_ALL_DONE E=$E $(utc_now)"

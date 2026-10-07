@@ -3,6 +3,10 @@
 
 upload-wait 检查构建结束时冻结的中间凭证；full 还必须重放完整实现测试收据。
 旧轮次没有凭证时不根据成功日志猜测可复用，重新执行后自然生成新版凭证。
+
+Claude 升级 B3-04a 起按本轮客户端取 VC-4 绑定（``vc4_client``）：``upgrade`` 是本轮客户端的编排器模块（Codex 即
+codex_upgrade，调用与测试打桩和改造前相同）；门禁需求、revision 开启、前序构建收据合同与实现测试复用开关经 ``CLIENT``
+取（Claude 不复用实现测试，early-test-mode 恒为 full）。
 """
 
 from __future__ import annotations
@@ -17,12 +21,15 @@ import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ.get("D", str(Path(__file__).resolve().parents[3])))
-from tools.official_client_capture import codex_upgrade as upgrade
 from tools.official_client_capture import codex_upgrade_candidate_build as build
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt as vc_receipt
 sys.path.insert(0, str(Path(__file__).parent))
 import vc4_contract
+import vc4_client
+
+CLIENT = vc4_client.current()
+upgrade = CLIENT.upgrade
 
 SCHEMA = "arm64-vc4-resume/v2"
 TREES = ("source", "gate-tree", "build-tree", "plan-source")
@@ -75,10 +82,9 @@ def image(reference: str, *, prepare: bool = False) -> dict:
 
 def context() -> tuple[Path, Path, dict, dict]:
     base = Path(os.environ["B"])
-    campaign = Path(os.environ["D"]) / "evidence/campaigns" / os.environ["NEW"]
+    campaign = CLIENT.campaign()
     manifest = upgrade.load_campaign_manifest(campaign)
-    classification = upgrade._load_stage_result(campaign, "classify")
-    _, _, requirements = upgrade._load_vc3_gate_requirements(campaign, manifest, classification)
+    requirements = CLIENT.requirements(campaign, manifest)
     return base, campaign, manifest, requirements
 
 
@@ -147,7 +153,8 @@ def inputs(*, prepare: bool = False) -> dict:
                          "vendor_sha256": build.scan_tree_inventory(base / "build-tree/backend/vendor")["inventory_sha256"]},
         "toolchain": {"go_version": go_version, "node_version": node}, "base_images": images,
         "driver_build_sha256": {name: binding(Path(__file__).parent / name)["sha256"]
-                                for name in ("lib.sh", "vc4_contract.py", "trees.sh", "frontend.sh", "vc4-gates.sh", "implementation_gates.py", "build.sh", "vc4-facts.sh")},
+                                for name in ("lib.sh", "vc4_contract.py", "trees.sh", "frontend.sh", "vc4-gates.sh", "implementation_gates.py", "build.sh", "vc4-facts.sh",
+                                             "vc4_client.py")},
         "frontend_deviation_approved_by": os.environ["FRONTEND_DEVIATION_APPROVED_BY"],
         "tree_preparation": vc4_contract.verify_trees(base, dict(os.environ)),
         "build_network": vc4_contract.network_inputs(dict(os.environ)),
@@ -205,8 +212,7 @@ def open_revision() -> None:
         supersedes = current["supersedes"]["candidate_id"] if current["supersedes"] else None
     else:
         initial, supersedes = False, current["candidate_id"]
-    result = upgrade.open_candidate_revision(argparse.Namespace(campaign_dir=campaign,
-        candidate_id=os.environ["CAND"], initial=initial, supersedes=supersedes))
+    result = CLIENT.open_revision(campaign, os.environ["CAND"], initial=initial, supersedes=supersedes)
     print(f"REVISION_OPENED r{result['revision']} {result['candidate_id']}")
 
 
@@ -220,7 +226,7 @@ def build_flags(evidence: Path, default: str) -> str:
     path = campaign / "candidates" / revision["supersedes"]["candidate_id"] / "build-receipt.json"
     if not path.exists():
         return default
-    previous = artifacts.validate_candidate_build_receipt(read(path))
+    previous = CLIENT.previous_build_receipt(read(path))
     current = bound(evidence / "pre-build.json")["inputs"]
     if (previous["source"]["git_commit"] != current["git_commit"]
             or previous["source"]["tree_sha256"] != current["tree_sha256"]["source"]):
@@ -232,8 +238,10 @@ def build_flags(evidence: Path, default: str) -> str:
 
 
 def early_test_mode(evidence: Path) -> str:
-    """确定必然全量重跑时保留前端／门禁并行；可能复用时等真实构建参数齐全再裁定。"""
+    """确定必然全量重跑时保留前端／门禁并行；可能复用时等真实构建参数齐全再裁定。不复用实现测试的客户端恒为全量。"""
 
+    if not CLIENT.implementation_reuse:
+        return "full"
     _, campaign, manifest, requirements = context()
     _, revision = upgrade._current_candidate_revision_record(campaign, manifest)
     if revision is None or revision["supersedes"] is None:
@@ -241,7 +249,7 @@ def early_test_mode(evidence: Path) -> str:
     path = campaign / "candidates" / revision["supersedes"]["candidate_id"] / "build-receipt.json"
     if not path.exists():
         return "full"
-    previous = artifacts.validate_candidate_build_receipt(read(path))["build"].get("inputs")
+    previous = CLIENT.previous_build_receipt(read(path))["build"].get("inputs")
     if previous is None:
         return "full"
     current = bound(evidence / "pre-build.json")["inputs"]

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""执行本轮批准门禁并生成实现测试 facts，不内置某个版本的规则或测试名。"""
+"""执行本轮批准门禁并生成实现测试 facts，不内置某个版本的规则或测试名。
+
+Claude 升级 B3-04a 起按本轮客户端取 VC-4 绑定（同目录 ``vc4_client``）：``upgrade`` 是本轮客户端的编排器模块（Codex 即
+codex_upgrade，调用与测试打桩和改造前相同）；门禁需求、本候选属于当前 revision 的核对与前序构建收据合同经 ``CLIENT`` 取。
+实现测试复用只有 Codex（``CLIENT.implementation_reuse``）：Claude 的重跑计划不读前序构建收据，一律全量重跑。
+"""
 
 import argparse
 import hashlib
@@ -14,17 +19,20 @@ from datetime import datetime, timezone
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ["D"])
-from tools.official_client_capture import codex_upgrade as upgrade
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture import codex_upgrade_candidate_build as build
 from tools.official_client_capture import codex_upgrade_vc_receipt as vc_receipt
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import vc4_client
+
+CLIENT = vc4_client.current()
+upgrade = CLIENT.upgrade
 
 
 def load_plan():
-    campaign = Path(os.environ["D"]) / "evidence/campaigns" / os.environ["NEW"]
+    campaign = CLIENT.campaign()
     manifest = upgrade.load_campaign_manifest(campaign)
-    classification = upgrade._load_stage_result(campaign, "classify")
-    _, _, requirements = upgrade._load_vc3_gate_requirements(campaign, manifest, classification)
+    requirements = CLIENT.requirements(campaign, manifest)
     path = Path(os.environ["B"]) / "source" / os.environ["LIFECYCLE_DIR"] / "gate-plan.json"
     plan = artifacts.validate_gate_plan(json.loads(path.read_text()), requirements)
     mapping = path.with_name("gate-mapping.json").read_bytes()
@@ -70,9 +78,9 @@ def current_inputs(plan: dict) -> dict:
 
 
 def target_revision() -> Path:
-    campaign = Path(os.environ["D"]) / "evidence/campaigns" / os.environ["NEW"]
+    campaign = CLIENT.campaign()
     manifest = upgrade.load_campaign_manifest(campaign)
-    revision, record = upgrade._require_candidate_in_current_revision(campaign, manifest, os.environ["CAND"], action="实现测试复用")
+    revision, record = CLIENT.require_current_revision(campaign, manifest, os.environ["CAND"], action="实现测试复用")
     if record is None:
         raise ValueError("实现测试复用要求显式登记当前 revision")
     return campaign / "control/vc/revisions" / f"r{revision}" / "revision.json"
@@ -84,10 +92,10 @@ def retest_plan(root: Path, *, write: bool = False) -> dict:
     path = target_revision()
     revision = json.loads(path.read_text())
     proof = None
-    if revision["supersedes"] is not None:
+    if CLIENT.implementation_reuse and revision["supersedes"] is not None:
         old_path = path.parents[4] / "candidates" / revision["supersedes"]["candidate_id"] / "build-receipt.json"
         if old_path.exists():
-            old = artifacts.validate_candidate_build_receipt(json.loads(old_path.read_text()))
+            old = CLIENT.previous_build_receipt(json.loads(old_path.read_text()))
             if old["build"].get("inputs") is not None:
                 proof = vc_receipt.plan_implementation_reuse(path, inputs)
     decision = (proof if proof is not None else build.implementation_retest_plan(None, inputs,

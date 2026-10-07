@@ -465,7 +465,8 @@ CAPTURE_REAL_CHAIN_MODULES := \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_build_revision \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_stage_recovery \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_segment_reuse \
-	tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain
+	tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain \
+	tools.official_client_capture.tests.real_chains.test_claude_vc4_candidate_chain
 test-capture-real-chains:
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
 		PYTHONDONTWRITEBYTECODE=1 python3 -m tools.official_client_capture.tests.real_chain_gate $(CAPTURE_REAL_CHAIN_MODULES)

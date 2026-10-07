@@ -58,7 +58,7 @@
 3. VC-1 封存和 checkpoint 重放通过后，先完成人工分类审核，再用 `vc23.sh`；批准前必须通过下节离线判据门。
 4. 本机 `driver/local/local-candidate-chain.sh` 形成 A／C／D 提交链及 bundle，上传到参数中的 `$BUNDLE`。
    ARM64 先 `arm64-vc4-gates.sh`，确认 `ARM64_VC4_GATES_DONE` 和收据通过后再 `vc4-all.sh`，两者不并行。
-   `driver/local/local-vc4.sh` 只解释旧轮次的本机门禁，新轮次不使用。
+   `driver/local/local-vc4.sh` 只解释旧轮次的本机门禁，新轮次不使用。Claude 的顺序见下文「Claude 的 VC-4 候选链」。
 5. VC-4 收据通过后，`vc5-precheck.sh --dry-run` → 按批准 `--apply` → `vc5-all.sh`。
    现成 VC-4／VC-5 整链冻结生产替换用途；只读交付用途须生成对应的受管批次，不直接套用生产驱动计划。
 6. VC-6 按指南经受管批次执行；收尾材料使用下节 `codex_closeout.py`，人工批准后才正式发布。
@@ -448,6 +448,40 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   Campaign 场景解析器读取，不固定门禁数、规则名或 Job 列表。缺少批准输入、命令／集合／摘要漂移均拒绝。
   canonical 必须提供 `RETIRE_VERSION`；本机历史门禁须显式设置本机路径 `HISTORICAL_SOURCE_ROOT`，ARM64
   可在本轮参数文件中覆盖其远端路径。保留历史测试接口变量名，不固定其来源目录。
+
+## Claude 的 VC-4 候选链（Claude 升级 B3-04a）
+
+`CLIENT=claude` 的轮次按客户端表 `vc4_requirements_source=arm64-preview`、`vc4_dispatch_script=vc4-claude.sh` 走下面的顺序（Codex
+仍是 `local-candidate-chain.sh` → `vc4-all.sh` → `vc4.sh`，流程与命令行不变）：
+
+1. 采集主机 `vc4-requirements.sh`：`guard.sh pre-plan` → `vc4_resume.py open-revision`（经 `claude_upgrade revision-open` 写编排器与
+   Store 两份登记，同一参数重跑幂等）→ `vc4_client.py requirements`：编排器的门禁需求预览（`plan-candidate-gates` 只给 Campaign
+   与候选，零写入）与按 VC-2／VC-3 阶段结果只读推出的需求逐字核对后写 `$RUNROOT/vc4-gate-requirements.json`（0600，同一轮重跑
+   收敛）。本步在候选提交之前，参数文件里的 C／DC／RECEIPT／BUNDLE 可先沿用上一轮，`vc4-all.sh` 之前改成本轮的提交。
+2. 本机 `local/local-claude-candidate-chain.sh`（参数与 Codex 链同形）：一条只读 ssh tar 取回 Campaign 总计划、`profile/` 下的
+   VC-3 产物与需求预览，`claude_catalog_chain.py` 按摘要链核验后装配三段提交：
+   * A：暂存 Release 的画像与 Wire（`catalogdata/claude/…`，内容寻址、已有只能逐字复用）、投影策略
+     `tools/official_client_capture/claude_upgrade_wire_projection_<版本下划线>.json`、lifecycle 目录的 `catalog-stage/`（暂存收据与
+     Release 条目，先删再写、恰好两个）、`gate-mapping.json`（`GATE_MAPPING_INPUT` 原字节）、`gate-plan.json`；
+   * C：只有 Claude 的 `release-catalog.json`（VC-3 冻结的 Active 目录、末尾追加暂存 Release、validation_candidate 指向它）。写完先
+     用候选源码的 Go 加载器（`claude_catalog_check.go`，在 backend 内的临时目录 `go run`）核对，再以 `verify_candidate_catalog`
+     验收，任一项不过即还原、脚本停下；
+   * D：`freeze-successor-generate --before A --after C`，要求结论通过、未登记与人工动作为 0、摘要边恰好只有 release-catalog.json，
+     并按 Claude 的 source transition 校验（与 record-candidate-build 同一函数）验收。
+   仓库当前提交的 Claude 目录必须就是 VC-3 冻结的 Active 目录：不同说明主线在 VC-3 之后改过目录，候选链停下；r≥2 的候选也从
+   不含候选目录改动的提交开始。投影策略进了受管树，部署含它的候选树之前先登记一次 control 层工具演进。
+3. 采集主机 `arm64-vc4-gates.sh` 与 `vc4-all.sh` 同 Codex。续跑凭证与实现门禁经 `vc4_client.py` 取 Claude 的绑定：门禁需求与
+   record-candidate-build 的入口门同一推法，前序构建收据认客户端中立合同；Claude 不复用实现测试（`early-test-mode` 恒为 full，
+   重跑计划不读前序构建收据，r≥2 一律全量重跑，登记为后续项）。最后一步派发 `vc4-claude.sh`：
+   * 实现测试收据沿用 `vc4-facts.sh`；
+   * `claude_vc4.py plan-gates` 用 `claude_upgrade_batch` 的受管动作生成 plan-candidate-gates 计划，并按 VC-4 阶段幂等重派合同
+     自检；`plan-rehearsal` 在批次外以同一组旗标跑一次生成模式（输出换成 `gate-plan-rehearsal.json`），与提交内 `gate-plan.json`
+     逐字节比对后删除；随后经 `vc-batch.sh` 派发；
+   * `record-plan` 生成十九个旗标的 record-candidate-build 计划（用途取 Campaign 冻结的 `campaign_purpose`）；`record-preview`
+     加 `--preview` 在批次外跑零写入预览，前后比对 Campaign 写域（`candidates`、`control/vc`、`control-store`）；随后派发；
+   * `summary` 打印 VC-4 checkpoint、候选构建收据（`official-client-upgrade-candidate-build-receipt/v1`）与计时账本状态。
+* 第一条真实链的前提：B3-04b（Go 侧 Release 钉住解耦）合入、Go 加载器不再写死 Active 版本的模型角色——在那之前候选链会在
+  C 段的 Go 核对处停下。
 
 ## 幂等与证据边界（2026-09-22 v14r4 批次 15 事故后的硬规则）
 
