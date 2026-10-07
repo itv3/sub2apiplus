@@ -17,7 +17,9 @@
 2. ``selector_observed``（前态，只读观察）；
 3. ``validation_execution_plan`` 对象：外部门禁一律由 ``claude_upgrade_accept.candidate_external_gate_plan_entries`` 生成
    （与 B4-06a 的门禁定稿出自同一处定义），三条门禁的 gate_id 与本次执行的候选 Job 一起进 ``execute_item_ids``，复用的
-   Job 进 ``reuse_item_ids``；``run_conditions`` 的工具摘要取 Store 当前有效工具身份；
+   Job 进 ``reuse_item_ids``；``run_conditions`` 的工具摘要取 Store 当前有效工具身份。门禁执行主机与架构缺省取候选 attempt
+   的 ``candidate_gateway.host``，``capture-candidate seal --gate-execution-overrides`` 逐门禁覆盖（B5b-01b：门禁收据与计划
+   逐字比对主机与架构，驱动按门禁实际执行的位置生成覆盖；覆盖并入 seal 代号，预览与批准必须给同一份）；
 4. ``validation_attempt_created``：attempt ID 是 ``<候选采集 attempt>-v<轮次>``（见第三节）；
 5. 每个 ScenarioPlan 场景依次 ``scenario_prepared → captured → sealed → approved``（批准人与审核引用取 seal 预览的批准）；
 6. ``candidate_evidence_package`` 对象。
@@ -916,6 +918,14 @@ def add_seal_arguments(target: Any) -> None:
         action="store_true",
         help="seal：外部门禁失败后的门禁重试——零请求、不重扫，用第 1 轮的封存产物与 Store 门禁收据历史封存下一轮（第七节）。",
     )
+    target.add_argument(
+        "--gate-execution-overrides",
+        metavar="JSON",
+        help=(
+            "seal：外部门禁执行主机的逐门禁覆盖（JSON 对象 {gate_id: {host_id?, architecture?}}），写进执行计划 gate_execution.overrides；"
+            "缺省主机与架构取候选 attempt 的 candidate_gateway.host。预览与批准必须给同一份（并入 seal 代号）；--revalidate 沿用第 1 轮。"
+        ),
+    )
 
 
 def seal_command(arguments: Any) -> tuple[dict[str, Any], int]:
@@ -929,8 +939,15 @@ def seal_command(arguments: Any) -> tuple[dict[str, Any], int]:
     approve = getattr(arguments, "approve_seal_sha256", None)
     approved_by = getattr(arguments, "approved_by", None)
     revalidate = bool(getattr(arguments, "revalidate", False))
-    if revalidate and (approve is not None or approved_by is not None or getattr(arguments, "client_evidence", None)):
-        raise ConfigurationError("--revalidate 不接受 --approve-seal-sha256、--approved-by 或 --client-evidence：批准与客户端收据沿用第 1 轮。")
+    raw_overrides = getattr(arguments, "gate_execution_overrides", None)
+    if revalidate and (
+        approve is not None or approved_by is not None or getattr(arguments, "client_evidence", None) or raw_overrides is not None
+    ):
+        raise ConfigurationError(
+            "--revalidate 不接受 --approve-seal-sha256、--approved-by、--client-evidence 或 --gate-execution-overrides："
+            "批准、客户端收据与门禁执行主机沿用第 1 轮。"
+        )
+    gate_overrides = parse_gate_execution_overrides(raw_overrides)
     if approve is not None:
         _sha256(approve, "--approve-seal-sha256")
         if not isinstance(approved_by, str) or not approved_by.strip():
@@ -955,7 +972,46 @@ def seal_command(arguments: Any) -> tuple[dict[str, Any], int]:
             client_evidence=list(getattr(arguments, "client_evidence", None) or []),
             approve=approve,
             approved_by=approved_by.strip() if isinstance(approved_by, str) else None,
+            gate_overrides=gate_overrides,
         )
+
+
+GATE_OVERRIDE_FIELDS = frozenset({"host_id", "architecture"})
+
+
+def parse_gate_execution_overrides(value: Any) -> dict[str, dict[str, str]] | None:
+    """``--gate-execution-overrides``：JSON 对象 ``{gate_id: {host_id?, architecture?}}``，按 gate_id 规范排序；没给为 None。
+
+    门禁 ID 必须是三条候选外部门禁之一、每条至少给一个字段；``host_id`` 是合法标识，``architecture`` 是 ``<系统>/<架构>``
+    形态的非空串。门禁收据与执行计划逐字比对主机与架构（B4-06a ``gate_result_inputs``），所以这里写的就是门禁记录里会出现的
+    值：驱动按门禁实际执行的位置生成（B5b-01b：两条本机门禁取本机门禁记录，目标平台门禁取采集主机的记录算法）。
+    """
+
+    if value is None:
+        return None
+    try:
+        payload = json.loads(str(value))
+    except json.JSONDecodeError as error:
+        raise ConfigurationError(f"--gate-execution-overrides 不是 JSON：{error}") from error
+    if not isinstance(payload, Mapping) or not payload:
+        raise ConfigurationError("--gate-execution-overrides 必须是非空 JSON 对象（门禁 ID → 覆盖）。")
+    known = set(claude_upgrade_accept.gate_receipt.CANDIDATE_COMMANDS)
+    overrides: dict[str, dict[str, str]] = {}
+    for gate_id, patch in sorted(payload.items()):
+        if gate_id not in known:
+            raise ConfigurationError(f"--gate-execution-overrides 登记了非候选外部门禁：{gate_id}（只有 {'、'.join(sorted(known))}）。")
+        if not isinstance(patch, Mapping) or not patch or not set(patch) <= GATE_OVERRIDE_FIELDS:
+            raise ConfigurationError(f"门禁 {gate_id} 的覆盖必须是只含 host_id／architecture 的非空对象。")
+        normalized: dict[str, str] = {}
+        if "host_id" in patch:
+            normalized["host_id"] = _safe_id(patch["host_id"], f"门禁 {gate_id} 的 host_id")
+        if "architecture" in patch:
+            architecture = patch["architecture"]
+            if not isinstance(architecture, str) or not re.fullmatch(r"[a-z0-9_]+/[A-Za-z0-9_.-]+", architecture):
+                raise ConfigurationError(f"门禁 {gate_id} 的 architecture 必须是 <系统>/<架构> 形态：{architecture!r}")
+            normalized["architecture"] = architecture
+        overrides[str(gate_id)] = normalized
+    return overrides
 
 
 def _capture() -> Any:
@@ -1106,6 +1162,7 @@ def _seal_candidate_attempt(
     client_evidence: Sequence[str],
     approve: str | None,
     approved_by: str | None,
+    gate_overrides: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[dict[str, Any], int]:
     orchestrator = _orchestrator()
     capture = _capture()
@@ -1179,6 +1236,10 @@ def _seal_candidate_attempt(
             for group, files in client_files.items()
         },
     }
+    if gate_overrides is not None:
+        # 门禁执行主机覆盖决定执行计划，并入代号：预览与批准必须给同一份，换一份就是另一代（没有它的预览即拒绝批准）。
+        # 不给时代号键与原来逐字相同。
+        generation_key["gate_execution_overrides"] = {gate: dict(patch) for gate, patch in sorted(gate_overrides.items())}
     generation = claude_upgrade_seal._generation(generation_key)
     seal_dir = campaign_dir / "candidates" / candidate_id / SEAL_DIRNAME / generation
     if approve is not None:
@@ -1354,7 +1415,11 @@ def _preview_candidate_seal(
         "issued_at_utc": str(attempt["completed_at_utc"]),
         "run_conditions": {"run_nonce": str(attempt["run_nonce"]), **gateway["run_conditions"]},
         "selector_before_snapshot": dict(gateway["selector_before_snapshot"]),
-        "gate_execution": dict(gateway["host"]),
+        "gate_execution": (
+            {**dict(gateway["host"]), "overrides": dict(generation_key["gate_execution_overrides"])}
+            if "gate_execution_overrides" in generation_key
+            else dict(gateway["host"])
+        ),
         "job_ids": {"execute": sorted(job.job_id for job in jobs), "reuse": []},
         "scenario_evidence": seal_binding["scenario_evidence"],
         "seal": {
@@ -1473,7 +1538,7 @@ def _approve_candidate_seal(
     orchestrator = _orchestrator()
     preview_path = seal_dir / SEAL_PREVIEW_FILENAME
     if preview_path.is_symlink() or not preview_path.is_file():
-        raise ConfigurationError("当前输入（attempt、工具身份、ScenarioPlan 与客户端收据）没有冻结的候选 seal 预览：先不带 --approve-seal-sha256 运行预览。")
+        raise ConfigurationError("当前输入（attempt、工具身份、ScenarioPlan、客户端收据与门禁执行主机覆盖）没有冻结的候选 seal 预览：先不带 --approve-seal-sha256 运行预览。")
     preview = orchestrator._read_json(preview_path, "候选 seal 预览")
     core = {key: value for key, value in preview.items() if key != "review_sha256"}
     if preview.get("review_sha256") != orchestrator._fingerprint(core) or preview.get("generation") != generation:

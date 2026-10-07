@@ -56,6 +56,32 @@ const (
 	ConnectionPoolIsolationAccountProxy = "account_proxy"
 )
 
+// claudeCandidateIsolatedInstanceIDs 是允许打开 Claude 候选开关（gateway.claude_fw_g_candidate_enabled）的
+// 隔离候选实例，取值对应 gateway.official_egress_guard.instance_id：DMIT 沿用改造前唯一的放行值（FW-G 2.1.226
+// 隔离验收时登记），ARM64 是升级控制面 VC-5 的隔离候选环境（候选验证期间由驱动切换网关时写入，恢复生产镜像时
+// 撤回）。新增登记只能是隔离候选环境；空值永远不在名单里。比较时去掉首尾空白、不区分大小写。名单是不导出的
+// 定长数组，包外只能经下面两个函数读取。
+var claudeCandidateIsolatedInstanceIDs = [...]string{"DMIT", "ARM64"}
+
+// ClaudeCandidateIsolatedInstanceIDs 返回登记的隔离候选实例 ID（副本，按登记顺序）。
+func ClaudeCandidateIsolatedInstanceIDs() []string {
+	return append([]string(nil), claudeCandidateIsolatedInstanceIDs[:]...)
+}
+
+// IsClaudeCandidateIsolatedInstance 判断 instance_id 是否是登记过的隔离候选实例。
+func IsClaudeCandidateIsolatedInstance(instanceID string) bool {
+	value := strings.TrimSpace(instanceID)
+	if value == "" {
+		return false
+	}
+	for _, registered := range claudeCandidateIsolatedInstanceIDs {
+		if strings.EqualFold(value, registered) {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultUpstreamResponseReadMaxBytes 上游非流式响应体的默认读取上限。
 // 128 MB 可容纳 2-3 张 4K PNG（base64 膨胀 33%，单张 4K PNG 最坏约 67MB base64）。
 // 可通过 gateway.upstream_response_read_max_bytes 配置项覆盖。
@@ -1053,8 +1079,9 @@ type GatewayConfig struct {
 	// OfficialEgressGuard: 官方出站 Guard 的两个未知项策略和 canary 参数。
 	// 变更集 1C 默认均为 enforce；临时 observe 只能通过绑定实例、route 和期限的策略覆盖启用。
 	OfficialEgressGuard GatewayOfficialEgressGuardConfig `mapstructure:"official_egress_guard"`
-	// ClaudeFWGCandidateEnabled 仅在 DMIT 隔离实例安装 Claude Code 2.1.226
-	// FW-G strict candidate。默认关闭，Vircs production 不得开启。
+	// ClaudeFWGCandidateEnabled 只在登记过的隔离候选实例（IsClaudeCandidateIsolatedInstance）安装
+	// Claude Code 候选 Runtime（Release 目录 validation_candidate selector 指向的 Release）。
+	// 默认关闭；对外服务的生产实例不得开启。
 	ClaudeFWGCandidateEnabled bool `mapstructure:"claude_fw_g_candidate_enabled"`
 	// ClaudeOfficialClientProfiles 是 Claude Code Persona 独立的生产发布指针。
 	// legacy 保持冻结遗留链；active 只解析已晋升且通过终态门禁的正式 Release。
@@ -3505,8 +3532,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("gateway.official_egress_guard.max_unique_log_samples must be positive")
 	}
 	if c.Gateway.ClaudeFWGCandidateEnabled &&
-		!strings.EqualFold(strings.TrimSpace(c.Gateway.OfficialEgressGuard.InstanceID), "DMIT") {
-		return fmt.Errorf("gateway.claude_fw_g_candidate_enabled 只允许在 instance_id=DMIT 的隔离实例开启")
+		!IsClaudeCandidateIsolatedInstance(c.Gateway.OfficialEgressGuard.InstanceID) {
+		return fmt.Errorf(
+			"gateway.claude_fw_g_candidate_enabled 只允许在登记的隔离候选实例开启（instance_id 取 %s 之一）",
+			strings.Join(ClaudeCandidateIsolatedInstanceIDs(), "、"),
+		)
 	}
 	claudeProductionMode := strings.ToLower(strings.TrimSpace(
 		c.Gateway.ClaudeOfficialClientProfiles.Mode,

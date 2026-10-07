@@ -40,6 +40,11 @@
 * 收尾编排（B5b-06）：收尾配置与方案的合同名（``closeout_schema``，``tools/codex_closeout.py`` 按配置的合同名分派客户端）、
   候选分支名（``closeout_candidate_branch``）与终态收据文件名前缀（``terminal_receipt_prefix``）。Codex 三项与改造前收尾里的
   字面逐字相同；
+* VC-5（B5b-01b）：一条龙 ``vc5-all.sh`` 按表调用各步的派发脚本——启动（派发前检查、run 计划、切候选网关、预检、后台 run
+  批次）、seal 链、accept 与 canonical 交接（``vc5_start_script``／``vc5_seal_script``／``vc5_accept_script``／
+  ``vc5_canonical_script``）。Codex 四项即原来的四个脚本；Claude 是 ``vc5-claude-*.sh``，canonical 为空（Claude 在 accept 时
+  完成 VC-5，不做 canonical 交接，设计附录 G 例外①），``vc5-all.sh`` 跳过这一步。Codex 那几个脚本（及其辅助脚本）开头按
+  这些表项核对本客户端的这一步就是自己，不是即在任何副作用之前拒绝（``lib.sh`` 的 ``CLIENT_STEP_REQUIRED``）；
 * ``pending``：Claude 尚未接入的入口步骤（``step:``）、便宜检查项（``check:``）与驱动工具（``tool:``）→ 落实它的工作项。
   驱动遇到它们失败关闭并写明工作项，不拿 Codex 的实现顶替；工作项落实时从这里删去对应条目。
 
@@ -217,6 +222,11 @@ _CODEX: Mapping[str, Any] = {
     "closeout_schema": "codex-upgrade-closeout/v1",
     "closeout_candidate_branch": "codex-closeout-candidate",
     "terminal_receipt_prefix": "CODEX_CLI_",
+    # VC-5（B5b-01b）：各步派发脚本即原来的四个脚本（vc5-all.sh 代入后逐字不变）。
+    "vc5_start_script": "vc5-start.sh",
+    "vc5_seal_script": "vc5-seal.sh",
+    "vc5_accept_script": "vc5-accept.sh",
+    "vc5_canonical_script": "vc5-canonical2.sh",
     "pending": {},
 }
 
@@ -388,13 +398,19 @@ _CLAUDE: Mapping[str, Any] = {
     "closeout_schema": "claude-upgrade-closeout/v1",
     "closeout_candidate_branch": "claude-closeout-candidate",
     "terminal_receipt_prefix": "CLAUDE_CODE_",
-    # B5b-01 拆出的 b 段：Claude 的 VC-5 派发动作依赖尚在进行的候选采集与封存、验收读侧和候选恢复，这些驱动在落实前一律失败
-    # 关闭并写明工作项，不先猜旗标，也不拿 Codex 的形状顶替。
+    # VC-5（B5b-01b）：Claude 的启动、seal 链与 accept 各有派发脚本（动作经 claude_vc5.py 用受管 claude_upgrade_batch 的受管
+    # 动作生成）；没有 canonical 交接（accept 写 VC-5 checkpoint），vc5-all.sh 跳过这一步。
+    "vc5_start_script": "vc5-claude-start.sh",
+    "vc5_seal_script": "vc5-claude-seal.sh",
+    "vc5_accept_script": "vc5-claude-accept.sh",
+    "vc5_canonical_script": None,
+    # 仍待接入的 VC-5 驱动工具：落实前一律失败关闭并写明工作项，不先猜旗标，也不拿 Codex 的形状顶替。
+    # * 边界核对（B4-01 f 段）：命令形状已定（capture-candidate boundary-check --candidate-id --attempt-id --check <check_id>
+    #   [--acknowledge-live-requests]，VC-5 批次动作、阶段项 candidate-seal），入口进主线前 seal 链在派发它之前停下；
+    # * 候选恢复段与 VC-5 续跑计划（B4-05b）。
     "pending": {
-        "tool:vc5-run": "B4-01b（Claude 候选 run 的参数与 attempt 布局：VC-5 run 计划、候选网关切换与派发前预检，B5b-01b 接入）",
-        "tool:vc5-seal": "B4-02 证据侧与 B4-01e（候选证据四阶段封存与 Desktop、VS Code 客户端收据，B5b-01b 接入）",
-        "tool:vc5-accept": "B4-06b（compare／accept 读侧根、canonical 交接与 VC-5 completion，B5b-01b 接入）",
-        "tool:vc5-recover": "B4-05b 与 B4-01c（候选恢复段与 VC-5 续跑计划，B5b-01b 接入）",
+        "tool:vc5-boundary-check": "B4-01 f 段（capture-candidate boundary-check：Codex final wire 隔离与第三方入口拒绝两项边界核对）",
+        "tool:vc5-recover": "B4-05b 与 B4-01c（候选恢复段与 VC-5 续跑计划）",
     },
 }
 
@@ -416,7 +432,7 @@ SHELL_ENTRIES = (
     "deploy_receipt_identity_key", "preflight_required", "binary_extra_containers", "official_package_verifier",
     "plan_audit_argv", "job_rehearsal_module", "vc4_requirements_source", "vc4_dispatch_script", "vc1_dispatch_script",
     "atomic_rehearsal_module", "atomic_root_prefix", "vc23_dispatch_script", "campaign_purpose_key", "preflight_plan_argv",
-    "official_reuse_subcommand",
+    "official_reuse_subcommand", "vc5_start_script", "vc5_seal_script", "vc5_accept_script", "vc5_canonical_script",
 )
 
 

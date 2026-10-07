@@ -5,8 +5,8 @@
 # 不生成任何文件，只断言全部收据已存在；manifest 绑定的证据根从此不可触碰。
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1" --client-checkpoint-at-utc "$2")
-# 待接入的驱动工具（B5b-01）：Claude 的 VC-5 派发在 B5b-01b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项。
-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)
+# 按客户端分了派发脚本（B5b-01b）：observed-profile／Kilo 收据只属于 Codex 的 seal 链（vc5-seal.sh），lib.sh 在任何副作用之前拒绝别的客户端。
+CLIENT_STEP_REQUIRED=(CT_VC5_SEAL_SCRIPT vc5-seal.sh)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 CKPT="$2"
 

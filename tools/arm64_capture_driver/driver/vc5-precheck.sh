@@ -5,8 +5,9 @@ set -Eeuo pipefail
 case "${1:-}" in
   --dry-run|--apply|--consume) exec python3 -B "$(dirname "${BASH_SOURCE[0]}")/vc5_admission.py" "$@" ;;
 esac
-# 准入三种模式两客户端都已接入（B5b-01）；下面的镜像预检用候选 run 的身份与作业，Claude 在 B5b-01b 接入前拒绝。
-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)
+# 准入三种模式两客户端都已接入（B5b-01）；下面的镜像预检属于 Codex 的 VC-5 启动（vc5-start.sh），Claude 的预检在
+# vc5-claude-start.sh（只读调候选 run 的正式入口门），lib.sh 在任何副作用之前拒绝别的客户端（B5b-01b）。
+CLIENT_STEP_REQUIRED=(CT_VC5_START_SCRIPT vc5-start.sh)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 IMAGE_ID="$1"; BUILD_ID="$2"
 vc5_require_admission

@@ -506,6 +506,38 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 * 第一条真实链的前提：B3-04b（Go 侧 Release 钉住解耦）合入、Go 加载器不再写死 Active 版本的模型角色——在那之前候选链会在
   C 段的 Go 核对处停下。
 
+## Claude 的 VC-5 驱动三段（Claude 升级 B5b-01b）
+
+`vc5-all.sh` 按客户端表的四个派发脚本表项调用（Codex：`vc5-start.sh`／`vc5-seal.sh`／`vc5-accept.sh`／`vc5-canonical2.sh`，流程与
+命令行不变；Claude：`vc5-claude-start.sh`／`vc5-claude-seal.sh`／`vc5-claude-accept.sh`，没有 canonical 交接）。每个 VC-5 脚本在
+`source lib.sh` 前写 `CLIENT_STEP_REQUIRED=(<表变量> <脚本名>)`，本轮客户端的这一步不由它负责即在解析阶段之前退出 3；Codex 的
+`gen_vc5_plans.py` 遇到别的派发脚本同样拒绝。动作计划一律由 `claude_vc5.py` 经受管 `claude_upgrade_batch` 生成，阶段项与 Codex
+同名（`candidate-run`、`candidate-seal`、`compare`、`assert-rules`、`acceptance`）。
+
+1. run：`vc5-claude-start.sh` 沿用 Codex 的锁、准入、`guard.sh pre-vc5` 与后台批次写法；`claude_vc5.py run-plan` 生成受管
+   `capture-candidate run` 计划；`vc5-claude-switch.sh candidate <标签>` 从 compose 备份改写 compose：镜像换候选标签，环境变量块写入
+   `GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED=true`、登记的隔离实例 `GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID=ARM64`（Go 只在登记的
+   隔离候选实例 DMIT、ARM64 放行候选开关）与激活事实那组 `GATEWAY_CLAUDE_EGRESS_ACTIVATION_*`（身份取 VC-4 构建收据，不写批准
+   摘要）；备份里已有这些变量即拒绝。起服务后 `activation-check` 核对激活事实是候选 Runtime 且与构建收据逐项一致，`precheck`
+   只读调候选 run 的正式入口门。`restore` 交给 `vc5-switch.sh`（拷回备份，以上变量一并撤回）。
+2. seal 链：`vc5-claude-seal.sh <attempt>` 每步先由 `claude_vc5.py seal-state` 判定下一步：两项边界核对
+   （`capture-candidate boundary-check`，入口进主线前登记为待接入 `tool:vc5-boundary-check`，走到这里退出 3）→ Desktop／VS Code
+   客户端收据没就位即暂停 → 当前输入下没有 seal 预览就派发预览（带 `--client-evidence` 与 `--gate-execution-overrides`）→ 闭合门禁
+   blocked 即 `SEAL_ABORT` → 等审核人批准。驱动不替审核人批准：没给 `--approve-seal-sha256 <review_sha256> --approved-by <审核人>`
+   即暂停；给了且与当前预览一致就派发「批准 + compare」一个批次。已封存而当前基线没有比较收据时只派发 compare。
+3. accept 链：`vc5-claude-accept.sh <attempt>` 要求后台验证已通过；assert 批次的 builder 配置、输出、结果目录与评估基线取比较
+   收据登记的那一份（`--reuse-authority none`），批次计划由 `phase_context` 逐项核对；目标平台门禁与 Codex 同一套；门禁 facts 的
+   subject 取 `claude_vc5.py gate-subject`（`build_gate_facts.py --subject`，Campaign 与候选必须与本轮一致）；accept 批次写 Store
+   验收链、accept 阶段结果与 VC-5 checkpoint（`phase_require --require-completion VC-5`）。外部门禁收据有失败门禁时 accept 只把
+   这一轮定稿进 Store、批次失败，下一步是 `capture-candidate seal --revalidate`。
+
+* 暂停：写 `$RUNROOT/vc5-pause.json`（`claude_vc5.py pause`），`vc5-all.sh` 读到后打印 `VC5_ALL_PAUSED reason=… next=…` 并退出 0；
+  两处暂停是 `client_receipts_missing` 与 `seal_approval_required`，处置后重起 `vc5-all.sh` 续跑。
+* 门禁执行主机覆盖（`claude_vc5.py gate-overrides`）：B4-02 封存时冻结的门禁执行计划与门禁收据逐字比对主机与架构。两条本机
+  门禁取 `$GATE_ROOT/local` 注入记录的 `host`／`architecture`，目标平台门禁按 `write_gate_json` 同一算法现算。覆盖并入 seal 代号，
+  预览与批准必须是同一份；`--revalidate` 沿用第 1 轮冻结请求，不接受覆盖。
+* 待接入：`tool:vc5-boundary-check`（B4-01 f 段）、`tool:vc5-recover`（B4-05b 与 B4-01c）。
+
 ## 幂等与证据边界（2026-09-22 v14r4 批次 15 事故后的硬规则）
 
 * 已封存的官方证据由 `reuse-official-evidence` 自动登记 VC-0／VC-1 完成；无需另运行账本对齐脚本。

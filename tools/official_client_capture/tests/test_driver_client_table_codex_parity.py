@@ -744,6 +744,91 @@ B5B01A_SHELL_RESIDUALS: dict[str, list[str]] = {
         '+[ "${1:-}" = restore ] || CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)',
     ],
 }
+# B5b-01b（驱动链 VC-5 的 run／seal／accept 按客户端分派脚本）改了下面这些脚本：以 B5b-01b 开工时的提交为基线，代入 Codex
+# 取值后只剩登记的几处，每处 Codex 下都等价或走不到：
+# * lib.sh：按派发脚本核对（CLIENT_STEP_REQUIRED）——Codex 各脚本登记的就是自己，条件恒不成立；
+# * vc5-start／seal／kilo／seal-receipts／accept／canonical2／precheck／switch／recover：待接入登记（CLIENT_TOOLS_REQUIRED，对 Codex
+#   是空操作）换成按派发脚本核对（对 Codex 同样是空操作；vc5-recover 仍登记候选恢复段的待接入）；
+# * vc5-all.sh：各步派发脚本按客户端表调用（代入后与原来逐字相同，不进残差）；暂停文件 vc5-pause.json 只由 Claude 的 seal 链写，
+#   Codex 下删除不存在的文件、判断恒不成立；canonical 交接按表项判断，Codex 的表项非空，恒走原分支。
+B5B01B_BASELINE_COMMIT = "322d3ea62"
+B5B01B_SHELL_DIGESTS: dict[str, str] = {
+    "lib.sh": "2b735161039e81facf72c3e5810aaf84ebe9ff26bd180ce5edbc2a49c21cb7c9",
+    "vc5-accept.sh": "bdbe2da526e55cb824e18dcd8b554e98a15c3530f8397df21f1f84fa03869cd1",
+    "vc5-all.sh": "2b0254512cdb81d608c62bf531fef15dcace0532c809e15427cfe71e6bbeea28",
+    "vc5-canonical2.sh": "5e62e8d2df9f41e6ed46acdb8cd3fbee594cc469b30b68f6f1929a188d5dd680",
+    "vc5-kilo.sh": "a0207243d2704fee1976619e7145a0a43ea63e767d27d161404ae21392c005cd",
+    "vc5-precheck.sh": "5d45a95529b20428d98d496cc36c5d13846e180aaf452ff5fe917a22bba8937d",
+    "vc5-recover.sh": "03e948c1fc251dfe6c131c37c98d434daace79f0a0c6f8b755f1eedc4dcfaf7b",
+    "vc5-seal-receipts.sh": "40d98a1e51208d95bdd5e4602ae5d2435ea6bb45434ad3fcddd2a8b8e10e3fc5",
+    "vc5-seal.sh": "ad7b57d99c6e67b1998c9a7214f4c3c62f99162f7a309934f48dccab2b1516d2",
+    "vc5-start.sh": "02606c4d381251c474fc468291cc3ad2e3dd88c9474ec0e3e03072492ea60779",
+    "vc5-switch.sh": "70b8e6e3f547d78b4987ee2ef7166dc6521883e6428d90186e42d24ea5885b20",
+}
+B5B01B_SHELL_RESIDUALS: dict[str, list[str]] = {
+    "lib.sh": [
+        "+export PYTHONDONTWRITEBYTECODE=1",
+        "-ARM64_VC_ENV_EXPORTS=$(python3 \"$DRV/parse_env.py\" \"$ARM64_VC_ENV\") || { echo \"参数文件拒绝加载：$ARM64_VC_ENV\"; exit 2; }",
+        "+ARM64_VC_ENV_EXPORTS=$(python3 -B \"$DRV/parse_env.py\" \"$ARM64_VC_ENV\") || { echo \"参数文件拒绝加载：$ARM64_VC_ENV\"; exit 2; }",
+        "+fi",
+        "+if declare -p CLIENT_STEP_REQUIRED >/dev/null 2>&1; then",
+        "+  CLIENT_STEP_DISPATCH=\"${!CLIENT_STEP_REQUIRED[0]:-}\"",
+        "+  if [ \"$CLIENT_STEP_DISPATCH\" != \"${CLIENT_STEP_REQUIRED[1]}\" ]; then",
+        "+    echo \"本轮客户端（codex）的这一步由 ${CLIENT_STEP_DISPATCH:-（无，本客户端没有这一步）} 负责，不是 ${CLIENT_STEP_REQUIRED[1]}，拒绝\"; exit 3",
+        "+  fi",
+        "+  unset CLIENT_STEP_DISPATCH",
+    ],
+    "vc5-accept.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_ACCEPT)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_ACCEPT_SCRIPT vc5-accept.sh)",
+    ],
+    "vc5-all.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN CT_PENDING_TOOL_VC5_SEAL CT_PENDING_TOOL_VC5_ACCEPT)",
+        "+  rm -f \"$RUNROOT/vc5-pause.json\"",
+        "+  if [ -f \"$RUNROOT/vc5-pause.json\" ]; then",
+        "+    python3 -c \"import json,sys; d=json.load(open(sys.argv[1])); print('VC5_ALL_PAUSED reason=' + d['reason'] + ' next=' + d['next'])\" \"$RUNROOT/vc5-pause.json\"; exit 0",
+        "+  fi",
+        "-echo \"=== canonical 交接 $(utc_now)\"; bash \"$DRV/vc5-canonical2.sh\" \"$ATT\" 2>&1 | { grep -E \"review_sha256|CLI preview|一致|plan ->|===|rc=|actions:|checkpoint|import-receipt|canonical latest|vc5-completion|账本|CANONICAL2_DONE|CANONICAL2_SKIP|Traceback|Error|assert|拒绝|失败\" || true; } | cut -c1-300",
+        "+if [ -n vc5-canonical2.sh ]; then",
+        "+  echo \"=== canonical 交接 $(utc_now)\"; bash \"$DRV/vc5-canonical2.sh\" \"$ATT\" 2>&1 | { grep -E \"review_sha256|CLI preview|一致|plan ->|===|rc=|actions:|checkpoint|import-receipt|canonical latest|vc5-completion|账本|CANONICAL2_DONE|CANONICAL2_SKIP|Traceback|Error|assert|拒绝|失败\" || true; } | cut -c1-300",
+        "+else",
+        "+  echo \"=== 本轮客户端（codex）没有 canonical 交接：VC-5 已在 accept 时完成 $(utc_now)\"",
+        "+fi",
+    ],
+    "vc5-canonical2.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_ACCEPT)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_CANONICAL_SCRIPT vc5-canonical2.sh)",
+    ],
+    "vc5-kilo.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_SEAL_SCRIPT vc5-seal.sh)",
+    ],
+    "vc5-precheck.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_START_SCRIPT vc5-start.sh)",
+    ],
+    "vc5-recover.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RECOVER CT_PENDING_TOOL_VC5_RUN)",
+        "+CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RECOVER)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_START_SCRIPT vc5-start.sh)",
+    ],
+    "vc5-seal-receipts.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_SEAL_SCRIPT vc5-seal.sh)",
+    ],
+    "vc5-seal.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_SEAL_SCRIPT vc5-seal.sh)",
+    ],
+    "vc5-start.sh": [
+        "-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)",
+        "+CLIENT_STEP_REQUIRED=(CT_VC5_START_SCRIPT vc5-start.sh)",
+    ],
+    "vc5-switch.sh": [
+        "-[ \"${1:-}\" = restore ] || CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_RUN)",
+        "+[ \"${1:-}\" = restore ] || CLIENT_STEP_REQUIRED=(CT_VC5_START_SCRIPT vc5-start.sh)",
+    ],
+}
 # 之后各批的新基线（批次、基线提交、改动后的脚本摘要、代入 Codex 取值后的残差）：某个脚本再改过时它那一项改为核对接管（当前
 # 内容由更新的一批登记），改了驱动脚本的批次在末尾追加一项。基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 已不再由客户端
 # 表给出，按 Codex 的空串代入（见 B5a-09 一段）。
@@ -767,6 +852,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SHELL_DIGESTS, B5A11_SHELL_RESIDUALS),
     ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SHELL_DIGESTS, B5B01A_SHELL_RESIDUALS),
     ("m9-bytecode", M9_BYTECODE_BASELINE_COMMIT, M9_BYTECODE_SHELL_DIGESTS, M9_BYTECODE_SHELL_RESIDUALS),
+    ("B5b-01b", B5B01B_BASELINE_COMMIT, B5B01B_SHELL_DIGESTS, B5B01B_SHELL_RESIDUALS),
 )
 
 
@@ -1132,6 +1218,106 @@ class Vc5PlanGeneratorCodexParityTests(unittest.TestCase):
                         outputs.append(self.generate(script, output, [fixture.new, fixture.cand, image, "build", *extra], modules, environment))
                     self.assertTrue(outputs[0])
                     self.assertEqual(outputs[1], outputs[0])
+
+
+def skip_unless_b5b01b_readable(case: unittest.TestCase) -> None:
+    if not commit_readable(B5B01B_BASELINE_COMMIT):
+        case.skipTest(f"读不到基线提交 {B5B01B_BASELINE_COMMIT}（浅克隆或不在仓库内）")
+
+
+class Vc5GateFactsCodexParityTests(unittest.TestCase):
+    """门禁 facts（B5b-01b 只加了可选 --subject，Codex 不传）：同一组 Codex 输入，改造前后写出的 facts 逐字相同；--subject 只认闭合字段。"""
+
+    def write(self, path: Path, payload: object) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload) if not isinstance(payload, str) else payload, encoding="utf-8")
+        return path
+
+    def inputs(self, root: Path) -> list[str]:
+        gate_root, local, target = root / "gates", root / "local", root / "target"
+        for gate_id, directory in (("check-egress-spec", local), ("full-regression", local), ("target-platform", target)):
+            self.write(directory / f"{gate_id}.gate.json", {
+                "command": ["make", gate_id], "working_directory": ".", "host": "host-a", "architecture": "linux/aarch64",
+                "started_at_utc": "2026-10-08T00:00:00Z", "completed_at_utc": "2026-10-08T00:01:00Z", "exit_code": 0,
+            })
+            self.write(directory / f"{gate_id}.stdout.log", f"{gate_id} ok\n")
+            self.write(directory / f"{gate_id}.stderr.log", "")
+        for role in ("before", "after"):
+            self.write(gate_root / "environment" / f"attempt-1-{role}.json", {"role": role})
+        campaign = self.write(root / "campaign.json", {"campaign_id": "c1", "campaign_mode": "formal", "campaign_purpose": "production_replacement", "target_version": "0.160.0"})
+        seal = self.write(root / "result.json", {"candidate_id": "cand", "candidate_purpose": "production_replacement", "package_digest": "p" * 64,
+                                                "identity": {"profile_id": "codex-x", "profile_digest": "d" * 64, "source_tree_sha256": "t" * 64,
+                                                             "image_id": "sha256:" + "i" * 64, "image_reference": "r@sha256:" + "i" * 64}})
+        build = self.write(root / "build-receipt.json", {"target_architecture": "linux/arm64"})
+        return [str(gate_root), "attempt-1", str(campaign), str(seal), str(build), str(local), str(target)]
+
+    def run_script(self, script: Path, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([sys.executable, str(script), *argv], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+
+    def test_codex_facts_match_b5b01b_baseline_and_subject_must_close(self) -> None:
+        skip_unless_b5b01b_readable(self)
+        source = git_source("tools/arm64_capture_driver/driver/build_gate_facts.py", B5B01B_BASELINE_COMMIT)
+        self.assertIsNotNone(source)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            baseline = root / "baseline.py"
+            baseline.write_bytes(source)
+            outputs = []
+            for label, script in (("before", baseline), ("after", DRIVER / "build_gate_facts.py")):
+                argv = self.inputs(root / label)
+                completed = self.run_script(script, argv)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                outputs.append((root / label / "gates" / "candidate-gates.facts.json").read_text(encoding="utf-8").replace(str(root / label), "<root>"))
+            self.assertEqual(outputs[1], outputs[0])
+            # --subject：字段闭合且 Campaign／候选与本轮一致才用；Claude 的 subject 原样进 facts。
+            argv = self.inputs(root / "subject")
+            facts = json.loads(outputs[0])
+            subject = self.write(root / "subject.json", {**facts["subject"], "profile_id": "claude-code-2.1.285-official"})
+            (root / "subject" / "gates" / "candidate-gates.facts.json").unlink(missing_ok=True)
+            completed = self.run_script(DRIVER / "build_gate_facts.py", [*argv, "--subject", str(subject)])
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            written = json.loads((root / "subject" / "gates" / "candidate-gates.facts.json").read_text(encoding="utf-8"))
+            self.assertEqual(written["subject"]["profile_id"], "claude-code-2.1.285-official")
+            for bad in ({**facts["subject"], "extra": 1}, {**facts["subject"], "candidate_id": "other"}):
+                self.write(subject, bad)
+                completed = self.run_script(DRIVER / "build_gate_facts.py", [*argv, "--subject", str(subject)])
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("--subject", completed.stderr)
+
+
+class PhaseContextCodexParityTests(unittest.TestCase):
+    """阶段解析（B5b-01b 只新增 Claude 分支）：B5b-01b 开工时的每个顶层定义原样保留，resolve 只改了按客户端选上下文与 VC-5 计划
+    核对的两处；Codex 参数选的仍是原来的 Context。行为面的 Codex 覆盖在 test_arm64_phase_context。"""
+
+    RESOLVE_RESIDUALS = [
+        "-        context = Context(config, candidate=candidate, upgrade=upgrade)",
+        '+        context_class = ClaudeContext if client_spec(config)["client"] == "claude" else Context',
+        "+        context = context_class(config, candidate=candidate, upgrade=upgrade)",
+        "-            _vc5_plan(context, plan)",
+        "+            (_claude_vc5_plan if isinstance(context, ClaudeContext) else _vc5_plan)(context, plan)",
+    ]
+
+    def segments(self, text: str) -> dict[str, str]:
+        import ast
+
+        tree = ast.parse(text)
+        return {node.name: ast.get_source_segment(text, node) for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+
+    def test_codex_definitions_are_untouched(self) -> None:
+        skip_unless_b5b01b_readable(self)
+        source = git_source("tools/arm64_capture_driver/driver/phase_context.py", B5B01B_BASELINE_COMMIT)
+        self.assertIsNotNone(source)
+        before = self.segments(source.decode("utf-8"))
+        after = self.segments((DRIVER / "phase_context.py").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(set(after) - set(before)), ["ClaudeContext", "_claude_vc5_plan"])
+        for name, text in before.items():
+            if name == "resolve":
+                continue
+            with self.subTest(definition=name):
+                self.assertEqual(after[name], text)
+        changed = [line for line in difflib.unified_diff(before["resolve"].splitlines(), after["resolve"].splitlines(), lineterm="", n=0)
+                   if line[:1] in "+-" and not line.startswith(("+++", "---")) and not line[1:].strip().startswith("#")]
+        self.assertEqual(changed, self.RESOLVE_RESIDUALS)
 
 
 class EntryLedgerAndPreflightCodexParityTests(unittest.TestCase):

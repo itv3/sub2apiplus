@@ -215,6 +215,199 @@ class Context:
         return {"schema_version": "arm64-phase-context/v1", "parameters": self.parameters, "bindings": self.bindings}
 
 
+class ClaudeContext(Context):
+    """Claude 的 VC-5 阶段解析（B5b-01b）：路径规则、评估基线与读写坐标与 Codex 同一套（服务面同名成员），不同的是 Claude 的
+    收据与制品形状——构建收据是客户端中立合同（``official-client-upgrade-candidate-build-receipt/v1``，没有 profile_id，
+    PROFILE_ID 只是驱动标签）；候选 attempt 身份没有 profile_id；断言结果合同是 ``claude-egress-rule-assertions/v2``，accept
+    阶段结果在 ``assertions.results`` 绑定它；没有 VC-5 完成收据与 canonical 交接，VC-5 完成即 accept 写出的 VC-5 checkpoint
+    （设计附录 G 例外①）；断言批次的 builder 配置由 compare 写出、登记在比较收据里。Codex 的 ``Context`` 不变。"""
+
+    RESULTS_SCHEMA = "claude-egress-rule-assertions/v2"
+    PROFILE_ID_FORMAT = "claude-code-{version}-official"
+    # 候选源码树在候选实物目录 B 下的目录名（ARM64 布局，与 Codex 同一约定）。
+    SOURCE_DIRNAME = "source"
+
+    def managed(self, name):
+        """与编排器同一受管根里的模块（不继承调用方预先导入的另一份工具）。"""
+
+        import importlib
+
+        module = importlib.import_module(f"tools.official_client_capture.{name}")
+        if Path(module.__file__).resolve().parent != Path(self.cu.__file__).resolve().parent:
+            raise ValueError(f"{name} 不属于本轮编排器所在的受管根")
+        return module
+
+    def stage_paths(self, *, replay=True):
+        cu, campaign, candidate = self.cu, self.campaign, self.candidate
+        number, commit = self.baseline
+        for stage, name in STAGES.items():
+            source = cu._stage_read_source(campaign, candidate, number, stage)
+            read = self.path(source["path"])
+            reused = commit is not None and commit["stage_sources"][stage]["source"] == "reused"
+            write = None if reused else self.path(cu._stage_write_target(campaign, candidate, number, stage))
+            self.parameters[f"{name}_RESULT"] = str(read)
+            if stage == "assertions":
+                self.parameters["EVALUATION_RUN"] = str(read.parent / "evaluation-run.json")
+            self.parameters[f"{name}_WRITE"] = str(write) if write is not None else ""
+            self.parameters[f"{name}_READY"] = "0"
+            if not self.exists(read):
+                continue
+            bound = self.bind(stage, read)
+            if bound["sha256"] != source["sha256"]:
+                raise ValueError("阶段结果在路径解析期间发生漂移")
+            if replay:
+                if stage == "assertions":
+                    # 只核评估运行索引与断言结果的绑定；完整规则验收由 accept 的原生重放负责。
+                    run_path = read.parent / "evaluation-run.json"
+                    self.bind("evaluation_run", run_path)
+                    run = cu.codex_upgrade_vc_artifacts.validate_evaluation_run(json.loads(run_path.read_text()))
+                    if (run["candidate_id"], run["evaluation_baseline"]) != (candidate, int(source["baseline_of_record"])):
+                        raise ValueError("评估运行索引未绑定当前候选与评估基线")
+                    result = json.loads(read.read_text())
+                    if (result.get("schema_version") != self.RESULTS_SCHEMA or result.get("candidate_id") != candidate
+                        or result.get("target_version") != self.config["TARGET_VERSION"]
+                        or result.get("comparison_package_digest") != self.stages.get("compare", {}).get("package_digest")):
+                        raise ValueError("断言结果未绑定当前候选、版本和比较收据")
+                    accepted = self.stages.get("accept")
+                    if accepted is not None and (accepted.get("assertions") or {}).get("results") != {
+                        "path": str(read.relative_to(campaign)), "sha256": bound["sha256"]
+                    }:
+                        raise ValueError("验收结果中的断言路径或摘要与当前读来源不一致")
+                else:
+                    self.stages[stage] = cu._load_stage_result(
+                        campaign, stage, candidate, _verified_campaign_manifest=self.manifest)
+                    if self.stages[stage].get("status") != "complete":
+                        raise ValueError(f"{stage} 结果尚未成功完成，禁止跳过")
+                self.parameters[f"{name}_READY"] = "1"
+
+    def build(self, *, materialized=True):
+        cu, campaign, candidate = self.cu, self.campaign, self.candidate
+        path = cu._candidate_build_receipt_path(campaign, candidate)
+        self.bind("build", path)
+        compare = self.managed("claude_upgrade_compare")
+        receipt, _binding = compare.load_candidate_build_receipt(campaign, self.manifest, candidate, int(self.roots["candidate_revision"]))
+        source, profile = receipt["source"], receipt["profile"]
+        if materialized:
+            # 新派发核对候选源码树仍是构建时那一棵（与候选 run 正式入口门同一算法）；镜像与服务容器由入口门在 run 时核对。
+            if cu._directory_tree_digest(Path(source["root"])) != source["tree_sha256"]:
+                raise ValueError("候选源码树与构建收据登记的摘要不一致")
+            self.parameters["BUILD_REPLAY_STATE"] = "materialized_build_verified"
+        else:
+            self.parameters["BUILD_REPLAY_STATE"] = "sealed_receipt_binding"
+        expected_profile_id = self.PROFILE_ID_FORMAT.format(version=self.config["TARGET_VERSION"])
+        if (source["root"], source["git_commit"], self.config["PROFILE_ID"], receipt["target_version"]) != (
+            str(Path(self.config["B"]) / self.SOURCE_DIRNAME), self.config["C"], expected_profile_id, self.config["TARGET_VERSION"]
+        ):
+            raise ValueError("构建收据的源码、提交、目标版本或画像标签与本轮不一致")
+        self.parameters.update(BUILD_RECEIPT=str(path), IMAGE_ID=receipt["image"]["image_id"],
+                               IMAGE_REF=receipt["image"]["reference"], BUILD_ID=receipt["build"]["build_id"],
+                               TREE=source["tree_sha256"], SOURCE_ROOT=source["root"],
+                               SOURCE_COMMIT=source["git_commit"], DEPLOYED=receipt["deployed_version"],
+                               PROFILE_ID=expected_profile_id, PROFILE_DIGEST=profile["profile_digest"])
+
+    def attempt(self, expected=None):
+        cu, campaign, candidate = self.cu, self.campaign, self.candidate
+        stage = self.stages.get("capture-candidate")
+        active = [value.split(":") for value in cu._active_unsealed_attempts(campaign, "candidate", _manifest=self.manifest)
+                  if value.split(":", 1)[0] == candidate]
+        if any(len(value) != 2 for value in active) or len(active) > 1:
+            raise ValueError("当前候选有未完成预约或多个待封存 attempt，禁止猜选")
+        reference = stage.get("attempt") if stage is not None else None
+        sealed_id = Path(reference["path"]).parent.name if isinstance(reference, dict) else None
+        selected = active[0][1] if active else sealed_id
+        if not selected or (active and sealed_id and selected != sealed_id):
+            raise ValueError("当前阶段与待封存 attempt 不唯一或尚无有效 attempt")
+        if expected is not None and expected != selected:
+            raise ValueError("显式 ATT 与当前有效 attempt 不一致")
+        if stage is not None:
+            # 已封存：封存后的读侧（证据边界按封存证据清单加重绑链核对，不重放 run 末收口）。
+            root, payload = cu._capture_stage_attempt_context(campaign, stage, phase="candidate", candidate_id=candidate)
+            root = self.path(root)
+            bound = self.bind("attempt", root / "attempt.json")
+            if reference != {"path": str((root / "attempt.json").relative_to(campaign)), "sha256": bound["sha256"]}:
+                raise ValueError("当前采集结果的 attempt 路径或摘要不一致")
+        else:
+            root = self.path(campaign / cu._capture_attempt_relative("candidate", candidate) / "attempts" / selected)
+            self.bind("attempt", root / "attempt.json")
+            actual_root, payload = cu._load_capture_attempt(campaign, "candidate", candidate, selected,
+                                                           _verified_campaign_manifest=self.manifest)
+            if actual_root != root:
+                raise ValueError("当前 attempt 的路径与编排器坐标不一致")
+        if payload["status"] != "awaiting_receipts":
+            raise ValueError("当前 attempt 未通过重放或不处于 awaiting_receipts")
+        identity = payload["identity"]
+        for key, field in (("IMAGE_ID", "image_id"), ("IMAGE_REF", "image_reference"), ("BUILD_ID", "build_id"),
+                           ("TREE", "source_tree_sha256"), ("SOURCE_COMMIT", "git_commit"), ("SOURCE_ROOT", "source_root"),
+                           ("DEPLOYED", "deployed_version"), ("PROFILE_DIGEST", "profile_digest")):
+            if identity.get(field) != self.parameters[key]:
+                raise ValueError(f"attempt 的 {field} 未绑定当前构建收据")
+        self.parameters.update(ATT=selected, A=str(root), EV=str(root / "evidence"), CID=self.config["NEW"],
+                               ATT_STATUS=payload["status"], RUN_NONCE=payload["run_nonce"], STARTED=payload["started_at_utc"])
+
+    def completion(self, *, required=None):
+        revision = self.roots["candidate_revision"]
+        for phase in ("VC-5", "VC-6"):
+            name = phase.replace("-", "")
+            checkpoint = self.cu._vc_checkpoint_path(self.campaign, phase, revision=revision)
+            # Claude 没有阶段完成收据：完成即本阶段 checkpoint 可重放（VC-5 由 accept 写、阶段收据是 accept 阶段结果）。
+            self.parameters.update({f"{name}_RECEIPT": "", f"{name}_CHECKPOINT": str(self.path(checkpoint)), f"{name}_COMPLETE": "0"})
+            if self.exists(checkpoint) or required == phase:
+                _path, payload = self.cu._replay_vc_checkpoint(self.campaign, self.plan, phase, revision=revision)
+                if phase == "VC-5":
+                    receipt = payload.get("stage_receipt") or {}
+                    accept = Path(self.parameters["ACCEPT_RESULT"])
+                    if Path(str(receipt.get("path", ""))) not in {accept, accept.relative_to(self.campaign)}:
+                        raise ValueError("VC-5 checkpoint 绑定的不是当前评估基线的 accept 阶段结果")
+                self.bind(name + "_checkpoint", checkpoint)
+                self.parameters[f"{name}_COMPLETE"] = "1"
+
+    def canonical(self):
+        raise ValueError("Claude 没有 canonical 交接（VC-5 在 accept 时完成）")
+
+
+def _claude_vc5_plan(context, plan):
+    """Claude 的 VC-5 计划提前核对：动作只能写当前基线的可写阶段；Campaign、候选、attempt 与外部门禁根绑定当前阶段；断言动作
+    的 builder 配置、输出、结果目录与评估基线必须是比较收据登记的那一份。具体授权仍由正式编译器与监督器重放。"""
+
+    params = context.parameters
+    option = context.cu.codex_upgrade_vc_artifacts._command_option
+    write_stages = {"candidate-run": "CAPTURE", "candidate-seal": "CAPTURE", "compare": "COMPARE",
+                    "assert-rules": "ASSERTIONS", "acceptance": "ACCEPT"}
+    for item in plan["execute_item_ids"]:
+        if item in write_stages and not params[write_stages[item] + "_WRITE"]:
+            raise ValueError("批次试图写入 reused 阶段")
+    expected = {"--campaign-dir": str(context.campaign), "--candidate-id": context.candidate,
+                "--external-gate-root": params["GATE_ROOT"]}
+    attempts = set()
+    for action in plan["actions"]:
+        command = action["command"]
+        for flag, value in expected.items():
+            provided = option(command, flag)
+            if provided is not None and provided != value:
+                raise ValueError(f"VC-5 计划的 {flag} 与当前阶段不一致")
+        explicit = option(command, "--attempt-id")
+        if explicit is not None:
+            attempts.add(explicit)
+        if action["operation"] == "VC-5:assert":
+            compare = context.stages.get("compare")
+            if compare is None:
+                raise ValueError("断言批次之前必须有当前基线的比较收据")
+            builder = compare["builder"]
+            write = Path(params["ASSERTIONS_WRITE"]) if params["ASSERTIONS_WRITE"] else None
+            for flag, value in (("--config", str(context.campaign / builder["config"]["path"])),
+                                ("--output", str(context.campaign / builder["output"])),
+                                ("--results-dir", str(context.campaign / builder["results_dir"])),
+                                ("--evaluation-baseline", params["EVALUATION_BASELINE"])):
+                if option(command, flag) != value:
+                    raise ValueError(f"断言计划的 {flag} 不是比较收据登记的那一份")
+            if write is None or Path(option(command, "--output")) != write / "results.json":
+                raise ValueError("断言计划的输出不是当前基线的写目标")
+    if len(attempts) > 1:
+        raise ValueError("VC-5 计划包含多个 attempt")
+    if attempts:
+        context.attempt(next(iter(attempts)))
+
+
 def _vc6_receipts(context, plan):
     """只读核对待派发的 canonical 收据；不调用会推进 checkpoint 的生产入口。"""
 
@@ -312,7 +505,9 @@ def resolve(config, *, mode="paths", attempt_id=None, phase=None, predecessor=No
         if mode not in {"build", "paths", "attempt", "batch"}:
             raise ValueError("未知阶段解析模式")
         candidate = mode != "batch" or phase in {"VC-5", "VC-6"}
-        context = Context(config, candidate=candidate, upgrade=upgrade)
+        # B5b-01b：Claude 的收据与制品形状不同，用 ClaudeContext（路径与基线规则相同）；Codex 仍是 Context。
+        context_class = ClaudeContext if client_spec(config)["client"] == "claude" else Context
+        context = context_class(config, candidate=candidate, upgrade=upgrade)
         if mode == "batch":
             phases = ("VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6")
             if phase not in phases[1:] or predecessor != phases[phases.index(phase) - 1]:
@@ -332,7 +527,7 @@ def resolve(config, *, mode="paths", attempt_id=None, phase=None, predecessor=No
         context.build(materialized=mode == "build" or "capture-candidate" not in context.stages or
                       (mode == "batch" and "candidate-run" in plan["execute_item_ids"]))
         if mode == "batch" and phase == "VC-5":
-            _vc5_plan(context, plan)
+            (_claude_vc5_plan if isinstance(context, ClaudeContext) else _vc5_plan)(context, plan)
             return context.finish()
         if mode in {"attempt", "batch"} or require_completion is not None:
             context.attempt(attempt_id)

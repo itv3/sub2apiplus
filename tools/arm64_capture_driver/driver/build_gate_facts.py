@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """组装候选外部门禁 facts（codex-upgrade-external-gate-facts/v4）：evidence 指向 gate.json、不带 test_id。
-用法：build_gate_facts.py <gate_root> <attempt_id> <campaign.json> <candidates/<cid>/result.json> <build-receipt.json> <本地门禁目录> <目标平台门禁记录目录>
+用法：build_gate_facts.py <gate_root> <attempt_id> <campaign.json> <candidates/<cid>/result.json> <build-receipt.json> <本地门禁目录> <目标平台门禁记录目录> [--subject <subject.json>]
 本地门禁目录含 check-egress-spec.{gate.json,stdout.log,stderr.log} 与 full-regression.*；目标平台目录含 target-platform.*。
-输出 <gate_root>/candidate-gates.facts.json，并把日志按 <gate_root>/logs/<gate>.stdout.log 登记为 evidence。"""
+输出 <gate_root>/candidate-gates.facts.json，并把日志按 <gate_root>/logs/<gate>.stdout.log 登记为 evidence。
+--subject（B5b-01b，Claude 用）：subject 直接取这份文件（claude_vc5.py gate-subject 按 claude_upgrade_compare.candidate_gate_identity
+与 claude_upgrade_accept.expected_gate_subject 生成），不从候选阶段结果的 identity 拼；Codex 不传，输出与改造前逐字相同。"""
 import json, sys, pathlib, hashlib, shutil
-root, attempt, campaign_path, seal_path, build_path, local_dir, target_dir = [pathlib.Path(p) if i not in (1,) else p for i, p in enumerate(sys.argv[1:])]
-root = pathlib.Path(sys.argv[1]); attempt = sys.argv[2]
-campaign = json.load(open(sys.argv[3])); seal = json.load(open(sys.argv[4])); build = json.load(open(sys.argv[5]))
-local_dir = pathlib.Path(sys.argv[6]); target_dir = pathlib.Path(sys.argv[7])
+ARGV = sys.argv[1:]
+SUBJECT_PATH = None
+if len(ARGV) == 9 and ARGV[7] == "--subject":
+    SUBJECT_PATH = pathlib.Path(ARGV[8]); ARGV = ARGV[:7]
+root, attempt, campaign_path, seal_path, build_path, local_dir, target_dir = [pathlib.Path(p) if i not in (1,) else p for i, p in enumerate(ARGV)]
+root = pathlib.Path(ARGV[0]); attempt = ARGV[1]
+campaign = json.load(open(ARGV[2])); seal = json.load(open(ARGV[3])); build = json.load(open(ARGV[4]))
+local_dir = pathlib.Path(ARGV[5]); target_dir = pathlib.Path(ARGV[6])
 def sha(p): return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 logs = root / "logs"; logs.mkdir(parents=True, exist_ok=True)
 gates = []
@@ -36,15 +42,25 @@ for gate_id, src in (("check-egress-spec", local_dir), ("full-regression", local
         gate["unit_execution"] = meta["unit_execution"]
     gates.append(gate)
 gates.sort(key=lambda g: g["gate_id"])
-identity = seal["identity"]
-subject = {
-    "campaign_id": campaign["campaign_id"], "campaign_mode": campaign["campaign_mode"], "campaign_purpose": campaign["campaign_purpose"],
-    "candidate_id": seal["candidate_id"], "candidate_purpose": seal["candidate_purpose"], "target_version": campaign["target_version"],
-    "target_architecture": build["target_architecture"], "profile_id": identity["profile_id"], "profile_digest": identity["profile_digest"],
-    "candidate_package_digest": seal["package_digest"], "candidate_source_tree_sha256": identity["source_tree_sha256"],
-    "candidate_image_id": identity["image_id"], "candidate_image_reference": identity["image_reference"],
-    "production_tree_sha256": None, "acceptance_sha256": None, "promotion_receipt_sha256": None,
+SUBJECT_FIELDS = {
+    "campaign_id", "campaign_mode", "campaign_purpose", "candidate_id", "candidate_purpose", "target_version", "target_architecture",
+    "profile_id", "profile_digest", "candidate_package_digest", "candidate_source_tree_sha256", "candidate_image_id",
+    "candidate_image_reference", "production_tree_sha256", "acceptance_sha256", "promotion_receipt_sha256",
 }
+if SUBJECT_PATH is not None:
+    subject = json.load(open(SUBJECT_PATH))
+    if not isinstance(subject, dict) or set(subject) != SUBJECT_FIELDS or (campaign["campaign_id"], seal["candidate_id"]) != (subject["campaign_id"], subject["candidate_id"]):
+        raise SystemExit("--subject 的字段不闭合，或 Campaign／候选与本轮不一致")
+else:
+    identity = seal["identity"]
+    subject = {
+        "campaign_id": campaign["campaign_id"], "campaign_mode": campaign["campaign_mode"], "campaign_purpose": campaign["campaign_purpose"],
+        "candidate_id": seal["candidate_id"], "candidate_purpose": seal["candidate_purpose"], "target_version": campaign["target_version"],
+        "target_architecture": build["target_architecture"], "profile_id": identity["profile_id"], "profile_digest": identity["profile_digest"],
+        "candidate_package_digest": seal["package_digest"], "candidate_source_tree_sha256": identity["source_tree_sha256"],
+        "candidate_image_id": identity["image_id"], "candidate_image_reference": identity["image_reference"],
+        "production_tree_sha256": None, "acceptance_sha256": None, "promotion_receipt_sha256": None,
+    }
 env = {}
 for role in ("before", "after"):
     p = root / "environment" / f"{attempt}-{role}.json"

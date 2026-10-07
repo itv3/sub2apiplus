@@ -7,8 +7,8 @@
 #   只允许读侧复核（seal-receipts 只核对模式）与批准 + compare。manifest 不存在时按产物存在与否逐步续跑。
 set -Eeuo pipefail; umask 077
 PHASE_CONTEXT_ARGS=(--mode attempt --attempt-id "$1")
-# 待接入的驱动工具（B5b-01）：Claude 的 VC-5 派发在 B5b-01b 接入前，lib.sh 在任何副作用之前拒绝并写明工作项。
-CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_VC5_SEAL)
+# 按客户端分了派发脚本（B5b-01b）：本脚本是 Codex 的 seal 链，Claude 的在 vc5-claude-seal.sh，lib.sh 在任何副作用之前拒绝别的客户端。
+CLIENT_STEP_REQUIRED=(CT_VC5_SEAL_SCRIPT vc5-seal.sh)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 export ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 vc5_require_admission

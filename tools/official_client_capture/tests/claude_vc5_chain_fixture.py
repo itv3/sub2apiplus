@@ -330,7 +330,20 @@ def materialize_candidate(
     attempt = {
         "attempt_id": attempt_id,
         "candidate_id": candidate_id,
+        "status": "awaiting_receipts",
         "run_nonce": run_nonce,
+        "started_at_utc": "2026-10-08T00:30:00Z",
+        # 候选 attempt 身份里驱动阶段解析（B5b-01b）核对的那几项，取 VC-4 构建收据（候选 run 的入口门同一取法）。
+        "identity": {
+            "image_id": str(build["image"]["image_id"]),
+            "image_reference": str(build["image"]["reference"]),
+            "build_id": str(build["build"]["build_id"]),
+            "source_tree_sha256": str(build["source"]["tree_sha256"]),
+            "git_commit": str(build["source"]["git_commit"]),
+            "source_root": str(build["source"]["root"]),
+            "deployed_version": str(build["deployed_version"]),
+            "profile_digest": str(build["profile"]["profile_digest"]),
+        },
         "gateway_environment": {
             "activation_fact": {
                 "path": fact_path.relative_to(evidence_root).as_posix(),

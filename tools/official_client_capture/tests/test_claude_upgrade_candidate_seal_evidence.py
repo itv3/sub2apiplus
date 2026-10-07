@@ -810,6 +810,69 @@ class CandidateSealChainTests(_CandidateSealCase):
         self.assertEqual(code, 1)
         self.assertIn("另一批准人", stderr)
 
+    def test_gate_execution_overrides_enter_generation_and_execution_plan(self) -> None:
+        """B5b-01b：--gate-execution-overrides 并入 seal 代号、写进执行计划的逐门禁主机与架构；批准必须给同一份。"""
+
+        attempt_root = self.write_evidence_and_attempt()
+        client = self.write_client_evidence(attempt_root)
+        local = {"host_id": "operator-mac", "architecture": "darwin/arm64"}
+        target = {"host_id": "arm64-runner", "architecture": "linux/aarch64"}
+        overrides = json.dumps({"target-platform": target, "check-egress-spec": local, "full-regression": local})
+        code, plain, stderr = self.run_seal(*client)
+        self.assertEqual(code, 2, stderr)
+        assert plain is not None
+        code, preview, stderr = self.run_seal(*client, "--gate-execution-overrides", overrides)
+        self.assertEqual(code, 2, stderr)
+        assert preview is not None
+        self.assertNotEqual(preview["generation"], plain["generation"])
+        planned = {item["gate_id"]: (item["host_id"], item["architecture"]) for item in json.loads(Path(preview["preview"]).read_text(encoding="utf-8"))["store_plan"]["external_gates"]}
+        self.assertEqual(
+            planned,
+            {"check-egress-spec": ("operator-mac", "darwin/arm64"), "full-regression": ("operator-mac", "darwin/arm64"), "target-platform": ("arm64-runner", "linux/aarch64")},
+        )
+        draft = json.loads((Path(preview["preview"]).parent / candidate_seal.SEAL_DRAFT_FILENAME).read_text(encoding="utf-8"))
+        self.assertEqual(draft["store_request"]["gate_execution"]["overrides"], json.loads(overrides))
+        self.assertEqual(draft["generation_key"]["gate_execution_overrides"], {key: json.loads(overrides)[key] for key in sorted(json.loads(overrides))})
+        # 批准不带覆盖（或换一份覆盖）落到另一代，那一代的预览不是这份摘要：零写入拒绝。
+        before = self.store_footprint()
+        approve = ("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
+        for extra, message in (
+            ((), "review_sha256 不一致"),
+            (("--gate-execution-overrides", json.dumps({"target-platform": target})), "没有冻结的候选 seal 预览"),
+        ):
+            with self.subTest(extra=extra):
+                code, _result, stderr = self.run_seal(*approve, *extra)
+                self.assertEqual(code, 1)
+                self.assertIn(message, stderr)
+        self.assertEqual(self.store_footprint(), before)
+        code, sealed, stderr = self.run_seal(*approve, "--gate-execution-overrides", overrides)
+        self.assertEqual(code, 0, stderr)
+        assert sealed is not None
+        plan = self.world.store.load_object(sealed["store"]["validation_execution_plan_ref"])["payload"]
+        self.assertEqual({item["gate_id"]: (item["host_id"], item["architecture"]) for item in plan["external_gates"]}, planned)
+        # --revalidate 沿用第 1 轮的冻结请求，不接受覆盖。
+        code, _result, stderr = self.run_seal("--revalidate", "--gate-execution-overrides", overrides)
+        self.assertEqual(code, 1)
+        self.assertIn("--gate-execution-overrides", stderr)
+
+    def test_gate_execution_overrides_are_validated_before_anything(self) -> None:
+        attempt_root = self.write_evidence_and_attempt()
+        client = self.write_client_evidence(attempt_root)
+        for value, message in (
+            ("not-json", "不是 JSON"),
+            ("{}", "非空 JSON 对象"),
+            (json.dumps({"kilo": {"host_id": "a"}}), "非候选外部门禁"),
+            (json.dumps({"target-platform": {}}), "非空对象"),
+            (json.dumps({"target-platform": {"host_id": "a", "port": 1}}), "只含 host_id／architecture"),
+            (json.dumps({"target-platform": {"host_id": "a b"}}), "host_id"),
+            (json.dumps({"target-platform": {"architecture": "aarch64"}}), "<系统>/<架构>"),
+        ):
+            with self.subTest(value=value):
+                code, _result, stderr = self.run_seal(*client, "--gate-execution-overrides", value)
+                self.assertEqual(code, 1)
+                self.assertIn(message, stderr)
+        self.assertFalse((self.campaign / "candidates" / CANDIDATE / candidate_seal.SEAL_DIRNAME).exists())
+
     def test_interrupted_after_store_writes_converges_on_rerun(self) -> None:
         attempt_root = self.write_evidence_and_attempt()
         client = self.write_client_evidence(attempt_root)

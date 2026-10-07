@@ -109,25 +109,55 @@ func TestLoadOfficialEgressGuardDefaultsToFailClose(t *testing.T) {
 	require.Equal(t, "legacy", cfg.Gateway.ClaudeOfficialClientProfiles.Mode)
 }
 
-func TestLoadClaudeFWGCandidateRequiresDMITInstance(t *testing.T) {
-	t.Run("DMIT 可显式开启", func(t *testing.T) {
+// Claude 候选开关只在登记的隔离候选实例（DMIT、ARM64）开启；其它实例（含对外服务的 BWG）与空值一律拒绝启动。
+func TestLoadClaudeFWGCandidateRequiresRegisteredIsolatedInstance(t *testing.T) {
+	for _, instanceID := range []string{"DMIT", "ARM64", " arm64 ", "dmit"} {
+		t.Run("登记实例可显式开启："+instanceID, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
+			t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", instanceID)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.True(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
+		})
+	}
+
+	for _, instanceID := range []string{"Vircs", "BWG", "ARM64-prod", ""} {
+		t.Run("未登记实例拒绝启动："+instanceID, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
+			t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", instanceID)
+
+			_, err := Load()
+			require.ErrorContains(t, err, "只允许在登记的隔离候选实例开启")
+			require.ErrorContains(t, err, "DMIT、ARM64")
+		})
+	}
+
+	t.Run("候选开关关闭时实例 ID 不受限", func(t *testing.T) {
 		resetViperWithJWTSecret(t)
-		t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
-		t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", "DMIT")
+		t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", "BWG")
 
 		cfg, err := Load()
 		require.NoError(t, err)
-		require.True(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
+		require.False(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
 	})
+}
 
-	t.Run("非 DMIT 拒绝启动", func(t *testing.T) {
-		resetViperWithJWTSecret(t)
-		t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
-		t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", "Vircs")
-
-		_, err := Load()
-		require.ErrorContains(t, err, "只允许在 instance_id=DMIT")
-	})
+func TestClaudeCandidateIsolatedInstanceAllowlist(t *testing.T) {
+	require.Equal(t, []string{"DMIT", "ARM64"}, ClaudeCandidateIsolatedInstanceIDs())
+	// 返回的是副本：调用方改它不影响名单。
+	ids := ClaudeCandidateIsolatedInstanceIDs()
+	ids[0] = "BWG"
+	require.False(t, IsClaudeCandidateIsolatedInstance("BWG"))
+	require.True(t, IsClaudeCandidateIsolatedInstance("DMIT"))
+	for _, value := range []string{"", "   ", "Vircs", "BWG", "ARM"} {
+		require.False(t, IsClaudeCandidateIsolatedInstance(value), value)
+	}
+	for _, value := range []string{"DMIT", "ARM64", "arm64", "\tDMIT\n"} {
+		require.True(t, IsClaudeCandidateIsolatedInstance(value), value)
+	}
 }
 
 func TestLoadOfficialEgressGuardRejectsPermanentGlobalObserve(t *testing.T) {
@@ -523,6 +553,8 @@ func TestClaudeOfficialClientProfilesValidationAndCandidateIsolation(t *testing.
 	require.NoError(t, cfg.Validate())
 	cfg.Gateway.ClaudeFWGCandidateEnabled = true
 	cfg.Gateway.OfficialEgressGuard.InstanceID = "DMIT"
+	require.ErrorContains(t, cfg.Validate(), "不能同时启用")
+	cfg.Gateway.OfficialEgressGuard.InstanceID = "ARM64"
 	require.ErrorContains(t, cfg.Validate(), "不能同时启用")
 
 	cfg.Gateway.ClaudeFWGCandidateEnabled = false
