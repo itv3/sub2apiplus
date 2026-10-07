@@ -80,7 +80,8 @@ v5 把 ``anthropic-usage-limit``、``anthropic-dispatch-id`` 两个灰度 Header
 迁移决定（不得 ``blocked``）、``add／delete`` 与基线／目标成员关系一致、``delete`` 必须 ``superseded``、证据项都在只读
 EvidencePackage 里、``affected_rules／inherited_rules`` 由决定复算、理由不得保留草案占位、``production_replacement``
 用途下 ``observed``／``regressed_evidence`` 不得承担目标规则。原子断言：唯一 owner、每条目标规则至少一条画像断言、
-scenario-only 组闭合、结果不得 ``blocked``、通道必须含 M 且含 R 或 P、条件与证据项非空；``inherit`` 规则的断言归属
+scenario-only 组闭合、结果不得 ``blocked``、scenario-only 断言的结果必须是 ``pass``（候选证据包按 VC-1 复用为 pass，
+B4-02）、通道必须含 M 且含 R 或 P、条件与证据项非空；``inherit`` 规则的断言归属
 必须与基线逐条相同。目标规则清单、迁移台账、断言台账、场景清单、补丁计划的 ID、计数与摘要互相一致；责任边界
 （客户端本地职责、非 request_egress 兼容类别不得进入 RequiredRules）。全部通过后再按 Store 合同投影两份台账做一次合同
 校验。任何一项不满足，批准即拒绝。
@@ -1357,6 +1358,14 @@ def _check_assertions(
             continue
         if not isinstance(result, str) or result not in REVIEW_OUTCOMES:
             problems.add("assertion_invalid", f"{assertion_id}：result 只能是 pass 或 observed")
+        elif kind == "scenario_only" and result != "pass":
+            # B4-02：scenario-only 断言是官方客户端的本地行为，候选改不了；VC-5 的候选证据包按 VC-1 复用、一律记 pass（Store
+            # 合同要求 pass）。observed 只证明有限样本，带进 VC-5 会在候选封存时被闭合门禁挡下，所以在这里就拒绝。
+            problems.add(
+                "scenario_only_not_passed",
+                f"scenario-only 组 {owner} 的原子断言 {assertion_id} 结果为 {result}：scenario-only 断言必须 pass"
+                "（候选证据包按 VC-1 复用为 pass；证据只到 observed 时回 VC-1 补证，或把它改归规则）",
+            )
         channels = row["channels"]
         if (
             not isinstance(channels, list)

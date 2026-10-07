@@ -15,9 +15,14 @@ B4-01 b 段（候选 attempt.json、环境快照、恢复核验、selector 快�
   该 probe 复核失败、闭合门禁 blocked（官方清单冒充候选、direct 中继、账号不符、hosts 恢复范围、官方 M 门禁键集、恢复报告
   缺失或恢复失败、账号刷新触发缺失、多出触发结果、观测缺失）；ScenarioPlan 场景缺证据 blocked；
 * 端到端：缺客户端收据与边界核对时预览 blocked（只有这两个原因）；补齐后预览可批准、评估用 manifest 每个 artifact 带候选
-  job_id；批准写 Store 到 candidate_sealed 并写候选阶段结果，阶段结果读侧、评估用 manifest 的失败定位输入合同、Store 按宿主
-  数据根做外部证据重放都通过；再批准逐字复用；批准在 Store 写完、阶段结果写出之前被打断，重跑收敛；
-* 拒绝：批准摘要不符、未给批准人、闭合门禁 blocked 时批准、客户端收据不在 attempt 客户端证据目录、未登记的客户端。
+  job_id；批准写 Store 到 candidate_sealed 并写候选阶段结果，阶段结果读侧、B4-05a 失败定位输入合同
+  （``candidate_failure_scope_inputs`` 直接读这份阶段结果）、Store 按宿主数据根做外部证据重放都通过；再批准逐字复用；批准在
+  Store 写完、阶段结果写出之前被打断，重跑收敛；
+* 拒绝：批准摘要不符、未给批准人、闭合门禁 blocked 时批准、客户端收据不在 attempt 客户端证据目录、未登记的客户端；
+* 封存后的证据边界（B4-02 收尾）：批准时在 attempt 根写共享合同的封存证据清单；封存后证据被复制回原路径（只有
+  inode／mtime／ctime 漂移）时，封存后的读侧与批准重跑报可恢复的元数据漂移，``harden-evidence-permissions rebind-boundary``
+  重绑后读侧、失败定位输入与批准重跑都恢复，没有新漂移时不重绑；同大小的内容改写读侧先见元数据漂移、重绑复算内容即拒绝，
+  大小变化读侧直接判完整性异常；未封存或缺 ``--candidate-id`` 拒绝。
 """
 
 from __future__ import annotations
@@ -35,11 +40,13 @@ from tools.official_client_capture import claude_rule_assertion
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
 from tools.official_client_capture import claude_upgrade_capture as capture_module
+from tools.official_client_capture import claude_upgrade_evaluation_recovery as evaluation_recovery
 from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import claude_upgrade_seal
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
 from tools.official_client_capture.tests import test_claude_upgrade_accept as accept_tests
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_seal as store_layer_tests
 from tools.official_client_capture.tests import test_claude_upgrade_capture as capture_tests
@@ -96,6 +103,13 @@ def _write_json(path: Path, payload: Any) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def _close_permissions(root: Path) -> None:
+    """模拟 run 末权限收口：证据目录 0700、文件 0600（封存证据清单的前检要求不向 group／other 开放）。"""
+
+    for path in [root, *root.rglob("*")]:
+        path.chmod(0o700 if path.is_dir() else 0o600)
 
 
 def _sha_or_zero(path: Path) -> str:
@@ -350,6 +364,7 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
                 )
             if mutate is not None:
                 mutate(job, root)
+            _close_permissions(root)
             results.append(
                 {
                     "id": job.job_id,
@@ -391,6 +406,8 @@ class _CandidateSealCase(seal_tests._SealCampaignCase):
             "started_at_utc": "2026-10-07T00:10:00Z",
             "completed_at_utc": "2026-10-07T00:40:00Z",
             "binary_verification": self.fake_binaries(self.manifest),
+            # run 末收口登记的证据根（宿主路径）：封存证据清单与共享重绑都按它解析。
+            "evidence_roots": sorted(str(Path(job.evidence_roots[0])) for job in jobs),
             "results": results,
             candidate_seal.ATTEMPT_CANDIDATE_CONTEXT_FIELD: {
                 "base_url": BASE_URL,
@@ -697,9 +714,20 @@ class CandidateSealChainTests(_CandidateSealCase):
         )
         with self.seal_patched():
             _root, attempt = claude_upgrade._capture_stage_attempt_context(self.campaign, stage, phase="candidate", candidate_id=CANDIDATE)
-        attempt_jobs = {result["id"] for result in attempt["results"]}
-        self.assertTrue(all(artifact.get("job_id") in attempt_jobs for artifact in evaluation["artifacts"]))
+        # B4-05a 的失败定位输入合同直接读这份候选阶段结果与 attempt：评估用 manifest 每个条目归属唯一的候选 Job，
+        # Job 集合就是原 attempt 的 results[].id。
+        inputs = evaluation_recovery.candidate_failure_scope_inputs(self.campaign, stage, attempt)
+        candidate_jobs = sorted(job.job_id for job in self.candidate_jobs(self.campaign, self.manifest, CANDIDATE))
+        self.assertEqual(inputs["attempt_jobs"], candidate_jobs)
+        self.assertEqual(inputs["artifact_jobs"], {str(item["path"]): str(item["job_id"]) for item in evaluation["artifacts"]})
+        self.assertEqual(set(inputs["artifact_jobs"].values()), set(candidate_jobs))
         self.assertEqual(stage["client_evidence"]["client_bindings"].keys(), {"claude-desktop", "claude-vscode"})
+        # 封存证据清单（共享合同）写在 attempt 根，覆盖全部候选 Job 证据根，阶段结果按摘要绑定它。
+        sealed_manifest = attempt_root / candidate_seal.SEALED_EVIDENCE_MANIFEST_FILENAME
+        self.assertEqual(stage[candidate_seal.SEALED_EVIDENCE_MANIFEST_FIELD]["sha256"], codex_upgrade.file_sha256(sealed_manifest))
+        sealed_document = json.loads(sealed_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(sealed_document["schema_version"], evidence_manifest.MANIFEST_SCHEMA)
+        self.assertEqual(sorted(root["path"] for root in sealed_document["roots"]), sorted(attempt["evidence_roots"]))
         # Store 外部证据重放：宿主数据根就是 external root（夹具自己的外部文件也放进去）。
         shutil.copytree(self.world.fixture.external_root, self.data, dirs_exist_ok=True)
         self.world.store.replay(external_root=self.data, require_external=True)
@@ -744,6 +772,105 @@ class CandidateSealChainTests(_CandidateSealCase):
         self.assertEqual((sealed["reused"], sealed["store"]["checkpoint"]), (False, "candidate_sealed"))
         self.assertEqual(self.store_footprint(), after_store)
         self.assertTrue(stage_path.is_file())
+
+    def seal_candidate(self) -> tuple[Path, list[str], dict[str, Any]]:
+        """预览、批准一次走完；返回 (attempt 根, 客户端收据参数, 批准结果)。"""
+
+        attempt_root = self.write_evidence_and_attempt()
+        client = self.write_client_evidence(attempt_root)
+        code, preview, stderr = self.run_seal(*client)
+        self.assertEqual(code, 2, stderr)
+        assert preview is not None
+        code, sealed, stderr = self.run_seal("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
+        self.assertEqual(code, 0, stderr)
+        assert sealed is not None
+        self.approve_argv = ("--approve-seal-sha256", preview["review_sha256"], "--approved-by", "reviewer-a", *client)
+        return attempt_root, client, sealed
+
+    def job_root(self, job_id: str) -> Path:
+        return Path(next(job for job in self.candidate_jobs(self.campaign, self.manifest, CANDIDATE) if job.job_id == job_id).evidence_roots[0])
+
+    def read_sealed_attempt(self) -> tuple[Path, dict[str, Any]]:
+        stage = claude_upgrade._load_stage_result(self.campaign, "capture-candidate", CANDIDATE)
+        with self.seal_patched():
+            return claude_upgrade._capture_stage_attempt_context(self.campaign, stage, phase="candidate", candidate_id=CANDIDATE)
+
+    def rebind(self, *extra: str) -> tuple[int, dict | None, str]:
+        argv = ["harden-evidence-permissions", "rebind-boundary", "--campaign-dir", str(self.campaign), "--attempt-id", ATTEMPT, *extra]
+        with self.seal_patched():
+            return seal_tests.run_main(argv)
+
+    def test_metadata_drift_after_seal_is_rebound_and_readers_recover(self) -> None:
+        self.seal_candidate()
+        self.read_sealed_attempt()
+        # 封存后证据被「复制回原路径」：内容不变，inode／mtime／ctime 变化。读侧报可恢复的元数据漂移并给出重绑命令。
+        target = self.job_root("candidate-transport-baseline") / "v4-native-tls-baseline" / evidence.RELAY_MANIFEST_FILENAME
+        content = target.read_bytes()
+        target.unlink()
+        target.write_bytes(content)
+        target.chmod(0o600)
+        with self.assertRaises(candidate_seal.SealedEvidenceBoundaryError) as caught:
+            self.read_sealed_attempt()
+        self.assertEqual(caught.exception.failure_class, evidence_manifest.METADATA_DRIFT_FAILURE_CLASS)
+        self.assertIn(f"rebind-boundary --attempt-id {ATTEMPT} --candidate-id {CANDIDATE}", str(caught.exception))
+        # 已封存 attempt 的批准重跑走同一读侧：同样先要求重绑。
+        code, _result, stderr = self.run_seal(*self.approve_argv)
+        self.assertEqual(code, 1)
+        self.assertIn("rebind-boundary", stderr)
+        # 重绑：逐文件复算内容一致后写重绑收据；之后读侧、失败定位输入与批准重跑都恢复。
+        code, record, stderr = self.rebind("--candidate-id", CANDIDATE, "--operator", "tester")
+        self.assertEqual(code, 0, stderr)
+        assert record is not None
+        self.assertEqual((record["status"], record["phase"], record["candidate_id"], record["drifted_entry_count"]), ("rebound", "candidate", CANDIDATE, 1))
+        attempt_root, attempt = self.read_sealed_attempt()
+        self.assertTrue((attempt_root / "evidence-manifest-rebind-01.json").is_file())
+        stage = claude_upgrade._load_stage_result(self.campaign, "capture-candidate", CANDIDATE)
+        self.assertTrue(evaluation_recovery.candidate_failure_scope_inputs(self.campaign, stage, attempt)["attempt_jobs"])
+        code, again, stderr = self.run_seal(*self.approve_argv)
+        self.assertEqual(code, 0, stderr)
+        assert again is not None
+        self.assertTrue(again["reused"])
+        # 没有新的漂移时不重绑。
+        code, _record, stderr = self.rebind("--candidate-id", CANDIDATE)
+        self.assertEqual(code, 1)
+        self.assertIn("无需 rebind", stderr)
+
+    def test_content_drift_after_seal_is_not_rebindable(self) -> None:
+        self.seal_candidate()
+        target = self.job_root("candidate-transport-baseline") / "v4-native-tls-baseline" / "results" / "debug.log"
+        content = target.read_bytes()
+        rebind_receipt = self.campaign / "candidates" / CANDIDATE / "attempts" / ATTEMPT / "evidence-manifest-rebind-01.json"
+        # 同样大小的内容改写：stat 边界只见 mtime／ctime 变化，读侧（不读内容）报元数据漂移；重绑逐文件复算内容即拒绝，不写收据。
+        target.write_bytes(content.upper())
+        with self.assertRaises(candidate_seal.SealedEvidenceBoundaryError) as caught:
+            self.read_sealed_attempt()
+        self.assertEqual(caught.exception.failure_class, evidence_manifest.METADATA_DRIFT_FAILURE_CLASS)
+        code, _record, stderr = self.rebind("--candidate-id", CANDIDATE)
+        self.assertEqual(code, 1)
+        self.assertIn("证据文件内容与 EvidenceManifest 不一致", stderr)
+        self.assertFalse(rebind_receipt.exists())
+        with self.assertRaises(candidate_seal.SealedEvidenceBoundaryError):
+            self.read_sealed_attempt()
+        # 大小也变：读侧直接判完整性异常（不可恢复），重绑同样拒绝。
+        target.write_bytes(content + b"tampered")
+        with self.assertRaises(candidate_seal.SealedEvidenceBoundaryError) as caught:
+            self.read_sealed_attempt()
+        self.assertEqual(caught.exception.failure_class, "evidence-integrity")
+        code, _record, stderr = self.rebind("--candidate-id", CANDIDATE)
+        self.assertEqual(code, 1)
+        self.assertIn("不能 rebind", stderr)
+        self.assertFalse(rebind_receipt.exists())
+
+    def test_rebind_requires_a_sealed_candidate_attempt(self) -> None:
+        self.write_evidence_and_attempt()
+        for extra, message in (
+            ((), "必须给出 --candidate-id"),
+            (("--candidate-id", CANDIDATE), "阶段尚未封存"),
+        ):
+            with self.subTest(extra=extra):
+                code, _record, stderr = self.rebind(*extra)
+                self.assertEqual(code, 1)
+                self.assertIn(message, stderr)
 
     def test_client_evidence_must_be_registered_and_inside_the_attempt_directory(self) -> None:
         attempt_root = self.write_evidence_and_attempt()

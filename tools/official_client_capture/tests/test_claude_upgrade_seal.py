@@ -9,6 +9,8 @@
 * 标签错位（有效连接顺序与证据标签不一致）在预览阶段即让闭合门禁 blocked，不能批准。
 * 只读复用路径（B2-09 挪来）：写本 Campaign 的 Discovery／Evidence（引用导入包）、阶段结果与 VC-1 checkpoint，补「VC-0
   完成、VC-1 开始、VC-1 完成」三条计时账本事件；冲突预检在任何 Store 写入之前拒绝；SIGKILL 后重跑收敛，事件不重复。
+* 官方阶段的封存后读侧不变（B4-02 收尾）：编排器服务面 ``_capture_stage_attempt_context`` 对官方阶段照旧重放 run 末收口，
+  不走候选的封存证据清单读侧，官方 seal 不写那份清单。
 * evidence 闭包涉及的模块集合锁定：只有编排器四个 evidence 根、``claude_upgrade_evidence``、发现补全
   ``claude_upgrade_discovery``（B2-07 补充项）、``claude_upgrade_plan`` 的标签加载与匹配、``canonical`` 三个函数与
   ``ControlError``，加整文件的 ``claude_target_inventory``、``contracts`` 与两个 FW-E 历史工具（语义候选目录与归并词表、
@@ -33,6 +35,7 @@ from unittest import mock
 
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
+from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal_module
 from tools.official_client_capture import claude_upgrade_capture as capture
 from tools.official_client_capture import claude_upgrade_discovery as discovery_module
 from tools.official_client_capture import claude_upgrade_evidence as evidence
@@ -699,6 +702,18 @@ class CapturedSealChainTests(_SealCampaignCase):
             self.assertEqual(stage["attempt"], {"path": f"official/attempts/{attempt_id}/attempt.json", "sha256": codex_upgrade.file_sha256(attempt_root / "attempt.json")})
             bound_root, _bound = capture._capture_stage_attempt_context(campaign, stage, phase="official", candidate_id=None)
             self.assertEqual(bound_root, attempt_root)
+            # B4-02 收尾：编排器服务面对官方阶段照旧转到取证模块、重放 run 末收口，不走候选的封存证据清单读侧，官方 seal
+            # 也不写那份清单。
+            replay = claude_upgrade._replay_attempt_evidence_permissions
+            with mock.patch.object(
+                candidate_seal_module, "sealed_attempt_context", side_effect=AssertionError("官方阶段不得走候选封存后读侧")
+            ), mock.patch.object(claude_upgrade, "_replay_attempt_evidence_permissions", wraps=replay) as replayed:
+                orchestrated_root, _orchestrated = claude_upgrade._capture_stage_attempt_context(
+                    campaign, stage, phase="official", candidate_id=None
+                )
+            self.assertEqual(orchestrated_root, attempt_root)
+            self.assertEqual(replayed.call_count, 1)
+            self.assertFalse((attempt_root / "evidence-manifest.json").exists())
             manifest = claude_upgrade.load_campaign_manifest(campaign)
             _path, checkpoint = claude_upgrade_vc.replay_vc_checkpoint(campaign, claude_upgrade_vc.vc_campaign_plan(campaign, manifest), "VC-1")
             self.assertEqual(checkpoint["execute_item_ids"], sorted(SEAL_JOBS))

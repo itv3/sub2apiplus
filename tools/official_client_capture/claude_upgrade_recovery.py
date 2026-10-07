@@ -61,11 +61,12 @@ attempt 收据），差别只在：
 
 五、不提供的子命令
 ==================
-* ``harden-evidence-permissions``：Codex 的 A3a 两步式收口是为改造前没有 run 末收口（或只有 v1 收口）的历史 attempt 事后
-  补做的。Claude 的 run 从第一个受管版本起就在每个 Job 终态与 run 末各做一次 ``evidence-permission-closeout/v2`` 收口
-  （B2-06），收口重放随读取 attempt 默认执行（B2-07）；run 末收口失败的 attempt 记为 failed，经对账、批准恢复预览与
-  ``resume --rerun-failed`` 由新 attempt 全部复用、零执行地重新收口。已封存证据的元数据漂移重绑（``rebind-boundary``）
-  随候选证据封存（B4-02）统一评估。
+* ``harden-evidence-permissions`` 的 preview／apply／replay／upgrade-closeout：Codex 的 A3a 两步式收口是为改造前没有 run 末
+  收口（或只有 v1 收口）的历史 attempt 事后补做的。Claude 的 run 从第一个受管版本起就在每个 Job 终态与 run 末各做一次
+  ``evidence-permission-closeout/v2`` 收口（B2-06），收口重放随读取 attempt 默认执行（B2-07）；run 末收口失败的 attempt 记为
+  failed，经对账、批准恢复预览与 ``resume --rerun-failed`` 由新 attempt 全部复用、零执行地重新收口。只提供
+  ``rebind-boundary``（B4-02 收尾）：已封存的候选 attempt 只有 mtime／ctime／inode 漂移时，转调共享重绑写重绑收据，封存后
+  的读侧按封存证据清单加重绑链核对（``claude_upgrade_candidate_seal`` 第六节）；必须带 ``--candidate-id``。
 * ``wire-transition-intent``／``wire-transition-final``：Claude Campaign 只用工具演进链，wire 层变化一律经 ``tool-evolution``
   登记（逐作业作废，resume 只重跑受影响作业）；两条链在共享合同里互斥，Claude 不建 wire transition 链。
 """
@@ -1828,14 +1829,23 @@ def require_quiescent_campaign_lease(campaign_dir: Path, *, action: str, attempt
 
 
 def harden_evidence_permissions_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
-    """``harden-evidence-permissions``：Claude 不提供（理由见模块说明第五节）。"""
+    """``harden-evidence-permissions``：Claude 只提供 ``rebind-boundary``（B4-02 收尾），其余动作不提供（理由见模块说明第五节）。"""
 
-    del arguments
+    if getattr(arguments, "harden_action", None) == "rebind-boundary":
+        from tools.official_client_capture import claude_upgrade_candidate_seal
+
+        record = claude_upgrade_candidate_seal.rebind_sealed_boundary(
+            Path(arguments.campaign_dir),
+            str(arguments.attempt_id),
+            candidate_id=getattr(arguments, "candidate_id", None),
+            operator=getattr(arguments, "operator", None),
+        )
+        return record, 0
     raise ConfigurationError(
-        "Claude 不提供 harden-evidence-permissions：run 从第一个受管版本起就在每个 Job 终态与 run 末各做一次 v2 证据权限收口"
-        "（B2-06），收口重放随读取 attempt 默认执行（B2-07），没有缺收口的历史 attempt 需要事后补做；run 末收口失败的 attempt"
-        "记为 failed，经 reconcile-attempt → 批准恢复预览 → resume --rerun-failed 由新 attempt 全部复用、零执行地重新收口。"
-        "已封存证据的元数据漂移重绑（rebind-boundary）随候选证据封存（B4-02）统一评估。"
+        "Claude 不提供 harden-evidence-permissions 的 preview／apply／replay／upgrade-closeout：run 从第一个受管版本起就在每个"
+        " Job 终态与 run 末各做一次 v2 证据权限收口（B2-06），收口重放随读取 attempt 默认执行（B2-07），没有缺收口的历史 attempt"
+        "需要事后补做；run 末收口失败的 attempt 记为 failed，经 reconcile-attempt → 批准恢复预览 → resume --rerun-failed 由新"
+        " attempt 全部复用、零执行地重新收口。已封存候选证据只有元数据漂移时用 rebind-boundary（带 --candidate-id）。"
     )
 
 

@@ -3190,8 +3190,18 @@ def _capture_stage_attempt_context(
     phase: str,
     candidate_id: str | None,
 ) -> tuple[Path, dict[str, Any]]:
-    """服务面成员（B2-06）：阶段结果绑定的 attempt；实现在 ``claude_upgrade_capture``。"""
+    """服务面成员（B2-06）：阶段结果绑定的 attempt；官方实现在 ``claude_upgrade_capture``。
 
+    候选阶段（B4-02 收尾）是封存后的读侧：不重放 run 末收口，证据边界按候选阶段结果绑定的封存证据清单加重绑链核对
+    （``claude_upgrade_candidate_seal.sealed_attempt_context``）；官方阶段照旧。
+    """
+
+    if phase == "candidate":
+        from tools.official_client_capture import claude_upgrade_candidate_seal
+
+        if not isinstance(candidate_id, str):
+            raise ConfigurationError("候选阶段结果绑定的 attempt 必须带 candidate-id。")
+        return claude_upgrade_candidate_seal.sealed_attempt_context(campaign_dir, stage, candidate_id=candidate_id)
     from tools.official_client_capture import claude_upgrade_capture
 
     return claude_upgrade_capture._capture_stage_attempt_context(campaign_dir, stage, phase=phase, candidate_id=candidate_id)

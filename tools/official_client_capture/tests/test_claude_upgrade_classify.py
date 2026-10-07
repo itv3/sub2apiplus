@@ -491,7 +491,8 @@ class _ClassifyCase(unittest.TestCase):
                 evidence_item_ids=row["evidence_item_ids"] or [fallback],
                 conditions=row["conditions"] or ["platform=linux/arm64"],
                 channels=["P", "M"] if row["assertion_id"].startswith("SPEC-TLS") else ["R", "M"],
-                result="observed",
+                # scenario-only 断言必须 pass（B4-02：候选证据包按 VC-1 复用为 pass，VC-2 批准拒绝 observed）；画像断言沿用 observed。
+                result="pass" if row["owner_kind"] == "scenario_only" else "observed",
                 rationale="按目标证据复核通过。",
             )
         ledger = docs["discovery_dispositions"]
@@ -715,6 +716,13 @@ class RevisionAndApprovalTests(_ClassifyCase):
             ("断言缺 M 通道", lambda d: d["atomic_assertions"]["assertions"][0].update(channels=["R"]), "assertion_channel_invalid"),
             ("执行契约变化", lambda d: d["scenarios"]["capture_jobs"][0].update(required=not d["scenarios"]["capture_jobs"][0]["required"]), "scenarios_execution_changed"),
             ("类型错误", lambda d: d["atomic_assertions"]["assertions"][0].update(owner_id=["SPEC-BODY-001"]), "assertion_invalid"),
+            (
+                "scenario-only 断言填 observed",
+                lambda d: next(row for row in d["atomic_assertions"]["assertions"] if row["owner_kind"] == "scenario_only").update(
+                    result="observed"
+                ),
+                "scenario_only_not_passed",
+            ),
         ):
             with self.subTest(label=label):
                 variant = copy.deepcopy(docs)
@@ -723,6 +731,12 @@ class RevisionAndApprovalTests(_ClassifyCase):
                 code, result, stderr = self.revise(campaign, draft["revision"], directory)
                 self.assertEqual((code, result["status"]), (2, "classification_blocked"), stderr)
                 self.assertIn(code_expected, self.reason_codes(result))
+                if code_expected == "scenario_only_not_passed":
+                    # B4-02：报错点名 scenario-only 组（owner）与断言；画像断言填 observed 不在这条门禁里。
+                    row = next(row for row in variant["atomic_assertions"]["assertions"] if row["owner_kind"] == "scenario_only")
+                    reason = next(item for item in result["gate"]["reasons"] if item["code"] == code_expected)
+                    self.assertEqual(reason["count"], 1)
+                    self.assertIn(f"scenario-only 组 {row['owner_id']} 的原子断言 {row['assertion_id']} 结果为 observed", reason["sample"][0])
 
     def test_approval_seals_ledgers_and_converges_after_sigkill(self) -> None:
         campaign = self.build_campaign()

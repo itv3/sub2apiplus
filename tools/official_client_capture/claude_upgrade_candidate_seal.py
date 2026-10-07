@@ -58,6 +58,7 @@ attempt。所以将来门禁失败时，要用同一份原始证据零请求地�
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -74,6 +75,7 @@ from tools.official_client_capture import claude_upgrade_live_request_provenance
 from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture import claude_upgrade_seal
 from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import file_sha256
 from tools.official_client_control import receipts as store_receipts
@@ -791,6 +793,12 @@ CLIENT_EVIDENCE_DIRNAME = "client-evidence"
 # 评估用 manifest 的 assertion_context 字段（与 ``claude_upgrade_evaluation_recovery.candidate_failure_scope_inputs`` 同名）。
 ASSERTION_CONTEXT_FIELD = "assertion_context"
 EVALUATION_MANIFEST_FIELD = "evaluation_manifest"
+# 封存后的证据边界（B4-02 收尾）：批准时在 attempt 根写一份共享合同（``codex-upgrade-evidence-manifest/v1``）的证据清单，
+# 封存后的读侧按它加重绑链核对 stat 边界；文件名与位置是共享重绑（``rebind-boundary``）认的那一个。扫描续作 checkpoint
+# 放在 seal 代号目录（不得在证据边界内）。
+SEALED_EVIDENCE_MANIFEST_FILENAME = "evidence-manifest.json"
+SEALED_EVIDENCE_CHECKPOINT_FILENAME = "sealed-evidence-scan-checkpoint.json"
+SEALED_EVIDENCE_MANIFEST_FIELD = "sealed_evidence_manifest"
 STAGE_RESULT_FIELDS = frozenset(
     {
         "schema_version",
@@ -803,6 +811,7 @@ STAGE_RESULT_FIELDS = frozenset(
         "seal",
         "store",
         "client_evidence",
+        SEALED_EVIDENCE_MANIFEST_FIELD,
         ASSERTION_CONTEXT_FIELD,
         "execute_item_ids",
         "reuse_item_ids",
@@ -1020,14 +1029,20 @@ def _seal_candidate_attempt(
     if key in capture._invalidated_attempts(campaign_dir):
         raise ConfigurationError("该候选 attempt 已被环境隔离或冲突隔离作废，永不 seal。")
     stage_path = orchestrator._stage_path(campaign_dir, STAGE_NAME, candidate_id, mode="write")[1]
+    sealed_stage: dict[str, Any] | None = None
     if stage_path.exists() or stage_path.is_symlink():
         sealed = orchestrator._read_json(stage_path, "候选阶段结果")
         binding = sealed.get("attempt") if isinstance(sealed.get("attempt"), Mapping) else {}
         if Path(str(binding.get("path", ""))).parent.name != attempt_id:
             raise ConfigurationError("候选证据已经由另一 attempt 封存，禁止覆盖。")
-    attempt_root, attempt = orchestrator._load_capture_attempt(
-        campaign_dir, "candidate", candidate_id, attempt_id, _verified_campaign_manifest=manifest
-    )
+        sealed_stage = load_stage_result(campaign_dir, stage_path, candidate_id, manifest=manifest)
+    if sealed_stage is not None:
+        # 已封存：与其余封存后读侧同一口径，按封存证据清单加重绑链核对边界（不再重放 run 末收口）。
+        attempt_root, attempt = sealed_attempt_context(campaign_dir, sealed_stage, candidate_id=candidate_id)
+    else:
+        attempt_root, attempt = orchestrator._load_capture_attempt(
+            campaign_dir, "candidate", candidate_id, attempt_id, _verified_campaign_manifest=manifest
+        )
     if attempt.get("status") != "awaiting_receipts":
         raise ConfigurationError("只有 awaiting_receipts 候选 attempt 可以 seal。")
     failed = orchestrator._failed_job_ids(attempt.get("results"))
@@ -1358,10 +1373,11 @@ def _approve_candidate_seal(
     candidate_id: str,
     data_root: Path,
 ) -> dict[str, Any]:
-    """④ 批准：核对冻结预览与草稿，经第三节写入链写 Store（到 candidate_sealed），再写候选阶段结果（只写一次）。
+    """④ 批准：核对冻结预览与草稿，写封存证据清单，经第三节写入链写 Store（到 candidate_sealed），再写候选阶段结果（只写一次）。
 
-    批准不再扫描：证据边界由 ``_load_capture_attempt`` 的权限收口重放担保，草稿、深度扫描清单与评估用 manifest 按预览
-    绑定的摘要核对。
+    批准不再做深度扫描：草稿、深度扫描清单与评估用 manifest 按预览绑定的摘要核对。唯一一次内容读取是在 attempt 根写共享
+    合同的封存证据清单（第六节），它与预览的深度扫描清单在候选 Job 证据根内逐文件比对摘要，此后封存后的读侧只认它（加
+    重绑链）。被打断后重跑：清单已存在时按边界复核、不再读内容。
     """
 
     orchestrator = _orchestrator()
@@ -1409,6 +1425,21 @@ def _approve_candidate_seal(
     attempt_binding = _stage_binding(attempt_path, campaign_dir)
     if attempt_binding["sha256"] != draft["generation_key"]["attempt"]["sha256"]:
         raise ConfigurationError("attempt 收据与 seal 草稿绑定的摘要不一致。")
+    sealed_manifest = _seal_evidence_boundary(
+        campaign_dir,
+        attempt_path.parent,
+        seal_dir,
+        candidate_id=candidate_id,
+        data_root=data_root,
+        inventory=orchestrator._read_json(claude_upgrade_seal._verify_bound_file(campaign_dir, preview["evidence_manifest"], "深度扫描清单"), "深度扫描清单"),
+        job_roots=[
+            str(job["evidence_root"])
+            for job in orchestrator._read_json(
+                claude_upgrade_seal._verify_bound_file(campaign_dir, draft["drafts"]["capture_index"], "封存草稿 capture_index"),
+                "候选 CaptureIndex",
+            )["jobs"]
+        ],
+    )
     request = dict(draft["store_request"])
     request["seal"] = {**request["seal"], "review_sha256": preview["review_sha256"], "reviewer": approved_by}
     recorded = record_candidate_seal_chain(campaign_dir, manifest, request)
@@ -1450,6 +1481,7 @@ def _approve_candidate_seal(
         },
         "store": store_summary,
         "client_evidence": client_bindings,
+        SEALED_EVIDENCE_MANIFEST_FIELD: _stage_binding(sealed_manifest, campaign_dir),
         # 评估用 manifest 由 seal 合成并绑定（Campaign 相对路径＋摘要），compare 与失败定位
         # （``claude_upgrade_evaluation_recovery.candidate_failure_scope_inputs``）只读。
         ASSERTION_CONTEXT_FIELD: {
@@ -1514,9 +1546,217 @@ def load_stage_result(campaign_dir: Path, path: Path, candidate_id: str, *, mani
     for label, binding in (
         ("候选阶段结果 attempt", stage.get("attempt")),
         ("候选评估用 manifest", context.get(EVALUATION_MANIFEST_FIELD) if isinstance(context, Mapping) else None),
+        ("候选封存证据清单", stage.get(SEALED_EVIDENCE_MANIFEST_FIELD)),
     ):
         orchestrator._require_file_binding(binding, label)
         target = orchestrator._campaign_file(campaign_dir, str(binding["path"]))
         if target.is_symlink() or not target.is_file() or file_sha256(target) != binding["sha256"]:
             raise ConfigurationError(f"{label}缺失或摘要漂移。")
     return stage
+
+
+# ---------------------------------------------------------------------------
+# 六、封存后的证据边界与元数据漂移重绑（B4-02 收尾）
+# ---------------------------------------------------------------------------
+#
+# 封存之前，证据边界由 run 末收口（``evidence-permission-closeout/v2``）担保，``_load_capture_attempt`` 每次重放；收口边界
+# 含 inode 与 mtime，证据被复制回原路径或 seal 之后再 chmod，重放就再也过不去。封存之后改按共享合同的证据清单核对：
+#
+# * 批准时在 attempt 根写 ``evidence-manifest.json``（``codex_upgrade_evidence_manifest.build_evidence_manifest``，证据根取
+#   attempt 收据登记的 ``evidence_roots``，与共享重绑解析出的根完全相同），并与预览的深度扫描清单在候选 Job 证据根内逐文件
+#   比对摘要；候选阶段结果绑定它（``sealed_evidence_manifest``）。
+# * 封存后的读侧（``sealed_attempt_context``：编排器服务面 ``_capture_stage_attempt_context`` 的候选分支与已封存 attempt 的
+#   seal 重跑）读 attempt 时不再重放收口，改按 ``verify_manifest_boundary`` 加清单同目录的重绑链核对 stat 边界：只有
+#   mtime／ctime／inode 漂移时报可恢复的元数据漂移（附重绑命令），其余漂移是完整性异常、不可恢复。
+# * ``harden-evidence-permissions rebind-boundary --attempt-id … --candidate-id …``（``rebind_sealed_boundary``）直接转调共享
+#   的 ``codex_upgrade_harden_evidence_permissions.rebind_boundary``：逐文件复算内容与清单一致后写 write-once 的重绑收据，
+#   重绑后按读侧同一口径复核。只认已封存的候选 attempt。
+#
+# 官方阶段不受影响：官方 seal 不写这份清单，官方的封存后读侧照旧重放收口。
+#
+# 清单生成时共享模块顺带做的启发式令牌形态扫描（``security.findings``）原样记在清单里，不作批准条件：候选证据的秘密扫描
+# 门禁是中继的逐字节已知秘密扫描与宿主脚本删除秘密文件，已作为 ``secret_scan`` 运行证据进 CandidateEvidencePackage。
+
+
+class SealedEvidenceBoundaryError(ConfigurationError):
+    """封存证据清单的边界核对失败；带生产者给出的机器失败分类（可恢复的元数据漂移，或不可恢复的完整性异常）。"""
+
+    def __init__(self, message: str, *, failure_class: str | None, failure_observations: list[dict[str, Any]] | None) -> None:
+        super().__init__(message)
+        self.failure_class = failure_class
+        self.failure_observations = list(failure_observations or [])
+
+
+def _harden() -> Any:
+    from tools.official_client_capture import codex_upgrade_harden_evidence_permissions
+
+    return codex_upgrade_harden_evidence_permissions
+
+
+def _sealed_evidence_roots(campaign_dir: Path, attempt_id: str, candidate_id: str) -> list[Path]:
+    """封存证据清单的证据根：与共享重绑同一个解析函数（attempt 收据登记的 ``evidence_roots``，容器坐标映射到宿主）。"""
+
+    harden = _harden()
+    try:
+        return list(harden._evidence_roots(Path(campaign_dir), attempt_id, candidate_id=candidate_id)[1])
+    except (harden.HardenError, OSError, ValueError, RuntimeError) as error:
+        raise ConfigurationError(f"封存证据根无法解析：{error}") from error
+
+
+def _verify_sealed_manifest(path: Path, roots: Sequence[Path], *, attempt_id: str, candidate_id: str) -> dict[str, Any]:
+    """封存证据清单加重绑链的 stat 边界核对（不读文件内容）；返回已校验的清单。"""
+
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        evidence_manifest.validate_manifest_document(manifest)
+        rebinds = evidence_manifest.load_boundary_rebinds(path, manifest)
+        evidence_manifest.verify_manifest_boundary(manifest, list(roots), rebinds=rebinds)
+    except evidence_manifest.EvidenceManifestMetadataDriftError as error:
+        raise SealedEvidenceBoundaryError(
+            f"候选封存证据只有 mtime／ctime／inode 漂移（{error}）：逐文件复算后可重绑——harden-evidence-permissions "
+            f"rebind-boundary --attempt-id {attempt_id} --candidate-id {candidate_id}",
+            failure_class=error.failure_class,
+            failure_observations=error.failure_observations,
+        ) from error
+    except evidence_manifest.EvidenceManifestError as error:
+        raise SealedEvidenceBoundaryError(
+            f"候选封存证据边界核对失败：{error}",
+            failure_class=getattr(error, "failure_class", None),
+            failure_observations=getattr(error, "failure_observations", None),
+        ) from error
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError(f"候选封存证据清单无法读取：{path}") from error
+    return dict(manifest)
+
+
+def _check_sealed_manifest_content(
+    manifest: Mapping[str, Any],
+    inventory: Mapping[str, Any],
+    *,
+    data_root: Path,
+    job_roots: Sequence[str],
+) -> None:
+    """封存证据清单与预览的深度扫描清单在候选 Job 证据根内逐文件一致（路径集合与摘要），且清单覆盖每个 Job 证据根。"""
+
+    sealed: dict[str, str] = {}
+    root_paths: list[str] = []
+    for root in manifest["roots"]:
+        base = Path(str(root["path"]))
+        try:
+            root_paths.append(base.relative_to(data_root).as_posix())
+        except ValueError as error:
+            raise ConfigurationError(f"封存证据清单的证据根不在宿主数据根内：{base}") from error
+        prefix = str(root["prefix"])
+        for entry in manifest["entries"]:
+            logical = str(entry["path"])
+            if logical == prefix or logical.startswith(prefix + "/"):
+                relative = logical[len(prefix) + 1 :]
+                # 证据根是单个文件时清单条目记「前缀/文件名」，对应的就是根本身。
+                target = base if base.is_file() else base / relative
+                sealed[target.relative_to(data_root).as_posix()] = str(entry["sha256"])
+    uncovered = sorted(root for root in job_roots if root not in root_paths)
+    if uncovered:
+        raise ConfigurationError(f"封存证据清单没有覆盖候选 Job 证据根：{uncovered}")
+
+    def under(path: str) -> bool:
+        return any(path == root or path.startswith(root + "/") for root in job_roots)
+
+    expected = {str(entry["path"]): str(entry["sha256"]) for entry in inventory["entries"] if under(str(entry["path"]))}
+    actual = {path: digest for path, digest in sealed.items() if under(path)}
+    if actual != expected:
+        drift = sorted(path for path in set(actual) | set(expected) if actual.get(path) != expected.get(path))
+        raise ConfigurationError(f"封存证据清单与预览的深度扫描在候选 Job 证据根内不一致（证据在预览之后被改动）：{drift[:5]}")
+
+
+def _seal_evidence_boundary(
+    campaign_dir: Path,
+    attempt_root: Path,
+    seal_dir: Path,
+    *,
+    candidate_id: str,
+    data_root: Path,
+    inventory: Mapping[str, Any],
+    job_roots: Sequence[str],
+) -> Path:
+    """批准时写（或被打断后复核）attempt 根的封存证据清单；返回清单路径。"""
+
+    path = attempt_root / SEALED_EVIDENCE_MANIFEST_FILENAME
+    roots = _sealed_evidence_roots(campaign_dir, attempt_root.name, candidate_id)
+    existing = path.exists() or path.is_symlink()
+    if existing:
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"封存证据清单路径不可信：{path}")
+        manifest = _verify_sealed_manifest(path, roots, attempt_id=attempt_root.name, candidate_id=candidate_id)
+    else:
+        try:
+            manifest = evidence_manifest.build_evidence_manifest(
+                roots, checkpoint_path=seal_dir / SEALED_EVIDENCE_CHECKPOINT_FILENAME
+            )
+        except evidence_manifest.EvidenceManifestError as error:
+            raise ConfigurationError(f"封存证据清单生成失败：{error}") from error
+    _check_sealed_manifest_content(manifest, inventory, data_root=data_root, job_roots=job_roots)
+    if not existing:
+        _orchestrator()._secure_write_json_once(path, manifest)
+    return path
+
+
+def verify_sealed_boundary(campaign_dir: Path, stage: Mapping[str, Any], attempt_root: Path, *, candidate_id: str) -> dict[str, Any]:
+    """候选阶段结果绑定的封存证据清单：摘要不变、位于 attempt 根，且当前证据边界等于清单或重绑链末的边界。"""
+
+    orchestrator = _orchestrator()
+    binding = stage.get(SEALED_EVIDENCE_MANIFEST_FIELD)
+    orchestrator._require_file_binding(binding, "候选封存证据清单")
+    path = orchestrator._campaign_file(Path(campaign_dir), str(binding["path"]))  # type: ignore[index]
+    if (
+        path != Path(attempt_root) / SEALED_EVIDENCE_MANIFEST_FILENAME
+        or path.is_symlink()
+        or not path.is_file()
+        or file_sha256(path) != binding["sha256"]  # type: ignore[index]
+    ):
+        raise ConfigurationError("候选阶段结果绑定的封存证据清单缺失、不在 attempt 根或摘要漂移。")
+    roots = _sealed_evidence_roots(Path(campaign_dir), Path(attempt_root).name, candidate_id)
+    return _verify_sealed_manifest(path, roots, attempt_id=Path(attempt_root).name, candidate_id=candidate_id)
+
+
+def sealed_attempt_context(campaign_dir: Path, stage: Mapping[str, Any], *, candidate_id: str) -> tuple[Path, dict[str, Any]]:
+    """封存后的读侧：候选阶段结果绑定的 attempt（不重放 run 末收口），证据边界按封存证据清单加重绑链核对。"""
+
+    orchestrator = _orchestrator()
+    reference = stage.get("attempt")
+    orchestrator._require_file_binding(reference, "抓包 attempt")
+    attempt_path = orchestrator._campaign_file(Path(campaign_dir), str(reference["path"]))  # type: ignore[index]
+    attempt_root, attempt = orchestrator._load_capture_attempt(
+        Path(campaign_dir), "candidate", candidate_id, attempt_path.parent.name, _replay_evidence_permissions=False
+    )
+    if attempt_path != attempt_root / "attempt.json":
+        raise ConfigurationError("抓包阶段 attempt 绑定路径不一致。")
+    verify_sealed_boundary(campaign_dir, stage, attempt_root, candidate_id=candidate_id)
+    return attempt_root, attempt
+
+
+def rebind_sealed_boundary(campaign_dir: Path, attempt_id: str, *, candidate_id: str | None, operator: str | None) -> dict[str, Any]:
+    """``harden-evidence-permissions rebind-boundary``：已封存候选 attempt 只有元数据漂移时转调共享重绑，再按读侧复核。"""
+
+    orchestrator = _orchestrator()
+    if candidate_id is None:
+        raise ConfigurationError("Claude 的 rebind-boundary 只认已封存的候选 attempt：必须给出 --candidate-id（官方阶段没有封存证据清单）。")
+    candidate_id = _safe_id(candidate_id, "--candidate-id")
+    attempt_id = _safe_id(attempt_id, "--attempt-id")
+    campaign_dir = Path(campaign_dir)
+    orchestrator._validate_existing_campaign_path(campaign_dir)
+    campaign_dir = campaign_dir.resolve(strict=True)
+    manifest = orchestrator._require_formal_campaign(campaign_dir)
+    stage_path = orchestrator._stage_path(campaign_dir, STAGE_NAME, candidate_id)[1]
+    stage = load_stage_result(campaign_dir, stage_path, candidate_id, manifest=manifest)
+    attempt_path = orchestrator._campaign_file(campaign_dir, str(stage["attempt"]["path"]))
+    if attempt_path.parent.name != attempt_id:
+        raise ConfigurationError(f"候选 {candidate_id} 封存的是 attempt {attempt_path.parent.name}，不是 {attempt_id}。")
+    harden = _harden()
+    try:
+        record = harden.rebind_boundary(
+            campaign_dir, attempt_id, candidate_id=candidate_id, operator=str(operator or "harden-evidence-permissions")
+        )
+    except (harden.HardenError, OSError, ValueError, RuntimeError) as error:
+        raise ConfigurationError(f"证据边界重绑失败：{error}") from error
+    verify_sealed_boundary(campaign_dir, stage, attempt_path.parent, candidate_id=candidate_id)
+    return dict(record)
