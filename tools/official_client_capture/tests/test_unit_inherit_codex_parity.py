@@ -510,11 +510,20 @@ B5B01A_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         '            *_params("UP", "BASELINE_VERSION", "TARGET_VERSION", "EVIDENCE_DECISION", "STAGE_BUDGETS"),',
     ],
 }
+# B5b-03（Claude 故障恢复链 recovery-chain）改了 pre-A3 认证模块：以 B5b-03 开工时的主线头（B4-06b 合入后）为基线，只在 Claude
+# 的两张字面量登记表 CLAUDE_REAL_CHAIN_IDS、CLAUDE_SCENARIOS 与派发秒数表 SCENARIO_SECONDS 末尾追加 vc-chain.claude-recovery-chain
+# 一项（连同说明注释），没有删改任何已有的行；Codex 场景表、单元、命令、秒数与收据不变（test_pre_a3_codex_parity 逐项守住）。
+B5B03_BASELINE_COMMIT = "322d3ea62ba141227a6f485d0440cfd4e7f22360"
+B5B03_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": "4e58938dae2753cfb666f517e229d7212a66c6a26a9d9ae9c4693d61134dd484",
+}
+B5B03_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/official_client_capture/codex_upgrade_pre_a3_certification.py": []}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
     ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SOURCE_DIGESTS, B5A11_SOURCE_REMOVED_LINES),
     ("B5b-01a", B5B01A_BASELINE_COMMIT, B5B01A_SOURCE_DIGESTS, B5B01A_SOURCE_REMOVED_LINES),
+    ("B5b-03", B5B03_BASELINE_COMMIT, B5B03_SOURCE_DIGESTS, B5B03_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {
