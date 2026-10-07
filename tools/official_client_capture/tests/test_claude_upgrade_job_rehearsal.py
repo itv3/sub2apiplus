@@ -1,7 +1,7 @@
 """Claude 完整 Job 离线演练（Claude 升级控制面设计 B2-10）：共享收据模块按 ``--client claude`` 经适配器取 Claude 画像。
 
 不起 Docker、不联网、不读凭据：
-* 场景清单取 B2-01 冻结的真实 2.1.285 清单（12 个 Job、79 步，含断网容器里的合成 Job），Campaign 按 B2-06 的总计划形状
+* 场景清单取 B2-01 冻结的真实 2.1.285 清单（14 个 Job、112 步：主模型 12 个 Job 79 步，加 B2-07 补充项的两个非主模型能力 Job 33 步；含断网容器里的合成 Job），Campaign 按 B2-06 的总计划形状
   写在临时数据根 ``<数据根>/evidence/campaigns`` 下；
 * 数据根下的 ``tools`` 指向仓库的 ``tools``：宿主执行副本与受管树是同一份，「容器内」执行副本经 ``docker`` 替身在本机读同一
   路径（测试里容器坐标即宿主坐标）；
@@ -219,8 +219,8 @@ class ClaudeContractTests(ClaudeRehearsalFixture):
         contract = adapter.build_job_contract(manifest, scenario, None)
         self.assertIs(adapter.job_rehearsal_profile, claude_profile)
         self.assertEqual((contract["schema_version"], contract["client"]), (claude_profile.EXECUTION_CONTRACT_SCHEMA, "claude"))
-        self.assertEqual((contract["job_count"], contract["phase_counts"]), (12, {"official": 12}))
-        self.assertEqual(sum(contract["step_counts"].values()), 79)
+        self.assertEqual((contract["job_count"], contract["phase_counts"]), (14, {"official": 14}))
+        self.assertEqual(sum(contract["step_counts"].values()), 112)
         self.assertTrue(SYNTHETIC_JOBS <= set(contract["job_ids"]))
         self.assertEqual(contract["evidence_labels_sha256"], receipt._sha256_file(plan.evidence_labels_path(TARGET)))
         self.assertEqual(contract["official_identity_sha256"], receipt._fingerprint(manifest["official_identity"]))
@@ -303,7 +303,7 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
         self.assertEqual(facts["schema_version"], claude_profile.FACTS_SCHEMA)
         self.assertEqual(facts["summary"]["status"], "passed", facts["summary"])
         self.assertIs(facts["summary"]["live_requests_sent"], False)
-        self.assertEqual(facts["summary"]["job_count"], 12)
+        self.assertEqual(facts["summary"]["job_count"], 14)
         self.assertEqual(facts["summary"]["executed_job_ids"], sorted(facts["execution_contract"]["job_ids"]))
         self.assertEqual(set(facts["tool_trees"]), {"managed_host", "execution_host", "execution_container", "execution_synthetic_container"})
         self.assertEqual(facts["tool_identity"], {field: self.tool_identity[field] for field in claude_profile.TOOL_IDENTITY_FIELDS})
@@ -317,7 +317,7 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
             with self.subTest(job=job_id):
                 self.assertEqual(values, {"synthetic_container"} if job_id in SYNTHETIC_JOBS else {"capture_container"})
         step_probes = [call for call in self.docker_calls() if call[0] == "exec" and any("container_python_script" in item for item in call)]
-        self.assertEqual(len(step_probes), 79)
+        self.assertEqual(len(step_probes), 112)
         self.assertEqual({call[1] for call in step_probes}, {CAPTURE, SYNTHETIC})
         self.assertFalse([call for call in self.docker_calls() if call[0] not in {"exec", "inspect"}], "替身只收到 exec 与 inspect")
         self.assertEqual(sealed["schema_version"], claude_profile.RECEIPT_SCHEMA)
@@ -370,7 +370,7 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
             rerun = self.collect(campaign, "rerun-facts.json", previous_receipt="receipt.json", rerun_failed=True)
         self.assertEqual(rerun["summary"]["status"], "passed")
         self.assertEqual(set(rerun["summary"]["executed_job_ids"]), SYNTHETIC_JOBS)
-        self.assertEqual(len(rerun["summary"]["reused_job_ids"]), 9)
+        self.assertEqual(len(rerun["summary"]["reused_job_ids"]), 11)
         rerun_steps = [call for call in self.docker_calls()[before:] if any("container_python_script" in item for item in call)]
         self.assertEqual({call[1] for call in rerun_steps}, {SYNTHETIC})
         self.assertEqual(len(rerun_steps), sum(facts["execution_contract"]["step_counts"][job] for job in SYNTHETIC_JOBS))
@@ -428,7 +428,7 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
             code, out, err = main("collect", "--client", "claude", "--campaign-dir", str(campaign), "--evidence-root", root,
                                   "--output", "facts.json")
             self.assertEqual(code, 0, err)
-            self.assertEqual(json.loads(out)["job_count"], 12)
+            self.assertEqual(json.loads(out)["job_count"], 14)
             # 认错客户端：Codex 的 finalize 不封存 Claude facts，Codex 的 replay 不认 Claude 收据；报错带客户端标签。
             code, _out, err = main("finalize", "--evidence-root", root, "--facts", "facts.json", "--output", "wrong.json")
             self.assertEqual(code, 1)
