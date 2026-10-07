@@ -650,14 +650,17 @@ class TreeDigestTests(unittest.TestCase):
 class ClaudeStructureTests(unittest.TestCase):
     """Claude 的 pre-A3 与二进制探针：现在没有登记就如实记录，登记之后按同一规则核对。"""
 
-    def test_current_tree_claude_pre_a3_set_is_empty(self) -> None:
-        """B5a-04 起按客户端分组的表已在，Claude 集合在 B5a-05 登记之前为空：如实记录，不算已认证。"""
+    def test_current_tree_claude_pre_a3_set_is_registered(self) -> None:
+        """B5a-05 登记了 Claude 最小恢复演练四条链：真实树上按 AST 核对，四个场景入口都随树部署、都是登记的真实链。"""
 
         tool_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
         result = deploy.verify_claude_pre_a3_entries(tool_root)
-        self.assertEqual((result["status"], result["scenario_count"], result["real_chain_registration"]),
-                         ("not-registered", 0, []))
-        self.assertIn("集合为空", result["reason"])
+        chains = ["vc-chain.claude-reconcile", "vc-chain.claude-deadline", "vc-chain.claude-root-cause",
+                  "vc-chain.claude-tool-evolution"]
+        self.assertEqual((result["status"], result["scenario_count"], result["reason"]), ("verified", 4, None))
+        self.assertEqual([row["id"] for row in result["real_chain_registration"]], chains)
+        self.assertTrue(all(".tests.real_chains." in row["test"] for row in result["real_chain_registration"]),
+                        "四条都是 tests/real_chains 下的真实链入口")
 
     def test_registered_claude_table_is_checked_like_codex(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

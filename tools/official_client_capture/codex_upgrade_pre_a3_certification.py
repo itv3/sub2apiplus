@@ -387,11 +387,48 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "test_consumers_reject_unregistered_0154_formal_and_pass_legacy",
     ),
 )
-# B5a-04：Claude 的场景表与真实链登记，形状与 Codex 相同。最小恢复演练四条链（vc-chain.claude-reconcile 等，模块
-# tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain）由 B5a-05 登记；登记之前集合为空，
-# Claude 的规划、签发与核验一律拒绝（不签出零场景的认证）。场景名不得与 Codex 重名，也不得以客户端单元前缀开头。
-CLAUDE_REAL_CHAIN_IDS: tuple[str, ...] = ()
-CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = ()
+# B5a-04：Claude 的场景表与真实链登记，形状与 Codex 相同；集合为空时 Claude 的规划、签发与核验一律拒绝（不签出零场景的
+# 认证）。场景名不得与 Codex 重名，也不得以客户端单元前缀开头。
+# B5a-05：登记最小恢复演练四条链（全部是真实链，零请求、隔离副本树；Linux root 上在 unshare -m -n 命名空间里运行）。
+# 两张表必须是纯字面量：部署脚本 verify_claude_pre_a3_entries 只做 AST 静态求值，不导入本模块。依赖 B2-08 的步骤在链里
+# 是明确的失败占位（「等 B2-08」），B2-08 落地之前这四条不会通过、Claude 的 pre-A3 v3 也签不出来，这是有意的。
+CLAUDE_REAL_CHAIN_IDS: tuple[str, ...] = (
+    "vc-chain.claude-reconcile",
+    "vc-chain.claude-deadline",
+    "vc-chain.claude-root-cause",
+    "vc-chain.claude-tool-evolution",
+)
+CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "vc-chain.claude-reconcile",
+        "首批采集失败 → reconcile-attempt → 批准恢复预览 → resume 只重跑失败 Job；无预约时 reconcile-supervisor-run → N+1 重派",
+        "tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain",
+        "ClaudeControlChainTests",
+        "test_reconcile_preview_approve_resume_reruns_failed_jobs_only",
+    ),
+    (
+        "vc-chain.claude-deadline",
+        "阶段预算真实到期：运行中命令与看门狗按阶段截止停 → 两本账暂停 → deadline-extend 预览／批准、两本账之间强杀后补齐收敛"
+        " → 原 Campaign 续跑",
+        "tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain",
+        "ClaudeControlChainTests",
+        "test_deadline_pause_extension_sigkill_resumes_original_campaign",
+    ),
+    (
+        "vc-chain.claude-root-cause",
+        "同根因累计达冻结上限只暂停（不写终态）、门禁只挡该根因 → 修复收据放行 → 续跑",
+        "tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain",
+        "ClaudeControlChainTests",
+        "test_same_root_cause_limit_pauses_until_repair_receipt",
+    ),
+    (
+        "vc-chain.claude-tool-evolution",
+        "部署新工具 → 未登记即拒绝（零写入）→ 登记 → 有效身份更新 → Store finalizer 通过 → 旧收据按形成期重放仍通过",
+        "tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain",
+        "ClaudeControlChainTests",
+        "test_tool_evolution_registration_moves_effective_identity",
+    ),
+)
 # 按客户端分组的登记表（设计 B5a-04）。值引用上面的模块常量，部署脚本据此静态核对场景入口随树部署
 #（arm64_supervised_deploy.verify_claude_pre_a3_entries）。运行时一律经 scenarios_for／real_chain_ids_for 现取模块属性：
 # 这两张字典在导入时就绑定了元组对象，测试与历史回放对 SCENARIOS 等模块属性的替换不会改到它们。

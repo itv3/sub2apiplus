@@ -10,10 +10,15 @@
 
 基线提交读不到（浅克隆）或基线之后 Codex 场景表已变（同一输入不再成立）时跳过并写明原因。本模块读真实仓库的 git 历史，
 按 ``unit_records.GIT_READERS`` 登记。
+
+另核 B5a-05：认证模块相对 B5a-08 提交只填了 Claude 的两张登记表（真实链 ID 与场景表）。按 AST 逐个顶层语句对照——除这两张
+表的赋值以外，每个语句（Codex 场景表、全部函数与常量）与 B5a-08 提交逐字相同；注释改写不进 AST，不影响判定。B5a-08 的源码
+残差对照因本文件在它之后又改过而跳过，这一项接着守住 Codex 部分不变。
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 import tempfile
@@ -26,6 +31,10 @@ from tools.official_client_capture import codex_upgrade_pre_a3_certification as 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASELINE_COMMIT = "68745c9dd"
+# B5a-05 的对照基线：B5a-08 的提交（本分支历史上的认证模块最后一次由 B5a-08 修改）。
+B5A05_BASELINE_COMMIT = "c53571c7d"
+# B5a-05 只许改这两张表的赋值（Claude 的真实链登记与场景表）。
+B5A05_CLAUDE_TABLES = ("CLAUDE_REAL_CHAIN_IDS", "CLAUDE_SCENARIOS")
 STAGING_PARENT = Path("/root/docker/capture-cli/data/staging/pre-a3-scenarios")
 WORKDIR = Path("/root/docker/capture-cli/data")
 
@@ -73,6 +82,36 @@ class PreA3CodexParityTests(unittest.TestCase):
         unit_ids = [unit["unit_id"] for unit in new_plan["units"]]
         self.assertEqual(entry_gates.gate_literal_command("pre-a3", unit_ids), gates_before.GATE_COMMANDS["pre-a3"],
                          "门禁记录里的字面命令相同")
+
+    def test_b5a05_only_fills_the_claude_tables(self) -> None:
+        """B5a-05：除两张 Claude 登记表的赋值外，认证模块的每个顶层语句与 B5a-08 提交逐字相同（AST 级）。"""
+
+        relative = "tools/official_client_capture/codex_upgrade_pre_a3_certification.py"
+        try:
+            source = subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{B5A05_BASELINE_COMMIT}:{relative}"],
+                                    capture_output=True, check=True, stdin=subprocess.DEVNULL).stdout.decode("utf-8")
+        except (OSError, subprocess.CalledProcessError):
+            self.skipTest(f"读不到基线提交 {B5A05_BASELINE_COMMIT} 的认证模块（浅克隆或不在仓库内）")
+
+        def statements(text: str) -> tuple[list[str], dict[str, str]]:
+            """顶层语句的 AST 转储：两张 Claude 表单独取出，其余按原顺序。"""
+
+            others: list[str] = []
+            tables: dict[str, str] = {}
+            for node in ast.parse(text).body:
+                target = node.target if isinstance(node, ast.AnnAssign) else None
+                if isinstance(target, ast.Name) and target.id in B5A05_CLAUDE_TABLES:
+                    tables[target.id] = ast.dump(node)
+                else:
+                    others.append(ast.dump(node))
+            return others, tables
+
+        old_others, old_tables = statements(source)
+        new_others, new_tables = statements((REPO_ROOT / relative).read_text(encoding="utf-8"))
+        self.assertEqual(sorted(old_tables), sorted(B5A05_CLAUDE_TABLES))
+        self.assertEqual(sorted(new_tables), sorted(B5A05_CLAUDE_TABLES))
+        self.assertEqual(new_others, old_others, "两张 Claude 登记表以外的顶层语句与 B5a-08 提交逐字相同")
+        self.assertNotEqual(new_tables, old_tables, "B5a-05 填了两张 Claude 登记表")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
 """pre-A3 与发布认证按客户端分组（Claude 升级 B5a-04）。
 
 * 场景表按客户端：Codex 的场景表、单元 ID、命令与改造前相同（与改造前脚本逐字对照见 ``test_pre_a3_codex_parity``）；Claude
-  集合为空时规划、签发（含 ``issue --client claude``）、核验与串行认证一律拒绝；登记了 Claude 场景时单元 ID 带
-  ``pre-a3:claude:``、命令带 ``--client claude``，两客户端的单元在同一份运行清单里互不承接、互不算作全集之外；
+  集合为空时规划、签发（含 ``issue --client claude``）、核验与串行认证一律拒绝（B5a-05 登记四条链之后，用替身清空两张表
+  验证）；登记了 Claude 场景时单元 ID 带 ``pre-a3:claude:``、命令带 ``--client claude``，两客户端的单元在同一份运行清单里
+  互不承接、互不算作全集之外；B5a-05 登记的最小恢复演练四条链按真实链规划（超时 2400 秒、测试文件按模块路径）；
 * 策略认证对 Claude 按 v3 引擎算身份：兼容收据、激活认证与 Claude 部署收据合同，客户端混用即拒绝；
 * 从单元执行记录签发 Claude 的 pre-A3 v3（带 client）并核验、复用；发布认证 v2 的组装与核验；Claude 发布认证签发在核完
   pre-A3 之后因演练合同未落实而失败关闭，Claude 场景集合为空时更早被 pre-A3 拒绝；
@@ -45,11 +46,28 @@ STAGING_PARENT = Path("/root/docker/capture-cli/data/staging/pre-a3-scenarios")
 
 @contextlib.contextmanager
 def claude_registered():
-    """临时登记一条 Claude 替身链（B5a-05 之前 Claude 集合为空）。"""
+    """临时把 Claude 的登记换成一条替身链（与 B5a-05 登记的真实四条链无关，单元与记录都用替身）。"""
 
     with mock.patch.object(pre_a3, "CLAUDE_SCENARIOS", CLAUDE_FAKE), \
             mock.patch.object(pre_a3, "CLAUDE_REAL_CHAIN_IDS", (CLAUDE_FAKE_NAME,)):
         yield
+
+
+@contextlib.contextmanager
+def claude_unregistered():
+    """临时清空 Claude 的场景表与真实链登记（B5a-05 登记之前的形态）：验证零场景时一律拒绝的规则仍在。"""
+
+    with mock.patch.object(pre_a3, "CLAUDE_SCENARIOS", ()), mock.patch.object(pre_a3, "CLAUDE_REAL_CHAIN_IDS", ()):
+        yield
+
+
+# B5a-05 登记的 Claude 最小恢复演练四条链（场景 ID；模块与测试入口取登记表本身，不在这里写模块名）。
+CLAUDE_CHAIN_IDS = (
+    "vc-chain.claude-reconcile",
+    "vc-chain.claude-deadline",
+    "vc-chain.claude-root-cause",
+    "vc-chain.claude-tool-evolution",
+)
 
 
 def _claude_previous_policy(root: Path) -> Path:
@@ -114,8 +132,12 @@ class ScenarioTableTests(unittest.TestCase):
     def test_tables_group_by_client_and_read_current_attributes(self) -> None:
         self.assertIs(pre_a3.SCENARIOS_BY_CLIENT["codex"], pre_a3.SCENARIOS)
         self.assertIs(pre_a3.REAL_CHAIN_IDS_BY_CLIENT["codex"], pre_a3.REAL_CHAIN_IDS)
-        self.assertEqual((pre_a3.SCENARIOS_BY_CLIENT["claude"], pre_a3.REAL_CHAIN_IDS_BY_CLIENT["claude"]), ((), ()),
-                         "Claude 的四条链由 B5a-05 登记，此前为空")
+        self.assertIs(pre_a3.SCENARIOS_BY_CLIENT["claude"], pre_a3.CLAUDE_SCENARIOS)
+        self.assertIs(pre_a3.REAL_CHAIN_IDS_BY_CLIENT["claude"], pre_a3.CLAUDE_REAL_CHAIN_IDS)
+        self.assertEqual(pre_a3.CLAUDE_REAL_CHAIN_IDS, CLAUDE_CHAIN_IDS, "B5a-05 登记最小恢复演练四条链")
+        self.assertEqual([row[0] for row in pre_a3.CLAUDE_SCENARIOS], list(CLAUDE_CHAIN_IDS), "四条都是真实链，场景表与登记一一对应")
+        self.assertEqual(len({(row[2], row[3]) for row in pre_a3.CLAUDE_SCENARIOS}), 1, "四条链在同一个真实链模块的同一个类里")
+        self.assertTrue(all(".real_chains." in row[2] and row[4].startswith("test_") for row in pre_a3.CLAUDE_SCENARIOS))
         self.assertEqual(set(pre_a3.SCENARIOS_BY_CLIENT), set(upgrade_client_adapter.CLIENTS))
         self.assertIs(pre_a3.scenarios_for(), pre_a3.SCENARIOS)
         self.assertEqual(pre_a3.scenario_names(), pre_a3.scenario_names("codex"))
@@ -128,42 +150,62 @@ class ScenarioTableTests(unittest.TestCase):
             pre_a3.scenarios_for("kilo")
 
     def test_empty_claude_set_refuses_plan_issue_verify_and_serial_run(self) -> None:
-        with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
-            pre_a3.plan_scenario_commands(STAGING_PARENT, client="claude")
-        self.assertEqual(pre_a3.real_chain_registration("claude"), [])
-        # 签发在读任何绑定之前拒绝：给不存在的路径也只报集合为空。
-        with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
-            pre_a3.issue_certification_from_records(
-                STAGING_PARENT, unit_manifest=Path("/nonexistent/manifest.json"), record_store=Path("/nonexistent/store"),
-                deployment_receipt=Path("/nonexistent/deploy.json"), policy_activation=Path("/nonexistent/activation.json"),
-                client="claude")
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "pre-a3-claude.json"
-            stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
-                code = pre_a3.main(["issue", "--client", "claude", "--staging-root", str(STAGING_PARENT),
-                                    "--unit-manifest", "/nonexistent/m.json", "--record-store", "/nonexistent/s",
-                                    "--deployment-receipt", "/nonexistent/d.json", "--policy-activation", "/nonexistent/a.json",
-                                    "--output", str(output)])
-            self.assertEqual(code, 2)
-            self.assertIn("场景集合为空", stderr.getvalue())
-            self.assertFalse(output.exists() or list(Path(directory).glob("*.failed-*")), "拒绝签发不写任何认证文件")
-            # 核验：一份形状合法的 v3 认证在集合为空时同样无效（逐条重验会得到空报告，不能当成通过）。
-            identity = {name: "0" * 64 for name in policy_certification.IDENTITY_FIELDS}
-            payload = {"schema_version": pre_a3.SCHEMA_VERSION_V3, "status": "passed", "client": "claude", "identity": identity,
-                       "network_attempts": 0, "live_request_count": 0, "scenarios": [], "scenario_count": 0}
-            payload["receipt_sha256"] = pre_a3._fingerprint(payload, "claude")
-            path = policy_tests._write_json(Path(directory) / "v3.json", payload)
+        with claude_unregistered():
             with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
-                pre_a3.verify_certification(path, expected_identity=identity, client="claude")
-            with self.assertRaisesRegex(pre_a3.CertificationError, "schema 非法"):
-                pre_a3.verify_certification(path, expected_identity=identity)
-        with self.assertRaisesRegex(pre_a3.CertificationError, "没有串行认证合同"):
-            pre_a3.run_certification(STAGING_PARENT, deployment_receipt=Path("/x"), policy_activation=Path("/y"), client="claude")
-        with contextlib.redirect_stderr(io.StringIO()) as stderr, contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(pre_a3.main(["plan", "--client", "claude", "--staging-root", str(STAGING_PARENT),
-                                          "--output", "/nonexistent/units.json"]), 2)
-        self.assertIn("E2-03 旧路径", stderr.getvalue())
+                pre_a3.plan_scenario_commands(STAGING_PARENT, client="claude")
+            self.assertEqual(pre_a3.real_chain_registration("claude"), [])
+            # 签发在读任何绑定之前拒绝：给不存在的路径也只报集合为空。
+            with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
+                pre_a3.issue_certification_from_records(
+                    STAGING_PARENT, unit_manifest=Path("/nonexistent/manifest.json"), record_store=Path("/nonexistent/store"),
+                    deployment_receipt=Path("/nonexistent/deploy.json"), policy_activation=Path("/nonexistent/activation.json"),
+                    client="claude")
+            with tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "pre-a3-claude.json"
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                    code = pre_a3.main(["issue", "--client", "claude", "--staging-root", str(STAGING_PARENT),
+                                        "--unit-manifest", "/nonexistent/m.json", "--record-store", "/nonexistent/s",
+                                        "--deployment-receipt", "/nonexistent/d.json", "--policy-activation", "/nonexistent/a.json",
+                                        "--output", str(output)])
+                self.assertEqual(code, 2)
+                self.assertIn("场景集合为空", stderr.getvalue())
+                self.assertFalse(output.exists() or list(Path(directory).glob("*.failed-*")), "拒绝签发不写任何认证文件")
+                # 核验：一份形状合法的 v3 认证在集合为空时同样无效（逐条重验会得到空报告，不能当成通过）。
+                identity = {name: "0" * 64 for name in policy_certification.IDENTITY_FIELDS}
+                payload = {"schema_version": pre_a3.SCHEMA_VERSION_V3, "status": "passed", "client": "claude", "identity": identity,
+                           "network_attempts": 0, "live_request_count": 0, "scenarios": [], "scenario_count": 0}
+                payload["receipt_sha256"] = pre_a3._fingerprint(payload, "claude")
+                path = policy_tests._write_json(Path(directory) / "v3.json", payload)
+                with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
+                    pre_a3.verify_certification(path, expected_identity=identity, client="claude")
+                with self.assertRaisesRegex(pre_a3.CertificationError, "schema 非法"):
+                    pre_a3.verify_certification(path, expected_identity=identity)
+            with self.assertRaisesRegex(pre_a3.CertificationError, "没有串行认证合同"):
+                pre_a3.run_certification(STAGING_PARENT, deployment_receipt=Path("/x"), policy_activation=Path("/y"), client="claude")
+            with contextlib.redirect_stderr(io.StringIO()) as stderr, contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(pre_a3.main(["plan", "--client", "claude", "--staging-root", str(STAGING_PARENT),
+                                              "--output", "/nonexistent/units.json"]), 2)
+            self.assertIn("E2-03 旧路径", stderr.getvalue())
+
+    def test_registered_claude_chains_plan_as_real_chain_units(self) -> None:
+        """B5a-05：真实登记的四条链规划成 Claude 场景单元——前缀、命令、真实链超时与测试文件；Codex 清单不受影响。"""
+
+        codex_before = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=Path("/data"))
+        plan = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=Path("/data"), client="claude")
+        self.assertEqual(pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=Path("/data"), client="codex"),
+                         codex_before)
+        self.assertEqual([unit["unit_id"] for unit in plan["units"]], [f"pre-a3:claude:{name}" for name in CLAUDE_CHAIN_IDS])
+        rows = {row[0]: row for row in pre_a3.CLAUDE_SCENARIOS}
+        for unit, name in zip(plan["units"], CLAUDE_CHAIN_IDS, strict=True):
+            with self.subTest(chain=name):
+                self.assertEqual(unit["argv"][3:8], ["run-scenario", "--client", "claude", "--name", name])
+                self.assertEqual(unit["timeout_seconds"], pre_a3.REAL_CHAIN_TIMEOUT_SECONDS, "真实链的单元超时")
+                self.assertEqual(unit["scenario_test_file"], rows[name][2].replace(".", "/") + ".py")
+                self.assertEqual(pre_a3.scenario_test_module(name, "claude"), rows[name][2])
+        self.assertEqual(pre_a3.real_chain_registration("claude"),
+                         [{"id": name, "test": f"{rows[name][2]}:{rows[name][3]}.{rows[name][4]}"} for name in CLAUDE_CHAIN_IDS])
+        self.assertEqual(pre_a3.require_scenarios("claude"), list(CLAUDE_CHAIN_IDS), "Claude 没有进程内场景，全集就是四条链")
 
     def test_claude_units_carry_their_prefix_and_client_argument(self) -> None:
         codex_before = pre_a3.plan_scenario_commands(STAGING_PARENT, python="python3", cwd=Path("/data"))
@@ -375,24 +417,28 @@ class ClaudeRecordCertificationTests(_IdentityMemo):
                 forged_path = policy_tests._write_json(root / "release-forged.json", forged)
                 with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "不属于客户端|自摘要"):
                     certify_release.verify(forged_path, client="claude")
-            # Claude 集合为空（本批的现状）：同一份 v3 认证不再有效，发布认证签发在 pre-A3 一步即拒绝。
-            with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
-                pre_a3.verify_certification(path, client="claude")
-            with mock.patch.object(certify_release, "_require_release_platform"):
-                with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "场景集合为空"):
-                    certify_release.build_certification(
-                        deployment_receipt=deployment, pre_a3_certification=path, policy_activation=activation,
-                        job_rehearsal_root=root, job_rehearsal_receipt=Path("job.json"), atomic_rehearsal_root=root,
-                        atomic_rehearsal_receipt=Path("atomic.json"), client="claude")
-                with contextlib.redirect_stderr(io.StringIO()) as stderr:
-                    code = certify_release.main(["issue", "--client", "claude", "--deployment-receipt", str(deployment),
-                                                 "--pre-a3-certification", str(path), "--policy-activation", str(activation),
-                                                 "--job-rehearsal-root", str(root), "--job-rehearsal-receipt", "job.json",
-                                                 "--atomic-rehearsal-root", str(root), "--atomic-rehearsal-receipt", "atomic.json",
-                                                 "--output", str(root / "release-issued.json")])
+            # Claude 集合为空（B5a-05 登记之前的形态，用替身清空）：同一份 v3 认证不再有效，发布认证签发在 pre-A3 一步即拒绝。
+            with claude_unregistered():
+                with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
+                    pre_a3.verify_certification(path, client="claude")
+                with mock.patch.object(certify_release, "_require_release_platform"):
+                    with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "场景集合为空"):
+                        certify_release.build_certification(
+                            deployment_receipt=deployment, pre_a3_certification=path, policy_activation=activation,
+                            job_rehearsal_root=root, job_rehearsal_receipt=Path("job.json"), atomic_rehearsal_root=root,
+                            atomic_rehearsal_receipt=Path("atomic.json"), client="claude")
+                    with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                        code = certify_release.main(["issue", "--client", "claude", "--deployment-receipt", str(deployment),
+                                                     "--pre-a3-certification", str(path), "--policy-activation", str(activation),
+                                                     "--job-rehearsal-root", str(root), "--job-rehearsal-receipt", "job.json",
+                                                     "--atomic-rehearsal-root", str(root), "--atomic-rehearsal-receipt",
+                                                     "atomic.json", "--output", str(root / "release-issued.json")])
             self.assertEqual(code, 2)
             self.assertIn("场景集合为空", stderr.getvalue())
             self.assertFalse((root / "release-issued.json").exists())
+            # 真实登记（B5a-05 的四条链）下，替身链签出的 v3 认证与当前登记集合不一致：链覆盖校验拒绝，不当成已认证。
+            with self.assertRaisesRegex(pre_a3.CertificationError, "真实链登记集合与当前发布包不一致"):
+                pre_a3.real_chain_coverage(receipt, client="claude")
 
     @staticmethod
     def _compose_release(root: Path, identity: dict, deployment: Path, pre_a3_path: Path, receipt: dict) -> dict:
