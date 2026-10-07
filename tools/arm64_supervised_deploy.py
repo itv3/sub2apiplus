@@ -326,7 +326,7 @@ from urllib.parse import urlsplit
 # official-client-managed-deploy/v1（身份由 v3 引擎按 Claude 策略计算）。受管树只有 codex_upgrade_wire_transition.py 的
 # main 改经适配器取 _tool_identity（control 层，Codex 取值不变）；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "9a4b077e261f30dd0ab0cad72b597c3099edafd33c548a9144c442f53faa6a0d"
+    "672cb15f1e796f40a7e2dd43ef60cb296199422514315009303b6f16fee8d5b7"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
