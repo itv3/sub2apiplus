@@ -30,7 +30,7 @@ import signal
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
@@ -170,7 +170,11 @@ class _ClassifyCase(unittest.TestCase):
         candidates: bytes | None = None,
         relay_overrides: dict[str, Any] | None = None,
         control_receipts: dict[str, Any] | None = None,
+        wire_files: Mapping[str, Sequence[tuple[str, bytes, str, int | None]]] | None = None,
     ) -> Path:
+        """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
+        目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。"""
+
         scenarios = _scenarios(target)
         scratch = self.root / f"store-build-{campaign_id}"
         scratch.mkdir()
@@ -253,8 +257,28 @@ class _ClassifyCase(unittest.TestCase):
                     "status": "covered" if covering_probes else "gap",
                 }
             )
+        evidence_dir = campaign / "official" / "attempts" / "attempt-fixture" / "evidence"
+        wire_bindings: dict[str, list[dict[str, Any]]] = {}
+        wire_artifacts: list[dict[str, Any]] = []
+        for probe, files in sorted((wire_files or {}).items()):
+            for relative, data, kind, ordinal in files:
+                path = _write_bytes(evidence_dir / probe / relative, data)
+                wire_bindings.setdefault(probe, []).append(_binding(path, self.data))
+                artifact = {
+                    "job_id": "fixture", "probe_id": probe, "path": path.relative_to(self.data).as_posix(), "kind": kind,
+                    "parser": "opaque_bound_source", "labels": {"probe": probe}, "scenario_ids": [],
+                }
+                if ordinal is not None:
+                    artifact["connection"] = {"ordinal": ordinal, "connection_id": ordinal}
+                wire_artifacts.append(artifact)
         static = {
-            "capture_manifest": _write_json(drafts / "capture-manifest.json", {"schema_version": evidence.CAPTURE_MANIFEST_SCHEMA, "artifacts": []}),
+            "capture_manifest": _write_json(
+                drafts / "capture-manifest.json",
+                {
+                    "schema_version": evidence.CAPTURE_MANIFEST_SCHEMA, "attempt": {"attempt_id": "attempt-fixture"},
+                    "artifacts": wire_artifacts, "label_mismatches": [],
+                },
+            ),
             "capture_index": _write_json(drafts / "capture-index.json", {"schema_version": evidence.CAPTURE_INDEX_SCHEMA, "result": "passed"}),
             "discovery_inventory": discovery_path,
             "cross_source_matrix": _write_json(
@@ -298,7 +322,7 @@ class _ClassifyCase(unittest.TestCase):
                 {
                     "evidence_id": f"EVIDENCE-{probe}",
                     "source_ids": probe_scenarios[probe],
-                    "evidence_refs": [_binding(relays[probe], self.data)],
+                    "evidence_refs": [_binding(relays[probe], self.data), *wire_bindings.get(probe, [])],
                     "applicability": sorted(
                         [f"platform={derived['platform']}", f"privacy={derived['privacy_mode']}", f"probe={probe}", "response_mode=live"]
                     ),

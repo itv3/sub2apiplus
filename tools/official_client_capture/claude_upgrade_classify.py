@@ -85,8 +85,8 @@ scenario-only 组闭合、结果不得 ``blocked``、通道必须含 M 且含 R 
 
 五、幂等与崩溃收敛
 ==================
-* 运行在 Campaign 锁内，并要求没有未释放的执行租约（与 seal 同口径）；不取得 ``CampaignLease``，被强杀后不留需要对账的
-  过期租约。revision 与批准目录都先写进同级临时目录、写完再整体改名发布，半成品只会是被下次调用清掉的临时目录。
+* 运行在 Campaign 锁内，并要求 Campaign 静止（B2-08 的静止判据，与 seal 同一函数：停线租约视为静止，仍在执行或已过期的
+  active 租约拒绝）；不取得 ``CampaignLease``，被强杀后不留需要对账的过期租约。revision 与批准目录都先写进同级临时目录、写完再整体改名发布，半成品只会是被下次调用清掉的临时目录。
 * Store 写入经 ``claude_upgrade_seal._StoreSession``（进程内 CLI、对象 ``--allow-existing``、事实带
   ``fact_idempotency_key(逻辑动作, payload 摘要, 事实种类)``、父监督器上下文里带 ``--producer-run``）；事实时刻取被批准
   revision 的创建时刻（冻结值）。批准在任一步被强杀后，重跑同一批准命令逐步复用、事实数不增；已批准后再批准同一
@@ -332,12 +332,8 @@ def classify_command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
     campaign_dir = campaign_dir.resolve(strict=True)
     orchestrator._require_formal_campaign(campaign_dir)
     with orchestrator._campaign_lock(campaign_dir):
-        lease = orchestrator._read_campaign_lease(campaign_dir)
-        if lease is not None and lease.get("state") != "released":
-            raise ConfigurationError(
-                f"Campaign 有未释放的执行租约（state={lease.get('state')}）：classify 要求 Campaign 静止；"
-                "停线或过期租约先按恢复协议对账（B2-08）。"
-            )
+        # B2-08 定的静止判据（与 seal 同一函数）：停线租约（执行者已退出）视为静止，仍在执行或已过期的 active 租约拒绝。
+        orchestrator._require_quiescent_campaign_lease(campaign_dir, action="classify")
         manifest = orchestrator._require_formal_campaign(campaign_dir)
         if (campaign_dir / _capture().CONTAMINATION_MARKER).exists():
             raise ConfigurationError("Campaign 已记录环境污染：先走环境隔离与恢复（B2-08），禁止分类。")

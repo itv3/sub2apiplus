@@ -1,0 +1,210 @@
+{
+  "schema_version": "claude-code-wire-projection-policy/v1",
+  "version": "2.1.226",
+  "models": {
+    "ordered": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "title_model": "claude-haiku-4-5-20251001",
+    "fallback_model": "claude-haiku-4-5",
+    "legacy_retry_fallback": [
+      "claude-sonnet-5"
+    ],
+    "server_fallbacks": [
+      {
+        "model": "claude-fable-5",
+        "fallback_model": "claude-opus-4-8",
+        "probe": "v4-bash"
+      }
+    ],
+    "alias_policy": "explicit-only",
+    "unknown_model_policy": "deny"
+  },
+  "efforts": [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max"
+  ],
+  "attestation": {
+    "cch": {
+      "algorithm": "crypto-random-20-bit-nonce",
+      "hex_length": 5,
+      "lifecycle": "per-logical-request-reused-by-transport-retry"
+    },
+    "version_fingerprint": {
+      "algorithm": "sha256-salt-message-index-v1",
+      "hex_length": 3,
+      "message_indexes": [
+        4,
+        7,
+        20
+      ],
+      "salt": "59cf53e54c78"
+    }
+  },
+  "selectors": {
+    "system_block_count": 4,
+    "background_request_count": 4,
+    "mcp_deferred_tool_count": 33,
+    "background_tool_count": 12,
+    "advisor_tool_type": "advisor_20260301"
+  },
+  "tls": {
+    "cipher_suites": [
+      4865,
+      4866,
+      4867,
+      49195,
+      49199,
+      49196,
+      49200,
+      52393,
+      52392,
+      49161,
+      49171,
+      49162,
+      49172,
+      156,
+      157,
+      47,
+      53
+    ],
+    "supported_groups": [
+      29,
+      23,
+      24
+    ],
+    "point_formats": [
+      0
+    ],
+    "signature_algorithms": [
+      1027,
+      2052,
+      1025,
+      1283,
+      2053,
+      1281,
+      2054,
+      1537,
+      513
+    ],
+    "supported_versions": [
+      772,
+      771
+    ],
+    "key_share_groups": [
+      29
+    ],
+    "psk_modes": [
+      1
+    ],
+    "with_alpn_extensions": [
+      0,
+      23,
+      65281,
+      10,
+      11,
+      35,
+      16,
+      5,
+      13,
+      18,
+      51,
+      45,
+      43,
+      21
+    ],
+    "without_alpn_extensions": [
+      0,
+      23,
+      65281,
+      10,
+      11,
+      35,
+      13,
+      51,
+      45,
+      43
+    ]
+  },
+  "implementation": {
+    "identity": {
+      "agent_id_pattern": "^[0-9a-f]{17}$",
+      "device_id_algorithm": "sha256-account-scope-ingress-binding-v1",
+      "metadata_order": [
+        "extra_metadata",
+        "device_id",
+        "account_uuid",
+        "session_id"
+      ],
+      "session_sources": [
+        "official-consistent",
+        "planner-derived"
+      ]
+    },
+    "headers": {
+      "conditional_order": [
+        "x-anthropic-additional-protection",
+        "x-app",
+        "x-claude-remote-container-id",
+        "x-claude-remote-session-id",
+        "x-client-app",
+        "x-claude-code-agent-id",
+        "x-claude-code-parent-agent-id",
+        "x-cc-fallback-latched-by",
+        "x-client-request-id",
+        "x-is-refusal-fallback"
+      ],
+      "custom_insert_after": "X-Claude-Code-Session-Id",
+      "protected_names": [
+        "accept",
+        "authorization",
+        "connection",
+        "content-encoding",
+        "content-length",
+        "content-type",
+        "host",
+        "user-agent",
+        "x-claude-code-session-id",
+        "x-cc-fallback-latched-by",
+        "x-client-request-id",
+        "x-is-refusal-fallback"
+      ]
+    },
+    "retry": {
+      "default_base_ms": [
+        500,
+        1000
+      ],
+      "default_jitter_max_ms": 250,
+      "default_max_retries": 2,
+      "http_date_policy": "default-backoff",
+      "non_retryable_statuses": [
+        400,
+        403
+      ],
+      "non_stream_timeout_seconds": 300,
+      "retry_after_seconds_jitter_max_ms": 100,
+      "retry_count_header": "0",
+      "retryable_statuses": [
+        401,
+        408,
+        409,
+        429,
+        500,
+        502,
+        503,
+        529
+      ],
+      "stream_timeout_seconds": 600
+    }
+  },
+  "thinking_display_values": [
+    "summarized",
+    "omitted"
+  ]
+}

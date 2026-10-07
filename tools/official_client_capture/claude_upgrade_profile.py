@@ -1,4 +1,4 @@
-"""Claude VC-3 画像 producer（Claude 升级控制面设计 B3-03）：``prepare-profile`` 与 ``stage-profile`` 的控制流程。
+"""Claude VC-3 画像 producer（Claude 升级控制面设计 B3-03 及其补充项）：``prepare-profile`` 与 ``stage-profile`` 的控制流程。
 
 VC-3 在 VC-1／VC-2 的同一个受管 Store 里继续（「承接原 Store」），不像历史聚合入口 ``claude_fw_f_profile.py`` 那样另建
 Store。全程离线、零请求，不改 Active／Rollback、生产 selector 与仓库里的生产 Catalog（指南 §4.3：暂存 Release／Catalog
@@ -9,31 +9,35 @@ Store。全程离线、零请求，不改 Active／Rollback、生产 selector �
 * ``prepare-profile``——目标画像派生与 EvidenceApprovalFact：
 
   - **机器草案**（``--active-release-catalog`` + ``--active-profile``）：在 ``profile/prepare/draft/rev-NNNN/`` 写只写一次的
-    revision，含四个文件与收据 ``draft.json``：``profile-policy.json``（阶段专用 Profile policy，由输入派生、只读）、
+    revision，含五个文件与收据 ``draft.json``：``profile-policy.json``（阶段专用 Profile policy，由输入派生、只读）、
     ``rule-patches.json``（受影响规则的画像补丁，审核人逐条填）、``model-capability-patch.json``（已批准的模型能力差异，
     可为空）、``joint-inputs.json``（联合制品里无法由输入推出的事实：生产入口与出站清单、目标处置、支持范围、边界断言、
-    Persona 派生、兼容边界与部署计划；能推出的部分预填）。补丁一律为空、联合输入只预填可推出的部分，门禁因此 blocked。
-  - **修订**（``--from-revision`` + ``--revision-input``）：审核人把四个文件复制出去处置后整目录交回，按字节写成新 revision；
+    Persona 派生、兼容边界与部署计划；能推出的部分预填）、``wire-projection-policy.json``（Wire 投影策略，取 Active
+    版本的那一份、只换版本号，见 ``claude_upgrade_release``）。补丁一律为空、联合输入只预填可推出的部分，门禁因此 blocked。
+  - **修订**（``--from-revision`` + ``--revision-input``）：审核人把五个文件复制出去处置后整目录交回，按字节写成新 revision；
     同内容重跑复用，父 revision 的输入漂移即拒绝。
   - **批准**（``--approve-revision`` + ``--approve-review-sha256`` + ``--approved-by``）：核对 revision 未被改动、输入未漂移、
     门禁 closed、审核摘要一致后，确保原 Store 有 ``evidence_approved``（v3：同时引用原 ``evidence_recorded``、未改写的
     EvidencePackage v3 与同一 Campaign 的 ``rule_classification_recorded``）——第一次准备批准时签发，Store 检查点到
     ``official_sealed``；它批准的是 VC-1 证据与 VC-2 分类的组合，与画像 revision 无关，之后再批准新的准备 revision 时沿用。
-    再写 ``profile/prepare/approved/<rev>/``（四个批准文件、Active 副本、目标画像与派生收据）与
-    ``profile/prepare/results/<rev>.json``。
+    再写 ``profile/prepare/approved/<rev>/``（五个批准文件、Active 副本、目标画像与派生收据、模型能力目录、目标 Wire 与
+    Release 条目）与 ``profile/prepare/results/<rev>.json``。
   - 指南 §4.3「批准前只新建 draft revision」：这里的「批准」指 ProfileApprovalFact。准备批准之后、``stage-profile`` 批准之前，
     审核人仍可继续起草、修订并批准新的准备 revision，``stage-profile`` 一律采用**最新**批准的一份；ProfileApprovalFact 之后
     起草案、批准新 revision 都拒绝（批准后变化须建立后继 Campaign，§4.3.3）。
 * ``stage-profile``——联合制品与 ProfileApprovalFact：
 
   - **预览**（只给 ``--campaign-dir``）：从最新批准的准备包确定性构造联合制品——PersonaDescriptor、ProfileSchema、Snapshot、
-    ReleaseBundle、ReleaseArtifact、入口与出站的 Observation／Inventory、边界断言、SupportEnvelope、PersonaDerivation、
-    CompatibilityBoundary、ScenarioPlan、DeploymentPlan——按 Store 的内容寻址算法预先算出引用，写
+    ReleaseBundle（document 绑定 Wire、模型能力目录与 Release 的摘要）、ReleaseArtifact、ModelCapabilityCatalog、入口与出站的
+    Observation／Inventory、边界断言、SupportEnvelope、PersonaDerivation、CompatibilityBoundary、ScenarioPlan、
+    DeploymentPlan 共 17 个对象——按 Store 的内容寻址算法预先算出引用，写
     ``profile/stage/<代号>/joint-manifest.json`` 与 ``stage-preview.json``，给出联合摘要 ``joint_sha256``（退出码 2）。
   - **批准**（``--approve-joint-sha256`` + ``--approved-by``）：经 ``official_client_control`` CLI 以 ``artifact-seal
     --allow-existing`` 依依赖顺序封存全部联合制品，再 ``profile-approve`` 追加 ``profile_approved``（绑定联合引用、目标
     规则全集与入口／出站目标处置，``approval_purpose`` 取 Campaign 用途），Store 检查点到 ``profile_approved``；随后写
-    阶段结果 ``profile/result.json`` 与 VC-3 checkpoint（执行项为空、复用项为 ``inherited_rules``、零请求、零扫描字节）。
+    暂存 Release ``profile/release/``（布局镜像仓库 catalogdata，见 ``claude_upgrade_release``）、阶段结果
+    ``profile/result.json``（绑定暂存 Release 收据）与 VC-3 checkpoint（执行项为空、复用项为 ``inherited_rules``、零请求、
+    零扫描字节）。
 
 二、输入
 ========
@@ -45,21 +49,27 @@ Store。全程离线、零请求，不改 Active／Rollback、生产 selector �
   ``inputs.active_release_catalog``／``inputs.active_profile`` 的冻结副本，没有时取命令行给出的 Campaign 内文件——Release
   目录 ``official-egress-claude-release-catalog/v1`` 的 ``production_active`` 选择器指向的 Release，其画像摘要必须等于给出
   的画像文件。两者的绑定写进 Profile policy，后续每次调用逐字重核。
+* Wire 投影（B3-03 补充项）：VC-1 封存的 capture manifest、CaptureIndex 与 EvidencePackage 外部绑定（``claude_upgrade_release.
+  load_release_evidence``），受管树里 Active 版本的 Wire 投影策略 ``claude_upgrade_wire_projection_<版本>.json``（没有即拒绝；
+  绑定写进 Profile policy），VC-2 批准的目标规则清单副本摘要与 Store 原子断言台账按 ``owner_kind`` 的计数。
 
 三、目标画像派生与 ``profile_diff_paths`` 约束（指南 §4.3.1）
 =============================================================
-``target = active + 版本身份替换 + rule_patches[affected_rules] + 已批准模型能力补丁``：
+``target = active + 版本身份替换 + 模型能力目录派生的 identity + rule_patches[affected_rules] + 已批准模型能力补丁``：
 
 * **版本身份替换**只做精确值替换：Active 的版本、平台与二进制摘要（取自规则适用条件里唯一的 ``binary_sha256=``），以及
   ``version=``／``platform=``／``binary_sha256=`` 三种条件串，替换成 Campaign 的目标版本、平台与官方二进制摘要；证据路径与
   说明文字不做子串替换。替换落点即 ``version_identity_paths``。
 * **规则补丁**：每条受影响规则至少一个操作（``add``／``remove``／``replace``），路径必须落在 VC-2 ``profile-patches.json``
   为该规则登记的 ``profile_paths`` 之内；不得触碰继承规则的画像条目、不得与版本身份落点相同、不同 owner 的操作不得重叠。
+* **模型能力目录派生**（B3-03 补充项）：按批准的 Wire 投影策略从 VC-1 证据投影出模型能力目录，画像 ``identity`` 的
+  ``supported_models``、``model_alias_policy``、``unknown_model_policy``、``model_capability_catalog_sha256`` 随目录派生，
+  落点即 ``model_identity_paths``；补丁不得再碰这四个落点。
 * **模型能力补丁**只允许落在 ``MODEL_CAPABILITY_PATHS``（模型闭集、别名与未知模型策略、能力目录摘要、模型特有的
-  ``fallbacks`` 字段）之内。
+  ``fallbacks`` 字段）之内；投影成功时实际只剩 ``fallbacks`` 的两个落点可改。
 * 路径语法：JSON Pointer（``~0``／``~1`` 转义）；对象数组若有唯一键字段（``KEY_FIELDS`` 按序取第一个），段写成
   ``<字段>=<值>``，例如 ``/rules/spec_id=SPEC-BODY-001/title``。
-* 复算：``profile_diff_paths = diff(active, target)``，每条差异都必须落在版本身份落点或某个补丁操作的路径之内（或是其
+* 复算：``profile_diff_paths = diff(active, target)``，每条差异都必须落在版本身份落点、模型身份落点或某个补丁操作的路径之内（或是其
   结构上级，例如键控列表的增删），每个补丁操作都必须产生差异；目标画像的规则全集必须等于 VC-2 目标规则，严格端点与
   ``feature_matrix`` 不得再引用目标规则之外的 SPEC。``profile_diff_paths`` 写进派生收据，批准后随准备包冻结。
 
@@ -73,7 +83,7 @@ SupportEnvelope 只覆盖 ``migrated_strict`` 入口、DeploymentPlan 的 Active
 
 五、幂等与崩溃收敛
 ==================
-运行在 Campaign 锁内并要求没有未释放的执行租约（与 seal、classify 同口径）。revision、准备包与暂存代号目录都先写
+运行在 Campaign 锁内并要求 Campaign 静止（B2-08 的静止判据，与 seal、classify 同一函数：停线租约视为静止）。revision、准备包与暂存代号目录都先写
 同级临时目录再整体改名发布，准备结果与阶段结果只写一次。Store 写入经 ``claude_upgrade_seal._StoreSession``：对象
 ``--allow-existing``，事实带 ``fact_idempotency_key``（逻辑动作、payload 摘要、事实种类），父监督器上下文里带
 ``--producer-run``；两条事实的时刻都取冻结值（第一次被批准的 revision 的创建时刻、联合清单的生成时刻），任一步被强杀后
@@ -84,9 +94,10 @@ SupportEnvelope 只覆盖 ``migrated_strict`` 入口、DeploymentPlan 的 Active
 
 六、边界与已知缺口
 ==================
-* 不产出 Wire 与 ModelCapabilityCatalog：新版本的 Wire 需要按新证据布局投影目标请求，``generate_claude_fw_g_profile.py`` 的
-  Wire／模型目录构造仍绑定 2.1.226 的 FW-F attempt 布局与 v2 generation policy（含后续阶段身份，指南 §4.3.1 不许复制成
-  新 Campaign 的 VC-3 policy），接入前要先拆分策略 Schema。暂存 Catalog 的生成在适配器 ``catalog_stage_profile``（B5b-01）。
+* Wire 与模型能力目录（B3-03 补充项）：投影工具 ``tools/generate_claude_fw_g_profile.py`` 拆出了版本专用的 Wire 投影策略，
+  VC-1 布局的证据来源与装配在 ``claude_upgrade_release``。VC-1 现行场景清单只用主模型取证，非主模型（``<模型>-<probe>``）
+  没有证据：投影策略登记多个模型时投影失败关闭，审核人只能先把模型闭集收到主模型（画像 ``supported_models`` 随之派生），
+  或等 VC-1 补模型能力取证作业。
 * 生产入口清单、出站处置清单的现状没有 VC-1 生产者（B2-07 补充项），这里由审核人在 ``joint-inputs.json`` 提供，按 Store
   合同与上面的门禁核对。
 * 留给 B3-01：``_stage_path``／``_load_stage_result`` 的 ``stage-profile`` 分支、VC-3 阶段重派证明、计时账本事件。批次动作即
@@ -103,6 +114,7 @@ import copy
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -112,6 +124,7 @@ if __package__ in {None, ""}:
 
 from tools.official_client_capture import claude_upgrade_classify as classify
 from tools.official_client_capture import claude_upgrade_evidence
+from tools.official_client_capture import claude_upgrade_release as release
 from tools.official_client_capture import claude_upgrade_seal
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import claude_upgrade_vc
@@ -149,19 +162,23 @@ DRAFT_TEMPORARY_PREFIX = ".tmp-rev-"
 PREPARED_TEMPORARY_PREFIX = ".tmp-prepared-"
 STAGE_TEMPORARY_PREFIX = ".tmp-stage-"
 
-# 准备阶段 revision 的四个文件：名字 → 文件名。
+# 准备阶段 revision 的五个文件：名字 → 文件名（第五个是 B3-03 补充项的 Wire 投影策略）。
 PREPARE_FILES: Mapping[str, str] = {
     "policy": "profile-policy.json",
     "rule_patches": "rule-patches.json",
     "model_patch": "model-capability-patch.json",
     "joint_inputs": "joint-inputs.json",
+    "projection": "wire-projection-policy.json",
 }
-# 准备包另含的派生与副本文件。
+# 准备包另含的派生与副本文件（模型能力目录、目标 Wire 与 Release 条目都由批准的 revision 确定性投影）。
 PREPARED_EXTRA_FILES: Mapping[str, str] = {
     "active_release_catalog": "active-release-catalog.json",
     "active_profile": "active-profile.json",
     "target_profile": "target-profile.json",
     "derivation": "profile-derivation.json",
+    "model_catalog": "model-capability-catalog.json",
+    "target_wire": "target-wire.json",
+    "release_entry": "release-entry.json",
 }
 
 COMMAND_RESULT_SCHEMA = "claude-upgrade-profile-result/v1"
@@ -295,7 +312,7 @@ def add_stage_arguments(target: argparse.ArgumentParser) -> None:
 
 
 def _locked(campaign_dir_value: Any, action: Callable[[Path, dict[str, Any]], tuple[dict[str, Any], int]]) -> tuple[dict[str, Any], int]:
-    """Campaign 锁内执行：要求 Formal、没有未释放的执行租约、没有环境污染标记。"""
+    """Campaign 锁内执行：要求 Formal、Campaign 静止（B2-08 判据）、没有环境污染标记。"""
 
     orchestrator = _orchestrator()
     campaign_dir = Path(campaign_dir_value)
@@ -303,11 +320,8 @@ def _locked(campaign_dir_value: Any, action: Callable[[Path, dict[str, Any]], tu
     campaign_dir = campaign_dir.resolve(strict=True)
     orchestrator._require_formal_campaign(campaign_dir)
     with orchestrator._campaign_lock(campaign_dir):
-        lease = orchestrator._read_campaign_lease(campaign_dir)
-        if lease is not None and lease.get("state") != "released":
-            raise ConfigurationError(
-                f"Campaign 有未释放的执行租约（state={lease.get('state')}）：VC-3 要求 Campaign 静止；先按恢复协议对账（B2-08）。"
-            )
+        # B2-08 定的静止判据（与 seal、classify 同一函数）：停线租约视为静止，仍在执行或已过期的 active 租约拒绝。
+        orchestrator._require_quiescent_campaign_lease(campaign_dir, action="VC-3 画像")
         manifest = orchestrator._require_formal_campaign(campaign_dir)
         if (campaign_dir / _capture().CONTAMINATION_MARKER).exists():
             raise ConfigurationError("Campaign 已记录环境污染：先走环境隔离与恢复（B2-08），禁止 VC-3。")
@@ -596,6 +610,10 @@ class ProfileInputs:
     evidence_approval_ref: dict[str, Any] | None
     profile_approval: dict[str, Any] | None
     vc1_sealed_at_utc: str
+    release_evidence: Any
+    active_projection_policy: dict[str, Any]
+    target_rules_sha256: str
+    atomic_counts: dict[str, int]
 
 
 def _campaign_file_binding(campaign_dir: Path, path: Path, label: str) -> dict[str, Any]:
@@ -764,6 +782,10 @@ def collect_inputs(
         for key in ("evidence_fact_ref", "evidence_package_ref", "rule_migration_ledger_ref", "atomic_assertion_ledger_ref", "classification_fact_ref")
     }
     stage_path = campaign_dir / classify.STAGE_RESULT_RELATIVE
+    # B3-03 补充项：Wire 投影的输入——VC-1 证据索引、Active 版本的投影策略、原子断言按 owner_kind 的计数。
+    release_evidence = release.load_release_evidence(campaign_dir, store, package, stage)
+    active_projection, projection_binding = release.active_projection_policy(baseline_version)
+    atomic_counts = dict(Counter(str(assertion["owner_kind"]) for assertion in atomic["assertions"]))
     policy = {
         "schema_version": PROFILE_POLICY_SCHEMA,
         "campaign_id": campaign_id,
@@ -783,6 +805,7 @@ def collect_inputs(
             **active,
             "binary_sha256": active_binary,
             "profile_schema_version": str(active_profile.get("schema_version", "")),
+            "projection_policy": projection_binding,
         },
         "classification": {
             "stage_result": {"path": stage_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(stage_path)},
@@ -797,11 +820,18 @@ def collect_inputs(
             "inherited_rules": list(stage["inherited_rules"]),
             "atomic_assertion_count": len(atomic["assertions"]),
             "scenario_only_owner_ids": list(atomic["scenario_only_owner_ids"]),
+            "atomic_owner_counts": {key: atomic_counts[key] for key in sorted(atomic_counts)},
         },
         "identity_substitutions": [{"from": old, "to": new} for old, new in sorted(replacements.items())],
         "model_capability_paths": list(MODEL_CAPABILITY_PATHS),
         # 生成工具：policy 只登记生成器与 policy 合同；生成时的有效工具身份冻结在准备结果里（批准时刻），审核摘要也绑定它。
-        "generator": {"module": "claude_upgrade_profile", "policy_schema": PROFILE_POLICY_SCHEMA},
+        "generator": {
+            "module": "claude_upgrade_profile",
+            "policy_schema": PROFILE_POLICY_SCHEMA,
+            # Wire、模型能力目录与 Release 的确定性投影工具（指南 §4.3.2）与其策略合同。
+            "projection_module": "tools.generate_claude_fw_g_profile",
+            "projection_policy_schema": release.generator.PROJECTION_POLICY_SCHEMA,
+        },
     }
     bindings = {"policy": policy, "active_release_catalog": catalog_binding, "active_profile": profile_binding}
     official = _read_json(campaign_dir / claude_upgrade_seal.STAGE_RESULT_RELATIVE, "官方阶段结果")
@@ -841,6 +871,10 @@ def collect_inputs(
         evidence_approval_ref=store.fact_ref(facts["evidence_approved"][0]) if facts.get("evidence_approved") else None,
         profile_approval=(facts.get("profile_approved") or [None])[0],
         vc1_sealed_at_utc=str(official.get("sealed_at_utc", "")),
+        release_evidence=release_evidence,
+        active_projection_policy=active_projection,
+        target_rules_sha256=str(stage["approved"]["target_rules"]["sha256"]),
+        atomic_counts=atomic_counts,
     )
 
 
@@ -868,7 +902,8 @@ def _egress_kind(endpoint_kind: Any) -> str:
 
 
 def machine_draft_files(inputs: ProfileInputs) -> dict[str, bytes]:
-    """机器草案：policy 由输入派生；规则补丁与模型补丁为空；联合输入只预填能由 Active 画像推出的严格端点。"""
+    """机器草案：policy 由输入派生；规则补丁与模型补丁为空；联合输入只预填能由 Active 画像推出的严格端点；Wire 投影
+    策略取 Active 版本的那一份、只换版本号。"""
 
     rule_patches = {
         "schema_version": RULE_PATCHES_SCHEMA,
@@ -960,6 +995,8 @@ def machine_draft_files(inputs: ProfileInputs) -> dict[str, bytes]:
         "rule_patches": _serialize(rule_patches),
         "model_patch": _serialize(model_patch),
         "joint_inputs": _serialize(joint),
+        # Active 版本的 Wire 投影策略只换版本号；模型闭集、版本指纹 salt 等由审核人按目标证据修订。
+        "projection": _serialize(release.machine_projection_policy(inputs.active_projection_policy, inputs.target_version)),
     }
     return {name: files[name] for name in PREPARE_FILES}
 
@@ -992,8 +1029,18 @@ def _check_ops(ops: Any, label: str, problems: _Problems) -> list[dict[str, Any]
     return valid
 
 
-def derive_target_profile(inputs: ProfileInputs, documents: Mapping[str, Mapping[str, Any]], problems: _Problems) -> dict[str, Any] | None:
-    """按指南 §4.3.1 派生目标画像并复算 ``profile_diff_paths`` 约束；返回 ``{target, derivation}``，结构失败返回 None。"""
+def derive_target_profile(
+    inputs: ProfileInputs,
+    documents: Mapping[str, Mapping[str, Any]],
+    problems: _Problems,
+    model_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """按指南 §4.3.1 派生目标画像并复算 ``profile_diff_paths`` 约束；返回 ``{target, derivation}``，结构失败返回 None。
+
+    ``model_identity`` 是投影出的模型能力目录派生的四个 identity 字段（B3-03 补充项）：在版本身份替换之后写入，落点记为
+    ``model_identity_paths``，是 ``profile_diff_paths`` 的一类解释；规则补丁与模型补丁都不得再碰这些落点。投影失败时
+    为 None（门禁已因投影失败 blocked），派生照常进行以便列出其余原因。
+    """
 
     patches = documents["rule_patches"]
     model = documents["model_patch"]
@@ -1059,15 +1106,25 @@ def derive_target_profile(inputs: ProfileInputs, documents: Mapping[str, Mapping
         if not any(within(op["path"], scope) for scope in MODEL_CAPABILITY_PATHS):
             problems.add("model_patch_out_of_scope", f"{op['path']} 不在模型能力落点 {list(MODEL_CAPABILITY_PATHS)} 之内")
         owners.append(("model_capability", op))
-    # 版本身份替换（精确值），得到补丁的基底。
+    # 版本身份替换（精确值），再写入模型能力目录派生的 identity 字段，得到补丁的基底。
     version_paths: list[str] = []
     base = _substitute(inputs.active_profile, inputs.replacements, "", version_paths)
     version_paths = sorted(set(version_paths))
+    model_identity_paths: list[str] = []
+    if model_identity is not None:
+        identity = base.setdefault("identity", {})
+        for key in release.MODEL_IDENTITY_FIELDS:
+            if identity.get(key) != model_identity[key]:
+                identity[key] = copy.deepcopy(model_identity[key])
+                model_identity_paths.append(join_pointer("/identity", key))
+    derived_identity_scopes = [join_pointer("/identity", key) for key in release.MODEL_IDENTITY_FIELDS] if model_identity is not None else []
     inherited_scopes = [join_pointer("/rules", f"spec_id={spec_id}") for spec_id in inputs.inherited_rules]
     for owner, op in owners:
         path = op["path"]
         if path in version_paths:
             problems.add("patch_owner_conflict", f"{owner}：{path} 是版本身份落点")
+        if any(within(path, scope) or within(scope, path) for scope in derived_identity_scopes):
+            problems.add("patch_owner_conflict", f"{owner}：{path} 是模型能力目录派生的 identity 落点（由 Wire 投影策略决定）")
         for scope in inherited_scopes:
             if within(path, scope) or within(scope, path):
                 problems.add("inherited_rule_changed", f"{owner}：{path} 触碰继承规则 {scope}")
@@ -1094,7 +1151,9 @@ def derive_target_profile(inputs: ProfileInputs, documents: Mapping[str, Mapping
     unexplained = [
         path
         for path in profile_diff
-        if path not in version_paths and not any(within(path, scope) or within(scope, path) for scope in op_paths)
+        if path not in version_paths
+        and path not in model_identity_paths
+        and not any(within(path, scope) or within(scope, path) for scope in op_paths)
     ]
     if unexplained:
         problems.extend("profile_diff_unexplained", unexplained)
@@ -1143,6 +1202,8 @@ def derive_target_profile(inputs: ProfileInputs, documents: Mapping[str, Mapping
         "target_profile_sha256": _sha256(target_raw),
         "identity_substitutions": inputs.policy["identity_substitutions"],
         "version_identity_paths": version_paths,
+        "model_identity_paths": sorted(model_identity_paths),
+        "model_capability_catalog_sha256": model_identity["model_capability_catalog_sha256"] if model_identity is not None else None,
         "rule_field_paths": {spec_id: sorted(set(paths)) for spec_id, paths in sorted(rule_field_paths.items())},
         "model_capability_paths": sorted(set(model_paths)),
         "profile_diff_paths": profile_diff,
@@ -1203,8 +1264,15 @@ def build_joint(
     joint: Mapping[str, Any],
     files_sha256: Mapping[str, str],
     problems: _Problems,
+    *,
+    release_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """由目标画像、VC-2 结果与联合输入确定性投影联合制品（按封存依赖顺序），并复核 Store 画像批准门禁会查的一致性。"""
+    """由目标画像、VC-2 结果与联合输入确定性投影联合制品（按封存依赖顺序），并复核 Store 画像批准门禁会查的一致性。
+
+    ``release_info``（B3-03 补充项）带投影出的模型能力目录与 Release 身份摘要：ReleaseBundle 的 document 绑定 Wire、
+    模型能力目录与 Release 的摘要，另封存一个 ``model_capability_catalog`` 对象，于是 Profile、Wire、模型目录与 Release
+    进同一份联合摘要（指南 §4.3.3）。投影失败时为 None（门禁已 blocked）。
+    """
 
     if set(joint) != JOINT_TOP_FIELDS or joint.get("schema_version") != JOINT_INPUTS_SCHEMA:
         problems.add("joint_invalid", "joint-inputs.json 字段不闭合或合同名不符")
@@ -1336,6 +1404,7 @@ def build_joint(
                 "generation_role": target.get("generation_role"),
                 "profile_document_sha256": target_digest,
                 "rule_count": len(target.get("rules") or []),
+                "release": dict(release_info["summary"]) if release_info is not None else None,
             },
         },
         objects,
@@ -1357,6 +1426,15 @@ def build_joint(
         objects,
         problems,
     )
+    if release_info is not None:
+        projection = release_info["projection"]
+        _object(
+            "model_capability_catalog",
+            release.CATALOG_OBJECT_KIND,
+            release.catalog_object_payload(persona, projection.catalog, projection.catalog_sha256),
+            objects,
+            problems,
+        )
     # 入口：别名与清单闭合、目标处置覆盖完整清单。
     aliases = [dict(item) for item in ingress["aliases"]] if isinstance(ingress["aliases"], list) else []
     entries = [dict(item) for item in ingress["entries"]] if isinstance(ingress["entries"], list) else []
@@ -1661,8 +1739,32 @@ def evaluate_prepare(inputs: ProfileInputs, files: Mapping[str, bytes]) -> dict[
         problems.add("policy_drift", "profile-policy.json 必须逐字等于本次输入派生的阶段 Profile policy（只读）")
     derived: dict[str, Any] | None = None
     joint: dict[str, Any] | None = None
+    projection: release.CatalogProjection | None = None
+    staged: dict[str, Any] | None = None
+    # B3-03 补充项：先按投影策略投影实现策略与模型能力目录（目录摘要进画像 identity），画像派生之后再投影 Wire 与 Release。
     try:
-        derived = derive_target_profile(inputs, documents, problems)
+        projection = release.project_catalog(
+            inputs.release_evidence,
+            documents["projection"],
+            target_version=inputs.target_version,
+            required_rule_count=len(inputs.target_rules),
+        )
+    except release.ProjectionError as error:
+        problems.add("wire_projection_failed", str(error))
+    try:
+        derived = derive_target_profile(inputs, documents, problems, release.model_identity(projection) if projection is not None else None)
+        if derived is not None and projection is not None:
+            try:
+                staged = release.finish_release(
+                    projection,
+                    target_profile=derived["target"],
+                    target_profile_bytes=derived["target_bytes"],
+                    platform=inputs.platform,
+                    required_rules_manifest_sha256=inputs.target_rules_sha256,
+                    atomic_counts=inputs.atomic_counts,
+                )
+            except release.ProjectionError as error:
+                problems.add("wire_projection_failed", str(error))
         if derived is not None:
             joint = build_joint(
                 inputs,
@@ -1672,6 +1774,11 @@ def evaluate_prepare(inputs: ProfileInputs, files: Mapping[str, bytes]) -> dict[
                 documents["joint_inputs"],
                 {name: _sha256(files[name]) for name in PREPARE_FILES},
                 problems,
+                release_info=(
+                    {"projection": projection, "summary": release.release_summary(projection, staged)}
+                    if projection is not None and staged is not None
+                    else None
+                ),
             )
     except (TypeError, KeyError, AttributeError, ValueError) as error:
         problems.add("document_invalid", f"草案结构非法：{error!r}")
@@ -1684,12 +1791,18 @@ def evaluate_prepare(inputs: ProfileInputs, files: Mapping[str, bytes]) -> dict[
         "unexplained_path_count": len(derived["derivation"]["unexplained_paths"]) if derived else None,
         "joint_object_count": len(joint["objects"]) if joint else None,
         "target_profile_sha256": derived["derivation"]["target_profile_sha256"] if derived else None,
+        "model_identity_path_count": len(derived["derivation"]["model_identity_paths"]) if derived else None,
+        "release": release.release_summary(projection, staged) if projection is not None and staged is not None else None,
     }
     return {
         "status": "blocked" if problems else "closed",
         "reasons": problems.reasons(),
         "counts": counts,
-        "derived": {"profile": derived, "joint": joint} if derived is not None and not problems else None,
+        "derived": (
+            {"profile": derived, "joint": joint, "projection": projection, "release": staged}
+            if derived is not None and projection is not None and staged is not None and not problems
+            else None
+        ),
     }
 
 
@@ -1967,10 +2080,7 @@ def _approve_prepare(campaign_dir: Path, manifest: Mapping[str, Any], revision: 
         raise ConfigurationError(f"EvidenceApprovalFact 之后 Store 检查点应为 {STORE_SEALED}，实际 {status.get('checkpoint')}。")
     derived = gate["derived"]["profile"]
     prepared = {PREPARE_FILES[name]: files[name] for name in PREPARE_FILES}
-    prepared[PREPARED_EXTRA_FILES["active_release_catalog"]] = inputs.active_catalog_bytes
-    prepared[PREPARED_EXTRA_FILES["active_profile"]] = inputs.active_profile_bytes
-    prepared[PREPARED_EXTRA_FILES["target_profile"]] = derived["target_bytes"]
-    prepared[PREPARED_EXTRA_FILES["derivation"]] = _serialize(derived["derivation"])
+    prepared.update(_prepared_extras(inputs, gate["derived"]))
     bindings = _publish_files(campaign_dir, PREPARED_ROOT / revision, PREPARED_TEMPORARY_PREFIX, prepared)
     draft_receipt = campaign_dir / PREPARE_DRAFT_ROOT / revision / DRAFT_RECEIPT_FILENAME
     result_payload = {
@@ -1987,6 +2097,9 @@ def _approve_prepare(campaign_dir: Path, manifest: Mapping[str, Any], revision: 
         "prepared": bindings,
         "target_profile_sha256": derived["derivation"]["target_profile_sha256"],
         "profile_diff_paths": derived["derivation"]["profile_diff_paths"],
+        "release": release.release_summary(gate["derived"]["projection"], gate["derived"]["release"]),
+        # 投影工具在受管树之外：批准时的文件摘要留档（审核与重放核对用，不进审核摘要）。
+        "projection_tool_sha256": file_sha256(Path(release.generator.__file__)),
         "store": {
             "root": claude_upgrade_store.CAMPAIGN_STORE_DIRNAME,
             "campaign_id": inputs.store_campaign_id,
@@ -2015,6 +2128,22 @@ def _approve_prepare(campaign_dir: Path, manifest: Mapping[str, Any], revision: 
         "profile_diff_path_count": len(stage["profile_diff_paths"]),
         "live_request_count": 0,
         "next_command": f"stage-profile --campaign-dir {campaign_dir}",
+    }
+
+
+def _prepared_extras(inputs: ProfileInputs, derived: Mapping[str, Any]) -> dict[str, bytes]:
+    """准备包里由批准 revision 确定性派生或复制的文件（Active 副本、目标画像与派生收据、模型能力目录、Wire、Release 条目）。"""
+
+    profile = derived["profile"]
+    staged = derived["release"]
+    return {
+        PREPARED_EXTRA_FILES["active_release_catalog"]: inputs.active_catalog_bytes,
+        PREPARED_EXTRA_FILES["active_profile"]: inputs.active_profile_bytes,
+        PREPARED_EXTRA_FILES["target_profile"]: profile["target_bytes"],
+        PREPARED_EXTRA_FILES["derivation"]: _serialize(profile["derivation"]),
+        PREPARED_EXTRA_FILES["model_catalog"]: derived["projection"].catalog_bytes,
+        PREPARED_EXTRA_FILES["target_wire"]: staged["wire_bytes"],
+        PREPARED_EXTRA_FILES["release_entry"]: staged["entry_bytes"],
     }
 
 
@@ -2078,8 +2207,10 @@ def _prepared_files(campaign_dir: Path, result: Mapping[str, Any]) -> dict[str, 
     return {filename: (campaign_dir / str(binding["path"])).read_bytes() for filename, binding in result["prepared"].items()}
 
 
-def _stage_context(campaign_dir: Path, manifest: Mapping[str, Any], allowed: frozenset[str]) -> tuple[ProfileInputs, dict[str, Any], dict[str, Any], str]:
-    """暂存阶段的输入：重核准备包与全部 VC-2／Store 输入，从准备包复算联合制品（必须仍然闭合）。"""
+def _stage_context(
+    campaign_dir: Path, manifest: Mapping[str, Any], allowed: frozenset[str]
+) -> tuple[ProfileInputs, dict[str, Any], dict[str, Any], str, dict[str, Any]]:
+    """暂存阶段的输入：重核准备包与全部 VC-2／Store 输入，从准备包复算联合制品（必须仍然闭合）；末项是复算出的派生结果。"""
 
     result = load_prepare_result(campaign_dir, manifest)
     prepared = _prepared_files(campaign_dir, result)
@@ -2106,11 +2237,14 @@ def _stage_context(campaign_dir: Path, manifest: Mapping[str, Any], allowed: fro
         raise ConfigurationError("准备包的目标画像无法由 Active 与批准补丁复算。")
     if _serialize(derived["profile"]["derivation"]) != prepared[PREPARED_EXTRA_FILES["derivation"]]:
         raise ConfigurationError("准备包的派生收据（profile_diff_paths）无法复算。")
+    for name, data in _prepared_extras(inputs, derived).items():
+        if prepared.get(name) != data:
+            raise ConfigurationError(f"准备包的 {name} 无法由 VC-1 证据与批准的投影策略复算。")
     # 暂存代号绑定被采用的准备结果（revision 与摘要）和工具身份：换了准备 revision 或工具就是新的一代预览。
     generation = "g-" + _orchestrator()._fingerprint(
         {"prepare_result": _prepare_binding(campaign_dir, result), "tool_files_sha256": inputs.tool_files_sha256}
     )[:16]
-    return inputs, result, derived["joint"], generation
+    return inputs, result, derived["joint"], generation, derived
 
 
 def _prepare_binding(campaign_dir: Path, result: Mapping[str, Any]) -> dict[str, str]:
@@ -2127,7 +2261,7 @@ def _joint_sha256(objects: Sequence[Mapping[str, Any]], approval_core: Mapping[s
 def _stage_preview(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
     if (campaign_dir / STAGE_RESULT_RELATIVE).exists():
         raise ConfigurationError("画像已批准（profile/result.json 已存在）：批准后变化须建立后继 Campaign。")
-    inputs, result, joint, generation = _stage_context(campaign_dir, manifest, frozenset({STORE_SEALED, STORE_APPROVED}))
+    inputs, result, joint, generation, _derived = _stage_context(campaign_dir, manifest, frozenset({STORE_SEALED, STORE_APPROVED}))
     if inputs.profile_approval is not None:
         raise ConfigurationError("Store 已记录 ProfileApprovalFact 而阶段结果未写：重跑原批准命令（带 --approve-joint-sha256）收敛，不再生成预览。")
     stage_dir = campaign_dir / STAGE_ROOT / generation
@@ -2187,7 +2321,7 @@ def _stage_approve(campaign_dir: Path, manifest: Mapping[str, Any], approved_joi
     orchestrator = _orchestrator()
     if not SHA256_RE.fullmatch(approved_joint):
         raise ConfigurationError("--approve-joint-sha256 必须是 64 位小写十六进制。")
-    inputs, result, joint, generation = _stage_context(campaign_dir, manifest, frozenset({STORE_SEALED, STORE_APPROVED}))
+    inputs, result, joint, generation, derived = _stage_context(campaign_dir, manifest, frozenset({STORE_SEALED, STORE_APPROVED}))
     stage_dir = campaign_dir / STAGE_ROOT / generation
     if not (stage_dir / STAGE_PREVIEW_FILENAME).is_file():
         raise ConfigurationError("当前准备包与工具身份没有冻结的暂存预览：先不带批准参数运行 stage-profile。")
@@ -2221,8 +2355,40 @@ def _stage_approve(campaign_dir: Path, manifest: Mapping[str, Any], approved_joi
     status = session.status()
     if status.get("checkpoint") != STORE_APPROVED:
         raise ConfigurationError(f"ProfileApprovalFact 之后 Store 检查点应为 {STORE_APPROVED}，实际 {status.get('checkpoint')}。")
-    stage_path = campaign_dir / STAGE_RESULT_RELATIVE
     core = frozen["approval_core"]
+    # B3-03 补充项：暂存 Release（未入库的 Profile／Wire／Release 条目／投影策略，布局镜像仓库 catalogdata），VC-4 纳入候选源码树。
+    staged = derived["release"]
+    catalog_refs = [item["ref"] for item in frozen["objects"] if item["kind"] == release.CATALOG_OBJECT_KIND]
+    if len(catalog_refs) != 1:
+        raise ConfigurationError("联合清单没有唯一的模型能力目录对象。")
+    release_files = release.staged_release_files(
+        entry=staged["entry"],
+        profile_bytes=derived["profile"]["target_bytes"],
+        wire_bytes=staged["wire_bytes"],
+        entry_bytes=staged["entry_bytes"],
+        policy_bytes=_prepared_files(campaign_dir, result)[PREPARE_FILES["projection"]],
+    )
+    release_receipt = release.publish_staged_release(
+        campaign_dir,
+        release_files,
+        release.staged_release_receipt(
+            campaign_id=inputs.campaign_id,
+            target_version=inputs.target_version,
+            platform=inputs.platform,
+            generation=generation,
+            joint_sha256=frozen["joint_sha256"],
+            entry=staged["entry"],
+            files=release_files,
+            store_refs={
+                "profile_approval_fact_ref": fact["fact_ref"],
+                "release_artifact_ref": core["release_artifact_ref"],
+                "support_envelope_ref": core["support_envelope_ref"],
+                "model_capability_catalog_ref": catalog_refs[0],
+            },
+        ),
+    )
+    release_receipt_path = campaign_dir / release.STAGED_RELEASE_ROOT / release.STAGED_RECEIPT_FILENAME
+    stage_path = campaign_dir / STAGE_RESULT_RELATIVE
     stage_payload = {
         "schema_version": STAGE_RESULT_SCHEMA,
         "client": "claude",
@@ -2235,12 +2401,18 @@ def _stage_approve(campaign_dir: Path, manifest: Mapping[str, Any], approved_joi
         "prepared_revision": str(result["revision"]),
         "joint_manifest": {"path": manifest_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(manifest_path)},
         "target_profile_sha256": frozen["target_profile_sha256"],
+        "staged_release": {
+            "path": release_receipt_path.relative_to(campaign_dir).as_posix(),
+            "sha256": file_sha256(release_receipt_path),
+            "release_sha256": release_receipt["release_entry"]["release_sha256"],
+        },
         "store": {
             "root": claude_upgrade_store.CAMPAIGN_STORE_DIRNAME,
             "campaign_id": inputs.store_campaign_id,
             "checkpoint": STORE_APPROVED,
             "evidence_approval_fact_ref": dict(result["store"]["evidence_approval_fact_ref"]),
             "profile_approval_fact_ref": dict(fact["fact_ref"]),
+            "model_capability_catalog_ref": dict(catalog_refs[0]),
             **{key: dict(core[key]) for key in core if key.endswith("_ref")},
         },
         "approval_purpose": core["approval_purpose"],
@@ -2277,6 +2449,7 @@ def _stage_approve(campaign_dir: Path, manifest: Mapping[str, Any], approved_joi
         "vc3_checkpoint": str(claude_upgrade_vc.vc_checkpoint_path(campaign_dir, "VC-3")),
         "checkpoint_sha256": checkpoint["checkpoint_sha256"],
         "target_profile_sha256": stage["target_profile_sha256"],
+        "staged_release": dict(stage["staged_release"]),
         "live_request_count": 0,
     }
 
@@ -2306,4 +2479,7 @@ def load_stage_result(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[s
     if stage["prepare_result"]["path"] != expected_prepare:
         raise ConfigurationError("画像阶段结果绑定的准备结果路径与 prepared_revision 不一致。")
     load_prepare_result(campaign_dir, manifest, revision)
+    staged = release.load_staged_release(campaign_dir, stage.get("staged_release") or {})
+    if staged["release_entry"]["release_sha256"] != stage["staged_release"]["release_sha256"] or staged["joint_sha256"] != stage["joint_sha256"]:
+        raise ConfigurationError("暂存 Release 收据与画像阶段结果登记的 Release 或联合摘要不一致。")
     return stage

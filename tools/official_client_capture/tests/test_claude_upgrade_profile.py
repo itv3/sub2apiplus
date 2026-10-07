@@ -29,11 +29,14 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from tools import generate_claude_fw_g_profile as generator
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_profile as profile
+from tools.official_client_capture import claude_upgrade_release
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import claude_upgrade_vc
+from tools.official_client_capture.tests import claude_wire_fixture as wire_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_classify as classify_tests
 from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_tests
 from tools.official_client_control.store import ControlStore
@@ -42,6 +45,7 @@ REPOSITORY_ROOT = classify_tests.REPOSITORY_ROOT
 CATALOG_ROOT = REPOSITORY_ROOT / "backend" / "internal" / "officialegress" / "catalogdata" / "claude"
 ACTIVE_CATALOG = CATALOG_ROOT / "release-catalog.json"
 ACTIVE_PROFILE = CATALOG_ROOT / "profiles" / "2.1.226" / "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5.json"
+ACTIVE_WIRE = CATALOG_ROOT / "wire" / "2.1.226" / "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d.json"
 CAMPAIGN_ID = classify_tests.CAMPAIGN_ID
 CHANGE = "SPEC-BODY-001"
 DELETE = "SPEC-TOOL-024"
@@ -66,7 +70,22 @@ def run_main(argv: list[str]) -> tuple[int, dict | None, str]:
 
 
 class _ProfileCase(classify_tests._ClassifyCase):
-    """在 B3-02 夹具上走完 VC-2，并把真实的 2.1.226 Active 复制进 Campaign。"""
+    """在 B3-02 夹具上走完 VC-2，并把真实的 2.1.226 Active 复制进 Campaign。
+
+    VC-1 证据另带主模型 23 个 probe 的合成请求字节与 P 通道（``claude_wire_fixture``），供 Wire 投影；投影策略的机器草案
+    取受管树里 2.1.226 的那一份（三个模型），审核人替身改成只保留主模型（VC-1 现行场景清单只用主模型取证）。
+    """
+
+    @staticmethod
+    def projection_policy() -> dict[str, Any]:
+        policy, _binding = claude_upgrade_release.active_projection_policy("2.1.226")
+        return claude_upgrade_release.machine_projection_policy(policy, classify_tests.TARGET)
+
+    def build_campaign(self, **kwargs: Any) -> Path:
+        if "wire_files" not in kwargs:
+            builder = wire_fixture.WireEvidenceBuilder(wire_fixture.single_model_policy(self.projection_policy()), classify_tests.TARGET)
+            kwargs["wire_files"] = builder.files()
+        return super().build_campaign(**kwargs)
 
     def approved_vc2(self) -> Path:
         campaign = self.build_campaign()
@@ -167,6 +186,8 @@ class _ProfileCase(classify_tests._ClassifyCase):
             "rollback_target_kind": "legacy_deployment",
             "failure_policy": "persona_fail_close",
         }
+        # VC-1 只有主模型的证据：投影策略只保留主模型（画像的 supported_models 随目录派生成一个模型）。
+        docs["projection"] = wire_fixture.single_model_policy(docs["projection"])
         return docs
 
     def write_prepare(self, docs: dict[str, dict[str, Any]], directory: Path) -> Path:
@@ -209,7 +230,13 @@ class PrepareProfileTests(_ProfileCase):
         result = self.prepare_draft(campaign)
         self.assertEqual((result["status"], result["revision"], result["reused"]), ("profile_blocked", "rev-0001", False))
         self.assertTrue({"rule_patch_missing", "rationale_placeholder", "patch_evidence_missing", "joint_ingress_missing"} <= self.codes(result))
+        # 机器草案的投影策略是 Active 的那份（三个模型），VC-1 没有非主模型的证据：投影失败关闭并一次列全缺的 probe。
+        self.assertIn("wire_projection_failed", self.codes(result))
+        projection_reason = next(item for item in result["gate"]["reasons"] if item["code"] == "wire_projection_failed")
+        self.assertIn("claude-opus-5-v4-replay-baseline", " ".join(projection_reason["sample"]))
         draft_dir = Path(result["draft_dir"])
+        projection = json.loads((draft_dir / "wire-projection-policy.json").read_text(encoding="utf-8"))
+        self.assertEqual((projection["version"], projection["models"]["ordered"]), (classify_tests.TARGET, ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"]))
         policy = json.loads((draft_dir / "profile-policy.json").read_text(encoding="utf-8"))
         self.assertEqual(policy["rules"]["affected_rules"], sorted([CHANGE, DELETE]))
         self.assertEqual(len(policy["rules"]["target_rules"]), 39)
@@ -236,6 +263,12 @@ class PrepareProfileTests(_ProfileCase):
         diff = revised["profile_diff_paths"]
         self.assertIn("/identity/version", diff)
         self.assertIn("/identity/platform", diff)
+        # 模型闭集与能力目录摘要由投影出的模型能力目录派生（model_identity_paths）。
+        self.assertIn("/identity/supported_models", diff)
+        self.assertIn("/identity/model_capability_catalog_sha256", diff)
+        release_summary = revised["gate"]["counts"]["release"]
+        self.assertEqual(release_summary["models"], ["claude-sonnet-5"])
+        self.assertGreater(release_summary["fingerprint_verified_request_count"], 20)
         self.assertIn("/rules/spec_id=SPEC-TOOL-024", diff)
         self.assertIn("/rules/spec_id=SPEC-BODY-001/title", diff)
         # 继承规则只有版本身份落点变化（适用条件里的 version=／platform=／binary_sha256=）。
@@ -274,6 +307,35 @@ class PrepareProfileTests(_ProfileCase):
                 "补丁类型错误",
                 lambda d: d["rule_patches"]["rule_patches"][0].update(ops=[{"op": "move", "path": "/rules"}]),
                 {"patch_invalid"},
+            ),
+            (
+                "模型补丁碰目录派生落点",
+                lambda d: d["model_patch"].update(
+                    ops=[{"op": "replace", "path": "/identity/supported_models", "value": ["claude-sonnet-5", "claude-opus-5"]}],
+                    evidence_item_ids=[evidence],
+                    rationale="x",
+                ),
+                {"patch_owner_conflict"},
+            ),
+            (
+                "投影策略登记了没有证据的模型",
+                lambda d: d.update(projection=self.projection_policy()),
+                {"wire_projection_failed"},
+            ),
+            (
+                "版本指纹 salt 与观测不符",
+                lambda d: d["projection"]["attestation"]["version_fingerprint"].update(salt="000000000000"),
+                {"wire_projection_failed"},
+            ),
+            (
+                "工具目录计数与观测不符",
+                lambda d: d["projection"]["selectors"].update(mcp_deferred_tool_count=34),
+                {"wire_projection_failed"},
+            ),
+            (
+                "TLS 期望与观测不符",
+                lambda d: d["projection"]["tls"].update(psk_modes=[0]),
+                {"wire_projection_failed"},
             ),
         ):
             with self.subTest(label=label):
@@ -324,15 +386,17 @@ class PrepareProfileTests(_ProfileCase):
         policy = claude_identity.load_policy()
         digests = claude_identity.managed_tree_digests(REPOSITORY_ROOT, policy)
         index = claude_identity._module_index(policy, digests)
-        module = "tools.official_client_capture.claude_upgrade_profile"
+        modules = ("tools.official_client_capture.claude_upgrade_profile", "tools.official_client_capture.claude_upgrade_release")
         for layer, roots in (("wire_producer", "wire_roots"), ("evidence_semantics", "evidence_roots")):
             closure = claude_identity.closure(
                 policy, REPOSITORY_ROOT, digests, claude_identity._orchestrator_roots(policy, index, policy["orchestrator"][roots]), layer=layer
             )
-            with self.subTest(layer=layer):
-                self.assertNotIn(module, {item["module"] for item in closure["symbols"]})
-                self.assertNotIn(module, {item["module"] for item in closure["modules"]})
-        self.assertEqual(claude_identity.classify_path(policy, "official_client_capture/claude_upgrade_profile.py"), "control")
+            for module in modules:
+                with self.subTest(layer=layer, module=module):
+                    self.assertNotIn(module, {item["module"] for item in closure["symbols"]})
+                    self.assertNotIn(module, {item["module"] for item in closure["modules"]})
+        for name in ("claude_upgrade_profile.py", "claude_upgrade_release.py"):
+            self.assertEqual(claude_identity.classify_path(policy, f"official_client_capture/{name}"), "control")
 
 
 class ProfileApprovalChainTests(_ProfileCase):
@@ -387,7 +451,7 @@ class ProfileApprovalChainTests(_ProfileCase):
         # 暂存预览：联合摘要与对象数；同代重跑逐字复用；错误摘要不能批准。
         code, preview, stderr = run_main(["stage-profile", "--campaign-dir", str(campaign)])
         self.assertEqual((code, preview["status"]), (2, "awaiting_profile_approval"), stderr)
-        self.assertEqual(preview["object_count"], 16)
+        self.assertEqual(preview["object_count"], 17)
         self.assertEqual(run_main(["stage-profile", "--campaign-dir", str(campaign)])[1]["joint_sha256"], preview["joint_sha256"])
         code, _result, stderr = run_main(["stage-profile", "--campaign-dir", str(campaign), "--approve-joint-sha256", "0" * 64, "--approved-by", "reviewer-a"])
         self.assertEqual(code, 1)
@@ -432,6 +496,7 @@ class ProfileApprovalChainTests(_ProfileCase):
         _path, checkpoint = claude_upgrade_vc.replay_vc_checkpoint(campaign, claude_upgrade_vc.vc_campaign_plan(campaign, manifest), "VC-3")
         self.assertEqual(checkpoint["metrics"], {"live_request_count": 0, "scanned_bytes": 0})
         self.assertEqual(checkpoint["reuse_item_ids"], stage["inherited_rules"])
+        self.assert_staged_release(campaign, manifest, stage, prepared, store_root)
 
         # 再批准逐字复用；不同批准人被拒；批准后不能再预览。
         before = {path: claude_upgrade.file_sha256(path) for path in (campaign / profile.STAGE_RESULT_RELATIVE, claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-3"))}
@@ -455,6 +520,57 @@ class ProfileApprovalChainTests(_ProfileCase):
         code, replayed, stderr = run_main(self.approve_prepare_argv(campaign, second["revision"], second["review_sha256"], "reviewer-b"))
         self.assertEqual((code, replayed["target_profile_sha256"]), (0, prepared["target_profile_sha256"]), stderr)
         self.assertEqual(sum(seal_tests.facts_by_kind(store_root, CAMPAIGN_ID).values()), 5)
+
+    def assert_staged_release(
+        self, campaign: Path, manifest: dict[str, Any], stage: dict[str, Any], prepared: dict[str, Any], store_root: Path
+    ) -> None:
+        """暂存 Release：文件布局镜像仓库 catalogdata，Release 身份按 Go 加载器同一算法复算一致，模型能力目录对象已封存。"""
+
+        receipt = claude_upgrade_release.load_staged_release(campaign, stage["staged_release"])
+        entry = receipt["release_entry"]
+        root = campaign / claude_upgrade_release.STAGED_RELEASE_ROOT
+        profile_raw = (root / entry["profile"]["path"]).read_bytes()
+        wire_raw = (root / entry["wire"]["path"]).read_bytes()
+        self.assertEqual(entry["profile"]["path"], f"catalogdata/claude/profiles/{classify_tests.TARGET}/{prepared['target_profile_sha256']}.json")
+        self.assertEqual(generator.sha256_hex(profile_raw), prepared["target_profile_sha256"])
+        wire = json.loads(wire_raw)
+        target = json.loads(profile_raw)
+        self.assertEqual(wire["identity"]["profile_digest"], prepared["target_profile_sha256"])
+        self.assertEqual(wire["identity"]["model_capability_catalog_digest"], target["identity"]["model_capability_catalog_sha256"])
+        self.assertEqual(entry["models"], target["identity"]["supported_models"])
+        self.assertEqual(entry["models"], [item["canonical_model"] for item in wire["implementation_policy"]["model_catalog"]["models"]])
+        catalog_sha = generator.sha256_hex(generator.canonical_bytes(wire["implementation_policy"]["model_catalog"]))
+        self.assertEqual(catalog_sha, target["identity"]["model_capability_catalog_sha256"])
+        release_sha, bundle_sha = generator.build_release_identity(
+            version=classify_tests.TARGET,
+            platform="linux/arm64",
+            profile_digest=prepared["target_profile_sha256"],
+            wire_digest=generator.sha256_hex(wire_raw),
+            model_catalog_digest=catalog_sha,
+            required_rules_manifest_sha256=entry["required_rules_manifest_sha256"],
+            required_rule_count=len(target["rules"]),
+        )
+        self.assertEqual((entry["release_sha256"], entry["bundle_sha256"]), (release_sha, bundle_sha))
+        self.assertEqual((entry["required_rule_count"], entry["strict_endpoint_count"]), (39, len(target["strict_endpoints"])))
+        self.assertEqual(receipt["validation_candidate_selector"]["release_sha256"], release_sha)
+        catalog_object = ControlStore(store_root).load_object(receipt["store"]["model_capability_catalog_ref"])["payload"]
+        self.assertEqual(catalog_object["entries"][0]["facts"]["catalog_sha256"], catalog_sha)
+        self.assertEqual(catalog_object["entries"][0]["facts"]["document"], wire["implementation_policy"]["model_catalog"])
+        self.assertEqual(stage["store"]["model_capability_catalog_ref"], receipt["store"]["model_capability_catalog_ref"])
+        # 结构对照：投影出的 Wire 与已入库的 2.1.226 Wire 键集合一致（Go 加载器按这些键读取）。
+        active = json.loads(ACTIVE_WIRE.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(wire), sorted(active))
+        self.assertEqual(sorted(wire["implementation_policy"]), sorted(active["implementation_policy"]))
+        self.assertEqual(sorted(wire["implementation_policy"]["scenarios"]), sorted(active["implementation_policy"]["scenarios"]))
+        self.assertEqual(sorted(wire["implementation_policy"]["tool_policy"]), sorted(active["implementation_policy"]["tool_policy"]))
+        self.assertEqual(sorted(wire["implementation_policy"]["model_catalog"]), sorted(active["implementation_policy"]["model_catalog"]))
+        model = wire["implementation_policy"]["model_catalog"]["models"][0]
+        active_model = active["implementation_policy"]["model_catalog"]["models"][0]
+        self.assertEqual(sorted(model), sorted(active_model))
+        self.assertEqual(sorted(model["scenarios"]), sorted(active_model["scenarios"]))
+        self.assertEqual(sorted(wire["implementation_policy"]["model_catalog"]["evidence"]), sorted(active["implementation_policy"]["model_catalog"]["evidence"]))
+        self.assertEqual(wire["attestation"], active["attestation"])
+        self.assertEqual(len(model["scenarios"]["background"]), 4)
 
     def test_prepare_approval_converges_after_sigkill(self) -> None:
         campaign = self.approved_vc2()
