@@ -17,6 +17,7 @@ from unittest import mock
 
 from tools.official_client_capture import claude_upgrade as upgrade
 from tools.official_client_capture import claude_upgrade_delivery as delivery
+from tools.official_client_capture import claude_upgrade_recovery as recovery
 from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as chain
@@ -57,11 +58,17 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
     run_compare_and_assert = delivery_tests.Vc6BatchChainTests.run_compare_and_assert
     vc5_complete_world = delivery_tests.Vc6BatchChainTests.vc5_complete_world
     set_control = delivery_tests.Vc6BatchChainTests.set_control
-    run_action = delivery_tests.Vc6BatchChainTests.run_action
-    candidate_status = delivery_tests.Vc6BatchChainTests.candidate_status
     assert_status = delivery_tests.Vc6BatchChainTests.assert_status
     delivery_calls = delivery_tests.Vc6BatchChainTests.delivery_calls
     assert_batch_failed_and_reconcile = delivery_tests.Vc6BatchChainTests.assert_batch_failed_and_reconcile
+
+    def run_action(self, world: dict[str, Any]) -> dict[str, Any]:
+        return delivery.run_action(world["campaign"], world.get("candidate_id", CANDIDATE),
+            environment_executor=environment.EXECUTOR_NAME, observation_window_seconds=60)
+
+    def candidate_status(self, world: dict[str, Any]) -> dict[str, Any]:
+        with chain.seams(world["config_path"]):
+            return recovery.campaign_status(world["campaign"], world.get("candidate_id", CANDIDATE))
 
     def dispatch_vc6(self, world: dict[str, Any], sequence: int, action: dict[str, Any], *, crash_after_receipt: bool = False) -> tuple[int, dict | None, str]:
         """同一父批次入口；只给 finalize 动作的 usercustomize 增加一次性强杀点。"""
@@ -78,7 +85,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         with mock.patch.dict(os.environ, variables):
             return batch_tests.run_main([
                 "compile-and-run-vc-batch", "--campaign-dir", campaign, "--phase", "VC-6", "--sequence", sequence,
-                "--predecessor-checkpoint", vc.vc_checkpoint_path(campaign, "VC-5", revision=1),
+                "--predecessor-checkpoint", vc.vc_checkpoint_path(campaign, "VC-5", revision=world.get("revision", 1)),
                 "--action-plan", plan, "--state-dir", self.state_dir,
             ])
 
@@ -109,12 +116,18 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         audit.check_entry(entry, *fragments)
         return audit.report(**facts)
 
-    def exercise_delivery_faults(self) -> list[dict[str, Any]]:
+    def exercise_delivery_faults(self, world: dict[str, Any] | None = None, *, sequence_start: int = 12) -> list[dict[str, Any]]:
         """同一世界连续执行批次提交故障、阶段失败、动作强杀、阶段失效及收据后强杀。"""
 
-        world = self.vc5_complete_world()
+        world = self.vc5_complete_world() if world is None else world
         campaign = world["campaign"]
         self.campaign = campaign
+        candidate = world.get("candidate_id", CANDIDATE)
+        revision = world.get("revision", 1)
+        # 调用方可交入同一个已完成 VC-5 的世界；不重新创建 Campaign 或清空前段账本。
+        if not hasattr(self, "control"):
+            self.control = environment.write_control(self.root / "vc6" / "control.json",
+                environment={**environment.ENVIRONMENT, "architecture": world["architecture"]})
         run = self.run_action(world)
         records = []
 
@@ -131,12 +144,12 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             original_publish(source, target, root)
 
         with mock.patch.object(upgrade, "_publish_staging_file", side_effect=fail_commit):
-            code, result, stderr = self.dispatch_vc6(world, 12, run)
+            code, result, stderr = self.dispatch_vc6(world, sequence_start, run)
         self.assertEqual((code, result), (1, None), stderr)
         self.assertIn("COMMIT 发布失败", stderr)
         self.assertEqual(self.delivery_calls(), [])
         self.set_control(world, failures=[["dr0", "candidate_restored", None]])
-        retried = self.assert_batch_passed(self.dispatch_vc6(world, 12, run), 12, "VC-6")
+        retried = self.assert_batch_passed(self.dispatch_vc6(world, sequence_start, run), sequence_start, "VC-6")
         self.assertEqual(retried["staging_attempt"], 2)
         failed = self.assert_status(world, "delivery_stage_failed")
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()],
@@ -147,10 +160,10 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         audit = self.late_audit("后段交付修复后动作中断", world)
         before_calls = len(self.delivery_calls())
         self.set_control(world, kill_at=["dr1", "stable_observed"])
-        self.assert_batch_failed_and_reconcile(self.dispatch_vc6(world, 13, run), delivery.RUN_ACTION_ID)
+        self.assert_batch_failed_and_reconcile(self.dispatch_vc6(world, sequence_start + 1, run), delivery.RUN_ACTION_ID)
         interrupted = self.assert_status(world, "delivery_in_progress")
         self.set_control(world)
-        self.assert_batch_passed(self.dispatch_vc6(world, 14, run), 14, "VC-6")
+        self.assert_batch_passed(self.dispatch_vc6(world, sequence_start + 2, run), sequence_start + 2, "VC-6")
         self.assert_status(world, "delivery_awaiting_finalize")
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()[before_calls:]],
             expected=["dr1:candidate_restored", "dr1:stable_observed", "dr1:stable_observed"],
@@ -159,7 +172,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         # 已通过阶段只有经批准失效才可再执行，从批准阶段起重做。
         audit = self.late_audit("后段交付阶段批准失效", world)
         before_calls = len(self.delivery_calls())
-        arguments = ["--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--stage", "rollback_verified",
+        arguments = ["--campaign-dir", campaign, "--candidate-id", candidate, "--stage", "rollback_verified",
                      "--reason", "回退检查在相同冻结环境中重新核验"]
         code, preview, stderr = batch_tests.run_main(["delivery-stage-invalidate", "preview", *arguments])
         self.assertEqual((code, preview["status"]), (2, "preview"), stderr)
@@ -167,7 +180,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             "--approve-sha256", preview["review_sha256"], "--approved-by", "fixture-reviewer"])
         self.assertEqual((code, applied["status"]), (0, "applied"), stderr)
         pending = self.assert_status(world, "delivery_invalidation_pending")
-        self.assert_batch_passed(self.dispatch_vc6(world, 15, run), 15, "VC-6")
+        self.assert_batch_passed(self.dispatch_vc6(world, sequence_start + 3, run), sequence_start + 3, "VC-6")
         ready = self.assert_status(world, "delivery_awaiting_finalize")
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()[before_calls:]],
             expected=[f"dr2:{stage}" for stage in delivery.STAGES[1:]], entry=pending,
@@ -176,20 +189,20 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         # 第二层提交故障：Store 已签交付收据，VC-6 checkpoint 尚未写；下批只补收尾。
         audit = self.late_audit("后段交付收据后中断与重复收尾", world)
         before_calls = len(self.delivery_calls())
-        finalize = delivery.finalize_action(campaign, CANDIDATE, ready["delivery"]["review_sha256"])
-        self.assert_batch_failed_and_reconcile(self.dispatch_vc6(world, 16, finalize, crash_after_receipt=True), delivery.FINALIZE_ACTION_ID)
+        finalize = delivery.finalize_action(campaign, candidate, ready["delivery"]["review_sha256"])
+        self.assert_batch_failed_and_reconcile(self.dispatch_vc6(world, sequence_start + 4, finalize, crash_after_receipt=True), delivery.FINALIZE_ACTION_ID)
         self.assertTrue((self.root / "finalize-crashed-once").is_file())
         receipt_refs = world["store"].list_receipt_refs("candidate_delivery")
         self.assertEqual(len(receipt_refs), 1)
-        self.assertFalse(vc.vc_checkpoint_path(campaign, "VC-6", revision=1).exists())
+        self.assertFalse(vc.vc_checkpoint_path(campaign, "VC-6", revision=revision).exists())
         interrupted = self.assert_status(world, "delivery_completion_pending")
-        self.assert_batch_passed(self.dispatch_vc6(world, 17, finalize), 17, "VC-6")
-        checkpoint = vc.vc_checkpoint_path(campaign, "VC-6", revision=1)
+        self.assert_batch_passed(self.dispatch_vc6(world, sequence_start + 5, finalize), sequence_start + 5, "VC-6")
+        checkpoint = vc.vc_checkpoint_path(campaign, "VC-6", revision=revision)
         checkpoint_bytes = checkpoint.read_bytes()
         self.assertEqual(world["store"].list_receipt_refs("candidate_delivery"), receipt_refs)
         before_repeat = audit.accounting_state()
         for _ in range(2):
-            code, repeated, stderr = batch_tests.run_main(["deliver-candidate", "finalize", "--campaign-dir", campaign, "--candidate-id", CANDIDATE])
+            code, repeated, stderr = batch_tests.run_main(["deliver-candidate", "finalize", "--campaign-dir", campaign, "--candidate-id", candidate])
             self.assertEqual((code, repeated["status"]), (0, "finalized"), stderr)
         self.assertEqual(checkpoint.read_bytes(), checkpoint_bytes)
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()[before_calls:]], expected=[],

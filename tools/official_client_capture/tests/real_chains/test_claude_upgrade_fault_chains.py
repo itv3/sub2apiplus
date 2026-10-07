@@ -59,6 +59,7 @@ from unittest import mock
 from tools.official_client_capture.tests import managed_tree_copy as trees
 from tools.official_client_capture.tests import claude_chain_driver as chain_driver
 from tools.official_client_capture.tests import claude_late_stage_chain_driver as late_driver
+from tools.official_client_capture.tests import claude_late_control_chain_driver as late_control_driver
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_predecessor as predecessor_tests
@@ -1671,6 +1672,14 @@ class _LateStageFaultScenarios(late_driver.ClaudeLateStageChainDriver):
     def _scenario_delivery_faults_in_one_campaign(self) -> None:
         records = self.exercise_delivery_faults()
         self.assertEqual(len(records), 4)
+
+
+class _LateControlFaultScenarios(late_control_driver.ClaudeLateControlChainDriver):
+    """同一世界的暂停、延期和交付恢复；完整 A 组剩余场景未验收前不注册。"""
+
+    def _scenario_control_and_delivery_in_one_campaign(self) -> None:
+        records = self.exercise_control_and_delivery_faults()
+        self.assertEqual(len(records), 6)
 
 
 class ClaudeFaultChainTests(unittest.TestCase):
