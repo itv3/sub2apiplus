@@ -12,14 +12,20 @@
 * 源码残差：各文件相对基线删掉或改写的行只有登记的那几处（每处写明为什么 Codex 下等价），入口门禁脚本代入 Codex 的客户端表
   取值后与基线的差异只有登记的新增与改写行；Codex 的入口步骤表与门禁项输入与基线逐字相同（Claude 的步骤声明只有
   ``STEP_CHANGES_AFTER_B5A08`` 登记的设计变化）。
-基线读不到（浅克隆）时跳过并写明原因；某个文件在 B5a-08 之后又改过（摘要不再是 ``SOURCE_DIGESTS`` 登记的那份）时，它的残差
-对照跳过——以新的基线提交重新对照：B5a-09、B5a-10 改过的入口步骤分别以该批开工时的提交为新基线再核一次删改的行
-（``LATER_SOURCE_BASELINES``；入口门禁脚本在 B5a-10 之后的对照在 B5a-06 的对照模块里）。本模块读真实仓库的 git 历史，按
-``unit_records.GIT_READERS`` 登记。
+基线读不到（浅克隆）时整条用例跳过（父级 ``skipTest``）并写明原因。源码残差按批登记：B5a-08 以 ``BASELINE_COMMIT`` 为基线
+（``SOURCE_DIGESTS``／``SOURCE_REMOVED_LINES``），B5a-09、B5a-10 改过的入口步骤以该批开工时的提交为新基线
+（``LATER_SOURCE_BASELINES``）；5a 收口（B5a-11）把对照基线统一换成收口时的主线头（与驱动脚本同一个
+``B5A11_BASELINE_COMMIT``），七个文件都登记在这一批、删改行为空，之后改动这些文件的批次照样在末尾追加一项。入口门禁脚本在
+B5a-08 之后的对照在 B5a-06 的对照模块里。
+
+某个文件在某一批之后又改过（摘要不再是该批登记的那份）时，那一批的残差对照不再执行，改为核对接管：当前内容必须由另一批
+登记过（入口门禁脚本也认 B5a-06 对照模块里登记的批次），没有任何一批登记就失败。子测试里一律不跳过（见
+``ParitySkipDisciplineTests``）。本模块读真实仓库的 git 历史，按 ``unit_records.GIT_READERS`` 登记。
 """
 
 from __future__ import annotations
 
+import ast
 import difflib
 import hashlib
 import io
@@ -30,6 +36,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import types
 import unittest
 from pathlib import Path
@@ -288,7 +295,7 @@ class RecordsAndConsumersCodexParityTests(unittest.TestCase):
 
 # ------------------------------------------------------------------------------------------------ 源码残差
 
-# B5a-08 改动后各文件的内容摘要：之后又改过就跳过残差对照（以新的基线提交重新对照）。
+# B5a-08 改动后各文件的内容摘要：之后又改过就不再对照残差，改为核对接管（当前内容由之后的某一批登记）。
 SOURCE_DIGESTS: dict[str, str] = {
     "tools/arm64_capture_driver/driver/entry-gates.sh": "bca7b015ba199b7d4d29e130c3a287695750ad49c747ebc061181699168c7851",
     "tools/ci/entry_gates.py": "7903c17a9c1fc86a788b87027ffacb6fabe0a8b1a649fdcf1dbd3012f65ad8f0",
@@ -468,9 +475,26 @@ B5A10_SOURCE_DIGESTS: dict[str, str] = {
     "tools/ci/entry_steps.py": "b6f4f66fba26cd448e6e590d7cf216ebcf7fe8dfacb5dfc296a410f2ac501be4",
 }
 B5A10_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/ci/entry_steps.py": []}
+# 5a 收口（B5a-11）的统一对照基线（与驱动脚本同一个提交）：上面登记过的七个文件都登记在这一批，基线就是当前内容，删改行为空。
+# B5a-08 到这里没有逐行登记的几段（B2-10、B2-11 第二部分、B5a-09 续改入口编排器与入口步骤，B5a-05 与 5a 收口改 pre-A3 认证模块）
+# 在收口时一次性核对过：入口编排器只在命令末尾追加 Codex 为空的客户端参数、新增 Codex 模板为空时不进的分支并改写注释；入口步骤
+# 的启动探测运行器改取客户端表（Codex 取值就是原文件名）、新增 Codex 为空的表内输入（Codex 步骤表逐字不变由
+# test_codex_step_table_and_gate_inputs_match_the_baseline 守住）；pre-A3 认证模块的三段由 test_pre_a3_codex_parity 逐项守住。
+B5A11_BASELINE_COMMIT = b5a06.B5A11_BASELINE_COMMIT
+B5A11_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_gates.py": "7903c17a9c1fc86a788b87027ffacb6fabe0a8b1a649fdcf1dbd3012f65ad8f0",
+    "tools/ci/entry_orchestrator.py": "269c9c7f9fca94e96f7a0f6dcea7d1a23155cb3a067229e34df25ac78464fcaf",
+    "tools/ci/entry_steps.py": "f0dbc163254f4a3f2b4e8147c5f6b82b15d9ab5b5748f36186074b65345421ae",
+    "tools/ci/unit_executor.py": "61f83789666a8851203ac519c98b21bc80ab57c7c23ad5a28181921593c89c4c",
+    "tools/ci/unit_records.py": "9bdc1f8ea5831945781585b0129337566a0cd4284b6c637b01fb34ce41995c31",
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": "04131954074a36e6e02d42622da707fb52d2097578da66b3731bc039d29ef0b5",
+    "tools/official_client_capture/codex_upgrade_vc_receipt.py": "019f19b5cf6acf56e07b04981a9001e6b1ff33a3805a12da489928ce254661a5",
+}
+B5A11_SOURCE_REMOVED_LINES: dict[str, list[str]] = {relative: [] for relative in B5A11_SOURCE_DIGESTS}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
+    ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SOURCE_DIGESTS, B5A11_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {
@@ -494,37 +518,69 @@ def removed_lines(relative: str, old: str) -> list[str]:
             if line.startswith("-") and not line.startswith("---")]
 
 
+def source_batches_registering(relative: str, digest: str) -> list[str]:
+    """登记了文件 ``relative`` 这份内容（摘要）的批次：B5a-08 与之后各批（含 5a 收口的统一基线）；入口门禁脚本另认 B5a-06
+    对照模块里登记的批次。"""
+
+    owners = ["B5a-08"] if SOURCE_DIGESTS.get(relative) == digest else []
+    owners += [batch for batch, _commit, digests, _removed in LATER_SOURCE_BASELINES if digests.get(relative) == digest]
+    if relative == ENTRY_GATES:
+        owners += b5a06.shell_batches_registering(Path(relative).name, digest)
+    return owners
+
+
+def current_digest(relative: str) -> str:
+    return hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest()
+
+
 class SourceResidualCodexParityTests(unittest.TestCase):
-    def _source(self, relative: str) -> str:
-        current = (REPO_ROOT / relative).read_bytes()
-        if relative in SOURCE_DIGESTS and hashlib.sha256(current).hexdigest() != SOURCE_DIGESTS[relative]:
-            self.skipTest(f"{relative} 在 B5a-08 之后又改过：以新的基线提交重新对照")
+    def _b5a08_source(self, relative: str) -> str | None:
+        """B5a-08 登记的改后内容仍是当前内容时返回基线源码；之后又改过时核对接管（当前内容由之后的某一批登记）并返回 None。"""
+
+        digest = current_digest(relative)
+        if digest != SOURCE_DIGESTS[relative]:
+            b5a06.assert_handed_over(self, relative, "B5a-08", source_batches_registering(relative, digest))
+            return None
         source = git_source(relative)
-        if source is None:
-            self.skipTest(f"读不到基线提交 {BASELINE_COMMIT} 的 {relative}")
+        self.assertIsNotNone(source, f"基线提交 {BASELINE_COMMIT} 里没有 {relative}")
         return source.decode("utf-8")
 
     def test_only_the_registered_lines_were_removed_or_rewritten(self) -> None:
+        if not b5a06.commit_readable(BASELINE_COMMIT):
+            self.skipTest(f"读不到基线提交 {BASELINE_COMMIT}（浅克隆或不在仓库内）")
         self.assertEqual(sorted(SOURCE_DIGESTS), sorted([*SOURCE_REMOVED_LINES, ENTRY_GATES]))
         for relative, expected in SOURCE_REMOVED_LINES.items():
             with self.subTest(relative):
-                self.assertEqual(removed_lines(relative, self._source(relative)), expected)
+                source = self._b5a08_source(relative)
+                if source is not None:
+                    self.assertEqual(removed_lines(relative, source), expected)
 
     def test_later_batches_only_rewrote_the_registered_lines(self) -> None:
         self.assertNotIn("codex", STEP_CHANGES_AFTER_B5A08, "Codex 的步骤声明不得改")
+        unreadable = sorted({commit for _batch, commit, _digests, _removed in LATER_SOURCE_BASELINES if not b5a06.commit_readable(commit)})
+        if unreadable:
+            self.skipTest(f"读不到基线提交 {'、'.join(unreadable)}（浅克隆或不在仓库内）")
+        # 统一基线覆盖 B5a-08 登记的全部 Python 文件（入口门禁脚本的统一基线在 B5a-06 对照模块里）。
+        self.assertEqual(sorted(B5A11_SOURCE_DIGESTS), sorted(SOURCE_REMOVED_LINES))
+        self.assertIn(Path(ENTRY_GATES).name, b5a06.B5A11_SHELL_DIGESTS)
         for batch, commit, digests, removed in LATER_SOURCE_BASELINES:
             self.assertEqual(sorted(digests), sorted(removed), batch)
             for relative, digest in digests.items():
                 with self.subTest(batch=batch, source=relative):
-                    if hashlib.sha256((REPO_ROOT / relative).read_bytes()).hexdigest() != digest:
-                        self.skipTest(f"{relative} 在 {batch} 之后又改过：以新的基线提交重新对照")
+                    current = current_digest(relative)
+                    if current != digest:
+                        b5a06.assert_handed_over(self, relative, batch, source_batches_registering(relative, current))
+                        continue
                     source = git_source(relative, commit)
-                    if source is None:
-                        self.skipTest(f"读不到基线提交 {commit} 的 {relative}")
+                    self.assertIsNotNone(source, f"基线提交 {commit} 里没有 {relative}")
                     self.assertEqual(removed_lines(relative, source.decode("utf-8")), removed[relative])
 
     def test_entry_gates_script_with_codex_values_differs_only_in_registered_lines(self) -> None:
-        old = self._source(ENTRY_GATES)
+        if not b5a06.commit_readable(BASELINE_COMMIT):
+            self.skipTest(f"读不到基线提交 {BASELINE_COMMIT}（浅克隆或不在仓库内）")
+        old = self._b5a08_source(ENTRY_GATES)
+        if old is None:
+            return  # 之后又改过，已核对接管：当前内容由 B5a-06 对照模块里的某一批逐行对照
         values = b5a06._codex_shell_values()
         new = (REPO_ROOT / ENTRY_GATES).read_text(encoding="utf-8")
         self.assertEqual(b5a06.residual(b5a06.codex_effective(old, values), b5a06.codex_effective(new, values)), ENTRY_GATES_RESIDUAL)
@@ -570,6 +626,106 @@ class SourceResidualCodexParityTests(unittest.TestCase):
                 self.assertEqual(eo.Orchestrator._gates_mode(orchestrator), baseline)
         inherit = types.SimpleNamespace(full_set_request=None, reexecute_gates=False, unit_inherit_request=Path("/u.json"))
         self.assertEqual(eo.Orchestrator._gates_mode(inherit), "unit-inherit")
+
+
+
+# ------------------------------------------------------------------------------------------------ 防回归：子测试里不跳过
+
+# Codex 逐字对照模块的跳过纪律：子测试里跳过时 unittest 既不报父用例、又多报子测试编号，入口门禁的全集核对因此失败（全集核对
+# 在 tools/ci 的 unit_records／full_set_receipt，摘要被 Codex 评估器读侧钉住，不改它）。跳过只许发生在父级（subTest 之外），
+# 对照基线过期改为核对接管。
+PARITY_MODULES = ("test_driver_client_table_codex_parity.py", "test_unit_inherit_codex_parity.py", "test_pre_a3_codex_parity.py")
+
+
+def _direct_skips(node: ast.AST) -> list[int]:
+    """节点里的跳过（行号）：任何 ``<对象>.skipTest(...)`` 调用，以及 ``raise SkipTest``／``raise unittest.SkipTest(...)``。"""
+
+    lines: list[int] = []
+    for item in ast.walk(node):
+        if isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute) and item.func.attr == "skipTest":
+            lines.append(item.lineno)
+        elif isinstance(item, ast.Raise) and item.exc is not None:
+            target = item.exc.func if isinstance(item.exc, ast.Call) else item.exc
+            if (target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", None)) == "SkipTest":
+                lines.append(item.lineno)
+    return lines
+
+
+def subtest_skips(trees: dict[str, ast.Module]) -> list[str]:
+    """``with self.subTest(...)`` 块里（含经本类方法、本模块函数与另一对照模块函数的传递调用）出现的跳过，记「模块:行号」。"""
+
+    stems = {Path(name).stem: name for name in trees}
+    functions = {name: {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)} for name, tree in trees.items()}
+    aliases: dict[str, dict[str, str]] = {}
+    for name, tree in trees.items():
+        aliases[name] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in stems:
+                        aliases[name][alias.asname or alias.name] = stems[alias.name]
+    found: list[str] = []
+    for name, tree in trees.items():
+        for cls in [node for node in tree.body if isinstance(node, ast.ClassDef)]:
+            methods = {node.name: node for node in cls.body if isinstance(node, ast.FunctionDef)}
+
+            def resolve(call: ast.Call, module: str, methods: dict[str, ast.FunctionDef] = methods) -> tuple[str, ast.AST] | None:
+                func = call.func
+                if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                    if func.value.id == "self" and func.attr in methods and module == name:
+                        return module, methods[func.attr]
+                    target = aliases[module].get(func.value.id)
+                    if target is not None and func.attr in functions[target]:
+                        return target, functions[target][func.attr]
+                if isinstance(func, ast.Name) and func.id in functions[module]:
+                    return module, functions[module][func.id]
+                return None
+
+            for block in [node for node in ast.walk(cls) if isinstance(node, ast.With)]:
+                if not any(isinstance(item.context_expr, ast.Call) and isinstance(item.context_expr.func, ast.Attribute)
+                           and item.context_expr.func.attr == "subTest" for item in block.items):
+                    continue
+                pending: list[tuple[str, ast.AST]] = [(name, statement) for statement in block.body]
+                seen: set[int] = set()
+                while pending:
+                    module, node = pending.pop()
+                    found += [f"{module}:{line}" for line in _direct_skips(node)]
+                    for call in [item for item in ast.walk(node) if isinstance(item, ast.Call)]:
+                        target = resolve(call, module)
+                        if target is not None and id(target[1]) not in seen:
+                            seen.add(id(target[1]))
+                            pending.append(target)
+    return sorted(set(found), key=lambda item: (item.rpartition(":")[0], int(item.rpartition(":")[2])))
+
+
+class ParitySkipDisciplineTests(unittest.TestCase):
+    def test_parity_modules_never_skip_inside_subtests(self) -> None:
+        here = Path(__file__).resolve().parent
+        trees = {name: ast.parse((here / name).read_text(encoding="utf-8")) for name in PARITY_MODULES}
+        self.assertEqual(subtest_skips(trees), [], "Codex 逐字对照模块的子测试里不许跳过：跳过放到父级，基线过期改为核对接管")
+        # 规则本身认得出：子测试里直接跳过、经本类方法跳过、经本模块函数跳过；父级跳过不算。
+        sample = textwrap.dedent('''
+            def outer(case):
+                case.skipTest("模块函数")
+            class T:
+                def helper(self):
+                    raise unittest.SkipTest("本类方法")
+                def test_parent(self):
+                    self.skipTest("父级可以")
+                    with self.subTest(0):
+                        pass
+                def test_direct(self):
+                    with self.subTest(1):
+                        self.skipTest("直接")
+                def test_method(self):
+                    for item in range(2):
+                        with self.subTest(item):
+                            self.helper()
+                def test_function(self):
+                    with self.subTest(3):
+                        outer(self)
+        ''')
+        self.assertEqual(subtest_skips({"sample.py": ast.parse(sample)}), ["sample.py:3", "sample.py:6", "sample.py:13"])
 
 
 if __name__ == "__main__":

@@ -15,12 +15,17 @@
 * 安装脚本（``install.py``）：只有 Codex 纳管时安装收据与复验结果和改造前相同；后台验证、入口门禁、入口空跑沿用的
   部署收据规则与 pre-A3 声明和改造前相同。
 
-基线提交读不到（浅克隆）时跳过并写明原因；某个驱动脚本在 B5a-06 之后又改过（内容摘要不再是 ``SHELL_DIGESTS`` 登记的
-那份）时，它的逐行对照跳过——以新的基线提交重新对照：B5a-09 改过的入口便宜检查以 B5a-09 开工时的提交
-（``B5A09_BASELINE_COMMIT``）为新基线再对照一次（``B5A09_SHELL_RESIDUALS``），B5a-10 改过的批次派发、VC-5 验收与入口门禁
-以 B5a-10 开工时的提交（``B5A10_BASELINE_COMMIT``）为新基线，B3-04a 改过的 VC-4 总控以 B3-04a 开工时的提交
-（``B304A_BASELINE_COMMIT``）为新基线（``LATER_SHELL_BASELINES``）。本模块读真实仓库的 git 历史，按
-``unit_records.GIT_READERS`` 登记。
+基线提交读不到（浅克隆）时整条用例跳过（父级 ``skipTest``）并写明原因。驱动脚本的逐行对照按批登记：B5a-06 以改造前的
+``BASELINE_COMMIT`` 为基线（``SHELL_DIGESTS``／``SHELL_RESIDUALS``），之后改过驱动脚本的各批以该批开工时的提交为新基线
+（``LATER_SHELL_BASELINES``：B5a-09 的入口便宜检查、B5a-10 的批次派发／VC-5 验收／入口门禁、B3-04a 的 VC-4 总控）。5a 收口
+（B5a-11）把对照基线统一换成收口时的主线头（``B5A11_BASELINE_COMMIT``）：九个驱动脚本都登记在这一批，基线就是当前内容，
+残差为空；之后改动驱动脚本的批次照样在 ``LATER_SHELL_BASELINES`` 末尾追加一项。
+
+某个脚本在某一批之后又改过（内容摘要不再是该批登记的那份）时，那一批对它的逐行对照不再执行，改为核对接管：它当前的内容
+必须由另一批登记过（登记了当前摘要的那一批会逐行对照它），没有任何一批登记就失败——改了驱动脚本就要追加一批。子测试里
+一律不跳过：子测试跳过时 unittest 既不报父用例、又多报子测试编号，入口门禁的全集核对因此失败（防回归见
+``test_unit_inherit_codex_parity.ParitySkipDisciplineTests``）。改造前基线到收口基线的累计变化在收口时一次性核对过：每一次
+改动都落在某一批登记的对照区间里。本模块读真实仓库的 git 历史，按 ``unit_records.GIT_READERS`` 登记。
 """
 
 from __future__ import annotations
@@ -66,6 +71,23 @@ def git_source(relative: str, commit: str = BASELINE_COMMIT) -> bytes | None:
                               capture_output=True, check=True, stdin=subprocess.DEVNULL).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
+
+
+def commit_readable(commit: str) -> bool:
+    """基线提交在本仓库里读得到（浅克隆或不在仓库内时读不到；对照用例据此在父级跳过，不在子测试里跳过）。"""
+
+    try:
+        subprocess.run(["git", "-C", str(REPO_ROOT), "cat-file", "-e", f"{commit}^{{commit}}"],
+                       capture_output=True, check=True, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
+def assert_handed_over(case: unittest.TestCase, label: str, batch: str, owners: list[str]) -> None:
+    """接管核对：某一批登记的改后内容已不是当前内容时，当前内容必须由另一批登记（那一批逐行对照它）；没有即失败。"""
+
+    case.assertTrue(owners, f"{label} 在 {batch} 之后又改过，但没有一批登记它当前的内容：追加一批（基线提交、改后摘要与残差）")
 
 
 def load_baseline(relative: str, name: str, *, siblings: dict[str, types.ModuleType] | None = None) -> types.ModuleType | None:
@@ -347,7 +369,7 @@ def residual(old: str, new: str) -> list[str]:
     return [line for line in difflib.unified_diff(code(old), code(new), lineterm="", n=0) if not line.startswith(("---", "+++", "@@"))]
 
 
-# B5a-06 改动后各驱动脚本的内容摘要：脚本之后又改过就跳过逐行对照（以新的基线提交重新对照）。
+# B5a-06 改动后各驱动脚本的内容摘要：脚本之后又改过就不再逐行对照，改为核对接管（当前内容由之后的某一批登记）。
 SHELL_DIGESTS: dict[str, str] = {
     "entry-gates.sh": "63b2f897b5103d8aa23a276a4727355dabe6b9dd76238aee1ecd5802b468e832",
     "entry-preflight.sh": "b18f8106f495a6893ddccf94c453213a927f00981d7a681dbd22ccbbdcf0edda",
@@ -453,8 +475,17 @@ SHELL_RESIDUALS: dict[str, list[str]] = {
 }
 
 
+def shell_batches_registering(name: str, digest: str) -> list[str]:
+    """登记了驱动脚本 ``name`` 这份内容（摘要）的批次：B5a-06 与之后各批（含 5a 收口的统一基线）。"""
+
+    owners = ["B5a-06"] if SHELL_DIGESTS.get(name) == digest else []
+    return owners + [batch for batch, _commit, digests, _residuals in LATER_SHELL_BASELINES if digests.get(name) == digest]
+
+
 class DriverScriptCodexParityTests(unittest.TestCase):
     def test_scripts_with_codex_values_match_pre_b5a06(self) -> None:
+        if not commit_readable(BASELINE_COMMIT):
+            self.skipTest(f"读不到基线提交 {BASELINE_COMMIT}（浅克隆或不在仓库内）")
         values = _codex_shell_values()
         names = ("entry-gates.sh", "entry-preflight.sh", "guard.sh", "vc-batch.sh", "vc5-accept.sh", "vc5-precheck.sh", "lib.sh",
                  "fix-and-continue.sh")
@@ -462,11 +493,13 @@ class DriverScriptCodexParityTests(unittest.TestCase):
         for name in names:
             with self.subTest(name):
                 text = (DRIVER / name).read_text(encoding="utf-8")
-                if hashlib.sha256(text.encode("utf-8")).hexdigest() != SHELL_DIGESTS[name]:
-                    self.skipTest(f"{name} 在 B5a-06 之后又改过：以新的基线提交重新对照")
+                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                if digest != SHELL_DIGESTS[name]:
+                    # B5a-06 之后又改过：这一段的累计变化已在收口时一次性核对，这里只核对当前内容由之后的某一批登记。
+                    assert_handed_over(self, name, "B5a-06", shell_batches_registering(name, digest))
+                    continue
                 source = git_source(f"tools/arm64_capture_driver/driver/{name}")
-                if source is None:
-                    self.skipTest(f"读不到基线提交 {BASELINE_COMMIT} 的 {name}")
+                self.assertIsNotNone(source, f"基线提交 {BASELINE_COMMIT} 里没有 {name}")
                 self.assertEqual(residual(baseline_codex_effective(source.decode("utf-8")), codex_effective(text, values)),
                                  SHELL_RESIDUALS.get(name, []))
 
@@ -568,28 +601,54 @@ B304A_SHELL_DIGESTS: dict[str, str] = {
     "vc4-all.sh": "bd8faf3250a7e093d83b1dcdf11165014fcc684cfe725adc30d25136c2a051de",
 }
 B304A_SHELL_RESIDUALS: dict[str, list[str]] = {"vc4-all.sh": []}
-# 之后各批的新基线（批次、基线提交、改动后的脚本摘要、代入 Codex 取值后的残差）：某个脚本再改过时它那一项跳过，以更新的
-# 一批重新对照。基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 已不再由客户端表给出，按 Codex 的空串代入（见 B5a-09 一段）。
+# 5a 收口（B5a-11）的统一对照基线：B5a-06／08／09／10 每批都以「上一提交为新基线」补偿对照，旧基线的逐行对照随之失效。收口时把
+# 基线统一换成收口时的主线头，上面各批登记过的九个驱动脚本都登记在这一批：基线就是当前内容，残差为空。改造前基线到这里的累计
+# 变化在收口时一次性核对过（每次改动都落在上面某一批登记的对照区间里）。
+B5A11_BASELINE_COMMIT = "375c240390321677035e47a3fb5fe8091c637b88"
+B5A11_SHELL_DIGESTS: dict[str, str] = {
+    "entry-gates.sh": "bbc1cd02625ba8fba74efcda74af7c19847a58bfdfa878631d766b9a5d2fa11e",
+    "entry-preflight.sh": "762a64e1ca33bf25e84e44711497717ce0a8a3b530730306946d506a225c8cc4",
+    "fix-and-continue.sh": "5935d4c70f64979435bee6a626caad04ef94babcf2b604b06bd80a91a5de622c",
+    "guard.sh": "23ef1f8cbd4785872793fcbb28a87ef70146596a5d2eb026866abd003cac6a4d",
+    "lib.sh": "f085a20cead4a844b84148d56adb522d9a2a93687fb0dc8bb2ccffeba6ca5174",
+    "vc-batch.sh": "a94b32137e9efff2a24053392938afab73304ced10e3a238d948a0d1cb59e1e3",
+    "vc4-all.sh": "bd8faf3250a7e093d83b1dcdf11165014fcc684cfe725adc30d25136c2a051de",
+    "vc5-accept.sh": "bfe7d7c8bbbc3abc326edeb4e92d06ded6effb79000bf5be6c8b53319feecf00",
+    "vc5-precheck.sh": "226e9a93763b1d7c149f6cb1b0bf12efba24d51dc9c142c9e4b2d2b61d9ecb75",
+}
+B5A11_SHELL_RESIDUALS: dict[str, list[str]] = {name: [] for name in B5A11_SHELL_DIGESTS}
+# 之后各批的新基线（批次、基线提交、改动后的脚本摘要、代入 Codex 取值后的残差）：某个脚本再改过时它那一项改为核对接管（当前
+# 内容由更新的一批登记），改了驱动脚本的批次在末尾追加一项。基线脚本引用的待接入变量 CT_PENDING_CHECK_PLAN_AUDIT 已不再由客户端
+# 表给出，按 Codex 的空串代入（见 B5a-09 一段）。
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
     ("B3-04a", B304A_BASELINE_COMMIT, B304A_SHELL_DIGESTS, B304A_SHELL_RESIDUALS),
+    ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SHELL_DIGESTS, B5A11_SHELL_RESIDUALS),
 )
 
 
 class DriverScriptLaterBatchCodexParityTests(unittest.TestCase):
     def test_scripts_with_codex_values_match_later_batch_starts(self) -> None:
+        unreadable = sorted({commit for _batch, commit, _digests, _residuals in LATER_SHELL_BASELINES if not commit_readable(commit)})
+        if unreadable:
+            self.skipTest(f"读不到基线提交 {'、'.join(unreadable)}（浅克隆或不在仓库内）")
+        # 统一基线覆盖收口前登记过的全部驱动脚本。
+        before = {name for batch, _commit, digests, _residuals in LATER_SHELL_BASELINES
+                  if batch in {"B5a-09", "B5a-10", "B3-04a"} for name in digests}
+        self.assertEqual(sorted(B5A11_SHELL_DIGESTS), sorted(set(SHELL_DIGESTS) | before))
         values = {**_codex_shell_values(), "CT_PENDING_CHECK_PLAN_AUDIT": ""}
         for batch, commit, digests, residuals in LATER_SHELL_BASELINES:
             self.assertEqual(sorted(digests), sorted(residuals), batch)
             for name, digest in digests.items():
                 with self.subTest(batch=batch, script=name):
                     text = (DRIVER / name).read_text(encoding="utf-8")
-                    if hashlib.sha256(text.encode("utf-8")).hexdigest() != digest:
-                        self.skipTest(f"{name} 在 {batch} 之后又改过：以新的基线提交重新对照")
+                    current = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                    if current != digest:
+                        assert_handed_over(self, name, batch, shell_batches_registering(name, current))
+                        continue
                     source = git_source(f"tools/arm64_capture_driver/driver/{name}", commit)
-                    if source is None:
-                        self.skipTest(f"读不到基线提交 {commit} 的 {name}")
+                    self.assertIsNotNone(source, f"基线提交 {commit} 里没有 {name}")
                     self.assertEqual(residual(codex_effective(source.decode("utf-8"), values), codex_effective(text, values)),
                                      residuals[name])
 
