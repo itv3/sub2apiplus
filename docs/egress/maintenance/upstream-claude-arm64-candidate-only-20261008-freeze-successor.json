@@ -1,0 +1,82 @@
+{
+  "base_commit": "3d114ee8973f2d07090c72f2c3ef3773d166dd9b",
+  "changed_path_count": 4,
+  "current_commit": "6f7bdeaeadf2bf5753e7b2c6f3d78a1e0921ba9d",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5872,
+  "frozen_path_count": 2015,
+  "identity_sha256": "d2f152597de582f00a4bd68d583e4371589eaffb1b925dac27359ee7f2c3dd18",
+  "issued_at_utc": "2026-10-07T22:08:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-arm64-candidate-only-20261008-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/config/config.go",
+      "predecessor_sha256s": [
+        "17955f0941ac2889fabbc8f5fcb41b69ea49476c61db8a7ba8b69f1c7ae015d3"
+      ],
+      "reason": "用户确认 Claude 候选开关仅允许 ARM64，DMIT 已为生产实例；历史事实与收据保留 path=backend/internal/config/config.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-b5b01b-candidate-instance-allowlist-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b9ef2e887945433eb0b1d6c263c92316797488ea28c74c3d3c0ff94b45bd2088"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/config/config_test.go",
+      "predecessor_sha256s": [
+        "b1a35ad60fdde8d5c533179f8080633acf392fabf999531c7454b89847d7d81f"
+      ],
+      "reason": "用户确认 Claude 候选开关仅允许 ARM64，DMIT 已为生产实例；历史事实与收据保留 path=backend/internal/config/config_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-b5b01b-candidate-instance-allowlist-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c3214ffc74b1c9ce99aaac3ad5770440a7924a9c35dcdb81560cfc9384133c90"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/manifest.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
