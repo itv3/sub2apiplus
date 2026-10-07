@@ -31,7 +31,8 @@ SNAPSHOT_DIRNAME = "claude-recorded"
 PURPOSE = "regression_fixture"
 SOURCE_METADATA = ("campaign.json", "scenario-catalog.json", "candidate-denominator.json", "execution-summary.json")
 PROBE_ID = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
-RELAY_FILE = re.compile(r"(?:relay\.json|conn[0-9]+\.(?:client_to_upstream|upstream_to_client)\.bin)\Z")
+# 合成场景的干预记录也是既有评估器的证据输入，必须保持原字节一起封存。
+RELAY_FILE = re.compile(r"(?:relay\.json|intervention\.jsonl|conn[0-9]+\.(?:client_to_upstream|upstream_to_client)\.bin)\Z")
 
 
 class ReplayError(RuntimeError):

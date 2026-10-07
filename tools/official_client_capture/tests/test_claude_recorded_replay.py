@@ -48,6 +48,7 @@ class ClaudeRecordedSnapshotTests(unittest.TestCase):
                 "client": {"version": "2.1.226 (Claude Code)"}, "dimension_evidence": {"actual_wire_inventory": []},
             })
             _write(attempt / "relay" / "relay.json", {"connections": []})
+            (attempt / "relay" / "intervention.jsonl").write_bytes(b'{"fixture_only":true}\n')
             (attempt / "relay" / "conn001.client_to_upstream.bin").write_bytes(b"historical-regression-bytes\x00\xff")
             (attempt / "results").mkdir()
             (attempt / "results" / "debug.log").write_text("仅供测试的调试记录", encoding="utf-8")
@@ -87,6 +88,14 @@ class ClaudeRecordedSnapshotTests(unittest.TestCase):
         (Path(index["evidence_root"]) / relative).write_bytes(b"changed")
         with self.assertRaisesRegex(replay.ReplayError, "附件摘要漂移"):
             replay.load_snapshot(binding)
+
+    def test_unregistered_relay_file_is_still_rejected(self) -> None:
+        """只补登记干预证据，未知中继附件仍不能混进快照。"""
+
+        path = self.recorded / "attempts" / "v4-fixture-probe" / "attempt-001" / "relay" / "unknown.jsonl"
+        path.write_bytes(b'{}\n')
+        with self.assertRaisesRegex(replay.ReplayError, "未登记的文件"):
+            replay.build_snapshot(self.staging, recorded=self.recorded)
 
     def test_index_cannot_be_replaced_to_bless_other_bytes(self) -> None:
         binding = replay.build_snapshot(self.staging, recorded=self.recorded)
