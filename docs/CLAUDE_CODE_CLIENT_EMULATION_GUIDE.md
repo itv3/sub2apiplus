@@ -1018,8 +1018,9 @@ Claude 的生产 Active 身份必须同时满足
 | 范围 | 当前边界 |
 |---|---|
 | VC-0～VC-4 | 受管入口、官方取证／恢复、分类批准、画像暂存和候选 revision／构建已接入；正式开工仍需 §4.0.5 的发布认证 |
-| VC-5 | 候选采集与封存、compare／accept、评估基线和四类裁定的控制面已有实现；Mac v2 合同 B、受监督 client-run、来源与预约 wrapper 及 compare／accept 读侧接线已合入。原 attempt 持久请求上界占用、候选服务与消费读侧已接通；独立 H1／TLS-H1 及受限 H2 原生捕获、认证导出同步、私有状态 journal 和只读能力检查已完成本机实现。H2 首片持久化、同原件恢复、ALPN 与断点同步专项已通过，全部仍为回归夹具；完整产品 capture v2、真实 ProductRecorder、连续事件／模块／transport-map 与历史形成期 authority 仍有缺口。正式来源表仍为空，live 保持零启动拒绝，三官方客户端真账号现场未验收 |
-| 封存后临时环境故障 | B4-05b 的 `ar<k>`、对账、增量封存、封存后请求入账及五项恢复后继修复已合入本机集成树，组合定向检查通过；第二次 transient 整链及正式八链未认证。不能把封存前 resume 或组合专项当作该整链的通过凭证 |
+| VC-5 | 候选采集与封存、compare／accept、评估基线和四类裁定的控制面已有实现；Mac v2 合同 B、受监督 client-run、来源与预约 wrapper 及 compare／accept 读侧接线已合入。原 attempt 持久请求上界占用、候选服务与消费读侧已接通；独立 H1／TLS-H1 及受限 H2 原生捕获、认证导出同步、私有状态 journal 和只读能力检查已完成本机实现。H2 首片持久化、同原件恢复、ALPN 与断点同步专项已通过，全部仍为回归夹具；完整产品 capture v2、正式产品观测后端、连续事件／模块／transport-map 与历史形成期 authority 仍有缺口。正式来源表仍为空，live 保持零启动拒绝，三官方客户端真账号现场未验收 |
+| Mac fixture 内部记录器 | `NativeProductRecorder` 的九方法协议与真实 `StateJournal` 已完成本机接线，相关专项在 `059d87e52` 上 165 项通过、零跳过。仅接受显式回归夹具，产物是内部 partial／恢复诊断；formal 与成功收据仍拒绝，真实产品后端与现场权限未就绪。合同与来源边界见共享实现文档 §12.1 |
+| 封存后临时环境故障 | B4-05b 的 `ar<k>`、对账、增量封存、封存后请求入账及五项恢复后继修复已合入本机集成树，组合定向检查通过；第二次 transient 已实际复验，最终验收收口尚未登记通过；正式八链未认证。不能把封存前 resume 或组合专项当作该整链的通过凭证 |
 | VC-6 候选交付 | 真实交付合同 A、独立执行器与 guard／恢复证明、严格 Store 消费、阶段结果及 checkpoint 已完成本机接线；正式执行器与来源登记仍为空，ARM64 受管安装、可信回退、专用凭据、四阶段及异常恢复尚待现场验收。当前不能宣称已完成真实切换、回退或稳定观察 |
 | 完整链与认证 | B5b-02 来源快照与 VC-0→VC-1 连续驱动源码已接入，仅限 `fixture_only／regression_fixture`；连续链、完整链与故障链仍须按实际串行执行结果验收，B5b-04 当前发布认证未签发 |
 | 生产激活 | B4-08 另批；候选交付与生产激活的权限、收据及终态分开，见 §4.6 |
@@ -1347,7 +1348,7 @@ Claude 发布认证：**待认证**。上述入口、源码与离线合同不等
 本次文档同步只登记结构与实际入口，不补签认证或把旧 pre-A3 收据视为当前发布证明。
 本机集成树已合入真实交付合同 A（`551a01c17`，89 项本机测试通过）与 Mac v2 合同 B
 （`8b6e15ab8`，74 项基础测试及 31 项入口故障测试通过）。共享 D4／r2 与五项恢复后继修复也已合入，
-Mac、身份与恢复组合专项在 `58dcc47ab` 上共 165 项通过，第二次 transient 整链尚未执行；这些本机
+Mac、身份与恢复组合专项在 `58dcc47ab` 上共 165 项通过，第二次 transient 已实际复验，最终验收收口尚未登记通过；这些本机
 局部凭证不证明八条必需链通过。B 的来源与预约 wrapper 已真实调用并进入 compare／accept 读侧根，
 末轮接线已提交 `58dcc47ab`，双客户端身份与读侧摘要已实算，最终演进登记及变异复验仍待收口。
 新模块与最终修复纳入工具身份后，仍须完成策略演进与受监督部署，并以 ARM64 当前部署的八链、
@@ -1417,7 +1418,7 @@ EvidencePackage 才获正式引用权限；`regression_fixture` 收据只供测�
 历史候选冲突／闭集缺口，或候选粒度不足以唯一映射时，才全量重审原始资料。重审必须建立新的内容寻址
 基线和追加式收据，记录触发原因、摘要、ID 迁移和覆盖差异；旧基线不得覆盖。
 
-### 4.1.2 Bundle 分析、抓包与封存
+### 4.1.2 源码分析、抓包与封存
 
 Claude 没有可审计的目标版本未压缩源码，以官方生产 bundle 和目标运行证据为主。VC-1 的动作全部由父监督器
 `campaign-run` 派发，是受监督动作；参数取自 Formal 总计划冻结的输入（场景清单、证据标签、静态基线、生产现状
@@ -2068,7 +2069,7 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-all.sh"
 来源与预约 wrapper 已真实调用并显式纳入 compare／accept 读侧根，末轮接线已提交 `58dcc47ab`，
 双客户端摘要已实算，最终受控演进、部署与统一门禁仍待收口。原 attempt 的持久请求预算服务与消费
 已接通；H1／TLS-H1 和受限 H2 原生捕获／恢复／认证同步已通过本机专项，来源只属回归夹具。
-真实 ProductRecorder、连续事件／模块、transport-map、正式隔离模板与完整产品联合来源仍未闭合，
+正式产品观测后端、连续事件／模块、transport-map、正式隔离模板与完整产品联合来源仍未闭合，
 因此 live 入口保持零启动拒绝，正式来源登记仍为空。历史形成期 authority 也待补齐。三官方客户端
 真账号采集尚未现场验收；缺少 Desktop／VS Code 当前 v2 收据或 seal 批准时，驱动写
 `vc5-pause.json` 并暂停。D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项共 165 项通过，第二次 transient 已实际
@@ -2135,6 +2136,12 @@ for VS Code 按批准计划驱动候选。Claude 按 ModelCapabilityCatalog 枚�
 transport-map、正式隔离模板与联合来源仍未闭合；受限原生捕获不冒充完整产品 v2 来源。能力未闭合时在产品启动前拒绝，不创建第二本账或另起
 不受监督的捕获。正式 `SOURCE_ADAPTERS` 仍为空，测试作用域的替身登记不授予正式权限；
 `regression_fixture` 只归档回归材料，实际产品、账号与双端来源仍须现场验收。
+
+`NativeProductRecorder` 的九方法协议、真实 `StateJournal`、内部 partial 与恢复诊断已完成
+本机 fixture 接线，合同边界见[共享实现 §12.1](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md#121-候选采集来源复用与封存)。
+它尚无真实产品观测后端，formal 在产品启动前拒绝；即使上游请求 `complete` 仍抛
+`ProductRecorderUnavailable`，不生成完整 v2 联合来源或成功收据。本机 165 项专项通过不能
+代替正式来源工厂、连续观测、transport-map 与三官方客户端现场验收。
 
 | v2 材料 | 必须分别冻结和重验的事实 |
 |---|---|
@@ -2279,7 +2286,7 @@ python3 -m tools.official_client_capture.claude_upgrade evaluation-recover previ
 | `root-cause-class` | 修复与续跑入口 | 当前边界 |
 |---|---|---|
 | `evaluator-defect` | 修 evaluator、定向回归、受监督部署并登记演进；`evaluation-recover apply` 绑定修复 commit、部署收据与批准摘要，开新 `b<K>` | 复用原始采集，仅重评受影响部分 |
-| `transient-environment` | 从失败断言沿候选 manifest 的 `source_artifacts` 回溯非空 Job 集 J*；经批准开 `ar<k>`，补采后增量封存、重评 | 恢复段及五项后继修复已合入，组合定向检查通过；第二次 transient 整链未跑，尚无正式整链通过凭证 |
+| `transient-environment` | 从失败断言沿候选 manifest 的 `source_artifacts` 回溯非空 Job 集 J*；经批准开 `ar<k>`，补采后增量封存、重评 | 恢复段及五项后继修复已合入，组合定向检查通过；第二次 transient 已实际复验，尚无最终整链验收通过凭证 |
 | `candidate-source` | 对账、`invalidate-candidate preview／apply`，再 `revision-open --supersedes` | 新候选从 VC-4 起，保留可信 VC-0～VC-3 |
 | `approval-inputs` | 仅 selector 修正走 `evaluation-recover approval-revision`；规则集、模式、场景或目标身份变化建后继 Campaign | 新批准基线下旧验收不能直接沿用 |
 
@@ -2544,7 +2551,7 @@ attempt 不足以选前者。下表的“已接入”指本机代码入口；完
 | VC-4 构建／上传中断 | 父 run 对账 | 原身份且幂等证明成立时续作 | `vc4-all.sh`；上传用 `--resume-from upload-wait` | 已接入 |
 | VC-5 未封存采集失败 | 预约对账 | 批准、授权、`vc5-claude-recover.sh` | 保留可信 Job，只补执行闭集 | `fix-and-continue.sh` 已接入 |
 | 网关残留／取证进程残留 | 预约对账与 `environment-cleanup preview` | 批准清理、干净环境复核，必要时隔离 | 原恢复轮，再批准补跑 | 清理工具已接入，需独立批准 |
-| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | CLI／批次、门禁与来源消费已接；三项真实服务能力仍缺，live 保持零启动拒绝 |
+| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | CLI／批次、门禁、预算与受限原生采集消费已接；fixture 薄记录器只产内部诊断，正式产品／来源仍缺，live 保持零启动拒绝 |
 | 边界核对／seal／compare 批次失败 | 父 run 对账 | 按失败码修复与登记演进 | 同一候选的未完成动作 | seal／compare 已接；不合法既有边界收据先人工审计 |
 | 已封存 evaluator 缺陷 | `evaluation-recover preview` | 修复、部署、演进、批准 `evaluator-defect` | 新 `b<K>`，只重评影响项 | 离线恢复已接入 |
 | 已封存临时环境故障 | 评估诊断沿 `source_artifacts` 定位 J* | `transient-environment`，补采后增量封存 | `ar<k>` → 新基线 compare／accept | 恢复段及后继修复已合入；组合专项与第二次 transient 整链待验收 |
@@ -2671,7 +2678,7 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-claude-recover.sh" "$RECOVERY_PREVIEW"
 
 封存前候选续跑使用普通 attempt；封存后的补采段使用 `ar<k>`，交付恢复另用 `dr<k>`，三者不能混用。
 B4-05b 恢复段、D4／r2 与五项恢复后继修复已合入本机集成树，覆盖 J* 定向补采、独立
-ValidationAttempt、增量封存与新基线重评；组合专项仍待复验，第二次 transient 整链尚未执行，
+ValidationAttempt、增量封存与新基线重评；本机组合专项仅供回归，第二次 transient 已实际复验，最终验收收口尚未登记通过，
 正式整链未认证。已预约段中断走 `reconcile-attempt --recovery-revision ar<k>`，未预约走父 run 对账。
 完成验收前保留暂停与诊断，不以普通 resume 重采整份已封存候选。
 

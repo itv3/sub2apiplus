@@ -144,7 +144,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 8；schema 版本不表示发布认证通过） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 10；schema 版本不表示发布认证通过） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
 | 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
 | 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
@@ -178,6 +178,19 @@ Claude 的 Store 合同（Codex 不涉及）：
 | 候选交付包／收据 | 旧包及 v1～v3 收据按形成期只读重放，不授予当前完成权 | `official-client-candidate-delivery-package/v2`／`official-client-candidate-delivery-receipt/v4`，绑定有效四阶段、失败／恢复、阶段失效、预约与发布意图 |
 | Mac 客户端材料 | v1 原件只读保留；准确形成期 authority 入口仍待补齐 | task／source-manifest／server-capture／imported-run／receipt 全组 v2，accounting 仍为 v1；正式来源与真实服务未就绪时拒绝启动 |
 | 新对象与查询 | — | `tool_evolution_registration`、`predecessor_import`、候选作废对象 `candidate_invalidation`（两步批准：`candidate-invalidate --preview`／`--approve-sha256`）；新事实 `candidate_revision_recorded`；新收据 `predecessor_import`（`official-client-predecessor-import-receipt/v1`）；`fact-lookup` 结果 `official-client-control-fact-lookup/v1` |
+
+通用 `Store.replay` 先完成原有对象图、Campaign／事实链、形成期坐标、因果关系和收据重建，再按
+本轮已核验的 Campaign v2 `client` 与完整引用图判定归属。只有全部来源可证属于 Claude v2 的
+`Snapshot.payload.document` 与 `CandidateBuildReceipt.build_identity.parameters` 两个父域使用共享读集
+投影；父原件及真正外部绑定仍逐项实读。未知、孤立、跨客户端或前序导入来源保持原严格扫描，
+不从路径、Persona、自报来源或已有报告授予投影资格。
+
+出现父域投影时，通用结果为 `official-client-control-replay-result/v2`，携带
+`official-client-qualification-binding-projection/v1` 清单；未使用投影仍按原 v1 结果合同返回。
+候选资格与交付资格消费者分别使用 `claude-upgrade-candidate-qualification-replay/v2`、
+`claude-upgrade-delivery-qualification/v2`，共用同一投影与真实文件要求。该读集补正不改写历史原件、
+不放宽其余外部核验，也不授予当前写入、正式来源、现场执行或发布认证权限；实现存在不能证明某份
+旧大图已经完成完整 generic 重放。
 
 ## 4 共享控制流程与两个编排器
 
@@ -360,7 +373,7 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 8 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 10 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
@@ -706,12 +719,20 @@ Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recover
   完整 v2；来源与预约的字面验证入口也已纳入真实读侧根，不能以整文件边界代替调用依赖。accounting 仍沿既有
   v1 意图／COMMIT／outbox／项目账本链写入，不新建第二本账。原 attempt 的持久请求上界占用、派发前复核和
   结清服务与消费读侧已接通。独立 H1／TLS-H1 和受限 H2 原生捕获及认证导出同步已实现，
-  仅支持 `regression_fixture`。H2 原始字节／ALPN／恢复／断点同步及身份专项已通过，外层完整运行库
-  读集尚未接入，不能据此开放通用承接；它也不生成完整产品 v2 联合来源。私有状态 journal 仅恢复明确
+  仅支持 `regression_fixture`。H2 原始字节／ALPN／恢复／断点同步及身份专项已通过，外层完整宿主运行库
+  读集尚未闭合，H2 测试单元在此之前禁止承接；它也不生成完整产品 v2 联合来源。私有状态 journal 仅恢复明确
   受管意图，能力检查仅核对显式冻结制品，未经认证的外部能力结果保持未知。正式 `SOURCE_ADAPTERS`
-  仍为空；真实 ProductRecorder、连续事件／模块／transport-map、完整 v2 联合来源与历史形成期 authority 仍待闭合。能力未闭合
+  仍为空；正式产品观测后端、连续事件／模块／transport-map、完整 v2 联合来源与历史形成期 authority 仍待闭合。能力未闭合
   时 live 在产品启动前拒绝；驱动缺真实材料／批准则写 `vc5-pause.json`。本机接线、夹具与组合专项不证明三官方
   客户端真账号采集或完整链通过，现场与认证状态以 Claude 指南 §4.0.5／§4.5.2 为准。
+- `claude_mac_product_recorder.NativeProductRecorder` 已提供既有九方法协议的内部桥，并使用真实
+  `StateJournal` 处理明确冻结的私有状态；观测仅委托原静态 fixture 来源拥有的 provider。完整 task、
+  原目录实例、来源所有权、生命周期 WAL、首次 partial 原件与恢复原件分别核验；重复恢复仍读取当前
+  实际状态。它没有真实产品启动、UI、信号、凭据或网络后端，formal 在取锁、写入和 provider 调用前
+  拒绝；只封存 `internal-v1` partial／恢复诊断，即使上游请求 `complete` 仍抛
+  `ProductRecorderUnavailable`，不生成 source-manifest、正式 origin 或成功收据。薄记录器、状态 journal、
+  预算消费、配方及双客户端身份专项在 `059d87e52` 上 165 项通过、零跳过；这份本机夹具凭证不授予
+  正式 `SOURCE_ADAPTERS` 登记、当前完整 v2 成功或现场采集权限。
 
 ### 12.2 评估基线、compare 与 accept
 

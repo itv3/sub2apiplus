@@ -29,6 +29,11 @@ EvidenceApprovalFact。规则数量由已原子化且可断言的 SPEC 决定，
 
 FW-E 补强链为：
 
+`analyze-bundles` 默认使用采集容器内的受管 `/opt/claude-tooling/node` 与
+`/opt/claude-tooling/typescript/lib/typescript.js`；缺失即失败。本机分析须显式传
+`--node-binary <node 路径或 PATH 中的命令名>`、`--typescript-module <typescript.js 路径>`。
+TypeScript 必须仍为锁定的 5.6.3 原件并通过 SHA-256 核验；两项运行时的实际路径与摘要进入分析收据。
+
 ```bash
 python3 tools/official_client_capture/claude_fw_e.py analyze-bundles --help
 node tools/official_client_capture/claude_sink_containment.mjs \
