@@ -1215,7 +1215,7 @@ class Arm64DeliveryExecutor:
                        "guard_continuity": raw["guard_continuity"],
                        "continuity_originals": [item.as_value() for item in continuity.read_bindings]}
             bindings = project_delivery_raw_bindings(source, initial,
-                gate_projection=gate_projection, profile_projection=profile_projection, guard_continuity=continuity)
+                gate_projection=gate_projection, profile_projection=profile_projection)
             for item in bindings:
                 data = originals.get(item["path"])
                 if data is None or len(data) != item["bytes"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
