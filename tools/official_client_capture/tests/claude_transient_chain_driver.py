@@ -291,7 +291,14 @@ sys.exit(0)
     def evaluation_context(self, campaign: Path) -> dict[str, Any]:
         """同世界的全部批准规则与官方外部来源；不合成或覆盖候选阶段结果。"""
 
-        return world_fixture.real_candidate_world(self, campaign, candidate_id=CANDIDATE, revision=1, expected_client_requests=2)
+        # 把当前执行源已经登记的映射作为外部输入冻结，供 VC-5 动作子进程登记同一布局。
+        with self.runtime.patched():
+            capture_layout = {
+                "host_runs_root": str(upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT),
+                "container_run_roots": [str(root) for root in upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS],
+            }
+            return world_fixture.real_candidate_world(self, campaign, candidate_id=CANDIDATE, revision=1,
+                expected_client_requests=2, capture_layout=capture_layout)
 
     def dispatch_builder(self, context: dict[str, Any], sequence: int, *, baseline: int) -> tuple[int, dict | None, str]:
         """当前基线先经真实 compare 批次，再消费它的 builder 配置；序号在 world 内连续。"""

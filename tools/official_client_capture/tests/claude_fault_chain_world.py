@@ -54,14 +54,19 @@ def refresh_world(case: Any, world: dict[str, Any], *, candidate_id: str | None 
     return world
 
 
-def real_candidate_world(case: Any, campaign: Path, *, candidate_id: str, revision: int, expected_client_requests: int) -> dict[str, Any]:
+def real_candidate_world(case: Any, campaign: Path, *, candidate_id: str, revision: int, expected_client_requests: int,
+                         capture_layout: dict[str, Any] | None = None) -> dict[str, Any]:
     """共享世界只绑定真实候选；配置中不允许出现替换 attempt 上下文的两个接缝字段。"""
 
     evaluation = campaign / 'continuous-sources'
     official_side = evaluator.write_side(evaluation / 'official', capture_id='continuous-official')
     official = upgrade._load_stage_result(campaign, 'capture-official')
     source_path = sources._write_json(evaluation / 'official-source.json', sources.official_source(official_side, official['store']['evidence_package_ref']))
-    config_path = sources._write_json(evaluation / 'source-config.json', {'official_source': str(source_path)})
+    source_config: dict[str, Any] = {'official_source': str(source_path)}
+    if capture_layout is not None:
+        # 可选布局只登记测试运行源的真实映射，与首次来源配置一起写出；不改 Campaign 或候选证据。
+        source_config['capture_layout'] = dict(capture_layout)
+    config_path = sources._write_json(evaluation / 'source-config.json', source_config)
     world = {'campaign': campaign, 'candidate_id': candidate_id, 'revision': revision, 'evaluation': evaluation,
              'official': official_side, 'config_path': config_path, 'gate_root': case.root / 'gate-evidence',
              'expected_client_requests': expected_client_requests, 'real_candidate': True, 'next_sequence': 9,

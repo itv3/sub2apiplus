@@ -31,7 +31,7 @@ import hashlib
 import json
 import os
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
 from unittest import mock
 
@@ -168,12 +168,18 @@ def _replay_environment(root: Path, relative: str) -> dict[str, Any]:
 
 
 def patchers(config: Mapping[str, Any]) -> list[Any]:
-    """按配置组出接缝的 patcher：官方评估来源、候选 attempt 上下文与门禁环境收据（模块说明第 2、4、5 条）。"""
+    """按配置组出输入源接缝，并按可选的运行源布局登记映射；正式布局校验仍由产品读侧执行。"""
 
     from tools.official_client_capture import claude_upgrade
     from tools.official_client_capture import claude_upgrade_compare
 
     result: list[Any] = [claude_client_receipt_fixture.source_patch()]
+    if config.get("capture_layout") is not None:
+        # 只登记外部运行源已冻结的两个值；不从 capture_root 推导别名、不替换正式布局校验器。
+        layout = config["capture_layout"]
+        result.append(mock.patch.object(claude_upgrade, "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT", Path(layout["host_runs_root"])))
+        result.append(mock.patch.object(claude_upgrade, "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS",
+            tuple(PurePosixPath(value) for value in layout["container_run_roots"])))
     if config.get("official_source"):
         source = json.loads(Path(config["official_source"]).read_text(encoding="utf-8"))
         result.append(mock.patch.object(claude_upgrade_compare, "official_evaluation_source", side_effect=lambda *a, **k: copy.deepcopy(source)))
