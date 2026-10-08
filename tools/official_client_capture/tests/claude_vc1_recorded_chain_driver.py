@@ -323,6 +323,7 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
 
 def _batch(
     data: Path, campaign: Path, name: str, argv: list[str], *, phase: str = "VC-1", timeout_seconds: float = 600,
+    action: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """同一 Campaign 的真实监督批次；前序只从已验证 checkpoint 取，不能由夹具预写完成。"""
     from tools.official_client_capture import claude_upgrade as upgrade
@@ -338,9 +339,13 @@ def _batch(
     plan = upgrade._vc_campaign_plan(campaign, manifest)
     upgrade._replay_vc_checkpoint(campaign, plan, previous, revision=revision)
     sequence = max(upgrade._committed_vc_sequences(campaign, manifest), default=0) + 1
+    dispatched = (batch.managed_action(name, phase + ":" + name, argv, item_ids=[name], timeout_seconds=timeout_seconds)
+                  if action is None else action)
+    if dispatched.get("action_id") != name or dispatched.get("item_ids") != [name] or dispatched.get("operation") != phase + ":" + name:
+        raise replay.ReplayError("显式批次动作必须与本阶段、动作名和唯一执行项闭合")
     action = source.write(data / "control" / "actions" / f"{sequence}-{name}.json", {
         "schema_version": artifacts.VC_ACTION_PLAN_SCHEMA, "execute_item_ids": [name], "reuse_item_ids": [],
-        "actions": [batch.managed_action(name, phase + ":" + name, argv, item_ids=[name], timeout_seconds=timeout_seconds)]})
+        "actions": [dispatched]})
     result, code = upgrade.compile_and_run_vc_batch(argparse.Namespace(
         campaign_dir=campaign, state_dir=data / "supervisor", phase=phase, sequence=sequence,
         predecessor_checkpoint=predecessor, action_plan=action,

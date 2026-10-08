@@ -13,8 +13,11 @@ import copy
 import json
 import os
 import subprocess
+import sys
+import tempfile
 import time
 import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
@@ -265,16 +268,30 @@ def _direct(argv: list[Any]) -> tuple[int, dict[str, Any], str]:
     return code, result, stderr
 
 
+def _require_client_staging(data: Path) -> None:
+    """完整链的 Mac 来源也受系统临时根约束；只能由外层隔离执行器明确统一 TMPDIR 和记录根。"""
+
+    from tools.official_client_capture.tests import claude_client_receipt_fixture as clients
+
+    data = data.resolve()
+    root = clients.temporary_root(data)
+    if not data.is_relative_to(root / "staging"):
+        raise replay.ReplayError(f"完整链数据根须在实际临时根 {tempfile.gettempdir()} 的首层 <world>/staging 内")
+
+
 @contextlib.contextmanager
 def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
     """冻结候选形成后才安装其外部环境观察源；准入、Store、画像、selector 与 run/seal 判定不替换。"""
 
+    from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import claude_upgrade_capture as capture
     from tools.official_client_capture import claude_upgrade_candidate_capture as candidate
     from tools.official_client_capture.tests import claude_client_receipt_fixture as clients
     from tools.official_client_capture.tests import test_claude_upgrade_capture as host_fixture
     from tools.official_client_capture.tests import claude_vc5_chain_fixture as observation_fixture
     from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as gateway_fixture
+    from tools.official_client_capture import claude_upgrade_delivery as delivery
+    from tools.official_client_capture.tests import claude_vc6_delivery_fixture as delivery_fixture
 
     data = Path(state["data_root"])
     path = data / "control/full-runtime-source.json"
@@ -285,7 +302,14 @@ def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
     config = source.read(path)
     if config.get("fixture_only") is not True or config.get("purpose") != "recorded_control_runtime_source":
         raise replay.ReplayError("候选环境来源不是明确的控制夹具")
-    build = source.read(source.bound(config["build_receipt"], root=data))
+    build_path = source.bound(config["build_receipt"], root=data)
+    build = source.read(build_path)
+    manifest = upgrade.load_campaign_manifest(build_path.parents[2])
+    source.bound(config["profile_stage"], root=data)
+    frozen = state["inputs"]["candidate_configuration"]
+    if (build.get("candidate_id") != CANDIDATE or config["candidate_configuration"] != manifest["configuration"]
+            or any(str(manifest["configuration"].get(name)) != value for name, value in frozen.items())):
+        raise replay.ReplayError("外部候选运行观察与本链构建、冻结五变量不符")
     gateway = copy.deepcopy(gateway_fixture.BASE_GATEWAY)
     gateway["service"]["image_id"] = build["image"]["image_id"]
     fact = observation_fixture.activation_fact(build, source.VERSION)
@@ -309,6 +333,14 @@ def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
         stack.enter_context(mock.patch.object(candidate, "observe_service_image", lambda *_a, **_k: build["image"]["image_id"]))
         stack.enter_context(mock.patch.object(candidate, "host_facts", return_value={"host_id": HOST, "architecture": "linux/arm64"}))
         stack.enter_context(clients.source_scope())
+        delivery_control = data / "control/recorded-delivery-control.json"
+        if delivery_control.exists():
+            control = source.read(source.bound(source.binding(delivery_control), root=data))
+            if control.get("fixture_only") is not True or control.get("formal_version_semantics_certified") is not False:
+                raise replay.ReplayError("交付执行器来源未显式限定控制回归")
+            stack.enter_context(mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {
+                delivery_fixture.EXECUTOR_NAME: lambda: delivery_fixture.FileExecutor(delivery_control),
+            }))
         yield
 
 
@@ -357,6 +389,294 @@ def build_candidate(data: Path, campaign: Path) -> dict[str, Any]:
             "external_source": "fixture_only Git/二进制/前端/镜像/实现测试观察，不表示生产构建验收"}
 
 
+def _client_inputs(data: Path, campaign: Path, attempt_root: Path, attempt: dict[str, Any]) -> dict[str, Any]:
+    """外部 Mac/边界材料仅构造输入；Mac 导入、计账、附件验证与边界收据消费执行真实合同。"""
+
+    from tools.official_client_capture import claude_client_receipt_contract as client_contract
+    from tools.official_client_capture import claude_upgrade_boundary_checks as boundary
+    from tools.official_client_capture.tests import claude_boundary_receipt_fixture as boundary_fixture
+    from tools.official_client_capture.tests import claude_client_receipt_fixture as clients
+
+    values = {name: attempt[name] for name in client_contract.COORDINATES}
+    original = source.binding(attempt_root / "attempt.json")
+    receipts, batches = {}, []
+    for client in client_contract.CLIENTS:
+        task, bundle, _capture = clients.material(attempt_root, client, values, issued_at_utc=attempt["completed_at_utc"])
+        batches.append(vc1._batch(data, campaign, "vc5-client-" + client, [
+            "capture-candidate", "client-evidence", "import", "--campaign-dir", str(campaign),
+            "--candidate-id", CANDIDATE, "--attempt-id", attempt_root.name, "--client", client,
+            "--client-task", str(task), "--bundle", str(bundle),
+        ], phase="VC-5"))
+        receipt = attempt_root / "client-evidence" / (client + ".json")
+        client_contract.verify_client_receipt(attempt_root, client, receipt)
+        receipts[client] = source.binding(receipt)
+    for check in boundary.CHECK_IDS:
+        receipt = boundary_fixture.write_boundary_receipt(attempt_root, check, mutate=lambda value: value["facts"].update(
+            fixture_only=True, purpose="recorded_control_input", formal_version_semantics_certified=False,
+        ))
+        boundary.verify_boundary_receipt(attempt_root, check, receipt)
+        receipts[check] = source.binding(receipt)
+    if source.binding(attempt_root / "attempt.json") != original:
+        raise replay.ReplayError("外部 Mac/边界输入改变了真实候选 attempt 原件")
+    origin = source.write(data / "control/candidate-client-input-origin.json", {
+        "fixture_only": True, "purpose": "recorded_control_input", "attempt": original, "receipts": receipts,
+        "source_scope": "离线 Mac 应用/请求与边界材料；不表示实际 Mac 或 Codex 边界执行",
+        "formal_version_semantics_certified": False,
+    })
+    return {"batches": batches, "origin": source.binding(origin), "receipts": receipts}
+
+
+def capture_and_seal(data: Path, campaign: Path) -> dict[str, Any]:
+    """同一 revision 上真实 run→客户端输入→预览→批准；完整 R/P 来源只能由监督动作投影复制。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_candidate_seal as seal
+
+    batches = [vc1._batch(data, campaign, "vc5-01-candidate-run", [
+        "capture-candidate", "run", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE, "--acknowledge-live-requests",
+    ], phase="VC-5")]
+    attempts = sorted((campaign / "candidates" / CANDIDATE / "attempts").glob("*/attempt.json"))
+    if len(attempts) != 1:
+        raise replay.ReplayError("候选 run 未形成唯一真实 attempt")
+    attempt_root = attempts[0].parent
+    attempt = source.read(attempts[0])
+    if attempt.get("status") != "awaiting_receipts" or upgrade._failed_job_ids(attempt.get("results")):
+        raise replay.ReplayError("候选 run 未到真实 awaiting_receipts 停点或仍有失败 Job")
+    clients = _client_inputs(data, campaign, attempt_root, attempt)
+    argv = ["capture-candidate", "seal", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE,
+            "--attempt-id", attempt_root.name]
+    batches.append(vc1._batch(data, campaign, "vc5-02-candidate-seal-preview", argv, phase="VC-5"))
+    previews = list((campaign / "candidates" / CANDIDATE / "seal").glob("*/seal-preview.json"))
+    if len(previews) != 1:
+        raise replay.ReplayError("候选 seal 未形成唯一真实预览")
+    preview = source.read(previews[0])
+    batches.append(vc1._batch(data, campaign, "candidate-seal", [
+        *argv, "--approve-seal-sha256", preview["review_sha256"], "--approved-by", REVIEWER,
+    ], phase="VC-5"))
+    manifest = upgrade.load_campaign_manifest(campaign)
+    stage_path, stage = seal.load_round_one_result(campaign, CANDIDATE, manifest=manifest)
+    seal.sealed_attempt_context(campaign, stage, candidate_id=CANDIDATE)
+    return {"batches": batches, "client_inputs": clients, "attempt": source.binding(attempts[0]),
+            "stage": source.binding(stage_path), "store": stage["store"]}
+
+
+def _gate_environment(root: Path, data: Path, attempt_id: str) -> dict[str, Any]:
+    """外部观察由明确夹具提供；真实 ARM64 collect、finalize、replay 和前后等价比较一个都不替换。"""
+
+    from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
+    from tools.official_client_capture.tests import control_receipt_fixtures as fixture
+
+    observation_root = data / "control/fixture-gate-observation"
+    fixture.create_arm_receipt(observation_root, phase="gate_before", subject_id=attempt_id, prefix="source")
+    observed = source.read(observation_root / "source-facts.json")
+    moment = datetime.fromisoformat(observed["observed_at_utc"])
+    filesystem = observed["root_filesystem"]
+    block = 4096
+    from types import SimpleNamespace
+    statvfs = SimpleNamespace(f_frsize=block, f_bsize=block, f_blocks=filesystem["total_bytes"] // block,
+                              f_bavail=filesystem["available_bytes"] // block,
+                              f_bfree=(filesystem["total_bytes"] - filesystem["used_bytes"]) // block)
+
+    def container(name: str, **_options: Any) -> dict[str, Any]:
+        return copy.deepcopy(next(row for row in observed["containers"] if row["name"] == name))
+
+    def tls(target: Any) -> dict[str, Any]:
+        if any(observed["rust_tls_readiness"].get(name) != value for name, value in target.items()):
+            raise replay.ReplayError("门禁外部 TLS 观察与正式探针目标不符")
+        return copy.deepcopy(observed["rust_tls_readiness"])
+
+    bindings = {}
+    with mock.patch.object(arm.os, "statvfs", return_value=statvfs), \
+            mock.patch.object(arm, "require_runtime_egress", return_value=copy.deepcopy(observed["runtime_egress"])), \
+            mock.patch.object(arm, "_checked_runtime_egress", side_effect=lambda: (copy.deepcopy(observed["runtime_egress"]), moment)), \
+            mock.patch.object(arm, "_container_observation", side_effect=container), \
+            mock.patch.object(arm, "_rust_tls_readiness_observation", side_effect=tls):
+        for role in ("before", "after"):
+            facts, receipt = "environment/" + role + "-facts.json", "environment/" + role + "-receipt.json"
+            arm.collect(root, facts, phase="gate_" + role, subject_id=attempt_id, rust_tls_codex_version="0.154.0")
+            arm.finalize(root, facts, receipt)
+            arm.replay(root, receipt)
+            bindings[role] = {"path": receipt, "sha256": source.binding(root / receipt)["sha256"]}
+    before = arm.replay(root, bindings["before"]["path"])
+    after = arm.replay(root, bindings["after"]["path"])
+    if not arm.receipts_equivalent(root, before, root, after):
+        raise replay.ReplayError("真实门禁环境前后等价比较失败")
+    source.write(observation_root / "origin.json", {"fixture_only": True, "purpose": "external_environment_observation",
+                 "source": source.binding(observation_root / "source-facts.json"), "formal_version_semantics_certified": False})
+    return bindings
+
+
+def candidate_gate(data: Path, campaign: Path) -> tuple[Path, str]:
+    """冻结输入形式的外部门禁观察；独立 finalizer 与 accept 消费端仍重放环境和正式 subject。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_accept as accept
+    from tools.official_client_capture import claude_upgrade_baseline as baseline
+    from tools.official_client_capture import claude_upgrade_compare as compare
+    from tools.official_client_capture import claude_upgrade_store as store_module
+    from tools.official_client_capture import codex_upgrade_gate_receipt as gate
+
+    manifest = upgrade.load_campaign_manifest(campaign)
+    store, store_campaign = store_module.open_campaign_store(campaign, manifest)
+    revision, _current = baseline._store_revision(store, store_campaign)
+    fact = baseline._store_candidate_fact(store, store_campaign, CANDIDATE, revision)
+    if fact is None:
+        raise replay.ReplayError("同一 Store 缺少本 revision 的候选冻结事实")
+    build, _binding = compare.load_candidate_build_receipt(campaign, manifest, CANDIDATE, revision)
+    identity = compare.candidate_gate_identity(campaign, manifest, CANDIDATE, build)
+    subject = {**accept.expected_gate_subject(manifest, fact["payload"], identity),
+               "production_tree_sha256": None, "acceptance_sha256": None, "promotion_receipt_sha256": None}
+    root = data / "control/candidate-external-gate"
+    root.mkdir(mode=0o700)
+    attempt_id = "recorded-candidate-gate"
+    environment = _gate_environment(root, data, attempt_id)
+    gates = []
+    for gate_id, (directory, command) in sorted(gate.CANDIDATE_COMMANDS.items()):
+        proof = source.write(root / "evidence" / (gate_id + ".json"), {
+            "fixture_only": True, "purpose": "external_gate_control_observation", "gate_id": gate_id,
+            "command": list(command), "command_executed": False, "not_production_gate_verdict": True,
+            "formal_version_semantics_certified": False,
+        })
+        gates.append({"gate_id": gate_id, "working_directory": directory, "command": list(command),
+                      "host": HOST, "architecture": "linux/arm64", "started_at_utc": upgrade._utc_now(),
+                      "completed_at_utc": upgrade._utc_now(), "exit_code": 0, "status": "passed", "passed_count": 1,
+                      "failed_count": 0, "skipped_count": 0, "stdout_sha256": "6" * 64, "stderr_sha256": "7" * 64,
+                      "evidence": [{"path": proof.relative_to(root).as_posix(), "sha256": source.binding(proof)["sha256"]}]})
+    source.write(root / "facts.json", {"schema_version": gate.FACTS_SCHEMA, "phase": gate.CANDIDATE_PHASE,
+                 "attempt": {"attempt_id": attempt_id, "root_cause_id": None, "previous_receipt": None},
+                 "subject": subject, "inputs": [], "gate_plan": None, "environment": environment, "gates": gates})
+    gate.finalize(root, "facts.json", "receipt.json")
+    gate.replay(root, "receipt.json")
+    return root, "receipt.json"
+
+
+def compare_and_accept(data: Path, campaign: Path) -> dict[str, Any]:
+    """真实全规则画像和双侧 checker；官方评估来源直读本链 VC-1，任何缺证或检查失败都终止。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_assertion_profile as assertion_profile
+
+    batches = [vc1._batch(data, campaign, "compare", ["compare", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE], phase="VC-5")]
+    comparison = upgrade._load_stage_result(campaign, "compare", CANDIDATE)
+    builder = comparison["builder"]
+    action = {"action_id": "assert-rules", "operation": "VC-5:assert-rules", "timeout_seconds": 900.0,
+              "command": [sys.executable, str(data / builder["script"]), "--config", str(campaign / builder["config"]["path"]),
+                          "--output", str(campaign / builder["output"]), "--results-dir", str(campaign / builder["results_dir"]),
+                          "--evaluation-baseline", str(builder["evaluation_baseline"]), "--reuse-authority", "none"],
+              "item_ids": ["assert-rules"]}
+    batches.append(vc1._batch(data, campaign, "assert-rules", [], phase="VC-5", action=action))
+    manifest = upgrade.load_campaign_manifest(campaign)
+    profile = assertion_profile.load_approved_assertion_profile(campaign, manifest)
+    if len(comparison["rules"]) != 40:
+        raise replay.ReplayError("全规则评估分母被缩减")
+    root, receipt = candidate_gate(data, campaign)
+    batches.append(vc1._batch(data, campaign, "acceptance", [
+        "accept", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE,
+        "--external-gate-root", str(root), "--external-gate-receipt", receipt,
+    ], phase="VC-5"))
+    upgrade._replay_vc_checkpoint(campaign, upgrade._vc_campaign_plan(campaign, manifest), "VC-5", revision=1)
+    stage = upgrade._load_stage_result(campaign, "accept", CANDIDATE)
+    if stage.get("status") != "complete" or stage.get("production_state") != "not_activated":
+        raise replay.ReplayError("真实验收未形成 validation_only 未激活终态")
+    return {"batches": batches, "assertion_profile": profile, "comparison": comparison,
+            "gate": source.binding(root / receipt), "acceptance": stage}
+
+
+def deliver(data: Path, campaign: Path) -> dict[str, Any]:
+    """外部执行器按真实交付计划给观察；run/finalize、Store 收据、计时账与 VC-6 checkpoint 都由正式批次完成。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_delivery as delivery
+    from tools.official_client_capture.tests import claude_vc6_delivery_fixture as fixture
+
+    action = delivery.run_action(campaign, CANDIDATE, environment_executor=fixture.EXECUTOR_NAME, observation_window_seconds=60)
+    batches = [vc1._batch(data, campaign, delivery.RUN_ACTION_ID, [], phase="VC-6", action=action)]
+    status = delivery.delivery_status(campaign, CANDIDATE)
+    if status.get("status") != "delivery_awaiting_finalize":
+        raise replay.ReplayError(f"真实候选交付没有完成四阶段：{status.get('status')}")
+    action = delivery.finalize_action(campaign, CANDIDATE, status["review_sha256"])
+    batches.append(vc1._batch(data, campaign, delivery.FINALIZE_ACTION_ID, [], phase="VC-6", action=action))
+    result = delivery.load_stage_result(campaign, CANDIDATE, manifest=upgrade.load_campaign_manifest(campaign))
+    if (result is None or result.get("release_state") != "ready_for_operator_release"
+            or result.get("production_state") != "not_activated"
+            or delivery.delivery_status(campaign, CANDIDATE).get("status") != "ready_for_operator_release"):
+        raise replay.ReplayError("真实交付终态与 validation_only 合同不符")
+    return {"batches": batches, "stage": result, "source": source.binding(data / "control/recorded-delivery-control.json")}
+
+
+def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
+    """完整链只有所有真实 checkpoint、Store 与两本账闭合才通过；来源标记不会升级成版本语义认证。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_project_ledger as project
+    from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+    from tools.official_client_control.store import ControlStore
+    from tools.official_client_capture.tests import claude_vc6_delivery_fixture as delivery_fixture
+
+    started = time.monotonic()
+    state = source.load_state(state_path, digest)
+    data = Path(state["data_root"])
+    _require_client_staging(data)
+    first = vc1.run_chain(state_path, digest, installer=installed)
+    continuation_path = Path(first["continuation"]["path"])
+    continuation_digest = first["continuation"]["sha256"]
+    with installed(state_path, digest):
+        continuation = vc1.load_continuation(continuation_path, continuation_digest)
+        campaign = continuation["campaign"]
+        project_root = project.find_project_ledger(campaign, client="claude")
+        if project_root != data / project.ledger_dir_name("claude"):
+            raise replay.ReplayError("完整链项目总账不是同一原始数据根的 Claude 总账")
+        initial_project = source.binding(project_root / "plan.json")
+        stages = {"VC-1": first, "VC-2/3": classify_and_prepare(data, campaign), "VC-4": build_candidate(data, campaign)}
+    # VC-4 后再安装新的外部观察源；禁止嵌套 SourceAdapter 造成一次动作重复签发/复制。
+    with installed(state_path, digest):
+        vc1.load_continuation(continuation_path, continuation_digest)
+        stages["VC-5-capture"] = capture_and_seal(data, campaign)
+        stages["VC-5-accept"] = compare_and_accept(data, campaign)
+    source.write(data / "control/recorded-delivery-control.json", {
+        "fixture_only": True, "purpose": "recorded_control_delivery_source", "formal_version_semantics_certified": False,
+        "environment": {**delivery_fixture.ENVIRONMENT, "host_id": HOST, "architecture": "linux/arm64"},
+        "calls": str(data / "control/recorded-delivery-calls.jsonl"),
+    })
+    with installed(state_path, digest):
+        stages["VC-6"] = deliver(data, campaign)
+        final = vc1.load_continuation(continuation_path, continuation_digest)
+        manifest = final["manifest"]
+        plan = upgrade._vc_campaign_plan(campaign, manifest)
+        checkpoints = {}
+        for phase in ("VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"):
+            path, _payload = upgrade._replay_vc_checkpoint(campaign, plan, phase, revision=1 if phase in upgrade.CANDIDATE_VC_PHASES else None)
+            checkpoints[phase] = source.binding(path)
+        store = ControlStore(campaign / "control-store")
+        store_replay = store.replay(external_root=data, require_external=True)
+        store_campaign = store.load_campaign(manifest["campaign_id"])
+        ledger = data / "control/timing"
+        if (upgrade._campaign_timing_ledger_dir(campaign, manifest) != ledger or source.binding(project_root / "plan.json") != initial_project
+                or project.find_project_ledger(campaign, client="claude") != project_root):
+            raise replay.ReplayError("完整链换了时间账本或项目总账")
+        timing_head, project_head = timing.phase_ledger_state(ledger), project.replay_head(project_root)
+        if (timing_head["status"] not in {"active", "complete"} or timing_head["active_phase"] is not None
+                or timing_head["completed_phases"] != ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]):
+            raise replay.ReplayError("VC-6 checkpoint 存在但七个阶段未在原时间账逐项收口")
+    replay.assert_source_untouched(state["snapshot"])
+    for path, expected in state["freeze"]["source_sentinel"].items():
+        if replay._stat(Path(path)) != expected:
+            raise replay.ReplayError("完整链改变了旧 freeze 来源元数据")
+    report = {"schema_version": FULL_SCHEMA, "fixture_only": True, "purpose": "control_regression_execution",
+              "status": "passed", "scope": "VC-0→VC-6", "registered_chains": ["vc-chain.claude-full-validation-only"],
+              "target_version": source.VERSION, "campaign": str(campaign), "store_campaign_id": manifest["campaign_id"],
+              "source_state": source.binding(state_path), "continuation": source.binding(continuation_path),
+              "checkpoints": checkpoints, "store_replay": store_replay, "store_campaign": store_campaign,
+              "timing_ledger": timing_head, "project_ledger": {"root": str(project_root), "plan": initial_project, "head": project_head},
+              "stages": stages, "elapsed_seconds": time.monotonic() - started, "network_requests_this_run": 0,
+              "historical_request_accounting": "真实录制和显式 Mac/边界来源按正式消费者计账，不代表本次实际联网请求",
+              "full_vc0_vc6_certified": True, "formal_version_semantics_certified": False,
+              "external_fixture_sources": ["历史 x64 单 npm 官方来源", "完整 Active 控制基线投影", "Docker/宿主观察",
+                                           "离线候选构建输入", "Mac/边界来源输入", "外部门禁执行观察", "候选交付环境执行器"]}
+    source.write(data / "control/recorded-full-chain-result.json", report)
+    return report
+
+
 def run_through_profile(state_path: Path, digest: str) -> dict[str, Any]:
     """前半段诊断入口；即使 VC-0～VC-3 全部完成也固定不登记完整链通过。"""
 
@@ -383,15 +703,18 @@ def run_through_profile(state_path: Path, digest: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Claude 录制控制回归前半段诊断，不能签发完整链认证")
+    parser = argparse.ArgumentParser(description="Claude 录制控制回归；完整阶段实际执行后才登记控制链，不授予版本语义认证")
     parser.add_argument("--data", required=True)
     parser.add_argument("--recorded", required=True)
     parser.add_argument("--freeze", required=True)
     parser.add_argument("--parent-namespaces", required=True)
-    parser.add_argument("--through", required=True, choices=("VC-3",))
+    parser.add_argument("--through", required=True, choices=("VC-3", "VC-6"))
     args = parser.parse_args(argv)
     try:
-        report = vc1.namespace_main(args, inputs_builder=_inputs, chain_runner=run_through_profile, activation_module=ACTIVATION_MODULE)
+        if args.through == "VC-6":
+            _require_client_staging(Path(args.data))
+        report = vc1.namespace_main(args, inputs_builder=_inputs, chain_runner=run_chain if args.through == "VC-6" else run_through_profile,
+                                    activation_module=ACTIVATION_MODULE)
     except BaseException as error:
         traceback.print_exc()
         print(json.dumps({"status": "unverified", "fixture_only": True, "registered_chains": [], "error": str(error)}, ensure_ascii=False))
