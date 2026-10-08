@@ -121,6 +121,8 @@ def _accounted_segment(
         if (ledger._plan_client(plan) != "claude" or campaign_plan is None or registered is None
                 or ledger._campaign_plan_client(campaign_plan) != "claude"
                 or campaign_plan["campaign_id"] != manifest["campaign_id"]
+                or any(document.get(key) != manifest.get(key)
+                       for document in (campaign_plan, registered) for key in ("campaign_mode", "target_version"))
                 or campaign_plan["project_ledger"] != str(root)
                 or registered.get("client") != "claude" or registered.get("campaign_dir") != str(campaign_dir)
                 or registered.get("operation_id") != campaign_plan["registration_operation_id"]):
@@ -146,17 +148,26 @@ def _accounted_segment(
                 or not set(request.get("identity_keys", [])) <= set(head["accounted_identity_index"]) | ledger._initial_keys(root, plan)):
             raise ConfigurationError("前序段入账事件没有绑定完整 seal、原 attempt 或成功段摘要。")
         previous_sha256 = None
+        registration_verified = False
         outbox = campaign_dir / ledger.CAMPAIGN_LEDGER_DIR_NAME / "outbox"
         for sequence, batch_dir in ledger._batch_dirs(outbox):
             batch = ledger._read_batch(batch_dir)
             if not batch["committed"]:
                 return False
             commit = batch["commit"]
-            if commit["batch_sequence"] != sequence or commit["previous_batch_sha256"] != previous_sha256:
+            if (commit["batch_sequence"] != sequence or commit["previous_batch_sha256"] != previous_sha256
+                    or any(entry["batch_sequence"] != sequence for entry in batch["entries"])):
                 raise ConfigurationError("前序段入账 outbox 的 COMMIT 链不连续。")
             previous_sha256 = commit["batch_sha256"]
+            if commit["operation_id"] == campaign_plan["registration_operation_id"]:
+                if (commit["event_type"] != "campaign_registered"
+                        or commit["batch_sha256"] != registered.get("registration_batch_sha256")
+                        or ledger._merge_batch_payload(batch) != ledger._registration_payload(campaign_plan, campaign_dir)):
+                    raise ConfigurationError("前序段所属 Campaign 的注册事件与实际 outbox COMMIT 不一致。")
+                registration_verified = True
             if commit["operation_id"] == operation:
-                if (commit["event_type"] != event["event_type"] or commit["batch_sha256"] != event["source_batch_sha256"]
+                if (not registration_verified
+                        or commit["event_type"] != event["event_type"] or commit["batch_sha256"] != event["source_batch_sha256"]
                         or ledger._merge_batch_payload(batch) != event["payload"]):
                     raise ConfigurationError("前序段入账事件与实际 outbox COMMIT／payload 不一致。")
                 return True

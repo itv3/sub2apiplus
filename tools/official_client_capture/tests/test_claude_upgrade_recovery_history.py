@@ -344,6 +344,22 @@ class RecoveryHistoryTests(unittest.TestCase):
             self.reserve(client="codex")
         self.assertFalse((self.attempt / "recovery" / "ar2").exists())
 
+    def test_campaign_registration_metadata_and_batch_proof_must_match(self) -> None:
+        self.account()
+        plan_path = self.campaign / ledger.CAMPAIGN_LEDGER_DIR_NAME / "plan.json"
+        original = plan_path.read_bytes()
+        data = json.loads(original)
+        data["target_version"] = "2.1.999"
+        self.write(plan_path, data)
+        with self.assertRaisesRegex(upgrade.ConfigurationError, "实际项目总账登记"):
+            self.admitted()
+        plan_path.write_bytes(original)
+        data = json.loads(original)
+        data["admission_head_sha256"] = "0" * 64
+        self.write(plan_path, data)
+        with self.assertRaisesRegex(upgrade.ConfigurationError, "注册事件"):
+            self.admitted()
+
     def test_failed_terminal_bypasses_extra_hook_and_codex_does_not_gain_success_admission(self) -> None:
         with mock.patch.object(upgrade, "_attempt_recovery_segment_terminal_failed", return_value=True), \
                 mock.patch.object(history, "sealed_predecessor_segment", side_effect=AssertionError("失败判据已通过")):
