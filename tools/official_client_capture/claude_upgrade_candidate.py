@@ -870,7 +870,9 @@ def _store_artifact_inventory(image_inspection: Mapping[str, Any], source_tree_s
         row = image_inspection["files"][image_path]
         if row["mode"] != "0755" or len(raw) != row["size"] or hashlib.sha256(raw).hexdigest() != row["sha256"]:
             raise ConfigurationError("候选制品副本来源与已验证镜像检查的字节或权限不一致。")
-        destination = campaign_dir / "candidates" / candidate_id / BUILD_EVIDENCE_DIRNAME / "artifacts" / PurePosixPath(image_path).name
+        # 与共享 VC-4 重派合同一致：收据及三件制品均为 build-evidence 下的普通文件。
+        # 历史库存仍按各自冻结 binding 只读重放，不迁移或覆盖旧副本。
+        destination = campaign_dir / "candidates" / candidate_id / BUILD_EVIDENCE_DIRNAME / PurePosixPath(image_path).name
         _orchestrator()._reject_symlink_components(destination, campaign_dir, "候选制品副本")
         if destination.exists() or destination.is_symlink():
             _verify_artifact_copy(destination, raw, campaign_dir)
