@@ -55,6 +55,7 @@ from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import claude_upgrade_predecessor_sealed as predecessor_sealed
 from tools.official_client_capture import claude_upgrade_seal
+from tools.official_client_capture import claude_upgrade_segment_seal as segment_seal
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_evidence_manifest as evidence_manifest
@@ -682,7 +683,10 @@ class CandidateEvidenceTests(_CandidateSealCase):
 
     def test_valid_evidence_passes_every_probe_and_observations_are_only_recorded(self) -> None:
         attempt_root = self.write_evidence_and_attempt()
-        result = self.preview(*self.write_client_evidence(attempt_root))
+        with mock.patch.object(claude_upgrade, "_seal_capture_attempt", wraps=claude_upgrade._seal_capture_attempt) as build:
+            result = self.preview(*self.write_client_evidence(attempt_root))
+        self.assertNotIn("attempt_root", vars(candidate_seal))
+        self.assertEqual([call.args[0]["attempt_root"] for call in build.call_args_list], [str(attempt_root)] * 2)
         self.assertEqual((result["status"], result["closure"]), ("awaiting_seal_approval", {"status": "closed", "reasons": []}))
         index = self.capture_index(result)
         rows = {probe["probe_id"]: probe for job in index["jobs"] for probe in job["probes"]}
@@ -696,6 +700,64 @@ class CandidateEvidenceTests(_CandidateSealCase):
         self.assertEqual(rows["v4-native-tls-baseline"]["restoration"]["failed_fields"], [])
         self.assertEqual(index["scenario_plan"], {"scenario_ids": plan_scenario_ids(self.payload), "uncovered": []})
         self.assertEqual(result["live_request_count"], self.model_requests)
+
+    def test_segment_preview_keeps_original_client_source_and_separate_recovery_coordinate(self) -> None:
+        """用普通入口取得真实预览输入，再验证恢复段预览的附件合同、视图承接、扫描与零写入规划。"""
+
+        attempt_root = self.write_evidence_and_attempt()
+        with mock.patch.object(candidate_seal, "_preview_candidate_seal", wraps=candidate_seal._preview_candidate_seal) as preview_call:
+            original = self.preview(*self.write_client_evidence(attempt_root))
+        preview_arguments, preview_options = preview_call.call_args
+        attempt_path = attempt_root / "attempt.json"
+        original_bytes = attempt_path.read_bytes()
+        attempt = json.loads(original_bytes)
+        original_preview = json.loads(Path(original["preview"]).read_text(encoding="utf-8"))
+        original_draft_path = self.campaign / original_preview["seal_draft"]["path"]
+        original_draft = json.loads(original_draft_path.read_text(encoding="utf-8"))
+        previous = {
+            "seal": {key: original_preview[key] for key in ("seal_draft", "evidence_manifest")},
+            "client_evidence": {
+                group: {item: candidate_seal._stage_binding(self.data / binding["path"], self.campaign)
+                        for item, binding in bindings.items()}
+                for group, bindings in original_draft["client_evidence"].items()
+            },
+        }
+        segment_root = attempt_root / "recovery" / "ar1"
+        summary = {**attempt, "recovery_revision": "ar1", "evaluation_baseline": 1,
+                   "status": claude_upgrade.ATTEMPT_RECOVERY_SUCCESS_STATUS}
+        summary_path = _write_json(segment_root / claude_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME, summary)
+        jobs = self.candidate_jobs(self.campaign, self.manifest, CANDIDATE)
+        prepared = {
+            "original_root": attempt_root, "original": attempt, "segment_root": segment_root,
+            "revision": "ar1", "recovery": {"execute_jobs": []}, "previous": previous, "summary": summary,
+            "store_capture_attempt_id": f"{ATTEMPT}-ar1", "execute_item_ids": [],
+            "reuse_item_ids": sorted(job.job_id for job in jobs),
+        }
+        stage_path = self.campaign / "evaluation" / CANDIDATE / "b1" / "capture-candidate" / "result.json"
+        generation_key = {**preview_options["generation_key"], "recovery": claude_upgrade_seal._binding(summary_path, self.campaign)}
+        generation = claude_upgrade_seal._generation(generation_key)
+        # 前置恢复链由段读侧回归覆盖；本用例只检查共用预览写侧，不将它登记为完整恢复链通过。
+        with self.seal_patched(), \
+                mock.patch.object(claude_upgrade, "_seal_capture_attempt", wraps=claude_upgrade._seal_capture_attempt) as build, \
+                mock.patch.object(segment_seal, "incremental_inventory", wraps=segment_seal.incremental_inventory) as scan:
+            result = candidate_seal._preview_candidate_seal(
+                *preview_arguments,
+                **{**preview_options, "segment_context": prepared, "generation": generation,
+                   "generation_key": generation_key, "seal_dir": stage_path.parent / "seal" / generation},
+            )
+        self.assertEqual(result["closure"], {"status": "closed", "reasons": []})
+        self.assertNotIn("attempt_root", vars(candidate_seal))
+        self.assertEqual([call.args[0]["attempt_root"] for call in build.call_args_list], [str(attempt_root)] * 2)
+        self.assertNotEqual(attempt_root, segment_root)
+        self.assertIn(summary_path, scan.call_args.args[2])
+        self.assertEqual(attempt_path.read_bytes(), original_bytes)
+        preview = json.loads(Path(result["preview"]).read_text(encoding="utf-8"))
+        draft = json.loads((self.campaign / preview["seal_draft"]["path"]).read_text(encoding="utf-8"))
+        inventory = json.loads((self.campaign / preview["evidence_manifest"]["path"]).read_text(encoding="utf-8"))
+        self.assertEqual(draft["generation_key"]["recovery"]["path"], summary_path.relative_to(self.campaign).as_posix())
+        self.assertIn(summary_path.relative_to(self.data).as_posix(), {row["path"] for row in inventory["entries"]})
+        self.assertEqual(draft["store_request"]["capture_attempt_id"], f"{ATTEMPT}-ar1")
+        self.assertIn("--attempt-recovery ar1", result["next_command"])
 
     def test_each_candidate_check_fails_closed(self) -> None:
         probe = "v4-native-tls-baseline"

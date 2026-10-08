@@ -1388,7 +1388,8 @@ def _preview_candidate_seal(
     draft_paths = {name: drafts_dir / filename for name, filename in claude_upgrade_evidence.CANDIDATE_DRAFT_FILES.items()}
     view = {
         "side": claude_upgrade_evidence.CANDIDATE_SIDE,
-        "attempt_root": str(attempt_root),
+        # 恢复段也承接原 attempt 的客户端附件；恢复段坐标由 segment_context 单独传入。
+        "attempt_root": str(attempt_path.parent),
         "evidence_data_root": str(data_root),
         "campaign_id": manifest["campaign_id"],
         "candidate_id": candidate_id,
