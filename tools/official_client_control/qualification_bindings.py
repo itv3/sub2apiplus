@@ -3,7 +3,8 @@
 只有完整 Store 父合同承认的 CandidateBuildReceipt.build_identity.parameters
 和 Snapshot.payload.document 属于父域元数据。两个域仍重放父语义并实读父原件；
 它们内部的同形三字段来源记录不授权打开本轮数据根文件。其余外部绑定完整保留。
-此合同只用于两个资格消费者，不改变 generic Store.replay 的历史形状扫描行为。
+两个资格消费者与通用 Store.replay 共用本合同。通用重放只给本轮完整图
+已证明属于 Claude 的父域使用投影；其它来源保留原严格形状扫描。
 """
 
 from __future__ import annotations

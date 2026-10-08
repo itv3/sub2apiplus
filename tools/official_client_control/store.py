@@ -758,6 +758,8 @@ class ControlStore:
 
         前序导入（B1-14）复制进来的对象：只有被 read_only_reuse 导入收据授权的，其外部证据才计入本 Store 的外部
         核验（本 Campaign 依赖它们）；只作回归夹具或尚未 finalize 的导入对象，外部证据随前序 Store 自己的重放核验。
+        Claude v2 的两个父域在全部原件语义重放之后，按本轮已验 Campaign 与完整引用图选择共享读集投影；未知或
+        跨客户端来源仍走原严格扫描。有投影的结果明确记录 v2 与投影合同版本，不授予任何当前执行权限。
         """
 
         from .gates import WorkflowGates
@@ -767,6 +769,10 @@ class ControlStore:
         validate_store_metadata(metadata)
         object_count = 0
         external_bindings: list[dict[str, Any]] = []
+        object_documents: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        fact_documents: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        receipt_documents: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        campaigns: list[dict[str, Any]] = []
         unbound_imports = fixture_only_imported_objects(self)
         for kind in sorted(OBJECT_KINDS):
             directory = self.root / "objects" / kind
@@ -780,14 +786,14 @@ class ControlStore:
                 ):
                     raise ControlError(f"对象路径非法：{path}")
                 digest = path.stem
-                document = self.load_object({"object_kind": kind, "sha256": digest})
-                for reference in iter_object_refs(document["payload"]):
-                    self.load_object(reference)
+                reference = {"object_kind": kind, "sha256": digest}
+                document = self.load_object(reference)
+                for referenced in iter_object_refs(document["payload"]):
+                    self.load_object(referenced)
                 WorkflowGates(self).validate_object_graph(
                     {"object_kind": kind, "sha256": digest}
                 )
-                if (kind, digest) not in unbound_imports:
-                    external_bindings.extend(self._iter_external_bindings(document["payload"]))
+                object_documents.append((reference, document))
                 object_count += 1
 
         campaign_count = 0
@@ -797,9 +803,10 @@ class ControlStore:
             if path.is_symlink() or not path.is_file() or path.suffix != ".json":
                 raise ControlError(f"Campaign 路径非法：{path}")
             campaign = self.load_campaign(path.stem)
-            external_bindings.extend(self._iter_external_bindings(campaign))
             facts = self.list_facts(campaign["campaign_id"])
             WorkflowGates(self).replay_campaign(campaign, facts)
+            campaigns.append(campaign)
+            fact_documents.extend((self.fact_ref(fact), fact) for fact in facts)
             fact_count += len(facts)
             campaign_count += 1
 
@@ -816,10 +823,33 @@ class ControlStore:
                     raise ControlError(f"收据路径非法：{path}")
                 reference = {"receipt_kind": kind, "sha256": path.stem}
                 replay_receipt(self, reference)
-                external_bindings.extend(
-                    self._iter_external_bindings(self.load_receipt(reference))
-                )
+                receipt_documents.append((reference, self.load_receipt(reference)))
                 receipt_count += 1
+
+        # 原完整图／事实链／形成期／因果／收据重建先全部通过，再决定两个
+        # 父域的读集。一次操作的索引与投影只存内存，不能由外部报告赋权。
+        projection = None
+        ownership = None
+        if any(campaign_is_v2(row) and row["client"] == "claude" for row in campaigns):
+            from .qualification_bindings import QualificationBindingProjection
+            from .replay_bindings import ReplayBindingOwnership
+
+            ownership = ReplayBindingOwnership(campaigns, object_documents, fact_documents, receipt_documents)
+            projection = QualificationBindingProjection(self)
+        for reference, document in object_documents:
+            if (reference["object_kind"], reference["sha256"]) in unbound_imports:
+                continue
+            if reference["object_kind"] == "snapshot" and ownership is not None and ownership.is_claude_parent(reference):
+                external_bindings.extend(projection.bindings(document, reference))
+            else:
+                external_bindings.extend(self._iter_external_bindings(document["payload"]))
+        for campaign in campaigns:
+            external_bindings.extend(self._iter_external_bindings(campaign))
+        for reference, document in receipt_documents:
+            if reference["receipt_kind"] == "candidate_build" and ownership is not None and ownership.is_claude_parent(reference):
+                external_bindings.extend(projection.bindings(document, reference))
+            else:
+                external_bindings.extend(self._iter_external_bindings(document))
 
         if external_bindings and external_root is None and require_external:
             raise ControlError("完整重放要求提供 external_root")
@@ -828,8 +858,10 @@ class ControlStore:
                 raise ControlError("external_root 必须是可信绝对目录")
             for binding in external_bindings:
                 self._verify_external_binding(external_root.resolve(), binding)
+                if projection is not None:
+                    projection.verify_external_mode(external_root.resolve(), binding)
 
-        return {
+        result = {
             "schema_version": "official-client-control-replay-result/v1",
             "result": "passed",
             "objects": object_count,
@@ -839,3 +871,9 @@ class ControlStore:
             "external_bindings": len(external_bindings),
             "external_verified": external_root is not None,
         }
+        if projection is not None and projection.manifest()["parent_domains"]:
+            from .replay_bindings import REPLAY_PROJECTION_RESULT_SCHEMA
+
+            result["schema_version"] = REPLAY_PROJECTION_RESULT_SCHEMA
+            result["binding_projection"] = projection.manifest()
+        return result
