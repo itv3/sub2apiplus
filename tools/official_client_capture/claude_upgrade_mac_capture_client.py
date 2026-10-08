@@ -20,6 +20,21 @@ from tools.official_client_capture import claude_mac_capture_contract as c
 from tools.official_client_capture.claude_upgrade_mac_capture_service import _mac, receive
 
 
+def _private_sync_directory(root: Path, target: Path) -> Path:
+    """从既有私有根逐级创建0700目录，不能依赖调用进程的umask。
+
+    mkdir(parents=True)只给末级应用指定mode，中间目录会取默认权限；H2依赖的
+    多级成员因而可能在普通umask下生成0755目录。逐级使用原私有目录校验，
+    既有坏权限、符号链接和根外路径仍拒绝，不chmod旧目录来掩盖漂移。
+    """
+    root, target = c.plain_path(root), c.plain_path(target)
+    c.require(target.is_relative_to(root), "同步目录越出冻结私有接收根")
+    current = c.private_directory(root)
+    for name in target.relative_to(root).parts:
+        current = c.private_directory(current / name)
+    return current
+
+
 class CaptureClient:
     """socket、key 与接收根只取受管调用配置，不能由证据指定。"""
 
@@ -110,17 +125,17 @@ class CaptureClient:
             expected_commit = {"schema_version": self.versions["sync"], "source_scope": c.SCOPE, "task_sha256": self.task_sha, "export_id": export_id, "inventory": c.binding(destination, destination / "authenticated-inventory.json")}
             c.require(c.read_json(destination / "sync-commit.json") == expected_commit, "已同步提交凭证缺失或漂移")
             return {"status": native["status"], "source_scope": c.SCOPE, "export_id": export_id, "root": str(destination), "native_manifest": inventory["native_manifest"]}
-        staging = c.private_directory(self.root / "pending" / export_id)
+        staging = _private_sync_directory(self.root, self.root / "pending" / export_id)
         c.write_json_once(staging / "authenticated-inventory.json", inventory)
         for reference in inventory["files"]:
             relative, expected = reference["path"], reference["bytes"]
             target = c.managed_path(staging, relative)
-            c.private_directory(target.parent)
+            _private_sync_directory(staging, target.parent)
             if target.exists():
                 c.check_binding(staging, reference)
                 continue
             part = c.managed_path(staging / ".parts", relative)
-            c.private_directory(part.parent)
+            _private_sync_directory(staging, part.parent)
             existing = c.read_bytes(part) if part.exists() else b""
             c.require(len(existing) <= expected, "同步 partial 超出认证文件长度")
             # 续传先认证已有前缀，不能仅相信本地 offset 或把坏前缀当成功。

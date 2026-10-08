@@ -8,6 +8,7 @@ import os
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,7 @@ from unittest import mock
 from tools.official_client_capture import claude_mac_capture_contract as c
 from tools.official_client_capture import claude_mac_capture_h2_contract as hc
 from tools.official_client_capture import claude_mac_capture_h2_runtime as runtime
-from tools.official_client_capture.claude_upgrade_mac_capture_client import CaptureClient
+from tools.official_client_capture.claude_upgrade_mac_capture_client import CaptureClient, _private_sync_directory
 from tools.official_client_capture.claude_mac_capture_h2_dependencies import FrozenDependencies
 from tools.official_client_capture.tests import test_claude_mac_capture_service as old
 from tools.official_client_capture.tests import claude_h2_dependency_fixture as fixture
@@ -90,6 +91,57 @@ def run_peer(args):
             finally:
                 c.write_once(root / "peer-received.bin", b"".join(raw_parts))
     return 0
+
+class PrivateSyncDirectoryTests(unittest.TestCase):
+    """真实文件系统证明多级同步目录不依赖umask，旧漂移目录不被修饰。"""
+
+    def test_all_new_levels_are_private_under_common_umasks(self):
+        for mask in (0o022, 0o000):
+            with self.subTest(umask=mask), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                target = root / "pending/export/h2-dependencies/packages/hpack"
+                previous = os.umask(mask)
+                try:
+                    self.assertEqual(_private_sync_directory(root, target), target)
+                finally:
+                    os.umask(previous)
+                for directory in [root, *root.rglob("*")]:
+                    self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+                    self.assertEqual(directory.stat().st_uid, os.getuid())
+
+    def test_existing_bad_permissions_are_rejected_without_repair(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            existing = root / "pending"
+            existing.mkdir(mode=0o700)
+            existing.chmod(0o755)
+            marker = existing / "original.bin"
+            marker.write_bytes(b"keep-existing-state")
+            before = (marker.read_bytes(), marker.stat().st_mtime_ns, existing.stat().st_mode)
+            with self.assertRaises(c.CaptureError):
+                _private_sync_directory(root, existing / "export/member")
+            self.assertFalse((existing / "export").exists())
+            self.assertEqual(before, (marker.read_bytes(), marker.stat().st_mtime_ns, existing.stat().st_mode))
+
+    def test_symlink_component_is_rejected_without_target_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            external = root / "external"
+            external.mkdir(mode=0o700)
+            (root / "pending").symlink_to(external, target_is_directory=True)
+            with self.assertRaises(c.CaptureError):
+                _private_sync_directory(root, root / "pending/export")
+            self.assertEqual(list(external.iterdir()), [])
+
+    def test_directory_outside_frozen_root_is_rejected_before_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root = c.private_directory(base / "received")
+            target = base / "outside/member"
+            with self.assertRaises(c.CaptureError):
+                _private_sync_directory(root, target)
+            self.assertFalse(target.parent.exists())
+
 
 class NativeH2ServiceTests(unittest.TestCase):
     def setUp(self):
