@@ -1,0 +1,3012 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/claude-delivery-execution-v2.json",
+  "title": "Claude 隔离候选真实交付证据",
+  "description": "严格类型、固定来源、真实实测与全部操作归档；来源和跨引用语义由同一受管校验器执行，不能用自报通过替代。",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "configuration"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "configuration"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "binding",
+                  "campaign_id",
+                  "configuration",
+                  "configuration_sha256",
+                  "contract_version",
+                  "delivery_id",
+                  "origin",
+                  "result"
+                ],
+                "properties": {
+                  "binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "configuration": {
+                    "type": "object"
+                  },
+                  "configuration_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-configuration/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "stable_projection"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "stable_projection"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "binding",
+                  "campaign_id",
+                  "contract_version",
+                  "delivery_id",
+                  "origin",
+                  "projection",
+                  "projection_sha256",
+                  "result"
+                ],
+                "properties": {
+                  "binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-stable-projection/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "projection": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "schema_version",
+                      "application_service",
+                      "compose",
+                      "containers"
+                    ],
+                    "properties": {
+                      "schema_version": {
+                        "const": "claude-upgrade-stable-environment-projection/v1"
+                      },
+                      "application_service": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                      },
+                      "compose": {
+                        "type": "object"
+                      },
+                      "containers": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "projection_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "freeze"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "freeze"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "before_bindings",
+                  "campaign_id",
+                  "contract_version",
+                  "delivery_id",
+                  "environment",
+                  "gates",
+                  "guard_identity",
+                  "origin",
+                  "result"
+                ],
+                "properties": {
+                  "before_bindings": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-freeze/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "environment": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "host_id",
+                      "architecture",
+                      "compose_sha256",
+                      "environment_sha256",
+                      "configuration_sha256",
+                      "network_sha256"
+                    ],
+                    "properties": {
+                      "host_id": {
+                        "const": "ARM64"
+                      },
+                      "architecture": {
+                        "enum": [
+                          "arm64",
+                          "aarch64",
+                          "linux/arm64"
+                        ]
+                      },
+                      "compose_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "environment_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "network_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "gates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "result",
+                        "facts"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "result": {
+                          "enum": [
+                            "pass",
+                            "failed"
+                          ]
+                        },
+                        "facts": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  },
+                  "guard_identity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contract_version",
+                      "authority",
+                      "source_scope",
+                      "host_id",
+                      "instance_id",
+                      "service_name",
+                      "service_instance_id",
+                      "boot_id",
+                      "pid",
+                      "process_start",
+                      "process_group_id",
+                      "independent_service",
+                      "service_unit_binding",
+                      "executor_binding",
+                      "guard_binding",
+                      "deployment_receipt_binding"
+                    ],
+                    "properties": {
+                      "contract_version": {
+                        "const": "claude-upgrade-delivery-guard-identity/v1"
+                      },
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "host_id": {
+                        "const": "ARM64"
+                      },
+                      "instance_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                      },
+                      "service_name": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "boot_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "pid": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "process_start": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "process_group_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "independent_service": {
+                        "type": "boolean"
+                      },
+                      "service_unit_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "executor_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "guard_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "deployment_receipt_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    },
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "source_scope": {
+                              "const": "formal"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "independent_service": {
+                              "const": true
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "rollback_state"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "rollback_state"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "acceptance_ref",
+                  "bindings",
+                  "build_receipt_ref",
+                  "campaign_id",
+                  "candidate_ref",
+                  "contract_version",
+                  "delivery_id",
+                  "evidence_package_ref",
+                  "image_digest",
+                  "origin",
+                  "result",
+                  "runtime_profile_sha256"
+                ],
+                "properties": {
+                  "acceptance_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "campaign_id",
+                      "dimension",
+                      "sequence",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "campaign_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                      },
+                      "dimension": {
+                        "enum": [
+                          "approval",
+                          "deployment",
+                          "discovery",
+                          "evidence",
+                          "runtime_selector",
+                          "validation"
+                        ]
+                      },
+                      "sequence": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "bindings": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "build_receipt_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "receipt_kind",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "receipt_kind": {
+                        "const": "candidate_build"
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "candidate_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "campaign_id",
+                      "dimension",
+                      "sequence",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "campaign_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                      },
+                      "dimension": {
+                        "enum": [
+                          "approval",
+                          "deployment",
+                          "discovery",
+                          "evidence",
+                          "runtime_selector",
+                          "validation"
+                        ]
+                      },
+                      "sequence": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-rollback-state/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "evidence_package_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "object_kind",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "object_kind": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "image_digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  },
+                  "runtime_profile_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "stage_execution"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "stage_execution"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "actual",
+                  "after_bindings",
+                  "before_bindings",
+                  "campaign_id",
+                  "candidate_id",
+                  "checks",
+                  "configuration_ref",
+                  "contract_version",
+                  "delivery_id",
+                  "during_bindings",
+                  "environment",
+                  "guard_identity",
+                  "guard_terminal_binding",
+                  "journal_binding",
+                  "live_request_count",
+                  "observed_seconds",
+                  "operation_id",
+                  "origin",
+                  "physical_intent_binding",
+                  "plan_ref",
+                  "prepared_binding",
+                  "probe_recipe_ref",
+                  "request_records",
+                  "restoration",
+                  "result",
+                  "run_nonce",
+                  "stable_projection_ref",
+                  "stage",
+                  "target"
+                ],
+                "properties": {
+                  "actual": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "image",
+                      "profile"
+                    ],
+                    "properties": {
+                      "image": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "value",
+                              "direct_binding"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "known"
+                              },
+                              "value": {
+                                "type": "string",
+                                "pattern": "^sha256:[0-9a-f]{64}$"
+                              },
+                              "direct_binding": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "path",
+                                  "sha256",
+                                  "bytes"
+                                ],
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "bytes": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "reason"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "unknown"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "profile": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "value",
+                              "direct_binding"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "known"
+                              },
+                              "value": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "direct_binding": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "path",
+                                  "sha256",
+                                  "bytes"
+                                ],
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "bytes": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "reason"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "unknown"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "after_bindings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "before_bindings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "candidate_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "checks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "result",
+                        "facts"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "result": {
+                          "enum": [
+                            "pass",
+                            "failed"
+                          ]
+                        },
+                        "facts": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  },
+                  "configuration_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "object_kind",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "object_kind": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-stage-execution/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "during_bindings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "environment": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "host_id",
+                          "architecture",
+                          "compose_sha256",
+                          "environment_sha256",
+                          "configuration_sha256",
+                          "network_sha256"
+                        ],
+                        "properties": {
+                          "host_id": {
+                            "type": "string",
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                          },
+                          "architecture": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "compose_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "environment_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "configuration_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "network_sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "guard_identity": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "contract_version",
+                      "authority",
+                      "source_scope",
+                      "host_id",
+                      "instance_id",
+                      "service_name",
+                      "service_instance_id",
+                      "boot_id",
+                      "pid",
+                      "process_start",
+                      "process_group_id",
+                      "independent_service",
+                      "service_unit_binding",
+                      "executor_binding",
+                      "guard_binding",
+                      "deployment_receipt_binding"
+                    ],
+                    "properties": {
+                      "contract_version": {
+                        "const": "claude-upgrade-delivery-guard-identity/v1"
+                      },
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "host_id": {
+                        "const": "ARM64"
+                      },
+                      "instance_id": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                      },
+                      "service_name": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "boot_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "pid": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "process_start": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "process_group_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "independent_service": {
+                        "type": "boolean"
+                      },
+                      "service_unit_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "executor_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "guard_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      "deployment_receipt_binding": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      }
+                    },
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "source_scope": {
+                              "const": "formal"
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "independent_service": {
+                              "const": true
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "guard_terminal_binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "journal_binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "live_request_count": {
+                    "const": 0,
+                    "type": "integer"
+                  },
+                  "observed_seconds": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "physical_intent_binding": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "path",
+                          "sha256",
+                          "bytes"
+                        ],
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "sha256": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                          },
+                          "bytes": {
+                            "type": "integer",
+                            "minimum": 0
+                          }
+                        }
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "plan_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "object_kind",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "object_kind": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "prepared_binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "probe_recipe_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "object_kind",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "object_kind": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "request_records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "method",
+                        "path",
+                        "request_binding",
+                        "response_binding"
+                      ],
+                      "properties": {
+                        "method": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "request_binding": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "path",
+                            "sha256",
+                            "bytes"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "bytes": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          }
+                        },
+                        "response_binding": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "path",
+                                "sha256",
+                                "bytes"
+                              ],
+                              "properties": {
+                                "path": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "sha256": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
+                                },
+                                "bytes": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                }
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "restoration": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "state",
+                      "bindings",
+                      "reason"
+                    ],
+                    "properties": {
+                      "state": {
+                        "enum": [
+                          "not_required",
+                          "verified",
+                          "restore_failed",
+                          "recovery_pending"
+                        ]
+                      },
+                      "bindings": {
+                        "type": "array",
+                        "minItems": 0,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "path",
+                            "sha256",
+                            "bytes"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "bytes": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          }
+                        }
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "state": {
+                              "not": {
+                                "const": "not_required"
+                              }
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "bindings": {
+                              "type": "array",
+                              "minItems": 1,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "path",
+                                  "sha256",
+                                  "bytes"
+                                ],
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "bytes": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  },
+                  "run_nonce": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "stable_projection_ref": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "object_kind",
+                      "sha256"
+                    ],
+                    "properties": {
+                      "object_kind": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "stage": {
+                    "enum": [
+                      "candidate_active",
+                      "rollback_verified",
+                      "candidate_restored",
+                      "stable_observed"
+                    ]
+                  },
+                  "target": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "image_digest",
+                      "runtime_profile_sha256"
+                    ],
+                    "properties": {
+                      "image_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      },
+                      "runtime_profile_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "result": {
+                          "not": {
+                            "const": "failed"
+                          }
+                        }
+                      }
+                    },
+                    "then": {
+                      "properties": {
+                        "environment": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "host_id",
+                            "architecture",
+                            "compose_sha256",
+                            "environment_sha256",
+                            "configuration_sha256",
+                            "network_sha256"
+                          ],
+                          "properties": {
+                            "host_id": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                            },
+                            "architecture": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "compose_sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "environment_sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "configuration_sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "network_sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "zero_model_probes"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "zero_model_probes"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bindings",
+                  "campaign_id",
+                  "contract_version",
+                  "delivery_id",
+                  "mode",
+                  "origin",
+                  "recipe",
+                  "request_records",
+                  "result"
+                ],
+                "properties": {
+                  "bindings": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-zero-model-probes/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "mode": {
+                    "enum": [
+                      "recipe",
+                      "observation"
+                    ]
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "recipe": {
+                    "type": "object",
+                    "required": [
+                      "allowed_requests"
+                    ],
+                    "properties": {
+                      "allowed_requests": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "method",
+                            "path"
+                          ],
+                          "properties": {
+                            "method": {
+                              "const": "GET"
+                            },
+                            "path": {
+                              "enum": [
+                                "/health",
+                                "/v1/models"
+                              ]
+                            },
+                            "authentication": {
+                              "enum": [
+                                "none",
+                                "candidate_private_ref"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "request_records": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "method",
+                        "path",
+                        "request_binding",
+                        "response_binding"
+                      ],
+                      "properties": {
+                        "method": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "request_binding": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "path",
+                            "sha256",
+                            "bytes"
+                          ],
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "sha256": {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{64}$"
+                            },
+                            "bytes": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          }
+                        },
+                        "response_binding": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "path",
+                                "sha256",
+                                "bytes"
+                              ],
+                              "properties": {
+                                "path": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "sha256": {
+                                  "type": "string",
+                                  "pattern": "^[0-9a-f]{64}$"
+                                },
+                                "bytes": {
+                                  "type": "integer",
+                                  "minimum": 0
+                                }
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "restore"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "restore"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "actual",
+                  "bindings",
+                  "campaign_id",
+                  "checks",
+                  "contract_version",
+                  "delivery_id",
+                  "journal_binding",
+                  "operation_id",
+                  "origin",
+                  "result",
+                  "target",
+                  "terminal_binding"
+                ],
+                "properties": {
+                  "actual": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "image",
+                      "profile"
+                    ],
+                    "properties": {
+                      "image": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "value",
+                              "direct_binding"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "known"
+                              },
+                              "value": {
+                                "type": "string",
+                                "pattern": "^sha256:[0-9a-f]{64}$"
+                              },
+                              "direct_binding": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "path",
+                                  "sha256",
+                                  "bytes"
+                                ],
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "bytes": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "reason"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "unknown"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "profile": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "value",
+                              "direct_binding"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "known"
+                              },
+                              "value": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "direct_binding": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "path",
+                                  "sha256",
+                                  "bytes"
+                                ],
+                                "properties": {
+                                  "path": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "sha256": {
+                                    "type": "string",
+                                    "pattern": "^[0-9a-f]{64}$"
+                                  },
+                                  "bytes": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "state",
+                              "reason"
+                            ],
+                            "properties": {
+                              "state": {
+                                "const": "unknown"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "bindings": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "checks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "id",
+                        "result",
+                        "facts"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "result": {
+                          "enum": [
+                            "pass",
+                            "failed"
+                          ]
+                        },
+                        "facts": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-restore/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "journal_binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "operation_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  },
+                  "target": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "image_digest",
+                      "runtime_profile_sha256"
+                    ],
+                    "properties": {
+                      "image_digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      },
+                      "runtime_profile_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      }
+                    }
+                  },
+                  "terminal_binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "persona",
+        "manifest_id",
+        "evidence_type",
+        "entries"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-operational-evidence/v2"
+        },
+        "persona": {
+          "type": "object"
+        },
+        "manifest_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_type": {
+          "const": "deployment_configuration"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "facts"
+            ],
+            "properties": {
+              "id": {
+                "const": "deployment_configuration"
+              },
+              "facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "bindings",
+                  "campaign_id",
+                  "configuration_binding",
+                  "contract_version",
+                  "delivery_id",
+                  "deployment_sha256",
+                  "origin",
+                  "result"
+                ],
+                "properties": {
+                  "bindings": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "path",
+                        "sha256",
+                        "bytes"
+                      ],
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "bytes": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  },
+                  "campaign_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "contract_version": {
+                    "const": "claude-delivery-deployment-configuration/v1"
+                  },
+                  "delivery_id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+                  },
+                  "deployment_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "origin": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "authority",
+                      "source_scope",
+                      "configuration_sha256",
+                      "service_instance_id",
+                      "operations_index_binding"
+                    ],
+                    "properties": {
+                      "authority": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "source_scope": {
+                        "enum": [
+                          "formal",
+                          "regression_fixture"
+                        ]
+                      },
+                      "configuration_sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "service_instance_id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "operations_index_binding": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "path",
+                              "sha256",
+                              "bytes"
+                            ],
+                            "properties": {
+                              "path": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                              },
+                              "bytes": {
+                                "type": "integer",
+                                "minimum": 0
+                              }
+                            }
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "result": {
+                    "enum": [
+                      "pass",
+                      "failed",
+                      "pending"
+                    ]
+                  },
+                  "configuration_binding": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

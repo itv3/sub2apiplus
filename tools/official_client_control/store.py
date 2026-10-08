@@ -6,6 +6,7 @@ import fcntl
 import os
 import re
 import stat
+import threading
 from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -67,6 +68,7 @@ class ControlStore:
             raise ControlError("Store 根必须是现有的非符号链接目录")
         # 只读打开（B1-14 读前序 Store）：额外接受去掉写权限的归档权限（根 0500、文件 0400），任何写入都拒绝。
         self.read_only = read_only
+        self._lock_state = threading.local()
         self._root_modes = (0o700, 0o500) if read_only else (0o700,)
         self._file_modes = (0o600, 0o400) if read_only else (0o600,)
         self.root = root.resolve()
@@ -117,12 +119,23 @@ class ControlStore:
         # 每条写入路径都先取锁（对象、事实、收据、Campaign），只读实例在这里统一拒绝。
         if self.read_only:
             raise ControlError(f"只读打开的 Store 禁止写入：{self.root}")
+        held = getattr(self._lock_state, "held", None)
+        if held is None:
+            held = self._lock_state.held = set()
+        if name in held:
+            # 同一实例、同一线程的 finalizer → 直接发布复核复用维度锁；其他线程仍取真实 flock。
+            yield
+            return
         lock_path = self.root / "locks" / f"{name}.lock"
         ensure_directory(lock_path.parent)
         descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX)
-            yield
+            held.add(name)
+            try:
+                yield
+            finally:
+                held.remove(name)
         finally:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
@@ -642,6 +655,21 @@ class ControlStore:
         """
 
         validate_receipt_document(receipt, kind)
+        from . import delivery_execution
+        if kind == "candidate_delivery" and receipt.get("schema_version") == delivery_execution.RECEIPT_V4:
+            with self._dimension_locks(receipt["campaign_id"], ("deployment",)):
+                return self._write_receipt_outcome_locked(kind, receipt, allow_existing=allow_existing)
+        return self._write_receipt_outcome_locked(kind, receipt, allow_existing=allow_existing)
+
+    def _write_receipt_outcome_locked(
+        self, kind: str, receipt: dict[str, Any], *, allow_existing: bool
+    ) -> dict[str, Any]:
+        """v4 调用方已持 deployment 锁，其余合同沿用原发布顺序。"""
+
+        # v4 直接发布与幂等复用也重验来源和全操作闭集；不只接受自摘要正确的收据。
+        from . import delivery_execution
+        if kind == "candidate_delivery" and receipt.get("schema_version") == delivery_execution.RECEIPT_V4:
+            delivery_execution.validate_delivery_receipt(self, receipt)
         content = canonical_json_bytes(receipt)
         digest = sha256_bytes(content)
         reference = {"receipt_kind": kind, "sha256": digest}
@@ -658,6 +686,11 @@ class ControlStore:
         from .receipts import require_receipt_current
 
         require_receipt_current(self, receipt)
+        if kind == "candidate_delivery" and receipt.get("schema_version") == delivery_execution.RECEIPT_V4:
+            for existing_reference in self.list_receipt_refs("candidate_delivery"):
+                existing = self.load_receipt(existing_reference)
+                if existing["candidate_ref"] == receipt["candidate_ref"] and existing["acceptance_ref"] == receipt["acceptance_ref"] and existing_reference != reference:
+                    raise ControlError("同一 Candidate／Acceptance 的候选交付收据不得覆盖或重新签发")
         reused = self._write_once_or_reuse(
             path, content, f"receipt-{kind}-{digest}", allow_existing=allow_existing
         )

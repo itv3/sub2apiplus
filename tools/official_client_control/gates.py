@@ -31,6 +31,7 @@ from .contracts import (
     validate_object_document,
 )
 from .errors import ControlError
+from . import delivery_execution
 
 if TYPE_CHECKING:
     from .store import ControlStore
@@ -185,9 +186,11 @@ class WorkflowGates:
         elif kind == "candidate_evidence_package":
             self._validate_candidate_evidence_package(payload)
         elif kind == "candidate_delivery_plan":
-            self._validate_candidate_delivery_plan(payload)
+            self._validate_candidate_delivery_plan(payload, new=new)
         elif kind == "candidate_delivery_package":
             self._validate_candidate_delivery_package(payload, new=new)
+        elif kind == "operational_evidence" and payload.get("schema_version") == delivery_execution.OPERATIONAL_V2:
+            delivery_execution.validate_evidence_graph(self.store, payload)
         elif kind == "private_archive_manifest":
             campaign = self.store.load_campaign(payload["campaign_id"])
             self._same_persona(
@@ -1054,8 +1057,12 @@ class WorkflowGates:
             evidence = self._object(payload[key], "operational_evidence")
             self._require_manifest_pass(evidence, f"CandidateEvidencePackage/{key}")
 
-    def _validate_candidate_delivery_plan(self, payload: dict[str, Any]) -> None:
+    def _validate_candidate_delivery_plan(self, payload: dict[str, Any], *, new: bool = False) -> None:
         campaign = self.store.load_campaign(payload["campaign_id"])
+        if new:
+            delivery_execution.require_write_version(self.store, campaign, payload, delivery_execution.PLAN_V2)
+        if payload.get("schema_version") == delivery_execution.PLAN_V2:
+            delivery_execution.validate_plan(self.store, payload)
         self._same_persona(
             campaign["persona"], payload["persona"], "Campaign/CandidateDeliveryPlan"
         )
@@ -1105,10 +1112,16 @@ class WorkflowGates:
         self, payload: dict[str, Any], *, new: bool = False
     ) -> None:
         campaign = self.store.load_campaign(payload["campaign_id"])
+        if new:
+            delivery_execution.require_write_version(self.store, campaign, payload, delivery_execution.PACKAGE_V2)
+        if payload.get("schema_version") == delivery_execution.PACKAGE_V2:
+            delivery_execution.validate_delivery_package(self.store, payload)
         self._same_persona(
             campaign["persona"], payload["persona"], "Campaign/CandidateDeliveryPackage"
         )
         plan = self._object(payload["delivery_plan_ref"], "candidate_delivery_plan")
+        if (plan.get("schema_version") == delivery_execution.PLAN_V2) != (payload.get("schema_version") == delivery_execution.PACKAGE_V2):
+            raise ControlError("真实交付计划与包不能混用历史合同")
         if plan["campaign_id"] != payload["campaign_id"]:
             self._require_campaign_owned(
                 campaign,
@@ -1161,6 +1174,8 @@ class WorkflowGates:
             + len(payload["public_evidence_index_refs"])
             + len(payload["rollback_material_refs"])
         )
+        if payload.get("schema_version") == delivery_execution.PACKAGE_V2:
+            expected_artifact_count += len(payload["execution_evidence_refs"]) + len(payload["restoration_evidence_refs"]) + 1 + len(payload["publication_intent_bindings"])
         if payload["artifact_count"] != expected_artifact_count:
             raise ControlError(
                 "CandidateDeliveryPackage artifact_count 与部署配置、公开索引和回退材料不一致"
@@ -2373,6 +2388,13 @@ class WorkflowGates:
         from .receipts import require_acceptance_formed_under
 
         plan = self._object(payload["delivery_plan_ref"], "candidate_delivery_plan")
+        real_execution = payload.get("schema_version") == delivery_execution.FACT_V3
+        if new and campaign is not None:
+            delivery_execution.require_write_version(self.store, campaign, payload, delivery_execution.FACT_V3)
+        if (plan.get("schema_version") == delivery_execution.PLAN_V2) != real_execution:
+            raise ControlError("真实交付计划与阶段事实不能混用历史合同")
+        if real_execution:
+            delivery_execution.validate_stage_execution(self.store, plan, payload)
         completed = self._fact(payload["validation_completed_ref"], "validation_completed")
         acceptance = self._fact(payload["acceptance_ref"], "acceptance_recorded")
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")
@@ -2414,14 +2436,14 @@ class WorkflowGates:
             if stage == "rollback_verified"
             else plan["candidate_image_digest"]
         )
-        if payload["image_digest"] != expected_image:
+        if payload["target_image_digest" if real_execution else "image_digest"] != expected_image:
             raise ControlError(f"{stage} 未使用冻结的正确镜像摘要")
         expected_profile = (
             plan["rollback_runtime_profile_sha256"]
             if stage == "rollback_verified"
             else plan["runtime_profile_sha256"]
         )
-        if payload["runtime_profile_sha256"] != expected_profile:
+        if payload["target_runtime_profile_sha256" if real_execution else "runtime_profile_sha256"] != expected_profile:
             raise ControlError(f"{stage} 运行 Profile 与冻结计划不一致")
         if payload["check_ids"] != plan["stage_checks"][stage]:
             raise ControlError(f"{stage} 未执行冻结的交付检查闭集")
@@ -3195,6 +3217,8 @@ class WorkflowGates:
             if receipt["campaign_id"] != campaign_id:
                 continue
             delivery_receipts.append(reference)
+            if delivery_execution.requires_current_contract(self.store, campaign) and receipt.get("schema_version") != delivery_execution.RECEIPT_V4:
+                continue
             if not is_current(receipt):
                 continue
             try:

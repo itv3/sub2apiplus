@@ -65,6 +65,7 @@ from .contracts import (
     validate_receipt_document,
 )
 from .errors import ControlError
+from . import delivery_execution
 
 
 TOOL_IDENTITY_V1_SCHEMA = "official-client-control-tool-identity/v1"
@@ -783,6 +784,8 @@ def require_receipt_current(store: Any, receipt: dict[str, Any]) -> None:
     """
 
     campaign = store.load_campaign(receipt["campaign_id"])
+    if receipt.get("schema_version", "").startswith("official-client-candidate-delivery-receipt/"):
+        delivery_execution.require_write_version(store, campaign, receipt, delivery_execution.RECEIPT_V4)
     if campaign_is_v2(campaign) != receipt_is_v2(receipt):
         raise ControlError("收据合同版本与 Campaign 版本不一致")
     if not receipt_is_v2(receipt):
@@ -1780,7 +1783,23 @@ def build_candidate_delivery_receipt(
     formed_under: dict[str, Any] | None = None,
     schema: str | None = None,
 ) -> dict[str, Any]:
-    """由完整 DMIT 四阶段事实和交付包生成候选交付终态收据。
+    """共同严格交付图通过后，按同一组基础判据确定性生成收据。"""
+
+    package = store.load_object(candidate_delivery_package_ref)["payload"]
+    if package.get("schema_version") == delivery_execution.PACKAGE_V2:
+        delivery_execution.validate_delivery_package(store, package)
+    return _build_candidate_delivery_receipt_unchecked(store, campaign_id, candidate_delivery_package_ref, formed_under=formed_under, schema=schema)
+
+
+def _build_candidate_delivery_receipt_unchecked(
+    store: Any,
+    campaign_id: str,
+    candidate_delivery_package_ref: dict[str, Any],
+    *,
+    formed_under: dict[str, Any] | None = None,
+    schema: str | None = None,
+) -> dict[str, Any]:
+    """复核完整四阶段基础链并生成收据，不递归调用已核过的执行包验证。
 
     v2 下只认当前候选 revision 与当前评估基线下形成的 Acceptance（重放时为收据形成期坐标）。
     B4-07：Campaign v2 写入时一律签发 v3——四阶段取唯一有效链的最终 pass，另记全部失败事实、被消费的阶段失效
@@ -1793,6 +1812,12 @@ def build_candidate_delivery_receipt(
     if package_document["object_kind"] != "candidate_delivery_package":
         raise ControlError("CandidateDeliveryReceipt 必须绑定 CandidateDeliveryPackage")
     package = package_document["payload"]
+    real_execution = package.get("schema_version") == delivery_execution.PACKAGE_V2
+    if formed_under is None:
+        delivery_execution.require_write_version(store, campaign, package, delivery_execution.PACKAGE_V2)
+    if real_execution:
+        if not producer["v2"] or (schema is not None and schema != delivery_execution.RECEIPT_V4):
+            raise ControlError("真实交付包只能形成 Campaign v2 的 Receipt v4")
     if package["campaign_id"] != campaign_id:
         raise ControlError("CandidateDeliveryPackage 与 Campaign 不一致")
     facts = [store.load_fact(reference) for reference in package["delivery_fact_refs"]]
@@ -1831,14 +1856,16 @@ def build_candidate_delivery_receipt(
     )
     plan = store.load_object(package["delivery_plan_ref"])["payload"]
     archive_ref = package["private_archive_manifest_ref"]
-    if not producer["v2"]:
+    if real_execution:
+        target_schema = delivery_execution.RECEIPT_V4
+    elif not producer["v2"]:
         target_schema = _receipt_schema("candidate_delivery", producer)
     elif schema is None or schema == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA:
         target_schema = CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
     else:
         target_schema = _receipt_schema("candidate_delivery", producer)
     recovery: dict[str, list[dict[str, Any]]] | None = None
-    if target_schema == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA:
+    if target_schema in {CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA, delivery_execution.RECEIPT_V4}:
         recovery = _delivery_receipt_recovery_inputs(store, campaign_id, package)
     elif producer["v2"]:
         _require_delivery_without_recovery(store, campaign_id, package)
@@ -1861,6 +1888,9 @@ def build_candidate_delivery_receipt(
                 *recovery["recovery_refs"],
             ]
         )
+    execution_inputs = delivery_execution.receipt_execution_inputs(package, plan) if real_execution else {}
+    if real_execution:
+        inputs.extend(execution_inputs[key] for key in sorted(execution_inputs))
     receipt = {
         "schema_version": target_schema,
         "campaign_id": campaign_id,
@@ -1891,6 +1921,7 @@ def build_candidate_delivery_receipt(
     }
     if recovery is not None:
         receipt.update(recovery)
+    receipt.update(execution_inputs)
     _attach_formed_under(receipt, producer)
     receipt["identity_sha256"] = canonical_sha256(
         {key: item for key, item in receipt.items() if key != "identity_sha256"}

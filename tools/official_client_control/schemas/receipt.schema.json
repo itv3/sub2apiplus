@@ -15,7 +15,10 @@
     {"$ref": "#/$defs/validationGateV2"},
     {"$ref": "#/$defs/candidateDeliveryV2"},
     {"$ref": "#/$defs/candidateDeliveryV3"},
-    {"$ref": "#/$defs/predecessorImport"}
+    {"$ref": "#/$defs/predecessorImport"},
+    {
+      "$ref": "#/$defs/candidateDeliveryV4"
+    }
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -414,6 +417,422 @@
         "producer_tool_sha256": {"$ref": "#/$defs/sha256"},
         "formed_under": {"$ref": "#/$defs/formedUnder"},
         "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidateDeliveryV4": {
+      "description": "候选交付收据 v3（B4-07，Campaign v2 在 B4-07 之后一律签发）：delivery_fact_refs 是唯一有效链四阶段的最终 pass；delivery_failure_refs 是该 delivery 的全部失败事实（按事实序号），stage_invalidation_refs 是被恢复段消费的阶段失效对象，recovery_refs 是恢复段预约（均按 dr 编号），三者都进入 input_facts_sha256。finalize 成功后该 delivery 为终态：同一交付包重复 finalize 重放核对后返回原收据，换交付包、追加事实、预约恢复段或申请阶段失效一律拒绝。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "campaign_id",
+        "campaign_purpose",
+        "target_version",
+        "profile_approval_ref",
+        "candidate_id",
+        "candidate_ref",
+        "candidate_build_receipt_ref",
+        "validation_completed_ref",
+        "acceptance_ref",
+        "candidate_evidence_package_ref",
+        "delivery_plan_ref",
+        "delivery_fact_refs",
+        "candidate_delivery_package_ref",
+        "private_archive_manifest_ref",
+        "candidate_image_digest",
+        "host_id",
+        "architecture",
+        "release_state",
+        "vircs_state",
+        "delivery_failure_refs",
+        "stage_invalidation_refs",
+        "recovery_refs",
+        "input_facts_sha256",
+        "completed_at_utc",
+        "producer_tool_sha256",
+        "identity_sha256",
+        "formed_under",
+        "execution_evidence_refs",
+        "executor_configuration_ref",
+        "operation_index_binding",
+        "operation_index_origin",
+        "probe_recipe_ref",
+        "restoration_evidence_refs",
+        "rollback_state_ref",
+        "stable_environment_projection_ref",
+        "publication_intent_bindings",
+        "deployment_configuration_ref"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "official-client-candidate-delivery-receipt/v4"
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "campaign_purpose": {
+          "enum": [
+            "validation_only",
+            "production_replacement"
+          ]
+        },
+        "target_version": {
+          "type": "string"
+        },
+        "profile_approval_ref": {
+          "type": "object"
+        },
+        "candidate_id": {
+          "type": "string"
+        },
+        "candidate_ref": {
+          "type": "object"
+        },
+        "candidate_build_receipt_ref": {
+          "type": "object"
+        },
+        "validation_completed_ref": {
+          "type": "object"
+        },
+        "acceptance_ref": {
+          "type": "object"
+        },
+        "candidate_evidence_package_ref": {
+          "type": "object"
+        },
+        "delivery_plan_ref": {
+          "type": "object"
+        },
+        "delivery_fact_refs": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "candidate_delivery_package_ref": {
+          "type": "object"
+        },
+        "private_archive_manifest_ref": {
+          "type": "object"
+        },
+        "candidate_image_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "host_id": {
+          "type": "string"
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "release_state": {
+          "const": "ready_for_operator_release"
+        },
+        "vircs_state": {
+          "type": "object"
+        },
+        "delivery_failure_refs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "stage_invalidation_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "object_kind",
+              "sha256"
+            ],
+            "properties": {
+              "object_kind": {
+                "const": "candidate_delivery_stage_invalidation"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        },
+        "recovery_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "object_kind",
+              "sha256"
+            ],
+            "properties": {
+              "object_kind": {
+                "const": "candidate_delivery_recovery"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        },
+        "input_facts_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "completed_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "producer_tool_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "formed_under": {
+          "$ref": "#/$defs/formedUnder"
+        },
+        "execution_evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "object_kind",
+              "sha256"
+            ],
+            "properties": {
+              "object_kind": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "executor_configuration_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_kind",
+            "sha256"
+          ],
+          "properties": {
+            "object_kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "operation_index_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "bytes"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "operation_index_origin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "authority",
+            "source_scope",
+            "configuration_sha256",
+            "service_instance_id",
+            "operations_index_binding"
+          ],
+          "properties": {
+            "authority": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_scope": {
+              "enum": [
+                "formal",
+                "regression_fixture"
+              ]
+            },
+            "configuration_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "service_instance_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operations_index_binding": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "path",
+                    "sha256",
+                    "bytes"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        "probe_recipe_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_kind",
+            "sha256"
+          ],
+          "properties": {
+            "object_kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "restoration_evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "object_kind",
+              "sha256"
+            ],
+            "properties": {
+              "object_kind": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "rollback_state_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_kind",
+            "sha256"
+          ],
+          "properties": {
+            "object_kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "stable_environment_projection_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_kind",
+            "sha256"
+          ],
+          "properties": {
+            "object_kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "publication_intent_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "deployment_configuration_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object_kind",
+            "sha256"
+          ],
+          "properties": {
+            "object_kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        }
       }
     }
   }

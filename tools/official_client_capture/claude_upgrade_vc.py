@@ -252,6 +252,8 @@ def replay_vc_checkpoint(
     stage_path = Path(raw) if Path(raw).is_absolute() else _campaign_file(campaign_dir, raw, f"{phase} 阶段收据")
     if stage_path.is_symlink() or not stage_path.is_file() or file_sha256(stage_path) != stage.get("sha256"):
         raise ConfigurationError(f"{phase} checkpoint 的阶段收据摘要漂移。")
+    if phase == "VC-6":
+        _validate_vc6_delivery_consumer(campaign_dir, plan, stage_path, revision)
     if phase != "VC-0":
         previous = VC_PHASES[VC_PHASES.index(phase) - 1]
         previous_path, previous_checkpoint = replay_vc_checkpoint(
@@ -328,6 +330,8 @@ def complete_candidate_phase(
         raise ConfigurationError("候选级阶段完成器只接受 VC-4～VC-6。")
     if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
         raise ConfigurationError("候选级阶段完成器必须给出正整数候选 revision。")
+    if phase == "VC-6":
+        _validate_vc6_delivery_consumer(campaign_dir, manifest, stage_receipt_path, revision)
     return _complete_phase(
         campaign_dir,
         manifest,
@@ -340,6 +344,23 @@ def complete_candidate_phase(
         live_request_count=live_request_count,
         scanned_bytes=scanned_bytes,
     )
+
+
+def _validate_vc6_delivery_consumer(campaign_dir: Path, manifest: Mapping[str, Any], path: Path, revision: int | None) -> None:
+    """Claude 专属 VC-6 消费接线：真实交付语义先于 checkpoint 写入或完成判定。"""
+
+    from tools.official_client_capture import claude_upgrade_delivery
+    result = _read_json(path, "VC-6 阶段收据")
+    if result.get("stage") != claude_upgrade_delivery.STAGE_NAME:
+        # 生产交接另归 B4-08；本批不把候选完成权扩大到生产。
+        raise ConfigurationError("当前候选 VC-6 只能消费受管候选交付结果；生产终态合同仍待 B4-08。")
+    candidate_id = result.get("candidate_id")
+    checked = claude_upgrade_delivery.load_stage_result(campaign_dir, str(candidate_id), manifest=manifest)
+    expected_path = claude_upgrade_delivery.stage_result_path(campaign_dir, str(candidate_id))
+    if checked is None or Path(path).resolve(strict=True) != expected_path.resolve(strict=True) or checked != result or (revision is not None and checked.get("candidate_revision") != revision):
+        raise ConfigurationError("VC-6 checkpoint 未绑定同一当前交付结果。")
+    if checked.get("vc6_status") != claude_upgrade_delivery.VC6_STATUS_COMPLETE or checked.get("campaign_purpose") != "validation_only":
+        raise ConfigurationError("生产用途的候选交付尚待激活，不能完成 VC-6。")
 
 
 def _complete_phase(

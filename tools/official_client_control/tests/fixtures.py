@@ -1118,9 +1118,10 @@ class SyntheticCampaign:
             "source_tree_sha256": "7" * 64,
             "test_tree_sha256": "8" * 64,
             "dependency_lock_sha256": "9" * 64,
-            "target_architecture": "linux/amd64",
-            "build_id": f"synthetic-build-{tag}",
-            "image_digest": TARGET_IMAGE,
+            # 候选绑定本轮构建输入，便于独立夹具提供真实架构、镜像与 Profile 字节。
+            "target_architecture": build_input["build_identity"]["target_architecture"],
+            "build_id": build_input["build_identity"]["build_id"],
+            "image_digest": build_input["image"]["image_digest"],
             "candidate_purpose": candidate_purpose,
             "candidate_build_receipt_ref": self.references[key("candidate-build-receipt")],
             "identity_sha256": "",

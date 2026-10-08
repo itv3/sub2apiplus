@@ -26,6 +26,7 @@ from .canonical import (
     validate_external_binding,
 )
 from .errors import ControlError
+from . import delivery_execution
 
 
 STORE_SCHEMA = "official-client-control-store/v1"
@@ -68,6 +69,11 @@ CANDIDATE_DELIVERY_RECEIPT_V2_SCHEMA = "official-client-candidate-delivery-recei
 # B4-07：候选交付收据 v3（只属于 Campaign v2）在 v2 之上记录该 delivery 的全部失败事实、阶段失效对象与恢复段
 # 预约；B4-07 之后 Campaign v2 新签发的候选交付收据一律是 v3，B1-12 时期的 v2 收据按自身合同只读重放。
 CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA = "official-client-candidate-delivery-receipt/v3"
+# 真实候选交付的新合同保留独立分支，不改历史版本含义。
+CANDIDATE_DELIVERY_PLAN_V2_SCHEMA = delivery_execution.PLAN_V2
+CANDIDATE_DELIVERY_FACT_V3_SCHEMA = delivery_execution.FACT_V3
+CANDIDATE_DELIVERY_PACKAGE_V2_SCHEMA = delivery_execution.PACKAGE_V2
+CANDIDATE_DELIVERY_RECEIPT_V4_SCHEMA = delivery_execution.RECEIPT_V4
 # 收据种类 → (v1 合同名, v2 合同名)；v2 只比 v1 多一个 formed_under 字段。
 RECEIPT_SCHEMA_VERSIONS = {
     "promotion": (PROMOTION_RECEIPT_SCHEMA, PROMOTION_RECEIPT_V2_SCHEMA),
@@ -82,7 +88,7 @@ RECEIPT_SCHEMA_VERSIONS = {
 # 属于 Campaign v2、带 formed_under 的五类收据合同（含候选交付收据 v3）。
 RECEIPT_V2_SCHEMAS = frozenset(
     versions[1] for versions in RECEIPT_SCHEMA_VERSIONS.values()
-) | {CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA}
+) | {CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA, CANDIDATE_DELIVERY_RECEIPT_V4_SCHEMA}
 # 收据种类全集（按 Store 重放顺序）；predecessor_import（B1-14）只有一版合同，只属于 Campaign v2。
 RECEIPT_KINDS = (
     "promotion",
@@ -1658,6 +1664,20 @@ def _validate_delivery_stage_checks(value: Any, label: str) -> dict[str, Any]:
 
 
 def _validate_candidate_delivery_plan(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("schema_version") == CANDIDATE_DELIVERY_PLAN_V2_SCHEMA:
+        extra = delivery_execution.PLAN_EXTRA_FIELDS
+        if not extra <= set(value):
+            raise ControlError("CandidateDeliveryPlan v2 缺少冻结执行输入")
+        projected = {key: item for key, item in value.items() if key not in extra}
+        projected["schema_version"] = CANDIDATE_DELIVERY_PLAN_SCHEMA
+        projected["identity_sha256"] = canonical_sha256({key: item for key, item in projected.items() if key != "identity_sha256"})
+        _validate_candidate_delivery_plan(projected)
+        for key in extra:
+            delivery_execution._object_ref(value[key], "operational_evidence", f"CandidateDeliveryPlan v2.{key}")
+        if value["host_id"] != "ARM64" or value["architecture"] not in {"arm64", "aarch64", "linux/arm64"}:
+            raise ControlError("真实候选交付只允许 ARM64")
+        _require_identity(value, "CandidateDeliveryPlan v2")
+        return value
     payload = expect_object(value, "candidate_delivery_plan")
     expect_exact_keys(
         payload,
@@ -1815,6 +1835,23 @@ def _validate_private_archive_manifest(value: Any) -> dict[str, Any]:
 
 
 def _validate_candidate_delivery_package(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("schema_version") == CANDIDATE_DELIVERY_PACKAGE_V2_SCHEMA:
+        extra = delivery_execution.PACKAGE_EXTRA_FIELDS
+        if not extra <= set(value):
+            raise ControlError("CandidateDeliveryPackage v2 缺少完整操作归档")
+        projected = {key: item for key, item in value.items() if key not in extra}
+        projected["schema_version"] = CANDIDATE_DELIVERY_PACKAGE_SCHEMA
+        projected["identity_sha256"] = canonical_sha256({key: item for key, item in projected.items() if key != "identity_sha256"})
+        _validate_candidate_delivery_package(projected)
+        for key in ("execution_evidence_refs", "restoration_evidence_refs"):
+            _validate_ref_list(value[key], f"CandidateDeliveryPackage v2.{key}", validate_object_ref, non_empty=key == "execution_evidence_refs")
+            for reference in value[key]:
+                delivery_execution._object_ref(reference, "operational_evidence", f"CandidateDeliveryPackage v2.{key}")
+        validate_external_binding(value["operation_index_binding"], "CandidateDeliveryPackage v2.operation_index_binding")
+        delivery_execution.validate_publication_bindings(value["publication_intent_bindings"])
+        delivery_execution._origin(value["operation_index_origin"])
+        _require_identity(value, "CandidateDeliveryPackage v2")
+        return value
     payload = expect_object(value, "candidate_delivery_package")
     expect_exact_keys(
         payload,
@@ -2470,6 +2507,8 @@ def _validate_deployment_traffic_envelope(value: Any) -> dict[str, Any]:
 
 
 def _validate_generic_manifest(value: Any, kind: str) -> dict[str, Any]:
+    if kind == "operational_evidence" and isinstance(value, dict) and value.get("schema_version") == delivery_execution.OPERATIONAL_V2:
+        return delivery_execution.validate_operational_evidence(value)
     payload = expect_object(value, kind)
     expect_exact_keys(
         payload,
@@ -3830,6 +3869,21 @@ def _validate_candidate_delivery_payload(value: Any, *, allow_v2: bool = True) -
     ``allow_v2`` 为 False（v1 事实）时只按 v1 键集合校验，v1 报错逐字不变。
     """
 
+    if allow_v2 and isinstance(value, dict) and value.get("schema_version") == CANDIDATE_DELIVERY_FACT_V3_SCHEMA:
+        extra = {"execution_evidence_ref", "target_image_digest", "target_runtime_profile_sha256"}
+        if not extra <= set(value) or "image_digest" in value or "runtime_profile_sha256" in value:
+            raise ControlError("StageFact v3 必须区分目标与严格执行实测")
+        projected = {key: item for key, item in value.items() if key not in extra}
+        projected["schema_version"] = CANDIDATE_DELIVERY_FACT_V2_SCHEMA
+        projected["image_digest"] = value["target_image_digest"]
+        projected["runtime_profile_sha256"] = value["target_runtime_profile_sha256"]
+        projected["identity_sha256"] = canonical_sha256({key: item for key, item in projected.items() if key != "identity_sha256"})
+        _validate_candidate_delivery_payload(projected, allow_v2=True)
+        delivery_execution._object_ref(value["execution_evidence_ref"], "operational_evidence", "StageFact v3.execution_evidence_ref")
+        if value["execution_evidence_ref"] not in value["evidence_refs"]:
+            raise ControlError("StageFact v3 的执行证明未进入证据引用闭集")
+        _require_identity(value, "StageFact v3")
+        return value
     payload = expect_object(value, "candidate_delivery_recorded")
     v2 = allow_v2 and payload.get("schema_version") == CANDIDATE_DELIVERY_FACT_V2_SCHEMA
     keys = {
@@ -4610,6 +4664,27 @@ def _validate_candidate_delivery_receipt(
     dr 编号），三者都进入 ``input_facts_sha256``；``delivery_fact_refs`` 是有效链四阶段的最终 pass。
     """
 
+    if schema == CANDIDATE_DELIVERY_RECEIPT_V4_SCHEMA:
+        if not isinstance(value, dict) or not delivery_execution.RECEIPT_EXTRA_FIELDS <= set(value):
+            raise ControlError("CandidateDeliveryReceipt v4 缺少严格执行输入")
+        projected = {key: item for key, item in value.items() if key not in delivery_execution.RECEIPT_EXTRA_FIELDS}
+        projected["schema_version"] = CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
+        inputs = _candidate_delivery_receipt_inputs(projected)
+        projected["input_facts_sha256"] = canonical_sha256(inputs)
+        projected["identity_sha256"] = canonical_sha256({key: item for key, item in projected.items() if key != "identity_sha256"})
+        _validate_candidate_delivery_receipt(projected, CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA)
+        for key in ("executor_configuration_ref", "stable_environment_projection_ref", "probe_recipe_ref", "rollback_state_ref", "deployment_configuration_ref"):
+            delivery_execution._object_ref(value[key], "operational_evidence", f"CandidateDeliveryReceipt v4.{key}")
+        for key in ("execution_evidence_refs", "restoration_evidence_refs"):
+            _validate_ref_list(value[key], f"CandidateDeliveryReceipt v4.{key}", validate_object_ref, non_empty=key == "execution_evidence_refs")
+        validate_external_binding(value["operation_index_binding"], "CandidateDeliveryReceipt v4.operation_index_binding")
+        delivery_execution.validate_publication_bindings(value["publication_intent_bindings"])
+        delivery_execution._origin(value["operation_index_origin"])
+        inputs.extend(value[key] for key in sorted(delivery_execution.RECEIPT_EXTRA_FIELDS))
+        if value["input_facts_sha256"] != canonical_sha256(inputs):
+            raise ControlError("CandidateDeliveryReceipt v4 完整执行输入摘要不匹配")
+        _require_identity(value, "CandidateDeliveryReceipt v4")
+        return value
     v3 = schema == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
     receipt = expect_object(value, "candidate_delivery_receipt")
     expect_exact_keys(
@@ -4715,6 +4790,15 @@ def _validate_candidate_delivery_receipt(
     if receipt["identity_sha256"] != expected_identity:
         raise ControlError("candidate_delivery_receipt.identity_sha256 与交付内容不一致")
     return receipt
+
+
+def _require_identity(value: dict[str, Any], label: str) -> None:
+    if value.get("identity_sha256") != canonical_sha256({key: item for key, item in value.items() if key != "identity_sha256"}):
+        raise ControlError(f"{label} 身份摘要与完整内容不一致")
+
+
+def _candidate_delivery_receipt_inputs(receipt: dict[str, Any]) -> list[Any]:
+    return [receipt["candidate_ref"], receipt["candidate_build_receipt_ref"], receipt["validation_completed_ref"], receipt["acceptance_ref"], receipt["candidate_evidence_package_ref"], receipt["delivery_plan_ref"], *receipt["delivery_fact_refs"], receipt["candidate_delivery_package_ref"], receipt["private_archive_manifest_ref"], *_validate_delivery_recovery_inputs(receipt)]
 
 
 def _validate_delivery_recovery_inputs(receipt: dict[str, Any]) -> list[dict[str, Any]]:
@@ -4911,9 +4995,9 @@ def _requested_receipt_schema(value: Any, kind: str) -> str | None:
     if (
         kind == "candidate_delivery"
         and isinstance(value, dict)
-        and value.get("schema_version") == CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
+        and value.get("schema_version") in {CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA, CANDIDATE_DELIVERY_RECEIPT_V4_SCHEMA}
     ):
-        return CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA
+        return value["schema_version"]
     return versions[0]
 
 

@@ -146,11 +146,13 @@ from tools.official_client_capture import codex_upgrade_timing_ledger as timing_
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.capturelib.security import ensure_private_directory, file_sha256
 from tools.official_client_control import receipts as store_receipts
+from tools.official_client_control import delivery_execution
 from tools.official_client_control.canonical import (
     canonical_json_bytes,
     canonical_sha256,
     expect_image_digest,
     sha256_bytes,
+    write_once,
 )
 from tools.official_client_control.contracts import (
     CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS,
@@ -201,13 +203,16 @@ ROOT_CAUSE_ENVIRONMENT_DRIFT = "delivery-environment-drift"
 LOGICAL_ACTION_PREFIX = "claude-upgrade:deliver-candidate"
 EXECUTOR_PENDING_WORK_ITEM = "B4-07 遗留项：ARM64 隔离候选环境真实执行器（另行排期）"
 # 交付环境执行器登记表：名字 → 无参工厂。生产环境目前不登记任何执行器（第二节）。
-ENVIRONMENT_EXECUTORS: dict[str, Callable[[], Any]] = {}
+ENVIRONMENT_EXECUTORS: dict[str, Callable[..., Any]] = {}
+EXECUTOR_V1 = "claude-upgrade-arm64-delivery-executor/v1"
+EXECUTOR_CONFIGURATION_FLAGS = frozenset({"--executor-configuration", "--executor-configuration-sha256"})
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RESULTS = ("pass", "failed")
 # 八、交付阶段结果与 VC-6 完成（B4-07 收尾）。
 STAGE_RESULT_SCHEMA = "claude-upgrade-delivery/v1"
+STAGE_RESULT_V2_SCHEMA = "claude-upgrade-delivery/v2"
 STAGE_NAME = "deliver-candidate"
 STAGE_RESULT_DIRECTORY = Path("delivery")
 STAGE_RESULT_FILENAME = "result.json"
@@ -467,13 +472,56 @@ def _require_vc6_open(context: DeliveryContext, state: Mapping[str, Any]) -> Non
 # ---------------------------------------------------------------------------
 
 
-def _environment_executor(name: Any) -> Any:
+def _environment_executor(name: Any, *, configuration: Mapping[str, Any] | None = None, execution_context: Mapping[str, Any] | None = None) -> Any:
     if not isinstance(name, str) or not SAFE_NAME_RE.fullmatch(name):
         raise ConfigurationError("--environment-executor 格式非法。")
     factory = ENVIRONMENT_EXECUTORS.get(name)
     if factory is None:
         raise _orchestrator()._pending(f"交付环境执行器 {name}", EXECUTOR_PENDING_WORK_ITEM)
-    return factory()
+    if configuration is None:
+        return factory()
+    if execution_context is None:
+        raise ConfigurationError("真实交付缺少冻结执行上下文。")
+    executor = factory(name, dict(configuration), dict(execution_context))
+    if getattr(executor, "contract_version", None) != EXECUTOR_V1:
+        raise ConfigurationError("已登记工厂未提供受管真实交付执行合同。")
+    return executor
+
+
+def _configuration_input(context: DeliveryContext, arguments: argparse.Namespace) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """父动作里的两项配置旗标必须一起给出，文件限 Campaign 内并按原始字节核 SHA。"""
+
+    raw_path = getattr(arguments, "executor_configuration", None)
+    digest = getattr(arguments, "executor_configuration_sha256", None)
+    if (raw_path is None) != (digest is None):
+        raise ConfigurationError("执行配置路径与 SHA 必须成对给出。")
+    if raw_path is None:
+        if delivery_execution.requires_current_contract(context.store, context.campaign):
+            raise ConfigurationError("当前 Claude 真实交付必须显式冻结执行配置，缺配置零变更拒绝。")
+        return None, None
+    path = Path(raw_path)
+    if not path.is_absolute() or path.is_symlink() or not path.is_file() or not path.resolve(strict=True).is_relative_to(context.campaign_dir):
+        raise ConfigurationError("执行配置必须是 Campaign 内的可信绝对路径普通文件。")
+    content = path.read_bytes()
+    if not SHA256_RE.fullmatch(str(digest)) or sha256_bytes(content) != digest:
+        raise ConfigurationError("执行配置原始字节与父动作冻结 SHA 不一致。")
+    configuration = claude_upgrade_vc._read_json(path, "真实交付执行配置")
+    from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import validate_configuration
+    validate_configuration(configuration)
+    binding = {"path": path.relative_to(context.data_root).as_posix(), "sha256": digest, "bytes": len(content)}
+    return dict(configuration), binding
+
+
+def _executor_context(context: DeliveryContext, delivery_id: str, binding: Mapping[str, Any]) -> dict[str, Any]:
+    return {"campaign_id": context.campaign_id, "candidate_id": context.candidate_id, "delivery_id": delivery_id, "segment": "dr0", "run_nonce": f"{delivery_id}-dr0", "data_root": str(context.data_root), "configuration_ref": dict(binding)}
+
+
+def _typed_manifest(context: DeliveryContext, manifest_id: str, kind: str, core: Mapping[str, Any]) -> dict[str, Any]:
+    if len(manifest_id) > 128:
+        manifest_id = f"delivery-{kind.replace('_', '-')}-{canonical_sha256(manifest_id)[:40]}"
+    payload = {"schema_version": delivery_execution.OPERATIONAL_V2, "persona": dict(context.persona), "manifest_id": manifest_id, "evidence_type": kind, "entries": [{"id": kind, "facts": dict(core)}]}
+    delivery_execution.validate_operational_evidence(payload)
+    return payload
 
 
 def _expect(condition: bool, message: str) -> None:
@@ -534,9 +582,17 @@ def _freeze(context: DeliveryContext, executor: Any, name: str, delivery_id: str
     raw = executor.freeze(request)
     _expect(isinstance(raw, Mapping), "freeze 必须返回对象")
     _expect(
-        set(raw) == {"environment", "rollback", "gates", "rollback_material", "deployment_configuration"},
+        set(raw) == ({"environment", "rollback", "gates", "cores"} if getattr(executor, "contract_version", None) == EXECUTOR_V1 else {"environment", "rollback", "gates", "rollback_material", "deployment_configuration"}),
         "freeze 字段不闭合",
     )
+    if getattr(executor, "contract_version", None) == EXECUTOR_V1:
+        _expect(set(raw) == {"environment", "rollback", "gates", "cores"}, "真实 freeze 字段不闭合")
+        cores = raw["cores"]
+        kinds = {"configuration", "stable_projection", "freeze", "rollback_state", "zero_model_probes", "deployment_configuration"}
+        _expect(isinstance(cores, Mapping) and set(cores) == kinds, "真实 freeze 的六种输入证据不闭合")
+        for kind in kinds:
+            _typed_manifest(context, f"{delivery_id}-{kind.replace('_', '-')}", kind, cores[kind])
+        return {"executor": name, "environment": _environment(raw["environment"], "environment"), "rollback": dict(raw["rollback"]), "gates": _checked_items(raw["gates"], DELIVERY_GATES, "gates"), "cores": dict(cores)}
     rollback = raw["rollback"]
     _expect(isinstance(rollback, Mapping) and set(rollback) == {"image_digest", "runtime_profile_sha256"}, "rollback 字段不闭合")
     _expect(
@@ -882,6 +938,8 @@ def _plan_drift(plan: Mapping[str, Any], snapshot: Mapping[str, Any]) -> dict[st
     """冻结计划与本次冻结的差异：环境身份 6 项、回退镜像与回退 Profile（任一不同即须开新 delivery）。"""
 
     drift: dict[str, dict[str, Any]] = {}
+    if (plan.get("schema_version") == delivery_execution.PLAN_V2) != ("cores" in snapshot):
+        drift["execution_contract"] = {"planned": plan.get("schema_version"), "observed": delivery_execution.PLAN_V2 if "cores" in snapshot else CANDIDATE_DELIVERY_PLAN_SCHEMA}
     for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS:
         if plan[key] != snapshot["environment"][key]:
             drift[key] = {"planned": plan[key], "observed": snapshot["environment"][key]}
@@ -903,6 +961,8 @@ def _open_delivery(context: DeliveryContext, index: int, snapshot: Mapping[str, 
         raise ConfigurationError(
             f"交付环境架构 {snapshot['environment']['architecture']} 与候选 {context.handoff['architecture']} 不一致。"
         )
+    if "cores" in snapshot:
+        return _open_typed_delivery(context, index, snapshot, window)
     freeze = _freeze_manifest(context, f"{delivery_id}-environment-freeze", snapshot)
     rollback = _manifest(
         context,
@@ -937,6 +997,23 @@ def _open_delivery(context: DeliveryContext, index: int, snapshot: Mapping[str, 
                 "vircs_state": dict(PRODUCTION_STATE),
             }
         )
+        plan_ref = context.session.seal_object("candidate_delivery_plan", plan)
+    return {"delivery_id": delivery_id, "index": index, "plan_ref": plan_ref, "plan": plan}
+
+
+def _open_typed_delivery(context: DeliveryContext, index: int, snapshot: Mapping[str, Any], window: int) -> dict[str, Any]:
+    """先封存不反向引用 Plan 的六种真实输入，再形成 Plan v2。"""
+
+    delivery_id = _delivery_id(context, index)
+    cores = snapshot["cores"]
+    for core in cores.values():
+        if core["campaign_id"] != context.campaign_id or core["delivery_id"] != delivery_id:
+            raise ConfigurationError("冻结执行输入不是即将建立的同一交付；须按新 delivery 重做只读 freeze。")
+    with _write_scope(context):
+        refs = {}
+        for kind in ("configuration", "stable_projection", "freeze", "rollback_state", "zero_model_probes", "deployment_configuration"):
+            refs[kind] = context.session.seal_object("operational_evidence", _typed_manifest(context, f"{delivery_id}-{kind.replace('_', '-')}", kind, cores[kind]))
+        plan = _with_identity({"schema_version": delivery_execution.PLAN_V2, "campaign_id": context.campaign_id, "persona": dict(context.persona), "plan_id": f"{delivery_id}-plan", "delivery_id": delivery_id, "candidate_id": context.candidate_id, **{key: context.handoff[key] for key in ("candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref")}, **snapshot["environment"], "runtime_profile_sha256": context.handoff["runtime_profile_sha256"], "rollback_runtime_profile_sha256": snapshot["rollback"]["runtime_profile_sha256"], "candidate_image_digest": context.handoff["candidate_image_digest"], "rollback_image_digest": snapshot["rollback"]["image_digest"], "observation_window_seconds": window, "stage_checks": {stage: list(STAGE_CHECKS[stage]) for stage in STAGES}, "environment_freeze_ref": refs["freeze"], "rollback_material_refs": [refs["rollback_state"]], "vircs_state": dict(PRODUCTION_STATE), "executor_configuration_ref": refs["configuration"], "stable_environment_projection_ref": refs["stable_projection"], "probe_recipe_ref": refs["zero_model_probes"], "rollback_state_ref": refs["rollback_state"], "environment_before_ref": refs["freeze"], "deployment_configuration_ref": refs["deployment_configuration"]})
         plan_ref = context.session.seal_object("candidate_delivery_plan", plan)
     return {"delivery_id": delivery_id, "index": index, "plan_ref": plan_ref, "plan": plan}
 
@@ -1028,6 +1105,8 @@ def _reserve(
     recovery = f"dr{number}"
     environment = _manifest(context, f"{delivery_id}-{recovery}-environment-before", _environment_entries(snapshot)
                             + [_entry(f"gate-{item['id']}", item["result"], detail=item["facts"]) for item in snapshot["gates"]])
+    if delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+        environment = _typed_manifest(context, f"{delivery_id}-{recovery}-environment-before", "freeze", snapshot["cores"]["freeze"])
     with _write_scope(context):
         evidence_ref = context.session.seal_object("operational_evidence", environment)
         payload = {
@@ -1156,7 +1235,7 @@ def _stage_payload(
     )
 
 
-def _record_stage(context: DeliveryContext, stage: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+def _record_stage(context: DeliveryContext, stage: str, payload: Mapping[str, Any], *, publication: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """``candidate-delivery-record``（事实 v2）：带幂等键，父监督器里另带 producer run；返回 ``{fact_ref, reused}``。"""
 
     key = fact_idempotency_key(
@@ -1165,18 +1244,164 @@ def _record_stage(context: DeliveryContext, stage: str, payload: Mapping[str, An
         "candidate_delivery_recorded",
     )
     producer = claude_upgrade_seal._producer_run()
+    issued_at = _orchestrator()._utc_now()
+    if publication is not None:
+        if publication["payload"] != payload or publication["idempotency_key"] != key:
+            raise ConfigurationError("不可变发布意图与待补发事实不一致。")
+        producer = publication["producer_run"]
+        issued_at = publication["issued_at_utc"]
+        # 已有同键事实只读复用；尚未写入时禁止用新形成期坐标替换旧物理意图。
+        existing = context.store.find_fact_by_idempotency_key(context.campaign_id, key)
+        if existing is None and store_receipts.current_formed_under(context.store, dict(context.campaign)) != publication["formed_under"]:
+            raise ConfigurationError("物理操作已完成，但形成期坐标已变化；保留原意图并停止补发，不能重做物理阶段。")
 
     def call(path: Path) -> Any:
         argv: list[Any] = [
             "candidate-delivery-record", "--store", context.store.root, "--campaign", context.campaign_id,
-            "--stage", stage, "--input", path, "--issued-at", _orchestrator()._utc_now(), "--idempotency-key", key,
+            "--stage", stage, "--input", path, "--issued-at", issued_at, "--idempotency-key", key,
         ]
         if producer is None:
             return _store(argv)
         return context.session._with_input(producer, lambda producer_path: _store([*argv, "--producer-run", producer_path]))
 
     outcome = context.session._with_input(dict(payload), call)
+    if publication is not None:
+        fact = context.store.load_fact(outcome["fact_ref"])
+        if any(fact[key] != publication[key] for key in ("payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key")):
+            raise ConfigurationError("Store 幂等事实不属于原始发布意图。")
     return {"fact_ref": dict(outcome["fact_ref"]), "reused": bool(outcome["reused"])}
+
+
+def _publication_root(context: DeliveryContext, delivery_id: str) -> Path:
+    return ensure_private_directory(context.delivery_root / delivery_id / "publication", context.campaign_dir)
+
+
+def _bound_local(context: DeliveryContext, path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file() or not path.resolve(strict=True).is_relative_to(context.data_root):
+        raise ConfigurationError("交付后处理原件路径不可信。")
+    return {"path": path.relative_to(context.data_root).as_posix(), "sha256": file_sha256(path), "bytes": path.stat().st_size}
+
+
+def _immutable_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """同内容重入，异内容拒绝；文件及目录落盘后才允许下一步。"""
+
+    content = canonical_json_bytes(dict(payload))
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != content:
+            raise ConfigurationError("交付不可变意图已存在且字节不一致。")
+        return
+    write_once(path, content)
+
+
+def _stage_request(delivery: Mapping[str, Any], stage: str, run_nonce: str) -> dict[str, Any]:
+    plan = delivery["plan"]
+    return {"stage": stage, "run_nonce": run_nonce, "plan_ref": dict(delivery["plan_ref"]), "configuration_ref": plan["executor_configuration_ref"], "stable_projection_ref": plan["stable_environment_projection_ref"], "probe_recipe_ref": plan["probe_recipe_ref"], "environment": {key: plan[key] for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS}}
+
+
+def _publication_seed(context: DeliveryContext, delivery: Mapping[str, Any], request: Mapping[str, Any], previous: Mapping[str, Any] | None, recovery: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = _publication_root(context, str(delivery["delivery_id"]))
+    path = root / "seeds" / f"{canonical_sha256(dict(request))}.json"
+    if path.exists():
+        value = claude_upgrade_vc._read_json(path, "交付发布预登记")
+        if value.get("request") != request or value.get("delivery_id") != delivery["delivery_id"]:
+            raise ConfigurationError("重入请求与原发布预登记不一致。")
+    else:
+        value = {"schema_version": "claude-upgrade-delivery-publication-seed/v1", "campaign_id": context.campaign_id, "candidate_id": context.candidate_id, "delivery_id": delivery["delivery_id"], "request": dict(request), "previous_stage_ref": dict(previous) if previous is not None else None, "recovery_revision": recovery[0] if recovery is not None else None, "recovery_ref": dict(recovery[1]) if recovery is not None else None, "issued_at_utc": _orchestrator()._utc_now(), "producer_run": claude_upgrade_seal._producer_run(), "formed_under": store_receipts.current_formed_under(context.store, dict(context.campaign))}
+        _immutable_json(path, value)
+    return value, _bound_local(context, path)
+
+
+def _typed_stage_payload(context: DeliveryContext, delivery: Mapping[str, Any], core: Mapping[str, Any], reference: Mapping[str, Any], seed: Mapping[str, Any]) -> dict[str, Any]:
+    payload = _stage_payload(context, delivery, str(core["stage"]), previous=seed["previous_stage_ref"], recovery=(seed["recovery_revision"], seed["recovery_ref"]) if seed["recovery_revision"] is not None else None, evidence_ref=reference, observed_seconds=int(core["observed_seconds"]), result=str(core["result"]))
+    image = payload.pop("image_digest")
+    profile = payload.pop("runtime_profile_sha256")
+    payload.update(schema_version=delivery_execution.FACT_V3, target_image_digest=image, target_runtime_profile_sha256=profile, execution_evidence_ref=dict(reference))
+    return _with_identity(payload)
+
+
+def _publish_execution(context: DeliveryContext, delivery: Mapping[str, Any], core: Mapping[str, Any]) -> dict[str, Any]:
+    """从 guard 已封的同字节执行证明补 Store／账本；此函数没有物理动作。"""
+
+    request = _stage_request(delivery, str(core["stage"]), str(core["run_nonce"]))
+    root = _publication_root(context, str(delivery["delivery_id"]))
+    seed_path = root / "seeds" / f"{canonical_sha256(request)}.json"
+    if not seed_path.is_file() or seed_path.is_symlink():
+        raise ConfigurationError("已完成物理操作缺少修改前发布预登记，不能生成新的 producer 或时间坐标。")
+    seed = claude_upgrade_vc._read_json(seed_path, "原发布预登记")
+    seed_binding = _bound_local(context, seed_path)
+    if seed.get("request") != request or seed.get("campaign_id") != context.campaign_id:
+        raise ConfigurationError("原物理执行与发布预登记不一致。")
+    manifest = _typed_manifest(context, f"{delivery['delivery_id']}-{core['operation_id']}-execution", "stage_execution", core)
+    reference = _object_ref("operational_evidence", manifest)
+    payload = _typed_stage_payload(context, delivery, core, reference, seed)
+    key = fact_idempotency_key(f"{LOGICAL_ACTION_PREFIX}:{payload['delivery_id']}:{payload['recovery_revision'] or 'dr0'}:{payload['stage']}", canonical_sha256(payload), "candidate_delivery_recorded")
+    publication = {"schema_version": "claude-upgrade-delivery-publication-intent/v1", "campaign_id": context.campaign_id, "delivery_id": delivery["delivery_id"], "operation_id": core["operation_id"], "seed_binding": seed_binding, "execution_evidence_ref": reference, "payload": payload, "issued_at_utc": seed["issued_at_utc"], "producer_run": seed["producer_run"], "formed_under": seed["formed_under"], "idempotency_key": key, "ledger_action": "catch_up_delivery_events"}
+    path = root / f"{core['operation_id']}.json"
+    with _write_scope(context):
+        # 来源语义先于发布意图；已提交意图后的异常不再调用物理恢复或重做阶段。
+        delivery_execution.validate_evidence_graph(context.store, manifest)
+        sealed = context.session.seal_object("operational_evidence", manifest)
+        if sealed != reference:
+            raise ConfigurationError("交付执行对象封存引用漂移。")
+        delivery_execution.validate_stage_execution(context.store, delivery["plan"], payload)
+        _immutable_json(path, publication)
+        recorded = _record_stage(context, str(core["stage"]), payload, publication=publication)
+        appended = _catch_up_ledger(context)
+    return {"stage": core["stage"], "segment": seed["recovery_revision"] or "dr0", "result": core["result"], "root_cause_id": None if core["result"] == "pass" else f"delivery-{core['stage']}", "problems": [] if core["result"] == "pass" else [core["restoration"]["reason"]], "fact_ref": recorded["fact_ref"], "evidence_ref": reference, "publication_intent_binding": _bound_local(context, path), "ledger_events": appended}
+
+
+def _verify_typed_observation(context: DeliveryContext, delivery: Mapping[str, Any], ticket: Mapping[str, Any], raw: Any, request: Mapping[str, Any]) -> dict[str, Any]:
+    """提交物理意图前核真实观测、原件、当前下层图和阶段顺序。"""
+
+    from tools.official_client_capture.claude_upgrade_delivery_recovery_guard import check_binding, read_json, validate_observation
+    prepared = read_json(check_binding(context.data_root, ticket["prepared_binding"]))
+    if prepared.get("request") != request:
+        raise ConfigurationError("guard prepared 不属于当前冻结阶段。")
+    observation = validate_observation(raw, prepared, context.data_root)
+    plan = delivery["plan"]
+    delivery_execution.validate_plan(context.store, plan)
+    _require_plan_current(context, delivery)
+    if store_receipts.current_formed_under(context.store, dict(context.campaign)) != claude_upgrade_vc._read_json(_publication_root(context, delivery["delivery_id"]) / "seeds" / f"{canonical_sha256(dict(request))}.json", "原发布预登记")["formed_under"]:
+        raise ConfigurationError("物理操作期间形成期坐标发生变化。")
+    step = _next_stage(context, _chain(context, delivery["delivery_id"]))
+    if step is None or step[0] != request["stage"]:
+        raise ConfigurationError("物理提交前 Store 阶段顺序发生变化。")
+    delivery_execution._requests(observation["request_records"])
+    recipe = delivery_execution.evidence_facts(context.store, plan["probe_recipe_ref"], "zero_model_probes")["recipe"]
+    allowed = delivery_execution.allowed_probe_requests(recipe)
+    if any((row["method"], row["path"]) not in allowed for row in observation["request_records"]):
+        raise ConfigurationError("实际请求超出冻结探针 recipe。")
+    if observation["result"] != "pass":
+        raise ConfigurationError("真实观测未通过。")
+    return observation
+
+
+def _execute_typed_stage(context: DeliveryContext, executor: Any, delivery: Mapping[str, Any], stage: str, previous: Any, recovery: Any) -> dict[str, Any]:
+    run_nonce = str(recovery[2]["run_nonce"]) if recovery is not None else f"{delivery['delivery_id']}-dr0"
+    request = _stage_request(delivery, stage, run_nonce)
+    with _write_scope(context):
+        _publication_seed(context, delivery, request, previous, recovery)
+    ticket = executor.prepare_stage(request)
+    raw: Any = None
+    reason = "观测及提交前语义通过"
+    try:
+        raw = executor.run_stage(ticket)
+        _verify_typed_observation(context, delivery, ticket, raw, request)
+        verdict = "pass"
+    except Exception as error:
+        # 这里只捕获提交前异常，finish 后的 Store 失败属于后处理恢复。
+        verdict = "failed"
+        reason = f"提交前复核失败：{type(error).__name__}"
+    try:
+        document = {"schema_version": "claude-upgrade-delivery-verifier/v1", "operation_id": ticket["operation_id"], "request_sha256": canonical_sha256(request), "observation_sha256": canonical_sha256(raw), "result": verdict, "reason": reason}
+        path = _publication_root(context, delivery["delivery_id"]) / "verifiers" / f"{ticket['operation_id']}.json"
+        _immutable_json(path, document)
+        decision = {"result": verdict, "observation_sha256": document["observation_sha256"], "verifier_binding": _bound_local(context, path), "reason": reason}
+    except Exception as error:
+        # 编排复核原件写不下也立即 abort；现有 prepared 是可信只读绑定，不能放任 lease 悬挂。
+        decision = {"result": "failed", "observation_sha256": canonical_sha256(None), "verifier_binding": ticket["prepared_binding"], "reason": f"复核原件预写失败：{type(error).__name__}"}
+    core = executor.finish_stage(ticket, decision)
+    return _publish_execution(context, delivery, core)
 
 
 def _execute_stage(
@@ -1189,6 +1414,9 @@ def _execute_stage(
     recovery: tuple[str, Mapping[str, Any], Mapping[str, Any]] | None,
 ) -> dict[str, Any]:
     """执行器跑一个阶段 → 核对 → 写私有文件 → 封阶段证据 → 登记阶段事实 → 补账。"""
+
+    if delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+        return _execute_typed_stage(context, executor, delivery, stage, previous, recovery)
 
     plan = delivery["plan"]
     delivery_id = str(delivery["delivery_id"])
@@ -1265,6 +1493,10 @@ def _close_for_drift(
 
     if chain["latest_closed"]:
         return None
+    if delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+        # 没发生新的物理操作，就没有可以签发的真实 StageFact。
+        # 旧链和全部 guard 操作原样保留；新环境只通过新 delivery 的门禁与计划继续。
+        return {"status": "retained_as_previous_environment", "delivery_id": delivery["delivery_id"], "drift": dict(drift), "fact_ref": None, "ledger_events": []}
     number, reference, _reservation = _segment(context, chain)
     if number == 0 and chain.get("terminal_ref") is None:
         return None  # 首轮交付还没有任何事实：旧 delivery 原样保留，不需要收口。
@@ -1324,6 +1556,9 @@ def _private_bindings(context: DeliveryContext, delivery_id: str) -> list[dict[s
 def _package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain: Mapping[str, Any]) -> dict[str, Any]:
     """确定性推出私有归档清单、部署配置与交付包（不封存）；审核摘要即交付包的 ``identity_sha256``。"""
 
+    if delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+        return _typed_package_review(context, delivery, chain)
+
     delivery_id = str(delivery["delivery_id"])
     plan = delivery["plan"]
     entries = _private_bindings(context, delivery_id)
@@ -1382,6 +1617,52 @@ def _package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain
     }
 
 
+def _frozen_executor(context: DeliveryContext, delivery: Mapping[str, Any]) -> Any:
+    core = delivery_execution.evidence_facts(context.store, delivery["plan"]["executor_configuration_ref"], "configuration")
+    return _environment_executor("arm64-isolated", configuration=core["configuration"], execution_context=_executor_context(context, delivery["delivery_id"], core["binding"]))
+
+
+def _typed_package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain: Mapping[str, Any]) -> dict[str, Any]:
+    """从全操作索引生成归档；未入 Store 的操作、恢复未决或发布原件缺失都阻断收口。"""
+
+    inventory = _frozen_executor(context, delivery).inventory()
+    _expect(isinstance(inventory, Mapping) and set(inventory) == {"executions", "restorations", "operations_index_binding", "origin"}, "完整交付 inventory 字段不闭合")
+    if not isinstance(inventory["executions"], list) or not inventory["executions"] or not isinstance(inventory["restorations"], list):
+        raise ConfigurationError("完整交付 inventory 没有合法执行与恢复集合。")
+    plan = delivery["plan"]
+    index_binding = inventory["operations_index_binding"]
+    index_content = {"campaign_id": context.campaign_id, "delivery_id": delivery["delivery_id"], "operation_index_binding": index_binding}
+    source = delivery_execution._verified_source(context.store, index_content, inventory["origin"])
+    index = delivery_execution._source_json(source, index_binding)
+    if any(operation.get("status") not in {"execution_committed", "restored"} for operation in index.get("operations", [])):
+        raise ConfigurationError("交付全操作索引仍有恢复未决操作，不能 finalize。")
+    manifests = []
+    execution_refs, restoration_refs, publications = [], [], []
+    for kind, cores in (("stage_execution", inventory["executions"]), ("restore", inventory["restorations"])):
+        for core in cores:
+            manifest = _typed_manifest(context, f"{delivery['delivery_id']}-{kind.replace('_', '-')}-{canonical_sha256(core)[:24]}", kind, core)
+            # 执行对象必须沿原发布意图的确定性名字形成同一引用，不能另签复本。
+            if kind == "stage_execution":
+                manifest = _typed_manifest(context, f"{delivery['delivery_id']}-{core['operation_id']}-execution", kind, core)
+                path = _publication_root(context, delivery["delivery_id"]) / f"{core['operation_id']}.json"
+                publications.append(_bound_local(context, path))
+            delivery_execution.validate_evidence_graph(context.store, manifest)
+            reference = _object_ref("operational_evidence", manifest)
+            (execution_refs if kind == "stage_execution" else restoration_refs).append(reference)
+            manifests.append(manifest)
+    publications.sort(key=lambda item: item["path"])
+    input_material = [context.store.load_object(plan[key])["payload"] for key in delivery_execution.PLAN_EXTRA_FIELDS]
+    input_material.extend(manifests)
+    input_material.extend([index, index_binding, publications])
+    entries = delivery_execution.complete_raw_bindings(source, input_material)
+    archive = _with_identity({"schema_version": PRIVATE_ARCHIVE_MANIFEST_SCHEMA, "campaign_id": context.campaign_id, "persona": dict(context.persona), "manifest_id": f"{delivery['delivery_id']}-private-archive", "redacted": True, "entries": entries, "entry_count": len(entries), "total_bytes": sum(row["bytes"] for row in entries), "manifest_sha256": canonical_sha256(entries)})
+    valid = [dict(chain["valid_stage_refs"][stage]) for stage in STAGES]
+    public = _sorted_refs(reference for fact_ref in valid for reference in context.store.load_fact(fact_ref)["payload"]["evidence_refs"])
+    rollback = [dict(reference) for reference in plan["rollback_material_refs"]]
+    package = _with_identity({"schema_version": delivery_execution.PACKAGE_V2, "campaign_id": context.campaign_id, "persona": dict(context.persona), "package_id": f"{delivery['delivery_id']}-package", "delivery_id": delivery["delivery_id"], "candidate_id": plan["candidate_id"], **{key: plan[key] for key in ("candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref")}, "delivery_plan_ref": dict(delivery["plan_ref"]), "delivery_fact_refs": valid, "deployment_configuration_ref": plan["deployment_configuration_ref"], "public_evidence_index_refs": public, "rollback_material_refs": rollback, "private_archive_manifest_ref": _object_ref("private_archive_manifest", archive), "candidate_image_digest": plan["candidate_image_digest"], "execution_evidence_refs": _sorted_refs(execution_refs), "restoration_evidence_refs": _sorted_refs(restoration_refs), "operation_index_binding": index_binding, "operation_index_origin": inventory["origin"], "publication_intent_bindings": publications, "artifact_count": 2 + len(public) + len(rollback) + len(execution_refs) + len(restoration_refs) + len(publications)})
+    return {"review_sha256": package["identity_sha256"], "package": package, "private_archive_manifest": archive, "deployment_configuration": context.store.load_object(plan["deployment_configuration_ref"])["payload"], "operational_evidence": manifests}
+
+
 # ---------------------------------------------------------------------------
 # 六之二、交付阶段结果与 VC-6 完成（模块说明第八节）
 # ---------------------------------------------------------------------------
@@ -1408,7 +1689,7 @@ def load_stage_result(campaign_dir: Path, candidate_id: str, *, manifest: Mappin
     campaign_id = (manifest or claude_upgrade_vc._read_json(campaign_dir / "campaign.json", "Campaign 核心清单")).get("campaign_id")
     if (
         set(result) != STAGE_RESULT_FIELDS
-        or result.get("schema_version") != STAGE_RESULT_SCHEMA
+        or result.get("schema_version") not in {STAGE_RESULT_SCHEMA, STAGE_RESULT_V2_SCHEMA}
         or result.get("client") != "claude"
         or result.get("campaign_id") != campaign_id
         or result.get("stage") != STAGE_NAME
@@ -1427,7 +1708,41 @@ def load_stage_result(campaign_dir: Path, candidate_id: str, *, manifest: Mappin
         ("VC-4 构建收据", result.get("vc4_build_receipt")),
     ):
         claude_upgrade_vc._bound_file(campaign_dir, binding, f"交付阶段结果登记的{label}")
+    # 这是当前操作入口的消费；历史 v1 幂等引用不授予新版本的完成权。
+    if result.get("schema_version") == STAGE_RESULT_V2_SCHEMA:
+        validate_current_stage_result(campaign_dir, result)
+    else:
+        store, campaign = claude_upgrade_store.open_campaign_store(campaign_dir, claude_upgrade_vc._read_json(campaign_dir / "campaign.json", "Campaign 核心清单"))
+        if delivery_execution.requires_current_contract(store, campaign):
+            raise ConfigurationError("当前 VC-6 不接受历史交付结果 v1 作为真实交付完成证明。")
     return result
+
+
+def validate_current_stage_result(campaign_dir: Path, result: Mapping[str, Any]) -> None:
+    """只读重验下层 VC-5 与交付图，不反向调用自身 VC-6 checkpoint。"""
+
+    try:
+        context = _resolve(campaign_dir, str(result.get("candidate_id", "")), action="重验真实交付结果")
+        if result.get("schema_version") != STAGE_RESULT_V2_SCHEMA or result.get("candidate_revision") != context.revision or result.get("campaign_purpose") != context.manifest.get("campaign_purpose"):
+            raise ConfigurationError("真实交付结果的版本、当前 revision 或用途不一致。")
+        receipt = store_receipts.replay_receipt(context.store, dict(result["receipt_ref"]))
+        delivery_execution.validate_delivery_receipt(context.store, receipt, current=True)
+        for key, receipt_key in (("delivery_plan_ref", "delivery_plan_ref"), ("package_ref", "candidate_delivery_package_ref")):
+            if result[key] != receipt[receipt_key]:
+                raise ConfigurationError("交付结果与 Store 的交付计划或交付包不一致。")
+        if result["delivery_id"] != context.store.load_object(receipt["delivery_plan_ref"])["payload"]["delivery_id"]:
+            raise ConfigurationError("交付结果与真实执行 delivery 坐标不一致。")
+        for key in ("validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref"):
+            if result["store"][key] != receipt[key] or receipt[key] != context.handoff[key]:
+                raise ConfigurationError("交付结果、当前 VC-5 与 Store 收据不属于同一条验收链。")
+        for key in ("vc5_checkpoint", "accept_result", "vc4_build_receipt"):
+            if result[key] != context.entry[key]:
+                raise ConfigurationError("交付结果的下层验收文件绑定不是当前冻结输入。")
+        expected = VC6_STATUS_COMPLETE if result["campaign_purpose"] == "validation_only" else VC6_STATUS_PRODUCTION_PENDING
+        if result["vc6_status"] != expected or result["production_state"] != CANDIDATE_PRODUCTION_STATE:
+            raise ConfigurationError("候选交付终态不能冒充生产激活完成。")
+    except ControlError as error:
+        raise ConfigurationError(f"真实交付结果重验失败：{error}") from error
 
 
 def _require_parent_batch(label: str) -> None:
@@ -1474,6 +1789,11 @@ def _complete_vc6(
         "vc6_status": vc6_status,
         "completed_at_utc": _orchestrator()._utc_now(),
     }
+    if delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+        payload["schema_version"] = STAGE_RESULT_V2_SCHEMA
+        validate_current_stage_result(context.campaign_dir, payload)
+    elif delivery_execution.requires_current_contract(context.store, context.campaign):
+        raise ConfigurationError("旧交付收据可只读复用，不能生成当前 v2 交付结果或 VC-6 完成证明。")
     path = stage_result_path(context.campaign_dir, context.candidate_id)
     ensure_private_directory(path.parent, context.campaign_dir)
     sealed = claude_upgrade_seal._write_once_or_reuse(path, payload, ignore=("completed_at_utc",))
@@ -1519,18 +1839,28 @@ def run_action(
     *,
     environment_executor: str,
     observation_window_seconds: int = DEFAULT_OBSERVATION_WINDOW_SECONDS,
+    executor_configuration: Path | None = None,
+    executor_configuration_sha256: str | None = None,
 ) -> dict[str, Any]:
     """run 批次的唯一动作：受管 Python 直接调用 ``deliver-candidate run``，超时为观察窗加余量。"""
 
     window = int(observation_window_seconds)
     if window <= 0:
         raise ConfigurationError("--observation-window-seconds 必须大于 0。")
+    config_flags: list[Any] = []
+    if (executor_configuration is None) != (executor_configuration_sha256 is None):
+        raise ConfigurationError("执行配置路径与 SHA 必须成对给出。")
+    if executor_configuration is not None:
+        actual = claude_upgrade_batch._campaign_input_file(campaign_dir, str(executor_configuration), "--executor-configuration")
+        if actual != executor_configuration_sha256:
+            raise ConfigurationError("run 动作执行配置字节与 SHA 不一致。")
+        config_flags = ["--executor-configuration", executor_configuration, "--executor-configuration-sha256", actual]
     return claude_upgrade_batch.managed_action(
         RUN_ACTION_ID,
         f"{DELIVERY_PHASE}:{RUN_ACTION_ID}",
         [
             "deliver-candidate", "run", "--campaign-dir", campaign_dir, "--candidate-id", candidate_id,
-            "--environment-executor", environment_executor, "--observation-window-seconds", window,
+            "--environment-executor", environment_executor, "--observation-window-seconds", window, *config_flags,
         ],
         item_ids=[RUN_ACTION_ID],
         timeout_seconds=window + RUN_TIMEOUT_MARGIN_SECONDS,
@@ -1577,8 +1907,13 @@ def batch_action_kind(action: Any, manifest: Mapping[str, Any]) -> str | None:
         if argv[:2] != ["deliver-candidate", kind]:
             return None
         flags = claude_upgrade_batch._paired_flags("deliver-candidate", argv[2:])
-        if set(flags) != BATCH_ACTION_FLAGS[kind]:
+        required = BATCH_ACTION_FLAGS[kind]
+        if set(flags) != required and not (kind == "run" and set(flags) == required | EXECUTOR_CONFIGURATION_FLAGS):
             return None
+        if kind == "run" and set(flags) & EXECUTOR_CONFIGURATION_FLAGS:
+            actual = claude_upgrade_batch._campaign_input_file(Path(flags["--campaign-dir"]), flags["--executor-configuration"], "--executor-configuration")
+            if actual != flags["--executor-configuration-sha256"]:
+                return None
         campaign_id = manifest.get("campaign_id")
         if not isinstance(campaign_id, str) or Path(flags["--campaign-dir"]).name != campaign_id:
             return None
@@ -1682,6 +2017,8 @@ def add_arguments(name: str, parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--delivery-id", help="核对用：必须是当前交付（缺省取当前交付）")
     if name == "deliver-candidate":
         parser.add_argument("delivery_action", choices=DELIVERY_ACTIONS)
+        parser.add_argument("--executor-configuration", type=Path, help="run：Campaign 内已冻结的 ARM64 执行配置原件")
+        parser.add_argument("--executor-configuration-sha256", help="run：配置原始字节 SHA；与路径成对传入父动作")
         parser.add_argument("--environment-executor", help="run：交付环境执行器名字（第二节）")
         parser.add_argument(
             "--observation-window-seconds", type=int,
@@ -1724,7 +2061,8 @@ def _summary(context: DeliveryContext, delivery: Mapping[str, Any] | None) -> di
 def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     _require_parent_batch("deliver-candidate run")
     context = _resolve(Path(arguments.campaign_dir), str(arguments.candidate_id), action="deliver-candidate run")
-    executor = _environment_executor(arguments.environment_executor)
+    configuration, configuration_binding = _configuration_input(context, arguments)
+    executor = None
     rerun_from = arguments.rerun_from
     with _delivery_lock(context):
         with _write_scope(context):
@@ -1737,6 +2075,10 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
             _require_plan_current(context, current)
             chain = _chain(context, current["delivery_id"])
             if chain["receipt_refs"]:
+                if delivery_execution.requires_current_contract(context.store, context.campaign):
+                    for reference in chain["receipt_refs"]:
+                        delivery_execution.validate_delivery_receipt(context.store, context.store.load_receipt(reference), current=True)
+
                 return {
                     **_summary(context, current),
                     "status": "finalized",
@@ -1755,6 +2097,19 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         if window <= 0:
             raise ConfigurationError("--observation-window-seconds 必须大于 0。")
         proposed = current["delivery_id"] if current is not None else _delivery_id(context, 1)
+        execution_context = _executor_context(context, proposed, configuration_binding) if configuration_binding is not None else None
+        executor = _environment_executor(arguments.environment_executor, configuration=configuration, execution_context=execution_context)
+        if execution_context is not None:
+            recovery = executor.recover_pending({"reason": "entry"})
+            if current is not None and current["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+                # 先补缺失发布，再重做便宜门禁；已完成物理操作不得因新 freeze 失败而被遗漏。
+                for operation in recovery.get("operations", []):
+                    core = operation.get("execution")
+                    if core is not None:
+                        published = _publish_execution(context, current, core)
+                        ledger_events += published["ledger_events"]
+            if recovery.get("blocked") or recovery.get("unresolved_operation_ids"):
+                raise ConfigurationError("真实交付仍有恢复未决操作，修复同一恢复记录后才能继续。")
         snapshot = _freeze(context, executor, str(arguments.environment_executor), proposed, window)
         failed_gates = [item["id"] for item in snapshot["gates"] if item["result"] != "pass"]
         if failed_gates:
@@ -1775,6 +2130,16 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 closed = _close_for_drift(context, current, chain, drift)
                 switched = {"previous_delivery_id": current["delivery_id"], "drift": drift, "closed": closed}
                 current = None
+                if configuration_binding is not None:
+                    proposed = _delivery_id(context, len(_deliveries(context)) + 1)
+                    executor = _environment_executor(arguments.environment_executor, configuration=configuration, execution_context=_executor_context(context, proposed, configuration_binding))
+                    recovered = executor.recover_pending({"reason": "entry"})
+                    if recovered.get("blocked") or recovered.get("unresolved_operation_ids"):
+                        raise ConfigurationError("新交付仍有未解决的恢复操作。")
+                    snapshot = _freeze(context, executor, str(arguments.environment_executor), proposed, window)
+                    if any(item["result"] != "pass" for item in snapshot["gates"]):
+                        raise ConfigurationError("按新 delivery 重做的冻结门禁未通过，零现场变更拒绝。")
+
         if current is None:
             current = _open_delivery(context, len(_deliveries(context)) + 1, snapshot, window)
         stages: list[dict[str, Any]] = []
@@ -1852,6 +2217,8 @@ def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         if not finalized:
             _require_vc6_open(context, _ledger_state(context))
         with _write_scope(context):
+            for manifest in review.get("operational_evidence", []):
+                context.session.seal_object("operational_evidence", manifest)
             deployment_ref = context.session.seal_object("operational_evidence", review["deployment_configuration"])
             archive_ref = context.session.seal_object("private_archive_manifest", review["private_archive_manifest"])
             package_ref = context.session.seal_object("candidate_delivery_package", review["package"])

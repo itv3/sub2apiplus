@@ -70,6 +70,78 @@
     {
       "if": {"properties": {"object_kind": {"const": "candidate_delivery_recovery"}}},
       "then": {"properties": {"payload": {"$ref": "candidate-delivery.schema.json#/$defs/recovery"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "object_kind": {
+            "const": "candidate_delivery_plan"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "oneOf": [
+              {
+                "$ref": "candidate-delivery.schema.json#/$defs/plan"
+              },
+              {
+                "$ref": "candidate-delivery.schema.json#/$defs/planV2"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "object_kind": {
+            "const": "candidate_delivery_package"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "oneOf": [
+              {
+                "$ref": "candidate-delivery.schema.json#/$defs/package"
+              },
+              {
+                "$ref": "candidate-delivery.schema.json#/$defs/packageV2"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "object_kind": {
+            "const": "operational_evidence"
+          },
+          "payload": {
+            "properties": {
+              "schema_version": {
+                "const": "official-client-operational-evidence/v2"
+              }
+            },
+            "required": [
+              "schema_version"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "delivery-execution.schema.json"
+          }
+        }
+      }
     }
   ],
   "$defs": {
