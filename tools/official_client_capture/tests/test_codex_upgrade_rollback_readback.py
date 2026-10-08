@@ -527,12 +527,15 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
             new_timing,
             ["campaign_abandoned", "deadline_extended", "deadline_paused", "evaluation_reopened", "stage_review_required"],
         )
-        # 修好接着跑第 11、14 项：campaign_resumed 与 live_request_budget_extended 同样是基线工具不认识、读到即拒绝的新事件。
+        # 修好接着跑第 11、14 项及 Claude 请求预算预约：这些新增事件
+        # 都必须保留在当前闭集中，基线工具读到任一种时仍严格拒绝。
         self.assertEqual(
             new_project,
             [
                 "campaign_paused",
                 "campaign_resumed",
+                "claude_live_request_bound_reserved",
+                "claude_live_request_bound_settled",
                 "deadline_extended",
                 "deadline_extension_committed",
                 "live_request_budget_extended",

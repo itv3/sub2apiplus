@@ -200,7 +200,12 @@ class NativeCaptureTests(unittest.TestCase):
         return process
 
     def _upstream(self, mode: str = "normal", tls: bool = False) -> subprocess.Popen:
-        command = [sys.executable, "-B", "-m", __name__ if __name__ != "__main__" else "tools.official_client_capture.tests.test_claude_mac_capture_service", "--upstream", "--port", str(self.upstream_port), "--mode", mode, "--log", str(self.root / "upstream-requests.jsonl")]
+        # discover 会以短模块名导入本文件；独立进程从仓库根启动，
+        # 始终使用完整模块名，避免把父进程临时 sys.path 当作启动合同。
+        command = [sys.executable, "-B", "-m",
+            "tools.official_client_capture.tests.test_claude_mac_capture_service",
+            "--upstream", "--port", str(self.upstream_port), "--mode", mode,
+            "--log", str(self.root / "upstream-requests.jsonl")]
         if tls:
             command.extend(["--certificate", str(self.data / "cert.pem"), "--private-key", str(self.data / "key.pem")])
         process = self._spawn(command, "upstream")
