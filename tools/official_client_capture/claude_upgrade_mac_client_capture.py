@@ -179,7 +179,8 @@ def run_client(task_path: Path, attempt_root: Path, *, services: CandidateClient
             importer._write(run_root / "dispatch-intent.json", {"schema_version": "claude-upgrade-client-dispatch-intent/v2", "task_sha256": task["task_sha256"], "producer_run_id": task["execution"]["producer_run_id"], "capture_id": task["execution"]["capture_id"], "source_deployments": task["execution"]["source_deployments"]})
     if already_imported:
         # 离开锁后进入 import 自己的锁顺序，避免同进程重复获取文件锁。
-        return importer.import_bundle(campaign_dir, attempt_root, task["client_id"], task_path, bundle_root)
+        result = importer.import_bundle(campaign_dir, attempt_root, task["client_id"], task_path, bundle_root)
+        return {key: value for key, value in result.items() if key != "live_request_count"}
     execution_error = None
     try:
         recorder = services.recorder(task, bundle_root)
@@ -205,7 +206,8 @@ def run_client(task_path: Path, attempt_root: Path, *, services: CandidateClient
         result = importer.import_bundle(campaign_dir, attempt_root, task["client_id"], task_path, bundle_root)
     except (ValueError, KeyError, TypeError, OSError) as error:
         return {"status": "accounting_unresolved", "reason": str(error), "execution_error": str(execution_error) if execution_error else None, "producer_run_id": task["execution"]["producer_run_id"]}
-    return result
+    # 导入动作的零请求值不能代表整次 client-run；实际请求只由原 provenance 入账。
+    return {key: value for key, value in result.items() if key != "live_request_count"}
 
 
 def command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -242,7 +244,8 @@ def command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
         deadline = claude_upgrade_capture._attempt_deadline(arguments, "candidate")
         with claude_upgrade.CampaignLease(
-            campaign_dir, phase="candidate", candidate_id=arguments.candidate_id, deadline=deadline,
+            campaign_dir, phase="candidate", candidate_id=arguments.candidate_id,
+            attempt_id=task["attempt_id"], deadline=deadline,
             command="capture-candidate", allow_stale_recovery=False, campaign_id=task["campaign_id"],
         ):
             return command(arguments)

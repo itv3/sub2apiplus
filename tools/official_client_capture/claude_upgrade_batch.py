@@ -1108,6 +1108,20 @@ def action_plan(
     return payload
 
 
+def validate_mac_client_run_arguments(argv: Sequence[str]) -> dict[str, str]:
+    """原 argv 闭集校验；不能从 Namespace 默认值猜出重复或多余旗标。"""
+    tokens = list(argv)
+    if tokens[:2] != ["capture-candidate", "client-run"] or tokens[2:].count("--acknowledge-live-requests") != 1:
+        raise ConfigurationError("client-run 必须是直接受管动作且恰好确认一次真实请求")
+    rest = tokens[2:]
+    rest.remove("--acknowledge-live-requests")
+    flags = _paired_flags("client-run", rest)
+    expected = {"--campaign-dir", "--candidate-id", "--attempt-id", "--client", "--client-task"}
+    if set(flags) != expected or any(not value or value.startswith("--") for value in flags.values()):
+        raise ConfigurationError("client-run 参数不符合冻结任务闭集")
+    return flags
+
+
 def mac_client_run_action(campaign_dir: Path, task_path: Path) -> dict[str, Any]:
     """以冻结任务生成 VC-5 的真实请求动作；不登记为零请求后处理或离线导入。"""
     from tools.official_client_capture import claude_client_receipt_contract as contract
@@ -1121,10 +1135,12 @@ def mac_client_run_action(campaign_dir: Path, task_path: Path) -> dict[str, Any]
     contract.require(task["campaign_id"] == manifest["campaign_id"]
                      and task["execution"]["source_scope"] == "formal", "Mac 动作不属于本 Formal Campaign")
     action_id = "vc5-client-run-" + task["client_id"]
-    return managed_action(
+    action = managed_action(
         action_id, "VC-5:" + action_id,
         ["capture-candidate", "client-run", "--campaign-dir", campaign_dir,
          "--candidate-id", task["candidate_id"], "--attempt-id", task["attempt_id"],
          "--client", task["client_id"], "--client-task", task_path, "--acknowledge-live-requests"],
         item_ids=[task["client_id"]], timeout_seconds=task["execution"]["timeout_seconds"],
     )
+    validate_mac_client_run_arguments(_orchestrator_argv(action["command"]))
+    return action

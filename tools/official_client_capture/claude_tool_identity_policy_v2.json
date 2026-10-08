@@ -2,7 +2,7 @@
   "schema_version": "tool-identity-policy/v3",
   "client": "claude",
   "policy_version": 4,
-  "description": "Claude Code 升级受管工具身份策略（Claude 升级控制面设计 B1-08；v2 起 runtime_bindings 登记 node v24.21.0，B5a-03；v3 起 Claude 控制面依赖的六个共享文件归 control 层、claude_21220 按用途归层，5a 收口）。两个受管根，条目键为 <根目录名>/<相对路径>；Codex 专属文件进 ignored_prefixes，v3 引擎在闭包到达它们时失败关闭；与 Codex 共用的文件按 Codex 策略的同一层归层（codex_upgrade_vc0_closeout.py 因 host_layout 绑定归 control）；Claude 控制面依赖的共享文件（候选构建、Job 演练、campaign-run 演练与派发前停线、零请求网络守护）不得留在忽略清单里，非忽略模块直接导入忽略文件只允许 tests/test_claude_tool_identity_policy 白名单里登记过理由的 Codex 专属路径；整文件计入的 wire／evidence 模块不得导入被忽略的文件；node 运行时在 B5a-03 冻结后登记。 v4：交付执行证明归 evidence_semantics，独立执行器与恢复 guard 归 control；Mac v2 来源验证归 evidence_semantics、真实产品 recorder 与驱动归 wire_producer，受监督 client-run 与候选服务归 control；当前 reader 通过字面 verify_mac_source_v2 入口验证真实来源。正式来源登记仍须现场验收。",
+  "description": "Claude Code 升级受管工具身份策略（Claude 升级控制面设计 B1-08；v2 起 runtime_bindings 登记 node v24.21.0，B5a-03；v3 起 Claude 控制面依赖的六个共享文件归 control 层、claude_21220 按用途归层，5a 收口）。两个受管根，条目键为 <根目录名>/<相对路径>；Codex 专属文件进 ignored_prefixes，v3 引擎在闭包到达它们时失败关闭；与 Codex 共用的文件按 Codex 策略的同一层归层（codex_upgrade_vc0_closeout.py 因 host_layout 绑定归 control）；Claude 控制面依赖的共享文件（候选构建、Job 演练、campaign-run 演练与派发前停线、零请求网络守护）不得留在忽略清单里，非忽略模块直接导入忽略文件只允许 tests/test_claude_tool_identity_policy 白名单里登记过理由的 Codex 专属路径；整文件计入的 wire／evidence 模块不得导入被忽略的文件；node 运行时在 B5a-03 冻结后登记。 v4：交付执行证明归 evidence_semantics，独立执行器与恢复 guard 归 control；Mac v2 来源验证归 evidence_semantics、真实产品 recorder 与驱动归 wire_producer，受监督 client-run 与候选服务归 control；当前 reader 通过字面 verify_mac_source_v2 入口验证真实来源。正式来源登记仍须现场验收。 两份 reader 的 Mac 来源与预约字面入口显式登记为真实消费根，避免整文件 evidence 边界吞掉反向调用依赖。",
   "roots": [
     "tools/official_client_capture",
     "tools/official_client_control"
@@ -229,10 +229,14 @@
     "checker": "official_client_capture/claude_rule_assertion.py",
     "builder": "official_client_capture/claude_build_rule_assertion_results.py",
     "compare_reader_roots": [
-      "compare_campaign"
+      "compare_campaign",
+      "verify_mac_source_v2",
+      "verify_mac_reservation_v2"
     ],
     "accept_reader_roots": [
-      "accept_campaign"
+      "accept_campaign",
+      "verify_mac_source_v2",
+      "verify_mac_reservation_v2"
     ]
   },
   "reader_barriers": {}

@@ -186,8 +186,7 @@ def verify_import_inputs(attempt_root: Path, client_id: str, task_path: Path, bu
     contract.bound_file(attempt_root, contract.binding(task_path, attempt_root))
     contract.verify_task_attempt(attempt_root, task)
     if task["execution"]["source_scope"] == "formal":
-        from tools.official_client_capture import claude_upgrade_mac_client_capture
-        claude_upgrade_mac_client_capture.require_registered_reservation(attempt_root, task)
+        _upgrade().verify_mac_reservation_v2(attempt_root, task)
         verified = _upgrade().verify_mac_source_v2(task, bundle_root, Path(task["execution"]["capture_root"]))
     else:
         verified = contract.verify_client_bundle(task, bundle_root, Path(task["execution"]["capture_root"]))

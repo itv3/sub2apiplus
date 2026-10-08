@@ -43,6 +43,15 @@ class MacEntryIntegrationTests(unittest.TestCase):
                 control.command(self.arguments("--acknowledge-live-requests", "--bundle", "/unused/source"))
         context.assert_not_called()
 
+    def test_raw_argv_rejects_duplicate_extra_and_missing_confirmation(self) -> None:
+        good = ["capture-candidate", "client-run", "--campaign-dir", "/campaign", "--candidate-id", "c1",
+                "--attempt-id", "a1", "--client", "claude-desktop", "--client-task", "/task", "--acknowledge-live-requests"]
+        self.assertEqual(batch.validate_mac_client_run_arguments(good)["--attempt-id"], "a1")
+        for bad in (good + ["--client", "claude-vscode"], good + ["--zero-request-rehearsal"],
+                    good + ["--acknowledge-live-requests"], good[:-1], good + ["--max-wall-seconds", "900"]):
+            with self.subTest(argv=bad), self.assertRaises(ValueError):
+                batch.validate_mac_client_run_arguments(bad)
+
     def test_static_source_wrapper_and_frozen_batch_use_real_material(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, fixture.source_scope():
             campaign = Path(temporary).resolve() / "staging/data/evidence/campaigns/campaign-1"

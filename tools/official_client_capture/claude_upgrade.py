@@ -4691,6 +4691,13 @@ def verify_mac_source_v2(
     return claude_mac_client_source.verify_mac_source_v2(task, bundle_root, capture_root)
 
 
+def verify_mac_reservation_v2(attempt_root: Path, task: Mapping[str, Any]) -> dict[str, Any]:
+    """当前 Mac 消费的预约读侧入口；与来源验证分别纳入两份真实 reader。"""
+    from tools.official_client_capture import claude_upgrade_mac_client_capture
+
+    return claude_upgrade_mac_client_capture.require_registered_reservation(attempt_root, task)
+
+
 def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
     """评估读侧根（B4-06b）：只读封存材料离线比较，写比较收据、官方评估用 manifest 与 builder 配置；实现在
     ``claude_upgrade_compare``（Claude 身份策略 ``evaluator.compare_reader_roots`` 从这里按函数级计算读侧闭包）。"""
@@ -5393,6 +5400,10 @@ def _main(argv: list[str] | None = None) -> int:
     try:
         # B3-01：批次控制面命令只能在两个批次之间由操作员执行，父监督器里的动作调用即拒绝（零写入）。
         claude_upgrade_batch.reject_control_plane_in_campaign_run(str(arguments.command))
+        if arguments.command == "capture-candidate" and arguments.capture_action == "client-run":
+            claude_upgrade_batch.validate_mac_client_run_arguments(list(argv) if argv is not None else sys.argv[1:])
+            if os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) != "1":
+                raise ConfigurationError("client-run 只能由候选父批次监督派发。")
         _assert_consumer_admission(arguments)
         if arguments.command in SHARED_SUBCOMMANDS:
             result, return_code = _run_shared_subcommand(arguments)

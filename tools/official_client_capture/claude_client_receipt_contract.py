@@ -416,8 +416,7 @@ def verify_client_receipt(attempt_root: Path, client_id: str, path: Path) -> dic
     verify_imported_run(root, client_id, imported_run, task, bundle_manifest)
     failure_path = imported_run.parent / "client-run-failure.json"
     require(not failure_path.exists() and not failure_path.is_symlink(), "原客户端执行失败，不能消费成功收据")
-    from tools.official_client_capture import claude_upgrade_mac_client_capture
-    claude_upgrade_mac_client_capture.require_registered_reservation(root, task)
+    claude_upgrade.verify_mac_reservation_v2(root, task)
     # 编排器字面包装必须进入真实 reader 调用链，不能只有身份 roots 登记。
     verified = claude_upgrade.verify_mac_source_v2(task, bundle_manifest.parent, Path(task["execution"]["capture_root"]))
     require(task["execution"]["source_scope"] == "formal" and verified["status"] == "verified", "历史夹具或失败运行不能成为正式成功")
