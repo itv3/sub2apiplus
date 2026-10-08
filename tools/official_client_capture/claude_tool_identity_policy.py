@@ -357,7 +357,7 @@ def closure(
     parsed: dict[str, tuple[Any, ...]] = {}
     symbols: dict[tuple[str, str], dict[str, str]] = {}
     whole: dict[str, dict[str, str]] = {}
-    pending: list[tuple[str, str]] = []
+    pending: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
 
     def module_info(module: str) -> tuple[Any, ...]:
         if module not in parsed:
@@ -388,26 +388,54 @@ def closure(
             reject_ignored(module, owner)
             whole[module] = {"module": module, "path": key, "sha256": digests[key]}
 
-    def refer(module: str, name: str, owner: str) -> None:
+    def refer(
+        module: str,
+        name: str,
+        owner: str,
+        *,
+        import_chain: tuple[tuple[str, str], ...] = (),
+    ) -> None:
         module_layer = reject_ignored(module, owner)
         if module_layer is None:
             return
         if module == orchestrator_module or module_layer == "control":
-            pending.append((module, name))
+            pending.append((module, name, import_chain))
         elif layer is None or module_layer == layer:
             whole_module(module, owner)
 
-    for root in roots:
-        pending.append(tuple(root))  # type: ignore[arg-type]
+    for module, name in roots:
+        pending.append((module, name, ()))
     while pending:
-        module, name = pending.pop()
-        if (module, name) in symbols or f"{module}:{name}" in stop:
+        module, name, import_chain = pending.pop()
+        if f"{module}:{name}" in stop:
+            continue
+        # 只追踪连续重导出边：函数体重新开始依赖遍历，因此正常函数递归不会被误判成导入环。
+        if (module, name) in import_chain:
+            chain = " → ".join(f"{owner}:{symbol}" for owner, symbol in (*import_chain, (module, name)))
+            raise ToolIdentityPolicyError(f"导入符号构成循环，闭包无法解析：{chain}")
+        if (module, name) in symbols:
             continue
         if module not in index:
             continue
         source, tree, functions, constants, aliases, symbol_imports, lines = module_info(module)
         node = functions.get(name) or constants.get(name)
         if node is None:
+            if name in symbol_imports:
+                target_module, target_name = symbol_imports[name]
+                # 重导出本身也是依赖边：把别名所指的模块与符号计入摘要，再按原分层与屏障规则跟进真实定义。
+                symbols[(module, name)] = {
+                    "module": module,
+                    "name": name,
+                    "kind": "import",
+                    "sha256": codex_identity._fingerprint({"module": target_module, "name": target_name}),
+                }
+                refer(
+                    target_module,
+                    target_name,
+                    f"{module}.{name}",
+                    import_chain=(*import_chain, (module, name)),
+                )
+                continue
             if module == orchestrator_module:
                 raise ToolIdentityPolicyError(f"闭包根或引用的编排器符号不存在：{name}")
             whole_module(module, f"{module}.{name}")
@@ -475,7 +503,7 @@ def closure(
             if not isinstance(child, ast.Name) or id(child) in attribute_bases or child.id == name:
                 continue
             if child.id in functions or child.id in constants:
-                pending.append((module, child.id))
+                pending.append((module, child.id, ()))
             elif child.id in scope_symbols:
                 refer(*scope_symbols[child.id], owner)
             elif child.id in scope_aliases:

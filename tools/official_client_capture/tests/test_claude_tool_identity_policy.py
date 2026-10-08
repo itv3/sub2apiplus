@@ -366,6 +366,130 @@ class ClaudeIdentityEngineTests(_ClaudeTreeMixin, unittest.TestCase):
         self.assertEqual(json.dumps(second_identity), json.dumps(identity))
 
 
+class ClaudeImportedSymbolClosureTests(_ClaudeTreeMixin, unittest.TestCase):
+    """导入别名与重导出必须跟到真实定义；导入环拒绝，正常函数递归、忽略文件与屏障维持原合同。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._write("official_client_capture/claude_upgrade.py", """
+            from .upgrade_control_plane import PublicError as ConfigurationError
+        """)
+        self._write("official_client_capture/upgrade_control_plane.py", """
+            from tools.official_client_control.store import ImplementationError as PublicError
+        """)
+        self._write("official_client_control/store.py", '\n'.join([
+            'DETAIL = "first"',
+            '',
+            'class ImplementationError(ValueError):',
+            '    def describe(self):',
+            '        return DETAIL',
+            '',
+            'def unused_helper():',
+            '    return "unused"',
+            '',
+        ]))
+
+    def _write(self, key: str, source: str) -> None:
+        path = self.repo / "tools" / key
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(textwrap.dedent(source).lstrip("\n"), encoding="utf-8")
+
+    def _closure(self, symbol: str = "ConfigurationError", *, barriers: tuple[str, ...] = ()) -> dict[str, Any]:
+        return v3.closure(
+            self.policy,
+            self.repo,
+            v3.managed_tree_digests(self.repo, self.policy),
+            [("tools.official_client_capture.claude_upgrade", symbol)],
+            layer=None,
+            barriers=barriers,
+        )
+
+    def test_reexported_class_and_its_dependencies_enter_closure(self) -> None:
+        before = self._closure()
+        records = {(item["module"], item["name"]): item for item in before["symbols"]}
+        self.assertEqual(records[("tools.official_client_capture.claude_upgrade", "ConfigurationError")]["kind"], "import")
+        self.assertEqual(records[("tools.official_client_capture.upgrade_control_plane", "PublicError")]["kind"], "import")
+        self.assertIn(("tools.official_client_control.store", "ImplementationError"), records)
+        self.assertIn(("tools.official_client_control.store", "DETAIL"), records)
+        self.assertEqual(before["modules"], [])
+        self._edit("official_client_control/store.py", 'DETAIL = "first"', 'DETAIL = "second"')
+        changed = self._closure()
+        self.assertNotEqual(before["closure_sha256"], changed["closure_sha256"])
+        self._edit("official_client_control/store.py", 'return "unused"', 'return "irrelevant"')
+        self.assertEqual(changed["closure_sha256"], self._closure()["closure_sha256"])
+
+    def test_import_target_is_bound_even_when_definitions_are_identical(self) -> None:
+        original = (self.repo / "tools/official_client_control/store.py").read_text(encoding="utf-8")
+        self._write("official_client_control/store_copy.py", original)
+        control = self.policy["layers"]["control"]
+        self.policy = {
+            **self.policy,
+            "layers": {
+                **self.policy["layers"],
+                "control": {**control, "files": [*control["files"], "official_client_control/store_copy.py"]},
+            },
+        }
+        before = self._closure()
+        self._edit("official_client_capture/upgrade_control_plane.py", "from tools.official_client_control.store import", "from tools.official_client_control.store_copy import")
+        after = self._closure()
+        old_edge = next(item for item in before["symbols"] if item["name"] == "PublicError")
+        new_edge = next(item for item in after["symbols"] if item["name"] == "PublicError")
+        self.assertEqual(new_edge["sha256"], codex_identity._fingerprint({
+            "module": "tools.official_client_control.store_copy", "name": "ImplementationError",
+        }))
+        self.assertNotEqual(old_edge["sha256"], new_edge["sha256"])
+        self.assertNotEqual(before["closure_sha256"], after["closure_sha256"])
+
+    def test_import_cycle_is_rejected_and_explicit_barrier_stops_it(self) -> None:
+        self._write("official_client_control/store.py", """
+            from tools.official_client_capture.claude_upgrade import ConfigurationError as ImplementationError
+        """)
+        with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "导入符号构成循环"):
+            self._closure()
+        barrier = "tools.official_client_control.store:ImplementationError"
+        stopped = self._closure(barriers=(barrier,))
+        self.assertIn(barrier, stopped["barriers"])
+        self.assertEqual({item["name"] for item in stopped["symbols"]}, {"ConfigurationError", "PublicError"})
+        self.assertEqual(stopped["modules"], [])
+
+    def test_function_recursion_through_import_alias_is_allowed(self) -> None:
+        self._write("official_client_capture/claude_upgrade.py", """
+            from . import upgrade_control_plane
+
+            def recursive_function(depth):
+                if depth:
+                    return upgrade_control_plane.helper(depth - 1)
+                return 0
+        """)
+        self._write("official_client_capture/upgrade_control_plane.py", """
+            from .claude_upgrade import recursive_function as helper
+        """)
+        record = self._closure("recursive_function")
+        self.assertEqual({item["name"]: item["kind"] for item in record["symbols"]}, {
+            "recursive_function": "function", "helper": "import",
+        })
+
+    def test_missing_orchestrator_symbol_still_fails(self) -> None:
+        with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "编排器符号不存在：MissingError"):
+            self._closure("MissingError")
+        self._write("official_client_control/store.py", """
+            from tools.official_client_capture.claude_upgrade import MissingError as ImplementationError
+        """)
+        with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "编排器符号不存在：MissingError"):
+            self._closure()
+
+    def test_missing_other_module_symbol_keeps_whole_file_fallback(self) -> None:
+        self._write("official_client_control/store.py", "UNRELATED = 1\n")
+        record = self._closure()
+        self.assertEqual([item["module"] for item in record["modules"]], ["tools.official_client_control.store"])
+        self.assertEqual({item["name"] for item in record["symbols"]}, {"ConfigurationError", "PublicError"})
+
+    def test_reexport_cannot_hide_an_ignored_definition(self) -> None:
+        self.policy = {**self.policy, "ignored_prefixes": ["official_client_control/store.py"]}
+        with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "被策略忽略的文件 official_client_control/store.py"):
+            self._closure()
+
+
 class CodexUnaffectedByClaudeMutationTests(_ClaudeTreeMixin, unittest.TestCase):
     """真实受管树副本：Claude 侧的间接调用突变仍可见，Codex 身份敏感摘要不动。"""
 
