@@ -217,6 +217,227 @@ class ReaderIsolationDenialTests(unittest.TestCase):
                 self.assertIn(b'"fatal":true', outcome.stdout.replace(b" ", b""))
 
 
+class FrozenActiveDerivationProofTests(unittest.TestCase):
+    """真实离线 VC-3／VC-4 前缀的最小来源专项，不执行 VC-5、VC-6 或真实账号。
+
+    原批次生产一次精确准备包和 Store，再给每个负例复制独立数据根。
+    所有原 reader 与纯派生函数照常执行；不把 bootstrap 占位当成旧
+    Active Snapshot，也不改种子原件或正式来源注册表。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from tools.official_client_capture.tests.test_claude_upgrade_batch import _RealTreeBatchCase
+        from tools.official_client_capture import claude_qualification_material_source as material
+        cls.material = material
+        cls.seed = _RealTreeBatchCase("runTest")
+        cls.addClassCleanup(cls.seed.doCleanups)
+        cls.seed.setUpClass()
+        cls.seed.setUp()
+        cls.seed.drive_vc3_vc4_to_candidate_sealed()
+        cls.seed_originals = {path.relative_to(cls.seed.data).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in cls.seed.data.rglob("*") if path.is_file()}
+
+    @classmethod
+    def tearDownClass(cls):
+        actual = {path.relative_to(cls.seed.data).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in cls.seed.data.rglob("*") if path.is_file()}
+        if actual != cls.seed_originals:
+            raise AssertionError("冻结 Active 专项的种子历史原件发生漂移")
+
+    def setUp(self):
+        from tools.official_client_capture import claude_upgrade_vc as vc
+        from tools.official_client_control.store import ControlStore
+        temporary = tempfile.TemporaryDirectory(prefix="frozen-active-proof-", dir="/private/tmp")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.data = self.root / "data"
+        shutil.copytree(self.seed.data, self.data)
+        self.campaign = self.data / self.seed.campaign.relative_to(self.seed.data)
+        self.manifest = json_read(self.campaign / "campaign.json")
+        self.vc4 = json_read(vc.vc_checkpoint_path(self.campaign, "VC-4", revision=1))
+        self.build = json_read(self.campaign / self.vc4["stage_receipt"]["path"])
+        self.store = ControlStore.open_read_only(self.campaign / "control-store")
+        self.originals, self.parents = {}, {}
+
+    def retain(self, path, expected_sha256=None):
+        from tools.official_client_control.errors import ControlError
+        path = Path(path)
+        if not path.is_relative_to(self.data):
+            raise ControlError("冻结 Active 专项不得读取数据根以外的原件")
+        raw, _metadata = self.material._plain_file(path)
+        row = {"path": path.relative_to(self.data).as_posix(),
+            "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+        if expected_sha256 is not None and row["sha256"] != expected_sha256:
+            raise ControlError("冻结 Active 专项原件摘要错配")
+        if self.originals.setdefault(row["path"], row) != row:
+            raise ControlError("冻结 Active 专项同坐标原件漂移")
+        return raw
+
+    def project_parent(self, path, base, metadata=(), *, coordinate_roots=()):
+        """按原 subject 相同的闭合字段构造专项投影，权限仅在证明返回后消费。"""
+        from tools.official_client_control.canonical import canonical_sha256
+        raw = self.retain(path)
+        document = self.material.parse_json_bytes(raw)
+        domains = []
+        for coordinate in metadata:
+            node = document
+            for key in coordinate:
+                node = node[int(key)] if isinstance(node, list) else node[key]
+            domains.append((coordinate, canonical_sha256(node)))
+        binding = self.originals[path.relative_to(self.data).as_posix()]
+        projection = self.material.VerifiedQualificationSubjectProjection(binding,
+            base.relative_to(self.data).as_posix(), tuple(domains),
+            tuple((coordinate, root.relative_to(self.data).as_posix()) for coordinate, root in coordinate_roots),
+            self.material._TOKEN)
+        self.assertEqual(self.parents.setdefault(binding["path"], projection), projection)
+
+    def prove(self):
+        self.material._prove_frozen_active_derivation(self.store, self.data, self.campaign, self.manifest, self.build,
+            retain=self.retain, project_parent=self.project_parent)
+
+    def source_and_projection(self, source_files=None):
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_control import sealed_gate_bindings as bindings
+        from tools.official_client_capture import claude_upgrade_compare as compare
+        # 实际 subject 在 helper 之前已由同一原 VC-4 reader 核构建父。
+        # 专项也实跑这个前提，再沿原合同保留宿主构建元数据域；不
+        # 给绝对路径外部读取权，不伪造验收四根或 gate 成功结果。
+        build, binding = compare.load_candidate_build_receipt(self.campaign, self.manifest,
+            self.build["candidate_id"], self.build["candidate_revision"])
+        self.assertEqual(build, self.build)
+        self.project_parent(self.campaign / binding["path"], self.campaign,
+            (("binary",), ("build", "parameters"), ("implementation_tests",)))
+        # 专项仅消费 helper 已证明的明确父域与完整读集，不伪造门禁或资格四根。
+        source = VerifiedSource("0" * 64, "1" * 64, source_files or {}, "0" * 64, "fixture-only", self.data)
+        projection = bindings.VerifiedGateProjection((), (), tuple(self.originals.values()), (),
+            bindings._TOKEN, tuple(self.parents.values()))
+        return source, projection
+
+    def binding(self, path):
+        self.retain(path)
+        return self.originals[path.relative_to(self.data).as_posix()]
+
+    def test_exact_prepared_revision_survives_later_unrelated_material(self):
+        from tools.official_client_capture import claude_upgrade_profile as profile
+        stage = json_read(self.campaign / profile.STAGE_RESULT_RELATIVE)
+        self.assertEqual(stage["prepared_revision"], "rev-0002")
+        result = json_read(self.campaign / stage["prepare_result"]["path"])
+        successor = copy.deepcopy(result)
+        successor.update(revision="rev-0003", target_profile_sha256="f" * 64)
+        write(self.campaign, profile.prepare_result_path(self.campaign, "rev-0003").relative_to(self.campaign).as_posix(), successor)
+        self.prove()
+        names = set(self.originals)
+        self.assertTrue(any("approved/rev-0002/active-profile.json" in name for name in names))
+        self.assertFalse(any("rev-0003" in name for name in names))
+        active = self.campaign / "inputs/active-profile.json"
+        row = self.binding(active)
+        self.assertEqual(self.parents[row["path"]].project(row, active.read_bytes()), [])
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+        source, projection = self.source_and_projection()
+        closed = project_delivery_raw_bindings(source, [row], gate_projection=projection)
+        self.assertTrue(names <= {binding["path"] for binding in closed})
+
+    def test_every_material_read_by_original_readers_is_retained(self):
+        from unittest import mock
+        import builtins
+        import io
+        observed = set()
+        def observe(original):
+            def call(name, *arguments, **options):
+                if isinstance(name, (str, bytes, os.PathLike)):
+                    path = Path(os.fsdecode(name))
+                    if path.is_absolute() and path.is_relative_to(self.data):
+                        observed.add(path.relative_to(self.data).as_posix())
+                return original(name, *arguments, **options)
+            return call
+        # 只记录原 I/O 再原样委托，不替换 reader 返回值或父语义。
+        with mock.patch.object(builtins, "open", observe(builtins.open)), \
+             mock.patch.object(io, "open", observe(io.open)), \
+             mock.patch.object(os, "open", observe(os.open)):
+            self.prove()
+        self.assertFalse(observed - set(self.originals), sorted(observed - set(self.originals)))
+
+    def test_non_digest_active_field_change_rejects_without_new_active_permission(self):
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_capture.capturelib.model import ConfigurationError
+        active = self.campaign / "inputs/active-profile.json"
+        document = json_read(active)
+        document["identity"]["privacy_mode"] = "changed-non-digest-field"
+        active.write_bytes(canonical_json_bytes(document))
+        with self.assertRaises((ControlError, ConfigurationError)):
+            self.prove()
+        self.assertNotIn(active.relative_to(self.data).as_posix(), self.parents)
+
+    def test_approved_active_policy_selector_and_attestation_mismatches_each_reject(self):
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_capture.capturelib.model import ConfigurationError
+        from tools.official_client_capture import claude_upgrade_profile as profile
+        stage = json_read(self.campaign / profile.STAGE_RESULT_RELATIVE)
+        prepared = profile.load_prepare_result(self.campaign, self.manifest, stage["prepared_revision"])
+        release = self.store.load_object(self.build["store"]["release_artifact_ref"])["payload"]
+        mutations = [
+            (self.campaign / prepared["prepared"]["active-profile.json"]["path"],
+                lambda document: document["identity"].update(privacy_mode="approved-active-mismatch")),
+            (self.campaign / profile.PREPARE_DRAFT_ROOT / stage["prepared_revision"] / profile.PREPARE_FILES["policy"],
+                lambda document: document.update(target_version="2.1.999")),
+            (self.campaign / "inputs/active-release-catalog.json",
+                lambda document: document["selectors"].update(production_active="f" * 64)),
+            (self.store.object_path(release["snapshot_ref"]),
+                lambda document: document["payload"].update(compiler_attestation_sha256="f" * 64)),
+        ]
+        for path, mutate in mutations:
+            with self.subTest(path=path.relative_to(self.data).as_posix()):
+                raw = path.read_bytes()
+                self.addCleanup(path.write_bytes, raw)
+                document = self.material.parse_json_bytes(raw)
+                mutate(document)
+                path.write_bytes(canonical_json_bytes(document))
+                self.originals, self.parents = {}, {}
+                with self.assertRaises((ControlError, ConfigurationError)):
+                    self.prove()
+                self.assertNotIn((self.campaign / "inputs/active-profile.json").relative_to(self.data).as_posix(), self.parents)
+                path.write_bytes(raw)
+
+    def test_same_active_bytes_at_other_coordinate_remain_strict_and_reject(self):
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+        self.prove()
+        active = self.campaign / "inputs/active-profile.json"
+        duplicate = self.campaign / "inputs/same-bytes-active.json"
+        duplicate.write_bytes(active.read_bytes())
+        duplicate.chmod(0o600)
+        row = self.binding(duplicate)
+        source, projection = self.source_and_projection()
+        self.assertIsNone(projection.project(row, active.read_bytes()))
+        with self.assertRaises(ControlError):
+            project_delivery_raw_bindings(source, [row], gate_projection=projection)
+
+    def test_unknown_json_missing_binding_still_rejects(self):
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+        self.prove()
+        unknown = write(self.campaign, "inputs/unknown-json.json", {
+            "unverified": {"path": "unbound/missing.json", "sha256": "f" * 64, "bytes": 20}})
+        row = self.binding(unknown)
+        source, projection = self.source_and_projection()
+        self.assertIsNone(projection.project(row, unknown.read_bytes()))
+        with self.assertRaises(ControlError):
+            project_delivery_raw_bindings(source, [row], gate_projection=projection)
+
+    def test_source_view_bytes_different_from_disk_original_reject(self):
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+        self.prove()
+        active = self.campaign / "inputs/active-profile.json"
+        raw = active.read_bytes()
+        row = self.binding(active)
+        source, projection = self.source_and_projection({row["path"]: raw + b" "})
+        with self.assertRaisesRegex(ControlError, "字节漂移"):
+            project_delivery_raw_bindings(source, [row], gate_projection=projection)
+        self.assertEqual(active.read_bytes(), raw)
+
+
 PROBE_SOURCE = r'''"""专项负例：钩子由真实实现安装，只读进程不执行任何真实副作用。"""
 import sys, os, io, _io, posix, json, socket, mmap, ctypes, subprocess
 from pathlib import Path

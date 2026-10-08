@@ -416,6 +416,363 @@ class VerifiedQualificationSubjectProjection:
             for row in typed_bindings(document)]
 
 
+def _prove_frozen_active_derivation(store: Any, external: Path, campaign: Path,
+                                   manifest: Mapping[str, Any], build: Mapping[str, Any], *,
+                                   retain: Callable[..., bytes],
+                                   project_parent: Callable[..., None]) -> None:
+    """重放精确 VC-4 的冻结 Active 派生父链，不寻找旧 Snapshot 或最新准备包。
+
+    Active 是本次总计划冻结的历史输入文档。只有原 VC-3 批准、联合
+    Store 原件、目标 Snapshot 和原纯派生函数同时证明完整文档时，才
+    登记其两个精确副本的内存投影。证明材料沿调用方既有读集归档；
+    画像内部的历史证据坐标始终不产生新的文件根权限。
+    """
+    from collections import Counter
+    from types import SimpleNamespace
+    from . import claude_upgrade_classify as classify
+    from . import claude_upgrade_profile as profile
+    from . import claude_upgrade_release as release
+    from . import claude_upgrade_vc as vc
+    from tools.official_client_control.gates import WorkflowGates
+    from tools.official_client_control.qualification_bindings import QualificationBindingProjection
+
+    active_names = ("active_release_catalog", "active_profile")
+    if not any((manifest.get("inputs") or {}).get(name) is not None for name in active_names):
+        # 没有冻结 Active 的旧来源不获得新投影，仍遵循原严格读取路径。
+        return
+    if any((manifest.get("inputs") or {}).get(name) is None for name in active_names):
+        raise ControlError("冻结 Active 派生证明缺少成对的总计划输入")
+
+    def bound(binding: Mapping[str, Any], expected: Path | None = None) -> tuple[Path, bytes]:
+        if not isinstance(binding, Mapping) or set(binding) not in ({"path", "sha256"}, {"path", "sha256", "bytes"}):
+            raise ControlError("冻结 Active 父链绑定字段不闭合")
+        path = campaign / _relative(binding["path"])
+        if expected is not None and path != expected:
+            raise ControlError("冻结 Active 父链不是指定 revision 的精确坐标")
+        raw = retain(path, binding["sha256"])
+        if "bytes" in binding and binding["bytes"] != len(raw):
+            raise ControlError("冻结 Active 父链原件字节数漂移")
+        return path, raw
+
+    projection = QualificationBindingProjection(store)
+
+    def original(reference: Mapping[str, Any]) -> dict[str, Any]:
+        """沿原 Store 合同核原件；其外部绑定仍只在既有 external 根读取。"""
+        if "object_kind" in reference:
+            document = store.load_object(dict(reference))
+            path = store.object_path(dict(reference))
+            WorkflowGates(store).validate_object_graph(dict(reference))
+        else:
+            document = store.load_fact(dict(reference))
+            path = (Path(store.root) / "facts" / reference["campaign_id"] / reference["dimension"]
+                / f"{reference['sequence']:08d}-{reference['sha256']}.json")
+        raw = retain(path, reference["sha256"])
+        expected = parse_json_bytes(raw)
+        if "object_kind" not in reference:
+            # 原 fact reader 返回已核过序链的文档，并明确增加引用摘要。
+            # 完整视图必须恰为原文档加这一字段，不能裁剪其它差异。
+            expected = {**expected, "_sha256": reference["sha256"]}
+        if expected != document:
+            raise ControlError("冻结 Active 父链 Store 视图与来源原字节不同")
+        for binding in projection.bindings(document, reference):
+            store._verify_external_binding(external, binding)
+            projection.verify_external_mode(external, binding)
+            retain(external / _relative(binding["path"]), binding["sha256"])
+        domains = tuple(tuple(row["domain_pointer"].strip("/").split("/"))
+            for row in projection.manifest()["parent_domains"] if row["parent_ref"] == reference)
+        project_parent(path, external, domains)
+        return document
+
+    manifest_raw = retain(campaign / "campaign.json")
+    if (parse_json_bytes(manifest_raw) != dict(manifest)
+            or build["campaign_manifest_sha256"] != sha256_bytes(manifest_raw)
+            or build["campaign_id"] != manifest["campaign_id"]):
+        raise ControlError("冻结 Active 父链与精确 VC-4 总计划不同源")
+    plan_path, plan_raw = bound(manifest["vc_control"]["campaign_plan"])
+    plan = vc.vc_campaign_plan(campaign, manifest)
+    if parse_json_bytes(plan_raw) != plan:
+        raise ControlError("冻结 Active 的 VC 总计划原件视图漂移")
+    vc4_path, vc4 = vc.replay_vc_checkpoint(campaign, plan, "VC-4", revision=build["candidate_revision"])
+    if parse_json_bytes(retain(vc4_path)) != vc4:
+        raise ControlError("冻结 Active 的 VC-4 checkpoint 原字节漂移")
+    _build_path, build_raw = bound(vc4["stage_receipt"])
+    if parse_json_bytes(build_raw) != dict(build):
+        raise ControlError("冻结 Active 的 VC-4 不是当前精确构建原件")
+    # 原 checkpoint reader 回溯到 VC-0 并读取每份阶段收据。全部原件
+    # 纳入同一来源读集，不能只封存本次直接使用的 VC-2／VC-3。
+    checkpoint_parents = [vc4_path]
+    current = vc4
+    while current["predecessor_checkpoint"] is not None:
+        previous = current["predecessor_checkpoint"]
+        path, raw = bound({key: previous[key] for key in ("path", "sha256")})
+        current = parse_json_bytes(raw)
+        checkpoint_parents.append(path)
+        path, _raw = bound(current["stage_receipt"])
+        checkpoint_parents.append(path)
+    vc3_binding = vc4["predecessor_checkpoint"]
+    if vc3_binding["phase"] != "VC-3":
+        raise ControlError("冻结 Active 的直接父阶段不是 VC-3")
+    vc3_path, vc3_raw = bound({key: vc3_binding[key] for key in ("path", "sha256")})
+    vc3 = parse_json_bytes(vc3_raw)
+    stage_path, stage_raw = bound(vc3["stage_receipt"], campaign / profile.STAGE_RESULT_RELATIVE)
+    stage = parse_json_bytes(stage_raw)
+    if (stage.get("schema_version") != profile.STAGE_RESULT_SCHEMA
+            or stage.get("campaign_id") != manifest["campaign_id"]
+            or stage.get("client") != "claude" or stage.get("stage") != "stage-profile"
+            or stage.get("status") != "complete"
+            or profile.REVISION_RE.fullmatch(str(stage.get("prepared_revision", ""))) is None):
+        raise ControlError("冻结 Active 的精确 VC-3 阶段合同不闭合")
+    for stage_key, build_key in (("profile_approval_fact_ref", "profile_approval_ref"),
+                                 ("release_artifact_ref", "release_artifact_ref"),
+                                 ("support_envelope_ref", "support_envelope_ref")):
+        if stage["store"][stage_key] != build["store"][build_key]:
+            raise ControlError("冻结 Active 的 VC-3 批准与精确 VC-4 Store 构建错配")
+    if (stage["staged_release"]["sha256"] != build["catalog_stage"]["sha256"]
+            or stage["staged_release"]["release_sha256"] != build["profile"]["release_sha256"]):
+        raise ControlError("冻结 Active 的暂存 Release 与精确 VC-4 构建错配")
+
+    # 先封闭所有读坐标，再调用原读者；显式 revision 禁止取后继准备包。
+    revision = stage["prepared_revision"]
+    result_path, result_raw = bound(stage["prepare_result"], profile.prepare_result_path(campaign, revision))
+    result = parse_json_bytes(result_raw)
+    expected_files = {*profile.PREPARE_FILES.values(), *profile.PREPARED_EXTRA_FILES.values()}
+    if set(result.get("prepared") or {}) != expected_files:
+        raise ControlError("冻结 Active 的批准准备包文件全集不闭合")
+    prepared = {}
+    prepared_paths = {}
+    for name, binding in result["prepared"].items():
+        path, raw = bound(binding, campaign / profile.PREPARED_ROOT / revision / name)
+        prepared_paths[name], prepared[name] = path, raw
+    if profile.load_prepare_result(campaign, manifest, revision) != result:
+        raise ControlError("冻结 Active 的指定准备结果在原 reader 重放时漂移")
+    draft_path, draft_raw = bound(result["draft_receipt"],
+        campaign / profile.PREPARE_DRAFT_ROOT / revision / profile.DRAFT_RECEIPT_FILENAME)
+    draft = parse_json_bytes(draft_raw)
+    original_draft, draft_files = profile.load_revision(campaign, manifest["campaign_id"], revision)
+    if original_draft != draft:
+        raise ControlError("冻结 Active 的完整草案收据在原 reader 重放时漂移")
+    for name, filename in profile.PREPARE_FILES.items():
+        raw = retain(draft_path.parent / filename, draft["files"][name]["sha256"])
+        if raw != draft_files[name] or raw != prepared[filename]:
+            raise ControlError("冻结 Active 的草案与批准文件原字节不同")
+
+    catalog_path, active_path = profile._active_paths(campaign, manifest, None, None)
+    catalog_raw, active_raw = retain(catalog_path), retain(active_path)
+    catalog = parse_json_bytes(catalog_raw)
+    active_profile = parse_json_bytes(active_raw)
+    if profile.profile_bytes(active_profile) != active_raw:
+        raise ControlError("冻结 Active 画像不是原合同的内容寻址规范字节")
+    active = profile._active_release(catalog, sha256_bytes(active_raw))
+    identity = active_profile.get("identity") or {}
+    if (identity.get("version") != manifest["baseline_version"]
+            or active["version"] != manifest["baseline_version"]
+            or identity.get("platform") != active["platform"]
+            or profile.list_key_field(active_profile.get("rules")) != "spec_id"
+            or sorted(row["spec_id"] for row in active_profile["rules"]) != sorted(manifest["required_rules"])):
+        raise ControlError("冻结 Active 的版本、平台或基线规则全集不同源")
+    for name, raw in (("active_release_catalog", catalog_raw), ("active_profile", active_raw)):
+        if prepared[profile.PREPARED_EXTRA_FILES[name]] != raw:
+            raise ControlError("冻结 Active 总计划输入与指定批准副本原字节不同")
+    policy = parse_json_bytes(prepared[profile.PREPARE_FILES["policy"]])
+    frozen_bindings = {name: profile._campaign_file_binding(campaign, path, name)
+        for name, path in (("active_release_catalog", catalog_path), ("active_profile", active_path))}
+    expected_inputs = {"policy": policy, **frozen_bindings}
+    if (draft["inputs"] != expected_inputs
+            or draft["inputs_sha256"] != profile._orchestrator()._fingerprint(expected_inputs)
+            or result["inputs_sha256"] != draft["inputs_sha256"]):
+        raise ControlError("冻结 Active 草案 policy、总计划输入与批准输入摘要不同源")
+
+    vc2_binding = vc3["predecessor_checkpoint"]
+    vc2_path, vc2_raw = bound({key: vc2_binding[key] for key in ("path", "sha256")})
+    vc2 = parse_json_bytes(vc2_raw)
+    class_path, class_raw = bound(vc2["stage_receipt"], campaign / classify.STAGE_RESULT_RELATIVE)
+    classification = parse_json_bytes(class_raw)
+    documents = {}
+    for name, binding in classification["approved"].items():
+        _path, raw = bound(binding)
+        documents[name] = parse_json_bytes(raw)
+    class_draft_path, class_draft_raw = bound(classification["draft_receipt"],
+        campaign / classify.DRAFT_ROOT / classification["revision"] / classify.DRAFT_RECEIPT_FILENAME)
+    if classify.load_stage_result(campaign, manifest) != classification:
+        raise ControlError("冻结 Active 的精确 VC-2 分类原 reader 视图漂移")
+    class_draft, class_files = classify.load_revision(campaign, manifest["campaign_id"], classification["revision"])
+    if parse_json_bytes(class_draft_raw) != class_draft:
+        raise ControlError("冻结 Active 的分类 revision 原 reader 与完整草案原件不同")
+    for name, filename in classify.DRAFT_FILES.items():
+        raw = retain(class_draft_path.parent / filename, class_draft["files"][name]["sha256"])
+        _approved_path, approved_raw = bound(classification["approved"][name])
+        if raw != class_files[name] or raw != approved_raw:
+            raise ControlError("冻结 Active 的分类草案与批准副本原字节不同")
+    refs = {key: classification["store"][key] for key in (
+        "evidence_fact_ref", "evidence_package_ref", "rule_migration_ledger_ref",
+        "atomic_assertion_ledger_ref", "classification_fact_ref")}
+    classification_fact = original(refs["classification_fact_ref"])
+    if classification_fact["payload"] != {key: refs[key] for key in (
+            "evidence_fact_ref", "evidence_package_ref", "rule_migration_ledger_ref", "atomic_assertion_ledger_ref")}:
+        raise ControlError("冻结 Active 的分类事实与精确 VC-2 引用不同源")
+    migration = original(refs["rule_migration_ledger_ref"])["payload"]
+    atomic = original(refs["atomic_assertion_ledger_ref"])["payload"]
+    evidence = original(refs["evidence_package_ref"])["payload"]
+    original(refs["evidence_fact_ref"])
+    if sorted(classification["target_rules"]) != sorted(migration["target_spec_ids"]):
+        raise ControlError("冻结 Active 的分类规则与原 Store 迁移台账不同源")
+    approval = original(stage["store"]["profile_approval_fact_ref"])
+    evidence_approval = original(result["store"]["evidence_approval_fact_ref"])
+    expected_approval_inputs = {key: refs[key] for key in ("evidence_fact_ref", "evidence_package_ref", "classification_fact_ref")}
+    if (approval["fact_kind"] != "profile_approved"
+            or approval["payload"]["evidence_approval_ref"] != result["store"]["evidence_approval_fact_ref"]
+            or stage["store"]["evidence_approval_fact_ref"] != result["store"]["evidence_approval_fact_ref"]
+            or evidence_approval["fact_kind"] != "evidence_approved"
+            or any(evidence_approval["payload"][key] != value for key, value in expected_approval_inputs.items())
+            or any(result["store"][key] != value for key, value in expected_approval_inputs.items())):
+        raise ControlError("冻结 Active 的准备批准与原证据、分类或画像批准不同源")
+
+    binary = profile._active_binary(active_profile)
+    configuration = manifest["configuration"]
+    pairs = [(manifest["baseline_version"], manifest["target_version"]),
+             (identity["platform"], configuration["platform"])]
+    if binary is not None:
+        pairs.append((binary, manifest["target_sha256"]))
+    replacements = {old: new for old, new in pairs if old and old != new}
+    for key, (old, new) in zip(profile.IDENTITY_CONDITION_KEYS, pairs + [(None, None)] * (3 - len(pairs))):
+        if old and new and old != new:
+            replacements[f"{key}={old}"] = f"{key}={new}"
+    counts = Counter(row["owner_kind"] for row in atomic["assertions"])
+    # 这个两字段引用是封存生成器元数据。其完整 policy 原字节另由
+    # joint_source 的 prepare-files 证明，不据此打开仓库或任何外部根。
+    projection_binding = policy["active"]["projection_policy"]
+    if (set(projection_binding) != {"path", "sha256"}
+            or profile.SHA256_RE.fullmatch(str(projection_binding["sha256"])) is None):
+        raise ControlError("冻结 Active 的投影生成器元数据不闭合")
+    _relative(projection_binding["path"])
+    expected_policy = {
+        "schema_version": profile.PROFILE_POLICY_SCHEMA, "campaign_id": manifest["campaign_id"],
+        "baseline_version": manifest["baseline_version"], "target_version": manifest["target_version"],
+        "campaign_purpose": manifest["campaign_purpose"],
+        "target_identity": {"version": manifest["target_version"], "platform": configuration["platform"],
+            "binary_sha256": manifest["target_sha256"], "entrypoint": str(configuration.get("entrypoint", "")),
+            "privacy_mode": str(configuration.get("privacy_mode", ""))},
+        "active": {"release_catalog": frozen_bindings["active_release_catalog"],
+            "profile": frozen_bindings["active_profile"], **active, "binary_sha256": binary,
+            "profile_schema_version": str(active_profile.get("schema_version", "")), "projection_policy": dict(projection_binding)},
+        "classification": {"stage_result": {"path": class_path.relative_to(campaign).as_posix(), "sha256": sha256_bytes(class_raw)},
+            "vc2_checkpoint": {"path": vc2_path.relative_to(campaign).as_posix(), "checkpoint_sha256": vc2["checkpoint_sha256"]},
+            "revision": classification["revision"], "review_sha256": classification["review_sha256"], **refs},
+        "rules": {"target_rules": classification["target_rules"], "affected_rules": classification["affected_rules"],
+            "inherited_rules": classification["inherited_rules"], "atomic_assertion_count": len(atomic["assertions"]),
+            "scenario_only_owner_ids": atomic["scenario_only_owner_ids"], "atomic_owner_counts": dict(sorted(counts.items()))},
+        "identity_substitutions": [{"from": old, "to": new} for old, new in sorted(replacements.items())],
+        "model_capability_paths": list(profile.MODEL_CAPABILITY_PATHS),
+        "generator": {"module": "claude_upgrade_profile", "policy_schema": profile.PROFILE_POLICY_SCHEMA,
+            "projection_module": "tools.official_client_capture.claude_upgrade_wire_projection",
+            "projection_policy_schema": release.wire_projection.PROJECTION_POLICY_SCHEMA}}
+    if policy != expected_policy:
+        raise ControlError("冻结 Active 的完整 policy 不等于原分类、输入与生成语义")
+
+    joint_path, joint_raw = bound(stage["joint_manifest"])
+    joint = parse_json_bytes(joint_raw)
+    if (joint.get("schema_version") != profile.JOINT_MANIFEST_SCHEMA
+            or joint["campaign_id"] != manifest["campaign_id"]
+            or joint["generation"] != stage["generation"] or joint["prepare_result"] != stage["prepare_result"]
+            or joint["joint_sha256"] != stage["joint_sha256"]
+            or profile._joint_sha256(joint["objects"], joint["approval_core"]) != joint["joint_sha256"]
+            or any(approval["payload"].get(key) != value for key, value in joint["approval_core"].items())
+            or any(stage["store"].get(key) != value for key, value in joint["approval_core"].items() if key.endswith("_ref"))):
+        raise ControlError("冻结 Active 联合清单、原画像批准与精确 VC-3 不同源")
+    joint_metadata = []
+    joint_sources = []
+    for index, item in enumerate(joint["objects"]):
+        parent = original(item["ref"])
+        if parent["object_kind"] != item["kind"] or parent["payload"] != item["payload"]:
+            raise ControlError("冻结 Active 联合制品不是原 Store 完整父文档")
+        if item["kind"] == "snapshot":
+            joint_metadata.append(("objects", str(index), "payload", "document"))
+        if item["name"] == "joint_source":
+            joint_sources.append(parent["payload"])
+    derivation_raw = prepared[profile.PREPARED_EXTRA_FILES["derivation"]]
+    derivation = parse_json_bytes(derivation_raw)
+    target_raw = prepared[profile.PREPARED_EXTRA_FILES["target_profile"]]
+    expected_joint_source = profile._manifest_payload("operational_evidence", store.load_campaign(manifest["campaign_id"])["persona"],
+        "claude-upgrade-vc3-joint-source", [
+            {"id": "active-release", "facts": {key: active[key] for key in ("release_sha256", "profile_sha256", "bundle_sha256", "version", "platform")}},
+            {"id": "classification", "facts": expected_policy["classification"]},
+            {"id": "prepare-files", "facts": {name: sha256_bytes(raw) for name, raw in draft_files.items()}},
+            {"id": "target-profile", "facts": {"profile_sha256": sha256_bytes(target_raw), "derivation_sha256": canonical_sha256(derivation)}}])
+    if joint_sources != [expected_joint_source]:
+        raise ControlError("冻结 Active 的完整草案原字节没有原联合来源证明")
+    retain(Path(store.root) / "campaigns" / (manifest["campaign_id"] + ".json"))
+    target_release = original(build["store"]["release_artifact_ref"])["payload"]
+    snapshot = original(target_release["snapshot_ref"])["payload"]
+    if (approval["payload"]["release_artifact_ref"] != build["store"]["release_artifact_ref"]
+            or approval["payload"]["snapshot_ref"] != target_release["snapshot_ref"]
+            or stage["store"]["snapshot_ref"] != target_release["snapshot_ref"]
+            or snapshot["profile_digest"] != sha256_bytes(target_raw)
+            or stage["target_profile_sha256"] != sha256_bytes(target_raw)
+            or result["target_profile_sha256"] != sha256_bytes(target_raw)
+            or joint["target_profile_sha256"] != sha256_bytes(target_raw)
+            or snapshot["document"] != parse_json_bytes(target_raw)):
+        raise ControlError("冻结 Active 的目标画像与原批准 Release／Snapshot 完整文档错配")
+    attestation = canonical_sha256({"attestation": "claude-upgrade-vc3-active-derivation/v1",
+        "active_release_sha256": active["release_sha256"], "active_profile_sha256": sha256_bytes(active_raw),
+        "profile_schema_version": active_profile["schema_version"], "derivation_sha256": canonical_sha256(derivation)})
+    if snapshot["compiler_attestation_sha256"] != attestation:
+        raise ControlError("冻结 Active 的目标 Snapshot 派生证明错配")
+    catalog_document = parse_json_bytes(prepared[profile.PREPARED_EXTRA_FILES["model_catalog"]])
+    catalog_object = original(stage["store"]["model_capability_catalog_ref"])["payload"]
+    catalog_rows = [row["facts"] for row in catalog_object["entries"] if row["id"] == "catalog"]
+    if (len(catalog_rows) != 1 or catalog_rows[0]["document"] != catalog_document
+            or catalog_rows[0]["catalog_sha256"] != sha256_bytes(prepared[profile.PREPARED_EXTRA_FILES["model_catalog"]])):
+        raise ControlError("冻结 Active 的模型目录不是同一批准联合制品的原字节")
+    # 只向原纯函数传它实际使用的冻结字段，不借当前 Store 状态重做
+    # prepare/stage，也不构造包含虚假运行证据的 CatalogProjection。
+    inputs = SimpleNamespace(campaign_id=manifest["campaign_id"], baseline_version=manifest["baseline_version"],
+        target_version=manifest["target_version"], policy=policy, active_profile=active_profile, replacements=replacements,
+        affected_rules=classification["affected_rules"], inherited_rules=classification["inherited_rules"],
+        target_rules=classification["target_rules"], decisions={row["spec_id"]: row["migration_decision"] for row in migration["rules"]},
+        planned_paths={row["spec_id"]: row["profile_paths"] for row in documents["profile_patches"]["rule_patches"]},
+        evidence_ids=frozenset(row["evidence_id"] for row in evidence["evidence_items"]))
+    model_identity = release.model_identity(SimpleNamespace(catalog=catalog_document,
+        catalog_sha256=sha256_bytes(prepared[profile.PREPARED_EXTRA_FILES["model_catalog"]])))
+    problems = profile._Problems()
+    derived = profile.derive_target_profile(inputs,
+        {name: parse_json_bytes(raw) for name, raw in draft_files.items()}, problems, model_identity)
+    if (problems or derived is None or derived["target_bytes"] != target_raw
+            or profile._serialize(derived["derivation"]) != derivation_raw
+            or result["profile_diff_paths"] != derived["derivation"]["profile_diff_paths"]):
+        raise ControlError("冻结 Active 到目标画像的原纯派生语义不能完整重放")
+
+    # 到这里才给精确 Active 父和批准副本整文档投影。其它原件仍按
+    # 自己的明确坐标展开；未知 JSON 和同 SHA 的其它路径没有此权限。
+    project_parent(active_path, campaign, ((),))
+    project_parent(prepared_paths[profile.PREPARED_EXTRA_FILES["active_profile"]], campaign, ((),))
+    project_parent(prepared_paths[profile.PREPARED_EXTRA_FILES["target_profile"]], campaign, ((),))
+    project_parent(draft_path, campaign, coordinate_roots=tuple(
+        (("files", name), draft_path.parent) for name in profile.PREPARE_FILES))
+    for name, filename in profile.PREPARE_FILES.items():
+        project_parent(draft_path.parent / filename, campaign)
+    classification_data = classify._capture()._host_data_root(campaign)
+    for name, path in prepared_paths.items():
+        if name not in {profile.PREPARED_EXTRA_FILES["active_profile"], profile.PREPARED_EXTRA_FILES["target_profile"]}:
+            # 批准 Wire 的 VC-1 原件是 data 相对坐标，原件继续实读，
+            # 不因批准包所在目录而重复加上 Campaign 前缀。
+            base = classification_data if name == profile.PREPARED_EXTRA_FILES["target_wire"] else campaign
+            project_parent(path, base)
+    project_parent(result_path, campaign)
+    project_parent(joint_path, campaign, tuple(joint_metadata))
+    project_parent(stage_path, campaign)
+    project_parent(class_path, campaign)
+    # 分类原 collect_inputs／处置台账的来源坐标是宿主 data 根，
+    # 只有 draft.files 自身使用同目录坐标；不把两类坐标混为一根。
+    project_parent(class_draft_path, classification_data, coordinate_roots=tuple(
+        (("files", name), class_draft_path.parent) for name in classify.DRAFT_FILES))
+    for name, filename in classify.DRAFT_FILES.items():
+        project_parent(class_draft_path.parent / filename, classification_data)
+        project_parent(campaign / classification["approved"][name]["path"], classification_data)
+    project_parent(plan_path, campaign)
+    for path in checkpoint_parents:
+        project_parent(path, campaign)
+
+
 def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], data_root: Path,
                                parent: Mapping[str, Any], *, read_bindings: list[dict[str, Any]] | None = None,
                                read_projections: list[VerifiedQualificationSubjectProjection] | None = None) -> dict[str, Any]:
@@ -465,7 +822,7 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
         for coordinate in metadata:
             node = document
             for key in coordinate:
-                node = node[key]
+                node = node[int(key)] if isinstance(node, list) else node[key]
             domains.append((coordinate, canonical_sha256(node)))
         binding = originals[path.relative_to(data_root).as_posix()]
         roots = []
@@ -708,6 +1065,12 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
         raise ControlError("门禁 subject 暂存画像不是精确 Release Snapshot 的原文档")
     project_parent(campaign / release.STAGED_RELEASE_ROOT / profile_relative,
         campaign / release.STAGED_RELEASE_ROOT, ((),))
+    from .capturelib.model import ConfigurationError
+    try:
+        _prove_frozen_active_derivation(store, external, campaign, manifest, build,
+            retain=retain, project_parent=project_parent)
+    except (ConfigurationError, KeyError, TypeError, ValueError) as error:
+        raise ControlError("冻结 Active 派生来源证明不闭合：" + str(error)) from error
     # Campaign 内普通原件的坐标仍以 Campaign 为根；特定父域上面的
     # 显式证明优先。叶子未知 JSON 没有父合同证明，仍交给严格读者。
     campaign_parents = [campaign / "campaign.json", round_path,
