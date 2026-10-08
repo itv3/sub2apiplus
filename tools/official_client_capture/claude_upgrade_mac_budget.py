@@ -283,6 +283,81 @@ def reserve_task_bound(admission: ledger.RuntimeAdmission, attempt_root: Path, t
     return reserve_bound(admission, bound, expected_sequence=admission.head_sequence, expected_head_sha256=admission.head_sha256)
 
 
+def _task_attempt(head: Mapping[str, Any], task: Mapping[str, Any]) -> tuple[Path, Path]:
+    """只从原注册事件定位任务，不能由上传包换 Campaign 或 attempt。"""
+    from tools.official_client_capture import claude_client_receipt_contract as contract
+
+    registered = head["registered_campaigns"].get(task["campaign_id"])
+    contract.require(registered is not None and registered.get("client") == "claude", "任务的原 Claude Campaign 未注册")
+    campaign = Path(registered["campaign_dir"])
+    attempt = campaign / "candidates" / task["candidate_id"] / "attempts" / task["attempt_id"]
+    return campaign, attempt
+
+
+def read_task_bound_receipt(project_root: Path, task: Mapping[str, Any]) -> dict[str, Any] | None:
+    """只读重建原收据并核整个 bound；不取锁、写缓存、刷新窗口或授准入权。
+
+    首次追加后尚未发布本地收据的断点可以由真实事件重建。反过来，有本地
+    收据却缺真实事件、同 producer 被另一个 task 占用或任一绑定漂移，均拒绝，
+    不能降级为新任务或无占用的历史导入。
+    """
+    from tools.official_client_capture import claude_client_receipt_contract as contract
+
+    task = contract.validate_task(task)
+    root = Path(project_root)
+    contract.require(root == Path(task["execution"]["project_ledger"]), "任务占用不能借其他项目总账")
+    plan, _raw = ledger._load_plan(root)
+    ledger._require_plan_client(plan, "claude", "Mac 占用只读消费")
+    head = ledger._replay(root, plan, ledger._load_events(root), rebuild_cache=False)
+    row = head.get("live_request_bounds", {}).get(reservation_operation_id(task["task_sha256"]))
+    if row is None:
+        for previous in head.get("live_request_bounds", {}).values():
+            old = previous["bound"]
+            contract.require(all(old[name] != task["execution"][name] for name in ("producer_run_id", "capture_id")),
+                             "其他 task 已占用相同 producer 或 capture，不能借用")
+        if task["campaign_id"] in head["registered_campaigns"]:
+            _campaign, attempt = _task_attempt(head, task)
+            local = attempt / "client-evidence" / task["client_id"] / "runs" / task["task_nonce"] / "budget-reservation.json"
+            contract.require(not local.exists() and not local.is_symlink(), "本地预算原件缺真实占用事件，禁止降级")
+        return None
+    campaign, attempt = _task_attempt(head, task)
+    contract.require(ledger.find_project_ledger(campaign, client="claude") == root, "原 Campaign 与预算总账不符")
+    expected = bound_from_task(attempt, task)
+    local = attempt / "client-evidence" / task["client_id"] / "runs" / task["task_nonce"] / "budget-reservation.json"
+    contract.require(row["bound"] == expected, "原任务预算 bound 或冻结原件发生漂移")
+    receipt = _receipt(root, row)
+    verify_bound_receipt(root, receipt, task_sha256=task["task_sha256"])
+    if local.exists() or local.is_symlink():
+        original = contract.read_json(contract.secure_file(attempt, local.relative_to(attempt).as_posix()))
+        contract.require(ledger._canonical(original) == ledger._canonical(receipt), "本地预算原件与真实事件收据冲突")
+    return receipt
+
+
+def accounting_runtime(campaign_dir: Path, task: Mapping[str, Any]) -> ledger.RuntimeAdmission:
+    """原锁内重建同一账务数据上下文；不运行 live 准入，不新建 lease 或 attempt。
+
+    到期、暂停或产品失败后仍可精确收账。这不是派发入口，调用方只能将结果
+    交给已有结清原语；任何后续派发仍必须经过完整 Candidate 与实时预算门禁。
+    """
+    from tools.official_client_capture import claude_client_receipt_contract as contract
+
+    contract.require(ledger._PROJECT_LOCK_DEPTH > 0, "原账务上下文必须在项目锁内重建")
+    task = contract.validate_task(task)
+    campaign_dir = Path(campaign_dir)
+    root = ledger.find_project_ledger(campaign_dir, client="claude")
+    contract.require(root is not None and root == Path(task["execution"]["project_ledger"]), "账务上下文不是原任务总账")
+    plan, _raw = ledger._load_plan(root)
+    ledger._require_plan_client(plan, "claude", "Mac 精确收账")
+    ledger._check_fixture_only(root, plan, campaign_dir)
+    head = ledger._replay(root, plan, ledger._load_events(root), rebuild_cache=False)
+    campaign, attempt = _task_attempt(head, task)
+    contract.require(campaign == campaign_dir, "账务上下文不能换 Campaign")
+    bound_from_task(attempt, task)
+    campaign_plan = ledger._campaign_plan(campaign_dir / ledger.CAMPAIGN_LEDGER_DIR_NAME)
+    contract.require(campaign_plan is not None and campaign_plan["campaign_id"] == task["campaign_id"], "缺原 Campaign plan")
+    return ledger.RuntimeAdmission(root, plan, head, campaign_plan)
+
+
 def _frozen_task(admission: ledger.RuntimeAdmission, bound: Mapping[str, Any]) -> tuple[Path, dict[str, Any]]:
     """只从已注册原 Campaign 取冻结 task 与原预约，不接收上传包代替原件。"""
     from tools.official_client_capture import claude_client_receipt_contract as contract

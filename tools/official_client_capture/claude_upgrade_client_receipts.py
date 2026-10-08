@@ -143,6 +143,18 @@ def _account_run(campaign_dir: Path, run_root: Path, task: Mapping[str, Any], ve
             result["status"] = "accounted"
         # 未决记录不覆盖；显式 accounting_resolved 之后可补发独立的已决收据。
         _write(run_root / ("accounting.json" if result["status"] == "accounted" else "accounting-pending.json"), result)
+        if result["status"] == "accounted":
+            # 原 COMMIT 和项目精确入账已完成，才消费持久占用。关闭、失败或到期
+            # 都不自行释放；独立 import、失败运行和重放共同经过这个消费点。
+            from tools.official_client_capture import claude_upgrade_mac_budget as budget
+
+            receipt = budget.read_task_bound_receipt(project_root, task)
+            if receipt is None:
+                original = run_root / "budget-reservation.json"
+                contract.require(not original.exists() and not original.is_symlink(), "本地预算原件缺真实占用事件，禁止降级")
+            if receipt is not None:
+                admission = budget.accounting_runtime(campaign_dir, task)
+                budget.settle_task_bound(admission, task, receipt, result)
         return result
 
 

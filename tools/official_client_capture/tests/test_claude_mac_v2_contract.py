@@ -302,6 +302,8 @@ class MacV2ContractTests(unittest.TestCase):
         services.recorder.assert_not_called()
 
     def test_ready_failure_keeps_discoverable_index_and_closes_capture(self) -> None:
+        # 本例模拟首次取证；默认完整夹具的历史终态不能进入新预约。
+        (self.capture / "capture-manifest.json").unlink()
         services = mock.Mock(fixture_only=True)
         index_path = self.attempt / "client-evidence/reservations" / (self.task["execution"]["producer_run_id"] + ".json")
         index_path.unlink()
@@ -314,6 +316,7 @@ class MacV2ContractTests(unittest.TestCase):
         self.assertEqual(importer.collect_campaign_runs(self.campaign)[0]["status"], "unresolved")
 
     def test_reservation_is_indexed_before_ready_exists(self) -> None:
+        (self.capture / "capture-manifest.json").unlink()
         services = mock.Mock(fixture_only=True)
         index_path = self.attempt / "client-evidence/reservations" / (self.task["execution"]["producer_run_id"] + ".json")
         index_path.unlink()
@@ -330,6 +333,7 @@ class MacV2ContractTests(unittest.TestCase):
             source.verify_reservation_v2(self.task, self.capture)
 
     def test_registration_failure_still_closes_original_capture(self) -> None:
+        (self.capture / "capture-manifest.json").unlink()
         services = mock.Mock(fixture_only=True)
         index_path = self.attempt / "client-evidence/reservations" / (self.task["execution"]["producer_run_id"] + ".json")
         index_path.unlink()
@@ -344,6 +348,7 @@ class MacV2ContractTests(unittest.TestCase):
         self.assertEqual(importer.collect_campaign_runs(self.campaign)[0]["status"], "unresolved")
 
     def test_close_failure_preserves_ready_error_and_discoverable_reservation(self) -> None:
+        (self.capture / "capture-manifest.json").unlink()
         services = mock.Mock(fixture_only=True)
         services.wait_capture_ready.side_effect = RuntimeError("独立 ready 故障")
         services.close_capture.side_effect = OSError("关闭通道中断")
@@ -354,6 +359,7 @@ class MacV2ContractTests(unittest.TestCase):
         self.assertEqual(importer.collect_campaign_runs(self.campaign)[0]["status"], "unresolved")
 
     def test_recorder_factory_failure_cannot_publish_preexisting_success_material(self) -> None:
+        (self.capture / "capture-manifest.json").unlink()
         services = mock.Mock(fixture_only=True)
         services.recorder.side_effect = RuntimeError("录制后端缺失")
         with mock.patch.object(importer, "import_bundle") as publish:
@@ -450,6 +456,7 @@ class MacV2ContractTests(unittest.TestCase):
         self.assertEqual(calls[-4:], ["stop", "restore", "capture-close-sync", "seal:truncated"])
 
     def test_client_run_close_barrier_failure_is_not_retried_or_imported(self) -> None:
+        (self.capture / "capture-manifest.json").unlink()
         calls = []
         services = mock.Mock(fixture_only=True)
         services.recorder.return_value = _SealBarrierBackend(calls)

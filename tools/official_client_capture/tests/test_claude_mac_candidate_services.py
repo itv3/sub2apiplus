@@ -163,9 +163,9 @@ class MacCandidateServicesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "原清理時間|原清理时间"):
             self.admit()
 
-    def test_request_budget_cas_is_not_claimed_as_reservation(self) -> None:
+    def test_missing_factory_is_not_claimed_as_budget_reservation(self) -> None:
         before = ledger.replay_head(self.project)
-        with ledger.project_lock(self.project), self.assertRaisesRegex(services.CandidateServicesUnavailable, "不产生预算预约"):
+        with ledger.project_lock(self.project), self.assertRaisesRegex(services.CandidateServicesUnavailable, "工厂"):
             self.service.reserve(self.task, self.attempt)
         self.assertEqual(ledger.replay_head(self.project)["head_sha256"], before["head_sha256"])
         self.assertFalse((self.bundle.parent / "dispatch-intent.json").exists())
@@ -183,7 +183,11 @@ class MacCandidateServicesTests(unittest.TestCase):
             return original_cas(**kwargs)
 
         with mock.patch.object(runtime, "reservation_cas", side_effect=register_before_cas):
-            with ledger.project_lock(self.project), self.assertRaisesRegex(ValueError, "head 已并发前进"):
+            f.write(self.attempt / "reservation.json", {"fixture_only": True, "original_attempt": "attempt-1"})
+            (self.capture_root / "capture-manifest.json").unlink()
+            # 这个窄用例只隔离工厂构造，真实预算原语与 CAS 仍运行；完整静态工厂
+            # 的来源／所有权由预算消费专项核验，不能据此登记正式来源。
+            with mock.patch.object(self.service, "_capture", return_value=mock.Mock()), ledger.project_lock(self.project), self.assertRaisesRegex(ValueError, "head 已并发前进"):
                 self.service.reserve(self.task, self.attempt)
         self.assertEqual(len(ledger.replay_head(self.project)["registered_campaigns"]), 2)
         self.assertFalse((self.bundle.parent / "dispatch-intent.json").exists())
@@ -191,15 +195,16 @@ class MacCandidateServicesTests(unittest.TestCase):
     def test_all_missing_live_methods_fail_closed(self) -> None:
         for call in (lambda: self.service.wait_capture_ready(self.task), lambda: self.service.recorder(self.task, self.bundle),
                      lambda: self.service.close_capture(self.task)):
-            with self.subTest(call=call), self.assertRaises(services.CandidateServicesUnavailable):
+            with self.subTest(call=call), self.assertRaises(ValueError):
                 call()
 
     def test_run_client_stops_before_intent_recorder_or_import(self) -> None:
+        (self.capture_root / "capture-manifest.json").unlink()
         with mock.patch.object(self.service, "recorder") as recorder, mock.patch.object(self.service, "close_capture") as close:
             with self.assertRaises(services.CandidateServicesUnavailable):
                 control.run_client(self.task_path, self.attempt, services=self.service)
             recorder.assert_not_called()
-            close.assert_not_called()
+            close.assert_called_once_with(self.task)
         self.assertFalse((self.bundle.parent / "dispatch-intent.json").exists())
 
     def test_dispatch_recheck_reuses_original_gate_failure(self) -> None:

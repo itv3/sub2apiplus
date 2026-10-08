@@ -35,6 +35,12 @@ def _adapter(task: Mapping[str, Any]) -> Any:
     return adapter
 
 
+def _capture_terminal_exists(task: Mapping[str, Any]) -> bool:
+    root = Path(task["execution"]["capture_root"])
+    return any(path.exists() or path.is_symlink() for path in
+               (root / "capture-manifest.json", root / "undispatched.json", root / "native-capture-manifest.json"))
+
+
 def register_reservation(campaign_dir: Path, attempt_root: Path, task_path: Path, reservation_binding: Mapping[str, Any]) -> dict[str, Any]:
     """调用方处于项目锁→Campaign 锁内，独立预约完成后、任何产品启动前登记。"""
     from tools.official_client_capture import claude_upgrade_client_receipts as importer
@@ -149,6 +155,7 @@ def run_client(task_path: Path, attempt_root: Path, *, services: CandidateClient
     """由既有受监督入口调用；同一 producer 的未知执行只重放／对账，不能重启产品。"""
     from tools.official_client_capture import claude_upgrade_client_receipts as importer
     from tools.official_client_capture import claude_mac_recorder
+    from tools.official_client_capture import claude_upgrade_mac_budget as budget
     task_path, attempt_root = Path(task_path), Path(attempt_root)
     task = c.validate_task(c.read_json(c.bound_file(attempt_root, c.binding(task_path, attempt_root))))
     c.require(task["execution"]["source_scope"] == "formal", "正式 client-run 不接受离线夹具用途")
@@ -158,29 +165,41 @@ def run_client(task_path: Path, attempt_root: Path, *, services: CandidateClient
     run_root = attempt_root / "client-evidence" / task["client_id"] / "runs" / task["task_nonce"]
     bundle_root = run_root / "source"
     already_imported = False
+    reservation_failure = None
     with importer._client_control_lock(campaign_dir):
         c.verify_task_attempt(attempt_root, task)
-        services.admit(task, attempt_root)
-        if (run_root / "run.json").exists():
+        if (run_root / "run.json").exists() or (run_root / "run.json").is_symlink():
             already_imported = True
-        elif (run_root / "dispatch-intent.json").exists():
+        elif (run_root / "dispatch-intent.json").exists() or (run_root / "dispatch-intent.json").is_symlink():
             return {"status": "accounting_unresolved", "reason": "原 producer 已进入派发窗口，先同步来源／恢复／导入，不能重新启动产品", "producer_run_id": task["execution"]["producer_run_id"]}
         else:
-            services.reserve(task, attempt_root)
+            receipt = budget.read_task_bound_receipt(Path(task["execution"]["project_ledger"]), task)
+            if receipt is None:
+                local = run_root / "budget-reservation.json"
+                c.require(not local.exists() and not local.is_symlink(), "本地预算原件缺真实占用事件，禁止降级")
+            row = budget.verify_bound_receipt(Path(task["execution"]["project_ledger"]), receipt,
+                                             task_sha256=task["task_sha256"]) if receipt is not None else None
+            if _capture_terminal_exists(task) or (row is not None and row["status"] == "settled"):
+                return {"status": "accounting_unresolved", "reason": "原预算或捕获已有终态但缺完整导入记录，只收账不得重新启动产品", "producer_run_id": task["execution"]["producer_run_id"]}
+            services.admit(task, attempt_root)
             capture_root = Path(task["execution"]["capture_root"])
             try:
+                services.reserve(task, attempt_root)
                 # 预约已经存在即登记；登记或 ready 失败都必须收口原捕获方。
                 register_reservation(campaign_dir, attempt_root, task_path, c.binding(capture_root / "reservation.json", capture_root))
                 services.wait_capture_ready(task)
+                # intent 写入失败也处于预约收口范围；不能留下无人处理的原 hold。
+                importer._write(run_root / "dispatch-intent.json", {"schema_version": "claude-upgrade-client-dispatch-intent/v2", "task_sha256": task["task_sha256"], "producer_run_id": task["execution"]["producer_run_id"], "capture_id": task["execution"]["capture_id"], "source_deployments": task["execution"]["source_deployments"]})
             except BaseException as reservation_error:
-                # 保留冻结 task／已写索引；关闭失败不能覆盖最初故障或伪造零请求。
-                try:
-                    services.close_capture(task)
-                except BaseException as close_error:
-                    raise reservation_error from close_error
-                raise
-            # intent 在实际运行之前持久化；任何断点都可由发现入口定位到同一 producer。
-            importer._write(run_root / "dispatch-intent.json", {"schema_version": "claude-upgrade-client-dispatch-intent/v2", "task_sha256": task["task_sha256"], "producer_run_id": task["execution"]["producer_run_id"], "capture_id": task["execution"]["capture_id"], "source_deployments": task["execution"]["source_deployments"]})
+                # 保存原故障，退出项目→Campaign 锁后再收口，避免重复 flock 同一
+                # Campaign。关闭失败不能覆盖最初故障或伪造零请求。
+                reservation_failure = reservation_error
+    if reservation_failure is not None:
+        try:
+            services.close_capture(task)
+        except BaseException as close_error:
+            raise reservation_failure from close_error
+        raise reservation_failure
     if already_imported:
         # 离开锁后进入 import 自己的锁顺序，避免同进程重复获取文件锁。
         result = importer.import_bundle(campaign_dir, attempt_root, task["client_id"], task_path, bundle_root)
@@ -230,6 +249,7 @@ def command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     from tools.official_client_capture import claude_upgrade
     from tools.official_client_capture import claude_upgrade_client_receipts as importer
     from tools.official_client_capture import claude_upgrade_mac_candidate_services
+    from tools.official_client_capture import claude_upgrade_mac_budget as budget
     from tools.official_client_capture import codex_upgrade_project_ledger as ledger
     from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 
@@ -253,24 +273,35 @@ def command(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     c.require(task["execution"]["source_scope"] == "formal", "client-run 只接受正式任务")
     # 缺正式来源时在项目总账和监督服务之前停止；不生成预约或派发意图。
     _adapter(task)
+    run_root = attempt_root / "client-evidence" / task["client_id"] / "runs" / task["task_nonce"]
+    reservation_id = None
+    with importer._client_control_lock(campaign_dir):
+        receipt = budget.read_task_bound_receipt(Path(task["execution"]["project_ledger"]), task)
+        if receipt is None:
+            local = run_root / "budget-reservation.json"
+            c.require(not local.exists() and not local.is_symlink(), "本地预算原件缺真实占用事件，禁止降级")
+        row = budget.verify_bound_receipt(Path(task["execution"]["project_ledger"]), receipt,
+                                         task_sha256=task["task_sha256"]) if receipt is not None else None
+        cleanup = any(path.exists() or path.is_symlink() for path in
+                      (run_root / "run.json", run_root / "dispatch-intent.json")) or _capture_terminal_exists(task) or (row is not None and row["status"] == "settled")
+        if cleanup:
+            admission = budget.accounting_runtime(campaign_dir, task)
+        elif row is not None:
+            reservation_id = budget.reservation_operation_id(task["task_sha256"])
+    if cleanup:
+        # 原截止已到仍可重放精确账务；没有新的 lease、factory 或派发。
+        services = claude_upgrade_mac_candidate_services.CandidateMacClientServices(campaign_dir, admission)
+        result = run_client(task_path, attempt_root, services=services)
+        return result, 0 if result.get("status") == "imported" else 2
     active = claude_upgrade._ACTIVE_CAMPAIGN_LEASE
-    if active is None:
-        from tools.official_client_capture import claude_upgrade_capture
-
-        deadline = claude_upgrade_capture._attempt_deadline(arguments, "candidate")
-        with claude_upgrade.CampaignLease(
-            campaign_dir, phase="candidate", candidate_id=arguments.candidate_id,
-            attempt_id=task["attempt_id"], deadline=deadline,
-            command="capture-candidate", allow_stale_recovery=False, campaign_id=task["campaign_id"],
-        ):
-            return command(arguments)
     c.require(active is not None and active._attached_parent and active._supervisor is not None
               and claude_upgrade._lease_identity_matches(
                   active, campaign_dir, phase="candidate", candidate_id=arguments.candidate_id),
               "client-run 未附着同一候选的原父监督租约")
     active.check("mac-client:entry")
     # 取得原总账准入上下文后释放外层项目锁；run_client 自己按项目→Campaign 取锁。
-    with ledger.runtime_admission_scope(campaign_dir, require=True, command="campaign-run") as admission:
+    with ledger.runtime_admission_scope(campaign_dir, require=True, command="campaign-run",
+                                        reservation_operation_id=reservation_id) as admission:
         c.require(admission is not None, "client-run 缺既有项目总账准入")
         services = claude_upgrade_mac_candidate_services.CandidateMacClientServices(campaign_dir, admission)
     result = run_client(task_path, attempt_root, services=services)
