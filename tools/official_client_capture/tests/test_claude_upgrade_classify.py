@@ -177,6 +177,7 @@ class _ClassifyCase(unittest.TestCase):
         relay_identities: Mapping[str, Mapping[str, Any]] | None = None,
         frozen_files: Mapping[str, bytes] | None = None,
         vc1_sealed: bool = True,
+        configuration: Mapping[str, Any] | None = None,
     ) -> Path:
         """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
         目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。
@@ -192,6 +193,9 @@ class _ClassifyCase(unittest.TestCase):
         （``claude_upgrade_campaign.FROZEN_INPUT_FILES``）写出并绑定摘要。带控制收据的 Campaign 由 plan 或 VC-0 收口建立，
         B2-11（db6a57aab）起建立时一律冻结 Active 输入、不接受命令行回退，这类夹具经这里冻结 ``active_release_catalog``
         与 ``active_profile``；缺省不冻结，不带控制收据的旧形状用例不受影响。
+
+        ``configuration``：调用方可在首次建 Campaign 时冻结额外取证坐标；默认仍用原最小配置，
+        Store 导出的平台与身份条件保持优先，不允许事后补写已有总计划或账本注册绑定。
 
         ``vc1_sealed`` 为假时 VC-1 停在封存之前（VC-1 封存批次的续跑用例用）：Store 对象照常封存，但不写 Discovery／Evidence
         事实、官方阶段结果与 VC-1 checkpoint；缺省封存完成，原有用例不受影响。"""
@@ -230,6 +234,7 @@ class _ClassifyCase(unittest.TestCase):
             "baseline_identity": {}, "tool_identity": self.tool_identity, "control_receipts": dict(control_receipts or {}),
             "inputs": {name: {"path": path.relative_to(campaign).as_posix(), "sha256": claude_upgrade.file_sha256(path)} for name, path in frozen.items()},
             "configuration": {
+                **dict(configuration or {}),
                 "platform": "linux/arm64",
                 **{key: derived[key] for key in ("entrypoint", "privacy_mode", "oauth_org_id", "model_catalog_sha256")},
             },

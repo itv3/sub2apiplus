@@ -608,6 +608,30 @@ class ClaudeVc5DriverChainTests(chain_tests.CompareAcceptChainTests):
     test_failed_external_gate_records_round_without_accept_result = None  # type: ignore[assignment]
     test_zero_seam_compare_freezes_real_profile_and_fails_closed_at_official_source = None  # type: ignore[assignment]
 
+    def build_campaign(self, **kwargs: Any) -> Path:
+        """驱动计划需要真实展开候选 Job，在首次建账前冻结完整的离线取证坐标。"""
+        from tools.official_client_capture.tests import test_claude_upgrade_capture as capture_tests
+        from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as candidate_tests
+
+        target = kwargs.get("target", capture_tests.TARGET)
+        configuration = {
+            "runtime_image": capture_tests.IMAGE,
+            "capture_root": str(self.data),
+            "capture_tool_root": str(REPO_ROOT / "tools" / "official_client_capture"),
+            "capture_container": capture_tests.CAPTURE,
+            "synthetic_capture_container": capture_tests.SYNTHETIC,
+            "claude_bin": f"/opt/claude-{target}/claude",
+            "model": "claude-sonnet-5",
+            "upstream_ip": "160.79.104.10",
+            "credentials_file": "/root/.claude/.credentials.json",
+            "ca_signing_pem": "/opt/mitm/mitmproxy-ca.pem",
+            "ca_cert": "/opt/mitm/mitmproxy-ca-cert.pem",
+            # 容器名与 7／9 标识均沿用离线候选夹具；不读取真实凭据，不发起采集请求。
+            **candidate_tests.CANDIDATE_CONFIGURATION,
+            **dict(kwargs.pop("configuration", None) or {}),
+        }
+        return super().build_campaign(configuration=configuration, **kwargs)
+
     def driver_env(self, world: dict[str, Any], **extra: str) -> dict[str, str]:
         campaign = world["campaign"]
         inputs = self.root / "driver-inputs"
