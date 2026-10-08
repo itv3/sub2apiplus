@@ -191,6 +191,10 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
 
     # -- 世界与派发 -------------------------------------------------------------------------------------------
 
+    def setUp(self) -> None:
+        with vc6_fixture.retain_setup_world():
+            super().setUp()
+
     def vc5_complete_world(self) -> dict[str, Any]:
         world = self.vc5_world()
         campaign = world["campaign"]
@@ -217,14 +221,16 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         campaign = world["campaign"]
         plan = chain._write_json(self.root / "action-plans" / f"vc-6-{sequence:04d}.json", delivery.vc6_action_plan(action))
         environment = vc6_fixture.subprocess_environment(self.root / "inject-vc6", self.control, [str(action["action_id"])])
-        with mock.patch.dict(os.environ, environment):
-            return run_main(
+        with mock.patch.dict(os.environ, environment), \
+                vc6_fixture.action_diagnostics(sequence, action, environment, self.control) as output_path:
+            outcome = run_main(
                 [
                     "compile-and-run-vc-batch", "--campaign-dir", campaign, "--phase", "VC-6", "--sequence", sequence,
                     "--predecessor-checkpoint", claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-5", revision=1),
                     "--action-plan", plan, "--state-dir", self.state_dir,
                 ]
             )
+        return vc6_fixture.diagnostic_outcome(outcome, output_path)
 
     def assert_batch_failed_and_reconcile(self, outcome: tuple[int, dict | None, str], action_id: str) -> None:
         code, result, stderr = outcome

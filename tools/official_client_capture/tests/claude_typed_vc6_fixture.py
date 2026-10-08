@@ -13,6 +13,7 @@ import json
 import multiprocessing
 import os
 import signal
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Iterator
@@ -37,7 +38,133 @@ CONTROL_SCHEMA = "claude-typed-vc6-test-source/v1"
 SEAM_CONTROL_ENV = "CLAUDE_TYPED_VC6_CONTROL"
 SEAM_ACTIONS_ENV = "CLAUDE_TYPED_VC6_ACTIONS"
 SEAM_REPOSITORY_ENV = "CLAUDE_TYPED_VC6_REPOSITORY"
+DIAGNOSTIC_ROOT_ENV = "CLAUDE_TYPED_VC6_DIAGNOSTIC_ROOT"
 _STACKS: list[contextlib.ExitStack] = []
+
+
+def _diagnostic_root() -> Path | None:
+    """显式开关只定位私有测试日志，缺省完全沿用原测试行为。"""
+
+    configured = os.environ.get(DIAGNOSTIC_ROOT_ENV)
+    if not configured:
+        return None
+    root = Path(configured)
+    guard.private_directory(root)
+    return root
+
+
+@contextlib.contextmanager
+def retain_setup_world() -> Iterator[None]:
+    """仅保留 VC-6 setUp 创建的首个世界；其余清理与临时目录原样执行。
+
+    基类先建世界，再创建出口隔离目录。只脱离首个目录的自动删除器，
+    其路径不搬移、不复制。基类已登记的守卫、出口与 registry 清理不变。
+    """
+
+    root = _diagnostic_root()
+    if root is None:
+        yield
+        return
+    create = tempfile.TemporaryDirectory
+    retained: list[Any] = []
+
+    def first_world(*arguments: Any, **options: Any) -> Any:
+        directory = create(*arguments, **options)
+        if not retained:
+            directory._finalizer.detach()
+            directory.cleanup = lambda: None
+            retained.append(directory)
+        return directory
+
+    try:
+        with mock.patch.object(tempfile, "TemporaryDirectory", side_effect=first_world):
+            yield
+    finally:
+        if retained:
+            world = Path(retained[0].name).resolve()
+            guard.write_json_once(root / f"retained-world-{world.name}.json", {
+                "schema_version": "claude-typed-vc6-test-diagnostic-world/v1",
+                "fixture_only": True,
+                "world_path": str(world),
+                "repository": str(REPOSITORY_ROOT),
+                "retained_in_place": True,
+                "guard_and_registry_cleanup": "unchanged",
+            })
+
+
+@contextlib.contextmanager
+def action_diagnostics(
+    sequence: int, action: dict[str, Any], environment: dict[str, str], control_path: Path,
+) -> Iterator[Path | None]:
+    """只为指定 VC-6 动作保留原输出，不改父命令、判据或异常传播。
+
+    仍以 capture_output=False 执行同一 argv，仅把原 DEVNULL 接到 600 文件。
+    每次派发新建目录，完整日志和非密钥接缝绑定只写一次，旧现场不覆盖。
+    """
+
+    root = _diagnostic_root()
+    if root is None:
+        yield None
+        return
+    action_id = str(action["action_id"])
+    if action_id not in {delivery.RUN_ACTION_ID, delivery.FINALIZE_ACTION_ID}:
+        raise ValueError("诊断范围仅限两个 VC-6 交付动作")
+    control = _control(control_path)
+    directory = Path(tempfile.mkdtemp(prefix=f"{sequence:04d}-{action_id}-", dir=root))
+    output_path = directory / "action-output.log"
+    run_command = supervisor.SupervisorClient.run_command
+
+    def record_action(client: Any, argv: Any, **options: Any) -> Any:
+        actual_environment = options.get("env") or {}
+        if (options.get("job_id") != action_id
+                or actual_environment.get(supervisor.CAMPAIGN_RUN_ACTION_ID_ENV) != action_id
+                or options.get("capture_output") is not False
+                or options.get("output_stream") is not None):
+            return run_command(client, argv, **options)
+        guard.write_json_once(directory / "action-inputs.json", {
+            "schema_version": "claude-typed-vc6-test-diagnostic-inputs/v1",
+            "fixture_only": True,
+            "sequence": sequence,
+            "action_id": action_id,
+            "command": list(argv),
+            "capture_output": False,
+            "timeout_seconds": options.get("timeout_seconds"),
+            "cleanup_grace_seconds": options.get("cleanup_grace_seconds", 0),
+            "seam_environment": {key: actual_environment.get(key) for key in environment},
+            "control_path": str(control_path),
+            "configuration_ref": control["context"]["configuration_ref"],
+            "injection_binding": guard.binding(Path(environment["PYTHONPATH"]),
+                                                Path(environment["PYTHONPATH"]) / "usercustomize.py"),
+        })
+        descriptor = os.open(output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            forwarded = dict(options, output_stream=stream)
+            try:
+                return run_command(client, argv, **forwarded)
+            finally:
+                stream.flush()
+                os.fsync(stream.fileno())
+
+    with mock.patch.object(supervisor.SupervisorClient, "run_command", new=record_action):
+        yield output_path
+
+
+def diagnostic_outcome(
+    outcome: tuple[int, dict | None, str], output_path: Path | None,
+) -> tuple[int, dict | None, str]:
+    """失败摘要只追加原件位置与短尾部；结果对象、退出码和完整日志不变。"""
+
+    code, result, stderr = outcome
+    if output_path is None or code == 0:
+        return outcome
+    tail = ""
+    if output_path.exists():
+        with output_path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 2000))
+            tail = stream.read().decode("utf-8", errors="replace")
+    return code, result, stderr + f"\nVC-6 动作原件：{output_path}\n{tail}"
 
 
 def _control(path: Path) -> dict[str, Any]:
