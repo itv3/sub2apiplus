@@ -682,10 +682,11 @@ class ClaudeVc5DriverChainTests(chain_tests.CompareAcceptChainTests):
         self.assert_batch_passed(self.dispatch_plan(world, 10, assert_path), 10, "VC-5")
         # 外部门禁 subject：驱动生成的与 accept 期望的逐字相同；build_gate_facts --subject 照它写 facts。
         module = load_vc5()
-        with mock.patch.dict(os.environ, self.driver_env(world)):
+        # 两条真实身份读取路径共用显式离线来源作用域；环境变量本身不会登记来源适配器。
+        with chain.seams(world["config_path"]), mock.patch.dict(os.environ, self.driver_env(world)):
             subject = module.gate_subject()
-        identity = compare.candidate_gate_identity(campaign, world["manifest"], chain_tests.CANDIDATE, world["build"])
-        expected = chain.expected_subject(world["manifest"], world["candidate_payload"], identity)
+            identity = compare.candidate_gate_identity(campaign, world["manifest"], chain_tests.CANDIDATE, world["build"])
+            expected = chain.expected_subject(world["manifest"], world["candidate_payload"], identity)
         self.assertEqual(subject, {**expected, "production_tree_sha256": None, "acceptance_sha256": None, "promotion_receipt_sha256": None})
         receipt = self.gate_receipt(world, "candidate-gates.receipt.json")
         # accept（驱动计划）：VC-5 checkpoint 写出，计时账本 VC-5 完成，阶段解析给出 VC-5 完成。

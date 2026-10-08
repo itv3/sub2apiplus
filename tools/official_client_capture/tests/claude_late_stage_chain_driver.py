@@ -80,9 +80,10 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
              '--external-gate-receipt', receipt], item_ids=['acceptance'])
 
     def gate_receipt(self, world: dict[str, Any], name: str, *, failed_gate: str | None = None) -> str:
-        identity = compare.candidate_gate_identity(world['campaign'], world['manifest'], world.get('candidate_id', CANDIDATE), world['build'])
-        subject = chain.expected_subject(world['manifest'], world['candidate_payload'], identity)
+        # 连续链在父进程重验来源时也沿用同一测试作用域，不能跳过正式客户端读侧。
         with chain.seams(world['config_path']):
+            identity = compare.candidate_gate_identity(world['campaign'], world['manifest'], world.get('candidate_id', CANDIDATE), world['build'])
+            subject = chain.expected_subject(world['manifest'], world['candidate_payload'], identity)
             return chain.gate_receipt_file(world['gate_root'], name=name, subject=subject,
                 host=delivery_tests.compare_tests.HOST, architecture=world['architecture'], failed_gate=failed_gate)
 
