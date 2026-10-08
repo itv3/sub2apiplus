@@ -1106,3 +1106,25 @@ def action_plan(
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(f"动作计划不合法：{error}") from error
     return payload
+
+
+def mac_client_run_action(campaign_dir: Path, task_path: Path) -> dict[str, Any]:
+    """以冻结任务生成 VC-5 的真实请求动作；不登记为零请求后处理或离线导入。"""
+    from tools.official_client_capture import claude_client_receipt_contract as contract
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    manifest = _orchestrator()._require_formal_campaign(campaign_dir)
+    task = contract.validate_task(contract.read_json(Path(task_path)))
+    attempt_root = campaign_dir / "candidates" / task["candidate_id"] / "attempts" / task["attempt_id"]
+    task_path = contract.bound_file(attempt_root, contract.binding(Path(task_path), attempt_root))
+    contract.verify_task_attempt(attempt_root, task)
+    contract.require(task["campaign_id"] == manifest["campaign_id"]
+                     and task["execution"]["source_scope"] == "formal", "Mac 动作不属于本 Formal Campaign")
+    action_id = "vc5-client-run-" + task["client_id"]
+    return managed_action(
+        action_id, "VC-5:" + action_id,
+        ["capture-candidate", "client-run", "--campaign-dir", campaign_dir,
+         "--candidate-id", task["candidate_id"], "--attempt-id", task["attempt_id"],
+         "--client", task["client_id"], "--client-task", task_path, "--acknowledge-live-requests"],
+        item_ids=[task["client_id"]], timeout_seconds=task["execution"]["timeout_seconds"],
+    )

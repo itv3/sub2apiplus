@@ -15,8 +15,9 @@ from typing import Any, Mapping
 from tools.official_client_capture import claude_client_receipt_contract as contract
 from tools.official_client_capture.capturelib.model import ConfigurationError
 
-PLAN_SCHEMA = "claude-upgrade-client-plan/v1"
-RUN_SCHEMA = "claude-upgrade-client-imported-run/v1"
+PLAN_SCHEMA = "claude-upgrade-client-plan/v2"
+RUN_SCHEMA = "claude-upgrade-client-imported-run/v2"
+HISTORICAL_RUN_SCHEMA = "claude-upgrade-client-imported-run/v1"
 
 
 def _upgrade() -> Any:
@@ -68,7 +69,8 @@ def _client_control_lock(campaign_dir: Path) -> Any:
 def _require_unique_task_producer(campaign_dir: Path, task: Mapping[str, Any]) -> None:
     """同一 producer、捕获根与捕获 ID 不得重新分配给另一个任务。"""
     for path in campaign_dir.glob("candidates/*/attempts/*/client-evidence/*/tasks/*/task.json"):
-        previous = contract.validate_task(contract.read_json(path))
+        raw = contract.read_json(path)
+        previous = contract._validate_task_v1(raw) if raw.get("schema_version") == contract.HISTORICAL_TASK_SCHEMA else contract.validate_task(raw)
         if previous["task_sha256"] == task["task_sha256"]:
             continue
         contract.require(all(previous["execution"][key] != task["execution"][key] for key in ("producer_run_id", "capture_id", "capture_root")), "不同客户端任务重复分配 producer 或独立捕获坐标")
@@ -183,9 +185,12 @@ def verify_import_inputs(attempt_root: Path, client_id: str, task_path: Path, bu
     contract.require(task["client_id"] == client_id, "任务客户端不符")
     contract.bound_file(attempt_root, contract.binding(task_path, attempt_root))
     contract.verify_task_attempt(attempt_root, task)
-    verified = contract.verify_client_bundle(task, bundle_root, Path(task["execution"]["capture_root"]))
     if task["execution"]["source_scope"] == "formal":
-        contract.verify_origin(task, bundle_root, Path(task["execution"]["capture_root"]))
+        from tools.official_client_capture import claude_upgrade_mac_client_capture
+        claude_upgrade_mac_client_capture.require_registered_reservation(attempt_root, task)
+        verified = _upgrade().verify_mac_source_v2(task, bundle_root, Path(task["execution"]["capture_root"]))
+    else:
+        verified = contract.verify_client_bundle(task, bundle_root, Path(task["execution"]["capture_root"]))
     return task, verified
 
 
@@ -210,19 +215,47 @@ def import_bundle(campaign_dir: Path, attempt_root: Path, client_id: str, task_p
         _write_bytes(target_bundle / "source-manifest.json", (bundle_root / "source-manifest.json").read_bytes())
         # 拷贝后再次验证；原件在拷贝期间变化不能发布半真半假的来源清单。
         _, verified = verify_import_inputs(attempt_root, client_id, task_path, target_bundle)
-        run = {"schema_version": RUN_SCHEMA, "client_id": client_id, "task": contract.binding(task_path, attempt_root), "source_manifest": contract.binding(target_bundle / "source-manifest.json", attempt_root), "source_scope": task["execution"]["source_scope"], "producer_run_id": task["execution"]["producer_run_id"]}
+        run = {"schema_version": RUN_SCHEMA, "client_id": client_id, "task": contract.binding(task_path, attempt_root), "source_manifest": contract.binding(target_bundle / "source-manifest.json", attempt_root), "source_scope": task["execution"]["source_scope"], "producer_run_id": task["execution"]["producer_run_id"], "reservation": contract.binding(Path(task["execution"]["capture_root"]) / "reservation.json", Path(task["execution"]["capture_root"]))}
         _write(run_root / "run.json", run)
         _write(run_root / "verdict.json", verified)
         if task["execution"]["source_scope"] == "regression_fixture":
             return {"status": "regression_fixture_imported", "run": str(run_root), "live_request_count": 0, "recorded_request_count": len(verified["requests"]), "formal_reference_authorized": False}
         accounting = _account_run(campaign_dir, run_root, task, verified)
+        failure_path = run_root / "client-run-failure.json"
+        if failure_path.exists() or failure_path.is_symlink():
+            # 可重复导入失败材料用于精确入账；原执行失败永不因完整的上传包取得成功权。
+            failure = contract.read_json(contract.secure_file(run_root, "client-run-failure.json"))
+            contract.require(set(failure) == {"schema_version", "task_sha256", "producer_run_id", "error_type"}
+                             and failure["schema_version"] == "claude-upgrade-client-run-failure/v2"
+                             and failure["task_sha256"] == task["task_sha256"]
+                             and failure["producer_run_id"] == task["execution"]["producer_run_id"],
+                             "原客户端执行失败记录与任务不符")
+            return {"status": "client_run_failed", "run": str(run_root), "accounting": accounting, "live_request_count": 0}
         if verified["status"] != "verified" or accounting["status"] != "accounted":
             return {"status": "accounting_unresolved" if accounting["status"] != "accounted" else "client_run_failed", "run": str(run_root), "accounting": accounting, "live_request_count": 0}
-        receipt = {"schema_version": contract.RECEIPT_SCHEMA, "client_id": client_id, **{k: task[k] for k in contract.COORDINATES}, "status": "success", "task": contract.binding(task_path, attempt_root), "bundle": contract.binding(target_bundle / "source-manifest.json", attempt_root), "verification": verified, "accounting_binding": contract.binding(run_root / "accounting.json", attempt_root), "issued_at_utc": task["issued_at_utc"], "conclusion_scope": "formal"}
+        receipt = {"schema_version": contract.RECEIPT_SCHEMA, "client_id": client_id, **{k: task[k] for k in contract.COORDINATES}, "status": "success", "task": contract.binding(task_path, attempt_root), "bundle": contract.binding(target_bundle / "source-manifest.json", attempt_root), "imported_run": contract.binding(run_root / "run.json", attempt_root), "verification": verified, "accounting_binding": contract.binding(run_root / "accounting.json", attempt_root), "issued_at_utc": task["issued_at_utc"], "conclusion_scope": "formal"}
         target = attempt_root / "client-evidence" / f"{client_id}.json"
         _write(target, receipt)
         contract.verify_client_receipt(attempt_root, client_id, target)
         return {"status": "imported", "receipt": str(target), "accounting": accounting, "live_request_count": 0}
+
+
+def _verify_historical_accounting_run(attempt_root: Path, run_path: Path, run: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """只供受管历史 run 发现重放账务，绝不返回当前客户端成功收据或降级开关。"""
+    fields = {"schema_version", "client_id", "task", "source_manifest", "source_scope", "producer_run_id"}
+    contract.require(set(run) == fields and run["schema_version"] == HISTORICAL_RUN_SCHEMA, "历史导入运行合同不完整")
+    task_path = contract.bound_file(attempt_root, run["task"])
+    task = contract._validate_task_v1(contract.read_json(task_path))
+    root = attempt_root / "client-evidence" / task["client_id"]
+    contract.require(task_path == root / "tasks" / task["task_nonce"] / "task.json" and run_path == root / "runs" / task["task_nonce"] / "run.json", "历史发现只能沿受管原 task/producer 位置")
+    contract.require(run["client_id"] == task["client_id"] and run["source_scope"] == task["execution"]["source_scope"] and run["producer_run_id"] == task["execution"]["producer_run_id"], "历史导入运行身份不符")
+    bundle_manifest = contract.bound_file(attempt_root, run["source_manifest"])
+    contract.require(bundle_manifest == run_path.parent / "source" / "source-manifest.json", "历史来源不在原运行位置")
+    contract.verify_task_attempt(attempt_root, task)
+    verified = contract._verify_client_bundle_v1(task, bundle_manifest.parent, Path(task["execution"]["capture_root"]))
+    if task["execution"]["source_scope"] == "formal":
+        contract.verify_origin(task, bundle_manifest.parent, Path(task["execution"]["capture_root"]))
+    return task, verified
 
 
 def collect_campaign_runs(campaign_dir: Path) -> list[dict[str, Any]]:
@@ -236,10 +269,15 @@ def collect_campaign_runs(campaign_dir: Path) -> list[dict[str, Any]]:
         record: dict[str, Any] = {"job_id": job_id, "phase": "candidate", "roots": [], "precise_count": 0, "estimated_count": 0, "auxiliary_count": 0, "requests": [], "auxiliary_requests": []}
         try:
             run = contract.read_json(contract.secure_file(attempt_root, path.relative_to(attempt_root).as_posix()))
-            contract.require(run.get("schema_version") == RUN_SCHEMA, "导入运行清单 schema 非法")
+            contract.require(run.get("schema_version") in {RUN_SCHEMA, HISTORICAL_RUN_SCHEMA}, "导入运行清单 schema 非法")
             task_path = contract.bound_file(attempt_root, run["task"])
             bundle = contract.bound_file(attempt_root, run["source_manifest"]).parent
-            task, verified = verify_import_inputs(attempt_root, str(run["client_id"]), task_path, bundle)
+            if run["schema_version"] == HISTORICAL_RUN_SCHEMA:
+                task, verified = _verify_historical_accounting_run(attempt_root, path, run)
+                record["conclusion_scope"] = "historical_accounting_only"
+            else:
+                task, verified = verify_import_inputs(attempt_root, str(run["client_id"]), task_path, bundle)
+                contract.verify_imported_run(attempt_root, str(run["client_id"]), path, task, bundle / "source-manifest.json")
             _require_unique_task_producer(Path(campaign_dir), task)
             contract.require(task["campaign_id"] == campaign_id, "客户端来源不是本 Campaign")
             contract.require(run["source_scope"] == task["execution"]["source_scope"] and run["producer_run_id"] == task["execution"]["producer_run_id"], "运行清单身份不符")
@@ -250,20 +288,8 @@ def collect_campaign_runs(campaign_dir: Path) -> list[dict[str, Any]]:
         except (ConfigurationError, ValueError, KeyError, OSError, TypeError) as error:
             record.update(status="unresolved", reason=str(error))
         results.append(record)
-    # 已冻结任务对应的 server 预约/捕获存在，Mac 包还没有完整导入：不能静默当作零请求。
-    # 来源原件没有闭合时只记账务未决；后继 recorder 的请求前预约仍须先过预算准入。
-    for path in sorted(Path(campaign_dir).glob("candidates/*/attempts/*/client-evidence/*/tasks/*/task.json")):
-        try:
-            task = contract.validate_task(contract.read_json(path))
-            if task["execution"]["source_scope"] == "regression_fixture" or task["task_sha256"] in imported_tasks:
-                continue
-            capture = Path(task["execution"]["capture_root"])
-            if not capture.exists() and not capture.is_symlink():
-                continue
-            reason = "独立客户端捕获已预约或有原件，但完整来源包尚未导入"
-        except (ConfigurationError, ValueError, OSError, KeyError, TypeError) as error:
-            reason = str(error)
-        results.append({"job_id": "mac-unimported-" + contract.digest(str(path.relative_to(campaign_dir)))[:24], "phase": "candidate", "roots": [], "status": "unresolved", "reason": reason, "precise_count": 0, "estimated_count": 0, "auxiliary_count": 0, "requests": [], "auxiliary_requests": []})
+    from tools.official_client_capture import claude_upgrade_mac_client_capture
+    results.extend(claude_upgrade_mac_client_capture.discover_reservations(Path(campaign_dir), imported_task_shas=imported_tasks))
     return results
 
 

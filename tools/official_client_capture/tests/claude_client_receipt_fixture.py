@@ -93,7 +93,8 @@ class FixtureSourceAdapter:
 
 
 def source_patch() -> Any:
-    return mock.patch.dict(contract.SOURCE_ADAPTERS, {RECORDER: FixtureSourceAdapter()})
+    from tools.official_client_capture.tests.claude_mac_v2_fixture import FixturePatch
+    return FixturePatch()
 
 
 @contextlib.contextmanager
@@ -158,7 +159,7 @@ def candidate_inputs(attempt_root: Path, values: Mapping[str, Any], client_id: s
     return contract.candidate_context(attempt_root, entry["client_id"])
 
 
-def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, scope: str = "formal", status: str = "complete", nonce: str | None = None, scenarios: list[dict[str, Any]] | None = None, scenario_reuse: list[dict[str, Any]] | None = None, issued_at_utc: str = NOW) -> tuple[Path, Path, Path]:
+def material_v1(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, scope: str = "formal", status: str = "complete", nonce: str | None = None, scenarios: list[dict[str, Any]] | None = None, scenario_reuse: list[dict[str, Any]] | None = None, issued_at_utc: str = NOW) -> tuple[Path, Path, Path]:
     """生成独立 Mac 包与 server 原件；故意不把服务端原件放进 Mac 上传包。"""
     nonce = nonce or f"{client_id}-task-{contract.digest(dict(values))[:12]}"
     current = candidate_inputs(attempt_root, values, client_id)
@@ -175,7 +176,7 @@ def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, s
     artifacts = [{"role": "application", "version": "fixture-app-1", "platform": "darwin/arm64", "sha256": "1" * 64}, {"role": "embedded_cli", "version": current["catalog"]["entry"]["version"], "platform": "darwin/arm64", "sha256": current["catalog"]["entry"]["binary_sha256"]}]
     if client_id == "claude-vscode":
         artifacts.append({"role": "extension", "version": "fixture-extension-1", "platform": "darwin/arm64", "sha256": "3" * 64})
-    task = {"schema_version": contract.TASK_SCHEMA, "client_id": client_id, **dict(values), "candidate_revision": 1, "candidate": {key: "a" * 64 for key in ("source_tree_sha256", "build_receipt_sha256", "image_digest", "profile_digest", "gateway_sha256")}, "catalog": {"sha256": "b" * 64, "entry": {"client_id": f"{client_id}-fixture", "product": "claude-desktop" if client_id == "claude-desktop" else "claude-code-vscode", "version": "fixture-cli-1", "platform": "darwin/arm64", "binary_sha256": "2" * 64}}, "client_artifacts": artifacts, "scenarios": [{"id": "client-smoke", "model": "fixture-model", "challenge": "fixture-unique-challenge-1234", "response_marker": "fixture-response", "minimum_requests": 1}], "execution": {"endpoint": "http://candidate.invalid:8080", "credential_ref": "private-ref:fixture", "timeout_seconds": 300, "request_budget": 10, "recorder_id": RECORDER, "capture_id": nonce, "producer_run_id": f"producer-{nonce}", "source_scope": scope, "capture_root": str(capture_root)}, "issued_at_utc": NOW, "task_nonce": nonce}
+    task = {"schema_version": contract.HISTORICAL_TASK_SCHEMA, "client_id": client_id, **dict(values), "candidate_revision": 1, "candidate": {key: "a" * 64 for key in ("source_tree_sha256", "build_receipt_sha256", "image_digest", "profile_digest", "gateway_sha256")}, "catalog": {"sha256": "b" * 64, "entry": {"client_id": f"{client_id}-fixture", "product": "claude-desktop" if client_id == "claude-desktop" else "claude-code-vscode", "version": "fixture-cli-1", "platform": "darwin/arm64", "binary_sha256": "2" * 64}}, "client_artifacts": artifacts, "scenarios": [{"id": "client-smoke", "model": "fixture-model", "challenge": "fixture-unique-challenge-1234", "response_marker": "fixture-response", "minimum_requests": 1}], "execution": {"endpoint": "http://candidate.invalid:8080", "credential_ref": "private-ref:fixture", "timeout_seconds": 300, "request_budget": 10, "recorder_id": RECORDER, "capture_id": nonce, "producer_run_id": f"producer-{nonce}", "source_scope": scope, "capture_root": str(capture_root)}, "issued_at_utc": NOW, "task_nonce": nonce}
     task.update({key: current[key] for key in ("candidate", "candidate_revision", "catalog")})
     task["execution"]["endpoint"] = current["endpoint"]
     task["execution"]["project_ledger"] = str(fixture_ledger(attempt_root))
@@ -195,8 +196,8 @@ def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, s
     events_path.write_bytes(b"".join(contract.canonical(event) + b"\n" for event in events))
     events_path.chmod(0o600)
     write(bundle_root / "recorder-execution.json", {"recorder_id": RECORDER, "task_sha256": task["task_sha256"], "run_id": nonce, "status": status})
-    files = [contract.binding(path, bundle_root) for path in sorted(bundle_root.iterdir()) if path.name != "source-manifest.json"]
-    write(bundle_root / "source-manifest.json", {"schema_version": contract.BUNDLE_SCHEMA, "task_sha256": task["task_sha256"], "run_id": nonce, "source_scope": scope, "status": status, "files": files})
+    files = [contract.binding(path, bundle_root) for path in sorted(bundle_root.rglob("*")) if path.is_file() and path.name != "source-manifest.json"]
+    write(bundle_root / "source-manifest.json", {"schema_version": contract.HISTORICAL_BUNDLE_SCHEMA, "task_sha256": task["task_sha256"], "run_id": nonce, "source_scope": scope, "status": status, "files": files})
     reservation = write(capture_root / "reservation.json", {"task_sha256": task["task_sha256"], "candidate": task["candidate"], "capture_id": nonce, "producer_run_id": f"producer-{nonce}", "reserved_at_utc": issued_at_utc})
     rows = []
     for index, scenario in enumerate(executing, start=1):
@@ -205,16 +206,16 @@ def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, s
     requests = capture_root / "requests.jsonl"
     requests.write_bytes(b"".join(contract.canonical(row) + b"\n" for row in rows))
     requests.chmod(0o600)
-    write(capture_root / "capture-manifest.json", {"schema_version": contract.CAPTURE_SCHEMA, "task_sha256": task["task_sha256"], "capture_id": nonce, "producer_run_id": f"producer-{nonce}", "candidate": task["candidate"], "endpoint": task["execution"]["endpoint"], "status": status, "requests": contract.binding(requests, capture_root), "reservation": contract.binding(reservation, capture_root)})
+    write(capture_root / "capture-manifest.json", {"schema_version": contract.HISTORICAL_CAPTURE_SCHEMA, "task_sha256": task["task_sha256"], "capture_id": nonce, "producer_run_id": f"producer-{nonce}", "candidate": task["candidate"], "endpoint": task["execution"]["endpoint"], "status": status, "requests": contract.binding(requests, capture_root), "reservation": contract.binding(reservation, capture_root)})
     fixture_ledger(attempt_root)
     return task_path, bundle_root, capture_root
 
 
-def write_receipt(attempt_root: Path, client_id: str, values: Mapping[str, Any]) -> Path:
+def write_receipt_v1(attempt_root: Path, client_id: str, values: Mapping[str, Any]) -> Path:
     """为既有 seal/accept 世界迁移完整输入夹具；真实读侧仍重放全部附件及账本事件。"""
-    task_path, bundle, capture = material(attempt_root, client_id, values)
+    task_path, bundle, capture = material_v1(attempt_root, client_id, values)
     task = contract.read_json(task_path)
-    verified = contract.verify_client_bundle(task, bundle, capture)
+    verified = contract._verify_client_bundle_v1(task, bundle, capture)
     write(bundle.parent / "run.json", {"schema_version": "claude-upgrade-client-imported-run/v1", "client_id": client_id, "task": contract.binding(task_path, attempt_root), "source_manifest": contract.binding(bundle / "source-manifest.json", attempt_root), "source_scope": "formal", "producer_run_id": task["execution"]["producer_run_id"]})
     root = fixture_ledger(attempt_root)
     keys = sorted(row["identity_key"] for row in verified["requests"])
@@ -223,4 +224,15 @@ def write_receipt(attempt_root: Path, client_id: str, values: Mapping[str, Any])
     batch_sha = contract.digest(payload)
     ledger.append_project_event(root, operation_id=operation, event_type="reconciliation_committed", payload=payload, source_batch_sha256=batch_sha)
     accounting = write(bundle.parent / "accounting.json", {"schema_version": "claude-upgrade-client-accounting/v1", "status": "accounted", "task_sha256": task["task_sha256"], "identity_keys_sha256": contract.digest(keys), "operation_id": operation, "batch_sha256": batch_sha, "project_ledger": str(root)})
-    return write(attempt_root / "client-evidence" / f"{client_id}.json", {"schema_version": contract.RECEIPT_SCHEMA, "client_id": client_id, **dict(values), "status": "success", "task": contract.binding(task_path, attempt_root), "bundle": contract.binding(bundle / "source-manifest.json", attempt_root), "verification": verified, "accounting_binding": contract.binding(accounting, attempt_root), "issued_at_utc": NOW, "conclusion_scope": "formal"})
+    return write(attempt_root / "client-evidence" / f"{client_id}.json", {"schema_version": contract.HISTORICAL_RECEIPT_SCHEMA, "client_id": client_id, **dict(values), "status": "success", "task": contract.binding(task_path, attempt_root), "bundle": contract.binding(bundle / "source-manifest.json", attempt_root), "verification": verified, "accounting_binding": contract.binding(accounting, attempt_root), "issued_at_utc": NOW, "conclusion_scope": "formal"})
+
+
+def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], **kwargs: Any) -> tuple[Path, Path, Path]:
+    """当前消费测试生成完整 v2；形成期夹具由 material_v1 显式生成。"""
+    from tools.official_client_capture.tests import claude_mac_v2_fixture
+    return claude_mac_v2_fixture.material(attempt_root, client_id, values, **kwargs)
+
+
+def write_receipt(attempt_root: Path, client_id: str, values: Mapping[str, Any]) -> Path:
+    from tools.official_client_capture.tests import claude_mac_v2_fixture
+    return claude_mac_v2_fixture.write_receipt(attempt_root, client_id, values)

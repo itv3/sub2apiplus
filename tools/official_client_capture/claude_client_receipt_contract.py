@@ -18,10 +18,14 @@ from typing import Any, Mapping
 
 from tools.official_client_capture.capturelib.model import ConfigurationError
 
-TASK_SCHEMA = "claude-upgrade-client-task/v1"
-BUNDLE_SCHEMA = "claude-upgrade-client-source-manifest/v1"
-CAPTURE_SCHEMA = "claude-upgrade-client-server-capture/v1"
-RECEIPT_SCHEMA = "claude-upgrade-client-receipt/v1"
+TASK_SCHEMA = "claude-upgrade-client-task/v2"
+HISTORICAL_TASK_SCHEMA = "claude-upgrade-client-task/v1"
+BUNDLE_SCHEMA = "claude-upgrade-client-source-manifest/v2"
+HISTORICAL_BUNDLE_SCHEMA = "claude-upgrade-client-source-manifest/v1"
+CAPTURE_SCHEMA = "claude-upgrade-client-server-capture/v2"
+HISTORICAL_CAPTURE_SCHEMA = "claude-upgrade-client-server-capture/v1"
+RECEIPT_SCHEMA = "claude-upgrade-client-receipt/v2"
+HISTORICAL_RECEIPT_SCHEMA = "claude-upgrade-client-receipt/v1"
 CLIENTS = ("claude-desktop", "claude-vscode")
 SOURCE_KIND = "claude_mac_candidate"
 MODEL_ENDPOINTS = frozenset({"/v1/messages", "/v1/messages/count_tokens", "/v1/messages/batches"})
@@ -146,10 +150,10 @@ def verify_task_attempt(attempt_root: Path, task: Mapping[str, Any]) -> None:
         require(ledger.find_project_ledger(campaign, client="claude") == Path(task["execution"]["project_ledger"]), "任务项目总账不是本 Campaign 的总账")
 
 
-def validate_task(document: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_task_v1(document: Mapping[str, Any]) -> dict[str, Any]:
     """校验冻结任务的闭集、独立客户端版本及场景挑战。"""
     task = dict(document)
-    require(set(task) == TASK_FIELDS and task.get("schema_version") == TASK_SCHEMA, "任务 schema 或字段闭集非法")
+    require(set(task) == TASK_FIELDS and task.get("schema_version") == HISTORICAL_TASK_SCHEMA, "任务 schema 或字段闭集非法")
     require(task["client_id"] in CLIENTS, "客户端不受支持")
     for field in (*COORDINATES, "task_nonce"):
         require(isinstance(task[field], str) and ID_RE.fullmatch(task[field]), f"任务 {field} 非法")
@@ -216,15 +220,15 @@ def _inventory(root: Path, manifest: Mapping[str, Any]) -> dict[str, Path]:
     return found
 
 
-def verify_client_bundle(task: Mapping[str, Any], bundle_root: Path, candidate_evidence_root: Path, *, _depth: int = 0) -> dict[str, Any]:
+def _verify_client_bundle_v1(task: Mapping[str, Any], bundle_root: Path, candidate_evidence_root: Path, *, _depth: int = 0) -> dict[str, Any]:
     """逐文件、产品参与、独立捕获及场景关联全部重算；失败运行仍返回精确请求或账务未决。"""
-    task = validate_task(task)
+    task = _validate_task_v1(task)
     require(_depth < 32, "客户端场景承接链过深或存在循环")
     root, capture_root = Path(bundle_root), Path(candidate_evidence_root)
     require(capture_root == Path(task["execution"]["capture_root"]), "服务端原件必须来自任务预约的独立捕获根")
     require(not capture_root.is_relative_to(root), "服务端原件不能来自 Mac 上传包")
     source = read_json(secure_file(root, "source-manifest.json"))
-    require(set(source) == {"schema_version", "task_sha256", "run_id", "source_scope", "status", "files"} and source["schema_version"] == BUNDLE_SCHEMA, "来源清单 schema 非法")
+    require(set(source) == {"schema_version", "task_sha256", "run_id", "source_scope", "status", "files"} and source["schema_version"] == HISTORICAL_BUNDLE_SCHEMA, "来源清单 schema 非法")
     require(source["task_sha256"] == task["task_sha256"] and source["source_scope"] == task["execution"]["source_scope"], "来源清单不是本任务或用途不同")
     require(ID_RE.fullmatch(str(source["run_id"])) and source["status"] in {"complete", "failed", "truncated"}, "来源运行身份或状态非法")
     files = _inventory(root, source)
@@ -252,7 +256,7 @@ def verify_client_bundle(task: Mapping[str, Any], bundle_root: Path, candidate_e
     recorder = read_json(files["recorder-execution.json"])
     require(recorder == {"recorder_id": task["execution"]["recorder_id"], "task_sha256": task["task_sha256"], "run_id": source["run_id"], "status": source["status"]}, "记录器执行记录不闭合")
     capture = read_json(secure_file(capture_root, "capture-manifest.json"))
-    require(set(capture) == {"schema_version", "task_sha256", "capture_id", "producer_run_id", "candidate", "endpoint", "status", "requests", "reservation"} and capture["schema_version"] == CAPTURE_SCHEMA, "独立捕获清单 schema 非法")
+    require(set(capture) == {"schema_version", "task_sha256", "capture_id", "producer_run_id", "candidate", "endpoint", "status", "requests", "reservation"} and capture["schema_version"] == HISTORICAL_CAPTURE_SCHEMA, "独立捕获清单 schema 非法")
     for key in ("capture_id", "producer_run_id", "endpoint"):
         require(capture[key] == task["execution"][key], f"独立捕获 {key} 不符")
     require(capture["task_sha256"] == task["task_sha256"] and capture["candidate"] == task["candidate"], "独立捕获未绑定本轮任务与候选")
@@ -295,14 +299,14 @@ def verify_client_bundle(task: Mapping[str, Any], bundle_root: Path, candidate_e
     for reuse in task["scenario_reuse"]:
         require(isinstance(reuse, dict) and set(reuse) == {"root", "task", "source_manifest", "scenario_ids"}, "场景复用绑定字段不完整")
         previous_root = Path(str(reuse["root"]))
-        previous_task = validate_task(read_json(bound_file(previous_root, reuse["task"])))
+        previous_task = _validate_task_v1(read_json(bound_file(previous_root, reuse["task"])))
         verify_task_attempt(previous_root, previous_task)
         previous_bundle = bound_file(previous_root, reuse["source_manifest"]).parent
         require(timestamp(previous_task["issued_at_utc"]) < timestamp(task["issued_at_utc"]), "场景复用必须指向更早冻结的任务")
         for key in (*COORDINATES, "client_id", "candidate", "catalog", "client_artifacts", "candidate_revision"):
             require(previous_task[key] == task[key], f"场景复用 {key} 已变化，必须重新取证")
         require(previous_task["execution"]["source_scope"] == task["execution"]["source_scope"], "夹具不能承接为正式来源")
-        previous = verify_client_bundle(previous_task, previous_bundle, Path(previous_task["execution"]["capture_root"]), _depth=_depth + 1)
+        previous = _verify_client_bundle_v1(previous_task, previous_bundle, Path(previous_task["execution"]["capture_root"]), _depth=_depth + 1)
         if previous_task["execution"]["source_scope"] == "formal":
             verify_origin(previous_task, previous_bundle, Path(previous_task["execution"]["capture_root"]))
             from tools.official_client_capture import claude_upgrade_client_receipts
@@ -341,22 +345,22 @@ def verify_origin(task: Mapping[str, Any], bundle_root: Path, capture_root: Path
     adapter.verify_origin(task, Path(bundle_root), Path(capture_root))
 
 
-def verify_client_receipt(attempt_root: Path, client_id: str, path: Path) -> dict[str, Any]:
+def _verify_client_receipt_v1(attempt_root: Path, client_id: str, path: Path) -> dict[str, Any]:
     """seal、封存读侧、accept 与驱动共用；旧六字段成功收据明确拒绝。"""
     root = Path(attempt_root)
     require(client_id in CLIENTS, "客户端不受支持")
     path = secure_file(root, Path(path).relative_to(root).as_posix())
     receipt = read_json(path)
     fields = {"schema_version", "client_id", *COORDINATES, "status", "task", "bundle", "verification", "accounting_binding", "issued_at_utc", "conclusion_scope"}
-    require(set(receipt) == fields and receipt["schema_version"] == RECEIPT_SCHEMA, "拒绝占位成功：客户端收据缺少正式 schema 或附件合同")
+    require(set(receipt) == fields and receipt["schema_version"] == HISTORICAL_RECEIPT_SCHEMA, "拒绝占位成功：客户端收据缺少正式 schema 或附件合同")
     require(receipt["client_id"] == client_id and receipt["status"] == "success" and receipt["conclusion_scope"] == "formal", "客户端收据不是正式成功结论")
-    task = validate_task(read_json(bound_file(root, receipt["task"])))
+    task = _validate_task_v1(read_json(bound_file(root, receipt["task"])))
     require(all(receipt[key] == task[key] for key in (*COORDINATES, "client_id")), "收据与任务身份不符")
     verify_task_attempt(root, task)
     bundle_manifest = bound_file(root, receipt["bundle"])
     bundle_root = bundle_manifest.parent
     require(bundle_manifest.name == "source-manifest.json", "来源清单文件名不符")
-    verified = verify_client_bundle(task, bundle_root, Path(task["execution"]["capture_root"]))
+    verified = _verify_client_bundle_v1(task, bundle_root, Path(task["execution"]["capture_root"]))
     require(task["execution"]["source_scope"] == "formal" and verified["status"] == "verified", "历史夹具或失败运行不能成为正式成功")
     verify_origin(task, bundle_root, Path(task["execution"]["capture_root"]))
     require(receipt["verification"] == verified, "收据验证结论与附件重放不符")
@@ -365,5 +369,62 @@ def verify_client_receipt(attempt_root: Path, client_id: str, path: Path) -> dic
     require(accounting.get("task_sha256") == task["task_sha256"] and accounting.get("identity_keys_sha256") == digest(keys) and accounting.get("status") == "accounted", "客户端请求尚未完成既有项目账务入账")
     from tools.official_client_capture import claude_upgrade_client_receipts
 
+    claude_upgrade_client_receipts.verify_accounting(accounting, task, keys)
+    return verified
+
+
+def validate_task(document: Mapping[str, Any]) -> dict[str, Any]:
+    """所有新冻结／导入／当前消费只接受 v2；旧分支不由任意开关派发。"""
+    from tools.official_client_capture import claude_mac_client_source
+    return claude_mac_client_source.validate_task_v2(document)
+
+
+def verify_client_bundle(task: Mapping[str, Any], bundle_root: Path, candidate_evidence_root: Path, *, _depth: int = 0) -> dict[str, Any]:
+    """当前结构合同入口不接受 v1 或混搭；完整来源权另由受管 wrapper 验证。"""
+    from tools.official_client_capture import claude_mac_client_source
+    return claude_mac_client_source.verify_client_bundle_v2(task, bundle_root, candidate_evidence_root, depth=_depth)
+
+
+def verify_imported_run(attempt_root: Path, client_id: str, run_path: Path, task: Mapping[str, Any], bundle_manifest: Path) -> dict[str, Any]:
+    """当前成功收据必须引用真实 v2 导入运行；不能只补一个顶层 schema。"""
+    run = read_json(secure_file(attempt_root, run_path.relative_to(attempt_root).as_posix()))
+    fields = {"schema_version", "client_id", "task", "source_manifest", "source_scope", "producer_run_id", "reservation"}
+    require(set(run) == fields and run["schema_version"] == "claude-upgrade-client-imported-run/v2", "当前收据缺少完整 v2 imported-run")
+    require(run["client_id"] == client_id and run["source_scope"] == task["execution"]["source_scope"] and run["producer_run_id"] == task["execution"]["producer_run_id"], "导入运行身份不符")
+    require(read_json(bound_file(attempt_root, run["task"])) == dict(task) and bound_file(attempt_root, run["source_manifest"]) == bundle_manifest, "导入运行未绑定同一任务／来源")
+    capture_root = Path(task["execution"]["capture_root"])
+    require(bound_file(capture_root, run["reservation"]).name == "reservation.json", "导入运行没有独立预约绑定")
+    return run
+
+
+def verify_client_receipt(attempt_root: Path, client_id: str, path: Path) -> dict[str, Any]:
+    """seal、accept、evidence、segment、VC5 的统一当前消费，强制完整 v2。"""
+    from tools.official_client_capture import claude_upgrade
+    root = Path(attempt_root)
+    require(client_id in CLIENTS, "客户端不受支持")
+    path = secure_file(root, Path(path).relative_to(root).as_posix())
+    receipt = read_json(path)
+    fields = {"schema_version", "client_id", *COORDINATES, "status", "task", "bundle", "imported_run", "verification", "accounting_binding", "issued_at_utc", "conclusion_scope"}
+    require(set(receipt) == fields and receipt["schema_version"] == RECEIPT_SCHEMA, "拒绝占位成功：当前客户端收据必须为完整 v2")
+    require(receipt["client_id"] == client_id and receipt["status"] == "success" and receipt["conclusion_scope"] == "formal", "客户端收据不是正式成功结论")
+    task = validate_task(read_json(bound_file(root, receipt["task"])))
+    require(all(receipt[key] == task[key] for key in (*COORDINATES, "client_id")), "收据与任务身份不符")
+    verify_task_attempt(root, task)
+    bundle_manifest = bound_file(root, receipt["bundle"])
+    require(bundle_manifest.name == "source-manifest.json", "来源清单文件名不符")
+    imported_run = bound_file(root, receipt["imported_run"])
+    verify_imported_run(root, client_id, imported_run, task, bundle_manifest)
+    failure_path = imported_run.parent / "client-run-failure.json"
+    require(not failure_path.exists() and not failure_path.is_symlink(), "原客户端执行失败，不能消费成功收据")
+    from tools.official_client_capture import claude_upgrade_mac_client_capture
+    claude_upgrade_mac_client_capture.require_registered_reservation(root, task)
+    # 编排器字面包装必须进入真实 reader 调用链，不能只有身份 roots 登记。
+    verified = claude_upgrade.verify_mac_source_v2(task, bundle_manifest.parent, Path(task["execution"]["capture_root"]))
+    require(task["execution"]["source_scope"] == "formal" and verified["status"] == "verified", "历史夹具或失败运行不能成为正式成功")
+    require(receipt["verification"] == verified, "收据验证结论与附件重放不符")
+    accounting = read_json(bound_file(root, receipt["accounting_binding"]))
+    keys = sorted(row["identity_key"] for row in verified["requests"])
+    require(accounting.get("task_sha256") == task["task_sha256"] and accounting.get("identity_keys_sha256") == digest(keys) and accounting.get("status") == "accounted", "客户端请求尚未完成既有项目账务入账")
+    from tools.official_client_capture import claude_upgrade_client_receipts
     claude_upgrade_client_receipts.verify_accounting(accounting, task, keys)
     return verified

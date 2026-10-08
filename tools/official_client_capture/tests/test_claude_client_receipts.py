@@ -209,7 +209,7 @@ class ClientReceiptContractTests(unittest.TestCase):
         self.assertFalse((self.attempt / "client-evidence" / "claude-desktop.json").exists())
         discovered = importer.collect_campaign_runs(self.campaign)
         self.assertEqual(len(discovered), 1)
-        self.assertTrue(discovered[0]["job_id"].startswith("mac-unimported-"))
+        self.assertTrue(discovered[0]["job_id"].startswith("mac-reserved-"))
 
     def test_existing_provenance_accounting_deduplicates_import_and_reevaluation(self) -> None:
         verified = self.verify()
@@ -250,7 +250,7 @@ class ClientReceiptContractTests(unittest.TestCase):
         runs = importer.collect_campaign_runs(self.campaign)
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0]["status"], "unresolved")
-        self.assertEqual(runs[0]["precise_count"], 0)
+        self.assertEqual(runs[0]["precise_count"], 1)
         self.assertIn("尚未导入", runs[0]["reason"])
 
     def test_producer_cannot_be_reallocated_to_another_task(self) -> None:
@@ -267,6 +267,11 @@ class ClientReceiptContractTests(unittest.TestCase):
         capture = contract.read_json(self.capture / "capture-manifest.json")
         capture["requests"] = contract.binding(self.capture / "requests.jsonl", self.capture)
         fixture.write(self.capture / "capture-manifest.json", capture)
+        call = json.loads((self.bundle / "socket-calls.jsonl").read_bytes())
+        call["request_ordinals"] = [1, 2]
+        fixture.write(contract.bound_file(self.bundle, call["observation"]), {k: v for k, v in call.items() if k != "observation"})
+        call["observation"] = contract.binding(self.bundle / call["observation"]["path"], self.bundle)
+        self.rewrite_source("socket-calls.jsonl", call)
         rows = self.verify()["requests"]
         self.assertEqual(len(rows), 2)
         self.assertNotEqual(rows[0]["identity_key"], rows[1]["identity_key"])
@@ -284,7 +289,7 @@ class ClientReceiptContractTests(unittest.TestCase):
         current["scenarios"][0]["model"] = "changed-model"
         current["task_sha256"] = contract.digest({key: value for key, value in current.items() if key != "task_sha256"})
         # 先拒来源绑定；重新冻结其他条件不能沿用旧源包。
-        with self.assertRaisesRegex(ValueError, "来源清单不是本任务"):
+        with self.assertRaisesRegex(ValueError, "来源清单 schema、任务或用途不符"):
             contract.verify_client_bundle(current, bundle, capture)
 
     def test_segment_inherits_original_client_receipt_without_writing_or_recounting(self) -> None:
@@ -334,6 +339,29 @@ class FormalClientImportTests(seal_fixture._CandidateSealCase):
     def importing(self) -> dict:
         with self.seal_patched():
             return importer.import_bundle(self.campaign, self.attempt, "claude-desktop", self.task_path, self.bundle)
+
+    def test_prepare_requires_v2_and_preserves_current_frozen_task(self) -> None:
+        task = contract.read_json(self.task_path)
+        plan = {"schema_version": importer.PLAN_SCHEMA, "approved_by": "fixture-reviewer", "catalog_entry_id": task["catalog"]["entry"]["client_id"], **{key: task[key] for key in ("task_nonce", "issued_at_utc", "client_artifacts", "scenarios", "scenario_reuse", "execution")}}
+        path = fixture.write(self.root / "client-plan.json", plan)
+        before = self.task_path.read_bytes()
+        with self.seal_patched():
+            result = importer.prepare(self.campaign, seal_fixture.CANDIDATE, seal_fixture.ATTEMPT, "claude-desktop", path)
+        self.assertEqual((result["status"], result["live_request_count"]), ("prepared", 0))
+        self.assertEqual(self.task_path.read_bytes(), before)
+        plan["schema_version"] = "claude-upgrade-client-plan/v1"
+        fixture.write(path, plan)
+        with self.seal_patched(), self.assertRaisesRegex(ValueError, "客户端计划"):
+            importer.prepare(self.campaign, seal_fixture.CANDIDATE, seal_fixture.ATTEMPT, "claude-desktop", path)
+        self.assertEqual(self.task_path.read_bytes(), before)
+
+    def test_formal_import_requires_pre_dispatch_reservation_index(self) -> None:
+        task = contract.read_json(self.task_path)
+        index = self.attempt / "client-evidence" / "reservations" / (task["execution"]["producer_run_id"] + ".json")
+        index.unlink()
+        with self.assertRaisesRegex(ValueError, "缺失"):
+            self.importing()
+        self.assertEqual(ledger.replay_head(self.project)["precise_total"], 0)
 
     def test_complete_reimport_reuses_batch_and_receipt_without_new_requests(self) -> None:
         first = self.importing()

@@ -1,0 +1,1588 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "claude-client-receipt.schema.json",
+  "title": "Claude Mac 当前 v2 与形成期 v1 材料合同",
+  "description": "当前消费只接受完整 v2；v1 定义仅用于受管历史审计和账务发现。来源授权由受管验证器决定。",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/plan_v2"
+    },
+    {
+      "$ref": "#/$defs/task_v2"
+    },
+    {
+      "$ref": "#/$defs/source_v2"
+    },
+    {
+      "$ref": "#/$defs/reservation_v2"
+    },
+    {
+      "$ref": "#/$defs/capture_v2"
+    },
+    {
+      "$ref": "#/$defs/run_v2"
+    },
+    {
+      "$ref": "#/$defs/receipt_v2"
+    },
+    {
+      "$ref": "#/$defs/task_v1"
+    },
+    {
+      "$ref": "#/$defs/source_v1"
+    },
+    {
+      "$ref": "#/$defs/capture_v1"
+    },
+    {
+      "$ref": "#/$defs/run_v1"
+    },
+    {
+      "$ref": "#/$defs/receipt_v1"
+    },
+    {
+      "$ref": "#/$defs/ready_v2"
+    },
+    {
+      "$ref": "#/$defs/index_v2"
+    },
+    {
+      "$ref": "#/$defs/undispatched_v2"
+    }
+  ],
+  "$defs": {
+    "file_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployment_id",
+        "tool_identity_sha256"
+      ],
+      "properties": {
+        "deployment_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "tool_identity_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_tree_sha256",
+        "build_receipt_sha256",
+        "image_digest",
+        "profile_digest",
+        "gateway_sha256"
+      ],
+      "properties": {
+        "source_tree_sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_receipt_sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "image_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "gateway_sha256": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "file",
+            "directory"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "product",
+            "host",
+            "embedded_cli",
+            "extension_package"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "kind",
+        "product",
+        "role",
+        "version",
+        "platform",
+        "content",
+        "official_source"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "kind": {
+          "enum": [
+            "app_bundle",
+            "host_executable",
+            "embedded_cli",
+            "extension_package",
+            "extension_entry"
+          ]
+        },
+        "product": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content": {
+          "$ref": "#/$defs/content"
+        },
+        "official_source": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "model",
+        "challenge",
+        "response_marker",
+        "minimum_requests"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "challenge": {
+          "type": "string",
+          "minLength": 16
+        },
+        "response_marker": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minimum_requests": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "reuse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "task",
+        "source_manifest",
+        "scenario_ids"
+      ],
+      "properties": {
+        "root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_manifest": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "scenario_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        }
+      }
+    },
+    "request_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "methods",
+        "model_paths",
+        "retry_upper_bound",
+        "max_concurrency",
+        "deadline_utc"
+      ],
+      "properties": {
+        "methods": {
+          "const": [
+            "POST"
+          ]
+        },
+        "model_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "retry_upper_bound": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "deadline_utc": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "credential_ref",
+        "timeout_seconds",
+        "request_budget",
+        "recorder_id",
+        "capture_id",
+        "producer_run_id",
+        "source_scope",
+        "capture_root",
+        "project_ledger",
+        "source_deployments",
+        "isolation_recipe",
+        "request_policy"
+      ],
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credential_ref": {
+          "type": "string",
+          "pattern": "^private-ref:"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "request_budget": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "recorder_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "capture_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "producer_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "source_scope": {
+          "enum": [
+            "formal",
+            "regression_fixture"
+          ]
+        },
+        "capture_root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_ledger": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_deployments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mac",
+            "capture"
+          ],
+          "properties": {
+            "mac": {
+              "$ref": "#/$defs/deployment"
+            },
+            "capture": {
+              "$ref": "#/$defs/deployment"
+            }
+          }
+        },
+        "isolation_recipe": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "request_policy": {
+          "$ref": "#/$defs/request_policy"
+        }
+      }
+    },
+    "catalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "entry"
+      ],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "entry": {
+          "type": "object"
+        }
+      }
+    },
+    "task_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "client_id",
+        "campaign_id",
+        "candidate_id",
+        "attempt_id",
+        "run_nonce",
+        "candidate_revision",
+        "candidate",
+        "catalog",
+        "client_artifacts",
+        "scenarios",
+        "scenario_reuse",
+        "execution",
+        "issued_at_utc",
+        "task_nonce",
+        "task_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-task/v2"
+        },
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "campaign_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "run_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "catalog": {
+          "$ref": "#/$defs/catalog"
+        },
+        "client_artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        },
+        "scenarios": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/scenario"
+          }
+        },
+        "scenario_reuse": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reuse"
+          }
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "issued_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "task_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "plan_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "approved_by",
+        "task_nonce",
+        "issued_at_utc",
+        "catalog_entry_id",
+        "client_artifacts",
+        "scenarios",
+        "scenario_reuse",
+        "execution"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-plan/v2"
+        },
+        "approved_by": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "issued_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "catalog_entry_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "client_artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact"
+          }
+        },
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scenario"
+          }
+        },
+        "scenario_reuse": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reuse"
+          }
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        }
+      }
+    },
+    "source_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_sha256",
+        "run_id",
+        "source_scope",
+        "status",
+        "files"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-source-manifest/v2"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "source_scope": {
+          "enum": [
+            "formal",
+            "regression_fixture"
+          ]
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "truncated"
+          ]
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/file_binding"
+          }
+        }
+      }
+    },
+    "reservation_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_sha256",
+        "candidate",
+        "capture_id",
+        "producer_run_id",
+        "endpoint",
+        "request_budget",
+        "reserved_at_utc",
+        "deadline_utc",
+        "budget_reservation",
+        "source_deployments"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-reservation/v2"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "capture_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "producer_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_budget": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reserved_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "deadline_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "budget_reservation": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_deployments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mac",
+            "capture"
+          ],
+          "properties": {
+            "mac": {
+              "$ref": "#/$defs/deployment"
+            },
+            "capture": {
+              "$ref": "#/$defs/deployment"
+            }
+          }
+        }
+      }
+    },
+    "capture_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_sha256",
+        "capture_id",
+        "producer_run_id",
+        "candidate",
+        "endpoint",
+        "status",
+        "requests",
+        "connections",
+        "transport_map",
+        "reservation",
+        "ready",
+        "source_origin"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-server-capture/v2"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capture_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "producer_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "truncated"
+          ]
+        },
+        "requests": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "connections": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "transport_map": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "reservation": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "ready": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_origin": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    },
+    "run_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "client_id",
+        "task",
+        "source_manifest",
+        "source_scope",
+        "producer_run_id",
+        "reservation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-imported-run/v2"
+        },
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_manifest": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_scope": {
+          "enum": [
+            "formal",
+            "regression_fixture"
+          ]
+        },
+        "producer_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "reservation": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    },
+    "receipt_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "client_id",
+        "campaign_id",
+        "candidate_id",
+        "attempt_id",
+        "run_nonce",
+        "status",
+        "task",
+        "bundle",
+        "imported_run",
+        "verification",
+        "accounting_binding",
+        "issued_at_utc",
+        "conclusion_scope"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-receipt/v2"
+        },
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "campaign_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "run_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "status": {
+          "const": "success"
+        },
+        "task": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "bundle": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "imported_run": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "verification": {
+          "type": "object"
+        },
+        "accounting_binding": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "issued_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "conclusion_scope": {
+          "const": "formal"
+        }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "process_instance_id",
+        "pid",
+        "boot_id",
+        "start_marker",
+        "parent_instance_id",
+        "executable_artifact_id",
+        "executable_sha256",
+        "role",
+        "session_id",
+        "started_at_utc",
+        "exited_at_utc",
+        "observation"
+      ],
+      "properties": {
+        "process_instance_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "boot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "start_marker": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "parent_instance_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executable_artifact_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "executable_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "role": {
+          "enum": [
+            "application",
+            "extension_host",
+            "embedded_cli"
+          ]
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "started_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "exited_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observation": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    },
+    "loaded_module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "module_instance_id",
+        "artifact_id",
+        "host_process_instance_id",
+        "entrypoint",
+        "loaded_at_utc",
+        "activated_at_utc",
+        "observation"
+      ],
+      "properties": {
+        "module_instance_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "host_process_instance_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "entrypoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "loaded_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "activated_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observation": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "session_id",
+        "started_at_utc",
+        "completed_at_utc",
+        "processes",
+        "loaded_modules"
+      ],
+      "properties": {
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "session_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "started_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "processes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/process"
+          }
+        },
+        "loaded_modules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/loaded_module"
+          }
+        }
+      }
+    },
+    "task_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "client_id",
+        "campaign_id",
+        "candidate_id",
+        "attempt_id",
+        "run_nonce",
+        "candidate_revision",
+        "candidate",
+        "catalog",
+        "client_artifacts",
+        "scenarios",
+        "scenario_reuse",
+        "execution",
+        "issued_at_utc",
+        "task_nonce",
+        "task_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-task/v1"
+        },
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "campaign_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "run_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "catalog": {
+          "$ref": "#/$defs/catalog"
+        },
+        "client_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "role",
+              "version",
+              "platform",
+              "sha256"
+            ],
+            "properties": {
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "string",
+                "minLength": 1
+              },
+              "platform": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          }
+        },
+        "scenarios": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/scenario"
+          }
+        },
+        "scenario_reuse": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reuse"
+          }
+        },
+        "execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "endpoint",
+            "credential_ref",
+            "timeout_seconds",
+            "request_budget",
+            "recorder_id",
+            "capture_id",
+            "producer_run_id",
+            "source_scope",
+            "capture_root",
+            "project_ledger"
+          ],
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "credential_ref": {
+              "type": "string",
+              "pattern": "^private-ref:"
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "request_budget": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "recorder_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "capture_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "producer_run_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+            },
+            "source_scope": {
+              "enum": [
+                "formal",
+                "regression_fixture"
+              ]
+            },
+            "capture_root": {
+              "type": "string",
+              "minLength": 1
+            },
+            "project_ledger": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "issued_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "task_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "source_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_sha256",
+        "run_id",
+        "source_scope",
+        "status",
+        "files"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-source-manifest/v1"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "source_scope": {
+          "enum": [
+            "formal",
+            "regression_fixture"
+          ]
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "truncated"
+          ]
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/file_binding"
+          }
+        }
+      }
+    },
+    "capture_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_sha256",
+        "capture_id",
+        "producer_run_id",
+        "candidate",
+        "endpoint",
+        "status",
+        "requests",
+        "reservation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-server-capture/v1"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capture_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "producer_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate": {
+          "$ref": "#/$defs/candidate"
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed",
+            "truncated"
+          ]
+        },
+        "requests": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "reservation": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    },
+    "run_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "client_id",
+        "task",
+        "source_manifest",
+        "source_scope",
+        "producer_run_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-imported-run/v1"
+        },
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "task": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_manifest": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_scope": {
+          "enum": [
+            "formal",
+            "regression_fixture"
+          ]
+        },
+        "producer_run_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        }
+      }
+    },
+    "receipt_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "client_id",
+        "campaign_id",
+        "candidate_id",
+        "attempt_id",
+        "run_nonce",
+        "status",
+        "task",
+        "bundle",
+        "verification",
+        "accounting_binding",
+        "issued_at_utc",
+        "conclusion_scope"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-receipt/v1"
+        },
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "campaign_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "candidate_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "run_nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        },
+        "status": {
+          "const": "success"
+        },
+        "task": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "bundle": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "verification": {
+          "type": "object"
+        },
+        "accounting_binding": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "issued_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "conclusion_scope": {
+          "const": "formal"
+        }
+      }
+    },
+    "ready_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_sha256",
+        "capture_id",
+        "reservation",
+        "deployment",
+        "ready_at_utc",
+        "observation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-capture-ready/v2"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capture_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reservation": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "deployment": {
+          "$ref": "#/$defs/deployment"
+        },
+        "ready_at_utc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "observation": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    },
+    "index_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "client_id",
+        "campaign_id",
+        "candidate_id",
+        "attempt_id",
+        "run_nonce",
+        "task",
+        "task_sha256",
+        "capture_root",
+        "capture_id",
+        "producer_run_id",
+        "reservation",
+        "source_deployments"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-reservation-index/v2"
+        },
+        "client_id": {
+          "enum": [
+            "claude-desktop",
+            "claude-vscode"
+          ]
+        },
+        "campaign_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "candidate_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_nonce": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "capture_root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capture_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "producer_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reservation": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "source_deployments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mac",
+            "capture"
+          ],
+          "properties": {
+            "mac": {
+              "$ref": "#/$defs/deployment"
+            },
+            "capture": {
+              "$ref": "#/$defs/deployment"
+            }
+          }
+        }
+      }
+    },
+    "undispatched_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "task_sha256",
+        "producer_run_id",
+        "capture_id",
+        "status",
+        "request_count",
+        "requests",
+        "attestation"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "claude-upgrade-client-undispatched/v2"
+        },
+        "task_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "producer_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capture_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "undispatched"
+        },
+        "request_count": {
+          "const": 0
+        },
+        "requests": {
+          "$ref": "#/$defs/file_binding"
+        },
+        "attestation": {
+          "$ref": "#/$defs/file_binding"
+        }
+      }
+    }
+  }
+}

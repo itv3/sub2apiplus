@@ -4682,6 +4682,15 @@ def _seal_capture_attempt(view: Mapping[str, Any], *, inventory: Mapping[str, An
     return claude_upgrade_evidence.build_seal_drafts(view, inventory=inventory)
 
 
+def verify_mac_source_v2(
+    task: Mapping[str, Any], bundle_root: Path, capture_root: Path,
+) -> dict[str, Any]:
+    """当前 Mac 成功消费的字面读侧入口；完整来源语义只保留一份实现。"""
+    from tools.official_client_capture import claude_mac_client_source
+
+    return claude_mac_client_source.verify_mac_source_v2(task, bundle_root, capture_root)
+
+
 def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
     """评估读侧根（B4-06b）：只读封存材料离线比较，写比较收据、官方评估用 manifest 与 builder 配置；实现在
     ``claude_upgrade_compare``（Claude 身份策略 ``evaluator.compare_reader_roots`` 从这里按函数级计算读侧闭包）。"""
@@ -5072,7 +5081,7 @@ def _build_parser() -> argparse.ArgumentParser:
         add_campaign_reference(target)
         if name in {"capture-official", "capture-candidate"}:
             # capture-candidate 另有 boundary-check（B4-01 f 段：attempt 级边界核对，run 之后、seal 之前）。
-            actions = ("run", "boundary-check", "seal", "client-evidence") if name == "capture-candidate" else ("run", "seal")
+            actions = ("run", "boundary-check", "seal", "client-evidence", "client-run") if name == "capture-candidate" else ("run", "seal")
             target.add_argument("capture_action", choices=actions)
         if name == "capture-official":
             # run 的参数（B2-06）：真实请求确认、零请求演练与 deadline；seal 的参数（B2-07）：attempt、批准摘要与静态输入。
@@ -5418,6 +5427,10 @@ def _main(argv: list[str] | None = None) -> int:
             if os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1":
                 raise ConfigurationError("client-evidence 是批次之间的离线控制入口，不能由父批次执行。")
             result, return_code = claude_upgrade_client_receipts.command(arguments)
+        elif arguments.command == "capture-candidate" and arguments.capture_action == "client-run":
+            from tools.official_client_capture import claude_upgrade_mac_client_capture
+
+            result, return_code = claude_upgrade_mac_client_capture.command(arguments)
         elif arguments.command == "capture-candidate" and arguments.capture_action == "boundary-check":
             from tools.official_client_capture import claude_upgrade_boundary_checks
 
