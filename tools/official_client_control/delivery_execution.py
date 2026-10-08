@@ -150,7 +150,7 @@ def _source_bytes(source: VerifiedSource, binding: Mapping[str, Any]) -> bytes:
             if path.is_symlink():
                 raise ControlError("交付原件路径包含符号链接")
         if path.is_symlink() or not path.is_file():
-            raise ControlError("交付原件缺失")
+            raise ControlError(f"交付原件缺失：{parsed['path']}")
         raw = path.read_bytes()
     if not isinstance(raw, bytes) or len(raw) != parsed["bytes"] or sha256_bytes(raw) != parsed["sha256"]:
         raise ControlError(f"受管来源原件缺失或字节漂移：{parsed['path']}")
