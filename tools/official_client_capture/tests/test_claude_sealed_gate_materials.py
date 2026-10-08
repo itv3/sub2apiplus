@@ -422,6 +422,53 @@ class MaterialImportProofTests(unittest.TestCase):
             {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")},
             purpose=purpose, expected_source_scope="regression_fixture")
 
+    def test_typed_fixture_uses_frozen_accept_root_and_original_receipt(self):
+        from tools.official_client_capture.tests.claude_typed_vc6_fixture import (
+            _fixture_qualification_gate_root, prepare_fixture_qualification_materials,
+        )
+        from tools.official_client_capture import claude_qualification_material_source as source_module
+        q = self.configuration["candidate"]["qualification"]
+        parent = json_read(self.root / q["sealed_result_binding"]["path"])
+        originals = {path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+                     for path in [self.root / q["sealed_result_binding"]["path"],
+                                  *sorted(self.gate_root.rglob("*"))] if path.is_file()}
+        registrations = dict(source_module.QUALIFICATION_SOURCE_RESOLVERS)
+        root = _fixture_qualification_gate_root(self.store, q, self.root)
+        self.assertEqual(str(root), parent["external_gate"]["evidence_root"])
+        binding = prepare_fixture_qualification_materials(self.store, self.configuration, self.root, gate_root=root)
+        projection = self.validate(binding, purpose="current_import")
+        self.assertTrue(any(row["source_relative_path"] == parent["external_gate"]["receipt"]["path"]
+                            for row in projection.material_files))
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+                          for path in originals}, originals)
+        self.assertEqual(source_module.QUALIFICATION_SOURCE_RESOLVERS, registrations)
+
+    def test_typed_fixture_rejects_drifted_accept_before_intake(self):
+        from tools.official_client_capture.tests.claude_typed_vc6_fixture import _fixture_qualification_gate_root
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        q = copy.deepcopy(self.configuration["candidate"]["qualification"])
+        q["sealed_result_binding"]["bytes"] += 1
+        with self.assertRaisesRegex(guard.GuardError, "文件绑定漂移"):
+            _fixture_qualification_gate_root(self.store, q, self.root)
+        self.assertFalse((self.root / "control/qualification-imports").exists())
+
+    def test_typed_fixture_rejects_drifted_original_receipt_without_replacement(self):
+        from tools.official_client_capture.tests.claude_typed_vc6_fixture import _fixture_qualification_gate_root
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        q = copy.deepcopy(self.configuration["candidate"]["qualification"])
+        path = self.root / q["sealed_result_binding"]["path"]
+        parent = json_read(path)
+        receipt = self.gate_root / parent["external_gate"]["receipt"]["path"]
+        original_receipt = receipt.read_bytes()
+        # 仅形成一份无效的测试父声明；原门禁收据及其 producer 完整保留。
+        parent["external_gate"]["receipt"]["bytes"] += 1
+        write(self.root, q["sealed_result_binding"]["path"], parent)
+        q["sealed_result_binding"].update(sha256=hashlib.sha256(path.read_bytes()).hexdigest(), bytes=path.stat().st_size)
+        with self.assertRaisesRegex(guard.GuardError, "文件绑定漂移"):
+            _fixture_qualification_gate_root(self.store, q, self.root)
+        self.assertEqual(receipt.read_bytes(), original_receipt)
+        self.assertFalse((self.root / "control/qualification-imports").exists())
+
     def test_complete_import_replays_real_four_roots_and_survives_original_removal(self):
         from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
         from tools.official_client_control.delivery_execution import VerifiedSource

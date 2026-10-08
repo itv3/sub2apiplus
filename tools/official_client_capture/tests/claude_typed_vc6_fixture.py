@@ -30,7 +30,7 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests.test_claude_real_delivery_integration import DeliveryCampaign, QualifiedFileRuntime, fixture_projection
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
 from tools.official_client_control import delivery_execution as execution
-from tools.official_client_control.canonical import canonical_sha256, sha256_file
+from tools.official_client_control.canonical import canonical_sha256, sha256_bytes, sha256_file
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR_NAME = "arm64-isolated"
@@ -319,6 +319,38 @@ def subprocess_environment(inject_dir: Path, control_path: Path, actions: list[s
             SEAM_ACTIONS_ENV: ",".join(actions), SEAM_REPOSITORY_ENV: str(REPOSITORY_ROOT)}
 
 
+def _fixture_qualification_gate_root(store: Any, qualification: dict, data_root: Path) -> Path:
+    """只从同源封存 accept 取得门禁坐标，并实读它绑定的原收据。
+
+    外部门禁根可以位于数据根之外，不能按 Campaign、候选或评估基线猜目录。
+    这里不创建目录或改写原件；完整资格图、权限范围与原 reader 仍由既有
+    来源准备和导入合同核对。
+    """
+    from tools.official_client_capture import claude_qualification_material_source as source_module
+
+    source_module._check_four_roots(store, qualification)
+    parent_binding = qualification["sealed_result_binding"]
+    parent_raw = guard.read_bytes(guard.check_binding(data_root, parent_binding))
+    if len(parent_raw) != parent_binding["bytes"] or sha256_bytes(parent_raw) != parent_binding["sha256"]:
+        raise guard.GuardError("typed 门禁坐标的封存 accept 原件漂移")
+    parent = guard.parse_json_bytes(parent_raw, "typed 封存 accept")
+    if (parent.get("schema_version") != "claude-upgrade-acceptance/v1"
+            or parent.get("candidate_id") != qualification["candidate_id"]
+            or parent.get("production_state") != "not_activated"
+            or parent.get("store", {}).get("acceptance_ref") != qualification["acceptance_ref"]
+            or parent.get("store", {}).get("validation_completed_ref") != qualification["validation_ref"]):
+        raise guard.GuardError("typed 门禁坐标的封存 accept 与资格四根不同源")
+    external = guard.exact(parent.get("external_gate"), {"evidence_root", "receipt"}, "typed 封存门禁父域")
+    locator = external["evidence_root"]
+    if not isinstance(locator, str):
+        raise guard.GuardError("typed 封存门禁根必须为规范绝对路径")
+    root = Path(locator)
+    if not root.is_absolute() or str(root) != locator or ".." in root.parts:
+        raise guard.GuardError("typed 封存门禁根必须为规范绝对路径")
+    guard.check_binding(root, external["receipt"])
+    return root
+
+
 def prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path) -> dict:
     """只在显式本机夹具布局里取得来源；正式 registry 与身份均保持关闭。"""
     from tools.official_client_control import receipts
@@ -422,7 +454,7 @@ class TypedDeliveryFixture:
         from tools.official_client_control.qualification_material_import import requires_qualification_materials
         if requires_qualification_materials(store, store_campaign):
             # 新夹具在配置与现场冻结前准备原件；不给已冻结旧 world 补叶子。
-            gate_root = self.data / "control" / (store_campaign["campaign_id"] + "-candidate-gates") / candidate_id / ("b" + str(guard.read_json(accept_path)["evaluation_baseline"]))
+            gate_root = _fixture_qualification_gate_root(store, candidate_qualification, self.data)
             configuration.update(schema_version=executor.MATERIAL_CONFIGURATION_SCHEMA,
                 qualification_materials_binding=prepare_fixture_qualification_materials(store, configuration,
                     self.data, gate_root=gate_root))
