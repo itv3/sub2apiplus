@@ -186,17 +186,28 @@ def run_client(task_path: Path, attempt_root: Path, *, services: CandidateClient
         result = importer.import_bundle(campaign_dir, attempt_root, task["client_id"], task_path, bundle_root)
         return {key: value for key, value in result.items() if key != "live_request_count"}
     execution_error = None
+    close_attempted = False
+
+    def close_before_seal() -> None:
+        nonlocal close_attempted
+        # 标记的是已尝试收口；未知关闭不能在 finally 中重发或假装完成。
+        close_attempted = True
+        services.close_capture(task)
+
     try:
         recorder = services.recorder(task, bundle_root)
-        claude_mac_recorder.record_product(task, bundle_root, recorder=recorder)
+        claude_mac_recorder.record_product(task, bundle_root, recorder=recorder,
+                                          before_seal=close_before_seal)
     except Exception as error:
         execution_error = error
     finally:
-        # 来源可能截断或不可同步；此时索引一直存在并保持未决，不补造零请求。
-        try:
-            services.close_capture(task)
-        except Exception as error:
-            execution_error = execution_error or error
+        # 工厂或启动前验证失败时尚未到屏障，也要收口原预约；屏障已尝试则
+        # 保留其真实结果，恢复另走同 producer 同步入口，不在此重复关闭。
+        if not close_attempted:
+            try:
+                close_before_seal()
+            except Exception as error:
+                execution_error = execution_error or error
     if execution_error is not None:
         # 失败先落盘，再交给同一预约索引的 provenance 收账；不能先导入并签成功后才发现失败。
         importer._write(run_root / "client-run-failure.json", {

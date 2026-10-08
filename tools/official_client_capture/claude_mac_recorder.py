@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import stat
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 
 from tools.official_client_capture import claude_client_receipt_contract as c
 from tools.official_client_capture import claude_mac_client_source as source
@@ -60,8 +60,14 @@ def isolation_recipe(task: Mapping[str, Any], bundle_root: Path) -> dict[str, An
     return source.verify_isolation_recipe_v2(task, bundle_root)
 
 
-def record_product(task: Mapping[str, Any], bundle_root: Path, *, recorder: ProductRecorder) -> dict[str, Any]:
-    """先 journal/monitor，后产品；无论成功或失败都回收、恢复并封存已取得原件。"""
+def record_product(task: Mapping[str, Any], bundle_root: Path, *, recorder: ProductRecorder,
+                   before_seal: Callable[[], None] | None = None) -> dict[str, Any]:
+    """先监测、后产品；回收和恢复后经独立捕获收口屏障，再封存一次真实终态。
+
+    client-run 传入已受管的关闭／排空／同步回调，封存时间只能取屏障之后的
+    实际观测。独立调用没有回调时沿用原顺序；屏障失败仍保存截断原件，不把
+    未关闭的捕获当成功，也不改写冻结 deadline 或补造连接关闭时间。
+    """
     task = source.validate_task_v2(task)
     root = Path(bundle_root)
     adapter = c.SOURCE_ADAPTERS.get(task["execution"]["recorder_id"])
@@ -99,8 +105,18 @@ def record_product(task: Mapping[str, Any], bundle_root: Path, *, recorder: Prod
         except BaseException as caught:
             error = error or caught
             status = "truncated"
+        if before_seal is not None:
+            try:
+                before_seal()
+            except BaseException as caught:
+                error = error or caught
+                status = "truncated"
         # 失败也封存；缺材料不补造成功／零值，独立预约索引仍由发现入口标为未决。
-        recorder.seal_sources(task, root, status=status)
+        try:
+            recorder.seal_sources(task, root, status=status)
+        except BaseException as caught:
+            # 封存自身失败不能掩盖更早的真实故障，也不能另封一份假成功原件。
+            error = error or caught
     if error is not None:
         raise error
     return {"status": status, "source_root": str(root), "producer_run_id": task["execution"]["producer_run_id"]}

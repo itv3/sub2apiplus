@@ -21,6 +21,32 @@ from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture.tests import claude_client_receipt_fixture as f
 
 
+class _SealBarrierBackend:
+    """仅验证收口顺序的测试记录器，不产生真实产品来源。"""
+
+    fixture_only = True
+
+    def __init__(self, calls, *, launch_error=None, seal_error=None):
+        self.calls = calls
+        self.launch_error = launch_error
+        self.seal_error = seal_error
+
+    def prepare_state(self, task, root): self.calls.append("prepare")
+    def start_monitoring(self, task, root): self.calls.append("monitor")
+    def recheck_dispatch(self, task): self.calls.append("recheck")
+    def launch_desktop(self, task, recipe):
+        self.calls.append("launch")
+        if self.launch_error is not None:
+            raise self.launch_error
+    def drive_scenario(self, task, scenario): self.calls.append("drive")
+    def stop_product(self, task): self.calls.append("stop")
+    def restore_state(self, task, root): self.calls.append("restore")
+    def seal_sources(self, task, root, *, status):
+        self.calls.append("seal:" + status)
+        if self.seal_error is not None:
+            raise self.seal_error
+
+
 class MacV2ContractTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
@@ -388,6 +414,56 @@ class MacV2ContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "启动失败"):
             recorder.record_product(self.task, self.bundle, recorder=Backend())
         self.assertEqual(calls, ["prepare", "monitor", "recheck", "launch", "stop", "restore", "seal:failed"])
+
+    def test_independent_capture_drains_before_single_mac_seal(self) -> None:
+        calls = []
+        result = recorder.record_product(
+            self.task, self.bundle, recorder=_SealBarrierBackend(calls),
+            before_seal=lambda: calls.append("capture-close-sync"))
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(calls[-4:], ["stop", "restore", "capture-close-sync", "seal:complete"])
+        self.assertEqual(calls.count("capture-close-sync"), 1)
+        self.assertEqual(calls.count("seal:complete"), 1)
+
+    def test_capture_close_failure_seals_only_truncated_material(self) -> None:
+        calls = []
+        def interrupted_close():
+            calls.append("capture-close-sync")
+            raise OSError("独立捕获关闭同步中断")
+        with self.assertRaisesRegex(OSError, "关闭同步中断"):
+            recorder.record_product(self.task, self.bundle, recorder=_SealBarrierBackend(calls),
+                                    before_seal=interrupted_close)
+        self.assertEqual(calls[-4:], ["stop", "restore", "capture-close-sync", "seal:truncated"])
+        self.assertNotIn("seal:complete", calls)
+
+    def test_original_product_failure_survives_close_and_seal_failures(self) -> None:
+        calls = []
+        original = RuntimeError("原产品启动失败")
+        def interrupted_close():
+            calls.append("capture-close-sync")
+            raise OSError("关闭失败")
+        backend = _SealBarrierBackend(calls, launch_error=original, seal_error=OSError("封存失败"))
+        with self.assertRaises(RuntimeError) as caught:
+            recorder.record_product(self.task, self.bundle, recorder=backend,
+                                    before_seal=interrupted_close)
+        self.assertIs(caught.exception, original)
+        self.assertEqual(calls[-4:], ["stop", "restore", "capture-close-sync", "seal:truncated"])
+
+    def test_client_run_close_barrier_failure_is_not_retried_or_imported(self) -> None:
+        calls = []
+        services = mock.Mock(fixture_only=True)
+        services.recorder.return_value = _SealBarrierBackend(calls)
+        def interrupted_close(task):
+            calls.append("capture-close-sync")
+            raise OSError("独立同步失败")
+        services.close_capture.side_effect = interrupted_close
+        with mock.patch.object(importer, "import_bundle") as publish:
+            result = control.run_client(self.task_path, self.attempt, services=services)
+        self.assertEqual(result["status"], "accounting_unresolved")
+        services.close_capture.assert_called_once_with(self.task)
+        publish.assert_not_called()
+        self.assertEqual(calls[-4:], ["stop", "restore", "capture-close-sync", "seal:truncated"])
+        self.assertTrue((self.bundle.parent / "client-run-failure.json").is_file())
 
     def test_auxiliary_oauth_native_request_remains_separate_from_model_budget(self) -> None:
         first = json.loads((self.capture / "requests.jsonl").read_bytes())
