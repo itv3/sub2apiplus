@@ -58,6 +58,15 @@ INDEX_OPERATION_FIELDS = frozenset({
     "operation_id", "status", "prepared_binding", "terminal_binding", "bindings",
 })
 SAFE_OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+CONTINUITY_SCHEMA = "claude-upgrade-delivery-guard-continuity/v1"
+CONTINUITY_FIELDS = frozenset({
+    "schema_version", "source_service_instance_id", "channel_service_instance_id",
+    "stable_deployment_identity_sha256", "epoch_bindings", "readiness_bindings",
+    "source_record_binding", "source_json_pointer", "current_operations_index_binding",
+})
+SOURCE_ORIGIN_FIELDS = frozenset({
+    "authority", "source_scope", "configuration_sha256", "service_instance_id", "operations_index_binding",
+})
 
 
 def _exact(value: Any, fields: Any, label: str) -> dict[str, Any]:
@@ -180,6 +189,23 @@ class VerifiedEpochReadiness:
     readiness_binding: EpochBinding
     recovered_operations_index_binding: EpochBinding
     operation_ids: tuple[str, ...]
+    read_bindings: tuple[EpochBinding, ...]
+
+
+@dataclass(frozen=True)
+class VerifiedGuardContinuity:
+    """保留原 producer 与当前通道的区别，完整原件用于再次验真和归档。"""
+
+    stable_deployment_identity_sha256: str
+    configuration_sha256: str
+    source_service_instance_id: str
+    channel_service_instance_id: str
+    source_content_sha256: str
+    source_origin_sha256: str
+    source_record_binding: EpochBinding
+    current_operations_index_binding: EpochBinding
+    epoch_bindings: tuple[EpochBinding, ...]
+    readiness_bindings: tuple[EpochBinding, ...]
     read_bindings: tuple[EpochBinding, ...]
 
 
@@ -437,4 +463,163 @@ def validate_epoch_readiness(
         read_binding_values(terminal, "readiness.terminal.binding")
     return VerifiedEpochReadiness(
         instance, readiness, index_binding, tuple(ids), tuple(seen[path][0] for path in sorted(seen)),
+    )
+
+
+def validate_guard_continuity(
+    configuration: Mapping[str, Any],
+    context: Mapping[str, Any],
+    envelope: Any,
+    read_raw: Callable[[Mapping[str, Any]], bytes],
+    *,
+    source_core: Mapping[str, Any],
+    source_origin: Mapping[str, Any],
+    channel_identity: Mapping[str, Any],
+    purpose: str,
+) -> VerifiedGuardContinuity:
+    """核同部署注册链、启动恢复、原生产记录与当前通道之间的连续性。
+
+    当前通道 live 身份和材料选择由受管守卫验证；本函数只消费已选定的
+    精确原件。旧来源保留原 ID 和结果，不对旧 failed/unknown 倒填成功。
+    操作索引没有独立 producer 字段，因此其派生 core 只接受当前通道，
+    不能用相同索引字节冒充旧进程曾生成的来源。其他 core 必须逐字等于
+    原操作文件或冻结 snapshot 的指定子对象，不能由调用者上传 JSON 授权。
+    """
+    if purpose not in {"current_execution", "formed_replay"}:
+        raise ControlError("guard 连续性消费目的未登记")
+    document = _exact(envelope, CONTINUITY_FIELDS, "guard.continuity")
+    origin = _exact(dict(source_origin), SOURCE_ORIGIN_FIELDS, "guard.continuity.origin")
+    core = expect_object(dict(source_core), "guard.continuity.core")
+    seen: dict[str, tuple[EpochBinding, bytes]] = {}
+
+    def read(value: Mapping[str, Any]) -> bytes:
+        item = EpochBinding.from_value(value, "guard.continuity.binding")
+        previous = seen.get(item.path)
+        if previous is not None:
+            if previous[0] != item:
+                raise ControlError("guard 连续性对同一路径引用不同原件")
+            return previous[1]
+        raw = read_raw(item.as_value())
+        if not isinstance(raw, bytes) or len(raw) != item.bytes or sha256_bytes(raw) != item.sha256:
+            raise ControlError("guard 连续性原件缺失或字节漂移：" + item.path)
+        seen[item.path] = (item, raw)
+        return raw
+
+    registered = validate_registration_chain(
+        configuration, context, document["epoch_bindings"], read, channel_identity=channel_identity,
+    )
+    if (document["schema_version"] != CONTINUITY_SCHEMA
+            or document["channel_service_instance_id"] != registered.channel_service_instance_id
+            or document["source_service_instance_id"] != origin["service_instance_id"]
+            or document["source_service_instance_id"] not in registered.ordered_service_instance_ids
+            or document["stable_deployment_identity_sha256"] != registered.stable_deployment_identity_sha256
+            or origin["configuration_sha256"] != canonical_sha256(configuration)
+            or origin["authority"] != channel_identity["authority"]
+            or origin["source_scope"] != channel_identity["source_scope"]):
+        raise ControlError("guard 连续性版本、来源、当前通道或稳定部署不一致")
+    ready_values = document["readiness_bindings"]
+    if not isinstance(ready_values, list):
+        raise ControlError("guard 连续性 readiness 必须是显式完整数组")
+    ready_bindings = tuple(EpochBinding.from_value(value, "guard.continuity.readiness") for value in ready_values)
+    paths = [item.path for item in ready_bindings]
+    if paths != sorted(set(paths)):
+        raise ControlError("guard 连续性 readiness 重复或乱序")
+    ready_instances = set()
+    for value in ready_values:
+        readiness = validate_epoch_readiness(configuration, context, registered, value, read)
+        ready_instances.add(readiness.service_instance_id)
+    if registered.channel_service_instance_id not in ready_instances:
+        raise ControlError("当前 guard 通道尚未证明启动完整恢复，不能消费连续性")
+    if core.get("result") != "failed" and origin["service_instance_id"] not in ready_instances:
+        raise ControlError("原通过来源缺 producer 的启动恢复证明，不能承接成功")
+    root = validate_relative_path(configuration["paths"]["guard_root_relative"], "guard.continuity.root")
+    source_index_binding = EpochBinding.from_value(origin["operations_index_binding"], "guard.continuity.source_index")
+    source_index = _exact(parse_json_bytes(read(source_index_binding.as_value())), {
+        "schema_version", "configuration_sha256", "operations",
+    }, "guard.continuity.source_index")
+    if (source_index["schema_version"] != INDEX_SCHEMA
+            or source_index["configuration_sha256"] != canonical_sha256(configuration)
+            or source_index_binding.path != f"{root}/index-snapshots/{canonical_sha256(source_index)}.json"
+            or not isinstance(source_index["operations"], list)):
+        raise ControlError("guard 原来源的形成期索引缺失或配置不一致")
+    index_binding = EpochBinding.from_value(document["current_operations_index_binding"], "guard.continuity.current_index")
+    index = _exact(parse_json_bytes(read(index_binding.as_value())), {
+        "schema_version", "configuration_sha256", "operations",
+    }, "guard.continuity.current_index")
+    if (index["schema_version"] != INDEX_SCHEMA
+            or index["configuration_sha256"] != canonical_sha256(configuration)
+            or index_binding.path != f"{root}/index-snapshots/{canonical_sha256(index)}.json"
+            or not isinstance(index["operations"], list)):
+        raise ControlError("guard 连续性当前索引不是完整受管快照")
+    current_rows = [_exact(row, INDEX_OPERATION_FIELDS, "guard.continuity.current_index.operation") for row in index["operations"]]
+    current_ids = [expect_string(row["operation_id"], "guard.continuity.operation_id") for row in current_rows]
+    if current_ids != sorted(set(current_ids)) or any(not SAFE_OPERATION_ID.fullmatch(value) for value in current_ids):
+        raise ControlError("guard 连续性当前索引操作重复、乱序或非法")
+    for row in current_rows:
+        if (not isinstance(row["bindings"], list)
+                or row["status"] not in {"armed", "execution_committed", "restored", "restore_failed", "recovery_pending"}
+                or _binding(row["prepared_binding"], "guard.continuity.index.prepared")["path"] != f"{root}/operations/{row['operation_id']}/prepared.json"):
+            raise ControlError("guard 连续性当前索引条目非法")
+        for binding in [row["prepared_binding"], *row["bindings"], *([row["terminal_binding"]] if row["terminal_binding"] is not None else [])]:
+            read(binding)
+    source_binding = EpochBinding.from_value(document["source_record_binding"], "guard.continuity.source_record")
+    record = expect_object(parse_json_bytes(read(source_binding.as_value())), "guard.continuity.source_record")
+    pointer = document["source_json_pointer"]
+    expected_core = {**core, "origin": origin}
+    if any(core.get(key) != context[key] for key in ("campaign_id", "delivery_id")):
+        raise ControlError("guard 原来源跨 Campaign 或交付上下文")
+    if "guard_identity" in core:
+        producer = expect_object(core["guard_identity"], "guard.continuity.core.guard_identity")
+        stable = stable_deployment_identity(configuration, context, producer)
+        if (producer["service_instance_id"] != origin["service_instance_id"]
+                or canonical_sha256(stable) != registered.stable_deployment_identity_sha256):
+            raise ControlError("guard 原 core 的 producer 与连续性来源不一致")
+    if pointer == "":
+        if set(core) == {"campaign_id", "delivery_id", "operation_index_binding"}:
+            if (origin["service_instance_id"] != registered.channel_service_instance_id
+                    or source_binding != index_binding or core["operation_index_binding"] != index_binding.as_value()
+                    or origin["operations_index_binding"] != index_binding.as_value()
+                    or any(core[key] != context[key] for key in ("campaign_id", "delivery_id"))):
+                raise ControlError("guard 派生索引来源只能绑定已验证的当前通道及当前完整索引")
+        else:
+            operation_id = core.get("operation_id")
+            kind = core.get("contract_version")
+            expected_path = None
+            if isinstance(operation_id, str) and kind == "claude-delivery-stage-execution/v1":
+                expected_path = f"{root}/operations/{operation_id}/evidence-000001.json"
+            elif isinstance(operation_id, str) and kind == "claude-delivery-restore/v1":
+                terminal = _binding(core.get("terminal_binding"), "guard.continuity.restore.terminal")
+                match = re.fullmatch(re.escape(f"{root}/operations/{operation_id}/terminals/") + r"([0-9]{6})\.json", terminal["path"])
+                if match is not None and int(match[1]) > 0:
+                    expected_path = f"{root}/operations/{operation_id}/restoration-core-{match[1]}.json"
+            if (not isinstance(operation_id, str) or not SAFE_OPERATION_ID.fullmatch(operation_id)
+                    or operation_id not in current_ids
+                    or source_binding.path != expected_path
+                    or record != expected_core):
+                raise ControlError("guard 原来源不是该操作的完整不可变 core")
+    else:
+        names = {"configuration", "stable_projection", "freeze", "rollback_state", "zero_model_probes", "deployment_configuration"}
+        if (not isinstance(pointer, str) or pointer not in {"/cores/" + name for name in names}
+                or not re.fullmatch(re.escape(root) + r"/freezes/[0-9a-f]{64}/[0-9]{6}/snapshot\.json", source_binding.path)):
+            raise ControlError("guard 冻结来源 pointer 或原 snapshot 坐标非法")
+        _exact(record, {"environment", "rollback", "gates", "cores"}, "guard.continuity.snapshot")
+        if expect_object(record["cores"], "guard.continuity.snapshot.cores").get(pointer.rsplit("/", 1)[1]) != expected_core:
+            raise ControlError("guard 冻结来源与指定原 core 不相等")
+    return VerifiedGuardContinuity(
+        registered.stable_deployment_identity_sha256, canonical_sha256(configuration),
+        str(origin["service_instance_id"]), registered.channel_service_instance_id,
+        canonical_sha256(core), canonical_sha256(origin), source_binding, index_binding,
+        registered.epoch_bindings, ready_bindings, tuple(seen[path][0] for path in sorted(seen)),
+    )
+
+
+def same_verified_guard_deployment(left: Any, right: Any) -> bool:
+    """跨 producer 的同部署关系只能由两份完整连续性证明授予。"""
+    if not isinstance(left, VerifiedGuardContinuity) or not isinstance(right, VerifiedGuardContinuity):
+        return False
+    return (
+        left.stable_deployment_identity_sha256 == right.stable_deployment_identity_sha256
+        and left.configuration_sha256 == right.configuration_sha256
+        and left.channel_service_instance_id == right.channel_service_instance_id
+        and left.epoch_bindings == right.epoch_bindings
     )
