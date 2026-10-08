@@ -546,7 +546,7 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 |---|---|---|
 | Mac v2 来源／导入 | 已合入 `8b6e15ab8`；74 项基础与 31 项入口故障测试通过；CLI／批次、门禁适配、预约发现、provenance 及两 wrapper 的真实调用／读侧根已接，末轮接线已提交 `58dcc47ab`；双客户端摘要已实算，受控登记与变异复验仍待收口 | 原 attempt 预算服务及消费已接通，H1／TLS-H1 和受限 H2 原生捕获／同步的本机专项通过；fixture 薄记录器已接九方法协议与真实 StateJournal，只封存内部 partial／恢复诊断；正式产品后端、完整事件／模块／transport-map及联合来源仍缺，live 零启动拒绝；正式 SOURCE_ADAPTERS 为空，历史形成期 authority 待补，产品／双端来源未认证 |
 | 严格候选交付 | 已提交 `551a01c17`，89 项本机通过；typed 执行证明、Store／阶段结果／checkpoint 消费已接 | 正式 ENVIRONMENT_EXECUTORS 仍为空；ARM64 场地、可信回退、guard 受管安装、专用凭据、四阶段／异常恢复待现场验收 |
-| 共享 D4／r2 与发布 | D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项在 `58dcc47ab` 共 165 项通过；policy_version=10 已实现，schema 仍 v3、文件名仍 _v2.json | 第二次 transient 已实际复验但最终收口尚未通过；最终策略演进／部署、A/B 组合认证、ARM64 八链、pre-A3、issue／verify 与 VC-0 收口尚未完成 |
+| 共享 D4／r2 与发布 | D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项在 `58dcc47ab` 共 165 项通过；当前 policy_version=13 已实现，schema 仍 v3、文件名仍 _v2.json | 第二次 transient 在固定 `09ce8fa04` 已完整通过，717.503 秒，仅属本机回归；最终源码复验、策略演进／部署、A/B 组合认证、ARM64 八链、pre-A3、issue／verify 与 VC-0 收口尚未完成 |
 
 通用 Store 的父域读集补正与 v2 重放结果已接入，合同和严格扫描边界见
 [共享实现 §3.2](../../docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md#32-合同版本)。实现存在不能证明
@@ -556,6 +556,8 @@ fixture 薄记录器已接九方法协议、真实 StateJournal、首次 partial
 状态、预算、配方与双客户端身份专项在 `059d87e52` 上 165 项通过、零跳过。准确准入与原件边界见
 [共享实现 §12.1](../../docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md#121-候选采集来源复用与封存)。
 当前 formal、完整 v2 成功与正式来源仍拒绝，真实产品后端及现场采集未就绪。
+
+内部 owned-v2 原生进程管线已完成有限源码、私有编译与离线接线；合入源码的原生／身份组合86项专项通过，生成物未执行。旧v1启动拒绝不变，五能力旗标恒false；签名及运行authority、真实窗口、产品模块、transport-map和正式来源仍待，不能据此核销B4-01整项。
 
 Mac 离线 `client-evidence prepare／verify／import` 不启动产品；live 协议要复用原 Candidate 准入、
 reservation／lease 和调度前预算／身份复核。原 attempt 的 `client-evidence/reservations/<producer_run_id>.json`

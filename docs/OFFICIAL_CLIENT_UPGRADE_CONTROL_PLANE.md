@@ -376,11 +376,11 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 13 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
-| 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
+| 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs`、`.m` |
 | 引擎 | `codex_upgrade_tool_identity_policy.py` | `claude_tool_identity_policy.py`（v3） |
 
 Codex 策略 v8 只在 control 层登记三个共享新文件（`upgrade_client_adapter.py`、`codex_upgrade_client_adapter.py`、
-`upgrade_control_plane.py`）。Claude 策略把 Codex 专属文件逐项列入 53 项 `ignored_prefixes`，未归层文件数必须为
+`upgrade_control_plane.py`）。Claude 策略把 Codex 专属文件逐项列入当前 47 项 `ignored_prefixes`，未归层文件数必须为
 零；`runtime_bindings` 登记两个受管运行时——`node`（`runtime/claude-tooling/node`）与 `typescript`
 （`runtime/claude-tooling/typescript/lib/typescript.js`）的路径、版本与摘要，进入 `control_sha256`。两客户端共用的
 文件在两份策略里同层，任一方修改都会同时改变双方身份，修改前按双方策略评估。
