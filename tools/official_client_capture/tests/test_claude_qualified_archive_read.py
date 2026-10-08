@@ -74,8 +74,10 @@ class QualifiedArchiveReadTests(unittest.TestCase):
 
     def test_same_bytes_at_another_candidate_coordinate_have_no_permission(self) -> None:
         row = self.copied("evidence/campaigns/other/profile/release/copied.json")
+        extra = replace(self.projection, archive_bindings=(*self.projection.archive_bindings, row))
+        self.assertIn(row, extra.archive_bindings)
         with self.assertRaises(guard.GuardError):
-            self.engine._read_qualification_archive_binding(row, self.projection)
+            self.engine._read_qualification_archive_binding(row, extra)
 
     def test_projection_json_and_production_namespace_cannot_grant_permission(self) -> None:
         with self.assertRaises(guard.GuardError):
@@ -96,3 +98,100 @@ class QualifiedArchiveReadTests(unittest.TestCase):
         path.symlink_to(copy)
         with self.assertRaises(guard.GuardError):
             self.engine._read_qualification_archive_binding(self.staged, self.projection)
+
+    def test_validated_data_root_cannot_be_replaced_by_a_symlink(self) -> None:
+        path = self.root / self.staged["path"]
+        raw, before = path.read_bytes(), path.stat()
+        parked = self.root.with_name(self.root.name + "-archive-read-original")
+        self.root.rename(parked)
+        try:
+            self.root.symlink_to(parked, target_is_directory=True)
+            with self.assertRaises(guard.GuardError):
+                self.engine._read_qualification_archive_binding(self.staged, self.projection)
+        finally:
+            if self.root.is_symlink():
+                self.root.unlink()
+            parked.rename(self.root)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual((path.stat().st_ino, path.stat().st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+
+    def test_data_root_ancestor_symlink_does_not_relocate_verified_permission(self) -> None:
+        # 仅在新建测试世界中加目录别名，不改已验证原件或数据根的实际目录。
+        alias = self.root.parent / (self.root.name + "-archive-read-parent-alias")
+        alias.symlink_to(self.root.parent, target_is_directory=True)
+        original_root = self.engine.data_root
+        path = self.root / self.staged["path"]
+        raw, before = path.read_bytes(), path.stat()
+        try:
+            self.engine.data_root = alias / self.root.name
+            self.assertFalse(self.engine.data_root.is_symlink())
+            with self.assertRaises(guard.GuardError):
+                self.engine._read_qualification_archive_binding(self.staged, self.projection)
+        finally:
+            self.engine.data_root = original_root
+            alias.unlink()
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual((path.stat().st_ino, path.stat().st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+
+    def test_verified_relative_directory_cannot_be_replaced_by_a_symlink(self) -> None:
+        path = self.root / self.staged["path"]
+        raw, before = path.read_bytes(), path.stat()
+        directory = path.parent
+        parked = directory.with_name(directory.name + "-archive-read-original")
+        directory.rename(parked)
+        try:
+            directory.symlink_to(parked, target_is_directory=True)
+            with self.assertRaises(guard.GuardError):
+                self.engine._read_qualification_archive_binding(self.staged, self.projection)
+        finally:
+            if directory.is_symlink():
+                directory.unlink()
+            parked.rename(directory)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual((path.stat().st_ino, path.stat().st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+
+    def test_staged_release_exception_preserves_original_path_syntax(self) -> None:
+        campaign_id = self.configuration["candidate"]["qualification"]["campaign_id"]
+        prefix = f"evidence/campaigns/{campaign_id}/profile/release/"
+        row = self.copied(prefix + "bad\\name.json")
+        invalid = {**row, "path": prefix + "bad\x00name.json"}
+        for item in (row, invalid):
+            with self.subTest(path=repr(item["path"])):
+                extra = replace(self.projection, archive_bindings=(*self.projection.archive_bindings, item))
+                self.assertIn(item, extra.archive_bindings)
+                with self.assertRaises(guard.GuardError):
+                    guard.relative_path(item["path"])
+                with self.assertRaises(guard.GuardError):
+                    self.engine._read_qualification_archive_binding(item, extra)
+
+    def test_staged_release_exception_preserves_all_other_protected_components(self) -> None:
+        campaign_id = self.configuration["candidate"]["qualification"]["campaign_id"]
+        prefix = f"evidence/campaigns/{campaign_id}/profile/release/"
+        for component in ("production", "production_active", "production_candidate", "production_previous", "releases", "release"):
+            for spelling in (component, component.upper()):
+                with self.subTest(component=spelling):
+                    row = self.copied(prefix + spelling + "/copied.json")
+                    extra = replace(self.projection, archive_bindings=(*self.projection.archive_bindings, row))
+                    self.assertIn(row, extra.archive_bindings)
+                    with self.assertRaises(guard.GuardError):
+                        guard.relative_path(row["path"])
+                    with self.assertRaises(guard.GuardError):
+                        self.engine._read_qualification_archive_binding(row, extra)
+
+    def test_missing_binding_or_invalid_token_cannot_grant_staged_permission(self) -> None:
+        missing = replace(self.projection, archive_bindings=tuple(row for row in self.projection.archive_bindings if row != self.staged))
+        invalid_token = replace(self.projection, token=object())
+        for value in (missing, invalid_token):
+            with self.subTest(proof="missing-binding" if value is missing else "invalid-token"):
+                with self.assertRaisesRegex(guard.GuardError, "缺精确已验证来源权限"):
+                    self.engine._read_qualification_archive_binding(self.staged, value)
+
+    def test_verified_original_byte_drift_is_rejected_without_repair(self) -> None:
+        path = self.root / self.staged["path"]
+        changed = bytearray(path.read_bytes())
+        changed[0] ^= 1
+        raw = bytes(changed)
+        path.write_bytes(raw)
+        with self.assertRaisesRegex(guard.GuardError, "字节漂移"):
+            self.engine._read_qualification_archive_binding(self.staged, self.projection)
+        self.assertEqual(path.read_bytes(), raw)

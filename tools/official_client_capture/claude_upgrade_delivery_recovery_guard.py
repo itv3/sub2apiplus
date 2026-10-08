@@ -1356,25 +1356,31 @@ class GuardEngine:
         from tools.official_client_control.sealed_gate_bindings import VerifiedGateProjection, _TOKEN as projection_token
 
         binding_value = validate_external_binding(dict(item), "资格归档原件")
-        try:
-            relative_path(binding_value["path"])
-        except GuardError:
-            protected = {"production", "production_active", "production_candidate", "production_previous", "releases", "release"}
-            if not any(part.lower() in protected for part in PurePosixPath(binding_value["path"]).parts):
-                raise
+        parts = PurePosixPath(binding_value["path"]).parts
+        staged_release_index = None
+        for role in ("candidate", "rollback"):
+            qualification = self.configuration[role]["qualification"]
+            prefix = PurePosixPath(f"evidence/campaigns/{qualification['campaign_id']}/profile/release").parts
+            if len(parts) > len(prefix) and parts[:len(prefix)] == prefix:
+                staged_release_index = len(prefix) - 1
+                break
+        if staged_release_index is not None:
+            # 只豁免冻结前缀中的这一个 release 分量；复核坐标不用于实读。
+            # 原路径校验器仍检查全部语法和其它生产禁词，不能吞掉其异常。
+            validation_parts = list(parts)
+            validation_parts[staged_release_index] = "qualification-release"
+            relative_path(PurePosixPath(*validation_parts).as_posix())
             if (not isinstance(projection, VerifiedGateProjection) or projection.token is not projection_token
                     or binding_value not in projection.archive_bindings):
                 raise GuardError("资格归档原件缺精确已验证来源权限") from None
-            allowed = False
-            for role in ("candidate", "rollback"):
-                qualification = self.configuration[role]["qualification"]
-                staged_prefix = f"evidence/campaigns/{qualification['campaign_id']}/profile/release/"
-                if binding_value["path"].startswith(staged_prefix):
-                    allowed = True
-            if not allowed:
-                raise GuardError("资格归档原件超出精确候选暂存 Release 范围") from None
+            # 与原 managed_path 一样，每次实读都核数据根；同时拒绝根以上
+            # 已替换的目录祖先。初始化时核过根，不能代替本次读取的复核。
+            if not self.data_root.is_absolute() or self.data_root.is_symlink():
+                raise GuardError("受管根必须为非符号链接的绝对路径")
+            if any(parent.is_symlink() for parent in self.data_root.parents):
+                raise GuardError("资格归档数据根祖先含符号链接")
             path = self.data_root
-            for part in PurePosixPath(binding_value["path"]).parts:
+            for part in parts:
                 path = path / part
                 if path.is_symlink():
                     raise GuardError("资格归档只读原件含符号链接")
