@@ -164,8 +164,8 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
             self.assertEqual((code, result["status"]), (2, "awaiting_receipts"), stderr)
             segment = attempt_root / "recovery" / "ar2"
             summary = json.loads((segment / "attempt-recovery.json").read_bytes())
-            ar1_reservation = json.loads((ar1_root / "reservation.json").read_bytes())
-            reservation = json.loads((segment / "reservation.json").read_bytes())
+            ar1_reservation = json.loads((ar1_root / upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME).read_bytes())
+            reservation = json.loads((segment / upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME).read_bytes())
             self.assertEqual(len({original["run_nonce"], ar1_reservation["run_nonce"], reservation["run_nonce"]}), 3)
             # identity_sha256 是同一个候选的身份；段的独立绑定来自基线、裁定与预约摘要。
             self.assertEqual(ar1_reservation["identity_sha256"], reservation["identity_sha256"])
