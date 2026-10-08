@@ -1,7 +1,8 @@
 """交付归档 Profile 父字节边界：真实合同消费及未声明原件的严格负例。
 
-只在局部作用域登记文件原件来源，保留正式空登记表。没有守卫服务、
-Docker 或账号调用；冻结配置仍经过原来源、原件与配置合同校验。
+两个正例复用实际守卫、Docker 返回结构模拟及原 producer 来源；其余负例
+维持未资格化夹具。只在局部作用域登记来源，保留正式空登记表，不运行
+Docker、现场服务或账号调用；归档始终经过当前正式来源与原件消费者。
 """
 
 from __future__ import annotations
@@ -14,10 +15,11 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
-from tools.official_client_control import delivery_execution as execution
+from tools.official_client_control import delivery_execution as execution, profile_observation_bindings as profiles
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, sha256_bytes
 from tools.official_client_control.errors import ControlError
 from tools.official_client_control.store import ControlStore
+from tools.official_client_control.tests import test_profile_observation_bindings as profile_sources
 
 
 class DeliveryArchiveBoundaryTests(unittest.TestCase):
@@ -93,15 +95,26 @@ class DeliveryArchiveBoundaryTests(unittest.TestCase):
         )
 
     def test_frozen_profiles_archive_complete_parent_bytes_without_rebasing_history(self) -> None:
-        entries = self.archive()
+        helper = profile_sources.ProfileObservationBindingTests()
+        self.addCleanup(helper.doCleanups)
+        helper.setUp()
+        core = helper.committed()
+        _raw, source = helper.exported(core)
+        self.assertIsInstance(source.profile_projection, profiles.VerifiedProfileProjection)
+        frozen_profiles = {name: helper.bytes(helper.configuration[name]["profile_binding"])
+                           for name in ("candidate", "rollback")}
+        entries = helper.archive(source, core)
         for name in ("candidate", "rollback"):
-            self.assertIn(self.configuration[name]["profile_binding"], entries)
-        self.assertIn(self.configuration_binding, entries)
-        self.assertNotIn(self.history, entries)
+            binding = helper.configuration[name]["profile_binding"]
+            self.assertIn(binding, entries)
+            self.assertEqual(helper.bytes(binding), frozen_profiles[name])
+            self.assertEqual(source.bytes_by_path[binding["path"]], frozen_profiles[name])
+        self.assertIn(helper.context["configuration_ref"], entries)
+        self.assertNotIn(helper.history, entries)
         self.assertEqual(entries, sorted(entries, key=lambda row: row["path"]))
         # 生产端可先提供配置证据；消费端即使原材料中未列配置，也推导同一两份精确父绑定。
-        consumption = self.archive(initial=[self.configuration["candidate"]["profile_binding"]])
-        self.assertIn(self.configuration["rollback"]["profile_binding"], consumption)
+        consumption = helper.archive(source, [helper.configuration["candidate"]["profile_binding"]])
+        self.assertIn(helper.configuration["rollback"]["profile_binding"], consumption)
 
     def test_unqualified_complete_raw_bindings_keeps_strict_recursive_contract(self) -> None:
         with self.assertRaisesRegex(ControlError, "交付原件缺失"):
@@ -117,15 +130,21 @@ class DeliveryArchiveBoundaryTests(unittest.TestCase):
                     self.archive([self.payload, binding])
 
     def test_unknown_json_still_archives_every_declared_descendant(self) -> None:
-        leaf = self.write("unknown/leaf.bin", b"original descendant")
-        child = self.write("unknown/child.json", {"original": leaf})
-        parent = self.write("unknown/parent.json", {"original": child})
-        entries = self.archive([self.payload, parent])
+        helper = profile_sources.ProfileObservationBindingTests()
+        self.addCleanup(helper.doCleanups)
+        helper.setUp()
+        core = helper.committed()
+        _raw, source = helper.exported(core)
+        self.assertIsInstance(source.profile_projection, profiles.VerifiedProfileProjection)
+        leaf = helper.write("unknown/leaf.bin", b"original descendant")
+        child = helper.write("unknown/child.json", {"original": leaf})
+        parent = helper.write("unknown/parent.json", {"original": child})
+        entries = helper.archive(source, [core, parent])
         for binding in (parent, child, leaf):
             self.assertIn(binding, entries)
-        (self.root / leaf["path"]).unlink()
+        (helper.root / leaf["path"]).unlink()
         with self.assertRaisesRegex(ControlError, "交付原件缺失"):
-            self.archive([self.payload, parent])
+            helper.archive(source, [core, parent])
 
     def test_profile_parent_missing_or_byte_drift_is_rejected(self) -> None:
         for name in ("candidate", "rollback"):
