@@ -2108,6 +2108,9 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
                         inputs = cache[module]
                     except (records.RecordsError, OSError, ValueError) as error:
                         reason = f"输入算不出来：{error}"
+            # H2 实际解释器与 SSL 读取尚未进入完整宿主读集；所有拆块和独占单元只认本次执行。
+            if module in ("test_claude_mac_capture_h2", "test_claude_mac_capture_h2_service") and not reason:
+                reason = "H2 完整宿主运行库读集尚未闭合：本次执行记录不得承接"
             currents[unit.unit_id] = current(unit, spec, inputs, reason)
     for unit in command_units:
         spec = unit_spec(unit, start=None, pattern=None, timeout_seconds=timeout)

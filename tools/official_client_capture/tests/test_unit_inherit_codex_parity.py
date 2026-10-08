@@ -557,6 +557,13 @@ B5B05A_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         '                cores, seconds = pre_a3_quota(str(unit["unit_id"]).removeprefix(PRE_A3_PREFIX))',
     ],
 }
+# H2 承接保护仅在真实测试当前事实中追加两模块的拒绝原因，输入、规格、调度与 Codex 其他单元保持原值。
+# 本次只有新增行，固定基线的删除侧残差为空；两模块的拆块和独占保护由执行器边界专项核对。
+H2_INHERIT_GUARD_BASELINE_COMMIT = "f7b09b60a2d1e3c5256f96122e4ddb396df39a89"
+H2_INHERIT_GUARD_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/unit_executor.py": "f86da3f3e781b116be3cd040ef4396a6868dd96164b7398319ced17b0ead9e41",
+}
+H2_INHERIT_GUARD_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/ci/unit_executor.py": []}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
@@ -566,6 +573,7 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
     ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SOURCE_DIGESTS, B405B1_SOURCE_REMOVED_LINES),
     ("B5b-03 B 组", B5B03B_BASELINE_COMMIT, B5B03B_SOURCE_DIGESTS, B5B03B_SOURCE_REMOVED_LINES),
     ("B5b-05a", B5B05A_BASELINE_COMMIT, B5B05A_SOURCE_DIGESTS, B5B05A_SOURCE_REMOVED_LINES),
+    ("H2 承接保护", H2_INHERIT_GUARD_BASELINE_COMMIT, H2_INHERIT_GUARD_SOURCE_DIGESTS, H2_INHERIT_GUARD_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {

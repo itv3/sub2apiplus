@@ -181,6 +181,71 @@ class UnitExecutorPlanTests(unittest.TestCase):
         self.assertEqual(not_run["full_set"]["units_not_run"], ["test_b"])
 
 
+class H2InheritanceBoundaryTests(unittest.TestCase):
+    """真实规划器生成的小型单元夹具：H2 不读旧记录，控制模块声明保持原值；不执行 H2 服务。"""
+
+    def _planned_currents(self, *, split: bool) -> tuple[list[ue.Unit], dict, dict]:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        modules = ("test_claude_mac_capture_h2", "test_claude_mac_capture_h2_service",
+                   "test_codex_upgrade", "test_claude_mac_capture_h2_service_extra")
+        tests = _write_modules(root, {module: "import unittest\n" for module in modules})
+        grouped = {module: [f"{module}.FixtureTests.test_{index}" for index in range(4)] for module in modules}
+        config = ue.ExecutorConfig(default_parallelism=2, default_quota=ue.Quota(1, 128), quotas={},
+                                   splits={module: 2 for module in modules[:2]} if split else {},
+                                   exclusive=tuple((grouped[module][0], "夹具独占方法") for module in modules[:2]) if split else (),
+                                   unit_timeout_seconds=91, orphan_grace_seconds=1, raw={})
+        units = ue.plan_units(grouped, config, {}, {}, machine_cores=2)
+        records = ue._records_module()
+        inputs = {module: [records.value_entry("tests", "file:" + module, "固定输入")] for module in modules}
+        group = ue.DiscoverGroup("capture-tools", tests, "test_*.py", (), ())
+        with unittest.mock.patch.object(records.RepoIndex, "load", return_value=unittest.mock.Mock(clean=True)), \
+                unittest.mock.patch.object(records, "TestDependencies", return_value=unittest.mock.Mock(occ=tests.parent)), \
+                unittest.mock.patch.object(records, "test_unit_inputs", side_effect=lambda _repo, _deps, path: inputs[path.stem]):
+            currents = ue._gate_currents(records, groups=[group], group_units={group.group_id: units},
+                                         command_units=[], manifest={"units": []}, timeout=config.unit_timeout_seconds)
+        for unit in units:
+            current = currents[unit.unit_id]
+            self.assertEqual(current.inputs, inputs[unit.module])
+            self.assertEqual(current.inputs_sha256, records.entries_sha256(inputs[unit.module]))
+            self.assertEqual(current.spec, ue.unit_spec(unit, start=tests, pattern="test_*.py", timeout_seconds=91))
+            self.assertEqual(current.spec_sha256, ue._sha256(current.spec))
+        return units, currents, grouped
+
+    def test_h2_planned_units_refuse_inheritance_without_changing_control_modules(self) -> None:
+        units, currents, _grouped = self._planned_currents(split=False)
+        self.assertEqual({unit.unit_id for unit in units},
+                         {"test_claude_mac_capture_h2", "test_claude_mac_capture_h2_service",
+                          "test_codex_upgrade", "test_claude_mac_capture_h2_service_extra"})
+        records = ue._records_module()
+        store = unittest.mock.Mock()
+        for module in ("test_claude_mac_capture_h2", "test_claude_mac_capture_h2_service"):
+            current = currents[module]
+            self.assertFalse(current.inheritable)
+            self.assertIn("完整宿主运行库读集尚未闭合", current.reason)
+            self.assertFalse(records.evaluate(store, current, unittest.mock.Mock()).inherit)
+        store.candidates.assert_not_called()
+        for module in ("test_codex_upgrade", "test_claude_mac_capture_h2_service_extra"):
+            self.assertTrue(currents[module].inheritable)
+            self.assertEqual(currents[module].reason, "")
+
+    def test_h2_split_and_exclusive_units_all_refuse_inheritance_and_keep_test_set(self) -> None:
+        units, currents, grouped = self._planned_currents(split=True)
+        self.assertEqual(sorted(test_id for unit in units for test_id in unit.test_ids),
+                         sorted(test_id for ids in grouped.values() for test_id in ids))
+        for module in ("test_claude_mac_capture_h2", "test_claude_mac_capture_h2_service"):
+            members = [unit for unit in units if unit.module == module]
+            self.assertEqual({unit.unit_id for unit in members}, {module + "#1", module + "#2", module + "!exclusive"})
+            self.assertTrue(any(unit.exclusive for unit in members))
+            for unit in members:
+                self.assertFalse(currents[unit.unit_id].inheritable)
+                self.assertIn("完整宿主运行库读集尚未闭合", currents[unit.unit_id].reason)
+        for module in ("test_codex_upgrade", "test_claude_mac_capture_h2_service_extra"):
+            self.assertTrue(currents[module].inheritable)
+            self.assertEqual(currents[module].reason, "")
+
+
 class UnitExecutorRunTests(unittest.TestCase):
     def test_quota_never_exceeds_machine_cores_and_exclusive_unit_runs_alone(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
