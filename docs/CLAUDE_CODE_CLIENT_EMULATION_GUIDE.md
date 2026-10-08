@@ -59,6 +59,10 @@
 
 ---
 
+> **第二部分是 2.1.226 形成期规则与验收快照。** 该部分保留冻结原字节；其中等级、用途与 DMIT／Vircs 坐标
+> 仅描述形成时事实，不授予本轮操作权限。当前证据边界、新 Campaign 操作及采集环境分别见第三、第四、
+> 第六部分；本轮候选只允许 ARM64，DMIT 是生产机与指定出口，不承担候选验收或官方取证。
+
 # 第二部分 Claude Code 客户端规则画像
 
 本部分是当前 Claude Persona 的唯一活动规则画像。按照 Codex CLI 第二部分的规则粒度，活动集合为
@@ -88,11 +92,11 @@
 | strict egress | messages、hello、policy limits、settings、OAuth profile、count_tokens、OAuth refresh、MCP servers，共 8 类 |
 | RequiredRules | 40 条；按 Codex 的“范围、规则／机制、源码、实测、实现、状态”六字段维护 |
 | 原子断言 | 110 条全部通过；107 条 R/M、3 条 TLS P/M；106 条画像证据、4 条客户端本地场景 |
-| 当前等级 | 40 条公共 RequiredRules 在历史三模型出站 SupportEnvelope 内为 `verified`；新 Candidate 与新入站准入边界仍须独立取得本轮验收事实 |
-| 批准用途 | 2.1.226 Release 已取得 `production_replacement_official_client_only` Approval；批准不等于当前部署，候选交付与生产激活按 §3.6、§4.6 分开判定 |
+| 当前等级 | 40 条公共 RequiredRules 在三模型出站 SupportEnvelope 内为 `verified`；official-client-only 后继尚须取得 DMIT 候选验收事实 |
+| 批准用途 | 2.1.226 Release 已取得 `production_replacement_official_client_only` Approval；本任务只交付 DMIT `ready_for_operator_release`，不主张 Vircs 已激活 |
 
 历史 Sonnet `verified` 结论由 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)
-冻结；历史三模型结论由独立 ValidationCandidate、三模型 API／Desktop 正例、边界门禁及当时 DMIT
+冻结；当前三模型结论由独立 ValidationCandidate、三模型 API／Desktop 正例、边界门禁及 DMIT
 回滚／恢复共同支撑，公开摘要见
 [三模型 FW-G 验收收据](egress/maintenance/claude-fw-g-three-model-acceptance.json)。Profile、Wire、
 Release、源码或镜像任一变化，仍必须冻结新的 ValidationCandidate 并重新验收，不能复用本次 `ready`。
@@ -723,7 +727,7 @@ Claude Code 换版时必须新建 Campaign，并重复以下顺序：
 1. 冻结最新 stable 的官方产物、二进制、平台、入口、账号类型、模型和隐私配置；
 2. 以目标 bundle 原生发现为主，加载 2.1.220／前一批准版本以及已冻结的 2.1.88、HitCC 历史候选
    台账补充线索，不继承其目标版本结论；
-3. 对每个拟活动命题构造可达正负场景；按第六部分冻结本轮取证环境，故障语义在隔离 relay 注入；历史 2.1.226 的上游 run 位于当时 Vircs；
+3. 对每个拟活动命题构造可达正负场景；真实上游 run 在 Vircs 采集，故障语义在隔离 relay 注入；
 4. 采集目标 R/M；涉及 ClientHello／ALPN 时另采原生 P；
 5. 运行原子断言，把通过断言的 request-egress 命题写入新的 AtomicAssertionLedger；
 6. 按 Codex 六字段和 Sub2API 实现责任归并 RequiredRules，客户端本地行为进入 scenario-only；
@@ -1069,8 +1073,8 @@ P0 收据 → EvidencePackage → RuleMigrationLedger／AtomicAssertionLedger
 替换。仓库 `local-analysis/` 下的 2.1.226 历史证据只读保留；迁移时保留完整 SHA-256 清单和旧→新路径
 映射，历史收据原字节不改。
 
-**Claude 新受管 Campaign 采用 Framework §5.3.6 的对账合同。** 中断后按未收口预约分流，先取得对账结论，
-再按批准范围续跑；这项操作合同不代表 §4.0.5 的发布认证已经通过。失败矩阵、暂停放行、身份策略、批次和
+**Claude 发布认证通过且 Formal 准入完成后，新受管 Campaign 采用 Framework §5.3.6 的对账合同。**
+当前发布认证仍待完成（§4.0.5）；认证后的 Campaign 中断后按未收口预约分流，先取得对账结论，再按批准范围续跑。失败矩阵、暂停放行、身份策略、批次和
 驱动入口统一见 [§4.7](#claude-4-7)，不再使用历史 FW-H 检查点恢复新 Campaign。
 
 用途、权限和状态是四个正交维度：
@@ -2362,8 +2366,9 @@ B4-08 另批，候选清理批准不扩大为生产清理权限。
 <a id="claude-fix-and-continue"></a>
 ### 修好接着跑：出问题先暂停，修好后在原 Campaign 接着跑
 
-Claude 采用 [Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#536-共享控制面合同) 的对账与暂停
-合同。操作顺序是：读诊断 → 修复最小范围 → 定向复核 → 受监督部署并登记工具／环境变化 → 对账 →
+Claude 发布认证通过且 Formal 准入完成后，新受管 Campaign 采用
+[Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#536-共享控制面合同) 的对账与暂停合同。认证仍待完成
+（§4.0.5）；以下为认证后的操作顺序：读诊断 → 修复最小范围 → 定向复核 → 受监督部署并登记工具／环境变化 → 对账 →
 批准恢复范围并授权 → 续派 → 重放完成收据。永久身份边界按
 [Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界) 办理；可信原件保留原
 字节和来源，不能通过换目录、换 ID 或重建 Campaign 绕过累计与失败事实。
