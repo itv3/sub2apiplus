@@ -110,11 +110,11 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
                 content = parse_json_bytes(raw)
             except ControlError:
                 # 非 JSON 字节仍完整读验。合法数组里的绑定也要严格展开。
-                    try:
+                try:
                     content = json.loads(raw)
                 except (ValueError, UnicodeDecodeError):
                     continue
-            if isinstance(content, dict) and content.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+            if profile_projection is None and isinstance(content, dict) and content.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
                 raise ControlError("Docker Profile 观测原件未匹配精确来源证明")
             projected = typed_bindings(content)
         for row in projected:
