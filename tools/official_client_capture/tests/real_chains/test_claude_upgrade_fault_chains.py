@@ -61,6 +61,7 @@ from tools.official_client_capture.tests import claude_chain_driver as chain_dri
 from tools.official_client_capture.tests import claude_late_stage_chain_driver as late_driver
 from tools.official_client_capture.tests import claude_late_control_chain_driver as late_control_driver
 from tools.official_client_capture.tests import claude_transient_chain_driver as transient_driver
+from tools.official_client_capture.tests.real_chains import claude_revision_evaluator_scenarios as revision_scenarios
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_predecessor as predecessor_tests
@@ -75,6 +76,23 @@ CHAIN_MODULE = "tools.official_client_capture.tests.real_chains." + Path(__file_
 # 场景 ID → 链体方法名（与 pre-A3 登记、外层 test_* 方法一一对应）。
 CHAINS: Mapping[str, Mapping[str, str]] = {
     "recovery": {"scenario": "vc-chain.claude-recovery-chain", "exercise": "_exercise_recovery_chain"},
+}
+
+# 私有待验入口不在 CHAINS 或 pre-A3 注册表中；只有主任务实测、核对全部合同后才能另提交启用。
+LATE_CONTINUOUS_SCENARIOS = (
+    '候选 transient 裁定与恢复段续跑', '后段同根因暂停并续派 compare', '后段预算到期并延期续派 builder',
+    '后段批次 COMMIT 发布中断', '后段交付修复后动作中断', '后段交付阶段批准失效', '后段交付收据后中断与重复收尾',
+)
+REVISION_CONTINUOUS_SCENARIOS = (
+    '候选源码失败与 r2 修订接续', '评估器修复拒绝错误部署收据：codex', '评估器修复拒绝错误部署收据：missing-client',
+    '评估器真实修复与 b1 零采集重评', '后段批次 COMMIT 发布中断', '后段交付修复后动作中断',
+    '后段交付阶段批准失效', '后段交付收据后中断与重复收尾',
+)
+PENDING_CONTINUOUS_CHAINS = {
+    'late-continuous': {'scenario': 'vc-chain.claude-late-stage-faults', 'exercise': '_exercise_late_continuous',
+                        'expected': LATE_CONTINUOUS_SCENARIOS},
+    'revision-continuous': {'scenario': 'vc-chain.claude-revision-evaluator-recovery', 'exercise': '_exercise_revision_continuous',
+                            'expected': REVISION_CONTINUOUS_SCENARIOS},
 }
 
 # 设计 B5b-03 的验收：ARM64 上每条不超过 15 分钟（含复制副本树）；子进程超时比它略短，留出外层收尾。
@@ -414,12 +432,31 @@ class _ChainRecorder(shell._ChainRecorder):
         print(METRICS_PREFIX + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
-def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Mapping[str, str], step: str) -> None:
+def _expected_scenarios(scenarios: Mapping[str, str | tuple[str, ...]]) -> list[str]:
+    """普通组每方法一条，连续组一方法多条；展开后必须保持声明顺序且场景名唯一。"""
+
+    expected = [name for value in scenarios.values() for name in ((value,) if isinstance(value, str) else value)]
+    if not expected or len(expected) != len(set(expected)) or any(not isinstance(name, str) or not name for name in expected):
+        raise ValueError('场景组的六项记录声明为空、重复或非法')
+    return expected
+
+
+def _records_complete(records: list[dict[str, Any]], expected: list[str]) -> bool:
+    """每次实际故障的六项都必须明确通过；缺项、重复、错序或伪造总体 passed 均拒绝。"""
+
+    return (all(isinstance(row, dict) for row in records)
+        and [row.get('scenario') for row in records] == expected and all(
+        isinstance(row.get('checks'), dict) and set(row['checks']) == set(SIX_CHECKS)
+        and all(isinstance(check, dict) and check.get('passed') is True for check in row['checks'].values()) for row in records))
+
+
+def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Mapping[str, str | tuple[str, ...]], step: str) -> None:
     """在副本树里起一个子进程按顺序运行一组场景方法（``类._scenario_名`` → 场景名），收齐每个场景写出的六项记录。
 
     子进程环境与链体相同（同一命名空间、``PYTHONPATH`` 只含副本根、同一 ``TMPDIR`` 与仅夹具总账开关），单独成一个进程组：
     超时整组终止。全部通过（正好运行这几项、没有跳过）且每个场景都写出六项齐全的记录才记 ``step``。"""
 
+    expected = _expected_scenarios(scenarios)
     remaining = CHAIN_TIMEOUT_SECONDS - GROUP_MARGIN_SECONDS - (time.monotonic() - recorder.started)
     records_file = Path(tempfile.mkstemp(prefix="fault-chain-records-", suffix=".jsonl")[1])
     environment = {**os.environ, RECORDS_ENV: str(records_file)}
@@ -451,7 +488,7 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
     passed = (not timed_out and process.returncode == 0 and bool(lines) and lines[-1] == "OK"
               and any(line.startswith(ran) for line in lines))
     reported = [record["scenario"] for record in records]
-    complete = reported == list(scenarios.values()) and all(set(record["checks"]) == set(SIX_CHECKS) for record in records)
+    complete = _records_complete(records, expected)
     if not passed or not complete:
         recorder.emit()
         reason = (f"超时（{seconds} 秒，链体剩余预算 {round(remaining, 1)} 秒）" if timed_out
@@ -1689,6 +1726,18 @@ class _TransientSegmentScenarios(transient_driver.ClaudeTransientChainDriver):
     def _scenario_apply_run_seal_builder_in_one_campaign(self) -> None:
         self.run_transient_chain()
 
+    def _scenario_full_control_delivery(self) -> None:
+        world = self.run_transient_control_delivery_chain()
+        self.assertEqual(tuple(row['scenario'] for row in world['records']), LATE_CONTINUOUS_SCENARIOS)
+
+
+class _RevisionEvaluatorScenarios(revision_scenarios._RevisionEvaluatorScenarios):
+    """私有完整第三链；普通发现和当前认证都不自动运行。"""
+
+    def _scenario_revision_evaluator_delivery(self) -> None:
+        world = self.run_revision_evaluator_delivery_chain()
+        self.assertEqual(tuple(row['scenario'] for row in world['records']), REVISION_CONTINUOUS_SCENARIOS)
+
 
 class ClaudeFaultChainTests(unittest.TestCase):
     """外层场景入口（方法直接写在类体里，部署脚本按 AST 核对）与链体（只在副本树子进程里运行）。"""
@@ -1700,6 +1749,16 @@ class ClaudeFaultChainTests(unittest.TestCase):
     def test_recovery_chain_keeps_trusted_results_and_resumes_every_fault(self) -> None:
         self._run_chain("recovery")
 
+    def _run_pending_late_continuous(self) -> None:
+        """显式定向运行，未放入 test_* 发现或认证登记。"""
+
+        self._run_chain('late-continuous')
+
+    def _run_pending_revision_continuous(self) -> None:
+        """只有设计的拆链判据满足后，主任务才决定是否正式注册。"""
+
+        self._run_chain('revision-continuous')
+
     def _isolation_mode(self) -> str:
         """Linux 上以 root 运行必须进命名空间（缺 ``unshare`` 即失败，不降级）；其余环境降级为副本树加替身。"""
 
@@ -1710,7 +1769,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
         return shell.ISOLATION_DEGRADED
 
     def _run_chain(self, chain: str) -> None:
-        spec = CHAINS[chain]
+        spec = CHAINS[chain] if chain in CHAINS else PENDING_CONTINUOUS_CHAINS[chain]
         started = time.monotonic()
         mode = self._isolation_mode()
         metrics: dict[str, Any] = {}
@@ -1762,8 +1821,28 @@ class ClaudeFaultChainTests(unittest.TestCase):
         self.assertNotIn("skipped=", completed.stderr, "链体不得跳过")
         self.assertTrue(metrics.get("steps"), "通过的链必须写出指标与已通过的步骤")
         self.assertEqual(metrics.get("upstream_requests"), 0, "链体必须零请求")
-        expected = [name for _step, group in RECOVERY_CHAIN_GROUPS for name in group.values()]
-        self.assertEqual([record["scenario"] for record in metrics.get("scenarios") or []], expected, "每个场景都要写出六项记录")
+        expected = list(spec.get('expected') or [name for _step, group in RECOVERY_CHAIN_GROUPS for name in group.values()])
+        records = metrics.get('scenarios') or []
+        self.assertTrue(_records_complete(records, expected), '每个场景必须按顺序写出六项真实通过记录')
+        if chain in PENDING_CONTINUOUS_CHAINS:
+            self.assertEqual(len({row.get('campaign_id') for row in records}), 1, '连续链不得拼多个 Campaign 的场景')
+            self.assertTrue(all(row.get('campaign_id') for row in records), '连续记录缺少 Campaign 坐标')
+
+    def _exercise_late_continuous(self) -> None:
+        recorder = _ChainRecorder('late-continuous')
+        shell._assert_isolation(self, recorder)
+        _run_group(self, recorder, {'_TransientSegmentScenarios._scenario_full_control_delivery': LATE_CONTINUOUS_SCENARIOS},
+                   '同 Campaign 的 transient、暂停、延期、严格验收与交付恢复')
+        recorder.facts['six_checks'] = {row['scenario']: sorted(row['checks']) for row in recorder.facts['scenarios']}
+        recorder.emit()
+
+    def _exercise_revision_continuous(self) -> None:
+        recorder = _ChainRecorder('revision-continuous')
+        shell._assert_isolation(self, recorder)
+        _run_group(self, recorder, {'_RevisionEvaluatorScenarios._scenario_revision_evaluator_delivery': REVISION_CONTINUOUS_SCENARIOS},
+                   '同 Campaign 的 r2、评估器修复、严格验收与交付恢复')
+        recorder.facts['six_checks'] = {row['scenario']: sorted(row['checks']) for row in recorder.facts['scenarios']}
+        recorder.emit()
 
     # ---- 链体：recovery-chain ----
 

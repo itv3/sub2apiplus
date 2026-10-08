@@ -17,6 +17,7 @@ from unittest import mock
 
 from tools.official_client_capture import claude_upgrade as upgrade
 from tools.official_client_capture import claude_upgrade_delivery as delivery
+from tools.official_client_capture import claude_upgrade_compare as compare
 from tools.official_client_capture import claude_upgrade_recovery as recovery
 from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
@@ -50,18 +51,48 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
     """借用输入构造和命令构造，不继承原测试用例，避免每个外层场景重复运行旧用例。"""
 
     vc5_world = delivery_tests.Vc6BatchChainTests.vc5_world
-    dispatch_vc5 = delivery_tests.Vc6BatchChainTests.dispatch_vc5
-    compare_action = delivery_tests.Vc6BatchChainTests.compare_action
     assert_action = delivery_tests.Vc6BatchChainTests.assert_action
-    accept_action = delivery_tests.Vc6BatchChainTests.accept_action
-    gate_receipt = delivery_tests.Vc6BatchChainTests.gate_receipt
     run_compare_and_assert = delivery_tests.Vc6BatchChainTests.run_compare_and_assert
-    assert_recorded_client_requests = delivery_tests.Vc6BatchChainTests.assert_recorded_client_requests
     vc5_complete_world = delivery_tests.Vc6BatchChainTests.vc5_complete_world
     set_control = delivery_tests.Vc6BatchChainTests.set_control
     assert_status = delivery_tests.Vc6BatchChainTests.assert_status
     delivery_calls = delivery_tests.Vc6BatchChainTests.delivery_calls
     assert_batch_failed_and_reconcile = delivery_tests.Vc6BatchChainTests.assert_batch_failed_and_reconcile
+
+    def dispatch_vc5(self, world: dict[str, Any], sequence: int, action: dict[str, Any]) -> tuple[int, dict | None, str]:
+        """当前候选 revision 的真实 VC-5 批次，输入接缝仅由 world 的配置决定。"""
+
+        campaign = world['campaign']
+        action_plan = chain._write_json(self.root / 'action-plans' / f'vc-5-{sequence:04d}.json', batch_tests.batch.action_plan([action], phase='VC-5'))
+        variables = chain.subprocess_environment(self.root / 'inject-vc5', world['config_path'], [str(action['action_id'])])
+        with mock.patch.dict(os.environ, variables):
+            return batch_tests.run_main(['compile-and-run-vc-batch', '--campaign-dir', campaign, '--phase', 'VC-5',
+                '--sequence', sequence, '--predecessor-checkpoint', vc.vc_checkpoint_path(campaign, 'VC-4', revision=world.get('revision', 1)),
+                '--action-plan', action_plan, '--state-dir', self.state_dir])
+
+    def compare_action(self, campaign: Path, *, candidate_id: str = CANDIDATE) -> dict[str, Any]:
+        return batch_tests.batch.managed_action('compare', 'VC-5:compare',
+            ['compare', '--campaign-dir', campaign, '--candidate-id', candidate_id], item_ids=['compare'])
+
+    def accept_action(self, campaign: Path, receipt: str, gate_root: Path, *, candidate_id: str = CANDIDATE) -> dict[str, Any]:
+        return batch_tests.batch.managed_action('acceptance', 'VC-5:acceptance',
+            ['accept', '--campaign-dir', campaign, '--candidate-id', candidate_id, '--external-gate-root', gate_root,
+             '--external-gate-receipt', receipt], item_ids=['acceptance'])
+
+    def gate_receipt(self, world: dict[str, Any], name: str, *, failed_gate: str | None = None) -> str:
+        identity = compare.candidate_gate_identity(world['campaign'], world['manifest'], world.get('candidate_id', CANDIDATE), world['build'])
+        subject = chain.expected_subject(world['manifest'], world['candidate_payload'], identity)
+        with chain.seams(world['config_path']):
+            return chain.gate_receipt_file(world['gate_root'], name=name, subject=subject,
+                host=delivery_tests.compare_tests.HOST, architecture=world['architecture'], failed_gate=failed_gate)
+
+    def assert_recorded_client_requests(self, world: dict[str, Any]) -> None:
+        """真实候选世界按同 Campaign 总 provenance 核算，原合成世界保留原来的两请求断言。"""
+
+        if world.get('real_candidate'):
+            self.assert_campaign_request_accounting(world['campaign'], expected_client_requests=world['expected_client_requests'])
+        else:
+            delivery_tests.Vc6BatchChainTests.assert_recorded_client_requests(self, world)
 
     def run_action(self, world: dict[str, Any]) -> dict[str, Any]:
         return delivery.run_action(world["campaign"], world.get("candidate_id", CANDIDATE),
@@ -100,9 +131,9 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         audit = ScenarioAudit(self, name)
         audit.snapshot(
             trusted=[campaign / "campaign.json", control / "commits", control / "batches",
-                     *sorted(control.rglob("*-checkpoint.json"))],
-            history=[world["store"].root, self.ledger_dir / "events", self.ledger_dir / "ledger.json",
-                     self.project_root / "events", self.project_root / "plan.json", control / "commits", control / "batches"],
+                     *sorted(control.rglob("*-checkpoint.json")), *world.get("trusted_roots", [])],
+            history=[world["store"].root, self.ledger_dir, self.project_root,
+                     control / "commits", control / "batches", *world.get("trusted_roots", [])],
             timing_dir=self.ledger_dir, project_root=self.project_root,
         )
         return audit

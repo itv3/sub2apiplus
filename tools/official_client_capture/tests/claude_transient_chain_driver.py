@@ -2,7 +2,8 @@
 
 VC-0/1 使用批次夹具明确的已封存输入，VC-3/4、候选 run/seal、失败 builder、恢复 apply、ar1 run/seal 与 b1 builder
 执行产品代码。宿主/Docker/网关来自 CandidateFixture；中继替身按已有连接序列写原始字节，并由可改控制文件注入一条头值故障。
-画像仅选择一个请求头检查，官方评估字节采用 evaluator fixture；候选评估必须来自实际 seal 的 evaluation-manifest。
+首次冻结使用保留批准规则全集的控制面画像接缝，官方字节来自 evaluator fixture；候选评估必须来自实际 seal。
+每个基线真实 compare 后只用它生成的配置运行 builder，后继可继续严格 accept／VC-6；不等同于全规则真实语义认证。
 不替换候选阶段结果、attempt 读侧、恢复裁定、权限/封存边界、Store、请求核算或断言结论。
 """
 
@@ -14,27 +15,24 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
 
-from tools.official_client_capture import claude_rule_assertion as assertion
 from tools.official_client_capture import claude_upgrade as upgrade
-from tools.official_client_capture import claude_upgrade_assertion_profile as assertion_profile
 from tools.official_client_capture import claude_upgrade_candidate_capture as candidate_capture
 from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
 from tools.official_client_capture import claude_upgrade_capture as capture
-from tools.official_client_capture import claude_upgrade_compare as compare
 from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import claude_upgrade_store as candidate_store
-from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.tests import claude_boundary_receipt_fixture as boundary_fixture
 from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
-from tools.official_client_capture.tests import claude_evaluator_fixture as evaluator_fixture
+from tools.official_client_capture.tests import claude_fault_chain_world as world_fixture
+from tools.official_client_capture.tests import claude_late_control_chain_driver as late_control
+from tools.official_client_capture.tests import claude_vc5_chain_fixture as vc5_sources
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as candidate_tests
 from tools.official_client_capture.tests import test_claude_upgrade_capture as capture_tests
@@ -44,9 +42,7 @@ from tools.official_client_capture.tests import test_claude_upgrade_seal as seal
 CANDIDATE = candidate_tests.CANDIDATE
 FAILED_JOB = candidate_tests.LIVE_JOB
 FAILED_PROBE = "v4-replay-baseline"
-RULE = "SPEC-HDR-001"
 HOST = "arm64-transient-fixture"
-BUILDER = Path(__file__).resolve().parents[1] / "claude_build_rule_assertion_results.py"
 
 
 def _write(path: Path, value: Any) -> Path:
@@ -56,7 +52,7 @@ def _write(path: Path, value: Any) -> Path:
     return path
 
 
-class ClaudeTransientChainDriver(batch_tests._RealTreeBatchCase):
+class ClaudeTransientChainDriver(late_control.ClaudeLateControlChainDriver):
     """只借用既有输入驱动，不继承那些测试用例；所有新段产物均由真实命令产生。"""
 
     recover = evaluation_tests.EvaluationRecoveryChainTests.recover
@@ -86,7 +82,7 @@ class ClaudeTransientChainDriver(batch_tests._RealTreeBatchCase):
         self.assertEqual(source.count(marker), 1)
         source = source.replace(marker, '''        version = "2023-01-01" if probe == json.load(open(os.environ["CLAUDE_TRANSIENT_RELAY_CONTROL"], encoding="utf-8")).get("bad_probe") else "2023-06-01"
         stream += f"{method} {target} HTTP/1.1''')
-        source = source.replace(r'Host: {host}\r\nContent-Length:', r'Host: {host}\r\nAnthropic-Version: {version}\r\nContent-Length:')
+        source = source.replace(r'Host: {host}\r\nContent-Length:', r'Host: {host}\r\nAuthorization: Bearer <secret>XXXXXXXXXXXXXXXXXXXXXXXX\r\nAnthropic-Version: {version}\r\nContent-Length:')
         envelope = '''
 manifest.update(side="candidate", run_id=value("--run-id"))
 manifest["candidate_gateway"] = {
@@ -146,12 +142,7 @@ sys.exit(0)
         gateway = copy.deepcopy(candidate_tests.BASE_GATEWAY)
         gateway["service"]["image_id"] = self.build["image"]["image_id"]
         _write(self.runtime.gateway_file, gateway)
-        self.runtime.activation_fact = {
-            "schema_version": candidate_capture.ACTIVATION_FACT_SCHEMA, "source": "sub2api-runtime",
-            "event_type": "claude_profile_observed", "event_id": "a" * 64, "profile_mode": "validation_candidate",
-            "claude_version": capture_tests.TARGET, "profile_digest": self.build["profile"]["profile_digest"],
-            "image_id": self.build["image"]["image_id"],
-        }
+        self.runtime.activation_fact = vc5_sources.activation_fact(self.build, capture_tests.TARGET)
 
     @contextlib.contextmanager
     def source_context(self) -> Iterator[None]:
@@ -235,56 +226,25 @@ sys.exit(0)
         return result
 
     def evaluation_context(self, campaign: Path) -> dict[str, Any]:
-        """一个可定位到实际 Job 的请求头检查；官方字节为固定来源，候选来源由每代 seal 绑定。"""
+        """同世界的全部批准规则与官方外部来源；不合成或覆盖候选阶段结果。"""
 
-        evaluation = campaign / "transient-evaluation"
-        rule_manifest = {**evaluator_fixture.RULE_MANIFEST, "required_rules": [RULE]}
-        ledger = copy.deepcopy(evaluator_fixture.LEDGER)
-        ledger["scenario_only_owner_ids"] = []
-        ledger["assertions"] = [row for row in ledger["assertions"] if row["assertion_id"] == RULE]
-        scenarios = copy.deepcopy(evaluator_fixture.SCENARIOS_PAYLOAD)
-        scenarios["evidence_scenarios"] = [row for row in scenarios["evidence_scenarios"] if row["scenario_id"] == "transport.http"]
-        scenarios["evidence_scenarios"][0]["covers"] = [RULE]
-        templates = copy.deepcopy(evaluator_fixture.TEMPLATES)
-        templates["templates"] = {RULE: templates["templates"][RULE]}
-        templates["templates"][RULE]["checks"] = templates["templates"][RULE]["checks"][:1]
-        profile = assertion.build_expectations(claude_version=capture_tests.TARGET, ledger=ledger, scenarios_payload=scenarios,
-            templates=templates, release_wire=evaluator_fixture.RELEASE_WIRE, rule_manifest=rule_manifest)
-        profile_path = evaluation / "assertion-profile.json"
-        profile_path.parent.mkdir(parents=True, mode=0o700)
-        profile_path.write_bytes(assertion.render_expectations(profile))
-        return {"campaign": campaign, "evaluation": evaluation, "profile_path": profile_path,
-                "profile_sha256": upgrade.file_sha256(profile_path), "rules_path": _write(evaluation / "target-rules.json", rule_manifest),
-                "official": evaluator_fixture.write_side(evaluation / "official", capture_id="transient-official")}
+        return world_fixture.real_candidate_world(self, campaign, candidate_id=CANDIDATE, revision=1, expected_client_requests=2)
 
     def dispatch_builder(self, context: dict[str, Any], sequence: int, *, baseline: int) -> tuple[int, dict | None, str]:
-        """真实父批次调度 builder，候选配置指向该基线实际增量封存的 manifest，禁止构造候选评估文件。"""
+        """当前基线先经真实 compare 批次，再消费它的 builder 配置；序号在 world 内连续。"""
 
-        campaign = context["campaign"]
-        with self.source_context():
-            stage = upgrade._load_stage_result(campaign, "capture-candidate", CANDIDATE, _baseline=baseline)
-        candidate = compare.candidate_evaluation_source(campaign, upgrade.load_campaign_manifest(campaign), stage)
-        target = upgrade._stage_write_target(campaign, CANDIDATE, baseline, "assertions")
-        config = {
-            "assertion_profile": str(context["profile_path"]), "rule_manifest": str(context["rules_path"]),
-            "expected_profile_sha256": context["profile_sha256"], "official_evidence_root": str(context["official"].evidence_root),
-            "candidate_evidence_root": candidate["evidence_root"], "official_capture_manifest": str(context["official"].manifest_path),
-            "candidate_capture_manifest": str(campaign / stage["assertion_context"]["evaluation_manifest"]["path"]),
-            "official_evidence_prefix": "official-run", "candidate_evidence_prefix": "candidate-run", "target_version": capture_tests.TARGET,
-            "candidate_id": CANDIDATE, "profile_id": "transient-header", "profile_digest": "d" * 64,
-            "official_package_digest": "1" * 64, "candidate_package_digest": "2" * 64, "comparison_package_digest": "3" * 64,
-            "official_authority": dict(evaluator_fixture.AUTHORITY), "rules": [RULE], "campaign_dir": str(campaign),
-        }
-        path = _write(context["evaluation"] / f"builder-config-b{baseline}.json", config)
-        action = {"action_id": "assert-rules", "operation": "VC-5:assert-rules", "timeout_seconds": 600.0,
-            "command": [sys.executable, str(BUILDER), "--config", str(path), "--output", str(target / "results.json"),
-                        "--results-dir", str(target / "machine"), "--evaluation-baseline", str(baseline)], "item_ids": ["assert-rules"]}
-        action_plan = _write(self.root / "action-plans" / f"transient-b{baseline}.json", batch_tests.batch.action_plan([action], phase="VC-5"))
-        return self.source_command([
-            "compile-and-run-vc-batch", "--campaign-dir", campaign, "--phase", "VC-5", "--sequence", sequence,
-            "--predecessor-checkpoint", vc.vc_checkpoint_path(campaign, "VC-4", revision=1),
-            "--action-plan", action_plan, "--state-dir", self.state_dir,
-        ])
+        world_fixture.refresh_world(self, context)
+        self.assertEqual(context['evaluation_baseline'], baseline)
+        compare_sequence = world_fixture.take_sequence(context, sequence)
+        self.assert_batch_passed(self.dispatch_vc5(context, compare_sequence,
+            self.compare_action(context['campaign'], candidate_id=context['candidate_id'])), compare_sequence, 'VC-5')
+        with vc5_sources.seams(context['config_path']):
+            comparison = upgrade._load_stage_result(context['campaign'], 'compare', context['candidate_id'])
+        self.assertEqual((comparison['candidate_revision'], comparison['evaluation_baseline']), (context['revision'], baseline))
+        self.assertEqual(comparison['rules'], list(upgrade._approved_rules(context['campaign'], context['manifest'], require_approved=True)))
+        builder_sequence = world_fixture.take_sequence(context)
+        context.update(comparison=comparison, last_builder_sequence=builder_sequence)
+        return self.dispatch_vc5(context, builder_sequence, self.assert_action(context['campaign'], comparison))
 
     @staticmethod
     def boundary(paths: list[Path]) -> dict[str, tuple[str, int, int]]:
@@ -294,7 +254,7 @@ sys.exit(0)
         return {str(path): (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_ino, path.stat().st_mtime_ns)
                 for path in sorted(files)}
 
-    def run_transient_chain(self) -> None:
+    def run_transient_chain(self, *, evaluate_recovery: bool = True, first_recovery_fault: str | None = None) -> dict[str, Any]:
         """同一 Campaign 的完整新段链：失败定位、批准、只补 J*、增量封存、单次入账、b1 重新评估及幂等重读。"""
 
         from tools.official_client_capture.tests import claude_client_receipt_fixture
@@ -302,7 +262,7 @@ sys.exit(0)
         campaign = self.drive_vc3_vc4_to_candidate_sealed()
         self.prepare_runtime(campaign)
         manifest = upgrade.load_campaign_manifest(campaign)
-        assertion_profile.freeze_approved_assertion_profile(campaign, manifest)
+        world_fixture.freeze_control_profile(campaign)
         with claude_client_receipt_fixture.source_scope():
             code, first, stderr = self.source_command([
                 "capture-candidate", "run", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--acknowledge-live-requests",
@@ -317,6 +277,7 @@ sys.exit(0)
             code, _accounted, stderr = self.source_command(["account-sealed-candidate", "--campaign-dir", campaign, "--candidate-id", CANDIDATE])
             self.assertEqual(code, 0, stderr)
             context = self.evaluation_context(campaign)
+            audit = self.late_audit("候选 transient 裁定与恢复段续跑", context)
             code, failed, stderr = self.dispatch_builder(context, 9, baseline=0)
             self.assertIsNotNone(failed, stderr)
             self.assertEqual((code, failed["campaign_run"]["reason"]), (1, "action-failed:assert-rules"), stderr)
@@ -342,7 +303,8 @@ sys.exit(0)
             old_boundary = self.boundary([original_stage, attempt_root, original_seal_root, *old_roots])
             before_calls = len(self.runtime.candidate_calls())
             before_count = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"]
-            _write(self.relay_control, {"bad_probe": None})
+            # 独立第二 transient 驱动可在首次 ar1 执行前指定另一 probe 的环境故障，不修改封存原件。
+            _write(self.relay_control, {"bad_probe": first_recovery_fault})
             run_argv = ["capture-candidate", "run", "--campaign-dir", campaign, "--candidate-id", CANDIDATE,
                         "--attempt-recovery", "ar1", "--acknowledge-live-requests"]
             code, result, stderr = self.source_command(run_argv)
@@ -396,12 +358,13 @@ sys.exit(0)
             delta = delta_receipt["precise_total"]
             self.assertGreater(delta, 0)
             self.assertEqual(receipt["precise_total"] - before_count, delta)
-            code, passed, stderr = self.dispatch_builder(context, 10, baseline=1)
-            self.assertIsNotNone(passed, stderr)
-            self.assertEqual((code, passed["campaign_run"]["reason"]), (0, "queue-complete"), stderr)
-            index = json.loads((upgrade._stage_write_target(campaign, CANDIDATE, 1, "assertions") / "evaluation-run.json").read_bytes())
-            self.assertEqual(index["evaluation_baseline"], 1)
-            self.assertTrue(all(row["status"] == "pass" for row in index["rules"]))
+            if evaluate_recovery:
+                code, passed, stderr = self.dispatch_builder(context, context["next_sequence"], baseline=1)
+                self.assertIsNotNone(passed, stderr)
+                self.assertEqual((code, passed["campaign_run"]["reason"]), (0, "queue-complete"), stderr)
+                index = json.loads((upgrade._stage_write_target(campaign, CANDIDATE, 1, "assertions") / "evaluation-run.json").read_bytes())
+                self.assertEqual(index["evaluation_baseline"], 1)
+                self.assertTrue(all(row["status"] == "pass" for row in index["rules"]))
             count, calls = receipt["precise_total"], len(self.runtime.candidate_calls())
             code, reused, stderr = self.source_command(run_argv)
             self.assertEqual((code, reused["reused"], reused["live_request_count"]), (2, True, 0), stderr)
@@ -421,3 +384,29 @@ sys.exit(0)
             self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
             self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
             self.assert_campaign_request_accounting(campaign, expected_client_requests=2)
+
+            audit.check_trusted()
+            audit.check_closure(executed=[row['id'] for row in summary['results']], expected=[FAILED_JOB],
+                reused=recovery['reuse_jobs'], expected_reused=sorted(set(jobs) - {FAILED_JOB}), what='恢复段 J*')
+            audit.check_accounting(precise_delta=delta)
+            audit.check_elapsed()
+            audit.check_history()
+            audit.check_entry(recovered, 'compile-and-run-vc-batch', 'VC-5')
+            context['records'].append(audit.report(campaign_id=campaign.name, candidate_id=CANDIDATE,
+                candidate_revision=1, evaluation_baseline=1, executed_probes=executed, live_request_delta=delta))
+            world_fixture.refresh_world(self, context)
+            context.update(original_attempt_root=attempt_root, original_attempt=attempt, attempt_id=attempt_id,
+                recovery_revision='ar1', recovery_root=segment, recovery_summary=summary, baseline_recovery=recovery,
+                old_boundary=old_boundary, relay_control=self.relay_control)
+            return context
+
+    def run_transient_control_delivery_chain(self) -> dict[str, Any]:
+        """A 组主链：同一 Campaign 的真实恢复段经暂停／延期、严格 accept 到 VC-6。"""
+
+        with client_fixture.source_scope():
+            # 成功索引只写一次；b1 的首次 builder 在延期场景中执行，不重复写 recorded_at。
+            world = self.run_transient_chain(evaluate_recovery=False)
+            records = self.exercise_control_and_delivery_faults(world, sequence_start=world['next_sequence'])
+            world['records'].extend(records)
+            self.assertEqual({row['campaign_id'] for row in world['records']}, {world['campaign'].name})
+            return world

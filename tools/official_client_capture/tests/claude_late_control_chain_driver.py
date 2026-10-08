@@ -30,7 +30,7 @@ class ClaudeLateControlChainDriver(late.ClaudeLateStageChainDriver):
     def repeat_root_cause_then_compare(self, world: dict[str, Any], sequence: int) -> dict[str, Any]:
         campaign = world["campaign"]
         self.campaign = campaign
-        action = self.compare_action(campaign)
+        action = self.compare_action(campaign, candidate_id=world.get("candidate_id", late.CANDIDATE))
         audit = self.late_audit("后段同根因暂停并续派 compare", world)
         original = upgrade.compile_vc_batch
 
@@ -89,7 +89,7 @@ class ClaudeLateControlChainDriver(late.ClaudeLateStageChainDriver):
     def expired_budget_then_assert(self, world: dict[str, Any], sequence: int) -> dict[str, Any]:
         """只注入门禁的观察时间；准入判断、延期批准和后续 builder 均执行产品实现。"""
         campaign = world["campaign"]
-        comparison = upgrade._load_stage_result(campaign, "compare", late.CANDIDATE)
+        comparison = upgrade._load_stage_result(campaign, "compare", world.get("candidate_id", late.CANDIDATE))
         action = self.assert_action(campaign, comparison)
         audit = self.late_audit("后段预算到期并延期续派 builder", world)
         frozen = campaign / "control" / "vc" / "campaign-plan.json"
@@ -138,15 +138,17 @@ class ClaudeLateControlChainDriver(late.ClaudeLateStageChainDriver):
         return audit.report(campaign_id=campaign.name, sequence=sequence, observation_at_utc=observed_at.isoformat(),
             observation_injection="真实门禁仅替换 now 输入", extended_to=new_deadline)
 
-    def exercise_control_and_delivery_faults(self) -> list[dict[str, Any]]:
-        world = self.vc5_world()
+    def exercise_control_and_delivery_faults(self, world: dict[str, Any] | None = None, *, sequence_start: int = 9) -> list[dict[str, Any]]:
+        """给定 world 时继续原 Campaign，不重建证据、Store 或两本账。"""
+
+        world = self.vc5_world() if world is None else world
         self.campaign = world["campaign"]
-        records = [self.repeat_root_cause_then_compare(world, 9), self.expired_budget_then_assert(world, 10)]
+        records = [self.repeat_root_cause_then_compare(world, sequence_start), self.expired_budget_then_assert(world, sequence_start + 1)]
         receipt = self.gate_receipt(world, "late-control-candidate-receipt.json")
-        self.assert_batch_passed(self.dispatch_vc5(world, 11,
-            self.accept_action(self.campaign, receipt, world["gate_root"])), 11, "VC-5")
-        self.assertTrue(vc.vc_checkpoint_path(self.campaign, "VC-5", revision=1).is_file())
-        records.extend(self.exercise_delivery_faults(world, sequence_start=12))
+        self.assert_batch_passed(self.dispatch_vc5(world, sequence_start + 2,
+            self.accept_action(self.campaign, receipt, world["gate_root"], candidate_id=world.get("candidate_id", late.CANDIDATE))), sequence_start + 2, "VC-5")
+        self.assertTrue(vc.vc_checkpoint_path(self.campaign, "VC-5", revision=world.get("revision", 1)).is_file())
+        records.extend(self.exercise_delivery_faults(world, sequence_start=sequence_start + 3))
         self.assert_recorded_client_requests(world)
         self.assertEqual(len({row["campaign_id"] for row in records}), 1)
         return records
