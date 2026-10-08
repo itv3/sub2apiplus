@@ -17,6 +17,7 @@ import os
 import platform
 import re
 import signal
+import stat
 import subprocess
 import tarfile
 import threading
@@ -26,6 +27,8 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit
 
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, parse_json_bytes
+from tools.official_client_control.contracts import DIMENSIONS, validate_fact_ref
+from tools.official_client_control.errors import ControlError
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 
 CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v1"
@@ -253,7 +256,12 @@ def _external_executable(specification: dict[str, Any]) -> Path:
 
 
 class _QualificationStoreView:
-    """严格只读的验收视图，禁止引入交付分支而反向调用当前guard。"""
+    """单次资格重放的已验证只读视图，不引入交付分支或跨操作缓存。
+
+    每个 Campaign 首次读取仍由原 Store 完整校验事实链；本次重放内只索引
+    已验证的记录，返回独立副本。成功前再次读验完整原链及 Campaign 原字节，
+    任一变化都拒绝，不能用操作开始时的旧图签发通过证明。
+    """
 
     def __init__(self, store: Any):
         if store.read_only is not True:
@@ -261,19 +269,90 @@ class _QualificationStoreView:
         self._store = store
         self.root = store.root
         self.read_only = True
+        self._campaign_snapshots: dict[str, tuple[bytes, dict[str, Any]]] = {}
+        self._fact_snapshots: dict[str, tuple[list[dict[str, Any]], bytes]] = {}
+        self._fact_index: dict[tuple[str, str, int], dict[str, Any]] = {}
 
     def load_campaign(self, campaign_id: str) -> dict[str, Any]:
-        return self._store.load_campaign(campaign_id)
+        campaign = self._store.load_campaign(campaign_id)
+        observed = (canonical_json_bytes(campaign),
+                    self._file_source(self.root / "campaigns" / f"{campaign_id}.json"))
+        previous = self._campaign_snapshots.setdefault(campaign_id, observed)
+        if observed != previous:
+            raise guard.GuardError("资格重放期间 Campaign 发生变化，必须重新完整核验")
+        return campaign
+
+    def _file_source(self, path: Path) -> dict[str, Any]:
+        """实读 SHA 并记录原件坐标，不用 stat 命中代替字节校验。"""
+
+        binding = guard.binding(self.root, path)
+        information = path.lstat()
+        if not stat.S_ISREG(information.st_mode):
+            raise guard.GuardError("资格重放原件不是普通文件")
+        return {"binding": binding, "metadata": {
+            "device": information.st_dev, "inode": information.st_ino,
+            "mode": stat.S_IMODE(information.st_mode), "uid": information.st_uid,
+            "gid": information.st_gid, "mtime_ns": information.st_mtime_ns,
+            "ctime_ns": information.st_ctime_ns,
+        }}
+
+    def _fact_signature(self, campaign_id: str, facts: list[dict[str, Any]]) -> bytes:
+        """原链校验后的每个事实再绑定实际字节及路径元数据。"""
+
+        sources = []
+        for fact in facts:
+            path = (self.root / "facts" / campaign_id / fact["dimension"]
+                    / f"{fact['sequence']:08d}-{fact['_sha256']}.json")
+            source = self._file_source(path)
+            if source["binding"]["sha256"] != fact["_sha256"]:
+                raise guard.GuardError("资格重放期间事实原字节发生变化")
+            sources.append(source)
+        return canonical_json_bytes({"facts": facts, "sources": sources})
+
+    def _fact_snapshot(self, campaign_id: str) -> list[dict[str, Any]]:
+        """完整原链只读验一次，操作结束再复核；原记录不交给调用方修改。"""
+
+        if campaign_id not in self._fact_snapshots:
+            self.load_campaign(campaign_id)
+            facts = self._store.list_facts(campaign_id)
+            self.load_campaign(campaign_id)
+            self._fact_snapshots[campaign_id] = (facts, self._fact_signature(campaign_id, facts))
+            for fact in facts:
+                self._fact_index[(campaign_id, fact["dimension"], fact["sequence"])] = fact
+        return self._fact_snapshots[campaign_id][0]
 
     def list_facts(self, campaign_id: str, dimension: str | None = None) -> list[dict[str, Any]]:
         if dimension == "deployment":
             return []
-        return [fact for fact in self._store.list_facts(campaign_id, dimension) if fact["dimension"] != "deployment"]
+        if dimension is not None and dimension not in DIMENSIONS:
+            # 非法维度继续走原拒绝，不能因索引过滤而静默返回空集。
+            return self._store.list_facts(campaign_id, dimension)
+        facts = self._fact_snapshot(campaign_id)
+        return copy.deepcopy([fact for fact in facts if fact["dimension"] != "deployment"
+                              and (dimension is None or fact["dimension"] == dimension)])
 
     def load_fact(self, reference: dict[str, Any]) -> dict[str, Any]:
-        if reference.get("dimension") == "deployment":
+        if isinstance(reference, dict) and reference.get("dimension") == "deployment":
             raise guard.GuardError("验收子图不接受交付或生产激活事实")
-        return self._store.load_fact(reference)
+        parsed = validate_fact_ref(reference)
+        self._fact_snapshot(parsed["campaign_id"])
+        fact = self._fact_index.get((parsed["campaign_id"], parsed["dimension"], parsed["sequence"]))
+        if fact is None:
+            raise ControlError(f"事实引用不存在：{parsed}")
+        if fact["_sha256"] != parsed["sha256"]:
+            raise ControlError("事实引用摘要不匹配")
+        return copy.deepcopy(fact)
+
+    def verify_fact_snapshots(self) -> None:
+        """成功前重做原链与 Campaign 校验，追加或任何漂移都不能承接旧索引。"""
+
+        for campaign_id in sorted(self._campaign_snapshots):
+            self.load_campaign(campaign_id)
+            if campaign_id in self._fact_snapshots:
+                observed = self._store.list_facts(campaign_id)
+                if self._fact_signature(campaign_id, observed) != self._fact_snapshots[campaign_id][1]:
+                    raise guard.GuardError("资格重放期间事实链发生变化，必须重新完整核验")
+                self.load_campaign(campaign_id)
 
     def load_object(self, reference: dict[str, Any]) -> dict[str, Any]:
         if str(reference.get("object_kind", "")).startswith("candidate_delivery"):
@@ -365,6 +444,7 @@ def replay_qualification_graph(store: Any, qualification: dict[str, Any], extern
                 raise guard.GuardError("回退验收资格不得依赖本轮物理交付或生产激活事实")
             pending.append(fact)
             references.append(reference)
+    store.verify_fact_snapshots()
     return {"schema_version": "claude-upgrade-candidate-qualification-replay/v1", "campaign_id": qualification["campaign_id"], "candidate_id": qualification["candidate_id"], "fact_refs": sorted(references, key=canonical_sha256), "object_refs": sorted(objects, key=canonical_sha256), "receipt_refs": sorted(receipts, key=canonical_sha256), "external_bindings": [external[key] for key in sorted(external)], "result": "pass"}
 
 
