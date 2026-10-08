@@ -1769,7 +1769,11 @@ class ClaudeFaultChainTests(unittest.TestCase):
         self._run_chain('late-continuous')
 
     def _run_pending_revision_continuous(self) -> None:
-        """只有设计的拆链判据满足后，主任务才决定是否正式注册。"""
+        """显式定向入口保持未认证；八场景成功后再按设计决定合链／拆链。
+
+        claude_revision_evaluator_scenarios 的 --execute 委托本入口保存
+        真实指标与首败；它没有加入 test_* 发现或 pre-A3 登记。
+        """
 
         self._run_chain('revision-continuous')
 

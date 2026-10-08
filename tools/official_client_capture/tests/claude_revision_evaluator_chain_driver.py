@@ -145,6 +145,63 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         self.assertEqual(stage["attempt"]["path"], (attempt_root / "attempt.json").relative_to(campaign).as_posix())
         return attempt_root, attempt, stage
 
+    def evaluation_context(self, campaign: Path) -> dict[str, Any]:
+        """首个评估前补齐官方夹具原件，供同一世界的严格验收和 typed 交付实读。
+
+        父类来源仍只表示离线控制面夹具。这里沿用其请求、响应和包引用，
+        物化三份父清单及完整下层字节；不修改旧来源配置、官方 Store 包或
+        候选阶段结果。新配置在第一次 compare 前写出，后续 r2／b1 共用。
+        """
+
+        context = super().evaluation_context(campaign)
+        original_config = json.loads(context["config_path"].read_bytes())
+        self.assertNotIn("attempt", original_config, "候选上下文必须由正式封存读侧读取")
+        self.assertNotIn("attempt_root", original_config, "不能用来源配置替换候选 attempt")
+        official = upgrade._load_stage_result(campaign, "capture-official")
+        source = vc5_sources.materialize_official_source(
+            campaign=campaign, data_root=self.data, side=context["official"],
+            package_ref=official["store"]["evidence_package_ref"],
+        )
+        source_path = transient._write(context["evaluation"] / "materialized-official-source.json", source)
+        config = {**original_config, "official_source": str(source_path),
+                  "gate_environment_mode": vc5_sources.REAL_GATE_ENVIRONMENT}
+        context["config_path"] = transient._write(context["evaluation"] / "materialized-source-config.json", config)
+        return context
+
+    def late_audit(self, name: str, world: dict[str, Any]) -> Any:
+        """每次六项审计都保留新物化来源；刷新当前候选不能漏掉这些可信原件。"""
+
+        config = json.loads(world["config_path"].read_bytes())
+        roots = [*world.get("trusted_roots", []), world["config_path"],
+                 Path(config["official_source"]), world["campaign"] / "seam" / "official"]
+        audit_world = {**world, "trusted_roots": list(dict.fromkeys(roots))}
+        return super().late_audit(name, audit_world)
+
+    def gate_receipt(self, world: dict[str, Any], name: str, *, failed_gate: str | None = None) -> str:
+        """当前 revision 的门禁输入采用可独立重放的环境合同；原 reader 不打桩。
+
+        门禁命令的结果仍是明示测试输入。宿主与架构取真实封存执行计划，
+        环境原件经原 finalizer 形成，不能把旧最小替身送入 typed 交付。
+        """
+
+        config = json.loads(world["config_path"].read_bytes())
+        self.assertEqual(vc5_sources.gate_environment_mode(config), vc5_sources.REAL_GATE_ENVIRONMENT,
+                         "revision 连续链必须实读门禁环境原件")
+        self.assertTrue(world.get("real_candidate"), "门禁必须绑定真实 run／seal 的候选世界")
+        self.assertEqual(world["candidate_id"], self.active_candidate)
+        with vc5_sources.seams(world["config_path"]):
+            identity = compare.candidate_gate_identity(world["campaign"], world["manifest"],
+                                                     world["candidate_id"], world["build"])
+            subject = vc5_sources.expected_subject(world["manifest"], world["candidate_payload"], identity)
+            reference = world["stage"]["store"]["validation_execution_plan_ref"]
+            execution = world["store"].load_object(reference)["payload"]
+            coordinates = {(gate["host_id"], gate["architecture"]) for gate in execution["external_gates"]}
+            self.assertEqual(len(coordinates), 1, "本夹具只支持同一执行宿主与架构的门禁集合")
+            host, architecture = next(iter(coordinates))
+            return vc5_sources.gate_receipt_file(world["gate_root"], name=name, subject=subject,
+                host=host, architecture=architecture, failed_gate=failed_gate,
+                environment_mode=vc5_sources.REAL_GATE_ENVIRONMENT)
+
     def recover(self, context: dict[str, Any], action: str, *extra: Any) -> tuple[int, dict | None, str]:
         return self.source_command(["evaluation-recover", action, "--campaign-dir", context["campaign"],
             "--candidate-id", self.active_candidate, "--reviewer", "连续链审核", *extra])
