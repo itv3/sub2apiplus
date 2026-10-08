@@ -81,7 +81,7 @@
 | `provenance` | 模块 | `codex_upgrade_live_request_provenance` | `claude_upgrade_live_request_provenance` |
 | `identity_policy` | 模块 | `codex_upgrade_tool_identity_policy` | `claude_tool_identity_policy` |
 | `reject_volatile_dimensions` | 函数 | 无附加检查 | 拒绝含 Claude Campaign ID 的维度值 |
-| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名成员；VC-1 官方路径不经过，B4-05b 候选恢复段仍在实现／待验收 |
+| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名成员；VC-1 官方路径不经过，B4-05b 候选恢复段与后继修复已合入本机，正式整链待验收 |
 | `candidate_recovery_identity_flags` | 值 | Codex 原候选身份旗标闭集 | 仅 `--candidate-id`，候选身份从 VC-4 构建收据读取 |
 | `candidate_post_run_extra_action` | 函数 | 无额外动作（恒为假） | 供监督器 `candidate_post_run_recovery_action` 识别 Claude VC-6 run／finalize 的受管动作闭集 |
 | `requires_project_ledger` | 函数 | 0.154 起的 Formal Campaign 在项目总账内 | Formal Campaign 一律在项目总账内 |
@@ -144,7 +144,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（`policy_version` 2） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 4；schema 版本不表示发布认证通过） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
 | 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
 | 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
@@ -173,7 +173,10 @@ Claude 的 Store 合同（Codex 不涉及）：
 | Store 工具摘要 | `official-client-control-tool-identity/v1` | `…/v2` |
 | 收据形成期坐标（晋升、激活、候选构建、验收门禁） | `…/v1` | `…/v2`：加形成期坐标 |
 | PAIR／Acceptance | 严格 v2 只读重放 | 严格 v3：加评估基线与有效来源绑定 |
-| 候选交付收据 | v1／v2 只读重放 | v3：有效四阶段链及失败事实、阶段失效、恢复段预约引用 |
+| 候选交付计划／阶段 payload | 形成期合同只读重放 | `official-client-candidate-delivery-plan/v2`／`official-client-candidate-delivery-fact/v3`，control-fact 外壳仍为 v2 |
+| 候选交付执行证明 | generic v1 仅供原有合同使用 | typed `operational_evidence` v2，绑定独立 guard／journal 与严格来源，不能用 generic 证明降级 |
+| 候选交付包／收据 | 旧包及 v1～v3 收据按形成期只读重放，不授予当前完成权 | `official-client-candidate-delivery-package/v2`／`official-client-candidate-delivery-receipt/v4`，绑定有效四阶段、失败／恢复、阶段失效、预约与发布意图 |
+| Mac 客户端材料 | v1 原件只读保留；准确形成期 authority 入口仍待补齐 | task／source-manifest／server-capture／imported-run／receipt 全组 v2，accounting 仍为 v1；正式来源与真实服务未就绪时拒绝启动 |
 | 新对象与查询 | — | `tool_evolution_registration`、`predecessor_import`、候选作废对象 `candidate_invalidation`（两步批准：`candidate-invalidate --preview`／`--approve-sha256`）；新事实 `candidate_revision_recorded`；新收据 `predecessor_import`（`official-client-predecessor-import-receipt/v1`）；`fact-lookup` 结果 `official-client-control-fact-lookup/v1` |
 
 ## 4 共享控制流程与两个编排器
@@ -210,7 +213,7 @@ def compile_and_run_vc_batch(arguments):
 | 迁入薄壳 | 在 Claude 适配器作用域里转调 `upgrade_control_plane` |
 | 照搬 | 两客户端语义相同的通用函数（读写、摘要、路径、租约读取、证据根取代归档与冲突隔离读取、阶段路径等），逐字取 Codex 实现，由 `tests/test_orchestrator_surface_contract.py` 的照搬清单锁定逐字一致；先照搬后因 Claude 语义分叉的成员另行登记 |
 | 自实现 | Claude 语义不同的成员，实现在 `claude_upgrade_*` 子模块：总计划、官方／候选 attempt、封存与恢复、工具演进、阶段批次、分类、画像、候选 revision／构建、compare／accept、评估基线与交付等 |
-| 未完成或待验收 | 未接入成员报 `ClaudeOrchestratorPending` 或明确的配置错误；B4-05b 封存后恢复段仍在实现／验收中，Mac 真实客户端驱动与 ARM64 交付执行器仍有缺口，完整发布认证待完成 |
+| 未完成或待验收 | 未接入成员报 `ClaudeOrchestratorPending` 或明确的配置错误；恢复后继、Mac v2 合同 B 与交付合同 A 已合入本机，组合验证不能代替正式来源、真实服务、ARM64 受管登记及现场验收，完整发布认证仍待完成 |
 
 另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。共享流程子命令沿用 Codex 的参数定义，
 并在 Claude 适配器作用域里转调共享实现，对账器同时进入 Claude 作用域；其中
@@ -357,7 +360,7 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，`policy_version` 2 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 4 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
@@ -698,8 +701,14 @@ Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recover
   来源沿原 Job 权限收口校验。producer 坐标必须一致，逐跳 Job 收据摘要追溯最初生产者，计费请求沿同一身份去重。
 - seal 冻结执行计划、ValidationAttempt、场景 `prepare／capture／seal／approve`、CandidateEvidencePackage、候选
   评估 manifest 和边界。`--revalidate` 为外部门禁重试新建 `v<N>`，只读复用首轮原始证据，零请求、不重新深扫。
-- Mac Desktop／VS Code 收据与两项边界检查按 attempt 绑定；CLI 正例来自候选 PAIR。驱动缺材料／批准即写
-  `vc5-pause.json`，真实 Mac 驱动／收据闭合尚未完成，不能以合成材料登记全链通过。
+- Mac Desktop／VS Code 收据与两项边界检查按 attempt 绑定；CLI 正例来自候选 PAIR。Mac v2 合同 B、
+  受监督 `client-run` 与来源／预约 wrapper 已接入，当前 seal、恢复段继承、compare／accept 和 VC-5 严格消费
+  完整 v2；来源与预约的字面验证入口也已纳入真实读侧根，不能以整文件边界代替调用依赖。accounting 仍沿既有
+  v1 意图／COMMIT／outbox／项目账本链写入，不新建第二本账。原 attempt 的持久请求上界占用、派发前复核和
+  结清原语已实现，候选服务与消费读侧尚未接通。正式 `SOURCE_ADAPTERS` 仍为空；独立 capture 生命周期及真实
+  ProductRecorder 尚有缺口，历史形成期 authority 也待补齐。能力未闭合
+  时 live 在产品启动前拒绝；驱动缺真实材料／批准则写 `vc5-pause.json`。本机接线、夹具与组合专项不证明三官方
+  客户端真账号采集或完整链通过，现场与认证状态以 Claude 指南 §4.0.5／§4.5.2 为准。
 
 ### 12.2 评估基线、compare 与 accept
 
@@ -713,14 +722,18 @@ Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recover
 - 当前基线由时间账本、`b<K>/COMMIT` 和 Store `evaluation_baseline_recorded` 联合判定；形成期重放保留旧 b0，当前
   判定只取新基线有效来源。`evaluation-recover` 的 preview／apply、reevaluate、approval-revision 接共享控制流程，
   后两者无批准摘要时只预览；不存在独立的 approval-revision 子命令。
-- 四类裁定是 evaluator-defect、transient-environment、candidate-source、approval-inputs；已有的离线／候选
-  分流不能外推为 transient 补采全链已经通过。B4-05b 的 `ar<k>`、增量封存及封存后请求入账仍在实现／待验收。
+- 四类裁定是 evaluator-defect、transient-environment、candidate-source、approval-inputs；B4-05b 的 `ar<k>`、
+  增量封存、封存后请求入账及五项恢复后继修复已合入本机，成功前段按完整来源与原预约证明承接。第二次
+  transient 整链尚未完成验收，组合专项不能外推为正式整链已认证；实际链与认证状态见 Claude 指南 §4.0.5／§4.5.8。
 - Claude 不从缺失的历史 b0 `evaluation-run.json` 猜造新读侧事实；同基线未完成批次按对账结论逐字重派。
 
 ### 12.3 交付四阶段、恢复段与终态
 
 `claude_upgrade_delivery` 实现 `deliver-candidate run／finalize`、`delivery-stage-invalidate preview／apply`，
-Store 提供 `delivery-chain`、恢复段预约、阶段事实和 v3 交付收据。操作合同见
+Store 提供 `delivery-chain`、恢复段预约和阶段事实；当前真实交付使用 Plan v2、阶段 payload v3、typed 执行
+证明 v2、Package v2 与 Receipt v4，control-fact 外壳仍为 v2。`claude-upgrade-delivery/v2` 阶段结果、Store
+直接发布／重放、finalizer、status、既有结果复用及 VC-6 checkpoint 均须消费完整新合同，不能选旧外壳或混搭
+降级。旧收据仅按形成期重放或作历史幂等引用，不授予当前真实交付完成权。操作合同见
 [Claude 指南 §4.6](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-6)。
 
 - run 与批准版 finalize 是两份父批次动作；无批准 finalize 只看审核内容，阶段失效在批次之间执行。进入前重放 VC-5
@@ -730,24 +743,31 @@ Store 提供 `delivery-chain`、恢复段预约、阶段事实和 v3 交付收�
   新失效，重复 finalize 返回原收据。
 - run 的 `awaiting_finalize=2`／`stage_failed=3` 在父批次映射为合法暂停点；最终 `validation_only` 写 VC-6 checkpoint，
   `production_replacement` 停 `production_activation_pending`。生产 B4-08 另批，现有终态校验器不能代替真实部署。
-- **真实执行范围**：`ENVIRONMENT_EXECUTORS` 当前为空，ARM64 四阶段真实执行器未完成；控制面夹具通过不证明已经
-  切换现场。完整录制回放、故障链和发布认证状态均见 Claude 指南 §3.6／§4.0.5。
+- **本机实现与现场边界**：真实交付合同 A 的独立执行器、显式配置、稳定投影、零模型 recipe、可信回退绑定、
+  独立 guard／journal 来源及恢复证明已完成本机接线。正式 `ENVIRONMENT_EXECUTORS` 与交付
+  `SOURCE_VERIFIERS` 仍为空；ARM64 受管安装与 guard 生命周期、实际场地、可信回退、专用凭据、四阶段及异常
+  恢复尚待现场验收。本机执行证明和替身登记不证明已切换现场，也不开放正式执行。完整录制回放、故障链和
+  发布认证状态均见 Claude 指南 §3.6／§4.0.5；生产 B4-08 另批。
 
 ## 13 Codex 身份守恒
 
-本控制面改造对 Codex 只增不改：
+Codex 身份守恒以不可变原基线和已经明确批准的精确读侧登记为准：
 
-1. Codex 的 wire 闭包、evidence 闭包与评估读侧闭包计入的符号一律原位不动；共享代码与编排器以适配器服务面
-   为界，身份敏感函数不迁出、不复制。
-2. Codex wire 层与 evidence 层文件零修改；wire 层前缀下不新增文件；Claude 新文件一律 `claude_` 前缀，不新增
-   忽略规则。
-3. 新能力命中上述符号时新增并行实现，不改原符号。共享 control 模块里被评估读侧闭包按符号计入的符号同样不得
-   修改。
+1. Codex wire／evidence 层文件、编排器的 wire／evidence 两项闭包及 checker／builder 摘要保持原值；共享代码
+   与编排器以适配器服务面为界，身份敏感函数不迁出、不复制。
+2. wire 层前缀下不新增文件；Claude 新文件仍用 `claude_` 前缀，不扩身份引擎、策略屏障或忽略规则。新能力
+   命中 Codex 读侧符号仍用并行实现，未登记变化照常拒绝。
+3. 已批准的读侧演进仅限 B5a-08 原两常量登记，以及 D4 单点静态证明、r2 协议顺序元数据和原设计恢复接口
+   的精确后继。D4 唯一目标为 `codex_upgrade_reconciler:validate_segment_reuse_preview`；恢复原静态证明读集的
+   23／35 项依赖必须保留，不能把曾经丢失的依赖当成新基线，也不能将该单点扩大为整模块行为豁免。
 
-`tests/test_codex_identity_conservation.py` 守门：基线固化在 `fixtures/codex_identity_conservation_baseline.json`
-（基线文件摘要钉在测试里，各批不得改动），要求 wire、evidence、两个编排器闭包与四项评估器摘要逐字相等；
-control 层、策略与整树摘要的变化逐文件落在 `REGISTERED_CONTROL_CHANGES` 登记的修改清单里；没有按默认层归类
-的文件；迁入共享模块的函数与常量不属于任何身份闭包。
+`tests/test_codex_identity_conservation.py` 守门：原基线仍固化在
+`fixtures/codex_identity_conservation_baseline.json`，SHA 钉在测试中，各批不得改动。当前 compare／accept
+reader 摘要须等于 `fixtures/codex_identity_conservation_reader_transition_20261008.json` 的精确登记后值；
+该过渡原件也以 SHA 钉住。按恢复后继 → r2 → D4 逆向到 B5a-08 原图，再还原原两常量，最终须与冻结基线图
+逐字段、逐符号、逐摘要一致；遗漏整文件、漏登记、相位交换或额外漂移均拒绝。当前后值通过不替代部署前
+Codex 重认证。control 层、策略与整树摘要的变化仍逐文件落在 `REGISTERED_CONTROL_CHANGES`；未归层文件为零，
+迁入共享模块的函数与常量仍不属于任何身份闭包。
 
 留原位的函数分两类：被 Codex 身份闭包计入、本来就不可迁的函数（闭包名单随基线固化），以及 4.2 节列出的 11 个
 可迁但留原位的函数。两个编排器各自实现的读取与校验函数以后合并为一份，需要 Codex 改用跨模块按符号的 v3 引擎，
@@ -756,7 +776,9 @@ control 层、策略与整树摘要的变化逐文件落在 `REGISTERED_CONTROL_
 ## 14 修改本控制面时
 
 - 先判断改动落在哪个客户端的哪个身份层：改共享 control 模块要同时按两份策略评估，并在
-  `REGISTERED_CONTROL_CHANGES` 登记；改到 Codex 身份闭包内的符号属于身份守恒违规，应改为新增并行实现。
+  `REGISTERED_CONTROL_CHANGES` 登记；命中 Codex 身份闭包时仍优先新增并行实现。仅 §13 列明的已批准精确
+  后继按钉住原件和逆向证明消费，不得自行扩大例外或改基线；其它未登记变化属于守恒违规。部署前仍须登记
+  双客户端演进并完成各自发布重认证，文档同步或本机测试不授予部署认证。
 - 新增客户端差异时加适配器成员或服务面成员，并为两个客户端都登记绑定；不在共享代码里写客户端分支。
 - 新增或重命名服务面成员后运行 `tests/orchestrator_surface_inventory.py --check` 与两适配器合同测试。
 - 改到计时账本工具时，在其 `PRODUCER_FREEZE_SUCCESSORS` 与部署脚本 `MANAGED_RUNTIME_DOCUMENTS` 登记本批承接
