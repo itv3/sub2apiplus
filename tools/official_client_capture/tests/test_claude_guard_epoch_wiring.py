@@ -67,6 +67,65 @@ class GuardEpochWiringTests(unittest.TestCase):
             self.engine.prepare(fixtures.prepare_request(self.case.environment, nonce="missing-ready"), self.case.owner)
         self.assertEqual(guard.read_json(self.root / "state.json")["switch_count"], before)
 
+    def test_ticket_to_first_run_rechecks_readiness_before_any_change(self):
+        ticket = self.engine.prepare(fixtures.prepare_request(self.case.environment), self.case.owner)
+        (self.root / "guard/epochs/000001/readiness.json").unlink()
+        state = guard.read_bytes(self.root / "state.json")
+        operation = self.engine._operation(ticket["operation_id"])
+        originals = {path.relative_to(operation): guard.read_bytes(path) for path in operation.rglob("*") if path.is_file()}
+        with self.assertRaises(guard.GuardError):
+            self.engine.run(ticket)
+        self.assertEqual(guard.read_bytes(self.root / "state.json"), state)
+        self.assertEqual({path.relative_to(operation): guard.read_bytes(path) for path in operation.rglob("*") if path.is_file()}, originals)
+
+    def test_ticket_to_first_run_rechecks_registration_before_any_change(self):
+        ticket = self.engine.prepare(fixtures.prepare_request(self.case.environment), self.case.owner)
+        (self.root / "guard/epochs/000001/registration.json").unlink()
+        before = guard.read_json(self.root / "state.json")
+        with self.assertRaises((guard.GuardError, ControlError)):
+            self.engine.run(ticket)
+        self.assertEqual(guard.read_json(self.root / "state.json"), before)
+        self.assertNotIn("execution_started", {row["event"] for row in self.engine._journal(ticket["operation_id"])})
+
+    def test_new_pass_finish_rechecks_readiness_without_false_commit_or_restore(self):
+        ticket = self.engine.prepare(fixtures.prepare_request(self.case.environment), self.case.owner)
+        observed = self.engine.run(ticket)
+        decision = self.case.decision(observed)
+        (self.root / "guard/epochs/000001/readiness.json").unlink()
+        state = guard.read_bytes(self.root / "state.json")
+        with self.assertRaises(guard.GuardError):
+            self.engine.finish(ticket, decision)
+        self.assertEqual(guard.read_bytes(self.root / "state.json"), state)
+        self.assertFalse((self.engine._operation(ticket["operation_id"]) / "physical-intent.json").exists())
+
+    def test_zero_operation_old_root_losing_epochs_and_head_cannot_reinitialize(self):
+        self.assertEqual(self.engine._index()["operations"], [])
+        self.assertTrue((self.root / "guard/index-snapshots").is_dir())
+        shutil.rmtree(self.root / "guard/epochs")
+        shutil.rmtree(self.root / "guard/epoch-registry")
+        with self.assertRaisesRegex(guard.GuardError, "禁止倒填"):
+            self.engine.complete_startup()
+        self.assertFalse((self.root / "guard/epochs").exists())
+
+    def test_current_proof_contains_and_revalidates_immutable_registry_head(self):
+        core = self.committed()
+        raw = self.exported(core)
+        envelope = raw["guard_continuity"]
+        from tools.official_client_capture import claude_upgrade_guard_epochs as epochs
+        self.assertEqual(envelope["schema_version"], epochs.CONTINUITY_V2_SCHEMA)
+        originals = {path: base64.b64decode(value, validate=True) for path, value in raw["bytes_by_path"].items()}
+        head = envelope["registry_head_binding"]
+        self.assertIn(head["path"], originals)
+        content = {key: value for key, value in core.items() if key != "origin"}
+        checked = epochs.validate_guard_continuity(self.case.configuration, self.case.context, envelope,
+            lambda item: originals[item["path"]], source_core=content, source_origin=core["origin"],
+            channel_identity=raw["guard_identity"], purpose="formed_replay")
+        self.assertIn(head, [row.as_value() for row in checked.read_bindings])
+        incomplete = dict(originals)
+        del incomplete[head["path"]]
+        with self.assertRaises((ControlError, KeyError)):
+            checked.revalidate(lambda item: incomplete[item["path"]], purpose="formed_replay")
+
     def test_registration_gap_and_unknown_epoch_material_are_rejected(self):
         core = self.committed()
         epoch = self.root / "guard/epochs/000001"
@@ -134,6 +193,41 @@ class GuardServiceEpochRecoveryTests(unittest.TestCase):
         self.assertFalse(recovery["blocked"])
         self.assertEqual(guard.read_json(readiness)["result"], "pass")
         self.assertEqual(recovery["operations"][0]["execution"]["result"], "failed")
+
+    def test_removing_unused_tail_epoch_blocks_real_restart_without_reusing_number(self):
+        first = self.case.start_guard()
+        first.kill()
+        first.join(timeout=3)
+        second = self.case.start_guard()
+        second.kill()
+        second.join(timeout=3)
+        root = self.case.root
+        pointer = guard.read_bytes(root / "guard/epoch-registry/head.json")
+        self.assertEqual(guard.read_json(root / "state.json")["switch_count"], 0)
+        shutil.rmtree(root / "guard/epochs/000002")
+        third = self.case.mp.Process(target=fixtures.guard_process, args=(self.case.configuration, self.case.context))
+        third.start()
+        self.case.processes.append(third)
+        third.join(timeout=5)
+        self.assertFalse(third.is_alive())
+        self.assertNotEqual(third.exitcode, 0)
+        self.assertFalse((root / "guard/epochs/000002").exists())
+        self.assertEqual(guard.read_bytes(root / "guard/epoch-registry/head.json"), pointer)
+
+    def test_normal_new_epoch_preserves_old_immutable_head_and_proof(self):
+        first = self.case.start_guard()
+        client = executor.create_executor("arm64-isolated", self.case.configuration, self.case.context)
+        core = client.operations_index()
+        content = {"campaign_id": self.case.context["campaign_id"], "delivery_id": self.case.context["delivery_id"],
+                   "operation_index_binding": core["operation_index_binding"]}
+        source = client.verify_origin_evidence(content, core["origin"])
+        proof = source["guard_continuity"]
+        before = guard.read_bytes(self.case.root / "guard/epoch-registry/head.json")
+        first.kill()
+        first.join(timeout=3)
+        self.case.start_guard()
+        self.assertNotEqual(guard.read_bytes(self.case.root / "guard/epoch-registry/head.json"), before)
+        proof.revalidate(lambda item: guard.read_bytes(guard.check_binding(self.case.root, dict(item))), purpose="formed_replay")
 
 
 if __name__ == "__main__":

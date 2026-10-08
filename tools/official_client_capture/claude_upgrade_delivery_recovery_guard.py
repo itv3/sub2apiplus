@@ -352,6 +352,7 @@ class GuardEngine:
         registrations, readiness = [], []
         directory = self.root / "epochs"
         if not directory.exists():
+            self._registry_head_binding(registrations)
             return registrations, readiness
         if directory.is_symlink() or not directory.is_dir():
             raise GuardError("epoch 根不是受管目录")
@@ -364,7 +365,44 @@ class GuardEngine:
             registrations.append(binding(self.data_root, path / "registration.json"))
             if "readiness.json" in names:
                 readiness.append(binding(self.data_root, path / "readiness.json"))
+        self._registry_head_binding(registrations)
         return registrations, readiness
+
+    def _registry_head_binding(self, registrations: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """游标只指向不可变注册全集；旧现场丢头不视为首次初始化。"""
+        registry = self.root / "epoch-registry"
+        pointer = registry / "head.json"
+        if not pointer.exists():
+            scaffold = {".service.lock", "configuration.json", "index.json", "operations"}
+            unknown = {path.name for path in self.root.iterdir()} - scaffold
+            if registrations or unknown or list(self.operations.iterdir()):
+                raise GuardError("旧守卫根丢失注册头，禁止倒填或复用历史代际序号")
+            return None
+        value = exact(read_json(pointer), {"schema_version", "snapshot_binding"}, "注册头游标")
+        if value["schema_version"] != "claude-upgrade-delivery-guard-registry-pointer/v1" or not registrations:
+            raise GuardError("守卫注册头存在而代际全集缺失，禁止倒填")
+        last = read_json(check_binding(self.data_root, registrations[-1]))
+        registered = guard_epochs.validate_registration_chain(
+            self.configuration, self.context, registrations, self._read_original,
+            channel_identity=last["guard_identity"])
+        guard_epochs.validate_registry_head(
+            self.configuration, self.context, registered, value["snapshot_binding"], self._read_original)
+        return dict(value["snapshot_binding"])
+
+    def _seal_registry_head(self, registrations: list[dict[str, Any]]) -> None:
+        """注册追加后封存不可变全集，再原子推进游标；不重签旧快照。"""
+        registered = guard_epochs.validate_registration_chain(
+            self.configuration, self.context, registrations, self._read_original, channel_identity=self.identity)
+        document = {"schema_version": guard_epochs.REGISTRY_HEAD_SCHEMA,
+                    "configuration_binding": self.context["configuration_ref"],
+                    "configuration_sha256": canonical_sha256(self.configuration),
+                    "stable_deployment_identity_sha256": registered.stable_deployment_identity_sha256,
+                    "epoch_bindings": registrations}
+        path = self.root / "epoch-registry" / "snapshots" / (canonical_sha256(document) + ".json")
+        write_json_once(path, document)
+        atomic_json(self.root / "epoch-registry" / "head.json", {
+            "schema_version": "claude-upgrade-delivery-guard-registry-pointer/v1",
+            "snapshot_binding": binding(self.data_root, path)})
 
     def _register_epoch(self) -> None:
         """持有独占现场锁时追加真实进程，不给无注册的历史操作倒填身份。"""
@@ -405,6 +443,7 @@ class GuardEngine:
         )
         write_json_once(path, document)
         self._epoch_binding = binding(self.data_root, path)
+        self._seal_registry_head([*registrations, self._epoch_binding])
 
     def _publish_epoch_readiness(self) -> None:
         """全部操作恢复后封存启动边界，后续当前索引仍独立重验。"""
@@ -750,6 +789,8 @@ class GuardEngine:
             if any(row["event"] == "execution_started" for row in self._journal(operation_id)):
                 self._abort(operation_id, "检测到物理动作已开始的断点；不能重复动作")
                 return read_json(root / "observation.json")
+            # 准备票据不保证执行时仍有同一注册及启动资格；拒绝须发生在任何动作前。
+            self._require_epoch_readiness()
             try:
                 self._lease_check(operation_id)
                 self._append(operation_id, "execution_started", {"prepared_binding": ticket["prepared_binding"]})
@@ -883,6 +924,9 @@ class GuardEngine:
             if terminal:
                 return self._current_core(operation_id)
             root = self._operation(operation_id)
+            # 新通过提交重核资格；失败决策仍能进入既有恢复路径。
+            if decision.get("result") == "pass":
+                self._require_epoch_readiness()
             try:
                 exact(decision, {"result", "observation_sha256", "verifier_binding", "reason"}, "编排复核")
                 if decision["result"] not in {"pass", "failed"} or not isinstance(decision["reason"], str):
@@ -1049,11 +1093,12 @@ class GuardEngine:
             registered = guard_epochs.validate_registration_chain(
                 self.configuration, self.context, registrations, self._read_original, channel_identity=self.identity)
             continuity = {
-                "schema_version": guard_epochs.CONTINUITY_SCHEMA,
+                "schema_version": guard_epochs.CONTINUITY_V2_SCHEMA,
                 "source_service_instance_id": origin["service_instance_id"],
                 "channel_service_instance_id": self.identity["service_instance_id"],
                 "stable_deployment_identity_sha256": registered.stable_deployment_identity_sha256,
                 "epoch_bindings": registrations, "readiness_bindings": ready_bindings,
+                "registry_head_binding": self._registry_head_binding(registrations),
                 "source_record_binding": binding(self.data_root, matched_source_path),
                 "source_json_pointer": source_pointer,
                 "current_operations_index_binding": self._snapshot_index(),

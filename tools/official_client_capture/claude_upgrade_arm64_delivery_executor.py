@@ -1192,6 +1192,8 @@ class Arm64DeliveryExecutor:
         profile_projection = profile_observations.validate_profile_observation_projection(
             self.configuration, self.context, raw.get("profile_proof_bindings"), read_profile_original,
             purpose="formed_replay", producer_materials=raw.get("profile_producer_materials"))
+        if raw.get("guard_continuity", {}).get("schema_version") != guard_epochs.CONTINUITY_V2_SCHEMA:
+            raise guard.GuardError("当前守卫通道缺注册全集头锚点，不能降级消费旧连续性")
         continuity = guard_epochs.validate_guard_continuity(
             self.configuration, self.context, raw.get("guard_continuity"), read_profile_original,
             source_core=content, source_origin=origin, channel_identity=raw["guard_identity"],

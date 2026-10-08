@@ -60,6 +60,12 @@ INDEX_OPERATION_FIELDS = frozenset({
 })
 SAFE_OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 CONTINUITY_SCHEMA = "claude-upgrade-delivery-guard-continuity/v1"
+CONTINUITY_V2_SCHEMA = "claude-upgrade-delivery-guard-continuity/v2"
+REGISTRY_HEAD_SCHEMA = "claude-upgrade-delivery-guard-registry-head/v1"
+REGISTRY_HEAD_FIELDS = frozenset({
+    "schema_version", "configuration_binding", "configuration_sha256",
+    "stable_deployment_identity_sha256", "epoch_bindings",
+})
 CONTINUITY_FIELDS = frozenset({
     "schema_version", "source_service_instance_id", "channel_service_instance_id",
     "stable_deployment_identity_sha256", "epoch_bindings", "readiness_bindings",
@@ -506,7 +512,9 @@ def validate_guard_continuity(
     """
     if purpose not in {"current_execution", "formed_replay"}:
         raise ControlError("guard 连续性消费目的未登记")
-    document = _exact(envelope, CONTINUITY_FIELDS, "guard.continuity")
+    schema = expect_object(envelope, "guard.continuity").get("schema_version")
+    fields = CONTINUITY_FIELDS | {"registry_head_binding"} if schema == CONTINUITY_V2_SCHEMA else CONTINUITY_FIELDS
+    document = _exact(envelope, fields, "guard.continuity")
     origin = _exact(dict(source_origin), SOURCE_ORIGIN_FIELDS, "guard.continuity.origin")
     core = expect_object(dict(source_core), "guard.continuity.core")
     seen: dict[str, tuple[EpochBinding, bytes]] = {}
@@ -527,7 +535,7 @@ def validate_guard_continuity(
     registered = validate_registration_chain(
         configuration, context, document["epoch_bindings"], read, channel_identity=channel_identity,
     )
-    if (document["schema_version"] != CONTINUITY_SCHEMA
+    if (document["schema_version"] not in {CONTINUITY_SCHEMA, CONTINUITY_V2_SCHEMA}
             or document["channel_service_instance_id"] != registered.channel_service_instance_id
             or document["source_service_instance_id"] != origin["service_instance_id"]
             or document["source_service_instance_id"] not in registered.ordered_service_instance_ids
@@ -536,6 +544,8 @@ def validate_guard_continuity(
             or origin["authority"] != channel_identity["authority"]
             or origin["source_scope"] != channel_identity["source_scope"]):
         raise ControlError("guard 连续性版本、来源、当前通道或稳定部署不一致")
+    if schema == CONTINUITY_V2_SCHEMA:
+        validate_registry_head(configuration, context, registered, document["registry_head_binding"], read)
     ready_values = document["readiness_bindings"]
     if not isinstance(ready_values, list):
         raise ControlError("guard 连续性 readiness 必须是显式完整数组")
@@ -633,6 +643,30 @@ def validate_guard_continuity(
         canonical_json_bytes(channel_identity), canonical_json_bytes(document),
         canonical_json_bytes(core), canonical_json_bytes(origin),
     )
+
+
+def validate_registry_head(
+    configuration: Mapping[str, Any], context: Mapping[str, Any], registered: RegisteredGuardEpochs,
+    head_binding: Mapping[str, Any], read_raw: Callable[[Mapping[str, Any]], bytes],
+) -> dict[str, Any]:
+    """独立封存的注册全集锚点，防止删除末尾目录后静默复用代际序号。
+
+    实际服务另核可变游标；此处只消费不可变快照，正常追加不会击穿旧证明。
+    """
+    item = _binding(head_binding, "guard.registry_head.binding")
+    raw = read_raw(item)
+    if not isinstance(raw, bytes) or len(raw) != item["bytes"] or sha256_bytes(raw) != item["sha256"]:
+        raise ControlError("守卫注册头原件缺失或字节漂移")
+    document = _exact(parse_json_bytes(raw), REGISTRY_HEAD_FIELDS, "guard.registry_head")
+    root = validate_relative_path(configuration["paths"]["guard_root_relative"], "guard.registry_head.root")
+    if (document["schema_version"] != REGISTRY_HEAD_SCHEMA
+            or item["path"] != f"{root}/epoch-registry/snapshots/{canonical_sha256(document)}.json"
+            or document["configuration_binding"] != _stable_context(context)["configuration_ref"]
+            or document["configuration_sha256"] != canonical_sha256(configuration)
+            or document["stable_deployment_identity_sha256"] != registered.stable_deployment_identity_sha256
+            or document["epoch_bindings"] != [value.as_value() for value in registered.epoch_bindings]):
+        raise ControlError("守卫注册头与同一冻结配置及完整代际链不一致")
+    return document
 
 
 def same_verified_guard_deployment(left: Any, right: Any) -> bool:
