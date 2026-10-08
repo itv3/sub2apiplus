@@ -287,6 +287,32 @@ class StateJournalTests(unittest.TestCase):
                 with self.recorder():
                     self.fail("第二持锁者不应进入")
 
+    def test_lock_hardlink_added_while_held_rejects_change_without_overwriting_state_or_wal(self) -> None:
+        with self.recorder() as recorder:
+            recorder.prepare()
+            recorder.record_intent("edit", {"config.json": file_state(b"must-not-write")})
+            original_state = self.config.read_bytes()
+            original_stat = self.config.stat()
+            original_wal = (self.journal / "journal.jsonl").read_bytes()
+            original_before = (self.journal / "state-before.bin").read_bytes()
+            lock_path = self.state / ".claude-private-state.lock"
+            # 真正增加持锁 inode 的链接数，不能只模拟 stat 返回值。
+            alias = self.outer / "lock-alias"
+            os.link(lock_path, alias)
+            self.assertEqual(lock_path.stat().st_nlink, 2)
+            with self.assertRaisesRegex(StateJournalError, "私有普通单链接"):
+                recorder.apply_intent("edit")
+            with self.assertRaisesRegex(StateJournalError, "私有普通单链接"):
+                recorder.record_intent("blocked", {"config.json": file_state(b"must-not-record")})
+            self.assertEqual(self.config.read_bytes(), original_state)
+            current_stat = self.config.stat()
+            self.assertEqual((current_stat.st_mode, current_stat.st_mtime_ns),
+                             (original_stat.st_mode, original_stat.st_mtime_ns))
+            self.assertEqual((self.journal / "journal.jsonl").read_bytes(), original_wal)
+            self.assertEqual((self.journal / "state-before.bin").read_bytes(), original_before)
+            self.assertFalse((self.journal / "state-after.bin").exists())
+            self.assertEqual(alias.stat().st_ino, lock_path.stat().st_ino)
+
     def test_task_nonce_producer_and_deadline_mismatch_preserve_originals(self) -> None:
         with self.recorder() as recorder:
             recorder.prepare()

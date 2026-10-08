@@ -251,8 +251,9 @@ class StateJournal:
         lock_path = os.stat(LOCK_NAME, dir_fd=self._state_fd, follow_symlinks=False)
         held = os.fstat(self._lock_fd)
         _require((held.st_dev, held.st_ino) == (lock_path.st_dev, lock_path.st_ino)
-                 and stat.S_ISREG(lock_path.st_mode) and stat.S_IMODE(lock_path.st_mode) == 0o600,
-                 "持锁期间状态锁文件被替换或改权")
+                 and all(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and info.st_nlink == 1
+                         and stat.S_IMODE(info.st_mode) == 0o600 for info in (held, lock_path)),
+                 "持锁期间状态锁被替换、改权或不再是私有普通单链接文件")
 
     @contextmanager
     def _parent(self, relative: str) -> Iterator[tuple[int, str]]:
