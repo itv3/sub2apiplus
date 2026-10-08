@@ -136,7 +136,7 @@ def _binary_observation(state: dict[str, Any], manifest: dict[str, Any], observe
 
 
 @contextlib.contextmanager
-def installed(state_path: Path, digest: str):
+def installed(state_path: Path, digest: str, *, adapter_factory: Callable[..., Any] = source.SourceAdapter):
     """所有替身集中登记。控制判定函数不在替换清单内，离开作用域后恢复原函数。"""
 
     from tools.official_client_capture import claude_upgrade as upgrade
@@ -147,7 +147,7 @@ def installed(state_path: Path, digest: str):
     from tools.official_client_capture.tests import test_claude_upgrade_capture as fixture
     from tools.official_client_capture.tests import test_claude_upgrade_job_rehearsal as rehearsal_fixture
 
-    adapter = source.SourceAdapter(state_path, digest)
+    adapter = adapter_factory(state_path, digest)
     state, data = adapter.state, Path(adapter.state["data_root"])
     for item in state["inputs"]["bindings"].values():
         source.bound(item, root=data)
@@ -436,7 +436,7 @@ def load_continuation(path: Path, digest: str) -> dict[str, Any]:
             "state": state, "data": data, "campaign": campaign, "manifest": manifest}
 
 
-def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
+def run_chain(state_path: Path, digest: str, *, installer: Callable[..., Any] = installed) -> dict[str, Any]:
     from tools.official_client_capture import claude_upgrade_vc0_closeout as closeout
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import codex_upgrade_timing_ledger as timing
@@ -445,7 +445,7 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
     state = source.load_state(state_path, digest)
     replay.load_snapshot(state["snapshot"])
     data, started = Path(state["data_root"]), time.monotonic()
-    with installed(state_path, digest):
+    with installer(state_path, digest):
         paths = _plan_and_inputs(state)
         campaign = data / "evidence/campaigns" / FORMAL
         argv = ["--preflight-campaign-dir", str(paths["preflight"]), "--formal-campaign-dir", str(campaign),
@@ -518,13 +518,13 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
     return report
 
 
-def activate() -> None:
+def activate(*, installer: Callable[..., Any] = installed) -> None:
     """sitecustomize 只承接登记的受管编排器脚本；安装失败必须终止，不能悄悄执行真实客户端。"""
 
     state_path, digest = Path(os.environ[source.STATE_ENV]), os.environ[source.DIGEST_ENV]
     state = source.load_state(state_path, digest)
     stack = contextlib.ExitStack()
-    stack.enter_context(installed(state_path, digest))
+    stack.enter_context(installer(state_path, digest))
     _STACKS.append(stack)
     raw = [item.decode() for item in Path("/proc/self/cmdline").read_bytes().split(b"\0") if item]
     managed = {str(Path(state["data_root"]) / "tools/official_client_capture/claude_upgrade.py"),
