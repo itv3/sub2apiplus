@@ -29,17 +29,39 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
     """首段已成功封存并入账后接续第二段；不改旧段正文，不放宽根因上限。"""
 
-    def repair_environment_root(self, world: dict[str, Any], reconciled: dict[str, Any]) -> dict[str, Any]:
-        """解除外部故障后用真实 CLI 登记环境修复；收据明确只属于本次离线来源。"""
+    def repair_environment_root(
+        self, world: dict[str, Any], reconciled: dict[str, Any], *, prior_repair: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """只修复当前暂停明确绑定的根因；同一环境修复可以为两个不同的失败合同分别留证。"""
 
-        cause = str(reconciled["root_cause"]["root_cause_id"])
+        cause = str(reconciled["root_cause_id"] if prior_repair is not None else reconciled["root_cause"]["root_cause_id"])
         self.assertIn(cause, ledger.replay_head(self.project_root)["root_cause_counts"])
         if reconciled["status"] == "paused":
             self.assertEqual(set(reconciled["decision"]["pause_kinds"]), {"root_cause_repair"})
         else:
             self.assertEqual(reconciled["status"], "recoverable")
         before_control = upgrade.file_sha256(self.relay_control)
-        first_chain._write(self.relay_control, {"bad_probe": None})
+        evidence: dict[str, Any] = {}
+        if prior_repair is None:
+            first_chain._write(self.relay_control, {"bad_probe": None})
+        else:
+            # 第二个根因只能来自本次 b2 的真实 PREPARED；不按总账中的其他根因自动清零。
+            self.assertEqual(reconciled["status"], "paused")
+            prepared_root = world["campaign"] / "candidates" / first_chain.CANDIDATE / "revisions" / "b2"
+            prepared_recovery = prepared_root / "recovery.json"
+            recovery = json.loads(prepared_recovery.read_bytes())
+            self.assertEqual((recovery["evaluation_baseline"], recovery["recovery_revision"], recovery["kind"]),
+                             (2, "ar2", "attempt-recovery"))
+            self.assertEqual(cause, recovery["root_cause_id"])
+            self.assertEqual(cause, world["baseline_recovery"]["root_cause_id"])
+            self.assertTrue((prepared_root / "PREPARED").is_file())
+            self.assertFalse((prepared_root / "AUTHORIZATION").exists())
+            self.assertFalse((prepared_root / "COMMIT").exists())
+            prior_receipt = Path(prior_repair["receipt_path"])
+            evidence = {
+                "prior_environment_repair": {"path": str(prior_receipt), "sha256": upgrade.file_sha256(prior_receipt)},
+                "prepared_recovery": {"path": str(prepared_recovery), "sha256": upgrade.file_sha256(prepared_recovery)},
+            }
         self.assertIsNone(json.loads(self.relay_control.read_bytes())["bad_probe"])
         binding = {
             "campaign_id": world["campaign"].name, "candidate_id": world["candidate_id"],
@@ -47,12 +69,13 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
             "source_kind": "offline-fixture-environment", "production_certification": False,
             "control_path": str(self.relay_control), "control_before_sha256": before_control,
             "control_after_sha256": upgrade.file_sha256(self.relay_control),
+            **evidence,
         }
-        repaired = first_chain._write(self.root / "second-transient-environment-repair.json", {
+        repaired = first_chain._write(self.root / f"second-transient-environment-repair-{cause}.json", {
             "schema_version": "claude-offline-environment-repair/v1", **binding,
             "repaired_probe": SECOND_FAILED_PROBE,
         })
-        clean = first_chain._write(self.root / "second-transient-clean-environment.json", {
+        clean = first_chain._write(self.root / f"second-transient-clean-environment-{cause}.json", {
             "schema_version": "claude-offline-clean-environment/v1", **binding,
             "bad_probe": None, "environment_repair_receipt_sha256": upgrade.file_sha256(repaired),
         })
@@ -105,9 +128,27 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
                 self.assertEqual(preview["failure_scope"]["jobs"], [first_chain.FAILED_JOB])
                 code, recovered, stderr = self.recover(world, "apply", "--approve-sha256", preview["review_sha256"],
                     "--root-cause-class", "transient-environment")
-            self.assertEqual(code, 0, stderr)
             self.assertIsNotNone(recovered, stderr)
+            # 父 run 对账与评估恢复各有根因事件；前者已修复，后者第二次入账仍须依法暂停并单独登记修复。
+            self.assertEqual((code, recovered["status"]), (3, "paused"), stderr)
             baseline_root = campaign / "candidates" / first_chain.CANDIDATE / "revisions" / "b2"
+            prepared_boundary = self.boundary([baseline_root])
+            operations_before_resume = dict(ledger.replay_head(self.project_root)["operations"])
+            calls_before_resume = len(self.runtime.candidate_calls())
+            evaluation_repair = self.repair_environment_root(world, recovered, prior_repair=repair)
+            with self.source_context():
+                code, recovered, stderr = self.recover(world, "apply", "--approve-sha256", preview["review_sha256"],
+                    "--root-cause-class", "transient-environment")
+            self.assertIsNotNone(recovered, stderr)
+            self.assertEqual((code, recovered["status"]), (0, "applied"), stderr)
+            self.assertEqual(recovered["evaluation_baseline"], 2)
+            self.assertEqual(len(self.runtime.candidate_calls()), calls_before_resume)
+            for path, digest in prepared_boundary.items():
+                self.assertEqual(upgrade.file_sha256(Path(path)), digest)
+            resumed_operations = ledger.replay_head(self.project_root)["operations"]
+            for operation, binding in operations_before_resume.items():
+                self.assertEqual(resumed_operations[operation], binding)
+            self.assertEqual(set(resumed_operations) - set(operations_before_resume), {evaluation_repair["operation_id"]})
             recovery = json.loads((baseline_root / "recovery.json").read_bytes())
             self.assertEqual((recovery["attempt_id"], recovery["recovery_revision"], recovery["previous_baseline"]), (attempt_id, "ar2", 1))
             self.assertEqual(recovery["execute_jobs"], [first_chain.FAILED_JOB])
@@ -204,7 +245,8 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
             world["records"].append(audit.report(campaign_id=campaign.name, candidate_id=first_chain.CANDIDATE,
                 candidate_revision=world["revision"], evaluation_baseline=2, recovery_revision="ar2",
                 predecessor_recovery="ar1", executed_probes=executed, live_request_delta=delta,
-                environment_repair=repair["receipt_sha256"]))
+                environment_repair=repair["receipt_sha256"],
+                evaluation_environment_repair=evaluation_repair["receipt_sha256"]))
             world_fixture.refresh_world(self, world)
             world.update(recovery_revision="ar2", recovery_root=segment, recovery_summary=summary,
                 baseline_recovery=recovery, second_transient_old_boundary=old_boundary)
