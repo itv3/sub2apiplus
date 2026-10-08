@@ -25,6 +25,7 @@ class CaptureClient:
 
     def __init__(self, configuration: Mapping[str, Any], sync_root: Path, *, timeout_seconds: float = 40):
         self.configuration = c.validate_configuration(dict(configuration))
+        self.versions = c.contract_versions(self.configuration)
         self.task = c.verify_task_configuration(self.configuration)
         self.task_sha = self.task["task_sha256"]
         self.data_root = Path(self.configuration["data_root"])
@@ -42,14 +43,14 @@ class CaptureClient:
         info = self.path.lstat()
         c.require(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o600, "采集 socket 类型、所有者或权限非法")
         nonce = secrets.token_hex(24)
-        envelope = {"protocol": c.RPC_PROTOCOL, "nonce": nonce, "action": action, "payload": dict(payload)}
+        envelope = {"protocol": self.versions["rpc"], "nonce": nonce, "action": action, "payload": dict(payload)}
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(self.timeout)
             connection.connect(str(self.path))
             connection.sendall(c.canonical({**envelope, "mac": _mac(self.key, envelope)}) + b"\n")
             response = c.exact(c.parse_json(receive(connection)), {"protocol", "nonce", "body", "mac"}, "采集 RPC 响应")
         core = {name: response[name] for name in ("protocol", "nonce", "body")}
-        c.require(response["protocol"] == c.RPC_PROTOCOL and response["nonce"] == nonce and isinstance(response["mac"], str) and hmac.compare_digest(response["mac"], _mac(self.key, core)), "采集来源响应鉴权失败")
+        c.require(response["protocol"] == self.versions["rpc"] and response["nonce"] == nonce and isinstance(response["mac"], str) and hmac.compare_digest(response["mac"], _mac(self.key, core)), "采集来源响应鉴权失败")
         body = c.exact(response["body"], {"ok", "value"}, "采集响应体")
         c.require(body["ok"] is True, str(body["value"]))
         c.require(isinstance(body["value"], dict), "采集返回值必须为对象")
@@ -67,7 +68,7 @@ class CaptureClient:
         return self.call("ready", {"task_sha256": self.task_sha})
 
     def _inventory(self, value: Mapping[str, Any]) -> dict[str, Any]:
-        inventory = c.validate_inventory(dict(value), task_sha256=self.task_sha)
+        inventory = c.validate_inventory(dict(value), task_sha256=self.task_sha, expected_version=self.versions["version"])
         c.require(inventory["configuration_sha256"] == c.digest(self.configuration) and inventory["deployment"] == self.configuration["deployment"], "认证 export 与受管配置或部署不符")
         for name in ("capture_id", "producer_run_id"):
             c.require(inventory[name] == self.task["execution"][name], "认证 export 与原 producer 不符")
@@ -104,9 +105,9 @@ class CaptureClient:
         exports = c.private_directory(self.root / "exports")
         destination = c.managed_path(exports, export_id)
         if destination.exists():
-            native = c.verify_export(destination, inventory, task_sha256=self.task_sha)
+            native = c.verify_export(destination, inventory, task_sha256=self.task_sha, expected_version=self.versions["version"])
             c.require(c.read_json(destination / "authenticated-inventory.json") == inventory, "已同步 inventory 漂移")
-            expected_commit = {"schema_version": "claude-upgrade-native-capture-sync/v1", "source_scope": c.SCOPE, "task_sha256": self.task_sha, "export_id": export_id, "inventory": c.binding(destination, destination / "authenticated-inventory.json")}
+            expected_commit = {"schema_version": self.versions["sync"], "source_scope": c.SCOPE, "task_sha256": self.task_sha, "export_id": export_id, "inventory": c.binding(destination, destination / "authenticated-inventory.json")}
             c.require(c.read_json(destination / "sync-commit.json") == expected_commit, "已同步提交凭证缺失或漂移")
             return {"status": native["status"], "source_scope": c.SCOPE, "export_id": export_id, "root": str(destination), "native_manifest": inventory["native_manifest"]}
         staging = c.private_directory(self.root / "pending" / export_id)
@@ -147,8 +148,8 @@ class CaptureClient:
             c.write_once(target, raw)
             part.unlink()
             c.fsync_directory(part.parent)
-        native = c.verify_export(staging, inventory, task_sha256=self.task_sha)
-        commit = {"schema_version": "claude-upgrade-native-capture-sync/v1", "source_scope": c.SCOPE, "task_sha256": self.task_sha, "export_id": export_id, "inventory": c.binding(staging, staging / "authenticated-inventory.json")}
+        native = c.verify_export(staging, inventory, task_sha256=self.task_sha, expected_version=self.versions["version"])
+        commit = {"schema_version": self.versions["sync"], "source_scope": c.SCOPE, "task_sha256": self.task_sha, "export_id": export_id, "inventory": c.binding(staging, staging / "authenticated-inventory.json")}
         c.write_json_once(staging / "sync-commit.json", commit)
         for directory in sorted((item for item in staging.rglob("*") if item.is_dir()), reverse=True):
             c.fsync_directory(directory)

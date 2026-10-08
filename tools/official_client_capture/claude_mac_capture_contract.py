@@ -30,6 +30,19 @@ MAX_CHUNK_BYTES = 65536
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
+def contract_versions(configuration: Mapping[str, Any]) -> dict[str, Any]:
+    """从受管配置形成期选择整套版本，禁止失败后跨版本回退。"""
+    schema = configuration.get("schema_version")
+    require(schema in {CONFIG_SCHEMA, "claude-upgrade-native-capture-configuration/v2"}, "未知 native 配置版本")
+    version = 1 if schema == CONFIG_SCHEMA else 2
+    return {"version": version, "configuration": schema,
+            "native": f"claude-upgrade-native-capture/v{version}",
+            "inventory": f"claude-upgrade-native-capture-export/v{version}",
+            "commit": f"claude-upgrade-native-capture-commit/v{version}",
+            "rpc": f"claude-upgrade-native-capture-rpc/v{version}",
+            "sync": f"claude-upgrade-native-capture-sync/v{version}"}
+
+
 class CaptureError(ValueError):
     """受管采集合同失败；不包含请求正文或凭据。"""
 
@@ -182,6 +195,9 @@ def _loopback(value: Any) -> None:
 
 
 def validate_configuration(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping) and value.get("schema_version") == "claude-upgrade-native-capture-configuration/v2":
+        from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+        return h2_contract.validate_configuration(value)
     result = exact(value, {"schema_version", "source_scope", "data_root", "capture_relative", "task_binding", "deployment", "control_socket_relative", "channel_key_binding", "listener", "upstream", "limits"}, "采集配置")
     require(result["schema_version"] == CONFIG_SCHEMA and result["source_scope"] == SCOPE, "本机 capture 尚不接受正式来源用途")
     root = private_directory(Path(result["data_root"]))
@@ -232,14 +248,22 @@ def verify_task_configuration(configuration: Mapping[str, Any]) -> dict[str, Any
     return task
 
 
-def runtime_bindings() -> list[dict[str, Any]]:
+def runtime_bindings(configuration: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     root = Path(__file__).parent
     # 记录本后端直接调用的关键代码字节；这份原件不代替整套正式工具身份和来源登记。
     names = ("claude_mac_capture_contract.py", "claude_mac_capture_wire.py", "claude_upgrade_mac_capture_service.py", "claude_upgrade_mac_capture_client.py", "upstream_byte_relay.py", "claude_client_receipt_contract.py", "claude_mac_client_source.py", "claude_upgrade_mac_budget.py", "codex_upgrade_project_ledger.py", "claude_upgrade_delivery_recovery_guard.py")
+    if configuration is not None and contract_versions(configuration)["version"] == 2:
+        names += ("claude_mac_capture_h2.py", "claude_mac_capture_h2_dependencies.py",
+                  "claude_mac_capture_h2_contract.py", "claude_mac_capture_h2_runtime.py")
     return [{"file": name, "sha256": hashlib.sha256((root / name).read_bytes()).hexdigest(), "bytes": (root / name).stat().st_size} for name in names]
 
 
-def validate_inventory(value: Any, *, task_sha256: str) -> dict[str, Any]:
+def validate_inventory(value: Any, *, task_sha256: str, expected_version: int | None = None) -> dict[str, Any]:
+    version = 2 if isinstance(value, Mapping) and value.get("schema_version") == "claude-upgrade-native-capture-export/v2" else 1
+    require(expected_version is None or expected_version == version, "inventory 与形成期版本不符")
+    if version == 2:
+        from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+        return h2_contract.validate_inventory(value, task_sha256=task_sha256)
     inventory = exact(value, {"schema_version", "source_scope", "task_sha256", "capture_id", "producer_run_id", "configuration_sha256", "deployment", "native_manifest", "files", "export_id"}, "采集导出清单")
     require(inventory["schema_version"] == INVENTORY_SCHEMA and inventory["source_scope"] == SCOPE and inventory["task_sha256"] == task_sha256, "导出用途或任务不符")
     require(inventory["export_id"] == digest({key: item for key, item in inventory.items() if key != "export_id"}), "不可变 export ID 不符")
@@ -254,8 +278,11 @@ def validate_inventory(value: Any, *, task_sha256: str) -> dict[str, Any]:
     return inventory
 
 
-def verify_export(root: Path, inventory: Mapping[str, Any], *, task_sha256: str) -> dict[str, Any]:
-    inventory = validate_inventory(dict(inventory), task_sha256=task_sha256)
+def verify_export(root: Path, inventory: Mapping[str, Any], *, task_sha256: str, expected_version: int | None = None) -> dict[str, Any]:
+    inventory = validate_inventory(dict(inventory), task_sha256=task_sha256, expected_version=expected_version)
+    if inventory["schema_version"] == "claude-upgrade-native-capture-export/v2":
+        from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+        return h2_contract.verify_export(root, inventory, task_sha256=task_sha256)
     for item in inventory["files"]:
         check_binding(root, item)
     native = read_json(check_binding(root, inventory["native_manifest"]))
@@ -272,6 +299,10 @@ def verify_export(root: Path, inventory: Mapping[str, Any], *, task_sha256: str)
     for reference in references:
         require(reference in inventory["files"], "native 必需原件不在导出闭包")
         check_binding(root, reference)
+    for name in ("requests", "outcomes"):
+        for line in read_bytes(check_binding(root, native[name])).splitlines():
+            row = parse_json(line)
+            require(row.get("protocol") != "h2" and "stream_id" not in row, "H2 行不能包装为 native v1")
     # 这里验证字节闭包，不声称真实产品进程／模块、transport-map 或正式来源已完成。
     return native
 

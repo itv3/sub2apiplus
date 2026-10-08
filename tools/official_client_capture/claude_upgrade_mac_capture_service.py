@@ -1,7 +1,7 @@
 """回环独立采集 daemon：真实原件先持久化，关闭后只导出不可变字节。
 
-仅支持 regression_fixture 的 H1／TLS-H1。本模块不登记来源、不启动产品，
-不产生真实 ProductRecorder、transport-map、H2 或正式 v2 成功证明。
+仅支持 regression_fixture 的 H1／TLS-H1／TLS-H2。本模块不登记来源、不启动产品，
+不产生真实 ProductRecorder、transport-map 或正式产品联合 v2 成功证明。
 """
 
 from __future__ import annotations
@@ -50,6 +50,7 @@ class CaptureEngine:
 
     def __init__(self, configuration: Mapping[str, Any]):
         self.configuration = c.validate_configuration(dict(configuration))
+        self.versions = c.contract_versions(self.configuration)
         self.task = c.verify_task_configuration(self.configuration)
         self.task_sha = self.task["task_sha256"]
         self.data_root = Path(self.configuration["data_root"])
@@ -83,9 +84,19 @@ class CaptureEngine:
         self._phase = "initial"
         self._inventory: dict[str, Any] | None = None
         self._closed = False
+        self._dependencies = None
+        self._seen_headers: set[tuple[Any, ...]] = set()
         try:
+            if self.versions["version"] == 2:
+                from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+                from tools.official_client_capture import claude_mac_capture_h2_runtime as runtime
+                runtime.verify_binding(self.data_root, self.configuration["runtime_environment_binding"])
+                c.write_once(self.root / "runtime-environment.json", c.read_bytes(
+                    c.check_binding(self.data_root, self.configuration["runtime_environment_binding"])))
+                c.write_json_once(self.root / "native-configuration.json", self.configuration)
+                self._dependencies = h2_contract.prepare_snapshot(self.configuration, self.root)
             from tools.official_client_capture.claude_upgrade_delivery_recovery_guard import process_identity
-            owner = {"configuration_sha256": c.digest(self.configuration), "task_sha256": self.task_sha, "source_scope": c.SCOPE, "runtime_bindings": c.runtime_bindings(), "process": process_identity(os.getpid()), "started_at_utc": c.utc_now()}
+            owner = {"configuration_sha256": c.digest(self.configuration), "task_sha256": self.task_sha, "source_scope": c.SCOPE, "runtime_bindings": c.runtime_bindings(self.configuration), "process": process_identity(os.getpid()), "started_at_utc": c.utc_now()}
             existing = self.root / "daemon-owner.json"
             if existing.exists():
                 previous = c.read_json(existing)
@@ -129,10 +140,18 @@ class CaptureEngine:
         c.require(not raw or raw.endswith(b"\n"), "采集 WAL 裂尾；保留原件与预算未决")
         previous = "0" * 64
         for index, line in enumerate(raw.splitlines(), 1):
-            event = c.exact(c.parse_json(line), {"sequence", "previous_sha256", "event", "at_utc", "data", "sha256"}, "采集 WAL")
+            fields = {"sequence", "previous_sha256", "event", "at_utc", "data", "sha256"}
+            if self.versions["version"] == 2:
+                fields.add("schema_version")
+            event = c.exact(c.parse_json(line), fields, "采集 WAL")
+            if self.versions["version"] == 2:
+                c.require(event["schema_version"] == "claude-upgrade-native-wal/v2", "WAL 与形成期版本不符")
             core = {name: value for name, value in event.items() if name != "sha256"}
             c.require(type(event["sequence"]) is int and event["sequence"] == index and event["previous_sha256"] == previous and event["sha256"] == c.digest(core), "采集 WAL 序号或摘要链漂移")
-            c.require(isinstance(event["data"], dict) and event["event"] in {"reserved", "ready", "connection_opened", "segment", "request_header", "eof", "connection_closed", "incomplete", "sealing"}, "采集 WAL 事件不在固定合同内")
+            events = {"reserved", "ready", "connection_opened", "segment", "request_header", "eof", "connection_closed", "incomplete", "sealing"}
+            if self.versions["version"] == 2:
+                events |= {"protocol_selected", "transport_validated"}
+            c.require(isinstance(event["data"], dict) and event["event"] in events, "采集 WAL 事件不在固定合同内")
             c.timestamp(event["at_utc"])
             self._events.append(event)
             previous = event["sha256"]
@@ -141,6 +160,8 @@ class CaptureEngine:
         with self._lock:
             c.require(self._inventory is None, "已提交采集不能再追加原件")
             core = {"sequence": len(self._events) + 1, "previous_sha256": self._events[-1]["sha256"] if self._events else "0" * 64, "event": name, "at_utc": at_utc or c.utc_now(), "data": dict(data)}
+            if self.versions["version"] == 2:
+                core["schema_version"] = "claude-upgrade-native-wal/v2"
             event = {**core, "sha256": c.digest(core)}
             path = self.root / "journal.jsonl"
             descriptor = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
@@ -169,6 +190,20 @@ class CaptureEngine:
             return
         # 旧进程消失后只重读原件，不能重建 ByteRecorder 或续开同一 producer。
         self._phase = "recovering"
+        if self.versions["version"] == 2:
+            from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+            self._parsers, self._connections, sizes, tails = h2_contract.replay_events(
+                self.root, self.configuration, self._events, self._dependencies)
+            self._next_connection = len(self._connections)
+            self._wire_bytes = sum(sizes.values())
+            for event in self._events:
+                if event["event"] == "incomplete" and event["data"]["reason"] not in self._reasons:
+                    self._reasons.append(event["data"]["reason"])
+            if tails:
+                self._reasons.append("raw 原件存在 WAL 未确认尾段")
+            self.mark_incomplete("旧 capture 缺已提交终态，重启只收口为 truncated")
+            self._seal_native("truncated")
+            return
         expected_sizes: dict[str, int] = {}
         for event in self._events:
             data, at = event["data"], event["at_utc"]
@@ -231,6 +266,15 @@ class CaptureEngine:
             self._check_task(task_sha256)
             c.require(self._phase in {"reserved", "ready"}, "未预约或已收口的 capture 不能 ready")
             self._budget(c.read_json(self.root / "budget-reservation.json"))
+            if self.versions["version"] == 2:
+                from tools.official_client_capture import claude_mac_capture_h2_runtime as runtime
+                runtime.verify_binding(self.data_root, self.configuration["runtime_environment_binding"])
+                self._dependencies.revalidate()
+                self._dependencies.new_hpack_decoder(self.configuration["limits"]["max_header_bytes"])
+                c.write_json_once(self.root / "ready-environment.json", {
+                    "configuration_sha256": c.digest(self.configuration),
+                    "runtime_environment": c.binding(self.root, self.root / "runtime-environment.json"),
+                    "dependencies": self._dependencies.receipt()})
             if self._phase == "ready":
                 c.require(self._listener is not None and not self._stop_accept.is_set(), "旧 ready listener 已失效")
                 return c.read_json(self.root / "ready.json")
@@ -270,6 +314,8 @@ class CaptureEngine:
                 number = self._next_connection
                 connection_id = f"{self.task['execution']['capture_id']}.conn-{number:06d}"
                 row = {"connection_id": connection_id, "client_endpoint": _endpoint(connection.getpeername()), "server_endpoint": _endpoint(connection.getsockname()), "opened_at_utc": c.utc_now(), "closed_at_utc": None}
+                if self.versions["version"] == 2:
+                    row.update(protocol=None, protocol_observation=None, transport_observation=None)
                 self._connections[connection_id] = row
                 self._journal("connection_opened", row, at_utc=row["opened_at_utc"])
                 worker = ConnectionWorker(self, connection, connection_id, number)
@@ -280,6 +326,32 @@ class CaptureEngine:
                     worker.request_stop()
                 worker.start()
 
+    def bind_parser(self, worker: ConnectionWorker, protocol: str) -> None:
+        """首片应用字节前同锁更新两处引用，原协议选择先于 segment WAL。"""
+        from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+        with self._lock:
+            c.require(worker.parser is None and self._parsers[worker.connection_id] is None and
+                      all(value == 0 for value in worker.recorder.offsets.values()), "应用字节后禁止更换协议解析器")
+            path = worker.directory / "protocol-observation.json"
+            observation = {"protocol": protocol, "mode": self.configuration["protocol_policy"]["mode"],
+                           "configuration_sha256": c.digest(self.configuration), "tls": dict(worker.tls_facts)}
+            c.write_json_once(path, observation)
+            binding = c.binding(self.root, path)
+            parser = h2_contract.create_parser(worker.connection_id, protocol, self.configuration,
+                                               self._dependencies, self.on_request_header)
+            self._journal("protocol_selected", {"connection_id": worker.connection_id, "protocol": protocol,
+                "observation": binding, "dependency_manifest": c.binding(self.root, self.root / "h2-dependencies/production_decoder-dependencies.json"),
+                "runtime_environment": c.binding(self.root, self.root / "runtime-environment.json")})
+            worker.parser = self._parsers[worker.connection_id] = parser
+            self._connections[worker.connection_id].update(protocol=protocol, protocol_observation=binding)
+
+    def record_transport(self, worker: ConnectionWorker, path: Path) -> None:
+        if self.versions["version"] == 2:
+            with self._lock:
+                binding = c.binding(self.root, path)
+                self._journal("transport_validated", {"connection_id": worker.connection_id, "observation": binding})
+                self._connections[worker.connection_id]["transport_observation"] = binding
+
     def record_segment(self, worker: ConnectionWorker, direction: str, raw: bytes) -> None:
         observed = c.utc_now()
         with self._lock:
@@ -288,6 +360,8 @@ class CaptureEngine:
             self._wire_bytes += len(raw)
             path = worker.directory / f"conn{worker.number:03d}.{direction}.bin"
             self._journal("segment", {"connection_id": worker.connection_id, "direction": direction, "path": path.relative_to(self.root).as_posix(), "offset": offset, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}, at_utc=observed)
+            c.require(worker.parser is not None and self._parsers[worker.connection_id] is worker.parser,
+                      "原生协议未选择或两处 parser 引用不一致")
             worker.parser.feed(direction, raw, observed)
             # 准入拒绝不得打断同一已持久化片段的正文解析；解析完毕仍绝不转发。
             c.require(worker.forward_error is None, worker.forward_error or "请求转发被拒绝")
@@ -295,8 +369,17 @@ class CaptureEngine:
             c.require(c.timestamp(observed) < c.timestamp(self.task["execution"]["request_policy"]["deadline_utc"]), "收到字节时冻结 deadline 已到")
 
     def on_request_header(self, row: Mapping[str, Any]) -> None:
-        self._journal("request_header", {name: row[name] for name in ("connection_id", "request_ordinal", "observed_at_utc", "host", "method", "path")}, at_utc=row["observed_at_utc"])
-        models = sum(item["method"] == "POST" and item["path"].split("?", 1)[0] in wire.MODEL_PATHS for parser in self._parsers.values() for item in parser.requests)
+        header = {name: row[name] for name in ("connection_id", "request_ordinal", "observed_at_utc", "host", "method", "path")}
+        if self.versions["version"] == 2:
+            from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+            worker = self._workers[row["connection_id"]]
+            c.require(worker.parser is self._parsers[row["connection_id"]], "预算头计数 parser 引用不一致")
+            key = (row["connection_id"], row.get("stream_id"), row["request_ordinal"])
+            c.require(key not in self._seen_headers, "原生请求头重复计数")
+            self._seen_headers.add(key)
+            header = h2_contract.header_row(row, self._connections[row["connection_id"]]["protocol"])
+        self._journal("request_header", header, at_utc=row["observed_at_utc"])
+        models = sum(item["method"] == "POST" and item["path"].split("?", 1)[0] in wire.MODEL_PATHS for parser in self._parsers.values() if parser is not None for item in parser.requests)
         try:
             c.require(models <= self.task["execution"]["request_budget"], "真实模型请求超过原任务上界；仍保留已观察 POST")
             self._budget(c.read_json(self.root / "budget-reservation.json"))
@@ -308,7 +391,9 @@ class CaptureEngine:
     def record_eof(self, worker: ConnectionWorker, direction: str) -> None:
         with self._lock:
             self._journal("eof", {"connection_id": worker.connection_id, "direction": direction})
-            worker.parser.eof(direction)
+            if worker.parser is not None:
+                c.require(self._parsers[worker.connection_id] is worker.parser, "EOF parser 引用不一致")
+                worker.parser.eof(direction)
 
     def record_closed(self, worker: ConnectionWorker) -> None:
         with self._lock:
@@ -358,14 +443,26 @@ class CaptureEngine:
             c.require(not any(item.is_alive() for item in self._workers.values()), "采集 worker 尚未停止，不能发布 immutable export")
             if reason in {"deadline", "failure"}:
                 self.mark_incomplete("采集由冻结 deadline 或失败路径收口")
-            complete = not self._reasons and all(row.get("closed_at_utc") is not None and row.get("observation") for row in self._connections.values()) and all(not parser.errors and not parser.has_pending() and all(row["status"] == "complete" for row in parser.outcome_rows()) for parser in self._parsers.values())
+            complete = not self._reasons and all(row.get("closed_at_utc") is not None and row.get("observation") for row in self._connections.values()) and all(parser is not None and not parser.errors and not parser.has_pending() and all(row["status"] == "complete" for row in parser.outcome_rows()) for parser in self._parsers.values())
+            if self.versions["version"] == 2:
+                complete = complete and (self.root / "ready.json").exists() and (self.root / "ready-environment.json").exists() and all(row.get("protocol") and row.get("transport_observation") for row in self._connections.values())
             return self._seal_native("complete" if complete else "truncated")
 
     def _seal_native(self, status: str) -> dict[str, Any]:
         with self._lock:
             self._journal("sealing", {"status": status})
-            requests = [row for parser in self._parsers.values() for row in parser.request_rows()]
-            outcomes = [row for parser in self._parsers.values() for row in parser.outcome_rows()]
+            if self.versions["version"] == 2:
+                from tools.official_client_capture import claude_mac_capture_h2_contract as h2_contract
+                from tools.official_client_capture import claude_mac_capture_h2_runtime as runtime
+                runtime.verify_binding(self.data_root, self.configuration["runtime_environment_binding"])
+                requests, outcomes, frames, blocks = h2_contract.parser_rows(self._parsers)
+                for name, rows in (("native-h2-frames.jsonl", frames), ("native-h2-header-blocks.jsonl", blocks)):
+                    c.write_once(self.root / name, b"".join(c.canonical(row) + b"\n" for row in rows))
+                self._dependencies.new_hpack_decoder(self.configuration["limits"]["max_header_bytes"])
+                c.write_json_once(self.root / "h2-dependency-read-set.json", self._dependencies.receipt())
+            else:
+                requests = [row for parser in self._parsers.values() for row in parser.request_rows()]
+                outcomes = [row for parser in self._parsers.values() for row in parser.outcome_rows()]
             for name, rows in (("native-connections.jsonl", list(self._connections.values())), ("native-requests.jsonl", requests), ("native-outcomes.jsonl", outcomes)):
                 c.write_once(self.root / name, b"".join(c.canonical(row) + b"\n" for row in rows))
             journal_raw = c.read_bytes(self.root / "journal.jsonl")
@@ -373,6 +470,15 @@ class CaptureEngine:
             c.write_once(journal_path, journal_raw)
             raw_files = [c.binding(self.root, path) for path in sorted(self.root.rglob("*.bin"))]
             manifest = {"schema_version": c.NATIVE_SCHEMA, "source_scope": c.SCOPE, "task_sha256": self.task_sha, "candidate": self.task["candidate"], **{name: self.task["execution"][name] for name in ("capture_id", "producer_run_id", "endpoint")}, "deployment": self.configuration["deployment"], "configuration_sha256": c.digest(self.configuration), "runtime_bindings": c.read_json(self.root / "daemon-owner.json")["runtime_bindings"], "status": status, "reasons": list(dict.fromkeys(self._reasons)), "closed_at_utc": c.utc_now(), "reservation": c.binding(self.root, self.root / "reservation.json"), "ready": c.binding(self.root, self.root / "ready.json") if (self.root / "ready.json").exists() else None, "connections": c.binding(self.root, self.root / "native-connections.jsonl"), "requests": c.binding(self.root, self.root / "native-requests.jsonl"), "outcomes": c.binding(self.root, self.root / "native-outcomes.jsonl"), "journal": c.binding(self.root, journal_path), "raw_files": raw_files}
+            if self.versions["version"] == 2:
+                manifest.update(schema_version=self.versions["native"], formal_ready=False, launch_allowed=False,
+                    protocols=sorted({row.get("protocol") for row in self._connections.values()} - {None}))
+                for key, name in (("configuration", "native-configuration.json"), ("runtime_environment", "runtime-environment.json"),
+                    ("dependency_manifest", "h2-dependencies/production_decoder-dependencies.json"),
+                    ("dependency_read_set", "h2-dependency-read-set.json"), ("h2_frames", "native-h2-frames.jsonl"),
+                    ("h2_header_blocks", "native-h2-header-blocks.jsonl")):
+                    manifest[key] = c.binding(self.root, self.root / name)
+                manifest["ready_environment"] = c.binding(self.root, self.root / "ready-environment.json") if (self.root / "ready-environment.json").exists() else None
             c.write_json_once(self.root / "native-capture-manifest.json", manifest)
             self._phase = "committed"
             self._publish_inventory()
@@ -392,11 +498,12 @@ class CaptureEngine:
                     continue
                 originals.append(c.binding(self.root, item))
             core = {"schema_version": c.INVENTORY_SCHEMA, "source_scope": c.SCOPE, "task_sha256": self.task_sha, "capture_id": self.task["execution"]["capture_id"], "producer_run_id": self.task["execution"]["producer_run_id"], "configuration_sha256": c.digest(self.configuration), "deployment": self.configuration["deployment"], "native_manifest": c.binding(self.root, self.root / "native-capture-manifest.json"), "files": originals}
+            core["schema_version"] = self.versions["inventory"]
             inventory = {**core, "export_id": c.digest(core)}
             c.write_json_once(path, inventory)
-        native = c.verify_export(self.root, inventory, task_sha256=self.task_sha)
-        c.require(native["configuration_sha256"] == c.digest(self.configuration) and native["runtime_bindings"] == c.runtime_bindings(), "导出有效代码或配置已漂移")
-        commit = {"schema_version": c.COMMIT_SCHEMA, "task_sha256": self.task_sha, "export_id": inventory["export_id"], "inventory": c.binding(self.root, path)}
+        native = c.verify_export(self.root, inventory, task_sha256=self.task_sha, expected_version=self.versions["version"])
+        c.require(native["configuration_sha256"] == c.digest(self.configuration) and native["runtime_bindings"] == c.runtime_bindings(self.configuration), "导出有效代码或配置已漂移")
+        commit = {"schema_version": self.versions["commit"], "task_sha256": self.task_sha, "export_id": inventory["export_id"], "inventory": c.binding(self.root, path)}
         c.write_json_once(self.root / "export-commit.json", commit)
         c.fsync_directory(self.root)
         self._inventory = inventory
@@ -411,7 +518,7 @@ class CaptureEngine:
             c.verify_export(self.root, self._inventory, task_sha256=self.task_sha)
             c.require(c.read_json(self.root / "export-inventory.json") == self._inventory, "持久 inventory 已漂移")
             commit = c.exact(c.read_json(self.root / "export-commit.json"), {"schema_version", "task_sha256", "export_id", "inventory"}, "export commit")
-            c.require(commit == {"schema_version": c.COMMIT_SCHEMA, "task_sha256": self.task_sha, "export_id": self._inventory["export_id"], "inventory": c.binding(self.root, self.root / "export-inventory.json")}, "export commit 已漂移")
+            c.require(commit == {"schema_version": self.versions["commit"], "task_sha256": self.task_sha, "export_id": self._inventory["export_id"], "inventory": c.binding(self.root, self.root / "export-inventory.json")}, "export commit 已漂移")
             return self._inventory
 
     def export_chunk(self, task_sha256: str, export_id: str, relative: str, offset: int, limit: int) -> dict[str, Any]:
@@ -429,7 +536,7 @@ class CaptureEngine:
         return self.inventory(task_sha256)
 
     def status(self) -> dict[str, Any]:
-        return {"source_scope": c.SCOPE, "task_sha256": self.task_sha, "phase": self._phase, "connections": self._committed_connections if self._inventory else len(self._connections), "requests": self._committed_requests if self._inventory else sum(len(parser.requests) for parser in self._parsers.values()), "export_id": self._inventory["export_id"] if self._inventory else None}
+        return {"source_scope": c.SCOPE, "task_sha256": self.task_sha, "phase": self._phase, "connections": self._committed_connections if self._inventory else len(self._connections), "requests": self._committed_requests if self._inventory else sum(len(parser.requests) for parser in self._parsers.values() if parser is not None), "export_id": self._inventory["export_id"] if self._inventory else None}
 
     def dispose(self) -> None:
         if not getattr(self, "_closed", False):
@@ -448,7 +555,7 @@ class ConnectionWorker(threading.Thread):
         self.engine, self.front, self.connection_id, self.number = engine, connection, connection_id, number
         self.directory = c.private_directory(engine.root / "connections" / connection_id)
         self.recorder = wire.DurableByteRecorder(self.directory, number)
-        self.parser = wire.H1Parser(connection_id, engine.configuration["limits"], engine.on_request_header)
+        self.parser = None if engine.versions["version"] == 2 else wire.H1Parser(connection_id, engine.configuration["limits"], engine.on_request_header)
         self.upstream: socket.socket | None = None
         self.stop_requested = threading.Event()
         self.tls_facts: dict[str, Any] = {}
@@ -477,14 +584,26 @@ class ConnectionWorker(threading.Thread):
             return
         self.offers, hello = wire.peek_client_hello(self.front, configuration["limits"]["socket_timeout_seconds"])
         c.write_once(self.directory / "tls-client-hello.bin", hello)
-        c.require(all(item == "http/1.1" for item in self.offers), "TLS ClientHello 提供 H2 或未支持协议；不降级 H1")
+        v2 = self.engine.versions["version"] == 2
+        if not v2:
+            c.require(all(item == "http/1.1" for item in self.offers), "TLS ClientHello 提供 H2 或未支持协议；不降级 H1")
+        supported = [item for item in self.offers if item in {"h2", "http/1.1"}] if v2 else self.offers
+        c.require(not self.offers or bool(supported), "ClientHello 不含已实现的 ALPN 协议")
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(str(c.check_binding(self.engine.data_root, material["certificate"])), str(c.check_binding(self.engine.data_root, material["private_key"])))
         if self.offers:
-            context.set_alpn_protocols(self.offers)
+            context.set_alpn_protocols(supported)
         self.front = context.wrap_socket(self.front, server_side=True)
         self.tls_facts = {"client_alpn_offers": self.offers, "client_negotiated_alpn": self.front.selected_alpn_protocol(), "client_tls_version": self.front.version()}
-        c.require(self.front.selected_alpn_protocol() == ("http/1.1" if self.offers else None), "客户端实际 ALPN 与真实 offer 不符")
+        if v2:
+            self.tls_facts["front_server_alpn"] = supported
+            c.write_json_once(self.directory / "client-tls-observation.json", self.tls_facts)
+            selected = self.front.selected_alpn_protocol()
+            c.require(selected in supported if self.offers else
+                      (selected is None and configuration["protocol_policy"]["allow_no_alpn_h1"]),
+                      "客户端实际 ALPN 与冻结能力及原 offer 不符")
+        else:
+            c.require(self.front.selected_alpn_protocol() == ("http/1.1" if self.offers else None), "客户端实际 ALPN 与真实 offer 不符")
         c.write_json_once(self.directory / "client-tls-observation.json", self.tls_facts)
 
     def _connect_upstream(self) -> None:
@@ -499,9 +618,18 @@ class ConnectionWorker(threading.Thread):
             upstream = context.wrap_socket(upstream, server_hostname=endpoint["tls"]["server_hostname"])
             self.upstream = upstream
             selected = upstream.selected_alpn_protocol()
-            c.require(selected == ("http/1.1" if self.offers else None), "上游实际 ALPN 与捕获腿不一致")
+            if self.engine.versions["version"] == 1:
+                c.require(selected == ("http/1.1" if self.offers else None), "上游实际 ALPN 与捕获腿不一致")
             self.tls_facts.update(upstream_negotiated_alpn=selected, upstream_tls_version=upstream.version())
-        c.write_json_once(self.directory / "upstream-connection-observation.json", {"client_endpoint": _endpoint(upstream.getsockname()), "server_endpoint": _endpoint(upstream.getpeername()), "observed_at_utc": c.utc_now(), "tls": self.tls_facts})
+        if self.engine.versions["version"] == 2:
+            self.tls_facts["upstream_alpn_offers"] = list(self.offers)
+        path = self.directory / "upstream-connection-observation.json"
+        c.write_json_once(path, {"client_endpoint": _endpoint(upstream.getsockname()), "server_endpoint": _endpoint(upstream.getpeername()), "observed_at_utc": c.utc_now(), "tls": self.tls_facts})
+        if self.engine.versions["version"] == 2 and endpoint["tls"] is not None:
+            c.require(self.tls_facts["upstream_negotiated_alpn"] == self.tls_facts["client_negotiated_alpn"] and
+                      self.tls_facts["upstream_alpn_offers"] == self.tls_facts["client_alpn_offers"],
+                      "两腿真实 ALPN 不一致，首片原字节禁止转发")
+        self.engine.record_transport(self, path)
         upstream.settimeout(configuration["limits"]["socket_timeout_seconds"])
 
     def run(self) -> None:
@@ -510,6 +638,9 @@ class ConnectionWorker(threading.Thread):
             if self.stop_requested.is_set():
                 return
             self._front_tls()
+            if self.engine.versions["version"] == 2:
+                selected = self.tls_facts.get("client_negotiated_alpn")
+                self.engine.bind_parser(self, "h2" if selected == "h2" else "h1")
             self.prepared = True
             while not self.stop_requested.is_set():
                 candidates = ([] if front_eof else [self.front]) + ([self.upstream] if self.upstream else [])
@@ -577,11 +708,14 @@ class ConnectionWorker(threading.Thread):
                         pass
             self.recorder.close()
             for direction in wire.DIRECTIONS:
-                if not self.parser.states[direction]["eof"]:
+                if self.parser is None or not self.parser.states[direction]["eof"]:
                     try:
                         self.engine.record_eof(self, direction)
                     except c.CaptureError:
-                        self.engine.mark_incomplete("关闭连接时存在未完成 H1 消息")
+                        self.engine.mark_incomplete("关闭连接时存在未完成 H1 消息" if self.engine.versions["version"] == 1
+                                                    else "关闭连接时存在未完成原生消息")
+            if self.parser is None:
+                self.engine.mark_incomplete("连接缺真实协议选择，不能签零值成功")
             self.engine.record_closed(self)
 
 
@@ -613,7 +747,7 @@ def serve(engine: CaptureEngine) -> None:
                     request = c.exact(c.parse_json(receive(connection)), {"protocol", "nonce", "action", "payload", "mac"}, "采集 RPC")
                     core = {name: request[name] for name in ("protocol", "nonce", "action", "payload")}
                     nonce = request["nonce"]
-                    c.require(request["protocol"] == c.RPC_PROTOCOL and isinstance(nonce, str) and len(nonce) == 48 and isinstance(request["mac"], str) and hmac.compare_digest(request["mac"], _mac(engine.key, core)), "采集 RPC 来源鉴权失败")
+                    c.require(request["protocol"] == engine.versions["rpc"] and isinstance(nonce, str) and len(nonce) == 48 and isinstance(request["mac"], str) and hmac.compare_digest(request["mac"], _mac(engine.key, core)), "采集 RPC 来源鉴权失败")
                     c.require(nonce not in nonces, "采集 RPC nonce 已重放")
                     c.require(len(nonces) < 65536, "采集 RPC nonce 数超过有界能力")
                     nonces.add(nonce)
@@ -646,7 +780,7 @@ def serve(engine: CaptureEngine) -> None:
                     body = {"ok": True, "value": value}
                 except Exception as error:
                     body = {"ok": False, "value": str(error) if isinstance(error, (ValueError,)) else "采集操作失败：" + type(error).__name__}
-                response = {"protocol": c.RPC_PROTOCOL, "nonce": nonce, "body": body}
+                response = {"protocol": engine.versions["rpc"], "nonce": nonce, "body": body}
                 try:
                     connection.sendall(c.canonical({**response, "mac": _mac(engine.key, response)}) + b"\n")
                 except OSError:

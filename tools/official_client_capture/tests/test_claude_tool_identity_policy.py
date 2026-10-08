@@ -525,10 +525,22 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 5))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 6))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
+
+    def test_h2_files_have_explicit_semantic_layers(self) -> None:
+        """H2字节解析与导入改变wire身份；导出语义和运行库证明进入evidence身份。"""
+        expected = {
+            "claude_mac_capture_h2.py": "wire_producer",
+            "claude_mac_capture_h2_dependencies.py": "wire_producer",
+            "claude_mac_capture_h2_contract.py": "evidence_semantics",
+            "claude_mac_capture_h2_runtime.py": "evidence_semantics",
+        }
+        for name, layer in expected.items():
+            with self.subTest(file=name):
+                self.assertEqual(v3.classify_path(self.policy, "official_client_capture/" + name), layer)
 
     def test_orchestrators_and_shared_control(self) -> None:
         for key in ("official_client_capture/codex_upgrade.py", "official_client_capture/codex_upgrade_client_adapter.py"):
