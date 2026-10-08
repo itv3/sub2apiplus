@@ -160,12 +160,22 @@ def _source_bytes(source: VerifiedSource, binding: Mapping[str, Any]) -> bytes:
 def complete_raw_bindings(source: VerifiedSource, initial: Any) -> list[dict[str, Any]]:
     """跟随已绑定 JSON 原件，覆盖 journal 与意图内的下层原件，不能只归档第一层。"""
 
+    return _complete_raw_bindings(source, initial, {})
+
+
+def _complete_raw_bindings(source: VerifiedSource, initial: Any,
+                           profile_documents: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """完整读验父文件后，仅在已验真配置明确声明的精确 Profile 坐标结束递归。"""
+
     import json
     bindings = {row["path"]: row for row in typed_bindings(initial)}
     queue = list(bindings)
     while queue:
         path = queue.pop()
         raw = _source_bytes(source, bindings[path])
+        if profile_documents.get(path) == bindings[path]:
+            # Profile 的历史来源元数据仍由原资格图解释；本次归档保留其完整父字节。
+            continue
         try:
             content = json.loads(raw)
         except (UnicodeDecodeError, ValueError):
@@ -178,6 +188,50 @@ def complete_raw_bindings(source: VerifiedSource, initial: Any) -> list[dict[str
                 bindings[row["path"]] = row
                 queue.append(row["path"])
     return [bindings[path] for path in sorted(bindings)]
+
+
+def complete_delivery_raw_bindings(store: Any, plan: Mapping[str, Any], source: VerifiedSource,
+                                  initial: Any) -> list[dict[str, Any]]:
+    """交付归档的两份 Profile 边界只能由同 Plan 的受管冻结配置推出。
+
+    不接受证据自报跳过字段，也不按文件名、schema 或相同摘要选择其他路径。
+    配置原件和来源实例先验真；两份 Profile 的精确绑定始终完整读验并归档。
+    其余 JSON（包括日志、资格报告和父发布意图）继续递归验证下层原件。
+    """
+
+    if plan.get("schema_version") != PLAN_V2:
+        raise ControlError("交付归档 Profile 边界要求同一 Plan v2")
+    reference = plan["executor_configuration_ref"]
+    payload = store.load_object(dict(reference))["payload"]
+    facts = evidence_facts(store, reference, "configuration")
+    configuration_source = validate_evidence_graph(store, payload)
+    if (facts["campaign_id"] != plan["campaign_id"]
+            or facts["delivery_id"] != plan["delivery_id"]
+            or facts["result"] != "pass"
+            or facts["configuration_sha256"] != plan["configuration_sha256"]
+            or source.configuration_sha256 != plan["configuration_sha256"]
+            or configuration_source.configuration_sha256 != source.configuration_sha256
+            or configuration_source.service_instance_id != source.service_instance_id
+            or configuration_source.deployment_sha256 != source.deployment_sha256
+            or configuration_source.trusted_data_root != source.trusted_data_root):
+        raise ControlError("交付归档配置、Plan、受管根或来源实例不一致")
+    configuration = _source_json(configuration_source, facts["binding"])
+    if configuration != facts["configuration"] or canonical_sha256(configuration) != source.configuration_sha256:
+        raise ControlError("交付归档冻结配置原件与已验证来源不一致")
+    profiles: dict[str, dict[str, Any]] = {}
+    for name, digest_key in (("candidate", "runtime_profile_sha256"),
+                             ("rollback", "rollback_runtime_profile_sha256")):
+        material = configuration[name]
+        binding = _binding(material["profile_binding"], f"delivery.archive.{name}.profile_binding")
+        if (binding["sha256"] != material["runtime_profile_sha256"]
+                or binding["sha256"] != plan[digest_key]):
+            raise ControlError("交付归档 Profile 原件不是同一冻结 Plan 的运行材料")
+        previous = profiles.setdefault(binding["path"], binding)
+        if previous != binding:
+            raise ControlError("交付归档两份 Profile 对同一路径声明不同字节")
+        _source_bytes(configuration_source, binding)
+        _source_bytes(source, binding)
+    return _complete_raw_bindings(source, [initial, list(profiles.values())], profiles)
 
 
 def _source_json(source: VerifiedSource, binding: Mapping[str, Any]) -> dict[str, Any]:
@@ -930,7 +984,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
         required_material.append(payload)
     archive = store.load_object(package["private_archive_manifest_ref"])["payload"]
     by_path = {row["path"]: row for row in archive["entries"]}
-    for binding in complete_raw_bindings(source, required_material):
+    for binding in complete_delivery_raw_bindings(store, plan, source, required_material):
         if by_path.get(binding["path"]) != binding:
             raise ControlError("交付归档遗漏失败、恢复、提交或发布意图的原件")
         _source_bytes(source, binding)

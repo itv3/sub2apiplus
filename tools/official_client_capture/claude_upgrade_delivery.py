@@ -1654,7 +1654,7 @@ def _typed_package_review(context: DeliveryContext, delivery: Mapping[str, Any],
     input_material = [context.store.load_object(plan[key])["payload"] for key in delivery_execution.PLAN_EXTRA_FIELDS]
     input_material.extend(manifests)
     input_material.extend([index, index_binding, publications])
-    entries = delivery_execution.complete_raw_bindings(source, input_material)
+    entries = delivery_execution.complete_delivery_raw_bindings(context.store, plan, source, input_material)
     archive = _with_identity({"schema_version": PRIVATE_ARCHIVE_MANIFEST_SCHEMA, "campaign_id": context.campaign_id, "persona": dict(context.persona), "manifest_id": f"{delivery['delivery_id']}-private-archive", "redacted": True, "entries": entries, "entry_count": len(entries), "total_bytes": sum(row["bytes"] for row in entries), "manifest_sha256": canonical_sha256(entries)})
     valid = [dict(chain["valid_stage_refs"][stage]) for stage in STAGES]
     public = _sorted_refs(reference for fact_ref in valid for reference in context.store.load_fact(fact_ref)["payload"]["evidence_refs"])
