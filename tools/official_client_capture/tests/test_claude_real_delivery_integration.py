@@ -21,7 +21,7 @@ from tools.official_client_capture import claude_upgrade_delivery as delivery
 from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
-from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import FileRuntime, fixture_world
+from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import FileRuntime
 from tools.official_client_control import contracts, delivery_execution as execution, receipts
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
 from tools.official_client_control.errors import ControlError
@@ -29,6 +29,22 @@ from tools.official_client_control.gates import WorkflowGates
 from tools.official_client_control import qualification_bindings
 from tools.official_client_control.store import ControlStore
 from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
+
+
+def qualified_configuration_fixture(owner: unittest.TestCase, tree: ManagedToolTree) -> tuple:
+    """复用真实门禁生产与来源取得；保留调用方当前策略，不运行策略12的类初始化。"""
+
+    from tools.official_client_capture.tests import test_claude_sealed_gate_materials as material_fixture
+
+    helper = material_fixture.MaterialImportProofTests()
+    helper.tree = tree
+    owner.addCleanup(helper.doCleanups)
+    helper.setUp()
+    configuration = deepcopy(helper.configuration)
+    configuration.update(schema_version=executor.MATERIAL_CONFIGURATION_SCHEMA,
+        qualification_materials_binding=helper.prepare())
+    executor.validate_configuration(configuration)
+    return helper, configuration
 
 
 def fixture_projection() -> dict:
@@ -70,6 +86,23 @@ class QualifiedFileRuntime(FileRuntime):
     """文件现场仍走真实验收子图；不把假引用当成通过证据。"""
 
     def check_qualification(self) -> dict:
+        from tools.official_client_control.qualification_material_import import (
+            requires_qualification_materials, validate_qualification_material_import,
+        )
+
+        first = self.configuration["candidate"]["qualification"]
+        store = ControlStore.open_read_only(self.root / first["store_relative"])
+        materials = self.configuration.get("qualification_materials_binding")
+        if requires_qualification_materials(store, store.load_campaign(first["campaign_id"])) and materials is None:
+            raise guard.GuardError("当前第二根能力要求配置 v2 和真实导入证明，禁止降级")
+        source = None
+        if materials is not None:
+            source = execution.VerifiedSource("0" * 64,
+                self.configuration["guard"]["deployment_receipt_binding"]["sha256"], {},
+                canonical_sha256(self.configuration), "qualification-readonly", self.root)
+            validate_qualification_material_import(store, materials, source,
+                {name: self.configuration[name]["qualification"] for name in ("candidate", "rollback")},
+                purpose="current_delivery", expected_source_scope=self.configuration["source_scope"])
         super().check_qualification()
         reports = []
         for name in ("candidate", "rollback"):
@@ -91,8 +124,12 @@ class QualifiedFileRuntime(FileRuntime):
                   "qualification_replays": reports, "candidate_compose": compose["candidate"],
                   "rollback_compose": compose["rollback"], "normalized_compose": normalized["candidate"],
                   "allowed_changes": ["application_image", "application_stage_label", "active_runtime_profile"], "result": "pass"}
+        if materials is not None:
+            report.update(schema_version=qualification_bindings.MATERIAL_DELIVERY_SCHEMA,
+                          qualification_materials_binding=materials)
         qualification_bindings.validate_delivery_report(report, store, current_execution=True,
-            configuration=self.configuration, trusted_data_root=self.root)
+            configuration=self.configuration, trusted_data_root=self.root, source=source)
+        self._qualification_source = source
         self._qualification_report = report
         return report
 
@@ -161,35 +198,14 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         active = self.tree.active()
         active.__enter__()
         self.addCleanup(active.__exit__, None, None, None)
-        temporary = tempfile.TemporaryDirectory(prefix="delivery-combined-", dir="/private/tmp")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name).resolve()
+        helper, configuration = qualified_configuration_fixture(self, self.tree)
+        self.root = helper.root
         # macOS 的 /private/tmp 可能继承 wheel 组；受管账本要求本人有效组，夹具从根开始按正式身份创建。
         os.chown(self.root, -1, os.getegid())
-        configuration, _, environment = fixture_world(self.root)
-        guard.private_directory(self.root / "qualification")
-        fixture = DeliveryCampaign(self.root / "qualification", schema="v2")
-        fixture.materials = configuration
-        fixture.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
-        fixture.discovery_and_evidence()
-        fixture.profile_objects()
-        fixture.select_profile("rollback")
-        fixture.profile_approve("validation_only")
-        fixture.strict_validate(tag="baseline")
-        fixture.select_profile("candidate")
-        fixture.profile_approve("validation_only")
-        fixture.strict_validate()
+        environment = guard.read_json(self.root / "state.json")["environment"]
+        fixture = helper.fixture
         self.fixture = fixture
         self.store = fixture.store
-        for name, tag in (("candidate", "strict"), ("rollback", "baseline")):
-            key = lambda reference: reference if tag == "strict" else reference + "-" + tag
-            qualification = {"store_relative": "qualification/store", "external_root_relative": "qualification/external", "campaign_id": fixture.campaign_id, "candidate_id": "synthetic-candidate-" + tag, "candidate_ref": fixture.references["candidate-" + tag], "build_receipt_ref": fixture.references[key("candidate-build-receipt")], "validation_ref": fixture.references[key("validation-completed")], "acceptance_ref": fixture.references["acceptance-" + tag]}
-            sealed = {"schema_version": "claude-upgrade-acceptance/v1", "candidate_id": qualification["candidate_id"], "store": {"acceptance_ref": qualification["acceptance_ref"], "validation_completed_ref": qualification["validation_ref"]}, "production_state": "not_activated"}
-            path = self.root / "inputs" / (name + "-qualification-sealed.json")
-            guard.write_json_once(path, sealed)
-            qualification["sealed_result_binding"] = guard.binding(self.root, path)
-            configuration[name]["qualification"] = qualification
-        executor.validate_configuration(configuration)
         self.configuration = configuration
         campaign_dir = self.root / "evidence" / "campaigns" / fixture.campaign_id
         guard.private_directory(campaign_dir)

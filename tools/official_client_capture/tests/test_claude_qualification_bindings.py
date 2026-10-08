@@ -23,8 +23,10 @@ from tools.official_client_control.errors import ControlError
 from tools.official_client_control.receipts import build_candidate_build_receipt
 from tools.official_client_control.store import ControlStore
 from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
-from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import FileRuntime, fixture_world
-from tools.official_client_capture.tests.test_claude_real_delivery_integration import DeliveryCampaign, QualifiedFileRuntime
+from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import FileRuntime
+from tools.official_client_capture.tests.test_claude_real_delivery_integration import (
+    QualifiedFileRuntime, qualified_configuration_fixture,
+)
 
 
 class QualificationBindingTests(unittest.TestCase):
@@ -106,7 +108,7 @@ class QualificationBindingTests(unittest.TestCase):
         return report
 
     def consume_original(self, report: dict, coordinate: str) -> None:
-        """把变异报告作为实际原件交到已验真后的消费者；不替换原 Store 或校验判据。"""
+        """只读审计历史 v2 的完整外部绑定反例；当前 v3 消费另由真实来源专项验证。"""
         path = self.fixture.root / coordinate / "qualification.json"
         guard.write_json_once(path, report)
         binding = guard.binding(self.fixture.root, path)
@@ -115,7 +117,16 @@ class QualificationBindingTests(unittest.TestCase):
             canonical_sha256(self.report_configuration), "fixture", self.fixture.root)
         evidence = {"evidence_type": "freeze", "entries": [{"facts": {
             "campaign_id": self.fixture.campaign_id, "result": "pass", "bindings": [binding]}}]}
-        execution._validate_qualification_originals(self.fixture.store, evidence, source, current_execution=True)
+        execution._validate_qualification_originals(self.fixture.store, evidence, source, current_execution=False)
+
+    def current_world(self) -> "FrozenConfigurationConsumerTests":
+        """复用当前双候选配置和实际 v3 导入，不降低策略或替换资格来源。"""
+
+        helper = FrozenConfigurationConsumerTests()
+        helper.tree = self.tree
+        self.addCleanup(helper.doCleanups)
+        helper.setUp()
+        return helper
 
     def test_unknown_top_level_and_nested_schema_do_not_authorize_metadata(self) -> None:
         projection = bindings.QualificationBindingProjection(self.reader)
@@ -246,8 +257,14 @@ class QualificationBindingTests(unittest.TestCase):
 
     def test_new_report_validates_and_old_report_has_readonly_permission_only(self) -> None:
         report = self.report()
-        bindings.validate_delivery_report(report, self.reader, current_execution=True,
+        bindings.validate_delivery_report(report, self.reader, current_execution=False,
             configuration=self.report_configuration, trusted_data_root=self.fixture.root)
+        with self.assertRaisesRegex(ControlError, "当前第二根能力要求资格 v3"):
+            bindings.validate_delivery_report(report, self.reader, current_execution=True,
+                configuration=self.report_configuration, trusted_data_root=self.fixture.root)
+        current = self.current_world()
+        bindings.validate_delivery_report(current.report, current.store, current_execution=True,
+            configuration=current.configuration, trusted_data_root=current.root, source=current.qualification_source)
         with self.assertRaisesRegex(ControlError, "缺本次已核验"):
             bindings.validate_delivery_report(report, self.reader, current_execution=True, trusted_data_root=self.fixture.root)
         old = self.report(legacy=True)
@@ -266,20 +283,21 @@ class QualificationBindingTests(unittest.TestCase):
             execution._validate_qualification_originals(self.fixture.store, payload, source, current_execution=True)
 
     def test_current_consumer_requires_current_effective_tool_identity(self) -> None:
-        raw = canonical_json_bytes(self.report())
+        current = self.current_world()
+        raw = canonical_json_bytes(current.report)
         binding = {"path": "freeze/qualification.json", "sha256": sha256_bytes(raw), "bytes": len(raw)}
         source = execution.VerifiedSource("a" * 64, "a" * 64, {binding["path"]: raw},
-            canonical_sha256(self.report_configuration), "fixture", self.fixture.root)
-        payload = {"evidence_type": "freeze", "entries": [{"facts": {"campaign_id": self.fixture.campaign_id,
+            canonical_sha256(current.configuration), "fixture", current.root)
+        payload = {"evidence_type": "freeze", "entries": [{"facts": {"campaign_id": current.fixture.campaign_id,
                    "result": "pass", "bindings": [binding]}}]}
         key = "official_client_control/store.py"
         self.tree.write(key, self.tree.path(key).read_bytes() + "\n# 未登记的工具变更\n".encode())
         try:
             with self.assertRaisesRegex(ControlError, "工具身份"):
-                execution._validate_qualification_originals(self.fixture.store, payload, source, current_execution=True)
+                execution._validate_qualification_originals(current.store, payload, source, current_execution=True)
         finally:
             self.tree.restore()
-        execution._validate_qualification_originals(self.fixture.store, payload, source, current_execution=True)
+        execution._validate_qualification_originals(current.store, payload, source, current_execution=True)
 
     def test_current_pass_cannot_omit_report_but_failure_can_be_recorded(self) -> None:
         source = execution.VerifiedSource("a" * 64, "a" * 64, {}, "a" * 64, "fixture")
@@ -407,39 +425,15 @@ class QualificationBindingTests(unittest.TestCase):
             bindings.QualificationBindingProjection(self.reader).bindings(self.reader.load_receipt(reference), reference)
 
     def test_qualified_file_runtime_archives_real_v2_originals_without_a_guard(self) -> None:
-        root = self.world / "qualified-file-runtime"
-        guard.private_directory(root)
-        configuration, context, _environment = fixture_world(root)
-        qualification_root = root / "qualification"
-        guard.private_directory(qualification_root)
-        fixture = DeliveryCampaign(qualification_root, schema="v2")
-        fixture.materials = configuration
-        fixture.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
-        fixture.discovery_and_evidence()
-        fixture.profile_objects()
-        for name, tag in (("rollback", "baseline"), ("candidate", "strict")):
-            fixture.select_profile(name)
-            fixture.profile_approve("validation_only")
-            fixture.strict_validate(tag=tag)
-            suffix = "" if tag == "strict" else "-" + tag
-            qualification = {"store_relative": "qualification/store", "external_root_relative": "qualification/external",
-                             "campaign_id": fixture.campaign_id, "candidate_id": "synthetic-candidate-" + tag,
-                             "candidate_ref": fixture.references["candidate-" + tag],
-                             "build_receipt_ref": fixture.references["candidate-build-receipt" + suffix],
-                             "validation_ref": fixture.references["validation-completed" + suffix],
-                             "acceptance_ref": fixture.references["acceptance-" + tag]}
-            sealed_path = root / "inputs" / (name + "-qualified-seal.json")
-            guard.write_json_once(sealed_path, {"schema_version": "claude-upgrade-acceptance/v1",
-                "candidate_id": qualification["candidate_id"], "store": {
-                    "acceptance_ref": qualification["acceptance_ref"], "validation_completed_ref": qualification["validation_ref"]},
-                "production_state": "not_activated"})
-            qualification["sealed_result_binding"] = guard.binding(root, sealed_path)
-            configuration[name]["qualification"] = qualification
-        executor.validate_configuration(configuration)
+        # 资格图重放仍为 v2；当前执行总报告必须是实际导入所得的 v3。
+        helper, configuration = qualified_configuration_fixture(self, self.tree)
+        root, fixture = helper.root, helper.fixture
         configuration_path = root / "inputs/qualified-configuration.json"
         guard.write_json_once(configuration_path, configuration)
-        context.update(campaign_id=fixture.campaign_id, candidate_id="synthetic-candidate-strict",
-                       configuration_ref=guard.binding(root, configuration_path))
+        candidate_id = "synthetic-candidate-strict"
+        context = {"campaign_id": fixture.campaign_id, "candidate_id": candidate_id,
+            "delivery_id": candidate_id + "-d1", "segment": "dr0", "run_nonce": candidate_id + "-d1-dr0",
+            "data_root": str(root), "configuration_ref": guard.binding(root, configuration_path)}
         runtime = QualifiedFileRuntime(configuration, context)
         before_state = (root / "state.json").read_bytes()
         # 本专项只核原件生产与消费；守卫及父物理执行入口都明确禁止。
@@ -450,7 +444,7 @@ class QualificationBindingTests(unittest.TestCase):
                                   if Path(row["path"]).name == "qualification.json")
             self.assertTrue(all(freeze_binding in gate_row["facts"]["bindings"] for gate_row in frozen["gates"]))
             report = guard.read_json(guard.check_binding(root, freeze_binding))
-            self.assertEqual(report["schema_version"], bindings.DELIVERY_SCHEMA)
+            self.assertEqual(report["schema_version"], bindings.MATERIAL_DELIVERY_SCHEMA)
             self.assertEqual(len(report["qualification_replays"]), 2)
             self.assertNotEqual(report["qualification_replays"][0]["qualification_roots"],
                                 report["qualification_replays"][1]["qualification_roots"])
@@ -468,7 +462,7 @@ class QualificationBindingTests(unittest.TestCase):
                 physical.assert_called_once()
             stage_report = guard.read_json(stage_directory / "qualification.json")
             bindings.validate_delivery_report(stage_report, fixture.store, current_execution=True,
-                                               configuration=configuration, trusted_data_root=root)
+                configuration=configuration, trusted_data_root=root, source=runtime._qualification_source)
         self.assertEqual((root / "state.json").read_bytes(), before_state)
 
 
@@ -485,40 +479,17 @@ class FrozenConfigurationConsumerTests(unittest.TestCase):
         active = self.tree.active()
         active.__enter__()
         self.addCleanup(active.__exit__, None, None, None)
-        temporary = tempfile.TemporaryDirectory(prefix="qualification-frozen-case-", dir="/private/tmp")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        helper, configuration = qualified_configuration_fixture(self, self.tree)
+        self.root = helper.root
         os.chown(self.root, -1, os.getegid())
-        configuration, context, environment = fixture_world(self.root)
-        guard.private_directory(self.root / "qualification")
-        fixture = DeliveryCampaign(self.root / "qualification", schema="v2")
-        fixture.materials = configuration
-        fixture.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
-        fixture.discovery_and_evidence()
-        fixture.profile_objects()
-        for name, tag in (("rollback", "baseline"), ("candidate", "strict")):
-            fixture.select_profile(name)
-            fixture.profile_approve("validation_only")
-            fixture.strict_validate(tag=tag)
-            suffix = "" if tag == "strict" else "-" + tag
-            qualification = {"store_relative": "qualification/store", "external_root_relative": "qualification/external",
-                "campaign_id": fixture.campaign_id, "candidate_id": "synthetic-candidate-" + tag,
-                "candidate_ref": fixture.references["candidate-" + tag],
-                "build_receipt_ref": fixture.references["candidate-build-receipt" + suffix],
-                "validation_ref": fixture.references["validation-completed" + suffix],
-                "acceptance_ref": fixture.references["acceptance-" + tag]}
-            seal = self.root / "inputs" / (name + "-qualified-seal.json")
-            guard.write_json_once(seal, {"schema_version": "claude-upgrade-acceptance/v1",
-                "candidate_id": qualification["candidate_id"], "production_state": "not_activated",
-                "store": {"acceptance_ref": qualification["acceptance_ref"],
-                          "validation_completed_ref": qualification["validation_ref"]}})
-            qualification["sealed_result_binding"] = guard.binding(self.root, seal)
-            configuration[name]["qualification"] = qualification
-        executor.validate_configuration(configuration)
+        fixture = helper.fixture
+        environment = guard.read_json(self.root / "state.json")["environment"]
         configuration_path = self.root / "inputs/qualified-configuration.json"
         guard.write_json_once(configuration_path, configuration)
-        context.update(campaign_id=fixture.campaign_id, candidate_id="synthetic-candidate-strict",
-            delivery_id="synthetic-candidate-strict-d1", configuration_ref=guard.binding(self.root, configuration_path))
+        candidate_id = "synthetic-candidate-strict"
+        context = {"campaign_id": fixture.campaign_id, "candidate_id": candidate_id,
+            "delivery_id": candidate_id + "-d1", "segment": "dr0", "run_nonce": candidate_id + "-d1-dr0",
+            "data_root": str(self.root), "configuration_ref": guard.binding(self.root, configuration_path)}
         projection = executor.stable_environment_projection({"services": {"app": {"image": "fixture-candidate"},
             "db": {"image": "fixed-db"}, "redis": {"image": "fixed-redis"}}}, {
             "app": {"Config": {"Image": "fixture-candidate"}}, "db": {"Config": {"Image": "fixed-db"}},
@@ -547,7 +518,9 @@ class FrozenConfigurationConsumerTests(unittest.TestCase):
             forbidden = mock.patch.object(guard, name, side_effect=AssertionError("本专项禁止启动守卫"))
             forbidden.start()
             self.addCleanup(forbidden.stop)
-        frozen = QualifiedFileRuntime(configuration, context).freeze({}, self.root / "legal-freeze")
+        runtime = QualifiedFileRuntime(configuration, context)
+        frozen = runtime.freeze({}, self.root / "legal-freeze")
+        self.qualification_source = runtime._qualification_source
         self.freeze_core = frozen["cores"]["freeze"]
         self.freeze_core["guard_identity"] = self.identity
         self.report = guard.read_json(self.root / "legal-freeze/qualification.json")
