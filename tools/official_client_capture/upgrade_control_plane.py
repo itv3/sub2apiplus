@@ -5223,7 +5223,7 @@ def _evaluation_recover_locked(
                 authorized_at_utc=adapter.orchestrator._utc_now(),
             )
             adapter.orchestrator._secure_write_json_once(authorization_path, authorization)
-        # ④ COMMIT（stage_sources：capture 恒 reused；compare 按 compare-reader 是否变化；断言／accept local）。
+        # ④ COMMIT：新增基线按客户端的 compare 合同选来源；已存在的 COMMIT 逐字重放，不能追改历史来源。
         commit_path = baseline_dir / adapter.orchestrator.EVALUATION_BASELINE_COMMIT_FILENAME
         if commit_path.is_file():
             commit = codex_upgrade_vc_artifacts.validate_evaluation_baseline_commit(adapter.orchestrator._read_json(commit_path, "评估基线 COMMIT"))
@@ -5247,6 +5247,7 @@ def _evaluation_recover_locked(
             }
             if (
                 transient is not None
+                or adapter.comparison_is_baseline_bound
                 or "compare_reader_sha256" in defect["changed_items"]
                 or compare_source["status"] != "complete"
             ):

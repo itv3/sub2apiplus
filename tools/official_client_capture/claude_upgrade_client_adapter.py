@@ -86,6 +86,8 @@ SUCCESSOR_PROTOCOL_ORDER = (
     "candidate_recovery_run_retry",
     "attempt_recovery_segment",
 )
+# Claude compare 与 builder 输出绑定当前评估基线；即使只修 checker，后继基线也必须重新 compare。
+COMPARISON_IS_BASELINE_BOUND = True
 # Claude Campaign ID（如 ``claude-code-2_1_226-fw-g-production-replacement-v2-20260821``）不匹配根因模块的 Codex
 # Campaign ID 模式，必须在调用根因 API 前由适配器拒绝；版本号分隔符兼容点与下划线。
 CLAUDE_CAMPAIGN_ID_RE = re.compile(r"claude-code-\d+[._]\d+[._]\d+")

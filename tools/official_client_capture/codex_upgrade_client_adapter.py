@@ -41,6 +41,8 @@ TARGET_VERSION_FIELD = "codex_version"
 # 候选就绪探针（``/models`` wire dispatch）在项目总账里的请求计量类别：原写死在项目总账的入账
 # （``RuntimeAdmission.account_candidate_probe``）与重放校验两处，取值逐字不变。
 CANDIDATE_PROBE_ACCOUNTING_CATEGORY = "candidate_readiness_models_probe/v1"
+# Codex 新评估基线保留原 compare 来源选择；比较完成且读侧不变时仍可复用旧收据。
+COMPARISON_IS_BASELINE_BOUND = False
 
 
 def reject_volatile_dimensions(dimensions: Mapping[str, str]) -> None:

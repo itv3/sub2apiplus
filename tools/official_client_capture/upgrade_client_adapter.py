@@ -458,6 +458,9 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     # recovery) → 旧成功段是否属于当前 COMMIT 前序链，且原计划／执行、完整 seal 与实际入账均可信。
     # Codex 恒为假，保留原成功段拒绝语义；Claude 只允许更早基线的成功段，不允许当前基线重开。
     "sealed_predecessor_segment": "callable",
+    # compare 收据是否绑定写出时的评估基线：Claude 收据与 builder 路径都绑定当前基线，开新基线必须重新 compare。
+    # Codex 沿用原判据，仅 transient、compare-reader 变化或比较尚未完成时才将 compare 标成 local。
+    "comparison_is_baseline_bound": "value",
 })
 
 
@@ -511,6 +514,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "sealed_predecessor_segment": ("codex_upgrade_client_adapter", "sealed_predecessor_segment"),
         "candidate_recovery_identity_flags": ("codex_upgrade_supervisor", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),
         "successor_protocol_order": ("upgrade_client_adapter", "DEFAULT_SUCCESSOR_PROTOCOL_ORDER"),
+        "comparison_is_baseline_bound": ("codex_upgrade_client_adapter", "COMPARISON_IS_BASELINE_BOUND"),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -550,6 +554,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "sealed_predecessor_segment": ("claude_upgrade_recovery_history", "sealed_predecessor_segment"),
         "candidate_recovery_identity_flags": ("claude_upgrade_client_adapter", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),  # B4-05b-1
         "successor_protocol_order": ("claude_upgrade_client_adapter", "SUCCESSOR_PROTOCOL_ORDER"),
+        "comparison_is_baseline_bound": ("claude_upgrade_client_adapter", "COMPARISON_IS_BASELINE_BOUND"),
     }),
 })
 
