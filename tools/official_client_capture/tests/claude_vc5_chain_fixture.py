@@ -20,7 +20,8 @@ B4-02 的真实写入层 ``claude_upgrade_candidate_seal.record_candidate_seal_c
 5. **门禁环境收据**：``codex_upgrade_arm64_environment_receipt.replay``／``receipts_equivalent`` 换成替身（B4-06a 测试同一
    做法）。真实来源：ARM64 门禁前后的环境收据。
 
-子进程里的接缝经 ``usercustomize`` 注入：只在 ``SEAM_ACTIONS_ENV`` 列出的动作子进程里生效，配置是测试写的一份 JSON。
+子进程里的接缝经 ``usercustomize`` 注入：只在 ``SEAM_ACTIONS_ENV`` 列出的外层动作里生效，配置是测试写的一份 JSON。
+独立规则检查器虽然继承父动作 ID，也只读已经冻结的输入，不重复安装这套来源接缝。
 """
 
 from __future__ import annotations
@@ -57,10 +58,14 @@ import os
 import sys
 
 if os.environ.get("{supervisor.CAMPAIGN_RUN_ACTION_ID_ENV}") in os.environ.get("{SEAM_ACTIONS_ENV}", "").split(","):
-    sys.path.insert(0, os.environ["{SEAM_REPOSITORY_ENV}"])
-    from tools.official_client_capture.tests import claude_vc5_chain_fixture
+    repository = os.environ["{SEAM_REPOSITORY_ENV}"]
+    checker = os.path.realpath(os.path.join(repository, "tools", "official_client_capture", "claude_rule_assertion.py"))
+    # 只排除权威命令构造器直接派发的检查器；同名文件与外层动作仍保持原接缝。
+    if os.path.realpath(sys.argv[0]) != checker:
+        sys.path.insert(0, repository)
+        from tools.official_client_capture.tests import claude_vc5_chain_fixture
 
-    claude_vc5_chain_fixture.install(os.environ["{SEAM_CONFIG_ENV}"])
+        claude_vc5_chain_fixture.install(os.environ["{SEAM_CONFIG_ENV}"])
 '''
 
 
