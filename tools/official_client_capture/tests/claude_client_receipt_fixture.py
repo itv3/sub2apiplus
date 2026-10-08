@@ -162,24 +162,46 @@ def candidate_inputs(attempt_root: Path, values: Mapping[str, Any], client_id: s
 def material_v1(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, scope: str = "formal", status: str = "complete", nonce: str | None = None, scenarios: list[dict[str, Any]] | None = None, scenario_reuse: list[dict[str, Any]] | None = None, issued_at_utc: str = NOW) -> tuple[Path, Path, Path]:
     """生成独立 Mac 包与 server 原件；故意不把服务端原件放进 Mac 上传包。"""
     nonce = nonce or f"{client_id}-task-{contract.digest(dict(values))[:12]}"
-    current = candidate_inputs(attempt_root, values, client_id)
     client_root = attempt_root / "client-evidence" / client_id
     task_path = client_root / "tasks" / nonce / "task.json"
     bundle_root = client_root / "runs" / nonce / "source"
+    project = fixture_ledger(attempt_root)
+    # 捕获原件从创建时就在实际账本的数据根内。账本身份已由上面的
+    # helper 核过；这不是从 task 的绝对路径字符串取得归档权限。
+    capture_root = project.parent / "server-originals" / contract.digest(dict(values))[:12] / nonce
+    if task_path.exists():
+        frozen = contract.read_json(contract.secure_file(attempt_root, task_path.relative_to(attempt_root).as_posix()))
+        if frozen.get("schema_version") == contract.HISTORICAL_TASK_SCHEMA:
+            contract._validate_task_v1(frozen)
+        else:
+            contract.validate_task(frozen)
+        contract.require(frozen["client_id"] == client_id and frozen["task_nonce"] == nonce
+                         and all(frozen[key] == values[key] for key in contract.COORDINATES),
+                         "已有 fixture task 的冻结坐标与本次不同，禁止重建")
+        contract.require(frozen["execution"]["capture_root"] == str(capture_root)
+                         and frozen["execution"]["project_ledger"] == str(project),
+                         "已有 fixture task 的捕获根已冻结，禁止迁移或重写")
+        # 已发布世界只读核对当前候选原件；不得调用会补历史字段的创建路径。
+        contract.verify_task_attempt(attempt_root, frozen)
+        return task_path, bundle_root, capture_root
+    current = candidate_inputs(attempt_root, values, client_id)
     # 逐级新建私有目录；递归 mkdir 的 mode 只作用于末级，不能留下 755 的客户端证据或 runs 父目录。
     # 重入时只核已有目录权限，不 chmod 已发布的来源世界。
     for directory in (client_root.parent, client_root, client_root / "tasks", client_root / "runs", bundle_root.parent):
         directory.mkdir(mode=0o700, exist_ok=True)
         contract.require(directory.is_dir() and not directory.is_symlink() and directory.stat().st_mode & 0o077 == 0,
                          "fixture 客户端目录必须保持私有")
-    capture_root = temporary_root(attempt_root) / "server-originals" / contract.digest(dict(values))[:12] / nonce
+    for directory in (capture_root.parent.parent, capture_root.parent, capture_root):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        contract.require(directory.is_dir() and not directory.is_symlink() and directory.stat().st_mode & 0o077 == 0,
+                         "fixture 捕获目录必须保持私有")
     artifacts = [{"role": "application", "version": "fixture-app-1", "platform": "darwin/arm64", "sha256": "1" * 64}, {"role": "embedded_cli", "version": current["catalog"]["entry"]["version"], "platform": "darwin/arm64", "sha256": current["catalog"]["entry"]["binary_sha256"]}]
     if client_id == "claude-vscode":
         artifacts.append({"role": "extension", "version": "fixture-extension-1", "platform": "darwin/arm64", "sha256": "3" * 64})
     task = {"schema_version": contract.HISTORICAL_TASK_SCHEMA, "client_id": client_id, **dict(values), "candidate_revision": 1, "candidate": {key: "a" * 64 for key in ("source_tree_sha256", "build_receipt_sha256", "image_digest", "profile_digest", "gateway_sha256")}, "catalog": {"sha256": "b" * 64, "entry": {"client_id": f"{client_id}-fixture", "product": "claude-desktop" if client_id == "claude-desktop" else "claude-code-vscode", "version": "fixture-cli-1", "platform": "darwin/arm64", "binary_sha256": "2" * 64}}, "client_artifacts": artifacts, "scenarios": [{"id": "client-smoke", "model": "fixture-model", "challenge": "fixture-unique-challenge-1234", "response_marker": "fixture-response", "minimum_requests": 1}], "execution": {"endpoint": "http://candidate.invalid:8080", "credential_ref": "private-ref:fixture", "timeout_seconds": 300, "request_budget": 10, "recorder_id": RECORDER, "capture_id": nonce, "producer_run_id": f"producer-{nonce}", "source_scope": scope, "capture_root": str(capture_root)}, "issued_at_utc": NOW, "task_nonce": nonce}
     task.update({key: current[key] for key in ("candidate", "candidate_revision", "catalog")})
     task["execution"]["endpoint"] = current["endpoint"]
-    task["execution"]["project_ledger"] = str(fixture_ledger(attempt_root))
+    task["execution"]["project_ledger"] = str(project)
     task["scenarios"] = scenarios if scenarios is not None else task["scenarios"]
     task["scenario_reuse"] = scenario_reuse or []
     task["issued_at_utc"] = issued_at_utc

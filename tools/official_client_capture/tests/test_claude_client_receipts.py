@@ -16,6 +16,7 @@ from tools.official_client_capture import claude_upgrade_segment_seal as segment
 from tools.official_client_capture import codex_upgrade_project_ledger as ledger
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture.tests import claude_client_receipt_fixture as fixture
+from tools.official_client_capture.tests import claude_mac_v2_fixture as mac_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_seal_evidence as seal_fixture
 
 
@@ -38,6 +39,53 @@ class ClientReceiptContractTests(unittest.TestCase):
     def verify(self) -> dict:
         return contract.verify_client_bundle(self.task, self.bundle, self.capture)
 
+    def test_new_capture_world_is_managed_and_independent_of_uploaded_bundle(self) -> None:
+        project = fixture.fixture_ledger(self.attempt)
+        self.assertTrue(self.capture.is_relative_to(project.parent))
+        self.assertFalse(self.capture.is_relative_to(self.bundle))
+        self.assertFalse(self.bundle.is_relative_to(self.capture))
+        for path in (self.capture.parent.parent, self.capture.parent, self.capture):
+            self.assertEqual(path.stat().st_mode & 0o077, 0)
+        verified = self.verify()
+        self.assertEqual((verified["status"], len(verified["requests"])), ("verified", 1))
+
+    def test_frozen_v2_material_reentry_preserves_task_and_original_files(self) -> None:
+        paths = [self.task_path, *[path for root in (self.bundle, self.capture)
+            for path in root.rglob("*") if path.is_file()]]
+        before = {path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}
+        self.assertEqual(fixture.material(self.attempt, "claude-desktop", self.values),
+                         (self.task_path, self.bundle, self.capture))
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}, before)
+        self.assertEqual(self.verify()["status"], "verified")
+
+    def test_existing_task_with_old_capture_coordinate_is_rejected_without_migration(self) -> None:
+        # 只在本用例新建的反例中改变已冻结根；不搬移既有失败世界。
+        previous_root = self.root / "server-originals/legacy-task"
+        frozen = dict(self.task)
+        frozen["execution"] = {**self.task["execution"], "capture_root": str(previous_root)}
+        frozen["task_sha256"] = contract.digest({key: value for key, value in frozen.items() if key != "task_sha256"})
+        fixture.write(self.task_path, frozen)
+        paths = [self.task_path, *[path for path in self.capture.rglob("*") if path.is_file()]]
+        before = {path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}
+        with self.assertRaisesRegex(ValueError, "捕获根已冻结，禁止迁移或重写"):
+            fixture.material(self.attempt, "claude-desktop", self.values)
+        self.assertFalse(previous_root.exists())
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}, before)
+
+    def test_frozen_material_reentry_rechecks_current_candidate_without_rewriting(self) -> None:
+        paths = [self.task_path, *[path for root in (self.bundle, self.capture)
+            for path in root.rglob("*") if path.is_file()]]
+        before = {path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}
+        attempt_path = self.attempt / "attempt.json"
+        changed = contract.read_json(attempt_path)
+        changed["candidate_gateway"]["base_url"] = "http://other-candidate.invalid:8080"
+        fixture.write(attempt_path, changed)
+        attempt_before = attempt_path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "候选身份或 Catalog 与当前构建不符"):
+            fixture.material(self.attempt, "claude-desktop", self.values)
+        self.assertEqual(attempt_path.read_bytes(), attempt_before)
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}, before)
+
     def rewrite_source(self, name: str, payload: dict) -> None:
         fixture.write(self.bundle / name, payload)
         source = contract.read_json(self.bundle / "source-manifest.json")
@@ -58,9 +106,12 @@ class ClientReceiptContractTests(unittest.TestCase):
         other = self.root / "staging" / "other-project"
         other.mkdir(mode=0o700)
         foreign = ledger.create_fixture_ledger(other, client="claude")
-        # 旁账内仍走真实 append/replay，使 task、accounting 与请求键彼此完全自洽；独立读侧必须查真实 Campaign 归属。
+        # 另建独立 nonce 的旁账反例，保持默认 task 和原件不变。
+        # 旁账内仍走真实 append/replay，task、accounting 与请求键完全自洽。
         with mock.patch.object(fixture, "fixture_ledger", return_value=foreign):
-            receipt = fixture.write_receipt(self.attempt, "claude-desktop", self.values)
+            material = fixture.material(self.attempt, "claude-desktop", self.values, nonce="foreign-project-task")
+            with mock.patch.object(mac_fixture, "material", return_value=material):
+                receipt = fixture.write_receipt(self.attempt, "claude-desktop", self.values)
         self.assertEqual(len(ledger.replay_head(foreign)["accounted_identity_index"]), 1)
         with self.assertRaisesRegex(ValueError, "不是本 Campaign 的总账"):
             contract.verify_client_receipt(self.attempt, "claude-desktop", receipt)
@@ -70,9 +121,13 @@ class ClientReceiptContractTests(unittest.TestCase):
         other = self.root / "staging" / "other-project"
         other.mkdir(mode=0o700)
         foreign = ledger.create_fixture_ledger(other, client="claude")
+        # 承接引用新建的旁账反例，不迁移或重写默认冻结 task。
         with mock.patch.object(fixture, "fixture_ledger", return_value=foreign):
-            fixture.write_receipt(self.attempt, "claude-desktop", self.values)
-        reuse = [{"root": str(self.attempt), "task": contract.binding(self.task_path, self.attempt), "source_manifest": contract.binding(self.bundle / "source-manifest.json", self.attempt), "scenario_ids": ["client-smoke"]}]
+            material = fixture.material(self.attempt, "claude-desktop", self.values, nonce="foreign-accounted-task")
+            with mock.patch.object(mac_fixture, "material", return_value=material):
+                fixture.write_receipt(self.attempt, "claude-desktop", self.values)
+        previous_task, previous_bundle, _capture = material
+        reuse = [{"root": str(self.attempt), "task": contract.binding(previous_task, self.attempt), "source_manifest": contract.binding(previous_bundle / "source-manifest.json", self.attempt), "scenario_ids": ["client-smoke"]}]
         task_path, bundle, capture = fixture.material(self.attempt, "claude-desktop", self.values, nonce="reuse-foreign-accounting", scenario_reuse=reuse, issued_at_utc="2026-10-08T00:01:00Z")
         with self.assertRaisesRegex(ValueError, "不是本 Campaign 的总账"):
             contract.verify_client_bundle(contract.read_json(task_path), bundle, capture)

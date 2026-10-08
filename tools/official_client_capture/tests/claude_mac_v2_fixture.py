@@ -89,6 +89,10 @@ class FixturePatch:
 def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], **kwargs: Any) -> tuple[Path, Path, Path]:
     task_path, root, capture_root = old.material_v1(attempt_root, client_id, values, **kwargs)
     legacy = c.read_json(task_path)
+    if legacy["schema_version"] == c.TASK_SCHEMA:
+        # 原委托返回已冻结 v2 世界时只读承接，不重写 task 或两端原件。
+        c.validate_task(legacy)
+        return task_path, root, capture_root
     moment = c.timestamp(legacy["issued_at_utc"])
     at = lambda n: (moment + timedelta(seconds=n)).isoformat()
     product = legacy["catalog"]["entry"]["product"]
