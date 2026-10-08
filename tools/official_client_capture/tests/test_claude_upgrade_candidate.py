@@ -460,7 +460,7 @@ class RecordCandidateBuildTests(_CandidateCase):
         self.assertEqual(store_receipt["image"]["image_digest"], "sha256:" + "7" * 64)
         self.assertEqual(
             [item["binding"]["path"] for item in store_receipt["artifact_inventory"]["entries"]],
-            [f"evidence/campaigns/{CAMPAIGN_ID}/candidates/{CANDIDATE}/build-evidence/artifacts/{name}"
+            [f"evidence/campaigns/{CAMPAIGN_ID}/candidates/{CANDIDATE}/build-evidence/{name}"
              for name in ("container-healthcheck.sh", "docker-entrypoint.sh", "sub2api")],
         )
         for entry in store_receipt["artifact_inventory"]["entries"]:
