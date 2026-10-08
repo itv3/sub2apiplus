@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Mapping
 
 from .canonical import canonical_sha256, parse_json_bytes, sha256_bytes
@@ -34,7 +35,6 @@ class VerifiedGateProjection:
         if materials:
             if len(materials) != 1 or sha256_bytes(raw) != parent_binding["sha256"] or len(raw) != parent_binding["bytes"]:
                 raise ControlError("门禁复制原件在严格投影时漂移或映射重复")
-            import json
             try:
                 material = json.loads(raw)
             except (ValueError, UnicodeDecodeError):
@@ -77,6 +77,13 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
     guard_proof = _revalidate_guard_continuity(source)
     continuity_bindings = [item.as_value() for item in guard_proof.read_bindings] if guard_proof is not None else []
     bindings = {row["path"]: row for row in typed_bindings([initial, continuity_bindings])}
+    if profile_projection is None:
+        # 在任何历史父域展开前核当前观测证据，避免先缺历史坐标掩盖缺证明。
+        for row in bindings.values():
+            if row["path"].rsplit("/", 1)[-1] in {"profile-identity.json", "host-profile-identity.json"}:
+                identity = json.loads(_source_bytes(source, row))
+                if isinstance(identity, dict) and identity.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+                    raise ControlError("当前 Docker Profile 观测副本缺少已验证来源证明")
     if gate_projection is not None:
         if not isinstance(gate_projection, VerifiedGateProjection) or gate_projection.token is not _TOKEN:
             raise ControlError("门禁投影类型或受管权限错误")
@@ -103,8 +110,7 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
                 content = parse_json_bytes(raw)
             except ControlError:
                 # 非 JSON 字节仍完整读验。合法数组里的绑定也要严格展开。
-                import json
-                try:
+                    try:
                     content = json.loads(raw)
                 except (ValueError, UnicodeDecodeError):
                     continue

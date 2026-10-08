@@ -360,6 +360,17 @@ def validate_profile_observation_projection(configuration: Mapping[str, Any], co
     if proof_bindings != expected:
         raise ControlError("Profile 来源证明集合遗漏、重复或含未授权原件")
     documents: dict[str, tuple[dict[str, Any], bytes]] = {}
+    # 冻结配置的两个来源父也保留完整字节；历史内部坐标由原资格图解释。
+    # 权限来自同一配置原件及本校验器，不能由归档调用者传入路径列表授予。
+    for role in ("candidate", "rollback"):
+        source_material = configuration[role]
+        source_binding = _binding(source_material["profile_binding"])
+        if source_binding["sha256"] != source_material["runtime_profile_sha256"]:
+            raise ControlError("Profile 来源父不是冻结角色的完整字节")
+        source_raw = _raw(read_raw, source_binding)
+        previous = documents.setdefault(source_binding["path"], (source_binding, source_raw))
+        if previous != (source_binding, source_raw):
+            raise ControlError("Profile 两角色来源父对同一路径声明不同字节")
     validated_proofs: dict[str, dict[str, Any]] = {}
     visiting_proofs: set[str] = set()
 
