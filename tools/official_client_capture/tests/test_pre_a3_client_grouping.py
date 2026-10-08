@@ -3,7 +3,7 @@
 * 场景表按客户端：Codex 的场景表、单元 ID、命令与改造前相同（与改造前脚本逐字对照见 ``test_pre_a3_codex_parity``）；Claude
   集合为空时规划、签发（含 ``issue --client claude``）、核验与串行认证一律拒绝（B5a-05 登记四条链之后，用替身清空两张表
   验证）；登记了 Claude 场景时单元 ID 带 ``pre-a3:claude:``、命令带 ``--client claude``，两客户端的单元在同一份运行清单里
-  互不承接、互不算作全集之外；B5a-05 登记的最小恢复演练四条链与 B5b-03 的故障恢复链按真实链规划（超时 2400 秒、测试文件按模块路径）；
+  互不承接、互不算作全集之外；当前八条登记仅证明可执行入口，按既有真实链规格规划，不代表完整恢复覆盖或认证通过；
 * 策略认证对 Claude 按 v3 引擎算身份：兼容收据、激活认证与 Claude 部署收据合同，客户端混用即拒绝；
 * 从单元执行记录签发 Claude 的 pre-A3 v3（带 client）并核验、复用；发布认证 v2 的组装与核验；Claude 发布认证签发在核完
   pre-A3 之后因演练合同未落实而失败关闭，Claude 场景集合为空时更早被 pre-A3 拒绝；
@@ -63,13 +63,16 @@ def claude_unregistered():
         yield
 
 
-# B5a-05 登记的 Claude 最小恢复演练四条链与 B5b-03 的故障恢复链（场景 ID；模块与测试入口取登记表本身，不在这里写模块名）。
+# 当前八条 Claude 入口（模块与测试入口取登记表本身）；登记不代替实际逐链通过。
 CLAUDE_CHAIN_IDS = (
     "vc-chain.claude-reconcile",
     "vc-chain.claude-deadline",
     "vc-chain.claude-root-cause",
     "vc-chain.claude-tool-evolution",
+    "vc-chain.claude-vc1-capture",
+    "vc-chain.claude-full-validation-only",
     "vc-chain.claude-recovery-chain",
+    "vc-chain.claude-late-stage-faults",
 )
 
 
@@ -137,10 +140,10 @@ class ScenarioTableTests(unittest.TestCase):
         self.assertIs(pre_a3.REAL_CHAIN_IDS_BY_CLIENT["codex"], pre_a3.REAL_CHAIN_IDS)
         self.assertIs(pre_a3.SCENARIOS_BY_CLIENT["claude"], pre_a3.CLAUDE_SCENARIOS)
         self.assertIs(pre_a3.REAL_CHAIN_IDS_BY_CLIENT["claude"], pre_a3.CLAUDE_REAL_CHAIN_IDS)
-        self.assertEqual(pre_a3.CLAUDE_REAL_CHAIN_IDS, CLAUDE_CHAIN_IDS, "B5a-05 的四条最小恢复演练链与 B5b-03 的故障恢复链")
+        self.assertEqual(pre_a3.CLAUDE_REAL_CHAIN_IDS, CLAUDE_CHAIN_IDS, "当前八条可执行入口，不代表已通过")
         self.assertEqual([row[0] for row in pre_a3.CLAUDE_SCENARIOS], list(CLAUDE_CHAIN_IDS), "都是真实链，场景表与登记一一对应")
-        self.assertEqual(len({(row[2], row[3]) for row in pre_a3.CLAUDE_SCENARIOS}), 2,
-                         "B5a-05 四条在控制链模块的同一个类里，B5b-03 的链在故障链模块里")
+        self.assertEqual(len({(row[2], row[3]) for row in pre_a3.CLAUDE_SCENARIOS}), 3,
+                         "四条最小控制链、两条录制链与两条故障链分属三个实际类")
         self.assertTrue(all(".real_chains." in row[2] and row[4].startswith("test_") for row in pre_a3.CLAUDE_SCENARIOS))
         self.assertEqual(set(pre_a3.SCENARIOS_BY_CLIENT), set(upgrade_client_adapter.CLIENTS))
         self.assertIs(pre_a3.scenarios_for(), pre_a3.SCENARIOS)

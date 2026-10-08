@@ -123,8 +123,13 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                                        "seconds": seconds, "report": source.binding(report_path)}
             save_record(directory, {**record, "status": "passed", "metrics": self.real_chain_metrics})
 
+    def test_real_vc0_through_vc6_recorded_validation(self) -> None:
+        """pre-A3 的完整录制链入口；委托既有 CLI 外壳，缺条件与失败不能转记通过。"""
+
+        self._run_pending_full_validation()
+
     def _run_pending_full_validation(self) -> None:
-        """只供显式隔离执行器选择的完整链准备入口；不进入默认发现，也不在此登记 CHAINS。
+        """保留原显式定向入口，由完整录制链的公共场景转调；本方法不重复进入测试发现。
 
         外层必须在新 Python 启动前将 TMPDIR 与记录目录设为同一私有父目录。本方法只分配一次世界，
         然后委托正式 full CLI；报告缺失、失败或超时均保存真实日志和未验证记录，不能改写为成功。

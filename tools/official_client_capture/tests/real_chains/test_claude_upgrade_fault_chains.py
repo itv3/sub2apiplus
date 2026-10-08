@@ -15,8 +15,8 @@
   - 有候选 attempt 的完整工具演进（真实身份变化 → 整体预览 → 两侧登记 → 候选作废闭集 → 对账批准续跑）；
   - 多根部署各故障点（受监督部署在交换、备份、新增根、回滚、收据各点被杀 → 下次启动按日志恢复 → 再部署成功）；
   - 跨客户端误用（Codex 收据喂给 Claude 入口、缺 client 的合同、x86_64 证据喂给 arm64 目标、夹具收据冒充正式引用）。
-* ``vc-chain.claude-late-stage-faults``：VC-2～VC-6 一个 Campaign 的连续后段故障链，等 B4-06b（compare／accept）与 B4-07
-  收尾合入后补，补时再登记（只登记能通过的链）。
+* ``vc-chain.claude-late-stage-faults``：VC-2～VC-6 一个 Campaign 的七场景连续后段故障链；当前只登记既有可执行
+  入口，不预填通过。r2／评估器修复仍在另一条私有待验链，八条入口不代表 B5b-03 完整覆盖。
 
 每个场景都核对同样六项（``ScenarioAudit``），逐项写进链指标：
 
@@ -73,12 +73,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 # 链体在子进程里按点分名运行；不用 __name__，直接以脚本运行本文件时它是 __main__。
 CHAIN_MODULE = "tools.official_client_capture.tests.real_chains." + Path(__file__).stem
 
-# 场景 ID → 链体方法名（与 pre-A3 登记、外层 test_* 方法一一对应）。
-CHAINS: Mapping[str, Mapping[str, str]] = {
-    "recovery": {"scenario": "vc-chain.claude-recovery-chain", "exercise": "_exercise_recovery_chain"},
-}
-
-# 私有待验入口不在 CHAINS 或 pre-A3 注册表中；只有主任务实测、核对全部合同后才能另提交启用。
+# late 的七场景与 revision 的八场景是不同闭集；登记入口不合并两者，也不证明完整认证。
 LATE_CONTINUOUS_SCENARIOS = (
     '候选 transient 裁定与恢复段续跑', '后段同根因暂停并续派 compare', '后段预算到期并延期续派 builder',
     '后段批次 COMMIT 发布中断', '后段交付修复后动作中断', '后段交付阶段批准失效', '后段交付收据后中断与重复收尾',
@@ -88,9 +83,15 @@ REVISION_CONTINUOUS_SCENARIOS = (
     '评估器真实修复与 b1 零采集重评', '后段批次 COMMIT 发布中断', '后段交付修复后动作中断',
     '后段交付阶段批准失效', '后段交付收据后中断与重复收尾',
 )
-PENDING_CONTINUOUS_CHAINS = {
+# 场景 ID → 链体方法名（与 pre-A3 登记、外层 test_* 方法一一对应）；通过状态只来自实际运行。
+CHAINS: Mapping[str, Mapping[str, Any]] = {
+    "recovery": {"scenario": "vc-chain.claude-recovery-chain", "exercise": "_exercise_recovery_chain"},
     'late-continuous': {'scenario': 'vc-chain.claude-late-stage-faults', 'exercise': '_exercise_late_continuous',
                         'expected': LATE_CONTINUOUS_SCENARIOS},
+}
+
+# revision 保持私有待验；最终按完整成功实测决定合链还是正式拆出，不在此猜测新增认证项。
+PENDING_CONTINUOUS_CHAINS = {
     'revision-continuous': {'scenario': 'vc-chain.claude-revision-evaluator-recovery', 'exercise': '_exercise_revision_continuous',
                             'expected': REVISION_CONTINUOUS_SCENARIOS},
 }
@@ -1749,8 +1750,15 @@ class ClaudeFaultChainTests(unittest.TestCase):
     def test_recovery_chain_keeps_trusted_results_and_resumes_every_fault(self) -> None:
         self._run_chain("recovery")
 
+    def test_late_stage_faults_resume_seven_scenarios(self) -> None:
+        """正式入口要求 Linux ARM64 root；本机降级回归只能走原私有入口，不能成为认证结果。"""
+
+        if not sys.platform.startswith("linux") or os.geteuid() != 0 or os.uname().machine not in {"aarch64", "arm64"}:
+            self.skipTest("未验证：正式后段链要求 Linux ARM64 root 与 mount/net namespace")
+        self._run_chain('late-continuous')
+
     def _run_pending_late_continuous(self) -> None:
-        """显式定向运行，未放入 test_* 发现或认证登记。"""
+        """保留原显式定向入口；允许本机降级回归，不能拿其结果替代正式场景认证。"""
 
         self._run_chain('late-continuous')
 
@@ -1824,7 +1832,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
         expected = list(spec.get('expected') or [name for _step, group in RECOVERY_CHAIN_GROUPS for name in group.values()])
         records = metrics.get('scenarios') or []
         self.assertTrue(_records_complete(records, expected), '每个场景必须按顺序写出六项真实通过记录')
-        if chain in PENDING_CONTINUOUS_CHAINS:
+        if spec.get('expected'):
             self.assertEqual(len({row.get('campaign_id') for row in records}), 1, '连续链不得拼多个 Campaign 的场景')
             self.assertTrue(all(row.get('campaign_id') for row in records), '连续记录缺少 Campaign 坐标')
 

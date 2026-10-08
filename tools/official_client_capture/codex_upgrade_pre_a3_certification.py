@@ -400,7 +400,10 @@ CLAUDE_REAL_CHAIN_IDS: tuple[str, ...] = (
     "vc-chain.claude-deadline",
     "vc-chain.claude-root-cause",
     "vc-chain.claude-tool-evolution",
+    "vc-chain.claude-vc1-capture",
+    "vc-chain.claude-full-validation-only",
     "vc-chain.claude-recovery-chain",
+    "vc-chain.claude-late-stage-faults",
 )
 CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
@@ -433,6 +436,20 @@ CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "test_tool_evolution_registration_moves_effective_identity",
     ),
     (
+        "vc-chain.claude-vc1-capture",
+        "ARM64 隔离副本中用只读录制来源执行 VC-0 收口、受监督复制与 VC-1 封存；登记入口不代表已通过",
+        "tools.official_client_capture.tests.real_chains.test_claude_vc1_recorded_chain",
+        "ClaudeRecordedVC1ChainTests",
+        "test_real_vc0_closeout_supervised_copy_and_vc1_seal",
+    ),
+    (
+        "vc-chain.claude-full-validation-only",
+        "ARM64 隔离副本中委托真实 CLI 执行 VC-0～VC-6 完整录制回放，逐阶段核对与零请求；不授予正式版本取证权",
+        "tools.official_client_capture.tests.real_chains.test_claude_vc1_recorded_chain",
+        "ClaudeRecordedVC1ChainTests",
+        "test_real_vc0_through_vc6_recorded_validation",
+    ),
+    (
         "vc-chain.claude-recovery-chain",
         "故障恢复链：父进程中断、预约后中断、seal 失败、提交中崩溃两层、账务未决、预算到期、同根因暂停、工具演进后旧链重放、"
         "候选真实对账批准续跑、有候选 attempt 的完整工具演进、多根部署各故障点与四类跨客户端误用，"
@@ -440,6 +457,14 @@ CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains",
         "ClaudeFaultChainTests",
         "test_recovery_chain_keeps_trusted_results_and_resumes_every_fault",
+    ),
+    (
+        "vc-chain.claude-late-stage-faults",
+        "ARM64 同 Campaign 的七场景连续链：transient、同根因暂停、预算延期、COMMIT 中断、交付动作中断、阶段失效与重复收尾；"
+        "r2 与评估器修复仍在私有待验链，登记八条不代表 B5b-03 完整覆盖",
+        "tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains",
+        "ClaudeFaultChainTests",
+        "test_late_stage_faults_resume_seven_scenarios",
     ),
 )
 # 按客户端分组的登记表（设计 B5a-04）。值引用上面的模块常量，部署脚本据此静态核对场景入口随树部署
@@ -909,6 +934,10 @@ SCENARIO_SECONDS: dict[str, float] = {
     "vc-chain.claude-reconcile": 57.0,
     # B5b-03：原恢复链本机降级模式约 85 秒；并入 B 组后先登记 ARM64 预算估计，B5b-04 重认证时以实测替换。
     "vc-chain.claude-recovery-chain": 340.0,
+    # B5b-02／03：只补可执行入口登记，沿用既有缺省调度权重占位；不是 ARM64 实测或通过凭证，B5b-05 后续替换。
+    "vc-chain.claude-vc1-capture": 30.0,
+    "vc-chain.claude-full-validation-only": 30.0,
+    "vc-chain.claude-late-stage-faults": 30.0,
 }
 # 单元超时只作安全网（超时即判该场景崩溃、不签发）：真实链 40 分钟，其余 15 分钟。
 REAL_CHAIN_TIMEOUT_SECONDS = 2400
