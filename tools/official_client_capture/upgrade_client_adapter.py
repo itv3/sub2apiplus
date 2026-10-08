@@ -453,6 +453,11 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     "candidate_recovery_identity_flags": "value",
     # 后继协议顺序：None 沿用监督器原 tuple；显式值必须是全部既有协议名的无重复 tuple，不能由清单或 CLI 注入。
     "successor_protocol_order": "value",
+    # 跨基线恢复段承接：调用方必须已持有 Campaign 锁，且旧段未通过 terminal_failed。
+    # (campaign_dir, *, manifest, candidate_id, attempt_id, segment_root, baseline, baseline_commit_sha256,
+    # recovery) → 旧成功段是否属于当前 COMMIT 前序链，且原计划／执行、完整 seal 与实际入账均可信。
+    # Codex 恒为假，保留原成功段拒绝语义；Claude 只允许更早基线的成功段，不允许当前基线重开。
+    "sealed_predecessor_segment": "callable",
 })
 
 
@@ -503,6 +508,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "catalog_stage_profile": ("codex_upgrade_client_adapter", "catalog_stage_profile"),
         "vc5_official_campaign": ("codex_upgrade_client_adapter", "vc5_official_campaign"),
         # B4-05b-1：Codex 的候选续跑身份参数就是监督器原常量。
+        "sealed_predecessor_segment": ("codex_upgrade_client_adapter", "sealed_predecessor_segment"),
         "candidate_recovery_identity_flags": ("codex_upgrade_supervisor", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),
         "successor_protocol_order": ("upgrade_client_adapter", "DEFAULT_SUCCESSOR_PROTOCOL_ORDER"),
     }),
@@ -541,6 +547,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "candidate_post_run_extra_action": ("claude_upgrade_client_adapter", "candidate_post_run_extra_action"),  # B4-07 收尾
         "catalog_stage_profile": ("claude_upgrade_vc5_admission", "catalog_stage_profile"),  # B5b-01
         "vc5_official_campaign": ("claude_upgrade_vc5_admission", "vc5_official_campaign"),  # B5b-01
+        "sealed_predecessor_segment": ("claude_upgrade_recovery_history", "sealed_predecessor_segment"),
         "candidate_recovery_identity_flags": ("claude_upgrade_client_adapter", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),  # B4-05b-1
         "successor_protocol_order": ("claude_upgrade_client_adapter", "SUCCESSOR_PROTOCOL_ORDER"),
     }),

@@ -6043,10 +6043,14 @@ def _reserve_attempt_recovery(
             for existing in sorted(recovery_root.iterdir()):
                 if existing.is_symlink() or not existing.is_dir():
                     raise adapter.orchestrator.ConfigurationError("attempt 恢复段目录含不可信条目。")
-                # 既有段只能是已对账的失败终态（中断段先 reconcile-attempt --recovery-revision）；成功段
-                # 意味着本基线已有可封存结果，禁止再开段。
+                # 同基线仍只允许已对账失败段；Claude 的新裁定可承接已封存且已入账的前序基线成功段。
+                # 额外判据必须在同一 Campaign 锁内重放当前 COMMIT 前序链，不能把成功段伪装成失败终态。
                 if not adapter.orchestrator._attempt_recovery_segment_terminal_failed(
                     campaign_dir, candidate_id=candidate_id, attempt_id=attempt_root.name, segment_root=existing
+                ) and not adapter.sealed_predecessor_segment(
+                    campaign_dir, manifest=manifest, candidate_id=candidate_id, attempt_id=attempt_root.name,
+                    segment_root=existing, baseline=baseline, baseline_commit_sha256=baseline_commit_sha256,
+                    recovery=recovery,
                 ):
                     raise adapter.orchestrator.ConfigurationError(
                         f"attempt 存在未收口或未对账的恢复段 {existing.name}，禁止并行开段"

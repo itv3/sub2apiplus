@@ -83,6 +83,16 @@ def candidate_post_run_extra_action(manifest: Any, action: Any) -> bool:
     return False
 
 
+def sealed_predecessor_segment(
+    campaign_dir: Path, *, manifest: Mapping[str, Any], candidate_id: str, attempt_id: str,
+    segment_root: Path, baseline: int, baseline_commit_sha256: str, recovery: Mapping[str, Any],
+) -> bool:
+    """Codex 不增加跨基线成功段承接；共享预约器继续使用原 terminal_failed 判据。"""
+
+    del campaign_dir, manifest, candidate_id, attempt_id, segment_root, baseline, baseline_commit_sha256, recovery
+    return False
+
+
 # ---------------------------------------------------------------------------
 # VC-5 准入的受管事实（B5b-01）：驱动 vc5_admission 原有的 Codex 逻辑，原样搬入
 # ---------------------------------------------------------------------------
