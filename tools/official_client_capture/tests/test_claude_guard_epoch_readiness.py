@@ -42,6 +42,11 @@ class ReadinessTests(unittest.TestCase):
             self.configuration, self.context, FileRuntime(self.configuration, self.context), identity,
         )
         self.addCleanup(self.engine.close)
+        # 纯负例保留独立上传字节；真实动作先具备真实登记、完整头与启动边界。
+        for item in self.case.bindings:
+            guard.write_once(guard.managed_path(self.root, item["path"]), self.case.raw_by_path[item["path"]])
+        self.engine._seal_registry_head(self.case.bindings)
+        self.assertFalse(self.engine.complete_startup()["blocked"])
         self.worker = subprocess.Popen(
             [sys.executable, "-B", "-c", "import sys; print('ready', flush=True); sys.stdin.read()"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

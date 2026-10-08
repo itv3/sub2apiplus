@@ -47,6 +47,9 @@ PREPARED_SCHEMA = "claude-upgrade-delivery-prepared/v1"
 INTENT_SCHEMA = "claude-upgrade-delivery-physical-intent/v1"
 TERMINAL_SCHEMA = "claude-upgrade-delivery-guard-terminal/v1"
 CORE_SCHEMA = "claude-delivery-stage-execution/v1"
+REGISTRY_POINTER_SCHEMA = "claude-upgrade-delivery-guard-registry-pointer/v1"
+REGISTRY_APPEND_SCHEMA = "claude-upgrade-delivery-guard-registry-append-intent/v1"
+REGISTRY_COMPLETED_SCHEMA = "claude-upgrade-delivery-guard-registry-append-completed/v1"
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 IMAGE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -349,10 +352,15 @@ class GuardEngine:
 
     def _epoch_materials(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """实际磁盘全集决定注册链，上传列表不能裁掉中间或末尾代际。"""
+        registrations, readiness = self._scan_epoch_materials()
+        self._registry_head_binding(registrations)
+        return registrations, readiness
+
+    def _scan_epoch_materials(self, pending_sequence: int | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """只读扫描原件；仅已核追加意图可以容许自己的空尾目录。"""
         registrations, readiness = [], []
-        directory = self.root / "epochs"
+        directory = managed_path(self.root, "epochs")
         if not directory.exists():
-            self._registry_head_binding(registrations)
             return registrations, readiness
         if directory.is_symlink() or not directory.is_dir():
             raise GuardError("epoch 根不是受管目录")
@@ -360,53 +368,282 @@ class GuardEngine:
             if path.is_symlink() or not path.is_dir() or path.name != f"{number:06d}":
                 raise GuardError("epoch 注册目录缺失、乱序或非法")
             names = {item.name for item in path.iterdir()}
+            if number == pending_sequence and not names:
+                continue
             if not {"registration.json"} <= names <= {"registration.json", "readiness.json"}:
                 raise GuardError("epoch 目录缺注册或存在未知原件")
             registrations.append(binding(self.data_root, path / "registration.json"))
             if "readiness.json" in names:
                 readiness.append(binding(self.data_root, path / "readiness.json"))
-        self._registry_head_binding(registrations)
         return registrations, readiness
+
+    def _registry_pointer(self) -> dict[str, Any] | None:
+        pointer = managed_path(self.root, "epoch-registry/head.json")
+        if not pointer.exists():
+            return None
+        value = exact(read_json(pointer), {"schema_version", "snapshot_binding"}, "注册头游标")
+        if value["schema_version"] != REGISTRY_POINTER_SCHEMA:
+            raise GuardError("注册头游标版本非法")
+        return dict(exact(value["snapshot_binding"], {"path", "sha256", "bytes"}, "注册头绑定"))
 
     def _registry_head_binding(self, registrations: list[dict[str, Any]]) -> dict[str, Any] | None:
         """游标只指向不可变注册全集；旧现场丢头不视为首次初始化。"""
-        registry = self.root / "epoch-registry"
-        pointer = registry / "head.json"
-        if not pointer.exists():
+        head_binding = self._registry_pointer()
+        if head_binding is None:
             scaffold = {".service.lock", "configuration.json", "index.json", "operations"}
             unknown = {path.name for path in self.root.iterdir()} - scaffold
             if registrations or unknown or list(self.operations.iterdir()):
                 raise GuardError("旧守卫根丢失注册头，禁止倒填或复用历史代际序号")
             return None
-        value = exact(read_json(pointer), {"schema_version", "snapshot_binding"}, "注册头游标")
-        if value["schema_version"] != "claude-upgrade-delivery-guard-registry-pointer/v1" or not registrations:
+        if not registrations:
             raise GuardError("守卫注册头存在而代际全集缺失，禁止倒填")
         last = read_json(check_binding(self.data_root, registrations[-1]))
         registered = guard_epochs.validate_registration_chain(
             self.configuration, self.context, registrations, self._read_original,
             channel_identity=last["guard_identity"])
         guard_epochs.validate_registry_head(
-            self.configuration, self.context, registered, value["snapshot_binding"], self._read_original)
-        return dict(value["snapshot_binding"])
+            self.configuration, self.context, registered, head_binding, self._read_original)
+        return head_binding
+
+    def _registry_head_document(self, registrations: list[dict[str, Any]], registered: Any) -> dict[str, Any]:
+        return {"schema_version": guard_epochs.REGISTRY_HEAD_SCHEMA,
+                "configuration_binding": self.context["configuration_ref"],
+                "configuration_sha256": canonical_sha256(self.configuration),
+                "stable_deployment_identity_sha256": registered.stable_deployment_identity_sha256,
+                "epoch_bindings": registrations}
+
+    def _document_binding(self, path: Path, document: Any) -> dict[str, Any]:
+        raw = canonical_json_bytes(document)
+        return {"path": path.relative_to(self.data_root).as_posix(),
+                "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
 
     def _seal_registry_head(self, registrations: list[dict[str, Any]]) -> None:
         """注册追加后封存不可变全集，再原子推进游标；不重签旧快照。"""
         registered = guard_epochs.validate_registration_chain(
             self.configuration, self.context, registrations, self._read_original, channel_identity=self.identity)
-        document = {"schema_version": guard_epochs.REGISTRY_HEAD_SCHEMA,
-                    "configuration_binding": self.context["configuration_ref"],
-                    "configuration_sha256": canonical_sha256(self.configuration),
-                    "stable_deployment_identity_sha256": registered.stable_deployment_identity_sha256,
-                    "epoch_bindings": registrations}
+        document = self._registry_head_document(registrations, registered)
         path = self.root / "epoch-registry" / "snapshots" / (canonical_sha256(document) + ".json")
         write_json_once(path, document)
         atomic_json(self.root / "epoch-registry" / "head.json", {
-            "schema_version": "claude-upgrade-delivery-guard-registry-pointer/v1",
+            "schema_version": REGISTRY_POINTER_SCHEMA,
             "snapshot_binding": binding(self.data_root, path)})
+
+    def _require_registered_producers(self, registrations: list[dict[str, Any]]) -> None:
+        """追加前核既有来源；未完成的新身份不能替旧操作或 freeze 倒填注册。"""
+        identities = {value["service_instance_id"]: value for value in (
+            read_json(check_binding(self.data_root, item))["guard_identity"] for item in registrations)}
+
+        def require(document: dict[str, Any], *, identity_required: bool, origin_required: bool) -> None:
+            if identity_required:
+                identity = document.get("guard_identity")
+                if not isinstance(identity, dict) or identities.get(identity.get("service_instance_id")) != identity:
+                    raise GuardError("既有 producer 的真实身份不在完整前序注册链，禁止倒填")
+            if origin_required:
+                origin = document.get("origin")
+                if (not isinstance(origin, dict) or origin.get("service_instance_id") not in identities
+                        or origin.get("authority") != self.identity["authority"]
+                        or origin.get("source_scope") != self.identity["source_scope"]
+                        or origin.get("configuration_sha256") != canonical_sha256(self.configuration)):
+                    raise GuardError("既有 producer 的来源不在完整前序注册链，禁止倒填")
+            for item in all_bindings(document):
+                check_binding(self.data_root, item)
+
+        for path in self.operations.iterdir():
+            if path.is_symlink() or not path.is_dir() or not SAFE_ID.fullmatch(path.name):
+                raise GuardError("既有 producer 操作目录非法")
+            require(self._prepared(path.name), identity_required=True, origin_required=False)
+            self._latest_terminal(path.name)
+            for terminal in sorted((path / "terminals").glob("*.json")):
+                require(read_json(terminal), identity_required=True, origin_required=False)
+            for pattern in ("evidence-*.json", "restoration-core-*.json"):
+                for core_path in sorted(path.glob(pattern)):
+                    core = read_json(core_path)
+                    require(core, identity_required=pattern.startswith("evidence-"), origin_required=True)
+        freezes = managed_path(self.root, "freezes")
+        if freezes.exists():
+            if not freezes.is_dir():
+                raise GuardError("既有 freeze 根非法")
+            for path in freezes.rglob("snapshot.json"):
+                snapshot = read_json(managed_path(self.data_root, path.relative_to(self.data_root).as_posix()))
+                cores = snapshot.get("cores")
+                if not isinstance(cores, dict) or "freeze" not in cores:
+                    raise GuardError("既有 freeze producer 缺失")
+                for name, core in cores.items():
+                    if not isinstance(core, dict):
+                        raise GuardError("既有 freeze core 非法")
+                    require(core, identity_required=name == "freeze", origin_required=True)
+
+    def _validate_registry_append(self, path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+        """只从不可变意图核精确新原件；前链和前头始终读取真实磁盘字节。"""
+        document = exact(read_json(path), {
+            "schema_version", "epoch_sequence", "configuration_binding", "configuration_sha256",
+            "context", "stable_deployment_identity_sha256", "previous_head_binding",
+            "previous_append_completed_binding",
+            "registration_document", "registration_binding", "proposed_head_document", "proposed_head_binding",
+        }, "注册追加意图")
+        number = document["epoch_sequence"]
+        if (document["schema_version"] != REGISTRY_APPEND_SCHEMA or type(number) is not int or number < 1
+                or path != self.root / "epoch-registry/appends" / f"{number:06d}" / "intent.json"
+                or read_bytes(path) != canonical_json_bytes(document)
+                or document["configuration_binding"] != self.context["configuration_ref"]
+                or document["configuration_sha256"] != canonical_sha256(self.configuration)
+                or document["context"] != self.stable_context):
+            raise GuardError("注册追加意图坐标、配置或原字节非法")
+        registration = document["registration_document"]
+        head = document["proposed_head_document"]
+        if not isinstance(registration, dict) or not isinstance(head, dict):
+            raise GuardError("注册追加意图的新原件必须是对象")
+        exact(registration, guard_epochs.EPOCH_FIELDS, "追加注册原件")
+        exact(head, guard_epochs.REGISTRY_HEAD_FIELDS, "追加头原件")
+        registration_path = self.root / "epochs" / f"{number:06d}" / "registration.json"
+        head_path = self.root / "epoch-registry/snapshots" / (canonical_sha256(head) + ".json")
+        if (document["registration_binding"] != self._document_binding(registration_path, registration)
+                or document["proposed_head_binding"] != self._document_binding(head_path, head)):
+            raise GuardError("注册追加意图未绑定精确拟议原字节")
+        registrations = head.get("epoch_bindings")
+        if (not isinstance(registrations, list) or len(registrations) != number
+                or registrations[-1] != document["registration_binding"]):
+            raise GuardError("注册追加意图不是单一末尾追加")
+        previous = registrations[:-1]
+        if previous:
+            identity = read_json(check_binding(self.data_root, previous[-1]))["guard_identity"]
+            registered = guard_epochs.validate_registration_chain(
+                self.configuration, self.context, previous, self._read_original, channel_identity=identity)
+            guard_epochs.validate_registry_head(
+                self.configuration, self.context, registered, document["previous_head_binding"], self._read_original)
+        elif document["previous_head_binding"] is not None:
+            raise GuardError("首次注册追加不能声明历史头")
+        previous_completed = document["previous_append_completed_binding"]
+        if previous_completed is not None:
+            exact(previous_completed, {"path", "sha256", "bytes"}, "前注册追加完成绑定")
+            completed_path = self.root / "epoch-registry/appends" / f"{number - 1:06d}" / "completed.json"
+            if number < 2 or previous_completed.get("path") != completed_path.relative_to(self.data_root).as_posix():
+                raise GuardError("注册追加意图的前完成凭证坐标非法")
+            completed = exact(read_json(check_binding(self.data_root, previous_completed)), {
+                "schema_version", "intent_binding", "registry_head_binding",
+            }, "注册追加前完成凭证")
+            exact(completed["intent_binding"], {"path", "sha256", "bytes"}, "前注册追加意图绑定")
+            previous_intent_path = completed_path.with_name("intent.json").relative_to(self.data_root).as_posix()
+            if (completed["schema_version"] != REGISTRY_COMPLETED_SCHEMA
+                    or completed["registry_head_binding"] != document["previous_head_binding"]
+                    or completed["intent_binding"].get("path") != previous_intent_path):
+                raise GuardError("注册追加意图与前完成原件未闭合")
+            self._read_original(completed["intent_binding"])
+        proposed_raw = {item["path"]: canonical_json_bytes(value) for item, value in (
+            (document["registration_binding"], registration), (document["proposed_head_binding"], head))}
+
+        def read_proposed(item: Mapping[str, Any]) -> bytes:
+            return proposed_raw[item["path"]] if item["path"] in proposed_raw else self._read_original(item)
+
+        registered = guard_epochs.validate_registration_chain(
+            self.configuration, self.context, registrations, read_proposed, channel_identity=registration["guard_identity"])
+        guard_epochs.validate_registry_head(
+            self.configuration, self.context, registered, document["proposed_head_binding"], read_proposed)
+        if document["stable_deployment_identity_sha256"] != registered.stable_deployment_identity_sha256:
+            raise GuardError("注册追加意图稳定部署漂移")
+        return document, binding(self.data_root, path)
+
+    def _registry_completed(self, intent_binding: dict[str, Any], head_binding: dict[str, Any]) -> dict[str, Any]:
+        return {"schema_version": REGISTRY_COMPLETED_SCHEMA,
+                "intent_binding": intent_binding, "registry_head_binding": head_binding}
+
+    def _recover_registry_append(self) -> None:
+        """仅幂等完成最后一份受管原意图，已完成事务永不回填历史缺件。"""
+        directory = managed_path(self.root, "epoch-registry/appends")
+        if not directory.exists():
+            return
+        if not directory.is_dir():
+            raise GuardError("注册追加事务根非法")
+        paths = sorted(directory.iterdir())
+        if not paths:
+            raise GuardError("注册追加事务目录没有已封存意图")
+        previous = None
+        previous_completed = None
+        pending = None
+        for offset, path in enumerate(paths):
+            if path.is_symlink() or not path.is_dir() or not re.fullmatch(r"[0-9]{6}", path.name):
+                raise GuardError("注册追加事务目录非法")
+            names = {item.name for item in path.iterdir()}
+            if not {"intent.json"} <= names <= {"intent.json", "completed.json"}:
+                raise GuardError("注册追加事务缺意图或存在未知原件")
+            intent, intent_binding = self._validate_registry_append(path / "intent.json")
+            if intent["previous_append_completed_binding"] != previous_completed:
+                raise GuardError("注册追加事务前缀缺失或前完成原件绑定漂移")
+            if previous is not None and (
+                    intent["epoch_sequence"] != previous["epoch_sequence"] + 1
+                    or intent["previous_head_binding"] != previous["proposed_head_binding"]):
+                raise GuardError("注册追加事务序号或前头链断裂")
+            if "completed.json" in names:
+                expected = self._registry_completed(intent_binding, intent["proposed_head_binding"])
+                if read_bytes(path / "completed.json") != canonical_json_bytes(expected):
+                    raise GuardError("注册追加完成原件漂移")
+                # 已完成事务只校原件，绝不使用意图重新落盘。
+                try:
+                    self._read_original(intent["registration_binding"])
+                    self._read_original(intent["proposed_head_binding"])
+                except (ControlError, GuardError) as error:
+                    raise GuardError("已完成注册追加原件缺失或漂移，禁止倒填历史来源：" + str(error)) from error
+                previous_completed = binding(self.data_root, path / "completed.json")
+            elif offset != len(paths) - 1:
+                raise GuardError("只允许最后一份注册追加事务尚未完成")
+            else:
+                pending = intent, intent_binding, path
+            previous = intent
+        if pending is None:
+            registrations, _ready = self._epoch_materials()
+            if (len(registrations) != previous["epoch_sequence"]
+                    or self._registry_pointer() != previous["proposed_head_binding"]):
+                raise GuardError("已完成注册追加与实际头或代际全集不一致")
+            return
+        intent, intent_binding, path = pending
+        previous_registrations = intent["proposed_head_document"]["epoch_bindings"][:-1]
+        registrations, readiness = self._scan_epoch_materials(intent["epoch_sequence"])
+        if registrations not in (previous_registrations, intent["proposed_head_document"]["epoch_bindings"]):
+            raise GuardError("未完成注册追加的实际前链或新原件漂移")
+        if any(item["path"].endswith(f"/{intent['epoch_sequence']:06d}/readiness.json") for item in readiness):
+            raise GuardError("未完成注册追加已出现启动通过原件，不能作为追加断点恢复")
+        current = self._registry_pointer()
+        if current not in (intent["previous_head_binding"], intent["proposed_head_binding"]):
+            raise GuardError("未完成注册追加的实际游标不是前头或拟议头")
+        if current is None:
+            allowed = {".service.lock", "configuration.json", "index.json", "operations", "epochs", "epoch-registry"}
+            if (previous_registrations or {item.name for item in self.root.iterdir()} - allowed
+                    or list(self.operations.iterdir())
+                    or self._index()["operations"]):
+                raise GuardError("首次注册恢复只接受已封存首意图与空脚手架，禁止倒填旧根")
+            registry = managed_path(self.root, "epoch-registry")
+            for item in registry.iterdir():
+                if item.name in {"appends", "snapshots"}:
+                    continue
+                # 原子游标的遗留临时文件没有恢复权限，仅允许固定命名的普通原件。
+                if not re.fullmatch(r"\.index-[0-9a-f]{24}", item.name):
+                    raise GuardError("首次注册恢复存在非意图授权的注册根材料")
+                read_bytes(item)
+            snapshots = managed_path(self.root, "epoch-registry/snapshots")
+            if snapshots.exists() and {item.name for item in snapshots.iterdir()} - {PurePosixPath(intent["proposed_head_binding"]["path"]).name}:
+                raise GuardError("首次注册恢复存在非意图授权的快照")
+        self._require_registered_producers(previous_registrations)
+        if current == intent["proposed_head_binding"]:
+            # 游标已经发布则必须保有全部真实字节，只准补完成标记。
+            self._read_original(intent["registration_binding"])
+            self._read_original(intent["proposed_head_binding"])
+            self._registry_head_binding(registrations)
+        else:
+            for key in ("registration_binding", "proposed_head_binding"):
+                target = managed_path(self.data_root, intent[key]["path"])
+                if target.exists():
+                    self._read_original(intent[key])
+            write_json_once(managed_path(self.data_root, intent["registration_binding"]["path"]), intent["registration_document"])
+            write_json_once(managed_path(self.data_root, intent["proposed_head_binding"]["path"]), intent["proposed_head_document"])
+            atomic_json(self.root / "epoch-registry/head.json", {
+                "schema_version": REGISTRY_POINTER_SCHEMA, "snapshot_binding": intent["proposed_head_binding"]})
+            self._epoch_materials()
+        write_json_once(path / "completed.json", self._registry_completed(intent_binding, intent["proposed_head_binding"]))
 
     def _register_epoch(self) -> None:
         """持有独占现场锁时追加真实进程，不给无注册的历史操作倒填身份。"""
         registrations, _ready = self._epoch_materials()
+        self._require_registered_producers(registrations)
         stable = guard_epochs.stable_deployment_identity(self.configuration, self.context, self.identity)
         if registrations:
             last = read_json(check_binding(self.data_root, registrations[-1]))
@@ -433,17 +670,29 @@ class GuardEngine:
         }
         path = self.root / "epochs" / f"{number:06d}" / "registration.json"
         # 写前先核完整拟议链，不能留下跨部署的新注册原件。
-        proposed = {"path": path.relative_to(self.data_root).as_posix(),
-                    "sha256": hashlib.sha256(canonical_json_bytes(document)).hexdigest(),
-                    "bytes": len(canonical_json_bytes(document))}
-        guard_epochs.validate_registration_chain(
+        proposed = self._document_binding(path, document)
+        registered = guard_epochs.validate_registration_chain(
             self.configuration, self.context, [*registrations, proposed],
             lambda item: canonical_json_bytes(document) if dict(item) == proposed else self._read_original(item),
             channel_identity=self.identity,
         )
-        write_json_once(path, document)
-        self._epoch_binding = binding(self.data_root, path)
-        self._seal_registry_head([*registrations, self._epoch_binding])
+        head = self._registry_head_document([*registrations, proposed], registered)
+        head_path = self.root / "epoch-registry/snapshots" / (canonical_sha256(head) + ".json")
+        previous_completed = None
+        if (self.root / "epoch-registry/appends").exists():
+            previous_completed = binding(self.data_root, self.root / "epoch-registry/appends" / f"{number - 1:06d}" / "completed.json")
+        intent = {"schema_version": REGISTRY_APPEND_SCHEMA, "epoch_sequence": number,
+                  "configuration_binding": self.context["configuration_ref"],
+                  "configuration_sha256": canonical_sha256(self.configuration), "context": self.stable_context,
+                  "stable_deployment_identity_sha256": registered.stable_deployment_identity_sha256,
+                  "previous_head_binding": self._registry_head_binding(registrations),
+                  "previous_append_completed_binding": previous_completed,
+                  "registration_document": document, "registration_binding": proposed,
+                  "proposed_head_document": head, "proposed_head_binding": self._document_binding(head_path, head)}
+        intent_path = self.root / "epoch-registry/appends" / f"{number:06d}" / "intent.json"
+        write_json_once(intent_path, intent)
+        self._recover_registry_append()
+        self._epoch_binding = proposed
 
     def _publish_epoch_readiness(self) -> None:
         """全部操作恢复后封存启动边界，后续当前索引仍独立重验。"""
@@ -488,6 +737,7 @@ class GuardEngine:
             self._startup_requested = True
             self._epoch_ready_binding = None
             try:
+                self._recover_registry_append()
                 self._register_epoch()
                 self._startup_recovery = True
                 summary = self.recover_pending({"reason": "startup"}, startup=True)
