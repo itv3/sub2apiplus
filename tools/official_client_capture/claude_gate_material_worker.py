@@ -103,6 +103,10 @@ def _preload(repository: Path) -> Any:
     target = gate._target_gate_verifier()
     records = target.fs.records_module()
     records._audit_module()._runtime_module()
+    # 身份校验也有固定的纯依赖；bootstrap 与真实读取须预载同一序列。
+    # 不过滤运行库增量，随后仍逐文件严格比较完整实际清单。
+    from tools.official_client_capture import claude_tool_identity_policy
+    from tools.official_client_control import contracts
     import codecs
     import encodings.utf_8
     import encodings.ascii

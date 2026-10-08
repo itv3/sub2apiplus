@@ -144,7 +144,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 11；schema 版本不表示发布认证通过） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 12；schema 版本不表示发布认证通过） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
 | 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
 | 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
@@ -155,7 +155,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | 入口步骤记录、单元执行记录与运行清单、逐单元承接、后台验证与入口空跑结论、P0 收据与离线门禁证据 | `entry-step-record/v1`、`unit-execution-record/v1`、`unit-execution-manifest/v1`、`unit-inherit-request/v1`／`-context/v1`／`-decision/v1`、`background-validation/v1`、`entry-dryrun/v1`、`codex-upgrade-vc-receipt/v1`、`codex-p0-offline-gate-evidence/v1`／`v2` | 同左（客户端无关，或经计时账本 subject 与部署收据绑定） |
 | 官方产物冻结 | `codex-upgrade-official-asset-receipt/v1` | `claude-code-fw-e-official-freeze/v2`（npm 与原生分发双来源；v1 只读） |
 | VC-0 收口收据组（收口收据、失败诊断、现场、上限后恢复预览、首批交接） | `codex-upgrade-vc0-closeout-receipt/v1` 等 | `official-client-vc0-closeout-*/v1` 同组 |
-| Job 演练收据组（facts、收据、执行合同、采集器） | `codex-upgrade-job-rehearsal-*`（执行合同 v2） | `official-client-job-rehearsal-*/v1` 同组 |
+| Job 演练收据组（facts、收据、执行合同、采集器） | `codex-upgrade-job-rehearsal-*`（执行合同 v2） | 当前 `official-client-job-rehearsal-*/v2`；v1 形成期只读兼容 |
 | 失败生命周期探针 | `codex-upgrade-failure-lifecycle-probe/v1` | `official-client-failure-lifecycle-probe/v1` |
 | atomic-double 收据（动作事实、合成 VC-0 阶段事实同组） | `codex-atomic-vc0-vc1-rehearsal/v2` | `official-client-atomic-vc0-vc1-rehearsal/v1`（v2 字段加 `client`）同组 |
 | 编排器候选构建收据 | `codex-upgrade-candidate-build-receipt/v2` | `official-client-upgrade-candidate-build-receipt/v1`（带 `client`） |
@@ -373,7 +373,7 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 11 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 12 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
@@ -596,7 +596,7 @@ Campaign、项目总账计划、计时账本计划）必须一致。Formal 首�
 `codex_upgrade_job_rehearsal_receipt`，`--client claude` 经适配器取 Claude 画像 `claude_upgrade_job_rehearsal`：
 
 - `build_job_contract`、`binary_facts`、`job_contract_replay` 构造并重放完整的 Claude 执行合同
-  （`official-client-job-rehearsal-contract/v1`）：Claude 总计划没有 Codex 的官方包与 code-mode-host 字段，所以是另一份
+  （当前 `official-client-job-rehearsal-contract/v2`，四角色八根实枚举；v1 仅形成期只读重放）：Claude 总计划没有 Codex 的官方包与 code-mode-host 字段，所以是另一份
   合同，不是在 Codex 合同上换名字；
 - 模块型成员 `job_rehearsal_profile` 给出合同名组（`official-client-job-rehearsal-*`）、场景清单输入名、只展开 official
   阶段、两个采集容器各自的工具树、命令依赖与步骤启动器、执行副本坐标、运行时探针与采集器身份；
@@ -768,7 +768,7 @@ Store 提供 `delivery-chain`、恢复段预约和阶段事实；当前真实交
 - run 的 `awaiting_finalize=2`／`stage_failed=3` 在父批次映射为合法暂停点；最终 `validation_only` 写 VC-6 checkpoint，
   `production_replacement` 停 `production_activation_pending`。生产 B4-08 另批，现有终态校验器不能代替真实部署。
 - **本机实现与现场边界**：真实交付合同 A 的独立执行器、显式配置、稳定投影、零模型 recipe、可信回退绑定、
-  独立 guard／journal 来源及恢复证明已完成本机接线。正式 `ENVIRONMENT_EXECUTORS` 与交付
+  独立 guard／journal 来源及恢复证明已完成本机接线。封存门禁的第二根由配置 v2／资格报告 v3 的精确材料绑定处理；Profile 边界来自已验证内存投影，未知 JSON 仍严格递归。当前 guard 连续性 v2 保存原 producer、当前通道及完整注册头的不可变快照，正常重启不重签旧原件；注册追加中断的安全续作仍在专项完善。正式 `ENVIRONMENT_EXECUTORS` 与交付
   `SOURCE_VERIFIERS` 仍为空；ARM64 受管安装与 guard 生命周期、实际场地、可信回退、专用凭据、四阶段及异常
   恢复尚待现场验收。本机执行证明和替身登记不证明已切换现场，也不开放正式执行。完整录制回放、故障链和
   发布认证状态均见 Claude 指南 §3.6／§4.0.5；生产 B4-08 另批。
