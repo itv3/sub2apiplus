@@ -31,6 +31,7 @@ UPGRADE = "claude-recorded-2-1-226-upgrade"
 IMAGE = "oauth-egress-capture-capture-cli@sha256:" + "b" * 64
 REPOSITORY = Path(__file__).resolve().parents[3]
 _STACKS: list[contextlib.ExitStack] = []
+CONTINUATION_SCHEMA = "claude-recorded-vc1-continuation/v1"
 
 
 def _inputs(data: Path) -> dict[str, Any]:
@@ -50,7 +51,17 @@ def _inputs(data: Path) -> dict[str, Any]:
                  description="fixture_only：以既有 40 条规则构成 2.1.226 离线控制链分母，不代表新的历史版本结论。",
                  baseline_rule_manifest={"path": "fixture-only/baseline.json", "sha256": source.binding(baseline_path)["sha256"]})
     rules_path = source.write(root / "rules.json", rules)
-    scenarios = capture_tests._reduced_payload(set(seal_tests.SEAL_JOBS))
+    template = source.read(plan.scenario_manifest_path("2.1.285"))
+    official_ids = set(seal_tests.SEAL_JOBS)
+    official_probes = {step["probe_id"] for job in template["capture_jobs"] if job["id"] in official_ids for step in job["steps"]}
+    # full 预检在冻结时就要求两侧覆盖同一规则全集。只选所有步骤都已有官方来源的完整候选 Job，不能删候选侧或拆半个 Job。
+    candidate_ids = {job["id"] for job in template["capture_jobs"] if job["phase"] == "candidate"
+                     and all(step["probe_id"] in official_probes for step in job["steps"])}
+    selected_ids = official_ids | candidate_ids
+    scenarios = capture_tests._reduced_payload(selected_ids)
+    primary = {step["probe_id"] for job in scenarios["capture_jobs"] if job["phase"] == "official" for step in job["steps"]
+               if plan.step_model(step["probe_id"], step["argv"]) is None}
+    scenarios["probe_catalog"]["probe_count"] = len(primary)
     scenarios["claude_version"] = source.VERSION
     scenarios["profile_id"] = "claude-recorded-fixture-2.1.226"
     scenarios["rule_manifest"] = {"path": "fixture-only/rules.json", "sha256": source.binding(rules_path)["sha256"], "rule_count": 40}
@@ -72,7 +83,7 @@ def _inputs(data: Path) -> dict[str, Any]:
     labels = source.read(plan.evidence_labels_path("2.1.285"))
     labels["claude_version"] = source.VERSION
     labels["description"] = "fixture_only：以原 v4 连接标签承接 2.1.226 录制，只用于控制链回归。"
-    labels["entries"] = [item for item in labels["entries"] if item["job_id"] in seal_tests.SEAL_JOBS]
+    labels["entries"] = [item for item in labels["entries"] if item["job_id"] in selected_ids]
     labels_path = source.write(root / "labels.json", labels)
     inventory = copy.deepcopy(seal_tests.TARGET_INVENTORY)
     inventory["target_version"] = source.VERSION
@@ -90,7 +101,9 @@ def _inputs(data: Path) -> dict[str, Any]:
                  "target_version": source.VERSION, "template_version": "2.1.285", "inputs": records,
                  "static_conclusions": "合成控制输入，不是历史 307 sink 的原始分析结论",
                  "template_version_facts": source.binding(original_facts)})
-    return {"bindings": records, "jobs": {job["id"]: [step["probe_id"] for step in job["steps"]] for job in scenarios["capture_jobs"]},
+    return {"bindings": records,
+            "jobs": {job["id"]: [step["probe_id"] for step in job["steps"]] for job in scenarios["capture_jobs"] if job["phase"] == "official"},
+            "candidate_jobs": {job["id"]: [step["probe_id"] for step in job["steps"]] for job in scenarios["capture_jobs"] if job["phase"] == "candidate"},
             "repository_bindings": {"fixture-only/baseline.json": records["baseline"],
                                     "fixture-only/rules.json": records["rules"], facts_relative: records["version_facts"]}}
 
@@ -291,23 +304,119 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
     return {"preflight": preflight, "ledger": ledger, "environment": environment, "deploy": deploy, "release": release, "p0": p0}
 
 
-def _batch(data: Path, campaign: Path, name: str, argv: list[str]) -> dict[str, Any]:
+def _batch(
+    data: Path, campaign: Path, name: str, argv: list[str], *, phase: str = "VC-1", timeout_seconds: float = 600,
+) -> dict[str, Any]:
+    """同一 Campaign 的真实监督批次；前序只从已验证 checkpoint 取，不能由夹具预写完成。"""
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import claude_upgrade_batch as batch
     from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 
+    if phase not in artifacts.VC_PHASES[1:]:
+        raise replay.ReplayError(f"录制链不接受此动作阶段：{phase}")
     manifest = upgrade.load_campaign_manifest(campaign)
+    previous = artifacts.VC_PHASES[artifacts.VC_PHASES.index(phase) - 1]
+    revision = upgrade._current_candidate_revision(campaign, manifest) if previous in upgrade.CANDIDATE_VC_PHASES else None
+    predecessor = upgrade._vc_checkpoint_path(campaign, previous, revision=revision)
+    plan = upgrade._vc_campaign_plan(campaign, manifest)
+    upgrade._replay_vc_checkpoint(campaign, plan, previous, revision=revision)
     sequence = max(upgrade._committed_vc_sequences(campaign, manifest), default=0) + 1
     action = source.write(data / "control" / "actions" / f"{sequence}-{name}.json", {
         "schema_version": artifacts.VC_ACTION_PLAN_SCHEMA, "execute_item_ids": [name], "reuse_item_ids": [],
-        "actions": [batch.managed_action(name, "VC-1:" + name, argv, item_ids=[name], timeout_seconds=600)]})
+        "actions": [batch.managed_action(name, phase + ":" + name, argv, item_ids=[name], timeout_seconds=timeout_seconds)]})
     result, code = upgrade.compile_and_run_vc_batch(argparse.Namespace(
-        campaign_dir=campaign, state_dir=data / "supervisor", phase="VC-1", sequence=sequence,
-        predecessor_checkpoint=campaign / "control/vc/vc-0-checkpoint.json", action_plan=action,
+        campaign_dir=campaign, state_dir=data / "supervisor", phase=phase, sequence=sequence,
+        predecessor_checkpoint=predecessor, action_plan=action,
         heartbeat_seconds=0.5, watchdog_timeout_seconds=30.0, ledger_interval_seconds=0.5))
     if code != 0:
         raise replay.ReplayError(f"真实 {name} 批次失败：{result}")
     return result
+
+
+def write_continuation(state_path: Path, digest: str, campaign: Path, paths: dict[str, Path]) -> Path:
+    """冻结只读接续凭证；引用真实 VC-1 结果，后段不能另建 Campaign 或替换封存材料。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_control.store import ControlStore
+
+    state = source.load_state(state_path, digest)
+    data = Path(state["data_root"])
+    manifest = upgrade.load_campaign_manifest(campaign)
+    plan = upgrade._vc_campaign_plan(campaign, manifest)
+    checkpoints = {}
+    for phase in ("VC-0", "VC-1"):
+        path, _checkpoint = upgrade._replay_vc_checkpoint(campaign, plan, phase)
+        checkpoints[phase] = source.binding(path)
+    stage = upgrade._load_stage_result(campaign, "capture-official")
+    if stage.get("status") != "complete" or stage.get("store", {}).get("checkpoint") != "evidence_recorded":
+        raise replay.ReplayError("录制接续仅接受真实 VC-1 封存结果")
+    store = ControlStore(campaign / "control-store")
+    store_campaign = store.load_campaign(str(manifest["campaign_id"]))
+    document = {
+        "schema_version": CONTINUATION_SCHEMA, "fixture_only": True, "purpose": "regression_fixture",
+        "scope": "VC-0→VC-1", "target_version": source.VERSION, "data_root": str(data),
+        "state": source.binding(state_path), "campaign": source.binding(campaign / "campaign.json"),
+        "campaign_checksum": source.binding(campaign / "campaign.sha256"),
+        "campaign_plan": source.binding(campaign / "control/vc/campaign-plan.json"),
+        "official_stage": source.binding(campaign / "official/result.json"), "checkpoints": checkpoints,
+        "store_campaign_id": store_campaign["campaign_id"], "official_store": stage["store"],
+        "timing_ledger_plan": source.binding(paths["ledger"] / "ledger.json"),
+        "tool_identity": manifest["tool_identity"], "source_snapshot": state["snapshot"],
+        "full_vc0_vc6_certified": False,
+    }
+    return source.write(data / "control/recorded-vc1-continuation.json", document)
+
+
+def load_continuation(path: Path, digest: str) -> dict[str, Any]:
+    """逐项重验只读接续凭证；凭证存在并不授予 VC-2～VC-6 的完成状态。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_control.store import ControlStore
+
+    if source.binding(path)["sha256"] != digest:
+        raise replay.ReplayError("录制接续凭证外持摘要漂移")
+    document = source.read(path)
+    if (document.get("schema_version") != CONTINUATION_SCHEMA or document.get("fixture_only") is not True
+            or document.get("purpose") != "regression_fixture" or document.get("scope") != "VC-0→VC-1"
+            or document.get("target_version") != source.VERSION or document.get("full_vc0_vc6_certified") is not False):
+        raise replay.ReplayError("录制接续凭证合同非法")
+    data = Path(document["data_root"])
+    if "staging" not in data.parts or data.resolve() != data:
+        raise replay.ReplayError("录制接续必须留在原 staging 数据根")
+    state_path = source.bound(document["state"], root=data)
+    state = source.load_state(state_path, document["state"]["sha256"])
+    if state["data_root"] != str(data) or state["snapshot"] != document["source_snapshot"]:
+        raise replay.ReplayError("录制接续的来源或数据根漂移")
+    campaign_file = source.bound(document["campaign"], root=data / "evidence/campaigns")
+    campaign = campaign_file.parent
+    expected_paths = {
+        "campaign": campaign / "campaign.json", "campaign_checksum": campaign / "campaign.sha256",
+        "campaign_plan": campaign / "control/vc/campaign-plan.json", "official_stage": campaign / "official/result.json",
+        "timing_ledger_plan": data / "control/timing/ledger.json",
+    }
+    for name, expected in expected_paths.items():
+        if source.bound(document[name], root=data) != expected:
+            raise replay.ReplayError(f"录制接续绑定坐标错位：{name}")
+    manifest = upgrade.load_campaign_manifest(campaign)
+    if (manifest["campaign_id"] != document["store_campaign_id"] or manifest["tool_identity"] != document["tool_identity"]
+            or manifest["campaign_purpose"] != "validation_only" or manifest["target_version"] != source.VERSION):
+        raise replay.ReplayError("录制接续 Campaign 身份漂移")
+    plan = upgrade._vc_campaign_plan(campaign, manifest)
+    if set(document["checkpoints"]) != {"VC-0", "VC-1"}:
+        raise replay.ReplayError("录制接续的前序 checkpoint 集不闭合")
+    for phase, item in document["checkpoints"].items():
+        checkpoint, _payload = upgrade._replay_vc_checkpoint(campaign, plan, phase)
+        if source.bound(item, root=campaign) != checkpoint:
+            raise replay.ReplayError("录制接续的 checkpoint 绑定错位")
+    stage = upgrade._load_stage_result(campaign, "capture-official")
+    if stage["store"] != document["official_store"]:
+        raise replay.ReplayError("录制接续的官方封存对象引用漂移")
+    store = ControlStore(campaign / "control-store")
+    if store.load_campaign(document["store_campaign_id"])["campaign_id"] != manifest["campaign_id"]:
+        raise replay.ReplayError("录制接续不能另建 Store 世界")
+    replay.load_snapshot(state["snapshot"])
+    return {"document": document, "state_path": state_path, "state_digest": document["state"]["sha256"],
+            "state": state, "data": data, "campaign": campaign, "manifest": manifest}
 
 
 def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
@@ -371,6 +480,7 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
         expected = sum(map(len, state["jobs"].values()))
         if len(copied) != expected or len({row["operation"] for row in copied}) != expected:
             raise replay.ReplayError("复制动作未按白名单一一闭合")
+        continuation = write_continuation(state_path, digest, campaign, paths)
         elapsed = time.monotonic() - started
         if elapsed > 900:
             raise replay.ReplayError("VC-0→VC-1 回归超过 15 分钟")
@@ -380,6 +490,7 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
                   "network_requests_this_run": 0, "historical_request_accounting": timing.inspect_ledger(paths["ledger"]),
                   "campaign": str(campaign), "store_campaign_id": store_campaign["campaign_id"], "checkpoint": source.binding(checkpoint),
                   "preview_batch": preview_batch, "approval_batch": approval, "copy_projections": copied,
+                  "continuation": source.binding(continuation),
                   "external_fixture_sources": ["v1 单 npm 来源适配", "Docker 与宿主环境观察", "部署状态观察", "Job 演练外部观察",
                                                "发布认证循环前置", "静态控制输入投影"], "full_vc0_vc6_certified": False}
     replay.assert_source_untouched(state["snapshot"])

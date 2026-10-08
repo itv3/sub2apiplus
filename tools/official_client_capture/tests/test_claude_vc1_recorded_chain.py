@@ -1,4 +1,4 @@
-"""录制来源合同与 VC-0→VC-1 连续链验收。
+"""录制来源合同的离线边界验收。
 
 边界用例使用明确的合成来源；真实链只在显式设置来源、Linux ARM64 root 和 unshare 可用时执行。
 未运行、缺条件或子进程失败均不能登记链认证。完整链的监督器、closeout 与 seal 不做通过替身。
@@ -9,12 +9,9 @@ from __future__ import annotations
 import copy
 import json
 import os
-import platform
-import shutil
-import subprocess
-import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -33,7 +30,7 @@ class RecordedSourceContractTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         self.fixture = fixture
-        self.data = fixture.root / "staging" / "data"
+        self.data = (fixture.root / "staging" / "data").resolve()
         self.data.mkdir(parents=True, mode=0o700)
         self.binary_sha = "4" * 64
         for root, probes in ((fixture.recorded, ["v4-fixture-probe"]), (fixture.supplement, list(source.replay.evaluator_fixture.SUPPLEMENT_PROBES))):
@@ -189,47 +186,86 @@ class ProductionV2VerifierIsolationTests(unittest.TestCase):
                 original(frozen, expected_version="2.1.226")
 
 
-class ClaudeRecordedVC1ChainTests(unittest.TestCase):
-    """显式启用的真实连续控制链；缺条件不会降级成 mock 判定通过。"""
+class RecordedFullInputTests(unittest.TestCase):
+    """VC-1 录制输入在预检冻结前就保留完整候选映射，不能把 full 校验降成官方单侧。"""
 
-    def test_historical_307_sink_sources_remain_independent(self) -> None:
-        configured = os.environ.get("CLAUDE_2_1_226_STATIC_FIXTURE")
-        if not configured:
-            self.skipTest("未验证：未设置历史 307 sink 静态来源")
-        result = source.verify_historical_static(Path(configured))
-        self.assertEqual(result["sink_count"], 307)
-        self.assertEqual(result["files_written"], 0)
-        self.assertFalse(result["vc_chain_certified"])
-
-    def test_real_vc0_closeout_supervised_copy_and_vc1_seal(self) -> None:
-        recorded = os.environ.get("CLAUDE_2_1_226_RELAY_FIXTURE")
-        freeze = os.environ.get("CLAUDE_2_1_226_FREEZE_FIXTURE")
-        if not recorded or not freeze:
-            self.skipTest("未验证：需显式登记 2.1.226 relay 与旧 freeze 来源")
-        if platform.system() != "Linux" or platform.machine() not in {"aarch64", "arm64"} or os.geteuid() != 0:
-            self.skipTest("未验证：真实链要求 Linux ARM64 root")
-        if shutil.which("unshare") is None or shutil.which("mount") is None:
-            self.skipTest("未验证：缺少 unshare 或 mount")
-        probe = subprocess.run(["unshare", "-m", "-n", "true"], capture_output=True, timeout=10)
-        if probe.returncode:
-            self.skipTest("未验证：宿主不允许建立 mount/net namespace")
+    def test_projected_inputs_keep_both_sides_and_their_labels(self) -> None:
+        from tools.official_client_capture import claude_upgrade_plan as plan
         from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
-        with tempfile.TemporaryDirectory(prefix="claude-vc1-recorded-") as directory:
-            data = Path(directory) / "staging/data"
-            command = ["unshare", "-m", "-n", sys.executable, "-m",
-                       "tools.official_client_capture.tests.claude_vc1_recorded_chain_driver",
-                       "--data", str(data), "--recorded", recorded, "--freeze", freeze,
-                       "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
-            completed = subprocess.run(command, cwd=driver.REPOSITORY, capture_output=True, text=True, timeout=960,
-                                       env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
-            self.assertEqual(completed.returncode, 0, completed.stderr[-12000:] + completed.stdout[-12000:])
-            report = source.read(data / "control/recorded-chain-result.json")
-            self.assertEqual(report["registered_chains"], ["vc-chain.claude-vc1-capture"])
-            self.assertEqual(report["status"], "passed")
-            self.assertFalse(report["full_vc0_vc6_certified"])
-            self.assertEqual(report["network_requests_this_run"], 0)
-            self.assertGreater(len(report["copy_projections"]), 0)
-            self.assertTrue(all(item["runtime"]["run_nonce"] != item["origin"]["run_nonce"] for item in report["copy_projections"]))
+
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory).resolve() / "staging/data"
+            inputs = driver._inputs(data)
+            scenarios = source.read(source.bound(inputs["bindings"]["scenarios"]))
+            plan.validate_scenario_manifest(scenarios)
+            rules = plan.load_baseline_rules(source.bound(inputs["bindings"]["baseline"]), driver.BASELINE)
+            jobs = [SimpleNamespace(phase=job["phase"], required=job["required"], covers=job["covers"]) for job in scenarios["capture_jobs"]]
+            plan.validate_full_coverage(jobs, rules)
+            self.assertTrue(inputs["candidate_jobs"])
+            self.assertFalse(set(inputs["jobs"]) & set(inputs["candidate_jobs"]))
+            official = {probe for probes in inputs["jobs"].values() for probe in probes}
+            mirrored = {probe for probes in inputs["candidate_jobs"].values() for probe in probes}
+            self.assertEqual(mirrored, official)
+            labels = source.read(source.bound(inputs["bindings"]["labels"]))
+            self.assertEqual({entry["job_id"] for entry in labels["entries"]}, set(inputs["jobs"]) | set(inputs["candidate_jobs"]))
+            self.assertEqual(sum(map(len, inputs["jobs"].values())), 42)
+
+
+class RecordedContinuationContractTests(unittest.TestCase):
+    """后段凭证不能用 passed 字样、篡改字节或错误阶段绕过实际封存验证。"""
+
+    def test_changed_receipt_fails_before_loading_a_campaign(self) -> None:
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = source.write(Path(directory) / "continuation.json", {"fixture_only": True})
+            digest = source.binding(path)["sha256"]
+            path.write_bytes(path.read_bytes() + b" ")
+            with mock.patch.object(source, "load_state") as load_state:
+                with self.assertRaisesRegex(replay.ReplayError, "外持摘要漂移"):
+                    driver.load_continuation(path, digest)
+                load_state.assert_not_called()
+
+    def test_full_chain_claim_cannot_be_carried_by_vc1_receipt(self) -> None:
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = source.write(Path(directory) / "continuation.json", {
+                "schema_version": driver.CONTINUATION_SCHEMA, "fixture_only": True, "purpose": "regression_fixture",
+                "scope": "VC-0→VC-1", "target_version": source.VERSION, "full_vc0_vc6_certified": True,
+            })
+            with mock.patch.object(source, "load_state") as load_state:
+                with self.assertRaisesRegex(replay.ReplayError, "合同非法"):
+                    driver.load_continuation(path, source.binding(path)["sha256"])
+                load_state.assert_not_called()
+
+    def test_vc0_and_unknown_phases_never_create_an_action(self) -> None:
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            for phase in ("VC-0", "VC-7", "passed"):
+                with self.subTest(phase=phase), self.assertRaisesRegex(replay.ReplayError, "动作阶段"):
+                    driver._batch(data, data / "campaign", "bad", ["status"], phase=phase)
+            self.assertEqual(list(data.iterdir()), [])
+
+    def test_explicit_record_directory_survives_the_shell_scope(self) -> None:
+        from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as shell
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            records = root / "records.jsonl"
+            with mock.patch.dict(os.environ, {shell.RECORD_DIR_ENV: str(root / "artifacts"), shell.RECORDS_ENV: str(records)}):
+                with shell.staging_directory("vc1-") as staging:
+                    report = source.write(staging / "staging/data/control/result.json", {"status": "unverified"})
+                    record = {"scenario": "vc-chain.claude-vc1-capture", "status": "unverified", "report": source.binding(report)}
+                    shell.save_record(staging, record, append=False)
+                    shell.save_record(staging, record)
+                self.assertTrue(staging.is_dir())
+                binding = source.read(staging / "record-binding.json")
+                self.assertEqual(source.bound(binding), staging / "record.json")
+                self.assertEqual(len(records.read_text().splitlines()), 1)
+                self.assertEqual(source.bound(source.read(staging / "record.json")["report"]), report)
 
 
 if __name__ == "__main__":

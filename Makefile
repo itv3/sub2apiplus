@@ -467,6 +467,7 @@ CAPTURE_REAL_CHAIN_MODULES := \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_segment_reuse \
 	tools.official_client_capture.tests.real_chains.test_claude_upgrade_control_chain \
 	tools.official_client_capture.tests.real_chains.test_claude_vc4_candidate_chain \
+	tools.official_client_capture.tests.real_chains.test_claude_vc1_recorded_chain \
 	tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains
 test-capture-real-chains:
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
