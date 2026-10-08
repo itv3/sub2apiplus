@@ -45,10 +45,26 @@
     ],
     "source_commit": "e509f7523782edc62664c29e825ec5e645bacf03",
     "tests": 3281,
-    "units": 208
+    "units": 208,
+    "local_supplements": [
+      {
+        "module": "test_claude_mac_process_events",
+        "tests": 28,
+        "elapsed_seconds": 0.03556541699799709,
+        "weight_seconds": 0.036,
+        "architecture": "arm64",
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "python": "3.14.5",
+        "source_base_commit": "15a85f28ff8c8f568d5b13e15456d3e797c0670d",
+        "measured_at_utc": "2026-10-08T14:39:34.460470+00:00",
+        "scope": "macOS本机轻专项串行实测，未执行ES或构建物；不改写此前ARM64完整分片统计",
+        "receipt_sha256": "206366e78ba31a9735b4586d8433a8c1da374e75a10c1a168adb14b644952c0a",
+        "log_sha256": "c4309d36b00a386495252f479b546e7e27b2a4cb722ef66113c80527e05429d0"
+      }
+    ]
   },
   "schema_version": "capture-test-shard-weights/v1",
-  "source": "A-07.2：ARM64 2026-10-05 完整四片实测；并发运行、字节码与身份记忆化关闭；模块权重为正式单元墙钟之和，用例计时下限为 0.001 秒。仅作调度权重，不是串行耗时或统计分位数。",
+  "source": "A-07.2：ARM64 2026-10-05 完整四片实测；并发运行、字节码与身份记忆化关闭；模块权重为正式单元墙钟之和，用例计时下限为 0.001 秒。仅作调度权重，不是串行耗时或统计分位数。；2026-10-08补登记Claude原生进程离线轻专项28项，本机实测0.036秒，仅作该模块调度权重，详情见measurement.local_supplements。",
   "weights": {
     "test_acceptance_contract": 0.512,
     "test_acceptance_end_to_end": 4.36,
@@ -119,6 +135,7 @@
     "test_claude_fw_g_candidate_pair": 0.5,
     "test_claude_fw_g_official_finalize": 0.599,
     "test_claude_generation_policy": 0.477,
+    "test_claude_mac_process_events": 0.036,
     "test_claude_oauth_refresh": 0.733,
     "test_client_launch_probe": 7.318,
     "test_codex_01491_terminal_state": 0.448,

@@ -525,7 +525,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 10))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 11))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
@@ -549,6 +549,23 @@ class ClaudePolicyFileTests(unittest.TestCase):
         self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_product_recorder.py"), "wire_producer")
         self.assertEqual(v3.classify_path(self.policy, "official_client_control/qualification_bindings.py"), "evidence_semantics")
         self.assertEqual(v3.classify_path(self.policy, "official_client_control/replay_bindings.py"), "evidence_semantics")
+
+    def test_native_process_projection_is_claude_only_and_explicitly_layered(self) -> None:
+        """原生.m只进入Claude受管树；新源和接线不影响Codex敏感层。"""
+        expected = {
+            "claude_mac_process_events_native.m": "evidence_semantics",
+            "claude_mac_process_events_contract.py": "evidence_semantics",
+            "claude_mac_process_events.py": "evidence_semantics",
+            "claude_mac_process_events_build.py": "control",
+        }
+        self.assertIn(".m", self.policy["suffixes"])
+        self.assertNotIn("claude_mac_process_events_native.m", codex_identity._managed_tree_digests(TOOL_ROOT))
+        for name, layer in expected.items():
+            key = "official_client_capture/" + name
+            with self.subTest(file=name):
+                self.assertIn(key, self.digests)
+                self.assertEqual(v3.classify_path(self.policy, key), layer)
+                self.assertIsNone(codex_identity.classify_path(self.codex, name))
 
     def test_orchestrators_and_shared_control(self) -> None:
         for key in ("official_client_capture/codex_upgrade.py", "official_client_capture/codex_upgrade_client_adapter.py"):
