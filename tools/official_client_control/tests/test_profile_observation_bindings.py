@@ -41,12 +41,7 @@ class ProfileObservationBindingTests(unittest.TestCase):
         self.context["configuration_ref"] = self.write("inputs/full-configuration.json", self.configuration)
         self.role = "candidate"
         self.write(self.configuration["paths"]["active_profile_relative"], self.bytes(self.configuration["candidate"]["profile_binding"]))
-        self.identity = {"contract_version": executor.GUARD_IDENTITY_SCHEMA, "authority": executor.AUTHORITY,
-                         "source_scope": "regression_fixture", "host_id": "ARM64", "instance_id": self.configuration["instance_id"],
-                         "service_name": self.configuration["guard"]["service_name"], "service_instance_id": "profile-original-producer",
-                         "boot_id": "fixture-boot", "pid": os.getpid(), "process_start": "fixture-start",
-                         "process_group_id": os.getpgrp(), "independent_service": False,
-                         **{key: self.configuration["guard"][key] for key in ("service_unit_binding", "executor_binding", "guard_binding", "deployment_receipt_binding")}}
+        self.identity = executor.guard_identity(self.configuration, self.context, formal=False)
         self.runtime = executor.DockerComposeRuntime(self.configuration, self.context)
         self.runtime._compose_cache = {"services": {"app": {}, "db": {}, "redis": {}}}
         self.runtime._command = mock.Mock(side_effect=self.command)
@@ -56,6 +51,7 @@ class ProfileObservationBindingTests(unittest.TestCase):
         self.runtime._business = mock.Mock(return_value=({key: True for key in ("health", "entry-routing", "smoke", "auth", "data", "dependencies")}, []))
         self.engine = guard.GuardEngine(self.configuration, self.context, self.runtime, self.identity)
         self.addCleanup(self.engine.close)
+        self.engine.complete_startup()
         self.environment = self.runtime._inspect(self.root / "baseline")[1]
         self.owner = {"pid": os.getpid(), "boot_id": "worker-boot", "process_start": "worker-start", "process_group_id": os.getpgrp() + 1}
         alive = mock.patch.object(guard, "owner_alive", return_value=True)
