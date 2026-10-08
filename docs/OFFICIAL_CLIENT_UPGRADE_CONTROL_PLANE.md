@@ -463,8 +463,10 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
   记录库里互不承接。Claude 场景集合为空时规划、签发与核验一律拒绝；Claude 只从单元执行记录签发 v3。
 - Claude 核心四条真实链在 `tests/real_chains/test_claude_upgrade_control_chain.py`：`vc-chain.claude-reconcile`、
   `vc-chain.claude-deadline`、`vc-chain.claude-root-cause`、`vc-chain.claude-tool-evolution`；故障恢复链
-  `vc-chain.claude-recovery-chain` 在 `test_claude_upgrade_fault_chains.py`。最终执行闭集取注册表；B5b-02 完整录制回放、
-  B5b-03 后段故障链与 B5b-04 发布认证仍待收口。这些链零请求，在两个受管根的副本树上运行；Linux root 上必须进入
+  `vc-chain.claude-recovery-chain` 在 `test_claude_upgrade_fault_chains.py`。pre-A3 执行闭集取本客户端注册表；发布准入
+  另外要求[Claude 指南 §4.0.5](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#405-受管工具发布认证)登记的八条必需链全部齐备并通过，
+  不能以当前已注册子集通过代替。B5b-02 完整录制回放、B5b-03 后段故障链与 B5b-04 发布认证仍待收口。
+  这些链零请求，在两个受管根的副本树上运行；Linux root 上必须进入
   `unshare -m -n` 私有命名空间（临时根 `/var/tmp`，显式传 TMPDIR，网络自检），
   不满足即失败。Claude 场景单元另声明第二受管根：只改 `tools/official_client_control` 时 Claude 场景单元失效，Codex
   场景单元不受影响。
@@ -518,8 +520,13 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
 | `p0-receipt` | `codex_upgrade_vc_receipt finalize／replay` | 同一模块与合同 |
 | `vc0-closeout` | `codex_upgrade_vc0_closeout` | `claude_upgrade_vc0_closeout`（共享收口流程的 Claude 画像） |
 
-建账本之前的步骤一次报全，全部通过才建账本；建账本之后失败即停；Formal 建成后创建链冻结，只剩收口按判定续作。
-产物坐标、只写一次坐标被占用时换 `-r2` 等规则见入口编排器的模块说明。
+Claude 通过轮次参数 `CAMPAIGN_PURPOSE` 选 `validation_only` 或 `production_replacement`，缺省为后者；
+计时账本、预检 plan 和 audit-only 共用此值，Formal 与后续阶段从冻结计划恢复。Codex 不接受这个参数，
+其入口用途仍固定为 `production_replacement`。
+
+建账本之前的步骤一次报全，全部通过才建账本；建账本之后失败即停。Formal 未建时每次重新核对入口门禁
+的当前上下文、承接凭证时效与撤销状态，旧步骤记录不能替代本轮准入；便宜检查和启动探测也按实时步骤重跑。
+Formal 建成后创建链冻结，只剩收口按判定续作。产物坐标、只写一次坐标被占用时换 `-r2` 等规则见入口编排器的模块说明。
 
 ### 10.3 记录库、空跑与日常维护
 
