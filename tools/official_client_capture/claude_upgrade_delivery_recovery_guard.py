@@ -1344,6 +1344,49 @@ class GuardEngine:
                         add("recovery", terminal_binding, restoration_binding, restored, "/bindings/")
         return sorted(materials, key=canonical_sha256)
 
+    def _read_qualification_archive_binding(self, item: Mapping[str, Any], projection: Any) -> bytes:
+        """只读导出精确资格原件；候选快照目录不继承生产写入权限。
+
+        常规路径仍走原守卫。名称含 release 的原件，只有在完整资格
+        校验器的内存证明内，并属于本配置明确冻结的 Campaign 暂存
+        Release 或内容寻址 Store Release 对象时才能读取。其它生产
+        路径、同字节错坐标、上传 JSON 和符号链接仍拒绝。
+        """
+        from tools.official_client_control.canonical import validate_external_binding
+        from tools.official_client_control.sealed_gate_bindings import VerifiedGateProjection, _TOKEN as projection_token
+
+        binding_value = validate_external_binding(dict(item), "资格归档原件")
+        try:
+            relative_path(binding_value["path"])
+        except GuardError:
+            protected = {"production", "production_active", "production_candidate", "production_previous", "releases", "release"}
+            if not any(part.lower() in protected for part in PurePosixPath(binding_value["path"]).parts):
+                raise
+            if (not isinstance(projection, VerifiedGateProjection) or projection.token is not projection_token
+                    or binding_value not in projection.archive_bindings):
+                raise GuardError("资格归档原件缺精确已验证来源权限") from None
+            allowed = False
+            for role in ("candidate", "rollback"):
+                qualification = self.configuration[role]["qualification"]
+                staged_prefix = f"evidence/campaigns/{qualification['campaign_id']}/profile/release/"
+                store_release = (PurePosixPath(qualification["store_relative"]) / "objects" / "release"
+                                 / (binding_value["sha256"] + ".json")).as_posix()
+                if binding_value["path"].startswith(staged_prefix) or binding_value["path"] == store_release:
+                    allowed = True
+            if not allowed:
+                raise GuardError("资格归档原件超出精确候选暂存或 Store Release 范围") from None
+            path = self.data_root
+            for part in PurePosixPath(binding_value["path"]).parts:
+                path = path / part
+                if path.is_symlink():
+                    raise GuardError("资格归档只读原件含符号链接")
+        else:
+            path = managed_path(self.data_root, binding_value["path"])
+        raw = read_bytes(path)
+        if len(raw) != binding_value["bytes"] or hashlib.sha256(raw).hexdigest() != binding_value["sha256"]:
+            raise GuardError("资格归档只读原件字节漂移")
+        return raw
+
     def export(self, request: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             self._require_epoch_readiness()
@@ -1428,7 +1471,7 @@ class GuardEngine:
                 originals = {}
                 total = 0
                 for item in bindings:
-                    raw = read_bytes(check_binding(self.data_root, item))
+                    raw = self._read_qualification_archive_binding(item, gate_projection)
                     total += len(raw)
                     if total > MAX_RPC_BYTES // 2:
                         raise GuardError("来源原件闭包超出固定通道上限，不能裁掉原件继续")
