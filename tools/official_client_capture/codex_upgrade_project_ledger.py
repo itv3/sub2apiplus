@@ -66,6 +66,15 @@ observation，相同根因 ID 也只计一次。旧 ``root_cause`` 单值仍可�
 总计划声明的 client，或显式给出）必须等于总账 plan 的 client，缺失或不一致即拒绝——Claude 入口遇到缺 client 的 v1 plan
 即拒绝。一本总账只属于一个客户端，所以根因分桶键 ``(client, target_version)`` 在总账内按 ``target_version`` 存放。
 根因码表变更由 ``record-code-migration`` 写映射收据 ``migrations/NNNNNN.json`` 衔接。
+
+Claude Mac 的原 task 请求上界占用追加在本账 ``claude_live_request_bound_reserved``／
+``claude_live_request_bound_settled`` 事件中。占用不改 precise、estimated 或原生去重，
+``remaining_live_requests`` 继续只扣已入账请求；有新占用事件时才增加
+``available_live_requests``，竞争派发与新 Campaign 准入按扣除全部活动占用的余额执行。
+原 task 派发复核可传 ``reservation_operation_id``，只重验和使用自己的未到期活动占用；
+不能借用别的 Campaign 占用。结清由 Claude 受管入口核独立来源全集及真实 COMMIT，
+到期、未知、截断不释放；收口操作不重新取得派发权限。Codex 账本拒绝这两类新事件，
+没有新事件的历史 head 保持原字段与字节形态。
 """
 
 from __future__ import annotations
@@ -140,6 +149,9 @@ EVENT_TYPES = (
     "campaign_resumed",
     # 修好接着跑第 14 项：请求预算的批准延长（与三层时间预算延期同口径），预算耗尽不再是终态。
     "live_request_budget_extended",
+    # Claude Mac 的请求上界只占用可派发额度，不计为 precise／estimated 请求。
+    "claude_live_request_bound_reserved",
+    "claude_live_request_bound_settled",
 )
 TERMINAL_REASONS = (
     "deadline_wall_clock",
@@ -185,6 +197,8 @@ BLOCKED_ALLOWED_EVENTS = frozenset(
         "campaign_paused",
         "deadline_extended",
         "deadline_extension_committed",
+        # 真实 COMMIT 已精确解决原任务后，允许收口原占用；未知请求仍拒绝。
+        "claude_live_request_bound_settled",
     }
 )
 # B9：compare／accept 也是总账消费者，写收据前先经准入门禁。
@@ -207,6 +221,8 @@ CONSUMER_COMMANDS = frozenset(
         "evaluation-recover",
     }
 )
+# 这些入口可能继续派发真实请求；离线封存与评估保留原已入账余额判据。
+LIVE_CONSUMER_COMMANDS = frozenset({"recover-candidate-failed-jobs", "campaign-run", "resume"})
 ESTIMATION_POLICIES = ("none", "upper_bound_from_sibling", "upper_bound_from_sibling_or_turn_ratio")
 REPAIR_KINDS = ("code", "environment")
 DEFAULT_RETRY_LIMIT = 2
@@ -1200,6 +1216,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         # 修好接着跑第 14 项：有效请求预算＝plan 预算或最近一次批准延长的新预算（只增不减）。
         "effective_live_request_budget": plan["live_request_budget"],
         "live_request_budget_extensions": [],
+        "live_request_bounds": {},
         "effective_campaign_deadlines": {},
         "effective_stage_deadlines": {},
         "deadline_extensions": [],
@@ -1461,6 +1478,10 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                 {"receipt_sha256": extension["receipt_sha256"], "campaign_id": campaign_id,
                  "original_budget": extension["original_budget"], "new_budget": extension["new_budget"]}
             )
+        elif event_type in {"claude_live_request_bound_reserved", "claude_live_request_bound_settled"}:
+            from tools.official_client_capture import claude_upgrade_mac_budget
+
+            claude_upgrade_mac_budget.replay_bound_event(plan, state, event, events, correction_overlays)
         elif event_type == "deadline_extension_committed":
             receipt = payload.get("receipt_sha256")
             campaign_event = payload.get("campaign_event")
@@ -1571,6 +1592,12 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         # 同上：只在批准过请求预算延长时写入；剩余请求按有效预算计算。
         head["effective_live_request_budget"] = state["effective_live_request_budget"]
         head["live_request_budget_extensions"] = state["live_request_budget_extensions"]
+    if state["live_request_bounds"]:
+        # 仅新事件出现后增加派生字段，历史 head 字节和原已记账剩余口径不变。
+        reserved = sum(row["bound"]["request_budget"] for row in state["live_request_bounds"].values() if row["status"] == "reserved")
+        head["live_request_bounds"] = state["live_request_bounds"]
+        head["reserved_live_requests"] = reserved
+        head["available_live_requests"] = None if budget is None else max(int(budget) - consumed - reserved, 0)
     cache_path = root / "head.json"
     if cache_path.exists() or cache_path.is_symlink():
         cached, _raw = _read_json(cache_path, "head 缓存")
@@ -1676,6 +1703,10 @@ def append_project_event(
             return head, "duplicate"
         if expected_head_sha256 is not None and head["head_sha256"] != expected_head_sha256:
             raise ProjectLedgerError("总账 head 已变化，CAS 失败")
+        if event_type == "claude_live_request_bound_reserved":
+            from tools.official_client_capture import claude_upgrade_mac_budget
+
+            claude_upgrade_mac_budget.validate_new_reservation(plan, head, operation_id, payload_dict)
         blocking = campaign_blocked(head, _payload_campaign_id(payload_dict))
         if blocking and event_type not in BLOCKED_ALLOWED_EVENTS:
             # 第三批 B3-10：只有事件归属的 Campaign（或无归属桶）有未决账务才拒；其它 Campaign 的未决不挡。
@@ -2337,7 +2368,8 @@ def admission_problems(
         problems.append("项目绝对截止时间已到")
     if campaign_id in head.get("paused_campaigns", {}):
         problems.append("Campaign 预算已暂停，必须批准延期或显式放弃")
-    if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:
+    available = head.get("available_live_requests", head["remaining_live_requests"])
+    if available is not None and available <= 0:
         problems.append("项目请求预算已耗尽")
     at_limit = root_causes_at_limit_for(head, target_version)
     if at_limit:
@@ -2876,6 +2908,20 @@ class RuntimeAdmission:
         value = self.head.get("remaining_live_requests")
         return int(value) if value is not None else None
 
+    @property
+    def available_live_requests(self) -> int | None:
+        """竞争派发可用余额；原 remaining 字段继续只表示已经入账后的剩余。"""
+
+        value = self.head.get("available_live_requests", self.head.get("remaining_live_requests"))
+        return int(value) if value is not None else None
+
+    def reserve_live_request_bound(self, bound: Mapping[str, Any], *, expected_sequence: int, expected_head_sha256: str) -> dict[str, Any]:
+        """为原 Claude task 持久占用请求上界，不创建新的账本或 attempt。"""
+
+        from tools.official_client_capture import claude_upgrade_mac_budget
+
+        return claude_upgrade_mac_budget.reserve_bound(self, bound, expected_sequence=expected_sequence, expected_head_sha256=expected_head_sha256)
+
     def refresh(self) -> dict[str, Any]:
         """在仍持有的项目锁内重放最新 head。"""
 
@@ -2939,7 +2985,7 @@ class RuntimeAdmission:
             },
         }
         existing = self.head.get("operations", {}).get(operation_id)
-        remaining = self.remaining_live_requests
+        remaining = self.available_live_requests
         if existing is None and remaining is not None and remaining <= 0:
             # 重放既有 operation 必须始终允许，以便崩溃后补齐幂等核验；
             # 只有会新增一个真实 dispatch 事件时才执行项目预算硬门禁。
@@ -2969,6 +3015,7 @@ class RuntimeAdmission:
         expected_sequence: int,
         expected_head_sha256: str,
         retry_root_cause_ids: list[str] | None = None,
+        reservation_operation_id: str | None = None,
     ) -> dict[str, Any]:
         """在 reservation 前复核 probe 后 head 与剩余额度。``retry_root_cause_ids`` 见 ``_blocking_root_causes``。"""
 
@@ -2988,7 +3035,7 @@ class RuntimeAdmission:
         blocking = campaign_blocked(current, str(self.campaign_plan["campaign_id"]))
         if blocking:
             raise ProjectLedgerError(f"probe 入账后项目总账 blocked（未决账务 {blocking}），拒绝 reservation")
-        remaining = current.get("remaining_live_requests")
+        remaining = _dispatch_live_request_budget(current, str(self.campaign_plan["campaign_id"]), reservation_operation_id)
         if remaining is not None and remaining <= 0:
             raise ProjectLedgerError("probe 已耗尽项目请求预算，拒绝 reservation")
         at_limit = _blocking_root_causes(
@@ -2999,6 +3046,18 @@ class RuntimeAdmission:
         return dict(current)
 
 
+def _dispatch_live_request_budget(head: Mapping[str, Any], campaign_id: str,
+                                  reservation_operation_id: str | None = None,
+                                  *, now: datetime | None = None) -> int | None:
+    """同账竞争读取扣除占用后的余额；指定原任务才重验自己的活动占用。"""
+
+    if reservation_operation_id is None:
+        return head.get("available_live_requests", head.get("remaining_live_requests"))
+    from tools.official_client_capture import claude_upgrade_mac_budget
+
+    return claude_upgrade_mac_budget.available_for_dispatch(head, campaign_id, reservation_operation_id, now=now)
+
+
 def _runtime_admission_problems(
     plan: Mapping[str, Any],
     head: Mapping[str, Any],
@@ -3006,6 +3065,7 @@ def _runtime_admission_problems(
     *,
     now: datetime | None,
     retry_root_cause_ids: list[str] | None = None,
+    reservation_operation_id: str | None = None,
 ) -> list[str]:
     """抓包派发门禁；同时检查项目与 Campaign 的绝对截止。``retry_root_cause_ids`` 给出时根因上限只挡交集（第三批 B3-9）。"""
 
@@ -3022,7 +3082,7 @@ def _runtime_admission_problems(
     blocking = campaign_blocked(head, campaign_id)
     if blocking:
         problems.append(f"总账 blocked：{blocking}")
-    remaining = head.get("remaining_live_requests")
+    remaining = _dispatch_live_request_budget(head, campaign_id, reservation_operation_id, now=now)
     if remaining is not None and remaining <= 0:
         problems.append("项目请求预算为 0")
     at_limit = _blocking_root_causes(head, campaign_target_version(head, campaign_id), retry_root_cause_ids)
@@ -3051,6 +3111,7 @@ def runtime_admission_scope(
     command: str = "capture-run",
     now: datetime | None = None,
     retry_root_cause_ids: list[str] | None = None,
+    reservation_operation_id: str | None = None,
 ) -> Iterator[RuntimeAdmission | None]:
     """从候选 probe 到 reservation 持续占用项目锁的运行期准入作用域。``retry_root_cause_ids`` 见 ``_blocking_root_causes``。
 
@@ -3081,6 +3142,7 @@ def runtime_admission_scope(
             campaign_plan,
             now=now,
             retry_root_cause_ids=retry_root_cause_ids,
+            reservation_operation_id=reservation_operation_id,
         )
         problems.extend(_campaign_deadline_problems(campaign_dir, plan, head, now=now))
         if problems:
@@ -3151,6 +3213,7 @@ def assert_campaign_admitted(
     require: bool,
     now: datetime | None = None,
     retry_root_cause_ids: list[str] | None = None,
+    reservation_operation_id: str | None = None,
 ) -> dict[str, Any] | None:
     """消费者门禁：补齐器先行，再锁内重放；不满足即拒绝。
 
@@ -3160,6 +3223,8 @@ def assert_campaign_admitted(
 
     if command not in CONSUMER_COMMANDS:
         raise ProjectLedgerError(f"未知消费者命令：{command}")
+    if reservation_operation_id is not None and command not in LIVE_CONSUMER_COMMANDS:
+        raise ProjectLedgerError("离线消费者不能借用派发预算占用")
     root = find_project_ledger(campaign_dir)
     if root is None:
         if require:
@@ -3186,7 +3251,9 @@ def assert_campaign_admitted(
         blocking = campaign_blocked(head, campaign_id)
         if blocking:
             problems.append(f"总账 blocked：{blocking}")
-        if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:
+        available = (_dispatch_live_request_budget(head, campaign_id, reservation_operation_id, now=now)
+                     if command in LIVE_CONSUMER_COMMANDS else head["remaining_live_requests"])
+        if available is not None and available <= 0:
             problems.append("项目请求预算为 0")
         at_limit = _blocking_root_causes(head, campaign_target_version(head, campaign_id), retry_root_cause_ids)
         if at_limit:
