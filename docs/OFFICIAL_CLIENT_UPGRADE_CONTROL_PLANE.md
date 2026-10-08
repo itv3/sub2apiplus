@@ -144,7 +144,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 12；schema 版本不表示发布认证通过） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 13；schema 版本不表示发布认证通过） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
 | 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
 | 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
@@ -373,7 +373,7 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 12 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 13 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
@@ -772,6 +772,8 @@ Store 提供 `delivery-chain`、恢复段预约和阶段事实；当前真实交
   `SOURCE_VERIFIERS` 仍为空；ARM64 受管安装与 guard 生命周期、实际场地、可信回退、专用凭据、四阶段及异常
   恢复尚待现场验收。本机执行证明和替身登记不证明已切换现场，也不开放正式执行。完整录制回放、故障链和
   发布认证状态均见 Claude 指南 §3.6／§4.0.5；生产 B4-08 另批。
+
+- Darwin内部owned-v2生产管线已完成有限源码、私有编译和离线接线，仍沿原生观测的evidence身份与构建器的control身份归层。计划、控制、原件封存和只读重放均按独立`internal-v2`闭集核验；三条pipe以真实自进程handle／peerhandle核实例分离。旧v1启动拒绝与形成期重放不变。本轮未执行生成的collector／probe，没有创建或订阅ES；五能力旗标恒false，尾排空不允许`verified`。合格签名、运行authority、完整原生窗口、产品模块、transport-map、recipe和正式来源仍未就绪，有限编译不算B4-01整项完成。
 
 ## 13 Codex 身份守恒
 
