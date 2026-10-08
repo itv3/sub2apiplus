@@ -1834,6 +1834,8 @@ class SupervisorTests(unittest.TestCase):
             prior_dir = root / "run-prior"
             prior_dir.mkdir(mode=0o700)
             campaign_id = "campaign-official-timeout"
+            # 历史 Codex 合同隐含客户端，但绑定目录仍须存在总计划原件。
+            self._write_json(campaign_dir / "campaign.json", {"campaign_id": campaign_id})
             owner_nonce = "8" * 64
             checkpoint = {
                 "path": "control/vc/vc-0-checkpoint.json",

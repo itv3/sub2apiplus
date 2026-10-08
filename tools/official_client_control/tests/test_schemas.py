@@ -15,7 +15,8 @@ class SchemaTests(unittest.TestCase):
 
     def test_all_schema_files_are_strict_json(self) -> None:
         paths = sorted(self.root.glob("*.json"))
-        self.assertEqual(len(paths), 15)
+        # 当前交付执行合同新增一份 schema；仍精确锁定集合大小。
+        self.assertEqual(len(paths), 16)
         for path in paths:
             value = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(value["$schema"], "https://json-schema.org/draft/2020-12/schema")

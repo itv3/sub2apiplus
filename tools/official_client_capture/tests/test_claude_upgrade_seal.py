@@ -345,6 +345,8 @@ class EvidenceClosureTests(unittest.TestCase):
         self.assertEqual(
             {item["module"] for item in closure["modules"]},
             {
+                # Mac v2 收据的正式封存读侧已经调用此完整合同；新增项必须显式登记。
+                capture_package + "claude_client_receipt_contract",
                 capture_package + "claude_fw_e_dispositions",
                 capture_package + "claude_fw_e_validation_closure",
                 capture_package + "claude_target_inventory",

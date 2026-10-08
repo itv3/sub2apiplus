@@ -180,7 +180,8 @@ class BuildNetworkContractTests(unittest.TestCase):
     def test_real_build_step_runs_once_and_never_automatically_escalates_network(self):
         # 执行 build.sh 的原始 Docker 步骤；Docker 是隔离记录器，批准和收据合同使用真实实现。
         code = (SCRIPTS / "build.sh").read_text()
-        step = code[code.index("NETWORK_ARGS=()") : code.index("docker image inspect --format")]
+        # 网络步骤止于完整客户端分流之前，不能从分流内部截掉 else／fi。
+        step = code[code.index("NETWORK_ARGS=()") : code.index('\nif [ "${CLIENT:-codex}" = claude ]; then\n')]
         for mode, exit_code in (("default", 7), ("host", 0)):
             with self.subTest(mode=mode):
                 if mode == "host":

@@ -173,10 +173,16 @@ class VcCheckpointParityTests(unittest.TestCase):
                 with self.subTest(phase=phase, revision=revision):
                     claude_path = claude_upgrade._vc_checkpoint_path(self.campaign, phase, revision=revision)
                     self.assertEqual(claude_path, codex_upgrade._vc_checkpoint_path(self.campaign, phase, revision=revision))
-                    self.assertEqual(
-                        claude_upgrade._replay_vc_checkpoint(self.campaign, self.plan, phase, revision=revision),
-                        codex_upgrade._replay_vc_checkpoint(self.campaign, self.plan, phase, revision=revision),
-                    )
+                    if phase == "VC-6":
+                        # 坐标沿用共享合同；Claude 当前交付拒绝通用伪阶段收据，正向链另核 typed 原件。
+                        with self.assertRaisesRegex(ConfigurationError, "当前候选 VC-6 只能消费受管候选交付结果"):
+                            claude_upgrade._replay_vc_checkpoint(self.campaign, self.plan, phase, revision=revision)
+                        self.assertIsNotNone(codex_upgrade._replay_vc_checkpoint(self.campaign, self.plan, phase, revision=revision))
+                    else:
+                        self.assertEqual(
+                            claude_upgrade._replay_vc_checkpoint(self.campaign, self.plan, phase, revision=revision),
+                            codex_upgrade._replay_vc_checkpoint(self.campaign, self.plan, phase, revision=revision),
+                        )
         self.assertEqual(
             claude_upgrade._vc_checkpoint_path(self.campaign, "VC-6", revision=2),
             self.campaign / "control" / "vc" / "revisions" / "r2" / "vc-6-checkpoint.json",
@@ -198,9 +204,11 @@ class VcCheckpointParityTests(unittest.TestCase):
             with self.subTest(orchestrator=orchestrator.__name__), self.assertRaisesRegex(ConfigurationError, "VC-2 checkpoint 的阶段收据摘要漂移"):
                 orchestrator._replay_vc_checkpoint(self.campaign, self.plan, "VC-4", revision=2)
         claude_upgrade_vc.vc_checkpoint_path(self.campaign, "VC-5", revision=2).unlink()
-        for orchestrator in (claude_upgrade, codex_upgrade):
-            with self.subTest(orchestrator=orchestrator.__name__), self.assertRaisesRegex(ConfigurationError, "VC-5 checkpoint 缺失"):
-                orchestrator._replay_vc_checkpoint(self.campaign, self.plan, "VC-6", revision=2)
+        with self.assertRaisesRegex(ConfigurationError, "VC-5 checkpoint 缺失"):
+            codex_upgrade._replay_vc_checkpoint(self.campaign, self.plan, "VC-6", revision=2)
+        # Claude 先拒绝非当前交付收据；不能靠删除前序 checkpoint 绕过专属合同。
+        with self.assertRaisesRegex(ConfigurationError, "当前候选 VC-6 只能消费受管候选交付结果"):
+            claude_upgrade._replay_vc_checkpoint(self.campaign, self.plan, "VC-6", revision=2)
 
     def test_vc5_reopen_follows_ledger_summary(self) -> None:
         with mock.patch.object(claude_upgrade_vc, "vc5_reopened_baseline", return_value=3), mock.patch.object(
