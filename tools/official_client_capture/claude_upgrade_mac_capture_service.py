@@ -285,14 +285,21 @@ class CaptureEngine:
             path = worker.directory / f"conn{worker.number:03d}.{direction}.bin"
             self._journal("segment", {"connection_id": worker.connection_id, "direction": direction, "path": path.relative_to(self.root).as_posix(), "offset": offset, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}, at_utc=observed)
             worker.parser.feed(direction, raw, observed)
+            # 准入拒绝不得打断同一已持久化片段的正文解析；解析完毕仍绝不转发。
+            c.require(worker.forward_error is None, worker.forward_error or "请求转发被拒绝")
             c.require(self._wire_bytes <= self.configuration["limits"]["max_wire_bytes"], "实际 wire 字节超过冻结上界")
             c.require(c.timestamp(observed) < c.timestamp(self.task["execution"]["request_policy"]["deadline_utc"]), "收到字节时冻结 deadline 已到")
 
     def on_request_header(self, row: Mapping[str, Any]) -> None:
         self._journal("request_header", {name: row[name] for name in ("connection_id", "request_ordinal", "observed_at_utc", "host", "method", "path")}, at_utc=row["observed_at_utc"])
         models = sum(item["method"] == "POST" and item["path"].split("?", 1)[0] in wire.MODEL_PATHS for parser in self._parsers.values() for item in parser.requests)
-        c.require(models <= self.task["execution"]["request_budget"], "真实模型请求超过原任务上界；仍保留已观察 POST")
-        self._budget(c.read_json(self.root / "budget-reservation.json"))
+        try:
+            c.require(models <= self.task["execution"]["request_budget"], "真实模型请求超过原任务上界；仍保留已观察 POST")
+            self._budget(c.read_json(self.root / "budget-reservation.json"))
+        except Exception as error:
+            reason = str(error) if isinstance(error, c.CaptureError) else "原预算占用重验失败：" + type(error).__name__
+            self._workers[row["connection_id"]].forward_error = reason
+            self.mark_incomplete(reason)
 
     def record_eof(self, worker: ConnectionWorker, direction: str) -> None:
         with self._lock:
@@ -444,6 +451,7 @@ class ConnectionWorker(threading.Thread):
         self.offers: list[str] = []
         self.prepared = False
         self.forced_stop = False
+        self.forward_error: str | None = None
 
     def request_stop(self, *, force: bool = False) -> None:
         self.stop_requested.set()

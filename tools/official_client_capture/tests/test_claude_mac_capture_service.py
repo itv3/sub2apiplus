@@ -384,7 +384,9 @@ class NativeCaptureTests(unittest.TestCase):
             self._post(connection, b"second")
         result, root, _native = self._closed()
         self.assertEqual(result["status"], "truncated")
-        self.assertEqual(len(_rows(root / "native-requests.jsonl")), 2)
+        requests = _rows(root / "native-requests.jsonl")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(base64.b64decode(requests[1]["request_body_base64"]), b"second")
         self.assertEqual(len(_rows(self.root / "upstream-requests.jsonl")), 1)
 
     def test_fake_budget_cannot_publish_reservation_or_ready(self) -> None:
