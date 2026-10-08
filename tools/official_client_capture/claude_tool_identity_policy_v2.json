@@ -145,6 +145,7 @@
         "official_client_capture/claude_upgrade_client_adapter.py",
         "official_client_capture/claude_upgrade_delivery_recovery_guard.py",
         "official_client_capture/claude_upgrade_mac_candidate_services.py",
+        "official_client_capture/claude_upgrade_mac_budget.py",
         "official_client_capture/claude_upgrade_mac_client_capture.py",
         "official_client_capture/codex_upgrade_arm64_environment_receipt.py",
         "official_client_capture/codex_upgrade_campaign_run_rehearsal_receipt.py",
