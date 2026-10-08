@@ -82,7 +82,8 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
         self.assertEqual(set(head["accounted_identity_index"]), keys)
         self.assertEqual((head["precise_total"], head["estimated_total"]), (2, 0))
 
-    def vc5_world(self, *, anthropic_version: str = "2023-06-01", profile_seam: bool = True) -> dict[str, Any]:
+    def vc5_world(self, *, anthropic_version: str = "2023-06-01", profile_seam: bool = True,
+                  typed_official_source: bool = False) -> dict[str, Any]:
         from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
 
         # 本方法也供 VC-6 与连续链驱动借用；在首个 Campaign 建立前选择 staging，保留唯一真实项目总账。
@@ -131,7 +132,11 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
         # 接缝二：官方评估来源（评估器夹具官方侧）；接缝四：候选 attempt 上下文。
         official_side = evaluator_fixture.write_side(sides / "official", capture_id="eval-official")
         official = claude_upgrade._load_stage_result(campaign, "capture-official")
-        official_source = chain._write_json(self.root / "seams" / "official-source.json", chain.official_source(official_side, official["store"]["evidence_package_ref"]))
+        # 只有 VC-6 新世界需要归档闭包；旧轻量路径继续使用原占位接缝。
+        source = (chain.materialize_official_source(campaign=campaign, data_root=data_root,
+                    side=official_side, package_ref=official["store"]["evidence_package_ref"])
+                  if typed_official_source else chain.official_source(official_side, official["store"]["evidence_package_ref"]))
+        official_source = chain._write_json(self.root / "seams" / "official-source.json", source)
         config = {"attempt_root": str(materialized["attempt_root"]), "attempt": str(materialized["attempt_path"])}
         if profile_seam:
             config["official_source"] = str(official_source)

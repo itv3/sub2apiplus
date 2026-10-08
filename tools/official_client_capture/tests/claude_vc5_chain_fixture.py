@@ -33,6 +33,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections import Counter
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
 from unittest import mock
@@ -163,6 +164,87 @@ def official_source(side: evaluator_fixture.SideEvidence, package_ref: Mapping[s
         "surfaces": surfaces(PROBE_REQUEST_PATHS),
         "probe_request_paths": dict(PROBE_REQUEST_PATHS),
     }
+
+
+def materialize_official_source(
+    *, campaign: Path, data_root: Path, side: evaluator_fixture.SideEvidence,
+    package_ref: Mapping[str, Any],
+) -> dict[str, Any]:
+    """只给新 typed 世界落真实测试原件，默认轻量来源仍由原函数返回。
+
+    输入仍是评估器已有的合成请求、响应、中继和 pcap；这里不采集官方
+    客户端、不生成或替换 Store 官方包。比较收据内的三份父绑定以
+    Campaign 为根，普通清单内的下层绑定以交付数据根为根，原严格读者
+    因此可以完整实读，不需要给未知 JSON 增加投影或豁免。
+    """
+
+    campaign, data_root = Path(campaign), Path(data_root)
+    campaign.relative_to(data_root)
+    source_root = campaign / "seam" / "official"
+    source_root.mkdir(parents=True, exist_ok=False, mode=0o700)
+    evidence_root = source_root / "evidence"
+    shutil.copytree(side.evidence_root, evidence_root)
+    original = json.loads(side.manifest_path.read_bytes())
+    capture = copy.deepcopy(side.capture_manifest)
+    capture.update(campaign_id=campaign.name, attempt={"attempt_id": original["capture_id"]})
+    prefix = evidence_root.relative_to(data_root).as_posix()
+    for artifact in capture["artifacts"]:
+        artifact["path"] = f"{prefix}/{artifact['path']}"
+    capture_path = _write_json(source_root / "capture-manifest.json", capture)
+
+    jobs, surface_counts = [], Counter()
+    for job_id in sorted({item["job_id"] for item in capture["artifacts"]}):
+        probes = []
+        probe_ids = {item["probe_id"] for item in capture["artifacts"] if item["job_id"] == job_id}
+        for probe_id in sorted(probe_ids):
+            probe_root = evidence_root / job_id / probe_id
+            relay_path = probe_root / "relay" / "relay.json"
+            connections = []
+            if relay_path.is_file():
+                relay = json.loads(relay_path.read_bytes())
+                for connection in relay["connections"]:
+                    if connection["valid"] is not True:
+                        continue
+                    connection_id = connection["connection_id"]
+                    request_path = probe_root / "relay" / f"conn{connection_id:03d}.client_to_upstream.bin"
+                    response_path = probe_root / "relay" / f"conn{connection_id:03d}.upstream_to_client.bin"
+                    requests = assertion.parse_h1_requests(request_path.read_bytes(), str(request_path))
+                    lines = [f"{row['method']} {row['target']} {row['protocol']}" for row in requests]
+                    for row, line in zip(requests, lines):
+                        surface_counts[f"{row['host']} {line}"] += 1
+                    connections.append({"connection_id": connection_id, "requests": lines,
+                        "request_evidence": binding(request_path, data_root),
+                        "response_evidence": binding(response_path, data_root)})
+            probes.append({"probe_id": probe_id, "connections": connections})
+        jobs.append({"job_id": job_id, "evidence_root": (evidence_root / job_id).relative_to(data_root).as_posix(),
+                     "probes": probes})
+    index = {"schema_version": evidence.CAPTURE_INDEX_SCHEMA, "campaign_id": campaign.name,
+        "target_version": capture["target_version"], "attempt": dict(capture["attempt"]),
+        "jobs": jobs, "failures": [], "result": "passed",
+        "network_inventory": {"host_prefilter_disabled": True,
+            "surfaces": [{"surface": name, "count": count} for name, count in sorted(surface_counts.items())]}}
+    index_path = _write_json(source_root / "capture-index.json", index)
+    raw_inventory = evidence.evidence_inventory([evidence_root], base=data_root)
+    evaluation = assertion.bind_capture_manifest(capture,
+        {row["path"]: row for row in raw_inventory["entries"]}, capture_id=original["capture_id"])
+    _write_json(source_root / "evaluation-manifest.json", evaluation)
+    _write_json(source_root / "fixture-origin.json", {
+        "schema_version": "claude-vc5-materialized-official-fixture/v1", "fixture_only": True,
+        "formal_version_semantics_certified": False, "producer": evaluator_fixture.__name__,
+        "input_evidence_root": str(side.evidence_root),
+        "input_evaluation_manifest_sha256": _sha256(side.manifest_path),
+        "package_reference_scope": "只沿用已有合成包引用，不生产或认证真实官方包",
+    })
+    inventory_path = _write_json(source_root / "evidence-manifest.json",
+                                 evidence.evidence_inventory([source_root], base=data_root))
+    from tools.official_client_capture import claude_upgrade_compare as compare
+
+    return {"mode": "predecessor_reuse", "evidence_root": str(data_root),
+        "capture_id": original["capture_id"], "evaluation_manifest": evaluation,
+        "package_ref": dict(package_ref), "capture_manifest": binding(capture_path, campaign),
+        "capture_index": binding(index_path, campaign), "inventory": binding(inventory_path, campaign),
+        "surfaces": compare._index_surfaces(index, "官方测试来源"),
+        "probe_request_paths": compare._index_probe_request_paths(index)}
 
 
 # ---------------------------------------------------------------------------

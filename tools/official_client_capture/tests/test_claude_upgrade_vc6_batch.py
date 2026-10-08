@@ -358,7 +358,7 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
             super().setUp()
 
     def vc5_complete_world(self) -> dict[str, Any]:
-        world = self.vc5_world()
+        world = self.vc5_world(typed_official_source=True)
         # 只对本次新建世界开启完整环境合同；VC-5 动作与父门禁共读同一配置。
         config = compare_tests._read(world["config_path"])
         config["gate_environment_mode"] = chain.REAL_GATE_ENVIRONMENT
