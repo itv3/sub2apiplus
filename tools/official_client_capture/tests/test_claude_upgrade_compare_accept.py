@@ -692,7 +692,11 @@ class RuntimeAuditAndClientReceiptTests(unittest.TestCase):
         scenarios = chain._write_json(self.campaign / "inputs" / "scenarios.json", {"required_client_bindings": ["claude-desktop"], "required_boundary_checks": ["third-party-ingress-rejection"]})
         chain._write_json(self.campaign / "campaign.json", {**self.manifest, "client": "claude"})
         values = {"campaign_id": "claude-campaign", "candidate_id": "cand-1", "attempt_id": "attempt-1", "run_nonce": "nonce-1"}
-        chain._write_json(self.attempt_root / "attempt.json", {**self.attempt, "candidate_id": "cand-1"})
+        attempt_path = self.attempt_root / "attempt.json"
+        # 既有任务会按真实合同复核当前 attempt；只在首次创建时补齐坐标，
+        # 后续保留原件中的构建身份与网关绑定，禁止重写成最小字典。
+        if not attempt_path.exists():
+            chain._write_json(attempt_path, {**self.attempt, **values})
         desktop = claude_client_receipt_fixture.write_receipt(self.attempt_root, "claude-desktop", values)
         if payload_changes:
             chain._write_json(desktop, {**json.loads(desktop.read_bytes()), **payload_changes})
