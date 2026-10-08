@@ -2391,10 +2391,14 @@ def validate_segment_reuse_preview(
     if not reuse:
         return 0
     stats = {"scanned_bytes": 0}
-    # B4-05b：与生成预览时相同的客户端证明实现；Codex 适配器仍绑定本模块原函数，原判定与统计不变。
     adapter = _adapter()
-    actual = adapter.segment_reuse_proofs(campaign_dir, str(preview["candidate_id"]), str(preview["source_attempt_id"]),
-                                         str(preview["recovery_revision"]), preview["planned_job_ids"], scan_stats=stats)
+    if adapter.client == "codex":
+        # Codex v2 读侧必须静态展开真实证明实现，避免动态适配分派遗漏复用判据。
+        actual = segment_reuse_proofs(campaign_dir, str(preview["candidate_id"]), str(preview["source_attempt_id"]),
+                                     str(preview["recovery_revision"]), preview["planned_job_ids"], scan_stats=stats)
+    else:
+        actual = adapter.segment_reuse_proofs(campaign_dir, str(preview["candidate_id"]), str(preview["source_attempt_id"]),
+                                             str(preview["recovery_revision"]), preview["planned_job_ids"], scan_stats=stats)
     if scan_stats is not None:
         scan_stats["scanned_bytes"] = scan_stats.get("scanned_bytes", 0) + stats["scanned_bytes"]
     if any(job_id not in actual or actual[job_id] != supplied[job_id] for job_id in reuse):
