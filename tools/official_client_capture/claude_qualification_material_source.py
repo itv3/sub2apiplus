@@ -777,13 +777,15 @@ def _retain_candidate_evaluation_draft(
     campaign: Path, manifest: Mapping[str, Any], round_one: Mapping[str, Any], data_root: Path, *,
     retain: Callable[..., bytes], project_parent: Callable[..., None],
 ) -> None:
-    """归档原读者验真的 seal 草稿；只转换两项已验真评估输入的坐标。
+    """归档原合同验真的 seal 草稿，只转换逐项证明的 Campaign 绑定。
 
-    草稿整体保持数据根坐标，只有原候选评估读者承认的两个 drafts 字段
-    使用冻结 Campaign 根。其它标准绑定仍由严格闭包实读，不能借文件名、
-    schema 或相同摘要取得转换权限。没有草稿引用的旧阶段不新增投影。
+    两个 drafts 字段沿原候选评估读者验真；解析视图沿批准时的原三字段
+    读取规则验真，顶层评估清单还须等于阶段结果已经验真的精确输入。
+    草稿整体保持数据根坐标，未知标准绑定继续严格实读，不能借文件名、
+    schema 或相同摘要取得转换权限。历史草稿没有附加字段时不新增权限。
     """
     from . import claude_upgrade_compare as compare
+    from . import claude_upgrade_seal as seal_contract
 
     seal = round_one.get("seal")
     draft_binding = seal.get("seal_draft") if isinstance(seal, Mapping) else None
@@ -802,6 +804,20 @@ def _retain_candidate_evaluation_draft(
         path = compare._bound_campaign_file(campaign, binding, "来源候选评估输入 " + name)
         retain(path, binding["sha256"])
         coordinates.append((("drafts", name), campaign))
+    for name in ("relay_view", "evaluation_manifest"):
+        value = draft.get(name)
+        if value is None:
+            continue
+        binding = validate_external_binding(value, "candidate.seal_draft." + name)
+        if name == "evaluation_manifest":
+            expected = round_one["assertion_context"]["evaluation_manifest"]
+            if any(binding[key] != expected[key] for key in ("path", "sha256")):
+                raise ControlError("候选草稿的评估用 manifest 与阶段结果的精确输入不同源")
+        # 复用初次批准对精确草稿附件的读取规则，不调用带 Store 写入
+        # 行为的批准流程。验证后的原件仍按原摘要留存，拒绝读取期间漂移。
+        path = seal_contract._verify_bound_file(campaign, binding, "来源候选草稿 " + name)
+        retain(path, binding["sha256"])
+        coordinates.append(((name,), campaign))
     project_parent(draft_path, data_root, coordinate_roots=tuple(coordinates))
 
 

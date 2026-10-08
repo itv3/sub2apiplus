@@ -1,4 +1,4 @@
-"""候选草稿的精确坐标证明：原评估读者验真，两叶之外仍严格实读。"""
+"""候选草稿的精确坐标证明：逐项重放原合同，未知附件仍严格实读。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ import unittest
 from unittest import mock
 
 from tools.official_client_capture import claude_qualification_material_source as material
+from tools.official_client_capture import claude_rule_assertion as assertion
 from tools.official_client_capture import claude_upgrade_compare as compare
+from tools.official_client_capture import claude_upgrade_seal as seal_contract
 from tools.official_client_capture.tests import claude_evaluator_fixture as evaluator
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as fixture
 from tools.official_client_control.delivery_execution import VerifiedSource
@@ -72,6 +74,18 @@ class CandidateDraftProjectionTests(unittest.TestCase):
         fixture._write_json(self.draft_path, {**self.draft, **extra})
         self.round_one["seal"]["seal_draft"] = fixture.binding(self.draft_path, self.campaign)
 
+    def formal_extra_fields(self) -> dict:
+        """按生产坐标准备合成附件，仅用于无写入的原读取合同测试。"""
+        original = self.campaign / self.round_one["assertion_context"]["evaluation_manifest"]["path"]
+        evaluation = fixture._write_json(self.draft_path.parent / "evaluation-manifest.json",
+            json.loads(original.read_bytes()))
+        self.round_one["assertion_context"]["evaluation_manifest"] = fixture.binding(
+            evaluation, self.campaign, with_bytes=False)
+        relay = fixture._write_json(self.draft_path.parent / "relay-view.json",
+            {"label": "candidate", "probes": {}, "surfaces": []})
+        return {"relay_view": fixture.binding(relay, self.campaign),
+                "evaluation_manifest": fixture.binding(evaluation, self.campaign)}
+
     def test_original_reader_proves_two_campaign_leaves_and_full_raw_closure(self) -> None:
         original = compare.candidate_evaluation_source(self.campaign, self.manifest, self.round_one)
         self.prove()
@@ -92,11 +106,176 @@ class CandidateDraftProjectionTests(unittest.TestCase):
             self.close()
 
     def test_other_campaign_relative_fields_receive_no_conversion_permission(self) -> None:
-        self.change_draft({"evaluation_manifest": self.round_one["assertion_context"]["evaluation_manifest"] | {
+        # 原输入用已被正式 seal 定义的字段充当未知扩展，修为真正未知
+        # 的附件字段；原件缺失的失败断言保持原样，不能自动转换任意叶。
+        self.change_draft({"unknown_campaign_attachment": self.round_one["assertion_context"]["evaluation_manifest"] | {
             "bytes": (self.campaign / self.round_one["assertion_context"]["evaluation_manifest"]["path"]).stat().st_size}})
         self.prove()
         with self.assertRaisesRegex(ControlError, "原件缺失"):
             self.close()
+
+    def test_formal_fields_prove_exact_campaign_roots_and_full_raw_closure(self) -> None:
+        fields = self.formal_extra_fields()
+        for names in (("relay_view",), ("evaluation_manifest",), ("relay_view", "evaluation_manifest")):
+            with self.subTest(fields=names):
+                self.originals.clear()
+                self.parents.clear()
+                self.change_draft({name: fields[name] for name in names})
+                self.prove()
+                closed = {row["path"] for row in self.close()}
+                parent = self.parents[self.draft_path.relative_to(self.data).as_posix()]
+                campaign_relative = self.campaign.relative_to(self.data).as_posix()
+                self.assertEqual(parent.base_relative, ".")
+                self.assertEqual(parent.metadata_domains, ())
+                expected_roots = {(("drafts", name), campaign_relative)
+                    for name in ("capture_manifest", "capture_index")}
+                expected_roots.update(((name,), campaign_relative) for name in names)
+                self.assertEqual(set(parent.coordinate_roots), expected_roots)
+                for name in names:
+                    self.assertIn((self.campaign / fields[name]["path"]).relative_to(self.data).as_posix(), closed)
+                self.assertTrue(any(path.endswith("conn002.client_to_upstream.bin") for path in closed))
+
+    def test_top_evaluation_requires_exact_stage_path_and_digest(self) -> None:
+        fields = self.formal_extra_fields()
+        original = self.campaign / fields["evaluation_manifest"]["path"]
+        other = self.draft_path.parent / "other-evaluation.json"
+        other.write_bytes(original.read_bytes())
+        for mismatch in ("same_bytes_other_path", "different_valid_manifest", "other_digest"):
+            with self.subTest(mismatch=mismatch):
+                self.originals.clear()
+                self.parents.clear()
+                changed = copy.deepcopy(fields)
+                if mismatch == "other_digest":
+                    changed["evaluation_manifest"]["sha256"] = "f" * 64
+                else:
+                    if mismatch == "different_valid_manifest":
+                        document = json.loads(original.read_bytes())
+                        document["capture_id"] = "other-capture"
+                        assertion.validate_evaluation_manifest(document, expected_claude_version=self.manifest["target_version"])
+                        fixture._write_json(other, document)
+                    changed["evaluation_manifest"] = fixture.binding(other, self.campaign)
+                self.change_draft(changed)
+                with self.assertRaisesRegex(ControlError, "精确输入不同源"):
+                    self.prove()
+                self.assertEqual(self.parents, {})
+
+    def test_formal_fields_reject_missing_drifted_and_wrong_length_before_projection(self) -> None:
+        fields = self.formal_extra_fields()
+        for name in ("relay_view", "evaluation_manifest"):
+            path = self.campaign / fields[name]["path"]
+            raw = path.read_bytes()
+            for fault in ("missing", "drift", "length"):
+                with self.subTest(field=name, fault=fault):
+                    self.originals.clear()
+                    self.parents.clear()
+                    changed = copy.deepcopy(fields)
+                    if fault == "missing":
+                        path.unlink()
+                    elif fault == "drift":
+                        path.write_bytes(raw + b" ")
+                    else:
+                        changed[name]["bytes"] += 1
+                    self.change_draft(changed)
+                    try:
+                        with self.assertRaises(ConfigurationError):
+                            self.prove()
+                        self.assertEqual(self.parents, {})
+                    finally:
+                        path.write_bytes(raw)
+
+    def test_formal_fields_require_closed_three_field_bindings(self) -> None:
+        fields = self.formal_extra_fields()
+        for name in ("relay_view", "evaluation_manifest"):
+            for fault in ("missing_bytes", "extra_key", "boolean_length", "negative_length", "outside_root"):
+                with self.subTest(field=name, fault=fault):
+                    self.originals.clear()
+                    self.parents.clear()
+                    changed = copy.deepcopy(fields)
+                    if fault == "missing_bytes":
+                        del changed[name]["bytes"]
+                    elif fault == "extra_key":
+                        changed[name]["unknown"] = "extra"
+                    elif fault == "boolean_length":
+                        changed[name]["bytes"] = True
+                    elif fault == "negative_length":
+                        changed[name]["bytes"] = -1
+                    else:
+                        changed[name]["path"] = "../outside.json"
+                    self.change_draft(changed)
+                    with self.assertRaises(ControlError):
+                        self.prove()
+                    self.assertEqual(self.parents, {})
+
+    def test_formal_field_symlinks_do_not_grant_new_reading_roots(self) -> None:
+        fields = self.formal_extra_fields()
+        self.change_draft(fields)
+        for name in ("relay_view", "evaluation_manifest"):
+            path = self.campaign / fields[name]["path"]
+            raw = path.read_bytes()
+            for destination in ("campaign", "outside_campaign"):
+                with self.subTest(field=name, destination=destination):
+                    self.originals.clear()
+                    self.parents.clear()
+                    target = ((path.parent / ("copy-" + path.name)) if destination == "campaign"
+                              else self.data / "outside-campaign" / path.name)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(raw)
+                    path.unlink()
+                    path.symlink_to(target)
+                    try:
+                        with self.assertRaises(ConfigurationError):
+                            self.prove()
+                        self.assertEqual(self.parents, {})
+                    finally:
+                        path.unlink()
+                        path.write_bytes(raw)
+
+    def test_formal_field_drift_between_original_verification_and_retention_refuses(self) -> None:
+        fields = self.formal_extra_fields()
+        self.change_draft(fields)
+        verifier = seal_contract._verify_bound_file
+        for name in ("relay_view", "evaluation_manifest"):
+            with self.subTest(field=name):
+                self.originals.clear()
+                self.parents.clear()
+                target = self.campaign / fields[name]["path"]
+                raw = target.read_bytes()
+                def drift(campaign, binding, label):
+                    path = verifier(campaign, binding, label)
+                    if path == target:
+                        path.write_bytes(raw + b" ")
+                    return path
+                try:
+                    with mock.patch.object(seal_contract, "_verify_bound_file", side_effect=drift):
+                        with self.assertRaisesRegex(ControlError, "验真原件摘要漂移"):
+                            self.prove()
+                    self.assertEqual(self.parents, {})
+                finally:
+                    target.write_bytes(raw)
+
+    def test_unknown_child_of_proved_relay_still_uses_data_root_and_is_fully_read(self) -> None:
+        fields = self.formal_extra_fields()
+        child = fixture._write_json(self.data / "unknown/relay-child.json", {"fixture": "child"})
+        relay = self.campaign / fields["relay_view"]["path"]
+        document = json.loads(relay.read_bytes())
+        document["unknown"] = fixture.binding(child, self.data)
+        fixture._write_json(relay, document)
+        fields["relay_view"] = fixture.binding(relay, self.campaign)
+        self.change_draft(fields)
+        self.prove()
+        self.assertIn("unknown/relay-child.json", {row["path"] for row in self.close()})
+        child.unlink()
+        with self.assertRaisesRegex(ControlError, "原件缺失"):
+            self.close()
+
+    def test_same_formal_parent_bytes_at_unverified_coordinate_receive_no_permission(self) -> None:
+        self.change_draft(self.formal_extra_fields())
+        self.prove()
+        duplicate = self.data / "unverified/formal-seal-draft.json"
+        duplicate.parent.mkdir()
+        duplicate.write_bytes(self.draft_path.read_bytes())
+        with self.assertRaisesRegex(ControlError, "原件缺失"):
+            self.close([fixture.binding(duplicate, self.data)])
 
     def test_same_bytes_at_unverified_parent_coordinate_receive_no_permission(self) -> None:
         self.prove()
