@@ -91,8 +91,9 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
             reconcile_argv = ["reconcile-supervisor-run", "--campaign-dir", campaign,
                 "--run-dir", Path(failed["campaign_run"]["run_dir"])]
             code, reconciled, stderr = self.source_command(reconcile_argv)
-            self.assertEqual(code, 0, stderr)
             self.assertIsNotNone(reconciled, stderr)
+            # 第二次同根因失败可能依法暂停；只接受对应退出码，暂停原因由下面的真实修复入口严格核对。
+            self.assertIn((code, reconciled["status"]), {(0, "recoverable"), (3, "paused")}, stderr)
             counted = audit.accounting_state()
             repair = self.repair_environment_root(world, reconciled)
             code, reconciled_after, stderr = self.source_command(reconcile_argv)
