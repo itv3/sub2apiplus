@@ -67,6 +67,25 @@ OFFICIAL_POST_RUN_TOOLING_ITEM_IDS = frozenset({"vc1-01-analyze-target", "vc1-02
 # VC-5 候选采集续跑（B4-05b-1）：候选续跑命令逐字携带的身份参数。Claude 的候选身份只来自 VC-4 构建收据，resume 重走候选
 # 入口门、拒绝 Codex 用来重建候选身份的参数（claude_upgrade_recovery 第六节），所以只有 ``--candidate-id``。
 CANDIDATE_RECOVERY_IDENTITY_FLAGS = ("--candidate-id",)
+# Claude 合法新 revision 必须先完整重放作废、对账、总账与 COMMIT 证明，避免旧批次重派提前认领并拒绝新候选。
+# 只把 candidate_revision 提前到 environment_redispatch 前，其余协议的相对顺序与共享监督器默认顺序一致。
+SUCCESSOR_PROTOCOL_ORDER = (
+    "evolution_recovery",
+    "seal_chain",
+    "stage_review",
+    "parent_start",
+    "parent_finalize",
+    "evaluation_baseline",
+    "candidate_revision",
+    "environment_redispatch",
+    "official_recovery_preview",
+    "official_recovery_preview_retry",
+    "official_recovery_run_retry",
+    "candidate_recovery_preview",
+    "candidate_recovery_preview_retry",
+    "candidate_recovery_run_retry",
+    "attempt_recovery_segment",
+)
 # Claude Campaign ID（如 ``claude-code-2_1_226-fw-g-production-replacement-v2-20260821``）不匹配根因模块的 Codex
 # Campaign ID 模式，必须在调用根因 API 前由适配器拒绝；版本号分隔符兼容点与下划线。
 CLAUDE_CAMPAIGN_ID_RE = re.compile(r"claude-code-\d+[._]\d+[._]\d+")

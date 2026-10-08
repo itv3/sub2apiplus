@@ -373,6 +373,9 @@ ORCHESTRATOR_SURFACE: Mapping[str, str | None] = MappingProxyType({
     'recovery_reuse_check': '(campaign_dir: Path, *, phase: str, candidate_id: str | None, source_attempt_id: str, reuse_job_ids: Iterable[str], execute_job_ids: Iterable[str]) -> dict[str, Any]',
 })
 
+# 默认后继协议顺序保留监督器原 tuple 对象；只有客户端明确登记完整名字顺序时才在已核归属后调整。
+DEFAULT_SUCCESSOR_PROTOCOL_ORDER = None
+
 # 服务面之外的适配器成员 → 种类。value：常量值；module：模块对象（后接属性时解析到该模块的符号，异常类型也
 # 由它取）；callable：可调用对象（适配器方法）。每个客户端都必须为下列成员登记绑定。只收共享代码里确有客户端
 # 差异的名字：子命令名、阶段名与动作 ID 两客户端相同（Claude 编排器子命令与 Codex 同名），仍按字面书写。
@@ -448,6 +451,8 @@ ADAPTER_MEMBERS: Mapping[str, str] = MappingProxyType({
     # （``codex_upgrade_supervisor.candidate_recovery_identity_flags``）。Codex 是监督器原常量（十个身份旗标，原位不动）；
     # Claude 的候选身份只来自 VC-4 构建收据，只有 ``--candidate-id``。
     "candidate_recovery_identity_flags": "value",
+    # 后继协议顺序：None 沿用监督器原 tuple；显式值必须是全部既有协议名的无重复 tuple，不能由清单或 CLI 注入。
+    "successor_protocol_order": "value",
 })
 
 
@@ -499,6 +504,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "vc5_official_campaign": ("codex_upgrade_client_adapter", "vc5_official_campaign"),
         # B4-05b-1：Codex 的候选续跑身份参数就是监督器原常量。
         "candidate_recovery_identity_flags": ("codex_upgrade_supervisor", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),
+        "successor_protocol_order": ("upgrade_client_adapter", "DEFAULT_SUCCESSOR_PROTOCOL_ORDER"),
     }),
     "claude": MappingProxyType({
         **_surface_bindings("claude_upgrade"),  # B1-09
@@ -536,6 +542,7 @@ ADAPTER_BINDINGS: Mapping[str, Mapping[str, tuple[str, str | None]]] = MappingPr
         "catalog_stage_profile": ("claude_upgrade_vc5_admission", "catalog_stage_profile"),  # B5b-01
         "vc5_official_campaign": ("claude_upgrade_vc5_admission", "vc5_official_campaign"),  # B5b-01
         "candidate_recovery_identity_flags": ("claude_upgrade_client_adapter", "CANDIDATE_RECOVERY_IDENTITY_FLAGS"),  # B4-05b-1
+        "successor_protocol_order": ("claude_upgrade_client_adapter", "SUCCESSOR_PROTOCOL_ORDER"),
     }),
 })
 

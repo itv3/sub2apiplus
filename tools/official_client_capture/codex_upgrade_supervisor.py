@@ -12314,6 +12314,38 @@ _SUCCESSOR_PROTOCOLS: tuple[tuple[str, Any], ...] = (
 )
 
 
+def _successor_protocols_for_run(
+    prior_manifest: Mapping[str, Any],
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> tuple[tuple[str, Any], ...]:
+    """从已核客户端归属的适配器取协议顺序；默认保持原 tuple 对象，显式顺序必须完整闭合。
+
+    元数据只携带名字，函数对象仍取当前监督器实例的既有 tuple，避免脚本与包实例混用。
+    本函数只选顺序，不弱化任何协议的完整证明；协议抛出的错误仍由历史分派原样向上传播。
+    """
+
+    if not _same_client_batched_runs(prior_manifest, successor_manifest):
+        raise SupervisorError("后继协议顺序要求前后批次属于同一客户端。")
+    adapter = _run_manifest_adapter(prior_manifest, campaign_dir)
+    order = adapter.successor_protocol_order
+    if order is None:
+        return _SUCCESSOR_PROTOCOLS
+    if campaign_dir is None:
+        raise SupervisorError("显式后继协议顺序必须绑定已核归属的 Campaign 目录。")
+    names = tuple(name for name, _protocol in _SUCCESSOR_PROTOCOLS)
+    if (
+        not isinstance(order, tuple)
+        or any(not isinstance(name, str) for name in order)
+        or len(order) != len(names)
+        or set(order) != set(names)
+    ):
+        raise SupervisorError("后继协议顺序必须是全部既有协议名的完整无重复 tuple。")
+    protocols = {name: protocol for name, protocol in _SUCCESSOR_PROTOCOLS}
+    return tuple((name, protocols[name]) for name in order)
+
+
 def _unclaimed_failed_batch_message(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -12516,14 +12548,16 @@ def _validate_batched_campaign_history(
                 and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
             ):
                 continue
-            # B4-1 改法 9：15 条后继协议按 _SUCCESSOR_PROTOCOLS 的固定顺序逐条尝试（顺序即原有的 if 链：工具演进作废
+            # B4-1 改法 9：15 条后继协议按已核归属的适配器顺序逐条尝试（默认 _SUCCESSOR_PROTOCOLS 保留原有 if 链：工具演进作废
             # 续跑预览必须先于环境／post-run-tooling 逐字重派——后者一旦认出可恢复的 seal 链失败就只接受逐字重派，而
             # attempt 作业已被工具演进作废时逐字重派必然再败；seal 链非逐字续派先于逐字重派协议…），任一返回 True 即
             # 通过；每条协议返回 False 时登记的拒因收进兜底文案。
             rejections: list[str] = []
             accepted = False
             if _same_client_batched_runs(prior_manifest, successor_manifest):
-                for name, protocol in _SUCCESSOR_PROTOCOLS:
+                for name, protocol in _successor_protocols_for_run(
+                    prior_manifest, successor_manifest, campaign_dir=campaign_dir
+                ):
                     token = _PROTOCOL_REJECTIONS.set([])
                     try:
                         accepted = bool(
