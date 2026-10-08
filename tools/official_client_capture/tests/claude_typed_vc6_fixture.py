@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import json
 import multiprocessing
@@ -257,15 +258,123 @@ class ControlledExecutor(executor.Arm64DeliveryExecutor):
         return super().prepare_stage(request)
 
 
+class ScopedMacFixtureAdapter:
+    """只重放本轮冻结首轮的 Mac 原件，不授予产品派发能力。"""
+
+    def __init__(self, tasks: dict[str, dict[str, Any]]):
+        from tools.official_client_capture.tests.claude_mac_v2_fixture import FixtureSourceAdapter
+        self.tasks = tasks
+        self.original = FixtureSourceAdapter()
+
+    def _require_task(self, task: Any, capture_root: Path) -> dict[str, Any]:
+        from tools.official_client_capture import claude_client_receipt_contract as contract
+        row = self.tasks.get(task.get("task_sha256"))
+        if row is None or dict(task) != row["task"] or Path(capture_root) != row["capture_root"]:
+            raise guard.GuardError("typed Mac 来源不属于本轮冻结首轮的准确 task")
+        contract.bound_file(row["attempt_root"], row["task_binding"])
+        # 原 adapter 每次重新核 fixture_only Claude 总账；原件漂移不能
+        # 因测试作用域已登记而继续取得权限。
+        self.original._roots(task, capture_root)
+        return row
+
+    def verify_origin(self, task: Any, bundle_root: Path, capture_root: Path) -> None:
+        row = self._require_task(task, capture_root)
+        if Path(bundle_root) != row["bundle_root"]:
+            raise guard.GuardError("typed Mac 来源包不是准确 task 的冻结原包")
+        self.original.verify_origin(task, bundle_root, capture_root)
+
+    def verify_capture_origin(self, task: Any, capture_root: Path) -> None:
+        self._require_task(task, capture_root)
+        self.original.verify_capture_origin(task, capture_root)
+
+    def verify_undispatched(self, task: Any, capture_root: Path) -> None:
+        self._require_task(task, capture_root)
+        self.original.verify_undispatched(task, capture_root)
+
+    def verify_isolation_recipe(self, task: Any, recipe: Any, root: Path) -> None:
+        row = self._require_task(task, Path(task["execution"]["capture_root"]))
+        if Path(root) != row["bundle_root"]:
+            raise guard.GuardError("typed Mac 隔离原件不属于准确 task 的冻结原包")
+        self.original.verify_isolation_recipe(task, recipe, root)
+
+    def owns_services(self, services: Any) -> bool:
+        return False
+
+    def owns_recorder(self, recorder: Any) -> bool:
+        return False
+
+
+@contextlib.contextmanager
+def fixture_mac_source_scope(configuration: dict, data_root: Path) -> Iterator[None]:
+    """材料准备、父读侧及新进程各自登记；退出逐字恢复原 registry。
+
+    仅沿资格的精确 Campaign、候选与固定首轮收据取得 task。冻结 task
+    全文、原字节绑定和包／捕获坐标一起钉住；fixture_only Claude 总账
+    必须与原 attempt 同源。正式任务或其它世界不能借用本测试 authority。
+    """
+    from tools.official_client_capture import claude_client_receipt_contract as contract
+    from tools.official_client_capture import claude_upgrade_compare as compare
+    from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
+    from tools.official_client_capture.tests.claude_mac_v2_fixture import FixturePatch
+
+    if configuration.get("source_scope") != "regression_fixture":
+        raise guard.GuardError("typed Mac authority 只允许明确的回归配置")
+    tasks = {}
+    for role in ("candidate", "rollback"):
+        q = configuration[role]["qualification"]
+        parent = guard.read_json(guard.check_binding(data_root, q["sealed_result_binding"]))
+        if parent.get("external_gate") is None:
+            continue
+        campaign = data_root / "evidence/campaigns" / q["campaign_id"]
+        round_path = upgrade._legacy_stage_path(campaign, "capture-candidate", q["candidate_id"])[1]
+        round_one = guard.read_json(round_path)
+        client_bindings = round_one.get("client_evidence", {}).get("client_bindings", {})
+        if not client_bindings:
+            continue
+        if (parent.get("campaign_id"), parent.get("candidate_id"), round_one.get("campaign_id"),
+                round_one.get("candidate_id")) != (q["campaign_id"], q["candidate_id"], q["campaign_id"], q["candidate_id"]):
+            raise guard.GuardError("typed Mac 冻结首轮、accept 与资格归属不符")
+        attempt_root = compare._bound_campaign_file(campaign, round_one["attempt"], "typed Mac 冻结首轮 attempt").parent
+        for client_id, client_binding in client_bindings.items():
+            contract.require(client_id in contract.CLIENTS, "typed Mac 必须为已登记的 Claude 客户端")
+            path = compare._bound_campaign_file(campaign, client_binding, "typed Mac 冻结首轮客户端收据")
+            contract.require(path.parent == attempt_root / "client-evidence", "typed Mac 收据必须归属冻结首轮 attempt")
+            receipt = contract.read_json(path)
+            task_path = contract.bound_file(attempt_root, receipt["task"])
+            task = contract.validate_task(contract.read_json(task_path))
+            contract.require(task["client_id"] == client_id and task["campaign_id"] == q["campaign_id"]
+                and task["candidate_id"] == q["candidate_id"]
+                and task["execution"]["recorder_id"] == client_fixture.RECORDER,
+                "typed Mac task 的客户端、候选或 recorder 归属不符")
+            contract.verify_task_attempt(attempt_root, task)
+            bundle_root = contract.bound_file(attempt_root, receipt["bundle"]).parent
+            capture_root = Path(task["execution"]["capture_root"])
+            row = {"task": task, "task_binding": dict(receipt["task"]), "attempt_root": attempt_root,
+                "bundle_root": bundle_root, "capture_root": capture_root}
+            # 原 FixturePatch 的来源验证器负责真实 fixture_only 总账及临时根。
+            adapter = ScopedMacFixtureAdapter({task["task_sha256"]: row})
+            adapter._require_task(task, capture_root)
+            previous = tasks.setdefault(task["task_sha256"], row)
+            if previous != row:
+                raise guard.GuardError("typed Mac 同一 task 存在不同的冻结坐标")
+    if not tasks:
+        yield
+        return
+    with FixturePatch(), mock.patch.dict(contract.SOURCE_ADAPTERS,
+            {client_fixture.RECORDER: ScopedMacFixtureAdapter(tasks)}):
+        yield
+
+
 def serve_guard(configuration: dict, context: dict, control_path: Path) -> None:
     """独立进程组持有真实 GuardEngine；动作强杀不会连带终止守卫。"""
 
     os.setsid()
-    identity = executor.guard_identity(configuration, context, formal=False)
-    engine = guard.GuardEngine(configuration, context, ControlledFileRuntime(configuration, context, control_path), identity)
     root = Path(context["data_root"])
-    key = guard.read_bytes(guard.check_binding(root, configuration["guard"]["channel_key_binding"]))
-    guard.serve(engine, root / configuration["guard"]["socket_relative"], key)
+    with fixture_mac_source_scope(configuration, root):
+        identity = executor.guard_identity(configuration, context, formal=False)
+        engine = guard.GuardEngine(configuration, context, ControlledFileRuntime(configuration, context, control_path), identity)
+        key = guard.read_bytes(guard.check_binding(root, configuration["guard"]["channel_key_binding"]))
+        guard.serve(engine, root / configuration["guard"]["socket_relative"], key)
 
 
 @contextlib.contextmanager
@@ -275,31 +384,39 @@ def source_scope(control_path: Path) -> Iterator[None]:
     control = _control(control_path)
     root = Path(control["context"]["data_root"])
     configuration = guard.read_json(guard.check_binding(root, control["context"]["configuration_ref"]))
-    reader = executor.create_executor(EXECUTOR_NAME, configuration, control["context"])
+    with fixture_mac_source_scope(configuration, root):
+        reader = executor.create_executor(EXECUTOR_NAME, configuration, control["context"])
 
-    def factory(name: str, observed: dict, context: dict) -> ControlledExecutor:
-        stable = {key: value for key, value in context.items() if key not in {"segment", "run_nonce"}}
-        expected = {key: value for key, value in control["context"].items() if key not in {"segment", "run_nonce"}}
-        if name != EXECUTOR_NAME or observed != configuration or stable != expected:
-            raise guard.GuardError("typed 回归 factory 被用于其他配置或世界")
-        return ControlledExecutor(observed, context, control_path)
+        def factory(name: str, observed: dict, context: dict) -> ControlledExecutor:
+            stable = {key: value for key, value in context.items() if key not in {"segment", "run_nonce"}}
+            expected = {key: value for key, value in control["context"].items() if key not in {"segment", "run_nonce"}}
+            if name != EXECUTOR_NAME or observed != configuration or stable != expected:
+                raise guard.GuardError("typed 回归 factory 被用于其他配置或世界")
+            return ControlledExecutor(observed, context, control_path)
 
-    def verify(store: Any, content: Any, origin: Any) -> execution.VerifiedSource:
-        if store.root.resolve() != (root / configuration["candidate"]["qualification"]["store_relative"]).resolve():
-            raise guard.GuardError("typed 来源被用于其他 Store")
-        return execution.VerifiedSource(**reader.verify_origin_evidence(content, origin))
+        def verify(store: Any, content: Any, origin: Any) -> execution.VerifiedSource:
+            if store.root.resolve() != (root / configuration["candidate"]["qualification"]["store_relative"]).resolve():
+                raise guard.GuardError("typed 来源被用于其他 Store")
+            return execution.VerifiedSource(**reader.verify_origin_evidence(content, origin))
 
-    with mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {EXECUTOR_NAME: factory}, clear=True), \
-            mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: verify}, clear=True):
-        yield
+        with mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {EXECUTOR_NAME: factory}, clear=True), \
+                mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: verify}, clear=True):
+            yield
 
 
 def install(control_path: str) -> None:
     """只供明示的测试子进程接缝；正式 CLI 没有这条入口。"""
 
+    if os.environ.get(supervisor.CAMPAIGN_RUN_ACTION_ID_ENV) not in {delivery.RUN_ACTION_ID, delivery.FINALIZE_ACTION_ID}:
+        raise guard.GuardError("typed 接缝仅允许两个明确的 VC-6 测试动作")
     stack = contextlib.ExitStack()
-    stack.enter_context(source_scope(Path(control_path)))
+    try:
+        stack.enter_context(source_scope(Path(control_path)))
+    except BaseException:
+        stack.close()
+        raise
     _STACKS.append(stack)
+    atexit.register(stack.close)
 
 
 USERCUSTOMIZE = f'''"""仅指定 VC-6 测试动作安装回归来源。"""
@@ -313,6 +430,8 @@ if os.environ.get("{supervisor.CAMPAIGN_RUN_ACTION_ID_ENV}") in os.environ.get("
 
 
 def subprocess_environment(inject_dir: Path, control_path: Path, actions: list[str]) -> dict[str, str]:
+    if not actions or any(action not in {delivery.RUN_ACTION_ID, delivery.FINALIZE_ACTION_ID} for action in actions):
+        raise ValueError("typed 注入只允许两个明确的 VC-6 测试动作")
     guard.private_directory(inject_dir)
     (inject_dir / "usercustomize.py").write_text(USERCUSTOMIZE, encoding="utf-8")
     return {"PYTHONPATH": str(inject_dir), SEAM_CONTROL_ENV: str(control_path),
@@ -352,6 +471,12 @@ def _fixture_qualification_gate_root(store: Any, qualification: dict, data_root:
 
 
 def prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path) -> dict:
+    """本轮 Mac 原 reader 的 authority 延续到来源准备和完整导入结束。"""
+    with fixture_mac_source_scope(configuration, data_root):
+        return _prepare_fixture_qualification_materials(store, configuration, data_root, gate_root=gate_root)
+
+
+def _prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path) -> dict:
     """只在显式本机夹具布局里取得来源；正式 registry 与身份均保持关闭。"""
     from tools.official_client_control import receipts
     from tools.official_client_control.store import ControlStore

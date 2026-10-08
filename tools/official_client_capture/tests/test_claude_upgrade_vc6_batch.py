@@ -34,8 +34,12 @@ accept 三批到 VC-5 checkpoint），之后全部以 ``compile-and-run-vc-batch
 
 from __future__ import annotations
 
+import copy
 import os
 import site
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Mapping
@@ -174,6 +178,164 @@ class CandidatePostRunCodexParityTests(unittest.TestCase):
         self.assertFalse(claude.candidate_post_run_extra_action(None, run))
         # 交付动作项名不进 post-run-tooling 五判据的共享闭集（只走 execution-failure 的残余恢复路径）。
         self.assertFalse(supervisor._post_run_tooling_item_allowed(delivery.RUN_ACTION_ID))
+
+
+class TypedMacFixtureAuthorityTests(unittest.TestCase):
+    """不建 VC-5 整链；完整 Mac v2 reader 核临时 authority 的准确边界。"""
+
+    def setUp(self) -> None:
+        from tools.official_client_capture import claude_client_receipt_contract as contract
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
+        from tools.official_client_capture.tests import claude_mac_v2_fixture as mac_fixture
+        from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
+        from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
+
+        directory = tempfile.TemporaryDirectory(prefix="typed-mac-scope-")
+        self.addCleanup(directory.cleanup)
+        self.data = Path(directory.name).resolve() / "staging/data"
+        self.contract, self.guard = contract, guard
+        self.configuration, self.context, _environment = fixture_world(self.data)
+        q = self.configuration["candidate"]["qualification"]
+        self.campaign = self.data / "evidence/campaigns" / q["campaign_id"]
+        client_fixture.write(self.campaign / "campaign.json", {"campaign_id": q["campaign_id"], "client": "claude"})
+        self.attempt = self.campaign / "candidates" / q["candidate_id"] / "attempts/first"
+        values = {"campaign_id": q["campaign_id"], "candidate_id": q["candidate_id"],
+            "attempt_id": "first", "run_nonce": "mac-fixture-run"}
+        self.receipts = {}
+        with mock.patch.dict(os.environ, {FIXTURE_ONLY_ENV: "1"}), mac_fixture.FixturePatch():
+            for client_id in sorted(contract.CLIENTS):
+                self.receipts[client_id] = mac_fixture.write_receipt(self.attempt, client_id, values)
+        self.round_path = self.campaign / "candidates" / q["candidate_id"] / "result.json"
+        client_fixture.write(self.round_path, {"campaign_id": q["campaign_id"], "candidate_id": q["candidate_id"],
+            "attempt": {key: contract.binding(self.attempt / "attempt.json", self.campaign)[key] for key in ("path", "sha256")},
+            "client_evidence": {"client_bindings": {client_id: {key: contract.binding(path, self.campaign)[key] for key in ("path", "sha256")}
+                for client_id, path in self.receipts.items()}}})
+        parent = client_fixture.write(self.campaign / "acceptance" / q["candidate_id"] / "result.json",
+            {"campaign_id": q["campaign_id"], "candidate_id": q["candidate_id"], "external_gate": {}})
+        q["sealed_result_binding"] = guard.binding(self.data, parent)
+        self.recorder = client_fixture.RECORDER
+        first = contract.read_json(self.receipts["claude-desktop"])
+        self.task = contract.validate_task(contract.read_json(contract.bound_file(self.attempt, first["task"])))
+        self.capture_root = Path(self.task["execution"]["capture_root"])
+        self.bundle_root = contract.bound_file(self.attempt, first["bundle"]).parent
+        self.before_adapters = dict(contract.SOURCE_ADAPTERS)
+        self.before_wrapper = claude_upgrade.verify_mac_source_v2
+
+    def assert_restored(self) -> None:
+        self.assertEqual(self.contract.SOURCE_ADAPTERS, self.before_adapters)
+        self.assertIs(claude_upgrade.verify_mac_source_v2, self.before_wrapper)
+
+    def test_original_reader_replays_both_clients_after_initial_fixture_scope_ended(self) -> None:
+        self.assert_restored()
+        with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+            for client_id, path in self.receipts.items():
+                verified = self.contract.verify_client_receipt(self.attempt, client_id, path)
+                self.assertEqual(verified["status"], "verified")
+                self.assertEqual(verified, self.contract.read_json(path)["verification"])
+            adapter = self.contract.SOURCE_ADAPTERS[self.recorder]
+            self.assertFalse(adapter.owns_services(type("Service", (), {"fixture_only": True})()))
+            self.assertFalse(adapter.owns_recorder(type("Recorder", (), {"fixture_only": True})()))
+        self.assert_restored()
+
+    def test_changed_task_client_candidate_or_nonce_has_no_authority(self) -> None:
+        with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+            adapter = self.contract.SOURCE_ADAPTERS[self.recorder]
+            for field, value in (("client_id", "claude-vscode"), ("candidate_id", "another-candidate"),
+                    ("campaign_id", "another-campaign"), ("task_nonce", "another-task")):
+                with self.subTest(field=field):
+                    foreign = copy.deepcopy(self.task)
+                    foreign[field] = value
+                    foreign["task_sha256"] = self.contract.digest({key: item for key, item in foreign.items() if key != "task_sha256"})
+                    with self.assertRaisesRegex(self.guard.GuardError, "准确 task"):
+                        adapter.verify_capture_origin(foreign, self.capture_root)
+            with self.assertRaisesRegex(self.guard.GuardError, "准确 task"):
+                adapter.verify_capture_origin(self.task, self.capture_root.parent)
+            with self.assertRaisesRegex(self.guard.GuardError, "冻结原包"):
+                adapter.verify_origin(self.task, self.bundle_root.parent, self.capture_root)
+        self.assert_restored()
+
+    def test_task_original_byte_drift_is_rejected_during_registered_scope(self) -> None:
+        receipt = self.contract.read_json(self.receipts["claude-desktop"])
+        task_path = self.contract.bound_file(self.attempt, receipt["task"])
+        with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+            task_path.write_bytes(task_path.read_bytes() + b" ")
+            with self.assertRaisesRegex(self.contract.ConfigurationError, "摘要或字节数漂移"):
+                self.contract.SOURCE_ADAPTERS[self.recorder].verify_capture_origin(self.task, self.capture_root)
+        self.assert_restored()
+
+    def test_source_origin_drift_is_rejected_by_original_adapter(self) -> None:
+        with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+            origin = self.contract.read_json(self.bundle_root / "source-origin.json")
+            proof = self.contract.bound_file(self.bundle_root, origin["attestation"])
+            proof.write_bytes(b'{"fixture_only": false}\n')
+            with self.assertRaises(self.contract.ConfigurationError):
+                self.contract.verify_client_receipt(self.attempt, "claude-desktop", self.receipts["claude-desktop"])
+        self.assert_restored()
+
+    def test_nonfixture_ledger_cannot_acquire_mac_authority(self) -> None:
+        from tools.official_client_capture import codex_upgrade_project_ledger as ledger
+        root = Path(self.task["execution"]["project_ledger"])
+        plan, _raw = ledger._load_plan(root)
+        plan["fixture_only"] = False
+        with mock.patch.object(ledger, "_load_plan", return_value=(plan, b"")):
+            with self.assertRaisesRegex(self.contract.ConfigurationError, "fixture_only"):
+                with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+                    self.fail("真实账本不能获得测试 authority")
+        self.assert_restored()
+
+    def test_exception_restores_preexisting_registry_and_wrapper(self) -> None:
+        sentinel = object()
+        with mock.patch.dict(self.contract.SOURCE_ADAPTERS, {self.recorder: sentinel, "other-recorder": sentinel}):
+            before = dict(self.contract.SOURCE_ADAPTERS)
+            with self.assertRaisesRegex(RuntimeError, "测试中断"):
+                with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+                    raise RuntimeError("测试中断")
+            self.assertEqual(self.contract.SOURCE_ADAPTERS, before)
+        self.assert_restored()
+
+    def test_formal_configuration_and_unrelated_action_refuse_before_registration(self) -> None:
+        formal = dict(self.configuration, source_scope="formal")
+        with self.assertRaisesRegex(self.guard.GuardError, "回归配置"):
+            with vc6_fixture.fixture_mac_source_scope(formal, self.data):
+                self.fail("正式配置不能获得 Mac 测试 authority")
+        with mock.patch.dict(os.environ, {supervisor.CAMPAIGN_RUN_ACTION_ID_ENV: "mac-client-run"}):
+            with self.assertRaisesRegex(self.guard.GuardError, "两个明确"):
+                vc6_fixture.install(str(self.data / "unused-control.json"))
+        with self.assertRaisesRegex(ValueError, "两个明确"):
+            vc6_fixture.subprocess_environment(self.data / "unused-inject", self.data / "unused-control.json", ["mac-client-run"])
+        self.assertFalse((self.data / "unused-inject").exists())
+        self.assert_restored()
+
+    def test_fresh_action_process_replays_original_mac_reader_and_restores_scope(self) -> None:
+        payload = self.data / "mac-scope-input.json"
+        self.guard.write_json_once(payload, {"configuration": self.configuration, "data_root": str(self.data),
+            "attempt_root": str(self.attempt), "receipts": {key: str(path) for key, path in self.receipts.items()}})
+        script = r'''
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from tools.official_client_capture.tests import claude_typed_vc6_fixture as fixture
+from tools.official_client_capture import claude_client_receipt_contract as contract
+from tools.official_client_capture import claude_upgrade
+value = json.loads(Path(sys.argv[2]).read_bytes())
+before = dict(contract.SOURCE_ADAPTERS)
+wrapper = claude_upgrade.verify_mac_source_v2
+with fixture.fixture_mac_source_scope(value["configuration"], Path(value["data_root"])):
+    for client_id, path in value["receipts"].items():
+        verified = contract.verify_client_receipt(Path(value["attempt_root"]), client_id, Path(path))
+        assert verified == contract.read_json(Path(path))["verification"]
+assert contract.SOURCE_ADAPTERS == before
+assert claude_upgrade.verify_mac_source_v2 is wrapper
+print("原 Mac v2 读取器在新进程中重放两客户端，退出恢复登记")
+'''
+        environment = dict(os.environ, **{supervisor.CAMPAIGN_RUN_ACTION_ID_ENV: delivery.RUN_ACTION_ID})
+        result = subprocess.run([sys.executable, "-I", "-B", "-S", "-c", script,
+            str(vc6_fixture.REPOSITORY_ROOT), str(payload)], env=environment,
+            capture_output=True, text=True, check=False, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("退出恢复登记", result.stdout)
+        self.assert_restored()
 
 
 @unittest.skipUnless(site.ENABLE_USER_SITE, "VC-5／VC-6 动作子进程里的接缝经 usercustomize 注入，要求启用用户 site")
