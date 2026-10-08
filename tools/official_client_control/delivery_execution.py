@@ -507,7 +507,13 @@ def _replay_qualification_subgraph(store: Any, qualification: Mapping[str, Any],
     external_root = None
     if source.trusted_data_root is not None:
         from .canonical import resolve_relative
-        external_root = resolve_relative(source.trusted_data_root, qualification["external_root_relative"])
+        relative = qualification["external_root_relative"]
+        # 此字段定位已由受管来源确认的资格材料根；原根用精确的 "." 表示。
+        # 文件绑定仍经原规范相对路径校验，不把根坐标例外扩展给任何原件路径。
+        external_root = (Path(source.trusted_data_root).resolve()
+                         if relative == "." else resolve_relative(source.trusted_data_root, relative))
+        if not external_root.is_dir():
+            raise ControlError("可信回退资格材料根不是现存目录")
     seen: set[tuple[str, str]] = set()
     reachable_facts: dict[str, dict[str, Any]] = {}
     while pending:

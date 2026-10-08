@@ -215,6 +215,25 @@ class RollbackQualificationTests(unittest.TestCase):
         with mock.patch.object(self.fixture.store, "replay", side_effect=AssertionError("禁止反向执行整个交付图")):
             self.verify()
 
+    def test_qualification_can_bind_the_trusted_external_root_itself(self):
+        qualification = deepcopy(self.qualification)
+        qualification["external_root_relative"] = "."
+        source = execution.VerifiedSource(SHA, SHA, self.source.bytes_by_path, SHA,
+                                          "guard-1", self.fixture.external_root)
+        # 使用同一真实 Store／资格子图和原件；不复制材料，也不跳过子图语义重放。
+        self.verify(qualification=qualification, source=source)
+
+    def test_root_coordinate_exception_does_not_allow_file_or_traversal_paths(self):
+        from tools.official_client_control.canonical import resolve_relative
+
+        with self.assertRaises(ControlError):
+            resolve_relative(self.fixture.external_root, ".")
+        for relative in ("", "./", "external/..", "../external", "/external"):
+            qualification = deepcopy(self.qualification)
+            qualification["external_root_relative"] = relative
+            with self.subTest(relative=relative), self.assertRaises(ControlError):
+                self.verify(qualification=qualification)
+
     def test_wrong_build_evidence_package_and_validation_are_rejected(self):
         for field, reference in (("build_receipt_ref", {"receipt_kind": "candidate_build", "sha256": "c" * 64}), ("evidence_package_ref", {"object_kind": "candidate_evidence_package", "sha256": "c" * 64}), ("acceptance_ref", self.qualification["validation_ref"])):
             with self.subTest(field=field):
