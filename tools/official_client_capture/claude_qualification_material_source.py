@@ -773,6 +773,38 @@ def _prove_frozen_active_derivation(store: Any, external: Path, campaign: Path,
         project_parent(path, campaign)
 
 
+def _retain_candidate_evaluation_draft(
+    campaign: Path, manifest: Mapping[str, Any], round_one: Mapping[str, Any], data_root: Path, *,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> None:
+    """归档原读者验真的 seal 草稿；只转换两项已验真评估输入的坐标。
+
+    草稿整体保持数据根坐标，只有原候选评估读者承认的两个 drafts 字段
+    使用冻结 Campaign 根。其它标准绑定仍由严格闭包实读，不能借文件名、
+    schema 或相同摘要取得转换权限。没有草稿引用的旧阶段不新增投影。
+    """
+    from . import claude_upgrade_compare as compare
+
+    seal = round_one.get("seal")
+    draft_binding = seal.get("seal_draft") if isinstance(seal, Mapping) else None
+    if draft_binding is None:
+        return
+    source = compare.candidate_evaluation_source(campaign, manifest, round_one)
+    draft_path = compare._bound_campaign_file(campaign, draft_binding, "来源候选 seal 草稿")
+    # 先沿原绑定摘要保留字节，再登记投影；project_parent 的同坐标冲突
+    # 检查负责拒绝这两次读取之间的漂移，不给新的首次读取结果背书。
+    draft = parse_json_bytes(retain(draft_path, draft_binding["sha256"]))
+    coordinates = []
+    for name in ("capture_manifest", "capture_index"):
+        binding = draft["drafts"][name]
+        if any(binding[key] != source[name][key] for key in ("path", "sha256")):
+            raise ControlError("候选评估草稿与原读者验真的精确输入不同源")
+        path = compare._bound_campaign_file(campaign, binding, "来源候选评估输入 " + name)
+        retain(path, binding["sha256"])
+        coordinates.append((("drafts", name), campaign))
+    project_parent(draft_path, data_root, coordinate_roots=tuple(coordinates))
+
+
 def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], data_root: Path,
                                parent: Mapping[str, Any], *, read_bindings: list[dict[str, Any]] | None = None,
                                read_projections: list[VerifiedQualificationSubjectProjection] | None = None) -> dict[str, Any]:
@@ -953,6 +985,8 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
     # 纯 subject 推导沿原 reader 核身份；只有消费端请求归档读集时，
     # 才要求三根原件能在已有数据根内闭合。缺受管外根合同仍失败关闭。
     if read_bindings is not None or read_projections is not None:
+        _retain_candidate_evaluation_draft(campaign, manifest, round_one, data_root,
+            retain=retain, project_parent=project_parent)
         # 原首轮 reader 已完整重验两种 Mac 客户端；其主收据、来源包和
         # 捕获原件采用三个不同根。只沿已验真的精确字段转坐标，普通 JSON
         # 仍严格展开，不能把 verification 的摘要当作真实附件的替代品。
