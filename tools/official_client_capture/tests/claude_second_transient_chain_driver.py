@@ -124,7 +124,11 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
             ar1_reservation = json.loads((ar1_root / "reservation.json").read_bytes())
             reservation = json.loads((segment / "reservation.json").read_bytes())
             self.assertEqual(len({original["run_nonce"], ar1_reservation["run_nonce"], reservation["run_nonce"]}), 3)
-            self.assertNotEqual(ar1_reservation["identity_sha256"], reservation["identity_sha256"])
+            # identity_sha256 是同一个候选的身份；段的独立绑定来自基线、裁定与预约摘要。
+            self.assertEqual(ar1_reservation["identity_sha256"], reservation["identity_sha256"])
+            for field in ("reservation_digest", "baseline_commit_sha256", "recovery_sha256"):
+                self.assertNotEqual(ar1_reservation[field], reservation[field])
+            self.assertEqual((reservation["evaluation_baseline"], reservation["recovery_revision"]), (2, "ar2"))
             self.assertEqual([row["id"] for row in summary["results"]], [first_chain.FAILED_JOB])
             self.assertTrue(all("-recovery-ar2" in root for row in summary["results"] for root in row["evidence_roots"]))
             new_calls = self.runtime.candidate_calls()[before_calls:]
@@ -153,8 +157,8 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
             self.assertEqual(code, 0, stderr)
             self.assertIsNotNone(account, stderr)
             keys = [key for key in ledger.replay_head(self.project_root)["operations"] if key.startswith("account-sealed-candidate:")]
-            self.assertTrue(any("ar1" in key for key in keys))
-            self.assertTrue(any("ar2" in key for key in keys))
+            self.assertIn(f"account-sealed-candidate:{first_chain.CANDIDATE}:{attempt_id}:ar1", keys)
+            self.assertIn(f"account-sealed-candidate:{first_chain.CANDIDATE}:{attempt_id}:ar2", keys)
             receipt = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
             self.assertEqual(receipt["status"], "complete")
             probes = [probe for row in summary["results"] for root in row["evidence_roots"]
