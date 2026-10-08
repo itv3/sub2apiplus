@@ -117,6 +117,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import signal
 import stat
 import subprocess
@@ -135,6 +136,9 @@ from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_capture as capture
 from tools.official_client_capture import claude_upgrade_vc
 from tools.official_client_capture import codex_upgrade_evidence_permissions
+from tools.official_client_capture import codex_upgrade_project_ledger
+from tools.official_client_capture import codex_upgrade_timing_ledger
+from tools.official_client_capture import codex_upgrade_vc_artifacts
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_wire_transition
@@ -1465,6 +1469,127 @@ def _candidate_status(
     }
 
 
+def _failed_evaluation_status(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    revision: int,
+    baseline: int,
+) -> tuple[str, str, None] | None:
+    """只读核对当前断言失败的续跑入口；文件名存在不能证明可以开新评估基线。
+
+    当前索引必须有合法自摘要和完整候选坐标，失败父 run 必须属于同一 VC-5 批次的正式 COMMIT。
+    复用 apply 的对账验证器核对项目总账与计时账本；停止收据、动作输出绑定和当前索引摘要闭合后，
+    才提示 evaluation-recover preview。旧基线、已成功索引和未产出索引继续走原阶段提示；
+    无输出锚点时先逐字重派原批次，任何已存在的绑定损坏都交审计，不派生或改写历史索引。
+    """
+
+    index_path = claude_upgrade._assertions_root_for_baseline(campaign_dir, candidate_id, baseline) / claude_upgrade.EVALUATION_RUN_FILENAME
+    if not (index_path.exists() or index_path.is_symlink()):
+        return None
+    prefix = 'python3 -m tools.official_client_capture.claude_upgrade'
+    campaign_arg = shlex.quote(str(campaign_dir))
+    candidate_arg = shlex.quote(candidate_id)
+    try:
+        claude_upgrade._reject_symlink_components(index_path, campaign_dir, '当前评估索引')
+        index = codex_upgrade_vc_artifacts.validate_evaluation_run(claude_upgrade._read_json(index_path, '当前 evaluation-run'))
+        if (index['campaign_id'], index['candidate_id'], index['candidate_revision'], index['evaluation_baseline']) != (
+            manifest['campaign_id'], candidate_id, revision, baseline
+        ):
+            raise ConfigurationError('当前 evaluation-run 的 Campaign、候选、revision 或基线身份不一致。')
+        if not any(row['status'] == 'fail' for row in index['rules']):
+            return None
+        failed = claude_upgrade._locate_evaluation_failed_run(campaign_dir, manifest, candidate_id, revision, baseline)
+        if failed['action_kind'] != 'assertion':
+            raise ConfigurationError('当前失败索引没有对应的断言 builder 失败父 run。')
+        run_dir = Path(failed['run_dir'])
+        state = codex_upgrade_supervisor._read_state(run_dir)
+        if codex_upgrade_supervisor.classify_prepared_run(run_dir, state) != 'committed':
+            raise ConfigurationError('失败父 run 没有属于自身的正式 COMMIT。')
+        sequence = int(failed['batch_sequence'])
+        control = campaign_dir / 'control' / 'vc'
+        commit = claude_upgrade._read_staging_commit(control / 'commits' / f'{sequence:04d}-vc-5.json')
+        batch_path = control / 'batches' / f'{sequence:04d}-vc-5.json'
+        claude_upgrade._reject_symlink_components(batch_path, campaign_dir, '失败 VC-5 批次')
+        batch = codex_upgrade_vc_artifacts.validate_vc_batch(claude_upgrade._read_json(batch_path, '失败 VC-5 批次'))
+        inner = failed['inner_manifest']
+        expected_inner = codex_upgrade_supervisor.build_batched_campaign_run_manifest_payload(
+            **claude_upgrade_vc._vc_run_manifest_arguments(batch, batch_model='staging')
+        )
+        record = claude_upgrade._read_json(run_dir / 'campaign-run-manifest.json', '失败父 run 清单')
+        expected = (manifest['campaign_id'], candidate_id, revision, baseline, sequence, 'VC-5')
+        if (batch['campaign_id'], batch['candidate_id'], batch['candidate_revision'], int(batch['evaluation_baseline'] or 0), batch['sequence'], batch['phase']) != expected or (
+            inner.get('campaign_id'), inner.get('candidate_id'), inner.get('candidate_revision'), int(inner.get('evaluation_baseline') or 0),
+            inner.get('batch_sequence'), inner.get('phase')
+        ) != expected:
+            raise ConfigurationError('失败批次与父 run 的当前评估坐标不一致。')
+        manifest_sha = codex_upgrade_supervisor._sha256(codex_upgrade_supervisor._canonical(inner))
+        if (commit['batch_sha256'] != batch['batch_sha256'] or batch['batch_sha256'] != failed['batch_sha256']
+                or commit['manifest_sha256'] != manifest_sha or record.get('manifest_sha256') != manifest_sha
+                or record.get('manifest') != inner or inner != expected_inner
+                or index['evaluator'] != batch['evaluator_digests']):
+            raise ConfigurationError('失败批次、COMMIT、父 run 清单或 evaluator 摘要不闭合。')
+        stop = codex_upgrade_supervisor.read_stop_receipt(run_dir)
+        if (stop['campaign_id'], stop['phase'], stop['owner_pid'], stop['owner_nonce']) != (
+            manifest['campaign_id'], 'VC-5', state['owner_pid'], state['owner_nonce']
+        ):
+            raise ConfigurationError('停止收据不属于当前失败父 run。')
+    except (ConfigurationError, codex_upgrade_supervisor.SupervisorError, codex_upgrade_vc_artifacts.VCArtifactError,
+            OSError, ValueError, TypeError, KeyError) as error:
+        return 'evaluation_state_inconsistent', f'人工审计当前 VC-5 失败事实：{error}', None
+
+    reconcile_command = f'{prefix} reconcile-supervisor-run --campaign-dir {campaign_arg} --run-dir {shlex.quote(str(run_dir))}'
+    try:
+        ledger_dir = claude_upgrade._campaign_timing_ledger_dir(campaign_dir, manifest)
+        project_root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir, client=CLIENT)
+        if project_root is None:
+            raise ConfigurationError('当前失败父 run 没有 Claude 项目总账绑定。')
+        head = codex_upgrade_project_ledger.replay_head(project_root)
+        reconciled = claude_upgrade._verify_failed_run_reconciled(campaign_dir, manifest, ledger_dir, failed, head=head)
+        # 总账绑定的是 Campaign 原件；计时副本经重新序列化，按实际绑定摘要重验后比较 JSON 事实。
+        codex_upgrade_timing_ledger.inspect_ledger(ledger_dir, project_ledger_optional=True)
+        passes = [event for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
+            if event.get('event_id') == f"reconcile-run-passed-{failed['run_id']}"]
+        if len(passes) != 1:
+            raise ConfigurationError('当前失败 run 的计时对账事件不唯一。')
+        passed = passes[0]
+        receipt = next((row for row in passed.get('receipts', []) if row.get('role') == 'reconciliation'), None)
+        if passed.get('phase') != 'VC-5' or receipt is None:
+            raise ConfigurationError('计时账本的对账通过事件没有绑定当前失败 run 的对账收据。')
+        codex_upgrade_timing_ledger._validate_binding(ledger_dir, receipt, '当前失败 run 的计时对账收据')
+        original_path = campaign_dir / 'control' / 'reconciliation' / f"run-{failed['run_id']}" / 'supervisor-run-reconciliation.json'
+        original = claude_upgrade._read_json(original_path, '当前失败 run 的 Campaign 对账收据')
+        if (file_sha256(original_path) != reconciled['receipt_sha256']
+                or claude_upgrade._read_json(ledger_dir / receipt['path'], '当前失败 run 的计时对账副本') != original):
+            raise ConfigurationError('计时对账副本与项目总账已绑定的对账原件事实不同。')
+    except (ConfigurationError, codex_upgrade_project_ledger.ProjectLedgerError,
+            codex_upgrade_timing_ledger.TimingLedgerError, OSError, ValueError, TypeError, KeyError) as error:
+        return 'evaluation_reconciliation_required', f'失败评估的对账尚未收口：{error}；{reconcile_command}', None
+
+    try:
+        if stop['action_outputs_sha256'] is None:
+            return 'evaluation_binding_required', (
+                f'VC-5：compile-and-run-vc-batch --phase VC-5 同基线 b{baseline} 逐字重派失败断言批次，'
+                '补齐动作输出锚点后再按状态提示恢复'
+            ), None
+        orphan = codex_upgrade_supervisor.evaluation_orphan_facts(run_dir, state, inner)
+        if not orphan['complete'] or orphan['binding_mismatch'] or orphan['action_id'] != failed['action_id'] or (
+            orphan['action_outputs_sha256'] != stop['action_outputs_sha256']
+        ):
+            raise ConfigurationError('停止收据与失败动作的输出锚点不闭合。')
+        outputs = codex_upgrade_supervisor.read_action_output_binding(run_dir, failed['action_id'])
+        bound = next((row for row in outputs['bindings'] if row['path'] == index_path.relative_to(campaign_dir).as_posix()), None)
+        if (outputs['campaign_id'] != manifest['campaign_id'] or outputs['phase'] != 'VC-5'
+                or bound is None or bound['exists'] is not True or bound['sha256'] != file_sha256(index_path)):
+            raise ConfigurationError('当前 evaluation-run 没有被失败动作的真实输出摘要绑定。')
+    except (ConfigurationError, codex_upgrade_supervisor.SupervisorError, OSError, ValueError, TypeError, KeyError) as error:
+        return 'evaluation_state_inconsistent', f'人工审计当前 VC-5 失败结果绑定：{error}', None
+    return 'evaluation_failed', (
+        f'VC-5：{prefix} evaluation-recover preview --campaign-dir {campaign_arg} --candidate-id {candidate_arg} '
+        '--reviewer <审核人>；按当前诊断分类并批准局部恢复'
+    ), None
+
+
 def _evaluation_and_delivery_status(
     campaign_dir: Path, manifest: Mapping[str, Any], candidate_id: str
 ) -> tuple[str, str, dict[str, Any] | None]:
@@ -1472,6 +1597,7 @@ def _evaluation_and_delivery_status(
 
     比较收据与 accept 阶段结果按当前评估基线的读来源判断是否已写（与 ``_load_stage_result`` 同一坐标）；accept 结果与
     VC-5 checkpoint 都在才算 VC-5 完成（accept 先写结果再写 checkpoint，只有结果是被打断的半成品，重派 accept 批次收敛）。
+    当前断言失败先按正式批次、动作输出与对账绑定给出局部恢复入口，未对账只提示对账。
     VC-5 完成之后交给 ``claude_upgrade_delivery.delivery_status``（入口重放、Store 交付链与交付阶段结果）；它失败关闭时报
     ``delivery_state_inconsistent`` 并原样给出原因，交人工审计。
     """
@@ -1487,6 +1613,10 @@ def _evaluation_and_delivery_status(
         return "candidate_sealed", f"VC-5：{vc5_batch} 派 compare 批次（compare --candidate-id {candidate_id}）", None
     accepted = claude_upgrade._stage_path(campaign_dir, "accept", candidate_id)[1]
     revision, _record = claude_upgrade._require_candidate_revision(campaign_dir, manifest, action="status")
+    baseline, _commit = claude_upgrade._current_evaluation_baseline(campaign_dir, candidate_id)
+    failure_status = _failed_evaluation_status(campaign_dir, manifest, candidate_id, revision, baseline)
+    if failure_status is not None:
+        return failure_status
     checkpoint = claude_upgrade_vc.vc_checkpoint_path(campaign_dir, "VC-5", revision=revision)
     if not (accepted.is_file() and checkpoint.is_file()):
         return (
