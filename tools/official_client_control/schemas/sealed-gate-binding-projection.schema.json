@@ -1,6 +1,7 @@
 {
   "$id": "official-client-sealed-gate-binding-projection/v1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "封存门禁原件绑定与第二根投影",
   "additionalProperties": false,
   "description": "本文件给出闭合数据形状；实际来源授权、同源链、根映射、字节与真实重放由同名 Python 纯校验器验证。",
   "properties": {
