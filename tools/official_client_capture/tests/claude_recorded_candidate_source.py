@@ -99,7 +99,7 @@ def _candidate_manifest(state: Mapping[str, Any], projection: Mapping[str, Any],
     return manifest
 
 
-def copy_registered(state_path: Path, digest: str, projection_path: Path, projection_digest: str) -> None:
+def copy_registered(state_path: Path, digest: str, projection_path: Path, projection_digest: str) -> int:
     """监督器的真实动作体：原件保持不变，候选投影和逐文件来源绑定只写一次。"""
 
     from tools.official_client_capture import claude_upgrade_evidence as evidence
@@ -110,6 +110,7 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
         raise replay.ReplayError("候选投影的外持摘要漂移")
     projection = source.read(projection_path)
     origin = verify_candidate_projection(state, projection)
+    source.recovery_control(state)
     index, row = origin["index"], origin["row"]
     destination = Path(projection["output_root"])
     if destination.exists() or destination.is_symlink():
@@ -130,12 +131,13 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
             raise replay.ReplayError("候选来源 R/P 或原始 relay 附件字节漂移")
         files.append({"original_relative": relative, "copied": source.binding(target)})
     manifest = source.write(destination / "relay-manifest.json", _candidate_manifest(state, projection, origin))
+    return_code, decision = source.record_candidate_action(state, projection)
     candidate = projection["candidate"]
     restoration = source.write(destination.parent / evidence.CANDIDATE_RESTORATION_DIRNAME / (projection["probe_id"] + ".json"), {
-        "schema_version": evidence.CANDIDATE_RESTORATION_SCHEMA, "status": "complete",
+        "schema_version": evidence.CANDIDATE_RESTORATION_SCHEMA, "status": "capture_failed" if return_code else "complete",
         "run_id": candidate["run_id"], "probe_id": candidate["probe_id"], "account_id": candidate["account_id"],
         "api_key_id": candidate["api_key_id"], "trigger": candidate["trigger"], "relay_port": candidate["relay_port"],
-        "capture_exit_code": 0, "runtime_secrets_removed": True,
+        "capture_exit_code": return_code, "runtime_secrets_removed": True,
         **{key: True for key in evidence.CANDIDATE_RESTORATION_EQUALITIES},
     })
     trigger = None
@@ -150,7 +152,9 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
         "projection": source.binding(projection_path), "runtime": projection["runtime"], "origin": projection["origin"],
         "files": files, "candidate_manifest": source.binding(manifest), "restoration": source.binding(restoration),
         "gateway_trigger": source.binding(trigger) if trigger else None, "formal_version_semantics_certified": False,
+        **({"recovery_action": decision} if decision is not None else {}),
     })
+    return return_code
 
 
 class SourceAdapter(source.SourceAdapter):
@@ -221,7 +225,7 @@ class SourceAdapter(source.SourceAdapter):
         verify_candidate_projection(self.state, source.read(path))
         script = ("import sys;sys.path.insert(0,sys.argv[1]);from pathlib import Path;"
                   "from tools.official_client_capture.tests.claude_recorded_candidate_source import copy_registered;"
-                  "copy_registered(Path(sys.argv[2]),sys.argv[3],Path(sys.argv[4]),sys.argv[5])")
+                  "raise SystemExit(copy_registered(Path(sys.argv[2]),sys.argv[3],Path(sys.argv[4]),sys.argv[5]))")
         command = [sys.executable, "-S", "-c", script, str(Path(__file__).resolve().parents[3]),
                    str(self.path), self.digest, str(path), digest]
         return original(client, command, operation=operation, **options)

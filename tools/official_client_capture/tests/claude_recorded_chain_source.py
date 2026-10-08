@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import platform
@@ -29,6 +30,7 @@ ORIGIN_FREEZE_SHA256 = "947ea92b56bc85b0fc87cc2ef196b627a846c35b925b47fa9730c01a
 STATE_ENV = "CLAUDE_VC1_RECORDED_SOURCE"
 DIGEST_ENV = "CLAUDE_VC1_RECORDED_SOURCE_SHA256"
 OPERATION = re.compile(r"(?:synthetic-job|job):([a-z0-9-]+):step-([1-9][0-9]*):attempt-([1-9][0-9]*)\Z")
+RECOVERY_CONTROL_SCHEMA = "claude-recorded-candidate-recovery-control/v1"
 
 
 def read(path: Path) -> dict[str, Any]:
@@ -227,6 +229,98 @@ def snapshot_index(state: Mapping[str, Any]) -> dict[str, Any]:
     if index.get("purpose") != "regression_fixture" or index.get("target_version") != VERSION:
         raise replay.ReplayError("快照身份不符")
     return {**index, "root": str(path.parent / "data")}
+
+
+def recovery_control(state: Mapping[str, Any]) -> tuple[Path, dict[str, Any]] | None:
+    """录制候选故障只能来自冻结的私有控制合同，不能由未登记的环境变量注入。"""
+
+    binding = state.get("inputs", {}).get("candidate_recovery_control")
+    if binding is None:
+        return None
+    data = Path(state["data_root"])
+    path = bound(binding, root=data / "control")
+    control = read(path)
+    wanted = {"schema_version", "fixture_only", "purpose", "control_root", "allowed_failure_probe_ids"}
+    probes = control.get("allowed_failure_probe_ids")
+    registered = {probe for items in state["inputs"]["candidate_jobs"].values() for probe in items}
+    if (set(control) != wanted or control.get("schema_version") != RECOVERY_CONTROL_SCHEMA
+            or control.get("fixture_only") is not True or control.get("purpose") != "regression_fixture"
+            or not isinstance(probes, list) or not probes
+            or any(not isinstance(probe, str) or probe not in registered for probe in probes)
+            or len(probes) != len(set(probes)) or not isinstance(control.get("control_root"), str)):
+        raise replay.ReplayError("候选恢复控制合同或故障 probe 白名单非法")
+    root = Path(control["control_root"])
+    if root != data / "control/candidate-recovery" or root.resolve() != root:
+        raise replay.ReplayError("候选恢复控制根越界或带链接")
+    replay._regular(root, data / "control", directory=True)
+    if root.stat().st_mode & 0o077:
+        raise replay.ReplayError("候选恢复控制根必须私有")
+    failures = root / "failures.json"
+    replay._regular(failures, root)
+    if failures.stat().st_mode & 0o077:
+        raise replay.ReplayError("候选故障表必须私有")
+    limits = read(failures)
+    if (not set(limits).issubset(probes)
+            or any(type(limit) is not int or limit < 0 for limit in limits.values())):
+        raise replay.ReplayError("候选故障表超出冻结白名单或次数非法")
+    return path, control
+
+
+def record_candidate_action(state: Mapping[str, Any], projection: Mapping[str, Any]) -> tuple[int, dict[str, Any] | None]:
+    """原始附件复制完成后，记录真实复制动作并决定一次性退出故障；不修改 R/P 或历史来源。"""
+
+    configured = recovery_control(state)
+    if configured is None:
+        return 0, None
+    import fcntl
+    path, control = configured
+    root, probe = Path(control["control_root"]), projection["probe_id"]
+    # 同一世界的作业可能并发；独立锁保护计数与日志，每个 operation 的决策只发布一次。
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+    if (root / ".lock").exists() or (root / ".lock").is_symlink():
+        replay._regular(root / ".lock", root)
+    descriptor = os.open(root / ".lock", flags, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        failures_path = root / "failures.json"
+        recovery_control(state)
+        failures = read(failures_path)
+        counts_path = root / "counts.json"
+        counts = {}
+        if counts_path.exists() or counts_path.is_symlink():
+            replay._regular(counts_path, root)
+            counts = read(counts_path)
+            if (not set(counts).issubset(control["allowed_failure_probe_ids"])
+                    or any(type(count) is not int or count < 0 for count in counts.values())):
+                raise replay.ReplayError("候选复制故障计数非法")
+        count = counts.get(probe, 0)
+        if probe in failures:
+            count += 1
+            counts[probe] = count
+        code = 2 if count <= failures.get(probe, 0) and failures.get(probe, 0) > 0 else 0
+        decision_path = root / "events" / (hashlib.sha256(str(projection["operation"]).encode()).hexdigest() + ".json")
+        decision = write(decision_path, {"schema_version": "claude-recorded-candidate-action/v1", "fixture_only": True,
+            "purpose": "regression_fixture", "control": binding(path), "failures": binding(failures_path),
+            "operation": projection["operation"], "probe_id": probe, "copy_completed": True,
+            "failure_count": count, "return_code": code, "network_requests_this_run": 0})
+        raw = (json.dumps(counts, ensure_ascii=False, sort_keys=True) + "\n").encode()
+        count_fd = os.open(counts_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(count_fd, raw)
+        finally:
+            os.close(count_fd)
+        log = root / "calls.jsonl"
+        if log.exists() or log.is_symlink():
+            replay._regular(log, root)
+        log_fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(log_fd, (json.dumps({"probe_id": probe, "operation": projection["operation"],
+                                        "decision": binding(decision)}, sort_keys=True) + "\n").encode())
+        finally:
+            os.close(log_fd)
+        return code, binding(decision)
+    finally:
+        os.close(descriptor)
 
 
 def origin_probe(state: Mapping[str, Any], probe: str) -> dict[str, Any]:

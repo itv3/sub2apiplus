@@ -1236,6 +1236,8 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         from tools.official_client_capture import claude_upgrade
         from tools.official_client_capture import claude_upgrade_recovery as recovery
 
+        if self.recorded_entry("reconcile-resume"):
+            return
         campaign = self.candidate_world()
         first = self.candidate_run(campaign, fail_refresh=True)
         first_root, _first_attempt = self.candidate_attempt(campaign, first["attempt_id"])
@@ -1299,8 +1301,9 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         audit.check_elapsed()
         audit.check_history()
         audit.check_entry({"reconcile": reconciled["next_command"], "status": status["next_command"]}, "resume", "client-evidence")
-        audit.report(candidate_id=chain_driver.CANDIDATE, source_attempt=first["attempt_id"], resumed_attempt=resumed["attempt_id"],
-                     counted_requests=counted, input_source="claude_chain_driver 已登记的离线来源，B5b-02 待替换")
+        record = audit.report(candidate_id=chain_driver.CANDIDATE, source_attempt=first["attempt_id"], resumed_attempt=resumed["attempt_id"],
+                     counted_requests=counted, input_source=self.assert_recorded_sources_untouched())
+        self.recorded_audit_report(record)
 
     def _scenario_candidate_tool_evolution(self) -> None:
         """隔离副本里修候选脚本：整体预览判定官方不受影响、已有候选两项失效，登记后真实对账续跑。"""
@@ -1310,6 +1313,8 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
         from tools.official_client_control import receipts as store_receipts
 
+        if self.recorded_entry("tool-evolution"):
+            return
         campaign = self.candidate_world()
         first = self.candidate_run(campaign)
         first_root, _attempt = self.candidate_attempt(campaign, first["attempt_id"])
@@ -1374,8 +1379,9 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         audit.check_elapsed()
         audit.check_history()
         audit.check_entry(status["next_command"], "reconcile-attempt")
-        audit.report(candidate_id=chain_driver.CANDIDATE, invalidated=expected, resumed_attempt=resumed["attempt_id"],
-                     counted_requests=counted, input_source="claude_chain_driver 已登记的离线来源，B5b-02 待替换")
+        record = audit.report(candidate_id=chain_driver.CANDIDATE, invalidated=expected, resumed_attempt=resumed["attempt_id"],
+                     counted_requests=counted, input_source=self.assert_recorded_sources_untouched())
+        self.recorded_audit_report(record)
 
 
 class _DeployFaultScenarios(unittest.TestCase):
