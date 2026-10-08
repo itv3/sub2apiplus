@@ -25,12 +25,20 @@ class VerifiedGateProjection:
     archive_bindings: tuple[Mapping[str, Any], ...]
     material_files: tuple[Mapping[str, Any], ...]
     token: object
+    subject_projections: tuple[Any, ...] = ()
 
     def project(self, parent_binding: Mapping[str, Any], raw: bytes) -> list[dict[str, Any]] | None:
         """只转换精确父域；保留父原件与其它字段的严格递归。"""
         from .delivery_execution import typed_bindings
         if self.token is not _TOKEN:
             raise ControlError("门禁投影不是纯校验器返回的受管结果")
+        from tools.official_client_capture.claude_qualification_material_source import VerifiedQualificationSubjectProjection
+        for projection in self.subject_projections:
+            if not isinstance(projection, VerifiedQualificationSubjectProjection):
+                raise ControlError("subject 投影不能由 JSON 或任意对象授信")
+            projected = projection.project(parent_binding, raw)
+            if projected is not None:
+                return projected
         materials = [row for row in self.material_files if row["archive_binding"] == dict(parent_binding)]
         if materials:
             if len(materials) != 1 or sha256_bytes(raw) != parent_binding["sha256"] or len(raw) != parent_binding["bytes"]:

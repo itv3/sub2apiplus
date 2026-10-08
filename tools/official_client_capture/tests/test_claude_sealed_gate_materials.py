@@ -353,7 +353,7 @@ class MaterialImportProofTests(unittest.TestCase):
 
     def setUp(self):
         from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
-        from tools.official_client_capture.tests.test_claude_real_delivery_integration import DeliveryCampaign
+        from tools.official_client_capture.tests.claude_qualification_source_fixture import QualificationSubjectWorld, QualificationDeliveryCampaign
         from tools.official_client_capture import claude_upgrade_accept as accept
         from tools.official_client_control.canonical import canonical_sha256
         temporary = tempfile.TemporaryDirectory(prefix="sealed-gate-materials-", dir="/private/tmp")
@@ -363,7 +363,7 @@ class MaterialImportProofTests(unittest.TestCase):
         self.configuration, _, _ = fixture_world(self.root)
         self.world = self.root / "qualification"
         self.world.mkdir(mode=0o700)
-        f = DeliveryCampaign(self.world, schema="v2")
+        f = QualificationDeliveryCampaign(self.world, data_root=self.root, schema="v2")
         self.fixture = f
         f.materials = self.configuration
         f.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
@@ -372,6 +372,7 @@ class MaterialImportProofTests(unittest.TestCase):
         for role, tag in (("rollback", "baseline"), ("candidate", "strict")):
             f.select_profile(role)
             f.profile_approve("validation_only")
+            f.open_candidate_revision("synthetic-candidate-" + tag)
             f.strict_validate(tag=tag)
             suffix = "" if tag == "strict" else "-baseline"
             q = {"store_relative": f.store.root.relative_to(self.root).as_posix(),
@@ -385,12 +386,12 @@ class MaterialImportProofTests(unittest.TestCase):
             if role == "candidate":
                 self.gate_root = self.root / "original-gate"
                 _unused, receipt = gate_world(self.gate_root)
-                identity = {"profile_id": "claude-code-fixture", "profile_digest": self.configuration[role]["runtime_profile_sha256"],
-                    "candidate_package_digest": "2" * 64, "candidate_image_id": self.configuration[role]["image_digest"],
-                    "candidate_image_reference": "fixture/sub2api@" + self.configuration[role]["image_digest"]}
-                parent.update(campaign_mode="formal", campaign_purpose="validation_only", candidate_identity=identity)
+                self.source_world = QualificationSubjectWorld(self.root, f, q,
+                    self.root / self.configuration[role]["profile_binding"]["path"])
+                identity = self.source_world.identity
                 facts = json_read(self.gate_root / "candidate-facts.json")
-                expected = accept.expected_gate_subject({"campaign_id": q["campaign_id"], "campaign_mode": "formal", "campaign_purpose": "validation_only", "target_version": f.campaign_document["target_version"]}, f.store.load_fact(q["candidate_ref"])["payload"], identity)
+                expected = accept.expected_gate_subject(self.source_world.manifest,
+                    f.store.load_fact(q["candidate_ref"])["payload"], identity)
                 facts["subject"] = {**expected, "production_tree_sha256": None, "acceptance_sha256": None, "promotion_receipt_sha256": None}
                 write(self.gate_root, "candidate-facts.json", facts)
                 (self.gate_root / receipt).unlink()
@@ -403,9 +404,11 @@ class MaterialImportProofTests(unittest.TestCase):
                     env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"}, capture_output=True, check=False, timeout=30)
                 self.assertEqual(outcome.returncode, 0, outcome.stderr.decode())
                 raw = (self.gate_root / receipt).read_bytes()
-                parent["external_gate"] = {"evidence_root": str(self.gate_root), "receipt": {"path": receipt, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}}
-            path = write(self.root, "parents/" + role + ".json", parent)
-            q["sealed_result_binding"] = {"path": path.relative_to(self.root).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
+                parent = self.source_world.seal_accept({"evidence_root": str(self.gate_root),
+                    "receipt": {"path": receipt, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}})
+            else:
+                path = write(self.root, "parents/" + role + ".json", parent)
+                q["sealed_result_binding"] = {"path": path.relative_to(self.root).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "bytes": path.stat().st_size}
             self.configuration[role]["qualification"] = q
         from tools.official_client_control.store import ControlStore
         self.store = ControlStore.open_read_only(f.store.root)
@@ -421,6 +424,271 @@ class MaterialImportProofTests(unittest.TestCase):
         return validate_qualification_material_import(self.store, binding, source,
             {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")},
             purpose=purpose, expected_source_scope="regression_fixture")
+
+    def subject(self, *, qualification=None, read_bindings=None, read_projections=None):
+        from tools.official_client_capture.claude_qualification_material_source import qualification_gate_subject
+        q = qualification or self.configuration["candidate"]["qualification"]
+        return qualification_gate_subject(self.store, q, self.root,
+            json_read(self.root / q["sealed_result_binding"]["path"]),
+            read_bindings=read_bindings, read_projections=read_projections)
+
+    def gated_historical_rollback(self):
+        """在同一 Store 内独立生产回滚四根和真实 gate，不借候选换角色。"""
+        import subprocess, sys
+        from tools.official_client_capture.tests.claude_qualification_source_fixture import QualificationSubjectWorld, QualificationDeliveryCampaign
+        from tools.official_client_capture import claude_upgrade_accept as accept
+        root = self.root / "historical-rollback-world"
+        root.mkdir(mode=0o700)
+        fixture = QualificationDeliveryCampaign(root, data_root=self.root, schema="v2",
+            store=self.fixture.store, external_root=self.fixture.external_root,
+            external_prefix="independent-gated-rollback")
+        fixture.campaign_id = "synthetic-gated-rollback-1.0.0-campaign"
+        fixture.persona = {**fixture.persona, "official_product": "synthetic-rollback-cli"}
+        fixture.materials = self.configuration
+        fixture.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
+        fixture.discovery_and_evidence()
+        fixture.profile_objects()
+        fixture.select_profile("rollback")
+        fixture.profile_approve("validation_only")
+        fixture.open_candidate_revision("synthetic-candidate-baseline")
+        fixture.strict_validate(tag="baseline")
+        q = {"store_relative": fixture.store.root.relative_to(self.root).as_posix(),
+            "external_root_relative": fixture.external_root.relative_to(self.root).as_posix(),
+            "campaign_id": fixture.campaign_id, "candidate_id": "synthetic-candidate-baseline",
+            "candidate_ref": fixture.references["candidate-baseline"],
+            "build_receipt_ref": fixture.references["candidate-build-receipt-baseline"],
+            "validation_ref": fixture.references["validation-completed-baseline"],
+            "acceptance_ref": fixture.references["acceptance-baseline"]}
+        world = QualificationSubjectWorld(self.root, fixture, q,
+            self.root / self.configuration["rollback"]["profile_binding"]["path"])
+        gate_root = self.root / "original-rollback-gate"
+        _unused, receipt = gate_world(gate_root)
+        expected = accept.expected_gate_subject(world.manifest,
+            fixture.store.load_fact(q["candidate_ref"])["payload"], world.identity)
+        facts = json_read(gate_root / "candidate-facts.json")
+        facts["subject"] = {**expected, "production_tree_sha256": None,
+            "acceptance_sha256": None, "promotion_receipt_sha256": None}
+        write(gate_root, "candidate-facts.json", facts)
+        (gate_root / receipt).unlink()
+        outcome = subprocess.run([str(Path(sys.executable).resolve()), "-I", "-B", "-S",
+            str(self.tree.root / "tools/official_client_capture/codex_upgrade_gate_receipt.py"), "finalize",
+            "--evidence-root", str(gate_root), "--facts", "candidate-facts.json", "--output", receipt],
+            env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"}, capture_output=True, check=False, timeout=30)
+        self.assertEqual(outcome.returncode, 0, outcome.stderr.decode())
+        raw = (gate_root / receipt).read_bytes()
+        world.seal_accept({"evidence_root": str(gate_root),
+            "receipt": {"path": receipt, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}})
+        self.configuration["rollback"]["qualification"] = q
+        # 较新 baseline 与 revision 都由原 Store 生产器追加。历史 accept
+        # 仍封存 baseline 0，不能因“当前”视图移动而改读新的资格或首轮。
+        fixture.open_evaluation_baseline(1, tag="baseline", kind="evaluator-only")
+        newer = fixture.open_candidate_revision("synthetic-candidate-later")
+        fixture.strict_validate(tag="later")
+        self.assertGreater(fixture.store.load_fact(newer)["payload"]["revision"], world.revision)
+        self.assertEqual(fixture.store.load_fact(fixture.references["evaluation-baseline-baseline-b1"])["payload"]["baseline"], 1)
+        newer_stage = world.campaign / "candidates/synthetic-candidate-later/result.json"
+        write(self.root, newer_stage.relative_to(self.root).as_posix(),
+            {"candidate_id": "synthetic-candidate-later", "status": "complete", "evaluation_baseline": 1})
+        return fixture, world, gate_root, facts["subject"]
+
+    def prepare_gated_pair(self, rollback_gate_root):
+        """两份独立 gate 沿原来源、复制器和 reader 取得；只临时登记 fixture。"""
+        from unittest import mock
+        from tools.official_client_capture import claude_qualification_material_source as source_module
+        from tools.official_client_capture import claude_qualification_material_import as importer
+        from tools.official_client_control.canonical import canonical_sha256
+        identity = worker.compute_gate_reader_identity(self.tree.root, formed_context={"fixture_only": True})
+        sources = []
+        for role, gate_root in (("candidate", self.gate_root), ("rollback", rollback_gate_root)):
+            provenance = {"fixture_contract": "qualified-gate-fixture/v1", "formation_context": {"fixture_only": True}}
+            capability = source_module.freeze_root_capability(gate_root, "gate_evidence",
+                authority=source_module.FIXTURE_AUTHORITY, reference_id="fixture-gated-" + role,
+                reference_sha256=canonical_sha256(provenance),
+                allowed_relative_paths=[path.relative_to(gate_root).as_posix() for path in sorted(gate_root.rglob("*")) if path.is_file()])
+            intake = source_module.VerifiedIntakeContext(source_module.FIXTURE_AUTHORITY, "regression_fixture",
+                self.root, self.tree.root, provenance, (capability,), identity, source_module._TOKEN)
+            sources.append(source_module.prepare_qualification_source(self.store,
+                self.configuration[role]["qualification"], role=role, intake_context=intake))
+        def resolve(store, qualification, reference, *, purpose):
+            self.assertIn(reference, sources)
+            self.assertEqual(reference.qualification, qualification)
+            source_module._check_four_roots(store, qualification)
+            return reference
+        with mock.patch.dict(source_module.QUALIFICATION_SOURCE_RESOLVERS,
+                {(source_module.FIXTURE_AUTHORITY, purpose): resolve for purpose in source_module.PURPOSES}):
+            return importer.prepare_qualification_material_import(self.store, sources, managed_data_root=self.root)
+
+    def test_gated_historical_rollback_replays_exact_originals_after_newer_baseline_and_revision(self):
+        from tools.official_client_control.canonical import canonical_sha256
+        fixture, world, gate_root, expected = self.gated_historical_rollback()
+        q = self.configuration["rollback"]["qualification"]
+        original_paths = [world.campaign / "campaign.json", world.build_path, world.round_path,
+            self.root / q["sealed_result_binding"]["path"], gate_root / "candidate-receipt.json"]
+        originals = {path: path.read_bytes() for path in original_paths}
+        self.assertEqual(self.subject(qualification=q), expected)
+        self.assertNotEqual(q["campaign_id"], self.configuration["candidate"]["qualification"]["campaign_id"])
+        proof = self.prepare_gated_pair(gate_root)
+        projection = self.validate(proof)
+        rollback = next(row for row in projection.domains if row["role"] == "rollback")
+        self.assertEqual(rollback["gate_subject_sha256"], canonical_sha256(expected))
+        shutil.rmtree(gate_root)
+        self.assertEqual(self.validate(proof), projection)
+        self.assertEqual({path: path.read_bytes() for path in original_paths[:-1]},
+                         {path: originals[path] for path in original_paths[:-1]})
+
+    def test_gated_historical_rollback_missing_original_cannot_use_newer_material(self):
+        from tools.official_client_capture.capturelib.model import ConfigurationError
+        from tools.official_client_control.errors import ControlError
+        _fixture, world, gate_root, _expected = self.gated_historical_rollback()
+        newer = world.campaign / "candidates/synthetic-candidate-later/build-receipt.json"
+        newer.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        newer.write_bytes(world.build_path.read_bytes())
+        newer.chmod(0o600)
+        world.build_path.unlink()
+        q = self.configuration["rollback"]["qualification"]
+        with self.assertRaises((ControlError, ConfigurationError, OSError)):
+            self.subject(qualification=q)
+        with self.assertRaises((ControlError, ConfigurationError, OSError)):
+            self.prepare_gated_pair(gate_root)
+        self.assertFalse((self.root / "control/qualification-imports").exists())
+
+    def replace_build(self, document):
+        """只重建当前独立反例的来源绑定；不修改历史失败世界或门禁原件。"""
+        from tools.official_client_capture import claude_upgrade_vc as vc
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+        document["receipt_digest"] = artifacts.digest({key: value for key, value in document.items() if key != "receipt_digest"})
+        write(self.root, self.source_world.build_path.relative_to(self.root).as_posix(), document)
+        previous_path, previous = vc.replay_vc_checkpoint(self.source_world.campaign,
+            self.source_world.plan, "VC-3")
+        self.source_world.checkpoint("VC-4", self.source_world.build_path, previous_path, previous)
+        q = self.configuration["candidate"]["qualification"]
+        parent = json_read(self.root / q["sealed_result_binding"]["path"])
+        self.source_world.seal_accept(parent["external_gate"])
+
+    def test_subject_uses_real_accept_fields_and_independent_originals(self):
+        from tools.official_client_capture import claude_upgrade_acceptance as acceptance
+        from tools.official_client_capture import claude_upgrade_accept as accept
+        q = self.configuration["candidate"]["qualification"]
+        parent = json_read(self.root / q["sealed_result_binding"]["path"])
+        self.assertEqual(set(parent), acceptance.STAGE_RESULT_FIELDS)
+        self.assertNotIn("candidate_identity", parent)
+        self.assertNotIn("campaign_mode", parent)
+        expected = accept.expected_gate_subject(self.source_world.manifest,
+            self.store.load_fact(q["candidate_ref"])["payload"], self.source_world.identity)
+        self.assertEqual(self.subject(), {**expected, "production_tree_sha256": None,
+            "acceptance_sha256": None, "promotion_receipt_sha256": None})
+
+    def test_subject_keeps_historical_revision_and_fixed_first_round(self):
+        original = self.subject()
+        self.fixture.open_candidate_revision("synthetic-candidate-next")
+        # 故意放一份不能被读取的最大轮次：首轮身份不得随当前 revision
+        # 或后继评估轮次漂移，历史原件仍由精确 VC-4 与首轮 reader 核验。
+        write(self.root, (self.source_world.round_path.parent / "validation-rounds/v2/result.json").relative_to(self.root).as_posix(),
+            {"candidate_id": "synthetic-candidate-next", "status": "failed"})
+        self.assertEqual(self.subject(), original)
+
+    def test_subject_rejects_changed_frozen_plan_even_with_valid_new_digest(self):
+        from tools.official_client_control.errors import ControlError
+        path = self.source_world.campaign / "campaign.json"
+        manifest = json_read(path)
+        manifest["created_at_utc"] = "2026-08-19T00:00:00Z"
+        write(self.root, path.relative_to(self.root).as_posix(), manifest)
+        (self.source_world.campaign / "campaign.sha256").write_text(hashlib.sha256(path.read_bytes()).hexdigest() + "\n")
+        with self.assertRaisesRegex(ControlError, "封印.*冻结总计划"):
+            self.subject()
+
+    def test_subject_rejects_vc4_store_build_from_other_candidate(self):
+        from tools.official_client_control.errors import ControlError
+        build = copy.deepcopy(self.source_world.build)
+        build["store"]["candidate_build_receipt_ref"] = self.configuration["rollback"]["qualification"]["build_receipt_ref"]
+        self.replace_build(build)
+        with self.assertRaisesRegex(ControlError, "精确候选.*revision"):
+            self.subject()
+
+    def test_subject_rejects_fixed_first_package_from_other_candidate(self):
+        from tools.official_client_control.errors import ControlError
+        q = self.configuration["rollback"]["qualification"]
+        foreign = self.store.load_fact(q["validation_ref"])["payload"]["candidate_evidence_package_ref"]
+        stage = json_read(self.source_world.round_path)
+        stage["store"]["candidate_evidence_package_ref"] = foreign
+        write(self.root, self.source_world.round_path.relative_to(self.root).as_posix(), stage)
+        self.source_world.identity["candidate_package_digest"] = foreign["sha256"]
+        parent = json_read(self.root / self.configuration["candidate"]["qualification"]["sealed_result_binding"]["path"])
+        self.source_world.seal_accept(parent["external_gate"])
+        with self.assertRaisesRegex(ControlError, "首轮制品.*精确候选"):
+            self.subject()
+
+    def test_subject_cannot_replace_missing_first_round_with_newer_result(self):
+        from tools.official_client_capture.capturelib.model import ConfigurationError
+        stage = json_read(self.source_world.round_path)
+        write(self.root, (self.source_world.round_path.parent / "validation-rounds/v2/result.json").relative_to(self.root).as_posix(), stage)
+        self.source_world.round_path.unlink()
+        with self.assertRaisesRegex(ConfigurationError, "尚未封存.*capture-candidate"):
+            self.subject()
+
+    def test_subject_readset_and_two_parent_projections_close_exact_materials(self):
+        from tools.official_client_control.canonical import canonical_sha256
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+        reads, parents = [], []
+        self.subject(read_bindings=reads, read_projections=parents)
+        paths = {row["path"] for row in reads}
+        q = self.configuration["candidate"]["qualification"]
+        required = [self.source_world.campaign / "campaign.json", self.source_world.campaign / "campaign.sha256",
+            self.source_world.build_path, self.source_world.release_path, self.source_world.profile_path,
+            self.source_world.round_path, self.store.receipt_path(q["build_receipt_ref"]),
+            self.store.object_path({"object_kind": "candidate_evidence_package", "sha256": self.source_world.identity["candidate_package_digest"]})]
+        self.assertTrue({path.relative_to(self.root).as_posix() for path in required} <= paths)
+        self.assertTrue(any(row.metadata_domains == ((("build_identity", "parameters"),
+            canonical_sha256(
+                self.store.load_receipt(q["build_receipt_ref"])["build_identity"]["parameters"])),) for row in parents))
+        proof = self.prepare()
+        projection = self.validate(proof)
+        source = VerifiedSource("0" * 64, "1" * 64, {}, "0" * 64, "fixture-only", self.root)
+        closed = project_delivery_raw_bindings(source, [q["sealed_result_binding"]], gate_projection=projection)
+        self.assertTrue(paths <= {row["path"] for row in closed})
+        self.assertTrue(any(row["path"].endswith("external/candidate/sub2api.bin") for row in closed))
+
+    def test_subject_projection_does_not_authorize_same_sha_wrong_coordinate(self):
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+        from tools.official_client_control.errors import ControlError
+        proof = self.prepare()
+        projection = self.validate(proof)
+        raw = self.source_world.build_path.read_bytes()
+        duplicate = self.source_world.campaign / "candidates/copied-build.json"
+        duplicate.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        duplicate.write_bytes(raw)
+        row = {"path": duplicate.relative_to(self.root).as_posix(), "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+        self.assertIsNone(projection.project(row, raw))
+        source = VerifiedSource("0" * 64, "1" * 64, {}, "0" * 64, "fixture-only", self.root)
+        with self.assertRaises(ControlError):
+            project_delivery_raw_bindings(source, [row], gate_projection=projection)
+
+    def test_subject_consumer_checks_received_original_bytes(self):
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_control.qualification_material_import import validate_qualification_material_import
+        from tools.official_client_control.errors import ControlError
+        proof = self.prepare()
+        path = self.source_world.campaign / "campaign.json"
+        raw = path.read_bytes()
+        # 受管通道给出的形成期字节不同时，即使当前磁盘同名原件正确，
+        # 消费端仍须拒绝，不能以磁盘新读替代冻结来源能力的原件。
+        source = VerifiedSource("0" * 64, "1" * 64,
+            {path.relative_to(self.root).as_posix(): raw.replace(b'formal', b'invalid', 1)}, "0" * 64, "fixture-only", self.root)
+        with self.assertRaisesRegex(ControlError, "字节漂移"):
+            validate_qualification_material_import(self.store, proof, source,
+                {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")},
+                purpose="formed_replay", expected_source_scope="regression_fixture")
+
+    def test_gate_self_report_cannot_change_subject_expected_from_originals(self):
+        from tools.official_client_control.errors import ControlError
+        facts = json_read(self.gate_root / "candidate-facts.json")
+        facts["subject"]["candidate_package_digest"] = "f" * 64
+        write(self.gate_root, "candidate-facts.json", facts)
+        self.refinalize()
+        with self.assertRaises((ControlError, worker.ReaderError)):
+            self.prepare()
 
     def test_typed_fixture_uses_frozen_accept_root_and_original_receipt(self):
         from tools.official_client_capture.tests.claude_typed_vc6_fixture import (
@@ -485,7 +753,9 @@ class MaterialImportProofTests(unittest.TestCase):
     def test_complete_import_replays_real_four_roots_and_survives_original_removal(self):
         from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
         from tools.official_client_control.delivery_execution import VerifiedSource
-        parents_before = {path: path.read_bytes() for path in (self.root / "parents").glob("*.json")}
+        parents_before = {self.root / self.configuration[role]["qualification"]["sealed_result_binding"]["path"]:
+            (self.root / self.configuration[role]["qualification"]["sealed_result_binding"]["path"]).read_bytes()
+            for role in ("candidate", "rollback")}
         proof = self.prepare()
         before = {path: path.read_bytes() for path in (self.root / "control/qualification-imports").rglob("*") if path.is_file()}
         projection = self.validate(proof, purpose="current_import")
@@ -519,8 +789,8 @@ class MaterialImportProofTests(unittest.TestCase):
         parent_path = self.root / q["sealed_result_binding"]["path"]
         parent = json_read(parent_path)
         parent["external_gate"]["receipt"].update(sha256=hashlib.sha256(receipt_path.read_bytes()).hexdigest(), bytes=receipt_path.stat().st_size)
-        write(self.root, q["sealed_result_binding"]["path"], parent)
-        q["sealed_result_binding"].update(sha256=hashlib.sha256(parent_path.read_bytes()).hexdigest(), bytes=parent_path.stat().st_size)
+        # 只重建当前用例尚未导入的合成封印和 accept；原历史世界不修改。
+        self.source_world.seal_accept(parent["external_gate"])
 
     def test_unknown_json_keeps_strict_transitive_binding_and_raw_bytes(self):
         leaf = write(self.gate_root, "unknown/leaf.json", {"original": "byte-exact"})

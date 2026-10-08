@@ -308,6 +308,7 @@ def validate_qualification_material_import(store: Any, import_binding: Mapping[s
     reader = VerifiedReaderIdentity(reader_document, code_root, _IDENTITY_TOKEN)
     roots = {row["root_id"]: row for row in document["roots"]}
     all_bindings = [dict(import_binding), dict(document["reader_identity_binding"])]
+    subject_projections = []
     if purpose != "formed_replay" and reader_document["tool_identity"].get("policy_version", 0) < MATERIALS_POLICY:
         raise ControlError("当前第二根导入不能使用旧读取身份取得新写入权限")
     if purpose != "formed_replay":
@@ -402,12 +403,17 @@ def validate_qualification_material_import(store: Any, import_binding: Mapping[s
         if receipt is None or receipt["content_sha256"] != sealed["external_gate"]["receipt"]["sha256"] or receipt["content_bytes"] != sealed["external_gate"]["receipt"]["bytes"]:
             raise ControlError("門禁父收据没有真实一一副本")
         receipt_document = parse_json_bytes(_read_bound(source, receipt["archive_binding"]))
-        from tools.official_client_capture import claude_upgrade_accept as accept
-        candidate = store.load_fact(q["candidate_ref"])["payload"]
-        campaign = store.load_campaign(q["campaign_id"])
-        identity = {key: sealed["candidate_identity"][key] for key in accept.EXTERNAL_GATE_IDENTITY_FIELDS}
-        expected = accept.expected_gate_subject({"campaign_id": q["campaign_id"], "campaign_mode": sealed["campaign_mode"], "campaign_purpose": sealed["campaign_purpose"], "target_version": campaign["target_version"]}, candidate, identity)
-        expected.update(production_tree_sha256=None, acceptance_sha256=None, promotion_receipt_sha256=None)
+        from tools.official_client_capture.claude_qualification_material_source import qualification_gate_subject
+        # 与来源准备共用原件读取；真实 accept 不含候选身份和模式字段。
+        # 原 reader、subject 摘要和完整结果比较仍在本调用之后强制执行。
+        subject_bindings = []
+        expected = qualification_gate_subject(store, q, source.trusted_data_root, sealed,
+            read_bindings=subject_bindings, read_projections=subject_projections)
+        for binding in subject_bindings:
+            # 对照来源能力的精确原字节，回传既有归档列表；形成期重放
+            # 不得用当前磁盘的同名材料掩盖缺失或不同的历史原件。
+            _read_bound(source, binding)
+            all_bindings.append(binding)
         if canonical_sha256(expected) != domain["gate_subject_sha256"]:
             raise ControlError("门禁完整 subject 不是四根与原父推出的身份")
         specs = material_worker_spec(reader, list(roots.values()), document["files"], document["reader_accesses"], data_root=source.trusted_data_root)
@@ -443,7 +449,7 @@ def validate_qualification_material_import(store: Any, import_binding: Mapping[s
         previous = unique.setdefault(row["path"], row)
         if previous != row:
             raise ControlError("门禁投影原件对同一路径绑定不同字节")
-    return VerifiedGateProjection(tuple(document["parents"]), tuple(document["domains"]), tuple(unique[path] for path in sorted(unique)), tuple(document["files"]), projection_token)
+    return VerifiedGateProjection(tuple(document["parents"]), tuple(document["domains"]), tuple(unique[path] for path in sorted(unique)), tuple(document["files"]), projection_token, tuple(subject_projections))
 
 
 def projection_for_configuration(store: Any, configuration: Mapping[str, Any], source: Any, *, purpose: str) -> Any:
