@@ -143,8 +143,9 @@ class ClaudeSecondTransientChainDriver(first_chain.ClaudeTransientChainDriver):
             self.assertEqual((code, recovered["status"]), (0, "applied"), stderr)
             self.assertEqual(recovered["evaluation_baseline"], 2)
             self.assertEqual(len(self.runtime.candidate_calls()), calls_before_resume)
-            for path, digest in prepared_boundary.items():
-                self.assertEqual(upgrade.file_sha256(Path(path)), digest)
+            resumed_boundary = self.boundary([baseline_root])
+            for path, binding in prepared_boundary.items():
+                self.assertEqual(resumed_boundary[path], binding)
             resumed_operations = ledger.replay_head(self.project_root)["operations"]
             for operation, binding in operations_before_resume.items():
                 self.assertEqual(resumed_operations[operation], binding)
