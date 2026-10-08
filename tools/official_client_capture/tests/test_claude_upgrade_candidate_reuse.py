@@ -192,6 +192,8 @@ class SealedReuseTests(CandidateReuseFixture):
         stage.update({
             "schema_version": candidate_seal.STAGE_RESULT_SCHEMA, "client": "claude", "campaign_id": PREDECESSOR,
             "stage": "capture-candidate", "candidate_id": CANDIDATE, "status": "complete",
+            # 本夹具仅核来源证明边界；空分组不表示客户端正式证据已完成。
+            "client_evidence": {"client_bindings": {}, "boundary_checks": {}},
             "attempt": candidate_seal._stage_binding(root / "attempt.json", source),
             candidate_seal.SEALED_EVIDENCE_MANIFEST_FIELD: candidate_seal._stage_binding(manifest_path, source),
             candidate_seal.ASSERTION_CONTEXT_FIELD: {

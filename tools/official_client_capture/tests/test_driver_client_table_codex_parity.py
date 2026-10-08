@@ -1425,6 +1425,8 @@ class SupervisorCandidateRecoveryCodexParityTests(unittest.TestCase):
         self.assertIsNotNone(source)
         old = types.ModuleType("codex_upgrade_supervisor_before_b405b1")
         old.__file__ = str(REPO_ROOT / relative)
+        # 历史源码按包方式导入，使用与正式监督器相同的相对导入上下文。
+        old.__package__ = "tools.official_client_capture"
         with mock.patch.dict(sys.modules, {old.__name__: old}):
             exec(compile(source, f"{B405B1_BASELINE_COMMIT}:{relative}", "exec"), old.__dict__)  # noqa: S102 - 受控的历史源码
         from tools.official_client_capture import codex_upgrade_supervisor as new

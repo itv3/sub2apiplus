@@ -174,6 +174,7 @@ class CandidateRestorationAccountingTests(unittest.TestCase):
         source, root, source_job, report, _payload, result = self._fixture()
         data = source.parent.parent.parent
         job_root = source_job.parent / "evidence" / "jobs" / self.JOB_ID
+        job_root.mkdir(parents=True, mode=0o700)
         for name in ("evidence", "logs"):
             (job_root / name).mkdir(parents=True, mode=0o700)
         permissions = provenance.evidence_permissions
