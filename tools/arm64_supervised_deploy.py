@@ -342,8 +342,11 @@ from urllib.parse import urlsplit
 # 2026-10-08（Claude 升级 B4-05b-1）：候选续跑命令的身份参数经适配器 candidate_recovery_identity_flags 提供；Codex 保留
 # 原十项及其顺序，Claude 只传 --candidate-id、候选身份由 VC-4 构建收据重放。解析、预览／补跑命令与后继协议使用同一组
 # 参数；只改 control 层并登记身份守恒，wire、evidence 与评估器摘要不变。
+# 2026-10-08（Claude 首批清单确定性编译）：共享清单结构规范化拆出唯一纯核心，Claude 首个 VC-1 批次的
+# 内容生成与重放只走纯核心；真实派发仍经原读取入口核绑定文件和 VC-1／VC-5 门禁。Codex 继续走严格入口，
+# 仅 control 层与监督器摘要变化，wire、evidence、编排器闭包和四项评估器摘要均保持原值。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "6c27d186bd121c1a0d78fb8d7c6b1e1312c3aa4efbd9ed789771a4b67123080c"
+    "44b08e351551c0e8366d4836b743cd40619b050528822dac570aca7752d16b7e"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
