@@ -180,14 +180,24 @@ class ProfileObservationBindingTests(unittest.TestCase):
         """走 Package／Receipt 共用的正式归档消费者，而非直接调用测试 walker。"""
         self._archive_count = getattr(self, "_archive_count", 0) + 1
         store = ControlStore.initialize(self.root / ("archive-store-" + str(self._archive_count)), "2026-10-08T00:00:00Z")
-        facts = {"contract_version": "claude-delivery-configuration/v1", "result": "pass", "campaign_id": self.context["campaign_id"],
-                 "delivery_id": self.context["delivery_id"], "origin": {"authority": "profile-test-channel", "source_scope": "regression_fixture",
-                 "configuration_sha256": source.configuration_sha256, "service_instance_id": source.service_instance_id, "operations_index_binding": None},
-                 "configuration": self.configuration, "configuration_sha256": canonical_sha256(self.configuration), "binding": self.context["configuration_ref"]}
+        def configuration_snapshot(_request, _directory):
+            common = {"result": "pass", "campaign_id": self.context["campaign_id"], "delivery_id": self.context["delivery_id"]}
+            return {"environment": self.environment, "rollback": {}, "gates": [], "cores": {
+                "configuration": {**common, "contract_version": "claude-delivery-configuration/v1",
+                                  "configuration": self.configuration, "configuration_sha256": canonical_sha256(self.configuration),
+                                  "binding": self.context["configuration_ref"]},
+                "freeze": {**common, "contract_version": "claude-delivery-freeze/v1", "environment": self.environment,
+                           "before_bindings": [], "gates": [], "guard_identity": {}},
+            }}
+        # 配置来源也走实际守卫生成与复核，不给另一份内容复用原证明的摘要。
+        with mock.patch.object(self.runtime, "freeze", side_effect=configuration_snapshot):
+            facts = self.engine.inspect({"profile_archive_configuration": self._archive_count})["cores"]["configuration"]
         payload = {"schema_version": execution.OPERATIONAL_V2, "persona": {"provider": "fixture", "official_product": "fixture",
                     "auth_family": "oauth", "upstream_route_family": "fixture"}, "manifest_id": "profile-config",
                    "evidence_type": "configuration", "entries": [{"id": "configuration", "facts": facts}]}
-        with mock.patch.dict(execution.SOURCE_VERIFIERS, {"profile-test-channel": lambda _store, content, _origin: replace(source, content_sha256=canonical_sha256(content))}, clear=True):
+        with mock.patch.dict(execution.SOURCE_VERIFIERS, {
+            executor.AUTHORITY: lambda _store, content, origin: execution.VerifiedSource(**self.reader.verify_origin_evidence(content, origin))
+        }, clear=True):
             reference = store.seal_object("operational_evidence", payload)
             plan = {"schema_version": execution.PLAN_V2, "campaign_id": self.context["campaign_id"], "delivery_id": self.context["delivery_id"],
                     "executor_configuration_ref": reference, "configuration_sha256": source.configuration_sha256,
@@ -284,6 +294,7 @@ class ProfileObservationBindingTests(unittest.TestCase):
             self.projection(response)
         materials = deepcopy(raw["profile_producer_materials"])
         next(item for item in materials if item["proof_references"])["proof_references"] = []
+        materials.sort(key=canonical_sha256)
         with self.assertRaisesRegex(ControlError, "完整显式闭集"):
             self.projection(raw, override={"profile_producer_materials": materials})
 
