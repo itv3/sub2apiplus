@@ -84,8 +84,17 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         with chain.seams(world['config_path']):
             identity = compare.candidate_gate_identity(world['campaign'], world['manifest'], world.get('candidate_id', CANDIDATE), world['build'])
             subject = chain.expected_subject(world['manifest'], world['candidate_payload'], identity)
+            host = delivery_tests.compare_tests.HOST
+            architecture = world['architecture']
+            if world.get('real_candidate'):
+                # 真实候选的收据坐标取当前封存执行计划，不能沿用合成世界的固定宿主名。
+                reference = world['stage']['store']['validation_execution_plan_ref']
+                execution = world['store'].load_object(reference)['payload']
+                coordinates = {(gate['host_id'], gate['architecture']) for gate in execution['external_gates']}
+                self.assertEqual(len(coordinates), 1, '本夹具只支持同一执行宿主与架构的门禁集合')
+                host, architecture = next(iter(coordinates))
             return chain.gate_receipt_file(world['gate_root'], name=name, subject=subject,
-                host=delivery_tests.compare_tests.HOST, architecture=world['architecture'], failed_gate=failed_gate)
+                host=host, architecture=architecture, failed_gate=failed_gate)
 
     def assert_recorded_client_requests(self, world: dict[str, Any]) -> None:
         """真实候选世界按同 Campaign 总 provenance 核算，原合成世界保留原来的两请求断言。"""
