@@ -123,6 +123,86 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                                        "seconds": seconds, "report": source.binding(report_path)}
             save_record(directory, {**record, "status": "passed", "metrics": self.real_chain_metrics})
 
+    def _run_pending_full_validation(self) -> None:
+        """只供显式隔离执行器选择的完整链准备入口；不进入默认发现，也不在此登记 CHAINS。
+
+        外层必须在新 Python 启动前将 TMPDIR 与记录目录设为同一私有父目录。本方法只分配一次世界，
+        然后委托正式 full CLI；报告缺失、失败或超时均保存真实日志和未验证记录，不能改写为成功。
+        """
+
+        recorded = os.environ.get("CLAUDE_2_1_226_RELAY_FIXTURE")
+        freeze = os.environ.get("CLAUDE_2_1_226_FREEZE_FIXTURE")
+        if not recorded or not freeze:
+            self.skipTest("未验证：完整链需显式登记 2.1.226 relay 与旧 freeze 来源")
+        if platform.system() != "Linux" or platform.machine() not in {"aarch64", "arm64"} or os.geteuid() != 0:
+            self.skipTest("未验证：完整链要求 Linux ARM64 root")
+        if shutil.which("unshare") is None or shutil.which("mount") is None:
+            self.skipTest("未验证：完整链缺少 unshare 或 mount")
+        probe = subprocess.run(["unshare", "-m", "-n", "true"], capture_output=True, timeout=10)
+        if probe.returncode:
+            self.skipTest("未验证：宿主不允许建立完整链 mount/net namespace")
+        from tools.official_client_capture.tests import claude_recorded_full_validation_driver as driver
+
+        started = time.monotonic()
+        with staging_directory("claude-full-recorded-") as directory:
+            data = directory / "staging/data"
+            driver._require_client_staging(data)
+            command = ["unshare", "-m", "-n", sys.executable, "-m", driver.ACTIVATION_MODULE,
+                       "--data", str(data), "--recorded", recorded, "--freeze", freeze, "--through", "VC-6",
+                       "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
+            try:
+                completed = subprocess.run(command, cwd=driver.vc1.REPOSITORY, capture_output=True, text=True,
+                                           timeout=960, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+            except subprocess.TimeoutExpired as error:
+                for filename, content in (("stdout.log", error.stdout or ""), ("stderr.log", error.stderr or "")):
+                    value = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
+                    (directory / filename).write_text(value, encoding="utf-8")
+                save_record(directory, {"scenario": "vc-chain.claude-full-validation-only", "fixture_only": True,
+                                        "status": "unverified", "timeout": True, "command": command,
+                                        "seconds": time.monotonic() - started,
+                                        "stdout": source.binding(directory / "stdout.log"),
+                                        "stderr": source.binding(directory / "stderr.log"),
+                                        "formal_version_semantics_certified": False})
+                raise
+            (directory / "stdout.log").write_text(completed.stdout, encoding="utf-8")
+            (directory / "stderr.log").write_text(completed.stderr, encoding="utf-8")
+            report_path = data / "control/recorded-full-chain-result.json"
+            report, report_error = None, None
+            try:
+                if report_path.is_file():
+                    report = source.read(report_path)
+            except Exception as error:
+                report_error = str(error)
+            seconds = time.monotonic() - started
+            record = {"scenario": "vc-chain.claude-full-validation-only", "fixture_only": True,
+                      "seconds": seconds, "command": command, "returncode": completed.returncode,
+                      "stdout": source.binding(directory / "stdout.log"), "stderr": source.binding(directory / "stderr.log"),
+                      "status": "unverified", "report": source.binding(report_path) if report_path.is_file() else None,
+                      "report_payload": report, "report_error": report_error, "formal_version_semantics_certified": False}
+            save_record(directory, record, append=False)
+            try:
+                self.assertEqual(completed.returncode, 0, completed.stderr[-12000:] + completed.stdout[-12000:])
+                self.assertIsNone(report_error, "真实完整链报告不可读取")
+                self.assertIsNotNone(report, "真实完整链未形成报告")
+                self.assertEqual(report["schema_version"], driver.FULL_SCHEMA)
+                self.assertEqual(report["registered_chains"], ["vc-chain.claude-full-validation-only"])
+                self.assertEqual(report["status"], "passed")
+                self.assertEqual(report["scope"], "VC-0→VC-6")
+                self.assertTrue(report["fixture_only"])
+                self.assertTrue(report["full_vc0_vc6_certified"])
+                self.assertFalse(report["formal_version_semantics_certified"])
+                self.assertEqual(report["network_requests_this_run"], 0)
+                self.assertEqual(set(report["checkpoints"]), {f"VC-{index}" for index in range(7)})
+                self.assertLessEqual(seconds, 900, "ARM64 录制完整链超过 15 分钟")
+                source.bound(report["source_state"], root=data)
+                source.bound(report["continuation"], root=data)
+            except BaseException:
+                save_record(directory, record)
+                raise
+            self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0,
+                                       "seconds": seconds, "report": source.binding(report_path)}
+            save_record(directory, {**record, "status": "passed", "metrics": self.real_chain_metrics})
+
 
 if __name__ == "__main__":
     unittest.main()

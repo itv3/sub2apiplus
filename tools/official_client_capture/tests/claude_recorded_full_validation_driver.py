@@ -279,6 +279,90 @@ def _require_client_staging(data: Path) -> None:
         raise replay.ReplayError(f"完整链数据根须在实际临时根 {tempfile.gettempdir()} 的首层 <world>/staging 内")
 
 
+class RecordedHostObservation:
+    """明确登记的离线 Docker 观察源；宿主收据由正式生成器计算，不能补写旧 FakeHost 的不完整收据。
+
+    只替换 Docker daemon 的 inspect/version 响应及容器文件可见性。nonce、镜像交叉核验、执行源摘要、
+    收据规范字节和三项运行变量继续由正式生成器及签发器计算；独立来源文件明确说明这些不是生产观察。
+    """
+
+    def __init__(self, data: Path, configuration: dict[str, Any], build: dict[str, Any]) -> None:
+        from tools.official_client_capture.tests import test_claude_upgrade_capture as fixture
+
+        self.data, self.configuration, self.build = data, configuration, build
+        self.host = fixture.FakeHost()
+        containers = {configuration["capture_container"], configuration["synthetic_capture_container"]}
+        if containers != set(fixture.CONTAINER_IDS):
+            raise replay.ReplayError("宿主观察源只支持本链登记的两个采集容器")
+        self.containers = {row["name"]: copy.deepcopy(row) for row in fixture.BASE_ENVIRONMENT["containers"]["containers"]}
+        self.runtime_id = "sha256:" + "d" * 64
+
+    def _network_file(self, container: str, name: str, raw: bytes) -> Path:
+        path = self.data / "control/fixture-runtime-observation" / container / name
+        if path.exists():
+            source.bound(source.binding(path), root=self.data)
+            if path.read_bytes() != raw:
+                raise replay.ReplayError("离线 Docker 网络观察输入漂移")
+            return path
+        return _write_bytes(path, raw)
+
+    def _docker_json(self, arguments: list[str]) -> Any:
+        """只提供 producer 实际查询的闭集；未登记的 daemon 查询失败关闭。"""
+
+        if len(arguments) == 2 and arguments[0] == "inspect" and arguments[1] in self.containers:
+            container = arguments[1]
+            row = self.containers[container]
+            hosts = self._network_file(container, "hosts", b"127.0.0.1 localhost\n")
+            resolv = self._network_file(container, "resolv.conf", b"nameserver 127.0.0.1\n")
+            return [{"Id": row["id"], "Image": self.runtime_id,
+                     "State": {"Running": True, "StartedAt": row["started_at"]},
+                     "Config": {"Hostname": container}, "HostConfig": {"NetworkMode": row["network_mode"]},
+                     "NetworkSettings": {"Networks": {}}, "HostsPath": str(hosts), "ResolvConfPath": str(resolv)}]
+        if arguments == ["image", "inspect", self.runtime_id]:
+            return [{"RepoDigests": [self.configuration["runtime_image"]]}]
+        if arguments == ["version", "--format", "{{json .Server}}"]:
+            return {"Version": "fixture-recorded-daemon", "Os": "linux", "Arch": "arm64"}
+        raise replay.ReplayError(f"未登记的离线 Docker daemon 查询：{arguments}")
+
+    def run(self, argv: Any, *, operation: str, timeout_seconds: float = 30, deadline: Any = None,
+            heartbeat: Any = None, check: bool = True) -> subprocess.CompletedProcess:
+        from tools.official_client_capture import runtime_host_receipt as producer
+
+        command = [str(item) for item in argv]
+        if len(command) > 1 and command[1].endswith("/runtime_host_receipt.py"):
+            arguments = producer._build_parser().parse_args(command[2:])
+            output, tool_root = arguments.output, arguments.capture_tool_root
+            expected_tools = self.data / "tools/official_client_capture"
+            if (tool_root != expected_tools or Path(command[1]) != expected_tools / "runtime_host_receipt.py"
+                    or arguments.runtime_image != self.configuration["runtime_image"]
+                    or arguments.container not in self.containers or output.resolve() != output
+                    or not output.is_relative_to(self.data / "evidence/campaigns")
+                    or output.exists() or output.is_symlink()):
+                raise replay.ReplayError("宿主收据观察命令与冻结工具、镜像、容器或输出坐标不符")
+            with mock.patch.object(producer, "_docker_json", self._docker_json):
+                receipt = producer.build_receipt(container=arguments.container, runtime_image=arguments.runtime_image,
+                                                tool_root=tool_root, run_nonce=arguments.run_nonce)
+            producer.secure_write_json(output, receipt)
+            source.write(output.with_suffix(".observation-origin.json"), {
+                "fixture_only": True, "purpose": "recorded_control_runtime_source", "source": "explicit_docker_observation",
+                "architecture": "linux/arm64", "not_production_observation": True,
+                "formal_version_semantics_certified": False, "receipt": source.binding(output),
+                "producer": receipt["producer"], "capture_source_bundle": receipt["capture_source_bundle"],
+                "container": receipt["container"], "docker_server": receipt["docker_server"],
+            })
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if command[:4] == ["docker", "inspect", "--format", "{{json .Image}}"]:
+            if command[4:] != [self.configuration["service_container"]]:
+                raise replay.ReplayError("服务镜像观察的容器与冻结坐标不符")
+            return subprocess.CompletedProcess(argv, 0, json.dumps(self.build["image"]["image_id"]), "")
+        if command[:5] == ["docker", "image", "inspect", "--format", "{{json .RepoDigests}}"]:
+            if command[5:] != [self.build["image"]["image_id"]]:
+                raise replay.ReplayError("RepoDigests 观察的镜像与本链构建不符")
+            return subprocess.CompletedProcess(argv, 0, json.dumps([self.build["image"]["reference"]]), "")
+        return self.host.run(argv, operation=operation, timeout_seconds=timeout_seconds,
+                             deadline=deadline, heartbeat=heartbeat, check=check)
+
+
 @contextlib.contextmanager
 def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
     """冻结候选形成后才安装其外部环境观察源；准入、Store、画像、selector 与 run/seal 判定不替换。"""
@@ -287,7 +371,6 @@ def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
     from tools.official_client_capture import claude_upgrade_capture as capture
     from tools.official_client_capture import claude_upgrade_candidate_capture as candidate
     from tools.official_client_capture.tests import claude_client_receipt_fixture as clients
-    from tools.official_client_capture.tests import test_claude_upgrade_capture as host_fixture
     from tools.official_client_capture.tests import claude_vc5_chain_fixture as observation_fixture
     from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as gateway_fixture
     from tools.official_client_capture import claude_upgrade_delivery as delivery
@@ -313,25 +396,31 @@ def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
     gateway = copy.deepcopy(gateway_fixture.BASE_GATEWAY)
     gateway["service"]["image_id"] = build["image"]["image_id"]
     fact = observation_fixture.activation_fact(build, source.VERSION)
-    host = host_fixture.FakeHost()
+    host = RecordedHostObservation(data, manifest["configuration"], build)
 
-    def probe(argv: Any, **options: Any):
-        if list(argv[:5]) == ["docker", "image", "inspect", "--format", "{{json .RepoDigests}}"]:
-            return subprocess.CompletedProcess(argv, 0, json.dumps([build["image"]["reference"]]), "")
-        return host.run(argv, **options)
+    def require_manifest(observed: dict[str, Any]) -> None:
+        if observed.get("campaign_id") != manifest["campaign_id"] or observed.get("configuration") != manifest["configuration"]:
+            raise replay.ReplayError("网关观察请求与冻结 Campaign 不符")
 
-    def gateway_facts(*_args: Any, **_options: Any):
+    def gateway_facts(observed: dict[str, Any], host_data_root: Path, *, deadline: Any, heartbeat: Any):
+        del deadline, heartbeat
+        require_manifest(observed)
+        if host_data_root != data:
+            raise replay.ReplayError("网关观察的数据根与本链不符")
         return copy.deepcopy(gateway)
 
-    def activation(*_args: Any, **_options: Any):
+    def activation(observed: dict[str, Any]):
+        require_manifest(observed)
         return "/app/data/claude-egress-activation-fact.json", json.dumps(fact, sort_keys=True) + "\n"
 
+    def host_facts():
+        return {"host_id": HOST, "architecture": "linux/arm64"}
+
     with contextlib.ExitStack() as stack:
-        stack.enter_context(mock.patch.object(capture, "_run_probe_command", probe))
+        stack.enter_context(mock.patch.object(capture, "_run_probe_command", host.run))
         stack.enter_context(mock.patch.object(candidate, "_collect_gateway_facts", gateway_facts))
         stack.enter_context(mock.patch.object(candidate, "_read_activation_fact", activation))
-        stack.enter_context(mock.patch.object(candidate, "observe_service_image", lambda *_a, **_k: build["image"]["image_id"]))
-        stack.enter_context(mock.patch.object(candidate, "host_facts", return_value={"host_id": HOST, "architecture": "linux/arm64"}))
+        stack.enter_context(mock.patch.object(candidate, "host_facts", host_facts))
         stack.enter_context(clients.source_scope())
         delivery_control = data / "control/recorded-delivery-control.json"
         if delivery_control.exists():

@@ -27,6 +27,12 @@ def verify_candidate_projection(state: Mapping[str, Any], projection: Mapping[st
     candidate_jobs = state["inputs"]["candidate_jobs"]
     origin = source.verify_projection({**state, "jobs": candidate_jobs}, projection)
     data = Path(state["data_root"])
+    runtime = source.read(source.bound(projection["runtime"]["receipt"], root=data))
+    server, bundle = runtime.get("docker_server"), runtime.get("capture_source_bundle")
+    if (not isinstance(server, Mapping) or server.get("os") != "linux" or server.get("arch") != "arm64"
+            or not capture.IMAGE_ID_RE.fullmatch(str(runtime.get("runtime_image_id", "")))
+            or not isinstance(bundle, Mapping) or not capture.SHA256_RE.fullmatch(str(bundle.get("sha256", "")))):
+        raise replay.ReplayError("本次候选 runtime 缺少完整 Docker、ARM64 镜像或执行源事实")
     reservation_path = source.bound(projection["runtime"]["reservation"], root=data)
     reservation = source.read(reservation_path)
     candidate_id = reservation.get("candidate_id")

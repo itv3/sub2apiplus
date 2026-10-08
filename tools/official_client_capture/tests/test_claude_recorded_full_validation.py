@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +62,48 @@ class RecordedFullPreparationTests(unittest.TestCase):
             arm.replay(root, bindings["after"]["path"])
         with self.assertRaises(arm.Arm64EnvironmentReceiptError):
             arm.receipts_equivalent(root, before, root, after)
+
+    def test_pending_private_shell_delegates_cli_and_preserves_failure(self) -> None:
+        from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as shell
+
+        case = shell.ClaudeRecordedVC1ChainTests(methodName="_run_pending_full_validation")
+        observed = {}
+        original_temp = tempfile.gettempdir()
+        original_readlink = os.readlink
+
+        def external_command(argv, **options):
+            if argv == ["unshare", "-m", "-n", "true"]:
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+            observed["argv"], observed["options"] = argv, options
+            data = Path(argv[argv.index("--data") + 1])
+            observed["world"] = data.parent.parent
+            self.addCleanup(shutil.rmtree, observed["world"])
+            return subprocess.CompletedProcess(argv, 23, "真实外部边界 stdout 标记\n", "真实外部边界 stderr 标记\n")
+
+        environment = {"CLAUDE_2_1_226_RELAY_FIXTURE": "/fixture/relay", "CLAUDE_2_1_226_FREEZE_FIXTURE": "/fixture/freeze",
+                       shell.RECORD_DIR_ENV: original_temp, shell.RECORDS_ENV: ""}
+        with mock.patch.dict(os.environ, environment), mock.patch.object(shell.platform, "system", return_value="Linux"), \
+                mock.patch.object(shell.platform, "machine", return_value="aarch64"), \
+                mock.patch.object(shell.os, "geteuid", return_value=0, create=True), \
+                mock.patch.object(shell.shutil, "which", return_value="/fixture/tool"), \
+                mock.patch.object(shell.os, "readlink", side_effect=lambda path: "parent-" + path.rsplit("/", 1)[-1]
+                                  if str(path).startswith("/proc/self/ns/") else original_readlink(path)), \
+                mock.patch.object(shell.subprocess, "run", side_effect=external_command):
+            with self.assertRaises(AssertionError):
+                case._run_pending_full_validation()
+        command = observed["argv"]
+        self.assertIn(driver.ACTIVATION_MODULE, command)
+        self.assertEqual(command[command.index("--through") + 1], "VC-6")
+        self.assertEqual(Path(command[command.index("--data") + 1]), observed["world"] / "staging/data")
+        record = source.read(observed["world"] / "record.json")
+        self.assertEqual(record["status"], "unverified")
+        self.assertEqual(record["returncode"], 23)
+        self.assertFalse(record["formal_version_semantics_certified"])
+        self.assertIsNone(record["report_payload"])
+        self.assertEqual(source.bound(record["stdout"]).read_text(encoding="utf-8"), "真实外部边界 stdout 标记\n")
+        self.assertEqual(source.bound(record["stderr"]).read_text(encoding="utf-8"), "真实外部边界 stderr 标记\n")
+        self.assertEqual(tempfile.gettempdir(), original_temp)
+        self.assertNotIn("_run_pending_full_validation", unittest.defaultTestLoader.getTestCaseNames(shell.ClaudeRecordedVC1ChainTests))
 
 
 if __name__ == "__main__":
