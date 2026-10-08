@@ -350,5 +350,157 @@ class QualificationReadSnapshotTests(unittest.TestCase):
                 self.replay()
 
 
+class QualificationSubjectReadSnapshotTests(unittest.TestCase):
+    """在真实 subject 消费入口核对索引接线，不只验证视图自身的方法。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.temporary = tempfile.TemporaryDirectory(prefix="claude-subject-read-", dir="/private/tmp")
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.tree = ManagedToolTree(Path(cls.temporary.name) / "repo")
+        repository = Path(__file__).resolve().parents[3]
+        shutil.copytree(repository / "tools/ci", cls.tree.root / "tools/ci",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        cls.active = cls.tree.active()
+        cls.active.__enter__()
+        cls.addClassCleanup(cls.active.__exit__, None, None, None)
+
+    def setUp(self) -> None:
+        from tools.official_client_capture.tests.test_claude_sealed_gate_materials import MaterialImportProofTests
+
+        # 只复用生产世界，不运行改为 policy12 的类初始化，也不启动交付。
+        self.helper = MaterialImportProofTests()
+        self.helper.tree = self.tree
+        self.addCleanup(self.helper.doCleanups)
+        self.helper.setUp()
+        self.reader = self.helper.store
+        self.fixture = self.helper.fixture
+        self.campaign_id = self.fixture.campaign_id
+
+    def subject(self, **arguments):
+        return self.helper.subject(**arguments)
+
+    def test_consumer_returns_identical_subject_bindings_and_projections(self) -> None:
+        from tools.official_client_capture import claude_qualification_material_source as material
+
+        class LegacySubjectStoreView(_LegacyQualificationStoreView):
+            """保留旧 consumer 的原 Store 读取，仅用于逐对象结果比较。"""
+
+            def object_path(self, reference):
+                return self._store.object_path(reference)
+
+            def receipt_path(self, reference):
+                return self._store.receipt_path(reference)
+
+        bindings, projections = [], []
+        current = self.subject(read_bindings=bindings, read_projections=projections)
+        previous_bindings, previous_projections = [], []
+        with mock.patch.object(material, "_qualification_subject_store", LegacySubjectStoreView):
+            previous = self.subject(read_bindings=previous_bindings,
+                                    read_projections=previous_projections)
+        self.assertEqual(canonical_json_bytes(current), canonical_json_bytes(previous))
+        self.assertEqual(bindings, previous_bindings)
+        self.assertEqual(projections, previous_projections)
+        self.assertTrue(bindings)
+        self.assertTrue(projections)
+
+    def test_consumer_performs_initial_and_final_full_scans_each_call(self) -> None:
+        with mock.patch.object(self.reader, "list_facts", wraps=self.reader.list_facts) as scans:
+            first = self.subject()
+            self.assertEqual(scans.call_args_list,
+                             [mock.call(self.campaign_id), mock.call(self.campaign_id)])
+            self.assertEqual(self.subject(), first)
+            self.assertEqual(scans.call_args_list,
+                             [mock.call(self.campaign_id)] * 4)
+
+    def test_writable_input_uses_a_new_readonly_handle_and_keeps_original(self) -> None:
+        from tools.official_client_capture import claude_qualification_material_source as material
+
+        writer = self.fixture.store
+        expected = self.subject()
+        self.helper.store = writer
+        with mock.patch.object(ControlStore, "open_read_only", wraps=ControlStore.open_read_only) as opens:
+            self.assertEqual(self.subject(), expected)
+            opens.assert_called_once_with(writer.root)
+        self.assertFalse(writer.read_only)
+        view = material._qualification_subject_store(writer)
+        self.assertTrue(view.read_only)
+        self.assertTrue(view._store.read_only)
+        self.assertIsNot(view._store, writer)
+
+    def reject_before_output(self, mutate, expected_message, expected_error=guard.GuardError) -> None:
+        from tools.official_client_capture import claude_qualification_material_source as material
+
+        create_view = material._qualification_subject_store
+        bindings, projections = [], []
+        verified = []
+
+        def mutate_at_final_verification(store):
+            view = create_view(store)
+            original = view.verify_fact_snapshots
+
+            def verify():
+                # 生产语义读取已完成，调用方尚未取得任何原件权限。
+                self.assertTrue(view._fact_snapshots)
+                self.assertEqual(bindings, [])
+                self.assertEqual(projections, [])
+                mutate()
+                verified.append(True)
+                return original()
+
+            view.verify_fact_snapshots = verify
+            return view
+
+        with mock.patch.object(material, "_qualification_subject_store", mutate_at_final_verification):
+            with self.assertRaisesRegex(expected_error, expected_message):
+                self.subject(read_bindings=bindings, read_projections=projections)
+        self.assertEqual(verified, [True])
+        self.assertEqual(bindings, [])
+        self.assertEqual(projections, [])
+
+    def test_valid_fact_append_before_return_refuses_all_output_permissions(self) -> None:
+        payload = self.reader.load_fact(self.fixture.references["validation-selector-after"])["payload"]
+
+        def append():
+            self.fixture.store.append_fact(self.campaign_id, "selector_observed", payload,
+                                           self.fixture._time())
+
+        self.reject_before_output(append, "事实链发生变化")
+
+    def test_campaign_raw_drift_before_return_refuses_all_output_permissions(self) -> None:
+        path = self.reader.root / "campaigns" / f"{self.campaign_id}.json"
+        self.reject_before_output(lambda: path.write_bytes(path.read_bytes() + b"\n "),
+                                  "Campaign 发生变化")
+
+    def test_fact_raw_drift_before_return_refuses_all_output_permissions(self) -> None:
+        fact = self.reader.list_facts(self.campaign_id)[0]
+        path = (self.reader.root / "facts" / self.campaign_id / fact["dimension"]
+                / f"{fact['sequence']:08d}-{fact['_sha256']}.json")
+        self.reject_before_output(lambda: path.write_bytes(path.read_bytes() + b" "),
+                                  "事实摘要漂移", ControlError)
+
+    def test_fact_permission_drift_before_return_refuses_all_output_permissions(self) -> None:
+        fact = self.reader.list_facts(self.campaign_id)[0]
+        path = (self.reader.root / "facts" / self.campaign_id / fact["dimension"]
+                / f"{fact['sequence']:08d}-{fact['_sha256']}.json")
+        self.reject_before_output(lambda: path.chmod(0o400), "事实链发生变化")
+
+    def test_identical_fact_at_another_inode_before_return_refuses_all_output_permissions(self) -> None:
+        fact = self.reader.list_facts(self.campaign_id)[0]
+        path = (self.reader.root / "facts" / self.campaign_id / fact["dimension"]
+                / f"{fact['sequence']:08d}-{fact['_sha256']}.json")
+
+        def replace():
+            replacement = self.helper.root / "replacement-fact.json"
+            replacement.write_bytes(path.read_bytes())
+            replacement.chmod(0o600)
+            before = path.stat()
+            os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+            os.replace(replacement, path)
+            self.assertNotEqual(path.stat().st_ino, before.st_ino)
+
+        self.reject_before_output(replace, "事实链发生变化")
+
+
 if __name__ == "__main__":
     unittest.main()

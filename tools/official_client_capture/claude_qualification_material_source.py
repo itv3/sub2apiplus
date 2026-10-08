@@ -821,6 +821,28 @@ def _retain_candidate_evaluation_draft(
     project_parent(draft_path, data_root, coordinate_roots=tuple(coordinates))
 
 
+def _qualification_subject_store(store: Any) -> Any:
+    """复用本次资格读取索引；首读与交回证明前仍完整校验原链。
+
+    调用方可能还持有形成资格的可写句柄，这里另开同根只读句柄，不更改
+    原句柄。索引不跨本次调用保留，路径定位仍委托原 Store 的引用校验。
+    """
+    from .claude_upgrade_arm64_delivery_executor import _QualificationStoreView
+    from tools.official_client_control.store import ControlStore
+
+    class SubjectStoreView(_QualificationStoreView):
+        """只补来源归档需要的两个定位方法，不增加写入或交付权限。"""
+
+        def object_path(self, reference: dict[str, Any]) -> Path:
+            return self._store.object_path(reference)
+
+        def receipt_path(self, reference: dict[str, Any]) -> Path:
+            return self._store.receipt_path(reference)
+
+    reader = store if store.read_only is True else ControlStore.open_read_only(Path(store.root))
+    return SubjectStoreView(reader)
+
+
 def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], data_root: Path,
                                parent: Mapping[str, Any], *, read_bindings: list[dict[str, Any]] | None = None,
                                read_projections: list[VerifiedQualificationSubjectProjection] | None = None) -> dict[str, Any]:
@@ -841,6 +863,7 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
     from tools.official_client_control.qualification_bindings import QualificationBindingProjection
     from tools.official_client_control.contracts import iter_fact_refs, iter_object_refs, iter_receipt_refs
 
+    store = _qualification_subject_store(store)
     originals = {}
     projections = {}
     data_root = Path(data_root)
@@ -1132,6 +1155,9 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
         if path.relative_to(data_root).as_posix() not in projections:
             project_parent(path, campaign)
     expected = accept.expected_gate_subject(manifest, candidate["payload"], identity)
+    # 返回 subject 或向调用方交回原件权限之前，再核完整事实链及其实际
+    # 字节、目录坐标和元数据；不能用读取初始时的旧索引接受期间的漂移。
+    store.verify_fact_snapshots()
     if read_bindings is not None:
         read_bindings.extend(originals[path] for path in sorted(originals))
     if read_projections is not None:
