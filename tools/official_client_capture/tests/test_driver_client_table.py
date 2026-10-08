@@ -85,6 +85,21 @@ def _write_text(path: Path, content: str) -> Path:
     return path
 
 
+def _shell_client_table_references(text: str) -> set[str]:
+    """提取当前驱动使用的表变量，先忽略允许前导空白的整行注释。
+
+    直接展开覆盖普通、数组、默认值、长度与间接展开；两个现用的间接引用数组
+    会把变量名交给 lib.sh 再读取，也必须核对，不能只检查带美元符号的写法。
+    这是当前引用约定的文本检查，不解析内联注释、引号或 here-document 边界。
+    """
+
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    names = set(re.findall(r"\$(?:\{[!#]?)?(CT_[A-Za-z0-9_]*)\b", code))
+    for match in re.finditer(r"\bCLIENT_(?:TOOLS|STEP)_REQUIRED\s*(?:\+)?=\s*\(([^)]*)\)", code):
+        names.update(re.findall(r"\bCT_[A-Za-z0-9_]*\b", match.group(1)))
+    return names
+
+
 class ClientTableStructureTests(unittest.TestCase):
     def test_driver_carries_an_identical_copy(self) -> None:
         self.assertEqual((DRIVER / "client_table.py").read_bytes(), (REPO_ROOT / "tools/ci/client_table.py").read_bytes())
@@ -106,14 +121,16 @@ class ClientTableStructureTests(unittest.TestCase):
         self.assertEqual(emitted, {line.split("=", 1)[0] for line in CT.shell_lines("codex")}, "两客户端输出同一组变量")
         referenced = set()
         for path in DRIVER.glob("*.sh"):
-            referenced.update(re.findall(r"\bCT_[A-Z0-9_]+", path.read_text(encoding="utf-8")))
+            referenced.update(_shell_client_table_references(path.read_text(encoding="utf-8")))
         self.assertTrue(referenced)
         self.assertLessEqual(referenced, emitted, "驱动脚本引用的 CT_ 变量都由客户端表给出（拼错即红）")
-        # 待接入变量取表里第一个条目作样本（条目随工作项落实删去，样本跟着表走）：本客户端已接入时为空串。
-        sample = CT.pending_names()[0]
-        variable = CT._shell_name("pending_" + sample)
+        # 有待接入条目时取真实条目作样本；全部接入后保留空输出槽，不读取不存在的变量，也不跳过 shell 断言。
+        pending_names = CT.pending_names()
+        sample = pending_names[0] if pending_names else None
+        variable = CT._shell_name("pending_" + sample) if sample is not None else None
+        pending_argument = f'"${{{variable}}}"' if variable is not None else '""'
         script = ('set -Eeuo pipefail\neval "$(python3 -B "$1" shell)"\n'
-                  f'printf "%s|%s|%s|" "$CT_CLIENT" "$CT_ORCHESTRATOR_MODULE" "${variable}"\n'
+                  f'printf "%s|%s|%s|" "$CT_CLIENT" "$CT_ORCHESTRATOR_MODULE" {pending_argument}\n'
                   'printf "[%s]" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}\necho\nenv | grep -c "^CT_" || true\n')
         environment = {key: value for key, value in os.environ.items() if key != "CLIENT"}
         for client, expected_argv in (("codex", "[]"), ("claude", "[--client][claude]")):
@@ -122,13 +139,51 @@ class ClientTableStructureTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             first, exported = completed.stdout.splitlines()
             module = CT.spec(client)["orchestrator_module"]
-            pending = CT.pending(client, sample) or ""
+            pending = (CT.pending(client, sample) or "") if sample is not None else ""
             self.assertEqual(first, f"{client}|{module}|{pending}|{expected_argv}")
             self.assertEqual(exported, "0", "只赋值、不导出：子进程看不到 CT_ 变量")
         unknown = subprocess.run([sys.executable, "-B", str(DRIVER / "client_table.py"), "shell"],
                                  env={**environment, "CLIENT": "kilo"}, capture_output=True, text=True)
         self.assertEqual(unknown.returncode, 2)
         self.assertIn("CLIENT 不认识", unknown.stderr)
+
+    def test_shell_reference_scan_covers_current_direct_and_indirect_forms(self) -> None:
+        text = r'''
+printf '%s' "$CT_CLIENT" "${CT_ORCHESTRATOR_MODULE}" "${CT_CLIENT_ARGV[@]}" "${CT_CLIENT:-}" \
+  "${#CT_PREFLIGHT_PLAN_ARGV[@]}" "${!CT_BINARY_KEY}"
+CLIENT_STEP_REQUIRED=(CT_VC5_RECOVER_SCRIPT vc5-recover.sh)
+CLIENT_TOOLS_REQUIRED=(CT_ORCHESTRATOR_MODULE)
+'''
+        referenced = _shell_client_table_references(text)
+        self.assertEqual(referenced, {"CT_CLIENT", "CT_ORCHESTRATOR_MODULE", "CT_CLIENT_ARGV",
+                                      "CT_PREFLIGHT_PLAN_ARGV", "CT_BINARY_KEY", "CT_VC5_RECOVER_SCRIPT"})
+        emitted = {line.split("=", 1)[0] for line in CT.shell_lines("claude")}
+        self.assertLessEqual(referenced, emitted)
+
+    def test_shell_reference_scan_ignores_placeholder_but_keeps_real_typos(self) -> None:
+        placeholder = ("# 待接入变量名形如 CT_PENDING_TOOL_<名称>\n"
+                       "  # 展开示例：$CT_CLINET ${CT_CLINET:-} ${#CT_CLINET[@]} ${!CT_CLINET}\n"
+                       "\t# 间接示例：CLIENT_STEP_REQUIRED=(CT_VC5_RECVOER_SCRIPT vc5-recover.sh)\n"
+                       "# 间接示例：CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_)\n")
+        self.assertEqual(_shell_client_table_references(placeholder), set())
+        emitted = {line.split("=", 1)[0] for line in CT.shell_lines("claude")}
+        samples = (
+            ('$CT_CLINET', "CT_CLINET"),
+            ('${CT_CLINET:-}', "CT_CLINET"),
+            ('${#CT_CLINET[@]}', "CT_CLINET"),
+            ('${!CT_CLINET}', "CT_CLINET"),
+            ('$CT_CLIENTx', "CT_CLIENTx"),
+            ('CLIENT_STEP_REQUIRED=(CT_VC5_RECVOER_SCRIPT vc5-recover.sh)', "CT_VC5_RECVOER_SCRIPT"),
+            ('CLIENT_TOOLS_REQUIRED=(CT_VC5_RECVOER_SCRIPT)', "CT_VC5_RECVOER_SCRIPT"),
+            ('$CT_PENDING_TOOL_', "CT_PENDING_TOOL_"),
+            ('CLIENT_TOOLS_REQUIRED=(CT_PENDING_TOOL_)', "CT_PENDING_TOOL_"),
+        )
+        for text, misspelled in samples:
+            with self.subTest(text=text):
+                referenced = _shell_client_table_references(placeholder + text)
+                self.assertEqual(referenced, {misspelled})
+                self.assertNotIn(misspelled, emitted)
+                self.assertFalse(referenced <= emitted, "真实拼错必须继续触发表变量未提供的断言")
 
     def test_table_agrees_with_adapters_deployer_installer_and_certification(self) -> None:
         install = driver_tests.driver

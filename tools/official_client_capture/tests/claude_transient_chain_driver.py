@@ -52,6 +52,59 @@ def _write(path: Path, value: Any) -> Path:
     return path
 
 
+def _candidate_relay_sequences(sequences: dict[str, Any], labels: dict[str, Any]) -> dict[str, Any]:
+    """只投影冻结候选标签允许的网关出站请求，保留来源连接号、请求顺序与合成干预。
+
+    来源是离线官方序列夹具；这份投影只用于连续链执行源，不认证真实网关的版本语义。只丢掉已声明由网关
+    本地处理的端点，未知端点或可转发但未获本 probe 标签允许的请求失败关闭，禁止把错误请求静默过滤掉。
+    """
+
+    local_requests = {
+        "HEAD /api/hello", "GET /api/claude_code/policy_limits", "GET /api/claude_code/settings",
+        "GET /api/oauth/profile", "GET /v1/mcp_servers",
+    }
+    model_requests = {"POST /v1/messages", "POST /v1/messages/count_tokens"}
+    projected = copy.deepcopy(sequences)
+    projected["description"] = "冻结候选标签约束下的离线网关出站投影；原官方序列保持不变，不表示真实候选请求。"
+    projected["probes"] = {}
+    for entry in labels["document"]["entries"]:
+        if entry["side"] != "candidate":
+            continue
+        rules = {rule["labels"]["probe"]: rule for rule in entry["rules"] if "connection" in rule}
+        for probe, connection_plan in labels["plans"][entry["job_id"]].items():
+            if probe in projected["probes"] or connection_plan["mode"] not in {"none", "unordered"}:
+                raise AssertionError(f"候选来源投影遇到重复 probe 或未支持的连接形态：{probe}")
+            record = copy.deepcopy(sequences["probes"][probe])
+            rule_labels = rules[probe]["labels"]
+            if (record["response_mode"] != rule_labels["response_mode"]
+                    or record["response_plan"] != rule_labels.get("response_plan")):
+                raise AssertionError(f"候选来源的合成模式或计划与冻结标签不同：{probe}")
+            forwarded = ({"POST /v1/oauth/token"} if plan.candidate_trigger(probe) == evidence.CANDIDATE_TRIGGER_ACCOUNT_REFRESH
+                         else model_requests)
+            allowed = set(connection_plan.get("requests", ()))
+            if not allowed <= forwarded:
+                raise AssertionError(f"候选标签超出网关转发边界：{probe}")
+            connections = []
+            for item in record["connections"]:
+                requests = []
+                for request in item["requests"]:
+                    normalized = request.split("?", 1)[0]
+                    if normalized in local_requests:
+                        continue
+                    if normalized not in forwarded or normalized not in allowed:
+                        raise AssertionError(f"候选来源含未知或未获标签允许的出站请求：{probe}／{request}")
+                    requests.append(request)
+                # 没有上游请求的连接不生成有效记录或字节附件；保留其余连接号、原请求顺序与干预动作。
+                if requests:
+                    connections.append({**item, "requests": requests})
+            record["connections"] = connections
+            # 官方客户端直连的握手前重置不能转成候选网关的握手事实；投影不带这些零请求记录。
+            record["excluded_connection_ids"] = []
+            plan.match_relay_connections(connection_plan, connections)
+            projected["probes"][probe] = record
+    return projected
+
+
 class ClaudeTransientChainDriver(late_control.ClaudeLateControlChainDriver):
     """只借用既有输入驱动，不继承那些测试用例；所有新段产物均由真实命令产生。"""
 
@@ -78,6 +131,12 @@ class ClaudeTransientChainDriver(late_control.ClaudeLateControlChainDriver):
         prefix, tail = candidate_tests.CANDIDATE_RELAY.rsplit("sys.exit(0)", 1)
         source, source_tail = seal_tests.FULL_FAKE_RELAY.rsplit("sys.exit(0)", 1)
         self.assertFalse(tail.strip() or source_tail.strip())
+        # 通用候选前缀只保留 dry-run 和宿主凭据核对，不能给零出站 probe 留下虚假的通用请求附件。
+        generic_artifact = 'with open(os.path.join(output, "relay-raw.bin"), "wb") as handle:'
+        self.assertEqual(prefix.count(generic_artifact), 1)
+        prefix = prefix.split(generic_artifact, 1)[0]
+        # 零连接 probe 不应因 all([]) 被归成 OAuth 专用主机。
+        source = source.replace('oauth_only = all(', 'oauth_only = bool(connections) and all(')
         marker = '        stream += f"{method} {target} HTTP/1.1'
         self.assertEqual(source.count(marker), 1)
         source = source.replace(marker, '''        version = "2023-01-01" if probe == json.load(open(os.environ["CLAUDE_TRANSIENT_RELAY_CONTROL"], encoding="utf-8")).get("bad_probe") else "2023-06-01"
@@ -117,6 +176,10 @@ sys.exit(0)
         campaign = super().build_campaign(**kwargs)
         manifest = upgrade.load_campaign_manifest(campaign)
         labels = _write(campaign / "inputs" / "evidence-labels.json", json.loads(plan.evidence_labels_path(capture_tests.TARGET).read_bytes()))
+        scenarios = json.loads((campaign / manifest["inputs"]["target_scenarios"]["path"]).read_bytes())
+        frozen_labels = plan.load_evidence_labels(labels, expected_version=manifest["target_version"], scenario_payload=scenarios)
+        self.relay_sequences = _write(self.root / "transient-candidate-relay-sequences.json",
+            _candidate_relay_sequences(json.loads(seal_tests.SEQUENCES.read_bytes()), frozen_labels))
         configuration = {
             **manifest["configuration"], **candidate_tests.CANDIDATE_CONFIGURATION,
             "runtime_image": capture_tests.IMAGE, "capture_root": str(self.data), "capture_tool_root": str(self.runtime.tool_copy),
@@ -162,7 +225,7 @@ sys.exit(0)
             stack.enter_context(mock.patch.dict(os.environ, {
                 "FAKE_CANDIDATE_HOST": str(self.runtime.fake_host), "FAKE_CANDIDATE_CONTROL": str(self.runtime.candidate_control),
                 "FAKE_CANDIDATE_CALLS": str(self.runtime.candidate_calls_file), "FAKE_GATEWAY_FILE": str(self.runtime.gateway_file),
-                "ADMIN_BEARER_TOKEN_FILE": str(self.runtime.admin_token), "FAKE_RELAY_SEQUENCES": str(seal_tests.SEQUENCES),
+                "ADMIN_BEARER_TOKEN_FILE": str(self.runtime.admin_token), "FAKE_RELAY_SEQUENCES": str(self.relay_sequences),
                 "FAKE_RELAY_MUTATIONS": str(self.mutations), "CLAUDE_TRANSIENT_RELAY_CONTROL": str(self.relay_control),
             }))
             yield
