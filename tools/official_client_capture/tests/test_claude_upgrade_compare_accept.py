@@ -193,11 +193,12 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
 
     def gate_receipt(self, world: dict[str, Any], name: str, *, failed_gate: str | None = None) -> str:
         # 父进程读取候选身份时也会重验客户端来源，须在既有测试接缝内完成；
-        # 来源适配器与门禁环境收据替身均只在此作用域登记，正式读侧保持严格校验。
+        # 来源适配器只在此作用域登记；环境收据按新世界配置选择真实合同或默认旧替身。
         with chain.seams(world["config_path"]):
             identity = compare.candidate_gate_identity(world["campaign"], world["manifest"], CANDIDATE, world["build"])
             subject = chain.expected_subject(world["manifest"], world["candidate_payload"], identity)
-            return chain.gate_receipt_file(world["gate_root"], name=name, subject=subject, host=HOST, architecture=world["architecture"], failed_gate=failed_gate)
+            return chain.gate_receipt_file(world["gate_root"], name=name, subject=subject, host=HOST, architecture=world["architecture"],
+                failed_gate=failed_gate, environment_mode=chain.gate_environment_mode(_read(world["config_path"])))
 
     def footprint(self, world: dict[str, Any]) -> tuple[list[str], int]:
         facts = [fact["fact_kind"] for fact in world["store"].list_facts(str(world["manifest"]["campaign_id"]))]

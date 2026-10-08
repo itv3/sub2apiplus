@@ -359,6 +359,10 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
 
     def vc5_complete_world(self) -> dict[str, Any]:
         world = self.vc5_world()
+        # 只对本次新建世界开启完整环境合同；VC-5 动作与父门禁共读同一配置。
+        config = compare_tests._read(world["config_path"])
+        config["gate_environment_mode"] = chain.REAL_GATE_ENVIRONMENT
+        chain._write_json(world["config_path"], config)
         campaign = world["campaign"]
         comparison = self.run_compare_and_assert(world)
         self.assert_batch_passed(self.dispatch_vc5(world, 10, self.assert_action(campaign, comparison)), 10, "VC-5")

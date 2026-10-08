@@ -17,8 +17,9 @@ B4-02 的真实写入层 ``claude_upgrade_candidate_seal.record_candidate_seal_c
    与候选 seal 预览／批准（B4-02）。
 4. **候选 attempt 上下文**：``claude_upgrade._capture_stage_attempt_context`` 换成合成 attempt（含 c1 定形的候选激活事实登记
    ``gateway_environment.activation_fact``）。真实来源：候选 run 写出的 attempt 与封存证据清单。
-5. **门禁环境收据**：``codex_upgrade_arm64_environment_receipt.replay``／``receipts_equivalent`` 换成替身（B4-06a 测试同一
-   做法）。真实来源：ARM64 门禁前后的环境收据。
+5. **门禁环境收据**：默认沿用 B4-06a 的旧替身。typed VC-6 新世界显式选 ``real_receipts`` 模式，以离线合成 ARM64
+   事实走原 producer finalizer 与门禁 finalizer；父进程和独立 worker 都调用原 replay，不安装环境重放或等价比较替身。
+   这只补齐新测试世界的读侧事实，不代表 ARM64 现场实采。
 
 子进程里的接缝经 ``usercustomize`` 注入：只在 ``SEAM_ACTIONS_ENV`` 列出的外层动作里生效，配置是测试写的一份 JSON。
 独立规则检查器虽然继承父动作 ID，也只读已经冻结的输入，不重复安装这套来源接缝。
@@ -44,11 +45,14 @@ from tools.official_client_capture import codex_upgrade_gate_receipt as gate_rec
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests import claude_evaluator_fixture as evaluator_fixture
 from tools.official_client_capture.tests import claude_client_receipt_fixture
+from tools.official_client_capture.tests.control_receipt_fixtures import create_arm_receipt
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 SEAM_CONFIG_ENV = "CLAUDE_VC5_CHAIN_SEAMS"
 SEAM_ACTIONS_ENV = "CLAUDE_VC5_CHAIN_SEAM_ACTIONS"
 SEAM_REPOSITORY_ENV = "CLAUDE_VC5_CHAIN_SEAM_REPOSITORY"
+LEGACY_GATE_ENVIRONMENT = "legacy"
+REAL_GATE_ENVIRONMENT = "real_receipts"
 TEMPLATE_ATOMIC = "SPEC-HDR-001"
 EVIDENCE_SCENARIO = "transport.http"
 PROBE_REQUEST_PATHS = {"failure-529": ["/v1/messages"], "print": ["/v1/messages", "/v1/messages/count_tokens"], "tls": []}
@@ -172,12 +176,22 @@ def _replay_environment(root: Path, relative: str) -> dict[str, Any]:
     return {"status": "passed", "phase": "gate_before" if role == "before" else "gate_after", "subject_id": attempt_id, "continuity_identity_sha256": "8" * 64}
 
 
+def gate_environment_mode(config: Mapping[str, Any]) -> str:
+    """新世界须显式选择真实封存合同；未声明时保持旧夹具行为，拼错模式直接拒绝。"""
+
+    mode = config.get("gate_environment_mode", LEGACY_GATE_ENVIRONMENT)
+    if mode not in (LEGACY_GATE_ENVIRONMENT, REAL_GATE_ENVIRONMENT):
+        raise ValueError("门禁环境夹具模式须为 legacy 或 real_receipts")
+    return mode
+
+
 def patchers(config: Mapping[str, Any]) -> list[Any]:
     """按配置组出输入源接缝，并按可选的运行源布局登记映射；正式布局校验仍由产品读侧执行。"""
 
     from tools.official_client_capture import claude_upgrade
     from tools.official_client_capture import claude_upgrade_compare
 
+    environment_mode = gate_environment_mode(config)
     result: list[Any] = [claude_client_receipt_fixture.source_patch()]
     if config.get("capture_layout") is not None:
         # 只登记外部运行源已冻结的两个值；不从 capture_root 推导别名、不替换正式布局校验器。
@@ -192,15 +206,16 @@ def patchers(config: Mapping[str, Any]) -> list[Any]:
         attempt = json.loads(Path(config["attempt"]).read_text(encoding="utf-8"))
         root = Path(config["attempt_root"])
         result.append(mock.patch.object(claude_upgrade, "_capture_stage_attempt_context", side_effect=lambda *a, **k: (root, copy.deepcopy(attempt))))
-    environment = gate_receipt.codex_upgrade_arm64_environment_receipt
-    result.append(mock.patch.object(environment, "replay", side_effect=_replay_environment))
-    result.append(
-        mock.patch.object(
-            environment,
-            "receipts_equivalent",
-            side_effect=lambda left_root, left, right_root, right: left["continuity_identity_sha256"] == right["continuity_identity_sha256"],
+    if environment_mode == LEGACY_GATE_ENVIRONMENT:
+        environment = gate_receipt.codex_upgrade_arm64_environment_receipt
+        result.append(mock.patch.object(environment, "replay", side_effect=_replay_environment))
+        result.append(
+            mock.patch.object(
+                environment,
+                "receipts_equivalent",
+                side_effect=lambda left_root, left, right_root, right: left["continuity_identity_sha256"] == right["continuity_identity_sha256"],
+            )
         )
-    )
     return result
 
 
@@ -519,9 +534,11 @@ def gate_receipt_file(
     host: str,
     architecture: str,
     failed_gate: str | None = None,
+    environment_mode: str = LEGACY_GATE_ENVIRONMENT,
 ) -> str:
-    """生成一份候选外部门禁 v4 收据（``failed_gate`` 给出时该门禁失败），返回证据根内的相对路径。"""
+    """生成候选外部门禁 v4；真实合同模式必须提供可独立重放的前后环境事实，默认保持旧夹具。"""
 
+    environment_mode = gate_environment_mode({"gate_environment_mode": environment_mode})
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     stem = Path(name).stem
     gates: list[dict[str, Any]] = []
@@ -540,10 +557,17 @@ def gate_receipt_file(
             }
         )
     attempt_id = f"gate-{stem}"
-    environment = {
-        role: binding(_private_json(root, root / "environment" / f"{attempt_id}-{role}.json", {"attempt_id": attempt_id, "role": role}), root, with_bytes=False)
-        for role in ("before", "after")
-    }
+    if environment_mode == REAL_GATE_ENVIRONMENT:
+        environment = {}
+        for role, phase in (("before", "gate_before"), ("after", "gate_after")):
+            receipt = create_arm_receipt(root, phase=phase, subject_id=attempt_id,
+                                         prefix=f"environment/{attempt_id}-{role}")
+            environment[role] = binding(receipt, root, with_bytes=False)
+    else:
+        environment = {
+            role: binding(_private_json(root, root / "environment" / f"{attempt_id}-{role}.json", {"attempt_id": attempt_id, "role": role}), root, with_bytes=False)
+            for role in ("before", "after")
+        }
     facts = {
         "schema_version": gate_receipt.FACTS_SCHEMA, "phase": gate_receipt.CANDIDATE_PHASE,
         "attempt": {"attempt_id": attempt_id, "root_cause_id": f"candidate-gate-{failed_gate}" if failed_gate else None, "previous_receipt": None},
