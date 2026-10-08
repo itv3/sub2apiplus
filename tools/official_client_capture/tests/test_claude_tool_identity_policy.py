@@ -525,7 +525,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 7))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 8))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
@@ -541,6 +541,12 @@ class ClaudePolicyFileTests(unittest.TestCase):
         for name, layer in expected.items():
             with self.subTest(file=name):
                 self.assertEqual(v3.classify_path(self.policy, "official_client_capture/" + name), layer)
+
+    def test_mac_observation_and_recipe_layers(self) -> None:
+        """原生观测与启动选择分别影响证据语义和wire生产身份，不留默认归层。"""
+        self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_process_identity.py"), "evidence_semantics")
+        self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_product_recipe.py"), "wire_producer")
+        self.assertEqual(v3.classify_path(self.policy, "official_client_control/qualification_bindings.py"), "evidence_semantics")
 
     def test_orchestrators_and_shared_control(self) -> None:
         for key in ("official_client_capture/codex_upgrade.py", "official_client_capture/codex_upgrade_client_adapter.py"):
