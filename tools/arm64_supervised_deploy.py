@@ -346,7 +346,7 @@ from urllib.parse import urlsplit
 # 内容生成与重放只走纯核心；真实派发仍经原读取入口核绑定文件和 VC-1／VC-5 门禁。Codex 继续走严格入口，
 # 仅 control 层与监督器摘要变化，wire、evidence、编排器闭包和四项评估器摘要均保持原值。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "44b08e351551c0e8366d4836b743cd40619b050528822dac570aca7752d16b7e"
+    "ed23911ee3b99c54455943a4a2c6a0a37993ce43d58cb5f8a4b3ef22fcbae19c"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

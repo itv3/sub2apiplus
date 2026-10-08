@@ -1021,7 +1021,7 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 | [VC-3](#claude-vc-3) 生成画像 | VC-2 批准、冻结的 Active 目录与画像 | `vc-batch.sh` 派发 `prepare-profile` 与 `stage-profile` 批次 | `official_sealed → profile_approved`、暂存 Release 与 VC-3 checkpoint；Active 未变 | 对账后重派；ProfileApprovalFact 之前只追加 revision |
 | [VC-4](#claude-vc-4) 固定候选 | VC-3 暂存 Release、批准实现闭集 | ARM64 `vc4-requirements.sh` → 本机 `local-claude-candidate-chain.sh` → ARM64 `arm64-vc4-gates.sh` → `vc4-all.sh` | 同源构建收据、`candidate_sealed` 与当前 revision 的 VC-4 checkpoint | 重入 `vc4-all.sh`（上传中断用 `--resume-from upload-wait`）；候选真实变化先 `invalidate-candidate`，再 `revision-open --supersedes` |
 | [VC-5](#claude-vc-5) 定向验收 | 固定候选与 VC-4 收据、VC-5 准入 | `vc5-all.sh` 按客户端派发采集、seal／compare、assert／accept；缺收据或批准时暂停 | AcceptanceFact、当前基线 VC-5 checkpoint；`validation_only／ready`、`not_activated` | 封存前对账→批准→授权→`vc5-claude-recover.sh`；封存后 `evaluation-recover`，完整 ar 链待验收 |
-| [VC-6](#claude-vc-6) 交付／激活 | VC-5、交付环境／回退点；生产另需权限 | `deliver-candidate run`／批准版 `finalize` 分两批；ARM64 真实执行器待接 | 候选交付收据；validation_only 完成 VC-6，生产用途等 B4-08 | 对账后同 run 续 `dr<k>`；成功阶段先批准失效；finalize 幂等 |
+| [VC-6](#claude-vc-6) 交付／激活 | VC-5、交付环境／回退点；生产另需权限 | `deliver-candidate run`／批准版 `finalize` 分两批；执行器已完成本机接线，ARM64 现场待验收 | 候选交付收据；validation_only 完成 VC-6，生产用途等 B4-08 | 对账后同 run 续 `dr<k>`；成功阶段先批准失效；finalize 幂等 |
 
 主交接链固定为：
 
@@ -1281,7 +1281,8 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
 ### 4.0.5 受管工具发布认证
 
 认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify，四个入口都带
-`--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude v3 引擎计算；pre-A3 签
+`--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude schema v3 引擎计算；当前
+`policy_version=4` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
 `pre-a3-path-certification/v3`，缺省坐标为 `control/policy-certification/claude-pre-a3-path-certification-<stamp>.json`；
 发布认证签 `tool-release-certification/v2`，绑定 Claude 部署收据的五摘要、pre-A3 认证、完整 Job 演练
 （`official-client-job-rehearsal-receipt/v1`，含失败生命周期探针）与 atomic-double 收据，只能在具备 Go 与 Docker
@@ -1315,6 +1316,13 @@ Claude 发布认证：**待认证**。上述入口、源码与离线合同不等
 录制链中的发布循环前置与静态控制投影是明确标记的测试夹具，不能反向证明八链已通过；局部 VC-0→VC-1
 通过也不能证明 VC-0～VC-6 全链通过。Mac 真账号采集与 ARM64 真实交付执行器的现场验收仍须分别完成。
 本次文档同步只登记结构与实际入口，不补签认证或把旧 pre-A3 收据视为当前发布证明。
+本机集成树已合入真实交付合同 A（`551a01c17`，89 项本机测试通过）与 Mac v2 合同 B
+（`8b6e15ab8`，74 项基础测试及 31 项入口故障测试通过）。共享 D4／r2 与五项恢复后继修复也已合入，
+Mac、身份与恢复组合专项在 `58dcc47ab` 上共 165 项通过，第二次 transient 整链尚未执行；这些本机
+局部凭证不证明八条必需链通过。B 的来源与预约 wrapper 已真实调用并进入 compare／accept 读侧根，
+末轮接线已提交 `58dcc47ab`，双客户端身份与读侧摘要已实算，最终演进登记及变异复验仍待收口。
+新模块与最终修复纳入工具身份后，仍须完成策略演进与受监督部署，并以 ARM64 当前部署的八链、
+pre-A3、发布认证 issue／verify 及 VC-0 收口凭证复核；当前不得声明最终发布或现场认证完成。
 
 <a id="claude-vc-1"></a>
 ## 4.1 VC-1 收集目标证据
@@ -1348,8 +1356,12 @@ AtomicAssertionLedger 均在 VC-2 完成。
 | 可信证据只缺少某项目标事实 | 只对该事实、触发条件和直接依赖场景定向取证，其余证据继续只读复用 |
 | 目标、基线、Campaign 用途、官方产物、平台、entrypoint、隐私模式、账号权限或模型可见性变化 | 停止当前 Campaign，返回 VC-0 重新冻结身份和证据策略 |
 | 仅报告、控制面、evaluator 或 Candidate 变化，目标证据语义未变 | 只重跑受影响的离线派生与门禁，不得据此重发官方请求 |
-| 采集、relay 或其他产出侧工具改变证据字节（wire producer 变化） | 官方未封存时在原 Campaign 以 `tool-evolution` 登记演进：预览按作业声明的工具依赖算出受影响 Job（编排器 wire 闭包变化或变化映射不到作业时全部受影响）并逐作业作废，`resume` 只重采受影响 Job；官方已封存后仍有 Job 受影响即拒绝登记，Campaign 内不再重采官方证据 |
+| 采集、relay 或其他产出侧工具改变证据字节（wire producer 变化） | 官方未封存时在原 Campaign 以 `tool-evolution preview／apply` 登记演进：预览按作业声明的工具依赖算出受影响 Job（编排器 wire 闭包变化或变化映射不到作业时全部受影响）并逐作业作废，批准后 `resume` 只重采受影响 Job；官方已封存后仍有 Job 受影响即拒绝登记，按后继身份边界处理。候选未封存时按同一影响映射与恢复资格续跑；候选已封存且仍有 Job 受影响时拒绝登记，补采走 §4.5.8 的评估失败局部恢复 |
 | 提取、脱敏或其他证据处理工具改变证据解释（evidence semantics 变化） | 原 Campaign 以 `tool-evolution` 登记演进并按评估纪元重评，只重跑离线处理，原始字节不重采 |
+
+共同身份、逐文件影响、批准与历史保留边界见
+[Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。Claude 沿本表的
+`tool-evolution` 入口处理；封存状态和官方／候选来源分别重验，登记拒绝后仍须取得对应恢复或后继许可。
 
 同目标只读复用经 `import-predecessor-evidence --mode read_only_reuse` 进入本 Campaign（§4.0.4）：七项身份（目标
 版本、官方产物、平台、entrypoint、隐私模式、OAuth 组织、模型目录摘要）全部可证且逐项相等才签发导入收据，导入的
@@ -2022,10 +2034,16 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-all.sh"
 `capture-candidate`、`compare`、`assert-rules`、`accept` 是父批次中的动作，操作员通过驱动或
 `compile-and-run-vc-batch` 派发。Store 低级写入命令由编排器调用，不作为人工拼接事实的操作步骤。
 
-**当前限制**：Mac 客户端收据已有离线准备、核验与导入合同，但三官方客户端真账号采集尚未接通，正式
-recorder／独立捕获来源登记仍为空。缺少 Desktop／VS Code 收据或 seal 批准时，驱动写
-`vc5-pause.json` 并暂停。B4-05b 的封存后 `ar<k>` 恢复段仍在实现／待验收，完整录制回放与发布认证也未完成，
-见 §3.6。以下入口和合同不能替代这些现场验收。
+**当前本机与现场状态**：Mac v2 合同 B 已合入本机集成树（`8b6e15ab8`），74 项基础测试与 31 项
+入口故障测试通过。`client-run` 主 CLI／批次、Candidate 准入适配、预约发现和 provenance 已接入；
+来源与预约 wrapper 已真实调用并显式纳入 compare／accept 读侧根，末轮接线已提交 `58dcc47ab`，
+双客户端摘要已实算，最终受控登记与读侧变异复验仍待收口。真实服务仍缺原 attempt 的请求上界占用、
+独立 capture 生命周期与真实 ProductRecorder，
+因此 live 入口保持零启动拒绝，正式来源登记仍为空。历史形成期 authority 也待补齐。三官方客户端
+真账号采集尚未现场验收；缺少 Desktop／VS Code 当前 v2 收据或 seal 批准时，驱动写
+`vc5-pause.json` 并暂停。D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项共 165 项通过，第二次 transient 整链
+尚未执行。完整录制回放、A/B 最终组合及发布认证仍未完成，见 §4.0.5；本机通过不能替代产品与
+账号、双端部署或 ARM64 独立来源验收。
 
 ### 4.5.1 执行闭集、运行前检查与 attempt 冻结
 
@@ -2077,10 +2095,45 @@ for VS Code 按批准计划驱动候选。Claude 按 ModelCapabilityCatalog 枚�
 `codex-final-wire-isolation` 两项单独留证；后者需要冻结的 Codex 账号／API Key／模型、生产 commit 及真实请求
 确认。驱动按顺序派发边界核对，不能用手工 HTTP 正例或伪造客户端 Header 替代真实客户端收据。
 
-Mac 客户端材料通过 `capture-candidate client-evidence prepare／verify／import` 冻结任务、核验原始附件并导入。
-这组入口目前只具备离线合同能力：没有已登记的真实 recorder 就不能预约正式客户端运行；
-`regression_fixture` 只归档历史回归材料，不能满足正式 `--client-evidence` 或真账号验收。后续须接通
-真实客户端、独立捕获来源与请求前预算准入，再按同一合同形成可消费的正式收据。
+<a id="claude-mac-v2"></a>
+#### Mac 客户端 v2 来源与受监督运行
+
+离线入口 `capture-candidate client-evidence prepare／verify／import` 继续负责冻结任务、核验来源与导入，
+自身不启动产品。受监督 `client-run` 已接入主 CLI 与批次，Candidate services 的现有门禁适配、来源
+和预约消费也已接入；真实服务仍缺原 attempt 请求上界占用、独立 capture 预约／ready／关闭／同步
+生命周期及真实 ProductRecorder 工厂。能力未闭合时在产品启动前拒绝，不创建第二本账或另起
+不受监督的捕获。正式 `SOURCE_ADAPTERS` 仍为空，测试作用域的替身登记不授予正式权限；
+`regression_fixture` 只归档回归材料，实际产品、账号与双端来源仍须现场验收。
+
+| v2 材料 | 必须分别冻结和重验的事实 |
+|---|---|
+| 产品与制品 | 应用包、应用 executable、embedded CLI 分列；VS Code 另列 extension host executable、扩展 package 与实际 entrypoint。产品、模块与 CLI 各自记录版本、SHA 和官方来源，目录树不能冒充 executable |
+| 真实参与 | PID、boot／start 标记组成进程实例，绑定父实例、角色、会话及窗口；模块绑定真实 host instance、加载／激活时间与独立观测。多模块可共用宿主，不能自行造模块 PID |
+| 独立捕获 | ARM64 受监督预约和 ready、原始请求、连接与 ordinal；本机 socket／调用、模块参与与完整代理／NAT 映射共同闭合。服务端原件只记录原生连接事实，不自报 Mac PID／scenario |
+| 隔离与恢复 | 产品实际支持的隔离 recipe、修改前状态、监测与恢复 journal、前后原件和双端部署证明。失败也停止本轮产品、恢复原状态并封存；恢复结论必须与 journal 终态一致 |
+| 成功与账务 | task／source-manifest／server-capture／imported-run／receipt 均用 v2，完整组合重放通过；accounting 仍为 v1，经既有 accounting-intent → COMMIT → outbox → 项目账本解决后才发成功收据 |
+
+运行顺序固定为：当前候选、来源和账务准入 → 原 attempt 登记 reservation/task/producer/capture 坐标 →
+独立 capture ready → 配置隔离、监测与恢复 journal → 调度前复核 Candidate lease／预算／身份 → 启动真实
+Desktop 或 VS Code 并驱动场景 → 停止、恢复、封存 → 同步与导入。实际产品参数须由来源原件证明；不能
+猜启动参数、注入非官方 Header，或用单独 CLI 代替产品。
+
+预约索引固定在原 attempt 的 `client-evidence/reservations/<producer_run_id>.json`，live 原件固定在
+`client-evidence/<client>/runs/<task_nonce>/`。本地捕获目录缺失、通道中断、材料未同步或未导入均保持
+未决；只有静态来源适配器证明未调度且独立请求原件为空，才允许零收口。进入 dispatch-intent 后，重入只
+恢复同步／导入，不重复启动产品；发现入口必须保留未导入预约。
+
+预算按实际模型 POST 计数，包含失败、拒绝、超额和非法 JSON payload；OAuth 等辅助请求单列。缺可执行的
+并发／重试上界与 deadline 时拒绝启动。原生请求键仍由 `producer_run_id`、`claude_mac_candidate` 和
+`{capture_id, connection_id, request_ordinal}` 生成，进程实例与 schema 版本不进入去重键；重导不重计。
+
+当前成功收据 reader、seal、segment 继承、evidence／compare、accept 与 VC-5 必须消费完整 v2，不接受整套
+v1 或混搭降级。历史 v1 已有原位置只读账务发现；私有验证器不转换、不重签，也不授予形成期成功
+审计或当前正例权限。准确 Store／封存 authority 的形成期入口仍待补齐，不能用当前 JSON、安装状态
+或任意用途旗标取得历史权。真实来源未完成验收前保持关闭。
+
+应用产品版本不能代替 Catalog 的 embedded CLI 身份。当前安装材料与旧固定 Catalog 不同，须先核实际
+内置 CLI 及官方来源，闭合 Translation／Catalog 后开新 Candidate revision；不能用新安装为旧候选签成功。
 
 ### 4.5.3 Candidate 证据封存
 
@@ -2195,7 +2248,7 @@ python3 -m tools.official_client_capture.claude_upgrade evaluation-recover previ
 | `root-cause-class` | 修复与续跑入口 | 当前边界 |
 |---|---|---|
 | `evaluator-defect` | 修 evaluator、定向回归、受监督部署并登记演进；`evaluation-recover apply` 绑定修复 commit、部署收据与批准摘要，开新 `b<K>` | 复用原始采集，仅重评受影响部分 |
-| `transient-environment` | 从失败断言沿候选 manifest 的 `source_artifacts` 回溯非空 Job 集 J*；经批准开 `ar<k>`，补采后增量封存、重评 | B4-05b 仍在实现／待验收；当前不得把命令参数存在解释为全链可用 |
+| `transient-environment` | 从失败断言沿候选 manifest 的 `source_artifacts` 回溯非空 Job 集 J*；经批准开 `ar<k>`，补采后增量封存、重评 | 恢复段及五项后继修复已合入，组合定向检查通过；第二次 transient 整链未跑，尚无正式整链通过凭证 |
 | `candidate-source` | 对账、`invalidate-candidate preview／apply`，再 `revision-open --supersedes` | 新候选从 VC-4 起，保留可信 VC-0～VC-3 |
 | `approval-inputs` | 仅 selector 修正走 `evaluation-recover approval-revision`；规则集、模式、场景或目标身份变化建后继 Campaign | 新批准基线下旧验收不能直接沿用 |
 
@@ -2227,9 +2280,23 @@ python3 -m tools.official_client_capture.claude_upgrade evaluation-recover apply
 - **产物与终点**：候选交付收据 `ready_for_operator_release`；`validation_only` 完成 VC-6，
   `production_replacement` 还须完成生产分支，目前停 `production_activation_pending` 等待 B4-08。
 
-**当前 ARM64 四阶段真实交付执行器尚未完成，`ENVIRONMENT_EXECUTORS` 尚无登记项。** 控制面、Store 合同与
-恢复测试不能替代真实切换证据；以下流程是当前交付操作合同，在执行器接入、验收及本轮准入齐备前不得
-宣称已完成候选交付。生产分支 §4.6.3～§4.6.8 随 B4-08 另批。
+**当前状态分两层**：真实交付合同 A 及六补项的本机实现已提交 `551a01c17`，89 项本机测试通过；
+typed 执行证明、严格 Store 消费者、阶段结果及交付 checkpoint 已完成本机接线。正式执行器登记表
+`ENVIRONMENT_EXECUTORS` 仍为空；ARM64 实际场地、可信回退、独立 guard 的受管安装与生命周期、
+专用凭据、四阶段及异常恢复尚待现场验收。以下合同规定新候选交付的版本下限与恢复边界，
+本机通过不能证明 ARM64 已部署或 VC-6 已完成。生产分支 §4.6.3～§4.6.8 随 B4-08 另批。
+
+| 当前候选交付合同 | 新能力要求 | 历史边界 |
+|---|---|---|
+| CandidateDeliveryPlan | v2，绑定显式配置、稳定投影、零模型 recipe 与可信回退 | v1 仅按形成期重放 |
+| 阶段 payload／Fact 外壳 | delivery-fact v3／control-fact v2，目标与实测分离并绑定严格执行证据 | 旧阶段不能混入当前有效链 |
+| operational_evidence | typed v2，固定证据种类与字段闭集，含独立 guard／journal 来源 | generic v1 继续供其它既有合同使用，不能冒充新交付证明 |
+| 交付包／交付收据 | package v2／receipt v4，覆盖全部操作、失败／恢复与发布意图 | 旧收据可作历史幂等引用，不授予当前完成权 |
+| 交付阶段结果 | claude-upgrade-delivery v2，完整语义到达 VC-6 写入及重放 | 旧结果与旧 checkpoint 只作形成期审计 |
+
+新真实交付须有 `client=claude` 的 Campaign v2、当前有效工具能力和受管来源；版本下限也在直接 Store
+发布、allow_existing／reused、finalizer、status、阶段结果与 checkpoint 消费者校验。不能选旧外壳降级，
+不能将旧历史成功引用包装成新版完成证明。
 
 ### 4.6.1 用途分流、交付快照与回滚点
 
@@ -2243,8 +2310,10 @@ python3 -m tools.official_client_capture.claude_upgrade evaluation-recover apply
 | `production_replacement` | 先完成完全相同的候选交付 | 生产权限与 P0 输入齐备后继续生产激活；当前等待 B4-08，不能改用途绕过 |
 
 切换前只读冻结 §6.4 ARM64 环境的应用镜像、Compose／override、依赖容器、数据库、缓存、挂载、网络、
-代理／CA／DNS、账号、磁盘与资源水位，登记实际可恢复的应用镜像和配置为本轮回退点。2.1.220 只是历史
-fixture，只有它本身就是本轮已冻结且验证可恢复的运行对象时，才可充当 operational rollback。
+代理／CA／DNS、账号、磁盘与资源水位。默认回退对象是一份独立、完整验收并封存的基准 Candidate，绑定
+真实源码、Build／镜像 digest、Profile、Evidence／Acceptance 及来源收据；回退镜像须与目标候选不同。
+生产目录或 production selector 不作本轮回退来源，缺 Profile 的 legacy 材料继续拒绝，不填零 SHA 或
+operational-envelope 摘要。2.1.220 历史 fixture 不能单独取得 operational rollback 资格。
 
 VC-6 始终使用 VC-4／VC-5 同一固定镜像，不能重编译、重封装或按可变 tag 替换。候选身份真实变化返回
 VC-4；交付环境身份变化则保留旧交付，开新 `delivery_id`。
@@ -2266,9 +2335,45 @@ VC-4；交付环境身份变化则保留旧交付，开新 `delivery_id`。
 | 3 | `candidate_restored` | 恢复同一候选 digest，核 Profile、入口与运行身份 |
 | 4 | `stable_observed` | 冻结观察窗内无身份、安全、数据、状态或跨 Persona／Release 混用异常 |
 
-每阶段绑定时间、主机、架构、镜像、Compose、前序事实和实测材料，`candidate_delivery_recorded.result`
-只能是 `pass／failed`。失败须保留证据并恢复已冻结回退镜像；后续阶段不能承接失败事实，也不能在故障
-容器内改代码后沿用原候选。
+每阶段绑定 Plan v2、执行配置、稳定投影、recipe、时间、主机、架构、前序事实与真实原件。
+`target_image_digest／target_runtime_profile_sha256` 来自计划，实际镜像／Profile 来自已知实测与原件；
+探针失败时写 unknown 和失败原因，不能把计划值复制为 actual。实际平台从镜像 inspect 的
+`Os／Architecture` 取值，归一为 `linux/arm64`；缺字段或非 Linux ARM64 均拒绝，不用请求参数冒充
+镜像架构。pass 必须使目标、实测、稳定投影、业务检查、时间窗及全部来源闭合；
+`candidate_delivery_recorded.result` 仍仅为 `pass／failed`。
+
+配置显式冻结 ARM64 主机、Compose project／应用服务、网络／挂载、数据根／驱动根、容器内路径、受管输出、
+部署身份、guard、私有凭据引用、探针上限、恢复目标及允许变更集合。只允许 ARM64 隔离实例；DMIT、生产
+selector 和生产 Release 目录不在集合内。配置、recipe、根坐标或 guard 身份变化须开新 delivery_id。
+稳定投影只排除允许变化的应用阶段身份及观测坐标，依赖容器镜像、固定 IP、挂载、持久卷、基础拓扑与
+安全配置继续绑定；原始 before／during／after 快照同时保存。
+
+零模型业务探针固定为有效专用 Key 的 `GET /v1/models` 与无凭据拒绝请求，核冻结分组／账号模型约束、
+候选路由和数据库只读事实；`/health` 只满足 health 一项。独立请求记录重算模型 POST 为零，HTTP／数据库／
+Redis 只读探针单列；不发送 Messages、count_tokens 或 batches，不以拒绝响应把已发模型请求记零。
+观察窗按单调时钟完整执行，缺凭据、回退或 guard 资格时零变更拒绝。
+
+任何切换前，独立 guard 须已受管安装并验证服务生命周期、部署身份、固定通道、独占操作锁与重启恢复。
+先恢复所有未收口 journal，再写已 fsync 的 prepared journal 并取得 armed 证明。通过预写语义复核后保存
+不可变 execution_commit_intent，guard 再写 execution_committed 终态证明；封存最终执行证据后另写
+publication_intent，才按原幂等键发布 Store／账本／结果。恢复发布须保留修改前预登记的
+`producer_run／issued_at_utc／formed_under／idempotency_key`，不能在断点后重新形成这些坐标。
+首次封存的执行证明固定；后续恢复原件单独追加，不能覆盖执行证明中的恢复结论。两个意图分别证明
+物理阶段完成与发布完成，不反向引用尚未产生的对象，也不另造四阶段状态机。
+
+| 断点 | 修复后从哪里继续 |
+|---|---|
+| 配置／回退／来源失败，尚未 armed | 保留拒绝原因，修材料后重新准入；尚无现场变更 |
+| 动作异常、非法返回、超时或预写语义失败，尚未 execution_committed | guard abort → 固定回退 → 真实身份、health、鉴权、数据／依赖复核；恢复已证后从失败阶段开原 dr 流程 |
+| worker／通道强杀或心跳丢失 | 独立 guard 按 lease／ticket 恢复；下次入口先取回 journal，PID 结合 boot／start 验证 |
+| 主机／Docker 不可用或恢复失败 | 保持 recovery_pending／restore_failed，阻断新变更和 finalize；服务恢复后先收口同一恢复操作 |
+| execution_committed 后、Store 或账本发布中断 | 复核同一物理 intent 与原件，确定性重建缺失 publication_intent 或补发原幂等操作；不重做物理切换 |
+| 内容、guard 证明或重入环境漂移 | 保持关闭并受控回退；已有 pass 按批准失效合同处理，环境身份变化开新交付 |
+| 已 finalize | 只读重验或幂等补结果，不能借 journal 再次执行已交付阶段 |
+
+自动恢复以 guard 服务和 Docker 可运行为边界；断电或 Docker 不可用期间不能完成物理恢复，重启后先恢复
+journal 并阻断新动作。历史失败及已解决恢复全部保留；任何未解决操作均阻断 finalize，四条 pass 不能
+覆盖缺失 journal、未发布意图或无 StageFact 的实际操作。
 
 工具流程分成两批，不把审核夹在一个无人监督动作中：
 
@@ -2352,9 +2457,14 @@ ProductionAcceptance。正式产物须以 promotion 收据连接原 Candidate，
 
 ### 4.6.9 私有归档与远端清理
 
-候选交付按 §6.7 归档：交付包引用不可变候选、部署配置、公开证据索引、逐规则结果、Acceptance 和回退材料；
-私有证据另存逐文件 `path／size／sha256` 清单。`artifact_count` 统计部署配置、公开索引与回退材料，
-`private_archive_manifest.entry_count` 统计私有归档内部文件，两者不混计。收据绑定归档清单后才算终态。
+当前候选交付按 typed v2 验证器导出的规范原件／引用闭集归档：交付包引用不可变候选、部署配置、公开
+证据索引、逐规则结果、Acceptance、真实回退与全部 guard 操作。受管操作索引和 journal 是全量分母，
+包含成功、失败、恢复、强杀后补收口、尚无 StageFact 的操作、物理 intent／终态前缀及 publication_intent。
+旧 `private-*` 前缀提取只保留历史 v1 分支；删除任一必要失败、恢复或发布原件都阻断包、finalize 与重放。
+
+私有证据仍存逐文件 `path／size／sha256` 清单，凭据仅保留受管私有引用；`artifact_count` 统计部署配置、
+公开索引与回退材料，`private_archive_manifest.entry_count` 统计归档内部文件，两者不混计。计数不能替代
+闭集证明，收据绑定完整归档且全部操作已收口才算当前终态。
 
 清理前验证交付包与私有归档能独立恢复，并登记清理决定。不能删除仍承担当前运行、回退、历史重放或唯一
 证据责任的产物；中断先对账，不盲目重派删除。生产 promotion／activation／removal 的归档及远端清理随
@@ -2392,7 +2502,8 @@ authorize → extend → accepted → recover`。它覆盖 **VC-5 封存前、�
 #### 失败矩阵
 
 本次父 run 有尚未完整收口的采集预约用 `reconcile-attempt`，否则用 `reconcile-supervisor-run`；目录里有
-attempt 不足以选前者。下表的“已接入”指当前入口，完整现场认证状态仍以 §3.6、§4.0.5 为准。
+attempt 不足以选前者。下表的“已接入”指本机代码入口；完整认证及现场状态以本部分 §4.0.5、
+§4.5 与 §4.6 的当前状态为准，本机测试与代码接线不能代替现场验收。
 
 | 现象 | 对账／诊断入口 | 修复后动作 | 从哪里继续 | 脚本覆盖 |
 |---|---|---|---|---|
@@ -2402,16 +2513,16 @@ attempt 不足以选前者。下表的“已接入”指当前入口，完整现
 | VC-4 构建／上传中断 | 父 run 对账 | 原身份且幂等证明成立时续作 | `vc4-all.sh`；上传用 `--resume-from upload-wait` | 已接入 |
 | VC-5 未封存采集失败 | 预约对账 | 批准、授权、`vc5-claude-recover.sh` | 保留可信 Job，只补执行闭集 | `fix-and-continue.sh` 已接入 |
 | 网关残留／取证进程残留 | 预约对账与 `environment-cleanup preview` | 批准清理、干净环境复核，必要时隔离 | 原恢复轮，再批准补跑 | 清理工具已接入，需独立批准 |
-| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | 暂停点与离线收据合同已接；Mac 真账号采集及正式 recorder 未接 |
+| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | CLI／批次、门禁与来源消费已接；三项真实服务能力仍缺，live 保持零启动拒绝 |
 | 边界核对／seal／compare 批次失败 | 父 run 对账 | 按失败码修复与登记演进 | 同一候选的未完成动作 | seal／compare 已接；不合法既有边界收据先人工审计 |
 | 已封存 evaluator 缺陷 | `evaluation-recover preview` | 修复、部署、演进、批准 `evaluator-defect` | 新 `b<K>`，只重评影响项 | 离线恢复已接入 |
-| 已封存临时环境故障 | 评估诊断沿 `source_artifacts` 定位 J* | `transient-environment`，补采后增量封存 | `ar<k>` → 新基线 compare／accept | B4-05b 实现／验收中 |
-| 恢复段中断 | 已预约用 `reconcile-attempt --recovery-revision ar<k>`；否则父 run 对账 | 按段合同批准后继段或重派 | 原段／后继段的合法闭集 | B4-05b 实现／验收中 |
+| 已封存临时环境故障 | 评估诊断沿 `source_artifacts` 定位 J* | `transient-environment`，补采后增量封存 | `ar<k>` → 新基线 compare／accept | 恢复段及后继修复已合入；组合专项与第二次 transient 整链待验收 |
+| 恢复段中断 | 已预约用 `reconcile-attempt --recovery-revision ar<k>`；否则父 run 对账 | 按段合同批准后继段或重派 | 原段／后继段的合法闭集 | 恢复段及五项后继修复已合入；组合定向检查通过，正式整链未认证 |
 | 候选源码／构建真实变化 | 对账及作废预览 | `invalidate-candidate` → `revision-open --supersedes` | VC-4 新 revision | 已接入，不能原地覆盖 |
 | 批准 selector 有误 | `evaluation-recover approval-revision` 预览 | 批准新画像／基线 | 零请求重评 | 已接入；规则／场景变化另建后继 Campaign |
 | 仅封存证据元数据漂移 | `harden-evidence-permissions rebind-boundary` | 核原字节／路径／类型／权限／属主，追加重绑 | 原基线只读重放 | 已接入，必须指定候选 |
 | 外部门禁失败 | 父 run 对账与失败门禁收据 | `capture-candidate seal --revalidate` | 新 `v<N>` 只补门禁，再 accept | 工具已接，零请求、不重扫 |
-| VC-6 阶段失败 | 父 run 对账、`delivery-chain` | 同命令重入，自动开 `dr<k>` | 失败阶段至第四阶段 | 控制面已接；ARM64 真实执行器待完成 |
+| VC-6 阶段失败 | 父 run 对账、`delivery-chain` | 同命令重入，自动开 `dr<k>` | 失败阶段至第四阶段 | A 执行器／消费者已本机接线，89 项通过；正式登记与 ARM64 现场待验收 |
 | VC-6 成功阶段需重跑 | `delivery-stage-invalidate preview／apply` | 批准失效，再派 run | 指定阶段及全部下游 | 未 finalize 才允许 |
 | VC-6 四阶段完成／审核中断 | 无批准 `deliver-candidate finalize` | 独立批准 finalize 批次 | 原交付包；重复幂等 | 控制面已接；生产激活 B4-08 另批 |
 | 预算、账务、污染或根因上限 | 相应对账入口 | 按下表解除暂停 | 原 Campaign 当前阶段 | 不由修复脚本包办 |
@@ -2431,7 +2542,7 @@ attempt 不足以选前者。下表的“已接入”指当前入口，完整现
 `fix-and-continue` 不代做补账、环境隔离、请求预算扩展或 campaign-resume。批准输入／账本 head 漂移时重新
 预览，不能复用旧批准。对账输出中的 `next_command` 与许可决定下一步，`status` 查询不能替代放行结论。
 
-### Claude 项目总账、工具身份策略 v3、对账与只读导入
+### Claude 项目总账、工具身份策略与形成期重放、对账与只读导入
 
 Claude 项目总账默认目录为 `<数据根>/upgrade-project-ledger-claude`，Campaign 时间账本路径从
 `control_receipts.upgrade_timing` 读取。两个入口仍是共享模块 `codex_upgrade_project_ledger` 和
@@ -2453,18 +2564,26 @@ Claude 项目总账默认目录为 `<数据根>/upgrade-project-ledger-claude`�
 同目标根因跨 Campaign／revision／基线累计，稳定维度不包含本轮 Campaign ID；码表迁移继承旧计数。
 修复凭证闭合后按前表放行，不能通过换 revision 清零。
 
-Claude 策略 **schema 是 v3，文件名仍为**
+Claude 策略 **schema 仍是 v3，`policy_version=4` 已实现，文件名仍为**
 [`claude_tool_identity_policy_v2.json`](../tools/official_client_capture/claude_tool_identity_policy_v2.json)，
 由 `claude_tool_identity_policy.py` 计算双受管根 `tools/official_client_capture`、`tools/official_client_control`
 及运行时绑定、符号闭包和五摘要。`tool-evolution preview／apply` 登记 wire／evidence／control 变化，policy
-变化另绑定兼容、激活与受监督部署凭证；Claude 不使用 Codex 的 wire-transition 命令。
+变化另绑定兼容、激活与受监督部署凭证；Claude 不使用 Codex 的 wire-transition 命令。来源 wrapper
+`verify_mac_source_v2` 与预约 wrapper `verify_mac_reservation_v2` 已由读侧真实调用，并显式进入
+compare／accept 根；末轮接线已提交 `58dcc47ab`，两端身份摘要已实算，最终受控登记与变异复验仍待收口。最终兼容、激活、演进登记、
+部署与发布认证仍待完成；schema v3 与文件名保持既有合同，不能把 policy 版本或本机局部通过写成
+当前部署已认证。共同边界见
+[Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。官方／候选分别按
+未封存与已封存重验：未封存只作废批准影响闭集；已封存且仍有受影响 Job 时拒绝借演进重采，分别按
+§4.1.1 的后继边界与 §4.5.8 的候选评估恢复办理。
 
 | Claude 变化 | 身份处理入口 |
 |---|---|
 | 目标／基线／用途、官方制品、平台／入口、隐私、账号权限或模型目录改变 | 按 Framework §5.3.4 重新冻结 Campaign |
 | RequiredRules、场景、原子归属或批准画像改变 | 从最早受影响阶段建后继；仅 selector 修正走批准 revision |
 | 候选源码、测试、依赖或构建真实改变 | `invalidate-candidate` → `revision-open --supersedes` |
-| wire producer 或 evidence semantics 改变 | `tool-evolution` 映射影响项；已封存官方证据不得受污染 |
+| wire producer 改变 | `tool-evolution preview／apply` 映射逐 Job 影响；官方／候选未封存时按批准闭集失效并恢复，已封存且仍有受影响 Job 时拒绝登记，分别转后继边界或 §4.5.8 |
+| evidence semantics 改变 | `tool-evolution` 追加评估纪元，仅重跑离线处理，保留原始字节 |
 | 仅 control／evaluator 改变 | 登记演进，补离线门禁／评估基线 |
 | 环境角色、出口、路由或网络语义改变 | 先复核环境，再按直接依赖确定失效范围 |
 
@@ -2520,9 +2639,10 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-claude-recover.sh" "$RECOVERY_PREVIEW"
 “最新目录”猜测。四类评估裁定与精确入口见 §4.5.8。
 
 封存前候选续跑使用普通 attempt；封存后的补采段使用 `ar<k>`，交付恢复另用 `dr<k>`，三者不能混用。
-B4-05b 完整恢复段仍在实现／待验收：目标合同是 J* 定向补采、独立 ValidationAttempt、增量封存与新基线
-重评；已预约段中断走 `reconcile-attempt --recovery-revision ar<k>`，未预约走父 run 对账。完成验收前保留
-暂停与诊断，不以普通 resume 重采整份已封存候选。
+B4-05b 恢复段、D4／r2 与五项恢复后继修复已合入本机集成树，覆盖 J* 定向补采、独立
+ValidationAttempt、增量封存与新基线重评；组合专项仍待复验，第二次 transient 整链尚未执行，
+正式整链未认证。已预约段中断走 `reconcile-attempt --recovery-revision ar<k>`，未预约走父 run 对账。
+完成验收前保留暂停与诊断，不以普通 resume 重采整份已封存候选。
 
 仅封存元数据漂移时，`harden-evidence-permissions rebind-boundary --candidate-id …` 在原文件内容、相对
 路径、类型、权限与属主均相同的前提下记录新边界；mtime／ctime／inode 可变，证据字节不可变。源 cover、
@@ -2541,8 +2661,8 @@ B4-05b 完整恢复段仍在实现／待验收：目标合同是 J* 定向补采
 | VC-4 | `vc4-requirements.sh`、`local-claude-candidate-chain.sh`、`arm64-vc4-gates.sh`、`vc4-all.sh` |
 | VC-5 主链 | `vc5-all.sh` → `vc5-claude-start.sh`／`vc5-claude-seal.sh`／`vc5-claude-accept.sh` |
 | VC-5 修复与补跑 | `fix-and-continue.sh`、`vc5-claude-recover.sh`，仅封存前普通 attempt |
-| 封存后评估恢复 | `evaluation-recover`，真实 `ar<k>` 全链仍待验收 |
-| VC-6 | `claude_upgrade_delivery` 动作计划 + `compile-and-run-vc-batch`；真实环境执行器待接入 |
+| 封存后评估恢复 | `evaluation-recover`，恢复段／后继代码已合入；第二次 transient 与完整 `ar<k>` 链待验收 |
+| VC-6 | `claude_upgrade_delivery` 动作计划 + `compile-and-run-vc-batch`；执行器已本机接线，正式登记与现场待验收 |
 
 Framework、本指南与共享实现文档都是受管依赖。部署清单登记完整路径、摘要与回滚点，与工具树在同一
 事务切换；源码修改不等于服务器已部署。部署后重新安装／复验驱动，核对 Git 可执行位、数据根和测试树的

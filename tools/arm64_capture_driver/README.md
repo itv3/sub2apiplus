@@ -538,6 +538,47 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   预览与批准必须是同一份；`--revalidate` 沿用第 1 轮冻结请求，不接受覆盖。
 * 待接入：`tool:vc5-boundary-check`（B4-01 f 段）、`tool:vc5-recover`（B4-05b 与 B4-01c）。
 
+## Claude Mac v2 与真实交付：本机合同和现场验收分层
+
+本节对应获批的真实交付合同 A、Mac v2 合同 B 及六补项。当前状态必须分别读取：
+
+| 范围 | 本机状态 | 现场与最终认证 |
+|---|---|---|
+| Mac v2 来源／导入 | 已合入 `8b6e15ab8`；74 项基础与 31 项入口故障测试通过；CLI／批次、门禁适配、预约发现、provenance 及两 wrapper 的真实调用／读侧根已接，末轮接线已提交 `58dcc47ab`；双客户端摘要已实算，受控登记与变异复验仍待收口 | 仍缺原 attempt 请求上界占用、独立 capture 生命周期、真实 ProductRecorder，live 零启动拒绝；正式 SOURCE_ADAPTERS 为空，历史形成期 authority 待补，产品／双端来源未认证 |
+| 严格候选交付 | 已提交 `551a01c17`，89 项本机通过；typed 执行证明、Store／阶段结果／checkpoint 消费已接 | 正式 ENVIRONMENT_EXECUTORS 仍为空；ARM64 场地、可信回退、guard 受管安装、专用凭据、四阶段／异常恢复待现场验收 |
+| 共享 D4／r2 与发布 | D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项在 `58dcc47ab` 共 165 项通过；policy_version=4 已实现，schema 仍 v3、文件名仍 _v2.json | 第二次 transient 整链未跑；最终策略演进／部署、A/B 组合认证、ARM64 八链、pre-A3、issue／verify 与 VC-0 收口尚未完成 |
+
+Mac 离线 `client-evidence prepare／verify／import` 不启动产品；live 协议要复用原 Candidate 准入、
+reservation／lease 和调度前预算／身份复核。原 attempt 的 `client-evidence/reservations/<producer_run_id>.json`
+是请求前登记分母，live 原件固定在 `client-evidence/<client>/runs/<task_nonce>/`。本地缺捕获、尚未同步或
+未导入均保持 unresolved；进入 dispatch-intent 后重入只同步／导入，不再启动产品。真实产品、进程实例、
+加载模块、socket 和独立连接／ordinal／代理映射要全部闭合；统一当前成功 reader 强制完整 v2。
+`client-run` 已进入主 CLI／批次与现有门禁，但真实预算预约、capture 生命周期及 recorder 未闭合时
+必须在产品启动前拒绝，不能把本机替身通过当成正式来源登记。
+
+已发请求仍按原 producer、`claude_mac_candidate` 与 capture／connection／ordinal 键入账，失败、拒绝、
+超额和非法 payload 不删除、不截断。导入继续使用 accounting-intent → COMMIT → outbox → ledger；
+历史 v1 已有原位置只读账务发现，准确 Store／封存 authority 的可信形成期入口仍待补；现有发现
+不授予形成期成功审计或当前 seal／accept 权限，也不转换、重签历史材料。不得用当前安装的新产品
+为旧 Catalog 的 embedded CLI 项签成功，须先核来源并按正式链更新 Candidate revision。
+
+候选真实交付使用 Plan v2、StageFact v3（Fact v2 外壳）、typed operational v2、Package v2、Receipt v4
+和阶段结果 v2。执行配置明确到 ARM64 主机、应用服务、根目录、固定镜像、可信回退、recipe、private-ref
+及 guard 部署；允许集合仅为 ARM64，生产 selector／目录不进入。零模型探针为鉴权与无凭据拒绝的
+GET /v1/models，核业务分组／模型及只读数据事实，health 只占一项；独立记录重算模型 POST 为零。
+
+切换前 journal 已 fsync 且独立 guard armed；物理 intent → guard execution_committed → 封存执行证据
+→ 独立 publication_intent → 原 Store／账本发布。发布断点保留原 producer、时间、formed_under 与
+幂等键；首次执行证明固定，后续恢复原件单独追加。物理提交后中断只补后处理，不能重复切换；未提交的
+异常、强杀和失联由 guard 恢复固定回退并留下真实复核原件。guard／Docker 不可用期间保持恢复未决，
+重新可用后先恢复所有操作再放行。全部成功、失败、恢复和未落 StageFact 的操作均按 typed 闭集归档。
+
+直接 Store 发布、reused、finalizer、当前 status、阶段结果与 VC-6 checkpoint 都须重验新交付语义与版本
+下限；历史幂等引用不能包装成当前完成。validation_only 完成候选交付，production_replacement 仍等待
+B4-08 的独立生产链。详细字段、断点和后继边界见
+[Claude 指南第四部分](../../docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-5) 与
+[Framework §5.3.4](../../docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。
+
 ## 幂等与证据边界（2026-09-22 v14r4 批次 15 事故后的硬规则）
 
 * 已封存的官方证据由 `reuse-official-evidence` 自动登记 VC-0／VC-1 完成；无需另运行账本对齐脚本。

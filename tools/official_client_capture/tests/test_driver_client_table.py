@@ -332,7 +332,8 @@ class ParseEnvClaudeTests(unittest.TestCase):
         overrides = dict(re.findall(r"^#   ([A-Z_][A-Z0-9_]*)=([^\s（]+)", template, flags=re.M))
         self.assertEqual({"CLIENT", "TARGET_PROFILE_ID", "NEW", "IN", "UP", "CAND", "BUNDLE_BRANCH", "CLIENT_BIN", "CLIENT_BIN_SHA256",
                           "CLIENT_ACCOUNT_ID", "BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "ENTRY_BRANCH", "UPSTREAM_IP",
-                          "CAMPAIGN_PURPOSE", *PLAN_KEYS}, set(overrides))
+                          "CAMPAIGN_PURPOSE", "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID",
+                          "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT", *PLAN_KEYS}, set(overrides))
         lines = []
         for line in template.splitlines():
             key = line.split("=", 1)[0]
@@ -340,16 +341,21 @@ class ParseEnvClaudeTests(unittest.TestCase):
                 continue
             lines.append(f"{key}={overrides[key]}" if key in overrides and not line.startswith("#") else line)
         lines += [f"{key}={value}" for key, value in overrides.items()
-                  if key in {"BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "UPSTREAM_IP", *PLAN_KEYS}]
+                  if key in {"BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "UPSTREAM_IP",
+                             "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT", *PLAN_KEYS}]
         text = "\n".join(lines) + "\n"
         text = text.replace("REPLACE_API_ANTHROPIC_COM_IP", "160.79.104.10")
         for placeholder in ("REPLACE_APPROVED_PROFILE_SHA256", "REPLACE_OFFICIAL_CLAUDE_SHA256", "REPLACE_OFFICIAL_PACKAGE_SHA256",
                             "REPLACE_MODEL_CATALOG_SHA256"):
             text = text.replace(placeholder, "a" * 64)
         text = text.replace("REPLACE_CLAUDE_ACCOUNT_ID", "17").replace("REPLACE_API_KEY_ID", "92").replace("/root/", f"{self.root}/")
+        text = text.replace("REPLACE_CODEX_ACCOUNT_ID", "23").replace("REPLACE_CODEX_API_KEY_ID", "94")
+        text = text.replace("REPLACE_CODEX_MAIN_MODEL", "gpt-5.3-codex").replace("REPLACE_PRODUCTION_COMMIT_40_HEX", "c" * 40)
         (self.root / "docker/capture-cli/data").mkdir(parents=True, exist_ok=True)
         values = self.parser.parse(text)
         derived = self.parser.derive(values)
+        self.assertEqual({key: derived[key] for key in ("BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT")},
+                         {"BOUNDARY_CODEX_ACCOUNT_ID": "23", "BOUNDARY_CODEX_API_KEY_ID": "94", "BOUNDARY_CODEX_MODEL": "gpt-5.3-codex", "PRODUCTION_COMMIT": "c" * 40})
         self.assertEqual(values["CLIENT"], "claude")
         self.assertTrue(values["NEW"].startswith("claude-code-9.1.0-formal-"))
         self.assertTrue(derived["TARGET_PACKAGE"].endswith("/official/claude-code-9.1.0/freeze.json"))
