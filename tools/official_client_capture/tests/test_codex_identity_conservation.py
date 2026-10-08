@@ -1,13 +1,12 @@
 """Codex 身份守恒门禁（Claude 升级控制面设计 D7、B1-07）。
 
-Claude 升级控制面改造对 Codex 只增不改：wire 层、evidence 层、两个编排器闭包与四项评估器摘要必须与改造开工前
+Claude 升级控制面改造的 wire 层、evidence 层、两个编排器闭包和 checker／builder 摘要必须与改造开工前
 的基线逐字相等；control 层、策略文件与整树摘要的变化必须逐文件落在 ``REGISTERED_CONTROL_CHANGES`` 登记的修改
 清单里，且不得出现按默认层归类的文件；迁入共享模块的函数与常量不得属于任何身份闭包。
 
-唯一例外是 ``REGISTERED_EVALUATOR_READER_CHANGES`` 单独登记的那一项评估器读侧变化（B5a-08，老板 10-07 定）：两项读侧
-摘要允许从基线变成登记的值，变化的符号只能是登记的那几个（门禁收据生成器的钉住常量，以及改它时既有门禁连带要求的只读
-重放登记）——测试把它们还原成变化前的摘要后，两个读侧闭包必须正好回到基线；wire、evidence、checker、builder 摘要与
-编排器闭包不受这项登记影响，照旧逐字等于基线。
+读侧保留 B5a-08 两个钉住常量的原登记；其后已批准的 D4 单点静态证明、r2 后继顺序元数据和原设计恢复接口，另用
+SHA 钉死的过渡原件登记逐符号及整文件前后值。正式算法的当前图必须逐步逆向回到 B5a-08 的原图，再还原两个旧常量，
+最终与原始基线图逐字段、逐摘要相同。D4 恢复的 23／35 项是旧证明依赖，不是可删除的兼容例外；未来未登记变化照常拒绝。
 
 基线由 B1-01 开工前的 main（见基线的 ``source_commit``）算出，固化在
 ``fixtures/codex_identity_conservation_baseline.json``；本项目各批不得改动基线，文件摘要钉在 ``BASELINE_SHA256``。
@@ -19,6 +18,8 @@ import ast
 import copy
 import hashlib
 import json
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -46,7 +47,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                  "candidate_post_run_extra_action（候选级共享闭集之外的零请求后处理动作），Codex 绑定到恒为假的新函数；"
                                  "B4-05b-1 新增值型成员 "
                                  "candidate_recovery_identity_flags（候选续跑命令的身份参数），Codex 绑定到监督器原常量 "
-                                 "CANDIDATE_RECOVERY_IDENTITY_FLAGS",
+                                 "CANDIDATE_RECOVERY_IDENTITY_FLAGS；r2 增加 candidate_successor_protocol_order 元数据，Codex 返回原 tuple；"
+                                 "B4-05／B5b-03 后继增加候选成功前段承接和新基线 compare 绑定元数据，Codex 前段承接恒 False、compare 条件保持原行为；"
+                                 "注册表两常量及整文件的实际读侧变化见 SHA 钉死的精确过渡原件",
     "codex_upgrade_vc0_closeout.py": "B2-11 收口流程加客户端作用域（adapter_scope，缺省 Codex）：共享流程里 12 个编排器引用经服务面"
                                      "（Codex 的 orchestrator 就是 codex_upgrade 模块本身，测试对它的替身照常生效），五个合同名与两个画像函数"
                                      "（validate_inputs、recover_formal_plan_arguments）经收口画像（Codex 画像是本模块，取值与原值逐字相同），"
@@ -71,7 +74,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                        "（恒为假：Codex 的 VC-1 seal 链动作都指向同一个官方 attempt）；B5b-01 搬入驱动 vc5_admission 原有的"
                                        "两段 Codex 逻辑（ManagedFacts.catalog 的画像与 VC-3／VC-4 收据重放、Admission.inspect 的 reuse 分支），"
                                        "候选用途照旧写死、错误码不变，不被 codex_upgrade 引用，不进编排器闭包与评估读侧闭包；B4-07 收尾新增"
-                                       "恒为假的 candidate_post_run_extra_action（Codex 没有共享闭集之外的候选级零请求后处理动作）",
+                                       "恒为假的 candidate_post_run_extra_action（Codex 没有共享闭集之外的候选级零请求后处理动作）；"
+                                       "r2 的协议顺序缺省元数据为 None，监督器返回原 tuple 对象；B4-05 恢复前段承接恒 False，"
+                                       "COMPARISON_IS_BASELINE_BOUND 为 False，Codex 原 compare 复用条件不变",
     "codex_upgrade_supervisor.py": "B1-02 监督器解耦：编排器符号与客户端名字经适配器，Claude 清单合同；B3-06 阶段审核后继协议"
                                    "（_validate_batched_stage_review_successor，读侧闭包外）只对正要派发的直接后继复算实物，已执行过的"
                                    "历史后继只重放冻结许可（原先阶段内还有后续批次时，成功的后继不写账本事件，复算看到后继自己的产物"
@@ -94,12 +99,14 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "candidate_capture_run_identity、_candidate_identity_tokens、两个续跑命令构造函数与"
                                    "_candidate_recovery_command_identity 加缺省为 Codex 的适配器参数，各调用点传清单归属客户端的适配器"
                                    "（Codex 清单得到的就是原常量，判定、命令与报错逐字不变，见 test_driver_client_table_codex_parity）。"
-                                   "改动与新增的符号都在 wire、evidence 与评估读侧闭包外；10-08 首批清单编译拆分：_normalize_campaign_run_manifest 与纯批次编译器共用唯一规范化核心，严格读取入口保留绑定文件、VC-1／VC-5 门禁，Codex 运行期与历史重放仍走严格入口，编排器与四项评估闭包摘要不变",
-    "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；读侧闭包内 7 个函数原位不动；B2-08 读侧闭包外的 _environment_facts、"
+                                   "改动与新增的符号都在 wire、evidence 与评估读侧闭包外；10-08 首批清单编译拆分：_normalize_campaign_run_manifest 与纯批次编译器共用唯一规范化核心，严格读取入口保留绑定文件、VC-1／VC-5 门禁，Codex 运行期与历史重放仍走严格入口；"
+                                   "r2 按客户端只读元数据校验完整后继排列，Codex 返回原 _SUCCESSOR_PROTOCOLS tuple 对象，原校验器不改",
+    "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；原读侧函数除单独批准的 D4 目标函数外保留；B2-08 读侧闭包外的 _environment_facts、"
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "
                                    "campaign_deadline_at_utc（批准延期后同一对象能再对账，原先在这里失败关闭）；B4-05b-2 的"
-                                   " validate_segment_reuse_preview 改调用现有 adapter.segment_reuse_proofs，与生成预览时取同一客户端实现；"
-                                   "Codex 仍绑定本模块原函数，原判定、报错与扫描统计由 test_claude_upgrade_attempt_recovery 对照原源码",
+                                   " validate_segment_reuse_preview 曾改成适配调用；D4 单点修复恢复 Codex 对原 segment_reuse_proofs 的静态调用，"
+                                   "Claude 仍沿自身适配器。原集合核对、拒绝及统计保留，23／35 项旧依赖恢复；目标函数和由它到达的"
+                                   "适配服务面依赖按过渡原件精确登记，不修改其他旧证明符号、算法、策略屏障或忽略表",
     "codex_upgrade_project_ledger.py": "B1-04 项目总账客户端维度：Claude v2 plan 带 client，码表、目录名与计量类别经适配器；Codex v1 逐字不变",
     "codex_upgrade_timing_ledger.py": (
         "B1-05 计时账本客户端维度：Claude v2 计划带 client，默认预算、承接表与总账目录名按客户端；Codex v1 逐字不变；"
@@ -113,7 +120,8 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                 " stopped，不是就当场失败并点名落盘终态（_bootstrap_noop_first_batch，读侧闭包外）；B5b-03 补账预览"
                                 "（_accounting_resolve_preview，读侧闭包外）的来源核算改经 adapter.provenance 取模块：Claude 作用域下"
                                 "原先误用 Codex 计量规则、与对账结论相反；Codex 下 adapter.provenance 就是 reconciler.provenance 同一个"
-                                "模块对象，行为不变",
+                                "模块对象，行为不变；B4-05 新基线 compare 的决定经 comparison_is_baseline_bound 值成员取，"
+                                "Claude 必须当前基线重签，Codex 原 compare 复用条件不变",
     "codex_upgrade_wire_transition.py": "B5a-01 只改 main：当前工具身份经适配器取 _tool_identity（Codex 取值不变）；裁定函数与 DEPLOY_RECEIPT_GLOB 原位不动",
     "codex_upgrade_pre_a3_certification.py": "B5a-04 pre-A3 按客户端分组：场景表与真实链按客户端、单元前缀 pre-a3:claude:、Claude 签 v3；编排器引用经适配器（Codex 单元、命令与收据逐字不变）；"
                                              "B5a-08 签发与核验新增逐单元承接（unit-inherit）清单的形成期证明分支（新增函数），逐场景核验多一个缺省为全集通过的"
@@ -145,7 +153,7 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
 }
 
 # 本项目登记的 Codex 评估器读侧变化（见模块说明）：键是工作项，值登记变化的符号（「模块:符号」→ 前后符号摘要）、两项读侧
-# 摘要的前后值与理由。这是 5a 批次唯一允许的 Codex 评估器身份变化；Codex 发布重认证随 5a 收口统一做。
+# 摘要的前后值与理由。B5a-08 的形成期登记原样保留；后续批准范围在独立冻结原件中精确登记，不能覆盖这两个旧值。
 REGISTERED_EVALUATOR_READER_CHANGES: dict[str, dict[str, Any]] = {
     "B5a-08": {
         "symbols": {
@@ -173,6 +181,99 @@ REGISTERED_EVALUATOR_READER_CHANGES: dict[str, dict[str, Any]] = {
     },
 }
 READER_FIELDS = (("compare_reader_sha256", tip.EVALUATOR_COMPARE_READER_ROOTS), ("accept_reader_sha256", tip.EVALUATOR_ACCEPT_READER_ROOTS))
+READER_TRANSITION_PATH = BASELINE_PATH.with_name("codex_identity_conservation_reader_transition_20261008.json")
+READER_TRANSITION_SHA256 = "6d62b8d3837302ab664732d8a329442221d7b02f9b4c59483cd69c5aac125301"
+READER_TRANSITION_PHASES = ("B4-05-D4", "r2-protocol-order", "B4-05-recovery")
+# 相对 B5a-08 原图，D4 静态分支只新增这 16 个既有受管适配依赖。显式清单防止把整模块名字当作任意符号豁免。
+REGISTERED_ADAPTER_DEPENDENCIES = frozenset({
+    "codex_upgrade_reconciler:_ADAPTER", "codex_upgrade_reconciler:_adapter",
+    *{f"upgrade_client_adapter:{name}" for name in (
+        "ADAPTER_BINDINGS", "ADAPTER_MEMBERS", "CandidateCoordinates", "ClientAdapter", "ClientAdapterError",
+        "ORCHESTRATOR_SURFACE", "PACKAGE", "RecoveryContext", "_ADAPTERS", "_ADAPTERS_LOCK",
+        "_import_managed", "_resolve", "_surface_bindings", "adapter_for",
+    )},
+})
+REGISTERED_METADATA_SYMBOLS = frozenset({"upgrade_client_adapter:ADAPTER_BINDINGS", "upgrade_client_adapter:ADAPTER_MEMBERS"})
+REGISTERED_D4_SYMBOL = "codex_upgrade_reconciler:validate_segment_reuse_preview"
+
+
+def _reader_payload(closure: dict[str, Any]) -> dict[str, Any]:
+    """保留正式图的所有元数据；只摘除派生摘要，不删除根、屏障或整文件记录。"""
+
+    return copy.deepcopy({key: value for key, value in closure.items() if key != "closure_sha256"})
+
+
+def _load_reader_transition(path: Path = READER_TRANSITION_PATH) -> dict[str, Any]:
+    """加载独立冻结过渡原件。新登记必须另行审核，不能原地改图后继续使用旧钉住值。"""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("读侧过渡原件必须是普通文件")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != READER_TRANSITION_SHA256:
+        raise ValueError("读侧过渡原件摘要与钉住值不符")
+    transition = json.loads(raw)
+    if (transition.get("schema_version") != "codex-identity-conservation-reader-transition/v1"
+            or transition.get("transition_id") != "D4-r2-recovery-20261008"
+            or transition.get("baseline_sha256") != BASELINE_SHA256):
+        raise ValueError("读侧过渡原件合同或原始基线绑定不符")
+    return transition
+
+
+def _inverse_reader_records(payload: dict[str, Any], collection: str, changes: list[dict[str, Any]]) -> None:
+    """按完整前后记录精确逆向；未登记项原样保留，最终摘要会拒绝任何残留变化。"""
+
+    def key(record: dict[str, Any]) -> str:
+        return f"{record['module']}:{record['name']}" if collection == "symbols" else record["module"]
+
+    records = {key(record): record for record in payload[collection]}
+    if len(records) != len(payload[collection]) or len({change["key"] for change in changes}) != len(changes):
+        raise ValueError("读侧记录或过渡键重复")
+    for change in changes:
+        name = change["key"]
+        after, before = change["after"], change["before"]
+        if after is None or key(after) != name or records.get(name) != after:
+            raise ValueError(f"当前读侧记录不是已登记的完整后值：{name}")
+        if before is None:
+            del records[name]
+        else:
+            if key(before) != name:
+                raise ValueError(f"读侧过渡前值的键不符：{name}")
+            records[name] = copy.deepcopy(before)
+    payload[collection] = [records[name] for name in sorted(records)]
+
+
+def _restore_registered_reader(closure: dict[str, Any], field: str, transition: dict[str, Any]) -> dict[str, Any]:
+    """当前真实图 → 恢复后继 → r2 → D4 → B5a-08 → 原始基线；每一步核实际图摘要。"""
+
+    if field not in {item for item, _roots in READER_FIELDS}:
+        raise ValueError("未知读侧摘要字段")
+    payload = _reader_payload(closure)
+    if tip._fingerprint(payload) != closure["closure_sha256"]:
+        raise ValueError("当前读侧图与其摘要不符")
+    if tuple(step["phase"] for step in transition["steps"]) != READER_TRANSITION_PHASES:
+        raise ValueError("读侧过渡阶段次序或集合不符")
+    for step in reversed(transition["steps"]):
+        change = step["readers"][field]
+        if tip._fingerprint(payload) != change["after_sha256"]:
+            raise ValueError(f"读侧出现未登记的变化：{step['phase']}／{field}")
+        for collection in ("symbols", "modules"):
+            _inverse_reader_records(payload, collection, change[collection])
+        if tip._fingerprint(payload) != change["before_sha256"]:
+            raise ValueError(f"读侧精确逆向没有回到前图：{step['phase']}／{field}")
+    legacy = REGISTERED_EVALUATOR_READER_CHANGES["B5a-08"]
+    if tip._fingerprint(payload) != legacy[field]["after"]:
+        raise ValueError("后继逆向未回到 B5a-08 的钉住图")
+    for name, digests in legacy["symbols"].items():
+        module, symbol = name.split(":", 1)
+        matches = [record for record in payload["symbols"] if (record["module"], record["name"]) == (module, symbol)]
+        if len(matches) != 1 or matches[0]["sha256"] != digests["after"]:
+            raise ValueError(f"B5a-08 常量后值不符：{name}")
+        matches[0]["sha256"] = digests["before"]
+    if tip._fingerprint(payload) != legacy[field]["before"]:
+        raise ValueError("常量逆向未回到原始基线摘要")
+    if payload != _reader_payload(transition["before_readers"][field]):
+        raise ValueError("逆向图与冻结的原始基线图逐字段不符")
+    return payload
 
 
 class CodexIdentityConservationTest(unittest.TestCase):
@@ -188,13 +289,18 @@ class CodexIdentityConservationTest(unittest.TestCase):
         cls.entries = [{"path": path, "sha256": digest} for path, digest in sorted(digests.items())]
         cls.identity = tip.compute_identity_v2(cls.policy, TOOL_ROOT, cls.entries)
         cls.evaluator = tip.evaluator_dependency_digests(TOOL_ROOT, cls.policy)
+        cls.transition = _load_reader_transition()
+        cls.readers = {
+            field: tip.evaluator_reader_closure(cls.policy, TOOL_ROOT, list(roots), digests)
+            for field, roots in READER_FIELDS
+        }
 
     def test_baseline_is_frozen(self) -> None:
         self.assertEqual(self.baseline_sha256, BASELINE_SHA256, "Codex 身份守恒基线被改动：本项目各批不得改基线")
         self.assertEqual(self.baseline["schema_version"], "codex-identity-conservation-baseline/v1")
 
     def test_identity_sensitive_digests_match_baseline(self) -> None:
-        """① wire、evidence、两个编排器闭包与四项评估器摘要逐字相等（两项读侧摘要等于单独登记的变化后值）。"""
+        """① 产出身份守恒；读侧摘要取已审核过渡的后值，并由独立测试逐项逆向证明。"""
 
         current = {
             "wire_producer_sha256": self.identity["wire_producer_sha256"],
@@ -206,6 +312,8 @@ class CodexIdentityConservationTest(unittest.TestCase):
             for field, _roots in READER_FIELDS:
                 self.assertEqual(change[field]["before"], self.baseline[field], f"登记的变化前摘要必须就是基线：{field}")
                 expected[field] = change[field]["after"]
+        for field, _roots in READER_FIELDS:
+            expected[field] = self.transition["after_readers"][field]["closure_sha256"]
         for field, value in current.items():
             self.assertEqual(value, expected[field], f"Codex 身份敏感摘要变化：{field}")
         for layer, expected in self.baseline["orchestrator_closure_sha256"].items():
@@ -243,29 +351,167 @@ class CodexIdentityConservationTest(unittest.TestCase):
         )
 
     def test_evaluator_reader_change_is_only_the_registered_symbols(self) -> None:
-        """⑤ 单独登记的评估器读侧变化只有登记的那几个符号：把它们还原成变化前的摘要后，两个读侧闭包正好回到基线，整文件计入
-        的模块一个不变——不能借这次登记放过别的读侧变化。"""
+        """⑤ 逐符号、整文件三步逆向，再还原 B5a-08 原两常量，完整图严格回到不变基线。"""
 
-        self.assertEqual(sorted(REGISTERED_EVALUATOR_READER_CHANGES), ["B5a-08"], "5a 批次唯一允许的 Codex 评估器身份变化")
+        self.assertEqual(sorted(REGISTERED_EVALUATOR_READER_CHANGES), ["B5a-08"], "B5a-08 的形成期登记不得原地覆盖")
         change = REGISTERED_EVALUATOR_READER_CHANGES["B5a-08"]
         self.assertEqual(sorted(change["symbols"]), ["codex_upgrade_gate_receipt:REGISTERED_REPLAY_PRODUCER_HASHES",
                                                      "codex_upgrade_gate_receipt:TARGET_VERIFIER_SHA256S"])
         self.assertEqual(len(change["reasons"]), 4)
-        digests = tip._managed_tree_digests(TOOL_ROOT)
-        for field, roots in READER_FIELDS:
+        for field, _roots in READER_FIELDS:
             with self.subTest(field=field):
-                closure = tip.evaluator_reader_closure(self.policy, TOOL_ROOT, list(roots), digests)
-                self.assertEqual(closure["closure_sha256"], change[field]["after"])
-                restored = copy.deepcopy({item: value for item, value in closure.items() if item != "closure_sha256"})
-                for key, digest in change["symbols"].items():
-                    module, name = key.split(":")
-                    matches = [item for item in restored["symbols"] if (item["module"], item["name"]) == (module, name)]
-                    self.assertEqual(len(matches), 1, f"登记的符号在读侧闭包里，按符号计入：{key}")
-                    self.assertEqual(matches[0]["sha256"], digest["after"], key)
-                    matches[0]["sha256"] = digest["before"]
-                    self.assertNotIn(module, [item["module"] for item in closure["modules"]], "登记的模块不能整文件计入")
-                self.assertEqual(tip._fingerprint(restored), self.baseline[field],
-                                 "把登记的符号还原成变化前的摘要，读侧闭包必须正好回到基线")
+                self.assertEqual(self.readers[field], self.transition["after_readers"][field])
+                restored = _restore_registered_reader(self.readers[field], field, self.transition)
+                self.assertEqual(tip._fingerprint(restored), self.baseline[field])
+                self.assertEqual(restored, _reader_payload(self.transition["before_readers"][field]))
+
+    def test_reader_transition_is_frozen_and_scope_is_exact(self) -> None:
+        """冻结完整原图和三步精确登记；不允许通配符、删除旧依赖或借元数据注册别的函数。"""
+
+        transition = self.transition
+        self.assertEqual(transition["baseline_sha256"], BASELINE_SHA256)
+        self.assertEqual(transition["source_commits"]["baseline"], self.baseline["source_commit"])
+        self.assertEqual(transition["source_commits"]["after"], "58dcc47ab6ae27bbd034ec515bc4b74e4ed4f727")
+        self.assertEqual(transition["algorithm_sha256"], hashlib.sha256(Path(tip.__file__).read_bytes()).hexdigest())
+        self.assertEqual(transition["sensitive_identity"]["before"], transition["sensitive_identity"]["after"])
+        self.assertEqual(tuple(step["phase"] for step in transition["steps"]), READER_TRANSITION_PHASES)
+        for field, _roots in READER_FIELDS:
+            with self.subTest(field=field):
+                before, after = transition["before_readers"][field], transition["after_readers"][field]
+                self.assertEqual(tip._fingerprint(_reader_payload(before)), self.baseline[field])
+                self.assertEqual(tip._fingerprint(_reader_payload(after)), after["closure_sha256"])
+                for key in ("schema_version", "roots", "barriers", "module_barriers"):
+                    self.assertEqual(before[key], after[key], f"不能改变原图元数据：{key}")
+                first = transition["steps"][0]["readers"][field]
+                self.assertEqual(first["before_sha256"], REGISTERED_EVALUATOR_READER_CHANGES["B5a-08"][field]["after"])
+                self.assertEqual({record["key"] for record in first["symbols"] if record["before"] is None},
+                                 REGISTERED_ADAPTER_DEPENDENCIES)
+                self.assertEqual({record["key"] for record in first["symbols"] if record["before"] is not None},
+                                 {REGISTERED_D4_SYMBOL})
+                for index, step in enumerate(transition["steps"]):
+                    records = step["readers"][field]
+                    self.assertTrue(all(record["after"] is not None and record["reason"] for record in records["symbols"]))
+                    self.assertEqual([record["key"] for record in records["modules"]], ["upgrade_client_adapter"])
+                    if index:
+                        self.assertEqual(records["before_sha256"], transition["steps"][index - 1]["readers"][field]["after_sha256"])
+                        self.assertEqual({record["key"] for record in records["symbols"]}, REGISTERED_METADATA_SYMBOLS)
+                        self.assertTrue(all(record["before"] is not None for record in records["symbols"] + records["modules"]))
+                    else:
+                        self.assertIsNone(records["modules"][0]["before"])
+                self.assertEqual(transition["steps"][-1]["readers"][field]["after_sha256"], after["closure_sha256"])
+
+    def test_d4_restored_dependencies_are_original_and_not_an_exemption(self) -> None:
+        """D4 恢复旧 23／35 项，没有把缺陷时期的丢读集当成可接受的基线。"""
+
+        legacy = REGISTERED_EVALUATOR_READER_CHANGES["B5a-08"]
+        for field, count in (("compare_reader_sha256", 23), ("accept_reader_sha256", 35)):
+            with self.subTest(field=field):
+                original = {f"{row['module']}:{row['name']}": row for row in self.transition["before_readers"][field]["symbols"]}
+                current = {f"{row['module']}:{row['name']}": row for row in self.readers[field]["symbols"]}
+                restored = self.transition["d4_restored_original_dependencies"]["readers"][field]
+                self.assertEqual(len(restored["restored_old_symbols"]), count)
+                self.assertTrue(restored["whole_modules_unchanged"])
+                self.assertEqual([record["key"] for record in restored["changed_symbols"]], [REGISTERED_D4_SYMBOL])
+                for row in restored["restored_old_symbols"]:
+                    key = f"{row['module']}:{row['name']}"
+                    self.assertIn(key, original)
+                    expected = copy.deepcopy(original[key])
+                    if key in legacy["symbols"]:
+                        expected["sha256"] = legacy["symbols"][key]["after"]
+                    self.assertEqual(row, expected)
+                    self.assertEqual(current[key], row, f"D4 已恢复的旧依赖不得再次丢失或被修改：{key}")
+
+    def test_unregistered_graph_changes_are_rejected(self) -> None:
+        """原符号、已登记符号、整文件、额外依赖与屏障漂移都拒绝，重新计算损坏图摘要也不能放过。"""
+
+        for field, _roots in READER_FIELDS:
+            cases: list[tuple[str, dict[str, Any]]] = []
+            original_key = next(row for row in self.readers[field]["symbols"] if row["module"] == "codex_upgrade_reconciler"
+                                and row["name"] == "segment_reuse_proofs")
+            for label, predicate in (
+                ("未登记原证明符号", lambda row: row == original_key),
+                ("已登记 D4 函数新变化", lambda row: f"{row['module']}:{row['name']}" == REGISTERED_D4_SYMBOL),
+                ("已登记适配常量新变化", lambda row: f"{row['module']}:{row['name']}" in REGISTERED_METADATA_SYMBOLS),
+            ):
+                damaged = copy.deepcopy(self.readers[field])
+                next(row for row in damaged["symbols"] if predicate(row))["sha256"] = "0" * 64
+                cases.append((label, damaged))
+            for label, module in (("既有整文件新变化", self.readers[field]["modules"][0]["module"]),
+                                  ("适配器整文件新变化", "upgrade_client_adapter")):
+                damaged = copy.deepcopy(self.readers[field])
+                next(row for row in damaged["modules"] if row["module"] == module)["sha256"] = "0" * 64
+                cases.append((label, damaged))
+            damaged = copy.deepcopy(self.readers[field]); damaged["symbols"].remove(original_key)
+            cases.append(("缺失旧依赖", damaged))
+            damaged = copy.deepcopy(self.readers[field])
+            damaged["symbols"].append({"module": "codex_upgrade_reconciler", "name": "unregistered_proof", "kind": "function", "sha256": "0" * 64})
+            cases.append(("额外符号", damaged))
+            damaged = copy.deepcopy(self.readers[field])
+            damaged["modules"].append({"module": "unregistered_module", "path": "unregistered_module.py", "sha256": "0" * 64})
+            cases.append(("额外整文件", damaged))
+            for key in ("roots", "barriers", "module_barriers"):
+                damaged = copy.deepcopy(self.readers[field]); damaged[key].append("unregistered")
+                cases.append((f"原图元数据变化 {key}", damaged))
+            for label, damaged in cases:
+                with self.subTest(field=field, case=label):
+                    damaged["closure_sha256"] = tip._fingerprint(_reader_payload(damaged))
+                    with self.assertRaises(ValueError):
+                        _restore_registered_reader(damaged, field, self.transition)
+
+    def test_transition_steps_cannot_drop_records_or_change_order(self) -> None:
+        """登记缺一项、漏掉整文件逆向或交换阶段都不能重新拼出原图。"""
+
+        for field, _roots in READER_FIELDS:
+            for collection in ("symbols", "modules"):
+                damaged = copy.deepcopy(self.transition)
+                damaged["steps"][0]["readers"][field][collection].pop()
+                with self.subTest(field=field, missing=collection), self.assertRaises(ValueError):
+                    _restore_registered_reader(self.readers[field], field, damaged)
+            damaged = copy.deepcopy(self.transition)
+            damaged["steps"][0], damaged["steps"][1] = damaged["steps"][1], damaged["steps"][0]
+            with self.subTest(field=field, case="次序"), self.assertRaises(ValueError):
+                _restore_registered_reader(self.readers[field], field, damaged)
+
+    def test_modified_transition_original_is_rejected(self) -> None:
+        """改过渡原件不能获得一个新期望；SHA 不符立即失败。"""
+
+        with tempfile.TemporaryDirectory(prefix="codex-reader-transition-", dir="/private/tmp") as temporary:
+            path = Path(temporary) / READER_TRANSITION_PATH.name
+            path.write_bytes(READER_TRANSITION_PATH.read_bytes() + b"\n")
+            with self.assertRaises(ValueError):
+                _load_reader_transition(path)
+
+    def test_real_source_proof_mutation_and_whole_file_drift_are_rejected(self) -> None:
+        """正式算法在副本源码上翻转旧证明比较／增加适配器文件注释，门禁拒绝对应未登记变化。"""
+
+        entries = {entry["path"]: entry["sha256"] for entry in self.entries}
+        for case in ("原证明判据", "适配器整文件"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory(prefix="codex-reader-source-", dir="/private/tmp") as temporary:
+                root = Path(temporary)
+                for relative in entries:
+                    if relative.endswith(".py") and not relative.startswith("tests/"):
+                        target = root / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(TOOL_ROOT / relative, target)
+                if case == "原证明判据":
+                    relative = "codex_upgrade_reconciler.py"
+                    path = root / relative
+                    source = path.read_text(encoding="utf-8")
+                    node = next(node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)
+                                and node.name == "segment_reuse_proofs")
+                    segment = ast.get_source_segment(source, node)
+                    self.assertIn(" != ", segment)
+                    path.write_text(source.replace(segment, segment.replace(" != ", " == ", 1), 1), encoding="utf-8")
+                else:
+                    relative = "upgrade_client_adapter.py"
+                    path = root / relative
+                    path.write_bytes(path.read_bytes() + "\n# 未登记的整文件读集变化。\n".encode("utf-8"))
+                digests = {**entries, relative: hashlib.sha256(path.read_bytes()).hexdigest()}
+                for field, roots in READER_FIELDS:
+                    closure = tip.evaluator_reader_closure(self.policy, root, list(roots), digests)
+                    self.assertNotEqual(closure["closure_sha256"], self.readers[field]["closure_sha256"])
+                    with self.assertRaises(ValueError):
+                        _restore_registered_reader(closure, field, self.transition)
 
     def test_migrated_symbols_stay_outside_identity_closures(self) -> None:
         """③ 迁入共享模块的函数与常量不得属于 wire、evidence 或评估读侧闭包。"""
