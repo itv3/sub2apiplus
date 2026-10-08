@@ -578,6 +578,11 @@ class NativeProductRecorder:
     def seal_sources(self, task: Mapping[str, Any], bundle_root: Path, *, status: str) -> None:
         try:
             self._guard(task, bundle_root)
+        except BaseException:
+            # 准入拒绝不能进入 failure 写入路径，已有 fixture 状态锁仍须释放。
+            self._release()
+            raise
+        try:
             _require(status in {"complete", "failed", "truncated"}, "上游终态非法")
             if self._optional(_FIRST) is not None:
                 self._verify_partial()

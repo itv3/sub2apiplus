@@ -266,6 +266,58 @@ class ProductRecorderTests(unittest.TestCase):
         self.assertEqual(self.hashes(self.outer), before)
         self.assertEqual(self.provider.calls, [])
 
+    def test_formal_seal_preserves_matching_frozen_context_and_valid_wal(self):
+        task = copy.deepcopy(self.task)
+        task["execution"]["source_scope"] = "formal"
+        task["task_sha256"] = c.digest({key: value for key, value in task.items() if key != "task_sha256"})
+        formal = self.build(task=task)
+        (self.bundle / "diagnostic").mkdir(mode=0o700)
+        _write(self.bundle / recorder_tools._FROZEN, formal._frozen)
+        body = {"sequence": 1, "previous_sha256": "0" * 64, "identity": formal._identity,
+                "event": "prepare_intent", "payload": {}, "observed_at_utc": datetime.now(timezone.utc).isoformat()}
+        row = {**body, "sha256": c.digest(body)}
+        wal = self.bundle / recorder_tools._WAL
+        wal.write_bytes(c.canonical(row) + b"\n")
+        wal.chmod(0o600)
+        # 准备与 formal 实例完整匹配的合法原件，不能靠损坏 WAL 掩盖异常路径写入。
+        self.assertEqual(formal._rows(), [row])
+        before_paths = set(self.outer.rglob("*"))
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before_paths if path.is_file()}
+        with mock.patch.object(self.adapter, "owns_recorder", wraps=self.adapter.owns_recorder) as owns_recorder, \
+             mock.patch.object(self.adapter, "owns_services", wraps=self.adapter.owns_services) as owns_services, \
+             mock.patch.object(self.adapter, "owns_observation_provider", wraps=self.adapter.owns_observation_provider) as owns_provider:
+            with self.assertRaises(recorder_tools.ProductRecorderUnavailable):
+                formal.seal_sources(task, self.bundle, status="failed")
+            owns_recorder.assert_not_called()
+            owns_services.assert_not_called()
+            owns_provider.assert_not_called()
+        self.assertEqual(set(self.outer.rglob("*")), before_paths)
+        for path, expected in before.items():
+            with self.subTest(path=path.relative_to(self.outer)):
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), expected)
+        self.assertEqual(self.provider.calls, [])
+        self.assertEqual(formal._failures, [])
+        self.assertIsNone(formal._journal)
+
+    def test_seal_ownership_refusal_releases_active_fds_without_failure_write(self):
+        previous = self.prepare()
+        descriptors = (previous._lock_fd, previous._state_fd)
+        self.assertTrue(all(type(fd) is int for fd in descriptors))
+        before_paths = set(self.outer.rglob("*"))
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before_paths if path.is_file()}
+        with mock.patch.object(self.adapter, "owns_recorder", return_value=False), self.assertRaisesRegex(ValueError, "不属于"):
+            self.recorder.seal_sources(self.task, self.bundle, status="failed")
+        for fd in descriptors:
+            with self.subTest(fd=fd), self.assertRaises(OSError):
+                os.fstat(fd)
+        self.assertEqual(set(self.outer.rglob("*")), before_paths)
+        for path, expected in before.items():
+            with self.subTest(path=path.relative_to(self.outer)):
+                self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), expected)
+        self.assertEqual(self.provider.calls, [])
+        self.assertEqual(self.recorder._failures, [])
+        self.assert_lock_released(previous)
+
     def test_nine_method_signatures_match_existing_protocol(self):
         def methods(path, name):
             tree = ast.parse(path.read_text())
