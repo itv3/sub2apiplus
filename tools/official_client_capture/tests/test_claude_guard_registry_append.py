@@ -5,17 +5,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
 from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+from tools.official_client_capture import claude_upgrade_guard_epochs as epochs
 from tools.official_client_capture.tests import test_claude_upgrade_arm64_delivery_executor as fixtures
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
 from tools.official_client_control.errors import ControlError
 
 
-def startup_process(configuration, context, result_path, cutpoint, sequence, make_freeze):
+def startup_process(configuration, context, result_path, cutpoint, sequence, make_freeze, legacy=False):
     """在指定原件完成持久化后强退；身份取自本子进程，不能换成续跑进程。"""
     os.setsid()
     try:
@@ -52,6 +55,18 @@ def startup_process(configuration, context, result_path, cutpoint, sequence, mak
 
     try:
         with mock.patch.object(guard, "write_json_once", side_effect=write), mock.patch.object(guard, "atomic_json", side_effect=atomic):
+            if legacy:
+                # 只构造真实进程的完整旧版前置；不能用删除新账本模拟合法旧链。
+                stable = epochs.stable_deployment_identity(configuration, context, identity)
+                registration_path = root / "epochs/000001/registration.json"
+                guard.write_json_once(registration_path, {
+                    "schema_version": epochs.EPOCH_SCHEMA, "epoch_sequence": 1,
+                    "configuration_binding": context["configuration_ref"],
+                    "configuration_sha256": canonical_sha256(configuration),
+                    "context": engine.stable_context, "stable_deployment_identity_sha256": canonical_sha256(stable),
+                    "guard_identity": identity, "previous_epoch_binding": None,
+                })
+                engine._seal_registry_head([guard.binding(Path(context["data_root"]), registration_path)])
             summary = engine.complete_startup()
             if make_freeze:
                 engine.inspect({"run_nonce": "registry-producer"})
@@ -78,9 +93,9 @@ class RegistryAppendTests(unittest.TestCase):
         self.worlds.append(case)
         return case
 
-    def startup(self, case, *, cutpoint=None, sequence=1, make_freeze=False, success=True):
+    def startup(self, case, *, cutpoint=None, sequence=1, make_freeze=False, success=True, legacy=False):
         result_path = case.root / f"startup-result-{len(case.processes):06d}.json"
-        process = case.mp.Process(target=startup_process, args=(case.configuration, case.context, str(result_path), cutpoint, sequence, make_freeze))
+        process = case.mp.Process(target=startup_process, args=(case.configuration, case.context, str(result_path), cutpoint, sequence, make_freeze, legacy))
         process.start()
         case.processes.append(process)
         process.join(timeout=8)
@@ -96,6 +111,23 @@ class RegistryAppendTests(unittest.TestCase):
     def originals(self, case):
         root = case.root / "guard"
         return {path.relative_to(root).as_posix(): guard.read_bytes(path) for path in root.rglob("*") if path.is_file() and path.name != ".service.lock"}
+
+    def live_engine(self, case):
+        identity = executor.guard_identity(case.configuration, case.context, formal=False)
+        engine = guard.GuardEngine(case.configuration, case.context, fixtures.FileRuntime(case.configuration, case.context), identity)
+        self.addCleanup(engine.close)
+        self.assertFalse(engine.complete_startup()["blocked"])
+        worker = subprocess.Popen([sys.executable, "-B", "-c", "import sys; print('ready', flush=True); sys.stdin.read()"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+
+        def close_worker():
+            if worker.poll() is None:
+                worker.terminate()
+            worker.communicate(timeout=3)
+
+        self.addCleanup(close_worker)
+        self.assertEqual(worker.stdout.readline(), b"ready\n")
+        return engine, guard.process_identity(worker.pid)
 
     def test_initial_sealed_intent_resumes_at_each_persisted_boundary(self):
         for cutpoint in ("intent", "before-registration", "registration", "snapshot", "pointer"):
@@ -251,6 +283,8 @@ class RegistryAppendTests(unittest.TestCase):
         guard.atomic_json(root / "epoch-registry/head.json", {
             "schema_version": guard.REGISTRY_POINTER_SCHEMA,
             "snapshot_binding": intent["previous_head_binding"],
+            **({"append_intent_binding": guard.binding(case.root, root / "epoch-registry/appends/000001/intent.json")}
+               if guard.REGISTRY_POINTER_SCHEMA.endswith("/v2") else {}),
         })
         before = self.originals(case)
         self.startup(case, success=False)
@@ -269,6 +303,151 @@ class RegistryAppendTests(unittest.TestCase):
                 self.startup(case, success=False)
                 self.assertEqual(self.originals(case), before)
                 self.assertFalse((root / "epochs/000003").exists())
+
+    def test_whole_append_root_deletion_is_not_a_legacy_initialization(self):
+        for cutpoint in (None, "intent", "pointer"):
+            with self.subTest(cutpoint=cutpoint):
+                case = self.world()
+                self.startup(case)
+                if cutpoint is not None:
+                    self.startup(case, cutpoint=cutpoint, sequence=2)
+                root = case.root / "guard"
+                shutil.rmtree(root / "epoch-registry/appends")
+                before = self.originals(case)
+                self.startup(case, success=False)
+                self.assertEqual(self.originals(case), before)
+                self.assertFalse((root / "epoch-registry/appends").exists())
+
+    def test_complete_v1_legacy_head_can_continue_once_and_publish_v2_anchor(self):
+        case = self.world()
+        self.startup(case, legacy=True)
+        root = case.root / "guard"
+        old_pointer = guard.read_json(root / "epoch-registry/head.json")
+        before = self.originals(case)
+        self.assertTrue(old_pointer["schema_version"].endswith("/v1"))
+        self.assertFalse((root / "epoch-registry/appends").exists())
+        self.startup(case)
+        current = guard.read_json(root / "epoch-registry/head.json")
+        self.assertTrue(current["schema_version"].endswith("/v2"))
+        self.assertEqual(current["append_intent_binding"], guard.binding(case.root, root / "epoch-registry/appends/000002/intent.json"))
+        self.assertIsNone(guard.read_json(root / "epoch-registry/appends/000002/intent.json")["previous_append_completed_binding"])
+        after = self.originals(case)
+        for path, raw in before.items():
+            if path != "epoch-registry/head.json":
+                self.assertEqual(after[path], raw, path)
+        self.startup(case)
+        self.assertTrue((root / "epoch-registry/appends/000003/completed.json").exists())
+
+    def test_v1_legacy_transition_resumes_at_all_new_persisted_boundaries(self):
+        for cutpoint in ("intent", "before-registration", "registration", "snapshot", "pointer"):
+            with self.subTest(cutpoint=cutpoint):
+                case = self.world()
+                self.startup(case, legacy=True)
+                before = self.originals(case)
+                self.startup(case, cutpoint=cutpoint, sequence=2)
+                self.startup(case)
+                after = self.originals(case)
+                for path, raw in before.items():
+                    if path != "epoch-registry/head.json":
+                        self.assertEqual(after[path], raw, path)
+                self.assertTrue(guard.read_json(case.root / "guard/epoch-registry/head.json")["schema_version"].endswith("/v2"))
+                self.assertFalse((case.root / "guard/epochs/000002/readiness.json").exists())
+                self.assertTrue((case.root / "guard/epochs/000003/readiness.json").exists())
+
+    def test_v2_pointer_rejects_wrong_anchor_and_v1_downgrade_with_new_history(self):
+        for drift in ("different-intent", "same-head-wrong-intent", "v1"):
+            with self.subTest(drift=drift):
+                case = self.world()
+                self.startup(case)
+                self.startup(case)
+                root = case.root / "guard"
+                pointer_path = root / "epoch-registry/head.json"
+                pointer = guard.read_json(pointer_path)
+                old = guard.binding(case.root, root / "epoch-registry/appends/000001/intent.json")
+                if drift == "different-intent":
+                    pointer["append_intent_binding"] = old
+                elif drift == "same-head-wrong-intent":
+                    pointer["append_intent_binding"] = {**pointer["append_intent_binding"], "path": old["path"]}
+                else:
+                    pointer = {"schema_version": "claude-upgrade-delivery-guard-registry-pointer/v1",
+                               "snapshot_binding": pointer["snapshot_binding"]}
+                guard.atomic_json(pointer_path, pointer)
+                before = self.originals(case)
+                self.startup(case, success=False)
+                self.assertEqual(self.originals(case), before)
+
+    def test_current_readiness_rechecks_whole_history_without_completion_or_mutation(self):
+        for action in ("prepare", "run", "finish", "inspect"):
+            for missing in ("whole-root", "old-prefix", "current-completed"):
+                with self.subTest(action=action, missing=missing):
+                    case = self.world()
+                    self.startup(case)
+                    self.startup(case)
+                    engine, owner = self.live_engine(case)
+                    request = fixtures.prepare_request(case.environment)
+                    ticket = engine.prepare(request, owner) if action in {"run", "finish"} else None
+                    observation = engine.run(ticket) if action == "finish" else None
+                    root = case.root / "guard"
+                    ledger = root / "epoch-registry/appends"
+                    if missing == "whole-root":
+                        shutil.rmtree(ledger)
+                    elif missing == "old-prefix":
+                        shutil.rmtree(ledger / "000001")
+                    else:
+                        (ledger / "000003/completed.json").unlink()
+                    before = self.originals(case)
+                    state = guard.read_bytes(case.root / "state.json")
+                    with self.assertRaises(guard.GuardError):
+                        if action == "prepare":
+                            engine.prepare(request, owner)
+                        elif action == "run":
+                            engine.run(ticket)
+                        elif action == "finish":
+                            engine.finish(ticket, {"result": "pass", "observation_sha256": canonical_sha256(observation),
+                                "verifier_binding": case.configuration["guard"]["executor_binding"], "reason": "历史完整性专项"})
+                        else:
+                            engine.inspect({"run_nonce": "history-recheck"})
+                    self.assertEqual(self.originals(case), before)
+                    self.assertEqual(guard.read_bytes(case.root / "state.json"), state)
+
+    def test_history_loss_keeps_existing_terminal_reentry_and_failed_recovery_boundaries(self):
+        for committed in (True, False):
+            with self.subTest(committed=committed):
+                case = self.world()
+                self.startup(case)
+                engine, owner = self.live_engine(case)
+                ticket = engine.prepare(fixtures.prepare_request(case.environment), owner)
+                observed = engine.run(ticket)
+                decision = {"result": "pass", "observation_sha256": canonical_sha256(observed),
+                            "verifier_binding": case.configuration["guard"]["executor_binding"], "reason": "恢复边界专项"}
+                core = engine.finish(ticket, decision) if committed else None
+                shutil.rmtree(case.root / "guard/epoch-registry/appends")
+                before = self.originals(case)
+                state = guard.read_bytes(case.root / "state.json")
+                if committed:
+                    self.assertEqual(engine.run(ticket), observed)
+                    self.assertEqual(engine.finish(ticket, decision), core)
+                    self.assertEqual(self.originals(case), before)
+                    self.assertEqual(guard.read_bytes(case.root / "state.json"), state)
+                else:
+                    failed = engine.finish(ticket, {**decision, "result": "failed"})
+                    self.assertEqual(failed["result"], "failed")
+                    self.assertEqual(failed["restoration"]["state"], "verified")
+                    self.assertEqual(guard.read_json(case.root / "state.json")["restore_count"], 1)
+                with self.assertRaises(guard.GuardError):
+                    engine.prepare(fixtures.prepare_request(case.environment, nonce="after-history-loss"), owner)
+
+    def test_old_sealing_helper_cannot_downgrade_a_v2_pointer_after_history_loss(self):
+        case = self.world()
+        self.startup(case)
+        engine, _owner = self.live_engine(case)
+        root = case.root / "guard"
+        registrations = [guard.binding(case.root, path) for path in sorted((root / "epochs").glob("*/registration.json"))]
+        shutil.rmtree(root / "epoch-registry/appends")
+        before = self.originals(case)
+        with self.assertRaises(guard.GuardError):
+            engine._seal_registry_head(registrations)
+        self.assertEqual(self.originals(case), before)
 
     def test_normal_append_preserves_formed_proof_and_real_previous_producer(self):
         case = self.world()
