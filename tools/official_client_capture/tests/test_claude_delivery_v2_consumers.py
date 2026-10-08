@@ -11,9 +11,12 @@ from tools.official_client_capture.tests.test_claude_upgrade_delivery import _De
 from tools.official_client_control import contracts, delivery_execution as execution
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
 from tools.official_client_control.errors import ControlError
+from tools.official_client_control.tests.fixtures import ManagedToolTree
 
 
 class DeliveryCurrentConsumerTests(_DeliveryCase):
+    """先在 policy 3 形成历史收据，再核当前结果消费者不能把它包装成新版完成。"""
+
     def _new_result_over_old_receipt(self):
         self.finalized()
         path = delivery.stage_result_path(self.campaign, CANDIDATE)
@@ -59,3 +62,37 @@ class DeliveryCurrentConsumerTests(_DeliveryCase):
         with self.assertRaisesRegex(ControlError, "Package v2"):
             store.write_receipt_outcome("candidate_delivery", value, allow_existing=True)
         self.assertEqual(store.list_receipt_refs("candidate_delivery"), before)
+
+
+class CurrentPolicyDeliveryAdmissionTests(_DeliveryCase):
+    """当前 policy 4 的实际准入：缺配置及旧 Plan 都在执行前零变更拒绝。"""
+
+    TOOL_TREE_FACTORY = ManagedToolTree
+
+    def setUp(self):
+        super().setUp()
+        campaign = self.store().load_campaign(self.fixture.campaign_id)
+        self.assertEqual(campaign["tool_identity"]["policy_version"], 4)
+        self.assertTrue(execution.requires_current_contract(self.store(), campaign))
+
+    def test_current_policy_missing_configuration_has_zero_changes(self):
+        before = self.written()
+        code, result, error = self.run_delivery()
+        self.assertEqual(code, 1, error)
+        self.assertIsNone(result)
+        self.assertIn("缺配置零变更拒绝", error)
+        self.assertEqual(self.written(), before)
+        self.assertEqual(self.executor.freezes, 0)
+        self.assertEqual(self.executor.calls, [])
+        self.assertFalse(delivery.stage_result_path(self.campaign, CANDIDATE).exists())
+
+    def test_current_policy_legacy_plan_has_zero_changes(self):
+        before = self.written()
+        # 基础夹具已把 Store 移到 Campaign；旧 plan 构造器也必须指向同一真实存储坐标。
+        self.fixture.store = self.store()
+        with self.assertRaisesRegex(ControlError, "当前 Claude 真实交付能力拒绝降级合同"):
+            self.fixture.seal_delivery_plan()
+        self.assertEqual(self.written(), before)
+        self.assertEqual(self.executor.freezes, 0)
+        self.assertEqual(self.executor.calls, [])
+        self.assertEqual(self.store().list_receipt_refs("candidate_delivery"), [])

@@ -36,18 +36,19 @@ from tools.official_client_control.receipts import (
     finalize_validation,
     replay_receipt,
 )
-from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
+from tools.official_client_control.tests.fixtures import HistoricalDeliveryToolTree, ManagedToolTree, SyntheticCampaign
 
 STRICT = "synthetic-candidate-strict"
 
 
 class _BaselineCase(unittest.TestCase):
     tree: ManagedToolTree
+    TOOL_TREE_FACTORY = ManagedToolTree
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._tree_directory = tempfile.TemporaryDirectory()
-        cls.tree = ManagedToolTree(Path(cls._tree_directory.name) / "repo")
+        cls.tree = cls.TOOL_TREE_FACTORY(Path(cls._tree_directory.name) / "repo")
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -329,41 +330,6 @@ class BaselineFactGateTests(_BaselineCase):
                 self.baseline_payload(1, candidate_id="synthetic-candidate-other", candidate_ref=idle),
             )
 
-    def test_baseline_cannot_open_after_delivery_started(self) -> None:
-        self.fixture.strict_validate()
-        self.fixture.seal_delivery_plan()
-        self.fixture.record_delivery_stage("candidate_active", previous=None)
-        with self.assertRaisesRegex(ControlError, "已开始 VC-6 交付：交付开始后不得再开评估基线"):
-            self.fixture.open_evaluation_baseline(1)
-
-    def test_delivery_runs_under_current_baseline(self) -> None:
-        """b1 重评完成后交付只认 b1 的 Acceptance：b0 的验收不能进交付，交付收据形成于 b1。"""
-
-        self.fixture.strict_validate()
-        self.fixture.open_evaluation_baseline(1)
-        b1_pair = self.fixture.rerun_pair_under_baseline()
-        b1_acceptance = self.fixture.accept_under_baseline([b1_pair])
-        # 先试用 b0 的验收开始交付：交付门禁按形成期基线拒绝。
-        self.fixture.seal_delivery_plan(delivery_id="delivery-b0")
-        with self.assertRaisesRegex(ControlError, "候选交付阶段 引用的 Acceptance 形成于候选 revision r1、评估基线 None"):
-            self.fixture.record_delivery_stage("candidate_active", previous=None, delivery_id="delivery-b0")
-        self.fixture.references["acceptance-strict"] = b1_acceptance
-        self.fixture.references["validation-completed"] = self.fixture.references["validation-completed-strict-b1"]
-        self.fixture.seal_delivery_plan()
-        refs = self.fixture.record_delivery_run(
-            ["candidate_active", "rollback_verified", "candidate_restored", "stable_observed"]
-        )
-        with self.assertRaisesRegex(ControlError, "已开始 VC-6 交付"):
-            self.fixture.open_evaluation_baseline(2)
-        receipt = self.store.load_receipt(
-            finalize_candidate_delivery(
-                self.store, self.campaign_id, self.fixture.seal_delivery_package(refs)
-            )
-        )
-        self.assertEqual(receipt["formed_under"]["evaluation_baseline"], self.baseline(1))
-        self.assertEqual(self.status()["checkpoint"], "ready_for_operator_release")
-        self.assertEqual(self.replay()["result"], "passed")
-
     def test_baselines_in_one_revision_belong_to_one_candidate(self) -> None:
         self.fixture.strict_validate(finalize=False)
         self.fixture.strict_validate(finalize=False, tag="second")
@@ -405,6 +371,47 @@ class BaselineFactGateTests(_BaselineCase):
         )
         self.assertEqual(self.store.load_fact(reference)["fact_kind"], "evaluation_baseline_recorded")
         self.assertEqual(self.status()["evaluation_baseline"], self.baseline(1))
+
+
+class HistoricalDeliveryBaselineTests(_BaselineCase):
+    """只回归 policy 3 的历史交付合同；不改变其余用例的当前身份策略。"""
+
+    TOOL_TREE_FACTORY = HistoricalDeliveryToolTree
+
+    def test_baseline_cannot_open_after_delivery_started(self) -> None:
+        self.fixture.strict_validate()
+        self.fixture.seal_delivery_plan()
+        self.fixture.record_delivery_stage("candidate_active", previous=None)
+        with self.assertRaisesRegex(ControlError, "已开始 VC-6 交付：交付开始后不得再开评估基线"):
+            self.fixture.open_evaluation_baseline(1)
+
+    def test_delivery_runs_under_current_baseline(self) -> None:
+        """b1 重评完成后交付只认 b1 的 Acceptance：b0 的验收不能进交付，交付收据形成于 b1。"""
+
+        self.fixture.strict_validate()
+        self.fixture.open_evaluation_baseline(1)
+        b1_pair = self.fixture.rerun_pair_under_baseline()
+        b1_acceptance = self.fixture.accept_under_baseline([b1_pair])
+        # 先试用 b0 的验收开始交付：交付门禁按形成期基线拒绝。
+        self.fixture.seal_delivery_plan(delivery_id="delivery-b0")
+        with self.assertRaisesRegex(ControlError, "候选交付阶段 引用的 Acceptance 形成于候选 revision r1、评估基线 None"):
+            self.fixture.record_delivery_stage("candidate_active", previous=None, delivery_id="delivery-b0")
+        self.fixture.references["acceptance-strict"] = b1_acceptance
+        self.fixture.references["validation-completed"] = self.fixture.references["validation-completed-strict-b1"]
+        self.fixture.seal_delivery_plan()
+        refs = self.fixture.record_delivery_run(
+            ["candidate_active", "rollback_verified", "candidate_restored", "stable_observed"]
+        )
+        with self.assertRaisesRegex(ControlError, "已开始 VC-6 交付"):
+            self.fixture.open_evaluation_baseline(2)
+        receipt = self.store.load_receipt(
+            finalize_candidate_delivery(
+                self.store, self.campaign_id, self.fixture.seal_delivery_package(refs)
+            )
+        )
+        self.assertEqual(receipt["formed_under"]["evaluation_baseline"], self.baseline(1))
+        self.assertEqual(self.status()["checkpoint"], "ready_for_operator_release")
+        self.assertEqual(self.replay()["result"], "passed")
 
 
 class BaselineReplayTests(_BaselineCase):

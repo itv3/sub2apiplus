@@ -38,18 +38,19 @@ from tools.official_client_control.receipts import (
     require_acceptance_formed_under,
     tool_evolutions,
 )
-from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
+from tools.official_client_control.tests.fixtures import HistoricalDeliveryToolTree, ManagedToolTree, SyntheticCampaign
 
 PROBE = "official_client_capture/claude_upgrade_b112_probe.json"
 
 
 class _FormedCase(unittest.TestCase):
     tree: ManagedToolTree
+    TOOL_TREE_FACTORY = ManagedToolTree
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._tree_directory = tempfile.TemporaryDirectory()
-        cls.tree = ManagedToolTree(Path(cls._tree_directory.name) / "repo")
+        cls.tree = cls.TOOL_TREE_FACTORY(Path(cls._tree_directory.name) / "repo")
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -119,34 +120,6 @@ class ToolEvolutionTests(_FormedCase):
         self.assertEqual(status["tool_identity_index"], 1)
         self.assertEqual(self.replay()["result"], "passed")
 
-    def test_old_receipts_replay_by_formed_under_after_evolution(self) -> None:
-        self.fixture.strict_validate()
-        initial_tool = self.fixture.tool_sha256
-        self.change_tools()
-        # 未登记演进：当前代码已变，重放与当前代码无关，照常通过；写入被拒。
-        self.assertEqual(self.replay()["result"], "passed")
-        for kind in ("candidate_build", "validation_gate"):
-            for reference in self.receipts(kind):
-                receipt = replay_receipt(self.fixture.store, reference)
-                self.assertIsNone(receipt["formed_under"]["tool_identity_ref"])
-                self.assertEqual(receipt["producer_tool_sha256"], initial_tool)
-        self.assertEqual(self.status()["checkpoint"], "ready")
-        self.fixture.register_evolution()
-        self.assertNotEqual(self.fixture.tool_sha256, initial_tool)
-        # 演进后：旧收据按形成期（初始身份）重放，新写入按新有效身份形成。
-        self.fixture.strict_deliver()
-        delivery = self.fixture.store.load_receipt(
-            self.fixture.references["candidate-delivery-receipt"]
-        )
-        self.assertEqual(delivery["formed_under"]["tool_identity_ref"]["object_kind"], "tool_evolution_registration")
-        self.assertEqual(delivery["producer_tool_sha256"], self.fixture.tool_sha256)
-        replay = self.replay()
-        self.assertEqual((replay["result"], replay["receipts"]), ("passed", 3))
-        self.assertEqual(self.status()["checkpoint"], "ready_for_operator_release")
-        # 再改一次代码：所有收据仍按各自形成期重放通过。
-        self.change_tools("2")
-        self.assertEqual(self.replay()["result"], "passed")
-
     def test_registration_must_be_current_code_at_chain_tail(self) -> None:
         self.change_tools()
         stale = self.fixture.evolution_payload()
@@ -196,6 +169,40 @@ class ToolEvolutionTests(_FormedCase):
         WorkflowGates(self.fixture.store).validate_object_graph(
             self.fixture.references["validation-plan"]
         )
+
+
+class HistoricalDeliveryToolEvolutionTests(_FormedCase):
+    """只回归 policy 3 的历史交付合同；不改变其余用例的当前身份策略。"""
+
+    TOOL_TREE_FACTORY = HistoricalDeliveryToolTree
+
+    def test_old_receipts_replay_by_formed_under_after_evolution(self) -> None:
+        self.fixture.strict_validate()
+        initial_tool = self.fixture.tool_sha256
+        self.change_tools()
+        # 未登记演进：当前代码已变，重放与当前代码无关，照常通过；写入被拒。
+        self.assertEqual(self.replay()["result"], "passed")
+        for kind in ("candidate_build", "validation_gate"):
+            for reference in self.receipts(kind):
+                receipt = replay_receipt(self.fixture.store, reference)
+                self.assertIsNone(receipt["formed_under"]["tool_identity_ref"])
+                self.assertEqual(receipt["producer_tool_sha256"], initial_tool)
+        self.assertEqual(self.status()["checkpoint"], "ready")
+        self.fixture.register_evolution()
+        self.assertNotEqual(self.fixture.tool_sha256, initial_tool)
+        # 演进后：旧收据按形成期（初始身份）重放，新写入按新有效身份形成。
+        self.fixture.strict_deliver()
+        delivery = self.fixture.store.load_receipt(
+            self.fixture.references["candidate-delivery-receipt"]
+        )
+        self.assertEqual(delivery["formed_under"]["tool_identity_ref"]["object_kind"], "tool_evolution_registration")
+        self.assertEqual(delivery["producer_tool_sha256"], self.fixture.tool_sha256)
+        replay = self.replay()
+        self.assertEqual((replay["result"], replay["receipts"]), ("passed", 3))
+        self.assertEqual(self.status()["checkpoint"], "ready_for_operator_release")
+        # 再改一次代码：所有收据仍按各自形成期重放通过。
+        self.change_tools("2")
+        self.assertEqual(self.replay()["result"], "passed")
 
 
 class CandidateRevisionTests(_FormedCase):

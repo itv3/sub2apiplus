@@ -118,6 +118,35 @@ class ManagedToolTree:
         self._originals.clear()
 
 
+class HistoricalDeliveryToolTree(ManagedToolTree):
+    """历史交付合同的隔离受管树，只供 regression_fixture 回归。
+
+    策略取自 A 提交 551a01c17 的 policy 3 原始字节，先核冻结摘要，再写进
+    两个受管根内的正式策略坐标；Campaign 身份由原引擎在该副本上实算。
+    不篡改已封存身份字段，不替换当前合同判定，不改正式策略或来源登记。
+    这份合成历史树不代表历史发布认证，也不授予当前候选完成权限；当前
+    typed 集成继续使用默认 ManagedToolTree 的 policy 4。
+    """
+
+    SOURCE_SCOPE = "regression_fixture"
+    SOURCE_COMMIT = "551a01c1762b7f6604e5be5716a195cbf251531b"
+    POLICY_SHA256 = "86d99e3a0906a4e2f5c96bcc0b0026f1891aa1ac43746e6076b37365b3205ace"
+
+    def __init__(self, destination: Path) -> None:
+        frozen = Path(__file__).with_name("data") / "claude_delivery_policy_v3_551a01c17.json"
+        if sha256_file(frozen) != self.POLICY_SHA256:
+            raise ValueError("历史交付 regression_fixture 的 policy 3 原始字节摘要不符")
+        engine = receipts_module._identity_engine("claude")
+        policy = engine.load_policy(frozen)
+        if (policy["client"], policy["policy_version"]) != ("claude", 3):
+            raise ValueError("历史交付 regression_fixture 不是冻结的 Claude policy 3")
+        super().__init__(destination)
+        relative = Path(engine.DEFAULT_POLICY_PATH).relative_to(engine.REPOSITORY_ROOT)
+        self.policy_path = self.root / relative
+        self.policy_path.write_bytes(frozen.read_bytes())
+        self.path(str(policy["orchestrator"]["file"])).write_bytes(orchestrator_stub(policy))
+
+
 def orchestrator_stub(policy: dict[str, Any]) -> bytes:
     """编排器替身源码：只定义策略登记的 wire／evidence 闭包根，函数体为空。"""
 
@@ -1422,7 +1451,10 @@ class SyntheticCampaign:
             )
 
     def strict_deliver(self, *, fail_stage: str | None = None) -> None:
-        """按 VC-6 严格合同记录 DMIT 四阶段并签发候选交付收据。"""
+        """按历史合成 VC-6 合同记录四阶段；Claude v2 只配合隔离的 policy 3 回归树。
+
+        当前 policy 4 的真实交付必须使用 typed 新合同，不能借本方法取得当前成功凭证。
+        """
 
         stage_checks = {
             "candidate_active": ["health", "smoke"],

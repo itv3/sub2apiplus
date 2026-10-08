@@ -52,7 +52,7 @@ from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artif
 from tools.official_client_control.contracts import CANDIDATE_DELIVERY_RECEIPT_V3_SCHEMA, derive_identity_conditions
 from tools.official_client_control.store import ControlStore
 from tools.official_client_capture.tests.claude_vc6_delivery_fixture import FixtureExecutor
-from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
+from tools.official_client_control.tests.fixtures import HistoricalDeliveryToolTree, ManagedToolTree, SyntheticCampaign
 
 CAMPAIGN_ID = "claude-code-2_1_285-b407"
 CANDIDATE = "synthetic-candidate-strict"
@@ -98,13 +98,15 @@ def tree_digests(*roots: Path) -> dict[str, str]:
 
 class _DeliveryCase(unittest.TestCase):
     tree: ManagedToolTree
+    # 旧交付链只在冻结 policy 3 的 regression_fixture 中回归；当前准入负例覆写为默认树。
+    TOOL_TREE_FACTORY = HistoricalDeliveryToolTree
     # Campaign 用途：Store 夹具、计时账本、VC 总计划与 Campaign 总计划同取（production_replacement 子类覆盖）。
     PURPOSE = "validation_only"
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._tree_directory = tempfile.TemporaryDirectory()
-        cls.tree = ManagedToolTree(Path(cls._tree_directory.name) / "repo")
+        cls.tree = cls.TOOL_TREE_FACTORY(Path(cls._tree_directory.name) / "repo")
 
     @classmethod
     def tearDownClass(cls) -> None:

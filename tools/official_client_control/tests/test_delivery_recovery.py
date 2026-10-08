@@ -43,7 +43,7 @@ from tools.official_client_control.receipts import (
     finalize_candidate_delivery_outcome,
     replay_receipt,
 )
-from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
+from tools.official_client_control.tests.fixtures import HistoricalDeliveryToolTree, ManagedToolTree, SyntheticCampaign
 
 PROBE = "official_client_capture/claude_upgrade_b407_probe.json"
 ALL_STAGES = ["candidate_active", "rollback_verified", "candidate_restored", "stable_observed"]
@@ -52,14 +52,14 @@ MISSING_RECOVERY = {"object_kind": "candidate_delivery_recovery", "sha256": "0" 
 
 
 class _DeliveryCase(unittest.TestCase):
-    """每个测试在受管树副本上建一个 VC-5 已完成（ready）的 Campaign v2。"""
+    """在历史 policy 3 回归树上建 VC-5 已完成的 Campaign v2，不授予当前完成权。"""
 
     tree: ManagedToolTree
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._tree_directory = tempfile.TemporaryDirectory()
-        cls.tree = ManagedToolTree(Path(cls._tree_directory.name) / "repo")
+        cls.tree = HistoricalDeliveryToolTree(Path(cls._tree_directory.name) / "repo")
 
     @classmethod
     def tearDownClass(cls) -> None:
