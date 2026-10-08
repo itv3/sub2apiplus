@@ -59,10 +59,14 @@ class CaptureEngine:
         self.key = c.read_bytes(c.check_binding(self.data_root, self.configuration["channel_key_binding"]))
         self._lock_descriptor = os.open(self.socket_path.parent / "capture-owner.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
+            info = os.fstat(self._lock_descriptor)
+            c.require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600, "采集所有权锁类型、所有者或权限非法")
             fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BaseException:
+        except BaseException as error:
             os.close(self._lock_descriptor)
-            raise c.CaptureError("相同采集根已有独立服务持锁")
+            if isinstance(error, c.CaptureError):
+                raise
+            raise c.CaptureError("相同采集根已有独立服务持锁") from error
         self._lock = threading.RLock()
         self._operation_lock = threading.RLock()
         self._stop_accept = threading.Event()

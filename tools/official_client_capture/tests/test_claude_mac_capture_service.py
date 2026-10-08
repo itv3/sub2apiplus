@@ -31,7 +31,7 @@ from tools.official_client_capture import claude_mac_capture_wire as wire
 from tools.official_client_capture import claude_upgrade_mac_budget as budget
 from tools.official_client_capture import codex_upgrade_project_ledger as ledger
 from tools.official_client_capture.claude_upgrade_mac_capture_client import CaptureClient
-from tools.official_client_capture.claude_upgrade_mac_capture_service import _mac, receive
+from tools.official_client_capture.claude_upgrade_mac_capture_service import CaptureEngine, _mac, receive
 
 SSE_BODY = b"event: message\ndata: {\"text\":\"real-loopback\"}\n\ndata: [DONE]\n\n"
 
@@ -400,6 +400,47 @@ class NativeCaptureTests(unittest.TestCase):
         self.assertFalse((self.data / "capture" / "ready.json").exists())
         with self.assertRaises(OSError):
             socket.create_connection(("127.0.0.1", self.listener_port), timeout=0.1)
+
+    def _assert_capture_owner_lock_rejected(self, lock: Path) -> None:
+        capture = c.private_directory(self.data / "capture")
+        originals = {"daemon-owner.json": b'{"untouched":"owner"}\n', "reservation.json": b'{"untouched":"reservation"}\n'}
+        for name, raw in originals.items():
+            c.write_once(capture / name, raw)
+        previous_head = ledger.replay_head(self.ledger_root)
+        previous_lock = (lock.read_bytes(), lock.stat().st_mode, lock.stat().st_nlink)
+        opened = []
+        original_open = os.open
+        def observed_open(path, flags, mode=0o777, *, dir_fd=None):
+            descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+            if Path(path) == lock:
+                opened.append(descriptor)
+            return descriptor
+        # 仅观察真实 open 返回的 fd，不替换 fstat；拒绝必须关闭它且不能动原件。
+        with mock.patch.object(os, "open", side_effect=observed_open):
+            with self.assertRaisesRegex(c.CaptureError, "所有权锁"):
+                CaptureEngine(self.configuration)
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(OSError):
+            os.fstat(opened[0])
+        self.assertEqual(previous_lock, (lock.read_bytes(), lock.stat().st_mode, lock.stat().st_nlink))
+        for name, raw in originals.items():
+            self.assertEqual(c.read_bytes(capture / name), raw)
+        self.assertEqual(ledger.replay_head(self.ledger_root), previous_head)
+        self.assertEqual({path.name for path in capture.iterdir()}, set(originals))
+
+    def test_capture_owner_lock_bad_permissions_are_rejected(self) -> None:
+        self._prepare()
+        lock = c.private_directory(self.data / "control") / "capture-owner.lock"
+        c.write_once(lock, b"existing-lock")
+        lock.chmod(0o644)
+        self._assert_capture_owner_lock_rejected(lock)
+
+    def test_capture_owner_lock_hard_link_is_rejected(self) -> None:
+        self._prepare()
+        lock = c.private_directory(self.data / "control") / "capture-owner.lock"
+        c.write_once(lock, b"existing-lock")
+        os.link(lock, self.data / "capture-owner-alias.lock")
+        self._assert_capture_owner_lock_rejected(lock)
 
     def test_close_is_immutable_and_replay_does_not_rerun(self) -> None:
         self._start()
