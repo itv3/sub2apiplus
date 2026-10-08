@@ -1,0 +1,21 @@
+{
+  "schema_version": "claude-gate-material-reader-contract/v1",
+  "entry": "tools.official_client_capture.codex_upgrade_gate_receipt.replay",
+  "phase": "candidate_external",
+  "environment_entry": "codex_upgrade_arm64_environment_receipt.replay",
+  "target_entry": "target_platform_gate.verify_evidence",
+  "target_mode": "historical",
+  "io_version": "managed-path-fd-metadata/v1",
+  "views": ["original", "imported"],
+  "open_modes": ["r", "rt", "rb"],
+  "fd_operations": ["open", "fdopen", "fstat", "read", "lseek", "dup", "close"],
+  "metadata_operations": ["stat", "lstat", "access", "readlink", "scandir", "listdir"],
+  "denied": ["write", "pread", "dup2", "unknown-fd", "unknown-path", "symlink", "subprocess", "socket", "ctypes", "mmap", "unknown-native", "unknown-code"],
+  "max_material_bytes": 134217728,
+  "max_material_files": 20000,
+  "max_result_bytes": 16777216,
+  "timeout_seconds": 60,
+  "fatal_violations_are_irrevocable": true,
+  "readset_encoding": "sorted-root-id-relative-path/v1",
+  "metadata_encoding": "sorted-logical-operation-type-mode-size-members/v1"
+}

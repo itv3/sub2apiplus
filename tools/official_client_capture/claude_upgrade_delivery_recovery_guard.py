@@ -902,6 +902,33 @@ class GuardEngine:
                 self.configuration, self.context, [proof_bindings[key] for key in sorted(proof_bindings)],
                 lambda item: read_bytes(check_binding(self.data_root, dict(item))),
                 purpose="formed_replay", producer_materials=profile_materials)
+            if self.configuration.get("schema_version") == "claude-upgrade-arm64-executor-configuration/v2":
+                source = self.build_local_source(content, origin)
+                from tools.official_client_control.qualification_material_import import projection_for_configuration
+                from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+                from tools.official_client_control.store import ControlStore
+                qualification = self.configuration["candidate"]["qualification"]
+                store = ControlStore.open_read_only(managed_path(self.data_root, qualification["store_relative"]))
+                gate_projection = projection_for_configuration(store, self.configuration, source, purpose="formed_replay")
+                initial = {"content": content, "origin": origin, "profile_producer_materials": profile_materials,
+                           "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)],
+                           "configuration_binding": self.context["configuration_ref"]}
+                bindings = project_delivery_raw_bindings(source, initial,
+                    gate_projection=gate_projection, profile_projection=profile_projection)
+                originals = {}
+                total = 0
+                for item in bindings:
+                    raw = read_bytes(check_binding(self.data_root, item))
+                    total += len(raw)
+                    if total > MAX_RPC_BYTES // 2:
+                        raise GuardError("来源原件闭包超出固定通道上限，不能裁掉原件继续")
+                    originals[item["path"]] = base64.b64encode(raw).decode("ascii")
+                return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"],
+                    "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": origin["service_instance_id"],
+                    "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity,
+                    "profile_configuration_binding": self.context["configuration_ref"],
+                    "profile_producer_materials": profile_materials,
+                    "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)]}
             originals: dict[str, str] = {}
             seen: dict[str, dict[str, Any]] = {}
             pending = all_bindings({"content": content, "origin": origin, "profile_producer_materials": profile_materials,
@@ -932,6 +959,23 @@ class GuardEngine:
             return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"], "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": expected_core["origin"]["service_instance_id"], "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity,
                     "profile_configuration_binding": self.context["configuration_ref"],
                     "profile_producer_materials": profile_materials, "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)]}
+
+    def build_local_source(self, matched_content: dict[str, Any], origin: dict[str, Any]):
+        """仅由 export 在完成真实原件匹配后调用，不反向 RPC 或重放交付图。"""
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import guard_identity
+        actual = guard_identity(self.configuration, self.context, formal=self.configuration["source_scope"] == "formal")
+        if actual != self.identity:
+            raise GuardError("守卫本地来源的实际安装身份或进程已变化")
+        saved = read_json(self.root / "configuration.json")
+        if saved != {"configuration": self.configuration, "context": self.stable_context}:
+            raise GuardError("守卫本地来源的保存配置或受管上下文漂移")
+        if read_json(check_binding(self.data_root, self.context["configuration_ref"])) != self.configuration:
+            raise GuardError("守卫本地来源的配置原件与冻结绑定不同")
+        if origin["configuration_sha256"] != canonical_sha256(self.configuration) or origin["source_scope"] != self.identity["source_scope"] or origin["authority"] != self.identity["authority"]:
+            raise GuardError("守卫本地来源不是同一匹配的固定配置")
+        return VerifiedSource(canonical_sha256(matched_content), self.identity["deployment_receipt_binding"]["sha256"], {},
+            canonical_sha256(self.configuration), origin["service_instance_id"], self.data_root)
 
 
 def _mac(key: bytes, value: Any) -> str:

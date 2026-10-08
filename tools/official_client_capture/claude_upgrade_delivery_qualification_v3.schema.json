@@ -1,0 +1,104 @@
+{
+  "$id": "claude-upgrade-delivery-qualification/v3",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "本文件给出闭合数据形状；实际来源授权、同源链、根映射、字节与真实重放由同名 Python 纯校验器验证。",
+  "properties": {
+    "allowed_changes": {
+      "const": [
+        "application_image",
+        "application_stage_label",
+        "active_runtime_profile"
+      ]
+    },
+    "candidate": {
+      "type": "object"
+    },
+    "candidate_compose": {
+      "type": "object"
+    },
+    "configuration_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "normalized_compose": {
+      "type": "object"
+    },
+    "qualification_materials_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "qualification_replays": {
+      "items": {
+        "type": "object"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "result": {
+      "const": "pass"
+    },
+    "rollback": {
+      "type": "object"
+    },
+    "rollback_compose": {
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "claude-upgrade-delivery-qualification/v3"
+    }
+  },
+  "required": [
+    "allowed_changes",
+    "candidate",
+    "candidate_compose",
+    "configuration_binding",
+    "normalized_compose",
+    "qualification_materials_binding",
+    "qualification_replays",
+    "result",
+    "rollback",
+    "rollback_compose",
+    "schema_version"
+  ],
+  "type": "object"
+}

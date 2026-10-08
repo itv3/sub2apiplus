@@ -1,0 +1,184 @@
+{
+  "$id": "official-client-sealed-gate-binding-projection/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "本文件给出闭合数据形状；实际来源授权、同源链、根映射、字节与真实重放由同名 Python 纯校验器验证。",
+  "properties": {
+    "archive_bindings": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "domains": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "domain_pointer": {
+            "const": "/external_gate"
+          },
+          "domain_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "gate_subject_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "parent_binding": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "parent_schema": {
+            "const": "claude-upgrade-acceptance/v1"
+          },
+          "receipt_relative_path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "candidate",
+              "rollback"
+            ]
+          },
+          "source_root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain_pointer",
+          "domain_sha256",
+          "gate_subject_sha256",
+          "parent_binding",
+          "parent_schema",
+          "receipt_relative_path",
+          "role",
+          "source_root_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "material_files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_binding": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "content_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "reader_role": {
+            "enum": [
+              "reader",
+              "strict",
+              "reader_and_strict"
+            ]
+          },
+          "root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_mode": {
+            "enum": [
+              "0400",
+              "0600"
+            ]
+          },
+          "source_relative_path": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "archive_binding",
+          "content_bytes",
+          "content_sha256",
+          "reader_role",
+          "root_id",
+          "source_mode",
+          "source_relative_path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "official-client-sealed-gate-binding-projection/v1"
+    }
+  },
+  "required": [
+    "archive_bindings",
+    "domains",
+    "material_files",
+    "schema_version"
+  ],
+  "type": "object"
+}

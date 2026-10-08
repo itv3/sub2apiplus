@@ -33,6 +33,7 @@ from tools.official_client_control import profile_observation_bindings as profil
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 
 CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v1"
+MATERIAL_CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v2"
 EXECUTOR_VERSION = "claude-upgrade-arm64-delivery-executor/v1"
 GUARD_IDENTITY_SCHEMA = "claude-upgrade-delivery-guard-identity/v1"
 AUTHORITY = "claude-arm64-recovery-guard"
@@ -97,9 +98,12 @@ def _qualification_shape(value: Any, label: str) -> dict[str, Any]:
 
 def validate_configuration(configuration: Any) -> dict[str, Any]:
     """仅纯合同校验；不读取文件、不查询主机、不改变现场。"""
-    value = guard.exact(configuration, CONFIGURATION_FIELDS, "执行器配置")
-    if value["schema_version"] != CONFIGURATION_SCHEMA or value["client"] != "claude" or value["host_id"] != "ARM64" or value["isolation"] != "isolated_candidate" or value["source_scope"] not in {"formal", "regression_fixture"}:
+    material_contract = isinstance(configuration, dict) and configuration.get("schema_version") == MATERIAL_CONFIGURATION_SCHEMA
+    value = guard.exact(configuration, CONFIGURATION_FIELDS | ({"qualification_materials_binding"} if material_contract else set()), "执行器配置")
+    if value["schema_version"] not in {CONFIGURATION_SCHEMA, MATERIAL_CONFIGURATION_SCHEMA} or value["client"] != "claude" or value["host_id"] != "ARM64" or value["isolation"] != "isolated_candidate" or value["source_scope"] not in {"formal", "regression_fixture"}:
         raise guard.GuardError("执行器仅允许 Claude ARM64 隔离候选配置")
+    if material_contract:
+        _binding_shape(value["qualification_materials_binding"], "资格门禁材料导入")
     if not isinstance(value["instance_id"], str) or not guard.SAFE_ID.fullmatch(value["instance_id"]) or value["instance_id"].lower().startswith(("production", "dmit", "vircs")):
         raise guard.GuardError("隔离实例 ID 非法")
     paths = guard.exact(value["paths"], {"guard_root_relative", "active_profile_relative", "compose_binding"}, "受管路径")
@@ -630,9 +634,23 @@ class DockerComposeRuntime:
         """只读重放同Store的两份资格图，禁止自报验收、旧Profile占位。"""
         from tools.official_client_control.store import ControlStore
         from tools.official_client_control.receipts import replay_receipt
-        from tools.official_client_control.qualification_bindings import DELIVERY_SCHEMA, validate_delivery_report
+        from tools.official_client_control.qualification_bindings import DELIVERY_SCHEMA, MATERIAL_DELIVERY_SCHEMA, validate_delivery_report
         first = self.configuration["candidate"]["qualification"]
         store = ControlStore.open_read_only(guard.managed_path(self.root, first["store_relative"]))
+        # 第二根在凭据、Compose 或任何现场探针之前只读验真；当前有效
+        # 身份达到12时禁止写入/派发旧配置，历史消费另走形成期合同。
+        from tools.official_client_control.qualification_material_import import requires_qualification_materials, validate_qualification_material_import
+        materials = self.configuration.get("qualification_materials_binding")
+        if requires_qualification_materials(store, store.load_campaign(first["campaign_id"])) and materials is None:
+            raise guard.GuardError("当前第二根能力要求配置 v2 和真实导入证明，禁止降级")
+        source = None
+        if materials is not None:
+            from tools.official_client_control.delivery_execution import VerifiedSource
+            source = VerifiedSource("0" * 64, self.configuration["guard"]["deployment_receipt_binding"]["sha256"], {},
+                canonical_sha256(self.configuration), "qualification-readonly", self.root)
+            validate_qualification_material_import(store, materials, source,
+                {name: self.configuration[name]["qualification"] for name in ("candidate", "rollback")}, purpose="current_delivery",
+                expected_source_scope=self.configuration["source_scope"])
         reports = []
         for name in ("candidate", "rollback"):
             material = self.configuration[name]
@@ -677,7 +695,9 @@ class DockerComposeRuntime:
             raise guard.GuardError("两份Compose仅可改变唯一应用镜像／阶段标签")
         self._compose_cache = candidate_compose
         report = {"schema_version": DELIVERY_SCHEMA, "configuration_binding": self.context["configuration_ref"], "candidate": self.configuration["candidate"], "rollback": self.configuration["rollback"], "qualification_replays": reports, "candidate_compose": raw_candidate, "rollback_compose": raw_rollback, "normalized_compose": candidate_compose, "allowed_changes": ["application_image", "application_stage_label", "active_runtime_profile"], "result": "pass"}
-        validate_delivery_report(report, store, current_execution=True, configuration=self.configuration, trusted_data_root=self.root)
+        if materials is not None:
+            report.update(schema_version=MATERIAL_DELIVERY_SCHEMA, qualification_materials_binding=materials)
+        validate_delivery_report(report, store, current_execution=True, configuration=self.configuration, trusted_data_root=self.root, source=source)
         self._qualification_report = report
         return report
 
@@ -1171,6 +1191,26 @@ class Arm64DeliveryExecutor:
         profile_projection = profile_observations.validate_profile_observation_projection(
             self.configuration, self.context, raw.get("profile_proof_bindings"), read_profile_original,
             purpose="formed_replay", producer_materials=raw.get("profile_producer_materials"))
+        if self.configuration.get("schema_version") == MATERIAL_CONFIGURATION_SCHEMA:
+            from tools.official_client_control.delivery_execution import VerifiedSource
+            from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+            from tools.official_client_control.qualification_material_import import projection_for_configuration
+            from tools.official_client_control.store import ControlStore
+            source = VerifiedSource(raw["content_sha256"], raw["deployment_sha256"], originals,
+                raw["configuration_sha256"], raw["service_instance_id"], self.data_root,
+                profile_projection=profile_projection)
+            q = self.configuration["candidate"]["qualification"]
+            store = ControlStore.open_read_only(guard.managed_path(self.data_root, q["store_relative"]))
+            gate_projection = projection_for_configuration(store, self.configuration, source, purpose="formed_replay")
+            initial = {"content": content, "origin": origin,
+                       "profile_proof_bindings": list(profile_projection.proof_bindings),
+                       "profile_producer_materials": list(profile_projection.producer_materials)}
+            bindings = project_delivery_raw_bindings(source, initial,
+                gate_projection=gate_projection, profile_projection=profile_projection)
+            for item in bindings:
+                data = originals.get(item["path"])
+                if data is None or len(data) != item["bytes"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
+                    raise guard.GuardError("受管通道遗漏门禁第二根投影的真实原件")
         return {"content_sha256": raw["content_sha256"], "deployment_sha256": raw["deployment_sha256"], "bytes_by_path": originals, "configuration_sha256": raw["configuration_sha256"], "service_instance_id": raw["service_instance_id"], "trusted_data_root": self.data_root,
                 "profile_projection": profile_projection}
 

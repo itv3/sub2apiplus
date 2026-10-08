@@ -23,6 +23,7 @@ from .errors import ControlError
 PROJECTION_SCHEMA = "official-client-qualification-binding-projection/v1"
 REPLAY_SCHEMA = "claude-upgrade-candidate-qualification-replay/v2"
 DELIVERY_SCHEMA = "claude-upgrade-delivery-qualification/v2"
+MATERIAL_DELIVERY_SCHEMA = "claude-upgrade-delivery-qualification/v3"
 LEGACY_REPLAY_SCHEMA = "claude-upgrade-candidate-qualification-replay/v1"
 LEGACY_DELIVERY_SCHEMA = "claude-upgrade-delivery-qualification/v1"
 ROOT_FIELDS = ("candidate_ref", "validation_ref", "acceptance_ref", "build_receipt_ref")
@@ -376,13 +377,15 @@ def validate_replay_report(value: Any, qualification: Mapping[str, Any], store: 
 
 def validate_delivery_report(value: Any, store: Any, *, current_execution: bool,
                              configuration: Mapping[str, Any] | None = None,
-                             trusted_data_root: Path | None = None) -> None:
+                             trusted_data_root: Path | None = None, source: Any = None) -> None:
     """新执行必须用 v2；旧 v1 只保留形成期只读合同，不授予本轮写入／派发权。"""
     report = expect_object(value, "qualification.delivery_report")
     legacy = report.get("schema_version") == LEGACY_DELIVERY_SCHEMA
-    expect_exact_keys(report, DELIVERY_FIELDS if legacy else DELIVERY_FIELDS | {"configuration_binding"},
+    material_contract = report.get("schema_version") == MATERIAL_DELIVERY_SCHEMA
+    fields = DELIVERY_FIELDS if legacy else DELIVERY_FIELDS | {"configuration_binding"}
+    expect_exact_keys(report, fields | ({"qualification_materials_binding"} if material_contract else set()),
                       "qualification.delivery_report")
-    if report["schema_version"] not in {DELIVERY_SCHEMA, LEGACY_DELIVERY_SCHEMA} or (current_execution and legacy):
+    if report["schema_version"] not in {DELIVERY_SCHEMA, MATERIAL_DELIVERY_SCHEMA, LEGACY_DELIVERY_SCHEMA} or (current_execution and legacy):
         raise ControlError("当前资格消费拒绝旧报告冒充后继合同")
     if not legacy:
         configuration_binding = validate_external_binding(report["configuration_binding"], "qualification.configuration_binding")
@@ -394,6 +397,16 @@ def validate_delivery_report(value: Any, store: Any, *, current_execution: bool,
                                         "qualification.configuration_original")
             if configuration is not None and original != configuration:
                 raise ControlError("资格报告配置绑定与本次冻结配置原件不一致")
+            if configuration is None:
+                configuration = original
+    from .qualification_material_import import requires_qualification_materials, projection_for_configuration
+    campaign = store.load_campaign(report["candidate"]["qualification"]["campaign_id"])
+    if current_execution and requires_qualification_materials(store, campaign) and not material_contract:
+        raise ControlError("当前第二根能力要求资格 v3，旧报告只能按形成期只读重放")
+    if material_contract:
+        if configuration is None or configuration.get("schema_version") != "claude-upgrade-arm64-executor-configuration/v2" or report["qualification_materials_binding"] != configuration.get("qualification_materials_binding") or source is None:
+            raise ControlError("资格 v3 必须使用同一配置 v2、导入绑定与已验证来源")
+        projection_for_configuration(store, configuration, source, purpose="current_delivery" if current_execution else "formed_replay")
     if report["result"] != "pass" or report["allowed_changes"] != ["application_image", "application_stage_label", "active_runtime_profile"]:
         raise ControlError("交付资格报告未通过或允许变化不闭合")
     for key in ("candidate_compose", "rollback_compose", "normalized_compose"):

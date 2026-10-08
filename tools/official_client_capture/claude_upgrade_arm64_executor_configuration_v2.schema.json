@@ -1,0 +1,91 @@
+{
+  "$id": "claude-upgrade-arm64-executor-configuration/v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "本文件给出闭合数据形状；实际来源授权、同源链、根映射、字节与真实重放由同名 Python 纯校验器验证。",
+  "properties": {
+    "candidate": {
+      "type": "object"
+    },
+    "client": {
+      "const": "claude"
+    },
+    "guard": {
+      "type": "object"
+    },
+    "host_id": {
+      "const": "ARM64"
+    },
+    "instance_id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "isolation": {
+      "const": "isolated_candidate"
+    },
+    "limits": {
+      "type": "object"
+    },
+    "paths": {
+      "type": "object"
+    },
+    "probes": {
+      "type": "object"
+    },
+    "qualification_materials_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "rollback": {
+      "type": "object"
+    },
+    "runtime": {
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "claude-upgrade-arm64-executor-configuration/v2"
+    },
+    "source_scope": {
+      "enum": [
+        "formal",
+        "regression_fixture"
+      ]
+    }
+  },
+  "required": [
+    "candidate",
+    "client",
+    "guard",
+    "host_id",
+    "instance_id",
+    "isolation",
+    "limits",
+    "paths",
+    "probes",
+    "qualification_materials_binding",
+    "rollback",
+    "runtime",
+    "schema_version",
+    "source_scope"
+  ],
+  "type": "object"
+}

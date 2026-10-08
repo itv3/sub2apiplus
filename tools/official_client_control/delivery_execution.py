@@ -258,8 +258,12 @@ def complete_delivery_raw_bindings(store: Any, plan: Mapping[str, Any], source: 
             raise ControlError("交付归档两份 Profile 对同一路径声明不同字节")
         _source_bytes(configuration_source, binding)
         _source_bytes(source, binding)
+    from .qualification_material_import import projection_for_configuration
+    from .sealed_gate_bindings import project_delivery_raw_bindings
+    gate_projection = projection_for_configuration(store, configuration, configuration_source, purpose="formed_replay")
     proof_bindings = [*projection.proof_bindings, *projection.material_bindings()] if projection is not None else []
-    return _complete_raw_bindings(source, [initial, list(profiles.values()), proof_bindings], profiles)
+    return project_delivery_raw_bindings(source, [initial, list(profiles.values()), proof_bindings],
+                                        gate_projection=gate_projection, profile_projection=projection)
 
 
 def _source_json(source: VerifiedSource, binding: Mapping[str, Any]) -> dict[str, Any]:
@@ -547,7 +551,7 @@ def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], so
     """来源已经验真，再按本次执行或形成期只读上下文消费资格原件。"""
     if payload["evidence_type"] not in {"freeze", "stage_execution"}:
         return
-    from .qualification_bindings import DELIVERY_SCHEMA, validate_delivery_report
+    from .qualification_bindings import DELIVERY_SCHEMA, MATERIAL_DELIVERY_SCHEMA, validate_delivery_report
 
     facts = payload["entries"][0]["facts"]
     if current_execution:
@@ -563,7 +567,7 @@ def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], so
     for binding in bindings:
         report = _source_json(source, binding)
         configuration = None
-        if report.get("schema_version") == DELIVERY_SCHEMA:
+        if report.get("schema_version") in {DELIVERY_SCHEMA, MATERIAL_DELIVERY_SCHEMA}:
             configuration_binding = _binding(report.get("configuration_binding"), "qualification.configuration_binding")
             configuration = _source_json(source, configuration_binding)
             if canonical_sha256(configuration) != source.configuration_sha256:
@@ -585,7 +589,7 @@ def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], so
                         or original_facts["configuration_sha256"] != source.configuration_sha256):
                     raise ControlError("资格报告配置绑定与冻结配置引用的真实原件不一致")
         validate_delivery_report(report, store, current_execution=current_execution, configuration=configuration,
-                                 trusted_data_root=source.trusted_data_root)
+                                 trusted_data_root=source.trusted_data_root, source=source)
         if report["candidate"]["qualification"]["campaign_id"] != facts["campaign_id"]:
             raise ControlError("资格报告与本次交付 Campaign 不一致")
 
@@ -602,6 +606,13 @@ def validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_e
         # 配置细节由执行器的同一纯校验函数核对，不接受隐藏的 shell 或 import。
         from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import validate_configuration
         validate_configuration(raw)
+        from .qualification_material_import import projection_for_configuration, requires_qualification_materials
+        campaign_path = Path(store.root) / "campaigns" / (facts["campaign_id"] + ".json")
+        # 独立配置对象可先于 Campaign 封存，本身不授予执行权限；Plan
+        # 必须有真实 Campaign，并在其准入处再次要求后继合同。
+        if current_execution and (campaign_path.exists() or campaign_path.is_symlink()) and requires_qualification_materials(store, store.load_campaign(facts["campaign_id"])) and raw.get("schema_version") != "claude-upgrade-arm64-executor-configuration/v2":
+            raise ControlError("当前第二根能力拒绝配置 v1 降级")
+        projection_for_configuration(store, raw, source, purpose="current_delivery" if current_execution else "formed_replay")
     elif payload["evidence_type"] == "stable_projection":
         if _source_json(source, facts["binding"]) != facts["projection"]:
             raise ControlError("稳定投影与来源原件不一致")
@@ -769,6 +780,11 @@ def validate_plan(store: Any, plan: Mapping[str, Any], *, current_execution: boo
         raise ControlError("真实交付仅属于明确 Claude 的 Campaign v2")
     if plan["schema_version"] != PLAN_V2 or plan["host_id"] != "ARM64" or plan["architecture"] not in {"arm64", "aarch64", "linux/arm64"}:
         raise ControlError("真实候选交付只允许 ARM64 隔离用途")
+    from .qualification_material_import import requires_qualification_materials
+    if current_execution and requires_qualification_materials(store, campaign):
+        frozen = evidence_facts(store, plan["executor_configuration_ref"], "configuration")["configuration"]
+        if frozen.get("schema_version") != "claude-upgrade-arm64-executor-configuration/v2":
+            raise ControlError("当前交付准入要求配置 v2；旧配置对象不授予后继执行权限")
     expected = {
         "executor_configuration_ref": "configuration",
         "stable_environment_projection_ref": "stable_projection",

@@ -1,0 +1,422 @@
+{
+  "$id": "claude-qualification-source-acquisition/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "本文件给出闭合数据形状；实际来源授权、同源链、根映射、字节与真实重放由同名 Python 纯校验器验证。",
+  "properties": {
+    "acquisition_content_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "authority": {
+      "enum": [
+        "claude-arm64-qualified-intake",
+        "claude-regression-qualified-intake"
+      ]
+    },
+    "client": {
+      "const": "claude"
+    },
+    "entry_references": {
+      "description": "形成期原 VC-5/VC-4 entry 原样冻结，由原 reader 校验；显式夹具为空对象。",
+      "type": "object"
+    },
+    "formation_context": {
+      "type": "object"
+    },
+    "host_id": {
+      "const": "ARM64"
+    },
+    "qualification_roots": {
+      "additionalProperties": false,
+      "properties": {
+        "acceptance_ref": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "dimension": {
+              "const": "validation"
+            },
+            "sequence": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "dimension",
+            "sequence",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "build_receipt_ref": {
+          "additionalProperties": false,
+          "properties": {
+            "receipt_kind": {
+              "const": "candidate_build"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "receipt_kind",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "candidate_ref": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "dimension": {
+              "const": "validation"
+            },
+            "sequence": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "dimension",
+            "sequence",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "validation_ref": {
+          "additionalProperties": false,
+          "properties": {
+            "campaign_id": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "dimension": {
+              "const": "validation"
+            },
+            "sequence": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "campaign_id",
+            "dimension",
+            "sequence",
+            "sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "candidate_ref",
+        "build_receipt_ref",
+        "validation_ref",
+        "acceptance_ref"
+      ],
+      "type": "object"
+    },
+    "reader_identity_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "roots": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_relative_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "missing_relative_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "root_kind": {
+            "enum": [
+              "gate_evidence",
+              "unit_records",
+              "unit_sources",
+              "read_audit_materials"
+            ]
+          },
+          "source_locator": {
+            "pattern": "^/",
+            "type": "string"
+          },
+          "source_reference_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_reference_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "allowed_relative_paths",
+          "missing_relative_paths",
+          "root_id",
+          "root_kind",
+          "source_locator",
+          "source_reference_id",
+          "source_reference_sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "claude-qualification-source-acquisition/v1"
+    },
+    "sealed_parent_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "source_context_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "source_deployment_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "source_driver_manifest_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "source_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "source_install_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "source_layout_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "source_original_bindings": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "sha256",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "source_parameter_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "source_scope": {
+      "enum": [
+        "formal",
+        "regression_fixture"
+      ]
+    }
+  },
+  "required": [
+    "acquisition_content_sha256",
+    "authority",
+    "client",
+    "entry_references",
+    "formation_context",
+    "host_id",
+    "qualification_roots",
+    "reader_identity_binding",
+    "roots",
+    "schema_version",
+    "sealed_parent_binding",
+    "source_context_binding",
+    "source_deployment_binding",
+    "source_driver_manifest_binding",
+    "source_id",
+    "source_install_binding",
+    "source_layout_sha256",
+    "source_original_bindings",
+    "source_parameter_binding",
+    "source_scope"
+  ],
+  "type": "object"
+}

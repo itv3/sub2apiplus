@@ -1,0 +1,174 @@
+{
+  "$id": "claude-gate-material-reader-identity/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "本文件给出闭合数据形状；实际来源授权、同源链、根映射、字节与真实重放由同名 Python 纯校验器验证。",
+  "properties": {
+    "code_bindings": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "absolute_path": {
+            "pattern": "^/",
+            "type": "string"
+          },
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "pattern": "^[0-7]{4}$",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "absolute_path",
+          "bytes",
+          "mode",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "contract_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "absolute_path": {
+          "pattern": "^/",
+          "type": "string"
+        },
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mode": {
+          "pattern": "^[0-7]{4}$",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "absolute_path",
+        "bytes",
+        "mode",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "contract_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "formed_context": {
+      "type": "object"
+    },
+    "identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "io_version": {
+      "const": "managed-path-fd-metadata/v1"
+    },
+    "runtime_manifest": {
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "claude-gate-material-reader-identity/v1"
+    },
+    "target_bindings": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "absolute_path": {
+            "pattern": "^/",
+            "type": "string"
+          },
+          "bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "mode": {
+            "pattern": "^[0-7]{4}$",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "absolute_path",
+          "bytes",
+          "mode",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "tool_identity": {
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "control_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "evidence_semantics_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "policy_version": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "tool_files_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "wire_producer_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "client",
+        "control_sha256",
+        "evidence_semantics_sha256",
+        "policy_sha256",
+        "policy_version",
+        "tool_files_sha256",
+        "wire_producer_sha256"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "code_bindings",
+    "contract_binding",
+    "contract_sha256",
+    "formed_context",
+    "identity_sha256",
+    "io_version",
+    "runtime_manifest",
+    "schema_version",
+    "target_bindings",
+    "tool_identity"
+  ],
+  "type": "object"
+}

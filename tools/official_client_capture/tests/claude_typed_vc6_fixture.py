@@ -319,6 +319,47 @@ def subprocess_environment(inject_dir: Path, control_path: Path, actions: list[s
             SEAM_ACTIONS_ENV: ",".join(actions), SEAM_REPOSITORY_ENV: str(REPOSITORY_ROOT)}
 
 
+def prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path) -> dict:
+    """只在显式本机夹具布局里取得来源；正式 registry 与身份均保持关闭。"""
+    from tools.official_client_control import receipts
+    from tools.official_client_control.canonical import canonical_sha256
+    from tools.official_client_capture import claude_gate_material_worker as reader
+    from tools.official_client_capture import claude_qualification_material_source as source_module
+    from tools.official_client_capture import claude_qualification_material_import as importer
+    repository = receipts._tool_repository_root()
+    target_root = repository / "tools/ci"
+    if not target_root.exists() and repository != REPOSITORY_ROOT:
+        # 隔离 Store 测试树只复制两受管根；五个历史 reader 属于固定外根。
+        # 仅复制缺失的隔离树模块，不改变任何资格、历史收据或正式安装。
+        import shutil
+        shutil.copytree(REPOSITORY_ROOT / "tools/ci", target_root, ignore=shutil.ignore_patterns("__pycache__"))
+    identity = reader.compute_gate_reader_identity(repository, formed_context={"fixture_only": True})
+    sources = []
+    for role in ("candidate", "rollback"):
+        q = configuration[role]["qualification"]
+        provenance = {"fixture_contract": "qualified-gate-fixture/v1" if role == "candidate" else "explicit-no-gate-rollback/v1",
+                      "formation_context": {"fixture_only": True}}
+        capabilities = ()
+        if role == "candidate":
+            capability = source_module.freeze_root_capability(gate_root, "gate_evidence", authority=source_module.FIXTURE_AUTHORITY,
+                reference_id="fixture-qualified-gate", reference_sha256=canonical_sha256(provenance),
+                allowed_relative_paths=[path.relative_to(gate_root).as_posix() for path in sorted(gate_root.rglob("*")) if path.is_file()])
+            capabilities = (capability,)
+        intake = source_module.VerifiedIntakeContext(source_module.FIXTURE_AUTHORITY, "regression_fixture", data_root,
+            repository, provenance, capabilities, identity, source_module._TOKEN)
+        sources.append(source_module.prepare_qualification_source(store, q, role=role, intake_context=intake))
+
+    def fixture_resolver(actual_store, qualification, reference, *, purpose):
+        if reference not in sources or reference.qualification != qualification or reference.intake.authority != source_module.FIXTURE_AUTHORITY:
+            raise guard.GuardError("本机夹具来源引用不属于本轮实际取得的能力")
+        source_module._check_four_roots(actual_store, qualification)
+        return reference
+
+    registrations = {(source_module.FIXTURE_AUTHORITY, purpose): fixture_resolver for purpose in source_module.PURPOSES}
+    with mock.patch.dict(source_module.QUALIFICATION_SOURCE_RESOLVERS, registrations):
+        return importer.prepare_qualification_material_import(store, sources, managed_data_root=data_root)
+
+
 class TypedDeliveryFixture:
     """已完成 VC-5 的原世界接入 typed 文件现场；持有守卫直到最后一次重放。"""
 
@@ -378,6 +419,13 @@ class TypedDeliveryFixture:
             "validation_ref": rollback.references["validation-completed-baseline"],
             "acceptance_ref": rollback.references["acceptance-baseline"],
             "sealed_result_binding": guard.binding(self.data, sealed_path)}
+        from tools.official_client_control.qualification_material_import import requires_qualification_materials
+        if requires_qualification_materials(store, store_campaign):
+            # 新夹具在配置与现场冻结前准备原件；不给已冻结旧 world 补叶子。
+            gate_root = self.data / "control" / (store_campaign["campaign_id"] + "-candidate-gates") / candidate_id / ("b" + str(guard.read_json(accept_path)["evaluation_baseline"]))
+            configuration.update(schema_version=executor.MATERIAL_CONFIGURATION_SCHEMA,
+                qualification_materials_binding=prepare_fixture_qualification_materials(store, configuration,
+                    self.data, gate_root=gate_root))
         self.configuration = executor.validate_configuration(configuration)
         self.configuration_path = campaign / "control/typed-vc6-configuration.json"
         guard.write_json_once(self.configuration_path, configuration)

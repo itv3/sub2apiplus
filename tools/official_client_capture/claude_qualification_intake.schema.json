@@ -1,0 +1,861 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "精确来源范围先审核，再按公开安装、准入和历史资格原件验真；JSON 不能自行构造 capability。",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "admission_descriptors": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "absolute_path": {
+                "pattern": "^/",
+                "type": "string"
+              },
+              "bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "absolute_path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "campaign_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "candidate_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "candidate_revision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "client": {
+          "const": "claude"
+        },
+        "data_root": {
+          "pattern": "^/",
+          "type": "string"
+        },
+        "entry_references": {
+          "description": "形成期原 VC-5/VC-4 entry 原样冻结，由原 reader 校验；显式夹具为空对象。",
+          "type": "object"
+        },
+        "evaluation_baseline": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "host_id": {
+          "const": "ARM64"
+        },
+        "parameter_descriptor": {
+          "additionalProperties": false,
+          "properties": {
+            "absolute_path": {
+              "pattern": "^/",
+              "type": "string"
+            },
+            "bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "absolute_path",
+            "sha256",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "qualification_roots": {
+          "additionalProperties": false,
+          "properties": {
+            "acceptance_ref": {
+              "additionalProperties": false,
+              "properties": {
+                "campaign_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "dimension": {
+                  "const": "validation"
+                },
+                "sequence": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "campaign_id",
+                "dimension",
+                "sequence",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            "build_receipt_ref": {
+              "additionalProperties": false,
+              "properties": {
+                "receipt_kind": {
+                  "const": "candidate_build"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "receipt_kind",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            "candidate_ref": {
+              "additionalProperties": false,
+              "properties": {
+                "campaign_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "dimension": {
+                  "const": "validation"
+                },
+                "sequence": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "campaign_id",
+                "dimension",
+                "sequence",
+                "sha256"
+              ],
+              "type": "object"
+            },
+            "validation_ref": {
+              "additionalProperties": false,
+              "properties": {
+                "campaign_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "dimension": {
+                  "const": "validation"
+                },
+                "sequence": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "campaign_id",
+                "dimension",
+                "sequence",
+                "sha256"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "candidate_ref",
+            "build_receipt_ref",
+            "validation_ref",
+            "acceptance_ref"
+          ],
+          "type": "object"
+        },
+        "schema_version": {
+          "const": "claude-qualification-intake-context/v1"
+        },
+        "source_layout": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "allowed_relative_paths": {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 20000,
+                "type": "array",
+                "uniqueItems": true
+              },
+              "root_kind": {
+                "enum": [
+                  "gate_evidence",
+                  "unit_records",
+                  "unit_sources",
+                  "read_audit_materials"
+                ]
+              },
+              "source_locator": {
+                "pattern": "^/",
+                "type": "string"
+              }
+            },
+            "required": [
+              "root_kind",
+              "source_locator",
+              "allowed_relative_paths"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "admission_descriptors",
+        "campaign_id",
+        "candidate_id",
+        "candidate_revision",
+        "client",
+        "data_root",
+        "entry_references",
+        "evaluation_baseline",
+        "host_id",
+        "parameter_descriptor",
+        "qualification_roots",
+        "schema_version",
+        "source_layout"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "approved_by": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "context_binding": {
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "sha256",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "context_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": "claude-qualification-intake-approval/v1"
+        },
+        "scope": {
+          "const": "read-copy-exact-qualified-layout/v1"
+        }
+      },
+      "required": [
+        "approved_by",
+        "context_binding",
+        "context_sha256",
+        "schema_version",
+        "scope"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_descriptor": {
+          "additionalProperties": false,
+          "properties": {
+            "absolute_path": {
+              "pattern": "^/",
+              "type": "string"
+            },
+            "bytes": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sha256": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "absolute_path",
+            "sha256",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        "contexts": {
+          "additionalProperties": false,
+          "properties": {
+            "candidate": {
+              "additionalProperties": false,
+              "properties": {
+                "admission_descriptors": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "absolute_path": {
+                        "pattern": "^/",
+                        "type": "string"
+                      },
+                      "bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "sha256": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "absolute_path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "campaign_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "candidate_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "candidate_revision": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "client": {
+                  "const": "claude"
+                },
+                "data_root": {
+                  "pattern": "^/",
+                  "type": "string"
+                },
+                "entry_references": {
+                  "description": "形成期原 VC-5/VC-4 entry 原样冻结，由原 reader 校验；显式夹具为空对象。",
+                  "type": "object"
+                },
+                "evaluation_baseline": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "host_id": {
+                  "const": "ARM64"
+                },
+                "parameter_descriptor": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "absolute_path": {
+                      "pattern": "^/",
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "absolute_path",
+                    "sha256",
+                    "bytes"
+                  ],
+                  "type": "object"
+                },
+                "qualification_roots": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "acceptance_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "campaign_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "dimension": {
+                          "const": "validation"
+                        },
+                        "sequence": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "campaign_id",
+                        "dimension",
+                        "sequence",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "build_receipt_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "receipt_kind": {
+                          "const": "candidate_build"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "receipt_kind",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "candidate_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "campaign_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "dimension": {
+                          "const": "validation"
+                        },
+                        "sequence": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "campaign_id",
+                        "dimension",
+                        "sequence",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "validation_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "campaign_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "dimension": {
+                          "const": "validation"
+                        },
+                        "sequence": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "campaign_id",
+                        "dimension",
+                        "sequence",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "candidate_ref",
+                    "build_receipt_ref",
+                    "validation_ref",
+                    "acceptance_ref"
+                  ],
+                  "type": "object"
+                },
+                "schema_version": {
+                  "const": "claude-qualification-intake-context/v1"
+                },
+                "source_layout": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "allowed_relative_paths": {
+                        "items": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 20000,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "root_kind": {
+                        "enum": [
+                          "gate_evidence",
+                          "unit_records",
+                          "unit_sources",
+                          "read_audit_materials"
+                        ]
+                      },
+                      "source_locator": {
+                        "pattern": "^/",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "root_kind",
+                      "source_locator",
+                      "allowed_relative_paths"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "admission_descriptors",
+                "campaign_id",
+                "candidate_id",
+                "candidate_revision",
+                "client",
+                "data_root",
+                "entry_references",
+                "evaluation_baseline",
+                "host_id",
+                "parameter_descriptor",
+                "qualification_roots",
+                "schema_version",
+                "source_layout"
+              ],
+              "type": "object"
+            },
+            "rollback": {
+              "additionalProperties": false,
+              "properties": {
+                "admission_descriptors": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "absolute_path": {
+                        "pattern": "^/",
+                        "type": "string"
+                      },
+                      "bytes": {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "sha256": {
+                        "pattern": "^[0-9a-f]{64}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "absolute_path",
+                      "sha256",
+                      "bytes"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "type": "array"
+                },
+                "campaign_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "candidate_id": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "candidate_revision": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "client": {
+                  "const": "claude"
+                },
+                "data_root": {
+                  "pattern": "^/",
+                  "type": "string"
+                },
+                "entry_references": {
+                  "description": "形成期原 VC-5/VC-4 entry 原样冻结，由原 reader 校验；显式夹具为空对象。",
+                  "type": "object"
+                },
+                "evaluation_baseline": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "host_id": {
+                  "const": "ARM64"
+                },
+                "parameter_descriptor": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "absolute_path": {
+                      "pattern": "^/",
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "absolute_path",
+                    "sha256",
+                    "bytes"
+                  ],
+                  "type": "object"
+                },
+                "qualification_roots": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "acceptance_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "campaign_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "dimension": {
+                          "const": "validation"
+                        },
+                        "sequence": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "campaign_id",
+                        "dimension",
+                        "sequence",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "build_receipt_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "receipt_kind": {
+                          "const": "candidate_build"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "receipt_kind",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "candidate_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "campaign_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "dimension": {
+                          "const": "validation"
+                        },
+                        "sequence": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "campaign_id",
+                        "dimension",
+                        "sequence",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    },
+                    "validation_ref": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "campaign_id": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "dimension": {
+                          "const": "validation"
+                        },
+                        "sequence": {
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        "sha256": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "campaign_id",
+                        "dimension",
+                        "sequence",
+                        "sha256"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "candidate_ref",
+                    "build_receipt_ref",
+                    "validation_ref",
+                    "acceptance_ref"
+                  ],
+                  "type": "object"
+                },
+                "schema_version": {
+                  "const": "claude-qualification-intake-context/v1"
+                },
+                "source_layout": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "allowed_relative_paths": {
+                        "items": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 20000,
+                        "type": "array",
+                        "uniqueItems": true
+                      },
+                      "root_kind": {
+                        "enum": [
+                          "gate_evidence",
+                          "unit_records",
+                          "unit_sources",
+                          "read_audit_materials"
+                        ]
+                      },
+                      "source_locator": {
+                        "pattern": "^/",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "root_kind",
+                      "source_locator",
+                      "allowed_relative_paths"
+                    ],
+                    "type": "object"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "admission_descriptors",
+                "campaign_id",
+                "candidate_id",
+                "candidate_revision",
+                "client",
+                "data_root",
+                "entry_references",
+                "evaluation_baseline",
+                "host_id",
+                "parameter_descriptor",
+                "qualification_roots",
+                "schema_version",
+                "source_layout"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "candidate",
+            "rollback"
+          ],
+          "type": "object"
+        },
+        "runtime_manifest": {
+          "type": "object"
+        },
+        "schema_version": {
+          "const": "claude-qualification-intake-preview/v1"
+        },
+        "tool_identity": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "configuration_descriptor",
+        "contexts",
+        "runtime_manifest",
+        "schema_version",
+        "tool_identity"
+      ],
+      "type": "object"
+    }
+  ]
+}

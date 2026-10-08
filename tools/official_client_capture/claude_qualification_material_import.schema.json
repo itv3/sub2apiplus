@@ -1,0 +1,573 @@
+{
+  "$id": "claude-qualification-material-import/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "本文件给出闭合数据形状；实际来源授权、同源链、根映射、字节与真实重放由同名 Python 纯校验器验证。",
+  "properties": {
+    "domains": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "domain_pointer": {
+            "const": "/external_gate"
+          },
+          "domain_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "gate_subject_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "parent_binding": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "parent_schema": {
+            "const": "claude-upgrade-acceptance/v1"
+          },
+          "receipt_relative_path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "candidate",
+              "rollback"
+            ]
+          },
+          "source_root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "domain_pointer",
+          "domain_sha256",
+          "gate_subject_sha256",
+          "parent_binding",
+          "parent_schema",
+          "receipt_relative_path",
+          "role",
+          "source_root_id"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "files": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_binding": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "content_bytes": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "reader_role": {
+            "enum": [
+              "reader",
+              "strict",
+              "reader_and_strict"
+            ]
+          },
+          "root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_mode": {
+            "enum": [
+              "0400",
+              "0600"
+            ]
+          },
+          "source_relative_path": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "archive_binding",
+          "content_bytes",
+          "content_sha256",
+          "reader_role",
+          "root_id",
+          "source_mode",
+          "source_relative_path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "files_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "import_id": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "parents": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "parent_schema": {
+            "const": "claude-upgrade-acceptance/v1"
+          },
+          "parent_semantic_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "qualification_roots": {
+            "additionalProperties": false,
+            "properties": {
+              "acceptance_ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "campaign_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "dimension": {
+                    "const": "validation"
+                  },
+                  "sequence": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "sha256": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "campaign_id",
+                  "dimension",
+                  "sequence",
+                  "sha256"
+                ],
+                "type": "object"
+              },
+              "build_receipt_ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "receipt_kind": {
+                    "const": "candidate_build"
+                  },
+                  "sha256": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "receipt_kind",
+                  "sha256"
+                ],
+                "type": "object"
+              },
+              "candidate_ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "campaign_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "dimension": {
+                    "const": "validation"
+                  },
+                  "sequence": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "sha256": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "campaign_id",
+                  "dimension",
+                  "sequence",
+                  "sha256"
+                ],
+                "type": "object"
+              },
+              "validation_ref": {
+                "additionalProperties": false,
+                "properties": {
+                  "campaign_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "dimension": {
+                    "const": "validation"
+                  },
+                  "sequence": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "sha256": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "campaign_id",
+                  "dimension",
+                  "sequence",
+                  "sha256"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "candidate_ref",
+              "build_receipt_ref",
+              "validation_ref",
+              "acceptance_ref"
+            ],
+            "type": "object"
+          },
+          "role": {
+            "enum": [
+              "candidate",
+              "rollback"
+            ]
+          },
+          "sealed_result_binding": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "parent_schema",
+          "parent_semantic_sha256",
+          "qualification_roots",
+          "role",
+          "sealed_result_binding"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "reader_accesses": {
+      "items": {
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "reader_accesses_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reader_contract_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reader_identity_binding": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "reader_identity_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "reader_readset": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_relative_path": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "root_id",
+          "source_relative_path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "reader_readset_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "roots": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_root_relative": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "root_kind": {
+            "enum": [
+              "gate_evidence",
+              "unit_records",
+              "unit_sources",
+              "read_audit_materials"
+            ]
+          },
+          "source_locator": {
+            "pattern": "^/",
+            "type": "string"
+          },
+          "source_reference_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_reference_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "archive_root_relative",
+          "root_id",
+          "root_kind",
+          "source_locator",
+          "source_reference_id",
+          "source_reference_sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "claude-qualification-material-import/v1"
+    },
+    "source_acquisition_bindings": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "binding": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "role": {
+            "enum": [
+              "candidate",
+              "rollback"
+            ]
+          }
+        },
+        "required": [
+          "binding",
+          "role"
+        ],
+        "type": "object"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "source_origin": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "enum": [
+            "claude-arm64-qualified-intake",
+            "claude-regression-qualified-intake"
+          ]
+        },
+        "deployment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "formed_under": {
+          "items": {
+            "type": "object"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "source_instance_id": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_material_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "source_scope": {
+          "enum": [
+            "formal",
+            "regression_fixture"
+          ]
+        }
+      },
+      "required": [
+        "authority",
+        "deployment_sha256",
+        "formed_under",
+        "source_instance_id",
+        "source_material_sha256",
+        "source_scope"
+      ],
+      "type": "object"
+    },
+    "strict_readset": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "root_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_relative_path": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "root_id",
+          "source_relative_path"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "strict_readset_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "domains",
+    "files",
+    "files_sha256",
+    "identity_sha256",
+    "import_id",
+    "parents",
+    "reader_accesses",
+    "reader_accesses_sha256",
+    "reader_contract_sha256",
+    "reader_identity_binding",
+    "reader_identity_sha256",
+    "reader_readset",
+    "reader_readset_sha256",
+    "roots",
+    "schema_version",
+    "source_acquisition_bindings",
+    "source_origin",
+    "strict_readset",
+    "strict_readset_sha256"
+  ],
+  "type": "object"
+}
