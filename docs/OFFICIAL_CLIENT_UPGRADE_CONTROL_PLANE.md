@@ -144,7 +144,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 4；schema 版本不表示发布认证通过） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 5；schema 版本不表示发布认证通过） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
 | 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
 | 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
@@ -360,7 +360,7 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 4 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 5 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
@@ -705,8 +705,10 @@ Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recover
   受监督 `client-run` 与来源／预约 wrapper 已接入，当前 seal、恢复段继承、compare／accept 和 VC-5 严格消费
   完整 v2；来源与预约的字面验证入口也已纳入真实读侧根，不能以整文件边界代替调用依赖。accounting 仍沿既有
   v1 意图／COMMIT／outbox／项目账本链写入，不新建第二本账。原 attempt 的持久请求上界占用、派发前复核和
-  结清原语已实现，候选服务与消费读侧尚未接通。正式 `SOURCE_ADAPTERS` 仍为空；独立 capture 生命周期及真实
-  ProductRecorder 尚有缺口，历史形成期 authority 也待补齐。能力未闭合
+  结清原语已实现，候选服务与消费读侧尚未接通。独立 H1／TLS-H1 捕获服务及认证导出同步已实现，
+  只支持 `regression_fixture`，不生成完整 v2 捕获清单；私有状态 journal 仅恢复明确受管意图，
+  能力检查仅核对显式冻结制品，未经认证的外部能力结果保持未知。正式 `SOURCE_ADAPTERS` 仍为空；
+  H2、真实 ProductRecorder、完整 v2 联合来源与历史形成期 authority 仍待闭合。能力未闭合
   时 live 在产品启动前拒绝；驱动缺真实材料／批准则写 `vc5-pause.json`。本机接线、夹具与组合专项不证明三官方
   客户端真账号采集或完整链通过，现场与认证状态以 Claude 指南 §4.0.5／§4.5.2 为准。
 

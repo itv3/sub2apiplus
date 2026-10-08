@@ -989,7 +989,7 @@ Claude 的生产 Active 身份必须同时满足
 | 范围 | 当前边界 |
 |---|---|
 | VC-0～VC-4 | 受管入口、官方取证／恢复、分类批准、画像暂存和候选 revision／构建已接入；正式开工仍需 §4.0.5 的发布认证 |
-| VC-5 | 候选采集与封存、compare／accept、评估基线和四类裁定的控制面已有实现；Mac v2 合同 B、受监督 client-run、来源与预约 wrapper 及 compare／accept 读侧接线已合入。原 attempt 持久请求上界占用与结清原语已实现，候选服务与消费读侧尚未接通；独立 capture 生命周期、真实 ProductRecorder 与历史形成期 authority 仍有缺口。正式来源表仍为空，live 保持零启动拒绝，三官方客户端真账号现场未验收 |
+| VC-5 | 候选采集与封存、compare／accept、评估基线和四类裁定的控制面已有实现；Mac v2 合同 B、受监督 client-run、来源与预约 wrapper 及 compare／accept 读侧接线已合入。原 attempt 持久请求上界占用与结清原语已实现，候选服务与消费读侧尚未接通；独立 H1／TLS-H1 捕获服务、认证导出同步、私有状态 journal 与只读能力检查已完成本机实现；H2、完整 capture v2、真实 ProductRecorder 与历史形成期 authority 仍有缺口。正式来源表仍为空，live 保持零启动拒绝，三官方客户端真账号现场未验收 |
 | 封存后临时环境故障 | B4-05b 的 `ar<k>`、对账、增量封存、封存后请求入账及五项恢复后继修复已合入本机集成树，组合定向检查通过；第二次 transient 整链及正式八链未认证。不能把封存前 resume 或组合专项当作该整链的通过凭证 |
 | VC-6 候选交付 | 真实交付合同 A、独立执行器与 guard／恢复证明、严格 Store 消费、阶段结果及 checkpoint 已完成本机接线；正式执行器与来源登记仍为空，ARM64 受管安装、可信回退、专用凭据、四阶段及异常恢复尚待现场验收。当前不能宣称已完成真实切换、回退或稳定观察 |
 | 完整链与认证 | B5b-02 来源快照与 VC-0→VC-1 连续驱动源码已接入，仅限 `fixture_only／regression_fixture`；连续链、完整链与故障链仍须按实际串行执行结果验收，B5b-04 当前发布认证未签发 |
@@ -1282,7 +1282,7 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
 
 认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify，四个入口都带
 `--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude schema v3 引擎计算；当前
-`policy_version=4` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
+`policy_version=5` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
 `pre-a3-path-certification/v3`，缺省坐标为 `control/policy-certification/claude-pre-a3-path-certification-<stamp>.json`；
 发布认证签 `tool-release-certification/v2`，绑定 Claude 部署收据的五摘要、pre-A3 认证、完整 Job 演练
 （`official-client-job-rehearsal-receipt/v1`，含失败生命周期探针）与 atomic-double 收据，只能在具备 Go 与 Docker
@@ -2564,7 +2564,7 @@ Claude 项目总账默认目录为 `<数据根>/upgrade-project-ledger-claude`�
 同目标根因跨 Campaign／revision／基线累计，稳定维度不包含本轮 Campaign ID；码表迁移继承旧计数。
 修复凭证闭合后按前表放行，不能通过换 revision 清零。
 
-Claude 策略 **schema 仍是 v3，`policy_version=4` 已实现，文件名仍为**
+Claude 策略 **schema 仍是 v3，`policy_version=5` 已实现，文件名仍为**
 [`claude_tool_identity_policy_v2.json`](../tools/official_client_capture/claude_tool_identity_policy_v2.json)，
 由 `claude_tool_identity_policy.py` 计算双受管根 `tools/official_client_capture`、`tools/official_client_control`
 及运行时绑定、符号闭包和五摘要。`tool-evolution preview／apply` 登记 wire／evidence／control 变化，policy

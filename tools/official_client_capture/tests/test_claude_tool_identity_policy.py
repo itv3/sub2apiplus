@@ -525,7 +525,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 4))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 5))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
