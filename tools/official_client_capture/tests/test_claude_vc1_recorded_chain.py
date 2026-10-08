@@ -20,6 +20,42 @@ from tools.official_client_capture.tests import claude_recorded_replay as replay
 from tools.official_client_capture.tests import test_claude_recorded_replay as snapshot_tests
 
 
+class RecordedWorldDirectoryTests(unittest.TestCase):
+    """在通用 022 umask 下由正式审计目录前置判断新世界；错误权限必须在写收据前拒绝。"""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data = Path(temporary.name).resolve() / "world/staging/data"
+
+    def test_private_world_passes_real_closeout_directory_precondition(self) -> None:
+        from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        previous = os.umask(0o022)
+        try:
+            driver._create_world_roots(self.data)
+        finally:
+            os.umask(previous)
+        audit = self.data / "control/closeout-audit"
+        self.assertFalse(audit.exists())
+        self.assertEqual(closeout._new_private_directory(audit, "closeout audit-dir"), audit)
+        for relative in (".", "runs", "evidence", "evidence/campaigns", "control", "control/closeout-audit"):
+            self.assertEqual((self.data / relative).stat().st_mode & 0o777, 0o700)
+
+    def test_open_parent_is_rejected_without_audit_or_receipt(self) -> None:
+        from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        driver._create_world_roots(self.data)
+        (self.data / "control").chmod(0o755)
+        audit = self.data / "control/closeout-audit"
+        with self.assertRaisesRegex(closeout.VC0CloseoutError, "父目录权限不得允许 group/other"):
+            closeout._new_private_directory(audit, "closeout audit-dir")
+        self.assertFalse(audit.exists())
+        self.assertEqual((self.data / "control").stat().st_mode & 0o777, 0o755)
+
+
 class RecordedBinaryObservationTests(unittest.TestCase):
     """来源标记与正式二进制事实分开；直接交真实 Job 重放器做正反例，不登记任何链通过。"""
 

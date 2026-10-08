@@ -544,6 +544,15 @@ def activate(*, installer: Callable[..., Any] = installed) -> None:
         os._exit(code or 0)
 
 
+def _create_world_roots(data: Path) -> None:
+    """逐级建私有控制根，避免 parents=True 把审计父目录隐式建成 755；已有目录不修权限。"""
+
+    data.mkdir(parents=True, mode=0o700)
+    for name in ("runs", "evidence", "control"):
+        (data / name).mkdir(mode=0o700)
+    (data / "evidence/campaigns").mkdir(mode=0o700)
+
+
 def namespace_main(
     arguments: argparse.Namespace, *, inputs_builder: Callable[[Path], dict[str, Any]] = _inputs,
     chain_runner: Callable[[Path, str], dict[str, Any]] = run_chain,
@@ -562,9 +571,7 @@ def namespace_main(
     for root in roots:
         subprocess.run(["mount", "--bind", root, root], check=True)
         subprocess.run(["mount", "-o", "remount,bind,ro", root], check=True)
-    data.mkdir(parents=True, mode=0o700)
-    (data / "runs").mkdir(mode=0o700)
-    (data / "evidence/campaigns").mkdir(parents=True, mode=0o700)
+    _create_world_roots(data)
     shutil.copytree(REPOSITORY / "tools", data / "tools", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     snapshot = replay.build_snapshot(data / "control/snapshot", recorded=Path(arguments.recorded))
     freeze = source.stage_freeze(data / "official/claude-code-2.1.226", Path(arguments.freeze))
