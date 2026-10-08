@@ -1349,7 +1349,7 @@ class GuardEngine:
 
         常规路径仍走原守卫。名称含 release 的原件，只有在完整资格
         校验器的内存证明内，并属于本配置明确冻结的 Campaign 暂存
-        Release 或内容寻址 Store Release 对象时才能读取。其它生产
+        Release 时才能读取。内容寻址 Store 对象仍沿原路径规则。其它生产
         路径、同字节错坐标、上传 JSON 和符号链接仍拒绝。
         """
         from tools.official_client_control.canonical import validate_external_binding
@@ -1369,12 +1369,10 @@ class GuardEngine:
             for role in ("candidate", "rollback"):
                 qualification = self.configuration[role]["qualification"]
                 staged_prefix = f"evidence/campaigns/{qualification['campaign_id']}/profile/release/"
-                store_release = (PurePosixPath(qualification["store_relative"]) / "objects" / "release"
-                                 / (binding_value["sha256"] + ".json")).as_posix()
-                if binding_value["path"].startswith(staged_prefix) or binding_value["path"] == store_release:
+                if binding_value["path"].startswith(staged_prefix):
                     allowed = True
             if not allowed:
-                raise GuardError("资格归档原件超出精确候选暂存或 Store Release 范围") from None
+                raise GuardError("资格归档原件超出精确候选暂存 Release 范围") from None
             path = self.data_root
             for part in PurePosixPath(binding_value["path"]).parts:
                 path = path / part

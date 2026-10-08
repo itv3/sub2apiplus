@@ -56,8 +56,8 @@ class QualifiedArchiveReadTests(unittest.TestCase):
 
     def test_verified_staged_and_content_addressed_store_releases_are_read_only(self) -> None:
         rows = [row for row in self.projection.archive_bindings
-                if "/profile/release/" in row["path"] or "/objects/release/" in row["path"]]
-        self.assertTrue(any("/objects/release/" in row["path"] for row in rows))
+                if "/profile/release/" in row["path"] or "/objects/release_artifact/" in row["path"]]
+        self.assertTrue(any("/objects/release_artifact/" in row["path"] for row in rows))
         for row in rows:
             with self.subTest(path=row["path"]):
                 path = self.root / row["path"]
@@ -66,8 +66,11 @@ class QualifiedArchiveReadTests(unittest.TestCase):
                 self.assertEqual(self.engine._read_qualification_archive_binding(row, self.projection), raw)
                 self.assertEqual((path.stat().st_ino, path.stat().st_mtime_ns), (before.st_ino, before.st_mtime_ns))
                 self.assertEqual(path.read_bytes(), raw)
-                with self.assertRaises(guard.GuardError):
-                    guard.managed_path(self.root, row["path"])
+                if "/profile/release/" in row["path"]:
+                    with self.assertRaises(guard.GuardError):
+                        guard.managed_path(self.root, row["path"])
+                else:
+                    self.assertEqual(guard.managed_path(self.root, row["path"]), path)
 
     def test_same_bytes_at_another_candidate_coordinate_have_no_permission(self) -> None:
         row = self.copied("evidence/campaigns/other/profile/release/copied.json")
