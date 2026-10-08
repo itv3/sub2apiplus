@@ -1,6 +1,6 @@
 """B5b-04：发布必需链不会随尚未完成的可执行登记缩小；当前 Formal 准入拒绝缺链认证。
 
-夹具只构造绑定文件与已签结果，验证器仍重放自摘要、附件绑定和逐链结果；不把这些离线夹具登记为 ARM64 实测通过。
+Job 夹具由实际 v2 producer 收集双根并封存，当前读侧重放其完整绑定；链覆盖仍是离线结果，不登记为 ARM64 实测通过。
 """
 
 from __future__ import annotations
@@ -15,15 +15,32 @@ from tools.official_client_capture import certify_release as release
 from tools.official_client_capture import claude_upgrade_vc0_closeout as closeout
 from tools.official_client_capture import codex_upgrade_policy_certification as policy
 from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
+from tools.official_client_capture.tests.test_claude_upgrade_job_tool_tree import VersionBoundaryFixture
 
 
 class ClaudeReleaseAdmissionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        """实际收集并封存 Job v2，一份完整双根来源供本组只读消费。"""
+
+        cls.job_fixture = VersionBoundaryFixture()
+        cls.addClassCleanup(cls.job_fixture.doCleanups)
+        cls.job_fixture.setUpClass()
+        cls.job_fixture.setUp()
+        with cls.job_fixture.patched():
+            campaign = cls.job_fixture.write_campaign()
+            cls.job_fixture.collect(campaign, "facts.json")
+            cls.job_receipt = release.job_rehearsal.finalize(
+                cls.job_fixture.evidence, "facts.json", "receipt.json", client="claude"
+            )
+            cls.job_binding = release.replay_job_rehearsal(cls.job_fixture.evidence, Path("receipt.json"), "claude")
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="claude-release-admission-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
-        self.identity = {field: "a" * 64 for field in policy.IDENTITY_FIELDS}
-        self.identity["policy_version"] = 2
+        self.enterContext(self.job_fixture.patched())
+        self.identity = policy.current_identity("claude")
         self.coverage = [
             {"id": name, "test": f"fixtures:{name}", "status": "passed"}
             for name in release.RELEASE_REQUIRED_CHAINS["claude"]
@@ -44,7 +61,6 @@ class ClaudeReleaseAdmissionTests(unittest.TestCase):
             "real_chain_registration": [{"id": row["id"], "test": row["test"]} for row in rows],
         })
         deployment = self.write("deployment.json", {"fixture": "部署附件"})
-        job = self.write("job.json", {"fixture": "Job 演练附件"})
         atomic = self.write("atomic.json", {"fixture": "原子双跑附件"})
 
         def binding(path: Path) -> dict:
@@ -52,8 +68,7 @@ class ClaudeReleaseAdmissionTests(unittest.TestCase):
 
         document = release.compose_certification(
             identity=self.identity, deployment_receipt=binding(deployment), pre_a3_certification=binding(paths),
-            policy_activation=None, job_rehearsal={"evidence_root": str(self.root), "receipt": job.name,
-                "sha256": binding(job)["sha256"], "failure_lifecycle_probe_sha256": "b" * 64},
+            policy_activation=None, job_rehearsal=self.job_binding,
             atomic_double_rehearsal={"evidence_root": str(self.root), "receipt": atomic.name,
                 "sha256": binding(atomic)["sha256"]},
             campaign_run_rehearsal=None, real_chain_coverage=coverage, client="claude",
@@ -97,6 +112,23 @@ class ClaudeReleaseAdmissionTests(unittest.TestCase):
         path = self.certificate(self.coverage)
         result = release.verify(path, expected_identity=self.identity, client="claude")
         self.assertEqual(result["real_chain_coverage"], self.coverage)
+        self.assertEqual(result["job_rehearsal"], self.job_binding)
+        self.assertEqual(self.job_receipt["schema_version"], "official-client-job-rehearsal-receipt/v2")
+
+    def test_current_job_binding_requires_every_frozen_result_field(self) -> None:
+        """四个原先漏填的字段都由真实读侧强制消费，重签认证不能绕过。"""
+
+        path = self.certificate(self.coverage)
+        original = json.loads(path.read_text(encoding="utf-8"))
+        for missing in ("job_count", "execution_contract_sha256", "storage_probe_sha256", "preflight_campaign_id"):
+            with self.subTest(missing=missing):
+                current = json.loads(json.dumps(original))
+                del current["job_rehearsal"][missing]
+                del current["receipt_sha256"]
+                current["receipt_sha256"] = release._fingerprint(current, "claude")
+                self.write("release.json", current)
+                with self.assertRaisesRegex(release.ReleaseCertificationError, "发布认证的当前 Job 消费失败"):
+                    release.verify(path, expected_identity=self.identity, client="claude")
 
     def test_issue_rejects_partial_registration_before_output_or_rehearsal(self) -> None:
         output = self.root / "new-certification.json"

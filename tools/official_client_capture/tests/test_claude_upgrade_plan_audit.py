@@ -23,6 +23,7 @@ from unittest import mock
 from tools.official_client_capture import claude_tool_identity_policy as claude_identity
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_plan as plan
+from tools.official_client_capture.tests.claude_current_fixture_inputs import freeze_current_scenario_inputs
 from tools.official_client_capture.tests import test_claude_upgrade_freeze as freeze_tests
 from tools.official_client_control import receipts as control_receipts
 
@@ -70,6 +71,9 @@ class PlanAuditTests(unittest.TestCase):
         shutil.copytree(self.source.parent, self.official, symlinks=True)
         self.freeze = self.official / "freeze.json"
         self.campaign_dir = self.base / "staging" / "entry-preflight-x" / "campaign"
+        self.scenario_inputs = freeze_current_scenario_inputs(
+            plan.scenario_manifest_path(TARGET), self.base / "current-scenario-inputs"
+        )
 
     def _argv(self, *extra: str, **overrides: str) -> list[str]:
         values = {
@@ -80,6 +84,7 @@ class PlanAuditTests(unittest.TestCase):
             "--target-sha256": hashlib.sha256(self.binary).hexdigest(),
             "--target-package": str(self.freeze),
             "--target-package-sha256": hashlib.sha256(self.freeze.read_bytes()).hexdigest(),
+            "--scenario-manifest": str(self.scenario_inputs.manifest_path),
             "--runtime-image": IMAGE,
             "--model": "claude-sonnet-5",
             "--upstream-ip": "160.79.104.10",

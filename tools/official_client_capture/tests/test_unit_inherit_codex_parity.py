@@ -564,6 +564,32 @@ H2_INHERIT_GUARD_SOURCE_DIGESTS: dict[str, str] = {
     "tools/ci/unit_executor.py": "f86da3f3e781b116be3cd040ef4396a6868dd96164b7398319ced17b0ead9e41",
 }
 H2_INHERIT_GUARD_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/ci/unit_executor.py": []}
+# cfc3ae053 的三条 Claude 可执行入口以实际父提交为基准；只新增 Claude 三张表的条目和待验说明。
+# 前序 f3a9dd3b0 的恢复链说明与预算已由 B5b-03 B 组登记，不改其历史摘要或残差。
+# 当前新增登记不宣称三条链已认证，Codex 场景表、命令、预算与收据由既有行为对照继续守住。
+CLAUDE_ENTRY_REGISTRATION_BASELINE_COMMIT = "d9d9787e18988cb579189fd3db5134d6550765a9"
+CLAUDE_ENTRY_REGISTRATION_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": "b24980b37b5e6dce2a46ca78e7a2380fdde665b70f177ce811ac4e9914d59ae6",
+}
+CLAUDE_ENTRY_REGISTRATION_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": [],
+}
+# 828b25627 的请求上界占用/结清以实际父提交为基准，保留完整源码摘要并逐行登记五处删改。
+# 新派发余额仅在 Claude 新事件出现时扣除活动占用；无新事件的历史 head 与 Codex 旧路径保持原字节形态。
+# 这份登记只接管已经批准的共享实现字节，不开启正式来源或产品执行；预算语义由对应专项另行校验。
+CLAUDE_REQUEST_RESERVATION_BASELINE_COMMIT = "d009c87fbf3eb701a6b6d508ae7795752ceb107e"
+CLAUDE_REQUEST_RESERVATION_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/official_client_capture/codex_upgrade_project_ledger.py": "6bec6c17d2db583b3eb1042f7861ec3c376d6107e7f949e232a2806b2ec8bf95",
+}
+CLAUDE_REQUEST_RESERVATION_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/official_client_capture/codex_upgrade_project_ledger.py": [
+        '    if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:',
+        "        remaining = self.remaining_live_requests",
+        '        remaining = current.get("remaining_live_requests")',
+        '    remaining = head.get("remaining_live_requests")',
+        '        if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:',
+    ],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
@@ -574,6 +600,10 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
     ("B5b-03 B 组", B5B03B_BASELINE_COMMIT, B5B03B_SOURCE_DIGESTS, B5B03B_SOURCE_REMOVED_LINES),
     ("B5b-05a", B5B05A_BASELINE_COMMIT, B5B05A_SOURCE_DIGESTS, B5B05A_SOURCE_REMOVED_LINES),
     ("H2 承接保护", H2_INHERIT_GUARD_BASELINE_COMMIT, H2_INHERIT_GUARD_SOURCE_DIGESTS, H2_INHERIT_GUARD_SOURCE_REMOVED_LINES),
+    ("Claude 三条可执行入口补登", CLAUDE_ENTRY_REGISTRATION_BASELINE_COMMIT,
+     CLAUDE_ENTRY_REGISTRATION_SOURCE_DIGESTS, CLAUDE_ENTRY_REGISTRATION_SOURCE_REMOVED_LINES),
+    ("Claude 原任务预算占用与结清", CLAUDE_REQUEST_RESERVATION_BASELINE_COMMIT,
+     CLAUDE_REQUEST_RESERVATION_SOURCE_DIGESTS, CLAUDE_REQUEST_RESERVATION_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {

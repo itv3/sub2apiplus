@@ -984,10 +984,14 @@ class EntryScriptClaudeTests(unittest.TestCase):
         仍只核源码树，不调用冻结复核。"""
 
         from tools.official_client_capture.tests import test_claude_upgrade_freeze as freeze_tests
+        from tools.official_client_capture.tests.claude_current_fixture_inputs import freeze_current_scenario_inputs
 
         version = "2.1.285"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
+            scenario_inputs = freeze_current_scenario_inputs(
+                OCC / f"claude_upgrade_scenarios_{version.replace('.', '_')}.json", root / "current-scenario-inputs"
+            )
             (root / "keys").mkdir()
             binary = freeze_tests._elf(freeze_tests.GLIBC, payload=b"claude-entry-preflight")
             freeze = freeze_tests.freeze_fixture(root / "data" / "official" / f"claude-code-{version}", signer=freeze_tests._Signer(root / "keys"),
@@ -1003,7 +1007,7 @@ class EntryScriptClaudeTests(unittest.TestCase):
                 "BASELINE_VERSION": BASELINE, "TARGET_VERSION": version, "CLIENT_BIN": f"/opt/claude-{version}/claude",
                 "CLIENT_BIN_SHA256": hashlib.sha256(binary).hexdigest(), "TARGET_PACKAGE": str(freeze),
                 "OFFICIAL_ASSET_SHA256": digest(freeze), "CAPTURE_RUNTIME_IMAGE": "oauth-egress-capture-capture-cli@sha256:" + "b" * 64,
-                "SCENARIOS_JSON": str(OCC / f"claude_upgrade_scenarios_{version.replace('.', '_')}.json"),
+                "SCENARIOS_JSON": str(scenario_inputs.manifest_path),
                 "MAIN_MODEL": "claude-sonnet-5", "UPSTREAM_IP": "160.79.104.10",
                 # B5b-01：模板另带 Campaign 用途（parse_env 给 Claude 派生缺省值）与候选阶段的账号、ingress API Key。
                 "CAMPAIGN_PURPOSE": "production_replacement", "CLIENT_ACCOUNT_ID": "7", "API_KEY_ID": "8",

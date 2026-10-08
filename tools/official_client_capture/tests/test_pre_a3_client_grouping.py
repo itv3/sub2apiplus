@@ -5,8 +5,8 @@
   验证）；登记了 Claude 场景时单元 ID 带 ``pre-a3:claude:``、命令带 ``--client claude``，两客户端的单元在同一份运行清单里
   互不承接、互不算作全集之外；当前八条登记仅证明可执行入口，按既有真实链规格规划，不代表完整恢复覆盖或认证通过；
 * 策略认证对 Claude 按 v3 引擎算身份：兼容收据、激活认证与 Claude 部署收据合同，客户端混用即拒绝；
-* 从单元执行记录签发 Claude 的 pre-A3 v3（带 client）并核验、复用；发布认证 v2 的组装与核验；Claude 发布认证签发在核完
-  pre-A3 之后因演练合同未落实而失败关闭，Claude 场景集合为空时更早被 pre-A3 拒绝；
+* 从单元执行记录签发 Claude 的 pre-A3 v3（带 client）并核验、复用；发布认证 v2 的组装、完整签发与核验实际消费双根 Job v2，
+  固定 v1 原件只可形成期重放，当前消费拒绝；Claude 场景集合为空时更早被 pre-A3 拒绝；
 * 入口门禁：pre-a3 门禁项的字面命令按客户端，混合客户端的场景清单拒绝；入口门禁脚本缺省不带 ``--client``；
 * 解耦：三个认证模块不再直接引用 ``codex_upgrade``，经适配器取到的 Codex 值与原来相同。
 """
@@ -35,6 +35,7 @@ from tools.official_client_capture import codex_upgrade_pre_a3_certification as 
 from tools.official_client_capture import upgrade_client_adapter
 from tools.official_client_capture.tests import test_codex_upgrade_policy_certification as policy_tests
 from tools.official_client_capture.tests import test_codex_upgrade_pre_a3_certification as pre_a3_tests
+from tools.official_client_capture.tests.test_claude_upgrade_job_tool_tree import VersionBoundaryFixture
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TOOL_ROOT = REPO_ROOT / "tools" / "official_client_capture"
@@ -438,64 +439,79 @@ class ClaudeRecordCertificationTests(_IdentityMemo):
                 self.assertEqual(reuse["status"], "not_needed", "同一部署下签发的认证不需要复用收据")
                 with contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(pre_a3.main(["verify", "--client", "claude", "--certification", str(path)]), 0)
-                # 发布认证完整签发（B5a-09 续）：Job 演练按 Claude 合同重放（替身给出两项探针摘要），atomic-double 是本机真跑的
-                # Claude 双跑收据（official-client-atomic-vc0-vc1-rehearsal/v1），本机与容器内两种重放都按 Claude 合同核对。
+                # 发布认证完整签发：Job 由真实 v2 producer 封存完整双根事实，当前读侧与绑定消费不替换。
+                # atomic-double 仍是本机真跑的 Claude 双跑收据；这些离线夹具不授予 ARM64 现场资格。
                 atomic_root = root / "data" / "staging" / "claude-atomic"
                 atomic_root.mkdir(parents=True, mode=0o700)
                 (root / "data" / "staging").chmod(0o700)
                 rehearsal.collect_atomic_double(atomic_root, "receipt.json", require_arm64=False, client="claude")
-                job_receipt = policy_tests._write_json(root / "job-claude.json", {"synthetic": "claude-job-rehearsal"})
-                replayed = {"status": "passed", "job_count": 14, "storage_probe_sha256": "b" * 64,
-                            "failure_lifecycle_probe_sha256": "a" * 64, "preflight_campaign": {"campaign_id": "claude-pre"}}
+                job_fixture = VersionBoundaryFixture()
+                self.addCleanup(job_fixture.doCleanups)
+                job_fixture.setUpClass()
+                job_fixture.setUp()
+                with job_fixture.patched():
+                    campaign = job_fixture.write_campaign()
+                    job_fixture.collect(campaign, "facts.json")
+                    replayed = certify_release.job_rehearsal.finalize(
+                        job_fixture.evidence, "facts.json", "receipt.json", client="claude"
+                    )
                 inputs = dict(deployment_receipt=deployment, pre_a3_certification=path, policy_activation=activation,
-                              job_rehearsal_root=root, job_rehearsal_receipt=Path(job_receipt.name),
+                              job_rehearsal_root=job_fixture.evidence, job_rehearsal_receipt=Path("receipt.json"),
                               atomic_rehearsal_root=atomic_root, atomic_rehearsal_receipt=Path("receipt.json"),
                               require_arm64=False, client="claude")
-                with mock.patch.object(certify_release, "_require_release_platform"):
+                with job_fixture.patched(), mock.patch.object(certify_release, "_require_release_platform"):
                     with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "Job rehearsal 收据"):
                         certify_release.build_certification(**{**inputs, "job_rehearsal_receipt": Path("job.json")})
-                    with mock.patch.object(certify_release.job_rehearsal, "replay", return_value=replayed) as replay:
-                        issued = certify_release.issue(root / "release-issued-claude.json", **inputs)
-                        self.assertEqual(replay.call_args.kwargs, {"client": "claude"}, "Job 演练按 Claude 的合同重放")
-                        self.assertEqual((issued["schema_version"], issued["client"]), (certify_release.SCHEMA_VERSION_V2, "claude"))
-                        self.assertEqual(issued["atomic_double_rehearsal"]["campaign_ids"], ["atomic-vc0-vc1-1", "atomic-vc0-vc1-2"])
-                        self.assertEqual(issued["job_rehearsal"]["failure_lifecycle_probe_sha256"], "a" * 64)
-                        self.assertEqual(certify_release.verify(root / "release-issued-claude.json", client="claude")["receipt_sha256"],
-                                         issued["receipt_sha256"])
-                        # 容器内重放：Claude 的命令追加 --client claude，收据按 Claude 合同核对。
-                        completed = mock.Mock(returncode=0, stdout=b'{"campaign_id": null, "live_request_count": 0, "status": "passed"}\n',
-                                              stderr=b"")
-                        with mock.patch.object(certify_release.subprocess, "run", return_value=completed) as run:
-                            in_container = certify_release.build_certification(**inputs, atomic_container="capture-cli",
-                                                                               data_root=root / "data")
-                        command = run.call_args.args[0]
-                        self.assertEqual(command[command.index("atomic-double-replay"):][-2:], ["--client", "claude"])
-                        self.assertEqual(in_container["atomic_double_rehearsal"]["replayed_in_container"], "capture-cli")
-                        # 可选的分批演练只有 Codex 的合同。
-                        with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "没有 campaign-run 分批演练合同"):
-                            certify_release.build_certification(**inputs, campaign_run_rehearsal_root=root,
-                                                                campaign_run_rehearsal_receipt=Path("x.json"))
+                    issued = certify_release.issue(root / "release-issued-claude.json", **inputs)
+                    self.assertEqual((issued["schema_version"], issued["client"]), (certify_release.SCHEMA_VERSION_V2, "claude"))
+                    self.assertEqual(issued["atomic_double_rehearsal"]["campaign_ids"], ["atomic-vc0-vc1-1", "atomic-vc0-vc1-2"])
+                    self.assertEqual(issued["job_rehearsal"],
+                                     certify_release.replay_job_rehearsal(job_fixture.evidence, Path("receipt.json"), "claude"))
+                    self.assertEqual(issued["job_rehearsal"]["failure_lifecycle_probe_sha256"],
+                                     replayed["failure_lifecycle_probe_sha256"])
+                    self.assertEqual(certify_release.verify(root / "release-issued-claude.json", client="claude")["receipt_sha256"],
+                                     issued["receipt_sha256"])
+                    # 容器内重放：Claude 的命令追加 --client claude，收据按 Claude 合同核对。
+                    completed = mock.Mock(returncode=0, stdout=b'{"campaign_id": null, "live_request_count": 0, "status": "passed"}\n',
+                                          stderr=b"")
+                    with mock.patch.object(certify_release.subprocess, "run", return_value=completed) as run:
+                        in_container = certify_release.build_certification(**inputs, atomic_container="capture-cli",
+                                                                           data_root=root / "data")
+                    command = run.call_args.args[0]
+                    self.assertEqual(command[command.index("atomic-double-replay"):][-2:], ["--client", "claude"])
+                    self.assertEqual(in_container["atomic_double_rehearsal"]["replayed_in_container"], "capture-cli")
+                    # 可选的分批演练只有 Codex 的合同。
+                    with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "没有 campaign-run 分批演练合同"):
+                        certify_release.build_certification(**inputs, campaign_run_rehearsal_root=root,
+                                                            campaign_run_rehearsal_receipt=Path("x.json"))
                     # Claude 的双跑收据不能进 Codex 的认证（按 Codex 合同重放即拒绝）。
                     with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "atomic-double 收据重放失败"):
                         certify_release.replay_atomic_double(atomic_root, Path("receipt.json"), require_arm64=False)
-                    # 缺失败生命周期探针的 Job 演练（B2-11 之前的 Claude 收据）不能进发布认证。
-                    without_probe = {key: value for key, value in replayed.items() if key != "failure_lifecycle_probe_sha256"}
-                    with mock.patch.object(certify_release.job_rehearsal, "replay", return_value=without_probe):
-                        with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "缺少失败生命周期探针"):
-                            certify_release.build_certification(**inputs)
-                # 发布认证 v2 的组装与核验（演练绑定用占位文件，校验只核路径与摘要）。
-                release = self._compose_release(root, identity, deployment, path, receipt)
-                self.assertEqual((release["schema_version"], release["client"]), (certify_release.SCHEMA_VERSION_V2, "claude"))
-                release_path = policy_tests._write_json(root / "release-claude.json", release)
-                self.assertEqual(certify_release.verify(release_path, client="claude")["receipt_sha256"], release["receipt_sha256"])
-                with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "schema 非法"):
-                    certify_release.verify(release_path)
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(certify_release.main(["verify", "--client", "claude", "--certification", str(release_path)]), 0)
-                forged = {**release, "client": "codex"}
-                forged_path = policy_tests._write_json(root / "release-forged.json", forged)
-                with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "不属于客户端|自摘要"):
-                    certify_release.verify(forged_path, client="claude")
+                    # 固定 v1 存储单探针原件可形成期重放，当前发布消费仍拒绝，不能降版本洗入。
+                    with job_fixture.formed_environment(), self.assertRaisesRegex(
+                        certify_release.ReleaseCertificationError, "历史 Claude v1"
+                    ):
+                        certify_release.build_certification(**{
+                            **inputs, "job_rehearsal_root": job_fixture.legacy_root,
+                            "job_rehearsal_receipt": Path("storage-only-receipt.json"),
+                        })
+                # 发布认证 v2 的组装仍消费同一份当前 Job v2，不再使用缺字段的占位绑定。
+                with job_fixture.patched():
+                    release = self._compose_release(
+                        root, identity, deployment, path, receipt,
+                        certify_release.replay_job_rehearsal(job_fixture.evidence, Path("receipt.json"), "claude"),
+                    )
+                    self.assertEqual((release["schema_version"], release["client"]), (certify_release.SCHEMA_VERSION_V2, "claude"))
+                    release_path = policy_tests._write_json(root / "release-claude.json", release)
+                    self.assertEqual(certify_release.verify(release_path, client="claude")["receipt_sha256"], release["receipt_sha256"])
+                    with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "schema 非法"):
+                        certify_release.verify(release_path)
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(certify_release.main(["verify", "--client", "claude", "--certification", str(release_path)]), 0)
+                    forged = {**release, "client": "codex"}
+                    forged_path = policy_tests._write_json(root / "release-forged.json", forged)
+                    with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "不属于客户端|自摘要"):
+                        certify_release.verify(forged_path, client="claude")
             # Claude 集合为空（B5a-05 登记之前的形态，用替身清空）：同一份 v3 认证不再有效，发布认证签发在 pre-A3 一步即拒绝。
             with claude_unregistered():
                 with self.assertRaisesRegex(pre_a3.CertificationError, "场景集合为空"):
@@ -520,8 +536,9 @@ class ClaudeRecordCertificationTests(_IdentityMemo):
                 pre_a3.real_chain_coverage(receipt, client="claude")
 
     @staticmethod
-    def _compose_release(root: Path, identity: dict, deployment: Path, pre_a3_path: Path, receipt: dict) -> dict:
-        job = policy_tests._write_json(root / "job.json", {"job": True})
+    def _compose_release(
+        root: Path, identity: dict, deployment: Path, pre_a3_path: Path, receipt: dict, job_binding: dict,
+    ) -> dict:
         atomic = policy_tests._write_json(root / "atomic.json", {"atomic": True})
         binding = certify_release._bind_file
         return certify_release.compose_certification(
@@ -530,8 +547,7 @@ class ClaudeRecordCertificationTests(_IdentityMemo):
             pre_a3_certification={**binding(pre_a3_path, "pre-A3", "claude"), "receipt_sha256": receipt["receipt_sha256"],
                                   "scenario_count": receipt["scenario_count"]},
             policy_activation=None,
-            job_rehearsal={"evidence_root": str(root), "receipt": job.name, "sha256": binding(job, "Job", "claude")["sha256"],
-                           "failure_lifecycle_probe_sha256": "a" * 64},
+            job_rehearsal=job_binding,
             atomic_double_rehearsal={"evidence_root": str(root), "receipt": atomic.name,
                                      "sha256": binding(atomic, "atomic", "claude")["sha256"]},
             campaign_run_rehearsal=None,

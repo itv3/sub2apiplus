@@ -37,6 +37,7 @@ from tools.official_client_capture.capturelib import claude_fw_f_v4 as v4
 from tools.official_client_capture.capturelib import claude_fw_f_v5 as v5
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests import job_dependency_analyzer as analyzer
+from tools.official_client_capture.tests.claude_current_fixture_inputs import freeze_current_scenario_inputs
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = TOOL_ROOT.parents[1]
@@ -106,11 +107,15 @@ def _capability_argv(primary_step: dict, model: str, job_id: str) -> list[str]:
     return expected
 
 
-def _plan_argv(campaign_dir: Path, *extra: str, campaign_id: str = "claude-code-2_1_285-t1") -> list[str]:
+def _plan_argv(
+    campaign_dir: Path, *extra: str, campaign_id: str = "claude-code-2_1_285-t1", scenario_manifest: Path | None = None,
+) -> list[str]:
     return [
         "plan", "--campaign-dir", str(campaign_dir), "--campaign-mode", "preflight_only",
         "--campaign-purpose", "validation_only", "--baseline-version", BASELINE, "--target-version", TARGET,
-        "--target-sha256", SHA_A, "--runtime-image", IMAGE, "--model", "claude-sonnet-5",
+        "--target-sha256", SHA_A,
+        *(["--scenario-manifest", str(scenario_manifest)] if scenario_manifest is not None else []),
+        "--runtime-image", IMAGE, "--model", "claude-sonnet-5",
         "--upstream-ip", "160.79.104.10", "--campaign-id", campaign_id, *extra,
     ]
 
@@ -125,8 +130,15 @@ def _run_main(argv: list[str]) -> tuple[int, str, str]:
 class ScenarioManifestTests(unittest.TestCase):
     """场景清单结构、绑定与变量合同。"""
 
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.scenario_inputs = freeze_current_scenario_inputs(
+            plan.scenario_manifest_path(TARGET), Path(directory.name).resolve() / "current-scenario-inputs"
+        )
+
     def test_real_manifest_validates_and_binds(self) -> None:
-        payload = plan.read_scenario_manifest(plan.scenario_manifest_path(TARGET), expected_version=TARGET, rules=_baseline_rules())
+        payload = plan.read_scenario_manifest(self.scenario_inputs.manifest_path, expected_version=TARGET, rules=_baseline_rules())
         self.assertEqual((payload["schema_version"], payload["claude_version"]), (plan.SCENARIO_SCHEMA, TARGET))
         self.assertEqual(payload["rule_manifest"]["path"], f"tools/official_client_capture/claude_upgrade_rules_{TARGET.replace('.', '_')}.json")
         guide = REPOSITORY_ROOT / payload["source_spec"]["path"]
@@ -636,9 +648,20 @@ class PlanExpansionTests(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name).resolve()
         self.campaign_dir = self.root / "evidence" / "campaigns" / "claude-code-2_1_285-t1"
+        self.scenario_inputs = freeze_current_scenario_inputs(
+            plan.scenario_manifest_path(TARGET), self.root / "current-scenario-inputs"
+        )
+
+    def _argv(self, *extra: str, campaign_dir: Path | None = None, campaign_id: str = "claude-code-2_1_285-t1") -> list[str]:
+        """所有当前计划路径均消费新冻结副本；旧模板仍只读保留。"""
+
+        return _plan_argv(
+            self.campaign_dir if campaign_dir is None else campaign_dir, *extra,
+            campaign_id=campaign_id, scenario_manifest=self.scenario_inputs.manifest_path,
+        )
 
     def test_preflight_plan_expands_all_jobs(self) -> None:
-        code, stdout, stderr = _run_main(_plan_argv(self.campaign_dir))
+        code, stdout, stderr = _run_main(self._argv())
         self.assertEqual(code, 0, stderr)
         report = json.loads(stdout)
         payload = _scenario_payload()
@@ -666,7 +689,7 @@ class PlanExpansionTests(unittest.TestCase):
             ("capture-cli", "capture-cli-synthetic"),
         )
         for name, path in (
-            ("target_scenarios", plan.scenario_manifest_path(TARGET)),
+            ("target_scenarios", self.scenario_inputs.manifest_path),
             ("evidence_labels", plan.evidence_labels_path(TARGET)),
             ("target_rules", plan.rule_manifest_path(TARGET)),
             ("baseline_rules", plan.baseline_rule_manifest_path(BASELINE)),
@@ -684,7 +707,7 @@ class PlanExpansionTests(unittest.TestCase):
                     self.assertIn(TARGET, step["argv"])
 
     def test_runtime_binding(self) -> None:
-        _code, stdout, _stderr = _run_main(_plan_argv(self.campaign_dir))
+        _code, stdout, _stderr = _run_main(self._argv())
         step = json.loads(stdout)["jobs"][0]["steps"][0]
         values = {"host_runtime_receipt": "/capture/runs/receipts/r1.json", "host_runtime_receipt_sha256": SHA_A, "run_nonce": "c" * 64}
         bound = plan.bind_step_runtime(step, values)
@@ -700,21 +723,21 @@ class PlanExpansionTests(unittest.TestCase):
 
     def test_plan_rejections(self) -> None:
         cases = {
-            "formal 只由 VC-0 收口建立": (_plan_argv(self.campaign_dir)[:4] + ["formal"] + _plan_argv(self.campaign_dir)[5:], "VC-0 收口"),
-            "私网上游": ([*_plan_argv(self.campaign_dir)[:-4], "--upstream-ip", "10.1.2.3", "--campaign-id", "claude-code-2_1_285-t1"], "ip_address"),
+            "formal 只由 VC-0 收口建立": (self._argv()[:4] + ["formal"] + self._argv()[5:], "VC-0 收口"),
+            "私网上游": ([*self._argv()[:-4], "--upstream-ip", "10.1.2.3", "--campaign-id", "claude-code-2_1_285-t1"], "ip_address"),
             "目标版本无清单": ([item if item != TARGET else "2.1.299" for item in _plan_argv(self.campaign_dir)], "场景清单"),
-            "run-id 超长": (_plan_argv(self.campaign_dir, campaign_id="c" * 100), "run-id"),
-            "相对目录": (_plan_argv(Path("relative/campaign")), "安全绝对路径"),
-            "模型名非法": ([item if item != "claude-sonnet-5" else "bad model" for item in _plan_argv(self.campaign_dir)], "--model 格式非法"),
+            "run-id 超长": (self._argv(campaign_id="c" * 100), "run-id"),
+            "相对目录": (self._argv(campaign_dir=Path("relative/campaign")), "安全绝对路径"),
+            "模型名非法": ([item if item != "claude-sonnet-5" else "bad model" for item in self._argv()], "--model 格式非法"),
             "合成容器与抓包容器相同": (
-                _plan_argv(self.campaign_dir, "--synthetic-capture-container", "capture-cli"), "独立的断网容器"
+                self._argv("--synthetic-capture-container", "capture-cli"), "独立的断网容器"
             ),
             "主模型与非主模型取证模型相同": (
-                [item if item != "claude-sonnet-5" else "claude-fable-5" for item in _plan_argv(self.campaign_dir)],
+                [item if item != "claude-sonnet-5" else "claude-fable-5" for item in self._argv()],
                 "与 Campaign 主模型 claude-fable-5 相同",
             ),
-            "候选账号 ID 非整数": (_plan_argv(self.campaign_dir, "--claude-account-id", "acct-7"), "--claude-account-id 必须是正整数"),
-            "候选服务容器名非法": (_plan_argv(self.campaign_dir, "--service-container", "bad name"), "--service-container 格式非法"),
+            "候选账号 ID 非整数": (self._argv("--claude-account-id", "acct-7"), "--claude-account-id 必须是正整数"),
+            "候选服务容器名非法": (self._argv("--service-container", "bad name"), "--service-container 格式非法"),
         }
         for label, (argv, message) in cases.items():
             with self.subTest(label=label):
@@ -727,13 +750,13 @@ class PlanExpansionTests(unittest.TestCase):
         payload["rule_manifest"]["sha256"] = SHA_A
         tampered = self.root / "scenarios.json"
         tampered.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        code, _stdout, stderr = _run_main(_plan_argv(self.campaign_dir, "--scenario-manifest", str(tampered)))
+        code, _stdout, stderr = _run_main(self._argv("--scenario-manifest", str(tampered)))
         self.assertEqual(code, 1)
         self.assertIn("摘要漂移", stderr)
 
     def test_orchestrator_wire_roots(self) -> None:
         parser = claude_upgrade._build_parser()
-        arguments = parser.parse_args(_plan_argv(self.campaign_dir))
+        arguments = parser.parse_args(self._argv())
         plan.prepare_plan_arguments(arguments)
         context = claude_upgrade._job_context(arguments)
         self.assertEqual(set(context), set(plan.CAMPAIGN_VARIABLES) | CANDIDATE_VARIABLES)
@@ -749,7 +772,7 @@ class PlanExpansionTests(unittest.TestCase):
         self.assertNotIn("covers", contract["jobs"][0])
 
     def test_core_suite_selects_declared_jobs(self) -> None:
-        code, stdout, stderr = _run_main(_plan_argv(self.campaign_dir, "--suite", "core"))
+        code, stdout, stderr = _run_main(self._argv("--suite", "core"))
         self.assertEqual(code, 0, stderr)
         self.assertEqual(json.loads(stdout)["job_count"], len([job for job in _scenario_payload()["capture_jobs"] if "core" in job["suites"]]))
 
