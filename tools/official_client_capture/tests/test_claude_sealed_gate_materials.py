@@ -452,6 +452,19 @@ class MaterialImportProofTests(unittest.TestCase):
             _fixture_qualification_gate_root(self.store, q, self.root)
         self.assertFalse((self.root / "control/qualification-imports").exists())
 
+    def test_typed_fixture_uses_read_only_handle_without_mutating_writable_store(self):
+        from tools.official_client_capture.tests.claude_typed_vc6_fixture import prepare_fixture_qualification_materials
+        writable = self.fixture.store
+        self.assertFalse(writable.read_only)
+        originals = {path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+                     for path in writable.root.rglob("*") if path.is_file()}
+        binding = prepare_fixture_qualification_materials(writable, self.configuration, self.root,
+                                                         gate_root=self.gate_root)
+        self.assertTrue(self.validate(binding, purpose="current_import").material_files)
+        self.assertFalse(writable.read_only)
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
+                          for path in originals}, originals)
+
     def test_typed_fixture_rejects_drifted_original_receipt_without_replacement(self):
         from tools.official_client_capture.tests.claude_typed_vc6_fixture import _fixture_qualification_gate_root
         from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard

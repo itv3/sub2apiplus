@@ -354,10 +354,14 @@ def _fixture_qualification_gate_root(store: Any, qualification: dict, data_root:
 def prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path) -> dict:
     """只在显式本机夹具布局里取得来源；正式 registry 与身份均保持关闭。"""
     from tools.official_client_control import receipts
+    from tools.official_client_control.store import ControlStore
     from tools.official_client_control.canonical import canonical_sha256
     from tools.official_client_capture import claude_gate_material_worker as reader
     from tools.official_client_capture import claude_qualification_material_source as source_module
     from tools.official_client_capture import claude_qualification_material_import as importer
+    # 夹具刚用可写句柄完成回退事实；资格重放必须另开同根只读句柄。
+    # 不改调用方的权限旗标，也不改原 Store 的字节或文件权限。
+    qualification_store = ControlStore.open_read_only(store.root)
     repository = receipts._tool_repository_root()
     target_root = repository / "tools/ci"
     if not target_root.exists() and repository != REPOSITORY_ROOT:
@@ -379,7 +383,7 @@ def prepare_fixture_qualification_materials(store: Any, configuration: dict, dat
             capabilities = (capability,)
         intake = source_module.VerifiedIntakeContext(source_module.FIXTURE_AUTHORITY, "regression_fixture", data_root,
             repository, provenance, capabilities, identity, source_module._TOKEN)
-        sources.append(source_module.prepare_qualification_source(store, q, role=role, intake_context=intake))
+        sources.append(source_module.prepare_qualification_source(qualification_store, q, role=role, intake_context=intake))
 
     def fixture_resolver(actual_store, qualification, reference, *, purpose):
         if reference not in sources or reference.qualification != qualification or reference.intake.authority != source_module.FIXTURE_AUTHORITY:
@@ -389,7 +393,7 @@ def prepare_fixture_qualification_materials(store: Any, configuration: dict, dat
 
     registrations = {(source_module.FIXTURE_AUTHORITY, purpose): fixture_resolver for purpose in source_module.PURPOSES}
     with mock.patch.dict(source_module.QUALIFICATION_SOURCE_RESOLVERS, registrations):
-        return importer.prepare_qualification_material_import(store, sources, managed_data_root=data_root)
+        return importer.prepare_qualification_material_import(qualification_store, sources, managed_data_root=data_root)
 
 
 class TypedDeliveryFixture:
