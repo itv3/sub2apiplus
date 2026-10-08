@@ -173,7 +173,7 @@ def build_native(staging_root: Path) -> MaterialBinding:
         link_driver = [str(tools["clang"]), "-arch", "arm64", "-mmacosx-version-min=" + MINIMUM_TARGET,
             "-isysroot", str(sdk), str(object_path), "-framework", "Foundation"]
         if role == "collector":
-            link_driver += ["-lEndpointSecurity", "-lbsm"]
+            link_driver += ["-framework", "CoreFoundation", "-lEndpointSecurity", "-lbsm", "-lproc"]
         link_driver += ["-Wl,-t", "-Wl,-no_adhoc_codesign", "-o", str(output_path)]
         dry = _run(link_driver + ["-###"], staging_root, role + "-link-driver", traces)
         command = _link_command(dry, tools["linker"])
