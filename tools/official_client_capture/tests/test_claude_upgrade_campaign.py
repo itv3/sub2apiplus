@@ -30,11 +30,13 @@ from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_arm64_environment_receipt as environment_receipt
 from tools.official_client_capture import claude_upgrade_campaign as campaign_module
 from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_freeze as freeze_tests
+from tools.official_client_capture.tests.claude_current_fixture_inputs import freeze_current_scenario_inputs
 from tools.official_client_control.store import ControlStore
 from tools.official_client_control.tests.fixtures import SyntheticCampaign
 
@@ -83,6 +85,10 @@ class CampaignWorld:
 
     def __init__(self, root: Path, *, signer: Any, binary: bytes, evidence_decision: str = "recapture") -> None:
         self.root = root
+        # 独立 regression_fixture 只刷新来源章节绑定；正式模板与严格规格校验保持原样。
+        self.scenario_inputs = freeze_current_scenario_inputs(
+            claude_upgrade_plan.scenario_manifest_path(TARGET), root / "fixture-inputs" / "scenarios"
+        )
         self.data = root / "data"
         for directory in (self.data, self.data / "evidence", self.data / "evidence" / "campaigns", self.data / "control"):
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -136,6 +142,7 @@ class CampaignWorld:
         return self.data / "evidence" / "campaigns" / campaign_id
 
     def plan_argv(self, campaign_id: str, *extra: str, inventory: str = "store", **overrides: str) -> list[str]:
+        self.scenario_inputs.verify()
         values: dict[str, str | None] = {
             "--campaign-dir": str(self.campaign_dir(campaign_id)),
             "--campaign-id": campaign_id,
@@ -143,6 +150,7 @@ class CampaignWorld:
             "--campaign-purpose": "production_replacement",
             "--baseline-version": BASELINE,
             "--target-version": TARGET,
+            "--scenario-manifest": str(self.scenario_inputs.manifest_path),
             "--target-sha256": self.binary_sha256,
             "--target-package": str(self.freeze),
             "--target-package-sha256": _sha256(self.freeze),

@@ -5,7 +5,7 @@
 * 两个门禁消费者：``check_runtime_catalog_projection`` 实检在 Codex 运行投影通过时仍按 Claude 终态缺失、损坏失败关闭，
   stdout 只有运行投影报告；``evidence_index`` 的 Claude 分支与 Codex 分支的参数边界；
 * Claude 收尾（``codex_closeout`` 配 ``claude-upgrade-closeout/v1``）：演练仓库上 ``prepare --dry-run`` 零写入、prepare／gates／
-  publish 重跑幂等，签出的终态收据通过 Claude 校验器与两个消费者；第二部分摘要连锁在真实仓库上恰是三处唯一替换；
+  publish 重跑幂等，签出的终态收据通过 Claude 校验器与两个消费者；第二部分摘要连锁在隔离配对夹具上恰是三处唯一替换；
 * 材料读侧：独立解释器在受管根（合成的两棵受管树）上重放 VC-2 批准包与 VC-1 官方观测，含只读复用沿前序取证。
 
 全部只读真实仓库的工作树文件（不读 Git 历史）；Git 操作都在临时仓库里。
@@ -475,29 +475,75 @@ class ClaudeCloseoutTests(unittest.TestCase):
 
 
 class SourceCascadeTests(unittest.TestCase):
-    def test_real_repository_cascade_is_three_unique_replacements(self) -> None:
-        before = (REPO_ROOT / CLAUDE_GUIDE).read_text()
-        changed = before.replace(CLAUDE_PART2, CLAUDE_PART2 + "\n\n测试新增说明。", 1)
-        updates = closeout.source_updates(REPO_ROOT, changed, client="claude")
+    def paired_inputs(self, repo: Path, guide: str) -> tuple[str, str, str]:
+        """当前指南、场景、期望与冻结表成对生成，版本号只用于 regression_fixture。"""
+
         capture = "tools/official_client_capture/"
-        self.assertEqual(sorted(updates), sorted([CLAUDE_GUIDE, capture + "claude_upgrade_scenarios_2_1_285.json",
-                                                  capture + "claude_rule_expectations_2_1_226.json", capture + "claude_rule_assertion.py"]))
-        self.assertEqual((REPO_ROOT / CLAUDE_GUIDE).read_text(), before)
-        scenarios = json.loads(updates[capture + "claude_upgrade_scenarios_2_1_285.json"]["text"])
-        self.assertEqual(scenarios["source_spec"]["sha256"], closeout.part2_sha(changed, heading=CLAUDE_PART2))
-        expected = json.loads((REPO_ROOT / capture / "claude_upgrade_scenarios_2_1_285.json").read_text())
-        expected["source_spec"]["sha256"] = scenarios["source_spec"]["sha256"]
-        self.assertEqual(scenarios, expected)
-        expectations_text = updates[capture + "claude_rule_expectations_2_1_226.json"]["text"]
-        expectations = json.loads(expectations_text)
-        self.assertEqual(expectations["generated_from"]["scenarios"]["sha256"], claude_closeout.canonical_sha256(scenarios))
-        checker = updates[capture + "claude_rule_assertion.py"]
-        old_checker = (REPO_ROOT / capture / "claude_rule_assertion.py").read_text()
-        self.assertEqual(checker["text"], old_checker.replace(
-            closeout.sha((REPO_ROOT / capture / "claude_rule_expectations_2_1_226.json").read_bytes()),
-            closeout.sha(expectations_text.encode())))
-        # 同一份指南（第二部分不变）只更新指南本身。
-        self.assertEqual(list(closeout.source_updates(REPO_ROOT, before + "\n", client="claude")), [CLAUDE_GUIDE])
+        scenario_name = capture + "claude_upgrade_scenarios_9_9_9.json"
+        expectations_name = capture + "claude_rule_expectations_9_9_8.json"
+        checker_name = capture + "claude_rule_assertion.py"
+        (repo / "docs").mkdir(exist_ok=True)
+        (repo / CLAUDE_GUIDE).write_text(guide)
+        scenarios = {"source_spec": {"path": CLAUDE_GUIDE, "fragment": "第二部分", "sha256": closeout.part2_sha(guide, heading=CLAUDE_PART2)}}
+        write_json(repo / scenario_name, scenarios)
+        expectations = write_json(repo / expectations_name, {
+            "claude_version": "9.9.8", "generated_from": {"scenarios": {"sha256": claude_closeout.canonical_sha256(scenarios)}}
+        })
+        (repo / checker_name).write_text('FROZEN_PROFILE_SHA256S = {"9.9.8": "' + closeout.sha(expectations.read_bytes()) + '"}\n')
+        return scenario_name, expectations_name, checker_name
+
+    def test_paired_fixture_cascade_is_three_unique_replacements(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            init_repo(repo)
+            before = claude_guide("成对基线")
+            scenario_name, expectations_name, checker_name = self.paired_inputs(repo, before)
+            commit_all(repo, "成对基线")
+            original_bytes = {name: (repo / name).read_bytes() for name in (CLAUDE_GUIDE, scenario_name, expectations_name, checker_name)}
+            changed = before.replace(CLAUDE_PART2, CLAUDE_PART2 + "\n\n测试新增说明。", 1)
+            updates = closeout.source_updates(repo, changed, client="claude")
+            self.assertEqual(sorted(updates), sorted(original_bytes))
+            scenarios = json.loads(updates[scenario_name]["text"])
+            expected = json.loads(original_bytes[scenario_name])
+            expected["source_spec"]["sha256"] = closeout.part2_sha(changed, heading=CLAUDE_PART2)
+            self.assertEqual(scenarios, expected)
+            expectations_text = updates[expectations_name]["text"]
+            expected = json.loads(original_bytes[expectations_name])
+            expected["generated_from"]["scenarios"]["sha256"] = claude_closeout.canonical_sha256(scenarios)
+            self.assertEqual(json.loads(expectations_text), expected)
+            self.assertEqual(updates[checker_name]["text"], original_bytes[checker_name].decode().replace(
+                closeout.sha(original_bytes[expectations_name]), closeout.sha(expectations_text.encode())))
+            self.assertEqual({name: (repo / name).read_bytes() for name in original_bytes}, original_bytes)
+            # 同一份指南（第二部分不变）只更新指南本身。
+            self.assertEqual(list(closeout.source_updates(repo, before + "\n", client="claude")), [CLAUDE_GUIDE])
+
+    def test_historical_scenario_keeps_original_bytes_and_rejects_uncommitted_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory).resolve()
+            init_repo(repo)
+            (repo / "docs").mkdir()
+            historical_guide = claude_guide("历史章节")
+            (repo / CLAUDE_GUIDE).write_text(historical_guide)
+            historical_name = "tools/official_client_capture/claude_upgrade_scenarios_9_9_8.json"
+            historical = write_json(repo / historical_name, {
+                "source_spec": {"path": CLAUDE_GUIDE, "fragment": "第二部分", "sha256": closeout.part2_sha(historical_guide, heading=CLAUDE_PART2)}
+            })
+            commit_all(repo, "历史章节及场景")
+            current_guide = claude_guide("当前章节")
+            current_names = self.paired_inputs(repo, current_guide)
+            commit_all(repo, "当前成对输入")
+            original_bytes = historical.read_bytes()
+            changed = claude_guide("本轮新增说明")
+            updates = closeout.source_updates(repo, changed, client="claude")
+            self.assertEqual(sorted(updates), sorted((CLAUDE_GUIDE, *current_names)))
+            self.assertNotIn(historical_name, updates)
+            self.assertEqual(historical.read_bytes(), original_bytes)
+            # 即使旧章节能由 Git 重放，历史清单与 HEAD 不同也必须拒绝，不能顺便重写历史链。
+            historical.write_bytes(original_bytes + b"\n")
+            before = {name: (repo / name).read_bytes() for name in (CLAUDE_GUIDE, *current_names, historical_name)}
+            with self.assertRaisesRegex(closeout.CloseoutError, "无历史绑定"):
+                closeout.source_updates(repo, changed, client="claude")
+            self.assertEqual({name: (repo / name).read_bytes() for name in before}, before)
 
     def test_cascade_fails_closed_when_a_digest_cannot_be_uniquely_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

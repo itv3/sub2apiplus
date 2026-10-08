@@ -8,6 +8,7 @@ from copy import deepcopy
 from tools.official_client_capture import claude_upgrade_delivery as delivery, claude_upgrade_vc, codex_upgrade_vc_artifacts
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests.test_claude_upgrade_delivery import _DeliveryCase, CANDIDATE
+from tools.official_client_capture.tests.claude_current_fixture_inputs import freeze_current_tool_inputs
 from tools.official_client_control import contracts, delivery_execution as execution
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
 from tools.official_client_control.errors import ControlError
@@ -65,14 +66,19 @@ class DeliveryCurrentConsumerTests(_DeliveryCase):
 
 
 class CurrentPolicyDeliveryAdmissionTests(_DeliveryCase):
-    """当前 policy 4 的实际准入：缺配置及旧 Plan 都在执行前零变更拒绝。"""
+    """冻结当前策略原字节与完整身份：缺配置及旧 Plan 都在执行前零变更拒绝。"""
 
     TOOL_TREE_FACTORY = ManagedToolTree
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.current_inputs = freeze_current_tool_inputs(cls.tree, cls.tree.root.parent / "fixture-inputs")
 
     def setUp(self):
         super().setUp()
         campaign = self.store().load_campaign(self.fixture.campaign_id)
-        self.assertEqual(campaign["tool_identity"]["policy_version"], 4)
+        self.current_inputs.verify(self.tree, campaign["tool_identity"])
         self.assertTrue(execution.requires_current_contract(self.store(), campaign))
 
     def test_current_policy_missing_configuration_has_zero_changes(self):
