@@ -31,6 +31,7 @@ from tools.official_client_control.contracts import DIMENSIONS, validate_fact_re
 from tools.official_client_control.errors import ControlError
 from tools.official_client_control import profile_observation_bindings as profile_observations
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+from tools.official_client_capture import claude_upgrade_guard_epochs as guard_epochs
 
 CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v1"
 MATERIAL_CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v2"
@@ -1191,6 +1192,10 @@ class Arm64DeliveryExecutor:
         profile_projection = profile_observations.validate_profile_observation_projection(
             self.configuration, self.context, raw.get("profile_proof_bindings"), read_profile_original,
             purpose="formed_replay", producer_materials=raw.get("profile_producer_materials"))
+        continuity = guard_epochs.validate_guard_continuity(
+            self.configuration, self.context, raw.get("guard_continuity"), read_profile_original,
+            source_core=content, source_origin=origin, channel_identity=raw["guard_identity"],
+            purpose="current_execution")
         if self.configuration.get("schema_version") == MATERIAL_CONFIGURATION_SCHEMA:
             from tools.official_client_control.delivery_execution import VerifiedSource
             from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
@@ -1198,21 +1203,23 @@ class Arm64DeliveryExecutor:
             from tools.official_client_control.store import ControlStore
             source = VerifiedSource(raw["content_sha256"], raw["deployment_sha256"], originals,
                 raw["configuration_sha256"], raw["service_instance_id"], self.data_root,
-                profile_projection=profile_projection)
+                profile_projection=profile_projection, guard_continuity=continuity)
             q = self.configuration["candidate"]["qualification"]
             store = ControlStore.open_read_only(guard.managed_path(self.data_root, q["store_relative"]))
             gate_projection = projection_for_configuration(store, self.configuration, source, purpose="formed_replay")
             initial = {"content": content, "origin": origin,
                        "profile_proof_bindings": list(profile_projection.proof_bindings),
-                       "profile_producer_materials": list(profile_projection.producer_materials)}
+                       "profile_producer_materials": list(profile_projection.producer_materials),
+                       "guard_continuity": raw["guard_continuity"],
+                       "continuity_originals": [item.as_value() for item in continuity.read_bindings]}
             bindings = project_delivery_raw_bindings(source, initial,
-                gate_projection=gate_projection, profile_projection=profile_projection)
+                gate_projection=gate_projection, profile_projection=profile_projection, guard_continuity=continuity)
             for item in bindings:
                 data = originals.get(item["path"])
                 if data is None or len(data) != item["bytes"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
                     raise guard.GuardError("受管通道遗漏门禁第二根投影的真实原件")
         return {"content_sha256": raw["content_sha256"], "deployment_sha256": raw["deployment_sha256"], "bytes_by_path": originals, "configuration_sha256": raw["configuration_sha256"], "service_instance_id": raw["service_instance_id"], "trusted_data_root": self.data_root,
-                "profile_projection": profile_projection}
+                "profile_projection": profile_projection, "guard_continuity": continuity}
 
 
 def create_executor(name: str, configuration: dict[str, Any], execution_context: dict[str, Any]) -> Arm64DeliveryExecutor:

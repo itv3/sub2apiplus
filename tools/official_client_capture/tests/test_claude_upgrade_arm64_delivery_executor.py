@@ -188,6 +188,7 @@ class GuardTests(unittest.TestCase):
         self.addCleanup(self._close)
         self.identity = executor.guard_identity(self.configuration, self.context, formal=False)
         self.engine = guard.GuardEngine(self.configuration, self.context, FileRuntime(self.configuration, self.context), self.identity)
+        self.engine.complete_startup()
         self.owner = guard.process_identity(self.owner_process.pid)
 
     def _close(self) -> None:
@@ -457,6 +458,12 @@ class ProcessTests(unittest.TestCase):
         content = {key: value for key, value in core.items() if key != "origin"}
         source = restarted.verify_origin_evidence(content, core["origin"])
         self.assertEqual(source["content_sha256"], canonical_sha256(content))
+        proof = source["guard_continuity"]
+        self.assertEqual(proof.source_service_instance_id, core["origin"]["service_instance_id"])
+        self.assertNotEqual(proof.channel_service_instance_id, proof.source_service_instance_id)
+        self.assertEqual(len(proof.epoch_bindings), 2)
+        self.assertEqual(len(proof.readiness_bindings), 2)
+        proof.revalidate(lambda item: source["bytes_by_path"][item["path"]], purpose="formed_replay")
 
     def test_freeze_second_run_rechecks_live_gate_and_zero_change(self) -> None:
         self.start_guard()

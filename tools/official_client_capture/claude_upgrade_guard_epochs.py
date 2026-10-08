@@ -8,12 +8,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 import re
 from typing import Any, Callable, Mapping
 
 from tools.official_client_control.canonical import (
+    canonical_json_bytes,
     canonical_sha256,
     expect_non_negative_int,
     expect_object,
@@ -207,6 +208,24 @@ class VerifiedGuardContinuity:
     epoch_bindings: tuple[EpochBinding, ...]
     readiness_bindings: tuple[EpochBinding, ...]
     read_bindings: tuple[EpochBinding, ...]
+    configuration_bytes: bytes = field(repr=False, default=b"")
+    context_bytes: bytes = field(repr=False, default=b"")
+    channel_identity_bytes: bytes = field(repr=False, default=b"")
+    envelope_bytes: bytes = field(repr=False, default=b"")
+    source_core_bytes: bytes = field(repr=False, default=b"")
+    source_origin_bytes: bytes = field(repr=False, default=b"")
+
+    def revalidate(self, read_raw: Callable[[Mapping[str, Any]], bytes], *, purpose: str) -> None:
+        """归档只读重验原证明；当前通道存活仍由实际消费入口单独核验。"""
+        result = validate_guard_continuity(
+            parse_json_bytes(self.configuration_bytes), parse_json_bytes(self.context_bytes),
+            parse_json_bytes(self.envelope_bytes), read_raw,
+            source_core=parse_json_bytes(self.source_core_bytes),
+            source_origin=parse_json_bytes(self.source_origin_bytes),
+            channel_identity=parse_json_bytes(self.channel_identity_bytes), purpose=purpose,
+        )
+        if result != self:
+            raise ControlError("guard 连续性原件重验与形成时结果不一致")
 
 
 def validate_registration_chain(
@@ -610,6 +629,9 @@ def validate_guard_continuity(
         str(origin["service_instance_id"]), registered.channel_service_instance_id,
         canonical_sha256(core), canonical_sha256(origin), source_binding, index_binding,
         registered.epoch_bindings, ready_bindings, tuple(seen[path][0] for path in sorted(seen)),
+        canonical_json_bytes(configuration), canonical_json_bytes(context),
+        canonical_json_bytes(channel_identity), canonical_json_bytes(document),
+        canonical_json_bytes(core), canonical_json_bytes(origin),
     )
 
 

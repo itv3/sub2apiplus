@@ -66,7 +66,7 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
                                   profile_projection: Any = None,
                                   profile_documents: Mapping[str, Mapping[str, Any]] | None = None) -> list[dict[str, Any]]:
     """完整实读父字节后投影；该函数不取来源、不 RPC、不重放交付上层图。"""
-    from .delivery_execution import _source_bytes, typed_bindings
+    from .delivery_execution import _source_bytes, typed_bindings, _revalidate_guard_continuity
     from .profile_observation_bindings import VerifiedProfileProjection, RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA
     if profile_documents:
         raise ControlError("Profile 文件列表不能替代已验证来源投影")
@@ -74,7 +74,9 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
         if not isinstance(profile_projection, VerifiedProfileProjection):
             raise ControlError("Profile 投影不能由 JSON 或任意对象授信")
         profile_projection.revalidate(lambda row: _source_bytes(source, row), purpose="formed_replay")
-    bindings = {row["path"]: row for row in typed_bindings(initial)}
+    guard_proof = _revalidate_guard_continuity(source)
+    continuity_bindings = [item.as_value() for item in guard_proof.read_bindings] if guard_proof is not None else []
+    bindings = {row["path"]: row for row in typed_bindings([initial, continuity_bindings])}
     if gate_projection is not None:
         if not isinstance(gate_projection, VerifiedGateProjection) or gate_projection.token is not _TOKEN:
             raise ControlError("门禁投影类型或受管权限错误")

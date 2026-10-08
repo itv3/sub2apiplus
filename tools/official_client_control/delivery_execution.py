@@ -52,6 +52,7 @@ class VerifiedSource:
     service_instance_id: str
     trusted_data_root: Path | None = None
     profile_projection: VerifiedProfileProjection | None = None
+    guard_continuity: Any = None
 
 
 # 正式登记须在固定通道、部署身份与原件真实性现场验收后由受管源码完成。
@@ -134,6 +135,7 @@ def _verified_source(store: Any, content: Mapping[str, Any], origin: Mapping[str
     if verified.content_sha256 != canonical_sha256(core) or verified.configuration_sha256 != origin["configuration_sha256"] or verified.service_instance_id != origin["service_instance_id"]:
         raise ControlError("交付来源、部署与完整执行内容不一致")
     expect_sha256(verified.deployment_sha256, "delivery.verified_deployment_sha256")
+    _revalidate_guard_continuity(verified, required=origin["source_scope"] == "formal")
     for binding in typed_bindings(content):
         _source_bytes(verified, binding)
     return verified
@@ -159,6 +161,33 @@ def _source_bytes(source: VerifiedSource, binding: Mapping[str, Any]) -> bytes:
     return raw
 
 
+def _revalidate_guard_continuity(source: VerifiedSource, *, required: bool = False) -> Any:
+    """只读重验来源验证器交回的纯合同对象，不能接受上传 JSON 或旗标。"""
+    proof = source.guard_continuity
+    if proof is None:
+        if required:
+            raise ControlError("当前真实守卫来源缺完整 epoch 连续性证明")
+        return None
+    from tools.official_client_capture.claude_upgrade_guard_epochs import VerifiedGuardContinuity
+    if not isinstance(proof, VerifiedGuardContinuity):
+        raise ControlError("guard 连续性必须为已验证的内存合同，不能由 JSON 授权")
+    if (proof.source_content_sha256 != source.content_sha256
+            or proof.configuration_sha256 != source.configuration_sha256
+            or proof.source_service_instance_id != source.service_instance_id):
+        raise ControlError("guard 连续性与来源内容、配置或原 producer 不一致")
+    proof.revalidate(lambda item: _source_bytes(source, item), purpose="formed_replay")
+    return proof
+
+
+def _same_verified_guard_source_deployment(left: VerifiedSource, right: VerifiedSource) -> bool:
+    """原实例比较继续保留；跨实例仅接受完整注册链和同一当前通道。"""
+    left_proof, right_proof = _revalidate_guard_continuity(left), _revalidate_guard_continuity(right)
+    if left_proof is None and right_proof is None:
+        return left.service_instance_id == right.service_instance_id
+    from tools.official_client_capture.claude_upgrade_guard_epochs import same_verified_guard_deployment
+    return same_verified_guard_deployment(left_proof, right_proof)
+
+
 def complete_raw_bindings(source: VerifiedSource, initial: Any) -> list[dict[str, Any]]:
     """跟随已绑定 JSON 原件，覆盖 journal 与意图内的下层原件，不能只归档第一层。"""
 
@@ -170,11 +199,17 @@ def _complete_raw_bindings(source: VerifiedSource, initial: Any,
     """完整读验父文件后，仅在已验真配置明确声明的精确 Profile 坐标结束递归。"""
 
     import json
+    guard_proof = _revalidate_guard_continuity(source)
     if source.profile_projection is not None:
         if not isinstance(source.profile_projection, VerifiedProfileProjection):
             raise ControlError("Profile 归档域必须来自纯来源校验器，不能由 JSON manifest 授权")
         source.profile_projection.revalidate(lambda row: _source_bytes(source, row), purpose="formed_replay")
     bindings = {row["path"]: row for row in typed_bindings(initial)}
+    if guard_proof is not None:
+        for item in guard_proof.read_bindings:
+            previous = bindings.setdefault(item.path, item.as_value())
+            if previous != item.as_value():
+                raise ControlError("guard 连续性归档对同一路径引用不同原件")
     if source.profile_projection is None:
         for row in bindings.values():
             if Path(row["path"]).name in {"profile-identity.json", "host-profile-identity.json"}:
@@ -233,7 +268,7 @@ def complete_delivery_raw_bindings(store: Any, plan: Mapping[str, Any], source: 
             or facts["configuration_sha256"] != plan["configuration_sha256"]
             or source.configuration_sha256 != plan["configuration_sha256"]
             or configuration_source.configuration_sha256 != source.configuration_sha256
-            or configuration_source.service_instance_id != source.service_instance_id
+            or not _same_verified_guard_source_deployment(configuration_source, source)
             or configuration_source.deployment_sha256 != source.deployment_sha256
             or configuration_source.trusted_data_root != source.trusted_data_root):
         raise ControlError("交付归档配置、Plan、受管根或来源实例不一致")

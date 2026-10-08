@@ -37,6 +37,8 @@ if __package__ in {None, ""}:
 
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, parse_json_bytes
 from tools.official_client_control import profile_observation_bindings as profile_observations
+from tools.official_client_capture import claude_upgrade_guard_epochs as guard_epochs
+from tools.official_client_control.errors import ControlError
 
 PROTOCOL = "claude-upgrade-delivery-guard-rpc/v1"
 JOURNAL_SCHEMA = "claude-upgrade-delivery-journal/v1"
@@ -337,6 +339,127 @@ class GuardEngine:
         if not (self.root / "index.json").exists():
             atomic_json(self.root / "index.json", {"schema_version": INDEX_SCHEMA, "configuration_sha256": canonical_sha256(configuration), "operations": []})
         self._stop = threading.Event()
+        self._epoch_binding: dict[str, Any] | None = None
+        self._epoch_ready_binding: dict[str, Any] | None = None
+        self._startup_recovery = False
+
+    def _read_original(self, item: Mapping[str, Any]) -> bytes:
+        return read_bytes(check_binding(self.data_root, dict(item)))
+
+    def _epoch_materials(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """实际磁盘全集决定注册链，上传列表不能裁掉中间或末尾代际。"""
+        registrations, readiness = [], []
+        directory = self.root / "epochs"
+        if not directory.exists():
+            return registrations, readiness
+        if directory.is_symlink() or not directory.is_dir():
+            raise GuardError("epoch 根不是受管目录")
+        for number, path in enumerate(sorted(directory.iterdir()), 1):
+            if path.is_symlink() or not path.is_dir() or path.name != f"{number:06d}":
+                raise GuardError("epoch 注册目录缺失、乱序或非法")
+            names = {item.name for item in path.iterdir()}
+            if not {"registration.json"} <= names <= {"registration.json", "readiness.json"}:
+                raise GuardError("epoch 目录缺注册或存在未知原件")
+            registrations.append(binding(self.data_root, path / "registration.json"))
+            if "readiness.json" in names:
+                readiness.append(binding(self.data_root, path / "readiness.json"))
+        return registrations, readiness
+
+    def _register_epoch(self) -> None:
+        """持有独占现场锁时追加真实进程，不给无注册的历史操作倒填身份。"""
+        registrations, _ready = self._epoch_materials()
+        stable = guard_epochs.stable_deployment_identity(self.configuration, self.context, self.identity)
+        if registrations:
+            last = read_json(check_binding(self.data_root, registrations[-1]))
+            guard_epochs.validate_registration_chain(
+                self.configuration, self.context, registrations, self._read_original,
+                channel_identity=last["guard_identity"],
+            )
+            if last["guard_identity"] == self.identity:
+                self._epoch_binding = registrations[-1]
+                return
+        elif list(self.operations.iterdir()) or (
+            (self.root / "freezes").exists() and list((self.root / "freezes").iterdir())
+        ):
+            raise GuardError("非空旧守卫根没有 epoch，禁止倒填历史来源身份")
+        number = len(registrations) + 1
+        document = {
+            "schema_version": guard_epochs.EPOCH_SCHEMA, "epoch_sequence": number,
+            "configuration_binding": self.context["configuration_ref"],
+            "configuration_sha256": canonical_sha256(self.configuration),
+            "context": self.stable_context,
+            "stable_deployment_identity_sha256": canonical_sha256(stable),
+            "guard_identity": self.identity,
+            "previous_epoch_binding": registrations[-1] if registrations else None,
+        }
+        path = self.root / "epochs" / f"{number:06d}" / "registration.json"
+        # 写前先核完整拟议链，不能留下跨部署的新注册原件。
+        proposed = {"path": path.relative_to(self.data_root).as_posix(),
+                    "sha256": hashlib.sha256(canonical_json_bytes(document)).hexdigest(),
+                    "bytes": len(canonical_json_bytes(document))}
+        guard_epochs.validate_registration_chain(
+            self.configuration, self.context, [*registrations, proposed],
+            lambda item: canonical_json_bytes(document) if dict(item) == proposed else self._read_original(item),
+            channel_identity=self.identity,
+        )
+        write_json_once(path, document)
+        self._epoch_binding = binding(self.data_root, path)
+
+    def _publish_epoch_readiness(self) -> None:
+        """全部操作恢复后封存启动边界，后续当前索引仍独立重验。"""
+        if self._epoch_binding is None:
+            raise GuardError("启动恢复缺真实 epoch 注册")
+        registrations, _ready = self._epoch_materials()
+        registered = guard_epochs.validate_registration_chain(
+            self.configuration, self.context, registrations, self._read_original,
+            channel_identity=self.identity,
+        )
+        path = check_binding(self.data_root, self._epoch_binding).parent / "readiness.json"
+        if not path.exists():
+            index_binding = self._snapshot_index()
+            index = read_json(check_binding(self.data_root, index_binding))
+            rows = []
+            for item in index["operations"]:
+                if item["status"] not in {"execution_committed", "restored"} or item["terminal_binding"] is None:
+                    raise GuardError("启动恢复仍未决，禁止封存通过 readiness")
+                prefix = self._operation(item["operation_id"]) / (
+                    "journal-prefix-" + PurePosixPath(item["terminal_binding"]["path"]).stem + ".json")
+                rows.append({key: item[key] for key in ("operation_id", "prepared_binding", "terminal_binding", "status")}
+                            | {"journal_prefix_binding": binding(self.data_root, prefix)})
+            document = {"schema_version": guard_epochs.READINESS_SCHEMA, "epoch_binding": self._epoch_binding,
+                        "recovered_operations_index_binding": index_binding, "operations": rows, "result": "pass"}
+            proposed = {"path": path.relative_to(self.data_root).as_posix(),
+                        "sha256": hashlib.sha256(canonical_json_bytes(document)).hexdigest(),
+                        "bytes": len(canonical_json_bytes(document))}
+            guard_epochs.validate_epoch_readiness(
+                self.configuration, self.context, registered, proposed,
+                lambda item: canonical_json_bytes(document) if dict(item) == proposed else self._read_original(item),
+            )
+            write_json_once(path, document)
+        ready = binding(self.data_root, path)
+        guard_epochs.validate_epoch_readiness(
+            self.configuration, self.context, registered, ready, self._read_original,
+        )
+        self._epoch_ready_binding = ready
+
+    def complete_startup(self) -> dict[str, Any]:
+        """登记、全量恢复和 readiness 按顺序执行；未决只开放诊断／恢复。"""
+        with self.lock:
+            try:
+                self._register_epoch()
+                self._startup_recovery = True
+                summary = self.recover_pending({"reason": "startup"}, startup=True)
+                if not summary["blocked"]:
+                    self._publish_epoch_readiness()
+                return summary
+            except ControlError as error:
+                raise GuardError(str(error)) from error
+            finally:
+                self._startup_recovery = False
+
+    def _require_epoch_readiness(self) -> None:
+        if self._epoch_binding is None or self._epoch_ready_binding is None:
+            raise GuardError("守卫尚未完成真实 epoch 注册及全部启动恢复")
 
     def close(self) -> None:
         self._stop.set()
@@ -483,6 +606,8 @@ class GuardEngine:
 
     def inspect(self, request: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
+            if self._epoch_binding is not None or self.configuration["source_scope"] == "formal":
+                self._require_epoch_readiness()
             summary = self.recover_pending({"reason": "freeze"}, startup=False)
             if summary["blocked"]:
                 raise GuardError("存在未验证恢复的操作，禁止新的 freeze")
@@ -503,6 +628,8 @@ class GuardEngine:
 
     def prepare(self, request: dict[str, Any], owner: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
+            if self._epoch_binding is not None or self.configuration["source_scope"] == "formal":
+                self._require_epoch_readiness()
             exact(request, PREPARE_FIELDS, "prepare请求")
             if request["stage"] not in STAGE_CHECKS or not isinstance(request["run_nonce"], str) or not SAFE_ID.fullmatch(request["run_nonce"]):
                 raise GuardError("prepare阶段或run_nonce非法")
@@ -783,6 +910,8 @@ class GuardEngine:
                     core = None
                 rows.append({"operation_id": operation_id, "status": self._latest_terminal(operation_id)[0]["status"] if self._latest_terminal(operation_id) else "armed", "execution": core})
             blocked = any(row["status"] in {"restore_failed", "recovery_pending", "armed"} for row in rows)
+            if not blocked and self._epoch_binding is not None and self._epoch_ready_binding is None and not self._startup_recovery:
+                self._publish_epoch_readiness()
             origin = self._origin()
             return {"schema_version": "claude-upgrade-delivery-recovery-summary/v1", "blocked": blocked, "operations": rows, "operations_index_binding": origin["operations_index_binding"], "origin": origin}
 
@@ -867,6 +996,7 @@ class GuardEngine:
 
     def export(self, request: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
+            self._require_epoch_readiness()
             exact(request, {"content", "origin"}, "来源导出")
             origin = request["origin"]
             if origin.get("authority") != self.identity["authority"] or origin.get("configuration_sha256") != canonical_sha256(self.configuration) or origin.get("source_scope") != self.identity["source_scope"]:
@@ -876,16 +1006,24 @@ class GuardEngine:
             expected_core = {**request["content"], "origin": origin}
             matched = False
             matched_freeze_path = None
+            matched_source_path = None
+            source_pointer = ""
             for path in [*self.operations.glob("*/evidence-*.json"), *self.operations.glob("*/restoration-core-*.json")]:
                 if read_json(path) == expected_core:
                     matched = True
+                    matched_source_path = path
                     break
             if not matched:
                 for path in (self.root / "freezes").rglob("snapshot.json") if (self.root / "freezes").exists() else ():
                     snapshot = read_json(path)
-                    if expected_core in snapshot.get("cores", {}).values():
-                        matched = True
-                        matched_freeze_path = path
+                    for name, value in snapshot.get("cores", {}).items():
+                        if value == expected_core:
+                            matched = True
+                            matched_freeze_path = path
+                            matched_source_path = path
+                            source_pointer = "/cores/" + name
+                            break
+                    if matched:
                         break
             content = request["content"]
             if not matched and set(content) == {"campaign_id", "delivery_id", "operation_index_binding"}:
@@ -893,8 +1031,25 @@ class GuardEngine:
                 derived = {"campaign_id": self.context["campaign_id"], "delivery_id": self.context["delivery_id"], "operation_index_binding": current["operations_index_binding"]}
                 if content == derived and origin == current:
                     matched = True
+                    matched_source_path = check_binding(self.data_root, current["operations_index_binding"])
             if not matched:
                 raise GuardError("请求内容不是该受管守卫生成的冻结原件")
+            registrations, ready_bindings = self._epoch_materials()
+            registered = guard_epochs.validate_registration_chain(
+                self.configuration, self.context, registrations, self._read_original, channel_identity=self.identity)
+            continuity = {
+                "schema_version": guard_epochs.CONTINUITY_SCHEMA,
+                "source_service_instance_id": origin["service_instance_id"],
+                "channel_service_instance_id": self.identity["service_instance_id"],
+                "stable_deployment_identity_sha256": registered.stable_deployment_identity_sha256,
+                "epoch_bindings": registrations, "readiness_bindings": ready_bindings,
+                "source_record_binding": binding(self.data_root, matched_source_path),
+                "source_json_pointer": source_pointer,
+                "current_operations_index_binding": self._snapshot_index(),
+            }
+            verified_continuity = guard_epochs.validate_guard_continuity(
+                self.configuration, self.context, continuity, self._read_original,
+                source_core=content, source_origin=origin, channel_identity=self.identity, purpose="current_execution")
             profile_materials = self._profile_source_materials(origin, matched_freeze_path)
             proof_bindings = {reference["proof_binding"]["path"]: reference["proof_binding"]
                               for material in profile_materials for reference in material["proof_references"]}
@@ -903,7 +1058,9 @@ class GuardEngine:
                 lambda item: read_bytes(check_binding(self.data_root, dict(item))),
                 purpose="formed_replay", producer_materials=profile_materials)
             if self.configuration.get("schema_version") == "claude-upgrade-arm64-executor-configuration/v2":
-                source = self.build_local_source(content, origin)
+                from dataclasses import replace
+                source = replace(self.build_local_source(content, origin),
+                                 profile_projection=profile_projection, guard_continuity=verified_continuity)
                 from tools.official_client_control.qualification_material_import import projection_for_configuration
                 from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
                 from tools.official_client_control.store import ControlStore
@@ -912,7 +1069,9 @@ class GuardEngine:
                 gate_projection = projection_for_configuration(store, self.configuration, source, purpose="formed_replay")
                 initial = {"content": content, "origin": origin, "profile_producer_materials": profile_materials,
                            "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)],
-                           "configuration_binding": self.context["configuration_ref"]}
+                           "configuration_binding": self.context["configuration_ref"],
+                           "guard_continuity": continuity,
+                           "continuity_originals": [item.as_value() for item in verified_continuity.read_bindings]}
                 bindings = project_delivery_raw_bindings(source, initial,
                     gate_projection=gate_projection, profile_projection=profile_projection)
                 originals = {}
@@ -927,12 +1086,15 @@ class GuardEngine:
                     "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": origin["service_instance_id"],
                     "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity,
                     "profile_configuration_binding": self.context["configuration_ref"],
+                    "guard_continuity": continuity,
                     "profile_producer_materials": profile_materials,
                     "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)]}
             originals: dict[str, str] = {}
             seen: dict[str, dict[str, Any]] = {}
             pending = all_bindings({"content": content, "origin": origin, "profile_producer_materials": profile_materials,
-                                    "configuration_binding": self.context["configuration_ref"]})
+                                    "configuration_binding": self.context["configuration_ref"],
+                                    "guard_continuity": continuity,
+                                    "continuity_originals": [item.as_value() for item in verified_continuity.read_bindings]})
             total = 0
             while pending:
                 item = pending.pop()
@@ -958,6 +1120,7 @@ class GuardEngine:
                     pending.extend(all_bindings(parse_json_bytes(data, "受管来源闭包")))
             return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"], "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": expected_core["origin"]["service_instance_id"], "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity,
                     "profile_configuration_binding": self.context["configuration_ref"],
+                    "guard_continuity": continuity,
                     "profile_producer_materials": profile_materials, "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)]}
 
     def build_local_source(self, matched_content: dict[str, Any], origin: dict[str, Any]):
@@ -1032,7 +1195,7 @@ class GuardClient:
 def serve(engine: GuardEngine, socket_path: Path, key: bytes, ready: Callable[[], None] | None = None) -> None:
     """独立服务入口。重启先恢复全部日志，再监听，不能只重放最新一条。"""
     private_directory(socket_path.parent)
-    engine.recover_pending({"reason": "startup"}, startup=True)
+    engine.complete_startup()
     if socket_path.exists():
         if socket_path.is_symlink() or not stat.S_ISSOCK(socket_path.stat().st_mode) or socket_path.stat().st_uid != os.getuid():
             raise GuardError("已有 socket 不可信")
