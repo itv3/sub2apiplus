@@ -525,7 +525,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 8))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 9))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
@@ -547,6 +547,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_process_identity.py"), "evidence_semantics")
         self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_product_recipe.py"), "wire_producer")
         self.assertEqual(v3.classify_path(self.policy, "official_client_control/qualification_bindings.py"), "evidence_semantics")
+        self.assertEqual(v3.classify_path(self.policy, "official_client_control/replay_bindings.py"), "evidence_semantics")
 
     def test_orchestrators_and_shared_control(self) -> None:
         for key in ("official_client_capture/codex_upgrade.py", "official_client_capture/codex_upgrade_client_adapter.py"):
