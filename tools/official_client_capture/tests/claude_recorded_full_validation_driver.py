@@ -10,9 +10,9 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
-import hashlib
 import json
 import os
+import subprocess
 import time
 import traceback
 from pathlib import Path
@@ -21,11 +21,14 @@ from unittest import mock
 
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
 from tools.official_client_capture.tests import claude_recorded_replay as replay
+from tools.official_client_capture.tests import claude_recorded_candidate_source as candidate_source
 from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as vc1
 
 ACTIVATION_MODULE = "tools.official_client_capture.tests.claude_recorded_full_validation_driver"
 FULL_SCHEMA = "claude-recorded-full-validation-only/v1"
 REVIEWER = "录制控制回归审核来源"
+CANDIDATE = "claude-recorded-cand-r1"
+HOST = "arm64-recorded-control-fixture"
 
 
 def _write_bytes(path: Path, raw: bytes) -> Path:
@@ -138,7 +141,8 @@ def installed(state_path: Path, digest: str) -> Iterator[Any]:
             raise replay.ReplayError("控制基线投影版本漂移")
         return policy, {"path": str(path), "sha256": source.binding(path)["sha256"]}
 
-    with vc1.installed(state_path, digest) as adapter, mock.patch.object(release, "active_projection_policy", active_projection_policy):
+    with vc1.installed(state_path, digest, adapter_factory=candidate_source.SourceAdapter) as adapter, \
+            mock.patch.object(release, "active_projection_policy", active_projection_policy), runtime_sources(state):
         yield adapter
 
 
@@ -248,6 +252,109 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
     upgrade._replay_vc_checkpoint(campaign, upgrade._vc_campaign_plan(campaign, manifest), "VC-3")
     return {"batches": batches, "classification": source.binding(campaign / classify.STAGE_RESULT_RELATIVE),
             "profile": source.binding(campaign / profile.STAGE_RESULT_RELATIVE), "profile_store": profile_stage["store"]}
+
+
+def _direct(argv: list[Any]) -> tuple[int, dict[str, Any], str]:
+    """只借 CLI 输出捕获；真实命令的诊断码、事实和副作用原样保留。"""
+
+    from tools.official_client_capture.tests import test_claude_upgrade_classify as cli_fixture
+
+    code, result, stderr = cli_fixture.run_main([str(item) for item in argv])
+    if code not in {0, 2} or not isinstance(result, dict):
+        raise replay.ReplayError(f"真实命令失败：{argv[0]}，诊断码 {code}，{stderr}")
+    return code, result, stderr
+
+
+@contextlib.contextmanager
+def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
+    """冻结候选形成后才安装其外部环境观察源；准入、Store、画像、selector 与 run/seal 判定不替换。"""
+
+    from tools.official_client_capture import claude_upgrade_capture as capture
+    from tools.official_client_capture import claude_upgrade_candidate_capture as candidate
+    from tools.official_client_capture.tests import claude_client_receipt_fixture as clients
+    from tools.official_client_capture.tests import test_claude_upgrade_capture as host_fixture
+    from tools.official_client_capture.tests import claude_vc5_chain_fixture as observation_fixture
+    from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as gateway_fixture
+
+    data = Path(state["data_root"])
+    path = data / "control/full-runtime-source.json"
+    if not path.exists():
+        yield
+        return
+    source.bound(source.binding(path), root=data)
+    config = source.read(path)
+    if config.get("fixture_only") is not True or config.get("purpose") != "recorded_control_runtime_source":
+        raise replay.ReplayError("候选环境来源不是明确的控制夹具")
+    build = source.read(source.bound(config["build_receipt"], root=data))
+    gateway = copy.deepcopy(gateway_fixture.BASE_GATEWAY)
+    gateway["service"]["image_id"] = build["image"]["image_id"]
+    fact = observation_fixture.activation_fact(build, source.VERSION)
+    host = host_fixture.FakeHost()
+
+    def probe(argv: Any, **options: Any):
+        if list(argv[:5]) == ["docker", "image", "inspect", "--format", "{{json .RepoDigests}}"]:
+            return subprocess.CompletedProcess(argv, 0, json.dumps([build["image"]["reference"]]), "")
+        return host.run(argv, **options)
+
+    def gateway_facts(*_args: Any, **_options: Any):
+        return copy.deepcopy(gateway)
+
+    def activation(*_args: Any, **_options: Any):
+        return "/app/data/claude-egress-activation-fact.json", json.dumps(fact, sort_keys=True) + "\n"
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(mock.patch.object(capture, "_run_probe_command", probe))
+        stack.enter_context(mock.patch.object(candidate, "_collect_gateway_facts", gateway_facts))
+        stack.enter_context(mock.patch.object(candidate, "_read_activation_fact", activation))
+        stack.enter_context(mock.patch.object(candidate, "observe_service_image", lambda *_a, **_k: build["image"]["image_id"]))
+        stack.enter_context(mock.patch.object(candidate, "host_facts", return_value={"host_id": HOST, "architecture": "linux/arm64"}))
+        stack.enter_context(clients.source_scope())
+        yield
+
+
+def build_candidate(data: Path, campaign: Path) -> dict[str, Any]:
+    """VC-4 的 Git/构建输入来自明确离线来源；冻结、构建收据、revision seal 与 checkpoint 全部走真实命令。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_profile as profile
+    from tools.official_client_capture.tests import claude_candidate_build_fixture as fixture
+
+    code, opened, _stderr = _direct(["revision-open", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--initial"])
+    if code != 0 or opened.get("revision") != 1:
+        raise replay.ReplayError("真实候选 initial revision 未建立")
+    _code, preview, _stderr = _direct(["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", CANDIDATE])
+    builder = fixture.CandidateBuildFixture(data / "control/fixture-candidate-build", campaign, CANDIDATE, run_main=_direct)
+    builder.build_source(preview=preview)
+    builder.build_artifacts()
+    builder.build_transition()
+    builder.build_implementation_receipt(preview["requirements"], vc1.UPGRADE)
+    plan_source = data / "control/candidate-plan-source"
+    subprocess.run(["git", "clone", "-q", str(builder.source), str(plan_source)], check=True, capture_output=True, timeout=60)
+    lifecycle = builder.lifecycle_dir.relative_to(builder.source)
+    dispatched = plan_source / lifecycle / "gate-plan-dispatch.json"
+    batches = [vc1._batch(data, campaign, "vc4-01-plan-gates", [
+        "plan-candidate-gates", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE,
+        "--candidate-source", str(plan_source), "--mapping", str(plan_source / lifecycle / "gate-mapping.json"), "--output", str(dispatched),
+    ], phase="VC-4")]
+    if dispatched.read_bytes() != builder.plan_path.read_bytes():
+        raise replay.ReplayError("真实监督门禁计划与冻结源码里的计划不一致")
+    binaries = builder.install_fake_commands(data / "control/fixture-build-bin")
+    with mock.patch.dict(os.environ, {"PATH": str(binaries) + os.pathsep + os.environ.get("PATH", "")}):
+        batches.append(vc1._batch(data, campaign, "vc4-02-record-build", builder.argv(), phase="VC-4"))
+    manifest = upgrade.load_campaign_manifest(campaign)
+    revision = upgrade._current_candidate_revision(campaign, manifest)
+    if revision != 1:
+        raise replay.ReplayError("候选构建未留在同一 initial revision")
+    checkpoint, _payload = upgrade._replay_vc_checkpoint(campaign, upgrade._vc_campaign_plan(campaign, manifest), "VC-4", revision=revision)
+    receipt = campaign / "candidates" / CANDIDATE / "build-receipt.json"
+    source.write(data / "control/full-runtime-source.json", {
+        "fixture_only": True, "purpose": "recorded_control_runtime_source", "build_receipt": source.binding(receipt),
+        "profile_stage": source.binding(campaign / profile.STAGE_RESULT_RELATIVE), "candidate_configuration": manifest["configuration"],
+        "formal_version_semantics_certified": False,
+    })
+    return {"batches": batches, "revision": revision, "candidate_id": CANDIDATE,
+            "build_receipt": source.binding(receipt), "checkpoint": source.binding(checkpoint),
+            "external_source": "fixture_only Git/二进制/前端/镜像/实现测试观察，不表示生产构建验收"}
 
 
 def run_through_profile(state_path: Path, digest: str) -> dict[str, Any]:
