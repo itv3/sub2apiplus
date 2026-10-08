@@ -210,12 +210,13 @@ def _complete_raw_bindings(source: VerifiedSource, initial: Any,
             previous = bindings.setdefault(item.path, item.as_value())
             if previous != item.as_value():
                 raise ControlError("guard 连续性归档对同一路径引用不同原件")
-    if source.profile_projection is None:
-        for row in bindings.values():
-            if Path(row["path"]).name in {"profile-identity.json", "host-profile-identity.json"}:
-                identity = _source_json(source, row)
-                if identity.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+    for row in bindings.values():
+        if Path(row["path"]).name in {"profile-identity.json", "host-profile-identity.json"}:
+            identity = _source_json(source, row)
+            if identity.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+                if source.profile_projection is None:
                     raise ControlError("当前 Docker Profile 观测副本缺少已验证来源证明，不能降为宽松归档")
+                source.profile_projection.require_identity_parent(row, _source_bytes(source, row))
     queue = list(bindings)
     while queue:
         path = queue.pop()

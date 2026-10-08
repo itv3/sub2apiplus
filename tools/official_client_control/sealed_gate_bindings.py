@@ -77,13 +77,15 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
     guard_proof = _revalidate_guard_continuity(source)
     continuity_bindings = [item.as_value() for item in guard_proof.read_bindings] if guard_proof is not None else []
     bindings = {row["path"]: row for row in typed_bindings([initial, continuity_bindings])}
-    if profile_projection is None:
-        # 在任何历史父域展开前核当前观测证据，避免先缺历史坐标掩盖缺证明。
-        for row in bindings.values():
-            if row["path"].rsplit("/", 1)[-1] in {"profile-identity.json", "host-profile-identity.json"}:
-                identity = json.loads(_source_bytes(source, row))
-                if isinstance(identity, dict) and identity.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+    # 在任何历史父域展开前逐份核身份，空投影也不能为陌生原件背书。
+    for row in bindings.values():
+        if row["path"].rsplit("/", 1)[-1] in {"profile-identity.json", "host-profile-identity.json"}:
+            identity_raw = _source_bytes(source, row)
+            identity = json.loads(identity_raw)
+            if isinstance(identity, dict) and identity.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+                if profile_projection is None:
                     raise ControlError("当前 Docker Profile 观测副本缺少已验证来源证明")
+                profile_projection.require_identity_parent(row, identity_raw)
     if gate_projection is not None:
         if not isinstance(gate_projection, VerifiedGateProjection) or gate_projection.token is not _TOKEN:
             raise ControlError("门禁投影类型或受管权限错误")
