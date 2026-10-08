@@ -144,7 +144,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 10；schema 版本不表示发布认证通过） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 11；schema 版本不表示发布认证通过） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
 | 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
 | 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
@@ -373,7 +373,7 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 10 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 11 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs` |
@@ -447,7 +447,7 @@ Codex 策略 v8 只在 control 层登记三个共享新文件（`upgrade_client_
 | | Codex | Claude |
 |---|---|---|
 | 合同与文件名 | `codex-arm64-supervisor-enable/v1`，`codex-01600-supervisor-enable-<stamp>.json` | `official-client-managed-deploy/v1`，`claude-managed-deploy-<stamp>.json` |
-| 工具身份 | 收据顶层的策略版本与五摘要，单根、`.py`／`.sh`／`.json` 三后缀口径 | `identity{policy_version, policy_sha256, wire_producer_sha256, evidence_semantics_sha256, control_sha256, tool_files_sha256}`，由 v3 引擎按 Claude 策略算两根（含 `.mjs`） |
+| 工具身份 | 收据顶层的策略版本与五摘要，单根、`.py`／`.sh`／`.json` 三后缀口径 | `identity{policy_version, policy_sha256, wire_producer_sha256, evidence_semantics_sha256, control_sha256, tool_files_sha256}`，由 v3 引擎按 Claude 策略算两根（含 `.mjs`、`.m`；原生观测仍仅有限构建与离线重放） |
 | 其余字段 | 22 字段闭集不变 | `client`、`managed_roots[{root, tool_files_sha256, rollback_backup}]`、`runtime_bindings`、`switch_journal_sha256`（意图摘要）、`documents`（Claude 文档的生效摘要与回滚点）、`client_binaries`、`pre_a3`、`transaction_receipts`、`notes` 等 |
 
 签收据顺序固定 Codex 在前：Claude 收据的 `transaction_receipts` 记录同一事务签出的其它客户端收据，消费方据此认定

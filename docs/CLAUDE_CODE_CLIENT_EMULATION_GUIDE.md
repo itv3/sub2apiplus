@@ -1312,7 +1312,7 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
 
 认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify，四个入口都带
 `--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude schema v3 引擎计算；当前
-`policy_version=10` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
+`policy_version=11` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
 `pre-a3-path-certification/v3`，缺省坐标为 `control/policy-certification/claude-pre-a3-path-certification-<stamp>.json`；
 发布认证签 `tool-release-certification/v2`，绑定 Claude 部署收据的五摘要、pre-A3 认证、完整 Job 演练
 （`official-client-job-rehearsal-receipt/v1`，含失败生命周期探针）与 atomic-double 收据，只能在具备 Go 与 Docker
@@ -2602,7 +2602,7 @@ Claude 项目总账默认目录为 `<数据根>/upgrade-project-ledger-claude`�
 同目标根因跨 Campaign／revision／基线累计，稳定维度不包含本轮 Campaign ID；码表迁移继承旧计数。
 修复凭证闭合后按前表放行，不能通过换 revision 清零。
 
-Claude 策略 **schema 仍是 v3，`policy_version=10` 已实现，文件名仍为**
+Claude 策略 **schema 仍是 v3，`policy_version=11` 已实现，文件名仍为**
 [`claude_tool_identity_policy_v2.json`](../tools/official_client_capture/claude_tool_identity_policy_v2.json)，
 由 `claude_tool_identity_policy.py` 计算双受管根 `tools/official_client_capture`、`tools/official_client_control`
 及运行时绑定、符号闭包和五摘要。`tool-evolution preview／apply` 登记 wire／evidence／control 变化，policy
@@ -2610,7 +2610,9 @@ Claude 策略 **schema 仍是 v3，`policy_version=10` 已实现，文件名仍�
 `verify_mac_source_v2` 与预约 wrapper `verify_mac_reservation_v2` 已由读侧真实调用，并显式进入
 compare／accept 根；末轮接线已提交 `58dcc47ab`，两端身份摘要已实算，最终受控登记与变异复验仍待收口。最终兼容、激活、演进登记、
 部署与发布认证仍待完成；schema v3 与文件名保持既有合同，不能把 policy 版本或本机局部通过写成
-当前部署已认证。共同边界见
+当前部署已认证。v11 新增 Darwin 原生 fork／exec／exit 投影、离线重放与私有构建合同，
+`.m` 只进入 Claude 身份；当前实际采集入口仍关闭，编译或离线结构通过不授予完整事件、执行映像、
+正式来源或产品启动能力。共同边界见
 [Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。官方／候选分别按
 未封存与已封存重验：未封存只作废批准影响闭集；已封存且仍有受影响 Job 时拒绝借演进重采，分别按
 §4.1.1 的后继边界与 §4.5.8 的候选评估恢复办理。
