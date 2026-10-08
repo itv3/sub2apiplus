@@ -59,9 +59,13 @@ class GuardEpochWiringTests(unittest.TestCase):
         core = self.committed()
         original = copy.deepcopy(core)
         (self.root / "guard/epochs/000001/readiness.json").unlink()
-        with self.assertRaises(ControlError):
+        with self.assertRaises((ControlError, guard.GuardError)):
             self.exported(core)
         self.assertEqual(core, original)
+        before = guard.read_json(self.root / "state.json")["switch_count"]
+        with self.assertRaises(guard.GuardError):
+            self.engine.prepare(fixtures.prepare_request(self.case.environment, nonce="missing-ready"), self.case.owner)
+        self.assertEqual(guard.read_json(self.root / "state.json")["switch_count"], before)
 
     def test_registration_gap_and_unknown_epoch_material_are_rejected(self):
         core = self.committed()

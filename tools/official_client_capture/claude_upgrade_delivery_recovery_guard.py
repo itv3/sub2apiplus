@@ -342,6 +342,7 @@ class GuardEngine:
         self._epoch_binding: dict[str, Any] | None = None
         self._epoch_ready_binding: dict[str, Any] | None = None
         self._startup_recovery = False
+        self._startup_requested = False
 
     def _read_original(self, item: Mapping[str, Any]) -> bytes:
         return read_bytes(check_binding(self.data_root, dict(item)))
@@ -445,6 +446,8 @@ class GuardEngine:
     def complete_startup(self) -> dict[str, Any]:
         """登记、全量恢复和 readiness 按顺序执行；未决只开放诊断／恢复。"""
         with self.lock:
+            self._startup_requested = True
+            self._epoch_ready_binding = None
             try:
                 self._register_epoch()
                 self._startup_recovery = True
@@ -460,6 +463,14 @@ class GuardEngine:
     def _require_epoch_readiness(self) -> None:
         if self._epoch_binding is None or self._epoch_ready_binding is None:
             raise GuardError("守卫尚未完成真实 epoch 注册及全部启动恢复")
+        try:
+            registrations, _ready = self._epoch_materials()
+            registered = guard_epochs.validate_registration_chain(
+                self.configuration, self.context, registrations, self._read_original, channel_identity=self.identity)
+            guard_epochs.validate_epoch_readiness(
+                self.configuration, self.context, registered, self._epoch_ready_binding, self._read_original)
+        except ControlError as error:
+            raise GuardError(str(error)) from error
 
     def close(self) -> None:
         self._stop.set()
@@ -606,7 +617,7 @@ class GuardEngine:
 
     def inspect(self, request: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
-            if self._epoch_binding is not None or self.configuration["source_scope"] == "formal":
+            if self._startup_requested or self.configuration["source_scope"] == "formal":
                 self._require_epoch_readiness()
             summary = self.recover_pending({"reason": "freeze"}, startup=False)
             if summary["blocked"]:
@@ -628,7 +639,7 @@ class GuardEngine:
 
     def prepare(self, request: dict[str, Any], owner: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
-            if self._epoch_binding is not None or self.configuration["source_scope"] == "formal":
+            if self._startup_requested or self.configuration["source_scope"] == "formal":
                 self._require_epoch_readiness()
             exact(request, PREPARE_FIELDS, "prepare请求")
             if request["stage"] not in STAGE_CHECKS or not isinstance(request["run_nonce"], str) or not SAFE_ID.fullmatch(request["run_nonce"]):
