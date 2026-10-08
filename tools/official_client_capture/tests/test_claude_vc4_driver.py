@@ -70,6 +70,55 @@ def load_driver(name: str, environment: dict[str, str]) -> types.ModuleType:
     return module
 
 
+class ClaudeCandidateImageReferenceTests(unittest.TestCase):
+    """镜像配置 ID 和仓库 manifest digest 不同，成功与拒绝都不调用真实 Docker。"""
+
+    def setUp(self) -> None:
+        self.driver = load_driver("claude_vc4", {})
+        self.repository = "registry.local/sub2api"
+        self.reference = build_fixture.RUNTIME_IMAGE
+
+    def _inspect(self, payload: Any, returncode: int = 0) -> Any:
+        def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+            self.assertEqual(arguments, ["docker", "image", "inspect", build_fixture.IMAGE_ID])
+            self.assertEqual(kwargs["timeout"], 60)
+            return subprocess.CompletedProcess(arguments, returncode, json.dumps(payload), "检查失败" if returncode else "")
+        return run
+
+    def test_uses_real_repository_digest_and_preserves_image_id(self) -> None:
+        payload = [{"Id": build_fixture.IMAGE_ID, "RepoDigests": ["other/repo@sha256:" + "6" * 64, self.reference, self.reference]}]
+        self.assertEqual(
+            self.driver.candidate_image_reference(build_fixture.IMAGE_ID, self.repository, runner=self._inspect(payload)),
+            self.reference,
+        )
+        self.assertNotEqual(self.reference.split("@", 1)[1], build_fixture.IMAGE_ID)
+
+    def test_missing_ambiguous_or_wrong_image_is_rejected(self) -> None:
+        cases = (
+            ([], "恰好"),
+            ([{"Id": "sha256:" + "9" * 64, "RepoDigests": [self.reference]}], "配置 ID"),
+            ([{"Id": build_fixture.IMAGE_ID, "RepoDigests": []}], "唯一真实 RepoDigest"),
+            ([{"Id": build_fixture.IMAGE_ID, "RepoDigests": ["other/repo@sha256:" + "6" * 64]}], "唯一真实 RepoDigest"),
+            ([{"Id": build_fixture.IMAGE_ID, "RepoDigests": [self.reference, self.repository + "@sha256:" + "6" * 64]}], "唯一真实 RepoDigest"),
+            ([{"Id": build_fixture.IMAGE_ID, "RepoDigests": [None]}], "字符串数组"),
+            ([{"Id": build_fixture.IMAGE_ID, "RepoDigests": [self.repository + "@sha256:" + "z" * 64]}], "唯一真实 RepoDigest"),
+        )
+        for payload, message in cases:
+            with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, message):
+                self.driver.candidate_image_reference(build_fixture.IMAGE_ID, self.repository, runner=self._inspect(payload))
+
+    def test_invalid_id_or_inspection_failure_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "镜像 ID"):
+            self.driver.candidate_image_reference("sha256:" + "z" * 64, self.repository, runner=mock.Mock())
+        with self.assertRaisesRegex(ValueError, "检查失败"):
+            self.driver.candidate_image_reference(build_fixture.IMAGE_ID, self.repository, runner=self._inspect([], 1))
+        with self.assertRaisesRegex(ValueError, "合法 JSON"):
+            self.driver.candidate_image_reference(
+                build_fixture.IMAGE_ID, self.repository,
+                runner=lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "not-json", ""),
+            )
+
+
 def in_process_cli(argv: list[str]) -> tuple[int, dict[str, Any]]:
     """编排器 CLI 的进程内替身：与 ``ClaudeBinding.cli`` 同一口径（退出码 0／2 返回结果，其余报错）。"""
 
@@ -463,7 +512,7 @@ class LocalAssemblyTests(candidate_tests._CandidateCase):
         work.mkdir(mode=0o700)
         environment = self.environment(
             campaign, B=str(base), W=str(work), C=fixture.commit, TARGET_VERSION=TARGET,
-            LIFECYCLE_DIR=fixture.lifecycle_dir.relative_to(fixture.source).as_posix(), CANDIDATE_IMAGE_REPOSITORY="sub2apiplus-claude-candidate",
+            LIFECYCLE_DIR=fixture.lifecycle_dir.relative_to(fixture.source).as_posix(), CANDIDATE_IMAGE_REPOSITORY="registry.local/sub2api",
         )
         dispatch = load_driver("claude_vc4", environment)
         client = sys.modules["vc4_client"]
@@ -471,7 +520,8 @@ class LocalAssemblyTests(candidate_tests._CandidateCase):
         with mock.patch.dict(os.environ, environment), contextlib.redirect_stdout(io.StringIO()) as printed:
             # 两个批次计划：受管 Python 直接调 claude_upgrade.py，按 VC-4 阶段幂等重派合同在构建开始前可逐字重派。
             plan = dispatch.plan_gates(work / "action-plan-vc4-plan-gates.json")
-            record = dispatch.record_plan(fixture.implementation_root, work / "action-plan-vc4-record-build.json")
+            with mock.patch.object(dispatch.subprocess, "run", return_value=fixture.runner()(["docker", "image", "inspect", build_fixture.IMAGE_ID])):
+                record = dispatch.record_plan(fixture.implementation_root, work / "action-plan-vc4-record-build.json")
             for document in (plan, record):
                 self.assertEqual(vc_artifacts.validate_action_plan(document, phase="VC-4"), document)
                 (action,) = document["actions"]
@@ -486,7 +536,8 @@ class LocalAssemblyTests(candidate_tests._CandidateCase):
             self.assertEqual(set(flags), set(claude_upgrade_batch.STAGE_REPLAY_CONTRACTS["VC-4"]["record-candidate-build"]["record"][0]))
             self.assertEqual(flags["--candidate-purpose"], manifest["campaign_purpose"])
             self.assertEqual(flags["--build-id"], f"{CANDIDATE}-{fixture.commit[:9]}-20261007t010203z")
-            self.assertEqual(flags["--runtime-image"], f"sub2apiplus-claude-candidate@{build_fixture.IMAGE_ID}")
+            self.assertEqual(flags["--runtime-image"], build_fixture.RUNTIME_IMAGE)
+            self.assertEqual(flags["--candidate-image-id"], build_fixture.IMAGE_ID)
             self.assertEqual(flags["--implementation-test-receipt"], str(fixture.implementation_root.resolve() / "receipt.json"))
             self.assertEqual(plan["actions"][0]["command"][-1], str(base / "plan-source" / environment["LIFECYCLE_DIR"] / "gate-plan-dispatch.json"))
             # plan 预演：批次外生成模式写预演文件，与提交内 gate-plan.json 逐字相同后删除；派发产物位置不受影响。

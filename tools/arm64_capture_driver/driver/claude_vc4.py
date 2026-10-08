@@ -15,6 +15,7 @@ record 预演替换 ``codex_upgrade`` 的三个内部写点（构建收据路径
 
 子命令（只读，或只写本轮输入目录 W 下的动作计划与候选计划副本 ``plan-source`` 里的预演文件）：
 
+* ``image-reference``：只读检查 Docker 的配置 ID 与实际 RepoDigests，返回指定仓库的唯一不可变引用；
 * ``tree``：打印候选源码树摘要（编排器 ``_directory_tree_digest``，与实现门禁同一算法）；
 * ``plan-gates --output <W 下的计划>``：plan-candidate-gates 批次计划（``--candidate-source`` 是候选目录的 ``plan-source``，
   ``--output`` 是其中的 ``gate-plan-dispatch.json``）；
@@ -34,6 +35,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -143,6 +145,46 @@ def plan_rehearsal() -> None:
         rehearsal.unlink(missing_ok=True)
 
 
+def candidate_image_reference(image_id: str, repository: str, *, runner: Any = None) -> str:
+    """从 Docker 实际检查结果取不可变引用；镜像配置 ID 与 manifest digest 分别绑定。
+
+    本地 build 可能尚无 RepoDigests。此时拒绝登记，不能把配置 ID 拼成仓库引用；
+    先将镜像放入获批的隔离镜像仓库，再以原候选输入重跑即可。
+    """
+
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        raise ValueError(f"构建参数里的镜像 ID 不合法：{image_id}")
+    if not repository or re.search(r"[\s@]", repository):
+        raise ValueError("候选镜像仓库必须是不含空白或 digest 的仓库名称")
+    inspect = (runner or subprocess.run)(
+        ["docker", "image", "inspect", image_id], capture_output=True, text=True, timeout=60, check=False
+    )
+    if inspect.returncode != 0:
+        raise ValueError(f"候选镜像检查失败：{inspect.stderr.strip()[-500:]}")
+    try:
+        images = json.loads(inspect.stdout)
+    except (TypeError, ValueError) as error:
+        raise ValueError("候选镜像检查没有返回合法 JSON") from error
+    if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
+        raise ValueError("候选镜像检查必须恰好返回一份镜像对象")
+    image = images[0]
+    if image.get("Id") != image_id:
+        raise ValueError("候选镜像检查的配置 ID 与冻结构建参数不一致")
+    digests = image.get("RepoDigests")
+    if not isinstance(digests, list) or any(not isinstance(item, str) for item in digests):
+        raise ValueError("候选镜像 RepoDigests 必须是字符串数组")
+    references = sorted({
+        item for item in digests
+        if item.startswith(repository + "@") and re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", item)
+    })
+    if len(references) != 1:
+        raise ValueError(
+            f"候选镜像在仓库 {repository} 下没有唯一真实 RepoDigest；"
+            "先将镜像放入获批的隔离镜像仓库，核对引用后重跑，禁止用镜像配置 ID 代替 manifest digest"
+        )
+    return references[0]
+
+
 def record_argv(evidence: Path) -> list[str]:
     binding = _binding()
     base = Path(os.environ["B"])
@@ -152,8 +194,7 @@ def record_argv(evidence: Path) -> list[str]:
         raise ValueError(f"候选构建只产出 {TARGET_ARCHITECTURE}，Campaign 平台是 {platform or '（缺）'}")
     parameters = json.loads((base / "artifacts" / "build-parameters.json").read_text(encoding="utf-8"))
     image_id = str(parameters["docker_build"]["image_id"])
-    if not image_id.startswith("sha256:") or len(image_id) != 71:
-        raise ValueError(f"构建参数里的镜像 ID 不合法：{image_id}")
+    runtime_image = candidate_image_reference(image_id, os.environ["CANDIDATE_IMAGE_REPOSITORY"])
     built_at = (base / "artifacts" / "built-at-utc.txt").read_text(encoding="utf-8").strip()
     # 构建标识与 Codex vc4.sh 同一规则：候选、提交前 9 位与构建时刻（去掉 - 与 :、小写）。
     build_id = f"{os.environ['CAND']}-{os.environ['C'][:9]}-{built_at.replace('-', '').replace(':', '').lower()}"
@@ -164,7 +205,7 @@ def record_argv(evidence: Path) -> list[str]:
         "--candidate-purpose", str(manifest["campaign_purpose"]),
         "--candidate-source", str(base / "source"),
         "--candidate-binary", str(base / "artifacts" / "sub2api"),
-        "--runtime-image", f"{os.environ['CANDIDATE_IMAGE_REPOSITORY']}@{image_id}",
+        "--runtime-image", runtime_image,
         "--candidate-image-id", image_id,
         "--build-id", build_id,
         "--deployed-version", os.environ["TARGET_VERSION"],
@@ -257,6 +298,9 @@ def summary() -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Claude 的 VC-4 派发（B3-04a）")
     sub = parser.add_subparsers(dest="action", required=True)
+    image = sub.add_parser("image-reference", help="从真实 RepoDigests 核对候选镜像不可变引用")
+    image.add_argument("--image-id", required=True)
+    image.add_argument("--repository", required=True)
     sub.add_parser("tree", help="候选源码树摘要")
     gates = sub.add_parser("plan-gates", help="plan-candidate-gates 批次计划")
     gates.add_argument("--output", type=Path, required=True)
@@ -269,7 +313,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("summary", help="VC-4 checkpoint、候选构建收据与账本状态")
     args = parser.parse_args(argv)
     try:
-        if args.action == "tree":
+        if args.action == "image-reference":
+            _binding()
+            print(candidate_image_reference(args.image_id, args.repository))
+        elif args.action == "tree":
             print(_binding().upgrade._directory_tree_digest(Path(os.environ["B"]) / "source"))
         elif args.action == "plan-gates":
             plan_gates(args.output)

@@ -46,7 +46,12 @@ if [ "$BUILD_RC" = 0 ]; then IMAGE_ID=$(docker inspect --format '{{.Id}}' "$TAG"
 python3 "$DRV/vc4_contract.py" record-network --pre-build "$E/pre-build.json" --exit-code "$BUILD_RC" \
   --image-id "$IMAGE_ID" --started-at "$BUILD_STARTED" --command "${BUILD_COMMAND[@]}" > /dev/null
 test "$BUILD_RC" = 0 || { echo "Docker 构建失败（已记录网络模式和失败日志）：$BUILD_RC"; exit "$BUILD_RC"; }
-docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "$CANDIDATE_IMAGE_REPOSITORY@$IMAGE_ID"
+if [ "${CLIENT:-codex}" = claude ]; then
+  # Claude 独立核对真实 manifest 引用；本地镜像没有 RepoDigest 时明确停在此处，不冒充配置 ID。
+  python3 "$DRV/claude_vc4.py" image-reference --image-id "$IMAGE_ID" --repository "$CANDIDATE_IMAGE_REPOSITORY" > /dev/null
+else
+  docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "$CANDIDATE_IMAGE_REPOSITORY@$IMAGE_ID"
+fi
 NODE_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/node-version.txt"); PNPM_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/pnpm-version.txt")
 NODE_IMAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"]["NODE_IMAGE"]["image_id"])' "$E/pre-build.json")
 # ---------- 三份收据 ----------

@@ -34,9 +34,9 @@
     },
     {
       "path": "driver/build.sh",
-      "sha256": "1954b49c9176e02321f8782320788456e094fcc632bd8afcfb3d9eefd5f2aa9a",
+      "sha256": "e48494d50c187046395dd16651b147b2634df96b60794181840f280c7c8d6b5a",
       "mode": "0700",
-      "bytes": 10382
+      "bytes": 10682
     },
     {
       "path": "driver/build_assertion_config.py",
@@ -94,9 +94,9 @@
     },
     {
       "path": "driver/claude_vc4.py",
-      "sha256": "da6d54020a713b40b7add3cf0acb60ba21f5580088a7913e189283d77633a404",
+      "sha256": "32c027e14109a7636b6ebcc5d1bbdac0c09872617186e70e5e68a73eeb95b05c",
       "mode": "0700",
-      "bytes": 15782
+      "bytes": 18352
     },
     {
       "path": "driver/claude_vc5.py",
@@ -657,5 +657,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "065c7f9b8719a6f7df3c1eb7cfae4d64bb75279e06d268a05778c2cc24ae58ef"
+  "manifest_sha256": "0858218a12275eee4e0d6f088ee1fe5bd8bbe44907a5168ec50780fc62155585"
 }
