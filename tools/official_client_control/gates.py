@@ -190,7 +190,7 @@ class WorkflowGates:
         elif kind == "candidate_delivery_package":
             self._validate_candidate_delivery_package(payload, new=new)
         elif kind == "operational_evidence" and payload.get("schema_version") == delivery_execution.OPERATIONAL_V2:
-            delivery_execution.validate_evidence_graph(self.store, payload)
+            delivery_execution.validate_evidence_graph(self.store, payload, current_execution=new)
         elif kind == "private_archive_manifest":
             campaign = self.store.load_campaign(payload["campaign_id"])
             self._same_persona(
@@ -1062,7 +1062,7 @@ class WorkflowGates:
         if new:
             delivery_execution.require_write_version(self.store, campaign, payload, delivery_execution.PLAN_V2)
         if payload.get("schema_version") == delivery_execution.PLAN_V2:
-            delivery_execution.validate_plan(self.store, payload)
+            delivery_execution.validate_plan(self.store, payload, current_execution=new)
         self._same_persona(
             campaign["persona"], payload["persona"], "Campaign/CandidateDeliveryPlan"
         )
@@ -1115,7 +1115,7 @@ class WorkflowGates:
         if new:
             delivery_execution.require_write_version(self.store, campaign, payload, delivery_execution.PACKAGE_V2)
         if payload.get("schema_version") == delivery_execution.PACKAGE_V2:
-            delivery_execution.validate_delivery_package(self.store, payload)
+            delivery_execution.validate_delivery_package(self.store, payload, current_execution=new)
         self._same_persona(
             campaign["persona"], payload["persona"], "Campaign/CandidateDeliveryPackage"
         )
@@ -2394,7 +2394,7 @@ class WorkflowGates:
         if (plan.get("schema_version") == delivery_execution.PLAN_V2) != real_execution:
             raise ControlError("真实交付计划与阶段事实不能混用历史合同")
         if real_execution:
-            delivery_execution.validate_stage_execution(self.store, plan, payload)
+            delivery_execution.validate_stage_execution(self.store, plan, payload, current_execution=new)
         completed = self._fact(payload["validation_completed_ref"], "validation_completed")
         acceptance = self._fact(payload["acceptance_ref"], "acceptance_recorded")
         candidate = self._fact(payload["candidate_ref"], "candidate_frozen")

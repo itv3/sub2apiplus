@@ -459,7 +459,57 @@ def evidence_facts(store: Any, reference: Mapping[str, Any], kind: str) -> dict[
     return payload["entries"][0]["facts"]
 
 
-def validate_evidence_graph(store: Any, payload: Mapping[str, Any]) -> VerifiedSource:
+def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], source: VerifiedSource,
+                                      *, current_execution: bool,
+                                      frozen_configuration_ref: Mapping[str, Any] | None = None) -> None:
+    """来源已经验真，再按本次执行或形成期只读上下文消费资格原件。"""
+    if payload["evidence_type"] not in {"freeze", "stage_execution"}:
+        return
+    from .qualification_bindings import DELIVERY_SCHEMA, validate_delivery_report
+
+    facts = payload["entries"][0]["facts"]
+    if current_execution:
+        from .receipts import _require_effective_tool
+        campaign = store.load_campaign(facts["campaign_id"])
+        if campaign.get("client") != "claude" or campaign.get("schema_version") != "official-client-control-campaign/v2":
+            raise ControlError("当前资格消费必须属于 Claude Campaign v2")
+        # 当前写入／派发权限由有效身份与受管树一致性决定，不能由 source_scope 字符串授予。
+        _require_effective_tool(store, campaign)
+    bindings = [row for row in typed_bindings(facts) if Path(row["path"]).name == "qualification.json"]
+    if current_execution and facts["result"] == "pass" and len(bindings) != 1:
+        raise ControlError("当前通过的交付缺少唯一资格报告原件")
+    for binding in bindings:
+        report = _source_json(source, binding)
+        configuration = None
+        if report.get("schema_version") == DELIVERY_SCHEMA:
+            configuration_binding = _binding(report.get("configuration_binding"), "qualification.configuration_binding")
+            configuration = _source_json(source, configuration_binding)
+            if canonical_sha256(configuration) != source.configuration_sha256:
+                raise ControlError("资格报告配置原件与已验证来源的冻结配置摘要不一致")
+            reference = frozen_configuration_ref
+            if payload["evidence_type"] == "stage_execution":
+                reference = facts["configuration_ref"]
+                if frozen_configuration_ref is not None and reference != frozen_configuration_ref:
+                    raise ControlError("资格报告阶段配置引用不是本次冻结配置")
+            if reference is not None:
+                # 只沿明确引用核一次 configuration 原件，不扫描文件名、摘要或递归重放交付图。
+                original_payload = store.load_object(dict(reference))["payload"]
+                original_facts = evidence_facts(store, reference, "configuration")
+                validate_evidence_graph(store, original_payload, current_execution=current_execution)
+                if (original_facts["campaign_id"], original_facts["delivery_id"]) != (facts["campaign_id"], facts["delivery_id"]):
+                    raise ControlError("资格报告配置引用跨 Campaign 或交付运行")
+                if (original_facts["binding"] != configuration_binding
+                        or original_facts["configuration"] != configuration
+                        or original_facts["configuration_sha256"] != source.configuration_sha256):
+                    raise ControlError("资格报告配置绑定与冻结配置引用的真实原件不一致")
+        validate_delivery_report(report, store, current_execution=current_execution, configuration=configuration,
+                                 trusted_data_root=source.trusted_data_root)
+        if report["candidate"]["qualification"]["campaign_id"] != facts["campaign_id"]:
+            raise ControlError("资格报告与本次交付 Campaign 不一致")
+
+
+def validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_execution: bool = False,
+                            frozen_configuration_ref: Mapping[str, Any] | None = None) -> VerifiedSource:
     validate_operational_evidence(dict(payload))
     facts = payload["entries"][0]["facts"]
     source = _verified_source(store, facts, facts["origin"])
@@ -473,6 +523,8 @@ def validate_evidence_graph(store: Any, payload: Mapping[str, Any]) -> VerifiedS
     elif payload["evidence_type"] == "stable_projection":
         if _source_json(source, facts["binding"]) != facts["projection"]:
             raise ControlError("稳定投影与来源原件不一致")
+    _validate_qualification_originals(store, payload, source, current_execution=current_execution,
+                                      frozen_configuration_ref=frozen_configuration_ref)
     return source
 
 
@@ -491,50 +543,72 @@ def require_write_version(store: Any, campaign: Mapping[str, Any], payload: Mapp
         raise ControlError("当前 Claude 真实交付能力拒绝降级合同；旧交付仅可按形成期只读重放")
 
 
-def _replay_qualification_subgraph(store: Any, qualification: Mapping[str, Any], source: VerifiedSource) -> None:
+def _replay_qualification_subgraph(store: Any, qualification: Mapping[str, Any], source: VerifiedSource | None = None,
+                                  *, trusted_data_root: Path | None = None) -> dict[str, Any]:
     """只重放验收可达子图，不遍历本轮交付图或调用 Store 全重放触发来源 RPC。"""
     from collections import defaultdict
     from .contracts import iter_fact_refs, iter_object_refs, iter_receipt_refs
     from .gates import WorkflowGates
     from .receipts import FormedContext, replay_receipt
+    from .qualification_bindings import QualificationBindingProjection, REPLAY_SCHEMA, validate_qualification_roots
 
+    # source 的原调用语义保留。新增根只供已验证消费路径做只读闭包，不能取报告自报绝对路径。
+    if source is not None and trusted_data_root is not None:
+        if source.trusted_data_root is None or Path(source.trusted_data_root).resolve() != Path(trusted_data_root).resolve():
+            raise ControlError("资格重放的显式数据根与受管来源不一致")
+    data_root = source.trusted_data_root if source is not None else trusted_data_root
+    if source is None and data_root is None:
+        raise ControlError("只读资格闭包缺已验证的材料根")
+    if source is None and (not Path(data_root).is_absolute() or Path(data_root).is_symlink() or not Path(data_root).is_dir()):
+        raise ControlError("只读资格闭包只接受已有、非符号链接的可信绝对材料根")
+    roots = validate_qualification_roots(store, qualification)
     campaign = store.load_campaign(qualification["campaign_id"])
     gates = WorkflowGates(store)
     history = store.list_facts(campaign["campaign_id"])
     context = FormedContext(store, campaign)
-    pending = [store.load_fact(qualification[key]) for key in ("candidate_ref", "validation_ref", "acceptance_ref")]
-    pending.append(store.load_receipt(qualification["build_receipt_ref"]))
+    pending = [(store.load_fact(qualification[key]), None) for key in ("candidate_ref", "validation_ref", "acceptance_ref")]
+    pending.append((store.load_receipt(qualification["build_receipt_ref"]), qualification["build_receipt_ref"]))
     external_root = None
-    if source.trusted_data_root is not None:
+    if data_root is not None:
         from .canonical import resolve_relative
         relative = qualification["external_root_relative"]
         # 此字段定位已由受管来源确认的资格材料根；原根用精确的 "." 表示。
         # 文件绑定仍经原规范相对路径校验，不把根坐标例外扩展给任何原件路径。
-        external_root = (Path(source.trusted_data_root).resolve()
-                         if relative == "." else resolve_relative(source.trusted_data_root, relative))
+        external_root = (Path(data_root).resolve()
+                         if relative == "." else resolve_relative(data_root, relative))
         if not external_root.is_dir():
             raise ControlError("可信回退资格材料根不是现存目录")
     seen: set[tuple[str, str]] = set()
     reachable_facts: dict[str, dict[str, Any]] = {}
+    projection = QualificationBindingProjection(store)
+    objects, receipts, external = [], [], {}
     while pending:
-        document = pending.pop()
-        for binding in typed_bindings(document):
+        document, parent_ref = pending.pop()
+        for binding in projection.bindings(document, parent_ref):
             if external_root is None:
                 _source_bytes(source, binding)
             else:
                 store._verify_external_binding(external_root, binding)
+                projection.verify_external_mode(external_root, binding)
+            if external_root is None and projection.manifest()["artifact_file_requirements"]:
+                raise ControlError("严格 Claude 构建资格缺受管材料根，无法核验制品模式")
+            previous = external.setdefault(binding["path"], dict(binding))
+            if previous != binding:
+                raise ControlError("可信回退外部读集对同一路径声明不同字节")
         for reference in iter_object_refs(document):
             key = ("object", canonical_sha256(reference))
             if key not in seen:
                 seen.add(key)
                 gates.validate_object_graph(reference)
-                pending.append(store.load_object(reference))
+                pending.append((store.load_object(reference), reference))
+                objects.append(reference)
         for reference in iter_receipt_refs(document):
             key = ("receipt", canonical_sha256(reference))
             if key not in seen:
                 seen.add(key)
                 replay_receipt(store, reference)
-                pending.append(store.load_receipt(reference))
+                pending.append((store.load_receipt(reference), reference))
+                receipts.append(reference)
         for reference in iter_fact_refs(document):
             key = ("fact", canonical_sha256(reference))
             if key not in seen:
@@ -543,7 +617,7 @@ def _replay_qualification_subgraph(store: Any, qualification: Mapping[str, Any],
                 if fact["campaign_id"] != campaign["campaign_id"] or fact["fact_kind"] == "candidate_delivery_recorded":
                     raise ControlError("可信回退验收子图跨 Campaign 或反向引用交付执行")
                 reachable_facts[canonical_sha256(reference)] = fact
-                pending.append(fact)
+                pending.append((fact, None))
         if "fact_kind" in document:
             reachable_facts[canonical_sha256(store.fact_ref(document))] = document
     for fact in reachable_facts.values():
@@ -554,6 +628,13 @@ def _replay_qualification_subgraph(store: Any, qualification: Mapping[str, Any],
         coordinates = context.coordinates(fact)
         context.require_causality(store, coordinates, iter_fact_refs(fact["payload"]), "可信回退验收子图")
         gates._validate_fact_semantics(campaign, fact, without_current, context)
+    return {"schema_version": REPLAY_SCHEMA, "campaign_id": qualification["campaign_id"],
+            "candidate_id": qualification["candidate_id"], "qualification_roots": roots,
+            "external_bindings_base": "external_root",
+            "binding_projection": projection.manifest(),
+            "fact_refs": sorted((store.fact_ref(fact) for fact in reachable_facts.values()), key=canonical_sha256),
+            "object_refs": sorted(objects, key=canonical_sha256), "receipt_refs": sorted(receipts, key=canonical_sha256),
+            "external_bindings": [external[key] for key in sorted(external)], "result": "pass"}
 
 
 def _validate_rollback_qualification(store: Any, plan: Mapping[str, Any], configuration: Mapping[str, Any], rollback: Mapping[str, Any], source: VerifiedSource) -> None:
@@ -600,7 +681,7 @@ def _validate_rollback_qualification(store: Any, plan: Mapping[str, Any], config
     _replay_qualification_subgraph(store, qualification, source)
 
 
-def validate_plan(store: Any, plan: Mapping[str, Any]) -> None:
+def validate_plan(store: Any, plan: Mapping[str, Any], *, current_execution: bool = False) -> None:
     campaign = store.load_campaign(plan["campaign_id"])
     if campaign.get("client") != "claude" or campaign.get("schema_version") != "official-client-control-campaign/v2":
         raise ControlError("真实交付仅属于明确 Claude 的 Campaign v2")
@@ -620,7 +701,8 @@ def validate_plan(store: Any, plan: Mapping[str, Any]) -> None:
         facts = evidence_facts(store, plan[key], kind)
         if facts["campaign_id"] != plan["campaign_id"] or facts["delivery_id"] != plan["delivery_id"] or facts["result"] != "pass":
             raise ControlError("交付计划引用了其他运行或未通过的严格证据")
-        validate_evidence_graph(store, payload)
+        validate_evidence_graph(store, payload, current_execution=current_execution,
+                                frozen_configuration_ref=plan["executor_configuration_ref"] if kind == "freeze" else None)
     configuration = evidence_facts(store, plan["executor_configuration_ref"], "configuration")
     projection = evidence_facts(store, plan["stable_environment_projection_ref"], "stable_projection")
     if configuration["configuration_sha256"] != plan["configuration_sha256"] or projection["projection_sha256"] != plan["environment_sha256"]:
@@ -628,7 +710,7 @@ def validate_plan(store: Any, plan: Mapping[str, Any]) -> None:
     rollback = evidence_facts(store, plan["rollback_state_ref"], "rollback_state")
     if rollback["image_digest"] != plan["rollback_image_digest"] or rollback["runtime_profile_sha256"] != plan["rollback_runtime_profile_sha256"]:
         raise ControlError("交付回退状态与计划不一致")
-    source = validate_evidence_graph(store, store.load_object(plan["executor_configuration_ref"])["payload"])
+    source = validate_evidence_graph(store, store.load_object(plan["executor_configuration_ref"])["payload"], current_execution=current_execution)
     _validate_rollback_qualification(store, plan, configuration["configuration"], rollback, source)
 
 
@@ -706,11 +788,11 @@ def validate_restore_evidence(store: Any, plan: Mapping[str, Any], payload: Mapp
     return facts
 
 
-def validate_stage_execution(store: Any, plan: Mapping[str, Any], stage_payload: Mapping[str, Any]) -> dict[str, Any]:
+def validate_stage_execution(store: Any, plan: Mapping[str, Any], stage_payload: Mapping[str, Any], *, current_execution: bool = False) -> dict[str, Any]:
     if plan["schema_version"] != PLAN_V2 or stage_payload.get("schema_version") != FACT_V3:
         raise ControlError("当前交付阶段必须使用 Plan v2 与 StageFact v3")
     facts = evidence_facts(store, stage_payload["execution_evidence_ref"], "stage_execution")
-    source = validate_evidence_graph(store, store.load_object(stage_payload["execution_evidence_ref"])["payload"])
+    source = validate_evidence_graph(store, store.load_object(stage_payload["execution_evidence_ref"])["payload"], current_execution=current_execution)
     stage = stage_payload["stage"]
     for key, expected in (("campaign_id", plan["campaign_id"]), ("delivery_id", plan["delivery_id"]), ("candidate_id", plan["candidate_id"]), ("stage", stage), ("plan_ref", stage_payload["delivery_plan_ref"]), ("configuration_ref", plan["executor_configuration_ref"]), ("stable_projection_ref", plan["stable_environment_projection_ref"]), ("probe_recipe_ref", plan["probe_recipe_ref"]), ("result", stage_payload["result"])):
         if facts[key] != expected:
@@ -763,15 +845,15 @@ def receipt_execution_inputs(package: Mapping[str, Any], plan: Mapping[str, Any]
     return {**{key: plan[key] for key in PLAN_EXTRA_FIELDS if key != "environment_before_ref"}, **{key: package[key] for key in PACKAGE_EXTRA_FIELDS}}
 
 
-def validate_delivery_package(store: Any, package: Mapping[str, Any]) -> None:
+def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current_execution: bool = False) -> None:
     if package.get("schema_version") != PACKAGE_V2:
         raise ControlError("当前真实交付必须使用 Package v2")
     plan = store.load_object(package["delivery_plan_ref"])["payload"]
-    validate_plan(store, plan)
+    validate_plan(store, plan, current_execution=current_execution)
     execution_refs = package["execution_evidence_refs"]
     facts = [store.load_fact(ref) for ref in package["delivery_fact_refs"]]
     for fact in facts:
-        validate_stage_execution(store, plan, fact["payload"])
+        validate_stage_execution(store, plan, fact["payload"], current_execution=current_execution)
         if fact["payload"]["execution_evidence_ref"] not in execution_refs:
             raise ControlError("交付包未归档有效阶段的执行证明")
     index_content = {"campaign_id": package["campaign_id"], "delivery_id": package["delivery_id"], "operation_index_binding": package["operation_index_binding"]}
@@ -789,7 +871,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any]) -> None:
     for reference in execution_refs:
         payload = store.load_object(reference)["payload"]
         core = evidence_facts(store, reference, "stage_execution")
-        validate_evidence_graph(store, payload)
+        validate_evidence_graph(store, payload, current_execution=current_execution)
         if core["operation_id"] in by_operation or core["campaign_id"] != package["campaign_id"] or core["delivery_id"] != package["delivery_id"]:
             raise ControlError("完整交付执行集合有重复操作或跨运行材料")
         by_operation[core["operation_id"]] = (reference, core)
@@ -832,7 +914,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any]) -> None:
         _exact(publication, {"schema_version", "campaign_id", "delivery_id", "operation_id", "seed_binding", "execution_evidence_ref", "payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key", "ledger_action"}, "delivery.publication_intent")
         if publication["schema_version"] != "claude-upgrade-delivery-publication-intent/v1" or publication["campaign_id"] != package["campaign_id"] or publication["delivery_id"] != package["delivery_id"] or publication["operation_id"] != operation["operation_id"] or publication["execution_evidence_ref"] != reference or publication["payload"].get("execution_evidence_ref") != reference or publication["ledger_action"] != "catch_up_delivery_events":
             raise ControlError("交付发布意图与真实物理操作不一致")
-        validate_stage_execution(store, plan, publication["payload"])
+        validate_stage_execution(store, plan, publication["payload"], current_execution=current_execution)
         published = store.find_fact_by_idempotency_key(package["campaign_id"], publication["idempotency_key"])
         if published is None or published["fact_kind"] != "candidate_delivery_recorded" or any(published[key] != publication[key] for key in ("payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key")):
             raise ControlError("完整交付包存在未发布或错误 producer 的 Store 后处理意图")
@@ -844,7 +926,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any]) -> None:
         raise ControlError("交付包与 guard 全部操作索引不闭合，不能删除失败或未发布操作")
     for reference in execution_refs + package["restoration_evidence_refs"]:
         payload = store.load_object(reference)["payload"]
-        validate_evidence_graph(store, payload)
+        validate_evidence_graph(store, payload, current_execution=current_execution)
         required_material.append(payload)
     archive = store.load_object(package["private_archive_manifest_ref"])["payload"]
     by_path = {row["path"]: row for row in archive["entries"]}
@@ -858,7 +940,7 @@ def validate_delivery_receipt(store: Any, receipt: Mapping[str, Any], *, current
     if receipt.get("schema_version") != RECEIPT_V4:
         raise ControlError("当前 Claude 交付完成权要求 Receipt v4，历史收据不能冒充")
     package = store.load_object(receipt["candidate_delivery_package_ref"])["payload"]
-    validate_delivery_package(store, package)
+    validate_delivery_package(store, package, current_execution=current)
     plan = store.load_object(package["delivery_plan_ref"])["payload"]
     expected = receipt_execution_inputs(package, plan)
     if any(receipt.get(key) != value for key, value in expected.items()):

@@ -690,7 +690,7 @@ class FormalCandidateRunTests(CandidateFixture):
         # selector 前态快照是 Store 的 runtime_catalog_snapshot 对象 payload（按 Store 合同校验）；观察原文另存文件。
         snapshot = contracts._validate_runtime_catalog_snapshot(facts["selector_before_snapshot"])
         self.assertEqual(snapshot["catalog_digest"], snapshot["source_ref"]["sha256"])
-        self.assertEqual(snapshot["source_ref"]["path"], "inputs/active-release-catalog.json")
+        self.assertEqual(snapshot["source_ref"]["path"], f"evidence/campaigns/{campaign.name}/inputs/active-release-catalog.json")
         self.assertEqual((snapshot["production_active_ref"], snapshot["production_rollback_ref"]), (None, None))
         self.assertEqual(attempt["next_gate"], "capture-candidate seal（B4-02）")
         for job in attempt["results"]:

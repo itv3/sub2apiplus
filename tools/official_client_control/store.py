@@ -669,7 +669,8 @@ class ControlStore:
         # v4 直接发布与幂等复用也重验来源和全操作闭集；不只接受自摘要正确的收据。
         from . import delivery_execution
         if kind == "candidate_delivery" and receipt.get("schema_version") == delivery_execution.RECEIPT_V4:
-            delivery_execution.validate_delivery_receipt(self, receipt)
+            # 发布与幂等复用属于当前执行，不能用旧资格报告授权本轮写入。
+            delivery_execution.validate_delivery_receipt(self, receipt, current=True)
         content = canonical_json_bytes(receipt)
         digest = sha256_bytes(content)
         reference = {"receipt_kind": kind, "sha256": digest}

@@ -979,7 +979,7 @@ def _release_summary(catalog: Mapping[str, Any], selector: Any) -> dict[str, Any
 def observe_selectors(campaign_dir: Path, manifest: Mapping[str, Any], *, required: bool) -> dict[str, Any] | None:
     """生产 selector 的只读快照：读 Campaign 冻结的 Active Release 目录（候选验证不连接、不修改生产环境）。
 
-    记目录文件绑定（Campaign 内相对路径、摘要与字节数，可直接作 runtime_catalog_snapshot 的 ``source_ref``）、两个生产
+    记目录文件绑定（Campaign 内相对路径、摘要与字节数；进入 Store 时显式转换为数据根坐标）、两个生产
     选择器原样与它们指向的 Release 摘要；``production_rollback`` 不是 Release（例如运维部署）时只记选择器、Release 为 null。
     """
 
@@ -1020,17 +1020,22 @@ def observe_selectors(campaign_dir: Path, manifest: Mapping[str, Any], *, requir
 RUNTIME_CATALOG_SNAPSHOT_SCHEMA = "official-client-runtime-catalog-snapshot/v1"
 
 
-def runtime_catalog_snapshot(observation: Mapping[str, Any], persona: Mapping[str, Any]) -> dict[str, Any]:
+def runtime_catalog_snapshot(observation: Mapping[str, Any], persona: Mapping[str, Any], *, campaign_dir: Path) -> dict[str, Any]:
     """由 selector 只读观察组装 Store 的 ``runtime_catalog_snapshot`` 对象 payload（候选 attempt 的
     ``candidate_gateway.selector_before_snapshot``；VC-5 收口的后态快照应调用同一函数，保证前后判据同源）。
 
-    * ``catalog_digest``：Campaign 冻结的 Active Release 目录文件的 SHA-256；``source_ref`` 是它的 Campaign 内相对绑定；
+    * ``catalog_digest``：Campaign 冻结的 Active Release 目录文件的 SHA-256；``source_ref`` 是显式转换后的数据根相对绑定；
     * ``production_active_ref``／``production_rollback_ref``：Store 只登记候选侧 ReleaseArtifact，生产 Active（运行中的
       Release）与 Rollback（运维部署）都不在 Store 里，一律为 null——候选验证不连接、不修改、不验证生产环境，前后态由
       同一份冻结目录给出，``catalog_digest`` 与两个引用前后必然相等。
     """
 
     source = observation["source"]
+    data_root = capture._host_data_root(campaign_dir)
+    path = claude_upgrade._campaign_file(campaign_dir, str(source["path"]))
+    claude_upgrade._reject_symlink_components(path, data_root, "selector 冻结原件")
+    if not path.is_file() or path.is_symlink() or path.stat().st_size != source["bytes"] or file_sha256(path) != source["sha256"]:
+        raise ConfigurationError("selector 冻结原件在转换 Store 坐标时缺失或漂移。")
     return {
         "schema_version": RUNTIME_CATALOG_SNAPSHOT_SCHEMA,
         "persona": dict(persona),
@@ -1038,7 +1043,7 @@ def runtime_catalog_snapshot(observation: Mapping[str, Any], persona: Mapping[st
         "production_active_ref": None,
         "production_rollback_ref": None,
         "observed_at_utc": str(observation["observed_at_utc"]),
-        "source_ref": {"path": str(source["path"]), "sha256": str(source["sha256"]), "bytes": int(source["bytes"])},
+        "source_ref": {"path": path.relative_to(data_root).as_posix(), "sha256": str(source["sha256"]), "bytes": int(source["bytes"])},
     }
 
 
@@ -1499,7 +1504,7 @@ class CandidateRunHooks:
         except BaseException as caught:
             error = caught
         selector = (
-            runtime_catalog_snapshot(self.selector_observation, admission.persona)
+            runtime_catalog_snapshot(self.selector_observation, admission.persona, campaign_dir=self.campaign_dir)
             if self.selector_path is not None and self.selector_observation is not None and admission.persona is not None
             else None
         )

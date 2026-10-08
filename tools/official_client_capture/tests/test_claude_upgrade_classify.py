@@ -213,6 +213,22 @@ class _ClassifyCase(unittest.TestCase):
             campaign_purpose="validation_only",
             absolute_deadline_utc="2026-12-31T00:00:00Z",
         )
+        # Store 声明的外部材料必须在声明数据根交付；仅在新世界建立时写，不补写旧失败世界。
+        for source in sorted(fixture.external_root.rglob("*")):
+            if source.is_symlink():
+                raise AssertionError("合成外部材料不得包含符号链接")
+            if source.is_file():
+                destination = self.data / source.relative_to(fixture.external_root)
+                raw = source.read_bytes()
+                claude_upgrade._reject_symlink_components(destination, self.data, "合成外部材料")
+                if destination.exists():
+                    if not destination.is_file() or destination.read_bytes() != raw:
+                        raise AssertionError("合成外部材料已存在且不同，禁止覆盖")
+                else:
+                    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    with destination.open("xb") as stream:
+                        stream.write(raw)
+                    destination.chmod(0o600)
         derived = derive_identity_conditions(fixture.campaign_document)[0]
         campaign = self.data / "evidence" / "campaigns" / campaign_id
         frozen = {

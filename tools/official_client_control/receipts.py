@@ -1787,7 +1787,8 @@ def build_candidate_delivery_receipt(
 
     package = store.load_object(candidate_delivery_package_ref)["payload"]
     if package.get("schema_version") == delivery_execution.PACKAGE_V2:
-        delivery_execution.validate_delivery_package(store, package)
+        # 只有新签发使用当前资格合同；带形成期坐标的重建沿用原只读合同。
+        delivery_execution.validate_delivery_package(store, package, current_execution=formed_under is None)
     return _build_candidate_delivery_receipt_unchecked(store, campaign_id, candidate_delivery_package_ref, formed_under=formed_under, schema=schema)
 
 

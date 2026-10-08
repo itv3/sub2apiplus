@@ -805,7 +805,7 @@ def _accept(
     claude_upgrade_seal._write_once_or_reuse(audit_path, audit)
     store_campaign = current["store_campaign"]
     observation = claude_upgrade_candidate_capture.observe_selectors(campaign_dir, manifest, required=True)
-    snapshot = claude_upgrade_candidate_capture.runtime_catalog_snapshot(observation, store_campaign["persona"])
+    snapshot = claude_upgrade_candidate_capture.runtime_catalog_snapshot(observation, store_campaign["persona"], campaign_dir=campaign_dir)
     snapshot = claude_upgrade_seal._write_once_or_reuse(stage_dir / SELECTOR_AFTER_FILENAME, snapshot, ignore=("observed_at_utc",))
     inventory_payload = {
         "schema_version": OPERATIONAL_EVIDENCE_SCHEMA,

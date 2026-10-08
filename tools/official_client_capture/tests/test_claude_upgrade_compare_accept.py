@@ -116,7 +116,7 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
         frozen = [fact for fact in store.list_facts(str(manifest["campaign_id"])) if fact["fact_kind"] == "candidate_frozen"][-1]
         architecture = str(frozen["payload"]["target_architecture"])
         snapshot = candidate_capture.runtime_catalog_snapshot(
-            candidate_capture.observe_selectors(campaign, manifest, required=True), store_campaign["persona"]
+            candidate_capture.observe_selectors(campaign, manifest, required=True), store_campaign["persona"], campaign_dir=campaign
         )
         request = chain.seal_request(
             campaign=campaign, data_root=data_root, candidate_id=CANDIDATE, attempt_id=ATTEMPT_ID,

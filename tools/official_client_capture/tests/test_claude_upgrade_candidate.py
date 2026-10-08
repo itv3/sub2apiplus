@@ -460,8 +460,12 @@ class RecordCandidateBuildTests(_CandidateCase):
         self.assertEqual(store_receipt["image"]["image_digest"], "sha256:" + "7" * 64)
         self.assertEqual(
             [item["binding"]["path"] for item in store_receipt["artifact_inventory"]["entries"]],
-            ["app/container-healthcheck.sh", "app/docker-entrypoint.sh", "app/sub2api"],
+            [f"evidence/campaigns/{CAMPAIGN_ID}/candidates/{CANDIDATE}/build-evidence/artifacts/{name}"
+             for name in ("container-healthcheck.sh", "docker-entrypoint.sh", "sub2api")],
         )
+        for entry in store_receipt["artifact_inventory"]["entries"]:
+            store._verify_external_binding(self.data, entry["binding"])
+            self.assertEqual((self.data / entry["binding"]["path"]).stat().st_mode & 0o777, 0o755)
         frozen = next(fact for fact in store.list_facts(CAMPAIGN_ID) if fact["fact_kind"] == "candidate_frozen")
         self.assertEqual(frozen["payload"]["candidate_build_receipt_ref"], receipt["store"]["candidate_build_receipt_ref"])
         self.assertEqual(store.fact_ref(frozen), receipt["store"]["candidate_frozen_ref"])

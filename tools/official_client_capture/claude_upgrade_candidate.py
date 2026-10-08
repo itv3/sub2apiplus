@@ -55,7 +55,7 @@
   树内、按 VC-3 门禁需求校验；实现测试收据（``implementation_tests``）重放通过，绑定本 Campaign、本候选、源码树、架构与
   affected 闭集；构建实物（build inventory、前端来源、镜像检查、能力探针）经 docker／go 复算（执行器可注入）；
   revision seal 预检（r≥2 与被取代候选全同即拒绝）。
-* 写入顺序：``candidates/<候选>/build-evidence/`` 四件机器收据 → Store CandidateBuildReceipt（内容寻址，同输入复用）→
+* 写入顺序：``candidates/<候选>/build-evidence/`` 三件制品副本与四件机器收据 → Store CandidateBuildReceipt（内容寻址，同输入复用）→
   Store ``candidate_frozen``（``official-client-validation-candidate/v2``，幂等键）→ ``control/vc/revisions/r<N>/seal.json``
   （r≥2 另写 ``candidates/<旧候选>/superseded-by.json``）→ ``candidates/<候选>/build-receipt.json``（客户端中立合同
   ``official-client-upgrade-candidate-build-receipt/v1``）→ VC-4 checkpoint（r1 在 ``control/vc/vc-4-checkpoint.json``，
@@ -813,23 +813,78 @@ def _write_or_verify_machine_receipt(path: Path, payload: Mapping[str, Any], cam
     }
 
 
-def _store_artifact_inventory(image_inspection: Mapping[str, Any], source_tree_sha256: str) -> dict[str, Any]:
-    """Store CandidateBuildReceipt 的制品清单：镜像内逐文件路径（去掉开头的 /）、摘要、大小，绑定同一源码树。"""
+def _verify_artifact_copy(path: Path, raw: bytes, campaign_dir: Path) -> None:
+    """已冻结制品只能逐字节复用，不能靠改权限或覆盖文件掩盖漂移。"""
+    _orchestrator()._reject_symlink_components(path, campaign_dir, "候选制品副本")
+    if (not path.is_file() or path.is_symlink() or path.stat().st_uid != os.geteuid()
+            or stat.S_IMODE(path.stat().st_mode) != 0o755 or path.read_bytes() != raw):
+        raise ConfigurationError(f"候选制品副本已存在且字节、所有者或 0755 权限漂移：{path}")
 
-    entries = [
-        {
-            "role": PurePosixPath(path).name,
-            "binding": {"path": path.lstrip("/"), "sha256": row["sha256"], "bytes": row["size"]},
-            "source_sha256": source_tree_sha256,
-        }
-        for path, row in sorted(image_inspection["files"].items(), key=lambda pair: pair[0].lstrip("/"))
-    ]
-    return {
+
+def _write_artifact_copy(path: Path, raw: bytes, campaign_dir: Path) -> None:
+    """临时文件 fsync 后以硬链接不可覆盖发布；被杀后同一命令可继续。"""
+    _orchestrator()._reject_symlink_components(path, campaign_dir, "候选制品副本")
+    if path.exists() or path.is_symlink():
+        _verify_artifact_copy(path, raw, campaign_dir)
+        return
+    ensure_private_directory(path.parent, campaign_dir)
+    descriptor, name = tempfile.mkstemp(prefix=".artifact-", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            os.fchmod(stream.fileno(), 0o755)
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            _verify_artifact_copy(path, raw, campaign_dir)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+    _verify_artifact_copy(path, raw, campaign_dir)
+
+
+def _store_artifact_inventory(image_inspection: Mapping[str, Any], source_tree_sha256: str, *,
+                              campaign_dir: Path, candidate_id: str, binary_path: Path,
+                              docker_context: Path) -> tuple[dict[str, Any], list[tuple[Path, bytes]]]:
+    """纯计算真实制品副本计划；Store 绑定数据根坐标，镜像内坐标保留在镜像检查收据。"""
+    data_root = _capture()._host_data_root(campaign_dir)
+    sources = {"/app/sub2api": binary_path,
+               "/app/docker-entrypoint.sh": docker_context / "deploy/docker-entrypoint.sh",
+               "/app/container-healthcheck.sh": docker_context / "deploy/container-healthcheck.sh"}
+    if set(image_inspection["files"]) != set(sources):
+        raise ConfigurationError("候选制品副本必须覆盖镜像检查的三项闭集。")
+    entries, copies = [], []
+    for image_path, source in sorted(sources.items()):
+        root = docker_context if image_path != "/app/sub2api" else source.parent
+        _orchestrator()._reject_symlink_components(source, root, "候选制品来源")
+        if source.is_symlink() or not source.is_file() or stat.S_IMODE(source.stat().st_mode) != 0o755:
+            raise ConfigurationError("候选制品来源缺失或不是普通 0755 文件。")
+        raw = source.read_bytes()
+        row = image_inspection["files"][image_path]
+        if row["mode"] != "0755" or len(raw) != row["size"] or hashlib.sha256(raw).hexdigest() != row["sha256"]:
+            raise ConfigurationError("候选制品副本来源与已验证镜像检查的字节或权限不一致。")
+        destination = campaign_dir / "candidates" / candidate_id / BUILD_EVIDENCE_DIRNAME / "artifacts" / PurePosixPath(image_path).name
+        _orchestrator()._reject_symlink_components(destination, campaign_dir, "候选制品副本")
+        if destination.exists() or destination.is_symlink():
+            _verify_artifact_copy(destination, raw, campaign_dir)
+        entries.append({"role": PurePosixPath(image_path).name,
+                        "binding": {"path": destination.relative_to(data_root).as_posix(), "sha256": row["sha256"], "bytes": len(raw)},
+                        "source_sha256": source_tree_sha256})
+        copies.append((destination, raw))
+    inventory = {
         "entries": entries,
         "file_count": len(entries),
         "total_bytes": sum(item["binding"]["bytes"] for item in entries),
         "inventory_sha256": canonical_sha256(entries),
     }
+    return inventory, copies
 
 
 def _store_finalize(session: Any, store: Any, campaign_id: str, build_input: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -1010,6 +1065,10 @@ def _record_build(
         "image_inspection": image_receipt,
         "capability_probe": capability_receipt,
     }
+    artifact_inventory, artifact_copies = _store_artifact_inventory(
+        image_receipt, source_tree, campaign_dir=campaign_dir, candidate_id=candidate_id,
+        binary_path=binary_path, docker_context=docker_context,
+    )
 
     # Store 输入（纯计算）：CandidateBuildReceipt 的输入与按内容寻址预先算出的引用、candidate_frozen 的 payload。
     # 时刻取实现测试收据的签发时刻，重跑逐字相同。
@@ -1054,7 +1113,7 @@ def _record_build(
             "parameters": parameters_copy,
             "parameters_sha256": canonical_sha256(parameters_copy),
         },
-        "artifact_inventory": _store_artifact_inventory(image_receipt, source_tree),
+        "artifact_inventory": artifact_inventory,
         "image": {"reference": runtime_image, "image_digest": manifest_digest, "image_id": image_id, "manifest_digest": manifest_digest},
         "completed_at_utc": completed_at,
     }
@@ -1105,6 +1164,7 @@ def _record_build(
     revision_dir = orchestrator._candidate_revision_dir(campaign_dir, entry.candidate_revision)
     if preview:
         writes = [
+            *(path.relative_to(campaign_dir).as_posix() for path, _raw in artifact_copies),
             *(f"candidates/{candidate_id}/{BUILD_EVIDENCE_DIRNAME}/{filename}" for _name, filename in MACHINE_RECEIPTS),
             f"candidates/{candidate_id}/{CANDIDATE_BUILD_RECEIPT_FILENAME}",
             (revision_dir / claude_upgrade_revision.REVISION_SEAL_FILENAME).relative_to(campaign_dir).as_posix(),
@@ -1137,7 +1197,9 @@ def _record_build(
             "live_request_count": 0,
         }
 
-    # 写入：构建机器收据 → Store CandidateBuildReceipt 与 candidate_frozen → revision seal → 候选构建收据 → VC-4 checkpoint。
+    # 写入：真实制品副本与构建机器收据 → Store CandidateBuildReceipt 与 candidate_frozen → revision seal → 候选构建收据 → VC-4 checkpoint。
+    for path, raw in artifact_copies:
+        _write_artifact_copy(path, raw, campaign_dir)
     ensure_private_directory(evidence_root, campaign_dir)
     machine = {
         name: _write_or_verify_machine_receipt(evidence_root / filename, machine_payloads[name], campaign_dir)

@@ -387,6 +387,10 @@ class _QualificationStoreView:
     def fact_ref(self, fact: dict[str, Any]) -> dict[str, Any]:
         return self._store.fact_ref(fact)
 
+    def _verify_external_binding(self, external_root: Path, binding: dict[str, Any]) -> None:
+        """每次委托原 Store 实读外部原件，不把事实索引权限扩展到外部缓存。"""
+        self._store._verify_external_binding(external_root, binding)
+
 
 def replay_qualification_graph(store: Any, qualification: dict[str, Any], external_root: Path, data_root: Path) -> dict[str, Any]:
     """形成期重放验收子图，不从guard反向重放本轮交付来源RPC。
@@ -397,26 +401,37 @@ def replay_qualification_graph(store: Any, qualification: dict[str, Any], extern
     from tools.official_client_control.contracts import iter_fact_refs, iter_object_refs, iter_receipt_refs
     from tools.official_client_control.gates import WorkflowGates
     from tools.official_client_control.receipts import replay_receipt
+    from tools.official_client_control.qualification_bindings import QualificationBindingProjection, REPLAY_SCHEMA, validate_qualification_roots
     original_store = store
     store = _QualificationStoreView(store)
+    qualification_root_refs = validate_qualification_roots(store, qualification)
     campaign = store.load_campaign(qualification["campaign_id"])
     facts = store.list_facts(qualification["campaign_id"])
     gates = WorkflowGates(store)
     gates.replay_campaign(campaign, facts)
-    roots = [store.load_fact(qualification[name]) for name in ("candidate_ref", "validation_ref", "acceptance_ref")]
-    roots.append(store.load_receipt(qualification["build_receipt_ref"]))
+    roots = [(store.load_fact(qualification[name]), None) for name in ("candidate_ref", "validation_ref", "acceptance_ref")]
+    roots.append((store.load_receipt(qualification["build_receipt_ref"]), qualification["build_receipt_ref"]))
     seen: set[tuple[str, str]] = set()
     objects, receipts, references, external = [], [], [], {}
-    pending = [campaign, *facts, *roots]
+    projection = QualificationBindingProjection(store)
+    pending = [(campaign, None), *((fact, None) for fact in facts), *roots]
     while pending:
-        document = pending.pop()
-        for item in guard.all_bindings(document):
+        document, parent_ref = pending.pop()
+        # v2 报告必须记录本身作为根或历史上下文读取的事实，不能只列字段里的反向引用。
+        if "fact_kind" in document:
+            reference = store.fact_ref(document)
+            key = ("fact", reference["sha256"])
+            if key not in seen:
+                seen.add(key)
+                references.append(reference)
+        for item in projection.bindings(document, parent_ref):
             path = guard.managed_path(external_root, item["path"])
             rebased = guard.binding(data_root, path)
             previous = external.get(item["path"])
             if previous is not None and previous != rebased:
                 raise guard.GuardError("验收资格图的同一路径存在不同外部字节")
             original_store._verify_external_binding(external_root, item)
+            projection.verify_external_mode(external_root, item)
             external[item["path"]] = rebased
         for reference in iter_object_refs(document):
             key = ("object", reference["sha256"])
@@ -424,7 +439,7 @@ def replay_qualification_graph(store: Any, qualification: dict[str, Any], extern
                 continue
             seen.add(key)
             gates.validate_object_graph(reference)
-            pending.append(store.load_object(reference))
+            pending.append((store.load_object(reference), reference))
             objects.append(reference)
         for reference in iter_receipt_refs(document):
             key = ("receipt", reference["sha256"])
@@ -432,7 +447,7 @@ def replay_qualification_graph(store: Any, qualification: dict[str, Any], extern
                 continue
             seen.add(key)
             replay_receipt(store, reference)
-            pending.append(store.load_receipt(reference))
+            pending.append((store.load_receipt(reference), reference))
             receipts.append(reference)
         for reference in iter_fact_refs(document):
             key = ("fact", reference["sha256"])
@@ -442,10 +457,10 @@ def replay_qualification_graph(store: Any, qualification: dict[str, Any], extern
             fact = store.load_fact(reference)
             if fact["dimension"] == "deployment":
                 raise guard.GuardError("回退验收资格不得依赖本轮物理交付或生产激活事实")
-            pending.append(fact)
+            pending.append((fact, None))
             references.append(reference)
     store.verify_fact_snapshots()
-    return {"schema_version": "claude-upgrade-candidate-qualification-replay/v1", "campaign_id": qualification["campaign_id"], "candidate_id": qualification["candidate_id"], "fact_refs": sorted(references, key=canonical_sha256), "object_refs": sorted(objects, key=canonical_sha256), "receipt_refs": sorted(receipts, key=canonical_sha256), "external_bindings": [external[key] for key in sorted(external)], "result": "pass"}
+    return {"schema_version": REPLAY_SCHEMA, "campaign_id": qualification["campaign_id"], "candidate_id": qualification["candidate_id"], "qualification_roots": qualification_root_refs, "external_bindings_base": "data_root", "binding_projection": projection.manifest(), "fact_refs": sorted(references, key=canonical_sha256), "object_refs": sorted(objects, key=canonical_sha256), "receipt_refs": sorted(receipts, key=canonical_sha256), "external_bindings": [external[key] for key in sorted(external)], "result": "pass"}
 
 
 def guard_identity(configuration: dict[str, Any], context: dict[str, Any], *, formal: bool) -> dict[str, Any]:
@@ -585,6 +600,7 @@ class DockerComposeRuntime:
         """只读重放同Store的两份资格图，禁止自报验收、旧Profile占位。"""
         from tools.official_client_control.store import ControlStore
         from tools.official_client_control.receipts import replay_receipt
+        from tools.official_client_control.qualification_bindings import DELIVERY_SCHEMA, validate_delivery_report
         first = self.configuration["candidate"]["qualification"]
         store = ControlStore.open_read_only(guard.managed_path(self.root, first["store_relative"]))
         reports = []
@@ -630,7 +646,8 @@ class DockerComposeRuntime:
         if candidate_compose != rollback_compose:
             raise guard.GuardError("两份Compose仅可改变唯一应用镜像／阶段标签")
         self._compose_cache = candidate_compose
-        report = {"schema_version": "claude-upgrade-delivery-qualification/v1", "candidate": self.configuration["candidate"], "rollback": self.configuration["rollback"], "qualification_replays": reports, "candidate_compose": raw_candidate, "rollback_compose": raw_rollback, "normalized_compose": candidate_compose, "allowed_changes": ["application_image", "application_stage_label", "active_runtime_profile"], "result": "pass"}
+        report = {"schema_version": DELIVERY_SCHEMA, "configuration_binding": self.context["configuration_ref"], "candidate": self.configuration["candidate"], "rollback": self.configuration["rollback"], "qualification_replays": reports, "candidate_compose": raw_candidate, "rollback_compose": raw_rollback, "normalized_compose": candidate_compose, "allowed_changes": ["application_image", "application_stage_label", "active_runtime_profile"], "result": "pass"}
+        validate_delivery_report(report, store, current_execution=True, configuration=self.configuration, trusted_data_root=self.root)
         self._qualification_report = report
         return report
 

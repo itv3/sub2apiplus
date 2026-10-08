@@ -26,6 +26,7 @@ from tools.official_client_control import contracts, delivery_execution as execu
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
 from tools.official_client_control.errors import ControlError
 from tools.official_client_control.gates import WorkflowGates
+from tools.official_client_control import qualification_bindings
 from tools.official_client_control.store import ControlStore
 from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
 
@@ -68,12 +69,40 @@ class DeliveryCampaign(SyntheticCampaign):
 class QualifiedFileRuntime(FileRuntime):
     """文件现场仍走真实验收子图；不把假引用当成通过证据。"""
 
-    def check_qualification(self) -> None:
+    def check_qualification(self) -> dict:
         super().check_qualification()
+        reports = []
         for name in ("candidate", "rollback"):
             qualification = self.configuration[name]["qualification"]
             store = ControlStore.open_read_only(self.root / qualification["store_relative"])
-            executor.replay_qualification_graph(store, qualification, self.root / qualification["external_root_relative"], self.root)
+            reports.append(executor.replay_qualification_graph(store, qualification, self.root / qualification["external_root_relative"], self.root))
+        # 文件现场把已绑定的 base/override JSON 当作现场配置；仍由真实 Store 推出两份资格，
+        # 不自报通过，也不启动生产 Docker。落盘原件与生产执行器使用同一后继报告合同。
+        base = guard.read_json(guard.check_binding(self.root, self.configuration["paths"]["compose_binding"]))
+        compose = {name: {**base, **guard.read_json(guard.check_binding(self.root, self.configuration[name]["override_binding"]))}
+                   for name in ("candidate", "rollback")}
+        normalized = {name: {key: value for key, value in document.items() if key != "image"}
+                      for name, document in compose.items()}
+        if normalized["candidate"] != normalized["rollback"]:
+            raise guard.GuardError("文件现场两份冻结配置除了应用镜像以外发生漂移")
+        report = {"schema_version": qualification_bindings.DELIVERY_SCHEMA,
+                  "configuration_binding": self.context["configuration_ref"],
+                  "candidate": self.configuration["candidate"], "rollback": self.configuration["rollback"],
+                  "qualification_replays": reports, "candidate_compose": compose["candidate"],
+                  "rollback_compose": compose["rollback"], "normalized_compose": normalized["candidate"],
+                  "allowed_changes": ["application_image", "application_stage_label", "active_runtime_profile"], "result": "pass"}
+        qualification_bindings.validate_delivery_report(report, store, current_execution=True,
+            configuration=self.configuration, trusted_data_root=self.root)
+        self._qualification_report = report
+        return report
+
+    def execute(self, stage: str, target: dict, environment: dict, directory: Path, checkpoint: object) -> dict:
+        report = self.check_qualification()
+        path = directory / "qualification.json"
+        guard.write_json_once(path, report)
+        observed = super().execute(stage, target, environment, directory, checkpoint)
+        observed["during_bindings"].append(guard.binding(self.root, path))
+        return observed
 
     def observation(self, stage: str, target: dict, directory: Path) -> dict:
         value = super().observation(stage, target, directory)
@@ -88,6 +117,9 @@ class QualifiedFileRuntime(FileRuntime):
 
     def freeze(self, request: dict, directory: Path) -> dict:
         value = super().freeze(request, directory)
+        qualification_path = directory / "qualification.json"
+        guard.write_json_once(qualification_path, self._qualification_report)
+        value["cores"]["freeze"]["before_bindings"].append(guard.binding(self.root, qualification_path))
         projection = fixture_projection()
         projection_path = directory / "qualified-projection.json"
         guard.write_json_once(projection_path, projection)
