@@ -20,6 +20,50 @@ from tools.official_client_capture.tests import claude_recorded_replay as replay
 from tools.official_client_capture.tests import test_claude_recorded_replay as snapshot_tests
 
 
+class RecordedBinaryObservationTests(unittest.TestCase):
+    """来源标记与正式二进制事实分开；直接交真实 Job 重放器做正反例，不登记任何链通过。"""
+
+    def inputs(self):
+        from tools.official_client_capture.tests import test_claude_upgrade_job_rehearsal as rehearsal_fixture
+
+        manifest = {"target_version": source.VERSION, "target_sha256": "a" * 64,
+                    "configuration": {"claude_bin": "/opt/claude-2.1.226/claude",
+                                      "synthetic_capture_container": "capture-cli-synthetic",
+                                      "runtime_image": "capture-cli@sha256:" + "b" * 64}}
+        state = {"fixture_only": True, "freeze": {"origin_platform": "linux/amd64",
+                  "files": {"freeze.json": {"path": "/fixture-only/freeze.json"}}}}
+        observer = rehearsal_fixture.ClaudeRehearsalFixture(methodName="runTest")
+        observer.binary_calls = 0
+        return state, manifest, observer
+
+    def test_source_metadata_does_not_pollute_closed_job_binary_contract(self) -> None:
+        from tools.official_client_capture import claude_upgrade_job_rehearsal as contract
+        from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as receipt
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        state, manifest, observer = self.inputs()
+        # 此用例只提供外部 freeze 观察源；binary 形状与时效仍由正式 job_contract_replay 判断。
+        with mock.patch.object(source, "verify_origin_freeze") as verify:
+            binary = driver._binary_observation(state, manifest, observer)
+        verify.assert_called_once_with(state, Path("/fixture-only/freeze.json"),
+                                       expected_version=source.VERSION, expected_binary_sha256=manifest["target_sha256"])
+        self.assertEqual(contract.job_contract_replay(manifest, {"binary_verification": binary}),
+                         {"binary_facts": contract.binary_facts(manifest)})
+        self.assertEqual(observer.binary_calls, 1)
+        for fields in ({"fixture_only": True, "origin_platform": "linux/amd64"}, {"target_sha256": "c" * 64}):
+            with self.subTest(fields=fields), self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "目标客户端或运行镜像核验事实非法"):
+                contract.job_contract_replay(manifest, {"binary_verification": {**binary, **fields}})
+
+    def test_failed_freeze_source_prevents_binary_observation(self) -> None:
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        state, manifest, observer = self.inputs()
+        with mock.patch.object(source, "verify_origin_freeze", side_effect=replay.ReplayError("来源身份漂移")), \
+                self.assertRaisesRegex(replay.ReplayError, "来源身份漂移"):
+            driver._binary_observation(state, manifest, observer)
+        self.assertEqual(observer.binary_calls, 0)
+
+
 class RecordedSourceContractTests(unittest.TestCase):
     """证明 origin/runtime 双绑定和精确复制白名单，合成材料不计为真实链通过。"""
 

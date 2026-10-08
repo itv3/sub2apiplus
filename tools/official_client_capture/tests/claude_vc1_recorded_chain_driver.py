@@ -126,6 +126,15 @@ def _environment_facts(state: dict[str, Any], **options: Any) -> dict[str, Any]:
             return arm.collect_facts(**options)
 
 
+def _binary_observation(state: dict[str, Any], manifest: dict[str, Any], observer: Any, **options: Any) -> dict[str, Any]:
+    """先严格重验旧 freeze，再输出正式二进制事实闭集；夹具来源标记只留在独立 source state 与报告。"""
+
+    source.verify_origin_freeze(state, Path(state["freeze"]["files"]["freeze.json"]["path"]),
+                                expected_version=manifest["target_version"], expected_binary_sha256=manifest["target_sha256"])
+    # Job 演练的 binary_verification/v2 是封闭合同，不能向其追加 fixture_only 或 origin_platform。
+    return observer.fake_binaries(manifest, **options)
+
+
 @contextlib.contextmanager
 def installed(state_path: Path, digest: str):
     """所有替身集中登记。控制判定函数不在替换清单内，离开作用域后恢复原函数。"""
@@ -155,12 +164,7 @@ def installed(state_path: Path, digest: str):
         return source.bound(item, root=data) if item else original_repo_file(relative, label)
 
     def binary(manifest: dict[str, Any], **options: Any) -> dict[str, Any]:
-        source.verify_origin_freeze(state, Path(state["freeze"]["files"]["freeze.json"]["path"]),
-                                    expected_version=manifest["target_version"], expected_binary_sha256=manifest["target_sha256"])
-        result = observer.fake_binaries(manifest, **options)
-        result["fixture_only"] = True
-        result["origin_platform"] = "linux/amd64"
-        return result
+        return _binary_observation(state, manifest, observer, **options)
 
     def read_deploy(path: Path) -> dict[str, Any]:
         if Path(path) == deploy_dir:
