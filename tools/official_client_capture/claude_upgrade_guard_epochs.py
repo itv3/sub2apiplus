@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+import re
 from typing import Any, Callable, Mapping
 
 from tools.official_client_control.canonical import (
@@ -42,6 +43,21 @@ EPOCH_FIELDS = frozenset({
     "schema_version", "epoch_sequence", "configuration_binding", "configuration_sha256",
     "context", "stable_deployment_identity_sha256", "guard_identity", "previous_epoch_binding",
 })
+READINESS_SCHEMA = "claude-upgrade-delivery-guard-epoch-readiness/v1"
+INDEX_SCHEMA = "claude-upgrade-delivery-operations-index/v1"
+JOURNAL_SCHEMA = "claude-upgrade-delivery-journal/v1"
+PREPARED_SCHEMA = "claude-upgrade-delivery-prepared/v1"
+TERMINAL_SCHEMA = "claude-upgrade-delivery-guard-terminal/v1"
+READINESS_FIELDS = frozenset({
+    "schema_version", "epoch_binding", "recovered_operations_index_binding", "operations", "result",
+})
+READINESS_OPERATION_FIELDS = frozenset({
+    "operation_id", "prepared_binding", "journal_prefix_binding", "terminal_binding", "status",
+})
+INDEX_OPERATION_FIELDS = frozenset({
+    "operation_id", "status", "prepared_binding", "terminal_binding", "bindings",
+})
+SAFE_OPERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def _exact(value: Any, fields: Any, label: str) -> dict[str, Any]:
@@ -156,6 +172,17 @@ class RegisteredGuardEpochs:
     read_bindings: tuple[EpochBinding, ...]
 
 
+@dataclass(frozen=True)
+class VerifiedEpochReadiness:
+    """某个启动边界的完整恢复结果；不代表之后没有新的未决操作。"""
+
+    service_instance_id: str
+    readiness_binding: EpochBinding
+    recovered_operations_index_binding: EpochBinding
+    operation_ids: tuple[str, ...]
+    read_bindings: tuple[EpochBinding, ...]
+
+
 def validate_registration_chain(
     configuration: Mapping[str, Any],
     context: Mapping[str, Any],
@@ -229,4 +256,185 @@ def validate_registration_chain(
     return RegisteredGuardEpochs(
         stable_sha256, str(channel_identity["service_instance_id"]), tuple(instances),
         tuple(verified_bindings), tuple(seen[path][0] for path in sorted(seen)),
+    )
+
+
+def validate_epoch_readiness(
+    configuration: Mapping[str, Any],
+    context: Mapping[str, Any],
+    registered: RegisteredGuardEpochs,
+    readiness_binding: Mapping[str, Any],
+    read_raw: Callable[[Mapping[str, Any]], bytes],
+) -> VerifiedEpochReadiness:
+    """纯校验一次启动恢复的完整操作全集、终态和 journal 前缀。
+
+    调用方必须先由真实守卫通道取得并校验注册链。这里核不可变原件与
+    已注册进程的归属，不查询磁盘、当前进程或 RPC。启动快照是完整受管
+    索引的一次边界；后续准入仍须读取当前索引，不能据此省略未决检查。
+    """
+    if not isinstance(registered, RegisteredGuardEpochs):
+        raise ControlError("readiness 必须消费已验证的完整注册链")
+    root = validate_relative_path(configuration["paths"]["guard_root_relative"], "readiness.guard_root")
+    readiness = EpochBinding.from_value(readiness_binding, "readiness.binding")
+    choices = {
+        f"{root}/epochs/{number:06d}/readiness.json": (item, instance)
+        for number, (item, instance) in enumerate(zip(
+            registered.epoch_bindings, registered.ordered_service_instance_ids, strict=True,
+        ), 1)
+    }
+    if readiness.path not in choices:
+        raise ControlError("readiness 不是已注册 epoch 的精确路径")
+    epoch_binding, instance = choices[readiness.path]
+    seen: dict[str, tuple[EpochBinding, bytes]] = {}
+
+    def read(value: Any, label: str) -> bytes:
+        item = EpochBinding.from_value(value, label)
+        previous = seen.get(item.path)
+        if previous is not None:
+            if previous[0] != item:
+                raise ControlError("readiness 同一路径引用了不同原件")
+            return previous[1]
+        raw = read_raw(item.as_value())
+        if not isinstance(raw, bytes) or len(raw) != item.bytes or sha256_bytes(raw) != item.sha256:
+            raise ControlError("readiness 原件缺失或字节漂移：" + item.path)
+        seen[item.path] = (item, raw)
+        return raw
+
+    def read_json(value: Any, label: str) -> dict[str, Any]:
+        return expect_object(parse_json_bytes(read(value, label)), label)
+
+    def read_binding_values(node: Any, label: str) -> None:
+        # 这里只核显式标准绑定，不对无关 JSON 赋予跳过或读取权限。
+        if isinstance(node, dict):
+            if set(node) == {"path", "sha256", "bytes"}:
+                read(node, label)
+            else:
+                for child in node.values():
+                    read_binding_values(child, label)
+        elif isinstance(node, list):
+            for child in node:
+                read_binding_values(child, label)
+
+    def check_producer(identity: Any, label: str) -> None:
+        stable = stable_deployment_identity(configuration, context, expect_object(identity, label))
+        if (canonical_sha256(stable) != registered.stable_deployment_identity_sha256
+                or identity["service_instance_id"] not in registered.ordered_service_instance_ids):
+            raise ControlError("readiness 原生产进程不在同一部署注册链中")
+
+    document = _exact(read_json(readiness_binding, "readiness"), READINESS_FIELDS, "readiness")
+    if (document["schema_version"] != READINESS_SCHEMA or document["result"] != "pass"
+            or document["epoch_binding"] != epoch_binding.as_value()):
+        raise ControlError("readiness 版本、结果或 epoch 绑定非法")
+    registration = read_json(epoch_binding.as_value(), "readiness.epoch")
+    if registration["guard_identity"]["service_instance_id"] != instance:
+        raise ControlError("readiness 注册原件与已验证进程不一致")
+    index_binding = EpochBinding.from_value(document["recovered_operations_index_binding"], "readiness.index")
+    index = _exact(read_json(index_binding.as_value(), "readiness.index"), {
+        "schema_version", "configuration_sha256", "operations",
+    }, "readiness.index")
+    if (index["schema_version"] != INDEX_SCHEMA
+            or index["configuration_sha256"] != canonical_sha256(configuration)
+            or index_binding.path != f"{root}/index-snapshots/{canonical_sha256(index)}.json"):
+        raise ControlError("readiness 索引不是同配置的完整受管快照")
+    if not isinstance(index["operations"], list) or not isinstance(document["operations"], list):
+        raise ControlError("readiness 操作全集必须为数组")
+    indexed = [_exact(value, INDEX_OPERATION_FIELDS, "readiness.index.operation") for value in index["operations"]]
+    rows = [_exact(value, READINESS_OPERATION_FIELDS, "readiness.operation") for value in document["operations"]]
+    ids = [expect_string(row["operation_id"], "readiness.operation_id") for row in rows]
+    if (any(not SAFE_OPERATION_ID.fullmatch(value) for value in ids)
+            or ids != sorted(set(ids))
+            or ids != [row["operation_id"] for row in indexed]):
+        raise ControlError("readiness 遗漏、重复、乱序或伪造了恢复操作")
+    stable_context = _stable_context(context)
+    for row, indexed_row in zip(rows, indexed, strict=True):
+        operation_id = row["operation_id"]
+        operation_root = f"{root}/operations/{operation_id}"
+        for key in ("operation_id", "prepared_binding", "terminal_binding", "status"):
+            if row[key] != indexed_row[key]:
+                raise ControlError("readiness 操作与恢复后完整索引不一致")
+        if row["status"] not in {"execution_committed", "restored"}:
+            raise ControlError("readiness 存在尚未验证恢复的操作")
+        if not isinstance(indexed_row["bindings"], list):
+            raise ControlError("readiness 索引原件读集必须为数组")
+        original_paths = []
+        for value in indexed_row["bindings"]:
+            item = EpochBinding.from_value(value, "readiness.index.original")
+            if not PurePosixPath(item.path).is_relative_to(operation_root):
+                raise ControlError("readiness 索引原件越出该操作根")
+            original_paths.append(item.path)
+            read(value, "readiness.index.original")
+        if original_paths != sorted(set(original_paths)):
+            raise ControlError("readiness 索引原件重复或乱序")
+        prepared_binding = EpochBinding.from_value(row["prepared_binding"], "readiness.prepared")
+        if prepared_binding.path != f"{operation_root}/prepared.json":
+            raise ControlError("readiness prepared 不是精确操作原件")
+        prepared = _exact(read_json(row["prepared_binding"], "readiness.prepared"), {
+            "schema_version", "operation_id", "configuration_sha256", "context", "request", "target",
+            "rollback", "before_bindings", "guard_identity", "owner", "prepared_at_utc",
+        }, "readiness.prepared")
+        if (prepared["schema_version"] != PREPARED_SCHEMA or prepared["operation_id"] != operation_id
+                or prepared["configuration_sha256"] != canonical_sha256(configuration)
+                or prepared["context"] != stable_context):
+            raise ControlError("readiness prepared 配置或上下文漂移")
+        check_producer(prepared["guard_identity"], "readiness.prepared.guard")
+        terminal_binding = EpochBinding.from_value(row["terminal_binding"], "readiness.terminal")
+        journal_binding = EpochBinding.from_value(row["journal_prefix_binding"], "readiness.journal")
+        terminal_parent = f"{operation_root}/terminals/"
+        number_text = terminal_binding.path.removeprefix(terminal_parent).removesuffix(".json")
+        if (not re.fullmatch(r"[0-9]{6}", number_text) or int(number_text) < 1
+                or terminal_binding.path != terminal_parent + number_text + ".json"
+                or journal_binding.path != f"{operation_root}/journal-prefix-{number_text}.json"):
+            raise ControlError("readiness terminal 或 journal 前缀坐标非法")
+        terminal = _exact(read_json(row["terminal_binding"], "readiness.terminal"), {
+            "schema_version", "operation_id", "status", "prepared_sha256", "physical_intent_sha256",
+            "physical_intent_binding", "restoration", "guard_identity",
+        }, "readiness.terminal")
+        if (terminal["schema_version"] != TERMINAL_SCHEMA or terminal["operation_id"] != operation_id
+                or terminal["status"] != row["status"] or terminal["prepared_sha256"] != prepared_binding.sha256):
+            raise ControlError("readiness terminal 与 prepared 或完整索引不一致")
+        check_producer(terminal["guard_identity"], "readiness.terminal.guard")
+        restoration = _exact(terminal["restoration"], {"state", "bindings", "reason"}, "readiness.restoration")
+        expect_string(restoration["reason"], "readiness.restoration.reason")
+        if not isinstance(restoration["bindings"], list):
+            raise ControlError("readiness 恢复原件必须为数组")
+        if row["status"] == "restored":
+            if restoration["state"] != "verified" or not restoration["bindings"]:
+                raise ControlError("readiness 恢复终态缺少实测恢复原件")
+        elif restoration["state"] != "not_required" or restoration["bindings"] or terminal["physical_intent_binding"] is None:
+            raise ControlError("readiness 提交终态缺少原始物理提交意图")
+        intent = terminal["physical_intent_binding"]
+        if intent is None:
+            if terminal["physical_intent_sha256"] is not None:
+                raise ControlError("readiness 空提交意图仍有摘要")
+        elif _binding(intent, "readiness.intent")["sha256"] != terminal["physical_intent_sha256"]:
+            raise ControlError("readiness 提交意图摘要不一致")
+        prefix = _exact(read_json(row["journal_prefix_binding"], "readiness.journal"), {
+            "schema_version", "operation_id", "records",
+        }, "readiness.journal")
+        records = prefix["records"]
+        if (prefix["schema_version"] != JOURNAL_SCHEMA or prefix["operation_id"] != operation_id
+                or not isinstance(records, list) or not records):
+            raise ControlError("readiness journal 前缀版本、坐标或记录非法")
+        previous = None
+        for number, value in enumerate(records, 1):
+            record = _exact(value, {"schema_version", "operation_id", "sequence", "event", "payload", "previous_sha256", "record_sha256"}, "readiness.journal.record")
+            if (record["schema_version"] != JOURNAL_SCHEMA or record["operation_id"] != operation_id
+                    or type(record["sequence"]) is not int or record["sequence"] != number
+                    or record["previous_sha256"] != previous
+                    or record["record_sha256"] != canonical_sha256({key: item for key, item in record.items() if key != "record_sha256"})):
+                raise ControlError("readiness journal 链断裂或原件摘要漂移")
+            expect_string(record["event"], "readiness.journal.event")
+            expect_object(record["payload"], "readiness.journal.payload")
+            # journal 前缀保留完整记录；逐文件字节由 snapshot 的绑定一并封存。
+            record_path = f"{operation_root}/journal/{number:06d}.json"
+            if record_path not in seen or parse_json_bytes(seen[record_path][1]) != record:
+                raise ControlError("readiness journal 前缀与原记录文件不一致")
+            previous = record["record_sha256"]
+            read_binding_values(record["payload"], "readiness.journal.payload.binding")
+        if records[-1]["event"] != row["status"] or records[-1]["payload"].get("terminal_binding") != row["terminal_binding"]:
+            raise ControlError("readiness journal 未闭合到恢复后的终态")
+        read_binding_values(prepared, "readiness.prepared.binding")
+        read_binding_values(terminal, "readiness.terminal.binding")
+    return VerifiedEpochReadiness(
+        instance, readiness, index_binding, tuple(ids), tuple(seen[path][0] for path in sorted(seen)),
     )
