@@ -318,6 +318,15 @@ class VerifiedProfileProjection:
         # 完整 Profile 父已归档；其历史来源仅由同角色原资格图按形成期解释。
         return []
 
+    def require_identity_parent(self, parent_binding: Mapping[str, Any], raw: bytes) -> None:
+        """每份身份原件必须由精确 producer 引用，存在另一份合法投影不授全局权限。"""
+        parsed = _binding(dict(parent_binding))
+        references = [reference for material in self.producer_materials
+                      for reference in material["proof_references"]
+                      if reference["identity_binding"] == parsed]
+        if not references or len(raw) != parsed["bytes"] or sha256_bytes(raw) != parsed["sha256"]:
+            raise ControlError("Docker Profile 身份原件缺精确来源证明及原 producer 引用")
+
 
 def validate_profile_observation_projection(configuration: Mapping[str, Any], context: Mapping[str, Any],
                                             proof_bindings: list[dict[str, Any]],

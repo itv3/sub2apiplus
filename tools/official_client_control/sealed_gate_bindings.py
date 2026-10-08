@@ -114,8 +114,10 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
                     content = json.loads(raw)
                 except (ValueError, UnicodeDecodeError):
                     continue
-            if profile_projection is None and isinstance(content, dict) and content.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
-                raise ControlError("Docker Profile 观测原件未匹配精确来源证明")
+            if isinstance(content, dict) and content.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+                if profile_projection is None:
+                    raise ControlError("Docker Profile 观测原件未匹配精确来源证明")
+                profile_projection.require_identity_parent(binding, raw)
             projected = typed_bindings(content)
         for row in projected:
             old = bindings.setdefault(row["path"], row)

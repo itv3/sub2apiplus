@@ -122,6 +122,8 @@ def _runtime_manifest(repository: Path) -> dict[str, Any]:
     if sys.pycache_prefix and Path(sys.pycache_prefix).exists():
         raise ReaderError("独立源码读取器的禁用 bytecode 前缀必须不存在")
     _preload(repository)
+    # 配置查询可能首次载入平台模块，必须在采样运行库全集之前完成。
+    library = Path(sysconfig.get_config_var("LIBDIR") or "/nonexistent") / (sysconfig.get_config_var("LDLIBRARY") or "nonexistent")
     paths = {Path(sys.executable).resolve()}
     for module in tuple(sys.modules.values()):
         location = getattr(module, "__file__", None)
@@ -134,7 +136,6 @@ def _runtime_manifest(repository: Path) -> dict[str, Any]:
         cached = getattr(module, "__cached__", None)
         if cached and Path(cached).is_file():
             paths.add(Path(cached).resolve())
-    library = Path(sysconfig.get_config_var("LIBDIR") or "/nonexistent") / (sysconfig.get_config_var("LDLIBRARY") or "nonexistent")
     if library.is_file():
         paths.add(library.resolve())
     # Linux 的实际映射表用于精确绑定已加载共享库，不能用整棵 lib 根授权。

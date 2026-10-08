@@ -227,8 +227,10 @@ def _complete_raw_bindings(source: VerifiedSource, initial: Any,
             content = json.loads(raw)
         except (UnicodeDecodeError, ValueError):
             continue
-        if isinstance(content, dict) and content.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA} and source.profile_projection is None:
-            raise ControlError("当前 Docker Profile 观测副本缺少已验证来源证明，不能降为宽松归档")
+        if isinstance(content, dict) and content.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+            if source.profile_projection is None:
+                raise ControlError("当前 Docker Profile 观测副本缺少已验证来源证明，不能降为宽松归档")
+            source.profile_projection.require_identity_parent(bindings[path], raw)
         if source.profile_projection is not None:
             projected = source.profile_projection.project(bindings[path], raw)
             if projected is not None:

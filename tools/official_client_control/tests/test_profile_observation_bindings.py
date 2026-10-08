@@ -223,6 +223,24 @@ class ProfileObservationBindingTests(unittest.TestCase):
         self.assertNotIn(self.history, entries)
         self.assertEqual(raw["profile_proof_bindings"], list(projection.proof_bindings))
 
+    def test_foreign_identity_is_rejected_even_with_another_valid_or_empty_projection(self) -> None:
+        from dataclasses import replace
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+        core = self.committed()
+        _raw, source = self.exported(core)
+        known = next(reference["identity_binding"] for material in source.profile_projection.producer_materials
+                     for reference in material["proof_references"])
+        foreign = self.write("foreign/profile-identity.json", self.bytes(known))
+        empty = profiles.validate_profile_observation_projection(self.configuration, self.context, [], self.bytes,
+            purpose="formed_replay", producer_materials=[])
+        for projection in (empty, source.profile_projection):
+            selected = replace(source, profile_projection=projection)
+            with self.subTest(empty=not projection.proof_bindings):
+                with self.assertRaisesRegex(ControlError, "Profile.*来源证明"):
+                    project_delivery_raw_bindings(selected, foreign, gate_projection=None, profile_projection=projection)
+                with self.assertRaisesRegex(ControlError, "Profile.*来源证明"):
+                    execution.complete_raw_bindings(selected, foreign)
+
     def test_freeze_real_inspect_origin_and_formed_replay(self) -> None:
         def freeze(request: dict, directory: Path) -> dict:
             _actual, environment, originals, _identifier = self.runtime._inspect(directory / "before", collection_phase="freeze")
