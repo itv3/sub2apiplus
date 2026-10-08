@@ -418,13 +418,8 @@ def write_json_once(path: Path, payload: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def vc_run_manifest_from_batch(batch: Mapping[str, Any], *, batch_model: str = "legacy") -> dict[str, Any]:
-    """从已校验 VC 批次确定性编译父 run 队列清单（服务面 ``_vc_run_manifest_from_batch``）。
-
-    合同取 ``official-client-campaign-run/v1``（``client`` 为 claude）；候选级绑定两字段与批次逐字一致（Campaign 级阶段为
-    null），v3 批次另带评估基线三字段（非 VC-5 为 null）——字段口径与 Codex 的 staging 清单相同，只差合同名与 ``client``。
-    参数默认值与 Codex 签名一致；Claude 只有 staging 批次模型，传入别的模型即拒绝。
-    """
+def _vc_run_manifest_arguments(batch: Mapping[str, Any], *, batch_model: str) -> dict[str, Any]:
+    """两种编译入口共用的批次到队列参数映射；只映射已冻结字段，不复制清单合同实现。"""
 
     if batch_model != STAGING_BATCH_MODEL:
         raise ConfigurationError(f"Claude Campaign 只使用 staging 批次模型，不能按 {batch_model!r} 编译队列清单。")
@@ -442,24 +437,53 @@ def vc_run_manifest_from_batch(batch: Mapping[str, Any], *, batch_model: str = "
                 ),
             }
         )
+    return dict(
+        campaign_id=str(batch["campaign_id"]),
+        campaign_plan_sha256=str(batch["campaign_plan_sha256"]),
+        batch_id=str(batch["batch_id"]),
+        batch_sequence=int(batch["sequence"]),
+        batch_sha256=str(batch["batch_sha256"]),
+        phase=str(batch["phase"]),
+        predecessor_checkpoint=batch["predecessor_checkpoint"],
+        original_deadline_at_utc=str(batch["original_deadline_at_utc"]),
+        actions=batch["actions"],
+        execute_items=batch["execute_item_ids"],
+        reuse_items=batch["reuse_item_ids"],
+        client="claude",
+        **extra,
+    )
+
+
+def vc_run_manifest_from_batch(batch: Mapping[str, Any], *, batch_model: str = "legacy") -> dict[str, Any]:
+    """从已校验 VC 批次确定性编译父 run 队列清单（服务面 ``_vc_run_manifest_from_batch``）。
+
+    合同取 ``official-client-campaign-run/v1``（``client`` 为 claude）；候选级绑定两字段与批次逐字一致（Campaign 级阶段为
+    null），v3 批次另带评估基线三字段（非 VC-5 为 null）——字段口径与 Codex 的 staging 清单相同，只差合同名与 ``client``。
+    参数默认值与 Codex 签名一致；Claude 只有 staging 批次模型，传入别的模型即拒绝。
+    """
+
     try:
         return codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-            campaign_id=str(batch["campaign_id"]),
-            campaign_plan_sha256=str(batch["campaign_plan_sha256"]),
-            batch_id=str(batch["batch_id"]),
-            batch_sequence=int(batch["sequence"]),
-            batch_sha256=str(batch["batch_sha256"]),
-            phase=str(batch["phase"]),
-            predecessor_checkpoint=batch["predecessor_checkpoint"],
-            original_deadline_at_utc=str(batch["original_deadline_at_utc"]),
-            actions=batch["actions"],
-            execute_items=batch["execute_item_ids"],
-            reuse_items=batch["reuse_item_ids"],
-            client="claude",
-            **extra,
+            **_vc_run_manifest_arguments(batch, batch_model=batch_model)
         )
     except codex_upgrade_supervisor.SupervisorError as error:
         raise ConfigurationError(f"VC 批次无法编译成 Claude 队列清单：{error}") from error
+
+
+def _first_vc1_run_manifest_from_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
+    """只编译或重放序号 1 的 VC-1 首批内容；运行期不会从此入口取得门禁准入。
+
+    首批的确定性内容对照只依赖纯规范化合同。真正派发同一份队列时，共享监督器仍从默认严格读取入口重做文件与阶段门禁。
+    """
+
+    if batch.get("phase") != "VC-1" or type(batch.get("sequence")) is not int or batch["sequence"] != 1:
+        raise ConfigurationError("纯首批编译入口只接受序号 1 的 VC-1 批次。")
+    try:
+        return codex_upgrade_supervisor.build_batched_campaign_run_manifest_payload(
+            **_vc_run_manifest_arguments(batch, batch_model=STAGING_BATCH_MODEL)
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"首个 VC-1 批次无法确定性编译成 Claude 队列清单：{error}") from error
 
 
 # ---------------------------------------------------------------------------
@@ -479,7 +503,7 @@ def write_first_formal_batch(
 ) -> dict[str, dict[str, str]]:
     """写 VC-0 交接链的首批两件（序号 1 的 VC-1 批次与队列清单），只写一次；返回 ``vc_control`` 里的两条绑定。
 
-    前序是规范坐标上已封存的 VC-0 checkpoint；队列清单由 ``vc_run_manifest_from_batch`` 确定性编译。没有动作时是零请求
+    前序是规范坐标上已封存的 VC-0 checkpoint；队列清单由 ``_first_vc1_run_manifest_from_batch`` 的纯核心确定性编译。没有动作时是零请求
     no-op 首批（只读复用前序证据的 Campaign）：原子批次入口派发第 2 批前由共享流程代跑成父 run 历史。
     """
 
@@ -498,7 +522,7 @@ def write_first_formal_batch(
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(f"无法编译首个 VC-1 批次：{error}") from error
-    run_manifest = vc_run_manifest_from_batch(batch, batch_model=STAGING_BATCH_MODEL)
+    run_manifest = _first_vc1_run_manifest_from_batch(batch)
     root = Path(campaign_dir) / VC_DIRECTORY
     batch_path = root / "batches" / FIRST_BATCH_NAME
     manifest_path = root / "run-manifests" / FIRST_BATCH_NAME
@@ -569,7 +593,7 @@ def validate_vc_control(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict
         ):
             raise ConfigurationError("首个 VC-1 批次不是从 VC-0 checkpoint 编译的序号 1。")
         run_path = _bound_file(campaign_dir, first_manifest, "首个 VC-1 队列清单")
-        expected = vc_run_manifest_from_batch(batch, batch_model=STAGING_BATCH_MODEL)
+        expected = _first_vc1_run_manifest_from_batch(batch)
         if _read_json(run_path, "首个 VC-1 队列清单") != expected:
             raise ConfigurationError("首个 VC-1 队列清单不是由首批确定性编译的。")
     return {"plan": plan}

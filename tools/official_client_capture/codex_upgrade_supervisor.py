@@ -6621,14 +6621,13 @@ def _campaign_run_sha256(value: Any, label: str) -> str:
     return value
 
 
-def _campaign_run_file_binding(
+def _normalize_campaign_run_file_binding(
     value: Any,
     *,
     label: str,
-    require_bound_files: bool,
     include_tool_identity: bool = False,
 ) -> dict[str, str]:
-    """校验恢复清单绑定的绝对普通文件及其摘要。"""
+    """只校验恢复清单文件绑定的形状；生成阶段不读取或探测文件系统。"""
 
     fields = {"path", "sha256"}
     if include_tool_identity:
@@ -6637,17 +6636,7 @@ def _campaign_run_file_binding(
         raise SupervisorError(f"Campaign {label} 字段不闭合。")
     bound_path = Path(str(value.get("path", "")))
     digest = _campaign_run_sha256(value.get("sha256"), f"{label}.sha256")
-    if (
-        not bound_path.is_absolute()
-        or bound_path.is_symlink()
-        or (
-            require_bound_files
-            and (
-                not bound_path.is_file()
-                or _sha256(bound_path.read_bytes()) != digest
-            )
-        )
-    ):
+    if not bound_path.is_absolute():
         raise SupervisorError(f"Campaign {label} 路径或摘要漂移。")
     normalized = {"path": str(bound_path), "sha256": digest}
     if include_tool_identity:
@@ -6655,6 +6644,25 @@ def _campaign_run_file_binding(
             value.get("tool_files_sha256"),
             f"{label}.tool_files_sha256",
         )
+    return normalized
+
+
+def _campaign_run_file_binding(
+    value: Any,
+    *,
+    label: str,
+    require_bound_files: bool,
+    include_tool_identity: bool = False,
+) -> dict[str, str]:
+    """运行边界重放恢复清单绑定；生成期形状校验不能代替真实普通文件及摘要复核。"""
+
+    normalized = _normalize_campaign_run_file_binding(value, label=label, include_tool_identity=include_tool_identity)
+    bound_path = Path(normalized["path"])
+    if bound_path.is_symlink() or (
+        require_bound_files
+        and (not bound_path.is_file() or _sha256(bound_path.read_bytes()) != normalized["sha256"])
+    ):
+        raise SupervisorError(f"Campaign {label} 路径或摘要漂移。")
     return normalized
 
 
@@ -7258,21 +7266,14 @@ def _same_client_batched_runs(prior_manifest: Mapping[str, Any], successor_manif
     )
 
 
-def _campaign_run_manifest(
-    path: Path,
-    *,
-    require_bound_files: bool = True,
-) -> dict[str, Any]:
-    """读取并严格校验新流程使用的预声明动作队列。
+def _normalize_campaign_run_manifest(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """清单结构校验与规范化的唯一实现；只使用输入对象，不读取文件或代执行派发门禁。
 
-    生成器可在最终合同原子落盘前只做结构校验；真正执行清单时保持默认值，
-    必须重放合同普通文件及其摘要，不能把生成期豁免带到运行边界。
-    Claude 的新合同（v2 结构加 client）与 v2 走同一套校验，编排器 CLI 名与禁止子命令按清单所属客户端取。
+    此处结果只用于确定性编译与内容对照。真实派发仍须经过 ``_campaign_run_manifest``，重新核对绑定文件和阶段门禁。
     """
 
-    path = Path(path)
-    _validate_file(path)
-    payload = _read_json(path)
+    if not isinstance(payload, Mapping):
+        raise SupervisorError("Campaign run manifest 必须是对象。")
     schema_version = payload.get("schema_version")
     if schema_version == CAMPAIGN_RUN_SCHEMA:
         required = {
@@ -7397,10 +7398,9 @@ def _campaign_run_manifest(
         if schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA:
             if payload.get("recovery_mode") != "interrupted-vc1-preview":
                 raise SupervisorError("Campaign recovery mode 非法。")
-            _campaign_run_file_binding(
+            _normalize_campaign_run_file_binding(
                 payload.get("recovery_contract"),
                 label="recovery_contract",
-                require_bound_files=require_bound_files,
             )
             recovery_predecessor = payload.get("recovery_predecessor")
             recovery_fields = {
@@ -7565,20 +7565,6 @@ def _campaign_run_manifest(
             except vc_artifacts.VCArtifactError as error:
                 raise SupervisorError(str(error)) from error
         normalized_actions.append(normalized_action)
-    _validate_vc1_assertion_seal_gate(
-        schema_version=str(schema_version),
-        campaign_id=campaign_id,
-        phase=phase,
-        actions=normalized_actions,
-        require_bound_files=require_bound_files,
-    )
-    _validate_vc5_seal_rehearsal_gate(
-        schema_version=str(schema_version),
-        campaign_id=campaign_id,
-        phase=phase,
-        actions=normalized_actions,
-        require_bound_files=require_bound_files,
-    )
     execute_items = payload.get(
         "execute_items", [item["action_id"] for item in normalized_actions]
     )
@@ -7693,6 +7679,44 @@ def _campaign_run_manifest(
     return normalized
 
 
+def _campaign_run_manifest(
+    path: Path,
+    *,
+    require_bound_files: bool = True,
+) -> dict[str, Any]:
+    """读取并严格校验新流程使用的预声明动作队列。
+
+    生成器可在最终合同原子落盘前只做结构校验；真正执行清单时保持默认值，
+    必须重放合同普通文件及其摘要，不能把生成期豁免带到运行边界。
+    Claude 的新合同（v2 结构加 client）与 v2 走同一套校验，编排器 CLI 名与禁止子命令按清单所属客户端取。
+    """
+
+    path = Path(path)
+    _validate_file(path)
+    normalized = _normalize_campaign_run_manifest(_read_json(path))
+    if normalized["schema_version"] == CAMPAIGN_RUN_RECOVERY_SCHEMA:
+        _campaign_run_file_binding(
+            normalized["recovery_contract"],
+            label="recovery_contract",
+            require_bound_files=require_bound_files,
+        )
+    _validate_vc1_assertion_seal_gate(
+        schema_version=str(normalized["schema_version"]),
+        campaign_id=normalized["campaign_id"],
+        phase=normalized["phase"],
+        actions=normalized["actions"],
+        require_bound_files=require_bound_files,
+    )
+    _validate_vc5_seal_rehearsal_gate(
+        schema_version=str(normalized["schema_version"]),
+        campaign_id=normalized["campaign_id"],
+        phase=normalized["phase"],
+        actions=normalized["actions"],
+        require_bound_files=require_bound_files,
+    )
+    return normalized
+
+
 def build_campaign_run_manifest(
     campaign_id: str,
     phase: str,
@@ -7764,7 +7788,7 @@ def build_campaign_run_manifest(
     return payload
 
 
-def build_batched_campaign_run_manifest(
+def build_batched_campaign_run_manifest_payload(
     *,
     campaign_id: str,
     campaign_plan_sha256: str,
@@ -7780,7 +7804,7 @@ def build_batched_campaign_run_manifest(
     client: str | None = None,
     **candidate_binding: Any,
 ) -> dict[str, Any]:
-    """把已冻结 VC batch 编译成使用绝对总截止时间的 v2 队列。
+    """纯函数编译已冻结 VC batch；只规范化清单内容，结果不能替代真实派发校验。
 
     改造 2：staging 模型清单以关键字 ``candidate_revision``／``candidate_id`` 携带候选级
     绑定（Campaign 级阶段为 null）；legacy 模型不传，清单里就没有这两个字段。
@@ -7824,6 +7848,47 @@ def build_batched_campaign_run_manifest(
             raise SupervisorError("评估基线三字段必须同时给出。")
         for key in sorted(given):
             payload[key] = candidate_binding[key]
+    return _normalize_campaign_run_manifest(payload)
+
+
+def build_batched_campaign_run_manifest(
+    *,
+    campaign_id: str,
+    campaign_plan_sha256: str,
+    batch_id: str,
+    batch_sequence: int,
+    batch_sha256: str,
+    phase: str,
+    predecessor_checkpoint: Mapping[str, Any],
+    original_deadline_at_utc: str,
+    actions: Sequence[Mapping[str, Any]],
+    execute_items: Sequence[str],
+    reuse_items: Sequence[str],
+    client: str | None = None,
+    **candidate_binding: Any,
+) -> dict[str, Any]:
+    """把已冻结 VC batch 编译成使用绝对总截止时间的 v2 队列。
+
+    改造 2：staging 模型清单以关键字 ``candidate_revision``／``candidate_id`` 携带候选级
+    绑定（Campaign 级阶段为 null）；legacy 模型不传，清单里就没有这两个字段。
+    ``client`` 不传时（Codex）生成 v2、不写 client；给出时生成 Claude 新合同并写入 client，由同一个解析器校验。
+    """
+
+    payload = build_batched_campaign_run_manifest_payload(
+        campaign_id=campaign_id,
+        campaign_plan_sha256=campaign_plan_sha256,
+        batch_id=batch_id,
+        batch_sequence=batch_sequence,
+        batch_sha256=batch_sha256,
+        phase=phase,
+        predecessor_checkpoint=predecessor_checkpoint,
+        original_deadline_at_utc=original_deadline_at_utc,
+        actions=actions,
+        execute_items=execute_items,
+        reuse_items=reuse_items,
+        client=client,
+        **candidate_binding,
+    )
     # 使用与 CLI 完全相同的校验器，避免生成器与执行器对字段或闭集理解不同。
     descriptor, temporary_name = tempfile.mkstemp(prefix=".campaign-run-v2-", suffix=".json")
     temporary = Path(temporary_name)
