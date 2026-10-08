@@ -258,18 +258,11 @@ class MacBudgetTests(unittest.TestCase):
                     budget.settle_task_bound(self._admission(), task, receipt, {}, undispatched=True)
         self.assertEqual(ledger.replay_head(self.root)["reserved_live_requests"], 4)
 
-    def test_production_primitive_requires_original_frozen_task_before_reservation(self) -> None:
-        self.data = self.data / "formal-boundary"
-        self.data.mkdir(mode=0o700)
-        self.root = self.data / ledger.ledger_dir_name("claude")
-        ledger.create_project_ledger(self.root, project_id="closed-formal-test", client="claude",
-            absolute_deadline_utc=_future(48), deadline_approved_by="fixture",
-            estimation_policy="none", estimation_policy_approved_by="fixture",
-            fixture_only=False, live_request_budget=6, formal_open_limit=64)
-        self.campaigns = {"campaign-a": self._campaign("campaign-a")}
+    def test_formal_binding_verifier_requires_original_frozen_task(self) -> None:
+        """直接核正式验证器；实际总账仍为 fixture_only，不造正式夹具。"""
         before = ledger.replay_head(self.root)
-        with self.assertRaises(contract.ConfigurationError):
-            self._reserve(self._bound())
+        with ledger.project_lock(self.root), self.assertRaises(contract.ConfigurationError):
+            budget._verify_formal_reservation_inputs(self._admission(), self._bound())
         self.assertEqual(ledger.replay_head(self.root)["head_sha256"], before["head_sha256"])
 
     def test_malformed_event_is_rejected_without_uncaught_key_error_or_write(self) -> None:
