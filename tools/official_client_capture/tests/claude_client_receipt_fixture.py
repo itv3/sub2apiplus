@@ -47,6 +47,7 @@ def fixture_ledger(path: Path) -> Path:
     if root is None:
         data_root = campaign.parents[2] if campaign.parent.name == "campaigns" and campaign.parent.parent.name == "evidence" else campaign
         data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        data_root.chmod(0o700)
         root = ledger.create_fixture_ledger(data_root, client="claude")
     contract.require(root.is_relative_to(staging), "Mac 夹具不得改用 Campaign 之外的项目账本")
     plan, _raw = ledger._load_plan(root)
@@ -164,6 +165,9 @@ def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, s
     client_root = attempt_root / "client-evidence" / client_id
     task_path = client_root / "tasks" / nonce / "task.json"
     bundle_root = client_root / "runs" / nonce / "source"
+    # import_bundle 在同一 run 根原子发布 run.json；递归建 source 不会收紧既有中间目录。
+    bundle_root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    bundle_root.parent.chmod(0o700)
     capture_root = temporary_root(attempt_root) / "server-originals" / contract.digest(dict(values))[:12] / nonce
     artifacts = [{"role": "application", "version": "fixture-app-1", "platform": "darwin/arm64", "sha256": "1" * 64}, {"role": "embedded_cli", "version": current["catalog"]["entry"]["version"], "platform": "darwin/arm64", "sha256": current["catalog"]["entry"]["binary_sha256"]}]
     if client_id == "claude-vscode":

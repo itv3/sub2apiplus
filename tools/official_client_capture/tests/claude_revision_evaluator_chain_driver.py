@@ -67,8 +67,6 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
 
     def setUp(self) -> None:
         self.require_isolated_copy()
-        # Mac 来源必须与 Campaign 共用 staging 内的 fixture_only 总账；不能退到旁账。
-        client_fixture.install_staging_scope(self)
         self.checker_path = Path(assertion.__file__).resolve()
         self.assertTrue(self.checker_path.is_relative_to(REPOSITORY_ROOT))
         self.fixed_checker = self.checker_path.read_bytes()
@@ -98,17 +96,6 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         source = source.replace(anchor, '        header_name = json.load(open(os.environ["CLAUDE_TRANSIENT_RELAY_CONTROL"], encoding="utf-8"))["header_name"]\n' + anchor)
         self.assertEqual(source.count("Anthropic-Version: {version}"), 1)
         path.write_text(source.replace("Anthropic-Version: {version}", "{header_name}: {version}"), encoding="utf-8")
-
-    def build_campaign(self, **kwargs: Any) -> Path:
-        """在总账注册前冻结两个阶段的完整 Job 模板，演进读侧也必须能展开官方全集。"""
-
-        campaign = super().build_campaign(**kwargs)
-        manifest = upgrade.load_campaign_manifest(campaign)
-        jobs = [job for phase in ("official", "candidate")
-                for job in capture._expand_phase_jobs(campaign, manifest, phase, candidate_id=None)]
-        seal_tests.rewrite_manifest(campaign, jobs=[{"id": job.job_id, "phase": job.phase,
-            "execution_sha256": capture._job_execution_sha256(job), "evidence_roots": list(job.evidence_roots)} for job in jobs])
-        return campaign
 
     def prepare_runtime(self, campaign: Path) -> None:
         self.build = json.loads((campaign / "candidates" / self.active_candidate / "build-receipt.json").read_bytes())
@@ -384,6 +371,7 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
             self.assertEqual((before["status"], after["status"]), ("complete", "complete"))
             self.assertEqual(after["precise_total"], before["precise_total"])
             self.assertEqual(project_ledger.replay_head(self.project_root)["precise_total"], project_before)
+            self.assert_campaign_request_accounting(campaign, expected_client_requests=4)
             self.assertEqual(timing.inspect_ledger(self.ledger_dir)["current_revision"], 2)
             store, store_campaign = candidate_store.open_campaign_store(campaign, manifest)
             return {**context, "manifest": manifest, "candidate_id": SECOND_CANDIDATE, "candidate_revision": 2,

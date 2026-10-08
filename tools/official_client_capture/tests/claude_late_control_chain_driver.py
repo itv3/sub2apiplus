@@ -147,5 +147,6 @@ class ClaudeLateControlChainDriver(late.ClaudeLateStageChainDriver):
             self.accept_action(self.campaign, receipt, world["gate_root"])), 11, "VC-5")
         self.assertTrue(vc.vc_checkpoint_path(self.campaign, "VC-5", revision=1).is_file())
         records.extend(self.exercise_delivery_faults(world, sequence_start=12))
+        self.assert_recorded_client_requests(world)
         self.assertEqual(len({row["campaign_id"] for row in records}), 1)
         return records

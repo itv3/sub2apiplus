@@ -33,6 +33,7 @@ from tools.official_client_capture import claude_upgrade_store as candidate_stor
 from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.tests import claude_boundary_receipt_fixture as boundary_fixture
+from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
 from tools.official_client_capture.tests import claude_evaluator_fixture as evaluator_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as candidate_tests
@@ -62,6 +63,8 @@ class ClaudeTransientChainDriver(batch_tests._RealTreeBatchCase):
     preview = evaluation_tests.EvaluationRecoveryChainTests.preview
 
     def setUp(self) -> None:
+        # 外部 Mac 来源与运行账本共用 staging；禁止最小来源夹具偷偷创建旁账。
+        client_fixture.install_staging_scope(self)
         super().setUp()
         self.runtime = candidate_tests.CandidateFixture(methodName="runTest")
         self.runtime.tool_identity = self.tool_identity
@@ -113,7 +116,7 @@ sys.exit(0)
         relay.chmod(0o700)
 
     def build_campaign(self, **kwargs: Any) -> Path:
-        """在两本账注册之前冻结运行坐标、标签和候选模板行，沿用真实全量场景清单。"""
+        """在两本账注册之前冻结运行坐标、标签和官方／候选模板全集，沿用真实全量场景清单。"""
 
         campaign = super().build_campaign(**kwargs)
         manifest = upgrade.load_campaign_manifest(campaign)
@@ -129,7 +132,9 @@ sys.exit(0)
         manifest = seal_tests.rewrite_manifest(campaign, configuration=configuration, inputs={**manifest["inputs"], "evidence_labels": {
             "path": labels.relative_to(campaign).as_posix(), "sha256": upgrade.file_sha256(labels),
         }})
-        jobs = capture._expand_phase_jobs(campaign, manifest, "candidate", candidate_id=None)
+        # 工具演进读侧会重新展开两个阶段，不能只冻结候选模板后靠恢复时补写。
+        jobs = [job for phase in ("official", "candidate")
+                for job in capture._expand_phase_jobs(campaign, manifest, phase, candidate_id=None)]
         seal_tests.rewrite_manifest(campaign, jobs=[{"id": job.job_id, "phase": job.phase,
             "execution_sha256": capture._job_execution_sha256(job), "evidence_roots": list(job.evidence_roots)} for job in jobs])
         return campaign
@@ -192,6 +197,31 @@ sys.exit(0)
         self.assertEqual((attempt_root / "attempt.json").read_bytes(), original_attempt,
                          "客户端输入夹具不能改写真实 run 已发布的 attempt 或身份")
         return argv
+
+    def assert_campaign_request_accounting(self, campaign: Path, *, expected_client_requests: int) -> None:
+        """重放实际 Campaign 的 Mac 原件与总 provenance；模拟请求不能落旁账或在重读时再次入账。"""
+
+        from tools.official_client_capture import claude_client_receipt_contract as contract
+        from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+
+        self.assertEqual(project_ledger.find_project_ledger(campaign, client="claude"), self.project_root)
+        before = project_ledger.replay_head(self.project_root)
+        client_keys: set[str] = set()
+        with client_fixture.source_scope():
+            for attempt_root in sorted(campaign.glob("candidates/*/attempts/*")):
+                for client_id in contract.CLIENTS:
+                    path = attempt_root / "client-evidence" / f"{client_id}.json"
+                    if path.is_file():
+                        verified = contract.verify_client_receipt(attempt_root, client_id, path)
+                        client_keys.update(row["identity_key"] for row in verified["requests"])
+            receipt = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
+        keys = {row["identity_key"] for row in receipt["requests"]}
+        self.assertEqual(len(client_keys), expected_client_requests)
+        self.assertTrue(client_keys <= keys, "真实 provenance 不能漏掉同账本的模拟 Mac 请求")
+        self.assertEqual(receipt["status"], "complete")
+        self.assertEqual(keys, set(before["accounted_identity_index"]))
+        self.assertEqual((before["precise_total"], before["estimated_total"]), (len(keys), 0))
+        self.assertEqual(project_ledger.replay_head(self.project_root), before, "读侧复核必须保持原总账事件与请求数不变")
 
     def seal(self, campaign: Path, attempt_id: str, *, clients: list[str] | None = None, recovery: str | None = None) -> dict:
         argv = ["capture-candidate", "seal", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--attempt-id", attempt_id]
@@ -390,3 +420,4 @@ sys.exit(0)
             self.assertEqual(provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"], count)
             self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
             self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
+            self.assert_campaign_request_accounting(campaign, expected_client_requests=2)

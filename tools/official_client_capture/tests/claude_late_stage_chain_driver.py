@@ -56,6 +56,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
     accept_action = delivery_tests.Vc6BatchChainTests.accept_action
     gate_receipt = delivery_tests.Vc6BatchChainTests.gate_receipt
     run_compare_and_assert = delivery_tests.Vc6BatchChainTests.run_compare_and_assert
+    assert_recorded_client_requests = delivery_tests.Vc6BatchChainTests.assert_recorded_client_requests
     vc5_complete_world = delivery_tests.Vc6BatchChainTests.vc5_complete_world
     set_control = delivery_tests.Vc6BatchChainTests.set_control
     assert_status = delivery_tests.Vc6BatchChainTests.assert_status
@@ -210,6 +211,6 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             repeats=[("重复读取已完成 finalize", before_repeat, audit.accounting_state())], campaign_id=campaign.name,
             receipt_sha256=receipt_refs[0]["sha256"]))
         self.assert_status(world, "ready_for_operator_release")
-        self.assert_zero_requests()
+        self.assert_recorded_client_requests(world)
         self.assertEqual(len({row["campaign_id"] for row in records}), 1)
         return records

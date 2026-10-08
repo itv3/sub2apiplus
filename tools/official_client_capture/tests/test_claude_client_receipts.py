@@ -78,6 +78,7 @@ class ClientReceiptContractTests(unittest.TestCase):
             contract.verify_client_bundle(contract.read_json(task_path), bundle, capture)
 
     def test_fixture_reuses_campaign_ledger_without_creating_side_ledger(self) -> None:
+        self.assertEqual(self.campaign.parents[2].stat().st_mode & 0o777, 0o700)
         project = ledger.find_project_ledger(self.campaign, client="claude")
         self.assertIsNotNone(project)
         self.assertEqual(fixture.fixture_ledger(self.attempt), project)

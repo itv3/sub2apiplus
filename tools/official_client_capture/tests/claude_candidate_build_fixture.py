@@ -28,6 +28,8 @@ from tools.official_client_capture import codex_upgrade_candidate_build as build
 from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt as vc_receipt
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+OFFICIAL_INGRESS_CATALOG_RELATIVE = "backend/internal/officialegress/catalogdata/claude/official-ingress-catalog.json"
 IMAGE_ID = "sha256:" + "8" * 64
 RUNTIME_IMAGE = "registry.local/sub2api@sha256:" + "7" * 64
 BUILD_ID = "claude-build-0001"
@@ -101,6 +103,8 @@ class CandidateBuildFixture:
         _git(self.source, "init", "-q")
         catalog_path = self.source / candidate.RELEASE_CATALOG_RELATIVE
         _write(catalog_path, _json_bytes(self._active_catalog()))
+        # Mac 读侧核对候选实际 Catalog；原件必须先进入基线提交，再参与源码树和构建摘要。
+        _write(self.source / OFFICIAL_INGRESS_CATALOG_RELATIVE, (REPOSITORY_ROOT / OFFICIAL_INGRESS_CATALOG_RELATIVE).read_bytes())
         if marker is not None:
             _write(self.source / "backend" / "internal" / "officialegress" / "claude_candidate_marker.go", f"package officialegress\n\n// {marker}\n")
         _write(self.source / "backend" / "go.mod", "module github.com/example/sub2apiplus\n\ngo 1.27\n")
