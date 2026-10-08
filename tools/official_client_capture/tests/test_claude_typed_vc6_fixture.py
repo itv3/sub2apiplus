@@ -23,7 +23,7 @@ from tools.official_client_capture import claude_upgrade_delivery as delivery
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests import claude_typed_vc6_fixture as fixture
-from tools.official_client_capture.tests.test_claude_real_delivery_integration import RealDeliveryIntegrationTests
+from tools.official_client_capture.tests import test_claude_real_delivery_integration as integration_fixture
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
 from tools.official_client_control import delivery_execution as execution
 from tools.official_client_control.canonical import canonical_json_bytes
@@ -135,13 +135,13 @@ def armed_worker(context: delivery.DeliveryContext, configuration: dict, executi
 
 
 class TypedArmedRecoveryTests(unittest.TestCase):
-    """只借组合世界构造方法，不继承旧五项用例或重复跑整链。"""
+    """通过模块属性复用构造方法，避免 unittest 将导入的 TestCase 再次加载。"""
 
-    setUpClass = classmethod(RealDeliveryIntegrationTests.setUpClass.__func__)
-    tearDownClass = classmethod(RealDeliveryIntegrationTests.tearDownClass.__func__)
-    setUp = RealDeliveryIntegrationTests.setUp
-    _stop_guard = RealDeliveryIntegrationTests._stop_guard
-    _seal_review = RealDeliveryIntegrationTests._seal_review
+    setUpClass = classmethod(integration_fixture.RealDeliveryIntegrationTests.setUpClass.__func__)
+    tearDownClass = classmethod(integration_fixture.RealDeliveryIntegrationTests.tearDownClass.__func__)
+    setUp = integration_fixture.RealDeliveryIntegrationTests.setUp
+    _stop_guard = integration_fixture.RealDeliveryIntegrationTests._stop_guard
+    _seal_review = integration_fixture.RealDeliveryIntegrationTests._seal_review
 
     def test_armed_worker_kill_restores_then_publishes_original_failure_and_resumes_new_segment(self) -> None:
         guard.atomic_json(self.root / "fault.json", {"execute": "wait", "restore": "normal", "freeze": "normal"})
