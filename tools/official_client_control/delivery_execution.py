@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 
 from .canonical import canonical_sha256, expect_image_digest, expect_non_negative_int, expect_object, expect_sha256, expect_string, sha256_bytes
 from .errors import ControlError
+from .profile_observation_bindings import VerifiedProfileProjection, RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA
 
 OPERATIONAL_V2 = "official-client-operational-evidence/v2"
 PLAN_V2 = "official-client-candidate-delivery-plan/v2"
@@ -50,6 +51,7 @@ class VerifiedSource:
     configuration_sha256: str
     service_instance_id: str
     trusted_data_root: Path | None = None
+    profile_projection: VerifiedProfileProjection | None = None
 
 
 # 正式登记须在固定通道、部署身份与原件真实性现场验收后由受管源码完成。
@@ -168,7 +170,17 @@ def _complete_raw_bindings(source: VerifiedSource, initial: Any,
     """完整读验父文件后，仅在已验真配置明确声明的精确 Profile 坐标结束递归。"""
 
     import json
+    if source.profile_projection is not None:
+        if not isinstance(source.profile_projection, VerifiedProfileProjection):
+            raise ControlError("Profile 归档域必须来自纯来源校验器，不能由 JSON manifest 授权")
+        source.profile_projection.revalidate(lambda row: _source_bytes(source, row), purpose="formed_replay")
     bindings = {row["path"]: row for row in typed_bindings(initial)}
+    if source.profile_projection is None:
+        for row in bindings.values():
+            if Path(row["path"]).name in {"profile-identity.json", "host-profile-identity.json"}:
+                identity = _source_json(source, row)
+                if identity.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA}:
+                    raise ControlError("当前 Docker Profile 观测副本缺少已验证来源证明，不能降为宽松归档")
     queue = list(bindings)
     while queue:
         path = queue.pop()
@@ -180,7 +192,17 @@ def _complete_raw_bindings(source: VerifiedSource, initial: Any,
             content = json.loads(raw)
         except (UnicodeDecodeError, ValueError):
             continue
-        for row in typed_bindings(content):
+        if isinstance(content, dict) and content.get("schema_version") in {RUNTIME_IDENTITY_SCHEMA, HOST_IDENTITY_SCHEMA} and source.profile_projection is None:
+            raise ControlError("当前 Docker Profile 观测副本缺少已验证来源证明，不能降为宽松归档")
+        if source.profile_projection is not None:
+            projected = source.profile_projection.project(bindings[path], raw)
+            if projected is not None:
+                children = projected
+            else:
+                children = typed_bindings(content)
+        else:
+            children = typed_bindings(content)
+        for row in children:
             old = bindings.get(row["path"])
             if old is not None and old != row:
                 raise ControlError("交付原件递归读集对同一路径声明不同字节")
@@ -218,6 +240,11 @@ def complete_delivery_raw_bindings(store: Any, plan: Mapping[str, Any], source: 
     configuration = _source_json(configuration_source, facts["binding"])
     if configuration != facts["configuration"] or canonical_sha256(configuration) != source.configuration_sha256:
         raise ControlError("交付归档冻结配置原件与已验证来源不一致")
+    projection = source.profile_projection
+    if projection is not None and (not isinstance(projection, VerifiedProfileProjection)
+            or projection.configuration_sha256 != source.configuration_sha256
+            or projection.deployment_sha256 != source.deployment_sha256):
+        raise ControlError("交付归档 Profile 派生域不是同一冻结配置及部署的已验证来源")
     profiles: dict[str, dict[str, Any]] = {}
     for name, digest_key in (("candidate", "runtime_profile_sha256"),
                              ("rollback", "rollback_runtime_profile_sha256")):
@@ -231,7 +258,8 @@ def complete_delivery_raw_bindings(store: Any, plan: Mapping[str, Any], source: 
             raise ControlError("交付归档两份 Profile 对同一路径声明不同字节")
         _source_bytes(configuration_source, binding)
         _source_bytes(source, binding)
-    return _complete_raw_bindings(source, [initial, list(profiles.values())], profiles)
+    proof_bindings = [*projection.proof_bindings, *projection.material_bindings()] if projection is not None else []
+    return _complete_raw_bindings(source, [initial, list(profiles.values()), proof_bindings], profiles)
 
 
 def _source_json(source: VerifiedSource, binding: Mapping[str, Any]) -> dict[str, Any]:

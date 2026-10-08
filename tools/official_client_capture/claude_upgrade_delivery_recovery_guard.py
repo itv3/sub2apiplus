@@ -36,6 +36,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, parse_json_bytes
+from tools.official_client_control import profile_observation_bindings as profile_observations
 
 PROTOCOL = "claude-upgrade-delivery-guard-rpc/v1"
 JOURNAL_SCHEMA = "claude-upgrade-delivery-journal/v1"
@@ -314,6 +315,8 @@ class GuardEngine:
         self.context = context
         self.runtime = runtime
         self.identity = identity
+        if hasattr(runtime, "bind_profile_producer"):
+            runtime.bind_profile_producer(identity)
         self.data_root = Path(context["data_root"])
         self.root = managed_path(self.data_root, configuration["paths"]["guard_root_relative"])
         private_directory(self.root)
@@ -815,6 +818,53 @@ class GuardEngine:
                 finally:
                     self.lock.release()
 
+    def _profile_source_materials(self, origin: dict[str, Any], freeze_path: Path | None) -> list[dict[str, Any]]:
+        """完整 core 已匹配后，只从其原 snapshot 和显式全操作索引选择 producer。"""
+        def read_original(item: Mapping[str, Any]) -> bytes:
+            return read_bytes(check_binding(self.data_root, dict(item)))
+
+        materials = []
+
+        def add(phase: str, producer: dict[str, Any], observation: dict[str, Any] | None, document: Any, prefix: str) -> None:
+            references = profile_observations.select_profile_proof_references(document, prefix, read_original, configuration=self.configuration)
+            # 也保留无可授域的 Docker 观测：校验器继续核完整来源而不倒填角色。
+            materials.append({"collection_phase": phase, "producer_binding": producer,
+                              "observation_binding": observation, "proof_references": references})
+
+        if freeze_path is not None:
+            snapshot = read_json(freeze_path)
+            add("freeze", binding(self.data_root, freeze_path), None, snapshot, "/cores/freeze/before_bindings/")
+        index_binding = origin.get("operations_index_binding")
+        if index_binding is not None:
+            index = read_json(check_binding(self.data_root, index_binding))
+            if index.get("schema_version") != INDEX_SCHEMA or index.get("configuration_sha256") != canonical_sha256(self.configuration):
+                raise GuardError("Profile producer 的索引不是同一冻结配置")
+            current = {row["operation_id"]: row["prepared_binding"] for row in self._index()["operations"]}
+            for row in index["operations"]:
+                exact(row, {"operation_id", "status", "prepared_binding", "terminal_binding", "bindings"}, "Profile producer操作索引")
+                if current.get(row["operation_id"]) != row["prepared_binding"]:
+                    raise GuardError("Profile producer 的原操作不在受管索引")
+                prepared = self._prepared(row["operation_id"])
+                add("before", row["prepared_binding"], None, prepared, "/before_bindings/")
+                operation = self._operation(row["operation_id"])
+                observation_path = operation / "observation.json"
+                if observation_path.exists():
+                    observed_binding = binding(self.data_root, observation_path)
+                    if observed_binding in row["bindings"]:
+                        add("execution", row["prepared_binding"], observed_binding, read_json(observation_path), "/during_bindings/")
+                for terminal_binding in row["bindings"]:
+                    terminal_path = PurePosixPath(terminal_binding["path"])
+                    if terminal_path.parent.as_posix() != operation.relative_to(self.data_root).as_posix() + "/terminals":
+                        continue
+                    terminal = read_json(check_binding(self.data_root, terminal_binding))
+                    if terminal.get("status") == "restored":
+                        restoration_binding = terminal["restoration"]["bindings"][0]
+                        if restoration_binding not in row["bindings"]:
+                            raise GuardError("Profile recovery 的原观测不在完整操作索引")
+                        restored = read_json(check_binding(self.data_root, restoration_binding))
+                        add("recovery", terminal_binding, restoration_binding, restored, "/bindings/")
+        return sorted(materials, key=canonical_sha256)
+
     def export(self, request: dict[str, Any]) -> dict[str, Any]:
         with self.lock:
             exact(request, {"content", "origin"}, "来源导出")
@@ -825,6 +875,7 @@ class GuardEngine:
             # 只能导出守卫曾生成的完整内容；不能给客户端任意自摘要 JSON 背书。
             expected_core = {**request["content"], "origin": origin}
             matched = False
+            matched_freeze_path = None
             for path in [*self.operations.glob("*/evidence-*.json"), *self.operations.glob("*/restoration-core-*.json")]:
                 if read_json(path) == expected_core:
                     matched = True
@@ -834,6 +885,7 @@ class GuardEngine:
                     snapshot = read_json(path)
                     if expected_core in snapshot.get("cores", {}).values():
                         matched = True
+                        matched_freeze_path = path
                         break
             content = request["content"]
             if not matched and set(content) == {"campaign_id", "delivery_id", "operation_index_binding"}:
@@ -843,9 +895,17 @@ class GuardEngine:
                     matched = True
             if not matched:
                 raise GuardError("请求内容不是该受管守卫生成的冻结原件")
+            profile_materials = self._profile_source_materials(origin, matched_freeze_path)
+            proof_bindings = {reference["proof_binding"]["path"]: reference["proof_binding"]
+                              for material in profile_materials for reference in material["proof_references"]}
+            profile_projection = profile_observations.validate_profile_observation_projection(
+                self.configuration, self.context, [proof_bindings[key] for key in sorted(proof_bindings)],
+                lambda item: read_bytes(check_binding(self.data_root, dict(item))),
+                purpose="formed_replay", producer_materials=profile_materials)
             originals: dict[str, str] = {}
             seen: dict[str, dict[str, Any]] = {}
-            pending = all_bindings({"content": content, "origin": origin})
+            pending = all_bindings({"content": content, "origin": origin, "profile_producer_materials": profile_materials,
+                                    "configuration_binding": self.context["configuration_ref"]})
             total = 0
             while pending:
                 item = pending.pop()
@@ -861,11 +921,17 @@ class GuardEngine:
                 if total > MAX_RPC_BYTES // 2:
                     raise GuardError("来源原件闭包超出固定通道上限，不能裁掉原件继续")
                 originals[item["path"]] = base64.b64encode(data).decode("ascii")
+                projected = profile_projection.project(item, data)
+                if projected is not None:
+                    pending.extend(projected)
+                    continue
                 # 展开受管新协议的原件引用；旧资格图仍由Store形成期重放，
                 # 不把旧文件里的任意路径当作guard新的读取权限。
                 if path.suffix == ".json" and (path.is_relative_to(self.root) or item == self.context["configuration_ref"]):
                     pending.extend(all_bindings(parse_json_bytes(data, "受管来源闭包")))
-            return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"], "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": expected_core["origin"]["service_instance_id"], "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity}
+            return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"], "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": expected_core["origin"]["service_instance_id"], "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity,
+                    "profile_configuration_binding": self.context["configuration_ref"],
+                    "profile_producer_materials": profile_materials, "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)]}
 
 
 def _mac(key: bytes, value: Any) -> str:

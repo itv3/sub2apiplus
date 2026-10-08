@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, parse_json_bytes
 from tools.official_client_control.contracts import DIMENSIONS, validate_fact_ref
 from tools.official_client_control.errors import ControlError
+from tools.official_client_control import profile_observation_bindings as profile_observations
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 
 CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v1"
@@ -516,6 +517,35 @@ class DockerComposeRuntime:
         self.docker = _external_executable(self.runtime["docker_binding"])
         self._credential: bytes | None = None
         self._compose_cache: dict[str, Any] = {}
+        self._profile_producer_identity: dict[str, Any] | None = None
+
+    def bind_profile_producer(self, identity: dict[str, Any]) -> None:
+        """仅固定 guard 构造时绑定真实生产实例；旧 proof 不按新实例改写。"""
+        self._profile_producer_identity = copy.deepcopy(profile_observations._producer_identity(identity, self.configuration))
+
+    def _profile_proof(self, directory: Path, phase: str, observed: dict[str, Any],
+                       actual: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any] | None:
+        if self._profile_producer_identity is None:
+            raise guard.GuardError("真实 Docker Profile 采集缺受管 producer 实例")
+        if any(actual[key].get("state") != "known" for key in ("image", "profile")):
+            return None
+        roles = [name for name in ("candidate", "rollback")
+                 if (actual["image"]["value"], actual["profile"]["value"]) ==
+                 (self.configuration[name]["image_digest"], self.configuration[name]["runtime_profile_sha256"])]
+        if len(roles) != 1:
+            return None
+        role = roles[0]
+        source = self.configuration[role]["profile_binding"]
+        if guard.read_bytes(guard.check_binding(self.root, source)) != guard.read_bytes(guard.check_binding(self.root, observed)):
+            raise guard.GuardError("Profile 派生证明的源父与真实副本完整字节不一致")
+        relative = directory.relative_to(self.root).as_posix()
+        return {"schema_version": profile_observations.PROOF_SCHEMA,
+                "configuration_binding": self.context["configuration_ref"], "configuration_sha256": canonical_sha256(self.configuration),
+                "source_scope": self.configuration["source_scope"],
+                **{key: self.context[key] for key in ("campaign_id", "candidate_id", "delivery_id")},
+                "collection_phase": phase, "capture_coordinate": profile_observations.capture_coordinate(self.configuration, phase, relative),
+                "role": role, "producer_identity": copy.deepcopy(self._profile_producer_identity),
+                "source_profile_binding": source, "observed_profile_binding": observed, "observation": observation}
 
     def _command(self, arguments: list[str], *, checkpoint: Any = None, input_bytes: bytes | None = None) -> bytes:
         _external_executable(self.runtime["docker_binding"])
@@ -651,7 +681,7 @@ class DockerComposeRuntime:
         self._qualification_report = report
         return report
 
-    def _inspect(self, directory: Path, checkpoint: Any = None) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], str]:
+    def _inspect(self, directory: Path, checkpoint: Any = None, *, collection_phase: str | None = None) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], str]:
         guard.private_directory(directory)
         inspections, originals = {}, []
         for service in [self.runtime["application_service"], *self.runtime["dependency_services"]]:
@@ -691,21 +721,34 @@ class DockerComposeRuntime:
             identity_path = directory / "image-identity.json"
             guard.write_json_once(identity_path, {"image_digest": digest, "container_inspect_binding": originals[0], "image_inspect_binding": guard.binding(self.root, image_path)})
             image_actual = {"state": "known", "value": digest, "direct_binding": guard.binding(self.root, identity_path)}
+            originals.append(guard.binding(self.root, identity_path))
         tar_bytes = self._command(["container", "cp", container_id + ":" + self.runtime["profile_container_path"], "-"], checkpoint=checkpoint)
-        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:*") as archive:
-            members = archive.getmembers()
-            if len(members) != 1 or not members[0].isfile() or members[0].size > 4 * 1024 * 1024 or PurePosixPath(members[0].name).name != PurePosixPath(self.runtime["profile_container_path"]).name:
-                raise guard.GuardError("容器Profile归档结构非法")
-            stream = archive.extractfile(members[0])
-            if stream is None:
-                raise guard.GuardError("真实Profile不可读取")
-            profile_bytes = stream.read()
+        profile_bytes = profile_observations.extract_profile_tar(tar_bytes, self.runtime["profile_container_path"])
         # 原始Profile也严格解析；其实际字节摘要不由目标倒填。
         parse_json_bytes(profile_bytes, "真实运行Profile")
         profile_path = directory / "runtime-profile.json"
         guard.write_once(profile_path, profile_bytes)
         profile_identity_path = directory / "profile-identity.json"
-        guard.write_json_once(profile_identity_path, {"runtime_profile_sha256": hashlib.sha256(profile_bytes).hexdigest(), "profile_binding": guard.binding(self.root, profile_path)})
+        profile_identity = {"runtime_profile_sha256": hashlib.sha256(profile_bytes).hexdigest(), "profile_binding": guard.binding(self.root, profile_path)}
+        if collection_phase is not None:
+            tar_path = directory / "runtime-profile.tar"
+            guard.write_once(tar_path, tar_bytes)
+            originals.append(guard.binding(self.root, tar_path))
+            measured = {"image": image_actual, "profile": {"state": "known", "value": hashlib.sha256(profile_bytes).hexdigest()}}
+            observation = {"kind": "container", "container_id": container_id,
+                           "container_profile_path": self.runtime["profile_container_path"], "application_service": self.runtime["application_service"],
+                           "container_inspect_binding": originals[0], "image_inspect_binding": guard.binding(self.root, image_path),
+                           "profile_tar_binding": guard.binding(self.root, tar_path),
+                           "image_digest": image_actual.get("value"), "profile_sha256": hashlib.sha256(profile_bytes).hexdigest()}
+            proof = self._profile_proof(directory, collection_phase, guard.binding(self.root, profile_path), measured, observation)
+            proof_binding = None
+            if proof is not None:
+                proof_path = directory / "runtime-profile-proof.json"
+                guard.write_json_once(proof_path, proof)
+                proof_binding = guard.binding(self.root, proof_path)
+                originals.append(proof_binding)
+            profile_identity.update(schema_version=profile_observations.RUNTIME_IDENTITY_SCHEMA, profile_observation_proof_binding=proof_binding)
+        guard.write_json_once(profile_identity_path, profile_identity)
         actual = {"image": image_actual, "profile": {"state": "known", "value": hashlib.sha256(profile_bytes).hexdigest(), "direct_binding": guard.binding(self.root, profile_identity_path)}}
         originals.extend([guard.binding(self.root, profile_path), guard.binding(self.root, profile_identity_path)])
         if not self._compose_cache:
@@ -720,7 +763,7 @@ class DockerComposeRuntime:
         return actual, environment, originals, container_id
 
     def before(self, directory: Path, expected_environment: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        actual, environment, originals, _ = self._inspect(directory / "before")
+        actual, environment, originals, _ = self._inspect(directory / "before", collection_phase="before")
         if expected_environment is not None and environment != expected_environment:
             raise guard.GuardError("armed前实测环境与冻结计划漂移")
         allowed = {(self.configuration[name]["image_digest"], self.configuration[name]["runtime_profile_sha256"]) for name in ("candidate", "rollback")}
@@ -732,6 +775,22 @@ class DockerComposeRuntime:
         if hashlib.sha256(guard.read_bytes(path)).hexdigest() != actual["profile"]["value"]:
             raise guard.GuardError("armed前宿主Profile与容器实测不符")
         originals.append(guard.binding(self.root, path))
+        container_identity_path = directory / "before" / "profile-identity.json"
+        container_identity = guard.read_json(container_identity_path)
+        proof = self._profile_proof(directory / "before", "before", guard.binding(self.root, path), actual,
+                                    {"kind": "host", "active_profile_relative": self.configuration["paths"]["active_profile_relative"],
+                                     "container_proof_binding": container_identity["profile_observation_proof_binding"],
+                                     "profile_sha256": actual["profile"]["value"]})
+        if proof is None or container_identity["profile_observation_proof_binding"] is None:
+            raise guard.GuardError("armed前宿主Profile缺同次容器派生证明")
+        proof_path = directory / "before" / "host-active-profile-proof.json"
+        guard.write_json_once(proof_path, proof)
+        host_identity_path = directory / "before" / "host-profile-identity.json"
+        guard.write_json_once(host_identity_path, {"schema_version": profile_observations.HOST_IDENTITY_SCHEMA,
+                              "active_profile_relative": self.configuration["paths"]["active_profile_relative"],
+                              "profile_binding": guard.binding(self.root, path), "profile_observation_proof_binding": guard.binding(self.root, proof_path),
+                              "container_profile_identity_binding": guard.binding(self.root, container_identity_path)})
+        originals.extend([guard.binding(self.root, proof_path), guard.binding(self.root, host_identity_path)])
         return originals
 
     def failed_observation(self, fallback: dict[str, Any], directory: Path) -> dict[str, Any]:
@@ -856,10 +915,10 @@ ROLLBACK;
             checkpoint()
         self._command(self._compose(material) + ["up", "--no-deps", "--detach", "--no-build", "--force-recreate", self.runtime["application_service"]], checkpoint=checkpoint)
 
-    def _observe(self, stage: str, target: dict[str, Any], expected_environment: dict[str, Any], directory: Path, checkpoint: Any = None) -> dict[str, Any]:
+    def _observe(self, stage: str, target: dict[str, Any], expected_environment: dict[str, Any], directory: Path, checkpoint: Any = None, *, collection_phase: str = "execution") -> dict[str, Any]:
         started = time.monotonic()
         records: list[dict[str, Any]] = []
-        actual, environment, originals, _ = self._inspect(directory / "identity", checkpoint)
+        actual, environment, originals, _ = self._inspect(directory / "identity", checkpoint, collection_phase=collection_phase)
         business, business_bindings = self._business(directory / "business", records, checkpoint)
         originals.extend(business_bindings)
         image_pass = actual["image"].get("state") == "known" and actual["image"].get("value") == target["image_digest"]
@@ -874,7 +933,7 @@ ROLLBACK;
                     checkpoint()
                 time.sleep(min(self.configuration["limits"]["poll_seconds"], max(0, deadline - time.monotonic())))
                 number += 1
-                current_actual, current_environment, more, _ = self._inspect(directory / f"window-{number:06d}" / "identity", checkpoint)
+                current_actual, current_environment, more, _ = self._inspect(directory / f"window-{number:06d}" / "identity", checkpoint, collection_phase=collection_phase)
                 current_business, more_business = self._business(directory / f"window-{number:06d}" / "business", records, checkpoint)
                 originals.extend(more + more_business)
                 stable_pass = stable_pass and current_environment == expected_environment
@@ -922,7 +981,7 @@ ROLLBACK;
                 raise guard.GuardError("恢复超过冻结时限")
         self._credential = guard.read_bytes(guard.check_binding(self.root, self.probes["credential_binding"])).strip()
         self._switch("rollback", bounded)
-        observation = self._observe("rollback_verified", target, environment, directory / "observed", bounded)
+        observation = self._observe("rollback_verified", target, environment, directory / "observed", bounded, collection_phase="recovery")
         return {"target": target, "actual": observation["actual"], "checks": observation["checks"], "bindings": [*observation["during_bindings"], *observation["after_bindings"]], "result": observation["result"]}
 
     def freeze(self, request: dict[str, Any], directory: Path) -> dict[str, Any]:
@@ -932,7 +991,7 @@ ROLLBACK;
         guard.check_binding(self.root, self.context["configuration_ref"])
         if guard.read_json(guard.check_binding(self.root, self.context["configuration_ref"])) != self.configuration:
             raise guard.GuardError("raw配置binding与有效配置不一致")
-        actual, environment, originals, _ = self._inspect(directory / "before")
+        actual, environment, originals, _ = self._inspect(directory / "before", collection_phase="freeze")
         records: list[dict[str, Any]] = []
         business, business_bindings = self._business(directory / "business", records)
         originals.extend(business_bindings + all_bindings_for_records(records))
@@ -1100,7 +1159,20 @@ class Arm64DeliveryExecutor:
                 raise guard.GuardError("受管来源原件不闭合")
         if raw["configuration_sha256"] != canonical_sha256(self.configuration) or raw["trusted_data_root"] != str(self.data_root) or raw["service_instance_id"] != origin["service_instance_id"]:
             raise guard.GuardError("认证通道的来源配置、实例或受管根不一致")
-        return {"content_sha256": raw["content_sha256"], "deployment_sha256": raw["deployment_sha256"], "bytes_by_path": originals, "configuration_sha256": raw["configuration_sha256"], "service_instance_id": raw["service_instance_id"], "trusted_data_root": self.data_root}
+        if raw.get("profile_configuration_binding") != self.context["configuration_ref"]:
+            raise guard.GuardError("认证通道缺同一冻结配置的 Profile 来源合同")
+
+        def read_profile_original(item: Mapping[str, Any]) -> bytes:
+            data = originals.get(item["path"])
+            if data is None:
+                raise guard.GuardError("Profile 来源合同缺 guard 已导出的精确原件")
+            return data
+
+        profile_projection = profile_observations.validate_profile_observation_projection(
+            self.configuration, self.context, raw.get("profile_proof_bindings"), read_profile_original,
+            purpose="formed_replay", producer_materials=raw.get("profile_producer_materials"))
+        return {"content_sha256": raw["content_sha256"], "deployment_sha256": raw["deployment_sha256"], "bytes_by_path": originals, "configuration_sha256": raw["configuration_sha256"], "service_instance_id": raw["service_instance_id"], "trusted_data_root": self.data_root,
+                "profile_projection": profile_projection}
 
 
 def create_executor(name: str, configuration: dict[str, Any], execution_context: dict[str, Any]) -> Arm64DeliveryExecutor:
