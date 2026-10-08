@@ -165,9 +165,12 @@ def material(attempt_root: Path, client_id: str, values: Mapping[str, Any], *, s
     client_root = attempt_root / "client-evidence" / client_id
     task_path = client_root / "tasks" / nonce / "task.json"
     bundle_root = client_root / "runs" / nonce / "source"
-    # import_bundle 在同一 run 根原子发布 run.json；递归建 source 不会收紧既有中间目录。
-    bundle_root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    bundle_root.parent.chmod(0o700)
+    # 逐级新建私有目录；递归 mkdir 的 mode 只作用于末级，不能留下 755 的客户端证据或 runs 父目录。
+    # 重入时只核已有目录权限，不 chmod 已发布的来源世界。
+    for directory in (client_root.parent, client_root, client_root / "tasks", client_root / "runs", bundle_root.parent):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        contract.require(directory.is_dir() and not directory.is_symlink() and directory.stat().st_mode & 0o077 == 0,
+                         "fixture 客户端目录必须保持私有")
     capture_root = temporary_root(attempt_root) / "server-originals" / contract.digest(dict(values))[:12] / nonce
     artifacts = [{"role": "application", "version": "fixture-app-1", "platform": "darwin/arm64", "sha256": "1" * 64}, {"role": "embedded_cli", "version": current["catalog"]["entry"]["version"], "platform": "darwin/arm64", "sha256": current["catalog"]["entry"]["binary_sha256"]}]
     if client_id == "claude-vscode":

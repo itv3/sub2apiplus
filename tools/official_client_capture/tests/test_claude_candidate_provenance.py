@@ -595,6 +595,10 @@ class SealedCandidateRestorationAccountingTests(reuse_tests.CandidateReuseFixtur
         source_payload = json.loads(attempt_path.read_bytes())
         excluded = set(row["evidence_roots"])
         source_payload["evidence_roots"] = [value for value in source_payload["evidence_roots"] if value not in excluded]
+        # 只重建本负例的合成输入，保持自摘要有效，才能单独命中来源清单漏根判据。
+        source_payload["attempt_digest"] = reuse_tests.claude_upgrade._fingerprint(
+            {key: value for key, value in source_payload.items() if key != "attempt_digest"}
+        )
         _write(attempt_path, json.dumps(source_payload))
         document = reuse_tests.evidence_manifest.build_evidence_manifest(
             seal._sealed_evidence_roots(source, source_attempt, reuse_tests.CANDIDATE),
