@@ -5333,7 +5333,22 @@ def _run_shared_subcommand(arguments: argparse.Namespace) -> tuple[dict[str, Any
     raise ConfigurationError(f"不是共享流程的子命令：{command}")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _record_campaign_run_action_failure(failure_kind: str, error: BaseException) -> None:
+    """尽力写入父动作的 v4 脱敏诊断；写入失败不覆盖原异常、输出或退出码。"""
+
+    try:
+        codex_upgrade_supervisor.write_campaign_run_action_diagnostic(
+            failure_kind=failure_kind,
+            error=error,
+            # 忠实传递异常已有的机器分类；缺省沿用监督器默认值，不按文案或异常类型重分类。
+            failure_class=getattr(error, "failure_class", "execution-failure"),
+        )
+    except BaseException:
+        # 父进程独立校验或生成兜底诊断；此处只忽略诊断保存失败，原错误仍走原控制流。
+        pass
+
+
+def _main(argv: list[str] | None = None) -> int:
     """Claude 编排器入口：共享子命令转调共享实现，freeze 转调官方制品冻结，plan 展开取证 Job（B2-05），
     import-predecessor-evidence 导入前序证据（B2-09），capture-official run 执行官方取证 attempt（B2-06），capture-official
     seal 封存官方证据（B2-07），tool-evolution 与 ``RECOVERY_SUBCOMMANDS``（对账、恢复预览、resume --rerun-failed、
@@ -5349,8 +5364,8 @@ def main(argv: list[str] | None = None) -> int:
     拒绝，草案、修订与预览这类等审核的暂停点退出 0（``claude_upgrade_batch`` 第四、五节）。
 
     分派前先过项目总账消费者门禁（``_assert_consumer_admission``，与 Codex 主入口同一判据：达上限只挡该根因）；
-    可处理异常与 Codex 主入口同一组，报错退出 1。租约、遗留入口拒绝与停线收据等 Codex 主入口的其余外层流程，
-    随租约与锁（B1-09 续）一起落实。
+    可处理异常与 Codex 主入口同一组，原样报错退出 1，并尽力写父动作的脱敏诊断；未捕获异常由最外层 main 记录后原样
+    抛出。租约、遗留入口拒绝与停线收据等其余外层流程，仍随租约与锁（B1-09 续）落实。
     """
 
     arguments = _build_parser().parse_args(argv)
@@ -5360,6 +5375,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             summary = claude_upgrade_freeze.run(arguments)
         except claude_upgrade_freeze.FreezeError as error:
+            _record_campaign_run_action_failure("handled-error", error)
             print(f"官方制品冻结失败：{error}", file=sys.stderr)
             return 1
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
@@ -5461,10 +5477,23 @@ def main(argv: list[str] | None = None) -> int:
         return_code = claude_upgrade_batch.campaign_run_aware_exit_code(result, return_code)
     except (ConfigurationError, OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
         # 与 Codex 主入口同一组可处理异常（共享流程抛的总账、账本、对账器错误都是 ValueError 子类）：报错退出 1。
+        _record_campaign_run_action_failure("handled-error", error)
         print(f"Claude 升级失败：{error}", file=sys.stderr)
         return 1
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return return_code
+
+
+def main(argv: list[str] | None = None) -> int:
+    """沿用既有 CLI 行为，为未捕获异常补父动作诊断后仍抛出原异常。"""
+
+    try:
+        return _main(argv)
+    except BaseException as error:
+        # argparse 的正常帮助出口不是动作失败；其他异常只补诊断，不改原传播。
+        if not (isinstance(error, SystemExit) and error.code in (None, 0)):
+            _record_campaign_run_action_failure("unexpected-error", error)
+        raise
 
 
 if __name__ == "__main__":
