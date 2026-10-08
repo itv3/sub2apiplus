@@ -18,7 +18,7 @@ import sys
 import time
 import traceback
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 from unittest import mock
 
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
@@ -102,6 +102,9 @@ def _inputs(data: Path) -> dict[str, Any]:
                  "static_conclusions": "合成控制输入，不是历史 307 sink 的原始分析结论",
                  "template_version_facts": source.binding(original_facts)})
     return {"bindings": records,
+            # 候选容器与 7/9 只用于 fixture_only 控制来源；它们随 source state 冻结，后段不得另取真实账号或改值。
+            "candidate_configuration": {"service_container": "sub2apiplus", "keeper_container": "sub2apiplus-keeper",
+                                        "postgres_container": "sub2apiplus-postgres", "claude_account_id": "7", "api_key_id": "9"},
             "jobs": {job["id"]: [step["probe_id"] for step in job["steps"]] for job in scenarios["capture_jobs"] if job["phase"] == "official"},
             "candidate_jobs": {job["id"]: [step["probe_id"] for step in job["steps"]] for job in scenarios["capture_jobs"] if job["phase"] == "candidate"},
             "repository_bindings": {"fixture-only/baseline.json": records["baseline"],
@@ -217,13 +220,19 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
     source.write(environment / "facts.json", facts)
     arm.finalize(environment, "facts.json", "receipt.json")
     arm.replay(environment, "receipt.json")
-    active = source.write(control / "active.json", {"fixture_only": True, "release": "claude-recorded-baseline"})
-    profile = source.write(control / "profile.json", {"fixture_only": True})
-    anchors = source.write(control / "anchors.json", {"fixture_only": True})
-    reachability = source.write(control / "reachability.json", {"fixture_only": True})
+    frozen = state["inputs"]["bindings"]
+    def baseline_input(name: str, filename: str, fallback: dict[str, Any]) -> Path:
+        # 完整链在 VC-0 前提供全部输入；旧 VC-1 专用世界保留显式占位，禁止封存后再补改。
+        return source.bound(frozen[name], root=data) if name in frozen else source.write(control / filename, fallback)
+
+    active = baseline_input("active_release_catalog", "active.json", {"fixture_only": True, "release": "claude-recorded-baseline"})
+    profile = baseline_input("active_profile", "profile.json", {"fixture_only": True})
+    anchors = baseline_input("static_baseline_anchors", "anchors.json", {"fixture_only": True})
+    reachability = baseline_input("static_baseline_reachability", "reachability.json", {"fixture_only": True})
     predecessor, predecessor_id = campaign_fixture.build_predecessor_store(data / "fixture-predecessor")
     preflight = data / "evidence" / "campaigns" / PREFLIGHT
     inputs = state["inputs"]["bindings"]
+    candidate_configuration = state["inputs"]["candidate_configuration"]
     values = {
         "--campaign-dir": preflight, "--campaign-id": PREFLIGHT, "--campaign-mode": "preflight_only",
         "--campaign-purpose": "validation_only", "--baseline-version": BASELINE, "--target-version": source.VERSION,
@@ -237,6 +246,10 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
         "--static-baseline-anchors": anchors, "--static-baseline-reachability": reachability,
         "--entrypoint": "sdk-cli", "--privacy-mode": "essential-traffic", "--oauth-org-id": "claude-org-fixture",
         "--model-catalog-sha256": "f" * 64, "--source-commit": "e" * 40,
+        "--service-container": candidate_configuration["service_container"],
+        "--keeper-container": candidate_configuration["keeper_container"],
+        "--postgres-container": candidate_configuration["postgres_container"],
+        "--claude-account-id": candidate_configuration["claude_account_id"], "--api-key-id": candidate_configuration["api_key_id"],
         "--production-inventory-store": predecessor, "--production-inventory-campaign": predecessor_id,
         "--rule-manifest": inputs["baseline"]["path"], "--scenario-manifest": inputs["scenarios"]["path"],
         "--evidence-labels": inputs["labels"]["path"],
@@ -527,7 +540,11 @@ def activate() -> None:
         os._exit(code or 0)
 
 
-def namespace_main(arguments: argparse.Namespace) -> dict[str, Any]:
+def namespace_main(
+    arguments: argparse.Namespace, *, inputs_builder: Callable[[Path], dict[str, Any]] = _inputs,
+    chain_runner: Callable[[Path, str], dict[str, Any]] = run_chain,
+    activation_module: str = "tools.official_client_capture.tests.claude_vc1_recorded_chain_driver",
+) -> dict[str, Any]:
     """外壳已 unshare；原始目录只读挂载后才建副本与控制输入。"""
 
     data = Path(arguments.data).resolve()
@@ -547,7 +564,7 @@ def namespace_main(arguments: argparse.Namespace) -> dict[str, Any]:
     shutil.copytree(REPOSITORY / "tools", data / "tools", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     snapshot = replay.build_snapshot(data / "control/snapshot", recorded=Path(arguments.recorded))
     freeze = source.stage_freeze(data / "official/claude-code-2.1.226", Path(arguments.freeze))
-    inputs = _inputs(data)
+    inputs = inputs_builder(data)
     state = {"schema_version": source.SCHEMA, "fixture_only": True, "purpose": "regression_fixture", "target_version": source.VERSION,
              "data_root": str(data), "snapshot": snapshot, "freeze": freeze, "inputs": inputs, "jobs": inputs["jobs"],
              "parent_namespaces": parent_namespaces, "readonly_sources": roots}
@@ -556,13 +573,13 @@ def namespace_main(arguments: argparse.Namespace) -> dict[str, Any]:
     site = data / "control/site"
     site.mkdir(mode=0o700)
     (site / "sitecustomize.py").write_text(
-        "import os,traceback\ntry:\n from tools.official_client_capture.tests.claude_vc1_recorded_chain_driver import activate\n activate()\n"
+        "import os,traceback\ntry:\n from " + activation_module + " import activate\n activate()\n"
         "except BaseException:\n traceback.print_exc()\n os._exit(97)\n", encoding="utf-8")
     from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
     with mock.patch.dict(os.environ, {source.STATE_ENV: str(state_path), source.DIGEST_ENV: digest,
                                      FIXTURE_ONLY_ENV: "1", "PYTHONDONTWRITEBYTECODE": "1",
                                      "PYTHONPATH": os.pathsep.join([str(site), str(REPOSITORY)])}):
-        return run_chain(state_path, digest)
+        return chain_runner(state_path, digest)
 
 
 def main(argv: list[str] | None = None) -> int:
