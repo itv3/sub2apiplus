@@ -287,6 +287,46 @@ class MacV2ContractTests(unittest.TestCase):
         self.assertTrue(index_path.is_file())
         self.assertEqual(importer.collect_campaign_runs(self.campaign)[0]["status"], "unresolved")
 
+    def test_reservation_is_indexed_before_ready_exists(self) -> None:
+        services = mock.Mock(fixture_only=True)
+        index_path = self.attempt / "client-evidence/reservations" / (self.task["execution"]["producer_run_id"] + ".json")
+        index_path.unlink()
+        (self.capture / "ready.json").unlink()
+        services.wait_capture_ready.side_effect = RuntimeError("真实 ready 尚未发布")
+        with self.assertRaisesRegex(RuntimeError, "尚未发布"):
+            control.run_client(self.task_path, self.attempt, services=services)
+        self.assertTrue(index_path.is_file())
+        services.close_capture.assert_called_once_with(self.task)
+        services.recorder.assert_not_called()
+        self.assertEqual(importer.collect_campaign_runs(self.campaign)[0]["status"], "unresolved")
+        # 预约登记不授予成功权，完整消费继续严格要求真实 ready。
+        with self.assertRaises(ValueError):
+            source.verify_reservation_v2(self.task, self.capture)
+
+    def test_registration_failure_still_closes_original_capture(self) -> None:
+        services = mock.Mock(fixture_only=True)
+        index_path = self.attempt / "client-evidence/reservations" / (self.task["execution"]["producer_run_id"] + ".json")
+        index_path.unlink()
+        adapter = c.SOURCE_ADAPTERS[self.task["execution"]["recorder_id"]]
+        with mock.patch.object(adapter, "verify_capture_origin", side_effect=RuntimeError("预约来源暂不可核")):
+            with self.assertRaisesRegex(RuntimeError, "暂不可核"):
+                control.run_client(self.task_path, self.attempt, services=services)
+        services.close_capture.assert_called_once_with(self.task)
+        services.wait_capture_ready.assert_not_called()
+        services.recorder.assert_not_called()
+        self.assertFalse(index_path.exists())
+        self.assertEqual(importer.collect_campaign_runs(self.campaign)[0]["status"], "unresolved")
+
+    def test_close_failure_preserves_ready_error_and_discoverable_reservation(self) -> None:
+        services = mock.Mock(fixture_only=True)
+        services.wait_capture_ready.side_effect = RuntimeError("独立 ready 故障")
+        services.close_capture.side_effect = OSError("关闭通道中断")
+        with self.assertRaisesRegex(RuntimeError, "ready 故障") as caught:
+            control.run_client(self.task_path, self.attempt, services=services)
+        self.assertIsInstance(caught.exception.__cause__, OSError)
+        services.recorder.assert_not_called()
+        self.assertEqual(importer.collect_campaign_runs(self.campaign)[0]["status"], "unresolved")
+
     def test_recorder_factory_failure_cannot_publish_preexisting_success_material(self) -> None:
         services = mock.Mock(fixture_only=True)
         services.recorder.side_effect = RuntimeError("录制后端缺失")

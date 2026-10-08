@@ -203,8 +203,8 @@ def _participation(task: Mapping[str, Any], root: Path, files: Mapping[str, Path
     return session, processes, modules
 
 
-def verify_reservation_v2(task: Mapping[str, Any], capture_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """重验请求前 reservation 与独立 ready；预算来源仍由既有候选监督适配器核验。"""
+def verify_reservation_body_v2(task: Mapping[str, Any], capture_root: Path) -> dict[str, Any]:
+    """先验预约本体，允许真实捕获服务尚未发布 ready；来源及预算另经受管适配器核验。"""
     task = validate_task_v2(task)
     root = Path(capture_root)
     c.require(root == Path(task["execution"]["capture_root"]), "捕获预约根与任务冻结根不符")
@@ -214,6 +214,13 @@ def verify_reservation_v2(task: Mapping[str, Any], capture_root: Path) -> tuple[
         c.require(reservation[key] == task["execution"][key], f"独立捕获预约 {key} 不符")
     c.require(reservation["deadline_utc"] == task["execution"]["request_policy"]["deadline_utc"] and c.timestamp(task["issued_at_utc"]) <= c.timestamp(reservation["reserved_at_utc"]) < c.timestamp(reservation["deadline_utc"]), "预约时间边界非法")
     c.bound_file(root, reservation["budget_reservation"])
+    return reservation
+
+
+def verify_reservation_v2(task: Mapping[str, Any], capture_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """派发与成功消费仍要求独立 ready；预约本体校验不能代替真实就绪原件。"""
+    reservation = verify_reservation_body_v2(task, capture_root)
+    root = Path(capture_root)
     ready = _fields(c.read_json(c.secure_file(root, "ready.json")), {"schema_version", "task_sha256", "capture_id", "reservation", "deployment", "ready_at_utc", "observation"}, "独立捕获 ready")
     c.require(ready["schema_version"] == READY_SCHEMA and ready["task_sha256"] == task["task_sha256"] and ready["capture_id"] == reservation["capture_id"] and ready["deployment"] == task["execution"]["source_deployments"]["capture"], "独立 ready 来源或任务不符")
     c.require(c.bound_file(root, ready["reservation"]).name == "reservation.json", "ready 未绑定准确预约原件")

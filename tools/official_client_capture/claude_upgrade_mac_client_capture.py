@@ -46,7 +46,8 @@ def register_reservation(campaign_dir: Path, attempt_root: Path, task_path: Path
     importer._require_unique_task_producer(campaign_dir, task)
     capture_root = Path(task["execution"]["capture_root"])
     c.require(c.bound_file(capture_root, reservation_binding) == capture_root / "reservation.json", "索引未绑定准确独立预约")
-    source.verify_reservation_v2(task, capture_root)
+    # 请求前索引必须先于 ready 发布；完整成功消费仍调用预约＋ready 验证器。
+    source.verify_reservation_body_v2(task, capture_root)
     adapter = _adapter(task)
     c.require(callable(getattr(adapter, "verify_capture_origin", None)), "受管捕获来源验证未实现")
     adapter.verify_capture_origin(task, capture_root)
@@ -167,13 +168,16 @@ def run_client(task_path: Path, attempt_root: Path, *, services: CandidateClient
         else:
             services.reserve(task, attempt_root)
             capture_root = Path(task["execution"]["capture_root"])
-            # 预约已经存在即登记；ready 等待失败也必须能被账务发现，不能遗失捕获方。
-            register_reservation(campaign_dir, attempt_root, task_path, c.binding(capture_root / "reservation.json", capture_root))
             try:
+                # 预约已经存在即登记；登记或 ready 失败都必须收口原捕获方。
+                register_reservation(campaign_dir, attempt_root, task_path, c.binding(capture_root / "reservation.json", capture_root))
                 services.wait_capture_ready(task)
-            except BaseException:
-                # 未启动产品的失败也关闭独立捕获；关闭失败时保留原索引为未决。
-                services.close_capture(task)
+            except BaseException as reservation_error:
+                # 保留冻结 task／已写索引；关闭失败不能覆盖最初故障或伪造零请求。
+                try:
+                    services.close_capture(task)
+                except BaseException as close_error:
+                    raise reservation_error from close_error
                 raise
             # intent 在实际运行之前持久化；任何断点都可由发现入口定位到同一 producer。
             importer._write(run_root / "dispatch-intent.json", {"schema_version": "claude-upgrade-client-dispatch-intent/v2", "task_sha256": task["task_sha256"], "producer_run_id": task["execution"]["producer_run_id"], "capture_id": task["execution"]["capture_id"], "source_deployments": task["execution"]["source_deployments"]})

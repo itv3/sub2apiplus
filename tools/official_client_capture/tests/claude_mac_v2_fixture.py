@@ -45,7 +45,8 @@ class FixtureSourceAdapter:
         self._roots(task, capture_root)
         expected = {"deployment_id": "fixture-arm64", "tool_identity_sha256": "b" * 64}
         c.require(task["execution"]["source_deployments"]["capture"] == expected, "fixture capture 受管部署不符")
-        source.verify_reservation_v2(task, capture_root)
+        # 来源认证只核已经真实存在的预约；ready 由完整派发／消费路径独立重验。
+        source.verify_reservation_body_v2(task, capture_root)
 
     def verify_undispatched(self, task: Mapping[str, Any], capture_root: Path) -> None:
         self.verify_capture_origin(task, capture_root)
