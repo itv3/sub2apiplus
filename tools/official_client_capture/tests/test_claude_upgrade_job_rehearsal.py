@@ -37,6 +37,7 @@ from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as receipt
 from tools.official_client_capture import upgrade_client_adapter as uca
+from tools.official_client_capture.tests.claude_job_rehearsal_v1_fixture import copy_formed_v1
 from tools.official_client_capture.tests.test_claude_upgrade_failure_lifecycle import fake_probe
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
@@ -368,28 +369,22 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
             receipt.assert_formal_compatible(noop_receipt, contract)
 
     def test_receipts_before_the_failure_lifecycle_probe_replay_but_are_not_formal(self) -> None:
-        """B2-11 第二部分之前的 Claude 收据（probes 只有 runs 根）：照样按原字节重放，但不能再新封存，也不能用于 Formal。"""
+        """真实 v1 storage-only 原件按原字节重放，当前生成与 Formal 均拒绝。"""
 
-        campaign = self.write_campaign()
-        with self.patched():
-            facts = self.collect(campaign, "facts.json")
-            old = copy.deepcopy(facts)
-            old["probes"].pop("failure_lifecycle")
-            # 当时的采集器同样按 probes 算运行时身份摘要：去掉探针后照原算法重算（只模拟旧收据，不改任何校验）。
-            old["runtime_identity_sha256"] = receipt._runtime_identity(old)
-            path = self.evidence / "old-facts.json"
-            path.write_bytes(receipt._canonical(old))
-            path.chmod(0o600)
-            with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "probes字段不闭合"):
-                receipt.finalize(self.evidence, "old-facts.json", "old-receipt.json", client="claude")
-            sealed = receipt.build_receipt(self.evidence, "old-facts.json", allow_collector_drift=True)
-            receipt._write_once(self.evidence / "old-receipt.json", sealed)
-            replayed = receipt.replay(self.evidence, "old-receipt.json", client="claude")
-        self.assertEqual(replayed, sealed)
-        self.assertIn("storage_probe_sha256", sealed)
-        self.assertNotIn("failure_lifecycle_probe_sha256", sealed)
-        with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "未通过"):
-            receipt.assert_formal_compatible(sealed, facts["execution_contract"])
+        copy_formed_v1(self.evidence)
+        original = (self.evidence / "storage-only-receipt.json").read_bytes()
+        replayed = receipt.replay(self.evidence, "storage-only-receipt.json", client="claude")
+        self.assertEqual(receipt._canonical(replayed), original)
+        self.assertIn("storage_probe_sha256", replayed)
+        self.assertNotIn("failure_lifecycle_probe_sha256", replayed)
+        for drift in (False, True):
+            with self.subTest(drift=drift), self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "历史 Claude v1"):
+                receipt.build_receipt(self.evidence, "storage-only-facts.json", allow_collector_drift=drift)
+        with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "历史 Claude v1"):
+            receipt.finalize(self.evidence, "storage-only-facts.json", "new-receipt.json", client="claude")
+        self.assertFalse((self.evidence / "new-receipt.json").exists())
+        with self.assertRaisesRegex(receipt.JobRehearsalReceiptError, "历史 Claude v1"):
+            receipt.assert_formal_compatible(replayed, replayed["execution_contract"])
 
     def test_failed_synthetic_steps_are_sealed_and_only_they_rerun(self) -> None:
         campaign = self.write_campaign()
@@ -424,7 +419,7 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
             return lambda value: value["binary_verification"].__setitem__(field, item)
 
         def shrink(tree: dict) -> None:
-            # 少一个文件、自身摘要仍自洽的工具树：自身校验通过，四份互等核对拒绝。
+            # 少一个文件后重算自摘要，仍必须因与冻结完整读集不符而拒绝。
             tree["entries"].pop()
             tree["entry_count"] = len(tree["entries"])
             tree["files_sha256"] = receipt._fingerprint({"entries": tree["entries"]})
@@ -434,7 +429,7 @@ class ClaudeRehearsalTests(ClaudeRehearsalFixture):
             "wire 身份漂移": (lambda value: value["tool_identity"].__setitem__("wire_producer_sha256", "0" * 64), "wire／策略身份"),
             "启动器": (lambda value: value["jobs"][0]["steps"][0].__setitem__("launcher", "host"), "步骤演练不完整"),
             "容器集合": (lambda value: value["containers"].pop(), "容器集合"),
-            "断网容器工具树": (lambda value: shrink(value["tool_trees"]["execution_synthetic_container"]), "四份工具树"),
+            "断网容器工具树": (lambda value: shrink(value["tool_trees"]["execution_synthetic_container"]), "完整工具树与冻结合同"),
             "断网容器依赖": (lambda value: value["dependencies"].pop("synthetic_container"), "dependencies"),
             "宿主客户端摘要": (binary("host_binary", {"path": f"/opt/claude-{TARGET}/claude", "sha256": "0" * 64}), "核验事实"),
             "断网容器联网": (lambda value: value["binary_verification"]["synthetic_container"].__setitem__("network_mode", "bridge"), "核验事实"),

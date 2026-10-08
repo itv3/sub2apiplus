@@ -29,6 +29,7 @@ from unittest import mock
 from tools.official_client_capture import certify_release
 from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_campaign as campaign_module
+from tools.official_client_capture import claude_upgrade_job_rehearsal as claude_job_profile
 from tools.official_client_capture import claude_upgrade_plan
 from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import claude_upgrade_vc0_closeout as claude_closeout
@@ -84,7 +85,7 @@ class ClaudeCloseoutTestCase(CampaignWorldTestCase):
         contract = campaign_module.job_rehearsal_contract(self.preflight, self.preflight_manifest)
         self.contract = contract
         self.job_receipt = {
-            "schema_version": "official-client-job-rehearsal-receipt/v1",
+            "schema_version": claude_job_profile.RECEIPT_SCHEMA,
             "status": "passed",
             "execution_contract": contract,
             "execution_contract_sha256": job_rehearsal.execution_contract_sha256(contract),

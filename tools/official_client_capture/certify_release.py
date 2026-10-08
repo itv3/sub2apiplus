@@ -155,6 +155,7 @@ def replay_job_rehearsal(root: Path, receipt: Path, client: str = DEFAULT_CLIENT
     relative = _relative_inside(root, receipt, "Job rehearsal 收据")
     try:
         replayed = job_rehearsal.replay(Path(root).resolve(strict=True), relative, client=require_client(client))
+        job_rehearsal.assert_current_receipt(replayed, client=require_client(client))
     except (OSError, ValueError, job_rehearsal.JobRehearsalReceiptError) as error:
         raise ReleaseCertificationError(f"Job rehearsal 收据重放失败：{error}") from error
     preflight = replayed.get("preflight_campaign")
@@ -513,6 +514,10 @@ def verify(
         )
     if not SHA256_RE.fullmatch(str((payload.get("job_rehearsal") or {}).get("failure_lifecycle_probe_sha256", ""))):
         raise ReleaseCertificationError("发布认证缺少失败生命周期探针摘要")
+    try:
+        job_rehearsal.verify_current_certification_job_binding(payload["job_rehearsal"], client=require_client(client))
+    except (OSError, ValueError, job_rehearsal.JobRehearsalReceiptError) as error:
+        raise ReleaseCertificationError(f"发布认证的当前 Job 消费失败：{error}") from error
     return payload
 
 

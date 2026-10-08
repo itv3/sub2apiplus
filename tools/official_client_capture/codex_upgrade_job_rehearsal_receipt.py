@@ -849,15 +849,34 @@ def _document_adapter(schema: Any) -> Any:
     for client in upgrade_client_adapter.CLIENTS:
         adapter = upgrade_client_adapter.adapter_for(client)
         profile = adapter.job_rehearsal_profile
-        if schema in (profile.FACTS_SCHEMA, profile.RECEIPT_SCHEMA, profile.EXECUTION_CONTRACT_SCHEMA):
+        if schema in getattr(profile, "DOCUMENT_SCHEMAS", (profile.FACTS_SCHEMA, profile.RECEIPT_SCHEMA, profile.EXECUTION_CONTRACT_SCHEMA)):
             return adapter
     return upgrade_client_adapter.adapter_for(DEFAULT_CLIENT)
+
+
+def _document_profile(schema: Any) -> Any:
+    """经客户端画像选文档的精确形成版本，不把历史解释当作当前准入。"""
+
+    return _document_adapter(schema).job_rehearsal_profile.profile_for_schema(schema)
+
+
+def assert_current_receipt(receipt: Mapping[str, Any], *, client: str | None = None) -> None:
+    """当前消费端的固定准入，无历史或 collector 降级开关。"""
+
+    adapter = _adapter(client) if client is not None else _document_adapter(_schema_of(receipt))
+    adapter.job_rehearsal_profile.require_current_receipt(receipt)
+
+
+def verify_current_certification_job_binding(binding: Mapping[str, Any], *, client: str = DEFAULT_CLIENT) -> None:
+    """当前认证按画像核实际 Job 来源；Codex 保留原有绑定验证口径。"""
+
+    _adapter(client).job_rehearsal_profile.rehearsal_verify_current_certification_binding(binding)
 
 
 def _validate_contract(contract: Any) -> dict[str, Any]:
     """按执行合同自带的合同名取画像校验；Codex 合同（以及认不出合同名的）即 ``validate_execution_contract``。"""
 
-    return _document_adapter(_schema_of(contract)).job_rehearsal_profile.validate_execution_contract(contract)
+    return _document_profile(_schema_of(contract)).validate_execution_contract(contract)
 
 
 def build_codex_job_contract(
@@ -958,9 +977,68 @@ def rehearsal_execution_roots(campaign_dir: Path, manifest: Mapping[str, Any]) -
     return capture_root, execution_root, str(execution_root)
 
 
-def rehearsal_container_tool_trees(configuration: Mapping[str, Any], container_root: str) -> dict[str, Any]:
+def profile_for_schema(schema: Any) -> Any:
+    """Codex 原画像；未知合同仍由原闭集校验拒绝。"""
+
+    del schema
+    return sys.modules[__name__]
+
+
+def require_current_facts(facts: Mapping[str, Any]) -> None:
+    """Codex 当前生成仍只接受原 facts 合同。"""
+
+    if _schema_of(facts) != FACTS_SCHEMA:
+        raise JobRehearsalReceiptError("facts.schema_version 不匹配")
+
+
+def require_current_contract(contract: Mapping[str, Any]) -> None:
+    """委托原 Codex 执行合同校验。"""
+
+    validate_execution_contract(dict(contract))
+
+
+def require_current_receipt(receipt: Mapping[str, Any]) -> None:
+    """Codex 当前收据仍采用原版本；不改变其字段或内容摘要。"""
+
+    if _schema_of(receipt) != RECEIPT_SCHEMA:
+        raise JobRehearsalReceiptError("receipt.schema_version 不匹配")
+
+
+def rehearsal_verify_current_certification_binding(binding: Mapping[str, Any]) -> None:
+    """Codex 的认证验证已核绑定，保持原消费行为。"""
+
+    del binding
+
+
+def rehearsal_validate_collector(collector: Mapping[str, Any]) -> None:
+    """Codex 采集器继续由原字段闭集与当前字节比较校验。"""
+
+    del collector
+
+
+def rehearsal_host_tool_tree(tool_root: Path, contract: Mapping[str, Any], *, role: str) -> dict[str, Any]:
+    """Codex 委托原单根三后缀观测，输出字节不增字段。"""
+
+    del contract, role
+    return _tool_tree_summary(tool_root)
+
+
+def rehearsal_validate_tool_trees(trees: Any, contract: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """Codex 委托原三份工具树闭集、逐条比较与合同绑定。"""
+
+    names = ("managed_host", "execution_host", *CONTAINER_TREE_NAMES)
+    values = _expect(trees, set(names), "tool_trees")
+    result = {name: _validate_tree(values[name], f"tool_trees.{name}") for name in names}
+    if (not all(tree["entries"] == result[names[0]]["entries"] for tree in result.values())
+            or not rehearsal_tree_matches_contract(result[names[0]], contract)):
+        raise JobRehearsalReceiptError("三份工具树或 Campaign 工具摘要不一致")
+    return result
+
+
+def rehearsal_container_tool_trees(configuration: Mapping[str, Any], container_root: str, *, contract: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Codex 画像：容器内执行副本的工具树（只有 capture-cli 一个容器）。"""
 
+    del contract
     return {"execution_container": _container_tool_tree(str(configuration["capture_container"]), container_root)}
 
 
@@ -1250,7 +1328,7 @@ def _contract_reuse_identity(contract: Mapping[str, Any]) -> dict[str, Any]:
     稳定字段按执行合同的客户端画像取（B2-10）；Codex 是 ``CONTRACT_REUSE_FIELDS``，与改造前写在这里的元组相同。
     """
 
-    stable_fields = _document_adapter(_schema_of(contract)).job_rehearsal_profile.CONTRACT_REUSE_FIELDS
+    stable_fields = _document_profile(_schema_of(contract)).CONTRACT_REUSE_FIELDS
     return {field: contract.get(field) for field in stable_fields}
 
 
@@ -3577,7 +3655,7 @@ def _collect_facts(
     # 计划阶段只读取 manifest、场景、Job 合同和当前受管工具树。任何可能触碰
     # Docker、官方二进制、执行副本、环境或运行容器的探针都必须放在空集判断之后。
     managed_root = Path(adapter.orchestrator.__file__).resolve().parent
-    managed_tree = _tool_tree_summary(managed_root)
+    managed_tree = profile.rehearsal_host_tool_tree(managed_root, contract, role="managed_host")
     # 工具树摘要只由当前受管树生成，不能从前序收据复制，避免把旧工具身份误当成当前身份。
     component_summary = _component_summary(managed_tree)
     previous_facts: dict[str, Any] | None = None
@@ -3643,8 +3721,11 @@ def _collect_facts(
     # Claude：configuration.capture_tool_root 映射到宿主，抓包与断网两个容器）。
     verify_root, execution_root, container_root = profile.rehearsal_execution_roots(campaign_dir, manifest)
     adapter.orchestrator._verify_execution_tree(verify_root)
-    execution_tree = _tool_tree_summary(execution_root)
-    container_trees = profile.rehearsal_container_tool_trees(configuration, container_root)
+    execution_tree = profile.rehearsal_host_tool_tree(execution_root, contract, role="execution_host")
+    container_trees = profile.rehearsal_container_tool_trees(configuration, container_root, contract=contract)
+    profile.rehearsal_validate_tool_trees(
+        {"managed_host": managed_tree, "execution_host": execution_tree, **container_trees}, contract
+    )
     if not (
         all(
             managed_tree["entries"] == tree["entries"]
@@ -4621,7 +4702,7 @@ def _validate_incremental_noop_facts(
     客户端按 facts 自带的合同名认（B2-10）：合同名、执行合同校验与采集器身份取该客户端的画像；认不出时按 Codex。
     """
 
-    profile = _document_adapter(_schema_of(facts)).job_rehearsal_profile
+    profile = _document_profile(_schema_of(facts))
     required = {
         "schema_version",
         "status",
@@ -4753,6 +4834,7 @@ def _validate_incremental_noop_facts(
         set(profile.PRODUCER_FIELDS),
         "incremental-noop.collector",
     )
+    profile.rehearsal_validate_collector(collector)
     if not allow_collector_drift and collector != profile.rehearsal_producer():
         raise JobRehearsalReceiptError("incremental-noop 采集器身份漂移")
     return {
@@ -4792,7 +4874,7 @@ def validate_facts(
         )
 
     adapter = _document_adapter(_schema_of(facts))
-    profile = adapter.job_rehearsal_profile
+    profile = _document_profile(_schema_of(facts))
     required_fact_fields = {
         "schema_version",
         "observed_at_utc",
@@ -4845,22 +4927,7 @@ def validate_facts(
     }:
         raise JobRehearsalReceiptError("演练宿主不是 ARM64 Linux")
     profile.rehearsal_validate_containers(facts.get("containers"), contract)
-    tree_names = ("managed_host", "execution_host", *profile.CONTAINER_TREE_NAMES)
-    trees = _expect(
-        facts.get("tool_trees"),
-        set(tree_names),
-        "tool_trees",
-    )
-    tree_values = [
-        _validate_tree(trees[name], f"tool_trees.{name}")
-        for name in tree_names
-    ]
-    if (
-        not all(tree["entries"] == tree_values[0]["entries"] for tree in tree_values)
-        or not profile.rehearsal_tree_matches_contract(tree_values[0], contract)
-    ):
-        copies = {3: "三份", 4: "四份"}.get(len(tree_names), f"{len(tree_names)} 份")
-        raise JobRehearsalReceiptError(f"{copies}工具树或 Campaign 工具摘要不一致")
+    profile.rehearsal_validate_tool_trees(facts.get("tool_trees"), contract)
     component_summary = facts.get("tool_components")
     if component_summary is not None:
         _validate_component_summary(component_summary, "tool_components")
@@ -5097,6 +5164,7 @@ def validate_facts(
         set(profile.PRODUCER_FIELDS),
         "collector",
     )
+    profile.rehearsal_validate_collector(collector)
     if not allow_collector_drift and collector != profile.rehearsal_producer():
         raise JobRehearsalReceiptError("Job 演练采集器身份漂移")
     # 画像额外的 facts 字段（Codex 没有；Claude 核对采集当时的有效工具身份与执行合同一致）。
@@ -5125,6 +5193,22 @@ def build_receipt(
     *,
     allow_collector_drift: bool = False,
 ) -> dict[str, Any]:
+    """当前收据生成；collector 漂移不能开放旧合同发布。"""
+
+    root = _private_root(root)
+    facts, _raw = _load_json(_relative(root, facts_relative, "facts"), "facts")
+    _document_adapter(_schema_of(facts)).job_rehearsal_profile.require_current_facts(facts)
+    receipt = _assemble_receipt(root, facts_relative, allow_collector_drift=allow_collector_drift)
+    # 组装时会重读 facts；返回前再核实际结果，堵住两次读取之间换入历史原件的窗口。
+    assert_current_receipt(receipt)
+    return receipt
+
+
+def _assemble_receipt(
+    root: Path, facts_relative: str, *, allow_collector_drift: bool,
+) -> dict[str, Any]:
+    """无发布能力的公共组装逻辑；形成期重放保留事实里的原 producer。"""
+
     root = _private_root(root)
     facts_path = _relative(root, facts_relative, "facts")
     facts, raw = _load_json(facts_path, "facts")
@@ -5133,7 +5217,7 @@ def build_receipt(
         allow_collector_drift=allow_collector_drift,
     )
     # 收据合同名与签发者身份取 facts 所属客户端的画像（B2-10；Codex 即本模块的原值）。
-    profile = _document_adapter(_schema_of(facts)).job_rehearsal_profile
+    profile = _document_profile(_schema_of(facts))
     campaign = facts["preflight_campaign"]
     if validated["status"] == INCREMENTAL_NOOP_STATUS:
         # no-op 收据保留当前计划和原有 passed 收据绑定，但明确不能作为
@@ -5319,14 +5403,15 @@ def replay(root: Path, receipt_relative: str, *, client: str | None = None) -> d
     path = _relative(root, receipt_relative, "receipt")
     receipt, raw = _load_json(path, "receipt")
     profile = (
-        _adapter(client) if client is not None else _document_adapter(_schema_of(receipt))
-    ).job_rehearsal_profile
+        _adapter(client).job_rehearsal_profile.profile_for_schema(_schema_of(receipt))
+        if client is not None else _document_profile(_schema_of(receipt))
+    )
     if receipt.get("schema_version") != profile.RECEIPT_SCHEMA:
         raise JobRehearsalReceiptError("receipt.schema_version 不匹配")
     facts = receipt.get("facts")
     if not isinstance(facts, dict) or not isinstance(facts.get("path"), str):
         raise JobRehearsalReceiptError("receipt.facts 缺失")
-    expected = build_receipt(
+    expected = _assemble_receipt(
         root,
         facts["path"],
         allow_collector_drift=True,
@@ -5345,11 +5430,13 @@ def assert_formal_compatible(
     与失败生命周期两项探针摘要（``FORMAL_PROBE_DIGESTS``）；Claude 的失败生命周期探针由 B2-11 第二部分补上。
     """
 
-    profile = _document_adapter(_schema_of(expected_contract)).job_rehearsal_profile
+    profile = _document_profile(_schema_of(expected_contract))
     if receipt.get("status") == INCREMENTAL_NOOP_STATUS:
         raise JobRehearsalReceiptError(
             "incremental-noop 不是完整 Job 演练通过事实，Formal 必须绑定原有 passed 收据"
         )
+    _document_adapter(_schema_of(expected_contract)).job_rehearsal_profile.require_current_contract(expected_contract)
+    assert_current_receipt(receipt)
     profile.validate_execution_contract(dict(expected_contract))
     actual = receipt.get("execution_contract")
     if not isinstance(actual, dict):
@@ -5386,7 +5473,9 @@ def assert_recovery_compatible(
         return dict(receipt)
 
     # 客户端按期望执行合同的合同名认（B2-10），同 assert_formal_compatible。
-    profile = _document_adapter(_schema_of(expected_contract)).job_rehearsal_profile
+    profile = _document_profile(_schema_of(expected_contract))
+    _document_adapter(_schema_of(expected_contract)).job_rehearsal_profile.require_current_contract(expected_contract)
+    assert_current_receipt(receipt)
     profile.validate_execution_contract(dict(expected_contract))
     actual = receipt.get("execution_contract")
     if not isinstance(actual, dict):
@@ -5433,6 +5522,7 @@ def assert_recovery_compatible(
         raise JobRehearsalReceiptError("恢复 incremental-noop 原始通过收据漂移")
 
     source = replay(source_root, source_relative)
+    assert_current_receipt(source)
     source_contract = source.get("execution_contract")
     if not isinstance(source_contract, dict):
         raise JobRehearsalReceiptError("原始通过收据缺少执行合同")

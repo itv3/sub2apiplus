@@ -30,17 +30,26 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as job_rehearsal
+from tools.official_client_capture import claude_upgrade_job_tool_tree as tool_tree
 
 CLIENT = "claude"
-FACTS_SCHEMA = "official-client-job-rehearsal-facts/v1"
-RECEIPT_SCHEMA = "official-client-job-rehearsal-receipt/v1"
-EXECUTION_CONTRACT_SCHEMA = "official-client-job-rehearsal-contract/v1"
-PRODUCER_SCHEMA = "official-client-job-rehearsal-producer/v1"
-PRODUCER_VERSION = "1"
+FACTS_SCHEMA = "official-client-job-rehearsal-facts/v2"
+RECEIPT_SCHEMA = "official-client-job-rehearsal-receipt/v2"
+EXECUTION_CONTRACT_SCHEMA = "official-client-job-rehearsal-contract/v2"
+PRODUCER_SCHEMA = "official-client-job-rehearsal-producer/v2"
+PRODUCER_VERSION = "2"
+# 当前生成只有 v2；v1 的 schema 只供形成期固定视图解释。
+LEGACY_FACTS_SCHEMA = "official-client-job-rehearsal-facts/v1"
+LEGACY_RECEIPT_SCHEMA = "official-client-job-rehearsal-receipt/v1"
+LEGACY_EXECUTION_CONTRACT_SCHEMA = "official-client-job-rehearsal-contract/v1"
+LEGACY_PRODUCER_SCHEMA = "official-client-job-rehearsal-producer/v1"
+DOCUMENT_SCHEMAS = (FACTS_SCHEMA, RECEIPT_SCHEMA, EXECUTION_CONTRACT_SCHEMA,
+                    LEGACY_FACTS_SCHEMA, LEGACY_RECEIPT_SCHEMA, LEGACY_EXECUTION_CONTRACT_SCHEMA)
 CLI_LABEL = "Claude"
 # 采集器身份：共享流程模块与本画像模块各一份路径与摘要（两份都决定 facts 怎么产生）。
 PRODUCER_FIELDS = frozenset({"schema_version", "tool", "tool_sha256", "version", "profile", "profile_sha256"})
@@ -108,6 +117,11 @@ CONTRACT_FIELDS = frozenset(
         "job_templates_sha256",
     }
 )
+# 在新增 v2 字段前保存 v1 闭集；历史视图不得由后续字段增删推导。
+LEGACY_CONTRACT_FIELDS = CONTRACT_FIELDS
+LEGACY_CONTRACT_REUSE_FIELDS = CONTRACT_REUSE_FIELDS
+CONTRACT_FIELDS = CONTRACT_FIELDS | {"tool_tree_read_contract"}
+CONTRACT_REUSE_FIELDS = (*CONTRACT_REUSE_FIELDS, "tool_tree_read_contract")
 CONTRACT_SHA256_FIELDS = (
     "target_sha256",
     "official_identity_sha256",
@@ -260,14 +274,25 @@ def build_job_contract(
         "job_phases": dict(sorted(job_phases.items())),
         "step_counts": dict(sorted(step_counts.items())),
         "job_templates_sha256": job_rehearsal._fingerprint(templates),
+        "tool_tree_read_contract": tool_tree.build_read_contract(
+            Path(__file__).resolve().with_name("claude_tool_identity_policy_v2.json"), str(tool["policy_sha256"])
+        ),
     }
 
 
 def validate_execution_contract(contract: Any) -> dict[str, Any]:
     """Claude 执行合同的严格校验（字段闭集、合同名与客户端、摘要、配置与 Job 集）。"""
 
-    job_rehearsal._expect(contract, set(CONTRACT_FIELDS), "execution_contract")
-    if contract.get("schema_version") != EXECUTION_CONTRACT_SCHEMA or contract.get("client") != CLIENT:
+    value = _validate_execution_contract(contract, CONTRACT_FIELDS, EXECUTION_CONTRACT_SCHEMA)
+    tool_tree.validate_read_contract(value["tool_tree_read_contract"], value["policy_sha256"])
+    return value
+
+
+def _validate_execution_contract(contract: Any, fields: Iterable[str], schema: str) -> dict[str, Any]:
+    """业务字段共用原校验，版本视图分别给定固定 schema 与闭集。"""
+
+    job_rehearsal._expect(contract, set(fields), "execution_contract")
+    if contract.get("schema_version") != schema or contract.get("client") != CLIENT:
         raise _error("execution_contract.schema_version 不匹配")
     for field in CONTRACT_SHA256_FIELDS:
         if not _sha256_text(contract.get(field)):
@@ -398,24 +423,35 @@ def rehearsal_execution_roots(campaign_dir: Path, manifest: Mapping[str, Any]) -
     return execution_root.parents[1], execution_root, str(layout.capture_tool_root)
 
 
-def rehearsal_container_tool_trees(configuration: Mapping[str, Any], container_root: str) -> dict[str, Any]:
+def rehearsal_host_tool_tree(tool_root: Path, contract: Mapping[str, Any], *, role: str) -> dict[str, Any]:
+    """当前宿主受管与执行副本均枚举真实双根。"""
+
+    if role not in {"managed_host", "execution_host"}:
+        raise _error("宿主树角色非法")
+    require_current_contract(contract)
+    return tool_tree.observe_host_tree(tool_root, contract)
+
+
+def rehearsal_validate_tool_trees(trees: Any, contract: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """当前八根事实经纯闭集校验，不读取当前磁盘。"""
+
+    require_current_contract(contract)
+    return tool_tree.validate_tool_trees(trees, contract)
+
+
+def rehearsal_container_tool_trees(configuration: Mapping[str, Any], container_root: str, *, contract: Mapping[str, Any]) -> dict[str, Any]:
     """抓包容器与断网容器里执行副本的工具树（同一挂载，必须与受管树逐文件一致）。"""
 
     return {
-        name: job_rehearsal._container_tool_tree(
-            str(configuration[field]), container_root, label=str(configuration[field])
-        )
+        name: tool_tree.observe_container_tree(str(configuration[field]), container_root, contract)
         for name, field in CONTAINER_TREE_FIELDS.items()
     }
 
 
 def rehearsal_tree_matches_contract(tree: Mapping[str, Any], contract: Mapping[str, Any]) -> bool:
-    """受管树与执行合同的绑定不在这里比：共享流程的工具树摘要只覆盖 ``official_client_capture`` 一个根，Claude 总计划的
-    整树摘要按 v3 身份引擎覆盖两个受管根，二者口径不同。绑定改由 facts 额外记录的有效工具身份承担
-    （``rehearsal_validate_extra``：wire 与策略身份必须等于合同登记的值，与采集时 ``_contract_tool_matches`` 同一口径）。"""
+    """当前演练覆盖两个受管根，整树摘要直接等于执行合同冻结的 v3 身份。"""
 
-    del tree, contract
-    return True
+    return tree.get("files_sha256") == contract.get("tool_files_sha256")
 
 
 def rehearsal_extra_facts(contract: Mapping[str, Any], adapter: Any) -> dict[str, Any]:
@@ -729,16 +765,13 @@ def rehearsal_validate_probes(
     from tools.official_client_capture import claude_upgrade_failure_lifecycle
 
     configuration = contract["configuration"]
-    if allow_collector_drift and isinstance(raw_probes, dict) and set(raw_probes) == {"storage"}:
-        storage = _validate_runs_root_probe(raw_probes.get("storage"), configuration)
-        return job_rehearsal._fingerprint(storage), None
     probes = job_rehearsal._expect(raw_probes, {"failure_lifecycle", "storage"}, "probes")
     storage = _validate_runs_root_probe(probes.get("storage"), configuration)
     lifecycle = claude_upgrade_failure_lifecycle.validate_probe(probes.get("failure_lifecycle"), configuration)
     return job_rehearsal._fingerprint(storage), job_rehearsal._fingerprint(lifecycle)
 
 
-def rehearsal_validate_extra(facts: Mapping[str, Any], contract: Mapping[str, Any]) -> None:
+def _validate_formed_extra(facts: Mapping[str, Any], contract: Mapping[str, Any]) -> None:
     """采集当时的有效 wire 与策略身份必须等于执行合同登记的值（整树摘要只作审计，与 Codex v2 合同同一口径）。"""
 
     identity = job_rehearsal._expect(facts.get("tool_identity"), set(TOOL_IDENTITY_FIELDS), "tool_identity")
@@ -749,3 +782,137 @@ def rehearsal_validate_extra(facts: Mapping[str, Any], contract: Mapping[str, An
         or identity["policy_sha256"] != contract["policy_sha256"]
     ):
         raise _error("演练时的有效 wire／策略身份与执行合同不一致")
+
+
+def rehearsal_validate_extra(facts: Mapping[str, Any], contract: Mapping[str, Any]) -> None:
+    """当前完整观测的整树、wire 与策略均绑定同一执行合同。"""
+
+    _validate_formed_extra(facts, contract)
+    if facts["tool_identity"]["files_sha256"] != contract["tool_files_sha256"]:
+        raise _error("当前有效整树身份与执行合同不一致")
+
+
+def _validate_collector(collector: Mapping[str, Any], schema: str, version: str) -> None:
+    if (collector.get("schema_version") != schema or collector.get("version") != version
+            or not all(_sha256_text(collector.get(name)) for name in ("tool_sha256", "profile_sha256"))
+            or not all(isinstance(collector.get(name), str) and collector[name].startswith("/") for name in ("tool", "profile"))):
+        raise _error("采集器版本混用或来源绑定非法")
+
+
+def rehearsal_validate_collector(collector: Mapping[str, Any]) -> None:
+    """当前 collector 漂移只允许字节变化，不允许混入 v1 schema。"""
+
+    _validate_collector(collector, PRODUCER_SCHEMA, PRODUCER_VERSION)
+
+
+def require_current_facts(facts: Mapping[str, Any]) -> None:
+    """当前生成拒绝历史事实，caller drift 不是合同降级开关。"""
+
+    if facts.get("schema_version") != FACTS_SCHEMA:
+        raise _error("历史 Claude v1 facts 只能形成期重放，当前必须重新执行 v2")
+
+
+def require_current_contract(contract: Mapping[str, Any]) -> None:
+    """当前准入只接受冻结完整读集的 v2 执行合同。"""
+
+    if contract.get("schema_version") != EXECUTION_CONTRACT_SCHEMA:
+        raise _error("历史 Claude v1 执行合同不能作为当前准入")
+    validate_execution_contract(dict(contract))
+
+
+def require_current_receipt(receipt: Mapping[str, Any]) -> None:
+    """当前收据与执行合同必须同时为 v2。"""
+
+    if receipt.get("schema_version") != RECEIPT_SCHEMA:
+        raise _error("历史 Claude v1 收据只能形成期重放，不能当前消费")
+    contract = receipt.get("execution_contract")
+    if not isinstance(contract, Mapping):
+        raise _error("当前收据缺少执行合同")
+    require_current_contract(contract)
+
+
+def rehearsal_verify_current_certification_binding(binding: Mapping[str, Any]) -> None:
+    """当前 active 认证实际重放绑定 Job，并核当前 v2 与全部结果字段。"""
+
+    section = job_rehearsal._expect(binding, {
+        "evidence_root", "receipt", "sha256", "job_count", "execution_contract_sha256",
+        "failure_lifecycle_probe_sha256", "storage_probe_sha256", "preflight_campaign_id",
+    }, "发布认证 Job 绑定")
+    root = job_rehearsal._private_root(Path(str(section["evidence_root"])))
+    path = job_rehearsal._relative(root, str(section["receipt"]), "发布认证 Job 收据")
+    receipt = job_rehearsal.replay(root, str(section["receipt"]), client=CLIENT)
+    require_current_receipt(receipt)
+    preflight = receipt.get("preflight_campaign")
+    if (receipt.get("status") != "passed" or job_rehearsal._sha256_file(path) != section["sha256"]
+            or not isinstance(preflight, Mapping)
+            or preflight.get("campaign_id") != section["preflight_campaign_id"]
+            or any(receipt.get(name) != section[name] for name in (
+                "job_count", "execution_contract_sha256", "failure_lifecycle_probe_sha256", "storage_probe_sha256"))):
+        raise _error("发布认证的当前 Job 收据与绑定不一致")
+
+
+def _validate_formed_probes(raw_probes: Any, contract: Mapping[str, Any], *, allow_collector_drift: bool) -> tuple[str | None, str | None]:
+    """只读 v1 原探针合同；缺失生命周期的历史记录不补造新通过。"""
+
+    if allow_collector_drift and isinstance(raw_probes, dict) and set(raw_probes) == {"storage"}:
+        storage = _validate_runs_root_probe(raw_probes.get("storage"), contract["configuration"])
+        return job_rehearsal._fingerprint(storage), None
+    return rehearsal_validate_probes(raw_probes, contract, allow_collector_drift=allow_collector_drift)
+
+
+def _validate_formed_contract(contract: Any) -> dict[str, Any]:
+    return _validate_execution_contract(contract, LEGACY_CONTRACT_FIELDS, LEGACY_EXECUTION_CONTRACT_SCHEMA)
+
+
+def _validate_formed_tool_trees(trees: Any, contract: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    """v1 原四份单根观测，只解释形成期结构。"""
+
+    del contract
+    names = ("managed_host", "execution_host", "execution_container", "execution_synthetic_container")
+    values = job_rehearsal._expect(trees, set(names), "tool_trees")
+    result = {name: job_rehearsal._validate_tree(values[name], f"tool_trees.{name}") for name in names}
+    if not all(tree["entries"] == result[names[0]]["entries"] for tree in result.values()):
+        raise _error("四份工具树或 Campaign 工具摘要不一致")
+    return result
+
+
+class _FormedV1Profile:
+    """v1 固定解释视图；没有生成、发布或当前准入服务。"""
+
+    FACTS_SCHEMA = LEGACY_FACTS_SCHEMA
+    RECEIPT_SCHEMA = LEGACY_RECEIPT_SCHEMA
+    EXECUTION_CONTRACT_SCHEMA = LEGACY_EXECUTION_CONTRACT_SCHEMA
+    PRODUCER_SCHEMA = LEGACY_PRODUCER_SCHEMA
+    PRODUCER_FIELDS = frozenset({"schema_version", "tool", "tool_sha256", "version", "profile", "profile_sha256"})
+    EXTRA_FACT_FIELDS = frozenset({"tool_identity"})
+    CONTAINER_TREE_NAMES = ("execution_container", "execution_synthetic_container")
+    STEP_LAUNCHERS = frozenset({"capture_container", "synthetic_container"})
+    FORMAL_PROBE_DIGESTS = ("storage_probe_sha256", "failure_lifecycle_probe_sha256")
+    CONTRACT_REUSE_FIELDS = LEGACY_CONTRACT_REUSE_FIELDS
+    validate_execution_contract = staticmethod(_validate_formed_contract)
+    rehearsal_validate_tool_trees = staticmethod(_validate_formed_tool_trees)
+    rehearsal_validate_containers = staticmethod(rehearsal_validate_containers)
+    rehearsal_validate_dependencies = staticmethod(rehearsal_validate_dependencies)
+    rehearsal_validate_probes = staticmethod(_validate_formed_probes)
+    rehearsal_validate_extra = staticmethod(_validate_formed_extra)
+
+    @staticmethod
+    def rehearsal_validate_collector(collector: Mapping[str, Any]) -> None:
+        _validate_collector(collector, LEGACY_PRODUCER_SCHEMA, "1")
+
+    @staticmethod
+    def rehearsal_producer() -> dict[str, str]:
+        raise _error("形成期 v1 视图没有当前采集器或签发能力")
+
+
+_FORMED_V1 = _FormedV1Profile()
+
+
+def profile_for_schema(schema: Any) -> Any:
+    """精确版本分派；未知或另一客户端 schema 不可降级。"""
+
+    if schema in (FACTS_SCHEMA, RECEIPT_SCHEMA, EXECUTION_CONTRACT_SCHEMA):
+        return sys.modules[__name__]
+    if schema in (LEGACY_FACTS_SCHEMA, LEGACY_RECEIPT_SCHEMA, LEGACY_EXECUTION_CONTRACT_SCHEMA):
+        return _FORMED_V1
+    raise _error("Claude Job 文档版本不受支持")
