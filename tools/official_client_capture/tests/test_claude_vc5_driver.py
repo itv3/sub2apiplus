@@ -341,13 +341,23 @@ class ClaudeVc5HelperTests(unittest.TestCase):
 
     def test_seal_approval_needs_reviewed_digest_and_approver(self) -> None:
         from tools.official_client_capture.tests import claude_client_receipt_fixture
+        from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
 
-        attempt = self.root / "attempt"
-        values = {"campaign_id": "fixture-campaign", "candidate_id": "candidate-1", "attempt_id": "attempt-1", "run_nonce": "nonce-1"}
+        # 在同一私有临时根的 staging 内创建最小 Campaign，账本与收据都沿用此根。
+        # 只为本例开启离线夹具资格，不改其他辅助测试的目录或环境。
+        fixture_environment = mock.patch.dict(os.environ, {FIXTURE_ONLY_ENV: "1"})
+        fixture_environment.start()
+        self.addCleanup(fixture_environment.stop)
+        staging = self.root / "staging"
+        staging.mkdir(mode=0o700)
+        campaign = staging / "campaign"
+        claude_client_receipt_fixture.write(campaign / "campaign.json", {"campaign_id": "fixture-campaign", "client": "claude"})
+        attempt = campaign / "attempt"
+        values = {"campaign_id": "fixture-campaign", "candidate_id": "cand-1", "attempt_id": "attempt-1", "run_nonce": "nonce-1"}
         claude_client_receipt_fixture.write(attempt / "attempt.json", values)
         receipt = claude_client_receipt_fixture.write_receipt(attempt, "claude-desktop", values)
         files = {"client_bindings": {"claude-desktop": receipt}, "boundary_checks": {"third-party-ingress-rejection": self.root / "b.json"}}
-        with claude_client_receipt_fixture.source_scope(), self.env(ATT="attempt-1", A=str(attempt)), mock.patch.object(self.module, "_client_files", return_value=files), \
+        with claude_client_receipt_fixture.source_scope(), self.env(NEWDIR=str(campaign), ATT="attempt-1", A=str(attempt)), mock.patch.object(self.module, "_client_files", return_value=files), \
                 mock.patch.object(self.module, "gate_overrides", return_value={"target-platform": {"host_id": "h", "architecture": "linux/aarch64"}}), \
                 mock.patch.object(self.module, "_candidate_job_ids", return_value=JOBS), contextlib.redirect_stdout(io.StringIO()):
             for approve, approver in ((None, "reviewer-a"), ("0" * 64, None), ("not-a-digest", "reviewer-a"), ("0" * 64, "  ")):
@@ -365,7 +375,7 @@ class ClaudeVc5HelperTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--approve-seal-sha256") + 1:], ["a" * 64, "--approved-by", "reviewer-a"])
         self.assertIn(f"claude-desktop={receipt}", argv)
         missing = {"client_bindings": {"claude-desktop": None}, "boundary_checks": {}}
-        with self.env(ATT="attempt-1"), mock.patch.object(self.module, "_client_files", return_value=missing), \
+        with self.env(NEWDIR=str(campaign), ATT="attempt-1"), mock.patch.object(self.module, "_client_files", return_value=missing), \
                 self.assertRaisesRegex(ValueError, "还没就位：claude-desktop"):
             self.module.seal_plan("preview", self.root / "p.json")
 
