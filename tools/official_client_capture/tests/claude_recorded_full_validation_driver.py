@@ -373,8 +373,7 @@ def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
     from tools.official_client_capture.tests import claude_client_receipt_fixture as clients
     from tools.official_client_capture.tests import claude_vc5_chain_fixture as observation_fixture
     from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as gateway_fixture
-    from tools.official_client_capture import claude_upgrade_delivery as delivery
-    from tools.official_client_capture.tests import claude_vc6_delivery_fixture as delivery_fixture
+    from tools.official_client_capture.tests import claude_typed_vc6_fixture as delivery_fixture
 
     data = Path(state["data_root"])
     path = data / "control/full-runtime-source.json"
@@ -427,9 +426,7 @@ def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
             control = source.read(source.bound(source.binding(delivery_control), root=data))
             if control.get("fixture_only") is not True or control.get("formal_version_semantics_certified") is not False:
                 raise replay.ReplayError("交付执行器来源未显式限定控制回归")
-            stack.enter_context(mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {
-                delivery_fixture.EXECUTOR_NAME: lambda: delivery_fixture.FileExecutor(delivery_control),
-            }))
+            stack.enter_context(delivery_fixture.source_scope(delivery_control))
         yield
 
 
@@ -671,14 +668,12 @@ def compare_and_accept(data: Path, campaign: Path) -> dict[str, Any]:
             "gate": source.binding(root / receipt), "acceptance": stage}
 
 
-def deliver(data: Path, campaign: Path) -> dict[str, Any]:
-    """外部执行器按真实交付计划给观察；run/finalize、Store 收据、计时账与 VC-6 checkpoint 都由正式批次完成。"""
+def deliver(data: Path, campaign: Path, typed_fixture: Any) -> dict[str, Any]:
+    """typed 文件现场和独立守卫给原件；Store、收据、账本与 checkpoint 由正式批次完成。"""
 
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import claude_upgrade_delivery as delivery
-    from tools.official_client_capture.tests import claude_vc6_delivery_fixture as fixture
-
-    action = delivery.run_action(campaign, CANDIDATE, environment_executor=fixture.EXECUTOR_NAME, observation_window_seconds=60)
+    action = typed_fixture.run_action()
     batches = [vc1._batch(data, campaign, delivery.RUN_ACTION_ID, [], phase="VC-6", action=action)]
     status = delivery.delivery_status(campaign, CANDIDATE)
     if status.get("status") != "delivery_awaiting_finalize":
@@ -700,7 +695,7 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
     from tools.official_client_capture import codex_upgrade_project_ledger as project
     from tools.official_client_capture import codex_upgrade_timing_ledger as timing
     from tools.official_client_control.store import ControlStore
-    from tools.official_client_capture.tests import claude_vc6_delivery_fixture as delivery_fixture
+    from tools.official_client_capture.tests import claude_typed_vc6_fixture as delivery_fixture
 
     started = time.monotonic()
     state = source.load_state(state_path, digest)
@@ -722,13 +717,9 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
         vc1.load_continuation(continuation_path, continuation_digest)
         stages["VC-5-capture"] = capture_and_seal(data, campaign)
         stages["VC-5-accept"] = compare_and_accept(data, campaign)
-    source.write(data / "control/recorded-delivery-control.json", {
-        "fixture_only": True, "purpose": "recorded_control_delivery_source", "formal_version_semantics_certified": False,
-        "environment": {**delivery_fixture.ENVIRONMENT, "host_id": HOST, "architecture": "linux/arm64"},
-        "calls": str(data / "control/recorded-delivery-calls.jsonl"),
-    })
-    with installed(state_path, digest):
-        stages["VC-6"] = deliver(data, campaign)
+    with installed(state_path, digest), delivery_fixture.TypedDeliveryFixture(
+            campaign, CANDIDATE, control_path=data / "control/recorded-delivery-control.json") as typed_fixture:
+        stages["VC-6"] = deliver(data, campaign, typed_fixture)
         final = vc1.load_continuation(continuation_path, continuation_digest)
         manifest = final["manifest"]
         plan = upgrade._vc_campaign_plan(campaign, manifest)

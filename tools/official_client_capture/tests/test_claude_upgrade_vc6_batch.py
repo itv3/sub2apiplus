@@ -13,13 +13,15 @@ B4-07 收尾只给 ``codex_upgrade_supervisor.candidate_post_run_recovery_action
 =======================================================
 世界是 B4-06b 的真实批次链（``test_claude_upgrade_compare_accept`` 的 VC-3／VC-4 真实批次 → VC-5 compare、assert-rules、
 accept 三批到 VC-5 checkpoint），之后全部以 ``compile-and-run-vc-batch --phase VC-6`` 在父监督器的动作子进程里派发交付
-动作；交付环境执行器替身经 ``claude_vc6_delivery_fixture`` 的 usercustomize 接缝在动作子进程里登记，注入点读控制 JSON。
+动作；typed 文件现场经 ``claude_typed_vc6_fixture`` 给出回归观测，独立守卫与 Store 都走真实链。
+来源只在测试生命周期与指定动作子进程的 usercustomize 中临时登记，退出即恢复，注入点读控制 JSON。
 一条用例走完整条恢复链（世界构建约 4 分钟，只建一次）：
 
 1. 直接 CLI 的交付写入被拒（零写入）；
 2. 首轮第三阶段失败：``stage_failed`` 在父批次里退出 0（失败已写 Store、由交付侧记账），账本保持进行中；
-3. 下一个 run 批次自动预约 dr1，第四阶段中途动作进程被强杀 → 父批次失败 → 账本 ``recovery_required``（候选级零请求后处理，
+3. 下一个 run 批次自动预约 dr1，第四阶段 prepare 前动作进程被强杀 → 父批次失败 → 账本 ``recovery_required``（候选级零请求后处理，
    阶段保持进行中，不进候选审核）→ ``reconcile-supervisor-run`` 可恢复 → 逐字重派 N+1 续跑到 ``awaiting_finalize``（退出 0）；
+   原替身在阶段入口记调用后即退出，本点仍核未开始的操作同段重派；已 armed 后的真实恢复见 ``TypedArmedRecoveryTests``；
 4. 两批之间直接执行 ``delivery-stage-invalidate preview／apply``（控制面命令），下一个 run 批次以 dr2（approved_invalidation）
    从被失效的阶段重跑；status 给出 ``delivery_awaiting_finalize`` 与审核摘要；
 5. finalize 批次：交付收据、交付阶段结果与 VC-6 checkpoint，批次层补写 ``vc-batch-NNNN-vc-6-completed``；status 为
@@ -47,7 +49,7 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture import upgrade_client_adapter
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as chain
-from tools.official_client_capture.tests import claude_vc6_delivery_fixture as vc6_fixture
+from tools.official_client_capture.tests import claude_typed_vc6_fixture as vc6_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_compare_accept as compare_tests
 
@@ -197,17 +199,19 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         receipt = self.gate_receipt(world, "candidate-receipt.json")
         self.assert_batch_passed(self.dispatch_vc5(world, 11, self.accept_action(campaign, receipt, world["gate_root"])), 11, "VC-5")
         self.assertTrue(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-5", revision=1).is_file())
-        self.control = vc6_fixture.write_control(
-            self.root / "vc6" / "control.json", environment={**vc6_fixture.ENVIRONMENT, "architecture": world["architecture"]}
-        )
+        fixture = vc6_fixture.TypedDeliveryFixture(campaign, CANDIDATE)
+        fixture.__enter__()
+        self.addCleanup(fixture.close)
+        world["typed_delivery"] = fixture
+        self.control = fixture.control_path
         self.ledger_dir = claude_upgrade._campaign_timing_ledger_dir(campaign, world["manifest"])
         return world
 
     def set_control(self, world: dict[str, Any], **fields: Any) -> None:
-        vc6_fixture.write_control(self.control, environment={**vc6_fixture.ENVIRONMENT, "architecture": world["architecture"]}, **fields)
+        vc6_fixture.write_control(self.control, **fields)
 
     def run_action(self, world: dict[str, Any]) -> dict[str, Any]:
-        return delivery.run_action(world["campaign"], CANDIDATE, environment_executor=vc6_fixture.EXECUTOR_NAME, observation_window_seconds=60)
+        return world["typed_delivery"].run_action()
 
     def dispatch_vc6(self, world: dict[str, Any], sequence: int, action: dict[str, Any]) -> tuple[int, dict | None, str]:
         campaign = world["campaign"]
@@ -266,10 +270,13 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         self.assert_batch_passed(self.dispatch_vc6(world, 12, run), 12, "VC-6")
         self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
         self.assert_status(world, "delivery_stage_failed")
-        # 3. 下一个 run 批次预约 dr1，第四阶段动作进程被强杀 → 父批次失败 → 对账 → 逐字重派续跑到 awaiting_finalize。
+        # 3. dr1 阶段四 prepare 前强杀（原替身也未变更现场）；父 run 对账后同段重派。
+        # armed 后强杀另由 TypedArmedRecoveryTests 覆盖，不能据此把已 armed 事实当成未发生。
         self.set_control(world, kill_at=["dr1", "stable_observed"])
+        physical_before = len(vc6_fixture.read_calls(self.control, physical=True))
         self.assert_batch_failed_and_reconcile(self.dispatch_vc6(world, 13, run), delivery.RUN_ACTION_ID)
         self.assert_status(world, "delivery_in_progress")
+        self.assertEqual(vc6_fixture.read_calls(self.control, physical=True)[physical_before:], [("dr1", "candidate_restored")])
         self.set_control(world)
         self.assert_batch_passed(self.dispatch_vc6(world, 14, run), 14, "VC-6")
         self.assertEqual(
@@ -277,6 +284,9 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
             [("dr0", "candidate_active"), ("dr0", "rollback_verified"), ("dr0", "candidate_restored"),
              ("dr1", "candidate_restored"), ("dr1", "stable_observed"), ("dr1", "stable_observed")],
         )
+        self.assertEqual(vc6_fixture.read_calls(self.control, physical=True),
+            [("dr0", "candidate_active"), ("dr0", "rollback_verified"), ("dr0", "candidate_restored"),
+             ("dr1", "candidate_restored"), ("dr1", "stable_observed")])
         # 4. 两批之间批准第二阶段失效（控制面命令，直接执行），下一个 run 批次以 dr2 从它起重跑。
         code, preview, stderr = run_main(
             ["delivery-stage-invalidate", "preview", "--campaign-dir", campaign, "--candidate-id", CANDIDATE,

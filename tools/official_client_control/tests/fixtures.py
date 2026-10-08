@@ -20,6 +20,7 @@ from tools.official_client_control.canonical import (
     canonical_json_bytes,
     canonical_sha256,
     sha256_file,
+    validate_relative_path,
 )
 from tools.official_client_control.contracts import (
     atomic_assertion_ledger_identity_sha256,
@@ -168,15 +169,37 @@ def synthetic_tool_identity(manifest: dict[str, Any]) -> dict[str, Any]:
 class SyntheticCampaign:
     """按文档顺序生成可在单元测试中变异的完整受管事实链。"""
 
-    def __init__(self, root: Path, *, schema: str = "v1") -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        schema: str = "v1",
+        store: ControlStore | None = None,
+        external_root: Path | None = None,
+        external_prefix: str = "",
+    ) -> None:
+        """可在原 Store 内构造独立回滚资格；不复制事实、收据或成功终态。
+
+        同 Store 模式必须显式指定已有外部根和非空原件前缀，防止合成输入
+        覆盖原世界的原件。默认模式仍独立初始化，已有测试的路径与字节不变。
+        """
+
         if schema not in {"v1", "v2"}:
             raise ValueError(f"不支持的 Campaign 合同：{schema}")
+        if store is not None:
+            if external_root is None or not external_root.is_dir() or not external_prefix:
+                raise ValueError("同 Store 夹具必须给出已有外部根与独立原件前缀")
+            validate_relative_path(external_prefix, "测试原件前缀")
+        elif external_root is not None or external_prefix:
+            raise ValueError("外部根与原件前缀只适用于同 Store 模式")
         self.root = root
         self.schema = schema
-        self.external_root = root / "external"
-        self.external_root.mkdir(mode=0o700)
-        self.store_root = root / "store"
-        self.store = ControlStore.initialize(
+        self.external_root = external_root if external_root is not None else root / "external"
+        self.external_prefix = external_prefix
+        if store is None:
+            self.external_root.mkdir(mode=0o700)
+        self.store_root = store.root if store is not None else root / "store"
+        self.store = store if store is not None else ControlStore.initialize(
             self.store_root, "2026-08-18T00:00:00Z"
         )
         self.persona = {
@@ -203,9 +226,16 @@ class SyntheticCampaign:
         return self._clock.isoformat().replace("+00:00", "Z")
 
     def _write_external(self, relative: str, content: bytes) -> dict[str, Any]:
+        if self.external_prefix:
+            relative = f"{self.external_prefix}/{relative}"
         path = self.external_root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
+        if self.external_prefix:
+            # 原 Store 的外部文件不能覆盖；每份回滚输入只创建一次。
+            with path.open("xb") as stream:
+                stream.write(content)
+        else:
+            path.write_bytes(content)
         return {"path": relative, "sha256": sha256_file(path), "bytes": len(content)}
 
     def _prepare_external_files(self) -> None:

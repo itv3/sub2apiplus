@@ -2,7 +2,7 @@
 
 同一 Campaign 从已有 VC-3／VC-4 批次夹具经真实 compare、builder、accept 进入 VC-6。
 本文件沿用 claude_vc5_chain_fixture 明示的官方来源、候选来源及画像接缝，以及
-claude_vc6_delivery_fixture 的外部环境执行器；不将这些输入接缝算作真机取证。
+claude_typed_vc6_fixture 的 typed 文件现场与独立守卫；不将这些输入接缝算作真机取证。
 批次提交、恢复对账、交付阶段失效、Store 收据和 checkpoint 都执行产品代码。
 
 这里先覆盖交付半链，完整 A 组及 ARM64 时长验收完成前不登记 late-stage-faults 通过。
@@ -22,7 +22,7 @@ from tools.official_client_capture import claude_upgrade_recovery as recovery
 from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as chain
-from tools.official_client_capture.tests import claude_vc6_delivery_fixture as environment
+from tools.official_client_capture.tests import claude_typed_vc6_fixture as environment
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 from tools.official_client_capture.tests import test_claude_upgrade_vc6_batch as delivery_tests
 
@@ -96,8 +96,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             delivery_tests.Vc6BatchChainTests.assert_recorded_client_requests(self, world)
 
     def run_action(self, world: dict[str, Any]) -> dict[str, Any]:
-        return delivery.run_action(world["campaign"], world.get("candidate_id", CANDIDATE),
-            environment_executor=environment.EXECUTOR_NAME, observation_window_seconds=60)
+        return world["typed_delivery"].run_action()
 
     def candidate_status(self, world: dict[str, Any]) -> dict[str, Any]:
         with chain.seams(world["config_path"]):
@@ -158,9 +157,12 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         candidate = world.get("candidate_id", CANDIDATE)
         revision = world.get("revision", 1)
         # 调用方可交入同一个已完成 VC-5 的世界；不重新创建 Campaign 或清空前段账本。
-        if not hasattr(self, "control"):
-            self.control = environment.write_control(self.root / "vc6" / "control.json",
-                environment={**environment.ENVIRONMENT, "architecture": world["architecture"]})
+        if "typed_delivery" not in world:
+            fixture = environment.TypedDeliveryFixture(campaign, candidate)
+            fixture.__enter__()
+            self.addCleanup(fixture.close)
+            world["typed_delivery"] = fixture
+        self.control = world["typed_delivery"].control_path
         run = self.run_action(world)
         records = []
 
@@ -189,15 +191,19 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             expected=[f"dr0:{stage}" for stage in delivery.STAGES[:3]], entry=failed, fragments=("deliver-candidate",),
             campaign_id=campaign.name, staging_attempt=2))
 
-        # 修复阶段三后，阶段四动作被强杀；真实父 run 对账后只重派剩余阶段四。
+        # 修复阶段三后，阶段四 prepare 前强杀；对账后同段重派该阶段，物理动作只执行一次。
+        # 已 armed 的强杀另由 typed 专项核真实恢复，不得沿用这个未开始操作的断言。
         audit = self.late_audit("后段交付修复后动作中断", world)
         before_calls = len(self.delivery_calls())
+        physical_before = len(environment.read_calls(self.control, physical=True))
         self.set_control(world, kill_at=["dr1", "stable_observed"])
         self.assert_batch_failed_and_reconcile(self.dispatch_vc6(world, sequence_start + 1, run), delivery.RUN_ACTION_ID)
         interrupted = self.assert_status(world, "delivery_in_progress")
         self.set_control(world)
         self.assert_batch_passed(self.dispatch_vc6(world, sequence_start + 2, run), sequence_start + 2, "VC-6")
         self.assert_status(world, "delivery_awaiting_finalize")
+        self.assertEqual(environment.read_calls(self.control, physical=True)[physical_before:],
+            [("dr1", "candidate_restored"), ("dr1", "stable_observed")])
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()[before_calls:]],
             expected=["dr1:candidate_restored", "dr1:stable_observed", "dr1:stable_observed"],
             entry=interrupted, fragments=("deliver-candidate",), campaign_id=campaign.name))
