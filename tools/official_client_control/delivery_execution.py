@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -74,6 +74,82 @@ class _SourceBatch:
 
 
 _SOURCE_BATCH: ContextVar[_SourceBatch | None] = ContextVar("claude_delivery_source_batch", default=None)
+
+
+@dataclass
+class _QualificationReadBatch:
+    """一次只读审核中尚未执行的资格检查；不保存或承接通过结论。"""
+
+    store: Any
+    current_execution: bool
+    pending: list[dict[str, Any]] = field(default_factory=list)
+    active: bool = True
+
+
+_QUALIFICATION_READ_BATCH: ContextVar[_QualificationReadBatch | None] = ContextVar(
+    "claude_delivery_qualification_read_batch", default=None)
+
+
+@contextmanager
+def _qualification_read_batch(store: Any, *, current_execution: bool):
+    """只读计划／交付包先逐份验来源与绑定，再重放不同的完整报告。
+
+    不供 Store 写入路径使用；整个作用域成功返回前才完成资格验证。
+    相同报告只合并本次待执行计算，退出后销毁，下一次调用重新验证。
+    """
+    previous = _QUALIFICATION_READ_BATCH.get()
+    if previous is not None:
+        if not previous.active or previous.store is not store or previous.current_execution != current_execution:
+            raise ControlError("只读资格批次不能跨 Store、用途或生命周期")
+        yield
+        return
+    batch = _QualificationReadBatch(store, current_execution)
+    token = _QUALIFICATION_READ_BATCH.set(batch)
+    try:
+        yield
+        _finish_qualification_read_batch(batch)
+    finally:
+        batch.active = False
+        batch.pending.clear()
+        _QUALIFICATION_READ_BATCH.reset(token)
+
+
+def _finish_qualification_read_batch(batch: _QualificationReadBatch) -> None:
+    """完整报告按全部输入分组重放，随后重查每份实际来源与原件。"""
+    from .qualification_bindings import validate_delivery_report
+    from .receipts import _require_effective_tool
+    # 开始收口即封住待验集合；重放期间的递归调用不得追加尚未分组的任务。
+    batch.active = False
+    groups: dict[str, dict[str, Any]] = {}
+    for item in batch.pending:
+        source = item["source"]
+        key = canonical_sha256({"report": item["report"], "configuration": item["configuration"],
+            "trusted_data_root": str(source.trusted_data_root), "deployment_sha256": source.deployment_sha256,
+            "configuration_sha256": source.configuration_sha256})
+        groups.setdefault(key, item)
+    for item in groups.values():
+        source = item["source"]
+        validate_delivery_report(item["report"], batch.store, current_execution=batch.current_execution,
+            configuration=item["configuration"], trusted_data_root=source.trusted_data_root, source=source)
+    for item in batch.pending:
+        facts = item["facts"]
+        if batch.current_execution:
+            _require_effective_tool(batch.store, batch.store.load_campaign(facts["campaign_id"]))
+        # 报告重放可能耗时；批量来源必须再次核真实文件和当前守卫，不能用旧字节收口。
+        source = _verified_source(batch.store, facts, facts["origin"])
+        if (_source_json(source, item["binding"]) != item["report"]
+                or _source_json(source, item["configuration_binding"]) != item["configuration"]):
+            raise ControlError("只读资格批次收口时报告或配置原件漂移")
+        reference = item["configuration_ref"]
+        if reference is not None:
+            original = evidence_facts(batch.store, reference, "configuration")
+            original_source = _verified_source(batch.store, original, original["origin"])
+            configuration = _validate_configuration_original(batch.store, original, original_source,
+                current_execution=batch.current_execution)
+            if (configuration != item["configuration"]
+                    or original["binding"] != item["configuration_binding"]
+                    or (original["campaign_id"], original["delivery_id"]) != (facts["campaign_id"], facts["delivery_id"])):
+                raise ControlError("只读资格批次收口时冻结配置或归属漂移")
 
 
 def _source_request(content: Mapping[str, Any], origin: Mapping[str, Any]) -> dict[str, Any]:
@@ -711,6 +787,7 @@ def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], so
     for binding in bindings:
         report = _source_json(source, binding)
         configuration = None
+        reference = frozen_configuration_ref
         if report.get("schema_version") in {DELIVERY_SCHEMA, MATERIAL_DELIVERY_SCHEMA}:
             configuration_binding = _binding(report.get("configuration_binding"), "qualification.configuration_binding")
             configuration = _source_json(source, configuration_binding)
@@ -739,10 +816,19 @@ def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], so
                         or original_facts["configuration"] != configuration
                         or original_facts["configuration_sha256"] != source.configuration_sha256):
                     raise ControlError("资格报告配置绑定与冻结配置引用的真实原件不一致")
-        validate_delivery_report(report, store, current_execution=current_execution, configuration=configuration,
-                                 trusted_data_root=source.trusted_data_root, source=source)
         if report["candidate"]["qualification"]["campaign_id"] != facts["campaign_id"]:
             raise ControlError("资格报告与本次交付 Campaign 不一致")
+        batch = _QUALIFICATION_READ_BATCH.get()
+        if batch is not None and report.get("schema_version") == MATERIAL_DELIVERY_SCHEMA:
+            if not batch.active or batch.store is not store or batch.current_execution != current_execution:
+                raise ControlError("只读资格批次与本次证据图不一致")
+            from copy import deepcopy
+            batch.pending.append({"report": deepcopy(report), "configuration": deepcopy(configuration),
+                "facts": deepcopy(facts), "source": source, "binding": dict(binding),
+                "configuration_binding": dict(configuration_binding), "configuration_ref": deepcopy(reference)})
+        else:
+            validate_delivery_report(report, store, current_execution=current_execution, configuration=configuration,
+                                     trusted_data_root=source.trusted_data_root, source=source)
 
 
 def validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_execution: bool = False,
@@ -943,7 +1029,8 @@ def _validate_rollback_qualification(store: Any, plan: Mapping[str, Any], config
 
 
 def validate_plan(store: Any, plan: Mapping[str, Any], *, current_execution: bool = False) -> None:
-    with _source_batch_scope(store, _plan_source_items(store, plan)):
+    with _source_batch_scope(store, _plan_source_items(store, plan)), \
+            _qualification_read_batch(store, current_execution=current_execution):
         _validate_plan(store, plan, current_execution=current_execution)
 
 
@@ -1140,7 +1227,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
         "operation_index_binding": package["operation_index_binding"]}, package["operation_index_origin"]))
     for reference in [*package["execution_evidence_refs"], *package["restoration_evidence_refs"]]:
         items.extend(_graph_source_items(store, store.load_object(reference)["payload"]))
-    with _source_batch_scope(store, items):
+    with _source_batch_scope(store, items), _qualification_read_batch(store, current_execution=current_execution):
         _validate_delivery_package(store, package, current_execution=current_execution)
 
 

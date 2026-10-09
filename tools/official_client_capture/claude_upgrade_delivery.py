@@ -1640,7 +1640,8 @@ def _typed_package_review(context: DeliveryContext, delivery: Mapping[str, Any],
         for core in cores:
             manifest = _typed_manifest(context, f"{delivery['delivery_id']}-{kind.replace('_', '-')}-{canonical_sha256(core)[:24]}", kind, core)
             items.extend(delivery_execution._graph_source_items(context.store, manifest))
-    with delivery_execution._source_batch_scope(context.store, items):
+    with delivery_execution._source_batch_scope(context.store, items), \
+            delivery_execution._qualification_read_batch(context.store, current_execution=False):
         return _typed_package_review_inventory(context, delivery, chain, inventory)
 
 
