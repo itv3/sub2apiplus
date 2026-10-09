@@ -434,7 +434,7 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         original_publication = execution.publication_document
         original_identity = receipts.effective_tool_identity
         scenarios = (
-            ("来源失效", ControlError, "受管通道验收"),
+            ("来源失效", ControlError, "批量来源.*通道登记或生命周期已变化"),
             ("当前资格失效", ControlError, "有效七项工具身份"),
             # 批量来源在装配前取得；装配后的权限漂移由消费端独立 reader 拒绝。
             ("材料权限漂移", ReaderError, "材料实际类型、长度或模式漂移"),

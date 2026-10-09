@@ -592,12 +592,14 @@ class DeliveryRecoveryTests(_DeliveryCase):
         self.assertEqual(self.store().list_object_refs("candidate_delivery_plan"), [])
 
     def test_unregistered_executor_reports_pending(self) -> None:
+        snapshot = self.written()
         code, _result, stderr = run_main(
             ["deliver-candidate", "run", "--campaign-dir", str(self.campaign), "--candidate-id", CANDIDATE,
              "--environment-executor", "arm64-isolated"]
         )
         self.assertEqual(code, 1)
-        self.assertIn("B4-07 遗留项", stderr)
+        self.assertIn("固定 ARM64 受管安装并提供冻结执行配置", stderr)
+        self.assertEqual(self.written(), snapshot)
         self.assertEqual(delivery.ENVIRONMENT_EXECUTORS.keys() - {"fixture"}, set())
 
     def test_stage_invalidation_is_rejected_in_campaign_run(self) -> None:
