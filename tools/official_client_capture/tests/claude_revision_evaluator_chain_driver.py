@@ -507,7 +507,11 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
             evaluator_audit.check_closure(executed=[row['rule'] for row in index['rules']],
                 expected=list(upgrade._approved_rules(campaign, manifest, require_approved=True)), what='修复后按全部批准规则离线重评')
             evaluator_audit.check_accounting()
-            evaluator_audit.check_elapsed()
+            # b1 的批准合法重开 VC-5 一次；仍核累计时间、原截止和历史事件不变。
+            self.assertEqual(recovered['ledger_event']['event_type'], 'evaluation_baseline')
+            self.assertEqual(evaluator_audit.totals()['timing']['stage_started_counts']['VC-5'],
+                             evaluator_audit.totals_before['timing']['stage_started_counts']['VC-5'] + 1)
+            evaluator_audit.check_elapsed(reopened_phases=['VC-5'])
             evaluator_audit.check_history()
             evaluator_audit.check_entry(recovered, 'compile-and-run-vc-batch', 'VC-5')
             context['records'].append(evaluator_audit.report(campaign_id=campaign.name, candidate_id=SECOND_CANDIDATE,
