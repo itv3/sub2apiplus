@@ -304,11 +304,45 @@ class ScopedMacFixtureAdapter:
         return False
 
 
+def _fixture_mac_candidate_history(campaign: Path, candidate_id: str) -> list[str]:
+    """只沿原 revision 摘要链取得当前候选及前序，不能扫描任意候选目录授予来源。
+
+    交付派发的 Campaign 级检查会重验旧候选封存结果，所以 r2 的测试作用域
+    也必须能读 r1 原件。无显式 revision 的旧单候选夹具仍只登记当前候选。
+    原 revision reader 核记录与 COMMIT；这里额外核 Campaign、取代关系及
+    前序摘要，完整客户端原件仍在下方逐项绑定和验证。
+    """
+    revisions = upgrade._existing_candidate_revisions(campaign)
+    if not revisions:
+        return [candidate_id]
+    candidates: list[str] = []
+    previous = None
+    for number in revisions:
+        record, commit = upgrade._read_candidate_revision_record(campaign, number)
+        if (record is None or commit is None or number != len(candidates) + 1
+                or record["campaign_id"] != campaign.name or commit["campaign_id"] != campaign.name
+                or commit["candidate_id"] != record["candidate_id"]):
+            raise guard.GuardError("typed Mac 前序 revision 记录或 COMMIT 不完整／不同源")
+        if previous is not None:
+            supersedes = record["supersedes"]
+            if (record["previous_revision_sha256"] != previous["record_sha256"]
+                    or supersedes["candidate_id"] != previous["candidate_id"]
+                    or supersedes["revision"] != previous["revision"]):
+                raise guard.GuardError("typed Mac 前序 revision 摘要或取代关系不一致")
+        if record["candidate_id"] in candidates:
+            raise guard.GuardError("typed Mac revision 重复使用候选")
+        candidates.append(record["candidate_id"])
+        if record["candidate_id"] == candidate_id:
+            return candidates
+        previous = record
+    raise guard.GuardError("typed Mac 当前候选不在已登记的 revision 链中")
+
+
 @contextlib.contextmanager
 def fixture_mac_source_scope(configuration: dict, data_root: Path) -> Iterator[None]:
     """材料准备、父读侧及新进程各自登记；退出逐字恢复原 registry。
 
-    仅沿资格的精确 Campaign、候选与固定首轮收据取得 task。冻结 task
+    仅沿资格的精确 Campaign、当前候选及已登记前序的首轮收据取得 task。冻结 task
     全文、原字节绑定和包／捕获坐标一起钉住；fixture_only Claude 总账
     必须与原 attempt 同源。正式任务或其它世界不能借用本测试 authority。
     """
@@ -326,37 +360,39 @@ def fixture_mac_source_scope(configuration: dict, data_root: Path) -> Iterator[N
         if parent.get("external_gate") is None:
             continue
         campaign = data_root / "evidence/campaigns" / q["campaign_id"]
-        round_path = upgrade._legacy_stage_path(campaign, "capture-candidate", q["candidate_id"])[1]
-        round_one = guard.read_json(round_path)
-        client_bindings = round_one.get("client_evidence", {}).get("client_bindings", {})
-        if not client_bindings:
-            continue
-        if (parent.get("campaign_id"), parent.get("candidate_id"), round_one.get("campaign_id"),
-                round_one.get("candidate_id")) != (q["campaign_id"], q["candidate_id"], q["campaign_id"], q["candidate_id"]):
-            raise guard.GuardError("typed Mac 冻结首轮、accept 与资格归属不符")
-        attempt_root = compare._bound_campaign_file(campaign, round_one["attempt"], "typed Mac 冻结首轮 attempt").parent
-        for client_id, client_binding in client_bindings.items():
-            contract.require(client_id in contract.CLIENTS, "typed Mac 必须为已登记的 Claude 客户端")
-            path = compare._bound_campaign_file(campaign, client_binding, "typed Mac 冻结首轮客户端收据")
-            contract.require(path.parent == attempt_root / "client-evidence", "typed Mac 收据必须归属冻结首轮 attempt")
-            receipt = contract.read_json(path)
-            task_path = contract.bound_file(attempt_root, receipt["task"])
-            task = contract.validate_task(contract.read_json(task_path))
-            contract.require(task["client_id"] == client_id and task["campaign_id"] == q["campaign_id"]
-                and task["candidate_id"] == q["candidate_id"]
-                and task["execution"]["recorder_id"] == client_fixture.RECORDER,
-                "typed Mac task 的客户端、候选或 recorder 归属不符")
-            contract.verify_task_attempt(attempt_root, task)
-            bundle_root = contract.bound_file(attempt_root, receipt["bundle"]).parent
-            capture_root = Path(task["execution"]["capture_root"])
-            row = {"task": task, "task_binding": dict(receipt["task"]), "attempt_root": attempt_root,
-                "bundle_root": bundle_root, "capture_root": capture_root}
-            # 原 FixturePatch 的来源验证器负责真实 fixture_only 总账及临时根。
-            adapter = ScopedMacFixtureAdapter({task["task_sha256"]: row})
-            adapter._require_task(task, capture_root)
-            previous = tasks.setdefault(task["task_sha256"], row)
-            if previous != row:
-                raise guard.GuardError("typed Mac 同一 task 存在不同的冻结坐标")
+        if (parent.get("campaign_id"), parent.get("candidate_id")) != (q["campaign_id"], q["candidate_id"]):
+            raise guard.GuardError("typed Mac accept 与当前资格归属不符")
+        for candidate_id in _fixture_mac_candidate_history(campaign, q["candidate_id"]):
+            round_path = upgrade._legacy_stage_path(campaign, "capture-candidate", candidate_id)[1]
+            round_one = guard.read_json(round_path)
+            client_bindings = round_one.get("client_evidence", {}).get("client_bindings", {})
+            if not client_bindings:
+                continue
+            if (round_one.get("campaign_id"), round_one.get("candidate_id")) != (q["campaign_id"], candidate_id):
+                raise guard.GuardError("typed Mac 冻结首轮、accept 与资格归属不符")
+            attempt_root = compare._bound_campaign_file(campaign, round_one["attempt"], "typed Mac 冻结首轮 attempt").parent
+            for client_id, client_binding in client_bindings.items():
+                contract.require(client_id in contract.CLIENTS, "typed Mac 必须为已登记的 Claude 客户端")
+                path = compare._bound_campaign_file(campaign, client_binding, "typed Mac 冻结首轮客户端收据")
+                contract.require(path.parent == attempt_root / "client-evidence", "typed Mac 收据必须归属冻结首轮 attempt")
+                receipt = contract.read_json(path)
+                task_path = contract.bound_file(attempt_root, receipt["task"])
+                task = contract.validate_task(contract.read_json(task_path))
+                contract.require(task["client_id"] == client_id and task["campaign_id"] == q["campaign_id"]
+                    and task["candidate_id"] == candidate_id
+                    and task["execution"]["recorder_id"] == client_fixture.RECORDER,
+                    "typed Mac task 的客户端、候选或 recorder 归属不符")
+                contract.verify_task_attempt(attempt_root, task)
+                bundle_root = contract.bound_file(attempt_root, receipt["bundle"]).parent
+                capture_root = Path(task["execution"]["capture_root"])
+                row = {"task": task, "task_binding": dict(receipt["task"]), "attempt_root": attempt_root,
+                    "bundle_root": bundle_root, "capture_root": capture_root}
+                # 原 FixturePatch 的来源验证器负责真实 fixture_only 总账及临时根。
+                adapter = ScopedMacFixtureAdapter({task["task_sha256"]: row})
+                adapter._require_task(task, capture_root)
+                previous = tasks.setdefault(task["task_sha256"], row)
+                if previous != row:
+                    raise guard.GuardError("typed Mac 同一 task 存在不同的冻结坐标")
     if not tasks:
         yield
         return

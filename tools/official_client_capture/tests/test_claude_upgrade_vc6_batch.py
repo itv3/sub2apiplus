@@ -226,6 +226,107 @@ class TypedMacFixtureAuthorityTests(unittest.TestCase):
         self.assertEqual(self.contract.SOURCE_ADAPTERS, self.before_adapters)
         self.assertIs(claude_upgrade.verify_mac_source_v2, self.before_wrapper)
 
+    def write_historical_candidate(self, candidate_id: str) -> tuple[Path, dict[str, Path]]:
+        """创建独立的真实 Mac v2 原件；是否属于前序链另由 revision 登记决定。"""
+        from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
+        from tools.official_client_capture.tests import claude_mac_v2_fixture as mac_fixture
+        from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
+
+        attempt = self.campaign / "candidates" / candidate_id / "attempts/first"
+        values = {"campaign_id": self.campaign.name, "candidate_id": candidate_id,
+                  "attempt_id": "first", "run_nonce": "mac-history-" + candidate_id}
+        with mock.patch.dict(os.environ, {FIXTURE_ONLY_ENV: "1"}), mac_fixture.FixturePatch():
+            receipts = {client: mac_fixture.write_receipt(attempt, client, values)
+                        for client in sorted(self.contract.CLIENTS)}
+        client_fixture.write(attempt.parent.parent / "result.json", {
+            "campaign_id": self.campaign.name, "candidate_id": candidate_id,
+            "attempt": {key: self.contract.binding(attempt / "attempt.json", self.campaign)[key]
+                        for key in ("path", "sha256")},
+            "client_evidence": {"client_bindings": {client: {
+                key: self.contract.binding(path, self.campaign)[key] for key in ("path", "sha256")}
+                for client, path in receipts.items()}}})
+        return attempt, receipts
+
+    def register_predecessor(self, candidate_id: str) -> None:
+        """以原合同写 r1／r2 记录和 COMMIT，保持摘要链与取代关系完整。"""
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+        from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
+
+        previous = None
+        current = self.configuration["candidate"]["qualification"]["candidate_id"]
+        for revision, candidate in enumerate((candidate_id, current), 1):
+            record = artifacts.build_candidate_revision(campaign_id=self.campaign.name, revision=revision,
+                candidate_id=candidate, opened_at_utc="2026-10-09T00:00:00Z",
+                previous_revision_sha256=None if previous is None else previous["record_sha256"],
+                vc3_checkpoint={"path": "control/vc/vc-3-checkpoint.json", "sha256": "3" * 64,
+                                "phase": "VC-3", "checkpoint_sha256": "4" * 64},
+                vc3_stage_receipt={"path": "profile/result.json", "sha256": "5" * 64},
+                supersedes=None if previous is None else {"revision": 1, "candidate_id": candidate_id,
+                    "invalidation_receipt": {"path": "control/vc/revisions/r1/invalidation.json", "sha256": "6" * 64},
+                    "candidate_invalidated_event_sha256": "7" * 64})
+            commit = artifacts.build_candidate_revision_commit(campaign_id=self.campaign.name,
+                revision=revision, candidate_id=candidate, record_sha256=record["record_sha256"],
+                committed_at_utc="2026-10-09T00:00:00Z")
+            directory = claude_upgrade._candidate_revision_dir(self.campaign, revision)
+            client_fixture.write(directory / "revision.json", record)
+            client_fixture.write(directory / "COMMIT", commit)
+            previous = record
+
+    def test_revision_predecessor_replays_original_clients_but_unrelated_candidate_is_refused(self) -> None:
+        old_attempt, old_receipts = self.write_historical_candidate("fixture-predecessor")
+        unrelated_attempt, unrelated_receipts = self.write_historical_candidate("fixture-unrelated")
+        self.register_predecessor("fixture-predecessor")
+        with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+            for attempt, receipts in ((self.attempt, self.receipts), (old_attempt, old_receipts)):
+                for client, path in receipts.items():
+                    self.assertEqual(self.contract.verify_client_receipt(attempt, client, path),
+                                     self.contract.read_json(path)["verification"])
+            with self.assertRaisesRegex(self.guard.GuardError, "准确 task"):
+                self.contract.verify_client_receipt(unrelated_attempt, "claude-desktop",
+                                                    unrelated_receipts["claude-desktop"])
+        self.assert_restored()
+
+    def test_predecessor_task_byte_drift_is_not_accepted_by_history_scope(self) -> None:
+        attempt, receipts = self.write_historical_candidate("fixture-predecessor")
+        self.register_predecessor("fixture-predecessor")
+        receipt = self.contract.read_json(receipts["claude-desktop"])
+        task_path = self.contract.bound_file(attempt, receipt["task"])
+        with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+            task = self.contract.read_json(task_path)
+            task_path.write_bytes(task_path.read_bytes() + b" ")
+            with self.assertRaisesRegex(self.contract.ConfigurationError, "摘要或字节数漂移"):
+                self.contract.SOURCE_ADAPTERS[self.recorder].verify_capture_origin(
+                    task, Path(task["execution"]["capture_root"]))
+        self.assert_restored()
+
+    def test_changed_revision_link_is_rejected_even_with_consistent_local_digests(self) -> None:
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+        from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
+        self.write_historical_candidate("fixture-predecessor")
+        self.register_predecessor("fixture-predecessor")
+        directory = claude_upgrade._candidate_revision_dir(self.campaign, 2)
+        record = self.contract.read_json(directory / "revision.json")
+        record["previous_revision_sha256"] = "a" * 64
+        record["record_sha256"] = artifacts.digest({key: value for key, value in record.items() if key != "record_sha256"})
+        commit = artifacts.build_candidate_revision_commit(campaign_id=self.campaign.name, revision=2,
+            candidate_id=record["candidate_id"], record_sha256=record["record_sha256"],
+            committed_at_utc="2026-10-09T00:00:00Z")
+        client_fixture.write(directory / "revision.json", record)
+        client_fixture.write(directory / "COMMIT", commit)
+        with self.assertRaisesRegex(self.guard.GuardError, "revision 摘要"):
+            with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+                self.fail("各自摘要合法但前序链接不实，不能取得测试来源权限")
+        self.assert_restored()
+
+    def test_missing_predecessor_commit_refuses_before_source_registration(self) -> None:
+        self.write_historical_candidate("fixture-predecessor")
+        self.register_predecessor("fixture-predecessor")
+        (claude_upgrade._candidate_revision_dir(self.campaign, 1) / "COMMIT").unlink()
+        with self.assertRaisesRegex(self.guard.GuardError, "revision"):
+            with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+                self.fail("不完整的前序链不能取得测试来源权限")
+        self.assert_restored()
+
     def test_original_reader_replays_both_clients_after_initial_fixture_scope_ended(self) -> None:
         self.assert_restored()
         with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
