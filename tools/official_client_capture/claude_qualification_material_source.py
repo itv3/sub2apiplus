@@ -819,6 +819,156 @@ def _retain_candidate_evaluation_draft(
         retain(path, binding["sha256"])
         coordinates.append(((name,), campaign))
     project_parent(draft_path, data_root, coordinate_roots=tuple(coordinates))
+    preview_binding = seal.get("preview")
+    if preview_binding is not None:
+        from . import claude_upgrade_candidate_seal as candidate_seal
+
+        preview_path = seal_contract._verify_bound_file(campaign, preview_binding, "来源候选 seal 预览")
+        preview = parse_json_bytes(retain(preview_path, preview_binding["sha256"]))
+        core = {key: value for key, value in preview.items() if key != "review_sha256"}
+        if (preview.get("schema_version") != candidate_seal.SEAL_PREVIEW_SCHEMA
+                or preview.get("review_sha256") != seal.get("review_sha256")
+                or preview.get("review_sha256") != seal_contract._orchestrator()._fingerprint(core)
+                or any(preview.get(key) != draft.get(key) for key in
+                    ("campaign_id", "candidate_id", "attempt_id", "generation"))
+                or preview.get("candidate_id") != round_one["candidate_id"]):
+            raise ControlError("来源候选 seal 预览与批准的精确草稿不同源")
+        preview_coordinates = []
+        for name in ("seal_draft", "evidence_manifest", "client_checkpoint", "evaluation_manifest"):
+            binding = validate_external_binding(preview[name], "candidate.seal_preview." + name)
+            expected = round_one["assertion_context"]["evaluation_manifest"] if name == "evaluation_manifest" else seal[name]
+            if any(binding[key] != expected[key] for key in ("path", "sha256")):
+                raise ControlError("来源候选 seal 预览与阶段批准的附件不同源")
+            path = seal_contract._verify_bound_file(campaign, binding, "来源候选预览 " + name)
+            retain(path, binding["sha256"])
+            preview_coordinates.append(((name,), campaign))
+        # 只有批准时冻结的四个精确字段使用 Campaign 根；未知字段仍从
+        # 数据根严格展开，不因预览文件名或 schema 放宽读取边界。
+        project_parent(preview_path, data_root, coordinate_roots=tuple(preview_coordinates))
+
+
+def _retain_candidate_attempt_materials(
+    campaign: Path, round_one: Mapping[str, Any], data_root: Path, *,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> None:
+    """保留原封存读者验真的 attempt，只转换生产合同明确规定的附件坐标。
+
+    同一个 attempt 同时含数据根、Campaign、attempt 和 evidence 四种
+    相对坐标。未知标准绑定继续以数据根严格展开，不能因父文件的 schema
+    或路径而获得新的根。Job 闭环收据同样只转换已逐项绑定的环境探针。
+    """
+    from . import claude_upgrade as upgrade
+    from . import claude_upgrade_capture as capture
+    from . import claude_upgrade_candidate_capture as candidate_capture
+    from . import claude_upgrade_compare as compare
+
+    path = compare._bound_campaign_file(campaign, round_one["attempt"], "来源候选 attempt")
+    document = parse_json_bytes(retain(path, round_one["attempt"]["sha256"]))
+    if document.get("schema_version") != capture.CAPTURE_ATTEMPT_SCHEMA:
+        # 历史或显式来源夹具不因字段相似取得新权限，继续走原严格递归。
+        return
+    attempt_root, verified = upgrade._capture_stage_attempt_context(
+        campaign, round_one, phase="candidate", candidate_id=round_one["candidate_id"])
+    if path != attempt_root / "attempt.json" or document != verified:
+        raise ControlError("来源候选 attempt 与原封存读者不是同一份原件")
+    coordinates = []
+    probe_paths = set()
+
+    def retain_attachment(value: Mapping[str, Any], root: Path) -> Path:
+        # 以下调用点均是原合同已经验真的明确字段；带 kind、schema 等
+        # 附加信息的附件单独保留，不扩大通用三字段绑定识别规则。
+        binding = validate_external_binding({key: value[key] for key in
+            ("path", "sha256", "bytes")}, "candidate.attempt.attachment")
+        target = root / _relative(binding["path"])
+        raw = retain(target, binding["sha256"])
+        if len(raw) != binding["bytes"]:
+            raise ControlError("候选 attempt 附件字节数与已验证绑定不一致")
+        return target
+
+    def bind(parent: Mapping[str, Any], coordinate: tuple[str, ...], root: Path,
+             output: list[tuple[tuple[str, ...], Path]]) -> Path | None:
+        node: Any = parent
+        for key in coordinate:
+            node = node[int(key)] if isinstance(node, list) else node.get(key)
+            if node is None:
+                return None
+        binding = validate_external_binding(node, "candidate.attempt.original_binding")
+        target = retain_attachment(binding, root)
+        output.append((coordinate, root))
+        if coordinate[-1] in {"before_probe", "after_probe"}:
+            probe_paths.add(target)
+        return target
+
+    evidence_root = attempt_root / "evidence"
+    for coordinate in (("environment", "before_probe"), ("environment", "after_probe"),
+            ("environment", "restoration_report"), ("gateway_environment", "before"),
+            ("gateway_environment", "after"), ("gateway_recovery", "file")):
+        bind(document, coordinate, evidence_root, coordinates)
+    recovery_binding = (document.get("gateway_recovery") or {}).get("file")
+    if recovery_binding is not None:
+        recovery_path = evidence_root / _relative(recovery_binding["path"])
+        recovery = parse_json_bytes(retain(recovery_path, recovery_binding["sha256"]))
+        if (recovery.get("schema_version") != candidate_capture.GATEWAY_RECOVERY_SCHEMA
+                or recovery.get("gateway_before") != document["gateway_environment"]["before"]
+                or recovery.get("gateway_after") != document["gateway_environment"]["after"]):
+            raise ControlError("来源网关恢复原件与冻结 attempt 的前后环境不同源")
+        recovery_coordinates = []
+        for name in ("gateway_before", "gateway_after"):
+            bind(recovery, (name,), evidence_root, recovery_coordinates)
+        project_parent(recovery_path, data_root, coordinate_roots=tuple(recovery_coordinates))
+    activation = (document.get("gateway_environment") or {}).get("activation_fact")
+    if activation is not None:
+        # 原合同仅授权已复制到 evidence 根的副本，不读取宿主 source_path。
+        retain_attachment(activation, evidence_root)
+    selector = document.get("selector_observed")
+    if selector is not None:
+        selector_path = retain_attachment(selector, evidence_root)
+        observation = parse_json_bytes(retain(selector_path, selector["sha256"]))
+        source = validate_external_binding(observation["source"], "candidate.selector.source")
+        expected = document["candidate_gateway"]["selector_before_snapshot"]["source_ref"]
+        normalized = {**source, "path": (campaign.relative_to(data_root) / _relative(source["path"])).as_posix()}
+        if observation.get("schema_version") != candidate_capture.SELECTOR_OBSERVATION_SCHEMA or normalized != expected:
+            raise ControlError("来源 selector 观察与冻结 attempt 的目录原件不同源")
+        retain_attachment(source, campaign)
+        project_parent(selector_path, data_root, coordinate_roots=((("source",), campaign),))
+    reservation = document.get("reservation")
+    if reservation is not None:
+        reservation_path = compare._bound_campaign_file(campaign, reservation, "来源候选预约")
+        retain(reservation_path, reservation["sha256"])
+    bind(document, ("evidence_permission_closeout",), attempt_root, coordinates)
+    for name in ("heartbeat", "timeout_checkpoint"):
+        bind(document, ("watchdog", name), campaign, coordinates)
+    for index, result in enumerate(document["results"]):
+        prefix = ("results", str(index))
+        for number, _run in enumerate(result.get("environment_runs") or []):
+            for name in ("before_probe", "after_probe"):
+                bind(document, (*prefix, "environment_runs", str(number), name), attempt_root, coordinates)
+        closure_path = bind(document, (*prefix, "job_closure"), attempt_root, coordinates)
+        if closure_path is None:
+            continue
+        closure = parse_json_bytes(retain(closure_path))
+        if (closure.get("schema_version") != capture.JOB_CLOSURE_SCHEMA
+                or closure.get("campaign_id") != document["campaign_id"]
+                or closure.get("attempt_id") != document["attempt_id"]
+                or closure.get("job_id") != result["id"]
+                or closure.get("execution_sha256") != result["execution_sha256"]
+                or closure.get("environment_runs") != result.get("environment_runs")):
+            raise ControlError("来源 Job 闭环原件与冻结 attempt 结果不同源")
+        closure_coordinates = []
+        for number, _run in enumerate(closure.get("environment_runs") or []):
+            for name in ("before_probe", "after_probe"):
+                bind(closure, ("environment_runs", str(number), name), attempt_root, closure_coordinates)
+        permission = closure.get("evidence_permission_closeout")
+        if permission is not None:
+            retain_attachment(permission, attempt_root)
+        project_parent(closure_path, data_root, coordinate_roots=tuple(closure_coordinates))
+    for probe_path in sorted(probe_paths):
+        probe = parse_json_bytes(retain(probe_path))
+        if probe.get("schema_version") != capture.PROBE_MANIFEST_SCHEMA:
+            raise ControlError("来源环境探针与原 capture 合同不一致")
+        for snapshot in probe["snapshots"]:
+            retain_attachment(snapshot, probe_path.parent)
+    project_parent(path, data_root, coordinate_roots=tuple(coordinates))
 
 
 def _qualification_subject_store(store: Any) -> Any:
@@ -1025,6 +1175,8 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
     # 才要求三根原件能在已有数据根内闭合。缺受管外根合同仍失败关闭。
     if read_bindings is not None or read_projections is not None:
         _retain_candidate_evaluation_draft(campaign, manifest, round_one, data_root,
+            retain=retain, project_parent=project_parent)
+        _retain_candidate_attempt_materials(campaign, round_one, data_root,
             retain=retain, project_parent=project_parent)
         # 原首轮 reader 已完整重验两种 Mac 客户端；其主收据、来源包和
         # 捕获原件采用三个不同根。只沿已验真的精确字段转坐标，普通 JSON

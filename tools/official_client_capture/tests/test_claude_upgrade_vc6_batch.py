@@ -327,6 +327,19 @@ class TypedMacFixtureAuthorityTests(unittest.TestCase):
                 self.fail("不完整的前序链不能取得测试来源权限")
         self.assert_restored()
 
+    def test_fixture_without_mac_materials_does_not_require_or_gain_history_authority(self) -> None:
+        from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
+        self.write_historical_candidate("fixture-predecessor")
+        self.register_predecessor("fixture-predecessor")
+        (claude_upgrade._candidate_revision_dir(self.campaign, 1) / "COMMIT").unlink()
+        current = self.contract.read_json(self.round_path)
+        client_fixture.write(self.round_path, {**current, "client_evidence": {}})
+        with mock.patch.object(vc6_fixture, "_fixture_mac_candidate_history") as history:
+            with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):
+                history.assert_not_called()
+                self.assertNotIn(self.recorder, self.contract.SOURCE_ADAPTERS)
+        self.assert_restored()
+
     def test_original_reader_replays_both_clients_after_initial_fixture_scope_ended(self) -> None:
         self.assert_restored()
         with vc6_fixture.fixture_mac_source_scope(self.configuration, self.data):

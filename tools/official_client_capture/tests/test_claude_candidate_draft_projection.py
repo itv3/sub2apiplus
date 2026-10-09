@@ -96,6 +96,51 @@ class CandidateDraftProjectionTests(unittest.TestCase):
         self.assertTrue(any(path.endswith("conn002.client_to_upstream.bin") for path in closed))
         self.assertEqual(self.parents[self.draft_path.relative_to(self.data).as_posix()].metadata_domains, ())
 
+    def add_preview(self, *, extra=None, wrong_attachment=False):
+        """生成冻结批准引用的精确预览，用原预览摘要规则签定合成原件。"""
+        from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
+        fields = {"campaign_id": "claude-candidate-fixture", "candidate_id": "candidate-1",
+            "attempt_id": "attempt-1", "generation": "generation-1"}
+        self.change_draft({**fields, **self.formal_extra_fields()})
+        checkpoint = fixture._write_json(self.draft_path.parent / "client-checkpoint.json", {"checkpoint": "fixture"})
+        self.round_one["seal"]["client_checkpoint"] = fixture.binding(checkpoint, self.campaign)
+        core = {"schema_version": candidate_seal.SEAL_PREVIEW_SCHEMA, **fields,
+            **{name: self.round_one["seal"][name] for name in ("seal_draft", "evidence_manifest", "client_checkpoint")},
+            "evaluation_manifest": fixture.binding(self.campaign / self.round_one["assertion_context"]["evaluation_manifest"]["path"], self.campaign),
+            **(extra or {})}
+        if wrong_attachment:
+            other = fixture._write_json(self.draft_path.parent / "other-checkpoint.json", {"checkpoint": "fixture"})
+            core["client_checkpoint"] = fixture.binding(other, self.campaign)
+        digest = seal_contract._orchestrator()._fingerprint(core)
+        preview = fixture._write_json(self.draft_path.parent / "seal-preview.json", {**core, "review_sha256": digest})
+        self.round_one["seal"].update(preview=fixture.binding(preview, self.campaign), review_sha256=digest)
+        return preview
+
+    def test_approved_preview_closes_four_exact_campaign_coordinates(self):
+        preview = self.add_preview()
+        self.prove()
+        closed = {row["path"] for row in self.close([fixture.binding(preview, self.data)])}
+        self.assertIn(self.draft_path.relative_to(self.data).as_posix(), closed)
+        self.assertIn(preview.relative_to(self.data).as_posix(), closed)
+        self.assertEqual(len(self.parents[preview.relative_to(self.data).as_posix()].coordinate_roots), 4)
+
+    def test_preview_same_bytes_at_other_coordinate_are_not_approved(self):
+        self.add_preview(wrong_attachment=True)
+        with self.assertRaisesRegex(ControlError, "阶段批准的附件不同源"):
+            self.prove()
+
+    def test_preview_modified_approval_digest_is_rejected(self):
+        self.add_preview()
+        self.round_one["seal"]["review_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ControlError, "批准的精确草稿不同源"):
+            self.prove()
+
+    def test_preview_unknown_campaign_binding_has_no_conversion_permission(self):
+        preview = self.add_preview(extra={"unknown": fixture.binding(self.draft_path, self.campaign)})
+        self.prove()
+        with self.assertRaisesRegex(ControlError, "原件缺失"):
+            self.close([fixture.binding(preview, self.data)])
+
     def test_unknown_data_root_binding_is_still_fully_read(self) -> None:
         child = fixture._write_json(self.data / "unknown/child.json", {"fixture": "extra"})
         self.change_draft({"unknown": {"child": fixture.binding(child, self.data)}})

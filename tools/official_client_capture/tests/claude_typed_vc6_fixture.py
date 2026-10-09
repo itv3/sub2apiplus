@@ -362,6 +362,12 @@ def fixture_mac_source_scope(configuration: dict, data_root: Path) -> Iterator[N
         campaign = data_root / "evidence/campaigns" / q["campaign_id"]
         if (parent.get("campaign_id"), parent.get("candidate_id")) != (q["campaign_id"], q["candidate_id"]):
             raise guard.GuardError("typed Mac accept 与当前资格归属不符")
+        current_path = upgrade._legacy_stage_path(campaign, "capture-candidate", q["candidate_id"])[1]
+        current = guard.read_json(current_path)
+        if not current.get("client_evidence", {}).get("client_bindings"):
+            # 不含 Mac 原件的旧资格夹具不需要 Mac 来源权限；不为它新增
+            # revision 前置，也不从其它候选目录寻找可以授权的附件。
+            continue
         for candidate_id in _fixture_mac_candidate_history(campaign, q["candidate_id"]):
             round_path = upgrade._legacy_stage_path(campaign, "capture-candidate", candidate_id)[1]
             round_one = guard.read_json(round_path)
