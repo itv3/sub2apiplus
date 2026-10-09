@@ -35,9 +35,11 @@ class RecordedCandidateSourceTests(unittest.TestCase):
                         m_binding={"complete": True}, upstream={"host": "api.anthropic.com", "live_requests": True})
         original_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
         self.state["snapshot"] = replay.build_snapshot(self.data / "control/candidate-snapshot", recorded=fixture.fixture.recorded)
-        self.state["inputs"] = {"candidate_jobs": {"candidate-fixture": [PROBE]},
-                                "candidate_configuration": {"service_container": "sub2apiplus", "keeper_container": "sub2apiplus-keeper",
-                                "postgres_container": "sub2apiplus-postgres", "claude_account_id": "7", "api_key_id": "9"}}
+        self.state["inputs"] = source_fixture.projection_inputs(
+            self.data / "control/candidate-v5-inputs", self.state["jobs"], {"candidate-fixture": [PROBE]})
+        self.state["inputs"]["candidate_configuration"] = {
+            "service_container": "sub2apiplus", "keeper_container": "sub2apiplus-keeper",
+            "postgres_container": "sub2apiplus-postgres", "claude_account_id": "7", "api_key_id": "9"}
         attempt = self.data / f"evidence/campaigns/fixture/candidates/{full.CANDIDATE}/attempts/attempt-fixture"
         reservation = source.write(attempt / "reservation.json", {
             "schema_version": capture.CAPTURE_RESERVATION_SCHEMA, "mode": capture.MODE_FORMAL,
@@ -68,6 +70,11 @@ class RecordedCandidateSourceTests(unittest.TestCase):
             "--expected-version", source.VERSION, "--expected-sha256", self.state["freeze"]["binary_sha256"],
             "--output-root", self.projection["output_root"], "--upstream-ip", "160.79.104.10",
         ]
+        facts = self.state["inputs"]["bindings"]["version_facts"]
+        self.projection["argv"].extend([
+            "--fw-f-v5-probe", PROBE, "--fw-f-v5-catalog", self.projection["v5_catalog"]["argument"],
+            "--fw-f-v5-version-facts", facts["path"], "--fw-f-v5-version-facts-sha256", facts["sha256"],
+        ])
         self.projection["candidate"] = {
             "run_id": "fixture-cand-r1-" + PROBE, "probe_id": PROBE, "model": "claude-sonnet-5",
             "account_id": 7, "api_key_id": 9, "base_url": "http://sub2apiplus:8080",
@@ -225,6 +232,10 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         self.assertEqual(manifest["runtime"]["host_runtime_receipt"]["run_nonce"], self.projection["runtime"]["run_nonce"])
         self.assertNotEqual(manifest["runtime"]["host_runtime_receipt"]["run_nonce"], origin["receipt"]["run_nonce"])
         self.assertEqual(manifest["candidate_gateway"]["account_id"], 7)
+        self.assertEqual(manifest["fw_f_v5_probe"], PROBE)
+        self.assertIsNone(manifest["fw_f_v4_probe"])
+        self.assertFalse(manifest["formal_version_semantics_certified"])
+        self.assertEqual(manifest["fixture_projection"]["v5_dimension_result"], "passed")
         self.assertEqual(source.origin_probe(self.state, PROBE)["manifest"], origin["manifest"])
 
     def test_wrong_job_nonce_gateway_or_side_fails_closed(self) -> None:
@@ -261,6 +272,16 @@ class RecordedCandidateSourceTests(unittest.TestCase):
             original = Path(origin["index"]["root"]) / item["original_relative"]
             self.assertEqual(source.bound(item["copied"]).read_bytes(), original.read_bytes())
         self.assertNotEqual(source.read(source.bound(copied["candidate_manifest"])), origin["manifest"])
+        # 正式 probe 校验不放宽：原 v4 清单仍失败，受控投影必须由同一生产校验函数判通过。
+        from tools.official_client_capture import claude_upgrade_evidence as evidence
+
+        current_root = source.bound(copied["candidate_manifest"]).parent
+        projected_view = evidence.relay_probe_view(current_root, base=self.data)
+        context = {"target_version": source.VERSION, "target_sha256": self.state["freeze"]["binary_sha256"],
+                   "runtime_image": self.projection["runtime"]["runtime_image"]}
+        self.assertEqual(evidence._probe_checks(projected_view, probe=PROBE, context=context, synthetic=False), [])
+        original_view = evidence.relay_probe_view(Path(origin["manifest_path"]).parent, base=Path(origin["index"]["root"]))
+        self.assertIn("probe_identity", evidence._probe_checks(original_view, probe=PROBE, context=context, synthetic=False))
         replay.assert_source_untouched(self.state["snapshot"])
 
 

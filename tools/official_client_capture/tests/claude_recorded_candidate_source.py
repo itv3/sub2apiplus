@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any, Mapping
@@ -62,26 +61,10 @@ def _candidate_manifest(state: Mapping[str, Any], projection: Mapping[str, Any],
 
     from tools.official_client_capture import claude_upgrade_evidence as evidence
 
-    manifest = json.loads(json.dumps(origin["manifest"]))
-    if (manifest.get("status") != "complete" or (manifest.get("m_binding") or {}).get("complete") is not True
-            or (manifest.get("secret_scan") or {}).get("passed") is not True
-            or manifest.get("cleanup") != {"relay_stopped": True, "hosts_restored": True}
-            or not isinstance(manifest.get("upstream"), dict)):
-        raise replay.ReplayError("历史 relay 来源未具备真实完成、秘密扫描、完整 M 与恢复事实")
+    # 官方与候选的目录兼容、原始 wire/debug 重验和双身份封套必须走同一实现。
+    manifest = source.control_manifest(state, projection, origin)
     candidate = projection["candidate"]
-    runtime_path = source.bound(projection["runtime"]["receipt"], root=Path(state["data_root"]))
-    runtime = source.read(runtime_path)
-    current = projection["runtime"]
-    host_binding = {
-        "schema_version": runtime["schema_version"], "path": str(runtime_path),
-        "sha256": current["receipt"]["sha256"], "run_nonce": current["run_nonce"],
-        **{name: runtime[name] for name in ("container", "docker_server", "runtime_image_reference", "runtime_image_id", "repo_digest_verified")},
-        "capture_source_bundle_sha256": runtime["capture_source_bundle"]["sha256"],
-        "container_runtime_binding": {"verified": True, "container_id": runtime["container"]["id"]},
-    }
     manifest.update(side="candidate", run_id=candidate["run_id"])
-    manifest["runtime"].update(runtime_image_reference=runtime["runtime_image_reference"], host_runtime_receipt=host_binding,
-                               capture_tools={"execution_sources": runtime["capture_source_bundle"]})
     manifest["candidate_gateway"] = {
         "base_url": candidate["base_url"], "account_id": candidate["account_id"], "api_key_id": candidate["api_key_id"],
         "trigger": candidate["trigger"], "client_authentication": evidence.CANDIDATE_CLIENT_AUTHENTICATION,
@@ -92,7 +75,7 @@ def _candidate_manifest(state: Mapping[str, Any], projection: Mapping[str, Any],
     manifest["m_binding"] = {"complete": True, "requirements": {key: True for key in sorted(evidence.CANDIDATE_M_REQUIREMENTS)}}
     manifest["candidate_observation"] = {
         "client_outcome_valid": True, "message_request_expectation_met": True,
-        "synthetic_plan_closed": None if candidate["live"] else True, "dimension_result": "passed",
+        "synthetic_plan_closed": None if candidate["live"] else True, "dimension_result": manifest["dimension_evidence"]["result"],
     }
     if isinstance(manifest.get("dimension_evidence"), dict):
         manifest["dimension_evidence"].update(side="candidate", observation_only=True)
@@ -110,6 +93,7 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
         raise replay.ReplayError("候选投影的外持摘要漂移")
     projection = source.read(projection_path)
     origin = verify_candidate_projection(state, projection)
+    manifest_payload = _candidate_manifest(state, projection, origin)
     source.recovery_control(state)
     index, row = origin["index"], origin["row"]
     destination = Path(projection["output_root"])
@@ -122,7 +106,7 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
             continue
         original = source.bound({"path": str(Path(index["root"]) / relative), **item}, root=Path(index["root"]))
         suffix = Path(relative).relative_to(row["attempt"])
-        target = destination / (".origin-relay-manifest.json" if suffix.as_posix() == "relay-manifest.json" else suffix)
+        target = destination / (source.ORIGIN_MANIFEST_FILENAME if suffix.as_posix() == "relay-manifest.json" else suffix)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with target.open("xb") as handle:
             handle.write(original.read_bytes())
@@ -130,7 +114,8 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
         if replay._digest(target) != item:
             raise replay.ReplayError("候选来源 R/P 或原始 relay 附件字节漂移")
         files.append({"original_relative": relative, "copied": source.binding(target)})
-    manifest = source.write(destination / "relay-manifest.json", _candidate_manifest(state, projection, origin))
+    manifest_payload["fixture_projection"]["copied_origin_manifest"] = source.binding(destination / source.ORIGIN_MANIFEST_FILENAME)
+    manifest = source.write(destination / "relay-manifest.json", manifest_payload)
     return_code, decision = source.record_candidate_action(state, projection)
     candidate = projection["candidate"]
     restoration = source.write(destination.parent / evidence.CANDIDATE_RESTORATION_DIRNAME / (projection["probe_id"] + ".json"), {
@@ -209,6 +194,8 @@ class SourceAdapter(source.SourceAdapter):
                           "trigger": plan.candidate_trigger(probe), "relay_port": int(plan.CANDIDATE_RELAY_PORT),
                           "live": coordinates["upstream_ip"] is not None},
         }
+        catalog_path = context.layout.host_tool_root / "capturelib/claude_fw_f_v5.py"
+        projection["v5_catalog"] = {"file": source.binding(catalog_path), "argument": str(capture._container_path(catalog_path, context.layout))}
         verify_candidate_projection(self.state, projection)
         path = source.write(runtime_path.with_suffix(".candidate-projection.json"), projection)
         if operation in self.candidate_pending:

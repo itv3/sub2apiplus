@@ -1,13 +1,15 @@
 """仅供离线回归的 2.1.226 来源合同；不扩展生产冻结、relay 或封存合同。
 
 旧录制是 linux/amd64、npm 单来源。这里明确保留该身份，不能声称它是 ARM64 双渠道冻结。
-每次监督复制分别绑定本轮 runtime 和原始 origin，两个收据都要重验。原 relay、host 收据和请求字节
-不做字段替换。此模块必须由隔离测试入口显式启用，生产代码不会导入它。
+每次监督复制分别绑定本轮 runtime 和原始 origin，两个收据都要重验。原 relay 清单另存为原件，host 收据、
+请求字节与附件逐字保留；只有通过真实 v5 判定器重验后才生成本轮控制封套。封套不是本轮客户端执行的证明，
+也不能签发正式版本语义认证。此模块必须由隔离测试入口显式启用，生产代码不会导入它。
 """
 
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import json
 import os
@@ -31,6 +33,8 @@ STATE_ENV = "CLAUDE_VC1_RECORDED_SOURCE"
 DIGEST_ENV = "CLAUDE_VC1_RECORDED_SOURCE_SHA256"
 OPERATION = re.compile(r"(?:synthetic-job|job):([a-z0-9-]+):step-([1-9][0-9]*):attempt-([1-9][0-9]*)\Z")
 RECOVERY_CONTROL_SCHEMA = "claude-recorded-candidate-recovery-control/v1"
+CONTROL_PROJECTION_SCHEMA = "claude-recorded-control-envelope/v1"
+ORIGIN_MANIFEST_FILENAME = ".origin-relay-manifest.json"
 
 
 def read(path: Path) -> dict[str, Any]:
@@ -353,7 +357,8 @@ def origin_probe(state: Mapping[str, Any], probe: str) -> dict[str, Any]:
             or old.get("container_runtime_binding", {}).get("verified") is not True
             or old["container_runtime_binding"].get("container_id") != host.get("container", {}).get("id")):
         raise replay.ReplayError("原始 relay、宿主收据或 binary 身份断裂")
-    return {"row": row, "index": index, "manifest": manifest, "receipt": host, "receipt_path": receipt}
+    return {"row": row, "index": index, "manifest": manifest, "manifest_path": manifest_path,
+            "receipt": host, "receipt_path": receipt}
 
 
 def verify_projection(state: Mapping[str, Any], projection: Mapping[str, Any]) -> dict[str, Any]:
@@ -406,6 +411,171 @@ def verify_projection(state: Mapping[str, Any], projection: Mapping[str, Any]) -
     return origin
 
 
+def _argument(argv: Any, option: str) -> str:
+    """步骤参数必须唯一存在；不容许重复参数改变实际选中的目录或版本事实。"""
+
+    values = list(argv)
+    if values.count(option) != 1 or values.index(option) + 1 >= len(values):
+        raise replay.ReplayError(f"录制投影缺少唯一参数：{option}")
+    return str(values[values.index(option) + 1])
+
+
+def control_manifest(state: Mapping[str, Any], projection: Mapping[str, Any], origin: Mapping[str, Any]) -> dict[str, Any]:
+    """真实 v5 重验历史 R/P 后生成控制封套，官方与候选共用这一份实现。
+
+    原执行身份仍由原清单与原宿主收据证明；本次运行身份只表示隔离 fixture 的复制控制动作。历史目录逐字段与
+    当前 v5 目录比对，只有登记的覆盖字段可以变化；advisor 模型从摘要绑定的原 debug 字节解析，绝不从期望值填入。
+    判定器、冻结版本事实、历史附件和两份宿主收据全部写入投影说明，保留原摘要与当前摘要不同这一事实。
+    """
+
+    from tools.official_client_capture.capturelib import claude_fw_f_v5 as v5
+
+    data = Path(state["data_root"])
+    if (state.get("fixture_only") is not True or state.get("purpose") != "regression_fixture"
+            or state.get("target_version") != VERSION or "staging" not in data.parts):
+        raise replay.ReplayError("控制封套仅限隔离 fixture_only 来源")
+    manifest = json.loads(json.dumps(origin["manifest"]))
+    probe_id = projection["probe_id"]
+    if (manifest.get("status") != "complete" or (manifest.get("m_binding") or {}).get("complete") is not True
+            or (manifest.get("secret_scan") or {}).get("passed") is not True
+            or manifest.get("cleanup") != {"relay_stopped": True, "hosts_restored": True}
+            or not isinstance(manifest.get("upstream"), dict)):
+        raise replay.ReplayError("历史 relay 来源未具备真实完成、秘密扫描、完整 M 与恢复事实")
+    if manifest.get("fw_f_v4_probe") != probe_id or manifest.get("fw_f_v5_probe") is not None:
+        raise replay.ReplayError("控制封套只接受登记的原始 v4 录制")
+    index, row = origin["index"], origin["row"]
+    root = Path(index["root"])
+    manifest_relative = f"{row['attempt']}/relay-manifest.json"
+    original_manifest_binding = {"path": str(root / manifest_relative), **index["files"][manifest_relative]}
+    original_manifest = bound(original_manifest_binding, root=root)
+    if original_manifest != origin["manifest_path"] or read(original_manifest) != origin["manifest"]:
+        raise replay.ReplayError("历史 relay 清单与已验证的来源映射不同")
+    catalog_relative = f"{row['source_id']}/scenario-catalog.json"
+    original_catalog_binding = {"path": str(root / catalog_relative), **index["files"][catalog_relative]}
+    catalog_path = bound(original_catalog_binding, root=root)
+    catalog = read(catalog_path)
+    definitions = [item for item in catalog.get("probes", []) if item.get("probe_id") == probe_id]
+    if catalog.get("target_version") != VERSION or len(definitions) != 1:
+        raise replay.ReplayError("历史目录未唯一绑定本次 probe 与版本")
+    v5.validate_probe_catalog()
+    probe = v5.get_probe(probe_id)
+    current_definition = json.loads(json.dumps(dataclasses.asdict(probe)))
+    base_definition = json.loads(json.dumps(dataclasses.asdict(v5.v4.get_probe(probe_id))))
+    changed = {key for key in current_definition if current_definition[key] != definitions[0].get(key)}
+    if (definitions[0] != base_definition or changed != set(v5.PROBE_OVERRIDES.get(probe_id, {}))):
+        raise replay.ReplayError("历史与 v5 目录差异超出登记覆盖字段")
+
+    inputs = state.get("inputs", {}).get("bindings", {})
+    if not {"scenarios", "version_facts"} <= set(inputs) or not isinstance(projection.get("v5_catalog"), Mapping):
+        raise replay.ReplayError("控制封套缺少冻结场景、版本事实或判定器绑定")
+    scenarios_path = bound(inputs["scenarios"], root=data)
+    facts_path = bound(inputs["version_facts"], root=data)
+    scenarios = read(scenarios_path)
+    if (scenarios.get("schema_version") != "claude-upgrade-scenarios/v1" or scenarios.get("claude_version") != VERSION
+            or scenarios.get("probe_catalog", {}).get("schema_version") != v5.SCHEMA_CATALOG
+            or scenarios.get("probe_catalog", {}).get("path") != "tools/official_client_capture/capturelib/claude_fw_f_v5.py"
+            or scenarios.get("version_facts", {}).get("sha256") != inputs["version_facts"]["sha256"]):
+        raise replay.ReplayError("冻结场景与 v5 版本事实绑定不符")
+    phase = projection.get("side", "official")
+    jobs = [job for job in scenarios.get("capture_jobs", [])
+            if job.get("id") == projection["job_id"] and job.get("phase") == phase]
+    matched = OPERATION.fullmatch(str(projection["operation"]))
+    number = int(matched.group(2)) if matched is not None else 0
+    if len(jobs) != 1 or not 0 < number <= len(jobs[0].get("steps", [])):
+        raise replay.ReplayError("投影步骤没有绑定冻结的客户端阶段与 Job")
+    frozen_step = jobs[0]["steps"][number - 1]
+    if frozen_step.get("probe_id") != probe_id:
+        raise replay.ReplayError("投影 probe 与冻结步骤不同")
+    for argv in (projection["argv"], frozen_step["argv"]):
+        if (any(option in argv for option in ("--fw-f-v4-probe", "--fw-f-probe"))
+                or _argument(argv, "--fw-f-v5-probe") != probe_id
+                or _argument(argv, "--fw-f-v5-version-facts-sha256") != inputs["version_facts"]["sha256"]):
+            raise replay.ReplayError("投影目录参数与冻结 v5 步骤不同")
+    catalog_binding = projection["v5_catalog"]
+    current_catalog = bound(catalog_binding["file"], root=data)
+    if (_argument(projection["argv"], "--fw-f-v5-catalog") != catalog_binding["argument"]
+            or replay._digest(current_catalog) != replay._digest(Path(v5.__file__))):
+        raise replay.ReplayError("投影 v5 判定器与实际加载的工具不同")
+    facts, facts_binding = v5.load_version_facts(facts_path, inputs["version_facts"]["sha256"], expected_version=VERSION)
+
+    # 先复验所有允许读取的附件摘要，再让真实判定器读它们；未登记的连接文件不能混进其 glob。
+    source_files = {}
+    for relative, item in sorted(index["files"].items()):
+        if relative.startswith(row["attempt"] + "/"):
+            path = bound({"path": str(root / relative), **item}, root=root)
+            source_files[Path(relative).relative_to(row["attempt"]).as_posix()] = binding(path)
+    relay_root = root / row["attempt"] / "relay"
+    replay._regular(relay_root, root, directory=True)
+    if {"relay/" + path.name for path in relay_root.iterdir()} != {name for name in source_files if name.startswith("relay/")}:
+        raise replay.ReplayError("历史 relay 读集含未登记文件")
+    summary = json.loads(json.dumps(manifest.get("scenario_result")))
+    if (not isinstance(summary, dict) or summary.get("schema_version") != v5.v4.SCHEMA_RESULT
+            or summary.get("probe_id") != probe_id or summary.get("valid") is not True
+            or not isinstance(summary.get("inner_result"), dict)):
+        raise replay.ReplayError("历史录制缺少已绑定的真实场景结果")
+    producer = summary.get("catalog_producer", {})
+    old_sources = manifest["runtime"]["capture_tools"]["execution_sources"]
+    if (producer.get("path") != "tools/official_client_capture/capturelib/claude_fw_f_v4.py"
+            or not any(item.get("path") == "capturelib/claude_fw_f_v4.py" and item.get("sha256") == producer.get("sha256")
+                       for item in old_sources.get("files", []))):
+        raise replay.ReplayError("历史场景结果与原执行源身份断裂")
+    if "tool.advisor" in probe.dimensions and probe.require_debug_log:
+        if "results/debug.log" not in source_files:
+            raise replay.ReplayError("advisor 重验缺少已绑定的原 debug 日志")
+        summary["inner_result"]["debug_declarations"] = v5._debug_declarations(relay_root.parent / "results", facts)
+    dimension = v5.validate_v5_probe_evidence(
+        probe_id=probe_id, relay_root=relay_root, scenario_summary=summary,
+        relay_integrity=manifest["relay_integrity"], pcap_receipt=manifest["tls_p_channel"], version_facts=facts,
+    )
+    if dimension["result"] != "passed":
+        raise replay.ReplayError(f"历史录制未通过真实 v5 重验：{probe_id}；{dimension['failed_dimensions']}；{dimension['wire_contract']['failures']}")
+    if dimension["actual_wire_inventory"] != manifest["dimension_evidence"]["actual_wire_inventory"]:
+        raise replay.ReplayError("原 wire inventory 与实际字节重解析结果不同")
+
+    runtime_path = bound(projection["runtime"]["receipt"], root=data)
+    runtime = read(runtime_path)
+    server, bundle = runtime.get("docker_server", {}), runtime.get("capture_source_bundle", {})
+    if (not isinstance(server, Mapping) or not isinstance(bundle, Mapping)
+            or server.get("os") != "linux" or server.get("arch") != "arm64"
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", str(runtime.get("runtime_image_id", "")))
+            or not re.fullmatch(r"[a-f0-9]{64}", str(bundle.get("sha256", "")))):
+        raise replay.ReplayError("本次控制 runtime 缺少完整 ARM64 镜像与执行源事实")
+    if (runtime.get("run_nonce") != projection["runtime"]["run_nonce"]
+            or runtime.get("run_nonce") == projection["origin"]["run_nonce"]):
+        raise replay.ReplayError("控制封套的本次 nonce 与来源混同或漂移")
+    host_binding = {
+        "schema_version": runtime["schema_version"], "path": str(runtime_path),
+        "sha256": projection["runtime"]["receipt"]["sha256"], "run_nonce": runtime["run_nonce"],
+        **{name: runtime[name] for name in ("container", "docker_server", "runtime_image_reference", "runtime_image_id", "repo_digest_verified")},
+        "capture_source_bundle_sha256": bundle["sha256"],
+        "container_runtime_binding": {"verified": True, "container_id": runtime["container"]["id"]},
+    }
+    manifest.update(
+        side=phase, run_id=_argument(projection["argv"], "--run-id"), capture_mode="fw-f-v5",
+        fw_f_v4_probe=None, fw_f_v5_probe=probe_id,
+        fw_f_v5_catalog={"path": str(current_catalog), "sha256": catalog_binding["file"]["sha256"]},
+        fw_f_v5_version_facts={**facts_binding, "facts": facts}, dimension_evidence=dimension,
+        fixture_only=True, formal_version_semantics_certified=False,
+    )
+    manifest["runtime"].update(runtime_image_reference=runtime["runtime_image_reference"], host_runtime_receipt=host_binding,
+                               capture_tools={"execution_sources": bundle})
+    manifest["fixture_projection"] = {
+        "schema_version": CONTROL_PROJECTION_SCHEMA, "purpose": "recorded_control_source_projection", "fixture_only": True,
+        "formal_version_semantics_certified": False, "current_client_executed": False,
+        "original_manifest": original_manifest_binding, "original_catalog": original_catalog_binding,
+        "original_execution_sources": old_sources, "runtime": projection["runtime"], "origin": projection["origin"],
+        "current_scenarios": inputs["scenarios"], "version_facts": inputs["version_facts"], "v5_catalog": catalog_binding,
+        "v5_validator": binding(Path(v5.__file__)), "v4_validator": binding(Path(v5.v4.__file__)),
+        "catalog_changed_fields": sorted(changed), "source_files": source_files,
+        "v5_dimension_result": dimension["result"],
+    }
+    # 判定器读完后再核一遍摘要，避免重验期间的字节变化被写进控制封套。
+    for item in (*source_files.values(), original_catalog_binding, inputs["scenarios"], inputs["version_facts"],
+                 catalog_binding["file"], projection["runtime"]["receipt"], projection["origin"]["receipt"]):
+        bound(item)
+    return manifest
+
+
 def copy_registered(state_path: Path, digest: str, projection_path: Path, projection_digest: str) -> None:
     """真实监督器执行的动作体：只复制外持摘要绑定的唯一步骤；无 shell、Docker 或网络调用。"""
 
@@ -415,6 +585,7 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
         raise replay.ReplayError("步骤投影外持摘要漂移")
     projection = read(projection_path)
     origin = verify_projection(state, projection)
+    manifest = control_manifest(state, projection, origin)
     index, row = origin["index"], origin["row"]
     destination = Path(projection["output_root"])
     if destination.exists() or destination.is_symlink():
@@ -425,16 +596,21 @@ def copy_registered(state_path: Path, digest: str, projection_path: Path, projec
         if not relative.startswith(row["attempt"] + "/"):
             continue
         source = bound({"path": str(Path(index["root"]) / relative), **item}, root=Path(index["root"]))
-        target = destination / Path(relative).relative_to(row["attempt"])
+        suffix = Path(relative).relative_to(row["attempt"])
+        target = destination / (ORIGIN_MANIFEST_FILENAME if suffix.as_posix() == "relay-manifest.json" else suffix)
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         shutil.copyfile(source, target)
         target.chmod(0o600)
         if replay._digest(target) != item:
             raise replay.ReplayError("复制结果与原始字节不同")
         copied.append({"path": str(target), **item})
+    manifest["fixture_projection"]["copied_origin_manifest"] = binding(destination / ORIGIN_MANIFEST_FILENAME)
+    current_manifest = write(destination / "relay-manifest.json", manifest)
     verify_projection(state, projection)
     write(projection_path.with_suffix(".copied.json"), {"fixture_only": True, "operation": projection["operation"],
-          "projection": binding(projection_path), "runtime": projection["runtime"], "origin": projection["origin"], "files": copied})
+          "purpose": "recorded_control_source_projection", "formal_version_semantics_certified": False,
+          "projection": binding(projection_path), "runtime": projection["runtime"], "origin": projection["origin"],
+          "files": copied, "control_manifest": binding(current_manifest)})
 
 
 class SourceAdapter:
@@ -463,12 +639,8 @@ class SourceAdapter:
             handle.write(source["receipt_path"].read_bytes())
         old_path.chmod(0o600)
         old = source["receipt"]
-        values = {"host_runtime_receipt": str(capture._container_path(old_path, context.layout)),
-                  "host_runtime_receipt_sha256": replay._digest(old_path)["sha256"], "run_nonce": old["run_nonce"]}
-        origin_binding = {"path": old_path.relative_to(context.attempt_root).as_posix(), "sha256": values["host_runtime_receipt_sha256"],
-                          "run_nonce": old["run_nonce"], "container_path": values["host_runtime_receipt"],
-                          "container_name": old["container"]["name"], "container_id": old["container"]["id"],
-                          "issued_at_utc": old["issued_at_utc"], "fixture_origin_only": True}
+        # 本次 Job/checker 一律消费本次签发收据；旧收据只作为独立来源附件，不替本次复制控制身份背书。
+        values = current_values
         jobs = capture.claude_upgrade._campaign_jobs(context.campaign_dir, context.manifest, "official")
         job = next(item for item in jobs if item.job_id == job_id)
         raw_step = job.steps[number - 1]
@@ -490,12 +662,14 @@ class SourceAdapter:
                       "origin": {"receipt": binding(old_path), "run_nonce": old["run_nonce"],
                                  "source_id": source["row"]["source_id"], "attempt": source["row"]["attempt"],
                                  "platform": "linux/amd64", "binary_sha256": self.state["freeze"]["binary_sha256"]}}
+        catalog_path = context.layout.host_tool_root / "capturelib/claude_fw_f_v5.py"
+        projection["v5_catalog"] = {"file": binding(catalog_path), "argument": str(capture._container_path(catalog_path, context.layout))}
         verify_projection(self.state, projection)
         path = write(runtime_path.with_suffix(".projection.json"), projection)
         if operation in self.pending:
             raise replay.ReplayError("重复的 operation 预约")
         self.pending[operation] = (argv, path, replay._digest(path)["sha256"])
-        return values, origin_binding
+        return current_values, current_binding
 
     def command(self, original: Any, client: Any, argv: Any, *, operation: str, **options: Any) -> Any:
         if operation.startswith(("job:", "synthetic-job:")):
