@@ -11,14 +11,14 @@
 * 计时账本必须是当前 revision 的 VC-5 已完成、VC-6 进行中（VC-6 由批次层开始）；交付写入一律在这个前提下进行。
 * 交付写入只经父批次（第九节）：Formal Campaign 里 ``deliver-candidate run`` 与带批准的 ``finalize`` 只能由
   ``compile-and-run-vc-batch`` 派发；不带批准的 ``finalize`` 只看审核内容（零写入），``delivery-stage-invalidate`` 是批次
-  之间的控制面命令，两者可以直接执行。ARM64 隔离候选环境的真实执行器是 B4-07 遗留项，另行排期（第二节）；生产激活属
+  之间的控制面命令，两者可以直接执行。ARM64 隔离候选执行器从固定受管安装解析，未完成正式安装时拒绝（第二节）；生产激活属
   B4-08 生产分支（另批）。
 
 二、交付环境执行器
 ==================
 四阶段的环境动作（切到候选镜像、实际回退、恢复候选、稳定观察；任一阶段失败立即恢复回退镜像）由交付环境执行器完成，
-编排器只做冻结、核对与登记。执行器按名字登记在 ``ENVIRONMENT_EXECUTORS``（名字 → 无参工厂），``--environment-executor``
-选择；生产环境目前不登记任何执行器，选了即报「待落实」。执行器对象提供两个方法：
+编排器只做冻结、核对与登记。``--environment-executor arm64-isolated`` 经固定受管安装解析配置和上下文；
+``ENVIRONMENT_EXECUTORS`` 保留给测试局部覆盖，生产环境仍无执行器。执行器对象提供两个方法：
 
 * ``freeze(request)``：只读冻结当前环境，返回环境身份 6 项（``host_id``、``architecture``、``compose_sha256``、
   ``environment_sha256``、``configuration_sha256``、``network_sha256``）、真实回退点（``rollback.image_digest``、
@@ -201,8 +201,8 @@ STORE_SCRATCH_RELATIVE = Path("control") / "store-inputs"
 LOCK_FILENAME = ".delivery.lock"
 ROOT_CAUSE_ENVIRONMENT_DRIFT = "delivery-environment-drift"
 LOGICAL_ACTION_PREFIX = "claude-upgrade:deliver-candidate"
-EXECUTOR_PENDING_WORK_ITEM = "B4-07 遗留项：ARM64 隔离候选环境真实执行器（另行排期）"
-# 交付环境执行器登记表：名字 → 无参工厂。生产环境目前不登记任何执行器（第二节）。
+EXECUTOR_PENDING_WORK_ITEM = "B4-07：需使用固定 ARM64 受管安装并提供冻结执行配置；其他环境未开放"
+# 测试接缝保留原显式登记；固定 ARM64 工厂另外核真实受管安装，空表不授予执行权。
 ENVIRONMENT_EXECUTORS: dict[str, Callable[..., Any]] = {}
 EXECUTOR_V1 = "claude-upgrade-arm64-delivery-executor/v1"
 EXECUTOR_CONFIGURATION_FLAGS = frozenset({"--executor-configuration", "--executor-configuration-sha256"})
@@ -476,13 +476,22 @@ def _environment_executor(name: Any, *, configuration: Mapping[str, Any] | None 
     if not isinstance(name, str) or not SAFE_NAME_RE.fullmatch(name):
         raise ConfigurationError("--environment-executor 格式非法。")
     factory = ENVIRONMENT_EXECUTORS.get(name)
+    fixed_installation = factory is None and name == "arm64-isolated" and configuration is not None
+    if fixed_installation:
+        from tools.official_client_capture.claude_upgrade_delivery_installation import formal_factory
+        factory = formal_factory
     if factory is None:
         raise _orchestrator()._pending(f"交付环境执行器 {name}", EXECUTOR_PENDING_WORK_ITEM)
     if configuration is None:
         return factory()
     if execution_context is None:
         raise ConfigurationError("真实交付缺少冻结执行上下文。")
-    executor = factory(name, dict(configuration), dict(execution_context))
+    try:
+        executor = factory(name, dict(configuration), dict(execution_context))
+    except (OSError, ValueError, RuntimeError) as error:
+        if not fixed_installation:
+            raise
+        raise ConfigurationError("固定 ARM64 交付安装不可用：" + str(error)) from error
     if getattr(executor, "contract_version", None) != EXECUTOR_V1:
         raise ConfigurationError("已登记工厂未提供受管真实交付执行合同。")
     return executor

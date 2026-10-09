@@ -2,7 +2,7 @@
 
 配置、数据根、凭据引用、Compose 服务及探针均显式冻结。只有独立守卫
 服务能够执行应用切换；客户端封票、维持租约、接收原件并提交复核。
-本模块提供能力，不登记正式执行器或来源；缺现场服务或可信回退时拒绝。
+固定安装模块为正式编排与来源重放提供接线；缺现场服务或可信回退时拒绝。
 """
 
 from __future__ import annotations
@@ -502,6 +502,8 @@ def guard_identity(configuration: dict[str, Any], context: dict[str, Any], *, fo
         if any(receipt.get(key) != value for key, value in expected.items()) or not isinstance(receipt.get("restart_recovery_binding"), dict):
             raise guard.GuardError("缺完整受管安装／独立重启恢复部署收据")
         guard.check_binding(root, receipt["restart_recovery_binding"])
+        from tools.official_client_capture.claude_upgrade_delivery_installation import validate_deployment_receipt
+        validate_deployment_receipt(configuration)
     else:
         if configuration["source_scope"] != "regression_fixture":
             raise guard.GuardError("本机fixture身份不能声称formal")

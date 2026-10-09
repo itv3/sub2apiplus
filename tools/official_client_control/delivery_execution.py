@@ -58,9 +58,17 @@ class VerifiedSource:
     gate_projection: Any = None
 
 
-# 正式登记须在固定通道、部署身份与原件真实性现场验收后由受管源码完成。
-# 测试仅在局部作用域登记夹具，不允许 CLI、环境变量或证据 JSON 动态加载验证器。
+# 测试仅在局部作用域登记夹具。正式固定 authority 经已验真的安装解析；
+# 不允许 CLI、环境变量或证据 JSON 动态加载验证器或建立安装信任。
 SOURCE_VERIFIERS: dict[str, Callable[[Any, Mapping[str, Any], Mapping[str, Any]], VerifiedSource]] = {}
+
+
+def _source_verifier(authority: str):
+    verifier = SOURCE_VERIFIERS.get(authority)
+    if verifier is None and authority == "claude-arm64-recovery-guard":
+        from tools.official_client_capture.claude_upgrade_delivery_installation import formal_source_verifier
+        return formal_source_verifier
+    return verifier
 
 
 @dataclass
@@ -186,7 +194,7 @@ def _source_batch_scope(store: Any, items: list[dict[str, Any]]):
             raise ControlError("批量来源被用于其他 Store 或未声明的来源")
         yield
         return
-    verifiers = {item["origin"]["authority"]: SOURCE_VERIFIERS.get(item["origin"]["authority"]) for item in unique.values()}
+    verifiers = {item["origin"]["authority"]: _source_verifier(item["origin"]["authority"]) for item in unique.values()}
     # 老来源登记继续走单项合同；批量能力只能随可信登记提供，不能从 JSON 选择。
     if not verifiers or any(not callable(getattr(verifier, "verify_batch", None)) for verifier in verifiers.values()):
         yield
@@ -275,7 +283,7 @@ def validate_publication_bindings(value: Any) -> list[dict[str, Any]]:
 
 def _verified_source(store: Any, content: Mapping[str, Any], origin: Mapping[str, Any]) -> VerifiedSource:
     _origin(origin)
-    verifier = SOURCE_VERIFIERS.get(str(origin["authority"]))
+    verifier = _source_verifier(str(origin["authority"]))
     if verifier is None:
         raise ControlError("Claude 真实交付来源尚未完成受管通道验收，不能发布或消费正式执行证明")
     core = {key: value for key, value in content.items() if key != "origin"}
