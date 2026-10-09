@@ -209,7 +209,9 @@ class ScenarioTableTests(unittest.TestCase):
         for unit, name in zip(plan["units"], CLAUDE_CHAIN_IDS, strict=True):
             with self.subTest(chain=name):
                 self.assertEqual(unit["argv"][3:8], ["run-scenario", "--client", "claude", "--name", name])
-                self.assertEqual(unit["timeout_seconds"], pre_a3.REAL_CHAIN_TIMEOUT_SECONDS, "真实链的单元超时")
+                expected_timeout = (pre_a3.claude_fault_time_budget(name)["unit_timeout_seconds"]
+                                    if name in pre_a3.CLAUDE_FAULT_METHOD_COUNTS else pre_a3.REAL_CHAIN_TIMEOUT_SECONDS)
+                self.assertEqual(unit["timeout_seconds"], expected_timeout, "仅三条 Claude 故障链扩时")
                 self.assertEqual(unit["scenario_test_file"], rows[name][2].replace(".", "/") + ".py")
                 self.assertEqual(pre_a3.scenario_test_module(name, "claude"), rows[name][2])
         self.assertEqual(pre_a3.real_chain_registration("claude"),

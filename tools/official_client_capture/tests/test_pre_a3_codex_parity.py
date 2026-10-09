@@ -24,6 +24,7 @@ project_ledger_fixture``（运行时模块不导入测试目录）；``FIXTURE_O
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import subprocess
 import tempfile
@@ -50,6 +51,17 @@ B5A11_FIXTURE_ENV_NAME = "FIXTURE_ONLY_ENV"
 B5A11_BIND_FUNCTION = "_bind_rehearsal_receipt"
 STAGING_PARENT = Path("/root/docker/capture-cli/data/staging/pre-a3-scenarios")
 WORKDIR = Path("/root/docker/capture-cli/data")
+# B5b-03 扩时只允许四个新增声明和 planner 中一个 Claude 专属表达式。
+# 固定 AST 摘要防止借历史对照例外接纳其它修改；行为与方法数由预算合同回归独立核对。
+CLAUDE_TIME_AST = {
+    "CLAUDE_FAULT_TIME_SCHEMA": "fb10ba0aff91363c6c6cbaa14a8b7cea48deb2689d7b6853b600b6d224871630",
+    "CLAUDE_FAULT_METHOD_SECONDS": "4143cca82261e5ef6187a302787b58d91fce4cc60b63e60600f8ac358cd10d9d",
+    "CLAUDE_FAULT_METHOD_COUNTS": "4f1d9f648e8d71ec4450cb49b08f3fba45159f2d4d9937133055e1163c6a9ed7",
+    "claude_fault_time_budget": "43a8b4b961dfa01b0a1c016040336115e436659f43a57ac29488b5bc88d6a23e",
+}
+CLAUDE_TIME_EXPRESSION = '''claude_fault_time_budget(name)["unit_timeout_seconds"]
+    if client == "claude" and name in CLAUDE_FAULT_METHOD_COUNTS else
+    REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS'''
 
 
 def load_baseline(relative: str, name: str) -> types.ModuleType | None:
@@ -117,6 +129,23 @@ class PreA3CodexParityTests(unittest.TestCase):
             for node in ast.parse(text).body:
                 target = node.target if isinstance(node, ast.AnnAssign) else None
                 names = [item.id for item in node.targets if isinstance(item, ast.Name)] if isinstance(node, ast.Assign) else []
+                name = (node.name if isinstance(node, ast.FunctionDef) else target.id if isinstance(target, ast.Name)
+                        else names[0] if len(names) == 1 else "")
+                if name in CLAUDE_TIME_AST:
+                    self.assertEqual(hashlib.sha256(ast.dump(node).encode()).hexdigest(), CLAUDE_TIME_AST[name])
+                    closeout.setdefault("time_additions", []).append(name)
+                    continue
+                if isinstance(node, ast.FunctionDef) and node.name == "plan_scenario_commands":
+                    expected = ast.parse("(" + CLAUDE_TIME_EXPRESSION + ")", mode="eval").body
+                    for item in ast.walk(node):
+                        if isinstance(item, ast.Dict):
+                            for index, key in enumerate(item.keys):
+                                if isinstance(key, ast.Constant) and key.value == "timeout_seconds":
+                                    expression = item.values[index]
+                                    if isinstance(expression, ast.IfExp) and isinstance(expression.test, ast.BoolOp):
+                                        self.assertEqual(ast.dump(expression), ast.dump(expected))
+                                        closeout["time_overrides"] = closeout.get("time_overrides", 0) + 1
+                                        item.values[index] = expression.orelse
                 if isinstance(target, ast.Name) and target.id in B5A05_CLAUDE_TABLES:
                     tables[target.id] = ast.dump(node)
                 elif isinstance(target, ast.Name) and target.id == B5A05_SECONDS_TABLE:
@@ -146,7 +175,10 @@ class PreA3CodexParityTests(unittest.TestCase):
         self.assertEqual(sorted(old_tables), sorted(B5A05_CLAUDE_TABLES))
         self.assertEqual(sorted(new_tables), sorted(B5A05_CLAUDE_TABLES))
         self.assertEqual(new_others, old_others,
-                         "两张 Claude 登记表、秒数表与 5a 收口三处以外的顶层语句与 B5a-08 提交逐字相同")
+                         "Claude 登记表、秒数表、5a 收口三处与精确时间合同例外之外均须逐字相同")
+        self.assertEqual(old_closeout.get("time_additions", []), [])
+        self.assertEqual(sorted(new_closeout["time_additions"]), sorted(CLAUDE_TIME_AST))
+        self.assertEqual(new_closeout["time_overrides"], 1)
         # 5a 收口①：基线在模块级导入测试夹具，现在不再导入测试目录。
         self.assertEqual(old_closeout["tests_imports"], [["project_ledger_fixture"]])
         self.assertEqual(new_closeout["tests_imports"], [])

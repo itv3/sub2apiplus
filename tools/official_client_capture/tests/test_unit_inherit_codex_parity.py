@@ -601,7 +601,12 @@ CLAUDE_REVISION_ENTRY_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
     "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": ["        \"r2 与评估器修复仍在私有待验链，登记八条不代表 B5b-03 完整覆盖\","],
     "tools/official_client_capture/certify_release.py": [],
 }
+# B5b-03 时间合同 v2：仅三条 Claude 故障链独立预算，Codex 所有单元逐字不变。
+CLAUDE_TIME_BASELINE_COMMIT = '8e4713ad8180c6f82b279bad58a66b60602dceb9'
+CLAUDE_TIME_SOURCE_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '73ddf7c5a2fe1637a2873e922380876159608d4ce79dbc223514ac533ee3cae0'}
+CLAUDE_TIME_SOURCE_REMOVED_LINES = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['            "timeout_seconds": REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS,']}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("Claude 故障链时间合同 v2", CLAUDE_TIME_BASELINE_COMMIT, CLAUDE_TIME_SOURCE_DIGESTS, CLAUDE_TIME_SOURCE_REMOVED_LINES),
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
     ("B5a-11", B5A11_BASELINE_COMMIT, B5A11_SOURCE_DIGESTS, B5A11_SOURCE_REMOVED_LINES),

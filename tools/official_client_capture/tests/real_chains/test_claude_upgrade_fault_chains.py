@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from unittest import mock
 
+from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
 from tools.official_client_capture.tests import managed_tree_copy as trees
 from tools.official_client_capture.tests import claude_chain_diagnostic_budget as diagnostic_budget
 from tools.official_client_capture.tests import claude_chain_driver as chain_driver
@@ -98,11 +99,11 @@ CHAINS: Mapping[str, Mapping[str, Any]] = {
 # 保留待验表接口供显式本机入口读取；公共入口登记不表示任何链已实际通过。
 PENDING_CONTINUOUS_CHAINS: Mapping[str, Mapping[str, Any]] = {}
 
-# 设计 B5b-03 的验收：ARM64 上每条不超过 15 分钟（含复制副本树）；子进程超时比它略短，留出外层收尾。
-CHAIN_BUDGET_SECONDS = 900
-CHAIN_TIMEOUT_SECONDS = 870
+# 单连续方法链的兼容导出；recovery 按登记的 21 个独立方法计算外层上限。
+# 时间合同只由 pre-A3 定义，避免内部已扩时却仍被外层执行器截断。
+CHAIN_BUDGET_SECONDS = certification.claude_fault_time_budget("vc-chain.claude-late-stage-faults")["chain_budget_seconds"]
+CHAIN_TIMEOUT_SECONDS = certification.claude_fault_time_budget("vc-chain.claude-late-stage-faults")["chain_timeout_seconds"]
 # 每组场景子进程的超时取链体剩余预算再减去这段余量。
-GROUP_MARGIN_SECONDS = 30.0
 
 # 场景组写六项记录的文件（链体设置；本机单跑场景时不设置，只做断言）。
 RECORDS_ENV = "CLAUDE_FAULT_CHAIN_RECORDS"
@@ -467,7 +468,7 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
     超时整组终止。全部通过（正好运行这几项、没有跳过）且每个场景都写出六项齐全的记录才记 ``step``。"""
 
     diagnostic_seconds = diagnostic_budget.diagnostic_seconds()
-    if diagnostic_seconds is not None and len(scenarios) > 1:
+    if len(scenarios) > 1:
         errors = []
         for method, names in scenarios.items():
             try:
@@ -475,11 +476,11 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
             except AssertionError as error:
                 errors.append(str(error))
         if errors:
-            case.fail("独立场景诊断已收齐失败：\n" + "\n".join(errors))
+            case.fail("独立场景已收齐失败：\n" + "\n".join(errors))
         return
     expected = _expected_scenarios(scenarios)
-    remaining = (diagnostic_seconds if diagnostic_seconds is not None else
-                 CHAIN_TIMEOUT_SECONDS - GROUP_MARGIN_SECONDS - (time.monotonic() - recorder.started))
+    method_timeout = (diagnostic_seconds if diagnostic_seconds is not None else
+                      certification.CLAUDE_FAULT_METHOD_SECONDS)
     records_file = Path(tempfile.mkstemp(prefix="fault-chain-records-", suffix=".jsonl")[1])
     environment = {**os.environ, RECORDS_ENV: str(records_file)}
     started = time.monotonic()
@@ -490,7 +491,7 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
     )
     timed_out = False
     try:
-        stdout, stderr = process.communicate(timeout=max(remaining, 1.0))
+        stdout, stderr = process.communicate(timeout=method_timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         try:
@@ -510,7 +511,7 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
     records_file.unlink()
     recorder.facts["scenarios"].extend(records)
     recorder.facts.setdefault("groups", []).append(
-        {"step": step, "tests": list(scenarios), "seconds": seconds, "returncode": None if timed_out else process.returncode, "timeout_seconds": remaining,
+        {"step": step, "tests": list(scenarios), "seconds": seconds, "returncode": None if timed_out else process.returncode, "timeout_seconds": method_timeout,
          "diagnostic_only": diagnostic_seconds is not None}
     )
     lines = stderr.rstrip().splitlines()
@@ -521,7 +522,7 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
     complete = _records_complete(records, expected)
     if not passed or not complete:
         recorder.emit()
-        reason = (f"超时（{seconds} 秒，链体剩余预算 {round(remaining, 1)} 秒）" if timed_out
+        reason = (f"超时（{seconds} 秒，本方法独立预算 {method_timeout} 秒）" if timed_out
                   else f"退出码 {process.returncode}" if not passed else f"六项记录不全：报了 {reported}")
         case.fail(f"场景组「{step}」没有通过（{reason}）：{', '.join(scenarios)}\n{stdout[-2000:]}\n{stderr[-6000:]}")
     recorder.step(step)
@@ -1829,9 +1830,12 @@ class ClaudeFaultChainTests(unittest.TestCase):
             diagnostic_budget.validate_seconds(diagnostic_seconds)
             if not os.environ.get("CLAUDE_RECORDED_CHAIN_RECORD_DIR"):
                 raise ValueError("诊断必须指定原件记录目录")
-        diagnostic_count = sum(len(group) for _step, group in RECOVERY_CHAIN_GROUPS) if chain == "recovery" else 1
-        timeout_seconds = diagnostic_count * diagnostic_seconds + 60 if diagnostic_seconds is not None else CHAIN_TIMEOUT_SECONDS
         spec = CHAINS[chain] if chain in CHAINS else PENDING_CONTINUOUS_CHAINS[chain]
+        method_count = sum(len(group) for _step, group in RECOVERY_CHAIN_GROUPS) if chain == "recovery" else 1
+        time_budget = certification.claude_fault_time_budget(spec["scenario"])
+        self.assertEqual(method_count, time_budget["method_count"], "场景数量变化必须同步正式时间合同")
+        timeout_seconds = (method_count * diagnostic_seconds + 60 if diagnostic_seconds is not None else
+                           time_budget["chain_timeout_seconds"])
         started = time.monotonic()
         mode = self._isolation_mode()
         metrics: dict[str, Any] = {}
@@ -1874,7 +1878,8 @@ class ClaudeFaultChainTests(unittest.TestCase):
                 **{key: value for key, value in metrics.items() if key != "chain"},
                 "scenario": spec["scenario"],
                 "diagnostic_only": diagnostic_seconds is not None,
-                "formal_time_budget_met": elapsed < CHAIN_BUDGET_SECONDS,
+                "time_budget": time_budget,
+                "formal_time_budget_met": elapsed < time_budget["chain_budget_seconds"],
                 "seconds": elapsed,
                 "copy_seconds": copy_seconds,
                 "isolation": mode,
@@ -1883,8 +1888,8 @@ class ClaudeFaultChainTests(unittest.TestCase):
             }
         if timed_out:
             self.fail(f"{spec['scenario']} 执行器超过清理时限 {timeout_seconds} 秒；诊断={diagnostic_seconds is not None}")
-        if diagnostic_seconds is None and elapsed >= CHAIN_BUDGET_SECONDS:
-            self.fail(f"{spec['scenario']} 超过 {CHAIN_BUDGET_SECONDS} 秒（实测 {elapsed} 秒）：每条链的验收上限是 15 分钟")
+        if diagnostic_seconds is None and elapsed >= time_budget["chain_budget_seconds"]:
+            self.fail(f"{spec['scenario']} 超过当前时间合同 {time_budget['chain_budget_seconds']} 秒（实测 {elapsed} 秒）")
         assert completed is not None
         if completed.returncode != 0:
             self.fail(f"{spec['scenario']} 子进程失败（退出码 {completed.returncode}，隔离={mode}，耗时 {elapsed} 秒；已通过的步骤："
@@ -1925,12 +1930,10 @@ class ClaudeFaultChainTests(unittest.TestCase):
             try:
                 _run_group(self, recorder, group, step)
             except AssertionError as error:
-                if diagnostic_budget.diagnostic_seconds() is None:
-                    raise
                 failures.append(str(error))
         if failures:
             recorder.emit()
-            self.fail("诊断已执行全部独立场景组：\n" + "\n".join(failures))
+            self.fail("已执行全部独立场景组：\n" + "\n".join(failures))
         recorder.facts["six_checks"] = {record["scenario"]: sorted(record["checks"]) for record in recorder.facts["scenarios"]}
         recorder.emit()
 
