@@ -280,7 +280,11 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
             path.write_text("#!/bin/sh\n# 仅供离线依赖观察，禁止执行工具行为。\nexit 125\n", encoding="utf-8")
             path.chmod(0o700)
     verified_binary_observation = upgrade._verify_official_binaries
+    # 同一录制世界在 collect 与后续发布认证重放时使用同一 runs 别名全集。
+    # 通用 Job fixture 另带的历史别名不属于本世界，不能在退出 fixture 后改变读侧期望。
+    registered_runs = tuple(upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS)
     with mock.patch.object(rehearsal_fixture, "TEST_CONTAINER_COMMANDS", required_commands), fixture.patched(), \
+            mock.patch.object(upgrade, "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS", registered_runs), \
             mock.patch.object(upgrade, "_verify_official_binaries", verified_binary_observation):
         rehearsal.collect(fixture.evidence, "facts.json", campaign_dir=preflight, client="claude")
         rehearsal.finalize(fixture.evidence, "facts.json", "receipt.json", client="claude")
@@ -309,9 +313,8 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
         identity=policy.current_identity("claude"), deployment_receipt=source.binding(deploy),
         pre_a3_certification=source.binding(pre_a3), policy_activation=None,
         real_chain_coverage=pre_a3_contract.real_chain_coverage(prerequisite, historical=True, client="claude"),
-        job_rehearsal={"evidence_root": str(fixture.evidence), "receipt": "receipt.json",
-                       "sha256": source.binding(fixture.evidence / "receipt.json")["sha256"],
-                       "failure_lifecycle_probe_sha256": job_receipt["failure_lifecycle_probe_sha256"]},
+        # 由当前正式读侧从真实演练收据推导完整绑定，避免手工字段表落后于 Job 合同。
+        job_rehearsal=certify_release.replay_job_rehearsal(fixture.evidence, Path("receipt.json"), "claude"),
         atomic_double_rehearsal={"evidence_root": str(control), "receipt": atomic.name, "sha256": source.binding(atomic)["sha256"]},
         campaign_run_rehearsal=None, client="claude")
     release = source.write(control / "fixture-release-certification.json", certificate)
