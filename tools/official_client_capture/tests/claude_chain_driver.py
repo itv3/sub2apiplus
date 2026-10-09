@@ -31,6 +31,7 @@ from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import codex_upgrade_project_ledger as project
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
+from tools.official_client_capture.tests import claude_chain_diagnostic_budget as diagnostic_budget
 from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full
 from tools.official_client_capture.tests import claude_recorded_replay as replay
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as candidate_tests
@@ -327,7 +328,7 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
             "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
         try:
             completed = subprocess.run(command, cwd=full.vc1.REPOSITORY, capture_output=True, text=True,
-                                       timeout=850, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                                       timeout=diagnostic_budget.diagnostic_seconds() or 850, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         except subprocess.TimeoutExpired as error:
             for name, raw in (("stdout.log", error.stdout or b""), ("stderr.log", error.stderr or b"")):
                 (self.root / name).write_bytes(raw.encode() if isinstance(raw, str) else raw)

@@ -1312,7 +1312,7 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
 
 认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify，四个入口都带
 `--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude schema v3 引擎计算；当前
-`policy_version=13` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
+`policy_version=14` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
 `pre-a3-path-certification/v3`，缺省坐标为 `control/policy-certification/claude-pre-a3-path-certification-<stamp>.json`；
 发布认证签 `tool-release-certification/v2`，绑定 Claude 部署收据的五摘要、pre-A3 认证、完整 Job 演练
 （当前 `official-client-job-rehearsal-receipt/v2`，双受管根及失败生命周期探针；v1仅按形成期只读重放）与 atomic-double 收据，只能在具备 Go 与 Docker
@@ -2170,6 +2170,12 @@ v1 或混搭降级。历史 v1 已有原位置只读账务发现；私有验证�
 审计或当前正例权限。准确 Store／封存 authority 的形成期入口仍待补齐，不能用当前 JSON、安装状态
 或任意用途旗标取得历史权。真实来源未完成验收前保持关闭。
 
+`claude_mac_product_materials` 已提供 `inspect_product_materials`、`freeze_product_materials`，
+`claude_mac_product_recipe.derive_readonly_private_launch_plan` 消费真实安装物料形成只读计划。输入必须显式指定
+应用与扩展或 Desktop pin CLI 根；分别冻结产品、宿主、扩展与内置 CLI 的版本和字节，拒绝越根链接、
+读中变化与旧 Catalog 冲突。它不启动产品，`formal_ready／launch_allowed／registration_verified` 仍为 false；
+私有缓存／扩展安置、实际隔离与状态恢复、原生来源仍须完成后才能登记正式模板。
+
 应用产品版本不能代替 Catalog 的 embedded CLI 身份。当前安装材料与旧固定 Catalog 不同，须先核实际
 内置 CLI 及官方来源，闭合 Translation／Catalog 后开新 Candidate revision；不能用新安装为旧候选签成功。
 
@@ -2319,9 +2325,10 @@ python3 -m tools.official_client_capture.claude_upgrade evaluation-recover apply
   `production_replacement` 还须完成生产分支，目前停 `production_activation_pending` 等待 B4-08。
 
 **当前状态分两层**：真实交付合同 A 及六补项的本机实现已提交 `551a01c17`，89 项本机测试通过；
-typed 执行证明、严格 Store 消费者、阶段结果及交付 checkpoint 已完成本机接线。正式执行器登记表
-`ENVIRONMENT_EXECUTORS` 仍为空；ARM64 实际场地、可信回退、独立 guard 的受管安装与生命周期、
-专用凭据、四阶段及异常恢复尚待现场验收。以下合同规定新候选交付的版本下限与恢复边界，
+typed 执行证明、严格 Store 消费者、阶段结果及交付 checkpoint 已完成本机接线。固定
+`arm64-isolated` 工厂与 `claude-arm64-recovery-guard` 来源解析已接受管安装；两张空登记表仅保留测试接缝，
+正式入口无需手工注入。安装接线的 58 项局部回归通过；ARM64 实际场地、可信回退、独立 guard 的
+实际安装与生命周期、专用凭据、四阶段及异常恢复尚待现场验收。以下合同规定新候选交付的版本下限与恢复边界，
 本机通过不能证明 ARM64 已部署或 VC-6 已完成。生产分支 §4.6.3～§4.6.8 随 B4-08 另批。
 
 | 当前候选交付合同 | 新能力要求 | 历史边界 |
@@ -2361,6 +2368,12 @@ VC-4；交付环境身份变化则保留旧交付，开新 `delivery_id`。
 到 `stable_observed`。一份交付同一时刻只允许一个未收口恢复段，finalize 后不得再失效或改写。
 
 ### 4.6.2 ARM64 隔离候选环境四阶段交付
+
+受监督部署当前工具和驱动后，固定入口 `driver/delivery_guard.py prepare --instance <实例>` 先安装同一
+systemd unit，采样主／子进程并强杀主进程，验证旧进程组清理及自动重启。该原件只证明服务生命周期，
+不能替代 Docker 回退。取得 unit 与部署收据绑定后再冻结配置 v2 和 execution context，调用
+`activate --instance <实例> --execution-context <固定数据根中的绝对路径>`。启用必须通过注册链、注册头与
+epoch readiness 校验；启用意图落盘后，缺损配置只报错，不能回落安装自检。重入沿原实例和原输入继续。
 
 交付门禁只检查镜像身份、Compose 差异、启动与 health、依赖连通、入口路由、秘密扫描、inventory、回退
 可用性与冻结观察窗。VC-5 正负矩阵、PAIR、断言和外部门禁只重放封存收据；必要 smoke 预先列入交付计划，
@@ -2602,7 +2615,7 @@ Claude 项目总账默认目录为 `<数据根>/upgrade-project-ledger-claude`�
 同目标根因跨 Campaign／revision／基线累计，稳定维度不包含本轮 Campaign ID；码表迁移继承旧计数。
 修复凭证闭合后按前表放行，不能通过换 revision 清零。
 
-Claude 策略 **schema 仍是 v3，`policy_version=13` 已实现，文件名仍为**
+Claude 策略 **schema 仍是 v3，`policy_version=14` 已实现，文件名仍为**
 [`claude_tool_identity_policy_v2.json`](../tools/official_client_capture/claude_tool_identity_policy_v2.json)，
 由 `claude_tool_identity_policy.py` 计算双受管根 `tools/official_client_capture`、`tools/official_client_control`
 及运行时绑定、符号闭包和五摘要。`tool-evolution preview／apply` 登记 wire／evidence／control 变化，policy
@@ -2612,7 +2625,7 @@ compare／accept 根；末轮接线已提交 `58dcc47ab`，两端身份摘要已
 部署与发布认证仍待完成；schema v3 与文件名保持既有合同，不能把 policy 版本或本机局部通过写成
 当前部署已认证。v11 新增 Darwin 原生 fork／exec／exit 投影、离线重放与私有构建合同，
 `.m` 只进入 Claude 身份；旧v1启动仍拒绝，编译或离线结构通过不授予完整事件、执行映像、
-正式来源或产品启动能力。v13新增独立内部owned-v2计划、控制、原生有界管线与只读封存重放；三条pipe按实际自进程handle／peerhandle核实例隔离。本轮只做私有编译和离线验收，没有执行collector／probe或创建ES；五能力旗标恒false，签名／部署authority、完整窗口、实际产品与transport-map仍待。v12 显式登记门禁第二根、Profile 观测副本与冻结来源父、守卫注册及连续性纯合同；当前 Job 消费双受管根 v2，当前守卫通道使用带不可变注册头的连续性 v2。完整交付链、最终冻结、双门禁与现场认证仍待完成。共同边界见
+正式来源或产品启动能力。v13新增独立内部owned-v2计划、控制、原生有界管线与只读封存重放；三条pipe按实际自进程handle／peerhandle核实例隔离。本轮只做私有编译和离线验收，没有执行collector／probe或创建ES；五能力旗标恒false，签名／部署authority、完整窗口、实际产品与transport-map仍待。v12 显式登记门禁第二根、Profile 观测副本与冻结来源父、守卫注册及连续性纯合同；当前 Job 消费双受管根 v2，当前守卫通道使用带不可变注册头的连续性 v2。完整交付链、最终冻结、双门禁与现场认证仍待完成。v14 增加真实产品物料冻结与只读计划的 wire 归层、固定守卫安装及来源解析的 control 接线；本机实现不授现场认证。共同边界见
 [Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。官方／候选分别按
 未封存与已封存重验：未封存只作废批准影响闭集；已封存且仍有受影响 Job 时拒绝借演进重采，分别按
 §4.1.1 的后继边界与 §4.5.8 的候选评估恢复办理。

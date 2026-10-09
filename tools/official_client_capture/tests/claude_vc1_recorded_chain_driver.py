@@ -507,11 +507,14 @@ def run_chain(state_path: Path, digest: str, *, installer: Callable[..., Any] = 
             raise replay.ReplayError("复制动作未按白名单一一闭合")
         continuation = write_continuation(state_path, digest, campaign, paths)
         elapsed = time.monotonic() - started
-        if elapsed > 900:
+        from tools.official_client_capture.tests import claude_chain_diagnostic_budget as diagnostic_budget
+        diagnostic_seconds = diagnostic_budget.diagnostic_seconds()
+        if elapsed > (diagnostic_seconds or 900):
             raise replay.ReplayError("VC-0→VC-1 回归超过 15 分钟")
         report = {"schema_version": "claude-recorded-vc0-vc1-chain/v1", "fixture_only": True, "status": "passed",
                   "registered_chains": ["vc-chain.claude-vc1-capture"], "scope": "VC-0→VC-1", "target_version": source.VERSION,
                   "origin_platform": "linux/amd64", "execution_platform": "linux/arm64", "elapsed_seconds": elapsed,
+                  "diagnostic_only": diagnostic_seconds is not None, "formal_time_budget_met": elapsed <= 900,
                   "network_requests_this_run": 0, "historical_request_accounting": timing.inspect_ledger(paths["ledger"]),
                   "campaign": str(campaign), "store_campaign_id": store_campaign["campaign_id"], "checkpoint": source.binding(checkpoint),
                   "preview_batch": preview_batch, "approval_batch": approval, "copy_projections": copied,

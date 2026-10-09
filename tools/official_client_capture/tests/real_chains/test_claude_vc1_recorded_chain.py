@@ -20,6 +20,7 @@ import unittest
 from pathlib import Path
 
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
+from tools.official_client_capture.tests import claude_chain_diagnostic_budget as diagnostic_budget
 
 RECORD_DIR_ENV = "CLAUDE_RECORDED_CHAIN_RECORD_DIR"
 RECORDS_ENV = "CLAUDE_FAULT_CHAIN_RECORDS"
@@ -68,6 +69,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
         self.assertFalse(result["vc_chain_certified"])
 
     def test_real_vc0_closeout_supervised_copy_and_vc1_seal(self) -> None:
+        self.assertIsNone(diagnostic_budget.diagnostic_seconds(), "正式录制链不能继承诊断预算")
         recorded = os.environ.get("CLAUDE_2_1_226_RELAY_FIXTURE")
         freeze = os.environ.get("CLAUDE_2_1_226_FREEZE_FIXTURE")
         if not recorded or not freeze:
@@ -135,6 +137,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
         然后委托正式 full CLI；报告缺失、失败或超时均保存真实日志和未验证记录，不能改写为成功。
         """
 
+        self.assertIsNone(diagnostic_budget.diagnostic_seconds(), "正式录制链不能继承诊断预算")
         recorded = os.environ.get("CLAUDE_2_1_226_RELAY_FIXTURE")
         freeze = os.environ.get("CLAUDE_2_1_226_FREEZE_FIXTURE")
         if not recorded or not freeze:

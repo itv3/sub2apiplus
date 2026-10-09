@@ -622,7 +622,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 13))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 14))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
@@ -643,6 +643,8 @@ class ClaudePolicyFileTests(unittest.TestCase):
         """原生观测与启动选择分别影响证据语义和wire生产身份，不留默认归层。"""
         self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_process_identity.py"), "evidence_semantics")
         self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_product_recipe.py"), "wire_producer")
+        self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_product_materials.py"), "wire_producer")
+        self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_upgrade_delivery_installation.py"), "control")
         self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_product_recorder.py"), "wire_producer")
         self.assertEqual(v3.classify_path(self.policy, "official_client_control/qualification_bindings.py"), "evidence_semantics")
         self.assertEqual(v3.classify_path(self.policy, "official_client_control/replay_bindings.py"), "evidence_semantics")

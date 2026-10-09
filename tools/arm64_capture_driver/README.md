@@ -545,8 +545,18 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 | 范围 | 本机状态 | 现场与最终认证 |
 |---|---|---|
 | Mac v2 来源／导入 | 已合入 `8b6e15ab8`；74 项基础与 31 项入口故障测试通过；CLI／批次、门禁适配、预约发现、provenance 及两 wrapper 的真实调用／读侧根已接，末轮接线已提交 `58dcc47ab`；双客户端摘要已实算，受控登记与变异复验仍待收口 | 原 attempt 预算服务及消费已接通，H1／TLS-H1 和受限 H2 原生捕获／同步的本机专项通过；fixture 薄记录器已接九方法协议与真实 StateJournal，只封存内部 partial／恢复诊断；正式产品后端、完整事件／模块／transport-map及联合来源仍缺，live 零启动拒绝；正式 SOURCE_ADAPTERS 为空，历史形成期 authority 待补，产品／双端来源未认证 |
-| 严格候选交付 | 已提交 `551a01c17`，89 项本机通过；typed 执行证明、Store／阶段结果／checkpoint 消费已接 | 正式 ENVIRONMENT_EXECUTORS 仍为空；ARM64 场地、可信回退、guard 受管安装、专用凭据、四阶段／异常恢复待现场验收 |
-| 共享 D4／r2 与发布 | D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项在 `58dcc47ab` 共 165 项通过；当前 policy_version=13 已实现，schema 仍 v3、文件名仍 _v2.json | 第二次 transient 在固定 `09ce8fa04` 已完整通过，717.503 秒，仅属本机回归；最终源码复验、策略演进／部署、A/B 组合认证、ARM64 八链、pre-A3、issue／verify 与 VC-0 收口尚未完成 |
+| 严格候选交付 | 已提交 `551a01c17`，89 项本机通过；typed 执行证明、Store／阶段结果／checkpoint 消费已接 | 固定 arm64-isolated 工厂及 guard 来源已接受管安装，58 项安装接线局部回归通过；空注册表保留测试接缝。ARM64 实际安装、场地、可信回退、专用凭据、四阶段／异常恢复待现场验收 |
+| 共享 D4／r2 与发布 | D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项在 `58dcc47ab` 共 165 项通过；当前 policy_version=14 已实现，schema 仍 v3、文件名仍 _v2.json | 第二次 transient 在固定 `09ce8fa04` 已完整通过，717.503 秒，仅属本机回归；最终源码复验、策略演进／部署、A/B 组合认证、ARM64 八链、pre-A3、issue／verify 与 VC-0 收口尚未完成 |
+
+固定守卫安装入口为 `python3 -B /root/arm64-capture-driver/driver/delivery_guard.py`。先运行
+`prepare --instance <实例>`，真实采样 systemd 自动重启与旧进程组退出；此时不执行交付动作。取得安装
+绑定后才冻结配置 v2／execution context，再运行 `activate --instance <实例> --execution-context <绝对路径>`，
+必须核完整注册链、注册头与启动 readiness。配置一旦进入启用，损坏只能修复后重入，不能退回自检。
+此安装原件不代替 Docker 回退、账号资格或四阶段交付证据；完整操作合同见
+[Claude 指南 §4.6.2](../../docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#462-arm64-隔离候选环境四阶段交付)。
+
+Mac 产品物料冻结及只读计划已补实读安装树入口，73 项定向测试与两套真实安装树检查通过；
+正式模板、来源与产品启动资格仍关闭，不能据此完成 B4-01。
 
 通用 Store 的父域读集补正与 v2 重放结果已接入，合同和严格扫描边界见
 [共享实现 §3.2](../../docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md#32-合同版本)。实现存在不能证明
