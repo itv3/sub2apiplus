@@ -441,6 +441,13 @@ def source_scope(control_path: Path) -> Iterator[None]:
                 raise guard.GuardError("typed 来源被用于其他 Store")
             return execution.VerifiedSource(**reader.verify_origin_evidence(content, origin))
 
+        def verify_batch(store: Any, items: list[dict[str, Any]]) -> list[execution.VerifiedSource]:
+            if store.root.resolve() != (root / configuration["candidate"]["qualification"]["store_relative"]).resolve():
+                raise guard.GuardError("typed 批量来源被用于其他 Store")
+            return [execution.VerifiedSource(**row) for row in reader.verify_origin_evidence_batch(items)]
+
+        verify.verify_batch = verify_batch
+
         with mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {EXECUTOR_NAME: factory}, clear=True), \
                 mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: verify}, clear=True):
             yield

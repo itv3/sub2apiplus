@@ -71,6 +71,8 @@ PREPARE_FIELDS = frozenset({
 })
 TERMINAL_STATES = {"execution_committed", "restored", "restore_failed", "recovery_pending"}
 MAX_RPC_BYTES = 64 * 1024 * 1024
+MAX_EXPORT_ITEMS = 64
+EXPORT_BATCH_SCHEMA = "claude-delivery-source-batch/v1"
 
 
 class GuardError(RuntimeError):
@@ -1395,7 +1397,49 @@ class GuardEngine:
             raise GuardError("资格归档只读原件字节漂移")
         return raw
 
+    def export_batch(self, request: dict[str, Any]) -> dict[str, Any]:
+        """同一冻结配置的只读来源全集；原件并集不跨请求保存。
+
+        每项仍从守卫真实生成的原件证明 producer 和连续性。公共资格
+        投影只在本次锁内建立一次，逐项闭包仍实读，不能缓存通过状态。
+        """
+        exact(request, {"items"}, "批量来源导出")
+        items = request["items"]
+        if not isinstance(items, list) or not 1 <= len(items) <= MAX_EXPORT_ITEMS:
+            raise GuardError("批量来源项数超出固定上限")
+        seen = set()
+        for item in items:
+            exact(item, {"content", "origin"}, "批量来源项")
+            digest = canonical_sha256(item)
+            if digest in seen:
+                raise GuardError("批量来源包含重复项")
+            seen.add(digest)
+        with self.lock:
+            projections: list[Any] = []
+            originals: dict[str, str] = {}
+            results = []
+            total = 0
+            for item in items:
+                result = self._export(item, projections)
+                for path, encoded in result.pop("bytes_by_path").items():
+                    previous = originals.get(path)
+                    if previous is not None and previous != encoded:
+                        raise GuardError("批量来源中同一路径绑定不同字节")
+                    if previous is None:
+                        total += len(base64.b64decode(encoded, validate=True))
+                        if total > MAX_RPC_BYTES // 2:
+                            raise GuardError("批量来源原件并集超出固定通道上限")
+                        originals[path] = encoded
+                results.append({**result, "request_sha256": canonical_sha256(item)})
+            return {"schema_version": EXPORT_BATCH_SCHEMA,
+                    "requests_sha256": canonical_sha256(items),
+                    "items": results, "bytes_by_path": originals}
+
     def export(self, request: dict[str, Any]) -> dict[str, Any]:
+        """单项旧接口每次独立验真，不承接其他调用的证明。"""
+        return self._export(request, [])
+
+    def _export(self, request: dict[str, Any], projections: list[Any]) -> dict[str, Any]:
         with self.lock:
             self._require_epoch_readiness()
             exact(request, {"content", "origin"}, "来源导出")
@@ -1468,7 +1512,9 @@ class GuardEngine:
                 from tools.official_client_control.store import ControlStore
                 qualification = self.configuration["candidate"]["qualification"]
                 store = ControlStore.open_read_only(managed_path(self.data_root, qualification["store_relative"]))
-                gate_projection = projection_for_configuration(store, self.configuration, source, purpose="formed_replay")
+                if not projections:
+                    projections.append(projection_for_configuration(store, self.configuration, source, purpose="formed_replay"))
+                gate_projection = projections[0]
                 initial = {"content": content, "origin": origin, "profile_producer_materials": profile_materials,
                            "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)],
                            "configuration_binding": self.context["configuration_ref"],
@@ -1570,7 +1616,7 @@ class GuardClient:
         self.timeout = timeout_seconds
 
     def call(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if action not in {"status", "inspect", "prepare", "run", "finish", "heartbeat", "recover", "inventory", "export"}:
+        if action not in {"status", "inspect", "prepare", "run", "finish", "heartbeat", "recover", "inventory", "export", "export_batch"}:
             raise GuardError("未定义的守卫操作")
         if self.path.is_symlink() or not self.path.exists() or not stat.S_ISSOCK(self.path.stat().st_mode) or self.path.stat().st_uid != os.getuid() or stat.S_IMODE(self.path.stat().st_mode) != 0o600:
             raise GuardError("守卫 socket 所有者、类型或权限非法")
@@ -1644,6 +1690,8 @@ def serve(engine: GuardEngine, socket_path: Path, key: bytes, ready: Callable[[]
                 value = engine.inventory()
             elif action == "export":
                 value = engine.export(payload)
+            elif action == "export_batch":
+                value = engine.export_batch(payload)
             else:
                 raise GuardError("未定义的守卫操作")
             body = {"ok": True, "value": value}

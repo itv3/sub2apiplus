@@ -26,7 +26,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
-from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, parse_json_bytes
+from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, parse_json_bytes, validate_relative_path
 from tools.official_client_control.contracts import DIMENSIONS, validate_fact_ref
 from tools.official_client_control.errors import ControlError
 from tools.official_client_control import profile_observation_bindings as profile_observations
@@ -1170,10 +1170,58 @@ class Arm64DeliveryExecutor:
 
     def verify_origin_evidence(self, content: Mapping[str, Any], origin: Mapping[str, Any]) -> dict[str, Any]:
         raw = self.client.call("export", {"content": dict(content), "origin": dict(origin)})
+        originals = self._decode_source_originals(raw["bytes_by_path"])
+        return self._verify_origin_export(content, origin, raw, originals, [])
+
+    @staticmethod
+    def _decode_source_originals(encoded_originals: Any) -> dict[str, bytes]:
+        if not isinstance(encoded_originals, dict):
+            raise guard.GuardError("来源原件必须为路径与原字节映射")
+        originals = {}
+        total = 0
+        for path, encoded in encoded_originals.items():
+            validate_relative_path(path, "delivery.source.path")
+            raw = base64.b64decode(encoded, validate=True)
+            total += len(raw)
+            if total > guard.MAX_RPC_BYTES // 2:
+                raise guard.GuardError("来源原件并集超出固定通道上限")
+            originals[path] = raw
+        return originals
+
+    def verify_origin_evidence_batch(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """独立验证同次批量原件；不消费守卫自报通过或共享其投影对象。"""
+        if not isinstance(items, list) or not 1 <= len(items) <= guard.MAX_EXPORT_ITEMS:
+            raise guard.GuardError("批量来源项数超出固定上限")
+        for item in items:
+            guard.exact(item, {"content", "origin"}, "批量来源项")
+        digests = [canonical_sha256(item) for item in items]
+        if len(set(digests)) != len(digests):
+            raise guard.GuardError("批量来源包含重复项")
+        raw = self.client.call("export_batch", {"items": items})
+        guard.exact(raw, {"schema_version", "requests_sha256", "items", "bytes_by_path"}, "批量来源响应")
+        if (raw["schema_version"] != guard.EXPORT_BATCH_SCHEMA
+                or raw["requests_sha256"] != canonical_sha256(items)
+                or not isinstance(raw["items"], list) or len(raw["items"]) != len(items)):
+            raise guard.GuardError("批量来源响应未闭合本次精确请求全集")
+        originals = self._decode_source_originals(raw["bytes_by_path"])
+        projections: list[Any] = []
+        results = []
+        channel = None
+        for item, response, digest in zip(items, raw["items"], digests):
+            if response.get("request_sha256") != digest:
+                raise guard.GuardError("批量来源响应与完整内容及来源不对应")
+            if channel is not None and channel != response.get("guard_identity"):
+                raise guard.GuardError("批量来源不是同一当前守卫通道")
+            channel = response.get("guard_identity")
+            results.append(self._verify_origin_export(item["content"], item["origin"], response, originals, projections))
+        return results
+
+    def _verify_origin_export(self, content: Mapping[str, Any], origin: Mapping[str, Any],
+                              raw: Mapping[str, Any], originals: dict[str, bytes],
+                              projections: list[Any]) -> dict[str, Any]:
         self._identity(raw["guard_identity"])
         if raw["content_sha256"] != canonical_sha256(content) or raw["deployment_sha256"] != self.configuration["guard"]["deployment_receipt_binding"]["sha256"]:
             raise guard.GuardError("受管来源返回的内容或部署摘要不匹配")
-        originals = {path: base64.b64decode(encoded, validate=True) for path, encoded in raw["bytes_by_path"].items()}
         for item in guard.all_bindings({"content": content, "origin": origin}):
             data = originals.get(item["path"])
             if data is None or len(data) != item["bytes"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
@@ -1209,7 +1257,9 @@ class Arm64DeliveryExecutor:
                 profile_projection=profile_projection, guard_continuity=continuity)
             q = self.configuration["candidate"]["qualification"]
             store = ControlStore.open_read_only(guard.managed_path(self.data_root, q["store_relative"]))
-            gate_projection = projection_for_configuration(store, self.configuration, source, purpose="formed_replay")
+            if not projections:
+                projections.append(projection_for_configuration(store, self.configuration, source, purpose="formed_replay"))
+            gate_projection = projections[0]
             initial = {"content": content, "origin": origin,
                        "profile_proof_bindings": list(profile_projection.proof_bindings),
                        "profile_producer_materials": list(profile_projection.producer_materials),
@@ -1237,3 +1287,10 @@ def verify_origin_evidence(executor: Arm64DeliveryExecutor, content: Mapping[str
     if not isinstance(executor, Arm64DeliveryExecutor):
         raise guard.GuardError("来源读取须使用固定执行器实例")
     return executor.verify_origin_evidence(content, origin)
+
+
+def verify_origin_evidence_batch(executor: Arm64DeliveryExecutor, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """批量只读来源同样只接受可信登记选中的固定执行器实例。"""
+    if not isinstance(executor, Arm64DeliveryExecutor):
+        raise guard.GuardError("批量来源读取须使用固定执行器实例")
+    return executor.verify_origin_evidence_batch(items)

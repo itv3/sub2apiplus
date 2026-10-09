@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -59,6 +61,77 @@ class VerifiedSource:
 # 正式登记须在固定通道、部署身份与原件真实性现场验收后由受管源码完成。
 # 测试仅在局部作用域登记夹具，不允许 CLI、环境变量或证据 JSON 动态加载验证器。
 SOURCE_VERIFIERS: dict[str, Callable[[Any, Mapping[str, Any], Mapping[str, Any]], VerifiedSource]] = {}
+
+
+@dataclass
+class _SourceBatch:
+    """只属于一次只读校验的原件快照，不能由证据文件创建。"""
+
+    store: Any
+    verifiers: dict[str, Any]
+    sources: dict[str, VerifiedSource]
+    active: bool = True
+
+
+_SOURCE_BATCH: ContextVar[_SourceBatch | None] = ContextVar("claude_delivery_source_batch", default=None)
+
+
+def _source_request(content: Mapping[str, Any], origin: Mapping[str, Any]) -> dict[str, Any]:
+    return {"content": {key: value for key, value in content.items() if key != "origin"}, "origin": dict(origin)}
+
+
+def _graph_source_items(store: Any, payload: Mapping[str, Any],
+                        frozen_configuration_ref: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    validate_operational_evidence(dict(payload))
+    facts = payload["entries"][0]["facts"]
+    items = [_source_request(facts, facts["origin"])]
+    reference = facts["configuration_ref"] if payload["evidence_type"] == "stage_execution" else frozen_configuration_ref
+    if reference is not None:
+        original = evidence_facts(store, reference, "configuration")
+        items.append(_source_request(original, original["origin"]))
+    return items
+
+
+def _plan_source_items(store: Any, plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    items = []
+    for key in (*sorted(PLAN_EXTRA_FIELDS), "environment_freeze_ref"):
+        items.extend(_graph_source_items(store, store.load_object(plan[key])["payload"],
+            plan["executor_configuration_ref"] if key in {"environment_before_ref", "environment_freeze_ref"} else None))
+    return items
+
+
+@contextmanager
+def _source_batch_scope(store: Any, items: list[dict[str, Any]]):
+    """只在精确预声明的只读图内承接来源；独立调用重新取得通道证明。"""
+    unique = {canonical_sha256(item): item for item in items}
+    previous = _SOURCE_BATCH.get()
+    if previous is not None:
+        if not previous.active or previous.store is not store or not set(unique) <= set(previous.sources):
+            raise ControlError("批量来源被用于其他 Store 或未声明的来源")
+        yield
+        return
+    verifiers = {item["origin"]["authority"]: SOURCE_VERIFIERS.get(item["origin"]["authority"]) for item in unique.values()}
+    # 老来源登记继续走单项合同；批量能力只能随可信登记提供，不能从 JSON 选择。
+    if not verifiers or any(not callable(getattr(verifier, "verify_batch", None)) for verifier in verifiers.values()):
+        yield
+        return
+    sources = {}
+    for authority, verifier in verifiers.items():
+        selected = [(key, item) for key, item in unique.items() if item["origin"]["authority"] == authority]
+        results = verifier.verify_batch(store, [item for _, item in selected])
+        if not isinstance(results, list) or len(results) != len(selected):
+            raise ControlError("批量来源验证器未返回精确逐项结果")
+        for (key, item), source in zip(selected, results):
+            _check_verified_source(source, item["content"], item["origin"])
+            sources[key] = source
+    batch = _SourceBatch(store, verifiers, sources)
+    token = _SOURCE_BATCH.set(batch)
+    try:
+        yield
+    finally:
+        batch.active = False
+        batch.sources.clear()
+        _SOURCE_BATCH.reset(token)
 
 
 def _exact(value: Any, fields: Any, label: str) -> dict[str, Any]:
@@ -130,16 +203,39 @@ def _verified_source(store: Any, content: Mapping[str, Any], origin: Mapping[str
     if verifier is None:
         raise ControlError("Claude 真实交付来源尚未完成受管通道验收，不能发布或消费正式执行证明")
     core = {key: value for key, value in content.items() if key != "origin"}
-    verified = verifier(store, core, origin)
+    batch = _SOURCE_BATCH.get()
+    if batch is None:
+        verified = verifier(store, core, origin)
+    else:
+        if not batch.active or batch.store is not store or batch.verifiers.get(origin["authority"]) is not verifier:
+            raise ControlError("本次批量来源的 Store、通道登记或生命周期已变化")
+        verified = batch.sources.get(canonical_sha256(_source_request(content, origin)))
+        if not isinstance(verified, VerifiedSource) or verified.trusted_data_root is None:
+            raise ControlError("请求未列入本次批量来源，不能承接其他调用的证明")
+        # 快照只省来源导出；每次消费仍对照真实原件，不能掩盖批量后字节漂移。
+        live = replace(verified, bytes_by_path={})
+        for path, raw in verified.bytes_by_path.items():
+            _source_bytes(live, {"path": path, "sha256": sha256_bytes(raw), "bytes": len(raw)})
+    _check_verified_source(verified, core, origin)
+    if batch is not None and verified.guard_continuity is not None:
+        from .canonical import parse_json_bytes
+        from tools.official_client_capture.claude_upgrade_delivery_recovery_guard import owner_alive
+        identity = parse_json_bytes(verified.guard_continuity.channel_identity_bytes)
+        if not owner_alive({key: identity[key] for key in ("boot_id", "pid", "process_start", "process_group_id")}):
+            raise ControlError("批量取证后的当前守卫实例已消失或 PID 被重用")
+    for binding in typed_bindings(content):
+        _source_bytes(verified, binding)
+    return verified
+
+
+def _check_verified_source(verified: VerifiedSource, core: Mapping[str, Any], origin: Mapping[str, Any]) -> None:
+    _origin(origin)
     if not isinstance(verified, VerifiedSource):
         raise ControlError("交付来源验证器未返回受管原件结果")
     if verified.content_sha256 != canonical_sha256(core) or verified.configuration_sha256 != origin["configuration_sha256"] or verified.service_instance_id != origin["service_instance_id"]:
         raise ControlError("交付来源、部署与完整执行内容不一致")
     expect_sha256(verified.deployment_sha256, "delivery.verified_deployment_sha256")
     _revalidate_guard_continuity(verified, required=origin["source_scope"] == "formal")
-    for binding in typed_bindings(content):
-        _source_bytes(verified, binding)
-    return verified
 
 
 def _source_bytes(source: VerifiedSource, binding: Mapping[str, Any]) -> bytes:
@@ -637,7 +733,8 @@ def validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_e
                             frozen_configuration_ref: Mapping[str, Any] | None = None) -> VerifiedSource:
     """一次图校验独占临时 reader 结果，成功或失败退出后均失效。"""
     from tools.official_client_capture.claude_gate_material_worker import gate_material_reader_scope
-    with gate_material_reader_scope():
+    with gate_material_reader_scope(), _source_batch_scope(store,
+            _graph_source_items(store, payload, frozen_configuration_ref)):
         return _validate_evidence_graph(store, payload, current_execution=current_execution,
                                         frozen_configuration_ref=frozen_configuration_ref)
 
@@ -823,6 +920,11 @@ def _validate_rollback_qualification(store: Any, plan: Mapping[str, Any], config
 
 
 def validate_plan(store: Any, plan: Mapping[str, Any], *, current_execution: bool = False) -> None:
+    with _source_batch_scope(store, _plan_source_items(store, plan)):
+        _validate_plan(store, plan, current_execution=current_execution)
+
+
+def _validate_plan(store: Any, plan: Mapping[str, Any], *, current_execution: bool = False) -> None:
     campaign = store.load_campaign(plan["campaign_id"])
     if campaign.get("client") != "claude" or campaign.get("schema_version") != "official-client-control-campaign/v2":
         raise ControlError("真实交付仅属于明确 Claude 的 Campaign v2")
@@ -1007,6 +1109,19 @@ def receipt_execution_inputs(package: Mapping[str, Any], plan: Mapping[str, Any]
 
 
 def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current_execution: bool = False) -> None:
+    if package.get("schema_version") != PACKAGE_V2:
+        raise ControlError("当前真实交付必须使用 Package v2")
+    plan = store.load_object(package["delivery_plan_ref"])["payload"]
+    items = _plan_source_items(store, plan)
+    items.append(_source_request({"campaign_id": package["campaign_id"], "delivery_id": package["delivery_id"],
+        "operation_index_binding": package["operation_index_binding"]}, package["operation_index_origin"]))
+    for reference in [*package["execution_evidence_refs"], *package["restoration_evidence_refs"]]:
+        items.extend(_graph_source_items(store, store.load_object(reference)["payload"]))
+    with _source_batch_scope(store, items):
+        _validate_delivery_package(store, package, current_execution=current_execution)
+
+
+def _validate_delivery_package(store: Any, package: Mapping[str, Any], *, current_execution: bool = False) -> None:
     if package.get("schema_version") != PACKAGE_V2:
         raise ControlError("当前真实交付必须使用 Package v2")
     plan = store.load_object(package["delivery_plan_ref"])["payload"]

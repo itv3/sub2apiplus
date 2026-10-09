@@ -21,6 +21,7 @@ from tools.official_client_capture import claude_upgrade_delivery as delivery
 from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+from tools.official_client_capture.claude_gate_material_worker import ReaderError
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import FileRuntime
 from tools.official_client_control import contracts, delivery_execution as execution, receipts
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
@@ -228,7 +229,14 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
                 self.fail("组合守卫未成功启动")
             time.sleep(0.01)
         self.executor = executor.create_executor("arm64-isolated", configuration, context)
-        source = mock.patch.dict(execution.SOURCE_VERIFIERS, {"claude-arm64-recovery-guard": lambda store, content, origin: execution.VerifiedSource(**self.executor.verify_origin_evidence(content, origin))}, clear=True)
+        def verify(store, content, origin):
+            return execution.VerifiedSource(**self.executor.verify_origin_evidence(content, origin))
+
+        def verify_batch(store, items):
+            return [execution.VerifiedSource(**row) for row in self.executor.verify_origin_evidence_batch(items)]
+
+        verify.verify_batch = verify_batch
+        source = mock.patch.dict(execution.SOURCE_VERIFIERS, {"claude-arm64-recovery-guard": verify}, clear=True)
         source.start()
         self.addCleanup(source.stop)
         factory = mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {"arm64-isolated": executor.create_executor}, clear=True)
@@ -415,8 +423,8 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         scenarios = (
             ("来源失效", ControlError, "受管通道验收"),
             ("当前资格失效", ControlError, "有效七项工具身份"),
-            # 独立守卫只对外返回内部异常类名，避免泄露原件路径。
-            ("材料权限漂移", guard.GuardError, "^守卫执行异常：ReaderError$"),
+            # 批量来源在装配前取得；装配后的权限漂移由消费端独立 reader 拒绝。
+            ("材料权限漂移", ReaderError, "材料实际类型、长度或模式漂移"),
         )
         for scenario, error_type, pattern in scenarios:
             with self.subTest(scenario=scenario):
