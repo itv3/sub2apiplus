@@ -1,0 +1,77 @@
+{
+  "base_commit": "641e2b48cb6debbbce8c9f3ca4c5f8d26de3033b",
+  "changed_path_count": 15,
+  "current_commit": "64e7bc2a3b0a210373231c8c128a96634c8d3415",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5886,
+  "frozen_path_count": 2015,
+  "identity_sha256": "9fc14ee5d2cb6c73ea55060a60951db6729febd443fab71919b8e862258fe1ad",
+  "issued_at_utc": "2026-10-09T22:56:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-fault-time-v2-20261010-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "cf51e8f2d2acc8aed9f4fd07569faa2471c4f0c1035c25956b6ba23af44d95dc"
+      ],
+      "reason": "按上游合并流程规则在最终 revision 一次性登记冻结台账的精确后继摘要（claude-fault-time-v2-20261010）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-b407-r01-20261010-successor.json",
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-ab-mac-recovery-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-document-job-local-20261009-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "461c9c477195cf166a10dd7360ff49e11aefcbc37c93c1a9ac509e25e26b0af8"
+    }
+  ],
+  "unregistered_path_count": 14,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py",
+    "tools/official_client_capture/tests/claude_recorded_candidate_source.py",
+    "tools/official_client_capture/tests/claude_recorded_chain_source.py",
+    "tools/official_client_capture/tests/real_chains/test_claude_upgrade_fault_chains.py",
+    "tools/official_client_capture/tests/test_claude_chain_diagnostic_budget.py",
+    "tools/official_client_capture/tests/test_claude_chain_registration.py",
+    "tools/official_client_capture/tests/test_claude_real_delivery_integration.py",
+    "tools/official_client_capture/tests/test_claude_recorded_candidate_source.py",
+    "tools/official_client_capture/tests/test_claude_upgrade_delivery.py",
+    "tools/official_client_capture/tests/test_claude_vc1_recorded_chain.py",
+    "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+    "tools/official_client_capture/tests/test_pre_a3_client_grouping.py",
+    "tools/official_client_capture/tests/test_pre_a3_codex_parity.py",
+    "tools/official_client_capture/tests/test_unit_inherit_codex_parity.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
