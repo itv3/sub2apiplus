@@ -277,8 +277,15 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         package_ref = self._seal_review()
         receipt = receipts.build_candidate_delivery_receipt(self.store, self.fixture.campaign_id, package_ref)
         self.assertEqual(receipt["schema_version"], execution.RECEIPT_V4)
+        # 构造待发布收据不能取得写入权限：来源暂不可用时，持锁
+        # finalizer 的发布门禁仍必须拒绝，且没有收据落盘。
+        with mock.patch.dict(execution.SOURCE_VERIFIERS, {}, clear=True):
+            with self.assertRaisesRegex(ControlError, "受管通道验收"):
+                receipts.finalize_candidate_delivery(self.store, self.fixture.campaign_id, package_ref)
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
         reference = receipts.finalize_candidate_delivery(self.store, self.fixture.campaign_id, package_ref)
         self.assertEqual(receipts.replay_receipt(self.store, reference), receipt)
+        self.assertEqual(receipts.replay_receipt(self.store, reference, current_delivery=True), receipt)
         self.assertTrue(self.store.write_receipt_outcome("candidate_delivery", receipt, allow_existing=True)["reused"])
         for field in ("candidate_image_digest", "release_state", "delivery_fact_refs"):
             value = deepcopy(receipt)

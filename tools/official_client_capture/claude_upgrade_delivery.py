@@ -1725,8 +1725,9 @@ def validate_current_stage_result(campaign_dir: Path, result: Mapping[str, Any])
         context = _resolve(campaign_dir, str(result.get("candidate_id", "")), action="重验真实交付结果")
         if result.get("schema_version") != STAGE_RESULT_V2_SCHEMA or result.get("candidate_revision") != context.revision or result.get("campaign_purpose") != context.manifest.get("campaign_purpose"):
             raise ConfigurationError("真实交付结果的版本、当前 revision 或用途不一致。")
-        receipt = store_receipts.replay_receipt(context.store, dict(result["receipt_ref"]))
-        delivery_execution.validate_delivery_receipt(context.store, receipt, current=True)
+        receipt = store_receipts.replay_receipt(
+            context.store, dict(result["receipt_ref"]), current_delivery=True
+        )
         for key, receipt_key in (("delivery_plan_ref", "delivery_plan_ref"), ("package_ref", "candidate_delivery_package_ref")):
             if result[key] != receipt[receipt_key]:
                 raise ConfigurationError("交付结果与 Store 的交付计划或交付包不一致。")

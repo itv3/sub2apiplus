@@ -1996,9 +1996,18 @@ def finalize_candidate_delivery_outcome(
                 f"候选交付 {package['delivery_id']} 已 finalize（终态收据 {finalized[0][0]['sha256']}）："
                 "不得以其他交付包重新签发"
             )
-        receipt = build_candidate_delivery_receipt(
-            store, campaign_id, candidate_delivery_package_ref
-        )
+        if package.get("schema_version") == delivery_execution.PACKAGE_V2:
+            # 这里只生成待发布内容，不返回收据或取得写入权限。下方的
+            # write_receipt_outcome 在同一 deployment 锁内完整验证当前
+            # 交付包、形成期与确定性重建，再发布；避免在写入前重复验
+            # 同一完整包。公开 build 接口及历史合同仍沿用原严格路径。
+            receipt = _build_candidate_delivery_receipt_unchecked(
+                store, campaign_id, candidate_delivery_package_ref
+            )
+        else:
+            receipt = build_candidate_delivery_receipt(
+                store, campaign_id, candidate_delivery_package_ref
+            )
         for reference in store.list_receipt_refs("candidate_delivery"):
             existing = store.load_receipt(reference)
             if (
@@ -2009,12 +2018,17 @@ def finalize_candidate_delivery_outcome(
         return store.write_receipt_outcome("candidate_delivery", receipt, allow_existing=True)
 
 
-def replay_receipt(store: Any, reference: dict[str, Any]) -> dict[str, Any]:
+def replay_receipt(
+    store: Any, reference: dict[str, Any], *, current_delivery: bool = False
+) -> dict[str, Any]:
     """从所引用事实重建收据，拒绝任一输入或收据字段不匹配。
 
     v2 收据按自身 ``formed_under`` 的坐标重建：工具摘要取形成期有效身份，交付判定比较形成期 revision 与基线，
     与当前受管代码无关——重放只证明形成时一致，当前有效性另由写入门禁与 status 判定。还核对收据引用的事实
     不晚于收据自身的形成期坐标。v1 收据沿用原语义。
+
+    ``current_delivery`` 只用于 Receipt v4 的当前完成权消费：共同的合同与形成期因果检查不变，
+    交付包、确定性收据重建和当前有效性合为一次完整验证；不能借此消费历史合同或其它收据。
 
     前序导入收据（B1-14）同样按形成期重放：只用本 Store 内的导入登记、复制来的对象、目标 Campaign 与收据记录
     的源身份文档重建，从不打开前序 Store，因此前序 Store 搬走或删除都不影响重放；需要对照前序 Store 现状时用
@@ -2023,6 +2037,11 @@ def replay_receipt(store: Any, reference: dict[str, Any]) -> dict[str, Any]:
 
     existing = store.load_receipt(reference)
     kind = reference["receipt_kind"]
+    if current_delivery and (
+        kind != "candidate_delivery"
+        or existing.get("schema_version") != delivery_execution.RECEIPT_V4
+    ):
+        raise ControlError("当前 Claude 交付完成权要求 Receipt v4，历史收据不能冒充")
     campaign = store.load_campaign(existing["campaign_id"])
     if campaign_is_v2(campaign) != receipt_is_v2(existing):
         raise ControlError(f"{kind} 收据合同版本与 Campaign 版本不一致")
@@ -2065,6 +2084,11 @@ def replay_receipt(store: Any, reference: dict[str, Any]) -> dict[str, Any]:
             formed_under=formed_under,
         )
     elif kind == "candidate_delivery":
+        if current_delivery:
+            # 此验证器已逐字段确定性重建收据并核当前资格；上方的
+            # 形成期因果检查仍执行。不再先重放相同包再重复验证。
+            delivery_execution.validate_delivery_receipt(store, existing, current=True)
+            return existing
         rebuilt = build_candidate_delivery_receipt(
             store,
             existing["campaign_id"],
