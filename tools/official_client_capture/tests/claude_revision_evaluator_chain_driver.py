@@ -227,13 +227,31 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
             if rule['validation_mode'] == 'dual_wire':
                 official = json.loads((target / 'machine' / 'official' / f"{rule['rule']}.json").read_bytes())
                 self.assertEqual(official['status'], 'pass', '失败必须来自候选侧，官方小写头由真实 checker 通过')
-        counts_after = project_ledger.replay_head(self.project_root)['root_cause_counts']
-        self.assertion_failure_causes = getattr(self, 'assertion_failure_causes', set()) | {
-            cause for cause, count in counts_after.items() if count > counts_before.get(cause, 0)}
+        self.failed_evaluation_run = Path(failed["campaign_run"]["run_dir"])
         code, reconciled, stderr = self.source_command(["reconcile-supervisor-run", "--campaign-dir", context["campaign"],
-                                                      "--run-dir", Path(failed["campaign_run"]["run_dir"])])
+                                                      "--run-dir", self.failed_evaluation_run])
         self.assertIsNotNone(reconciled, stderr)
-        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
+        # r1、r2 的相同断言失败仍按原根因合同累计；r2 必须暂停，不能绕过上限。
+        # 对账本身也会登记根因，因此在它完成后收集待修复集合，保留所有历史计数。
+        head_after = project_ledger.replay_head(self.project_root)
+        counts_after = head_after['root_cause_counts']
+        causes = {row['root_cause_id'] for row in reconciled.get('root_causes', [reconciled['root_cause']])}
+        previous_causes = getattr(self, 'assertion_failure_causes', set())
+        self.assertTrue(causes)
+        self.assertTrue(all(counts_after[cause] > counts_before.get(cause, 0) for cause in causes))
+        self.assertion_failure_causes = previous_causes | causes
+        self.assertIn(self.active_revision, (1, 2))
+        expected = (0, "recoverable") if self.active_revision == 1 else (3, "paused")
+        self.assertEqual((code, reconciled["status"]), expected, stderr)
+        if self.active_revision == 2:
+            self.assertEqual(reconciled["decision"]["pause_kinds"], ["root_cause_repair"])
+            self.assertIsNone(reconciled["decision"]["terminal_reason"])
+            self.assertTrue(any(reconciled["decision"]["root_cause_counts"][cause] >= project_ledger.DEFAULT_RETRY_LIMIT
+                                for cause in causes & previous_causes))
+            self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "recovery_required")
+            self.assertNotIn(context["campaign"].name, head_after["terminal_campaigns"])
+            self.assertFalse(any(event.get("event_id") == f"reconcile-run-passed-{reconciled['run_id']}"
+                                 for event, _raw in timing._load_events(self.ledger_dir)))
         return failed
 
     def invalidate_first_candidate(self, context: dict[str, Any]) -> dict:
@@ -319,10 +337,22 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
                 "--candidate-id", self.active_candidate, "--attempt-id", attempt_root.name, "--reason", "修复头大小写解析后离线重评"])
             self.assertIsNotNone(epoch, stderr)
             self.assertEqual((code, epoch["status"]), (0, "epoch_appended"), stderr)
+        # 暂停不会生成恢复放行收据。真实 checker 回归与修复登记完成后，
+        # 必须重放原失败 run 的对账，使账本回到 active，再进入评估恢复批准。
+        self.release_repaired_assertion_roots(context, deployment)
+        code, reconciled, stderr = self.source_command(["reconcile-supervisor-run", "--campaign-dir", context["campaign"],
+                                                      "--run-dir", self.failed_evaluation_run])
+        self.assertIsNotNone(reconciled, stderr)
+        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
+        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
+        repaired_counts = project_ledger.replay_head(self.project_root)["root_cause_counts"]
+        self.assertTrue(all(repaired_counts.get(cause) == 0 for cause in self.assertion_failure_causes))
+        passed = [event for event, _raw in timing._load_events(self.ledger_dir)
+                  if event.get("event_id") == f"reconcile-run-passed-{reconciled['run_id']}"]
+        self.assertEqual([event["event_type"] for event in passed], ["receipt_passed"])
         preview = self.preview(context)
         self.refuse_wrong_deployments(context, preview, deployment)
-        self.release_repaired_assertion_roots(context, deployment)
-        # 根因修复登记追加了总账事件，必须重新生成绑定当前 head 的批准草案。
+        # 错误部署收据必须零写入；批准草案仍绑定修复与重新对账后的当前 head。
         preview = self.preview(context)
         code, applied, stderr = self.recover(context, "apply", "--approve-sha256", preview["review_sha256"],
             "--root-cause-class", "evaluator-defect", "--fix-commit", "e" * 40, "--deployment-receipt", deployment)
@@ -386,6 +416,7 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         checked = subprocess.run(command, cwd=REPOSITORY_ROOT, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
         self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
         self.assertEqual(json.loads(regression.read_bytes())['status'], 'pass')
+        previous_counts = project_ledger.replay_head(self.project_root)["root_cause_counts"]
         for cause in sorted(self.assertion_failure_causes):
             repaired = subprocess.run([sys.executable, '-B', '-m', 'tools.official_client_capture.codex_upgrade_project_ledger',
                 'record-root-cause-repair', '--ledger-dir', str(self.project_root), '--root-cause-id', cause, '--kind', 'code',
@@ -393,6 +424,10 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
                 '--binding', f'deployment_receipt_sha256={upgrade.file_sha256(deployment)}', '--note', '实际 checker 修复并验证 r2 原字节后放行'],
                 cwd=REPOSITORY_ROOT, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
             self.assertEqual(repaired.returncode, 0, repaired.stdout + repaired.stderr)
+        repaired_counts = project_ledger.replay_head(self.project_root)["root_cause_counts"]
+        self.assertEqual({cause: count for cause, count in repaired_counts.items() if cause not in self.assertion_failure_causes},
+                         {cause: count for cause, count in previous_counts.items() if cause not in self.assertion_failure_causes},
+                         "本次评估修复不得清除无关根因的计数")
 
     def run_revision_evaluator_chain(self) -> dict[str, Any]:
         """从真实 r1 失败一直进入真实 r2／b1；返回同一世界，供后续完整 A 组继续接续。"""
