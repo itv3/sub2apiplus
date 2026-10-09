@@ -955,10 +955,11 @@ REAL_CHAIN_TIMEOUT_SECONDS = 2400
 SCENARIO_TIMEOUT_SECONDS = 900
 
 # B5b-03 时间合同 v2：独立方法各有完整一小时，不再共用整条链的十五分钟倒计时。
-# 七／八场景连续链各算一个方法，仍在同一 Campaign 内完整执行。三层各留一分钟收尾，
+# 七／八场景连续链各算一个两小时方法，仍在同一 Campaign 内完整执行。三层各留一分钟收尾，
 # 执行器安全网必须晚于链外壳与方法超时；这些是挂死保护上限，不是性能通过凭证。
 CLAUDE_FAULT_TIME_SCHEMA = "claude-fault-chain-time-budget/v2"
 CLAUDE_FAULT_METHOD_SECONDS = 3600
+CLAUDE_FAULT_CONTINUOUS_SECONDS = 7200
 CLAUDE_FAULT_METHOD_COUNTS: Mapping[str, int] = {
     "vc-chain.claude-recovery-chain": 21,
     "vc-chain.claude-late-stage-faults": 1,
@@ -968,14 +969,16 @@ CLAUDE_RECORDED_CHAIN_IDS = ("vc-chain.claude-vc1-capture", "vc-chain.claude-ful
 
 
 def claude_fault_time_budget(name: str) -> dict[str, Any]:
-    """返回三条 Claude 故障链的唯一时间合同；正式入口与外层执行器消费相同数值。"""
+    """返回 Claude 长链的唯一时间合同；正式入口与外层执行器消费相同数值。"""
 
-    count = CLAUDE_FAULT_METHOD_COUNTS[name]
-    work_seconds = count * CLAUDE_FAULT_METHOD_SECONDS
+    count = 1 if name in CLAUDE_RECORDED_CHAIN_IDS else CLAUDE_FAULT_METHOD_COUNTS[name]
+    method_seconds = (CLAUDE_FAULT_CONTINUOUS_SECONDS
+                      if name in CLAUDE_FAULT_METHOD_COUNTS and count == 1 else CLAUDE_FAULT_METHOD_SECONDS)
+    work_seconds = count * method_seconds
     return {
         "schema_version": CLAUDE_FAULT_TIME_SCHEMA,
         "method_count": count,
-        "method_timeout_seconds": CLAUDE_FAULT_METHOD_SECONDS,
+        "method_timeout_seconds": method_seconds,
         "chain_timeout_seconds": work_seconds + 60,
         "chain_budget_seconds": work_seconds + 120,
         "unit_timeout_seconds": work_seconds + 180,
@@ -987,7 +990,7 @@ def claude_recorded_time_budget(name: str) -> dict[str, Any]:
 
     if name not in CLAUDE_RECORDED_CHAIN_IDS:
         raise KeyError(name)
-    return {**claude_fault_time_budget("vc-chain.claude-late-stage-faults"),
+    return {**claude_fault_time_budget(name),
             "schema_version": "claude-recorded-chain-time-budget/v2"}
 
 

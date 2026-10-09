@@ -90,7 +90,7 @@ class ClaudeChainRegistrationTests(unittest.TestCase):
         self.assertFalse(hasattr(case, "real_chain_metrics"))
         self.assertEqual(faults.CHAINS["revision-continuous"]["expected"], faults.REVISION_CONTINUOUS_SCENARIOS)
         self.assertEqual(len(faults.REVISION_CONTINUOUS_SCENARIOS), 8)
-        self.assertEqual((faults.CHAIN_BUDGET_SECONDS, faults.CHAIN_TIMEOUT_SECONDS), (3720, 3660))
+        self.assertEqual((faults.CHAIN_BUDGET_SECONDS, faults.CHAIN_TIMEOUT_SECONDS), (7320, 7260))
 
     def test_revision_wrong_os_user_or_architecture_remains_uncertified(self) -> None:
         """本机、非 root 与非 ARM64 结果均不可进入认证，且不启动原链。"""
@@ -165,7 +165,7 @@ class RegisteredLateIntegrityTests(unittest.TestCase):
                 mock.patch.object(faults.shell, "_namespace_argv", side_effect=lambda argv: argv), \
                 mock.patch.object(faults.subprocess, "run", return_value=completed) as command:
             case._run_chain(chain)
-        self.assertEqual(command.call_args.kwargs["timeout"], 3660, "连续方法加独立清理余量")
+        self.assertEqual(command.call_args.kwargs["timeout"], 7260, "连续方法两小时加独立清理余量")
 
     def records(self, chain: str = "late-continuous") -> list[dict]:
         return [{"scenario": name, "campaign_id": "同一夹具Campaign",

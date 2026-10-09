@@ -103,7 +103,6 @@ PENDING_CONTINUOUS_CHAINS: Mapping[str, Mapping[str, Any]] = {}
 # 时间合同只由 pre-A3 定义，避免内部已扩时却仍被外层执行器截断。
 CHAIN_BUDGET_SECONDS = certification.claude_fault_time_budget("vc-chain.claude-late-stage-faults")["chain_budget_seconds"]
 CHAIN_TIMEOUT_SECONDS = certification.claude_fault_time_budget("vc-chain.claude-late-stage-faults")["chain_timeout_seconds"]
-# 每组场景子进程的超时取链体剩余预算再减去这段余量。
 
 # 场景组写六项记录的文件（链体设置；本机单跑场景时不设置，只做断言）。
 RECORDS_ENV = "CLAUDE_FAULT_CHAIN_RECORDS"
@@ -480,7 +479,7 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
         return
     expected = _expected_scenarios(scenarios)
     method_timeout = (diagnostic_seconds if diagnostic_seconds is not None else
-                      certification.CLAUDE_FAULT_METHOD_SECONDS)
+                      certification.claude_fault_time_budget(CHAINS[recorder.chain]["scenario"])["method_timeout_seconds"])
     records_file = Path(tempfile.mkstemp(prefix="fault-chain-records-", suffix=".jsonl")[1])
     environment = {**os.environ, RECORDS_ENV: str(records_file)}
     started = time.monotonic()

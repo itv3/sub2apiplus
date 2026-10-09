@@ -609,7 +609,12 @@ CLAUDE_TIME_SOURCE_REMOVED_LINES = {'tools/official_client_capture/codex_upgrade
 CLAUDE_RECORDED_TIME_BASELINE = '622b0b5f7f214eaece78c48830b90c0f81cb498d'
 CLAUDE_RECORDED_TIME_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': 'ce9ba9c06ff59a9a1f0c5766bff61dd431b0490821d532ad27934718eec158ce'}
 CLAUDE_RECORDED_TIME_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': []}
+# 连续世界按 ARM64 交付实测扩大至两小时，其余方法和 Codex 上限不变。
+CLAUDE_CONTINUOUS_TIME_BASELINE = '980272b7114f8daf046bf761a84ba7d544ee6ab8'
+CLAUDE_CONTINUOUS_TIME_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '2a115f4de8606ae20020dcbdc849eaca2b3e24263a9aded0272756dccaa0379c'}
+CLAUDE_CONTINUOUS_TIME_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['# 七／八场景连续链各算一个方法，仍在同一 Campaign 内完整执行。三层各留一分钟收尾，', '    """返回三条 Claude 故障链的唯一时间合同；正式入口与外层执行器消费相同数值。"""', '', '    count = CLAUDE_FAULT_METHOD_COUNTS[name]', '    work_seconds = count * CLAUDE_FAULT_METHOD_SECONDS', '        "method_timeout_seconds": CLAUDE_FAULT_METHOD_SECONDS,', '    return {**claude_fault_time_budget("vc-chain.claude-late-stage-faults"),']}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("Claude 连续世界两小时安全网", CLAUDE_CONTINUOUS_TIME_BASELINE, CLAUDE_CONTINUOUS_TIME_DIGESTS, CLAUDE_CONTINUOUS_TIME_REMOVED),
     ("Claude 录制链时间合同 v2", CLAUDE_RECORDED_TIME_BASELINE, CLAUDE_RECORDED_TIME_DIGESTS, CLAUDE_RECORDED_TIME_REMOVED),
     ("Claude 故障链时间合同 v2", CLAUDE_TIME_BASELINE_COMMIT, CLAUDE_TIME_SOURCE_DIGESTS, CLAUDE_TIME_SOURCE_REMOVED_LINES),
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),

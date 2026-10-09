@@ -22,7 +22,7 @@ class DiagnosticBudgetTests(unittest.TestCase):
                     budget.diagnostic_seconds()
         with mock.patch.dict(os.environ, {budget.DIAGNOSTIC_TIMEOUT_ENV: '3600'}):
             self.assertEqual(budget.diagnostic_seconds(), 3600)
-        self.assertEqual((chains.CHAIN_TIMEOUT_SECONDS, chains.CHAIN_BUDGET_SECONDS), (3660, 3720))
+        self.assertEqual((chains.CHAIN_TIMEOUT_SECONDS, chains.CHAIN_BUDGET_SECONDS), (7260, 7320))
 
     def test_public_entries_reject_inherited_diagnostic_budget_before_work(self):
         with mock.patch.dict(os.environ, {budget.DIAGNOSTIC_TIMEOUT_ENV: '3600'}), mock.patch.object(chains, '_copy_tree') as copy:
@@ -89,7 +89,7 @@ class DiagnosticBudgetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {}, clear=True), \
                 mock.patch.object(chains.subprocess, 'Popen', side_effect=lambda *args, **kwargs: Process()), \
                 mock.patch.object(chains.shell, '_tree_root', return_value=Path(temporary)):
-            recorder = chains._ChainRecorder('formal-test')
+            recorder = chains._ChainRecorder('recovery')
             recorder.started -= 10000
             with mock.patch.object(recorder, 'emit'), self.assertRaisesRegex(AssertionError, '独立场景已收齐失败'):
                 chains._run_group(self, recorder, {'A.first': '前项', 'A.second': '后项'}, '独立预算')
@@ -105,7 +105,7 @@ class DiagnosticBudgetTests(unittest.TestCase):
                 mock.patch.object(chains.subprocess, 'Popen', return_value=process), \
                 mock.patch.object(chains.os, 'killpg') as kill, \
                 mock.patch.object(chains.shell, '_tree_root', return_value=Path(temporary)):
-            recorder = chains._ChainRecorder('formal-timeout')
+            recorder = chains._ChainRecorder('recovery')
             with mock.patch.object(recorder, 'emit'), self.assertRaisesRegex(AssertionError, '本方法独立预算 3600 秒'):
                 chains._run_group(self, recorder, {'A.first': '超时'}, '超时方法')
             kill.assert_called_once_with(123, chains.signal.SIGKILL)
@@ -120,6 +120,20 @@ class DiagnosticBudgetTests(unittest.TestCase):
             self.assertLess(contract['chain_budget_seconds'], contract['unit_timeout_seconds'])
         with self.assertRaises(KeyError):
             chains.certification.claude_recorded_time_budget('vc-chain.codex')
+
+    def test_continuous_method_receives_two_hours_without_changing_recorded_or_recovery(self):
+        """连续世界只有一个方法，七／八个场景共享两小时；不能被旧一小时子进程上限截断。"""
+        for chain in ('late-continuous', 'revision-continuous'):
+            process = mock.Mock(returncode=1)
+            process.communicate.return_value = ('', 'Ran 1 test in 0.1s\nFAILED (failures=1)')
+            with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch.object(chains.subprocess, 'Popen', return_value=process), \
+                    mock.patch.object(chains.shell, '_tree_root', return_value=Path(temporary)):
+                recorder = chains._ChainRecorder(chain)
+                recorder.started -= 10000
+                with mock.patch.object(recorder, 'emit'), self.assertRaises(AssertionError):
+                    chains._run_group(self, recorder, {'A.continuous': ('前段', '后段')}, '连续方法')
+                process.communicate.assert_called_once_with(timeout=7200)
 
     def test_registered_method_counts_and_nested_limits_close(self):
         """独立方法数与登记一致；外部执行器必须在内层收尾之后才到期。"""
