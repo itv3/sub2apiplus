@@ -112,6 +112,15 @@ def _template(task: Mapping[str, Any], recipe: Mapping[str, Any]) -> _ReviewedLa
     if len(candidates) != 1:
         raise ProductRecipeUnavailable("当前客户端／版本／用途没有唯一已审核模板，隔离能力保持未知")
     template = candidates[0]
+    _validate_template(task, recipe, template)
+    return template
+
+
+def _validate_template(task: Mapping[str, Any], recipe: Mapping[str, Any],
+                       template: _ReviewedLaunchTemplate) -> None:
+    """所有入口共用模板绑定与闭集检查，诊断模板不能扩宽正式合同。"""
+    _require(template.client_id == task["client_id"] and template.recipe_id == recipe["recipe_id"]
+             and template.source_scope == task["execution"]["source_scope"], "模板客户端／recipe／用途不符")
     _require(template.artifact_identity_sha256 == _artifact_identity(task)
              and template.official_support_sha256 == recipe["official_support"]["sha256"],
              "制品／版本或官方支持与已审核模板不符")
@@ -120,7 +129,6 @@ def _template(task: Mapping[str, Any], recipe: Mapping[str, Any]) -> _ReviewedLa
              and set(template.private_root_names) <= _PRIVATE_ROOT_NAMES,
              "已审核模板安装模式或私有路径集合非法；portable不能沿用普通安装参数")
     _require(len(set(template.env_names)) == len(template.env_names), "模板环境名称重复")
-    return template
 
 
 def validate_private_launch_plan(task: Mapping[str, Any], plan: Mapping[str, Any],
@@ -133,6 +141,15 @@ def validate_private_launch_plan(task: Mapping[str, Any], plan: Mapping[str, Any
     _require(isinstance(plan, Mapping) and set(plan) == _PLAN_FIELDS, "离线启动计划字段闭集非法")
     frozen, recipe = _recipe_context(task, bundle_root)
     template = _template(frozen, recipe)
+    return _validate_private_launch_plan(frozen, recipe, plan, template)
+
+
+def _validate_private_launch_plan(frozen: Mapping[str, Any], recipe: Mapping[str, Any],
+                                  plan: Mapping[str, Any],
+                                  template: _ReviewedLaunchTemplate) -> dict[str, Any]:
+    """正式模板入口和实读物料诊断入口共用同一份计划校验，不接收动态权限。"""
+    _require(isinstance(plan, Mapping) and set(plan) == _PLAN_FIELDS, "离线启动计划字段闭集非法")
+    _validate_template(frozen, recipe, template)
     execution = frozen["execution"]
     _require(plan["client_id"] == frozen["client_id"] and plan["task_sha256"] == frozen["task_sha256"]
              and plan["recipe_sha256"] == execution["isolation_recipe"]["sha256"], "计划没有绑定准确task／recipe原件")
@@ -167,6 +184,56 @@ def validate_private_launch_plan(task: Mapping[str, Any], plan: Mapping[str, Any
     return {"source_scope": "readonly_diagnostic", "registration_verified": False,
             "formal_ready": False, "launch_allowed": False, "template_matched": True,
             "plan": copy.deepcopy(dict(plan)), "recipe": copy.deepcopy(recipe)}
+
+
+def derive_readonly_private_launch_plan(task: Mapping[str, Any], *, bundle_root: Path,
+                                       materials_receipt: Path) -> dict[str, Any]:
+    """从实读公开产品物料派生固定诊断计划，保持正式模板与来源登记表关闭。
+
+    仅接受regression_fixture。环境名称和值都由本run私有根确定，不从调用方
+    JSON、当前环境或credential_ref取值。这里只形成计划，现场隔离和真实CLI
+    参与仍须由独立观测与原有正式资格合同证明。
+    """
+    from tools.official_client_capture import claude_mac_product_materials as materials
+
+    frozen, recipe = _recipe_context(copy.deepcopy(dict(task)), bundle_root)
+    _require(frozen["execution"]["source_scope"] == "regression_fixture",
+             "真实产品物料诊断不能给formal任务授予隔离资格")
+    _require(Path(materials_receipt).parent == Path(bundle_root), "物料归档须恰好属于本task来源根")
+    material = materials.read_product_materials(Path(materials_receipt))
+    _require(material["client_id"] == frozen["client_id"]
+             and material["client_artifacts"] == frozen["client_artifacts"],
+             "实读产品物料与冻结task的客户端／制品／独立版本不一致")
+    _require(material["official_support"] == recipe["official_support"],
+             "recipe须绑定实读产品公开源码支持原件")
+    desktop = frozen["client_id"] == "claude-desktop"
+    root_names = ("home", "user_data", "config") if desktop else ("home", "user_data", "extensions", "config")
+    env_names = ("HOME", "CLAUDE_USER_DATA_DIR", "CLAUDE_CONFIG_DIR") if desktop else ("HOME", "CLAUDE_CONFIG_DIR")
+    tokens = (("{executable}",) if desktop else
+              ("{executable}", "--user-data-dir", "{user_data}", "--extensions-dir", "{extensions}", "--new-window"))
+    template = _ReviewedLaunchTemplate(
+        recipe_id=recipe["recipe_id"], client_id=frozen["client_id"], source_scope="regression_fixture",
+        artifact_identity_sha256=_artifact_identity(frozen),
+        official_support_sha256=recipe["official_support"]["sha256"], installation_mode="standard",
+        argv_tokens=tokens, env_names=env_names, private_root_names=root_names)
+    executable = next(row["content"]["path"] for row in frozen["client_artifacts"] if row["role"] == "application_executable")
+    roots = {name: str(Path(recipe["private_session_root"]) / name) for name in root_names}
+    replacements = {"{executable}": executable, **{"{" + name + "}": value for name, value in roots.items()}}
+    plan = {"client_id": frozen["client_id"], "task_sha256": frozen["task_sha256"],
+            "recipe_sha256": frozen["execution"]["isolation_recipe"]["sha256"], "executable": executable,
+            "argv": [replacements.get(token, token) for token in tokens], "env_names": list(env_names),
+            "private_roots": roots, "installation_mode": "standard",
+            "official_support_bindings": [recipe["official_support"]]}
+    result = _validate_private_launch_plan(frozen, recipe, plan, template)
+    result["derivation"] = "public_materials_readonly"
+    result["materials_receipt_sha256"] = material["receipt_sha256"]
+    result["environment"] = {"HOME": roots["home"], "CLAUDE_CONFIG_DIR": roots["config"]}
+    if desktop:
+        result["environment"]["CLAUDE_USER_DATA_DIR"] = roots["user_data"]
+    result["private_user_data_settings"] = ({} if desktop else {
+        "claudeCode.environmentVariables": [{"name": name, "value": result["environment"][name]}
+                                            for name in ("HOME", "CLAUDE_CONFIG_DIR")]})
+    return result
 
 
 def check_recipe_qualification(task: Mapping[str, Any], recipe: Mapping[str, Any],
