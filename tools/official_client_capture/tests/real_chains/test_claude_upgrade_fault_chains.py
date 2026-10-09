@@ -1802,7 +1802,10 @@ class ClaudeFaultChainTests(unittest.TestCase):
         copy_seconds: float | None = None
         timed_out = False
         try:
-            with tempfile.TemporaryDirectory(prefix=f"claude-fault-chain-{chain}-", dir=shell._scratch_root()) as directory:
+            # 连续链内还有两层来源夹具，守卫的 Unix socket 路径必须保持足够短。
+            # macOS 的系统临时根本身很长；短根仍位于宿主数据根和执行副本之外。
+            scratch = Path("/private/tmp") if sys.platform == "darwin" else shell._scratch_root()
+            with tempfile.TemporaryDirectory(prefix="cfc-", dir=scratch) as directory:
                 staging = Path(directory).resolve() / "staging"
                 staging.mkdir(mode=0o700)
                 # 与 B5a-05 相同：staging 的属组改成本进程的有效组（macOS 新建目录取父目录属组）。
