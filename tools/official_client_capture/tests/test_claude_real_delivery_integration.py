@@ -380,8 +380,6 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
 
     def test_package_tail_rechecks_source_current_qualification_and_material_mode(self) -> None:
         """同一完整现场复用三次负例；装配后失效仍走原 verifier 和私有 reader。"""
-        from tools.official_client_capture import claude_gate_material_worker as material_worker
-
         self._complete()
         package_ref = self._seal_review()
         package = self.store.load_object(package_ref)["payload"]
@@ -395,11 +393,12 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         original_publication = execution.publication_document
         original_identity = receipts.effective_tool_identity
         scenarios = (
-            ("来源失效", "受管通道验收"),
-            ("当前资格失效", "有效七项工具身份"),
-            ("材料权限漂移", "模式|权限|mode"),
+            ("来源失效", ControlError, "受管通道验收"),
+            ("当前资格失效", ControlError, "有效七项工具身份"),
+            # 独立守卫只对外返回内部异常类名，避免泄露原件路径。
+            ("材料权限漂移", guard.GuardError, "^守卫执行异常：ReaderError$"),
         )
-        for scenario, pattern in scenarios:
+        for scenario, error_type, pattern in scenarios:
             with self.subTest(scenario=scenario):
                 entered = False
                 publications_seen = set()
@@ -432,6 +431,8 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
                             # 只改本测试新建的导入副本；完整私有 reader
                             # 必须再次读取实际权限，不能承接之前的结果。
                             material.chmod(0o644 if original_mode != 0o644 else 0o600)
+                            self.assertNotEqual(material.stat().st_mode & 0o7777, original_mode)
+                            self.assertEqual(material.read_bytes(), original_material)
                     return original_graph(store, payload, **options)
 
                 try:
@@ -439,7 +440,7 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
                             mock.patch.object(receipts, "effective_tool_identity", side_effect=identity), \
                             mock.patch.object(execution, "publication_document", side_effect=publication), \
                             mock.patch.object(execution, "validate_evidence_graph", side_effect=graph):
-                        with self.assertRaisesRegex((ControlError, guard.GuardError, material_worker.ReaderError), pattern):
+                        with self.assertRaisesRegex(error_type, pattern):
                             receipts.finalize_candidate_delivery(self.store, self.fixture.campaign_id, package_ref)
                 finally:
                     if material.stat().st_mode & 0o7777 != original_mode:
