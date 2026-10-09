@@ -86,6 +86,46 @@ class CandidateDraftProjectionTests(unittest.TestCase):
         return {"relay_view": fixture.binding(relay, self.campaign),
                 "evaluation_manifest": fixture.binding(evaluation, self.campaign)}
 
+    def test_vc5_materialized_preview_proves_the_same_approved_attachments(self) -> None:
+        """直接检验 VC-6 使用的 VC-5 夹具，防止占位预览到长链才暴露。"""
+        self.manifest["campaign_id"] = self.campaign.name
+        build = {"profile": {name: "a" * 64 for name in
+                    ("profile_digest", "wire_sha256", "release_sha256", "bundle_sha256")},
+                 "image": {"image_id": "sha256:" + "b" * 64, "reference": "fixture:candidate"},
+                 "source": {"tree_sha256": "c" * 64, "git_commit": "d" * 40, "root": "/fixture/source"},
+                 "build": {"build_id": "fixture-build"}, "deployed_version": evaluator.TARGET_VERSION}
+        side = evaluator.write_side(self.data / "candidate-input", capture_id="candidate-attempt")
+        # 本短测只验封存预览；独立 Mac 回执不被预览引用，完整 VC-6 仍走其原生产夹具。
+        def unrelated_client_receipt(attempt_root, client_id, values):
+            return fixture._write_json(attempt_root / "client-evidence" / (client_id + ".json"),
+                                       {"fixture": client_id, **values})
+        with mock.patch.object(fixture.claude_client_receipt_fixture, "write_receipt",
+                               side_effect=unrelated_client_receipt):
+            generated = fixture.materialize_candidate(campaign=self.campaign, data_root=self.data,
+                manifest=self.manifest, candidate_id="candidate-2", attempt_id="candidate-attempt",
+                side=side, build=build, run_nonce="e" * 64)
+        package = {"object_kind": "candidate_evidence_package", "sha256": "c" * 64}
+        recorded = {"validation_attempt_id": "fixture-attempt", "validation_attempt_ref": {},
+                    "validation_execution_plan_ref": {}, "selector_before": {"fact_ref": {}},
+                    "candidate_evidence_package_ref": package, "scenario_approval_refs": {}}
+        stage = fixture.candidate_stage_result(campaign=self.campaign, manifest=self.manifest,
+            candidate_id="candidate-2", materialized=generated, recorded=recorded,
+            store_checkpoint="candidate_sealed")
+        self.round_one = json.loads(stage.read_bytes())
+        self.draft_path = generated["seal_draft"]
+        request = fixture.seal_request(campaign=self.campaign, data_root=self.data,
+            candidate_id="candidate-2", attempt_id="candidate-attempt", scenario_ids=[],
+            materialized=generated, selector_snapshot={}, architecture="arm64", host_id="ARM64",
+            run_nonce="e" * 64, issued_at="2026-10-08T01:30:00Z")
+        preview = json.loads(generated["preview"].read_bytes())
+        self.prove()
+        self.assertEqual(request["seal"]["review_sha256"], preview["review_sha256"])
+        self.assertEqual(self.round_one["seal"]["review_sha256"], preview["review_sha256"])
+        closed = {row["path"] for row in self.close([fixture.binding(generated["preview"], self.data)])}
+        for name in ("seal_draft", "evidence_manifest", "client_checkpoint", "evaluation_manifest"):
+            self.assertIn((self.campaign / preview[name]["path"]).relative_to(self.data).as_posix(), closed)
+        self.assertTrue(any(path.endswith("conn002.client_to_upstream.bin") for path in closed))
+
     def test_original_reader_proves_two_campaign_leaves_and_full_raw_closure(self) -> None:
         original = compare.candidate_evaluation_source(self.campaign, self.manifest, self.round_one)
         self.prove()

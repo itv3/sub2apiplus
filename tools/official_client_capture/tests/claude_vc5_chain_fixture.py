@@ -417,12 +417,26 @@ def materialize_candidate(
         seal_dir / "evidence-manifest.json",
         {"schema_version": evidence.EVIDENCE_INVENTORY_SCHEMA, "entry_count": len(entries), "total_bytes": sum(item["bytes"] for item in entries), "entries": entries, "digest": "0" * 64},
     )
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
+
+    # 来源仍是测试合成数据，但预览必须绑定本次草稿与四份真实附件。
+    # Store 请求与候选阶段结果共用此摘要，不能以固定占位值冒充批准来源。
+    coordinates = {"campaign_id": manifest["campaign_id"], "candidate_id": candidate_id,
+                   "attempt_id": attempt_id, "generation": "g-seam"}
     seal_draft = _write_json(
         seal_dir / "seal-draft.json",
-        {"drafts": {"capture_manifest": binding(capture_path, campaign), "capture_index": binding(index_path, campaign)}},
+        {**coordinates, "drafts": {"capture_manifest": binding(capture_path, campaign),
+                                  "capture_index": binding(index_path, campaign)}},
     )
-    preview = _write_json(seal_dir / "seal-preview.json", {"seam": "B4-06b 合成预览"})
     checkpoint = _write_json(seal_dir / "client-checkpoint.json", {"seam": "B4-06b 合成客户端检查点"})
+    preview_core = {"schema_version": candidate_seal.SEAL_PREVIEW_SCHEMA, **coordinates,
+                    "seal_draft": binding(seal_draft, campaign),
+                    "evidence_manifest": binding(evidence_manifest, campaign),
+                    "client_checkpoint": binding(checkpoint, campaign),
+                    "evaluation_manifest": binding(evaluation_path, campaign)}
+    review_sha256 = upgrade._fingerprint(preview_core)
+    preview = _write_json(seal_dir / "seal-preview.json", {**preview_core, "review_sha256": review_sha256})
     sealed_manifest = _write_json(attempt_root / "evidence-manifest.json", {"seam": "B4-06b 合成封存证据清单"})
     values = {"campaign_id": manifest["campaign_id"], "candidate_id": candidate_id, "attempt_id": attempt_id, "run_nonce": run_nonce}
     client_dir = attempt_root / "client-evidence"
@@ -480,6 +494,7 @@ def materialize_candidate(
         "evidence_manifest": evidence_manifest,
         "seal_draft": seal_draft,
         "preview": preview,
+        "review_sha256": review_sha256,
         "client_checkpoint": checkpoint,
         "sealed_manifest": sealed_manifest,
         "clients": clients,
@@ -527,7 +542,7 @@ def seal_request(
         "scenario_evidence": {scenario: [dict(relay)] for scenario in scenario_ids},
         "seal": {
             "generation": "g-seam",
-            "review_sha256": "9" * 64,
+            "review_sha256": materialized["review_sha256"],
             "reviewer": "reviewer-a",
             "evidence_manifest": binding(materialized["evidence_manifest"], data_root),
             "capture_manifest": dict(by_path[capture]),
@@ -562,7 +577,7 @@ def candidate_stage_result(
             "client_checkpoint": binding(materialized["client_checkpoint"], campaign),
             "evidence_manifest": binding(materialized["evidence_manifest"], campaign),
             "seal_draft": binding(materialized["seal_draft"], campaign),
-            "review_sha256": "9" * 64,
+            "review_sha256": materialized["review_sha256"],
             "reviewer": "reviewer-a",
         },
         "store": {
