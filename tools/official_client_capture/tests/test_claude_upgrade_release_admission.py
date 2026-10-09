@@ -80,6 +80,7 @@ class ClaudeReleaseAdmissionTests(unittest.TestCase):
             "vc-chain.claude-reconcile", "vc-chain.claude-deadline", "vc-chain.claude-root-cause",
             "vc-chain.claude-tool-evolution", "vc-chain.claude-vc1-capture", "vc-chain.claude-full-validation-only",
             "vc-chain.claude-recovery-chain", "vc-chain.claude-late-stage-faults",
+            "vc-chain.claude-revision-evaluator-recovery",
         })
 
     def test_verify_rejects_every_missing_required_chain(self) -> None:
@@ -150,6 +151,40 @@ class ClaudeReleaseAdmissionTests(unittest.TestCase):
         path = self.certificate(self.coverage[:4])
         with mock.patch.object(policy, "current_identity", return_value=self.identity):
             with self.assertRaisesRegex(closeout.VC0CloseoutError, "发布必需链未认证"):
+                closeout._validate_release_certification(path, {}, None, self.root / "preflight", {})
+        self.assertFalse((self.root / "preflight").exists())
+
+    def test_old_eight_chain_certificate_cannot_authorize_current_formal(self) -> None:
+        """历史八条覆盖可按形成期读取，但缺 revision 不能通过当前发布准入或创建 Formal。"""
+
+        old_coverage = [row for row in self.coverage if row["id"] != "vc-chain.claude-revision-evaluator-recovery"]
+        self.assertEqual(len(old_coverage), 8)
+        path = self.certificate(old_coverage)
+        historical_paths = json.loads((self.root / "pre-a3.json").read_text(encoding="utf-8"))
+        self.assertEqual(pre_a3.real_chain_coverage(historical_paths, historical=True, client="claude"), old_coverage)
+        with self.assertRaisesRegex(release.ReleaseCertificationError, "vc-chain.claude-revision-evaluator-recovery"):
+            release.verify(path, expected_identity=self.identity, client="claude")
+        with mock.patch.object(policy, "current_identity", return_value=self.identity):
+            with self.assertRaisesRegex(closeout.VC0CloseoutError, "vc-chain.claude-revision-evaluator-recovery"):
+                closeout._validate_release_certification(path, {}, None, self.root / "preflight", {})
+        self.assertFalse((self.root / "preflight").exists())
+
+    def test_closeout_rejects_damaged_revision_attachment_and_wrong_client(self) -> None:
+        """真实发布认证消费者拒绝附件漂移与跨客户端认证，不落下 Formal 目录。"""
+
+        path = self.certificate(self.coverage)
+        self.write("pre-a3.json", {"损坏的 revision 附件": True})
+        with mock.patch.object(policy, "current_identity", return_value=self.identity):
+            with self.assertRaisesRegex(closeout.VC0CloseoutError, "摘要漂移"):
+                closeout._validate_release_certification(path, {}, None, self.root / "preflight", {})
+        path = self.certificate(self.coverage)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["client"] = "codex"
+        del payload["receipt_sha256"]
+        payload["receipt_sha256"] = release._fingerprint(payload, "claude")
+        self.write("release.json", payload)
+        with mock.patch.object(policy, "current_identity", return_value=self.identity):
+            with self.assertRaisesRegex(closeout.VC0CloseoutError, "不属于客户端 claude"):
                 closeout._validate_release_certification(path, {}, None, self.root / "preflight", {})
         self.assertFalse((self.root / "preflight").exists())
 

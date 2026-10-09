@@ -590,6 +590,17 @@ CLAUDE_REQUEST_RESERVATION_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         '        if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:',
     ],
 }
+# revision 八场景接入准备只追加 Claude 表项及未实测占位；基线是本任务实际父提交。
+# 此登记只核对源码归属与删除侧残差，不证明故障链、ARM64 实测或发布认证已通过。
+CLAUDE_REVISION_ENTRY_BASELINE_COMMIT = "0dc1bcf724372bdc8afe464d8ed9bf8ee9bfb3f0"
+CLAUDE_REVISION_ENTRY_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": "5573a0ecb649a83651a06359204a42a0c9af7e71da6b4b3bd7c7e6a68876d227",
+    "tools/official_client_capture/certify_release.py": "a6b2c1f66dd2b86c4318f777e2d53ca6c1c0fdd1bb3d1ab5fb64ab71e3756ea8",
+}
+CLAUDE_REVISION_ENTRY_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/official_client_capture/codex_upgrade_pre_a3_certification.py": ["        \"r2 与评估器修复仍在私有待验链，登记八条不代表 B5b-03 完整覆盖\","],
+    "tools/official_client_capture/certify_release.py": [],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),
@@ -604,6 +615,8 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      CLAUDE_ENTRY_REGISTRATION_SOURCE_DIGESTS, CLAUDE_ENTRY_REGISTRATION_SOURCE_REMOVED_LINES),
     ("Claude 原任务预算占用与结清", CLAUDE_REQUEST_RESERVATION_BASELINE_COMMIT,
      CLAUDE_REQUEST_RESERVATION_SOURCE_DIGESTS, CLAUDE_REQUEST_RESERVATION_SOURCE_REMOVED_LINES),
+    ("Claude revision 八场景接入准备", CLAUDE_REVISION_ENTRY_BASELINE_COMMIT,
+     CLAUDE_REVISION_ENTRY_SOURCE_DIGESTS, CLAUDE_REVISION_ENTRY_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {

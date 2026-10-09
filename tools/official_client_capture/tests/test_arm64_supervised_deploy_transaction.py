@@ -651,13 +651,14 @@ class ClaudeStructureTests(unittest.TestCase):
     """Claude 的 pre-A3 与二进制探针：现在没有登记就如实记录，登记之后按同一规则核对。"""
 
     def test_current_tree_claude_pre_a3_set_is_registered(self) -> None:
-        """当前八条 Claude 入口在真实树上按 AST 核对；随树部署不等于逐链通过或当前认证已成立。"""
+        """当前九条 Claude 入口在真实树上按 AST 核对；随树部署不等于逐链通过或当前认证已成立。"""
 
         tool_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
         result = deploy.verify_claude_pre_a3_entries(tool_root)
         chains = ["vc-chain.claude-reconcile", "vc-chain.claude-deadline", "vc-chain.claude-root-cause",
                   "vc-chain.claude-tool-evolution", "vc-chain.claude-vc1-capture", "vc-chain.claude-full-validation-only",
-                  "vc-chain.claude-recovery-chain", "vc-chain.claude-late-stage-faults"]
+                  "vc-chain.claude-recovery-chain", "vc-chain.claude-late-stage-faults",
+                  "vc-chain.claude-revision-evaluator-recovery"]
         self.assertEqual((result["status"], result["scenario_count"], result["reason"]), ("verified", len(chains), None))
         self.assertEqual([row["id"] for row in result["real_chain_registration"]], chains)
         self.assertTrue(all(".tests.real_chains." in row["test"] for row in result["real_chain_registration"]),

@@ -56,6 +56,7 @@ RELEASE_REQUIRED_CHAINS: Mapping[str, tuple[str, ...]] = {
         "vc-chain.claude-full-validation-only",
         "vc-chain.claude-recovery-chain",
         "vc-chain.claude-late-stage-faults",
+        "vc-chain.claude-revision-evaluator-recovery",
     ),
 }
 # 64 位小写十六进制摘要；与编排器 SHA256_RE 同一个模式（两客户端相同，测试核对），不为一个正则导入编排器。

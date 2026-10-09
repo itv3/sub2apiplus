@@ -97,11 +97,14 @@ class ContinuousWorldContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '重复'):
             outer._expected_scenarios({'one': ('first', 'first')})
 
-    def test_registered_late_entry_keeps_revision_private(self) -> None:
-        """后段七场景已有正式入口；revision 八场景仍保持私有待验。"""
-        self.assertEqual(set(outer.CHAINS), {'recovery', 'late-continuous'})
+    def test_registered_continuous_entries_keep_distinct_scene_sets(self) -> None:
+        """后段七场景与 revision 八场景分别登记，不拼接场景或预填实际通过。"""
+        self.assertEqual(set(outer.CHAINS), {'recovery', 'late-continuous', 'revision-continuous'})
         self.assertIn('test_late_stage_faults_resume_seven_scenarios', outer.ClaudeFaultChainTests.__dict__)
-        self.assertNotIn('revision-continuous', outer.CHAINS)
+        self.assertIn('test_revision_evaluator_faults_resume_eight_scenarios', outer.ClaudeFaultChainTests.__dict__)
+        self.assertEqual(outer.CHAINS['revision-continuous']['expected'], outer.REVISION_CONTINUOUS_SCENARIOS)
+        self.assertEqual(len(outer.REVISION_CONTINUOUS_SCENARIOS), 8)
+        self.assertNotIn('revision-continuous', outer.PENDING_CONTINUOUS_CHAINS)
         self.assertNotIn('test_revision_continuous', outer.ClaudeFaultChainTests.__dict__)
 
 

@@ -1,6 +1,6 @@
 """Claude 升级 B5b-03：故障恢复真实链（pre-A3 场景，零请求、隔离副本树）。
 
-本模块登记两条链，外层入口与 pre-A3 登记（``codex_upgrade_pre_a3_certification.CLAUDE_SCENARIOS``）一一对应：
+本模块登记三条链，外层入口与 pre-A3 登记（``codex_upgrade_pre_a3_certification.CLAUDE_SCENARIOS``）一一对应：
 
 * ``vc-chain.claude-recovery-chain``（本批）：
   - 父进程中断（批次父 run 已 prepared、owner 在 commit 之前被 SIGKILL）；
@@ -16,7 +16,9 @@
   - 多根部署各故障点（受监督部署在交换、备份、新增根、回滚、收据各点被杀 → 下次启动按日志恢复 → 再部署成功）；
   - 跨客户端误用（Codex 收据喂给 Claude 入口、缺 client 的合同、x86_64 证据喂给 arm64 目标、夹具收据冒充正式引用）。
 * ``vc-chain.claude-late-stage-faults``：VC-2～VC-6 一个 Campaign 的七场景连续后段故障链；当前只登记既有可执行
-  入口，不预填通过。r2／评估器修复仍在另一条私有待验链，八条入口不代表 B5b-03 完整覆盖。
+  入口，不预填通过。
+* ``vc-chain.claude-revision-evaluator-recovery``：同一 Campaign 的 r2／评估器八场景链，公共入口仅在 Linux ARM64 root
+  下执行原隔离外壳；本机私有入口与轻量结果不能充当正式链认证。
 
 每个场景都核对同样六项（``ScenarioAudit``），逐项写进链指标：
 
@@ -88,13 +90,12 @@ CHAINS: Mapping[str, Mapping[str, Any]] = {
     "recovery": {"scenario": "vc-chain.claude-recovery-chain", "exercise": "_exercise_recovery_chain"},
     'late-continuous': {'scenario': 'vc-chain.claude-late-stage-faults', 'exercise': '_exercise_late_continuous',
                         'expected': LATE_CONTINUOUS_SCENARIOS},
-}
-
-# revision 保持私有待验；最终按完整成功实测决定合链还是正式拆出，不在此猜测新增认证项。
-PENDING_CONTINUOUS_CHAINS = {
     'revision-continuous': {'scenario': 'vc-chain.claude-revision-evaluator-recovery', 'exercise': '_exercise_revision_continuous',
                             'expected': REVISION_CONTINUOUS_SCENARIOS},
 }
+
+# 保留待验表接口供显式本机入口读取；公共入口登记不表示任何链已实际通过。
+PENDING_CONTINUOUS_CHAINS: Mapping[str, Mapping[str, Any]] = {}
 
 # 设计 B5b-03 的验收：ARM64 上每条不超过 15 分钟（含复制副本树）；子进程超时比它略短，留出外层收尾。
 CHAIN_BUDGET_SECONDS = 900
@@ -1775,11 +1776,18 @@ class ClaudeFaultChainTests(unittest.TestCase):
 
         self._run_chain('late-continuous')
 
+    def test_revision_evaluator_faults_resume_eight_scenarios(self) -> None:
+        """公共入口仅在 Linux ARM64 root 中委托原八场景外壳；跳过、失败均不能签认证。"""
+
+        if not sys.platform.startswith("linux") or os.geteuid() != 0 or os.uname().machine not in {"aarch64", "arm64"}:
+            self.skipTest("未验证：正式 r2／评估器链要求 Linux ARM64 root 与 mount/net namespace")
+        self._run_pending_revision_continuous()
+
     def _run_pending_revision_continuous(self) -> None:
-        """显式定向入口保持未认证；八场景成功后再按设计决定合链／拆链。
+        """保留显式本机定向入口；公共入口也委托本实现，维持唯一八场景外壳。
 
         claude_revision_evaluator_scenarios 的 --execute 委托本入口保存
-        真实指标与首败；它没有加入 test_* 发现或 pre-A3 登记。
+        真实指标与首败；本机成功仍是夹具结果，不签正式认证。
         """
 
         self._run_chain('revision-continuous')

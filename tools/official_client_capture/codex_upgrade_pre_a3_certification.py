@@ -404,6 +404,7 @@ CLAUDE_REAL_CHAIN_IDS: tuple[str, ...] = (
     "vc-chain.claude-full-validation-only",
     "vc-chain.claude-recovery-chain",
     "vc-chain.claude-late-stage-faults",
+    "vc-chain.claude-revision-evaluator-recovery",
 )
 CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
@@ -461,10 +462,18 @@ CLAUDE_SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "vc-chain.claude-late-stage-faults",
         "ARM64 同 Campaign 的七场景连续链：transient、同根因暂停、预算延期、COMMIT 中断、交付动作中断、阶段失效与重复收尾；"
-        "r2 与评估器修复仍在私有待验链，登记八条不代表 B5b-03 完整覆盖",
+        "与 r2／评估器八场景分开验收，登记不预填通过或授予正式版本取证权",
         "tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains",
         "ClaudeFaultChainTests",
         "test_late_stage_faults_resume_seven_scenarios",
+    ),
+    (
+        "vc-chain.claude-revision-evaluator-recovery",
+        "ARM64 同 Campaign 的八场景连续链：r2 修订、两类错误部署收据拒绝、评估器修复与 b1 零采集重评、COMMIT 与交付恢复；"
+        "逐场景核对原六项，登记不预填通过或授予正式版本取证权",
+        "tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains",
+        "ClaudeFaultChainTests",
+        "test_revision_evaluator_faults_resume_eight_scenarios",
     ),
 )
 # 按客户端分组的登记表（设计 B5a-04）。值引用上面的模块常量，部署脚本据此静态核对场景入口随树部署
@@ -938,6 +947,8 @@ SCENARIO_SECONDS: dict[str, float] = {
     "vc-chain.claude-vc1-capture": 30.0,
     "vc-chain.claude-full-validation-only": 30.0,
     "vc-chain.claude-late-stage-faults": 30.0,
+    # B5b-03／04 接入准备：仅显式登记既有 30 秒缺省占位，不是 ARM64 实测；B5b-05 成功实测后替换。
+    "vc-chain.claude-revision-evaluator-recovery": 30.0,
 }
 # 单元超时只作安全网（超时即判该场景崩溃、不签发）：真实链 40 分钟，其余 15 分钟。
 REAL_CHAIN_TIMEOUT_SECONDS = 2400
