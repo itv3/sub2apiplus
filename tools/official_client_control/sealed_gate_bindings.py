@@ -26,6 +26,7 @@ class VerifiedGateProjection:
     material_files: tuple[Mapping[str, Any], ...]
     token: object
     subject_projections: tuple[Any, ...] = ()
+    reader_replays: tuple[Any, ...] = ()
 
     def project(self, parent_binding: Mapping[str, Any], raw: bytes) -> list[dict[str, Any]] | None:
         """只转换精确父域；保留父原件与其它字段的严格递归。"""

@@ -289,7 +289,7 @@ def validate_qualification_material_import(store: Any, import_binding: Mapping[s
                                             expected_source_scope: str | None = None) -> Any:
     """受管来源已验真后，校验纯证明并真实重放复制视图；不复制或补叶子。"""
     from .sealed_gate_bindings import VerifiedGateProjection, _TOKEN as projection_token
-    from tools.official_client_capture.claude_gate_material_worker import VerifiedReaderIdentity, verify_reader_identity, run_gate_material_reader, _IDENTITY_TOKEN
+    from tools.official_client_capture.claude_gate_material_worker import VerifiedReaderIdentity, verify_reader_identity, read_verified_gate_material, _IDENTITY_TOKEN
     from tools.official_client_capture.claude_qualification_material_source import _check_four_roots, qualification_roots
     if purpose not in {"current_import", "current_delivery", "formed_replay"} or set(qualification_by_role) != {"candidate", "rollback"} or source.trusted_data_root is None:
         raise ControlError("门禁导入消费缺明确用途、两份资格或可信实际根")
@@ -309,6 +309,12 @@ def validate_qualification_material_import(store: Any, import_binding: Mapping[s
     roots = {row["root_id"]: row for row in document["roots"]}
     all_bindings = [dict(import_binding), dict(document["reader_identity_binding"])]
     subject_projections = []
+    reader_replays = []
+    prior_projection = source.gate_projection
+    if prior_projection is not None and (not isinstance(prior_projection, VerifiedGateProjection)
+            or prior_projection.token is not projection_token):
+        raise ControlError("同次门禁投影必须来自受管纯验证器，不能由 JSON 授权")
+    prior_replays = prior_projection.reader_replays if prior_projection is not None else ()
     if purpose != "formed_replay" and reader_document["tool_identity"].get("policy_version", 0) < MATERIALS_POLICY:
         raise ControlError("当前第二根导入不能使用旧读取身份取得新写入权限")
     if purpose != "formed_replay":
@@ -417,7 +423,9 @@ def validate_qualification_material_import(store: Any, import_binding: Mapping[s
         if canonical_sha256(expected) != domain["gate_subject_sha256"]:
             raise ControlError("门禁完整 subject 不是四根与原父推出的身份")
         specs = material_worker_spec(reader, list(roots.values()), document["files"], document["reader_accesses"], data_root=source.trusted_data_root)
-        result = run_gate_material_reader(reader, *specs, root["source_locator"], domain["receipt_relative_path"], view="imported", expected_subject=expected)
+        result, replay = read_verified_gate_material(reader, *specs, root["source_locator"], domain["receipt_relative_path"],
+            view="imported", expected_subject=expected, prior_replays=prior_replays)
+        reader_replays.append(replay)
         if result["result"] != receipt_document:
             raise ControlError("复制视图的原 reader 完整结果不同")
         for logical in result["reader_readset"]:
@@ -449,7 +457,7 @@ def validate_qualification_material_import(store: Any, import_binding: Mapping[s
         previous = unique.setdefault(row["path"], row)
         if previous != row:
             raise ControlError("门禁投影原件对同一路径绑定不同字节")
-    return VerifiedGateProjection(tuple(document["parents"]), tuple(document["domains"]), tuple(unique[path] for path in sorted(unique)), tuple(document["files"]), projection_token, tuple(subject_projections))
+    return VerifiedGateProjection(tuple(document["parents"]), tuple(document["domains"]), tuple(unique[path] for path in sorted(unique)), tuple(document["files"]), projection_token, tuple(subject_projections), tuple(reader_replays))
 
 
 def projection_for_configuration(store: Any, configuration: Mapping[str, Any], source: Any, *, purpose: str) -> Any:

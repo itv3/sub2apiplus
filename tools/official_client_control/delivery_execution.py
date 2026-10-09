@@ -53,6 +53,7 @@ class VerifiedSource:
     trusted_data_root: Path | None = None
     profile_projection: VerifiedProfileProjection | None = None
     guard_continuity: Any = None
+    gate_projection: Any = None
 
 
 # 正式登记须在固定通道、部署身份与原件真实性现场验收后由受管源码完成。
@@ -634,6 +635,15 @@ def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], so
 
 def validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_execution: bool = False,
                             frozen_configuration_ref: Mapping[str, Any] | None = None) -> VerifiedSource:
+    """一次图校验独占临时 reader 结果，成功或失败退出后均失效。"""
+    from tools.official_client_capture.claude_gate_material_worker import gate_material_reader_scope
+    with gate_material_reader_scope():
+        return _validate_evidence_graph(store, payload, current_execution=current_execution,
+                                        frozen_configuration_ref=frozen_configuration_ref)
+
+
+def _validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_execution: bool,
+                             frozen_configuration_ref: Mapping[str, Any] | None) -> VerifiedSource:
     validate_operational_evidence(dict(payload))
     facts = payload["entries"][0]["facts"]
     source = _verified_source(store, facts, facts["origin"])

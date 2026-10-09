@@ -1198,6 +1198,7 @@ class Arm64DeliveryExecutor:
             self.configuration, self.context, raw.get("guard_continuity"), read_profile_original,
             source_core=content, source_origin=origin, channel_identity=raw["guard_identity"],
             purpose="current_execution")
+        gate_projection = None
         if self.configuration.get("schema_version") == MATERIAL_CONFIGURATION_SCHEMA:
             from tools.official_client_control.delivery_execution import VerifiedSource
             from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
@@ -1221,7 +1222,8 @@ class Arm64DeliveryExecutor:
                 if data is None or len(data) != item["bytes"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
                     raise guard.GuardError("受管通道遗漏门禁第二根投影的真实原件")
         return {"content_sha256": raw["content_sha256"], "deployment_sha256": raw["deployment_sha256"], "bytes_by_path": originals, "configuration_sha256": raw["configuration_sha256"], "service_instance_id": raw["service_instance_id"], "trusted_data_root": self.data_root,
-                "profile_projection": profile_projection, "guard_continuity": continuity}
+                "profile_projection": profile_projection, "guard_continuity": continuity,
+                "gate_projection": gate_projection}
 
 
 def create_executor(name: str, configuration: dict[str, Any], execution_context: dict[str, Any]) -> Arm64DeliveryExecutor:

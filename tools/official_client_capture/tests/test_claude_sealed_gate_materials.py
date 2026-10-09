@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import copy
+from contextvars import copy_context
 import hashlib
 import importlib.util
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_gate_receipt as gate
 from tools.official_client_capture import claude_gate_material_worker as worker
@@ -106,6 +108,119 @@ class GateReaderWorkerTests(unittest.TestCase):
         files, directories, missing = view_spec(self.identity, self.original, physical, selected=selected)
         return worker.run_gate_material_reader(self.identity, files, directories, missing,
             str(self.original), self.receipt, view="original" if physical == self.original else "imported", expected_subject=self.subject)
+
+    def test_same_source_reader_result_revalidates_actual_inputs_without_new_process(self):
+        specs = view_spec(self.identity, self.original, self.original)
+        with worker.gate_material_reader_scope(), \
+                mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls:
+            first, proof = worker.read_verified_gate_material(self.identity, *specs,
+                str(self.original), self.receipt, view="original", expected_subject=self.subject)
+            second, same = worker.read_verified_gate_material(self.identity, *specs,
+                str(self.original), self.receipt, view="original", expected_subject=self.subject,
+                prior_replays=(proof,))
+            self.assertEqual(second, first)
+            self.assertIs(same, proof)
+            self.assertEqual(calls.call_count, 1)
+            self.assertEqual(second["result"], gate.replay(self.original, self.receipt))
+            # 新来源没有旧内存证明，仍须独立启动原 reader。
+            third, _ = worker.read_verified_gate_material(self.identity, *specs,
+                str(self.original), self.receipt, view="original", expected_subject=self.subject)
+            self.assertEqual(third, first)
+            self.assertEqual(calls.call_count, 2)
+
+    def test_reused_reader_proof_rejects_real_byte_mode_and_directory_drift(self):
+        specs = view_spec(self.identity, self.original, self.original)
+        scope = worker.gate_material_reader_scope()
+        scope.__enter__()
+        self.addCleanup(scope.__exit__, None, None, None)
+        _, proof = worker.read_verified_gate_material(self.identity, *specs,
+            str(self.original), self.receipt, view="original", expected_subject=self.subject)
+        material = self.original / "environment-before-facts.json"
+        raw, mode = material.read_bytes(), material.stat().st_mode & 0o7777
+        directory_mode = self.original.stat().st_mode & 0o7777
+        mutations = {
+            "同长原字节变化": lambda: material.write_bytes(b" " + raw[1:]),
+            "文件权限变化": lambda: material.chmod(0o644),
+            "目录权限变化": lambda: self.original.chmod(0o755),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                mutate()
+                try:
+                    with self.assertRaises(worker.ReaderError):
+                        worker.read_verified_gate_material(self.identity, *specs,
+                            str(self.original), self.receipt, view="original", expected_subject=self.subject,
+                            prior_replays=(proof,))
+                finally:
+                    material.write_bytes(raw)
+                    material.chmod(mode)
+                    self.original.chmod(directory_mode)
+
+    def test_reader_proof_plain_json_and_changed_scope_have_no_permission(self):
+        specs = view_spec(self.identity, self.original, self.original)
+        _, proof = worker.read_verified_gate_material(self.identity, *specs,
+            str(self.original), self.receipt, view="original", expected_subject=self.subject)
+        with self.assertRaisesRegex(worker.ReaderError, "JSON"):
+            worker.read_verified_gate_material(self.identity, *specs, str(self.original), self.receipt,
+                view="original", expected_subject=self.subject, prior_replays=({"result_bytes": proof.result_bytes},))
+        with mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls:
+            with self.assertRaises(worker.ReaderError):
+                worker.read_verified_gate_material(self.identity, *specs, str(self.original), self.receipt,
+                    view="original", expected_subject={**self.subject, "campaign_id": "other-campaign"},
+                    prior_replays=(proof,))
+            self.assertEqual(calls.call_count, 1)
+
+    def test_reader_scope_expiry_and_nested_scope_force_independent_first_reads(self):
+        specs = view_spec(self.identity, self.original, self.original)
+        def read(prior=()):
+            return worker.read_verified_gate_material(self.identity, *specs,
+                str(self.original), self.receipt, view="original", expected_subject=self.subject,
+                prior_replays=prior)
+        with mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls:
+            with worker.gate_material_reader_scope():
+                first, outer = read()
+                with worker.gate_material_reader_scope():
+                    inside, _ = read((outer,))
+                    self.assertEqual(inside, first)
+                    self.assertEqual(calls.call_count, 2)
+                self.assertEqual(read((outer,))[0], first)
+                self.assertEqual(calls.call_count, 2)
+            # 退出原图，携带旧对象也必须再次执行原私有 reader。
+            self.assertEqual(read((outer,))[0], first)
+            self.assertEqual(calls.call_count, 3)
+            with worker.gate_material_reader_scope():
+                self.assertEqual(read((outer,))[0], first)
+                self.assertEqual(calls.call_count, 4)
+            with self.assertRaises(RuntimeError):
+                with worker.gate_material_reader_scope():
+                    _, interrupted = read()
+                    raise RuntimeError("模拟证据图校验中断")
+            self.assertEqual(read((interrupted,))[0], first)
+            self.assertEqual(calls.call_count, 6)
+
+    def test_copied_context_cannot_extend_normal_or_exceptional_scope_lifetime(self):
+        specs = view_spec(self.identity, self.original, self.original)
+        def read(prior=()):
+            return worker.read_verified_gate_material(self.identity, *specs,
+                str(self.original), self.receipt, view="original", expected_subject=self.subject,
+                prior_replays=prior)
+        with mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls:
+            for exceptional in (False, True):
+                with self.subTest(exceptional=exceptional):
+                    try:
+                        with worker.gate_material_reader_scope():
+                            first, proof = read()
+                            copied = copy_context()
+                            if exceptional:
+                                raise RuntimeError("模拟证据图中断")
+                    except RuntimeError:
+                        if not exceptional:
+                            raise
+                    previous_calls = calls.call_count
+                    second, replacement = copied.run(read, (proof,))
+                    self.assertEqual(second, first)
+                    self.assertEqual(calls.call_count, previous_calls + 1)
+                    self.assertIsNot(replacement, proof)
 
     def test_original_and_imported_are_true_reader_results_without_parent_hooks(self):
         original_open = open
@@ -645,6 +760,59 @@ class MaterialImportProofTests(unittest.TestCase):
         return validate_qualification_material_import(self.store, binding, source,
             {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")},
             purpose=purpose, expected_source_scope="regression_fixture")
+
+    def test_import_reuses_only_reader_and_still_rebuilds_full_subject(self):
+        from dataclasses import replace
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_control.qualification_material_import import validate_qualification_material_import
+        from tools.official_client_capture import claude_qualification_material_source as material
+        binding = self.prepare()
+        source = VerifiedSource("0" * 64, "1" * 64, {}, "0" * 64, "fixture-only", self.root)
+        qualifications = {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")}
+        with worker.gate_material_reader_scope(), \
+                mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls, \
+                mock.patch.object(material, "qualification_gate_subject", wraps=material.qualification_gate_subject) as subjects:
+            first = validate_qualification_material_import(self.store, binding, source, qualifications,
+                purpose="formed_replay", expected_source_scope="regression_fixture")
+            second = validate_qualification_material_import(self.store, binding,
+                replace(source, gate_projection=first), qualifications,
+                purpose="formed_replay", expected_source_scope="regression_fixture")
+            self.assertEqual(first.manifest(), second.manifest())
+            self.assertEqual(first.subject_projections, second.subject_projections)
+            self.assertEqual(calls.call_count, 1)
+            self.assertEqual(subjects.call_count, 2)
+
+    def test_import_reader_result_cannot_bypass_current_tool_admission(self):
+        from dataclasses import replace
+        from tools.official_client_control import receipts
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.qualification_material_import import validate_qualification_material_import
+        binding = self.prepare()
+        source = VerifiedSource("0" * 64, "1" * 64, {}, "0" * 64, "fixture-only", self.root)
+        qualifications = {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")}
+        with worker.gate_material_reader_scope():
+            first = validate_qualification_material_import(self.store, binding, source, qualifications,
+                purpose="formed_replay", expected_source_scope="regression_fixture")
+            with mock.patch.object(receipts, "effective_tool_identity", return_value={"policy_version": 0}), \
+                    mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls:
+                with self.assertRaisesRegex(ControlError, "有效七项工具身份"):
+                    validate_qualification_material_import(self.store, binding,
+                        replace(source, gate_projection=first), qualifications,
+                        purpose="current_delivery", expected_source_scope="regression_fixture")
+                self.assertEqual(calls.call_count, 0)
+
+    def test_import_plain_json_projection_cannot_supply_a_reader_result(self):
+        from tools.official_client_control.delivery_execution import VerifiedSource
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.qualification_material_import import validate_qualification_material_import
+        binding = self.prepare()
+        source = VerifiedSource("0" * 64, "1" * 64, {}, "0" * 64, "fixture-only", self.root,
+                                gate_projection={"reader_replays": []})
+        with self.assertRaisesRegex(ControlError, "JSON"):
+            validate_qualification_material_import(self.store, binding, source,
+                {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")},
+                purpose="formed_replay", expected_source_scope="regression_fixture")
 
     def subject(self, *, qualification=None, read_bindings=None, read_projections=None):
         from tools.official_client_capture.claude_qualification_material_source import qualification_gate_subject

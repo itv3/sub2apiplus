@@ -31,7 +31,10 @@ import subprocess
 import sys
 import sysconfig
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
+from types import CodeType
 from typing import Any, Mapping
 
 
@@ -39,6 +42,8 @@ CONTRACT_PATH = Path(__file__).with_name("claude_gate_material_reader_contract.j
 IDENTITY_SCHEMA = "claude-gate-material-reader-identity/v1"
 RUNTIME_SCHEMA = "claude-gate-material-python-runtime/v1"
 _IDENTITY_TOKEN = object()
+_REPLAY_TOKEN = object()
+_REPLAY_SCOPE: ContextVar[_ReaderReplayScope | None] = ContextVar("claude_gate_material_replay_scope", default=None)
 _ORIGINAL = {name: getattr(os, name) for name in ("open", "stat", "lstat", "access", "readlink", "scandir", "listdir", "fstat", "read", "lseek", "dup", "close")}
 _OPEN = builtins.open
 _FDOPEN = os.fdopen
@@ -61,6 +66,52 @@ class VerifiedReaderIdentity:
     document: Mapping[str, Any]
     repository_root: Path
     token: object
+
+
+@dataclass
+class _ReaderReplayScope:
+    """共享失效状态；复制上下文也不能延长原图校验的生命周期。"""
+
+    active: bool = True
+
+
+@dataclass(frozen=True)
+class VerifiedMaterialReplay:
+    """一次真实私有 reader 的内存结果，不接受 JSON 授权或跨来源缓存。
+
+    只省去同一来源内重复启动 reader。输入须逐字相同，消费时仍完整
+    实读材料、读取器和运行库，并重做原元数据访问。用途准入由原导入
+    验证器每次执行，这个结果不能授予当前写入或派发权限。
+    """
+
+    specification_bytes: bytes
+    result_bytes: bytes
+    token: object
+    scope_token: _ReaderReplayScope | None
+
+
+@contextmanager
+def gate_material_reader_scope():
+    """一次证据图调用的私有生命周期，嵌套调用结束后恢复外层。
+
+    结果不跨调用、Store 写入或 RPC 继续承接。退出后的内存证明只能
+    触发原完整 reader，不能依靠相同配置摘要再次进入快速路径。
+    """
+    scope = _ReaderReplayScope()
+    handle = _REPLAY_SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        scope.active = False
+        _REPLAY_SCOPE.reset(handle)
+
+
+def _reader_specification(reader: VerifiedReaderIdentity, files: list[dict[str, Any]],
+                          directories: list[dict[str, Any]], missing: list[str], gate_root: str,
+                          receipt_relative: str, expected_subject: Mapping[str, Any]) -> dict[str, Any]:
+    return {"reader_identity": dict(reader.document), "files": files, "directories": directories,
+            "missing": missing, "gate_root": gate_root, "receipt_relative": receipt_relative,
+            "expected_subject": dict(expected_subject)}
 
 
 def _plain_file(path: Path) -> tuple[bytes, os.stat_result]:
@@ -378,7 +429,7 @@ class GateMaterialReadView:
                     if isinstance(function, (staticmethod, classmethod)):
                         function = function.__func__
                     candidate = getattr(function, "__code__", None)
-                    if candidate is not None and candidate.co_filename == "<string>":
+                    if isinstance(candidate, CodeType) and candidate.co_filename == "<string>":
                         generated.add(candidate)
         self.generated_codes = frozenset(generated)
 
@@ -713,9 +764,8 @@ def run_gate_material_reader(reader_identity: VerifiedReaderIdentity, files: lis
     if not isinstance(reader_identity, VerifiedReaderIdentity) or reader_identity.token is not _IDENTITY_TOKEN or view not in {"original", "imported"}:
         raise ReaderError("读取器须由受管身份与固定视图启动")
     verify_reader_identity(reader_identity.document)
-    specification = {"reader_identity": dict(reader_identity.document), "files": files, "directories": directories,
-                     "missing": missing, "gate_root": gate_root, "receipt_relative": receipt_relative,
-                     "expected_subject": dict(expected_subject)}
+    specification = _reader_specification(reader_identity, files, directories, missing, gate_root,
+                                         receipt_relative, expected_subject)
     command = [reader_identity.document["runtime_manifest"]["executable"], "-I", "-B", "-S", str(reader_identity.repository_root / "tools/official_client_capture/claude_gate_material_worker.py"), "--repository", str(reader_identity.repository_root)]
     result = subprocess.run(command, input=_canonical(specification), env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"}, capture_output=True, timeout=60, check=False)
     if result.returncode != 0:
@@ -723,6 +773,77 @@ def run_gate_material_reader(reader_identity: VerifiedReaderIdentity, files: lis
     if len(result.stdout) > 16 * 1024 * 1024:
         raise ReaderError("读取器结果超过固定上限")
     return json.loads(result.stdout)
+
+
+def read_verified_gate_material(reader: VerifiedReaderIdentity, files: list[dict[str, Any]],
+                                directories: list[dict[str, Any]], missing: list[str], gate_root: str,
+                                receipt_relative: str, *, view: str, expected_subject: Mapping[str, Any],
+                                prior_replays: tuple[VerifiedMaterialReplay, ...] = ()) -> tuple[dict[str, Any], VerifiedMaterialReplay]:
+    """首读运行原私有进程，同一已验来源的重复消费逐份复核完整输入。
+
+    这里不复用来源、Store 图、subject 或用途判断，它们仍由原导入验证器
+    每次重做。只有输入完全相同的 reader 纯结果可以承接。陌生内存对象、
+    材料字节与模式变化、元数据访问变化均失败关闭。
+    """
+    if not isinstance(reader, VerifiedReaderIdentity) or reader.token is not _IDENTITY_TOKEN or view not in {"original", "imported"}:
+        raise ReaderError("读取器须由受管身份与固定视图启动")
+    specification = _canonical({"view": view, **_reader_specification(
+        reader, files, directories, missing, gate_root, receipt_relative, expected_subject)})
+    for prior in prior_replays:
+        if not isinstance(prior, VerifiedMaterialReplay) or prior.token is not _REPLAY_TOKEN:
+            raise ReaderError("reader 结果不能由 JSON 或任意对象授权")
+        scope_token = _REPLAY_SCOPE.get()
+        if (scope_token is None or not scope_token.active or prior.scope_token is not scope_token
+                or prior.specification_bytes != specification):
+            continue
+        verify_reader_identity(reader.document)
+        bytecode_prefix = reader.document["runtime_manifest"].get("bytecode_prefix")
+        if bytecode_prefix and Path(bytecode_prefix).exists():
+            raise ReaderError("独立源码读取器的禁用 bytecode 前缀必须不存在")
+        result = json.loads(prior.result_bytes)
+        if (set(result) != {"result", "reader_readset", "metadata_files", "reader_accesses", "reader_accesses_sha256", "violations"}
+                or result["violations"] or result["reader_accesses_sha256"] != _digest(result["reader_accesses"])
+                or result["result"].get("phase") != "candidate_external"
+                or result["result"].get("status") != "passed"
+                or result["result"].get("subject") != dict(expected_subject)):
+            raise ReaderError("同次 reader 结果不符合原完整判据")
+        code = [*reader.document["code_bindings"], *reader.document["target_bindings"],
+                *reader.document["runtime_manifest"]["files"]]
+        material_view = GateMaterialReadView(files, directories, missing, code)
+        for access in result["reader_accesses"]:
+            operation, logical = access["operation"], access["logical_path"]
+            try:
+                if operation in {"stat", "lstat"}:
+                    material_view.stat(logical, follow_symlinks=operation == "stat")
+                elif operation == "access":
+                    material_view.access(logical, os.F_OK)
+                elif operation in {"listdir", "scandir"}:
+                    material_view.members(logical, operation)
+                elif operation in {"open", "fstat"}:
+                    descriptor = material_view.open_fd(logical, os.O_RDONLY)
+                    try:
+                        if operation == "fstat":
+                            material_view.fstat(descriptor)
+                    finally:
+                        material_view.close_fd(descriptor)
+                else:
+                    raise ReaderError("同次 reader 结果含未登记的元数据操作")
+            except FileNotFoundError:
+                if access["type"] != "missing":
+                    raise ReaderError("同次 reader 的实际原件或目录缺失")
+        actual_accesses = sorted(material_view.accesses.values(), key=lambda row: (row["logical_path"], row["operation"]))
+        if actual_accesses != result["reader_accesses"] or sorted(material_view.metadata_files) != result["metadata_files"]:
+            raise ReaderError("同次 reader 的实际元数据或完整访问读集漂移")
+        # 与私有 worker 收口相同：所有材料均用真实只读描述符完整实读，
+        # 不拿来源字典的旧字节或 stat 命中代替实际文件。
+        for row in files:
+            raw, metadata = _plain_file(Path(row["physical_path"]))
+            if hashlib.sha256(raw).hexdigest() != row["sha256"] or len(raw) != row["bytes"] or f"{stat.S_IMODE(metadata.st_mode):04o}" != row["mode"]:
+                raise ReaderError("同次 reader 的材料字节／模式漂移")
+        return result, prior
+    result = run_gate_material_reader(reader, files, directories, missing, gate_root, receipt_relative,
+                                     view=view, expected_subject=expected_subject)
+    return result, VerifiedMaterialReplay(specification, _canonical(result), _REPLAY_TOKEN, _REPLAY_SCOPE.get())
 
 
 def main() -> int:
