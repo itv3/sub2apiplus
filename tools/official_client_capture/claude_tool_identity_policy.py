@@ -28,11 +28,15 @@
 from __future__ import annotations
 
 import ast
+from collections import OrderedDict
 import functools
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import sys
+import threading
 from typing import Any, Iterable, Mapping
 
 if __package__ in {None, ""}:
@@ -56,6 +60,10 @@ ADAPTER_MODULE = "upgrade_client_adapter"
 ADAPTER_MECHANISM_BARRIERS = frozenset({"adapter_for", "_resolve", "_import_managed", "OrchestratorFacade"})
 # ClientAdapter 上客户端无关的恢复接口：方法体以字面 ``self.orchestrator.<名字>`` 转调，遍历类体即可解析。
 ADAPTER_METHODS = frozenset({"recovery_reuse_check", "recovery_preview_continuity", "attempt_evolution_impact"})
+# 只存本进程对实读快照的真实计算；外部 memo 永远不能写入这个证明。
+_PROCESS_MEMO: OrderedDict[str, bytes] = OrderedDict()
+_PROCESS_MEMO_LIMIT = 8
+_PROCESS_MEMO_LOCK = threading.RLock()
 
 
 def _sha256(raw: bytes) -> str:
@@ -154,8 +162,16 @@ def _root_names(policy: Mapping[str, Any]) -> list[tuple[str, str]]:
 def managed_tree_digests(repository_root: Path, policy: Mapping[str, Any]) -> dict[str, str]:
     """多根受管清单：``<根目录名>/<相对路径>`` → sha256；排除 tests、versions 与 __pycache__。"""
 
+    digests, _sources = _managed_tree_snapshot(repository_root, policy)
+    return digests
+
+
+def _managed_tree_snapshot(repository_root: Path, policy: Mapping[str, Any]) -> tuple[dict[str, str], dict[str, bytes]]:
+    """逐文件实读同一份字节，同时生成摘要和闭包分析输入，不承接 stat 或旧文件内容。"""
+
     suffixes = set(policy["suffixes"])
     digests: dict[str, str] = {}
+    sources: dict[str, bytes] = {}
     for relative_root, name in _root_names(policy):
         root = Path(repository_root) / relative_root
         if root.is_symlink() or not root.is_dir():
@@ -166,8 +182,11 @@ def managed_tree_digests(repository_root: Path, policy: Mapping[str, Any]) -> di
             parts = path.relative_to(root).parts
             if EXCLUDED_PARTS.intersection(parts):
                 continue
-            digests[f"{name}/{path.relative_to(root).as_posix()}"] = _sha256(path.read_bytes())
-    return digests
+            key = f"{name}/{path.relative_to(root).as_posix()}"
+            raw = path.read_bytes()
+            sources[key] = raw
+            digests[key] = _sha256(raw)
+    return digests, sources
 
 
 def layer_entries(policy: Mapping[str, Any], digests: Mapping[str, str]) -> dict[str, list[dict[str, str]]]:
@@ -338,6 +357,7 @@ def closure(
     layer: str | None,
     barriers: Iterable[str] = (),
     bindings: Mapping[str, tuple[str, str | None]] | None = None,
+    source_bytes: Mapping[str, bytes] | None = None,
 ) -> dict[str, Any]:
     """从根符号（模块全名, 符号）出发的跨模块按符号闭包。
 
@@ -362,9 +382,22 @@ def closure(
     def module_info(module: str) -> tuple[Any, ...]:
         if module not in parsed:
             key = index[module]
-            source, tree, functions, constants, lines = codex_identity._reader_parsed_module(
-                str(_key_path(repository_root, policy, key)), digests[key]
-            )
+            if source_bytes is None:
+                source, tree, functions, constants, lines = codex_identity._reader_parsed_module(
+                    str(_key_path(repository_root, policy, key)), digests[key]
+                )
+            else:
+                raw = source_bytes[key]
+                if _sha256(raw) != digests[key]:
+                    raise ToolIdentityPolicyError("闭包输入与本次实读快照摘要不同")
+                # 与 Path.read_text 的 UTF-8／通用换行口径逐字一致。
+                with io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8") as stream:
+                    source = stream.read()
+                tree = ast.parse(source)
+                functions, constants, _imports = codex_identity._module_symbols(tree)
+                parts = source.split("\n")
+                lines = tuple([(part + "\n").encode("utf-8") for part in parts[:-1]]
+                              + ([parts[-1].encode("utf-8")] if parts[-1] else []))
             aliases, symbol_imports = _resolve_imports(
                 _top_level_binding_nodes(tree), module, index, managed_roots=managed_roots
             )
@@ -556,7 +589,26 @@ def _algorithm_sha256() -> str:
     return _sha256(Path(__file__).read_bytes() + b"\0" + adapter_source)
 
 
-def _memoized(kind: str, policy: Mapping[str, Any], digests: Mapping[str, str], compute: Any) -> dict[str, Any]:
+def _process_memo_key(kind: str, policy: Mapping[str, Any], digests: Mapping[str, str], repository_root: Path) -> str:
+    """实际路径、完整输入、解释器、算法和动态绑定共同限定纯计算，不改变来源校验权限。"""
+    return codex_identity._fingerprint({
+        "kind": kind, "process_id": os.getpid(), "repository": str(repository_root.resolve(strict=True)),
+        "policy": dict(policy), "tree": dict(digests),
+        "python": {"executable": str(Path(sys.executable).resolve()), "version": sys.version},
+        "algorithms": [_sha256(Path(path).read_bytes()) for path in
+                       (__file__, codex_identity.__file__, upgrade_client_adapter.__file__)],
+        "adapter_bindings": {client: dict(bindings) for client, bindings in
+                             upgrade_client_adapter.ADAPTER_BINDINGS.items()},
+        "orchestrator_surface": dict(upgrade_client_adapter.ORCHESTRATOR_SURFACE),
+        "adapter_members": dict(upgrade_client_adapter.ADAPTER_MEMBERS),
+        "mechanism_barriers": sorted(ADAPTER_MECHANISM_BARRIERS),
+        "adapter_methods": sorted(ADAPTER_METHODS),
+    })
+
+
+def _memoized(kind: str, policy: Mapping[str, Any], digests: Mapping[str, str], compute: Any,
+              *, repository_root: Path) -> dict[str, Any]:
+    key = _process_memo_key(kind, policy, digests, repository_root)
     entry = None
     if os.environ.get(codex_identity.IDENTITY_MEMO_ENV):
         try:
@@ -567,12 +619,30 @@ def _memoized(kind: str, policy: Mapping[str, Any], digests: Mapping[str, str], 
             })
         except (OSError, TypeError, ValueError):
             entry = None
-        cached = codex_identity._memo_load(entry)
-        if cached is not None:
-            return cached
+    with _PROCESS_MEMO_LOCK:
+        trusted = _PROCESS_MEMO.get(key)
+        if trusted is not None:
+            _PROCESS_MEMO.move_to_end(key)
+    if trusted is not None:
+        result = json.loads(trusted)
+        codex_identity._memo_save(entry, result)
+        return result
+    cached = codex_identity._memo_load(entry)
+    if cached is not None:
+        # 原跨进程合同仍可使用，但不能给禁用外部 memo 的 reader 形成内存证明。
+        return cached
     result = compute()
+    current = managed_tree_digests(repository_root, policy)
+    if _process_memo_key(kind, policy, current, repository_root) != key:
+        raise ToolIdentityPolicyError("身份首次计算期间受管输入或适配绑定漂移")
+    raw = json.dumps(result, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    with _PROCESS_MEMO_LOCK:
+        _PROCESS_MEMO[key] = raw
+        _PROCESS_MEMO.move_to_end(key)
+        while len(_PROCESS_MEMO) > _PROCESS_MEMO_LIMIT:
+            _PROCESS_MEMO.popitem(last=False)
     codex_identity._memo_save(entry, result)
-    return result
+    return json.loads(raw)
 
 
 def _orchestrator_roots(policy: Mapping[str, Any], index: Mapping[str, str], names: Iterable[str]) -> list[tuple[str, str]]:
@@ -584,13 +654,13 @@ def compute_identity(policy: Mapping[str, Any], repository_root: Path | None = N
     """按 v3 策略计算 Claude 工具身份：五摘要、层计数、默认层路径与两个编排器闭包。"""
 
     root = Path(repository_root) if repository_root is not None else REPOSITORY_ROOT
-    digests = managed_tree_digests(root, policy)
+    digests, sources = _managed_tree_snapshot(root, policy)
 
     def compute() -> dict[str, Any]:
         grouped = layer_entries(policy, digests)
         index = _module_index(policy, digests)
-        wire = closure(policy, root, digests, _orchestrator_roots(policy, index, policy["orchestrator"]["wire_roots"]), layer="wire_producer")
-        evidence = closure(policy, root, digests, _orchestrator_roots(policy, index, policy["orchestrator"]["evidence_roots"]), layer="evidence_semantics")
+        wire = closure(policy, root, digests, _orchestrator_roots(policy, index, policy["orchestrator"]["wire_roots"]), layer="wire_producer", source_bytes=sources)
+        evidence = closure(policy, root, digests, _orchestrator_roots(policy, index, policy["orchestrator"]["evidence_roots"]), layer="evidence_semantics", source_bytes=sources)
         runtime = sorted((dict(item) for item in policy["runtime_bindings"]), key=lambda item: item["name"])
         return {
             "client": str(policy["client"]),
@@ -608,7 +678,7 @@ def compute_identity(policy: Mapping[str, Any], repository_root: Path | None = N
             },
         }
 
-    return _memoized("claude-identity-v3", policy, digests, compute)
+    return _memoized("claude-identity-v3", policy, digests, compute, repository_root=root)
 
 
 def evaluator_dependency_digests(
@@ -622,7 +692,7 @@ def evaluator_dependency_digests(
 
     root = Path(repository_root) if repository_root is not None else REPOSITORY_ROOT
     active = dict(policy) if policy is not None else load_policy()
-    digests = managed_tree_digests(root, active)
+    digests, sources = _managed_tree_snapshot(root, active)
     evaluator = active["evaluator"]
 
     def compute() -> dict[str, Any]:
@@ -631,8 +701,8 @@ def evaluator_dependency_digests(
                 raise ToolIdentityPolicyError(f"评估器直接依赖不在受管树内：{key}")
         index = _module_index(active, digests)
         barriers = sorted(f"{_module_of_name(item, index)}" for item in active.get("reader_barriers", {}))
-        compare = closure(active, root, digests, _orchestrator_roots(active, index, evaluator["compare_reader_roots"]), layer=None, barriers=barriers)
-        accept = closure(active, root, digests, _orchestrator_roots(active, index, evaluator["accept_reader_roots"]), layer=None, barriers=barriers)
+        compare = closure(active, root, digests, _orchestrator_roots(active, index, evaluator["compare_reader_roots"]), layer=None, barriers=barriers, source_bytes=sources)
+        accept = closure(active, root, digests, _orchestrator_roots(active, index, evaluator["accept_reader_roots"]), layer=None, barriers=barriers, source_bytes=sources)
         return {
             "checker_sha256": digests[evaluator["checker"]],
             "builder_sha256": digests[evaluator["builder"]],
@@ -640,7 +710,7 @@ def evaluator_dependency_digests(
             "accept_reader_sha256": accept["closure_sha256"],
         }
 
-    return _memoized("claude-evaluator-v3", active, digests, compute)
+    return _memoized("claude-evaluator-v3", active, digests, compute, repository_root=root)
 
 
 def _module_of_name(item: str, index: Mapping[str, str]) -> str:

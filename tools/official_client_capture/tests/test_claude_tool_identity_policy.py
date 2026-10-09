@@ -366,6 +366,103 @@ class ClaudeIdentityEngineTests(_ClaudeTreeMixin, unittest.TestCase):
         self.assertEqual(json.dumps(second_identity), json.dumps(identity))
 
 
+class ClaudeProcessMemoTests(_ClaudeTreeMixin, unittest.TestCase):
+    """禁用外部 memo 后，仅承接本进程真实快照计算；全部输入变化和输出污染仍可见。"""
+
+    def setUp(self) -> None:
+        super().setUp()
+        v3._PROCESS_MEMO.clear()
+        self.addCleanup(v3._PROCESS_MEMO.clear)
+
+    def test_warm_result_still_reads_tree_and_returns_independent_value(self) -> None:
+        with mock.patch.object(v3, "closure", wraps=v3.closure) as closure:
+            first = v3.compute_identity(self.policy, self.repo)
+            expected = json.loads(json.dumps(first))
+            first["orchestrator_closures"]["wire_producer"]["modules"].append("forged")
+            with mock.patch.object(v3, "_managed_tree_snapshot", wraps=v3._managed_tree_snapshot) as snapshot:
+                self.assertEqual(v3.compute_identity(self.policy, self.repo), expected)
+            self.assertEqual(snapshot.call_count, 1)
+            self.assertEqual(closure.call_count, 2)
+
+    def test_same_length_change_and_tree_membership_do_not_hit(self) -> None:
+        first = v3.compute_identity(self.policy, self.repo)
+        self._edit("official_client_capture/claude_upgrade.py", 'return "fingerprint"', 'return "fingerprinx"')
+        changed = v3.compute_identity(self.policy, self.repo)
+        self.assertNotEqual(first[EVIDENCE], changed[EVIDENCE])
+        added = self.repo / "tools/official_client_control/new_control.py"
+        added.write_text("VALUE = 1\n", encoding="utf-8")
+        with_added = v3.compute_identity(self.policy, self.repo)
+        self.assertNotEqual(with_added["tool_files_sha256"], changed["tool_files_sha256"])
+        added.unlink()
+        self.assertEqual(v3.compute_identity(self.policy, self.repo), changed)
+
+    def test_policy_and_actual_binding_table_change_do_not_hit(self) -> None:
+        v3.compute_identity(self.policy, self.repo)
+        with mock.patch.object(v3, "closure", wraps=v3.closure) as closure:
+            changed = {**self.policy, "policy_version": self.policy["policy_version"] + 1}
+            self.assertEqual(v3.compute_identity(changed, self.repo)["policy_version"], changed["policy_version"])
+            bindings = {**upgrade_client_adapter.ADAPTER_BINDINGS,
+                        "claude": {**upgrade_client_adapter.ADAPTER_BINDINGS["claude"],
+                                   "unused-proof-marker": ("claude_upgrade", "_utc_now")}}
+            with mock.patch.object(upgrade_client_adapter, "ADAPTER_BINDINGS", bindings):
+                v3.compute_identity(self.policy, self.repo)
+            self.assertEqual(closure.call_count, 4)
+
+    def test_first_calculation_drift_cannot_form_memory_proof(self) -> None:
+        original = v3.closure
+        changed = False
+
+        def drift(*arguments: Any, **options: Any) -> dict[str, Any]:
+            nonlocal changed
+            if not changed:
+                changed = True
+                self._edit("official_client_capture/claude_upgrade.py", 'return "fingerprint"', 'return "fingerprinx"')
+            return original(*arguments, **options)
+
+        with mock.patch.object(v3, "closure", side_effect=drift):
+            with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "首次计算期间"):
+                v3.compute_identity(self.policy, self.repo)
+        self.assertFalse(v3._PROCESS_MEMO)
+        self.assertEqual(v3.compute_identity(self.policy, self.repo)["client"], "claude")
+
+    def test_removed_orchestrator_surface_rejects_warm_result(self) -> None:
+        v3.compute_identity(self.policy, self.repo)
+        surface = {key: value for key, value in upgrade_client_adapter.ORCHESTRATOR_SURFACE.items()
+                   if key != "_fingerprint"}
+        with mock.patch.object(upgrade_client_adapter, "ORCHESTRATOR_SURFACE", surface):
+            with self.assertRaisesRegex(v3.ToolIdentityPolicyError, "_fingerprint.*不在绑定表"):
+                v3.compute_identity(self.policy, self.repo)
+
+    def test_changed_adapter_members_matches_cold_calculation(self) -> None:
+        v3.compute_identity(self.policy, self.repo)
+        members = {key: value for key, value in upgrade_client_adapter.ADAPTER_MEMBERS.items()
+                   if key != "provenance"}
+        with mock.patch.object(upgrade_client_adapter, "ADAPTER_MEMBERS", members):
+            with mock.patch.object(v3, "closure", wraps=v3.closure) as closure:
+                warm = v3.compute_identity(self.policy, self.repo)
+                self.assertEqual(closure.call_count, 2)
+            v3._PROCESS_MEMO.clear()
+            self.assertEqual(v3.compute_identity(self.policy, self.repo), warm)
+
+    def test_external_memo_cannot_seed_reader_memory_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as memo, \
+                mock.patch.dict(os.environ, {codex_identity.IDENTITY_MEMO_ENV: memo}), \
+                mock.patch.object(codex_identity, "_memo_load", return_value={"forged": True}):
+            self.assertEqual(v3.compute_identity(self.policy, self.repo), {"forged": True})
+        self.assertFalse(v3._PROCESS_MEMO)
+        self.assertEqual(v3.compute_identity(self.policy, self.repo)["client"], "claude")
+
+    def test_snapshot_does_not_use_shared_parsed_module_cache(self) -> None:
+        with mock.patch.object(codex_identity, "_reader_parsed_module", side_effect=AssertionError("外部解析缓存")):
+            self.assertEqual(v3.compute_identity(self.policy, self.repo)["client"], "claude")
+            self.assertEqual(set(v3.evaluator_dependency_digests(self.repo, self.policy)), set(v3.EVALUATOR_DIGEST_FIELDS))
+
+    def test_process_cache_has_fixed_capacity(self) -> None:
+        for number in range(v3._PROCESS_MEMO_LIMIT + 2):
+            v3.compute_identity({**self.policy, "policy_version": number + 1}, self.repo)
+        self.assertEqual(len(v3._PROCESS_MEMO), v3._PROCESS_MEMO_LIMIT)
+
+
 class ClaudeImportedSymbolClosureTests(_ClaudeTreeMixin, unittest.TestCase):
     """导入别名与重导出必须跟到真实定义；导入环拒绝，正常函数递归、忽略文件与屏障维持原合同。"""
 
