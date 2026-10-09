@@ -842,13 +842,20 @@ def validate_plan(store: Any, plan: Mapping[str, Any], *, current_execution: boo
         "environment_freeze_ref": "freeze",
         "deployment_configuration_ref": "deployment_configuration",
     }
+    verified_references: set[tuple[str, str]] = set()
     for key, kind in expected.items():
         payload = store.load_object(plan[key])["payload"]
         facts = evidence_facts(store, plan[key], kind)
         if facts["campaign_id"] != plan["campaign_id"] or facts["delivery_id"] != plan["delivery_id"] or facts["result"] != "pass":
             raise ControlError("交付计划引用了其他运行或未通过的严格证据")
+        # 字段类型与归属逐项核对；本次只读计划内，相同内容寻址对象只验图一次。
+        # 配置留在最后验真，来源结果立即用于回退资格，不跨写入或物理阶段承接。
+        reference_key = (plan[key]["object_kind"], plan[key]["sha256"])
+        if kind == "configuration" or reference_key in verified_references:
+            continue
         validate_evidence_graph(store, payload, current_execution=current_execution,
                                 frozen_configuration_ref=plan["executor_configuration_ref"] if kind == "freeze" else None)
+        verified_references.add(reference_key)
     configuration = evidence_facts(store, plan["executor_configuration_ref"], "configuration")
     projection = evidence_facts(store, plan["stable_environment_projection_ref"], "stable_projection")
     if configuration["configuration_sha256"] != plan["configuration_sha256"] or projection["projection_sha256"] != plan["environment_sha256"]:

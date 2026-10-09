@@ -1338,8 +1338,8 @@ def _publish_execution(context: DeliveryContext, delivery: Mapping[str, Any], co
     publication = {"schema_version": "claude-upgrade-delivery-publication-intent/v1", "campaign_id": context.campaign_id, "delivery_id": delivery["delivery_id"], "operation_id": core["operation_id"], "seed_binding": seed_binding, "execution_evidence_ref": reference, "payload": payload, "issued_at_utc": seed["issued_at_utc"], "producer_run": seed["producer_run"], "formed_under": seed["formed_under"], "idempotency_key": key, "ledger_action": "catch_up_delivery_events"}
     path = root / f"{core['operation_id']}.json"
     with _write_scope(context):
-        # 来源语义先于发布意图；已提交意图后的异常不再调用物理恢复或重做阶段。
-        delivery_execution.validate_evidence_graph(context.store, manifest)
+        # 新对象由 Store 写入门禁完整验图；同内容重试仍须通过下方阶段校验。
+        # 两种路径都在发布意图前重验来源，意图后的异常不再重做物理阶段。
         sealed = context.session.seal_object("operational_evidence", manifest)
         if sealed != reference:
             raise ConfigurationError("交付执行对象封存引用漂移。")

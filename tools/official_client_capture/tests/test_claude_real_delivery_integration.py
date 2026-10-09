@@ -332,6 +332,26 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         self.assertEqual(sum(call.args[1].get("evidence_type") == "stage_execution"
                              for call in graph.call_args_list), 1)
 
+    def test_plan_deduplicates_exact_references_but_rechecks_each_call(self) -> None:
+        """同次只读去重不豁免字段类型，也不能承接到下一次来源失效的调用。"""
+        plan = self.delivery["plan"]
+        original = execution.validate_evidence_graph
+        for current in (False, True):
+            with mock.patch.object(execution, "validate_evidence_graph", wraps=original) as graph:
+                execution.validate_plan(self.store, plan, current_execution=current)
+            kinds = [call.args[1]["evidence_type"] for call in graph.call_args_list]
+            self.assertEqual(kinds.count("freeze"), 1)
+            # freeze 的资格原件独立重验配置；计划末尾再验配置并立即核回退资格。
+            self.assertEqual(kinds.count("configuration"), 2)
+            self.assertEqual(kinds[-1], "configuration")
+        wrong = deepcopy(plan)
+        wrong["environment_freeze_ref"] = plan["stable_environment_projection_ref"]
+        with self.assertRaisesRegex(ControlError, "证据类型必须是 freeze"):
+            execution.validate_plan(self.store, wrong)
+        with mock.patch.dict(execution.SOURCE_VERIFIERS, {}, clear=True):
+            with self.assertRaises(ControlError):
+                execution.validate_plan(self.store, plan)
+
     def test_same_operation_under_another_execution_object_is_rejected(self) -> None:
         self._complete()
         package = deepcopy(self.store.load_object(self._seal_review())["payload"])
@@ -543,6 +563,15 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         core = summary["operations"][0]["execution"]
         publication_path = delivery._publication_root(self.context, self.delivery["delivery_id"]) / (core["operation_id"] + ".json")
         original = publication_path.read_bytes()
+        # 同内容封存的快速返回不能授予发布权；来源失效须在再次发布意图和事实前拒绝。
+        with mock.patch.dict(execution.SOURCE_VERIFIERS, {}, clear=True), \
+                mock.patch.object(delivery, "_immutable_json") as publish, \
+                mock.patch.object(delivery, "_record_stage") as record:
+            with self.assertRaises(ControlError):
+                delivery._publish_execution(self.context, self.delivery, core)
+            publish.assert_not_called()
+            record.assert_not_called()
+        self.assertEqual(publication_path.read_bytes(), original)
         first = delivery._publish_execution(self.context, self.delivery, core)
         second = delivery._publish_execution(self.context, self.delivery, core)
         self.assertEqual(first["fact_ref"], second["fact_ref"])
