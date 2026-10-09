@@ -391,7 +391,9 @@ class ScenarioAudit:
 
 def _copy_tree(destination: Path) -> Path:
     """两个受管根的隔离副本：``official_client_capture`` 按本模块的静态依赖闭包复制，``official_client_control`` 整根复制；
-    另带受监督部署脚本（多根部署场景）、Claude 两份文档与 Claude Release 目录（批次夹具冻结的 Active 输入）。"""
+    另带钉住的门禁读取器及其同目录依赖、受监督部署脚本、Claude 文档与 Release 目录。"""
+
+    from tools.official_client_capture import codex_upgrade_gate_receipt as gate
 
     tree = trees.copy_managed_tree(destination, include_tests="closure", closure_of=Path(__file__))
     shutil.copytree(
@@ -400,6 +402,11 @@ def _copy_tree(destination: Path) -> Path:
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     shutil.copy2(REPO_ROOT / "tools" / "arm64_supervised_deploy.py", tree / "tools" / "arm64_supervised_deploy.py")
+    # 门禁 reader 在隔离解释器中只认固定目录。先由原消费者核验钉住摘要，
+    # 再把该源码或已安装驱动的同目录依赖带入副本，不能依赖宿主回退。
+    verifier_root = Path(gate._target_gate_verifier().__file__).resolve().parent
+    shutil.copytree(verifier_root, tree / "tools" / "ci",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     # 批次夹具建 Campaign 时冻结真实的 2.1.226 Active 输入（Claude Release 目录与画像），按仓库相对路径读取。
     catalog = Path("backend") / "internal" / "officialegress" / "catalogdata" / "claude"
     shutil.copytree(REPO_ROOT / catalog, tree / catalog)
