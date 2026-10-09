@@ -31,6 +31,35 @@ from tools.official_client_control.sealed_gate_bindings import project_delivery_
 from tools.official_client_control.errors import ControlError
 
 
+class DeliveryResumeEntryTests(unittest.TestCase):
+    """连续链消费产品生成的监督入口；旧直接动作和不完整入口仍须拒绝。"""
+
+    def test_three_recoverable_states_use_supervised_batch_entry(self):
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture.tests import claude_late_stage_chain_driver as late
+        campaign = Path("/fixture/campaign")
+        context = SimpleNamespace(campaign_dir=campaign, manifest={})
+        for expected, closed, pending in (("delivery_stage_failed", True, None),
+                ("delivery_in_progress", False, None), ("delivery_invalidation_pending", True, {"id": "fixture"})):
+            state = {"receipt_refs": [], "complete": False,
+                     "pending_invalidation_ref": pending, "latest_closed": closed}
+            with self.subTest(status=expected), mock.patch.object(delivery, "_resolve", return_value=context), \
+                    mock.patch.object(delivery, "load_stage_result", return_value=None), \
+                    mock.patch.object(delivery, "_deliveries", return_value=[{"delivery_id": "d1"}]), \
+                    mock.patch.object(delivery, "_chain", return_value=state):
+                value = delivery.delivery_status(campaign, "candidate-r2")
+                self.assertEqual(value["status"], expected)
+                audit = outer.ScenarioAudit(self, expected)
+                audit.check_entry(value, *late.RUN_ENTRY_FRAGMENTS)
+                self.assertTrue(audit.checks["entry"]["passed"])
+
+    def test_old_direct_or_incomplete_entry_cannot_pass_resume_check(self):
+        from tools.official_client_capture.tests import claude_late_stage_chain_driver as late
+        for hint in ("deliver-candidate run", "compile-and-run-vc-batch --phase VC-5", "compile-and-run-vc-batch --phase VC-6"):
+            with self.subTest(hint=hint), self.assertRaises(AssertionError):
+                outer.ScenarioAudit(self, "恢复入口拒绝").check_entry({"next_command": hint}, *late.RUN_ENTRY_FRAGMENTS)
+
+
 class RevisionOfficialSourceTests(unittest.TestCase):
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="revision-official-input-", dir="/private/tmp")

@@ -27,6 +27,8 @@ from tools.official_client_capture.tests import test_claude_upgrade_batch as bat
 from tools.official_client_capture.tests import test_claude_upgrade_vc6_batch as delivery_tests
 
 CANDIDATE = delivery_tests.CANDIDATE
+# 续跑必须经父批次监督器；直接子动作名称不能代替当前合法入口。
+RUN_ENTRY_FRAGMENTS = ("compile-and-run-vc-batch", "--phase VC-6", "claude_upgrade_delivery.run_action")
 CRASH_MARKER_ENV = "CLAUDE_LATE_CHAIN_FINALIZE_CRASH_MARKER"
 # 只在指定 finalize 动作进程、且 Store 已签出收据后的一次性故障；不改变成功判据。
 FINALIZE_CRASH = f'''
@@ -197,7 +199,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         self.assertEqual(retried["staging_attempt"], 2)
         failed = self.assert_status(world, "delivery_stage_failed")
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()],
-            expected=[f"dr0:{stage}" for stage in delivery.STAGES[:3]], entry=failed, fragments=("deliver-candidate",),
+            expected=[f"dr0:{stage}" for stage in delivery.STAGES[:3]], entry=failed, fragments=RUN_ENTRY_FRAGMENTS,
             campaign_id=campaign.name, staging_attempt=2))
 
         # 修复阶段三后，阶段四 prepare 前强杀；对账后同段重派该阶段，物理动作只执行一次。
@@ -215,7 +217,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             [("dr1", "candidate_restored"), ("dr1", "stable_observed")])
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()[before_calls:]],
             expected=["dr1:candidate_restored", "dr1:stable_observed", "dr1:stable_observed"],
-            entry=interrupted, fragments=("deliver-candidate",), campaign_id=campaign.name))
+            entry=interrupted, fragments=RUN_ENTRY_FRAGMENTS, campaign_id=campaign.name))
 
         # 已通过阶段只有经批准失效才可再执行，从批准阶段起重做。
         audit = self.late_audit("后段交付阶段批准失效", world)
@@ -232,7 +234,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         ready = self.assert_status(world, "delivery_awaiting_finalize")
         records.append(self.finish_audit(audit, executed=[f"{a}:{b}" for a, b in self.delivery_calls()[before_calls:]],
             expected=[f"dr2:{stage}" for stage in delivery.STAGES[1:]], entry=pending,
-            fragments=("deliver-candidate",), campaign_id=campaign.name))
+            fragments=RUN_ENTRY_FRAGMENTS, campaign_id=campaign.name))
 
         # 第二层提交故障：Store 已签交付收据，VC-6 checkpoint 尚未写；下批只补收尾。
         audit = self.late_audit("后段交付收据后中断与重复收尾", world)
