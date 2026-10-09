@@ -1629,6 +1629,24 @@ def _typed_package_review(context: DeliveryContext, delivery: Mapping[str, Any],
     _expect(isinstance(inventory, Mapping) and set(inventory) == {"executions", "restorations", "operations_index_binding", "origin"}, "完整交付 inventory 字段不闭合")
     if not isinstance(inventory["executions"], list) or not inventory["executions"] or not isinstance(inventory["restorations"], list):
         raise ConfigurationError("完整交付 inventory 没有合法执行与恢复集合。")
+    # inventory 已由守卫冻结；本次只读审核的准确来源全集一次导出。
+    # 图校验、原件复读及当前守卫存活仍逐项执行，不跨 Store 写入或调用承接。
+    plan = delivery["plan"]
+    items = [delivery_execution._source_request({"campaign_id": context.campaign_id,
+        "delivery_id": delivery["delivery_id"], "operation_index_binding": inventory["operations_index_binding"]}, inventory["origin"])]
+    configuration = context.store.load_object(plan["executor_configuration_ref"])["payload"]
+    items.extend(delivery_execution._graph_source_items(context.store, configuration))
+    for kind, cores in (("stage_execution", inventory["executions"]), ("restore", inventory["restorations"])):
+        for core in cores:
+            manifest = _typed_manifest(context, f"{delivery['delivery_id']}-{kind.replace('_', '-')}-{canonical_sha256(core)[:24]}", kind, core)
+            items.extend(delivery_execution._graph_source_items(context.store, manifest))
+    with delivery_execution._source_batch_scope(context.store, items):
+        return _typed_package_review_inventory(context, delivery, chain, inventory)
+
+
+def _typed_package_review_inventory(context: DeliveryContext, delivery: Mapping[str, Any],
+                                     chain: Mapping[str, Any], inventory: Mapping[str, Any]) -> dict[str, Any]:
+    """只消费同次已声明的 inventory；逐项原合同与完整归档校验保持。"""
     plan = delivery["plan"]
     index_binding = inventory["operations_index_binding"]
     index_content = {"campaign_id": context.campaign_id, "delivery_id": delivery["delivery_id"], "operation_index_binding": index_binding}

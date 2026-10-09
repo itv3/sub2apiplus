@@ -360,8 +360,17 @@ def complete_delivery_raw_bindings(store: Any, plan: Mapping[str, Any], source: 
         raise ControlError("交付归档 Profile 边界要求同一 Plan v2")
     reference = plan["executor_configuration_ref"]
     payload = store.load_object(dict(reference))["payload"]
-    facts = evidence_facts(store, reference, "configuration")
-    configuration_source = validate_evidence_graph(store, payload)
+    from tools.official_client_capture.claude_gate_material_worker import gate_material_reader_scope
+    with gate_material_reader_scope(), _source_batch_scope(store, _graph_source_items(store, payload)):
+        return _complete_delivery_raw_bindings(store, plan, source, initial)
+
+
+def _complete_delivery_raw_bindings(store: Any, plan: Mapping[str, Any], source: VerifiedSource,
+                                    initial: Any) -> list[dict[str, Any]]:
+    """配置原件先验真，随后完整投影一次并立即构造归档闭包。"""
+    facts = evidence_facts(store, plan["executor_configuration_ref"], "configuration")
+    configuration_source = _verified_source(store, facts, facts["origin"])
+    _validate_configuration_original(store, facts, configuration_source, current_execution=False)
     if (facts["campaign_id"] != plan["campaign_id"]
             or facts["delivery_id"] != plan["delivery_id"]
             or facts["result"] != "pass"
@@ -716,7 +725,14 @@ def _validate_qualification_originals(store: Any, payload: Mapping[str, Any], so
                 # 只沿明确引用核一次 configuration 原件，不扫描文件名、摘要或递归重放交付图。
                 original_payload = store.load_object(dict(reference))["payload"]
                 original_facts = evidence_facts(store, reference, "configuration")
-                validate_evidence_graph(store, original_payload, current_execution=current_execution)
+                if report.get("schema_version") == MATERIAL_DELIVERY_SCHEMA:
+                    # 同次报告随后完整重建同一配置的第二根资格；这里仍独立
+                    # 验配置原件及来源，只合并重复的资格图，不复用通过结论。
+                    original_source = _verified_source(store, original_facts, original_facts["origin"])
+                    _validate_configuration_original(store, original_facts, original_source,
+                                                     current_execution=current_execution)
+                else:
+                    validate_evidence_graph(store, original_payload, current_execution=current_execution)
                 if (original_facts["campaign_id"], original_facts["delivery_id"]) != (facts["campaign_id"], facts["delivery_id"]):
                     raise ControlError("资格报告配置引用跨 Campaign 或交付运行")
                 if (original_facts["binding"] != configuration_binding
@@ -739,24 +755,31 @@ def validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_e
                                         frozen_configuration_ref=frozen_configuration_ref)
 
 
+def _validate_configuration_original(store: Any, facts: Mapping[str, Any], source: VerifiedSource,
+                                     *, current_execution: bool) -> dict[str, Any]:
+    """配置的原件、形状与版本准入；资格图由对应消费入口完整验证。"""
+    raw = _source_json(source, facts["binding"])
+    if raw != facts["configuration"]:
+        raise ControlError("交付配置与受管通道原件不一致")
+    from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import validate_configuration
+    from .qualification_material_import import requires_qualification_materials
+    validate_configuration(raw)
+    campaign_path = Path(store.root) / "campaigns" / (facts["campaign_id"] + ".json")
+    # 独立配置对象可先于 Campaign 封存，本身不授予执行权限；Plan
+    # 必须有真实 Campaign，并在其准入处再次要求后继合同。
+    if current_execution and (campaign_path.exists() or campaign_path.is_symlink()) and requires_qualification_materials(store, store.load_campaign(facts["campaign_id"])) and raw.get("schema_version") != "claude-upgrade-arm64-executor-configuration/v2":
+        raise ControlError("当前第二根能力拒绝配置 v1 降级")
+    return raw
+
+
 def _validate_evidence_graph(store: Any, payload: Mapping[str, Any], *, current_execution: bool,
                              frozen_configuration_ref: Mapping[str, Any] | None) -> VerifiedSource:
     validate_operational_evidence(dict(payload))
     facts = payload["entries"][0]["facts"]
     source = _verified_source(store, facts, facts["origin"])
     if payload["evidence_type"] == "configuration":
-        raw = _source_json(source, facts["binding"])
-        if raw != facts["configuration"]:
-            raise ControlError("交付配置与受管通道原件不一致")
-        # 配置细节由执行器的同一纯校验函数核对，不接受隐藏的 shell 或 import。
-        from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import validate_configuration
-        validate_configuration(raw)
-        from .qualification_material_import import projection_for_configuration, requires_qualification_materials
-        campaign_path = Path(store.root) / "campaigns" / (facts["campaign_id"] + ".json")
-        # 独立配置对象可先于 Campaign 封存，本身不授予执行权限；Plan
-        # 必须有真实 Campaign，并在其准入处再次要求后继合同。
-        if current_execution and (campaign_path.exists() or campaign_path.is_symlink()) and requires_qualification_materials(store, store.load_campaign(facts["campaign_id"])) and raw.get("schema_version") != "claude-upgrade-arm64-executor-configuration/v2":
-            raise ControlError("当前第二根能力拒绝配置 v1 降级")
+        from .qualification_material_import import projection_for_configuration
+        raw = _validate_configuration_original(store, facts, source, current_execution=current_execution)
         projection_for_configuration(store, raw, source, purpose="current_delivery" if current_execution else "formed_replay")
     elif payload["evidence_type"] == "stable_projection":
         if _source_json(source, facts["binding"]) != facts["projection"]:

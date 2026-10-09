@@ -311,7 +311,19 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
 
     def test_package_checks_each_execution_graph_once_per_call(self) -> None:
         self._complete()
-        package = self.store.load_object(self._seal_review())["payload"]
+        original_review = delivery._typed_package_review
+        verifier = execution.SOURCE_VERIFIERS[executor.AUTHORITY]
+
+        def checked_review(*arguments, **options):
+            # 审核入口必须真正接入批量来源；离开它以后不能留下可复用证明。
+            with mock.patch.object(verifier, "verify_batch", wraps=verifier.verify_batch) as batch:
+                result = original_review(*arguments, **options)
+            batch.assert_called_once()
+            self.assertIsNone(execution._SOURCE_BATCH.get())
+            return result
+
+        with mock.patch.object(delivery, "_typed_package_review", side_effect=checked_review):
+            package = self.store.load_object(self._seal_review())["payload"]
         original = execution.validate_evidence_graph
         expected = {canonical_sha256(self.store.load_object(reference)["payload"])
                     for reference in package["execution_evidence_refs"]}
@@ -349,8 +361,9 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
                 execution.validate_plan(self.store, plan, current_execution=current)
             kinds = [call.args[1]["evidence_type"] for call in graph.call_args_list]
             self.assertEqual(kinds.count("freeze"), 1)
-            # freeze 的资格原件独立重验配置；计划末尾再验配置并立即核回退资格。
-            self.assertEqual(kinds.count("configuration"), 2)
+            # freeze 原件与来源仍独立核对；相同配置的完整资格由报告核一次。
+            # 计划末尾的独立配置消费仍重新完整验图并立即核回退资格。
+            self.assertEqual(kinds.count("configuration"), 1)
             self.assertEqual(kinds[-1], "configuration")
         wrong = deepcopy(plan)
         wrong["environment_freeze_ref"] = plan["stable_environment_projection_ref"]
