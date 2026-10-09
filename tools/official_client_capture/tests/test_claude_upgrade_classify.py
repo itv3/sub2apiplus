@@ -178,6 +178,7 @@ class _ClassifyCase(unittest.TestCase):
         frozen_files: Mapping[str, bytes] | None = None,
         vc1_sealed: bool = True,
         configuration: Mapping[str, Any] | None = None,
+        deadline_at_utc: str = "2026-12-31T00:00:00Z",
     ) -> Path:
         """``wire_files``（B3-03 补充项起）：probe → [(probe 目录内相对路径, 字节, 标签 kind, 有效连接序号)]，写进 VC-1 证据
         目录、登记进 capture manifest 并绑定到该 probe 的证据项（Wire 投影读它们）；缺省不写，B3-02 的用例不受影响。
@@ -196,6 +197,7 @@ class _ClassifyCase(unittest.TestCase):
 
         ``configuration``：调用方可在首次建 Campaign 时冻结额外取证坐标；默认仍用原最小配置，
         Store 导出的平台与身份条件保持优先，不允许事后补写已有总计划或账本注册绑定。
+        ``deadline_at_utc`` 在首次形成 Store 与 VC 总计划时共同冻结，连续链用同一计时账本截止。
 
         ``vc1_sealed`` 为假时 VC-1 停在封存之前（VC-1 封存批次的续跑用例用）：Store 对象照常封存，但不写 Discovery／Evidence
         事实、官方阶段结果与 VC-1 checkpoint；缺省封存完成，原有用例不受影响。"""
@@ -211,7 +213,7 @@ class _ClassifyCase(unittest.TestCase):
             entrypoints=["claude-cli"],
             default_conditions=["privacy=default"],
             campaign_purpose="validation_only",
-            absolute_deadline_utc="2026-12-31T00:00:00Z",
+            absolute_deadline_utc=deadline_at_utc,
         )
         # Store 声明的外部材料必须在声明数据根交付；仅在新世界建立时写，不补写旧失败世界。
         for source in sorted(fixture.external_root.rglob("*")):
@@ -259,7 +261,7 @@ class _ClassifyCase(unittest.TestCase):
         raw = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
         _write_bytes(campaign / "campaign.json", raw)
         (campaign / "campaign.sha256").write_text(hashlib.sha256(raw).hexdigest() + "\n", encoding="utf-8")
-        seal_tests.write_vc_control(campaign)
+        seal_tests.write_vc_control(campaign, deadline_at_utc=deadline_at_utc)
         manifest = claude_upgrade.load_campaign_manifest(campaign)
         store, store_campaign = seal._ensure_store_campaign(campaign, manifest)
         tool_sha = seal._require_store_tool_current(store, store_campaign)

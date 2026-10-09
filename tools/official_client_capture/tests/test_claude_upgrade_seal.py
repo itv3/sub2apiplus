@@ -236,7 +236,7 @@ def rewrite_manifest(campaign: Path, **updates: Any) -> dict[str, Any]:
     return manifest
 
 
-def write_vc_control(campaign: Path) -> dict[str, Any]:
+def write_vc_control(campaign: Path, *, deadline_at_utc: str = "2026-12-31T00:00:00Z") -> dict[str, Any]:
     """VC-0 收口产物的最小替身：VC 总计划与 VC-0 checkpoint，并把 ``vc_control.campaign_plan`` 绑定写进总计划。"""
 
     manifest = json.loads((campaign / "campaign.json").read_text(encoding="utf-8"))
@@ -247,7 +247,7 @@ def write_vc_control(campaign: Path) -> dict[str, Any]:
         baseline_version=manifest["baseline_version"],
         target_version=manifest["target_version"],
         created_at_utc=manifest["created_at_utc"],
-        original_deadline_at_utc="2026-12-31T00:00:00Z",
+        original_deadline_at_utc=deadline_at_utc,
         timing_checkpoint_sha256="1" * 64,
         arm64_environment_sha256="2" * 64,
         job_rehearsal_sha256="3" * 64,

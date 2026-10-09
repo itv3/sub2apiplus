@@ -551,7 +551,16 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
 
         # 下面补写控制收据，按 VC-0 收口建立的 Campaign 形状在建立时就冻结 Active 输入（B2-11，db6a57aab：带控制收据的
         # Campaign 不接受命令行回退）。
-        campaign = self.build_campaign(official_reuse=True, frozen_files=profile_tests.active_frozen_files(), vc1_sealed=vc1_sealed)
+        # 截止只在建世界时生成一次；Store、VC 总计划和项目注册都承接同一计时原件。
+        # 不能让固定年末截止与动态六小时账本并存，也不能事后改写旧失败世界。
+        ledger = self.root / "timing-ledger"
+        timing_plan = timing.create_ledger(
+            ledger, upgrade_id=f"{CAMPAIGN_ID}-ledger", baseline_version=BASELINE, target_version=TARGET,
+            campaign_purpose="validation_only", evidence_decision="recapture", client="claude",
+        )
+        timing.append_event(ledger, event_id="fixture-vc0-completed", phase="VC-0", event_type="stage_completed", next_action="VC-0 收口完成", receipts=[])
+        campaign = self.build_campaign(official_reuse=True, frozen_files=profile_tests.active_frozen_files(),
+            vc1_sealed=vc1_sealed, deadline_at_utc=timing_plan["total_deadline_at_utc"])
         # 只读复用形态：VC-1 证据（中继清单与 Wire 证据）都在前序 Campaign 里，本 Campaign 没有官方 attempt 目录；
         # 对账器会按正式 attempt 读这里每个目录的原子预约收据，夹具不得留下半个 attempt。
         self.assertFalse((campaign / "official" / "attempts").exists(), "只读复用形态的 Campaign 不得出现官方 attempt 目录")
@@ -562,12 +571,6 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
             campaign, plan=plan, execute_item_ids=[], reuse_item_ids=official, actions=[],
             compiled_at_utc=FIRST_BATCH_COMPILED_AT, must_start_by_utc=FIRST_BATCH_START_BY,
         )
-        ledger = self.root / "timing-ledger"
-        timing.create_ledger(
-            ledger, upgrade_id=f"{CAMPAIGN_ID}-ledger", baseline_version=BASELINE, target_version=TARGET,
-            campaign_purpose="validation_only", evidence_decision="recapture", client="claude",
-        )
-        timing.append_event(ledger, event_id="fixture-vc0-completed", phase="VC-0", event_type="stage_completed", next_action="VC-0 收口完成", receipts=[])
         vc0 = claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-0")
         seal_tests.rewrite_manifest(
             campaign,

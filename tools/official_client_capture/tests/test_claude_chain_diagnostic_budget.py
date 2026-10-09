@@ -78,5 +78,34 @@ class DiagnosticBudgetTests(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
 
 
+from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_fixture
+
+
+class FixtureDeadlineTests(batch_fixture._RealTreeBatchCase):
+    def test_frozen_campaign_and_both_ledgers_share_one_deadline_before_extension(self):
+        """从新世界直接走真实延期，复现原错配而不重跑十分钟候选准备。"""
+        import json
+        from datetime import datetime, timedelta
+        from tools.official_client_capture import codex_upgrade_project_ledger as project
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+        campaign = self.build_batch_campaign()
+        plan_path = campaign / 'control/vc/campaign-plan.json'
+        plan = json.loads(plan_path.read_text())
+        current = timing.inspect_ledger(self.ledger_dir)['total_deadline_at_utc']
+        registered = project.replay_head(self.project_root)['registered_campaigns'][campaign.name]['deadline_at_utc']
+        self.assertEqual(plan['original_deadline_at_utc'], current)
+        self.assertEqual(registered, current)
+        original = {path: path.read_bytes() for path in (plan_path, campaign / 'campaign.json', self.ledger_dir / 'ledger.json')}
+        target = (datetime.fromisoformat(current.replace('Z', '+00:00')) + timedelta(minutes=30)).isoformat()
+        preview = project.preview_deadline_extension(campaign, scope='campaign', phase=None,
+            new_deadline_at_utc=target, reason='连续链截止同源回归')
+        result = project.apply_deadline_extension(campaign, preview_path=Path(preview['preview_path']),
+            approve_sha256=preview['review_sha256'], approved_by='离线回归')
+        self.assertEqual(result['status'], 'extended')
+        self.assertEqual(timing.inspect_ledger(self.ledger_dir)['total_deadline_at_utc'], target)
+        self.assertEqual(project.replay_head(self.project_root)['effective_campaign_deadlines'][campaign.name], target)
+        self.assertEqual(original, {path: path.read_bytes() for path in original})
+
+
 if __name__ == '__main__':
     unittest.main()
