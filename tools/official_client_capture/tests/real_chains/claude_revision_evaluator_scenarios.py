@@ -24,6 +24,9 @@ from tools.official_client_capture.tests import claude_revision_evaluator_chain_
 
 SOURCE_PATHS = (
     "tools/official_client_capture/tests/claude_revision_evaluator_chain_driver.py",
+    "tools/official_client_capture/tests/claude_fault_chain_world.py",
+    "tools/official_client_capture/tests/claude_transient_chain_driver.py",
+    "tools/official_client_capture/tests/claude_late_stage_chain_driver.py",
     "tools/official_client_capture/tests/real_chains/claude_revision_evaluator_scenarios.py",
     "tools/official_client_capture/tests/real_chains/test_claude_upgrade_fault_chains.py",
     "tools/official_client_capture/claude_rule_assertion.py",

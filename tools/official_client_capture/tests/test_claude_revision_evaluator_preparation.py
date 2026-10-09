@@ -80,7 +80,8 @@ class RevisionOfficialSourceTests(unittest.TestCase):
     def context(self) -> dict:
         world = {"campaign": self.campaign, "official": self.side, "evaluation": self.evaluation,
                  "config_path": self.old_config}
-        with mock.patch.object(driver.transient.ClaudeTransientChainDriver, "evaluation_context", return_value=world), \
+        self.case.runtime = SimpleNamespace(patched=lambda: contextlib.nullcontext())
+        with mock.patch.object(driver.transient.world_fixture, "real_candidate_world", return_value=world), \
                 mock.patch.object(driver.upgrade, "_load_stage_result", return_value={"store": {"evidence_package_ref": self.package}}):
             return self.case.evaluation_context(self.campaign)
 
@@ -146,6 +147,16 @@ class RevisionOfficialSourceTests(unittest.TestCase):
                 self.assertFalse((self.campaign / "seam").exists())
                 config.pop(field)
                 sources._write_json(self.old_config, config)
+
+
+class TransientOfficialSourceTests(RevisionOfficialSourceTests):
+    """七场景与八场景共用来源准备，原件闭包和损坏拒绝逐条复验。"""
+
+    def setUp(self):
+        super().setUp()
+        data = self.case.data
+        self.case = driver.transient.ClaudeTransientChainDriver('runTest')
+        self.case.data = data
 
 
 class RevisionGateSourceTests(unittest.TestCase):

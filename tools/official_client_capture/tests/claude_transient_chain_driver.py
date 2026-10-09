@@ -297,8 +297,18 @@ sys.exit(0)
                 "host_runs_root": str(upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT),
                 "container_run_roots": [str(root) for root in upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS],
             }
-            return world_fixture.real_candidate_world(self, campaign, candidate_id=CANDIDATE, revision=1,
+            context = world_fixture.real_candidate_world(self, campaign, candidate_id=CANDIDATE, revision=1,
                 expected_client_requests=2, capture_layout=capture_layout)
+            return world_fixture.prepare_delivery_sources(self, context)
+
+    def late_audit(self, name: str, world: dict[str, Any]) -> Any:
+        """每次六项审计都保留新物化来源；刷新当前候选不能漏掉这些可信原件。"""
+
+        config = json.loads(world["config_path"].read_bytes())
+        roots = [*world.get("trusted_roots", []), world["config_path"],
+                 Path(config["official_source"]), world["campaign"] / "seam" / "official"]
+        audit_world = {**world, "trusted_roots": list(dict.fromkeys(roots))}
+        return super().late_audit(name, audit_world)
 
     def dispatch_builder(self, context: dict[str, Any], sequence: int, *, baseline: int) -> tuple[int, dict | None, str]:
         """当前基线先经真实 compare 批次，再消费它的 builder 配置；序号在 world 内连续。"""

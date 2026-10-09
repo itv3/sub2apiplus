@@ -11,6 +11,7 @@ claude_typed_vc6_fixture 的 typed 文件现场与独立守卫；不将这些输
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -82,7 +83,10 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
              '--external-gate-receipt', receipt], item_ids=['acceptance'])
 
     def gate_receipt(self, world: dict[str, Any], name: str, *, failed_gate: str | None = None) -> str:
-        # 连续链在父进程重验来源时也沿用同一测试作用域，不能跳过正式客户端读侧。
+        # 连续链在父进程与独立 reader 中消费同一完整环境合同；不把旧占位收据送入交付。
+        environment_mode = chain.gate_environment_mode(json.loads(world['config_path'].read_bytes()))
+        if world.get('real_candidate'):
+            self.assertEqual(environment_mode, chain.REAL_GATE_ENVIRONMENT, '连续交付链必须实读完整环境收据')
         with chain.seams(world['config_path']):
             identity = compare.candidate_gate_identity(world['campaign'], world['manifest'], world.get('candidate_id', CANDIDATE), world['build'])
             subject = chain.expected_subject(world['manifest'], world['candidate_payload'], identity)
@@ -96,7 +100,7 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
                 self.assertEqual(len(coordinates), 1, '本夹具只支持同一执行宿主与架构的门禁集合')
                 host, architecture = next(iter(coordinates))
             return chain.gate_receipt_file(world['gate_root'], name=name, subject=subject,
-                host=host, architecture=architecture, failed_gate=failed_gate)
+                host=host, architecture=architecture, failed_gate=failed_gate, environment_mode=environment_mode)
 
     def assert_recorded_client_requests(self, world: dict[str, Any]) -> None:
         """真实候选世界按同 Campaign 总 provenance 核算，原合成世界保留原来的两请求断言。"""

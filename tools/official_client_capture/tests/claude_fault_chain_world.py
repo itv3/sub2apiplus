@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,27 @@ def real_candidate_world(case: Any, campaign: Path, *, candidate_id: str, revisi
     rules_path = compare._bound_campaign_file(campaign, classification['approved']['target_rules'], '批准目标规则')
     world.update(profile_path=profile_path, profile_sha256=binding['sha256'], rules_path=rules_path)
     return world
+
+
+def prepare_delivery_sources(case: Any, context: dict[str, Any]) -> dict[str, Any]:
+    """七／八场景连续链共用实读来源，在第一次 compare 前物化新原件，禁止改写已封存收据。
+
+    历史请求仍来自明示的评估器夹具；门禁环境由原 finalizer 生成，供独立 reader 消费。
+    不替换候选 attempt、Store 包或已有来源配置，两条链共享同一初始化规则。
+    """
+
+    campaign = context['campaign']
+    original_config = json.loads(context['config_path'].read_bytes())
+    case.assertNotIn('attempt', original_config, '候选上下文必须由正式封存读侧读取')
+    case.assertNotIn('attempt_root', original_config, '不能用来源配置替换候选 attempt')
+    official = upgrade._load_stage_result(campaign, 'capture-official')
+    source = sources.materialize_official_source(campaign=campaign, data_root=case.data, side=context['official'],
+        package_ref=official['store']['evidence_package_ref'])
+    source_path = sources._write_json(context['evaluation'] / 'materialized-official-source.json', source)
+    configuration = {**original_config, 'official_source': str(source_path),
+                     'gate_environment_mode': sources.REAL_GATE_ENVIRONMENT}
+    context['config_path'] = sources._write_json(context['evaluation'] / 'materialized-source-config.json', configuration)
+    return context
 
 
 def take_sequence(world: dict[str, Any], requested: int | None = None) -> int:

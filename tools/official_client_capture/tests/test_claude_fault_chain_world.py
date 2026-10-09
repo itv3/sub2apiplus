@@ -7,6 +7,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tools.official_client_capture import claude_build_runtime_audit as runtime_audit
@@ -18,6 +19,42 @@ from tools.official_client_capture.tests.real_chains import test_claude_upgrade_
 
 
 class ContinuousWorldContractTests(unittest.TestCase):
+    def test_late_gate_environment_replays_in_independent_reader_and_rejects_damage(self) -> None:
+        """直接复现交付读侧边界，不重跑前面十多分钟的候选构造。"""
+        from tools.official_client_capture import claude_gate_material_worker as worker
+        from tools.official_client_capture.tests import test_claude_vc5_gate_environment_fixture as gate_tests
+        fixture = gate_tests.GateEnvironmentFixtureTests('runTest')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.reader = worker.compute_gate_reader_identity(gate_tests.REPOSITORY, formed_context={'fixture_only': True})
+        case = late.ClaudeLateStageChainDriver('runTest')
+        world = {'campaign': fixture.root / 'campaign', 'manifest': {}, 'candidate_id': fixture.subject['candidate_id'],
+                 'build': {}, 'candidate_payload': {}, 'config_path': fixture.config, 'gate_root': fixture.gate_root,
+                 'architecture': 'linux/arm64', 'real_candidate': True,
+                 'stage': {'store': {'validation_execution_plan_ref': {'sha256': '1' * 64}}},
+                 'store': SimpleNamespace(load_object=lambda _: {'payload': {
+                     'external_gates': [{'host_id': 'ARM64', 'architecture': 'linux/arm64'}]}})}
+        with mock.patch.object(late.compare, 'candidate_gate_identity', return_value={}), \
+                mock.patch.object(late.chain, 'expected_subject', return_value=fixture.subject):
+            receipt = case.gate_receipt(world, 'late-receipt.json')
+        self.assertEqual(fixture.independent_replay(receipt)['result']['status'], 'passed')
+        path = fixture.environment_receipt(receipt, 'before')
+        payload = json.loads(path.read_bytes())
+        payload['schema_version'] = 'invalid-environment/v1'
+        source_fixture._write_json(path, payload)
+        with self.assertRaises(worker.ReaderError):
+            fixture.independent_replay(receipt)
+
+    def test_late_delivery_refuses_legacy_environment_before_writing_gate(self) -> None:
+        case = late.ClaudeLateStageChainDriver('runTest')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = source_fixture._write_json(root / 'source.json', {})
+            with mock.patch.object(late.chain, 'gate_receipt_file') as create:
+                with self.assertRaisesRegex(AssertionError, '实读完整环境收据'):
+                    case.gate_receipt({'config_path': config, 'real_candidate': True}, 'rejected.json')
+            create.assert_not_called()
+
     def test_activation_source_matches_complete_runtime_contract(self) -> None:
         build = {'profile': {'profile_digest': '1' * 64, 'wire_sha256': '2' * 64,
                             'release_sha256': '3' * 64, 'bundle_sha256': '4' * 64},
@@ -52,6 +89,7 @@ class ContinuousWorldContractTests(unittest.TestCase):
         with mock.patch.object(late.compare, 'candidate_gate_identity', return_value={'candidate': 'r2'}) as identity, \
                 mock.patch.object(late.chain, 'expected_subject', return_value={}), \
                 mock.patch.object(late.chain, 'seams', return_value=contextlib.nullcontext()), \
+                mock.patch.object(Path, 'read_bytes', return_value=b'{}'), \
                 mock.patch.object(late.chain, 'gate_receipt_file', return_value='receipt'):
             case.gate_receipt(world, 'r2.json')
         self.assertEqual(identity.call_args.args[2], 'r2')
