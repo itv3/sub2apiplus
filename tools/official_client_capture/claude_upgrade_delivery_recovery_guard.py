@@ -254,7 +254,11 @@ def process_identity(pid: int) -> dict[str, Any]:
             if len(parts) != 2:
                 raise OSError("进程不存在")
             start, group = parts[0], int(parts[1])
-            boot = subprocess.run(["/usr/sbin/sysctl", "-n", "kern.boottime"], check=True, capture_output=True, text=True).stdout.strip()
+            # macOS 的 boottime 会随校时调整，不能作为同一次开机的稳定身份。
+            # 启动会话 UUID 在本次开机内不变，重启后改变；不可读时拒绝续作。
+            boot = subprocess.run(["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"], check=True, capture_output=True, text=True).stdout.strip()
+            if not re.fullmatch(r"[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}", boot):
+                raise OSError("宿主启动会话身份非法")
         return {"boot_id": boot, "pid": pid, "process_start": start, "process_group_id": group}
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         raise GuardError("进程实例已消失或启动身份不可读") from error

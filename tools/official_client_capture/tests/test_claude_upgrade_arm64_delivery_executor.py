@@ -179,6 +179,57 @@ def prepare_request(environment: dict, stage: str = "candidate_active", nonce: s
     return {"stage": stage, "run_nonce": nonce, "plan_ref": reference("candidate_delivery_plan", "a"), "configuration_ref": reference("operational_evidence", "b"), "stable_projection_ref": reference("operational_evidence", "c"), "probe_recipe_ref": reference("operational_evidence", "d"), "environment": environment}
 
 
+class ProcessIdentityTests(unittest.TestCase):
+    """校时不终止同一进程，真正重启、PID 重用或组变化必须失效。"""
+
+    def mac_identity(self, *, boot: str = "E0020A7E-8EB1-4D89-B9AE-31B06E03929C",
+                     start: str = "Fri Oct  9 12:42:16 2026", group: int = 10090) -> dict:
+        def run(command: list[str], **options: object) -> subprocess.CompletedProcess:
+            if command == ["/bin/ps", "-p", "10090", "-o", "lstart=", "-o", "pgid="]:
+                return subprocess.CompletedProcess(command, 0, stdout=f"{start} {group}\n")
+            self.assertEqual(command, ["/usr/sbin/sysctl", "-n", "kern.bootsessionuuid"])
+            return subprocess.CompletedProcess(command, 0, stdout=boot + "\n")
+
+        with mock.patch.object(guard.Path, "is_dir", return_value=False), \
+                mock.patch.object(guard.subprocess, "run", side_effect=run):
+            return guard.process_identity(10090)
+
+    def test_mac_clock_adjustment_does_not_change_process_identity(self) -> None:
+        # 核心负例是禁止读取随校时漂移的 boottime；两次均核真实进程字段。
+        owner = self.mac_identity()
+        current = self.mac_identity()
+        self.assertEqual(current, owner)
+        with mock.patch.object(guard, "process_identity", return_value=current):
+            self.assertTrue(guard.owner_alive(owner))
+
+    def test_mac_real_boot_change_invalidates_owner(self) -> None:
+        owner = self.mac_identity()
+        current = self.mac_identity(boot="E0020A7E-8EB1-4D89-B9AE-31B06E03929D")
+        with mock.patch.object(guard, "process_identity", return_value=current):
+            self.assertFalse(guard.owner_alive(owner))
+
+    def test_mac_pid_reuse_or_group_change_invalidates_owner(self) -> None:
+        owner = self.mac_identity()
+        for changes in ({"start": "Fri Oct  9 12:42:17 2026"}, {"group": 10091}):
+            with self.subTest(changes=changes):
+                current = self.mac_identity(**changes)
+                with mock.patch.object(guard, "process_identity", return_value=current):
+                    self.assertFalse(guard.owner_alive(owner))
+
+    def test_mac_boot_identity_malformed_is_rejected(self) -> None:
+        for boot in ("", "{ sec = 1791303462, usec = 290700 }", "not-a-uuid"):
+            with self.subTest(boot=boot), self.assertRaises(guard.GuardError):
+                self.mac_identity(boot=boot)
+
+    def test_mac_boot_identity_unavailable_is_rejected_without_fallback(self) -> None:
+        with mock.patch.object(guard.Path, "is_dir", return_value=False), \
+                mock.patch.object(guard.subprocess, "run", side_effect=[
+                    subprocess.CompletedProcess([], 0, stdout="Fri Oct  9 12:42:16 2026 10090\n"),
+                    subprocess.CalledProcessError(1, ["/usr/sbin/sysctl"]),
+                ]), self.assertRaises(guard.GuardError):
+            guard.process_identity(10090)
+
+
 class GuardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="cgd-", dir="/private/tmp")
