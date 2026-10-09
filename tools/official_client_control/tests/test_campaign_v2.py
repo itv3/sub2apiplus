@@ -278,9 +278,15 @@ class CampaignCreateManifestTests(_ManagedTreeCase):
             return digests
 
         with mock.patch.object(engine, "managed_tree_digests", side_effect=without_errors):
-            campaign = self._recomputed(tool_files=True, store_bundle=False)
+            # 身份引擎先拒绝与实际快照不一致的清单，不能用伪清单装配身份。
+            # Store 的缺件检查仍独立核对，不能因提前拒绝而丢掉原负例。
+            manifest = current_tool_manifest("claude")
             with self.assertRaisesRegex(ControlError, "未进清单=\\['official_client_control/errors.py'\\]"):
-                self._create(campaign)
+                receipts_module.store_bundle_from_manifest(manifest)
+            with self.assertRaisesRegex(ControlError, "计算三层摘要期间受管文件发生变化"):
+                self._recomputed(tool_files=True, store_bundle=False)
+            with self.assertRaisesRegex(ControlError, "tool_files_sha256 与现算受管文件清单不一致"):
+                self._create(self.campaign)
 
     def test_manifest_entry_disagreeing_with_store_file_is_rejected(self) -> None:
         engine = receipts_module._identity_engine("claude")
@@ -292,9 +298,15 @@ class CampaignCreateManifestTests(_ManagedTreeCase):
             return digests
 
         with mock.patch.object(engine, "managed_tree_digests", side_effect=drifted):
-            campaign = self._recomputed(tool_files=True, store_bundle=False)
+            # 同时验证 Store 对错误字节的原拒绝与身份／Campaign 的提前拒绝。
+            # 不模拟通过身份，也不放宽生产检查来满足旧夹具的调用顺序。
+            manifest = current_tool_manifest("claude")
             with self.assertRaisesRegex(ControlError, "文件被改而清单未跟上.*store.py"):
-                self._create(campaign)
+                receipts_module.store_bundle_from_manifest(manifest)
+            with self.assertRaisesRegex(ControlError, "计算三层摘要期间受管文件发生变化"):
+                self._recomputed(tool_files=True, store_bundle=False)
+            with self.assertRaisesRegex(ControlError, "tool_files_sha256 与现算受管文件清单不一致"):
+                self._create(self.campaign)
 
     def test_policy_fields_must_match_current_policy(self) -> None:
         for field, value in (("policy_sha256", "0" * 64), ("policy_version", 99)):
