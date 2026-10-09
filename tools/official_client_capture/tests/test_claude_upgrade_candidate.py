@@ -661,6 +661,19 @@ class RecordCandidateBuildTests(_CandidateCase):
         result = self.replay_facts(campaign, record, candidate_id=OTHER)
         self.assertFalse(result["allowed"])
 
+    def test_current_candidate_attempt_blocks_build_without_writes(self) -> None:
+        """即使构建输入齐全，当前候选已有 attempt 仍须拒绝，且保留全部原件。"""
+
+        campaign, fixture = self.fixture()
+        attempt = campaign / "candidates" / CANDIDATE / "attempts" / "already-started"
+        attempt.mkdir(parents=True, mode=0o700)
+        (attempt / "evidence.bin").write_bytes(b"current-candidate-evidence")
+        before = self.campaign_digests(campaign)
+        code, _result, stderr = self.record(fixture)
+        self.assertEqual(code, 1)
+        self.assertIn("VC-4 已出现 Candidate attempt，禁止补写构建收据", stderr)
+        self.assertEqual(self.campaign_digests(campaign), before)
+
     def test_superseding_revision_requires_a_new_candidate(self) -> None:
         campaign, first = self.fixture()
         code, _result, stderr = self.record(first)
@@ -668,6 +681,12 @@ class RecordCandidateBuildTests(_CandidateCase):
         # 作废 r1 的候选（有构建收据：身份快照取构建收据），以 OTHER 开 r2。
         self.invalidate(campaign, CANDIDATE)
         self.open_revision(campaign, OTHER, supersedes=CANDIDATE)
+        # 本用例只验证构建登记的候选范围；完整旧 attempt 的封存与作废由原八场景链验证。
+        # 保留一份旧候选取证原件，使扫描整个 Campaign 的错误检查必然被回归测试捕获。
+        history = campaign / "candidates" / CANDIDATE / "attempts" / "prior-revision"
+        history.mkdir(parents=True, mode=0o700)
+        (history / "evidence.bin").write_bytes(b"previous-candidate-evidence")
+        historical_bytes = tree_digests(history)
         store_root = claude_upgrade_store.campaign_store_root(campaign)
         self.assertEqual(seal_tests.store_status(store_root, CAMPAIGN_ID), "profile_approved")
         code, preview, stderr = run_main(self.preview_argv(campaign, OTHER))
@@ -700,6 +719,7 @@ class RecordCandidateBuildTests(_CandidateCase):
         claude_upgrade_vc.replay_vc_checkpoint(campaign, claude_upgrade_vc.vc_campaign_plan(campaign, manifest), "VC-4", revision=2)
         self.assertEqual(seal_tests.store_status(store_root, CAMPAIGN_ID), "candidate_sealed")
         self.assertEqual(seal_tests.facts_by_kind(store_root, CAMPAIGN_ID)["candidate_frozen"], 2)
+        self.assertEqual(tree_digests(history), historical_bytes)
         # 被取代的候选只读：再为它记录构建即拒绝。
         code, _result, stderr = self.record(first)
         self.assertEqual(code, 1)

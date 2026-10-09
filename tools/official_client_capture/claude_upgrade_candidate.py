@@ -735,16 +735,16 @@ def verify_candidate_catalog(
     }
 
 
-def _no_candidate_attempts(campaign_dir: Path) -> None:
-    """VC-4 只登记构建：Campaign 里不得已有任何候选 attempt（候选采集属于 VC-5）。"""
+def _no_candidate_attempts(campaign_dir: Path, candidate_id: str) -> None:
+    """当前候选开始采集后不得补写构建；旧 revision 的 attempt 原样保留。
 
-    root = campaign_dir / "candidates"
-    if not root.exists():
-        return
-    for candidate_root in root.iterdir():
-        attempts = candidate_root / "attempts"
-        if attempts.exists() and (attempts.is_symlink() or any(attempts.iterdir())):
-            raise ConfigurationError("VC-4 已出现 Candidate attempt，禁止补写构建收据。")
+    调用前由 candidate_entry 核对两份 revision 登记及当前候选归属。
+    r2 必须能在 r1 历史存在时登记构建，不能把历史取证当作 r2 已经采集。
+    """
+
+    attempts = campaign_dir / "candidates" / candidate_id / "attempts"
+    if attempts.exists() and (attempts.is_symlink() or any(attempts.iterdir())):
+        raise ConfigurationError("VC-4 已出现 Candidate attempt，禁止补写构建收据。")
 
 
 def _implementation_binding(
@@ -941,7 +941,7 @@ def _record_build(
     entry = candidate_entry(
         campaign_dir, manifest, candidate_id, action=RECORD_BUILD_ACTION, allowed_status=frozenset({STORE_PROFILE_APPROVED, STORE_CANDIDATE_SEALED})
     )
-    _no_candidate_attempts(campaign_dir)
+    _no_candidate_attempts(campaign_dir, entry.candidate_id)
 
     # 源码树：独立于 Campaign 的干净 Git 提交。
     source_root = trusted_candidate_source(Path(arguments.candidate_source), campaign_dir)
