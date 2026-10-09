@@ -111,6 +111,16 @@ class DiagnosticBudgetTests(unittest.TestCase):
             kill.assert_called_once_with(123, chains.signal.SIGKILL)
         self.assertIsNone(recorder.facts['groups'][0]['returncode'])
 
+    def test_recorded_chain_shell_and_executor_share_one_hour_contract(self):
+        for name in chains.certification.CLAUDE_RECORDED_CHAIN_IDS:
+            contract = chains.certification.claude_recorded_time_budget(name)
+            self.assertEqual(contract['method_timeout_seconds'], 3600)
+            self.assertLess(contract['method_timeout_seconds'], contract['chain_timeout_seconds'])
+            self.assertLess(contract['chain_timeout_seconds'], contract['chain_budget_seconds'])
+            self.assertLess(contract['chain_budget_seconds'], contract['unit_timeout_seconds'])
+        with self.assertRaises(KeyError):
+            chains.certification.claude_recorded_time_budget('vc-chain.codex')
+
     def test_registered_method_counts_and_nested_limits_close(self):
         """独立方法数与登记一致；外部执行器必须在内层收尾之后才到期。"""
         count = sum(len(group) for _, group in chains.RECOVERY_CHAIN_GROUPS)

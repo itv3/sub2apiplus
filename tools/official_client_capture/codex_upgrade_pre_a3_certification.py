@@ -964,6 +964,7 @@ CLAUDE_FAULT_METHOD_COUNTS: Mapping[str, int] = {
     "vc-chain.claude-late-stage-faults": 1,
     "vc-chain.claude-revision-evaluator-recovery": 1,
 }
+CLAUDE_RECORDED_CHAIN_IDS = ("vc-chain.claude-vc1-capture", "vc-chain.claude-full-validation-only")
 
 
 def claude_fault_time_budget(name: str) -> dict[str, Any]:
@@ -979,6 +980,15 @@ def claude_fault_time_budget(name: str) -> dict[str, Any]:
         "chain_budget_seconds": work_seconds + 120,
         "unit_timeout_seconds": work_seconds + 180,
     }
+
+
+def claude_recorded_time_budget(name: str) -> dict[str, Any]:
+    """两条录制链各作为一个完整方法计时，与故障链共用一小时和三层收尾余量。"""
+
+    if name not in CLAUDE_RECORDED_CHAIN_IDS:
+        raise KeyError(name)
+    return {**claude_fault_time_budget("vc-chain.claude-late-stage-faults"),
+            "schema_version": "claude-recorded-chain-time-budget/v2"}
 
 
 def scenario_names(client: str = DEFAULT_CLIENT) -> list[str]:
@@ -1315,6 +1325,8 @@ def plan_scenario_commands(
             "memory_mb": 1024,
             "timeout_seconds": (claude_fault_time_budget(name)["unit_timeout_seconds"]
                                 if client == "claude" and name in CLAUDE_FAULT_METHOD_COUNTS else
+                                claude_recorded_time_budget(name)["unit_timeout_seconds"]
+                                if client == "claude" and name in CLAUDE_RECORDED_CHAIN_IDS else
                                 REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS),
             "weight": SCENARIO_SECONDS.get(name, 30.0),
             "scenario_test_file": scenario_test_module(name, client).replace(".", "/") + ".py",

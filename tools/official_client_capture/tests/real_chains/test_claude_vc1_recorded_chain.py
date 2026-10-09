@@ -19,6 +19,7 @@ import time
 import unittest
 from pathlib import Path
 
+from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
 from tools.official_client_capture.tests import claude_chain_diagnostic_budget as diagnostic_budget
 
@@ -82,6 +83,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
         if probe.returncode:
             self.skipTest("未验证：宿主不允许建立 mount/net namespace")
         from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+        time_budget = certification.claude_recorded_time_budget("vc-chain.claude-vc1-capture")
         started = time.monotonic()
         with staging_directory("claude-vc1-recorded-") as directory:
             data = directory / "staging/data"
@@ -90,7 +92,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                        "--data", str(data), "--recorded", recorded, "--freeze", freeze,
                        "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
             try:
-                completed = subprocess.run(command, cwd=driver.REPOSITORY, capture_output=True, text=True, timeout=960,
+                completed = subprocess.run(command, cwd=driver.REPOSITORY, capture_output=True, text=True, timeout=time_budget["chain_timeout_seconds"],
                                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
             except subprocess.TimeoutExpired as error:
                 for filename, content in (("stdout.log", error.stdout or ""), ("stderr.log", error.stderr or "")):
@@ -117,12 +119,12 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
             self.assertEqual(report["status"], "passed")
             self.assertFalse(report["full_vc0_vc6_certified"])
             self.assertEqual(report["network_requests_this_run"], 0)
-            self.assertLessEqual(seconds, 900, "ARM64 录制链超过 15 分钟")
+            self.assertLessEqual(seconds, time_budget["chain_budget_seconds"], "ARM64 录制链超过当前独立预算")
             self.assertGreater(len(report["copy_projections"]), 0)
             self.assertTrue(all(item["runtime"]["run_nonce"] != item["origin"]["run_nonce"] for item in report["copy_projections"]))
             source.bound(report["continuation"], root=data)
             self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0,
-                                       "seconds": seconds, "report": source.binding(report_path)}
+                                       "seconds": seconds, "time_budget": time_budget, "report": source.binding(report_path)}
             save_record(directory, {**record, "status": "passed", "metrics": self.real_chain_metrics})
 
     def test_real_vc0_through_vc6_recorded_validation(self) -> None:
@@ -151,6 +153,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
             self.skipTest("未验证：宿主不允许建立完整链 mount/net namespace")
         from tools.official_client_capture.tests import claude_recorded_full_validation_driver as driver
 
+        time_budget = certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")
         started = time.monotonic()
         with staging_directory("claude-full-recorded-") as directory:
             data = directory / "staging/data"
@@ -160,7 +163,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                        "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
             try:
                 completed = subprocess.run(command, cwd=driver.vc1.REPOSITORY, capture_output=True, text=True,
-                                           timeout=960, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                                           timeout=time_budget["chain_timeout_seconds"], env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
             except subprocess.TimeoutExpired as error:
                 for filename, content in (("stdout.log", error.stdout or ""), ("stderr.log", error.stderr or "")):
                     value = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
@@ -201,14 +204,14 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                 self.assertFalse(report["formal_version_semantics_certified"])
                 self.assertEqual(report["network_requests_this_run"], 0)
                 self.assertEqual(set(report["checkpoints"]), {f"VC-{index}" for index in range(7)})
-                self.assertLessEqual(seconds, 900, "ARM64 录制完整链超过 15 分钟")
+                self.assertLessEqual(seconds, time_budget["chain_budget_seconds"], "ARM64 录制完整链超过当前独立预算")
                 source.bound(report["source_state"], root=data)
                 source.bound(report["continuation"], root=data)
             except BaseException:
                 save_record(directory, record)
                 raise
             self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0,
-                                       "seconds": seconds, "report": source.binding(report_path)}
+                                       "seconds": seconds, "time_budget": time_budget, "report": source.binding(report_path)}
             save_record(directory, {**record, "status": "passed", "metrics": self.real_chain_metrics})
 
 

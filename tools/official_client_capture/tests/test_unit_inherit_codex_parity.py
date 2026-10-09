@@ -605,7 +605,12 @@ CLAUDE_REVISION_ENTRY_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
 CLAUDE_TIME_BASELINE_COMMIT = '8e4713ad8180c6f82b279bad58a66b60602dceb9'
 CLAUDE_TIME_SOURCE_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '73ddf7c5a2fe1637a2873e922380876159608d4ce79dbc223514ac533ee3cae0'}
 CLAUDE_TIME_SOURCE_REMOVED_LINES = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['            "timeout_seconds": REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS,']}
+# B5b-02：录制链也采用同一方法预算与外层余量，保留 Codex 和四条基础链原上限。
+CLAUDE_RECORDED_TIME_BASELINE = '622b0b5f7f214eaece78c48830b90c0f81cb498d'
+CLAUDE_RECORDED_TIME_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': 'ce9ba9c06ff59a9a1f0c5766bff61dd431b0490821d532ad27934718eec158ce'}
+CLAUDE_RECORDED_TIME_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': []}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("Claude 录制链时间合同 v2", CLAUDE_RECORDED_TIME_BASELINE, CLAUDE_RECORDED_TIME_DIGESTS, CLAUDE_RECORDED_TIME_REMOVED),
     ("Claude 故障链时间合同 v2", CLAUDE_TIME_BASELINE_COMMIT, CLAUDE_TIME_SOURCE_DIGESTS, CLAUDE_TIME_SOURCE_REMOVED_LINES),
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SOURCE_DIGESTS, B5A09_SOURCE_REMOVED_LINES),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SOURCE_DIGESTS, B5A10_SOURCE_REMOVED_LINES),

@@ -51,9 +51,12 @@ B5A11_FIXTURE_ENV_NAME = "FIXTURE_ONLY_ENV"
 B5A11_BIND_FUNCTION = "_bind_rehearsal_receipt"
 STAGING_PARENT = Path("/root/docker/capture-cli/data/staging/pre-a3-scenarios")
 WORKDIR = Path("/root/docker/capture-cli/data")
-# B5b-03 扩时只允许四个新增声明和 planner 中一个 Claude 专属表达式。
+# B5b-03 扩时只允许六个新增声明和 planner 中一个 Claude 专属表达式。
 # 固定 AST 摘要防止借历史对照例外接纳其它修改；行为与方法数由预算合同回归独立核对。
 CLAUDE_TIME_AST = {
+    'CLAUDE_RECORDED_CHAIN_IDS': '2507db6a6af099ccbca7866438729c8be0e76ad29feb8ada6bdd05844f9b57d9',
+    'claude_recorded_time_budget': '4a502d4f9b8561228740eabf21801a7138e2e8b070652b224b302fc5488528b0',
+
     "CLAUDE_FAULT_TIME_SCHEMA": "fb10ba0aff91363c6c6cbaa14a8b7cea48deb2689d7b6853b600b6d224871630",
     "CLAUDE_FAULT_METHOD_SECONDS": "4143cca82261e5ef6187a302787b58d91fce4cc60b63e60600f8ac358cd10d9d",
     "CLAUDE_FAULT_METHOD_COUNTS": "4f1d9f648e8d71ec4450cb49b08f3fba45159f2d4d9937133055e1163c6a9ed7",
@@ -61,6 +64,8 @@ CLAUDE_TIME_AST = {
 }
 CLAUDE_TIME_EXPRESSION = '''claude_fault_time_budget(name)["unit_timeout_seconds"]
     if client == "claude" and name in CLAUDE_FAULT_METHOD_COUNTS else
+    claude_recorded_time_budget(name)["unit_timeout_seconds"]
+    if client == "claude" and name in CLAUDE_RECORDED_CHAIN_IDS else
     REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS'''
 
 
@@ -145,7 +150,7 @@ class PreA3CodexParityTests(unittest.TestCase):
                                     if isinstance(expression, ast.IfExp) and isinstance(expression.test, ast.BoolOp):
                                         self.assertEqual(ast.dump(expression), ast.dump(expected))
                                         closeout["time_overrides"] = closeout.get("time_overrides", 0) + 1
-                                        item.values[index] = expression.orelse
+                                        item.values[index] = expression.orelse.orelse
                 if isinstance(target, ast.Name) and target.id in B5A05_CLAUDE_TABLES:
                     tables[target.id] = ast.dump(node)
                 elif isinstance(target, ast.Name) and target.id == B5A05_SECONDS_TABLE:

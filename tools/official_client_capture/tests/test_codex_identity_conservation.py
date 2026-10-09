@@ -135,7 +135,8 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                              "与输出不变；B5b-03 在 Claude 两张字面量登记表追加故障恢复链 vc-chain.claude-recovery-chain，"
                                              "SCENARIO_SECONDS 追加它的派发秒数（暂按本机实测，ARM64 预跑后替换；只决定派发顺序），"
                                              "Codex 场景表、单元、秒数与收据不变；B5b-03 时间合同 v2 新增 Claude 三条故障链的方法预算表与计算函数，"
-                                             "plan_scenario_commands 仅对这三条 Claude 链覆盖外层时限，其余单元与旧 Codex planner 逐字不变",
+                                             "plan_scenario_commands 仅对这三条 Claude 链覆盖外层时限；B5b-02 两条 Claude 录制链也采用独立一小时与收尾余量，"
+                                             "其余单元与旧 Codex planner 逐字不变",
     "codex_upgrade_policy_certification.py": "B5a-04 策略认证按客户端：Claude 按 v3 引擎算身份、认 Claude 部署收据；编排器引用经适配器（Codex 合同与输出逐字不变）",
     "certify_release.py": "B5a-04 发布认证按客户端：Claude 签 tool-release-certification/v2（加 client）；编排器引用经适配器（Codex v1 逐字不变）；"
                           "B2-11 第二部分 Job 演练按认证的客户端重放（Codex 传 codex：合法收据的结果与报错不变，另一客户端的收据被拒），"
