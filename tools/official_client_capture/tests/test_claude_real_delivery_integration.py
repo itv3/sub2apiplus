@@ -301,6 +301,236 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
                 self.store.write_receipt_outcome("candidate_delivery", value, allow_existing=True)
         self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [reference])
 
+    def test_package_checks_each_execution_graph_once_per_call(self) -> None:
+        self._complete()
+        package = self.store.load_object(self._seal_review())["payload"]
+        original = execution.validate_evidence_graph
+        expected = {canonical_sha256(self.store.load_object(reference)["payload"])
+                    for reference in package["execution_evidence_refs"]}
+        for current in (False, True):
+            calls = []
+
+            def counted(store, payload, **options):
+                if payload.get("evidence_type") == "stage_execution":
+                    calls.append(canonical_sha256(payload))
+                return original(store, payload, **options)
+
+            with self.subTest(current=current), mock.patch.object(execution, "validate_evidence_graph", side_effect=counted):
+                execution.validate_delivery_package(self.store, package, current_execution=current)
+            self.assertEqual(set(calls), expected)
+            self.assertEqual(len(calls), len(expected))
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+
+    def test_public_stage_validation_still_runs_complete_graph(self) -> None:
+        self._complete()
+        package = self.store.load_object(self._seal_review())["payload"]
+        plan = self.store.load_object(package["delivery_plan_ref"])["payload"]
+        stage = self.store.load_fact(package["delivery_fact_refs"][0])["payload"]
+        original = execution.validate_evidence_graph
+        with mock.patch.object(execution, "validate_evidence_graph", wraps=original) as graph:
+            execution.validate_stage_execution(self.store, plan, stage, current_execution=True)
+        self.assertEqual(sum(call.args[1].get("evidence_type") == "stage_execution"
+                             for call in graph.call_args_list), 1)
+
+    def test_same_operation_under_another_execution_object_is_rejected(self) -> None:
+        self._complete()
+        package = deepcopy(self.store.load_object(self._seal_review())["payload"])
+        payload = deepcopy(self.store.load_object(package["execution_evidence_refs"][0])["payload"])
+        payload["manifest_id"] += "-alias"
+        alias = self.store.seal_object("operational_evidence", payload)
+        self.assertNotEqual(alias, package["execution_evidence_refs"][0])
+        package["execution_evidence_refs"].append(alias)
+        with self.assertRaisesRegex(ControlError, "重复操作"):
+            execution.validate_delivery_package(self.store, package, current_execution=True)
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+
+    def test_effective_fact_target_is_checked_against_complete_graph(self) -> None:
+        self._complete()
+        package = self.store.load_object(self._seal_review())["payload"]
+        target = package["delivery_fact_refs"][0]
+        original = self.store.load_fact
+
+        def changed(reference):
+            value = original(reference)
+            if reference == target:
+                value = deepcopy(value)
+                value["payload"]["target_image_digest"] = "sha256:" + "f" * 64
+            return value
+
+        with mock.patch.object(self.store, "load_fact", side_effect=changed):
+            with self.assertRaises(ControlError):
+                execution.validate_delivery_package(self.store, package, current_execution=True)
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+
+    def test_publication_stage_payload_is_checked_against_complete_graph(self) -> None:
+        self._complete()
+        package = self.store.load_object(self._seal_review())["payload"]
+        original = execution.publication_document
+
+        def changed(*arguments, **options):
+            value = deepcopy(original(*arguments, **options))
+            value["payload"]["observed_seconds"] += 1
+            return value
+
+        with mock.patch.object(execution, "publication_document", side_effect=changed):
+            with self.assertRaises(ControlError):
+                execution.validate_delivery_package(self.store, package, current_execution=True)
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+
+
+    def test_package_tail_rechecks_source_current_qualification_and_material_mode(self) -> None:
+        """同一完整现场复用三次负例；装配后失效仍走原 verifier 和私有 reader。"""
+        from tools.official_client_capture import claude_gate_material_worker as material_worker
+
+        self._complete()
+        package_ref = self._seal_review()
+        package = self.store.load_object(package_ref)["payload"]
+        self.assertEqual(self.configuration["source_scope"], "regression_fixture")
+        imported = guard.read_json(self.root / self.configuration["qualification_materials_binding"]["path"])
+        material = self.root / imported["files"][0]["archive_binding"]["path"]
+        self.assertTrue(material.is_relative_to(self.root))
+        original_mode = material.stat().st_mode & 0o7777
+        original_material = material.read_bytes()
+        original_graph = execution.validate_evidence_graph
+        original_publication = execution.publication_document
+        original_identity = receipts.effective_tool_identity
+        scenarios = (
+            ("来源失效", "受管通道验收"),
+            ("当前资格失效", "有效七项工具身份"),
+            ("材料权限漂移", "模式|权限|mode"),
+        )
+        for scenario, pattern in scenarios:
+            with self.subTest(scenario=scenario):
+                entered = False
+                publications_seen = set()
+
+                def publication(*arguments, **options):
+                    value = original_publication(*arguments, **options)
+                    if not entered:
+                        publications_seen.add(value["operation_id"])
+                    return value
+
+                def identity(*arguments, **options):
+                    # 先取得真实 Store 推出的身份；只模拟末尾当前查询失效，
+                    # 不修改 Campaign、冻结原件或来源 verifier 的通过证明。
+                    value = original_identity(*arguments, **options)
+                    if entered and scenario == "当前资格失效":
+                        self.assertIsInstance(value, dict)
+                        value = deepcopy(value)
+                        value["tool_files_sha256"] = "0" * 64
+                    return value
+
+                def graph(store, payload, **options):
+                    nonlocal entered
+                    if payload.get("evidence_type") == "stage_execution" and not entered:
+                        self.assertEqual(len(publications_seen), len(package["execution_evidence_refs"]))
+                        self.assertTrue(options.get("current_execution"))
+                        entered = True
+                        if scenario == "来源失效":
+                            execution.SOURCE_VERIFIERS.clear()
+                        elif scenario == "材料权限漂移":
+                            # 只改本测试新建的导入副本；完整私有 reader
+                            # 必须再次读取实际权限，不能承接之前的结果。
+                            material.chmod(0o644 if original_mode != 0o644 else 0o600)
+                    return original_graph(store, payload, **options)
+
+                try:
+                    with mock.patch.dict(execution.SOURCE_VERIFIERS, {}, clear=False), \
+                            mock.patch.object(receipts, "effective_tool_identity", side_effect=identity), \
+                            mock.patch.object(execution, "publication_document", side_effect=publication), \
+                            mock.patch.object(execution, "validate_evidence_graph", side_effect=graph):
+                        with self.assertRaisesRegex((ControlError, guard.GuardError, material_worker.ReaderError), pattern):
+                            receipts.finalize_candidate_delivery(self.store, self.fixture.campaign_id, package_ref)
+                finally:
+                    if material.stat().st_mode & 0o7777 != original_mode:
+                        material.chmod(original_mode)
+                self.assertTrue(entered, "必须已装配全部发布意图，才触发末尾失效")
+                self.assertEqual(material.read_bytes(), original_material)
+                self.assertEqual(material.stat().st_mode & 0o7777, original_mode)
+                self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+        # 撤掉局部故障后，同一现场可继续验证，不重复执行物理交付。
+        execution.validate_delivery_package(self.store, package, current_execution=True)
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+
+    def test_package_tail_rejects_payload_fact_and_publication_drift_after_assembly(self) -> None:
+        """三个子场景只改消费者的复读副本；真实 Store、guard 原件和 verifier 保持。"""
+        self._complete()
+        package = self.store.load_object(self._seal_review())["payload"]
+        self.assertEqual(self.configuration["source_scope"], "regression_fixture")
+        target_execution = package["execution_evidence_refs"][0]
+        original_object = self.store.load_object
+        original_fact = self.store.load_fact
+        original_publication = execution.publication_document
+        original_graph = execution.validate_evidence_graph
+        target_core = original_object(target_execution)["payload"]["entries"][0]["facts"]
+        target_operation = target_core["operation_id"]
+        target_fact = next(reference for reference in package["delivery_fact_refs"]
+                           if original_fact(reference)["payload"]["execution_evidence_ref"] == target_execution)
+        scenarios = (
+            ("完整 payload", "完整交付执行对象.*装配"),
+            ("有效 fact", "有效交付阶段事实.*漂移"),
+            ("publication", "交付发布意图.*漂移"),
+        )
+        for scenario, pattern in scenarios:
+            with self.subTest(scenario=scenario):
+                publications_seen = set()
+                graph_completed = False
+                late_payload_changed = False
+
+                def publication(*arguments, **options):
+                    value = original_publication(*arguments, **options)
+                    if not graph_completed:
+                        publications_seen.add(value["operation_id"])
+                    elif scenario == "publication" and value["operation_id"] == target_operation:
+                        value = deepcopy(value)
+                        value["payload"]["observed_seconds"] += 1
+                    return value
+
+                def object_document(reference):
+                    nonlocal late_payload_changed
+                    value = original_object(reference)
+                    # 装配读原件；全部 publication 首读后才扰动末尾
+                    # 对象复读，且只动 manifest_id，完整 core 保持。
+                    if (scenario == "完整 payload" and reference == target_execution
+                            and len(publications_seen) == len(package["execution_evidence_refs"])
+                            and not graph_completed):
+                        value = deepcopy(value)
+                        value["payload"]["manifest_id"] += "-after-assembly"
+                        self.assertEqual(value["payload"]["entries"][0]["facts"], target_core)
+                        late_payload_changed = True
+                    return value
+
+                def fact_document(reference):
+                    value = original_fact(reference)
+                    if scenario == "有效 fact" and graph_completed and reference == target_fact:
+                        value = deepcopy(value)
+                        value["payload"]["target_image_digest"] = "sha256:" + "f" * 64
+                    return value
+
+                def graph(store, payload, **options):
+                    nonlocal graph_completed
+                    result = original_graph(store, payload, **options)
+                    if (payload.get("evidence_type") == "stage_execution"
+                            and payload["entries"][0]["facts"]["operation_id"] == target_operation):
+                        self.assertEqual(len(publications_seen), len(package["execution_evidence_refs"]))
+                        self.assertTrue(options.get("current_execution"))
+                        graph_completed = True
+                    return result
+
+                with mock.patch.object(self.store, "load_object", side_effect=object_document), \
+                        mock.patch.object(self.store, "load_fact", side_effect=fact_document), \
+                        mock.patch.object(execution, "publication_document", side_effect=publication), \
+                        mock.patch.object(execution, "validate_evidence_graph", side_effect=graph):
+                    with self.assertRaisesRegex(ControlError, pattern):
+                        execution.validate_delivery_package(self.store, package, current_execution=True)
+                if scenario == "完整 payload":
+                    self.assertTrue(late_payload_changed)
+                else:
+                    self.assertTrue(graph_completed, "fact 与 publication 只能在完整验图返回后变化")
+                self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+        execution.validate_delivery_package(self.store, package, current_execution=True)
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
+
     def test_store_failure_after_physical_commit_only_publishes_original_coordinates(self) -> None:
         with mock.patch.object(delivery, "_record_stage", side_effect=OSError("模拟 Store 写入中断")):
             with self.assertRaises(OSError):

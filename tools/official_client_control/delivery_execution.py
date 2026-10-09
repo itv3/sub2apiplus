@@ -939,6 +939,14 @@ def validate_stage_execution(store: Any, plan: Mapping[str, Any], stage_payload:
         raise ControlError("当前交付阶段必须使用 Plan v2 与 StageFact v3")
     facts = evidence_facts(store, stage_payload["execution_evidence_ref"], "stage_execution")
     source = validate_evidence_graph(store, store.load_object(stage_payload["execution_evidence_ref"])["payload"], current_execution=current_execution)
+    return _validate_stage_execution_semantics(store, plan, stage_payload, facts, source)
+
+
+def _validate_stage_execution_semantics(store: Any, plan: Mapping[str, Any], stage_payload: Mapping[str, Any],
+                                       facts: Mapping[str, Any], source: VerifiedSource) -> dict[str, Any]:
+    """仅在同次完整验图后消费阶段语义；不缓存来源或接受外部证明的公共绕行入口。"""
+    if plan["schema_version"] != PLAN_V2 or stage_payload.get("schema_version") != FACT_V3:
+        raise ControlError("当前交付阶段必须使用 Plan v2 与 StageFact v3")
     stage = stage_payload["stage"]
     for key, expected in (("campaign_id", plan["campaign_id"]), ("delivery_id", plan["delivery_id"]), ("candidate_id", plan["candidate_id"]), ("stage", stage), ("plan_ref", stage_payload["delivery_plan_ref"]), ("configuration_ref", plan["executor_configuration_ref"]), ("stable_projection_ref", plan["stable_environment_projection_ref"]), ("probe_recipe_ref", plan["probe_recipe_ref"]), ("result", stage_payload["result"])):
         if facts[key] != expected:
@@ -997,11 +1005,15 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
     plan = store.load_object(package["delivery_plan_ref"])["payload"]
     validate_plan(store, plan, current_execution=current_execution)
     execution_refs = package["execution_evidence_refs"]
-    facts = [store.load_fact(ref) for ref in package["delivery_fact_refs"]]
-    for fact in facts:
-        validate_stage_execution(store, plan, fact["payload"], current_execution=current_execution)
-        if fact["payload"]["execution_evidence_ref"] not in execution_refs:
+    stages_by_reference: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for reference in package["delivery_fact_refs"]:
+        fact = store.load_fact(reference)
+        if fact["payload"].get("schema_version") != FACT_V3:
+            raise ControlError("当前交付阶段必须使用 Plan v2 与 StageFact v3")
+        execution_reference = fact["payload"]["execution_evidence_ref"]
+        if execution_reference not in execution_refs:
             raise ControlError("交付包未归档有效阶段的执行证明")
+        stages_by_reference.setdefault(canonical_sha256(execution_reference), []).append((reference, fact))
     index_content = {"campaign_id": package["campaign_id"], "delivery_id": package["delivery_id"], "operation_index_binding": package["operation_index_binding"]}
     source = _verified_source(store, index_content, package["operation_index_origin"])
     if package["operation_index_origin"]["operations_index_binding"] != package["operation_index_binding"]:
@@ -1017,10 +1029,9 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
     for reference in execution_refs:
         payload = store.load_object(reference)["payload"]
         core = evidence_facts(store, reference, "stage_execution")
-        validate_evidence_graph(store, payload, current_execution=current_execution)
         if core["operation_id"] in by_operation or core["campaign_id"] != package["campaign_id"] or core["delivery_id"] != package["delivery_id"]:
             raise ControlError("完整交付执行集合有重复操作或跨运行材料")
-        by_operation[core["operation_id"]] = (reference, core)
+        by_operation[core["operation_id"]] = (reference, core, payload)
     restoration_cores = []
     for reference in package["restoration_evidence_refs"]:
         payload = store.load_object(reference)["payload"]
@@ -1034,6 +1045,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
     if len(publication_bindings) != len(by_operation):
         raise ControlError("完整交付包遗漏或重复不可变发布意图")
     operation_ids = set()
+    publications_by_reference: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
     for operation in operations:
         _exact(operation, {"operation_id", "status", "prepared_binding", "terminal_binding", "bindings"}, "delivery.operation")
         if operation["operation_id"] in operation_ids or operation["status"] not in {"execution_committed", "restored"}:
@@ -1042,7 +1054,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
         pair = by_operation.get(operation["operation_id"])
         if pair is None:
             raise ControlError("交付包遗漏未发布或失败的物理操作")
-        reference, core = pair
+        reference, core, _formed_payload = pair
         prepared = _source_json(source, operation["prepared_binding"])
         if prepared.get("context", {}).get("campaign_id") != package["campaign_id"] or prepared.get("context", {}).get("delivery_id") != package["delivery_id"] or prepared.get("operation_id") != operation["operation_id"] or core["prepared_binding"] != operation["prepared_binding"]:
             raise ControlError("完整操作索引与冻结交付或原执行不一致")
@@ -1060,7 +1072,7 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
         _exact(publication, {"schema_version", "campaign_id", "delivery_id", "operation_id", "seed_binding", "execution_evidence_ref", "payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key", "ledger_action"}, "delivery.publication_intent")
         if publication["schema_version"] != "claude-upgrade-delivery-publication-intent/v1" or publication["campaign_id"] != package["campaign_id"] or publication["delivery_id"] != package["delivery_id"] or publication["operation_id"] != operation["operation_id"] or publication["execution_evidence_ref"] != reference or publication["payload"].get("execution_evidence_ref") != reference or publication["ledger_action"] != "catch_up_delivery_events":
             raise ControlError("交付发布意图与真实物理操作不一致")
-        validate_stage_execution(store, plan, publication["payload"], current_execution=current_execution)
+        publications_by_reference[canonical_sha256(reference)] = (matches[0], publication)
         published = store.find_fact_by_idempotency_key(package["campaign_id"], publication["idempotency_key"])
         if published is None or published["fact_kind"] != "candidate_delivery_recorded" or any(published[key] != publication[key] for key in ("payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key")):
             raise ControlError("完整交付包存在未发布或错误 producer 的 Store 后处理意图")
@@ -1070,7 +1082,30 @@ def validate_delivery_package(store: Any, package: Mapping[str, Any], *, current
         required_material.extend([operation, core, matches[0], publication])
     if operation_ids != set(by_operation):
         raise ControlError("交付包与 guard 全部操作索引不闭合，不能删除失败或未发布操作")
-    for reference in execution_refs + package["restoration_evidence_refs"]:
+    # 保留原末尾完整验图位置。一个执行对象的有效事实和发布意图在这次
+    # 完整验图后立即消费；不同对象、恢复图以及独立调用均重新完整验证。
+    for reference in execution_refs:
+        payload = store.load_object(reference)["payload"]
+        graph_source = validate_evidence_graph(store, payload, current_execution=current_execution)
+        core = evidence_facts(store, reference, "stage_execution")
+        if by_operation.get(core["operation_id"]) != (reference, core, payload):
+            raise ControlError("完整交付执行对象与装配时原件不一致")
+        key = canonical_sha256(reference)
+        for fact_reference, formed_fact in stages_by_reference.get(key, []):
+            current_fact = store.load_fact(fact_reference)
+            if current_fact != formed_fact:
+                raise ControlError("有效交付阶段事实在完整验图前后漂移")
+            _validate_stage_execution_semantics(store, plan, current_fact["payload"], core, graph_source)
+        publication_binding, formed_publication = publications_by_reference[key]
+        publication = publication_document(source, publication_binding, package["campaign_id"], package["delivery_id"], core["operation_id"])
+        if publication != formed_publication:
+            raise ControlError("交付发布意图在完整验图前后漂移")
+        _validate_stage_execution_semantics(store, plan, publication["payload"], core, graph_source)
+        published = store.find_fact_by_idempotency_key(package["campaign_id"], publication["idempotency_key"])
+        if published is None or published["fact_kind"] != "candidate_delivery_recorded" or any(published[name] != publication[name] for name in ("payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key")):
+            raise ControlError("完整交付包存在未发布或错误 producer 的 Store 后处理意图")
+        required_material.append(payload)
+    for reference in package["restoration_evidence_refs"]:
         payload = store.load_object(reference)["payload"]
         validate_evidence_graph(store, payload, current_execution=current_execution)
         required_material.append(payload)
