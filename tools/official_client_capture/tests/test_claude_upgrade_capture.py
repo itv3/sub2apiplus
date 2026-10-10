@@ -1259,6 +1259,9 @@ class AttemptFactsTests(unittest.TestCase):
             self.assertEqual(stops.active_seconds('method', 1.5), 1.5)
             self.assertEqual(stops.active_seconds('method', 2.0), 3.5)
             self.assertEqual(stops.active_seconds('method'), 3.5)
+            stops.checkpoint(first, 'audit-short', phase='audit', audit_snapshots={'原短验审计': 'recorded'})
+            stops.checkpoint(first, 'audit-short', phase='after', audit_snapshots={'原短验审计': 'uninitialized'})
+            self.assertEqual(stops.load_state('cursor:audit-short')['audit_snapshots'], {'原短验审计': 'recorded'})
             # 后续阶段尚未首次建场必须由原阶段游标精确允许；曾开始却丢停点仍拒绝。
             stops.save_state('cursor:future-stage', {'phase': 'before-fixture',
                 'initializations': {'fixture:future': 'uninitialized'}})

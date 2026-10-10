@@ -408,7 +408,12 @@ def checkpoint(case: Any, name: str, **values: Any) -> None:
     case._fault_cursor_name = name
     previous = load_state('cursor:' + name) or {}
     if previous.get('audit_snapshots'):
-        values['audit_snapshots'] = {**previous['audit_snapshots'], **values.get('audit_snapshots', {})}
+        snapshots = {**previous['audit_snapshots'], **values.get('audit_snapshots', {})}
+        # 已签出的原 before 不能被调用方携带的旧局部值倒退为首次许可。
+        for scenario, status in previous['audit_snapshots'].items():
+            if status == 'recorded':
+                snapshots[scenario] = status
+        values['audit_snapshots'] = snapshots
     values['command_prefix'] = (load_state('command-observations') or {}).get('commands', [])
     save_case(case)
     if hasattr(case, 'runtime'):
@@ -600,10 +605,56 @@ def strict_accept(case: Any, world: dict[str, Any]) -> dict[str, Any]:
 
     refresh_world(case, world)
     campaign = world['campaign']
-    receipt = case.gate_receipt(world, f"continuous-r{world['revision']}-b{world['evaluation_baseline']}.json")
-    sequence = take_sequence(world)
+    name = f"continuous-r{world['revision']}-b{world['evaluation_baseline']}.json"
+    if record_root() is None:
+        receipt = case.gate_receipt(world, name)
+        sequence = take_sequence(world)
+    else:
+        from tools.official_client_capture import codex_upgrade_gate_receipt as gate
+
+        cursor = getattr(case, '_fault_cursor_name', None)
+        if cursor is None:
+            raise ValueError('strict_accept 缺原方法游标，不能登记孤立停点')
+        key = f"strict-accept:{cursor}:{world['candidate_id']}:{world['revision']}:{world['evaluation_baseline']}"
+        with sources.seams(world['config_path']):
+            identity = compare.candidate_gate_identity(campaign, world['manifest'], world['candidate_id'], world['build'])
+            subject = sources.expected_subject(world['manifest'], world['candidate_payload'], identity)
+        expected = {'campaign': campaign, 'candidate_id': world['candidate_id'], 'revision': world['revision'],
+                    'evaluation_baseline': world['evaluation_baseline'], 'gate_root': world['gate_root'],
+                    'receipt': name, 'subject': subject}
+        saved = load_state(key)
+        if saved is None:
+            sequence = take_sequence(world)
+            saved = {**expected, 'sequence': sequence, 'next_sequence': world['next_sequence'], 'status': 'gate-pending'}
+            # 收据生成前冻结原候选、门禁坐标和序号；同方法恢复不再次取序号。
+            save_state(key, saved)
+            save_world(key, world)
+            receipt = case.gate_receipt(world, name)
+            if receipt != name:
+                raise ValueError('strict_accept 原门禁收据坐标改变')
+        else:
+            if not os.environ.get(METHOD_RESUME_ENV) or any(saved[field] != value for field, value in expected.items()):
+                raise ValueError('strict_accept 原候选、门禁或评估基线已改变')
+            sequence, receipt = saved['sequence'], saved['receipt']
+            world['next_sequence'] = saved['next_sequence']
+            verify_case(case, campaign)
+            if saved['status'] == 'gate-pending' and not (world['gate_root'] / receipt).is_file():
+                raise ValueError('strict_accept 原门禁生成未闭合；保留原现场，禁止覆盖或重建门禁原件')
+        original_gate = gate.replay(world['gate_root'], receipt)
+        case.assertEqual({field: original_gate['subject'][field] for field in subject}, subject,
+                         '原门禁收据不属于冻结的候选与评估基线')
+        if saved['status'] == 'gate-pending':
+            # 只承接原 finalizer 已完整签出且原 reader 可重放的窄窗口。
+            saved = {**saved, 'status': 'gate-ready', 'receipt_binding': file_cut(world['gate_root'] / receipt)}
+            save_state(key, saved)
+        read_cut(saved['receipt_binding'])
     action = case.accept_action(campaign, receipt, world['gate_root'], candidate_id=world['candidate_id'])
-    result = case.assert_batch_passed(case.dispatch_vc5(world, sequence, action), sequence, 'VC-5')
+    argv = ['compile-and-run-vc-batch', '--campaign-dir', campaign, '--phase', 'VC-5', '--sequence', sequence,
+            '--predecessor-checkpoint', vc.vc_checkpoint_path(campaign, 'VC-4', revision=world['revision']),
+            '--action-plan', case.root / 'action-plans' / f'vc-5-{sequence:04d}.json', '--state-dir', case.state_dir]
+    outcome = (case.dispatch_vc5(world, sequence, action) if record_root() is None else
+               command_step(case, key, 'accept', argv, lambda: case.dispatch_vc5(world, sequence, action), campaign=campaign))
+    result = case.assert_batch_passed(outcome, sequence, 'VC-5')
     case.assertTrue(vc.vc_checkpoint_path(campaign, 'VC-5', revision=world['revision']).is_file())
     with sources.seams(world['config_path']):
         accepted = upgrade._load_stage_result(campaign, 'accept', world['candidate_id'])
@@ -612,4 +663,7 @@ def strict_accept(case: Any, world: dict[str, Any]) -> dict[str, Any]:
     case.assertEqual((comparison['candidate_revision'], comparison['evaluation_baseline']), (world['revision'], world['evaluation_baseline']))
     world['acceptance'] = accepted
     world['accepted_batch'] = result
+    if record_root() is not None:
+        save_state(key, {**saved, 'status': 'complete'})
+        save_world(key, world)
     return accepted

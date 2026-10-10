@@ -611,6 +611,27 @@ def _prepare_fixture_qualification_materials(store: Any, configuration: dict, da
         return importer.prepare_qualification_material_import(qualification_store, sources, managed_data_root=data_root)
 
 
+def close_recorded_guards() -> None:
+    """原 runner 全链最终消费成功后调用；单方法完成或失败不得调用此出口。
+
+    只沿本方法登记的准确坐标重验原配置、Store 四根及完整活身份，再有界终止。
+    不扫描宿主进程、不创建守卫、不改交付原件或源身份；冷原守卫只作已退出处理。
+    """
+
+    index = stops.load_state('typed-live-guards') or {'records': []}
+    if stops.record_root() is None:
+        raise guard.GuardError('清理原记录守卫缺少本方法记录坐标')
+    with mock.patch.dict(os.environ, {stops.METHOD_RESUME_ENV: '1'}):
+        for name in index['records']:
+            saved = stops.load_state(name)
+            if saved is None or not saved.get('guard_identity'):
+                raise guard.GuardError('原守卫清理索引缺配置或完整身份，保留现场')
+            if name != 'typed-vc6:' + str(saved['campaign']):
+                raise guard.GuardError('原守卫清理索引不属于准确 Campaign')
+            instance = TypedDeliveryFixture(saved['campaign'], saved['candidate_id'], control_path=saved['control_path'])
+            instance.close(force=True)
+
+
 class TypedDeliveryFixture:
     """已完成 VC-5 的原世界接入 typed 文件现场；持有守卫直到最后一次重放。"""
 
@@ -719,6 +740,10 @@ class TypedDeliveryFixture:
             'data': self.data, 'configuration_binding': self.configuration_binding,
             'control_path': self.control_path, 'context': self.context,
             'guard_identity': self.saved_guard_identity})
+        if self.saved_guard_identity is not None and stops.record_root() is not None:
+            index = stops.load_state('typed-live-guards') or {'records': []}
+            if self.record_name not in index['records']:
+                stops.save_state('typed-live-guards', {'records': [*index['records'], self.record_name]})
 
     def _restore(self, saved: dict[str, Any], *, control_path: Path | None) -> None:
         """只读原 control/config/VC-5 四根；不调用首次建场、回滚资格或 import。"""
