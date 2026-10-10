@@ -1,0 +1,67 @@
+{
+  "base_commit": "3978c00a8bfc08f753b18aa56ce607211f682258",
+  "changed_path_count": 7,
+  "current_commit": "d1df07e4896d0e4a7dc021796a1f6b32b3b7c8a5",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5899,
+  "frozen_path_count": 2015,
+  "identity_sha256": "c3798d98eb5e4fdd797d22ba90eb56cc738b2928c3f2c79816fb2aa6455d65fd",
+  "issued_at_utc": "2026-10-10T22:06:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-strict-stat-20261011-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "fedb13ac88df307473a62a6752cfccc5a8236b11c581076dc8f314ab41298189"
+      ],
+      "reason": "严格审计只接受完整返回的普通文件或目录NOFOLLOW统计结果，并同步一个验证器消费钉住值；历史形成期原件和旧认证状态保留，不追加未部署生成器身份。 path=tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-test-read-transport-20261011-freeze-successor.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-b10-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-b10-history-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-b10-replay-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c06-verifier-binding-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-merge-verifier-permissions-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-midpoint-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4545caf5da2d4ca6e090239c08bfde463a56dfc36e324f0afa802a81fd954bf0"
+    }
+  ],
+  "unregistered_path_count": 6,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/driver/read_audit.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/ci/read_audit.py",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_reader_transition_20261011.json",
+    "tools/official_client_capture/tests/test_ci_read_audit.py",
+    "tools/official_client_capture/tests/test_codex_identity_conservation.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
