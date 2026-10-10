@@ -301,9 +301,91 @@ def record_json_read(path: Path) -> None:
     save_state('command-observations', rows)
 
 
+def _original_command(row: dict[str, Any], argv: list[str]) -> tuple[int, Any, str]:
+    """实读原调用、完整输出与退出码；摘要值和后续新输出都不能替代原件。"""
+
+    if row.get('command_binding') is None or row.get('invocation_binding') is None:
+        raise ValueError('原逻辑命令缺副作用前调用或完整输出原件')
+    invocation = json.loads(read_cut(row['invocation_binding']))
+    descriptor = _decoded(json.loads(read_cut(row['command_binding'])))
+    expected = {key: value for key, value in row.items() if key != 'command_binding'}
+    if invocation != {'argv': argv} or descriptor != expected or row['argv'] != argv:
+        raise ValueError('原逻辑命令的 argv、退出码或输出绑定不一致')
+    if type(row['returncode']) is not int:
+        raise ValueError('原逻辑命令尚未得到真实退出码，不能承接未决动作')
+    stdout = read_cut(row['stdout']).decode('utf-8')
+    stderr = read_cut(row['stderr']).decode('utf-8')
+    return row['returncode'], json.loads(stdout) if stdout.strip() else None, stderr
+
+
+def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke: Any,
+                 *, campaign: Path | None = None) -> tuple[int, Any, str]:
+    """原逻辑命令唯一承接接缝；不调度阶段、不替调用方裁定未决副作用。"""
+
+    if record_root() is None:
+        return invoke()
+    arguments = [str(item) for item in argv]
+    name = 'command-step:' + cursor_name + ':' + key
+    saved = load_state(name)
+    if saved is not None:
+        if saved['argv'] != arguments or saved['campaign'] != campaign:
+            raise ValueError(f'原命令 {key} 的 argv／Campaign 已改变')
+        if not os.environ.get(METHOD_RESUME_ENV):
+            raise ValueError(f'原命令 {key} 只能经原方法恢复入口消费；有意重复动作须用不同 key')
+        observations = (load_state('command-observations') or {}).get('commands', [])
+        prefix = saved.get('observation_prefix')
+        begin = saved['observation_begin']
+        if prefix is None or begin != len(prefix) or observations[:begin] != prefix:
+            raise ValueError(f'原命令 {key} 的副作用前观测列表前缀已改变或缺失')
+        for previous in prefix:
+            for field in ('stdout', 'stderr', 'command_binding', 'invocation_binding'):
+                if previous.get(field) is not None:
+                    read_cut(previous[field])
+        if saved['status'] != 'complete':
+            rows = observations[begin:]
+            if len(rows) != 1 or rows[0]['argv'] != arguments:
+                raise ValueError(f'原命令 {key} 已进入 pending（原观测切点 {begin}）；'
+                    '须按原 COMMIT／Store／收据对账裁定，禁止盲重派或重新注入故障')
+            # 只补完整日志已形成、旧前缀未改且真实世界读侧已闭合的那次命令。
+            # 缺日志、额外观测或读侧未闭合都拒绝，不能从多个同argv里挑一个。
+            result = _original_command(rows[0], arguments)
+            if campaign is not None:
+                verify_case(case, campaign)
+            saved = {**saved, 'status': 'complete', 'command': rows[0]}
+            save_state(name, saved)
+        result = _original_command(saved['command'], arguments)
+        if campaign is not None:
+            verify_case(case, campaign)
+        return result
+    prefix = (load_state('command-observations') or {}).get('commands', [])
+    begin = len(prefix)
+    pending = {'status': 'pending', 'argv': arguments, 'campaign': campaign, 'observation_begin': begin,
+        'observation_prefix': prefix}
+    save_case(case)
+    if hasattr(case, 'runtime'):
+        save_case(case.runtime, 'candidate-case')
+    save_state(name, pending)
+    result = invoke()
+    rows = (load_state('command-observations') or {}).get('commands', [])[begin:]
+    if len(rows) != 1 or rows[0]['argv'] != arguments:
+        raise ValueError(f'原命令 {key} 未形成唯一真实 argv 的完整输出；保留 pending，禁止拼接摘要')
+    original = _original_command(rows[0], arguments)
+    if original != result:
+        raise ValueError(f'原命令 {key} 的返回值与完整原 stdout／stderr 不一致')
+    save_case(case)
+    if hasattr(case, 'runtime'):
+        save_case(case.runtime, 'candidate-case')
+    save_state(name, {**pending, 'status': 'complete', 'command': rows[0]})
+    return original
+
+
 def checkpoint(case: Any, name: str, **values: Any) -> None:
     """原方法在明确动作边界保存局部值，动态宿主字段也在这个边界保存。"""
 
+    case._fault_cursor_name = name
+    previous = load_state('cursor:' + name) or {}
+    if previous.get('audit_snapshots'):
+        values['audit_snapshots'] = {**previous['audit_snapshots'], **values.get('audit_snapshots', {})}
     save_case(case)
     if hasattr(case, 'runtime'):
         save_case(case.runtime, 'candidate-case')
@@ -335,6 +417,7 @@ def verify_case(case: Any, campaign: Path) -> None:
 def resume_checkpoint(case: Any, name: str) -> dict[str, Any] | None:
     """只恢复确有原游标的本方法；不从最后一个结果猜停点，不自动重建。"""
 
+    case._fault_cursor_name = name
     saved = load_state('cursor:' + name)
     if saved is None:
         return None
@@ -351,7 +434,9 @@ WORLD_FIELDS = ('campaign', 'candidate_id', 'revision', 'evaluation', 'config_pa
     'expected_client_requests', 'real_candidate', 'next_sequence', 'records', 'ledger_dir',
     'project_root', 'state_dir', 'profile_path', 'profile_sha256', 'rules_path', 'trusted_roots',
     'last_builder_sequence', 'acceptance', 'accepted_batch', 'original_attempt_root',
-    'original_attempt', 'attempt_id', 'r1_invalidation', 'evaluation_recovery')
+    'original_attempt', 'attempt_id', 'r1_invalidation', 'evaluation_recovery', 'recovery_revision',
+    'recovery_root', 'recovery_summary', 'baseline_recovery', 'old_boundary', 'relay_control',
+    'wrong_deployment_refusals', 'evaluation_index', 'capture_calls', 'precise_total')
 WORLD_REBUILT_FIELDS = ('manifest', 'store', 'store_campaign', 'build', 'candidate_payload',
     'architecture', 'stage', 'attempt_root', 'attempt', 'candidate_revision', 'evaluation_baseline',
     'official', 'typed_delivery', 'comparison')

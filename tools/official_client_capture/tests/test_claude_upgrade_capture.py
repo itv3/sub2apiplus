@@ -1273,6 +1273,41 @@ class AttemptFactsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '首次初始化许可'):
                     with stops.initialization_scope('fixture:future', cursor='future-stage', phase='before-fixture'):
                         self.fail('完成的初始化不能再建场')
+            # 命令接缝消费的是原完整输出；相同argv的有意重复必须分开逻辑key。
+            command = ['既有短验原输出', '--sequence', '2']
+            calls = []
+            def original_call():
+                calls.append(command)
+                pending = stops.begin_command(command)
+                stops.record_command(command, 0, '{"original":true}\n', '原 stderr\n', pending=pending)
+                return 0, {'original': True}, '原 stderr\n'
+            expected = stops.command_step(first, 'command-short', 'first', command, original_call)
+            stops.command_step(first, 'command-short', 'intentional-repeat', command, original_call)
+            self.assertEqual(len(calls), 2)
+            stops.command_step(first, 'command-short', 'cursor-gap', command, original_call)
+            gap = stops.load_state('command-step:command-short:cursor-gap')
+            gap.pop('command')
+            gap['status'] = 'pending'
+            stops.save_state('command-step:command-short:cursor-gap', gap)
+            with mock.patch.dict(os.environ, {stops.METHOD_RESUME_ENV: '1'}):
+                self.assertEqual(stops.command_step(first, 'command-short', 'first', command,
+                    lambda: self.fail('完整原命令不得重发')), expected)
+                self.assertEqual(stops.command_step(first, 'command-short', 'cursor-gap', command,
+                    lambda: self.fail('有完整原输出的cursor窄窗口不得重发')), expected)
+                self.assertEqual(len(calls), 3)
+                row = stops.load_state('command-step:command-short:first')['command']
+                output = row['stdout']['path']
+                raw = output.read_bytes()
+                output.write_bytes(b'X' + raw[1:])
+                with self.assertRaisesRegex(ValueError, '原件切点'):
+                    stops.command_step(first, 'command-short', 'first', command, lambda: None)
+                output.write_bytes(raw)
+                stops.save_state('command-step:command-short:pending', {'status': 'pending',
+                    'argv': command, 'campaign': None, 'observation_begin': 3,
+                    'observation_prefix': stops.load_state('command-observations')['commands']})
+                with self.assertRaisesRegex(ValueError, 'COMMIT／Store／收据'):
+                    stops.command_step(first, 'command-short', 'pending', command,
+                        lambda: self.fail('未决动作不得重发'))
 
 
 if __name__ == "__main__":
