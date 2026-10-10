@@ -117,6 +117,53 @@ class RunManifestClientTests(unittest.TestCase):
                 with self.subTest(schema=manifest["schema_version"]), self.assertRaises(supervisor.SupervisorError):
                     supervisor._run_manifest_adapter(manifest, campaign)
 
+    def test_claude_vc5_seal_approval_does_not_require_codex_rehearsal(self) -> None:
+        # 复现真实 VC-5 批准编译入口；客户端归属仍由原合同校验，批准内容由 Claude seal 校验。
+        from tools.official_client_capture import codex_upgrade_seal_rehearsal as rehearsal
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory).resolve() / "campaign"
+            _write(campaign / "campaign.json", {
+                "schema_version": "official-client-upgrade-campaign/v1", "client": "claude",
+                "campaign_id": "fixture-campaign",
+            })
+            action = {
+                "action_id": "candidate-seal", "operation": "VC-5:candidate-seal", "timeout_seconds": 60,
+                "command": ["python3", "claude_upgrade.py", "capture-candidate", "seal",
+                            "--campaign-dir", str(campaign), "--candidate-id", "cand-1",
+                            "--attempt-id", "attempt-001", "--approve-seal-sha256", "f" * 64],
+                "item_ids": ["candidate-seal"],
+            }
+            with mock.patch.object(rehearsal, "verify_rehearsal_for_batch",
+                                   side_effect=AssertionError("Claude 不能消费 Codex 专属预演合同")):
+                manifest = _build(client="claude", phase="VC-5", actions=[action], execute_items=["candidate-seal"],
+                                  predecessor_checkpoint={**CHECKPOINT, "phase": "VC-4"})
+                self.assertEqual(supervisor._run_manifest_adapter(manifest, campaign).client, "claude")
+            self.assertEqual(manifest["actions"][0]["command"], action["command"])
+            wrong = {**manifest, "client": "codex"}
+            with self.assertRaises(supervisor.SupervisorError):
+                supervisor._campaign_run_manifest(_write(campaign / "wrong-client.json", wrong))
+
+    def test_codex_vc5_seal_approval_keeps_required_rehearsal(self) -> None:
+        from tools.official_client_capture import codex_upgrade_seal_rehearsal as rehearsal
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory).resolve() / "campaign"
+            _write(campaign / "campaign.json", {"campaign_id": "fixture-campaign"})
+            action = {
+                "action_id": "candidate-seal", "operation": "VC-5:candidate-seal", "timeout_seconds": 60,
+                "command": ["python3", "codex_upgrade.py", "capture-candidate", "seal",
+                            "--campaign-dir", str(campaign), "--candidate-id", "cand-1",
+                            "--attempt-id", "attempt-001", "--approve-seal-sha256", "f" * 64],
+                "item_ids": ["candidate-seal"],
+            }
+            with mock.patch.object(rehearsal, "verify_rehearsal_for_batch",
+                                   side_effect=rehearsal.SealRehearsalError("缺少 Codex 预演收据")) as verify:
+                with self.assertRaisesRegex(supervisor.SupervisorError, "缺少 Codex 预演收据"):
+                    _build(phase="VC-5", actions=[action], execute_items=["candidate-seal"],
+                           predecessor_checkpoint={**CHECKPOINT, "phase": "VC-4"})
+                verify.assert_called_once()
+
     def test_supervisor_no_longer_imports_orchestrator(self) -> None:
         tree = ast.parse((TOOL_ROOT / "codex_upgrade_supervisor.py").read_text(encoding="utf-8"))
         offenders = []

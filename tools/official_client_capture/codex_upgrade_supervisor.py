@@ -7157,15 +7157,17 @@ def _validate_vc5_seal_rehearsal_gate(
     actions: Sequence[Mapping[str, Any]],
     require_bound_files: bool,
 ) -> None:
-    """VC-5 候选 seal 零请求链派发前必须持有匹配的隔离预演收据。
+    """Codex VC-5 候选 seal 零请求链派发前必须持有匹配的隔离预演收据。
 
     2026-09-18 起：assertion bundle、seal preview、seal approve 任一动作进入批次，
     都要求同一 Campaign／candidate／attempt 在当前工具身份下已经用
     ``rehearse-candidate-seal`` 在 OverlayFS 副本上跑通整条链（Framework §5.1.2：
     修复必须先在冻结夹具上跑通到最终阶段）。只含 Kilo 检查点的批次不受此门禁。
+    Claude 新清单只允许 client=claude，由自己的 seal 预览、闭合与批准合同校验；
+    不能要求它提交采用 Codex 工具身份、且 Claude 未注册入口的专属预演收据。
     """
 
-    if schema_version not in BATCHED_RUN_SCHEMAS or phase != "VC-5":
+    if schema_version != CAMPAIGN_RUN_BATCHED_SCHEMA or phase != "VC-5":
         return
     chain: list[tuple[str, Path, str, str]] = []
     for action in actions:
