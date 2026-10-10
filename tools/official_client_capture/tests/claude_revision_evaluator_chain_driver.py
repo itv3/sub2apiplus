@@ -65,25 +65,70 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
 
     def setUp(self) -> None:
         self.require_isolated_copy()
+        if os.environ.get(world_fixture.METHOD_RESUME_ENV):
+            if not world_fixture.restore_case(self):
+                raise ValueError("revision 原方法缺少评估器与候选值字段，禁止重新预埋缺陷")
+            self.assertEqual(self.checker_path, Path(assertion.__file__).resolve())
+            original = world_fixture.load_state("revision-checker")
+            if original is None:
+                raise ValueError("revision 原方法缺少评估器原字节绑定")
+            world_fixture.read_cut(original["binding"])
+            super().setUp()
+            saved = world_fixture.resume_checkpoint(self, "revision-setup")
+            if saved is None or saved.get("phase") != "ready":
+                raise ValueError("revision 原方法没有完整运行来源停点")
+            return
         self.checker_path = Path(assertion.__file__).resolve()
         self.assertTrue(self.checker_path.is_relative_to(REPOSITORY_ROOT))
         self.fixed_checker = self.checker_path.read_bytes()
         source = self.fixed_checker.decode("utf-8")
         self.assertEqual(source.count(REQUEST_HEADER_LINE), 2, "请求和响应各有一处归一化；只改第一处请求解析")
         self.checker_path.write_text(source.replace(REQUEST_HEADER_LINE, DEFECTIVE_HEADER_LINE, 1), encoding="utf-8")
-        self.addCleanup(self.restore_checker)
+        # 原记录世界在失败后保留实际源码；普通单元测试仍按原行为清理。
+        if world_fixture.record_root() is None:
+            self.addCleanup(self.restore_checker)
+        world_fixture.save_state("revision-checker", {"binding": world_fixture.file_cut(self.checker_path)})
         self.tool_identity = upgrade._tool_identity(include_git=False)
         self.defective_evaluator = identity_policy.evaluator_dependency_digests()
         self.active_candidate, self.active_revision = transient.CANDIDATE, 1
         super().setUp()
         transient._write(self.relay_control, {"bad_probe": transient.FAILED_PROBE, "header_name": "anthropic-version"})
+        world_fixture.checkpoint(self, "revision-setup", phase="ready")
+        world_fixture.checkpoint(self, "revision-chain", phase="unstarted", values={})
+        world_fixture.checkpoint(self, "revision-delivery-chain", phase="unstarted")
 
     def restore_checker(self) -> None:
         """修复和清理都再验隔离边界；只能还原当前副本里预先保留的原始字节。"""
 
         self.require_isolated_copy()
         self.assertEqual(self.checker_path, Path(assertion.__file__).resolve())
-        self.checker_path.write_bytes(self.fixed_checker)
+        if self.checker_path.read_bytes() != self.fixed_checker:
+            self.checker_path.write_bytes(self.fixed_checker)
+        world_fixture.save_state("revision-checker", {"binding": world_fixture.file_cut(self.checker_path)})
+
+    def process_step(self, cursor: str, key: str, argv: list[str], campaign: Path,
+                     *, timeout: int = 120) -> tuple[int, Any, str]:
+        """记录原子进程的完整退出事实；统一承接接缝复核原日志后才返回。"""
+
+        def invoke() -> tuple[int, Any, str]:
+            pending = world_fixture.begin_command(argv)
+            try:
+                completed = subprocess.run(argv, cwd=REPOSITORY_ROOT, capture_output=True, text=True,
+                    timeout=timeout, stdin=subprocess.DEVNULL)
+            except subprocess.TimeoutExpired as error:
+                stdout, stderr = error.stdout or "", error.stderr or ""
+                world_fixture.record_command(argv, None,
+                    stdout.decode() if isinstance(stdout, bytes) else stdout,
+                    stderr.decode() if isinstance(stderr, bytes) else stderr, pending=pending)
+                raise
+            world_fixture.record_command(argv, completed.returncode, completed.stdout, completed.stderr, pending=pending)
+            try:
+                result = json.loads(completed.stdout) if completed.stdout.strip() else None
+            except json.JSONDecodeError:
+                result = None
+            return completed.returncode, result, completed.stderr
+
+        return world_fixture.command_step(self, cursor, key, argv, invoke, campaign=campaign)
 
     def install_relay_source(self) -> None:
         super().install_relay_source()
@@ -119,29 +164,49 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         self.assertIsNone(recovery, "本驱动只开新候选；恢复段由独立 transient 连续链覆盖")
         argv = ["capture-candidate", "seal", "--campaign-dir", campaign, "--candidate-id", self.active_candidate,
                 "--attempt-id", attempt_id, *list(clients or [])]
-        code, preview, stderr = self.source_command(argv)
+        cursor = f"candidate-seal:{self.active_candidate}:{attempt_id}:b0"
+        code, preview, stderr = self.source_step(cursor, "preview", argv, campaign)
         self.assertIsNotNone(preview, stderr)
         self.assertEqual((code, preview["status"]), (2, "awaiting_seal_approval"), stderr)
-        code, result, stderr = self.source_command([*argv, "--approve-seal-sha256", preview["review_sha256"], "--approved-by", "连续链审核"])
+        code, result, stderr = self.source_step(cursor, "apply",
+            [*argv, "--approve-seal-sha256", preview["review_sha256"], "--approved-by", "连续链审核"], campaign)
         self.assertIsNotNone(result, stderr)
         self.assertEqual((code, result["status"]), (0, "complete"), stderr)
         return result
 
     def capture_and_seal(self, campaign: Path) -> tuple[Path, dict, dict]:
-        """当前候选必须真实产生 attempt 和证据；写好客户端来源后真实封存并对账。"""
+        """当前候选真实取证只执行一次；seal 和入账分别承接完整原命令输出。"""
 
-        self.prepare_runtime(campaign)
-        code, captured, stderr = self.source_command(["capture-candidate", "run", "--campaign-dir", campaign,
-            "--candidate-id", self.active_candidate, "--acknowledge-live-requests"])
-        self.assertIsNotNone(captured, stderr)
-        self.assertEqual((code, captured["status"]), (2, "awaiting_receipts"), stderr)
+        cursor = f"revision-capture:{self.active_candidate}"
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            self.prepare_runtime(campaign)
+            saved = {"phase": "capture", "campaign": campaign}
+            world_fixture.checkpoint(self, cursor, **saved)
+        if saved['phase'] == 'capture':
+            code, captured, stderr = self.source_step(cursor, 'run', ["capture-candidate", "run", "--campaign-dir", campaign,
+                "--candidate-id", self.active_candidate, "--acknowledge-live-requests"], campaign)
+            self.assertIsNotNone(captured, stderr)
+            self.assertEqual((code, captured["status"]), (2, "awaiting_receipts"), stderr)
+            with self.source_context():
+                attempt_root, attempt = upgrade._load_capture_attempt(campaign, "candidate", self.active_candidate, captured["attempt_id"])
+            saved = {**saved, 'phase': 'seal', 'attempt_root': attempt_root, 'attempt': attempt}
+            world_fixture.checkpoint(self, cursor, **saved)
+        attempt_root, attempt = saved['attempt_root'], saved['attempt']
+        if saved['phase'] == 'seal':
+            self.seal(campaign, attempt_root.name, clients=self.client_inputs(campaign, attempt_root, attempt))
+            saved = {**saved, 'phase': 'account'}
+            world_fixture.checkpoint(self, cursor, **saved)
+        if saved['phase'] == 'account':
+            code, accounted, stderr = self.source_step(cursor, 'account',
+                ["account-sealed-candidate", "--campaign-dir", campaign, "--candidate-id", self.active_candidate], campaign)
+            self.assertEqual(code, 0, stderr)
+            saved = {**saved, 'phase': 'complete'}
+            world_fixture.checkpoint(self, cursor, **saved)
         with self.source_context():
-            attempt_root, attempt = upgrade._load_capture_attempt(campaign, "candidate", self.active_candidate, captured["attempt_id"])
-        self.seal(campaign, attempt_root.name, clients=self.write_clients(campaign, attempt_root, attempt))
-        code, accounted, stderr = self.source_command(["account-sealed-candidate", "--campaign-dir", campaign, "--candidate-id", self.active_candidate])
-        self.assertEqual(code, 0, stderr)
-        with self.source_context():
+            current_root, current_attempt = upgrade._load_capture_attempt(campaign, "candidate", self.active_candidate, attempt_root.name)
             stage = upgrade._load_stage_result(campaign, "capture-candidate", self.active_candidate, _baseline=0)
+        self.assertEqual((current_root, current_attempt), (attempt_root, attempt))
         self.assertEqual(stage["attempt"]["path"], (attempt_root / "attempt.json").relative_to(campaign).as_posix())
         return attempt_root, attempt, stage
 
@@ -181,8 +246,15 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         return super().dispatch_builder(context, sequence, baseline=baseline)
 
     def failed_builder(self, context: dict[str, Any], sequence: int) -> dict:
-        counts_before = project_ledger.replay_head(self.project_root)["root_cause_counts"]
-        code, failed, stderr = self.dispatch_builder(context, sequence, baseline=0)
+        cursor = f"failed-builder:{self.active_candidate}"
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            saved = {"phase": "builder", "campaign": context["campaign"], "sequence": sequence,
+                     "counts_before": project_ledger.replay_head(self.project_root)["root_cause_counts"],
+                     "previous_causes": set(getattr(self, 'assertion_failure_causes', set()))}
+            world_fixture.checkpoint(self, cursor, **saved)
+        counts_before = saved["counts_before"]
+        code, failed, stderr = self.dispatch_builder(context, saved["sequence"], baseline=0)
         self.assertIsNotNone(failed, stderr)
         self.assertEqual((code, failed["campaign_run"]["reason"]), (1, "action-failed:assert-rules"), stderr)
         target = upgrade._stage_write_target(context["campaign"], self.active_candidate, 0, "assertions")
@@ -196,15 +268,15 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
                 official = json.loads((target / 'machine' / 'official' / f"{rule['rule']}.json").read_bytes())
                 self.assertEqual(official['status'], 'pass', '失败必须来自候选侧，官方小写头由真实 checker 通过')
         self.failed_evaluation_run = Path(failed["campaign_run"]["run_dir"])
-        code, reconciled, stderr = self.source_command(["reconcile-supervisor-run", "--campaign-dir", context["campaign"],
-                                                      "--run-dir", self.failed_evaluation_run])
+        code, reconciled, stderr = self.source_step(cursor, "reconcile", ["reconcile-supervisor-run", "--campaign-dir", context["campaign"],
+                                                      "--run-dir", self.failed_evaluation_run], context["campaign"])
         self.assertIsNotNone(reconciled, stderr)
         # r1、r2 的相同断言失败仍按原根因合同累计；r2 必须暂停，不能绕过上限。
         # 对账本身也会登记根因，因此在它完成后收集待修复集合，保留所有历史计数。
         head_after = project_ledger.replay_head(self.project_root)
         counts_after = head_after['root_cause_counts']
         causes = {row['root_cause_id'] for row in reconciled.get('root_causes', [reconciled['root_cause']])}
-        previous_causes = getattr(self, 'assertion_failure_causes', set())
+        previous_causes = saved['previous_causes']
         self.assertTrue(causes)
         self.assertTrue(all(counts_after[cause] > counts_before.get(cause, 0) for cause in causes))
         self.assertion_failure_causes = previous_causes | causes
@@ -220,113 +292,230 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
             self.assertNotIn(context["campaign"].name, head_after["terminal_campaigns"])
             self.assertFalse(any(event.get("event_id") == f"reconcile-run-passed-{reconciled['run_id']}"
                                  for event, _raw in timing._load_events(self.ledger_dir)))
+        world_fixture.checkpoint(self, cursor, **{**saved, "phase": "complete"})
         return failed
 
     def invalidate_first_candidate(self, context: dict[str, Any]) -> dict:
-        preview = self.preview(context)
+        campaign = context['campaign']
+        cursor = 'r1-invalidation'
+        argv = ["--campaign-dir", campaign, "--candidate-id", self.active_candidate, "--reviewer", "连续链审核"]
+        code, preview, stderr = self.source_step(cursor, 'recovery-preview', ['evaluation-recover', 'preview', *argv], campaign)
+        self.assertEqual(code, 0, stderr)
+        self.assertIsNotNone(preview, stderr)
         self.assertEqual(preview["failure_scope"]["jobs"], [transient.FAILED_JOB])
-        code, redirect, stderr = self.recover(context, "apply", "--approve-sha256", preview["review_sha256"],
-                                            "--root-cause-class", "candidate-source")
+        code, redirect, stderr = self.source_step(cursor, 'recovery-redirect', ['evaluation-recover', 'apply', *argv,
+            "--approve-sha256", preview["review_sha256"], "--root-cause-class", "candidate-source"], campaign)
         self.assertIsNotNone(redirect, stderr)
         self.assertEqual((code, redirect["status"]), (0, "redirect"), stderr)
         self.assertIn("invalidate-candidate preview", redirect["next_command"])
-        argv = ["--campaign-dir", context["campaign"], "--candidate-id", self.active_candidate, "--reviewer", "连续链审核"]
-        code, proposed, stderr = self.source_command(["invalidate-candidate", "preview", *argv])
+        code, proposed, stderr = self.source_step(cursor, 'invalidate-preview', ["invalidate-candidate", "preview", *argv], campaign)
         self.assertIsNotNone(proposed, stderr)
         self.assertEqual((code, proposed["status"]), (0, "preview"), stderr)
-        code, applied, stderr = self.source_command(["invalidate-candidate", "apply", *argv, "--approve-sha256", proposed["review_sha256"]])
+        code, applied, stderr = self.source_step(cursor, 'invalidate-apply',
+            ["invalidate-candidate", "apply", *argv, "--approve-sha256", proposed["review_sha256"]], campaign)
         self.assertIsNotNone(applied, stderr)
         self.assertEqual((code, applied["status"]), (0, "applied"), stderr)
         self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "revision_required")
         return applied
 
     def build_second_candidate(self, campaign: Path, context: dict[str, Any]) -> None:
-        code, opened, stderr = self.source_command(["revision-open", "--campaign-dir", campaign, "--candidate-id", SECOND_CANDIDATE,
-                                                  "--supersedes", transient.CANDIDATE])
-        self.assertIsNotNone(opened, stderr)
-        self.assertEqual((code, opened["revision"], opened["store"]["payload"]["revision"]), (0, 2, 2), stderr)
-        self.active_candidate, self.active_revision = SECOND_CANDIDATE, 2
-        code, preview, stderr = self.source_command(["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", self.active_candidate])
-        self.assertIsNotNone(preview, stderr)
-        self.assertEqual((code, preview["candidate_revision"]), (2, 2), stderr)
-        fixture = build_fixture.CandidateBuildFixture(self.root / "build-r2", campaign, self.active_candidate, run_main=batch_tests.run_main)
-        fixture.build_source(preview=preview, marker="r2：修正版本请求头值")
-        fixture.build_artifacts()
-        fixture.build_transition()
-        fixture.build_implementation_receipt(preview["requirements"], f"{campaign.name}-ledger")
+        """r2 按原修订、构建和两批 VC-4 顺序续作；原序号在派发前冻结。"""
+
+        cursor = 'r2-build'
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            saved = {'phase': 'open', 'campaign': campaign, 'fixture_values': {}, 'bindings': []}
+            world_fixture.checkpoint(self, cursor, **saved)
+        for binding in saved['bindings']:
+            world_fixture.read_cut(binding)
+        if world_fixture.load_state('world:' + cursor) is not None:
+            restored = world_fixture.restore_world(self, cursor)
+            context.clear()
+            context.update(restored)
+        if 'next_sequence' in saved:
+            context['next_sequence'] = max(context['next_sequence'], saved['next_sequence'])
+        if saved['phase'] == 'open':
+            code, opened, stderr = self.source_step(cursor, 'revision-open', ["revision-open", "--campaign-dir", campaign,
+                "--candidate-id", SECOND_CANDIDATE, "--supersedes", transient.CANDIDATE], campaign)
+            self.assertIsNotNone(opened, stderr)
+            self.assertEqual((code, opened["revision"], opened["store"]["payload"]["revision"]), (0, 2, 2), stderr)
+            self.active_candidate, self.active_revision = SECOND_CANDIDATE, 2
+            saved = {**saved, 'phase': 'preview'}
+            world_fixture.checkpoint(self, cursor, **saved)
+        if saved['phase'] == 'preview':
+            code, preview, stderr = self.source_step(cursor, 'gate-preview',
+                ["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", SECOND_CANDIDATE], campaign)
+            self.assertIsNotNone(preview, stderr)
+            self.assertEqual((code, preview["candidate_revision"]), (2, 2), stderr)
+            saved = {**saved, 'phase': 'source', 'preview': preview}
+            world_fixture.checkpoint(self, cursor, **saved)
+        preview = saved['preview']
+        fixture = build_fixture.CandidateBuildFixture(self.root / "build-r2", campaign, SECOND_CANDIDATE,
+            run_main=lambda argv: self.source_step(cursor, 'fixture-gate-plan', argv, campaign))
+        for key, value in saved['fixture_values'].items():
+            setattr(fixture, key, value)
+        operations = [('source', lambda: fixture.build_source(preview=preview, marker="r2：修正版本请求头值")),
+                      ('artifacts', fixture.build_artifacts), ('transition', fixture.build_transition),
+                      ('implementation', lambda: fixture.build_implementation_receipt(preview['requirements'], f'{campaign.name}-ledger'))]
+        phases = ['source', 'artifacts', 'transition', 'implementation', 'clone']
+        for operation, invoke in operations:
+            if saved['phase'] != operation:
+                continue
+            if saved.get('fixture_pending'):
+                raise ValueError(f'r2 原构建来源停在 {operation} 的未决形成过程，禁止重建候选源码或覆盖原件')
+            saved = {**saved, 'fixture_pending': True}
+            world_fixture.checkpoint(self, cursor, **saved)
+            invoke()
+            fields = ('base_commit', 'commit', 'mapping_path', 'plan_path', 'gate_plan', 'parameters')
+            fixture_values = {key: getattr(fixture, key) for key in fields if hasattr(fixture, key)}
+            # 原构建来源每段实际写出的普通文件逐字节保存，不含 Git 内部锁和日志。
+            files = [path for path in fixture.root.rglob('*') if path.is_file() and '.git' not in path.parts]
+            saved = {**saved, 'phase': phases[phases.index(operation) + 1], 'fixture_pending': False,
+                     'fixture_values': fixture_values, 'bindings': [world_fixture.file_cut(path) for path in files]}
+            world_fixture.checkpoint(self, cursor, **saved)
         plan_source = self.root / "plan-source-r2"
-        subprocess.run(["git", "clone", "-q", str(fixture.source), str(plan_source)], check=True, capture_output=True, timeout=60)
         lifecycle = fixture.lifecycle_dir.relative_to(fixture.source)
         dispatched_plan = plan_source / lifecycle / "gate-plan-dispatch.json"
-        action = batch_tests.batch.managed_action("vc4-plan-r2", "VC-4:plan-candidate-gates",
-            ["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", self.active_candidate, "--candidate-source", plan_source,
-             "--mapping", plan_source / lifecycle / "gate-mapping.json", "--output", dispatched_plan], item_ids=["vc4-plan-r2"])
-        plan_sequence = world_fixture.take_sequence(context)
-        self.assert_batch_passed(self.dispatch(campaign, "VC-4", plan_sequence, [action]), plan_sequence, "VC-4")
-        self.assertEqual(dispatched_plan.read_bytes(), fixture.plan_path.read_bytes())
-        action = batch_tests.batch.managed_action("vc4-record-r2", "VC-4:record-candidate-build", fixture.argv(), item_ids=["vc4-record-r2"])
-        record_sequence = world_fixture.take_sequence(context)
-        binary = fixture.install_fake_commands(self.root / "fake-bin-r2")
-        with mock.patch.dict(os.environ, {"PATH": f"{binary}{os.pathsep}{os.environ.get('PATH', '')}"}):
-            self.assert_batch_passed(self.dispatch(campaign, "VC-4", record_sequence, [action]), record_sequence, "VC-4")
-        seal_path = upgrade._candidate_revision_dir(campaign, 2) / "seal.json"
-        revision = json.loads(seal_path.read_bytes())
+        if saved['phase'] == 'clone':
+            if saved.get('clone_pending'):
+                raise ValueError('r2 原计划源码克隆未形成完整停点，禁止覆盖原目录')
+            code, _cloned, stderr = self.process_step(cursor, 'clone',
+                ["git", "clone", "-q", str(fixture.source), str(plan_source)], campaign, timeout=60)
+            self.assertEqual(code, 0, stderr)
+            saved = {**saved, 'phase': 'plan', 'clone_pending': False, 'plan_sequence': world_fixture.take_sequence(context)}
+            saved['next_sequence'] = context['next_sequence']
+            world_fixture.checkpoint(self, cursor, **saved)
+            world_fixture.save_world(cursor, context)
+        if saved['phase'] == 'plan':
+            action = batch_tests.batch.managed_action("vc4-plan-r2", "VC-4:plan-candidate-gates",
+                ["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", SECOND_CANDIDATE,
+                 "--candidate-source", plan_source, "--mapping", plan_source / lifecycle / "gate-mapping.json", "--output", dispatched_plan],
+                item_ids=["vc4-plan-r2"])
+            sequence = saved['plan_sequence']
+            self.assert_batch_passed(self.vc_step(cursor, 'vc4-plan', context, 'VC-4', sequence, action), sequence, 'VC-4')
+            self.assertEqual(dispatched_plan.read_bytes(), fixture.plan_path.read_bytes())
+            binary = fixture.install_fake_commands(self.root / "fake-bin-r2")
+            saved = {**saved, 'phase': 'record', 'record_sequence': world_fixture.take_sequence(context), 'binary': binary,
+                     'binary_bindings': [world_fixture.file_cut(path) for path in binary.iterdir() if path.is_file()]}
+            saved['next_sequence'] = context['next_sequence']
+            world_fixture.checkpoint(self, cursor, **saved)
+            world_fixture.save_world(cursor, context)
+        if saved['phase'] in {'record', 'complete'}:
+            for binding in saved['binary_bindings']:
+                world_fixture.read_cut(binding)
+            action = batch_tests.batch.managed_action("vc4-record-r2", "VC-4:record-candidate-build", fixture.argv(), item_ids=["vc4-record-r2"])
+            sequence = saved['record_sequence']
+            with mock.patch.dict(os.environ, {"PATH": f"{saved['binary']}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                self.assert_batch_passed(self.vc_step(cursor, 'vc4-record', context, 'VC-4', sequence, action), sequence, 'VC-4')
+        revision = json.loads((upgrade._candidate_revision_dir(campaign, 2) / "seal.json").read_bytes())
         self.assertEqual(revision["superseded"]["candidate_id"], transient.CANDIDATE)
         self.assertIn("source", revision["changed_layers"])
         previous = json.loads((campaign / "candidates" / transient.CANDIDATE / "build-receipt.json").read_bytes())
         current = json.loads((campaign / "candidates" / SECOND_CANDIDATE / "build-receipt.json").read_bytes())
         self.assertNotEqual(previous["source"]["tree_sha256"], current["source"]["tree_sha256"])
         self.assertTrue(vc.vc_checkpoint_path(campaign, "VC-4", revision=2).is_file())
+        world_fixture.checkpoint(self, cursor, **{**saved, 'phase': 'complete'})
 
     def repair_evaluator(self, context: dict[str, Any], attempt_root: Path) -> dict:
-        """实际修复副本源码，再按真实变化层办理演进；不替换摘要、身份、批准判定或结果。"""
+        """实际修复、身份演进、根因放行和 b1 批准逐段承接；不替换真实判定。"""
 
-        self.restore_checker()
-        repaired = upgrade._tool_identity(include_git=False)
-        digests = identity_policy.evaluator_dependency_digests()
-        self.assertNotEqual(digests["checker_sha256"], self.defective_evaluator["checker_sha256"])
-        self.assertEqual(repaired["policy_sha256"], self.tool_identity["policy_sha256"])
-        self.assertEqual(repaired["wire_producer_sha256"], self.tool_identity["wire_producer_sha256"],
-                         "实际策略若把本次解析修复归到 wire，不得绕过身份边界继续本链")
-        deployment = ledger_fixture.write_claude_deploy_receipt(self.data, repaired, stamp="20261008t090000z")
-        argv = ["tool-evolution", "--campaign-dir", context["campaign"], "--fix-commit", "e" * 40,
-                "--reason", "修复请求头大小写归一化，候选证据原字节复用"]
-        code, preview, stderr = self.source_command(argv)
-        self.assertIsNotNone(preview, stderr)
-        self.assertEqual((code, preview["status"]), (0, "approval_required"), stderr)
-        self.assertEqual(preview["impact"]["official"]["affected_job_ids"], [])
-        self.assertTrue(all(not value["affected_job_ids"] for value in preview["impact"]["candidates"].values()))
-        approved = [*argv, "--approve-sha256", preview["review_sha256"], "--approved-by", "连续链审核"]
-        code, evolved, stderr = self.source_command(approved)
-        self.assertIsNotNone(evolved, stderr)
-        self.assertEqual((code, evolved["status"], evolved["store_registration"]["status"]), (0, "evolution_applied", "registered"), stderr)
-        if repaired["evidence_semantics_sha256"] != self.tool_identity["evidence_semantics_sha256"]:
-            code, epoch, stderr = self.source_command(["evaluation-epoch", "--campaign-dir", context["campaign"],
-                "--candidate-id", self.active_candidate, "--attempt-id", attempt_root.name, "--reason", "修复头大小写解析后离线重评"])
-            self.assertIsNotNone(epoch, stderr)
-            self.assertEqual((code, epoch["status"]), (0, "epoch_appended"), stderr)
-        # 暂停不会生成恢复放行收据。真实 checker 回归与修复登记完成后，
-        # 必须重放原失败 run 的对账，使账本回到 active，再进入评估恢复批准。
-        self.release_repaired_assertion_roots(context, deployment)
-        code, reconciled, stderr = self.source_command(["reconcile-supervisor-run", "--campaign-dir", context["campaign"],
-                                                      "--run-dir", self.failed_evaluation_run])
-        self.assertIsNotNone(reconciled, stderr)
-        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
-        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
-        repaired_counts = project_ledger.replay_head(self.project_root)["root_cause_counts"]
-        self.assertTrue(all(repaired_counts.get(cause) == 0 for cause in self.assertion_failure_causes))
-        passed = [event for event, _raw in timing._load_events(self.ledger_dir)
-                  if event.get("event_id") == f"reconcile-run-passed-{reconciled['run_id']}"]
-        self.assertEqual([event["event_type"] for event in passed], ["receipt_passed"])
-        preview = self.preview(context)
-        self.refuse_wrong_deployments(context, preview, deployment)
-        # 错误部署收据必须零写入；批准草案仍绑定修复与重新对账后的当前 head。
-        preview = self.preview(context)
-        code, applied, stderr = self.recover(context, "apply", "--approve-sha256", preview["review_sha256"],
-            "--root-cause-class", "evaluator-defect", "--fix-commit", "e" * 40, "--deployment-receipt", deployment)
-        self.assertIsNotNone(applied, stderr)
-        self.assertEqual((code, applied["kind"], applied["evaluation_baseline"]), (0, "evaluator-only", 1), stderr)
-        self.tool_identity = repaired
+        cursor = 'evaluator-repair'
+        campaign = context['campaign']
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            saved = {'phase': 0, 'campaign': campaign, 'attempt_root': attempt_root, 'values': {}}
+            world_fixture.checkpoint(self, cursor, **saved)
+        if saved['attempt_root'] != attempt_root:
+            raise ValueError('评估器修复停点绑定的原 attempt 已改变')
+        phase, values = saved['phase'], dict(saved['values'])
+        repaired, digests = values.get('repaired'), values.get('digests')
+        deployment, reconciled = values.get('deployment'), values.get('reconciled')
+        preview, applied = values.get('preview'), values.get('applied')
+        if deployment is not None:
+            world_fixture.read_cut(values['deployment_binding'])
+        if phase == 0:
+            self.restore_checker()
+            repaired = upgrade._tool_identity(include_git=False)
+            digests = identity_policy.evaluator_dependency_digests()
+            self.assertNotEqual(digests["checker_sha256"], self.defective_evaluator["checker_sha256"])
+            self.assertEqual(repaired["policy_sha256"], self.tool_identity["policy_sha256"])
+            self.assertEqual(repaired["wire_producer_sha256"], self.tool_identity["wire_producer_sha256"],
+                             "实际策略若把本次解析修复归到 wire，不得绕过身份边界继续本链")
+            deployment = ledger_fixture.write_claude_deploy_receipt(self.data, repaired, stamp="20261008t090000z")
+            values.update(repaired=repaired, digests=digests, deployment=deployment)
+            values["deployment_binding"] = world_fixture.file_cut(deployment)
+            phase = 1
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
+        if phase == 1:
+            argv = ["tool-evolution", "--campaign-dir", context["campaign"], "--fix-commit", "e" * 40,
+                    "--reason", "修复请求头大小写归一化，候选证据原字节复用"]
+            code, preview, stderr = self.source_step(cursor, "tool-preview", argv, campaign)
+            self.assertIsNotNone(preview, stderr)
+            self.assertEqual((code, preview["status"]), (0, "approval_required"), stderr)
+            self.assertEqual(preview["impact"]["official"]["affected_job_ids"], [])
+            self.assertTrue(all(not value["affected_job_ids"] for value in preview["impact"]["candidates"].values()))
+            approved = [*argv, "--approve-sha256", preview["review_sha256"], "--approved-by", "连续链审核"]
+            code, evolved, stderr = self.source_step(cursor, "tool-apply", approved, campaign)
+            self.assertIsNotNone(evolved, stderr)
+            self.assertEqual((code, evolved["status"], evolved["store_registration"]["status"]), (0, "evolution_applied", "registered"), stderr)
+            phase = 2
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
+        if phase == 2:
+            if repaired["evidence_semantics_sha256"] != self.tool_identity["evidence_semantics_sha256"]:
+                code, epoch, stderr = self.source_step(cursor, "epoch", ["evaluation-epoch", "--campaign-dir", context["campaign"],
+                    "--candidate-id", self.active_candidate, "--attempt-id", attempt_root.name, "--reason", "修复头大小写解析后离线重评"], campaign)
+                self.assertIsNotNone(epoch, stderr)
+                self.assertEqual((code, epoch["status"]), (0, "epoch_appended"), stderr)
+            phase = 3
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
+        if phase == 3:
+            # 暂停不会生成恢复放行收据。真实 checker 回归与修复登记完成后，
+            # 必须重放原失败 run 的对账，使账本回到 active，再进入评估恢复批准。
+            self.release_repaired_assertion_roots(context, deployment)
+            phase = 4
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
+        if phase == 4:
+            code, reconciled, stderr = self.source_step(cursor, "repaired-reconcile", ["reconcile-supervisor-run", "--campaign-dir", context["campaign"],
+                                                          "--run-dir", self.failed_evaluation_run], campaign)
+            self.assertIsNotNone(reconciled, stderr)
+            self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
+            self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
+            repaired_counts = project_ledger.replay_head(self.project_root)["root_cause_counts"]
+            self.assertTrue(all(repaired_counts.get(cause) == 0 for cause in self.assertion_failure_causes))
+            passed = [event for event, _raw in timing._load_events(self.ledger_dir)
+                      if event.get("event_id") == f"reconcile-run-passed-{reconciled['run_id']}"]
+            self.assertEqual([event["event_type"] for event in passed], ["receipt_passed"])
+            values.update(reconciled=reconciled)
+            phase = 5
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
+        if phase == 5:
+            code, preview, stderr = self.source_step(cursor, "refusal-preview",
+                ["evaluation-recover", "preview", "--campaign-dir", campaign, "--candidate-id", self.active_candidate, "--reviewer", "连续链审核"], campaign)
+            self.assertEqual(code, 0, stderr)
+            self.assertIsNotNone(preview, stderr)
+            self.refuse_wrong_deployments(context, preview, deployment)
+            values.update(preview=preview)
+            phase = 6
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
+        if phase == 6:
+            # 错误部署收据必须零写入；批准草案仍绑定修复与重新对账后的当前 head。
+            code, preview, stderr = self.source_step(cursor, "final-preview",
+                ["evaluation-recover", "preview", "--campaign-dir", campaign, "--candidate-id", self.active_candidate, "--reviewer", "连续链审核"], campaign)
+            self.assertEqual(code, 0, stderr)
+            self.assertIsNotNone(preview, stderr)
+            code, applied, stderr = self.source_step(cursor, "recovery-apply",
+                ["evaluation-recover", "apply", "--campaign-dir", campaign, "--candidate-id", self.active_candidate, "--reviewer", "连续链审核",
+                 "--approve-sha256", preview["review_sha256"], "--root-cause-class", "evaluator-defect", "--fix-commit", "e" * 40,
+                 "--deployment-receipt", deployment], campaign)
+            self.assertIsNotNone(applied, stderr)
+            self.assertEqual((code, applied["kind"], applied["evaluation_baseline"]), (0, "evaluator-only", 1), stderr)
+            values.update(preview=preview, applied=applied)
+            phase = 7
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
+        if phase == 7:
+            self.tool_identity = repaired
+            phase = 8
+            world_fixture.checkpoint(self, cursor, phase=phase, campaign=campaign, attempt_root=attempt_root, values=values)
         return applied
 
     def refuse_wrong_deployments(self, context: dict[str, Any], preview: dict, deployment: Path) -> None:
@@ -340,15 +529,37 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         missing_client = {key: value for key, value in original.items() if key != "client"}
         self.wrong_deployment_refusals = []
         for label, document in (("codex", codex), ("missing-client", missing_client)):
-            path = transient._write(self.root / "wrong-deployment-inputs" / f"{label}.json", document)
+            cursor = 'wrong-deployment:' + label
             campaign = context["campaign"]
+            scenario = f"评估器修复拒绝错误部署收据：{label}"
+            saved = world_fixture.resume_checkpoint(self, cursor)
+            if saved is None:
+                path = transient._write(self.root / "wrong-deployment-inputs" / f"{label}.json", document)
+                saved = {'phase': 'refusal', 'campaign': campaign, 'path': path,
+                         'path_binding': world_fixture.file_cut(path), 'before_files': file_digests(
+                             campaign, candidate_store.campaign_store_root(campaign), self.ledger_dir, self.project_root),
+                         'before_head': project_ledger.replay_head(self.project_root),
+                         'calls': len(self.runtime.candidate_calls())}
+                world_fixture.checkpoint(self, cursor, **saved, audit_snapshots={scenario: 'uninitialized'})
+            world_fixture.read_cut(saved['path_binding'])
+            if saved['phase'] == 'complete':
+                from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains import ScenarioAudit
+                report = ScenarioAudit.revalidate(self, scenario)
+                if report not in context['records']:
+                    context['records'].append(report)
+                self.wrong_deployment_refusals.append({'case': label, 'stderr': saved['stderr']})
+                continue
+            path = saved['path']
+            world_fixture.read_cut(saved['path_binding'])
             write_roots = [campaign, candidate_store.campaign_store_root(campaign), self.ledger_dir, self.project_root]
-            audit = self.late_audit(f"评估器修复拒绝错误部署收据：{label}", context)
-            before_files = file_digests(*write_roots)
-            before_head = project_ledger.replay_head(self.project_root)
-            calls = len(self.runtime.candidate_calls())
-            code, _result, stderr = self.recover(context, "apply", "--approve-sha256", preview["review_sha256"],
-                "--root-cause-class", "evaluator-defect", "--fix-commit", "e" * 40, "--deployment-receipt", path)
+            audit = self.late_audit(f"评估器修复拒绝错误部署收据：{label}", {
+                **context, 'trusted_roots': [*context.get('trusted_roots', []),
+                    *write_roots, self.runtime.candidate_calls_file]})
+            before_files, before_head, calls = saved['before_files'], saved['before_head'], saved['calls']
+            code, _result, stderr = self.source_step(cursor, 'refuse',
+                ["evaluation-recover", "apply", "--campaign-dir", campaign, "--candidate-id", self.active_candidate,
+                 "--reviewer", "连续链审核", "--approve-sha256", preview["review_sha256"],
+                 "--root-cause-class", "evaluator-defect", "--fix-commit", "e" * 40, "--deployment-receipt", path], campaign)
             self.assertEqual(code, 1, stderr)
             self.assertIn("不是 Claude 受管部署收据", stderr)
             self.assertEqual(file_digests(*write_roots), before_files, f"{label} 收据必须在任何恢复写入前拒绝")
@@ -357,7 +568,8 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
             self.assertFalse((campaign / "candidates" / self.active_candidate / "revisions" / "b1" / upgrade.EVALUATION_BASELINE_COMMIT_FILENAME).exists())
             self.wrong_deployment_refusals.append({'case': label, 'stderr': stderr})
             audit.check_trusted()
-            audit.check_closure(executed=[], expected=[], what='错误部署收据在恢复写入前拒绝')
+            audit.check_closure(executed=[], expected=[], what='错误部署收据在恢复写入前拒绝',
+                source=audit.refusal_closure_source(stderr))
             audit.check_accounting()
             audit.check_elapsed_untouched(self.ledger_dir, self.project_root)
             audit.check_history()
@@ -365,12 +577,22 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
             with self.source_context(), vc5_sources.seams(context['config_path']):
                 recovery_status = self.candidate_status(context)
             audit.check_entry(recovery_status, 'evaluation-recover')
-            context['records'].append(audit.report(campaign_id=campaign.name, candidate_id=self.active_candidate,
-                candidate_revision=self.active_revision, evaluation_baseline=0, refusal=label))
+            report = audit.report(campaign_id=campaign.name, candidate_id=self.active_candidate,
+                candidate_revision=self.active_revision, evaluation_baseline=0, refusal=label)
+            if report not in context['records']:
+                context['records'].append(report)
+            world_fixture.checkpoint(self, cursor, **{**saved, 'phase': 'complete', 'stderr': stderr})
 
     def release_repaired_assertion_roots(self, context: dict[str, Any], deployment: Path) -> None:
         """修复后先用真实 checker 验证当前字节，再按正式根因修复入口放行，不能调高冻结上限。"""
 
+        cursor = 'evaluator-root-release'
+        campaign = context['campaign']
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            saved = {'phase': 'regression', 'campaign': campaign,
+                     'previous_counts': project_ledger.replay_head(self.project_root)["root_cause_counts"]}
+            world_fixture.checkpoint(self, cursor, **saved)
         with self.source_context():
             stage = upgrade._load_stage_result(context['campaign'], 'capture-candidate', self.active_candidate, _baseline=0)
         candidate = compare.candidate_evaluation_source(context['campaign'], context['manifest'], stage)
@@ -381,122 +603,292 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
             evidence_root=candidate['evidence_root'], output=str(regression), profile=str(context['profile_path']),
             rule_manifest=str(context['rules_path']), expected_claude_version=capture_tests.TARGET,
             expected_profile_sha256=context['profile_sha256'], side='candidate')
-        checked = subprocess.run(command, cwd=REPOSITORY_ROOT, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
-        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        code, _checked, stderr = self.process_step(cursor, 'checker-regression', [str(item) for item in command], campaign)
+        self.assertEqual(code, 0, stderr)
         self.assertEqual(json.loads(regression.read_bytes())['status'], 'pass')
-        previous_counts = project_ledger.replay_head(self.project_root)["root_cause_counts"]
+        previous_counts = saved["previous_counts"]
+        if saved['phase'] == 'regression':
+            saved = {**saved, 'phase': 'repairs', 'regression_binding': world_fixture.file_cut(regression),
+                     'deployment_binding': world_fixture.file_cut(deployment)}
+            world_fixture.checkpoint(self, cursor, **saved)
+        world_fixture.read_cut(saved['regression_binding'])
+        world_fixture.read_cut(saved['deployment_binding'])
         for cause in sorted(self.assertion_failure_causes):
-            repaired = subprocess.run([sys.executable, '-B', '-m', 'tools.official_client_capture.codex_upgrade_project_ledger',
+            code, _repaired, stderr = self.process_step(cursor, 'root-repair:' + cause, [sys.executable, '-B', '-m', 'tools.official_client_capture.codex_upgrade_project_ledger',
                 'record-root-cause-repair', '--ledger-dir', str(self.project_root), '--root-cause-id', cause, '--kind', 'code',
                 '--binding', f"fix_commit_sha={'e' * 40}", '--binding', f'regression_receipt_sha256={upgrade.file_sha256(regression)}',
-                '--binding', f'deployment_receipt_sha256={upgrade.file_sha256(deployment)}', '--note', '实际 checker 修复并验证 r2 原字节后放行'],
-                cwd=REPOSITORY_ROOT, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
-            self.assertEqual(repaired.returncode, 0, repaired.stdout + repaired.stderr)
+                '--binding', f'deployment_receipt_sha256={upgrade.file_sha256(deployment)}', '--note', '实际 checker 修复并验证 r2 原字节后放行'], campaign)
+            self.assertEqual(code, 0, stderr)
         repaired_counts = project_ledger.replay_head(self.project_root)["root_cause_counts"]
         self.assertEqual({cause: count for cause, count in repaired_counts.items() if cause not in self.assertion_failure_causes},
                          {cause: count for cause, count in previous_counts.items() if cause not in self.assertion_failure_causes},
                          "本次评估修复不得清除无关根因的计数")
 
-    def run_revision_evaluator_chain(self) -> dict[str, Any]:
-        """从真实 r1 失败一直进入真实 r2／b1；返回同一世界，供后续完整 A 组继续接续。"""
+        world_fixture.checkpoint(self, cursor, **{**saved, "phase": "complete"})
 
-        campaign = self.drive_vc3_vc4_to_candidate_sealed()
-        manifest = upgrade.load_campaign_manifest(campaign)
-        world_fixture.freeze_control_profile(campaign)
+    def run_revision_evaluator_chain(self) -> dict[str, Any]:
+        """同一 r1→r2→b1 原链保存局部值与审计before，未完成命令才继续执行。"""
+
+        from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains import ScenarioAudit
+
+        cursor = 'revision-chain'
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            if os.environ.get(world_fixture.METHOD_RESUME_ENV):
+                raise ValueError('revision 原方法缺少阶段游标，禁止重新建立 Campaign')
+            saved = {'phase': 'unstarted', 'values': {}}
+            world_fixture.checkpoint(self, cursor, **saved)
+        if saved['phase'] == 'unstarted':
+            saved = {'phase': 'vc3-vc4', 'values': {}, 'initializations': {'vc3-vc4-parent': 'uninitialized'}}
+            world_fixture.checkpoint(self, cursor, **saved)
+        phase, values = (0 if saved['phase'] == 'vc3-vc4' else saved['phase']), dict(saved['values'])
+        campaign = values.get('campaign')
+        manifest = values.get('manifest')
+        first_root = values.get('first_root')
+        first_attempt = values.get('first_attempt')
+        first_stage = values.get('first_stage')
+        first_snapshot = values.get('first_snapshot')
+        invalidated = values.get('invalidated')
+        second_root = values.get('second_root')
+        second_attempt = values.get('second_attempt')
+        second_stage = values.get('second_stage')
+        jobs = values.get('jobs')
+        r2_provenance = values.get('r2_provenance')
+        counted = values.get('counted')
+        roots = values.get('roots')
+        snapshot = values.get('snapshot')
+        calls = values.get('calls')
+        before = values.get('before')
+        project_before = values.get('project_before')
+        recovered = values.get('recovered')
+        index_path = values.get('index_path')
+        index = values.get('index')
+        after = values.get('after')
+        context = world_fixture.restore_world(self, cursor) if phase >= 2 else None
+        source_name, evaluator_name = '候选源码失败与 r2 修订接续', '评估器真实修复与 b1 零采集重评'
+        source_audit = self.late_audit(source_name, context) if 1 < phase <= 6 else None
+        evaluator_audit = self.late_audit(evaluator_name, context) if 7 < phase < 11 else None
+        if phase > 6:
+            ScenarioAudit.revalidate(self, source_name)
+        if phase == 11:
+            ScenarioAudit.revalidate(self, evaluator_name)
+            return context
+        if phase == 0:
+            campaign = self.drive_vc3_vc4_to_candidate_sealed()
+            manifest = upgrade.load_campaign_manifest(campaign)
+            world_fixture.freeze_control_profile(campaign)
+            values.update(campaign=campaign, manifest=manifest)
+            phase = 1
+            world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
         with client_fixture.source_scope():
-            first_root, first_attempt, first_stage = self.capture_and_seal(campaign)
-            context = self.evaluation_context(campaign)
-            source_audit = self.late_audit("候选源码失败与 r2 修订接续", context)
-            self.failed_builder(context, context["next_sequence"])
-            first_snapshot = self.boundary([first_root, campaign / "candidates" / transient.CANDIDATE / "seal",
-                                           upgrade._stage_write_target(campaign, transient.CANDIDATE, 0, "capture-candidate"),
-                                           upgrade._stage_write_target(campaign, transient.CANDIDATE, 0, "assertions"),
-                                           *[Path(root) for row in first_attempt["results"] for root in row["evidence_roots"]]])
-            invalidated = self.invalidate_first_candidate(context)
-            self.build_second_candidate(campaign, context)
-            transient._write(self.relay_control, {"bad_probe": None, "header_name": "Anthropic-Version"})
-            second_root, second_attempt, second_stage = self.capture_and_seal(campaign)
-            self.assertEqual(self.boundary([Path(path) for path in first_snapshot]), first_snapshot)
-            self.assertEqual(second_attempt["identity"]["candidate_revision"], 2)
-            jobs = upgrade._campaign_jobs(campaign, manifest, "candidate", candidate_id=SECOND_CANDIDATE)
-            self.assertCountEqual([row["id"] for row in second_attempt["results"]], [job.job_id for job in jobs])
-            self.assertTrue(all(row["disposition"] == "executed" for row in second_attempt["results"]))
-            self.assertNotEqual(first_stage["store"]["validation_attempt_ref"], second_stage["store"]["validation_attempt_ref"])
-            world_fixture.refresh_world(self, context, candidate_id=SECOND_CANDIDATE, revision=2)
-            source_audit.check_trusted()
-            source_audit.check_closure(executed=[row['id'] for row in second_attempt['results']], expected=[job.job_id for job in jobs],
-                what='源码改变后 r2 的完整候选 Job')
-            r2_probes = [probe for row in second_attempt['results'] for root in row['evidence_roots']
-                         for probe in Path(root).iterdir() if (probe / 'relay-manifest.json').is_file()]
-            r2_provenance = provenance.collect_root_provenance(r2_probes)
-            self.assertEqual(r2_provenance['unresolved_roots'], [])
-            # 原件逐请求重放给出期望：r2 CLI 请求加两个新增 Mac 请求，不能由总账增量反推期望。
-            source_audit.check_accounting(precise_delta=r2_provenance['precise_total'] + 2)
-            source_audit.check_elapsed(reopened_phases=['VC-4', 'VC-5'])
-            source_audit.check_history()
-            source_audit.check_entry(invalidated, 'revision-open')
-            context['records'].append(source_audit.report(campaign_id=campaign.name, candidate_id=SECOND_CANDIDATE,
-                candidate_revision=2, evaluation_baseline=0))
-            evaluator_audit = self.late_audit('评估器真实修复与 b1 零采集重评', context)
-            self.failed_builder(context, context['next_sequence'])
-            counted = evaluator_audit.accounting_state()
-            # r2 的值已正确；缺陷必须来自实际 checker，而非改写证据或伪造结果。
-            roots = [Path(root) for row in second_attempt["results"] for root in row["evidence_roots"]]
-            snapshot = self.boundary(roots)
-            correct_headers = 0
-            for root in roots:
-                for binary in root.glob("*/relay/*.client_to_upstream.bin"):
-                    raw = binary.read_bytes()
-                    self.assertNotIn(b"Anthropic-Version: 2023-01-01", raw)
-                    correct_headers += raw.count(b"Anthropic-Version: 2023-06-01")
-            self.assertGreater(correct_headers, 0, "r2 必须实际产生正确值、混合大小写的请求头字节")
-            calls = len(self.runtime.candidate_calls())
-            before = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
-            project_before = project_ledger.replay_head(self.project_root)["precise_total"]
-            recovered = self.repair_evaluator(context, second_root)
-            code, passed, stderr = self.dispatch_builder(context, context["next_sequence"], baseline=1)
-            self.assertIsNotNone(passed, stderr)
-            self.assertEqual((code, passed["campaign_run"]["reason"]), (0, "queue-complete"), stderr)
-            index_path = upgrade._stage_write_target(campaign, SECOND_CANDIDATE, 1, "assertions") / "evaluation-run.json"
-            index = json.loads(index_path.read_bytes())
-            self.assertEqual(index["evaluation_baseline"], 1)
-            self.assertEqual(index["evaluator"]["checker_sha256"], identity_policy.evaluator_dependency_digests()["checker_sha256"])
-            self.assertEqual({row["status"] for row in index["rules"]}, {"pass"})
-            self.assertEqual(self.boundary(roots), snapshot)
-            self.assertEqual(self.boundary([Path(path) for path in first_snapshot]), first_snapshot)
-            self.assertEqual(len(self.runtime.candidate_calls()), calls)
-            after = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
-            self.assertEqual((before["status"], after["status"]), ("complete", "complete"))
-            self.assertEqual(after["precise_total"], before["precise_total"])
-            self.assertEqual(project_ledger.replay_head(self.project_root)["precise_total"], project_before)
-            self.assert_campaign_request_accounting(campaign, expected_client_requests=4)
-            self.assertEqual(timing.inspect_ledger(self.ledger_dir)["current_revision"], 2)
-            evaluator_audit.check_trusted()
-            evaluator_audit.check_closure(executed=[row['rule'] for row in index['rules']],
-                expected=list(upgrade._approved_rules(campaign, manifest, require_approved=True)), what='修复后按全部批准规则离线重评')
-            evaluator_audit.check_accounting()
-            # b1 的批准合法重开 VC-5 一次；仍核累计时间、原截止和历史事件不变。
-            self.assertEqual(recovered['ledger_event']['event_type'], 'evaluation_baseline')
-            self.assertEqual(evaluator_audit.totals()['timing']['stage_started_counts']['VC-5'],
-                             evaluator_audit.totals_before['timing']['stage_started_counts']['VC-5'] + 1)
-            evaluator_audit.check_elapsed(reopened_phases=['VC-5'])
-            evaluator_audit.check_history()
-            evaluator_audit.check_entry(recovered, 'compile-and-run-vc-batch', 'VC-5')
-            context['records'].append(evaluator_audit.report(campaign_id=campaign.name, candidate_id=SECOND_CANDIDATE,
-                candidate_revision=2, evaluation_baseline=1, checker_sha256=index['evaluator']['checker_sha256'],
-                root_cause_state_before_repair=counted['project']['root_cause_counts']))
-            world_fixture.refresh_world(self, context)
-            context.update(expected_client_requests=4, r1_invalidation=invalidated, evaluation_recovery=recovered,
-                wrong_deployment_refusals=list(self.wrong_deployment_refusals), evaluation_index=index_path,
-                capture_calls=calls, precise_total=after['precise_total'])
+            if phase == 1:
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign,
+                    audit_snapshots={source_name: (world_fixture.load_state("cursor:" + cursor) or {}).get("audit_snapshots", {}).get(source_name, "uninitialized")})
+                first_root, first_attempt, first_stage = self.capture_and_seal(campaign)
+                context = self.evaluation_context(campaign)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign,
+                    audit_snapshots={source_name: (world_fixture.load_state("cursor:" + cursor) or {}).get(
+                        "audit_snapshots", {}).get(source_name, "uninitialized")})
+                source_audit = self.late_audit("候选源码失败与 r2 修订接续", context)
+                values.update(first_root=first_root, first_attempt=first_attempt, first_stage=first_stage)
+                phase = 2
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 2:
+                self.failed_builder(context, context["next_sequence"])
+                first_snapshot = self.boundary([first_root, campaign / "candidates" / transient.CANDIDATE / "seal",
+                                               upgrade._stage_write_target(campaign, transient.CANDIDATE, 0, "capture-candidate"),
+                                               upgrade._stage_write_target(campaign, transient.CANDIDATE, 0, "assertions"),
+                                               *[Path(root) for row in first_attempt["results"] for root in row["evidence_roots"]]])
+                values.update(first_snapshot=first_snapshot)
+                phase = 3
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 3:
+                invalidated = self.invalidate_first_candidate(context)
+                values.update(invalidated=invalidated)
+                phase = 4
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 4:
+                self.build_second_candidate(campaign, context)
+                transient._write(self.relay_control, {"bad_probe": None, "header_name": "Anthropic-Version"})
+                phase = 5
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 5:
+                second_root, second_attempt, second_stage = self.capture_and_seal(campaign)
+                self.assertEqual(self.boundary([Path(path) for path in first_snapshot]), first_snapshot)
+                self.assertEqual(second_attempt["identity"]["candidate_revision"], 2)
+                jobs = upgrade._campaign_jobs(campaign, manifest, "candidate", candidate_id=SECOND_CANDIDATE)
+                self.assertCountEqual([row["id"] for row in second_attempt["results"]], [job.job_id for job in jobs])
+                self.assertTrue(all(row["disposition"] == "executed" for row in second_attempt["results"]))
+                self.assertNotEqual(first_stage["store"]["validation_attempt_ref"], second_stage["store"]["validation_attempt_ref"])
+                world_fixture.refresh_world(self, context, candidate_id=SECOND_CANDIDATE, revision=2)
+                values.update(second_root=second_root, second_attempt=second_attempt, second_stage=second_stage, jobs=jobs)
+                phase = 6
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 6:
+                source_audit.check_trusted()
+                source_audit.check_closure(executed=[row['id'] for row in second_attempt['results']], expected=[job.job_id for job in jobs],
+                    what='源码改变后 r2 的完整候选 Job',
+                    source=source_audit.file_closure_source(second_root / 'attempt.json', ('results',), row_key='id'))
+                r2_probes = [probe for row in second_attempt['results'] for root in row['evidence_roots']
+                             for probe in Path(root).iterdir() if (probe / 'relay-manifest.json').is_file()]
+                r2_provenance = provenance.collect_root_provenance(r2_probes)
+                self.assertEqual(r2_provenance['unresolved_roots'], [])
+                # 原件逐请求重放给出期望：r2 CLI 请求加两个新增 Mac 请求，不能由总账增量反推期望。
+                source_audit.check_accounting(precise_delta=r2_provenance['precise_total'] + 2)
+                source_audit.check_elapsed(reopened_phases=['VC-4', 'VC-5'])
+                source_audit.check_history()
+                source_audit.check_entry(invalidated, 'revision-open')
+                context['records'].append(source_audit.report(campaign_id=campaign.name, candidate_id=SECOND_CANDIDATE,
+                    candidate_revision=2, evaluation_baseline=0))
+                values.update(r2_provenance=r2_provenance)
+                phase = 7
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 7:
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign,
+                    audit_snapshots={evaluator_name: (world_fixture.load_state("cursor:" + cursor) or {}).get("audit_snapshots", {}).get(evaluator_name, "uninitialized")})
+                evaluator_audit = self.late_audit('评估器真实修复与 b1 零采集重评', context)
+                self.failed_builder(context, context['next_sequence'])
+                counted = evaluator_audit.accounting_state()
+                # r2 的值已正确；缺陷必须来自实际 checker，而非改写证据或伪造结果。
+                roots = [Path(root) for row in second_attempt["results"] for root in row["evidence_roots"]]
+                snapshot = self.boundary(roots)
+                correct_headers = 0
+                for root in roots:
+                    for binary in root.glob("*/relay/*.client_to_upstream.bin"):
+                        raw = binary.read_bytes()
+                        self.assertNotIn(b"Anthropic-Version: 2023-01-01", raw)
+                        correct_headers += raw.count(b"Anthropic-Version: 2023-06-01")
+                self.assertGreater(correct_headers, 0, "r2 必须实际产生正确值、混合大小写的请求头字节")
+                calls = len(self.runtime.candidate_calls())
+                before = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
+                project_before = project_ledger.replay_head(self.project_root)["precise_total"]
+                values.update(counted=counted, roots=roots, snapshot=snapshot, calls=calls, before=before, project_before=project_before)
+                phase = 8
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 8:
+                recovered = self.repair_evaluator(context, second_root)
+                values.update(recovered=recovered)
+                phase = 9
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 9:
+                code, passed, stderr = self.dispatch_builder(context, context["next_sequence"], baseline=1)
+                self.assertIsNotNone(passed, stderr)
+                self.assertEqual((code, passed["campaign_run"]["reason"]), (0, "queue-complete"), stderr)
+                index_path = upgrade._stage_write_target(campaign, SECOND_CANDIDATE, 1, "assertions") / "evaluation-run.json"
+                index = json.loads(index_path.read_bytes())
+                self.assertEqual(index["evaluation_baseline"], 1)
+                self.assertEqual(index["evaluator"]["checker_sha256"], identity_policy.evaluator_dependency_digests()["checker_sha256"])
+                self.assertEqual({row["status"] for row in index["rules"]}, {"pass"})
+                self.assertEqual(self.boundary(roots), snapshot)
+                self.assertEqual(self.boundary([Path(path) for path in first_snapshot]), first_snapshot)
+                self.assertEqual(len(self.runtime.candidate_calls()), calls)
+                after = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
+                self.assertEqual((before["status"], after["status"]), ("complete", "complete"))
+                self.assertEqual(after["precise_total"], before["precise_total"])
+                self.assertEqual(project_ledger.replay_head(self.project_root)["precise_total"], project_before)
+                self.assert_campaign_request_accounting(campaign, expected_client_requests=4)
+                self.assertEqual(timing.inspect_ledger(self.ledger_dir)["current_revision"], 2)
+                values.update(index_path=index_path, index=index, after=after)
+                phase = 10
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
+            if phase == 10:
+                evaluator_audit.check_trusted()
+                evaluator_audit.check_closure(executed=[row['rule'] for row in index['rules']],
+                    expected=list(upgrade._approved_rules(campaign, manifest, require_approved=True)), what='修复后按全部批准规则离线重评',
+                    source=evaluator_audit.file_closure_source(index_path, ('rules',), row_key='rule'))
+                evaluator_audit.check_accounting()
+                # b1 的批准合法重开 VC-5 一次；仍核累计时间、原截止和历史事件不变。
+                self.assertEqual(recovered['ledger_event']['event_type'], 'evaluation_baseline')
+                self.assertEqual(evaluator_audit.totals()['timing']['stage_started_counts']['VC-5'],
+                                 evaluator_audit.totals_before['timing']['stage_started_counts']['VC-5'] + 1)
+                evaluator_audit.check_elapsed(reopened_phases=['VC-5'])
+                evaluator_audit.check_history()
+                evaluator_audit.check_entry(recovered, 'compile-and-run-vc-batch', 'VC-5')
+                context['records'].append(evaluator_audit.report(campaign_id=campaign.name, candidate_id=SECOND_CANDIDATE,
+                    candidate_revision=2, evaluation_baseline=1, checker_sha256=index['evaluator']['checker_sha256'],
+                    root_cause_state_before_repair=counted['project']['root_cause_counts']))
+                world_fixture.refresh_world(self, context)
+                context.update(expected_client_requests=4, r1_invalidation=invalidated, evaluation_recovery=recovered,
+                    wrong_deployment_refusals=list(self.wrong_deployment_refusals), evaluation_index=index_path,
+                    capture_calls=calls, precise_total=after['precise_total'])
+                phase = 11
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
             return context
 
     def run_revision_evaluator_delivery_chain(self) -> dict[str, Any]:
-        """备选第三条连续链：同 Campaign 的 r2／b1 严格验收与 VC-6；实测前不注册认证。"""
+        """原第三条方法从 r2/b1 接严格验收与 VC-6，不新增认证方法。"""
 
+        cursor = 'revision-delivery-chain'
         with client_fixture.source_scope():
-            world = self.run_revision_evaluator_chain()
-            world_fixture.strict_accept(self, world)
-            world['records'].extend(self.exercise_delivery_faults(world, sequence_start=world['next_sequence']))
-            self.assertEqual({row['campaign_id'] for row in world['records']}, {world['campaign'].name})
+            saved = world_fixture.resume_checkpoint(self, cursor)
+            if saved is None:
+                if os.environ.get(world_fixture.METHOD_RESUME_ENV):
+                    raise ValueError('revision 后段原方法缺少交接游标，禁止推导续接位置')
+                saved = {'phase': 'revision'}
+                world_fixture.checkpoint(self, cursor, **saved)
+            if saved['phase'] == 'unstarted':
+                saved = {'phase': 'revision'}
+                world_fixture.checkpoint(self, cursor, **saved)
+            if saved['phase'] == 'revision':
+                world = self.run_revision_evaluator_chain()
+                world_fixture.save_world(cursor, world)
+                saved = {'phase': 'accept', 'campaign': world['campaign']}
+                world_fixture.checkpoint(self, cursor, **saved)
+            else:
+                world = world_fixture.restore_world(self, cursor)
+            if saved['phase'] == 'accept':
+                world_fixture.strict_accept(self, world)
+                world_fixture.save_world(cursor, world)
+                saved = {**saved, 'phase': 'delivery'}
+                world_fixture.checkpoint(self, cursor, **saved)
+            if saved['phase'] == 'delivery':
+                world['records'].extend(self.exercise_delivery_faults(world, sequence_start=world['next_sequence']))
+                self.assertEqual({row['campaign_id'] for row in world['records']}, {world['campaign'].name})
+                world_fixture.save_world(cursor, world)
+                world_fixture.checkpoint(self, cursor, phase='complete', campaign=world['campaign'])
             return world
+
+    def revalidate_completed_method(self, expected: list[str]) -> list[dict[str, Any]]:
+        """r2/b1 与两次错误部署拒绝仅重验原件，后段活守卫交给原父类。"""
+
+        from tools.official_client_capture.tests import claude_late_control_chain_driver as late_control
+        from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains import ScenarioAudit
+
+        own = {'候选源码失败与 r2 修订接续', '评估器真实修复与 b1 零采集重评',
+               '评估器修复拒绝错误部署收据：codex', '评估器修复拒绝错误部署收据：missing-client'}
+        records = []
+        with client_fixture.source_scope():
+            if own & set(expected):
+                saved = world_fixture.resume_checkpoint(self, 'revision-chain')
+                if saved is None or saved['phase'] != 11:
+                    raise ValueError('revision 原方法未形成完整终态游标')
+                world_fixture.restore_world(self, 'revision-chain')
+                with self.source_context():
+                    records.extend(ScenarioAudit.revalidate(self, name) for name in expected if name in own)
+            remaining = [name for name in expected if name not in own]
+            if remaining:
+                records.extend(late_control.ClaudeLateControlChainDriver.revalidate_completed_method(self, remaining))
+        by_name = {record['scenario']: record for record in records}
+        if set(by_name) != set(expected):
+            raise ValueError('revision 原方法审计集合与原声明不同')
+        return [by_name[name] for name in expected]

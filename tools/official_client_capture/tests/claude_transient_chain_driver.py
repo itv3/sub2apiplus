@@ -27,6 +27,7 @@ from tools.official_client_capture import claude_upgrade_evidence as evidence
 from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import claude_upgrade_store as candidate_store
+from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.tests import claude_boundary_receipt_fixture as boundary_fixture
 from tools.official_client_capture.tests import claude_client_receipt_fixture as client_fixture
@@ -119,11 +120,62 @@ class ClaudeTransientChainDriver(late_control.ClaudeLateControlChainDriver):
         self.runtime.tool_identity = self.tool_identity
         self.runtime.setUp()
         self.addCleanup(self.runtime.doCleanups)
+        if os.environ.get(world_fixture.METHOD_RESUME_ENV):
+            saved = world_fixture.resume_checkpoint(self, "transient-setup")
+            if saved is None or saved.get("phase") != "ready":
+                raise ValueError("transient 原方法缺少完整运行来源停点，禁止重新安装中继")
+            return
         # 批次与执行源共享同一宿主数据根，避免用别处的证据或总账拼成连续链。
         self.root, self.data = self.runtime.root, self.runtime.data
         self.relay_control = _write(self.root / "transient-relay-control.json", {"bad_probe": FAILED_PROBE})
         self.mutations = _write(self.root / "transient-relay-mutations.json", {})
         self.install_relay_source()
+        world_fixture.checkpoint(self, "transient-setup", phase="ready")
+        world_fixture.checkpoint(self, "transient-chain", phase="unstarted", values={}, parameters=None)
+        world_fixture.checkpoint(self, "transient-control-delivery-chain", phase="unstarted")
+
+    def source_step(self, cursor: str, key: str, argv: list[Any], campaign: Path) -> tuple[int, dict | None, str]:
+        """只转交共享的原命令承接接缝；相同 argv 的有意重复必须使用不同逻辑键。"""
+
+        return world_fixture.command_step(self, cursor, key, argv,
+            lambda: self.source_command(argv), campaign=campaign)
+
+    def vc_step(self, cursor: str, key: str, context: dict[str, Any], phase: str,
+                sequence: int, action: dict[str, Any]) -> tuple[int, dict | None, str]:
+        """固定原批次序号和动作计划坐标，执行仍进入原父监督器。"""
+
+        campaign = context["campaign"]
+        plan_name = (f"vc-5-{sequence:04d}.json" if phase == "VC-5"
+                     else f"{phase.lower()}-{action['action_id']}.json")
+        plan_path = self.root / "action-plans" / plan_name
+        revision = context.get("revision", 1)
+        predecessor = "VC-4" if phase == "VC-5" else "VC-3"
+        argv = ["compile-and-run-vc-batch", "--campaign-dir", campaign, "--phase", phase,
+                "--sequence", sequence, "--predecessor-checkpoint",
+                vc.vc_checkpoint_path(campaign, predecessor, revision=revision if phase == "VC-5" else None),
+                "--action-plan", plan_path, "--state-dir", self.state_dir]
+        invoke = (lambda: self.dispatch_vc5(context, sequence, action)) if phase == "VC-5" else (
+            lambda: self.dispatch(campaign, phase, sequence, [action]))
+        return world_fixture.command_step(self, cursor, key, argv, invoke, campaign=campaign)
+
+    def client_inputs(self, campaign: Path, attempt_root: Path, attempt: dict) -> list[str]:
+        """客户端来源只写一次；续作重验原输入字节，不改已发布的 attempt。"""
+
+        name = "client-inputs:" + str(attempt_root.resolve())
+        saved = world_fixture.load_state(name)
+        if saved is not None:
+            if not os.environ.get(world_fixture.METHOD_RESUME_ENV) or saved.get("status") != "complete":
+                raise ValueError("原客户端来源尚未形成完整原件，禁止重写或猜测收据")
+            for binding in saved["bindings"]:
+                world_fixture.read_cut(binding)
+            return saved["argv"]
+        world_fixture.save_state(name, {"status": "pending"})
+        argv = self.write_clients(campaign, attempt_root, attempt)
+        paths = [attempt_root / "attempt.json",
+                 *(path for path in (attempt_root / "client-evidence").rglob("*") if path.is_file())]
+        world_fixture.save_state(name, {"status": "complete", "argv": argv,
+            "bindings": [world_fixture.file_cut(path) for path in paths]})
+        return argv
 
     def install_relay_source(self) -> None:
         """中继输入保持真实序列与完整候选封套；头值从单独控制文件读取，修复不改工具源码或旧字节。"""
@@ -280,10 +332,12 @@ sys.exit(0)
     def seal(self, campaign: Path, attempt_id: str, *, clients: list[str] | None = None, recovery: str | None = None) -> dict:
         argv = ["capture-candidate", "seal", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--attempt-id", attempt_id]
         argv += ["--attempt-recovery", recovery] if recovery else list(clients or [])
-        code, preview, stderr = self.source_command(argv)
+        cursor = f"candidate-seal:{CANDIDATE}:{attempt_id}:{recovery or 'b0'}"
+        code, preview, stderr = self.source_step(cursor, "preview", argv, campaign)
         self.assertIsNotNone(preview, stderr)
         self.assertEqual((code, preview["status"]), (2, "awaiting_seal_approval"), stderr)
-        code, result, stderr = self.source_command([*argv, "--approve-seal-sha256", preview["review_sha256"], "--approved-by", "连续链审核"])
+        code, result, stderr = self.source_step(cursor, "apply",
+            [*argv, "--approve-seal-sha256", preview["review_sha256"], "--approved-by", "连续链审核"], campaign)
         self.assertEqual(code, 0, stderr)
         self.assertIsNotNone(result, stderr)
         return result
@@ -291,6 +345,13 @@ sys.exit(0)
     def evaluation_context(self, campaign: Path) -> dict[str, Any]:
         """同世界的全部批准规则与官方外部来源；不合成或覆盖候选阶段结果。"""
 
+        name = "evaluation-context:" + str(campaign.resolve())
+        saved = world_fixture.load_state(name)
+        if saved is not None:
+            if saved.get("status") != "complete":
+                raise ValueError("原评估来源物化尚未完成，禁止重建旁侧世界")
+            return world_fixture.restore_world(self, name)
+        world_fixture.save_state(name, {"status": "pending"})
         # 把当前执行源已经登记的映射作为外部输入冻结，供 VC-5 动作子进程登记同一布局。
         with self.runtime.patched():
             capture_layout = {
@@ -299,7 +360,10 @@ sys.exit(0)
             }
             context = world_fixture.real_candidate_world(self, campaign, candidate_id=CANDIDATE, revision=1,
                 expected_client_requests=2, capture_layout=capture_layout)
-            return world_fixture.prepare_delivery_sources(self, context)
+            context = world_fixture.prepare_delivery_sources(self, context)
+            world_fixture.save_world(name, context)
+            world_fixture.save_state(name, {"status": "complete"})
+            return context
 
     def late_audit(self, name: str, world: dict[str, Any]) -> Any:
         """每次六项审计都保留新物化来源；刷新当前候选不能漏掉这些可信原件。"""
@@ -311,20 +375,44 @@ sys.exit(0)
         return super().late_audit(name, audit_world)
 
     def dispatch_builder(self, context: dict[str, Any], sequence: int, *, baseline: int) -> tuple[int, dict | None, str]:
-        """当前基线先经真实 compare 批次，再消费它的 builder 配置；序号在 world 内连续。"""
+        """compare 与 builder 保留原序号；部分完成时承接原输出，不再次消耗 next_sequence。"""
 
-        world_fixture.refresh_world(self, context)
-        self.assertEqual(context['evaluation_baseline'], baseline)
-        compare_sequence = world_fixture.take_sequence(context, sequence)
-        self.assert_batch_passed(self.dispatch_vc5(context, compare_sequence,
-            self.compare_action(context['campaign'], candidate_id=context['candidate_id'])), compare_sequence, 'VC-5')
-        with vc5_sources.seams(context['config_path']):
-            comparison = upgrade._load_stage_result(context['campaign'], 'compare', context['candidate_id'])
-        self.assertEqual((comparison['candidate_revision'], comparison['evaluation_baseline']), (context['revision'], baseline))
-        self.assertEqual(comparison['rules'], list(upgrade._approved_rules(context['campaign'], context['manifest'], require_approved=True)))
-        builder_sequence = world_fixture.take_sequence(context)
-        context.update(comparison=comparison, last_builder_sequence=builder_sequence)
-        return self.dispatch_vc5(context, builder_sequence, self.assert_action(context['campaign'], comparison))
+        cursor = f"builder:{context['candidate_id']}:b{baseline}:s{sequence}"
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            world_fixture.refresh_world(self, context)
+            self.assertEqual(context['evaluation_baseline'], baseline)
+            compare_sequence = world_fixture.take_sequence(context, sequence)
+            saved = {"phase": "compare", "compare_sequence": compare_sequence, "campaign": context['campaign']}
+            world_fixture.save_world(cursor, context)
+            world_fixture.checkpoint(self, cursor, **saved)
+        else:
+            restored = world_fixture.restore_world(self, cursor)
+            context.clear()
+            context.update(restored)
+        compare_sequence = saved['compare_sequence']
+        if saved['phase'] == 'compare':
+            self.assert_batch_passed(self.vc_step(cursor, 'compare', context, 'VC-5', compare_sequence,
+                self.compare_action(context['campaign'], candidate_id=context['candidate_id'])), compare_sequence, 'VC-5')
+            with vc5_sources.seams(context['config_path']):
+                comparison = upgrade._load_stage_result(context['campaign'], 'compare', context['candidate_id'])
+            self.assertEqual((comparison['candidate_revision'], comparison['evaluation_baseline']), (context['revision'], baseline))
+            self.assertEqual(comparison['rules'], list(upgrade._approved_rules(context['campaign'], context['manifest'], require_approved=True)))
+            builder_sequence = world_fixture.take_sequence(context)
+            context.update(comparison=comparison, last_builder_sequence=builder_sequence)
+            saved = {**saved, 'phase': 'builder', 'builder_sequence': builder_sequence, 'comparison': comparison}
+            world_fixture.checkpoint(self, cursor, **saved)
+            world_fixture.save_world(cursor, context)
+        builder_sequence = saved['builder_sequence']
+        context['next_sequence'] = max(context['next_sequence'], builder_sequence + 1)
+        context['last_builder_sequence'] = builder_sequence
+        comparison = saved['comparison']
+        outcome = self.vc_step(cursor, 'builder', context, 'VC-5', builder_sequence,
+                               self.assert_action(context['campaign'], comparison))
+        if saved['phase'] != 'complete':
+            world_fixture.save_world(cursor, context)
+            world_fixture.checkpoint(self, cursor, **{**saved, 'phase': 'complete'})
+        return outcome
 
     @staticmethod
     def boundary(paths: list[Path]) -> dict[str, tuple[str, int, int]]:
@@ -335,158 +423,342 @@ sys.exit(0)
                 for path in sorted(files)}
 
     def run_transient_chain(self, *, evaluate_recovery: bool = True, first_recovery_fault: str | None = None) -> dict[str, Any]:
-        """同一 Campaign 的完整新段链：失败定位、批准、只补 J*、增量封存、单次入账、b1 重新评估及幂等重读。"""
+        """原 transient 方法保存明确阶段；恢复先重验原世界，不再派发已完成命令。"""
 
         from tools.official_client_capture.tests import claude_client_receipt_fixture
+        from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains import ScenarioAudit
 
-        campaign = self.drive_vc3_vc4_to_candidate_sealed()
-        self.prepare_runtime(campaign)
-        manifest = upgrade.load_campaign_manifest(campaign)
-        world_fixture.freeze_control_profile(campaign)
+        cursor = "transient-chain"
+        parameters = {"evaluate_recovery": evaluate_recovery, "first_recovery_fault": first_recovery_fault}
+        saved = world_fixture.resume_checkpoint(self, cursor)
+        if saved is None:
+            if os.environ.get(world_fixture.METHOD_RESUME_ENV):
+                raise ValueError("transient 原方法缺少阶段游标，禁止重新建立 Campaign")
+            saved = {"phase": "unstarted", "values": {}, "parameters": None}
+            world_fixture.checkpoint(self, cursor, **saved)
+        if saved["phase"] == "unstarted":
+            saved = {"phase": "vc3-vc4", "values": {}, "parameters": parameters,
+                     "initializations": {"vc3-vc4-parent": "uninitialized"}}
+            world_fixture.checkpoint(self, cursor, **saved)
+        if saved["parameters"] != parameters:
+            raise ValueError("transient 原方法参数与原停点不同")
+        phase, values = (0 if saved["phase"] == "vc3-vc4" else saved["phase"]), dict(saved["values"])
+        campaign = values.get('campaign')
+        manifest = values.get('manifest')
+        first = values.get('first')
+        attempt_id = values.get('attempt_id')
+        attempt_root = values.get('attempt_root')
+        attempt = values.get('attempt')
+        clients = values.get('clients')
+        failed = values.get('failed')
+        reconciled = values.get('reconciled')
+        preview = values.get('preview')
+        recovered = values.get('recovered')
+        baseline_root = values.get('baseline_root')
+        recovery = values.get('recovery')
+        jobs = values.get('jobs')
+        original_stage = values.get('original_stage')
+        old_roots = values.get('old_roots')
+        original_seal_root = values.get('original_seal_root')
+        old_boundary = values.get('old_boundary')
+        before_calls = values.get('before_calls')
+        before_count = values.get('before_count')
+        run_argv = values.get('run_argv')
+        result = values.get('result')
+        executed = values.get('executed')
+        expected = values.get('expected')
+        segment = values.get('segment')
+        summary = values.get('summary')
+        stage_path = values.get('stage_path')
+        stage = values.get('stage')
+        previous_stage = values.get('previous_stage')
+        effective = values.get('effective')
+        receipt = values.get('receipt')
+        delta = values.get('delta')
+        count = values.get('count')
+        calls = values.get('calls')
+        replay_boundary = values.get('replay_boundary')
+        context = world_fixture.restore_world(self, cursor) if phase >= 3 else None
+        audit_name = "候选 transient 裁定与恢复段续跑"
+        audit = self.late_audit(audit_name, context) if 3 < phase < 13 else None
+        if phase == 13:
+            ScenarioAudit.revalidate(self, audit_name)
+            return context
+        if phase == 0:
+            campaign = self.drive_vc3_vc4_to_candidate_sealed()
+            self.prepare_runtime(campaign)
+            manifest = upgrade.load_campaign_manifest(campaign)
+            world_fixture.freeze_control_profile(campaign)
+            values.update(campaign=campaign, manifest=manifest)
+            phase = 1
+            world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
         with claude_client_receipt_fixture.source_scope():
-            code, first, stderr = self.source_command([
-                "capture-candidate", "run", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--acknowledge-live-requests",
-            ])
-            self.assertIsNotNone(first, stderr)
-            self.assertEqual((code, first["status"]), (2, "awaiting_receipts"), stderr)
-            attempt_id = first["attempt_id"]
-            with self.source_context():
-                attempt_root, attempt = upgrade._load_capture_attempt(campaign, "candidate", CANDIDATE, attempt_id)
-            clients = self.write_clients(campaign, attempt_root, attempt)
-            self.seal(campaign, attempt_id, clients=clients)
-            code, _accounted, stderr = self.source_command(["account-sealed-candidate", "--campaign-dir", campaign, "--candidate-id", CANDIDATE])
-            self.assertEqual(code, 0, stderr)
-            context = self.evaluation_context(campaign)
-            audit = self.late_audit("候选 transient 裁定与恢复段续跑", context)
-            code, failed, stderr = self.dispatch_builder(context, 9, baseline=0)
-            self.assertIsNotNone(failed, stderr)
-            self.assertEqual((code, failed["campaign_run"]["reason"]), (1, "action-failed:assert-rules"), stderr)
-            code, reconciled, stderr = self.source_command([
-                "reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", Path(failed["campaign_run"]["run_dir"]),
-            ])
-            self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
-            with self.source_context():
-                preview = self.preview(context)
-                self.assertEqual(preview["failure_scope"]["jobs"], [FAILED_JOB])
-                code, recovered, stderr = self.recover(context, "apply", "--approve-sha256", preview["review_sha256"],
-                    "--root-cause-class", "transient-environment")
-            self.assertEqual(code, 0, stderr)
-            self.assertIsNotNone(recovered, stderr)
-            baseline_root = campaign / "candidates" / CANDIDATE / "revisions" / "b1"
-            recovery = json.loads((baseline_root / "recovery.json").read_bytes())
-            self.assertEqual((recovery["attempt_id"], recovery["recovery_revision"], recovery["execute_jobs"]), (attempt_id, "ar1", [FAILED_JOB]))
-            jobs = {row["id"]: row for row in attempt["results"]}
-            self.assertEqual(set(recovery["reuse_jobs"]), set(jobs) - {FAILED_JOB})
-            original_stage = candidate_capture.legacy_stage_result_path(campaign, CANDIDATE)
-            old_roots = [Path(value) for row in jobs.values() for value in row["evidence_roots"]]
-            original_seal_root = campaign / "candidates" / CANDIDATE / "seal"
-            old_boundary = self.boundary([original_stage, attempt_root, original_seal_root, *old_roots])
-            before_calls = len(self.runtime.candidate_calls())
-            before_count = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"]
-            # 独立第二 transient 驱动可在首次 ar1 执行前指定另一 probe 的环境故障，不修改封存原件。
-            _write(self.relay_control, {"bad_probe": first_recovery_fault})
-            run_argv = ["capture-candidate", "run", "--campaign-dir", campaign, "--candidate-id", CANDIDATE,
-                        "--attempt-recovery", "ar1", "--acknowledge-live-requests"]
-            code, result, stderr = self.source_command(run_argv)
-            self.assertIsNotNone(result, stderr)
-            self.assertEqual((code, result["status"]), (2, "awaiting_receipts"), stderr)
-            new_calls = self.runtime.candidate_calls()[before_calls:]
-            executed = [row["probe"] for row in new_calls if not row["dry_run"]]
-            expected = [row["probe_id"] for row in jobs[FAILED_JOB]["steps"] if row.get("argv")]
-            self.assertCountEqual(executed, expected)
-            segment = attempt_root / "recovery" / "ar1"
-            summary = json.loads((segment / "attempt-recovery.json").read_bytes())
-            self.assertEqual([row["id"] for row in summary["results"]], [FAILED_JOB])
-            self.assertTrue(all("-recovery-ar1" in root for row in summary["results"] for root in row["evidence_roots"]))
-            self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
-            self.seal(campaign, attempt_id, recovery="ar1")
-            stage_path = upgrade._stage_write_target(campaign, CANDIDATE, 1, "capture-candidate")
-            with self.source_context():
-                stage = upgrade._load_stage_result(campaign, "capture-candidate", CANDIDATE, _baseline=1)
-            self.assertTrue(stage_path.is_file())
-            previous_stage = json.loads(original_stage.read_bytes())
-            self.assertEqual(stage["client_evidence"], previous_stage["client_evidence"])
-            self.assertEqual(set(stage["root_sets"]["dropped_roots"]), set(jobs[FAILED_JOB]["evidence_roots"]))
-            effective_path = campaign / stage["effective_results"]["path"]
-            self.assertEqual(upgrade.file_sha256(effective_path), stage["effective_results"]["sha256"])
-            effective = json.loads(effective_path.read_bytes())
-            self.assertEqual((effective["evaluation_baseline"], effective["recovery_revision"]), (1, "ar1"))
-            effective_jobs = {row["id"]: row for row in effective["results"]}
-            self.assertEqual(effective_jobs, {**jobs, FAILED_JOB: summary["results"][0]})
-            self.assertEqual(stage["results"], effective["results"])
-            store, store_campaign = candidate_store.open_campaign_store(campaign, manifest)
-            validation_attempts = [fact for fact in store.list_facts(store_campaign["campaign_id"])
-                                   if fact["fact_kind"] == "validation_attempt_created"]
-            self.assertEqual({fact["payload"]["attempt_id"] for fact in validation_attempts},
-                             {f"{attempt_id}-v1", f"{attempt_id}-ar1-v1"})
-            self.assertNotEqual(stage["store"]["validation_attempt_ref"], previous_stage["store"]["validation_attempt_ref"])
-            execution = store.load_object(stage["store"]["validation_execution_plan_ref"])["payload"]
-            self.assertEqual(set(execution["execute_item_ids"]) & set(jobs), {FAILED_JOB})
-            self.assertEqual(set(execution["reuse_item_ids"]) & set(jobs), set(jobs) - {FAILED_JOB})
-            self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
-            code, _accounted, stderr = self.source_command(["account-sealed-candidate", "--campaign-dir", campaign,
-                "--candidate-id", CANDIDATE, "--attempt-recovery", "ar1"])
-            self.assertEqual(code, 0, stderr)
-            receipt = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
-            self.assertEqual(receipt["status"], "complete")
-            # 离线增量核算只接中继运行根；Job 根里的网关恢复报告须由上面的 Campaign provenance 闭包验证。
-            new_probes = [probe for row in summary["results"] for root in row["evidence_roots"]
-                          for probe in Path(root).iterdir() if (probe / "relay-manifest.json").is_file()]
-            self.assertCountEqual([probe.name for probe in new_probes], expected)
-            delta_receipt = provenance.collect_root_provenance(new_probes)
-            self.assertEqual(delta_receipt["unresolved_roots"], [])
-            delta = delta_receipt["precise_total"]
-            self.assertGreater(delta, 0)
-            self.assertEqual(receipt["precise_total"] - before_count, delta)
-            if evaluate_recovery:
-                code, passed, stderr = self.dispatch_builder(context, context["next_sequence"], baseline=1)
-                self.assertIsNotNone(passed, stderr)
-                self.assertEqual((code, passed["campaign_run"]["reason"]), (0, "queue-complete"), stderr)
-                index = json.loads((upgrade._stage_write_target(campaign, CANDIDATE, 1, "assertions") / "evaluation-run.json").read_bytes())
-                self.assertEqual(index["evaluation_baseline"], 1)
-                self.assertTrue(all(row["status"] == "pass" for row in index["rules"]))
-            count, calls = receipt["precise_total"], len(self.runtime.candidate_calls())
-            code, reused, stderr = self.source_command(run_argv)
-            self.assertEqual((code, reused["reused"], reused["live_request_count"]), (2, True, 0), stderr)
-            self.assertEqual(len(self.runtime.candidate_calls()), calls)
-            self.assertEqual(provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"], count)
-            replay_boundary = self.boundary([segment, stage_path.parent, store.root])
-            code, resealed, stderr = self.source_command([
-                "capture-candidate", "seal", "--campaign-dir", campaign, "--candidate-id", CANDIDATE,
-                "--attempt-id", attempt_id, "--attempt-recovery", "ar1", "--approve-seal-sha256",
-                stage["seal"]["review_sha256"], "--approved-by", "连续链审核",
-            ])
-            self.assertIsNotNone(resealed, stderr)
-            self.assertEqual((code, resealed["status"], resealed["reused"]), (0, "complete", True), stderr)
-            self.assertEqual(self.boundary([segment, stage_path.parent, store.root]), replay_boundary)
-            self.assertEqual(len(self.runtime.candidate_calls()), calls)
-            self.assertEqual(provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"], count)
-            self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
-            self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
-            self.assert_campaign_request_accounting(campaign, expected_client_requests=2)
-
-            audit.check_trusted()
-            audit.check_closure(executed=[row['id'] for row in summary['results']], expected=[FAILED_JOB],
-                reused=recovery['reuse_jobs'], expected_reused=sorted(set(jobs) - {FAILED_JOB}), what='恢复段 J*')
-            audit.check_accounting(precise_delta=delta)
-            audit.check_elapsed()
-            audit.check_history()
-            audit.check_entry(recovered, 'compile-and-run-vc-batch', 'VC-5')
-            context['records'].append(audit.report(campaign_id=campaign.name, candidate_id=CANDIDATE,
-                candidate_revision=1, evaluation_baseline=1, executed_probes=executed, live_request_delta=delta))
-            world_fixture.refresh_world(self, context)
-            context.update(original_attempt_root=attempt_root, original_attempt=attempt, attempt_id=attempt_id,
-                recovery_revision='ar1', recovery_root=segment, recovery_summary=summary, baseline_recovery=recovery,
-                old_boundary=old_boundary, relay_control=self.relay_control)
+            if phase == 1:
+                code, first, stderr = self.source_step(cursor, "first-capture", [
+                    "capture-candidate", "run", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--acknowledge-live-requests",
+                ], campaign)
+                self.assertIsNotNone(first, stderr)
+                self.assertEqual((code, first["status"]), (2, "awaiting_receipts"), stderr)
+                attempt_id = first["attempt_id"]
+                with self.source_context():
+                    attempt_root, attempt = upgrade._load_capture_attempt(campaign, "candidate", CANDIDATE, attempt_id)
+                values.update(first=first, attempt_id=attempt_id, attempt_root=attempt_root, attempt=attempt)
+                phase = 2
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 2:
+                clients = self.client_inputs(campaign, attempt_root, attempt)
+                self.seal(campaign, attempt_id, clients=clients)
+                code, _accounted, stderr = self.source_step(cursor, "first-account", ["account-sealed-candidate", "--campaign-dir", campaign, "--candidate-id", CANDIDATE], campaign)
+                self.assertEqual(code, 0, stderr)
+                context = self.evaluation_context(campaign)
+                values.update(clients=clients)
+                phase = 3
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 3:
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters,
+                    campaign=campaign, audit_snapshots={audit_name: (world_fixture.load_state("cursor:" + cursor) or {}).get("audit_snapshots", {}).get(audit_name, "uninitialized")})
+                audit = self.late_audit("候选 transient 裁定与恢复段续跑", context)
+                code, failed, stderr = self.dispatch_builder(context, 9, baseline=0)
+                self.assertIsNotNone(failed, stderr)
+                self.assertEqual((code, failed["campaign_run"]["reason"]), (1, "action-failed:assert-rules"), stderr)
+                code, reconciled, stderr = self.source_step(cursor, "first-reconcile", [
+                    "reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", Path(failed["campaign_run"]["run_dir"]),
+                ], campaign)
+                self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
+                values.update(failed=failed, reconciled=reconciled)
+                phase = 4
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 4:
+                with self.source_context():
+                    code, preview, stderr = self.source_step(cursor, "recovery-preview",
+                        ["evaluation-recover", "preview", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--reviewer", "reviewer-a"], campaign)
+                    self.assertEqual(code, 0, stderr)
+                    self.assertIsNotNone(preview, stderr)
+                    self.assertEqual(preview["failure_scope"]["jobs"], [FAILED_JOB])
+                    code, recovered, stderr = self.source_step(cursor, "recovery-apply",
+                        ["evaluation-recover", "apply", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--reviewer", "reviewer-a",
+                         "--approve-sha256", preview["review_sha256"], "--root-cause-class", "transient-environment"], campaign)
+                self.assertEqual(code, 0, stderr)
+                self.assertIsNotNone(recovered, stderr)
+                baseline_root = campaign / "candidates" / CANDIDATE / "revisions" / "b1"
+                recovery = json.loads((baseline_root / "recovery.json").read_bytes())
+                self.assertEqual((recovery["attempt_id"], recovery["recovery_revision"], recovery["execute_jobs"]), (attempt_id, "ar1", [FAILED_JOB]))
+                jobs = {row["id"]: row for row in attempt["results"]}
+                self.assertEqual(set(recovery["reuse_jobs"]), set(jobs) - {FAILED_JOB})
+                values.update(preview=preview, recovered=recovered, baseline_root=baseline_root, recovery=recovery, jobs=jobs)
+                phase = 5
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 5:
+                original_stage = candidate_capture.legacy_stage_result_path(campaign, CANDIDATE)
+                old_roots = [Path(value) for row in jobs.values() for value in row["evidence_roots"]]
+                original_seal_root = campaign / "candidates" / CANDIDATE / "seal"
+                old_boundary = self.boundary([original_stage, attempt_root, original_seal_root, *old_roots])
+                before_calls = len(self.runtime.candidate_calls())
+                before_count = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"]
+                # 独立第二 transient 驱动可在首次 ar1 执行前指定另一 probe 的环境故障，不修改封存原件。
+                run_argv = ["capture-candidate", "run", "--campaign-dir", campaign, "--candidate-id", CANDIDATE,
+                            "--attempt-recovery", "ar1", "--acknowledge-live-requests"]
+                _write(self.relay_control, {"bad_probe": first_recovery_fault})
+                values.update(original_stage=original_stage, old_roots=old_roots, original_seal_root=original_seal_root, old_boundary=old_boundary, before_calls=before_calls, before_count=before_count, run_argv=run_argv)
+                phase = 6
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 6:
+                code, result, stderr = self.source_step(cursor, "recovery-capture", run_argv, campaign)
+                self.assertIsNotNone(result, stderr)
+                self.assertEqual((code, result["status"]), (2, "awaiting_receipts"), stderr)
+                new_calls = self.runtime.candidate_calls()[before_calls:]
+                executed = [row["probe"] for row in new_calls if not row["dry_run"]]
+                expected = [row["probe_id"] for row in jobs[FAILED_JOB]["steps"] if row.get("argv")]
+                self.assertCountEqual(executed, expected)
+                segment = attempt_root / "recovery" / "ar1"
+                summary = json.loads((segment / "attempt-recovery.json").read_bytes())
+                self.assertEqual([row["id"] for row in summary["results"]], [FAILED_JOB])
+                self.assertTrue(all("-recovery-ar1" in root for row in summary["results"] for root in row["evidence_roots"]))
+                self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
+                values.update(result=result, executed=executed, expected=expected, segment=segment, summary=summary)
+                phase = 7
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 7:
+                self.seal(campaign, attempt_id, recovery="ar1")
+                stage_path = upgrade._stage_write_target(campaign, CANDIDATE, 1, "capture-candidate")
+                with self.source_context():
+                    stage = upgrade._load_stage_result(campaign, "capture-candidate", CANDIDATE, _baseline=1)
+                self.assertTrue(stage_path.is_file())
+                previous_stage = json.loads(original_stage.read_bytes())
+                self.assertEqual(stage["client_evidence"], previous_stage["client_evidence"])
+                self.assertEqual(set(stage["root_sets"]["dropped_roots"]), set(jobs[FAILED_JOB]["evidence_roots"]))
+                effective_path = campaign / stage["effective_results"]["path"]
+                self.assertEqual(upgrade.file_sha256(effective_path), stage["effective_results"]["sha256"])
+                effective = json.loads(effective_path.read_bytes())
+                self.assertEqual((effective["evaluation_baseline"], effective["recovery_revision"]), (1, "ar1"))
+                effective_jobs = {row["id"]: row for row in effective["results"]}
+                self.assertEqual(effective_jobs, {**jobs, FAILED_JOB: summary["results"][0]})
+                self.assertEqual(stage["results"], effective["results"])
+                store, store_campaign = candidate_store.open_campaign_store(campaign, manifest)
+                validation_attempts = [fact for fact in store.list_facts(store_campaign["campaign_id"])
+                                       if fact["fact_kind"] == "validation_attempt_created"]
+                self.assertEqual({fact["payload"]["attempt_id"] for fact in validation_attempts},
+                                 {f"{attempt_id}-v1", f"{attempt_id}-ar1-v1"})
+                self.assertNotEqual(stage["store"]["validation_attempt_ref"], previous_stage["store"]["validation_attempt_ref"])
+                execution = store.load_object(stage["store"]["validation_execution_plan_ref"])["payload"]
+                self.assertEqual(set(execution["execute_item_ids"]) & set(jobs), {FAILED_JOB})
+                self.assertEqual(set(execution["reuse_item_ids"]) & set(jobs), set(jobs) - {FAILED_JOB})
+                self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
+                values.update(stage_path=stage_path, stage=stage, previous_stage=previous_stage, effective=effective)
+                phase = 8
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 8:
+                code, _accounted, stderr = self.source_step(cursor, "recovery-account", ["account-sealed-candidate", "--campaign-dir", campaign,
+                    "--candidate-id", CANDIDATE, "--attempt-recovery", "ar1"], campaign)
+                self.assertEqual(code, 0, stderr)
+                receipt = provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)
+                self.assertEqual(receipt["status"], "complete")
+                # 离线增量核算只接中继运行根；Job 根里的网关恢复报告须由上面的 Campaign provenance 闭包验证。
+                new_probes = [probe for row in summary["results"] for root in row["evidence_roots"]
+                              for probe in Path(root).iterdir() if (probe / "relay-manifest.json").is_file()]
+                self.assertCountEqual([probe.name for probe in new_probes], expected)
+                delta_receipt = provenance.collect_root_provenance(new_probes)
+                self.assertEqual(delta_receipt["unresolved_roots"], [])
+                delta = delta_receipt["precise_total"]
+                self.assertGreater(delta, 0)
+                self.assertEqual(receipt["precise_total"] - before_count, delta)
+                values.update(receipt=receipt, delta=delta)
+                phase = 9
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 9:
+                if evaluate_recovery:
+                    code, passed, stderr = self.dispatch_builder(context, context["next_sequence"], baseline=1)
+                    self.assertIsNotNone(passed, stderr)
+                    self.assertEqual((code, passed["campaign_run"]["reason"]), (0, "queue-complete"), stderr)
+                    index = json.loads((upgrade._stage_write_target(campaign, CANDIDATE, 1, "assertions") / "evaluation-run.json").read_bytes())
+                    self.assertEqual(index["evaluation_baseline"], 1)
+                    self.assertTrue(all(row["status"] == "pass" for row in index["rules"]))
+                phase = 10
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 10:
+                if 'count' not in values:
+                    count, calls = receipt["precise_total"], len(self.runtime.candidate_calls())
+                    values.update(count=count, calls=calls)
+                    world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+                code, reused, stderr = self.source_step(cursor, "repeat-capture", run_argv, campaign)
+                self.assertEqual((code, reused["reused"], reused["live_request_count"]), (2, True, 0), stderr)
+                self.assertEqual(len(self.runtime.candidate_calls()), calls)
+                self.assertEqual(provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"], count)
+                values.update(count=count, calls=calls)
+                phase = 11
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 11:
+                if 'replay_boundary' not in values:
+                    replay_boundary = self.boundary([segment, stage_path.parent, candidate_store.campaign_store_root(campaign)])
+                    values.update(replay_boundary=replay_boundary)
+                    world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+                code, resealed, stderr = self.source_step(cursor, "repeat-seal", [
+                    "capture-candidate", "seal", "--campaign-dir", campaign, "--candidate-id", CANDIDATE,
+                    "--attempt-id", attempt_id, "--attempt-recovery", "ar1", "--approve-seal-sha256",
+                    stage["seal"]["review_sha256"], "--approved-by", "连续链审核",
+                ], campaign)
+                self.assertIsNotNone(resealed, stderr)
+                self.assertEqual((code, resealed["status"], resealed["reused"]), (0, "complete", True), stderr)
+                self.assertEqual(self.boundary([segment, stage_path.parent, candidate_store.campaign_store_root(campaign)]), replay_boundary)
+                self.assertEqual(len(self.runtime.candidate_calls()), calls)
+                self.assertEqual(provenance.collect_campaign_provenance(campaign, formal_campaign_id=campaign.name)["precise_total"], count)
+                self.assertEqual(self.boundary([Path(path) for path in old_boundary]), old_boundary)
+                self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "active")
+                self.assert_campaign_request_accounting(campaign, expected_client_requests=2)
+                values.update(replay_boundary=replay_boundary)
+                phase = 12
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
+            if phase == 12:
+                audit.check_trusted()
+                audit.check_closure(executed=[row['id'] for row in summary['results']], expected=[FAILED_JOB],
+                    reused=recovery['reuse_jobs'], expected_reused=sorted(set(jobs) - {FAILED_JOB}), what='恢复段 J*', source=audit.file_closure_source(segment / 'attempt-recovery.json',
+                        ('results',), ('reuse_jobs',), row_key='id', reused_path=baseline_root / 'recovery.json'))
+                audit.check_accounting(precise_delta=delta)
+                audit.check_elapsed()
+                audit.check_history()
+                audit.check_entry(recovered, 'compile-and-run-vc-batch', 'VC-5')
+                context['records'].append(audit.report(campaign_id=campaign.name, candidate_id=CANDIDATE,
+                    candidate_revision=1, evaluation_baseline=1, executed_probes=executed, live_request_delta=delta))
+                world_fixture.refresh_world(self, context)
+                context.update(original_attempt_root=attempt_root, original_attempt=attempt, attempt_id=attempt_id,
+                    recovery_revision='ar1', recovery_root=segment, recovery_summary=summary, baseline_recovery=recovery,
+                    old_boundary=old_boundary, relay_control=self.relay_control)
+                phase = 13
+                if context is not None:
+                    world_fixture.save_world(cursor, context)
+                world_fixture.checkpoint(self, cursor, phase=phase, values=values, parameters=parameters, campaign=campaign)
             return context
 
     def run_transient_control_delivery_chain(self) -> dict[str, Any]:
-        """A 组主链：同一 Campaign 的真实恢复段经暂停／延期、严格 accept 到 VC-6。"""
+        """原 A 组主方法续接已有世界；后段各场景仍由原父类继续。"""
 
+        cursor = 'transient-control-delivery-chain'
         with client_fixture.source_scope():
-            # 成功索引只写一次；b1 的首次 builder 在延期场景中执行，不重复写 recorded_at。
-            world = self.run_transient_chain(evaluate_recovery=False)
-            records = self.exercise_control_and_delivery_faults(world, sequence_start=world['next_sequence'])
-            world['records'].extend(records)
-            self.assertEqual({row['campaign_id'] for row in world['records']}, {world['campaign'].name})
+            saved = world_fixture.resume_checkpoint(self, cursor)
+            if saved is None:
+                if os.environ.get(world_fixture.METHOD_RESUME_ENV):
+                    raise ValueError('transient 后段原方法缺少交接游标，禁止推导续接位置')
+                saved = {'phase': 'transient'}
+                world_fixture.checkpoint(self, cursor, **saved)
+            if saved['phase'] == 'unstarted':
+                saved = {'phase': 'transient'}
+                world_fixture.checkpoint(self, cursor, **saved)
+            if saved['phase'] == 'transient':
+                world = self.run_transient_chain(evaluate_recovery=False)
+                world_fixture.save_world(cursor, world)
+                saved = {'phase': 'late', 'campaign': world['campaign']}
+                world_fixture.checkpoint(self, cursor, **saved)
+            else:
+                world = world_fixture.restore_world(self, cursor)
+            if saved['phase'] == 'late':
+                records = self.exercise_control_and_delivery_faults(world, sequence_start=world['next_sequence'])
+                world['records'].extend(records)
+                self.assertEqual({row['campaign_id'] for row in world['records']}, {world['campaign'].name})
+                world_fixture.save_world(cursor, world)
+                world_fixture.checkpoint(self, cursor, phase='complete', campaign=world['campaign'])
             return world
+
+    def revalidate_completed_method(self, expected: list[str]) -> list[dict[str, Any]]:
+        """成功原方法只重验原审计与原世界；输出统一交给原 runner 写入。"""
+
+        from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains import ScenarioAudit
+
+        own = '候选 transient 裁定与恢复段续跑'
+        records = []
+        with client_fixture.source_scope():
+            if own in expected:
+                saved = world_fixture.resume_checkpoint(self, 'transient-chain')
+                if saved is None or saved['phase'] != 13:
+                    raise ValueError('transient 原方法未形成完整终态游标')
+                world_fixture.restore_world(self, 'transient-chain')
+                with self.source_context():
+                    records.append(ScenarioAudit.revalidate(self, own))
+            remaining = [name for name in expected if name != own]
+            if remaining:
+                records.extend(super().revalidate_completed_method(remaining))
+        by_name = {record['scenario']: record for record in records}
+        if set(by_name) != set(expected):
+            raise ValueError('transient 原方法审计集合与原声明不同')
+        return [by_name[name] for name in expected]
