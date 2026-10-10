@@ -1,0 +1,53 @@
+{
+  "base_commit": "658fa686c559f91aacf78487146f364f51aab2ab",
+  "changed_path_count": 8,
+  "current_commit": "2656bac3a06535ce2a077872206582adab5df8bf",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5895,
+  "frozen_path_count": 2015,
+  "identity_sha256": "68db846b380536cee7fc89a29061a9177470d19e942358174dedbda7ca4615bf",
+  "issued_at_utc": "2026-10-10T15:29:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-entry-concentrated-20261010-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_inflight_reservation_test.go",
+      "predecessor_sha256s": [
+        "efadb92c67a9abd9ab3e37310caafc25ef85542d7c3ec0df301292e529f482d5"
+      ],
+      "reason": "集中修复隔离录制目录与冻结布局装配、补齐Go测试共享resolver；历史记录和正式判据不改 path=backend/internal/service/billing_inflight_reservation_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bcc655cf003043bdcc3f2a222852b3996a9befb7f1e06b3d7ad278e9614b25cd"
+    }
+  ],
+  "unregistered_path_count": 7,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/claude_late_stage_chain_driver.py",
+    "tools/official_client_capture/tests/real_chains/test_claude_upgrade_fault_chains.py",
+    "tools/official_client_capture/tests/real_chains/test_claude_vc1_recorded_chain.py",
+    "tools/official_client_capture/tests/test_claude_chain_diagnostic_budget.py",
+    "tools/official_client_capture/tests/test_claude_chain_registration.py",
+    "tools/official_client_capture/tests/test_claude_revision_evaluator_preparation.py",
+    "tools/official_client_capture/tests/test_claude_vc1_recorded_chain.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
