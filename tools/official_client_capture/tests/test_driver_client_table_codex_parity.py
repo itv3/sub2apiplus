@@ -920,6 +920,31 @@ ENGINEERING_DISK_SHELL_RESIDUALS = {"guard.sh": [
     '+    print("guard/disk-engineering:", disk["engineering_policy"])',
     '+if not disk["ok"]:',
 ]}
+# 入口可选并发透传以实际父提交为基线；缺省数组为空，执行器 argv 保持原样。
+# 新参数的正整数检查仅在显式提供 --parallel 时执行；不改客户端表、模式或承接批准规则。
+ENTRY_PARALLEL_BASELINE_COMMIT = "5b4663bc3ac79d76ddc99b9570d696d76cfb0714"
+ENTRY_PARALLEL_SHELL_DIGESTS = {'entry-gates.sh': 'a8c8083f82cd430b46b4f2f8ca59faa060da0089c6c2d484f4be9dc95bf726c1'}
+ENTRY_PARALLEL_SHELL_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates '
+                    '<门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] '
+                    '[--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] '
+                    '[--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] '
+                    '[--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" '
+                    '>&2; }',
+                    '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel '
+                    '<正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] '
+                    '[--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] '
+                    '[--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store '
+                    '<目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 '
+                    '位提交> [<前端依赖目录绝对路径>]" >&2; }',
+                    '+PARALLEL_ARGS=()',
+                    '+    --parallel)',
+                    '+      if ! [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then echo "--parallel 必须是正整数" >&2; exit 2; fi',
+                    '+      PARALLEL_ARGS=(--parallel "$2"); shift 2 ;;',
+                    '-    --mode "$MODE" --record-store "$STORE" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} '
+                    '${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?',
+                    '+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} '
+                    '${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || '
+                    'EXEC_RC=$?']}
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
@@ -930,6 +955,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("B5b-01b", B5B01B_BASELINE_COMMIT, B5B01B_SHELL_DIGESTS, B5B01B_SHELL_RESIDUALS),
     ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SHELL_DIGESTS, B405B1_SHELL_RESIDUALS),
     ("B5a-09-source", B5A09_SOURCE_BASELINE_COMMIT, B5A09_SOURCE_SHELL_DIGESTS, B5A09_SOURCE_SHELL_RESIDUALS),
+    ("升级入口可选并发透传", ENTRY_PARALLEL_BASELINE_COMMIT, ENTRY_PARALLEL_SHELL_DIGESTS, ENTRY_PARALLEL_SHELL_RESIDUALS),
     ("engineering-disk", ENGINEERING_DISK_BASELINE_COMMIT, ENGINEERING_DISK_SHELL_DIGESTS, ENGINEERING_DISK_SHELL_RESIDUALS),
 )
 
