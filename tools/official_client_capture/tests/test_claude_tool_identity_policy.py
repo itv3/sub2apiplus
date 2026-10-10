@@ -660,6 +660,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
             "claude_mac_product_logs.py": "evidence_semantics",
             "claude_mac_product_modules.py": "evidence_semantics",
             "claude_mac_product_origins.py": "evidence_semantics",
+            "claude_mac_product_state.py": "evidence_semantics",
             "claude_mac_product_native.m": "evidence_semantics",
             "claude_mac_product_flows_native.m": "evidence_semantics",
             "claude_mac_capture_fixture_policy.py": "control",

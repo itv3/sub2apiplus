@@ -134,6 +134,7 @@
         "official_client_capture/claude_mac_product_native.m",
         "official_client_capture/claude_mac_product_native.py",
         "official_client_capture/claude_mac_product_origins.py",
+        "official_client_capture/claude_mac_product_state.py",
         "official_client_capture/claude_qualification_material_import.schema.json",
         "official_client_capture/claude_qualification_source_acquisition.schema.json",
         "official_client_capture/claude_rule_assertion.py",
