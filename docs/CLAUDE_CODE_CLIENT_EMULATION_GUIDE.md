@@ -1020,9 +1020,9 @@ Claude 的生产 Active 身份必须同时满足
 | VC-0～VC-4 | 受管入口、官方取证／恢复、分类批准、画像暂存和候选 revision／构建已接入；正式开工仍需 §4.0.5 的发布认证 |
 | VC-5 | 候选采集与封存、compare／accept、评估基线和四类裁定的控制面已有实现；Mac v2 合同 B、受监督 client-run、来源与预约 wrapper 及 compare／accept 读侧接线已合入。原 attempt 持久请求上界占用、候选服务与消费读侧已接通；独立 H1／TLS-H1 及受限 H2 原生捕获、认证导出同步、私有状态 journal 和只读能力检查已完成本机实现。H2 首片持久化、同原件恢复、ALPN 与断点同步专项已通过，全部仍为回归夹具；正式捕获合同、中性字节核心、产品原生来源、固定工厂与跨机桥已有工具实现；固定物料、签名安装、原生权限和实时派发仍须现场验真。缺安装或资格时 live 在占用、监听和启动前拒绝；三官方客户端真账号现场未验收 |
 | Mac fixture 与正式产品路径 | 旧 `NativeProductRecorder` 仍只接受显式回归夹具，产物是 `internal-v1` partial／恢复诊断，formal 与成功收据仍拒绝。正式 `ProductEvidenceRecorder` 由固定受管工厂建立，使用实际 Darwin provider，逐项核验来源、物料、隔离与观测原件；本机实现不授予签名安装、原生权限或三官方客户端真账号现场验收。两条路径的合同与来源边界见共享实现文档 §12.1 |
-| 封存后临时环境故障 | B4-05b 的 `ar<k>`、对账、增量封存、封存后请求入账及五项恢复后继修复已合入本机集成树，组合定向检查通过；第二次 transient 已实际复验，最终验收收口尚未登记通过；正式九链未认证。不能把封存前 resume 或组合专项当作该整链的通过凭证 |
+| 封存后临时环境故障 | B4-05b 的 `ar<k>`、对账、增量封存、封存后请求入账及五项恢复后继修复已合入本机集成树，组合定向检查只作回归凭证；第二次 transient 与完整故障链的结果、发布认证按 §4.0.5 的当前原件核验。不能把封存前 resume 或组合专项当作该整链的通过凭证 |
 | VC-6 候选交付 | 真实交付合同 A、独立执行器与 guard／恢复证明、严格 Store 消费、阶段结果及 checkpoint 已完成本机接线；固定受管工厂与来源解析已有实现，ARM64 实际安装、可信回退、专用凭据、四阶段及异常恢复尚待现场验收。当前不能宣称已完成真实切换、回退或稳定观察 |
-| 完整链与认证 | B5b-02 来源快照与 VC-0→VC-1 连续驱动源码已接入，仅限 `fixture_only／regression_fixture`；连续链、完整链与故障链仍须按实际串行执行结果验收，B5b-04 当前发布认证未签发 |
+| 完整链与认证 | B5b-02 来源快照与 VC-0→VC-1 连续驱动源码已接入，仅限 `fixture_only／regression_fixture`；连续链、完整链与故障链须分别具有完整实际执行记录，当前发布认证按 §4.0.5 指定原件的校验结果判定；工具认证不代表真账号升级或生产已通过 |
 | 生产激活 | B4-08 另批；候选交付与生产激活的权限、收据及终态分开，见 §4.6 |
 
 旧 §3.6.1 的 DMIT／Vircs 运行坐标已失去续跑资格，原记录完整保存在
@@ -1050,7 +1050,7 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 | [VC-2](#claude-vc-2) 分类批准 | VC-1 封存、基线 RequiredRules | `vc-batch.sh` 派发 `classify` 草案、修订与批准批次 | `rule_classification_recorded`、清零收据与 VC-2 checkpoint；Store 仍为 `evidence_recorded` | 对账后按批次身份重派 |
 | [VC-3](#claude-vc-3) 生成画像 | VC-2 批准、冻结的 Active 目录与画像 | `vc-batch.sh` 派发 `prepare-profile` 与 `stage-profile` 批次 | `official_sealed → profile_approved`、暂存 Release 与 VC-3 checkpoint；Active 未变 | 对账后重派；ProfileApprovalFact 之前只追加 revision |
 | [VC-4](#claude-vc-4) 固定候选 | VC-3 暂存 Release、批准实现闭集 | ARM64 `vc4-requirements.sh` → 本机 `local-claude-candidate-chain.sh` → ARM64 `arm64-vc4-gates.sh` → `vc4-all.sh` | 同源构建收据、`candidate_sealed` 与当前 revision 的 VC-4 checkpoint | 重入 `vc4-all.sh`（上传中断用 `--resume-from upload-wait`）；候选真实变化先 `invalidate-candidate`，再 `revision-open --supersedes` |
-| [VC-5](#claude-vc-5) 定向验收 | 固定候选与 VC-4 收据、VC-5 准入 | `vc5-all.sh` 按客户端派发采集、seal／compare、assert／accept；缺收据或批准时暂停 | AcceptanceFact、当前基线 VC-5 checkpoint；`validation_only／ready`、`not_activated` | 封存前对账→批准→授权→`vc5-claude-recover.sh`；封存后 `evaluation-recover`，完整 ar 链待验收 |
+| [VC-5](#claude-vc-5) 定向验收 | 固定候选与 VC-4 收据、VC-5 准入 | `vc5-all.sh` 按客户端派发采集、seal／compare、assert／accept；缺收据或批准时暂停 | AcceptanceFact、当前基线 VC-5 checkpoint；`validation_only／ready`、`not_activated` | 封存前对账→批准→授权→`vc5-claude-recover.sh`；封存后 `evaluation-recover`，完整 ar 链与认证结果按 §4.0.5 核验 |
 | [VC-6](#claude-vc-6) 交付／激活 | VC-5、交付环境／回退点；生产另需权限 | `deliver-candidate run`／批准版 `finalize` 分两批；执行器已完成本机接线，ARM64 现场待验收 | 候选交付收据；validation_only 完成 VC-6，生产用途等 B4-08 | 对账后同 run 续 `dr<k>`；成功阶段先批准失效；finalize 幂等 |
 
 主交接链固定为：
@@ -1104,7 +1104,7 @@ P0 收据 → EvidencePackage → RuleMigrationLedger／AtomicAssertionLedger
 映射，历史收据原字节不改。
 
 **Claude 发布认证通过且 Formal 准入完成后，新受管 Campaign 采用 Framework §5.3.6 的对账合同。**
-当前发布认证仍待完成（§4.0.5）；认证后的 Campaign 中断后按未收口预约分流，先取得对账结论，再按批准范围续跑。失败矩阵、暂停放行、身份策略、批次和
+发布认证状态统一按 §4.0.5 核验；符合准入的 Campaign 中断后按未收口预约分流，先取得对账结论，再按批准范围续跑。失败矩阵、暂停放行、身份策略、批次和
 驱动入口统一见 [§4.7](#claude-4-7)，不再使用历史 FW-H 检查点恢复新 Campaign。
 
 用途、权限和状态是四个正交维度：
@@ -1352,15 +1352,17 @@ Claude 的 atomic-double 由同一共享收据模块加 `--client claude` 执行
 Formal Campaign，经原子入口完成一次 VC-0→VC-1 与失败父 run 收口及四个负例，零请求，签
 `official-client-atomic-vc0-vc1-rehearsal/v1`；发布认证按 Claude 合同重放它，容器内重放追加 `--client claude`。
 
-Claude 发布认证：**待认证**。上述入口、源码与离线合同不等于已经签发认证；九条必需链的实际执行结果、B5b-03
-后段故障链及 B5b-04 的当前部署 `certify_release issue --client claude`／`verify` 全部通过后，才能更新此结论。
+Claude 发布认证：没有通过当前 `certify_release verify --client claude` 的发布认证，即为**待认证**。
+只有九条必需链完整实际执行通过，当前部署的五摘要、pre-A3、Job 演练与 atomic-double 原件全部合法且
+`certify_release issue --client claude`／`verify` 均通过时，才视为本轮工具发布认证生效；源码入口、
+中性文案或局部专项均不授予认证。实际认证 ID、校验结果与原件凭证记入本轮计划和仓库外证据。
+首次签发或跨部署绑定按上述 issue／verify 和 record-reuse 合同执行；原认证及记录保持原字节。
 录制链中的发布循环前置与静态控制投影是明确标记的测试夹具，不能反向证明九链已通过；局部 VC-0→VC-1
 通过也不能证明 VC-0～VC-6 全链通过。Mac 真账号采集与 ARM64 真实交付执行器的现场验收仍须分别完成。
-本次文档同步只登记结构与实际入口，不补签认证或把旧 pre-A3 收据视为当前发布证明。
 当前工具实现已接入真实交付合同 A、Mac v2 合同 B、固定产品工厂与跨机来源桥，以及 D4／r2 和恢复后继读侧。
 当前有效工具身份由双受管根、策略与实际读侧闭包计算；兼容、激活、演进登记和受监督部署分别以当前原件判定。
-局部专项、旧提交凭证及旧 pre-A3 不替代当前九链、发布认证 issue／verify 或 VC-0 收口证明；
-本节认证结论仍为待认证，Mac 真账号与候选现场结果另行记录。
+局部专项或旧提交凭证不替代当前准入证明；旧 pre-A3 只有按原合同核验且取得合法复用收据后才可跨部署沿用。
+工具认证与 Mac 真账号、候选现场、首轮真实升级及生产结果分别记录，不能由工具认证推导后三类结果。
 
 <a id="claude-vc-1"></a>
 ## 4.1 VC-1 收集目标证据
@@ -2296,7 +2298,7 @@ python3 -m tools.official_client_capture.claude_upgrade evaluation-recover previ
 | `root-cause-class` | 修复与续跑入口 | 当前边界 |
 |---|---|---|
 | `evaluator-defect` | 修 evaluator、定向回归、受监督部署并登记演进；`evaluation-recover apply` 绑定修复 commit、部署收据与批准摘要，开新 `b<K>` | 复用原始采集，仅重评受影响部分 |
-| `transient-environment` | 从失败断言沿候选 manifest 的 `source_artifacts` 回溯非空 Job 集 J*；经批准开 `ar<k>`，补采后增量封存、重评 | 恢复段及五项后继修复已合入，组合定向检查通过；第二次 transient 已实际复验，尚无最终整链验收通过凭证 |
+| `transient-environment` | 从失败断言沿候选 manifest 的 `source_artifacts` 回溯非空 Job 集 J*；经批准开 `ar<k>`，补采后增量封存、重评 | 恢复段及五项后继修复已合入；第二次 transient 与完整故障链按 §4.0.5 的实际执行原件和认证结果核验，组合定向检查不替代整链 |
 | `candidate-source` | 对账、`invalidate-candidate preview／apply`，再 `revision-open --supersedes` | 新候选从 VC-4 起，保留可信 VC-0～VC-3 |
 | `approval-inputs` | 仅 selector 修正走 `evaluation-recover approval-revision`；规则集、模式、场景或目标身份变化建后继 Campaign | 新批准基线下旧验收不能直接沿用 |
 
@@ -2532,8 +2534,8 @@ B4-08 另批，候选清理批准不扩大为生产清理权限。
 ### 修好接着跑：出问题先暂停，修好后在原 Campaign 接着跑
 
 Claude 发布认证通过且 Formal 准入完成后，新受管 Campaign 采用
-[Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#536-共享控制面合同) 的对账与暂停合同。认证仍待完成
-（§4.0.5）；以下为认证后的操作顺序：读诊断 → 修复最小范围 → 定向复核 → 受监督部署并登记工具／环境变化 → 对账 →
+[Framework §5.3.6](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#536-共享控制面合同) 的对账与暂停合同。认证按 §4.0.5
+核验；符合准入后的操作顺序为：读诊断 → 修复最小范围 → 定向复核 → 受监督部署并登记工具／环境变化 → 对账 →
 批准恢复范围并授权 → 续派 → 重放完成收据。永久身份边界按
 [Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界) 办理；可信原件保留原
 字节和来源，不能通过换目录、换 ID 或重建 Campaign 绕过累计与失败事实。
@@ -2562,7 +2564,7 @@ attempt 不足以选前者。下表的“已接入”指本机代码入口；完
 
 | 现象 | 对账／诊断入口 | 修复后动作 | 从哪里继续 | 脚本覆盖 |
 |---|---|---|---|---|
-| VC-0 未完成 | `entry.sh --plan` 与步骤诊断 | 修输入／工具并重入同一入口 | 最近合法步骤，已建账本继续使用 | `entry.sh` 已接入；正式发布认证待完成 |
+| VC-0 未完成 | `entry.sh --plan` 与步骤诊断 | 修输入／工具并重入同一入口 | 最近合法步骤，已建账本继续使用 | `entry.sh` 已接入；发布认证按 §4.0.5 核验 |
 | VC-1 采集失败／孤儿预约 | `reconcile-attempt` | 批准预览、授权、`resume --rerun-failed` | 失败／未完成／依赖变化 Job | 已接入 |
 | VC-1 seal 链或 VC-2／VC-3 父动作失败 | `reconcile-supervisor-run` | 复验阶段幂等证明后重派 | 同 attempt seal 或 N+1 批次 | `vc1-claude.sh`／`vc23-claude.sh` 已接入 |
 | VC-4 构建／上传中断 | 父 run 对账 | 原身份且幂等证明成立时续作 | `vc4-all.sh`；上传用 `--resume-from upload-wait` | 已接入 |
@@ -2571,8 +2573,8 @@ attempt 不足以选前者。下表的“已接入”指本机代码入口；完
 | 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | CLI／批次、门禁、预算与来源消费已接；旧 fixture 薄记录器只产内部诊断；固定正式工厂逐项验真，缺安装、来源或原生资格时 live 零启动拒绝；真账号现场另验 |
 | 边界核对／seal／compare 批次失败 | 父 run 对账 | 按失败码修复与登记演进 | 同一候选的未完成动作 | seal／compare 已接；不合法既有边界收据先人工审计 |
 | 已封存 evaluator 缺陷 | `evaluation-recover preview` | 修复、部署、演进、批准 `evaluator-defect` | 新 `b<K>`，只重评影响项 | 离线恢复已接入 |
-| 已封存临时环境故障 | 评估诊断沿 `source_artifacts` 定位 J* | `transient-environment`，补采后增量封存 | `ar<k>` → 新基线 compare／accept | 恢复段及后继修复已合入；组合专项与第二次 transient 整链待验收 |
-| 恢复段中断 | 已预约用 `reconcile-attempt --recovery-revision ar<k>`；否则父 run 对账 | 按段合同批准后继段或重派 | 原段／后继段的合法闭集 | 恢复段及五项后继修复已合入；组合定向检查通过，正式整链未认证 |
+| 已封存临时环境故障 | 评估诊断沿 `source_artifacts` 定位 J* | `transient-environment`，补采后增量封存 | `ar<k>` → 新基线 compare／accept | 恢复段及后继修复已合入；第二次 transient 与完整故障链按 §4.0.5 的实际原件核验 |
+| 恢复段中断 | 已预约用 `reconcile-attempt --recovery-revision ar<k>`；否则父 run 对账 | 按段合同批准后继段或重派 | 原段／后继段的合法闭集 | 恢复段及五项后继修复已合入；完整链与认证按 §4.0.5 的实际原件核验 |
 | 候选源码／构建真实变化 | 对账及作废预览 | `invalidate-candidate` → `revision-open --supersedes` | VC-4 新 revision | 已接入，不能原地覆盖 |
 | 批准 selector 有误 | `evaluation-recover approval-revision` 预览 | 批准新画像／基线 | 零请求重评 | 已接入；规则／场景变化另建后继 Campaign |
 | 仅封存证据元数据漂移 | `harden-evidence-permissions rebind-boundary` | 核原字节／路径／类型／权限／属主，追加重绑 | 原基线只读重放 | 已接入，必须指定候选 |
@@ -2635,9 +2637,9 @@ schema v3 与文件名保持既有合同，不能把 policy 版本或本机局�
 `evidence_semantics`；旧夹具用途策略、固定正式捕获服务、受管来源、跨机认证桥、限定产品工厂与 root broker 归
 `control`。旧 `regression_fixture` 用途不变，实际 formal 来源仍须核固定安装、两端部署、原 task 和签名资格；
 路径映射只消费原认证合同，离线重放不重新启动产品。
-本轮 v15 源码已有[精确冻结承接](egress/maintenance/claude-tool-engineering-final-20261010-successor.json)和
-受监督部署原件 `claude-managed-deploy-20261010t043317z.json`；该部署绑定 `4cc10d585` 源码，须按当前
-bindings 重核客户端、策略和五摘要，不能把已有部署原件视作最终文档已部署。发布认证仍为 §4.0.5 的待认证状态，
+v15 已有形成期[精确冻结承接](egress/maintenance/claude-tool-engineering-final-20261010-successor.json)和
+受监督部署原件 `claude-managed-deploy-20261010t043317z.json`，该原件只证明其绑定的 `4cc10d585` 源码。
+当前部署仍须按选定原件的 bindings 重核客户端、策略、五摘要及文档摘要，发布认证按 §4.0.5 核验；
 代码、私有编译及无账号回归不能代替 OAuth、原生权限、签名资格或真实请求验收。共同边界见
 [Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。官方／候选分别按
 未封存与已封存重验：未封存只作废批准影响闭集；已封存且仍有受影响 Job 时拒绝借演进重采，分别按
@@ -2706,8 +2708,8 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-claude-recover.sh" "$RECOVERY_PREVIEW"
 
 封存前候选续跑使用普通 attempt；封存后的补采段使用 `ar<k>`，交付恢复另用 `dr<k>`，三者不能混用。
 B4-05b 恢复段、D4／r2 与五项恢复后继修复已合入本机集成树，覆盖 J* 定向补采、独立
-ValidationAttempt、增量封存与新基线重评；本机组合专项仅供回归，第二次 transient 已实际复验，最终验收收口尚未登记通过，
-正式整链未认证。已预约段中断走 `reconcile-attempt --recovery-revision ar<k>`，未预约走父 run 对账。
+ValidationAttempt、增量封存与新基线重评；本机组合专项只供回归，第二次 transient 与完整故障链按 §4.0.5
+的实际执行原件和认证结果核验。已预约段中断走 `reconcile-attempt --recovery-revision ar<k>`，未预约走父 run 对账。
 完成验收前保留暂停与诊断，不以普通 resume 重采整份已封存候选。
 
 仅封存元数据漂移时，`harden-evidence-permissions rebind-boundary --candidate-id …` 在原文件内容、相对
@@ -2727,7 +2729,7 @@ ValidationAttempt、增量封存与新基线重评；本机组合专项仅供回
 | VC-4 | `vc4-requirements.sh`、`local-claude-candidate-chain.sh`、`arm64-vc4-gates.sh`、`vc4-all.sh` |
 | VC-5 主链 | `vc5-all.sh` → `vc5-claude-start.sh`／`vc5-claude-seal.sh`／`vc5-claude-accept.sh` |
 | VC-5 修复与补跑 | `fix-and-continue.sh`、`vc5-claude-recover.sh`，仅封存前普通 attempt |
-| 封存后评估恢复 | `evaluation-recover`，恢复段／后继代码已合入；第二次 transient 与完整 `ar<k>` 链待验收 |
+| 封存后评估恢复 | `evaluation-recover`，恢复段／后继代码已合入；第二次 transient 与完整 `ar<k>` 链按 §4.0.5 的实际原件核验 |
 | VC-6 | `claude_upgrade_delivery` 动作计划 + `compile-and-run-vc-batch`；执行器已本机接线，正式登记与现场待验收 |
 
 Framework、本指南与共享实现文档都是受管依赖。部署清单登记完整路径、摘要与回滚点，与工具树在同一

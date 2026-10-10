@@ -64,7 +64,8 @@ class Vc23TableAndPlanTests(unittest.TestCase):
         self.assertEqual((CT.spec("codex")["vc23_dispatch_script"], CT.spec("claude")["vc23_dispatch_script"]), ("vc23.sh", "vc23-claude.sh"))
         for client in CT.CLIENTS:
             self.assertTrue((DRIVER / CT.spec(client)["vc23_dispatch_script"]).is_file())
-        self.assertEqual(os.stat(DRIVER / "vc23-claude.sh").st_mode & 0o111, 0o111)
+        # 源码保留 Git 可执行模式；私有检出与驱动安装允许 0700，只要求实际运行账号的属主执行位。
+        self.assertEqual(os.stat(DRIVER / "vc23-claude.sh").st_mode & 0o100, 0o100)
 
     def test_codex_is_refused_by_the_claude_entries_and_claude_by_vc23(self) -> None:
         with self.env("codex"), self.assertRaisesRegex(ValueError, "VC-2／VC-3 派发脚本是 vc23.sh"):

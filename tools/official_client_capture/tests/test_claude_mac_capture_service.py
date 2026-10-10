@@ -14,6 +14,7 @@ import http.server
 import json
 import os
 import secrets
+import shutil
 import socket
 import ssl
 import subprocess
@@ -226,7 +227,10 @@ class NativeCaptureTests(unittest.TestCase):
         self.fail("有界等待超时：" + "\n".join(path.read_text() for path in self.root.glob("*.log")))
 
     def _certificate(self) -> None:
-        result = subprocess.run(["/opt/homebrew/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(self.data / "key.pem"), "-out", str(self.data / "cert.pem"), "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True, timeout=15)
+        # TLS 回环夹具可在 Linux 和 Darwin 执行；工具缺失必须失败，不能跳过真实 TLS 断言。
+        openssl = shutil.which("openssl")
+        self.assertIsNotNone(openssl, "TLS 回环夹具需要 PATH 中的 openssl")
+        result = subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(self.data / "key.pem"), "-out", str(self.data / "cert.pem"), "-days", "1", "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0)
         for name in ("key.pem", "cert.pem"):
             (self.data / name).chmod(0o600)

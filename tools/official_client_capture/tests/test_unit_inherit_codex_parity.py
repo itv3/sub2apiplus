@@ -655,6 +655,18 @@ ENTRY_PARALLEL_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
     ],
     "tools/ci/background_validation.py": [],
 }
+# f1ce9dcd3 已把 Claude 私有场景清单全文绑定到两处实际读侧；只追加 Claude 输入，Codex 规格与门禁输入不变。
+# 用实际父提交、完整源码摘要与两条删除侧残差接管；不能用当前实现动态生成预期或略过其它字节。
+CLAUDE_SCENARIO_FILE_BASELINE_COMMIT = "1409dd43e336b14f049ef980abe37c73555ef361"
+CLAUDE_SCENARIO_FILE_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_steps.py": "4bf5e272a16fddea009d5cdb5cce7d4e4e72f5e98bf65842f7c98eb765bf104e",
+}
+CLAUDE_SCENARIO_FILE_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_steps.py": [
+        "            *IDENTITY, DEPLOY_RECEIPT, GUIDE_PART2,",
+        '            *_params(*spec["plan_params"]), *IDENTITY, GUIDE_PART2, DEPLOY_TOOL_FILES,',
+    ],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("Claude 连续世界两小时安全网", CLAUDE_CONTINUOUS_TIME_BASELINE, CLAUDE_CONTINUOUS_TIME_DIGESTS, CLAUDE_CONTINUOUS_TIME_REMOVED),
     ("Claude 录制链时间合同 v2", CLAUDE_RECORDED_TIME_BASELINE, CLAUDE_RECORDED_TIME_DIGESTS, CLAUDE_RECORDED_TIME_REMOVED),
@@ -678,6 +690,8 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      CLAUDE_FIXTURE_WIRING_SOURCE_DIGESTS, CLAUDE_FIXTURE_WIRING_SOURCE_REMOVED_LINES),
     ("升级入口可选并发透传", ENTRY_PARALLEL_BASELINE_COMMIT,
      ENTRY_PARALLEL_SOURCE_DIGESTS, ENTRY_PARALLEL_SOURCE_REMOVED_LINES),
+    ("Claude 私有目标场景文件输入绑定", CLAUDE_SCENARIO_FILE_BASELINE_COMMIT,
+     CLAUDE_SCENARIO_FILE_SOURCE_DIGESTS, CLAUDE_SCENARIO_FILE_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 CLAUDE_FIXTURE_STEP_INPUTS = (
@@ -687,6 +701,8 @@ CLAUDE_FIXTURE_STEP_INPUTS = (
 )
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {
     "claude": {
+        "entry-preflight": (["file:{SCENARIOS_JSON}"], [],
+                            "f1ce9dcd3：Claude 便宜检查实际读取私有目标场景清单，绑定文件全文；Codex 不新增输入"),
         "entry-gates": (list(CLAUDE_FIXTURE_STEP_INPUTS), [],
                         "a0c564377：Claude 三份来源的路径与内容进入门禁步骤输入；relay 覆盖父根的同级补充录制，Codex 空表不增加输入"),
         "pre-a3": (list(CLAUDE_FIXTURE_STEP_INPUTS), [],
@@ -696,10 +712,11 @@ STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]]
         "client-launch-probe": (["driver:claude_launch_probe_runner.py"], ["driver:client_launch_probe_runner.py"],
                                 "B2-10：启动探测运行器按客户端表取（launch_probe_runner），Claude 用 claude_launch_probe_runner.py；"
                                 "Codex 仍是 client_launch_probe_runner.py"),
-        "preflight-plan": (["file:{ACTIVE_RELEASE_CATALOG}", "file:{STATIC_BASELINE_ANCHORS}", "file:{STATIC_BASELINE_REACHABILITY}",
+        "preflight-plan": (["file:{SCENARIOS_JSON}", "file:{ACTIVE_RELEASE_CATALOG}", "file:{STATIC_BASELINE_ANCHORS}", "file:{STATIC_BASELINE_REACHABILITY}",
                             "tree:{PRODUCTION_INVENTORY_STORE}#pycache", "tree:{PREDECESSOR_STORE}#pycache"], [],
                            "B2-11 第二部分：Claude 预检 plan 另读的文件与 Store 目录取客户端表 preflight_plan_inputs（Active Release 目录、"
-                           "静态基线两份、生产现状清单所在的前序 Store 与只读复用的前序 Store）；Codex 这一项为空，步骤表不变"),
+                            "静态基线两份、生产现状清单所在的前序 Store 与只读复用的前序 Store）；f1ce9dcd3 另绑定私有目标场景清单全文；"
+                            "Codex 这些项为空，步骤表不变"),
         "ledger": (["param:CAMPAIGN_PURPOSE"], [],
                    "B5b-01a：Claude 的计时账本按参数 CAMPAIGN_PURPOSE 建（用途一变账本重建）；Codex 没有用途参数键，步骤表不变"),
     },

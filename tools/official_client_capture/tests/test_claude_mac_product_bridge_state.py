@@ -28,7 +28,7 @@ from tools.official_client_capture.claude_mac_state_journal import SnapshotLimit
 from tools.official_client_capture.tests import test_claude_mac_formal_bridge as bridge_fixture
 from tools.official_client_capture.tests import test_claude_mac_product_materials as material_fixture
 from tools.official_client_capture.tests import test_claude_mac_product_state as state_fixture
-from tools.official_client_capture.tests.test_claude_mac_product_sources import process
+from tools.official_client_capture.tests.test_claude_mac_product_sources import FIXTURE_USER_ID, process
 
 
 def write(path: Path, raw: bytes) -> None:
@@ -111,6 +111,8 @@ class ProductBridgeStateTests(unittest.TestCase):
             revalidate=lambda deployment: {"installation_sha256": "c"*64}))
         self.patch(products.platform, "system", return_value="Darwin")
         self.patch(products.platform, "machine", return_value="arm64")
+        # 只替身产品工厂的原用户接点；其他模块仍核对实际临时文件的宿主 UID 和私有权限。
+        self.patch(products, "os", new=SimpleNamespace(geteuid=lambda: FIXTURE_USER_ID))
         policy, execution = self.task["execution"]["request_policy"], self.task["execution"]
         self.grant = {"schema_version": products.QUALIFICATION_SCHEMA, "source_deployments": execution["source_deployments"],
             "installation_sha256s": {"native": "a"*64, "network": "b"*64, "broker": "c"*64, "bridge": fixture.mac_install.sha256},
@@ -143,6 +145,15 @@ class ProductBridgeStateTests(unittest.TestCase):
         return products.create_qualified_source(self.task, bundle_root=self.root,
             materials_receipt=self.root/"product-materials.json", path_context=self.context if context is None else context,
             dispatch=self.dispatch)
+
+    def test_root_user_never_constructs_or_registers_a_product_source(self):
+        with mock.patch.object(products, "os", SimpleNamespace(geteuid=lambda: 0)), \
+                mock.patch.object(products.native.subprocess, "Popen") as spawn:
+            with self.assertRaisesRegex(authority.ProductAuthorityError, "原用户"):
+                self.factory()
+        spawn.assert_not_called()
+        self.assertEqual(c.SOURCE_ADAPTERS, {})
+        self.assertEqual(products._MAC_SOURCE._owners, {})
 
     def test_authenticated_pairs_factory_scope_observation_and_restore_use_same_physical_files(self):
         before = self.file.read_bytes()

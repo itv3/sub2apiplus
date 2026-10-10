@@ -552,9 +552,9 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 
 | 范围 | 本机状态 | 现场与最终认证 |
 |---|---|---|
-| Mac v2 来源／导入 | 已合入 `8b6e15ab8`；74 项基础与 31 项入口故障测试通过；CLI／批次、门禁适配、预约发现、provenance 及两 wrapper 的真实调用／读侧根已接，末轮接线已提交 `58dcc47ab`；双客户端摘要已实算，受控登记与变异复验仍待收口 | 原 attempt 预算服务及消费已接通，H1／TLS-H1 和受限 H2 原生捕获／同步的本机专项通过；fixture 薄记录器已接九方法协议与真实 StateJournal，只封存内部 partial／恢复诊断；正式产品后端、完整事件／模块／transport-map及联合来源仍缺，live 零启动拒绝；正式 SOURCE_ADAPTERS 为空，历史形成期 authority 待补，产品／双端来源未认证 |
+| Mac v2 来源／导入 | CLI／批次、门禁适配、预约发现、provenance 及两 wrapper 的读侧已接；内部 fixture 与正式产品工厂的实现边界见 Claude 指南 §3.6 与共享实现文档 §12.1 | 工具实现与发布认证不授予签名安装、原生权限、真实产品或三官方客户端真账号现场资格；正式来源仅在当前资格逐项通过后受控登记，缺资格仍在启动前拒绝 |
 | 严格候选交付 | 已提交 `551a01c17`，89 项本机通过；typed 执行证明、Store／阶段结果／checkpoint 消费已接 | 固定 arm64-isolated 工厂及 guard 来源已接受管安装，58 项安装接线局部回归通过；空注册表保留测试接缝。ARM64 实际安装、场地、可信回退、专用凭据、四阶段／异常恢复待现场验收 |
-| 共享 D4／r2 与发布 | D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项在 `58dcc47ab` 共 165 项通过；当前 policy_version=14 已实现，schema 仍 v3、文件名仍 _v2.json | 第二次 transient 在固定 `09ce8fa04` 已完整通过，717.503 秒，仅属本机回归；最终源码复验、策略演进／部署、A/B 组合认证、ARM64 八链、pre-A3、issue／verify 与 VC-0 收口尚未完成 |
+| 共享 D4／r2 与发布 | D4／r2 与五项恢复后继修复已合入；当前 policy_version=15，schema 仍 v3、文件名仍 _v2.json；本机组合专项保留形成期效力 | ARM64 九条必需链、pre-A3 与当前发布认证按 Claude 指南 §4.0.5 的实际原件核验；VC-0 收口还须核本轮输入与准入，真账号首派及现场升级结果另验 |
 
 固定守卫安装入口为 `python3 -B /root/arm64-capture-driver/driver/delivery_guard.py`。先运行
 `prepare --instance <实例>`，真实采样 systemd 自动重启与旧进程组退出；此时不执行交付动作。取得安装

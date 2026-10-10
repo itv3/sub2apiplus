@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import subprocess
 import tempfile
@@ -56,18 +57,28 @@ WORKDIR = Path("/root/docker/capture-cli/data")
 CLAUDE_TIME_AST = {
     "CLAUDE_FAULT_CONTINUOUS_SECONDS": "c70c911e8b9ed0e8a9423ac0d8ee15dfbb48cae45f29589770ebe3b29a8e3e22",
     'CLAUDE_RECORDED_CHAIN_IDS': '2507db6a6af099ccbca7866438729c8be0e76ad29feb8ada6bdd05844f9b57d9',
-    'claude_recorded_time_budget': '6baccba0dd8fc83c22f97622c9cec6b484fb07d2f247891d453e838693e54a36',
+    'claude_recorded_time_budget': 'b6acbe8252c84dd70c5a0b01eebd64b2d1d66639b1809b3ad60c627422c8cad2',
 
     "CLAUDE_FAULT_TIME_SCHEMA": "fb10ba0aff91363c6c6cbaa14a8b7cea48deb2689d7b6853b600b6d224871630",
     "CLAUDE_FAULT_METHOD_SECONDS": "4143cca82261e5ef6187a302787b58d91fce4cc60b63e60600f8ac358cd10d9d",
     "CLAUDE_FAULT_METHOD_COUNTS": "4f1d9f648e8d71ec4450cb49b08f3fba45159f2d4d9937133055e1163c6a9ed7",
-    "claude_fault_time_budget": "ef135d8d1f2da60a14fdacc07c0bb42ae30c20b0407e41b001de9e312e33f692",
+    "claude_fault_time_budget": "8377a6f63768b145c2799c5db197dc8b37a224228c435df684e1b81603cd23f9",
 }
 CLAUDE_TIME_EXPRESSION = '''claude_fault_time_budget(name)["unit_timeout_seconds"]
     if client == "claude" and name in CLAUDE_FAULT_METHOD_COUNTS else
     claude_recorded_time_budget(name)["unit_timeout_seconds"]
     if client == "claude" and name in CLAUDE_RECORDED_CHAIN_IDS else
     REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS'''
+
+
+def full_ast_dump(node: ast.AST) -> str:
+    """保留 AST 的全部空字段，使 Python 3.12 与默认省略空字段的新版本产生同一份精确摘要。
+
+    旧版没有 show_empty 参数，本来就完整输出空字段；新版显式开启它。只统一序列化格式，不移除任何语法字段。
+    """
+
+    options = {"show_empty": True} if "show_empty" in inspect.signature(ast.dump).parameters else {}
+    return ast.dump(node, **options)
 
 
 def load_baseline(relative: str, name: str) -> types.ModuleType | None:
@@ -138,7 +149,7 @@ class PreA3CodexParityTests(unittest.TestCase):
                 name = (node.name if isinstance(node, ast.FunctionDef) else target.id if isinstance(target, ast.Name)
                         else names[0] if len(names) == 1 else "")
                 if name in CLAUDE_TIME_AST:
-                    self.assertEqual(hashlib.sha256(ast.dump(node).encode()).hexdigest(), CLAUDE_TIME_AST[name])
+                    self.assertEqual(hashlib.sha256(full_ast_dump(node).encode()).hexdigest(), CLAUDE_TIME_AST[name])
                     closeout.setdefault("time_additions", []).append(name)
                     continue
                 if isinstance(node, ast.FunctionDef) and node.name == "plan_scenario_commands":

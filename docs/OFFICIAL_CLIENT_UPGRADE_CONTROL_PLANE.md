@@ -81,7 +81,7 @@
 | `provenance` | 模块 | `codex_upgrade_live_request_provenance` | `claude_upgrade_live_request_provenance` |
 | `identity_policy` | 模块 | `codex_upgrade_tool_identity_policy` | `claude_tool_identity_policy` |
 | `reject_volatile_dimensions` | 函数 | 无附加检查 | 拒绝含 Claude Campaign ID 的维度值 |
-| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名成员；VC-1 官方路径不经过，B4-05b 候选恢复段与后继修复已合入本机，正式整链待验收 |
+| `recovery_segment_summary`、`segment_reuse_proofs` | 函数 | 对账器原函数 | `claude_upgrade` 同签名成员；VC-1 官方路径不经过，B4-05b 候选恢复段与后继修复已合入本机，完整链与认证按 Claude 指南 §4.0.5 的实际原件核验 |
 | `candidate_recovery_identity_flags` | 值 | Codex 原候选身份旗标闭集 | 仅 `--candidate-id`，候选身份从 VC-4 构建收据读取 |
 | `candidate_post_run_extra_action` | 函数 | 无额外动作（恒为假） | 供监督器 `candidate_post_run_recovery_action` 识别 Claude VC-6 run／finalize 的受管动作闭集 |
 | `requires_project_ledger` | 函数 | 0.154 起的 Formal Campaign 在项目总账内 | Formal Campaign 一律在项目总账内 |
@@ -226,7 +226,7 @@ def compile_and_run_vc_batch(arguments):
 | 迁入薄壳 | 在 Claude 适配器作用域里转调 `upgrade_control_plane` |
 | 照搬 | 两客户端语义相同的通用函数（读写、摘要、路径、租约读取、证据根取代归档与冲突隔离读取、阶段路径等），逐字取 Codex 实现，由 `tests/test_orchestrator_surface_contract.py` 的照搬清单锁定逐字一致；先照搬后因 Claude 语义分叉的成员另行登记 |
 | 自实现 | Claude 语义不同的成员，实现在 `claude_upgrade_*` 子模块：总计划、官方／候选 attempt、封存与恢复、工具演进、阶段批次、分类、画像、候选 revision／构建、compare／accept、评估基线与交付等 |
-| 未完成或待验收 | 未接入成员报 `ClaudeOrchestratorPending` 或明确的配置错误；恢复后继、Mac v2 合同 B 与交付合同 A 已合入本机，组合验证不能代替正式来源、真实服务、ARM64 受管登记及现场验收，完整发布认证仍待完成 |
+| 未完成或待验收 | 未接入成员报 `ClaudeOrchestratorPending` 或明确的配置错误；恢复后继、Mac v2 合同 B 与交付合同 A 已合入本机，组合验证不能代替正式来源、真实服务、ARM64 受管登记及现场验收，完整发布认证按 Claude 指南 §4.0.5 的当前原件核验 |
 
 另有 6 个类（`CampaignLease`、`Job` 与四个异常类）与 Codex 同名同语义。共享流程子命令沿用 Codex 的参数定义，
 并在 Claude 适配器作用域里转调共享实现，对账器同时进入 Claude 作用域；其中
@@ -481,7 +481,7 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
   `vc-chain.claude-deadline`、`vc-chain.claude-root-cause`、`vc-chain.claude-tool-evolution`；故障恢复链
   `vc-chain.claude-recovery-chain` 在 `test_claude_upgrade_fault_chains.py`。pre-A3 执行闭集取本客户端注册表；发布准入
   另外要求[Claude 指南 §4.0.5](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#405-受管工具发布认证)登记的九条必需链全部齐备并通过，
-  不能以当前已注册子集通过代替。B5b-02 完整录制回放、B5b-03 后段故障链与 B5b-04 发布认证仍待收口。
+  不能以当前已注册子集通过代替。B5b-02 完整录制回放、B5b-03 后段故障链与 B5b-04 发布认证按 Claude 指南 §4.0.5 的实际执行原件与认证结果核验。
   这些链零请求，在两个受管根的副本树上运行；Linux root 上必须进入
   `unshare -m -n` 私有命名空间（临时根 `/var/tmp`，显式传 TMPDIR，网络自检），
   不满足即失败。Claude 场景单元另声明第二受管根：只改 `tools/official_client_control` 时 Claude 场景单元失效，Codex
@@ -753,7 +753,7 @@ Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recover
   后两者无批准摘要时只预览；不存在独立的 approval-revision 子命令。
 - 四类裁定是 evaluator-defect、transient-environment、candidate-source、approval-inputs；B4-05b 的 `ar<k>`、
   增量封存、封存后请求入账及五项恢复后继修复已合入本机，成功前段按完整来源与原预约证明承接。第二次
-  transient 整链尚未完成验收，组合专项不能外推为正式整链已认证；实际链与认证状态见 Claude 指南 §4.0.5／§4.5.8。
+  transient 与完整故障链按实际执行原件核验，组合专项不能外推为正式整链已认证；实际链与认证状态见 Claude 指南 §4.0.5／§4.5.8。
 - Claude 不从缺失的历史 b0 `evaluation-run.json` 猜造新读侧事实；同基线未完成批次按对账结论逐字重派。
 
 ### 12.3 交付四阶段、恢复段与终态

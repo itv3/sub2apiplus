@@ -91,6 +91,7 @@ class ProcessIdentityTests(unittest.TestCase):
         with mock.patch.object(p, "_load_native", return_value=_fake_bindings(**kwargs)):
             return p.read_process_snapshot(321)
 
+    @unittest.skipUnless(sys.platform == "darwin", "真实 libproc 自进程读取只在 Darwin 验收")
     def test_real_self_libproc_is_stable_and_full_snapshot_keeps_boot_permission_boundary(self):
         bindings = p._load_native()
         first, second = p._read_bsd(bindings, os.getpid()), p._read_bsd(bindings, os.getpid())
@@ -113,6 +114,7 @@ class ProcessIdentityTests(unittest.TestCase):
                           "process_events_complete", "executed_image_verified"):
                 self.assertIs(actual[field], False)
 
+    @unittest.skipUnless(sys.platform == "darwin", "真实 libproc 子进程读取只在 Darwin 验收")
     def test_real_helper_parent_start_and_exit_are_read_without_signals(self):
         with self.helper() as child:
             bindings = p._load_native()
@@ -131,6 +133,7 @@ class ProcessIdentityTests(unittest.TestCase):
             with self.assertRaises(p.ProcessSnapshotUnavailable):
                 p._read_bsd(bindings, child.pid)
 
+    @unittest.skipUnless(sys.platform == "darwin", "真实 kern.boottime 查询只在 Darwin 验收")
     def test_real_boot_query_is_readonly_and_permission_denial_stays_unavailable(self):
         try:
             value = p.read_kernel_boot_time()
@@ -161,15 +164,22 @@ class ProcessIdentityTests(unittest.TestCase):
         original = ctypes.sizeof
         def changed(value):
             return original(value) + (8 if value is p._ProcBSDInfo else 0)
-        with mock.patch.object(p.ctypes, "sizeof", side_effect=changed), mock.patch.object(p.ctypes, "CDLL") as load:
+        # 固定受支持平台后才破坏结构长度，避免 Linux 在平台门禁就退出而没有覆盖 ABI 拒绝。
+        with mock.patch.object(p.platform, "system", return_value="Darwin"), \
+                mock.patch.object(p.platform, "machine", return_value="arm64"), \
+                mock.patch.object(p.ctypes, "sizeof", side_effect=changed), mock.patch.object(p.ctypes, "CDLL") as load:
             with self.assertRaisesRegex(p.ProcessSnapshotUnavailable, "ABI"):
                 p.read_process_snapshot(321)
             load.assert_not_called()
 
     def test_missing_native_library_is_unavailable(self):
-        with mock.patch.object(p.ctypes, "CDLL", side_effect=OSError("不可加载")):
+        # 同样固定平台，确保本负例实际到达库加载失败，而非误把平台拒绝当成覆盖。
+        with mock.patch.object(p.platform, "system", return_value="Darwin"), \
+                mock.patch.object(p.platform, "machine", return_value="arm64"), \
+                mock.patch.object(p.ctypes, "CDLL", side_effect=OSError("不可加载")) as load:
             with self.assertRaises(p.ProcessSnapshotUnavailable):
                 p.read_process_snapshot(321)
+            load.assert_called_once()
 
     def test_native_info_short_read_is_not_a_valid_identity(self):
         for returned in (1, 135, 137):

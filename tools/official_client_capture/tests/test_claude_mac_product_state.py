@@ -9,7 +9,6 @@ import base64
 import copy
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -24,7 +23,7 @@ from tools.official_client_capture import claude_mac_product_native as native
 from tools.official_client_capture import claude_mac_product_origins as origins
 from tools.official_client_capture import claude_mac_product_state as product
 from tools.official_client_capture.claude_mac_state_journal import StateJournal, StateConflict, SnapshotLimits, file_state
-from tools.official_client_capture.tests.test_claude_mac_product_sources import at, process, event
+from tools.official_client_capture.tests.test_claude_mac_product_sources import FIXTURE_USER_ID, at, process, event
 
 
 class ProductStateTests(unittest.TestCase):
@@ -72,10 +71,10 @@ class ProductStateTests(unittest.TestCase):
         product.verify_changes(task=self.task, state_root=self.state, paths=self.paths,
             baseline=before, actual=after, frames=frames, authorized_at_utc=at(0))
 
-    def signature(self, frames):
+    def signature(self, frames, *, user_id=FIXTURE_USER_ID):
         raw = b"".join(c.canonical(row)+b"\n" for row in frames)
         context = {"task_sha256": self.task["task_sha256"], "run_id": self.identity["producer_run_id"],
-            "user_id": os.geteuid(), "deployment": self.task["execution"]["source_deployments"]["mac"]}
+            "user_id": user_id, "deployment": self.task["execution"]["source_deployments"]["mac"]}
         payload = c.canonical({"schema_version": "claude-mac-product-native-attestation/v1", "context": context,
             "record_count": len(frames), "raw_bytes": len(raw), "stream_sha256": hashlib.sha256(raw).hexdigest(), "first_error": None})
         key = self.root/"fixture-key"
@@ -91,6 +90,14 @@ class ProductStateTests(unittest.TestCase):
             "signature_base64": base64.b64encode((self.root/"signature").read_bytes()).decode(),
             "public_key_sha256": hashlib.sha256(public).hexdigest()}
         return raw+c.canonical(seal)+b"\n", public
+
+    def test_signed_root_uid_never_counts_as_a_product_source(self):
+        # 真实 ECDSA 签名也不能把 root 用户写成有效产品来源；保留产品读侧原拒绝规则。
+        frames = [{"fixture_only": True}, {"fixture_only": True}]
+        raw, public = self.signature(frames, user_id=0)
+        with self.assertRaisesRegex(origins.ProductOriginError, "产品签名任务"):
+            origins.verify_native_original(self.task, raw, public)
+        self.assertEqual(c.SOURCE_ADAPTERS, {})
 
     def test_real_write_close_and_final_snapshot_are_all_required(self):
         before = self.snapshot()

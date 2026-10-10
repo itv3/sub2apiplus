@@ -9,7 +9,6 @@ import base64
 import copy
 import hashlib
 import json
-import os
 import subprocess
 import tempfile
 import unittest
@@ -28,16 +27,20 @@ from tools.official_client_capture import claude_mac_product_source as product_s
 from tools.official_client_capture.tests import test_claude_mac_product_materials as material_fixture
 
 
+# 合成内核事件和签名上下文使用同一个非 root 夹具 UID；不冒充宿主身份或授正式来源资格。
+FIXTURE_USER_ID = 501
+
+
 def at(second: int) -> str:
     return f"2026-10-10T01:00:{second:02d}.000Z"
 
 
-def process(pid: int, executable: str, parent: int = 99) -> dict:
+def process(pid: int, executable: str, parent: int = 99, *, user_id: int = FIXTURE_USER_ID) -> dict:
     return {"pid": pid, "ppid": parent, "pidversion": 1, "boot_id": "fixture-boot",
         "start_seconds": 1791594000 + pid, "start_microseconds": 0, "executable": executable,
         "cdhash": "a"*40, "device": 1, "inode": pid, "size": 100,
-        "audit_token": [0, os.geteuid(), 0, 0, 0, pid, 0, 1],
-        "parent_audit_token": [0, os.geteuid(), 0, 0, 0, parent, 0, 1]}
+        "audit_token": [0, user_id, 0, 0, 0, pid, 0, 1],
+        "parent_audit_token": [0, user_id, 0, 0, 0, parent, 0, 1]}
 
 
 def event(kind: str, instance: dict, second: int, sequence: int) -> dict:
@@ -76,7 +79,7 @@ class ProductSourceTests(unittest.TestCase):
         self.frames = [event("exec", self.application, 1, 1), event("exec", self.host, 2, 2),
             event("exec", self.cli, 3, 3), event("exit", self.cli, 10, 4), event("exit", self.host, 11, 5),
             event("exit", self.application, 12, 6)]
-        self.context = flows._context(self.task)
+        self.context = flows._context(self.task, user_id=FIXTURE_USER_ID)
         self.identifier = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 
     def row(self, name: str, second: int, facts: dict, sequence: int) -> dict:
@@ -114,10 +117,15 @@ class ProductSourceTests(unittest.TestCase):
             with self.assertRaises(flows.ProductFlowError):
                 self.parse(self.rows(closed=closed))
 
+    def test_root_uid_never_forms_a_network_source_context(self):
+        with self.assertRaisesRegex(flows.ProductFlowError, "非 root"):
+            flows._context(self.task, user_id=0)
+        self.assertEqual(c.SOURCE_ADAPTERS, {})
+
     def test_source_app_pid_cannot_substitute_actual_process_and_pidversion(self):
         rows = self.rows()
         for row in rows[1:-1]:
-            row["facts"]["source_process_audit_token"] = [0, os.geteuid(), 0, 0, 0, 102, 0, 2]
+            row["facts"]["source_process_audit_token"] = [0, FIXTURE_USER_ID, 0, 0, 0, 102, 0, 2]
         with self.assertRaises(flows.ProductFlowError):
             self.parse(rows)
         for row in rows[1:-1]:

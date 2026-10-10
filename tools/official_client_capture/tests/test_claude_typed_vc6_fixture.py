@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import multiprocessing
 import os
 import signal
@@ -192,11 +193,37 @@ class TypedArmedRecoveryTests(unittest.TestCase):
             args=(self.context, self.configuration, self.executor.context, self.delivery))
         worker.start()
         self.addCleanup(self.stop_worker, worker)
-        deadline = time.monotonic() + 8
-        while guard.read_json(self.root / "state.json")["switch_count"] != 1:
-            if not worker.is_alive() or time.monotonic() >= deadline:
-                self.fail("动作没有在独立守卫 armed 后开始物理操作")
+        started = time.monotonic()
+        # 进入物理动作前依次走 status、prepare、run，后两者仍做完整真实资格复核。
+        # 测试等待覆盖既有三次 RPC 的独立保护；不改变通道、租约或产品阶段时限。
+        wait_seconds = 3 * self.executor.client.timeout
+        deadline = started + wait_seconds
+        state = guard.read_json(self.root / "state.json")
+        while state["switch_count"] != 1:
+            alive = worker.is_alive()
+            if not alive or time.monotonic() >= deadline:
+                index = guard.read_json(self.root / "guard/index.json")
+                operations = []
+                for row in index["operations"]:
+                    operation = self.root / "guard/operations" / row["operation_id"]
+                    operations.append({"operation_id": row["operation_id"],
+                        "prepared": (operation / "prepared.json").is_file(),
+                        "armed": (operation / "armed.json").is_file(),
+                        "physical_intent": (operation / "physical-intent.json").is_file(),
+                        "journal_file_count": len(list((operation / "journal").glob("*.json")))})
+                diagnostic = {"reason": "worker提前退出" if not alive else "测试等待保护耗尽",
+                    "elapsed_seconds": round(time.monotonic() - started, 3), "wait_seconds": wait_seconds,
+                    "worker_pid": worker.pid, "worker_alive": alive, "worker_exitcode": worker.exitcode,
+                    "guard_pid": self.guard_process.pid, "guard_alive": self.guard_process.is_alive(),
+                    "guard_exitcode": self.guard_process.exitcode,
+                    "last_state": {key: state[key] for key in ("switch_count", "restore_count")},
+                    "operations": operations}
+                # 诊断留在原 unittest 日志中，不泄漏配置、凭据或现场内容。
+                self.fail("动作没有在独立守卫 armed 后开始物理操作：" + json.dumps(diagnostic, ensure_ascii=False))
             time.sleep(0.01)
+            state = guard.read_json(self.root / "state.json")
+        print(json.dumps({"typed_armed_wait": {"elapsed_seconds": round(time.monotonic() - started, 3),
+            "wait_seconds": wait_seconds, "switch_count": state["switch_count"]}}, ensure_ascii=False), flush=True)
         index = guard.read_json(self.root / "guard/index.json")
         self.assertEqual(len(index["operations"]), 1)
         operation_id = index["operations"][0]["operation_id"]

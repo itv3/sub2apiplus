@@ -59,6 +59,10 @@ CLAUDE_STEPS = {
     "vc5_recover_script": "vc5-claude-recover.sh",
 }
 BOUNDARY_KEYS = ("BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT")
+CLAUDE_OPTIONAL_KEYS = BOUNDARY_KEYS + (
+    "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
+    "CLAUDE_TARGET_SCENARIOS_JSON",
+)
 JOBS = ["job-a", "job-b"]
 
 
@@ -78,7 +82,8 @@ class Vc5TableAndDispatchTests(unittest.TestCase):
         for script in [*CODEX_STEPS.values(), *(value for value in CLAUDE_STEPS.values() if value), "vc5-claude-switch.sh"]:
             with self.subTest(script=script):
                 self.assertTrue((DRIVER / script).is_file())
-                self.assertEqual(os.stat(DRIVER / script).st_mode & 0o111, 0o111)
+                # 源码保留 Git 可执行模式；私有检出与驱动安装允许 0700，只要求实际运行账号的属主执行位。
+                self.assertEqual(os.stat(DRIVER / script).st_mode & 0o100, 0o100)
         # 边界核对（B4-01 f 段）与候选采集续跑（B4-05b-1）都已接入：两客户端都没有待接入项，shell 视图里也就没有待接入变量。
         self.assertEqual(CT.TABLE["claude"]["pending"], {})
         self.assertEqual(CT.TABLE["codex"]["pending"], {})
@@ -87,11 +92,11 @@ class Vc5TableAndDispatchTests(unittest.TestCase):
         self.assertIn("CT_VC5_CANONICAL_SCRIPT=''", shell)
         self.assertIn("CT_VC5_RECOVER_SCRIPT=vc5-claude-recover.sh", shell)
         self.assertNotIn("CT_PENDING_", shell)
-        # 边界核对的四个轮次参数是 Claude 专属可选键：Codex 的专属键清单里有它们（Codex 参数文件写了即拒绝），Claude 不受影响。
-        self.assertEqual(CT.spec("claude")["exclusive_optional_keys"], BOUNDARY_KEYS)
+        # 四个边界核对参数、三个原生夹具与场景清单都是 Claude 专属可选键；Codex 参数文件写入任何一项即拒绝。
+        self.assertEqual(CT.spec("claude")["exclusive_optional_keys"], CLAUDE_OPTIONAL_KEYS)
         self.assertEqual(CT.spec("codex")["exclusive_optional_keys"], ())
-        self.assertEqual(CT.foreign_keys("codex"), BOUNDARY_KEYS)
-        self.assertNotIn("PRODUCTION_COMMIT", CT.foreign_keys("claude"))
+        self.assertEqual(CT.foreign_keys("codex"), CLAUDE_OPTIONAL_KEYS)
+        self.assertTrue(set(CLAUDE_OPTIONAL_KEYS).isdisjoint(CT.foreign_keys("claude")))
 
     def run_script(self, script: str, client: str, *args: str) -> subprocess.CompletedProcess[str]:
         fixture = driver_tests._DriverFixture(self.root / f"fixture-{client}-{script}-{len(args)}")
