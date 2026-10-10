@@ -871,6 +871,26 @@ def _retain_candidate_attempt_materials(
         campaign, round_one, phase="candidate", candidate_id=round_one["candidate_id"])
     if path != attempt_root / "attempt.json" or document != verified:
         raise ControlError("来源候选 attempt 与原封存读者不是同一份原件")
+    producers = {row["id"]: (attempt_root, document["attempt_id"]) for row in document["results"]}
+    _retain_candidate_run_materials(campaign, path, document, attempt_root, producers, data_root,
+        execution_attempt_id=document["attempt_id"], retain=retain, project_parent=project_parent)
+
+
+def _retain_candidate_run_materials(
+    campaign: Path, path: Path, document: Mapping[str, Any], attempt_root: Path,
+    producers: Mapping[str, tuple[Path, str]], data_root: Path, *, execution_attempt_id: str,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> dict[str, tuple[tuple[tuple[str, ...], Path], ...]]:
+    """为已由原 reader 验真的 run 原件登记精确附件，不重新制定采集合同。
+
+    原 attempt 与恢复段复用同一份字段投影。每条 Job 的真实产出根由调用方
+    沿原裁定和继承证明取得；段摘要保留原 attempt ID，checkpoint 和闭环
+    则使用实际执行身份，二者不能混用。未知字段仍以数据根严格展开。
+    """
+    from . import claude_upgrade_capture as capture
+    from . import claude_upgrade_candidate_capture as candidate_capture
+    from . import claude_upgrade_compare as compare
+
     coordinates = []
     probe_paths = set()
 
@@ -940,16 +960,20 @@ def _retain_candidate_attempt_materials(
         bind(document, ("watchdog", name), campaign, coordinates)
     for index, result in enumerate(document["results"]):
         prefix = ("results", str(index))
+        producer_root, producer_id = producers[result["id"]]
         for number, _run in enumerate(result.get("environment_runs") or []):
             for name in ("before_probe", "after_probe"):
-                bind(document, (*prefix, "environment_runs", str(number), name), attempt_root, coordinates)
-        closure_path = bind(document, (*prefix, "job_closure"), attempt_root, coordinates)
+                bind(document, (*prefix, "environment_runs", str(number), name), producer_root, coordinates)
+        if result.get("recovered_from") is not None:
+            for name in ("source_receipt", "recovery_checkpoint"):
+                bind(document, (*prefix, name), campaign, coordinates)
+        closure_path = bind(document, (*prefix, "job_closure"), producer_root, coordinates)
         if closure_path is None:
             continue
         closure = parse_json_bytes(retain(closure_path))
         if (closure.get("schema_version") != capture.JOB_CLOSURE_SCHEMA
                 or closure.get("campaign_id") != document["campaign_id"]
-                or closure.get("attempt_id") != document["attempt_id"]
+                or closure.get("attempt_id") != producer_id
                 or closure.get("job_id") != result["id"]
                 or closure.get("execution_sha256") != result["execution_sha256"]
                 or closure.get("environment_runs") != result.get("environment_runs")):
@@ -957,10 +981,10 @@ def _retain_candidate_attempt_materials(
         closure_coordinates = []
         for number, _run in enumerate(closure.get("environment_runs") or []):
             for name in ("before_probe", "after_probe"):
-                bind(closure, ("environment_runs", str(number), name), attempt_root, closure_coordinates)
+                bind(closure, ("environment_runs", str(number), name), producer_root, closure_coordinates)
         permission = closure.get("evidence_permission_closeout")
         if permission is not None:
-            retain_attachment(permission, attempt_root)
+            retain_attachment(permission, producer_root)
         project_parent(closure_path, data_root, coordinate_roots=tuple(closure_coordinates))
     for probe_path in sorted(probe_paths):
         probe = parse_json_bytes(retain(probe_path))
@@ -998,7 +1022,8 @@ def _retain_candidate_attempt_materials(
             result, roots = result_roots[record["item_id"]]
             if (record.get("checkpoint_schema_version") != capture.JOB_CHECKPOINT_SCHEMA
                     or any(record.get(key) != document.get(key) for key in
-                           ("client", "mode", "campaign_id", "phase", "attempt_id", "run_nonce"))
+                           ("client", "mode", "campaign_id", "phase", "run_nonce"))
+                    or record.get("attempt_id") != execution_attempt_id
                     or record.get("result") != result
                     or record.get("result_sha256") != incremental_recovery.digest(result)):
                 raise ControlError("来源 checkpoint 的身份与完整结果不同源")
@@ -1008,6 +1033,130 @@ def _retain_candidate_attempt_materials(
             project_parent(checkpoint_path, data_root, coordinate_roots=tuple(
                 (("result", *coordinate), root) for coordinate, root in roots))
     project_parent(path, data_root, coordinate_roots=tuple(coordinates))
+    return {job_id: roots for job_id, (_result, roots) in result_roots.items()}
+
+
+def _retain_candidate_recovery_materials(
+    campaign: Path, manifest: Mapping[str, Any], stage_binding: Mapping[str, Any], data_root: Path, *,
+    candidate_id: str, retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> None:
+    """沿比较收据指定的阶段保留恢复父族，不按最新基线或目录搜索来源。
+
+    有效结果可以同时来自原 attempt 和多个恢复段。原阶段读取器重放批准
+    组合后，逐 Job 继承其实际产出根；摘要、独立 Job、checkpoint、阶段和
+    effective-results 各自登记同一组精确坐标，不能只给最外层 JSON 转根。
+    """
+    from . import claude_upgrade as upgrade
+    from . import claude_upgrade_attempt_recovery as reader
+    from . import claude_upgrade_candidate_seal as seal
+    from . import claude_upgrade_compare as compare
+    from . import claude_upgrade_segment_seal as segment_seal
+
+    stage_cache: dict[Path, dict[str, tuple[Path, str]]] = {}
+    segment_cache: dict[Path, dict[str, tuple[Path, str]]] = {}
+    visiting: set[Path] = set()
+
+    def result_coordinates(rows: list[Any], producers: Mapping[str, tuple[Path, str]]) -> tuple:
+        coordinates = []
+        for index, row in enumerate(rows):
+            root, _identity = producers[row["id"]]
+            prefix = ("results", str(index))
+            if row.get("job_closure") is not None:
+                coordinates.append(((*prefix, "job_closure"), root))
+            for number, _run in enumerate(row.get("environment_runs") or []):
+                coordinates.extend(((*prefix, "environment_runs", str(number), name), root)
+                    for name in ("before_probe", "after_probe") if _run.get(name) is not None)
+            if row.get("recovered_from") is not None:
+                coordinates.extend(((*prefix, name), campaign) for name in
+                    ("source_receipt", "recovery_checkpoint") if row.get(name) is not None)
+        return tuple(coordinates)
+
+    def retain_segment(original_id: str, revision: str) -> dict[str, tuple[Path, str]]:
+        root, reservation, summary = reader.load_segment(campaign, candidate_id, original_id, revision)
+        if root in segment_cache:
+            return segment_cache[root]
+        if root in visiting or len(stage_cache) + len(segment_cache) + len(visiting) >= 20000:
+            raise ControlError("候选恢复来源父族循环或超过固定原件上限")
+        visiting.add(root)
+        producers = {row["id"]: (root, f"{original_id}.{revision}") for row in summary["results"]}
+        reservation_coordinates = []
+        inherited = reservation.get("reuse_job_ids") or []
+        if inherited:
+            previous_revision = f"ar{int(revision[2:]) - 1}"
+            previous_producers = retain_segment(original_id, previous_revision)
+            proofs = reader.segment_reuse_proofs(campaign, candidate_id, original_id, previous_revision,
+                [row["id"] for row in reservation["planned_jobs"]])
+            rows = {row["id"]: row for row in summary["results"]}
+            for job_id in inherited:
+                proof = reservation["reuse_proofs"][job_id]
+                if (proofs.get(job_id) != proof or job_id not in previous_producers
+                        or rows.get(job_id) != reader.reused_job_result(campaign, proof)
+                        or previous_producers[job_id][1] != f"{original_id}.{proof['recovered_from']}"):
+                    raise ControlError("归档恢复段的继承结果与原批准来源证明不同源")
+                producers[job_id] = previous_producers[job_id]
+                for name in ("result", "checkpoint", "permission_closeout", "after_probe", "restoration_report"):
+                    binding = validate_external_binding(proof[name], "candidate.recovery.reuse_proof." + name)
+                    target = compare._bound_campaign_file(campaign, binding, "恢复段继承来源 " + name)
+                    raw = retain(target, binding["sha256"])
+                    if len(raw) != binding["bytes"]:
+                        raise ControlError("恢复段继承原件字节数漂移")
+                    reservation_coordinates.append((("reuse_proofs", job_id, name), campaign))
+        summary_path = root / upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
+        if parse_json_bytes(retain(summary_path)) != summary:
+            raise ControlError("恢复段摘要与原读取器不是同一份原件")
+        _retain_candidate_run_materials(campaign, summary_path, summary, root, producers, data_root,
+            execution_attempt_id=f"{original_id}.{revision}", retain=retain, project_parent=project_parent)
+        reservation_path = root / upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME
+        if parse_json_bytes(retain(reservation_path)) != reservation:
+            raise ControlError("恢复段预约与原读取器不是同一份原件")
+        project_parent(reservation_path, data_root, coordinate_roots=tuple(reservation_coordinates))
+        visiting.remove(root)
+        segment_cache[root] = producers
+        return producers
+
+    def retain_stage(binding: Mapping[str, Any]) -> dict[str, tuple[Path, str]]:
+        path = compare._bound_campaign_file(campaign, binding, "比较收据指定候选阶段")
+        if path in stage_cache:
+            return stage_cache[path]
+        if path in visiting or len(stage_cache) + len(segment_cache) + len(visiting) >= 20000:
+            raise ControlError("候选恢复来源阶段循环或超过固定原件上限")
+        visiting.add(path)
+        document = parse_json_bytes(retain(path, binding["sha256"]))
+        validation_round = document.get("validation_round", seal.FIRST_ROUND)
+        verified = seal._load_round_document(campaign, path, candidate_id, manifest=manifest,
+            validation_round=validation_round)
+        if verified != document:
+            raise ControlError("比较收据指定阶段与原读取器不是同一份原件")
+        if "recovery" not in document:
+            _retain_candidate_attempt_materials(campaign, document, data_root,
+                retain=retain, project_parent=project_parent)
+            attempt_path = compare._bound_campaign_file(campaign, document["attempt"], "原候选 attempt")
+            attempt = parse_json_bytes(retain(attempt_path, document["attempt"]["sha256"]))
+            producers = {row["id"]: (attempt_path.parent, attempt["attempt_id"]) for row in attempt["results"]}
+            project_parent(path, campaign)
+        else:
+            _root, effective_attempt = segment_seal.validate_stage(campaign, document, candidate_id)
+            producers = dict(retain_stage(document["previous_stage"]))
+            original_id = Path(document["attempt"]["path"]).parent.name
+            revision = reader.require_recovery_revision(document["recovery"]["recovery_revision"])
+            producers.update(retain_segment(original_id, revision))
+            if (document["results"] != effective_attempt["results"]
+                    or set(producers) != {row["id"] for row in document["results"]}):
+                raise ControlError("归档有效结果与原读取器批准的逐 Job 来源不同源")
+            coordinates = result_coordinates(document["results"], producers)
+            project_parent(path, campaign, coordinate_roots=coordinates)
+            effective_path = compare._bound_campaign_file(campaign, document["effective_results"], "有效结果原件")
+            effective = parse_json_bytes(retain(effective_path, document["effective_results"]["sha256"]))
+            if effective["results"] != document["results"]:
+                raise ControlError("有效结果原件与已验真阶段的完整结果不同源")
+            project_parent(effective_path, campaign, coordinate_roots=coordinates)
+            _retain_candidate_evaluation_draft(campaign, manifest, document, data_root,
+                retain=retain, project_parent=project_parent)
+        visiting.remove(path)
+        stage_cache[path] = producers
+        return producers
+
+    retain_stage(stage_binding)
 
 
 def _qualification_subject_store(store: Any) -> Any:
@@ -1217,6 +1366,14 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
             retain=retain, project_parent=project_parent)
         _retain_candidate_attempt_materials(campaign, round_one, data_root,
             retain=retain, project_parent=project_parent)
+        comparison_path = compare._bound_campaign_file(campaign, parent["comparison"], "subject 比较收据")
+        comparison = compare.load_stage_result(campaign, comparison_path, qualification["candidate_id"], manifest=manifest)
+        current_binding = comparison["inputs"]["candidate_stage"]
+        current_path = compare._bound_campaign_file(campaign, current_binding, "subject 精确候选阶段")
+        current_stage = parse_json_bytes(retain(current_path, current_binding["sha256"]))
+        if "recovery" in current_stage:
+            _retain_candidate_recovery_materials(campaign, manifest, current_binding, data_root,
+                candidate_id=qualification["candidate_id"], retain=retain, project_parent=project_parent)
         # 原首轮 reader 已完整重验两种 Mac 客户端；其主收据、来源包和
         # 捕获原件采用三个不同根。只沿已验真的精确字段转坐标，普通 JSON
         # 仍严格展开，不能把 verification 的摘要当作真实附件的替代品。

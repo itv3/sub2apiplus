@@ -202,3 +202,45 @@ class CandidateAttemptProjectionTests(unittest.TestCase):
                 retain=self.retain, project_parent=self.project_parent)
             reader.assert_not_called()
         self.assertFalse(self.parents)
+
+
+class RecoveryRunIdentityProjectionTests(unittest.TestCase):
+    """摘要的原 attempt 身份与段执行身份不同，必须分别核对原件。"""
+
+    retain = CandidateAttemptProjectionTests.retain
+    project_parent = CandidateAttemptProjectionTests.project_parent
+    close = CandidateAttemptProjectionTests.close
+    write_job_materials = CandidateAttemptProjectionTests.write_job_materials
+    write_attempt = CandidateAttemptProjectionTests.write_attempt
+
+    def setUp(self):
+        CandidateAttemptProjectionTests.setUp(self)
+        self.execution_id = self.document["attempt_id"] + ".ar1"
+        closure = json.loads(self.closure.read_bytes())
+        fixture._write_json(self.closure, {**closure, "attempt_id": self.execution_id})
+        self.document["schema_version"] = upgrade.ATTEMPT_RECOVERY_SUMMARY_SCHEMA
+        self.document["results"][0]["job_closure"] = fixture.binding(self.closure, self.attempt)
+        self.write_job_materials(checkpoint_changes={"attempt_id": self.execution_id})
+        self.write_attempt()
+
+    def prove(self, *, producer_id=None):
+        return material._retain_candidate_run_materials(self.campaign, self.attempt_path,
+            self.document, self.attempt, {"job-1": (self.attempt, producer_id or self.execution_id)},
+            self.data, execution_attempt_id=self.execution_id, retain=self.retain,
+            project_parent=self.project_parent)
+
+    def test_summary_keeps_original_id_and_checkpoint_uses_execution_id(self):
+        self.prove()
+        closed = {row["path"] for row in self.close([fixture.binding(self.attempt_path, self.data)])}
+        self.assertIn(self.closure.relative_to(self.data).as_posix(), closed)
+        self.assertEqual(self.document["attempt_id"], "attempt-1")
+
+    def test_rehashed_checkpoint_with_original_id_is_rejected(self):
+        self.write_job_materials()
+        self.write_attempt()
+        with self.assertRaisesRegex(ControlError, "checkpoint.*同源"):
+            self.prove()
+
+    def test_original_id_cannot_authorize_segment_closure(self):
+        with self.assertRaisesRegex(ControlError, "Job 闭环原件"):
+            self.prove(producer_id=self.document["attempt_id"])
