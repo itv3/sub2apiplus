@@ -189,7 +189,7 @@ READER_TRANSITION_PATH = BASELINE_PATH.with_name("codex_identity_conservation_re
 READER_TRANSITION_SHA256 = "6d62b8d3837302ab664732d8a329442221d7b02f9b4c59483cd69c5aac125301"
 READER_TRANSITION_PHASES = ("B4-05-D4", "r2-protocol-order", "B4-05-recovery")
 READER_SUCCESSOR_PATH = BASELINE_PATH.with_name("codex_identity_conservation_reader_transition_20261011.json")
-READER_SUCCESSOR_SHA256 = "469d8346ca5976e233c0fa9d41556d3848c2b924daf68cad47410ad56fcf6a53"
+READER_SUCCESSOR_SHA256 = "2b073cbe3c5efccba31336228b099f2a599c646e21a9902780ca314cd81c9f1d"
 READER_SUCCESSOR_PHASE = "B5a09-test-read-pins"
 REGISTERED_PIN_SUCCESSOR_SYMBOLS = frozenset({
     "codex_upgrade_gate_receipt:TARGET_VERIFIER_SHA256S",
@@ -469,7 +469,7 @@ class CodexIdentityConservationTest(unittest.TestCase):
         self.assertEqual(successor["algorithm_sha256"], hashlib.sha256(Path(tip.__file__).read_bytes()).hexdigest())
         self.assertEqual(successor["source_commits"], {
             "before": "f99137c82d44adfab8d95b53005b65f5b8de401c",
-            "after": "697ade3a218d6ad9c5cad524425983c6dd20f33f",
+            "after": "35b89b49945c685683e2ea8e38279667d221b9ac",
         })
         self.assertEqual(successor["source_file_sha256"]["before"], {
             "codex_upgrade_gate_receipt.py": "48cc60ff1419ba51b1d812e3ef30332e473b186a602c43831bd7ee4ad91a62de"})
