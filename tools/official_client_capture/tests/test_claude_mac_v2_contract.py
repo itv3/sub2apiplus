@@ -292,6 +292,23 @@ class MacV2ContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "真实产品隔离方法尚未验收"):
                 recorder.isolation_recipe(self.task, self.bundle)
 
+    def test_fixture_cannot_borrow_fixed_formal_recorder_name(self) -> None:
+        """夹具改名称仍不取得正式来源，连已登记的真实实例也不得借用。"""
+        task = copy.deepcopy(self.task)
+        task["execution"]["source_scope"] = "regression_fixture"
+        task["execution"]["recorder_id"] = c.MANAGED_RECORDER_ID
+        task["task_sha256"] = c.digest({key: value for key, value in task.items() if key != "task_sha256"})
+        source.validate_task_v2(task)
+        forbidden = mock.Mock()
+        with mock.patch.dict(c.SOURCE_ADAPTERS, {c.MANAGED_RECORDER_ID: forbidden}):
+            self.assertIsNone(c.source_adapter(task))
+        self.assertEqual(forbidden.mock_calls, [])
+
+    def test_ordinary_source_rejects_external_bridge_path_context(self) -> None:
+        """普通合同不因新可选参数获得跨机转根权限，原会话归属仍必须满足。"""
+        with self.assertRaisesRegex(ValueError, "普通来源不得消费跨机路径映射权限"):
+            source.verify_isolation_recipe_v2(self.task, self.bundle, bridge_context=object())
+
     def test_unknown_dispatch_never_restarts_product_or_reserves_budget_again(self) -> None:
         run_root = self.bundle.parent
         f.write(run_root / "dispatch-intent.json", {"task_sha256": self.task["task_sha256"]})
