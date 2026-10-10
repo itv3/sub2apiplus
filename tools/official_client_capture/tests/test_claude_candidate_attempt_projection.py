@@ -288,7 +288,11 @@ class NormalResumeProducerProjectionTests(unittest.TestCase):
         self.write_attempt()
 
     def prove(self):
-        with mock.patch.object(upgrade, "_capture_stage_attempt_context", return_value=(self.attempt, self.document)), \
+        def context(campaign, stage, **_kwargs):
+            path = campaign / stage["attempt"]["path"]
+            return path.parent, json.loads(path.read_bytes())
+
+        with mock.patch.object(upgrade, "_capture_stage_attempt_context", side_effect=context), \
                 mock.patch.object(upgrade, "load_campaign_manifest", return_value={}), \
                 mock.patch.object(capture, "_capture_layout", return_value=object()), \
                 mock.patch.object(recovery, "_verify_reusable_evidence") as reader:
@@ -384,6 +388,11 @@ class NormalResumeProducerProjectionTests(unittest.TestCase):
         self.assertIn(manifest_path.relative_to(self.data).as_posix(), self.originals)
 
     def test_original_cover_stage_does_not_grant_campaign_root_to_unknown_result(self):
+        # 历史 fixture 的相似字段不获新投影。正式 P 父族的正／负例在
+        # 后面的完整原件测试中另核，不为这个简化夹具放宽原读者合同。
+        origin_attempt = self.origin / "attempt.json"
+        fixture._write_json(origin_attempt, {**json.loads(origin_attempt.read_bytes()),
+            "schema_version": "fixture-historical/v1"})
         manifest = fixture._write_json(self.campaign / "campaign.json", {"campaign_id": "campaign-1"})
         origin = {"campaign_dir": str(self.campaign), "campaign_id": "campaign-1",
             "candidate_id": "candidate-1", "campaign_manifest_sha256": fixture.binding(manifest, self.data)["sha256"]}
@@ -423,6 +432,89 @@ class NormalResumeProducerProjectionTests(unittest.TestCase):
         self.write_attempt()
         with self.assertRaisesRegex(ControlError, "最初生产者的精确 attempt"):
             self.prove()
+
+    def complete_origin_cover(self):
+        """构造 P 自己的完整 Job／checkpoint 父族，不借用后继 S 的字节。"""
+        document = json.loads((self.origin / "attempt.json").read_bytes())
+        document["attempt_id"] = "producer-1"
+        for name, phase in (("before_probe", "before"), ("after_probe", "after")):
+            document["environment"][name] = fixture.binding(self.origin / "evidence" / phase / "probe.json",
+                self.origin / "evidence")
+        document["reservation"] = fixture.binding(self.origin / "reservation.json", self.campaign, with_bytes=False)
+        document["watchdog"]["heartbeat"] = fixture.binding(self.origin / "heartbeat.json", self.campaign)
+        result = document["results"][0]
+        result["environment_runs"] = copy.deepcopy(self.origin_runs)
+        result["job_closure"] = fixture.binding(self.origin / self.closure.relative_to(self.attempt), self.origin)
+        fixture._write_json(self.origin / "job-job-1.json", result)
+        store = incremental_recovery.CheckpointStore(self.origin / "checkpoints")
+        for path in store.root.glob("*.json"):
+            path.unlink()
+        store.append({"checkpoint_schema_version": capture.JOB_CHECKPOINT_SCHEMA,
+            **{key: document[key] for key in ("client", "mode", "campaign_id", "phase", "attempt_id", "run_nonce")},
+            "item_id": "job-1", "status": "complete", "disposition": "executed", "result": result,
+            "result_sha256": incremental_recovery.digest(result), "result_key": None,
+            "previous_checkpoint_sha256": None})
+        document["job_checkpoint"] = {"schema_version": capture.JOB_CHECKPOINT_SCHEMA,
+            "path": store.root.relative_to(self.campaign).as_posix(), "record_count": 1,
+            "last_sequence": 1, "last_sha256": store.records()[0]["checkpoint_sha256"]}
+        original = fixture._write_json(self.origin / "attempt.json", document)
+        manifest = fixture._write_json(self.campaign / "campaign.json", {"campaign_id": "campaign-1"})
+        origin = {"campaign_dir": str(self.campaign), "campaign_id": "campaign-1",
+            "candidate_id": "candidate-1", "campaign_manifest_sha256": fixture.binding(manifest, self.data)["sha256"]}
+        sealed = fixture._write_json(self.campaign / "source-sealed-manifest.json", {})
+        stage = fixture._write_json(self.campaign / "source-cover-stage.json", {
+            "candidate_id": "candidate-1", "attempt": fixture.binding(original, self.campaign, with_bytes=False),
+            "results": copy.deepcopy(document["results"]), "seal": {},
+            "sealed_evidence_manifest": fixture.binding(sealed, self.campaign, with_bytes=False)})
+        self.producer.update(campaign=origin, execution_sha256="a" * 64, predecessor_sealed_cover={
+            "campaign": origin, "stage_result": fixture.binding(stage, self.campaign, with_bytes=False),
+            "sealed_evidence_manifest": fixture.binding(sealed, self.campaign, with_bytes=False)})
+        self.write_job_materials(checkpoint_changes={"disposition": "reused"})
+        self.write_attempt()
+        return stage, document
+
+    def test_original_cover_closes_complete_attempt_job_checkpoint_and_stage_family(self):
+        stage, _document = self.complete_origin_cover()
+        self.prove()
+        closed = {row["path"] for row in self.close([fixture.binding(stage, self.data)])}
+        for path in self.origin.rglob("*"):
+            if path.is_file():
+                self.assertIn(path.relative_to(self.data).as_posix(), closed)
+
+    def test_original_cover_unknown_attempt_binding_keeps_data_root(self):
+        stage, document = self.complete_origin_cover()
+        document["unknown"] = fixture.binding(self.origin / self.closure.relative_to(self.attempt), self.origin)
+        original = fixture._write_json(self.origin / "attempt.json", document)
+        value = json.loads(stage.read_bytes())
+        value["attempt"] = fixture.binding(original, self.campaign, with_bytes=False)
+        fixture._write_json(stage, value)
+        self.producer["predecessor_sealed_cover"]["stage_result"] = fixture.binding(stage, self.campaign, with_bytes=False)
+        self.write_job_materials(checkpoint_changes={"disposition": "reused"})
+        self.write_attempt()
+        self.prove()
+        with self.assertRaisesRegex(ControlError, "原件缺失"):
+            self.close([fixture.binding(stage, self.data)])
+
+    def test_original_cover_results_cannot_borrow_same_job_id_projection(self):
+        stage, _document = self.complete_origin_cover()
+        value = json.loads(stage.read_bytes())
+        value["results"][0]["execution_sha256"] = "b" * 64
+        fixture._write_json(stage, value)
+        self.producer["predecessor_sealed_cover"]["stage_result"] = fixture.binding(stage, self.campaign, with_bytes=False)
+        self.write_job_materials(checkpoint_changes={"disposition": "reused"})
+        self.write_attempt()
+        with self.assertRaisesRegex(ControlError, "封存阶段的结果.*不同源"):
+            self.prove()
+
+    def test_original_cover_recursive_family_is_rejected(self):
+        stage, document = self.complete_origin_cover()
+        archive = material._CandidateAttemptArchive({self.origin / "attempt.json"}, {})
+        with mock.patch.object(upgrade, "load_campaign_manifest", return_value={}), \
+                mock.patch.object(capture, "_capture_layout", return_value=object()), \
+                mock.patch.object(recovery, "_verify_reusable_evidence"), \
+                self.assertRaisesRegex(ControlError, "父族循环"):
+            material._candidate_attempt_result_producers(self.campaign, self.document, self.attempt,
+                self.data, retain=self.retain, project_parent=self.project_parent, _archive=archive)
 
 
 class CandidateBoundaryRetentionTests(unittest.TestCase):
