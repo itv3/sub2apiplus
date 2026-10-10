@@ -86,6 +86,18 @@ def physical_session_root(task: Mapping[str, Any], recipe: Mapping[str, Any], bu
 def material_state_paths(task: Mapping[str, Any], recipe: Mapping[str, Any], bundle_root: Path,
                          path_context: Any = None) -> tuple[Path, ...]:
     """原冻结状态路径全集经过认证映射，不重写 recipe 或扩大状态范围。"""
+    if path_context is not None:
+        from tools.official_client_capture import claude_mac_agent_bridge as bridge
+        bridge.validate_bridge_path_context(task, path_context, bundle_root=Path(bundle_root))
+        mapping = dict(path_context.state_paths)
+        paths = recipe["state_paths"]
+        _require(isinstance(paths, list) and 0 < len(paths) <= 32
+                 and len(set(paths)) == len(paths) and set(paths) == set(mapping)
+                 and recipe["private_session_root"] == str(path_context.logical_session_root),
+                 "状态全集与原认证映射／逻辑会话根不一致")
+        # 固定桥已经认证规范绝对路径。离线 ARM64 重放不能再读取 Mac 上的
+        # 活动目录，更不能按 session 前缀推导一份未经认证的物理位置。
+        return tuple(Path(mapping[value]) for value in paths)
     logical = Path(recipe["private_session_root"])
     physical = physical_session_root(task, recipe, bundle_root, path_context)
     result = []
@@ -95,6 +107,27 @@ def material_state_paths(task: Mapping[str, Any], recipe: Mapping[str, Any], bun
         result.append(physical / path.relative_to(logical))
     _require(len(set(result)) == len(result), "实际映射状态路径重复")
     return tuple(result)
+
+
+def material_state_root(task: Mapping[str, Any], recipe: Mapping[str, Any], bundle_root: Path,
+                        path_context: Any = None) -> Path:
+    """从准确物理全集派生唯一恢复根；应用会话根与原状态根分别消费。
+
+    桥分支只用经过认证的 physical pair，不能由调用方指定任意公共根。
+    这里只推导字面，现场工厂／journal仍核当前用户私有目录、原实例、同卷
+    与精确路径上限；离线原件重放不要求 Mac 目录仍存在。
+    """
+    if path_context is None:
+        return physical_session_root(task, recipe, bundle_root)
+    paths = material_state_paths(task, recipe, bundle_root, path_context)
+    root = paths[0].parent
+    while any(path == root or not path.is_relative_to(root) for path in paths):
+        root = root.parent
+    _require(len(root.parts) > 2, "认证状态全集不能以系统公共根作为恢复根")
+    for private in (path_context.staging_bundle_root, path_context.staging_session_root):
+        _require(not root.is_relative_to(private) and not private.is_relative_to(root),
+                 "认证状态恢复根须与来源包和应用会话完全分离")
+    return root
 
 
 def _recipe_context(task: Mapping[str, Any], bundle_root: Path, path_context: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:

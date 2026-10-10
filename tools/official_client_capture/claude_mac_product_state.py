@@ -209,6 +209,7 @@ def verify_observation(recorder: Any, journal: Any, scope: Mapping[str, Any], ba
 def verify_archived_restore(task: Mapping[str, Any], bundle_root: Path, observed: Mapping[str, Any], *, path_context: Any) -> None:
     """ARM64 只读消费复制的恢复原件；不要求 Mac 活动锁或可注入恢复 callback。"""
     from tools.official_client_capture import claude_mac_product_authority as authority
+    from tools.official_client_capture import claude_mac_product_recipe as recipes
     from tools.official_client_capture.claude_mac_state_journal import StateJournal, SnapshotLimits
     root = Path(bundle_root)
     state = root/"state-originals"
@@ -226,8 +227,13 @@ def verify_archived_restore(task: Mapping[str, Any], bundle_root: Path, observed
         and before["identity"] == after["identity"] == expected_identity
         and before["states"] == after["states"] and set(before["states"]) == set(frozen["paths"]),
         "复制状态 before/after、原根、身份或精确清单不闭合")
-    _require(path_context is not None and path_context.task_sha256 == task["task_sha256"]
-        and frozen["state_root"] == str(path_context.staging_session_root), "恢复原根不是原认证 Mac 映射")
+    _require(path_context is not None, "恢复缺原认证 Mac 映射")
+    recipe = c.read_json(c.bound_file(root, task["execution"]["isolation_recipe"]))
+    state_root = recipes.material_state_root(task, recipe, root, path_context)
+    state_paths = recipes.material_state_paths(task, recipe, root, path_context)
+    _require(frozen["state_root"] == str(state_root)
+        and frozen["paths"] == sorted(path.relative_to(state_root).as_posix() for path in state_paths),
+        "恢复原根或准确状态全集不是原认证 Mac 物理映射")
     limits = SnapshotLimits(**frozen["limits"])
     limits.validate()
     _require(set(frozen["limits"]) == set(limits.__dataclass_fields__), "复制状态上限须精确冻结，不能补默认值")

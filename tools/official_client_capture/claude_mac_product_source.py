@@ -128,18 +128,19 @@ class QualifiedMacProductSource:
                  and isinstance(subject["credential_refs"], list) and execution["credential_ref"] in subject["credential_refs"],
                  "产品请求、重试、期限、并发或凭据作用域越出冻结许可")
         actual_state = recipes.material_state_paths(task, recipe, root, path_context)
-        session = recipes.physical_session_root(task, recipe, root, path_context)
-        _require(all(path.is_relative_to(session) and path != session for path in actual_state),
-                 "产品状态只允许固定桥认证的本 run 私有 session；不恢复全局用户状态")
-        relative = sorted(path.relative_to(session).as_posix() for path in actual_state)
+        state_root = recipes.material_state_root(task, recipe, root, path_context)
+        native._private_directory(state_root)
+        relative = sorted(path.relative_to(state_root).as_posix() for path in actual_state)
         _require(relative == subject["state_paths_relative"], "产品状态作用域与已批准精确路径全集不一致")
         immutable_roles = {row["role"]: row for row in task["client_artifacts"]}
         immutable = Path(immutable_roles["embedded_cli"]["content"]["path"])
         _require(all(not immutable.is_relative_to(path) and not path.is_relative_to(immutable) for path in actual_state),
                  "不可变的大 CLI 物料不能列作状态备份；须在冻结 recipe 前收窄精确状态全集")
         if task["client_id"] == "claude-vscode":
-            _require("user_data/User" in relative and material["facts"].get("vscode_activation_source") is not None,
-                     "扩展必须具备实际成功激活来源与准确的私有 User 设置作用域")
+            _require(material["facts"].get("vscode_activation_source") is not None,
+                     "扩展必须具备实际成功激活来源")
+            if path_context is None:
+                _require("user_data/User" in relative, "扩展缺准确的私有 User 设置作用域")
         return {"raw_sha256": hashlib.sha256(raw).hexdigest(), "subject": subject, "recipe": recipe}
 
     def verify_product_qualification(self, task: Mapping[str, Any], root: Path, provider: Any, *, dispatch: bool) -> None:
@@ -270,6 +271,8 @@ def create_qualified_source(task: Mapping[str, Any], *, bundle_root: Path, mater
     session = recipes.physical_session_root(frozen, qualification["recipe"], root, path_context)
     native._private_directory(session)
     paths = recipes.material_state_paths(frozen, qualification["recipe"], root, path_context)
+    state_root = recipes.material_state_root(frozen, qualification["recipe"], root, path_context)
+    native._private_directory(state_root)
     limits = SnapshotLimits(**qualification["subject"]["snapshot_limits"])
     limits.validate()
     _require(set(qualification["subject"]["snapshot_limits"]) == set(asdict(limits)), "恢复上限必须精确冻结，不填默认缺项")
@@ -287,10 +290,17 @@ def create_qualified_source(task: Mapping[str, Any], *, bundle_root: Path, mater
         operations = ()
         if frozen["client_id"] == "claude-vscode":
             raw = c.canonical(plan["private_user_data_settings"])
-            operations = (StateSetupOperation("private-vscode-settings", {"user_data/User":
-                {"type": "directory", "mode": 0o700, "mtime_ns": 1,
-                 "children": {"settings.json": file_state(raw, mtime_ns=1)}}}),)
-        state_plan = RecorderStatePlan(session, tuple(path.relative_to(session).as_posix() for path in paths), {},
+            settings = session/"user_data/User"
+            if settings in paths:
+                operations = (StateSetupOperation("private-vscode-settings", {settings.relative_to(state_root).as_posix():
+                    {"type": "directory", "mode": 0o700, "mtime_ns": 1,
+                     "children": {"settings.json": file_state(raw, mtime_ns=1)}}}),)
+            else:
+                # 认证桥的原状态位于 session 外；不能把全局 User 或未授权
+                # 路径塞入它的 journal。私有副本须在冻结 task 前准备准确设置。
+                _require(authority.read_original(settings/"settings.json", maximum=8192) == raw,
+                         "桥私有 User 设置尚未准确准备，不能改写原状态代替")
+        state_plan = RecorderStatePlan(state_root, tuple(path.relative_to(state_root).as_posix() for path in paths), {},
                                        limits, operations, plan["plan"])
         recorder = ProductEvidenceRecorder(frozen, bundle_root=root, services=services, provider=provider,
             state_plan=state_plan, materials_receipt=Path(materials_receipt), path_context=path_context)

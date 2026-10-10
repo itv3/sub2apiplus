@@ -72,9 +72,9 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
         expected = {str(self._state / relative) for relative in self._plan.frozen_paths}
         actual_paths = recipes.material_state_paths(self._task, recipe, self._root, self._path_context)
         base._require({str(path) for path in actual_paths} == expected and len(actual_paths) == len(expected)
-                      and self._state == recipes.physical_session_root(self._task, recipe, self._root, self._path_context)
+                      and self._state == recipes.material_state_root(self._task, recipe, self._root, self._path_context)
                       and self._state_instance["dev"] == self._root_instance["dev"],
-                      "恢复计划不是隔离 recipe 的准确状态全集与本 run 私有根")
+                      "恢复计划不是隔离 recipe 的准确物理状态全集与认证私有根")
         # 物料推导只证明固定参数；隔离能力仍由原来源合同消费，而非 false 旗标翻转。
         if self._path_context is None:
             base._require(source.verify_isolation_recipe_v2(self._task, self._root) == recipe,

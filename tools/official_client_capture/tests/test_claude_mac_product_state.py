@@ -232,11 +232,23 @@ class ProductStateTests(unittest.TestCase):
 
     def archived_restore(self):
         """真实 journal、真实文件恢复和 fixture ECDSA；不登记或派发正式来源。"""
-        mapping = self.root/"path-mapping.json"
-        mapping.write_bytes(c.canonical({"fixture_only": True}))
-        mapping.chmod(0o600)
-        context = SimpleNamespace(task_sha256=self.task["task_sha256"], staging_session_root=self.state,
-            staging_bundle_root=self.root, mapping_binding=c.binding(mapping, self.root))
+        from tools.official_client_capture import claude_mac_agent_bridge as bridge
+        from tools.official_client_capture.tests.test_claude_mac_formal_bridge import FormalBridgeTests
+        fixture = FormalBridgeTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.mapping_rows = [{"logical": fixture.state[0], "physical": str(self.file)}]
+        fixture.mac_install = fixture.installation("mac")
+        fixture.engine = bridge.MacBridgeEngine(fixture.task, fixture.mac_install)
+        fixture.prepared()
+        self.root, self.task = fixture.engine.root, fixture.task
+        self.identity = {"task_sha256": self.task["task_sha256"], "task_nonce": self.task["task_nonce"],
+            "producer_run_id": self.task["execution"]["producer_run_id"],
+            "deadline_utc": self.task["execution"]["request_policy"]["deadline_utc"]}
+        patch = mock.patch.object(bridge, "require_mac_bridge_installation", return_value=fixture.mac_install)
+        patch.start()
+        self.addCleanup(patch.stop)
+        context = bridge.verify_bridge_path_context(self.task, self.root)
         ready = {"kind": "ready", "task_sha256": self.task["task_sha256"], "run_id": self.identity["producer_run_id"],
             "boot_id": "fixture-boot", "observed_at_utc": at(0), "accessibility_trusted": False,
             "socket_events_complete": False, "module_activation_verified": False,
