@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import functools
 import json
 import multiprocessing
 import os
 import signal
 import tempfile
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
@@ -407,6 +409,43 @@ def fixture_mac_source_scope(configuration: dict, data_root: Path) -> Iterator[N
         yield
 
 
+@contextlib.contextmanager
+def guard_diagnostics(engine: guard.GuardEngine) -> Iterator[None]:
+    """测试开关开启时保存守卫异常原件；原异常、返回值和 RPC 判据均不变。"""
+
+    root = _diagnostic_root()
+    if root is None:
+        yield
+        return
+
+    def observe(name: str, operation: Any) -> Any:
+        @functools.wraps(getattr(guard.GuardEngine, name))
+        def invoke(*arguments: Any, **options: Any) -> Any:
+            try:
+                return operation(*arguments, **options)
+            except Exception as error:
+                # 不记录请求参数或局部变量；日志失败也不能覆盖原始执行异常。
+                with contextlib.suppress(OSError):
+                    directory = Path(tempfile.mkdtemp(prefix=f"guard-{name}-", dir=root))
+                    guard.write_json_once(directory / "exception.json", {
+                        "schema_version": "claude-typed-vc6-guard-diagnostic/v1",
+                        "fixture_only": True,
+                        "formal_certification": False,
+                        "operation": name,
+                        "exception_type": type(error).__name__,
+                        "message": str(error),
+                        "traceback": traceback.format_exc(),
+                    })
+                raise
+        return invoke
+
+    with contextlib.ExitStack() as stack:
+        for name in ("complete_startup", "status", "inspect", "prepare", "run", "finish",
+                     "heartbeat", "recover_pending", "inventory", "export", "export_batch", "watchdog"):
+            stack.enter_context(mock.patch.object(engine, name, new=observe(name, getattr(engine, name))))
+        yield
+
+
 def serve_guard(configuration: dict, context: dict, control_path: Path) -> None:
     """独立进程组持有真实 GuardEngine；动作强杀不会连带终止守卫。"""
 
@@ -416,7 +455,8 @@ def serve_guard(configuration: dict, context: dict, control_path: Path) -> None:
         identity = executor.guard_identity(configuration, context, formal=False)
         engine = guard.GuardEngine(configuration, context, ControlledFileRuntime(configuration, context, control_path), identity)
         key = guard.read_bytes(guard.check_binding(root, configuration["guard"]["channel_key_binding"]))
-        guard.serve(engine, root / configuration["guard"]["socket_relative"], key)
+        with guard_diagnostics(engine):
+            guard.serve(engine, root / configuration["guard"]["socket_relative"], key)
 
 
 @contextlib.contextmanager

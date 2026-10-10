@@ -39,6 +39,48 @@ class TypedFixtureInputTests(unittest.TestCase):
         self.root = Path(directory.name)
         os.chown(self.root, -1, os.getegid())
 
+    def test_guard_diagnostics_preserves_exception_and_private_original(self) -> None:
+        engine = mock.create_autospec(guard.GuardEngine, instance=True)
+        original = RuntimeError("测试守卫底层异常")
+        engine.prepare.side_effect = original
+        operation = engine.prepare
+        with mock.patch.dict(os.environ, {fixture.DIAGNOSTIC_ROOT_ENV: str(self.root)}):
+            with fixture.guard_diagnostics(engine), self.assertRaises(RuntimeError) as caught:
+                engine.prepare({"request": "不写入日志"}, {"owner": "不写入日志"})
+        self.assertIs(caught.exception, original)
+        self.assertIs(engine.prepare, operation)
+        records = list(self.root.glob("guard-prepare-*/exception.json"))
+        self.assertEqual(len(records), 1)
+        record = guard.read_json(records[0])
+        self.assertEqual(record["exception_type"], "RuntimeError")
+        self.assertEqual(record["message"], str(original))
+        self.assertIn("RuntimeError: 测试守卫底层异常", record["traceback"])
+        self.assertNotIn("不写入日志", records[0].read_text())
+        self.assertEqual(records[0].stat().st_mode & 0o777, 0o600)
+
+    def test_guard_diagnostics_keeps_success_and_default_behavior(self) -> None:
+        engine = mock.create_autospec(guard.GuardEngine, instance=True)
+        result = {"original": True}
+        engine.status.return_value = result
+        operation = engine.status
+        with mock.patch.dict(os.environ, {fixture.DIAGNOSTIC_ROOT_ENV: str(self.root)}):
+            with fixture.guard_diagnostics(engine):
+                self.assertIs(engine.status(), result)
+        self.assertEqual(list(self.root.iterdir()), [])
+        with mock.patch.dict(os.environ, {fixture.DIAGNOSTIC_ROOT_ENV: ""}):
+            with fixture.guard_diagnostics(engine):
+                self.assertIs(engine.status, operation)
+
+    def test_guard_diagnostic_write_failure_does_not_mask_original(self) -> None:
+        engine = mock.create_autospec(guard.GuardEngine, instance=True)
+        original = RuntimeError("保留此异常")
+        engine.run.side_effect = original
+        with mock.patch.dict(os.environ, {fixture.DIAGNOSTIC_ROOT_ENV: str(self.root)}):
+            with fixture.guard_diagnostics(engine), mock.patch.object(fixture.tempfile, "mkdtemp", side_effect=OSError("日志失败")):
+                with self.assertRaises(RuntimeError) as caught:
+                    engine.run({})
+        self.assertIs(caught.exception, original)
+
     def test_same_store_constructor_preserves_original_campaign_and_external_bytes(self) -> None:
         original = SyntheticCampaign(self.root, schema="v2")
         original.bootstrap_and_campaign()
