@@ -34,7 +34,7 @@ _STACKS: list[contextlib.ExitStack] = []
 CONTINUATION_SCHEMA = "claude-recorded-vc1-continuation/v1"
 
 
-def _inputs(data: Path) -> dict[str, Any]:
+def _inputs(data: Path, *, extra_official_jobs: tuple[str, ...] = ()) -> dict[str, Any]:
     """生成有独立来源说明的控制输入投影；不改任何版本化正式清单或原始录制字段。"""
 
     from tools.official_client_capture import claude_upgrade_plan as plan
@@ -52,7 +52,9 @@ def _inputs(data: Path) -> dict[str, Any]:
                  baseline_rule_manifest={"path": "fixture-only/baseline.json", "sha256": source.binding(baseline_path)["sha256"]})
     rules_path = source.write(root / "rules.json", rules)
     template = source.read(plan.scenario_manifest_path("2.1.285"))
-    official_ids = set(seal_tests.SEAL_JOBS)
+    official_ids = set(seal_tests.SEAL_JOBS) | set(extra_official_jobs)
+    if not official_ids <= {job["id"] for job in template["capture_jobs"] if job["phase"] == "official"}:
+        raise replay.ReplayError("录制控制输入选择了未登记的完整官方 Job")
     official_probes = {step["probe_id"] for job in template["capture_jobs"] if job["id"] in official_ids for step in job["steps"]}
     # full 预检在冻结时就要求两侧覆盖同一规则全集。只选所有步骤都已有官方来源的完整候选 Job，不能删候选侧或拆半个 Job。
     candidate_ids = {job["id"] for job in template["capture_jobs"] if job["phase"] == "candidate"
@@ -596,9 +598,11 @@ def namespace_main(
         subprocess.run(["mount", "-o", "remount,bind,ro", root], check=True)
     _create_world_roots(data)
     shutil.copytree(REPOSITORY / "tools", data / "tools", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    snapshot = replay.build_snapshot(data / "control/snapshot", recorded=Path(arguments.recorded))
-    freeze = source.stage_freeze(data / "official/claude-code-2.1.226", Path(arguments.freeze))
     inputs = inputs_builder(data)
+    snapshot = replay.build_snapshot(data / "control/snapshot", recorded=Path(arguments.recorded),
+                                     source_selections=tuple(inputs.get("source_selections", ())))
+    source.require_registered_jobs(snapshot, inputs)
+    freeze = source.stage_freeze(data / "official/claude-code-2.1.226", Path(arguments.freeze))
     state = {"schema_version": source.SCHEMA, "fixture_only": True, "purpose": "regression_fixture", "target_version": source.VERSION,
              "data_root": str(data), "snapshot": snapshot, "freeze": freeze, "inputs": inputs, "jobs": inputs["jobs"],
              "parent_namespaces": parent_namespaces, "readonly_sources": roots}

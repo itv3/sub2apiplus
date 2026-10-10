@@ -32,6 +32,16 @@ FULL_SCHEMA = "claude-recorded-full-validation-only/v1"
 REVIEWER = "录制控制回归审核来源"
 CANDIDATE = "claude-recorded-cand-r1"
 HOST = "arm64-recorded-control-fixture"
+FULL_EXTRA_OFFICIAL_JOBS = ("official-generation-params", "official-agency-subagent")
+# 完整来源选择登记的是原第二次及其确切收据；第一次失败原件和普通评估夹具选择不变。
+FULL_SOURCE_SELECTION = {
+    "source_id": "thinking-display-supplement-v1-94f7d00d704f",
+    "probe_id": "v4-thinking-display-summarized",
+    "attempt": "thinking-display-supplement-v1-94f7d00d704f/attempts/v4-thinking-display-summarized/attempt-002",
+    "host_receipt": "thinking-display-supplement-v1-94f7d00d704f/runtime-receipts/v4-thinking-display-summarized-attempt-002.json",
+    "manifest_sha256": "7c2c6ff5bc4ae357bb0e6f9ab2ff61092bc854fcdc6facae879aebb057d7f07d",
+    "host_receipt_sha256": "c3c80dc19de9e0882008d28d3b23b9ff4902f020e56e59872f76710a5cbd9661",
+}
 
 
 def _write_bytes(path: Path, raw: bytes) -> Path:
@@ -65,8 +75,9 @@ def _inputs(data: Path) -> dict[str, Any]:
     from tools.official_client_capture import claude_upgrade_release as release
     from tools.official_client_capture import claude_upgrade_wire_projection as wire
     from tools.official_client_capture.tests import test_claude_upgrade_profile as profile_fixture
+    from tools.official_client_capture.tests import claude_wire_fixture as wire_fixture
 
-    inputs = vc1._inputs(data)
+    inputs = vc1._inputs(data, extra_official_jobs=FULL_EXTRA_OFFICIAL_JOBS)
     root = data / "control/fixture-active-projection"
     original_profile = source.read(profile_fixture.ACTIVE_PROFILE)
     projected_profile = _baseline_values(original_profile)
@@ -93,9 +104,12 @@ def _inputs(data: Path) -> dict[str, Any]:
     for name in ("production_active", "validation_candidate"):
         catalog["selectors"][name] = {"kind": "release", "release_sha256": release_digest, "changeset": "fixture-only-control-baseline"}
     catalog_path = source.write(root / "active-release-catalog.json", catalog)
-    policy, original_policy_binding = release.active_projection_policy(source.VERSION)
+    original_policy, original_policy_binding = release.active_projection_policy(source.VERSION)
+    # 保留既有离线主模型语义，在 VC-0 之前冻结；完整 Active 原件及其三模型策略仍独立绑定。
+    policy = wire_fixture.single_model_policy(original_policy)
     policy["version"] = vc1.BASELINE
     policy_path = source.write(root / "active-projection-policy.json", policy)
+    review_policy_path = source.write(root / "review-projection-policy.json", release.machine_projection_policy(policy, source.VERSION))
     # 输入源改变也必须通过正式投影策略加载器；后续不替换其任何判据或投影计算。
     wire.load_projection_policy(policy_path)
     anchors_path = source.write(root / "static-baseline-anchors.json", {
@@ -108,19 +122,66 @@ def _inputs(data: Path) -> dict[str, Any]:
     })
     paths = {"active_release_catalog": catalog_path, "active_profile": profile_path, "active_wire": wire_path,
              "active_projection_policy": policy_path, "static_baseline_anchors": anchors_path,
-             "static_baseline_reachability": reachability_path}
+             "static_baseline_reachability": reachability_path, "review_projection_policy": review_policy_path}
     inputs["bindings"].update({key: source.binding(path) for key, path in paths.items()})
+    # 恢复链会合法聚合当前 Job；原完整 Job 单独绑定，完整性判据不能随聚合丢失。
+    inputs["bindings"]["full_scenarios"] = inputs["bindings"]["scenarios"]
     inputs["full_control_inputs"] = True
+    inputs["source_selections"] = [copy.deepcopy(FULL_SOURCE_SELECTION)]
     origin = source.write(root / "projection-origin.json", {
         "fixture_only": True, "purpose": "control_input_projection", "baseline_version": vc1.BASELINE,
         "target_version": source.VERSION, "source_version": source.VERSION, "formal_version_semantics_certified": False,
         "originals": {"profile": source.binding(profile_fixture.ACTIVE_PROFILE), "wire": source.binding(profile_fixture.ACTIVE_WIRE),
                       "catalog": source.binding(profile_fixture.ACTIVE_CATALOG), "projection_policy": original_policy_binding},
         "projected": {key: inputs["bindings"][key] for key in paths},
-        "method": "身份精确值投影，规范化画像/Wire 字节，按正式算法重算 Release/Bundle；业务规则不删减。",
+        "model_scope": {"original_models": original_policy["models"]["ordered"], "fixture_models": policy["models"]["ordered"],
+                        "original_required_probe_count": len(wire.required_probes(original_policy)),
+                        "fixture_required_probe_count": len(wire.required_probes(policy)),
+                        "formal_model_scope_certified": False},
+        "method": "身份精确值投影，按正式算法重算 Release/Bundle；业务规则不删减。原有主模型夹具审核策略在 VC-0 前单独冻结，不认证完整 Active 三模型语义。",
     })
     inputs["bindings"]["active_projection_origin"] = source.binding(origin)
+    validate_frozen_inputs(data, inputs)
     return inputs
+
+
+def validate_frozen_inputs(data: Path, inputs: dict[str, Any]) -> dict[str, Any]:
+    """零阶段运行地核完整 Job、双侧实际 probe 闭集及唯一冻结审核策略；不替代正式投影判定。"""
+
+    from tools.official_client_capture import claude_upgrade_plan as plan
+    from tools.official_client_capture import claude_upgrade_release as release
+    from tools.official_client_capture import claude_upgrade_wire_projection as wire
+    from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_fixture
+
+    bindings = inputs["bindings"]
+    active = wire.load_projection_policy(source.bound(bindings["active_projection_policy"], root=data))
+    review = wire.load_projection_policy(source.bound(bindings["review_projection_policy"], root=data))
+    if (active["version"] != vc1.BASELINE or review != release.machine_projection_policy(active, source.VERSION)
+            or inputs.get("source_selections") != [FULL_SOURCE_SELECTION]):
+        raise replay.ReplayError("完整链冻结审核策略或显式来源选择漂移")
+    original = source.read(source.bound(bindings["full_scenarios"], root=data))
+    template = source.read(plan.scenario_manifest_path("2.1.285"))
+    official_ids = set(seal_fixture.SEAL_JOBS) | set(FULL_EXTRA_OFFICIAL_JOBS)
+    official_probes = {step["probe_id"] for job in template["capture_jobs"] if job["id"] in official_ids for step in job["steps"]}
+    candidate_ids = {job["id"] for job in template["capture_jobs"] if job["phase"] == "candidate"
+                     and all(step["probe_id"] in official_probes for step in job["steps"])}
+    for side, selected in (("official", official_ids), ("candidate", candidate_ids)):
+        expected = {job["id"]: [step["probe_id"] for step in job["steps"]]
+                    for job in template["capture_jobs"] if job["phase"] == side and job["id"] in selected}
+        actual = {job["id"]: [step["probe_id"] for step in job["steps"]]
+                  for job in original["capture_jobs"] if job["phase"] == side}
+        if actual != expected:
+            raise replay.ReplayError(f"{side} 完整链 Job 未闭合，禁止删除 Job 或拆步骤")
+    current = source.read(source.bound(bindings["scenarios"], root=data))
+    required = set(wire.required_probes(review))
+    for side, key in (("official", "jobs"), ("candidate", "candidate_jobs")):
+        jobs = {job["id"]: [step["probe_id"] for step in job["steps"]] for job in current["capture_jobs"] if job["phase"] == side}
+        if jobs != inputs[key]:
+            raise replay.ReplayError(f"{side} 冻结场景与 Job 映射漂移")
+        missing = sorted(required - {probe for probes in jobs.values() for probe in probes})
+        if missing:
+            raise replay.ReplayError(f"{side} 冻结审核策略缺少正式 required probes：{missing}")
+    return review
 
 
 @contextlib.contextmanager
@@ -133,6 +194,7 @@ def installed(state_path: Path, digest: str) -> Iterator[Any]:
     state = source.load_state(state_path, digest)
     if state["inputs"].get("full_control_inputs") is not True:
         raise replay.ReplayError("完整链要求在 VC-0 前冻结完整控制输入")
+    validate_frozen_inputs(Path(state["data_root"]), state["inputs"])
     original = release.active_projection_policy
 
     def active_projection_policy(version: str):
@@ -200,7 +262,6 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
     from tools.official_client_capture import claude_upgrade_profile as profile
     from tools.official_client_capture.tests import test_claude_upgrade_classify as classify_fixture
     from tools.official_client_capture.tests import test_claude_upgrade_profile as profile_fixture
-    from tools.official_client_capture.tests import claude_wire_fixture as wire_fixture
 
     batches = []
     batches.append(vc1._batch(data, campaign, "vc2-01-classify-draft", ["classify", "--campaign-dir", str(campaign)], phase="VC-2"))
@@ -226,9 +287,16 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
         raise replay.ReplayError("控制审核输入未形成明确的 40 规则继承分母")
     batches.append(vc1._batch(data, campaign, "vc3-01-prepare-draft", ["prepare-profile", "--campaign-dir", str(campaign)], phase="VC-3"))
     draft = _latest_prepare(campaign)
+    state = source.load_state(Path(os.environ[source.STATE_ENV]), os.environ[source.DIGEST_ENV])
+    if Path(state["data_root"]) != data:
+        raise replay.ReplayError("审核策略的来源状态不属于本次数据根")
+    frozen_review = validate_frozen_inputs(data, state["inputs"])
+    if source.read(Path(draft["draft_dir"]) / profile.PREPARE_FILES["projection"]) != frozen_review:
+        raise replay.ReplayError("机器审核草案与 VC-0 前冻结策略不同")
     preparer = profile_fixture._ProfileCase(methodName="runTest")
     docs = preparer.resolved_prepare(campaign, Path(draft["draft_dir"]))
-    docs["projection"] = wire_fixture.single_model_policy(docs["projection"])
+    if docs["projection"] != frozen_review:
+        raise replay.ReplayError("审核来源改变了 VC-0 前冻结投影策略")
     for name in ("boundary_assertions", "persona_derivation", "compatibility_boundary"):
         for row in docs["joint_inputs"][name]:
             row["facts"].update(fixture_only=True, purpose="control_regression_input")

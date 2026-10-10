@@ -334,7 +334,10 @@ def origin_probe(state: Mapping[str, Any], probe: str) -> dict[str, Any]:
         raise replay.ReplayError("录制 probe 未唯一登记")
     row = rows[0]
     root = Path(index["root"])
-    relative = f"{row['source_id']}/runtime-receipts/{probe}-attempt-001.json"
+    relative = row.get("host_receipt", f"{row['source_id']}/runtime-receipts/{probe}-attempt-001.json")
+    # 新登记来源明确选择第二次及其原收据；旧 v1 行继续读原来的第一次，不猜其它成功 attempt。
+    if relative != f"{row['source_id']}/runtime-receipts/{probe}-{Path(row['attempt']).name}.json":
+        raise replay.ReplayError("录制来源的 attempt 与宿主收据坐标不同")
     receipt = bound({"path": str(root / relative), **index["files"][relative]}, root=root)
     manifest_relative = f"{row['attempt']}/relay-manifest.json"
     manifest_path = bound({"path": str(root / manifest_relative), **index["files"][manifest_relative]}, root=root)
@@ -359,6 +362,17 @@ def origin_probe(state: Mapping[str, Any], probe: str) -> dict[str, Any]:
         raise replay.ReplayError("原始 relay、宿主收据或 binary 身份断裂")
     return {"row": row, "index": index, "manifest": manifest, "manifest_path": manifest_path,
             "receipt": host, "receipt_path": receipt}
+
+
+def require_registered_jobs(snapshot: Mapping[str, Any], inputs: Mapping[str, Any]) -> None:
+    """阶段运行前核双侧实际冻结 Job 的来源闭集；不以来源总数或其它 Job 的记录替代。"""
+
+    index = replay.load_snapshot(snapshot)
+    available = {row["probe_id"] for row in index["probes"]}
+    for side, key in (("official", "jobs"), ("candidate", "candidate_jobs")):
+        missing = sorted({probe for probes in inputs.get(key, {}).values() for probe in probes} - available)
+        if missing:
+            raise replay.ReplayError(f"{side} 冻结 Job 缺少已登记来源：{missing}")
 
 
 def verify_projection(state: Mapping[str, Any], projection: Mapping[str, Any]) -> dict[str, Any]:

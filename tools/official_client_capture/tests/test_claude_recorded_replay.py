@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import os
 import tempfile
@@ -87,6 +88,62 @@ class ClaudeRecordedSnapshotTests(unittest.TestCase):
             source = self.recorded.parent / relative
             self.assertEqual(copied.read_bytes(), source.read_bytes())
         self.assertFalse((Path(index["evidence_root"]) / evaluator_fixture.SUPPLEMENT_DIRECTORY / "attempts" / "v4-thinking-display-summarized").exists())
+
+    def second_attempt_selection(self) -> dict:
+        """登记明确的第二次测试原件及收据，保留第一次失败；不模拟历史真实来源的摘要。"""
+
+        probe = "v4-thinking-display-summarized"
+        first = self.supplement / "attempts" / probe / "attempt-001"
+        second = first.with_name("attempt-002")
+        import shutil
+        shutil.copytree(first, second)
+        receipt = self.supplement / "runtime-receipts" / (probe + "-attempt-002.json")
+        _write(receipt, {"schema_version": "official-client-runtime-host-receipt/v1", "run_nonce": probe + "-second"})
+        document = json.loads((second / "relay-manifest.json").read_text())
+        document["runtime"]["host_runtime_receipt"] = {
+            "sha256": hashlib.sha256(receipt.read_bytes()).hexdigest(), "run_nonce": probe + "-second"}
+        _write(second / "relay-manifest.json", document)
+        failed = json.loads((first / "relay-manifest.json").read_text())
+        failed.update(status="failed", dimension_evidence={})
+        _write(first / "relay-manifest.json", failed)
+        return {"source_id": self.supplement.name, "probe_id": probe,
+                "attempt": f"{self.supplement.name}/attempts/{probe}/attempt-002",
+                "host_receipt": f"{self.supplement.name}/runtime-receipts/{probe}-attempt-002.json",
+                "manifest_sha256": replay._digest(second / "relay-manifest.json")["sha256"],
+                "host_receipt_sha256": replay._digest(receipt)["sha256"]}
+
+    def test_explicit_second_attempt_keeps_old_default_and_binds_its_receipt(self) -> None:
+        selection = self.second_attempt_selection()
+        default = replay._source_plan(self.recorded)
+        self.assertEqual(len(default["probes"]), 2)
+        selections = (selection,)
+        before = replay.production_sentinel(self.recorded, source_selections=selections)
+        binding = replay.build_snapshot(self.staging, recorded=self.recorded, source_selections=selections)
+        index = replay.load_snapshot(binding)
+        selected = next(row for row in index["probes"] if row["probe_id"] == selection["probe_id"])
+        self.assertEqual(selected["attempt"], selection["attempt"])
+        self.assertEqual(selected["host_receipt"], selection["host_receipt"])
+        self.assertEqual(index["source_selections"], [selection])
+        self.assertFalse(index["excluded_sources"])
+        self.assertNotIn(selection["attempt"].replace("attempt-002", "attempt-001") + "/relay-manifest.json", index["files"])
+        replay.assert_source_untouched(binding)
+        self.assertEqual(replay.production_sentinel(self.recorded, source_selections=selections), before)
+
+    def test_explicit_selection_rejects_wrong_receipt_digest_and_missing_exact_attempt(self) -> None:
+        selection = self.second_attempt_selection()
+        wrong = copy.deepcopy(selection)
+        wrong["host_receipt"] = wrong["host_receipt"].replace("attempt-002", "attempt-001")
+        with self.assertRaisesRegex(replay.ReplayError, "选择坐标"):
+            replay._source_plan(self.recorded, source_selections=(wrong,))
+        wrong = {**selection, "manifest_sha256": "0" * 64}
+        with self.assertRaisesRegex(replay.ReplayError, "清单摘要漂移"):
+            replay._source_plan(self.recorded, source_selections=(wrong,))
+        wrong = {**selection, "host_receipt_sha256": "0" * 64}
+        with self.assertRaisesRegex(replay.ReplayError, "宿主收据摘要漂移"):
+            replay._source_plan(self.recorded, source_selections=(wrong,))
+        (self.recorded.parent / selection["attempt"] / "relay-manifest.json").unlink()
+        with self.assertRaisesRegex(replay.ReplayError, "不存在"):
+            replay._source_plan(self.recorded, source_selections=(selection,))
 
     def test_snapshot_rejects_artifact_tampering(self) -> None:
         binding = replay.build_snapshot(self.staging, recorded=self.recorded)

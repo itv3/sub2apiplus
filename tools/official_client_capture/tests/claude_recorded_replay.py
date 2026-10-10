@@ -77,7 +77,7 @@ def _json(path: Path, root: Path) -> dict[str, Any]:
     return payload
 
 
-def _source_plan(recorded: Path) -> dict[str, Any]:
+def _source_plan(recorded: Path, *, source_selections: tuple[Mapping[str, Any], ...] = ()) -> dict[str, Any]:
     """只读发现明确允许复制的文件；先核清单，再按场景访问已选 attempt，不扫描凭据目录。"""
 
     recorded = Path(os.path.abspath(recorded))
@@ -86,6 +86,21 @@ def _source_plan(recorded: Path) -> dict[str, Any]:
         evaluator_fixture.CAPTURE_ID: recorded,
         evaluator_fixture.SUPPLEMENT_DIRECTORY: recorded.parent / evaluator_fixture.SUPPLEMENT_DIRECTORY,
     }
+    selections: dict[str, Mapping[str, Any]] = {}
+    for row in source_selections:
+        fields = {"source_id", "probe_id", "attempt", "host_receipt", "manifest_sha256", "host_receipt_sha256"}
+        if not isinstance(row, Mapping) or set(row) != fields:
+            raise ReplayError("显式录制来源选择字段不闭合")
+        probe, source_id = row["probe_id"], row["source_id"]
+        if (source_id != evaluator_fixture.SUPPLEMENT_DIRECTORY or not isinstance(probe, str)
+                or not PROBE_ID.fullmatch(probe) or probe in selections
+                or not isinstance(row["attempt"], str)
+                or not re.fullmatch(re.escape(source_id + "/attempts/" + probe + "/") + r"attempt-[0-9]{3}", row["attempt"])
+                or row["host_receipt"] != source_id + "/runtime-receipts/" + probe + "-" + Path(row["attempt"]).name + ".json"
+                or any(not isinstance(row[key], str) or not re.fullmatch(r"[a-f0-9]{64}", row[key])
+                       for key in ("manifest_sha256", "host_receipt_sha256"))):
+            raise ReplayError("显式录制来源选择坐标或摘要非法")
+        selections[probe] = row
     files: dict[str, Path] = {}
     probes: list[dict[str, str]] = []
     for source_id, root in sources.items():
@@ -104,6 +119,8 @@ def _source_plan(recorded: Path) -> dict[str, Any]:
                 raise ReplayError(f"来源场景 ID 非法或重复：{root}")
             catalog_probes[probe] = row
         chosen = sorted(catalog_probes) if source_id == evaluator_fixture.CAPTURE_ID else list(evaluator_fixture.SUPPLEMENT_PROBES)
+        if source_id == evaluator_fixture.SUPPLEMENT_DIRECTORY:
+            chosen = sorted(set(chosen) | set(selections))
         for filename in SOURCE_METADATA:
             path = root / filename
             if path.exists() or path.is_symlink():
@@ -112,9 +129,12 @@ def _source_plan(recorded: Path) -> dict[str, Any]:
         for probe in chosen:
             if probe not in catalog_probes:
                 raise ReplayError(f"补充场景没有登记：{probe}")
-            attempt = root / "attempts" / probe / "attempt-001"
+            selection = selections.get(probe) if source_id == evaluator_fixture.SUPPLEMENT_DIRECTORY else None
+            attempt = recorded.parent / selection["attempt"] if selection is not None else root / "attempts" / probe / "attempt-001"
             _regular(attempt, root, directory=True)
             manifest = _json(attempt / "relay-manifest.json", root)
+            if selection is not None and _digest(attempt / "relay-manifest.json")["sha256"] != selection["manifest_sha256"]:
+                raise ReplayError("显式录制来源的清单摘要漂移")
             client = manifest.get("client") or {}
             dimensions = manifest.get("dimension_evidence") or {}
             if (manifest.get("schema_version") != "claude-code-fw-e-relay-run/v1" or manifest.get("status") != "complete"
@@ -123,8 +143,10 @@ def _source_plan(recorded: Path) -> dict[str, Any]:
                     or not isinstance(dimensions, Mapping) or not isinstance(dimensions.get("actual_wire_inventory"), list)):
                 raise ReplayError(f"录制场景尚未闭合、版本不符或缺 wire inventory：{source_id}/{probe}")
             # 只按已选 probe 精确加入一份原宿主收据，不遍历 runtime-receipts，也不接受旁支凭据。
-            receipt_path = root / "runtime-receipts" / f"{probe}-attempt-001.json"
+            receipt_path = recorded.parent / selection["host_receipt"] if selection is not None else root / "runtime-receipts" / f"{probe}-attempt-001.json"
             receipt = _json(receipt_path, root)
+            if selection is not None and _digest(receipt_path)["sha256"] != selection["host_receipt_sha256"]:
+                raise ReplayError("显式录制来源的宿主收据摘要漂移")
             binding = (manifest.get("runtime") or {}).get("host_runtime_receipt") or {}
             if (receipt.get("schema_version") != "official-client-runtime-host-receipt/v1"
                     or _digest(receipt_path)["sha256"] != binding.get("sha256")
@@ -146,7 +168,10 @@ def _source_plan(recorded: Path) -> dict[str, Any]:
                     selected.append(path)
             for path in selected:
                 files[f"{source_id}/{path.relative_to(root).as_posix()}"] = path
-            probes.append({"source_id": source_id, "probe_id": probe, "attempt": f"{source_id}/attempts/{probe}/attempt-001"})
+            row = {"source_id": source_id, "probe_id": probe, "attempt": f"{source_id}/{attempt.relative_to(root).as_posix()}"}
+            if selection is not None:
+                row["host_receipt"] = selection["host_receipt"]
+            probes.append(row)
     if len({row["probe_id"] for row in probes}) != len(probes):
         raise ReplayError("主录制与补充录制出现同名场景，拒绝猜选来源")
     return {"sources": sources, "files": files, "probes": probes}
@@ -181,10 +206,10 @@ def _sentinel(plan: Mapping[str, Any]) -> dict[str, list[int]]:
     return {str(path): _stat(path) for path in sorted(paths)}
 
 
-def production_sentinel(recorded: Path | None = None) -> dict[str, list[int]]:
+def production_sentinel(recorded: Path | None = None, *, source_selections: tuple[Mapping[str, Any], ...] = ()) -> dict[str, list[int]]:
     """沿用 Codex 回放基座的哨兵接口；这里的“生产来源”仅指只读历史录制文件，不连接生产服务。"""
 
-    return _sentinel(_source_plan(recorded if recorded is not None else recorded_campaign_dir()))
+    return _sentinel(_source_plan(recorded if recorded is not None else recorded_campaign_dir(), source_selections=source_selections))
 
 
 def _digest(path: Path) -> dict[str, Any]:
@@ -197,10 +222,11 @@ def _digest(path: Path) -> dict[str, Any]:
     return {"sha256": digest.hexdigest(), "bytes": size}
 
 
-def build_snapshot(staging: Path, *, recorded: Path | None = None) -> dict[str, Any]:
+def build_snapshot(staging: Path, *, recorded: Path | None = None,
+                   source_selections: tuple[Mapping[str, Any], ...] = ()) -> dict[str, Any]:
     """只读复制来源，返回外部绑定的索引摘要；失败的私有快照保留，禁止覆盖重用。"""
 
-    plan = _source_plan(recorded if recorded is not None else recorded_campaign_dir())
+    plan = _source_plan(recorded if recorded is not None else recorded_campaign_dir(), source_selections=source_selections)
     before = _sentinel(plan)
     staging = Path(staging).resolve()
     snapshot = staging / SNAPSHOT_DIRNAME
@@ -234,6 +260,10 @@ def build_snapshot(staging: Path, *, recorded: Path | None = None) -> dict[str, 
         "source_sentinel": before,
         "excluded_sources": [{"source_id": evaluator_fixture.SUPPLEMENT_DIRECTORY, "probe_id": "v4-thinking-display-summarized", "reason": "历史补充缺 actual_wire_inventory，未登记为可复用来源"}],
     }
+    if source_selections:
+        index["source_selections"] = list(source_selections)
+        selected = {row["probe_id"] for row in source_selections}
+        index["excluded_sources"] = [row for row in index["excluded_sources"] if row["probe_id"] not in selected]
     path = snapshot / "index.json"
     path.write_text(json.dumps(index, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     path.chmod(0o600)
@@ -294,7 +324,8 @@ def assert_source_untouched(binding: Mapping[str, Any]) -> None:
     """消费副本之后重放来源哨兵；不修改来源权限或时间。"""
 
     index = load_snapshot(binding)
-    current = production_sentinel(Path(index["sources"][evaluator_fixture.CAPTURE_ID]))
+    current = production_sentinel(Path(index["sources"][evaluator_fixture.CAPTURE_ID]),
+                                  source_selections=tuple(index.get("source_selections", ())))
     if current != index["source_sentinel"]:
         raise ReplayError("历史录制来源在回放期间发生变化")
 
