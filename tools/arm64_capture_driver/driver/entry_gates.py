@@ -681,7 +681,10 @@ def plan_gates(
     if environment is not None:
         manifest["environment"] = environment
     if audit_policy is not None:
-        _unit_records_module().validate_audit_policy(audit_policy, {unit["unit_id"] for unit in units})
+        unit_ids = {unit["unit_id"] for unit in units}
+        if isinstance(audit_policy, dict) and isinstance(audit_policy.get("units"), dict) and set(audit_policy["units"]) - unit_ids:
+            unit_ids.update(_planned_test_ids(tree, groups))
+        _unit_records_module().validate_audit_policy(audit_policy, unit_ids)
         manifest["audit_policy"] = audit_policy
         for unit in units:
             if unit["unit_id"] in audit_policy["units"]:
@@ -717,18 +720,36 @@ def verify_scope_workspace(tree: Path, bytecode_cache: Path, *, commit: str, bun
             "bundle_sha256": _unit_records_module().file_sha256(bundle), "workspace_rebuilt": False}
 
 
-def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]]) -> None:
-    """收窄提案只用于新一轮验证；重放来源并逐项核对当前命令，保留原门禁集合。"""
+def _planned_test_ids(tree: Path, groups: Sequence[dict[str, Any]]) -> set[str]:
+    """登记测试合同时复用现有只读规划入口；执行器仍须按本轮实际调度配置再核对。"""
+    unit_ids: set[str] = set()
+    for group in groups:
+        completed = subprocess.run([sys.executable, "-B", str(HERE / "unit_executor.py"), "plan",
+                                    "--start", group["start"], "--pattern", group["pattern"]],
+                                   cwd=tree, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+        if completed.returncode:
+            raise _unit_records_module().RecordsError("测试单元规划失败，不能登记未知单元：" + completed.stderr.strip()[-300:])
+        payload = json.loads(completed.stdout)
+        unit_ids.update(unit["unit_id"] for unit in payload["units"])
+    return unit_ids
+
+
+def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]],
+                       *, test_specs: Mapping[str, dict[str, Any]] | None = None) -> None:
+    """提案必须重放；测试规格只有发现后才能完整核对，清单仅运输，不赋予旧记录承接资格。"""
     if not scopes:
         return
     records = _unit_records_module()
     audit = records._audit_module()
     units = {unit["unit_id"]: unit for unit in manifest["units"]}
     seen = set()
+    test_scopes = []
     for scope in scopes:
         unit_id = scope.get("unit_id")
-        if unit_id in seen or unit_id not in units:
-            raise ValueError("收窄提案重复或不属于当前命令单元")
+        spec = scope.get("spec") or {}
+        is_test = spec.get("type") == "test"
+        if unit_id in seen or (not is_test and unit_id not in units):
+            raise ValueError("收窄提案重复或不属于当前命令或测试单元")
         seen.add(unit_id)
         for key in ("source_record", "source_trace"):
             binding = scope.get(key) or {}
@@ -739,6 +760,16 @@ def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]
         replay = audit.narrow_input_scope(Path(scope["source_record"]["path"]), Path(scope["source_trace"]["path"]))
         if replay != scope:
             raise ValueError("收窄提案无法重放，不能自填路径或改成已启用")
+        if is_test:
+            if test_specs is None:
+                # plan 尚无最终拆块；这里只核运输目标，实际 ID 与完整规格由 run-gates 发现后核对。
+                if not any(spec.get("start") == group["start"] and spec.get("pattern") == group["pattern"]
+                           for group in manifest.get("test_groups", [])):
+                    raise ValueError("收窄提案不属于当前测试组")
+            elif unit_id not in test_specs or spec != test_specs[unit_id]:
+                raise ValueError("收窄提案的测试单元不存在或完整规格与当前单元不同")
+            test_scopes.append(scope)
+            continue
         unit = units[unit_id]
         spec = scope["spec"]
         for key, value in (("type", "command"), ("unit_id", unit_id), ("argv", unit["argv"]), ("cwd", unit["cwd"]),
@@ -749,6 +780,8 @@ def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]
                 raise ValueError("收窄提案的命令、环境或额度与当前单元不同：" + key)
         unit["inputs"] = scope["inputs"]
         unit["input_scope"] = scope
+    if test_scopes:
+        manifest["test_input_scopes"] = test_scopes
 
 
 # ---------------------------------------------------------------------------
@@ -1072,7 +1105,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                       help="数据根：在这里算 pre-A3 场景单元的数据根输入（冻结台账、录制数据、alpine 镜像，E3-02）")
     plan.add_argument("--historical-source-root", default=None, help="历史源码树（check-egress-spec 子检查另列的输入，E3-01）")
     plan.add_argument("--output", type=Path, required=True)
-    plan.add_argument("--input-scope", type=Path, action="append", default=[], help="本轮命令单元的输入收窄提案，可重复指定；必须重新执行严格审计")
+    plan.add_argument("--input-scope", type=Path, action="append", default=[], help="本轮命令或测试单元的输入收窄提案，可重复指定；必须重新执行严格审计")
     plan.add_argument("--audit-policy", type=Path, help="明确登记可验收输入合同；未登记单元一律重跑，不宣称覆盖完整")
     workspace = sub.add_parser("verify-scope-workspace", help="只读核对收窄复验沿用的测试树、缓存和 bundle")
     workspace.add_argument("--tree", type=Path, required=True)

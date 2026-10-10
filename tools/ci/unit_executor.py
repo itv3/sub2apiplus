@@ -2067,11 +2067,15 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
                    manifest: dict[str, Any], timeout: float) -> dict[str, Any]:
     """``run-gates`` 各单元的当前事实（E3-01）：单元规格、输入明细与摘要、能否承接（不能时写明原因）。
 
-    采集工具测试单元的输入由执行器按静态依赖闭包算（同一模块的拆块与独占单元共用一份）；命令单元的输入由门禁清单
+    采集工具测试单元的输入优先用完整读集登记或已核对规格的收窄提案，其余按静态依赖闭包算（同一模块的拆块与独占单元
+    共用一份）。未登记单元保持不可承接；每次恢复与发布复核都重算同一声明。命令单元的输入由门禁清单
     声明（``inputs``，pre-A3 场景单元另声明场景测试模块，同样按静态依赖闭包展开），清单标了 ``inheritable: false``
     的照写记录、不承接。工作目录不是干净的 git 检出时输入不完整（未跟踪文件不在范围里），本次一律不承接。"""
 
     items = {item["unit_id"]: item for item in manifest.get("units") or [] if isinstance(item, dict)}
+    audit_policy = manifest.get("audit_policy")
+    registered = audit_policy["units"] if audit_policy is not None else {}
+    test_scopes = {scope["unit_id"]: scope for scope in manifest.get("test_input_scopes", [])}
     repo, problem = None, ""
     try:
         repo = records.RepoIndex.load(Path.cwd())
@@ -2095,6 +2099,10 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
         cache: dict[str, Any] = {}
         for unit in group_units[group.group_id]:
             spec = unit_spec(unit, start=group.start, pattern=group.pattern, timeout_seconds=timeout)
+            scope = test_scopes.get(unit.unit_id)
+            if scope is not None and scope["spec"] != spec:
+                raise ExecutorError("测试收窄提案的完整规格漂移，拒绝沿用精确输入")
+            declaration = scope["inputs"] if scope is not None else registered.get(unit.unit_id)
             module = unit.module.split("+", 1)[0]
             inputs, reason = None, problem
             if not reason:
@@ -2103,9 +2111,12 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
                     reason = f"找不到测试模块文件：{module_file}"
                 else:
                     try:
-                        if module not in cache:
-                            cache[module] = records.test_unit_inputs(repo, deps, module_file)
-                        inputs = cache[module]
+                        if declaration is not None:
+                            inputs = records.declared_inputs(repo, declaration, deps_cache)
+                        else:
+                            if module not in cache:
+                                cache[module] = records.test_unit_inputs(repo, deps, module_file)
+                            inputs = cache[module]
                     except (records.RecordsError, OSError, ValueError) as error:
                         reason = f"输入算不出来：{error}"
             # H2 实际解释器与 SSL 读取尚未进入完整宿主读集；所有拆块和独占单元只认本次执行。
@@ -2128,6 +2139,14 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
             except (records.RecordsError, OSError, ValueError) as error:
                 reason = f"输入算不出来：{error}"
         currents[unit.unit_id] = current(unit, spec, inputs, reason)
+    if audit_policy is not None:
+        entry = records.value_entry("policy", "reexecute-only-policy", _sha256(audit_policy))
+        for unit_id, value in currents.items():
+            if unit_id not in registered:
+                value.inputs = records._unique([*(value.inputs or []), entry])
+                value.inputs_sha256 = records.entries_sha256(value.inputs)
+                value.inheritable = False
+                value.reason = "输入合同未闭合：只验证本次执行结果，禁止承接"
     return currents
 
 
@@ -2246,24 +2265,6 @@ def _run_gates(args: argparse.Namespace) -> int:
         raise ExecutorError(f"门禁清单的环境事实非法：{error}") from error
     executor = records.executor_version([args.bytecode_helper])
     store = records.RecordStore(args.record_store) if args.record_store is not None else None
-    scopes = [item["input_scope"] for item in manifest.get("units", []) if "input_scope" in item]
-    if scopes:
-        if args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict:
-            raise ExecutorError("收窄提案必须重新执行严格审计，不能直接承接来源记录")
-        # 清单只是运输载体：执行前再次重放提案，防止绕过 plan 或篡改 inputs。
-        scope_spec = importlib.util.spec_from_file_location("_unit_executor_entry_gates", Path(__file__).resolve().with_name("entry_gates.py"))
-        scope_module = importlib.util.module_from_spec(scope_spec)
-        scope_spec.loader.exec_module(scope_module)
-        expected_inputs = {item["unit_id"]: item.get("inputs") for item in manifest["units"] if "input_scope" in item}
-        scope_module.apply_input_scopes(manifest, scopes)
-        for item in manifest["units"]:
-            if "input_scope" not in item:
-                continue
-            scope = item["input_scope"]
-            if (item["inputs"] != expected_inputs[item["unit_id"]]
-                    or scope["environment_sha256"] != records.entries_sha256(environment)
-                    or scope["executor_sha256"] != executor["sha256"]):
-                raise ExecutorError("收窄提案的输入、平台环境或执行器与来源不同，须重新建立读集")
     group_units: dict[str, list[Unit]] = {}
     expected: dict[str, set[str]] = {}
     for group in groups:
@@ -2277,10 +2278,34 @@ def _run_gates(args: argparse.Namespace) -> int:
     if clash:
         raise ExecutorError(f"命令单元与测试单元重名：{clash}")
     units = test_units + command_units
+    test_scopes = manifest.get("test_input_scopes", [])
+    if (not isinstance(test_scopes, list) or not all(isinstance(scope, dict) and isinstance(scope.get("spec"), dict)
+            and scope["spec"].get("type") == "test" for scope in test_scopes)):
+        raise ExecutorError("测试收窄提案清单非法")
+    scopes = [item["input_scope"] for item in manifest.get("units", []) if "input_scope" in item] + test_scopes
+    if scopes:
+        if args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict:
+            raise ExecutorError("收窄提案必须重新执行严格审计，不能直接承接来源记录")
+        # 以本轮实际发现与拆分结果核对全部规格；来源旧规格不能决定本轮执行的测试集合。
+        test_specs = {unit.unit_id: unit_spec(unit, start=group.start, pattern=group.pattern,
+                                           timeout_seconds=config.unit_timeout_seconds)
+                      for group in groups for unit in group_units[group.group_id]}
+        scope_spec = importlib.util.spec_from_file_location("_unit_executor_entry_gates", Path(__file__).resolve().with_name("entry_gates.py"))
+        scope_module = importlib.util.module_from_spec(scope_spec)
+        scope_spec.loader.exec_module(scope_module)
+        expected_inputs = {item["unit_id"]: item.get("inputs") for item in manifest["units"] if "input_scope" in item}
+        scope_module.apply_input_scopes(manifest, scopes, test_specs=test_specs)
+        for item in manifest["units"]:
+            if "input_scope" in item and item["inputs"] != expected_inputs[item["unit_id"]]:
+                raise ExecutorError("收窄提案的输入、平台环境或执行器与来源不同，须重新建立读集")
+        for scope in scopes:
+            if (scope["environment_sha256"] != records.entries_sha256(environment)
+                    or scope["executor_sha256"] != executor["sha256"]):
+                raise ExecutorError("收窄提案的输入、平台环境或执行器与来源不同，须重新建立读集")
     audit_policy = manifest.get("audit_policy")
     if audit_policy is not None:
         try:
-            records.validate_audit_policy(audit_policy, {unit.unit_id for unit in command_units})
+            records.validate_audit_policy(audit_policy, {unit.unit_id for unit in units})
         except records.RecordsError as error:
             raise ExecutorError(str(error)) from error
         if (not args.decide_only and not request_path and not unit_inherit_mode
@@ -2289,20 +2314,15 @@ def _run_gates(args: argparse.Namespace) -> int:
         for item in manifest["units"]:
             if item["unit_id"] in audit_policy["units"] and item.get("inputs") != audit_policy["units"][item["unit_id"]]:
                 raise ExecutorError("单元输入与已登记读集合同不一致")
+        for scope in test_scopes:
+            if scope["unit_id"] in audit_policy["units"] and scope["inputs"] != audit_policy["units"][scope["unit_id"]]:
+                raise ExecutorError("测试收窄输入与已登记读集合同不一致")
     policy = gates_policy_digest(config, weights, durations, parallelism, manifest.get("scheduling"))
     currents = _gate_currents(records, groups=groups, group_units=group_units, command_units=command_units, manifest=manifest,
                               timeout=config.unit_timeout_seconds)
     def resume_basis(values: dict[str, Any]) -> dict[str, Any]:
         return {key: (value.spec_sha256, value.inputs_sha256, value.inheritable, value.reason) for key, value in values.items()}
     original_resume_basis = resume_basis(currents)
-    if audit_policy is not None:
-        entry = records.value_entry("policy", "reexecute-only-policy", _sha256(audit_policy))
-        for unit_id, current in currents.items():
-            if unit_id not in audit_policy["units"]:
-                current.inputs = records._unique([*(current.inputs or []), entry])
-                current.inputs_sha256 = records.entries_sha256(current.inputs)
-                current.inheritable = False
-                current.reason = "输入合同未闭合：只验证本次执行结果，禁止承接"
     if args.audit_strict and not args.audit_reads:
         raise ExecutorError("严格读集审计必须同时启用 --audit-reads")
     if args.audit_host_inputs:

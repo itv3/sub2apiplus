@@ -536,7 +536,7 @@ def _repo_file(repo: RepoIndex, relative: Any) -> Path:
 
 def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
                     deps_cache: dict[Path, TestDependencies] | None = None) -> list[dict[str, Any]]:
-    """门禁清单为命令单元声明的输入：
+    """门禁清单为命令或已登记测试单元声明的输入：
 
     * ``ranges``：仓库范围；``files``：仓库里的单个文件（``{category, path}``）；``head``：HEAD 提交；
     * ``test_modules``：测试模块文件（仓库相对路径），按与采集测试单元相同的静态依赖闭包展开（E3-02 的 pre-A3 场景
@@ -585,12 +585,12 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
     return _unique(entries)
 
 
-def validate_audit_policy(policy: Any, command_ids: set[str]) -> dict[str, Any]:
-    """登记已建合同的命令；所有未登记单元只能重跑，配置不能静默放开新增单元。"""
+def validate_audit_policy(policy: Any, unit_ids: set[str]) -> dict[str, Any]:
+    """只登记本轮真实规划的命令与测试单元；未登记单元只能重跑，未知单元拒绝。"""
     if (not isinstance(policy, dict) or set(policy) != {"schema_version", "default", "units"}
             or policy.get("schema_version") != "unit-audit-policy/v1" or policy.get("default") != "reexecute-only"
-            or not isinstance(policy.get("units"), dict) or set(policy["units"]) - command_ids):
-        raise RecordsError("读集策略须默认重跑，且只能登记当前真实命令单元")
+            or not isinstance(policy.get("units"), dict) or set(policy["units"]) - unit_ids):
+        raise RecordsError("读集策略须默认重跑，且只能登记当前真实命令或测试单元")
     for unit_id, declaration in policy["units"].items():
         if (not isinstance(declaration, dict) or set(declaration) != {"host_paths", "require_read_audit", "runtime_contract"}
                 or declaration["require_read_audit"] is not True):

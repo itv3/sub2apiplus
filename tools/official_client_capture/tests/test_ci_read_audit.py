@@ -841,6 +841,97 @@ class ReadAuditExecutorTests(unittest.TestCase):
             with self.assertRaises(ra.AuditError):
                 ra.narrow_input_scope(path, trace)
 
+    def test_test_scope_requires_full_spec_replay_and_new_strict_execution(self):
+        """测试提案复用原合同；完整规格任一字段变化拒绝，旧记录不能直接作为收窄后的结果。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            test_file = repo / "tools/official_client_capture/tests/test_alpha.py"
+            reads = {"cmd:a": [str(repo / "data/a.txt")], "cmd:all": [str(repo / "data/b.txt")],
+                     "test_alpha": [str(test_file)]}
+            code, _, stderr = self._run(root, repo, reads, strict=True, host_paths=reads)
+            self.assertEqual(code, 0, stderr[-3000:])
+            store = ur.RecordStore(root / "store")
+            path, source = store.candidates("test_alpha")[0]
+            trace = store.log_path(source["read_audit"]["trace"]["sha256"])
+            scope = ra.narrow_input_scope(path, trace)
+            self.assertEqual(scope["schema_version"], "unit-read-scope-proposal/v1")
+            self.assertEqual(scope["spec"]["type"], "test")
+            self.assertTrue(scope["requires_validation"])
+            self.assertFalse(scope["reuse_enabled"])
+            manifest = json.loads((root / "gates.json").read_text())
+            eg.apply_input_scopes(manifest, (scope,), test_specs={"test_alpha": source["spec"]})
+            self.assertEqual(manifest["test_input_scopes"], [scope])
+            changes = {"unit_id": "test_other", "type": "command", "start": "other/tests", "pattern": "other_*.py",
+                       "test_ids": ["test_alpha.AlphaTests.test_other"], "launcher": ["false"], "env": {"X": "changed"},
+                       "cores": 2, "memory_mb": 256, "exclusive": True, "timeout_seconds": 1, "reservation_restartable": False}
+            self.assertEqual(set(changes), set(source["spec"]), "全部测试规格字段都必须覆盖")
+            for key, value in changes.items():
+                with self.subTest(field=key), self.assertRaisesRegex(ValueError, "完整规格"):
+                    eg.apply_input_scopes(manifest, (scope,), test_specs={"test_alpha": {**source["spec"], key: value}})
+            with self.assertRaisesRegex(ValueError, "不存在"):
+                eg.apply_input_scopes(manifest, (scope,), test_specs={})
+            for changes in ({"kind": "diagnostic"}, {"read_audit": None}, {"read_audit": {"coverage_complete": False}}):
+                rejected = store.put_record(ur.seal_record({**source, **changes}))
+                with self.subTest(changes=changes), self.assertRaises(ra.AuditError):
+                    ra.narrow_input_scope(rejected, trace)
+            code, _, stderr = self._run(root, repo, reads, strict=True, host_paths=reads, scopes=(scope,), label="test-scope")
+            self.assertEqual(code, 0, stderr[-3000:])
+            fresh = [record for candidate, record in store.candidates("test_alpha") if candidate != path and record.get("read_audit")
+                     and record["kind"] == "formal" and record["read_audit"].get("coverage_complete")]
+            self.assertEqual(len(fresh), 1, "收窄后只认新的严格正式执行记录")
+            self.assertNotEqual(fresh[0]["inputs_sha256"], source["inputs_sha256"])
+            self.assertEqual(fresh[0]["spec"], source["spec"])
+            code, _, stderr = self._run(root, repo, reads, strict=True, host_paths=reads, scopes=(scope,),
+                                        mode="full-set-pass", label="test-scope-refused")
+            self.assertEqual(code, 2)
+            self.assertIn("必须重新执行严格审计", stderr)
+            trace_bytes = trace.read_bytes(); trace.unlink()
+            with self.assertRaises((ra.AuditError, OSError)):
+                ra.narrow_input_scope(path, trace)
+            trace.write_bytes(trace_bytes)
+
+    def test_registered_test_inputs_and_unregistered_boundary_survive_current_refresh(self):
+        """每次当前事实重算都保留精确声明；不相关文件不影响输入，未登记单元始终不可承接。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = self._repo(root)
+            test_file = repo / "tools/official_client_capture/tests/test_alpha.py"
+            contract = {"schema_version": "unit-runtime-contract/v1", "temporary_root": str(root / "private/output"),
+                        "mask_roots": [], "environment_paths": []}
+            declaration = {"host_paths": [str(test_file)], "require_read_audit": True, "runtime_contract": contract}
+            policy = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {"test_alpha": declaration}}
+            records = ue._records_module()
+            self.assertEqual(records.validate_audit_policy(policy, {"test_alpha", "cmd:a"}), policy)
+            with self.assertRaises(records.RecordsError):
+                records.validate_audit_policy(policy, {"cmd:a"})
+            unknown = {**policy, "units": {"test_ghost": declaration}}
+            code, summary, stderr = self._run(root, repo, {}, strict=True, audit_policy=unknown, label="unknown-test")
+            self.assertEqual(code, 2, stderr)
+            self.assertEqual(summary, {}, "未知单元必须在真实执行之前拒绝")
+            group = ue.DiscoverGroup("capture-tools", test_file.parent, "test_*.py", (), ())
+            unit = ue.Unit("test_alpha", "test_alpha", ("test_alpha.AlphaTests.test_a",), ue.Quota(1, 128), False, 1)
+            command = ue.Unit("cmd:a", "cmd:a", (), ue.Quota(1, 128), False, 1, command=("true",), cwd=str(repo))
+            manifest = {"audit_policy": policy, "units": [{"unit_id": "cmd:a", "inputs": {"head": True}}]}
+            def refresh():
+                with mock.patch.object(records.RepoIndex, "load", return_value=records.RepoIndex.load(repo)):
+                    return ue._gate_currents(records, groups=[group], group_units={group.group_id: [unit]},
+                                             command_units=[command], manifest=manifest, timeout=120)
+            before = refresh()
+            self.assertTrue(before["test_alpha"].inheritable)
+            self.assertEqual(before["test_alpha"].inputs, records.declared_inputs(records.RepoIndex.load(repo), declaration))
+            (repo / "data/b.txt").write_text("不相关文件变更\n")
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=e3", "-c", "user.email=e3@example.invalid",
+                            "-c", "commit.gpgsign=false", "commit", "-qam", "不相关变更"], check=True)
+            for _ in range(3):
+                current = refresh()
+                self.assertEqual(current["test_alpha"].inputs_sha256, before["test_alpha"].inputs_sha256)
+                self.assertFalse(current["cmd:a"].inheritable)
+                self.assertIn("禁止承接", current["cmd:a"].reason)
+                self.assertTrue(any(entry["name"] == "reexecute-only-policy" for entry in current["cmd:a"].inputs))
+            test_file.write_text(test_file.read_text() + "# 相关变更\n")
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=e3", "-c", "user.email=e3@example.invalid",
+                            "-c", "commit.gpgsign=false", "commit", "-qam", "相关变更"], check=True)
+            self.assertNotEqual(refresh()["test_alpha"].inputs_sha256, before["test_alpha"].inputs_sha256)
+
     def test_audit_is_only_for_re_execute(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

@@ -101,6 +101,23 @@ class EntryGatesMakeChecksTests(unittest.TestCase):
 class EntryGatesPlanTests(unittest.TestCase):
     CHECKS = ["check-egress-spec-local-source", "test-official-client-control", "egress-spec-go-test", "egress-spec-version-leak"]
 
+    def test_test_policy_membership_uses_real_planned_ids(self):
+        """复用现有只读规划命令取得实际 ID，不能仅凭 test_ 前缀把未知测试列为已登记。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tests = root / "fixture-tests"
+            tests.mkdir()
+            (tests / "test_scope_fixture.py").write_text("import unittest\nclass T(unittest.TestCase):\n    def test_ok(self): pass\n")
+            unit_ids = eg._planned_test_ids(root, [{"start": "fixture-tests", "pattern": "test_*.py"}])
+            self.assertEqual(unit_ids, {"test_scope_fixture"})
+            declaration = {"host_paths": [str(tests / "test_scope_fixture.py")], "require_read_audit": True,
+                           "runtime_contract": {"schema_version": "unit-runtime-contract/v1",
+                           "temporary_root": str(root / "private/output"), "mask_roots": [], "environment_paths": []}}
+            policy = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {"test_scope_fixture": declaration}}
+            self.assertEqual(ur.validate_audit_policy(policy, unit_ids), policy)
+            with self.assertRaises(ur.RecordsError):
+                ur.validate_audit_policy({**policy, "units": {"test_unknown": declaration}}, unit_ids)
+
     def test_audit_policy_preserves_gate_set_and_rejects_unknown_or_relaxed_declarations(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve(); tree = _tree(root, self.CHECKS)

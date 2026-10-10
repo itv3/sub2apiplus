@@ -664,15 +664,18 @@ def narrow_input_scope(record_path: Path, trace_path: Path) -> dict[str, Any]:
     body = {key: value for key, value in record.items() if key != "record_sha256"}
     audit = record.get("read_audit") or {}
     if (record.get("schema_version") != "unit-execution-record/v1" or digest(body) != record.get("record_sha256")
-            or record.get("kind") != "formal" or record.get("unit_type") != "command" or record.get("inheritable") is not True
+            or record.get("kind") != "formal" or record.get("unit_type") not in {"command", "test"}
+            or record.get("inheritable") is not True
             or record.get("passed") is not True or record.get("exit_code") != 0 or record.get("signal") is not None
             or record.get("timed_out") is not False or audit.get("coverage_complete") is not True
             or audit.get("status") != "passed" or audit.get("undeclared_count") != 0
             or audit.get("coverage_scope") != "all-file-paths/v1"
+            or not isinstance(record.get("spec"), dict)
             or digest(record.get("spec")) != record.get("spec_sha256")
+            or record.get("spec", {}).get("type") != record.get("unit_type")
             or audit.get("inputs_sha256") != record.get("inputs_sha256")
             or hashlib.sha256(trace_path.read_bytes()).hexdigest() != audit.get("trace", {}).get("sha256")):
-        raise AuditError("收窄输入必须引用完整通过的正式命令单元及其原始轨迹")
+        raise AuditError("收窄输入必须引用完整通过的正式命令或测试单元及其原始轨迹")
     # 沿原记录库核对来源清单与日志，未正常结束的运行不能单凭一张自摘要记录生成提案。
     name = "_read_audit_unit_records"
     if name not in sys.modules:
@@ -687,7 +690,7 @@ def narrow_input_scope(record_path: Path, trace_path: Path) -> dict[str, Any]:
             or records.entries_sha256(record["inputs"]) != record["inputs_sha256"]
             or records.entries_sha256(record["environment"]) != record["environment_sha256"]):
         raise AuditError("收窄来源必须来自同一正式记录库，输入与环境摘要须闭合")
-    current = records.Current(record["unit_id"], "command", record["spec"], record["spec_sha256"],
+    current = records.Current(record["unit_id"], record["unit_type"], record["spec"], record["spec_sha256"],
                               record["inputs"], record["inputs_sha256"], True)
     completed = records.parse_utc(record.get("completed_at_utc"))
     if completed is None:
