@@ -465,6 +465,52 @@ except Exception as error:
                 self.engine.handle(self.request('prepare_state',payload))
         self.assertEqual(material.call_count,1); recorder.assert_not_called()
 
+    def test_first_prepare_creates_private_nonce_parent_for_real_journal(self):
+        """实际准备入口创建目录；仅物料与产品工厂为无账号替身，journal 执行本体。"""
+        from tools.official_client_capture.claude_mac_state_journal import StateJournal
+        parent=self.engine.root.parent
+        self.assertFalse(parent.exists())
+        raw=c.read_bytes(c.check_binding(self.bundle,self.task['execution']['isolation_recipe']))
+        payload={'recipe_base64':base64.b64encode(raw).decode(),'dispatch':self.envelope()}
+        identity={'task_sha256':self.task['task_sha256'],'task_nonce':self.task['task_nonce'],
+                  'producer_run_id':self.task['execution']['producer_run_id'],
+                  'deadline_utc':self.task['execution']['request_policy']['deadline_utc']}
+        recorder=mock.Mock()
+        def prepare(task,root):
+            self.assertEqual((task,root),(self.task,self.engine.root))
+            self.assertEqual(parent.stat().st_mode & 0o777,0o700)
+            self.assertEqual(parent.stat().st_uid,os.getuid())
+            with StateJournal(identity,parent/'product-state-journal',self.engine.session,
+                              ['private-state.json']) as journal:
+                journal.prepare()
+                result=journal.restore()
+                self.assertEqual(result['status'],'restored')
+                self.assertFalse(result['formal_ready'])
+                self.assertFalse(result['launch_allowed'])
+        recorder.prepare_state.side_effect=prepare
+        with mock.patch.object(self.engine,'_stage_materials'),\
+             mock.patch.object(self.engine,'_recorder',side_effect=lambda *_args,**_kwargs:setattr(self.engine,'recorder',recorder)):
+            result=self.engine.handle(self.request('prepare_state',payload))
+        recorder.prepare_state.assert_called_once_with(self.task,self.engine.root)
+        self.assertEqual(result['mapping']['staging_session_root'],str(self.engine.session))
+        self.assertTrue((self.engine.control/'prepare_state.result.json').is_file())
+        self.assertEqual(parent.stat().st_mode & 0o777,0o700)
+
+    def test_prepare_refuses_existing_nonprivate_nonce_parent_before_side_effect(self):
+        parent=self.engine.root.parent; parent.mkdir(mode=0o755,parents=True); parent.chmod(0o755)
+        before=parent.stat()
+        raw=c.read_bytes(c.check_binding(self.bundle,self.task['execution']['isolation_recipe']))
+        payload={'recipe_base64':base64.b64encode(raw).decode(),'dispatch':self.envelope()}
+        with mock.patch.object(self.engine,'_stage_materials') as materials,\
+             mock.patch.object(self.engine,'_recorder') as recorder,\
+             self.assertRaisesRegex(c.CaptureError,'私有目录'):
+            self.engine.handle(self.request('prepare_state',payload))
+        materials.assert_not_called(); recorder.assert_not_called()
+        after=parent.stat()
+        self.assertEqual((after.st_ino,after.st_mode,after.st_mtime_ns),
+                         (before.st_ino,before.st_mode,before.st_mtime_ns))
+        self.assertEqual(list(parent.iterdir()),[])
+
     def test_forged_request_or_stale_mirror_has_zero_side_effect(self):
         raw=c.read_bytes(c.check_binding(self.bundle,self.task['execution']['isolation_recipe']))
         for stale in (False,True):
@@ -531,6 +577,29 @@ except Exception as error:
             with self.assertRaisesRegex(bridge.MacBridgeError,'持锁'):
                 with bridge._claim_agent(self.engine): pass
         with bridge._claim_agent(self.engine): pass
+
+    def test_first_agent_claim_creates_private_nonce_parent(self):
+        parent=self.engine.root.parent
+        self.assertFalse(parent.exists())
+        with bridge._claim_agent(self.engine):
+            self.assertEqual(parent.stat().st_mode & 0o777,0o700)
+            self.assertEqual(parent.stat().st_uid,os.getuid())
+            self.assertTrue((self.engine.control/'agent-owner.lock').is_file())
+            self.assertFalse(self.engine.root.exists())
+            self.assertFalse(self.engine.session.exists())
+        with bridge._claim_agent(self.engine):
+            self.assertEqual(parent.stat().st_mode & 0o777,0o700)
+
+    def test_agent_claim_refuses_existing_nonprivate_nonce_parent(self):
+        parent=self.engine.root.parent; parent.mkdir(mode=0o755,parents=True); parent.chmod(0o755)
+        before=parent.stat()
+        with self.assertRaisesRegex(c.CaptureError,'私有目录'):
+            with bridge._claim_agent(self.engine):
+                self.fail('宽权限 nonce 父不能取得 agent 锁')
+        after=parent.stat()
+        self.assertEqual((after.st_ino,after.st_mode,after.st_mtime_ns),
+                         (before.st_ino,before.st_mode,before.st_mtime_ns))
+        self.assertEqual(list(parent.iterdir()),[])
 
     def test_closed_capture_recovers_offline_without_spawn_or_rpc(self):
         c.write_json_once(self.outer/'closed-capture'/'capture-origin-committed.json',{'fixture_only':True})

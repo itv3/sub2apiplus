@@ -825,6 +825,8 @@ class MacBridgeEngine:
                 raw=base64.b64decode(payload['recipe_base64'],validate=True)
                 ref=self.task['execution']['isolation_recipe']
                 _require(len(raw)==ref['bytes'] and hashlib.sha256(raw).hexdigest()==ref['sha256'],'桥原recipe字节漂移')
+                # nonce 父承载会话与 sibling journal；先独立创建并核验，不能沿用宽权限父目录。
+                c.private_directory(self.root.parent)
                 c.private_directory(self.control)
             else:
                 _require(self.control.is_dir(),'桥没有原准备状态，不能补造恢复或库存')
@@ -891,6 +893,7 @@ class MacBridgeEngine:
 @contextmanager
 def _claim_agent(engine):
     """每个原任务只允许一个Mac服务实例；重启后原pending阶段仍保留。"""
+    c.private_directory(engine.root.parent)
     c.private_directory(engine.control)
     descriptor=os.open(engine.control/'agent-owner.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     try:
