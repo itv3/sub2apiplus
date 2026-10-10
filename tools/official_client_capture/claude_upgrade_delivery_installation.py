@@ -81,9 +81,14 @@ def _require_managed_install() -> None:
     exec(compile(raw, str(path), "exec", dont_inherit=True), module.__dict__)
     if _private_file(path, 0o700) != raw:
         raise guard.GuardError("驱动安装器加载期间漂移")
-    manifest = module.load_manifest(DRIVER_ROOT)
-    module.verify_tree(DRIVER_ROOT, manifest, check_mode=True, require_root_owner=True)
-    module.verify_install(DRIVER_ROOT, DATA_ROOT, "claude")
+    try:
+        manifest = module.load_manifest(DRIVER_ROOT)
+        module.verify_tree(DRIVER_ROOT, manifest, check_mode=True, require_root_owner=True)
+        module.verify_install(DRIVER_ROOT, DATA_ROOT, "claude")
+    except module.DriverError as error:
+        # 安装器独立加载，异常类也属于该模块实例；保留原校验失败与原因，
+        # 转入交付守卫已有的拒绝路径，不能让来源消费端漏出另一种异常。
+        raise guard.GuardError(str(error)) from error
     for loaded in (sys.modules[__name__], _executor(), guard):
         if Path(loaded.__file__).parent != DATA_ROOT / "tools/official_client_capture":
             raise guard.GuardError("交付模块不属于已验证的实际受管根")

@@ -40,6 +40,68 @@ def local_private_file(path: Path, mode: int = 0o600) -> bytes:
     return guard.read_bytes(path)
 
 
+class ManagedInstallationErrorTests(unittest.TestCase):
+    """安装器自己的拒绝须进入守卫和来源消费端的既有错误合同。"""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="claude-managed-install-errors-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.data = self.root / "data"
+        self.driver = self.root / "driver"
+        self.data.mkdir()
+        self.driver.mkdir()
+        for patch in (mock.patch.object(installation, "DATA_ROOT", self.data),
+                      mock.patch.object(installation, "DRIVER_ROOT", self.driver),
+                      mock.patch.object(installation.platform, "system", return_value="Linux"),
+                      mock.patch.object(installation.platform, "machine", return_value="aarch64"),
+                      mock.patch.object(installation.os, "geteuid", return_value=0),
+                      mock.patch.object(installation, "_check_directory")):
+            self.enterContext(patch)
+
+    def installer(self, stage, error_name="DriverError"):
+        """仅替代安装器原件，各消费端仍走真实动态加载和异常转换。"""
+        source = f'''
+class DriverError(RuntimeError):
+    pass
+def reject(stage):
+    if stage == {stage!r}:
+        raise {error_name}("安装拒绝：" + stage)
+def load_manifest(root):
+    reject("load_manifest")
+    return {{}}
+def verify_tree(root, manifest, **kwargs):
+    reject("verify_tree")
+def verify_install(root, data, client):
+    reject("verify_install")
+'''.encode()
+        return mock.patch.object(installation, "_private_file", return_value=source)
+
+    def test_all_installer_rejections_keep_original_cause(self):
+        for stage in ("load_manifest", "verify_tree", "verify_install"):
+            with self.subTest(stage=stage), self.installer(stage):
+                with self.assertRaisesRegex(guard.GuardError, "安装拒绝：" + stage) as raised:
+                    installation._require_managed_install()
+                self.assertEqual(type(raised.exception.__cause__).__name__, "DriverError")
+
+    def test_single_and_batch_consumers_fail_with_control_error(self):
+        for batch in (False, True):
+            with self.subTest(batch=batch), self.installer("verify_tree"):
+                with self.assertRaisesRegex(ControlError, "安装拒绝：verify_tree") as raised:
+                    if batch:
+                        installation.formal_source_verifier_batch(None, [])
+                    else:
+                        installation.formal_source_verifier(None, {}, {})
+                self.assertIsInstance(raised.exception.__cause__, guard.GuardError)
+                self.assertEqual(type(raised.exception.__cause__.__cause__).__name__, "DriverError")
+
+    def test_unexpected_installer_failure_is_not_reclassified(self):
+        with self.installer("verify_tree", "RuntimeError"):
+            with self.assertRaisesRegex(RuntimeError, "安装拒绝：verify_tree") as raised:
+                installation._require_managed_install()
+        self.assertNotIsInstance(raised.exception, guard.GuardError)
+
+
 class InstallationTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="claude-delivery-install-")
