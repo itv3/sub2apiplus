@@ -144,7 +144,7 @@ Codex 历史制品没有 `client` 时按 `codex` 只读解释，不补写。新�
 | Campaign 总计划 | `codex-upgrade-campaign/v3` | `official-client-upgrade-campaign/v1` |
 | 项目总账 plan | `upgrade-project-ledger-plan/v1` | `upgrade-project-ledger-plan/v2`（加 `client`，码表按客户端） |
 | 计时账本 plan | `codex-upgrade-timing-ledger-plan/v1` | `upgrade-timing-ledger-plan/v2`（加 `client`） |
-| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 13；schema 版本不表示发布认证通过） |
+| 工具身份策略 | `tool-identity-policy/v2`（`policy_version` 8） | `tool-identity-policy/v3`（当前 `policy_version` 15；schema 版本不表示发布认证通过） |
 | 环境收据 | `codex-upgrade-arm64-environment-receipt/v1` | `official-client-arm64-environment-receipt/v1`（含 `client`、`client_binary`） |
 | 受管部署收据 | `codex-arm64-supervisor-enable/v1`（22 字段闭集） | `official-client-managed-deploy/v1`（工具身份在 `identity` 下） |
 | 部署事务日志 | `managed-deploy-journal/v1`（一次事务一份，两客户端共用） | 同左 |
@@ -373,7 +373,7 @@ Campaign 锁内、静止时执行）：两种模式共用一条链，选取前�
 | | Codex | Claude |
 |---|---|---|
 | 策略文件 | `tool_identity_policy_v2.json` | `claude_tool_identity_policy_v2.json` |
-| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 13 |
+| schema／版本 | `tool-identity-policy/v2`，`policy_version` 8 | `tool-identity-policy/v3`，`client: claude`，当前 `policy_version` 15 |
 | 根 | `tools/official_client_capture` | `tools/official_client_capture`、`tools/official_client_control` |
 | 条目键 | 根内相对路径 | `<根目录名>/<相对路径>`（如 `official_client_control/store.py`） |
 | 后缀 | `.py`、`.sh`、`.json` | 另加 `.mjs`、`.m` |
@@ -480,7 +480,7 @@ codex，Codex 的命令行、合同与内容逐字不变；对编排器的引用
 - Claude 核心四条真实链在 `tests/real_chains/test_claude_upgrade_control_chain.py`：`vc-chain.claude-reconcile`、
   `vc-chain.claude-deadline`、`vc-chain.claude-root-cause`、`vc-chain.claude-tool-evolution`；故障恢复链
   `vc-chain.claude-recovery-chain` 在 `test_claude_upgrade_fault_chains.py`。pre-A3 执行闭集取本客户端注册表；发布准入
-  另外要求[Claude 指南 §4.0.5](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#405-受管工具发布认证)登记的八条必需链全部齐备并通过，
+  另外要求[Claude 指南 §4.0.5](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#405-受管工具发布认证)登记的九条必需链全部齐备并通过，
   不能以当前已注册子集通过代替。B5b-02 完整录制回放、B5b-03 后段故障链与 B5b-04 发布认证仍待收口。
   这些链零请求，在两个受管根的副本树上运行；Linux root 上必须进入
   `unshare -m -n` 私有命名空间（临时根 `/var/tmp`，显式传 TMPDIR，网络自检），

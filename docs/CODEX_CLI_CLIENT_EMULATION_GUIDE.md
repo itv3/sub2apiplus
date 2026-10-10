@@ -1451,6 +1451,10 @@ Formal 已建后创建链冻结，只补收口；已派发首批不得再次派�
 发布认证绑定部署收据的 `policy`、`wire_producer`、`evidence_semantics`、`control`、`tool_files` 五摘要，
 完整 Job 演练及 atomic-double；在具备 Go／Docker 的 Linux ARM64 上签发。
 
+认证工具按客户端分组：策略认证、pre-A3 与发布认证模块共用可选 `--client`，缺省为 `codex`；
+Claude 须显式指定 `--client claude`。两客户端分别绑定本客户端工具身份、pre-A3 场景、部署收据与认证合同，
+认证结果不相互承接。分组合同见[共享实现文档 §9.5](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md#95-认证链与真实链)。
+
 登记的真实链必须完整执行，失败、重复、缺失或 skip 均拒签。跨部署沿用 pre-A3 时通过 `record-reuse`
 登记复用收据并纳入新发布认证；无有效证明就重跑。旧认证按冻结合同只读重放，不追改历史字节。
 改变受管门禁、不变式或失败分类时，修复验证还须覆盖 `make test-capture-real-chains`；
