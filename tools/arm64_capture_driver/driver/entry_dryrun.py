@@ -167,13 +167,16 @@ def capture_busy(state_dir: Path | None = None) -> str | None:
 
 
 def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool, reexecute: bool = False,
-                to: str | None = None, client: str = "codex", unit_inherit: str | None = None) -> Path:
+                to: str | None = None, client: str = "codex", unit_inherit: str | None = None,
+                unit_inherit_full_gates: str | None = None) -> Path:
     """结论文件：客户端前缀＋提交＋部署收据＋空跑种类（开工、冷跑计时、逐单元承接）＋终点。终点不是这种空跑的默认终点时才
     写进名字：后台验证接着的那次（到 pre-A3）与明确执行的那次（默认 atomic-double 或到 P0 收据）是不同的空跑，不能互相顶替。
-    客户端前缀取客户端表（Codex 为空，与改造前同名）；带逐单元承接请求的空跑另带请求摘要（``unit_inherit``）。"""
+    客户端前缀取客户端表（Codex 为空，与改造前同名）；逐单元承接另带主请求摘要，显式配套请求另加其摘要，缺省命名不变。"""
 
     prefix = _sibling("client_table").spec(client)["dryrun_conclusion_prefix"]
     kind = "-opening" if opening else "-reexecute" if reexecute else f"-unit-inherit-{unit_inherit[:12]}" if unit_inherit else ""
+    if unit_inherit_full_gates:
+        kind += f"-full-gates-{unit_inherit_full_gates[:12]}"
     default = OPENING_TO if opening else DEFAULT_TO
     stop = f"-to-{to}" if to and to != default else ""
     return Path(runroot) / DIRECTORY / f"{prefix}{commit[:12]}-{str(deployment['sha256'])[:12]}{kind}{stop}.json"
@@ -251,6 +254,9 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     client = _client(args.vc_env)
     deployment = bv.latest_deployment(args.data_root, client)
     request = getattr(args, "unit_inherit_request", None)
+    full_gates_request = getattr(args, "unit_inherit_full_gates_request", None)
+    if full_gates_request is not None and request is None:
+        raise DryRunError("full-gates 逐单元承接请求须与 --unit-inherit-request 一起提供")
     if args.opening and args.reexecute:
         raise DryRunError("--opening 已含重新执行全集，不要再加 --reexecute")
     if request is not None and (args.opening or args.reexecute):
@@ -260,11 +266,16 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         if not Path(request).is_absolute() or Path(request).is_symlink() or not Path(request).is_file():
             raise DryRunError(f"逐单元承接请求必须是已有的普通文件（绝对路径）：{request}")
         request_sha256 = bv._sha256_file(Path(request))
+    full_gates_sha256 = None
+    if full_gates_request is not None:
+        if not Path(full_gates_request).is_absolute() or Path(full_gates_request).is_symlink() or not Path(full_gates_request).is_file():
+            raise DryRunError(f"full-gates 逐单元承接请求必须是已有的普通文件（绝对路径）：{full_gates_request}")
+        full_gates_sha256 = bv._sha256_file(Path(full_gates_request))
     to = args.to or (OPENING_TO if args.opening else DEFAULT_TO)
     if to not in ALLOWED_TO:
         raise DryRunError(f"--to 只能到 {ALLOWED_TO[-1]}（VC-0 收口会发正式请求，演练根里不做）：{to}")
     path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute, to=to, client=client,
-                       unit_inherit=request_sha256)
+                       unit_inherit=request_sha256, unit_inherit_full_gates=full_gates_sha256)
     existing = _read(path)
     if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
         return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
@@ -277,6 +288,8 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         # B5a-10：非 Codex 的结论记客户端；带逐单元承接请求的空跑记请求坐标与摘要（Codex 不带请求时结论与改造前同形）。
         **({"client": client} if client != _sibling("client_table").DEFAULT_CLIENT else {}),
         **({"unit_inherit_request": {"path": str(request), "sha256": request_sha256}} if request is not None else {}),
+        **({"unit_inherit_full_gates_request": {"path": str(full_gates_request), "sha256": full_gates_sha256}}
+           if full_gates_request is not None else {}),
     }
     busy = capture_busy()
     if busy:
@@ -460,6 +473,15 @@ def _run_orchestrator(payload: Mapping[str, Any], runroot: Path, env_file: Path)
         argv += ["--reexecute-gates"]
     elif payload.get("unit_inherit_request"):
         argv += ["--unit-inherit-request", str(payload["unit_inherit_request"]["path"])]
+        if payload.get("unit_inherit_full_gates_request"):
+            # 双请求空跑的结论绑定两份文件；排队结束后再次核对，防止起跑时摘要与实际消费的批准对象不同。
+            for name in ("unit_inherit_request", "unit_inherit_full_gates_request"):
+                reference = payload[name]
+                request = Path(reference["path"])
+                if (request.is_symlink() or not request.is_file()
+                        or _bv()._sha256_file(request) != reference["sha256"]):
+                    raise DryRunError(f"逐单元承接请求在空跑启动后变化：{request}")
+            argv += ["--unit-inherit-full-gates-request", str(payload["unit_inherit_full_gates_request"]["path"])]
     log = runroot / "entry.out"
     with log.open("ab") as handle:
         returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
@@ -512,6 +534,9 @@ def run(result: Path) -> int:
             if payload is None:
                 return 0
         returncode, log = _run_orchestrator(payload, runroot, env_file)
+    except DryRunError as error:
+        _update(path, status="failed", completed_at_utc=_utc_now(), failed_steps=["entry-orchestrator"], reason=str(error))
+        return 0
     finally:
         os.close(lock_fd)
     summary = _orchestrator_run(runroot) or {}
@@ -641,6 +666,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--reexecute", action="store_true", help="只重新执行全集、不带审计（冷跑计时用）")
     p_start.add_argument("--unit-inherit-request", type=Path, default=None,
                          help="B5a-08 逐单元承接请求（交给入口编排器；与 --opening／--reexecute 互斥）")
+    p_start.add_argument("--unit-inherit-full-gates-request", type=Path, default=None,
+                         help="独立批准的 full-gates 请求；与主请求从首轮一起固定提供，两份摘要共同绑定空跑结论")
     p_start.add_argument("--to", default=None, help=f"编排器跑到哪一步（默认 {DEFAULT_TO}；--opening 默认 {OPENING_TO}）")
     p_start.add_argument("--entry", type=Path, default=HERE / "entry.sh")
     p_run = sub.add_parser("run", help="（内部）建演练根、跑编排器、写结论")

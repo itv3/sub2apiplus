@@ -99,6 +99,31 @@ class AuthorizedInheritanceTests(_Base):
         reasons = {entry["unit_id"]: entry.get("reasons") for entry in result.manifest["units"] if entry["disposition"] == "executed"}
         self.assertTrue(all("来源集合没有登记这个单元" in " ".join(item) for item in reasons.values()), reasons)
 
+    def test_separate_profile_requests_do_not_approve_first_round_new_records(self) -> None:
+        """真实合同核对两种组合各自的批准；首轮新执行记录再有效，也不能自动扩大第二份请求的固定来源。"""
+
+        world = self.world()
+        listed = ("test_alpha", "egress-spec:check-a")
+        primary = world.request(sources=world.sources(("egress-spec:check-a",)))
+        full_context = world.context(profile="full-gates", gates=["check-egress-spec", "test-capture-tools"])
+        companion = world.request(context=full_context, sources=world.sources(listed))
+        originals = [path.read_bytes() for path in (primary, companion)]
+        first = world.run(primary)
+        self.assertEqual(first.problems, [])
+        self.assertIn("test_alpha", first.executed_records)
+        self.assertIn("test_beta", first.executed_records)
+        # 续跑沿用已签 pre-A3 后实际全集不含 pre-A3；只有已批准的两条记录可承接，其余仍执行。
+        world.units = tuple(unit_id for unit_id in world.units if not unit_id.startswith("pre-a3:"))
+        second = world.run(companion, context=lambda _name: full_context, times=(T0 + 180, T0 + 240, T0 + 300))
+        self.assertEqual(second.problems, [])
+        self.assertEqual(second.manifest["mode"], "unit-inherit")
+        self.assertEqual(self.inherited(second), set(listed))
+        self.assertIn("test_beta", self.executed(second), "首轮新记录不在第二份批准来源内，仍须执行")
+        alpha = next(entry for entry in second.manifest["units"] if entry["unit_id"] == "test_alpha")
+        self.assertEqual(alpha["record_sha256"], world.records["test_alpha"]["record_sha256"], "承接固定原来源，不优选首轮新记录")
+        self.assertNotEqual(alpha["record_sha256"], first.executed_records["test_alpha"]["record_sha256"])
+        self.assertEqual([path.read_bytes() for path in (primary, companion)], originals)
+
 
 class WholeRunFallbackTests(_Base):
     """请求缺失、校时过期、任一批准失效、当前上下文与请求不同：整次重新执行（不混用部分承接）。"""

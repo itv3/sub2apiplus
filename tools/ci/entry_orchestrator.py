@@ -40,6 +40,9 @@ Claude 的 atomic-double 之后，两客户端都没有待接入的入口步骤�
 Claude 的 ``claude_upgrade plan`` 参数；Codex 的模板为空，沿用下面写死的 Codex 参数形状）；atomic-double 给共享模块追加
 ``--client``（Claude 签 ``official-client-atomic-vc0-vc1-rehearsal/v1``）；VC-0 收口按客户端表的收口模块执行（两客户端同一组
 参数）。
+逐单元承接续跑：主请求 ``--unit-inherit-request`` 供首轮实际 entry 组合使用，可从首轮同时固定提供另一份已独立批准的
+``--unit-inherit-full-gates-request``。pre-A3 按步骤记录沿用时，门禁仍实时执行，实际组合是 full-gates，选用配套请求。
+两份请求始终同时进入步骤输入，不改写批准或来源，不把首轮新记录自动加入第二轮来源；没有配套请求保持原合同的拒绝与回退。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
 """
@@ -173,7 +176,8 @@ class Orchestrator:
                  runner: Runner = default_runner, es_runner: Any = None, masks: Mapping[str, str] | None = None,
                  approval: Mapping[str, str] | None = None, reexecute_gates: bool = False, audit_reads: bool = False,
                  full_set_request: Path | None = None, full_set_work: Path | None = None,
-                 unit_inherit_request: Path | None = None, gate_parallel: int | None = None) -> None:
+                 unit_inherit_request: Path | None = None, gate_parallel: int | None = None,
+                 unit_inherit_full_gates_request: Path | None = None) -> None:
         self.params = dict(params)
         if gate_parallel is not None and (type(gate_parallel) is not int or gate_parallel <= 0):
             raise OrchestratorError("--gate-parallel 必须是正整数")
@@ -187,6 +191,14 @@ class Orchestrator:
         self.unit_inherit_request = unit_inherit_request
         if unit_inherit_request is not None:
             self.params["UNIT_INHERIT_REQUEST"] = str(unit_inherit_request)
+        # 同一命令续跑时，pre-A3 从真跑变为沿用，实际门禁组合由 entry 变为 full-gates。两份分别批准的请求从首轮就固定
+        # 登记，不能到第二轮才替换主请求，也不能改写请求的上下文或来源集合。未提供配套请求时保持原合同的拒绝与回退。
+        if unit_inherit_full_gates_request is not None and (unit_inherit_request is None or full_set_request or reexecute_gates):
+            raise OrchestratorError("full-gates 逐单元承接请求须与主请求一起提供，且不能与全集请求或重新执行全集同用")
+        self.unit_inherit_full_gates_request = unit_inherit_full_gates_request
+        self.params.pop(ES.UNIT_INHERIT_FULL_GATES_PARAM, None)
+        if unit_inherit_full_gates_request is not None:
+            self.params[ES.UNIT_INHERIT_FULL_GATES_PARAM] = str(unit_inherit_full_gates_request)
         self.driver_dir, self.run_dir, self.steps_dir = driver_dir, run_dir, steps_dir
         self.runner, self.masks = runner, dict(masks or {})
         # 入口门禁的模式（D12）：重新执行全集时这一步强制重做、单元一个都不承接。
@@ -314,6 +326,13 @@ class Orchestrator:
             return "full-set-pass"
         return "unit-inherit" if self.unit_inherit_request is not None and not self.reexecute_gates else "re-execute"
 
+    def _unit_inherit_request_for(self, profile: str) -> Path | None:
+        """只按本次实际门禁组合选择原文件；授权、来源与实时复核仍由 unit-inherit 合同核对。"""
+
+        if profile == "full-gates" and self.unit_inherit_full_gates_request is not None:
+            return self.unit_inherit_full_gates_request
+        return self.unit_inherit_request
+
     def entry_gates_and_pre_a3(self, gates_run: bool, pre_a3_run: bool) -> None:
         """入口门禁与 pre-A3 同一次运行（E2-04）：pre-A3 要做就纳入，否则复核并沿用记录里的认证；入口门禁沿用、只有
         pre-A3 要做时，用入口门禁的 pre-a3 组合单独签（E3-02：同一测试树、同一部署一致性核对、同一记录库，场景可承接，
@@ -335,12 +354,13 @@ class Orchestrator:
             return
         if gates_run:
             out = self.run_dir / "entry-gates"
+            inherit_request = self._unit_inherit_request_for("entry" if pre_a3_run else "full-gates")
             rc = self.run("entry-gates", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "entry", "--out", str(out),
                                           "--policy-activation", str(activation), "--pre-a3-certification", str(certification),
                                           "--pre-a3-mode", "run" if pre_a3_run else "present",
                                           "--mode", self._gates_mode(),
                                           *(["--full-set-request", str(self.full_set_request)] if self.full_set_request else []),
-                                          *(["--unit-inherit-request", str(self.unit_inherit_request)] if self.unit_inherit_request else []),
+                                          *(["--unit-inherit-request", str(inherit_request)] if inherit_request else []),
                                           *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                           *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
                                           *(["--audit-reads"] if self.audit_reads else []), *source])
@@ -906,6 +926,8 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--gate-parallel", type=_positive_parallel, help="入口门禁和 pre-A3 单元并发数；缺省沿用执行器配置")
     parser.add_argument("--unit-inherit-request", type=Path,
                         help="B5a-08 逐单元承接请求（入口门禁 --mode unit-inherit）；与 --full-set-request、--reexecute-gates 互斥")
+    parser.add_argument("--unit-inherit-full-gates-request", type=Path,
+                        help="独立批准的 full-gates 请求；与主请求从首轮一起固定提供，pre-A3 沿用时按实际门禁组合选用")
     parser.add_argument("--audit-reads", action="store_true",
                         help="入口门禁带读集审计（E3-04，要和 --reexecute-gates 一起带）：实际读取超出声明的输入范围即判失败")
     return parser.parse_args(argv)
@@ -919,6 +941,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.unit_inherit_request is not None and (args.full_set_request or args.reexecute_gates
                                                   or not args.unit_inherit_request.is_absolute()):
         print("入口编排：逐单元承接请求须为绝对路径，且不能与 --full-set-request、--reexecute-gates 同用", file=sys.stderr)
+        return 2
+    if args.unit_inherit_full_gates_request is not None and (
+            args.unit_inherit_request is None or not args.unit_inherit_full_gates_request.is_absolute()):
+        print("入口编排：full-gates 逐单元承接请求须为绝对路径，并与 --unit-inherit-request 一起提供", file=sys.stderr)
         return 2
     if args.audit_reads and not args.reexecute_gates and args.unit_inherit_request is None:
         print("入口编排：读集审计要真跑才有读集，--audit-reads 要和 --reexecute-gates 一起带", file=sys.stderr)
@@ -950,7 +976,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 masks=masks, approval={"approve_sha256": args.approve_sha256 or "",
                                                        "approved_by": args.approved_by or "", "reason": args.reason or ""},
                                 reexecute_gates=args.reexecute_gates, audit_reads=args.audit_reads, full_set_request=args.full_set_request,
-                                full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel)
+                                full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel,
+                                unit_inherit_full_gates_request=args.unit_inherit_full_gates_request)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:

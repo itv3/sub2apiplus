@@ -24,6 +24,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.ci import background_validation as bv
 from tools.ci import entry_dryrun as dr
@@ -508,6 +509,55 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
                 self.assertIn("不能与 --opening／--reexecute", refused.stderr)
         missing = self.start_claude("--unit-inherit-request", str(self.root / "missing.json"))
         self.assertEqual(missing.returncode, 2)
+
+    def test_two_profile_requests_reach_the_orchestrator_and_bind_separate_conclusions(self) -> None:
+        primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"
+        primary.write_text(json.dumps({"profile": "entry"}), encoding="utf-8")
+        companion.write_text(json.dumps({"profile": "full-gates", "revision": 1}), encoding="utf-8")
+        argv = ("--unit-inherit-request", str(primary), "--unit-inherit-full-gates-request", str(companion))
+        started = self.start_claude(*argv)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        outcome = json.loads(started.stdout.strip().splitlines()[-1])
+        payload = self.wait(outcome["result"])
+        digest = bv._sha256_file(companion)
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual(payload["unit_inherit_full_gates_request"], {"path": str(companion), "sha256": digest})
+        self.assertTrue(Path(outcome["result"]).name.endswith(f"-full-gates-{digest[:12]}.json"))
+        self.assertEqual(self.calls()[-1]["argv"], ["--to", "atomic-double", *argv])
+        companion.write_text(json.dumps({"profile": "full-gates", "revision": 2}), encoding="utf-8")
+        changed = json.loads(self.start_claude(*argv).stdout.strip().splitlines()[-1])
+        self.assertNotEqual(changed["result"], outcome["result"], "配套批准变化不能命中旧空跑结论")
+        self.assertEqual(self.wait(changed["result"])["status"], "passed")
+
+    def test_companion_request_requires_the_primary_and_a_regular_absolute_file(self) -> None:
+        primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"
+        primary.write_text("{}", encoding="utf-8")
+        companion.write_text("{}", encoding="utf-8")
+        orphan = self.start_claude("--unit-inherit-full-gates-request", str(companion))
+        self.assertEqual(orphan.returncode, 2)
+        self.assertIn("与 --unit-inherit-request 一起提供", orphan.stderr)
+        link = self.root / "request-link.json"
+        link.symlink_to(companion)
+        for path in ("relative.json", str(self.root / "missing.json"), str(link)):
+            with self.subTest(path=path):
+                refused = self.start_claude("--unit-inherit-request", str(primary), "--unit-inherit-full-gates-request", path)
+                self.assertEqual(refused.returncode, 2)
+                self.assertIn("已有的普通文件（绝对路径）", refused.stderr)
+
+    def test_queued_two_request_dry_run_refuses_changed_bound_bytes_before_execution(self) -> None:
+        primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"
+        for path in (primary, companion):
+            path.write_text("{}", encoding="utf-8")
+        payload = {"to": "atomic-double", "entry": str(self.entry),
+                   "unit_inherit_request": {"path": str(primary), "sha256": bv._sha256_file(primary)},
+                   "unit_inherit_full_gates_request": {"path": str(companion), "sha256": bv._sha256_file(companion)}}
+        for path in (primary, companion):
+            with self.subTest(path=path.name), mock.patch.object(dr.subprocess, "run") as execute:
+                path.write_text('{"changed":true}', encoding="utf-8")
+                with self.assertRaisesRegex(dr.DryRunError, "空跑启动后变化"):
+                    dr._run_orchestrator(payload, self.claude_runroot, self.claude_env)
+                execute.assert_not_called()
+                path.write_text("{}", encoding="utf-8")
 
     def test_two_clients_dry_runs_queue_on_the_gate_work_directory(self) -> None:
         # 两客户端都纳管时，后台验证通过后两份空跑几乎同时接上；编排器各跑 3 秒，后到的那份排队、两份都通过。

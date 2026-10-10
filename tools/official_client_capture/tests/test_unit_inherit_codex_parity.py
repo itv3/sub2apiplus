@@ -667,6 +667,23 @@ CLAUDE_SCENARIO_FILE_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         '            *_params(*spec["plan_params"]), *IDENTITY, GUIDE_PART2, DEPLOY_TOOL_FILES,',
     ],
 }
+# 同一入口的实际组合从 entry 切到 full-gates 时，只在显式配套请求下选择另一份独立批准文件。
+# 缺省不增加步骤输入，主请求与 B-09 路径保持原样；两份请求的来源授权由真实合同短回归守住。
+ENTRY_PROFILE_REQUESTS_BASELINE_COMMIT = "70050bbd61734d36d6fc9ebeaa60e56a31ca5c2f"
+ENTRY_PROFILE_REQUESTS_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_steps.py": "34af52b410fe3df68b0a3c2f40ad61d03fad5e913e95a32f01cab34b20018c1c",
+    "tools/ci/entry_orchestrator.py": "01518a4b82e37a774cb0425ccdecb2790c4543a1bcfee2edc9c05695f614ec0b",
+}
+ENTRY_PROFILE_REQUESTS_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_steps.py": [
+        '        """本轮客户端的步骤表（步骤与依赖两客户端相同，输入声明按客户端；逐单元承接时入口门禁与 pre-A3 另有两项输入）。"""',
+    ],
+    "tools/ci/entry_orchestrator.py": [
+        "                 unit_inherit_request: Path | None = None, gate_parallel: int | None = None) -> None:",
+        '                                          *(["--unit-inherit-request", str(self.unit_inherit_request)] if self.unit_inherit_request else []),',
+        "                                full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel)",
+    ],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("Claude 连续世界两小时安全网", CLAUDE_CONTINUOUS_TIME_BASELINE, CLAUDE_CONTINUOUS_TIME_DIGESTS, CLAUDE_CONTINUOUS_TIME_REMOVED),
     ("Claude 录制链时间合同 v2", CLAUDE_RECORDED_TIME_BASELINE, CLAUDE_RECORDED_TIME_DIGESTS, CLAUDE_RECORDED_TIME_REMOVED),
@@ -692,6 +709,8 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      ENTRY_PARALLEL_SOURCE_DIGESTS, ENTRY_PARALLEL_SOURCE_REMOVED_LINES),
     ("Claude 私有目标场景文件输入绑定", CLAUDE_SCENARIO_FILE_BASELINE_COMMIT,
      CLAUDE_SCENARIO_FILE_SOURCE_DIGESTS, CLAUDE_SCENARIO_FILE_SOURCE_REMOVED_LINES),
+    ("入口实际组合分别批准请求", ENTRY_PROFILE_REQUESTS_BASELINE_COMMIT,
+     ENTRY_PROFILE_REQUESTS_SOURCE_DIGESTS, ENTRY_PROFILE_REQUESTS_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 CLAUDE_FIXTURE_STEP_INPUTS = (

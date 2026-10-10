@@ -201,10 +201,14 @@ class OrchestratorTestCase(unittest.TestCase):
         full_set_request = kwargs.pop("full_set_request", None)
         full_set_work = kwargs.pop("full_set_work", None)
         gate_parallel = kwargs.pop("gate_parallel", None)
+        unit_inherit_request = kwargs.pop("unit_inherit_request", None)
+        unit_inherit_full_gates_request = kwargs.pop("unit_inherit_full_gates_request", None)
         orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
                                        steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks,
                                        approval=approval, reexecute_gates=reexecute_gates, full_set_request=full_set_request,
-                                       full_set_work=full_set_work, gate_parallel=gate_parallel)
+                                       full_set_work=full_set_work, gate_parallel=gate_parallel,
+                                       unit_inherit_request=unit_inherit_request,
+                                       unit_inherit_full_gates_request=unit_inherit_full_gates_request)
         return orchestrator.orchestrate(**kwargs)
 
     @staticmethod
@@ -391,6 +395,66 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual([_option(call, "--profile") for call in gates], ["entry", "pre-a3"])
         self.assertEqual([_option(call, "--parallel") for call in gates], ["2", "2"])
         self.assertTrue(all("--work" not in call for call in gates), "普通入口沿用原工作目录")
+
+    def test_two_requests_keep_pre_a3_reusable_across_the_actual_profile_change(self) -> None:
+        """两轮参数及请求字节完全相同；只按真实组合选请求，不因切换输入让 pre-A3 循环重跑。"""
+
+        primary, companion = self.fx.root / "entry-request.json", self.fx.root / "full-gates-request.json"
+        _write_json(primary, {"profile": "entry", "approved": "首轮独立批准"})
+        _write_json(companion, {"profile": "full-gates", "approved": "续跑独立批准"})
+        (self.fx.driver / "unit_inherit.py").write_text("# 逐单元承接合同替身\n", encoding="utf-8")
+        original = [path.read_bytes() for path in (primary, companion)]
+        options = {"unit_inherit_request": primary, "unit_inherit_full_gates_request": companion}
+        first = self.orchestrate(to_step="atomic-double", **options)
+        second = self.orchestrate(to_step="atomic-double", **options)
+        third = self.orchestrate(to_step="p0-receipt", **options)
+        self.assertEqual([run["exit_code"] for run in (first, second, third)], [0, 0, 0])
+        self.assertEqual(self.actions(second)["pre-a3"], "沿用", self.actions(second))
+        self.assertEqual(self.actions(third)["pre-a3"], "沿用", self.actions(third))
+        gates = [call for call in self.commands.calls if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
+        self.assertEqual([_option(call, "--pre-a3-mode") for call in gates], ["run", "present", "present"])
+        self.assertEqual([_option(call, "--unit-inherit-request") for call in gates], [str(primary), str(companion), str(companion)])
+        self.assertEqual([_option(call, "--profile") for call in gates], ["entry"] * 3, "脚本按 pre-A3 模式生成真实门禁全集")
+        self.assertEqual(self.commands.gates_modes, ["unit-inherit"] * 3)
+        self.assertEqual([path.read_bytes() for path in (primary, companion)], original, "不改写任何请求或批准")
+
+    def test_changing_either_fixed_request_invalidates_pre_a3(self) -> None:
+        primary, companion = self.fx.root / "entry-request.json", self.fx.root / "full-gates-request.json"
+        for path in (primary, companion):
+            _write_json(path, {"revision": 1})
+        (self.fx.driver / "unit_inherit.py").write_text("# 逐单元承接合同替身\n", encoding="utf-8")
+        options = {"unit_inherit_request": primary, "unit_inherit_full_gates_request": companion}
+        self.assertEqual(self.orchestrate(to_step="atomic-double", **options)["exit_code"], 0)
+        for path in (companion, primary):
+            with self.subTest(request=path.name):
+                _write_json(path, {"revision": 2})
+                changed = self.orchestrate(to_step="atomic-double", **options)
+                self.assertEqual(self.actions(changed)["pre-a3"], "执行／passed")
+                gate = next(call for call in reversed(self.commands.calls) if call[0] == "bash" and call[1].endswith("entry-gates.sh"))
+                self.assertEqual(_option(gate, "--pre-a3-mode"), "run")
+                self.assertEqual(_option(gate, "--unit-inherit-request"), str(primary))
+
+    def test_missing_companion_preserves_the_original_request_and_contract_fallback(self) -> None:
+        primary = self.fx.root / "entry-request.json"
+        _write_json(primary, {"profile": "entry"})
+        (self.fx.driver / "unit_inherit.py").write_text("# 逐单元承接合同替身\n", encoding="utf-8")
+        original = primary.read_bytes()
+        for _round in range(2):
+            self.orchestrate(to_step="atomic-double", unit_inherit_request=primary)
+        gates = [call for call in self.commands.calls if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
+        self.assertEqual([_option(call, "--unit-inherit-request") for call in gates], [str(primary)] * 2)
+        self.assertEqual([_option(call, "--pre-a3-mode") for call in gates], ["run", "present"])
+        self.assertEqual(primary.read_bytes(), original, "缺配套请求不能改标签冒充 full-gates 批准")
+
+    def test_companion_request_cli_rejects_orphan_relative_and_full_set_modes(self) -> None:
+        cases = [(["--unit-inherit-full-gates-request", "/full.json"], "与 --unit-inherit-request 一起提供"),
+                 (["--unit-inherit-request", "/entry.json", "--unit-inherit-full-gates-request", "relative.json"], "绝对路径"),
+                 (["--unit-inherit-request", "/entry.json", "--unit-inherit-full-gates-request", "/full.json", "--reexecute-gates"], "不能与"),
+                 (["--unit-inherit-request", "/entry.json", "--unit-inherit-full-gates-request", "/full.json", "--full-set-request", "/b09.json"], "不能与")]
+        for argv, reason in cases:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(eo.main(argv), 2)
+                self.assertIn(reason, stderr.getvalue())
 
     def test_parallel_change_redoes_pre_a3_but_keeps_the_ledger(self) -> None:
         first = self.orchestrate(gate_parallel=2)

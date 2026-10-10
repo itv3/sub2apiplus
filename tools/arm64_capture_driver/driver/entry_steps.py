@@ -53,6 +53,8 @@
 逐单元承接（Claude 升级 B5a-08）：参数 ``UNIT_INHERIT_REQUEST``（入口编排器 ``--unit-inherit-request`` 给出）非空时，入口门禁与
 pre-A3 两步另把承接请求文件与承接合同模块 ``unit_inherit.py`` 列入输入——请求一换（来源集合、批准或凭证），两步都失效重做。
 不用这个模式时步骤表与改造前逐字相同（改造前写下的步骤记录照常沿用）；两张表只差这两步的这两项输入。
+显式提供 ``UNIT_INHERIT_FULL_GATES_REQUEST`` 时，这两步从首轮起还登记配套请求文件；续跑只选择实际组合的已批准请求，
+不临时替换步骤输入。任何一份请求变动都使两步失效，未提供配套请求时不增加输入。
 """
 
 from __future__ import annotations
@@ -438,6 +440,7 @@ STEP_BY_ID: dict[str, Step] = STEP_BY_ID_BY_CLIENT["codex"]
 
 # B5a-08：逐单元承接时的步骤表（见模块说明）。
 UNIT_INHERIT_PARAM = "UNIT_INHERIT_REQUEST"
+UNIT_INHERIT_FULL_GATES_PARAM = "UNIT_INHERIT_FULL_GATES_REQUEST"
 GATE_PARALLEL_PARAM = "ENTRY_GATES_PARALLEL"
 UNIT_INHERIT_STEPS = ("entry-gates", "pre-a3")
 UNIT_INHERIT_INPUTS = (Input("upstream", "file", "{" + UNIT_INHERIT_PARAM + "}"), *_drivers("unit_inherit.py"))
@@ -632,9 +635,14 @@ class Context:
 
     @property
     def steps(self) -> tuple[Step, ...]:
-        """本轮客户端的步骤表（步骤与依赖两客户端相同，输入声明按客户端；逐单元承接时入口门禁与 pre-A3 另有两项输入）。"""
+        """本轮客户端的步骤表：逐单元承接登记主请求与合同模块，显式配套请求和并发数另行登记。"""
 
         steps = (STEPS_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEPS_BY_CLIENT)[self.client]
+        if self.unit_inherit and self.params.get(UNIT_INHERIT_FULL_GATES_PARAM):
+            # 从首轮起同时绑定两份独立批准请求，实际组合切换时不换步骤输入；任何一份变动都要求重新验收。
+            companion = Input("upstream", "file", "{" + UNIT_INHERIT_FULL_GATES_PARAM + "}")
+            steps = tuple(replace(step, inputs=step.inputs + (companion,))
+                          if step.step_id in UNIT_INHERIT_STEPS else step for step in steps)
         if GATE_PARALLEL_PARAM not in self.params:
             return steps
         # 显式并发数是这两步实际执行的参数，续跑必须比较它；其它步骤及缺省规格不增加输入。
