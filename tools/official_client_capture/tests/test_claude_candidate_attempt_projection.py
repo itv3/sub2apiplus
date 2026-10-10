@@ -391,6 +391,7 @@ class NormalResumeProducerProjectionTests(unittest.TestCase):
         attachment = fixture._write_json(self.campaign / "source-client-checkpoint.json", {})
         unknown = fixture._write_json(self.campaign / "unknown-cover-result.json", {"source": "unregistered"})
         stage = fixture._write_json(self.campaign / "source-cover-stage.json", {
+            "attempt": fixture.binding(self.origin / "attempt.json", self.campaign, with_bytes=False),
             "seal": {"client_checkpoint": fixture.binding(attachment, self.campaign)},
             "results": [{"id": "job-1", "unknown": fixture.binding(unknown, self.campaign)}]})
         self.producer.update(campaign=origin, execution_sha256="a" * 64, predecessor_sealed_cover={
@@ -399,11 +400,29 @@ class NormalResumeProducerProjectionTests(unittest.TestCase):
         self.write_job_materials(checkpoint_changes={"disposition": "reused"})
         self.write_attempt()
         self.prove()
+        self.assertIn((self.origin / "attempt.json").relative_to(self.data).as_posix(), self.originals)
         projection = self.parents[stage.relative_to(self.data).as_posix()]
         bindings = projection.project(fixture.binding(stage, self.data), stage.read_bytes())
         self.assertIn(attachment.relative_to(self.data).as_posix(), {row["path"] for row in bindings})
         with self.assertRaisesRegex(ControlError, "原件缺失"):
             self.close([fixture.binding(stage, self.data)])
+
+    def test_cover_first_attempt_cannot_use_the_direct_source_coordinate(self):
+        manifest = fixture._write_json(self.campaign / "campaign.json", {"campaign_id": "campaign-1"})
+        origin = {"campaign_dir": str(self.campaign), "campaign_id": "campaign-1",
+            "candidate_id": "candidate-1", "campaign_manifest_sha256": fixture.binding(manifest, self.data)["sha256"]}
+        sealed = fixture._write_json(self.campaign / "source-sealed-manifest.json", {})
+        direct_attempt = fixture._write_json(self.attempt.with_name("middle-source") / "attempt.json",
+            {"source": "direct-source-only"})
+        stage = fixture._write_json(self.campaign / "source-cover-stage.json", {
+            "attempt": fixture.binding(direct_attempt, self.campaign, with_bytes=False)})
+        self.producer.update(campaign=origin, execution_sha256="a" * 64, predecessor_sealed_cover={
+            "campaign": origin, "stage_result": fixture.binding(stage, self.campaign, with_bytes=False),
+            "sealed_evidence_manifest": fixture.binding(sealed, self.campaign, with_bytes=False)})
+        self.write_job_materials(checkpoint_changes={"disposition": "reused"})
+        self.write_attempt()
+        with self.assertRaisesRegex(ControlError, "最初生产者的精确 attempt"):
+            self.prove()
 
 
 class CandidateBoundaryRetentionTests(unittest.TestCase):

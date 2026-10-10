@@ -1000,6 +1000,14 @@ def _candidate_attempt_result_producers(
                 cover_path = compare._bound_campaign_file(cover_campaign, cover["stage_result"],
                     "最初生产者的前序封存阶段")
                 cover_stage = parse_json_bytes(retain(cover_path, cover["stage_result"]["sha256"]))
+                # 原 cover 读取器已验真首轮的 attempt 绑定。承接两次以后，
+                # 直接来源的 attempt 属于中间 Campaign，不能给最初生产者
+                # 复用它的摘要；这里只保存首轮实际绑定的精确原件，不转根。
+                producer_attempt = compare._bound_campaign_file(cover_campaign, cover_stage["attempt"],
+                    "最初生产者的首轮 attempt")
+                if producer_attempt != root / "attempt.json":
+                    raise ControlError("前序封存首轮没有绑定最初生产者的精确 attempt")
+                retain(producer_attempt, cover_stage["attempt"]["sha256"])
                 _retain_candidate_sealed_boundary(cover_campaign, cover["sealed_evidence_manifest"], retain=retain)
                 _retain_candidate_evaluation_draft(cover_campaign, cover_manifest, cover_stage, data_root,
                     retain=retain, project_parent=project_parent)
