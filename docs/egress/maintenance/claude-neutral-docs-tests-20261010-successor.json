@@ -1,0 +1,79 @@
+{
+  "base_commit": "b301bd54295d4385e17599127fa7b9d296259d45",
+  "changed_path_count": 13,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5894,
+  "frozen_path_count": 2015,
+  "identity_sha256": "b3908bfb1a240bacec3c8586a2feff1d2d83cffc67127f9a12edf02f6c3b1376",
+  "issued_at_utc": "2026-10-10T12:35:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-neutral-docs-tests-20261010-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "010b0ee759c4f2a450599f87547411723bdd4f783df685bdd6155d69155c9e80"
+      ],
+      "reason": "本轮十个测试文件平台／等待诊断／表合同／历史对照适配与三文档中性修订的必要冻结承接；只登记已注册前序到当前字节的精确后继，历史收据原字节不变，不授予发布认证、真实账号现场或生产资格。 path=docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-b407-r01-20261010-successor.json",
+        "docs/egress/maintenance/claude-fault-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-long-chain-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/claude-tool-boundaries-docs-20261010-successor.json",
+        "docs/egress/maintenance/claude-tool-engineering-final-20261010-successor.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-ab-mac-recovery-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-document-job-local-20261009-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e794b4a15bdf3c71e27383782e37f7addde2bb3ab30a25bad648330c2ec4a3de"
+    }
+  ],
+  "unregistered_path_count": 12,
+  "unregistered_paths": [
+    "docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md",
+    "tools/arm64_capture_driver/README.md",
+    "tools/official_client_capture/tests/test_claude_mac_capture_service.py",
+    "tools/official_client_capture/tests/test_claude_mac_process_identity.py",
+    "tools/official_client_capture/tests/test_claude_mac_product_bridge_state.py",
+    "tools/official_client_capture/tests/test_claude_mac_product_sources.py",
+    "tools/official_client_capture/tests/test_claude_mac_product_state.py",
+    "tools/official_client_capture/tests/test_claude_typed_vc6_fixture.py",
+    "tools/official_client_capture/tests/test_claude_vc23_driver.py",
+    "tools/official_client_capture/tests/test_claude_vc5_driver.py",
+    "tools/official_client_capture/tests/test_pre_a3_codex_parity.py",
+    "tools/official_client_capture/tests/test_unit_inherit_codex_parity.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
