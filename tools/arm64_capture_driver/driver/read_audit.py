@@ -168,6 +168,22 @@ def _operation_flags(body: str) -> set[str]:
     return {flag for flag in _argument_flags(body) if flag.startswith("O_")}
 
 
+def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
+    """只认完整返回结构里明确的普通文件或目录，不能从路径、其他参数或缩略结构猜类型。"""
+    positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
+    position = positions.get(name)
+    if position is None or position >= len(arguments):
+        return False
+    value = arguments[position].strip()
+    if not value.startswith("{") or not value.endswith("}") or "..." in value:
+        return False
+    fields = _call_arguments(value[1:-1], None)
+    key = "stx_mode" if name == "statx" else "st_mode"
+    modes = [field for field in fields if re.match(re.escape(key) + r"\s*=", field)]
+    return len(modes) == 1 and re.fullmatch(
+        re.escape(key) + r"\s*=\s*(?:S_IFREG|S_IFDIR)(?:\|(?:0[0-7]+|S_ISUID|S_ISGID|S_ISVTX))*", modes[0]) is not None
+
+
 class AuditError(RuntimeError):
     """审计配置或轨迹文件不可用。"""
 
@@ -333,9 +349,11 @@ class TraceParser:
         if self.strict and result and result.group(1).isdigit() and errno is None:
             flags = _argument_flags(body)
             # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
-            # 显式读链接元数据或取得链接本身的描述符尚无完整合同，必须拒绝承接。
-            if (name in {"lstat", "lstat64"}
-                    or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags)
+            # NOFOLLOW 也会用于普通对象；完整返回结构明确非链接且返回 0 时，沿用普通 stat 精确快照。
+            # 真链接、未知或缩略类型，以及链接自身的描述符仍缺合同，必须拒绝承接。
+            nofollow_stat = (name in {"lstat", "lstat64"}
+                             or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags))
+            if ((nofollow_stat and not (result.group(1) == "0" and _returned_non_link_stat(name, arguments)))
                     or (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags)):
                 self._unresolved("symlink-metadata-not-bound:" + name)
         for argument in arguments:
@@ -533,7 +551,8 @@ def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], pyth
         raise AuditError("预筛表达式里有单引号，不能交给 shell")
     pipe = " ".join(command) if strict else f"grep --line-buffered -E '{pattern}' | " + " ".join(command)
     # 文件描述符切目录、命名空间变更和未建模的外部通信必须可见；未知调用保持失败关闭。
-    options = ["-s", "4096", "-e", "trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
+    options = ["-s", "4096", "-e", "verbose=%%stat", "-e", "abbrev=!%%stat",
+               "-e", "trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
                "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg"] if strict else []
     return ["strace", *STRACE_OPTIONS, *options, "-o", "|" + pipe, "--", *argv]
 

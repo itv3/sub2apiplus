@@ -524,6 +524,60 @@ class StrictReadAuditTests(unittest.TestCase):
                                  {"symlink-metadata-not-bound:" + call.split("(")[0]: 1})
                 self.assertFalse(ra.audit_reads(trace, [], repo_root="/repo", strict=True)["coverage_complete"])
 
+        # 结构采用宿主 strace 6.8 的完整返回格式，嵌套 makedev 与时间注释不能错分参数。
+        for mode in ("S_IFREG|0644", "S_IFDIR|0755", "S_IFREG|S_ISUID|0755"):
+            buffer = ("{st_dev=makedev(0x8, 0x1), st_ino=1506, st_mode=" + mode
+                      + ", st_nlink=1, st_uid=0, st_gid=0, st_blksize=4096, st_blocks=8, st_size=4096, "
+                      "st_atime=1791345047 /* 2026-10-07T03:50:47.835712463+0000 */, st_atime_nsec=835712463, "
+                      "st_mtime=1787996969, st_mtime_nsec=0, st_ctime=1787996969, st_ctime_nsec=0}")
+            calls = [
+                f'lstat("/repo/object", {buffer}) = 0',
+                f'lstat64("/repo/object", {buffer}) = 0',
+                f'newfstatat(AT_FDCWD</repo>, "object", {buffer}, AT_SYMLINK_NOFOLLOW) = 0',
+                f'fstatat64(AT_FDCWD</repo>, "object", {buffer}, AT_SYMLINK_NOFOLLOW) = 0',
+                f'statx(AT_FDCWD</repo>, "object", AT_SYMLINK_NOFOLLOW, STATX_ALL, {buffer.replace("st_mode", "stx_mode")}) = 0',
+            ]
+            for call in calls:
+                with self.subTest(mode=mode, call=call.split("(")[0]):
+                    trace = ra.filter_stream(["1 " + call], ["/"], strict=True)
+                    self.assertEqual(trace["coverage"]["unresolved"], 0)
+                    self.assertEqual(trace["accesses"], [["/repo/object", ["stat"]]])
+                    self.assertFalse(ra.audit_reads(trace, [], repo_root="/repo", strict=True)["coverage_complete"],
+                                     "明确非链接仍须原精确宿主输入，不能因 mode 绕过绑定")
+
+        # 真链接、未知类型、不完整结构和错位参数始终拒绝；不能按文件名或权限数字猜类型。
+        buffers = ["{st_mode=S_IFLNK|0777, st_size=10}", "{st_mode=S_IFSOCK|0600}",
+                   "{st_size=4096}", "0x1234", "{st_mode=S_IFDIR|0755, ...}",
+                   "{st_mode=S_IFREG|0644", "{st_mode=S_IFREG|0644, st_mode=S_IFDIR|0755}",
+                   '{other="st_mode=S_IFREG|0644"}', "{st_mode=0100644}"]
+        for buffer in buffers:
+            with self.subTest(buffer=buffer):
+                call = f'1 newfstatat(AT_FDCWD</repo>, "object", {buffer}, AT_SYMLINK_NOFOLLOW) = 0'
+                trace = ra.filter_stream([call], ["/"], strict=True)
+                self.assertGreater(trace["coverage"]["unresolved"], 0)
+                self.assertFalse(ra.audit_reads(trace, [], repo_root="/repo", strict=True)["coverage_complete"])
+        calls = [
+            'newfstatat(AT_FDCWD</repo>, "{st_mode=S_IFREG|0644}", 0x1, AT_SYMLINK_NOFOLLOW) = 0',
+            'newfstatat(AT_FDCWD</repo>, "object", 0x1, {st_mode=S_IFREG|0644}|AT_SYMLINK_NOFOLLOW) = 0',
+            'newfstatat(AT_FDCWD</repo>, "object", {st_mode=S_IFREG|0644}, AT_SYMLINK_NOFOLLOW) = 1',
+            'open("/repo/object", O_PATH|O_NOFOLLOW) = 3</repo/object>',
+        ]
+        for call in calls:
+            with self.subTest(call=call):
+                self.assertGreater(ra.filter_stream(["1 " + call], ["/"], strict=True)["coverage"]["unresolved"], 0)
+
+        # 明确非链接只恢复普通 stat 语义，原精确宿主快照仍须检测真实内容变化。
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.txt"
+            path.write_text("原内容")
+            trace = ra.filter_stream([
+                f'1 newfstatat(AT_FDCWD</repo>, "{path}", {{st_mode=S_IFREG|0644, st_size=9}}, AT_SYMLINK_NOFOLLOW) = 0',
+            ], ["/"], strict=True)
+            entry = ra.host_snapshot(str(path))
+            self.assertTrue(ra.audit_reads(trace, [entry], repo_root="/repo", strict=True)["coverage_complete"])
+            path.write_text("变更内容")
+            self.assertFalse(ra.audit_reads(trace, [entry], repo_root="/repo", strict=True)["coverage_complete"])
+
     def test_missing_link_probe_and_flags_in_paths_are_not_metadata_reads(self):
         calls = [
             'lstat("/repo/absent", 0x1) = -1 ENOENT (No such file or directory)',
@@ -567,7 +621,14 @@ class StrictReadAuditTests(unittest.TestCase):
         self.assertFalse(ra.audit_reads(empty, [], repo_root="/repo", strict=True)["coverage_complete"])
 
     def test_strict_wrapper_does_not_prefilter_host_and_never_skips_whole_repo(self):
+        ordinary = ra.strace_argv(["true"], output=Path("/out/trace.json"), roots=["/repo"])
+        self.assertEqual(ordinary[1:1 + len(ra.STRACE_OPTIONS)], list(ra.STRACE_OPTIONS))
+        self.assertNotIn("verbose=%%stat", ordinary)
+        self.assertNotIn("abbrev=!%%stat", ordinary)
         argv = ra.strace_argv(["true"], output=Path("/out/trace.json"), roots=["/repo"], strict=True)
+        self.assertEqual(argv[1:1 + len(ra.STRACE_OPTIONS)], list(ra.STRACE_OPTIONS))
+        self.assertIn("verbose=%%stat", argv)
+        self.assertIn("abbrev=!%%stat", argv)
         pipe = argv[argv.index("-o") + 1]
         self.assertNotIn("grep", pipe)
         self.assertIn("--strict --root /", pipe)
@@ -917,7 +978,11 @@ class ReadAuditExecutorTests(unittest.TestCase):
                                              command_units=[command], manifest=manifest, timeout=120)
             before = refresh()
             self.assertTrue(before["test_alpha"].inheritable)
-            self.assertEqual(before["test_alpha"].inputs, records.declared_inputs(records.RepoIndex.load(repo), declaration))
+            expected_spec = ue.unit_spec(unit, start=group.start, pattern=group.pattern, timeout_seconds=120)
+            self.assertEqual(before["test_alpha"].spec, expected_spec)
+            expected_inputs = records.declared_inputs(records.RepoIndex.load(repo), declaration)
+            expected_inputs.append(records._audit_module()._runtime_module().test_spec_entry(expected_spec))
+            self.assertEqual(before["test_alpha"].inputs, sorted(expected_inputs, key=lambda entry: entry["name"]))
             (repo / "data/b.txt").write_text("不相关文件变更\n")
             subprocess.run(["git", "-C", str(repo), "-c", "user.name=e3", "-c", "user.email=e3@example.invalid",
                             "-c", "commit.gpgsign=false", "commit", "-qam", "不相关变更"], check=True)
