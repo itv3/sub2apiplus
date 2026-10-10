@@ -7,6 +7,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -154,17 +155,21 @@ class RegisteredLateIntegrityTests(unittest.TestCase):
 
     def run_outer(self, records: list[dict], *, chain: str = "late-continuous") -> None:
         metrics = {"chain": chain, "steps": ["轻量夹具步骤"], "upstream_requests": 0, "scenarios": records}
-        completed = subprocess.CompletedProcess(["轻量替身"], 0, faults.METRICS_PREFIX + json.dumps(metrics) + "\n", "")
+        completed = subprocess.CompletedProcess(["轻量替身"], 0,
+                                               (faults.METRICS_PREFIX + json.dumps(metrics) + "\n").encode(), b"")
         method = NEW_ENTRIES[faults.CHAINS[chain]["scenario"]][2]
         case = faults.ClaudeFaultChainTests(method)
         with tempfile.TemporaryDirectory(prefix="registered-late-integrity-") as directory, \
+                mock.patch.dict(os.environ, {}, clear=True), \
                 mock.patch.object(case, "_isolation_mode", return_value=faults.shell.ISOLATION_NAMESPACE), \
                 mock.patch.object(faults.shell, "_scratch_root", return_value=directory), \
                 mock.patch.object(faults, "_copy_tree", side_effect=lambda destination: destination), \
-                mock.patch.object(faults.trees, "subprocess_env", return_value={}), \
+                mock.patch.object(faults.trees, "subprocess_env", side_effect=lambda tree, extra: dict(extra)), \
                 mock.patch.object(faults.shell, "_namespace_argv", side_effect=lambda argv: argv), \
                 mock.patch.object(faults.subprocess, "run", return_value=completed) as command:
             case._run_chain(chain)
+            self.assertFalse(Path(command.call_args.kwargs["env"]["CLAUDE_RECORDED_CHAIN_RECORD_DIR"]).exists(),
+                             "未配置外部记录目录时仍应清理临时世界")
         self.assertEqual(command.call_args.kwargs["timeout"], 7260, "连续方法两小时加独立清理余量")
 
     def records(self, chain: str = "late-continuous") -> list[dict]:

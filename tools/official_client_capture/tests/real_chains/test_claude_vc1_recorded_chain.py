@@ -1,8 +1,8 @@
 """B5b-02 的显式 ARM64 录制链外壳，不进入默认单元发现。
 
 每条要求 mount/net namespace、只读历史来源和真实阶段结果；跳过只表示未验证。
-CLAUDE_RECORDED_CHAIN_RECORD_DIR 可将整份 staging 世界与摘要绑定报告持久保留，
-CLAUDE_FAULT_CHAIN_RECORDS 沿用既有逐场景 JSONL；仅设置后者时也会在它旁边保留世界。
+CLAUDE_RECORDED_CHAIN_RECORD_DIR 保存世界原坐标；世界与摘要绑定报告持久保留在实际系统临时根，
+CLAUDE_FAULT_CHAIN_RECORDS 沿用既有逐场景 JSONL；仅设置后者时也在它旁边保存世界位置。
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ RECORDS_ENV = "CLAUDE_FAULT_CHAIN_RECORDS"
 
 @contextlib.contextmanager
 def staging_directory(prefix: str):
-    """显式记录目录里的数据不自动删除；无记录配置时使用正常临时目录。"""
+    """世界直接建在实际系统临时根；有记录配置时保留原位置并写旁侧坐标，无配置时正常清理。"""
 
     configured = os.environ.get(RECORD_DIR_ENV)
     legacy = os.environ.get(RECORDS_ENV)
@@ -38,7 +38,15 @@ def staging_directory(prefix: str):
         if root.is_symlink():
             raise ValueError("录制链记录目录不能是符号链接")
         root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        yield Path(tempfile.mkdtemp(prefix=prefix, dir=root.resolve()))
+        actual_temp = Path(tempfile.gettempdir()).resolve()
+        directory = Path(tempfile.mkdtemp(prefix=prefix, dir=actual_temp))
+        # 完整链来源只允许实际临时根首层的 <world>/staging；外部记录目录不参与世界装配。
+        # 只增加位置原件，原世界和已形成的绝对路径绑定不搬迁、不改写。
+        source.write(root / (directory.name + "-location.json"), {
+            "world_root": str(directory), "data_root": str(directory / "staging/data"),
+            "system_temp_root": str(actual_temp),
+        })
+        yield directory
     else:
         with tempfile.TemporaryDirectory(prefix=prefix) as directory:
             yield Path(directory)
@@ -93,7 +101,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                        "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
             try:
                 completed = subprocess.run(command, cwd=driver.REPOSITORY, capture_output=True, text=True, timeout=time_budget["chain_timeout_seconds"],
-                                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(directory.parent)})
             except subprocess.TimeoutExpired as error:
                 for filename, content in (("stdout.log", error.stdout or ""), ("stderr.log", error.stderr or "")):
                     value = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
@@ -135,7 +143,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
     def _run_pending_full_validation(self) -> None:
         """保留原显式定向入口，由完整录制链的公共场景转调；本方法不重复进入测试发现。
 
-        外层必须在新 Python 启动前将 TMPDIR 与记录目录设为同一私有父目录。本方法只分配一次世界，
+        世界分配在本进程实际系统临时根，CLI 子进程显式沿用同一 TMPDIR；外部记录目录只保存原位置。本方法只分配一次世界，
         然后委托正式 full CLI；报告缺失、失败或超时均保存真实日志和未验证记录，不能改写为成功。
         """
 
@@ -163,7 +171,8 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                        "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
             try:
                 completed = subprocess.run(command, cwd=driver.vc1.REPOSITORY, capture_output=True, text=True,
-                                           timeout=time_budget["chain_timeout_seconds"], env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                                           timeout=time_budget["chain_timeout_seconds"],
+                                           env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(directory.parent)})
             except subprocess.TimeoutExpired as error:
                 for filename, content in (("stdout.log", error.stdout or ""), ("stderr.log", error.stderr or "")):
                     value = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content

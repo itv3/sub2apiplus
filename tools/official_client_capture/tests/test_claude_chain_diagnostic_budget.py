@@ -1,5 +1,6 @@
 """验证诊断独立预算、集中收错和正式入口隔离，不运行长链。"""
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -15,7 +16,72 @@ from tools.official_client_capture.tests.real_chains import test_claude_vc1_reco
 
 class DiagnosticBudgetTests(unittest.TestCase):
     def test_candidate_recorded_inner_process_uses_method_budget_and_keeps_timeout_failure(self):
-        """两个候选恢复入口共用独立方法预算；内层超时仍保留日志并向外失败。"""
+        """内层保留独立预算；外层各退出路径保留原坐标与日志，隔离子进程只写私有根。"""
+        chain = "late-continuous"
+        metrics = {"steps": ["轻量原件回归"], "upstream_requests": 0,
+                   "scenarios": [{"scenario": name, "campaign_id": "同一夹具Campaign",
+                                  "checks": {key: {"passed": True} for key in chains.SIX_CHECKS}}
+                                 for name in chains.CHAINS[chain]["expected"]]}
+        normal_stdout = (chains.METRICS_PREFIX + json.dumps(metrics, ensure_ascii=False) + "\r\n").encode()
+        normal_stderr = "原始子进程日志\r\n".encode() + b"\x00"
+        for outcome in ("passed", "failed", "timeout", "invalid-metrics"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                external, scratch = root / "external", root / "scratch"
+                external.mkdir(mode=0o700)
+                scratch.mkdir(mode=0o700)
+                original = external / "existing-original.json"
+                original.write_bytes(b"existing original remains unchanged")
+                stdout = b"invalid metric\xff\r\n" if outcome == "invalid-metrics" else normal_stdout
+                stderr = normal_stderr
+                observed = {}
+                case = chains.ClaudeFaultChainTests()
+
+                def launch(argv, **kwargs):
+                    environment = kwargs["env"]
+                    private = Path(environment["CLAUDE_RECORDED_CHAIN_RECORD_DIR"])
+                    observed["private"] = private
+                    observed["original"] = json.dumps({"data_root": str(private / "staging/data")}).encode()
+                    self.assertTrue(private.is_relative_to(scratch))
+                    self.assertFalse(private.is_relative_to(external))
+                    self.assertEqual(environment[chains.shell.ISOLATION_ENV], chains.shell.ISOLATION_NAMESPACE)
+                    self.assertIn(chains.shell.NAMESPACE_SCRIPT, argv)
+                    self.assertEqual(kwargs["timeout"], 7260)
+                    (private / "state-original.json").write_bytes(observed["original"])
+                    if outcome == "timeout":
+                        raise subprocess.TimeoutExpired(argv, 7260, output=stdout, stderr=stderr)
+                    return subprocess.CompletedProcess(argv, 1 if outcome == "failed" else 0, stdout, stderr)
+
+                with mock.patch.dict(os.environ, {"CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(external)}, clear=True), \
+                        mock.patch.object(chains.sys, "platform", "linux"), \
+                        mock.patch.object(case, "_isolation_mode", return_value=chains.shell.ISOLATION_NAMESPACE), \
+                        mock.patch.object(chains.shell, "_scratch_root", return_value=scratch), \
+                        mock.patch.object(chains, "_copy_tree", side_effect=lambda destination: destination), \
+                        mock.patch.object(chains.trees, "subprocess_env", side_effect=lambda tree, extra: {**os.environ, **extra}), \
+                        mock.patch.object(chains.subprocess, "run", side_effect=launch):
+                    if outcome == "passed":
+                        case._run_chain(chain)
+                    else:
+                        expected = UnicodeDecodeError if outcome == "invalid-metrics" else AssertionError
+                        with self.assertRaises(expected):
+                            case._run_chain(chain)
+                    self.assertEqual(os.environ["CLAUDE_RECORDED_CHAIN_RECORD_DIR"], str(external))
+
+                sidecars = list(external.glob("fault-chain-*"))
+                self.assertEqual(len(sidecars), 1)
+                output = sidecars[0]
+                state = json.loads((output / "scratch.json").read_text())
+                self.assertEqual((output / "stdout.log").read_bytes(), stdout)
+                self.assertEqual((output / "stderr.log").read_bytes(), stderr)
+                self.assertEqual(state["returncode"], None if outcome == "timeout" else 1 if outcome == "failed" else 0)
+                self.assertEqual(state["timed_out"], outcome == "timeout")
+                self.assertEqual(state["error_type"], "UnicodeDecodeError" if outcome == "invalid-metrics" else None)
+                self.assertTrue(Path(state["scratch_root"]).is_dir())
+                self.assertEqual(Path(state["recorded_worlds"]), observed["private"])
+                self.assertEqual((observed["private"] / "state-original.json").read_bytes(), observed["original"])
+                self.assertEqual(original.read_bytes(), b"existing original remains unchanged")
+
+        # 两个候选恢复入口共用独立方法预算；内层超时仍保留日志并向外失败。
         with tempfile.TemporaryDirectory() as temporary:
             case = candidate_driver.ClaudeCandidateChainDriver()
             case.root = Path(temporary)

@@ -1841,36 +1841,74 @@ class ClaudeFaultChainTests(unittest.TestCase):
         completed: subprocess.CompletedProcess | None = None
         copy_seconds: float | None = None
         timed_out = False
+        record_directory = os.environ.get("CLAUDE_RECORDED_CHAIN_RECORD_DIR")
+        stdout_bytes, stderr_bytes = b"", b""
+        stdout, stderr = "", ""
         try:
             # 连续链内还有两层来源夹具，守卫的 Unix socket 路径必须保持足够短。
             # macOS 的系统临时根本身很长；短根仍位于宿主数据根和执行副本之外。
             scratch = Path("/private/tmp") if sys.platform == "darwin" else shell._scratch_root()
-            with tempfile.TemporaryDirectory(prefix="cfc-", dir=scratch) as directory:
+            # 已配置原件目录时保留原 scratch 坐标：来源和收据绑定绝对路径，不能搬走后改 JSON 冒充可重放。
+            temporary = (contextlib.nullcontext(tempfile.mkdtemp(prefix="cfc-", dir=scratch)) if record_directory else
+                         tempfile.TemporaryDirectory(prefix="cfc-", dir=scratch))
+            with temporary as directory:
                 staging = Path(directory).resolve() / "staging"
-                staging.mkdir(mode=0o700)
-                # 与 B5a-05 相同：staging 的属组改成本进程的有效组（macOS 新建目录取父目录属组）。
-                os.chown(staging, -1, os.getegid())
-                tree = _copy_tree(staging / "tree")
-                copy_seconds = round(time.monotonic() - started, 3)
-                environment = trees.subprocess_env(tree, {
-                    project_ledger_fixture.FIXTURE_ONLY_ENV: "1",
-                    "TMPDIR": str(staging),
-                    shell.ISOLATION_ENV: mode,
-                    shell.TREE_ENV: str(tree),
-                    shell.SOURCE_REPO_ENV: str(REPO_ROOT),
-                    shell.IDENTITY_MEMO_ENV: str(staging / "identity-memo"),
-                })
-                if diagnostic_seconds is not None:
-                    environment[diagnostic_budget.DIAGNOSTIC_TIMEOUT_ENV] = str(diagnostic_seconds)
-                argv = [sys.executable, "-m", "unittest", "-v", f"{CHAIN_MODULE}.{type(self).__name__}.{spec['exercise']}"]
-                command = shell._namespace_argv(argv) if mode == shell.ISOLATION_NAMESPACE else argv
+                recorded_worlds = staging / "recorded-worlds"
                 try:
-                    completed = subprocess.run(command, capture_output=True, text=True, cwd=str(tree), env=environment,
-                                               timeout=timeout_seconds, stdin=subprocess.DEVNULL)
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                if completed is not None:
-                    metrics = _parse_metrics(completed.stdout)
+                    staging.mkdir(mode=0o700)
+                    # 与 B5a-05 相同：staging 的属组改成本进程的有效组（macOS 新建目录取父目录属组）。
+                    os.chown(staging, -1, os.getegid())
+                    recorded_worlds.mkdir(mode=0o700)
+                    tree = _copy_tree(staging / "tree")
+                    copy_seconds = round(time.monotonic() - started, 3)
+                    environment = trees.subprocess_env(tree, {
+                        project_ledger_fixture.FIXTURE_ONLY_ENV: "1",
+                        "TMPDIR": str(staging),
+                        shell.ISOLATION_ENV: mode,
+                        shell.TREE_ENV: str(tree),
+                        shell.SOURCE_REPO_ENV: str(REPO_ROOT),
+                        shell.IDENTITY_MEMO_ENV: str(staging / "identity-memo"),
+                        # 宿主数据根在 namespace 中保持只读，链体原件只写本次私有可写根。
+                        "CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(recorded_worlds),
+                    })
+                    if diagnostic_seconds is not None:
+                        environment[diagnostic_budget.DIAGNOSTIC_TIMEOUT_ENV] = str(diagnostic_seconds)
+                    argv = [sys.executable, "-m", "unittest", "-v", f"{CHAIN_MODULE}.{type(self).__name__}.{spec['exercise']}"]
+                    command = shell._namespace_argv(argv) if mode == shell.ISOLATION_NAMESPACE else argv
+                    try:
+                        # 先捕获完整原始字节；解码与指标解析失败也必须保留子进程原件。
+                        completed = subprocess.run(command, capture_output=True, cwd=str(tree), env=environment,
+                                                   timeout=timeout_seconds, stdin=subprocess.DEVNULL)
+                        stdout_bytes, stderr_bytes = completed.stdout or b"", completed.stderr or b""
+                    except subprocess.TimeoutExpired as error:
+                        timed_out = True
+                        stdout_bytes, stderr_bytes = error.stdout or b"", error.stderr or b""
+                    if completed is not None:
+                        stdout, stderr = stdout_bytes.decode("utf-8"), stderr_bytes.decode("utf-8")
+                        metrics = _parse_metrics(stdout)
+                finally:
+                    if record_directory:
+                        # 只增旁侧原件，不移动 scratch、不改绑定；失败和超时与成功走同一保存出口。
+                        error = sys.exc_info()[1]
+                        parent = Path(record_directory)
+                        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        output = parent / f"fault-chain-{chain}-{Path(directory).name}"
+                        output.mkdir(mode=0o700)
+                        for name, raw in (("stdout.log", stdout_bytes), ("stderr.log", stderr_bytes)):
+                            path = output / name
+                            with path.open("xb") as handle:
+                                handle.write(raw)
+                            path.chmod(0o600)
+                        state = output / "scratch.json"
+                        with state.open("x", encoding="utf-8") as handle:
+                            json.dump({"scenario": spec["scenario"], "scratch_root": str(Path(directory).resolve()),
+                                       "recorded_worlds": str(recorded_worlds), "isolation": mode,
+                                       "returncode": None if completed is None else completed.returncode,
+                                       "timed_out": timed_out, "timeout_seconds": timeout_seconds,
+                                       "error_type": None if error is None else type(error).__name__},
+                                      handle, ensure_ascii=False, sort_keys=True, indent=2)
+                            handle.write("\n")
+                        state.chmod(0o600)
         finally:
             elapsed = round(time.monotonic() - started, 3)
             self.real_chain_metrics = {
@@ -1892,8 +1930,8 @@ class ClaudeFaultChainTests(unittest.TestCase):
         assert completed is not None
         if completed.returncode != 0:
             self.fail(f"{spec['scenario']} 子进程失败（退出码 {completed.returncode}，隔离={mode}，耗时 {elapsed} 秒；已通过的步骤："
-                      f"{'、'.join(metrics.get('steps') or []) or '没有'}）：\n{completed.stdout[-3000:]}\n{completed.stderr[-6000:]}")
-        self.assertNotIn("skipped=", completed.stderr, "链体不得跳过")
+                      f"{'、'.join(metrics.get('steps') or []) or '没有'}）：\n{stdout[-3000:]}\n{stderr[-6000:]}")
+        self.assertNotIn("skipped=", stderr, "链体不得跳过")
         self.assertTrue(metrics.get("steps"), "通过的链必须写出指标与已通过的步骤")
         self.assertEqual(metrics.get("upstream_requests"), 0, "链体必须零请求")
         expected = list(spec.get('expected') or [name for _step, group in RECOVERY_CHAIN_GROUPS for name in group.values()])

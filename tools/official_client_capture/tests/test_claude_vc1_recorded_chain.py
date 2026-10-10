@@ -10,6 +10,8 @@ import copy
 import dataclasses
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -586,21 +588,79 @@ class RecordedContinuationContractTests(unittest.TestCase):
 
     def test_explicit_record_directory_survives_the_shell_scope(self) -> None:
         from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as shell
+        from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            records = root / "records.jsonl"
-            with mock.patch.dict(os.environ, {shell.RECORD_DIR_ENV: str(root / "artifacts"), shell.RECORDS_ENV: str(records)}):
-                with shell.staging_directory("vc1-") as staging:
-                    report = source.write(staging / "staging/data/control/result.json", {"status": "unverified"})
-                    record = {"scenario": "vc-chain.claude-vc1-capture", "status": "unverified", "report": source.binding(report)}
-                    shell.save_record(staging, record, append=False)
-                    shell.save_record(staging, record)
-                self.assertTrue(staging.is_dir())
-                binding = source.read(staging / "record-binding.json")
-                self.assertEqual(source.bound(binding), staging / "record.json")
-                self.assertEqual(len(records.read_text().splitlines()), 1)
-                self.assertEqual(source.bound(source.read(staging / "record.json")["report"]), report)
+            actual_temp = Path(tempfile.gettempdir()).resolve()
+            for explicit in (True, False):
+                records = root / ("records.jsonl" if explicit else "legacy-records.jsonl")
+                notes = root / "artifacts" if explicit else root / "legacy-records-recorded-artifacts"
+                environment = {shell.RECORDS_ENV: str(records)}
+                if explicit:
+                    environment[shell.RECORD_DIR_ENV] = str(notes)
+                with self.subTest(explicit=explicit), mock.patch.dict(os.environ, environment, clear=True):
+                    with shell.staging_directory("vc1-") as staging:
+                        self.addCleanup(shutil.rmtree, staging)
+                        self.assertEqual(staging.parent, actual_temp)
+                        self.assertFalse(staging.is_relative_to(notes))
+                        full._require_client_staging(staging / "staging/data")
+                        report = source.write(staging / "staging/data/control/result.json", {"status": "unverified"})
+                        original = report.read_bytes()
+                        record = {"scenario": "vc-chain.claude-vc1-capture", "status": "unverified", "report": source.binding(report)}
+                        shell.save_record(staging, record, append=False)
+                        shell.save_record(staging, record)
+                    self.assertTrue(staging.is_dir())
+                    location = source.read(notes / (staging.name + "-location.json"))
+                    self.assertEqual(location["world_root"], str(staging))
+                    self.assertEqual(location["data_root"], str(staging / "staging/data"))
+                    self.assertEqual(location["system_temp_root"], str(actual_temp))
+                    binding = source.read(staging / "record-binding.json")
+                    self.assertEqual(source.bound(binding), staging / "record.json")
+                    self.assertEqual(len(records.read_text().splitlines()), 1)
+                    self.assertEqual(source.bound(source.read(staging / "record.json")["report"]), report)
+                    self.assertEqual(report.read_bytes(), original)
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with shell.staging_directory("vc1-default-") as staging:
+                    full._require_client_staging(staging / "staging/data")
+                self.assertFalse(staging.exists(), "无外部记录配置时保持自动清理")
+
+            # 完整外壳实际调用原 guard；替身仅让 CLI 返回失败，核其子进程 TMPDIR 和未验证原件。
+            notes = root / "full-artifacts"
+            observed = {}
+            original_readlink = os.readlink
+
+            def launch(argv, **kwargs):
+                if argv[-1] == "true":
+                    return subprocess.CompletedProcess(argv, 0, b"", b"")
+                data = Path(argv[argv.index("--data") + 1])
+                full._require_client_staging(data)
+                self.assertEqual(Path(kwargs["env"]["TMPDIR"]).resolve(), actual_temp)
+                self.assertEqual(argv[argv.index("--through") + 1], "VC-6")
+                observed["world"] = data.parents[1]
+                self.addCleanup(shutil.rmtree, observed["world"])
+                return subprocess.CompletedProcess(argv, 1, "完整 CLI 原始输出", "完整 CLI 原始失败")
+
+            with mock.patch.dict(os.environ, {shell.RECORD_DIR_ENV: str(notes),
+                    "TMPDIR": str(root / "not-the-cached-system-temp"),
+                    "CLAUDE_2_1_226_RELAY_FIXTURE": "/fixture/relay", "CLAUDE_2_1_226_FREEZE_FIXTURE": "/fixture/freeze"}, clear=True), \
+                    mock.patch.object(shell.platform, "system", return_value="Linux"), \
+                    mock.patch.object(shell.platform, "machine", return_value="aarch64"), \
+                    mock.patch.object(shell.os, "geteuid", return_value=0), \
+                    mock.patch.object(shell.os, "readlink", side_effect=lambda path, *args, **kwargs:
+                                      "ns:[fixture]" if str(path).startswith("/proc/self/ns/") else original_readlink(path, *args, **kwargs)), \
+                    mock.patch.object(shell.shutil, "which", return_value="/fixture/unshare"), \
+                    mock.patch.object(shell.subprocess, "run", side_effect=launch):
+                with self.assertRaisesRegex(AssertionError, "完整 CLI 原始失败"):
+                    shell.ClaudeRecordedVC1ChainTests()._run_pending_full_validation()
+            world = observed["world"]
+            self.assertEqual(source.read(notes / (world.name + "-location.json"))["world_root"], str(world))
+            record = source.read(world / "record.json")
+            self.assertEqual(record["status"], "unverified")
+            self.assertEqual(record["returncode"], 1)
+            self.assertEqual(source.bound(record["stdout"]).read_text(), "完整 CLI 原始输出")
+            self.assertEqual(source.bound(record["stderr"]).read_text(), "完整 CLI 原始失败")
 
 
 if __name__ == "__main__":
