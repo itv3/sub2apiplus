@@ -2231,6 +2231,61 @@ def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
             raise ConfigurationError(
                 f"交付 {delivery['delivery_id']} 的有效链尚未四阶段全部通过或仍有待消费的阶段失效：先 deliver-candidate run。"
             )
+        if finalized and delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+            # 当前收据签发后，批准对象固定为原封存包。仍完整核当前资格和
+            # 原守卫来源；不重新读 inventory 组包、换来源或重签收据。
+            if len(chain["receipt_refs"]) != 1:
+                raise ConfigurationError("当前交付必须只有一份已签收据，不能推测恢复对象。")
+            receipt_ref = dict(chain["receipt_refs"][0])
+            try:
+                receipt = store_receipts.replay_receipt(context.store, receipt_ref, current_delivery=True)
+                package_ref = dict(receipt["candidate_delivery_package_ref"])
+                package = context.store.load_object(package_ref)["payload"]
+            except ControlError as error:
+                raise ConfigurationError(f"已签交付收据当前重验失败：{error}") from error
+            if (receipt["campaign_id"] != context.campaign_id
+                    or receipt["delivery_plan_ref"] != delivery["plan_ref"]
+                    or package["campaign_id"] != context.campaign_id
+                    or package["delivery_plan_ref"] != delivery["plan_ref"]
+                    or package["delivery_id"] != delivery["delivery_id"]
+                    or package["candidate_id"] != context.candidate_id):
+                raise ConfigurationError("已签交付收据与当前 Campaign、交付计划或候选不一致。")
+            for key in ("candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref",
+                        "acceptance_ref", "candidate_evidence_package_ref"):
+                if package[key] != context.handoff[key]:
+                    raise ConfigurationError(f"已签交付包的 {key} 不是当前 VC-5 交接。")
+            review = {
+                "review_sha256": package["identity_sha256"],
+                "package": package,
+                "private_archive_manifest": context.store.load_object(package["private_archive_manifest_ref"])["payload"],
+                "deployment_configuration": context.store.load_object(package["deployment_configuration_ref"])["payload"],
+                "operational_evidence": [context.store.load_object(reference)["payload"]
+                    for reference in [*package["execution_evidence_refs"], *package["restoration_evidence_refs"]]],
+            }
+            if arguments.approve_sha256 is None:
+                return {
+                    **_summary(context, delivery),
+                    "status": "finalized",
+                    "receipt_refs": chain["receipt_refs"],
+                    "package_review": review,
+                    "stage_result": load_stage_result(context.campaign_dir, context.candidate_id, manifest=context.manifest),
+                }, 0
+            if arguments.approve_sha256 != review["review_sha256"]:
+                raise ConfigurationError("--approve-sha256 与交付包审核摘要不一致：批准的不是这份交付包，请重新查看审核内容。")
+            _require_parent_batch("deliver-candidate finalize --approve-sha256")
+            with _write_scope(context):
+                ledger_events = _catch_up_ledger(context)
+                completion = _complete_vc6(context, delivery, package_ref, receipt_ref)
+            return {
+                **_summary(context, delivery),
+                "status": "finalized",
+                "receipt_ref": receipt_ref,
+                "reused": True,
+                "package_ref": package_ref,
+                "release_state": RELEASE_STATE,
+                "ledger_events": ledger_events,
+                **completion,
+            }, 0
         review = _package_review(context, delivery, chain)
         if arguments.approve_sha256 is None:
             return {

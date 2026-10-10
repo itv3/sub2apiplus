@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 import multiprocessing
 import os
 import tempfile
@@ -308,6 +309,71 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ControlError):
                 self.store.write_receipt_outcome("candidate_delivery", value, allow_existing=True)
         self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [reference])
+
+        # 已签包续作使用同一个活守卫和原 Receipt v4。这里只替换缺少
+        # 编排器 VC 文件的外层坐标入口及完成回调，完整原包/资格重放不替换；
+        # 实际 checkpoint 写入另由既有 Vc6CompletionTests 验证。
+        package = self.store.load_object(package_ref)["payload"]
+        arguments = argparse.Namespace(campaign_dir=self.context.campaign_dir,
+            candidate_id=self.context.candidate_id, delivery_id=None, approve_sha256=None)
+        state_before = guard.read_bytes(self.root / "state.json")
+        identity_before = self.executor._status()["guard_identity"]
+        objects_before = {kind: self.store.list_object_refs(kind) for kind in
+            ("candidate_delivery_package", "private_archive_manifest", "operational_evidence")}
+        original_store = delivery._store
+
+        def read_store(argv):
+            self.assertNotEqual(argv[0], "candidate-delivery-finalize", "已签续作不能重新调用签发器")
+            return original_store(argv)
+
+        with mock.patch.object(delivery, "_resolve", return_value=self.context), \
+                mock.patch.object(delivery, "_package_review", side_effect=AssertionError("已签续作不能重新组包")), \
+                mock.patch.object(delivery, "_store", side_effect=read_store), \
+                mock.patch.object(self.context.session, "seal_object", side_effect=AssertionError("已签续作不能新封存对象")), \
+                mock.patch.object(delivery, "_require_parent_batch") as parent, \
+                mock.patch.object(delivery, "_complete_vc6", return_value={}) as complete:
+            reviewed, code = delivery._finalize(arguments)
+            self.assertEqual((code, reviewed["status"], reviewed["receipt_refs"]), (0, "finalized", [reference]))
+            self.assertEqual(reviewed["package_review"]["package"], package)
+            self.assertEqual(reviewed["package_review"]["review_sha256"], package["identity_sha256"])
+            self.assertIsNone(reviewed["stage_result"])
+            parent.assert_not_called()
+            complete.assert_not_called()
+
+            arguments.approve_sha256 = "f" * 64
+            with self.assertRaisesRegex(delivery.ConfigurationError, "批准的不是这份交付包"):
+                delivery._finalize(arguments)
+            parent.assert_not_called()
+            complete.assert_not_called()
+            arguments.approve_sha256 = package["identity_sha256"]
+            wrong_delivery = deepcopy(self.delivery)
+            wrong_delivery["plan_ref"] = package_ref
+            with mock.patch.object(delivery, "_select_delivery", return_value=wrong_delivery):
+                with self.assertRaisesRegex(delivery.ConfigurationError, "当前 Campaign、交付计划或候选"):
+                    delivery._finalize(arguments)
+            changed_handoff = deepcopy(self.context.handoff)
+            changed_handoff["candidate_evidence_package_ref"] = package_ref
+            with mock.patch.object(self.context, "handoff", changed_handoff):
+                with self.assertRaisesRegex(delivery.ConfigurationError, "candidate_evidence_package_ref.*当前 VC-5"):
+                    delivery._finalize(arguments)
+            with mock.patch.dict(execution.SOURCE_VERIFIERS, {}, clear=True):
+                with self.assertRaises((ControlError, delivery.ConfigurationError)):
+                    delivery._finalize(arguments)
+            parent.assert_not_called()
+            complete.assert_not_called()
+
+            for _ in range(2):
+                finalized, code = delivery._finalize(arguments)
+                self.assertEqual((code, finalized["status"], finalized["reused"]), (0, "finalized", True))
+                self.assertEqual((finalized["receipt_ref"], finalized["package_ref"]), (reference, package_ref))
+                self.assertEqual(complete.call_args, mock.call(self.context, self.delivery, package_ref, reference))
+            self.assertEqual(parent.call_count, 2)
+            self.assertEqual(complete.call_count, 2)
+        self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [reference])
+        self.assertEqual(receipts.replay_receipt(self.store, reference, current_delivery=True), receipt)
+        self.assertEqual({kind: self.store.list_object_refs(kind) for kind in objects_before}, objects_before)
+        self.assertEqual(guard.read_bytes(self.root / "state.json"), state_before)
+        self.assertEqual(self.executor._status()["guard_identity"], identity_before)
 
     def test_package_checks_each_execution_graph_once_per_call(self) -> None:
         self._complete()
