@@ -118,6 +118,12 @@ def save_state(name: str, state: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        # 临时文件已落盘还不等于目录项已持久化；发布后同步父目录，保留断电恢复边界。
+        directory_descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
     finally:
         Path(temporary).unlink(missing_ok=True)
 
@@ -257,7 +263,7 @@ def begin_command(argv: list[Any]) -> dict[str, Any] | None:
     return {'directory': directory, 'invocation_binding': file_cut(path)}
 
 
-def record_command(argv: list[Any], code: int | None, stdout: str, stderr: str,
+def record_command(argv: list[Any], code: int | None, stdout: str | bytes, stderr: str | bytes,
                    *, pending: dict[str, Any] | None = None) -> None:
     """原 run_main 原样保存 stdout/stderr、命令与退出码，摘要不代替输出原件。"""
 
@@ -271,7 +277,7 @@ def record_command(argv: list[Any], code: int | None, stdout: str, stderr: str,
     for label, text in (('stdout', stdout), ('stderr', stderr)):
         path = directory / (label + '.log')
         with path.open('xb') as stream:
-            stream.write(text.encode('utf-8'))
+            stream.write(text if isinstance(text, bytes) else text.encode('utf-8'))
             stream.flush()
             os.fsync(stream.fileno())
         path.chmod(0o600)
@@ -350,6 +356,31 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
     arguments = [str(item) for item in argv]
     name = 'command-step:' + cursor_name + ':' + key
     saved = load_state(name)
+    registry = load_state('command-step-keys')
+    if registry is None:
+        # 此检查仅拒绝清单被删除的旧世界，不从散落文件重建清单或推导命令成果。
+        for path in record_root().glob('*.json'):
+            if len(path.stem) != 64 or any(char not in '0123456789abcdef' for char in path.stem):
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('原命令登记清单缺失且记录路径不可信')
+            envelope = json.loads(path.read_bytes())
+            if envelope.get('payload', {}).get('name', '').startswith('command-step:'):
+                raise ValueError('原命令登记清单已缺失，禁止将旧命令当作首次派发')
+        registry = {'keys': {}}
+    keys = registry.get('keys')
+    if not isinstance(keys, dict):
+        raise ValueError('原命令登记清单损坏')
+    for registered_name, registered in keys.items():
+        original = load_state(registered_name)
+        if (not registered_name.startswith('command-step:') or original is None
+                or registered != {'argv': original.get('argv'), 'campaign': original.get('campaign')}):
+            raise ValueError(f'已登记原命令停点缺失或不一致：{registered_name}；禁止重新派发')
+    expected_registration = {'argv': arguments, 'campaign': campaign}
+    if saved is not None and keys.get(name) != expected_registration:
+        raise ValueError(f'原命令 {key} 缺准确登记清单，禁止承接或追认')
+    if saved is None and name in keys:
+        raise ValueError(f'已登记原命令 {key} 的停点已缺失，禁止重新派发')
     if saved is not None:
         if saved['argv'] != arguments or saved['campaign'] != campaign:
             raise ValueError(f'原命令 {key} 的 argv／Campaign 已改变')
@@ -387,6 +418,10 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
     save_case(case)
     if hasattr(case, 'runtime'):
         save_case(case.runtime, 'candidate-case')
+    # 必须先登记唯一逻辑键，再发布pending，最后才进入原副作用调用。
+    # 两次发布之间中断会具体拒绝，不补造停点，也不重派尚未裁定的动作。
+    keys[name] = expected_registration
+    save_state('command-step-keys', registry)
     save_state(name, pending)
     result = invoke()
     rows = (load_state('command-observations') or {}).get('commands', [])[begin:]

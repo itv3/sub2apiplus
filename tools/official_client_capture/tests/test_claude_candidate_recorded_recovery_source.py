@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from tools.official_client_capture import claude_upgrade_capture as capture
@@ -197,6 +200,44 @@ class CandidateJobAggregationTests(unittest.TestCase):
             driver.aggregate_scenarios(duplicate)
 
     def test_frozen_map_scenario_or_original_source_bytes_cannot_change(self) -> None:
+        # 同一个原UID内核准备交接：这里只验证接缝和真实文件绑定，不冒充原生形成链。
+        stops = driver.stops
+        state_path = source.write(self.data / 'control/short-prepared-state.json', self.state)
+        campaign = self.data / 'control/short-prepared-campaign'
+        campaign.mkdir()
+        continuation = source.write(self.data / 'control/short-continuation.json', {'fixture_only': True})
+        build = source.write(campaign / 'build.json', {'fixture_only': True})
+        checkpoint = source.write(campaign / 'vc4.json', {'fixture_only': True})
+        runtime = source.write(self.data / 'control/full-runtime-source.json', {'build_receipt': source.binding(build)})
+        ready = source.write(self.data / 'control/candidate-recovery-start.json', {
+            'schema_version': driver.PREPARED_SCHEMA, 'fixture_only': True, 'purpose': 'regression_fixture',
+            'scope': 'VC-0→VC-4', 'state': source.binding(state_path), 'continuation': source.binding(continuation),
+            'checkpoint': source.binding(checkpoint), 'build_receipt': source.binding(build),
+            'candidate_id': driver.CANDIDATE, 'candidate_revision': 1, 'runtime_source': source.binding(runtime),
+            'formal_version_semantics_certified': False})
+        prepared = {'state': source.binding(state_path), 'data': self.data, 'phase': 'prepared', 'prepared': source.binding(ready)}
+        with tempfile.TemporaryDirectory() as records, mock.patch.dict(os.environ, {
+                stops.METHOD_RECORD_ENV: records, stops.METHOD_RESUME_ENV: '1'}), \
+                mock.patch.object(source, 'load_state', return_value=self.state), \
+                mock.patch.object(driver, 'installed', return_value=contextlib.nullcontext()), \
+                mock.patch.object(driver.full.vc1, 'load_continuation', return_value={
+                    'data': self.data, 'campaign': campaign, 'manifest': {}}), \
+                mock.patch.object(driver.claude_upgrade, '_vc_campaign_plan', return_value={}), \
+                mock.patch.object(driver.claude_upgrade, '_replay_vc_checkpoint', return_value=(checkpoint, {})) as reader, \
+                mock.patch.object(driver.full.vc1, 'run_chain', side_effect=AssertionError('禁止重新形成VC-0→VC-1')), \
+                mock.patch.object(driver.full, 'classify_and_prepare', side_effect=AssertionError('禁止重新分类')), \
+                mock.patch.object(driver.full, 'build_candidate', side_effect=AssertionError('禁止重新构建')):
+            stops.save_state('candidate-prepare', prepared)
+            self.assertEqual(driver.prepare(state_path, source.binding(state_path)['sha256']), ready)
+            reader.assert_called_once()
+            for phase in ('vc1-started', 'classify-started', 'build-started'):
+                stops.save_state('candidate-prepare', {**prepared, 'phase': phase})
+                with self.assertRaisesRegex(replay.ReplayError, '内部形成动作未闭合'):
+                    driver.prepare(state_path, source.binding(state_path)['sha256'])
+            stops.save_state('candidate-prepare', prepared)
+            runtime.write_bytes(runtime.read_bytes() + b' ')
+            with self.assertRaisesRegex(replay.ReplayError, '摘要或字节数漂移'):
+                driver.prepare(state_path, source.binding(state_path)['sha256'])
         for name in ("original_scenarios", "grouped_scenarios", "grouped_labels", "baseline_scenarios"):
             with self.subTest(name=name):
                 path = source.bound(self.aggregation[name])
@@ -211,6 +252,68 @@ class CandidateJobAggregationTests(unittest.TestCase):
             driver.validate_aggregation(self.state)
 
     def test_wrong_job_whitelist_or_cross_root_frozen_binding_fails_closed(self) -> None:
+        # 执行副本恢复只接受原字节或冻结后继；丢清单、漂移或另写后继均不覆盖现场。
+        stops = driver.stops
+        path = self.data / 'tools/official_client_capture/short-candidate-copy.sh'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'original\n')
+        with tempfile.TemporaryDirectory() as records, mock.patch.dict(os.environ, {
+                stops.METHOD_RECORD_ENV: records, stops.METHOD_RESUME_ENV: ''}):
+            tree = driver.ExecutionToolCopy(self.data)
+            tree.write('official_client_capture/short-candidate-copy.sh', b'changed\n')
+            with mock.patch.dict(os.environ, {stops.METHOD_RESUME_ENV: '1'}):
+                resumed = driver.ExecutionToolCopy(self.data)
+                self.assertEqual(resumed.originals[path], b'original\n')
+                self.assertEqual(path.read_bytes(), b'changed\n')
+                with self.assertRaisesRegex(replay.ReplayError, '演进内容已改变'):
+                    resumed.write('official_client_capture/short-candidate-copy.sh', b'other\n')
+                path.write_bytes(b'drifted\n')
+                with self.assertRaisesRegex(replay.ReplayError, '字节不是原件'):
+                    driver.ExecutionToolCopy(self.data)
+                with self.assertRaisesRegex(replay.ReplayError, '当前字节漂移'):
+                    resumed.write('official_client_capture/short-candidate-copy.sh', b'changed\n')
+                self.assertEqual(path.read_bytes(), b'drifted\n')
+                stops._state_path('candidate-execution-copy').unlink()
+                with self.assertRaisesRegex(replay.ReplayError, '原件清单缺失'):
+                    driver.ExecutionToolCopy(self.data)
+        # 模拟的隔离检查只验恢复接缝：必须挂原来源，不能调用首次建场或复制路径。
+        relay = source.write(self.data.parent / 'short-origin/relay.json', {'fixture_only': True})
+        frozen = self.data.parent / 'short-freeze'
+        frozen.mkdir()
+        site = self.data / 'control/site/sitecustomize.py'
+        site.parent.mkdir(parents=True, exist_ok=True)
+        site.write_text('# 仅验证接缝，不代表原生资格\n', encoding='utf-8')
+        roots = [str(relay.parent), str(frozen)]
+        namespace_state = {**self.state, 'readonly_sources': roots}
+        state_path = source.write(self.data / 'control/short-namespace-state.json', namespace_state)
+        saved = {'state_path': state_path, 'digest': source.binding(state_path)['sha256'],
+            'state_binding': source.binding(state_path), 'data': self.data, 'roots': roots,
+            'site_binding': source.binding(site), 'scenario': 'reconcile-resume'}
+        arguments = SimpleNamespace(data=str(self.data), recorded=str(relay), freeze=str(frozen),
+            parent_namespaces=json.dumps({'mnt': 'original-parent-mnt', 'net': 'original-parent-net'}), scenario='reconcile-resume')
+        with tempfile.TemporaryDirectory() as records, mock.patch.dict(os.environ, {
+                stops.METHOD_RECORD_ENV: records, stops.METHOD_RESUME_ENV: '1'}), \
+                mock.patch.object(source, 'load_state', return_value=namespace_state), \
+                mock.patch.object(source, 'require_isolation') as isolation, \
+                mock.patch.object(driver.subprocess, 'run') as mount, \
+                mock.patch.object(driver, 'run_scenario', return_value={'fixture_only': True}), \
+                mock.patch.object(driver.full.vc1, 'namespace_main', side_effect=AssertionError('禁止重新建场')):
+            stops.save_state('candidate-namespace', saved)
+            self.assertEqual(driver._resume_namespace(arguments, saved), {'fixture_only': True})
+            self.assertEqual([call.args[0] for call in mount.call_args_list], [
+                ['mount', '--make-rprivate', '/'], ['mount', '--bind', roots[0], roots[0]],
+                ['mount', '-o', 'remount,bind,ro', roots[0]], ['mount', '--bind', roots[1], roots[1]],
+                ['mount', '-o', 'remount,bind,ro', roots[1]]])
+            isolation.assert_called_once_with({'parent_namespaces': json.loads(arguments.parent_namespaces), 'readonly_sources': []})
+            mount.reset_mock()
+            site.write_bytes(site.read_bytes() + b' ')
+            with self.assertRaisesRegex(replay.ReplayError, '摘要或字节数漂移'):
+                driver._resume_namespace(arguments, saved)
+            mount.assert_not_called()
+            arguments.scenario = 'tool-evolution'
+            with self.assertRaisesRegex(replay.ReplayError, '恢复坐标或只读来源发生改变'):
+                driver._resume_namespace(arguments, saved)
+            mount.assert_not_called()
         state = copy.deepcopy(self.state)
         state["inputs"]["candidate_jobs"][driver.LIVE_JOB].pop()
         with self.assertRaisesRegex(replay.ReplayError, "白名单"):

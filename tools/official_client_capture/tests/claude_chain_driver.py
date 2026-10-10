@@ -33,6 +33,7 @@ from tools.official_client_capture import codex_upgrade_pre_a3_certification as 
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
 from tools.official_client_capture.tests import claude_chain_diagnostic_budget as diagnostic_budget
+from tools.official_client_capture.tests import claude_fault_chain_world as stops
 from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full
 from tools.official_client_capture.tests import claude_recorded_replay as replay
 from tools.official_client_capture.tests import test_claude_upgrade_candidate_capture as candidate_tests
@@ -245,24 +246,99 @@ def activate() -> None:
 
 
 def prepare(state_path: Path, digest: str) -> Path:
-    """沿用已有真实 VC-0→VC-4 形成链；不预写官方终态或候选准入成功事实。"""
+    """原形成链的明确交接停点；恢复实读已有原件，不重新形成 VC-0→VC-4。"""
 
     state = source.load_state(state_path, digest)
     validate_aggregation(state)
-    first = full.vc1.run_chain(state_path, digest, installer=installed)
-    continuation = first["continuation"]
+    expected = {'state': source.binding(state_path), 'data': Path(state['data_root'])}
+    saved = stops.load_state('candidate-prepare')
+    if saved is not None:
+        if not os.environ.get(stops.METHOD_RESUME_ENV) or any(saved[key] != value for key, value in expected.items()):
+            raise replay.ReplayError('候选原准备停点不是本次来源或恢复入口')
+        if saved['phase'] in {'vc1-started', 'classify-started', 'build-started'}:
+            raise replay.ReplayError(f"候选原准备停在 {saved['phase']}，原内部形成动作未闭合；保留原件，禁止整体重跑或重建")
+        if saved['phase'] == 'prepared':
+            path = source.bound(saved['prepared'], root=expected['data'])
+            prepared_world(state_path, digest, source.binding(path))
+            return path
+    else:
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            raise replay.ReplayError('候选原准备缺明确停点，禁止重新形成 Campaign')
+        saved = {**expected, 'phase': 'vc1-started'}
+        stops.save_state('candidate-prepare', saved)
+        first = full.vc1.run_chain(state_path, digest, installer=installed)
+        saved.update(phase='vc1-complete', continuation=first['continuation'])
+        stops.save_state('candidate-prepare', saved)
+    continuation = saved['continuation']
     with installed(state_path, digest):
         world = full.vc1.load_continuation(source.bound(continuation), continuation["sha256"])
         data, campaign = world["data"], world["campaign"]
-        full.classify_and_prepare(data, campaign)
-        built = full.build_candidate(data, campaign)
-    return source.write(data / "control/candidate-recovery-start.json", {
+        if saved['phase'] == 'vc1-complete':
+            saved['phase'] = 'classify-started'
+            stops.save_state('candidate-prepare', saved)
+            classified = full.classify_and_prepare(data, campaign)
+            saved.update(phase='classified', classified=classified)
+            stops.save_state('candidate-prepare', saved)
+        for key in ('classification', 'profile'):
+            source.bound(saved['classified'][key], root=campaign)
+        claude_upgrade._load_stage_result(campaign, 'classify')
+        claude_upgrade._load_stage_result(campaign, 'stage-profile')
+        if saved['phase'] == 'classified':
+            saved['phase'] = 'build-started'
+            stops.save_state('candidate-prepare', saved)
+            built = full.build_candidate(data, campaign)
+            saved.update(phase='built', built=built)
+            stops.save_state('candidate-prepare', saved)
+        built = saved['built']
+        source.bound(built['build_receipt'], root=campaign)
+        checkpoint, _ = claude_upgrade._replay_vc_checkpoint(campaign, claude_upgrade._vc_campaign_plan(campaign, world['manifest']), 'VC-4', revision=1)
+        if source.bound(built['checkpoint'], root=campaign) != checkpoint:
+            raise replay.ReplayError('候选原准备的 VC-4 checkpoint 漂移')
+    payload = {
         "schema_version": PREPARED_SCHEMA, "fixture_only": True, "purpose": "regression_fixture", "scope": "VC-0→VC-4",
         "state": source.binding(state_path), "continuation": continuation, "build_receipt": built["build_receipt"],
         "checkpoint": built["checkpoint"], "candidate_id": CANDIDATE, "candidate_revision": 1,
         "runtime_source": source.binding(data / "control/full-runtime-source.json"),
         "formal_version_semantics_certified": False,
-    })
+    }
+    path = data / 'control/candidate-recovery-start.json'
+    if path.exists():
+        # 只承接全部原 reader 已闭合、最后一次性写入与局部停点之间的窄窗。
+        if source.read(path) != payload:
+            raise replay.ReplayError('候选原准备收据与真实形成链不一致，禁止覆盖')
+    else:
+        source.write(path, payload)
+    prepared_world(state_path, digest, source.binding(path))
+    saved.update(phase='prepared', prepared=source.binding(path))
+    stops.save_state('candidate-prepare', saved)
+    return path
+
+
+def prepared_world(state_path: Path, digest: str, binding: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """实核原固定起点、来源、Store、VC-4 与构建观察；不创建任何产物。"""
+    state = source.load_state(state_path, digest)
+    data = Path(state['data_root'])
+    ready_path = source.bound(binding, root=data / 'control')
+    ready = source.read(ready_path)
+    if (ready_path != data / 'control/candidate-recovery-start.json'
+            or ready.get('schema_version') != PREPARED_SCHEMA or ready.get('fixture_only') is not True
+            or ready.get('purpose') != 'regression_fixture' or ready.get('scope') != 'VC-0→VC-4'
+            or ready.get('formal_version_semantics_certified') is not False
+            or ready.get('state') != source.binding(state_path)
+            or ready.get('candidate_id') != CANDIDATE or ready.get('candidate_revision') != 1):
+        raise replay.ReplayError('候选恢复起点不是本世界原固定 VC-4')
+    with installed(state_path, digest):
+        continuation = ready['continuation']
+        world = full.vc1.load_continuation(source.bound(continuation, root=data), continuation['sha256'])
+        campaign, manifest = world['campaign'], world['manifest']
+        checkpoint, _ = claude_upgrade._replay_vc_checkpoint(campaign, claude_upgrade._vc_campaign_plan(campaign, manifest), 'VC-4', revision=1)
+        if source.bound(ready['checkpoint'], root=campaign) != checkpoint:
+            raise replay.ReplayError('候选恢复起点原 checkpoint 漂移')
+        runtime_path = source.bound(ready['runtime_source'], root=data)
+        if runtime_path != data / 'control/full-runtime-source.json' or source.read(runtime_path)['build_receipt'] != ready['build_receipt']:
+            raise replay.ReplayError('候选恢复起点原运行观察与构建不同源')
+        source.bound(ready['build_receipt'], root=campaign)
+    return ready, world
 
 
 class ExecutionToolCopy:
@@ -270,12 +346,39 @@ class ExecutionToolCopy:
 
     def __init__(self, data: Path) -> None:
         self.data, self.originals = data, {}
+        saved = stops.load_state('candidate-execution-copy')
+        if saved is not None:
+            if not os.environ.get(stops.METHOD_RESUME_ENV) or saved['data'] != data:
+                raise replay.ReplayError('执行副本原件只允许准确原世界恢复')
+            for row in saved['changes']:
+                path = row['path']
+                if path.resolve() != path or not path.is_relative_to(data / 'tools') or not path.is_file():
+                    raise replay.ReplayError('执行副本恢复坐标不可信')
+                if path.read_bytes() not in (row['before'], row['after']):
+                    raise replay.ReplayError('执行副本字节不是原件或已冻结的本次演进')
+                self.originals[path] = row['before']
+        else:
+            if os.environ.get(stops.METHOD_RESUME_ENV):
+                entry = stops.load_state('candidate-method-entry')
+                if (entry is None or entry.get('status') != 'uninitialized'
+                        or stops.load_state('candidate-vc5-start') is not None):
+                    raise replay.ReplayError('执行副本原件清单缺失，禁止重建或追认旧演进')
+            stops.save_state('candidate-execution-copy', {'data': data, 'changes': []})
 
     def write(self, key: str, content: bytes) -> None:
         path = self.data / "tools" / key
         if path.resolve() != path or not path.is_relative_to(self.data / "tools") or not path.is_file():
             raise replay.ReplayError("演进文件不在本世界执行副本")
         self.originals.setdefault(path, path.read_bytes())
+        saved = stops.load_state('candidate-execution-copy') or {'data': self.data, 'changes': []}
+        previous = next((row for row in saved['changes'] if row['path'] == path), None)
+        if previous is not None and previous['after'] != content:
+            raise replay.ReplayError('同一执行副本演进内容已改变，不能覆盖原停点')
+        if previous is not None and path.read_bytes() not in (previous['before'], previous['after']):
+            raise replay.ReplayError('执行副本当前字节漂移，禁止覆盖原现场')
+        if previous is None:
+            saved['changes'].append({'path': path, 'before': self.originals[path], 'after': content})
+            stops.save_state('candidate-execution-copy', saved)
         path.write_bytes(content)
 
     def restore(self) -> None:
@@ -332,21 +435,47 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
         recorded, frozen = os.environ.get("CLAUDE_2_1_226_RELAY_FIXTURE"), os.environ.get("CLAUDE_2_1_226_FREEZE_FIXTURE")
         if not recorded or not frozen:
             raise replay.ReplayError("候选 B 组需要显式历史 relay 与 freeze；不允许回落 fake_admission")
+        entry_name = 'candidate-entry:' + scenario
+        expected = {'data': self.data, 'scenario': scenario, 'recorded': recorded, 'freeze': frozen}
+        previous = stops.load_state(entry_name)
+        if previous is not None:
+            if not os.environ.get(stops.METHOD_RESUME_ENV) or any(previous[key] != value for key, value in expected.items()):
+                raise replay.ReplayError('候选原入口参数或原世界坐标已改变')
+            if stops.load_state('candidate-namespace') is None:
+                raise replay.ReplayError('候选原 namespace 初始化未闭合；保留原坐标，禁止重建')
+            for segment in previous['segments']:
+                for field in ('stdout', 'stderr', 'command_binding', 'invocation_binding'):
+                    stops.read_cut(segment[field])
+        else:
+            previous = {**expected, 'segments': []}
+            stops.save_state(entry_name, previous)
+        pending = None
         command = ["unshare", "-m", "-n", sys.executable, "-B", "-m", ACTIVATION_MODULE,
             "--data", str(self.data), "--recorded", recorded, "--freeze", frozen, "--scenario", scenario,
             "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
         # 内层共用本方法的独立预算；留一分钟给外层收日志与清理，不能遗留旧 850 秒截断。
         method_seconds = (diagnostic_budget.diagnostic_seconds() or
                           certification.claude_fault_time_budget("vc-chain.claude-recovery-chain")["method_timeout_seconds"])
+        pending = stops.begin_command(command)
         try:
             completed = subprocess.run(command, cwd=full.vc1.REPOSITORY, capture_output=True, text=True,
                                        timeout=method_seconds - 60, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         except subprocess.TimeoutExpired as error:
-            for name, raw in (("stdout.log", error.stdout or b""), ("stderr.log", error.stderr or b"")):
-                (self.root / name).write_bytes(raw.encode() if isinstance(raw, str) else raw)
+            stops.record_command(command, None, error.stdout or b'', error.stderr or b'', pending=pending)
+            if stops.record_root() is None:
+                for name, raw in (("stdout.log", error.stdout or b""), ("stderr.log", error.stderr or b"")):
+                    (self.root / name).write_bytes(raw.encode() if isinstance(raw, str) else raw)
+            else:
+                previous['segments'].append(stops.load_state('command-observations')['commands'][-1])
+                stops.save_state(entry_name, previous)
             raise
-        (self.root / "stdout.log").write_text(completed.stdout, encoding="utf-8")
-        (self.root / "stderr.log").write_text(completed.stderr, encoding="utf-8")
+        stops.record_command(command, completed.returncode, completed.stdout, completed.stderr, pending=pending)
+        if stops.record_root() is None:
+            (self.root / "stdout.log").write_text(completed.stdout, encoding="utf-8")
+            (self.root / "stderr.log").write_text(completed.stderr, encoding="utf-8")
+        else:
+            previous['segments'].append(stops.load_state('command-observations')['commands'][-1])
+            stops.save_state(entry_name, previous)
         self.assertEqual(completed.returncode, 0, completed.stderr[-12000:] + completed.stdout[-12000:])
         result = source.read(self.data / "control/candidate-recovery-case-result.json")
         self.assertEqual(result["status"], "passed")
@@ -362,45 +491,47 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
         return self.source_context()
 
     def candidate_world(self) -> Path:
-        """只消费同一世界已由真实命令形成的 VC-4 起点、官方封存、Store 和两本账。"""
-
-        state = source.load_state(self.state_path, self.state_digest)
-        ready_path = source.bound(json.loads(os.environ[PREPARED_ENV]), root=self.data / "control")
-        if ready_path != self.data / "control/candidate-recovery-start.json":
-            raise replay.ReplayError("候选恢复起点不是本世界的固定路径")
-        ready = source.read(ready_path)
-        if (ready.get("schema_version") != PREPARED_SCHEMA or ready.get("fixture_only") is not True
-                or ready.get("purpose") != "regression_fixture" or ready.get("scope") != "VC-0→VC-4"
-                or ready.get("formal_version_semantics_certified") is not False or ready.get("state") != source.binding(self.state_path)
-                or ready.get("candidate_id") != CANDIDATE or ready.get("candidate_revision") != 1):
-            raise replay.ReplayError("候选恢复起点不是本次录制世界的真实 VC-4")
+        """重绑原 VC-4 起点及原账本；VC-5 开始事件只能追加一次，恢复逐字重验。"""
+        binding = json.loads(os.environ[PREPARED_ENV])
+        ready, world = prepared_world(self.state_path, self.state_digest, binding)
+        campaign, manifest = world['campaign'], world['manifest']
         with self.source_context():
-            continuation = ready["continuation"]
-            world = full.vc1.load_continuation(source.bound(continuation, root=self.data), continuation["sha256"])
-            campaign, manifest = world["campaign"], world["manifest"]
-            checkpoint, _ = claude_upgrade._replay_vc_checkpoint(campaign, claude_upgrade._vc_campaign_plan(campaign, manifest), "VC-4", revision=1)
-            if source.bound(ready["checkpoint"], root=campaign) != checkpoint:
-                raise replay.ReplayError("候选恢复起点 checkpoint 坐标漂移")
-            runtime_path = source.bound(ready["runtime_source"], root=self.data)
-            if runtime_path != self.data / "control/full-runtime-source.json":
-                raise replay.ReplayError("候选观察来源不是本世界固定路径")
-            runtime_source = source.read(runtime_path)
-            if runtime_source["build_receipt"] != ready["build_receipt"]:
-                raise replay.ReplayError("候选运行观察与本次真实构建来源不符")
-            source.bound(ready["build_receipt"], root=campaign)
             self.ledger_dir = claude_upgrade._campaign_timing_ledger_dir(campaign, manifest)
-            self.project_root = project.find_project_ledger(campaign, client="claude")
-            self.tool_identity = manifest["tool_identity"]
-            self.tool_copy = self.data / "tools/official_client_capture"
+            self.project_root = project.find_project_ledger(campaign, client='claude')
+            self.tool_identity = manifest['tool_identity']
+            self.tool_copy = self.data / 'tools/official_client_capture'
             self.tree = ExecutionToolCopy(self.data)
-            self.failures_file = self.data / "control/candidate-recovery/failures.json"
-            self.call_log = self.data / "control/candidate-recovery/calls.jsonl"
-            head = timing.phase_ledger_state(self.ledger_dir)
-            if head["active_phase"] is None and head["completed_phases"][-1:] == ["VC-4"]:
-                timing.append_event(self.ledger_dir, event_id="recorded-candidate-recovery-vc5-start", phase="VC-5",
-                    event_type="stage_started", next_action="真实录制候选恢复首批开始", receipts=[])
+            self.failures_file = self.data / 'control/candidate-recovery/failures.json'
+            self.call_log = self.data / 'control/candidate-recovery/calls.jsonl'
+            expected = {'campaign': campaign, 'ready_binding': binding, 'state_binding': source.binding(self.state_path)}
+            saved = stops.load_state('candidate-vc5-start')
+            if saved is not None:
+                if not os.environ.get(stops.METHOD_RESUME_ENV) or any(saved[key] != value for key, value in expected.items()):
+                    raise replay.ReplayError('候选原阶段停点与本次世界不一致')
+                if saved['status'] == 'complete':
+                    stops.read_cut(saved['event_binding'])
             else:
-                raise replay.ReplayError("候选恢复起点时间账不是已完成 VC-4 的原账本")
+                head = timing.phase_ledger_state(self.ledger_dir)
+                if head['active_phase'] is not None or head['completed_phases'][-1:] != ['VC-4']:
+                    raise replay.ReplayError('候选原起点时间账不是已完成 VC-4 的原账本')
+                saved = {**expected, 'status': 'pending'}
+                stops.save_state('candidate-vc5-start', saved)
+                timing.append_event(self.ledger_dir, event_id='recorded-candidate-recovery-vc5-start', phase='VC-5',
+                    event_type='stage_started', next_action='真实录制候选恢复首批开始', receipts=[])
+            rows = [(event, raw) for event, raw in timing._load_events(self.ledger_dir)
+                    if event['event_id'] == 'recorded-candidate-recovery-vc5-start']
+            if len(rows) != 1 or rows[0][0]['event_type'] != 'stage_started' or rows[0][0]['phase'] != 'VC-5':
+                raise replay.ReplayError('候选原 VC-5 开始事件缺失或多义，禁止补写或重置阶段')
+            paths = [path for path in (self.ledger_dir / 'events').glob('*.json') if path.read_bytes() == rows[0][1]]
+            if len(paths) != 1:
+                raise replay.ReplayError('候选原 VC-5 开始事件原件不唯一')
+            if saved['status'] == 'pending':
+                saved.update(status='complete', event_binding=stops.file_cut(paths[0]))
+                stops.save_state('candidate-vc5-start', saved)
+            elif saved['event_binding'] != stops.file_cut(paths[0]):
+                raise replay.ReplayError('候选原 VC-5 停点未绑定唯一的原账本事件')
+            self.campaign = campaign
+            stops.save_case(self)
         self.assert_recorded_sources_untouched()
         return campaign
 
@@ -487,10 +618,17 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
         if not cases._records_complete([record], [record["scenario"]]):
             raise replay.ReplayError("候选录制恢复场景未完成六项真实检查")
         facts = self.assert_recorded_sources_untouched()
-        source.write(self.data / "control/candidate-recovery-case-result.json", {
+        payload = {
             "status": "passed", "scenario_method": self._testMethodName, "source": facts, "audit": record,
             "registered_chains": [], "full_vc0_vc6_certified": False,
-        })
+        }
+        path = self.data / 'control/candidate-recovery-case-result.json'
+        if path.exists():
+            if not os.environ.get(stops.METHOD_RESUME_ENV) or source.read(path) != payload:
+                raise replay.ReplayError('候选原六项审计结果已存在但不一致，禁止覆盖或追认')
+            source.binding(path)
+        else:
+            source.write(path, payload)
 
 
 def run_scenario(state_path: Path, digest: str, scenario: str) -> dict[str, Any]:
@@ -498,11 +636,22 @@ def run_scenario(state_path: Path, digest: str, scenario: str) -> dict[str, Any]
     from tools.official_client_capture.tests.real_chains import test_claude_upgrade_fault_chains as cases
 
     data = Path(source.load_state(state_path, digest)["data_root"])
+    entry = stops.load_state('candidate-method-entry')
+    if entry is None:
+        if os.environ.get(stops.METHOD_RESUME_ENV) and (
+                stops.load_state('candidate-vc5-start') is not None
+                or any(stops.load_state('cursor:' + name) is not None for name in ('candidate-reconcile', 'candidate-evolution'))):
+            raise replay.ReplayError('候选原方法交接停点已缺失，禁止重新授予首次进入许可')
+        stops.save_state('candidate-method-entry', {'method': SCENARIO_METHODS[scenario], 'status': 'uninitialized'})
+    elif entry['method'] != SCENARIO_METHODS[scenario]:
+        raise replay.ReplayError('候选原方法交接身份发生改变')
     output = io.StringIO()
     with mock.patch.dict(os.environ, {PREPARED_ENV: json.dumps(source.binding(prepared))}):
         result = unittest.TextTestRunner(stream=output, verbosity=2).run(unittest.TestSuite([
             cases._CandidateFaultScenarios(SCENARIO_METHODS[scenario])]))
-    path = source.write(data / "control/candidate-recovery-test-run.json", {
+    log_path = (Path(tempfile.mkdtemp(prefix='candidate-test-run-', dir=data / 'control')) / 'test-run.json'
+                if stops.record_root() is not None else data / 'control/candidate-recovery-test-run.json')
+    path = source.write(log_path, {
         "fixture_only": True, "purpose": "regression_fixture", "scenario": scenario,
         "tests_run": result.testsRun, "skipped": len(result.skipped), "errors": len(result.errors),
         "failures": len(result.failures), "output": output.getvalue(),
@@ -512,6 +661,44 @@ def run_scenario(state_path: Path, digest: str, scenario: str) -> dict[str, Any]
     return source.read(data / "control/candidate-recovery-case-result.json")
 
 
+def _namespace_handoff(state_path: Path, digest: str, scenario: str) -> dict[str, Any]:
+    """原 namespace 初始化完成后立即绑定原state/site；仅保存坐标，不签运行通过。"""
+    state = source.load_state(state_path, digest)
+    value = {'state_path': state_path, 'digest': digest, 'state_binding': source.binding(state_path),
+             'data': Path(state['data_root']), 'roots': state['readonly_sources'],
+             'site_binding': source.binding(Path(state['data_root']) / 'control/site/sitecustomize.py'), 'scenario': scenario}
+    previous = stops.load_state('candidate-namespace')
+    if previous is not None:
+        if previous != value or not os.environ.get(stops.METHOD_RESUME_ENV):
+            raise replay.ReplayError('候选原 namespace 交接身份或来源发生改变')
+    else:
+        stops.save_state('candidate-namespace', value)
+    return run_scenario(state_path, digest, scenario)
+
+
+def _resume_namespace(arguments: argparse.Namespace, saved: dict[str, Any]) -> dict[str, Any]:
+    """新的真实断网namespace只重挂原只读来源，绑定原state/site/数据根；不复制或建场。"""
+    data = Path(arguments.data).resolve(strict=True)
+    roots = [str(Path(arguments.recorded).resolve().parent), str(Path(arguments.freeze).resolve())]
+    if (data != saved['data'] or roots != saved['roots'] or saved.get('scenario') != arguments.scenario
+            or source.bound(saved['state_binding']) != saved['state_path']):
+        raise replay.ReplayError('候选 namespace 恢复坐标或只读来源发生改变')
+    source.bound(saved['site_binding'], root=data)
+    source.load_state(saved['state_path'], saved['digest'], isolation=False)
+    parent_namespaces = json.loads(arguments.parent_namespaces)
+    source.require_isolation({'parent_namespaces': parent_namespaces, 'readonly_sources': []})
+    subprocess.run(['mount', '--make-rprivate', '/'], check=True)
+    for root in roots:
+        subprocess.run(['mount', '--bind', root, root], check=True)
+        subprocess.run(['mount', '-o', 'remount,bind,ro', root], check=True)
+    source.load_state(saved['state_path'], saved['digest'])
+    from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
+    with mock.patch.dict(os.environ, {source.STATE_ENV: str(saved['state_path']), source.DIGEST_ENV: saved['digest'],
+            FIXTURE_ONLY_ENV: '1', 'PYTHONDONTWRITEBYTECODE': '1',
+            'PYTHONPATH': os.pathsep.join([str(data / 'control/site'), str(full.vc1.REPOSITORY)])}):
+        return _namespace_handoff(saved['state_path'], saved['digest'], arguments.scenario)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="隔离录制候选 B 组恢复场景；不签正式认证")
     for name in ("data", "recorded", "freeze", "parent-namespaces"):
@@ -519,8 +706,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scenario", choices=sorted(SCENARIO_METHODS), required=True)
     arguments = parser.parse_args(argv)
     try:
-        result = full.vc1.namespace_main(arguments, inputs_builder=inputs,
-            chain_runner=lambda path, digest: run_scenario(path, digest, arguments.scenario), activation_module=ACTIVATION_MODULE)
+        saved = stops.load_state('candidate-namespace')
+        if saved is not None:
+            if not os.environ.get(stops.METHOD_RESUME_ENV):
+                raise replay.ReplayError('候选旧 namespace 只允许原恢复入口重绑')
+            result = _resume_namespace(arguments, saved)
+        else:
+            if os.environ.get(stops.METHOD_RESUME_ENV):
+                raise replay.ReplayError('候选原 namespace 缺完整交接停点，禁止重建')
+            result = full.vc1.namespace_main(arguments, inputs_builder=inputs,
+                chain_runner=lambda path, digest: _namespace_handoff(path, digest, arguments.scenario), activation_module=ACTIVATION_MODULE)
     except BaseException as error:
         traceback.print_exc()
         print(json.dumps({"status": "unverified", "fixture_only": True, "registered_chains": [], "error": str(error)}, ensure_ascii=False))

@@ -1262,6 +1262,16 @@ class AttemptFactsTests(unittest.TestCase):
             stops.checkpoint(first, 'audit-short', phase='audit', audit_snapshots={'原短验审计': 'recorded'})
             stops.checkpoint(first, 'audit-short', phase='after', audit_snapshots={'原短验审计': 'uninitialized'})
             self.assertEqual(stops.load_state('cursor:audit-short')['audit_snapshots'], {'原短验审计': 'recorded'})
+            # 文件发布后必须同步目录项，断电窗口不能只依赖临时文件的fsync。
+            import stat
+            sync_kinds = []
+            original_fsync = os.fsync
+            def tracked_fsync(descriptor):
+                sync_kinds.append(stat.S_ISDIR(os.fstat(descriptor).st_mode))
+                original_fsync(descriptor)
+            with mock.patch.object(stops.os, 'fsync', side_effect=tracked_fsync):
+                stops.save_state('publish-short', {'original': True})
+            self.assertEqual(sync_kinds, [False, True])
             # 后续阶段尚未首次建场必须由原阶段游标精确允许；曾开始却丢停点仍拒绝。
             stops.save_state('cursor:future-stage', {'phase': 'before-fixture',
                 'initializations': {'fixture:future': 'uninitialized'}})
@@ -1298,6 +1308,23 @@ class AttemptFactsTests(unittest.TestCase):
                 self.assertEqual(stops.command_step(first, 'command-short', 'cursor-gap', command,
                     lambda: self.fail('有完整原输出的cursor窄窗口不得重发')), expected)
                 self.assertEqual(len(calls), 3)
+                # 清单与停点分别丢失均具体拒绝；不能把已派发命令变成首次命令。
+                key_path = stops._state_path('command-step:command-short:first')
+                key_raw = key_path.read_bytes()
+                key_path.unlink()
+                with self.assertRaisesRegex(ValueError, '停点缺失'):
+                    stops.command_step(first, 'command-short', 'first', command,
+                        lambda: self.fail('已登记停点丢失不得重发'))
+                key_path.write_bytes(key_raw)
+                registry_path = stops._state_path('command-step-keys')
+                registry_raw = registry_path.read_bytes()
+                registry_path.unlink()
+                for key in ('first', 'new-after-deleted-index'):
+                    with self.assertRaisesRegex(ValueError, '登记清单已缺失'):
+                        stops.command_step(first, 'command-short', key, command,
+                            lambda: self.fail('独立清单丢失不得重建或重发'))
+                registry_path.write_bytes(registry_raw)
+                self.assertEqual(len(calls), 3)
                 row = stops.load_state('command-step:command-short:first')['command']
                 output = row['stdout']['path']
                 raw = output.read_bytes()
@@ -1305,9 +1332,10 @@ class AttemptFactsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '原件切点'):
                     stops.command_step(first, 'command-short', 'first', command, lambda: None)
                 output.write_bytes(raw)
-                stops.save_state('command-step:command-short:pending', {'status': 'pending',
-                    'argv': command, 'campaign': None, 'observation_begin': 3,
-                    'observation_prefix': stops.load_state('command-observations')['commands']})
+                def interrupted_call():
+                    raise RuntimeError('原动作中断')
+                with self.assertRaisesRegex(RuntimeError, '原动作中断'):
+                    stops.command_step(first, 'command-short', 'pending', command, interrupted_call)
                 with self.assertRaisesRegex(ValueError, 'COMMIT／Store／收据'):
                     stops.command_step(first, 'command-short', 'pending', command,
                         lambda: self.fail('未决动作不得重发'))
