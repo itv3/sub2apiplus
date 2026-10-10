@@ -51,7 +51,7 @@ class CandidateMacClientServices:
         self._closed: set[str] = set()
 
     def _source(self, task: Mapping[str, Any]) -> Any:
-        adapter = contract.SOURCE_ADAPTERS.get(task["execution"]["recorder_id"])
+        adapter = contract.source_adapter(task)
         contract.require(adapter is not None, "真实 Mac 来源未登记，候选服务零启动拒绝")
         owns = getattr(adapter, "owns_services", None)
         contract.require(callable(owns) and owns(self), "候选服务不属于静态登记的真实来源")

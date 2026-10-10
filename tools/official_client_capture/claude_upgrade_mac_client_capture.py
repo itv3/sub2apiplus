@@ -30,7 +30,7 @@ class CandidateClientServices(Protocol):
 
 
 def _adapter(task: Mapping[str, Any]) -> Any:
-    adapter = c.SOURCE_ADAPTERS.get(task["execution"]["recorder_id"])
+    adapter = c.source_adapter(task)
     c.require(adapter is not None, "真实来源适配器尚未登记；client-run 保持关闭")
     return adapter
 

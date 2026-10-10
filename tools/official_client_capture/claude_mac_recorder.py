@@ -70,7 +70,7 @@ def record_product(task: Mapping[str, Any], bundle_root: Path, *, recorder: Prod
     """
     task = source.validate_task_v2(task)
     root = Path(bundle_root)
-    adapter = c.SOURCE_ADAPTERS.get(task["execution"]["recorder_id"])
+    adapter = c.source_adapter(task)
     c.require(adapter is not None and callable(getattr(adapter, "owns_recorder", None)) and adapter.owns_recorder(recorder), "记录器不属于受管静态来源")
     source.verify_reservation_v2(task, Path(task["execution"]["capture_root"]))
     recipe = isolation_recipe(task, root)

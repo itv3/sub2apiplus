@@ -442,7 +442,7 @@ def collect_independent_requests_v2(task: Mapping[str, Any], capture_root: Path)
     validate_task_v2(task)
     root = Path(capture_root)
     verify_reservation_v2(task, root)
-    adapter = c.SOURCE_ADAPTERS.get(task["execution"]["recorder_id"])
+    adapter = c.source_adapter(task)
     c.require(adapter is not None and callable(getattr(adapter, "verify_capture_origin", None)), "独立捕获受管来源尚未登记")
     adapter.verify_capture_origin(task, root)
     capture = _fields(c.read_json(c.secure_file(root, "capture-manifest.json")), {"schema_version", "task_sha256", "capture_id", "producer_run_id", "candidate", "endpoint", "status", "requests", "connections", "transport_map", "reservation", "ready", "source_origin"}, "未导入独立捕获清单")
@@ -480,8 +480,14 @@ def collect_independent_requests_v2(task: Mapping[str, Any], capture_root: Path)
     return {"requests": requests, "auxiliary_requests": auxiliary}
 
 
-def verify_isolation_recipe_v2(task: Mapping[str, Any], bundle_root: Path) -> dict[str, Any]:
-    """隔离支持来自官方原件和已验收来源适配器，不能依据计划字面猜参数。"""
+def verify_isolation_recipe_v2(task: Mapping[str, Any], bundle_root: Path, *,
+                               bridge_context: Any = None) -> dict[str, Any]:
+    """核验原隔离合同；跨机路径只接受固定桥认证过的原件映射。
+
+    任务和 recipe 始终保留 ARM64 冻结的原字节。普通来源继续要求会话属于
+    当前 run；固定正式桥在 Mac 上使用经过认证的物理目录，读侧重验原 mapping，
+    不接受外部 dataclass、任意转根或改写后的 recipe 冒充同一个任务。
+    """
     validate_task_v2(task)
     root = Path(bundle_root)
     recipe = c.read_json(c.bound_file(root, task["execution"]["isolation_recipe"]))
@@ -491,8 +497,27 @@ def verify_isolation_recipe_v2(task: Mapping[str, Any], bundle_root: Path) -> di
     c.bound_file(root, recipe["official_support"])
     session_root = Path(str(recipe["private_session_root"]))
     c.require_plain_path(session_root)
-    c.require(session_root.is_relative_to(root.parent) and isinstance(recipe["state_paths"], list) and bool(recipe["state_paths"]) and all(Path(str(value)).is_absolute() for value in recipe["state_paths"]), "私有会话目录或原状态位置未冻结")
-    adapter = c.SOURCE_ADAPTERS.get(task["execution"]["recorder_id"])
+    adapter = c.source_adapter(task)
     c.require(adapter is not None and callable(getattr(adapter, "verify_isolation_recipe", None)), "真实产品隔离方法尚未验收；禁止猜启动参数")
+    c.require(isinstance(recipe["state_paths"], list) and bool(recipe["state_paths"])
+              and all(Path(str(value)).is_absolute() and ".." not in Path(str(value)).parts
+                      for value in recipe["state_paths"]), "原状态位置未完整冻结")
+    fixed_bridge = (task["execution"]["recorder_id"] == c.MANAGED_RECORDER_ID
+                    and task["execution"]["source_scope"] == "formal")
+    if fixed_bridge:
+        from tools.official_client_capture import claude_mac_agent_bridge as bridge
+
+        if bridge_context is None:
+            verify_context = getattr(adapter, "verify_bridge_path_context", None)
+            c.require(callable(verify_context), "固定正式来源缺路径映射验证入口")
+            bridge_context = verify_context(task, root)
+        physical_session = bridge.validate_bridge_path_context(task, bridge_context, bundle_root=root)
+        c.require(str(bridge_context.logical_session_root) == str(session_root)
+                  and set(bridge_context.state_paths) == set(recipe["state_paths"]),
+                  "路径映射未绑定原私有会话与状态路径全集")
+        c.require_plain_path(Path(physical_session))
+    else:
+        c.require(bridge_context is None, "普通来源不得消费跨机路径映射权限")
+        c.require(session_root.is_relative_to(root.parent), "私有会话目录未冻结在原 run")
     adapter.verify_isolation_recipe(task, recipe, root)
     return recipe

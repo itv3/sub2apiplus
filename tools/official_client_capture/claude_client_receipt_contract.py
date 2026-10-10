@@ -1,7 +1,7 @@
 """Mac 客户端任务、来源包与收据的离线合同。
 
 摘要证明完整性，来源适配器证明材料取得方式；两者都通过才允许正式引用。
-产品记录器尚未交付，因此正式来源登记表默认为空。历史材料可以离线审计，但不能
+正式来源登记表默认为空；固定实现只在两端受管安装实际验真后登记。历史材料可以离线审计，但不能
 只靠客户端名、Header 或自报 success 变成正式客户端证据。所有读侧重放同一入口。
 """
 
@@ -35,6 +35,7 @@ COORDINATES = ("campaign_id", "candidate_id", "attempt_id", "run_nonce")
 # 名称 → 实现 verify_origin(task, bundle_root, capture_root) 的受管来源适配器。
 # 不提供从命令行动态导入模块的后门；真实 recorder 落地时须经受管源码登记。
 SOURCE_ADAPTERS: dict[str, Any] = {}
+MANAGED_RECORDER_ID = "claude-mac-managed-products-v2"
 TASK_FIELDS = frozenset({"schema_version", "client_id", *COORDINATES, "candidate_revision", "candidate", "catalog", "client_artifacts", "scenarios", "scenario_reuse", "execution", "issued_at_utc", "task_nonce", "task_sha256"})
 
 
@@ -49,6 +50,29 @@ def digest(value: Any) -> str:
 def require(condition: Any, message: str) -> None:
     if not condition:
         raise ConfigurationError(f"Mac 客户端证据：{message}")
+
+
+def source_adapter(task: Mapping[str, Any]) -> Any:
+    """统一取得静态来源；固定正式实现须先只读验证两端安装。
+
+    导入合同不会自动登记来源，也不接收模块名、命令或工厂回调。未知名称沿用
+    原登记合同；夹具不能借用固定正式名称取得启动权。已登记实例的运行归属、
+    当前安装与原件仍由每个消费端的来源方法实际重验，不能凭本字典授权。
+    """
+    name = str(task["execution"]["recorder_id"])
+    if name != MANAGED_RECORDER_ID:
+        return SOURCE_ADAPTERS.get(name)
+    if task["execution"]["source_scope"] != "formal":
+        return None
+    adapter = SOURCE_ADAPTERS.get(name)
+    if adapter is None:
+        from tools.official_client_capture import claude_mac_managed_source
+
+        qualified = claude_mac_managed_source.load_registered_source(task)
+        require(SOURCE_ADAPTERS.get(name) in (None, qualified), "固定来源登记在安装核验期间被替换")
+        SOURCE_ADAPTERS[name] = qualified
+        adapter = qualified
+    return adapter
 
 
 def require_plain_path(path: Path) -> None:
@@ -340,7 +364,7 @@ def _verify_client_bundle_v1(task: Mapping[str, Any], bundle_root: Path, candida
 def verify_origin(task: Mapping[str, Any], bundle_root: Path, capture_root: Path) -> None:
     """正式材料还须经已登记来源适配器验证。默认没有任何真实 recorder。"""
     name = str(task["execution"]["recorder_id"])
-    adapter = SOURCE_ADAPTERS.get(name)
+    adapter = source_adapter(task)
     require(adapter is not None, f"真实来源适配器尚未登记：{name}；离线结构通过不能签发真机成功")
     adapter.verify_origin(task, Path(bundle_root), Path(capture_root))
 

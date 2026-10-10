@@ -97,7 +97,7 @@ def _prepare_locked(campaign_dir: Path, candidate_id: str, attempt_id: str, clie
     contract.validate_task(task)
     _require_unique_task_producer(campaign_dir, task)
     if task["execution"]["source_scope"] == "formal":
-        contract.require(task["execution"]["recorder_id"] in contract.SOURCE_ADAPTERS, "真实 Mac recorder/独立捕获来源尚未登记；不能预约正式客户端运行")
+        contract.require(contract.source_adapter(task) is not None, "真实 Mac recorder/独立捕获来源尚未登记；不能预约正式客户端运行")
         from tools.official_client_capture import codex_upgrade_project_ledger as ledger
         contract.require(ledger.find_project_ledger(campaign_dir) == Path(task["execution"]["project_ledger"]), "任务项目总账不是本 Campaign 的总账")
         ledger.assert_campaign_admitted(campaign_dir, command="campaign-run", require=True)
