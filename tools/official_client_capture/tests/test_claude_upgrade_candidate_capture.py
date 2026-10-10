@@ -180,6 +180,11 @@ class CandidateFixture(capture_tests.CaptureFixture):
 
     def setUp(self) -> None:
         super().setUp()
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            if not stops.restore_case(self, 'candidate-case'):
+                raise ValueError('原候选夹具缺少值字段停点')
+            return
         relay = self.tool_copy / "claude_fw_e_relay.py"
         relay.write_text(CANDIDATE_RELAY, encoding="utf-8")
         wrapper = self.tool_copy / plan.CANDIDATE_SCRIPT
@@ -204,6 +209,7 @@ class CandidateFixture(capture_tests.CaptureFixture):
             "event_type": "claude_profile_observed", "event_id": "a" * 64, "profile_mode": "validation_candidate",
             "claude_version": capture_tests.TARGET, "profile_digest": "d" * 64, "image_id": SERVICE_IMAGE_ID,
         }
+        stops.save_case(self, 'candidate-case')
 
     def set_candidate_control(self, control: dict) -> None:
         self.candidate_control.write_text(json.dumps(control), encoding="utf-8")

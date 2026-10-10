@@ -90,9 +90,15 @@ if _ACTION and os.environ.get("{supervisor.CAMPAIGN_RUN_ACTION_ID_ENV}") == _ACT
 
 
 def run_main(argv: list[str]) -> tuple[int, dict | None, str]:
+    from tools.official_client_capture.tests import claude_fault_chain_world as stops
+    pending = stops.begin_command(argv)
     stdout, stderr = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        code = claude_upgrade.main([str(item) for item in argv])
+    code = None
+    try:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = claude_upgrade.main([str(item) for item in argv])
+    finally:
+        stops.record_command(argv, code, stdout.getvalue(), stderr.getvalue(), pending=pending)
     text = stdout.getvalue()
     return code, (json.loads(text) if text.strip() else None), stderr.getvalue()
 
@@ -530,15 +536,19 @@ class _RealTreeBatchCase(_VC2Mixin, profile_tests._ProfileCase):
         pass
 
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name).resolve()
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        self.root, restoring = stops.fixture_directory(self, 'batch')
         self.data = self.root / "data"
-        (self.data / "evidence" / "campaigns").mkdir(parents=True, mode=0o700)
+        if not restoring:
+            (self.data / "evidence" / "campaigns").mkdir(parents=True, mode=0o700)
         # 零请求离线夹具：父 run 不要求运行时出口准入（动作本身不发请求）。
         egress = runtime_egress_fixtures.offline_campaign_egress()
         egress.__enter__()
         self.addCleanup(egress.__exit__, None, None, None)
+        if restoring and not stops.restore_case(self):
+            raise ValueError('原批次夹具缺少值字段停点')
+        if not restoring:
+            stops.save_case(self)
 
     def build_batch_campaign(self, *, vc1_sealed: bool = True, predecessor: dict[str, Any] | None = None) -> Path:
         """分类夹具（VC-0／VC-1 已封存，VC-1 为只读复用前序证据的形态：本 Campaign 没有官方 attempt）＋ VC-0 交接链首批（零请求

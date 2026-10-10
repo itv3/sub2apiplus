@@ -32,6 +32,7 @@ from tools.official_client_capture import claude_upgrade_store
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests.test_claude_real_delivery_integration import DeliveryCampaign, QualifiedFileRuntime, fixture_projection
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
+from tools.official_client_capture.tests import claude_fault_chain_world as stops
 from tools.official_client_control import delivery_execution as execution
 from tools.official_client_control.canonical import canonical_sha256, sha256_bytes, sha256_file
 
@@ -616,6 +617,20 @@ class TypedDeliveryFixture:
     def __init__(self, campaign: Path, candidate_id: str, *, control_path: Path | None = None):
         self.campaign = campaign.resolve(strict=True)
         self.candidate_id = candidate_id
+        self.process: multiprocessing.Process | None = None
+        self.recorded_pid: int | None = None
+        self.saved_guard_identity: dict[str, Any] | None = None
+        self.restored_guard = False
+        self.retained = stops.record_root() is not None
+        self.record_name = 'typed-vc6:' + str(self.campaign)
+        saved = stops.load_state(self.record_name)
+        if saved is not None:
+            if not os.environ.get(stops.METHOD_RESUME_ENV):
+                raise guard.GuardError('旧 typed 现场只能经原方法显式恢复，不能重新建场')
+            self._restore(saved, control_path=control_path)
+            return
+        if os.environ.get(stops.METHOD_RESUME_ENV) and not stops.initialization_allowed(self.record_name):
+            raise guard.GuardError('原 typed 现场缺完整配置与守卫停点，不能事后建场')
         manifest = upgrade.load_campaign_manifest(campaign)
         store, store_campaign = claude_upgrade_store.open_campaign_store(campaign, manifest)
         self.data = capture._host_data_root(campaign)
@@ -695,29 +710,169 @@ class TypedDeliveryFixture:
             "calls": str(self.control_path.with_name("typed-vc6-calls.jsonl")),
             "physical_calls": str(self.control_path.with_name("typed-vc6-physical-calls.jsonl")),
             "failures": [], "kill_at": None, "crash_at": None, "failed_gates": []})
-        self.process: multiprocessing.Process | None = None
+        self._save_record()
+
+    def _save_record(self) -> None:
+        """记录原固定坐标与活身份，不生成服务或 Campaign 的成功证据。"""
+
+        stops.save_state(self.record_name, {'campaign': self.campaign, 'candidate_id': self.candidate_id,
+            'data': self.data, 'configuration_binding': self.configuration_binding,
+            'control_path': self.control_path, 'context': self.context,
+            'guard_identity': self.saved_guard_identity})
+
+    def _restore(self, saved: dict[str, Any], *, control_path: Path | None) -> None:
+        """只读原 control/config/VC-5 四根；不调用首次建场、回滚资格或 import。"""
+
+        self.data = capture._host_data_root(self.campaign)
+        if (saved['campaign'] != self.campaign or saved['candidate_id'] != self.candidate_id
+                or saved['data'] != self.data or (control_path is not None and control_path != saved['control_path'])):
+            raise guard.GuardError('typed 停点的 Campaign、候选或受管根已改变')
+        self.control_path = saved['control_path']
+        control = _control(self.control_path)
+        self.context = control['context']
+        if self.context != saved['context'] or self.context['data_root'] != str(self.data):
+            raise guard.GuardError('typed 停点的原固定上下文已改变')
+        self.configuration_binding = self.context['configuration_ref']
+        if self.configuration_binding != saved['configuration_binding']:
+            raise guard.GuardError('typed 停点的原配置绑定已改变')
+        self.configuration_path = guard.check_binding(self.data, self.configuration_binding)
+        self.configuration = executor.validate_configuration(guard.read_json(self.configuration_path))
+        manifest = upgrade.load_campaign_manifest(self.campaign)
+        store, campaign = claude_upgrade_store.open_campaign_store(self.campaign, manifest)
+        handoff = delivery._vc5_handoff(store, campaign, self.candidate_id)
+        qualification = self.configuration['candidate']['qualification']
+        expected = {'store_relative': store.root.relative_to(self.data).as_posix(), 'external_root_relative': '.',
+            'campaign_id': campaign['campaign_id'], 'candidate_id': self.candidate_id,
+            'candidate_ref': handoff['candidate_ref'], 'build_receipt_ref': handoff['candidate_build_receipt_ref'],
+            'validation_ref': handoff['validation_completed_ref'], 'acceptance_ref': handoff['acceptance_ref']}
+        if (any(qualification[key] != value for key, value in expected.items())
+                or self.configuration['candidate']['image_digest'] != handoff['candidate_image_digest']
+                or self.configuration['candidate']['runtime_profile_sha256'] != handoff['runtime_profile_sha256']):
+            raise guard.GuardError('typed 停点的 Store、VC-5 四根、镜像或 Profile 已改变')
+        from tools.official_client_capture import claude_qualification_material_source as materials
+        materials._check_four_roots(store, qualification)
+        self.saved_guard_identity = saved['guard_identity']
+        if not self.saved_guard_identity:
+            raise guard.GuardError('typed 停点没有原守卫活身份，禁止启动新守卫追认')
+        self.recorded_pid = int(self.saved_guard_identity['pid'])
+        self.restored_guard = True
+
+    def _bind_live_guard(self) -> None:
+        """同一原 namespace 内握手；冷守卫、PID 重用或配置不一致均拒绝。"""
+
+        if self.saved_guard_identity is not None and not guard.owner_alive({key: self.saved_guard_identity[key]
+                for key in ('boot_id', 'pid', 'process_start', 'process_group_id')}):
+            raise guard.GuardError('原守卫已死或 PID 被复用；该停点不可续作，禁止新 guard 补旧身份')
+        with fixture_mac_source_scope(self.configuration, self.data):
+            reader = executor.create_executor(EXECUTOR_NAME, self.configuration, self.context)
+            status = reader._status()
+        if status.get('configuration_sha256') != canonical_sha256(self.configuration):
+            raise guard.GuardError('原守卫握手的 configuration_sha256 不一致')
+        identity = status['guard_identity']
+        if self.saved_guard_identity is not None and identity != self.saved_guard_identity:
+            raise guard.GuardError('原守卫完整身份已改变，禁止换 origin 续作')
+        self.saved_guard_identity = dict(identity)
+        self.recorded_pid = int(identity['pid'])
 
     def __enter__(self) -> "TypedDeliveryFixture":
-        self.process = multiprocessing.get_context("fork").Process(target=serve_guard,
-            args=(self.configuration, self.context, self.control_path))
-        self.process.start()
+        retained = getattr(self, 'retained', stops.record_root() is not None)
+        self.retained = retained
+        if self.saved_guard_identity is None:
+            if retained:
+                # 原 serve_guard 自己 setsid。fork 子进程不注册 multiprocessing 的
+                # atexit join；同时断开 runner 管道，失败后活守卫保留在原世界。
+                self.recorded_pid = os.fork()
+                if self.recorded_pid == 0:
+                    try:
+                        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+                        signal.signal(signal.SIGINT, signal.SIG_DFL)
+                        descriptor = os.open(self.control_path.with_name('typed-vc6-guard.log'), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                        os.dup2(descriptor, 1)
+                        os.dup2(descriptor, 2)
+                        os.close(descriptor)
+                        null = os.open(os.devnull, os.O_RDONLY)
+                        os.dup2(null, 0)
+                        os.close(null)
+                        serve_guard(self.configuration, self.context, self.control_path)
+                    except BaseException:
+                        traceback.print_exc()
+                    finally:
+                        os._exit(1)
+            else:
+                self.process = multiprocessing.get_context("fork").Process(target=serve_guard,
+                    args=(self.configuration, self.context, self.control_path))
+                self.process.start()
         try:
             deadline = time.monotonic() + 8
             socket_path = self.data / self.configuration["guard"]["socket_relative"]
             while not socket_path.exists():
-                if not self.process.is_alive() or time.monotonic() >= deadline:
+                if (self.process is not None and not self.process.is_alive()) or time.monotonic() >= deadline:
                     raise guard.GuardError("typed VC-6 独立守卫启动失败")
                 time.sleep(0.01)
+            if retained:
+                self._bind_live_guard()
+                self._save_record()
             self.stack = contextlib.ExitStack()
             self.stack.enter_context(source_scope(self.control_path))
             return self
         except BaseException:
-            self.close()
+            self.close(force=not self.restored_guard)
             raise
 
-    def close(self) -> None:
+    def close(self, *, force: bool = False) -> None:
         if getattr(self, "stack", None) is not None:
             self.stack.close()
+            self.stack = None
+        if getattr(self, 'retained', False):
+            if not force:
+                return
+            if self.recorded_pid is None:
+                return
+            pid = self.recorded_pid
+            if self.saved_guard_identity is not None:
+                actual = {key: self.saved_guard_identity[key] for key in ('boot_id', 'pid', 'process_start', 'process_group_id')}
+                if guard.owner_alive(actual):
+                    # 终止前核完整服务实例身份，不能只凭某个仍存活的 PID。
+                    self._bind_live_guard()
+            else:
+                # 只有首次启动尚未握手的亲生子进程可走这条失败清理路径。
+                try:
+                    if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                        return
+                except ChildProcessError:
+                    raise guard.GuardError('无完整守卫身份且不是原子进程，拒绝终止')
+                try:
+                    actual = guard.process_identity(pid)
+                except guard.GuardError:
+                    return
+
+            def reaped() -> bool:
+                try:
+                    if os.waitpid(pid, os.WNOHANG)[0] == pid:
+                        return True
+                except ChildProcessError:
+                    pass
+                return not guard.owner_alive(actual)
+
+            def terminate(sig: int) -> bool:
+                if reaped():
+                    return True
+                if not guard.owner_alive(actual):
+                    return True
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    return True
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if reaped():
+                        return True
+                    time.sleep(0.02)
+                return reaped()
+
+            if not terminate(signal.SIGTERM) and not terminate(signal.SIGKILL):
+                raise guard.GuardError('原守卫有界终止后仍未退出，保留现场并拒绝无界等待')
+            return
         if self.process is not None:
             self.process.terminate()
             self.process.join(timeout=5)

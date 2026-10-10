@@ -45,6 +45,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import site
@@ -65,6 +66,7 @@ from tools.official_client_capture.tests import claude_chain_driver as chain_dri
 from tools.official_client_capture.tests import claude_late_stage_chain_driver as late_driver
 from tools.official_client_capture.tests import claude_late_control_chain_driver as late_control_driver
 from tools.official_client_capture.tests import claude_transient_chain_driver as transient_driver
+from tools.official_client_capture.tests import claude_fault_chain_world as stops
 from tools.official_client_capture.tests.real_chains import claude_revision_evaluator_scenarios as revision_scenarios
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
@@ -148,7 +150,10 @@ def file_digests(*paths: Path) -> dict[str, str]:
     return digests
 
 
-def ledger_totals(*, timing_dir: Path | None = None, project_root: Path | None = None) -> dict[str, Any]:
+def ledger_totals(*, timing_dir: Path | None = None, project_root: Path | None = None,
+                  project_limit: int | None = None, timing_limit: int | None = None,
+                  project_bindings: list[dict[str, Any]] | None = None,
+                  now: str | None = None) -> dict[str, Any]:
     """两本账的入账口径：项目总账的精确／估计请求数、根因计数与操作数，计时账本的请求数与累计时长。"""
 
     from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
@@ -156,7 +161,39 @@ def ledger_totals(*, timing_dir: Path | None = None, project_root: Path | None =
 
     totals: dict[str, Any] = {}
     if project_root is not None:
-        head = project_ledger.replay_head(project_root)
+        if project_limit is None:
+            plan, _raw = project_ledger._load_plan(project_root)
+            history = project_ledger.read_project_history_snapshot(project_root)
+            head = project_ledger._replay(project_root, plan, history['events'], rebuild_cache=False)
+        else:
+            # 先核完整原链与原head，再只读重算绑定过的精确历史前缀。
+            # 私有切片不带head，也不进入执行世界、产品引用或原缓存写入。
+            history = project_ledger.read_project_history_snapshot(project_root)
+            if not project_bindings or project_limit < 0 or project_limit > history['head_sequence']:
+                raise ValueError('历史项目账切点缺原字节绑定或序号越界')
+            originals = {Path(binding['path']).relative_to(project_root).as_posix(): stops.read_cut(binding)
+                         for binding in project_bindings}
+            expected = {'plan.json', 'initial-identity-keys.json',
+                *(f'events/{index:06d}.json' for index in range(1, project_limit + 1))}
+            extras = set(originals) - expected
+            if any(not re.fullmatch(r'migrations/[0-9]{6}\.json', name) for name in extras):
+                raise ValueError('历史项目账只读切片有未声明文件')
+            if not expected <= set(originals) or len(originals) != len(project_bindings):
+                raise ValueError('历史项目账缺plan、初始身份键或完整事件前缀')
+            with tempfile.TemporaryDirectory(prefix='cf-audit-ledger-') as directory:
+                audit_root = Path(directory)
+                (audit_root / 'events').mkdir(mode=0o700)
+                if extras:
+                    (audit_root / 'migrations').mkdir(mode=0o700)
+                for relative, raw in originals.items():
+                    path = audit_root / relative
+                    path.write_bytes(raw)
+                    path.chmod(0o400)
+                plan, _raw = project_ledger._load_plan(audit_root)
+                events = project_ledger._load_events(audit_root)
+                if events != history['events'][:project_limit]:
+                    raise ValueError('绑定历史前缀不是当前原账本事件链祖先')
+                head = project_ledger._replay(audit_root, plan, events, rebuild_cache=False)
         totals["project"] = {
             "precise_total": head["precise_total"],
             "estimated_total": head["estimated_total"],
@@ -165,8 +202,8 @@ def ledger_totals(*, timing_dir: Path | None = None, project_root: Path | None =
             "sequence": head["sequence"],
         }
     if timing_dir is not None:
-        summary = timing.inspect_ledger(timing_dir, project_ledger_optional=True)
-        events = [event for event, _raw in timing._load_events(timing_dir)]
+        summary = timing.inspect_ledger(timing_dir, project_ledger_optional=True, limit=timing_limit, now=now)
+        events = [event for event, _raw in timing._load_events(timing_dir, limit=timing_limit)]
         totals["timing"] = {
             "total_live_request_count": summary["total_live_request_count"],
             "total_elapsed_seconds": summary["total_elapsed_seconds"],
@@ -198,6 +235,11 @@ class ScenarioAudit:
         self.timing_dir: Path | None = None
         self.project_root: Path | None = None
         self.totals_before: dict[str, Any] = {}
+        self.inputs: dict[str, dict[str, Any]] = {}
+        self.replay_cut: dict[str, Any] = {}
+        self.ledger_observations: list[dict[str, Any]] = []
+        self.before_ledger: dict[str, Any] | None = None
+        self.revalidating = False
         self.started = time.monotonic()
 
     # ---- 故障前快照 ----
@@ -210,16 +252,174 @@ class ScenarioAudit:
         timing_dir: Path | None = None,
         project_root: Path | None = None,
     ) -> None:
+        saved = stops.load_state('audit-before:' + self.scenario)
+        if saved is not None and os.environ.get(stops.METHOD_RESUME_ENV):
+            for key, value in saved.items():
+                setattr(self, key, value)
+            self.ledger_observations = (stops.load_state('audit-ledger:' + self.scenario) or {}).get('observations', [])
+            # 重用的是原 before；不是把停点后的当前态当成故障前状态。
+            return
         self.trusted_paths = tuple(Path(path) for path in trusted)
         self.trusted_before = file_digests(*self.trusted_paths)
         self.case.assertTrue(self.trusted_before, f"{self.scenario}：故障前没有可信产物可核对")
         self.history_paths = tuple(Path(path) for path in history)
         self.history_before = file_digests(*self.history_paths)
         self.timing_dir, self.project_root = timing_dir, project_root
-        self.totals_before = ledger_totals(timing_dir=timing_dir, project_root=project_root)
+        self.totals_before = self.totals()
+        self.before_ledger = self.ledger_observations[-1] if self.ledger_observations else None
+        stops.save_state('audit-before:' + self.scenario, self._before())
+
+    def _before(self) -> dict[str, Any]:
+        return {key: getattr(self, key) for key in ('trusted_paths', 'trusted_before', 'history_paths',
+            'history_before', 'timing_dir', 'project_root', 'totals_before', 'before_ledger')}
+
+    def object_source(self, value: Any) -> dict[str, Any] | None:
+        """定位原命令完整输出中的同一个对象；只给审计绑定原件，不授予动作跳过权。"""
+
+        if stops.record_root() is None:
+            return None
+
+        def locate(current: Any, trail: list[Any]) -> list[Any] | None:
+            if type(current) is type(value) and current == value:
+                return trail
+            if isinstance(current, dict):
+                for key, item in current.items():
+                    found = locate(item, [*trail, key])
+                    if found is not None:
+                        return found
+            if isinstance(current, list):
+                for index, item in enumerate(current):
+                    found = locate(item, [*trail, index])
+                    if found is not None:
+                        return found
+            return None
+
+        for row in reversed((stops.load_state('command-observations') or {}).get('commands', [])):
+            for label in ('stdout', 'stderr'):
+                if row[label] is None:
+                    continue
+                raw = stops.read_cut(row[label]).decode('utf-8')
+                if label == 'stderr' and isinstance(value, str) and raw == value:
+                    return {'binding': row[label], 'format': 'text', 'trail': [], 'command': row['argv'],
+                            'returncode': row['returncode'], 'command_binding': row.get('command_binding')}
+                if not raw.strip():
+                    continue
+                try:
+                    document = json.loads(raw)
+                except ValueError:
+                    continue
+                trail = locate(document, [])
+                if trail is not None:
+                    return {'binding': row[label], 'format': 'json', 'trail': trail,
+                        'command': row['argv'], 'returncode': row['returncode'],
+                        'command_binding': row.get('command_binding')}
+        raise ValueError(f'{self.scenario} 缺原 stdout/JSON 对象绑定，不能仅保存审计输入摘要')
+
+    @staticmethod
+    def read_source(source: dict[str, Any]) -> Any:
+        if source.get('command_binding') is not None:
+            command = stops._decoded(json.loads(stops.read_cut(source['command_binding'])))
+            if command['argv'] != source['command'] or command['returncode'] != source['returncode']:
+                raise ValueError('原命令、退出码与输出原件不一致')
+        text = stops.read_cut(source['binding']).decode('utf-8')
+        if source['format'] == 'text':
+            return text
+        value = json.loads(text)
+        for key in source['trail']:
+            value = value[key]
+        return value
+
+    def closure_source(self, value: Any, executed: tuple[str, ...], reused: tuple[str, ...] = (),
+                       *, row_key: str | None = None, disposition: str | None = None) -> dict[str, Any] | None:
+        """调用方明示原结果字段；恢复从该原件重新投影实际执行／复用闭集。"""
+
+        source = self.object_source(value)
+        return None if source is None else {'source': source, 'executed': executed, 'reused': reused,
+            'row_key': row_key, 'disposition': disposition}
+
+    def delivery_closure_source(self, path: Path, begin: int = 0) -> dict[str, Any] | None:
+        if stops.record_root() is None:
+            return None
+        return {'calls': stops.file_cut(path), 'begin': begin}
+
+    def file_closure_source(self, path: Path, executed: tuple[str, ...], reused: tuple[str, ...] = (),
+                            *, row_key: str | None = None, disposition: str | None = None) -> dict[str, Any] | None:
+        if stops.record_root() is None:
+            return None
+        return {'source': {'binding': stops.file_cut(path), 'format': 'json', 'trail': []},
+            'executed': executed, 'reused': reused, 'row_key': row_key, 'disposition': disposition}
+
+    def _closure_original(self, source: dict[str, Any]) -> tuple[list[str], list[str]]:
+        if 'calls' in source:
+            rows = [json.loads(line) for line in stops.read_cut(source['calls']).decode('utf-8').splitlines() if line]
+            return [f'{segment}:{stage}' for segment, stage in rows[source['begin']:]], []
+        value = self.read_source(source['source'])
+        def items(keys: Iterable[str], disposition: str) -> list[str]:
+            result = value
+            for key in keys:
+                result = result[key]
+            if not keys:
+                return []
+            if source['disposition'] is not None:
+                result = [row for row in result if row[source['disposition']] == disposition]
+            if source['row_key'] is not None and result and isinstance(result[0], dict):
+                result = [row[source['row_key']] for row in result]
+            return sorted(result)
+        return items(source['executed'], 'executed'), items(source['reused'], 'reused')
 
     def totals(self) -> dict[str, Any]:
-        return ledger_totals(timing_dir=self.timing_dir, project_root=self.project_root)
+        if self.revalidating or stops.record_root() is None:
+            return ledger_totals(timing_dir=self.timing_dir, project_root=self.project_root, **self.replay_cut)
+        observed = datetime.now(timezone.utc).isoformat()
+        totals = ledger_totals(timing_dir=self.timing_dir, project_root=self.project_root, now=observed)
+        cut, bindings = self._ledger_cut(totals, observed)
+        row = {'cut': cut, 'bindings': bindings, 'totals': totals}
+        self.ledger_observations.append(row)
+        stops.save_state('audit-ledger:' + self.scenario, {'observations': self.ledger_observations})
+        return totals
+
+    def _ledger_cut(self, totals: dict[str, Any], observed: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """两本账用原事件序号与原字节绑定；后续追加不影响已经消费的切点。"""
+
+        cut: dict[str, Any] = {'now': observed}
+        bindings = []
+        for label, root, plan_name, field, limit_name in (
+                ('project', self.project_root, 'plan.json', 'sequence', 'project_limit'),
+                ('timing', self.timing_dir, 'ledger.json', 'head_sequence', 'timing_limit')):
+            if root is None:
+                continue
+            limit = int(totals[label][field])
+            cut[limit_name] = limit
+            files = [root / plan_name]
+            if label == 'project':
+                files.append(root / 'initial-identity-keys.json')
+                if (root / 'migrations').is_dir():
+                    files.extend(sorted((root / 'migrations').iterdir()))
+            files.extend(root / 'events' / f'{index:06d}.json' for index in range(1, limit + 1))
+            observed_bindings = [stops.file_cut(path) for path in files]
+            bindings.extend(observed_bindings)
+            if label == 'project':
+                cut['project_bindings'] = observed_bindings
+        return cut, bindings
+
+    @staticmethod
+    def _accounting_projection(totals: dict[str, Any]) -> dict[str, Any]:
+        state = {}
+        if 'project' in totals:
+            state['project'] = totals['project']
+        if 'timing' in totals:
+            state['timing'] = {key: totals['timing'][key]
+                for key in ('total_live_request_count', 'head_sequence', 'event_ids')}
+        return state
+
+    def _repeat_source(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        for row in reversed(self.ledger_observations):
+            totals = row['totals']
+            if dict(value) == self._accounting_projection(totals):
+                return {'observation': row, 'projection': 'accounting'}
+            if dict(value) == {'root_causes': totals.get('project', {}).get('root_cause_counts')}:
+                return {'observation': row, 'projection': 'root_causes'}
+        raise ValueError(f'{self.scenario} 重复入账核对缺少原账本切点，禁止保存摘要承接')
 
     def accounting_state(self) -> dict[str, Any]:
         """比较「重复动作有没有改变入账」用的口径：总账全部计数与序号、计时账本请求数与事件序列（不含随时间变的累计时长）。"""
@@ -241,6 +441,7 @@ class ScenarioAudit:
     def check_trusted(self, *, relocated: Mapping[str, str] | None = None) -> None:
         """故障前的可信文件逐字节不变；``relocated`` 给出被取代归档的目录（旧前缀 → 新前缀），按归档位置核对。"""
 
+        self.inputs['trusted'] = {'relocated': dict(relocated or {})}
         moved = 0
         for path, digest in self.trusted_before.items():
             current = path
@@ -259,9 +460,16 @@ class ScenarioAudit:
     # ---- 2 只执行合法闭集 ----
 
     def check_closure(self, *, executed: Iterable[str], expected: Iterable[str], reused: Iterable[str] = (),
-                      expected_reused: Iterable[str] = (), what: str) -> None:
+                      expected_reused: Iterable[str] = (), what: str, source: dict[str, Any] | None = None) -> None:
         executed, expected = sorted(executed), sorted(expected)
         reused, expected_reused = sorted(reused), sorted(expected_reused)
+        self.inputs['closure'] = dict(executed=executed, expected=expected, reused=reused,
+                                     expected_reused=expected_reused, what=what)
+        if source is not None:
+            self.inputs['closure_source'] = source
+            actual, reused_actual = self._closure_original(source)
+            self.case.assertEqual(executed, sorted(actual), '执行闭集与原动作／调用日志不一致')
+            self.case.assertEqual(reused, sorted(reused_actual), '复用闭集与原动作／调用日志不一致')
         self.case.assertEqual(executed, expected, f"{self.scenario}：{what}执行项与合法闭集不同")
         self.case.assertEqual(reused, expected_reused, f"{self.scenario}：{what}复用项与合法闭集不同")
         self._record("closure", what=what, executed=executed, reused=reused)
@@ -281,6 +489,13 @@ class ScenarioAudit:
         ``root_causes`` 给出时，新增根因的计数和必须等于它（每次失败只计一次）。根因修复会把准入计数清零，这时用
         ``root_cause_state``（修复之前取的 ``accounting_state``）核对计数。"""
 
+        repeats = list(repeats)
+        self.inputs['accounting'] = dict(precise_delta=precise_delta, estimated_delta=estimated_delta,
+            root_causes=root_causes, root_cause_state=root_cause_state, repeats=repeats)
+        if stops.record_root() is not None and not self.revalidating:
+            self.inputs['accounting_sources'] = {
+                'repeats': [(self._repeat_source(first), self._repeat_source(second)) for _label, first, second in repeats],
+                'root_cause_state': None if root_cause_state is None else self._repeat_source(root_cause_state)}
         after = self.totals()
         evidence: dict[str, Any] = {"repeats": []}
         if "project" in after:
@@ -308,6 +523,8 @@ class ScenarioAudit:
     def check_elapsed(self, *, reopened_phases: Iterable[str] = ()) -> None:
         """累计时长单调不减、原始总截止不变、已开始的阶段没有再写 stage_started（``reopened_phases`` 是经批准重开的阶段）。"""
 
+        reopened_phases = list(reopened_phases)
+        self.inputs['elapsed'] = {'reopened_phases': reopened_phases}
         if self.timing_dir is None:
             # 不涉及计时账本的场景（部署、误用拒绝）：核对它没有被写（零写入由历史检查兜底）。
             self.case.fail(f"{self.scenario}：累计时间检查需要计时账本；不涉及账本的场景用 check_elapsed_untouched")
@@ -334,6 +551,7 @@ class ScenarioAudit:
         """不经计时账本的场景（部署、误用拒绝）：给定的计时与项目账本逐字节不变，即没有入账、也没有重置。"""
 
         self.case.assertTrue(ledger_paths, f"{self.scenario}：要给出核对的账本")
+        self.inputs['elapsed'] = {'ledger_paths': ledger_paths}
         before = {path: digest for path, digest in self.history_before.items() if any(path.startswith(str(root)) for root in ledger_paths)}
         self.case.assertTrue(before, f"{self.scenario}：历史快照里没有这些账本")
         after = file_digests(*ledger_paths)
@@ -345,6 +563,7 @@ class ScenarioAudit:
     def check_history(self, *, archived: Mapping[str, str] | None = None) -> None:
         """故障前的历史事实文件全部仍在且逐字节不变；``archived`` 给出按设计被归档移走的目录（旧前缀 → 新前缀）。"""
 
+        self.inputs['history'] = {'archived': dict(archived or {})}
         moved = 0
         for path, digest in self.history_before.items():
             current = path
@@ -362,6 +581,14 @@ class ScenarioAudit:
     # ---- 6 输出续跑入口 ----
 
     def check_entry(self, text: Any, *fragments: str) -> None:
+        self.inputs['entry'] = {'text': text, 'fragments': fragments}
+        if stops.record_root() is not None and not self.revalidating:
+            try:
+                self.inputs['entry_source'] = {'whole': self.object_source(text)}
+            except ValueError:
+                if not isinstance(text, dict):
+                    raise
+                self.inputs['entry_source'] = {'parts': {key: self.object_source(value) for key, value in text.items()}}
         rendered = text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
         self.case.assertTrue(fragments, "续跑入口要给出期待的命令片段")
         for fragment in fragments:
@@ -383,7 +610,80 @@ class ScenarioAudit:
         if target:
             with open(target, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        observed = datetime.now(timezone.utc).isoformat()
+        after = ledger_totals(timing_dir=self.timing_dir, project_root=self.project_root, now=observed)
+        cut, bindings = self._ledger_cut(after, observed)
+        stops.save_state('audit-complete:' + self.scenario, {'before': self._before(), 'inputs': self.inputs,
+            'record': record, 'cut': cut, 'bindings': bindings, 'after': after})
+        stops.save_case(self.case)
         return record
+
+    @classmethod
+    def revalidate(cls, case: unittest.TestCase, scenario: str) -> dict[str, Any]:
+        """以原账本历史切点和原六个检查重验前缀，不能仅核 passed 摘要。"""
+
+        saved = stops.load_state('audit-complete:' + scenario)
+        if saved is None:
+            raise ValueError(f'{scenario} 缺少完整审计停点，禁止追认旧摘要')
+        audit = cls(case, scenario)
+        for key, value in saved['before'].items():
+            setattr(audit, key, value)
+        audit.replay_cut = saved['cut']
+        audit.revalidating = True
+        for binding in saved['bindings']:
+            stops.read_cut(binding)
+        case.assertEqual(audit.totals(), saved['after'], '原账本历史切点已改变')
+        inputs = saved['inputs']
+        case.assertEqual(set(inputs) - {'accounting_sources', 'closure_source', 'entry_source'}, set(SIX_CHECKS))
+        sources = inputs.get('accounting_sources')
+        if sources is None:
+            raise ValueError(f'{scenario} 缺少原账本重复动作切点，不能追认摘要')
+
+        def original_accounting(source: dict[str, Any]) -> dict[str, Any]:
+            row = source['observation']
+            for binding in row['bindings']:
+                stops.read_cut(binding)
+            totals = ledger_totals(timing_dir=audit.timing_dir, project_root=audit.project_root, **row['cut'])
+            case.assertEqual(totals, row['totals'], '重复动作的原账本切点已改变')
+            if source['projection'] == 'accounting':
+                return audit._accounting_projection(totals)
+            case.assertEqual(source['projection'], 'root_causes')
+            return {'root_causes': totals['project']['root_cause_counts']}
+
+        repeats = inputs['accounting']['repeats']
+        case.assertEqual(len(repeats), len(sources['repeats']))
+        for (_label, first, second), (first_source, second_source) in zip(repeats, sources['repeats']):
+            case.assertEqual(dict(first), original_accounting(first_source))
+            case.assertEqual(dict(second), original_accounting(second_source))
+        if sources['root_cause_state'] is not None:
+            case.assertEqual(inputs['accounting']['root_cause_state'], original_accounting(sources['root_cause_state']))
+        if audit.before_ledger is None:
+            raise ValueError(f'{scenario} 缺少原 before 的账本字节，禁止追认当前态')
+        for binding in audit.before_ledger['bindings']:
+            stops.read_cut(binding)
+        case.assertEqual(audit.totals_before, ledger_totals(timing_dir=audit.timing_dir,
+            project_root=audit.project_root, **audit.before_ledger['cut']), '原 before 账本切点已改变')
+        if not inputs.get('closure_source') or not inputs.get('entry_source'):
+            raise ValueError(f'{scenario} 缺原调用日志或 stdout/JSON 绑定，禁止承接摘要')
+        actual, reused = audit._closure_original(inputs['closure_source'])
+        case.assertEqual(sorted(actual), inputs['closure']['executed'])
+        case.assertEqual(sorted(reused), inputs['closure']['reused'])
+        entry_source = inputs['entry_source']
+        entry = (audit.read_source(entry_source['whole']) if 'whole' in entry_source else
+                 {key: audit.read_source(value) for key, value in entry_source['parts'].items()})
+        case.assertEqual(entry, inputs['entry']['text'])
+        audit.check_trusted(**inputs['trusted'])
+        audit.check_closure(**inputs['closure'])
+        audit.check_accounting(**inputs['accounting'])
+        elapsed = inputs['elapsed']
+        if 'ledger_paths' in elapsed:
+            audit.check_elapsed_untouched(*elapsed['ledger_paths'])
+        else:
+            audit.check_elapsed(**elapsed)
+        audit.check_history(**inputs['history'])
+        audit.check_entry(inputs['entry']['text'], *inputs['entry']['fragments'])
+        case.assertEqual(set(audit.checks), set(SIX_CHECKS))
+        return saved['record']
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +851,10 @@ class _BatchFaultScenarios(staging_tests._StagingCase):
         return audit
 
     def _committed(self, campaign: Path, sequence: int, phase: str = "VC-2") -> dict[str, Any]:
-        return json.loads((campaign / "control" / "vc" / "batches" / f"{sequence:04d}-{phase.lower()}.json").read_text(encoding="utf-8"))
+        path = campaign / "control" / "vc" / "batches" / f"{sequence:04d}-{phase.lower()}.json"
+        result = json.loads(path.read_text(encoding='utf-8'))
+        stops.record_json_read(path)
+        return result
 
     def _scenario_parent_interrupted(self) -> None:
         """父进程中断：VC-2 首批父 run 已 prepared、owner 在 commit 之前被 SIGKILL → monitor 封存 aborted_prepared →

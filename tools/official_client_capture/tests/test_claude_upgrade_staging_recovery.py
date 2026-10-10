@@ -280,7 +280,52 @@ class StagingCommitRecoveryTests(_StagingCase):
         self.wait_terminal(run_dir, {"aborted_prepared"})
         self.assertEqual(_read(run_dir / "stop-receipt.json")["reason"], "prepared-abandoned")
         self.assertEqual(self.ledger_events(), events_before)
-        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, self.draft_actions(campaign)), 2, "VC-2")
+        # 在原真实 prepared 停点保存并经正式 Store／两账／VC 读侧复核；不重建世界。
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        import tempfile
+        with tempfile.TemporaryDirectory() as records, mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: records}):
+            stops.checkpoint(self, 'prepared-orphan', campaign=campaign, run_dir=run_dir, sequence=2,
+                             phase='aborted_prepared')
+            before = self.head()
+            saved = stops.resume_checkpoint(self, 'prepared-orphan')
+            self.assertEqual((saved['campaign'], saved['run_dir'], saved['sequence']), (campaign, run_dir, 2))
+            self.assertEqual(self.head(), before)
+            self.assertEqual(self.ledger_events(), events_before)
+            from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains import ScenarioAudit
+            audit = ScenarioAudit(self, '原 prepared 停点六项原件重验')
+            audit.snapshot(trusted=[campaign / 'campaign.json'],
+                history=[self.store_root, self.ledger_dir / 'events', self.project_root / 'events'],
+                timing_dir=self.ledger_dir, project_root=self.project_root)
+            # 保留原方法的先自动对账、再同序号派发顺序；后面的显式重复对账只做幂等核验。
+            result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, self.draft_actions(campaign)), 2, "VC-2")
+            code, reconciled, stderr = run_main(['reconcile-supervisor-run', '--campaign-dir', campaign, '--run-dir', run_dir])
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            first = audit.accounting_state()
+            code, _again, stderr = run_main(['reconcile-supervisor-run', '--campaign-dir', campaign, '--run-dir', run_dir])
+            self.assertEqual(code, 0, stderr)
+            second = audit.accounting_state()
+            audit.check_trusted()
+            batch_path = campaign / 'control/vc/batches/0002-vc-2.json'
+            committed = _read(batch_path)
+            audit.check_closure(executed=committed['execute_item_ids'], expected=['vc2-classify-draft'],
+                reused=committed['reuse_item_ids'], expected_reused=[], what='原同序号批次',
+                source=audit.file_closure_source(batch_path, ('execute_item_ids',), ('reuse_item_ids',)))
+            audit.check_accounting(root_causes=1, repeats=[('原重复对账', first, second)])
+            audit.check_elapsed()
+            audit.check_history()
+            audit.check_entry(reconciled, 'compile-and-run-vc-batch', '同序号')
+            recorded = audit.report()
+            self.assertEqual(ScenarioAudit.revalidate(self, audit.scenario), recorded)
+            # 原 stdout 的后续追加不影响既有切点；改写原前缀必须拒绝。
+            saved_audit = stops.load_state('audit-complete:' + audit.scenario)
+            binding = saved_audit['inputs']['entry_source']['whole']['binding']
+            original_output = binding['path'].read_bytes()
+            binding['path'].write_bytes(original_output + b'\n')
+            self.assertEqual(ScenarioAudit.revalidate(self, audit.scenario), recorded)
+            binding['path'].write_bytes(b'X' + original_output[1:])
+            with self.assertRaisesRegex(ValueError, '原件切点'):
+                ScenarioAudit.revalidate(self, audit.scenario)
+            binding['path'].write_bytes(original_output)
         self.assertEqual(result["staging_attempt"], 2)
         (handled,) = result["orphans"]
         self.assertEqual((handled["kind"], handled["decision"]), ("parent-run", "recoverable"))

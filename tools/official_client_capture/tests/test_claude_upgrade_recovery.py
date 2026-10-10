@@ -103,12 +103,18 @@ class RecoveryChainCase(seal_tests._SealCampaignCase):
 
     def setUp(self) -> None:
         super().setUp()
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            if not stops.restore_case(self, 'recovery-case'):
+                raise ValueError('原恢复夹具缺少值字段停点')
+            return
         relay = self.tool_copy / "claude_fw_e_relay.py"
         relay.write_text(RECOVERY_RELAY, encoding="utf-8")
         relay.chmod(0o700)
         self.failures_file = self.root / "relay-failures.json"
         self.failures_file.write_text("{}", encoding="utf-8")
         self.call_log = self.root / "relay-call-log.txt"
+        stops.save_case(self, 'recovery-case')
 
     # ------------------------------------------------------------------ 夹具
 

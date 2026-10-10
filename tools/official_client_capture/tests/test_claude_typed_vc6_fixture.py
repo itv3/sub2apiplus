@@ -168,6 +168,70 @@ class TypedFixtureInputTests(unittest.TestCase):
         path.write_bytes(raw + b" ")
         self.assertIsNone(delivery.batch_action_kind(action, manifest))
         self.assertIsNone(supervisor.candidate_post_run_recovery_action(manifest, delivery.RUN_ACTION_ID))
+        path.write_bytes(raw)
+        # 同一个原短验补独立守卫停点：用原 serve_guard 和原 _status 实握手，
+        # 不派发阶段、不生成 Store 结果；旧 guard 冷失效不能换 PID 追认。
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_control.tests.fixtures import ManagedToolTree
+        from tools.official_client_control.canonical import canonical_sha256
+        tree = ManagedToolTree(self.root / 'qualified-managed')
+        active = tree.active()
+        active.__enter__()
+        self.addCleanup(active.__exit__, None, None, None)
+        helper, configuration = integration_fixture.qualified_configuration_fixture(self, tree)
+        data = helper.root
+        qualified_config = data / 'inputs/live-recorded-configuration.json'
+        guard.write_json_once(qualified_config, configuration)
+        q = configuration['candidate']['qualification']
+        context = {**_context, 'data_root': str(data), 'campaign_id': q['campaign_id'],
+            'candidate_id': q['candidate_id'], 'delivery_id': q['candidate_id'] + '-d1',
+            'configuration_ref': guard.binding(data, qualified_config)}
+        state = guard.read_json(data / 'state.json')
+        state['environment'].update(configuration_sha256=canonical_sha256(configuration), architecture='linux/arm64',
+            environment_sha256=canonical_sha256(integration_fixture.fixture_projection()))
+        guard.atomic_json(data / 'state.json', state)
+        control_path = data / 'typed-control.json'
+        guard.write_json_once(control_path, {'schema_version': fixture.CONTROL_SCHEMA, 'fixture_only': True,
+            'formal_version_semantics_certified': False, 'context': context,
+            'calls': str(data / 'calls.jsonl'), 'physical_calls': str(data / 'physical.jsonl'),
+            'failures': [], 'kill_at': None, 'crash_at': None, 'failed_gates': []})
+        records = self.root / 'method-records'
+        records.mkdir(mode=0o700)
+        first = object.__new__(fixture.TypedDeliveryFixture)
+        first.__dict__.update(campaign=campaign, candidate_id=context['candidate_id'], data=data,
+            configuration=configuration, configuration_path=guard.check_binding(data, context['configuration_ref']),
+            configuration_binding=context['configuration_ref'], context=context, control_path=control_path,
+            process=None, recorded_pid=None, saved_guard_identity=None, restored_guard=False,
+            record_name='typed-short-live-guard')
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records)}):
+            try:
+                first.__enter__()
+                identity = dict(first.saved_guard_identity)
+                first.close()
+                self.assertTrue(guard.owner_alive({key: identity[key]
+                    for key in ('boot_id', 'pid', 'process_start', 'process_group_id')}))
+                resumed = object.__new__(fixture.TypedDeliveryFixture)
+                resumed.__dict__.update(first.__dict__, process=None, restored_guard=True)
+                with mock.patch.object(os, 'fork', side_effect=AssertionError('恢复不能新建 guard')):
+                    resumed.__enter__()
+                    self.assertEqual(resumed.saved_guard_identity, identity)
+                    resumed.close()
+                resumed.saved_guard_identity = {**identity, 'service_instance_id': '0' * 64}
+                with self.assertRaisesRegex(guard.GuardError, '完整身份'):
+                    resumed._bind_live_guard()
+                # 原记录环境已退出也必须识别保留实例，不能落到 process=None 的空清理。
+                with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: ''}):
+                    first.close(force=True)
+                resumed.saved_guard_identity = identity
+                with self.assertRaisesRegex(guard.GuardError, '原守卫已死'):
+                    resumed._bind_live_guard()
+            except Exception:
+                log = control_path.with_name('typed-vc6-guard.log')
+                if log.is_file():
+                    print(log.read_text(encoding='utf-8'), flush=True)
+                raise
+            finally:
+                first.close(force=True)
 
 
 def armed_worker(context: delivery.DeliveryContext, configuration: dict, execution_context: dict, plan: dict) -> None:

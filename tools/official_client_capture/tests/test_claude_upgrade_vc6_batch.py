@@ -527,7 +527,11 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
 
     def candidate_status(self, world: dict[str, Any]) -> dict[str, Any]:
         with chain.seams(world["config_path"]):
-            return claude_upgrade_recovery.campaign_status(world["campaign"], CANDIDATE)
+            result = claude_upgrade_recovery.campaign_status(world["campaign"], CANDIDATE)
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        stops.record_command(['campaign_status', world['campaign'], CANDIDATE], 0,
+            json.dumps(result, ensure_ascii=False), '')
+        return result
 
     def assert_status(self, world: dict[str, Any], expected: str) -> dict[str, Any]:
         status = self.candidate_status(world)

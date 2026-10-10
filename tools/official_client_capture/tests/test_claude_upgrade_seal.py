@@ -274,9 +274,15 @@ def write_vc_control(campaign: Path, *, deadline_at_utc: str = "2026-12-31T00:00
 
 
 def run_main(argv: list[str]) -> tuple[int, dict | None, str]:
+    from tools.official_client_capture.tests import claude_fault_chain_world as stops
+    pending = stops.begin_command(argv)
     stdout, stderr = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        code = claude_upgrade.main(argv)
+    code = None
+    try:
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = claude_upgrade.main(argv)
+    finally:
+        stops.record_command(argv, code, stdout.getvalue(), stderr.getvalue(), pending=pending)
     text = stdout.getvalue()
     return code, (json.loads(text) if text.strip() else None), stderr.getvalue()
 
@@ -487,12 +493,19 @@ class _SealCampaignCase(capture_tests.CaptureFixture):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        cls._tree_directory = tempfile.TemporaryDirectory()
-        cls.tree = ManagedToolTree(Path(cls._tree_directory.name) / "repo")
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        if stops.record_root() is None:
+            cls._tree_directory = tempfile.TemporaryDirectory()
+            cls.tree = ManagedToolTree(Path(cls._tree_directory.name) / "repo")
+        else:
+            root, restoring = stops.fixture_directory(cls, 'seal-tool-tree')
+            cls._tree_directory = None
+            cls.tree = ManagedToolTree(root / 'repo', existing=restoring)
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls._tree_directory.cleanup()
+        if cls._tree_directory is not None:
+            cls._tree_directory.cleanup()
         super().tearDownClass()
 
     def setUp(self) -> None:
@@ -500,12 +513,19 @@ class _SealCampaignCase(capture_tests.CaptureFixture):
         active = self.tree.active()
         active.__enter__()
         self.addCleanup(active.__exit__, None, None, None)
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            if not stops.restore_case(self, 'seal-case'):
+                raise ValueError('原封存夹具缺少值字段停点')
+            self.sequences = json.loads(SEQUENCES.read_text(encoding='utf-8'))
+            return
         relay = self.tool_copy / "claude_fw_e_relay.py"
         relay.write_text(FULL_FAKE_RELAY, encoding="utf-8")
         relay.chmod(0o700)
         self.mutations_file = self.root / "relay-mutations.json"
         self.mutations_file.write_text("{}", encoding="utf-8")
         self.sequences = json.loads(SEQUENCES.read_text(encoding="utf-8"))
+        stops.save_case(self, 'seal-case')
 
     @contextlib.contextmanager
     def seal_patched(self):

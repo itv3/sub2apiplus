@@ -20,6 +20,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -225,9 +226,12 @@ class CaptureFixture(unittest.TestCase):
         cls.tool_identity = claude_upgrade._tool_identity(include_git=False)
 
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name).resolve()
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        self.root, restoring = stops.fixture_directory(self, 'capture')
+        if restoring:
+            if not stops.restore_case(self, 'capture-case'):
+                raise ValueError('原取证夹具缺少值字段停点')
+            return
         self.data = self.root / "data"
         (self.data / "runs").mkdir(parents=True, mode=0o700)
         (self.data / "evidence" / "campaigns").mkdir(parents=True, mode=0o700)
@@ -249,6 +253,7 @@ class CaptureFixture(unittest.TestCase):
         self.env_file.write_text(json.dumps(BASE_ENVIRONMENT), encoding="utf-8")
         self.host = FakeHost()
         self.execution_tree_calls: list[Path | None] = []
+        stops.save_case(self, 'capture-case')
 
     def set_control(self, control: dict) -> None:
         self.control_file.write_text(json.dumps(control), encoding="utf-8")
@@ -346,9 +351,15 @@ class CaptureFixture(unittest.TestCase):
             yield
 
     def run_main(self, argv: list[str]) -> tuple[int, dict | None, str]:
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        pending = stops.begin_command(argv)
         stdout, stderr = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            code = claude_upgrade.main(argv)
+        code = None
+        try:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = claude_upgrade.main(argv)
+        finally:
+            stops.record_command(argv, code, stdout.getvalue(), stderr.getvalue(), pending=pending)
         text = stdout.getvalue()
         return code, (json.loads(text) if text.strip() else None), stderr.getvalue()
 
@@ -1215,6 +1226,53 @@ class AttemptFactsTests(unittest.TestCase):
             claude_upgrade._attempt_deadline(type("A", (), {"max_wall_seconds": 10**9, "heartbeat_seconds": None})(), "official")
         self.assertEqual(claude_upgrade._wait_for_monitor_finalization(Path("/nonexistent"), {"monitor_pid": None, "state": "running"}),
                          {"monitor_pid": None, "state": "running"})
+        # 原短验内补恢复边界：保留故障后的宿主值和原字节，不另登记场景 UID。
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_capture.tests.test_claude_upgrade_candidate_capture import CandidateFixture
+        with tempfile.TemporaryDirectory() as records, mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: records}):
+            first = CandidateFixture('runTest')
+            first.setUp()
+            self.addCleanup(shutil.rmtree, first.root, ignore_errors=True)
+            first.host.calls.append(['真实故障前已调用的宿主命令'])
+            first.execution_tree_calls.append(first.tool_copy)
+            first.set_candidate_control({'interrupted': True})
+            original = first.candidate_control.read_bytes()
+            stops.checkpoint(first, 'candidate-runtime', phase='runtime-bound')
+            with mock.patch.dict(os.environ, {stops.METHOD_RESUME_ENV: '1'}), \
+                    mock.patch.object(stops.tempfile, 'mkdtemp', side_effect=AssertionError('恢复不能新建世界')):
+                resumed = CandidateFixture('runTest')
+                resumed.setUp()
+                saved = stops.resume_checkpoint(resumed, 'candidate-runtime')
+                self.assertEqual(saved['phase'], 'runtime-bound')
+                self.assertEqual(resumed.root, first.root)
+                self.assertEqual(resumed.host.calls, first.host.calls)
+                self.assertEqual(resumed.execution_tree_calls, first.execution_tree_calls)
+                self.assertEqual(resumed.candidate_control.read_bytes(), original)
+            cursor = stops._state_path('cursor:candidate-runtime')
+            raw = cursor.read_bytes()
+            damaged = json.loads(raw)
+            damaged['payload']['state']['phase'] = '伪造完成'
+            cursor.write_text(json.dumps(damaged), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, '摘要'):
+                stops.resume_checkpoint(first, 'candidate-runtime')
+            cursor.write_bytes(raw)
+            self.assertEqual(stops.active_seconds('method', 1.5), 1.5)
+            self.assertEqual(stops.active_seconds('method', 2.0), 3.5)
+            self.assertEqual(stops.active_seconds('method'), 3.5)
+            # 后续阶段尚未首次建场必须由原阶段游标精确允许；曾开始却丢停点仍拒绝。
+            stops.save_state('cursor:future-stage', {'phase': 'before-fixture',
+                'initializations': {'fixture:future': 'uninitialized'}})
+            with mock.patch.dict(os.environ, {stops.METHOD_RESUME_ENV: '1'}):
+                with self.assertRaisesRegex(ValueError, '缺少夹具停点'):
+                    stops.fixture_directory(self, 'future')
+                with stops.initialization_scope('fixture:future', cursor='future-stage', phase='before-fixture'):
+                    future, restoring = stops.fixture_directory(self, 'future')
+                self.addCleanup(shutil.rmtree, future, ignore_errors=True)
+                self.assertFalse(restoring)
+                self.assertEqual(stops.fixture_directory(self, 'future'), (future, True))
+                with self.assertRaisesRegex(ValueError, '首次初始化许可'):
+                    with stops.initialization_scope('fixture:future', cursor='future-stage', phase='before-fixture'):
+                        self.fail('完成的初始化不能再建场')
 
 
 if __name__ == "__main__":

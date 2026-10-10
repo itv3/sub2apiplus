@@ -292,7 +292,6 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
     approve = recovery_tests.RecoveryChainCase.approve
 
     def setUp(self) -> None:
-        super().setUp()
         if os.environ.get(source.STATE_ENV):
             self.state_path = Path(os.environ[source.STATE_ENV])
             self.state_digest = os.environ[source.DIGEST_ENV]
@@ -300,10 +299,18 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
             self.data = Path(state["data_root"])
             self.root = self.data.parent
             return
+        super().setUp()
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            saved = stops.load_state('candidate-recorded-world')
+            if saved is None or saved['root'].is_symlink() or not saved['root'].is_dir():
+                raise replay.ReplayError('候选 B 组缺少原世界停点，禁止重建')
+            self.root, self.data = saved['root'], saved['data']
+            return
         configured = os.environ.get("CLAUDE_RECORDED_CHAIN_RECORD_DIR") or os.environ.get("CLAUDE_FAULT_CHAIN_RECORDS")
         if configured:
-            parent = Path(configured) if os.environ.get("CLAUDE_RECORDED_CHAIN_RECORD_DIR") else Path(configured).parent
-            parent = parent.resolve() / "candidate-recorded-worlds"
+            # 世界用原可写临时根；记录目录的父目录可能已被来源隔离挂成只读。
+            parent = Path(tempfile.gettempdir()).resolve() / 'candidate-recorded-worlds'
             parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             self.root = Path(tempfile.mkdtemp(prefix="candidate-b-", dir=parent)).resolve()
         else:
@@ -311,6 +318,7 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
             self.addCleanup(directory.cleanup)
             self.root = Path(directory.name).resolve()
         self.data = self.root / "staging/data"
+        stops.save_state('candidate-recorded-world', {'root': self.root, 'data': self.data})
 
     def recorded_entry(self, scenario: str) -> bool:
         """旧场景入口先建立独立的断网与只读来源世界；内部方法执行原有全部断言后才返回。"""

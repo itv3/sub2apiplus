@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -68,7 +69,17 @@ class ManagedToolTree:
     副本上可确定性地现算，不随真实编排器（B1-09 及以后仍在演进）的中间状态变化。
     """
 
-    def __init__(self, destination: Path) -> None:
+    def __init__(self, destination: Path, *, existing: bool = False) -> None:
+        if existing:
+            if destination.is_symlink() or not destination.is_dir():
+                raise ValueError('旧受管夹具树缺失或不可信')
+            self.root = destination
+            from tools.official_client_capture.tests import claude_fault_chain_world as stops
+            remembered = stops.load_state('managed-tree:' + str(destination))
+            if remembered is None:
+                raise ValueError('旧受管夹具树缺少修改前原字节')
+            self._originals = remembered['originals']
+            return
         engine = receipts_module._identity_engine("claude")
         source_root = Path(engine.REPOSITORY_ROOT)
         digests = engine.managed_tree_digests(source_root, engine.load_policy())
@@ -83,6 +94,14 @@ class ManagedToolTree:
         orchestrator.parent.mkdir(parents=True, exist_ok=True)
         orchestrator.write_bytes(orchestrator_stub(policy))
         self._originals: dict[Path, bytes | None] = {}
+        self._save_originals()
+
+    def _save_originals(self) -> None:
+        """只为记录模式保留修改前字节，恢复/显式还原仍用原字节。"""
+        if not os.environ.get('CLAUDE_FAULT_METHOD_RECORD_DIR'):
+            return
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        stops.save_state('managed-tree:' + str(self.root), {'originals': self._originals})
 
     @contextmanager
     def active(self) -> Iterator["ManagedToolTree"]:
@@ -98,6 +117,7 @@ class ManagedToolTree:
     def _remember(self, path: Path) -> None:
         if path not in self._originals:
             self._originals[path] = path.read_bytes() if path.exists() else None
+            self._save_originals()
 
     def write(self, key: str, content: bytes) -> None:
         path = self.path(key)
@@ -117,6 +137,7 @@ class ManagedToolTree:
             else:
                 path.write_bytes(original)
         self._originals.clear()
+        self._save_originals()
 
 
 class HistoricalDeliveryToolTree(ManagedToolTree):
