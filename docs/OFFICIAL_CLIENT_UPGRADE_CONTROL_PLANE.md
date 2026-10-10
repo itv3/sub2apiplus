@@ -721,9 +721,9 @@ Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recover
   结清服务与消费读侧已接通。独立 H1／TLS-H1 和受限 H2 原生捕获及认证导出同步已实现，
   仅支持 `regression_fixture`。H2 原始字节／ALPN／恢复／断点同步及身份专项已通过，外层完整宿主运行库
   读集尚未闭合，H2 测试单元在此之前禁止承接；它也不生成完整产品 v2 联合来源。私有状态 journal 仅恢复明确
-  受管意图，能力检查仅核对显式冻结制品，未经认证的外部能力结果保持未知。正式 `SOURCE_ADAPTERS`
-  仍为空；正式产品观测后端、连续事件／模块／transport-map、完整 v2 联合来源与历史形成期 authority 仍待闭合。能力未闭合
-  时 live 在产品启动前拒绝；驱动缺真实材料／批准则写 `vc5-pause.json`。本机接线、夹具与组合专项不证明三官方
+  受管意图，能力检查仅核对显式冻结制品，未经认证的外部能力结果保持未知。正式捕获已拆出中性字节核心和独立合同，固定 Mac
+  产品工厂、ES／NE／模块原件消费者及跨机认证桥已有工具实现；旧夹具合同仍不授正式来源资格。
+  固定物料、签名安装、原生权限、两部署及原派发须逐项验真，缺任一项时 live 在预算占用、监听及产品启动前拒绝；驱动缺真实材料／批准则写 `vc5-pause.json`。本机接线、夹具与组合专项不证明三官方
   客户端真账号采集或完整链通过，现场与认证状态以 Claude 指南 §4.0.5／§4.5.2 为准。
 - `claude_mac_product_recorder.NativeProductRecorder` 已提供既有九方法协议的内部桥，并使用真实
   `StateJournal` 处理明确冻结的私有状态；观测仅委托原静态 fixture 来源拥有的 provider。完整 task、
@@ -768,8 +768,8 @@ Store 提供 `delivery-chain`、恢复段预约和阶段事实；当前真实交
 - run 的 `awaiting_finalize=2`／`stage_failed=3` 在父批次映射为合法暂停点；最终 `validation_only` 写 VC-6 checkpoint，
   `production_replacement` 停 `production_activation_pending`。生产 B4-08 另批，现有终态校验器不能代替真实部署。
 - **本机实现与现场边界**：真实交付合同 A 的独立执行器、显式配置、稳定投影、零模型 recipe、可信回退绑定、
-  独立 guard／journal 来源及恢复证明已完成本机接线。封存门禁的第二根由配置 v2／资格报告 v3 的精确材料绑定处理；Profile 边界来自已验证内存投影，未知 JSON 仍严格递归。当前 guard 连续性 v2 保存原 producer、当前通道及完整注册头的不可变快照，正常重启不重签旧原件；注册追加中断的安全续作仍在专项完善。正式 `ENVIRONMENT_EXECUTORS` 与交付
-  `SOURCE_VERIFIERS` 仍为空；ARM64 受管安装与 guard 生命周期、实际场地、可信回退、专用凭据、四阶段及异常
+  独立 guard／journal 来源及恢复证明已完成本机接线。封存门禁的第二根由配置 v2／资格报告 v3 的精确材料绑定处理；Profile 边界来自已验证内存投影，未知 JSON 仍严格递归。当前 guard 连续性 v2 保存原 producer、当前通道及完整注册头的不可变快照，正常重启不重签旧原件；注册追加中断的安全续作仍在专项完善。固定 `arm64-isolated` 工厂和受管 guard 来源解析已接入，
+  空登记表仅保留测试接缝；ARM64 实际受管安装与 guard 生命周期、场地、可信回退、专用凭据、四阶段及异常
   恢复尚待现场验收。本机执行证明和替身登记不证明已切换现场，也不开放正式执行。完整录制回放、故障链和
   发布认证状态均见 Claude 指南 §3.6／§4.0.5；生产 B4-08 另批。
 
