@@ -152,6 +152,7 @@ class StateJournal:
         self._frozen_config: dict[str, Any] | None = None
         self._rows: list[dict[str, Any]] = []
         self._prepared = False
+        self._product_recorder: Any = None
 
     def _check_symlink(self, logical: str, target: Any) -> None:
         _require(isinstance(target, str) and bool(target) and len(target.encode("utf-8")) <= 1024, "symlink 目标非法")
@@ -535,6 +536,8 @@ class StateJournal:
     def record_intent(self, operation_id: str, expected_after: Mapping[str, Any]) -> str:
         """在受管操作前 fsync 完整意图；不接受任意路径或未解释的实际写入。"""
         self._ready()
+        _require(not any(row["event"] == "product_scope_intent" for row in self._rows),
+                 "产品 scope 已冻结，不能继续增加受管设置意图")
         _require(isinstance(operation_id, str) and bool(ID_RE.fullmatch(operation_id)), "操作 ID 非法")
         _require(isinstance(expected_after, Mapping) and bool(expected_after) and set(expected_after) <= set(self.paths), "操作路径不在冻结清单")
         desired = json.loads(_canonical(dict(expected_after)))
@@ -559,6 +562,109 @@ class StateJournal:
         self._append("operation_intent", {"operation_id": operation_id, "before": self._material(current), "after": self._material(desired)})
         return operation_id
 
+    def bind_product_recorder(self, recorder: Any) -> None:
+        """只绑定固定正式产品工厂的原实例，供历史原件只恢复重放使用。"""
+        self._active()
+        from tools.official_client_capture import claude_mac_product_state as product
+        product.scope_context(recorder, self, authorize=False)
+        _require(self._product_recorder is None or self._product_recorder is recorder, "原产品恢复实例不能替换")
+        self._product_recorder = recorder
+
+    def _known_operations(self) -> dict[str, Any]:
+        baseline = json.loads(self._read_private(self.root / "state-before.bin"))["states"]
+        for row in self._rows:
+            if row["event"] == "operation_observed":
+                baseline.update(self._load(row["payload"]["actual"]))
+        return baseline
+
+    def authorize_product_scope(self, recorder: Any) -> None:
+        """产品派发前 fsync 精确 scope；after 不会被转换为受管操作意图。"""
+        self._ready()
+        self.bind_product_recorder(recorder)
+        _require(not any(row["event"] in {"product_scope_intent", "restored", "after_read_intent"}
+                         for row in self._rows), "产品 scope 只允许在恢复和独立 after 之前冻结一次")
+        complete = {row["payload"]["operation_id"] for row in self._rows if row["event"] == "operation_observed"}
+        _require(all(row["payload"]["operation_id"] in complete for row in self._rows
+                     if row["event"] == "operation_intent"), "产品派发前的受管设置仍未确认")
+        baseline = self._known_operations()
+        if self._observe() != baseline:
+            self._unknown("冻结产品 scope 前已有未知外部写入")
+        from tools.official_client_capture import claude_mac_product_state as product
+        scope = product.scope_context(recorder, self, authorize=True)
+        self._append("product_scope_intent", {"scope": self._material(scope), "baseline": self._material(baseline)})
+        # 固定 native 原件随后签准确 scope 摘要；不是可注入的动态验证 callback。
+        ack = recorder._provider._monitor.authorize_state_scope(_sha(_canonical(scope)))
+        product.verify_scope_ack(scope, ack)
+        self._append("product_scope_ack", {"scope_sha256": _sha(_canonical(scope)), "native_ack": ack})
+
+    def observe_product_writes(self) -> dict[str, Any]:
+        """停止后核签名完整变化链与全集，持久化观察材料；缺来源保留未知。"""
+        self._ready()
+        intents = [row["payload"] for row in self._rows if row["event"] == "product_scope_intent"]
+        _require(len(intents) == 1 and self._product_recorder is not None, "没有原产品事前 scope 与固定来源实例")
+        scope, baseline = self._load(intents[0]["scope"]), self._load(intents[0]["baseline"])
+        _require(baseline == self._known_operations(), "产品 scope 的初始状态不是准确已知操作结果")
+        actual = self._observe()
+        from tools.official_client_capture import claude_mac_product_state as product
+        try:
+            proof = product.verify_observation(self._product_recorder, self, scope, baseline, actual)
+            existing = [row["payload"] for row in self._rows if row["event"] == "product_state_observed"]
+            if existing:
+                _require(len(existing) == 1 and self._load(existing[0]["actual"]) == actual
+                         and existing[0]["proof"] == proof, "原产品观察材料被替换或实际状态已变化")
+            else:
+                self._append("product_state_observed", {"actual": self._material(actual), "proof": proof})
+            return actual
+        except StateConflict as error:
+            self._unknown(str(error))
+
+    def abandon_product_scope(self) -> None:
+        """只在固定实例原 WAL 确认无派发且全集仍等于事前已知状态时撤销 scope。"""
+        self._ready()
+        _require(self._product_recorder is not None, "没有原固定产品实例，不能判断无派发")
+        from tools.official_client_capture import claude_mac_product_state as product
+        product.scope_context(self._product_recorder, self, authorize=False)
+        _require(not any(row["event"] == "launch_intent" for row in self._product_recorder._rows()),
+                 "已有启动意图，不能推断 no-launch")
+        intents = [row["payload"] for row in self._rows if row["event"] == "product_scope_intent"]
+        _require(len(intents) == 1 and not any(row["event"] == "product_state_observed" for row in self._rows),
+                 "没有唯一尚未执行的产品 scope")
+        baseline = self._load(intents[0]["baseline"])
+        _require(baseline == self._known_operations() and self._observe() == baseline,
+                 "未派发产品的状态仍有未知变化，禁止自动覆盖")
+        payload = {"scope_sha256": _sha(_canonical(self._load(intents[0]["scope"]))), "reason": "durable_no_launch_and_unchanged_state"}
+        if not any(row["event"] == "product_scope_abandoned" for row in self._rows):
+            self._append("product_scope_abandoned", payload)
+
+    def _product_known_state(self) -> dict[str, Any] | None:
+        intents = [row["payload"] for row in self._rows if row["event"] == "product_scope_intent"]
+        observed = [row["payload"] for row in self._rows if row["event"] == "product_state_observed"]
+        if not intents:
+            _require(not observed, "产品观察材料缺事前 scope")
+            return None
+        abandoned = [row["payload"] for row in self._rows if row["event"] == "product_scope_abandoned"]
+        if abandoned:
+            _require(len(intents) == len(abandoned) == 1 and not observed and self._product_recorder is not None,
+                     "撤销产品 scope 原件不闭合")
+            from tools.official_client_capture import claude_mac_product_state as product
+            product.scope_context(self._product_recorder, self, authorize=False)
+            _require(not any(row["event"] == "launch_intent" for row in self._product_recorder._rows())
+                     and abandoned[0] == {"scope_sha256": _sha(_canonical(self._load(intents[0]["scope"]))),
+                         "reason": "durable_no_launch_and_unchanged_state"}, "撤销 scope 缺原无派发证明")
+            return self._known_operations()
+        _require(len(intents) == len(observed) == 1 and self._product_recorder is not None,
+                 "真实产品变化缺完整固定来源观察材料，不能自动覆盖")
+        scope, baseline = self._load(intents[0]["scope"]), self._load(intents[0]["baseline"])
+        actual = self._load(observed[0]["actual"])
+        _require(baseline == self._known_operations() and set(actual) == set(self.paths), "产品恢复材料状态全集非法")
+        budget = {"entries": 0, "bytes": 0}
+        for path, node in actual.items():
+            self._validate_node(node, path, len(PurePosixPath(path).parts), budget)
+        from tools.official_client_capture import claude_mac_product_state as product
+        _require(product.verify_observation(self._product_recorder, self, scope, baseline, actual)
+                 == observed[0]["proof"], "历史产品恢复来源重放不符")
+        return actual
+
     def _operation(self, operation_id: str) -> dict[str, Any]:
         matches = [r["payload"] for r in self._rows if r["event"] == "operation_intent" and r["payload"]["operation_id"] == operation_id]
         _require(len(matches) == 1, "缺唯一受管操作意图")
@@ -567,6 +673,8 @@ class StateJournal:
     def confirm_intent(self, operation_id: str) -> dict[str, Any]:
         """独立实读结果须匹配预先意图；调用方布尔自报没有确认效力。"""
         self._ready()
+        _require(not any(row["event"] == "product_scope_intent" for row in self._rows),
+                 "产品 scope 已冻结，不能事后确认受管设置")
         _require(not any(r["event"] == "restored" for r in self._rows), "已恢复任务不能重新确认执行")
         operation = self._operation(operation_id)
         desired = self._load(operation["after"])
@@ -679,6 +787,8 @@ class StateJournal:
     def apply_intent(self, operation_id: str) -> dict[str, Any]:
         """执行真实、已冻结的私有文件变更；不操作或重启任何产品。"""
         self._ready()
+        _require(not any(row["event"] == "product_scope_intent" for row in self._rows),
+                 "产品 scope 已冻结，不能继续执行受管设置")
         _require(not any(r["event"] == "restored" for r in self._rows), "已恢复任务不能重新执行变更")
         _require(not any(r["event"] == "after_read_intent" for r in self._rows), "after 观测开始后不能执行变更")
         self._recover_replacements()
@@ -730,6 +840,10 @@ class StateJournal:
                     known.update(actual)
                 else:
                     pending.update({p: (old[p], new[p]) for p in new})
+            product_known = self._product_known_state()
+            if product_known is not None:
+                _require(not pending, "产品 scope 不能越过未完成的 v1 受管操作")
+                known.update(product_known)
             current = self._observe()
             restored_paths = {r["payload"]["path"] for r in self._rows if r["event"] == "restored_path"}
             completed_replacements = {r["payload"]["replacement_id"] for r in self._rows if r["event"] == "replacement_complete"}

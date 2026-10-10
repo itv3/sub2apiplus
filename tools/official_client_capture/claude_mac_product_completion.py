@@ -29,19 +29,25 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
 
     def __init__(self, task: Mapping[str, Any], *, bundle_root: Path, services: Any,
                  provider: base.ProductObservationProvider, state_plan: base.RecorderStatePlan,
-                 materials_receipt: Path) -> None:
+                 materials_receipt: Path, path_context: Any = None) -> None:
         super().__init__(task, bundle_root=bundle_root, services=services, provider=provider, state_plan=state_plan)
         self._materials = Path(materials_receipt)
+        self._path_context = path_context
         self._scratch = self._root.parent / (".recorder-state-" + self._task["task_nonce"])
         self._frozen["schema_version"] = "claude-mac-product-recorder-frozen/v1"
         self._frozen["state_journal_root"] = str(self._scratch)
+        if path_context is not None:
+            recipes.physical_session_root(self._task, c.read_json(c.bound_file(self._root,
+                self._task["execution"]["isolation_recipe"])), self._root, path_context)
+            self._frozen["path_mapping"] = copy.deepcopy(path_context.mapping_binding)
+            c.bound_file(self._root, self._frozen["path_mapping"])
         if self._scratch.exists():
             self._frozen["state_journal_instance"] = base._directory(self._scratch)
 
     def _guard(self, task: Mapping[str, Any], bundle_root: Path | None = None) -> None:
         base._require(source.validate_task_v2(task) == self._task
                       and (bundle_root is None or Path(bundle_root) == self._root), "完整原 task 或来源根已变化")
-        adapter = c.SOURCE_ADAPTERS.get(self._task["execution"]["recorder_id"])
+        adapter = c.source_adapter(self._task)
         if adapter is None or adapter is not self._adapter:
             raise base.ProductRecorderUnavailable("产品静态来源未登记或已替换，零启动拒绝")
         for name, args in (("owns_recorder", (self,)), ("owns_services", (self._services,)),
@@ -61,16 +67,22 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
 
     def _preflight(self) -> dict[str, Any]:
         verified = recipes.validate_material_private_launch_plan(self._task, self._plan.launch_plan,
-                    bundle_root=self._root, materials_receipt=self._materials)
+                    bundle_root=self._root, materials_receipt=self._materials, path_context=self._path_context)
         recipe = verified["recipe"]
         expected = {str(self._state / relative) for relative in self._plan.frozen_paths}
-        base._require(set(recipe["state_paths"]) == expected and len(recipe["state_paths"]) == len(expected)
-                      and self._state == Path(recipe["private_session_root"])
+        actual_paths = recipes.material_state_paths(self._task, recipe, self._root, self._path_context)
+        base._require({str(path) for path in actual_paths} == expected and len(actual_paths) == len(expected)
+                      and self._state == recipes.physical_session_root(self._task, recipe, self._root, self._path_context)
                       and self._state_instance["dev"] == self._root_instance["dev"],
                       "恢复计划不是隔离 recipe 的准确状态全集与本 run 私有根")
         # 物料推导只证明固定参数；隔离能力仍由原来源合同消费，而非 false 旗标翻转。
-        base._require(source.verify_isolation_recipe_v2(self._task, self._root) == recipe,
-                      "产品隔离 recipe 尚未通过来源核验")
+        if self._path_context is None:
+            base._require(source.verify_isolation_recipe_v2(self._task, self._root) == recipe,
+                          "产品隔离 recipe 尚未通过来源核验")
+        else:
+            verify = getattr(self._adapter, "verify_isolation_recipe", None)
+            base._require(callable(verify), "固定桥缺原产品隔离资格消费端")
+            verify(self._task, recipe, self._root)
         return recipe
 
     def _new_journal(self) -> StateJournal:
@@ -101,6 +113,8 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
     def prepare_state(self, task: Mapping[str, Any], bundle_root: Path) -> None:
         self._guard(task, bundle_root)
         try:
+            if self._task["execution"]["source_scope"] == "formal":
+                self._services.recheck_dispatch(self._task)
             self._preflight()
             base._require(self._journal is None and self._optional(base._WAL) is None,
                           "已有生命周期只能显式恢复，不能重新 prepare")
@@ -128,12 +142,24 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
             self._release()
             raise
 
+    def start_monitoring(self, task: Mapping[str, Any], bundle_root: Path) -> None:
+        super().start_monitoring(task, bundle_root)
+        if self._task["execution"]["source_scope"] == "formal":
+            base._require(self._journal is not None, "缺原状态锁，不能授权产品写入 scope")
+            self._journal.authorize_product_scope(self)
+
     def restore_state(self, task: Mapping[str, Any], bundle_root: Path) -> None:
         self._guard(task, bundle_root)
         try:
             base._require(self._journal is not None and self._quiescent,
                           "没有原产品停止事实或活动状态锁，禁止恢复")
             self._append("state_restore_intent", {})
+            if self._task["execution"]["source_scope"] == "formal" and any(row["event"] == "product_scope_intent"
+                for row in self._journal._rows):
+                if self._instance is None:
+                    self._journal.abandon_product_scope()
+                else:
+                    self._journal.observe_product_writes()
             evidence = self._journal.restore()
             self._copy_state_originals()
             self._create("state-after.bin", self._read("state-originals/state-after.bin"))
@@ -188,6 +214,80 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
         return {"schema_version": source.BUNDLE_SCHEMA, "task_sha256": self._task["task_sha256"],
                 "run_id": self._task["execution"]["producer_run_id"],
                 "source_scope": self._task["execution"]["source_scope"], "status": status, "files": files}
+
+    def _product_receipts(self, status: str) -> None:
+        """只投影已经存在的真实生命周期；不补独立捕获或场景成功事实。"""
+        self._create("client-identity.json", c.canonical({"client_id": self._task["client_id"],
+            "artifacts": self._task["client_artifacts"]}))
+        journal = self._binding("recorder-journal.jsonl")
+        ready = json.loads(self._read("monitor-ready.json"))
+        self._create("recorder-execution.json", c.canonical({"recorder_id": self._task["execution"]["recorder_id"],
+            "task_sha256": self._task["task_sha256"], "run_id": self._task["execution"]["producer_run_id"], "status": status,
+            "deployment": self._task["execution"]["source_deployments"]["mac"],
+            "monitor_started_at_utc": ready["started_at_utc"], "journal": journal}))
+        self._create("state-restoration.json", c.canonical({"task_sha256": self._task["task_sha256"], "status": "restored",
+            "before": self._binding("state-before.bin"), "after": self._binding("state-after.bin"), "journal": journal}))
+
+    def seal_for_bridge(self, task: Mapping[str, Any], bundle_root: Path, *, status: str) -> dict[str, Any]:
+        """只预封 Mac 原件；不读 ARM64 capture 根，不发布完整成功来源清单。"""
+        try:
+            self._guard(task, bundle_root)
+            base._require(status in {"complete", "failed", "truncated"}, "预封上游终态非法")
+            existing = self._optional("product-preseal.json")
+            if existing is not None:
+                value = json.loads(existing)
+                base._require(value["task_sha256"] == self._task["task_sha256"]
+                    and value["task_nonce"] == self._task["task_nonce"], "Mac 预封不属于原任务")
+                for reference in value["files"]:
+                    self._bound(reference)
+                if value["status"] == "complete":
+                    verify = getattr(self._adapter, "verify_product_origin", None)
+                    base._require(callable(verify), "预封缺固定真实来源重验")
+                    verify(self._task, self._root, self._provider, value["origin"])
+                return {**value, "preseal": self._binding("product-preseal.json")}
+            base._require(self._optional("source-manifest.json") is None, "Mac 桥不得同时存在完整成功来源清单")
+            origin, result_status = None, status
+            try:
+                base._require(self._quiescent and self._optional("state-after.bin") is not None
+                    and self._instance is not None, "真实产品停止或独立恢复原件不完整")
+                if self._journal is not None:
+                    base._require(self._journal.evidence()["status"] == "restored", "原恢复日志仍有未知或失败")
+                else:
+                    rows = self._rows()
+                    base._require(any(row["event"] in {"state_restored", "recovery_complete"} for row in rows),
+                                  "历史任务没有原恢复完成证明")
+                closed = self._result_once("close", "close_observations", self._task)
+                base._require(closed["completeness"]["status"] == "complete" and closed["facts"].get("closed") is True,
+                              "产品监测或模块尾部未知")
+                lifecycle = source._json_lines(self._root/"recorder-journal.jsonl", "产品生命周期")
+                if not any(row["event"] == "closed" for row in lifecycle):
+                    self._fixture_event("closed", base._now())
+                inventory = self._result_once("inventory", "observation_inventory", self._task, self._root)
+                facts = inventory["facts"]
+                base._require(inventory["completeness"]["status"] == "complete" and facts.get("files_available") is True
+                    and isinstance(facts.get("origin"), dict) and isinstance(facts.get("files"), list)
+                    and {"process-session.json", "session-events.jsonl", "source-origin.json"}
+                    <= {row["path"] for row in facts["files"]}, "Mac 原件或真实产品来源缺失")
+                for reference in facts["files"]:
+                    self._bound(reference)
+                origin = json.loads(self._read("source-origin.json"))
+                base._require(origin == facts["origin"], "Mac 来源返回与原件不符")
+                verify = getattr(self._adapter, "verify_product_origin", None)
+                base._require(callable(verify), "固定来源没有真实原件重验")
+                verify(self._task, self._root, self._provider, origin)
+                self._product_receipts(status)
+            except (ValueError, OSError) as error:
+                self._failure("bridge_preseal", error)
+                result_status, origin = "failed", None
+            files = self._manifest(result_status)["files"]
+            base._require(not any(row["path"] in {"source-manifest.json", "product-preseal.json"} for row in files),
+                          "预封库存不得自引用或发布完整来源")
+            value = {"schema_version": "claude-mac-product-preseal/v1", "task_sha256": self._task["task_sha256"],
+                "task_nonce": self._task["task_nonce"], "status": result_status, "files": files, "origin": origin}
+            self._create("product-preseal.json", c.canonical(value))
+            return {**value, "preseal": self._binding("product-preseal.json")}
+        finally:
+            self._release()
 
     def seal_sources(self, task: Mapping[str, Any], bundle_root: Path, *, status: str) -> None:
         try:
@@ -274,6 +374,8 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
     def recover(self, task: Mapping[str, Any], bundle_root: Path) -> dict[str, Any]:
         """显式同 nonce 恢复状态，不派发产品或场景；缺原 owned 句柄即拒绝。"""
         self._guard(task, bundle_root)
+        if self._task["execution"]["source_scope"] == "formal":
+            return self._recover_formal(task, bundle_root)
         try:
             self._preflight()
             partial = self._verify_partial()
@@ -296,6 +398,56 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
             self._guard(task, bundle_root)
             self._verify_partial()
             return self._recovery_receipt(evidence)
+        except BaseException as error:
+            self._failure("recover", error)
+            raise
+        finally:
+            self._release()
+
+    def _recover_formal(self, task: Mapping[str, Any], bundle_root: Path) -> dict[str, Any]:
+        """过期只恢复现存原 WAL 与目录实例；没有任何 prepare/launch/drive 派发。"""
+        try:
+            self._preflight()
+            rows = self._rows()
+            base._require(self._journal is None and self._scratch.exists(), "正式恢复须有现存原状态事务且没有另一活动锁")
+            journal = self._new_journal()
+            journal.__enter__()
+            self._journal = journal
+            journal.prepare()
+            journal.bind_product_recorder(self)
+            launched = [row["payload"] for row in rows if row["event"] == "launch_result"]
+            if any(row["event"] == "launch_intent" for row in rows):
+                base._require(len(launched) == 1, "启动意图没有唯一原结果，不能猜 no-launch 或回收未知进程")
+                reply = self._result_once("recovery_owned", "recover_owned", self._task)
+                if any(row["event"] == "recovery_owned_result" for row in rows):
+                    # 历史结果可以复用，但新 daemon 的内存不能靠旧返回自行补齐。
+                    # 固定 provider 只读重验已签原件，不重发回收或观测操作。
+                    self._provider.rehydrate_recovery(self._task, reply)
+                self._instance = copy.deepcopy(launched[0]["facts"]["process_instance"])
+                base._require(reply["completeness"]["status"] == "complete" and reply["facts"].get("stopped") is True
+                    and reply["facts"]["process_instance"] == self._instance, "恢复对象不是原已真实退出产品")
+                self._quiescent = True
+                if not any(row["event"] == "product_stopped" for row in source._json_lines(
+                    self._root/"recorder-journal.jsonl", "原产品生命周期")):
+                    self._fixture_event("product_stopped", reply["facts"]["stopped_at_utc"])
+                if not any(row["event"] == "product_state_observed" for row in journal._rows):
+                    journal.observe_product_writes()
+            else:
+                self._quiescent = True
+                if any(row["event"] == "product_scope_intent" for row in journal._rows):
+                    journal.abandon_product_scope()
+            evidence = journal.restore()
+            self._copy_state_originals()
+            self._create("state-after.bin", self._read("state-originals/state-after.bin"))
+            if self._instance is not None and not any(row["event"] == "state_restored" for row in source._json_lines(
+                self._root/"recorder-journal.jsonl", "原产品生命周期")):
+                self._fixture_event("state_restored", base._now())
+            value = {"schema_version": "claude-mac-product-recovery/v1", "task_sha256": self._task["task_sha256"],
+                "task_nonce": self._task["task_nonce"], "status": evidence["status"], "state_evidence": evidence,
+                "launch_allowed": False, "new_request_dispatched": False}
+            self._append("recovery_complete", value)
+            self._create("diagnostic/product-recovery-"+c.digest(value)+".json", c.canonical(value))
+            return value
         except BaseException as error:
             self._failure("recover", error)
             raise

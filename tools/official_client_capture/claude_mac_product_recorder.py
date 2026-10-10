@@ -126,7 +126,7 @@ class NativeProductRecorder:
         self._root_instance = _directory(self._root)
         self._state_instance = _directory(self._state)
         self._services, self._provider = services, provider
-        self._adapter = c.SOURCE_ADAPTERS.get(self._task["execution"]["recorder_id"])
+        self._adapter = c.source_adapter(self._task)
         execution = self._task["execution"]
         self._identity = {"task_sha256": self._task["task_sha256"], "task_nonce": self._task["task_nonce"],
                           "producer_run_id": execution["producer_run_id"],
@@ -159,7 +159,7 @@ class NativeProductRecorder:
                  "原目录 dev/ino 已变化")
         if "journal_instance" in self._frozen:
             _require(_directory(self._root / "state-journal") == self._frozen["journal_instance"], "原 journal 目录 dev/ino 已变化")
-        adapter = c.SOURCE_ADAPTERS.get(self._task["execution"]["recorder_id"])
+        adapter = c.source_adapter(self._task)
         _require(adapter is not None and adapter is self._adapter, "原静态来源未登记或已替换")
         for name, args in (("owns_recorder", (self,)), ("owns_services", (self._services,)),
                            ("owns_observation_provider", (self._provider, self._task, self._root))):

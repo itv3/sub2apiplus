@@ -8,6 +8,7 @@ codesign 校验。外部上传的构建收据、ad-hoc 签名和未签名输出�
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import platform
@@ -68,7 +69,7 @@ def read_original(path: Path, *, maximum: int = 67_108_864, root_owned: bool = F
         os.close(fd)
 
 
-def _signature(path: Path, expected: Mapping[str, Any]) -> dict[str, Any]:
+def _signature(path: Path, expected: Mapping[str, Any], *, require_es: bool = True) -> dict[str, Any]:
     """系统工具只核冻结映像；不执行映像，不自动申请权限。"""
     _require(set(expected) == {"team_id", "identifier", "cdhash"}
              and isinstance(expected["team_id"], str) and re.fullmatch(r"[A-Z0-9]{10}", expected["team_id"])
@@ -91,9 +92,9 @@ def _signature(path: Path, expected: Mapping[str, Any]) -> dict[str, Any]:
              and rows.get("CDHash", "").lower() == expected["cdhash"], "实际签名身份与受管冻结值不符")
     raw = entitlement.stdout
     start = raw.find(b"<?xml")
-    _require(start >= 0, "正式观察器缺实际权限 plist")
-    permissions = plistlib.loads(raw[start:])
-    _require(permissions.get("com.apple.developer.endpoint-security.client") is True,
+    _require(start >= 0 or not require_es, "正式观察器缺实际权限 plist")
+    permissions = plistlib.loads(raw[start:]) if start >= 0 else {}
+    _require(not require_es or permissions.get("com.apple.developer.endpoint-security.client") is True,
              "正式观察器缺实际 EndpointSecurity entitlement")
     return {"identity": dict(expected), "identity_output_sha256": hashlib.sha256(identity.stderr).hexdigest(),
             "entitlements_sha256": hashlib.sha256(raw).hexdigest()}
@@ -107,6 +108,19 @@ class ProductInstallationAuthority:
     installation_sha256: str
     executable: Path
     _token: object
+
+    def origin_public_key(self, deployment: Mapping[str, Any]) -> bytes:
+        """只返回固定受管安装中的实际 P-256 公钥，不采用原件自报 key。"""
+        self.revalidate(deployment)
+        encoded = self.installation.get("origin_public_key_base64")
+        if not isinstance(encoded, str):
+            raise ProductAuthorityUnavailable("产品受管安装尚未冻结原生来源公钥")
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except ValueError as error:
+            raise ProductAuthorityError("产品来源公钥编码非法") from error
+        _require(len(raw) == 65 and raw[0] == 4, "产品来源公钥不是固定 P-256 X962 编码")
+        return raw
 
     def revalidate(self, deployment: Mapping[str, Any]) -> dict[str, Any]:
         _require(self._token is _TOKEN, "产品来源句柄不是固定安装工厂构造")
@@ -139,7 +153,9 @@ def load_product_installation() -> ProductInstallationAuthority:
     except (OSError, ValueError) as error:
         raise ProductAuthorityUnavailable("产品原生观察器尚无可信受管安装") from error
     value = json.loads(raw)
-    _require(isinstance(value, dict) and set(value) == {"schema_version", "deployment", "native_executable", "code_signature"}
+    _require(isinstance(value, dict) and set(value) in (
+             {"schema_version", "deployment", "native_executable", "code_signature"},
+             {"schema_version", "deployment", "native_executable", "code_signature", "origin_public_key_base64"})
              and value["schema_version"] == AUTHORITY_SCHEMA, "受管产品安装合同非法")
     authority = ProductInstallationAuthority(value, hashlib.sha256(raw).hexdigest(),
                                              INSTALL_ROOT / "claude-product-events", _TOKEN)

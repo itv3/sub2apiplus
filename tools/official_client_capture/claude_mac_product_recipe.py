@@ -69,7 +69,35 @@ def _plain_absolute(value: Any, label: str) -> Path:
     return path
 
 
-def _recipe_context(task: Mapping[str, Any], bundle_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def physical_session_root(task: Mapping[str, Any], recipe: Mapping[str, Any], bundle_root: Path,
+                          path_context: Any = None) -> Path:
+    """仅受管固定桥能映射逻辑根；任意 dict 或路径前缀不能授跨机映射权。"""
+    if path_context is None:
+        return _plain_absolute(recipe["private_session_root"], "私有会话根")
+    try:
+        from tools.official_client_capture import claude_mac_agent_bridge as bridge
+    except ImportError as error:
+        raise ProductRecipeUnavailable("受管跨机路径桥尚未安装，禁止字典替代") from error
+    physical = bridge.validate_bridge_path_context(task, path_context, bundle_root=Path(bundle_root))
+    _require(isinstance(physical, Path) and physical.is_absolute(), "固定桥未返回实际 Mac 私有根")
+    return _plain_absolute(str(physical), "实际 Mac 私有根")
+
+
+def material_state_paths(task: Mapping[str, Any], recipe: Mapping[str, Any], bundle_root: Path,
+                         path_context: Any = None) -> tuple[Path, ...]:
+    """原冻结状态路径全集经过认证映射，不重写 recipe 或扩大状态范围。"""
+    logical = Path(recipe["private_session_root"])
+    physical = physical_session_root(task, recipe, bundle_root, path_context)
+    result = []
+    for value in recipe["state_paths"]:
+        path = _plain_absolute(value, "原冻结状态路径")
+        _require(path.is_relative_to(logical) and path != logical, "状态路径越出原冻结私有根")
+        result.append(physical / path.relative_to(logical))
+    _require(len(set(result)) == len(result), "实际映射状态路径重复")
+    return tuple(result)
+
+
+def _recipe_context(task: Mapping[str, Any], bundle_root: Path, path_context: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """复用现有 task 与附件读侧；这里只核结构，不认证产品隔离能力。"""
     frozen = source.validate_task_v2(task)
     root = _plain_absolute(str(bundle_root), "来源根")
@@ -84,8 +112,10 @@ def _recipe_context(task: Mapping[str, Any], bundle_root: Path) -> tuple[dict[st
     source._file_binding(recipe["official_support"], "官方支持")
     c.bound_file(root, recipe["official_support"])
     session = _plain_absolute(recipe["private_session_root"], "私有会话根")
-    _require(session.is_relative_to(root.parent) and session != root.parent
-             and not session.is_relative_to(root) and not root.is_relative_to(session),
+    physical_session_root(frozen, recipe, root, path_context)
+    logical_root = root if path_context is None else path_context.logical_bundle_root
+    _require(session.is_relative_to(logical_root.parent) and session != logical_root.parent
+             and not session.is_relative_to(logical_root) and not logical_root.is_relative_to(session),
              "私有会话根须在本run中，且与原件根完全分离")
     paths = recipe["state_paths"]
     _require(isinstance(paths, list) and bool(paths) and len(paths) <= 32,
@@ -147,7 +177,8 @@ def validate_private_launch_plan(task: Mapping[str, Any], plan: Mapping[str, Any
 
 def _validate_private_launch_plan(frozen: Mapping[str, Any], recipe: Mapping[str, Any],
                                   plan: Mapping[str, Any],
-                                  template: _ReviewedLaunchTemplate) -> dict[str, Any]:
+                                  template: _ReviewedLaunchTemplate, *, bundle_root: Path | None = None,
+                                  path_context: Any = None) -> dict[str, Any]:
     """正式模板入口和实读物料诊断入口共用同一份计划校验，不接收动态权限。"""
     _require(isinstance(plan, Mapping) and set(plan) == _PLAN_FIELDS, "离线启动计划字段闭集非法")
     _validate_template(frozen, recipe, template)
@@ -158,7 +189,8 @@ def _validate_private_launch_plan(frozen: Mapping[str, Any], recipe: Mapping[str
     artifact = next(row for row in frozen["client_artifacts"] if row["role"] == "application_executable")
     executable = _plain_absolute(artifact["content"]["path"], "冻结应用executable")
     _require(plan["executable"] == str(executable), "不得用另装CLI或任意shell替换真实应用executable")
-    session = Path(recipe["private_session_root"])
+    session = (Path(recipe["private_session_root"]) if path_context is None
+               else physical_session_root(frozen, recipe, bundle_root, path_context))
     roots = {name: str(session / name) for name in template.private_root_names}
     _require(isinstance(plan["private_roots"], Mapping) and dict(plan["private_roots"]) == roots,
              "私有路径必须恰好来自审核模板与本run会话根")
@@ -202,7 +234,20 @@ def derive_readonly_private_launch_plan(task: Mapping[str, Any], *, bundle_root:
 
 
 def derive_material_private_launch_plan(task: Mapping[str, Any], *, bundle_root: Path,
-                                       materials_receipt: Path) -> dict[str, Any]:
+                                       materials_receipt: Path, path_context: Any = None) -> dict[str, Any]:
+    return _derive_material_plan(task, bundle_root=bundle_root, materials_receipt=materials_receipt,
+                                 path_context=path_context, archived=False)
+
+
+def derive_archived_private_launch_plan(task: Mapping[str, Any], *, bundle_root: Path,
+                                        materials_receipt: Path, path_context: Any = None) -> dict[str, Any]:
+    """离线重验产品固定配方；返回只读计划，不能据此启动或登记来源。"""
+    return _derive_material_plan(task, bundle_root=bundle_root, materials_receipt=materials_receipt,
+                                 path_context=path_context, archived=True)
+
+
+def _derive_material_plan(task: Mapping[str, Any], *, bundle_root: Path,
+                          materials_receipt: Path, path_context: Any, archived: bool) -> dict[str, Any]:
     """从本 task 的实读产品原件推导固定计划；formal 也只获得只读计划。
 
     不靠全局模板名单硬编码某次安装摘要。运行期仍须固定受管 authority、独立
@@ -210,9 +255,10 @@ def derive_material_private_launch_plan(task: Mapping[str, Any], *, bundle_root:
     """
     from tools.official_client_capture import claude_mac_product_materials as materials
 
-    frozen, recipe = _recipe_context(copy.deepcopy(dict(task)), bundle_root)
+    frozen, recipe = _recipe_context(copy.deepcopy(dict(task)), bundle_root, path_context)
     _require(Path(materials_receipt).parent == Path(bundle_root), "物料归档须恰好属于本task来源根")
-    material = materials.read_product_materials(Path(materials_receipt))
+    material = (materials.read_product_material_archive(task, Path(materials_receipt)) if archived
+                else materials.read_product_materials(Path(materials_receipt)))
     _require(material["client_id"] == frozen["client_id"]
              and material["client_artifacts"] == frozen["client_artifacts"],
              "实读产品物料与冻结task的客户端／制品／独立版本不一致")
@@ -223,20 +269,27 @@ def derive_material_private_launch_plan(task: Mapping[str, Any], *, bundle_root:
     env_names = ("HOME", "CLAUDE_USER_DATA_DIR", "CLAUDE_CONFIG_DIR") if desktop else ("HOME", "CLAUDE_CONFIG_DIR")
     tokens = (("{executable}",) if desktop else
               ("{executable}", "--user-data-dir", "{user_data}", "--extensions-dir", "{extensions}", "--new-window"))
+    if not desktop and material["facts"].get("vscode_activation_source") == {
+            "event_name": "extensionActivationTimes", "success_outcome": "success", "requires_log_level": "trace",
+            "originals": ["code-extension-host.js", "code-telemetry-service.js"]}:
+        # 只给实际源码已支持的产品版本开启固定日志参数；变动形成新的冻结
+        # recipe/task。参数仍来自静态闭集，调用方不能随意追加 inspector/shell。
+        tokens = (*tokens, "--log", "trace")
     template = _ReviewedLaunchTemplate(
         recipe_id=recipe["recipe_id"], client_id=frozen["client_id"], source_scope=frozen["execution"]["source_scope"],
         artifact_identity_sha256=_artifact_identity(frozen),
         official_support_sha256=recipe["official_support"]["sha256"], installation_mode="standard",
         argv_tokens=tokens, env_names=env_names, private_root_names=root_names)
     executable = next(row["content"]["path"] for row in frozen["client_artifacts"] if row["role"] == "application_executable")
-    roots = {name: str(Path(recipe["private_session_root"]) / name) for name in root_names}
+    session = physical_session_root(frozen, recipe, bundle_root, path_context)
+    roots = {name: str(session / name) for name in root_names}
     replacements = {"{executable}": executable, **{"{" + name + "}": value for name, value in roots.items()}}
     plan = {"client_id": frozen["client_id"], "task_sha256": frozen["task_sha256"],
             "recipe_sha256": frozen["execution"]["isolation_recipe"]["sha256"], "executable": executable,
             "argv": [replacements.get(token, token) for token in tokens], "env_names": list(env_names),
             "private_roots": roots, "installation_mode": "standard",
             "official_support_bindings": [recipe["official_support"]]}
-    result = _validate_private_launch_plan(frozen, recipe, plan, template)
+    result = _validate_private_launch_plan(frozen, recipe, plan, template, bundle_root=bundle_root, path_context=path_context)
     result["derivation"] = "public_materials_readonly"
     result["materials_receipt_sha256"] = material["receipt_sha256"]
     result["environment"] = {"HOME": roots["home"], "CLAUDE_CONFIG_DIR": roots["config"]}
@@ -249,9 +302,10 @@ def derive_material_private_launch_plan(task: Mapping[str, Any], *, bundle_root:
 
 
 def validate_material_private_launch_plan(task: Mapping[str, Any], plan: Mapping[str, Any],
-                                         *, bundle_root: Path, materials_receipt: Path) -> dict[str, Any]:
+                                         *, bundle_root: Path, materials_receipt: Path, path_context: Any = None) -> dict[str, Any]:
     """逐字核 material 派生计划，禁止外部追加 argv、环境名、portable 或替代 CLI。"""
-    actual = derive_material_private_launch_plan(task, bundle_root=bundle_root, materials_receipt=materials_receipt)
+    actual = derive_material_private_launch_plan(task, bundle_root=bundle_root, materials_receipt=materials_receipt,
+                                                path_context=path_context)
     _require(isinstance(plan, Mapping) and dict(plan) == actual["plan"], "启动计划不是当前实读物料的固定私有计划")
     return actual
 
@@ -369,7 +423,7 @@ def check_recipe_qualification(task: Mapping[str, Any], recipe: Mapping[str, Any
     _require(isinstance(recipe, Mapping) and dict(recipe) == actual, "资格核验须消费准确recipe原件")
     if frozen["execution"]["source_scope"] != "formal":
         raise ProductRecipeUnavailable("回归fixture不能认证真实产品隔离资格")
-    adapter = c.SOURCE_ADAPTERS.get(frozen["execution"]["recorder_id"])
+    adapter = c.source_adapter(frozen)
     if adapter is None or provider is not adapter or not callable(getattr(adapter, "verify_isolation_recipe", None)):
         raise ProductRecipeUnavailable("缺同task已登记的静态真实provider，隔离能力保持未知")
     _template(frozen, actual)

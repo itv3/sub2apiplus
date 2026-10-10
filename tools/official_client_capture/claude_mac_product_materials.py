@@ -373,6 +373,26 @@ def _inspect(client_id: str, *, application_root: Path, extension_root: Path | N
         cli_raw = public("code-cli.js", "application", "Contents/Resources/app/out/cli.js")
         _require(all(token in cli_raw for token in (b"user-data-dir", b"extensions-dir", b"inspect-extensions")),
                  "Code公开CLI解析器缺私有目录参数")
+        # 可用性从本次产品源码实读，不靠一份手填“已激活”声明。旧 fixture 没有
+        # 这些产品源码时仍可做只读诊断；正式产品配方不得因此取得模块资格。
+        activation_paths = {
+            "code-extension-host.js": "Contents/Resources/app/out/vs/workbench/api/node/extensionHostProcess.js",
+            "code-telemetry-service.js": "Contents/Resources/app/out/vs/code/electron-utility/sharedProcess/sharedProcessMain.js",
+        }
+        present = {row["path"] for row in snapshots["application"][0]["entries"]}
+        if all(path in present for path in activation_paths.values()):
+            activation_sources = {name: public(name, "application", path) for name, path in activation_paths.items()}
+            host = activation_sources["code-extension-host.js"]
+            telemetry = activation_sources["code-telemetry-service.js"]
+            # 绑定当前产品原件中的开始调用、resolve 成功、成功遥测及日志投影；
+            # 支持的解析器还须消费真实 ES/日志，静态 token 本身不是运行期证据。
+            _require(all(token in host for token in (b"ExtensionService#_doActivateExtension", b"didActivateExtension/",
+                         b"extensionActivationTimes", b'"success"', b'"failure"', b"activateResolvedTime"))
+                     and b"telemetry/" in telemetry and b"properties" in telemetry
+                     and b"measurements" in telemetry and b"trace" in cli_raw,
+                     "当前产品公开源码不支持已实现的成功激活观测配方")
+            facts["vscode_activation_source"] = {"event_name": "extensionActivationTimes", "success_outcome": "success",
+                "requires_log_level": "trace", "originals": sorted(activation_sources)}
         extension = _json(public("extension-package.json", "extension", "package.json"), "Claude扩展package")
         _require(extension.get("name") == "claude-code" and str(extension.get("publisher", "")).lower() == "anthropic"
                  and isinstance(extension.get("version"), str) and bool(extension["version"]), "Claude扩展身份或独立版本不符")
@@ -538,4 +558,27 @@ def read_product_materials(materials_receipt: Path) -> dict[str, Any]:
     _require(current == actual, "冻结收据与当前实读产品物料不一致")
     for name, raw in originals.items():
         _require(_read(receipt.parent, name) == raw, "冻结原件与实读物料不一致")
+    return copy.deepcopy(actual)
+
+
+def read_product_material_archive(task: Mapping[str, Any], materials_receipt: Path) -> dict[str, Any]:
+    """离线核冻结公共原件；不以此替代 Mac 的实际产品安装重验或授 formal 权。
+
+    ARM64 没有 Mac 应用路径，完整来源复验只读已封存的公共源码、库存及
+    制品来源，正式信任还须由受管桥和 ES/NE 实际签名独立验证。
+    """
+    receipt = Path(materials_receipt)
+    _require(receipt.name == "product-materials.json", "物料归档文件名不符")
+    root = receipt.parent
+    actual = _json(_read(root, receipt.name), "物料归档")
+    _require(actual.get("schema_version") == MATERIALS_SCHEMA and actual.get("client_id") == task["client_id"]
+             and actual.get("client_artifacts") == task["client_artifacts"]
+             and actual.get("receipt_sha256") == c.digest({key: value for key, value in actual.items() if key != "receipt_sha256"})
+             and all(actual.get(key) == value for key, value in _FLAGS.items()), "冻结物料归档与原 task 不一致")
+    for binding in [*actual["public_originals"], *actual["inventories"], actual["official_support"],
+                    *(row["official_source"] for row in actual["client_artifacts"])]:
+        c.bound_file(root, binding)
+    support = c.read_json(c.bound_file(root, actual["official_support"]))
+    _require(support["client_id"] == actual["client_id"] and support["facts"] == actual["facts"]
+             and support["originals"] == actual["public_originals"], "物料公共源码投影漂移")
     return copy.deepcopy(actual)

@@ -27,7 +27,8 @@ from tools.official_client_capture import claude_mac_product_native as native
 from tools.official_client_capture import claude_mac_product_provider as providers
 from tools.official_client_capture import claude_mac_product_recipe as recipes
 from tools.official_client_capture import claude_mac_product_recorder as recorder
-from tools.official_client_capture.claude_mac_state_journal import SnapshotLimits, file_state
+from tools.official_client_capture import claude_mac_product_state as product_state
+from tools.official_client_capture.claude_mac_state_journal import StateJournal, SnapshotLimits, file_state
 from tools.official_client_capture.tests import test_claude_mac_product_materials as material_fixture
 
 
@@ -253,6 +254,40 @@ class ProductExecutionTests(unittest.TestCase):
                 self.assertFalse(p.material["formal_ready"])
                 self.assertFalse(p.material["launch_allowed"])
 
+    def test_bridge_preseal_never_consumes_arm_capture_or_publishes_complete_manifest(self):
+        p = self.setup_product()
+        self.lifecycle(p)
+        def mac_inventory(task, root):
+            for name, value in (("process-session.json", {"fixture_only": True}),):
+                write(root/name, value)
+            write(root/"session-events.jsonl", b"{\"fixture_only\":true}\n")
+            attestation = c.binding(write(root/"provider-observations/mac-only-origin.json", {
+                "fixture_only": True, "task_sha256": task["task_sha256"], "side": "mac"}), root)
+            origin = {"task_sha256": task["task_sha256"], "deployment": task["execution"]["source_deployments"]["mac"], "attestation": attestation}
+            write(root/"source-origin.json", origin)
+            return p.provider.reply("inventory", {"files_available": True,
+                "files": [c.binding(root/name, root) for name in ("process-session.json", "session-events.jsonl", "source-origin.json")], "origin": origin})
+        p.provider.observation_inventory = mac_inventory
+        with mock.patch.object(source, "verify_client_bundle_v2", side_effect=AssertionError("不得读 ARM 捕获")):
+            first = p.recorder.seal_for_bridge(p.task, p.root, status="complete")
+            second = p.recorder.seal_for_bridge(p.task, p.root, status="complete")
+        self.assertEqual(first, second)
+        self.assertEqual(first["status"], "complete")
+        self.assertTrue((p.root/"product-preseal.json").is_file())
+        self.assertFalse((p.root/"source-manifest.json").exists())
+        raw = (p.root/first["preseal"]["path"]).read_bytes()
+        self.assertEqual(len(raw), first["preseal"]["bytes"])
+        self.assertNotIn("socket-calls.jsonl", {row["path"] for row in first["files"]})
+
+    def test_unknown_bridge_tail_is_failed_without_success_origin_or_manifest(self):
+        p = self.setup_product()
+        self.lifecycle(p)
+        p.provider.unknown_close = True
+        result = p.recorder.seal_for_bridge(p.task, p.root, status="complete")
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["origin"])
+        self.assertFalse((p.root/"source-manifest.json").exists())
+
     def test_complete_fixture_bundle_replays_and_repeated_seal_never_redispatches(self):
         for client in ("claude-desktop", "claude-vscode"):
             with self.subTest(client=client):
@@ -429,6 +464,39 @@ class ProductExecutionTests(unittest.TestCase):
             p.recorder.seal_sources(p.task, p.root, status="complete")
         self.assertIsNone(p.recorder._journal)
         self.assertFalse((p.root / "source-manifest.json").exists())
+
+    def test_bridge_preseal_revocation_releases_state_lock_without_preseal(self):
+        p = self.setup_product()
+        p.recorder.prepare_state(p.task, p.root)
+        with mock.patch.dict(c.SOURCE_ADAPTERS, {}, clear=True), self.assertRaises(ValueError):
+            p.recorder.seal_for_bridge(p.task, p.root, status="complete")
+        self.assertIsNone(p.recorder._journal)
+        self.assertFalse((p.root / "product-preseal.json").exists())
+
+    def test_repeated_recovery_result_rehydrates_only_and_never_reissues_owned_call(self):
+        p = self.setup_product()
+        self.lifecycle(p)
+        original = p.provider.reply("recovery_owned", {"process_instance": p.provider.instance,
+            "stopped": True, "stopped_at_utc": p.provider.stopped})
+        p.recorder._append("recovery_owned_intent", {})
+        p.recorder._append("recovery_owned_result", original)
+        p.recorder._release()
+        p.provider.rehydrate_recovery = mock.Mock()
+        before = list(p.provider.calls)
+        # 原件为 fixture，只有固定工厂所有权接点替身化；StateJournal 和旧返回
+        # 原件绑定仍运行本体，直接检查正式恢复工程分支，不登记正式来源。
+        with mock.patch.object(product_state, "scope_context", return_value={"fixture_only": True}), \
+             mock.patch.object(StateJournal, "observe_product_writes"), \
+             mock.patch.object(p.provider, "recover_owned", side_effect=AssertionError("历史回收不得重发")):
+            first = p.recorder._recover_formal(p.task, p.root)
+            second = p.recorder._recover_formal(p.task, p.root)
+        self.assertEqual(first["status"], "restored")
+        self.assertEqual(second["status"], "restored")
+        self.assertEqual(p.provider.calls, before)
+        self.assertEqual(p.provider.rehydrate_recovery.call_count, 2)
+        p.provider.rehydrate_recovery.assert_called_with(p.task, original)
+        self.assertFalse(first["launch_allowed"])
+        self.assertFalse(first["new_request_dispatched"])
 
     def test_unverified_product_origin_is_rejected_before_manifest_publication(self):
         p = self.setup_product()
