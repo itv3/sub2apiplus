@@ -622,7 +622,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 14))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 15))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
@@ -648,6 +648,30 @@ class ClaudePolicyFileTests(unittest.TestCase):
         self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_mac_product_recorder.py"), "wire_producer")
         self.assertEqual(v3.classify_path(self.policy, "official_client_control/qualification_bindings.py"), "evidence_semantics")
         self.assertEqual(v3.classify_path(self.policy, "official_client_control/replay_bindings.py"), "evidence_semantics")
+
+    def test_formal_mac_source_has_explicit_semantic_layers(self) -> None:
+        """正式捕获、产品原件与跨机工厂逐用途归层，不能落入默认wire层。"""
+        expected = {
+            "claude_mac_capture_engine_core.py": "wire_producer",
+            "claude_mac_capture_dependency_core.py": "wire_producer",
+            "claude_mac_capture_h2_core.py": "wire_producer",
+            "claude_mac_capture_runtime_core.py": "evidence_semantics",
+            "claude_mac_formal_capture_contract.py": "evidence_semantics",
+            "claude_mac_product_logs.py": "evidence_semantics",
+            "claude_mac_product_modules.py": "evidence_semantics",
+            "claude_mac_product_origins.py": "evidence_semantics",
+            "claude_mac_product_native.m": "evidence_semantics",
+            "claude_mac_product_flows_native.m": "evidence_semantics",
+            "claude_mac_capture_fixture_policy.py": "control",
+            "claude_mac_formal_capture_service.py": "control",
+            "claude_mac_managed_source.py": "control",
+            "claude_mac_agent_bridge.py": "control",
+            "claude_mac_product_source.py": "control",
+            "claude_mac_product_broker_native.m": "control",
+        }
+        for name, layer in expected.items():
+            with self.subTest(file=name):
+                self.assertEqual(v3.classify_path(self.policy, "official_client_capture/" + name), layer)
 
     def test_native_process_projection_is_claude_only_and_explicitly_layered(self) -> None:
         """原生.m只进入Claude受管树；新源和接线不影响Codex敏感层。"""

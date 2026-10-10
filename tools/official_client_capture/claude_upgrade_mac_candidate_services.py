@@ -5,8 +5,8 @@
 RuntimeAdmission 不是新权限对象，其 plan 与 Campaign plan 必须与受管原件相等，
 读取和 CAS 必须仍在既有项目锁内。
 
-预算占用使用已经落地的原 task 持久事件。捕获和产品工厂仍只来自已登记静态
-适配器，当前登记为空，因而正式入口继续零启动关闭。本模块不把 fixture 的
+预算占用使用已经落地的原 task 持久事件。捕获和产品工厂只来自固定受管来源；
+实际安装未通过时，正式入口在预算占用与派发意图之前拒绝。本模块不把 fixture 的
 NativeCapture、剩余额度检查或已有 ready 文件当作正式后端；关闭不释放预算，
 释放由精确 COMMIT 之后的统一账务消费负责。
 """
@@ -33,15 +33,15 @@ MISSING_LIVE_CAPABILITIES = (
 
 
 class CandidateServicesUnavailable(ConfigurationError):
-    """正式 live 能力尚未实现；不补造预约、终态或零请求事实。"""
+    """正式来源或原实例不可用；不补造预约、终态或零请求事实。"""
 
 
 class CandidateMacClientServices:
     """消费原持久预算，静态真实工厂缺失时在占用和 dispatch-intent 前拒绝。
 
     admit 与 recheck_dispatch 是可用的控制门禁；其通过不授予启动权。真正的
-    来源登记与工厂验收完成之前，本类永不返回 recorder，不启动产品，不创建第二本
-    账、不重建 attempt、不获取新 lease，也不释放调用者持有的监督器。
+    只有实际受管安装、原任务和固定工厂验真后才返回 recorder。复用原账本、attempt、
+    lease 与监督器，清理与重放均不能重新取得派发权限。
     """
 
     def __init__(self, campaign_dir: Path, runtime_admission: ledger.RuntimeAdmission) -> None:
