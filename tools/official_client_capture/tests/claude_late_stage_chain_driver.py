@@ -129,12 +129,14 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             with (injection / "usercustomize.py").open("a", encoding="utf-8") as stream:
                 stream.write(FINALIZE_CRASH)
             variables[CRASH_MARKER_ENV] = str(self.root / "finalize-crashed-once")
-        with mock.patch.dict(os.environ, variables):
-            return batch_tests.run_main([
+        with mock.patch.dict(os.environ, variables), \
+                environment.action_diagnostics(sequence, action, variables, self.control) as output_path:
+            outcome = batch_tests.run_main([
                 "compile-and-run-vc-batch", "--campaign-dir", campaign, "--phase", "VC-6", "--sequence", sequence,
                 "--predecessor-checkpoint", vc.vc_checkpoint_path(campaign, "VC-5", revision=world.get("revision", 1)),
                 "--action-plan", plan, "--state-dir", self.state_dir,
             ])
+        return environment.diagnostic_outcome(outcome, output_path)
 
     def late_audit(self, name: str, world: dict[str, Any]) -> Any:
         """共用六项审计；每个故障在同一 Campaign 的当前可信状态上取快照。"""
