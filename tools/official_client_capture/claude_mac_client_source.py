@@ -513,7 +513,8 @@ def verify_isolation_recipe_v2(task: Mapping[str, Any], bundle_root: Path, *,
             bridge_context = verify_context(task, root)
         physical_session = bridge.validate_bridge_path_context(task, bridge_context, bundle_root=root)
         c.require(str(bridge_context.logical_session_root) == str(session_root)
-                  and set(bridge_context.state_paths) == set(recipe["state_paths"]),
+                  and {str(logical) for logical, _physical in bridge_context.state_paths}
+                  == set(recipe["state_paths"]),
                   "路径映射未绑定原私有会话与状态路径全集")
         c.require_plain_path(Path(physical_session))
     else:
