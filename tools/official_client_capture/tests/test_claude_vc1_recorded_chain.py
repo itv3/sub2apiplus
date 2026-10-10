@@ -422,26 +422,25 @@ class RecordedSourceContractTests(unittest.TestCase):
 
     def test_official_adapter_returns_current_runtime_and_retains_origin(self) -> None:
         from tools.official_client_capture import claude_upgrade_capture as capture
+        from tools.official_client_capture.capturelib.identity import capture_source_bundle_identity
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
 
-        runtime_path = Path(self.projection["runtime"]["receipt"]["path"])
-        receipt = source.read(runtime_path)
         tools = self.data / "tools/official_client_capture"
         campaign = self.data / "evidence/campaigns/fixture"
-        campaign.mkdir(parents=True)
+        attempt = campaign / "official/attempts/fixture-attempt"
+        reservation = source.read(source.bound(self.projection["runtime"]["reservation"]))
+        source.write(attempt / "reservation.json", reservation)
         manifest = {"configuration": {"capture_root": str(self.data), "capture_tool_root": str(tools),
                     "capture_container": "capture-cli", "synthetic_capture_container": "capture-cli-synthetic",
-                    "runtime_image": receipt["runtime_image_reference"]}}
+                    "runtime_image": driver.IMAGE}}
         # 使用真实布局，宿主签发源码仍在仓库中，容器执行副本位于独立 staging 数据根。
         with mock.patch.object(capture.claude_upgrade, "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS", (str(self.data / "runs"),)), \
                 mock.patch.object(capture.claude_upgrade, "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT", str(self.data / "runs")):
             layout = capture._capture_layout(campaign, manifest)
         self.assertFalse(layout.host_tool_root.is_relative_to(self.data))
-        context = SimpleNamespace(mode=capture.MODE_FORMAL, attempt_root=runtime_path.parent, campaign_dir=campaign,
-                                  attempt_id=runtime_path.parent.name, manifest=manifest, layout=layout)
-        values = {"host_runtime_receipt": str(runtime_path), "host_runtime_receipt_sha256": source.binding(runtime_path)["sha256"],
-                  "run_nonce": receipt["run_nonce"]}
-        current = {"path": runtime_path.name, "sha256": values["host_runtime_receipt_sha256"], "run_nonce": receipt["run_nonce"],
-                   "container_name": receipt["container"]["name"], "container_id": receipt["container"]["id"]}
+        context = capture.ScenarioReceiptContext(mode=capture.MODE_FORMAL, attempt_root=attempt, campaign_dir=campaign,
+                                                 campaign_id=campaign.name, attempt_id=attempt.name, manifest=manifest,
+                                                 layout=layout, run_nonce=reservation["run_nonce"], evidence_root=attempt / "evidence")
         raw_step = {"probe_id": PROJECTION_PROBE, "argv": ["docker", "exec", "capture-cli", *self.projection["argv"],
                     "--host-runtime-receipt", "{host_runtime_receipt}",
                     "--host-runtime-receipt-sha256", "{host_runtime_receipt_sha256}", "--run-nonce", "{run_nonce}"],
@@ -449,14 +448,19 @@ class RecordedSourceContractTests(unittest.TestCase):
                     "runtime_variables": {"host_runtime_receipt": "absolute_path", "host_runtime_receipt_sha256": "sha256", "run_nonce": "sha256"}}
         adapter = object.__new__(source.SourceAdapter)
         adapter.state, adapter.pending = self.state, {}
-        # 只给步骤查询提供冻结输入；不替换 runtime、relay、seal 或目录判定的通过条件。
+        # 只给步骤查询与 Docker 提供外部输入，初始官方阶段经过真实 runtime 签发和完整 v5 判定。
         job = SimpleNamespace(job_id="official-fixture", steps=[raw_step])
-        original = mock.Mock(return_value=(values, current))
-        with mock.patch.object(capture.claude_upgrade, "_campaign_jobs", return_value=[job]):
-            actual_values, actual_binding = adapter.issue(original, context, job_id="official-fixture", probe_id=PROJECTION_PROBE,
-                                                         step_index=1, run_index=1)
-        self.assertIs(actual_values, values)
-        self.assertIs(actual_binding, current)
+        observer = driver.official_host_observation(self.data)
+        with mock.patch.object(capture.claude_upgrade, "_campaign_jobs", return_value=[job]), \
+                mock.patch.object(capture, "_run_probe_command", observer.run):
+            actual_values, actual_binding = adapter.issue(capture._issue_host_runtime_receipt, context,
+                                                         job_id="official-fixture", probe_id=PROJECTION_PROBE,
+                                                         step_index=1, run_index=1, container="capture-cli", deadline=None, heartbeat=None)
+        runtime_path = Path(actual_values["host_runtime_receipt"])
+        receipt = source.read(runtime_path)
+        self.assertEqual(receipt["capture_source_bundle"], capture_source_bundle_identity(layout.host_tool_root))
+        self.assertEqual(receipt["docker_server"], {"version": "fixture-recorded-daemon", "os": "linux", "arch": "arm64"})
+        self.assertEqual(receipt["run_nonce"], actual_binding["run_nonce"])
         _argv, path, digest = adapter.pending[self.projection["operation"]]
         projected = source.read(source.bound({"path": str(path), **replay._digest(path)}))
         self.assertEqual(digest, source.binding(path)["sha256"])
@@ -467,6 +471,13 @@ class RecordedSourceContractTests(unittest.TestCase):
                                                "argument": str(layout.capture_tool_root / "capturelib/claude_fw_f_v5.py")})
         origin = source.verify_projection(self.state, projected)
         self.assertEqual(source.control_manifest(self.state, projected, origin)["fixture_projection"]["v5_dimension_result"], "passed")
+        for index, server in enumerate((None, {"os": "linux", "arch": "amd64"})):
+            with self.subTest(docker_server=server):
+                rejected = copy.deepcopy(projected)
+                rejected_path = source.write(attempt / f"rejected-runtime-{index}.json", {**receipt, "docker_server": server})
+                rejected["runtime"]["receipt"] = source.binding(rejected_path)
+                with self.assertRaisesRegex(replay.ReplayError, "缺少完整 ARM64 镜像与执行源事实"):
+                    source.control_manifest(self.state, rejected, source.verify_projection(self.state, rejected))
 
     def test_state_is_fixture_only_and_outside_staging_is_rejected(self) -> None:
         source.load_state(self.state_path, source.binding(self.state_path)["sha256"], isolation=False)

@@ -354,7 +354,7 @@ class RecordedHostObservation:
             })
             return subprocess.CompletedProcess(argv, 0, "", "")
         if command[:4] == ["docker", "inspect", "--format", "{{json .Image}}"]:
-            if command[4:] != [self.configuration["service_container"]]:
+            if command[4:] != [self.configuration.get("service_container")]:
                 raise replay.ReplayError("服务镜像观察的容器与冻结坐标不符")
             return subprocess.CompletedProcess(argv, 0, json.dumps(self.build["image"]["image_id"]), "")
         if command[:5] == ["docker", "image", "inspect", "--format", "{{json .RepoDigests}}"]:

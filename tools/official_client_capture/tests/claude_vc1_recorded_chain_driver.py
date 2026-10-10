@@ -135,6 +135,16 @@ def _binary_observation(state: dict[str, Any], manifest: dict[str, Any], observe
     return observer.fake_binaries(manifest, **options)
 
 
+def official_host_observation(data: Path):
+    """官方起点也使用完整 Docker 观察和真实签发器；参数与本驱动创建的预检计划保持一致。"""
+
+    from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full
+    from tools.official_client_capture.tests import test_claude_upgrade_capture as fixture
+
+    return full.RecordedHostObservation(data, {"capture_container": fixture.CAPTURE,
+                                        "synthetic_capture_container": fixture.SYNTHETIC, "runtime_image": IMAGE}, {})
+
+
 @contextlib.contextmanager
 def installed(state_path: Path, digest: str, *, adapter_factory: Callable[..., Any] = source.SourceAdapter):
     """所有替身集中登记。控制判定函数不在替换清单内，离开作用域后恢复原函数。"""
@@ -151,7 +161,7 @@ def installed(state_path: Path, digest: str, *, adapter_factory: Callable[..., A
     state, data = adapter.state, Path(adapter.state["data_root"])
     for item in state["inputs"]["bindings"].values():
         source.bound(item, root=data)
-    host = fixture.FakeHost()
+    host = official_host_observation(data)
     observer = rehearsal_fixture.ClaudeRehearsalFixture()
     observer.binary_calls = 0
     original_repo_file, baseline_path, rules_path = plan._repository_file, plan.baseline_rule_manifest_path, plan.rule_manifest_path
