@@ -60,6 +60,8 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
             # ce9e3b79：3e3a333db 起的受管版本，B5a-08 更新 TARGET_VERIFIER_SHA256S 之前的生成器；按部署
             # 边界规则登记，仅供该版本已生成收据的只读重放。
             "ce9e3b7916a8075d3563abcd3382a289f2ef833cd7913dd607f92007af300981",
+            # B5a-09／10 测试单元读集接线前的已部署生成器；仅供历史 v4 收据只读重放。
+            "48cc60ff1419ba51b1d812e3ef30332e473b186a602c43831bd7ee4ad91a62de",
         }
     ),
 }
@@ -68,8 +70,8 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
 TARGET_VERIFIER_SHA256S: dict[str, str] = {
     "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
     "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
-    "unit_records.py": "9bdc1f8ea5831945781585b0129337566a0cd4284b6c637b01fb34ce41995c31",
-    "read_audit.py": "2d871034acc2c49c07623b5168190391229df23be3bd83cb5673435fa4f78bac",
+    "unit_records.py": "5fe0b37ab7f6cb118da98c2123eb1b552bb621dec43c7d644b22f394cb3af2b6",
+    "read_audit.py": "af7f77e14ee21601a7cb190d1d9376ef8258a352fbc1d3feab6f31d21f47be17",
     "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e"
 }
 
