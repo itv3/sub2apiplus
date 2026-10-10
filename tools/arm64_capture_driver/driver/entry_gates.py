@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import math
@@ -26,7 +27,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 HERE = Path(__file__).resolve().parent
 EXECUTOR = HERE / "unit_executor.py"
@@ -442,14 +443,53 @@ def historical_source_input(root: str | None) -> dict[str, Any]:
     return steps.resolve(steps.Input("environment", "tree", root or "/nonexistent-historical-source-root", "pycache"), ctx)
 
 
-def pre_a3_data_root_inputs(data_root: Path, client: str = "codex") -> list[dict[str, Any]]:
+def pre_a3_data_root_inputs(data_root: Path, client: str = "codex", *,
+                            pre_a3_env: Mapping[str, str] | None = None) -> list[dict[str, Any]]:
     """pre-A3 场景读、但测试树里没有或不保证与测试树一致的数据根内容：与 E2-05 的 pre-A3 步骤同一份
     （``entry_steps.pre_a3_data_root``：冻结台账目录、录制数据、alpine 镜像、断言打包脚本、项目总账探测位置；Claude 另加
     它自己的总账目录的两处探测位置，B5a-06）。门禁清单生成时在数据根算好，作为已算明细（``resolved``）带给每个场景单元。"""
 
     steps = _entry_steps_module()
-    ctx = steps.Context(params={"D": str(Path(data_root).resolve())}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
+    ctx = steps.Context(params={"D": str(Path(data_root).resolve()), **dict(pre_a3_env or {})},
+                        driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
     return [steps.resolve(item, ctx) for item in steps.pre_a3_data_root(client)]
+
+
+def pre_a3_fixture_environment(client: str, values: Mapping[str, str] | None) -> dict[str, str]:
+    """只接收 Claude 正式入口登记的白名单来源；缺目录或经符号链接转向时在派发前失败，不让叶测试 skip 冒充认证。
+    Codex 无新来源键，原来的环境合同保持不变。"""
+
+    keys = _client_table().spec(client)["pre_a3_fixture_keys"]
+    if not keys:
+        return {}
+    provided = dict(values or {})
+    allowed = {"PYTHONPATH", "PYTHONPYCACHEPREFIX", "CODEX_UPGRADE_IDENTITY_MEMO", *keys}
+    if set(provided) - allowed:
+        raise ValueError(f"Claude pre-A3 不接受未登记的环境键：{sorted(set(provided) - allowed)}")
+    result = {}
+    for key in keys:
+        value = provided.get(key)
+        if not isinstance(value, str) or not value.startswith("/") or ".." in value.split("/"):
+            raise ValueError(f"Claude pre-A3 缺少显式绝对来源目录：{key}")
+        path = Path(value)
+        if path.is_symlink() or not path.is_dir() or path.resolve() != path:
+            raise ValueError(f"Claude pre-A3 来源目录不存在或经过符号链接：{key}")
+        if not any(path.iterdir()):
+            raise ValueError(f"Claude pre-A3 来源目录为空：{key}")
+        result[key] = value
+    return result
+
+
+def pre_a3_fixture_resolved(client: str, values: Mapping[str, str] | None) -> list[dict[str, Any]]:
+    """按与入口步骤完全相同的输入声明现算只读来源摘要，拒绝空树；调用者不能只透传环境而遗漏内容绑定。"""
+
+    environment = pre_a3_fixture_environment(client, values)
+    steps = _entry_steps_module()
+    ctx = steps.Context(params=environment, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))
+    result = [steps.resolve(item, ctx) for item in steps.pre_a3_fixture_inputs(client)]
+    if any(item.get("sha256") == "missing" or item.get("detail", {}).get("files") == 0 for item in result):
+        raise ValueError("Claude pre-A3 来源目录为空或无法取得内容摘要")
+    return result
 
 
 def pre_a3_units_client(units: Path) -> str:
@@ -603,6 +643,10 @@ def plan_gates(
             unit_clients = {pre_a3_unit_client(unit.get("unit_id", "")) for unit in payload["units"]}
             if len(unit_clients - {None}) > 1:
                 raise ValueError(f"pre-A3 场景清单混有多个客户端的单元：{sorted(item for item in unit_clients if item)}")
+            unit_client = next(iter(unit_clients - {None}), "codex")
+            fixture_inputs = pre_a3_fixture_resolved(unit_client, pre_a3_env)
+            fixture_names = {item["name"] for item in fixture_inputs}
+            data_inputs = [item for item in pre_a3_data_inputs or [] if item["name"] not in fixture_names] + fixture_inputs
             members = []
             for unit in payload["units"]:
                 if not str(unit.get("unit_id", "")).startswith(PRE_A3_PREFIX):
@@ -614,13 +658,21 @@ def plan_gates(
                 merged.update(cores=cores, memory_mb=PRE_A3_MEMORY_MB)
                 test_file = unit.get("scenario_test_file")
                 if isinstance(test_file, str) and test_file:
-                    merged["inputs"] = pre_a3_inputs(test_file, pre_a3_data_inputs, pre_a3_unit_client(unit["unit_id"]) or "codex")
+                    merged["inputs"] = pre_a3_inputs(test_file, data_inputs, pre_a3_unit_client(unit["unit_id"]) or "codex")
                 else:
                     merged.update(inheritable=False, not_inheritable_reason=PRE_A3_NOT_INHERITABLE)
                 if seconds is not None:
                     merged["weight"] = seconds
                 if pre_a3_env:
                     merged["env"] = {**(unit.get("env") or {}), **pre_a3_env}
+                # 正式 Claude 链保留日志与录制副本。它们是本单元的产物，不把可变产物内容写进来源输入摘要。
+                if fixture_inputs and "--staging-parent" in merged["argv"]:
+                    parent = Path(merged["argv"][merged["argv"].index("--staging-parent") + 1])
+                    if not parent.is_absolute() or "staging" not in parent.parts or ".." in parent.parts:
+                        raise ValueError("Claude pre-A3 记录父目录必须位于显式 staging 根")
+                    record_id = hashlib.sha256(unit["unit_id"].encode()).hexdigest()[:16]
+                    merged["env"] = {**merged.get("env", {}),
+                                     "CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(parent / "claude-chain-records" / record_id)}
                 units.append(merged)
                 members.append(unit["unit_id"])
             gates.append({"gate_id": gate_id, "units": members})
@@ -1069,13 +1121,15 @@ def main(argv: list[str] | None = None) -> int:
             if not isinstance(launcher, list) or not all(isinstance(part, str) and part for part in launcher):
                 raise ValueError("--launcher-json 必须是非空字符串组成的列表")
             client = pre_a3_units_client(args.pre_a3_units) if args.pre_a3_units is not None else "codex"
-            data_inputs = pre_a3_data_root_inputs(args.pre_a3_data_root, client) if args.pre_a3_data_root is not None else None
+            pre_a3_env = _pairs(args.pre_a3_env, "--pre-a3-env") or None
+            data_inputs = (pre_a3_data_root_inputs(args.pre_a3_data_root, client, pre_a3_env=pre_a3_env)
+                           if args.pre_a3_data_root is not None else None)
             with_gates = [gate for gate in args.with_gates.split(",") if gate]
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
                                   input_scopes=[json.loads(path.read_text()) for path in args.input_scope],
                                   audit_policy=json.loads(args.audit_policy.read_text()) if args.audit_policy else None,
                                   with_gates=with_gates,
-                                  pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None,
+                                  pre_a3_units=args.pre_a3_units, pre_a3_env=pre_a3_env,
                                   pre_a3_data_inputs=data_inputs,
                                   environment=environment_facts(args.tree, args.typescript_module),
                                   egress_extra_inputs=[historical_source_input(args.historical_source_root)])

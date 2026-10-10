@@ -66,6 +66,8 @@ NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in (
     "CAMPAIGN_PURPOSE",
     # B5b-01b 续（边界核对接入）：Claude 专属可选键——VC-5 边界核对 codex-final-wire-isolation 的四个轮次参数（Codex 参数文件不得写）。
     "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
+    # B5a-09 来源接线：只清除外层残留的 Claude 工程来源，不向 Codex 单元传递任何新环境。
+    "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
 ))
 
 
@@ -882,6 +884,16 @@ B405B1_SHELL_RESIDUALS: dict[str, list[str]] = {
         "+CLIENT_STEP_REQUIRED=(CT_VC5_RECOVER_SCRIPT vc5-recover.sh)",
     ],
 }
+# B5a-09 工程来源接线：Codex 表项为空，新增循环不进入循环体，PRE_A3_ARGS 逐字相同。
+# test_claude_pre_a3_source_wiring 另以真实 bash 执行这个循环，核对空表与三个固定来源的实际参数。
+B5A09_SOURCE_BASELINE_COMMIT = "4cc10d5857177f60e5ad48f85bc1e8f572ee9f68"
+B5A09_SOURCE_SHELL_DIGESTS = {"entry-gates.sh": "3c88989210c6770b56f3dad9fa4705f53d0f784dc37a3e9dc0f30c9562bbff37"}
+B5A09_SOURCE_SHELL_RESIDUALS = {"entry-gates.sh": [
+    "+    for name in; do",
+    '+      if [ -z "${!name:-}" ]; then echo "ENTRY_GATES_ABORTED：pre-A3 缺少本轮显式来源 ${name}" >&2; exit 3; fi',
+    '+      PRE_A3_ARGS+=(--pre-a3-env "$name=${!name}")',
+    "+    done",
+]}
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
@@ -891,6 +903,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("m9-bytecode", M9_BYTECODE_BASELINE_COMMIT, M9_BYTECODE_SHELL_DIGESTS, M9_BYTECODE_SHELL_RESIDUALS),
     ("B5b-01b", B5B01B_BASELINE_COMMIT, B5B01B_SHELL_DIGESTS, B5B01B_SHELL_RESIDUALS),
     ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SHELL_DIGESTS, B405B1_SHELL_RESIDUALS),
+    ("B5a-09-source", B5A09_SOURCE_BASELINE_COMMIT, B5A09_SOURCE_SHELL_DIGESTS, B5A09_SOURCE_SHELL_RESIDUALS),
 )
 
 

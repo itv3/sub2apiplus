@@ -38,6 +38,7 @@ from unittest import mock
 from tools import arm64_supervised_deploy as deploy
 from tools.ci import entry_dryrun as dr
 from tools.ci import entry_gates as eg
+from tools.official_client_capture.tests.test_claude_pre_a3_source_wiring import source_environment
 from tools.ci import entry_orchestrator as eo
 from tools.ci import entry_steps as es
 from tools.ci import unit_records as records
@@ -876,6 +877,7 @@ class EntryGatesClaudeTests(unittest.TestCase):
                  "timeout_seconds": 60, "weight": 1.0, "scenario_test_file": self.SCENARIO_TEST}]}), encoding="utf-8")
             self.assertEqual(eg.pre_a3_units_client(units), "claude")
             manifest = eg.plan_gates(Path("."), profile="pre-a3", launcher=["launcher"], pre_a3_units=units, pre_a3_data_inputs=[],
+                                     pre_a3_env=source_environment(root / "sources"),
                                      platform="linux")
             self.assertIn("repo:official_client_control", names(manifest["units"][0]["inputs"]))
             data = root / "data"
@@ -883,7 +885,8 @@ class EntryGatesClaudeTests(unittest.TestCase):
             claude = [entry["name"] for entry in eg.pre_a3_data_root_inputs(data, "claude")]
             codex = [entry["name"] for entry in eg.pre_a3_data_root_inputs(data)]
             self.assertEqual(claude, codex + ["tree:{D}/staging/upgrade-project-ledger-claude#pycache",
-                                              "tree:{D}/upgrade-project-ledger-claude#pycache"])
+                                              "tree:{D}/upgrade-project-ledger-claude#pycache"] +
+                             [item.name for item in es.pre_a3_fixture_inputs("claude")])
 
     def _repo(self, overrides: dict[str, str]) -> records.RepoIndex:
         """受管两根、文档与部署脚本的跟踪文件（文件系统列举，不读 git）配合成摘要；``overrides`` 改其中几个文件的摘要。"""

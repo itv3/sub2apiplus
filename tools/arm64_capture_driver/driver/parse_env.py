@@ -80,6 +80,8 @@ OPTIONAL_KEYS = (
     # codex-final-wire-isolation 的四个轮次参数。参数文件可缺省，seal 链派发边界核对之前与 VC-5 启动预检报缺；写了就核格式
     # （BOUNDARY_FORMAT_KEYS）。别的客户端（Codex）的参数文件写了即按另一客户端的专属键拒绝。
     "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
+    # 工程 pre-A3 的只读历史来源：只接受本轮显式给出的三个 Claude 专属目录，不继承外层 CLAUDE_*。
+    "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
 )
 # 边界核对轮次参数的格式（B5b-01b 续）：两个 ID 是正整数，模型是安全标识，生产提交是完整 40 位小写 sha1（与
 # capture-candidate boundary-check 的入口校验同一口径）。
@@ -333,6 +335,9 @@ def parse(text: str) -> dict[str, str]:
         except ValueError:
             raise EnvFileError("UPSTREAM_IP 必须是 IP 地址") from None
     for key in PLAN_PATH_KEYS:
+        if key in values and (not values[key].startswith("/") or ".." in values[key].split("/")):
+            raise EnvFileError(f"{key} 必须是不含 .. 的绝对路径")
+    for key in spec["pre_a3_fixture_keys"]:
         if key in values and (not values[key].startswith("/") or ".." in values[key].split("/")):
             raise EnvFileError(f"{key} 必须是不含 .. 的绝对路径")
     for key in PLAN_ID_KEYS:

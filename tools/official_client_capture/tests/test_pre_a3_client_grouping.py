@@ -36,6 +36,7 @@ from tools.official_client_capture import upgrade_client_adapter
 from tools.official_client_capture.tests import test_codex_upgrade_policy_certification as policy_tests
 from tools.official_client_capture.tests import test_codex_upgrade_pre_a3_certification as pre_a3_tests
 from tools.official_client_capture.tests.test_claude_upgrade_job_tool_tree import VersionBoundaryFixture
+from tools.official_client_capture.tests.test_claude_pre_a3_source_wiring import source_environment
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TOOL_ROOT = REPO_ROOT / "tools" / "official_client_capture"
@@ -277,7 +278,8 @@ class EntryGatesTests(unittest.TestCase):
                                        ({CLAUDE_FAKE_NAME: (123.0, 0.61)}, (0.75, 123.0))):
                 with self.subTest(measured=bool(measured)), mock.patch.dict(entry_gates.PRE_A3_MEASURED, measured, clear=True):
                     manifest = entry_gates.plan_gates(root, profile="pre-a3", launcher=[], pre_a3_units=path,
-                                                     pre_a3_data_inputs=[], platform="linux")
+                                                     pre_a3_data_inputs=[], pre_a3_env=source_environment(root / "sources"),
+                                                     platform="linux")
                     unit = manifest["units"][0]
                     self.assertEqual((unit["cores"], unit["weight"]), expected)
                     self.assertEqual(unit["unit_id"], f"pre-a3:claude:{CLAUDE_FAKE_NAME}")
@@ -314,7 +316,8 @@ class EntryGatesTests(unittest.TestCase):
             claude_file = root / "claude-units.json"
             claude_file.write_text(json.dumps(claude_units), encoding="utf-8")
             manifest = entry_gates.plan_gates(Path("."), profile="pre-a3", launcher=["launcher"], pre_a3_units=claude_file,
-                                              pre_a3_data_inputs=[], platform="linux")
+                                              pre_a3_data_inputs=[], pre_a3_env=source_environment(root / "sources"),
+                                              platform="linux")
             self.assertEqual([unit["unit_id"] for unit in manifest["units"]], [f"pre-a3:claude:{CLAUDE_FAKE_NAME}"])
             self.assertEqual(manifest["gates"], [{"gate_id": "pre-a3", "units": [f"pre-a3:claude:{CLAUDE_FAKE_NAME}"]}])
             self.assertIn("--client", manifest["units"][0]["argv"])

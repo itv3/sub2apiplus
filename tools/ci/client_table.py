@@ -129,6 +129,8 @@ _CODEX: Mapping[str, Any] = {
     "exclusive_required_keys": ("KILO_BIN", "KILO_VERSION", "KILO_SHA256", "CODEX_BIN", "CODEX_BIN_SHA256", "CODEX_ACCOUNT_ID"),
     # 只属于本客户端的可选键：Codex 没有。
     "exclusive_optional_keys": (),
+    # pre-A3 显式来源：Codex 沿用既有 recorded 输入，参数、环境与单元规格均不增加新项。
+    "pre_a3_fixture_keys": (),
     "key_aliases": {"CLIENT_BIN": "CODEX_BIN", "CLIENT_BIN_SHA256": "CODEX_BIN_SHA256", "CLIENT_ACCOUNT_ID": "CODEX_ACCOUNT_ID"},
     # 除二进制摘要、官方包与画像摘要外还要核对为完整 SHA-256 的必填键（顺序即报错顺序）。
     "extra_sha256_keys": ("KILO_SHA256",),
@@ -265,6 +267,11 @@ _CLAUDE: Mapping[str, Any] = {
     # 与 VC-5 启动预检报缺；写了就核格式（parse_env）。出现在 Codex 参数文件里即拒绝。
     "exclusive_optional_keys": (
         "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
+        "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
+    ),
+    # 固定顺序为 relay、旧 freeze、历史 static；relay 还读取同级补充取证，输入声明覆盖共同父根。
+    "pre_a3_fixture_keys": (
+        "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
     ),
     "key_aliases": {},
     "extra_sha256_keys": (),
@@ -446,6 +453,7 @@ SHELL_ENTRIES = (
     "atomic_rehearsal_module", "atomic_root_prefix", "vc23_dispatch_script", "campaign_purpose_key", "preflight_plan_argv",
     "official_reuse_subcommand", "vc5_start_script", "vc5_seal_script", "vc5_accept_script", "vc5_canonical_script",
     "vc5_recover_script",
+    "pre_a3_fixture_keys",
 )
 
 

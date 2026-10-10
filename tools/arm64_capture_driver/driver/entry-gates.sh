@@ -311,6 +311,12 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
     PA3_PARENT=$(python3 -m "$CT_PRE_A3_MODULE" plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} \
       | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_parent"])')
     PRE_A3_ARGS=(--pre-a3-units "$UNITS" --pre-a3-data-root "$D" --pre-a3-env "PYTHONPATH=." --pre-a3-env "CODEX_UPGRADE_IDENTITY_MEMO=$CODEX_UPGRADE_IDENTITY_MEMO")
+    # 工程历史来源只从本轮安全参数文件取固定白名单；干净 EXEC_ENV 不继承任意 CLAUDE_*。
+    # 清单生产器同时登记路径与内容摘要，缺来源提前失败；Codex 的表为空，原参数数组不变。
+    for name in ${CT_PRE_A3_FIXTURE_KEYS[@]+"${CT_PRE_A3_FIXTURE_KEYS[@]}"}; do
+      if [ -z "${!name:-}" ]; then echo "ENTRY_GATES_ABORTED：pre-A3 缺少本轮显式来源 ${name}" >&2; exit 3; fi
+      PRE_A3_ARGS+=(--pre-a3-env "$name=${!name}")
+    done
     if [ -d "$PYC_MANAGED" ]; then PRE_A3_ARGS+=(--pre-a3-env "PYTHONPYCACHEPREFIX=$PYC_MANAGED"); fi
     echo "pre-A3 场景纳入本次运行：场景父目录 ${PA3_PARENT}"
   }

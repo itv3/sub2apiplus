@@ -249,7 +249,17 @@ def pre_a3_data_root(client: str) -> tuple[Input, ...]:
 
     name = CT.spec(client)["project_ledger_dir_name"]
     probes = (Input("environment", "tree", f"{{D}}/staging/{name}", "pycache"), Input("environment", "tree", f"{{D}}/{name}", "pycache"))
-    return PRE_A3_DATA_ROOT + tuple(item for item in probes if item not in PRE_A3_DATA_ROOT)
+    return PRE_A3_DATA_ROOT + tuple(item for item in probes if item not in PRE_A3_DATA_ROOT) + pre_a3_fixture_inputs(client)
+
+
+def pre_a3_fixture_inputs(client: str) -> tuple[Input, ...]:
+    """Claude 工程来源的路径和内容同时登记：relay 含同级补充取证，因此摘要覆盖共同父根；旧 freeze 与 static
+    各记完整目录。路径参数独立入摘要，换 capture 而父根没变也会失效。Codex 返回空元组，原输入声明逐字不变。"""
+
+    keys = CT.spec(client)["pre_a3_fixture_keys"]
+    trees = tuple(Input("environment", "tree", "{" + key + "}", "parent_pycache" if index == 0 else "pycache")
+                  for index, key in enumerate(keys))
+    return (*_params(*keys), *trees)
 
 
 # 客户端表里 ``kind:模板`` 形式的额外输入声明的种类（B2-11 第二部分：Claude 预检 plan 另读的文件与 Store 目录）。
@@ -317,6 +327,7 @@ def build_steps(client: str) -> tuple[Step, ...]:
         # 步骤据总摘要报原因。
         Step("entry-gates", "入口门禁", "pre_ledger", inputs=(
             Input("tests", "source_commit", "ENTRY_COMMIT"),
+            *pre_a3_fixture_inputs(client),
             *_params("HISTORY_TEST_TREE", "HISTORICAL_SOURCE_ROOT"), DEPLOY_TOOL_FILES,
             *_drivers("entry-gates.sh", "entry_gates.py", "unit_executor.py", "unit_executor.json", "bytecode_cache.py", "full_set_receipt.py"),
             *common_driver,
@@ -923,7 +934,10 @@ def _resolve(item: Input, ctx: Context) -> dict[str, Any]:
         root = Path(ctx.expand(item.arg))
         if root.is_symlink() or not root.is_dir():
             return _missing(item, path=str(root))
-        digest, count = ctx.tree(root, item.option)
+        # relay 的叶目录只是一部分：同级补充录制也参与评估，父根属于该输入的完整读集。
+        if item.option == "parent_pycache":
+            root = root.parent
+        digest, count = ctx.tree(root, "pycache" if item.option == "parent_pycache" else item.option)
         return {"category": item.category, "name": item.name, "sha256": digest, "detail": {"path": str(root), "files": count}}
     if kind == "recorded":
         total, files, roots = hashlib.sha256(), 0, ctx.recorded_roots()

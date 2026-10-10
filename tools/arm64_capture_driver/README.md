@@ -175,6 +175,14 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 * 单独签（`pre-a3.sh` 新跑、`stage2.sh` 兜底，`lib.sh` 的 `issue_pre_a3_certification`）调 `entry-gates.sh --profile pre-a3`，
   测试树取自参数文件的 `ENTRY_BUNDLE`、`ENTRY_BRANCH`、`ENTRY_COMMIT`，缺一个即停（没有测试树算不出输入）；入口编排器
   入口门禁沿用、只重做 pre-A3 时同样走它。
+* Claude 的工程历史来源必须在本轮安全参数文件显式填写三个只读目录：`CLAUDE_2_1_226_RELAY_FIXTURE`、
+  `CLAUDE_2_1_226_FREEZE_FIXTURE`、`CLAUDE_2_1_226_STATIC_FIXTURE`。驱动仅将这三个固定键传给正式清单生产器，
+  不继承外层 `CLAUDE_*`；缺目录、空目录或路径经过符号链接时在单元派发前失败。路径和内容都参与输入摘要，
+  relay 还包含同级补充取证目录，因而内容摘要覆盖共同父根；任一来源变化会使声明它的 Claude 场景失效，Codex 输入不变。
+  历史 2.1.226 工程录制只供零请求回归，不代表当前目标版本的 ARM64 原生双渠道资格或 OAuth 认证。
+* Claude 每个正式场景另获独占的持久记录坐标 `$D/staging/pre-a3-scenarios/claude-chain-records/<单元摘要>/`。
+  录制链与候选链原件、stdout/stderr 和副本保存在这里，成功场景的临时根清理不会删掉这些材料；可变产物内容不并入来源
+  输入摘要。来源缺失与真实链失败保持失败，不转写通过；全部问题由同一轮执行器汇总后统一修复。
 * 没通过的认证写旁路文件 `<正式文件名>.failed-<时间>.json`，正式路径保持不存在：修好后用同一 STAMP 直接重跑。
 * E2-03 的旧路径（`plan --staging-root` → `run-commands` → `issue --executor-summary`，签 v1）与串行入口 `run` 保留作对照与
   回退，旧形式的场景单元在入口门禁里仍标不可承接。串行 `run` 不经执行器：真实链按闭包复制受管树要用 `unit_records.py`，
