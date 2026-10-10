@@ -336,6 +336,29 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
     return {"preflight": preflight, "ledger": ledger, "environment": environment, "deploy": deploy, "release": release, "p0": p0}
 
 
+def _validate_batch_command(action: dict[str, Any]) -> None:
+    """写计划前按原产品禁区核有效受管命令；builder 与 typed 外部动作仍由各自原合同判定。"""
+
+    from tools.official_client_capture import claude_upgrade_batch as batch
+    from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+    try:
+        argv = batch._orchestrator_argv(action.get("command", []))
+    except batch.ConfigurationError:
+        return
+    if not argv:
+        return
+    # 此处提前模拟将来的父动作上下文，只调用原拒绝判定，不执行命令或清除已有上下文。
+    with mock.patch.dict(os.environ, {supervisor.CAMPAIGN_RUN_CONTEXT_ENV: "1"}):
+        try:
+            batch.reject_control_plane_in_campaign_run(argv[0])
+        except batch.ConfigurationError as error:
+            raise replay.ReplayError(str(error)) from error
+    # 嵌套 client-evidence 的产品边界在编排器分派处，没有独立判定函数。
+    if argv[:2] == ["capture-candidate", "client-evidence"]:
+        raise replay.ReplayError("client-evidence 是批次之间的离线控制入口，不能由父批次执行。")
+
+
 def _batch(
     data: Path, campaign: Path, name: str, argv: list[str], *, phase: str = "VC-1", timeout_seconds: float = 600,
     action: dict[str, Any] | None = None,
@@ -347,6 +370,11 @@ def _batch(
 
     if phase not in artifacts.VC_PHASES[1:]:
         raise replay.ReplayError(f"录制链不接受此动作阶段：{phase}")
+    dispatched = (batch.managed_action(name, phase + ":" + name, argv, item_ids=[name], timeout_seconds=timeout_seconds)
+                  if action is None else action)
+    if dispatched.get("action_id") != name or dispatched.get("item_ids") != [name] or dispatched.get("operation") != phase + ":" + name:
+        raise replay.ReplayError("显式批次动作必须与本阶段、动作名和唯一执行项闭合")
+    _validate_batch_command(dispatched)
     manifest = upgrade.load_campaign_manifest(campaign)
     previous = artifacts.VC_PHASES[artifacts.VC_PHASES.index(phase) - 1]
     revision = upgrade._current_candidate_revision(campaign, manifest) if previous in upgrade.CANDIDATE_VC_PHASES else None
@@ -354,10 +382,6 @@ def _batch(
     plan = upgrade._vc_campaign_plan(campaign, manifest)
     upgrade._replay_vc_checkpoint(campaign, plan, previous, revision=revision)
     sequence = max(upgrade._committed_vc_sequences(campaign, manifest), default=0) + 1
-    dispatched = (batch.managed_action(name, phase + ":" + name, argv, item_ids=[name], timeout_seconds=timeout_seconds)
-                  if action is None else action)
-    if dispatched.get("action_id") != name or dispatched.get("item_ids") != [name] or dispatched.get("operation") != phase + ":" + name:
-        raise replay.ReplayError("显式批次动作必须与本阶段、动作名和唯一执行项闭合")
     action = source.write(data / "control" / "actions" / f"{sequence}-{name}.json", {
         "schema_version": artifacts.VC_ACTION_PLAN_SCHEMA, "execute_item_ids": [name], "reuse_item_ids": [],
         "actions": [dispatched]})

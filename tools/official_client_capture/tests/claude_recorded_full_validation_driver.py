@@ -336,6 +336,62 @@ def _direct(argv: list[Any]) -> tuple[int, dict[str, Any], str]:
     return code, result, stderr
 
 
+def _account_sealed(data: Path, campaign: Path, phase: str) -> dict[str, Any]:
+    """成功封存显式调用原入账命令，并保留命令结果、封存原件和实际 outbox 绑定。"""
+
+    from tools.official_client_capture import claude_upgrade as upgrade
+
+    candidate_id = CANDIDATE if phase == "candidate" else None
+    stage_path = upgrade._stage_path(campaign, "capture-" + phase, candidate_id)[1]
+    stage = source.read(stage_path)
+    attempt_path = upgrade._campaign_file(campaign, stage["attempt"]["path"])
+    originals = {"stage": source.binding(stage_path), "attempt": source.binding(attempt_path)}
+    argv = ["account-sealed-" + phase, "--campaign-dir", str(campaign)]
+    if candidate_id is not None:
+        argv.extend(["--candidate-id", candidate_id])
+    code, result, stderr = _direct(argv)
+    if (code != 0 or result.get("status") != "accounted" or result.get("phase") != phase
+            or result.get("campaign_id") != source.read(campaign / "campaign.json")["campaign_id"]
+            or result.get("candidate_id") != candidate_id or result.get("attempt_id") != attempt_path.parent.name):
+        raise replay.ReplayError(f"成功封存入账没有形成当前 {phase} 的真实 accounted 结果：{result}，{stderr}")
+    for original in originals.values():
+        source.bound(original, root=campaign)
+    operation = "account-sealed-" + phase + ":" + (candidate_id + ":" if candidate_id is not None else "") + result["attempt_id"]
+    batch_root = Path(result["batch"]["batch_dir"])
+    batch_files = {path.name: source.binding(path) for path in sorted(batch_root.iterdir()) if path.is_file()}
+    receipt = source.write(data / "control" / (phase + "-sealed-accounting-command.json"), {
+        "argv": argv, "exit_code": code, "result": result, "stderr": stderr,
+        "operation_id": operation, "originals": originals, "batch_files": batch_files,
+    })
+    return {"operation_id": operation, "receipt": source.binding(receipt), "result": result,
+            "originals": originals, "batch_files": batch_files}
+
+
+def _verify_project_accounting(campaign: Path, project_root: Path, required_operations: list[str]) -> dict[str, Any]:
+    """只读核原 provenance 的全部模型请求键、精确总量与成功入账操作；不补账、不改 head。"""
+
+    from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
+    from tools.official_client_capture import codex_upgrade_project_ledger as project
+
+    before = project.replay_head(project_root)
+    receipt = provenance.collect_campaign_provenance(campaign, formal_campaign_id=source.read(campaign / "campaign.json")["campaign_id"])
+    keys = {item["identity_key"] for item in receipt["requests"]}
+    if (receipt.get("status") != "complete" or receipt["unresolved_job_ids"] or receipt["pending_job_ids"]
+            or receipt["estimated_total"] != 0 or receipt["precise_total"] != len(keys)):
+        raise replay.ReplayError("完整链 provenance 未形成零估计、无未决的全部精确请求键")
+    if (set(before["accounted_identity_index"]) != keys or before["precise_total"] != len(keys)
+            or before["estimated_total"] != 0):
+        raise replay.ReplayError("完整链 provenance 请求键与原项目总账未全部闭合")
+    if any(before["operations"].get(operation, {}).get("event_type") != "reconciliation_committed"
+           for operation in required_operations):
+        raise replay.ReplayError("完整链缺少成功官方或候选封存的原入账操作")
+    after = project.replay_head(project_root)
+    if after != before:
+        raise replay.ReplayError("完整链只读请求闭合核验改变了项目总账 head")
+    return {"provenance": receipt, "project_head": after, "required_operations": required_operations,
+            "precise_identity_keys": sorted(keys), "read_only_head_unchanged": True}
+
+
 def _require_client_staging(data: Path) -> None:
     """完整链的 Mac 来源也受系统临时根约束；只能由外层隔离执行器明确统一 TMPDIR 和记录根。"""
 
@@ -555,17 +611,26 @@ def _client_inputs(data: Path, campaign: Path, attempt_root: Path, attempt: dict
 
     values = {name: attempt[name] for name in client_contract.COORDINATES}
     original = source.binding(attempt_root / "attempt.json")
-    receipts, batches = {}, []
+    receipts, offline_imports, seal_arguments = {}, [], []
     for client in client_contract.CLIENTS:
         task, bundle, _capture = clients.material(attempt_root, client, values, issued_at_utc=attempt["completed_at_utc"])
-        batches.append(vc1._batch(data, campaign, "vc5-client-" + client, [
+        argv = [
             "capture-candidate", "client-evidence", "import", "--campaign-dir", str(campaign),
             "--candidate-id", CANDIDATE, "--attempt-id", attempt_root.name, "--client", client,
             "--client-task", str(task), "--bundle", str(bundle),
-        ], phase="VC-5"))
+        ]
+        code, result, stderr = _direct(argv)
         receipt = attempt_root / "client-evidence" / (client + ".json")
+        if (code != 0 or result.get("status") != "imported" or result.get("live_request_count") != 0
+                or result.get("receipt") != str(receipt)):
+            raise replay.ReplayError(f"批次间 {client} 导入没有形成真实零请求收据：{result}，{stderr}")
         client_contract.verify_client_receipt(attempt_root, client, receipt)
         receipts[client] = source.binding(receipt)
+        seal_arguments.extend(["--client-evidence", client + "=" + str(receipt)])
+        offline_imports.append({"client": client, "argv": argv, "exit_code": code, "result": result,
+                                "stderr": stderr, "task": source.binding(task),
+                                "bundle_manifest": source.binding(bundle / "source-manifest.json"),
+                                "receipt": receipts[client]})
     for check in boundary.CHECK_IDS:
         receipt = boundary_fixture.write_boundary_receipt(attempt_root, check, mutate=lambda value: value["facts"].update(
             fixture_only=True, purpose="recorded_control_input", formal_version_semantics_certified=False,
@@ -579,7 +644,8 @@ def _client_inputs(data: Path, campaign: Path, attempt_root: Path, attempt: dict
         "source_scope": "离线 Mac 应用/请求与边界材料；不表示实际 Mac 或 Codex 边界执行",
         "formal_version_semantics_certified": False,
     })
-    return {"batches": batches, "origin": source.binding(origin), "receipts": receipts}
+    return {"offline_imports": offline_imports, "origin": source.binding(origin), "receipts": receipts,
+            "seal_arguments": seal_arguments}
 
 
 def capture_and_seal(data: Path, campaign: Path) -> dict[str, Any]:
@@ -600,20 +666,23 @@ def capture_and_seal(data: Path, campaign: Path) -> dict[str, Any]:
         raise replay.ReplayError("候选 run 未到真实 awaiting_receipts 停点或仍有失败 Job")
     clients = _client_inputs(data, campaign, attempt_root, attempt)
     argv = ["capture-candidate", "seal", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE,
-            "--attempt-id", attempt_root.name]
+            "--attempt-id", attempt_root.name, *clients["seal_arguments"]]
     batches.append(vc1._batch(data, campaign, "vc5-02-candidate-seal-preview", argv, phase="VC-5"))
     previews = list((campaign / "candidates" / CANDIDATE / "seal").glob("*/seal-preview.json"))
     if len(previews) != 1:
         raise replay.ReplayError("候选 seal 未形成唯一真实预览")
     preview = source.read(previews[0])
+    if preview.get("closure", {}).get("status") != "closed":
+        raise replay.ReplayError(f"候选真实 seal 预览仍被闭合门禁阻断：{preview.get('closure')}")
     batches.append(vc1._batch(data, campaign, "candidate-seal", [
         *argv, "--approve-seal-sha256", preview["review_sha256"], "--approved-by", REVIEWER,
     ], phase="VC-5"))
     manifest = upgrade.load_campaign_manifest(campaign)
     stage_path, stage = seal.load_round_one_result(campaign, CANDIDATE, manifest=manifest)
     seal.sealed_attempt_context(campaign, stage, candidate_id=CANDIDATE)
+    accounting = _account_sealed(data, campaign, "candidate")
     return {"batches": batches, "client_inputs": clients, "attempt": source.binding(attempts[0]),
-            "stage": source.binding(stage_path), "store": stage["store"]}
+            "stage": source.binding(stage_path), "store": stage["store"], "accounting": accounting}
 
 
 def _gate_environment(root: Path, data: Path, attempt_id: str) -> dict[str, Any]:
@@ -781,7 +850,9 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
         if project_root != data / project.ledger_dir_name("claude"):
             raise replay.ReplayError("完整链项目总账不是同一原始数据根的 Claude 总账")
         initial_project = source.binding(project_root / "plan.json")
-        stages = {"VC-1": first, "VC-2/3": classify_and_prepare(data, campaign), "VC-4": build_candidate(data, campaign)}
+        official_accounting = _account_sealed(data, campaign, "official")
+        stages = {"VC-1": first, "official_accounting": official_accounting,
+                  "VC-2/3": classify_and_prepare(data, campaign), "VC-4": build_candidate(data, campaign)}
     # VC-4 后再安装新的外部观察源；禁止嵌套 SourceAdapter 造成一次动作重复签发/复制。
     with installed(state_path, digest):
         vc1.load_continuation(continuation_path, continuation_digest)
@@ -804,7 +875,11 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
         if (upgrade._campaign_timing_ledger_dir(campaign, manifest) != ledger or source.binding(project_root / "plan.json") != initial_project
                 or project.find_project_ledger(campaign, client="claude") != project_root):
             raise replay.ReplayError("完整链换了时间账本或项目总账")
-        timing_head, project_head = timing.phase_ledger_state(ledger), project.replay_head(project_root)
+        timing_head = timing.phase_ledger_state(ledger)
+        accounting_closure = _verify_project_accounting(campaign, project_root, [
+            official_accounting["operation_id"], stages["VC-5-capture"]["accounting"]["operation_id"],
+        ])
+        project_head = accounting_closure["project_head"]
         if (timing_head["status"] not in {"active", "complete"} or timing_head["active_phase"] is not None
                 or timing_head["completed_phases"] != ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]):
             raise replay.ReplayError("VC-6 checkpoint 存在但七个阶段未在原时间账逐项收口")
@@ -818,6 +893,7 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
               "source_state": source.binding(state_path), "continuation": source.binding(continuation_path),
               "checkpoints": checkpoints, "store_replay": store_replay, "store_campaign": store_campaign,
               "timing_ledger": timing_head, "project_ledger": {"root": str(project_root), "plan": initial_project, "head": project_head},
+              "accounting_closure": accounting_closure,
               "stages": stages, "elapsed_seconds": time.monotonic() - started, "network_requests_this_run": 0,
               "historical_request_accounting": "真实录制和显式 Mac/边界来源按正式消费者计账，不代表本次实际联网请求",
               "full_vc0_vc6_certified": True, "formal_version_semantics_certified": False,
