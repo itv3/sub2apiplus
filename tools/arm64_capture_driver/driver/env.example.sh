@@ -121,6 +121,9 @@ PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
 #   OAUTH_ORG_ID=REPLACE_OAUTH_ORG_ID
 #   MODEL_CATALOG_SHA256=REPLACE_MODEL_CATALOG_SHA256
 #   ENTRY_BRANCH=claude/REPLACE_TOOL_BRANCH
+#   CLAUDE_TARGET_SCENARIOS_JSON=/absolute/private-inputs/current-scenarios.json（B5a-09／B2-11：可选，须为现存普通文件且
+#   路径无符号链接。只覆盖 Claude 目标清单；缺省仍用受管版本模板，基线清单不变。plan 仍严格核规则、规格和版本事实，
+#   入口便宜检查与预检 plan 绑定该文件全文。回归夹具只供无账号演练，不授正式采纳或现场认证。）
 #   CAMPAIGN_PURPOSE=validation_only（B5b-01：Campaign 用途，缺省 production_replacement；入口建计时账本、预检 plan 与之后各阶段
 #   都按它，VC-4 构建与 VC-5 准入从冻结的总计划读取。Codex 的入口固定 production_replacement，不得写这一项）
 #   API_KEY_ID 与 CLIENT_ACCOUNT_ID 是候选阶段专用的 ingress API Key 与验收账号（B4-01），预检 plan 冻结进 Campaign 配置，

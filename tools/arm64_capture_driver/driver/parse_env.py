@@ -86,6 +86,8 @@ OPTIONAL_KEYS = (
     "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
     # 仅私有 staging 演练根可显式启用；正式缺省仍为 69%，实际消费者还须完整复验 fixture_only 总账。
     "ENGINEERING_ROOT_MAX_USED_PERCENT",
+    # B5a-09／B2-11：Claude 显式选择本轮独立目标场景输入；原模板与默认布局不改，正式 plan 仍严格核对来源绑定。
+    "CLAUDE_TARGET_SCENARIOS_JSON",
 )
 # 边界核对轮次参数的格式（B5b-01b 续）：两个 ID 是正整数，模型是安全标识，生产提交是完整 40 位小写 sha1（与
 # capture-candidate boundary-check 的入口校验同一口径）。
@@ -304,6 +306,10 @@ def parse(text: str) -> dict[str, str]:
     foreign = [key for key in client_table().foreign_keys(spec["client"]) if key in values]
     if foreign:
         raise EnvFileError(f"CLIENT={spec['client']} 的参数文件不得含其它客户端的专属键：{foreign}")
+    if "CLAUDE_TARGET_SCENARIOS_JSON" in values:
+        scenarios = plain_path(values["CLAUDE_TARGET_SCENARIOS_JSON"], "CLAUDE_TARGET_SCENARIOS_JSON")
+        if not scenarios.is_file():
+            raise EnvFileError("CLAUDE_TARGET_SCENARIOS_JSON 必须是现存普通文件")
     missing = [key for key in required_keys(spec["client"]) if key not in values]
     if missing:
         raise EnvFileError(f"参数文件缺少键：{missing}")
@@ -431,6 +437,9 @@ def derive(values: dict[str, str]) -> dict[str, str]:
     # B5b-01：登记了用途参数键的客户端（Claude）派生缺省用途，参数文件写了即以它为准（下一行覆盖）；Codex 不派生，与改造前相同。
     if spec["campaign_purpose_key"] is not None:
         result[spec["campaign_purpose_key"]] = DEFAULT_CAMPAIGN_PURPOSE
+    # 只覆盖 Claude 的目标清单；同一 SCENARIOS_JSON 随后进入原 plan 参数与文件输入声明，基线清单不动。
+    if spec["client"] == "claude" and "CLAUDE_TARGET_SCENARIOS_JSON" in values:
+        result["SCENARIOS_JSON"] = values["CLAUDE_TARGET_SCENARIOS_JSON"]
     result.update({key: values[key] for key in OPTIONAL_KEYS if key in values})
     result.update(coordinates(values))
     return result

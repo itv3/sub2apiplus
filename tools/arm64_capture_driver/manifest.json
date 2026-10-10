@@ -124,9 +124,9 @@
     },
     {
       "path": "driver/client_table.py",
-      "sha256": "52ed25da67d4cd9af2fd0467363c3940ecc660f0d98cd2da60f11a7010d3054b",
+      "sha256": "d3fb64ba97460cb22ab7804219aea15bb1cc11080a500a89eaf47b946370cf68",
       "mode": "0700",
-      "bytes": 43531
+      "bytes": 43571
     },
     {
       "path": "driver/delivery_guard.py",
@@ -190,15 +190,15 @@
     },
     {
       "path": "driver/entry_steps.py",
-      "sha256": "cefd4e263af2cdc861ee10420fd96f5f83cb98de47f6a4fa21c8554b59d83b95",
+      "sha256": "4bf5e272a16fddea009d5cdb5cce7d4e4e72f5e98bf65842f7c98eb765bf104e",
       "mode": "0700",
-      "bytes": 88604
+      "bytes": 89005
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "b8f7cecb3eda9a6807d1d0239f48ccc31d52b9f310cfff62b393c41c656ac651",
+      "sha256": "a0504a53f47488df9d35c5ca373b5ce973d76623fe8a3cf9b7d36332d8ccd9a2",
       "mode": "0700",
-      "bytes": 10597
+      "bytes": 11036
     },
     {
       "path": "driver/fix-and-continue.example.params",
@@ -328,9 +328,9 @@
     },
     {
       "path": "driver/parse_env.py",
-      "sha256": "6af42dcb165feb0e9f280720fe15ad347649098f55862621ff7b03d50988fc46",
+      "sha256": "f5c14d694ab6edeb0e5edf105e53bebae6ad06064246b24ef046df7315d6d399",
       "mode": "0700",
-      "bytes": 29508
+      "bytes": 30264
     },
     {
       "path": "driver/phase_context.py",
@@ -669,5 +669,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "41f0d7b8a4da495c3219621bf3a2dbc2450edf4090eb3912d98f36ffcd6707f6"
+  "manifest_sha256": "22724b4e6618420db002a797c30ea4a090f4bb52bab6f15fa5255e8093f67178"
 }

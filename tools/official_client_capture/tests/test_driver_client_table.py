@@ -311,6 +311,62 @@ class ParseEnvClaudeTests(unittest.TestCase):
         with self.assertRaisesRegex(self.parser.EnvFileError, "不得写 CAMPAIGN_PURPOSE"):
             self.parser.parse(codex + "CAMPAIGN_PURPOSE=production_replacement\n")
 
+    def test_explicit_target_scenarios_preserve_default_and_feed_both_plan_consumers(self) -> None:
+        """原模板默认值不改；新私有目标清单由同一安全派生值传给便宜检查和预检 plan。"""
+
+        ordinary = self.parser.derive(self.parser.parse(self.text))
+        manifest = _write_text(self.root / "private-inputs/current-scenarios.json", "{}\n")
+        values = self.parser.parse(self.text + f'CLAUDE_TARGET_SCENARIOS_JSON="{manifest}"\n')
+        derived = self.parser.derive(values)
+        expected = {**ordinary, "SCENARIOS_JSON": str(manifest), "CLAUDE_TARGET_SCENARIOS_JSON": str(manifest)}
+        self.assertEqual(derived, expected, "除了显式目标路径与新专属键，不改变任何派生值")
+        self.assertEqual([key for key in derived if key != "CLAUDE_TARGET_SCENARIOS_JSON"], list(ordinary),
+                         "覆盖原键保留顺序；新可选键按原规则排在后续派生坐标之前")
+        self.assertEqual(derived["BASELINE_SCENARIOS_JSON"], ordinary["BASELINE_SCENARIOS_JSON"])
+        for name in ("plan_audit_argv", "preflight_plan_argv"):
+            with self.subTest(consumer=name):
+                template = CT.spec("claude")[name]
+                argv = [derived.get(item[1:], values.get(item[1:], "")) if item.startswith("$") else item for item in template]
+                self.assertEqual(_option(argv, "--scenario-manifest"), str(manifest))
+        env_file = _write_text(self.root / "private-inputs/env.sh", self.text + f'CLAUDE_TARGET_SCENARIOS_JSON="{manifest}"\n')
+        completed = subprocess.run([sys.executable, "-B", str(DRIVER / "parse_env.py"), str(env_file)],
+                                   capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(f"export SCENARIOS_JSON={manifest}\n", completed.stdout)
+
+    def test_explicit_target_scenarios_reject_unsafe_or_missing_paths(self) -> None:
+        """输入必须已经冻结成普通文件，且路径本身和父目录都无链接；解析不创建文件。"""
+
+        manifest = _write_text(self.root / "private-inputs/current-scenarios.json", "{}\n")
+        link = self.root / "linked-scenarios.json"
+        link.symlink_to(manifest)
+        linked_parent = self.root / "linked-inputs"
+        linked_parent.symlink_to(manifest.parent, target_is_directory=True)
+        cases = (("相对路径", "private-inputs/current-scenarios.json", "规范绝对路径"),
+                 ("父目录跳转", str(manifest.parent / "../current-scenarios.json"), "规范绝对路径"),
+                 ("缺文件", str(self.root / "missing.json"), "现存普通文件"),
+                 ("目录", str(manifest.parent), "现存普通文件"),
+                 ("文件链接", str(link), "符号链接"),
+                 ("父目录链接", str(linked_parent / manifest.name), "符号链接"))
+        for label, value, error in cases:
+            with self.subTest(case=label):
+                with self.assertRaisesRegex(self.parser.EnvFileError, error):
+                    self.parser.parse(self.text + f'CLAUDE_TARGET_SCENARIOS_JSON="{value}"\n')
+        self.assertFalse((self.root / "missing.json").exists())
+
+    def test_codex_rejects_claude_target_scenarios_and_clears_outer_residue(self) -> None:
+        """Codex 不读 Claude 的目标清单，也不把外层同名参数带入本轮。"""
+
+        text = self.fixture.env_file.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(self.parser.EnvFileError, "不得含其它客户端的专属键"):
+            self.parser.parse(text + "CLAUDE_TARGET_SCENARIOS_JSON=/missing.json\n")
+        completed = subprocess.run([sys.executable, "-B", str(DRIVER / "parse_env.py"), str(self.fixture.env_file)],
+                                   env={**os.environ, "CLAUDE_TARGET_SCENARIOS_JSON": "/outer/stale.json"},
+                                   capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("unset CLAUDE_TARGET_SCENARIOS_JSON\n", completed.stdout)
+        self.assertNotIn("export CLAUDE_TARGET_SCENARIOS_JSON=", completed.stdout)
+
     def test_claude_rejects_codex_keys_and_requires_generic_keys(self) -> None:
         cases = {
             "Codex 二进制键": (self.text + 'CODEX_BIN="/opt/codex/bin/codex"\n', "专属键"),
@@ -334,7 +390,7 @@ class ParseEnvClaudeTests(unittest.TestCase):
         self.assertEqual({"CLIENT", "TARGET_PROFILE_ID", "NEW", "IN", "UP", "CAND", "BUNDLE_BRANCH", "CLIENT_BIN", "CLIENT_BIN_SHA256",
                           "CLIENT_ACCOUNT_ID", "BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "ENTRY_BRANCH", "UPSTREAM_IP",
                           "CAMPAIGN_PURPOSE", "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID",
-                          "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT", *PLAN_KEYS}, set(overrides))
+                          "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT", "CLAUDE_TARGET_SCENARIOS_JSON", *PLAN_KEYS}, set(overrides))
         lines = []
         for line in template.splitlines():
             key = line.split("=", 1)[0]
@@ -343,7 +399,8 @@ class ParseEnvClaudeTests(unittest.TestCase):
             lines.append(f"{key}={overrides[key]}" if key in overrides and not line.startswith("#") else line)
         lines += [f"{key}={value}" for key, value in overrides.items()
                   if key in {"BASELINE_SOURCE", "TARGET_SOURCE", "TARGET_PACKAGE", "UPSTREAM_IP",
-                             "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT", *PLAN_KEYS}]
+                             "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
+                             "CLAUDE_TARGET_SCENARIOS_JSON", *PLAN_KEYS}]
         text = "\n".join(lines) + "\n"
         text = text.replace("REPLACE_API_ANTHROPIC_COM_IP", "160.79.104.10")
         for placeholder in ("REPLACE_APPROVED_PROFILE_SHA256", "REPLACE_OFFICIAL_CLAUDE_SHA256", "REPLACE_OFFICIAL_PACKAGE_SHA256",
@@ -352,6 +409,8 @@ class ParseEnvClaudeTests(unittest.TestCase):
         text = text.replace("REPLACE_CLAUDE_ACCOUNT_ID", "17").replace("REPLACE_API_KEY_ID", "92").replace("/root/", f"{self.root}/")
         text = text.replace("REPLACE_CODEX_ACCOUNT_ID", "23").replace("REPLACE_CODEX_API_KEY_ID", "94")
         text = text.replace("REPLACE_CODEX_MAIN_MODEL", "gpt-5.3-codex").replace("REPLACE_PRODUCTION_COMMIT_40_HEX", "c" * 40)
+        private_scenarios = _write_text(self.root / "private-inputs/current-scenarios.json", "{}\n")
+        text = text.replace(overrides["CLAUDE_TARGET_SCENARIOS_JSON"], str(private_scenarios))
         (self.root / "docker/capture-cli/data").mkdir(parents=True, exist_ok=True)
         values = self.parser.parse(text)
         derived = self.parser.derive(values)
@@ -361,6 +420,7 @@ class ParseEnvClaudeTests(unittest.TestCase):
         self.assertTrue(values["NEW"].startswith("claude-code-9.1.0-formal-"))
         self.assertTrue(derived["TARGET_PACKAGE"].endswith("/official/claude-code-9.1.0/freeze.json"))
         self.assertEqual(values["UPSTREAM_IP"], "160.79.104.10")
+        self.assertEqual(derived["SCENARIOS_JSON"], str(private_scenarios))
         with self.assertRaisesRegex(self.parser.EnvFileError, "UPSTREAM_IP 必须是 IP 地址"):
             self.parser.parse(text.replace("UPSTREAM_IP=160.79.104.10", "UPSTREAM_IP=api.anthropic.com"))
         # B2-11 第二部分的预检 plan 键：模板里的写法能解析，格式与成对规则拒绝写错的。
@@ -496,6 +556,33 @@ class EntryStepsClaudeTests(unittest.TestCase):
         bad = es.Context(params={**self.fx.params, "CLIENT": "kilo"}, driver_dir=self.fx.driver, steps_dir=self.fx.steps_dir)
         with self.assertRaisesRegex(es.EntryStepsError, "CLIENT 不认识"):
             bad.steps
+
+    def test_private_scenario_content_change_invalidates_plan_without_guide_change(self) -> None:
+        """同路径只改作业内容时，指南章节没变也必须重做预检 plan，不能错误沿用旧作业。"""
+
+        private = _write_text(self.fx.root / "private-inputs/current-scenarios.json", self.fx.scenarios.read_text(encoding="utf-8"))
+        self.fx.params["SCENARIOS_JSON"] = str(private)
+        step = es.STEP_BY_ID_BY_CLIENT["claude"]["preflight-plan"]
+        context = self.ctx()
+        before = es.resolve_inputs(step, context)
+        for identifier in ("entry-preflight", "preflight-plan"):
+            self.assertIn("file:{SCENARIOS_JSON}", {item.name for item in es.STEP_BY_ID_BY_CLIENT["claude"][identifier].inputs})
+            self.assertNotIn("file:{SCENARIOS_JSON}", {item.name for item in es.STEP_BY_ID_BY_CLIENT["codex"][identifier].inputs})
+        es.begin(step, context)
+        es.finish(step, context, status="passed", products=self.fx.products["preflight-plan"])
+        upstream = {name: {"decision": "reuse"} for name in step.upstream}
+        first = es.evaluate_step(step, self.ctx(), upstream, is_formal_built=False, accept_snapshot=False)
+        self.assertEqual(first["decision"], "reuse", first["reasons"])
+        changed = json.loads(private.read_text(encoding="utf-8"))
+        changed["jobs"] = [{"job_id": "changed-at-the-same-path"}]
+        private.write_text(json.dumps(changed), encoding="utf-8")
+        after = es.resolve_inputs(step, self.ctx())
+        before_by_name, after_by_name = ({item["name"]: item for item in rows} for rows in (before, after))
+        self.assertEqual(before_by_name["section:{SCENARIOS_JSON}"], after_by_name["section:{SCENARIOS_JSON}"])
+        self.assertNotEqual(before_by_name["file:{SCENARIOS_JSON}"]["sha256"], after_by_name["file:{SCENARIOS_JSON}"]["sha256"])
+        decision = es.evaluate_step(step, self.ctx(), upstream, is_formal_built=False, accept_snapshot=False)
+        self.assertEqual(decision["decision"], "run")
+        self.assertEqual([item["name"] for item in decision["changed_inputs"]], ["file:{SCENARIOS_JSON}"])
 
     def test_deploy_consistency_covers_the_control_root_and_claude_documents(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

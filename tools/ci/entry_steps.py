@@ -302,11 +302,14 @@ def build_steps(client: str) -> tuple[Step, ...]:
     host_binary = spec["host_binary"].format(version="{TARGET_VERSION}")
     # Campaign 用途参数（B5b-01）：Claude 的计时账本一步另登记它（预检 plan 一步经 plan_params 登记）；Codex 为空。
     purpose_params = (spec["campaign_purpose_key"],) if spec["campaign_purpose_key"] else ()
+    # Claude 的目标清单可以位于独立输入目录：两处实际读侧绑定文件全文，不能只凭指南章节摘要沿用变更后的作业。
+    # Codex 不新增输入；其缺省声明与历史步骤记录继续逐字一致。
+    scenario_file_inputs = (Input("environment", "file", "{SCENARIOS_JSON}"),) if client == "claude" else ()
     return (
         # 便宜检查七项合成一个实时步骤：每次几十秒内重跑，记下输入只供复盘。
         Step("entry-preflight", "入口便宜检查", "cheap", live=True, creation_chain=False, inputs=(
             *_params("ROUND", "STAMP", "UP", "BASELINE_VERSION", "TARGET_VERSION", "MIN_FREE_GIB", *spec["preflight_required"]),
-            *IDENTITY, DEPLOY_RECEIPT, GUIDE_PART2,
+            *IDENTITY, DEPLOY_RECEIPT, GUIDE_PART2, *scenario_file_inputs,
             *_drivers("entry-preflight.sh", "guard.sh", "../install.py", "bytecode_cache.py"), *common_driver,
             *_env("kernel", "python"), Input("environment", "file", binary), Input("environment", "file", "{TARGET_PACKAGE}"),
         )),
@@ -381,7 +384,7 @@ def build_steps(client: str) -> tuple[Step, ...]:
         # Active 画像、compose 文件与采集镜像。Claude 另读客户端表登记的文件与 Store 目录（B2-11 第二部分：Active Release
         # 目录、静态基线两份、生产现状清单所在的前序 Store 与只读复用的前序 Store；Codex 没有，步骤表逐字不变）。
         Step("preflight-plan", "预检 plan", "post_ledger", upstream=("ledger", "ledger-checkpoint", "environment-p0"), inputs=(
-            *_params(*spec["plan_params"]), *IDENTITY, GUIDE_PART2, DEPLOY_TOOL_FILES,
+            *_params(*spec["plan_params"]), *IDENTITY, GUIDE_PART2, DEPLOY_TOOL_FILES, *scenario_file_inputs,
             *_drivers("stage1.sh"), *common_driver,
             Input("environment", "tree", "{BASELINE_SOURCE}", "source"), Input("environment", "tree", "{TARGET_SOURCE}", "source"),
             Input("environment", "file", "{TARGET_PACKAGE}"), Input("upstream", "file", "{ACTIVE_PROFILE}"),

@@ -70,6 +70,8 @@ NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in (
     "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
     # 工程磁盘上限未在本轮明确请求时清除外层残留；正式 Codex 仍按原 69% 判据。
     "ENGINEERING_ROOT_MAX_USED_PERCENT",
+    # B5a-09／B2-11：唯一正常 Codex 输出差异是清理外层残留的 Claude 目标清单键，不导出或使用它。
+    "CLAUDE_TARGET_SCENARIOS_JSON",
 ))
 
 
@@ -205,6 +207,16 @@ class ParseEnvCodexParityTests(unittest.TestCase):
                     self.old.parse(text)
                 with self.assertRaisesRegex(self.new.EnvFileError, f"不得含其它客户端的专属键：\\['{key}'\\]"):
                     self.new.parse(text)
+
+    def test_codex_refuses_claude_target_scenarios_before_reading_the_path(self) -> None:
+        """接受的 Codex 参数集合不扩大；新增键只把旧未知键拒绝细化成客户端专属键拒绝。"""
+
+        source = self.fixture.env_file.read_text(encoding="utf-8")
+        text = source + "CLAUDE_TARGET_SCENARIOS_JSON=/missing/claude-scenarios.json\n"
+        with self.assertRaisesRegex(self.old.EnvFileError, "键不在允许集合内"):
+            self.old.parse(text)
+        with self.assertRaisesRegex(self.new.EnvFileError, "不得含其它客户端的专属键"):
+            self.new.parse(text)
 
     def test_generic_keys_are_aliases_of_the_codex_keys(self) -> None:
         """「旧键作别名」：Codex 参数文件用通用键写目标客户端二进制、摘要与账号，解析结果与用旧键写的逐字相同（归一成旧键）。"""
