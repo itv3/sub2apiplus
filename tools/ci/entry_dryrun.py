@@ -43,11 +43,13 @@
 
 逐单元承接（B5a-08 合同，B5a-10 接入）：``--unit-inherit-request <请求>`` 原样交给入口编排器（入口门禁与 pre-A3 按请求承接记录库
 里有效的单元，只执行依赖变化或缺少有效记录的单元；请求的批准与上下文核对都在入口门禁里做）；与 ``--opening``／
-``--reexecute``（重新执行全集）互斥。后台验证接着的空跑不带请求。
+``--reexecute``（重新执行全集）互斥。登记来源使用精确读集策略时，显式带 ``--audit-policy <策略>``，策略按原登记合同校验、
+摘要进入结论，取锁后派发前与结束收口时再次复核。策略只随逐单元承接或显式开工空跑使用；授权、撤销和来源复核仍由原门禁完成。
+后台验证接着的空跑不带请求；后台明确登记了策略时，不自动启动缺少当前批准的空跑，由操作员带请求与策略显式执行。
 
 子命令：
 
-* ``start --runroot --data-root --vc-env --bundle --branch --commit [--opening|--reexecute|--unit-inherit-request <请求>] [--to <步骤>]
+* ``start --runroot --data-root --vc-env --bundle --branch --commit [--opening|--reexecute|--unit-inherit-request <请求>] [--audit-policy <策略>] [--to <步骤>]
   [--entry <entry.sh>]``：起一次空跑（新会话、后台）；退出码 0 已起或已有结论，4 让路，2 用法或环境错误。
 * ``run --result``（内部）：建演练根与演练总账、写演练参数文件、跑编排器、写结论。
 * ``stop --runroot [--reason]``：停下在跑的空跑（先标 superseded 再整组终止，执行器收到 SIGTERM 会终止全部单元会话）。空跑与
@@ -60,6 +62,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -168,15 +171,17 @@ def capture_busy(state_dir: Path | None = None) -> str | None:
 
 def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool, reexecute: bool = False,
                 to: str | None = None, client: str = "codex", unit_inherit: str | None = None,
-                unit_inherit_full_gates: str | None = None) -> Path:
+                unit_inherit_full_gates: str | None = None, audit_policy: str | None = None) -> Path:
     """结论文件：客户端前缀＋提交＋部署收据＋空跑种类（开工、冷跑计时、逐单元承接）＋终点。终点不是这种空跑的默认终点时才
     写进名字：后台验证接着的那次（到 pre-A3）与明确执行的那次（默认 atomic-double 或到 P0 收据）是不同的空跑，不能互相顶替。
-    客户端前缀取客户端表（Codex 为空，与改造前同名）；逐单元承接另带主请求摘要，显式配套请求另加其摘要，缺省命名不变。"""
+    客户端前缀取客户端表（Codex 为空，与改造前同名）；逐单元承接另带主请求摘要，显式配套请求与读集策略另加各自摘要，缺省命名不变。"""
 
     prefix = _sibling("client_table").spec(client)["dryrun_conclusion_prefix"]
     kind = "-opening" if opening else "-reexecute" if reexecute else f"-unit-inherit-{unit_inherit[:12]}" if unit_inherit else ""
     if unit_inherit_full_gates:
         kind += f"-full-gates-{unit_inherit_full_gates[:12]}"
+    if audit_policy:
+        kind += f"-audit-policy-{audit_policy[:12]}"
     default = OPENING_TO if opening else DEFAULT_TO
     stop = f"-to-{to}" if to and to != default else ""
     return Path(runroot) / DIRECTORY / f"{prefix}{commit[:12]}-{str(deployment['sha256'])[:12]}{kind}{stop}.json"
@@ -248,6 +253,36 @@ def _client(vc_env: Path) -> str:
         return str(table.DEFAULT_CLIENT)
 
 
+def _audit_policy_reference(path: Path) -> dict[str, str]:
+    """只绑定无链接普通文件的实际字节，沿用原登记合同；实际单元集合仍由入口门禁发现后核对。"""
+
+    if (not path.is_absolute() or ".." in path.parts
+            or any(item.is_symlink() for item in (path, *path.parents)) or not path.is_file()):
+        raise DryRunError("--audit-policy 必须是无符号链接的现有普通文件，使用规范绝对路径")
+    try:
+        raw = _sibling("full_set_receipt").file_bytes(path)
+        policy = json.loads(raw)
+        units = set(policy["units"]) if isinstance(policy, dict) and isinstance(policy.get("units"), dict) else set()
+        _sibling("unit_records").validate_audit_policy(policy, units)
+    except (OSError, ValueError, RuntimeError) as error:
+        raise DryRunError(f"登记审计策略不可读或合同无效：{error}") from error
+    return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def _verify_audit_policy(payload: Mapping[str, Any]) -> Path | None:
+    """按启动时的绑定复核策略，不能在排队期间或执行后悄悄改用另一份输入声明。"""
+
+    reference = payload.get("audit_policy")
+    if reference is None:
+        return None
+    if not isinstance(reference, dict) or set(reference) != {"path", "sha256"} or not isinstance(reference.get("path"), str):
+        raise DryRunError("登记审计策略的启动绑定缺失或格式错误")
+    path = Path(reference["path"])
+    if _audit_policy_reference(path) != reference:
+        raise DryRunError("登记审计策略在空跑启动后变化，拒绝执行或收口")
+    return path
+
+
 def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     bv = _bv()
     # B5a-10：按本轮客户端绑定它最新的部署收据，结论文件名带客户端表登记的前缀（Codex 为空，与改造前相同）。
@@ -261,6 +296,10 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         raise DryRunError("--opening 已含重新执行全集，不要再加 --reexecute")
     if request is not None and (args.opening or args.reexecute):
         raise DryRunError("逐单元承接请求不能与 --opening／--reexecute（重新执行全集）同用")
+    policy = getattr(args, "audit_policy", None)
+    if policy is not None and request is None and not args.opening:
+        raise DryRunError("--audit-policy 只与 --unit-inherit-request 或显式 --opening 一起使用")
+    policy_reference = _audit_policy_reference(Path(policy)) if policy is not None else None
     request_sha256 = None
     if request is not None:
         if not Path(request).is_absolute() or Path(request).is_symlink() or not Path(request).is_file():
@@ -275,7 +314,8 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if to not in ALLOWED_TO:
         raise DryRunError(f"--to 只能到 {ALLOWED_TO[-1]}（VC-0 收口会发正式请求，演练根里不做）：{to}")
     path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute, to=to, client=client,
-                       unit_inherit=request_sha256, unit_inherit_full_gates=full_gates_sha256)
+                       unit_inherit=request_sha256, unit_inherit_full_gates=full_gates_sha256,
+                       audit_policy=policy_reference["sha256"] if policy_reference else None)
     existing = _read(path)
     if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
         return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
@@ -290,6 +330,7 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         **({"unit_inherit_request": {"path": str(request), "sha256": request_sha256}} if request is not None else {}),
         **({"unit_inherit_full_gates_request": {"path": str(full_gates_request), "sha256": full_gates_sha256}}
            if full_gates_request is not None else {}),
+        **({"audit_policy": policy_reference} if policy_reference is not None else {}),
     }
     busy = capture_busy()
     if busy:
@@ -473,15 +514,23 @@ def _run_orchestrator(payload: Mapping[str, Any], runroot: Path, env_file: Path)
         argv += ["--reexecute-gates"]
     elif payload.get("unit_inherit_request"):
         argv += ["--unit-inherit-request", str(payload["unit_inherit_request"]["path"])]
-        if payload.get("unit_inherit_full_gates_request"):
-            # 双请求空跑的结论绑定两份文件；排队结束后再次核对，防止起跑时摘要与实际消费的批准对象不同。
-            for name in ("unit_inherit_request", "unit_inherit_full_gates_request"):
+        # 取锁后重核每份显式批准文件；单主请求与双请求适用同一条启动绑定约束。
+        for name in ("unit_inherit_request", "unit_inherit_full_gates_request"):
+            if payload.get(name):
                 reference = payload[name]
                 request = Path(reference["path"])
                 if (request.is_symlink() or not request.is_file()
                         or _bv()._sha256_file(request) != reference["sha256"]):
                     raise DryRunError(f"逐单元承接请求在空跑启动后变化：{request}")
+        if payload.get("unit_inherit_full_gates_request"):
             argv += ["--unit-inherit-full-gates-request", str(payload["unit_inherit_full_gates_request"]["path"])]
+    policy = _verify_audit_policy(payload)
+    if policy is not None:
+        if not payload.get("unit_inherit_request") and not payload.get("opening"):
+            raise DryRunError("登记审计策略的空跑缺少逐单元承接请求或显式开工模式")
+        if not payload.get("opening"):
+            argv += ["--audit-reads"]
+        argv += ["--audit-strict", "--audit-policy", str(policy)]
     log = runroot / "entry.out"
     with log.open("ab") as handle:
         returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
@@ -534,6 +583,7 @@ def run(result: Path) -> int:
             if payload is None:
                 return 0
         returncode, log = _run_orchestrator(payload, runroot, env_file)
+        _verify_audit_policy(payload)
     except DryRunError as error:
         _update(path, status="failed", completed_at_utc=_utc_now(), failed_steps=["entry-orchestrator"], reason=str(error))
         return 0
@@ -668,6 +718,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                          help="B5a-08 逐单元承接请求（交给入口编排器；与 --opening／--reexecute 互斥）")
     p_start.add_argument("--unit-inherit-full-gates-request", type=Path, default=None,
                          help="独立批准的 full-gates 请求；与主请求从首轮一起固定提供，两份摘要共同绑定空跑结论")
+    p_start.add_argument("--audit-policy", type=Path, default=None,
+                         help="精确读集登记策略；与逐单元承接请求或显式开工模式一起使用，按摘要绑定并复核")
     p_start.add_argument("--to", default=None, help=f"编排器跑到哪一步（默认 {DEFAULT_TO}；--opening 默认 {OPENING_TO}）")
     p_start.add_argument("--entry", type=Path, default=HERE / "entry.sh")
     p_run = sub.add_parser("run", help="（内部）建演练根、跑编排器、写结论")

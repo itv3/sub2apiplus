@@ -42,6 +42,8 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
   验证先停下、标 superseded；然后在新会话里起 ``run``。``--then-dryrun``（E4-02 日常化）：通过之后接着起入口空跑
   （``entry_dryrun.py start --to pre-a3``，同一份记录库；门禁结论仍须满足 B-09 完整合同，缺失时重新执行；
   有采集在跑就让路），结果记在本结论的 ``dryrun`` 字段。
+  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用
+  ``entry-dryrun.sh start ... --unit-inherit-request <请求> --audit-policy <策略>``，不自动补批准或重新执行全集。
 * ``run``（内部）：跑入口门禁，按结论写状态。收到 SIGTERM 时把它转给入口门禁（执行器会终止全部单元会话）。
 * ``stop --runroot [--reason]``：停下在跑的后台验证并标 superseded。修复轮跑定向回归之前用：同一台机器同一时间只能有
   一个调度器，上一轮的验证也已作废。两客户端都纳管时连本运行根搭上的（别的运行根发起的）那一次一起停。
@@ -734,6 +736,10 @@ CHAINED_DRYRUN_TO = "pre-a3"
 
 
 def _chain_dryrun(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if payload.get("audit_policy"):
+        # 后台的同次全集来源不是当前逐单元批准，不能暗中补造批准或丢掉策略再自动执行一遍全集。
+        return {"action": "skipped", "reason": "后台已绑定读集策略；请显式 entry-dryrun.sh start ... "
+                "--unit-inherit-request <当前批准请求> --audit-policy <原策略>，不自动接空跑"}
     if not payload.get("vc_env") or not payload.get("data_root") or not payload.get("runroot"):
         return {"action": "skipped", "reason": "缺少驱动参数文件、数据根或 RUNROOT，没有接着空跑"}
     argv = [sys.executable, "-B", str(HERE / "entry_dryrun.py"), "start", "--runroot", str(payload["runroot"]),

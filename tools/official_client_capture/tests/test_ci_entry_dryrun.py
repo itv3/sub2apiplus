@@ -55,6 +55,8 @@ with open(here / "calls.jsonl", "a", encoding="utf-8") as handle:
 if config.get("sleep"):
     import time
     time.sleep(config["sleep"])
+if config.get("change_audit_policy"):
+    Path(argv[argv.index("--audit-policy") + 1]).write_text(config["change_audit_policy"], encoding="utf-8")
 run = Path(values["RUNROOT"]) / "entry-runs" / "20261003t000000z"
 run.mkdir(parents=True, exist_ok=True)
 steps = [{"step_id": step, "action": "执行", "status": "passed", "reasons": []} for step in config.get("passed", [])]
@@ -510,6 +512,57 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         missing = self.start_claude("--unit-inherit-request", str(self.root / "missing.json"))
         self.assertEqual(missing.returncode, 2)
 
+        # 原无策略 argv 与结论命名先逐字核对；显式策略沿用原合同、绑定实际字节并透传严格审计。
+        policy = self.root / "unit-audit-policy.json"
+        declaration = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}}
+        policy.write_text(json.dumps(declaration), encoding="utf-8")
+        policy_digest = bv._sha256_file(policy)
+        audited = self.start_claude("--unit-inherit-request", str(request), "--audit-policy", str(policy))
+        self.assertEqual(audited.returncode, 0, audited.stderr)
+        audited_outcome = json.loads(audited.stdout.strip().splitlines()[-1])
+        audited_payload = self.wait(audited_outcome["result"])
+        self.assertEqual(audited_payload["status"], "passed", audited_payload)
+        self.assertEqual(audited_payload["audit_policy"], {"path": str(policy), "sha256": policy_digest})
+        self.assertTrue(Path(audited_outcome["result"]).name.endswith(f"-unit-inherit-{digest[:12]}-audit-policy-{policy_digest[:12]}.json"))
+        self.assertEqual(self.calls()[-1]["argv"], ["--to", "atomic-double", "--unit-inherit-request", str(request),
+                                                   "--audit-reads", "--audit-strict", "--audit-policy", str(policy)])
+        self.assertNotEqual(audited_outcome["result"], outcome["result"], "不能以无策略结论顶替登记策略下的空跑")
+
+        # 相同 JSON 的另一批字节也须另绑结论，不能仅比较解析后的对象。
+        policy.write_text(json.dumps(declaration, indent=2) + "\n", encoding="utf-8")
+        changed = json.loads(self.start_claude("--unit-inherit-request", str(request), "--audit-policy", str(policy)).stdout.strip().splitlines()[-1])
+        self.assertNotEqual(changed["result"], audited_outcome["result"])
+        self.assertEqual(self.wait(changed["result"])["status"], "passed")
+        opened = self.start_claude("--opening", "--audit-policy", str(policy))
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        self.assertEqual(self.wait(json.loads(opened.stdout.strip().splitlines()[-1])["result"])["status"], "passed")
+        self.assertEqual(self.calls()[-1]["argv"], ["--to", "p0-receipt", "--reexecute-gates", "--audit-reads",
+                                                   "--audit-strict", "--audit-policy", str(policy)])
+        for extra in ((), ("--reexecute",)):
+            with self.subTest(mode=extra):
+                refused = self.start_claude(*extra, "--audit-policy", str(policy))
+                self.assertEqual(refused.returncode, 2)
+                self.assertIn("只与 --unit-inherit-request 或显式 --opening", refused.stderr)
+
+        link = self.root / "policy-link.json"
+        link.symlink_to(policy)
+        linked_parent = self.root / "policy-parent-link"
+        linked_parent.symlink_to(self.root, target_is_directory=True)
+        for path in ("relative.json", str(self.root / "missing-policy.json"), str(link), str(linked_parent / policy.name),
+                     str(self.root / "child" / ".." / policy.name), str(self.root)):
+            with self.subTest(policy_path=path):
+                refused = self.start_claude("--unit-inherit-request", str(request), "--audit-policy", path)
+                self.assertEqual(refused.returncode, 2)
+                self.assertIn("规范绝对路径", refused.stderr)
+        invalid = self.root / "invalid-policy.json"
+        for content in ("broken-json", "[]", json.dumps({**declaration, "default": "inherit"}),
+                        json.dumps({**declaration, "units": {"test:unregistered": {"require_read_audit": False}}})):
+            with self.subTest(policy_content=content):
+                invalid.write_text(content, encoding="utf-8")
+                refused = self.start_claude("--unit-inherit-request", str(request), "--audit-policy", str(invalid))
+                self.assertEqual(refused.returncode, 2)
+                self.assertIn("合同无效", refused.stderr)
+
     def test_two_profile_requests_reach_the_orchestrator_and_bind_separate_conclusions(self) -> None:
         primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"
         primary.write_text(json.dumps({"profile": "entry"}), encoding="utf-8")
@@ -528,6 +581,20 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         changed = json.loads(self.start_claude(*argv).stdout.strip().splitlines()[-1])
         self.assertNotEqual(changed["result"], outcome["result"], "配套批准变化不能命中旧空跑结论")
         self.assertEqual(self.wait(changed["result"])["status"], "passed")
+        policy = self.root / "unit-audit-policy.json"
+        policy.write_text(json.dumps({"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}}), encoding="utf-8")
+        audited = self.start_claude(*argv, "--audit-policy", str(policy))
+        self.assertEqual(audited.returncode, 0, audited.stderr)
+        self.assertEqual(self.wait(json.loads(audited.stdout.strip().splitlines()[-1])["result"])["status"], "passed")
+        self.assertEqual(self.calls()[-1]["argv"], ["--to", "atomic-double", *argv, "--audit-reads", "--audit-strict", "--audit-policy", str(policy)])
+
+        # 执行期间策略变更，即使编排器替身返回成功也不能发布通过结论。
+        self.configure(change_audit_policy=policy.read_text(encoding="utf-8") + "\n")
+        mutated = self.start_claude(*argv, "--audit-policy", str(policy), "--to", "pre-a3")
+        self.assertEqual(mutated.returncode, 0, mutated.stderr)
+        rejected = self.wait(json.loads(mutated.stdout.strip().splitlines()[-1])["result"])
+        self.assertEqual((rejected["status"], rejected["failed_steps"]), ("failed", ["entry-orchestrator"]))
+        self.assertIn("策略在空跑启动后变化", rejected["reason"])
 
     def test_companion_request_requires_the_primary_and_a_regular_absolute_file(self) -> None:
         primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"
@@ -558,6 +625,56 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
                     dr._run_orchestrator(payload, self.claude_runroot, self.claude_env)
                 execute.assert_not_called()
                 path.write_text("{}", encoding="utf-8")
+
+        # 单主请求与双请求均须在排队后复核，不能只守有配套请求的路径。
+        single = {key: value for key, value in payload.items() if key != "unit_inherit_full_gates_request"}
+        with mock.patch.object(dr.subprocess, "run") as execute:
+            primary.write_text('{"changed":true}', encoding="utf-8")
+            with self.assertRaisesRegex(dr.DryRunError, "空跑启动后变化"):
+                dr._run_orchestrator(single, self.claude_runroot, self.claude_env)
+            execute.assert_not_called()
+            primary.write_text("{}", encoding="utf-8")
+
+        policy = self.root / "unit-audit-policy.json"
+        original = json.dumps({"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}})
+        policy.write_text(original, encoding="utf-8")
+        payload["audit_policy"] = {"path": str(policy), "sha256": bv._sha256_file(policy)}
+        other = self.root / "other-policy.json"
+        other.write_text(original, encoding="utf-8")
+        for mutation in ("修改", "删除", "替换链接"):
+            with self.subTest(mutation=mutation), mock.patch.object(dr.subprocess, "run") as execute:
+                if mutation == "修改":
+                    policy.write_text(original + "\n", encoding="utf-8")
+                else:
+                    policy.unlink()
+                    if mutation == "替换链接":
+                        policy.symlink_to(other)
+                with self.assertRaises(dr.DryRunError):
+                    dr._run_orchestrator(payload, self.claude_runroot, self.claude_env)
+                execute.assert_not_called()
+                policy.unlink(missing_ok=True)
+                policy.write_text(original, encoding="utf-8")
+
+        # 持住真实串行锁，让后台空跑进入排队后改策略；释放锁时须失败并且一次都未调用编排器。
+        lock = dr._serial_lock_path({"data_root": str(self.data)})
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        try:
+            started = self.start_claude("--unit-inherit-request", str(primary), "--audit-policy", str(policy))
+            self.assertEqual(started.returncode, 0, started.stderr)
+            result = json.loads(started.stdout.strip().splitlines()[-1])["result"]
+            deadline = time.monotonic() + 30
+            while not (dr._read(Path(result)) or {}).get("rehearsal_root"):
+                self.assertLess(time.monotonic(), deadline, dr._read(Path(result)))
+                time.sleep(0.05)
+            policy.write_text(original + "\n", encoding="utf-8")
+        finally:
+            os.close(holder)
+        rejected = self.wait(result)
+        self.assertEqual(rejected["status"], "failed", rejected)
+        self.assertIn("策略在空跑启动后变化", rejected["reason"])
+        self.assertEqual(self.calls(), [], "排队后策略变化不能派发编排器")
 
     def test_two_clients_dry_runs_queue_on_the_gate_work_directory(self) -> None:
         # 两客户端都纳管时，后台验证通过后两份空跑几乎同时接上；编排器各跑 3 秒，后到的那份排队、两份都通过。
@@ -615,6 +732,14 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
                          "验证已通过时搭上的当场接空跑，同一份空跑已有就不重复起")
         bv.stop(self.runroot, "测试收尾")
         bv.stop(self.claude_runroot, "测试收尾")
+        # 沿同一个自动衔接入口检查：本次带策略不能补造当前批准，也不能丢掉策略自动执行全集。
+        for client in ("codex", "claude"):
+            with self.subTest(audited_client=client), mock.patch.object(bv.subprocess, "run") as execute:
+                skipped = bv._chain_dryrun({**validation, "client": client, "audit_policy": str(self.root / "registered-policy.json")})
+                self.assertEqual(skipped["action"], "skipped")
+                self.assertIn("--unit-inherit-request", skipped["reason"])
+                self.assertIn("--audit-policy", skipped["reason"])
+                execute.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -684,6 +684,13 @@ ENTRY_PROFILE_REQUESTS_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
         "                                full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel)",
     ],
 }
+# 空跑审计策略透传以实际开工提交为基线：后台只新增显式策略分支，无策略的自动空跑命令与结论不变。
+# 该分支不补造逐单元批准、不丢掉策略再跑全集，由原空跑测试内的双客户端边界断言守住。
+ENTRY_DRYRUN_AUDIT_BASELINE_COMMIT = "9502304179ecdd5dcc7d02460d1f90fb63ad3e02"
+ENTRY_DRYRUN_AUDIT_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/background_validation.py": "5232ffa04deef6c3fe5ecae3bc235d5efe33417271c1b9361d1744f34c006ec9",
+}
+ENTRY_DRYRUN_AUDIT_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/ci/background_validation.py": []}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("Claude 连续世界两小时安全网", CLAUDE_CONTINUOUS_TIME_BASELINE, CLAUDE_CONTINUOUS_TIME_DIGESTS, CLAUDE_CONTINUOUS_TIME_REMOVED),
     ("Claude 录制链时间合同 v2", CLAUDE_RECORDED_TIME_BASELINE, CLAUDE_RECORDED_TIME_DIGESTS, CLAUDE_RECORDED_TIME_REMOVED),
@@ -711,6 +718,8 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      CLAUDE_SCENARIO_FILE_SOURCE_DIGESTS, CLAUDE_SCENARIO_FILE_SOURCE_REMOVED_LINES),
     ("入口实际组合分别批准请求", ENTRY_PROFILE_REQUESTS_BASELINE_COMMIT,
      ENTRY_PROFILE_REQUESTS_SOURCE_DIGESTS, ENTRY_PROFILE_REQUESTS_SOURCE_REMOVED_LINES),
+    ("空跑审计策略透传", ENTRY_DRYRUN_AUDIT_BASELINE_COMMIT,
+     ENTRY_DRYRUN_AUDIT_SOURCE_DIGESTS, ENTRY_DRYRUN_AUDIT_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
 CLAUDE_FIXTURE_STEP_INPUTS = (
