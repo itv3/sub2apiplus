@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from tools.official_client_capture import claude_mac_capture_contract as c
 from tools.official_client_capture import claude_mac_capture_wire as wire
 from tools.official_client_capture.claude_mac_capture_h2 import H2Parser, LIMIT_FIELDS
+from tools.official_client_capture.claude_mac_capture_h2_core import RawH2Parser
 from tools.official_client_capture.claude_mac_capture_h2_dependencies import FrozenDependencies
 from tools.official_client_capture import claude_mac_capture_h2_runtime as runtime
 
@@ -86,7 +87,7 @@ def parser_rows(parsers):
     for connection_id, parser in parsers.items():
         if parser is None:
             continue
-        if isinstance(parser, H2Parser):
+        if isinstance(parser, RawH2Parser):
             requests.extend(parser.request_rows())
             outcomes.extend(parser.outcome_rows())
             frames.extend({"connection_id": connection_id, **row} for row in parser.frame_rows())
@@ -167,8 +168,9 @@ def transport_observation(root, reference, connection, configuration):
                   "两腿真实 ALPN 或原前腿观测不一致")
     return observation
 
-def replay_events(root, configuration, events, dependencies):
+def replay_events(root, configuration, events, dependencies, *, parser_factory=None):
     """只回放原事件；不预约、监听、写 raw 或执行实时预算。"""
+    parser_factory = parser_factory or create_parser
     parsers, connections, sizes, headers = {}, {}, {}, []
     for event in events:
         data, kind = event["data"], event["event"]
@@ -194,7 +196,7 @@ def replay_events(root, configuration, events, dependencies):
             connections[connection_id].update(protocol=protocol, protocol_observation=data["observation"])
             def on_header(row, selected=protocol):
                 headers.append(header_row(row, selected))
-            parsers[connection_id] = create_parser(connection_id, protocol, configuration, dependencies, on_header)
+            parsers[connection_id] = parser_factory(connection_id, protocol, configuration, dependencies, on_header)
         elif kind == "transport_validated":
             c.exact(data, {"connection_id", "observation"}, "WAL 两腿核验")
             connection_id = data["connection_id"]

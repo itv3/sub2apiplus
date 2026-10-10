@@ -251,10 +251,12 @@ def verify_task_configuration(configuration: Mapping[str, Any]) -> dict[str, Any
 def runtime_bindings(configuration: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
     root = Path(__file__).parent
     # 记录本后端直接调用的关键代码字节；这份原件不代替整套正式工具身份和来源登记。
-    names = ("claude_mac_capture_contract.py", "claude_mac_capture_wire.py", "claude_upgrade_mac_capture_service.py", "claude_upgrade_mac_capture_client.py", "upstream_byte_relay.py", "claude_client_receipt_contract.py", "claude_mac_client_source.py", "claude_upgrade_mac_budget.py", "codex_upgrade_project_ledger.py", "claude_upgrade_delivery_recovery_guard.py")
+    names = ("claude_mac_capture_contract.py", "claude_mac_capture_wire.py", "claude_mac_capture_engine_core.py", "claude_mac_capture_fixture_policy.py", "claude_upgrade_mac_capture_service.py", "claude_upgrade_mac_capture_client.py", "upstream_byte_relay.py", "claude_client_receipt_contract.py", "claude_mac_client_source.py", "claude_upgrade_mac_budget.py", "codex_upgrade_project_ledger.py", "claude_upgrade_delivery_recovery_guard.py")
     if configuration is not None and contract_versions(configuration)["version"] == 2:
         names += ("claude_mac_capture_h2.py", "claude_mac_capture_h2_dependencies.py",
-                  "claude_mac_capture_h2_contract.py", "claude_mac_capture_h2_runtime.py")
+                  "claude_mac_capture_h2_contract.py", "claude_mac_capture_h2_runtime.py",
+                  "claude_mac_capture_h2_core.py", "claude_mac_capture_dependency_core.py",
+                  "claude_mac_capture_runtime_core.py")
     return [{"file": name, "sha256": hashlib.sha256((root / name).read_bytes()).hexdigest(), "bytes": (root / name).stat().st_size} for name in names]
 
 
