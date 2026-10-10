@@ -12,6 +12,7 @@ import errno
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import platform
 import re
@@ -24,6 +25,13 @@ from typing import Any
 
 SCHEMA = "unit-runtime-contract/v1"
 CONTEXT_SCHEMA = "read-audit-runtime-context/v1"
+TEST_SPEC_SCHEMA = "unit-runtime-test-spec/v1"
+TEST_TRANSPORT_SCHEMA = "unit-runtime-test-transport/v1"
+TEST_EXPORT_SCHEMA = "unit-runtime-test-export/v1"
+TEST_RESULT_SCHEMA = "unit-executor-unit-result/v1"
+TEST_RESULT_NAME = "unit-result.json"
+TEST_FAILURE_NAME = "unit-result.observed-failure.json"
+MAX_TEST_RESULT_BYTES = 16 * 1024 * 1024
 HERE = Path(__file__).resolve()
 MASK_ROOT = "/root/oauth-capture"
 ENVIRONMENT_PATHS = {"/proc/filesystems", "/proc/sys/crypto/fips_enabled"}
@@ -41,6 +49,231 @@ def digest(value: Any) -> str:
 
 def under(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def test_spec_entry(spec: Any) -> dict[str, Any]:
+    """只绑定本次已规划测试的完整规格，不能用宿主临时 tests.json 代替稳定输入。"""
+    fields = {"type", "unit_id", "env", "cores", "memory_mb", "exclusive", "timeout_seconds",
+              "reservation_restartable", "start", "pattern", "test_ids", "launcher"}
+    if (not isinstance(spec, dict) or set(spec) != fields or spec.get("type") != "test"
+            or not isinstance(spec["unit_id"], str) or not spec["unit_id"].startswith("test_")
+            or re.fullmatch(r"[A-Za-z0-9_.#!+-]+", spec["unit_id"]) is None
+            or not isinstance(spec["start"], str) or not spec["start"] or ".." in Path(spec["start"]).parts
+            or not isinstance(spec["pattern"], str) or not spec["pattern"]
+            or not isinstance(spec["test_ids"], list) or not spec["test_ids"]
+            or not all(isinstance(item, str) and item and "\x00" not in item for item in spec["test_ids"])
+            or len(spec["test_ids"]) != len(set(spec["test_ids"]))
+            or not isinstance(spec["env"], dict)
+            or not all(isinstance(key, str) and isinstance(value, str) for key, value in spec["env"].items())
+            or not isinstance(spec["launcher"], list)
+            or not all(isinstance(part, str) and part for part in spec["launcher"])
+            or not isinstance(spec["exclusive"], bool) or not isinstance(spec["reservation_restartable"], bool)
+            or not isinstance(spec["memory_mb"], int) or isinstance(spec["memory_mb"], bool) or spec["memory_mb"] < 64):
+        raise RuntimeContractError("专用测试运输的完整规格非法")
+    for name in ("cores", "timeout_seconds"):
+        value = spec[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise RuntimeContractError("专用测试运输的额度或超时非法")
+    return {"category": "policy", "name": "runtime-test-spec", "sha256": digest(spec),
+            "detail": {"schema_version": TEST_SPEC_SCHEMA, "spec": spec}}
+
+
+def _test_transport_check(value: Any, contract: dict[str, Any], inputs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    fields = {"schema_version", "spec", "spec_sha256", "payload_sha256", "temporary_root", "result_path"}
+    if not isinstance(value, dict) or set(value) != fields or value.get("schema_version") != TEST_TRANSPORT_SCHEMA:
+        raise RuntimeContractError("专用测试运输格式非法")
+    entry = test_spec_entry(value["spec"])
+    spec = value["spec"]
+    payload = {"unit_id": spec["unit_id"], "test_ids": spec["test_ids"]}
+    if (value["spec_sha256"] != entry["sha256"] or value["payload_sha256"] != digest(payload)
+            or value["temporary_root"] != contract["temporary_root"]):
+        raise RuntimeContractError("专用测试运输的规格、载荷或临时根错绑")
+    path = value["result_path"]
+    safe = spec["unit_id"].replace("#", "-").replace("!", "-")
+    if (not isinstance(path, str) or not path.startswith("/") or str(Path(path)) != path or ".." in Path(path).parts
+            or Path(path).parent.name != "units"
+            or re.fullmatch(re.escape(safe) + r"(?:\.resume-[1-9][0-9]*)?\.result\.json", Path(path).name) is None
+            or under(path, contract["temporary_root"]) or under(contract["temporary_root"], str(Path(path).parent))
+            or any(under(path, root) for root in ("/proc", "/sys", "/dev"))):
+        raise RuntimeContractError("只允许原调度器的规范测试结果坐标")
+    if inputs is not None and [item for item in inputs if item.get("name") == "runtime-test-spec"] != [entry]:
+        raise RuntimeContractError("专用测试运输未与当前完整规格输入绑定")
+    return value
+
+
+def test_transport_argv(value: dict[str, Any], contract: dict[str, Any], argv: list[str], *, output: Path) -> list[str]:
+    """仅替换既有 run-unit 的临时载荷与两种固定输出，不提供通用命令或导出能力。"""
+    _test_transport_check(value, contract)
+    result = Path(value["result_path"])
+    tests = str(result)[:-len(".result.json")] + ".tests.json"
+    expected = [sys.executable, str(HERE.with_name("unit_executor.py")), "run-unit", "--start", value["spec"]["start"],
+                "--tests-file", tests, "--result", str(result)]
+    if argv != expected or result.parent != output.parent.parent / "units":
+        raise RuntimeContractError("专用测试运输只允许本次原 run-unit 命令与结果目录")
+    for path in (result, *result.parents):
+        if path.is_symlink():
+            raise RuntimeContractError("测试结果坐标不能含符号链接")
+    return _runtime_test_command(value)
+
+
+def _runtime_test_command(value: dict[str, Any]) -> list[str]:
+    return [sys.executable, str(HERE.with_name("unit_executor.py")), "run-unit", "--start", value["spec"]["start"],
+            "--runtime-tests-json", json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+            "--result", str(Path(value["temporary_root"]) / TEST_RESULT_NAME)]
+
+
+def runtime_test_payload(value: Any, *, start: Path, result: Path) -> dict[str, Any]:
+    """既有 run-unit 的专用入口；完整规格和固定私有结果坐标均须吻合。"""
+    root = value.get("temporary_root") if isinstance(value, dict) else None
+    contract = validate_contract({"schema_version": SCHEMA, "temporary_root": root, "mask_roots": [], "environment_paths": []})
+    _test_transport_check(value, contract)
+    if str(start) != value["spec"]["start"] or str(result) != str(Path(root) / TEST_RESULT_NAME):
+        raise RuntimeContractError("专用测试载荷的起点或私有结果坐标错绑")
+    return {"unit_id": value["spec"]["unit_id"], "test_ids": value["spec"]["test_ids"]}
+
+
+def test_result_bytes(value: dict[str, Any]) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=1, allow_nan=False) + "\n").encode("utf-8")
+
+
+def write_test_output(path: Path, value: dict[str, Any]) -> None:
+    """只在本轮私有盘写两种测试产物；直接写入，保留通用 rename 的拒绝规则。"""
+    if path.name not in {TEST_RESULT_NAME, TEST_FAILURE_NAME}:
+        raise RuntimeContractError("专用测试输出类型非法")
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(test_result_bytes(value))
+
+
+def _check_test_result(value: Any, spec: dict[str, Any], *, partial: bool, returncode: int) -> None:
+    fields = {"schema_version", "unit_id", "tests", "tests_run", "successful"} | ({"partial"} if partial else set())
+    if (not isinstance(value, dict) or set(value) != fields or value.get("schema_version") != TEST_RESULT_SCHEMA
+            or value["unit_id"] != spec["unit_id"] or not isinstance(value["tests"], dict)
+            or not isinstance(value["successful"], bool) or not isinstance(value["tests_run"], int)
+            or isinstance(value["tests_run"], bool) or not 0 < value["tests_run"] <= len(spec["test_ids"])
+            or not set(value["tests"]) <= set(spec["test_ids"])):
+        raise RuntimeContractError("测试结果缺件、损坏或与本次测试集合错绑")
+    failures = {"failed", "error", "unexpected_success"}
+    for item in value["tests"].values():
+        if (not isinstance(item, dict) or not {"outcome", "seconds"} <= set(item) or set(item) - {"outcome", "seconds", "reason"}
+                or item["outcome"] not in failures | {"passed", "skipped", "expected_failure"}
+                or (item["seconds"] is not None and (isinstance(item["seconds"], bool)
+                    or not isinstance(item["seconds"], (int, float)) or not math.isfinite(item["seconds"]) or item["seconds"] < 0))
+                or ("reason" in item and not isinstance(item["reason"], str))):
+            raise RuntimeContractError("测试逐项结果格式非法")
+    failed = any(item["outcome"] in failures for item in value["tests"].values())
+    if partial:
+        if value.get("partial") is not True or value["successful"] is not False or not failed:
+            raise RuntimeContractError("失败旁路不能冒充成功或空证据")
+    elif (set(value["tests"]) != set(spec["test_ids"]) or value["tests_run"] != len(spec["test_ids"])
+          or value["successful"] == failed or value["successful"] != (returncode == 0)):
+        raise RuntimeContractError("测试结果全集、成功状态或退出码不一致")
+
+
+def _check_observed_failure(result: dict[str, Any], failure: dict[str, Any] | None) -> None:
+    """首次已完整持久化的失败不能被最终结果改成成功；后续失败只追加在完整结果里。"""
+    if result["successful"] != (failure is None):
+        raise RuntimeContractError("最终测试结果与已观察失败凭证矛盾")
+    if failure is not None:
+        for test_id, item in failure["tests"].items():
+            if item["outcome"] in {"failed", "error", "unexpected_success"} and result["tests"].get(test_id) != item:
+                raise RuntimeContractError("最终测试结果覆盖了已观察的完整失败")
+
+
+def _read_test_artifact(path: Path, spec: dict[str, Any], *, partial: bool, returncode: int) -> dict[str, Any]:
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid != os.geteuid()
+                or before.st_size > MAX_TEST_RESULT_BYTES):
+            raise RuntimeContractError("测试产物必须是本轮普通文件且不得超过上限")
+        raw = stream.read(MAX_TEST_RESULT_BYTES + 1)
+        after = os.fstat(stream.fileno())
+    if (len(raw) > MAX_TEST_RESULT_BYTES or (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+        raise RuntimeContractError("测试产物在读取期间变化")
+    value = json.loads(raw)
+    _check_test_result(value, spec, partial=partial, returncode=returncode)
+    if raw != test_result_bytes(value):
+        raise RuntimeContractError("测试产物不符合专用编码合同")
+    return {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(), "payload": value}
+
+
+def _export_test_artifact(artifact: dict[str, Any], destination: Path) -> dict[str, Any]:
+    for path in (destination, *destination.parents):
+        if path.is_symlink():
+            raise RuntimeContractError("导出测试结果不能经过符号链接")
+    if not destination.parent.is_dir():
+        raise RuntimeContractError("原调度器的结果目录缺失")
+    temporary = destination.with_name(destination.name + ".runtime-test-export.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(test_result_bytes(artifact["payload"]))
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    if hashlib.sha256(destination.read_bytes()).hexdigest() != artifact["sha256"]:
+        raise RuntimeContractError("测试结果导出摘要不符")
+    return {**artifact, "destination": str(destination)}
+
+
+def export_test_results(value: dict[str, Any], contract: dict[str, Any], document: dict[str, Any],
+                        inputs: list[dict[str, Any]], *, returncode: int) -> dict[str, Any]:
+    """审计流结束后只导出固定测试结果与失败旁路；未知产物、错绑和缺件均拒绝。"""
+    _test_transport_check(value, contract, inputs)
+    # 导出前核本轮生成证明；载荷绑定与最终导出凭证随后在完整消费重放里复核。
+    covered = replay_runtime(document, [item for item in inputs if item.get("name") != "runtime-test-spec"])
+    root, destination = Path(contract["temporary_root"]), Path(value["result_path"])
+    failure = None
+    failure_path = root / TEST_FAILURE_NAME
+    if failure_path.exists():
+        if str(failure_path) not in covered:
+            raise RuntimeContractError("失败旁路没有本轮生成证明")
+        failure = _read_test_artifact(failure_path, value["spec"], partial=True, returncode=returncode)
+        # 即使进程在最终结果形成前中止，已观察失败仍保留在原宿主旁路。
+        failure = _export_test_artifact(failure, destination.with_suffix(".observed-failure.json"))
+    result_path = root / TEST_RESULT_NAME
+    if str(result_path) not in covered:
+        raise RuntimeContractError("最终测试结果缺件或没有本轮生成证明")
+    result = _read_test_artifact(result_path, value["spec"], partial=False, returncode=returncode)
+    _check_observed_failure(result["payload"], failure["payload"] if failure is not None else None)
+    result = _export_test_artifact(result, destination)
+    return {"schema_version": TEST_EXPORT_SCHEMA, "status": "exported", "transport": value,
+            "returncode": returncode, "result": result, "observed_failure": failure}
+
+
+def _replay_test_export(document: dict[str, Any], inputs: list[dict[str, Any]], contract: dict[str, Any], covered: set[str]) -> None:
+    completion = document["runtime"]["completion"]
+    bindings = [item for item in inputs if item.get("name") == "runtime-test-spec"]
+    export = completion.get("test_export")
+    if not bindings and export is None:
+        return
+    if (len(bindings) != 1 or not isinstance(export, dict)
+            or set(export) != {"schema_version", "status", "transport", "returncode", "result", "observed_failure"}
+            or export.get("schema_version") != TEST_EXPORT_SCHEMA or export.get("status") != "exported"
+            or not isinstance(export.get("returncode"), int) or isinstance(export["returncode"], bool)
+            or export["returncode"] != completion.get("returncode")):
+        raise RuntimeContractError("专用测试导出凭证缺失、失败或与结束凭证错绑")
+    transport = _test_transport_check(export["transport"], contract, inputs)
+    for name, filename, partial in (("result", TEST_RESULT_NAME, False), ("observed_failure", TEST_FAILURE_NAME, True)):
+        item = export[name]
+        if item is None and partial:
+            continue
+        source = str(Path(contract["temporary_root"]) / filename)
+        destination = Path(transport["result_path"])
+        if partial:
+            destination = destination.with_suffix(".observed-failure.json")
+        if (not isinstance(item, dict) or set(item) != {"path", "sha256", "payload", "destination"}
+                or item.get("path") != source or source not in covered or item.get("destination") != str(destination)
+                or "write" not in dict(document.get("accesses") or []).get(source, [])):
+            raise RuntimeContractError("测试导出产物的类型、坐标或本轮生成证明不符")
+        _check_test_result(item["payload"], transport["spec"], partial=partial, returncode=export["returncode"])
+        if item["sha256"] != hashlib.sha256(test_result_bytes(item["payload"])).hexdigest():
+            raise RuntimeContractError("测试导出产物摘要漂移")
+    _check_observed_failure(export["result"]["payload"],
+                            export["observed_failure"]["payload"] if export["observed_failure"] is not None else None)
 
 
 def validate_contract(value: Any) -> dict[str, Any]:
@@ -288,6 +521,7 @@ def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]], *, hi
                     covered.add(path)
                 elif under(path, mask) and set(kinds) <= {"missing"}:
                     covered.add(path)
+    _replay_test_export(document, inputs, contract, covered)
     return covered
 
 
@@ -350,6 +584,16 @@ def run_child(request_path: Path, expected_digest: str) -> int:
     if any(path.is_symlink() for path in (root, *root.parents)) or any(root.iterdir()):
         raise RuntimeContractError("宿主临时挂载点非空或含链接")
     trace_path = Path(request["output"])
+    test_transport = request.get("test_transport")
+    bound_inputs = [entry, *request["host_entries"]]
+    if test_transport is not None:
+        if not isinstance(request.get("test_spec"), dict):
+            raise RuntimeContractError("受管请求缺少完整测试规格输入")
+        bound_inputs.append(request.get("test_spec"))
+        _test_transport_check(test_transport, contract, bound_inputs)
+        if (request["argv"] != _runtime_test_command(test_transport)
+                or Path(test_transport["result_path"]).parent != trace_path.parent.parent / "units"):
+            raise RuntimeContractError("受管请求的测试命令或导出坐标错绑")
     setup_parts, setup_commands = [], []
     operations = [("private", ["mount", "--make-rprivate", "/"])]
     operations += [(mask, ["mount", "-t", "tmpfs", "-o", "ro,size=64k,mode=0755", "tmpfs", mask]) for mask in contract["mask_roots"]]
@@ -391,12 +635,24 @@ def run_child(request_path: Path, expected_digest: str) -> int:
             key: receipt[key] for key in ("host_inputs_unchanged", "environment_unchanged", "namespace_unchanged")}
         document["runtime"]["completion"].update(command_finished=True, host_entries_sha256=digest(before),
                                                 returncode=result.returncode, request_sha256=expected_digest)
+        if test_transport is not None:
+            try:
+                exported = export_test_results(test_transport, contract, document, bound_inputs, returncode=result.returncode)
+            except (RuntimeContractError, OSError, ValueError, TypeError, KeyError) as error:
+                document["runtime"]["completion"]["test_export"] = {
+                    "schema_version": TEST_EXPORT_SCHEMA, "status": "failed", "transport": test_transport, "error": str(error)}
+                _write(trace_path, document)
+                print(f"专用测试结果运输失败：{error}", file=sys.stderr)
+                return 2
+            document["runtime"]["completion"]["test_export"] = exported
         _write(trace_path, document)
+    elif test_transport is not None:
+        raise RuntimeContractError("完整审计轨迹缺失，不能导出测试结果")
     return result.returncode
 
 
 def prepare(contract: dict[str, Any], *, output: Path, argv: list[str], cwd: str,
-            inputs: list[dict[str, Any]]) -> list[str]:
+            inputs: list[dict[str, Any]], test_spec: dict[str, Any] | None = None) -> list[str]:
     """启动前建立专用空挂载点，写受管请求；实际文件快照在子命名空间再次核对。"""
     if not sys.platform.startswith("linux") or shutil.which("unshare") is None:
         raise RuntimeContractError("隔离合同只在具备 unshare 的 Linux 上可用")
@@ -412,6 +668,13 @@ def prepare(contract: dict[str, Any], *, output: Path, argv: list[str], cwd: str
     request = {"contract_entry": contract_entry(contract), "parent_namespace": os.readlink("/proc/self/ns/mnt"),
                "output": str(output), "argv": argv, "cwd": cwd, "host_entries": entries,
                "host_paths": [entry["detail"]["path"] for entry in entries]}
+    if test_spec is not None:
+        payload = {"unit_id": test_spec["unit_id"], "test_ids": test_spec["test_ids"]}
+        transport = {"schema_version": TEST_TRANSPORT_SCHEMA, "spec": test_spec, "spec_sha256": digest(test_spec),
+                     "payload_sha256": digest(payload), "temporary_root": contract["temporary_root"], "result_path": argv[-1]}
+        _test_transport_check(transport, contract, inputs)
+        request.update(test_transport=transport, test_spec=test_spec_entry(test_spec),
+                       argv=test_transport_argv(transport, contract, argv, output=output))
     path = output.with_name(output.name + ".request.json")
     _write(path, request)
     return ["unshare", "-m", "--propagation", "unchanged", sys.executable, "-B", str(HERE),

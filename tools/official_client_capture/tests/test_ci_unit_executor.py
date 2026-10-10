@@ -246,6 +246,90 @@ class H2InheritanceBoundaryTests(unittest.TestCase):
             self.assertEqual(currents[module].reason, "")
 
 
+class UnitExecutorRuntimePayloadTests(unittest.TestCase):
+    """真实运行既有 run-unit；这是载荷与结果短验，Linux 隔离生产另行取证。"""
+
+    def _run_payload(self, body: str, ids: list[str], *, corrupt: bool = False):
+        from tools.ci import read_audit_runtime as runtime
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name).resolve()
+        tests = _write_modules(root, {"test_runtime_payload": body})
+        private = root / "private" / "output"
+        private.mkdir(parents=True, mode=0o700)
+        result = private / runtime.TEST_RESULT_NAME
+        unit = ue.Unit("test_runtime_payload", "test_runtime_payload", tuple(ids), ue.Quota(1, 128), False, 1)
+        spec = ue.unit_spec(unit, start=tests, pattern="test_*.py", timeout_seconds=30)
+        transport = {"schema_version": runtime.TEST_TRANSPORT_SCHEMA, "spec": spec, "spec_sha256": runtime.digest(spec),
+                     "payload_sha256": runtime.digest({"unit_id": unit.unit_id, "test_ids": ids}),
+                     "temporary_root": str(private), "result_path": str(root / "out" / "units" / "test_runtime_payload.result.json")}
+        if corrupt:
+            transport["payload_sha256"] = "0" * 64
+        completed = subprocess.run([sys.executable, "-B", str(EXECUTOR), "run-unit", "--start", str(tests),
+                                    "--runtime-tests-json", json.dumps(transport), "--result", str(result)],
+                                   cwd=REPO_ROOT, capture_output=True, text=True, timeout=15,
+                                   env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+        return completed, result, spec
+
+    def test_real_run_unit_uses_payload_without_host_tests_file_or_atomic_rename(self):
+        completed, result, spec = self._run_payload("""
+            import unittest
+            class PayloadTests(unittest.TestCase):
+                def test_ok(self): self.assertEqual(2 + 2, 4)
+            """, ["test_runtime_payload.PayloadTests.test_ok"])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(result.read_text())
+        self.assertEqual(set(payload["tests"]), set(spec["test_ids"]))
+        self.assertTrue(payload["successful"])
+        self.assertEqual([item.name for item in result.parent.iterdir()], ["unit-result.json"])
+
+    def test_real_failure_writes_both_fixed_outputs_and_corrupt_payload_writes_neither(self):
+        body = """
+            import unittest
+            class PayloadTests(unittest.TestCase):
+                def test_fail(self): self.assertEqual(1, 2)
+            """
+        completed, result, spec = self._run_payload(body, ["test_runtime_payload.PayloadTests.test_fail"])
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        final = json.loads(result.read_text())
+        partial = json.loads(result.with_suffix(".observed-failure.json").read_text())
+        self.assertFalse(final["successful"])
+        self.assertTrue(partial["partial"])
+        self.assertEqual(set(partial["tests"]), set(spec["test_ids"]))
+        self.assertFalse(any(item.name.endswith(".tmp") for item in result.parent.iterdir()))
+        bad, bad_result, _ = self._run_payload(body, ["test_runtime_payload.PayloadTests.test_fail"], corrupt=True)
+        self.assertEqual(bad.returncode, 2, bad.stderr)
+        self.assertFalse(bad_result.exists())
+        self.assertFalse(bad_result.with_suffix(".observed-failure.json").exists())
+
+    @unittest.skipUnless(os.name == "posix", "硬杀旁路仅在 POSIX 短验")
+    def test_observed_failure_survives_real_hard_kill_before_final_result(self):
+        completed, result, spec = self._run_payload("""
+            import os, signal, unittest
+            class PayloadTests(unittest.TestCase):
+                def test_01_fail(self): self.fail("失败须先持久化")
+                def test_02_fail(self): self.fail("后续失败不能截断已完整写好的旁路")
+                def test_03_kill(self): os.kill(os.getpid(), signal.SIGKILL)
+            """, ["test_runtime_payload.PayloadTests.test_01_fail", "test_runtime_payload.PayloadTests.test_02_fail",
+                   "test_runtime_payload.PayloadTests.test_03_kill"])
+        self.assertEqual(completed.returncode, -9, completed.stderr)
+        self.assertFalse(result.exists())
+        partial = json.loads(result.with_suffix(".observed-failure.json").read_text())
+        self.assertFalse(partial["successful"])
+        self.assertEqual(set(partial["tests"]), {spec["test_ids"][0]})
+
+    def test_multiple_failures_preserve_first_sidecar_and_all_final_results(self):
+        completed, result, spec = self._run_payload("""
+            import unittest
+            class PayloadTests(unittest.TestCase):
+                def test_01_fail(self): self.fail("第一处失败")
+                def test_02_fail(self): self.fail("第二处失败")
+            """, ["test_runtime_payload.PayloadTests.test_01_fail", "test_runtime_payload.PayloadTests.test_02_fail"])
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertEqual(set(json.loads(result.read_text())["tests"]), set(spec["test_ids"]))
+        self.assertEqual(set(json.loads(result.with_suffix(".observed-failure.json").read_text())["tests"]), {spec["test_ids"][0]})
+
+
 class UnitExecutorRunTests(unittest.TestCase):
     def test_quota_never_exceeds_machine_cores_and_exclusive_unit_runs_alone(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

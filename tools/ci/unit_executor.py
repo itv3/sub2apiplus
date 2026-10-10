@@ -625,12 +625,16 @@ def plan_units(
 class _RecordingResult(unittest.TextTestResult):
     """在 unittest 原有输出之外，逐个记录测试 ID 的结论与耗时。"""
 
-    def __init__(self, *args: Any, failure_path: Path | None = None, unit_id: str = "", **kwargs: Any) -> None:
+    def __init__(self, *args: Any, failure_path: Path | None = None, unit_id: str = "", result_writer: Any = None,
+                 preserve_first_failure: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.records: dict[str, dict[str, Any]] = {}
         self._started: dict[str, float] = {}
         self.failure_path = failure_path
         self.unit_id = unit_id
+        self.result_writer = result_writer or _write_json
+        self.preserve_first_failure = preserve_first_failure
+        self.failure_persisted = False
 
     def startTest(self, test: unittest.TestCase) -> None:  # noqa: N802 - unittest 接口
         self._started[test.id()] = time.monotonic()
@@ -648,11 +652,13 @@ class _RecordingResult(unittest.TextTestResult):
         }
         if reason is not None:
             self.records[test_id]["reason"] = reason  # 跳过原因（E2-04：P0 证据的跳过清单逐条带原因）
-        if self.failure_path is not None and outcome in {"failed", "error", "unexpected_success"}:
+        if (self.failure_path is not None and outcome in {"failed", "error", "unexpected_success"}
+                and not (self.preserve_first_failure and self.failure_persisted)):
             # 在输出失败标志之前持久化。成功路径不增加逐测试写盘；中止不能抹去已观察的失败。
-            _write_json(self.failure_path, {"schema_version": UNIT_RESULT_SCHEMA, "unit_id": self.unit_id,
-                                           "tests": self.records, "tests_run": self.testsRun,
-                                           "successful": False, "partial": True})
+            self.result_writer(self.failure_path, {"schema_version": UNIT_RESULT_SCHEMA, "unit_id": self.unit_id,
+                                                  "tests": self.records, "tests_run": self.testsRun,
+                                                  "successful": False, "partial": True})
+            self.failure_persisted = True
 
     def addSuccess(self, test: unittest.TestCase) -> None:  # noqa: N802
         super().addSuccess(test)
@@ -684,13 +690,22 @@ class _RecordingResult(unittest.TextTestResult):
         super().addSubTest(test, subtest, err)
 
 
-def run_unit(start: Path, tests_file: Path, result_path: Path) -> int:
+def run_unit(start: Path, tests_file: Path | None, result_path: Path, *, runtime_tests_json: str | None = None) -> int:
     # 导入路径与 discover 一致：起点目录在首位（discover 以它为顶层），其后是当前目录（仓库根）。
     _import_path_like_unittest_main()
     start_abs = str(Path(start).resolve())
     if start_abs not in sys.path:
         sys.path.insert(0, start_abs)
-    payload = json.loads(Path(tests_file).read_text(encoding="utf-8"))
+    writer = _write_json
+    if runtime_tests_json is None:
+        payload = json.loads(Path(tests_file).read_text(encoding="utf-8"))
+    else:
+        runtime = _audit_module()._runtime_module()
+        try:
+            payload = runtime.runtime_test_payload(json.loads(runtime_tests_json), start=start, result=result_path)
+        except (RuntimeError, ValueError, TypeError, KeyError) as error:
+            raise ExecutorError(str(error)) from error
+        writer = runtime.write_test_output
     test_ids = list(payload["test_ids"])
     loader = unittest.defaultTestLoader
     suite = unittest.TestSuite()
@@ -698,10 +713,11 @@ def run_unit(start: Path, tests_file: Path, result_path: Path) -> int:
         name = test_id[len(FAILED_IMPORT_PREFIX):] if test_id.startswith(FAILED_IMPORT_PREFIX) else test_id
         suite.addTests(loader.loadTestsFromName(name))
     runner = unittest.TextTestRunner(verbosity=1, resultclass=lambda *args, **kwargs: _RecordingResult(
-        *args, failure_path=result_path.with_suffix('.observed-failure.json'), unit_id=payload['unit_id'], **kwargs))
+        *args, failure_path=result_path.with_suffix('.observed-failure.json'), unit_id=payload['unit_id'], result_writer=writer,
+        preserve_first_failure=runtime_tests_json is not None, **kwargs))
     result = runner.run(suite)
     assert isinstance(result, _RecordingResult)
-    _write_json(
+    writer(
         result_path,
         {
             "schema_version": UNIT_RESULT_SCHEMA,
@@ -1086,7 +1102,7 @@ class ReadAuditor:
             elif contract["mask_roots"]:
                 raise ExecutorError("未识别的启动器不能使用既有遮挡合同")
             return runtime.prepare(contract, output=trace, argv=command, cwd=unit.cwd or self.repo_root,
-                                   inputs=current.inputs)
+                                   inputs=current.inputs, test_spec=None if unit.command else current.spec)
         return self.module.strace_argv(argv, output=trace, roots=roots, strict=self.strict)
 
     def collect(self, unit: Unit) -> dict[str, Any]:
@@ -1748,7 +1764,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
             p.add_argument("--audit-host-inputs", type=Path, help="逐单元精确宿主输入清单，运行前生成快照并要求完整读集重放")
     unit = sub.add_parser("run-unit")
     unit.add_argument("--start", type=Path, required=True)
-    unit.add_argument("--tests-file", type=Path, required=True)
+    test_source = unit.add_mutually_exclusive_group(required=True)
+    test_source.add_argument("--tests-file", type=Path)
+    test_source.add_argument("--runtime-tests-json", help="受管隔离测试载荷；只写私有盘的固定结果与失败旁路")
     unit.add_argument("--result", type=Path, required=True)
     for name in ("acquire", "release"):
         p = sub.add_parser(name)
@@ -2088,6 +2106,8 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     deps_cache: dict[Path, Any] = {}
 
     def current(unit: Unit, spec: dict[str, Any], inputs: list[dict[str, Any]] | None, reason: str) -> Any:
+        if inputs is not None and not unit.command and any(item.get("name") == "runtime-contract" for item in inputs):
+            inputs = records._unique([*inputs, records._audit_module()._runtime_module().test_spec_entry(spec)])
         return records.Current(unit_id=unit.unit_id, unit_type="command" if unit.command else "test", spec=spec, spec_sha256=_sha256(spec),
                                inputs=inputs, inputs_sha256=records.entries_sha256(inputs) if inputs is not None else None,
                                inheritable=inputs is not None and not reason, reason=reason)
@@ -2667,7 +2687,7 @@ def main(argv: list[str] | None = None) -> int:
         _terminate_like_interrupt()
     try:
         if args.command == "run-unit":
-            return run_unit(args.start, args.tests_file, args.result)
+            return run_unit(args.start, args.tests_file, args.result, runtime_tests_json=args.runtime_tests_json)
         if args.command == "acquire":
             grant = acquire(args.state_dir or default_state_dir(), args.owner, args.owner_pid, args.timeout)
             print(json.dumps(grant, ensure_ascii=False))

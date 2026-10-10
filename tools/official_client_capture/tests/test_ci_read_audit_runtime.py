@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +14,7 @@ from pathlib import Path
 from tools.ci import read_audit as ra
 from tools.ci import read_audit_runtime as runtime
 from tools.ci import unit_records as records
+from tools.ci import unit_executor as executor
 
 
 class RuntimeReadAuditTests(unittest.TestCase):
@@ -150,6 +153,126 @@ class RuntimeReadAuditTests(unittest.TestCase):
         argv = ra.strace_argv(["true"], output=Path("/out/trace.json"), roots=["/"], strict=True)
         self.assertIn("setns", " ".join(argv))
         self.assertIn("io_uring_setup", " ".join(argv))
+
+
+class RuntimeTestTransportTests(unittest.TestCase):
+    """用真实普通文件核运输边界；此短验不宣称已完成 Linux 挂载及 strace 来源生产。"""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve() / "private" / "output"
+        self.root.mkdir(parents=True, mode=0o700)
+        self.contract = {"schema_version": runtime.SCHEMA, "temporary_root": str(self.root),
+                         "mask_roots": [], "environment_paths": []}
+        self.result = Path(self.directory.name).resolve() / "out" / "units" / "test_native.result.json"
+        self.result.parent.mkdir(parents=True)
+        unit = executor.Unit("test_native", "test_native", ("test_native.NativeTests.test_one",), executor.Quota(1, 128), False, 1)
+        self.spec = executor.unit_spec(unit, start=Path("tests"), pattern="test_*.py", timeout_seconds=30)
+        self.transport = {"schema_version": runtime.TEST_TRANSPORT_SCHEMA, "spec": self.spec,
+                          "spec_sha256": runtime.digest(self.spec),
+                          "payload_sha256": runtime.digest({"unit_id": self.spec["unit_id"], "test_ids": self.spec["test_ids"]}),
+                          "temporary_root": str(self.root), "result_path": str(self.result)}
+        self.payload = {"schema_version": runtime.TEST_RESULT_SCHEMA, "unit_id": self.spec["unit_id"],
+                        "tests": {self.spec["test_ids"][0]: {"outcome": "passed", "seconds": 0.01}},
+                        "tests_run": 1, "successful": True}
+
+    def test_original_command_is_rewritten_without_reading_host_test_list(self):
+        original = [sys.executable, str(runtime.HERE.with_name("unit_executor.py")), "run-unit", "--start", "tests",
+                    "--tests-file", str(self.result).replace(".result.json", ".tests.json"), "--result", str(self.result)]
+        argv = runtime.test_transport_argv(self.transport, self.contract, original,
+                                          output=self.result.parent.parent / "audit" / "trace.json")
+        self.assertIn("--runtime-tests-json", argv)
+        self.assertNotIn("--tests-file", argv)
+        self.assertEqual(argv[-1], str(self.root / runtime.TEST_RESULT_NAME))
+        self.assertEqual(runtime.runtime_test_payload(self.transport, start=Path("tests"), result=Path(argv[-1])),
+                         {"unit_id": self.spec["unit_id"], "test_ids": self.spec["test_ids"]})
+        with self.assertRaises(runtime.RuntimeContractError):
+            runtime.test_transport_argv(self.transport, self.contract, ["true"], output=self.result.parent.parent / "audit" / "trace.json")
+
+    def test_payload_spec_and_destination_are_bound_but_destination_is_not_stable_input(self):
+        entry = runtime.test_spec_entry(self.spec)
+        runtime._test_transport_check(self.transport, self.contract, [entry])
+        changed = copy.deepcopy(self.transport)
+        changed["result_path"] = str(self.result.parent.parent.parent / "next" / "units" / self.result.name)
+        self.assertEqual(runtime.test_spec_entry(runtime._test_transport_check(changed, self.contract, [entry])["spec"]), entry)
+        for field, value in (("spec_sha256", "0" * 64), ("payload_sha256", "0" * 64),
+                             ("result_path", str(self.result.parent / "wrong.result.json")),
+                             ("result_path", str(self.root / "units" / self.result.name))):
+            with self.subTest(field=field, value=value), self.assertRaises(runtime.RuntimeContractError):
+                runtime._test_transport_check({**self.transport, field: value}, self.contract, [entry])
+        with self.assertRaises(runtime.RuntimeContractError):
+            runtime._test_transport_check(self.transport, self.contract, [])
+
+    def test_real_result_file_exports_identical_bytes_and_rejects_links_missing_and_corrupt_data(self):
+        source = self.root / runtime.TEST_RESULT_NAME
+        runtime.write_test_output(source, self.payload)
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()), [runtime.TEST_RESULT_NAME])
+        artifact = runtime._read_test_artifact(source, self.spec, partial=False, returncode=0)
+        exported = runtime._export_test_artifact(artifact, self.result)
+        self.assertEqual(source.read_bytes(), self.result.read_bytes())
+        self.assertEqual(exported["sha256"], hashlib.sha256(self.result.read_bytes()).hexdigest())
+        source.unlink()
+        with self.assertRaises(FileNotFoundError):
+            runtime._read_test_artifact(source, self.spec, partial=False, returncode=0)
+        source.symlink_to(self.result)
+        with self.assertRaises(OSError):
+            runtime._read_test_artifact(source, self.spec, partial=False, returncode=0)
+        source.unlink()
+        source.write_text("{broken}")
+        with self.assertRaises(ValueError):
+            runtime._read_test_artifact(source, self.spec, partial=False, returncode=0)
+        with self.assertRaises(runtime.RuntimeContractError):
+            runtime.write_test_output(self.root / "another.json", self.payload)
+
+    def test_failure_sidecar_is_partial_and_success_never_covers_loader_or_missing_tests(self):
+        failed = {**self.payload, "successful": False,
+                  "tests": {self.spec["test_ids"][0]: {"outcome": "error", "seconds": 0.01}}}
+        partial = {**failed, "partial": True}
+        source = self.root / runtime.TEST_FAILURE_NAME
+        runtime.write_test_output(source, partial)
+        saved = source.read_bytes()
+        with self.assertRaises(FileExistsError):
+            runtime.write_test_output(source, {**partial, "tests_run": 0})
+        self.assertEqual(source.read_bytes(), saved)
+        artifact = runtime._read_test_artifact(source, self.spec, partial=True, returncode=-9)
+        runtime._export_test_artifact(artifact, self.result.with_suffix(".observed-failure.json"))
+        self.assertFalse(json.loads(self.result.with_suffix(".observed-failure.json").read_text())["successful"])
+        runtime._check_test_result(failed, self.spec, partial=False, returncode=1)
+        for changed in ({**self.payload, "tests": {}}, {**self.payload, "tests_run": 0},
+                        {**failed, "successful": True}, {**partial, "successful": True},
+                        {**self.payload, "unit_id": "wrong"}):
+            with self.subTest(changed=changed), self.assertRaises(runtime.RuntimeContractError):
+                runtime._check_test_result(changed, self.spec, partial="partial" in changed, returncode=0)
+
+    def test_export_failures_and_consumer_wrong_binding_fail_closed(self):
+        source = self.root / runtime.TEST_RESULT_NAME
+        runtime.write_test_output(source, self.payload)
+        artifact = runtime._read_test_artifact(source, self.spec, partial=False, returncode=0)
+        self.result.with_name(self.result.name + ".runtime-test-export.tmp").write_text("已有文件不得覆盖")
+        with self.assertRaises(FileExistsError):
+            runtime._export_test_artifact(artifact, self.result)
+        self.assertFalse(self.result.exists())
+        self.result.with_name(self.result.name + ".runtime-test-export.tmp").unlink()
+        exported = runtime._export_test_artifact(artifact, self.result)
+        receipt = {"schema_version": runtime.TEST_EXPORT_SCHEMA, "status": "exported", "transport": self.transport,
+                   "returncode": 0, "result": exported, "observed_failure": None}
+        document = {"runtime": {"completion": {"returncode": 0, "test_export": receipt}},
+                    "accesses": [[str(source), ["write"]]]}
+        binding = runtime.test_spec_entry(self.spec)
+        runtime._replay_test_export(document, [binding], self.contract, {str(source)})
+        for mutation in ("missing", "wrong-digest", "wrong-spec", "wrong-kind"):
+            changed = copy.deepcopy(document)
+            if mutation == "missing":
+                changed["runtime"]["completion"].pop("test_export")
+            elif mutation == "wrong-digest":
+                changed["runtime"]["completion"]["test_export"]["result"]["sha256"] = "0" * 64
+            elif mutation == "wrong-spec":
+                changed["runtime"]["completion"]["test_export"]["transport"]["spec"]["test_ids"] = ["test_native.NativeTests.other"]
+            else:
+                changed["accesses"] = [[str(source), ["read"]]]
+            with self.subTest(mutation=mutation), self.assertRaises(runtime.RuntimeContractError):
+                runtime._replay_test_export(changed, [binding], self.contract, {str(source)})
 
 
 if __name__ == "__main__":
