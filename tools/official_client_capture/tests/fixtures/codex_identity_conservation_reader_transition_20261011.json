@@ -35,7 +35,7 @@
         "_verify_plan_identity",
         "_write_blocked_acceptance_attempt"
       ],
-      "closure_sha256": "2eeb03da1917cb7c36615b3f2e9a02c9c8097886a24768268e0953e0fc39f9ae",
+      "closure_sha256": "4d7967f0856dbbe6ba592ab21b2430a2e2188d33fabdae3b2a09f73680725399",
       "module_barriers": [
         "codex_upgrade_timing_ledger:replay",
         "codex_upgrade_timing_ledger:stopped_phase"
@@ -2387,7 +2387,7 @@
           "kind": "constant",
           "module": "codex_upgrade_gate_receipt",
           "name": "TARGET_VERIFIER_SHA256S",
-          "sha256": "1a30ba848e365355c5c5facfb11ca13a32de82cba9360f06a2479621833eeda4"
+          "sha256": "56e1350567136165e9a4ce131d9f9335808284ded70fafd1e13c78338b1aeb1e"
         },
         {
           "kind": "constant",
@@ -4232,7 +4232,7 @@
         "_verify_plan_identity",
         "_write_blocked_acceptance_attempt"
       ],
-      "closure_sha256": "c361d20216682d2000dd2c2fa99ce89e91dc6880b6ec56e242514581af2ce58e",
+      "closure_sha256": "b7827ec7d88d99ac600ca99316d22a24e0ff51e269a376935b22f8338b2320fd",
       "module_barriers": [
         "codex_upgrade_timing_ledger:replay",
         "codex_upgrade_timing_ledger:stopped_phase"
@@ -6293,7 +6293,7 @@
           "kind": "constant",
           "module": "codex_upgrade_gate_receipt",
           "name": "TARGET_VERIFIER_SHA256S",
-          "sha256": "1a30ba848e365355c5c5facfb11ca13a32de82cba9360f06a2479621833eeda4"
+          "sha256": "56e1350567136165e9a4ce131d9f9335808284ded70fafd1e13c78338b1aeb1e"
         },
         {
           "kind": "constant",
@@ -14693,7 +14693,7 @@
     "sha256": "6d62b8d3837302ab664732d8a329442221d7b02f9b4c59483cd69c5aac125301"
   },
   "schema_version": "codex-identity-conservation-reader-transition/v1",
-  "scope": "B5a-09／10 测试单元承接修复的两个钉住常量；不改变算法、基线、屏障或判据。",
+  "scope": "B5a-09／10 最终运输源码的三个验证器钉住值与旧部署生成器登记，仍只变两个既有常量；不改变算法、基线、屏障或判据。",
   "sensitive_identity": {
     "after": {
       "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
@@ -14717,12 +14717,12 @@
     }
   },
   "source_commits": {
-    "after": "ccb92f61d41627a4ab78e984e252a0bbef3f5361",
-    "before": "df90c329e3ba2b659ac7667b897e38a7a35d6269"
+    "after": "697ade3a218d6ad9c5cad524425983c6dd20f33f",
+    "before": "f99137c82d44adfab8d95b53005b65f5b8de401c"
   },
   "source_file_sha256": {
     "after": {
-      "codex_upgrade_gate_receipt.py": "dbb0796c715284cec7fa62ef3e9972b4028dd747290cd13a388cf148af6b0eeb"
+      "codex_upgrade_gate_receipt.py": "fedb13ac88df307473a62a6752cfccc5a8236b11c581076dc8f314ab41298189"
     },
     "before": {
       "codex_upgrade_gate_receipt.py": "48cc60ff1419ba51b1d812e3ef30332e473b186a602c43831bd7ee4ad91a62de"
@@ -14733,7 +14733,7 @@
       "phase": "B5a09-test-read-pins",
       "readers": {
         "accept_reader_sha256": {
-          "after_sha256": "2eeb03da1917cb7c36615b3f2e9a02c9c8097886a24768268e0953e0fc39f9ae",
+          "after_sha256": "4d7967f0856dbbe6ba592ab21b2430a2e2188d33fabdae3b2a09f73680725399",
           "before_sha256": "c8a720d303a522845b458eb5dba0b82eb289bf9e1b89debeca7ce47a825ee0fc",
           "modules": [],
           "symbols": [
@@ -14758,7 +14758,7 @@
                 "kind": "constant",
                 "module": "codex_upgrade_gate_receipt",
                 "name": "TARGET_VERIFIER_SHA256S",
-                "sha256": "1a30ba848e365355c5c5facfb11ca13a32de82cba9360f06a2479621833eeda4"
+                "sha256": "56e1350567136165e9a4ce131d9f9335808284ded70fafd1e13c78338b1aeb1e"
               },
               "before": {
                 "kind": "constant",
@@ -14772,7 +14772,7 @@
           ]
         },
         "compare_reader_sha256": {
-          "after_sha256": "c361d20216682d2000dd2c2fa99ce89e91dc6880b6ec56e242514581af2ce58e",
+          "after_sha256": "b7827ec7d88d99ac600ca99316d22a24e0ff51e269a376935b22f8338b2320fd",
           "before_sha256": "0b14a644e3373c5b33ad87261c34b9fc94ef2c2397dbe6063987996156cd28c5",
           "modules": [],
           "symbols": [
@@ -14797,7 +14797,7 @@
                 "kind": "constant",
                 "module": "codex_upgrade_gate_receipt",
                 "name": "TARGET_VERIFIER_SHA256S",
-                "sha256": "1a30ba848e365355c5c5facfb11ca13a32de82cba9360f06a2479621833eeda4"
+                "sha256": "56e1350567136165e9a4ce131d9f9335808284ded70fafd1e13c78338b1aeb1e"
               },
               "before": {
                 "kind": "constant",
@@ -14812,8 +14812,8 @@
         }
       },
       "reason": "完整正式测试读集与受管验证器同步；旧生成器只读登记，不授权旧单元跨执行器承接。",
-      "source_after": "ccb92f61d41627a4ab78e984e252a0bbef3f5361",
-      "source_before": "df90c329e3ba2b659ac7667b897e38a7a35d6269"
+      "source_after": "697ade3a218d6ad9c5cad524425983c6dd20f33f",
+      "source_before": "f99137c82d44adfab8d95b53005b65f5b8de401c"
     }
   ],
   "transition_id": "B5a09-test-read-pins-20261011"
