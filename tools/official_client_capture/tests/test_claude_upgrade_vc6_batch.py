@@ -35,6 +35,7 @@ accept 三批到 VC-5 checkpoint），之后全部以 ``compile-and-run-vc-batch
 from __future__ import annotations
 
 import copy
+import json
 import os
 import site
 import subprocess
@@ -526,11 +527,13 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         self.assertIn("逐字重派同一批次", reconciled["next_command"])
 
     def candidate_status(self, world: dict[str, Any]) -> dict[str, Any]:
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+
+        argv = ['campaign_status', world['campaign'], CANDIDATE]
+        pending = stops.begin_command(argv)
         with chain.seams(world["config_path"]):
             result = claude_upgrade_recovery.campaign_status(world["campaign"], CANDIDATE)
-        from tools.official_client_capture.tests import claude_fault_chain_world as stops
-        stops.record_command(['campaign_status', world['campaign'], CANDIDATE], 0,
-            json.dumps(result, ensure_ascii=False), '')
+        stops.record_command(argv, 0, json.dumps(result, ensure_ascii=False), '', pending=pending)
         return result
 
     def assert_status(self, world: dict[str, Any], expected: str) -> dict[str, Any]:
