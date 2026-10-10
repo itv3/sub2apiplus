@@ -123,7 +123,14 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         campaign = world["campaign"]
         plan = chain._write_json(self.root / "action-plans" / f"vc-6-{sequence:04d}.json", delivery.vc6_action_plan(action))
         injection = self.root / "inject-vc6"
-        variables = environment.subprocess_environment(injection, self.control, [str(action["action_id"])])
+        selected = [str(action["action_id"])]
+        variables = {
+            **chain.subprocess_environment(injection, world["config_path"], selected),
+            **environment.subprocess_environment(injection, self.control, selected),
+        }
+        # 新动作进程先登记同世界已经冻结的来源及布局，再安装原 typed 来源。
+        # 不能只依赖父进程的临时登记，也不从 capture_root 重新推导别名。
+        (injection / "usercustomize.py").write_text(chain.USERCUSTOMIZE + environment.USERCUSTOMIZE, encoding="utf-8")
         if crash_after_receipt:
             self.assertEqual(action["action_id"], delivery.FINALIZE_ACTION_ID)
             with (injection / "usercustomize.py").open("a", encoding="utf-8") as stream:
@@ -169,6 +176,14 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         """同一世界连续执行批次提交故障、阶段失败、动作强杀、阶段失效及收据后强杀。"""
 
         world = self.vc5_complete_world() if world is None else world
+        # 资格准备、fork 的独立守卫和父进程后处理共读同份冻结来源配置。
+        # 作用域结束恢复原登记；不替换正式布局或资格读侧。
+        with chain.seams(world["config_path"]):
+            return self._exercise_delivery_faults(world, sequence_start=sequence_start)
+
+    def _exercise_delivery_faults(self, world: dict[str, Any], *, sequence_start: int) -> list[dict[str, Any]]:
+        """在调用方已登记的同世界来源作用域内执行原交付故障流程。"""
+
         campaign = world["campaign"]
         self.campaign = campaign
         candidate = world.get("candidate_id", CANDIDATE)

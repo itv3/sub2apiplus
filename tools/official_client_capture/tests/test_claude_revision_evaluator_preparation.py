@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import io
 import json
+import multiprocessing
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -74,7 +78,7 @@ class RevisionOfficialSourceTests(unittest.TestCase):
         self.package = {"object_kind": "evidence_package", "sha256": "c" * 64}
         self.old_config = sources._write_json(self.evaluation / "source-config.json", {
             "official_source": str(self.evaluation / "original-source.json"),
-            "capture_layout": {"host_runs_root": str(self.case.data / "runs"), "container_run_roots": ["/capture/runs"]},
+            "capture_layout": {"host_runs_root": str(self.case.data / "runs"), "container_run_roots": [str(self.case.data / "runs")]},
         })
 
     def context(self) -> dict:
@@ -111,6 +115,138 @@ class RevisionOfficialSourceTests(unittest.TestCase):
         origin = json.loads((self.campaign / "seam/official/fixture-origin.json").read_bytes())
         self.assertTrue(origin["fixture_only"])
         self.assertFalse(origin["formal_version_semantics_certified"])
+
+        from tools.official_client_capture import claude_upgrade_capture as capture
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+        from tools.official_client_capture.tests import claude_late_stage_chain_driver as late
+        from tools.official_client_capture.tests import claude_typed_vc6_fixture as typed
+        from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
+
+        # 两条连续链都消费冻结的两映射；真实布局读侧必须仍拒绝默认宿主根与未登记别名。
+        manifest = {"configuration": {"capture_root": str(self.case.data), "capture_tool_root": "/capture/tools/official_client_capture",
+            "capture_container": "fixture-capture", "synthetic_capture_container": "fixture-synthetic",
+            "runtime_image": "fixture/runtime@sha256:" + "a" * 64}}
+        original_layout_reader = capture._capture_layout
+        original_mappings = (upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT, upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS)
+        expected = (str(self.case.data.resolve()), str(self.case.data))
+
+        def read_layout() -> tuple[str, str]:
+            layout = capture._capture_layout(self.campaign, manifest)
+            self.assertIs(capture._capture_layout, original_layout_reader)
+            return str(layout.host_data_root), str(layout.capture_root)
+
+        with self.assertRaises(upgrade.ConfigurationError):
+            read_layout()
+        with sources.seams(world["config_path"]):
+            self.assertEqual(read_layout(), expected)
+            bad = {"configuration": {**manifest["configuration"], "capture_root": "/unregistered-capture"}}
+            with self.assertRaisesRegex(upgrade.ConfigurationError, "不是登记的容器 runs 别名"):
+                capture._capture_layout(self.campaign, bad)
+
+        class LayoutProbeComplete(Exception):
+            pass
+
+        observed = []
+
+        class LayoutProbeFixture:
+            def __init__(_fixture, campaign, candidate):
+                observed.append(read_layout())
+
+            def __enter__(_fixture):
+                # 与真实 typed 守卫使用同一 fork 入口，核子进程继承的登记，不启动交付长链。
+                context = multiprocessing.get_context("fork")
+                receiver, sender = context.Pipe(duplex=False)
+
+                def guard_read():
+                    try:
+                        sender.send(read_layout())
+                    finally:
+                        sender.close()
+
+                process = context.Process(target=guard_read)
+                process.start()
+                sender.close()
+                try:
+                    self.assertTrue(receiver.poll(10), "守卫布局探针没有返回")
+                    observed.append(receiver.recv())
+                    process.join(timeout=10)
+                    self.assertEqual(process.exitcode, 0)
+                finally:
+                    if process.is_alive():
+                        process.terminate()
+                        process.join(timeout=5)
+                    receiver.close()
+                raise LayoutProbeComplete()
+
+        with mock.patch.object(late.environment, "TypedDeliveryFixture", LayoutProbeFixture), \
+                self.assertRaises(LayoutProbeComplete):
+            self.case.exercise_delivery_faults(world)
+        self.assertEqual(observed, [expected, expected])
+        self.assertEqual((upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT, upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS), original_mappings)
+
+        # 原 run/finalize 启动代码在真实新解释器里先登记来源配置，再安装 typed 来源。
+        # 只隔离父批次执行；子进程调用真实来源安装与布局读侧，结果不作为整链认证。
+        self.case.data.chmod(0o700)
+        configuration, execution_context, _environment = fixture_world(self.case.data)
+        configuration_path = self.campaign / "control/layout-probe-configuration.json"
+        guard.write_json_once(configuration_path, configuration)
+        execution_context["configuration_ref"] = guard.binding(self.case.data, configuration_path)
+        self.case.control = self.case.data / "control/layout-probe-control.json"
+        guard.write_json_once(self.case.control, {"schema_version": typed.CONTROL_SCHEMA, "fixture_only": True,
+            "formal_version_semantics_certified": False, "context": execution_context})
+        self.case.root, self.case.state_dir = self.root, self.case.data / "control/layout-probe-state"
+        script = '''
+import json, sys
+from pathlib import Path
+from tools.official_client_capture import claude_upgrade_capture as capture
+from tools.official_client_capture import claude_upgrade_delivery as delivery
+from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+from tools.official_client_control import delivery_execution as execution
+campaign, manifest, selected = sys.argv[1:]
+try:
+    layout = capture._capture_layout(Path(campaign), json.loads(manifest))
+    observed = [str(layout.host_data_root), str(layout.capture_root)]
+except capture.ConfigurationError:
+    if selected == "1":
+        raise
+    observed = None
+print(json.dumps({"layout": observed, "typed": "arm64-isolated" in delivery.ENVIRONMENT_EXECUTORS
+    and executor.AUTHORITY in execution.SOURCE_VERIFIERS}))
+'''
+        for index, action in enumerate((delivery.run_action(self.campaign, "candidate-current",
+                environment_executor=typed.EXECUTOR_NAME, observation_window_seconds=1,
+                executor_configuration=configuration_path,
+                executor_configuration_sha256=execution_context["configuration_ref"]["sha256"]),
+                delivery.finalize_action(self.campaign, "candidate-current", "a" * 64))):
+            def inspect_action(_argv):
+                for selected in (True, False):
+                    child_environment = {**os.environ, supervisor.CAMPAIGN_RUN_ACTION_ID_ENV:
+                        action["action_id"] if selected else "vc3-unselected"}
+                    result = subprocess.run([sys.executable, "-B", "-c", script, str(self.campaign),
+                        json.dumps(manifest), "1" if selected else "0"], cwd=sources.REPOSITORY_ROOT,
+                        env=child_environment, capture_output=True, text=True, timeout=15, check=True)
+                    self.assertEqual(result.stderr, "")
+                    self.assertEqual(json.loads(result.stdout), {"layout": list(expected) if selected else None,
+                        "typed": selected})
+                return 0, {}, ""
+
+            with sources.seams(world["config_path"]), mock.patch.object(late.batch_tests, "run_main", side_effect=inspect_action), \
+                    mock.patch.dict(os.environ, {typed.DIAGNOSTIC_ROOT_ENV: ""}):
+                self.case.dispatch_vc6(world, 12 + index, action)
+        # 错误来源配置另建原件，不篡改已经冻结的配置；新动作仍由原布局校验器拒绝。
+        wrong_configuration = {**config, "capture_layout": {**config["capture_layout"],
+            "container_run_roots": ["/unregistered-capture/runs"]}}
+        wrong_path = sources._write_json(self.evaluation / "wrong-layout-source-config.json", wrong_configuration)
+        wrong_world = {**world, "config_path": wrong_path}
+        with sources.seams(wrong_path), mock.patch.object(late.batch_tests, "run_main", side_effect=inspect_action), \
+                mock.patch.dict(os.environ, {typed.DIAGNOSTIC_ROOT_ENV: ""}), \
+                self.assertRaises(subprocess.CalledProcessError) as rejected:
+            self.case.dispatch_vc6(wrong_world, 14, action)
+        self.assertIn("不是登记的容器 runs 别名", rejected.exception.stderr)
+        self.assertEqual((upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT, upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS), original_mappings)
+        self.assertTrue(all(path.read_bytes() == raw for path, raw in before.items()))
 
     def test_missing_materialized_parent_still_fails_in_original_consumer(self) -> None:
         world = self.context()
