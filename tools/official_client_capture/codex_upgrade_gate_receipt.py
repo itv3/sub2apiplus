@@ -71,7 +71,7 @@ TARGET_VERIFIER_SHA256S: dict[str, str] = {
     "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
     "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
     "unit_records.py": "5fe0b37ab7f6cb118da98c2123eb1b552bb621dec43c7d644b22f394cb3af2b6",
-    "read_audit.py": "af7f77e14ee21601a7cb190d1d9376ef8258a352fbc1d3feab6f31d21f47be17",
+    "read_audit.py": "e432599e64d0011adb8c085247ef3db4a715ac07a8b771b9100c632c20998f33",
     "read_audit_runtime.py": "11c5914ad5ca6d1ea0882f6538e90683df6d21b4d3e6989994c621f8a7db6548"
 }
 
