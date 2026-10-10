@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import copy
+import gzip
+import hashlib
 import json
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -20,6 +23,54 @@ from tools.official_client_capture.tests import claude_recorded_full_validation_
 PROBE = "v4-thinking-display-omitted"
 
 
+def write_relay(root: Path, request: bytes, response: bytes | None, *, connection_id: int = 1, **metadata) -> None:
+    """写明确的合成 H1 录制；真实完整性校验仍检查原字节、方向和身份。"""
+
+    streams = {"client_to_upstream": request, **({"upstream_to_client": response} if response is not None else {})}
+    connection = {
+        "connection_id": connection_id, "client_alpn_offer": ["http/1.1"], "alpn_source": "assumed",
+        "client_alpn": "http/1.1", "upstream_alpn_offer": ["http/1.1"], "upstream_alpn": "http/1.1",
+        "sni": "api.anthropic.com", "valid": True, "opened_at_unix_ms": 10, "closed_at_unix_ms": 20,
+        "bytes": {name: len(raw) for name, raw in streams.items()},
+        "sha256": {name: hashlib.sha256(raw).hexdigest() for name, raw in streams.items()},
+        "segments": [{"direction": name, "offset": 0, "length": len(raw), "t_ms": number}
+                     for number, (name, raw) in enumerate(streams.items()) if raw], **metadata,
+    }
+    for name, raw in streams.items():
+        path = root / f"relay/conn{connection_id:03d}.{name}.bin"
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_bytes(raw)
+    (root / "relay/relay.json").write_text(json.dumps({
+        "schema_version": "byte-relay/v1", "mode": "direct", "upstream_host": "api.anthropic.com",
+        "mirror_selected_alpn": True, "synthetic_profile": None, "production_forwarding_enabled": True,
+        "credential_scrubbing": {"byte_offsets_preserved": True}, "connections": [connection],
+    }), encoding="utf-8")
+
+
+def freeze_labels(state: dict) -> None:
+    """从正式标签截取本测试 Job 的规则与场景；不替换规则口径或标签加载器。"""
+
+    root = full.vc1.REPOSITORY / "tools/official_client_capture"
+    labels = source.read(root / "claude_upgrade_evidence_labels_2_1_285.json")
+    original_scenarios = source.read(root / "claude_upgrade_scenarios_2_1_285.json")
+    binding = state["inputs"]["bindings"]["scenarios"]
+    path = source.bound(binding)
+    scenarios = source.read(path)
+    scenarios["evidence_scenarios"] = original_scenarios["evidence_scenarios"]
+    entries = []
+    for job in scenarios["capture_jobs"]:
+        rules = []
+        for step in job["steps"]:
+            found = [item for entry in labels["entries"] if entry["side"] == job["phase"]
+                     for item in entry["rules"] if item["glob"].startswith(step["probe_id"] + "/")]
+            rules.extend(found)
+        entries.append({"job_id": job["id"], "side": job["phase"], "rules": rules})
+    labels.update(claude_version=source.VERSION, entries=entries)
+    labels_path = source.write(path.with_name("labels.json"), labels)
+    path.write_text(json.dumps(scenarios, ensure_ascii=False), encoding="utf-8")
+    state["inputs"]["bindings"].update(scenarios=source.binding(path), labels=source.binding(labels_path))
+
+
 class RecordedCandidateSourceTests(unittest.TestCase):
     """候选预约与历史来源必须分别闭合；不继承旧用例类，避免默认发现重复运行。"""
 
@@ -32,6 +83,10 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         self.addCleanup(fixture.doCleanups)
         self.data, self.state = fixture.data, copy.deepcopy(fixture.state)
         original_path = fixture.fixture.supplement / f"attempts/{PROBE}/attempt-001/relay-manifest.json"
+        original_root = original_path.parent
+        write_relay(original_root, (original_root / "relay/conn001.client_to_upstream.bin").read_bytes(),
+                    (original_root / "relay/conn001.upstream_to_client.bin").read_bytes())
+        (original_root / "relay/intervention.jsonl").write_bytes(b"")
         manifest = source.read(original_path)
         manifest.update(secret_scan={"passed": True}, cleanup={"relay_stopped": True, "hosts_restored": True},
                         m_binding={"complete": True}, upstream={"host": "api.anthropic.com", "live_requests": True})
@@ -39,6 +94,7 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         self.state["snapshot"] = replay.build_snapshot(self.data / "control/candidate-snapshot", recorded=fixture.fixture.recorded)
         self.state["inputs"] = source_fixture.projection_inputs(
             self.data / "control/candidate-v5-inputs", self.state["jobs"], {"candidate-fixture": [PROBE]})
+        freeze_labels(self.state)
         self.state["inputs"]["candidate_configuration"] = {
             "service_container": "sub2apiplus", "keeper_container": "sub2apiplus-keeper",
             "postgres_container": "sub2apiplus-postgres", "claude_account_id": "7", "api_key_id": "9"}
@@ -339,9 +395,204 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         context = {"target_version": source.VERSION, "target_sha256": self.state["freeze"]["binary_sha256"],
                    "runtime_image": self.projection["runtime"]["runtime_image"]}
         self.assertEqual(evidence._probe_checks(projected_view, probe=PROBE, context=context, synthetic=False), [])
+        from tools.official_client_capture import claude_upgrade_plan as plan
+
+        candidate_view = evidence.candidate_probe_view(current_root, base=self.data)
+        job = {"candidate_steps": {PROBE: self.projection["candidate"]}}
+        self.assertEqual(evidence._candidate_probe_checks(
+            {"gateway_base_url": self.projection["candidate"]["base_url"]}, candidate_view, job, PROBE), [])
+        labels = plan.load_evidence_labels(source.bound(self.state["inputs"]["bindings"]["labels"]),
+                                          expected_version=source.VERSION,
+                                          scenario_payload=source.read(source.bound(self.state["inputs"]["bindings"]["scenarios"])))
+        self.assertTrue(plan.match_relay_connections(labels["plans"]["candidate-fixture"][PROBE], candidate_view["connections"]))
+        payload = source.read(current_root / "relay-manifest.json")
+        self.assertTrue(payload["dimension_evidence"]["observation_only"])
+        self.assertEqual(payload["fixture_projection"]["original_v5_dimension_evidence"]["result"], "passed")
+        self.assertEqual(payload["relay_integrity"]["hello_request_count"], 0)
+        self.assertTrue(all(item["path"].startswith(candidate.ORIGINAL_DIRECTORY + "/")
+                            or item["path"] in {row["path"] for row in source.read(current_root / "gateway-byte-projection.json")["projected_files"]}
+                            or item["path"] == "gateway-byte-projection.json" for item in payload["artifacts"]))
         original_view = evidence.relay_probe_view(Path(origin["manifest_path"]).parent, base=Path(origin["index"]["root"]))
         self.assertIn("probe_identity", evidence._probe_checks(original_view, probe=PROBE, context=context, synthetic=False))
         replay.assert_source_untouched(self.state["snapshot"])
+
+
+class GatewayByteProjectionTests(unittest.TestCase):
+    """只验证隔离夹具的字节形成与正式连接消费，不运行客户端、阶段链或版本认证。"""
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="claude-candidate-byte-projection-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.data = self.root / "staging/data"
+        self.data.mkdir(parents=True, mode=0o700)
+
+    def material(self, request: bytes, response: bytes | None, *, probe: str = PROBE, pcap: bytes | None = b"fixture-only-pcap", **metadata):
+        self.projection = {"job_id": "candidate-fixture", "probe_id": probe,
+                           "candidate": {"trigger": "client"}}
+        from tools.official_client_capture import claude_upgrade_plan as plan
+
+        self.projection["candidate"]["trigger"] = plan.candidate_trigger(probe)
+        self.state = {"data_root": str(self.data), "inputs": source_fixture.projection_inputs(
+            self.data / "inputs", {}, {"candidate-fixture": [probe]})}
+        freeze_labels(self.state)
+        attempt = self.root / "originals/attempt-001"
+        write_relay(attempt, request, response, **metadata)
+        source.write(attempt / "relay-manifest.json", {"fixture_only": True, "purpose": "synthetic-byte-contract"})
+        if pcap is not None:
+            (attempt / "tls-clienthello.pcap").write_bytes(pcap)
+        self.origin = {"manifest_path": attempt / "relay-manifest.json", "row": {"attempt": "attempt-001"},
+                       "index": {"root": str(attempt.parent), "files": {
+                           path.relative_to(attempt.parent).as_posix(): replay._digest(path)
+                           for path in attempt.rglob("*") if path.is_file()}}}
+        return candidate.gateway_material(self.state, self.projection, self.origin)
+
+    def materialize(self, material: dict) -> Path:
+        destination = self.data / "candidate"
+        destination.mkdir(mode=0o700)
+        for relative, binding in self.origin["index"]["files"].items():
+            path = destination / candidate.ORIGINAL_DIRECTORY / Path(relative).relative_to("attempt-001")
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.write_bytes(source.bound({"path": str(Path(self.origin["index"]["root"]) / relative), **binding}).read_bytes())
+        for relative, raw in material["files"].items():
+            path = destination / relative
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            path.write_bytes(raw)
+        source.write(destination / "gateway-byte-projection.json", material["receipt"])
+        return destination
+
+    @staticmethod
+    def request(target: str = "/v1/messages", method: str = "POST") -> bytes:
+        body = b'{"model":"claude-sonnet-5","messages":[],"fixture_only":true}' if method == "POST" else b""
+        return (f"{method} {target}?beta=true HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
+
+    def test_mixed_connection_keeps_exact_request_response_and_chunk_framing(self) -> None:
+        requests = [self.request("/api/hello", "HEAD"), self.request(), self.request("/api/claude_code/settings", "GET")]
+        responses = [b"HTTP/1.1 200 OK\r\nContent-Length: 777\r\n\r\n",
+                     b"HTTP/1.1 103 Early Hints\r\nLink: </fixture>\r\n\r\nHTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
+                     b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"]
+        material = self.material(b"".join(requests), b"".join(responses))
+        self.assertEqual(material["files"]["relay/conn001.client_to_upstream.bin"], requests[1])
+        self.assertEqual(material["files"]["relay/conn001.upstream_to_client.bin"], responses[1])
+        mapping = material["receipt"]["connections"][0]
+        self.assertEqual(mapping["kept_request_indices"], [1])
+        self.assertEqual(mapping["requests"][0]["source_range"], [len(requests[0]), len(requests[0] + requests[1])])
+        self.assertEqual(mapping["requests"][0]["response_range"], {
+            "start": len(responses[0]), "end": len(responses[0] + responses[1]), "complete": True})
+        destination = self.materialize(material)
+        self.assertEqual(candidate.verify_gateway_material(self.state, self.projection, self.origin, destination), material["receipt"])
+        from tools.official_client_capture import claude_fw_e_relay as relay_capture
+
+        integrity = relay_capture._validate_relay_integrity(destination / "relay", relay_mode="connect", candidate=True)
+        self.assertEqual(integrity["messages_request_count"], 1)
+        self.assertEqual(integrity["hello_request_count"], 0)
+        self.assertEqual((destination / "tls-clienthello.pcap").read_bytes(), b"fixture-only-pcap")
+        self.assertIn("不是本轮网关", material["receipt"]["pcap_scope"])
+
+    def test_zero_egress_has_no_fabricated_request_response_or_packet(self) -> None:
+        material = self.material(self.request("/api/hello", "HEAD"), b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+                                 probe="v4-replay-custom-header-invalid-name", pcap=None)
+        self.assertEqual(set(material["files"]), {"relay/relay.json"})
+        self.assertEqual(json.loads(material["files"]["relay/relay.json"])["connections"], [])
+        self.assertIsNone(material["receipt"]["pcap_source"])
+        destination = self.materialize(material)
+        from tools.official_client_capture import claude_fw_e_relay as relay_capture
+
+        integrity = relay_capture._validate_relay_integrity(destination / "relay", relay_mode="connect", candidate=True,
+                                                            message_request_expectation="zero")
+        self.assertEqual(integrity["connection_count"], 0)
+
+    def test_count_tokens_preserves_compressed_body_and_headers(self) -> None:
+        compressed = gzip.compress(b'{"model":"claude-sonnet-5","messages":[],"fixture_only":true}', mtime=0)
+        compressed_request = (b"POST /v1/messages/count_tokens?beta=true HTTP/1.1\r\nHost: api.anthropic.com\r\n"
+                    b"Content-Encoding: gzip\r\nX-Fixture-Source: original\r\n"
+                    + f"Content-Length: {len(compressed)}\r\n\r\n".encode() + compressed)
+        count = self.request("/v1/messages/count_tokens")
+        responses = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n" * 2
+        material = self.material(compressed_request + count, responses, probe="v4-tui-count-tokens")
+        self.assertEqual(material["files"]["relay/conn001.client_to_upstream.bin"], compressed_request + count)
+        self.assertEqual(material["files"]["relay/conn001.upstream_to_client.bin"], responses)
+        self.assertEqual(material["receipt"]["connections"][0]["kept_request_indices"], [0, 1])
+
+    def test_overlapping_source_segments_cannot_forge_complete_coverage(self) -> None:
+        segments = [{"direction": "client_to_upstream", "offset": 0, "length": 2, "t_ms": 1},
+                    {"direction": "client_to_upstream", "offset": 0, "length": 2, "t_ms": 2}]
+        with self.assertRaisesRegex(replay.ReplayError, "原偏移不连续"):
+            candidate._project_segments(segments, {"client_to_upstream": [(0, 4)]})
+
+    def test_probe_without_pcap_keeps_absence_and_original_bytes(self) -> None:
+        material = self.material(self.request(), b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", pcap=None)
+        self.assertNotIn("tls-clienthello.pcap", material["files"])
+        self.assertIsNone(material["receipt"]["pcap_source"])
+
+    def test_one_sided_shutdown_uses_real_constant_and_never_drops_response(self) -> None:
+        from tools.official_client_capture import claude_fw_e_relay as relay_capture
+
+        marker = {"termination_reason": relay_capture.ONE_SIDED_SHUTDOWN_TERMINATION_REASON, "relay_stop_requested": True}
+        material = self.material(self.request(), None, **marker)
+        self.assertEqual(material["receipt"]["connections"][0]["requests"][0]["response_range"]["reason"], "recorded_one_sided_shutdown")
+        destination = self.materialize(material)
+        integrity = relay_capture._validate_relay_integrity(destination / "relay", relay_mode="connect", candidate=True)
+        self.assertEqual(integrity["one_sided_shutdown_connection_count"], 1)
+        source_root = self.origin["manifest_path"].parent
+        response_path = source_root / "relay/conn001.upstream_to_client.bin"
+        response_path.write_bytes(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        self.origin["index"]["files"]["attempt-001/relay/conn001.upstream_to_client.bin"] = replay._digest(response_path)
+        with self.assertRaisesRegex(replay.ReplayError, "不能丢弃其字节"):
+            candidate.gateway_material(self.state, self.projection, self.origin)
+
+    def test_tampered_source_derived_mapping_and_added_files_are_rejected(self) -> None:
+        material = self.material(self.request(), b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+        destination = self.materialize(material)
+        derived = destination / "relay/conn001.client_to_upstream.bin"
+        original_derived = derived.read_bytes()
+        derived.write_bytes(original_derived + b"x")
+        with self.assertRaises(replay.ReplayError):
+            candidate.verify_gateway_material(self.state, self.projection, self.origin, destination)
+        derived.write_bytes(original_derived)
+        receipt_path = destination / "gateway-byte-projection.json"
+        receipt = source.read(receipt_path)
+        receipt["connections"][0]["requests"][0]["response_range"]["start"] = 1
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        with self.assertRaisesRegex(replay.ReplayError, "原件绑定漂移"):
+            candidate.verify_gateway_material(self.state, self.projection, self.origin, destination)
+        receipt_path.write_text(json.dumps(material["receipt"]), encoding="utf-8")
+        extra = destination / "relay/conn999.client_to_upstream.bin"
+        extra.write_bytes(b"extra")
+        with self.assertRaisesRegex(replay.ReplayError, "输出闭集漂移"):
+            candidate.verify_gateway_material(self.state, self.projection, self.origin, destination)
+        extra.unlink()
+        copied = destination / candidate.ORIGINAL_DIRECTORY / "relay/conn001.client_to_upstream.bin"
+        copied.write_bytes(b"altered-copy")
+        with self.assertRaises(replay.ReplayError):
+            candidate.verify_gateway_material(self.state, self.projection, self.origin, destination)
+        original = self.origin["manifest_path"].parent / "relay/conn001.client_to_upstream.bin"
+        original.write_bytes(b"altered-source")
+        with self.assertRaises(replay.ReplayError):
+            candidate.gateway_material(self.state, self.projection, self.origin)
+
+    def test_unpaired_and_ambiguous_nonfinal_response_fails_closed(self) -> None:
+        for raw in (b"HTTP/1.1 200 OK\r\n\r\nambiguous", b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort"):
+            with self.subTest(raw=raw), self.assertRaises(replay.ReplayError):
+                candidate._response_spans(raw, ["POST", "POST"], intervention=None)
+        with self.assertRaises(replay.ReplayError):
+            candidate._response_spans(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nextra", ["POST"], intervention=None)
+
+    def test_recorded_final_disconnect_and_truncation_keep_actual_bytes(self) -> None:
+        self.assertEqual(candidate._response_spans(b"", ["POST"], intervention="disconnect_without_response")[0]["end"], 0)
+        self.assertEqual(candidate._project_segments(
+            [{"direction": "upstream_to_client", "offset": 0, "length": 0, "t_ms": 1}],
+            {"upstream_to_client": [(0, 0)]}), [])
+        raw = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort"
+        spans = candidate._response_spans(raw, ["POST"], intervention=None)
+        self.assertEqual(spans, [{"start": 0, "end": len(raw), "complete": False, "reason": "recorded_final_truncation"}])
+
+    def test_unknown_or_unapproved_forwarded_endpoint_is_not_silently_removed(self) -> None:
+        for target in ("/v1/unknown", "/v1/messages/count_tokens"):
+            with self.subTest(target=target), self.assertRaisesRegex(replay.ReplayError, "未获标签允许"):
+                self.material(self.request(target), b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+            shutil.rmtree(self.data / "inputs")
+            shutil.rmtree(self.root / "originals")
 
 
 if __name__ == "__main__":
