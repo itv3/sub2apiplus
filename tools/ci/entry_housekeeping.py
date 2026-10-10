@@ -51,6 +51,7 @@ import argparse
 import calendar
 import contextlib
 import fcntl
+import importlib
 import importlib.util
 import json
 import os
@@ -550,16 +551,72 @@ def prune_superseded_staging(data_root: Path, *, keep: int = KEEP_SUPERSEDED, dr
 
 # ---------------------------------------------------------------- 根盘
 
-def disk_status(path: Path = Path("/"), *, min_free_gib: float = MIN_FREE_GIB) -> dict[str, Any]:
-    """根盘余量与停线判定（与 guard.sh 同一条：已用 ≤69%、可用 ≥30 GiB、可用 ≥ 操作员阈值且不低于 40 GiB）。"""
+def _parse_env() -> Any:
+    """安全参数解析器；仓库原件与已安装驱动都取同一实现。"""
 
+    name = "parse_env_sibling"
+    if name in sys.modules:
+        return sys.modules[name]
+    for path in (HERE / "parse_env.py", HERE.parent / "arm64_capture_driver" / "driver" / "parse_env.py"):
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location(name, path)
+            if spec is not None and spec.loader is not None:
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[name] = module
+                spec.loader.exec_module(module)
+                return module
+    raise HousekeepingError("找不到驱动的安全参数解析器")
+
+
+def disk_policy(environment: Mapping[str, str] | None = None) -> dict[str, Any] | None:
+    """唯一工程策略判据：明确 75%＋私有 staging 根＋完整、同客户端的 fixture_only 总账。
+
+    缺省不读总账、不改变正式 69%／30 GiB；工程策略只改变 used 上限，40 GiB 操作员余量仍是硬下限。
+    """
+
+    values = dict(environment or {})
+    if "ENGINEERING_ROOT_MAX_USED_PERCENT" not in values:
+        return None
+    try:
+        parser = _parse_env()
+        root = parser.engineering_root(values)
+        spec = parser.client_spec(values)
+        ledger_root = parser.plain_path(str(root / "evidence" / "campaigns" / spec["project_ledger_dir_name"]), "工程总账")
+        # 受管消费端在已确认的数据根运行；这里只复用其现有总账读侧，不另造合同字段或弱化校验。
+        data_path = str(Path(values["D"]))
+        sys.path.insert(0, data_path)
+        try:
+            ledger = importlib.import_module(spec["project_ledger_module"])
+        finally:
+            sys.path.remove(data_path)
+        for directory in (root, root / "evidence", root / "evidence" / "campaigns", ledger_root):
+            ledger._private_dir(directory, "工程总账受管目录")
+        plan, _raw = ledger._load_plan(ledger_root)
+        ledger._require_plan_client(plan, spec["client"], "工程磁盘策略")
+        if plan["fixture_only"] is not True:
+            raise ValueError("工程磁盘上限要求总账 plan.fixture_only is True")
+    except (ImportError, KeyError, OSError, ValueError) as error:
+        raise HousekeepingError(f"工程磁盘策略拒绝：{error}") from error
+    return {"name": "fixture-only-private-staging/v1", "max_used_percent": 75.0, "entry_root": str(root),
+            "client": spec["client"], "ledger_dir": str(ledger_root), "plan_sha256": plan["plan_sha256"]}
+
+
+def disk_status(path: Path = Path("/"), *, min_free_gib: float = MIN_FREE_GIB,
+                environment: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """根盘余量与停线判定；显式工程策略与 guard 共用完整总账复验，最低余量始终不低于 40 GiB。"""
+
+    policy = disk_policy(environment)
+    maximum = MAX_USED_PERCENT if policy is None else policy["max_used_percent"]
     usage = shutil.disk_usage(path)
     used_percent = usage.used * 100 / usage.total
     free_gib = usage.free / 2 ** 30
     need = max(MIN_FREE_GIB, float(min_free_gib))
-    ok = used_percent <= MAX_USED_PERCENT and free_gib >= POLICY_FREE_GIB and free_gib >= need
-    return {"path": str(path), "used_percent": round(used_percent, 1), "free_gib": round(free_gib, 1),
-            "max_used_percent": MAX_USED_PERCENT, "min_free_gib": need, "ok": ok}
+    ok = used_percent <= maximum and free_gib >= POLICY_FREE_GIB and free_gib >= need
+    report = {"path": str(path), "used_percent": round(used_percent, 1), "free_gib": round(free_gib, 1),
+              "max_used_percent": maximum, "min_free_gib": need, "ok": ok}
+    if policy is not None:
+        report["engineering_policy"] = policy
+    return report
 
 
 def disk_reason(disk: Mapping[str, Any]) -> str:
@@ -570,11 +627,12 @@ def disk_reason(disk: Mapping[str, Any]) -> str:
 def run(*, data_root: Path, runroot: Path, record_store: Path | None = None, reference_roots: Iterable[Path] | None = None,
         retention_days: float = DEFAULT_RETENTION_DAYS, keep_dryruns: int = KEEP_DRYRUNS, keep_superseded: int = KEEP_SUPERSEDED,
         go_cache: str = "auto", min_free_gib: float = MIN_FREE_GIB, busy_dryruns: Iterable[str] = (), dry_run: bool = False,
-        disk_path: Path = Path("/"), store_now: float | None = None) -> dict[str, Any]:
+        disk_path: Path = Path("/"), store_now: float | None = None, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
     """按顺序做一遍日常维护：Go 编译缓存 → 记录库 → 空跑留存 → 旧暂存树 → 根盘。某一项出错只记在报告里，不挡后面几项。
     ``store_now`` 只给记录库清理换一个判断新旧的时刻（验收与演练用），Go 编译缓存始终按墙钟。"""
 
     data_root, runroot = Path(data_root), Path(runroot)
+    disk_policy(environment)   # 资格不合法时先失败，不进行任何清理。
     store = Path(record_store) if record_store is not None else data_root.parent / "unit-records"
     roots = list(reference_roots) if reference_roots is not None else [data_root / "control", data_root / "evidence", data_root / "staging"]
     report: dict[str, Any] = {"schema_version": SCHEMA, "started_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -592,7 +650,7 @@ def run(*, data_root: Path, runroot: Path, record_store: Path | None = None, ref
             report[name] = {**action(), "seconds": round(time.monotonic() - began, 1)}
         except (HousekeepingError, OSError, subprocess.SubprocessError) as error:
             report[name] = {"status": "error", "error": f"{type(error).__name__}: {error}", "seconds": round(time.monotonic() - began, 1)}
-    report["disk"] = disk_status(disk_path, min_free_gib=min_free_gib)
+    report["disk"] = disk_status(disk_path, min_free_gib=min_free_gib, environment=environment)
     report["completed_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return report
 
@@ -611,6 +669,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_run.add_argument("--keep-superseded", type=int, default=KEEP_SUPERSEDED, help="部署留下的旧暂存树每组留几份（默认 2）")
     p_run.add_argument("--go-cache", default="auto", help="auto（go env GOCACHE）、off 或缓存目录")
     p_run.add_argument("--min-free-gib", type=float, default=MIN_FREE_GIB)
+    p_run.add_argument("--vc-env", type=Path, default=None, help="本轮安全参数文件；显式工程上限须完整复验私有 fixture_only 总账")
     p_run.add_argument("--dry-run", action="store_true", help="只算不删")
     p_run.add_argument("--store-now-utc", default=None,
                        help="验收与演练用：记录库清理按这个时刻（如 2026-11-15T00:00:00Z）判断新旧；Go 编译缓存始终按墙钟")
@@ -631,10 +690,15 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             print(f"日常维护：--store-now-utc 要 YYYY-MM-DDTHH:MM:SSZ：{args.store_now_utc}", file=sys.stderr)
             return 2
-    report = run(data_root=args.data_root, runroot=args.runroot, record_store=args.record_store, reference_roots=args.reference_root,
-                 retention_days=args.retention_days, keep_dryruns=args.keep_dryruns, keep_superseded=args.keep_superseded,
-                 go_cache=args.go_cache,
-                 min_free_gib=args.min_free_gib, dry_run=args.dry_run, store_now=store_now)
+    try:
+        values = _parse_env().parse(args.vc_env.read_text(encoding="utf-8")) if args.vc_env is not None else None
+        report = run(data_root=args.data_root, runroot=args.runroot, record_store=args.record_store, reference_roots=args.reference_root,
+                     retention_days=args.retention_days, keep_dryruns=args.keep_dryruns, keep_superseded=args.keep_superseded,
+                     go_cache=args.go_cache, environment=values,
+                     min_free_gib=args.min_free_gib, dry_run=args.dry_run, store_now=store_now)
+    except (HousekeepingError, OSError, ValueError) as error:
+        print(f"日常维护拒绝：{error}", file=sys.stderr)
+        return 2
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0 if report["disk"]["ok"] else 5
 

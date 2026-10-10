@@ -6,6 +6,7 @@
 #             必须是 control/ 下本轮客户端当前最新的部署收据（Codex 是 codex-*-supervisor-enable；工具重新部署后驱动必须重新安装确认）
 #   disk      根盘：used ≤ 69% 且 available ≥ 30 GiB（候选就绪门禁策略 root-69-percent-and-30-gib/v1）且 available ≥ 操作员阈值
 #             操作员阈值固定最低 40 GiB，参数文件 MIN_FREE_GIB 只能把它设得更高
+#             仅显式工程 75% 参数且私有 staging 根完整 fixture_only 总账复验通过时改 used 上限；与日常维护共用判据
 #   project   项目总账：blocked=false、root_causes_at_limit=[]；remaining_live_requests 为 null（本项目无固定请求上限）合法，非空且 ≤0 拒绝
 #   campaign  （pre-vc4／pre-vc5）以受管工具从 Campaign 清单解析并验证精确绑定的 UpgradeTimingLedger，要求 status=active
 #             （pre-vc5）再以受管工具 _current_candidate_revision_record + _replay_vc_checkpoint 完整重放当前 revision 的 VC-4 checkpoint
@@ -37,11 +38,19 @@ if [ "$MODE" = pre-vc4 ] || [ "$MODE" = pre-vc5 ]; then
   BEFORE=0; if [ -d /root/.cache/go-build ]; then BEFORE=$(du -sm /root/.cache/go-build | cut -f1); fi
   go clean -cache; echo "guard/go-clean-cache: released ${BEFORE} MiB"
 fi
-python3 - "$MIN_FREE_GIB" <<'PY'
-import shutil, sys
-t, u, f = shutil.disk_usage("/"); used = u * 100 / t; free_gib = f / 2**30; need = float(sys.argv[1])
-print(f"guard/disk: used={used:.1f}% free={free_gib:.1f}GiB (policy ≤69% & ≥30GiB; operator ≥{need:g}GiB, floor 40)")
-if used > 69 or free_gib < 30 or free_gib < need:
+python3 -B - "$MIN_FREE_GIB" "$DRV" <<'PY'
+import os, sys
+sys.path.insert(0, sys.argv[2])
+import entry_housekeeping as housekeeping
+try:
+    disk = housekeeping.disk_status(min_free_gib=float(sys.argv[1]), environment=os.environ)
+except housekeeping.HousekeepingError as error:
+    sys.exit(f"guard/disk: FAIL — {error}")
+print(f"guard/disk: used={disk['used_percent']:.1f}% free={disk['free_gib']:.1f}GiB "
+      f"(policy ≤{disk['max_used_percent']:g}% & ≥30GiB; operator ≥{disk['min_free_gib']:g}GiB, floor 40)")
+if disk.get("engineering_policy"):
+    print("guard/disk-engineering:", disk["engineering_policy"])
+if not disk["ok"]:
     sys.exit("guard/disk: FAIL — 根盘不满足派发条件，停止")
 PY
 python3 -m "$CT_PROJECT_LEDGER_MODULE" status --ledger-dir "$D/evidence/campaigns/$CT_PROJECT_LEDGER_DIR_NAME" | python3 -c "

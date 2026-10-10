@@ -166,9 +166,9 @@
     },
     {
       "path": "driver/entry_dryrun.py",
-      "sha256": "8fba2bda972a4dd54c230d9e5eefef195ff24a0c9521592b1057edaf587df654",
+      "sha256": "ebee4d6012c0fb476854e9ef3427e72e5c5f1ff5e0bae7b83a21f8d267f4fc8e",
       "mode": "0700",
-      "bytes": 41109
+      "bytes": 41842
     },
     {
       "path": "driver/entry_gates.py",
@@ -178,9 +178,9 @@
     },
     {
       "path": "driver/entry_housekeeping.py",
-      "sha256": "057b6404296c7897e736ea3d2b894aa42f651d927978881ab9020a3946e6d1d5",
+      "sha256": "09f21b36639ddf8ad59602416a587680172e7c790f7895993096e6f9ec70b722",
       "mode": "0700",
-      "bytes": 34481
+      "bytes": 37957
     },
     {
       "path": "driver/entry_orchestrator.py",
@@ -274,9 +274,9 @@
     },
     {
       "path": "driver/guard.sh",
-      "sha256": "23ef1f8cbd4785872793fcbb28a87ef70146596a5d2eb026866abd003cac6a4d",
+      "sha256": "166e25b995eec31604b536f7a08c6253e4194c52701ecbaecdd95d2133b48071",
       "mode": "0700",
-      "bytes": 6865
+      "bytes": 7328
     },
     {
       "path": "driver/implementation_gates.py",
@@ -328,9 +328,9 @@
     },
     {
       "path": "driver/parse_env.py",
-      "sha256": "fb19ddbab5ec00b4d474bfb1a80f9b291338d034a95a33407ded145ead76b50b",
+      "sha256": "6af42dcb165feb0e9f280720fe15ad347649098f55862621ff7b03d50988fc46",
       "mode": "0700",
-      "bytes": 28076
+      "bytes": 29508
     },
     {
       "path": "driver/phase_context.py",
@@ -669,5 +669,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "06e7a96fc1cdda8a1c9291805877d4d83a93111268ed7791d79540a5e9fcce0a"
+  "manifest_sha256": "3582d66cb6c650c792c0480ea37be21df9b24d2620953285bba8de14fc4d189f"
 }

@@ -68,6 +68,8 @@ NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in (
     "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
     # B5a-09 来源接线：只清除外层残留的 Claude 工程来源，不向 Codex 单元传递任何新环境。
     "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
+    # 工程磁盘上限未在本轮明确请求时清除外层残留；正式 Codex 仍按原 69% 判据。
+    "ENGINEERING_ROOT_MAX_USED_PERCENT",
 ))
 
 
@@ -894,6 +896,30 @@ B5A09_SOURCE_SHELL_RESIDUALS = {"entry-gates.sh": [
     '+      PRE_A3_ARGS+=(--pre-a3-env "$name=${!name}")',
     "+    done",
 ]}
+# 工程磁盘策略：基线为本次开工提交，逐行登记真实替换；缺省仍走 69%／30 GiB 和 40 GiB floor，
+# 唯一提高路径由真实私有 staging fixture_only 总账复验限定，拒绝场景另由专项测试覆盖。
+ENGINEERING_DISK_BASELINE_COMMIT = 'f769c32c5831fccb76d1f66cf093e8d3eb919090'
+ENGINEERING_DISK_SHELL_DIGESTS = {"guard.sh": '166e25b995eec31604b536f7a08c6253e4194c52701ecbaecdd95d2133b48071'}
+ENGINEERING_DISK_SHELL_RESIDUALS = {"guard.sh": [
+    '-python3 - "$MIN_FREE_GIB" <<\'PY\'',
+    '-import shutil, sys',
+    '-t, u, f = shutil.disk_usage("/"); used = u * 100 / t; free_gib = f / 2**30; need = float(sys.argv[1])',
+    '-print(f"guard/disk: used={used:.1f}% free={free_gib:.1f}GiB (policy ≤69% & ≥30GiB; operator ≥{need:g}GiB, floor 40)")',
+    '-if used > 69 or free_gib < 30 or free_gib < need:',
+    '+python3 -B - "$MIN_FREE_GIB" "$DRV" <<\'PY\'',
+    '+import os, sys',
+    '+sys.path.insert(0, sys.argv[2])',
+    '+import entry_housekeeping as housekeeping',
+    '+try:',
+    '+    disk = housekeeping.disk_status(min_free_gib=float(sys.argv[1]), environment=os.environ)',
+    '+except housekeeping.HousekeepingError as error:',
+    '+    sys.exit(f"guard/disk: FAIL — {error}")',
+    '+print(f"guard/disk: used={disk[\'used_percent\']:.1f}% free={disk[\'free_gib\']:.1f}GiB "',
+    '+      f"(policy ≤{disk[\'max_used_percent\']:g}% & ≥30GiB; operator ≥{disk[\'min_free_gib\']:g}GiB, floor 40)")',
+    '+if disk.get("engineering_policy"):',
+    '+    print("guard/disk-engineering:", disk["engineering_policy"])',
+    '+if not disk["ok"]:',
+]}
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
@@ -904,6 +930,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("B5b-01b", B5B01B_BASELINE_COMMIT, B5B01B_SHELL_DIGESTS, B5B01B_SHELL_RESIDUALS),
     ("B4-05b-1", B405B1_BASELINE_COMMIT, B405B1_SHELL_DIGESTS, B405B1_SHELL_RESIDUALS),
     ("B5a-09-source", B5A09_SOURCE_BASELINE_COMMIT, B5A09_SOURCE_SHELL_DIGESTS, B5A09_SOURCE_SHELL_RESIDUALS),
+    ("engineering-disk", ENGINEERING_DISK_BASELINE_COMMIT, ENGINEERING_DISK_SHELL_DIGESTS, ENGINEERING_DISK_SHELL_RESIDUALS),
 )
 
 

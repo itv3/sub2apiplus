@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import importlib.util
 import ipaddress
+import os
 import re
 import shlex
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,8 @@ OPTIONAL_KEYS = (
     "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
     # 工程 pre-A3 的只读历史来源：只接受本轮显式给出的三个 Claude 专属目录，不继承外层 CLAUDE_*。
     "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
+    # 仅私有 staging 演练根可显式启用；正式缺省仍为 69%，实际消费者还须完整复验 fixture_only 总账。
+    "ENGINEERING_ROOT_MAX_USED_PERCENT",
 )
 # 边界核对轮次参数的格式（B5b-01b 续）：两个 ID 是正整数，模型是安全标识，生产提交是完整 40 位小写 sha1（与
 # capture-candidate boundary-check 的入口校验同一口径）。
@@ -176,6 +180,29 @@ def plain_path(value: str, label: str) -> Path:
         if part.is_symlink():
             raise EnvFileError(f"{label} 不得含符号链接：{part}")
     return path
+
+
+def engineering_root(values: dict[str, str]) -> Path | None:
+    """工程磁盘参数只允许 75%，且绑定已有私有 staging 根；本解析器不执行参数所指工具源码。
+
+    完整总账合同、客户端和 ``fixture_only`` 由日常维护模块的唯一策略函数复验，guard 与空跑共用它。
+    """
+
+    raw = values.get("ENGINEERING_ROOT_MAX_USED_PERCENT")
+    if raw is None:
+        return None
+    if not re.fullmatch(r"75(?:\.0+)?", raw):
+        raise EnvFileError("ENGINEERING_ROOT_MAX_USED_PERCENT 只允许显式工程上限 75")
+    data = plain_path(values["D"], "D")
+    root = plain_path(values.get("ENTRY_ROOT", values["D"]), "ENTRY_ROOT")
+    try:
+        relative = root.relative_to(data / "staging")
+        metadata = root.stat()
+    except (ValueError, OSError) as error:
+        raise EnvFileError("工程磁盘上限只允许 D/staging 下已存在的私有演练根") from error
+    if not relative.parts or not root.is_dir() or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise EnvFileError("工程磁盘上限只允许 D/staging 下属主为当前用户、group/other 不可访问的演练根")
+    return root
 
 
 def coordinates(values: dict[str, str]) -> dict[str, str]:
@@ -364,6 +391,7 @@ def parse(text: str) -> dict[str, str]:
         raise EnvFileError("VC4_BUILD_NETWORK_APPROVAL 必须是不含 .. 的绝对路径")
     # 先核对根路径；lib.sh 只有解析成功后才允许建立 RUNROOT。
     values["B"] = coordinates(values)["B"]
+    engineering_root(values)
     return values
 
 

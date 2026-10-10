@@ -338,6 +338,10 @@ def _prepare(payload: Mapping[str, Any]) -> tuple[Path, Path, Path]:
     env_file = runroot / "env.sh"
     env_file.write_text(_env_text(env_values), encoding="utf-8")
     env_file.chmod(0o600)
+    try:
+        _sibling("entry_housekeeping").disk_policy(env_values)
+    except _sibling("entry_housekeeping").HousekeepingError as error:
+        raise DryRunError(str(error)) from error
     return root, runroot, env_file
 
 
@@ -346,8 +350,15 @@ def _housekeeping(path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
 
     keeper = _sibling("entry_housekeeping")
     minimum = keeper.MIN_FREE_GIB
-    with contextlib.suppress(OSError, ValueError, TypeError, DryRunError):
-        minimum = float(_parse_env().parse(Path(payload["vc_env"]).read_text(encoding="utf-8")).get("MIN_FREE_GIB") or minimum)
+    values: dict[str, str] = {}
+    env_text = ""
+    try:
+        env_text = Path(payload["vc_env"]).read_text(encoding="utf-8")
+        values = _parse_env().parse(env_text)
+        minimum = float(values.get("MIN_FREE_GIB") or minimum)
+    except (OSError, ValueError, TypeError, DryRunError) as error:
+        if re.search(r"^ENGINEERING_ROOT_MAX_USED_PERCENT=", env_text, re.MULTILINE):
+            raise keeper.HousekeepingError(f"工程磁盘参数拒绝：{error}") from error
     busy = set()
     for _other, current in results(Path(payload["runroot"])):
         if effective_status(current) == "running":
@@ -355,7 +366,8 @@ def _housekeeping(path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
                 matched = re.search(r"(\d{8}t\d{6}z)$", str(current.get(key) or ""))
                 if matched:
                     busy.add(matched.group(1))
-    report = keeper.run(data_root=Path(payload["data_root"]), runroot=Path(payload["runroot"]), min_free_gib=minimum, busy_dryruns=busy)
+    report = keeper.run(data_root=Path(payload["data_root"]), runroot=Path(payload["runroot"]), min_free_gib=minimum,
+                        busy_dryruns=busy, environment=values)
     _write_plain(path.with_name(f"{path.stem}.housekeeping.json"), report)
     return report
 
@@ -464,6 +476,9 @@ def run(result: Path) -> int:
     else:
         try:
             report = _housekeeping(path, payload)
+        except _sibling("entry_housekeeping").HousekeepingError as error:
+            _update(path, status="failed", completed_at_utc=_utc_now(), failed_steps=["disk-policy"], reason=str(error))
+            return 0
         except Exception as error:   # 维护本身出错不挡空跑，记下来
             report = {"status": "error", "error": f"{type(error).__name__}: {error}"}
     disk = report.get("disk") or {}
