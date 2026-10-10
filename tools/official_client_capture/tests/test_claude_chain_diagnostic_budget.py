@@ -8,11 +8,37 @@ import unittest
 from unittest import mock
 
 from tools.official_client_capture.tests import claude_chain_diagnostic_budget as budget
+from tools.official_client_capture.tests import claude_chain_driver as candidate_driver
 from tools.official_client_capture.tests.real_chains import test_claude_upgrade_fault_chains as chains
 from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as recorded
 
 
 class DiagnosticBudgetTests(unittest.TestCase):
+    def test_candidate_recorded_inner_process_uses_method_budget_and_keeps_timeout_failure(self):
+        """两个候选恢复入口共用独立方法预算；内层超时仍保留日志并向外失败。"""
+        with tempfile.TemporaryDirectory() as temporary:
+            case = candidate_driver.ClaudeCandidateChainDriver()
+            case.root = Path(temporary)
+            case.data = case.root / "data"
+            environment = {"CLAUDE_2_1_226_RELAY_FIXTURE": "/fixture/relay", "CLAUDE_2_1_226_FREEZE_FIXTURE": "/fixture/freeze"}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(candidate_driver.platform, "system", return_value="Linux"), \
+                    mock.patch.object(candidate_driver.platform, "machine", return_value="aarch64"), \
+                    mock.patch.object(candidate_driver.os, "geteuid", return_value=0), \
+                    mock.patch.object(candidate_driver.os, "readlink", return_value="ns:[fixture]"):
+                for scenario, method in candidate_driver.SCENARIO_METHODS.items():
+                    with self.subTest(scenario=scenario), \
+                            mock.patch.object(candidate_driver.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "stdout", "stderr")) as launch, \
+                            mock.patch.object(candidate_driver.source, "read", return_value={"status": "passed", "scenario_method": method}):
+                        self.assertTrue(case.recorded_entry(scenario))
+                        self.assertEqual(launch.call_args.kwargs["timeout"], 3540)
+                failure = subprocess.TimeoutExpired("fixture", 3540, output=b"original out", stderr=b"original err")
+                with mock.patch.object(candidate_driver.subprocess, "run", side_effect=failure), self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    case.recorded_entry("reconcile-resume")
+                self.assertIs(caught.exception, failure)
+                self.assertEqual((case.root / "stdout.log").read_bytes(), b"original out")
+                self.assertEqual((case.root / "stderr.log").read_bytes(), b"original err")
+
     def test_explicit_budget_is_bounded_and_default_is_unchanged(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(budget.diagnostic_seconds())

@@ -425,7 +425,7 @@ def guard_diagnostics(engine: guard.GuardEngine) -> Iterator[None]:
                 return operation(*arguments, **options)
             except Exception as error:
                 # 不记录请求参数或局部变量；日志失败也不能覆盖原始执行异常。
-                with contextlib.suppress(OSError):
+                with contextlib.suppress(Exception):
                     directory = Path(tempfile.mkdtemp(prefix=f"guard-{name}-", dir=root))
                     guard.write_json_once(directory / "exception.json", {
                         "schema_version": "claude-typed-vc6-guard-diagnostic/v1",

@@ -29,6 +29,7 @@ from tools.official_client_capture import claude_upgrade
 from tools.official_client_capture import claude_upgrade_capture as capture
 from tools.official_client_capture import claude_upgrade_plan as plan
 from tools.official_client_capture import codex_upgrade_project_ledger as project
+from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
 from tools.official_client_capture.tests import claude_chain_diagnostic_budget as diagnostic_budget
@@ -326,9 +327,12 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
         command = ["unshare", "-m", "-n", sys.executable, "-B", "-m", ACTIVATION_MODULE,
             "--data", str(self.data), "--recorded", recorded, "--freeze", frozen, "--scenario", scenario,
             "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
+        # 内层共用本方法的独立预算；留一分钟给外层收日志与清理，不能遗留旧 850 秒截断。
+        method_seconds = (diagnostic_budget.diagnostic_seconds() or
+                          certification.claude_fault_time_budget("vc-chain.claude-recovery-chain")["method_timeout_seconds"])
         try:
             completed = subprocess.run(command, cwd=full.vc1.REPOSITORY, capture_output=True, text=True,
-                                       timeout=diagnostic_budget.diagnostic_seconds() or 850, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+                                       timeout=method_seconds - 60, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
         except subprocess.TimeoutExpired as error:
             for name, raw in (("stdout.log", error.stdout or b""), ("stderr.log", error.stderr or b"")):
                 (self.root / name).write_bytes(raw.encode() if isinstance(raw, str) else raw)

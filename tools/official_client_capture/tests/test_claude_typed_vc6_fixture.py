@@ -75,11 +75,12 @@ class TypedFixtureInputTests(unittest.TestCase):
         engine = mock.create_autospec(guard.GuardEngine, instance=True)
         original = RuntimeError("保留此异常")
         engine.run.side_effect = original
-        with mock.patch.dict(os.environ, {fixture.DIAGNOSTIC_ROOT_ENV: str(self.root)}):
-            with fixture.guard_diagnostics(engine), mock.patch.object(fixture.tempfile, "mkdtemp", side_effect=OSError("日志失败")):
-                with self.assertRaises(RuntimeError) as caught:
-                    engine.run({})
-        self.assertIs(caught.exception, original)
+        for failure in (OSError("日志失败"), guard.GuardError("日志原件非法"), execution.ControlError("规范化失败")):
+            with self.subTest(failure=type(failure).__name__), mock.patch.dict(os.environ, {fixture.DIAGNOSTIC_ROOT_ENV: str(self.root)}):
+                with fixture.guard_diagnostics(engine), mock.patch.object(fixture.guard, "write_json_once", side_effect=failure):
+                    with self.assertRaises(RuntimeError) as caught:
+                        engine.run({})
+            self.assertIs(caught.exception, original)
 
     def test_same_store_constructor_preserves_original_campaign_and_external_bytes(self) -> None:
         original = SyntheticCampaign(self.root, schema="v2")

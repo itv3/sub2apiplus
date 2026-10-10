@@ -12,6 +12,7 @@ from tools.official_client_capture import claude_qualification_material_source a
 from tools.official_client_capture import claude_upgrade as upgrade
 from tools.official_client_capture import claude_upgrade_capture as capture
 from tools.official_client_capture import claude_upgrade_candidate_capture as candidate
+from tools.official_client_capture import incremental_recovery
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as fixture
 from tools.official_client_capture.tests import test_claude_candidate_draft_projection as draft_tests
@@ -68,6 +69,7 @@ class CandidateAttemptProjectionTests(unittest.TestCase):
         reservation = fixture._write_json(self.attempt / "reservation.json", {"reservation": "fixture"})
         heartbeat = fixture._write_json(self.attempt / "heartbeat.json", {"heartbeat": "fixture"})
         self.document = {"schema_version": capture.CAPTURE_ATTEMPT_SCHEMA, "campaign_id": "campaign-1",
+            "client": "claude", "mode": "formal", "phase": "candidate", "run_nonce": "fixture-nonce",
             "candidate_id": "candidate-1", "attempt_id": "attempt-1",
             "environment": {"before_probe": fixture.binding(before, self.evidence),
                 "after_probe": fixture.binding(after, self.evidence), "restoration_report": fixture.binding(recovery, self.evidence)},
@@ -78,7 +80,26 @@ class CandidateAttemptProjectionTests(unittest.TestCase):
             "watchdog": {"heartbeat": fixture.binding(heartbeat, self.campaign), "timeout_checkpoint": None},
             "results": [{"id": "job-1", "execution_sha256": "a" * 64, "environment_runs": self.runs,
                 "job_closure": fixture.binding(self.closure, self.attempt)}]}
+        self.write_job_materials()
         self.write_attempt()
+
+    def write_job_materials(self, *, checkpoint_changes=None):
+        """沿真实追加器形成 Job 与 checkpoint；只在本测试临时世界准备输入。"""
+        result = self.document["results"][0]
+        self.job_path = fixture._write_json(self.attempt / "job-job-1.json", result)
+        store = incremental_recovery.CheckpointStore(self.attempt / "checkpoints")
+        for path in store.root.glob("*.json"):
+            path.unlink()
+        store.append({"checkpoint_schema_version": capture.JOB_CHECKPOINT_SCHEMA,
+            **{key: self.document[key] for key in ("client", "mode", "campaign_id", "phase", "attempt_id", "run_nonce")},
+            "item_id": "job-1", "status": "complete", "disposition": "executed", "result": result,
+            "result_sha256": incremental_recovery.digest(result), "result_key": None,
+            "previous_checkpoint_sha256": None, **(checkpoint_changes or {})})
+        record = store.records()[0]
+        self.checkpoint_path = store.record_path(1)
+        self.document["job_checkpoint"] = {"schema_version": capture.JOB_CHECKPOINT_SCHEMA,
+            "path": store.root.relative_to(self.campaign).as_posix(), "record_count": 1,
+            "last_sequence": 1, "last_sha256": record["checkpoint_sha256"]}
 
     def write_attempt(self):
         self.attempt_path = fixture._write_json(self.attempt / "attempt.json", self.document)
@@ -96,6 +117,38 @@ class CandidateAttemptProjectionTests(unittest.TestCase):
         closed = {row["path"] for row in self.close([fixture.binding(self.attempt_path, self.data)])}
         expected = {path.relative_to(self.data).as_posix() for path in self.data.rglob("*") if path.is_file()}
         self.assertEqual(closed, expected)
+
+    def test_job_and_checkpoint_parents_close_through_their_exact_result_fields(self):
+        self.prove()
+        closed = {row["path"] for row in self.close([fixture.binding(path, self.data)
+            for path in (self.job_path, self.checkpoint_path)])}
+        self.assertIn(self.closure.relative_to(self.data).as_posix(), closed)
+
+    def test_job_result_mismatch_is_rejected_before_projection(self):
+        fixture._write_json(self.job_path, {**self.document["results"][0], "execution_sha256": "b" * 64})
+        with self.assertRaisesRegex(ControlError, "Job 原件.*同一结果"):
+            self.prove()
+
+    def test_checkpoint_rehashed_forgery_is_rejected(self):
+        self.write_job_materials(checkpoint_changes={"result_sha256": "f" * 64})
+        self.write_attempt()
+        with self.assertRaisesRegex(ControlError, "checkpoint.*同源"):
+            self.prove()
+
+    def test_checkpoint_foreign_attempt_is_rejected(self):
+        self.write_job_materials(checkpoint_changes={"attempt_id": "another-attempt"})
+        self.write_attempt()
+        with self.assertRaisesRegex(ControlError, "checkpoint.*同源"):
+            self.prove()
+
+    def test_job_and_checkpoint_unknown_result_binding_keeps_data_root(self):
+        self.document["results"][0]["unknown"] = fixture.binding(self.closure, self.attempt)
+        self.write_job_materials()
+        self.write_attempt()
+        self.prove()
+        for path in (self.job_path, self.checkpoint_path):
+            with self.subTest(parent=path.name), self.assertRaisesRegex(ControlError, "原件缺失"):
+                self.close([fixture.binding(path, self.data)])
 
     def test_reader_document_mismatch_is_rejected_before_projection(self):
         with self.assertRaisesRegex(ControlError, "不是同一份"):

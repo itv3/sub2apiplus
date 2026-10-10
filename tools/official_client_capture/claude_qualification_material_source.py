@@ -968,6 +968,45 @@ def _retain_candidate_attempt_materials(
             raise ControlError("来源环境探针与原 capture 合同不一致")
         for snapshot in probe["snapshots"]:
             retain_attachment(snapshot, probe_path.parent)
+    # Job 和 checkpoint 都嵌入同一份结果，但不会自动继承 attempt 父的
+    # 坐标证明。逐份比对原结果后，只转换已经验真的 closure／探针字段。
+    # 未知标准绑定仍以数据根展开；不能给整个 JSON 授予 attempt 根权限。
+    result_roots = {}
+    for index, result in enumerate(document["results"]):
+        prefix = ("results", str(index))
+        roots = tuple((coordinate[2:], root) for coordinate, root in coordinates
+                      if coordinate[:2] == prefix)
+        job_path = attempt_root / _relative(f"job-{result['id']}.json")
+        if parse_json_bytes(retain(job_path)) != result:
+            raise ControlError("来源 Job 原件与已验证 attempt 不是同一结果")
+        project_parent(job_path, data_root, coordinate_roots=roots)
+        result_roots[result["id"]] = (result, roots)
+    checkpoint = document.get("job_checkpoint")
+    if checkpoint is not None:
+        from . import incremental_recovery
+
+        checkpoint_root = attempt_root / "checkpoints"
+        records = incremental_recovery.CheckpointStore(checkpoint_root, create=False).records()
+        if (checkpoint.get("schema_version") != capture.JOB_CHECKPOINT_SCHEMA
+                or checkpoint.get("path") != checkpoint_root.relative_to(campaign).as_posix()
+                or checkpoint.get("record_count") != len(records)
+                or checkpoint.get("last_sequence") != (records[-1]["checkpoint_sequence"] if records else None)
+                or checkpoint.get("last_sha256") != (records[-1]["checkpoint_sha256"] if records else None)
+                or [row.get("item_id") for row in records] != [row["id"] for row in document["results"]]):
+            raise ControlError("来源 checkpoint 链与已验证 attempt 不同源")
+        for record in records:
+            result, roots = result_roots[record["item_id"]]
+            if (record.get("checkpoint_schema_version") != capture.JOB_CHECKPOINT_SCHEMA
+                    or any(record.get(key) != document.get(key) for key in
+                           ("client", "mode", "campaign_id", "phase", "attempt_id", "run_nonce"))
+                    or record.get("result") != result
+                    or record.get("result_sha256") != incremental_recovery.digest(result)):
+                raise ControlError("来源 checkpoint 的身份与完整结果不同源")
+            checkpoint_path = checkpoint_root / f"{record['checkpoint_sequence']:08d}.json"
+            if parse_json_bytes(retain(checkpoint_path)) != record:
+                raise ControlError("来源 checkpoint 原件在读取期间漂移")
+            project_parent(checkpoint_path, data_root, coordinate_roots=tuple(
+                (("result", *coordinate), root) for coordinate, root in roots))
     project_parent(path, data_root, coordinate_roots=tuple(coordinates))
 
 
