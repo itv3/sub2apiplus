@@ -847,10 +847,19 @@ def _retain_candidate_evaluation_draft(
         project_parent(preview_path, data_root, coordinate_roots=tuple(preview_coordinates))
 
 
+@dataclass
+class _CandidateAttemptArchive:
+    """同一次父族展开的循环防护与已验真结果；不提供任何新的读取根。"""
+
+    visiting: set[Path]
+    results: dict[Path, tuple[str, dict[str, tuple[tuple[tuple[str, ...], Path], ...]]]]
+
+
 def _retain_candidate_attempt_materials(
     campaign: Path, round_one: Mapping[str, Any], data_root: Path, *,
     retain: Callable[..., bytes], project_parent: Callable[..., None],
-) -> None:
+    _archive: _CandidateAttemptArchive | None = None,
+) -> dict[str, tuple[tuple[tuple[str, ...], Path], ...]]:
     """保留原封存读者验真的 attempt，只转换生产合同明确规定的附件坐标。
 
     同一个 attempt 同时含数据根、Campaign、attempt 和 evidence 四种
@@ -866,18 +875,32 @@ def _retain_candidate_attempt_materials(
     document = parse_json_bytes(retain(path, round_one["attempt"]["sha256"]))
     if document.get("schema_version") != capture.CAPTURE_ATTEMPT_SCHEMA:
         # 历史或显式来源夹具不因字段相似取得新权限，继续走原严格递归。
-        return
-    attempt_root, verified = upgrade._capture_stage_attempt_context(
-        campaign, round_one, phase="candidate", candidate_id=round_one["candidate_id"])
-    if path != attempt_root / "attempt.json" or document != verified:
-        raise ControlError("来源候选 attempt 与原封存读者不是同一份原件")
-    boundary_binding = round_one.get("sealed_evidence_manifest")
-    if boundary_binding is not None:
-        _retain_candidate_sealed_boundary(campaign, boundary_binding, retain=retain)
-    producers = _candidate_attempt_result_producers(campaign, document, attempt_root, data_root,
-        retain=retain, project_parent=project_parent)
-    _retain_candidate_run_materials(campaign, path, document, attempt_root, producers, data_root,
-        execution_attempt_id=document["attempt_id"], retain=retain, project_parent=project_parent)
+        return {}
+    archive = _archive or _CandidateAttemptArchive(set(), {})
+    if path in archive.visiting or len(archive.visiting) >= 128 or len(archive.results) >= 20000:
+        raise ControlError("候选封存来源父族循环或超过固定原件上限")
+    cached = archive.results.get(path)
+    if cached is not None:
+        if cached[0] != round_one["attempt"]["sha256"]:
+            raise ControlError("同坐标候选封存来源 attempt 摘要冲突")
+        return cached[1]
+    archive.visiting.add(path)
+    try:
+        attempt_root, verified = upgrade._capture_stage_attempt_context(
+            campaign, round_one, phase="candidate", candidate_id=round_one["candidate_id"])
+        if path != attempt_root / "attempt.json" or document != verified:
+            raise ControlError("来源候选 attempt 与原封存读者不是同一份原件")
+        boundary_binding = round_one.get("sealed_evidence_manifest")
+        if boundary_binding is not None:
+            _retain_candidate_sealed_boundary(campaign, boundary_binding, retain=retain)
+        producers = _candidate_attempt_result_producers(campaign, document, attempt_root, data_root,
+            retain=retain, project_parent=project_parent, _archive=archive)
+        roots = _retain_candidate_run_materials(campaign, path, document, attempt_root, producers, data_root,
+            execution_attempt_id=document["attempt_id"], retain=retain, project_parent=project_parent)
+        archive.results[path] = (round_one["attempt"]["sha256"], roots)
+        return roots
+    finally:
+        archive.visiting.remove(path)
 
 
 def _retain_candidate_sealed_boundary(
@@ -943,6 +966,7 @@ def _require_candidate_recovery_summary_structure(
 def _candidate_attempt_result_producers(
     campaign: Path, document: Mapping[str, Any], attempt_root: Path, data_root: Path, *,
     retain: Callable[..., bytes], project_parent: Callable[..., None],
+    _archive: _CandidateAttemptArchive | None = None,
 ) -> dict[str, tuple[Path, str]]:
     """普通续跑的探针仍属于原生产者；沿原复用读取器取得精确产出根。
 
@@ -1000,11 +1024,33 @@ def _candidate_attempt_result_producers(
                 cover_path = compare._bound_campaign_file(cover_campaign, cover["stage_result"],
                     "最初生产者的前序封存阶段")
                 cover_stage = parse_json_bytes(retain(cover_path, cover["stage_result"]["sha256"]))
+                # 原 cover 读取器已验真首轮的 attempt 绑定。承接两次以后，
+                # 直接来源的 attempt 属于中间 Campaign，不能给最初生产者
+                # 复用它的摘要；先保留首轮实际绑定的精确原件，随后才沿
+                # 原封存读者对它自己的明确字段分别登记坐标证明。
+                producer_attempt = compare._bound_campaign_file(cover_campaign, cover_stage["attempt"],
+                    "最初生产者的首轮 attempt")
+                if producer_attempt != root / "attempt.json":
+                    raise ControlError("前序封存首轮没有绑定最初生产者的精确 attempt")
+                producer_document = parse_json_bytes(retain(producer_attempt, cover_stage["attempt"]["sha256"]))
                 _retain_candidate_sealed_boundary(cover_campaign, cover["sealed_evidence_manifest"], retain=retain)
+                # 首轮原件留存以后仍须为它自己的各级父文件登记精确坐标。
+                # 封存读者已验证 P 的完整 attempt，沿同一合同展开 P 的
+                # Job、checkpoint、探针、恢复和 selector，不能把它们错当
+                # 成后继 S/T 的数据根附件，也不能给整份 P JSON 转根权限。
+                producer_roots = _retain_candidate_attempt_materials(cover_campaign, cover_stage, data_root,
+                    retain=retain, project_parent=project_parent, _archive=_archive)
+                stage_coordinates = list(_candidate_stage_binding_roots(cover_stage, cover_campaign))
+                if producer_document.get("schema_version") == capture.CAPTURE_ATTEMPT_SCHEMA and "results" in cover_stage:
+                    if cover_stage["results"] != producer_document["results"]:
+                        raise ControlError("前序封存阶段的结果与最初生产者 attempt 不同源")
+                    for index, row in enumerate(cover_stage["results"]):
+                        stage_coordinates.extend((("results", str(index), *coordinate), coordinate_root)
+                            for coordinate, coordinate_root in producer_roots[row["id"]])
                 _retain_candidate_evaluation_draft(cover_campaign, cover_manifest, cover_stage, data_root,
                     retain=retain, project_parent=project_parent)
                 project_parent(cover_path, data_root,
-                    coordinate_roots=_candidate_stage_binding_roots(cover_stage, cover_campaign))
+                    coordinate_roots=tuple(stage_coordinates))
                 retained_covers.add(cover_key)
         path = compare._bound_campaign_file(directory, producer["job_closure"], "普通续跑原生产者闭环")
         closure = parse_json_bytes(retain(path, producer["job_closure"]["sha256"]))
@@ -1183,7 +1229,33 @@ def _retain_candidate_run_materials(
             checkpoint_path = checkpoint_root / f"{record['checkpoint_sequence']:08d}.json"
             if parse_json_bytes(retain(checkpoint_path)) != record:
                 raise ControlError("来源 checkpoint 原件在读取期间漂移")
-            project_parent(checkpoint_path, data_root, coordinate_roots=tuple(
+            metadata = ()
+            inventory = record.get("recovery_evidence")
+            if inventory is not None:
+                from . import claude_upgrade as upgrade
+                from . import claude_upgrade_attempt_recovery as recovery_reader
+
+                # recovery_evidence 是 checkpoint 原读者冻结的完整文件库存，
+                # 其中绝对 path 是元数据坐标，不是外部三字段绑定。只在原
+                # Job 的证据根全集经原 job_inventory 逐字复算后屏蔽这一域；
+                # 库存内实际文件仍逐份归档，未知域不能获得相同豁免。
+                layout = capture._capture_layout(campaign, upgrade.load_campaign_manifest(campaign))
+                inventory_roots = tuple(sorted(str(capture._host_path(str(root), layout))
+                    for root in result.get("evidence_roots", [])))
+                for value in inventory_roots:
+                    root = Path(value)
+                    if not root.is_relative_to(data_root):
+                        raise ControlError("恢复 checkpoint 库存越过本资格已有数据根")
+                    upgrade._reject_symlink_components(root, data_root, "归档恢复 checkpoint 库存")
+                if inventory != recovery_reader.job_inventory(inventory_roots):
+                    raise ControlError("恢复 checkpoint 冻结库存与原 Job 证据全集不同源")
+                for reference in inventory["files"]:
+                    target = Path(reference["path"])
+                    raw = retain(target, reference["sha256"])
+                    if len(raw) != reference["bytes"]:
+                        raise ControlError("恢复 checkpoint 冻结库存原件字节数漂移")
+                metadata = (("recovery_evidence",),)
+            project_parent(checkpoint_path, data_root, metadata, coordinate_roots=tuple(
                 (("result", *coordinate), root) for coordinate, root in roots))
     project_parent(path, data_root, coordinate_roots=tuple(coordinates))
     return {job_id: roots for job_id, (_result, roots) in result_roots.items()}
