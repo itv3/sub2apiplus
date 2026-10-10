@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -12,6 +15,11 @@ from tools.official_client_capture import claude_qualification_material_source a
 from tools.official_client_capture import claude_upgrade as upgrade
 from tools.official_client_capture import claude_upgrade_capture as capture
 from tools.official_client_capture import claude_upgrade_candidate_capture as candidate
+from tools.official_client_capture import claude_upgrade_recovery as recovery
+from tools.official_client_capture import claude_upgrade_attempt_recovery as segment_reader
+from tools.official_client_capture import claude_upgrade_candidate_seal as candidate_seal
+from tools.official_client_capture import claude_upgrade_segment_seal as segment_seal
+from tools.official_client_capture import codex_upgrade_evidence_manifest as boundary
 from tools.official_client_capture import incremental_recovery
 from tools.official_client_capture.capturelib.model import ConfigurationError
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as fixture
@@ -244,3 +252,427 @@ class RecoveryRunIdentityProjectionTests(unittest.TestCase):
     def test_original_id_cannot_authorize_segment_closure(self):
         with self.assertRaisesRegex(ControlError, "Job 闭环原件"):
             self.prove(producer_id=self.document["attempt_id"])
+
+
+class NormalResumeProducerProjectionTests(unittest.TestCase):
+    """用不同字节的原生产者探针区分同相对路径，防止错根碰巧命中。"""
+
+    retain = CandidateAttemptProjectionTests.retain
+    project_parent = CandidateAttemptProjectionTests.project_parent
+    close = CandidateAttemptProjectionTests.close
+    write_job_materials = CandidateAttemptProjectionTests.write_job_materials
+    write_attempt = CandidateAttemptProjectionTests.write_attempt
+
+    def setUp(self):
+        CandidateAttemptProjectionTests.setUp(self)
+        self.origin = self.attempt.with_name("producer-1")
+        shutil.copytree(self.attempt, self.origin)
+        original_closure = self.origin / self.closure.relative_to(self.attempt)
+        runs = []
+        for name in ("before", "after"):
+            probe_root = self.origin / "evidence" / name
+            snapshot = fixture._write_json(probe_root / "state.json", {"state": "original-producer"})
+            probe = fixture._write_json(probe_root / "probe.json", {"schema_version": capture.PROBE_MANIFEST_SCHEMA,
+                "snapshots": [{**fixture.binding(snapshot, probe_root), "kind": "client"}]})
+            runs.append(probe)
+        self.origin_runs = [{"before_probe": fixture.binding(runs[0], self.origin),
+            "after_probe": fixture.binding(runs[1], self.origin)}]
+        closure = json.loads(original_closure.read_bytes())
+        fixture._write_json(original_closure, {**closure, "attempt_id": "producer-1",
+            "environment_runs": self.origin_runs})
+        self.producer = {"attempt_id": "producer-1",
+            "job_closure": fixture.binding(original_closure, self.campaign, with_bytes=False)}
+        self.document["results"][0].update(disposition="reused", job_closure=None,
+            environment_runs=self.origin_runs, reused_from={"producer": self.producer})
+        self.write_job_materials(checkpoint_changes={"disposition": "reused"})
+        self.write_attempt()
+
+    def prove(self):
+        with mock.patch.object(upgrade, "_capture_stage_attempt_context", return_value=(self.attempt, self.document)), \
+                mock.patch.object(upgrade, "load_campaign_manifest", return_value={}), \
+                mock.patch.object(capture, "_capture_layout", return_value=object()), \
+                mock.patch.object(recovery, "_verify_reusable_evidence") as reader:
+            material._retain_candidate_attempt_materials(self.campaign, self.round_one, self.data,
+                retain=self.retain, project_parent=self.project_parent)
+            reader.assert_called_once()
+
+    def test_normal_resume_retains_original_closure_and_probe_bytes(self):
+        self.prove()
+        closed = {row["path"] for row in self.close([fixture.binding(self.attempt_path, self.data)])}
+        for binding in self.origin_runs[0].values():
+            self.assertIn((self.origin / binding["path"]).relative_to(self.data).as_posix(), closed)
+        self.assertIn((self.campaign / self.producer["job_closure"]["path"]).relative_to(self.data).as_posix(), closed)
+
+    def test_same_relative_path_in_current_attempt_cannot_replace_producer(self):
+        self.prove()
+        (self.origin / self.origin_runs[0]["before_probe"]["path"]).unlink()
+        with self.assertRaisesRegex(ControlError, "原件缺失"):
+            self.close([fixture.binding(self.attempt_path, self.data)])
+
+    def test_environment_from_other_producer_is_rejected(self):
+        self.document["results"][0]["environment_runs"] = self.runs
+        self.write_job_materials()
+        self.write_attempt()
+        with self.assertRaisesRegex(ControlError, "原复用读者.*不同源"):
+            self.prove()
+
+    def test_producer_outside_qualification_data_root_is_rejected_before_read(self):
+        self.producer["campaign"] = {"campaign_dir": str(self.data.parent / "outside"),
+            "campaign_id": "other", "candidate_id": "other", "campaign_manifest_sha256": "a" * 64}
+        self.document["results"][0]["reused_from"]["producer"] = self.producer
+        self.write_job_materials()
+        self.write_attempt()
+        with self.assertRaisesRegex(ControlError, "越过.*已有数据根"):
+            self.prove()
+
+    def test_producer_lexical_parent_escape_is_rejected_before_original_reader(self):
+        self.producer["campaign"] = {"campaign_dir": str(self.data / "../outside"),
+            "campaign_id": "other", "candidate_id": "other", "campaign_manifest_sha256": "a" * 64}
+        self.document["results"][0]["reused_from"]["producer"] = self.producer
+        self.write_job_materials()
+        self.write_attempt()
+        with mock.patch.object(recovery, "_verify_reusable_evidence") as original_reader:
+            with self.assertRaisesRegex(ControlError, "越过.*已有数据根"):
+                material._candidate_attempt_result_producers(self.campaign, self.document, self.attempt, self.data,
+                    retain=self.retain, project_parent=self.project_parent)
+            original_reader.assert_not_called()
+
+    def test_producer_symlink_escape_is_rejected_before_original_reader(self):
+        outside = self.data.parent / "outside-campaign"
+        outside.mkdir()
+        link = self.data / "linked-campaign"
+        link.symlink_to(outside, target_is_directory=True)
+        self.producer["campaign"] = {"campaign_dir": str(link),
+            "campaign_id": "other", "candidate_id": "other", "campaign_manifest_sha256": "a" * 64}
+        self.document["results"][0]["reused_from"]["producer"] = self.producer
+        self.write_job_materials()
+        self.write_attempt()
+        with mock.patch.object(recovery, "_verify_reusable_evidence") as original_reader:
+            with self.assertRaisesRegex(ConfigurationError, "符号链接"):
+                material._candidate_attempt_result_producers(self.campaign, self.document, self.attempt, self.data,
+                    retain=self.retain, project_parent=self.project_parent)
+            original_reader.assert_not_called()
+
+    def test_cover_outside_data_root_is_rejected_before_original_reader(self):
+        self.producer["predecessor_sealed_cover"] = {
+            "campaign": {"campaign_dir": str(self.data / "../outside-cover")}}
+        with mock.patch.object(recovery, "_verify_reusable_evidence") as original_reader:
+            with self.assertRaisesRegex(ControlError, "封存覆盖越过.*已有数据根"):
+                material._candidate_attempt_result_producers(self.campaign, self.document, self.attempt, self.data,
+                    retain=self.retain, project_parent=self.project_parent)
+            original_reader.assert_not_called()
+
+    def test_multiple_campaign_inheritance_keeps_the_first_producer(self):
+        origin_campaign = self.data / "evidence/campaigns/original-campaign"
+        origin_root = origin_campaign / "candidates/original-candidate/attempts/producer-1"
+        shutil.copytree(self.origin, origin_root)
+        closure_path = origin_root / self.closure.relative_to(self.attempt)
+        closure = json.loads(closure_path.read_bytes())
+        fixture._write_json(closure_path, {**closure, "campaign_id": "original-campaign"})
+        manifest_path = fixture._write_json(origin_campaign / "campaign.json", {"campaign_id": "original-campaign"})
+        self.producer.update(campaign={"campaign_dir": str(origin_campaign), "campaign_id": "original-campaign",
+            "candidate_id": "original-candidate", "campaign_manifest_sha256": fixture.binding(manifest_path, self.data)["sha256"]},
+            execution_sha256="a" * 64, job_closure=fixture.binding(closure_path, origin_campaign, with_bytes=False))
+        self.document["results"][0]["reused_from"]["campaign"] = {"campaign_dir": str(self.campaign.with_name("middle-campaign"))}
+        with mock.patch.object(upgrade, "load_campaign_manifest", return_value={}), \
+                mock.patch.object(capture, "_capture_layout", return_value=object()), \
+                mock.patch.object(recovery, "_verify_reusable_evidence") as original_reader:
+            producers = material._candidate_attempt_result_producers(self.campaign, self.document, self.attempt,
+                self.data, retain=self.retain, project_parent=self.project_parent)
+            original_reader.assert_called_once()
+        self.assertEqual(producers["job-1"], (origin_root, "producer-1"))
+        self.assertIn(manifest_path.relative_to(self.data).as_posix(), self.originals)
+
+    def test_original_cover_stage_does_not_grant_campaign_root_to_unknown_result(self):
+        manifest = fixture._write_json(self.campaign / "campaign.json", {"campaign_id": "campaign-1"})
+        origin = {"campaign_dir": str(self.campaign), "campaign_id": "campaign-1",
+            "candidate_id": "candidate-1", "campaign_manifest_sha256": fixture.binding(manifest, self.data)["sha256"]}
+        sealed = fixture._write_json(self.campaign / "source-sealed-manifest.json", {})
+        attachment = fixture._write_json(self.campaign / "source-client-checkpoint.json", {})
+        unknown = fixture._write_json(self.campaign / "unknown-cover-result.json", {"source": "unregistered"})
+        stage = fixture._write_json(self.campaign / "source-cover-stage.json", {
+            "seal": {"client_checkpoint": fixture.binding(attachment, self.campaign)},
+            "results": [{"id": "job-1", "unknown": fixture.binding(unknown, self.campaign)}]})
+        self.producer.update(campaign=origin, execution_sha256="a" * 64, predecessor_sealed_cover={
+            "campaign": origin, "stage_result": fixture.binding(stage, self.campaign, with_bytes=False),
+            "sealed_evidence_manifest": fixture.binding(sealed, self.campaign, with_bytes=False)})
+        self.write_job_materials(checkpoint_changes={"disposition": "reused"})
+        self.write_attempt()
+        self.prove()
+        projection = self.parents[stage.relative_to(self.data).as_posix()]
+        bindings = projection.project(fixture.binding(stage, self.data), stage.read_bytes())
+        self.assertIn(attachment.relative_to(self.data).as_posix(), {row["path"] for row in bindings})
+        with self.assertRaisesRegex(ControlError, "原件缺失"):
+            self.close([fixture.binding(stage, self.data)])
+
+
+class CandidateBoundaryRetentionTests(unittest.TestCase):
+    """用实际封存与重绑生产器验证归档原件，不替代原证据边界验证。"""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="boundary-retention-", dir="/private/tmp")
+        self.addCleanup(temporary.cleanup)
+        self.campaign = Path(temporary.name)
+        self.evidence = self.campaign / "evidence"
+        self.evidence.mkdir(mode=0o700)
+        self.source = fixture._write_json(self.evidence / "source.json", {"source": "fixture-only"})
+        self.manifest = boundary.build_evidence_manifest([self.evidence],
+            checkpoint_path=self.campaign / "scan-checkpoint.json")
+        self.path = fixture._write_json(self.campaign / "sealed-evidence-manifest.json", self.manifest)
+        self.originals = {}
+
+    def retain(self, path, expected_sha256=None):
+        raw = path.read_bytes()
+        if expected_sha256 is not None and fixture.binding(path, self.campaign)["sha256"] != expected_sha256:
+            raise ControlError("归档原件摘要漂移")
+        self.originals[path] = raw
+        return raw
+
+    def prove(self):
+        material._retain_candidate_sealed_boundary(self.campaign,
+            fixture.binding(self.path, self.campaign, with_bytes=False), retain=self.retain)
+
+    def rebind(self):
+        replacement = self.evidence / ".replacement"
+        replacement.write_bytes(self.source.read_bytes())
+        replacement.chmod(0o600)
+        os.replace(replacement, self.source)
+        receipt = boundary.build_boundary_rebind(self.manifest, self.path, [self.evidence],
+            existing_rebinds=(), campaign_id="campaign-1", phase="candidate",
+            candidate_id="candidate-1", attempt_id="attempt-1.ar2", operator="fixture-only")
+        return fixture._write_json(self.path.parent / "evidence-manifest-rebind-01.json", receipt)
+
+    def test_original_manifest_is_retained_by_two_field_binding(self):
+        self.prove()
+        self.assertEqual(self.originals[self.path], self.path.read_bytes())
+
+    def test_actual_metadata_rebind_original_is_retained(self):
+        receipt = self.rebind()
+        self.prove()
+        self.assertEqual(self.originals[receipt], receipt.read_bytes())
+
+    def test_corrupt_rebind_is_rejected_instead_of_omitted(self):
+        receipt = self.rebind()
+        value = json.loads(receipt.read_bytes())
+        fixture._write_json(receipt, {**value, "receipt_sha256": "0" * 64})
+        with self.assertRaisesRegex(boundary.EvidenceManifestError, "自摘要不一致"):
+            self.prove()
+
+
+class CandidateRecoveryStageProjectionTests(unittest.TestCase):
+    """真实文件、checkpoint 与阶段读取器专项；运行／封存边界用明确替身。
+
+    这里不形成正式采集资格。替身只隔离账号和运行权限，规范轮次的闭集
+    读取、精确文件摘要、归档递归与 checkpoint 追加仍消费实际原件。
+    """
+
+    retain = CandidateAttemptProjectionTests.retain
+    project_parent = CandidateAttemptProjectionTests.project_parent
+    close = CandidateAttemptProjectionTests.close
+    write_job_materials = CandidateAttemptProjectionTests.write_job_materials
+    write_attempt = CandidateAttemptProjectionTests.write_attempt
+
+    def setUp(self):
+        CandidateAttemptProjectionTests.setUp(self)
+        self.manifest = {"campaign_id": "campaign-1"}
+        self.segments = {}
+        evaluation = fixture._write_json(self.campaign / "candidate-evaluation.json", {})
+        sealed = fixture._write_json(self.campaign / "sealed-evidence-manifest.json", {})
+        self.first = {
+            "schema_version": candidate_seal.STAGE_RESULT_SCHEMA, "client": "claude",
+            "campaign_id": "campaign-1", "stage": candidate_seal.STAGE_NAME,
+            "candidate_id": "candidate-1", "status": "complete",
+            "attempt": fixture.binding(self.attempt_path, self.campaign, with_bytes=False),
+            "seal": {}, "store": {}, "client_evidence": {},
+            "sealed_evidence_manifest": fixture.binding(sealed, self.campaign, with_bytes=False),
+            "assertion_context": {"evaluation_manifest": fixture.binding(evaluation, self.campaign, with_bytes=False)},
+            "execute_item_ids": ["job-1"], "reuse_item_ids": [], "live_request_count": 0,
+            "scanned_bytes": 0, "sealed_at_utc": "2026-10-10T00:00:00Z",
+        }
+        self.first_path = fixture._write_json(self.campaign / "candidates/candidate-1/result.json", self.first)
+        baseline = upgrade._evaluation_baseline_dir(self.campaign, "candidate-1", 1)
+        self.commit, self.recovery = {"commit": "fixture-only"}, {"recovery": "fixture-only"}
+        fixture._write_json(baseline / upgrade.EVALUATION_BASELINE_COMMIT_FILENAME, self.commit)
+        fixture._write_json(baseline / upgrade.EVALUATION_BASELINE_RECOVERY_FILENAME, self.recovery)
+
+    def make_segment(self, revision, *, result=None, status=None):
+        root = self.attempt / upgrade.ATTEMPT_RECOVERY_DIRNAME / revision
+        staging = self.data / "segment-staging"
+        shutil.copytree(self.attempt, staging, ignore=shutil.ignore_patterns(upgrade.ATTEMPT_RECOVERY_DIRNAME))
+        root.parent.mkdir(parents=True, exist_ok=True)
+        staging.rename(root)
+        document = copy.deepcopy(self.document)
+        document.update(schema_version=upgrade.ATTEMPT_RECOVERY_SUMMARY_SCHEMA,
+            identity={"source": "fixture-only"}, status=status or upgrade.ATTEMPT_RECOVERY_SUCCESS_STATUS,
+            recovery_revision=revision)
+        if result is None:
+            closure_path = root / self.closure.relative_to(self.attempt)
+            closure = json.loads(closure_path.read_bytes())
+            fixture._write_json(closure_path, {**closure, "attempt_id": "attempt-1." + revision})
+            document["results"][0]["job_closure"] = fixture.binding(closure_path, root)
+        else:
+            document["results"] = [copy.deepcopy(result)]
+        store = incremental_recovery.CheckpointStore(root / "checkpoints")
+        for path in store.root.glob("*.json"):
+            path.unlink()
+        row = document["results"][0]
+        fixture._write_json(root / "job-job-1.json", row)
+        store.append({"checkpoint_schema_version": capture.JOB_CHECKPOINT_SCHEMA,
+            **{key: document[key] for key in ("client", "mode", "campaign_id", "phase", "run_nonce")},
+            "attempt_id": "attempt-1." + revision, "item_id": "job-1", "status": "complete",
+            "disposition": row.get("disposition", "executed"), "result": row,
+            "result_sha256": incremental_recovery.digest(row), "previous_checkpoint_sha256": None})
+        record = store.records()[0]
+        document["job_checkpoint"] = {"schema_version": capture.JOB_CHECKPOINT_SCHEMA,
+            "path": store.root.relative_to(self.campaign).as_posix(), "record_count": 1,
+            "last_sequence": 1, "last_sha256": record["checkpoint_sha256"]}
+        reservation = {"planned_jobs": [{"id": "job-1", "execution_sha256": row["execution_sha256"]}],
+            "identity_sha256": upgrade._fingerprint(document["identity"])}
+        self.segments[revision] = (root, reservation, document)
+        self.write_segment(revision)
+        return root, reservation, document
+
+    def write_segment(self, revision):
+        root, reservation, document = self.segments[revision]
+        reservation_path = fixture._write_json(root / upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME, reservation)
+        document["reservation"] = fixture.binding(reservation_path, self.campaign, with_bytes=False)
+        return fixture._write_json(root / upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME, document)
+
+    def make_stage(self, revision):
+        _root, _reservation, summary = self.segments[revision]
+        stage = copy.deepcopy(self.first)
+        stage.update(recovery={**fixture.binding(self.write_segment(revision), self.campaign, with_bytes=False),
+                "recovery_revision": revision}, previous_stage=fixture.binding(self.first_path, self.campaign, with_bytes=False),
+            results=copy.deepcopy(summary["results"]), root_sets={})
+        effective_path = fixture._write_json(self.campaign / "effective-results.json", {"results": stage["results"]})
+        stage["effective_results"] = fixture.binding(effective_path, self.campaign, with_bytes=False)
+        stage_path = fixture._write_json(self.campaign / "recovery-result.json", stage)
+        return stage_path, effective_path
+
+    def prove(self, path):
+        with mock.patch.object(upgrade, "_capture_stage_attempt_context", return_value=(self.attempt, self.document)), \
+                mock.patch.object(segment_reader, "load_segment", side_effect=lambda _c, _cid, _aid, revision: self.segments[revision]), \
+                mock.patch.object(segment_reader, "recovery_segment_summary", side_effect=lambda _c, _cid, _aid, revision: self.segments[revision]), \
+                mock.patch.object(segment_reader, "authoritative_execute_jobs", return_value=(1, self.commit, self.recovery)), \
+                mock.patch.object(segment_reader, "segment_reuse_proofs", side_effect=AssertionError("不得重算历史运行期资格")), \
+                mock.patch.object(segment_seal, "segment_boundary", return_value=None), \
+                mock.patch.object(segment_seal, "validate_stage", side_effect=lambda _c, stage, _cid:
+                    (self.attempt, {**self.document, "results": stage["results"]})):
+            material._retain_candidate_recovery_materials(self.campaign, self.manifest,
+                fixture.binding(path, self.campaign, with_bytes=False), self.data, candidate_id="candidate-1",
+                retain=self.retain, project_parent=self.project_parent)
+
+    def make_inherited_stage(self):
+        root, _reservation, summary = self.make_segment("ar1", status="failed")
+        source = root / "job-job-1.json"
+        closure = json.loads((root / summary["results"][0]["job_closure"]["path"]).read_bytes())
+        proof = {"recovered_from": "ar1", "source_execution_sha256": "a" * 64,
+            "result": fixture.binding(source, self.campaign),
+            "checkpoint": fixture.binding(root / "checkpoints/00000001.json", self.campaign),
+            "permission_closeout": fixture.binding(root / closure["evidence_permission_closeout"]["path"], self.campaign),
+            "after_probe": fixture.binding(root / "evidence" / summary["environment"]["after_probe"]["path"], self.campaign),
+            "restoration_report": fixture.binding(root / "evidence" / summary["environment"]["restoration_report"]["path"], self.campaign)}
+        result = segment_reader.reused_job_result(self.campaign, proof)
+        _root, reservation, _summary = self.make_segment("ar2", result=result)
+        reservation.update(reuse_job_ids=["job-1"], reuse_proofs={"job-1": proof})
+        return self.make_stage("ar2")[0]
+
+    def test_recovery_stage_and_effective_results_keep_unknown_binding_at_data_root(self):
+        foreign = fixture._write_json(self.campaign / "unknown-result.json", {"source": "not-a-result-contract"})
+        root, _reservation, summary = self.make_segment("ar1")
+        summary["results"][0]["unknown"] = fixture.binding(foreign, self.campaign)
+        # 保持实际 Job/checkpoint 与结果同源，避免由另一处不一致抢先拒绝。
+        fixture._write_json(root / "job-job-1.json", summary["results"][0])
+        checkpoint = incremental_recovery.CheckpointStore(root / "checkpoints")
+        record = checkpoint.records()[0]
+        record = {key: value for key, value in record.items() if key not in {"checkpoint_sequence", "checkpoint_sha256"}}
+        record.update(result=summary["results"][0], result_sha256=incremental_recovery.digest(summary["results"][0]))
+        checkpoint.record_path(1).unlink()
+        written = checkpoint.append(record)
+        summary["job_checkpoint"]["last_sha256"] = written["checkpoint_sha256"]
+        stage_path, effective_path = self.make_stage("ar1")
+        self.prove(stage_path)
+        for path in (stage_path, effective_path):
+            with self.subTest(parent=path.name), self.assertRaisesRegex(ControlError, "原件缺失"):
+                self.close([fixture.binding(path, self.data)])
+
+    def test_known_stage_seal_binding_uses_campaign_and_unknown_result_does_not(self):
+        attachment = fixture._write_json(self.campaign / "seal-client-checkpoint.json", {})
+        self.first["seal"]["client_checkpoint"] = fixture.binding(attachment, self.campaign)
+        fixture._write_json(self.first_path, self.first)
+        self.prove(self.first_path)
+        closed = {row["path"] for row in self.close([fixture.binding(self.first_path, self.data)])}
+        self.assertIn(attachment.relative_to(self.data).as_posix(), closed)
+
+    def test_retry_round_rejects_string_boolean_zero_and_negative_before_reader(self):
+        for index, value in enumerate(("2", True, False, 0, -1)):
+            with self.subTest(validation_round=value):
+                path = fixture._write_json(self.campaign / f"invalid-round-{index}.json",
+                    {**self.first, "validation_round": value})
+                with mock.patch.object(candidate_seal, "_load_round_document") as reader:
+                    with self.assertRaisesRegex(ControlError, "非布尔正整数"):
+                        self.prove(path)
+                    reader.assert_not_called()
+
+    def test_exact_retry_rejects_different_first_attempt(self):
+        other = fixture._write_json(self.attempt / "other-attempt.json", self.document)
+        retry = {**self.first, "attempt": fixture.binding(other, self.campaign, with_bytes=False),
+            "validation_round": 2, "round_one_result": fixture.binding(self.first_path, self.campaign, with_bytes=False)}
+        path = fixture._write_json(candidate_seal._round_result_path(self.campaign, "candidate-1", 2,
+            round_one_path=self.first_path), retry)
+        with self.assertRaisesRegex(ControlError, "逐字承接.*首轮"):
+            self.prove(path)
+
+    def test_exact_retry_rejects_same_bytes_at_noncanonical_path(self):
+        retry = {**self.first, "validation_round": 2,
+            "round_one_result": fixture.binding(self.first_path, self.campaign, with_bytes=False)}
+        path = fixture._write_json(self.campaign / "same-retry-at-wrong-coordinate.json", retry)
+        with self.assertRaisesRegex(ControlError, "逐字承接.*首轮"):
+            self.prove(path)
+
+    def test_exact_retry_preserves_the_bound_first_round(self):
+        retry = {**self.first, "validation_round": 2,
+            "round_one_result": fixture.binding(self.first_path, self.campaign, with_bytes=False)}
+        path = fixture._write_json(candidate_seal._round_result_path(self.campaign, "candidate-1", 2,
+            round_one_path=self.first_path), retry)
+        self.prove(path)
+        self.assertIn(self.first_path.relative_to(self.data).as_posix(), self.originals)
+
+    def test_inherited_frozen_proof_does_not_recompute_runtime_permissions(self):
+        path = self.make_inherited_stage()
+        self.prove(path)
+        self.assertIn((self.segments["ar1"][0] / "job-job-1.json").relative_to(self.data).as_posix(), self.originals)
+
+    def test_historical_summary_structure_rejects_rehashed_identity_and_result_forgery(self):
+        for failure in ("identity", "execution", "duplicate", "unplanned", "unplanned-missing-execution", "complete-missing"):
+            with self.subTest(failure=failure):
+                # 每个负例复用已冻结 proof 的精确字节，只破坏历史控制摘要。
+                path = self.make_inherited_stage() if not self.segments else self.campaign / "recovery-result.json"
+                _root, reservation, summary = self.segments["ar1"]
+                original = copy.deepcopy(summary)
+                original_reservation = copy.deepcopy(reservation)
+                if failure == "identity":
+                    summary["identity"] = {"source": "forged"}
+                elif failure == "execution":
+                    summary["results"][0]["execution_sha256"] = "f" * 64
+                elif failure == "duplicate":
+                    summary["results"].append(copy.deepcopy(summary["results"][0]))
+                elif failure == "unplanned":
+                    summary["results"][0]["id"] = "outside-plan"
+                elif failure == "unplanned-missing-execution":
+                    summary["results"][0]["id"] = "outside-plan"
+                    summary["results"][0].pop("execution_sha256")
+                else:
+                    summary["status"] = upgrade.ATTEMPT_RECOVERY_SUCCESS_STATUS
+                    reservation["planned_jobs"].append({"id": "missing-job", "execution_sha256": "a" * 64})
+                summary["attempt_recovery_digest"] = upgrade._fingerprint({key: value for key, value in summary.items()
+                    if key != "attempt_recovery_digest"})
+                self.write_segment("ar1")
+                with self.assertRaisesRegex(ControlError, "历史恢复段摘要.*预约不一致"):
+                    self.prove(path)
+                summary.clear()
+                summary.update(original)
+                reservation.clear()
+                reservation.update(original_reservation)
+                self.write_segment("ar1")
+                self.originals, self.parents = {}, {}
