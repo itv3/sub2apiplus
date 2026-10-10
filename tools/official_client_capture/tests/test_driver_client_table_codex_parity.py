@@ -910,8 +910,10 @@ B5A09_SOURCE_SHELL_RESIDUALS = {"entry-gates.sh": [
 ]}
 # 工程磁盘策略：基线为本次开工提交，逐行登记真实替换；缺省仍走 69%／30 GiB 和 40 GiB floor，
 # 唯一提高路径由真实私有 staging fixture_only 总账复验限定，拒绝场景另由专项测试覆盖。
+# env.example.sh 的工程参数中文说明也是该批次既有产物，非注释残差为空；补全此前遗漏的接管登记。
 ENGINEERING_DISK_BASELINE_COMMIT = 'f769c32c5831fccb76d1f66cf093e8d3eb919090'
-ENGINEERING_DISK_SHELL_DIGESTS = {"guard.sh": '166e25b995eec31604b536f7a08c6253e4194c52701ecbaecdd95d2133b48071'}
+ENGINEERING_DISK_SHELL_DIGESTS = {"guard.sh": '166e25b995eec31604b536f7a08c6253e4194c52701ecbaecdd95d2133b48071',
+                                  "env.example.sh": "a0504a53f47488df9d35c5ca373b5ce973d76623fe8a3cf9b7d36332d8ccd9a2"}
 ENGINEERING_DISK_SHELL_RESIDUALS = {"guard.sh": [
     '-python3 - "$MIN_FREE_GIB" <<\'PY\'',
     '-import shutil, sys',
@@ -931,7 +933,7 @@ ENGINEERING_DISK_SHELL_RESIDUALS = {"guard.sh": [
     '+if disk.get("engineering_policy"):',
     '+    print("guard/disk-engineering:", disk["engineering_policy"])',
     '+if not disk["ok"]:',
-]}
+], "env.example.sh": []}
 # 入口可选并发透传以实际父提交为基线；缺省数组为空，执行器 argv 保持原样。
 # 新参数的正整数检查仅在显式提供 --parallel 时执行；不改客户端表、模式或承接批准规则。
 ENTRY_PARALLEL_BASELINE_COMMIT = "5b4663bc3ac79d76ddc99b9570d696d76cfb0714"
@@ -957,6 +959,45 @@ ENTRY_PARALLEL_SHELL_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：
                     '+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} '
                     '${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || '
                     'EXEC_RC=$?']}
+# B5a-09 私有 fixture 总账接点：默认保留原 D 路径与 status 命令；只有显式工程策略复验通过才进入新分支。
+# 锁内重新核客户端、私有目录与 plan 摘要，原 replay_head 与业务停线不变；专项测试验证合法路径、漂移和拒绝场景。
+FIXTURE_PROJECT_GUARD_BASELINE_COMMIT = 'f1ce9dcd3ae0e46d105b9ac0c3811a646f192a49'
+FIXTURE_PROJECT_GUARD_SHELL_DIGESTS = {'guard.sh': 'f7c56c3891d46b6b95cb51424501c1ced922a8f8ce3c796542bb3377d52c5a67'}
+FIXTURE_PROJECT_GUARD_SHELL_RESIDUALS = {'guard.sh': ['-python3 -m tools.official_client_capture.codex_upgrade_project_ledger status --ledger-dir '
+              '"$D/evidence/campaigns/upgrade-project-ledger" | python3 -c "',
+              '+guard_project_status() {',
+              '+  if [ "${ENGINEERING_ROOT_MAX_USED_PERCENT+x}" != x ]; then',
+              '+    python3 -m tools.official_client_capture.codex_upgrade_project_ledger status --ledger-dir '
+              '"$D/evidence/campaigns/upgrade-project-ledger"',
+              '+    return',
+              '+  fi',
+              '+  python3 -B - "$DRV" tools.official_client_capture.codex_upgrade_project_ledger <<\'PY\'',
+              '+import importlib, json, os, sys',
+              '+from pathlib import Path',
+              '+sys.path.insert(0, sys.argv[1])',
+              '+import entry_housekeeping as housekeeping',
+              '+project_ledger = importlib.import_module(sys.argv[2])',
+              '+os.umask(0o077)',
+              '+try:',
+              '+    policy = housekeeping.disk_policy(os.environ)',
+              '+    if policy is None:',
+              '+        raise housekeeping.HousekeepingError("显式工程策略未通过复验")',
+              '+    root = Path(policy["ledger_dir"])',
+              '+    with project_ledger.project_lock(root):',
+              '+        locked_policy = housekeeping.disk_policy(os.environ)',
+              '+        if locked_policy != policy:',
+              '+            raise housekeeping.HousekeepingError("工程总账路径、客户端或 plan 摘要在取锁后漂移")',
+              '+        head = project_ledger.replay_head(root)',
+              '+except (housekeeping.HousekeepingError, project_ledger.ProjectLedgerError,',
+              '+        project_ledger.root_cause.RootCauseError, OSError) as error:',
+              '+    print(f"guard/project: FAIL — {error}", file=sys.stderr)',
+              '+    sys.exit(2)',
+              '+result = {key: value for key, value in head.items() if key not in {"accounted_identity_index", '
+              '"operations"}}',
+              '+print(json.dumps(result, ensure_ascii=False, sort_keys=True))',
+              '+PY',
+              '+}',
+              '+guard_project_status | python3 -c "']}
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
@@ -969,6 +1010,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("B5a-09-source", B5A09_SOURCE_BASELINE_COMMIT, B5A09_SOURCE_SHELL_DIGESTS, B5A09_SOURCE_SHELL_RESIDUALS),
     ("升级入口可选并发透传", ENTRY_PARALLEL_BASELINE_COMMIT, ENTRY_PARALLEL_SHELL_DIGESTS, ENTRY_PARALLEL_SHELL_RESIDUALS),
     ("engineering-disk", ENGINEERING_DISK_BASELINE_COMMIT, ENGINEERING_DISK_SHELL_DIGESTS, ENGINEERING_DISK_SHELL_RESIDUALS),
+    ("B5a-09-fixture-project-guard", FIXTURE_PROJECT_GUARD_BASELINE_COMMIT, FIXTURE_PROJECT_GUARD_SHELL_DIGESTS, FIXTURE_PROJECT_GUARD_SHELL_RESIDUALS),
 )
 
 

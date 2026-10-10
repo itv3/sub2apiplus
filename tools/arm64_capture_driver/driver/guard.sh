@@ -53,7 +53,40 @@ if disk.get("engineering_policy"):
 if not disk["ok"]:
     sys.exit("guard/disk: FAIL — 根盘不满足派发条件，停止")
 PY
-python3 -m "$CT_PROJECT_LEDGER_MODULE" status --ledger-dir "$D/evidence/campaigns/$CT_PROJECT_LEDGER_DIR_NAME" | python3 -c "
+# 缺省沿用正式总账路径和 status 命令；只给已验证的显式工程 fixture 取其私有总账。
+# 路径、客户端、plan 摘要在同一项目锁内再次按既有 disk_policy 复核，不把裸 ENTRY_ROOT 当成准入证明。
+guard_project_status() {
+  if [ "${ENGINEERING_ROOT_MAX_USED_PERCENT+x}" != x ]; then
+    python3 -m "$CT_PROJECT_LEDGER_MODULE" status --ledger-dir "$D/evidence/campaigns/$CT_PROJECT_LEDGER_DIR_NAME"
+    return
+  fi
+  python3 -B - "$DRV" "$CT_PROJECT_LEDGER_MODULE" <<'PY'
+import importlib, json, os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import entry_housekeeping as housekeeping
+project_ledger = importlib.import_module(sys.argv[2])
+os.umask(0o077)
+try:
+    policy = housekeeping.disk_policy(os.environ)
+    if policy is None:
+        raise housekeeping.HousekeepingError("显式工程策略未通过复验")
+    root = Path(policy["ledger_dir"])
+    with project_ledger.project_lock(root):
+        locked_policy = housekeeping.disk_policy(os.environ)
+        if locked_policy != policy:
+            raise housekeeping.HousekeepingError("工程总账路径、客户端或 plan 摘要在取锁后漂移")
+        # replay_head 原有项目锁可重入；完整重放和缓存规则均沿用原实现。
+        head = project_ledger.replay_head(root)
+except (housekeeping.HousekeepingError, project_ledger.ProjectLedgerError,
+        project_ledger.root_cause.RootCauseError, OSError) as error:
+    print(f"guard/project: FAIL — {error}", file=sys.stderr)
+    sys.exit(2)
+result = {key: value for key, value in head.items() if key not in {"accounted_identity_index", "operations"}}
+print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+PY
+}
+guard_project_status | python3 -c "
 import importlib, sys, json
 project_ledger = importlib.import_module(sys.argv[2])
 d = json.loads(sys.stdin.read()); h = d.get('head', d)
