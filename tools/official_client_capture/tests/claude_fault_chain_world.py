@@ -301,6 +301,24 @@ def record_json_read(path: Path) -> None:
     save_state('command-observations', rows)
 
 
+def verify_commands(prefix: list[dict[str, Any]] | None = None) -> None:
+    """原phase跳过前实核完整命令原件，并核冻结观察列表只追加。"""
+
+    if record_root() is None:
+        return
+    rows = (load_state('command-observations') or {}).get('commands', [])
+    if prefix is not None and rows[:len(prefix)] != prefix:
+        raise ValueError('原phase的冻结命令观察前缀已改变')
+    for row in rows:
+        for field in ('stdout', 'stderr', 'command_binding', 'invocation_binding'):
+            if row.get(field) is not None:
+                read_cut(row[field])
+        if row.get('command_binding') is not None:
+            descriptor = _decoded(json.loads(read_cut(row['command_binding'])))
+            if descriptor != {key: value for key, value in row.items() if key != 'command_binding'}:
+                raise ValueError('原phase的命令描述与完整输出绑定不一致')
+
+
 def _original_command(row: dict[str, Any], argv: list[str]) -> tuple[int, Any, str]:
     """实读原调用、完整输出与退出码；摘要值和后续新输出都不能替代原件。"""
 
@@ -315,7 +333,12 @@ def _original_command(row: dict[str, Any], argv: list[str]) -> tuple[int, Any, s
         raise ValueError('原逻辑命令尚未得到真实退出码，不能承接未决动作')
     stdout = read_cut(row['stdout']).decode('utf-8')
     stderr = read_cut(row['stderr']).decode('utf-8')
-    return row['returncode'], json.loads(stdout) if stdout.strip() else None, stderr
+    try:
+        result = json.loads(stdout) if stdout.strip() else None
+    except ValueError:
+        # 原修复／回归子进程可能只输出文本；完整原件仍绑定，但没有JSON返回对象。
+        result = None
+    return row['returncode'], result, stderr
 
 
 def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke: Any,
@@ -386,6 +409,7 @@ def checkpoint(case: Any, name: str, **values: Any) -> None:
     previous = load_state('cursor:' + name) or {}
     if previous.get('audit_snapshots'):
         values['audit_snapshots'] = {**previous['audit_snapshots'], **values.get('audit_snapshots', {})}
+    values['command_prefix'] = (load_state('command-observations') or {}).get('commands', [])
     save_case(case)
     if hasattr(case, 'runtime'):
         save_case(case.runtime, 'candidate-case')
@@ -421,6 +445,9 @@ def resume_checkpoint(case: Any, name: str) -> dict[str, Any] | None:
     saved = load_state('cursor:' + name)
     if saved is None:
         return None
+    if 'command_prefix' not in saved:
+        raise ValueError('原phase缺冻结命令观察前缀，不能承接旧游标摘要')
+    verify_commands(saved['command_prefix'])
     if not restore_case(case):
         raise ValueError('原方法游标缺少夹具值字段')
     campaign = saved.get('campaign')
