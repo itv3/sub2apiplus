@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "7d71914bb59b11b8722182cfaebebcec15941413a37655a9527d8feec20916b7",
+      "sha256": "272e728cfb74f7f84a10d97f535138f69de94f270d6d642f72b494164e473ae2",
       "mode": "0600",
-      "bytes": 106160
+      "bytes": 105782
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -669,5 +669,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "7b79af2f2dd756f69b558de560888d2936a70e9ca8f6735570302a8ffa95cdf8"
+  "manifest_sha256": "b4df0c6e5fdc087c11b6290c7a7ac6f2706c4c5a7cb9c2d769c1644471e4a6fc"
 }
