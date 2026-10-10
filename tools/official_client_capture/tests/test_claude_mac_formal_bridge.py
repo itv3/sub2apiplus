@@ -22,6 +22,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 from tools.official_client_capture import claude_mac_capture_contract as c
 from tools.official_client_capture import claude_mac_formal_capture_contract as capture
@@ -142,6 +143,94 @@ class FormalBridgeTests(unittest.TestCase):
         for value in (forged,replace(handle),copy.copy(handle)):
             with self.subTest(value=id(value)),self.assertRaises(capture.FormalCaptureError):
                 capture.verify_capture_dispatch(self.task,value)
+
+    def expired_original_dispatch(self):
+        """构造历史夹具原件；不登记安装、账号或产品资格。"""
+        self.task['execution']['request_policy']['deadline_utc']=self.at(-10)
+        self.task['task_sha256']=c.digest({name:value for name,value in self.task.items() if name!='task_sha256'})
+        self.now-=timedelta(seconds=60)
+        self.engine=bridge.MacBridgeEngine(self.task,self.mac_install)
+        self.prepared(); c.private_directory(self.engine.control)
+        envelope=self.envelope(observed=self.at(0))
+        original=capture._verify_dispatch_envelope(self.task,envelope,self.key,
+                    require_live=False,bundle_root=self.engine.root)
+        c.write_json_once(self.engine.control/'original-dispatch.json',original.envelope_binding)
+        return envelope,original
+
+    def test_cold_dispatch_keeps_original_binding_through_product_origin_and_preseal(self):
+        """原生资格/产品只替身化；实际镜像、来源读写和冷预封入口保持原绑定。"""
+        from tools.official_client_capture import claude_mac_product_source as product
+        from tools.official_client_capture import claude_mac_product_completion as completion
+        from tools.official_client_capture import claude_mac_product_recorder as recorder
+        from tools.official_client_capture.claude_mac_state_journal import SnapshotLimits
+        from tools.official_client_capture.tests.test_claude_mac_product_sources import process
+        envelope,original=self.expired_original_dispatch()
+        root=self.engine.root; context=bridge._mapping_context(self.task,root,self.mac_install)
+        provider=SimpleNamespace(_root=root)
+        qualified=product.QualifiedMacProductSource()
+        services=SimpleNamespace(_dispatch=original)
+        qualified._owners[id(provider)]={'provider':provider,'task':self.task,'root':root,
+                    'services':services,'paths':context,'qualification':{'raw_sha256':'f'*64}}
+        artifacts={row['role']:row for row in self.task['client_artifacts']}
+        histories={}
+        for pid,role,parent in ((100,'application_executable',99),(101,'embedded_cli',100)):
+            instance=process(pid,artifacts[role]['content']['path'],parent)
+            histories[tuple(instance['audit_token'])]={
+                'start':{'event':'exec','process':instance,'observed_at_utc':self.at(pid-100)},
+                'end':{'observed_at_utc':self.at(6)},'end_reason':'exit'}
+        observed={'task_sha256':self.task['task_sha256'],'native':{'frames':[], 'lifecycles':histories},
+                  'network_flows':[],'session_id':'fixture-cold-binding','scenarios':[]}
+        for name in ('product-native-attestation.json','network-attestation.json','product-materials.json'):
+            c.write_json_once(root/name,{'fixture_only':True,'formal_qualification':False})
+        c.write_json_once(self.engine.control/'materials-receipt.json',c.binding(root,root/'product-materials.json'))
+        with mock.patch.object(qualified,'_originals',return_value=observed):
+            inventory=qualified.export_product_observations(self.task,provider,[],{})
+            attestation=c.read_json(root/'product-origin-attestation.json')
+            self.assertEqual(attestation['dispatch'],original.envelope_binding)
+            files=[c.binding(root,path) for path in sorted(root.rglob('*')) if path.is_file()]
+            c.write_json_once(root/'product-preseal.json',{'schema_version':'claude-mac-product-preseal/v1',
+                'task_sha256':self.task['task_sha256'],'task_nonce':self.task['task_nonce'],
+                'status':'complete','files':files,'origin':inventory['origin']})
+            reader=object.__new__(completion.ProductEvidenceRecorder)
+            reader._task,reader._root,reader._root_instance=self.task,root,recorder._directory(root)
+            reader._plan=SimpleNamespace(limits=SnapshotLimits())
+            reader._adapter,reader._provider,reader._journal=qualified,provider,None
+            # 现场工厂/资格只在本测试替身；预封、原件绑定、产品来源消费者执行本体。
+            reader._guard=lambda task,bundle_root:self.assertEqual((task,bundle_root),(self.task,root))
+            cold=bridge.MacBridgeEngine(self.task,self.mac_install)
+            def fixture_factory(task,*,bundle_root,materials_receipt,path_context,dispatch):
+                self.assertEqual((task,bundle_root,path_context.mapping_binding),
+                                 (self.task,root,context.mapping_binding))
+                self.assertEqual(dispatch.envelope_binding,original.envelope_binding)
+                services._dispatch=dispatch
+                return reader
+            before={path.relative_to(root).as_posix():path.read_bytes() for path in root.rglob('*') if path.is_file()}
+            with mock.patch.object(product,'create_qualified_source',side_effect=fixture_factory):
+                exported=cold.handle(self.request('seal_sources',{'status':'complete'}))
+            self.assertEqual(exported['preseal'],c.binding(root,root/'product-preseal.json'))
+            self.assertEqual(before,{path.relative_to(root).as_posix():path.read_bytes()
+                                     for path in root.rglob('*') if path.is_file()})
+            qualified.verify_product_origin(self.task,root,provider,inventory['origin'])
+            with self.assertRaisesRegex(capture.FormalCaptureError,'已过'):
+                capture.verify_capture_dispatch(self.task,services._dispatch)
+            with mock.patch.object(cold,'_recorder') as factory,self.assertRaisesRegex(capture.FormalCaptureError,'过期'):
+                cold.handle(self.request('launch_desktop',{'recipe':c.read_json(root/'isolation-recipe.json'),
+                                                         'dispatch':envelope}))
+            factory.assert_not_called()
+
+    def test_historical_dispatch_alias_and_binding_tamper_do_not_create_new_members(self):
+        _,original=self.expired_original_dispatch()
+        reference=original.envelope_binding
+        alias=self.engine.root/'renamed-dispatch.json'
+        c.write_once(alias,c.read_bytes(c.check_binding(self.engine.root,reference)))
+        for replacement in (c.binding(self.engine.root,alias),{**reference,'sha256':'0'*64}):
+            f.write(self.engine.control/'original-dispatch.json',replacement)
+            before={path.relative_to(self.engine.root).as_posix():path.read_bytes()
+                    for path in self.engine.root.rglob('*') if path.is_file()}
+            with self.subTest(path=replacement['path']),self.assertRaises((bridge.MacBridgeError,c.CaptureError)):
+                self.engine._historical_dispatch()
+            self.assertEqual(before,{path.relative_to(self.engine.root).as_posix():path.read_bytes()
+                                     for path in self.engine.root.rglob('*') if path.is_file()})
 
     def test_tampered_hmac_or_coordinates_are_rejected(self):
         for field in ('mac','task_sha256','task_nonce','capture_deployment','mac_deployment'):

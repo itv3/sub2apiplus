@@ -723,7 +723,13 @@ class MacBridgeEngine:
     def _historical_dispatch(self):
         references=c.read_json(self.control/'original-dispatch.json')
         raw=c.read_json(c.check_binding(self.root,references))
-        return capture._verify_dispatch_envelope(self.task,raw,self.installation.key,require_live=False)
+        # 冷恢复只读取最初持久化的镜像成员；过期句柄也保留原件绑定供来源封存重验。
+        _require(references['path'] == 'capture-dispatch-'+c.digest(raw)+'.json',
+                 '历史派发绑定不是原镜像固定成员')
+        dispatch=capture._verify_dispatch_envelope(self.task,raw,self.installation.key,
+                    require_live=False,bundle_root=self.root)
+        _require(dispatch.envelope_binding == references,'历史派发原件绑定漂移')
+        return dispatch
 
     def _sealed(self, status):
         self.recorder.seal_for_bridge(self.task,self.root,status=status)
