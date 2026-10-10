@@ -5,7 +5,9 @@ from __future__ import annotations
 import copy
 import json
 import shutil
-from pathlib import Path, PurePosixPath
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 import unittest
 
@@ -107,10 +109,11 @@ class RecordedCandidateSourceTests(unittest.TestCase):
                     "required_rules": [], "coverage_plan": {}, "jobs": [], "predecessor": None}
         path = source.write(campaign / "campaign.json", manifest)
         (campaign / "campaign.sha256").write_text(source.binding(path)["sha256"] + "\n", encoding="utf-8")
-        layout = capture.CaptureLayout(host_data_root=self.data, capture_root=PurePosixPath(str(self.data)),
-                                      capture_container=configuration["capture_container"], capture_tool_root=PurePosixPath(str(tools)),
-                                      host_tool_root=tools, runtime_image=configuration["runtime_image"],
-                                      synthetic_container=configuration["synthetic_capture_container"])
+        # 只登记测试数据根，布局与宿主签发源码位置交给真实产品函数计算。
+        with mock.patch.object(capture.claude_upgrade, "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS", (str(self.data / "runs"),)), \
+                mock.patch.object(capture.claude_upgrade, "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT", str(self.data / "runs")):
+            layout = capture._capture_layout(campaign, manifest)
+        self.assertFalse(layout.host_tool_root.is_relative_to(self.data))
         context = capture.ScenarioReceiptContext(campaign_id="fixture", attempt_id=attempt.name,
                                                 run_nonce=source.read(attempt / "reservation.json")["run_nonce"],
                                                 evidence_root=attempt / "evidence", campaign_dir=campaign, attempt_root=attempt,
@@ -225,6 +228,62 @@ class RecordedCandidateSourceTests(unittest.TestCase):
                 projection["runtime"]["receipt"] = source.binding(variant)
                 with self.assertRaisesRegex(replay.ReplayError, "缺少完整 Docker"):
                     candidate.verify_candidate_projection(self.state, projection)
+
+    def test_candidate_adapter_uses_frozen_catalog_with_real_runtime_issuer(self) -> None:
+        """真实布局和签发器贯通候选适配器，不能把仓库路径误当成容器执行副本。"""
+
+        from tools.official_client_capture import claude_upgrade_capture as capture
+
+        context = self.runtime_context()
+        self.register_runtime_source(context)
+        raw_step = {"probe_id": PROBE, "argv": ["docker", "exec", "capture-cli", *self.projection["argv"],
+                    "--host-runtime-receipt", "{host_runtime_receipt}",
+                    "--host-runtime-receipt-sha256", "{host_runtime_receipt_sha256}", "--run-nonce", "{run_nonce}"],
+                    "environment": {}, "timeout": 1,
+                    "runtime_variables": {"host_runtime_receipt": "absolute_path", "host_runtime_receipt_sha256": "sha256", "run_nonce": "sha256"}}
+        adapter = object.__new__(candidate.SourceAdapter)
+        adapter.state, adapter.pending, adapter.candidate_pending = self.state, {}, {}
+        job = SimpleNamespace(job_id="candidate-fixture", steps=[raw_step])
+        # 只提供冻结步骤与外部 daemon 观察，保留真实 runtime 签发、投影和 v5 判定。
+        with full.runtime_sources(self.state), mock.patch.object(capture.claude_upgrade, "_campaign_jobs", return_value=[job]):
+            values, current = adapter.issue(capture._issue_host_runtime_receipt, context,
+                                            job_id="candidate-fixture", probe_id=PROBE, step_index=1, run_index=1,
+                                            container="capture-cli", deadline=None, heartbeat=None)
+        _argv, path, digest = adapter.candidate_pending[self.projection["operation"]]
+        projected = source.read(source.bound({"path": str(path), **replay._digest(path)}))
+        catalog = self.data / "tools/official_client_capture/capturelib/claude_fw_f_v5.py"
+        self.assertEqual(digest, source.binding(path)["sha256"])
+        self.assertEqual(projected["v5_catalog"], {"file": source.binding(catalog),
+                                               "argument": str(context.layout.capture_tool_root / "capturelib/claude_fw_f_v5.py")})
+        self.assertEqual(projected["runtime"]["receipt"], source.binding(Path(values["host_runtime_receipt"])))
+        self.assertEqual(projected["runtime"]["run_nonce"], current["run_nonce"])
+        self.assertNotEqual(projected["origin"]["run_nonce"], current["run_nonce"])
+        origin = candidate.verify_candidate_projection(self.state, projected)
+        manifest = candidate._candidate_manifest(self.state, projected, origin)
+        self.assertEqual(manifest["fixture_projection"]["v5_dimension_result"], "passed")
+        self.assertFalse(manifest["formal_version_semantics_certified"])
+
+    def test_host_observer_rejects_substituted_issuer_or_source_root(self) -> None:
+        """绑定真实签发源码后仍拒绝换脚本、换根或把两者一起换成 staging 副本。"""
+
+        from tools.official_client_capture import claude_upgrade_capture as capture
+
+        context = self.runtime_context()
+        self.register_runtime_source(context)
+        host_tools = context.layout.host_tool_root
+        staging_tools = self.data / "tools/official_client_capture"
+        variants = ((staging_tools, host_tools), (host_tools, staging_tools), (staging_tools, staging_tools))
+        with full.runtime_sources(self.state):
+            for index, (script_root, source_root) in enumerate(variants):
+                output = context.attempt_root / f"rejected-source-{index}.json"
+                command = [sys.executable, str(script_root / "runtime_host_receipt.py"),
+                           "--container", context.layout.capture_container, "--runtime-image", context.layout.runtime_image,
+                           "--capture-tool-root", str(source_root), "--output", str(output), "--run-nonce", "a" * 64]
+                with self.subTest(script_root=str(script_root), source_root=str(source_root)), \
+                        self.assertRaisesRegex(replay.ReplayError, "宿主收据观察命令与冻结工具"):
+                    capture._run_probe_command(command, operation="fixture-source-rejection")
+                self.assertFalse(output.exists())
+                self.assertFalse(output.with_suffix(".observation-origin.json").exists())
 
     def test_valid_candidate_keeps_independent_origin_and_runtime(self) -> None:
         origin = candidate.verify_candidate_projection(self.state, self.projection)

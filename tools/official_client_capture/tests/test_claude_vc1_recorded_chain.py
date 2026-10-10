@@ -13,7 +13,7 @@ import os
 import tempfile
 import unittest
 from types import SimpleNamespace
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
@@ -426,12 +426,18 @@ class RecordedSourceContractTests(unittest.TestCase):
         runtime_path = Path(self.projection["runtime"]["receipt"]["path"])
         receipt = source.read(runtime_path)
         tools = self.data / "tools/official_client_capture"
-        layout = capture.CaptureLayout(host_data_root=self.data, capture_root=PurePosixPath(str(self.data)),
-                                       capture_container="capture-cli", host_tool_root=tools,
-                                       capture_tool_root=PurePosixPath(str(tools)),
-                                       runtime_image=receipt["runtime_image_reference"], synthetic_container="capture-cli-synthetic")
-        context = SimpleNamespace(mode=capture.MODE_FORMAL, attempt_root=runtime_path.parent, campaign_dir=self.data / "fixture",
-                                  attempt_id=runtime_path.parent.name, manifest={}, layout=layout)
+        campaign = self.data / "evidence/campaigns/fixture"
+        campaign.mkdir(parents=True)
+        manifest = {"configuration": {"capture_root": str(self.data), "capture_tool_root": str(tools),
+                    "capture_container": "capture-cli", "synthetic_capture_container": "capture-cli-synthetic",
+                    "runtime_image": receipt["runtime_image_reference"]}}
+        # 使用真实布局，宿主签发源码仍在仓库中，容器执行副本位于独立 staging 数据根。
+        with mock.patch.object(capture.claude_upgrade, "FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS", (str(self.data / "runs"),)), \
+                mock.patch.object(capture.claude_upgrade, "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT", str(self.data / "runs")):
+            layout = capture._capture_layout(campaign, manifest)
+        self.assertFalse(layout.host_tool_root.is_relative_to(self.data))
+        context = SimpleNamespace(mode=capture.MODE_FORMAL, attempt_root=runtime_path.parent, campaign_dir=campaign,
+                                  attempt_id=runtime_path.parent.name, manifest=manifest, layout=layout)
         values = {"host_runtime_receipt": str(runtime_path), "host_runtime_receipt_sha256": source.binding(runtime_path)["sha256"],
                   "run_nonce": receipt["run_nonce"]}
         current = {"path": runtime_path.name, "sha256": values["host_runtime_receipt_sha256"], "run_nonce": receipt["run_nonce"],
@@ -456,6 +462,11 @@ class RecordedSourceContractTests(unittest.TestCase):
         self.assertEqual(digest, source.binding(path)["sha256"])
         self.assertNotEqual(projected["origin"]["run_nonce"], actual_binding["run_nonce"])
         self.assertEqual(projected["runtime"]["receipt"], source.binding(runtime_path))
+        catalog = tools / "capturelib/claude_fw_f_v5.py"
+        self.assertEqual(projected["v5_catalog"], {"file": source.binding(catalog),
+                                               "argument": str(layout.capture_tool_root / "capturelib/claude_fw_f_v5.py")})
+        origin = source.verify_projection(self.state, projected)
+        self.assertEqual(source.control_manifest(self.state, projected, origin)["fixture_projection"]["v5_dimension_result"], "passed")
 
     def test_state_is_fixture_only_and_outside_staging_is_rejected(self) -> None:
         source.load_state(self.state_path, source.binding(self.state_path)["sha256"], isolation=False)

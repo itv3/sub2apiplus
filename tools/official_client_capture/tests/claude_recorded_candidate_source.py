@@ -194,8 +194,9 @@ class SourceAdapter(source.SourceAdapter):
                           "trigger": plan.candidate_trigger(probe), "relay_port": int(plan.CANDIDATE_RELAY_PORT),
                           "live": coordinates["upstream_ip"] is not None},
         }
-        catalog_path = context.layout.host_tool_root / "capturelib/claude_fw_f_v5.py"
-        projection["v5_catalog"] = {"file": source.binding(catalog_path), "argument": str(capture._container_path(catalog_path, context.layout))}
+        catalog_argument = context.layout.capture_tool_root / "capturelib/claude_fw_f_v5.py"
+        catalog_path = capture._host_path(catalog_argument, context.layout)
+        projection["v5_catalog"] = {"file": source.binding(catalog_path), "argument": str(catalog_argument)}
         verify_candidate_projection(self.state, projection)
         path = source.write(runtime_path.with_suffix(".candidate-projection.json"), projection)
         if operation in self.candidate_pending:

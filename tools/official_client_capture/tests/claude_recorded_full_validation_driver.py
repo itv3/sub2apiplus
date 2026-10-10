@@ -326,13 +326,15 @@ class RecordedHostObservation:
 
     def run(self, argv: Any, *, operation: str, timeout_seconds: float = 30, deadline: Any = None,
             heartbeat: Any = None, check: bool = True) -> subprocess.CompletedProcess:
+        from tools.official_client_capture import claude_upgrade_capture as capture
         from tools.official_client_capture import runtime_host_receipt as producer
 
         command = [str(item) for item in argv]
         if len(command) > 1 and command[1].endswith("/runtime_host_receipt.py"):
             arguments = producer._build_parser().parse_args(command[2:])
             output, tool_root = arguments.output, arguments.capture_tool_root
-            expected_tools = self.data / "tools/official_client_capture"
+            # 宿主签发器使用实际导入的仓库源码；容器执行副本由冻结 capture_tool_root 另行绑定。
+            expected_tools = Path(capture.__file__).resolve().parent
             if (tool_root != expected_tools or Path(command[1]) != expected_tools / "runtime_host_receipt.py"
                     or arguments.runtime_image != self.configuration["runtime_image"]
                     or arguments.container not in self.containers or output.resolve() != output

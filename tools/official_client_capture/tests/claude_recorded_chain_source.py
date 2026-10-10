@@ -662,8 +662,9 @@ class SourceAdapter:
                       "origin": {"receipt": binding(old_path), "run_nonce": old["run_nonce"],
                                  "source_id": source["row"]["source_id"], "attempt": source["row"]["attempt"],
                                  "platform": "linux/amd64", "binary_sha256": self.state["freeze"]["binary_sha256"]}}
-        catalog_path = context.layout.host_tool_root / "capturelib/claude_fw_f_v5.py"
-        projection["v5_catalog"] = {"file": binding(catalog_path), "argument": str(capture._container_path(catalog_path, context.layout))}
+        catalog_argument = context.layout.capture_tool_root / "capturelib/claude_fw_f_v5.py"
+        catalog_path = capture._host_path(catalog_argument, context.layout)
+        projection["v5_catalog"] = {"file": binding(catalog_path), "argument": str(catalog_argument)}
         verify_projection(self.state, projection)
         path = write(runtime_path.with_suffix(".projection.json"), projection)
         if operation in self.pending:
