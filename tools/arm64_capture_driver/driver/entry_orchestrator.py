@@ -29,8 +29,9 @@ upgrade-project-ledger``）、环境收据、预检 Campaign、Job 演练、启�
 步骤=目录`` 只供验收：执行这一步的命令时在私有挂载命名空间里用只读空 tmpfs 遮住这个目录，制造一次真实的失败；
 ``--approve-sha256``／``--approved-by``／``--reason`` 只交给 VC-0 收口这一步（批准对象由收口模块按现场判定）；
 ``--reexecute-gates``：入口门禁重新执行全集（方案 D12：升级开工的入口空跑、一致性验收、收尾合入前用），这一步不沿用
-记录、单元一个都不承接；不带时入口门禁用全集通过模式（承接有效的单元执行记录，E3-01）。``--audit-reads``（要和
-``--reexecute-gates`` 一起带）：入口门禁带读集审计（E3-04），每个单元的实际读取都要落在声明的输入范围里。
+记录、单元一个都不承接；承接模式由显式请求决定，没有请求时重新执行。``--audit-reads``：入口门禁检查实际读集；
+建立可逐单元承接的测试记录时，同时带 ``--audit-strict --audit-policy <登记策略>``，把完整审计和精确输入合同传到实际
+执行器。登记策略与审计选项进入入口门禁、pre-A3 的步骤输入；续跑保持这些选项，只执行失效或缺少有效记录的单元。
 运行锁 ``$RUNROOT/.entry.lock``；每步日志与运行汇总在 ``$RUNROOT/entry-runs/<UTC>/``。
 
 按客户端（Claude 升级 B5a-06）：执行顺序与续跑规则两客户端相同；各步骤调用的模块、合同、目录与追加给共享模块的
@@ -177,8 +178,27 @@ class Orchestrator:
                  approval: Mapping[str, str] | None = None, reexecute_gates: bool = False, audit_reads: bool = False,
                  full_set_request: Path | None = None, full_set_work: Path | None = None,
                  unit_inherit_request: Path | None = None, gate_parallel: int | None = None,
-                 unit_inherit_full_gates_request: Path | None = None) -> None:
+                 unit_inherit_full_gates_request: Path | None = None,
+                 audit_strict: bool = False, audit_policy: Path | None = None) -> None:
         self.params = dict(params)
+        if audit_strict and not audit_reads:
+            raise OrchestratorError("--audit-strict 必须同时启用 --audit-reads")
+        if audit_policy is not None:
+            if not audit_reads or not audit_strict:
+                raise OrchestratorError("--audit-policy 必须同时启用 --audit-reads --audit-strict")
+            if (not audit_policy.is_absolute() or ".." in audit_policy.parts
+                    or any(path.is_symlink() for path in (audit_policy, *audit_policy.parents)) or not audit_policy.is_file()):
+                raise OrchestratorError("--audit-policy 必须是无符号链接的现有普通文件，使用规范绝对路径")
+        self.audit_strict, self.audit_policy = audit_strict, audit_policy
+        # 只有本次显式选项能改变审计规格；策略路径和文件字节分别绑定，不能换内容却沿用旧步骤。
+        for key in (ES.AUDIT_READS_PARAM, ES.AUDIT_STRICT_PARAM, ES.AUDIT_POLICY_PARAM):
+            self.params.pop(key, None)
+        if audit_reads:
+            self.params[ES.AUDIT_READS_PARAM] = "true"
+        if audit_strict:
+            self.params[ES.AUDIT_STRICT_PARAM] = "true"
+        if audit_policy is not None:
+            self.params[ES.AUDIT_POLICY_PARAM] = str(audit_policy)
         if gate_parallel is not None and (type(gate_parallel) is not int or gate_parallel <= 0):
             raise OrchestratorError("--gate-parallel 必须是正整数")
         self.gate_parallel = gate_parallel
@@ -205,7 +225,7 @@ class Orchestrator:
         self.reexecute_gates = reexecute_gates
         self.full_set_request = full_set_request
         self.full_set_work = full_set_work
-        # 读集审计（E3-04）：只随重新执行全集一起带（真跑才有读集）。
+        # 承接的单元重验原轨迹；本次真正执行的单元继续产出相同严格合同的记录。
         self.audit_reads = audit_reads
         # 只交给 VC-0 收口这一步：approve_sha256／approved_by／reason。
         self.approval = {key: value for key, value in (approval or {}).items() if value}
@@ -339,6 +359,9 @@ class Orchestrator:
         认证从单元执行记录组装）。"""
 
         steps = [step for step, needed in (("entry-gates", gates_run), ("pre-a3", pre_a3_run)) if needed]
+        audit_args = (["--audit-reads"] if self.audit_reads else []) + (["--audit-strict"] if self.audit_strict else [])
+        if self.audit_policy is not None:
+            audit_args += ["--audit-policy", str(self.audit_policy)]
         for step in steps:
             ES.begin(self.ctx.step(step), self.ctx)
         try:
@@ -363,7 +386,7 @@ class Orchestrator:
                                           *(["--unit-inherit-request", str(inherit_request)] if inherit_request else []),
                                           *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                           *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
-                                          *(["--audit-reads"] if self.audit_reads else []), *source])
+                                          *audit_args, *source])
             summary = out / "entry-gates.json"
             try:
                 status = json.loads(summary.read_text(encoding="utf-8")).get("status")
@@ -386,7 +409,7 @@ class Orchestrator:
                                 *(["--unit-inherit-request", str(self.unit_inherit_request)] if self.unit_inherit_request else []),
                                 *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                 *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
-                                *(["--audit-reads"] if self.audit_reads else []), *source])
+                                *audit_args, *source])
         if pre_a3_run:
             if not certification.is_file():
                 self.outcomes["pre-a3"].reasons.append(
@@ -929,7 +952,9 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--unit-inherit-full-gates-request", type=Path,
                         help="独立批准的 full-gates 请求；与主请求从首轮一起固定提供，pre-A3 沿用时按实际门禁组合选用")
     parser.add_argument("--audit-reads", action="store_true",
-                        help="入口门禁带读集审计（E3-04，要和 --reexecute-gates 一起带）：实际读取超出声明的输入范围即判失败")
+                        help="入口门禁检查实际读集；与 --reexecute-gates 或 --unit-inherit-request 一起使用")
+    parser.add_argument("--audit-strict", action="store_true", help="同时启用 --audit-reads，完整观察宿主读取并核对精确输入")
+    parser.add_argument("--audit-policy", type=Path, help="测试与命令的精确输入登记策略；同时启用 --audit-reads --audit-strict")
     return parser.parse_args(argv)
 
 
@@ -949,6 +974,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.audit_reads and not args.reexecute_gates and args.unit_inherit_request is None:
         print("入口编排：读集审计要真跑才有读集，--audit-reads 要和 --reexecute-gates 一起带", file=sys.stderr)
         return 2
+    if args.audit_strict and not args.audit_reads:
+        print("入口编排：--audit-strict 必须同时启用 --audit-reads", file=sys.stderr)
+        return 2
+    if args.audit_policy is not None:
+        if not args.audit_reads or not args.audit_strict:
+            print("入口编排：--audit-policy 必须同时启用 --audit-reads --audit-strict", file=sys.stderr)
+            return 2
+        if (not args.audit_policy.is_absolute() or ".." in args.audit_policy.parts
+                or any(path.is_symlink() for path in (args.audit_policy, *args.audit_policy.parents)) or not args.audit_policy.is_file()):
+            print("入口编排：--audit-policy 必须是无符号链接的现有普通文件，使用规范绝对路径", file=sys.stderr)
+            return 2
     params = dict(os.environ)
     if not params.get("D") or not params.get("RUNROOT"):
         print("入口编排：参数里没有 D 或 RUNROOT（由 entry.sh 先 source 驱动 lib.sh 加载本轮参数文件）", file=sys.stderr)
@@ -977,7 +1013,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                                                        "approved_by": args.approved_by or "", "reason": args.reason or ""},
                                 reexecute_gates=args.reexecute_gates, audit_reads=args.audit_reads, full_set_request=args.full_set_request,
                                 full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel,
-                                unit_inherit_full_gates_request=args.unit_inherit_full_gates_request)
+                                unit_inherit_full_gates_request=args.unit_inherit_full_gates_request,
+                                audit_strict=args.audit_strict, audit_policy=args.audit_policy)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:

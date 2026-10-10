@@ -201,12 +201,16 @@ class OrchestratorTestCase(unittest.TestCase):
         full_set_request = kwargs.pop("full_set_request", None)
         full_set_work = kwargs.pop("full_set_work", None)
         gate_parallel = kwargs.pop("gate_parallel", None)
+        audit_reads = kwargs.pop("audit_reads", False)
+        audit_strict = kwargs.pop("audit_strict", False)
+        audit_policy = kwargs.pop("audit_policy", None)
         unit_inherit_request = kwargs.pop("unit_inherit_request", None)
         unit_inherit_full_gates_request = kwargs.pop("unit_inherit_full_gates_request", None)
         orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
                                        steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks,
                                        approval=approval, reexecute_gates=reexecute_gates, full_set_request=full_set_request,
                                        full_set_work=full_set_work, gate_parallel=gate_parallel,
+                                       audit_reads=audit_reads, audit_strict=audit_strict, audit_policy=audit_policy,
                                        unit_inherit_request=unit_inherit_request,
                                        unit_inherit_full_gates_request=unit_inherit_full_gates_request)
         return orchestrator.orchestrate(**kwargs)
@@ -418,6 +422,40 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual(self.commands.gates_modes, ["unit-inherit"] * 3)
         self.assertEqual([path.read_bytes() for path in (primary, companion)], original, "不改写任何请求或批准")
 
+    def test_strict_audit_reaches_entry_and_pre_a3_only_calls(self) -> None:
+        """主入口必须运输严格审计和登记合同，两种门禁调用分支都不能丢参数。"""
+        policy = self.fx.root / "audit-policy.json"
+        _write_json(policy, {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}})
+        orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "audit-run",
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner,
+                                       reexecute_gates=True, audit_reads=True, audit_strict=True, audit_policy=policy)
+        result = orchestrator.orchestrate(to_step="atomic-double")
+        self.assertEqual(result["exit_code"], 0, self.actions(result))
+        orchestrator.outcomes["pre-a3"] = eo.Outcome("pre-a3", "run")
+        orchestrator.entry_gates_and_pre_a3(False, True)
+        gates = [call for call in self.commands.calls if call[0] == "bash" and call[1].endswith("entry-gates.sh")]
+        self.assertEqual([_option(call, "--profile") for call in gates], ["entry", "pre-a3"])
+        self.assertTrue(all("--audit-reads" in call and "--audit-strict" in call for call in gates))
+        self.assertEqual([_option(call, "--audit-policy") for call in gates], [str(policy)] * 2)
+
+    def test_strict_policy_bytes_are_bound_and_the_ledger_is_preserved(self) -> None:
+        """同一策略路径换字节须重验，未变时沿用 pre-A3，不能重建已完成账本。"""
+        policy, request = self.fx.root / "audit-policy.json", self.fx.root / "inherit.json"
+        _write_json(policy, {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}})
+        _write_json(request, {"revision": 1})
+        (self.fx.driver / "unit_inherit.py").write_text("# 逐单元承接合同替身\n", encoding="utf-8")
+        options = {"unit_inherit_request": request, "audit_reads": True, "audit_strict": True, "audit_policy": policy}
+        first = self.orchestrate(to_step="p0-receipt", **options)
+        unchanged = self.orchestrate(to_step="p0-receipt", **options)
+        self.assertEqual([run["exit_code"] for run in (first, unchanged)], [0, 0])
+        self.assertEqual(self.actions(unchanged)["pre-a3"], "沿用")
+        policy.write_text(policy.read_text() + "\n", encoding="utf-8")
+        changed = self.orchestrate(to_step="p0-receipt", **options)
+        self.assertEqual(changed["exit_code"], 0, self.actions(changed))
+        self.assertEqual(self.actions(changed)["pre-a3"], "执行／passed")
+        self.assertEqual(self.actions(changed)["ledger"], "沿用")
+        self.assertEqual(self.commands.count("create"), 1)
+
     def test_changing_either_fixed_request_invalidates_pre_a3(self) -> None:
         primary, companion = self.fx.root / "entry-request.json", self.fx.root / "full-gates-request.json"
         for path in (primary, companion):
@@ -570,6 +608,17 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
 
 
 class OrchestratorPieceTests(unittest.TestCase):
+    def test_strict_audit_options_fail_before_starting_an_invalid_entry(self) -> None:
+        cases = [["--audit-strict"], ["--audit-policy", "/missing-policy.json"],
+                 ["--reexecute-gates", "--audit-reads", "--audit-strict", "--audit-policy", "relative.json"],
+                 ["--reexecute-gates", "--audit-reads", "--audit-strict", "--audit-policy", "/missing-policy.json"]]
+        for argv in cases:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(eo.main(argv), 2)
+        inherited = {eo.ES.AUDIT_READS_PARAM: "true", eo.ES.AUDIT_STRICT_PARAM: "true", eo.ES.AUDIT_POLICY_PARAM: "/old.json"}
+        orchestrator = eo.Orchestrator(inherited, driver_dir=DRIVER, run_dir=DRIVER, steps_dir=DRIVER)
+        self.assertTrue(all(key not in orchestrator.params for key in inherited), "环境变量不能隐式切换本次审计规格")
+
     def test_gate_parallel_requires_a_positive_integer(self) -> None:
         self.assertIsNone(eo._parse([]).gate_parallel)
         self.assertEqual(eo._parse(["--gate-parallel", "2"]).gate_parallel, 2)

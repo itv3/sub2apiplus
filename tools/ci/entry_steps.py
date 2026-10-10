@@ -442,6 +442,9 @@ STEP_BY_ID: dict[str, Step] = STEP_BY_ID_BY_CLIENT["codex"]
 UNIT_INHERIT_PARAM = "UNIT_INHERIT_REQUEST"
 UNIT_INHERIT_FULL_GATES_PARAM = "UNIT_INHERIT_FULL_GATES_REQUEST"
 GATE_PARALLEL_PARAM = "ENTRY_GATES_PARALLEL"
+AUDIT_READS_PARAM = "ENTRY_GATES_AUDIT_READS"
+AUDIT_STRICT_PARAM = "ENTRY_GATES_AUDIT_STRICT"
+AUDIT_POLICY_PARAM = "ENTRY_GATES_AUDIT_POLICY"
 UNIT_INHERIT_STEPS = ("entry-gates", "pre-a3")
 UNIT_INHERIT_INPUTS = (Input("upstream", "file", "{" + UNIT_INHERIT_PARAM + "}"), *_drivers("unit_inherit.py"))
 
@@ -643,10 +646,13 @@ class Context:
             companion = Input("upstream", "file", "{" + UNIT_INHERIT_FULL_GATES_PARAM + "}")
             steps = tuple(replace(step, inputs=step.inputs + (companion,))
                           if step.step_id in UNIT_INHERIT_STEPS else step for step in steps)
-        if GATE_PARALLEL_PARAM not in self.params:
-            return steps
-        # 显式并发数是这两步实际执行的参数，续跑必须比较它；其它步骤及缺省规格不增加输入。
-        return tuple(replace(step, inputs=step.inputs + _params(GATE_PARALLEL_PARAM))
+        extra = _params(*(key for key in (GATE_PARALLEL_PARAM, AUDIT_READS_PARAM, AUDIT_STRICT_PARAM, AUDIT_POLICY_PARAM)
+                          if key in self.params))
+        if self.params.get(AUDIT_POLICY_PARAM):
+            # 同一路径的策略内容变化也必须失效；登记范围由真实测试发现与执行器再核对。
+            extra += (Input("upstream", "file", "{" + AUDIT_POLICY_PARAM + "}"),)
+        # 仅这两步登记显式调度与审计参数，缺省规格及其它步骤保持原样。
+        return tuple(replace(step, inputs=step.inputs + extra)
                      if step.step_id in ("entry-gates", "pre-a3") else step for step in steps)
 
     def step(self, step_id: str) -> Step:
