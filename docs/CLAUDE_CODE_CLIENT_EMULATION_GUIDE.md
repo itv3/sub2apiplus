@@ -1019,8 +1019,8 @@ Claude 的生产 Active 身份必须同时满足
 |---|---|
 | VC-0～VC-4 | 受管入口、官方取证／恢复、分类批准、画像暂存和候选 revision／构建已接入；正式开工仍需 §4.0.5 的发布认证 |
 | VC-5 | 候选采集与封存、compare／accept、评估基线和四类裁定的控制面已有实现；Mac v2 合同 B、受监督 client-run、来源与预约 wrapper 及 compare／accept 读侧接线已合入。原 attempt 持久请求上界占用、候选服务与消费读侧已接通；独立 H1／TLS-H1 及受限 H2 原生捕获、认证导出同步、私有状态 journal 和只读能力检查已完成本机实现。H2 首片持久化、同原件恢复、ALPN 与断点同步专项已通过，全部仍为回归夹具；正式捕获合同、中性字节核心、产品原生来源、固定工厂与跨机桥已有工具实现；固定物料、签名安装、原生权限和实时派发仍须现场验真。缺安装或资格时 live 在占用、监听和启动前拒绝；三官方客户端真账号现场未验收 |
-| Mac fixture 内部记录器 | `NativeProductRecorder` 的九方法协议与真实 `StateJournal` 已完成本机接线，相关专项在 `059d87e52` 上 165 项通过、零跳过。仅接受显式回归夹具，产物是内部 partial／恢复诊断；formal 与成功收据仍拒绝，真实产品后端与现场权限未就绪。合同与来源边界见共享实现文档 §12.1 |
-| 封存后临时环境故障 | B4-05b 的 `ar<k>`、对账、增量封存、封存后请求入账及五项恢复后继修复已合入本机集成树，组合定向检查通过；第二次 transient 已实际复验，最终验收收口尚未登记通过；正式八链未认证。不能把封存前 resume 或组合专项当作该整链的通过凭证 |
+| Mac fixture 与正式产品路径 | 旧 `NativeProductRecorder` 仍只接受显式回归夹具，产物是 `internal-v1` partial／恢复诊断，formal 与成功收据仍拒绝。正式 `ProductEvidenceRecorder` 由固定受管工厂建立，使用实际 Darwin provider，逐项核验来源、物料、隔离与观测原件；本机实现不授予签名安装、原生权限或三官方客户端真账号现场验收。两条路径的合同与来源边界见共享实现文档 §12.1 |
+| 封存后临时环境故障 | B4-05b 的 `ar<k>`、对账、增量封存、封存后请求入账及五项恢复后继修复已合入本机集成树，组合定向检查通过；第二次 transient 已实际复验，最终验收收口尚未登记通过；正式九链未认证。不能把封存前 resume 或组合专项当作该整链的通过凭证 |
 | VC-6 候选交付 | 真实交付合同 A、独立执行器与 guard／恢复证明、严格 Store 消费、阶段结果及 checkpoint 已完成本机接线；固定受管工厂与来源解析已有实现，ARM64 实际安装、可信回退、专用凭据、四阶段及异常恢复尚待现场验收。当前不能宣称已完成真实切换、回退或稳定观察 |
 | 完整链与认证 | B5b-02 来源快照与 VC-0→VC-1 连续驱动源码已接入，仅限 `fixture_only／regression_fixture`；连续链、完整链与故障链仍须按实际串行执行结果验收，B5b-04 当前发布认证未签发 |
 | 生产激活 | B4-08 另批；候选交付与生产激活的权限、收据及终态分开，见 §4.6 |
@@ -1312,7 +1312,7 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
 
 认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify，四个入口都带
 `--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude schema v3 引擎计算；当前
-`policy_version=14` 已实现，最终策略演进、部署与认证仍待完成，不能把引擎／策略版本混作认证状态。pre-A3 签
+`policy_version=15` 已实现；兼容、激活、演进登记与部署分别核对当前原件，发布认证状态以下文结论为准，不能把引擎／策略版本混作认证状态。pre-A3 签
 `pre-a3-path-certification/v3`，缺省坐标为 `control/policy-certification/claude-pre-a3-path-certification-<stamp>.json`；
 发布认证签 `tool-release-certification/v2`，绑定 Claude 部署收据的五摘要、pre-A3 认证、完整 Job 演练
 （当前 `official-client-job-rehearsal-receipt/v2`，双受管根及失败生命周期探针；v1仅按形成期只读重放）与 atomic-double 收据，只能在具备 Go 与 Docker
@@ -1357,13 +1357,10 @@ Claude 发布认证：**待认证**。上述入口、源码与离线合同不等
 录制链中的发布循环前置与静态控制投影是明确标记的测试夹具，不能反向证明九链已通过；局部 VC-0→VC-1
 通过也不能证明 VC-0～VC-6 全链通过。Mac 真账号采集与 ARM64 真实交付执行器的现场验收仍须分别完成。
 本次文档同步只登记结构与实际入口，不补签认证或把旧 pre-A3 收据视为当前发布证明。
-本机集成树已合入真实交付合同 A（`551a01c17`，89 项本机测试通过）与 Mac v2 合同 B
-（`8b6e15ab8`，74 项基础测试及 31 项入口故障测试通过）。共享 D4／r2 与五项恢复后继修复也已合入，
-Mac、身份与恢复组合专项在 `58dcc47ab` 上共 165 项通过，第二次 transient 已实际复验，最终验收收口尚未登记通过；这些本机
-局部凭证不证明九条必需链通过。B 的来源与预约 wrapper 已真实调用并进入 compare／accept 读侧根，
-末轮接线已提交 `58dcc47ab`，双客户端身份与读侧摘要已实算，最终演进登记及变异复验仍待收口。
-新模块与最终修复纳入工具身份后，仍须完成策略演进与受监督部署，并以 ARM64 当前部署的九链、
-pre-A3、发布认证 issue／verify 及 VC-0 收口凭证复核；当前不得声明最终发布或现场认证完成。
+当前工具实现已接入真实交付合同 A、Mac v2 合同 B、固定产品工厂与跨机来源桥，以及 D4／r2 和恢复后继读侧。
+当前有效工具身份由双受管根、策略与实际读侧闭包计算；兼容、激活、演进登记和受监督部署分别以当前原件判定。
+局部专项、旧提交凭证及旧 pre-A3 不替代当前九链、发布认证 issue／verify 或 VC-0 收口证明；
+本节认证结论仍为待认证，Mac 真账号与候选现场结果另行记录。
 
 <a id="claude-vc-1"></a>
 ## 4.1 VC-1 收集目标证据
@@ -2075,17 +2072,12 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-all.sh"
 `capture-candidate`、`compare`、`assert-rules`、`accept` 是父批次中的动作，操作员通过驱动或
 `compile-and-run-vc-batch` 派发。Store 低级写入命令由编排器调用，不作为人工拼接事实的操作步骤。
 
-**当前本机与现场状态**：Mac v2 合同 B 已合入本机集成树（`8b6e15ab8`），74 项基础测试与 31 项
-入口故障测试通过。`client-run` 主 CLI／批次、Candidate 准入适配、预约发现和 provenance 已接入；
-来源与预约 wrapper 已真实调用并显式纳入 compare／accept 读侧根，末轮接线已提交 `58dcc47ab`，
-双客户端摘要已实算，最终受控演进、部署与统一门禁仍待收口。原 attempt 的持久请求预算服务与消费
-已接通；H1／TLS-H1 和受限 H2 原生捕获／恢复／认证同步已通过本机专项，来源只属回归夹具。
-固定产品工厂、ES／NE／模块原件消费、隔离配方、私有状态恢复、正式捕获合同与认证跨机桥已完成工具实现；
-跨组件合同及工具身份仍按本轮固定提交复验。Mac 的固定物料库存、可信安装／签名和原生权限须通过当前
-预检后才允许 live；缺任一项均在预算占用、监听或产品启动前拒绝。三官方客户端真账号采集尚未现场验收；缺少 Desktop／VS Code 当前 v2 收据或 seal 批准时，驱动写
-`vc5-pause.json` 并暂停。D4／r2 与五项恢复后继修复已合入，Mac、身份与恢复组合专项共 165 项通过，第二次 transient 已实际
-复验，最终验收收口尚未登记通过。完整录制回放、A/B 最终组合及发布认证仍未完成，见 §4.0.5；本机通过不能替代产品与
-账号、双端部署或 ARM64 独立来源验收。
+**当前工具与现场状态**：Mac v2 合同 B、`client-run`、Candidate 准入、原 attempt 的持久请求预算服务、
+预约发现及 compare／accept 读侧已接入。正式捕获合同、固定产品工厂、ES／NE／模块原件消费、隔离配方、
+私有状态恢复与跨机认证桥已有工具实现；旧 fixture 捕获和薄记录器仍只授回归权限。
+固定物料、可信安装／签名、原生权限、两端部署与原派发须逐项验真，缺任一项时 live 在占用、监听或产品启动前拒绝。
+工具链与发布认证以 §4.0.5 的当前原件为准；本机专项不能替代三官方客户端真账号、真实候选服务与现场来源验收。
+缺 Desktop／VS Code 当前 v2 收据或 seal 批准时，驱动写 `vc5-pause.json` 并暂停。
 
 ### 4.5.1 执行闭集、运行前检查与 attempt 冻结
 
@@ -2143,16 +2135,17 @@ for VS Code 按批准计划驱动候选。Claude 按 ModelCapabilityCatalog 枚�
 离线入口 `capture-candidate client-evidence prepare／verify／import` 继续负责冻结任务、核验来源与导入，
 自身不启动产品。受监督 `client-run` 已接入主 CLI 与批次，Candidate services 的现有门禁适配、来源
 和预约消费也已接入；原 attempt 的持久请求预算服务与消费已接通，独立 H1／TLS-H1 及受限 H2
-原生捕获已实现预约、ready、关闭与认证同步的本机回归链。真实产品 Recorder 工厂、完整连续事件／模块、
-transport-map、正式隔离模板与联合来源仍未闭合；受限原生捕获不冒充完整产品 v2 来源。能力未闭合时在产品启动前拒绝，不创建第二本账或另起
-不受监督的捕获。正式 `SOURCE_ADAPTERS` 仍为空，测试作用域的替身登记不授予正式权限；
-`regression_fixture` 只归档回归材料，实际产品、账号与双端来源仍须现场验收。
+原生捕获已实现预约、ready、关闭与认证同步的本机回归链。正式捕获合同另由固定产品工厂建立
+`ProductEvidenceRecorder`，实际 Darwin provider 消费完整事件、模块与 transport-map 原件，按固定物料和隔离配方逐项重验。
+`SOURCE_ADAPTERS` 初始为空；`claude_mac_product_source` 只有通过资格校验后才受控登记本次工厂实例，关闭后移除该作用域登记，
+替身登记、字段相同或外部自称 provider 都不能取得正式权限。缺材料或资格仍在产品启动前拒绝，不创建第二本账。
+`regression_fixture` 只归档回归材料；工具实现与受管发布认证不替代实际产品、账号和两端来源的现场验收。
 
 `NativeProductRecorder` 的九方法协议、真实 `StateJournal`、内部 partial 与恢复诊断已完成
 本机 fixture 接线，合同边界见[共享实现 §12.1](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md#121-候选采集来源复用与封存)。
 它尚无真实产品观测后端，formal 在产品启动前拒绝；即使上游请求 `complete` 仍抛
 `ProductRecorderUnavailable`，不生成完整 v2 联合来源或成功收据。本机 165 项专项通过不能
-代替正式来源工厂、连续观测、transport-map 与三官方客户端现场验收。
+代替正式 `ProductEvidenceRecorder` 工厂的现场资格、连续观测原件、transport-map 与三官方客户端现场验收。
 
 | v2 材料 | 必须分别冻结和重验的事实 |
 |---|---|
@@ -2575,7 +2568,7 @@ attempt 不足以选前者。下表的“已接入”指本机代码入口；完
 | VC-4 构建／上传中断 | 父 run 对账 | 原身份且幂等证明成立时续作 | `vc4-all.sh`；上传用 `--resume-from upload-wait` | 已接入 |
 | VC-5 未封存采集失败 | 预约对账 | 批准、授权、`vc5-claude-recover.sh` | 保留可信 Job，只补执行闭集 | `fix-and-continue.sh` 已接入 |
 | 网关残留／取证进程残留 | 预约对账与 `environment-cleanup preview` | 批准清理、干净环境复核，必要时隔离 | 原恢复轮，再批准补跑 | 清理工具已接入，需独立批准 |
-| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | CLI／批次、门禁、预算与受限原生采集消费已接；fixture 薄记录器只产内部诊断，正式产品／来源仍缺，live 保持零启动拒绝 |
+| 客户端收据缺失或 seal 待批准 | `vc5-pause.json`／seal 预览 | 取得真实收据或批准摘要 | `vc5-claude-seal.sh` → `vc5-all.sh` | CLI／批次、门禁、预算与来源消费已接；旧 fixture 薄记录器只产内部诊断；固定正式工厂逐项验真，缺安装、来源或原生资格时 live 零启动拒绝；真账号现场另验 |
 | 边界核对／seal／compare 批次失败 | 父 run 对账 | 按失败码修复与登记演进 | 同一候选的未完成动作 | seal／compare 已接；不合法既有边界收据先人工审计 |
 | 已封存 evaluator 缺陷 | `evaluation-recover preview` | 修复、部署、演进、批准 `evaluator-defect` | 新 `b<K>`，只重评影响项 | 离线恢复已接入 |
 | 已封存临时环境故障 | 评估诊断沿 `source_artifacts` 定位 J* | `transient-environment`，补采后增量封存 | `ar<k>` → 新基线 compare／accept | 恢复段及后继修复已合入；组合专项与第二次 transient 整链待验收 |
@@ -2626,17 +2619,26 @@ Claude 项目总账默认目录为 `<数据根>/upgrade-project-ledger-claude`�
 同目标根因跨 Campaign／revision／基线累计，稳定维度不包含本轮 Campaign ID；码表迁移继承旧计数。
 修复凭证闭合后按前表放行，不能通过换 revision 清零。
 
-Claude 策略 **schema 仍是 v3，`policy_version=14` 已实现，文件名仍为**
+Claude 策略 **schema 仍是 v3，`policy_version=15` 已实现，文件名仍为**
 [`claude_tool_identity_policy_v2.json`](../tools/official_client_capture/claude_tool_identity_policy_v2.json)，
 由 `claude_tool_identity_policy.py` 计算双受管根 `tools/official_client_capture`、`tools/official_client_control`
 及运行时绑定、符号闭包和五摘要。`tool-evolution preview／apply` 登记 wire／evidence／control 变化，policy
 变化另绑定兼容、激活与受监督部署凭证；Claude 不使用 Codex 的 wire-transition 命令。来源 wrapper
 `verify_mac_source_v2` 与预约 wrapper `verify_mac_reservation_v2` 已由读侧真实调用，并显式进入
-compare／accept 根；末轮接线已提交 `58dcc47ab`，两端身份摘要已实算，最终受控登记与变异复验仍待收口。最终兼容、激活、演进登记、
-部署与发布认证仍待完成；schema v3 与文件名保持既有合同，不能把 policy 版本或本机局部通过写成
-当前部署已认证。v11 新增 Darwin 原生 fork／exec／exit 投影、离线重放与私有构建合同，
+compare／accept 根。双客户端有效身份、兼容、激活、演进登记与部署逐项核对当前原件，发布认证结论见 §4.0.5；
+schema v3 与文件名保持既有合同，不能把 policy 版本或本机局部通过写成当前部署已认证。v11 新增 Darwin 原生 fork／exec／exit 投影、离线重放与私有构建合同，
 `.m` 只进入 Claude 身份；旧v1启动仍拒绝，编译或离线结构通过不授予完整事件、执行映像、
-正式来源或产品启动能力。v13新增独立内部owned-v2计划、控制、原生有界管线与只读封存重放；三条pipe按实际自进程handle／peerhandle核实例隔离。本轮只做私有编译和离线验收，没有执行collector／probe或创建ES；五能力旗标恒false，签名／部署authority、完整窗口、实际产品与transport-map仍待。v12 显式登记门禁第二根、Profile 观测副本与冻结来源父、守卫注册及连续性纯合同；当前 Job 消费双受管根 v2，当前守卫通道使用带不可变注册头的连续性 v2。完整交付链、最终冻结、双门禁与现场认证仍待完成。v14 增加真实产品物料冻结与只读计划的 wire 归层、固定守卫安装及来源解析的 control 接线；本机实现不授现场认证。共同边界见
+正式来源或产品启动能力。v13新增独立内部owned-v2计划、控制、原生有界管线与只读封存重放；三条pipe按实际自进程handle／peerhandle核实例隔离。本轮只做私有编译和离线验收，没有执行collector／probe或创建ES；五能力旗标恒false，签名／部署authority、完整窗口、实际产品与transport-map仍待。v12 显式登记门禁第二根、Profile 观测副本与冻结来源父、守卫注册及连续性纯合同；当前 Job 消费双受管根 v2，当前守卫通道使用带不可变注册头的连续性 v2。完整链、门禁及现场结果按本轮原件复核。v14 增加真实产品物料冻结与只读计划的 wire 归层、固定守卫安装及来源解析的 control 接线；本机实现不授现场认证。
+
+当前 v15 将中性捕获字节、H2 与依赖核心以及实际 Darwin provider 显式归 `wire_producer`；
+运行库核验、正式捕获原件合同、`ProductEvidenceRecorder`、产品日志／模块／ES／NE 原件及收口语义归
+`evidence_semantics`；旧夹具用途策略、固定正式捕获服务、受管来源、跨机认证桥、限定产品工厂与 root broker 归
+`control`。旧 `regression_fixture` 用途不变，实际 formal 来源仍须核固定安装、两端部署、原 task 和签名资格；
+路径映射只消费原认证合同，离线重放不重新启动产品。
+本轮 v15 源码已有[精确冻结承接](egress/maintenance/claude-tool-engineering-final-20261010-successor.json)和
+受监督部署原件 `claude-managed-deploy-20261010t043317z.json`；该部署绑定 `4cc10d585` 源码，须按当前
+bindings 重核客户端、策略和五摘要，不能把已有部署原件视作最终文档已部署。发布认证仍为 §4.0.5 的待认证状态，
+代码、私有编译及无账号回归不能代替 OAuth、原生权限、签名资格或真实请求验收。共同边界见
 [Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。官方／候选分别按
 未封存与已封存重验：未封存只作废批准影响闭集；已封存且仍有受影响 Job 时拒绝借演进重采，分别按
 §4.1.1 的后继边界与 §4.5.8 的候选评估恢复办理。

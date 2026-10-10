@@ -733,6 +733,11 @@ Claude 候选链在 `claude_upgrade_candidate_capture`、`claude_upgrade_recover
   `ProductRecorderUnavailable`，不生成 source-manifest、正式 origin 或成功收据。薄记录器、状态 journal、
   预算消费、配方及双客户端身份专项在 `059d87e52` 上 165 项通过、零跳过；这份本机夹具凭证不授予
   正式 `SOURCE_ADAPTERS` 登记、当前完整 v2 成功或现场采集权限。
+- 正式产品路径另由 `claude_mac_product_completion.ProductEvidenceRecorder` 与固定受管工厂建立。工厂核对
+  原静态来源、实际 `DarwinProductObservationProvider`、固定物料与隔离配方；正式阶段持续复核所有权，消费
+  ES／NE／模块与 transport-map 原件、联合来源和状态恢复证据。旧 `NativeProductRecorder` 的 fixture 拒绝
+  不取消，也不能靠子类名称或用途旗标绕过。`SOURCE_ADAPTERS` 初始为空，`claude_mac_product_source` 仅在
+  当前资格通过后受控登记本次工厂实例，关闭后移除；这份工具实现不等于签名安装、原生权限或真账号现场已通过。
 
 ### 12.2 评估基线、compare 与 accept
 
