@@ -435,6 +435,7 @@ STEP_BY_ID: dict[str, Step] = STEP_BY_ID_BY_CLIENT["codex"]
 
 # B5a-08：逐单元承接时的步骤表（见模块说明）。
 UNIT_INHERIT_PARAM = "UNIT_INHERIT_REQUEST"
+GATE_PARALLEL_PARAM = "ENTRY_GATES_PARALLEL"
 UNIT_INHERIT_STEPS = ("entry-gates", "pre-a3")
 UNIT_INHERIT_INPUTS = (Input("upstream", "file", "{" + UNIT_INHERIT_PARAM + "}"), *_drivers("unit_inherit.py"))
 
@@ -630,10 +631,15 @@ class Context:
     def steps(self) -> tuple[Step, ...]:
         """本轮客户端的步骤表（步骤与依赖两客户端相同，输入声明按客户端；逐单元承接时入口门禁与 pre-A3 另有两项输入）。"""
 
-        return (STEPS_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEPS_BY_CLIENT)[self.client]
+        steps = (STEPS_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEPS_BY_CLIENT)[self.client]
+        if GATE_PARALLEL_PARAM not in self.params:
+            return steps
+        # 显式并发数是这两步实际执行的参数，续跑必须比较它；其它步骤及缺省规格不增加输入。
+        return tuple(replace(step, inputs=step.inputs + _params(GATE_PARALLEL_PARAM))
+                     if step.step_id in ("entry-gates", "pre-a3") else step for step in steps)
 
     def step(self, step_id: str) -> Step:
-        steps = (STEP_BY_ID_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEP_BY_ID_BY_CLIENT)[self.client]
+        steps = {step.step_id: step for step in self.steps}
         if step_id not in steps:
             raise EntryStepsError(f"步骤不认识：{step_id}（可选：{', '.join(steps)}）")
         return steps[step_id]

@@ -469,6 +469,9 @@ def stop_registered(data_root: Path, reason: str, *, keep: Path) -> list[str]:
 
 def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     client = getattr(args, "client", None) or "codex"
+    parallel = getattr(args, "parallel", None)
+    if parallel is not None and (type(parallel) is not int or parallel <= 0):
+        raise ValidationError("--parallel 必须是正整数")
     deployment = latest_deployment(args.data_root, client)
     if deployments is not None and deployments.get(client) != deployment:
         raise ValidationError(f"部署收据集合里没有 {client} 当前的部署收据")
@@ -487,6 +490,9 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
               "work": str(work), "entry_gates_sha256": _sha256_file(args.entry_gates),
               "record_store": str(args.record_store) if args.record_store else None,
               "vc_env_sha256": _sha256_file(args.vc_env) if args.vc_env else None, "then_dryrun": bool(args.then_dryrun)}
+    # 只有显式指定才登记；缺省仍由既有执行器配置决定，不改变旧输入合同的字段形状。
+    if parallel is not None:
+        inputs["parallel"] = parallel
     full_set_paths = {key: str(getattr(args, key)) if getattr(args, key, None) else None
                       for key in ("full_set_context", "full_set_clock", "full_set_predecessor", "audit_policy")}
     if bool(full_set_paths["full_set_context"]) != bool(full_set_paths["full_set_clock"]):
@@ -545,6 +551,7 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         "vc_env": str(args.vc_env) if args.vc_env else None, "entry_gates": str(args.entry_gates),
         "data_root": str(args.data_root), "runroot": str(args.runroot), "then_dryrun": bool(args.then_dryrun),
         "failed_gates": [], "reason": None, "returncode": None, "dryrun": None,
+        **({"parallel": parallel} if parallel is not None else {}),
         **full_set_paths,
         # B5a-01：只有非 Codex 的结论记录客户端，Codex 结论的字段逐字不变（读取时缺省按 codex）。
         **({"client": client} if client != "codex" else {}),
@@ -595,6 +602,8 @@ def run(result: Path) -> int:
     for flag, key in (("--record-store", "record_store"), ("--work", "work")):
         if payload.get(key):
             argv += [flag, payload[key]]
+    if "parallel" in payload:
+        argv += ["--parallel", str(payload["parallel"])]
     if payload.get("audit_policy"):
         argv += ["--audit-reads", "--audit-strict", "--audit-policy", payload["audit_policy"]]
     argv += [payload["bundle"], payload["branch"], payload["commit"]]
@@ -608,6 +617,13 @@ def run(result: Path) -> int:
     work = Path(payload["work"])
     expected_caches = {"GOCACHE": str(work / "go-build-cache"), "GOMODCACHE": str(work / "go-mod-cache"), "GOTMPDIR": str(work / "go-tmp")}
     try:
+        # 运行期再核对已登记的资源值；修改结果或输入合同不能悄悄改变门禁的调度策略。
+        parallel = payload.get("parallel")
+        contract = payload.get("input_contract", {})
+        if "parallel" in payload or "parallel" in contract:
+            if (type(parallel) is not int or parallel <= 0 or type(contract.get("parallel")) is not int
+                    or contract["parallel"] != parallel):
+                raise ValidationError("后台并发参数缺失或发生漂移")
         isolated_root = Path(payload["runroot"]) / DIRECTORY / "work"
         bound_root = isolated_root / f"{payload['commit']}-{binding_key(payload['deployment'], payload.get('deployments'))}"
         if (payload.get("cache_roots") != expected_caches or payload.get("input_contract", {}).get("work") != str(work)
@@ -760,6 +776,12 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
     return (3, message) if require_passed else (0, "提示：" + message)
 
 
+def _positive_parallel(value: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise argparse.ArgumentTypeError("--parallel 必须是正整数")
+    return int(value)
+
+
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -772,6 +794,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--profile", default=DEFAULT_PROFILE)
     p_start.add_argument("--record-store", type=Path, default=None)
     p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")
+    p_start.add_argument("--parallel", type=_positive_parallel, default=None, help="门禁单元并发数；缺省沿用执行器配置")
     p_start.add_argument("--vc-env", type=Path, default=None, help="驱动参数文件（ARM64_VC_ENV），后台运行的入口门禁要用")
     p_start.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
     p_start.add_argument("--then-dryrun", action="store_true", help="通过之后接着空跑入口到 pre-A3（E4-02）")

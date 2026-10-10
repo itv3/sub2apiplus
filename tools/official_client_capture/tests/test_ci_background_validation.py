@@ -21,6 +21,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.ci import background_validation as bv
 
@@ -37,6 +38,7 @@ OUT=""; ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
+    --parallel) echo "parallel:$2" >> "$FAKE_GATES_CALLS"; shift 2 ;;
     --profile|--mode|--record-store|--work|--wait-lock) shift 2 ;;
     --require-deployed) echo "require-deployed" >> "$FAKE_GATES_CALLS"; shift ;;
     *) ARGS+=("$1"); shift ;;
@@ -86,9 +88,10 @@ class BackgroundValidationTests(unittest.TestCase):
         return subprocess.run([sys.executable, "-B", str(MODULE), *argv], capture_output=True, text=True, timeout=120,
                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **self.environ, **(env or {})})
 
-    def start(self, commit: str, **env: str) -> dict:
+    def start(self, commit: str, *, parallel: int | None = None, **env: str) -> dict:
         completed = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
-                             "--branch", "codex/test", "--commit", commit, "--entry-gates", str(self.gates), env=env)
+                             "--branch", "codex/test", "--commit", commit, "--entry-gates", str(self.gates),
+                             *(["--parallel", str(parallel)] if parallel is not None else []), env=env)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout.strip().splitlines()[-1])
 
@@ -110,6 +113,8 @@ class BackgroundValidationTests(unittest.TestCase):
         self.assertEqual(started["action"], "started")
         payload = self.wait(started["result"])
         self.assertEqual(payload["status"], "passed", payload)
+        self.assertNotIn("parallel", payload)
+        self.assertNotIn("parallel", payload["input_contract"], "缺省保持旧合同字段形状")
         self.assertEqual((payload["commit"], payload["deployment"]["receipt"], payload["profile"]),
                          (COMMIT_A, self.receipt.name, "full-gates"))
         self.assertEqual(Path(started["result"]).name, f"{COMMIT_A[:12]}-{bv._sha256_file(self.receipt)[:12]}.json")
@@ -119,6 +124,42 @@ class BackgroundValidationTests(unittest.TestCase):
         again = self.start(COMMIT_A)
         self.assertEqual((again["action"], again["status"]), ("exists", "passed"), "同一提交＋同一部署不重复起")
         self.assertEqual(self.calls.read_text(encoding="utf-8").split().count(COMMIT_A), 1)
+
+    def test_explicit_parallel_reaches_the_gate_and_binds_reuse(self) -> None:
+        started = self.start(COMMIT_A, parallel=2)
+        payload = self.wait(started["result"])
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual((payload["parallel"], payload["input_contract"]["parallel"]), (2, 2))
+        self.assertEqual(self.calls.read_text().split(), ["require-deployed", "parallel:2", COMMIT_A])
+        self.assertEqual(self.start(COMMIT_A, parallel=2)["action"], "exists")
+        for changed in ([], ["--parallel", "3"]):
+            with self.subTest(changed=changed):
+                result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+                                  "--bundle", str(self.root / "x.bundle"), "--branch", "codex/test", "--commit", COMMIT_A,
+                                  "--entry-gates", str(self.gates), *changed)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("合同不同", result.stderr)
+        self.assertEqual(self.calls.read_text().split().count(COMMIT_A), 1, "并发参数不一致不能复用或重复派发")
+
+    def test_invalid_parallel_is_rejected_before_dispatch(self) -> None:
+        for value in ("0", "-1", "bad", "", "1.5"):
+            with self.subTest(value=value):
+                result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+                                  "--bundle", str(self.root / "x.bundle"), "--branch", "codex/test", "--commit", COMMIT_A,
+                                  "--entry-gates", str(self.gates), "--parallel", value)
+                self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(self.calls.exists())
+
+    def test_parallel_drift_in_saved_result_aborts_before_dispatch(self) -> None:
+        started = self.start(COMMIT_A, parallel=2)
+        original = self.wait(started["result"])
+        for field, value in (("parallel", 3), ("parallel", 0), ("input_contract", {**original["input_contract"], "parallel": True})):
+            with self.subTest(field=field, value=value):
+                bv._write(Path(started["result"]), {**original, field: value})
+                with patch.object(bv.subprocess, "Popen") as dispatch:
+                    self.assertEqual(bv.run(Path(started["result"])), 3)
+                    dispatch.assert_not_called()
+                self.assertEqual(bv._read(Path(started["result"]))["status"], "aborted")
 
     def test_failed_result_refuses_the_next_batch_and_vc5_acceptance(self) -> None:
         payload = self.wait(self.start(COMMIT_A, FAKE_GATES_STATUS="failed")["result"])
@@ -324,6 +365,7 @@ OUT=""; ARGS=(); FLAG=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2 ;;
+    --parallel) echo "parallel:$2" >> "$FAKE_GATES_CALLS"; shift 2 ;;
     --profile|--mode|--record-store|--work|--wait-lock) shift 2 ;;
     --require-deployed|--require-deployed-all) FLAG="$1"; shift ;;
     *) ARGS+=("$1"); shift ;;
@@ -388,11 +430,13 @@ class TwoClientBackgroundValidationTests(unittest.TestCase):
         return subprocess.run([sys.executable, "-B", str(MODULE), *argv], capture_output=True, text=True, timeout=120,
                               env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", **(env or {})})
 
-    def start(self, commit: str, runroot: Path, client: str = "codex", **env: str) -> dict:
+    def start(self, commit: str, runroot: Path, client: str = "codex", *, parallel: int | None = None, **env: str) -> dict:
         argv = ["start", "--runroot", str(runroot), "--data-root", str(self.data), "--bundle", str(self.root / "x.bundle"),
                 "--branch", "claude/test", "--commit", commit, "--entry-gates", str(self.gates)]
         if client != "codex":
             argv += ["--client", client]
+        if parallel is not None:
+            argv += ["--parallel", str(parallel)]
         completed = self.cli(*argv, env={**self.gates_env(client), **env})
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return json.loads(completed.stdout.strip().splitlines()[-1])
@@ -409,6 +453,19 @@ class TwoClientBackgroundValidationTests(unittest.TestCase):
                 return payload
             self.assertLess(time.monotonic(), deadline, f"后台验证没有在时限内到达 {until}：{payload}")
             time.sleep(0.05)
+
+    def test_shared_run_requires_the_same_explicit_parallel(self) -> None:
+        started = self.start(COMMIT_A, self.codex_run, parallel=2)
+        self.assertEqual(self.wait(started["result"])["status"], "passed")
+        attached = self.start(COMMIT_A, self.claude_run, "claude", parallel=2)
+        self.assertEqual(attached["result"], started["result"])
+        self.assertEqual(self.calls.read_text().split().count("parallel:2"), 1)
+        changed = self.cli("start", "--runroot", str(self.claude_run), "--data-root", str(self.data),
+                           "--bundle", str(self.root / "x.bundle"), "--branch", "claude/test", "--commit", COMMIT_A,
+                           "--entry-gates", str(self.gates), "--client", "claude", "--parallel", "3",
+                           env=self.gates_env("claude"))
+        self.assertEqual(changed.returncode, 2, changed.stderr)
+        self.assertIn("输入合同不同", changed.stderr)
 
     def test_one_run_serves_both_clients_from_their_own_runroots(self) -> None:
         started = self.start(COMMIT_A, self.codex_run)

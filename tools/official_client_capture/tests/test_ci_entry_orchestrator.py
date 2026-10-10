@@ -8,6 +8,8 @@ pre-A3、smoke、atomic-double、建账本、环境收据、checkpoint、预检 
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -198,9 +200,11 @@ class OrchestratorTestCase(unittest.TestCase):
         reexecute_gates = kwargs.pop("reexecute_gates", False)
         full_set_request = kwargs.pop("full_set_request", None)
         full_set_work = kwargs.pop("full_set_work", None)
+        gate_parallel = kwargs.pop("gate_parallel", None)
         orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "runs" / str(self.runs),
                                        steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, masks=masks,
-                                       approval=approval, reexecute_gates=reexecute_gates, full_set_request=full_set_request, full_set_work=full_set_work)
+                                       approval=approval, reexecute_gates=reexecute_gates, full_set_request=full_set_request,
+                                       full_set_work=full_set_work, gate_parallel=gate_parallel)
         return orchestrator.orchestrate(**kwargs)
 
     @staticmethod
@@ -361,6 +365,7 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual((actions["entry-gates"], actions["p0-receipt"], actions["vc0-closeout"]), ("执行／passed",) * 3)
         self.assertEqual(actions["ledger"], "沿用")
         self.assertEqual(self.commands.gates_modes, ["re-execute", "re-execute"])
+        self.assertTrue(all("--parallel" not in call for call in self.commands.calls), "缺省门禁 argv 不增加并发参数")
         reasons = next(step for step in second["steps"] if step["step_id"] == "entry-gates")["reasons"]
         self.assertIn("B-09", "；".join(reasons))
 
@@ -373,6 +378,31 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual(_option(gate, "--work"), str(self.fx.root / "background-work"))
         self.orchestrate(full_set_request=request, reexecute_gates=True)
         self.assertEqual(self.commands.gates_modes[-1], "re-execute")
+
+    def test_explicit_parallel_reaches_entry_and_pre_a3_only_calls(self) -> None:
+        orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "parallel-run",
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner,
+                                       reexecute_gates=True, gate_parallel=2)
+        result = orchestrator.orchestrate(to_step="p0-receipt")
+        self.assertEqual(result["exit_code"], 0, self.actions(result))
+        orchestrator.outcomes["pre-a3"] = eo.Outcome("pre-a3", "run")
+        orchestrator.entry_gates_and_pre_a3(False, True)
+        gates = [call for call in self.commands.calls if call[:1] == ["bash"] and call[1].endswith("entry-gates.sh")]
+        self.assertEqual([_option(call, "--profile") for call in gates], ["entry", "pre-a3"])
+        self.assertEqual([_option(call, "--parallel") for call in gates], ["2", "2"])
+        self.assertTrue(all("--work" not in call for call in gates), "普通入口沿用原工作目录")
+
+    def test_parallel_change_redoes_pre_a3_but_keeps_the_ledger(self) -> None:
+        first = self.orchestrate(gate_parallel=2)
+        self.assertEqual(first["exit_code"], 0, self.actions(first))
+        unchanged = self.orchestrate(gate_parallel=2)
+        self.assertEqual(self.actions(unchanged)["pre-a3"], "沿用")
+        changed = self.orchestrate(gate_parallel=3)
+        actions = self.actions(changed)
+        self.assertEqual(changed["exit_code"], 0, actions)
+        self.assertEqual((actions["entry-gates"], actions["pre-a3"]), ("执行／passed", "执行／passed"))
+        self.assertEqual(actions["ledger"], "沿用")
+        self.assertEqual(self.commands.count("create"), 1)
 
     def test_pre_a3_redo_still_rechecks_the_full_set_contract(self) -> None:
         """pre-A3 缺失时重签，同时重新核对 B-09；不能因旧入口记录仍在就跳过时效检查。"""
@@ -476,6 +506,17 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
 
 
 class OrchestratorPieceTests(unittest.TestCase):
+    def test_gate_parallel_requires_a_positive_integer(self) -> None:
+        self.assertIsNone(eo._parse([]).gate_parallel)
+        self.assertEqual(eo._parse(["--gate-parallel", "2"]).gate_parallel, 2)
+        for value in ("0", "-1", "bad", "", "1.5"):
+            with self.subTest(value=value), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                eo._parse(["--gate-parallel", value])
+            self.assertEqual(error.exception.code, 2)
+        for value in (0, -1, True, "2"):
+            with self.subTest(value=value), self.assertRaisesRegex(eo.OrchestratorError, "正整数"):
+                eo.Orchestrator({}, driver_dir=DRIVER, run_dir=DRIVER, steps_dir=DRIVER, gate_parallel=value)
+
     def test_fresh_and_mask(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

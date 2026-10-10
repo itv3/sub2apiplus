@@ -222,6 +222,30 @@ class EntryStepsAcceptanceTests(EntryStepsTestCase):
         self.assertIn("上游要重做：preflight-plan", _step(result, "job-rehearsal")["reasons"])
         self.assertEqual(es.exit_code(result), 1)
 
+    def test_explicit_gate_parallel_binds_only_the_gate_and_pre_a3_specs(self) -> None:
+        for client in es.CT.CLIENTS:
+            with self.subTest(client=client):
+                default = es.Context({**self.fx.params, "CLIENT": client}, self.fx.driver, self.fx.steps_dir, self.fx.runner)
+                self.assertEqual(default.steps, es.STEPS_BY_CLIENT[client], "缺省规格保持原样")
+                explicit = es.Context({**self.fx.params, "CLIENT": client, es.GATE_PARALLEL_PARAM: "2"},
+                                      self.fx.driver, self.fx.steps_dir, self.fx.runner)
+                changed = {step.step_id for step in explicit.steps if step.spec_sha256() != default.step(step.step_id).spec_sha256()}
+                self.assertEqual(changed, {"entry-gates", "pre-a3"})
+                self.assertTrue(all(explicit.step(step.step_id) == step for step in explicit.steps))
+        self.fx.params[es.GATE_PARALLEL_PARAM] = "2"
+        ctx = self.fx.ctx()
+        for step_id in ("entry-gates", "pre-a3"):
+            step = ctx.step(step_id)
+            es.begin(step, ctx)
+            es.finish(step, ctx, status="passed", products=self.fx.products.get(step_id, {}))
+        self.assertReruns(set())
+        self.fx.params[es.GATE_PARALLEL_PARAM] = "3"
+        result = self.assertReruns({"entry-gates", "pre-a3", "release-certification", "p0-receipt", "vc0-closeout"})
+        for step_id in ("entry-gates", "pre-a3"):
+            self.assertIn(f"输入变了：参数 param:{es.GATE_PARALLEL_PARAM}", _step(result, step_id)["reasons"])
+        self.fx.params.pop(es.GATE_PARALLEL_PARAM)
+        self.assertReruns({"entry-gates", "pre-a3", "release-certification", "p0-receipt", "vc0-closeout"})
+
     def test_changing_a_test_file(self) -> None:
         test_file = self.fx.data / "tools" / "official_client_capture" / "tests" / "test_x.py"
         test_file.write_text("# 测试（改了）\n", encoding="utf-8")

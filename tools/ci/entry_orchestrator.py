@@ -52,6 +52,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -172,8 +173,15 @@ class Orchestrator:
                  runner: Runner = default_runner, es_runner: Any = None, masks: Mapping[str, str] | None = None,
                  approval: Mapping[str, str] | None = None, reexecute_gates: bool = False, audit_reads: bool = False,
                  full_set_request: Path | None = None, full_set_work: Path | None = None,
-                 unit_inherit_request: Path | None = None) -> None:
+                 unit_inherit_request: Path | None = None, gate_parallel: int | None = None) -> None:
         self.params = dict(params)
+        if gate_parallel is not None and (type(gate_parallel) is not int or gate_parallel <= 0):
+            raise OrchestratorError("--gate-parallel 必须是正整数")
+        self.gate_parallel = gate_parallel
+        # 只从本次显式选项生成步骤输入，防止继承环境中同名键与实际命令不一致；缺省规格保持原样。
+        self.params.pop(ES.GATE_PARALLEL_PARAM, None)
+        if gate_parallel is not None:
+            self.params[ES.GATE_PARALLEL_PARAM] = str(gate_parallel)
         # B5a-08：逐单元承接请求（与 B-09 全集请求、重新执行全集互斥）。放进参数 UNIT_INHERIT_REQUEST：入口步骤据此给入口门禁与
         # pre-A3 两步登记请求文件这项输入（请求一换两步都失效）；不给时参数、步骤表与命令行都与改造前相同。
         self.unit_inherit_request = unit_inherit_request
@@ -334,6 +342,7 @@ class Orchestrator:
                                           *(["--full-set-request", str(self.full_set_request)] if self.full_set_request else []),
                                           *(["--unit-inherit-request", str(self.unit_inherit_request)] if self.unit_inherit_request else []),
                                           *(["--work", str(self.full_set_work)] if self.full_set_work else []),
+                                          *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
                                           *(["--audit-reads"] if self.audit_reads else []), *source])
             summary = out / "entry-gates.json"
             try:
@@ -356,6 +365,7 @@ class Orchestrator:
                                           *(["--full-set-request", str(self.full_set_request)] if self.full_set_request else []),
                                 *(["--unit-inherit-request", str(self.unit_inherit_request)] if self.unit_inherit_request else []),
                                 *(["--work", str(self.full_set_work)] if self.full_set_work else []),
+                                *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
                                 *(["--audit-reads"] if self.audit_reads else []), *source])
         if pre_a3_run:
             if not certification.is_file():
@@ -872,6 +882,12 @@ def print_summary(result: Mapping[str, Any]) -> None:
     print(f"ENTRY_RUN_DONE exit={result['exit_code']} run={result['run_dir']}")
 
 
+def _positive_parallel(value: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise argparse.ArgumentTypeError("--gate-parallel 必须是正整数")
+    return int(value)
+
+
 def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="入口编排器（E2-06）")
     parser.add_argument("--plan", action="store_true", help="只判定每一步沿用还是重做，不执行")
@@ -887,6 +903,7 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
                         help="入口门禁重新执行全集（D12：升级开工的入口空跑、一致性验收、收尾合入前用）；不带时用全集通过模式")
     parser.add_argument("--full-set-request", type=Path, help="B-09 全集承接请求；仍须入口实时核对全部条件")
     parser.add_argument("--full-set-work", type=Path, help="来源后台验证的 work 目录；保持严格输入和命令路径一致")
+    parser.add_argument("--gate-parallel", type=_positive_parallel, help="入口门禁和 pre-A3 单元并发数；缺省沿用执行器配置")
     parser.add_argument("--unit-inherit-request", type=Path,
                         help="B5a-08 逐单元承接请求（入口门禁 --mode unit-inherit）；与 --full-set-request、--reexecute-gates 互斥")
     parser.add_argument("--audit-reads", action="store_true",
@@ -933,7 +950,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 masks=masks, approval={"approve_sha256": args.approve_sha256 or "",
                                                        "approved_by": args.approved_by or "", "reason": args.reason or ""},
                                 reexecute_gates=args.reexecute_gates, audit_reads=args.audit_reads, full_set_request=args.full_set_request,
-                                full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request)
+                                full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:

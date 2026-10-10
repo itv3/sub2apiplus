@@ -652,6 +652,45 @@ class UnitExecutorGatesTests(unittest.TestCase):
         path.write_text(json.dumps({"schema_version": ue.GATES_SCHEMA, **payload}, ensure_ascii=False), encoding="utf-8")
         return path
 
+    def test_explicit_parallel_overrides_config_and_changes_policy_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "probe.py").write_text("import time\ntime.sleep(0.3)\n", encoding="utf-8")
+            (root / ".gitignore").write_text("*\n!.gitignore\n!probe.py\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            subprocess.run(["git", "add", "probe.py", ".gitignore"], cwd=root, check=True)
+            subprocess.run(["git", "-c", "user.name=并发验收", "-c", "user.email=parallel@example.invalid",
+                            "commit", "-q", "-m", "固定并发验收输入"], cwd=root, check=True)
+            manifest = self._manifest(root, {
+                "units": [{"unit_id": f"probe:{i}", "argv": [sys.executable, "-B", str(root / "probe.py")],
+                           "cwd": str(root), "inputs": {"files": [{"category": "tests", "path": "probe.py"}]}} for i in range(3)],
+                "gates": [{"gate_id": "probe", "units": [f"probe:{i}" for i in range(3)]}],
+            })
+            config = _config(root, default_parallelism=3)
+            policies = []
+            for parallel, flags in ((2, ["--parallel", "2"]), (3, [])):
+                with self.subTest(parallel=parallel):
+                    out = root / f"out-{parallel}"
+                    completed = subprocess.run([
+                        sys.executable, "-B", str(EXECUTOR), "run-gates", "--manifest", str(manifest),
+                        "--config", str(config), "--weights", str(root / "no-weights.json"),
+                        "--durations", str(root / "no-durations.json"), "--cores", "4", *flags,
+                        "--state-dir", str(root / f"state-{parallel}"), "--out-dir", str(out),
+                        "--record-store", str(root / f"records-{parallel}"), "--shared-caches", "off",
+                    ], cwd=root, capture_output=True, text=True, timeout=30,
+                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO_ROOT)})
+                    self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+                    plan = json.loads((out / "plan.json").read_text())
+                    summary = json.loads((out / "summary.json").read_text())
+                    self.assertEqual((plan["parallelism"], summary["parallelism"], summary["status"]), (parallel, parallel, "passed"))
+                    events = [json.loads(line) for line in (out / "events.jsonl").read_text().splitlines()]
+                    starts = [event for event in events if event["event"] == "start" and event["kind"] == "formal"]
+                    self.assertEqual(len(starts), 3)
+                    self.assertEqual(max(len(event["running"]) for event in starts), parallel)
+                    policies.append(summary["policy_sha256"])
+            self.assertEqual(len(policies), 2)
+            self.assertNotEqual(policies[0], policies[1], "显式资源值进入原调度策略摘要")
+
     def test_manifest_closure_is_validated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

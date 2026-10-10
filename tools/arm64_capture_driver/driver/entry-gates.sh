@@ -63,7 +63,7 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
@@ -71,10 +71,14 @@ PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_S
 AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=(); AUDIT_POLICY_ARGS=()
 WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0; REQUIRE_DEPLOYED_ALL=false; DEPLOY_OTHERS=""; DEPLOY_OTHERS_SOURCE=()
 FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=(); GO_WARMUP=auto
+PARALLEL_ARGS=()
 UNIT_INHERIT_REQUEST=""; UNIT_INHERIT_STAGE=pre-ledger; UNIT_INHERIT_ARGS=(); UNIT_INHERIT_PROPOSE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --go-warmup) GO_WARMUP="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --parallel)
+      if ! [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then echo "--parallel 必须是正整数" >&2; exit 2; fi
+      PARALLEL_ARGS=(--parallel "$2"); shift 2 ;;
     --profile) PROFILE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --full-set-request) FULL_SET_REQUEST="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --unit-inherit-request) UNIT_INHERIT_REQUEST="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -401,7 +405,7 @@ if [ "$MODE" = unit-inherit ]; then
   fi
 fi
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 "$DRV/unit_executor.py" run-gates --manifest "$OUT/gates-manifest.json" --out-dir "$OUT/executor" \
-    --mode "$MODE" --record-store "$STORE" ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
+    --mode "$MODE" --record-store "$STORE" ${PARALLEL_ARGS[@]+"${PARALLEL_ARGS[@]}"} ${AUDIT_ARGS[@]+"${AUDIT_ARGS[@]}"} ${FULL_SET_ARGS[@]+"${FULL_SET_ARGS[@]}"} ${UNIT_INHERIT_ARGS[@]+"${UNIT_INHERIT_ARGS[@]}"} ) > "$OUT/executor.log" 2>&1 < /dev/null || EXEC_RC=$?
 tail -n 25 "$OUT/executor.log" | cut -c1-240
 if [ -n "$UNIT_INHERIT_PROPOSE" ]; then
   if [ "$EXEC_RC" -ne 0 ] || [ ! -f "$UNIT_INHERIT_PROPOSE/binding.json" ]; then

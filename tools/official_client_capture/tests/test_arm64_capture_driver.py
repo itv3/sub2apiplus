@@ -2046,6 +2046,32 @@ class Arm64GateScriptTests(unittest.TestCase):
 
     # ---- ARM64 全量门禁 ----
 
+    def test_entry_gate_parallel_reaches_executor_and_invalid_values_do_not_dispatch(self) -> None:
+        for parallel in (None, "2"):
+            with self.subTest(parallel=parallel), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                fixture, work, drv, record, env = self._fixture(root)
+                commit = self._candidate(work, "codex/parallel")
+                bundle = root / "parallel.bundle"
+                _git(work, "bundle", "create", "-q", str(bundle), "main..codex/parallel")
+                args = ["--profile", "full-gates", "--go-warmup", "off", "--work", str(fixture.runroot / "parallel-work")]
+                if parallel is not None:
+                    args += ["--parallel", parallel]
+                result = _run(drv / "entry-gates.sh", *args, str(bundle), "codex/parallel", commit, env=env, cwd=root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                (call,) = self._commands(record)
+                if parallel is None:
+                    self.assertNotIn("--parallel", call["args"], "缺省不改执行器 argv")
+                else:
+                    self.assertEqual(call["args"][call["args"].index("--parallel") + 1], "2")
+                before = record.read_bytes()
+                for value in ("0", "-1", "bad", "", "1.5"):
+                    with self.subTest(value=value):
+                        invalid = _run(drv / "entry-gates.sh", "--parallel", value, str(bundle), "codex/parallel", commit, env=env, cwd=root)
+                        self.assertEqual(invalid.returncode, 2, invalid.stdout + invalid.stderr)
+                self.assertEqual(record.read_bytes(), before, "非法并发值不得派发执行器")
+
     def test_go_warmup_failure_blocks_formal_gates_and_off_restores_original_path(self) -> None:
         for disabled in (False, True):
             with self.subTest(disabled=disabled), tempfile.TemporaryDirectory() as directory:
