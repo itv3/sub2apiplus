@@ -1229,7 +1229,33 @@ def _retain_candidate_run_materials(
             checkpoint_path = checkpoint_root / f"{record['checkpoint_sequence']:08d}.json"
             if parse_json_bytes(retain(checkpoint_path)) != record:
                 raise ControlError("来源 checkpoint 原件在读取期间漂移")
-            project_parent(checkpoint_path, data_root, coordinate_roots=tuple(
+            metadata = ()
+            inventory = record.get("recovery_evidence")
+            if inventory is not None:
+                from . import claude_upgrade as upgrade
+                from . import claude_upgrade_attempt_recovery as recovery_reader
+
+                # recovery_evidence 是 checkpoint 原读者冻结的完整文件库存，
+                # 其中绝对 path 是元数据坐标，不是外部三字段绑定。只在原
+                # Job 的证据根全集经原 job_inventory 逐字复算后屏蔽这一域；
+                # 库存内实际文件仍逐份归档，未知域不能获得相同豁免。
+                layout = capture._capture_layout(campaign, upgrade.load_campaign_manifest(campaign))
+                inventory_roots = tuple(sorted(str(capture._host_path(str(root), layout))
+                    for root in result.get("evidence_roots", [])))
+                for value in inventory_roots:
+                    root = Path(value)
+                    if not root.is_relative_to(data_root):
+                        raise ControlError("恢复 checkpoint 库存越过本资格已有数据根")
+                    upgrade._reject_symlink_components(root, data_root, "归档恢复 checkpoint 库存")
+                if inventory != recovery_reader.job_inventory(inventory_roots):
+                    raise ControlError("恢复 checkpoint 冻结库存与原 Job 证据全集不同源")
+                for reference in inventory["files"]:
+                    target = Path(reference["path"])
+                    raw = retain(target, reference["sha256"])
+                    if len(raw) != reference["bytes"]:
+                        raise ControlError("恢复 checkpoint 冻结库存原件字节数漂移")
+                metadata = (("recovery_evidence",),)
+            project_parent(checkpoint_path, data_root, metadata, coordinate_roots=tuple(
                 (("result", *coordinate), root) for coordinate, root in roots))
     project_parent(path, data_root, coordinate_roots=tuple(coordinates))
     return {job_id: roots for job_id, (_result, roots) in result_roots.items()}

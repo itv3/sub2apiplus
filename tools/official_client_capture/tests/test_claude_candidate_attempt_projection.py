@@ -31,8 +31,21 @@ class CandidateAttemptProjectionTests(unittest.TestCase):
     # 复用原专项的真实原件读取及通用归档遍历，只有封存 reader 边界用
     # 固定返回值替身；完整 reader 的接线另由原 revision 八场景覆盖。
     retain = draft_tests.CandidateDraftProjectionTests.retain
-    project_parent = draft_tests.CandidateDraftProjectionTests.project_parent
     close = draft_tests.CandidateDraftProjectionTests.close
+
+    def project_parent(self, path, base, metadata=(), *, coordinate_roots=()):
+        self.retain(path)
+        row = fixture.binding(path, self.data)
+        value = json.loads(path.read_bytes())
+        domains = []
+        for coordinate in metadata:
+            node = value
+            for key in coordinate:
+                node = node[int(key)] if isinstance(node, list) else node[key]
+            domains.append((coordinate, material.canonical_sha256(node)))
+        self.parents[row["path"]] = material.VerifiedQualificationSubjectProjection(row,
+            base.relative_to(self.data).as_posix(), tuple(domains),
+            tuple((coordinate, root.relative_to(self.data).as_posix()) for coordinate, root in coordinate_roots), material._TOKEN)
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="attempt-projection-", dir="/private/tmp")
@@ -252,6 +265,56 @@ class RecoveryRunIdentityProjectionTests(unittest.TestCase):
     def test_original_id_cannot_authorize_segment_closure(self):
         with self.assertRaisesRegex(ControlError, "Job 闭环原件"):
             self.prove(producer_id=self.document["attempt_id"])
+
+    def inventory_checkpoint(self, *, changes=None, unknown=False):
+        self.document["results"][0]["evidence_roots"] = [str(self.evidence / "job")]
+        self.write_job_materials(checkpoint_changes={"attempt_id": self.execution_id})
+        record = json.loads(self.checkpoint_path.read_bytes())
+        inventory = segment_reader.job_inventory([str(self.evidence / "job")])
+        record["recovery_evidence"] = {**inventory, **(changes or {})}
+        if unknown:
+            record["unknown_inventory"] = inventory
+        record["checkpoint_sha256"] = incremental_recovery.digest(
+            {key:value for key,value in record.items() if key != "checkpoint_sha256"})
+        fixture._write_json(self.checkpoint_path, record)
+        self.document["job_checkpoint"]["last_sha256"] = record["checkpoint_sha256"]
+        self.write_attempt()
+
+    def prove_inventory(self):
+        with mock.patch.object(upgrade, "load_campaign_manifest", return_value={}), \
+                mock.patch.object(capture, "_capture_layout", return_value=object()), \
+                mock.patch.object(capture, "_host_path", side_effect=lambda path, _layout: Path(path)):
+            self.prove()
+
+    def test_exact_recovery_inventory_is_metadata_but_all_original_files_are_retained(self):
+        self.inventory_checkpoint()
+        self.prove_inventory()
+        closed = {row["path"] for row in self.close([fixture.binding(self.checkpoint_path, self.data)])}
+        for path in (self.evidence / "job").rglob("*"):
+            if path.is_file():
+                self.assertIn(path.relative_to(self.data).as_posix(), closed)
+
+    def test_rehashed_wrong_recovery_inventory_is_rejected(self):
+        self.inventory_checkpoint(changes={"content_sha256": "f" * 64})
+        with self.assertRaisesRegex(ControlError, "冻结库存.*不同源"):
+            self.prove_inventory()
+
+    def test_same_inventory_in_unknown_checkpoint_domain_is_not_metadata(self):
+        self.inventory_checkpoint(unknown=True)
+        self.prove_inventory()
+        with self.assertRaisesRegex(ControlError, "根内规范相对路径"):
+            self.close([fixture.binding(self.checkpoint_path, self.data)])
+
+    def test_recovery_inventory_outside_data_root_is_rejected_before_scan(self):
+        self.inventory_checkpoint()
+        self.document["results"][0]["evidence_roots"] = [str(self.data.parent)]
+        self.write_job_materials(checkpoint_changes={"attempt_id": self.execution_id,
+            "recovery_evidence": segment_reader.job_inventory([str(self.evidence / "job")])})
+        self.write_attempt()
+        with mock.patch.object(segment_reader, "job_inventory") as scan, \
+                self.assertRaisesRegex(ControlError, "库存越过.*数据根"):
+            self.prove_inventory()
+        scan.assert_not_called()
 
 
 class NormalResumeProducerProjectionTests(unittest.TestCase):
