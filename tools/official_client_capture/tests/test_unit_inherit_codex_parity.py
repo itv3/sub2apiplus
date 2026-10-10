@@ -613,6 +613,48 @@ CLAUDE_RECORDED_TIME_REMOVED = {'tools/official_client_capture/codex_upgrade_pre
 CLAUDE_CONTINUOUS_TIME_BASELINE = '980272b7114f8daf046bf761a84ba7d544ee6ab8'
 CLAUDE_CONTINUOUS_TIME_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '2a115f4de8606ae20020dcbdc849eaca2b3e24263a9aded0272756dccaa0379c'}
 CLAUDE_CONTINUOUS_TIME_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['# 七／八场景连续链各算一个方法，仍在同一 Campaign 内完整执行。三层各留一分钟收尾，', '    """返回三条 Claude 故障链的唯一时间合同；正式入口与外层执行器消费相同数值。"""', '', '    count = CLAUDE_FAULT_METHOD_COUNTS[name]', '    work_seconds = count * CLAUDE_FAULT_METHOD_SECONDS', '        "method_timeout_seconds": CLAUDE_FAULT_METHOD_SECONDS,', '    return {**claude_fault_time_budget("vc-chain.claude-late-stage-faults"),']}
+# a0c564377 的实际父提交为 4cc10d585：入口门禁与步骤同时绑定 Claude 三份来源，并给录制产物独立目录。
+# Codex 的来源键表为空，新增来源解析与录制目录分支不进入；原有参数、步骤声明及门禁输入由逐字行为对照守住。
+# e104a6aae 只登记执行器配置中的十三方法拆分与驱动清单，未修改这里的 Python 文件，不以它重置源码基线。
+CLAUDE_FIXTURE_WIRING_BASELINE_COMMIT = "4cc10d5857177f60e5ad48f85bc1e8f572ee9f68"
+CLAUDE_FIXTURE_WIRING_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_gates.py": "445e7893b3dad54c8a98ac69a0a3dd7417d08f7b728eed85dee538d25f0920d8",
+    "tools/ci/entry_steps.py": "50405f68c271f27e877365cf517564e35b7dc37923a0b711d230e5f6cd9652ba",
+}
+CLAUDE_FIXTURE_WIRING_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_gates.py": [
+        "from typing import Any, Sequence",
+        'def pre_a3_data_root_inputs(data_root: Path, client: str = "codex") -> list[dict[str, Any]]:',
+        '    ctx = steps.Context(params={"D": str(Path(data_root).resolve())}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()))',
+        '                    merged["inputs"] = pre_a3_inputs(test_file, pre_a3_data_inputs, pre_a3_unit_client(unit["unit_id"]) or "codex")',
+        '            data_inputs = pre_a3_data_root_inputs(args.pre_a3_data_root, client) if args.pre_a3_data_root is not None else None',
+        '                                  pre_a3_units=args.pre_a3_units, pre_a3_env=_pairs(args.pre_a3_env, "--pre-a3-env") or None,',
+    ],
+    "tools/ci/entry_steps.py": [
+        "    return PRE_A3_DATA_ROOT + tuple(item for item in probes if item not in PRE_A3_DATA_ROOT)",
+        "        digest, count = ctx.tree(root, item.option)",
+    ],
+}
+# 0ba4a80f2 的可选并发透传以实际父提交为基线：不带选项时不生成新参数、后台字段或执行器 argv。
+# Context.steps 的缺省分支仍返回原表，Context.step 仅从同一张表建索引；Codex 缺省规格与行为继续逐字对照。
+# 指定选项时两步追加的输入由并发专项验证；背景模块只有新增行，原全集请求与承接批准规则不变。
+ENTRY_PARALLEL_BASELINE_COMMIT = "5b4663bc3ac79d76ddc99b9570d696d76cfb0714"
+ENTRY_PARALLEL_SOURCE_DIGESTS: dict[str, str] = {
+    "tools/ci/entry_steps.py": "cefd4e263af2cdc861ee10420fd96f5f83cb98de47f6a4fa21c8554b59d83b95",
+    "tools/ci/entry_orchestrator.py": "98116185d5d37eed26d876dc2847745799faeca416ea66f730bf5f79b1d669c7",
+    "tools/ci/background_validation.py": "cbf1bf9b18bdd2cf3780e4b101f41154d7bee74194fc3114dd089d9a5198b716",
+}
+ENTRY_PARALLEL_SOURCE_REMOVED_LINES: dict[str, list[str]] = {
+    "tools/ci/entry_steps.py": [
+        "        return (STEPS_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEPS_BY_CLIENT)[self.client]",
+        "        steps = (STEP_BY_ID_BY_CLIENT_UNIT_INHERIT if self.unit_inherit else STEP_BY_ID_BY_CLIENT)[self.client]",
+    ],
+    "tools/ci/entry_orchestrator.py": [
+        "                 unit_inherit_request: Path | None = None) -> None:",
+        "                                full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request)",
+    ],
+    "tools/ci/background_validation.py": [],
+}
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("Claude 连续世界两小时安全网", CLAUDE_CONTINUOUS_TIME_BASELINE, CLAUDE_CONTINUOUS_TIME_DIGESTS, CLAUDE_CONTINUOUS_TIME_REMOVED),
     ("Claude 录制链时间合同 v2", CLAUDE_RECORDED_TIME_BASELINE, CLAUDE_RECORDED_TIME_DIGESTS, CLAUDE_RECORDED_TIME_REMOVED),
@@ -632,10 +674,23 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
      CLAUDE_REQUEST_RESERVATION_SOURCE_DIGESTS, CLAUDE_REQUEST_RESERVATION_SOURCE_REMOVED_LINES),
     ("Claude revision 八场景接入准备", CLAUDE_REVISION_ENTRY_BASELINE_COMMIT,
      CLAUDE_REVISION_ENTRY_SOURCE_DIGESTS, CLAUDE_REVISION_ENTRY_SOURCE_REMOVED_LINES),
+    ("Claude 三来源输入及录制目录接线", CLAUDE_FIXTURE_WIRING_BASELINE_COMMIT,
+     CLAUDE_FIXTURE_WIRING_SOURCE_DIGESTS, CLAUDE_FIXTURE_WIRING_SOURCE_REMOVED_LINES),
+    ("升级入口可选并发透传", ENTRY_PARALLEL_BASELINE_COMMIT,
+     ENTRY_PARALLEL_SOURCE_DIGESTS, ENTRY_PARALLEL_SOURCE_REMOVED_LINES),
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
+CLAUDE_FIXTURE_STEP_INPUTS = (
+    "param:CLAUDE_2_1_226_RELAY_FIXTURE", "param:CLAUDE_2_1_226_FREEZE_FIXTURE", "param:CLAUDE_2_1_226_STATIC_FIXTURE",
+    "tree:{CLAUDE_2_1_226_RELAY_FIXTURE}#parent_pycache", "tree:{CLAUDE_2_1_226_FREEZE_FIXTURE}#pycache",
+    "tree:{CLAUDE_2_1_226_STATIC_FIXTURE}#pycache",
+)
 STEP_CHANGES_AFTER_B5A08: dict[str, dict[str, tuple[list[str], list[str], str]]] = {
     "claude": {
+        "entry-gates": (list(CLAUDE_FIXTURE_STEP_INPUTS), [],
+                        "a0c564377：Claude 三份来源的路径与内容进入门禁步骤输入；relay 覆盖父根的同级补充录制，Codex 空表不增加输入"),
+        "pre-a3": (list(CLAUDE_FIXTURE_STEP_INPUTS), [],
+                   "a0c564377：认证步骤消费同一份三来源输入声明，防止工程来源变更仍沿用旧认证；Codex 步骤声明不变"),
         "zero-request-smoke": (["identity:evidence_semantics_sha256"], [],
                                "B5a-09：Claude smoke 依赖的 provenance 在 Claude 身份的 evidence 层，登记的身份摘要取客户端表"),
         "client-launch-probe": (["driver:claude_launch_probe_runner.py"], ["driver:client_launch_probe_runner.py"],
@@ -744,7 +799,23 @@ class SourceResidualCodexParityTests(unittest.TestCase):
                         continue
                     self.assertEqual(now.spec_sha256(), before.spec_sha256(), f"不用逐单元承接时步骤表逐字相同：{now.step_id}")
                 as_json = lambda table: {key: [item.as_json() for item in value] for key, value in table.items()}  # noqa: E731
-                self.assertEqual(as_json(es.GATE_INPUTS_BY_CLIENT[client]), as_json(old.GATE_INPUTS_BY_CLIENT[client]))
+                expected_gates = as_json(old.GATE_INPUTS_BY_CLIENT[client])
+                if client == "claude":
+                    # a0c564377：pre-A3 门禁复用同名步骤输入。只准在旧工程目录声明后插入以下六项；
+                    # 其余门禁项、输入内容与顺序仍按原基线逐字比较，不从当前实现生成期望值。
+                    before = expected_gates["pre-a3"]
+                    anchor = old.Input("environment", "tree", "{D}/upgrade-project-ledger-claude", "pycache").as_json()
+                    position = before.index(anchor) + 1
+                    additions = [
+                        old.Input("param", "param", "CLAUDE_2_1_226_RELAY_FIXTURE"),
+                        old.Input("param", "param", "CLAUDE_2_1_226_FREEZE_FIXTURE"),
+                        old.Input("param", "param", "CLAUDE_2_1_226_STATIC_FIXTURE"),
+                        old.Input("environment", "tree", "{CLAUDE_2_1_226_RELAY_FIXTURE}", "parent_pycache"),
+                        old.Input("environment", "tree", "{CLAUDE_2_1_226_FREEZE_FIXTURE}", "pycache"),
+                        old.Input("environment", "tree", "{CLAUDE_2_1_226_STATIC_FIXTURE}", "pycache"),
+                    ]
+                    before[position:position] = [item.as_json() for item in additions]
+                self.assertEqual(as_json(es.GATE_INPUTS_BY_CLIENT[client]), expected_gates)
                 inherit = es.STEPS_BY_CLIENT_UNIT_INHERIT[client]
                 for plain, extended in zip(es.STEPS_BY_CLIENT[client], inherit):
                     added = [item.name for item in extended.inputs if item not in plain.inputs]
