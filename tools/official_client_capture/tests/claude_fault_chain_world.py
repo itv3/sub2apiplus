@@ -187,7 +187,8 @@ CASE_FIELDS = ('root', 'data', 'tool_copy', 'fake_bin', 'control_file', 'env_fil
     'relay_control', 'mutations', 'relay_sequences', 'build', 'checker_path', 'fixed_checker',
     'defective_evaluator', 'active_candidate', 'active_revision', 'wrong_deployment_refusals',
     'execution_tree_calls', 'state_path', 'state_digest', 'workspace', '_locked',
-    'failed_evaluation_run', 'assertion_failure_causes')
+    'failed_evaluation_run', 'assertion_failure_causes', 'inventory_path', 'containment_path',
+    'dispositions_path')
 
 
 def save_case(case: Any, name: str = 'case') -> None:

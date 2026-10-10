@@ -42,12 +42,15 @@ tests/，不进任何受管身份。
 from __future__ import annotations
 
 import contextlib
+import fcntl
+import functools
 import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import site
 import subprocess
 import sys
@@ -109,6 +112,9 @@ CHAIN_TIMEOUT_SECONDS = certification.claude_fault_time_budget("vc-chain.claude-
 # 场景组写六项记录的文件（链体设置；本机单跑场景时不设置，只做断言）。
 RECORDS_ENV = "CLAUDE_FAULT_CHAIN_RECORDS"
 METRICS_PREFIX = "CLAUDE_FAULT_CHAIN_METRICS "
+# 原公共入口生成的内部坐标，不从 CI 环境白名单新增旁路入口。
+METHODS_ROOT_ENV = "CLAUDE_FAULT_CHAIN_METHODS"
+METHOD_VERIFY_ENV = "CLAUDE_FAULT_METHOD_VERIFY"
 
 # 六项检查：键 → 说明（记录与报错都用说明）。
 SIX_CHECKS: Mapping[str, str] = {
@@ -259,6 +265,11 @@ class ScenarioAudit:
             self.ledger_observations = (stops.load_state('audit-ledger:' + self.scenario) or {}).get('observations', [])
             # 重用的是原 before；不是把停点后的当前态当成故障前状态。
             return
+        cursor_name = getattr(self.case, '_fault_cursor_name', None)
+        cursor = stops.load_state('cursor:' + cursor_name) if cursor_name else None
+        if os.environ.get(stops.METHOD_RESUME_ENV) and saved is None:
+            if cursor is None or cursor.get('audit_snapshots', {}).get(self.scenario) != 'uninitialized':
+                raise ValueError(f'{self.scenario} 缺少原故障前快照，禁止从当前态补造 before')
         self.trusted_paths = tuple(Path(path) for path in trusted)
         self.trusted_before = file_digests(*self.trusted_paths)
         self.case.assertTrue(self.trusted_before, f"{self.scenario}：故障前没有可信产物可核对")
@@ -268,6 +279,9 @@ class ScenarioAudit:
         self.totals_before = self.totals()
         self.before_ledger = self.ledger_observations[-1] if self.ledger_observations else None
         stops.save_state('audit-before:' + self.scenario, self._before())
+        if cursor is not None:
+            cursor.setdefault('audit_snapshots', {})[self.scenario] = 'recorded'
+            stops.save_state('cursor:' + cursor_name, cursor)
 
     def _before(self) -> dict[str, Any]:
         return {key: getattr(self, key) for key in ('trusted_paths', 'trusted_before', 'history_paths',
@@ -319,8 +333,18 @@ class ScenarioAudit:
     def read_source(source: dict[str, Any]) -> Any:
         if source.get('command_binding') is not None:
             command = stops._decoded(json.loads(stops.read_cut(source['command_binding'])))
-            if command['argv'] != source['command'] or command['returncode'] != source['returncode']:
+            if (command['argv'] != source['command'] or command['returncode'] != source['returncode']
+                    or source['binding'] not in (command.get('stdout'), command.get('stderr'))):
                 raise ValueError('原命令、退出码与输出原件不一致')
+            invocation = command.get('invocation_binding')
+            if invocation is None or json.loads(stops.read_cut(invocation)) != {'argv': command['argv']}:
+                raise ValueError('原输出缺副作用前的完整调用绑定')
+            for label in ('stdout', 'stderr'):
+                if command.get(label) is not None:
+                    stops.read_cut(command[label])
+        elif source.get('command') is not None:
+            if source['command'] != ['原 JSON 读侧', str(source['binding']['path'])]:
+                raise ValueError('命令输出缺原描述文件，不能当作文件读侧来源')
         text = stops.read_cut(source['binding']).decode('utf-8')
         if source['format'] == 'text':
             return text
@@ -343,24 +367,65 @@ class ScenarioAudit:
         return {'calls': stops.file_cut(path), 'begin': begin}
 
     def file_closure_source(self, path: Path, executed: tuple[str, ...], reused: tuple[str, ...] = (),
-                            *, row_key: str | None = None, disposition: str | None = None) -> dict[str, Any] | None:
+                            *, row_key: str | None = None, disposition: str | None = None,
+                            reused_path: Path | None = None) -> dict[str, Any] | None:
         if stops.record_root() is None:
             return None
-        return {'source': {'binding': stops.file_cut(path), 'format': 'json', 'trail': []},
+        source = {'source': {'binding': stops.file_cut(path), 'format': 'json', 'trail': []},
             'executed': executed, 'reused': reused, 'row_key': row_key, 'disposition': disposition}
+        if reused_path is not None:
+            source['reused_source'] = {'binding': stops.file_cut(reused_path), 'format': 'json', 'trail': []}
+        return source
+
+    def refusal_closure_source(self, stderr: str) -> dict[str, Any] | None:
+        """拒绝命令的空闭集必须绑定真实退出和完整事实快照，不能用空列表追认。"""
+
+        if stops.record_root() is None:
+            return None
+        source = self.object_source(stderr)
+        if source is None or source.get('returncode') in (None, 0) or not source.get('command_binding'):
+            raise ValueError('空执行闭集缺真实非零退出的命令原件')
+        paths = tuple(dict.fromkeys((*self.trusted_paths, *self.history_paths)))
+        before = {**self.trusted_before, **self.history_before}
+        after = file_digests(*paths)
+        self.case.assertTrue(paths and before, '拒绝闭集必须声明实际受管事实根')
+        self.case.assertEqual(after, before, '拒绝命令不能创建、删除或改写声明事实根中的文件')
+        return {'refusal': source, 'facts': after,
+                'bindings': [stops.file_cut(Path(path)) for path in sorted(after)]}
+
+    def journal_closure_source(self, path: Path, marker: str, field: str) -> dict[str, Any] | None:
+        if stops.record_root() is None:
+            return None
+        return {'journal': stops.file_cut(path), 'marker': marker, 'field': field}
 
     def _closure_original(self, source: dict[str, Any]) -> tuple[list[str], list[str]]:
+        if 'journal' in source:
+            rows = [json.loads(line) for line in stops.read_cut(source['journal']).decode('utf-8').splitlines() if line]
+            matches = [row for row in rows if row.get('marker') == source['marker']]
+            if not matches:
+                raise ValueError('原部署日志缺所声明的恢复marker')
+            return sorted(row['object'] for row in matches[-1][source['field']]), []
+        if 'refusal' in source:
+            stderr = self.read_source(source['refusal'])
+            if not stderr or source['refusal'].get('returncode') in (None, 0):
+                raise ValueError('拒绝闭集缺完整原 stderr 或真实非零退出')
+            original = {str(binding['path']): hashlib.sha256(stops.read_cut(binding)).hexdigest()
+                        for binding in source['bindings']}
+            if original != source['facts'] or original != {**self.trusted_before, **self.history_before}:
+                raise ValueError('拒绝闭集的原事实字节与故障前快照不一致')
+            return [], []
         if 'calls' in source:
             rows = [json.loads(line) for line in stops.read_cut(source['calls']).decode('utf-8').splitlines() if line]
             return [f'{segment}:{stage}' for segment, stage in rows[source['begin']:]], []
         value = self.read_source(source['source'])
         def items(keys: Iterable[str], disposition: str) -> list[str]:
-            result = value
+            result = (self.read_source(source['reused_source'])
+                      if disposition == 'reused' and 'reused_source' in source else value)
             for key in keys:
                 result = result[key]
             if not keys:
                 return []
-            if source['disposition'] is not None:
+            if source['disposition'] is not None and result and isinstance(result[0], dict):
                 result = [row for row in result if row[source['disposition']] == disposition]
             if source['row_key'] is not None and result and isinstance(result[0], dict):
                 result = [row[source['row_key']] for row in result]
@@ -446,7 +511,7 @@ class ScenarioAudit:
         for path, digest in self.trusted_before.items():
             current = path
             for old, new in (relocated or {}).items():
-                if path.startswith(old.rstrip("/") + "/"):
+                if path == old or path.startswith(old.rstrip("/") + "/"):
                     current = new.rstrip("/") + path[len(old.rstrip("/")):]
                     moved += 1
                     break
@@ -547,14 +612,24 @@ class ScenarioAudit:
             original_total_deadline_at_utc=after["original_total_deadline_at_utc"], new_events=len(after["event_ids"]) - len(before["event_ids"]),
         )
 
-    def check_elapsed_untouched(self, *ledger_paths: Path) -> None:
+    def check_elapsed_untouched(self, *ledger_paths: Path,
+                                original_after: list[dict[str, Any]] | None = None) -> None:
         """不经计时账本的场景（部署、误用拒绝）：给定的计时与项目账本逐字节不变，即没有入账、也没有重置。"""
 
         self.case.assertTrue(ledger_paths, f"{self.scenario}：要给出核对的账本")
-        self.inputs['elapsed'] = {'ledger_paths': ledger_paths}
-        before = {path: digest for path, digest in self.history_before.items() if any(path.startswith(str(root)) for root in ledger_paths)}
+        before = {path: digest for path, digest in self.history_before.items()
+                  if any(Path(path) == root or Path(path).is_relative_to(root) for root in ledger_paths)}
         self.case.assertTrue(before, f"{self.scenario}：历史快照里没有这些账本")
-        after = file_digests(*ledger_paths)
+        if self.revalidating:
+            if original_after is None or len(original_after) != len(before):
+                raise ValueError('账本零写入重验缺原 after 完整文件清单')
+            after = {str(binding['path']): hashlib.sha256(stops.read_cut(binding)).hexdigest()
+                     for binding in original_after}
+        else:
+            after = file_digests(*ledger_paths)
+            if stops.record_root() is not None:
+                original_after = [stops.file_cut(Path(path)) for path in sorted(after)]
+        self.inputs['elapsed'] = {'ledger_paths': ledger_paths, 'original_after': original_after}
         self.case.assertEqual(after, before, f"{self.scenario}：账本被写")
         self._record("elapsed", ledgers=len(ledger_paths), ledger_files=len(before), untouched=True)
 
@@ -568,7 +643,7 @@ class ScenarioAudit:
         for path, digest in self.history_before.items():
             current = path
             for old, new in (archived or {}).items():
-                if path.startswith(old.rstrip("/") + "/"):
+                if path == old or path.startswith(old.rstrip("/") + "/"):
                     current = new.rstrip("/") + path[len(old.rstrip("/")):]
                     moved += 1
                     break
@@ -598,6 +673,15 @@ class ScenarioAudit:
     # ---- 汇总 ----
 
     def report(self, **facts: Any) -> dict[str, Any]:
+        if stops.load_state('audit-complete:' + self.scenario) is not None:
+            if not os.environ.get(stops.METHOD_RESUME_ENV):
+                raise ValueError('已有完整审计只能由原方法恢复入口只读消费')
+            record = type(self).revalidate(self.case, self.scenario)
+            target = os.environ.get(RECORDS_ENV)
+            if target:
+                with open(target, 'a', encoding='utf-8') as handle:
+                    handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n')
+            return record
         missing = [label for key, label in SIX_CHECKS.items() if key not in self.checks]
         self.case.assertEqual(missing, [], f"{self.scenario}：六项检查没有做全")
         record = {
@@ -677,7 +761,7 @@ class ScenarioAudit:
         audit.check_accounting(**inputs['accounting'])
         elapsed = inputs['elapsed']
         if 'ledger_paths' in elapsed:
-            audit.check_elapsed_untouched(*elapsed['ledger_paths'])
+            audit.check_elapsed_untouched(*elapsed['ledger_paths'], original_after=elapsed.get('original_after'))
         else:
             audit.check_elapsed(**elapsed)
         audit.check_history(**inputs['history'])
@@ -760,6 +844,159 @@ def _records_complete(records: list[dict[str, Any]], expected: list[str]) -> boo
         and all(isinstance(check, dict) and check.get('passed') is True for check in row['checks'].values()) for row in records))
 
 
+@contextlib.contextmanager
+def _record_scope(root: Path, *, resume: bool = False, verify: bool = False):
+    """只在原执行者的作用域切换记录坐标，退出后恢复原环境。"""
+
+    keys = (stops.METHOD_RECORD_ENV, stops.METHOD_RESUME_ENV, METHOD_VERIFY_ENV)
+    previous = {key: os.environ.get(key) for key in keys}
+    os.environ[stops.METHOD_RECORD_ENV] = str(root)
+    for key, enabled in ((stops.METHOD_RESUME_ENV, resume), (METHOD_VERIFY_ENV, verify)):
+        if enabled:
+            os.environ[key] = '1'
+        else:
+            os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _private_record_root(root: Path) -> Path:
+    """记录根只能是当前执行用户的私有目录；失效停点不得换根掩盖。"""
+
+    if root.is_symlink():
+        raise ValueError('故障链记录根不能是符号链接')
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metadata = root.stat()
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_mode & 0o077:
+        raise ValueError('故障链记录根必须是当前用户独占的目录')
+    return root.resolve(strict=True)
+
+
+@contextlib.contextmanager
+def _record_lock(root: Path):
+    """同一原链只有一个续作者；锁冲突具体拒绝，不再复制世界。"""
+
+    path = root / '.resume.lock'
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise ValueError('故障链续作锁不是当前用户的普通文件')
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError('该原链仍有执行者，不能同时续作') from error
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _source_inputs() -> dict[str, Any]:
+    """冻结实际源码与来源坐标；修复有身份变化时先走原受控演进，不能暗用新源码承接旧结果。"""
+
+    roots = (REPO_ROOT / 'tools' / 'official_client_capture',
+             REPO_ROOT / 'tools' / 'official_client_control', REPO_ROOT / 'tools' / 'ci',
+             REPO_ROOT / 'backend' / 'internal' / 'officialegress' / 'catalogdata' / 'claude')
+    digests: dict[str, str] = {}
+    for root in roots:
+        for directory, folders, files in os.walk(root, followlinks=False):
+            folders[:] = sorted(name for name in folders if name not in {'__pycache__', 'versions', '.git'}
+                                 and not (Path(directory) / name).is_symlink())
+            for name in sorted(files):
+                path = Path(directory) / name
+                if path.suffix != '.pyc' and path.is_file() and not path.is_symlink():
+                    digests[path.relative_to(REPO_ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in (REPO_ROOT / 'tools' / 'arm64_supervised_deploy.py',
+                 *(REPO_ROOT / 'docs' / name for name in shell.CLAUDE_DOCUMENTS)):
+        if path.is_file() and not path.is_symlink():
+            digests[path.relative_to(REPO_ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {'repository': str(REPO_ROOT), 'files': digests,
+            'fixtures': {key: os.environ.get(key) for key in
+                         ('CLAUDE_2_1_226_RELAY_FIXTURE', 'CLAUDE_2_1_226_FREEZE_FIXTURE')}}
+
+
+def _read_records(path: Path) -> list[dict[str, Any]]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError('原方法六项记录缺失或不是普通文件')
+    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+
+
+def _method_result_passed(code: int | None, stderr: str, count: int = 1) -> bool:
+    lines = stderr.rstrip().splitlines()
+    ran = f"Ran {count} test{'s' if count > 1 else ''} in "
+    return code == 0 and bool(lines) and lines[-1] == 'OK' and any(line.startswith(ran) for line in lines)
+
+
+def _resume_complete_method(case: unittest.TestCase, expected: list[str]) -> list[dict[str, Any]]:
+    """重验真实成功退出及六项原件；连续链由原夹具重绑其活守卫作用域。"""
+
+    saved = stops.load_state('method-result')
+    if saved is None or saved.get('complete') is not True or saved.get('expected') != expected:
+        raise ValueError('原方法没有完整成功停点，不能承接摘要')
+    if bool(saved.get('diagnostic_only')) != (diagnostic_budget.diagnostic_seconds() is not None):
+        raise ValueError('诊断方法结果不能承接为正式认证')
+    for binding in saved['bindings'].values():
+        stops.read_cut(binding)
+    command_prefix = saved.get('command_prefix')
+    if command_prefix is None:
+        raise ValueError('原成功方法缺完整命令观察前缀，不能只承接 unittest 输出')
+    observations = (stops.load_state('command-observations') or {}).get('commands', [])
+    if observations != command_prefix:
+        raise ValueError('原成功方法之后的命令观察列表已改变')
+    stops.verify_commands(command_prefix)
+    original_exit = json.loads(stops.read_cut(saved['bindings']['exit']))
+    context = stops.load_state('method-context')
+    if (context is None or original_exit.get('timed_out') is not False
+            or original_exit.get('returncode') != saved['returncode']
+            or original_exit.get('argv') != [sys.executable, '-m', 'unittest', '-v',
+                                           CHAIN_MODULE + '.' + context['method']]):
+        raise ValueError('原方法的 argv、退出码或超时事实与停点不一致')
+    stderr = stops.read_cut(saved['bindings']['stderr']).decode('utf-8')
+    if not _method_result_passed(saved['returncode'], stderr):
+        raise ValueError('原方法没有真实成功退出事实')
+    callback = getattr(case, 'revalidate_completed_method', None)
+    if callback is not None:
+        records = callback(expected)
+    else:
+        if not stops.restore_case(case):
+            raise ValueError('原成功方法缺少真实夹具坐标')
+        campaign = getattr(case, 'campaign', None)
+        if campaign is not None:
+            stops.verify_case(case, Path(campaign))
+        records = [ScenarioAudit.revalidate(case, name) for name in expected]
+    original = _read_records(saved['bindings']['records']['path'])
+    if records != original or not _records_complete(records, expected):
+        raise ValueError('原方法六项原件、顺序或成功结果不一致')
+    return records
+
+
+def _resumable_method(method: Callable[..., Any]) -> Callable[..., Any]:
+    """保留原 unittest 方法和 ID；成功停点只走原件重验，不再运行故障注入。"""
+
+    @functools.wraps(method)
+    def execute(case: unittest.TestCase, *args: Any, **options: Any) -> Any:
+        if not os.environ.get(METHOD_VERIFY_ENV):
+            return method(case, *args, **options)
+        context = stops.load_state('method-context')
+        if context is None or context.get('method') != type(case).__name__ + '.' + method.__name__:
+            raise ValueError('方法重验入口与原方法身份不一致')
+        records = _resume_complete_method(case, context['expected'])
+        target = os.environ.get(RECORDS_ENV)
+        if not target:
+            raise ValueError('原方法重验缺六项输出坐标')
+        with open(target, 'a', encoding='utf-8') as stream:
+            for record in records:
+                stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n')
+        return None
+    return execute
+
+
 def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Mapping[str, str | tuple[str, ...]], step: str) -> None:
     """在副本树里起一个子进程按顺序运行一组场景方法（``类._scenario_名`` → 场景名），收齐每个场景写出的六项记录。
 
@@ -772,19 +1009,63 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
         for method, names in scenarios.items():
             try:
                 _run_group(case, recorder, {method: names}, step + " / " + method)
-            except AssertionError as error:
+            except (AssertionError, ValueError) as error:
                 errors.append(str(error))
         if errors:
             case.fail("独立场景已收齐失败：\n" + "\n".join(errors))
         return
+    method_root = None
+    if os.environ.get(METHODS_ROOT_ENV):
+        method = next(iter(scenarios))
+        method_root = _private_record_root(Path(os.environ[METHODS_ROOT_ENV]) /
+                                          hashlib.sha256(method.encode()).hexdigest()[:24])
+    if method_root is not None:
+        with _record_lock(method_root), _record_scope(method_root):
+            context = stops.load_state('method-context')
+            expected = _expected_scenarios(scenarios)
+            coordinates = {'method': next(iter(scenarios)), 'expected': expected, 'tree': str(shell._tree_root())}
+            if context is None:
+                context = {**coordinates, 'seconds': 0.0, 'invocations': []}
+                stops.save_state('method-context', context)
+            elif any(context.get(key) != value for key, value in coordinates.items()):
+                raise ValueError('原方法、场景顺序或隔离源码根已改变，不能承接停点')
+            previous = stops.load_state('method-result')
+            verify = bool(previous and previous.get('complete'))
+            resume = bool(context['invocations'])
+            with _record_scope(method_root, resume=resume, verify=verify):
+                _run_group_body(case, recorder, scenarios, step, method_root=method_root, context=context,
+                                verify=verify)
+        return
+    _run_group_body(case, recorder, scenarios, step)
+
+
+def _run_group_body(case: unittest.TestCase, recorder: _ChainRecorder,
+                    scenarios: Mapping[str, str | tuple[str, ...]], step: str,
+                    *, method_root: Path | None = None, context: dict[str, Any] | None = None,
+                    verify: bool = False) -> None:
+    """原方法实际 invocation；完整原件逐次保存，承接也实际运行原方法的重验分支。"""
+
+    diagnostic_seconds = diagnostic_budget.diagnostic_seconds()
     expected = _expected_scenarios(scenarios)
     method_timeout = (diagnostic_seconds if diagnostic_seconds is not None else
                       certification.claude_fault_time_budget(CHAINS[recorder.chain]["scenario"])["method_timeout_seconds"])
-    records_file = Path(tempfile.mkstemp(prefix="fault-chain-records-", suffix=".jsonl")[1])
+    if method_root is None:
+        descriptor, filename = tempfile.mkstemp(prefix="fault-chain-records-", suffix=".jsonl")
+        os.close(descriptor)
+        records_file = Path(filename)
+        output = None
+    else:
+        output = Path(tempfile.mkdtemp(prefix='invocation-', dir=method_root))
+        records_file = output / 'records.jsonl'
+        records_file.touch(mode=0o600)
     environment = {**os.environ, RECORDS_ENV: str(records_file)}
     started = time.monotonic()
+    argv = [sys.executable, "-m", "unittest", "-v", *(f"{CHAIN_MODULE}.{test}" for test in scenarios)]
+    if context is not None:
+        context['invocations'].append({'argv': argv, 'output': output, 'state': 'started', 'verify': verify})
+        stops.save_state('method-context', context)
     process = subprocess.Popen(
-        [sys.executable, "-m", "unittest", "-v", *(f"{CHAIN_MODULE}.{test}" for test in scenarios)],
+        argv,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=str(shell._tree_root()), env=environment,
         stdin=subprocess.DEVNULL, start_new_session=True,
     )
@@ -803,22 +1084,39 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
         log_root = Path(os.environ["CLAUDE_RECORDED_CHAIN_RECORD_DIR"]) / "diagnostic-groups"
         log_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         log_id = hashlib.sha256(step.encode()).hexdigest()[:16]
+        invocation_logs = Path(tempfile.mkdtemp(prefix=log_id + '-', dir=log_root))
         for suffix, value in (("stdout.log", stdout), ("stderr.log", stderr), ("records.jsonl", records_file.read_text())):
-            with (log_root / (log_id + "." + suffix)).open("x", encoding="utf-8") as stream:
+            with (invocation_logs / suffix).open("x", encoding="utf-8") as stream:
                 stream.write(value)
-    records = [json.loads(line) for line in records_file.read_text(encoding="utf-8").splitlines() if line.strip()]
-    records_file.unlink()
+    bindings = None
+    if output is not None:
+        for name, text in (('stdout', stdout), ('stderr', stderr)):
+            (output / (name + '.log')).write_text(text, encoding='utf-8')
+        (output / 'exit.json').write_text(json.dumps({'argv': argv, 'returncode': process.returncode,
+            'timed_out': timed_out, 'seconds': seconds, 'verify': verify}, ensure_ascii=False), encoding='utf-8')
+        bindings = {name: stops.file_cut(output / filename) for name, filename in
+                    (('stdout', 'stdout.log'), ('stderr', 'stderr.log'), ('records', 'records.jsonl'), ('exit', 'exit.json'))}
+        context['seconds'] += seconds
+        context['invocations'][-1].update(state='finished', seconds=seconds, bindings=bindings)
+        stops.save_state('method-context', context)
+    records = _read_records(records_file)
+    if output is None:
+        records_file.unlink()
     recorder.facts["scenarios"].extend(records)
     recorder.facts.setdefault("groups", []).append(
         {"step": step, "tests": list(scenarios), "seconds": seconds, "returncode": None if timed_out else process.returncode, "timeout_seconds": method_timeout,
+         "inherited": verify, "cumulative_seconds": context['seconds'] if context is not None else seconds,
          "diagnostic_only": diagnostic_seconds is not None}
     )
-    lines = stderr.rstrip().splitlines()
-    ran = f"Ran {len(scenarios)} test{'s' if len(scenarios) > 1 else ''} in "
-    passed = (not timed_out and process.returncode == 0 and bool(lines) and lines[-1] == "OK"
-              and any(line.startswith(ran) for line in lines))
+    passed = not timed_out and _method_result_passed(process.returncode, stderr, len(scenarios))
     reported = [record["scenario"] for record in records]
     complete = _records_complete(records, expected)
+    if bindings is not None:
+        result = {'complete': passed and complete, 'expected': expected, 'returncode': process.returncode,
+                  'bindings': bindings, 'diagnostic_only': diagnostic_seconds is not None,
+                  'command_prefix': (stops.load_state('command-observations') or {}).get('commands', [])}
+        # 后续重验不能覆盖最初成功的真实退出与输出原件。
+        stops.save_state('method-verification' if verify else 'method-result', result)
     if not passed or not complete:
         recorder.emit()
         reason = (f"超时（{seconds} 秒，本方法独立预算 {method_timeout} 秒）" if timed_out
@@ -833,363 +1131,519 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
 
 
 class _BatchFaultScenarios(staging_tests._StagingCase):
-    """B3-01 的真实工作树批次夹具（``_RealTreeBatchCase``）加 B3-06 的崩溃驱动：父进程中断、提交中崩溃两层、预算到期、
-    同根因暂停。"""
+    """原六个批次故障场景的明确停点；原序号、故障注入、真实动作和六项检查保持。"""
 
-    def _audit(self, scenario: str, campaign: Path) -> ScenarioAudit:
+    COMMAND_KEYS = {
+        'batch-parent': ('driver-interrupted', 'reconcile-first', 'reconcile-repeat', 'redispatch', 'committed-refusal'),
+        'batch-publish': ('publish-failure', 'redispatch'),
+        'batch-wal': ('draft', 'revise', 'read-revise', 'approve-failure', 'review-refusal', 'reconcile-first', 'reconcile-repeat', 'redispatch'),
+        'batch-root-cause': ('failure-1', 'failure-2', 'limit-refusal', 'record-repair', 'redispatch'),
+        'batch-budget': ('deadline-refusal', 'deadline-preview', 'deadline-apply', 'dispatch'),
+        'batch-seal': ('seal-failure', 'review-refusal', 'reconcile-first', 'reconcile-repeat', 'redispatch'),
+    }
+
+    def _batch_start(self, name: str, scenario: str, builder: Callable[[], Path]) -> dict[str, Any]:
+        """原建场只运行一次；旧阶段必须逐项重读原命令输出及产品读侧，摘要不能跳动作。"""
+        state = stops.resume_checkpoint(self, name)
+        if state is not None:
+            if state.get('phase') == 'initializing':
+                raise ValueError('原批次首次建场未闭合；保留原坐标，禁止重新构造 Campaign')
+            rows = state['completed_commands']
+            if tuple(row['key'] for row in rows) != self.COMMAND_KEYS[name][:len(rows)]:
+                raise ValueError('原批次逻辑命令清单不是冻结顺序的前缀')
+            for row in rows:
+                original = stops.command_step(self, name, row['key'], row['argv'],
+                    lambda: self.fail('已完成原批次命令不得再次派发'), campaign=state['campaign'])
+                self.assertEqual(original, row['outcome'], '原停点局部值与完整命令原件不一致')
+            return state
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            raise ValueError('原批次方法缺原游标，禁止重新初始化')
+        stops.checkpoint(self, name, phase='initializing', audit_snapshots={scenario: 'uninitialized'})
+        self.campaign = builder()
+        state = {'phase': 0, 'campaign': self.campaign, 'completed_commands': [],
+                 'audit_snapshots': {scenario: 'uninitialized'}}
+        stops.checkpoint(self, name, **state)
+        return state
+
+    def _batch_save(self, name: str, state: dict[str, Any], phase: int, **values: Any) -> None:
+        state.update(values, phase=phase)
+        stops.checkpoint(self, name, **state)
+
+    def _batch_command(self, name: str, state: dict[str, Any], key: str, argv: list[Any],
+                       invoke: Callable[[], tuple[int, Any, str]] | None = None) -> tuple[int, Any, str]:
+        if self.COMMAND_KEYS[name][len(state['completed_commands'])] != key:
+            raise ValueError('原批次命令不在下一逻辑停点')
+        result = stops.command_step(self, name, key, argv, invoke or (lambda: batch_tests.run_main(argv)),
+                                    campaign=state['campaign'])
+        state['completed_commands'].append({'key': key, 'argv': argv, 'outcome': result})
+        return result
+
+    def _batch_dispatch(self, name: str, state: dict[str, Any], key: str, phase: str, sequence: int,
+                        actions: list[dict[str, Any]]) -> tuple[int, Any, str]:
+        campaign = state['campaign']
+        plan_path = self.root / 'action-plans' / f"{phase.lower()}-{actions[0]['action_id']}.json"
+        argv = self.cli_argv(phase, sequence, plan_path)
+        return self._batch_command(name, state, key, argv, lambda: self.dispatch(campaign, phase, sequence, actions))
+
+    def _batch_driver(self, name: str, state: dict[str, Any], actions: list[dict[str, Any]]) -> None:
+        driver_tmp = self.root / 'driver-tmp'
+        config = {'tmpdir': str(driver_tmp), 'argv': self.cli_argv('VC-2', 2,
+            self.root / 'action-plans' / f"vc-2-{actions[0]['action_id']}.json"),
+            'patches': [{'module': 'supervisor', 'name': '_commit_prepared_run', 'mode': 'exit_before'}]}
+        argv = [sys.executable, '-c', staging_tests.DRIVER, str(staging_tests.REPOSITORY_ROOT), json.dumps(config)]
+        def invoke() -> tuple[int, Any, str]:
+            driver_tmp.mkdir(mode=0o700, exist_ok=True)
+            self.plan_file('VC-2', actions)
+            pending = stops.begin_command(argv)
+            completed = subprocess.run(argv, capture_output=True, text=True, timeout=300, check=False)
+            stops.record_command(argv, completed.returncode, completed.stdout, completed.stderr, pending=pending)
+            try:
+                output = json.loads(completed.stdout) if completed.stdout.strip() else None
+            except ValueError:
+                output = None
+            return completed.returncode, output, completed.stderr
+        code, _result, stderr = self._batch_command(name, state, 'driver-interrupted', argv, invoke)
+        self.assertEqual(code, 9, stderr[-2000:])
+
+    def _audit(self, scenario: str, campaign: Path, *, trusted_extra: Iterable[Path] = ()) -> ScenarioAudit:
         audit = ScenarioAudit(self, scenario)
-        vc = campaign / "control" / "vc"
-        audit.snapshot(
-            trusted=[campaign / "campaign.json", vc / "campaign-plan.json", vc / "commits", vc / "batches",
-                     *sorted(vc.glob("vc-*-checkpoint.json"))],
-            history=[self.store_root, self.ledger_dir / "events", self.ledger_dir / "ledger.json", self.project_root / "events",
-                     self.project_root / "plan.json", campaign / "control" / "reconciliation", vc / "commits", vc / "batches",
-                     vc / "run-manifests"],
-            timing_dir=self.ledger_dir,
-            project_root=self.project_root,
-        )
+        vc = campaign / 'control/vc'
+        audit.snapshot(trusted=[campaign / 'campaign.json', vc / 'campaign-plan.json', vc / 'commits', vc / 'batches',
+            *sorted(vc.glob('vc-*-checkpoint.json')), *trusted_extra], history=[self.store_root, self.ledger_dir / 'events',
+            self.ledger_dir / 'ledger.json', self.project_root / 'events', self.project_root / 'plan.json',
+            campaign / 'control/reconciliation', vc / 'commits', vc / 'batches', vc / 'run-manifests'],
+            timing_dir=self.ledger_dir, project_root=self.project_root)
         return audit
 
-    def _committed(self, campaign: Path, sequence: int, phase: str = "VC-2") -> dict[str, Any]:
-        path = campaign / "control" / "vc" / "batches" / f"{sequence:04d}-{phase.lower()}.json"
-        result = json.loads(path.read_text(encoding='utf-8'))
+    def _committed(self, campaign: Path, sequence: int, phase: str = 'VC-2') -> dict[str, Any]:
+        path = campaign / 'control/vc/batches' / f'{sequence:04d}-{phase.lower()}.json'
+        result = json.loads(path.read_bytes())
         stops.record_json_read(path)
         return result
 
-    def _scenario_parent_interrupted(self) -> None:
-        """父进程中断：VC-2 首批父 run 已 prepared、owner 在 commit 之前被 SIGKILL → monitor 封存 aborted_prepared →
-        状态给出同序号重派 → 下次入口对账、ABORT 入账一次 → 同序号 attempt-2 提交，只执行原动作。"""
+    def _batch_closure(self, audit: ScenarioAudit, campaign: Path, sequence: int, phase: str = 'VC-2') -> dict[str, Any] | None:
+        return audit.file_closure_source(campaign / 'control/vc/batches' / f'{sequence:04d}-{phase.lower()}.json',
+                                         ('execute_item_ids',), ('reuse_item_ids',))
 
-        campaign = self.campaign = self.build_batch_campaign()
-        audit = self._audit("父进程中断", campaign)
+    @_resumable_method
+    def _scenario_parent_interrupted(self) -> None:
+        """原父 run 中断、对账与同序号 attempt-2；停点后不重新注入原故障。"""
+        name, scenario = 'batch-parent', '父进程中断'
+        state = self._batch_start(name, scenario, self.build_batch_campaign)
+        campaign = state['campaign']
+        audit = self._audit(scenario, campaign)
         actions = self.draft_actions(campaign)
-        self.run_driver("VC-2", 2, actions, [{"module": "supervisor", "name": "_commit_prepared_run", "mode": "exit_before"}])
-        (run_dir,) = self.staging_runs()
-        self.wait_terminal(run_dir, {"aborted_prepared"})
-        self.assertEqual(staging_tests._read(run_dir / "stop-receipt.json")["reason"], "prepared-abandoned")
-        # 对账父 run：入账一次根因，给出续跑入口（序号未占，同序号重新 prepare）；再对账一次幂等、入账不变。
-        code, reconciled, stderr = batch_tests.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", run_dir])
-        self.assertIsNotNone(reconciled, stderr)
-        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
-        first_totals = audit.accounting_state()
-        code, _again, stderr = batch_tests.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", run_dir])
-        self.assertEqual(code, 0, stderr)
-        second_totals = audit.accounting_state()
-        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, actions), 2, "VC-2")
-        self.assertEqual(result["staging_attempt"], 2)
-        (handled,) = result["orphans"]
-        self.assertEqual((handled["kind"], handled["already_reconciled"]), ("parent-run", True))
-        totals_after = audit.accounting_state()
-        # 重复派发同序号：已提交即拒绝，零写入、入账不变。
-        code, _again, stderr = self.dispatch(campaign, "VC-2", 2, actions)
-        self.assertEqual(code, 1, stderr)
+        if state['phase'] == 0:
+            self._batch_driver(name, state, actions)
+            self._batch_save(name, state, 1)
+        if state['phase'] == 1:
+            (run_dir,) = self.staging_runs()
+            self.wait_terminal(run_dir, {'aborted_prepared'})
+            self.assertEqual(staging_tests._read(run_dir / 'stop-receipt.json')['reason'], 'prepared-abandoned')
+            self._batch_save(name, state, 2, run_dir=run_dir, stop_binding=stops.file_cut(run_dir / 'stop-receipt.json'))
+        run_dir = state['run_dir']
+        stops.read_cut(state['stop_binding'])
+        argv = ['reconcile-supervisor-run', '--campaign-dir', campaign, '--run-dir', run_dir]
+        if state['phase'] == 2:
+            code, reconciled, stderr = self._batch_command(name, state, 'reconcile-first', argv)
+            self.assertIsNotNone(reconciled, stderr)
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._batch_save(name, state, 3, reconciled=reconciled, first=audit.accounting_state())
+        if state['phase'] == 3:
+            code, _again, stderr = self._batch_command(name, state, 'reconcile-repeat', argv)
+            self.assertEqual(code, 0, stderr)
+            self._batch_save(name, state, 4, second=audit.accounting_state())
+        if state['phase'] == 4:
+            result = self.assert_batch_passed(self._batch_dispatch(name, state, 'redispatch', 'VC-2', 2, actions), 2, 'VC-2')
+            self.assertEqual(result['staging_attempt'], 2)
+            (handled,) = result['orphans']
+            self.assertEqual((handled['kind'], handled['already_reconciled']), ('parent-run', True))
+            self._batch_save(name, state, 5, result=result, totals_after=audit.accounting_state())
+        if state['phase'] == 5:
+            code, _again, stderr = self._batch_dispatch(name, state, 'committed-refusal', 'VC-2', 2, actions)
+            self.assertEqual(code, 1, stderr)
+            self._batch_save(name, state, 6, after_refusal=audit.accounting_state())
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
         audit.check_trusted()
         batch = self._committed(campaign, 2)
-        audit.check_closure(executed=batch["execute_item_ids"], expected=["vc2-classify-draft"],
-                            reused=batch["reuse_item_ids"], expected_reused=[], what="同序号重派批次")
-        audit.check_accounting(root_causes=1, repeats=[("重复对账父 run", first_totals, second_totals),
-                                                       ("重复派发已提交序号", totals_after, audit.accounting_state())])
+        audit.check_closure(executed=batch['execute_item_ids'], expected=['vc2-classify-draft'], reused=batch['reuse_item_ids'],
+            expected_reused=[], what='同序号重派批次', source=self._batch_closure(audit, campaign, 2))
+        audit.check_accounting(root_causes=1, repeats=[('重复对账父 run', state['first'], state['second']),
+            ('重复派发已提交序号', state['totals_after'], state['after_refusal'])])
         self.assert_unique_accounting()
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(reconciled["next_command"], "compile-and-run-vc-batch", "同序号")
-        audit.report(parent_run=run_dir.name, staging_attempt=result["staging_attempt"])
+        audit.check_entry(state['reconciled']['next_command'], 'compile-and-run-vc-batch', '同序号')
+        audit.report(parent_run=run_dir.name, staging_attempt=state['result']['staging_attempt'])
 
+    @_resumable_method
     def _scenario_commit_publish_crash(self) -> None:
-        """提交中崩溃（批次派发事务层）：COMMIT 发布步失败（计时事件已写、COMMIT 未写）→ 入口当场对账、ABORT、归档已发布的
-        半产物 → 同序号 attempt-2 提交；阶段已 active，不再补登记事件。"""
-
+        """原 COMMIT 发布步故障与同序号恢复，原失败 stderr 和归档均保留。"""
         from tools.official_client_capture import claude_upgrade
         from tools.official_client_capture.capturelib.model import ConfigurationError
-
-        campaign = self.campaign = self.build_batch_campaign()
-        audit = self._audit("提交中崩溃（批次派发事务层）", campaign)
+        name, scenario = 'batch-publish', '提交中崩溃（批次派发事务层）'
+        state = self._batch_start(name, scenario, self.build_batch_campaign)
+        campaign = state['campaign']
+        audit = self._audit(scenario, campaign)
         actions = self.draft_actions(campaign)
-        original = claude_upgrade._publish_staging_file
-        calls = {"count": 0}
-
-        def failing(source: Path, target: Path, campaign_dir: Path) -> None:
-            calls["count"] += 1
-            if calls["count"] == 2:
-                raise ConfigurationError("故障恢复链注入：COMMIT 发布步失败")
-            original(source, target, campaign_dir)
-
-        with mock.patch.object(claude_upgrade, "_publish_staging_file", side_effect=failing):
-            code, result, stderr = self.dispatch(campaign, "VC-2", 2, actions)
-        self.assertEqual((code, result), (1, None))
-        (run_dir,) = self.staging_runs()
-        receipt = staging_tests._read(campaign / "control" / "reconciliation" / f"run-{run_dir.name}" / "supervisor-run-reconciliation.json")
-        self.assertEqual((receipt["failure_class"], receipt["live_request_count"]), ("parent-prepare-abandoned", 0))
-        self.assertFalse(self.commit_path(2).exists())
-        archive = campaign / "control" / "vc" / "staging-aborts" / "0002-vc-2" / "attempt-1"
-        self.assertTrue((archive / "batch.json").is_file())
-        after_failure = audit.totals()
-        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, actions), 2, "VC-2")
-        self.assertEqual((result["staging_attempt"], result["timing_ledger"]["events"], result["orphans"]), (2, [], []))
+        if state['phase'] == 0:
+            original, calls = claude_upgrade._publish_staging_file, {'count': 0}
+            def failing(source: Path, target: Path, campaign_dir: Path) -> None:
+                calls['count'] += 1
+                if calls['count'] == 2:
+                    raise ConfigurationError('故障恢复链注入：COMMIT 发布步失败')
+                original(source, target, campaign_dir)
+            with mock.patch.object(claude_upgrade, '_publish_staging_file', side_effect=failing):
+                code, result, stderr = self._batch_dispatch(name, state, 'publish-failure', 'VC-2', 2, actions)
+            self.assertEqual((code, result), (1, None))
+            (run_dir,) = self.staging_runs()
+            receipt_path = campaign / 'control/reconciliation' / f'run-{run_dir.name}' / 'supervisor-run-reconciliation.json'
+            receipt = staging_tests._read(receipt_path)
+            self.assertEqual((receipt['failure_class'], receipt['live_request_count']), ('parent-prepare-abandoned', 0))
+            self.assertFalse(self.commit_path(2).exists())
+            archive = campaign / 'control/vc/staging-aborts/0002-vc-2/attempt-1'
+            self.assertTrue((archive / 'batch.json').is_file())
+            self._batch_save(name, state, 1, run_dir=run_dir, archive=archive, failure_stderr=stderr,
+                reconciliation_binding=stops.file_cut(receipt_path), after_failure=audit.totals())
+        stops.read_cut(state['reconciliation_binding'])
+        if state['phase'] == 1:
+            result = self.assert_batch_passed(self._batch_dispatch(name, state, 'redispatch', 'VC-2', 2, actions), 2, 'VC-2')
+            self.assertEqual((result['staging_attempt'], result['timing_ledger']['events'], result['orphans']), (2, [], []))
+            self._batch_save(name, state, 2, result=result)
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
         audit.check_trusted()
         batch = self._committed(campaign, 2)
-        audit.check_closure(executed=batch["execute_item_ids"], expected=["vc2-classify-draft"],
-                            reused=batch["reuse_item_ids"], expected_reused=[], what="同序号重派批次")
-        # 失败当场已对账入账一次；重派不再入账（同一根因计数不变）。
-        audit.check_accounting(root_causes=1, repeats=[("同序号重派", {"root_causes": after_failure["project"]["root_cause_counts"]},
-                                                         {"root_causes": audit.totals()["project"]["root_cause_counts"]})])
+        audit.check_closure(executed=batch['execute_item_ids'], expected=['vc2-classify-draft'], reused=batch['reuse_item_ids'],
+            expected_reused=[], what='同序号重派批次', source=self._batch_closure(audit, campaign, 2))
+        audit.check_accounting(root_causes=1, repeats=[('同序号重派',
+            {'root_causes': state['after_failure']['project']['root_cause_counts']},
+            {'root_causes': audit.totals()['project']['root_cause_counts']})])
         self.assert_unique_accounting()
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(stderr, "commit-publish 步失败", "同序号重新派发")
-        audit.report(parent_run=run_dir.name, archived=str(archive.relative_to(campaign)))
+        audit.check_entry(state['failure_stderr'], 'commit-publish 步失败', '同序号重新派发')
+        audit.report(parent_run=state['run_dir'].name, archived=str(state['archive'].relative_to(campaign)))
 
+    @_resumable_method
     def _scenario_action_wal_crash(self) -> None:
-        """提交中崩溃（动作结果 WAL 层）：VC-2 批准动作在 Store 分类事实写入之后、批准目录发布之前被硬杀 → 账本进阶段审核、
-        对账前 N+1 零写入拒绝 → reconcile-supervisor-run 写阶段幂等重派证明（重复对账逐字相同）→ N+1 逐字重派复用原事实。"""
-
+        """原分类 Store/WAL 写入后硬杀、阶段审核与 N+1 逐字重派。"""
         import collections
-
         from tools.official_client_capture import claude_upgrade
         from tools.official_client_capture import claude_upgrade_classify as classify
         from tools.official_client_capture import claude_upgrade_vc
         from tools.official_client_capture import codex_upgrade_timing_ledger as timing
-
         if not site.ENABLE_USER_SITE:
-            self.fail("动作子进程的崩溃注入经 usercustomize 进入，要求启用用户 site（不跳过：跳过即未认证）")
-        campaign = self.campaign = self.build_batch_campaign()
-
+            self.fail('动作子进程的崩溃注入经 usercustomize 进入，要求启用用户 site（不跳过：跳过即未认证）')
+        name, scenario = 'batch-wal', '提交中崩溃（动作结果 WAL 层）'
+        state = self._batch_start(name, scenario, self.build_batch_campaign)
+        campaign = state['campaign']
         def action(action_id: str, argv: list[Any]) -> dict[str, Any]:
-            from tools.official_client_capture import claude_upgrade_batch as batch
-
-            return batch.managed_action(action_id, f"VC-2:{action_id}", argv, item_ids=[action_id])
-
-        self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, [action("vc2-classify-draft", ["classify", "--campaign-dir", campaign])]), 2, "VC-2")
-        directory = self.write_documents(self.resolved_documents(campaign / classify.DRAFT_ROOT / "rev-0001"), self.root / "vc2-resolved")
-        revise = ["classify", "--campaign-dir", campaign, "--from-revision", "rev-0001", "--revision-input", directory]
-        self.assert_batch_passed(self.dispatch(campaign, "VC-2", 3, [action("vc2-classify-revise", revise)]), 3, "VC-2")
-        code, revised, stderr = self.revise(campaign, "rev-0001", directory)
-        self.assertEqual((code, revised["revision"]), (2, "rev-0002"), stderr)
-        audit = self._audit("提交中崩溃（动作结果 WAL 层）", campaign)
-        # 可信产物另加两份分类修订（草案与修订都已提交，崩溃与重派都不得改写）。
-        audit.trusted_before.update(file_digests(campaign / classify.DRAFT_ROOT))
-        approve = [action("vc2-classify-approve", self.approve_argv(campaign, "rev-0002", revised["review_sha256"]))]
-        inject = self.root / "inject"
-        inject.mkdir(mode=0o700)
-        (inject / "usercustomize.py").write_text(batch_tests.USERCUSTOMIZE, encoding="utf-8")
-        marker = self.root / "crashed.marker"
-        crash = {"PYTHONPATH": os.pathsep.join([str(inject), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
-                 batch_tests.CRASH_ACTION_ENV: "vc2-classify-approve", batch_tests.CRASH_MARKER_ENV: str(marker),
-                 batch_tests.CRASH_SUFFIX_ENV: "/classification/approved"}
-        with mock.patch.dict(os.environ, crash):
-            code, failed, stderr = self.dispatch(campaign, "VC-2", 4, approve)
-        self.assertTrue(marker.is_file(), "崩溃注入没有生效（usercustomize 未被动作子进程加载）")
-        self.assertEqual((code, failed["campaign_run"]["reason"]), (1, "action-failed:vc2-classify-approve"), stderr)
-        failed_run = Path(failed["campaign_run"]["run_dir"])
-        facts = [fact for fact in self.store_facts() if fact["fact_kind"] == "rule_classification_recorded"]
-        self.assertEqual(len(facts), 1)
-        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "stage_review_required")
-        # 对账前 N+1 零写入拒绝。
-        code, _result, stderr = self.dispatch(campaign, "VC-2", 5, approve)
-        self.assertEqual(code, 1)
-        self.assertIn("stage_review_required", stderr)
-        self.assertFalse(self.staging_dir(5).exists())
-        code, reconciled, stderr = batch_tests.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
-        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
-        first_totals = audit.accounting_state()
-        code, again, stderr = batch_tests.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
-        self.assertEqual((code, again["stage_replay"]), (0, reconciled["stage_replay"]), stderr)
-        second_totals = audit.accounting_state()
-        proof = reconciled["stage_replay"]
-        self.assertEqual((proof["allowed"], proof["next_action"]), (True, "redispatch-same-batch"))
-        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 5, approve), 5, "VC-2")
-        facts = [fact for fact in self.store_facts() if fact["fact_kind"] == "rule_classification_recorded"]
-        self.assertEqual([fact["producer_run"]["run_dir"] for fact in facts], [str(failed_run)], "重派必须复用崩溃前写下的唯一事实")
-        self.assertEqual(collections.Counter(fact["fact_kind"] for fact in self.store_facts())["rule_classification_recorded"], 1)
-        self.assertEqual(claude_upgrade._load_stage_result(campaign, "classify")["revision"], "rev-0002")
-        self.assertTrue(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-2").is_file())
+            return batch_tests.batch.managed_action(action_id, f'VC-2:{action_id}', argv, item_ids=[action_id])
+        if state['phase'] == 0:
+            self.assert_batch_passed(self._batch_dispatch(name, state, 'draft', 'VC-2', 2,
+                [action('vc2-classify-draft', ['classify', '--campaign-dir', campaign])]), 2, 'VC-2')
+            self._batch_save(name, state, 1)
+        if state['phase'] == 1:
+            self._batch_save(name, state, 2)
+            directory = self.write_documents(self.resolved_documents(campaign / classify.DRAFT_ROOT / 'rev-0001'), self.root / 'vc2-resolved')
+            self._batch_save(name, state, 3, directory=directory,
+                revision_bindings=[stops.file_cut(path) for path in sorted(directory.rglob('*')) if path.is_file()])
+        if state['phase'] == 2:
+            raise ValueError('原修订输入首次物化未闭合；禁止覆盖原输入')
+        for binding in state['revision_bindings']:
+            stops.read_cut(binding)
+        directory = state['directory']
+        revise = ['classify', '--campaign-dir', campaign, '--from-revision', 'rev-0001', '--revision-input', directory]
+        if state['phase'] == 3:
+            self.assert_batch_passed(self._batch_dispatch(name, state, 'revise', 'VC-2', 3,
+                [action('vc2-classify-revise', revise)]), 3, 'VC-2')
+            self._batch_save(name, state, 4)
+        if state['phase'] == 4:
+            code, revised, stderr = self._batch_command(name, state, 'read-revise', revise)
+            self.assertEqual((code, revised['revision']), (2, 'rev-0002'), stderr)
+            self._batch_save(name, state, 5, revised=revised)
+        audit = self._audit(scenario, campaign, trusted_extra=[campaign / classify.DRAFT_ROOT])
+        approve = [action('vc2-classify-approve', self.approve_argv(campaign, 'rev-0002', state['revised']['review_sha256']))]
+        if state['phase'] == 5:
+            self._batch_save(name, state, 6)
+            inject = self.root / 'inject'
+            inject.mkdir(mode=0o700)
+            injection = inject / 'usercustomize.py'
+            injection.write_text(batch_tests.USERCUSTOMIZE, encoding='utf-8')
+            marker = self.root / 'crashed.marker'
+            crash = {'PYTHONPATH': os.pathsep.join([str(inject), os.environ.get('PYTHONPATH', '')]).rstrip(os.pathsep),
+                batch_tests.CRASH_ACTION_ENV: 'vc2-classify-approve', batch_tests.CRASH_MARKER_ENV: str(marker),
+                batch_tests.CRASH_SUFFIX_ENV: '/classification/approved'}
+            self._batch_save(name, state, 7, injection_binding=stops.file_cut(injection), crash=crash, marker=marker)
+        if state['phase'] == 6:
+            raise ValueError('原 WAL 崩溃注入输入未闭合；禁止覆盖或重新生成')
+        stops.read_cut(state['injection_binding'])
+        if state['phase'] == 7:
+            with mock.patch.dict(os.environ, state['crash']):
+                code, failed, stderr = self._batch_dispatch(name, state, 'approve-failure', 'VC-2', 4, approve)
+            self.assertTrue(state['marker'].is_file(), '崩溃注入没有生效')
+            self.assertEqual((code, failed['campaign_run']['reason']), (1, 'action-failed:vc2-classify-approve'), stderr)
+            failed_run = Path(failed['campaign_run']['run_dir'])
+            facts = [fact for fact in self.store_facts() if fact['fact_kind'] == 'rule_classification_recorded']
+            self.assertEqual(len(facts), 1)
+            self.assertEqual(timing.inspect_ledger(self.ledger_dir)['status'], 'stage_review_required')
+            self._batch_save(name, state, 8, failed_run=failed_run, marker_binding=stops.file_cut(state['marker']))
+        stops.read_cut(state['marker_binding'])
+        if state['phase'] == 8:
+            code, _result, stderr = self._batch_dispatch(name, state, 'review-refusal', 'VC-2', 5, approve)
+            self.assertEqual(code, 1)
+            self.assertIn('stage_review_required', stderr)
+            self.assertFalse(self.staging_dir(5).exists())
+            self._batch_save(name, state, 9)
+        argv = ['reconcile-supervisor-run', '--campaign-dir', campaign, '--run-dir', state['failed_run']]
+        if state['phase'] == 9:
+            code, reconciled, stderr = self._batch_command(name, state, 'reconcile-first', argv)
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._batch_save(name, state, 10, reconciled=reconciled, first=audit.accounting_state())
+        if state['phase'] == 10:
+            code, again, stderr = self._batch_command(name, state, 'reconcile-repeat', argv)
+            self.assertEqual((code, again['stage_replay']), (0, state['reconciled']['stage_replay']), stderr)
+            self._batch_save(name, state, 11, second=audit.accounting_state())
+        proof = state['reconciled']['stage_replay']
+        self.assertEqual((proof['allowed'], proof['next_action']), (True, 'redispatch-same-batch'))
+        if state['phase'] == 11:
+            result = self.assert_batch_passed(self._batch_dispatch(name, state, 'redispatch', 'VC-2', 5, approve), 5, 'VC-2')
+            self._batch_save(name, state, 12, result=result)
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
+        facts = [fact for fact in self.store_facts() if fact['fact_kind'] == 'rule_classification_recorded']
+        self.assertEqual([fact['producer_run']['run_dir'] for fact in facts], [str(state['failed_run'])], '复用崩溃前唯一事实')
+        self.assertEqual(collections.Counter(fact['fact_kind'] for fact in self.store_facts())['rule_classification_recorded'], 1)
+        self.assertEqual(claude_upgrade._load_stage_result(campaign, 'classify')['revision'], 'rev-0002')
+        self.assertTrue(claude_upgrade_vc.vc_checkpoint_path(campaign, 'VC-2').is_file())
         audit.check_trusted()
-        audit.check_closure(executed=[item["action_id"] for item in proof["actions"]], expected=["vc2-classify-approve"],
-                            reused=self._committed(campaign, 5)["reuse_item_ids"], expected_reused=[], what="阶段幂等重派证明")
-        audit.check_accounting(root_causes=1, repeats=[("重复对账父 run", first_totals, second_totals)])
+        audit.check_closure(executed=[item['action_id'] for item in proof['actions']], expected=['vc2-classify-approve'],
+            reused=self._committed(campaign, 5)['reuse_item_ids'], expected_reused=[], what='阶段幂等重派证明',
+            source=audit.closure_source(proof, ('actions',), row_key='action_id'))
+        audit.check_accounting(root_causes=1, repeats=[('重复对账父 run', state['first'], state['second'])])
         self.assert_unique_accounting()
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(reconciled, "redispatch-same-batch")
-        audit.report(failed_run=failed_run.name, redispatched_sequence=5, completion=result["timing_ledger"]["completion"] is not None)
+        audit.check_entry(state['reconciled'], 'redispatch-same-batch')
+        audit.report(failed_run=state['failed_run'].name, redispatched_sequence=5,
+                     completion=state['result']['timing_ledger']['completion'] is not None)
 
+    @_resumable_method
     def _scenario_same_root_cause_pause(self) -> None:
-        """同根因暂停（批次派发层）：prepare 之后同一根因连续失败两次 → 第二次对账判定暂停、给出修复登记入口 → 达上限后
-        派发零写入拒绝 → 凭修复提交、离线回归与部署收据登记根因修复（只清零这个根因）→ 同序号重派提交。"""
-
+        """原两次同根因故障、上限拒绝、受控修复登记与同序号恢复。"""
         from tools.official_client_capture import claude_upgrade
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
-
-        campaign = self.campaign = self.build_batch_campaign()
-        audit = self._audit("同根因暂停", campaign)
+        name, scenario = 'batch-root-cause', '同根因暂停'
+        state = self._batch_start(name, scenario, self.build_batch_campaign)
+        campaign = state['campaign']
+        audit = self._audit(scenario, campaign)
         actions = self.draft_actions(campaign)
         original = claude_upgrade.compile_vc_batch
-
         def crashing(arguments: Any, **options: Any) -> Any:
             original(arguments, **options)
-            raise RuntimeError("故障恢复链注入：prepare 之后失败")
-
-        messages = []
-        for _ in range(2):
-            with mock.patch.object(claude_upgrade, "compile_vc_batch", side_effect=crashing):
-                code, result, stderr = self.dispatch(campaign, "VC-2", 2, actions)
-            self.assertEqual((code, result), (1, None), stderr)
-            messages.append(stderr)
-        head = self.head()
-        (cause, count), = head["root_cause_counts"].items()
-        self.assertEqual(count, 2)
-        counted = audit.accounting_state()
-        # 达上限：干净派发也被项目总账拒绝，零写入（不新开 staging attempt、入账不变）。
-        refused_state = audit.accounting_state()
-        attempts = sorted(path.name for path in self.staging_dir(2).iterdir())
-        code, _result, stderr = self.dispatch(campaign, "VC-2", 2, actions)
-        self.assertEqual(code, 1)
-        self.assertIn("根因达上限", stderr)
-        self.assertEqual(sorted(path.name for path in self.staging_dir(2).iterdir()), attempts)
-        after_refusal = audit.accounting_state()
-        # 修复登记：修复提交、离线回归收据与晚于停线的受管部署收据（code 类修复，只清零这个根因）。
-        regression = self.root / "regression-summary.txt"
-        regression.write_text("test_claude_upgrade_staging_recovery exit=0\n", encoding="utf-8")
-        deploy = ledger_fixture.write_claude_deploy_receipt(self.data, self.tool_identity, stamp="20261008t000000z")
-        sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()  # noqa: E731
-        repair = subprocess.run(
-            [sys.executable, "-m", "tools.official_client_capture.codex_upgrade_project_ledger", "record-root-cause-repair",
-             "--ledger-dir", str(self.project_root), "--root-cause-id", cause, "--kind", "code",
-             "--binding", f"fix_commit_sha={'b' * 40}", "--binding", f"regression_receipt_sha256={sha(regression)}",
-             "--binding", f"deployment_receipt_sha256={sha(deploy)}", "--note", "故障恢复链：修复导致同根因连续失败的缺陷"],
-            capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL,
-        )
-        self.assertEqual(repair.returncode, 0, repair.stdout + repair.stderr)
-        result = self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, actions), 2, "VC-2")
-        self.assertEqual(result["commit"]["staging_attempt"], len(attempts) + 1)
-        # 修复只追加 root_cause_repaired 事件把准入计数清零；两次失败事件原样留在总账里（历史检查兜底）。
-        self.assertEqual(self.head()["root_cause_counts"].get(cause), 0)
+            raise RuntimeError('故障恢复链注入：prepare 之后失败')
+        for index in range(2):
+            if state['phase'] == index:
+                with mock.patch.object(claude_upgrade, 'compile_vc_batch', side_effect=crashing):
+                    code, result, stderr = self._batch_dispatch(name, state, f'failure-{index + 1}', 'VC-2', 2, actions)
+                self.assertEqual((code, result), (1, None), stderr)
+                self._batch_save(name, state, index + 1, messages=[*state.get('messages', []), stderr])
+        if state['phase'] == 2:
+            (cause, count), = self.head()['root_cause_counts'].items()
+            self.assertEqual(count, 2)
+            self._batch_save(name, state, 3, cause=cause, counted=audit.accounting_state(),
+                refused_state=audit.accounting_state(), attempts=sorted(path.name for path in self.staging_dir(2).iterdir()))
+        if state['phase'] == 3:
+            code, _result, stderr = self._batch_dispatch(name, state, 'limit-refusal', 'VC-2', 2, actions)
+            self.assertEqual(code, 1)
+            self.assertIn('根因达上限', stderr)
+            self.assertEqual(sorted(path.name for path in self.staging_dir(2).iterdir()), state['attempts'])
+            self._batch_save(name, state, 4, after_refusal=audit.accounting_state())
+        if state['phase'] == 4:
+            self._batch_save(name, state, 5)
+            regression = self.root / 'regression-summary.txt'
+            regression.write_text('test_claude_upgrade_staging_recovery exit=0\n', encoding='utf-8')
+            deploy = ledger_fixture.write_claude_deploy_receipt(self.data, self.tool_identity, stamp='20261008t000000z')
+            sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            argv = [sys.executable, '-m', 'tools.official_client_capture.codex_upgrade_project_ledger', 'record-root-cause-repair',
+                '--ledger-dir', str(self.project_root), '--root-cause-id', state['cause'], '--kind', 'code',
+                '--binding', f"fix_commit_sha={'b' * 40}", '--binding', f'regression_receipt_sha256={sha(regression)}',
+                '--binding', f'deployment_receipt_sha256={sha(deploy)}', '--note', '故障恢复链：修复导致同根因连续失败的缺陷']
+            self._batch_save(name, state, 6, repair_argv=argv, repair_bindings=[stops.file_cut(regression), stops.file_cut(deploy)])
+        if state['phase'] == 5:
+            raise ValueError('原修复输入物化未闭合；禁止覆盖或重新形成部署收据')
+        for binding in state['repair_bindings']:
+            stops.read_cut(binding)
+        if state['phase'] == 6:
+            argv = state['repair_argv']
+            def repair() -> tuple[int, Any, str]:
+                pending = stops.begin_command(argv)
+                done = subprocess.run(argv, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL)
+                stops.record_command(argv, done.returncode, done.stdout, done.stderr, pending=pending)
+                try:
+                    result = json.loads(done.stdout) if done.stdout.strip() else None
+                except ValueError:
+                    result = None
+                return done.returncode, result, done.stderr
+            code, _result, stderr = self._batch_command(name, state, 'record-repair', argv, repair)
+            self.assertEqual(code, 0, stderr)
+            self._batch_save(name, state, 7)
+        if state['phase'] == 7:
+            result = self.assert_batch_passed(self._batch_dispatch(name, state, 'redispatch', 'VC-2', 2, actions), 2, 'VC-2')
+            self.assertEqual(result['commit']['staging_attempt'], len(state['attempts']) + 1)
+            self._batch_save(name, state, 8)
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
+        self.assertEqual(self.head()['root_cause_counts'].get(state['cause']), 0)
         audit.check_trusted()
         batch = self._committed(campaign, 2)
-        audit.check_closure(executed=batch["execute_item_ids"], expected=["vc2-classify-draft"],
-                            reused=batch["reuse_item_ids"], expected_reused=[], what="修复后同序号重派批次")
-        audit.check_accounting(root_causes=2, root_cause_state=counted, repeats=[("达上限时派发", refused_state, after_refusal)])
+        audit.check_closure(executed=batch['execute_item_ids'], expected=['vc2-classify-draft'], reused=batch['reuse_item_ids'],
+            expected_reused=[], what='修复后同序号重派批次', source=self._batch_closure(audit, campaign, 2))
+        audit.check_accounting(root_causes=2, root_cause_state=state['counted'],
+            repeats=[('达上限时派发', state['refused_state'], state['after_refusal'])])
         self.assert_unique_accounting()
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(messages[1], "record-root-cause-repair", "同序号重新派发")
-        audit.report(root_cause_id=cause, staging_attempts=len(attempts) + 1)
+        audit.check_entry(state['messages'][1], 'record-root-cause-repair', '同序号重新派发')
+        audit.report(root_cause_id=state['cause'], staging_attempts=len(state['attempts']) + 1)
 
+    @_resumable_method
     def _scenario_budget_expired(self) -> None:
-        """预算到期（批次派发层）：Campaign 预算在 VC-2 首批派发之前真实到期（开始时刻前推，不改时钟）→ 派发零写入拒绝并
-        给出延期入口 → deadline-extend 预览／批准写两本账（原始截止不变、只追加延期）→ 原 Campaign 同序号派发，批次带原始
-        截止与延期绑定。"""
-
+        """原截止真实到期再批准延期；恢复不重置开始、原截止或已冻结的新截止。"""
         from tools.official_client_capture import codex_upgrade_timing_ledger as timing
         from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
-
+        name, scenario = 'batch-budget', '预算到期'
         create, build_plan = timing.create_ledger, vc_artifacts.build_campaign_plan
-        # 总预算 30 分钟、开始时刻前推到只剩约 8 秒：阶段预算（不得宽于总预算）还要容纳正式的清理窗口与终态排空（与 Codex R8
-        # 同一约束），所以不缩预算本身；延期总截止之后 VC-2 阶段照常有完整预算。
         started = datetime.now(timezone.utc) - timedelta(minutes=30) + timedelta(seconds=8)
         deadline = started + timedelta(minutes=30)
-
         def aged(*arguments: Any, **options: Any) -> Any:
             options.update(started_at_utc=started.isoformat(), total_budget_minutes=30,
-                           stage_budgets_minutes={phase: 30 for phase in timing.PHASE_ORDER})
+                stage_budgets_minutes={phase: 30 for phase in timing.PHASE_ORDER})
             return create(*arguments, **options)
-
         def plan_with_ledger_deadline(*arguments: Any, **options: Any) -> Any:
-            # VC-0 收口按计时账本的总截止写 VC 总计划的原始截止（claude_upgrade_campaign），夹具里同样对齐，总账注册才承接得上。
-            options["original_deadline_at_utc"] = deadline.isoformat()
+            options['original_deadline_at_utc'] = deadline.isoformat()
             return build_plan(*arguments, **options)
-
-        with mock.patch.object(timing, "create_ledger", side_effect=aged), \
-                mock.patch.object(vc_artifacts, "build_campaign_plan", side_effect=plan_with_ledger_deadline):
-            campaign = self.campaign = self.build_batch_campaign()
-        self.assertEqual(datetime.fromisoformat(timing.inspect_ledger(self.ledger_dir)["total_deadline_at_utc"]), deadline)
-        audit = self._audit("预算到期", campaign)
-        originals = {path: path.read_bytes() for path in (campaign / "campaign.json", campaign / "control" / "vc" / "campaign-plan.json",
-                                                          self.ledger_dir / "ledger.json", self.project_root / "plan.json")}
-        while datetime.now(timezone.utc) <= deadline:
-            time.sleep(0.2)
+        def builder() -> Path:
+            with mock.patch.object(timing, 'create_ledger', side_effect=aged), \
+                    mock.patch.object(vc_artifacts, 'build_campaign_plan', side_effect=plan_with_ledger_deadline):
+                return self.build_batch_campaign()
+        state = self._batch_start(name, scenario, builder)
+        campaign = state['campaign']
+        audit = self._audit(scenario, campaign)
+        if state['phase'] == 0:
+            deadline_text = timing.inspect_ledger(self.ledger_dir)['total_deadline_at_utc']
+            self.assertEqual(deadline_text, staging_tests._read(campaign / 'control/vc/campaign-plan.json')['original_deadline_at_utc'])
+            paths = (campaign / 'campaign.json', campaign / 'control/vc/campaign-plan.json',
+                self.ledger_dir / 'ledger.json', self.project_root / 'plan.json')
+            self._batch_save(name, state, 1, deadline=deadline_text, originals={path: path.read_bytes() for path in paths})
+        deadline = datetime.fromisoformat(state['deadline'])
         actions = self.draft_actions(campaign)
-        before_refusal = audit.accounting_state()
-        code, _result, refused = self.dispatch(campaign, "VC-2", 2, actions)
-        self.assertEqual(code, 1, refused)
-        self.assertFalse(self.staging_dir(2).exists(), "到期后派发必须零写入")
-        after_refusal = audit.accounting_state()
-        new_deadline = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
-        code, preview, stderr = batch_tests.run_main(["deadline-extend", "preview", "--campaign-dir", campaign, "--scope", "campaign",
-                                                      "--new-deadline-at-utc", new_deadline, "--reason", "故障恢复链：预算真实到期后延期续跑"])
-        self.assertIsNotNone(preview, stderr)
-        self.assertEqual(code, 0, stderr)
-        code, applied, stderr = batch_tests.run_main(["deadline-extend", "apply", "--campaign-dir", campaign, "--preview", preview["preview_path"],
-                                                      "--approve-sha256", preview["review_sha256"], "--approved-by", "故障恢复链"])
-        self.assertIsNotNone(applied, stderr)
-        self.assertEqual(code, 0, stderr)
-        self.assert_batch_passed(self.dispatch(campaign, "VC-2", 2, actions), 2, "VC-2")
+        if state['phase'] == 1:
+            while datetime.now(timezone.utc) <= deadline:
+                time.sleep(0.2)
+            self._batch_save(name, state, 2, before_refusal=audit.accounting_state())
+        if state['phase'] == 2:
+            code, _result, refused = self._batch_dispatch(name, state, 'deadline-refusal', 'VC-2', 2, actions)
+            self.assertEqual(code, 1, refused)
+            self.assertFalse(self.staging_dir(2).exists(), '到期后派发必须零写入')
+            self._batch_save(name, state, 3, refused=refused, after_refusal=audit.accounting_state(),
+                new_deadline=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat())
+        if state['phase'] == 3:
+            argv = ['deadline-extend', 'preview', '--campaign-dir', campaign, '--scope', 'campaign',
+                '--new-deadline-at-utc', state['new_deadline'], '--reason', '故障恢复链：预算真实到期后延期续跑']
+            code, preview, stderr = self._batch_command(name, state, 'deadline-preview', argv)
+            self.assertIsNotNone(preview, stderr)
+            self.assertEqual(code, 0, stderr)
+            self._batch_save(name, state, 4, preview=preview)
+        if state['phase'] == 4:
+            preview = state['preview']
+            argv = ['deadline-extend', 'apply', '--campaign-dir', campaign, '--preview', preview['preview_path'],
+                '--approve-sha256', preview['review_sha256'], '--approved-by', '故障恢复链']
+            code, applied, stderr = self._batch_command(name, state, 'deadline-apply', argv)
+            self.assertIsNotNone(applied, stderr)
+            self.assertEqual(code, 0, stderr)
+            self._batch_save(name, state, 5)
+        if state['phase'] == 5:
+            self.assert_batch_passed(self._batch_dispatch(name, state, 'dispatch', 'VC-2', 2, actions), 2, 'VC-2')
+            self._batch_save(name, state, 6)
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
         batch = self._committed(campaign, 2)
-        plan = json.loads(originals[campaign / "control" / "vc" / "campaign-plan.json"])
-        self.assertEqual(batch["original_deadline_at_utc"], plan["original_deadline_at_utc"])
-        self.assertIn("deadline_extension", batch)
-        self.assertEqual(originals, {path: path.read_bytes() for path in originals}, "原始坐标文件逐字节不变（延期只追加事件）")
+        plan = json.loads(state['originals'][campaign / 'control/vc/campaign-plan.json'])
+        self.assertEqual(batch['original_deadline_at_utc'], plan['original_deadline_at_utc'])
+        self.assertIn('deadline_extension', batch)
+        self.assertEqual(state['originals'], {path: path.read_bytes() for path in state['originals']}, '原始坐标不变，延期只追加')
         audit.check_trusted()
-        audit.check_closure(executed=batch["execute_item_ids"], expected=["vc2-classify-draft"],
-                            reused=batch["reuse_item_ids"], expected_reused=[], what="延期后同序号派发批次")
-        audit.check_accounting(repeats=[("到期时派发", before_refusal, after_refusal)])
+        audit.check_closure(executed=batch['execute_item_ids'], expected=['vc2-classify-draft'], reused=batch['reuse_item_ids'],
+            expected_reused=[], what='延期后同序号派发批次', source=self._batch_closure(audit, campaign, 2))
+        audit.check_accounting(repeats=[('到期时派发', state['before_refusal'], state['after_refusal'])])
         audit.check_elapsed()
         audit.check_history()
-        # 派发入口的拒绝来自共享的项目总账消费者门禁（Codex 同一文字），只写到「需要批准延期」，没有写命令名（已报协调人）。
-        audit.check_entry(refused, "预算已暂停", "批准延期")
-        audit.report(extended_to=new_deadline)
+        audit.check_entry(state['refused'], '预算已暂停', '批准延期')
+        audit.report(extended_to=state['new_deadline'])
 
-
+    @_resumable_method
     def _scenario_seal_batch_failure(self) -> None:
-        """seal 失败：VC-1 封存批次（静态分析在 seal 预览之前）真实失败 → 账本进阶段审核、对账前 N+1 零写入拒绝 →
-        reconcile-supervisor-run 按 VC-1 封存批次的阶段幂等重派合同写证明（重复对账逐字相同）→ N+1 逐字重派（动作替身成功）。"""
-
+        """原 seal 失败、阶段审核与 N+1 原动作替身重派；不因恢复再次生成 stub。"""
         from tools.official_client_capture import claude_upgrade_static
         from tools.official_client_capture import claude_upgrade_vc
         from tools.official_client_capture import codex_upgrade_timing_ledger as timing
-
         if not site.ENABLE_USER_SITE:
-            self.fail("动作替身经 usercustomize 进入动作子进程，要求启用用户 site（不跳过：跳过即未认证）")
-        predecessor = dict(batch_tests.Vc1SealBatchReplayTests.PREDECESSOR)
-        campaign = self.campaign = self.build_batch_campaign(vc1_sealed=False, predecessor=predecessor)
-        self.assertFalse(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-1").exists())
-        audit = self._audit("seal 失败", campaign)
+            self.fail('动作替身要求启用用户 site（不跳过：跳过即未认证）')
+        name, scenario = 'batch-seal', 'seal 失败'
+        builder = lambda: self.build_batch_campaign(vc1_sealed=False, predecessor=dict(batch_tests.Vc1SealBatchReplayTests.PREDECESSOR))
+        state = self._batch_start(name, scenario, builder)
+        campaign = state['campaign']
+        audit = self._audit(scenario, campaign)
         actions = claude_upgrade_static.vc1_seal_actions(campaign)
-        code, failed, stderr = self.dispatch(campaign, "VC-1", 2, actions)
-        self.assertIsNotNone(failed, stderr)
-        self.assertEqual((code, failed["campaign_run"]["reason"]), (1, f"action-failed:{claude_upgrade_static.ACTION_ID}"), stderr)
-        failed_run = Path(failed["campaign_run"]["run_dir"])
-        self.assertEqual(timing.inspect_ledger(self.ledger_dir)["status"], "stage_review_required")
-        before_refusal = audit.accounting_state()
-        code, _result, stderr = self.dispatch(campaign, "VC-1", 3, actions)
-        self.assertEqual(code, 1)
-        self.assertIn("stage_review_required", stderr)
-        self.assertFalse(self.staging_dir(3, "VC-1").exists())
-        after_refusal = audit.accounting_state()
-        code, reconciled, stderr = batch_tests.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
-        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
-        first = audit.accounting_state()
-        code, again, stderr = batch_tests.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
-        self.assertEqual((code, again["stage_replay"]), (0, reconciled["stage_replay"]), stderr)
-        second = audit.accounting_state()
-        proof = reconciled["stage_replay"]
-        self.assertEqual((proof["allowed"], proof["phase"], proof["next_action"]), (True, "VC-1", "redispatch-same-batch"))
-        inject = self.root / "inject"
-        inject.mkdir(mode=0o700)
-        (inject / "usercustomize.py").write_text(batch_tests.VC1_STUB_USERCUSTOMIZE, encoding="utf-8")
-        stub = {"PYTHONPATH": os.pathsep.join([str(inject), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
-                batch_tests.VC1_STUB_ACTIONS_ENV: ",".join(item["action_id"] for item in actions)}
-        with mock.patch.dict(os.environ, stub):
-            self.assert_batch_passed(self.dispatch(campaign, "VC-1", 3, actions), 3, "VC-1")
-        batch = self._committed(campaign, 3, "VC-1")
+        if state['phase'] == 0:
+            self.assertFalse(claude_upgrade_vc.vc_checkpoint_path(campaign, 'VC-1').exists())
+            code, failed, stderr = self._batch_dispatch(name, state, 'seal-failure', 'VC-1', 2, actions)
+            self.assertIsNotNone(failed, stderr)
+            self.assertEqual((code, failed['campaign_run']['reason']), (1, f'action-failed:{claude_upgrade_static.ACTION_ID}'), stderr)
+            self.assertEqual(timing.inspect_ledger(self.ledger_dir)['status'], 'stage_review_required')
+            self._batch_save(name, state, 1, failed_run=Path(failed['campaign_run']['run_dir']), before_refusal=audit.accounting_state())
+        if state['phase'] == 1:
+            code, _result, stderr = self._batch_dispatch(name, state, 'review-refusal', 'VC-1', 3, actions)
+            self.assertEqual(code, 1)
+            self.assertIn('stage_review_required', stderr)
+            self.assertFalse(self.staging_dir(3, 'VC-1').exists())
+            self._batch_save(name, state, 2, after_refusal=audit.accounting_state())
+        argv = ['reconcile-supervisor-run', '--campaign-dir', campaign, '--run-dir', state['failed_run']]
+        if state['phase'] == 2:
+            code, reconciled, stderr = self._batch_command(name, state, 'reconcile-first', argv)
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._batch_save(name, state, 3, reconciled=reconciled, first=audit.accounting_state())
+        if state['phase'] == 3:
+            code, again, stderr = self._batch_command(name, state, 'reconcile-repeat', argv)
+            self.assertEqual((code, again['stage_replay']), (0, state['reconciled']['stage_replay']), stderr)
+            self._batch_save(name, state, 4, second=audit.accounting_state())
+        proof = state['reconciled']['stage_replay']
+        self.assertEqual((proof['allowed'], proof['phase'], proof['next_action']), (True, 'VC-1', 'redispatch-same-batch'))
+        if state['phase'] == 4:
+            self._batch_save(name, state, 5)
+            inject = self.root / 'inject'
+            inject.mkdir(mode=0o700)
+            injection = inject / 'usercustomize.py'
+            injection.write_text(batch_tests.VC1_STUB_USERCUSTOMIZE, encoding='utf-8')
+            stub = {'PYTHONPATH': os.pathsep.join([str(inject), os.environ.get('PYTHONPATH', '')]).rstrip(os.pathsep),
+                    batch_tests.VC1_STUB_ACTIONS_ENV: ','.join(item['action_id'] for item in actions)}
+            self._batch_save(name, state, 6, stub=stub, injection_binding=stops.file_cut(injection))
+        if state['phase'] == 5:
+            raise ValueError('原 seal 动作替身输入未闭合；禁止覆盖原文件')
+        stops.read_cut(state['injection_binding'])
+        if state['phase'] == 6:
+            with mock.patch.dict(os.environ, state['stub']):
+                self.assert_batch_passed(self._batch_dispatch(name, state, 'redispatch', 'VC-1', 3, actions), 3, 'VC-1')
+            self._batch_save(name, state, 7)
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
+        batch = self._committed(campaign, 3, 'VC-1')
         audit.check_trusted()
-        audit.check_closure(executed=batch["execute_item_ids"], expected=[item["action_id"] for item in actions],
-                            reused=batch["reuse_item_ids"], expected_reused=[], what="封存批次逐字重派")
-        audit.check_accounting(repeats=[("对账前派发 N+1", before_refusal, after_refusal), ("重复对账父 run", first, second)])
+        audit.check_closure(executed=batch['execute_item_ids'], expected=[item['action_id'] for item in actions],
+            reused=batch['reuse_item_ids'], expected_reused=[], what='封存批次逐字重派', source=self._batch_closure(audit, campaign, 3, 'VC-1'))
+        audit.check_accounting(repeats=[('对账前派发 N+1', state['before_refusal'], state['after_refusal']),
+                                      ('重复对账父 run', state['first'], state['second'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(reconciled, "redispatch-same-batch")
-        audit.report(failed_run=failed_run.name, redispatched_sequence=3)
+        audit.check_entry(state['reconciled'], 'redispatch-same-batch')
+        audit.report(failed_run=state['failed_run'].name, redispatched_sequence=3)
 
 
 # ---------------------------------------------------------------------------
@@ -1250,214 +1704,369 @@ class _OfficialFaultScenarios(recovery_tests.RecoveryChainCase):
         self.assertEqual(len(started), 1, f"被打断的 Job 应恰好一个：{started}")
         return orphan, completed, started[0]
 
+    def _official_start(self, name: str, scenario: str, builder: Callable[[], Path]) -> dict[str, Any]:
+        """只首次创建 Campaign；初始化没有闭合时明确拒绝，不能重新建账。"""
+
+        state = stops.resume_checkpoint(self, name)
+        if state is not None:
+            if state.get('phase') == 'initializing':
+                raise ValueError('官方故障链的首次建场尚未闭合；保留原坐标，禁止重新构造 Campaign')
+            return state
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            raise ValueError('官方故障方法缺原游标，禁止重新初始化')
+        stops.checkpoint(self, name, phase='initializing', audit_snapshots={scenario: 'uninitialized'})
+        self.campaign = builder()
+        state = {'phase': 0, 'campaign': self.campaign, 'audit_snapshots': {scenario: 'uninitialized'}}
+        stops.checkpoint(self, name, **state)
+        return state
+
+    def _official_save(self, name: str, state: dict[str, Any], phase: int, **values: Any) -> None:
+        state.update(values, phase=phase)
+        stops.checkpoint(self, name, **state)
+
+    def _official_cli(self, name: str, key: str, campaign: Path, argv: list[str]) -> tuple[int, Any, str]:
+        with self.chain_patched():
+            return stops.command_step(self, name, key, argv, lambda: self.run_main(argv), campaign=campaign)
+
+    @_resumable_method
     def _scenario_reserved_attempt_interrupted(self) -> None:
-        """预约后中断：首批取证跑到第二个 Job 时进程被 SIGKILL，留下没有 attempt.json 的孤儿 attempt → 状态要求先对账 →
-        reconcile-attempt 零请求先入账（写到一半的 Job 证据照样计量）后判定、预览全部重跑（来源没有收据，不能复用）→ 再对账幂等
-        → 批准 → resume 取代归档被占用的固定证据根后全部重跑。"""
+        """原孤儿 attempt 先对账入账，独立重复对账后批准，仅从未完成的动作续作。"""
 
         from tools.official_client_capture import claude_upgrade
 
-        campaign = self.build_recovery_campaign()
-        orphan, completed, interrupted = self._orphan(campaign)
+        name, scenario = 'official-reserved', '预约后中断'
+        state = self._official_start(name, scenario, self.build_recovery_campaign)
+        campaign = state['campaign']
+        if state['phase'] == 0:
+            self._official_save(name, state, 1)
+            orphan, completed, interrupted = self._orphan(campaign)
+            self._official_save(name, state, 2, orphan=orphan, completed=completed, interrupted=interrupted)
+        if state['phase'] == 1:
+            raise ValueError('孤儿故障注入未形成完整原停点；须检查原 attempt，禁止再次注入或取证')
+        orphan, completed, interrupted = (state[key] for key in ('orphan', 'completed', 'interrupted'))
         roots = self._job_roots(campaign)
-        audit = self._audit("预约后中断", campaign, trusted=[orphan, roots[completed], roots[interrupted]])
-        with self.chain_patched():
-            status = claude_upgrade.campaign_status(campaign)
-        self.assertEqual(status["status"], "official_capture_interrupted")
-        reconciled = self.reconcile(campaign, orphan.name)
-        preview = reconciled["recovery_preview"]
-        first = audit.accounting_state()
-        self.reconcile(campaign, orphan.name)
-        second = audit.accounting_state()
-        provenance = recovery_tests._read(campaign / reconciled["provenance_receipt"]["path"])
-        counted = sum(job["precise_count"] for job in provenance["jobs"])
-        self.assertGreater(sum(job["precise_count"] for job in provenance["jobs"] if job["job_id"] == interrupted), 0,
-                           "写到一半的 Job 证据必须计量，不因缺收据漏计")
-        self.approve(campaign, orphan.name, preview)
-        calls_before = self.relay_probe_calls()
-        code, resumed, stderr = self.resume(campaign, reconciled["recovery_preview_path"])
-        self.assertEqual((code, resumed["status"]), (2, "awaiting_receipts"), stderr)
+        audit = self._audit(scenario, campaign, trusted=[orphan, roots[completed], roots[interrupted]])
+        if state['phase'] == 2:
+            argv = ['status', '--campaign-dir', str(campaign)]
+            code, status, stderr = self._official_cli(name, 'status', campaign, argv)
+            self.assertEqual(status['status'], 'official_capture_interrupted', stderr)
+            code, reconciled, stderr = self._official_cli(name, 'reconcile-first', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', orphan.name])
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._official_save(name, state, 3, status=status, reconciled=reconciled, first=audit.accounting_state())
+        reconciled = state['reconciled']
+        preview = reconciled['recovery_preview']
+        if state['phase'] == 3:
+            code, _repeat, stderr = self._official_cli(name, 'reconcile-repeat', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', orphan.name])
+            self.assertEqual(code, 0, stderr)
+            self._official_save(name, state, 4, second=audit.accounting_state())
+        provenance = recovery_tests._read(campaign / reconciled['provenance_receipt']['path'])
+        counted = sum(job['precise_count'] for job in provenance['jobs'])
+        self.assertGreater(sum(job['precise_count'] for job in provenance['jobs'] if job['job_id'] == interrupted), 0)
+        if state['phase'] == 4:
+            code, approved, stderr = self._official_cli(name, 'approve', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', orphan.name,
+                 '--approve-recovery-sha256', preview['review_sha256']])
+            self.assertEqual((code, approved['recovery_approval']['approved_sha256']), (0, preview['review_sha256']), stderr)
+            self._official_save(name, state, 5, calls_before=self.relay_probe_calls())
+        if state['phase'] == 5:
+            code, resumed, stderr = self._official_cli(name, 'resume', campaign,
+                ['resume', '--campaign-dir', str(campaign), '--rerun-failed', '--recovery-preview',
+                 reconciled['recovery_preview_path'], '--acknowledge-live-requests'])
+            self.assertEqual((code, resumed['status']), (2, 'awaiting_receipts'), stderr)
+            self._official_save(name, state, 6, resumed=resumed, calls_after=self.relay_probe_calls())
+        resumed = state['resumed']
         supersession = recovery_tests._read(campaign / claude_upgrade.EVIDENCE_ROOT_SUPERSESSION_DIR / f"supersession-{resumed['attempt_id']}.json")
-        archived = {row["host_root"]: row["archived_host_root"] for row in supersession["roots"]}
+        archived = {row['host_root']: row['archived_host_root'] for row in supersession['roots']}
         self.assertEqual(sorted(archived), sorted(str(roots[job]) for job in (completed, interrupted)))
-        executed_probes = self.relay_probe_calls()[len(calls_before):]
+        executed_probes = state['calls_after'][len(state['calls_before']):]
         audit.check_trusted(relocated=archived)
-        audit.check_closure(executed=preview["execute_job_ids"], expected=sorted(self._job_roots(campaign)),
-                            reused=preview["reuse_job_ids"], expected_reused=[], what="孤儿 attempt 的恢复预览")
+        audit.check_closure(executed=preview['execute_job_ids'], expected=sorted(roots),
+            reused=preview['reuse_job_ids'], expected_reused=[], what='孤儿 attempt 的恢复预览',
+            source=audit.closure_source(preview, ('execute_job_ids',), ('reuse_job_ids',)))
         self.assertEqual(sorted(executed_probes), sorted(probe for job in sorted(roots) for probe in self.job_probes(job)))
-        audit.check_accounting(precise_delta=counted, root_causes=1, repeats=[("重复对账孤儿 attempt", first, second)])
+        audit.check_accounting(precise_delta=counted, root_causes=1,
+            repeats=[('重复对账孤儿 attempt', state['first'], state['second'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(status["next_command"], "reconcile-attempt")
-        audit.report(orphan_attempt=orphan.name, resumed_attempt=resumed["attempt_id"], counted_requests=counted)
+        audit.check_entry(state['status']['next_command'], 'reconcile-attempt')
+        audit.report(orphan_attempt=orphan.name, resumed_attempt=resumed['attempt_id'], counted_requests=counted)
+        self._official_save(name, state, 7)
 
+    @_resumable_method
     def _scenario_accounting_unresolved(self) -> None:
-        """账务未决：被打断 Job 的中继登记了有效连接却没有客户端原始字节（中继在写字节时被杀）→ reconcile-attempt 只暂停
-        （accounting），总账 blocked、给出补账入口 → accounting-resolve 预览、按批准上界补账（以同一批准重跑幂等）→ 同一 attempt
-        重新对账可恢复 → 批准预览 → resume。"""
+        """原账务暂停、补账批准、重复补账和恢复分别保存，原请求与原 before 不重建。"""
 
         from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
-
-        campaign = self.build_recovery_campaign()
-        orphan, completed, interrupted = self._orphan(campaign)
-        roots = self._job_roots(campaign)
-        connections = sorted(roots[interrupted].rglob("*.client_to_upstream.bin"))
-        self.assertTrue(connections, "被打断的 Job 没有中继连接字节")
-        connections[0].unlink()
-        audit = self._audit("账务未决", campaign, trusted=[orphan / f"job-{completed}.json", roots[completed]])
-        with self.chain_patched():
-            code, paused, stderr = self.run_main(["reconcile-attempt", "--campaign-dir", str(campaign), "--attempt-id", orphan.name])
-        self.assertIsNotNone(paused, stderr)
-        self.assertEqual((code, paused["status"], paused["decision"]["pause_kinds"]), (3, "paused", ["accounting"]), stderr)
-        self.assertIsNone(paused["decision"]["terminal_reason"])
-        operation = f"reconcile-attempt:{orphan.name}"
-        head = project_ledger.replay_head(self.project_root)
-        self.assertEqual((head["blocked"], head["unresolved_operation_ids"]), (True, [operation]))
-        evidence = self.root / "provenance-audit.txt"
-        evidence.write_text(f"{interrupted} 的中继在写客户端字节时被杀，按同类作业上界估计 3 次请求。\n", encoding="utf-8")
-        argv = ["accounting-resolve", "--campaign-dir", str(campaign), "--operation-id", operation, "--estimated-count", "3",
-                "--evidence", str(evidence), "--reason", "被打断作业缺客户端字节，按上界估计"]
-        with self.chain_patched():
-            code, preview, stderr = self.run_main(argv)
-            self.assertIsNotNone(preview, stderr)
-            self.assertEqual((code, preview["status"], preview["resolution_mode"]), (0, "approval_required", "estimated_upper_bound"), stderr)
-            approve = [*argv, "--approve-sha256", preview["review_sha256"], "--approved-by", "故障恢复链"]
-            code, resolved, stderr = self.run_main(approve)
-            self.assertEqual((code, resolved["status"], resolved["blocked"]), (0, "resolved", False), stderr)
-            first = audit.accounting_state()
-            code, rerun, stderr = self.run_main(approve)
-            self.assertEqual((code, rerun["status"], rerun["batch"]["reused"]), (0, "resolved", True), stderr)
-            second = audit.accounting_state()
-        reconciled = self.reconcile(campaign, orphan.name)
-        self.approve(campaign, orphan.name, reconciled["recovery_preview"])
-        code, resumed, stderr = self.resume(campaign, reconciled["recovery_preview_path"])
-        self.assertEqual((code, resumed["status"]), (2, "awaiting_receipts"), stderr)
-        head = project_ledger.replay_head(self.project_root)
-        self.assertEqual((head["blocked"], head["unresolved_operation_ids"], len(head["accounting_resolutions"][paused["campaign_id"]])),
-                         (False, [], 1))
         from tools.official_client_capture import claude_upgrade
 
+        name, scenario = 'official-accounting', '账务未决'
+        state = self._official_start(name, scenario, self.build_recovery_campaign)
+        campaign = state['campaign']
+        if state['phase'] == 0:
+            self._official_save(name, state, 1)
+            orphan, completed, interrupted = self._orphan(campaign)
+            self._official_save(name, state, 2, orphan=orphan, completed=completed, interrupted=interrupted)
+        if state['phase'] == 1:
+            raise ValueError('账务故障注入缺完整原停点，禁止再次取证')
+        orphan, completed, interrupted = (state[key] for key in ('orphan', 'completed', 'interrupted'))
+        roots = self._job_roots(campaign)
+        if state['phase'] == 2:
+            connections = sorted(roots[interrupted].rglob('*.client_to_upstream.bin'))
+            self.assertTrue(connections, '被打断的 Job 没有中继连接字节')
+            self._official_save(name, state, 3, removed_connection=stops.file_cut(connections[0]))
+            connections[0].unlink()
+            self._official_save(name, state, 4)
+        if state['phase'] == 3:
+            if Path(state['removed_connection']['path']).exists():
+                stops.read_cut(state['removed_connection'])
+                Path(state['removed_connection']['path']).unlink()
+            self._official_save(name, state, 4)
+        audit = self._audit(scenario, campaign, trusted=[orphan / f'job-{completed}.json', roots[completed]])
+        if state['phase'] == 4:
+            code, paused, stderr = self._official_cli(name, 'pause', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', orphan.name])
+            self.assertEqual((code, paused['status'], paused['decision']['pause_kinds']), (3, 'paused', ['accounting']), stderr)
+            self.assertIsNone(paused['decision']['terminal_reason'])
+            operation = f'reconcile-attempt:{orphan.name}'
+            head = project_ledger.replay_head(self.project_root)
+            self.assertEqual((head['blocked'], head['unresolved_operation_ids']), (True, [operation]))
+            evidence = self.root / 'provenance-audit.txt'
+            if evidence.exists():
+                raise ValueError('补账说明已存在但无原停点，禁止覆盖')
+            evidence.write_text(f'{interrupted} 的中继在写客户端字节时被杀，按同类作业上界估计 3 次请求。\n', encoding='utf-8')
+            self._official_save(name, state, 5, paused=paused, operation=operation, evidence=stops.file_cut(evidence))
+        stops.read_cut(state['evidence'])
+        argv = ['accounting-resolve', '--campaign-dir', str(campaign), '--operation-id', state['operation'],
+                '--estimated-count', '3', '--evidence', str(state['evidence']['path']), '--reason', '被打断作业缺客户端字节，按上界估计']
+        if state['phase'] == 5:
+            code, preview, stderr = self._official_cli(name, 'resolution-preview', campaign, argv)
+            self.assertEqual((code, preview['status'], preview['resolution_mode']), (0, 'approval_required', 'estimated_upper_bound'), stderr)
+            self._official_save(name, state, 6, preview=preview)
+        approve = [*argv, '--approve-sha256', state['preview']['review_sha256'], '--approved-by', '故障恢复链']
+        if state['phase'] == 6:
+            code, resolved, stderr = self._official_cli(name, 'resolution-apply', campaign, approve)
+            self.assertEqual((code, resolved['status'], resolved['blocked']), (0, 'resolved', False), stderr)
+            self._official_save(name, state, 7, first=audit.accounting_state())
+        if state['phase'] == 7:
+            code, rerun, stderr = self._official_cli(name, 'resolution-repeat', campaign, approve)
+            self.assertEqual((code, rerun['status'], rerun['batch']['reused']), (0, 'resolved', True), stderr)
+            self._official_save(name, state, 8, second=audit.accounting_state())
+        if state['phase'] == 8:
+            code, reconciled, stderr = self._official_cli(name, 'reconcile', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', orphan.name])
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._official_save(name, state, 9, reconciled=reconciled)
+        reconciled = state['reconciled']
+        if state['phase'] == 9:
+            code, _approved, stderr = self._official_cli(name, 'approve', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', orphan.name,
+                 '--approve-recovery-sha256', reconciled['recovery_preview']['review_sha256']])
+            self.assertEqual(code, 0, stderr)
+            self._official_save(name, state, 10)
+        if state['phase'] == 10:
+            code, resumed, stderr = self._official_cli(name, 'resume', campaign,
+                ['resume', '--campaign-dir', str(campaign), '--rerun-failed', '--recovery-preview',
+                 reconciled['recovery_preview_path'], '--acknowledge-live-requests'])
+            self.assertEqual((code, resumed['status']), (2, 'awaiting_receipts'), stderr)
+            self._official_save(name, state, 11, resumed=resumed)
+        resumed, paused = state['resumed'], state['paused']
+        head = project_ledger.replay_head(self.project_root)
+        self.assertEqual((head['blocked'], head['unresolved_operation_ids'], len(head['accounting_resolutions'][paused['campaign_id']])), (False, [], 1))
         supersession = recovery_tests._read(campaign / claude_upgrade.EVIDENCE_ROOT_SUPERSESSION_DIR / f"supersession-{resumed['attempt_id']}.json")
-        archived = {row["host_root"]: row["archived_host_root"] for row in supersession["roots"]}
-        precise = sum(job["precise_count"] for job in recovery_tests._read(campaign / paused["provenance_receipt"]["path"])["jobs"])
+        archived = {row['host_root']: row['archived_host_root'] for row in supersession['roots']}
+        precise = self._counted(campaign, paused)
         audit.check_trusted(relocated=archived)
-        audit.check_closure(executed=reconciled["recovery_preview"]["execute_job_ids"], expected=sorted(roots),
-                            reused=reconciled["recovery_preview"]["reuse_job_ids"], expected_reused=[], what="补账后的恢复预览")
-        audit.check_accounting(precise_delta=precise, estimated_delta=3, root_causes=1, repeats=[("以同一批准重跑补账", first, second)])
+        audit.check_closure(executed=reconciled['recovery_preview']['execute_job_ids'], expected=sorted(roots),
+            reused=reconciled['recovery_preview']['reuse_job_ids'], expected_reused=[], what='补账后的恢复预览',
+            source=audit.closure_source(reconciled['recovery_preview'], ('execute_job_ids',), ('reuse_job_ids',)))
+        audit.check_accounting(precise_delta=precise, estimated_delta=3, root_causes=1,
+            repeats=[('以同一批准重跑补账', state['first'], state['second'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(paused["next_command"], "accounting-resolve")
-        audit.report(operation=operation, estimated=3, precise=precise)
+        audit.check_entry(paused['next_command'], 'accounting-resolve')
+        audit.report(operation=state['operation'], estimated=3, precise=precise)
+        self._official_save(name, state, 12)
 
     build_evolution_campaign = recovery_tests.ToolEvolutionChainTests.build_evolution_campaign
     evolved_identity = recovery_tests.ToolEvolutionChainTests.evolved_identity
 
+    @_resumable_method
     def _scenario_tool_evolution_replay(self) -> None:
-        """工具演进后旧链重放：首批完成并有 seal 预览 → 修好一个 wire 依赖并部署（编排器侧身份与 Store 侧受管树一起变）→
-        未登记演进时 seal 与 run 都被拒 → 登记演进（两侧，以同一批准重跑只核对、不重算）→ 旧 attempt 被演进作废的作业只有
-        依赖它的那一个，seal 拒绝作废结果 → 对账预览只执行它 → resume 只重跑它的 probe → 新 attempt 在演进后身份下进 seal 预览；
-        首批 attempt 按形成期身份照旧完整重放（旧收据不因演进失效）。"""
+        """保留原首批与形成期身份，原演进批准后只续作失效 Job 和尚未完成的封存。"""
 
-        from tools.official_client_capture import claude_upgrade
-        from tools.official_client_capture import claude_upgrade_store
+        from tools.official_client_capture import claude_upgrade, claude_upgrade_store
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
         from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_tests
         from tools.official_client_control import receipts as store_receipts
 
-        campaign = self.build_evolution_campaign()
-        first = self.capture_run(campaign)
-        self.assertEqual(first["status"], "awaiting_receipts")
-        with self.chain_patched():
-            code, preview, stderr = seal_tests.run_main(self.seal_argv(campaign, first["attempt_id"]))
-        self.assertEqual((code, preview["status"]), (2, "awaiting_seal_approval"), stderr)
+        name, scenario = 'official-evolution', '工具演进后旧链重放'
+        state = self._official_start(name, scenario, self.build_evolution_campaign)
+        campaign = state['campaign']
+        if state['phase'] == 0:
+            code, first, stderr = self._official_cli(name, 'capture-first', campaign,
+                ['capture-official', 'run', '--campaign-dir', str(campaign), '--acknowledge-live-requests'])
+            self.assertEqual((code, first['status']), (2, 'awaiting_receipts'), stderr)
+            self._official_save(name, state, 1, first=first)
+        first = state['first']
+        if state['phase'] == 1:
+            argv = self.seal_argv(campaign, first['attempt_id'])
+            with self.chain_patched():
+                code, preview, stderr = stops.command_step(self, name, 'seal-first', argv,
+                    lambda: seal_tests.run_main(argv), campaign=campaign)
+            self.assertEqual((code, preview['status']), (2, 'awaiting_seal_approval'), stderr)
+            self._official_save(name, state, 2)
         roots = self._job_roots(campaign)
-        first_root = self._attempt_root(campaign, first["attempt_id"])
         others = sorted(job for job in roots if job != recovery_tests.EVOLVED_JOB)
-        audit = self._audit("工具演进后旧链重放", campaign, trusted=[first_root, *(roots[job] for job in others)])
+        audit = self._audit(scenario, campaign,
+            trusted=[self._attempt_root(campaign, first['attempt_id']), *(roots[job] for job in others)])
+        key = f'official_client_capture/{recovery_tests.EVOLVED_DEPENDENCY}'
+        if state['phase'] == 2:
+            original = self.tree.path(key).read_bytes()
+            evolved = self.evolved_identity()
+            created_at = datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+            # 先冻结原 helper 生成的完整预期字节，再允许向世界写出收据。
+            # 私有准备目录不进入产品来源；恢复只消费同一次写入意图。
+            with tempfile.TemporaryDirectory(prefix='cf-deploy-intent-') as directory:
+                planned = ledger_fixture.write_claude_deploy_receipt(Path(directory), evolved,
+                    stamp='20261008t010000z', created_at_utc=created_at)
+                deploy_raw = planned.read_bytes()
+            self._official_save(name, state, 3, evolved=evolved,
+                original_tool=original, revised_tool=original + '\n# B5b-03 工具演进夹具\n'.encode('utf-8'),
+                deploy_created_at=created_at, deploy_raw=deploy_raw)
+        if state['phase'] == 3:
+            current = self.tree.path(key).read_bytes()
+            if current not in (state['original_tool'], state['revised_tool']):
+                raise ValueError('原演进夹具工具字节不匹配，禁止再次注入修复')
+            if current == state['original_tool']:
+                self.tree.write(key, state['revised_tool'])
+            deployed = self.data / 'control/claude-managed-deploy-20261008t010000z.json'
+            if deployed.exists():
+                if deployed.is_symlink() or not deployed.is_file() or deployed.read_bytes() != state['deploy_raw']:
+                    raise ValueError('原演进部署收据与冻结的同次写入意图不一致，禁止覆盖')
+            else:
+                deployed = ledger_fixture.write_claude_deploy_receipt(self.data, state['evolved'],
+                    stamp='20261008t010000z', created_at_utc=state['deploy_created_at'])
+                self.assertEqual(deployed.read_bytes(), state['deploy_raw'], '原部署 helper 输出与冻结意图不同')
+            self._official_save(name, state, 4, deployed=stops.file_cut(deployed))
+        stops.read_cut(state['deployed'])
+        if stops.record_root() is None:
+            self.addCleanup(self.tree.restore)
+        evolved = state['evolved']
+        evolution_argv = ['tool-evolution', '--campaign-dir', str(campaign), '--fix-commit', 'a' * 40, '--reason', '修复 FW-F v3 判定']
 
-        evolved = self.evolved_identity()
-        key = f"official_client_capture/{recovery_tests.EVOLVED_DEPENDENCY}"
-        self.tree.write(key, self.tree.path(key).read_bytes() + b"\n# B5b-03 evolution fixture\n")
-        self.addCleanup(self.tree.restore)
-        ledger_fixture.write_claude_deploy_receipt(self.data, evolved, stamp="20261008t010000z")
-        evolution_argv = ["tool-evolution", "--campaign-dir", str(campaign), "--fix-commit", "a" * 40, "--reason", "修复 FW-F v3 判定"]
-        with self.chain_patched(), mock.patch.object(claude_upgrade, "_tool_identity", side_effect=lambda **_: json.loads(json.dumps(evolved))):
-            code, _result, refused_seal = seal_tests.run_main(self.seal_argv(campaign, first["attempt_id"]))
+        def command(command_key: str, argv: list[str], *, seal: bool = False) -> tuple[int, Any, str]:
+            with self.chain_patched(), mock.patch.object(claude_upgrade, '_tool_identity', side_effect=lambda **_: json.loads(json.dumps(evolved))):
+                return stops.command_step(self, name, command_key, argv,
+                    lambda: seal_tests.run_main(argv) if seal else self.run_main(argv), campaign=campaign)
+
+        if state['phase'] == 4:
+            code, _result, refused_seal = command('seal-unregistered', self.seal_argv(campaign, first['attempt_id']), seal=True)
             self.assertEqual(code, 1)
-            self.assertIn("尚未登记工具演进", refused_seal)
-            code, proposed, stderr = self.run_main(evolution_argv)
-            self.assertEqual((code, proposed["status"]), (0, "approval_required"), stderr)
-            self.assertEqual(proposed["impact"]["official"]["affected_job_ids"], [recovery_tests.EVOLVED_JOB])
-            approve = [*evolution_argv, "--approve-sha256", proposed["review_sha256"], "--approved-by", "故障恢复链"]
-            code, applied, stderr = self.run_main(approve)
-            self.assertEqual((code, applied["status"], applied["store_registration"]["status"]), (0, "evolution_applied", "registered"), stderr)
-            first_state = audit.accounting_state()
-            code, again, stderr = self.run_main(approve)
-            self.assertEqual((code, again["reused"], again["store_registration"]["status"]), (0, True, "current"), stderr)
-            second_state = audit.accounting_state()
-            status = claude_upgrade.campaign_status(campaign)
-            self.assertEqual(status["official_attempt"]["evolution_invalidated_job_ids"], [recovery_tests.EVOLVED_JOB])
-            code, _result, stderr = seal_tests.run_main(self.seal_argv(campaign, first["attempt_id"]))
+            self.assertIn('尚未登记工具演进', refused_seal)
+            self._official_save(name, state, 5, refused_seal=refused_seal)
+        if state['phase'] == 5:
+            code, proposed, stderr = command('evolution-preview', evolution_argv)
+            self.assertEqual((code, proposed['status']), (0, 'approval_required'), stderr)
+            self.assertEqual(proposed['impact']['official']['affected_job_ids'], [recovery_tests.EVOLVED_JOB])
+            self._official_save(name, state, 6, proposed=proposed)
+        approve = [*evolution_argv, '--approve-sha256', state['proposed']['review_sha256'], '--approved-by', '故障恢复链']
+        if state['phase'] == 6:
+            code, applied, stderr = command('evolution-apply', approve)
+            self.assertEqual((code, applied['status'], applied['store_registration']['status']), (0, 'evolution_applied', 'registered'), stderr)
+            self._official_save(name, state, 7, first_state=audit.accounting_state())
+        if state['phase'] == 7:
+            code, again, stderr = command('evolution-repeat', approve)
+            self.assertEqual((code, again['reused'], again['store_registration']['status']), (0, True, 'current'), stderr)
+            self._official_save(name, state, 8, second_state=audit.accounting_state())
+        if state['phase'] == 8:
+            code, status, stderr = command('status', ['status', '--campaign-dir', str(campaign)])
+            self.assertEqual(status['official_attempt']['evolution_invalidated_job_ids'], [recovery_tests.EVOLVED_JOB], stderr)
+            self._official_save(name, state, 9, status=status)
+        if state['phase'] == 9:
+            code, _result, stderr = command('seal-invalidated', self.seal_argv(campaign, first['attempt_id']), seal=True)
             self.assertEqual(code, 1)
-            self.assertIn("被工具演进作废", stderr)
-            code, reconciled, stderr = self.run_main(["reconcile-attempt", "--campaign-dir", str(campaign), "--attempt-id", first["attempt_id"]])
-            self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
-            recovery_preview = reconciled["recovery_preview"]
-            code, _approved, stderr = self.run_main(["reconcile-attempt", "--campaign-dir", str(campaign), "--attempt-id", first["attempt_id"],
-                                                     "--approve-recovery-sha256", recovery_preview["review_sha256"]])
+            self.assertIn('被工具演进作废', stderr)
+            self._official_save(name, state, 10)
+        if state['phase'] == 10:
+            code, reconciled, stderr = command('reconcile', ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', first['attempt_id']])
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._official_save(name, state, 11, reconciled=reconciled)
+        reconciled = state['reconciled']
+        recovery_preview = reconciled['recovery_preview']
+        if state['phase'] == 11:
+            code, _approved, stderr = command('recovery-approve', ['reconcile-attempt', '--campaign-dir', str(campaign),
+                '--attempt-id', first['attempt_id'], '--approve-recovery-sha256', recovery_preview['review_sha256']])
             self.assertEqual(code, 0, stderr)
-            calls_before = self.relay_probe_calls()
-            code, resumed, stderr = self.run_main(["resume", "--campaign-dir", str(campaign), "--rerun-failed", "--recovery-preview",
-                                                   reconciled["recovery_preview_path"], "--acknowledge-live-requests"])
-            self.assertEqual((code, resumed["status"]), (2, "awaiting_receipts"), stderr)
-            self.assertEqual(self.relay_probe_calls()[len(calls_before):], self.job_probes(recovery_tests.EVOLVED_JOB))
-            code, sealed_preview, stderr = seal_tests.run_main(self.seal_argv(campaign, resumed["attempt_id"]))
-            self.assertEqual((code, sealed_preview["status"]), (2, "awaiting_seal_approval"), stderr)
-            # 旧链重放：首批 attempt 按形成期身份完整重放（run 末收口重放、逐 Job 收据），不因演进失效。
-            _root, replayed = claude_upgrade._load_capture_attempt(campaign, "official", None, first["attempt_id"], _replay_evidence_permissions=True)
-        self.assertEqual(replayed["attempt_id"], first["attempt_id"])
-        store, store_campaign = claude_upgrade_store.open_campaign_store(campaign, claude_upgrade.load_campaign_manifest(campaign))
-        self.assertEqual(len(store_receipts.tool_evolutions(store, dict(store_campaign))), 1)
-        _root, attempt = self.load_attempt(campaign, resumed["attempt_id"])
-        reused = sorted(item["id"] for item in attempt["results"] if item["disposition"] == "reused")
+            self._official_save(name, state, 12, calls_before=self.relay_probe_calls())
+        if state['phase'] == 12:
+            code, resumed, stderr = command('resume', ['resume', '--campaign-dir', str(campaign), '--rerun-failed',
+                '--recovery-preview', reconciled['recovery_preview_path'], '--acknowledge-live-requests'])
+            self.assertEqual((code, resumed['status']), (2, 'awaiting_receipts'), stderr)
+            self._official_save(name, state, 13, resumed=resumed, calls_after=self.relay_probe_calls())
+        resumed = state['resumed']
+        self.assertEqual(state['calls_after'][len(state['calls_before']):], self.job_probes(recovery_tests.EVOLVED_JOB))
+        if state['phase'] == 13:
+            code, sealed_preview, stderr = command('seal-resumed', self.seal_argv(campaign, resumed['attempt_id']), seal=True)
+            self.assertEqual((code, sealed_preview['status']), (2, 'awaiting_seal_approval'), stderr)
+            self._official_save(name, state, 14)
+        with self.chain_patched(), mock.patch.object(claude_upgrade, '_tool_identity', side_effect=lambda **_: json.loads(json.dumps(evolved))):
+            _root, replayed = claude_upgrade._load_capture_attempt(campaign, 'official', None, first['attempt_id'], _replay_evidence_permissions=True)
+            self.assertEqual(replayed['attempt_id'], first['attempt_id'])
+            store, store_campaign = claude_upgrade_store.open_campaign_store(campaign, claude_upgrade.load_campaign_manifest(campaign))
+            self.assertEqual(len(store_receipts.tool_evolutions(store, dict(store_campaign))), 1)
+            attempt_root, attempt = self.load_attempt(campaign, resumed['attempt_id'])
+        reused = sorted(item['id'] for item in attempt['results'] if item['disposition'] == 'reused')
         audit.check_trusted()
-        audit.check_closure(executed=recovery_preview["execute_job_ids"], expected=[recovery_tests.EVOLVED_JOB],
-                            reused=reused, expected_reused=others, what="演进作废后的恢复")
-        # 首批是直接 CLI 取证（没有父监督器收账），它的请求在对账时按来源核算精确入账一次；演进登记本身不入账。
-        counted = sum(job["precise_count"] for job in recovery_tests._read(campaign / reconciled["provenance_receipt"]["path"])["jobs"])
-        audit.check_accounting(precise_delta=counted, repeats=[("以同一批准重跑演进登记", first_state, second_state)])
+        audit.check_closure(executed=recovery_preview['execute_job_ids'], expected=[recovery_tests.EVOLVED_JOB],
+            reused=reused, expected_reused=others, what='演进作废后的恢复',
+            source=audit.file_closure_source(campaign / reconciled['recovery_preview_path'], ('execute_job_ids',),
+                ('results',), reused_path=attempt_root / 'attempt.json', row_key='id', disposition='disposition'))
+        audit.check_accounting(precise_delta=self._counted(campaign, reconciled),
+            repeats=[('以同一批准重跑演进登记', state['first_state'], state['second_state'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry({"seal": refused_seal, "status": status["next_command"]}, "tool-evolution", "reconcile-attempt")
-        audit.report(invalidated=[recovery_tests.EVOLVED_JOB], resumed_attempt=resumed["attempt_id"])
-
+        audit.check_entry({'seal': state['refused_seal'], 'status': state['status']['next_command']}, 'tool-evolution', 'reconcile-attempt')
+        audit.report(invalidated=[recovery_tests.EVOLVED_JOB], resumed_attempt=resumed['attempt_id'])
+        self._official_save(name, state, 15)
 
     # ---- 跨客户端误用（官方取证世界：入口按 Claude 合同读部署收据，误用一律零写入拒绝）----
 
-    def _misuse_setup(self, scenario: str) -> tuple[Path, dict[str, Any], ScenarioAudit, Path, dict[str, Any]]:
-        """首批有一个 Job 失败的官方 attempt（对账入口要读当前工具的部署收据）；返回 (Campaign, attempt, 审计, 收据, 收据正文)。
+    def _misuse_setup(self, scenario: str) -> tuple[str, dict[str, Any], ScenarioAudit]:
+        """生产形态的原首批只建一次；坏收据恢复期间仍沿用原审计 before。"""
 
-        项目总账按生产形态建（不是仅夹具总账）：对账器只在生产总账下要求当前工具的通过部署收据（仅夹具总账不要求），
-        误用核对的就是这道门。链体整体设置了仅夹具开关，这里建总账时临时去掉它。"""
-
-        environment = {key: value for key, value in os.environ.items() if key != project_ledger_fixture.FIXTURE_ONLY_ENV}
-        with mock.patch.dict(os.environ, environment, clear=True):
-            campaign = self.build_recovery_campaign()
         from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+        name = 'official-misuse:' + scenario
 
-        self.assertFalse(project_ledger._load_plan(self.project_root)[0].get("fixture_only"), "误用场景要用生产形态的项目总账")
-        self.fail_probe(self.job_probes(recovery_tests.FAILING_JOB)[0], 3)
-        first = self.capture_run(campaign)
-        self.assertEqual(first["status"], "failed")
-        (receipt,) = sorted((self.data / "control").glob("claude-managed-deploy-*.json"))
-        audit = self._audit(scenario, campaign, trusted=[self._attempt_root(campaign, first["attempt_id"]), receipt])
-        return campaign, first, audit, receipt, json.loads(receipt.read_text(encoding="utf-8"))
+        def builder() -> Path:
+            environment = {key: value for key, value in os.environ.items() if key != project_ledger_fixture.FIXTURE_ONLY_ENV}
+            with mock.patch.dict(os.environ, environment, clear=True):
+                return self.build_recovery_campaign()
 
-    def _refused_reconcile(self, campaign: Path, attempt_id: str) -> str:
-        with self.chain_patched():
-            code, result, stderr = self.run_main(["reconcile-attempt", "--campaign-dir", str(campaign), "--attempt-id", attempt_id])
+        state = self._official_start(name, scenario, builder)
+        campaign = state['campaign']
+        self.assertFalse(project_ledger._load_plan(self.project_root)[0].get('fixture_only'))
+        if state['phase'] == 0:
+            argv = ['capture-official', 'run', '--campaign-dir', str(campaign), '--acknowledge-live-requests']
+            def invoke() -> tuple[int, Any, str]:
+                self.fail_probe(self.job_probes(recovery_tests.FAILING_JOB)[0], 3)
+                return self.run_main(argv)
+            with self.chain_patched():
+                code, first, stderr = stops.command_step(self, name, 'capture-first', argv, invoke,
+                                                       campaign=campaign)
+            self.assertEqual(first['status'], 'failed', stderr)
+            (receipt,) = sorted((self.data / 'control').glob('claude-managed-deploy-*.json'))
+            self._official_save(name, state, 1, first=first, receipt=receipt, receipt_raw=receipt.read_bytes())
+        audit = self._audit(scenario, campaign,
+            trusted=[self._attempt_root(campaign, state['first']['attempt_id']), state['receipt']])
+        return name, state, audit
+
+    def _refused_reconcile(self, name: str, key: str, campaign: Path, attempt_id: str) -> str:
+        code, result, stderr = self._official_cli(name, key, campaign,
+            ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', attempt_id])
         self.assertEqual((code, result), (1, None), stderr)
-        self.assertFalse((campaign / "control" / "reconciliation" / f"attempt-{attempt_id}").exists(), "误用必须零写入")
+        self.assertFalse((campaign / 'control' / 'reconciliation' / f'attempt-{attempt_id}').exists(), '误用必须零写入')
         return stderr
 
     @staticmethod
@@ -1473,72 +2082,116 @@ class _OfficialFaultScenarios(recovery_tests.RecoveryChainCase):
         self.assertEqual(reconciled["recovery_preview"]["execute_job_ids"], [recovery_tests.FAILING_JOB])
         return reconciled
 
+    @_resumable_method
     def _scenario_misuse_codex_receipt(self) -> None:
-        """跨客户端误用：Codex 收据喂给 Claude 入口——控制目录里只有 Codex 部署收据（codex-arm64-supervisor-enable/v1，身份在顶层），
-        或把它改名成 Claude 收据的文件名，Claude 对账入口都按「没有当前工具的通过部署收据」零写入拒绝；Codex 的 pre-A3 认证拿到
-        Claude 的链覆盖核对同样拒绝。放回 Claude 收据后同一入口照常对账。"""
+        """Codex 收据与伪装文件分别零写入拒绝，恢复只放回原 Claude 收据再对账。"""
 
         from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
-
-        campaign, first, audit, receipt, original = self._misuse_setup("跨客户端误用：Codex 收据喂给 Claude 入口")
-        codex = {"schema_version": "codex-arm64-supervisor-enable/v1", "status": "passed", "created_at_utc": original["created_at_utc"],
-                 **{key: value for key, value in original["identity"].items() if key != "tool_files_sha256"},
-                 "tool_files_sha256": original["identity"]["tool_files_sha256"]}
-        saved = receipt.read_bytes()
-        receipt.unlink()
-        codex_path = self.data / "control" / "codex-20261008t000000z-supervisor-enable-20261008t000000z.json"
-        codex_path.write_text(json.dumps(codex), encoding="utf-8")
-        state = audit.accounting_state()
-        refusals = [self._refused_reconcile(campaign, first["attempt_id"])]
-        disguised = self.data / "control" / "claude-managed-deploy-20261008t000001z.json"
-        disguised.write_text(json.dumps(codex), encoding="utf-8")
-        refusals.append(self._refused_reconcile(campaign, first["attempt_id"]))
-        after = audit.accounting_state()
-        with self.assertRaisesRegex(pre_a3.CertificationError, "不属于客户端 claude"):
-            pre_a3.real_chain_coverage({"schema_version": pre_a3.SCHEMA_VERSION_V2, "scenarios": [],
-                                        "real_chain_registration": pre_a3.real_chain_registration("codex")}, client="claude")
-        disguised.unlink()
-        codex_path.unlink()
-        receipt.write_bytes(saved)
+        name, state, audit = self._misuse_setup('跨客户端误用：Codex 收据喂给 Claude 入口')
+        campaign, first, receipt = (state[key] for key in ('campaign', 'first', 'receipt'))
+        original = json.loads(state['receipt_raw'])
+        codex = {'schema_version': 'codex-arm64-supervisor-enable/v1', 'status': 'passed',
+            'created_at_utc': original['created_at_utc'], **original['identity']}
+        codex_path = self.data / 'control' / 'codex-20261008t000000z-supervisor-enable-20261008t000000z.json'
+        disguised = self.data / 'control' / 'claude-managed-deploy-20261008t000001z.json'
+        raw = json.dumps(codex).encode('utf-8')
+        if state['phase'] == 1:
+            self._official_save(name, state, 2, state_before=audit.accounting_state())
+        if state['phase'] == 2:
+            if receipt.exists() and receipt.read_bytes() != state['receipt_raw']:
+                raise ValueError('原 Claude 部署收据字节已改变')
+            receipt.unlink(missing_ok=True)
+            if codex_path.exists() and codex_path.read_bytes() != raw:
+                raise ValueError('误用注入文件不是原 Codex 收据字节')
+            if not codex_path.exists():
+                codex_path.write_bytes(raw)
+            refusal = self._refused_reconcile(name, 'refuse-codex', campaign, first['attempt_id'])
+            self._official_save(name, state, 3, first_refusal=refusal)
+        if state['phase'] == 3:
+            if disguised.exists() and disguised.read_bytes() != raw:
+                raise ValueError('原伪装部署收据字节已改变')
+            if not disguised.exists():
+                disguised.write_bytes(raw)
+            second = self._refused_reconcile(name, 'refuse-disguised', campaign, first['attempt_id'])
+            self._official_save(name, state, 4, second_refusal=second, state_after=audit.accounting_state())
+        with self.assertRaisesRegex(pre_a3.CertificationError, '不属于客户端 claude'):
+            pre_a3.real_chain_coverage({'schema_version': pre_a3.SCHEMA_VERSION_V2, 'scenarios': [],
+                'real_chain_registration': pre_a3.real_chain_registration('codex')}, client='claude')
+        if state['phase'] == 4:
+            for path in (disguised, codex_path):
+                if path.exists() and path.read_bytes() != raw:
+                    raise ValueError('修复前误用注入原件已改变')
+                path.unlink(missing_ok=True)
+            if receipt.exists() and receipt.read_bytes() != state['receipt_raw']:
+                raise ValueError('修复前已有其他 Claude 收据，禁止覆盖')
+            if not receipt.exists():
+                receipt.write_bytes(state['receipt_raw'])
+            self._official_save(name, state, 5)
         audit.check_trusted()
-        reconciled = self._corrected_reconcile(campaign, first["attempt_id"])
-        audit.check_closure(executed=reconciled["recovery_preview"]["execute_job_ids"], expected=[recovery_tests.FAILING_JOB],
-                            reused=reconciled["recovery_preview"]["reuse_job_ids"],
-                            expected_reused=sorted(set(self._job_roots(campaign)) - {recovery_tests.FAILING_JOB}),
-                            what="纠正后的恢复预览（误用期间零执行）")
-        audit.check_accounting(precise_delta=self._counted(campaign, reconciled), root_causes=1, repeats=[("两次误用对账", state, after)])
+        if state['phase'] == 5:
+            code, reconciled, stderr = self._official_cli(name, 'reconcile-corrected', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', first['attempt_id']])
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._official_save(name, state, 6, reconciled=reconciled)
+        reconciled = state['reconciled']
+        preview = reconciled['recovery_preview']
+        audit.check_closure(executed=preview['execute_job_ids'], expected=[recovery_tests.FAILING_JOB],
+            reused=preview['reuse_job_ids'], expected_reused=sorted(set(self._job_roots(campaign)) - {recovery_tests.FAILING_JOB}),
+            what='纠正后的恢复预览（误用期间零执行）',
+            source=audit.closure_source(preview, ('execute_job_ids',), ('reuse_job_ids',)))
+        audit.check_accounting(precise_delta=self._counted(campaign, reconciled), root_causes=1,
+            repeats=[('两次误用对账', state['state_before'], state['state_after'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(refusals[0], "部署收据", "已受管部署")
-        audit.report(refusals=len(refusals))
+        audit.check_entry(state['first_refusal'], '部署收据', '已受管部署')
+        audit.report(refusals=2)
+        self._official_save(name, state, 7)
 
+    @_resumable_method
     def _scenario_misuse_missing_client(self) -> None:
-        """跨客户端误用：缺 client 的合同——Claude 部署收据（official-client-managed-deploy/v1）去掉 client 字段，对账入口零写入拒绝；
-        Claude 的 pre-A3 认证合同（v3）缺 client 同样拒绝。补回 client 后同一入口照常对账。"""
+        """缺 client 的收据先拒绝，再按原字节修复；不得重新取证或换一份成功记录。"""
 
         from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
-
-        campaign, first, audit, receipt, original = self._misuse_setup("跨客户端误用：缺 client 的合同")
-        saved = receipt.read_bytes()
-        stripped = {key: value for key, value in original.items() if key != "client"}
-        receipt.write_text(json.dumps(stripped, ensure_ascii=False, indent=2), encoding="utf-8")
-        state = audit.accounting_state()
-        refused = self._refused_reconcile(campaign, first["attempt_id"])
-        after = audit.accounting_state()
-        with self.assertRaisesRegex(pre_a3.CertificationError, "不认识的客户端"):
-            pre_a3.certification_client({"schema_version": pre_a3.SCHEMA_VERSION_V3, "scenarios": []})
-        receipt.write_bytes(saved)
+        name, state, audit = self._misuse_setup('跨客户端误用：缺 client 的合同')
+        campaign, first, receipt = (state[key] for key in ('campaign', 'first', 'receipt'))
+        stripped = {key: value for key, value in json.loads(state['receipt_raw']).items() if key != 'client'}
+        raw = json.dumps(stripped, ensure_ascii=False, indent=2).encode('utf-8')
+        if state['phase'] == 1:
+            self._official_save(name, state, 2, state_before=audit.accounting_state())
+        if state['phase'] == 2:
+            if receipt.read_bytes() not in (raw, state['receipt_raw']):
+                raise ValueError('缺 client 注入前的原收据字节已改变')
+            if receipt.read_bytes() != raw:
+                receipt.write_bytes(raw)
+            refused = self._refused_reconcile(name, 'refuse-missing-client', campaign, first['attempt_id'])
+            self._official_save(name, state, 3, refused=refused, state_after=audit.accounting_state())
+        with self.assertRaisesRegex(pre_a3.CertificationError, '不认识的客户端'):
+            pre_a3.certification_client({'schema_version': pre_a3.SCHEMA_VERSION_V3, 'scenarios': []})
+        if state['phase'] == 3:
+            if receipt.read_bytes() not in (raw, state['receipt_raw']):
+                raise ValueError('缺 client 的原注入收据已改变，禁止覆盖')
+            if receipt.read_bytes() != state['receipt_raw']:
+                receipt.write_bytes(state['receipt_raw'])
+            self._official_save(name, state, 4)
         audit.check_trusted()
-        reconciled = self._corrected_reconcile(campaign, first["attempt_id"])
-        audit.check_closure(executed=reconciled["recovery_preview"]["execute_job_ids"], expected=[recovery_tests.FAILING_JOB],
-                            reused=reconciled["recovery_preview"]["reuse_job_ids"],
-                            expected_reused=sorted(set(self._job_roots(campaign)) - {recovery_tests.FAILING_JOB}),
-                            what="纠正后的恢复预览（误用期间零执行）")
-        audit.check_accounting(precise_delta=self._counted(campaign, reconciled), root_causes=1, repeats=[("缺 client 时对账", state, after)])
+        if state['phase'] == 4:
+            code, reconciled, stderr = self._official_cli(name, 'reconcile-corrected', campaign,
+                ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', first['attempt_id']])
+            self.assertEqual((code, reconciled['status']), (0, 'recoverable'), stderr)
+            self._official_save(name, state, 5, reconciled=reconciled)
+        reconciled = state['reconciled']
+        preview = reconciled['recovery_preview']
+        audit.check_closure(executed=preview['execute_job_ids'], expected=[recovery_tests.FAILING_JOB],
+            reused=preview['reuse_job_ids'], expected_reused=sorted(set(self._job_roots(campaign)) - {recovery_tests.FAILING_JOB}),
+            what='纠正后的恢复预览（误用期间零执行）',
+            source=audit.closure_source(preview, ('execute_job_ids',), ('reuse_job_ids',)))
+        audit.check_accounting(precise_delta=self._counted(campaign, reconciled), root_causes=1,
+            repeats=[('缺 client 时对账', state['state_before'], state['state_after'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(refused, "部署收据", "已受管部署")
+        audit.check_entry(state['refused'], '部署收据', '已受管部署')
         audit.report()
+        self._official_save(name, state, 6)
 
 
 # ---------------------------------------------------------------------------
@@ -1547,172 +2200,319 @@ class _OfficialFaultScenarios(recovery_tests.RecoveryChainCase):
 
 
 class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
-    """B 组：只保留集中登记的输入来源替身，真实对账／批准消费／续跑与演进判定共同推进一个候选。"""
+    """原两个候选场景的同世界停点；来源继续由原真实namespace与VC形成链提供。"""
+
+    COMMAND_KEYS = {
+        'candidate-reconcile': ('candidate-run', 'reconcile-first', 'reconcile-repeat', 'unapproved-refusal', 'approve-first', 'approve-repeat', 'resume', 'status'),
+        'candidate-evolution': ('candidate-run', 'evolution-preview', 'evolution-apply', 'evolution-repeat', 'status', 'reconcile', 'approve', 'resume'),
+    }
+
+    def _candidate_start(self, name: str, scenario: str) -> dict[str, Any]:
+        state = stops.resume_checkpoint(self, name)
+        if state is None:
+            if os.environ.get(stops.METHOD_RESUME_ENV):
+                entry = stops.load_state('candidate-method-entry')
+                if (entry != {'method': self._testMethodName, 'status': 'uninitialized'}
+                        or stops.load_state('candidate-vc5-start') is not None):
+                    raise ValueError('候选原方法缺明确的首次读侧交接许可，禁止重建')
+            stops.checkpoint(self, name, phase='initializing', audit_snapshots={scenario: 'uninitialized'})
+            campaign = self.candidate_world()
+            state = {'phase': 0, 'campaign': campaign, 'completed_commands': [],
+                'audit_snapshots': {scenario: 'uninitialized'}}
+            stops.checkpoint(self, name, **state)
+            stops.save_state('candidate-method-entry', {'method': self._testMethodName, 'status': 'started'})
+        elif state['phase'] == 'initializing':
+            original = stops.load_state('candidate-vc5-start')
+            if original is None or original.get('status') != 'complete':
+                raise ValueError('候选原阶段首次绑定未闭合；保留原件，禁止重建')
+            campaign = self.candidate_world()
+            state = {'phase': 0, 'campaign': campaign, 'completed_commands': [],
+                'audit_snapshots': {scenario: 'uninitialized'}}
+            stops.checkpoint(self, name, **state)
+        else:
+            self.assertEqual(self.candidate_world(), state['campaign'])
+            rows = state['completed_commands']
+            if tuple(row['key'] for row in rows) != self.COMMAND_KEYS[name][:len(rows)]:
+                raise ValueError('候选原命令清单不是冻结逻辑顺序的前缀')
+            for row in rows:
+                with self.source_context():
+                    outcome = stops.command_step(self, name, row['key'], row['argv'],
+                        lambda: self.fail('已完成候选命令不得重发'), campaign=state['campaign'])
+                self.assertEqual(outcome, row['outcome'], '候选原停点与完整stdout/stderr不一致')
+        return state
+
+    def _candidate_save(self, name: str, state: dict[str, Any], phase: int, **values: Any) -> None:
+        state.update(values, phase=phase)
+        stops.checkpoint(self, name, **state)
+
+    def _candidate_cli(self, name: str, state: dict[str, Any], key: str, argv: list[Any]) -> tuple[int, Any, str]:
+        if self.COMMAND_KEYS[name][len(state['completed_commands'])] != key:
+            raise ValueError('候选命令不在原下一逻辑停点')
+        with self.source_context():
+            outcome = stops.command_step(self, name, key, argv, lambda: self.run_main(argv), campaign=state['campaign'])
+        state['completed_commands'].append({'key': key, 'argv': argv, 'outcome': outcome})
+        return outcome
+
+    def _candidate_run_step(self, name: str, state: dict[str, Any], *, fail_refresh: bool) -> dict[str, Any]:
+        """原故障输入只设置一次；命令pending或complete时只重读原输出，不再注入。"""
+        from tools.official_client_capture import claude_upgrade
+        command_state = stops.load_state('command-step:' + name + ':candidate-run')
+        planned = {chain_driver.REFRESH_PROBE: 1 if fail_refresh else 0}
+        if command_state is None:
+            if state.get('capture_input_started'):
+                if json.loads(self.failures_file.read_bytes()) != planned:
+                    raise ValueError('候选原采集故障输入未闭合，禁止再次设置或重新取证')
+            else:
+                state['capture_input_started'] = True
+                stops.checkpoint(self, name, **state)
+                self.fail_probe(chain_driver.REFRESH_PROBE, planned[chain_driver.REFRESH_PROBE])
+        argv = ['capture-candidate', 'run', '--campaign-dir', str(state['campaign']),
+            '--candidate-id', chain_driver.CANDIDATE, '--acknowledge-live-requests']
+        with mock.patch.object(claude_upgrade, 'JOB_RETRY_LIMIT', 0):
+            code, result, stderr = self._candidate_cli(name, state, 'candidate-run', argv)
+        self.assertIsNotNone(result, stderr)
+        self.assertEqual((code, result['status']), (2, 'failed' if fail_refresh else 'awaiting_receipts'), stderr)
+        if json.loads(self.failures_file.read_bytes()) != {chain_driver.REFRESH_PROBE: 0}:
+            self.fail_probe(chain_driver.REFRESH_PROBE, 0)
+        return result
+
+    def _candidate_reconcile_step(self, name: str, state: dict[str, Any], key: str,
+                                  attempt: str, preview: dict[str, Any] | None = None) -> dict[str, Any]:
+        argv = ['reconcile-attempt', '--campaign-dir', str(state['campaign']), '--attempt-id', attempt]
+        if preview is not None:
+            argv.extend(['--approve-recovery-sha256', preview['review_sha256']])
+        code, result, stderr = self._candidate_cli(name, state, key, argv)
+        self.assertIsNotNone(result, stderr)
+        self.assertEqual((code, result['status']), (0, 'recoverable'), stderr)
+        if preview is not None:
+            self.assertEqual(result['recovery_approval']['approved_sha256'], preview['review_sha256'])
+        return result
+
+    def _candidate_resume_step(self, name: str, state: dict[str, Any], preview_path: str) -> dict[str, Any]:
+        argv = ['resume', '--campaign-dir', str(state['campaign']), '--candidate-id', chain_driver.CANDIDATE,
+            '--rerun-failed', '--recovery-preview', preview_path, '--acknowledge-live-requests']
+        code, result, stderr = self._candidate_cli(name, state, 'resume', argv)
+        self.assertIsNotNone(result, stderr)
+        self.assertEqual((code, result['status']), (2, 'awaiting_receipts'), stderr)
+        return result
 
     def _audit(self, scenario: str, campaign: Path, trusted: Iterable[Path]) -> ScenarioAudit:
         from tools.official_client_capture import claude_upgrade_store
-
         audit = ScenarioAudit(self, scenario)
-        audit.snapshot(
-            trusted=[campaign / "campaign.json", campaign / "official" / "result.json", *trusted],
-            history=[claude_upgrade_store.campaign_store_root(campaign), self.ledger_dir / "events", self.ledger_dir / "ledger.json",
-                     self.project_root / "events", self.project_root / "plan.json", campaign / "control" / "reconciliation",
-                     campaign / "control" / "tool-evolution"],
-            timing_dir=self.ledger_dir, project_root=self.project_root,
-        )
+        audit.snapshot(trusted=[campaign / 'campaign.json', campaign / 'official/result.json', *trusted],
+            history=[claude_upgrade_store.campaign_store_root(campaign), self.ledger_dir / 'events', self.ledger_dir / 'ledger.json',
+                self.project_root / 'events', self.project_root / 'plan.json', campaign / 'control/reconciliation',
+                campaign / 'control/tool-evolution'], timing_dir=self.ledger_dir, project_root=self.project_root)
         return audit
 
+    @_resumable_method
     def _scenario_candidate_reconcile_resume(self) -> None:
-        """候选中继写完字节后失败 → 真实对账 → 未批准拒绝 → 批准与重复批准 → 只重跑失败作业。"""
-
+        """原失败候选attempt→两次对账→未批准拒绝→两次批准→只重跑失败作业。"""
         from tools.official_client_capture import claude_upgrade
         from tools.official_client_capture import claude_upgrade_recovery as recovery
-
-        if self.recorded_entry("reconcile-resume"):
+        if self.recorded_entry('reconcile-resume'):
             return
-        campaign = self.candidate_world()
-        first = self.candidate_run(campaign, fail_refresh=True)
-        first_root, _first_attempt = self.candidate_attempt(campaign, first["attempt_id"])
+        name, scenario = 'candidate-reconcile', '候选真实对账链端到端'
+        state = self._candidate_start(name, scenario)
+        campaign = state['campaign']
+        if state['phase'] == 0:
+            first = self._candidate_run_step(name, state, fail_refresh=True)
+            self._candidate_save(name, state, 1, first=first)
+        first = state['first']
+        first_root, _attempt = self.candidate_attempt(campaign, first['attempt_id'])
         roots = self.candidate_job_roots(campaign)
-        audit = self._audit("候选真实对账链端到端", campaign, [first_root, roots[chain_driver.LIVE_JOB]])
-        calls = self.relay_probe_calls()
-        reconciled = self.candidate_reconcile(campaign, first["attempt_id"])
-        preview = reconciled["recovery_preview"]
-        self.assertEqual((preview["phase"], preview["candidate_id"]), ("candidate", chain_driver.CANDIDATE))
-        self.assertEqual((preview["execute_job_ids"], preview["reuse_job_ids"]),
-                         ([chain_driver.REFRESH_JOB], [chain_driver.LIVE_JOB]))
-        self.assertEqual(reconciled["resume_reuse_check"]["status"], "consistent")
-        first_state = audit.accounting_state()
-        receipt_bytes = file_digests(campaign / "control" / "reconciliation")
-        repeated = self.candidate_reconcile(campaign, first["attempt_id"])
-        second_state = audit.accounting_state()
-        self.assertEqual(repeated["recovery_preview"]["review_sha256"], preview["review_sha256"])
-        for path, digest in receipt_bytes.items():
-            self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), digest)
-        attempts_root = first_root.parent
-        before = sorted(path.name for path in attempts_root.iterdir())
-        with self.source_context():
-            code, _result, refusal = self.run_main([
-                "resume", "--campaign-dir", str(campaign), "--candidate-id", chain_driver.CANDIDATE, "--rerun-failed",
-                "--recovery-preview", reconciled["recovery_preview_path"], "--acknowledge-live-requests",
-            ])
-        self.assertEqual(code, 1)
-        self.assertIn("尚未批准", refusal)
-        self.assertEqual(sorted(path.name for path in attempts_root.iterdir()), before)
-        self.assertEqual(self.relay_probe_calls(), calls)
-        approved = self.candidate_approve(campaign, first["attempt_id"], preview)
-        approved_state = audit.accounting_state()
-        again = self.candidate_approve(campaign, first["attempt_id"], preview)
-        repeated_approval_state = audit.accounting_state()
-        self.assertEqual(again["recovery_approval"], approved["recovery_approval"])
-        resumed = self.candidate_resume(campaign, reconciled["recovery_preview_path"])
+        audit = self._audit(scenario, campaign, [first_root, roots[chain_driver.LIVE_JOB]])
+        if state['phase'] == 1:
+            self._candidate_save(name, state, 2, calls=self.relay_probe_calls())
+        if state['phase'] == 2:
+            reconciled = self._candidate_reconcile_step(name, state, 'reconcile-first', first['attempt_id'])
+            preview = reconciled['recovery_preview']
+            self.assertEqual((preview['phase'], preview['candidate_id']), ('candidate', chain_driver.CANDIDATE))
+            self.assertEqual((preview['execute_job_ids'], preview['reuse_job_ids']), ([chain_driver.REFRESH_JOB], [chain_driver.LIVE_JOB]))
+            self.assertEqual(reconciled['resume_reuse_check']['status'], 'consistent')
+            self._candidate_save(name, state, 3, reconciled=reconciled, first_state=audit.accounting_state(),
+                receipt_bytes=file_digests(campaign / 'control/reconciliation'))
+        reconciled = state['reconciled']
+        preview = reconciled['recovery_preview']
+        if state['phase'] == 3:
+            repeated = self._candidate_reconcile_step(name, state, 'reconcile-repeat', first['attempt_id'])
+            self.assertEqual(repeated['recovery_preview']['review_sha256'], preview['review_sha256'])
+            for path, digest in state['receipt_bytes'].items():
+                self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), digest)
+            self._candidate_save(name, state, 4, second_state=audit.accounting_state(),
+                attempts_before=sorted(path.name for path in first_root.parent.iterdir()))
+        if state['phase'] == 4:
+            argv = ['resume', '--campaign-dir', str(campaign), '--candidate-id', chain_driver.CANDIDATE,
+                '--rerun-failed', '--recovery-preview', reconciled['recovery_preview_path'], '--acknowledge-live-requests']
+            code, _result, refusal = self._candidate_cli(name, state, 'unapproved-refusal', argv)
+            self.assertEqual(code, 1)
+            self.assertIn('尚未批准', refusal)
+            self.assertEqual(sorted(path.name for path in first_root.parent.iterdir()), state['attempts_before'])
+            self.assertEqual(self.relay_probe_calls(), state['calls'])
+            self._candidate_save(name, state, 5)
+        if state['phase'] == 5:
+            approved = self._candidate_reconcile_step(name, state, 'approve-first', first['attempt_id'], preview)
+            self._candidate_save(name, state, 6, approved=approved, approved_state=audit.accounting_state())
+        if state['phase'] == 6:
+            again = self._candidate_reconcile_step(name, state, 'approve-repeat', first['attempt_id'], preview)
+            self.assertEqual(again['recovery_approval'], state['approved']['recovery_approval'])
+            self._candidate_save(name, state, 7, repeated_approval_state=audit.accounting_state())
+        if state['phase'] == 7:
+            resumed = self._candidate_resume_step(name, state, reconciled['recovery_preview_path'])
+            self._candidate_save(name, state, 8, resumed=resumed)
+        if state['phase'] == 8:
+            code, status, stderr = self._candidate_cli(name, state, 'status',
+                ['status', '--campaign-dir', str(campaign), '--candidate-id', chain_driver.CANDIDATE])
+            self.assertEqual(code, 0, stderr)
+            self._candidate_save(name, state, 9, status=status)
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
+        if stops.load_state('audit-complete:' + scenario) is not None:
+            self.recorded_audit_report(ScenarioAudit.revalidate(self, scenario))
+            return
+        resumed, approved, calls = state['resumed'], state['approved'], state['calls']
         self.assertEqual(self.relay_probe_calls()[len(calls):], [chain_driver.REFRESH_PROBE])
-        attempt_root, attempt = self.candidate_attempt(campaign, resumed["attempt_id"])
+        attempt_root, attempt = self.candidate_attempt(campaign, resumed['attempt_id'])
         with self.source_context():
             source = recovery.load_recovery_source(campaign, attempt_root)
             status = claude_upgrade.campaign_status(campaign, chain_driver.CANDIDATE)
-        self.assertEqual((source["source_attempt_id"], source["execute_job_ids"]),
-                         (first["attempt_id"], [chain_driver.REFRESH_JOB]))
-        self.assertEqual(source["recovery_approval"], {
-            "index": approved["recovery_approval"]["index"],
-            "receipt_sha256": approved["recovery_approval"]["receipt_sha256"],
-        })
-        self.assertIsNotNone(source["timing_recovery_event"], "恢复批准必须真实推进计时账本并绑定消费事件")
-        self.assertEqual(status["status"], "candidate_awaiting_client_checkpoint")
-        executed = [row["id"] for row in attempt["results"] if row["disposition"] == "executed"]
-        reused = [row["id"] for row in attempt["results"] if row["disposition"] == "reused"]
-        self.assertTrue(all(row["status"] == "complete" for row in attempt["results"]))
-        counted = recovery_tests._read(campaign / reconciled["provenance_receipt"]["path"])["precise_total"]
-        self.assertGreater(counted, 0, "替身中继原始字节必须真正进入请求核算，不能用零请求占位绕过")
+        self.assertEqual((status['status'], status['next_command']),
+            (state['status']['status'], state['status']['next_command']), '状态原stdout与当前只读操作入口不一致')
+        self.assertEqual((source['source_attempt_id'], source['execute_job_ids']), (first['attempt_id'], [chain_driver.REFRESH_JOB]))
+        self.assertEqual(source['recovery_approval'], {'index': approved['recovery_approval']['index'],
+            'receipt_sha256': approved['recovery_approval']['receipt_sha256']})
+        self.assertIsNotNone(source['timing_recovery_event'], '恢复批准必须绑定原计时消费事件')
+        self.assertEqual(status['status'], 'candidate_awaiting_client_checkpoint')
+        self.assertTrue(all(row['status'] == 'complete' for row in attempt['results']))
+        counted = recovery_tests._read(campaign / reconciled['provenance_receipt']['path'])['precise_total']
+        self.assertGreater(counted, 0, '原录制字节必须真实进入核算')
         audit.check_trusted()
-        audit.check_closure(executed=executed, expected=[chain_driver.REFRESH_JOB], reused=reused,
-                            expected_reused=[chain_driver.LIVE_JOB], what="真实批准消费后的候选执行")
-        audit.check_accounting(precise_delta=counted, root_causes=1, repeats=[
-            ("重复候选对账", first_state, second_state), ("重复候选恢复批准", approved_state, repeated_approval_state),
-        ])
+        audit.check_closure(executed=[row['id'] for row in attempt['results'] if row['disposition'] == 'executed'],
+            expected=[chain_driver.REFRESH_JOB], reused=[row['id'] for row in attempt['results'] if row['disposition'] == 'reused'],
+            expected_reused=[chain_driver.LIVE_JOB], what='真实批准消费后的候选执行',
+            source=audit.file_closure_source(attempt_root / 'attempt.json', ('results',), ('results',), row_key='id', disposition='disposition'))
+        audit.check_accounting(precise_delta=counted, root_causes=1, repeats=[('重复候选对账', state['first_state'], state['second_state']),
+            ('重复候选恢复批准', state['approved_state'], state['repeated_approval_state'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry({"reconcile": reconciled["next_command"], "status": status["next_command"]}, "resume", "client-evidence")
-        record = audit.report(candidate_id=chain_driver.CANDIDATE, source_attempt=first["attempt_id"], resumed_attempt=resumed["attempt_id"],
-                     counted_requests=counted, input_source=self.assert_recorded_sources_untouched())
+        audit.check_entry({'reconcile': reconciled['next_command'], 'status': state['status']['next_command']}, 'resume', 'client-evidence')
+        record = audit.report(candidate_id=chain_driver.CANDIDATE, source_attempt=first['attempt_id'], resumed_attempt=resumed['attempt_id'],
+            counted_requests=counted, input_source=self.assert_recorded_sources_untouched())
         self.recorded_audit_report(record)
 
+    @_resumable_method
     def _scenario_candidate_tool_evolution(self) -> None:
-        """隔离副本里修候选脚本：整体预览判定官方不受影响、已有候选两项失效，登记后真实对账续跑。"""
-
+        """原隔离脚本修复、只读演进预览、两次登记、真实对账批准与候选闭集续跑。"""
         from tools.official_client_capture import claude_upgrade
         from tools.official_client_capture import claude_upgrade_store
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
         from tools.official_client_control import receipts as store_receipts
-
-        if self.recorded_entry("tool-evolution"):
+        if self.recorded_entry('tool-evolution'):
             return
-        campaign = self.candidate_world()
-        first = self.candidate_run(campaign)
-        first_root, _attempt = self.candidate_attempt(campaign, first["attempt_id"])
-        audit = self._audit("有候选 attempt 的整条工具演进预览", campaign, [first_root])
-        calls = self.relay_probe_calls()
-        # 必须在外层建立的隔离副本内变异；手工直接调用本场景时宁可拒绝，也不改用户源码。
-        self.assertEqual(Path(os.environ.get(shell.TREE_ENV, "/missing")).resolve(), REPO_ROOT.resolve())
-        shell._assert_isolation(self, shell._ChainRecorder("candidate-evolution-input"))
+        name, scenario = 'candidate-evolution', '有候选 attempt 的整条工具演进预览'
+        state = self._candidate_start(name, scenario)
+        campaign = state['campaign']
+        if state['phase'] == 0:
+            first = self._candidate_run_step(name, state, fail_refresh=False)
+            self._candidate_save(name, state, 1, first=first)
+        first = state['first']
+        first_root, _attempt = self.candidate_attempt(campaign, first['attempt_id'])
+        audit = self._audit(scenario, campaign, [first_root])
         path = Path(claude_upgrade.__file__).resolve().parent / chain_driver.EVOLVED_DEPENDENCY
-        original = path.read_bytes()
-        self.addCleanup(path.write_bytes, original)
-        path.write_bytes(original + "\n# B5b-03：候选采集脚本修复后的身份来源。\n".encode("utf-8"))
-        key = f"official_client_capture/{chain_driver.EVOLVED_DEPENDENCY}"
-        self.tree.write(key, path.read_bytes())
-        self.addCleanup(self.tree.restore)
-        evolved = claude_upgrade._tool_identity(include_git=False)
-        self.assertNotEqual(evolved["wire_producer_sha256"], self.tool_identity["wire_producer_sha256"])
-        ledger_fixture.write_claude_deploy_receipt(self.data, evolved, stamp="20261008t020000z")
-        argv = ["tool-evolution", "--campaign-dir", str(campaign), "--fix-commit", "b" * 40, "--reason", "修复候选采集脚本"]
-        before = file_digests(campaign, self.ledger_dir, self.project_root)
-        with self.source_context():
-            code, preview, stderr = self.run_main(argv)
-        self.assertEqual((code, preview["status"]), (0, "approval_required"), stderr)
-        self.assertEqual(file_digests(campaign, self.ledger_dir, self.project_root), before, "完整演进预览必须只读")
-        self.assertEqual(preview["changes"]["impact_paths"], [key])
-        self.assertEqual(preview["changes"]["unmapped_paths"], [])
-        self.assertFalse(preview["changes"]["wire_closure_changed"])
-        self.assertEqual((preview["impact"]["official"]["sealed"], preview["impact"]["official"]["affected_job_ids"]), (True, []))
-        self.assertEqual(set(preview["impact"]["candidates"]), {chain_driver.CANDIDATE})
-        impact = preview["impact"]["candidates"][chain_driver.CANDIDATE]
-        expected = sorted([chain_driver.LIVE_JOB, chain_driver.REFRESH_JOB])
-        self.assertEqual((impact["planned_job_ids"], impact["affected_job_ids"], impact["sealed"]), (expected, expected, False))
-        self.assertEqual(preview["evaluator"]["candidates"][chain_driver.CANDIDATE]["current_evaluation_baseline"], 0)
-        approved_argv = [*argv, "--approve-sha256", preview["review_sha256"], "--approved-by", "故障恢复链"]
-        with self.source_context():
-            code, applied, stderr = self.run_main(approved_argv)
-            self.assertEqual((code, applied["status"], applied["store_registration"]["status"]), (0, "evolution_applied", "registered"), stderr)
-            first_state = audit.accounting_state()
-            code, again, stderr = self.run_main(approved_argv)
-            self.assertEqual((code, again["reused"], again["store_registration"]["status"]), (0, True, "current"), stderr)
-            second_state = audit.accounting_state()
-            status = claude_upgrade.campaign_status(campaign, chain_driver.CANDIDATE)
-        self.assertEqual(status["candidate_attempt"]["evolution_invalidated_job_ids"], expected)
-        self.assertEqual(self.relay_probe_calls(), calls, "演进预览与登记不执行任何 probe")
-        reconciled = self.candidate_reconcile(campaign, first["attempt_id"])
-        recovery_preview = reconciled["recovery_preview"]
-        self.assertEqual((recovery_preview["execute_job_ids"], recovery_preview["reuse_job_ids"]), (expected, []))
-        self.candidate_approve(campaign, first["attempt_id"], recovery_preview)
-        resumed = self.candidate_resume(campaign, reconciled["recovery_preview_path"])
-        _root, replayed = self.candidate_attempt(campaign, resumed["attempt_id"])
-        self.assertEqual(self.relay_probe_calls()[len(calls):], calls, "共同依赖变化后应恰好重跑候选全部 probe 一次")
-        reservation = recovery_tests._read(_root / "reservation.json")
-        self.assertEqual(reservation["tool_evolution"]["index"], 1)
+        key = f'official_client_capture/{chain_driver.EVOLVED_DEPENDENCY}'
+        if state['phase'] == 1:
+            self.assertEqual(Path(os.environ.get(shell.TREE_ENV, '/missing')).resolve(), REPO_ROOT.resolve())
+            shell._assert_isolation(self, shell._ChainRecorder('candidate-evolution-input'))
+            original = path.read_bytes()
+            changed = original + '\n# B5b-03：候选采集脚本修复后的身份来源。\n'.encode('utf-8')
+            self._candidate_save(name, state, 2, calls=self.relay_probe_calls(), source_path=path,
+                source_before=original, source_after=changed)
+        self.assertEqual(path, state['source_path'])
+        if stops.record_root() is None:
+            self.addCleanup(path.write_bytes, state['source_before'])
+            self.addCleanup(self.tree.restore)
+        if state['phase'] == 2:
+            if path.read_bytes() == state['source_before']:
+                path.write_bytes(state['source_after'])
+            elif path.read_bytes() != state['source_after']:
+                raise ValueError('候选隔离源码不是原字节或冻结的本次修复，禁止覆盖')
+            self.tree.write(key, state['source_after'])
+            evolved = claude_upgrade._tool_identity(include_git=False)
+            self.assertNotEqual(evolved['wire_producer_sha256'], self.tool_identity['wire_producer_sha256'])
+            self._candidate_save(name, state, 3, evolved=evolved, source_binding=stops.file_cut(path))
+        stops.read_cut(state['source_binding'])
+        if state['phase'] == 3:
+            self._candidate_save(name, state, 4)
+            deploy = ledger_fixture.write_claude_deploy_receipt(self.data, state['evolved'], stamp='20261008t020000z')
+            self._candidate_save(name, state, 5, deployment_binding=stops.file_cut(deploy))
+        if state['phase'] == 4:
+            raise ValueError('候选演进部署输入未闭合，禁止重签部署或重建现场')
+        stops.read_cut(state['deployment_binding'])
+        argv = ['tool-evolution', '--campaign-dir', str(campaign), '--fix-commit', 'b' * 40, '--reason', '修复候选采集脚本']
+        if state['phase'] == 5:
+            before = file_digests(campaign, self.ledger_dir, self.project_root)
+            code, preview, stderr = self._candidate_cli(name, state, 'evolution-preview', argv)
+            self.assertEqual((code, preview['status']), (0, 'approval_required'), stderr)
+            self.assertEqual(file_digests(campaign, self.ledger_dir, self.project_root), before, '演进预览必须只读')
+            self.assertEqual(preview['changes']['impact_paths'], [key])
+            self.assertEqual(preview['changes']['unmapped_paths'], [])
+            self.assertFalse(preview['changes']['wire_closure_changed'])
+            self.assertEqual((preview['impact']['official']['sealed'], preview['impact']['official']['affected_job_ids']), (True, []))
+            self.assertEqual(set(preview['impact']['candidates']), {chain_driver.CANDIDATE})
+            impact = preview['impact']['candidates'][chain_driver.CANDIDATE]
+            expected = sorted([chain_driver.LIVE_JOB, chain_driver.REFRESH_JOB])
+            self.assertEqual((impact['planned_job_ids'], impact['affected_job_ids'], impact['sealed']), (expected, expected, False))
+            self.assertEqual(preview['evaluator']['candidates'][chain_driver.CANDIDATE]['current_evaluation_baseline'], 0)
+            self._candidate_save(name, state, 6, preview=preview, expected=expected)
+        preview, expected = state['preview'], state['expected']
+        approved_argv = [*argv, '--approve-sha256', preview['review_sha256'], '--approved-by', '故障恢复链']
+        if state['phase'] == 6:
+            code, applied, stderr = self._candidate_cli(name, state, 'evolution-apply', approved_argv)
+            self.assertEqual((code, applied['status'], applied['store_registration']['status']), (0, 'evolution_applied', 'registered'), stderr)
+            self._candidate_save(name, state, 7, first_state=audit.accounting_state())
+        if state['phase'] == 7:
+            code, again, stderr = self._candidate_cli(name, state, 'evolution-repeat', approved_argv)
+            self.assertEqual((code, again['reused'], again['store_registration']['status']), (0, True, 'current'), stderr)
+            self._candidate_save(name, state, 8, second_state=audit.accounting_state())
+        if state['phase'] == 8:
+            code, status, stderr = self._candidate_cli(name, state, 'status',
+                ['status', '--campaign-dir', str(campaign), '--candidate-id', chain_driver.CANDIDATE])
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(status['candidate_attempt']['evolution_invalidated_job_ids'], expected)
+            self.assertEqual(self.relay_probe_calls(), state['calls'], '演进预览与登记不执行probe')
+            self._candidate_save(name, state, 9, status=status)
+        if state['phase'] == 9:
+            reconciled = self._candidate_reconcile_step(name, state, 'reconcile', first['attempt_id'])
+            self.assertEqual((reconciled['recovery_preview']['execute_job_ids'], reconciled['recovery_preview']['reuse_job_ids']), (expected, []))
+            self._candidate_save(name, state, 10, reconciled=reconciled)
+        reconciled = state['reconciled']
+        if state['phase'] == 10:
+            self._candidate_reconcile_step(name, state, 'approve', first['attempt_id'], reconciled['recovery_preview'])
+            self._candidate_save(name, state, 11)
+        if state['phase'] == 11:
+            resumed = self._candidate_resume_step(name, state, reconciled['recovery_preview_path'])
+            self._candidate_save(name, state, 12, resumed=resumed)
+        self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
+        if stops.load_state('audit-complete:' + scenario) is not None:
+            self.recorded_audit_report(ScenarioAudit.revalidate(self, scenario))
+            return
+        resumed = state['resumed']
+        attempt_root, replayed = self.candidate_attempt(campaign, resumed['attempt_id'])
+        self.assertEqual(self.relay_probe_calls()[len(state['calls']):], state['calls'], '共同依赖变化后恰好重跑全部probe一次')
+        self.assertEqual(recovery_tests._read(attempt_root / 'reservation.json')['tool_evolution']['index'], 1)
         store, store_campaign = claude_upgrade_store.open_campaign_store(campaign, claude_upgrade.load_campaign_manifest(campaign))
         self.assertEqual(len(store_receipts.tool_evolutions(store, dict(store_campaign))), 1)
-        counted = recovery_tests._read(campaign / reconciled["provenance_receipt"]["path"])["precise_total"]
+        counted = recovery_tests._read(campaign / reconciled['provenance_receipt']['path'])['precise_total']
         self.assertGreater(counted, 0)
         audit.check_trusted()
-        audit.check_closure(executed=[row["id"] for row in replayed["results"] if row["disposition"] == "executed"], expected=expected,
-                            reused=[row["id"] for row in replayed["results"] if row["disposition"] == "reused"], what="完整演进判定后的候选闭集")
-        audit.check_accounting(precise_delta=counted, root_causes=0, repeats=[("重复候选工具演进批准", first_state, second_state)])
+        audit.check_closure(executed=[row['id'] for row in replayed['results'] if row['disposition'] == 'executed'], expected=expected,
+            reused=[row['id'] for row in replayed['results'] if row['disposition'] == 'reused'], what='完整演进判定后的候选闭集',
+            source=audit.file_closure_source(attempt_root / 'attempt.json', ('results',), ('results',), row_key='id', disposition='disposition'))
+        audit.check_accounting(precise_delta=counted, root_causes=0, repeats=[('重复候选工具演进批准', state['first_state'], state['second_state'])])
         audit.check_elapsed()
         audit.check_history()
-        audit.check_entry(status["next_command"], "reconcile-attempt")
-        record = audit.report(candidate_id=chain_driver.CANDIDATE, invalidated=expected, resumed_attempt=resumed["attempt_id"],
-                     counted_requests=counted, input_source=self.assert_recorded_sources_untouched())
+        audit.check_entry(state['status']['next_command'], 'reconcile-attempt')
+        record = audit.report(candidate_id=chain_driver.CANDIDATE, invalidated=expected, resumed_attempt=resumed['attempt_id'],
+            counted_requests=counted, input_source=self.assert_recorded_sources_untouched())
         self.recorded_audit_report(record)
 
 
@@ -1728,19 +2528,25 @@ class _DeployFaultScenarios(unittest.TestCase):
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
         from tools.official_client_capture.tests.arm64_deploy_fixture import DeployHarness
 
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name).resolve()
+        self.root, restoring = stops.fixture_directory(self, 'deploy')
         self.deploy = deploy
         self.capture_root, self.control_root = deploy.CAPTURE_ROOT, deploy.CONTROL_ROOT
-        self.BOTH = ("--managed-roots", deploy.CAPTURE_ROOT, deploy.CONTROL_ROOT, "--client", "codex", "claude")
-        self.harness = DeployHarness(self.root / "site")
-        ledgers = self.root / "ledgers"
+        self.BOTH = ('--managed-roots', deploy.CAPTURE_ROOT, deploy.CONTROL_ROOT, '--client', 'codex', 'claude')
+        self.harness = DeployHarness(self.root / 'site')
+        if restoring:
+            values = stops.load_state('deploy-fixture')
+            if values is None or not stops.restore_case(self):
+                raise ValueError('原部署世界缺夹具与账本坐标，禁止重建')
+            self.timing_dir = values['timing_dir']
+            return
+        ledgers = self.root / 'ledgers'
         ledgers.mkdir(mode=0o700)
         self.project_root = ledger_fixture.install_claude_project_ledger(ledgers)
-        self.timing_dir = ledgers / "timing"
-        timing.create_ledger(self.timing_dir, upgrade_id="claude-deploy-fault-ledger", baseline_version="2.1.226",
-                             target_version="2.1.285", campaign_purpose="validation_only", evidence_decision="recapture", client="claude")
+        self.timing_dir = ledgers / 'timing'
+        timing.create_ledger(self.timing_dir, upgrade_id='claude-deploy-fault-ledger', baseline_version='2.1.226',
+            target_version='2.1.285', campaign_purpose='validation_only', evidence_decision='recapture', client='claude')
+        stops.save_case(self)
+        stops.save_state('deploy-fixture', {'timing_dir': self.timing_dir})
 
     # ---- 共用
 
@@ -1808,85 +2614,197 @@ class _DeployFaultScenarios(unittest.TestCase):
         return [harness.production(root) for root in self.deploy.MANAGED_ROOT_CLIENTS] + [
             harness.data / "tools" / self.deploy.MANAGED_ASSERTION_PREPARER, harness.docs]
 
+    def _deploy_cursor(self, name: str, scenario: str) -> dict[str, Any]:
+        state = stops.resume_checkpoint(self, name)
+        if state is None:
+            if os.environ.get(stops.METHOD_RESUME_ENV):
+                raise ValueError('原部署方法缺停点，禁止重建或再注入故障')
+            state = {'phase': 0, 'audit_snapshots': {scenario: 'uninitialized'}}
+            stops.checkpoint(self, name, **state)
+        for key, value in state.get('harness', {}).items():
+            setattr(self.harness, key, value)
+        return state
+
+    def _deploy_save(self, name: str, state: dict[str, Any], phase: int, **values: Any) -> None:
+        state.update(values, phase=phase, harness={key: getattr(self.harness, key)
+            for key in ('stamp', 'events', 'exchange_calls', 'last_output')})
+        stops.checkpoint(self, name, **state)
+
+    def _deploy_run(self, name: str, key: str) -> tuple[int, Any, str]:
+        """保存原 main 完整输出及同次部署意图原字节；续作不再次跑部署事务。"""
+
+        argv = self.harness.argv(*self.BOTH)
+        def invoke() -> tuple[int, Any, str]:
+            pending = stops.begin_command(argv)
+            create = self.deploy.SwitchJournal.create
+            def capture_intent(*args: Any, **options: Any) -> Any:
+                journal = create(*args, **options)
+                if stops.record_root() is not None:
+                    directory = Path(tempfile.mkdtemp(prefix='deploy-intent-', dir=stops.record_root()))
+                    copy = directory / 'original.journal'
+                    copy.write_bytes(journal.path.read_bytes())
+                    copy.chmod(0o400)
+                    stops.save_state('deploy-intent:' + name + ':' + key, {'binding': stops.file_cut(copy)})
+                return journal
+            code, result, stderr = 0, None, ''
+            with mock.patch.object(self.deploy.SwitchJournal, 'create', side_effect=capture_intent):
+                try:
+                    code = self.harness.run(*self.BOTH)
+                except self.deploy.DeploymentError as error:
+                    code, stderr = 1, str(error)
+            stdout = self.harness.last_output
+            if stdout.strip():
+                result = json.loads(stdout)
+            stops.record_command(argv, code, stdout, stderr, pending=pending)
+            return code, result, stderr
+        return stops.command_step(self, name, key, argv, invoke)
+
+    def _deploy_relocations(self, name: str, key: str) -> dict[str, str]:
+        saved = stops.load_state('deploy-intent:' + name + ':' + key)
+        if saved is None:
+            if stops.record_root() is not None:
+                raise ValueError('原成功部署缺同次意图原件，不能猜备份坐标')
+            return {}
+        lines = stops.read_cut(saved['binding']).decode('utf-8').splitlines()
+        intent = json.loads(lines[0])['intent']
+        return {entry['production_path']: entry['backup_path']
+                for group in ('roots', 'preparers', 'documents') for entry in intent[group] if entry['old_exists']}
+
     def _rolled_back(self, scenario: str, kill: Callable[[Any], contextlib.AbstractContextManager[Any]], *, control_root_old: bool | None,
                      expected_restored: list[str], recovery_kill: Callable[[Any], contextlib.AbstractContextManager[Any]] | None = None) -> None:
-        """收据正文未入日志的残留：恢复按内容回滚到部署前（只动被切换过的对象）、拒绝本次部署并给出重新执行入口 → 再部署成功。"""
+        """沿原日志回滚后只续作部署；原故障注入与重复恢复各有独立停点。"""
 
+        name = 'deploy-rollback:' + scenario
+        state = self._deploy_cursor(name, scenario)
         harness = self.harness
-        harness.build(control_root_old=control_root_old)
-        before = harness.snapshot()
+        if state['phase'] == 0:
+            self._deploy_save(name, state, 1)
+            harness.build(control_root_old=control_root_old)
+            self._deploy_save(name, state, 2, before=harness.snapshot())
+        if state['phase'] == 1:
+            raise ValueError('原部署夹具首次建场未闭合，禁止清空原世界再建')
         audit = self._audit(scenario, self._production_paths())
-        self._kill_at(kill)
-        self.assertEqual(len(harness.journals()), 1, "被杀的部署应留下一份活动日志")
-        if recovery_kill is not None:
-            # 恢复本身在回滚交换完成、rollback_done 写入之前又被杀：再次启动按内容判已回滚，不重复交换。
-            self._kill_at(recovery_kill)
-        with self.assertRaises(self.deploy.DeploymentError) as refused:
-            harness.run(*self.BOTH)
-        (retired,) = harness.retired_journals()
-        records = [json.loads(line) for line in retired.read_text(encoding="utf-8").splitlines() if line.strip()]
-        done = [record for record in records if record.get("marker") == "rollback_done"]
-        self.assertTrue(done, "回滚完成必须在日志里留下 rollback_done")
-        restored_roots = sorted(item["object"] for item in done[-1]["restored"])
-        self.assertEqual(harness.snapshot(), before, "恢复后全部受管对象回到部署前")
-        audit.check_trusted()
-        repeat_before = audit.accounting_state()
-        harness.stamp = "20261008T010000Z"
-        self.assertEqual(harness.run(*self.BOTH), 0, "恢复之后重新执行部署应成功")
+        if state['phase'] == 2:
+            self._deploy_save(name, state, 3)
+            self._kill_at(kill)
+            self.assertEqual(len(harness.journals()), 1)
+            self._deploy_save(name, state, 4)
+        if state['phase'] == 3:
+            raise ValueError('原部署故障注入缺实际退出停点，检查原日志；禁止再次注入')
+        if state['phase'] == 4:
+            if recovery_kill is not None:
+                self._deploy_save(name, state, 5)
+                self._kill_at(recovery_kill)
+            self._deploy_save(name, state, 6)
+        if state['phase'] == 5:
+            raise ValueError('原回滚故障注入缺实际退出停点，禁止再次交换')
+        if state['phase'] == 6:
+            code, _result, refused = self._deploy_run(name, 'recover-refused')
+            self.assertEqual(code, 1)
+            (retired,) = harness.retired_journals()
+            records = [json.loads(line) for line in retired.read_text(encoding='utf-8').splitlines() if line.strip()]
+            done = [record for record in records if record.get('marker') == 'rollback_done']
+            self.assertTrue(done)
+            restored = sorted(item['object'] for item in done[-1]['restored'])
+            self.assertEqual(harness.snapshot(), state['before'], '恢复后全部受管对象回到部署前')
+            if stops.record_root() is None:
+                audit.check_trusted()
+            self._deploy_save(name, state, 7, refused=refused, retired=retired, restored=restored,
+                repeat_before=audit.accounting_state())
+        if state['phase'] == 7:
+            harness.stamp = '20261008T010000Z'
+            code, result, stderr = self._deploy_run(name, 'redeploy')
+            self.assertEqual(code, 0, stderr)
+            self._deploy_save(name, state, 8, result=result, repeat_after=audit.accounting_state())
         self.assertEqual((harness.journals(), len(harness.retired_journals())), ([], 1))
-        self.assertEqual((len(harness.receipts("codex")), len(harness.receipts("claude"))), (1, 1))
+        self.assertEqual((len(harness.receipts('codex')), len(harness.receipts('claude'))), (1, 1))
         self.assertEqual(harness.tree(self.control_root), harness.staging_tree(self.control_root))
-        audit.check_closure(executed=restored_roots, expected=expected_restored, what="启动恢复按内容换回的受管根")
-        audit.check_accounting(repeats=[("再部署", repeat_before, audit.accounting_state())])
+        relocated = self._deploy_relocations(name, 'redeploy')
+        # 记录模式重验同次意图中旧副本；普通测试保留回滚完成边界的原断言。
+        if stops.record_root() is not None:
+            audit.check_trusted(relocated=relocated)
+        audit.check_closure(executed=state['restored'], expected=expected_restored, what='启动恢复按内容换回的受管根',
+            source=audit.journal_closure_source(state['retired'], 'rollback_done', 'restored'))
+        audit.check_accounting(repeats=[('再部署', state['repeat_before'], state['repeat_after'])])
         audit.check_elapsed_untouched(self.project_root, self.timing_dir)
         audit.check_history()
-        audit.check_entry(str(refused.exception), "已按内容恢复到部署前", "重新执行")
-        audit.report(retired_journal=harness.retired_journals()[0].name)
+        audit.check_entry(state['refused'], '已按内容恢复到部署前', '重新执行')
+        audit.report(retired_journal=state['retired'].name)
+        self._deploy_save(name, state, 9)
 
-    def _receipts_residue(self, scenario: str, kill: Callable[[Any], contextlib.AbstractContextManager[Any]], *,
-                          expected_written: int) -> None:
-        """收据正文已入日志的残留：再次部署先核对新版本、按日志正文补齐缺失的收据（已写的只核对不改），删日志后照常部署。"""
+    def _receipts_residue(self, scenario: str, kill: Callable[[Any], contextlib.AbstractContextManager[Any]], *, expected_written: int) -> None:
+        """原收据残留只补齐一次；每次幂等恢复仍保留独立实际调用与原账本切点。"""
 
+        name = 'deploy-receipts:' + scenario
+        state = self._deploy_cursor(name, scenario)
         harness = self.harness
-        harness.build(control_root_old=True)
-        self._kill_at(kill)
-        (journal,) = harness.journals()
-        prepared = {item["client"]: item for item in self.deploy.SwitchJournal.load(journal).receipts or []}
-        written_before = sorted(path.name for path in [*harness.receipts("codex"), *harness.receipts("claude")])
-        audit = self._audit(scenario, [*self._production_paths(), *harness.receipts("codex"), *harness.receipts("claude")])
-        harness.stamp = "20261008T020000Z"
-        self.assertEqual(harness.run(*self.BOTH), 0, "收据残留补齐后本次部署照常进行")
-        recovered = json.loads(harness.last_output)["recovered_switch_journal"]
-        self.assertEqual(recovered["outcome"], "receipts-completed")
-        missing = sorted(Path(item["path"]).name for item in prepared.values() if Path(item["path"]).name not in written_before)
-        self.assertEqual(len(missing), expected_written)
-        repeat_before = audit.accounting_state()
-        self.assertEqual(self.deploy.recover_switch_journal(harness.control)["outcome"], "none", "日志已删：再次启动无事可做")
+        if state['phase'] == 0:
+            self._deploy_save(name, state, 1)
+            harness.build(control_root_old=True)
+            self._deploy_save(name, state, 2)
+        if state['phase'] == 1:
+            raise ValueError('原收据残留夹具建场未闭合，禁止重建')
+        if state['phase'] == 2:
+            self._deploy_save(name, state, 3)
+            self._kill_at(kill)
+            (journal,) = harness.journals()
+            prepared = {item['client']: item for item in self.deploy.SwitchJournal.load(journal).receipts or []}
+            written = sorted(path.name for path in [*harness.receipts('codex'), *harness.receipts('claude')])
+            self._deploy_save(name, state, 4, prepared=prepared, written=written)
+        if state['phase'] == 3:
+            raise ValueError('原收据故障注入缺实际退出停点，禁止重新部署')
+        audit = self._audit(scenario, [*self._production_paths(), *harness.receipts('codex'), *harness.receipts('claude')])
+        if state['phase'] == 4:
+            harness.stamp = '20261008T020000Z'
+            code, result, stderr = self._deploy_run(name, 'complete-receipts')
+            self.assertEqual(code, 0, stderr)
+            recovered = result['recovered_switch_journal']
+            self.assertEqual(recovered['outcome'], 'receipts-completed')
+            missing = sorted(Path(item['path']).name for item in state['prepared'].values() if Path(item['path']).name not in state['written'])
+            self.assertEqual(len(missing), expected_written)
+            self._deploy_save(name, state, 5, recovered=recovered, missing=missing, repeat_before=audit.accounting_state())
+        if state['phase'] == 5:
+            argv = ['recover_switch_journal', str(harness.control)]
+            def invoke() -> tuple[int, Any, str]:
+                pending = stops.begin_command(argv)
+                result = self.deploy.recover_switch_journal(harness.control)
+                stops.record_command(argv, 0, json.dumps(result), '', pending=pending)
+                return 0, result, ''
+            _code, result, _stderr = stops.command_step(self, name, 'recovery-repeat', argv, invoke)
+            self.assertEqual(result['outcome'], 'none')
+            self._deploy_save(name, state, 6, repeat_after=audit.accounting_state())
         audit.check_trusted()
-        audit.check_closure(executed=recovered["written_receipts"], expected=missing,
-                            reused=recovered["verified_receipts"], expected_reused=written_before, what="按日志正文补齐的收据")
-        audit.check_accounting(repeats=[("再次启动恢复", repeat_before, audit.accounting_state())])
+        recovered = state['recovered']
+        audit.check_closure(executed=recovered['written_receipts'], expected=state['missing'],
+            reused=recovered['verified_receipts'], expected_reused=state['written'], what='按日志正文补齐的收据',
+            source=audit.closure_source(recovered, ('written_receipts',), ('verified_receipts',)))
+        audit.check_accounting(repeats=[('再次启动恢复', state['repeat_before'], state['repeat_after'])])
         audit.check_elapsed_untouched(self.project_root, self.timing_dir)
         audit.check_history()
-        audit.check_entry(recovered, "receipts-completed")
-        audit.report(written=recovered["written_receipts"], verified=recovered["verified_receipts"])
+        audit.check_entry(recovered, 'receipts-completed')
+        audit.report(written=recovered['written_receipts'], verified=recovered['verified_receipts'])
+        self._deploy_save(name, state, 7)
 
     # ---- 各故障点（设计 B5a-01 ②～⑦）
 
+    @_resumable_method
     def _scenario_deploy_after_exchange(self) -> None:
         self._rolled_back("多根部署故障点：首根交换完成后被杀", self._hook("after_exchange", lambda h: h.production(self.capture_root)),
                           control_root_old=True, expected_restored=[self.capture_root])
 
+    @_resumable_method
     def _scenario_deploy_after_backup(self) -> None:
         self._rolled_back("多根部署故障点：旧树已入备份、第二根交换前被杀",
                           self._hook("before_exchange", lambda h: h.production(self.control_root)),
                           control_root_old=True, expected_restored=[self.capture_root])
 
+    @_resumable_method
     def _scenario_deploy_after_new_root(self) -> None:
         self._rolled_back("多根部署故障点：首次新增的根切入后被杀",
                           self._hook("after_rename_noreplace", lambda h: h.production(self.control_root)),
                           control_root_old=None, expected_restored=[self.capture_root, self.control_root])
 
+    @_resumable_method
     def _scenario_deploy_interrupted_rollback(self) -> None:
         deploy = self.deploy
         self._rolled_back(
@@ -1896,6 +2814,7 @@ class _DeployFaultScenarios(unittest.TestCase):
             recovery_kill=self._patch_kill(deploy.SwitchJournal, "append", when=lambda _journal, marker, **_fields: marker == "rollback_done"),
         )
 
+    @_resumable_method
     def _scenario_deploy_one_receipt_written(self) -> None:
         deploy = self.deploy
         written: list[Any] = []
@@ -1907,6 +2826,7 @@ class _DeployFaultScenarios(unittest.TestCase):
         self._receipts_residue("多根部署故障点：只写出一份收据时被杀", self._patch_kill(deploy, "write_json_once", when=second_write),
                                expected_written=1)
 
+    @_resumable_method
     def _scenario_deploy_receipts_written(self) -> None:
         deploy = self.deploy
         self._receipts_residue("多根部署故障点：收据全部写出、日志未删时被杀",
@@ -1922,17 +2842,243 @@ class _PredecessorMisuseScenarios(predecessor_tests._PredecessorCase):
     """x86_64 证据喂给 arm64 目标、夹具收据冒充正式引用：Store 侧零写入拒绝。导入不碰两本账：工作区另建 Claude 项目总账与
     计时账本，核对它们逐字节不变。"""
 
+    @classmethod
+    def setUpClass(cls) -> None:
+        """记录模式重绑原受管树；原树未建完或修改前字节缺失时拒绝重新复制。"""
+
+        cls._recorded_tree = stops.record_root() is not None
+        if not cls._recorded_tree:
+            super().setUpClass()
+            return
+        root, restoring = stops.fixture_directory(cls, 'predecessor-tree')
+        saved = stops.load_state('predecessor-tree-fixture')
+        if restoring:
+            if saved is None or saved.get('status') != 'complete' or saved.get('root') != root:
+                raise ValueError('原前序受管树初始化未闭合，禁止复制新树')
+            cls.tree = predecessor_tests.ManagedToolTree(root / 'repo', existing=True)
+            current = sorted(path for path in cls.tree.root.rglob('*') if path.is_file())
+            if current != [binding['path'] for binding in saved['bindings']]:
+                raise ValueError('原前序受管树文件集合已改变')
+            for binding in saved['bindings']:
+                stops.read_cut(binding)
+            return
+        stops.save_state('predecessor-tree-fixture', {'status': 'pending', 'root': root})
+        cls.tree = predecessor_tests.ManagedToolTree(root / 'repo')
+        bindings = [stops.file_cut(path) for path in sorted(cls.tree.root.rglob('*')) if path.is_file()]
+        stops.save_state('predecessor-tree-fixture', {'status': 'complete', 'root': root, 'bindings': bindings})
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        if not cls._recorded_tree:
+            super().tearDownClass()
+
     def setUp(self) -> None:
-        super().setUp()
         from tools.official_client_capture import codex_upgrade_timing_ledger as timing
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
 
+        if stops.record_root() is None:
+            super().setUp()
+            restoring = False
+        else:
+            self.workspace, restoring = stops.fixture_directory(self, 'predecessor-workspace')
+            active = self.tree.active()
+            active.__enter__()
+            self.addCleanup(active.__exit__, None, None, None)
+            if restoring:
+                saved = stops.load_state('predecessor-fixture')
+                workspace = self.workspace
+                if saved is None or saved.get('status') != 'complete' or not stops.restore_case(self):
+                    raise ValueError('原前序工作区或两账未闭合，禁止重新建账')
+                if self.workspace != workspace or saved['workspace'] != workspace:
+                    raise ValueError('原前序工作区坐标已改变')
+                self.timing_dir = saved['timing_dir']
+                self.project_root = saved['project_root']
+                from tools.official_client_capture import codex_upgrade_project_ledger as project
+                project.read_project_history_snapshot(self.project_root)
+                timing.inspect_ledger(self.timing_dir, project_ledger_optional=True)
+                return
+            self._locked = []
+            stops.save_state('predecessor-fixture', {'status': 'pending', 'workspace': self.workspace})
         ledgers = self.workspace / "ledgers"
         ledgers.mkdir(mode=0o700)
         self.project_root = ledger_fixture.install_claude_project_ledger(ledgers)
         self.timing_dir = ledgers / "timing"
         timing.create_ledger(self.timing_dir, upgrade_id="claude-predecessor-misuse-ledger", baseline_version="2.1.226",
                              target_version="2.1.285", campaign_purpose="validation_only", evidence_decision="recapture", client="claude")
+        stops.save_case(self)
+        stops.save_state('predecessor-fixture', {'status': 'complete', 'workspace': self.workspace,
+            'timing_dir': self.timing_dir, 'project_root': self.project_root})
+
+    @staticmethod
+    def _fixture_values(fixture: predecessor_tests.SyntheticCampaign) -> dict[str, Any]:
+        """只保存原证据写入所用值；Store、时钟对象与 SyntheticCampaign 实例不序列化。"""
+
+        return {**{key: getattr(fixture, key) for key in ('root', 'external_root', 'store_root', 'schema',
+            'campaign_id', 'tool_sha256', 'official_binding')}, 'clock': fixture._clock.isoformat()}
+
+    @staticmethod
+    def _restore_fixture(values: dict[str, Any]) -> predecessor_tests.SyntheticCampaign:
+        """跳过会初始化 Store 和覆盖外部原件的构造器，重绑原 _time 所需时钟值。"""
+
+        required = {'root', 'external_root', 'store_root', 'schema', 'campaign_id', 'tool_sha256',
+                    'official_binding', 'clock'}
+        if set(values) != required:
+            raise ValueError('原 SyntheticCampaign 明示值字段不完整')
+        fixture = object.__new__(predecessor_tests.SyntheticCampaign)
+        for key, value in values.items():
+            if key != 'clock':
+                setattr(fixture, key, value)
+        fixture._clock = datetime.fromisoformat(values['clock'])
+        return fixture
+
+    def _verify_predecessor(self, state: dict[str, Any]) -> None:
+        """最小合成总计划没有正式 VC 控制；用其原 Store 与外部原件读侧核验，不冒充正式 Campaign。"""
+
+        from tools.official_client_control.store import ControlStore
+
+        for binding in state['campaign_bindings']:
+            stops.read_cut(binding)
+        source = ControlStore.open_read_only(state['predecessor_root'])
+        source.replay(external_root=state['predecessor_external'], require_external=True)
+        target = self.target_store(state['campaign_dir'])
+        fixture = self._restore_fixture(state['target_fixture'])
+        target.replay(external_root=fixture.external_root, require_external=True)
+        campaign = target.load_campaign(predecessor_tests.TARGET_ID)
+        self.assertEqual(campaign['tool_identity']['tool_files_sha256'], fixture.tool_sha256)
+        self.assertEqual(campaign['official_artifacts'], [fixture.official_binding])
+
+    def _predecessor_start(self, name: str, scenario: str, *, amd64: bool = False) -> dict[str, Any]:
+        state = stops.resume_checkpoint(self, name)
+        if state is not None:
+            if state.get('phase') == 'initializing':
+                raise ValueError('原前序 Campaign 首次构造未闭合，保留现场并禁止重建')
+            self._verify_predecessor(state)
+            return state
+        if os.environ.get(stops.METHOD_RESUME_ENV):
+            raise ValueError('原前序场景缺游标，禁止重新初始化')
+        stops.checkpoint(self, name, phase='initializing', audit_snapshots={scenario: 'uninitialized'})
+        from tools.official_client_control.store import ControlStore
+
+        predecessor = (self.make_predecessor('amd64-predecessor', schema='v2',
+            **{**predecessor_tests.SYNTHETIC_TARGET, 'platforms': ['linux/amd64']}) if amd64
+            else self.make_predecessor())
+        campaign_dir, fixture = self.make_target('amd64' if amd64 else 'target',
+            predecessor=self.binding(ControlStore.open_read_only(predecessor.store_root), predecessor_tests.PREDECESSOR_ID))
+        if not amd64:
+            self.lock(predecessor.store_root)
+        state = {'phase': 0, 'campaign_dir': campaign_dir, 'predecessor_root': predecessor.store_root,
+            'predecessor_external': predecessor.external_root, 'target_fixture': self._fixture_values(fixture),
+            'campaign_bindings': [stops.file_cut(campaign_dir / filename)
+                                  for filename in ('campaign.json', 'campaign.sha256')],
+            'audit_snapshots': {scenario: 'uninitialized'}}
+        self._predecessor_save(name, state, 0)
+        return state
+
+    def _predecessor_save(self, name: str, state: dict[str, Any], phase: int, **values: Any) -> None:
+        state.update(values, phase=max(int(state['phase']), phase))
+        stops.checkpoint(self, name, **state)
+
+    def _predecessor_cli(self, name: str, key: str, state: dict[str, Any], mode: str) -> tuple[int, Any, str]:
+        argv = predecessor_tests._import_argv(state['campaign_dir'], state['predecessor_root'],
+                                              predecessor_tests.PREDECESSOR_ID, mode)
+
+        def invoke() -> tuple[int, Any, str]:
+            pending = stops.begin_command(argv)
+            code, stdout, stderr = predecessor_tests._run_main(argv)
+            stops.record_command(argv, code, stdout, stderr, pending=pending)
+            return code, json.loads(stdout) if stdout.strip() else None, stderr
+
+        result = stops.command_step(self, name, key, argv, invoke)
+        self._verify_predecessor(state)
+        if result[0] == 0:
+            store = self.target_store(state['campaign_dir'])
+            store.load_object(result[1]['import_ref'])
+            store.load_receipt(result[1]['receipt_ref'])
+        return result
+
+    def _predecessor_fact(self, name: str, key: str, state: dict[str, Any], kind: str,
+                          payload: dict[str, Any], issued: str) -> tuple[int, Any, str]:
+        """记录原 Store API 的真实引用或 ControlError；pending 缺完整输出时只交原事实裁定。"""
+
+        from tools.official_client_control.errors import ControlError
+
+        store = self.target_store(state['campaign_dir'])
+        digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        argv = ['原 Store.append_fact', str(store.root), predecessor_tests.TARGET_ID, kind, digest, issued]
+
+        def invoke() -> tuple[int, Any, str]:
+            pending = stops.begin_command(argv)
+            try:
+                result = store.append_fact(predecessor_tests.TARGET_ID, kind, payload, issued)
+            except ControlError as error:
+                stderr = str(error)
+                stops.record_command(argv, 1, '', stderr, pending=pending)
+                return 1, None, stderr
+            stdout = json.dumps(result, ensure_ascii=False, sort_keys=True)
+            stops.record_command(argv, 0, stdout, '', pending=pending)
+            return 0, result, ''
+
+        result = stops.command_step(self, name, key, argv, invoke)
+        self._verify_predecessor(state)
+        return result
+
+    def write_target_evidence(self, campaign_dir: Path, fixture: predecessor_tests.SyntheticCampaign,
+                              package_ref: dict[str, Any]) -> dict[str, Any]:
+        """原两次事实写入分别停点；Discovery 成功后恢复只核原引用，不再追加第二条。"""
+
+        if stops.record_root() is None:
+            return super().write_target_evidence(campaign_dir, fixture, package_ref)
+        from tools.official_client_control.errors import ControlError
+
+        name, state = self._predecessor_cursor, self._predecessor_state
+        self.assertEqual(campaign_dir, state['campaign_dir'])
+        if 'discovery_payload' not in state:
+            store = self.target_store(campaign_dir)
+            payload = {'version': store.load_campaign(predecessor_tests.TARGET_ID)['target_version'],
+                'source': 'synthetic-fixture', 'discovered_at_utc': fixture._time(),
+                'tool_sha256': fixture.tool_sha256, 'artifact_refs': [fixture.official_binding]}
+            discovery_issued, evidence_issued = fixture._time(), fixture._time()
+            self._predecessor_save(name, state, 2, discovery_payload=payload, discovery_issued=discovery_issued,
+                evidence_issued=evidence_issued, target_fixture=self._fixture_values(fixture))
+        code, discovery, stderr = self._predecessor_fact(name, 'discovery-write', state,
+            'discovery_recorded', state['discovery_payload'], state['discovery_issued'])
+        self.assertEqual(code, 0, stderr)
+        original = self.target_store(campaign_dir).load_fact(discovery)
+        self.assertEqual((original['fact_kind'], original['payload'], original['issued_at_utc']),
+            ('discovery_recorded', state['discovery_payload'], state['discovery_issued']))
+        if 'discovery_ref' in state:
+            self.assertEqual(discovery, state['discovery_ref'])
+        self._predecessor_save(name, state, 3, discovery_ref=discovery)
+        if 'evidence_before' not in state:
+            before = file_digests(self.target_store(campaign_dir).root)
+            self._predecessor_save(name, state, 3, evidence_before=before,
+                evidence_bindings=[stops.file_cut(Path(path)) for path in sorted(before)])
+        code, result, stderr = self._predecessor_fact(name, 'evidence-refusal', state, 'evidence_recorded',
+            {'discovery_fact_ref': discovery, 'evidence_package_ref': package_ref}, state['evidence_issued'])
+        for binding in state['evidence_bindings']:
+            stops.read_cut(binding)
+        self.assertEqual(file_digests(self.target_store(campaign_dir).root), state['evidence_before'],
+                         '原 Evidence 拒绝不得新增、删除或改写 Store 原件')
+        self._predecessor_save(name, state, 4)
+        if code != 0:
+            raise ControlError(stderr)
+        return result
+
+    def revalidate_completed_method(self, expected: list[str]) -> list[dict[str, Any]]:
+        """只返回原六项记录；唯一外层 runner 负责输出，不重复写记录文件。"""
+
+        contexts = {
+            '跨客户端误用：x86_64 证据喂给 arm64 目标': 'predecessor-x86',
+            '跨客户端误用：夹具收据冒充正式引用': 'predecessor-fixture-formal',
+        }
+        if len(expected) != 1 or expected[0] not in contexts:
+            raise ValueError('前序原方法的场景集合不一致')
+        state = stops.resume_checkpoint(self, contexts[expected[0]])
+        minimum = 2 if expected[0] == '跨客户端误用：x86_64 证据喂给 arm64 目标' else 6
+        if state is None or state.get('phase') == 'initializing' or state.get('phase', -1) < minimum:
+            raise ValueError('原前序方法缺完整世界游标')
+        self._verify_predecessor(state)
+        return [ScenarioAudit.revalidate(self, expected[0])]
 
     def _audit(self, scenario: str, *, trusted: Iterable[Path], history: Iterable[Path]) -> ScenarioAudit:
         audit = ScenarioAudit(self, scenario)
@@ -1940,68 +3086,78 @@ class _PredecessorMisuseScenarios(predecessor_tests._PredecessorCase):
                        timing_dir=self.timing_dir, project_root=self.project_root)
         return audit
 
+    @_resumable_method
     def _scenario_misuse_x86_evidence(self) -> None:
         """跨客户端误用：x86_64 证据喂给 arm64 目标——前序是 linux/amd64 平台的 Store Campaign，arm64 目标的总计划冻结了它，
         read_only_reuse 导入仍按七项身份逐项相等零写入拒绝（拒绝原因写明 platform）；只能以 regression_fixture 登记（见下一场景）。"""
 
-        from tools.official_client_control.store import ControlStore
-
-        other = self.make_predecessor("amd64-predecessor", schema="v2", **{**predecessor_tests.SYNTHETIC_TARGET, "platforms": ["linux/amd64"]})
-        campaign_dir, _fixture = self.make_target(
-            "amd64", predecessor=self.binding(ControlStore.open_read_only(other.store_root), predecessor_tests.PREDECESSOR_ID))
+        name, scenario = 'predecessor-x86', '跨客户端误用：x86_64 证据喂给 arm64 目标'
+        world = self._predecessor_start(name, scenario, amd64=True)
+        campaign_dir = world['campaign_dir']
         target_store = self.target_store(campaign_dir).root
-        audit = self._audit("跨客户端误用：x86_64 证据喂给 arm64 目标", trusted=[other.store_root, target_store, campaign_dir / "campaign.json"],
+        audit = self._audit(scenario, trusted=[world['predecessor_root'], target_store, campaign_dir / "campaign.json"],
                             history=[target_store])
-        state = audit.accounting_state()
-        code, _stdout, stderr = predecessor_tests._run_main(predecessor_tests._import_argv(
-            campaign_dir, other.store_root, predecessor_tests.PREDECESSOR_ID, "read_only_reuse"))
+        if 'accounting_before' not in world:
+            self._predecessor_save(name, world, 0, accounting_before=audit.accounting_state())
+        code, _stdout, stderr = self._predecessor_cli(name, 'read-only-reuse-refusal', world, 'read_only_reuse')
         self.assertEqual(code, 1, stderr)
         self.assertRegex(stderr, "read_only_reuse 要求七项全部可证且逐项相等：platform")
+        self._predecessor_save(name, world, 1)
         imported = self.target_store(campaign_dir).list_object_refs("predecessor_import")
         audit.check_trusted()
-        audit.check_closure(executed=[str(item) for item in imported], expected=[], what="被拒绝的前序导入（登记对象）")
-        audit.check_accounting(repeats=[("被拒绝的导入", state, audit.accounting_state())])
+        audit.check_closure(executed=[str(item) for item in imported], expected=[], what="被拒绝的前序导入（登记对象）",
+                            source=audit.refusal_closure_source(stderr))
+        audit.check_accounting(repeats=[("被拒绝的导入", world['accounting_before'], audit.accounting_state())])
         audit.check_elapsed_untouched(self.project_root, self.timing_dir)
         audit.check_history()
         audit.check_entry(stderr, "platform", "七项全部可证且逐项相等")
         audit.report(predecessor_platform="linux/amd64")
+        self._predecessor_save(name, world, 2)
 
+    @_resumable_method
     def _scenario_misuse_fixture_as_formal(self) -> None:
         """跨客户端误用：夹具收据冒充正式引用——regression_fixture 导入（x86_64 前序，三项身份差异如实登记）成功但逐个对象都不
         授予正式引用；拿导入的 EvidencePackage 写本 Campaign 的 EvidenceFact 被 Store 拒绝（零写入），以同一导入重跑复用原登记。"""
 
         from tools.official_client_control.errors import ControlError
-        from tools.official_client_control.store import ControlStore
-
-        predecessor = self.make_predecessor()
-        campaign_dir, fixture = self.make_target(
-            predecessor=self.binding(ControlStore.open_read_only(predecessor.store_root), predecessor_tests.PREDECESSOR_ID))
-        self.lock(predecessor.store_root)
+        name, scenario = 'predecessor-fixture-formal', '跨客户端误用：夹具收据冒充正式引用'
+        world = self._predecessor_start(name, scenario)
+        self._predecessor_cursor, self._predecessor_state = name, world
+        campaign_dir, fixture = world['campaign_dir'], self._restore_fixture(world['target_fixture'])
         target_store = self.target_store(campaign_dir).root
-        audit = self._audit("跨客户端误用：夹具收据冒充正式引用", trusted=[predecessor.store_root, campaign_dir / "campaign.json"],
+        audit = self._audit(scenario, trusted=[world['predecessor_root'], campaign_dir / "campaign.json"],
                             history=[target_store])
-        summary = self.run_import(campaign_dir, predecessor.store_root, predecessor_tests.PREDECESSOR_ID, "regression_fixture")
+        code, summary, stderr = self._predecessor_cli(name, 'fixture-import', world, 'regression_fixture')
+        self.assertEqual(code, 0, stderr)
+        self._predecessor_save(name, world, 1)
         self.assertEqual([item["item"] for item in summary["identity_differences"]], ["platform", "oauth_org_id", "model_catalog_sha256"])
         self.assertTrue(summary["formal_references"])
         self.assertTrue(all(not item["authorized"] for item in summary["formal_references"]))
-        facts_before = self.target_store(campaign_dir).list_facts(predecessor_tests.TARGET_ID)
-        state = audit.accounting_state()
+        if 'facts_before' not in world:
+            self._predecessor_save(name, world, 2,
+                facts_before=self.target_store(campaign_dir).list_facts(predecessor_tests.TARGET_ID),
+                accounting_before=audit.accounting_state())
+        facts_before = world['facts_before']
         with self.assertRaisesRegex(ControlError, "未获授权引用：③") as refused:
             self.write_target_evidence(campaign_dir, fixture, summary["evidence_package_ref"])
         # EvidenceFact 被拒（Discovery 是本 Campaign 自己的，先于引用核验写入，属合法事实）。
         facts_after = self.target_store(campaign_dir).list_facts(predecessor_tests.TARGET_ID)
         self.assertEqual([fact["fact_kind"] for fact in facts_after if fact["fact_kind"] == "evidence_recorded"],
                          [fact["fact_kind"] for fact in facts_before if fact["fact_kind"] == "evidence_recorded"])
-        again = self.run_import(campaign_dir, predecessor.store_root, predecessor_tests.PREDECESSOR_ID, "regression_fixture")
+        code, again, stderr = self._predecessor_cli(name, 'fixture-import-repeat', world, 'regression_fixture')
+        self.assertEqual(code, 0, stderr)
         self.assertEqual((again["import_ref"], again["receipt_reused"]), (summary["import_ref"], True))
+        self._predecessor_save(name, world, 5)
         audit.check_trusted()
         audit.check_closure(executed=[item["fact_kind"] for item in summary["imported_facts"]],
-                            expected=["discovery_recorded", "evidence_recorded"], what="夹具导入登记的事实（不授予正式引用）")
-        audit.check_accounting(repeats=[("拒绝的正式引用与重跑导入", state, audit.accounting_state())])
+                            expected=["discovery_recorded", "evidence_recorded"], what="夹具导入登记的事实（不授予正式引用）",
+                            source=audit.closure_source(summary, ('imported_facts',), row_key='fact_kind'))
+        audit.check_accounting(repeats=[("拒绝的正式引用与重跑导入", world['accounting_before'], audit.accounting_state())])
         audit.check_elapsed_untouched(self.project_root, self.timing_dir)
         audit.check_history()
         audit.check_entry(str(refused.exception), "未获授权引用", "③")
         audit.report(identity_differences=[item["item"] for item in summary["identity_differences"]], live_request_count=summary["live_request_count"])
+        self._predecessor_save(name, world, 6)
 
 
 # ---------------------------------------------------------------------------
@@ -2046,6 +3202,7 @@ RECOVERY_CHAIN_GROUPS: tuple[tuple[str, Mapping[str, str]], ...] = (
 class _LateStageFaultScenarios(late_driver.ClaudeLateStageChainDriver):
     """A 组未认证场景；单独定向验收后才能加入外层完整链登记。"""
 
+    @_resumable_method
     def _scenario_delivery_faults_in_one_campaign(self) -> None:
         records = self.exercise_delivery_faults()
         self.assertEqual(len(records), 4)
@@ -2054,6 +3211,7 @@ class _LateStageFaultScenarios(late_driver.ClaudeLateStageChainDriver):
 class _LateControlFaultScenarios(late_control_driver.ClaudeLateControlChainDriver):
     """同一世界的暂停、延期和交付恢复；完整 A 组剩余场景未验收前不注册。"""
 
+    @_resumable_method
     def _scenario_control_and_delivery_in_one_campaign(self) -> None:
         records = self.exercise_control_and_delivery_faults()
         self.assertEqual(len(records), 6)
@@ -2062,9 +3220,11 @@ class _LateControlFaultScenarios(late_control_driver.ClaudeLateControlChainDrive
 class _TransientSegmentScenarios(transient_driver.ClaudeTransientChainDriver):
     """恢复段未认证场景；定向串行验收完成前不加入外层完整链登记。"""
 
+    @_resumable_method
     def _scenario_apply_run_seal_builder_in_one_campaign(self) -> None:
         self.run_transient_chain()
 
+    @_resumable_method
     def _scenario_full_control_delivery(self) -> None:
         world = self.run_transient_control_delivery_chain()
         self.assertEqual(tuple(row['scenario'] for row in world['records']), LATE_CONTINUOUS_SCENARIOS)
@@ -2073,6 +3233,7 @@ class _TransientSegmentScenarios(transient_driver.ClaudeTransientChainDriver):
 class _RevisionEvaluatorScenarios(revision_scenarios._RevisionEvaluatorScenarios):
     """私有完整第三链；普通发现和当前认证都不自动运行。"""
 
+    @_resumable_method
     def _scenario_revision_evaluator_delivery(self) -> None:
         world = self.run_revision_evaluator_delivery_chain()
         self.assertEqual(tuple(row['scenario'] for row in world['records']), REVISION_CONTINUOUS_SCENARIOS)
@@ -2126,6 +3287,44 @@ class ClaudeFaultChainTests(unittest.TestCase):
         return shell.ISOLATION_DEGRADED
 
     def _run_chain(self, chain: str, *, diagnostic_seconds: int | None = None) -> None:
+        # 正式入口只有一条命令。原稳定记录目录有唯一停点即重验续作，
+        # 没有记录目录时保持原临时世界行为；不为失败自动申请新世界。
+        self.assertIsNone(diagnostic_budget.diagnostic_seconds(), '公共链不能继承诊断预算；须显式调用私有诊断入口')
+        record_directory = os.environ.get('CLAUDE_RECORDED_CHAIN_RECORD_DIR')
+        if not record_directory:
+            if os.environ.get(stops.CHAIN_RESUME_ENV):
+                raise ValueError('显式恢复必须指定原稳定记录目录，不能重建缺失停点')
+            self._run_chain_body(chain, diagnostic_seconds=diagnostic_seconds)
+            return
+        root = _private_record_root(Path(record_directory))
+        started = time.monotonic()
+        with _record_lock(root), _record_scope(root):
+            stop_name = 'chain:' + chain
+            saved = stops.load_state(stop_name)
+            source = _source_inputs()
+            if saved is None and os.environ.get(stops.CHAIN_RESUME_ENV):
+                raise ValueError('原链缺完整停点，不能从历史 scratch.json 追认 before 或初始化新世界')
+            if saved is not None:
+                if saved.get('chain') != chain or saved.get('diagnostic_seconds') != diagnostic_seconds:
+                    raise ValueError('原链身份或预算模式变化，禁止消费另一条链或诊断结果')
+                if saved.get('source') != source:
+                    prior = saved.get('source') or {}
+                    original = prior.get('files', {})
+                    current = source['files']
+                    changed = sorted(path for path in set(original) | set(current)
+                                     if original.get(path) != current.get(path))
+                    coordinates = [key for key in ('repository', 'fixtures') if prior.get(key) != source.get(key)]
+                    detail = '、'.join(changed[:20] + coordinates)
+                    raise ValueError(f'原链输入有 {len(changed)} 个路径变化：{detail}；'
+                        '先核实际读集及原受控演进，未覆盖路径保持拒绝，不自动初始化或重跑全集')
+                if saved.get('isolation') != self._isolation_mode():
+                    raise ValueError('原链隔离方式已改变，不能承接另一执行环境')
+            self._run_chain_body(chain, diagnostic_seconds=diagnostic_seconds, stop=saved,
+                                 source=source, setup_seconds=time.monotonic() - started)
+
+    def _run_chain_body(self, chain: str, *, diagnostic_seconds: int | None = None,
+                        stop: dict[str, Any] | None = None, source: dict[str, Any] | None = None,
+                        setup_seconds: float = 0.0) -> None:
         # 诊断只允许私有调用显式给预算；公共 test 入口不能靠继承环境放宽认证。
         self.assertIsNone(diagnostic_budget.diagnostic_seconds(), "公共链不能继承诊断预算；须显式调用私有诊断入口")
         if diagnostic_seconds is not None:
@@ -2152,18 +3351,38 @@ class ClaudeFaultChainTests(unittest.TestCase):
             # macOS 的系统临时根本身很长；短根仍位于宿主数据根和执行副本之外。
             scratch = Path("/private/tmp") if sys.platform == "darwin" else shell._scratch_root()
             # 已配置原件目录时保留原 scratch 坐标：来源和收据绑定绝对路径，不能搬走后改 JSON 冒充可重放。
-            temporary = (contextlib.nullcontext(tempfile.mkdtemp(prefix="cfc-", dir=scratch)) if record_directory else
+            if stop is not None:
+                previous_root = Path(stop['scratch_root'])
+                if (previous_root.is_symlink() or not previous_root.is_dir()
+                        or previous_root.parent != scratch.resolve()):
+                    raise ValueError('原 scratch 坐标缺失或不属于原隔离根，禁止另建世界')
+                temporary = contextlib.nullcontext(str(previous_root))
+            else:
+                temporary = (contextlib.nullcontext(tempfile.mkdtemp(prefix="cfc-", dir=scratch)) if record_directory else
                          tempfile.TemporaryDirectory(prefix="cfc-", dir=scratch))
             with temporary as directory:
                 staging = Path(directory).resolve() / "staging"
                 recorded_worlds = staging / "recorded-worlds"
                 try:
-                    staging.mkdir(mode=0o700)
-                    # 与 B5a-05 相同：staging 的属组改成本进程的有效组（macOS 新建目录取父目录属组）。
-                    os.chown(staging, -1, os.getegid())
-                    recorded_worlds.mkdir(mode=0o700)
-                    tree = _copy_tree(staging / "tree")
-                    copy_seconds = round(time.monotonic() - started, 3)
+                    if stop is None:
+                        staging.mkdir(mode=0o700)
+                        # 与 B5a-05 相同：新 staging 取本进程有效组。
+                        os.chown(staging, -1, os.getegid())
+                        recorded_worlds.mkdir(mode=0o700)
+                        tree = _copy_tree(staging / "tree")
+                        copy_seconds = round(time.monotonic() - started, 3)
+                        if record_directory:
+                            stop = {'chain': chain, 'source': source, 'scratch_root': Path(directory).resolve(),
+                                    'tree': tree, 'recorded_worlds': recorded_worlds, 'isolation': mode,
+                                    'diagnostic_seconds': diagnostic_seconds, 'seconds': 0.0,
+                                    'first_started_at_utc': datetime.now(timezone.utc).isoformat(), 'invocations': []}
+                            stops.save_state('chain:' + chain, stop)
+                    else:
+                        tree = Path(stop['tree'])
+                        if (tree != staging / 'tree' or recorded_worlds != stop['recorded_worlds']
+                                or any(path.is_symlink() or not path.is_dir() for path in (staging, tree, recorded_worlds))):
+                            raise ValueError('原源码树或记录世界缺失，禁止重新复制补造')
+                        copy_seconds = 0.0
                     environment = trees.subprocess_env(tree, {
                         project_ledger_fixture.FIXTURE_ONLY_ENV: "1",
                         "TMPDIR": str(staging),
@@ -2176,6 +3395,13 @@ class ClaudeFaultChainTests(unittest.TestCase):
                     })
                     if diagnostic_seconds is not None:
                         environment[diagnostic_budget.DIAGNOSTIC_TIMEOUT_ENV] = str(diagnostic_seconds)
+                    if record_directory:
+                        methods = recorded_worlds / 'method-records'
+                        _private_record_root(methods)
+                        environment[METHODS_ROOT_ENV] = str(methods)
+                    # 链体自身不能把公共目录当成方法目录；每个原方法由 _run_group 唯一绑定。
+                    for key in (stops.METHOD_RECORD_ENV, stops.METHOD_RESUME_ENV, METHOD_VERIFY_ENV):
+                        environment.pop(key, None)
                     argv = [sys.executable, "-m", "unittest", "-v", f"{CHAIN_MODULE}.{type(self).__name__}.{spec['exercise']}"]
                     command = shell._namespace_argv(argv) if mode == shell.ISOLATION_NAMESPACE else argv
                     try:
@@ -2195,8 +3421,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
                         error = sys.exc_info()[1]
                         parent = Path(record_directory)
                         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                        output = parent / f"fault-chain-{chain}-{Path(directory).name}"
-                        output.mkdir(mode=0o700)
+                        output = Path(tempfile.mkdtemp(prefix=f"fault-chain-{chain}-{Path(directory).name}-", dir=parent))
                         for name, raw in (("stdout.log", stdout_bytes), ("stderr.log", stderr_bytes)):
                             path = output / name
                             with path.open("xb") as handle:
@@ -2212,8 +3437,15 @@ class ClaudeFaultChainTests(unittest.TestCase):
                                       handle, ensure_ascii=False, sort_keys=True, indent=2)
                             handle.write("\n")
                         state.chmod(0o600)
+                        if stop is not None:
+                            stop['invocations'].append({'stdout': stops.file_cut(output / 'stdout.log'),
+                                'stderr': stops.file_cut(output / 'stderr.log'), 'exit': stops.file_cut(state)})
         finally:
-            elapsed = round(time.monotonic() - started, 3)
+            invocation_elapsed = round(time.monotonic() - started + setup_seconds, 3)
+            elapsed = round(invocation_elapsed + (float(stop['seconds']) if stop is not None else 0.0), 3)
+            if stop is not None:
+                stop['seconds'] = elapsed
+                stops.save_state('chain:' + chain, stop)
             self.real_chain_metrics = {
                 **{key: value for key, value in metrics.items() if key != "chain"},
                 "scenario": spec["scenario"],
@@ -2221,6 +3453,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
                 "time_budget": time_budget,
                 "formal_time_budget_met": elapsed < time_budget["chain_budget_seconds"],
                 "seconds": elapsed,
+                "invocation_seconds": invocation_elapsed,
                 "copy_seconds": copy_seconds,
                 "isolation": mode,
                 "network_isolated": mode == shell.ISOLATION_NAMESPACE,
