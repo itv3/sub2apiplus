@@ -148,6 +148,10 @@
       "chunks": 4,
       "reason": "A-07.2：42 条用例、原两块正式单元累计 1099.791 秒；按实测方法耗时细分为四块，并发和资源上限保持原值"
     },
+    "test_claude_real_delivery_integration": {
+      "chunks": 13,
+      "reason": "B5b-05：当前13方法彼此使用私有树、Store与守卫进程；仅首方法313.371秒实测不足以确定合并块的上限，先一方法一块，保留1核/768MiB额度及每块3600秒预算；完整实测后仍按既有splits和durations均衡调度，不减少用例。"
+    },
     "test_codex_upgrade": {
       "chunks": 4,
       "reason": "单模块 ARM64 约 7.8 分钟（359 个测试），拆 4 块"
