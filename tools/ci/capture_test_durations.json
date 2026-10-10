@@ -802,9 +802,12 @@
     "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_background_validation_chains_both_clients_dry_runs": 3.923,
     "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_claude_dry_run_is_prefixed_bound_to_claude_and_classifies_pending_steps": 0.948,
     "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_claude_dry_run_yields_while_a_capture_holds_the_machine": 0.496,
+    "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_companion_request_requires_the_primary_and_a_regular_absolute_file": 0.293,
     "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_orchestrator_crash_counts_as_a_real_failure": 0.43,
+    "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_queued_two_request_dry_run_refuses_changed_bound_bytes_before_execution": 0.005,
     "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_real_pre_a3_failures_are_not_hidden": 0.011,
     "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_two_clients_dry_runs_queue_on_the_gate_work_directory": 7.909,
+    "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_two_profile_requests_reach_the_orchestrator_and_bind_separate_conclusions": 0.925,
     "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_unit_inherit_request_reaches_the_orchestrator": 0.877,
     "test_ci_entry_dryrun.EntryDryRunTests.test_background_validation_chains_a_dry_run_up_to_pre_a3": 1.692,
     "test_ci_entry_dryrun.EntryDryRunTests.test_driver_carries_an_identical_copy": 0.005,
@@ -856,18 +859,22 @@
     "test_ci_entry_housekeeping.UnitInheritCleanupTests.test_claude_p0_evidence_pins_its_run_and_trash_in_inherit_directories_is_put_back": 0.004,
     "test_ci_entry_housekeeping.UnitInheritCleanupTests.test_unit_inherit_directory_follows_the_runs_it_belongs_to": 0.009,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_after_formal_is_built_only_the_closeout_continues": 0.347,
+    "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_changing_either_fixed_request_invalidates_pre_a3": 0.125,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_closeout_holds_the_machine_reservation_around_the_first_batch": 0.825,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_closeout_needing_approval_blocks_then_the_approval_is_passed_through": 0.86,
+    "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_companion_request_cli_rejects_orphan_relative_and_full_set_modes": 0.009,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_entry_gates_default_to_full_set_pass_and_reexecute_forces_the_step": 0.539,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_entry_gates_default_to_reexecute_and_never_skip_contract_check": 0.44,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_explicit_parallel_reaches_entry_and_pre_a3_only_calls": 0.273,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_failed_gate_evidence_refuses_to_sign_p0": 0.285,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_full_set_request_reaches_the_gate_and_force_reexecute_is_preserved": 0.482,
+    "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_missing_companion_preserves_the_original_request_and_contract_fallback": 0.046,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_only_pre_a3_redone_uses_the_pre_a3_gate_profile": 0.596,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_p0_receipt_is_assembled_from_the_entry_gates_run_and_the_ledger_plan": 0.301,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_parallel_change_redoes_pre_a3_but_keeps_the_ledger": 0.848,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_pre_a3_redo_still_rechecks_the_full_set_contract": 0.653,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_rehearsal_root_never_runs_the_closeout": 0.313,
+    "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_two_requests_keep_pre_a3_reusable_across_the_actual_profile_change": 0.257,
     "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_withheld_p0_evidence_fails_the_p0_step_with_the_reason": 0.296,
     "test_ci_entry_orchestrator.OrchestratorFlowTests.test_failed_deployment_binding_blocks_its_dependents": 0.028,
     "test_ci_entry_orchestrator.OrchestratorFlowTests.test_failed_job_rehearsal_receipt_is_not_reused_and_the_rerun_only_retries_failures": 0.46,
@@ -1078,6 +1085,7 @@
     "test_ci_unit_executor.UnitExecutorRunTests.test_subset_run_with_repository_config_is_planned_without_stale_entry_errors": 0.481,
     "test_ci_unit_inherit.AuthorizedInheritanceTests.test_all_valid_units_are_inherited_and_the_decision_is_published_with_the_manifest": 0.078,
     "test_ci_unit_inherit.AuthorizedInheritanceTests.test_only_units_without_a_valid_record_rerun": 0.049,
+    "test_ci_unit_inherit.AuthorizedInheritanceTests.test_separate_profile_requests_do_not_approve_first_round_new_records": 0.059,
     "test_ci_unit_inherit.CheckpointTests.test_approval_withdrawn_during_the_run_is_refused": 0.056,
     "test_ci_unit_inherit.CheckpointTests.test_checkpoint_order_is_enforced": 0.018,
     "test_ci_unit_inherit.CheckpointTests.test_lock_checkpoint_only_narrows_the_inherited_set": 0.104,
@@ -23089,6 +23097,1227 @@
             "manifest_sha256": "41ea94dd37713d02eb66c99c41ed38a4230f7086ea6ccb12e7beda730dd0ef4e",
             "path": "/root/claude-offline-tests/final-97a3b5b92-20261010/ci-measurement-five-failed-batches-B-20261010/046/executor/unit-manifest.json",
             "sha256": "d68ff28c13c4c6bec33a2857cf5bf8045abd283d8d083ca64174b7bd60ff92b9"
+          }
+        }
+      ],
+      "statistics": {
+        "complete": "全部当前模块权重齐全、无陈旧模块；不是每方法都有 passed 时长或发布认证",
+        "historical": "旧 measurement、旧权重与旧用例时长全部保留；不是串行耗时或分位数",
+        "module_weight": "同一正式运行覆盖模块全集的 executed 单元 summary.units.seconds 之和；下限0.1秒、1位小数",
+        "test_duration": "正式成功记录 tests[test_id].seconds；仅 outcome=passed，下限0.001秒、3位小数",
+        "unmeasured_method": "合法 skipped／expected_failure 保留原结论与来源，不写成 passed 方法时长；缺时长按原执行器模块权重／方法数回退"
+      }
+    },
+    {
+      "added_keys": [
+        "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_companion_request_requires_the_primary_and_a_regular_absolute_file",
+        "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_queued_two_request_dry_run_refuses_changed_bound_bytes_before_execution",
+        "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_two_profile_requests_reach_the_orchestrator_and_bind_separate_conclusions",
+        "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_changing_either_fixed_request_invalidates_pre_a3",
+        "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_companion_request_cli_rejects_orphan_relative_and_full_set_modes",
+        "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_missing_companion_preserves_the_original_request_and_contract_fallback",
+        "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_two_requests_keep_pre_a3_reusable_across_the_actual_profile_change",
+        "test_ci_unit_inherit.AuthorizedInheritanceTests.test_separate_profile_requests_do_not_approve_first_round_new_records"
+      ],
+      "candidate_only": true,
+      "created_at_utc": "2026-10-10T13:57:59.636435+00:00",
+      "report": "measurement-candidate-report.json",
+      "schema_version": "ci-additive-measurement-supplement/v1",
+      "source_commit": "ac557c505aba854caa62066ba52554aba48dfba1",
+      "source_runs": [
+        {
+          "added_modules": [],
+          "added_test_ids": [
+            "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_companion_request_requires_the_primary_and_a_regular_absolute_file",
+            "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_queued_two_request_dry_run_refuses_changed_bound_bytes_before_execution",
+            "test_ci_entry_dryrun.ClaudeEntryDryRunTests.test_two_profile_requests_reach_the_orchestrator_and_bind_separate_conclusions"
+          ],
+          "diagnostic_units_not_used": 0,
+          "entry_summary": {
+            "bytes": 1889,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/001/export/entry-gates.json",
+            "sha256": "cf1fd33e17feb51778c3750fff45a768f9bb9637b61d758ed730224d915b3ed4"
+          },
+          "environment": {
+            "arch": "aarch64",
+            "cpu_count": "4",
+            "euid": "0",
+            "hostname": "22-7-28-0641",
+            "kernel": "6.17.0-1020-oracle",
+            "python": "CPython 3.12.3",
+            "python_build": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+            "python_distributions": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943",
+            "system": "Linux",
+            "system_packages": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+          },
+          "environment_entries": [
+            {
+              "category": "environment",
+              "detail": {
+                "name": "DBUS_SESSION_BUS_ADDRESS"
+              },
+              "name": "envvar:DBUS_SESSION_BUS_ADDRESS",
+              "sha256": "7766395742da2c816f2433839a48808ae098c96dd004c9c947600ba84f0074ad"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "HOME"
+              },
+              "name": "envvar:HOME",
+              "sha256": "60f6214d2a34b950e9a41a39e7de9bc9ed49c7e8c21cfab85a24727b47d9de3a"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LANG"
+              },
+              "name": "envvar:LANG",
+              "sha256": "63e4dfad89c42ce6e17990127223ca78c9dda3f1ed096e813c2c7c1722e96383"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_ALL"
+              },
+              "name": "envvar:LC_ALL",
+              "sha256": "0435cd04e96f50bb368d06b74a8608720df7bd48b3e64ab517d62b6298bb5880"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_CTYPE"
+              },
+              "name": "envvar:LC_CTYPE",
+              "sha256": "e9a1ef298d538c4aecc3e3bf768850e96bbcf8b46024b64fa2c32c7ab1797cd6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LOGNAME"
+              },
+              "name": "envvar:LOGNAME",
+              "sha256": "260d59ea5c97e4b9433c4566a55eef1fa95bbfeda1d5699254bd5bb57910f02d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PATH"
+              },
+              "name": "envvar:PATH",
+              "sha256": "9ec016509e6ed5409b0ca56917fc37aaf44f4fe1bda991001875cfab8ccad6d0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PWD"
+              },
+              "name": "envvar:PWD",
+              "sha256": "afc31a9ce52603bcef6d88577a4e41fd59ef3af03a4c15e791a234400684604f"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PYTHONDONTWRITEBYTECODE"
+              },
+              "name": "envvar:PYTHONDONTWRITEBYTECODE",
+              "sha256": "402624638e6bb363053bdd8933fdbcdc17ee640a0b80bcded834412b7b892ec7"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHELL"
+              },
+              "name": "envvar:SHELL",
+              "sha256": "cfb92fa3a86e0714de20c4072336bccd46e79ef035eb25dd4e77c1d898724458"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHLVL"
+              },
+              "name": "envvar:SHLVL",
+              "sha256": "5b0180a390d61683c75afa1abc624d1301abff98b68cdca69f5fbd3328e3f1e6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CLIENT"
+              },
+              "name": "envvar:SSH_CLIENT",
+              "sha256": "4b0afd8d7f88ea8c4ada0263a6e2325e4d15cbe4a38fffb42a702e69f8380cbc"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CONNECTION"
+              },
+              "name": "envvar:SSH_CONNECTION",
+              "sha256": "8ccaa6cd84437efe4880f7f2447b5390ad67fe314c3139e7782c25bf3e7db0ce"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "USER"
+              },
+              "name": "envvar:USER",
+              "sha256": "94c8088bcf363badf371b5e9e703e5483eda852c02af0133571589705908c36d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_RUNTIME_DIR"
+              },
+              "name": "envvar:XDG_RUNTIME_DIR",
+              "sha256": "20e972270b66041391d03fd843b65096c31b1377c4931d698742e9e4b46e3cda"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_CLASS"
+              },
+              "name": "envvar:XDG_SESSION_CLASS",
+              "sha256": "53b4ed481e9b20baa4d5174e1a73009ad655d68db7e176ffab810cc2ae28bb8b"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_ID"
+              },
+              "name": "envvar:XDG_SESSION_ID",
+              "sha256": "b396f2e7d9c37efccc9bdf1b17e63a05f1b0310a6b184a4a0a59107ad4e6b531"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_TYPE"
+              },
+              "name": "envvar:XDG_SESSION_TYPE",
+              "sha256": "a18b43289489d9dd134b9df41fa05f8ad3ce088924942b695c3e5a45b86c9102"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "_"
+              },
+              "name": "envvar:_",
+              "sha256": "dc24e7a800c5d7020092465a6154c2ab549c8adc458bd2d23b9ee536fbdb12a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "aarch64"
+              },
+              "name": "executor:arch",
+              "sha256": "0ec380a9f29c449af4608b6f90099b3fcd8f17e7629153309d1c8941fae7c50d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4"
+              },
+              "name": "executor:cpu_count",
+              "sha256": "f01df6f46aa9ea49de5dc538946c71816f075e3f006a7124a53382c6f4552560"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "0"
+              },
+              "name": "executor:euid",
+              "sha256": "68a804a8a98dcc93f95f948b2d9ad1d6359496bab36c6c09644055c2c086c0b6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "22-7-28-0641"
+              },
+              "name": "executor:hostname",
+              "sha256": "cf68325fb9f7adba9703d5267f63dfa078a92d719d32ba0015d76445fffe3cab"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "6.17.0-1020-oracle"
+              },
+              "name": "executor:kernel",
+              "sha256": "44749e4718fd36166658fb8379700ed1fd7ad1037558bbaf57e023c13fa7b441"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "CPython 3.12.3"
+              },
+              "name": "executor:python",
+              "sha256": "73e7594201294cfef9d610a9f57d898d1662aec6fb8c73993c0962087f5606c0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]"
+              },
+              "name": "executor:python_build",
+              "sha256": "ccd76ecdc7cc2d8d622e5a2768af4a12cbafc23f5db76459e7d624da04548ad3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943"
+              },
+              "name": "executor:python_distributions",
+              "sha256": "eb46048ecb3c68758d07d7ab835ccae43a025663e9151f775a94fb2a30b716a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "Linux"
+              },
+              "name": "executor:system",
+              "sha256": "374cd36a88a50d7147d5256e3b9d06e9a83ca83736caa6134484a0ffbda72620"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+              },
+              "name": "executor:system_packages",
+              "sha256": "0ca77a40414056d6b9190f866d3f4745c61708d00d73aed82e13e4394ceb59ac"
+            }
+          ],
+          "environment_sha256": "7c45362aa00e50ec0467b77064ea1705e1f229bb45d0d86530d17a75fd5bbdf5",
+          "executor": {
+            "files": {
+              "bytecode_cache.py": "ab9cdf33994d1bc8a1b6614dd5fad48d8c4544f664ffad8c613bc7797a41db6e",
+              "entry_gates.py": "445e7893b3dad54c8a98ac69a0a3dd7417d08f7b728eed85dee538d25f0920d8",
+              "entry_steps.py": "34af52b410fe3df68b0a3c2f40ad61d03fad5e913e95a32f01cab34b20018c1c",
+              "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
+              "read_audit.py": "2d871034acc2c49c07623b5168190391229df23be3bd83cb5673435fa4f78bac",
+              "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e",
+              "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
+              "unit_executor.py": "f86da3f3e781b116be3cd040ef4396a6868dd96164b7398319ced17b0ead9e41",
+              "unit_inherit.py": "9e53bddcb0c647d4c7f3a1f07b9721ff59248c7c550dbba5e9edf4738ebfc828",
+              "unit_records.py": "9bdc1f8ea5831945781585b0129337566a0cd4284b6c637b01fb34ce41995c31"
+            },
+            "sha256": "e41955b60e6a9f8689a29461bab6fb472c3d1faf308f5ac17d09ad135ab3a776"
+          },
+          "executor_summary": {
+            "bytes": 3338,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/001/executor/summary.json",
+            "sha256": "832607c2eb53c68df914abd16d5f0c365edb4497a2e9997830866ea43dd6bea4"
+          },
+          "machine_cores": 4,
+          "mode": "re-execute",
+          "parallelism": 8,
+          "policy_sha256": "4e717ef612d8587882504354f65af583cae3685fe91a8de7b427a358db6e43df",
+          "records": [
+            {
+              "bytes": 24729,
+              "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/record-store/records/a05f438b98ff052f/bb30994fd2d35e4fab9d140ccd4d06d1abf97af81fad567ae7555f8330051b85.json",
+              "record_sha256": "bb30994fd2d35e4fab9d140ccd4d06d1abf97af81fad567ae7555f8330051b85",
+              "sha256": "267e9d0bc76e4ae5d85d63038efbb64b53a7cdad31ae9468ad0e48f8aa6d6456",
+              "unit_id": "test_ci_entry_dryrun"
+            }
+          ],
+          "run_id": "20261010t135615z-1401167-89904e",
+          "source_commit": "ac557c505aba854caa62066ba52554aba48dfba1",
+          "unit_manifest": {
+            "bytes": 10962,
+            "manifest_sha256": "4a7bb8d65fde400ab73510ab567ca5a14042fbec85a3625b3829c0475f4ac5c7",
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/001/executor/unit-manifest.json",
+            "sha256": "4cb741edced7463753413c16356eec2a95c75bb55b4f4df49c860a6215c2aaad"
+          }
+        },
+        {
+          "added_modules": [],
+          "added_test_ids": [
+            "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_changing_either_fixed_request_invalidates_pre_a3",
+            "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_companion_request_cli_rejects_orphan_relative_and_full_set_modes",
+            "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_missing_companion_preserves_the_original_request_and_contract_fallback",
+            "test_ci_entry_orchestrator.OrchestratorCloseoutTests.test_two_requests_keep_pre_a3_reusable_across_the_actual_profile_change"
+          ],
+          "diagnostic_units_not_used": 0,
+          "entry_summary": {
+            "bytes": 1889,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/002/export/entry-gates.json",
+            "sha256": "85f549abd966cbeeeeb08c19f19a7a497c0ac28f5cc86deac24e7ab29a774737"
+          },
+          "environment": {
+            "arch": "aarch64",
+            "cpu_count": "4",
+            "euid": "0",
+            "hostname": "22-7-28-0641",
+            "kernel": "6.17.0-1020-oracle",
+            "python": "CPython 3.12.3",
+            "python_build": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+            "python_distributions": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943",
+            "system": "Linux",
+            "system_packages": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+          },
+          "environment_entries": [
+            {
+              "category": "environment",
+              "detail": {
+                "name": "DBUS_SESSION_BUS_ADDRESS"
+              },
+              "name": "envvar:DBUS_SESSION_BUS_ADDRESS",
+              "sha256": "7766395742da2c816f2433839a48808ae098c96dd004c9c947600ba84f0074ad"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "HOME"
+              },
+              "name": "envvar:HOME",
+              "sha256": "60f6214d2a34b950e9a41a39e7de9bc9ed49c7e8c21cfab85a24727b47d9de3a"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LANG"
+              },
+              "name": "envvar:LANG",
+              "sha256": "63e4dfad89c42ce6e17990127223ca78c9dda3f1ed096e813c2c7c1722e96383"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_ALL"
+              },
+              "name": "envvar:LC_ALL",
+              "sha256": "0435cd04e96f50bb368d06b74a8608720df7bd48b3e64ab517d62b6298bb5880"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_CTYPE"
+              },
+              "name": "envvar:LC_CTYPE",
+              "sha256": "e9a1ef298d538c4aecc3e3bf768850e96bbcf8b46024b64fa2c32c7ab1797cd6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LOGNAME"
+              },
+              "name": "envvar:LOGNAME",
+              "sha256": "260d59ea5c97e4b9433c4566a55eef1fa95bbfeda1d5699254bd5bb57910f02d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PATH"
+              },
+              "name": "envvar:PATH",
+              "sha256": "9ec016509e6ed5409b0ca56917fc37aaf44f4fe1bda991001875cfab8ccad6d0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PWD"
+              },
+              "name": "envvar:PWD",
+              "sha256": "afc31a9ce52603bcef6d88577a4e41fd59ef3af03a4c15e791a234400684604f"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PYTHONDONTWRITEBYTECODE"
+              },
+              "name": "envvar:PYTHONDONTWRITEBYTECODE",
+              "sha256": "402624638e6bb363053bdd8933fdbcdc17ee640a0b80bcded834412b7b892ec7"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHELL"
+              },
+              "name": "envvar:SHELL",
+              "sha256": "cfb92fa3a86e0714de20c4072336bccd46e79ef035eb25dd4e77c1d898724458"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHLVL"
+              },
+              "name": "envvar:SHLVL",
+              "sha256": "5b0180a390d61683c75afa1abc624d1301abff98b68cdca69f5fbd3328e3f1e6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CLIENT"
+              },
+              "name": "envvar:SSH_CLIENT",
+              "sha256": "4b0afd8d7f88ea8c4ada0263a6e2325e4d15cbe4a38fffb42a702e69f8380cbc"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CONNECTION"
+              },
+              "name": "envvar:SSH_CONNECTION",
+              "sha256": "8ccaa6cd84437efe4880f7f2447b5390ad67fe314c3139e7782c25bf3e7db0ce"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "USER"
+              },
+              "name": "envvar:USER",
+              "sha256": "94c8088bcf363badf371b5e9e703e5483eda852c02af0133571589705908c36d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_RUNTIME_DIR"
+              },
+              "name": "envvar:XDG_RUNTIME_DIR",
+              "sha256": "20e972270b66041391d03fd843b65096c31b1377c4931d698742e9e4b46e3cda"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_CLASS"
+              },
+              "name": "envvar:XDG_SESSION_CLASS",
+              "sha256": "53b4ed481e9b20baa4d5174e1a73009ad655d68db7e176ffab810cc2ae28bb8b"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_ID"
+              },
+              "name": "envvar:XDG_SESSION_ID",
+              "sha256": "b396f2e7d9c37efccc9bdf1b17e63a05f1b0310a6b184a4a0a59107ad4e6b531"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_TYPE"
+              },
+              "name": "envvar:XDG_SESSION_TYPE",
+              "sha256": "a18b43289489d9dd134b9df41fa05f8ad3ce088924942b695c3e5a45b86c9102"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "_"
+              },
+              "name": "envvar:_",
+              "sha256": "dc24e7a800c5d7020092465a6154c2ab549c8adc458bd2d23b9ee536fbdb12a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "aarch64"
+              },
+              "name": "executor:arch",
+              "sha256": "0ec380a9f29c449af4608b6f90099b3fcd8f17e7629153309d1c8941fae7c50d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4"
+              },
+              "name": "executor:cpu_count",
+              "sha256": "f01df6f46aa9ea49de5dc538946c71816f075e3f006a7124a53382c6f4552560"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "0"
+              },
+              "name": "executor:euid",
+              "sha256": "68a804a8a98dcc93f95f948b2d9ad1d6359496bab36c6c09644055c2c086c0b6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "22-7-28-0641"
+              },
+              "name": "executor:hostname",
+              "sha256": "cf68325fb9f7adba9703d5267f63dfa078a92d719d32ba0015d76445fffe3cab"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "6.17.0-1020-oracle"
+              },
+              "name": "executor:kernel",
+              "sha256": "44749e4718fd36166658fb8379700ed1fd7ad1037558bbaf57e023c13fa7b441"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "CPython 3.12.3"
+              },
+              "name": "executor:python",
+              "sha256": "73e7594201294cfef9d610a9f57d898d1662aec6fb8c73993c0962087f5606c0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]"
+              },
+              "name": "executor:python_build",
+              "sha256": "ccd76ecdc7cc2d8d622e5a2768af4a12cbafc23f5db76459e7d624da04548ad3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943"
+              },
+              "name": "executor:python_distributions",
+              "sha256": "eb46048ecb3c68758d07d7ab835ccae43a025663e9151f775a94fb2a30b716a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "Linux"
+              },
+              "name": "executor:system",
+              "sha256": "374cd36a88a50d7147d5256e3b9d06e9a83ca83736caa6134484a0ffbda72620"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+              },
+              "name": "executor:system_packages",
+              "sha256": "0ca77a40414056d6b9190f866d3f4745c61708d00d73aed82e13e4394ceb59ac"
+            }
+          ],
+          "environment_sha256": "7c45362aa00e50ec0467b77064ea1705e1f229bb45d0d86530d17a75fd5bbdf5",
+          "executor": {
+            "files": {
+              "bytecode_cache.py": "ab9cdf33994d1bc8a1b6614dd5fad48d8c4544f664ffad8c613bc7797a41db6e",
+              "entry_gates.py": "445e7893b3dad54c8a98ac69a0a3dd7417d08f7b728eed85dee538d25f0920d8",
+              "entry_steps.py": "34af52b410fe3df68b0a3c2f40ad61d03fad5e913e95a32f01cab34b20018c1c",
+              "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
+              "read_audit.py": "2d871034acc2c49c07623b5168190391229df23be3bd83cb5673435fa4f78bac",
+              "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e",
+              "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
+              "unit_executor.py": "f86da3f3e781b116be3cd040ef4396a6868dd96164b7398319ced17b0ead9e41",
+              "unit_inherit.py": "9e53bddcb0c647d4c7f3a1f07b9721ff59248c7c550dbba5e9edf4738ebfc828",
+              "unit_records.py": "9bdc1f8ea5831945781585b0129337566a0cd4284b6c637b01fb34ce41995c31"
+            },
+            "sha256": "e41955b60e6a9f8689a29461bab6fb472c3d1faf308f5ac17d09ad135ab3a776"
+          },
+          "executor_summary": {
+            "bytes": 3362,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/002/executor/summary.json",
+            "sha256": "0fe9af8e91c54d65642d210edb15a37dce4e0c7576cba35a5081e893c113e54c"
+          },
+          "machine_cores": 4,
+          "mode": "re-execute",
+          "parallelism": 8,
+          "policy_sha256": "4e717ef612d8587882504354f65af583cae3685fe91a8de7b427a358db6e43df",
+          "records": [
+            {
+              "bytes": 27229,
+              "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/record-store/records/15559bbc98a5913c/bca0e8bf47b0fcaab189dc2bb68539e1ceb906748593b7a4b195ada952d67550.json",
+              "record_sha256": "bca0e8bf47b0fcaab189dc2bb68539e1ceb906748593b7a4b195ada952d67550",
+              "sha256": "c646db0192b6e8f4ef05bfa2b43ba34ed28b10f863e5f3288ed9a74c8a53f660",
+              "unit_id": "test_ci_entry_orchestrator"
+            }
+          ],
+          "run_id": "20261010t135644z-1405292-751fe3",
+          "source_commit": "ac557c505aba854caa62066ba52554aba48dfba1",
+          "unit_manifest": {
+            "bytes": 12001,
+            "manifest_sha256": "dcb5ef2ac0f29106b938ec5ad4b0f2d6af14926e9ffddd1ae41c7db19b74c537",
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/002/executor/unit-manifest.json",
+            "sha256": "e412bbfb86156695217bee83aaddd6d68d351657a2e652e2acd5b48f87ee1832"
+          }
+        },
+        {
+          "added_modules": [],
+          "added_test_ids": [
+            "test_ci_unit_inherit.AuthorizedInheritanceTests.test_separate_profile_requests_do_not_approve_first_round_new_records"
+          ],
+          "diagnostic_units_not_used": 0,
+          "entry_summary": {
+            "bytes": 1888,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/003/export/entry-gates.json",
+            "sha256": "6d33f80cc98dd555af3beff060f0bbace56685808f5f6ffb6145e07e4e948134"
+          },
+          "environment": {
+            "arch": "aarch64",
+            "cpu_count": "4",
+            "euid": "0",
+            "hostname": "22-7-28-0641",
+            "kernel": "6.17.0-1020-oracle",
+            "python": "CPython 3.12.3",
+            "python_build": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+            "python_distributions": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943",
+            "system": "Linux",
+            "system_packages": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+          },
+          "environment_entries": [
+            {
+              "category": "environment",
+              "detail": {
+                "name": "DBUS_SESSION_BUS_ADDRESS"
+              },
+              "name": "envvar:DBUS_SESSION_BUS_ADDRESS",
+              "sha256": "7766395742da2c816f2433839a48808ae098c96dd004c9c947600ba84f0074ad"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "HOME"
+              },
+              "name": "envvar:HOME",
+              "sha256": "60f6214d2a34b950e9a41a39e7de9bc9ed49c7e8c21cfab85a24727b47d9de3a"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LANG"
+              },
+              "name": "envvar:LANG",
+              "sha256": "63e4dfad89c42ce6e17990127223ca78c9dda3f1ed096e813c2c7c1722e96383"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_ALL"
+              },
+              "name": "envvar:LC_ALL",
+              "sha256": "0435cd04e96f50bb368d06b74a8608720df7bd48b3e64ab517d62b6298bb5880"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_CTYPE"
+              },
+              "name": "envvar:LC_CTYPE",
+              "sha256": "e9a1ef298d538c4aecc3e3bf768850e96bbcf8b46024b64fa2c32c7ab1797cd6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LOGNAME"
+              },
+              "name": "envvar:LOGNAME",
+              "sha256": "260d59ea5c97e4b9433c4566a55eef1fa95bbfeda1d5699254bd5bb57910f02d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PATH"
+              },
+              "name": "envvar:PATH",
+              "sha256": "9ec016509e6ed5409b0ca56917fc37aaf44f4fe1bda991001875cfab8ccad6d0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PWD"
+              },
+              "name": "envvar:PWD",
+              "sha256": "afc31a9ce52603bcef6d88577a4e41fd59ef3af03a4c15e791a234400684604f"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PYTHONDONTWRITEBYTECODE"
+              },
+              "name": "envvar:PYTHONDONTWRITEBYTECODE",
+              "sha256": "402624638e6bb363053bdd8933fdbcdc17ee640a0b80bcded834412b7b892ec7"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHELL"
+              },
+              "name": "envvar:SHELL",
+              "sha256": "cfb92fa3a86e0714de20c4072336bccd46e79ef035eb25dd4e77c1d898724458"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHLVL"
+              },
+              "name": "envvar:SHLVL",
+              "sha256": "5b0180a390d61683c75afa1abc624d1301abff98b68cdca69f5fbd3328e3f1e6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CLIENT"
+              },
+              "name": "envvar:SSH_CLIENT",
+              "sha256": "4b0afd8d7f88ea8c4ada0263a6e2325e4d15cbe4a38fffb42a702e69f8380cbc"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CONNECTION"
+              },
+              "name": "envvar:SSH_CONNECTION",
+              "sha256": "8ccaa6cd84437efe4880f7f2447b5390ad67fe314c3139e7782c25bf3e7db0ce"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "USER"
+              },
+              "name": "envvar:USER",
+              "sha256": "94c8088bcf363badf371b5e9e703e5483eda852c02af0133571589705908c36d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_RUNTIME_DIR"
+              },
+              "name": "envvar:XDG_RUNTIME_DIR",
+              "sha256": "20e972270b66041391d03fd843b65096c31b1377c4931d698742e9e4b46e3cda"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_CLASS"
+              },
+              "name": "envvar:XDG_SESSION_CLASS",
+              "sha256": "53b4ed481e9b20baa4d5174e1a73009ad655d68db7e176ffab810cc2ae28bb8b"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_ID"
+              },
+              "name": "envvar:XDG_SESSION_ID",
+              "sha256": "b396f2e7d9c37efccc9bdf1b17e63a05f1b0310a6b184a4a0a59107ad4e6b531"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_TYPE"
+              },
+              "name": "envvar:XDG_SESSION_TYPE",
+              "sha256": "a18b43289489d9dd134b9df41fa05f8ad3ce088924942b695c3e5a45b86c9102"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "_"
+              },
+              "name": "envvar:_",
+              "sha256": "dc24e7a800c5d7020092465a6154c2ab549c8adc458bd2d23b9ee536fbdb12a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "aarch64"
+              },
+              "name": "executor:arch",
+              "sha256": "0ec380a9f29c449af4608b6f90099b3fcd8f17e7629153309d1c8941fae7c50d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4"
+              },
+              "name": "executor:cpu_count",
+              "sha256": "f01df6f46aa9ea49de5dc538946c71816f075e3f006a7124a53382c6f4552560"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "0"
+              },
+              "name": "executor:euid",
+              "sha256": "68a804a8a98dcc93f95f948b2d9ad1d6359496bab36c6c09644055c2c086c0b6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "22-7-28-0641"
+              },
+              "name": "executor:hostname",
+              "sha256": "cf68325fb9f7adba9703d5267f63dfa078a92d719d32ba0015d76445fffe3cab"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "6.17.0-1020-oracle"
+              },
+              "name": "executor:kernel",
+              "sha256": "44749e4718fd36166658fb8379700ed1fd7ad1037558bbaf57e023c13fa7b441"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "CPython 3.12.3"
+              },
+              "name": "executor:python",
+              "sha256": "73e7594201294cfef9d610a9f57d898d1662aec6fb8c73993c0962087f5606c0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]"
+              },
+              "name": "executor:python_build",
+              "sha256": "ccd76ecdc7cc2d8d622e5a2768af4a12cbafc23f5db76459e7d624da04548ad3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943"
+              },
+              "name": "executor:python_distributions",
+              "sha256": "eb46048ecb3c68758d07d7ab835ccae43a025663e9151f775a94fb2a30b716a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "Linux"
+              },
+              "name": "executor:system",
+              "sha256": "374cd36a88a50d7147d5256e3b9d06e9a83ca83736caa6134484a0ffbda72620"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+              },
+              "name": "executor:system_packages",
+              "sha256": "0ca77a40414056d6b9190f866d3f4745c61708d00d73aed82e13e4394ceb59ac"
+            }
+          ],
+          "environment_sha256": "7c45362aa00e50ec0467b77064ea1705e1f229bb45d0d86530d17a75fd5bbdf5",
+          "executor": {
+            "files": {
+              "bytecode_cache.py": "ab9cdf33994d1bc8a1b6614dd5fad48d8c4544f664ffad8c613bc7797a41db6e",
+              "entry_gates.py": "445e7893b3dad54c8a98ac69a0a3dd7417d08f7b728eed85dee538d25f0920d8",
+              "entry_steps.py": "34af52b410fe3df68b0a3c2f40ad61d03fad5e913e95a32f01cab34b20018c1c",
+              "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
+              "read_audit.py": "2d871034acc2c49c07623b5168190391229df23be3bd83cb5673435fa4f78bac",
+              "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e",
+              "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
+              "unit_executor.py": "f86da3f3e781b116be3cd040ef4396a6868dd96164b7398319ced17b0ead9e41",
+              "unit_inherit.py": "9e53bddcb0c647d4c7f3a1f07b9721ff59248c7c550dbba5e9edf4738ebfc828",
+              "unit_records.py": "9bdc1f8ea5831945781585b0129337566a0cd4284b6c637b01fb34ce41995c31"
+            },
+            "sha256": "e41955b60e6a9f8689a29461bab6fb472c3d1faf308f5ac17d09ad135ab3a776"
+          },
+          "executor_summary": {
+            "bytes": 3335,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/003/executor/summary.json",
+            "sha256": "0b5d9c142b600e5b79b9618e5b4b4af795919ecefa1a66f5a92bedda2c7a61fb"
+          },
+          "machine_cores": 4,
+          "mode": "re-execute",
+          "parallelism": 8,
+          "policy_sha256": "4e717ef612d8587882504354f65af583cae3685fe91a8de7b427a358db6e43df",
+          "records": [
+            {
+              "bytes": 41912,
+              "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/record-store/records/27e8ecc78d84d811/5e4239886ab508ee648e9a1e904c0d53d54bd025eed30bb195e703ceef96b642.json",
+              "record_sha256": "5e4239886ab508ee648e9a1e904c0d53d54bd025eed30bb195e703ceef96b642",
+              "sha256": "fa0a85863d830a1bd3b9e0f0f3890336d4b951bba593f294371605c6409f04ac",
+              "unit_id": "test_ci_unit_inherit"
+            }
+          ],
+          "run_id": "20261010t135703z-1407449-72c0a2",
+          "source_commit": "ac557c505aba854caa62066ba52554aba48dfba1",
+          "unit_manifest": {
+            "bytes": 11810,
+            "manifest_sha256": "90753ceb92d7c2b1cae9c5533aedc990e1b5d28abcb7040b10a24976f15f1245",
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/003/executor/unit-manifest.json",
+            "sha256": "6745130614afa51edc51fd20c87ed882e3deb306831b0f5fdf9853c915891eaf"
+          }
+        },
+        {
+          "added_modules": [],
+          "added_test_ids": [],
+          "diagnostic_units_not_used": 0,
+          "entry_summary": {
+            "bytes": 1889,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/004/export/entry-gates.json",
+            "sha256": "ddc73c529b7cb16403aa491016a7e7963cf33ce06a319e0d98990b31cb40604f"
+          },
+          "environment": {
+            "arch": "aarch64",
+            "cpu_count": "4",
+            "euid": "0",
+            "hostname": "22-7-28-0641",
+            "kernel": "6.17.0-1020-oracle",
+            "python": "CPython 3.12.3",
+            "python_build": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+            "python_distributions": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943",
+            "system": "Linux",
+            "system_packages": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+          },
+          "environment_entries": [
+            {
+              "category": "environment",
+              "detail": {
+                "name": "DBUS_SESSION_BUS_ADDRESS"
+              },
+              "name": "envvar:DBUS_SESSION_BUS_ADDRESS",
+              "sha256": "7766395742da2c816f2433839a48808ae098c96dd004c9c947600ba84f0074ad"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "HOME"
+              },
+              "name": "envvar:HOME",
+              "sha256": "60f6214d2a34b950e9a41a39e7de9bc9ed49c7e8c21cfab85a24727b47d9de3a"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LANG"
+              },
+              "name": "envvar:LANG",
+              "sha256": "63e4dfad89c42ce6e17990127223ca78c9dda3f1ed096e813c2c7c1722e96383"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_ALL"
+              },
+              "name": "envvar:LC_ALL",
+              "sha256": "0435cd04e96f50bb368d06b74a8608720df7bd48b3e64ab517d62b6298bb5880"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LC_CTYPE"
+              },
+              "name": "envvar:LC_CTYPE",
+              "sha256": "e9a1ef298d538c4aecc3e3bf768850e96bbcf8b46024b64fa2c32c7ab1797cd6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "LOGNAME"
+              },
+              "name": "envvar:LOGNAME",
+              "sha256": "260d59ea5c97e4b9433c4566a55eef1fa95bbfeda1d5699254bd5bb57910f02d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PATH"
+              },
+              "name": "envvar:PATH",
+              "sha256": "9ec016509e6ed5409b0ca56917fc37aaf44f4fe1bda991001875cfab8ccad6d0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PWD"
+              },
+              "name": "envvar:PWD",
+              "sha256": "afc31a9ce52603bcef6d88577a4e41fd59ef3af03a4c15e791a234400684604f"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "PYTHONDONTWRITEBYTECODE"
+              },
+              "name": "envvar:PYTHONDONTWRITEBYTECODE",
+              "sha256": "402624638e6bb363053bdd8933fdbcdc17ee640a0b80bcded834412b7b892ec7"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHELL"
+              },
+              "name": "envvar:SHELL",
+              "sha256": "cfb92fa3a86e0714de20c4072336bccd46e79ef035eb25dd4e77c1d898724458"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SHLVL"
+              },
+              "name": "envvar:SHLVL",
+              "sha256": "5b0180a390d61683c75afa1abc624d1301abff98b68cdca69f5fbd3328e3f1e6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CLIENT"
+              },
+              "name": "envvar:SSH_CLIENT",
+              "sha256": "4b0afd8d7f88ea8c4ada0263a6e2325e4d15cbe4a38fffb42a702e69f8380cbc"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "SSH_CONNECTION"
+              },
+              "name": "envvar:SSH_CONNECTION",
+              "sha256": "8ccaa6cd84437efe4880f7f2447b5390ad67fe314c3139e7782c25bf3e7db0ce"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "USER"
+              },
+              "name": "envvar:USER",
+              "sha256": "94c8088bcf363badf371b5e9e703e5483eda852c02af0133571589705908c36d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_RUNTIME_DIR"
+              },
+              "name": "envvar:XDG_RUNTIME_DIR",
+              "sha256": "20e972270b66041391d03fd843b65096c31b1377c4931d698742e9e4b46e3cda"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_CLASS"
+              },
+              "name": "envvar:XDG_SESSION_CLASS",
+              "sha256": "53b4ed481e9b20baa4d5174e1a73009ad655d68db7e176ffab810cc2ae28bb8b"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_ID"
+              },
+              "name": "envvar:XDG_SESSION_ID",
+              "sha256": "b396f2e7d9c37efccc9bdf1b17e63a05f1b0310a6b184a4a0a59107ad4e6b531"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "XDG_SESSION_TYPE"
+              },
+              "name": "envvar:XDG_SESSION_TYPE",
+              "sha256": "a18b43289489d9dd134b9df41fa05f8ad3ce088924942b695c3e5a45b86c9102"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "name": "_"
+              },
+              "name": "envvar:_",
+              "sha256": "dc24e7a800c5d7020092465a6154c2ab549c8adc458bd2d23b9ee536fbdb12a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "aarch64"
+              },
+              "name": "executor:arch",
+              "sha256": "0ec380a9f29c449af4608b6f90099b3fcd8f17e7629153309d1c8941fae7c50d"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4"
+              },
+              "name": "executor:cpu_count",
+              "sha256": "f01df6f46aa9ea49de5dc538946c71816f075e3f006a7124a53382c6f4552560"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "0"
+              },
+              "name": "executor:euid",
+              "sha256": "68a804a8a98dcc93f95f948b2d9ad1d6359496bab36c6c09644055c2c086c0b6"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "22-7-28-0641"
+              },
+              "name": "executor:hostname",
+              "sha256": "cf68325fb9f7adba9703d5267f63dfa078a92d719d32ba0015d76445fffe3cab"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "6.17.0-1020-oracle"
+              },
+              "name": "executor:kernel",
+              "sha256": "44749e4718fd36166658fb8379700ed1fd7ad1037558bbaf57e023c13fa7b441"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "CPython 3.12.3"
+              },
+              "name": "executor:python",
+              "sha256": "73e7594201294cfef9d610a9f57d898d1662aec6fb8c73993c0962087f5606c0"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]"
+              },
+              "name": "executor:python_build",
+              "sha256": "ccd76ecdc7cc2d8d622e5a2768af4a12cbafc23f5db76459e7d624da04548ad3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "4ec1848a24a4bd800424da3cbb8ec56188ea0f467c5d108fb2845f1c40415943"
+              },
+              "name": "executor:python_distributions",
+              "sha256": "eb46048ecb3c68758d07d7ab835ccae43a025663e9151f775a94fb2a30b716a3"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "Linux"
+              },
+              "name": "executor:system",
+              "sha256": "374cd36a88a50d7147d5256e3b9d06e9a83ca83736caa6134484a0ffbda72620"
+            },
+            {
+              "category": "environment",
+              "detail": {
+                "value": "37efbc01ff9acd24d3ddc26aead747165912bdcce05f8f579e18ff153fb03a4d"
+              },
+              "name": "executor:system_packages",
+              "sha256": "0ca77a40414056d6b9190f866d3f4745c61708d00d73aed82e13e4394ceb59ac"
+            }
+          ],
+          "environment_sha256": "7c45362aa00e50ec0467b77064ea1705e1f229bb45d0d86530d17a75fd5bbdf5",
+          "executor": {
+            "files": {
+              "bytecode_cache.py": "ab9cdf33994d1bc8a1b6614dd5fad48d8c4544f664ffad8c613bc7797a41db6e",
+              "entry_gates.py": "445e7893b3dad54c8a98ac69a0a3dd7417d08f7b728eed85dee538d25f0920d8",
+              "entry_steps.py": "34af52b410fe3df68b0a3c2f40ad61d03fad5e913e95a32f01cab34b20018c1c",
+              "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
+              "read_audit.py": "2d871034acc2c49c07623b5168190391229df23be3bd83cb5673435fa4f78bac",
+              "read_audit_runtime.py": "49e00b1ff1e6baeb3c3d36e434fad9dab26778d3ebef5b29fc030b5584df275e",
+              "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
+              "unit_executor.py": "f86da3f3e781b116be3cd040ef4396a6868dd96164b7398319ced17b0ead9e41",
+              "unit_inherit.py": "9e53bddcb0c647d4c7f3a1f07b9721ff59248c7c550dbba5e9edf4738ebfc828",
+              "unit_records.py": "9bdc1f8ea5831945781585b0129337566a0cd4284b6c637b01fb34ce41995c31"
+            },
+            "sha256": "e41955b60e6a9f8689a29461bab6fb472c3d1faf308f5ac17d09ad135ab3a776"
+          },
+          "executor_summary": {
+            "bytes": 3381,
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/004/executor/summary.json",
+            "sha256": "076e0b69a1489d5dd1ef3000d18383f8474fac86ebd9031d1f771ad4c77dd0c0"
+          },
+          "machine_cores": 4,
+          "mode": "re-execute",
+          "parallelism": 8,
+          "policy_sha256": "4e717ef612d8587882504354f65af583cae3685fe91a8de7b427a358db6e43df",
+          "records": [],
+          "run_id": "20261010t135720z-1409395-289a88",
+          "source_commit": "ac557c505aba854caa62066ba52554aba48dfba1",
+          "unit_manifest": {
+            "bytes": 10076,
+            "manifest_sha256": "410daf84877301d14e46676d6270be14ac9277d83a88da9a4bb74520976b237b",
+            "path": "/root/claude-offline-tests/entry-ac557c505-measurement-20261010/profile-requests-short-measurement-20261010T135417Z/004/executor/unit-manifest.json",
+            "sha256": "72300f52e2bdd0193c3c7cd1cfbfa0a218731319caadddd06d3ba37a41fb9f78"
           }
         }
       ],
