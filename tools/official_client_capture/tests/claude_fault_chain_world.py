@@ -430,7 +430,17 @@ def verify_case(case: Any, campaign: Path) -> None:
     from tools.official_client_capture import codex_upgrade_timing_ledger as timing
     source_scope = (case.source_context if hasattr(case, 'source_context') else
                     case.chain_patched if hasattr(case, 'chain_patched') else contextlib.nullcontext)
-    with source_scope():
+    with source_scope(), contextlib.ExitStack() as stack:
+        typed_name = 'typed-vc6:' + str(campaign)
+        saved_typed = load_state(typed_name)
+        if saved_typed is not None and os.environ.get(METHOD_RESUME_ENV):
+            # 新进程在 Store 重放之前先用原 control/config 和完整活身份
+            # 重绑已形成的回归来源；不启动守卫，也不修改正式空登记表。
+            from tools.official_client_capture.tests import claude_typed_vc6_fixture as typed
+            original = typed.TypedDeliveryFixture(campaign, saved_typed['candidate_id'],
+                                                 control_path=saved_typed['control_path'])
+            original._bind_live_guard()
+            stack.enter_context(typed.source_scope(original.control_path))
         manifest = upgrade.load_campaign_manifest(campaign)
         store = ControlStore.open_read_only(store_module.campaign_store_root(campaign))
         store_campaign = store.load_campaign(manifest['campaign_id'])
