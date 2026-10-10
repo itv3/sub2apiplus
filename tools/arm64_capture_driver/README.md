@@ -340,13 +340,14 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 * `entry-gates.sh --mode re-execute --audit-reads --audit-strict` 记录全根路径，包括宿主依赖、目录元数据、缺失探测和字节码；整仓声明的单元也接受审计。无法解析、轨迹缺失、未绑定路径或输入漂移均失败，不发布可承接的通过记录。仅审计失败不自动重复执行命令。
 * `--audit-host-inputs <JSON>` 以 `unit-host-inputs/v1` 的 `units` 对象登记逐单元精确绝对路径，运行前计算快照。文件绑定内容、元数据、链接及祖先权限；目录只绑定直接目录项，不能代表子文件。虚拟设备、写入和不能稳定绑定的读取不能承接；未闭合单元维持重新执行。
 * 宿主快照 `read-audit-host-snapshot/v2` 保留链接指向、身份、权限、修改时间等属性，排除正常路径解析可能刷新的链接访问时间；普通目标文件和目录的访问时间仍绑定。成功的 `lstat`、带 `AT_SYMLINK_NOFOLLOW` 的元数据读取及 `O_PATH|O_NOFOLLOW` 打开继续拒绝承接，避免遗漏可观察的链接元数据。旧快照须重新取证，不能直接当作 v2 凭证。
-* `read_audit.py scope --record <记录库正式记录> --trace <库内轨迹> --output <新提案>` 重放来源运行清单、日志和完整读集。`entry_gates.py plan --input-scope <提案>` 或入口同名选项只替换该命令的输入声明，保留门禁全集；执行前再核对命令、资源、环境及执行器摘要，必须重新执行严格审计。提案 `reuse_enabled=false`，不直接承接宽范围来源记录。
+* `read_audit.py scope --record <记录库正式记录> --trace <库内轨迹> --output <新提案>` 重放来源运行清单、日志和完整读集。`entry_gates.py plan --input-scope <提案>` 或入口同名选项只替换该单元的输入声明，保留门禁全集；测试提案进入 `test_input_scopes`，按本轮实际发现结果复核完整测试规格，命令提案仍按原命令复核。资源、环境及执行器摘要均须匹配，并重新执行严格审计。提案 `reuse_enabled=false`，不直接承接宽范围来源记录。
 * 严格审计保留原测试树和字节码缓存。带 `--input-scope` 再验收时，只读核对原树提交、干净状态、bundle 分支及缓存，禁止重建测试树、复制依赖或重新预编译来绕过快照漂移；原实物缺失则重新建立读集。
 * 原始轨迹按内容摘要入库，审计结论先于执行记录落盘；承接时重新读取轨迹并核对当前快照。正式结果与诊断结果分别登记；覆盖报告逐单元列出缺口，汇总缺少任一单元不能判完整通过。B 类真实承接仍须独立批准。
-* `--audit-policy <JSON>` 登记 `unit-audit-policy/v1`，固定 `default=reexecute-only`；`units` 按真实命令 ID 列出精确 `host_paths`、`require_read_audit=true` 与 `runtime_contract`。只允许重新执行严格审计，登记单元必须覆盖闭合，未登记单元（包括新增测试）按原命令全量执行，记录明确 `inheritable=false`、`reexecute_required`、`coverage_complete=false`。未覆盖项不能成为以后承接的来源；功能与承接边界通过不代表全集读集覆盖。缺单元、错绑或登记项审计失败仍判失败。承接集合只能只读预览，不能以此开关开启真实承接。
+* `--audit-policy <JSON>` 登记 `unit-audit-policy/v1`，固定 `default=reexecute-only`；`units` 按本轮实际命令或测试单元 ID 列出精确 `host_paths`、`require_read_audit=true` 与 `runtime_contract`，未知 ID 拒绝。登记单元必须覆盖闭合；未登记单元执行自身，并明确记录 `inheritable=false`、`reexecute_required`、`coverage_complete=false`。未覆盖项不能成为以后承接的来源；功能与承接边界通过不代表全集读集覆盖。缺单元、错绑或登记项审计失败仍判失败。此策略不授予承接权限，真实承接仍须原 B5a-08 请求与批准。
+* `entry.sh --audit-reads --audit-strict --audit-policy <JSON>` 将严格审计与策略文件原样传给入口门禁及 pre-A3，并绑定两步输入；环境中的同名键不能隐式启用。策略登记必须匹配实际步骤的单元集合，不能把含测试 ID 的完整门禁策略直接用于只有场景命令的 pre-A3。
 * 控制终端单独绑定 `/dev/tty` 标准字符设备身份和无控制终端状态；只接受轨迹明确为 `ENXIO` 的打开失败或合同内元数据检查。成功访问、其它错误、事件缺失均拒绝，不能把所有设备读取一概豁免。
 * `/bin/bash -n` 语法检查显式设置 `SHELL=/bin/bash` 并绑定到单元规格，避免精简环境下额外查询用户数据库。其它脚本的环境保持原合同；取证和完整门禁必须使用相同的入口环境，不能用 SSH 会话环境替代。
-* 命令输入可登记 `runtime_contract`（`unit-runtime-contract/v1`）：指定专用空临时挂载点、既有生产别名遮挡和明确的动态环境输入。`read_audit_runtime.py` 创建私有挂载命名空间，分别留存实际挂载轨迹与命令轨迹，在实际环境中复核外部输入前后快照。只有本轮空 tmpfs 内能按创建顺序及真实描述符证明的文件才算输出；旧文件、先读后写、链接逃逸、来源不明、环境漂移或结束凭证缺失均不可承接。
+* 单元输入可登记 `runtime_contract`（`unit-runtime-contract/v1`）：指定专用空临时挂载点、既有生产别名遮挡和明确的动态环境输入。`read_audit_runtime.py` 创建私有挂载命名空间，分别留存实际挂载轨迹与被测轨迹，在实际环境中复核外部输入前后快照。测试单元另绑定完整 `runtime-test-spec`，沿原 `run-unit` 运输测试载荷，在私有 tmpfs 生成固定结果和首次已观察失败旁路；结果回收只接受本轮创建且身份、测试集合与摘要匹配的两类产物，消费端重放同一证明。输出坐标只绑定本轮请求，不进入稳定输入；每轮重建的宿主测试清单不能充当稳定输入。旧文件、先读后写、链接逃逸、来源不明、环境漂移或结束凭证缺失均不可承接，不放开通用移动操作或宿主写入。
 * 动态路径只支持逐项登记 `/proc/filesystems` 和 `/proc/sys/crypto/fips_enabled` 的实际值；`/dev/null` 单独绑定标准设备身份。其它动态内核输入、命名空间变更和未建模通信继续失败关闭，不允许整个 `/tmp`、`/proc` 或 `/dev` 前缀豁免。子进程早于 clone 返回的相对路径按父子关系缓存重放，缺少父子关系仍拒绝；轨迹文件名包含完整单元 ID 摘要，避免不同单元串用。
 
 ## 前阶段 1 的收尾段与客户端启动探测（R19）
