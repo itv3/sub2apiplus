@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -194,11 +195,22 @@ def derive_readonly_private_launch_plan(task: Mapping[str, Any], *, bundle_root:
     JSON、当前环境或credential_ref取值。这里只形成计划，现场隔离和真实CLI
     参与仍须由独立观测与原有正式资格合同证明。
     """
-    from tools.official_client_capture import claude_mac_product_materials as materials
-
     frozen, recipe = _recipe_context(copy.deepcopy(dict(task)), bundle_root)
     _require(frozen["execution"]["source_scope"] == "regression_fixture",
              "真实产品物料诊断不能给formal任务授予隔离资格")
+    return derive_material_private_launch_plan(frozen, bundle_root=bundle_root, materials_receipt=materials_receipt)
+
+
+def derive_material_private_launch_plan(task: Mapping[str, Any], *, bundle_root: Path,
+                                       materials_receipt: Path) -> dict[str, Any]:
+    """从本 task 的实读产品原件推导固定计划；formal 也只获得只读计划。
+
+    不靠全局模板名单硬编码某次安装摘要。运行期仍须固定受管 authority、独立
+    捕获及来源适配器的实际资格；本函数所有权限旗标保持 false，不读取凭据。
+    """
+    from tools.official_client_capture import claude_mac_product_materials as materials
+
+    frozen, recipe = _recipe_context(copy.deepcopy(dict(task)), bundle_root)
     _require(Path(materials_receipt).parent == Path(bundle_root), "物料归档须恰好属于本task来源根")
     material = materials.read_product_materials(Path(materials_receipt))
     _require(material["client_id"] == frozen["client_id"]
@@ -212,7 +224,7 @@ def derive_readonly_private_launch_plan(task: Mapping[str, Any], *, bundle_root:
     tokens = (("{executable}",) if desktop else
               ("{executable}", "--user-data-dir", "{user_data}", "--extensions-dir", "{extensions}", "--new-window"))
     template = _ReviewedLaunchTemplate(
-        recipe_id=recipe["recipe_id"], client_id=frozen["client_id"], source_scope="regression_fixture",
+        recipe_id=recipe["recipe_id"], client_id=frozen["client_id"], source_scope=frozen["execution"]["source_scope"],
         artifact_identity_sha256=_artifact_identity(frozen),
         official_support_sha256=recipe["official_support"]["sha256"], installation_mode="standard",
         argv_tokens=tokens, env_names=env_names, private_root_names=root_names)
@@ -234,6 +246,115 @@ def derive_readonly_private_launch_plan(task: Mapping[str, Any], *, bundle_root:
         "claudeCode.environmentVariables": [{"name": name, "value": result["environment"][name]}
                                             for name in ("HOME", "CLAUDE_CONFIG_DIR")]})
     return result
+
+
+def validate_material_private_launch_plan(task: Mapping[str, Any], plan: Mapping[str, Any],
+                                         *, bundle_root: Path, materials_receipt: Path) -> dict[str, Any]:
+    """逐字核 material 派生计划，禁止外部追加 argv、环境名、portable 或替代 CLI。"""
+    actual = derive_material_private_launch_plan(task, bundle_root=bundle_root, materials_receipt=materials_receipt)
+    _require(isinstance(plan, Mapping) and dict(plan) == actual["plan"], "启动计划不是当前实读物料的固定私有计划")
+    return actual
+
+
+def stage_private_product_materials(materials_receipt: Path, *, private_session_root: Path,
+                                   output_root: Path) -> dict[str, Any]:
+    """在冻结新 task 前复制公开产品依赖，然后实读复制品生成新物料原件。
+
+    VS Code 的 --extensions-dir 不能指向空目录同时宣称全局扩展被加载；Desktop
+    的私有 userData 也必须含 pin 指定的内置 CLI 缓存。只复制已核公共制品，不
+    读用户 HOME、账号或凭据，不改旧 task／material／Catalog，不启动任何产品。
+    """
+    import os
+    import stat
+    from tools.official_client_capture import claude_mac_product_materials as materials
+
+    frozen = materials.read_product_materials(Path(materials_receipt))
+    session = _plain_absolute(str(private_session_root), "新私有会话根")
+    output = _plain_absolute(str(output_root), "新物料根")
+    _require(not session.exists() and not output.exists() and not session.is_relative_to(output)
+             and not output.is_relative_to(session), "只允许新建彼此分离的私有会话与物料根")
+    for value in (session.parent, output.parent):
+        info = value.lstat()
+        _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                 and stat.S_IMODE(info.st_mode) == 0o700, "新根的父目录须为当前用户私有目录")
+    roots = {name: Path(value) for name, value in frozen["roots"].items()}
+    _require(all(not session.is_relative_to(value) and not output.is_relative_to(value)
+                 for value in roots.values()), "不能在原产品树中生成私有状态或物料")
+    session.mkdir(mode=0o700)
+    for name in ("home", "config", "user_data", *(("extensions",) if frozen["client_id"] == "claude-vscode" else ())):
+        (session / name).mkdir(mode=0o700)
+
+    def copy_public_tree(original: Path, copied: Path) -> None:
+        # 按已实读库存逐项复制。文件读侧使用 O_NOFOLLOW，不让复制中的竞态链接
+        # 导向用户状态；合法树内链接只复制链接原文，不解引用。
+        inventory, signatures = materials._tree(original)
+        copied.mkdir(mode=0o700)
+        for row in sorted(inventory["entries"], key=lambda item: (item["path"].count("/"), item["path"])):
+            if row["path"] == ".":
+                continue
+            target = copied / row["path"]
+            if row["kind"] == "directory":
+                target.mkdir(mode=0o700)
+            elif row["kind"] == "symlink":
+                target.symlink_to(row["target"])
+            else:
+                reader = materials._open(original, row["path"])
+                fd = None
+                try:
+                    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    before = os.fstat(reader)
+                    _require(materials._signature(before) == signatures[row["path"]]
+                             and stat.S_ISREG(before.st_mode), "公开文件读取前实例已变化")
+                    digest, count = hashlib.sha256(), 0
+                    while raw := os.read(reader, 1_048_576):
+                        count += len(raw)
+                        _require(count <= row["bytes"], "复制中的公开文件超过冻结长度")
+                        digest.update(raw)
+                        view = memoryview(raw)
+                        while view:
+                            written = os.write(fd, view)
+                            _require(written > 0, "复制公开文件短写")
+                            view = view[written:]
+                    _require(count == row["bytes"] and digest.hexdigest() == row["sha256"]
+                             and materials._signature(os.fstat(reader)) == materials._signature(before),
+                             "复制时公开文件实例或字节漂移")
+                    os.fchmod(fd, row["mode"])
+                    os.fsync(fd)
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+                    os.close(reader)
+        for row in sorted(inventory["entries"], key=lambda item: -item["path"].count("/")):
+            if row["kind"] == "directory":
+                (copied if row["path"] == "." else copied / row["path"]).chmod(row["mode"])
+        current, current_signatures = materials._tree(original)
+        _require(current == inventory and current_signatures == signatures, "复制期间原产品树实例变化")
+        copied_inventory, _ = materials._tree(copied)
+        _require(copied_inventory["tree_sha256"] == inventory["tree_sha256"], "复制品树摘要与原产品不符")
+    if frozen["client_id"] == "claude-vscode":
+        original = roots["extension"]
+        copied = session / "extensions" / original.name
+        copy_public_tree(original, copied)
+        staged = {"application_root": roots["application"], "extension_root": copied}
+    else:
+        original = roots["desktop_cli"]
+        version = frozen["versions"]["embedded_cli"]
+        copied = session / "user_data" / "claude-code" / version / original.name
+        copied.parent.mkdir(parents=True, mode=0o700)
+        copy_public_tree(original, copied)
+        staged = {"application_root": roots["application"], "desktop_cli_root": copied}
+    # 两套完整物料分别重读；复制期间源树漂移或复制品被置换不能只按当前摘要接受。
+    current = materials.read_product_materials(Path(materials_receipt))
+    _require(current == frozen, "复制依赖期间原产品物料漂移")
+    result = materials.freeze_product_materials(frozen["client_id"], output_root=output, **staged)
+    expected = {row["role"]: (row["kind"], row["version"], row["content"]["sha256"], row["content"]["bytes"])
+                for row in frozen["client_artifacts"]}
+    actual = {row["role"]: (row["kind"], row["version"], row["content"]["sha256"], row["content"]["bytes"])
+              for row in result["client_artifacts"]}
+    _require(actual == expected, "私有复制品的制品、独立版本或精确字节不符")
+    return {"source_scope": "private_product_materials", "original_receipt_sha256": frozen["receipt_sha256"],
+            "material": result, "private_session_root": str(session),
+            "registration_verified": False, "formal_ready": False, "launch_allowed": False}
 
 
 def check_recipe_qualification(task: Mapping[str, Any], recipe: Mapping[str, Any],
