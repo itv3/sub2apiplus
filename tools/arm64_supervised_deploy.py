@@ -345,8 +345,10 @@ from urllib.parse import urlsplit
 # 2026-10-08（Claude 首批清单确定性编译）：共享清单结构规范化拆出唯一纯核心，Claude 首个 VC-1 批次的
 # 内容生成与重放只走纯核心；真实派发仍经原读取入口核绑定文件和 VC-1／VC-5 门禁。Codex 继续走严格入口，
 # 仅 control 层与监督器摘要变化，wire、evidence、编排器闭包和四项评估器摘要均保持原值。
+# 2026-10-11（Claude 候选批准续跑）：Codex 专属 seal 预演门禁仅适用于 Codex v2 清单；
+# Claude 沿原闭合、批准摘要与证据绑定校验继续执行。仅控制层与整树变化，四条读侧及采集／证据身份不变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "ed23911ee3b99c54455943a4a2c6a0a37993ce43d58cb5f8a4b3ef22fcbae19c"
+    "c470f972f8b9f2f154d22ac1d5032a31ff343333aeac2708317b2d95323bcbe2"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
