@@ -38,6 +38,8 @@ def write(path: Path, raw: bytes) -> None:
 
 
 class ProductBridgeStateTests(unittest.TestCase):
+    client_id = "claude-desktop"
+
     def setUp(self):
         fixture = bridge_fixture.FormalBridgeTests()
         fixture.setUp()
@@ -46,17 +48,30 @@ class ProductBridgeStateTests(unittest.TestCase):
         material.setUp()
         self.addCleanup(material.doCleanups)
         material.run.chmod(0o700)
-        public_root, facts = material.freeze("claude-desktop", material.desktop())
+        if self.client_id == "claude-desktop":
+            roots = material.desktop()
+        else:
+            roots = material.vscode()
+            out = roots["application_root"]/"Contents/Resources/app/out"
+            write(out/"cli.js", b'"user-data-dir";"extensions-dir";"inspect-extensions";"trace"')
+            write(out/"vs/workbench/api/node/extensionHostProcess.js",
+                b'ExtensionService#_doActivateExtension didActivateExtension/ extensionActivationTimes "success" "failure" activateResolvedTime')
+            write(out/"vs/code/electron-utility/sharedProcess/sharedProcessMain.js", b"telemetry/ properties measurements")
+        public_root, facts = material.freeze(self.client_id, roots)
+        self.public_root = public_root
         for path in public_root.rglob("*"):
             if path.is_file():
                 write(fixture.bundle/path.relative_to(public_root), path.read_bytes())
         self.task = fixture.task
+        self.task["client_id"] = self.client_id
         self.task["client_artifacts"] = facts["client_artifacts"]
         embedded = next(row for row in facts["client_artifacts"] if row["role"] == "embedded_cli")
-        self.task["catalog"]["entry"].update(product=embedded["product"], version=embedded["version"]["value"],
+        self.task["catalog"]["entry"].update(client_id=self.client_id+"-fixture",
+            product=embedded["product"], version=embedded["version"]["value"],
             binary_sha256=embedded["content"]["sha256"])
         recipe = c.read_json(fixture.bundle/"isolation-recipe.json")
-        recipe.update(official_support=facts["official_support"], request_policy=self.task["execution"]["request_policy"])
+        recipe.update(client_id=self.client_id, official_support=facts["official_support"],
+            request_policy=self.task["execution"]["request_policy"])
         write(fixture.bundle/"isolation-recipe.json", c.canonical(recipe))
         self.task["execution"]["isolation_recipe"] = c.binding(fixture.bundle/"isolation-recipe.json", fixture.bundle)
         self.task["task_sha256"] = c.digest({key: value for key, value in self.task.items() if key != "task_sha256"})
@@ -66,7 +81,7 @@ class ProductBridgeStateTests(unittest.TestCase):
         self.root, self.session, self.physical = fixture.engine.root, fixture.engine.session, fixture.physical
         self.root.parent.chmod(0o700)
         self.session.mkdir(mode=0o700)
-        for name in ("home", "user_data", "config"):
+        for name in ("home", "user_data", "config", *(("extensions",) if self.client_id == "claude-vscode" else ())):
             (self.session/name).mkdir(mode=0o700)
         for path in public_root.rglob("*"):
             if path.is_file():
@@ -220,6 +235,104 @@ class ProductBridgeStateTests(unittest.TestCase):
         self.assertEqual(recipes.material_state_root(self.task, recipe, self.root), self.session)
         with self.assertRaises(recipes.ProductRecipeError):
             recipes.material_state_paths(self.task, {**recipe, "state_paths": [str(self.file)]}, self.root)
+
+
+class VSCodeBridgeSettingsTests(ProductBridgeStateTests):
+    client_id = "claude-vscode"
+
+    def prepare_through_bridge(self):
+        """运行真实认证 bridge.prepare→factory→recorder.prepare，而非直接填旗标。"""
+        fixed = self.fixture.mac_install.root/"materials"
+        files = []
+        for path in self.public_root.rglob("*"):
+            if path.is_file():
+                target = fixed/path.relative_to(self.public_root)
+                write(target, path.read_bytes())
+                files.append(capture.c.binding(fixed, target))
+        files.sort(key=lambda row: Path(row["path"]).parts)
+        write(fixed/"materials-export.json", c.canonical({"client_id": self.client_id, "files": files,
+            "materials_receipt": next(row for row in files if row["path"] == "product-materials.json")}))
+        # 只替身此测试固定安装的 root 读取权；库存与绑定仍由真实读侧校验。
+        trusted = capture.trusted_bytes
+        def fixed_read(path, **kwargs):
+            path = Path(path)
+            if path.is_relative_to(fixed):
+                return capture.c.read_bytes(path, **kwargs)
+            return trusted(path, **kwargs)
+        request = self.fixture.request("prepare_state", {
+            "recipe_base64": base64.b64encode((self.root/"isolation-recipe.json").read_bytes()).decode(),
+            "dispatch": self.fixture.envelope()})
+        with mock.patch.object(capture, "trusted_bytes", side_effect=fixed_read), \
+             mock.patch.object(products, "create_qualified_source", wraps=products.create_qualified_source) as factory, \
+             mock.patch.object(products.native.subprocess, "Popen") as spawn:
+            result = self.fixture.engine.handle(request)
+        factory.assert_called_once()
+        spawn.assert_not_called()
+        self.assertEqual(result["mapping"]["task"], self.task)
+        item = self.fixture.engine.recorder
+        self.addCleanup(item._release)
+        self.assertIs(type(item), completion.ProductEvidenceRecorder)
+        self.assertTrue(products._MAC_SOURCE.owns_recorder(item))
+        return item
+
+    def test_actual_bridge_prepare_creates_exact_private_settings_before_preflight_without_expanding_journal(self):
+        path = self.session/"user_data/User/settings.json"
+        self.assertFalse(path.exists())
+        item = self.prepare_through_bridge()
+        expected = c.canonical(recipes.derive_material_private_launch_plan(self.task, bundle_root=self.root,
+            materials_receipt=self.root/"product-materials.json", path_context=self.context)["private_user_data_settings"])
+        self.assertEqual(path.read_bytes(), expected)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(item._journal.paths, (self.file.name,))
+        self.assertEqual(item._plan.setup_operations, ())
+        self.assertEqual(self.file.read_bytes(), b"authenticated-original\x00\xff")
+        inode = path.stat().st_ino
+        recipes.prepare_bridge_private_user_settings(self.task, bundle_root=self.root,
+            materials_receipt=self.root/"product-materials.json", path_context=self.context)
+        self.assertEqual(path.stat().st_ino, inode)
+        item._preflight()
+        # 事后设置变化须在监测与派发前失败，不能悄悄修回或启动产品。
+        path.write_bytes(b'{}')
+        with mock.patch.object(products.native.subprocess, "Popen") as spawn:
+            with self.assertRaises(ValueError):
+                item.start_monitoring(self.task, self.root)
+            with self.assertRaises(ValueError):
+                item._provider._guard(self.task, self.root, dispatch=True)
+        spawn.assert_not_called()
+        self.assertEqual(path.read_bytes(), b'{}')
+
+    def test_new_factory_is_readonly_and_cold_recovery_never_recreates_missing_private_settings(self):
+        path = self.session/"user_data/User/settings.json"
+        item = self.factory()
+        self.assertFalse(path.exists(), "新工厂只能构造，不能先于 prepare 写设置")
+        self.assertIs(type(item), completion.ProductEvidenceRecorder)
+        products._MAC_SOURCE._owners.clear()
+        item = self.prepare_through_bridge()
+        item._release()
+        path.unlink()
+        self.fixture.engine.recorder = None
+        before = {file.relative_to(self.root).as_posix(): file.read_bytes() for file in self.root.rglob("*") if file.is_file()}
+        with mock.patch.object(products.native.subprocess, "Popen") as spawn, self.assertRaises((OSError, ValueError)):
+            self.fixture.engine.handle(self.fixture.request("recover", {}))
+        spawn.assert_not_called()
+        self.assertFalse(path.exists())
+        self.assertEqual(before, {file.relative_to(self.root).as_posix(): file.read_bytes() for file in self.root.rglob("*") if file.is_file()})
+
+    def test_existing_wrong_private_settings_or_symlink_is_never_replaced(self):
+        path = self.session/"user_data/User/settings.json"
+        write(path, b'{}')
+        with mock.patch.object(products.native.subprocess, "Popen") as spawn, self.assertRaises(ValueError):
+            self.factory()
+        spawn.assert_not_called()
+        self.assertEqual(path.read_bytes(), b'{}')
+        path.unlink()
+        path.symlink_to(self.file)
+        with mock.patch.object(products.native.subprocess, "Popen") as spawn, self.assertRaises((OSError, ValueError)):
+            self.factory()
+        spawn.assert_not_called()
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(self.file.read_bytes(), b"authenticated-original\x00\xff")
 
 
 if __name__ == "__main__":

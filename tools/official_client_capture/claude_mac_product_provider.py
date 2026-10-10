@@ -96,6 +96,9 @@ class DarwinProductObservationProvider:
                                                             materials_receipt=self._material, path_context=self._path_context)
         _require(actual == self._plan, "真实产品物料或私有配方已经变化")
         if dispatch:
+            if self._path_context is not None and self._task["client_id"] == "claude-vscode":
+                recipes.verify_bridge_private_user_settings(self._task, bundle_root=self._root,
+                    materials_receipt=self._material, path_context=self._path_context)
             _require(not self._cleanup and datetime.now(timezone.utc)
                      < c.timestamp(self._task["execution"]["request_policy"]["deadline_utc"]),
                      "产品冻结期限已过或已经回收，禁止续算与再派发")

@@ -75,6 +75,9 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
                       and self._state == recipes.material_state_root(self._task, recipe, self._root, self._path_context)
                       and self._state_instance["dev"] == self._root_instance["dev"],
                       "恢复计划不是隔离 recipe 的准确物理状态全集与认证私有根")
+        if self._path_context is not None and self._task["client_id"] == "claude-vscode":
+            recipes.verify_bridge_private_user_settings(self._task, bundle_root=self._root,
+                materials_receipt=self._materials, path_context=self._path_context)
         # 物料推导只证明固定参数；隔离能力仍由原来源合同消费，而非 false 旗标翻转。
         if self._path_context is None:
             base._require(source.verify_isolation_recipe_v2(self._task, self._root) == recipe,
@@ -115,9 +118,12 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
         try:
             if self._task["execution"]["source_scope"] == "formal":
                 self._services.recheck_dispatch(self._task)
-            self._preflight()
             base._require(self._journal is None and self._optional(base._WAL) is None,
                           "已有生命周期只能显式恢复，不能重新 prepare")
+            if self._path_context is not None and self._task["client_id"] == "claude-vscode":
+                recipes.prepare_bridge_private_user_settings(self._task, bundle_root=self._root,
+                    materials_receipt=self._materials, path_context=self._path_context)
+            self._preflight()
             journal = self._new_journal()
             journal.__enter__()
             self._journal = journal
@@ -143,6 +149,9 @@ class ProductEvidenceRecorder(base.NativeProductRecorder):
             raise
 
     def start_monitoring(self, task: Mapping[str, Any], bundle_root: Path) -> None:
+        if self._path_context is not None and self._task["client_id"] == "claude-vscode":
+            self._guard(task, bundle_root)
+            self._preflight()
         super().start_monitoring(task, bundle_root)
         if self._task["execution"]["source_scope"] == "formal":
             base._require(self._journal is not None, "缺原状态锁，不能授权产品写入 scope")

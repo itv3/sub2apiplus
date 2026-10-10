@@ -254,7 +254,7 @@ def create_qualified_source(task: Mapping[str, Any], *, bundle_root: Path, mater
     """实际安装、资格、原签名派发和物料均通过后构造唯一产品实例；不启动。"""
     from tools.official_client_capture.claude_mac_product_completion import ProductEvidenceRecorder
     from tools.official_client_capture.claude_mac_product_provider import DarwinProductObservationProvider
-    from tools.official_client_capture.claude_mac_product_recorder import RecorderStatePlan, StateSetupOperation
+    from tools.official_client_capture.claude_mac_product_recorder import RecorderStatePlan, StateSetupOperation, _FROZEN, _WAL
     from tools.official_client_capture.claude_mac_state_journal import SnapshotLimits, file_state
     frozen = copy.deepcopy(source.validate_task_v2(task))
     root = Path(bundle_root)
@@ -297,9 +297,15 @@ def create_qualified_source(task: Mapping[str, Any], *, bundle_root: Path, mater
                      "children": {"settings.json": file_state(raw, mtime_ns=1)}}}),)
             else:
                 # 认证桥的原状态位于 session 外；不能把全局 User 或未授权
-                # 路径塞入它的 journal。私有副本须在冻结 task 前准备准确设置。
-                _require(authority.read_original(settings/"settings.json", maximum=8192) == raw,
-                         "桥私有 User 设置尚未准确准备，不能改写原状态代替")
+                # 路径塞入它的 journal。新工厂只读构造后由唯一 prepare 准备
+                # 私有设置；历史构造和冷恢复必须已经有准确原件，不能补写。
+                path = settings/"settings.json"
+                c.require_plain_path(path)
+                historical = any((root/name).exists() for name in
+                    (_FROZEN, _WAL, "state-before.bin", "product-preseal.json", "source-origin.json", "source-manifest.json"))
+                if historical or path.exists():
+                    recipes.verify_bridge_private_user_settings(frozen, bundle_root=root,
+                        materials_receipt=Path(materials_receipt), path_context=path_context)
         state_plan = RecorderStatePlan(state_root, tuple(path.relative_to(state_root).as_posix() for path in paths), {},
                                        limits, operations, plan["plan"])
         recorder = ProductEvidenceRecorder(frozen, bundle_root=root, services=services, provider=provider,

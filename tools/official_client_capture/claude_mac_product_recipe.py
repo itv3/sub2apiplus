@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
+import stat
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -341,6 +344,103 @@ def validate_material_private_launch_plan(task: Mapping[str, Any], plan: Mapping
                                                 path_context=path_context)
     _require(isinstance(plan, Mapping) and dict(plan) == actual["plan"], "启动计划不是当前实读物料的固定私有计划")
     return actual
+
+
+@contextmanager
+def _bridge_private_settings_parent(task: Mapping[str, Any], *, bundle_root: Path,
+                                    materials_receipt: Path, path_context: Any, create: bool):
+    """只打开本认证 VSCode 会话的两个固定私有子目录，不接受任意目标路径。"""
+    _require(task["client_id"] == "claude-vscode" and path_context is not None,
+             "桥私有 User 设置只用于原认证 VSCode 会话")
+    actual = derive_material_private_launch_plan(task, bundle_root=Path(bundle_root),
+        materials_receipt=Path(materials_receipt), path_context=path_context)
+    session = Path(actual["plan"]["private_roots"]["user_data"]).parent
+    _require(session == physical_session_root(task, actual["recipe"], bundle_root, path_context),
+             "私有 User 不是原认证会话的固定目录")
+    raw = c.canonical(actual["private_user_data_settings"])
+    _require(len(raw) <= 8192, "准确私有设置超出固定长度上限")
+    before = session.lstat()
+    descriptor = os.open(session, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        def private(info):
+            _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                     and stat.S_IMODE(info.st_mode) == 0o700 and info.st_dev == before.st_dev,
+                     "私有 User 父目录不是当前用户的同卷 0700 普通目录")
+        info = os.fstat(descriptor)
+        private(info)
+        _require((info.st_dev, info.st_ino) == (before.st_dev, before.st_ino), "私有会话根在打开时被替换")
+        for name in ("user_data", "User"):
+            if create:
+                try:
+                    os.mkdir(name, mode=0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                except FileExistsError:
+                    pass
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            try:
+                private(os.fstat(child))
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor, raw
+    finally:
+        os.close(descriptor)
+
+
+def _verify_private_settings(descriptor: int, expected: bytes) -> None:
+    """只读实核准确 canonical 字节和私有原实例；既有文件从不覆盖。"""
+    reader = os.open("settings.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+    try:
+        before = os.fstat(reader)
+        _require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid() and before.st_nlink == 1
+                 and stat.S_IMODE(before.st_mode) == 0o600 and before.st_size == len(expected),
+                 "私有 User 设置不是准确长度的当前用户 0600 普通单链接文件")
+        raw = os.read(reader, len(expected)+1)
+        after = os.fstat(reader)
+        current = os.stat("settings.json", dir_fd=descriptor, follow_symlinks=False)
+        names = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns", "st_mode", "st_uid", "st_nlink")
+        _require(raw == expected and all(getattr(before, name) == getattr(after, name) == getattr(current, name)
+                     for name in names), "桥私有 User 设置与准确计划不符或读取时被替换")
+    finally:
+        os.close(reader)
+
+
+def prepare_bridge_private_user_settings(task: Mapping[str, Any], *, bundle_root: Path,
+                                         materials_receipt: Path, path_context: Any) -> None:
+    """仅首次受管 prepare 独占创建本 nonce 私有设置，不改原状态 journal。
+
+    冷恢复和工厂构造不能调用本方法。中断留下的不完整文件保持拒绝，不用
+    覆盖、重新冻结或当前摘要把残件转换为已完成准备。
+    """
+    with _bridge_private_settings_parent(task, bundle_root=bundle_root, materials_receipt=materials_receipt,
+                                        path_context=path_context, create=True) as (parent, raw):
+        try:
+            writer = os.open("settings.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=parent)
+        except FileExistsError:
+            _verify_private_settings(parent, raw)
+            return
+        try:
+            pending = memoryview(raw)
+            while pending:
+                size = os.write(writer, pending)
+                _require(size > 0, "私有 User 设置写入没有进展")
+                pending = pending[size:]
+            os.fsync(writer)
+        finally:
+            os.close(writer)
+        os.fsync(parent)
+        _verify_private_settings(parent, raw)
+
+
+def verify_bridge_private_user_settings(task: Mapping[str, Any], *, bundle_root: Path,
+                                        materials_receipt: Path, path_context: Any) -> None:
+    """构造重入、监测和派发只读重验原私有设置，缺件时零启动拒绝。"""
+    with _bridge_private_settings_parent(task, bundle_root=bundle_root, materials_receipt=materials_receipt,
+                                        path_context=path_context, create=False) as (parent, raw):
+        _verify_private_settings(parent, raw)
 
 
 def stage_private_product_materials(materials_receipt: Path, *, private_session_root: Path,
