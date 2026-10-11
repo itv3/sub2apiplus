@@ -3573,7 +3573,8 @@ class ClaudeFaultChainTests(unittest.TestCase):
                 "scenario": spec["scenario"],
                 "diagnostic_only": diagnostic_seconds is not None,
                 "time_budget": time_budget,
-                "formal_time_budget_met": elapsed < time_budget["chain_budget_seconds"],
+                # 三层安全网只约束本次调用；历史成本继续累计，不抵扣本次续作或重验的完整时限。
+                "formal_time_budget_met": invocation_elapsed < time_budget["chain_budget_seconds"],
                 "seconds": elapsed,
                 "invocation_seconds": invocation_elapsed,
                 "copy_seconds": copy_seconds,
@@ -3583,8 +3584,9 @@ class ClaudeFaultChainTests(unittest.TestCase):
             }
         if timed_out:
             self.fail(f"{spec['scenario']} 执行器超过清理时限 {timeout_seconds} 秒；诊断={diagnostic_seconds is not None}")
-        if diagnostic_seconds is None and elapsed >= time_budget["chain_budget_seconds"]:
-            self.fail(f"{spec['scenario']} 超过当前时间合同 {time_budget['chain_budget_seconds']} 秒（实测 {elapsed} 秒）")
+        if diagnostic_seconds is None and invocation_elapsed >= time_budget["chain_budget_seconds"]:
+            self.fail(f"{spec['scenario']} 本次调用超过安全网 {time_budget['chain_budget_seconds']} 秒"
+                      f"（本次 {invocation_elapsed} 秒，累计 {elapsed} 秒）")
         assert completed is not None
         if completed.returncode != 0:
             self.fail(f"{spec['scenario']} 子进程失败（退出码 {completed.returncode}，隔离={mode}，耗时 {elapsed} 秒；已通过的步骤："

@@ -237,6 +237,63 @@ class DiagnosticBudgetTests(unittest.TestCase):
             self.assertLess(contract['chain_timeout_seconds'], contract['chain_budget_seconds'])
             self.assertLess(contract['chain_budget_seconds'], contract['unit_timeout_seconds'])
 
+    def test_resume_shell_keeps_cumulative_cost_and_limits_only_this_invocation(self):
+        """原世界累计超过安全网上限仍能续作；本次超时和子进程失败不能变成通过。"""
+        outcomes = (
+            ('late-continuous', 5367.511, 2000.0, 'passed'),
+            ('revision-continuous', 10000.0, 10.0, 'passed'),
+            ('late-continuous', 10000.0, 7320.0, 'limit'),
+            ('late-continuous', 10000.0, 10.0, 'timeout'),
+            ('revision-continuous', 10000.0, 10.0, 'failed'),
+        )
+        for chain, prior_seconds, invocation_seconds, outcome in outcomes:
+            with self.subTest(chain=chain, outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                scratch = Path(directory).resolve()
+                world = scratch / 'existing-world'
+                tree, recorded_worlds = world / 'staging/tree', world / 'staging/recorded-worlds'
+                tree.mkdir(parents=True)
+                recorded_worlds.mkdir()
+                original = recorded_worlds / 'original.bin'
+                original.write_bytes(b'original bytes remain unchanged')
+                stop = {'scratch_root': str(world), 'tree': str(tree), 'recorded_worlds': recorded_worlds,
+                        'seconds': prior_seconds, 'invocations': []}
+                case = chains.ClaudeFaultChainTests()
+                contract = chains.certification.claude_fault_time_budget(chains.CHAINS[chain]['scenario'])
+                metrics = {'steps': ['明确的短验夹具'], 'upstream_requests': 0, 'scenarios': [
+                    {'scenario': name, 'campaign_id': 'same-short-fixture',
+                     'checks': {key: {'passed': True} for key in chains.SIX_CHECKS}}
+                    for name in chains.CHAINS[chain]['expected']]}
+                stdout = (chains.METRICS_PREFIX + json.dumps(metrics) + '\n').encode()
+                stderr = b'Ran 1 test in 0.1s\nOK\n'
+                result = subprocess.CompletedProcess([], 1 if outcome == 'failed' else 0, stdout, stderr)
+                timeout = subprocess.TimeoutExpired('short-fixture', contract['chain_timeout_seconds'],
+                                                    output=stdout, stderr=stderr)
+                with mock.patch.dict(os.environ, {}, clear=True), \
+                        mock.patch.object(chains.sys, 'platform', 'linux'), \
+                        mock.patch.object(case, '_isolation_mode', return_value=chains.shell.ISOLATION_DEGRADED), \
+                        mock.patch.object(chains.shell, '_scratch_root', return_value=scratch), \
+                        mock.patch.object(chains.trees, 'subprocess_env', side_effect=lambda tree, extra: dict(extra)), \
+                        mock.patch.object(chains.time, 'monotonic', side_effect=[100.0, 100.0 + invocation_seconds]), \
+                        mock.patch.object(chains.subprocess, 'run', return_value=result,
+                                          side_effect=timeout if outcome == 'timeout' else None) as launch, \
+                        mock.patch.object(chains.stops, 'save_state') as save:
+                    if outcome == 'passed':
+                        case._run_chain_body(chain, stop=stop)
+                    else:
+                        message = {'limit': '本次调用超过安全网', 'timeout': '执行器超过清理时限',
+                                   'failed': '子进程失败'}[outcome]
+                        with self.assertRaisesRegex(AssertionError, message):
+                            case._run_chain_body(chain, stop=stop)
+                    self.assertEqual(launch.call_args.kwargs['timeout'], contract['chain_timeout_seconds'])
+                    save.assert_called_once_with('chain:' + chain, stop)
+                cumulative_seconds = round(prior_seconds + invocation_seconds, 3)
+                self.assertEqual(stop['seconds'], cumulative_seconds)
+                self.assertEqual(case.real_chain_metrics['seconds'], cumulative_seconds)
+                self.assertEqual(case.real_chain_metrics['invocation_seconds'], invocation_seconds)
+                self.assertEqual(case.real_chain_metrics['time_budget'], contract)
+                self.assertEqual(case.real_chain_metrics['formal_time_budget_met'], outcome != 'limit')
+                self.assertEqual(original.read_bytes(), b'original bytes remain unchanged')
+
 
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_fixture
 
