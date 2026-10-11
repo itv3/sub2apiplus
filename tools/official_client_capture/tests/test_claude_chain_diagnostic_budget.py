@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 import tempfile
@@ -37,6 +38,18 @@ class DiagnosticBudgetTests(unittest.TestCase):
                 observed = {}
                 case = chains.ClaudeFaultChainTests()
 
+                def copy_executor_tree(destination):
+                    """预算夹具保留合法普通 tree，让原执行器运输与核验实际处理闭包字节。"""
+                    destination.mkdir(mode=0o700)
+                    for source in chains.trees._closure_files(Path(chains.__file__)):
+                        relative = source.relative_to(chains.REPO_ROOT).as_posix()
+                        if not chains.stops._executor_path(relative):
+                            continue
+                        target = destination / relative
+                        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                        shutil.copyfile(source, target)
+                    return destination
+
                 def launch(argv, **kwargs):
                     environment = kwargs["env"]
                     private = Path(environment["CLAUDE_RECORDED_CHAIN_RECORD_DIR"])
@@ -56,7 +69,7 @@ class DiagnosticBudgetTests(unittest.TestCase):
                         mock.patch.object(chains.sys, "platform", "linux"), \
                         mock.patch.object(case, "_isolation_mode", return_value=chains.shell.ISOLATION_NAMESPACE), \
                         mock.patch.object(chains.shell, "_scratch_root", return_value=scratch), \
-                        mock.patch.object(chains, "_copy_tree", side_effect=lambda destination: destination), \
+                        mock.patch.object(chains, "_copy_tree", side_effect=copy_executor_tree), \
                         mock.patch.object(chains.trees, "subprocess_env", side_effect=lambda tree, extra: {**os.environ, **extra}), \
                         mock.patch.object(chains.subprocess, "run", side_effect=launch):
                     if outcome == "passed":
@@ -77,6 +90,9 @@ class DiagnosticBudgetTests(unittest.TestCase):
                 self.assertEqual(state["timed_out"], outcome == "timeout")
                 self.assertEqual(state["error_type"], "UnicodeDecodeError" if outcome == "invalid-metrics" else None)
                 self.assertTrue(Path(state["scratch_root"]).is_dir())
+                self.assertIsNotNone(state["executor"])
+                chains.stops.verify_executor_source(chains.stops._decoded(state["executor"]),
+                                                    Path(state["scratch_root"]) / "staging/tree")
                 self.assertEqual(Path(state["recorded_worlds"]), observed["private"])
                 self.assertEqual((observed["private"] / "state-original.json").read_bytes(), observed["original"])
                 self.assertEqual(original.read_bytes(), b"existing original remains unchanged")
@@ -148,7 +164,10 @@ class DiagnosticBudgetTests(unittest.TestCase):
             self.assertEqual(len(methods), 2)
             self.assertEqual(len(recorder.facts['groups']), 2)
             self.assertTrue(all(row['diagnostic_only'] for row in recorder.facts['groups']))
-            self.assertEqual(len(list((Path(temporary) / 'diagnostic-groups').glob('*.stderr.log'))), 2)
+            logs = list((Path(temporary) / 'diagnostic-groups').glob('*/stderr.log'))
+            self.assertEqual(len(logs), 2)
+            self.assertTrue(all(path.read_text() == 'Ran 1 test in 0.1s\nFAILED (failures=1)\n真实诊断失败'
+                                for path in logs))
 
     def test_group_failure_does_not_prevent_later_diagnostic_groups(self):
         called = []
