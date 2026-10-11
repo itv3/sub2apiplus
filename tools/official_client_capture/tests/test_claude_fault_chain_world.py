@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -134,6 +136,20 @@ class ContinuousWorldContractTests(unittest.TestCase):
         self.assertFalse(outer._records_complete(rows, expected))
         with self.assertRaisesRegex(ValueError, '重复'):
             outer._expected_scenarios({'one': ('first', 'first')})
+        for check_name in (
+            '_assert_completed_audits_publish_only_missing_and_keep_order',
+            '_assert_missing_or_changed_audit_refuses_without_publishing',
+            '_assert_conflicting_or_duplicate_current_records_are_not_replaced',
+            '_assert_only_current_unsealed_invocation_can_be_published',
+            '_assert_original_revision_method_publishes_after_world_returns',
+        ):
+            with self.subTest(publication_check=check_name):
+                check = _RevisionAuditPublicationChecks()
+                try:
+                    check.setUp()
+                    getattr(check, check_name)()
+                finally:
+                    check.doCleanups()
 
     def test_registered_continuous_entries_keep_distinct_scene_sets(self) -> None:
         """后段七场景与 revision 八场景分别登记，不拼接场景或预填实际通过。"""
@@ -144,6 +160,163 @@ class ContinuousWorldContractTests(unittest.TestCase):
         self.assertEqual(len(outer.REVISION_CONTINUOUS_SCENARIOS), 8)
         self.assertNotIn('revision-continuous', outer.PENDING_CONTINUOUS_CHAINS)
         self.assertNotIn('test_revision_continuous', outer.ClaudeFaultChainTests.__dict__)
+
+
+class _RevisionAuditPublicationChecks(unittest.TestCase):
+    """既有六项完整性 UID 的私有检查；不增加 discover UID，不生成链认证。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.old = self.root / 'invocation-original'
+        self.current = self.root / 'invocation-current'
+        self.old.mkdir()
+        self.current.mkdir()
+        self.output = self.current / 'records.jsonl'
+        self.expected = list(outer.REVISION_CONTINUOUS_SCENARIOS)
+        self.records = [{'scenario': name, 'checks': {key: {'passed': True} for key in outer.SIX_CHECKS},
+                         'campaign_id': 'original-revision-world'} for name in self.expected]
+        self.case = outer._RevisionEvaluatorScenarios('_scenario_revision_evaluator_delivery')
+        self.addCleanup(self.case.doCleanups)
+        environment = mock.patch.dict(os.environ, {world_fixture.METHOD_RECORD_ENV: str(self.root),
+            world_fixture.METHOD_RESUME_ENV: '1', outer.RECORDS_ENV: str(self.output),
+            outer.METHOD_VERIFY_ENV: '', world_fixture.EXECUTOR_SOURCE_ENV: ''})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.context = {'method': type(self.case).__name__ + '.' + self.case._testMethodName,
+            'expected': self.expected, 'tree': str(outer.REPO_ROOT), 'seconds': 7,
+            'invocations': [{'output': self.old, 'state': 'finished', 'verify': False},
+                            {'output': self.current, 'state': 'started', 'verify': False}]}
+        world_fixture.save_state('method-context', self.context)
+        world_fixture.save_state('method-result', {'complete': False, 'returncode': 0})
+        for name, raw in (('exit.json', b'{"returncode":0}'), ('stdout.log', b'original output'),
+                          ('stderr.log', b'original errors'), ('records.jsonl', self.encode(self.records[3:]))):
+            (self.old / name).write_bytes(raw)
+        # 用实际文件切点核发布所调用的回调与原件拒绝；不替换产品函数、不形成新 Campaign。
+        self.sources = []
+        for index, record in enumerate(self.records):
+            source = self.root / f'audit-source-{index}.json'
+            source.write_bytes(self.encode([record]))
+            self.sources.append(source)
+            world_fixture.save_state('audit-complete:' + record['scenario'],
+                {'record': record, 'binding': world_fixture.file_cut(source)})
+        callback = mock.patch.object(self.case, 'revalidate_completed_method', side_effect=self.revalidate)
+        self.replays = callback.start()
+        self.addCleanup(callback.stop)
+        self.output.write_bytes(b'')
+        self.originals = {path: path.read_bytes() for path in self.root.rglob('*')
+                          if path.is_file() and path != self.output}
+
+    @staticmethod
+    def encode(records) -> bytes:
+        return ''.join(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n' for row in records).encode()
+
+    def revalidate(self, expected):
+        records = []
+        for name in expected:
+            saved = world_fixture.load_state('audit-complete:' + name)
+            if saved is None:
+                raise ValueError('缺少完整审计停点')
+            record = json.loads(world_fixture.read_cut(saved['binding']))
+            self.assertEqual(record, saved['record'])
+            records.append(record)
+        return records
+
+    def publish(self) -> None:
+        outer._publish_resumed_method_records(self.case, self.records, self.expected)
+
+    def assert_originals_unchanged(self) -> None:
+        self.assertEqual({path: path.read_bytes() for path in self.originals}, self.originals)
+        self.assertFalse(list(self.current.glob('.records-*')))
+
+    def _assert_completed_audits_publish_only_missing_and_keep_order(self) -> None:
+        # 五条已发、八条已发、完成游标零输出及八个独立缺项都走同一个原方法 UID。
+        groups = [self.records[3:], self.records, []]
+        groups.extend([row for row in self.records if row['scenario'] != name] for name in self.expected)
+        for published in groups:
+            with self.subTest(published=[row['scenario'] for row in published]):
+                self.replays.reset_mock()
+                self.output.write_bytes(self.encode(published))
+                self.publish()
+                self.assertEqual(outer._read_records(self.output), self.records)
+                missing = [name for name in self.expected if name not in [row['scenario'] for row in published]]
+                if missing:
+                    self.replays.assert_called_once_with(missing)
+                else:
+                    self.replays.assert_not_called()
+                self.assert_originals_unchanged()
+
+    def _assert_missing_or_changed_audit_refuses_without_publishing(self) -> None:
+        for index, name in enumerate(self.expected):
+            for damaged in (False, True):
+                with self.subTest(scenario=name, damaged=damaged):
+                    self.output.write_bytes(b'')
+                    target = (self.sources[index] if damaged else
+                              world_fixture._state_path('audit-complete:' + name))
+                    raw = target.read_bytes()
+                    if damaged:
+                        target.write_bytes(b'X' + raw[1:])
+                    else:
+                        target.unlink()
+                    try:
+                        with self.assertRaises(ValueError):
+                            self.publish()
+                        self.assertEqual(self.output.read_bytes(), b'')
+                    finally:
+                        target.write_bytes(raw)
+                    self.assert_originals_unchanged()
+
+    def _assert_conflicting_or_duplicate_current_records_are_not_replaced(self) -> None:
+        changed = copy.deepcopy(self.records[3])
+        changed['campaign_id'] = 'other-campaign'
+        unknown = {**self.records[3], 'scenario': 'another-scenario'}
+        for published in ([self.records[3], self.records[3]], list(reversed(self.records[3:])),
+                          [changed], [unknown], [None]):
+            with self.subTest(published=published):
+                self.replays.reset_mock()
+                original = self.encode(published)
+                self.output.write_bytes(original)
+                with self.assertRaisesRegex(ValueError, '有序子集'):
+                    self.publish()
+                self.assertEqual(self.output.read_bytes(), original)
+                self.replays.assert_not_called()
+                self.assert_originals_unchanged()
+
+    def _assert_only_current_unsealed_invocation_can_be_published(self) -> None:
+        with mock.patch.dict(os.environ, {outer.RECORDS_ENV: str(self.old / 'records.jsonl')}):
+            with self.assertRaisesRegex(ValueError, '当前新 invocation'):
+                self.publish()
+        for marker in ('stdout.log', 'stderr.log', 'exit.json'):
+            with self.subTest(marker=marker):
+                path = self.current / marker
+                path.write_bytes(b'formed')
+                try:
+                    with self.assertRaisesRegex(ValueError, '已封存'):
+                        self.publish()
+                finally:
+                    path.unlink()
+        invalid_context = copy.deepcopy(self.context)
+        invalid_context['invocations'][-1]['state'] = 'finished'
+        world_fixture.save_state('method-context', invalid_context)
+        try:
+            with self.assertRaisesRegex(ValueError, '当前新 invocation'):
+                self.publish()
+        finally:
+            world_fixture.save_state('method-context', self.context)
+        self.replays.assert_not_called()
+        self.assertEqual(self.output.read_bytes(), b'')
+        self.assert_originals_unchanged()
+
+    def _assert_original_revision_method_publishes_after_world_returns(self) -> None:
+        self.output.write_bytes(self.encode(self.records[3:]))
+        with mock.patch.object(self.case, 'run_revision_evaluator_delivery_chain',
+                               return_value={'records': self.records}) as restored:
+            self.case._scenario_revision_evaluator_delivery()
+        restored.assert_called_once_with()
+        self.replays.assert_called_once_with(self.expected[:3])
+        self.assertEqual(outer._read_records(self.output), self.records)
+        self.assert_originals_unchanged()
 
 
 if __name__ == '__main__':

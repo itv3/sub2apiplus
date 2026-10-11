@@ -1061,6 +1061,74 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
 
 
+def _publish_resumed_method_records(case: unittest.TestCase, records: list[dict[str, Any]],
+                                   expected: list[str]) -> None:
+    """原方法收口时补发已重验审计；只发布当前尚未封存的 invocation，不追改旧结果。"""
+
+    if not _records_complete(records, expected):
+        raise ValueError('原方法终态缺完整且有序的六项审计')
+    target = os.environ.get(RECORDS_ENV)
+    if not target:
+        return
+    path = Path(target)
+    published = _read_records(path)
+    names = [row.get('scenario') for row in published if isinstance(row, dict)]
+    by_name = {row['scenario']: row for row in records}
+    if (not _records_complete(published, names)
+            or names != [name for name in expected if name in names]
+            or published != [by_name[name] for name in names]):
+        raise ValueError('本轮已发审计不是原终态的有序子集，禁止覆盖冲突或重复记录')
+    if names == expected:
+        return
+    if not os.environ.get(stops.METHOD_RESUME_ENV) or os.environ.get(METHOD_VERIFY_ENV):
+        raise ValueError('缺项审计只能由原未完成方法的续作入口补发')
+    root, context = stops.record_root(), stops.load_state('method-context')
+    if (root is None or context is None or not context.get('invocations')
+            or context.get('method') != type(case).__name__ + '.' + case._testMethodName
+            or context.get('expected') != expected or context.get('tree') != str(REPO_ROOT)):
+        raise ValueError('补发审计缺当前原方法与执行树的上下文绑定')
+    invocation = context['invocations'][-1]
+    output = Path(invocation['output'])
+    if (invocation.get('state') != 'started' or invocation.get('verify') is not False
+            or output.is_symlink() or output.parent.resolve() != root
+            or not output.name.startswith('invocation-')
+            or path != output / 'records.jsonl'
+            or any(Path(row['output']) == output for row in context['invocations'][:-1])):
+        raise ValueError('只能补发当前新 invocation 的未封存审计输出')
+
+    def require_unsealed() -> None:
+        if any((output / name).exists() or (output / name).is_symlink()
+               for name in ('stdout.log', 'stderr.log', 'exit.json')):
+            raise ValueError('当前 invocation 已封存，禁止补改审计输出')
+
+    require_unsealed()
+    original = path.read_bytes()
+    missing = [name for name in expected if name not in names]
+    # 此回调按原 phase=11／done 和原件验真，不以 method-result.complete 授权。
+    # 已在本轮 report 的记录不重复重验；全部完成游标零输出时才重验全部八项。
+    recovered = case.revalidate_completed_method(missing)
+    if not _records_complete(recovered, missing) or recovered != [by_name[name] for name in missing]:
+        raise ValueError('承接审计原件与终态记录不一致，禁止补发')
+    if stops.load_state('method-context') != context or path.is_symlink() or path.read_bytes() != original:
+        raise ValueError('审计重验期间当前 invocation 或输出发生变化，禁止发布')
+    require_unsealed()
+    descriptor, temporary = tempfile.mkstemp(prefix='.records-', dir=output)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            for record in records:
+                stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(output, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def _method_result_passed(code: int | None, stderr: str, count: int = 1) -> bool:
     lines = stderr.rstrip().splitlines()
     ran = f"Ran {count} test{'s' if count > 1 else ''} in "
@@ -3517,6 +3585,7 @@ class _RevisionEvaluatorScenarios(revision_scenarios._RevisionEvaluatorScenarios
     def _scenario_revision_evaluator_delivery(self) -> None:
         world = self.run_revision_evaluator_delivery_chain()
         self.assertEqual(tuple(row['scenario'] for row in world['records']), REVISION_CONTINUOUS_SCENARIOS)
+        _publish_resumed_method_records(self, world['records'], list(REVISION_CONTINUOUS_SCENARIOS))
 
 
 class ClaudeFaultChainTests(unittest.TestCase):

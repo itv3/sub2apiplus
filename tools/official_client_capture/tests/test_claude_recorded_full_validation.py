@@ -411,6 +411,91 @@ class RecordedFullPreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(replay.ReplayError, "绑定摘要或字节数漂移"):
                 driver._control_step("input", action, intent={"choice": "原选择"})
         self.assertEqual(action.call_count, 1)
+        self._assert_recorded_assertion_timeout_selection()
+
+    def _assert_recorded_assertion_timeout_selection(self) -> None:
+        """沿既有 UID 核默认时限接线；这里只核驱动选择，真实对账与批次验真仍由原控制链测试覆盖。"""
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+
+        campaign = self.data / "campaigns/claude-fixture"
+        comparison = {"builder": {"script": "fixture.py", "config": {"path": "config.json"},
+                                   "output": "results.json", "results_dir": "machine", "evaluation_baseline": 0}}
+        with mock.patch.object(upgrade, "_load_stage_result", return_value=comparison), \
+                mock.patch.object(vc1, "_batch", side_effect=[{}, RuntimeError("只检查默认动作参数")]) as batch:
+            with self.assertRaisesRegex(RuntimeError, "只检查默认动作参数"):
+                driver.compare_and_accept(self.data, campaign)
+            current_action = batch.call_args.kwargs["action"]
+            self.assertEqual(current_action["timeout_seconds"], 1800.0)
+        old_options = {"phase": "VC-5", "action": {**current_action, "timeout_seconds": 900.0}}
+        new_options = {"phase": "VC-5", "action": current_action}
+        for initial_status in ("fresh", "complete", "started"):
+            with self.subTest(assertion_stop=initial_status):
+                record_root = self.data / ("assertion-stops-" + initial_status)
+                record_root.mkdir()
+                origin = source.write(self.data / "control" / (initial_status + "-origin.json"), {"fixture_only": True})
+                active = {"data": self.data, "source_state": source.binding(origin)}
+                token = driver._SUCCESSOR.set(active)
+                try:
+                    result = {"scope": "仅检查停点参数接线"}
+                    producer = mock.Mock(return_value=result)
+                    key = "recorded-full-step:batch:assert-rules"
+                    with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}), \
+                            mock.patch.object(driver, "_verify_batch_result") as verify, \
+                            mock.patch.object(driver, "_resume_undispatched_batch", return_value=result) as resume:
+                        def run(**changes):
+                            arguments = {"data": self.data, "campaign": campaign, "name": "assert-rules", "argv": [],
+                                         **copy.deepcopy(new_options), **changes}
+                            return driver._recorded_batch(producer, **arguments)
+                        if initial_status == "started":
+                            producer.side_effect = RuntimeError("原动作超时，尚待正式对账")
+                            with self.assertRaisesRegex(RuntimeError, "原动作超时"):
+                                run(**old_options)
+                            producer.side_effect = None
+                        elif initial_status == "complete":
+                            self.assertEqual(run(**old_options), result)
+                        originals = {path: path.read_bytes() for path in record_root.iterdir()}
+                        if initial_status == "started":
+                            # 原恢复入口拒绝时不得改停点；此模拟只证明接线，不能充当真实对账凭证。
+                            resume.side_effect = replay.ReplayError("尚未正式对账闭合")
+                            with self.assertRaisesRegex(replay.ReplayError, "尚未正式对账闭合"):
+                                run()
+                            self.assertEqual({path: path.read_bytes() for path in record_root.iterdir()}, originals)
+                            resume.side_effect = None
+                            resume.reset_mock()
+                        self.assertEqual(run(), result)
+                        expected_timeout = 1800.0 if initial_status == "fresh" else 900.0
+                        saved = stops.load_state(key)
+                        self.assertEqual(saved["intent"]["options"]["action"]["timeout_seconds"], expected_timeout)
+                        self.assertEqual(saved["status"], "complete")
+                        self.assertEqual(producer.call_count, 1)
+                        if initial_status == "started":
+                            resume.assert_called_once_with(producer, self.data, campaign, "assert-rules", [], **old_options)
+                        else:
+                            resume.assert_not_called()
+                        if initial_status == "complete":
+                            self.assertEqual({path: path.read_bytes() for path in record_root.iterdir()}, originals)
+                        self.assertGreaterEqual(verify.call_count, 1)
+                        if initial_status != "fresh":
+                            frozen = {path: path.read_bytes() for path in record_root.iterdir()}
+                            variants = [
+                                {"argv": ["changed"]}, {"campaign": campaign / "other"}, {"data": self.data / "other"},
+                                {"phase": "VC-4"}, {"reuse_items": ["other"]},
+                                *({"action": {**current_action, field: value}} for field, value in (
+                                    ("command", ["changed"]), ("operation", "VC-5:other"), ("action_id", "other"),
+                                    ("item_ids", ["other"]), ("timeout_seconds", 450.0), ("timeout_seconds", 3600.0))),
+                            ]
+                            for change in variants:
+                                with self.subTest(refused_change=change), self.assertRaisesRegex(replay.ReplayError, "停点意图漂移"):
+                                    run(**change)
+                            previous = active["source_state"]
+                            active["source_state"] = {**previous, "sha256": "0" * 64}
+                            with self.assertRaisesRegex(replay.ReplayError, "停点意图漂移"):
+                                run()
+                            active["source_state"] = previous
+                            self.assertEqual({path: path.read_bytes() for path in record_root.iterdir()}, frozen)
+                finally:
+                    driver._SUCCESSOR.reset(token)
 
     def test_successor_partial_input_is_preserved_and_never_rebuilt(self) -> None:
         from tools.official_client_capture.tests import claude_fault_chain_world as stops

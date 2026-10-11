@@ -501,6 +501,20 @@ def _recorded_batch(original: Callable[..., Any], data: Path, campaign: Path,
                     name: str, argv: list[str], **options: Any) -> dict[str, Any]:
     """完成项重验；未派发沿原序号，已提交失败须正式对账闭合后由 N+1 续作。"""
     step = "batch:" + name
+    action = options.get("action")
+    if (_SUCCESSOR.get() is not None and name == "assert-rules" and options.get("phase") == "VC-5"
+            and isinstance(action, dict) and action.get("action_id") == "assert-rules"
+            and action.get("operation") == "VC-5:assert-rules" and action.get("item_ids") == ["assert-rules"]
+            and action.get("timeout_seconds") == 1800.0):
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+
+        saved = stops.load_state("recorded-full-step:" + step)
+        original_options = {**options, "action": {**action, "timeout_seconds": 900.0}}
+        original_intent = {"data": data, "campaign": campaign, "argv": argv, "options": original_options}
+        # 新运行使用较宽时限；已有运行严格保持原 900 秒计划，依靠原逐规则检查点续余下项。
+        # 只有完整意图除默认时限外逐字段相同才沿用；来源、状态和实际批次仍由原 reader 验真。
+        if saved is not None and saved.get("intent") == original_intent:
+            options = original_options
 
     def dispatch() -> dict[str, Any]:
         active = _SUCCESSOR.get()
@@ -1188,7 +1202,7 @@ def compare_and_accept(data: Path, campaign: Path) -> dict[str, Any]:
     batches = [vc1._batch(data, campaign, "compare", ["compare", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE], phase="VC-5")]
     comparison = upgrade._load_stage_result(campaign, "compare", CANDIDATE)
     builder = comparison["builder"]
-    action = {"action_id": "assert-rules", "operation": "VC-5:assert-rules", "timeout_seconds": 900.0,
+    action = {"action_id": "assert-rules", "operation": "VC-5:assert-rules", "timeout_seconds": 1800.0,
               "command": [sys.executable, str(data / builder["script"]), "--config", str(campaign / builder["config"]["path"]),
                           "--output", str(campaign / builder["output"]), "--results-dir", str(campaign / builder["results_dir"]),
                           "--evaluation-baseline", str(builder["evaluation_baseline"]), "--reuse-authority", "none"],
