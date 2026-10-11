@@ -46,6 +46,8 @@
 ``--reexecute``（重新执行全集）互斥。登记来源使用精确读集策略时，显式带 ``--audit-policy <策略>``，策略按原登记合同校验、
 摘要进入结论，取锁后派发前与结束收口时再次复核。策略只随逐单元承接或显式开工空跑使用；授权、撤销和来源复核仍由原门禁完成。
 后台验证接着的空跑不带请求；后台明确登记了策略时，不自动启动缺少当前批准的空跑，由操作员带请求与策略显式执行。
+Claude 完整79接线的逐单元空跑另可消费本轮已有的 pre-A3 认证：准备阶段用原认证验证器核验源文件，原字节写入演练认证
+坐标，随后仍由入口复核与登记复用。源认证和原记录不改写；缺源保留首次运行，坏源明确失败，不降级另跑掩盖问题。
 
 子命令：
 
@@ -395,6 +397,64 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     return 0, {"action": "started", "result": str(path), "pid": process.pid, "to": to}
 
 
+def _copy_pre_a3_source(payload: Mapping[str, Any], values: Mapping[str, str], rehearsal: Mapping[str, str], *, client: str) -> None:
+    """只接现有 Claude bridge 的认证消费入口；旧记录的承接资格、Codex 与显式全集空跑语义不变。
+
+    认证本身没有另外的时长期限，合法性和历史承接期限均由原 find-reusable 校验。复制成功也不代表入口通过：后续
+    entry 仍核当前静态输入及记录，并把 record-reuse 收据写到演练认证旁，不能写入只读源认证目录。
+    """
+
+    if (client != "claude" or not payload.get("unit_inherit_request") or not values.get("CLAUDE_ENTRY_FULL79_SPEC")
+            or payload.get("opening") or payload.get("reexecute")):
+        return
+    location = values.get("PRE_A3_CERTIFICATION")
+    if not location:
+        return
+    source = Path(location)
+    if (not source.is_absolute() or ".." in source.parts
+            or any(item.is_symlink() for item in (source, *source.parents))):
+        raise DryRunError("源 pre-A3 认证必须是无符号链接的规范绝对路径")
+    if not source.exists():
+        return
+    if not source.is_file():
+        raise DryRunError("源 pre-A3 认证不是普通文件")
+    if payload.get("client", "codex") != client:
+        raise DryRunError("源 pre-A3 认证的本轮客户端与空跑启动绑定不一致")
+    activation = values.get("POLICY_ACTIVATION")
+    if not activation:
+        raise DryRunError("已有源 pre-A3 认证却缺少本轮策略激活认证")
+    data = Path(str(payload["data_root"]))
+    def current_deployment() -> dict[str, Any]:
+        # 部署在准备期间消失或损坏也须由 run 写 failed，不能只退出子进程而留下 running 结论。
+        try:
+            return _bv().latest_deployment(data, client)
+        except _bv().ValidationError as error:
+            raise DryRunError(f"源 pre-A3 认证所需的当前部署不可用：{error}") from error
+    deployment = current_deployment()
+    if deployment != payload.get("deployment"):
+        raise DryRunError("源 pre-A3 认证核验前部署已变化，须按当前部署重新启动空跑")
+    raw = source.read_bytes()
+    spec = _sibling("client_table").spec(client)
+    completed = subprocess.run(
+        [sys.executable, "-B", "-m", spec["pre_a3_module"], "find-reusable", "--certification", str(source),
+         "--deployment-receipt", str(data / "control" / deployment["receipt"]), "--policy-activation", activation,
+         *spec["client_argv"]], cwd=str(data),
+        env={**os.environ, "PYTHONPATH": str(data), "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True, text=True, timeout=300)
+    if completed.returncode != 0 or completed.stdout.strip() != str(source):
+        detail = (completed.stderr or completed.stdout)[-600:]
+        raise DryRunError(f"源 pre-A3 认证未通过当前客户端的原验证器，拒绝降级重跑：{detail}")
+    if (source.read_bytes() != raw or any(item.is_symlink() for item in (source, *source.parents))
+            or current_deployment() != deployment):
+        raise DryRunError("源 pre-A3 认证或部署在核验期间变化，拒绝复制未核准内容")
+    destination = Path(rehearsal["PRE_A3_CERTIFICATION"])
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(raw)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _prepare(payload: Mapping[str, Any]) -> tuple[Path, Path, Path]:
     """建演练根、fixture_only 演练总账与演练参数文件，返回（演练根，空跑 RUNROOT，演练参数文件）。"""
 
@@ -435,6 +495,10 @@ def _prepare(payload: Mapping[str, Any]) -> tuple[Path, Path, Path]:
     values = _parse_env().parse(Path(payload["vc_env"]).read_text(encoding="utf-8"))
     env_values = rehearsal_env(values, root=root, runroot=runroot, stamp=stamp, deadline=deadline, bundle=payload["bundle"],
                                branch=payload["branch"], commit=payload["commit"])
+    current_client = table.client_of(values)
+    if current_client != client:
+        raise DryRunError("参数文件客户端在演练根准备期间变化")
+    _copy_pre_a3_source(payload, values, env_values, client=client)
     env_file = runroot / "env.sh"
     env_file.write_text(_env_text(env_values), encoding="utf-8")
     env_file.chmod(0o600)

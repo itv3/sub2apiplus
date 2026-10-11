@@ -695,6 +695,141 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         rejected_work = self.wait(json.loads(changed_work.stdout.strip().splitlines()[-1])["result"])
         self.assertEqual((rejected_work["status"], rejected_work["failed_steps"]), ("failed", ["entry-orchestrator"]))
         self.assertIn("来源工作区核验失败", rejected_work["reason"])
+        self._assert_existing_pre_a3_consumption(argv)
+
+    def _assert_existing_pre_a3_consumption(self, argv: tuple[str, ...]) -> None:
+        """双请求的演练准备实际调用原认证验证器；合成记录只验消费合同，不冒充九条真实链通过。"""
+        from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
+        from tools.official_client_capture.tests import test_codex_upgrade_policy_certification as policy_tests
+        from tools.official_client_capture.tests import test_codex_upgrade_pre_a3_certification as certification_tests
+        from tools.official_client_capture.tests import test_pre_a3_client_grouping as grouping_tests
+
+        memo = {"CODEX_UPGRADE_IDENTITY_MEMO": str(self.root / "identity-memo")}
+        with mock.patch.dict(os.environ, memo), mock.patch.dict(self.environ, memo):
+            source_root = self.root / "source-certification"
+            source_root.mkdir()
+            _identity, compatibility, deployment, activation = grouping_tests._IdentityMemo.claude_bindings(self, source_root)
+            store = certification_tests._SyntheticStore(source_root)
+            entries = []
+            registration = {item["id"]: item["test"] for item in pre_a3.real_chain_registration("claude")}
+            for name in pre_a3.scenario_names("claude"):
+                result = store.result(name)
+                result["scenario"]["test"] = registration[name]
+                result = pre_a3._sealed({key: value for key, value in result.items() if key != "result_sha256"}, "result_sha256")
+                record = store.record(name, "entry-source", unit_id=f"pre-a3:claude:{name}", log_text=store.log_text(result))
+                entries.append(store.entry(record))
+            manifest = store.manifest("entry-source", entries)
+            receipt = pre_a3.issue_certification_from_records(
+                self.data / "staging" / "source-certification", unit_manifest=manifest, record_store=store.store.root,
+                deployment_receipt=deployment, policy_activation=activation, client="claude")
+            self.assertEqual(receipt["status"], "passed", receipt["failed_scenarios"])
+            source = pre_a3.write_certification(source_root / "pre-a3.json", receipt)
+            source_bytes = source.read_bytes()
+            self.claude_receipt.write_bytes(deployment.read_bytes())
+            # 本分支的总账、pre-A3 及全部校验依赖从真实源码包加载，不替换验证结果。
+            (self.data / "tools/official_client_capture/codex_upgrade_project_ledger.py").unlink()
+            for package in ("tools", "tools/official_client_capture"):
+                (self.data / package / "__init__.py").write_text(
+                    f"__path__.append({str(REPO_ROOT / package)!r})\n", encoding="utf-8")
+            spec = self.root / "full79-spec.json"
+            spec.write_text("{}", encoding="utf-8")
+            values = dr._parse_env().parse(self.claude_env.read_text(encoding="utf-8"))
+            values.update({"PRE_A3_CERTIFICATION": str(source), "POLICY_ACTIVATION": str(activation),
+                           "CLAUDE_ENTRY_FULL79_SPEC": str(spec), "CLAUDE_ENTRY_FULL79_SPEC_SHA256": bv._sha256_file(spec)})
+            self.claude_env.write_text(dr._env_text(values), encoding="utf-8")
+            self.configure()
+            source_listing = sorted(str(path.relative_to(source_root)) for path in source_root.rglob("*"))
+            started = self.start_claude(*argv)
+            self.assertEqual(started.returncode, 0, started.stderr)
+            payload = self.wait(json.loads(started.stdout.strip().splitlines()[-1])["result"])
+            self.assertEqual(payload["status"], "passed", payload)
+            prepared = self.calls()[-1]["env_file"]
+            copied = Path(prepared["PRE_A3_CERTIFICATION"])
+            self.assertNotEqual(copied, source)
+            self.assertEqual(copied.read_bytes(), source_bytes)
+            self.assertEqual(copied.stat().st_mode & 0o777, 0o600)
+            # 原入口之后生成新激活，原 record-reuse 必须把消费收据写演练目录，不能回写来源目录。
+            current_activation = policy_tests._write_json(Path(prepared["POLICY_ACTIVATION"]),
+                policy_certification.build_activation_certification(
+                    self.claude_receipt, compatibility, observed_at_utc="2026-10-03T00:01:00Z", client="claude"))
+            reuse = pre_a3.record_reuse(copied, deployment_receipt=self.claude_receipt, policy_activation=current_activation,
+                                       receipt_root=copied.parent, client="claude")
+            self.assertEqual(reuse["status"], "recorded", reuse)
+            self.assertEqual(Path(reuse["reuse_receipt"]).parent, copied.parent)
+            self.assertEqual(source.read_bytes(), source_bytes)
+            self.assertEqual(sorted(str(path.relative_to(source_root)) for path in source_root.rglob("*")), source_listing)
+
+            # 有认证但无效时走真实 run 的 failed 落盘；不会启动编排器，也不降级为重跑九场景。
+            calls_before = len(self.calls())
+            def run_refusal(label: str, expected: str) -> None:
+                conclusion = self.root / f"refused-{label}.json"
+                dr._write(conclusion, {**payload, "status": "running", "runroot": str(self.root / f"refused-run-{label}"),
+                                       "reason": None, "completed_at_utc": None})
+                with mock.patch.dict(os.environ, self.environ):
+                    self.assertEqual(dr.run(conclusion), 0)
+                refused = dr._read(conclusion)
+                self.assertEqual(refused["status"], "failed", refused)
+                self.assertIsNotNone(refused["completed_at_utc"])
+                self.assertIn(expected, refused["reason"])
+                self.assertEqual(len(self.calls()), calls_before)
+
+            wrong_client = {**receipt, "client": "codex"}
+            wrong_client["receipt_sha256"] = pre_a3._fingerprint(
+                {key: value for key, value in wrong_client.items() if key != "receipt_sha256"}, "claude")
+            replaced_activation = json.loads(activation.read_bytes())
+            replaced_activation.update({"status": "superseded", "superseded_by": "later-release.json"})
+            replaced_activation["receipt_sha256"] = policy_certification._fingerprint(
+                {key: value for key, value in replaced_activation.items() if key != "receipt_sha256"}, "claude")
+            log = store.store.log_path(record["log"]["sha256"])
+            mutations = (("bad-json", source, b"broken-json"),
+                         ("wrong-client", source, json.dumps(wrong_client).encode()),
+                         ("bad-log", log, log.read_bytes() + b"drift"),
+                         ("replaced-activation", activation, json.dumps(replaced_activation).encode()),
+                         ("missing-deployment", self.claude_receipt, None))
+            for label, path, changed in mutations:
+                with self.subTest(source_refusal=label):
+                    original = path.read_bytes()
+                    try:
+                        path.unlink() if changed is None else path.write_bytes(changed)
+                        run_refusal(label, "当前部署不可用" if changed is None else "原验证器")
+                    finally:
+                        path.write_bytes(original)
+
+            # 故障只注入在真实验证器返回之后；原验证器照常执行，复核必须捕获源／部署在窗口内变化。
+            real_run = subprocess.run
+            for label, changed_path, changed_bytes in (("source-drift", source, source_bytes + b"\n"),
+                                                        ("deployment-vanished", self.claude_receipt, None)):
+                with self.subTest(after_verification=label):
+                    original = changed_path.read_bytes()
+                    verified = []
+                    def mutate_after_verifier(command, *args, **kwargs):
+                        completed = real_run(command, *args, **kwargs)
+                        if "find-reusable" in command:
+                            self.assertEqual(completed.returncode, 0, completed.stderr)
+                            verified.append(True)
+                            changed_path.unlink() if changed_bytes is None else changed_path.write_bytes(changed_bytes)
+                        return completed
+                    try:
+                        with mock.patch.object(dr.subprocess, "run", side_effect=mutate_after_verifier):
+                            run_refusal(label, "当前部署不可用" if changed_bytes is None else "核验期间变化")
+                        self.assertEqual(verified, [True])
+                    finally:
+                        changed_path.write_bytes(original)
+
+            # 缺源保留首次执行；Codex、缺请求／bridge、opening、reexecute 不消费此来源。
+            target = self.root / "unused-certification.json"
+            rehearsal = {"PRE_A3_CERTIFICATION": str(target)}
+            dr._copy_pre_a3_source(payload, {**values, "PRE_A3_CERTIFICATION": str(self.root / "missing-source.json")},
+                                   rehearsal, client="claude")
+            source.write_bytes(b"invalid-unused-source")
+            for client, flags, configured in (("codex", {}, True), ("claude", {"unit_inherit_request": None}, True),
+                                                ("claude", {}, False), ("claude", {"opening": True}, True),
+                                                ("claude", {"reexecute": True}, True)):
+                with self.subTest(unchanged_branch=(client, flags, configured)):
+                    selected = values if configured else {**values, "CLAUDE_ENTRY_FULL79_SPEC": ""}
+                    dr._copy_pre_a3_source({**payload, **flags}, selected, rehearsal, client=client)
+                    self.assertFalse(target.exists())
+            source.write_bytes(source_bytes)
 
     def test_companion_request_requires_the_primary_and_a_regular_absolute_file(self) -> None:
         primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"

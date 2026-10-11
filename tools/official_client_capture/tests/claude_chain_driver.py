@@ -413,22 +413,24 @@ def validate_aggregation(state: dict[str, Any]) -> dict[str, Any]:
 
 
 @contextlib.contextmanager
-def installed(state_path: Path, digest: str) -> Iterator[Any]:
+def installed(state_path: Path, digest: str, *, read_only: bool = False) -> Iterator[Any]:
     state = source.load_state(state_path, digest)
     validate_aggregation(state)
-    token_path = fixture_admin_token(Path(state['data_root']))
+    token_path = fixture_admin_token(Path(state['data_root']), create=not read_only)
     with mock.patch.dict(os.environ, {'ADMIN_BEARER_TOKEN': '', 'ADMIN_BEARER_TOKEN_FILE': str(token_path)}), \
             full.installed(state_path, digest) as adapter:
         yield adapter
 
 
-def fixture_admin_token(data: Path) -> Path:
+def fixture_admin_token(data: Path, *, create: bool = True) -> Path:
     """私有录制夹具一次性写假 token；既有字节、权限或路径不符时拒绝，绝不覆盖。"""
 
     control = data / 'control'
     replay._regular(control, data, directory=True)
     path = control / 'recorded-candidate-admin-token.txt'
     if not path.exists() and not path.is_symlink():
+        if not create:
+            raise replay.ReplayError('成功候选重验缺少原假 token，禁止补写')
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
         try:
             os.write(descriptor, FIXTURE_ADMIN_TOKEN)
@@ -993,11 +995,59 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
 
     @contextlib.contextmanager
     def source_context(self) -> Iterator[None]:
-        with installed(self.state_path, self.state_digest):
+        with installed(self.state_path, self.state_digest,
+                       read_only=getattr(self, '_read_only_revalidation', False)):
             yield
 
     def chain_patched(self) -> contextlib.AbstractContextManager[None]:
         return self.source_context()
+
+    def revalidate_completed_method(self, expected: list[str]) -> list[dict[str, Any]]:
+        """成功方法重绑原只读来源后验世界；不重进形成链、发命令或补写夹具。"""
+
+        from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains import ScenarioAudit
+
+        specifications = {
+            SCENARIO_METHODS['reconcile-resume']: ('reconcile-resume', 'candidate-reconcile', 9, '候选真实对账链端到端'),
+            SCENARIO_METHODS['tool-evolution']: ('tool-evolution', 'candidate-evolution', 15, '有候选 attempt 的整条工具演进预览'),
+        }
+        specification = specifications.get(self._testMethodName)
+        if (not os.environ.get(stops.METHOD_RESUME_ENV) or specification is None
+                or expected != [specification[3]] or not stops.restore_case(self)):
+            raise replay.ReplayError('完成候选方法重验只接受原方法与原单个场景')
+        scenario, cursor, phase, label = specification
+        namespace = stops.load_state('candidate-namespace')
+        entry = stops.load_state('candidate-entry:' + scenario)
+        start = stops.load_state('candidate-vc5-start')
+        saved = stops.load_state('cursor:' + cursor)
+        if (namespace is None or entry is None or start is None or saved is None
+                or namespace.get('scenario') != scenario or entry.get('scenario') != scenario
+                or namespace.get('data') != self.data or entry.get('data') != self.data
+                or namespace.get('state_path') != self.state_path or namespace.get('digest') != self.state_digest
+                or start.get('state_binding') != namespace.get('state_binding')
+                or start.get('status') != 'complete' or start.get('campaign') != self.campaign
+                or saved.get('phase') != phase or saved.get('campaign') != self.campaign):
+            raise replay.ReplayError('完成候选方法缺同一原 namespace、世界或终态游标')
+        if source.bound(namespace['state_binding']) != self.state_path:
+            raise replay.ReplayError('完成候选方法的原来源状态发生变化')
+        if source.bound(namespace['site_binding'], root=self.data) != self.data / 'control/site/sitecustomize.py':
+            raise replay.ReplayError('完成候选方法的原 site 坐标发生变化')
+        roots = [str(Path(entry['recorded']).resolve().parent), str(Path(entry['freeze']).resolve())]
+        if roots != namespace['roots']:
+            raise replay.ReplayError('完成候选方法的原只读来源根发生变化')
+        state = source.load_state(self.state_path, self.state_digest, isolation=False)
+        if state['data_root'] != str(self.data) or self.root != self.data.parent:
+            raise replay.ReplayError('完成候选方法的原数据根发生变化')
+        fixture_admin_token(self.data, create=False)
+        _restore_read_only_mounts(self.state_path, self.state_digest, roots, state['parent_namespaces'])
+        # verify_case 会再次进入本对象的来源作用域，故只读约束覆盖全部嵌套消费者。
+        with mock.patch.object(self, '_read_only_revalidation', True, create=True), \
+                self.source_context(), stops.verified_read_only_world(self, self.campaign):
+            original_enclosing_commands(self)
+            restored = stops.resume_checkpoint(self, cursor)
+            if restored is None or restored.get('phase') != phase:
+                raise replay.ReplayError('完成候选方法的原终态游标已改变')
+            return [ScenarioAudit.revalidate(self, label)]
 
     def candidate_world(self) -> Path:
         """重绑原 VC-4 起点及原账本；VC-5 开始事件只能追加一次，恢复逐字重验。"""
@@ -1185,6 +1235,23 @@ def _namespace_handoff(state_path: Path, digest: str, scenario: str) -> dict[str
     return run_scenario(state_path, digest, scenario)
 
 
+def _restore_read_only_mounts(state_path: Path, digest: str, roots: list[str],
+                              parent_namespaces: dict[str, str]) -> None:
+    """只恢复原绑定根的只读挂载；宿主、联网或来源漂移均在挂载前拒绝。"""
+
+    state = source.load_state(state_path, digest, isolation=False)
+    if roots != state['readonly_sources']:
+        raise replay.ReplayError('候选只读来源根与原状态不同源')
+    for root in roots:
+        replay._regular(Path(root), Path(root), directory=True)
+    source.require_isolation({'parent_namespaces': parent_namespaces, 'readonly_sources': []})
+    subprocess.run(['mount', '--make-rprivate', '/'], check=True)
+    for root in roots:
+        subprocess.run(['mount', '--bind', root, root], check=True)
+        subprocess.run(['mount', '-o', 'remount,bind,ro', root], check=True)
+    source.load_state(state_path, digest)
+
+
 def _resume_namespace(arguments: argparse.Namespace, saved: dict[str, Any]) -> dict[str, Any]:
     """新的真实断网namespace只重挂原只读来源，绑定原state/site/数据根；不复制或建场。"""
     data = Path(arguments.data).resolve(strict=True)
@@ -1193,14 +1260,7 @@ def _resume_namespace(arguments: argparse.Namespace, saved: dict[str, Any]) -> d
             or source.bound(saved['state_binding']) != saved['state_path']):
         raise replay.ReplayError('候选 namespace 恢复坐标或只读来源发生改变')
     source.bound(saved['site_binding'], root=data)
-    source.load_state(saved['state_path'], saved['digest'], isolation=False)
-    parent_namespaces = json.loads(arguments.parent_namespaces)
-    source.require_isolation({'parent_namespaces': parent_namespaces, 'readonly_sources': []})
-    subprocess.run(['mount', '--make-rprivate', '/'], check=True)
-    for root in roots:
-        subprocess.run(['mount', '--bind', root, root], check=True)
-        subprocess.run(['mount', '-o', 'remount,bind,ro', root], check=True)
-    source.load_state(saved['state_path'], saved['digest'])
+    _restore_read_only_mounts(saved['state_path'], saved['digest'], roots, json.loads(arguments.parent_namespaces))
     from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
     with mock.patch.dict(os.environ, {source.STATE_ENV: str(saved['state_path']), source.DIGEST_ENV: saved['digest'],
             FIXTURE_ONLY_ENV: '1', 'PYTHONDONTWRITEBYTECODE': '1',

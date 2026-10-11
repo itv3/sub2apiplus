@@ -475,8 +475,9 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 driver._prepare_view("vc3-revision-view", campaign, **arguments)
 
     def test_real_batch_stop_reuses_original_commit_parent_and_results(self) -> None:
-        """仅派发一个零请求分类草案；真实COMMIT、父run与结果验真，复用不再派批次。"""
+        """派发前失败只续原序号；仅执行一个真实零请求草案，完成后不再派批次。"""
         from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
         from tools.official_client_capture.tests import claude_fault_chain_world as stops
         from tools.official_client_capture.tests import test_claude_upgrade_batch as batches
 
@@ -486,13 +487,10 @@ class RecordedFullPreparationTests(unittest.TestCase):
         case.setUp()
         self.addCleanup(case.doCleanups)
         campaign = case.campaign = case.build_batch_campaign()
-        action = case.classify_action("vc2-short-audit", ["classify", "--campaign-dir", campaign])
-        outcome = case.assert_batch_passed(case.dispatch(campaign, "VC-2", 2, [action]), 2, "VC-2")
-        case.assert_zero_requests()
         origin = source.write(self.data / "control/batch-origin.json", {"fixture_only": True})
         record_root = self.data / "batch-stops"
         record_root.mkdir()
-        token = driver._SUCCESSOR.set({"data": self.data, "source_state": source.binding(origin)})
+        token = driver._SUCCESSOR.set({"data": case.data, "source_state": source.binding(origin)})
         self.addCleanup(driver._SUCCESSOR.reset, token)
         producers = []
         def produced():
@@ -500,7 +498,43 @@ class RecordedFullPreparationTests(unittest.TestCase):
             return {"batches": [outcome]}
         def verify(result):
             driver._verify_stage_batches(campaign, result)
+
+        def resume():
+            return driver._recorded_batch(vc1._batch, case.data, campaign, "vc2-short-audit",
+                ["classify", "--campaign-dir", str(campaign)], phase="VC-2")
+
         with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}):
+            with mock.patch.object(upgrade, "_prepare_atomic_batch_governance",
+                    side_effect=upgrade.ConfigurationError("项目总账拒绝派发：隔离测试预算暂停")):
+                with self.assertRaisesRegex(upgrade.ConfigurationError, "项目总账拒绝派发"):
+                    resume()
+            key = "recorded-full-step:batch:vc2-short-audit"
+            self.assertEqual(stops.load_state(key)["status"], "started")
+            action_path = case.data / "control/actions/2-vc2-short-audit.json"
+            original_action = action_path.read_bytes()
+            action_path.write_bytes(original_action + b" ")
+            with self.assertRaisesRegex(replay.ReplayError, "动作计划与原字节不同"):
+                resume()
+            action_path.write_bytes(original_action)
+            staged = campaign / "control/vc/staging/0002-vc-2"
+            staged.mkdir(parents=True, mode=0o700)
+            with self.assertRaisesRegex(replay.ReplayError, "已经形成批次产物"):
+                resume()
+            staged.rmdir()
+            unknown_parent = case.data / "supervisor/run-unknown"
+            unknown_parent.mkdir(parents=True, mode=0o700)
+            unknown_parent.parent.chmod(0o700)
+            with self.assertRaises((supervisor.SupervisorError, OSError)):
+                resume()
+            unknown_parent.rmdir()
+            with mock.patch.object(upgrade, "compile_and_run_vc_batch", wraps=upgrade.compile_and_run_vc_batch) as dispatch:
+                outcome = resume()
+                self.assertEqual(resume(), outcome)
+                self.assertEqual(dispatch.call_count, 1)
+            self.assertEqual(outcome["batch_sequence"], 2)
+            self.assertEqual(stops.load_state(key)["status"], "complete")
+            self.assertEqual(action_path.read_bytes(), original_action)
+            case.assert_zero_requests()
             first = driver._control_step("real-stage", produced, verify=verify)
             self.assertEqual(driver._control_step("real-stage", produced, verify=verify), first)
             self.assertEqual(producers, [outcome["campaign_run"]["run_dir"]])

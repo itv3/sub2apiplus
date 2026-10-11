@@ -338,6 +338,79 @@ def _verify_stage_batches(campaign: Path, result: dict[str, Any]) -> None:
         _verify_batch_result(campaign, batch)
 
 
+def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaign: Path,
+                               name: str, argv: list[str], **options: Any) -> dict[str, Any]:
+    """只续作已有动作计划、尚无批次或父run的原序号；派发过的半产物仍交原恢复合同处理。"""
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+    manifest = upgrade.load_campaign_manifest(campaign)
+    sequence = max(upgrade._committed_vc_sequences(campaign, manifest), default=0) + 1
+    actions = data / "control/actions"
+    action_path = actions / f"{sequence}-{name}.json"
+    if (list(actions.glob(f"*-{name}.json")) != [action_path]
+            or list(actions.glob(f"{sequence}-*.json")) != [action_path]):
+        raise replay.ReplayError("拒派停点缺唯一原序号动作计划，禁止重新生成")
+    action_binding = source.binding(action_path)
+    source.bound(action_binding, root=data)
+    for group in ("batches", "run-manifests", "commits", "staging"):
+        directory = campaign / "control/vc" / group
+        if directory.is_symlink() or any(directory.glob(f"{sequence:04d}-*")):
+            raise replay.ReplayError("原序号已经形成批次产物，不能按派发前拒绝续作")
+    state_root = data / "supervisor"
+    if state_root.is_symlink():
+        raise replay.ReplayError("原监督器目录不能是链接")
+    for run_dir in sorted(state_root.glob("run-*")):
+        if run_dir.is_symlink() or not run_dir.is_dir():
+            raise replay.ReplayError("原父run目录不可信")
+        state = supervisor._read_state(run_dir)
+        parent = supervisor._run_inner_manifest(run_dir)
+        if (state.get("campaign_id") != manifest["campaign_id"] or parent["campaign_id"] != manifest["campaign_id"]
+                or parent["batch_sequence"] >= sequence or state.get("state") != "stopped"):
+            raise replay.ReplayError("原监督器存在本批或未收口父run，不能按派发前拒绝续作")
+        audit = supervisor._audit_command(run_dir)
+        if audit["audit_incomplete"] or audit["state"] != "stopped":
+            raise replay.ReplayError("前序父run未通过原审计，禁止续作拒派批次")
+    original_write = source.write
+    consumed = False
+
+    def original_action_plan(path: Path, value: Any) -> Path:
+        """原_batch重算同一计划时只读核原字节；不覆盖文件，也不另造批次或成功结果。"""
+        nonlocal consumed
+        if path.parent != actions:
+            return original_write(path, value)
+        if path != action_path or consumed:
+            raise replay.ReplayError("拒派续作改变原序号或重复生成动作计划")
+        source.bound(action_binding, root=data)
+        expected = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+        if path.read_bytes() != expected:
+            raise replay.ReplayError("拒派续作动作计划与原字节不同")
+        consumed = True
+        return path
+
+    with mock.patch.object(source, "write", side_effect=original_action_plan):
+        result = original(data, campaign, name, argv, **options)
+    if not consumed:
+        raise replay.ReplayError("拒派续作没有经过原动作计划消费者")
+    return result
+
+
+def _recorded_batch(original: Callable[..., Any], data: Path, campaign: Path,
+                    name: str, argv: list[str], **options: Any) -> dict[str, Any]:
+    """完整后继批次游标：完成项重验；仅已证实未派发的原动作允许同序号继续。"""
+    step = "batch:" + name
+
+    def dispatch() -> dict[str, Any]:
+        active = _SUCCESSOR.get()
+        if active is None or active.get("fresh_step") == step:
+            return original(data, campaign, name, argv, **options)
+        return _resume_undispatched_batch(original, data, campaign, name, argv, **options)
+
+    return _control_step(step, dispatch, resume_actions=True,
+        intent={"data": data, "campaign": campaign, "argv": argv, "options": options},
+        verify=lambda result: _verify_batch_result(campaign, result))
+
+
 @contextlib.contextmanager
 def _successor_steps(state_path: Path, digest: str) -> Iterator[None]:
     """只有显式79探针新后继启用游标；旧57入口仍保持原运行方式。"""
@@ -348,9 +421,7 @@ def _successor_steps(state_path: Path, digest: str) -> Iterator[None]:
     original = vc1._batch
     token = _SUCCESSOR.set({"data": Path(state["data_root"]), "source_state": source.binding(state_path)})
     def recorded_batch(data, campaign, name, argv, **options):
-        return _control_step("batch:" + name, lambda: original(data, campaign, name, argv, **options),
-            intent={"data": data, "campaign": campaign, "argv": argv, "options": options},
-            verify=lambda result: _verify_batch_result(campaign, result))
+        return _recorded_batch(original, data, campaign, name, argv, **options)
     try:
         with mock.patch.object(vc1, "_batch", recorded_batch):
             yield

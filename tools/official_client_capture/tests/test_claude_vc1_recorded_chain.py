@@ -791,6 +791,35 @@ class RecordedBudgetCarryTests(unittest.TestCase):
         return self.carry.create_ledgers(self.data, carry_binding=binding, upgrade_id="fixture-successor",
             baseline_version="2.1.225", target_version=source.VERSION, now=observed or self.observed)
 
+    def _successor_campaign(self, paths: dict):
+        """最小真实后继在VC-3等待；只补合法阶段事件，延期通过产品preview/apply生成。"""
+        from datetime import datetime, timedelta
+
+        plan = source.read(paths["ledger"] / "ledger.json")
+        started = datetime.fromisoformat(plan["started_at_utc"])
+        campaign_id = "recorded-successor-formal"
+        campaign = self.data / "evidence/campaigns" / campaign_id
+        deadline = (started + timedelta(minutes=plan["total_budget_minutes"])).isoformat()
+        source.write(campaign / "campaign.json", {"campaign_id": campaign_id, "client": "claude",
+            "campaign_mode": "formal", "target_version": source.VERSION,
+            "control_receipts": {"upgrade_timing": {"ledger_dir": str(paths["ledger"]),
+                "ledger_plan_sha256": source.binding(paths["ledger"] / "ledger.json")["sha256"]}}})
+        source.write(campaign / "control/vc/campaign-plan.json", {
+            "client": "claude", "campaign_id": campaign_id, "original_deadline_at_utc": deadline})
+        (campaign / "control").chmod(0o700)
+        self.project.append_project_event(paths["project_ledger"], operation_id="register:" + campaign_id,
+            event_type="campaign_registered", source_batch_sha256="c" * 64, recorded_at_utc=started.isoformat(),
+            payload={"campaign_id": campaign_id, "campaign_dir": str(campaign), "client": "claude",
+                "campaign_mode": "formal", "target_version": source.VERSION,
+                "registration_batch_sha256": "c" * 64, "deadline_at_utc": deadline})
+        for index, phase in enumerate(("VC-0", "VC-1", "VC-2")):
+            self.timing.append_event(paths["ledger"], event_id=phase + "-completed", phase=phase,
+                event_type="stage_completed", recorded_at_utc=(started + timedelta(minutes=index + 1)).isoformat())
+            following = self.timing.PHASE_ORDER[index + 1]
+            self.timing.append_event(paths["ledger"], event_id=following + "-started", phase=following,
+                event_type="stage_started", recorded_at_utc=(started + timedelta(minutes=index + 1)).isoformat())
+        return campaign, started
+
     def _extension(self, scope: str, observed, *, commit: bool = True) -> None:
         from datetime import timedelta
         from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
@@ -895,6 +924,47 @@ class RecordedBudgetCarryTests(unittest.TestCase):
         result = self.carry.verify_budget(self.data, carry_binding=binding, now=observed + timedelta(seconds=3))
         self.assertEqual(len(result["original_deadline_extensions"]), 2)
         self.assertGreater(result["combined_elapsed_seconds"], 360 * 60)
+
+        # 原延期不能替代后继当前阶段的额度：阶段等到过期后，由原产品合同合法延期，保留全部耗时。
+        campaign, started = self._successor_campaign(paths)
+        frozen = {path: path.read_bytes() for path in (self.path, paths["initialization"],
+            paths["ledger"] / "ledger.json", paths["project_ledger"] / "plan.json")}
+        predecessor = {path: path.read_bytes() for path in self.old.rglob("*") if path.is_file()}
+        moment = started + timedelta(minutes=80)
+        self.project.pause_campaign_deadline(campaign, now=moment)
+        with self.assertRaisesRegex(replay.ReplayError, "当前预算已暂停"):
+            self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
+        before = self.timing.inspect_ledger(paths["ledger"], now=moment.isoformat())
+        with self.assertRaisesRegex(self.project.ProjectLedgerError, "阶段不是当前阶段"):
+            self.project.preview_deadline_extension(campaign, scope="stage", phase="VC-2",
+                new_deadline_at_utc=(started + timedelta(minutes=88)).isoformat(), reason="错误阶段拒绝", now=moment)
+        preview = self.project.preview_deadline_extension(campaign, scope="stage", phase="VC-3",
+            new_deadline_at_utc=(started + timedelta(minutes=88)).isoformat(), reason="继续原后继且不扩总窗口", now=moment)
+        arguments = {"preview_path": Path(preview["preview_path"]), "approve_sha256": preview["review_sha256"],
+                     "approved_by": "隔离夹具明确批准", "now": moment}
+        with mock.patch.object(self.timing, "append_event", side_effect=RuntimeError("两账之间中断")):
+            with self.assertRaisesRegex(RuntimeError, "两账之间中断"):
+                self.project.apply_deadline_extension(campaign, **arguments)
+        with self.assertRaisesRegex(replay.ReplayError, "双账闭合"):
+            self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
+        self.project.apply_deadline_extension(campaign, **arguments)
+        self.project.apply_deadline_extension(campaign, **arguments)
+        after = self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
+        self.assertEqual((after["active_phase"], after["status"], after["remaining_seconds"]), ("VC-3", "active", 8 * 60))
+        self.assertEqual(len(after["successor_deadline_extensions"]), 1)
+        self.assertEqual(after["combined_phase_costs_seconds"]["VC-3"], before["stage_elapsed_seconds"] + 60)
+        self.assertEqual(after["combined_elapsed_seconds"], (moment - self.started).total_seconds())
+        self.assertEqual({path: path.read_bytes() for path in frozen}, frozen)
+        self.assertEqual({path: path.read_bytes() for path in predecessor}, predecessor)
+        self.assertEqual(self.carry.verify_accounting(paths["project_ledger"], carry_binding=binding,
+            current_identity_keys=[])["precise_total"], 2)
+        # 产品允许的更大阶段延期仍不能冒充本夹具原冻结总窗口内的承接。
+        outside = self.project.preview_deadline_extension(campaign, scope="stage", phase="VC-3",
+            new_deadline_at_utc=(started + timedelta(minutes=100)).isoformat(), reason="测试越过夹具总窗口拒绝", now=moment)
+        self.project.apply_deadline_extension(campaign, preview_path=Path(outside["preview_path"]),
+            approve_sha256=outside["review_sha256"], approved_by="隔离夹具明确批准", now=moment)
+        with self.assertRaisesRegex(replay.ReplayError, "原固定窗口内"):
+            self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
 
     def test_project_only_extension_cannot_open_a_window(self) -> None:
         from datetime import timedelta

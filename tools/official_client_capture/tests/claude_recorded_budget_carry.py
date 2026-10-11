@@ -1,7 +1,7 @@
 """录制夹具的预算携带：保留原失败世界，仅投影剩余额度，不提供正式账本迁移。
 
 原项目账和时间账只读重放；新账以实际创建时刻起算，原起点、阶段消耗、请求键、根因和已批准延期
-在不可变收据中保留。创建失败后不能换起点重获额度；无有效剩额时集中拒绝，原 Campaign 须先合法延期。
+在不可变收据中保留。创建失败后不能换起点重获额度；后继仅可在原执行窗口内消费双账批准的阶段延期。
 """
 
 from __future__ import annotations
@@ -339,13 +339,39 @@ def verify_budget(data_root: Path, *, carry_binding: Mapping[str, Any], now: dat
             or time_plan.get("project_ledger_binding", {}).get("plan_sha256") != _bind(project_root / "plan.json")["sha256"]):
         raise source.replay.ReplayError("后继两账预算、根因或初始化绑定漂移")
     summary = timing.inspect_ledger(time_root, now=observed.isoformat())
-    if summary["deadline_extensions"] or summary["status"] == "deadline_paused":
-        raise source.replay.ReplayError("后继fixture到期或另行扩大预算；须先回原账合法延期再冻结后继")
+    head = project._replay(project_root, plan, project._load_events(project_root), rebuild_cache=False)
+    extensions = summary["deadline_extensions"]
+    # 延期仍由原 CLI 写入；此处只消费同一后继真实两账的追加链。冻结的原账、初始化和计划不改写，
+    # 阶段等待的全部耗时继续计入；阶段延期不能扩张固定总窗口，也不能消除其他停线。
+    deadline = min(_execution_deadline(snapshot), _at(summary["total_deadline_at_utc"]))
+    additional = dict.fromkeys(timing.PHASE_ORDER, 0.0)
+    if head["deadline_extensions"] != extensions:
+        raise source.replay.ReplayError("后继延期尚未双账闭合或混入其他Campaign延期")
+    for extension in extensions:
+        owner = head["registered_campaigns"].get(extension["campaign_id"])
+        if (extension["scope"] != "stage" or extension["phase"] not in additional
+                or not owner or owner["campaign_mode"] != "formal" or owner["target_version"] != source.VERSION
+                or owner.get("campaign_dir") != str(data / "evidence/campaigns" / extension["campaign_id"])
+                or extension["project_ledger_path"] != str(project_root)
+                or not started <= _at(extension["approved_at_utc"]) <= observed
+                or _at(extension["new_deadline_at_utc"]) > deadline):
+            raise source.replay.ReplayError("后继只接受同一正式Campaign在原固定窗口内的阶段延期")
+        if not project.deadline_extension_applied(extension, head):
+            raise source.replay.ReplayError("后继延期尚未双账提交")
+        additional[extension["phase"]] += (_at(extension["new_deadline_at_utc"])
+                                           - _at(extension["original_deadline_at_utc"])).total_seconds()
+    if summary["status"] == "deadline_paused":
+        raise source.replay.ReplayError("后继当前预算已暂停；须对实际待续阶段使用原CLI合法延期")
+    if summary["status_before_pause"] in {"stopped", "stop_required", "abandoned"}:
+        raise source.replay.ReplayError("后继其他停线或终态不能用预算延期解除")
     current_costs = _phase_costs((row[0] for row in timing._load_events(time_root)), observed)
     combined = {phase: projection["predecessor_phase_costs_seconds"][phase] + current_costs[phase]
                 for phase in timing.PHASE_ORDER}
-    if any(combined[phase] > snapshot["phase_allowances_seconds"][phase] for phase in timing.PHASE_ORDER):
+    allowances = {phase: snapshot["phase_allowances_seconds"][phase] + additional[phase] for phase in timing.PHASE_ORDER}
+    if any(combined[phase] > allowances[phase] for phase in timing.PHASE_ORDER):
         raise source.replay.ReplayError("后继与原阶段的联合耗时超过原批准额度")
+    if summary["stage_deadline_at_utc"] is not None:
+        deadline = min(deadline, _at(summary["stage_deadline_at_utc"]))
     total = (observed - _at(snapshot["original_started_at_utc"])).total_seconds()
     return {"fixture_only": True, "formal_ledger_migration": False,
             "original_started_at_utc": snapshot["original_started_at_utc"],
@@ -353,4 +379,7 @@ def verify_budget(data_root: Path, *, carry_binding: Mapping[str, Any], now: dat
             "predecessor_elapsed_seconds": projection["predecessor_elapsed_seconds"],
             "successor_elapsed_seconds": (observed - started).total_seconds(), "combined_elapsed_seconds": total,
             "combined_phase_costs_seconds": combined, "original_deadline_extensions": snapshot["deadline_extensions"],
+            "combined_phase_allowances_seconds": allowances, "successor_deadline_extensions": extensions,
+            "active_phase": summary["active_phase"], "status": summary["status"],
+            "effective_deadline_at_utc": deadline.isoformat(), "remaining_seconds": (deadline - observed).total_seconds(),
             "initialization": _bind(initialization), "timing_head": summary["head_sha256"]}

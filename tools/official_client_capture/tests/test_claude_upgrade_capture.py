@@ -1624,6 +1624,168 @@ class AttemptFactsTests(unittest.TestCase):
                 self.assertEqual(before_path.read_bytes(), before_raw)
 
         self._assert_completed_method_read_scope()
+        self._assert_completed_candidate_read_scope()
+
+    def _assert_completed_candidate_read_scope(self) -> None:
+        """原 UID 补候选成功入口：实核绑定与隔离判据，只替换挂载动作和产品世界来源。"""
+
+        import sys
+        from tools.official_client_capture.tests import claude_chain_driver as driver
+        from tools.official_client_capture.tests.real_chains import test_claude_upgrade_fault_chains as outer
+        from tools.official_client_control.store import ControlStore
+
+        stops, source = driver.stops, driver.source
+        variants = (
+            ('reconcile-resume', 'candidate-reconcile', 9, '候选真实对账链端到端'),
+            ('tool-evolution', 'candidate-evolution', 15, '有候选 attempt 的整条工具演进预览'),
+        )
+        for scenario, cursor, phase, label in variants:
+            with self.subTest(candidate=scenario), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                records, data = root / 'records', root / 'staging/data'
+                records.mkdir(mode=0o700)
+                campaign = data / 'campaign'
+                campaign.mkdir(parents=True)
+                recorded, frozen = root / 'history/recorded.json', root / 'freeze'
+                recorded.parent.mkdir()
+                recorded.write_text('{}', encoding='utf-8')
+                frozen.mkdir()
+                roots = [str(recorded.parent), str(frozen)]
+                parents = {'mnt': 'original-mnt', 'net': 'original-net'}
+                site = source.write(data / 'control/site/sitecustomize.py', {'fixture_only': True})
+                source_path = source.write(data / 'control/source.json', {
+                    'schema_version': source.SCHEMA, 'fixture_only': True, 'purpose': 'regression_fixture',
+                    'target_version': source.VERSION, 'data_root': str(data),
+                    'readonly_sources': roots, 'parent_namespaces': parents})
+                case = outer._CandidateFaultScenarios(driver.SCENARIO_METHODS[scenario])
+                case.root, case.data, case.campaign = data.parent, data, campaign
+                case.state_path, case.state_digest = source_path, source.binding(source_path)['sha256']
+                token = driver.fixture_admin_token(data)
+                namespace = {'state_path': source_path, 'digest': case.state_digest,
+                    'data': data, 'scenario': scenario, 'roots': roots,
+                    'state_binding': source.binding(source_path), 'site_binding': source.binding(site)}
+                mounted: set[str] = set()
+                mount_calls = []
+                real_read_text = Path.read_text
+
+                def read_text(path, *args, **options):
+                    if str(path) == '/proc/self/mountinfo':
+                        return '\n'.join(f'1 0 0:0 / {value} ro - tmpfs tmpfs ro' for value in sorted(mounted))
+                    return real_read_text(path, *args, **options)
+
+                def mount(argv, **options):
+                    mount_calls.append(argv)
+                    self.assertTrue(options['check'])
+                    if argv[:3] == ['mount', '-o', 'remount,bind,ro']:
+                        mounted.add(argv[-1])
+                    return subprocess.CompletedProcess(argv, 0)
+
+                store = mock.Mock()
+                store.read_only = True
+                store.list_object_refs.return_value = []
+                store.load_campaign.return_value = {'campaign_id': 'candidate-read-only'}
+                def replay_world(**options):
+                    self.assertEqual(mounted, set(roots), '必须先恢复全部只读挂载，再核原世界')
+                    self.assertTrue(case._read_only_revalidation)
+                    self.assertTrue(options['require_external'])
+                store.replay.side_effect = replay_world
+
+                with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records),
+                        stops.METHOD_RESUME_ENV: '1'}), outer._record_lock(records):
+                    argv = ['unshare', '-m', '-n', sys.executable, '-B', '-m', driver.ACTIVATION_MODULE,
+                        '--data', str(data), '--recorded', str(recorded), '--freeze', str(frozen),
+                        '--scenario', scenario, '--parent-namespaces', json.dumps(parents)]
+                    pending = stops.begin_command(argv)
+                    stops.record_command(argv, 0, '原候选成功输出', '原候选成功日志', pending=pending)
+                    stops.save_state('candidate-entry:' + scenario, {'data': data, 'scenario': scenario,
+                        'recorded': str(recorded), 'freeze': str(frozen),
+                        'segments': stops.load_state('command-observations')['commands']})
+                    stops.save_state('candidate-namespace', namespace)
+                    stops.save_state('candidate-vc5-start', {'campaign': campaign, 'status': 'complete',
+                        'state_binding': namespace['state_binding']})
+                    stops.checkpoint(case, cursor, phase=phase, campaign=campaign)
+                    originals = {path: path.read_bytes() for path in root.rglob('*') if path.is_file()}
+                    with contextlib.ExitStack() as patches:
+                        patches.enter_context(mock.patch.object(source.platform, 'system', return_value='Linux'))
+                        patches.enter_context(mock.patch.object(source.platform, 'machine', return_value='aarch64'))
+                        patches.enter_context(mock.patch.object(source.os, 'geteuid', return_value=0))
+                        patches.enter_context(mock.patch.object(source.os, 'readlink', side_effect=lambda value: 'isolated-' + Path(value).name))
+                        patches.enter_context(mock.patch.object(source.socket, 'if_nameindex', return_value=[(1, 'lo')]))
+                        patches.enter_context(mock.patch.object(Path, 'read_text', read_text))
+                        patches.enter_context(mock.patch.object(driver.subprocess, 'run', side_effect=mount))
+                        patches.enter_context(mock.patch.object(driver, 'validate_aggregation'))
+                        patches.enter_context(mock.patch.object(driver.full, 'installed', side_effect=lambda *_a, **_k: contextlib.nullcontext()))
+                        patches.enter_context(mock.patch.object(ControlStore, 'open_read_only', return_value=store))
+                        patches.enter_context(mock.patch.object(stops, '_read_only_fact_index', side_effect=lambda value: contextlib.nullcontext(value)))
+                        patches.enter_context(mock.patch.object(stops.upgrade, 'load_campaign_manifest', return_value={'campaign_id': 'candidate-read-only'}))
+                        patches.enter_context(mock.patch.object(stops.store_module, 'require_store_campaign_matches_plan'))
+                        patches.enter_context(mock.patch.object(capture, '_host_data_root', return_value=data))
+                        patches.enter_context(mock.patch.object(stops.vc, 'validate_vc_control'))
+                        patches.enter_context(mock.patch.object(outer.ScenarioAudit, 'revalidate', return_value={'scenario': label}))
+                        for target, name in ((driver, 'prepare'), (driver, 'run_scenario'), (case, 'candidate_world'),
+                                             (case, 'recorded_entry'), (case, 'run_main')):
+                            patches.enter_context(mock.patch.object(target, name, side_effect=AssertionError('成功重验不得重新形成或派发')))
+                        for invocation in range(1, 3):
+                            mounted.clear()
+                            self.assertEqual(case.revalidate_completed_method([label]), [{'scenario': label}])
+                            self.assertEqual(store.replay.call_count, invocation, '每次只完整核一个原世界')
+                            self.assertFalse(hasattr(case, '_read_only_revalidation'), '退出后须还原来源作用域')
+                        expected_mounts = [['mount', '--make-rprivate', '/']]
+                        for value in roots:
+                            expected_mounts.extend([['mount', '--bind', value, value],
+                                ['mount', '-o', 'remount,bind,ro', value]])
+                        self.assertEqual(mount_calls, expected_mounts * 2)
+                        before = len(mount_calls)
+                        namespace_path = stops._state_path('candidate-namespace')
+                        for path in (namespace_path, site, token):
+                            raw = path.read_bytes()
+                            mode = path.stat().st_mode & 0o777
+                            path.unlink()
+                            try:
+                                with self.assertRaises(driver.replay.ReplayError):
+                                    case.revalidate_completed_method([label])
+                                self.assertFalse(path.exists(), '缺失原件不能被成功重验补建')
+                            finally:
+                                path.write_bytes(raw)
+                                path.chmod(mode)
+                        for path in (site, source_path):
+                            raw = path.read_bytes()
+                            path.write_bytes(raw + b'\n')
+                            try:
+                                with self.assertRaisesRegex(driver.replay.ReplayError, '摘要'):
+                                    case.revalidate_completed_method([label])
+                            finally:
+                                path.write_bytes(raw)
+                        raw = namespace_path.read_bytes()
+                        for changed in ({**namespace, 'roots': [str(root), str(frozen)]},
+                                        {**namespace, 'scenario': 'other'}, {**namespace, 'data': root}):
+                            stops.save_state('candidate-namespace', changed)
+                            try:
+                                with self.assertRaises(driver.replay.ReplayError):
+                                    case.revalidate_completed_method([label])
+                            finally:
+                                namespace_path.write_bytes(raw)
+                        with mock.patch.object(source.os, 'readlink', side_effect=lambda value: parents[Path(value).name]), \
+                                self.assertRaisesRegex(driver.replay.ReplayError, '独立挂载'):
+                            case.revalidate_completed_method([label])
+                        with mock.patch.object(source.socket, 'if_nameindex', return_value=[(1, 'lo'), (2, 'eth0')]), \
+                                self.assertRaisesRegex(driver.replay.ReplayError, '外网接口'):
+                            case.revalidate_completed_method([label])
+                        with self.assertRaisesRegex(driver.replay.ReplayError, '不同源'):
+                            driver._restore_read_only_mounts(source_path, case.state_digest, roots[::-1], parents)
+                        self.assertEqual(len(mount_calls), before, '坐标、原件或隔离条件不符必须在挂载前拒绝')
+                        token_raw = token.read_bytes()
+                        token.unlink()
+                        try:
+                            with self.assertRaisesRegex(driver.replay.ReplayError, '禁止补写'):
+                                with driver.installed(source_path, case.state_digest, read_only=True):
+                                    self.fail('缺 token 不得进入来源作用域')
+                        finally:
+                            self.assertFalse(token.exists())
+                            token.write_bytes(token_raw)
+                            token.chmod(0o400)
+                    self.assertEqual({path: path.read_bytes() for path in root.rglob('*') if path.is_file()}, originals)
+                    print(f'候选成功重验：{scenario}，两次重验、两次世界读取，原件与命令清单不变')
 
     def _assert_completed_method_read_scope(self) -> None:
         """原 UID 核三个成功回调的实际接线；产品读侧在独立 prepared 短验中真实执行。"""
