@@ -28,9 +28,9 @@
     },
     {
       "path": "driver/background_validation.py",
-      "sha256": "5232ffa04deef6c3fe5ecae3bc235d5efe33417271c1b9361d1744f34c006ec9",
+      "sha256": "4fc569275ba6737e1fe9b5354f5f86ed07322565b5cbacb9502af93b927b78f8",
       "mode": "0700",
-      "bytes": 54003
+      "bytes": 54782
     },
     {
       "path": "driver/build.sh",
@@ -148,9 +148,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "c2a1b66703be613d700afcfa5eb2ba163a665b68775c0d5304f36aa26f2af7e4",
+      "sha256": "30180dfe1877ebaece0eb89a5034658ee4028876d11f2b19fe75cabb81310d19",
       "mode": "0700",
-      "bytes": 44320
+      "bytes": 46097
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -669,5 +669,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "706272bcfae383a990b9f7b134f1af610e8d4015158ab28c5af08a83db0823f5"
+  "manifest_sha256": "70e010f6142cde0fa8f78eecf34ea1e4379ebd1de2ee263afca4600ef3fda9a8"
 }

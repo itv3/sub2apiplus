@@ -1770,7 +1770,8 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             self.assertFalse((pre / "test-tree").exists())
             self.assertFalse((pre / "pycache-target-platform").exists())
             self.assertFalse((pre / ".lock").exists())
-            self.assertFalse((pre / ".entry-gates.lock").exists())
+            self.assertTrue((pre / ".entry-gates.lock").is_dir(), "兼容目录常驻，避免续跑改动来源目录元数据")
+            self.assertEqual((pre / ".entry-gates.lock" / "pid").read_text(), "")
             self.assertEqual(list(fixture.data_root.rglob("__pycache__")), [])
             self.assertEqual(stat.S_IMODE(pre.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(subject.stat().st_mode), 0o700)
@@ -1807,6 +1808,60 @@ class TestTreeAndVc0PreflightTests(unittest.TestCase):
             self.assertEqual(self._calls(record), [], "前端依赖不可用时不得开跑任何门禁")
             self.assertEqual(list((fixture.runroot / "vc0-preflight").rglob("target-platform.gate.json")), [])
             self.assertFalse((fixture.runroot / "vc0-preflight" / ".lock").exists())
+            # 用真实入口准备链重复验证同一来源，故意在前端依赖出口停止，不派发任何执行单元。
+            from tools.ci import read_audit
+            from tools.official_client_capture.tests.test_driver_client_table import claude_env_text
+            source = root / "entry-gates-source-work" / "stable-fixture"
+            source.mkdir(mode=0o700, parents=True)
+            _git(root, "clone", "-q", str(work), str(source / "test-tree"))
+            (source / "pycache").mkdir(mode=0o700)
+            outputs = fixture.runroot / "entry-prepare-outputs"
+            outputs.mkdir(mode=0o700)
+            arguments = ("--mode", "unit-inherit", "--work", str(source))
+
+            def prepare(label, environment=env, source_path=source):
+                return _run(drv / "entry-gates.sh", *arguments[:2], "--work", str(source_path),
+                            "--unit-inherit-propose", str(outputs / (label + "-proposal")),
+                            "--out", str(outputs / label), str(root / "upload" / "vc0.bundle"),
+                            "codex/vc0-preflight", commit, str(hist / "frontend"), env=environment, cwd=root)
+
+            first = prepare("initial")
+            self.assertEqual(first.returncode, 3, first.stdout + first.stderr)
+            self.assertIn("前端依赖不可用", first.stdout)
+            lock_parent = source.parent / ".entry-gates-locks"
+            held = next(lock_parent.iterdir()) / "held"
+            legacy = source / ".entry-gates.lock"
+            paths = (source, source.parent, root)
+            before = [read_audit.host_snapshot(str(path)) for path in paths]
+            again = prepare("again")
+            self.assertEqual(again.returncode, 3, again.stdout + again.stderr)
+            self.assertEqual([read_audit.host_snapshot(str(path)) for path in paths], before)
+            self.assertFalse(held.exists(), "准备失败须释放外部锁")
+            self.assertEqual((legacy / "pid").read_text(), "")
+            # 两客户端与同一物理工作区的路径别名共用锁，旧版活 PID 拒绝迁移。
+            claude_env = outputs / "claude-env.sh"
+            claude_env.write_text(claude_env_text(fixture)); claude_env.chmod(0o600)
+            alias = outputs / "work-alias"; alias.symlink_to(source, target_is_directory=True)
+            held.mkdir(); (held / "pid").write_text(f"{os.getpid()}\n")
+            rejected = prepare("claude-held", {"ARM64_VC_ENV": str(claude_env)}, alias)
+            self.assertEqual(rejected.returncode, 3, rejected.stdout + rejected.stderr)
+            self.assertIn("拒绝并发", rejected.stdout)
+            self.assertTrue(held.is_dir(), "不得删除另一客户端的活锁")
+            shutil.rmtree(held)
+            (legacy / "pid").write_text(f"{os.getpid()}\n")
+            rejected = prepare("legacy-held")
+            self.assertEqual(rejected.returncode, 3, rejected.stdout + rejected.stderr)
+            self.assertIn("拒绝迁移", rejected.stdout)
+            self.assertEqual((legacy / "pid").read_text(), f"{os.getpid()}\n")
+            self.assertFalse(held.exists())
+            (legacy / "pid").write_text("999999999\n")
+            held.mkdir(); (held / "pid").write_text("999999999\n")
+            recovered = prepare("dead-lock")
+            self.assertEqual(recovered.returncode, 3, recovered.stdout + recovered.stderr)
+            self.assertIn("前端依赖不可用", recovered.stdout)
+            self.assertFalse(held.exists())
+            self.assertEqual((legacy / "pid").read_text(), "")
+            self.assertEqual(self._calls(record), [], "锁与元数据短验不得派发任何单元")
 
     def test_usage_errors_and_concurrent_run_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

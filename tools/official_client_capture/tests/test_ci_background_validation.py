@@ -341,7 +341,9 @@ class BackgroundValidationTests(unittest.TestCase):
     def test_explicit_work_must_bind_current_commit_and_deployment(self):
         sha = bv.latest_deployment(self.data)["sha256"]
         parent = self.runroot / "background-validation/work"
-        for work in (parent / "shared", parent / f"{COMMIT_B}-{sha}", parent / f"{COMMIT_A}-{'0'*64}"):
+        source_parent = self.data.parent / "entry-gates-source-work"
+        for work in (root / name for root in (parent, source_parent)
+                     for name in ("shared", f"{COMMIT_B}-{sha}", f"{COMMIT_A}-{'0'*64}")):
             result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
                 "--bundle", str(self.root / "x.bundle"), "--branch", "b", "--commit", COMMIT_A,
                 "--work", str(work), "--entry-gates", str(self.gates))
@@ -355,6 +357,41 @@ class BackgroundValidationTests(unittest.TestCase):
         payload = self.wait(json.loads(result.stdout)["result"])
         self.assertEqual(payload["status"], "passed")
         self.assertEqual(payload["work"], str(work))
+        # 显式来源工作区与状态发布目录分开；先准备全部目录，真实后台进程的原子终态发布不改来源精确目录。
+        from tools.ci import read_audit
+        source = source_parent / f"{COMMIT_A}-{sha}"
+        for leaf in ("go-build-cache", "go-mod-cache", "go-tmp"):
+            (source / leaf).mkdir(mode=0o700, parents=True)
+        paths = (source, source_parent, source_parent.parent)
+        before = [read_audit.host_snapshot(str(path)) for path in paths]
+        result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+            "--bundle", str(self.root / "x.bundle"), "--branch", "b", "--commit", COMMIT_A,
+            "--work", str(source), "--rerun-full-set", "--entry-gates", str(self.gates))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        path = Path(json.loads(result.stdout)["result"])
+        current = self.wait(str(path))
+        self.assertEqual(current["status"], "passed")
+        self.assertEqual(set(current), set(payload), "新坐标不改变旧结果 JSON 形状")
+        self.assertEqual([read_audit.host_snapshot(str(item)) for item in paths], before)
+        # 合法旧坐标与新坐标都拒绝链接；运行期不能靠修改输入合同挪到其它提交的来源。
+        linked = source / "linked"
+        linked.symlink_to(source, target_is_directory=True)
+        result = self.cli("start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+            "--bundle", str(self.root / "x.bundle"), "--branch", "b", "--commit", COMMIT_A,
+            "--work", str(linked), "--entry-gates", str(self.gates))
+        self.assertEqual(result.returncode, 2, result.stderr)
+        changed = source_parent / f"{COMMIT_B}-{sha}"
+        current["work"] = str(changed)
+        current["input_contract"]["work"] = str(changed)
+        current["cache_roots"] = {key: str(changed / leaf) for key, leaf in
+                                  (("GOCACHE", "go-build-cache"), ("GOMODCACHE", "go-mod-cache"), ("GOTMPDIR", "go-tmp"))}
+        current["status"] = "running"
+        bv._write(path, current)
+        calls = self.calls.read_text()
+        result = self.cli("run", "--result", str(path))
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(self.calls.read_text(), calls, "篡改工作区不得派发门禁")
+        self.assertEqual(bv._read(path)["status"], "aborted")
 
 
 # 两客户端都纳管时的入口门禁替身：记下部署核对开关与提交；总摘要来源写本轮客户端核对的收据，带 --require-deployed-all 时另写

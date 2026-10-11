@@ -841,7 +841,25 @@ ENTRY_SOURCE_WORKSPACE_REMOVED = {'tools/ci/entry_dryrun.py': ['                
                                     'args.full_set_work.is_absolute() or ".." in args.full_set_work.parts):'],
  'tools/ci/entry_steps.py': []}
 
+# 后台显式来源坐标保持原CLI与结果形状；两处校验同步按真实父提交登记。
+ENTRY_SOURCE_STABILITY_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
+ENTRY_SOURCE_STABILITY_DIGESTS = {'tools/ci/background_validation.py': '4fc569275ba6737e1fe9b5354f5f86ed07322565b5cbacb9502af93b927b78f8'}
+ENTRY_SOURCE_STABILITY_REMOVED = {'tools/ci/background_validation.py': ['本轮 background-validation/work 的独立目录，输入合同变化不能继续复用旧结论，启动以文件锁去重。',
+                                       '    isolated_root = Path(args.runroot) / DIRECTORY / "work"',
+                                       '    bound_root = isolated_root / f"{args.commit}-{binding_key(deployment, '
+                                       'deployments)}"',
+                                       '    work = args.work or bound_root',
+                                       '    if (not work.is_absolute() or ".." in work.parts or not '
+                                       'work.is_relative_to(bound_root)',
+                                       '        isolated_root = Path(payload["runroot"]) / DIRECTORY / "work"',
+                                       '        bound_root = isolated_root / '
+                                       'f"{payload[\'commit\']}-{binding_key(payload[\'deployment\'], '
+                                       'payload.get(\'deployments\'))}"',
+                                       '                or not work.is_relative_to(bound_root) or ".." in '
+                                       'work.parts):']}
+
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_REMOVED),
     ("入口承接后台来源工作区", ENTRY_SOURCE_WORKSPACE_BASELINE, ENTRY_SOURCE_WORKSPACE_DIGESTS, ENTRY_SOURCE_WORKSPACE_REMOVED),
     ("5626固定完整79场景根真实接管", CLAUDE_FIXED_SCENARIO_ROOT_BASELINE, CLAUDE_FIXED_SCENARIO_ROOT_DIGESTS, CLAUDE_FIXED_SCENARIO_ROOT_REMOVED),
     ("df90c329e真实历史接管", READ_SCOPE_HISTORY_BASELINE, READ_SCOPE_HISTORY_DIGESTS, READ_SCOPE_HISTORY_REMOVED),

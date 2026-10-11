@@ -169,10 +169,33 @@ on_error() {
   exit 3
 }
 trap 'on_error $LINENO' ERR
-mkdir -p "$WORK"; chmod 700 "$WORK"
-# 同一工作目录只允许一次入口门禁（共用测试树与缓存）：mkdir 原子锁，持有者已不在时回收陈旧锁。--wait-lock <秒>：持有者
-# 还活着时排队等（后台验证用，E4-01：它与前台入口门禁共用同一个测试树目录，单元规格与环境指纹才一致、记录才能互相承接）。
-LOCK="$WORK/.entry-gates.lock"
+private_directory() {
+  # 已有合法目录不重复 chmod：Linux 上即使模式相同也可能推进 ctime，导致原来源快照失效。
+  python3 -B - "$1" <<'PY'
+import os, stat, sys
+path = sys.argv[1]
+os.makedirs(path, mode=0o700, exist_ok=True)
+if stat.S_IMODE(os.stat(path).st_mode) != 0o700:
+    os.chmod(path, 0o700)
+PY
+}
+private_directory "$WORK"
+# 同一物理工作目录共用 mkdir/PID 锁，客户端与路径别名不能另起锁。常驻协调目录必须在来源快照绑定前准备好；
+# 运行期仅在其 held 叶目录增删，不再改变 WORK 本身的目录项、mtime 或 ctime。
+LOCK_BASE=$(python3 -B - "$WORK" <<'PY'
+import hashlib, os, pathlib, sys
+work = pathlib.Path(os.path.realpath(sys.argv[1]))
+root = work.parent / ".entry-gates-locks" / hashlib.sha256(str(work).encode()).hexdigest()
+if any(item.is_symlink() for item in (root, *root.parents)):
+    raise ValueError("入口锁目录不得含符号链接")
+print(root)
+PY
+)
+private_directory "$(dirname "$LOCK_BASE")"
+private_directory "$LOCK_BASE"
+LOCK="$LOCK_BASE/held"
+LEGACY_LOCK="$WORK/.entry-gates.lock"
+LEGACY_OWNED=false
 LOCK_WAITED=0
 while ! mkdir "$LOCK" 2>/dev/null; do
   HOLDER=$(cat "$LOCK/pid" 2>/dev/null || true)
@@ -184,14 +207,36 @@ while ! mkdir "$LOCK" 2>/dev/null; do
 done
 if [ "$LOCK_WAITED" -gt 0 ]; then echo "等入口门禁工作目录的锁 ${LOCK_WAITED} 秒"; fi
 printf '%s\n' "$$" > "$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT
+cleanup_entry_lock() {
+  # 常驻兼容目录让旧版看见活 PID；退出只清空自己的 PID，不移除 WORK 内目录。旧版自行回收该目录时，
+  # 必须按真实元数据变化令旧来源失效，不能宣称跨版本回收也保持来源不变。
+  if [ "$LEGACY_OWNED" = true ] && [ "$(cat "$LEGACY_LOCK/pid" 2>/dev/null || true)" = "$$" ]; then
+    : > "$LEGACY_LOCK/pid"
+  fi
+  rm -rf "$LOCK"
+}
+trap cleanup_entry_lock EXIT
+while [ -e "$LEGACY_LOCK" ]; do
+  if [ -L "$LEGACY_LOCK" ] || [ ! -d "$LEGACY_LOCK" ] || [ -L "$LEGACY_LOCK/pid" ]; then
+    echo "ENTRY_GATES_ABORTED：旧入口锁必须是普通目录与 PID 文件，拒绝迁移"; exit 3
+  fi
+  HOLDER=$(cat "$LEGACY_LOCK/pid" 2>/dev/null || true)
+  if [ -n "$HOLDER" ] && kill -0 "$HOLDER" 2>/dev/null; then
+    if [ "$LOCK_WAITED" -lt "$WAIT_LOCK" ]; then sleep 10; LOCK_WAITED=$((LOCK_WAITED + 10)); continue; fi
+    echo "ENTRY_GATES_ABORTED：已有旧版入口门禁在运行（PID ${HOLDER}），拒绝迁移"; exit 3
+  fi
+  break
+done
+private_directory "$LEGACY_LOCK"
+printf '%s\n' "$$" > "$LEGACY_LOCK/pid"
+LEGACY_OWNED=true
 if [ -z "$OUT" ]; then
   OUT="$RUNROOT/entry-gates/entry-gates-$(date -u +%Y%m%dt%H%M%Sz)"
   if [ -e "$OUT" ]; then OUT="$OUT-$$"; fi
 fi
 SUBJECT=$(basename "$OUT")
 # 主体目录可以由调用方预先建好（VC-0 预跑先在里面写 gate_before 环境收据），但不能已有门禁记录（不覆盖上一次的结论）。
-mkdir -p "$(dirname "$OUT")"; mkdir -p -m 0700 "$OUT"; chmod 700 "$OUT"
+mkdir -p "$(dirname "$OUT")"; private_directory "$OUT"
 if [ -e "$OUT/logs" ] || [ -e "$OUT/entry-gates.json" ]; then echo "ENTRY_GATES_ABORTED：主体目录里已有门禁记录：${OUT}"; exit 3; fi
 mkdir -m 0700 "$OUT/logs"
 echo "=== 入口门禁 ${SUBJECT}（组合 ${PROFILE}）$(utc_now)"
@@ -397,7 +442,7 @@ if [ "$GO_WARMUP" = auto ] && [ -z "$FULL_SET_REQUEST" ] && [ "$MODE" != unit-in
 fi
 GATES_STATUS=passed
 if [ "$RUN_GATES" = true ]; then
-mkdir -p "$STORE"; chmod 700 "$STORE"
+private_directory "$STORE"
 echo "=== 门禁清单（${PLAN_PROFILE}）$(utc_now)"
 ( cd "$TREE" && "${EXEC_ENV[@]}" python3 -B "$DRV/entry_gates.py" plan --tree "$TREE" --profile "$PLAN_PROFILE" --launcher-json "$LAUNCHER" \
     --typescript-module "$TS" --historical-source-root "$HISTORICAL_SOURCE_ROOT" ${PRE_A3_ARGS[@]+"${PRE_A3_ARGS[@]}"} \

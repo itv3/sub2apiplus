@@ -19,7 +19,8 @@
   不能被承接（E3-01 承接要追到原运行清单），下一次验证会重新执行它们。
 
 同一提交＋同一部署只有一份当前状态；重开前保存旧终态。A-04 起工作树与全部 Go 缓存位于
-本轮 background-validation/work 的独立目录，输入合同变化不能继续复用旧结论，启动以文件锁去重。
+本轮 background-validation/work 的独立目录，输入合同变化不能继续复用旧结论，启动以文件锁去重。显式 ``--work`` 也可放在
+数据根外的 ``entry-gates-source-work/<完整提交>-<部署绑定摘要>/``，与后台状态和输出分开；来源绑定前须一次准备好目录与缓存。
 
 B-09 可提供当前上下文与结束时校时凭证，覆盖完整才签发全集收据；到期自动重跑，撤销后可用 ``--rerun-full-set``。
 
@@ -469,6 +470,15 @@ def stop_registered(data_root: Path, reason: str, *, keep: Path) -> list[str]:
     return stopped
 
 
+def _bound_work_roots(runroot: Path, data_root: Path, commit: str, deployment: Mapping[str, Any],
+                      deployments: Mapping[str, Mapping[str, Any]] | None = None) -> tuple[Path, Path]:
+    """旧默认坐标保留；显式来源工作区按同一提交与部署绑定，避免后台发布变动它的精确目录输入。"""
+
+    binding = f"{commit}-{binding_key(deployment, deployments)}"
+    return (Path(runroot) / DIRECTORY / "work" / binding,
+            Path(data_root).parent / "entry-gates-source-work" / binding)
+
+
 def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     client = getattr(args, "client", None) or "codex"
     parallel = getattr(args, "parallel", None)
@@ -479,11 +489,10 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         raise ValidationError(f"部署收据集合里没有 {client} 当前的部署收据")
     path = result_path(args.runroot, args.commit, deployment, deployments)
     # 后台编译缓存不再依赖操作者的 GOCACHE，也不与前台准入清理共用工作目录。
-    isolated_root = Path(args.runroot) / DIRECTORY / "work"
-    bound_root = isolated_root / f"{args.commit}-{binding_key(deployment, deployments)}"
-    work = args.work or bound_root
+    bound_roots = _bound_work_roots(args.runroot, args.data_root, args.commit, deployment, deployments)
+    work = args.work or bound_roots[0]
     work = Path(work)
-    if (not work.is_absolute() or ".." in work.parts or not work.is_relative_to(bound_root)
+    if (not work.is_absolute() or ".." in work.parts or not any(work.is_relative_to(root) for root in bound_roots)
             or any(item.is_symlink() for item in (work, *work.parents))):
         raise ValidationError("后台工作目录必须绑定本轮完整提交和部署摘要，不得共用其它轮次目录")
     if Path(args.bundle).is_symlink() or not Path(args.bundle).is_file():
@@ -626,10 +635,10 @@ def run(result: Path) -> int:
             if (type(parallel) is not int or parallel <= 0 or type(contract.get("parallel")) is not int
                     or contract["parallel"] != parallel):
                 raise ValidationError("后台并发参数缺失或发生漂移")
-        isolated_root = Path(payload["runroot"]) / DIRECTORY / "work"
-        bound_root = isolated_root / f"{payload['commit']}-{binding_key(payload['deployment'], payload.get('deployments'))}"
+        bound_roots = _bound_work_roots(Path(payload["runroot"]), Path(payload["data_root"]), payload["commit"],
+                                       payload["deployment"], payload.get("deployments"))
         if (payload.get("cache_roots") != expected_caches or payload.get("input_contract", {}).get("work") != str(work)
-                or not work.is_relative_to(bound_root) or ".." in work.parts):
+                or not work.is_absolute() or not any(work.is_relative_to(root) for root in bound_roots) or ".." in work.parts):
             raise ValidationError("后台缓存合同缺失或发生漂移")
         for value in expected_caches.values():
             directory = Path(value)
