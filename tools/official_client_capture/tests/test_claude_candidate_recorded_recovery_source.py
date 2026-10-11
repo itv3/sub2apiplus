@@ -173,6 +173,98 @@ class CandidateJobAggregationTests(unittest.TestCase):
             new = next(job for job in grouped["capture_jobs"] if job["id"] == row["target_job_id"])["steps"][row["target_step_index"] - 1]
             self.assertEqual(new, driver._coordinate_projection(old, row["original_evidence_root"], row["target_evidence_root"]))
         self._assert_partial_initialization_resume()
+        self._assert_private_fixture_admin_token()
+        self._assert_preflight_store_fact_closure()
+
+    def _assert_preflight_store_fact_closure(self) -> None:
+        """原UID内只验七条准备事实的顺序与引用；形状夹具不冒充真实Store重放通过。"""
+
+        from tools.official_client_control.store import ControlStore
+        store = ControlStore.initialize(self.data / 'control/preflight-facts-short', '2026-10-11T00:00:00Z')
+        facts = []
+        kinds = [('discovery', 1, 'discovery_recorded'), ('evidence', 1, 'evidence_recorded'),
+            ('evidence', 2, 'rule_classification_recorded'), ('approval', 1, 'evidence_approved'),
+            ('approval', 2, 'profile_approved'), ('validation', 1, 'candidate_revision_recorded'),
+            ('validation', 2, 'candidate_frozen')]
+        for index, (dimension, sequence, kind) in enumerate(kinds, 1):
+            facts.append({'campaign_id': 'original-formal', 'dimension': dimension, 'sequence': sequence,
+                'fact_kind': kind, '_sha256': f'{index:064x}', 'payload': {},
+                'formed_under': {'tool_identity_ref': None, 'candidate_revision': 1, 'evaluation_baseline': None}})
+        refs = [store.fact_ref(fact) for fact in facts]
+        build_ref = {'receipt_kind': 'candidate_build', 'sha256': 'a' * 64}
+        build = {'campaign_id': 'original-formal', 'candidate_id': driver.CANDIDATE, 'candidate_revision': 1,
+            'store': {'profile_approval_ref': refs[4], 'candidate_frozen_ref': refs[-1], 'candidate_build_receipt_ref': build_ref}}
+        facts[-2]['payload'] = {'revision': 1, 'candidate_id': driver.CANDIDATE, 'supersedes': None, 'invalidation_ref': None}
+        facts[-1].update(previous_fact_sha256=refs[-2]['sha256'], payload={
+            'candidate_id': driver.CANDIDATE, 'profile_approval_ref': refs[4], 'candidate_build_receipt_ref': build_ref})
+        self.assertEqual(driver.preflight_store_fact_refs(store, facts, build), refs)
+        for mutate in (
+            lambda rows: rows.reverse(),
+            lambda rows: rows.append(copy.deepcopy(rows[-1])),
+            lambda rows: rows[-2]['payload'].update(revision=2),
+            lambda rows: rows[-1].update(previous_fact_sha256='b' * 64),
+            lambda rows: rows[-1]['payload'].update(candidate_id='foreign-candidate'),
+            lambda rows: rows[-1]['payload'].update(profile_approval_ref=refs[3]),
+            lambda rows: rows[-1]['payload'].update(candidate_build_receipt_ref={'receipt_kind': 'candidate_build', 'sha256': 'c' * 64}),
+        ):
+            damaged = copy.deepcopy(facts)
+            mutate(damaged)
+            with self.assertRaises(replay.ReplayError):
+                driver.preflight_store_fact_refs(store, damaged, build)
+        self.assertEqual(driver.preflight_store_fact_refs(store, facts, build), refs)
+
+    def _assert_private_fixture_admin_token(self) -> None:
+        """原UID内核隔离文件和环境恢复；假 token 不授予账号资格或正式认证。"""
+
+        path = driver.fixture_admin_token(self.data)
+        original = path.read_bytes()
+        inode = path.stat().st_ino
+        self.assertEqual(original, b'hdr.payload.sig\n')
+        self.assertEqual(path.stat().st_mode & 0o777, 0o400)
+        self.assertEqual(driver.fixture_admin_token(self.data), path)
+        self.assertEqual(path.stat().st_ino, inode)
+        with mock.patch.dict(os.environ, {'ADMIN_BEARER_TOKEN': 'ambient-inert-token',
+                'ADMIN_BEARER_TOKEN_FILE': '/original/inert-file'}), \
+                mock.patch.object(source, 'load_state', return_value=self.state), \
+                mock.patch.object(driver.full, 'installed', side_effect=lambda *_args: contextlib.nullcontext('original-adapter')):
+            before = {key: os.environ.get(key) for key in ('ADMIN_BEARER_TOKEN', 'ADMIN_BEARER_TOKEN_FILE')}
+            for fail in (False, True):
+                def isolated():
+                    with driver.installed(self.data / 'inert-state', '0' * 64) as adapter:
+                        self.assertEqual(adapter, 'original-adapter')
+                        self.assertEqual(os.environ['ADMIN_BEARER_TOKEN'], '')
+                        self.assertEqual(os.environ['ADMIN_BEARER_TOKEN_FILE'], str(path))
+                        if fail:
+                            raise RuntimeError('原隔离作用域退出')
+                if fail:
+                    with self.assertRaisesRegex(RuntimeError, '作用域退出'):
+                        isolated()
+                else:
+                    isolated()
+                self.assertEqual({key: os.environ.get(key) for key in before}, before)
+        path.chmod(0o600)
+        with self.assertRaisesRegex(replay.ReplayError, '只读权限'):
+            driver.fixture_admin_token(self.data)
+        path.write_bytes(original + b'changed')
+        path.chmod(0o400)
+        with self.assertRaisesRegex(replay.ReplayError, '原字节'):
+            driver.fixture_admin_token(self.data)
+        self.assertEqual(path.read_bytes(), original + b'changed', '漂移只能拒绝，不能自动覆盖')
+        path.unlink()
+        target = self.data / 'control/inert-original-token'
+        target.write_bytes(original)
+        path.symlink_to(target)
+        with self.assertRaises(replay.ReplayError):
+            driver.fixture_admin_token(self.data)
+        self.assertEqual(target.read_bytes(), original)
+        self.assertIsNone(driver.token_preflight_retry_proof(SimpleNamespace(), 'candidate-reconcile', [],
+            self.data / 'unknown-campaign', {}, (1, None, '其它配置失败\n')))
+        with tempfile.TemporaryDirectory() as records, mock.patch.dict(os.environ, {
+                driver.stops.METHOD_RECORD_ENV: records, driver.stops.METHOD_RESUME_ENV: '1'}):
+            with self.assertRaisesRegex(replay.ReplayError, '原方法'):
+                driver.token_preflight_retry_proof(SimpleNamespace(_testMethodName='foreign-method'),
+                    'candidate-reconcile', [], self.data / 'unknown-campaign', {},
+                    (1, None, driver.TOKEN_PREFLIGHT_ERROR))
 
     def _assert_partial_initialization_resume(self) -> None:
         """原 UID 内只验初始化运输边界；隔离替身不代表 ARM64 资格或形成链成功。"""

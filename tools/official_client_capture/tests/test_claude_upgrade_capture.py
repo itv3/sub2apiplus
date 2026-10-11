@@ -1379,6 +1379,8 @@ class AttemptFactsTests(unittest.TestCase):
                     reader.assert_called_once_with(first, campaign)
 
 
+        self._assert_candidate_token_preflight_retry()
+
         # 原 UID 内定向核验测试执行器运输：来源树、执行树和记录库都是独立的真实私有小目录。
         # 这里只换 capture/tests 内的一个 .py；产品、夹具、原 before 和来源停点均保留原字节。
         with tempfile.TemporaryDirectory() as directory:
@@ -1620,6 +1622,100 @@ class AttemptFactsTests(unittest.TestCase):
                 self.assertEqual((tree / product).read_bytes(), original_files[product])
                 self.assertEqual(original_stop.read_bytes(), original_stop_raw)
                 self.assertEqual(before_path.read_bytes(), before_raw)
+
+
+    def _assert_candidate_token_preflight_retry(self) -> None:
+        """原UID内只核命令接缝；真实Store/两账证明由候选驱动和原现场续作核验。"""
+
+        from types import SimpleNamespace
+        from tools.official_client_capture.tests import claude_chain_driver as driver
+        stops = driver.stops
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {
+                stops.METHOD_RECORD_ENV: directory, stops.METHOD_RESUME_ENV: '1'}):
+            root = Path(directory).resolve()
+            campaign, witness = root / 'original-campaign', root / 'original-witness'
+            witness.write_bytes('原独立小文件证明'.encode('utf-8'))
+            case = SimpleNamespace()
+            name, key = 'candidate-reconcile', 'candidate-run'
+            argv = ['capture-candidate', 'run', '--campaign-dir', str(campaign),
+                    '--candidate-id', driver.CANDIDATE, '--acknowledge-live-requests']
+            count = {'original': 0, 'retry': 0}
+            def command(code, result, stderr, kind):
+                count[kind] += 1
+                pending = stops.begin_command(argv)
+                stdout = '' if result is None else json.dumps(result) + '\n'
+                stops.record_command(argv, code, stdout, stderr, pending=pending)
+                return code, result, stderr
+            failure = (1, None, driver.TOKEN_PREFLIGHT_ERROR)
+            self.assertEqual(stops.command_step(case, name, key, argv,
+                lambda: command(*failure, 'original'), campaign=campaign), failure)
+            logical = 'command-step:' + name + ':' + key
+            original = stops.load_state(logical)
+            registry_raw = stops._state_path('command-step-keys').read_bytes()
+            def proof(cursor, arguments, selected_campaign, saved, observed):
+                self.assertEqual((cursor, arguments, selected_campaign, observed), (name, argv, campaign, failure))
+                if 'preflight_retry' in saved:
+                    return saved['preflight_retry']['proof']
+                return {'kind': 'candidate-admin-token-preflight', 'logical_name': logical,
+                        'campaign': campaign, 'original_command': saved['command'],
+                        'bindings': [stops.file_cut(witness)]}
+            # 显式接口不可退回case属性查找；即便挂了同名方法，默认仍只消费原失败。
+            case.candidate_token_preflight_retry = lambda *_args: self.fail('共享接缝禁止隐式查找客户端verifier')
+            verifier = proof
+            def continue_step(action):
+                return stops.command_step(case, name, key, argv, action, campaign=campaign,
+                                          preflight_retry_verifier=verifier)
+            outcome = (2, {'status': 'failed', 'fixture_only': True}, '原回归真实返回\n')
+            with mock.patch.object(stops, 'verify_case') as reader:
+                self.assertEqual(stops.command_step(case, name, key, argv,
+                    lambda: self.fail('无显式verifier不得重试'), campaign=campaign), failure)
+                with stops.verified_read_only_world(case, campaign):
+                    self.assertEqual(continue_step(lambda: self.fail('只读禁止重试')), failure)
+                self.assertEqual(stops.load_state(logical), original)
+                verifier = lambda *args: (_ for _ in ()).throw(ValueError('原无副作用证明未闭合'))
+                with self.assertRaisesRegex(ValueError, '证明未闭合'):
+                    continue_step(lambda: self.fail('无证明禁止重试'))
+                self.assertEqual(stops.load_state(logical), original)
+                verifier = proof
+                self.assertEqual(continue_step(lambda: command(*outcome, 'retry')), outcome)
+                completed = stops.load_state(logical)
+                self.assertEqual({field: value for field, value in completed.items() if field != 'preflight_retry'}, original)
+                self.assertEqual(stops._state_path('command-step-keys').read_bytes(), registry_raw)
+                self.assertNotEqual(completed['invocation_binding'], completed['preflight_retry']['invocation_binding'])
+                self.assertEqual(stops._original_command(completed['command'], argv), failure)
+                with self.assertRaisesRegex(ValueError, '显式重验证明'):
+                    stops.command_step(case, name, key, argv, lambda: None, campaign=campaign)
+                for _index in range(2):
+                    self.assertEqual(continue_step(lambda: self.fail('一次子尝试不得再次派发')), outcome)
+                with stops.verified_read_only_world(case, campaign):
+                    self.assertEqual(continue_step(lambda: self.fail('完整子尝试只读消费')), outcome)
+                self.assertEqual(count, {'original': 1, 'retry': 1})
+                # 子输出先形成、停点随后中断的窗口仅闭合原 invocation，不重新执行。
+                gap = {**completed, 'preflight_retry': {**completed['preflight_retry'], 'status': 'pending'}}
+                gap['preflight_retry'].pop('command')
+                stops.save_state(logical, gap)
+                with stops.verified_read_only_world(case, campaign):
+                    with self.assertRaisesRegex(ValueError, '禁止新动作'):
+                        continue_step(lambda: None)
+                self.assertEqual(continue_step(lambda: self.fail('原子输出已成不得重派')), outcome)
+                self.assertEqual(stops.load_state(logical), completed)
+                # 缺输出、错 invocation、未知状态均明确拒绝；不会用同argv另一条原件替代。
+                for damaged in (
+                    {**gap['preflight_retry'], 'observation_begin': len(stops.load_state('command-observations')['commands']),
+                     'observation_prefix': stops.load_state('command-observations')['commands']},
+                    {**gap['preflight_retry'], 'invocation_binding': original['invocation_binding']},
+                    {**gap['preflight_retry'], 'status': 'unknown'},
+                ):
+                    stops.save_state(logical, {**completed, 'preflight_retry': damaged})
+                    with self.assertRaises(ValueError):
+                        continue_step(lambda: self.fail('未决／未知不得重派'))
+                stops.save_state(logical, completed)
+                witness.write_bytes('改变原独立小文件证明'.encode('utf-8'))
+                with self.assertRaisesRegex(ValueError, '原件切点'):
+                    continue_step(lambda: None)
+                witness.write_bytes('原独立小文件证明'.encode('utf-8'))
+                self.assertEqual(count, {'original': 1, 'retry': 1})
+                self.assertGreater(reader.call_count, 0)
 
 
 if __name__ == "__main__":

@@ -478,12 +478,17 @@ def begin_command(argv: list[Any]) -> dict[str, Any] | None:
     pending = {'directory': directory, 'invocation_binding': file_cut(path)}
     logical_name = _ACTIVE_COMMAND_STEP.get()
     if logical_name is not None:
-        saved = load_state(logical_name)
+        retry_field = None
+        if isinstance(logical_name, tuple):
+            logical_name, retry_field = logical_name
+        original = load_state(logical_name)
+        saved = original.get(retry_field) if retry_field and original is not None else original
         if (saved is None or saved.get('status') != 'pending'
                 or saved.get('argv') != [str(item) for item in argv]
                 or saved.get('invocation_binding') is not None):
             raise ValueError('原逻辑命令没有唯一的副作用前调用绑定，禁止派发')
-        save_state(logical_name, {**saved, 'invocation_binding': pending['invocation_binding']})
+        bound = {**saved, 'invocation_binding': pending['invocation_binding']}
+        save_state(logical_name, {**original, retry_field: bound} if retry_field else bound)
     return pending
 
 
@@ -573,7 +578,8 @@ def _original_command(row: dict[str, Any], argv: list[str], *, allow_interrupted
 
 def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke: Any,
                  *, campaign: Path | None = None,
-                 enclosing_commands: list[dict[str, Any]] | None = None) -> tuple[int, Any, str]:
+                 enclosing_commands: list[dict[str, Any]] | None = None,
+                 preflight_retry_verifier: Any | None = None) -> tuple[int, Any, str]:
     """原逻辑命令唯一承接接缝；不调度阶段、不替调用方裁定未决副作用。"""
 
     if record_root() is None:
@@ -584,7 +590,8 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
     verified_scope = _VERIFIED_READ_ONLY_WORLD.get()
     if verified_scope is not None and (
             verified_scope[0] is not case or verified_scope[1] != campaign
-            or saved is None or saved.get('status') != 'complete'):
+            or saved is None or saved.get('status') != 'complete'
+            or ('preflight_retry' in saved and saved['preflight_retry'].get('status') != 'complete')):
         raise ValueError('已重验世界的只读作用域只允许承接同世界已完成命令，禁止新动作或补写未决命令')
     registry = load_state('command-step-keys')
     if registry is None:
@@ -660,6 +667,31 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
             raise ValueError(f'原命令 {key} 的完成输出未绑定副作用前唯一调用')
         if campaign is not None and not world_verified and verified_scope is None:
             verify_case(case, campaign)
+        if 'preflight_retry' in saved:
+            if (preflight_retry_verifier is None
+                    or preflight_retry_verifier(cursor_name, arguments, campaign, saved, result)
+                       != saved['preflight_retry'].get('proof')):
+                raise ValueError('原预约前子尝试缺调用方显式重验证明')
+            return _verified_preflight_retry(case, name, saved, invoke,
+                arguments, campaign, enclosing_commands, start=False)
+        # 共享接缝不认识客户端、场景或错误码；只有原调用点显式提供的只读证明可授权一次子尝试。
+        # 已重验只读作用域仍消费旧失败，不调用授权器，也不创建新的许可或动作。
+        if preflight_retry_verifier is not None and verified_scope is None:
+            proof = preflight_retry_verifier(cursor_name, arguments, campaign, saved, result)
+            if proof is not None:
+                if observations[begin:begin + 1] != [saved['command']]:
+                    raise ValueError('原前检失败不是原观测切点的唯一调用')
+                for row in observations[begin + 1:]:
+                    if not enclosing_commands or row not in enclosing_commands:
+                        raise ValueError('原前检失败后有未绑定的额外观测，禁止重派')
+                    _original_command(row, row['argv'], allow_interrupted=True)
+                saved = {**saved, 'preflight_retry': {
+                    'status': 'pending', 'argv': arguments, 'campaign': campaign,
+                    'original_command': saved['command'], 'proof': proof,
+                    'observation_begin': len(observations), 'observation_prefix': observations}}
+                save_state(name, saved)
+                return _verified_preflight_retry(case, name, saved, invoke,
+                    arguments, campaign, enclosing_commands, start=True)
         return result
     prefix = (load_state('command-observations') or {}).get('commands', [])
     begin = len(prefix)
@@ -711,6 +743,68 @@ def checkpoint(case: Any, name: str, **values: Any) -> None:
     if hasattr(case, 'runtime'):
         save_case(case.runtime, 'candidate-case')
     save_state('cursor:' + name, values)
+
+
+def _verified_preflight_retry(case: Any, name: str, saved: dict[str, Any], invoke: Any,
+                              argv: list[str], campaign: Path | None,
+                              enclosing_commands: list[dict[str, Any]] | None,
+                              *, start: bool) -> tuple[int, Any, str]:
+    """固定前检的一次子尝试；顶层失败、原 key、登记项与原输出永久保留。"""
+
+    retry = saved['preflight_retry']
+    proof = retry.get('proof', {})
+    if (retry.get('argv') != argv or retry.get('campaign') != campaign
+            or retry.get('status') not in {'pending', 'complete'}
+            or retry.get('original_command') != saved.get('command')
+            or proof.get('logical_name') != name or proof.get('campaign') != campaign
+            or proof.get('original_command') != saved['command']
+            or not isinstance(proof.get('bindings'), list) or not proof['bindings']):
+        raise ValueError('原命令预约前子尝试缺准确原命令／世界证明')
+    for binding in proof['bindings']:
+        read_cut(binding)
+    prefix, begin = retry.get('observation_prefix'), retry.get('observation_begin')
+    observations = (load_state('command-observations') or {}).get('commands', [])
+    if prefix is None or begin != len(prefix) or observations[:begin] != prefix:
+        raise ValueError('原命令预约前子尝试的原观测前缀已改变')
+    if retry['status'] == 'complete':
+        if (observations[begin:begin + 1] != [retry['command']]
+                or retry['command'].get('invocation_binding') != retry.get('invocation_binding')
+                or retry.get('invocation_binding') is None):
+            raise ValueError('原命令预约前子尝试完成输出没有唯一副作用前绑定')
+        return _original_command(retry['command'], argv)
+    if _VERIFIED_READ_ONLY_WORLD.get() is not None:
+        raise ValueError('只读作用域禁止原命令预约前重试或补写')
+    if start:
+        if retry['status'] != 'pending' or retry.get('invocation_binding') is not None:
+            raise ValueError('原命令预约前子尝试已开始，禁止第二次派发')
+        token = _ACTIVE_COMMAND_STEP.set((name, 'preflight_retry'))
+        try:
+            outcome = invoke()
+        finally:
+            _ACTIVE_COMMAND_STEP.reset(token)
+        saved = load_state(name)
+        retry = saved['preflight_retry']
+        observations = (load_state('command-observations') or {}).get('commands', [])
+    rows = observations[begin:]
+    invocation = retry.get('invocation_binding')
+    if (invocation is None or not rows or rows[0].get('invocation_binding') != invocation
+            or rows[0]['argv'] != argv
+            or [index for index, row in enumerate(rows) if row.get('invocation_binding') == invocation] != [0]):
+        raise ValueError('原命令预约前子尝试已进入 pending；缺唯一完整输出，禁止盲重派')
+    for row in rows[1:]:
+        if start or not enclosing_commands or row not in enclosing_commands:
+            raise ValueError('原命令预约前子尝试后有未绑定的额外观测，禁止追认')
+        _original_command(row, row['argv'], allow_interrupted=True)
+    result = _original_command(rows[0], argv)
+    if start and result != outcome:
+        raise ValueError('原命令预约前子尝试返回值与完整原件不一致')
+    if campaign is not None:
+        verify_case(case, campaign)
+    save_case(case)
+    if hasattr(case, 'runtime'):
+        save_case(case.runtime, 'candidate-case')
+    save_state(name, {**saved, 'preflight_retry': {**retry, 'status': 'complete', 'command': rows[0]}})
+    return result
 
 
 def verify_case(case: Any, campaign: Path) -> None:

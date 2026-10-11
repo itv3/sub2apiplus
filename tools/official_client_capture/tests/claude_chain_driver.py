@@ -51,6 +51,10 @@ AGGREGATION_SCHEMA = "claude-recorded-candidate-job-aggregation/v1"
 PREPARED_SCHEMA = "claude-recorded-candidate-recovery-start/v1"
 PREPARED_ENV = "CLAUDE_CANDIDATE_RECORDED_START"
 SOURCE_INITIALIZATION = "candidate-source-initialization"
+# 与原候选短验相同的不可用假 token；只在断网录制适配作用域满足文件前检。
+FIXTURE_ADMIN_TOKEN = b"hdr.payload.sig\n"
+TOKEN_PREFLIGHT_ERROR = ("Claude 升级失败：计划里有网关账号刷新触发的步骤：先签发管理 token，并用 "
+    "ADMIN_BEARER_TOKEN_FILE 指向只读 token 文件（不要放进命令行）。\n")
 SCENARIO_METHODS = {
     "reconcile-resume": "_scenario_candidate_reconcile_resume",
     "tool-evolution": "_scenario_candidate_tool_evolution",
@@ -412,8 +416,185 @@ def validate_aggregation(state: dict[str, Any]) -> dict[str, Any]:
 def installed(state_path: Path, digest: str) -> Iterator[Any]:
     state = source.load_state(state_path, digest)
     validate_aggregation(state)
-    with full.installed(state_path, digest) as adapter:
+    token_path = fixture_admin_token(Path(state['data_root']))
+    with mock.patch.dict(os.environ, {'ADMIN_BEARER_TOKEN': '', 'ADMIN_BEARER_TOKEN_FILE': str(token_path)}), \
+            full.installed(state_path, digest) as adapter:
         yield adapter
+
+
+def fixture_admin_token(data: Path) -> Path:
+    """私有录制夹具一次性写假 token；既有字节、权限或路径不符时拒绝，绝不覆盖。"""
+
+    control = data / 'control'
+    replay._regular(control, data, directory=True)
+    path = control / 'recorded-candidate-admin-token.txt'
+    if not path.exists() and not path.is_symlink():
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+        try:
+            os.write(descriptor, FIXTURE_ADMIN_TOKEN)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    replay._regular(path, control)
+    if path.stat().st_mode & 0o777 != 0o400 or path.read_bytes() != FIXTURE_ADMIN_TOKEN:
+        raise replay.ReplayError('录制候选假 token 原字节或只读权限已改变，禁止覆盖')
+    return path
+
+
+def token_preflight_retry_proof(case: Any, cursor_name: str, argv: list[str], campaign: Path,
+                               saved: dict[str, Any], result: tuple[int, Any, str]) -> dict[str, Any] | None:
+    """原两个 candidate-run 固定前检的一次续作许可；不是正式认证或通用失败重派。"""
+
+    if result != (1, None, TOKEN_PREFLIGHT_ERROR):
+        return None
+    expected_method = {'candidate-reconcile': SCENARIO_METHODS['reconcile-resume'],
+                       'candidate-evolution': SCENARIO_METHODS['tool-evolution']}.get(cursor_name)
+    arguments = ['capture-candidate', 'run', '--campaign-dir', str(campaign),
+                 '--candidate-id', CANDIDATE, '--acknowledge-live-requests']
+    if (expected_method is None or case._testMethodName != expected_method or argv != arguments
+            or saved.get('status') != 'complete' or saved.get('campaign') != campaign
+            or stops.read_cut(saved['command']['stdout']) != b''):
+        raise replay.ReplayError('候选固定前检缺原方法或原命令，禁止重派')
+    world = stops.load_state('candidate-recorded-world')
+    start = stops.load_state('candidate-vc5-start')
+    if (world is None or world.get('data') != case.data
+            or not isinstance(world.get('root'), Path) or world['root'] / 'staging/data' != case.data
+            or case.root != case.data.parent or start is None
+            or start.get('status') != 'complete' or start.get('campaign') != campaign
+            or start.get('state_binding') != source.binding(case.state_path)
+            or start.get('ready_binding') != json.loads(os.environ[PREPARED_ENV])):
+        raise replay.ReplayError('候选固定前检未绑定原 VC-4 起点与世界')
+    state = source.load_state(case.state_path, case.state_digest)
+    if Path(state['data_root']) != case.data:
+        raise replay.ReplayError('候选固定前检的录制来源不属于原世界')
+    ready_path = source.bound(start['ready_binding'], root=case.data / 'control')
+    ready = source.read(ready_path)
+    if (ready.get('schema_version') != PREPARED_SCHEMA or ready.get('fixture_only') is not True
+            or ready.get('purpose') != 'regression_fixture' or ready.get('candidate_id') != CANDIDATE
+            or ready.get('candidate_revision') != 1 or ready.get('formal_version_semantics_certified') is not False
+            or ready.get('state') != source.binding(case.state_path)):
+        raise replay.ReplayError('候选固定前检不是原已形成的回归 VC-4 起点')
+    expected_fault = {REFRESH_PROBE: 1 if cursor_name == 'candidate-reconcile' else 0}
+    from tools.official_client_control.store import ControlStore
+    from tools.official_client_control.contracts import RECEIPT_KINDS
+    from tools.official_client_capture import claude_upgrade_store
+    store = ControlStore.open_read_only(claude_upgrade_store.campaign_store_root(campaign))
+    manifest = claude_upgrade.load_campaign_manifest(campaign)
+    if 'preflight_retry' in saved:
+        # 子动作之后允许原世界正常前进；授权时冻结的原件、r1事实和固定失败仍逐份重验。
+        # 不重新作“无attempt”判定，不签第二次许可，也不将旧失败改成成功。
+        proof = saved['preflight_retry'].get('proof', {})
+        if (proof.get('kind') != 'candidate-admin-token-preflight' or proof.get('method') != expected_method
+                or proof.get('logical_name') != 'command-step:' + cursor_name + ':candidate-run'
+                or proof.get('campaign') != campaign or proof.get('original_command') != saved['command']
+                or proof.get('source_binding') != source.binding(case.state_path)
+                or proof.get('ready_binding') != start['ready_binding'] or proof.get('fault_input') != expected_fault
+                or proof.get('fixture_only') is not True or proof.get('formal_version_semantics_certified') is not False):
+            raise replay.ReplayError('候选原预约前许可不属于原方法／来源／失败')
+        for binding in proof['bindings']:
+            stops.read_cut(binding)
+        facts = [store.load_fact(reference) for reference in proof['store_facts']]
+        build = source.read(source.bound(ready['build_receipt'], root=campaign))
+        if preflight_store_fact_refs(store, facts, build) != proof['store_facts']:
+            raise replay.ReplayError('候选原预约前许可的r1准备事实未闭合')
+        return proof
+    cursor = stops.load_state('cursor:' + cursor_name)
+    if (cursor is None or cursor.get('phase') != 0 or cursor.get('campaign') != campaign
+            or cursor.get('completed_commands') != [] or cursor.get('capture_input_started') is not True):
+        raise replay.ReplayError('候选固定前检缺首次采集游标，禁止重派')
+    # command_step 在调用本专用证明前已跑真实 verify_case：Store外部闭合、VC、项目账与时间账。
+    # 这里再收窄到“尚无候选采集副作用”，不能把任意 code1/resultNone 当作无副作用。
+    candidate_root = campaign / 'candidates' / CANDIDATE
+    replay._regular(candidate_root, campaign, directory=True)
+    attempts = candidate_root / 'attempts'
+    if attempts.is_symlink() or attempts.exists():
+        raise replay.ReplayError('候选已有 attempt／预约目录，禁止预约前重派')
+    if any(path.name.startswith('.reservation-') or path.name == 'reservation.json'
+           for path in candidate_root.rglob('*')):
+        raise replay.ReplayError('候选已有预约原件或半产物，禁止重派')
+    configured = source.recovery_control(state)
+    if configured is None:
+        raise replay.ReplayError('候选固定前检缺原故障控制输入')
+    control = Path(configured[1]['control_root'])
+    if source.read(control / 'failures.json') != expected_fault:
+        raise replay.ReplayError('候选固定前检的原故障输入已改变')
+    for relative, empty in (('calls.jsonl', b''), ('counts.json', {})):
+        path = control / relative
+        if path.exists() or path.is_symlink():
+            replay._regular(path, control)
+            value = path.read_bytes() if isinstance(empty, bytes) else source.read(path)
+            if value != empty:
+                raise replay.ReplayError('候选已有复制动作或计数，禁止预约前重派')
+    events = control / 'events'
+    if events.is_symlink() or (events.exists() and (not events.is_dir() or any(events.iterdir()))):
+        raise replay.ReplayError('候选已有复制事件或未知原件，禁止预约前重派')
+    time_rows = timing._load_events(case.ledger_dir)
+    last = time_rows[-1][0] if time_rows else {}
+    if (last.get('event_id') != 'recorded-candidate-recovery-vc5-start'
+            or last.get('event_type') != 'stage_started' or last.get('phase') != 'VC-5'
+            or last.get('attempt_id') is not None or last.get('live_request_count') != 0
+            or sum(row[0]['event_id'] == last.get('event_id') for row in time_rows) != 1
+            or stops.read_cut(start['event_binding']) != time_rows[-1][1]):
+        raise replay.ReplayError('候选时间账已超出原 VC-5 开始事件，禁止预约前重派')
+    history = project.read_project_history_snapshot(case.project_root)
+    if (history['head_sequence'] != 2 or len(history['events']) != 2
+            or any(row['event_type'] != 'campaign_registered' for row in history['events'])):
+        raise replay.ReplayError('候选项目账已有登记以外的计账／动作，禁止预约前重派')
+    facts = store.list_facts(manifest['campaign_id'])
+    from tools.official_client_capture import claude_upgrade_compare
+    build, _build_binding = claude_upgrade_compare.load_candidate_build_receipt(campaign, manifest, CANDIDATE, 1)
+    fact_refs = preflight_store_fact_refs(store, facts, build)
+    for kind in ('candidate_evidence_package', 'candidate_delivery_plan', 'candidate_delivery_package', 'validation_execution_plan'):
+        if store.list_object_refs(kind):
+            raise replay.ReplayError('候选 Store 已有运行对象，禁止预约前重派')
+    if any(store.list_receipt_refs(kind) for kind in RECEIPT_KINDS if kind != 'candidate_build'):
+        raise replay.ReplayError('候选 Store 已有运行阶段收据，禁止预约前重派')
+    build_ref = build['store']['candidate_build_receipt_ref']
+    if store.list_receipt_refs('candidate_build') != [build_ref]:
+        raise replay.ReplayError('候选 Store 不仅有原r1构建收据，禁止预约前重派')
+    token_path = fixture_admin_token(case.data)
+    if (os.environ.get('ADMIN_BEARER_TOKEN') or os.environ.get('ADMIN_BEARER_TOKEN_FILE') != str(token_path)):
+        raise replay.ReplayError('候选续作未处于准确假 token 隔离作用域')
+    bindings = [stops.file_cut(path) for path in (
+        case.state_path, ready_path, campaign / 'campaign.json',
+        source.bound(ready['build_receipt'], root=campaign), source.bound(ready['checkpoint'], root=campaign),
+        case.ledger_dir / 'ledger.json', case.project_root / 'plan.json',
+        case.project_root / 'events/000001.json', case.project_root / 'events/000002.json', token_path)]
+    bindings.extend(stops.file_cut(store.root / 'facts' / reference['campaign_id'] / reference['dimension'] /
+        f"{reference['sequence']:08d}-{reference['sha256']}.json") for reference in fact_refs)
+    bindings.append(stops.file_cut(store.receipt_path(build_ref)))
+    return {'kind': 'candidate-admin-token-preflight', 'logical_name': 'command-step:' + cursor_name + ':candidate-run',
+        'campaign': campaign, 'original_command': saved['command'], 'method': expected_method,
+        'source_binding': source.binding(case.state_path), 'ready_binding': start['ready_binding'],
+        'bindings': bindings + [start['event_binding']], 'project_head': history,
+        'time_sequence': last['sequence'], 'store_facts': fact_refs,
+        'fault_input': expected_fault, 'fixture_only': True, 'formal_version_semantics_certified': False}
+
+
+def preflight_store_fact_refs(store: Any, facts: list[dict[str, Any]], build: dict[str, Any]) -> list[dict[str, Any]]:
+    """预约前原七条准备事实：明确r1先登记再冻结，并与原VC-4收据逐项闭合。"""
+
+    expected = [('discovery', 1, 'discovery_recorded'),
+        ('evidence', 1, 'evidence_recorded'), ('evidence', 2, 'rule_classification_recorded'),
+        ('approval', 1, 'evidence_approved'), ('approval', 2, 'profile_approved'),
+        ('validation', 1, 'candidate_revision_recorded'), ('validation', 2, 'candidate_frozen')]
+    if [(fact['dimension'], fact['sequence'], fact['fact_kind']) for fact in facts] != expected:
+        raise replay.ReplayError('候选 Store 不是原七条准备事实或顺序已变，禁止预约前重派')
+    revision, frozen = facts[-2:]
+    refs = [store.fact_ref(fact) for fact in facts]
+    formed = {'tool_identity_ref': None, 'candidate_revision': 1, 'evaluation_baseline': None}
+    if (any(reference['campaign_id'] != build['campaign_id'] for reference in refs)
+            or revision['payload'] != {'revision': 1, 'candidate_id': CANDIDATE, 'supersedes': None, 'invalidation_ref': None}
+            or revision.get('formed_under') != formed or frozen.get('formed_under') != formed
+            or frozen.get('previous_fact_sha256') != refs[-2]['sha256']
+            or build.get('candidate_id') != CANDIDATE or build.get('candidate_revision') != 1
+            or refs[-1] != build['store']['candidate_frozen_ref']
+            or frozen['payload'].get('candidate_id') != CANDIDATE
+            or frozen['payload'].get('profile_approval_ref') != refs[4]
+            or refs[4] != build['store']['profile_approval_ref']
+            or frozen['payload'].get('candidate_build_receipt_ref') != build['store']['candidate_build_receipt_ref']):
+        raise replay.ReplayError('候选原r1登记／冻结／构建收据引用未闭合，禁止预约前重派')
+    return refs
 
 
 def activate() -> None:
@@ -717,6 +898,7 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
     """B 组只保留控制动作辅助方法；来源全部转至真实录制、封存与构建形成链。"""
 
     run_main = staticmethod(seal_tests.run_main)
+    candidate_token_preflight_retry = token_preflight_retry_proof
     reconcile = recovery_tests.RecoveryChainCase.reconcile
     approve = recovery_tests.RecoveryChainCase.approve
 

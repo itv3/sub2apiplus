@@ -2257,7 +2257,8 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
                 for row in rows:
                     outcome = stops.command_step(self, name, row['key'], row['argv'],
                         lambda: self.fail('已完成候选命令不得重发'), campaign=state['campaign'],
-                        enclosing_commands=chain_driver.original_enclosing_commands(self))
+                        enclosing_commands=chain_driver.original_enclosing_commands(self),
+                        preflight_retry_verifier=self.candidate_token_preflight_retry if row['key'] == 'candidate-run' else None)
                     self.assertEqual(outcome, row['outcome'], '候选原停点与完整stdout/stderr不一致')
         return state
 
@@ -2270,7 +2271,8 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
             raise ValueError('候选命令不在原下一逻辑停点')
         with self.source_context():
             outcome = stops.command_step(self, name, key, argv, lambda: self.run_main(argv), campaign=state['campaign'],
-                enclosing_commands=chain_driver.original_enclosing_commands(self))
+                enclosing_commands=chain_driver.original_enclosing_commands(self),
+                preflight_retry_verifier=self.candidate_token_preflight_retry if key == 'candidate-run' else None)
         state['completed_commands'].append({'key': key, 'argv': argv, 'outcome': outcome})
         return outcome
 

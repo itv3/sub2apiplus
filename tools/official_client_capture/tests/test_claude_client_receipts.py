@@ -84,13 +84,33 @@ class ClientReceiptContractTests(unittest.TestCase):
                 fixture.require_same_world(self.bundle, sibling / "capture")
             stops.save_state("fixture:batch", {"root": staging / "unrelated-world"})
             # 候选录制驱动保留其原 root/staging/data 布局，不沿用 cfw 的边界。
-            candidate = staging / "candidate-original"
+            candidate_parent = staging / "candidate-recorded-worlds"
+            candidate_parent.mkdir(mode=0o700)
+            candidate = Path(tempfile.mkdtemp(prefix="candidate-b-", dir=candidate_parent)).resolve()
             candidate_data = candidate / "staging/data"
             candidate_data.mkdir(mode=0o700, parents=True)
             stops.save_state("candidate-recorded-world", {"root": candidate, "data": candidate_data})
             self.assertEqual(fixture.temporary_root(candidate_data), candidate)
             from tools.official_client_capture.tests.claude_recorded_full_validation_driver import _require_client_staging
             _require_client_staging(candidate_data)
+            # 三处 runner 坐标正确，仍不能追认错误父目录或篡改原 data。
+            wrong_parent = staging / "candidate-b-wrong-parent"
+            wrong_data = wrong_parent / "staging/data"
+            wrong_data.mkdir(mode=0o700, parents=True)
+            stops.save_state("candidate-recorded-world", {"root": wrong_parent, "data": wrong_data})
+            with self.assertRaisesRegex(ValueError, "不属于原方法的夹具世界"):
+                fixture.temporary_root(wrong_data)
+            stops.save_state("candidate-recorded-world", {"root": candidate, "data": candidate / "data"})
+            with self.assertRaisesRegex(ValueError, "不属于原方法的夹具世界"):
+                fixture.temporary_root(candidate_data)
+            stops.save_state("candidate-recorded-world", {"root": candidate, "data": candidate_data})
+            # 真实嵌套位置里的未登记兄弟世界，也不能混入原 Mac 两侧材料。
+            sibling_candidate = Path(tempfile.mkdtemp(prefix="candidate-b-", dir=candidate_parent)).resolve()
+            sibling_data = sibling_candidate / "staging/data"
+            sibling_data.mkdir(mode=0o700, parents=True)
+            with self.assertRaisesRegex(ValueError, "不属于原方法的夹具世界"):
+                fixture.require_same_world(candidate_data, sibling_data)
+            self.assertEqual(fixture.temporary_root(candidate_data), candidate)
             stops.save_state("fixture:capture", {"root": staging / "foreign-world"})
             with self.assertRaisesRegex(ValueError, "不属于原方法的夹具世界"):
                 fixture.fixture_ledger(self.attempt)

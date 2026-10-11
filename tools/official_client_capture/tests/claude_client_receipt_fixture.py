@@ -53,7 +53,12 @@ def _recorded_layout(path: Path, temp: Path) -> tuple[Path, Path] | None:
         candidate = stops.load_state("candidate-recorded-world")
         if candidate is not None:
             root = candidate["root"]
-            if root.parent == temp and candidate["data"] == root / "staging/data" and path.is_relative_to(root / "staging"):
+            # 候选原 runner 在固定容器目录里建 candidate-b-* 世界；
+            # 只认停点绑定的准确根，不接受任意嵌套祖先或兄弟世界。
+            if (root.parent == temp / "candidate-recorded-worlds"
+                    and root.name.startswith("candidate-b-")
+                    and candidate["data"] == root / "staging/data"
+                    and path.is_relative_to(root / "staging")):
                 return root, root
         contract.require(False, "录制 Mac 来源不属于原方法的夹具世界")
     return None
