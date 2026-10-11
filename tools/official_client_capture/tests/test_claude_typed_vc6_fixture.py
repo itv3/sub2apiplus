@@ -135,9 +135,54 @@ class TypedFixtureInputTests(unittest.TestCase):
                 'initializations': {record_name: 'uninitialized'}})
             with self.assertRaisesRegex(guard.GuardError, '游标许可'):
                 fixture._read_unstarted_fixture_world(self.root, campaign, control_path, record_name)
-            with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6'), \
+            # 原许可已签 started 后中断，只读现场检查才可承接；缺检查或检查失败都保留原件。
+            with self.assertRaisesRegex(RuntimeError, '首次初始化中断'):
+                with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6'):
+                    raise RuntimeError('首次初始化中断')
+            initial_path = stops._state_path('initialization:' + record_name)
+            initial_raw = initial_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, '首次初始化许可'):
+                with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6'):
+                    self.fail('缺只读现场检查不得续作')
+            rejected_check = mock.Mock(side_effect=guard.GuardError('现场检查拒绝'))
+            with self.assertRaisesRegex(guard.GuardError, '现场检查拒绝'):
+                with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6',
+                        resume_check=rejected_check):
+                    self.fail('检查拒绝后不得调用构造器')
+            rejected_check.assert_called_once_with()
+            self.assertEqual(initial_path.read_bytes(), initial_raw)
+            self.assertFalse(stops.initialization_allowed(record_name))
+            # 同时核游标许可与 started 的准确归属；completed、外来名称和额外字段均拒绝。
+            started = stops.load_state('initialization:' + record_name)
+            rejected = [{**started, 'cursor': 'other'}, {**started, 'phase': 'other'},
+                        {**started, 'state': 'completed'}, {**started, 'extra': True}]
+            for invalid in rejected:
+                with self.subTest(initialization=invalid):
+                    stops.save_state('initialization:' + record_name, invalid)
+                    check = mock.Mock()
+                    try:
+                        with self.assertRaisesRegex(ValueError, '首次初始化许可'):
+                            with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6',
+                                    resume_check=check):
+                                self.fail('外来或完成的初始化不得进入动作体')
+                        check.assert_not_called()
+                    finally:
+                        initial_path.write_bytes(initial_raw)
+            cursor_path = stops._state_path('cursor:typed-input')
+            cursor_raw = cursor_path.read_bytes()
+            stops.save_state('cursor:typed-input', {'phase': 'VC6'})
+            try:
+                with self.assertRaisesRegex(ValueError, '首次初始化许可'):
+                    with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6',
+                            resume_check=mock.Mock()):
+                        self.fail('旧游标缺许可不得追认')
+            finally:
+                cursor_path.write_bytes(cursor_raw)
+            check = lambda: fixture._read_unstarted_fixture_world(self.root, campaign, control_path, record_name)
+            with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6', resume_check=check), \
                     mock.patch.object(fixture, 'fixture_world', side_effect=AssertionError('不重建基础世界')), \
                     mock.patch.object(fixture, 'DeliveryCampaign', side_effect=AssertionError('不重建回滚资格')):
+                self.assertEqual(initial_path.read_bytes(), initial_raw)
                 originals = {path: path.read_bytes() for path in self.root.rglob('*')
                              if path.is_file() and records not in path.parents}
                 restored_configuration, restored_environment = fixture._read_unstarted_fixture_world(

@@ -1409,7 +1409,11 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
                     raise replay.ReplayError("完整后继VC-6缺原首次建场许可，禁止重建")
                 cursor = {"phase": "VC6", "initializations": {typed_name: "uninitialized"}}
                 stops.save_state("cursor:" + cursor_name, cursor)
-            scope = (stops.initialization_scope(typed_name, cursor=cursor_name, phase="VC6")
+            # 只承接已签 started、基础原件完整且尚未启动的首次初始化；不为旧游标补许可。
+            # 原构造器随后仍须在写入前核 Profile 副本与已封存回滚资格，不能重建半世界。
+            scope = (stops.initialization_scope(typed_name, cursor=cursor_name, phase="VC6",
+                         resume_check=lambda: delivery_fixture._read_unstarted_fixture_world(
+                             data, campaign, data / "control/recorded-delivery-control.json", typed_name))
                      if _SUCCESSOR.get() is not None and stops.load_state(typed_name) is None else contextlib.nullcontext())
             with scope:
                 typed_fixture = delivery_fixture.TypedDeliveryFixture(campaign, CANDIDATE,

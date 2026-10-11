@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from tools.official_client_capture import claude_upgrade as upgrade
 from tools.official_client_capture import claude_upgrade_assertion_profile as profile
@@ -41,6 +41,8 @@ CONTROL_CONTINUATION_PATHS = frozenset({
     'tools/official_client_capture/codex_upgrade_supervisor.py',
     'tools/official_client_capture/codex_upgrade_reconciler.py',
     'tools/official_client_capture/claude_qualification_material_source.py',
+    'tools/official_client_capture/claude_upgrade_delivery_recovery_guard.py',
+    'tools/official_client_capture/claude_upgrade_arm64_delivery_executor.py',
 })
 PRODUCT_CONTINUATION_FILE = 'product-continuation.json'
 
@@ -504,10 +506,8 @@ def _registered_control_state(campaign: Path, deployment: Path) -> dict[str, Any
     before = {row['path']: row['sha256'] for row in previous['entries']}
     after = {row['path']: row['sha256'] for row in current['entries']}
     changed = sorted('tools/' + key for key in set(before) | set(after) if before.get(key) != after.get(key))
-    permitted = {'tools/official_client_capture/codex_upgrade_supervisor.py',
-                 'tools/official_client_capture/codex_upgrade_reconciler.py',
-                 'tools/official_client_capture/claude_qualification_material_source.py'}
-    if (not changed or not set(changed) <= permitted or latest['evaluator']['changed_fields']
+    # 与实际来源承接使用同一审核闭集；历史 revision 的形成期两文件合同仍独立核验。
+    if (not changed or not set(changed) <= CONTROL_CONTINUATION_PATHS or latest['evaluator']['changed_fields']
             or any(previous[key] != current[key] for key in
                    ('policy_sha256', 'wire_producer_sha256', 'evidence_semantics_sha256'))):
         raise ValueError('原世界登记的工具演进不属于本次控制写侧修复')
@@ -838,20 +838,30 @@ def initialization_allowed(name: str) -> bool:
 
 
 @contextlib.contextmanager
-def initialization_scope(name: str, *, cursor: str, phase: str):
-    """恢复到尚未首次建场的阶段时，先签正在初始化，再调用原构造器。"""
+def initialization_scope(name: str, *, cursor: str, phase: str,
+                         resume_check: Callable[[], Any] | None = None):
+    """首次初始化先签 started；同一原 started 仅由显式只读现场检查承接。
+
+    默认仍拒绝任何已开始的初始化。回调不能补原许可，必须先核已有输入和
+    未启动现场，再进入原构造器；失败保留 started 原字节，不追认 completed。
+    """
 
     if record_root() is None or not os.environ.get(METHOD_RESUME_ENV):
         yield
         return
     saved = load_state('cursor:' + cursor)
     initial = load_state('initialization:' + name)
+    started = {'cursor': cursor, 'phase': phase, 'state': 'started'}
     if (saved is None or saved.get('phase') != phase
-            or saved.get('initializations', {}).get(name) != 'uninitialized' or initial is not None):
+            or saved.get('initializations', {}).get(name) != 'uninitialized'
+            or (initial is not None and (resume_check is None or initial != started))):
         raise ValueError('原游标没有精确的首次初始化许可，禁止重建缺失世界')
-    save_state('initialization:' + name, {'cursor': cursor, 'phase': phase, 'state': 'started'})
+    if initial is None:
+        save_state('initialization:' + name, started)
     _INITIALIZING.add(name)
     try:
+        if initial is not None:
+            resume_check()
         yield
     finally:
         _INITIALIZING.discard(name)

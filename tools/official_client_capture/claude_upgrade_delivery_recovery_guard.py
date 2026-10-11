@@ -73,6 +73,10 @@ TERMINAL_STATES = {"execution_committed", "restored", "restore_failed", "recover
 MAX_RPC_BYTES = 64 * 1024 * 1024
 MAX_EXPORT_ITEMS = 64
 EXPORT_BATCH_SCHEMA = "claude-delivery-source-batch/v1"
+LOCAL_ORIGINALS_SCHEMA = "claude-delivery-local-originals/v1"
+LOCAL_EXPORT_BATCH_SCHEMA = "claude-delivery-source-batch/v2"
+SOURCE_READ_TIMEOUT_SECONDS = 900
+SOURCE_READ_ACTIONS = frozenset({"inspect", "prepare", "run", "export", "export_batch", "export_local", "export_batch_local"})
 
 
 class GuardError(RuntimeError):
@@ -1397,6 +1401,41 @@ class GuardEngine:
             raise GuardError("资格归档只读原件字节漂移")
         return raw
 
+    def export_local(self, request: dict[str, Any]) -> dict[str, Any]:
+        """本机同根出口仅改变搬运方式，完整生成来源、原件实读和投影均保持。"""
+        return self._export(request, [], local_originals=True)
+
+    def export_batch_local(self, request: dict[str, Any]) -> dict[str, Any]:
+        """每项仍独立验真；并集只含本次完整闭包，清单本身受原 RPC 上限约束。"""
+        exact(request, {"items"}, "本地批量来源导出")
+        items = request["items"]
+        if not isinstance(items, list) or not 1 <= len(items) <= MAX_EXPORT_ITEMS:
+            raise GuardError("批量来源项数超出固定上限")
+        seen, originals, results = set(), {}, []
+        with self.lock:
+            projections: list[Any] = []
+            for item in items:
+                exact(item, {"content", "origin"}, "本地批量来源项")
+                digest = canonical_sha256(item)
+                if digest in seen:
+                    raise GuardError("批量来源包含重复项")
+                seen.add(digest)
+                result = self._export(item, projections, local_originals=True)
+                for row in result.pop("local_original_bindings"):
+                    previous = originals.setdefault(row["path"], row)
+                    if previous != row:
+                        raise GuardError("本地批量来源中同一路径绑定不同字节")
+                result.pop("local_original_bindings_sha256")
+                results.append({**result, "request_sha256": digest})
+            rows = [originals[path] for path in sorted(originals)]
+            if len(canonical_json_bytes(rows)) > MAX_RPC_BYTES // 2:
+                raise GuardError("本地原件清单超出固定通道上限")
+            return {"schema_version": LOCAL_EXPORT_BATCH_SCHEMA,
+                    "requests_sha256": canonical_sha256(items), "items": results,
+                    "originals_schema": LOCAL_ORIGINALS_SCHEMA,
+                    "local_original_bindings": rows,
+                    "local_original_bindings_sha256": canonical_sha256(rows)}
+
     def export_batch(self, request: dict[str, Any]) -> dict[str, Any]:
         """同一冻结配置的只读来源全集；原件并集不跨请求保存。
 
@@ -1439,7 +1478,7 @@ class GuardEngine:
         """单项旧接口每次独立验真，不承接其他调用的证明。"""
         return self._export(request, [])
 
-    def _export(self, request: dict[str, Any], projections: list[Any]) -> dict[str, Any]:
+    def _export(self, request: dict[str, Any], projections: list[Any], *, local_originals: bool = False) -> dict[str, Any]:
         with self.lock:
             self._require_epoch_readiness()
             exact(request, {"content", "origin"}, "来源导出")
@@ -1523,22 +1562,27 @@ class GuardEngine:
                 bindings = project_delivery_raw_bindings(source, initial,
                     gate_projection=gate_projection, profile_projection=profile_projection)
                 originals = {}
+                local_bindings = []
                 total = 0
                 for item in bindings:
                     raw = self._read_qualification_archive_binding(item, gate_projection)
-                    total += len(raw)
-                    if total > MAX_RPC_BYTES // 2:
-                        raise GuardError("来源原件闭包超出固定通道上限，不能裁掉原件继续")
-                    originals[item["path"]] = base64.b64encode(raw).decode("ascii")
+                    if local_originals:
+                        local_bindings.append(dict(item))
+                    else:
+                        total += len(raw)
+                        if total > MAX_RPC_BYTES // 2:
+                            raise GuardError("来源原件闭包超出固定通道上限，不能裁掉原件继续")
+                        originals[item["path"]] = base64.b64encode(raw).decode("ascii")
                 return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"],
                     "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": origin["service_instance_id"],
-                    "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity,
+                    "trusted_data_root": str(self.data_root), **self._originals_transport(originals, local_bindings if local_originals else None), "guard_identity": self.identity,
                     "profile_configuration_binding": self.context["configuration_ref"],
                     "guard_continuity": continuity,
                     "profile_producer_materials": profile_materials,
                     "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)]}
             originals: dict[str, str] = {}
             seen: dict[str, dict[str, Any]] = {}
+            local_bindings = []
             pending = all_bindings({"content": content, "origin": origin, "profile_producer_materials": profile_materials,
                                     "configuration_binding": self.context["configuration_ref"],
                                     "guard_continuity": continuity,
@@ -1554,10 +1598,13 @@ class GuardEngine:
                 path = check_binding(self.data_root, item)
                 data = read_bytes(path)
                 seen[item["path"]] = item
-                total += len(data)
-                if total > MAX_RPC_BYTES // 2:
-                    raise GuardError("来源原件闭包超出固定通道上限，不能裁掉原件继续")
-                originals[item["path"]] = base64.b64encode(data).decode("ascii")
+                if local_originals:
+                    local_bindings.append(dict(item))
+                else:
+                    total += len(data)
+                    if total > MAX_RPC_BYTES // 2:
+                        raise GuardError("来源原件闭包超出固定通道上限，不能裁掉原件继续")
+                    originals[item["path"]] = base64.b64encode(data).decode("ascii")
                 projected = profile_projection.project(item, data)
                 if projected is not None:
                     pending.extend(projected)
@@ -1566,10 +1613,21 @@ class GuardEngine:
                 # 不把旧文件里的任意路径当作guard新的读取权限。
                 if path.suffix == ".json" and (path.is_relative_to(self.root) or item == self.context["configuration_ref"]):
                     pending.extend(all_bindings(parse_json_bytes(data, "受管来源闭包")))
-            return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"], "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": expected_core["origin"]["service_instance_id"], "trusted_data_root": str(self.data_root), "bytes_by_path": originals, "guard_identity": self.identity,
+            return {"content_sha256": canonical_sha256(content), "deployment_sha256": self.identity["deployment_receipt_binding"]["sha256"], "configuration_sha256": canonical_sha256(self.configuration), "service_instance_id": expected_core["origin"]["service_instance_id"], "trusted_data_root": str(self.data_root), **self._originals_transport(originals, local_bindings if local_originals else None), "guard_identity": self.identity,
                     "profile_configuration_binding": self.context["configuration_ref"],
                     "guard_continuity": continuity,
                     "profile_producer_materials": profile_materials, "profile_proof_bindings": [proof_bindings[key] for key in sorted(proof_bindings)]}
+
+    @staticmethod
+    def _originals_transport(inline: dict[str, str], local_bindings: list[dict[str, Any]] | None) -> dict[str, Any]:
+        """清单是完整实读后的本机搬运合同，不能用它省略下层原件重验。"""
+        if local_bindings is None:
+            return {"bytes_by_path": inline}
+        rows = sorted(local_bindings, key=lambda row: row["path"])
+        if len({row["path"] for row in rows}) != len(rows) or len(canonical_json_bytes(rows)) > MAX_RPC_BYTES // 2:
+            raise GuardError("本地原件清单重复或超出固定通道上限")
+        return {"originals_schema": LOCAL_ORIGINALS_SCHEMA, "local_original_bindings": rows,
+                "local_original_bindings_sha256": canonical_sha256(rows)}
 
     def build_local_source(self, matched_content: dict[str, Any], origin: dict[str, Any]):
         """仅由 export 在完成真实原件匹配后调用，不反向 RPC 或重放交付图。"""
@@ -1605,6 +1663,40 @@ def _receive(connection: socket.socket) -> bytes:
     return bytes(content)
 
 
+@contextlib.contextmanager
+def socket_address(path: Path):
+    """长逻辑路径只通过同一核准父目录 fd 访问；不改 cwd、数据根或冻结配置。
+
+    Linux 的短地址在持有的普通目录 fd 下解析。前后核对同一目录 inode，
+    其余平台和短路径继续使用原逻辑地址；不创建别名、符号链接或新 socket 根。
+    """
+    if sys.platform != "linux" or len(os.fsencode(path)) < 108:
+        yield str(path)
+        return
+    parent = path.parent
+    if any(item.is_symlink() for item in (parent, *parent.parents)):
+        raise GuardError("socket 父目录祖先包含符号链接")
+    info = parent.stat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise GuardError("socket 父目录所有者、类型或权限非法")
+    descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        actual = os.fstat(descriptor)
+        if (info.st_dev, info.st_ino) != (actual.st_dev, actual.st_ino):
+            raise GuardError("socket 父目录在打开时改变")
+        address = f"/proc/self/fd/{descriptor}/{path.name}"
+        if len(os.fsencode(address)) >= 108:
+            raise GuardError("socket 文件名超出内核固定路径上限")
+        yield address
+        current = parent.stat()
+        if (any(item.is_symlink() for item in (parent, *parent.parents))
+                or (actual.st_dev, actual.st_ino) != (current.st_dev, current.st_ino)
+                or current.st_uid != os.getuid() or stat.S_IMODE(current.st_mode) != 0o700):
+            raise GuardError("socket 父目录在访问期间改变")
+    finally:
+        os.close(descriptor)
+
+
 class GuardClient:
     """只连接显式冻结的私有 Unix socket，协议和鉴权不可由证据指定。"""
 
@@ -1616,7 +1708,7 @@ class GuardClient:
         self.timeout = timeout_seconds
 
     def call(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if action not in {"status", "inspect", "prepare", "run", "finish", "heartbeat", "recover", "inventory", "export", "export_batch"}:
+        if action not in {"status", "inspect", "prepare", "run", "finish", "heartbeat", "recover", "inventory", "export", "export_batch", "export_local", "export_batch_local"}:
             raise GuardError("未定义的守卫操作")
         if self.path.is_symlink() or not self.path.exists() or not stat.S_ISSOCK(self.path.stat().st_mode) or self.path.stat().st_uid != os.getuid() or stat.S_IMODE(self.path.stat().st_mode) != 0o600:
             raise GuardError("守卫 socket 所有者、类型或权限非法")
@@ -1624,8 +1716,10 @@ class GuardClient:
         envelope = {"protocol": PROTOCOL, "nonce": nonce, "action": action, "payload": payload}
         request = {**envelope, "mac": _mac(self.key, envelope)}
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(self.timeout)
-            connection.connect(str(self.path))
+            # 资格实读在物理动作计时前发生；外层等待不改变任何冻结阶段或租约预算。
+            connection.settimeout(max(self.timeout, SOURCE_READ_TIMEOUT_SECONDS) if action in SOURCE_READ_ACTIONS else self.timeout)
+            with socket_address(self.path) as address:
+                connection.connect(address)
             connection.sendall(canonical_json_bytes(request))
             response = parse_json_bytes(_receive(connection))
         exact(response, {"protocol", "nonce", "body", "mac"}, "守卫响应")
@@ -1649,7 +1743,12 @@ def serve(engine: GuardEngine, socket_path: Path, key: bytes, ready: Callable[[]
             raise GuardError("已有 socket 不可信")
         socket_path.unlink()
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(socket_path))
+    try:
+        with socket_address(socket_path) as address:
+            server.bind(address)
+    except BaseException:
+        server.close()
+        raise
     socket_path.chmod(0o600)
     server.listen(16)
     server.settimeout(0.25)
@@ -1692,6 +1791,10 @@ def serve(engine: GuardEngine, socket_path: Path, key: bytes, ready: Callable[[]
                 value = engine.export(payload)
             elif action == "export_batch":
                 value = engine.export_batch(payload)
+            elif action == "export_local":
+                value = engine.export_local(payload)
+            elif action == "export_batch_local":
+                value = engine.export_batch_local(payload)
             else:
                 raise GuardError("未定义的守卫操作")
             body = {"ok": True, "value": value}

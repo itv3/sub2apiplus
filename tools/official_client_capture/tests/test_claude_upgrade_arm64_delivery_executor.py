@@ -232,7 +232,8 @@ class ProcessIdentityTests(unittest.TestCase):
 
 class GuardTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="cgd-", dir="/private/tmp")
+        temporary_root = "/tmp" if sys.platform == "linux" else "/private/tmp"
+        self.temporary = tempfile.TemporaryDirectory(prefix="cgd-", dir=temporary_root)
         self.root = Path(self.temporary.name)
         self.configuration, self.context, self.environment = fixture_world(self.root)
         self.owner_process = subprocess.Popen([sys.executable, "-B", "-c", "import time; time.sleep(60)"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -426,10 +427,185 @@ class GuardTests(unittest.TestCase):
         index = guard.read_json(guard.check_binding(self.root, inventory["operations_index_binding"]))
         self.assertTrue(all(item["path"] in source["bytes_by_path"] for item in index["operations"][0]["bindings"]))
 
+        # 真实操作索引增加不可裁掉的大原件；缩小测试容量以覆盖单件超限。
+        archive_path = self.root / "guard" / "operations" / ticket["operation_id"] / "transport-archive.bin"
+        archive_bytes = b"a" * (512 * 1024)
+        guard.write_once(archive_path, archive_bytes)
+        archive_binding = guard.binding(self.root, archive_path)
+        inventory = self.engine.inventory()
+        index_core["operation_index_binding"] = inventory["operations_index_binding"]
+        request = {"content": index_core, "origin": inventory["origin"]}
+        with mock.patch.object(guard, "MAX_RPC_BYTES", 256 * 1024):
+            with self.assertRaisesRegex(guard.GuardError, "通道上限"):
+                self.engine.export(request)
+            local = self.engine.export_local(request)
+            self.assertEqual(local["originals_schema"], guard.LOCAL_ORIGINALS_SCHEMA)
+            self.assertNotIn("bytes_by_path", local)
+            self.assertIn(archive_binding, local["local_original_bindings"])
+            originals = executor._LocalSourceOriginals(self.root, local["local_original_bindings"], local["local_original_bindings_sha256"])
+            self.assertEqual(originals[archive_binding["path"]], archive_bytes)
+            paths = set(originals)
+            originals.require_closure(paths)
+            with self.assertRaisesRegex(guard.GuardError, "闭包"):
+                originals.require_closure(paths - {archive_binding["path"]})
+            with self.assertRaisesRegex(guard.GuardError, "闭包"):
+                originals.require_closure(paths | {"inputs/unlisted.bin"})
+            with self.assertRaisesRegex(guard.GuardError, "精确清单"):
+                originals.get("inputs/unlisted.bin")
+            with self.assertRaises(TypeError):
+                originals.bindings[archive_binding["path"]]["bytes"] = 0
+            batch_items = [request, {"content": content, "origin": core["origin"]}]
+            batch = self.engine.export_batch_local({"items": batch_items})
+            self.assertEqual(batch["schema_version"], guard.LOCAL_EXPORT_BATCH_SCHEMA)
+            self.assertEqual(batch["requests_sha256"], canonical_sha256(batch_items))
+            self.assertEqual(batch["local_original_bindings_sha256"], canonical_sha256(batch["local_original_bindings"]))
+            self.assertIn(archive_binding, batch["local_original_bindings"])
+            self.assertTrue(all("bytes_by_path" not in item and "local_original_bindings" not in item for item in batch["items"]))
+            union = {row["path"]: row for item in batch_items for row in self.engine.export_local(item)["local_original_bindings"]}
+            self.assertEqual(batch["local_original_bindings"], [union[path] for path in sorted(union)])
+
+        # 清单摘要正确也不能放过长度、SHA、路径、缺件或实际字节漂移。
+        rows = local["local_original_bindings"]
+        with self.assertRaisesRegex(guard.GuardError, "摘要"):
+            executor._LocalSourceOriginals(self.root, rows, "f" * 64)
+        for field, value in (("bytes", 0), ("sha256", "f" * 64), ("path", "../outside.bin")):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(rows)
+                target = next(row for row in changed if row["path"] == archive_binding["path"])
+                target[field] = value
+                changed.sort(key=lambda row: row["path"])
+                with self.assertRaises(guard.GuardError):
+                    executor._LocalSourceOriginals(self.root, changed, canonical_sha256(changed))
+        for changed in (rows + [rows[-1]], list(reversed(rows))):
+            with self.assertRaises(guard.GuardError):
+                executor._LocalSourceOriginals(self.root, changed, canonical_sha256(changed))
+        omitted = [row for row in rows if row["path"] != archive_binding["path"]]
+        missing = executor._LocalSourceOriginals(self.root, omitted, canonical_sha256(omitted))
+        with self.assertRaisesRegex(guard.GuardError, "闭包"):
+            missing.require_closure(paths)
+        extra_path = self.root / "inputs" / "extra-source.bin"
+        guard.write_once(extra_path, b"extra")
+        extended = sorted([*rows, guard.binding(self.root, extra_path)], key=lambda row: row["path"])
+        extra = executor._LocalSourceOriginals(self.root, extended, canonical_sha256(extended))
+        with self.assertRaisesRegex(guard.GuardError, "闭包"):
+            extra.require_closure(paths)
+        try:
+            archive_path.write_bytes(b"b" * len(archive_bytes))
+            with self.assertRaisesRegex(guard.GuardError, "漂移"):
+                originals[archive_binding["path"]]
+            archive_path.unlink()
+            with self.assertRaisesRegex(guard.GuardError, "不可读"):
+                originals[archive_binding["path"]]
+            archive_path.symlink_to(extra_path)
+            with self.assertRaisesRegex(guard.GuardError, "符号链接"):
+                originals[archive_binding["path"]]
+        finally:
+            archive_path.unlink(missing_ok=True)
+            guard.write_once(archive_path, archive_bytes)
+        # 构造后仍重验路径祖先，不能用首次实读结果跨调用缓存。
+        operation_path = archive_path.parent
+        moved_path = operation_path.with_name(operation_path.name + "-held")
+        operation_path.rename(moved_path)
+        try:
+            operation_path.symlink_to(moved_path, target_is_directory=True)
+            with self.assertRaisesRegex(guard.GuardError, "符号链接"):
+                originals[archive_binding["path"]]
+        finally:
+            operation_path.unlink(missing_ok=True)
+            moved_path.rename(operation_path)
+        self.assertEqual(originals[archive_binding["path"]], archive_bytes)
+        self.assertIn("bytes_by_path", self.engine.export(request))
+
+        # 同一 UID 追加真实 v2 导入世界；当前客户端必须闭合门禁归档全集。
+        from tools.official_client_capture.tests.test_claude_real_delivery_integration import (
+            QualifiedFileRuntime, fixture_projection, qualified_configuration_fixture,
+        )
+        from tools.official_client_control.tests.fixtures import ManagedToolTree
+        tree = ManagedToolTree(self.root / "transport-managed-repo")
+        temporary_type = tempfile.TemporaryDirectory
+        def portable_temporary(*args: object, **kwargs: object):
+            if sys.platform == "linux" and kwargs.get("dir") == "/private/tmp":
+                kwargs["dir"] = "/tmp"
+            return temporary_type(*args, **kwargs)
+        with tree.active():
+            with mock.patch.object(tempfile, "TemporaryDirectory", side_effect=portable_temporary):
+                helper, configuration = qualified_configuration_fixture(self, tree)
+            qualified_root = helper.root
+            os.chown(qualified_root, -1, os.getegid())
+            configuration_path = qualified_root / "inputs" / "local-v2-configuration.json"
+            guard.write_json_once(configuration_path, configuration)
+            context = {"campaign_id": helper.fixture.campaign_id, "candidate_id": "synthetic-candidate-strict", "delivery_id": "synthetic-candidate-strict-d1", "segment": "dr0", "run_nonce": "local-v2-dr0", "data_root": str(qualified_root), "configuration_ref": guard.binding(qualified_root, configuration_path)}
+            state = guard.read_json(qualified_root / "state.json")
+            state["environment"].update(architecture="linux/arm64", configuration_sha256=canonical_sha256(configuration), environment_sha256=canonical_sha256(fixture_projection()))
+            guard.atomic_json(qualified_root / "state.json", state)
+            identity = executor.guard_identity(configuration, context, formal=False)
+            qualified_engine = guard.GuardEngine(configuration, context, QualifiedFileRuntime(configuration, context), identity)
+            try:
+                qualified_engine.complete_startup()
+                frozen = qualified_engine.inspect({"campaign_id": context["campaign_id"], "candidate_id": context["candidate_id"], "delivery_id": context["delivery_id"], "candidate_image_digest": configuration["candidate"]["image_digest"], "architecture": "arm64", "runtime_profile_sha256": configuration["candidate"]["runtime_profile_sha256"], "observation_window_seconds": 1, "delivery_gates": list(executor.DELIVERY_GATES)})
+                items = [{"content": {key: value for key, value in frozen["cores"][name].items() if key != "origin"}, "origin": frozen["cores"][name]["origin"]} for name in ("configuration", "freeze")]
+                source = qualified_engine.export_local(items[0])
+                expected_paths = {row["path"] for row in source["local_original_bindings"]}
+                batch = qualified_engine.export_batch_local({"items": items})
+                expected_union = {row["path"] for row in batch["local_original_bindings"]}
+                unrequested_path = qualified_root / "inputs" / "unrequested-original.bin"
+                guard.write_once(unrequested_path, "未被本次投影请求的原件".encode("utf-8"))
+                unrequested_binding = guard.binding(qualified_root, unrequested_path)
+                mp = multiprocessing.get_context("fork")
+                result_queue = mp.Queue()
+                def consume_local() -> None:
+                    # 真独立 worker 消费父引擎已实读生成的出口；Process UID 另验 RPC/HMAC。
+                    os.setsid()
+                    try:
+                        client = executor.create_executor("arm64-isolated", configuration, context)
+                        def source_dispatch(action: str, payload: dict) -> dict:
+                            if action == "export_local" and payload == items[0]:
+                                return copy.deepcopy(source)
+                            if action == "export_batch_local" and payload == {"items": items}:
+                                return copy.deepcopy(batch)
+                            raise AssertionError("v2 客户端不得降级来源出口")
+                        with mock.patch.object(client.client, "call", side_effect=source_dispatch):
+                            single = client.verify_origin_evidence(items[0]["content"], items[0]["origin"])
+                            combined = client.verify_origin_evidence_batch(items)
+                        archive_paths = {row["path"] for row in single["gate_projection"].archive_bindings}
+                        for rows in (source["local_original_bindings"][1:], sorted([*source["local_original_bindings"], unrequested_binding], key=lambda row: row["path"])):
+                            changed = {**source, "local_original_bindings": rows, "local_original_bindings_sha256": canonical_sha256(rows)}
+                            with mock.patch.object(client.client, "call", return_value=changed):
+                                try:
+                                    client.verify_origin_evidence(items[0]["content"], items[0]["origin"])
+                                except (guard.GuardError, executor.ControlError):
+                                    pass
+                                else:
+                                    raise AssertionError("v2 公开消费者必须拒绝缺项和额外原件")
+                        result_queue.put({"paths_sha256": canonical_sha256(sorted(single["bytes_by_path"])), "archive_count": len(archive_paths), "archive_subset": archive_paths.issubset(expected_paths), "union_sha256": canonical_sha256(sorted(combined[0]["bytes_by_path"])), "same_mapping": combined[0]["bytes_by_path"] is combined[1]["bytes_by_path"]})
+                    except Exception as error:
+                        result_queue.put({"error": str(error)})
+                reader = mp.Process(target=consume_local)
+                reader.start()
+                reader.join(timeout=60)
+                if reader.is_alive():
+                    reader.kill()
+                    reader.join(timeout=3)
+                    self.fail("小型 v2 完整来源消费者未在短验上限内完成")
+                self.assertEqual(reader.exitcode, 0)
+                result = result_queue.get(timeout=1)
+                result_queue.close()
+                result_queue.join_thread()
+                self.assertNotIn("error", result, result.get("error"))
+                self.assertEqual(result["paths_sha256"], canonical_sha256(sorted(expected_paths)))
+                self.assertGreater(result["archive_count"], 0)
+                self.assertTrue(result["archive_subset"])
+                self.assertEqual(result["union_sha256"], canonical_sha256(sorted(expected_union)))
+                self.assertTrue(result["same_mapping"])
+            finally:
+                qualified_engine.close()
+                helper.doCleanups()
+
 
 class ProcessTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory(prefix="cgp-", dir="/private/tmp")
+        temporary_root = "/tmp" if sys.platform == "linux" else "/private/tmp"
+        self.temporary = tempfile.TemporaryDirectory(prefix="cgp-", dir=temporary_root)
         self.root = Path(self.temporary.name)
         self.configuration, self.context, self.environment = fixture_world(self.root)
         self.processes = []
@@ -517,10 +693,59 @@ class ProcessTests(unittest.TestCase):
         proof.revalidate(lambda item: source["bytes_by_path"][item["path"]], purpose="formed_replay")
 
     def test_freeze_second_run_rechecks_live_gate_and_zero_change(self) -> None:
+        if sys.platform == "linux":
+            # 保留冻结逻辑 socket 位置，实际 bind/connect 必须绕开内核地址容量。
+            self.root = self.root / ("long-world-" + "a" * 70) / ("same-source-" + "b" * 70)
+            self.configuration, self.context, self.environment = fixture_world(self.root)
+            self.assertGreaterEqual(len(os.fsencode(self.root / "guard" / "rpc.sock")), 108)
         self.start_guard()
         client = executor.create_executor("arm64-isolated", self.configuration, self.context)
         request = {"campaign_id": self.context["campaign_id"], "candidate_id": self.context["candidate_id"], "delivery_id": self.context["delivery_id"], "candidate_image_digest": self.configuration["candidate"]["image_digest"], "architecture": "arm64", "runtime_profile_sha256": self.configuration["candidate"]["runtime_profile_sha256"], "observation_window_seconds": 1, "delivery_gates": list(executor.DELIVERY_GATES)}
-        first = client.freeze(request)
+        socket_type = guard.socket.socket
+        timeouts = []
+        class RecordingSocket(socket_type):
+            def settimeout(self, value: float | None) -> None:
+                timeouts.append(value)
+                super().settimeout(value)
+        with mock.patch.object(guard.socket, "socket", RecordingSocket):
+            first = client.freeze(request)
+        self.assertEqual(timeouts[-1], guard.SOURCE_READ_TIMEOUT_SECONDS)
+        self.assertTrue((self.root / "guard" / "rpc.sock").exists())
+        self.assertEqual(self.configuration["limits"], {"lease_seconds": 3, "command_timeout_seconds": 2, "stage_timeout_seconds": 20, "observation_window_seconds": 1, "poll_seconds": 1})
+        # 空请求在服务端拒绝，不产生动作；每个资格读取入口仍用固定外层等待。
+        for action in guard.SOURCE_READ_ACTIONS - {"inspect"}:
+            with self.subTest(action=action), mock.patch.object(guard.socket, "socket", RecordingSocket):
+                timeouts.clear()
+                with self.assertRaises(guard.GuardError):
+                    client.client.call(action, {})
+                self.assertEqual(timeouts, [guard.SOURCE_READ_TIMEOUT_SECONDS])
+
+        core = first["cores"]["configuration"]
+        content = {key: value for key, value in core.items() if key != "origin"}
+        export_request = {"content": content, "origin": core["origin"]}
+        local = client.client.call("export_local", export_request)
+        originals = client._decode_local_source_originals(local, content, core["origin"])
+        verified = client._verify_origin_export(content, core["origin"], local, originals, [])
+        self.assertEqual(verified["content_sha256"], canonical_sha256(content))
+        for field, value in (("trusted_data_root", str(self.root.parent)), ("configuration_sha256", "f" * 64), ("service_instance_id", "other-service"), ("originals_schema", "claude-delivery-local-originals/v0"), ("profile_configuration_binding", self.configuration["candidate"]["profile_binding"])):
+            with self.subTest(field=field):
+                changed = {**local, field: value}
+                with mock.patch.object(executor._LocalSourceOriginals, "__init__", side_effect=AssertionError("错误头不得实读清单")):
+                    with self.assertRaises(guard.GuardError):
+                        client._decode_local_source_originals(changed, content, core["origin"])
+        for changed in ({key: value for key, value in local.items() if key != "local_original_bindings"}, {**local, "bytes_by_path": {}}, {**local, "extra": True}):
+            with self.assertRaises(guard.GuardError):
+                client._decode_local_source_originals(changed, content, core["origin"])
+
+        # 旧服务兼容只接受已鉴权未知操作；任何其他错误都必须直接传播。
+        with mock.patch.dict(client.configuration, {"schema_version": executor.MATERIAL_CONFIGURATION_SCHEMA}):
+            with mock.patch.object(client.client, "call", side_effect=[guard.GuardError("未定义的守卫操作"), {"legacy": True}]) as call:
+                self.assertEqual(client._call_source_export("export", export_request), ({"legacy": True}, False))
+                self.assertEqual([item.args[0] for item in call.call_args_list], ["export_local", "export"])
+            with mock.patch.object(client.client, "call", side_effect=guard.GuardError("守卫来源通道鉴权失败")) as call:
+                with self.assertRaisesRegex(guard.GuardError, "鉴权失败"):
+                    client._call_source_export("export", export_request)
+                self.assertEqual(call.call_count, 1)
         guard.atomic_json(self.root / "fault.json", {"execute": "normal", "restore": "normal", "freeze": "failed"})
         with self.assertRaises(guard.GuardError):
             client.freeze(request)

@@ -23,6 +23,7 @@ import tarfile
 import threading
 import time
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any, Mapping
 from urllib.parse import urlsplit
 
@@ -32,6 +33,67 @@ from tools.official_client_control.errors import ControlError
 from tools.official_client_control import profile_observation_bindings as profile_observations
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 from tools.official_client_capture import claude_upgrade_guard_epochs as guard_epochs
+
+class _LocalSourceOriginals(Mapping[str, bytes]):
+    """只属于本次已鉴权清单的懒读原件；每次访问重新实读，未列入项直接拒绝。
+
+    这不是裸 data_root 回退。清单与后续完整投影逐项闭合，原字节、祖先、
+    文件类型、所有者、长度与 SHA 每次核对；不保留跨调用的原字节缓存。
+    """
+
+    def __init__(self, root: Path, rows: Any, digest: Any):
+        from tools.official_client_control.canonical import validate_external_binding
+        if not isinstance(rows, list) or not rows or canonical_sha256(rows) != digest:
+            raise guard.GuardError("本地原件清单缺失或摘要漂移")
+        if len(canonical_json_bytes(rows)) > guard.MAX_RPC_BYTES // 2:
+            raise guard.GuardError("本地原件清单超出固定通道上限")
+        self.root = root
+        bindings = {}
+        for row in rows:
+            try:
+                value = validate_external_binding(row, "本地原件绑定")
+            except ControlError as error:
+                raise guard.GuardError("本地原件绑定形状或路径非法") from error
+            if value["path"] in bindings:
+                raise guard.GuardError("本地原件清单路径重复")
+            bindings[value["path"]] = MappingProxyType(dict(value))
+        if list(bindings) != sorted(bindings):
+            raise guard.GuardError("本地原件清单必须按精确路径排序")
+        self.bindings = MappingProxyType(bindings)
+        # 首次取得也逐件实读，不能拿服务端清单摘要代替客户端原件。
+        for path in self.bindings:
+            self[path]
+
+    def __iter__(self):
+        return iter(self.bindings)
+
+    def __len__(self):
+        return len(self.bindings)
+
+    def __getitem__(self, path: str) -> bytes:
+        if path not in self.bindings:
+            raise guard.GuardError("本地原件不在本次已鉴权精确清单")
+        if not self.root.is_absolute() or not self.root.is_dir() or any(item.is_symlink() for item in (self.root, *self.root.parents)):
+            raise guard.GuardError("本地原件受管根或祖先发生漂移")
+        actual = self.root
+        for part in PurePosixPath(path).parts:
+            actual = actual / part
+            if actual.is_symlink():
+                raise guard.GuardError("本地原件路径包含符号链接")
+        raw = guard.read_bytes(actual)
+        row = self.bindings[path]
+        if len(raw) != row["bytes"] or hashlib.sha256(raw).hexdigest() != row["sha256"]:
+            raise guard.GuardError("本地原件字节、长度或 SHA 漂移")
+        return raw
+
+    def get(self, path: str, default: Any = None) -> bytes:
+        # 未列入项不能转入共享 _source_bytes 的裸根回退路径。
+        return self[path]
+
+    def require_closure(self, paths: set[str]) -> None:
+        if set(self.bindings) != paths:
+            raise guard.GuardError("本地原件清单与本次完整投影闭包不相同")
+
 
 CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v1"
 MATERIAL_CONFIGURATION_SCHEMA = "claude-upgrade-arm64-executor-configuration/v2"
@@ -44,6 +106,7 @@ GUARD_IDENTITY_FIELDS = frozenset({"contract_version", "authority", "source_scop
 FREEZE_FIELDS = frozenset({"campaign_id", "candidate_id", "delivery_id", "candidate_image_digest", "architecture", "runtime_profile_sha256", "observation_window_seconds", "delivery_gates"})
 DELIVERY_GATES = ("compose-diff", "dependency-connectivity", "entry-routing", "evidence-inventory", "health", "image-identity", "observation-window", "rollback-availability", "secret-scan")
 EVIDENCE_TYPES = ("configuration", "stable_projection", "freeze", "rollback_state", "zero_model_probes", "deployment_configuration")
+LOCAL_SOURCE_METADATA_FIELDS = frozenset({"content_sha256", "deployment_sha256", "configuration_sha256", "service_instance_id", "trusted_data_root", "guard_identity", "profile_configuration_binding", "guard_continuity", "profile_producer_materials", "profile_proof_bindings", "originals_schema"})
 DB_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 SERVICE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
@@ -1171,9 +1234,25 @@ class Arm64DeliveryExecutor:
         return {"operation_index_binding": inventory["operations_index_binding"], "origin": inventory["origin"]}
 
     def verify_origin_evidence(self, content: Mapping[str, Any], origin: Mapping[str, Any]) -> dict[str, Any]:
-        raw = self.client.call("export", {"content": dict(content), "origin": dict(origin)})
-        originals = self._decode_source_originals(raw["bytes_by_path"])
-        return self._verify_origin_export(content, origin, raw, originals, [])
+        raw, local = self._call_source_export("export", {"content": dict(content), "origin": dict(origin)})
+        originals = (self._decode_local_source_originals(raw, content, origin)
+                     if local else self._decode_source_originals(raw["bytes_by_path"]))
+        paths: set[str] = set()
+        result = self._verify_origin_export(content, origin, raw, originals, [], local_paths=paths if local else None)
+        if local:
+            originals.require_closure(paths)
+        return result
+
+    def _call_source_export(self, action: str, request: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """仅精确的已鉴权旧服务未知操作响应允许回退；坏清单不能降级。"""
+        if self.configuration["schema_version"] == MATERIAL_CONFIGURATION_SCHEMA:
+            try:
+                return self.client.call(action + "_local", request), True
+            except guard.GuardError as error:
+                # GuardClient 先核响应 HMAC，再抛出服务端的精确错误。
+                if str(error) != "未定义的守卫操作":
+                    raise
+        return self.client.call(action, request), False
 
     @staticmethod
     def _decode_source_originals(encoded_originals: Any) -> dict[str, bytes]:
@@ -1190,6 +1269,26 @@ class Arm64DeliveryExecutor:
             originals[path] = raw
         return originals
 
+    def _check_local_export_headers(self, raw: Mapping[str, Any], content: Mapping[str, Any],
+                                    origin: Mapping[str, Any]) -> None:
+        """实读清单前先核本机通道、原冻结根和完整来源坐标，拒绝 JSON 换根。"""
+        self._identity(raw.get("guard_identity"))
+        if (raw.get("originals_schema") != guard.LOCAL_ORIGINALS_SCHEMA
+                or raw.get("trusted_data_root") != str(self.data_root)
+                or raw.get("configuration_sha256") != canonical_sha256(self.configuration)
+                or raw.get("profile_configuration_binding") != self.context["configuration_ref"]
+                or raw.get("deployment_sha256") != self.configuration["guard"]["deployment_receipt_binding"]["sha256"]
+                or raw.get("content_sha256") != canonical_sha256(content)
+                or raw.get("service_instance_id") != origin.get("service_instance_id")):
+            raise guard.GuardError("本地原件清单不属于同一已鉴权来源、冻结根或守卫实例")
+
+    def _decode_local_source_originals(self, raw: Mapping[str, Any], content: Mapping[str, Any],
+                                      origin: Mapping[str, Any]) -> _LocalSourceOriginals:
+        guard.exact(raw, LOCAL_SOURCE_METADATA_FIELDS | {"local_original_bindings", "local_original_bindings_sha256"}, "本地来源响应")
+        self._check_local_export_headers(raw, content, origin)
+        return _LocalSourceOriginals(self.data_root, raw.get("local_original_bindings"),
+                                    raw.get("local_original_bindings_sha256"))
+
     def verify_origin_evidence_batch(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """独立验证同次批量原件；不消费守卫自报通过或共享其投影对象。"""
         if not isinstance(items, list) or not 1 <= len(items) <= guard.MAX_EXPORT_ITEMS:
@@ -1199,13 +1298,29 @@ class Arm64DeliveryExecutor:
         digests = [canonical_sha256(item) for item in items]
         if len(set(digests)) != len(digests):
             raise guard.GuardError("批量来源包含重复项")
-        raw = self.client.call("export_batch", {"items": items})
-        guard.exact(raw, {"schema_version", "requests_sha256", "items", "bytes_by_path"}, "批量来源响应")
-        if (raw["schema_version"] != guard.EXPORT_BATCH_SCHEMA
+        raw, local = self._call_source_export("export_batch", {"items": items})
+        transport_fields = ({"originals_schema", "local_original_bindings", "local_original_bindings_sha256"}
+                            if local else {"bytes_by_path"})
+        guard.exact(raw, {"schema_version", "requests_sha256", "items"} | transport_fields, "批量来源响应")
+        if (raw["schema_version"] != (guard.LOCAL_EXPORT_BATCH_SCHEMA if local else guard.EXPORT_BATCH_SCHEMA)
                 or raw["requests_sha256"] != canonical_sha256(items)
                 or not isinstance(raw["items"], list) or len(raw["items"]) != len(items)):
             raise guard.GuardError("批量来源响应未闭合本次精确请求全集")
-        originals = self._decode_source_originals(raw["bytes_by_path"])
+        if local:
+            if raw["originals_schema"] != guard.LOCAL_ORIGINALS_SCHEMA:
+                raise guard.GuardError("本地批量原件版本不属于已鉴权清单合同")
+            channel = None
+            for item, response, digest in zip(items, raw["items"], digests):
+                guard.exact(response, LOCAL_SOURCE_METADATA_FIELDS | {"request_sha256"}, "本地批量逐项来源响应")
+                self._check_local_export_headers(response, item["content"], item["origin"])
+                if (response["request_sha256"] != digest
+                        or channel is not None and channel != response["guard_identity"]):
+                    raise guard.GuardError("本地批量来源未闭合精确请求或同一当前守卫通道")
+                channel = response["guard_identity"]
+            originals = _LocalSourceOriginals(self.data_root, raw["local_original_bindings"], raw["local_original_bindings_sha256"])
+        else:
+            originals = self._decode_source_originals(raw["bytes_by_path"])
+        paths: set[str] = set()
         projections: list[Any] = []
         results = []
         channel = None
@@ -1215,12 +1330,15 @@ class Arm64DeliveryExecutor:
             if channel is not None and channel != response.get("guard_identity"):
                 raise guard.GuardError("批量来源不是同一当前守卫通道")
             channel = response.get("guard_identity")
-            results.append(self._verify_origin_export(item["content"], item["origin"], response, originals, projections))
+            results.append(self._verify_origin_export(item["content"], item["origin"], response, originals, projections,
+                                                      local_paths=paths if local else None))
+        if local:
+            originals.require_closure(paths)
         return results
 
     def _verify_origin_export(self, content: Mapping[str, Any], origin: Mapping[str, Any],
-                              raw: Mapping[str, Any], originals: dict[str, bytes],
-                              projections: list[Any]) -> dict[str, Any]:
+                              raw: Mapping[str, Any], originals: Mapping[str, bytes],
+                              projections: list[Any], *, local_paths: set[str] | None = None) -> dict[str, Any]:
         self._identity(raw["guard_identity"])
         if raw["content_sha256"] != canonical_sha256(content) or raw["deployment_sha256"] != self.configuration["guard"]["deployment_receipt_binding"]["sha256"]:
             raise guard.GuardError("受管来源返回的内容或部署摘要不匹配")
@@ -1265,11 +1383,14 @@ class Arm64DeliveryExecutor:
             initial = {"content": content, "origin": origin,
                        "profile_proof_bindings": list(profile_projection.proof_bindings),
                        "profile_producer_materials": list(profile_projection.producer_materials),
+                       "configuration_binding": self.context["configuration_ref"],
                        "guard_continuity": raw["guard_continuity"],
                        "continuity_originals": [item.as_value() for item in continuity.read_bindings]}
             bindings = project_delivery_raw_bindings(source, initial,
                 gate_projection=gate_projection, profile_projection=profile_projection)
             for item in bindings:
+                if local_paths is not None:
+                    local_paths.add(item["path"])
                 data = originals.get(item["path"])
                 if data is None or len(data) != item["bytes"] or hashlib.sha256(data).hexdigest() != item["sha256"]:
                     raise guard.GuardError("受管通道遗漏门禁第二根投影的真实原件")
