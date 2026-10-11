@@ -6,16 +6,22 @@
 from __future__ import annotations
 
 import json
+import copy
+import hashlib
 import os
 import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tools.ci import client_table, entry_gates, entry_steps, unit_records
 from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
+from tools.official_client_capture.tests import claude_recorded_budget_carry as budget_carry
+from tools.official_client_capture.tests import claude_recorded_chain_source as recorded_source
+from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full_driver
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -33,6 +39,53 @@ def source_environment(root: Path) -> dict[str, str]:
     supplement.mkdir(exist_ok=True)
     (supplement / "source.json").write_text('{"supplement":"original"}\n', encoding="utf-8")
     return values
+
+
+def recorded_bridge_fixture(root: Path, sources: dict[str, str]) -> tuple[Path, dict, dict]:
+    """接线接口夹具保留真实文件绑定和完整CARRY字段；原账重放另由原预算合同测试覆盖。"""
+
+    original = root / "original"
+    original.mkdir()
+    bindings = []
+    for index in range(45):
+        path = original / f"event-{index:02d}.json"
+        path.write_text(json.dumps({"sequence": index}), encoding="utf-8")
+        bindings.append(recorded_source.binding(path))
+    preserved = {}
+    for name in ("batch19_commit", "store_campaign"):
+        path = original / (name + ".json")
+        path.write_text(json.dumps({"name": name}), encoding="utf-8")
+        preserved[name] = recorded_source.binding(path)
+    snapshot = {"source_bindings": bindings, "project_head": {"sequence": 18, "sha256": "1" * 64},
+                "timing_head": {"sequence": 22, "sha256": "2" * 64},
+                "project_plan_sha256": "3" * 64, "timing_plan_sha256": "4" * 64}
+    parent = root / "staging/scenarios"
+    scenario = parent / "full79"
+    intent = {"schema_version": full_driver.BUDGET_CARRY_INTENT_SCHEMA,
+              "data_root": str(scenario / "tmp/world/staging/data"), "predecessor_data": str(original),
+              "predecessor_campaign_id": "claude-recorded-formal", "preserved_bindings": preserved,
+              **{"expected_" + key: snapshot[key] for key in ("project_head", "timing_head", "project_plan_sha256", "timing_plan_sha256")}}
+    intent_path = root / "carry.json"
+    intent_path.write_text(json.dumps(intent), encoding="utf-8")
+    env = {**sources, "PYTHONPATH": str(REPO), "PYTHONDONTWRITEBYTECODE": "1",
+           full_driver.BUDGET_CARRY_INTENT_ENV: str(intent_path),
+           full_driver.BUDGET_CARRY_DIGEST_ENV: hashlib.sha256(intent_path.read_bytes()).hexdigest(),
+           "CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(root / "records")}
+    unit = {"unit_id": entry_gates.RECORDED_FULL79_ID,
+            "argv": ["/usr/bin/python3", "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification",
+                     "run-scenario", "--client", "claude", "--name", "vc-chain.claude-full-validation-only",
+                     "--staging-parent", str(parent), "--scenario-root", str(scenario)],
+            "cwd": str(REPO), "env": env, "cores": 1, "memory_mb": 1024, "weight": 30.0,
+            "timeout_seconds": certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]}
+    unit["inputs"] = entry_gates.pre_a3_inputs(
+        certification.scenario_test_module("vc-chain.claude-full-validation-only", "claude").replace(".", "/") + ".py",
+        entry_gates.pre_a3_fixture_resolved("claude", sources) +
+        [{"category": "environment", "name": "file:" + binding["path"], "sha256": binding["sha256"],
+          "detail": {"path": binding["path"]}} for binding in
+         [recorded_source.binding(intent_path), *bindings, *preserved.values()]], "claude")
+    spec = root / "full79-spec.json"
+    spec.write_text(json.dumps(unit), encoding="utf-8")
+    return spec, unit, snapshot
 
 
 class ClaudePreA3SourceWiringTests(unittest.TestCase):
@@ -137,6 +190,120 @@ class ClaudePreA3SourceWiringTests(unittest.TestCase):
             for key in keys:
                 expected.extend(("--pre-a3-env", key + "=" + self.sources[key]))
             self.assertEqual(json.loads(completed.stdout), expected)
+
+    def test_fixed_recorded_bridge_binds_all_sources_and_preserves_original_coordinates(self) -> None:
+        spec, approved, snapshot = recorded_bridge_fixture(self.root, self.sources)
+        digest = hashlib.sha256(spec.read_bytes()).hexdigest()
+        with mock.patch.object(budget_carry, "_snapshot", return_value=snapshot):
+            bridge = entry_gates.recorded_full79_bridge(spec, digest, client="claude", fixture_env=self.sources)
+        self.assertEqual(len(bridge["resolved"]), 48)
+        self.assertEqual(len(bridge["fixtures"]), 6)
+        with self.assertRaisesRegex(ValueError, "显式提供冻结"):
+            entry_gates.plan_gates(REPO, profile="pre-a3", launcher=[], pre_a3_units=self.units["claude"],
+                                  pre_a3_env=self.sources, platform="linux", recorded_bridge=bridge)
+        policy = {"schema_version": "unit-audit-policy/v1", "default": "reexecute-only", "units": {}}
+        original_policy = copy.deepcopy(policy)
+        manifest = entry_gates.plan_gates(REPO, profile="pre-a3", launcher=[], pre_a3_units=self.units["claude"],
+                                         pre_a3_env=self.sources, platform="linux", recorded_bridge=bridge, audit_policy=policy)
+        actual = next(unit for unit in manifest["units"] if unit["unit_id"] == entry_gates.RECORDED_FULL79_ID)
+        self.assertEqual(actual["argv"], approved["argv"])
+        for key in (full_driver.BUDGET_CARRY_INTENT_ENV, full_driver.BUDGET_CARRY_DIGEST_ENV, "CLAUDE_RECORDED_CHAIN_RECORD_DIR"):
+            self.assertEqual(actual["env"][key], approved["env"][key])
+        self.assertEqual(manifest["audit_policy"]["default"], "reexecute-only")
+        self.assertEqual(policy, original_policy, "调用方的冻结策略原字节语义不改写")
+        with self.assertRaisesRegex(ValueError, "不能登记为可承接"):
+            entry_gates.plan_gates(REPO, profile="pre-a3", launcher=[], pre_a3_units=self.units["claude"],
+                                  pre_a3_env=self.sources, platform="linux", recorded_bridge=bridge,
+                                  audit_policy={"schema_version": "unit-audit-policy/v1", "default": "reexecute-only",
+                                                "units": {entry_gates.RECORDED_FULL79_ID: {}}})
+        self.assertFalse(Path(json.loads(Path(approved["env"][full_driver.BUDGET_CARRY_INTENT_ENV]).read_text())["data_root"]).exists(),
+                         "准备接线不能初始化新世界")
+
+    def test_recorded_bridge_rejects_sha_fixture_source_and_original_head_drift(self) -> None:
+        spec, _, snapshot = recorded_bridge_fixture(self.root, self.sources)
+        digest = hashlib.sha256(spec.read_bytes()).hexdigest()
+        def consume() -> dict:
+            return entry_gates.recorded_full79_bridge(spec, digest, client="claude", fixture_env=self.sources)
+        with mock.patch.object(budget_carry, "_snapshot", return_value=snapshot):
+            with self.assertRaises(ValueError):
+                entry_gates.recorded_full79_bridge(spec, "f" * 64, client="claude", fixture_env=self.sources)
+            with self.assertRaises(ValueError):
+                entry_gates.recorded_full79_bridge(spec, digest, client="codex", fixture_env={})
+            fixture = Path(next(iter(self.sources.values()))) / "source.json"
+            original = fixture.read_bytes()
+            fixture.write_bytes(original + b"\n")
+            with self.assertRaisesRegex(ValueError, "漂移"):
+                consume()
+            fixture.write_bytes(original)
+            budget = Path(snapshot["source_bindings"][0]["path"])
+            original = budget.read_bytes()
+            budget.write_bytes(original + b"\n")
+            with self.assertRaises(recorded_source.replay.ReplayError):
+                consume()
+            budget.write_bytes(original)
+            snapshot["project_head"] = {"sequence": 19, "sha256": "5" * 64}
+            with self.assertRaisesRegex(ValueError, "锚点漂移"):
+                consume()
+
+    def test_recorded_bridge_requires_new_ledger_sources_to_be_frozen_without_dropping_old_files(self) -> None:
+        spec, approved, snapshot = recorded_bridge_fixture(self.root, self.sources)
+        digest = hashlib.sha256(spec.read_bytes()).hexdigest()
+        extra = self.root / "original/new-extension.json"
+        extra.write_text('{"extension":"real"}', encoding="utf-8")
+        binding = recorded_source.binding(extra)
+        snapshot["source_bindings"].append(binding)
+        with mock.patch.object(budget_carry, "_snapshot", return_value=snapshot):
+            with self.assertRaisesRegex(ValueError, "来源全集"):
+                entry_gates.recorded_full79_bridge(spec, digest, client="claude", fixture_env=self.sources)
+            approved["inputs"]["resolved"].insert(-2, {"category": "environment", "name": "file:" + str(extra),
+                                                      "sha256": binding["sha256"], "detail": {"path": str(extra)}})
+            spec.write_text(json.dumps(approved), encoding="utf-8")
+            bridge = entry_gates.recorded_full79_bridge(spec, hashlib.sha256(spec.read_bytes()).hexdigest(),
+                                                      client="claude", fixture_env=self.sources)
+        self.assertEqual(len(bridge["resolved"]), 49)
+        self.assertEqual(len(bridge["unit"]["inputs"]["resolved"]), 55)
+
+    def test_recorded_certification_reuse_rechecks_current_source_and_original_validator(self) -> None:
+        spec, approved, snapshot = recorded_bridge_fixture(self.root, self.sources)
+        with mock.patch.object(budget_carry, "_snapshot", return_value=snapshot):
+            bridge = entry_gates.recorded_full79_bridge(spec, hashlib.sha256(spec.read_bytes()).hexdigest(),
+                                                      client="claude", fixture_env=self.sources)
+        current_source = self.root / "current-managed-source.py"
+        current_source.write_text("source = 1\n", encoding="utf-8")
+        def inputs(_repo, declaration, _cache):
+            return [{"category": "managed", "name": "repo:current-managed-source.py",
+                     "sha256": hashlib.sha256(current_source.read_bytes()).hexdigest()}, *declaration["resolved"]]
+        saved = {}
+        for name in certification.scenario_names("claude"):
+            unit_id = certification.scenario_unit_prefix("claude") + name
+            fixed = bridge["fixtures"] + (bridge["resolved"] if unit_id == entry_gates.RECORDED_FULL79_ID else [])
+            saved[unit_id] = {"inputs": inputs(None, {"resolved": fixed}, None), "spec": copy.deepcopy(approved)}
+        manifest = {"units": [{"unit_id": unit_id, "record_sha256": "1" * 64} for unit_id in saved]}
+        class Store:
+            def __init__(self, _root):
+                pass
+            def manifest_path(self, _run_id):
+                return Path("manifest")
+            def record_path(self, unit_id, _digest):
+                return Path(unit_id)
+            def read(self, path):
+                return manifest if str(path) == "manifest" else saved[str(path)]
+        cert_path = self.root / "real-certification.json"
+        cert_path.write_text("{}", encoding="utf-8")
+        payload = {"record_store": str(self.root), "unit_manifest": {"run_id": "original-run"}}
+        records = entry_gates._unit_records_module()
+        with mock.patch.object(certification, "verify_certification", return_value=payload) as validate, \
+                mock.patch.object(certification, "_RecordStore", Store), \
+                mock.patch.object(records.RepoIndex, "load", return_value=object()), \
+                mock.patch.object(records, "declared_inputs", side_effect=inputs):
+            entry_gates.verify_recorded_reuse(REPO, cert_path, bridge, [])
+            validate.assert_called_with(cert_path, client="claude")
+            current_source.write_text("source = 2\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "当前输入已变化"):
+                entry_gates.verify_recorded_reuse(REPO, cert_path, bridge, [])
+        with mock.patch.object(certification, "verify_certification", side_effect=certification.CertificationError("身份不一致")):
+            with self.assertRaises(certification.CertificationError):
+                entry_gates.verify_recorded_reuse(REPO, cert_path, bridge, [])
 
 
 if __name__ == "__main__":

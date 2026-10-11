@@ -353,12 +353,39 @@ class Orchestrator:
             return self.unit_inherit_full_gates_request
         return self.unit_inherit_request
 
+    def _recorded_bridge_enabled(self) -> bool:
+        keys = ("CLAUDE_ENTRY_FULL79_SPEC", "CLAUDE_ENTRY_FULL79_SPEC_SHA256")
+        configured = any(self.params.get(key) for key in keys)
+        if configured and (self.ctx.client != "claude" or not all(self.params.get(key) for key in keys)):
+            raise OrchestratorError("完整79接线只允许Claude，文件与外持SHA必须成对提供")
+        return configured
+
+    def _recorded_reuse_products(self, out: Path, certification: Path) -> dict[str, str]:
+        """仅登记正式脚本调用原record-reuse的真实输出；同部署not_needed合法，缺证明不能写通过。"""
+
+        result = json.loads((out / "pre-a3-reuse.json").read_text(encoding="utf-8"))
+        if not isinstance(result, dict):
+            raise OrchestratorError("原复用消费端输出必须是对象")
+        if result.get("reused_certification") != str(certification):
+            raise OrchestratorError("原复用消费端返回的认证坐标不符")
+        status, receipt = result.get("status"), result.get("reuse_receipt")
+        if status == "not_needed" and receipt is None:
+            return {}
+        if status not in {"recorded", "existing"} or not isinstance(receipt, str):
+            raise OrchestratorError("原复用消费端没有返回有效复用状态")
+        path = Path(receipt)
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise OrchestratorError("原复用收据缺失或不是普通绝对路径文件")
+        return {"reuse-receipt": str(path)}
+
     def entry_gates_and_pre_a3(self, gates_run: bool, pre_a3_run: bool) -> None:
         """入口门禁与 pre-A3 同一次运行（E2-04）：pre-A3 要做就纳入，否则复核并沿用记录里的认证；入口门禁沿用、只有
         pre-A3 要做时，用入口门禁的 pre-a3 组合单独签（E3-02：同一测试树、同一部署一致性核对、同一记录库，场景可承接，
         认证从单元执行记录组装）。"""
 
-        steps = [step for step, needed in (("entry-gates", gates_run), ("pre-a3", pre_a3_run)) if needed]
+        # 已有步骤记录的桥接续跑也登记本次原消费端验证与真实复用收据，不修改旧九单元记录。
+        refresh_reuse = gates_run and self.ctx.client == "claude" and bool(self.params.get("CLAUDE_ENTRY_FULL79_SPEC"))
+        steps = [step for step, needed in (("entry-gates", gates_run), ("pre-a3", pre_a3_run or refresh_reuse)) if needed]
         audit_args = (["--audit-reads"] if self.audit_reads else []) + (["--audit-strict"] if self.audit_strict else [])
         if self.audit_policy is not None:
             audit_args += ["--audit-policy", str(self.audit_policy)]
@@ -366,21 +393,26 @@ class Orchestrator:
             ES.begin(self.ctx.step(step), self.ctx)
         try:
             activation = self.record_product("policy-activation", "activation")
-            certification = (fresh(Path(self.p("PRE_A3_CERTIFICATION"))) if pre_a3_run
+            bridge = self._recorded_bridge_enabled()
+            # 显式接线时已有的独立九认证交给原消费端验真，不能因缺入口步骤记录就换坐标再跑九场景。
+            external_present = bridge and pre_a3_run and Path(self.p("PRE_A3_CERTIFICATION")).exists()
+            run_scenarios = pre_a3_run and not external_present
+            certification = (fresh(Path(self.p("PRE_A3_CERTIFICATION"))) if run_scenarios
+                             else Path(self.p("PRE_A3_CERTIFICATION")) if external_present
                              else self.record_product("pre-a3", "certification"))
             source = (self.p("ENTRY_BUNDLE"), self.p("ENTRY_BRANCH"), self.p("ENTRY_COMMIT"))
             self.latest_deploy()
-        except (OrchestratorError, OSError) as error:
+        except (OrchestratorError, ES.EntryStepsError, OSError) as error:
             for step in steps:
                 self.outcomes[step].reasons.append(f"执行前准备失败：{error}")
                 self._finish(step, False, {})
             return
         if gates_run:
             out = self.run_dir / "entry-gates"
-            inherit_request = self._unit_inherit_request_for("entry" if pre_a3_run else "full-gates")
+            inherit_request = self._unit_inherit_request_for("entry" if run_scenarios else "full-gates")
             rc = self.run("entry-gates", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "entry", "--out", str(out),
                                           "--policy-activation", str(activation), "--pre-a3-certification", str(certification),
-                                          "--pre-a3-mode", "run" if pre_a3_run else "present",
+                                          "--pre-a3-mode", "run" if run_scenarios else "present",
                                           "--mode", self._gates_mode(),
                                           *(["--full-set-request", str(self.full_set_request)] if self.full_set_request else []),
                                           *(["--unit-inherit-request", str(inherit_request)] if inherit_request else []),
@@ -402,19 +434,29 @@ class Orchestrator:
                 "p0-check-egress-spec": str(out / "p0" / "check-egress-spec.json")})
         else:
             out = self.run_dir / "pre-a3-gates"
-            self.run("pre-a3", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "pre-a3", "--out", str(out),
+            rc = self.run("pre-a3", ["bash", str(self.driver_dir / "entry-gates.sh"), "--profile", "pre-a3", "--out", str(out),
                                 "--policy-activation", str(activation), "--pre-a3-certification", str(certification),
-                                "--pre-a3-mode", "run", "--mode", self._gates_mode(),
+                                "--pre-a3-mode", "run" if run_scenarios else "present", "--mode", self._gates_mode(),
                                           *(["--full-set-request", str(self.full_set_request)] if self.full_set_request else []),
                                 *(["--unit-inherit-request", str(self.unit_inherit_request)] if self.unit_inherit_request else []),
                                 *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                 *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
                                 *audit_args, *source])
-        if pre_a3_run:
+        if pre_a3_run or refresh_reuse:
+            reuse_products: dict[str, str] = {}
+            pre_a3_passed = certification.is_file()
+            if bridge:
+                try:
+                    if rc not in {0, 1}:
+                        raise OrchestratorError("正式入口未完成认证与复用消费，不能凭已有文件记通过")
+                    reuse_products = self._recorded_reuse_products(out, certification)
+                except (OrchestratorError, OSError, ValueError, TypeError) as error:
+                    pre_a3_passed = False
+                    self.outcomes["pre-a3"].reasons.append(f"完整79接线复核失败：{error}")
             if not certification.is_file():
                 self.outcomes["pre-a3"].reasons.append(
                     f"pre-A3 认证没有签发（没通过的认证只写旁路文件 {certification.parent}/*.failed-*.json）")
-            self._finish("pre-a3", certification.is_file(), {"certification": str(certification)})
+            self._finish("pre-a3", pre_a3_passed, {"certification": str(certification), **reuse_products})
 
     def step_zero_request_smoke(self) -> tuple[bool, dict[str, str]]:
         stamp = self.p("STAMP")

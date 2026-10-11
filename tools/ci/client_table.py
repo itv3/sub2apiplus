@@ -269,6 +269,7 @@ _CLAUDE: Mapping[str, Any] = {
         "BOUNDARY_CODEX_ACCOUNT_ID", "BOUNDARY_CODEX_API_KEY_ID", "BOUNDARY_CODEX_MODEL", "PRODUCTION_COMMIT",
         "CLAUDE_2_1_226_RELAY_FIXTURE", "CLAUDE_2_1_226_FREEZE_FIXTURE", "CLAUDE_2_1_226_STATIC_FIXTURE",
         "CLAUDE_TARGET_SCENARIOS_JSON",
+        "CLAUDE_ENTRY_FULL79_SPEC", "CLAUDE_ENTRY_FULL79_SPEC_SHA256",
     ),
     # 固定顺序为 relay、旧 freeze、历史 static；relay 还读取同级补充取证，输入声明覆盖共同父根。
     "pre_a3_fixture_keys": (

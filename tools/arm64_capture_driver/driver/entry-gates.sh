@@ -286,6 +286,21 @@ check_deployed_others() {
   DEPLOY_OTHERS_SOURCE=(--source "deploy_receipts_others=$DEPLOY_OTHERS")
 }
 PRE_A3_MODE=none; PRE_A3_ARGS=(); PA3_PARENT=""; DEPLOY=""
+RECORDED_BRIDGE=false
+if [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then
+  if [ "$CT_CLIENT" != claude ] || [ -z "${CLAUDE_ENTRY_FULL79_SPEC:-}" ] || [ -z "${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then
+    echo "ENTRY_GATES_ABORTED：完整79接线只允许Claude，文件与外持SHA必须成对提供" >&2; exit 3
+  fi
+  RECORDED_BRIDGE=true
+fi
+verify_recorded_full79() {
+  local args=(--spec "$CLAUDE_ENTRY_FULL79_SPEC" --sha256 "$CLAUDE_ENTRY_FULL79_SPEC_SHA256") name
+  for name in ${CT_PRE_A3_FIXTURE_KEYS[@]+"${CT_PRE_A3_FIXTURE_KEYS[@]}"}; do
+    args+=(--pre-a3-env "$name=${!name:-}")
+  done
+  if [ "$#" -gt 0 ]; then args+=(--certification "$1" --tree "$TREE" --data-root "$D"); fi
+  ( cd "$D" && PYTHONPATH="$D" python3 -B "$DRV/entry_gates.py" recorded-full79-inputs "${args[@]}" ) > "$OUT/recorded-full79-inputs.json"
+}
 # B5a-04：pre-A3 认证模块的 plan／find-reusable／issue／record-reuse 与策略认证按本轮客户端（参数 CLIENT，缺省 codex）。
 # B5a-06 起模块名与追加的客户端参数取客户端表（CT_PRE_A3_MODULE、CT_POLICY_CERTIFICATION_MODULE、CT_CLIENT_ARGV）：Codex
 # 的客户端参数为空，命令行与改造前逐字相同；Claude 带 --client claude（场景单元 ID 前缀、身份、部署收据与认证合同随之按
@@ -321,6 +336,15 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
       if [ -z "${!name:-}" ]; then echo "ENTRY_GATES_ABORTED：pre-A3 缺少本轮显式来源 ${name}" >&2; exit 3; fi
       PRE_A3_ARGS+=(--pre-a3-env "$name=${!name}")
     done
+    if [ "$RECORDED_BRIDGE" = true ]; then
+      if [ "${#AUDIT_POLICY_ARGS[@]}" -eq 0 ]; then
+        echo "ENTRY_GATES_ABORTED：固定79运行必须显式提供冻结audit-policy，不能改写其它单元承接策略" >&2; exit 3
+      fi
+      verify_recorded_full79
+      PRE_A3_ARGS+=(--recorded-full79-spec "$CLAUDE_ENTRY_FULL79_SPEC" --recorded-full79-spec-sha256 "$CLAUDE_ENTRY_FULL79_SPEC_SHA256")
+      # 固定79没有运行时闭合读集，只生成真实重跑记录；严格执行器不得把它登记为可承接。
+      AUDIT_READS=true; AUDIT_STRICT=true
+    fi
     if [ -d "$PYC_MANAGED" ]; then PRE_A3_ARGS+=(--pre-a3-env "PYTHONPYCACHEPREFIX=$PYC_MANAGED"); fi
     echo "pre-A3 场景纳入本次运行：场景父目录 ${PA3_PARENT}"
   }
@@ -330,10 +354,12 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
   elif [ -f "$PRE_A3_CERTIFICATION" ]; then
     # 已有的本轮认证先按 stage1 同一口径复核（无效即在跑门禁之前停下，不白跑一遍）。
     python3 -m "$CT_PRE_A3_MODULE" find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} >/dev/null
+    if [ "$RECORDED_BRIDGE" = true ]; then verify_recorded_full79 "$PRE_A3_CERTIFICATION"; fi
     PRE_A3_MODE=present; echo "PRE_A3_PRESENT $PRE_A3_CERTIFICATION（不纳入本次运行）"
   elif [ "$PRE_A3_SOURCE" = present ]; then
     echo "ENTRY_GATES_ABORTED：--pre-a3-mode present 要求认证已在：${PRE_A3_CERTIFICATION}"; exit 3
   elif REUSE=$(python3 -m "$CT_PRE_A3_MODULE" find-reusable --search-root "$(dirname "$PRE_A3_CERTIFICATION")" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}); then
+    if [ "$RECORDED_BRIDGE" = true ]; then verify_recorded_full79 "$REUSE"; fi
     cp -p "$REUSE" "$PRE_A3_CERTIFICATION"; chmod 600 "$PRE_A3_CERTIFICATION"
     PRE_A3_MODE=reused; echo "PRE_A3_REUSED $REUSE（不纳入本次运行）"
   else
@@ -456,7 +482,13 @@ fi
 if [ "$PRE_A3_MODE" != none ] && [ "$PRE_A3_OK" = true ]; then
   # 与 stage1 建账本前同一口径复核本轮坐标；跨部署复用登记复用收据（同一组绑定不重复写）。
   python3 -m "$CT_PRE_A3_MODULE" find-reusable --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} >/dev/null
-  python3 -m "$CT_PRE_A3_MODULE" record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-300
+  if [ "$RECORDED_BRIDGE" = true ]; then
+    verify_recorded_full79 "$PRE_A3_CERTIFICATION"
+    # 保存原消费端的实际输出；编排器只据它登记真实收据，失败时不会凭已有认证写passed。
+    python3 -m "$CT_PRE_A3_MODULE" record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | tee "$OUT/pre-a3-reuse.json" | cut -c1-300
+  else
+    python3 -m "$CT_PRE_A3_MODULE" record-reuse --certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} | cut -c1-300
+  fi
   echo "PRE_A3_DONE $PRE_A3_CERTIFICATION（${PRE_A3_MODE}）"
 fi
 AFTER_STATUS=$(tree_status 5)

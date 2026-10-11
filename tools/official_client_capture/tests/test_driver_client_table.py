@@ -311,6 +311,26 @@ class ParseEnvClaudeTests(unittest.TestCase):
         with self.assertRaisesRegex(self.parser.EnvFileError, "不得写 CAMPAIGN_PURPOSE"):
             self.parser.parse(codex + "CAMPAIGN_PURPOSE=production_replacement\n")
 
+    def test_recorded_full79_spec_pair_is_explicit_claude_only_and_cannot_leak_from_outer_environment(self) -> None:
+        spec = _write_text(self.root / "full79.json", "{}\n")
+        pair = f'CLAUDE_ENTRY_FULL79_SPEC="{spec}"\nCLAUDE_ENTRY_FULL79_SPEC_SHA256=' + "a" * 64 + "\n"
+        values = self.parser.parse(self.text + pair)
+        self.assertEqual(values["CLAUDE_ENTRY_FULL79_SPEC"], str(spec))
+        self.assertEqual(values["CLAUDE_ENTRY_FULL79_SPEC_SHA256"], "a" * 64)
+        for text in (f'CLAUDE_ENTRY_FULL79_SPEC="{spec}"\n', "CLAUDE_ENTRY_FULL79_SPEC_SHA256=" + "a" * 64 + "\n",
+                     pair.replace("a" * 64, "bad")):
+            with self.subTest(text=text), self.assertRaises(self.parser.EnvFileError):
+                self.parser.parse(self.text + text)
+        with self.assertRaises(self.parser.EnvFileError):
+            self.parser.parse(self.fixture.env_file.read_text(encoding="utf-8") + pair)
+        env_file = _write_text(self.root / "plain-claude.sh", self.text)
+        completed = subprocess.run([sys.executable, "-B", str(DRIVER / "parse_env.py"), str(env_file)],
+                                   env={**os.environ, "CLAUDE_ENTRY_FULL79_SPEC": str(spec),
+                                        "CLAUDE_ENTRY_FULL79_SPEC_SHA256": "a" * 64}, capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("unset CLAUDE_ENTRY_FULL79_SPEC\n", completed.stdout)
+        self.assertIn("unset CLAUDE_ENTRY_FULL79_SPEC_SHA256\n", completed.stdout)
+
     def test_explicit_target_scenarios_preserve_default_and_feed_both_plan_consumers(self) -> None:
         """原模板默认值不改；新私有目标清单由同一安全派生值传给便宜检查和预检 plan。"""
 
@@ -543,7 +563,7 @@ class EntryStepsClaudeTests(unittest.TestCase):
 
     def test_claude_context_reads_claude_receipt_and_identity(self) -> None:
         ctx = self.ctx()
-        self.assertIs(ctx.steps, es.STEPS_BY_CLIENT["claude"])
+        self.assertEqual(ctx.steps, es.STEPS_BY_CLIENT["claude"], "缺省步骤内容与声明保持逐项一致")
         self.assertEqual(ctx.latest_deploy_receipt(), self.receipt)
         field = es.resolve(es.Input("upstream", "deploy_field", "tool_files_sha256"), ctx)
         self.assertEqual(field["detail"]["value"], json.dumps("e" * 64))

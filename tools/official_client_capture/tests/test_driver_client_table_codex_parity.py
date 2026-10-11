@@ -72,6 +72,8 @@ NEW_OPTIONAL_UNSETS = "".join(f"unset {key}\n" for key in (
     "ENGINEERING_ROOT_MAX_USED_PERCENT",
     # B5a-09／B2-11：唯一正常 Codex 输出差异是清理外层残留的 Claude 目标清单键，不导出或使用它。
     "CLAUDE_TARGET_SCENARIOS_JSON",
+    # B5a-09固定79接线：Codex只清除外层Claude专属参数，不消费或导出。
+    "CLAUDE_ENTRY_FULL79_SPEC", "CLAUDE_ENTRY_FULL79_SPEC_SHA256",
 ))
 
 
@@ -998,6 +1000,53 @@ FIXTURE_PROJECT_GUARD_SHELL_RESIDUALS = {'guard.sh': ['-python3 -m tools.officia
               '+PY',
               '+}',
               '+guard_project_status | python3 -c "']}
+# B5a-09固定79接线只由Claude显式参数触发；Codex分支与原消费命令保持不变。
+# 新增条件与函数保留实际逐行残差，合法／拒绝分支及未配置行为由接线短验另核。
+RECORDED_BRIDGE_BASELINE_COMMIT = 'c12674dcc0c10e0b26a3d3ed1ae4e6784fd0a986'
+RECORDED_BRIDGE_SHELL_DIGESTS = {'entry-gates.sh': 'c2a1b66703be613d700afcfa5eb2ba163a665b68775c0d5304f36aa26f2af7e4'}
+RECORDED_BRIDGE_SHELL_RESIDUALS = {'entry-gates.sh': ['+RECORDED_BRIDGE=false',
+                    '+if [ -n "${CLAUDE_ENTRY_FULL79_SPEC:-}${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then',
+                    '+  if [ codex != claude ] || [ -z "${CLAUDE_ENTRY_FULL79_SPEC:-}" ] || [ -z '
+                    '"${CLAUDE_ENTRY_FULL79_SPEC_SHA256:-}" ]; then',
+                    '+    echo "ENTRY_GATES_ABORTED：完整79接线只允许Claude，文件与外持SHA必须成对提供" >&2; exit 3',
+                    '+  fi',
+                    '+  RECORDED_BRIDGE=true',
+                    '+fi',
+                    '+verify_recorded_full79() {',
+                    '+  local args=(--spec "$CLAUDE_ENTRY_FULL79_SPEC" --sha256 "$CLAUDE_ENTRY_FULL79_SPEC_SHA256") '
+                    'name',
+                    '+  for name in; do',
+                    '+    args+=(--pre-a3-env "$name=${!name:-}")',
+                    '+  done',
+                    '+  if [ "$#" -gt 0 ]; then args+=(--certification "$1" --tree "$TREE" --data-root "$D"); fi',
+                    '+  ( cd "$D" && PYTHONPATH="$D" python3 -B "$DRV/entry_gates.py" recorded-full79-inputs '
+                    '"${args[@]}" ) > "$OUT/recorded-full79-inputs.json"',
+                    '+}',
+                    '+    if [ "$RECORDED_BRIDGE" = true ]; then',
+                    '+      if [ "${#AUDIT_POLICY_ARGS[@]}" -eq 0 ]; then',
+                    '+        echo "ENTRY_GATES_ABORTED：固定79运行必须显式提供冻结audit-policy，不能改写其它单元承接策略" >&2; exit 3',
+                    '+      fi',
+                    '+      verify_recorded_full79',
+                    '+      PRE_A3_ARGS+=(--recorded-full79-spec "$CLAUDE_ENTRY_FULL79_SPEC" '
+                    '--recorded-full79-spec-sha256 "$CLAUDE_ENTRY_FULL79_SPEC_SHA256")',
+                    '+      AUDIT_READS=true; AUDIT_STRICT=true',
+                    '+    fi',
+                    '+    if [ "$RECORDED_BRIDGE" = true ]; then verify_recorded_full79 "$PRE_A3_CERTIFICATION"; fi',
+                    '+    if [ "$RECORDED_BRIDGE" = true ]; then verify_recorded_full79 "$REUSE"; fi',
+                    '-  python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse '
+                    '--certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation '
+                    '"$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" | cut -c1-300',
+                    '+  if [ "$RECORDED_BRIDGE" = true ]; then',
+                    '+    verify_recorded_full79 "$PRE_A3_CERTIFICATION"',
+                    '+    python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse '
+                    '--certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation '
+                    '"$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" | tee '
+                    '"$OUT/pre-a3-reuse.json" | cut -c1-300',
+                    '+  else',
+                    '+    python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification record-reuse '
+                    '--certification "$PRE_A3_CERTIFICATION" --deployment-receipt "$DEPLOY" --policy-activation '
+                    '"$POLICY_ACTIVATION" --receipt-root "$(dirname "$PRE_A3_CERTIFICATION")" | cut -c1-300',
+                    '+  fi']}
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
     ("B5a-10", B5A10_BASELINE_COMMIT, B5A10_SHELL_DIGESTS, B5A10_SHELL_RESIDUALS),
@@ -1011,6 +1060,7 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("升级入口可选并发透传", ENTRY_PARALLEL_BASELINE_COMMIT, ENTRY_PARALLEL_SHELL_DIGESTS, ENTRY_PARALLEL_SHELL_RESIDUALS),
     ("engineering-disk", ENGINEERING_DISK_BASELINE_COMMIT, ENGINEERING_DISK_SHELL_DIGESTS, ENGINEERING_DISK_SHELL_RESIDUALS),
     ("B5a-09-fixture-project-guard", FIXTURE_PROJECT_GUARD_BASELINE_COMMIT, FIXTURE_PROJECT_GUARD_SHELL_DIGESTS, FIXTURE_PROJECT_GUARD_SHELL_RESIDUALS),
+    ("B5a-09固定79接线", RECORDED_BRIDGE_BASELINE_COMMIT, RECORDED_BRIDGE_SHELL_DIGESTS, RECORDED_BRIDGE_SHELL_RESIDUALS),
 )
 
 

@@ -651,6 +651,12 @@ class Context:
         if self.params.get(AUDIT_POLICY_PARAM):
             # 同一路径的策略内容变化也必须失效；登记范围由真实测试发现与执行器再核对。
             extra += (Input("upstream", "file", "{" + AUDIT_POLICY_PARAM + "}"),)
+        bridge_keys = ("CLAUDE_ENTRY_FULL79_SPEC", "CLAUDE_ENTRY_FULL79_SPEC_SHA256")
+        if any(key in self.params for key in bridge_keys):
+            if self.client != "claude" or not all(self.params.get(key) for key in bridge_keys):
+                raise EntryStepsError("完整79接线只允许Claude，文件与外持SHA必须成对提供")
+            # 聚合项实读同一消费端的六项夹具与原预算来源全集；不能只绑定路径或自行刷新外持SHA。
+            extra += (*_params(*bridge_keys), Input("environment", "recorded_full79"))
         # 仅这两步登记显式调度与审计参数，缺省规格及其它步骤保持原样。
         return tuple(replace(step, inputs=step.inputs + extra)
                      if step.step_id in ("entry-gates", "pre-a3") else step for step in steps)
@@ -953,6 +959,23 @@ def _resolve(item: Input, ctx: Context) -> dict[str, Any]:
         return _value_entry(item, str(ctx.identity()[item.arg]))
     if kind == "file":
         return _file_entry(item, Path(ctx.expand(item.arg)))
+    if kind == "recorded_full79":
+        argv = [sys.executable, "-B", str(ctx.driver_dir / "entry_gates.py"), "recorded-full79-inputs",
+                "--spec", ctx.expand("{CLAUDE_ENTRY_FULL79_SPEC}"),
+                "--sha256", ctx.expand("{CLAUDE_ENTRY_FULL79_SPEC_SHA256}")]
+        for key in ctx.client_spec["pre_a3_fixture_keys"]:
+            argv += ["--pre-a3-env", key + "=" + ctx.expand("{" + key + "}")]
+        environment = {**os.environ, "PYTHONPATH": str(ctx.data_root), "PYTHONDONTWRITEBYTECODE": "1"}
+        rc, out = ctx.runner(argv, environment, ctx.data_root)
+        try:
+            inputs = json.loads(out)["inputs"]
+            if (rc != 0 or not isinstance(inputs, list) or len(inputs) < 55
+                    or any(entry.get("sha256") == MISSING for entry in inputs)):
+                raise ValueError("接线来源数量或摘要不闭合")
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise FactUnavailable(f"完整79接线实读失败（rc={rc}）：{out[-300:]}") from error
+        return {"category": item.category, "name": item.name, "sha256": inputs_sha256(inputs),
+                "detail": {"inputs": inputs}}
     if kind == "tree":
         root = Path(ctx.expand(item.arg))
         if root.is_symlink() or not root.is_dir():

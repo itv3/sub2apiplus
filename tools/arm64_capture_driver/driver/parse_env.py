@@ -88,6 +88,8 @@ OPTIONAL_KEYS = (
     "ENGINEERING_ROOT_MAX_USED_PERCENT",
     # B5a-09／B2-11：Claude 显式选择本轮独立目标场景输入；原模板与默认布局不改，正式 plan 仍严格核对来源绑定。
     "CLAUDE_TARGET_SCENARIOS_JSON",
+    # 固定79接线只消费本轮外持单元及其摘要，不继承外层环境。
+    "CLAUDE_ENTRY_FULL79_SPEC", "CLAUDE_ENTRY_FULL79_SPEC_SHA256",
 )
 # 边界核对轮次参数的格式（B5b-01b 续）：两个 ID 是正整数，模型是安全标识，生产提交是完整 40 位小写 sha1（与
 # capture-candidate boundary-check 的入口校验同一口径）。
@@ -310,6 +312,13 @@ def parse(text: str) -> dict[str, str]:
         scenarios = plain_path(values["CLAUDE_TARGET_SCENARIOS_JSON"], "CLAUDE_TARGET_SCENARIOS_JSON")
         if not scenarios.is_file():
             raise EnvFileError("CLAUDE_TARGET_SCENARIOS_JSON 必须是现存普通文件")
+    if ("CLAUDE_ENTRY_FULL79_SPEC" in values) != ("CLAUDE_ENTRY_FULL79_SPEC_SHA256" in values):
+        raise EnvFileError("完整79外持单元路径与SHA必须成对提供")
+    if "CLAUDE_ENTRY_FULL79_SPEC" in values:
+        path = plain_path(values["CLAUDE_ENTRY_FULL79_SPEC"], "CLAUDE_ENTRY_FULL79_SPEC")
+        digest = values["CLAUDE_ENTRY_FULL79_SPEC_SHA256"]
+        if not path.is_file() or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise EnvFileError("完整79外持单元必须是现存普通文件，SHA须为64位小写十六进制")
     missing = [key for key in required_keys(spec["client"]) if key not in values]
     if missing:
         raise EnvFileError(f"参数文件缺少键：{missing}")

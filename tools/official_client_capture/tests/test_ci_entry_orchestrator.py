@@ -15,6 +15,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -678,6 +679,96 @@ class OrchestratorPieceTests(unittest.TestCase):
             with self.subTest(key=key, value=value):
                 with self.assertRaisesRegex(parse_env.EnvFileError, key):
                     parse_env.parse(text(**{key: value}))
+
+
+class RecordedEntryBridgeTests(OrchestratorTestCase):
+    """独立九认证的正式入口消费：缺步骤记录仍验真复用，失败不伪造通过，公共门禁保持实时执行。"""
+
+    def make_pair(self, *, client: str = "claude", configured: bool = True, rc: int = 0,
+                  reuse_status: str = "not_needed", omit_result: bool = False,
+                  invalid_shape: bool = False) -> eo.Orchestrator:
+        params = {**self.fx.params, "CLIENT": client}
+        if configured:
+            params.update({"CLAUDE_ENTRY_FULL79_SPEC": str(self.fx.root / "full79.json"),
+                           "CLAUDE_ENTRY_FULL79_SPEC_SHA256": "1" * 64})
+        self.reuse_receipt = self.fx.root / "original-reuse.json"
+        _write_json(self.reuse_receipt, {"receipt": "real-command-result"})
+        def inputs_runner(argv, env=None, cwd=None):
+            if "recorded-full79-inputs" in argv:
+                return 0, json.dumps({"inputs": [{"name": f"file:{index}", "sha256": "a" * 64,
+                                                  "category": "environment"} for index in range(55)]})
+            return self.fx.runner(argv, env, cwd)
+        def command_runner(argv, cwd, env, log):
+            if argv[0] == "bash" and argv[1].endswith("entry-gates.sh"):
+                value = self.commands(argv, cwd, env, log)
+                out = Path(_option(argv, "--out"))
+                if not omit_result:
+                    _write_json(out / "pre-a3-reuse.json", {
+                        "reused_certification": _option(argv, "--pre-a3-certification"), "status": reuse_status,
+                        "reuse_receipt": None if reuse_status == "not_needed" else str(self.reuse_receipt)}
+                        if not invalid_shape else [])
+                return rc or value
+            return self.commands(argv, cwd, env, log)
+        orchestrator = eo.Orchestrator(params, driver_dir=self.fx.driver, run_dir=self.fx.root / "pair-run",
+                                       steps_dir=self.fx.steps_dir, runner=command_runner, es_runner=inputs_runner,
+                                       unit_inherit_request=self.fx.root / "entry-request.json",
+                                       unit_inherit_full_gates_request=self.fx.root / "full-gates-request.json")
+        for step_id in ("entry-gates", "pre-a3"):
+            orchestrator.outcomes[step_id] = eo.Outcome(step_id, "run")
+        step = orchestrator.ctx.step("policy-activation")
+        eo.ES.begin(step, orchestrator.ctx)
+        eo.ES.finish(step, orchestrator.ctx, status="passed", products={"activation": params["POLICY_ACTIVATION"]})
+        return orchestrator
+
+    def test_existing_independent_certification_uses_present_and_full_gates_request(self) -> None:
+        orchestrator = self.make_pair(reuse_status="recorded")
+        with mock.patch.object(orchestrator, "latest_deploy", return_value=self.fx.root / "deploy.json"):
+            orchestrator.entry_gates_and_pre_a3(True, True)
+        call = self.commands.calls[-1]
+        self.assertEqual(_option(call, "--pre-a3-mode"), "present")
+        self.assertEqual(_option(call, "--pre-a3-certification"), self.fx.params["PRE_A3_CERTIFICATION"])
+        self.assertEqual(_option(call, "--unit-inherit-request"), str(self.fx.root / "full-gates-request.json"))
+        self.assertEqual(orchestrator.outcomes["pre-a3"].status, "passed")
+        record = eo.ES.read_record(self.fx.steps_dir, "pre-a3")
+        self.assertEqual({item["name"] for item in record["products"]}, {"certification", "reuse-receipt"})
+        self.assertEqual(record["origin"], "execution", "登记本次真实消费，不改旧单元的处置或记录")
+        self.reuse_receipt.write_text("damaged", encoding="utf-8")
+        self.assertTrue(eo.ES._product_problems(orchestrator.ctx.step("pre-a3"), record), "原步骤消费者继续核复用收据内容")
+
+    def test_not_needed_is_legal_and_next_entry_still_verifies_original_source(self) -> None:
+        orchestrator = self.make_pair()
+        with mock.patch.object(orchestrator, "latest_deploy", return_value=self.fx.root / "deploy.json"):
+            orchestrator.entry_gates_and_pre_a3(True, True)
+            self.assertEqual(orchestrator.outcomes["pre-a3"].status, "passed")
+            self.assertNotIn("reuse-receipt", orchestrator.outcomes["pre-a3"].products)
+            orchestrator.entry_gates_and_pre_a3(True, False)
+        self.assertEqual(len(self.commands.calls), 2, "公共门禁仍实时执行两次")
+        self.assertTrue(all(_option(call, "--pre-a3-mode") == "present" for call in self.commands.calls))
+        self.assertEqual(orchestrator.outcomes["pre-a3"].status, "passed")
+
+    def test_failed_source_or_record_reuse_never_marks_existing_certification_passed(self) -> None:
+        for rc, omit, status, invalid_shape in ((3, False, "not_needed", False), (0, True, "not_needed", False),
+                                               (0, False, "failed", False), (0, False, "not_needed", True)):
+            with self.subTest(rc=rc, missing=omit, status=status, invalid_shape=invalid_shape):
+                orchestrator = self.make_pair(rc=rc, omit_result=omit, reuse_status=status, invalid_shape=invalid_shape)
+                out = orchestrator.run_dir / "entry-gates/pre-a3-reuse.json"
+                out.unlink(missing_ok=True)
+                with mock.patch.object(orchestrator, "latest_deploy", return_value=self.fx.root / "deploy.json"):
+                    orchestrator.entry_gates_and_pre_a3(True, True)
+                self.assertTrue(Path(self.fx.params["PRE_A3_CERTIFICATION"]).is_file())
+                self.assertEqual(orchestrator.outcomes["pre-a3"].status, "failed")
+                self.assertEqual(eo.ES.read_record(self.fx.steps_dir, "pre-a3")["status"], "failed")
+
+    def test_unconfigured_claude_and_codex_keep_fresh_run_path(self) -> None:
+        for client in ("claude", "codex"):
+            with self.subTest(client=client):
+                orchestrator = self.make_pair(client=client, configured=False)
+                with mock.patch.object(orchestrator, "latest_deploy", return_value=self.fx.root / "deploy.json"):
+                    orchestrator.entry_gates_and_pre_a3(True, True)
+                call = self.commands.calls[-1]
+                self.assertEqual(_option(call, "--pre-a3-mode"), "run")
+                self.assertNotEqual(_option(call, "--pre-a3-certification"), self.fx.params["PRE_A3_CERTIFICATION"])
+                self.assertEqual(_option(call, "--unit-inherit-request"), str(self.fx.root / "entry-request.json"))
 
 
 if __name__ == "__main__":

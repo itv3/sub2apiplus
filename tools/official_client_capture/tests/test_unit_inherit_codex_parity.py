@@ -691,7 +691,147 @@ ENTRY_DRYRUN_AUDIT_SOURCE_DIGESTS: dict[str, str] = {
     "tools/ci/background_validation.py": "5232ffa04deef6c3fe5ecae3bc235d5efe33417271c1b9361d1744f34c006ec9",
 }
 ENTRY_DRYRUN_AUDIT_SOURCE_REMOVED_LINES: dict[str, list[str]] = {"tools/ci/background_validation.py": []}
+# df90c329e接线测试单元的明确登记与收窄提案；无policy、无scope仍按原静态输入与Codex旧消费路径。
+# 策略校验的ID集合扩至实际测试单元，错误文案相应说明；旧承接、旧记录及未审计执行由原行为对照守住。
+READ_SCOPE_HISTORY_BASELINE = '8d72f39f69d4d71b8fef9d8ae56dfa7ab1c7fc63'
+READ_SCOPE_HISTORY_DIGESTS = {'tools/ci/entry_gates.py': '8c6e5bc6a4d77985b2114fa01242a5492b01ec9b003c27d9e278ce6e051ca4e4',
+ 'tools/ci/unit_executor.py': 'f68b1891a6d8e4a499f2e261a9757ead0f1e8bd448d4edbd435cc58c69b663c2',
+ 'tools/ci/unit_records.py': '5fe0b37ab7f6cb118da98c2123eb1b552bb621dec43c7d644b22f394cb3af2b6'}
+READ_SCOPE_HISTORY_REMOVED = {'tools/ci/entry_gates.py': ['        _unit_records_module().validate_audit_policy(audit_policy, {unit["unit_id"] for unit in '
+                             'units})',
+                             'def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]]) -> None:',
+                             '    """收窄提案只用于新一轮验证；重放来源并逐项核对当前命令，保留原门禁集合。"""',
+                             '        if unit_id in seen or unit_id not in units:',
+                             '            raise ValueError("收窄提案重复或不属于当前命令单元")',
+                             '    plan.add_argument("--input-scope", type=Path, action="append", default=[], '
+                             'help="本轮命令单元的输入收窄提案，可重复指定；必须重新执行严格审计")'],
+ 'tools/ci/unit_executor.py': ['    采集工具测试单元的输入由执行器按静态依赖闭包算（同一模块的拆块与独占单元共用一份）；命令单元的输入由门禁清单',
+                               '                        if module not in cache:',
+                               '                            cache[module] = records.test_unit_inputs(repo, deps, module_file)',
+                               '                        inputs = cache[module]',
+                               '    scopes = [item["input_scope"] for item in manifest.get("units", []) if "input_scope" in '
+                               'item]',
+                               '    if scopes:',
+                               '        if args.mode != records.RE_EXECUTE or not args.audit_reads or not args.audit_strict:',
+                               '            raise ExecutorError("收窄提案必须重新执行严格审计，不能直接承接来源记录")',
+                               '        # 清单只是运输载体：执行前再次重放提案，防止绕过 plan 或篡改 inputs。',
+                               '        scope_spec = importlib.util.spec_from_file_location("_unit_executor_entry_gates", '
+                               'Path(__file__).resolve().with_name("entry_gates.py"))',
+                               '        scope_module = importlib.util.module_from_spec(scope_spec)',
+                               '        scope_spec.loader.exec_module(scope_module)',
+                               '        expected_inputs = {item["unit_id"]: item.get("inputs") for item in manifest["units"] if '
+                               '"input_scope" in item}',
+                               '        scope_module.apply_input_scopes(manifest, scopes)',
+                               '        for item in manifest["units"]:',
+                               '            if "input_scope" not in item:',
+                               '                continue',
+                               '            scope = item["input_scope"]',
+                               '            if (item["inputs"] != expected_inputs[item["unit_id"]]',
+                               '                    or scope["environment_sha256"] != records.entries_sha256(environment)',
+                               '                    or scope["executor_sha256"] != executor["sha256"]):',
+                               '                raise ExecutorError("收窄提案的输入、平台环境或执行器与来源不同，须重新建立读集")',
+                               '            records.validate_audit_policy(audit_policy, {unit.unit_id for unit in '
+                               'command_units})',
+                               '    if audit_policy is not None:',
+                               '        entry = records.value_entry("policy", "reexecute-only-policy", _sha256(audit_policy))',
+                               '        for unit_id, current in currents.items():',
+                               '            if unit_id not in audit_policy["units"]:',
+                               '                current.inputs = records._unique([*(current.inputs or []), entry])',
+                               '                current.inputs_sha256 = records.entries_sha256(current.inputs)',
+                               '                current.inheritable = False',
+                               '                current.reason = "输入合同未闭合：只验证本次执行结果，禁止承接"'],
+ 'tools/ci/unit_records.py': ['    """门禁清单为命令单元声明的输入：',
+                              'def validate_audit_policy(policy: Any, command_ids: set[str]) -> dict[str, Any]:',
+                              '    """登记已建合同的命令；所有未登记单元只能重跑，配置不能静默放开新增单元。"""',
+                              '            or not isinstance(policy.get("units"), dict) or set(policy["units"]) - command_ids):',
+                              '        raise RecordsError("读集策略须默认重跑，且只能登记当前真实命令单元")']}
+
+# f99137c82仅在显式runtime测试载荷下启用私有结果写入与首次失败保存；原tests-file仍由原JSON读取与写入。
+# ReadAuditor仅给测试合同追加test-spec，无runtime-contract不追加输入；原Codex产物用原对照实跑核验。
+PRIVATE_RESULT_HISTORY_BASELINE = 'f58e9f6308376f4616aa5b249985beaa6b2eee56'
+PRIVATE_RESULT_HISTORY_DIGESTS = {'tools/ci/unit_executor.py': '0413d4c3fc0b0f31acd51c7945e2b56e44aacf5f1dd723b7a5ddde589799dd0c'}
+PRIVATE_RESULT_HISTORY_REMOVED = {'tools/ci/unit_executor.py': ['    def __init__(self, *args: Any, failure_path: Path | None = None, unit_id: str = "", '
+                               '**kwargs: Any) -> None:',
+                               '        if self.failure_path is not None and outcome in {"failed", "error", '
+                               '"unexpected_success"}:',
+                               '            _write_json(self.failure_path, {"schema_version": UNIT_RESULT_SCHEMA, "unit_id": '
+                               'self.unit_id,',
+                               '                                           "tests": self.records, "tests_run": self.testsRun,',
+                               '                                           "successful": False, "partial": True})',
+                               'def run_unit(start: Path, tests_file: Path, result_path: Path) -> int:',
+                               '    payload = json.loads(Path(tests_file).read_text(encoding="utf-8"))',
+                               "        *args, failure_path=result_path.with_suffix('.observed-failure.json'), "
+                               "unit_id=payload['unit_id'], **kwargs))",
+                               '    _write_json(',
+                               '                                   inputs=current.inputs)',
+                               '    unit.add_argument("--tests-file", type=Path, required=True)',
+                               '            return run_unit(args.start, args.tests_file, args.result)']}
+
+# 8d72f39f6的显式严格审计与冻结policy参数进入两步输入；缺省不增加参数、输入或命令选项。
+# Context.steps返回对象身份不是合同；缺省内容和spec与原Codex逐项对照，不为旧assertIs调整产品实现。
+ENTRY_AUDIT_HISTORY_BASELINE = '7af814e5846b632c4af083dabae01384f196d843'
+ENTRY_AUDIT_HISTORY_DIGESTS = {'tools/ci/entry_orchestrator.py': 'b648c8f6c894e2c139d972353505cfe418614442493a03af4affb22475205c6d',
+ 'tools/ci/entry_steps.py': '005a8404d50d75da59e76c7d00ff77aaf85cf5d75b320348c9900ce727856f8f'}
+ENTRY_AUDIT_HISTORY_REMOVED = {'tools/ci/entry_orchestrator.py': ['记录、单元一个都不承接；不带时入口门禁用全集通过模式（承接有效的单元执行记录，E3-01）。``--audit-reads``（要和',
+                                    '``--reexecute-gates`` 一起带）：入口门禁带读集审计（E3-04），每个单元的实际读取都要落在声明的输入范围里。',
+                                    '                 unit_inherit_full_gates_request: Path | None = None) -> None:',
+                                    '        # 读集审计（E3-04）：只随重新执行全集一起带（真跑才有读集）。',
+                                    '                                          *(["--audit-reads"] if self.audit_reads else []), '
+                                    '*source])',
+                                    '                                *(["--audit-reads"] if self.audit_reads else []), *source])',
+                                    '                        help="入口门禁带读集审计（E3-04，要和 --reexecute-gates 一起带）：实际读取超出声明的输入范围即判失败")',
+                                    '                                '
+                                    'unit_inherit_full_gates_request=args.unit_inherit_full_gates_request)'],
+ 'tools/ci/entry_steps.py': ['        if GATE_PARALLEL_PARAM not in self.params:',
+                             '            return steps',
+                             '        # 显式并发数是这两步实际执行的参数，续跑必须比较它；其它步骤及缺省规格不增加输入。',
+                             '        return tuple(replace(step, inputs=step.inputs + _params(GATE_PARALLEL_PARAM))']}
+
+# 本次固定79桥接以真实开工c126为基线；仅显式Claude参数进入新分支，不换Codex缺省参数、规格与产物。
+# 预存在认证只调用原消费者，失败拒绝；不生成承接资格、不改旧单元记录。短验与原Codex行为对照分别留证。
+ENTRY_RECORDED_BRIDGE_BASELINE = 'c12674dcc0c10e0b26a3d3ed1ae4e6784fd0a986'
+ENTRY_RECORDED_BRIDGE_DIGESTS = {'tools/ci/entry_gates.py': '617075c7370c631bcb4a479a23e8cda588b15ccbd1e638ddf05a67508572ee84',
+ 'tools/ci/entry_orchestrator.py': 'a7cb93ac7ab2abbedf7f7e978c3a0444af028555eb94a054dbb188a51f396236',
+ 'tools/ci/entry_steps.py': '6fce2bd35f80d658af46b86826388a8f29dae7ce828e34a92299ddf2a6f344c8'}
+ENTRY_RECORDED_BRIDGE_REMOVED = {'tools/ci/entry_gates.py': [],
+ 'tools/ci/entry_orchestrator.py': ['        steps = [step for step, needed in (("entry-gates", gates_run), ("pre-a3", '
+                                    'pre_a3_run)) if needed]',
+                                    '            certification = (fresh(Path(self.p("PRE_A3_CERTIFICATION"))) if pre_a3_run',
+                                    '        except (OrchestratorError, OSError) as error:',
+                                    '            inherit_request = self._unit_inherit_request_for("entry" if pre_a3_run else '
+                                    '"full-gates")',
+                                    '                                          "--pre-a3-mode", "run" if pre_a3_run else '
+                                    '"present",',
+                                    '            self.run("pre-a3", ["bash", str(self.driver_dir / "entry-gates.sh"), '
+                                    '"--profile", "pre-a3", "--out", str(out),',
+                                    '                                "--pre-a3-mode", "run", "--mode", self._gates_mode(),',
+                                    '        if pre_a3_run:',
+                                    '            self._finish("pre-a3", certification.is_file(), {"certification": '
+                                    'str(certification)})'],
+ 'tools/ci/entry_steps.py': []}
+# 5626c055719 的固定场景根支持按真实父提交登记：仅 Claude 完整79显式传参进入，
+# Codex 的临时根创建、通过后清理与原命令保持不变；不能用当前 HEAD 空残差追认。
+CLAUDE_FIXED_SCENARIO_ROOT_BASELINE = '91bc47d3edd83b67b15049d3391dcf4ecdf81709'
+CLAUDE_FIXED_SCENARIO_ROOT_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '4c87682d5fab7b03a71c06013cc0f82ef9e46ffdff8a0398598d86b3415d1cdf'}
+CLAUDE_FIXED_SCENARIO_ROOT_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['# 每次在父目录下新建，通过后删除、失败保留供排查。结论不再写结果文件，而是单元标准输出里恰好一行',
+                                                                         '    场景结果行的合同两客户端相同（不在附录 B 之列）：场景归属由执行记录的单元 '
+                                                                         'ID（``pre-a3:claude:`` 前缀）区分。"""',
+                                                                         '    prefix = ("diagnostic-" if diagnostic else "") + '
+                                                                         '_scenario_file_name(name) + "-"',
+                                                                         '    root = Path(tempfile.mkdtemp(prefix=prefix, '
+                                                                         'dir=parent))',
+                                                                         '    if result["scenario"].get("status") == "passed" and '
+                                                                         'result["network_attempts"] == 0:',
+                                                                         '                result = run_scenario_unit(arguments.name, '
+                                                                         'arguments.staging_parent, diagnostic=diagnostic, '
+                                                                         'client=client)']}
+
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("5626固定完整79场景根真实接管", CLAUDE_FIXED_SCENARIO_ROOT_BASELINE, CLAUDE_FIXED_SCENARIO_ROOT_DIGESTS, CLAUDE_FIXED_SCENARIO_ROOT_REMOVED),
+    ("df90c329e真实历史接管", READ_SCOPE_HISTORY_BASELINE, READ_SCOPE_HISTORY_DIGESTS, READ_SCOPE_HISTORY_REMOVED),
+    ("f99137c82真实历史接管", PRIVATE_RESULT_HISTORY_BASELINE, PRIVATE_RESULT_HISTORY_DIGESTS, PRIVATE_RESULT_HISTORY_REMOVED),
+    ("8d72f39f6真实历史接管", ENTRY_AUDIT_HISTORY_BASELINE, ENTRY_AUDIT_HISTORY_DIGESTS, ENTRY_AUDIT_HISTORY_REMOVED),
+    ("B5a-09固定79正式入口接线", ENTRY_RECORDED_BRIDGE_BASELINE, ENTRY_RECORDED_BRIDGE_DIGESTS, ENTRY_RECORDED_BRIDGE_REMOVED),
     ("Claude 连续世界两小时安全网", CLAUDE_CONTINUOUS_TIME_BASELINE, CLAUDE_CONTINUOUS_TIME_DIGESTS, CLAUDE_CONTINUOUS_TIME_REMOVED),
     ("Claude 录制链时间合同 v2", CLAUDE_RECORDED_TIME_BASELINE, CLAUDE_RECORDED_TIME_DIGESTS, CLAUDE_RECORDED_TIME_REMOVED),
     ("Claude 故障链时间合同 v2", CLAUDE_TIME_BASELINE_COMMIT, CLAUDE_TIME_SOURCE_DIGESTS, CLAUDE_TIME_SOURCE_REMOVED_LINES),
@@ -868,8 +1008,11 @@ class SourceResidualCodexParityTests(unittest.TestCase):
                     self.assertEqual(added, expected, plain.step_id)
         params = {"D": "/data", "CLIENT": "codex"}
         self.assertEqual(es.Context(params=params, driver_dir=Path("/drv"), steps_dir=Path("/steps")).steps, es.STEPS_BY_CLIENT["codex"])
-        self.assertIs(es.Context(params={**params, "UNIT_INHERIT_REQUEST": "/r.json"}, driver_dir=Path("/drv"), steps_dir=Path("/steps")).steps,
-                      es.STEPS_BY_CLIENT_UNIT_INHERIT["codex"])
+        inherited_steps = es.Context(params={**params, "UNIT_INHERIT_REQUEST": "/r.json"}, driver_dir=Path("/drv"),
+                                     steps_dir=Path("/steps")).steps
+        self.assertEqual([step.spec_sha256() for step in inherited_steps],
+                         [step.spec_sha256() for step in es.STEPS_BY_CLIENT_UNIT_INHERIT["codex"]],
+                         "动态元组可以是新对象，Codex 的步骤规格、输入与顺序必须逐项相同")
 
     def test_orchestrator_gate_mode_matches_the_baseline_expression(self) -> None:
         from tools.ci import entry_orchestrator as eo

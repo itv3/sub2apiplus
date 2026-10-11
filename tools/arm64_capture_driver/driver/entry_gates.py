@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -535,6 +536,120 @@ def pre_a3_inputs(test_file: str, data_root_inputs: list[dict[str, Any]] | None,
             "test_modules": [test_file], "resolved": list(data_root_inputs or [])}
 
 
+RECORDED_SPEC_KEY = "CLAUDE_ENTRY_FULL79_SPEC"
+RECORDED_SPEC_SHA_KEY = "CLAUDE_ENTRY_FULL79_SPEC_SHA256"
+RECORDED_FULL79_ID = "pre-a3:claude:vc-chain.claude-full-validation-only"
+
+
+def recorded_full79_bridge(path: Path, digest: str, *, client: str,
+                           fixture_env: Mapping[str, str]) -> dict[str, Any]:
+    """实读外持的完整79单元与原账；只接线，不生成世界、延期或承接资格。
+
+    外持文件是九场景正规清单中已冻结的完整79单元，必须包含六项夹具和原账的真实预算来源全集。
+    正规延期新增事件与收据也必须逐项冻结；旧包48项是当时的数量，不是删减新原件的上限。
+    路径、记录根、CARRY意图和原账锚点全部保持原字节；目录内容与文件逐项重算后才允许派发。
+    """
+    from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
+    from tools.official_client_capture.tests import claude_recorded_budget_carry as carry
+    from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full
+    from tools.official_client_capture.tests import claude_recorded_chain_source as source
+
+    def plain(value: Any) -> Path:
+        if not isinstance(value, str):
+            raise ValueError("完整79接线路径必须是字符串")
+        result = Path(value)
+        if (not result.is_absolute() or str(result) != value or ".." in result.parts
+                or any(part.is_symlink() for part in (result, *result.parents))):
+            raise ValueError("完整79接线只接受无链接的规范绝对路径")
+        return result
+
+    path = plain(str(path))
+    if client != "claude" or not re.fullmatch(r"[0-9a-f]{64}", digest) or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        raise ValueError("完整79外持单元的客户端或SHA不符")
+    unit = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(unit, dict) or set(unit) != {"unit_id", "argv", "cwd", "env", "cores", "memory_mb", "timeout_seconds", "weight", "inputs"}:
+        raise ValueError("完整79外持单元字段不闭合")
+    argv, env = unit["argv"], unit["env"]
+    if (unit["unit_id"] != RECORDED_FULL79_ID or not isinstance(argv, list) or len(argv) != 12
+            or argv[:8] != ["/usr/bin/python3", "-m", "tools.official_client_capture.codex_upgrade_pre_a3_certification",
+                           "run-scenario", "--client", "claude", "--name", "vc-chain.claude-full-validation-only"]
+            or argv[8] != "--staging-parent" or argv[10] != "--scenario-root" or not isinstance(env, dict)):
+        raise ValueError("完整79接线不得改变场景、客户端或执行命令")
+    parent, scenario = plain(argv[9]), plain(argv[11])
+    if "staging" not in parent.parts or scenario.parent != parent:
+        raise ValueError("完整79固定场景必须是staging父目录的直接子根")
+    allowed = {"PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX", *_client_table().spec("claude")["pre_a3_fixture_keys"],
+               full.BUDGET_CARRY_INTENT_ENV, full.BUDGET_CARRY_DIGEST_ENV, "CLAUDE_RECORDED_CHAIN_RECORD_DIR"}
+    if set(env) - allowed or any(env.get(key) != value for key, value in pre_a3_fixture_environment("claude", fixture_env).items()):
+        raise ValueError("完整79外持环境含未批准键或与本轮夹具路径不同")
+    for key in (full.BUDGET_CARRY_INTENT_ENV, "CLAUDE_RECORDED_CHAIN_RECORD_DIR", "PYTHONPATH"):
+        plain(env.get(key))
+    plain(unit["cwd"])
+    if (unit["cores"] != 1 or unit["memory_mb"] != 1024 or unit["timeout_seconds"] !=
+            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):
+        raise ValueError("完整79额度或正式时间合同漂移")
+    intent_path = plain(env[full.BUDGET_CARRY_INTENT_ENV])
+    raw = json.loads(intent_path.read_text(encoding="utf-8"))
+    data = plain(raw.get("data_root"))
+    if data.name != "data" or data.parent.name != "staging" or data.parents[2] != scenario / "tmp":
+        raise ValueError("完整79固定P/S/T/W/D与CARRY数据根不闭合")
+    intent, binding = full._carry_intent(str(intent_path), env.get(full.BUDGET_CARRY_DIGEST_ENV), data)
+    observed = datetime.now(timezone.utc)
+    snapshot = carry._snapshot(Path(intent["predecessor_data"]), intent["predecessor_campaign_id"], observed)
+    for field in ("project_head", "timing_head", "project_plan_sha256", "timing_plan_sha256"):
+        if snapshot[field] != intent["expected_" + field]:
+            raise ValueError("完整79原账外持锚点漂移：" + field)
+    bindings = [binding, *snapshot["source_bindings"], *intent["preserved_bindings"].values()]
+    steps = _entry_steps_module()
+    ctx = steps.Context(params={}, driver_dir=HERE, steps_dir=path.parent)
+    resolved, seen = [], set()
+    for item in bindings:
+        target = plain(item["path"])
+        source.bound(item)
+        if str(target) in seen:
+            raise ValueError("完整79预算来源重复，不能改变冻结来源集合")
+        resolved.append(steps.resolve(steps.Input("environment", "file", str(target)), ctx))
+        seen.add(str(target))
+    current = pre_a3_fixture_resolved("claude", fixture_env) + resolved
+    test_file = certification.scenario_test_module("vc-chain.claude-full-validation-only", "claude").replace(".", "/") + ".py"
+    if len(resolved) < 48 or unit["inputs"] != pre_a3_inputs(test_file, current, "claude"):
+        raise ValueError("完整79外持六项夹具与真实预算来源全集缺失或内容漂移")
+    return {"unit": unit, "resolved": resolved, "fixtures": current[:len(current) - len(resolved)],
+            "spec_input": steps.resolve(steps.Input("environment", "file", str(path)), ctx)}
+
+
+def verify_recorded_reuse(tree: Path, certification_path: Path, bridge: dict[str, Any], data_inputs: list[dict[str, Any]]) -> None:
+    """原认证已由find-reusable验真后，另核当前静态输入；不把不可承接记录改成当前执行。
+
+    独立九场景来源没有入口额外数据根声明时不追认它；已有额外声明则同样必须按当前值核对。
+    """
+    from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
+    records = _unit_records_module()
+    # 不依赖调用顺序的口头约定：入口按当前身份再核原认证及其已发布记录，损坏引用在此拒绝。
+    payload = certification.verify_certification(certification_path, client="claude")
+    store = certification._RecordStore(Path(payload["record_store"]))
+    manifest = store.read(store.manifest_path(payload["unit_manifest"]["run_id"]))
+    repo, cache = records.RepoIndex.load(tree), {}
+    for name in certification.scenario_names("claude"):
+        unit_id = certification.scenario_unit_prefix("claude") + name
+        entry = next(item for item in manifest["units"] if item["unit_id"] == unit_id)
+        record = store.read(store.record_path(unit_id, entry["record_sha256"]))
+        fixed = bridge["fixtures"] + (bridge["resolved"] if unit_id == RECORDED_FULL79_ID else [])
+        test_file = certification.scenario_test_module(name, "claude").replace(".", "/") + ".py"
+        saved = {item["name"]: item for item in record["inputs"] if item["name"] != "reexecute-only-policy"}
+        mandatory = records.declared_inputs(repo, pre_a3_inputs(test_file, fixed, "claude"), cache)
+        optional = {item["name"]: item for item in [*data_inputs, bridge["spec_input"]]}
+        expected = {item["name"]: item for item in mandatory}
+        expected.update({key: optional[key] for key in saved if key in optional})
+        if set(saved) != set(expected) or any(saved[key]["sha256"] != expected[key]["sha256"] for key in expected):
+            raise ValueError("复用认证的当前输入已变化：" + unit_id)
+        if unit_id == RECORDED_FULL79_ID:
+            spec = record["spec"]
+            keys = ("CLAUDE_RECORDED_CHAIN_RECORD_DIR", "CLAUDE_RECORDED_BUDGET_CARRY_INTENT", "CLAUDE_RECORDED_BUDGET_CARRY_INTENT_SHA256")
+            if spec["argv"] != bridge["unit"]["argv"] or any(spec["env"].get(key) != bridge["unit"]["env"][key] for key in keys):
+                raise ValueError("复用认证的固定79根或外持意图不同")
+
+
 def plan_gates(
     tree: Path,
     *,
@@ -550,6 +665,7 @@ def plan_gates(
     with_gates: Sequence[str] = (),
     input_scopes: Sequence[dict[str, Any]] = (),
     audit_policy: dict[str, Any] | None = None,
+    recorded_bridge: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
@@ -564,6 +680,11 @@ def plan_gates(
     """
 
     gates_wanted = profile_gates(profile, with_gates)
+    if recorded_bridge is not None:
+        if audit_policy is None:
+            raise ValueError("固定79接线必须显式提供冻结的audit-policy，不能改变其它单元承接策略")
+        if RECORDED_FULL79_ID in audit_policy.get("units", {}):
+            raise ValueError("固定79尚无闭合运行时读集，不能登记为可承接")
     if ("pre-a3" in gates_wanted) != (pre_a3_units is not None):
         raise ValueError("含 pre-A3 的门禁组合（entry、pre-a3）必须给出 pre-A3 场景清单，其余组合不得给出")
     tree = Path(tree).resolve()
@@ -673,6 +794,12 @@ def plan_gates(
                     record_id = hashlib.sha256(unit["unit_id"].encode()).hexdigest()[:16]
                     merged["env"] = {**merged.get("env", {}),
                                      "CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(parent / "claude-chain-records" / record_id)}
+                if recorded_bridge is not None and unit["unit_id"] == RECORDED_FULL79_ID:
+                    # 原P/S/T/W/D、record与CARRY保持外持值；仅当前代码位置由已核部署的数据根提供。
+                    approved = recorded_bridge["unit"]
+                    merged = {**approved, "cwd": unit["cwd"], "env": {**approved["env"], "PYTHONPATH": unit["cwd"]},
+                              "inputs": pre_a3_inputs(test_file, data_inputs + recorded_bridge["resolved"] +
+                                                       [recorded_bridge["spec_input"]], "claude")}
                 units.append(merged)
                 members.append(unit["unit_id"])
             gates.append({"gate_id": gate_id, "units": members})
@@ -1107,6 +1234,15 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--output", type=Path, required=True)
     plan.add_argument("--input-scope", type=Path, action="append", default=[], help="本轮命令或测试单元的输入收窄提案，可重复指定；必须重新执行严格审计")
     plan.add_argument("--audit-policy", type=Path, help="明确登记可验收输入合同；未登记单元一律重跑，不宣称覆盖完整")
+    plan.add_argument("--recorded-full79-spec", type=Path, help="Claude已批准完整79单元的外持JSON")
+    plan.add_argument("--recorded-full79-spec-sha256", help="上述原字节的外持SHA；不能自行刷新")
+    recorded = sub.add_parser("recorded-full79-inputs", help="只读核固定79接线及真实夹具、预算来源")
+    recorded.add_argument("--spec", type=Path, required=True)
+    recorded.add_argument("--sha256", required=True)
+    recorded.add_argument("--pre-a3-env", action="append", default=[])
+    recorded.add_argument("--certification", type=Path)
+    recorded.add_argument("--tree", type=Path)
+    recorded.add_argument("--data-root", type=Path)
     workspace = sub.add_parser("verify-scope-workspace", help="只读核对收窄复验沿用的测试树、缓存和 bundle")
     workspace.add_argument("--tree", type=Path, required=True)
     workspace.add_argument("--bytecode-cache", type=Path, required=True)
@@ -1143,6 +1279,16 @@ def main(argv: list[str] | None = None) -> int:
     sys.dont_write_bytecode = True
     args = _parse(sys.argv[1:] if argv is None else argv)
     try:
+        if args.command == "recorded-full79-inputs":
+            env = _pairs(args.pre_a3_env, "--pre-a3-env")
+            bridge = recorded_full79_bridge(args.spec, args.sha256, client="claude", fixture_env=env)
+            if args.certification is not None:
+                if args.tree is None or args.data_root is None:
+                    raise ValueError("复用输入复核必须有当前测试树与数据根")
+                verify_recorded_reuse(args.tree, args.certification, bridge,
+                                      pre_a3_data_root_inputs(args.data_root, "claude", pre_a3_env=env))
+            print(json.dumps({"inputs": [bridge["spec_input"], *bridge["fixtures"], *bridge["resolved"]]}, ensure_ascii=False))
+            return 0
         if args.command == "make-checks":
             return make_checks(args.name, list(args.targets))
         if args.command == "verify-scope-workspace":
@@ -1155,12 +1301,18 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("--launcher-json 必须是非空字符串组成的列表")
             client = pre_a3_units_client(args.pre_a3_units) if args.pre_a3_units is not None else "codex"
             pre_a3_env = _pairs(args.pre_a3_env, "--pre-a3-env") or None
+            if (args.recorded_full79_spec is None) != (args.recorded_full79_spec_sha256 is None):
+                raise ValueError("完整79外持文件与SHA必须同时提供")
+            bridge = (recorded_full79_bridge(args.recorded_full79_spec, args.recorded_full79_spec_sha256,
+                                            client=client, fixture_env=pre_a3_env or {})
+                      if args.recorded_full79_spec is not None else None)
             data_inputs = (pre_a3_data_root_inputs(args.pre_a3_data_root, client, pre_a3_env=pre_a3_env)
                            if args.pre_a3_data_root is not None else None)
             with_gates = [gate for gate in args.with_gates.split(",") if gate]
             manifest = plan_gates(args.tree, profile=args.profile, launcher=launcher, typescript_module=args.typescript_module,
                                   input_scopes=[json.loads(path.read_text()) for path in args.input_scope],
                                   audit_policy=json.loads(args.audit_policy.read_text()) if args.audit_policy else None,
+                                  recorded_bridge=bridge,
                                   with_gates=with_gates,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=pre_a3_env,
                                   pre_a3_data_inputs=data_inputs,
