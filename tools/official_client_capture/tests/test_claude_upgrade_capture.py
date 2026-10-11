@@ -1379,5 +1379,248 @@ class AttemptFactsTests(unittest.TestCase):
                     reader.assert_called_once_with(first, campaign)
 
 
+        # 原 UID 内定向核验测试执行器运输：来源树、执行树和记录库都是独立的真实私有小目录。
+        # 这里只换 capture/tests 内的一个 .py；产品、夹具、原 before 和来源停点均保留原字节。
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            source_root, tree, record_root = (base / name for name in ('source', 'tree', 'records'))
+            for root in (source_root, tree, record_root):
+                root.mkdir(mode=0o700)
+            executor = 'tools/official_client_capture/tests/foo.py'
+            product = 'tools/official_client_capture/product.py'
+            fixture = 'tools/official_client_capture/tests/fixtures/probe.json'
+            fixture_python = 'tools/official_client_capture/tests/fixtures/probe.py'
+            control_test = 'tools/official_client_control/tests/foo.py'
+            old_executor, new_executor = b'VALUE = "old"\n', b'VALUE = "new"\n'
+            original_files = {executor: old_executor, product: b'PRODUCT = "fixed"\n',
+                fixture: b'{"fixture":"fixed"}\n', fixture_python: b'FIXTURE = "fixed"\n',
+                control_test: b'CONTROL_TEST = "fixed"\n'}
+            for root in (source_root, tree):
+                for relative, raw in original_files.items():
+                    path = root / relative
+                    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    path.write_bytes(raw)
+                    path.chmod(0o600)
+
+            def source_state():
+                return {'repository': str(source_root), 'files': {
+                    relative: hashlib.sha256((source_root / relative).read_bytes()).hexdigest()
+                    for relative in original_files}, 'fixtures': {
+                    'CLAUDE_2_1_226_RELAY_FIXTURE': str(source_root / fixture),
+                    'CLAUDE_2_1_226_FREEZE_FIXTURE': None}}
+
+            def record_files():
+                # 同输入续作必须连文件集、旧 raw、mtime 和 inode 都不改，不能覆盖成相同内容蒙混过关。
+                return {path.relative_to(record_root).as_posix():
+                    (path.read_bytes(), path.stat().st_mtime_ns, path.stat().st_ino)
+                    for path in record_root.rglob('*') if path.is_file()}
+
+            before_path = tree / 'world-before.json'
+            before_raw = b'{"before":"original"}\n'
+            before_path.write_bytes(before_raw)
+            tree_inode = tree.stat().st_ino
+            original_source = source_state()
+            (source_root / executor).write_bytes(new_executor)
+            current_source = source_state()
+            with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}):
+                stops.save_state('executor-original-source', original_source)
+                original_stop = stops._state_path('executor-original-source')
+                original_stop_raw = original_stop.read_bytes()
+                binding = stops.prepare_executor_source(tree, original_source, current_source, [executor])
+                verified = stops.verify_executor_source(binding, tree)
+                self.assertEqual(verified['files'][executor], hashlib.sha256(new_executor).hexdigest())
+                # 原 invocation 必须绑定实际导入的执行树；同字节的宿主来源树也不能冒充它。
+                with mock.patch.dict(os.environ, {stops.EXECUTOR_SOURCE_ENV: json.dumps(stops._encoded(binding))}):
+                    self.assertEqual(stops.executor_invocation_binding(tree), binding)
+                    with self.assertRaises(ValueError):
+                        stops.executor_invocation_binding(source_root)
+                self.assertEqual((tree / executor).read_bytes(), new_executor)
+                self.assertEqual((tree / product).read_bytes(), original_files[product])
+                self.assertEqual((before_path.read_bytes(), tree.stat().st_ino), (before_raw, tree_inode))
+                self.assertEqual(original_stop.read_bytes(), original_stop_raw)
+                old_raw = [path for path in record_root.rglob('*')
+                    if path.is_file() and path.read_bytes() == old_executor]
+                self.assertTrue(old_raw, '原执行器 raw 必须保留在记录库，不能只保存摘要')
+
+                frozen_records = record_files()
+                record_mtime = record_root.stat().st_mtime_ns
+                self.assertEqual(stops.prepare_executor_source(tree, original_source, current_source, [executor]), binding)
+                self.assertEqual(record_files(), frozen_records, '同输入运输不得覆盖旧 raw 或重新签出原件')
+                self.assertEqual(record_root.stat().st_mtime_ns, record_mtime)
+
+                # 产品、夹具（包括 fixtures 内 .py）及 control/tests 都属于本轮拒绝边界。
+                # 每次实际改来源字节并重算声明；不能只改摘要来模拟产品差异。
+                for relative in (product, fixture, fixture_python, control_test):
+                    with self.subTest(rejected_source=relative):
+                        path = source_root / relative
+                        path.write_bytes(original_files[relative] + b'changed\n')
+                        try:
+                            with self.assertRaises(ValueError):
+                                stops.prepare_executor_source(tree, original_source, source_state(), [executor])
+                        finally:
+                            path.write_bytes(original_files[relative])
+                moved_source = dict(current_source, repository=str(base / 'another-source'))
+                with self.assertRaises(ValueError):
+                    stops.prepare_executor_source(tree, original_source, moved_source, [executor])
+                changed_fixture = dict(current_source, fixtures={**current_source['fixtures'],
+                    'CLAUDE_2_1_226_FREEZE_FIXTURE': str(source_root / fixture)})
+                with self.assertRaises(ValueError):
+                    stops.prepare_executor_source(tree, original_source, changed_fixture, [executor])
+
+                # 同摘要的符号链接也拒绝；二次运输的幂等分支仍须核来源路径，不能提前返回。
+                source_executor = source_root / executor
+                link_target = base / 'same-executor.py'
+                link_target.write_bytes(new_executor)
+                source_executor.unlink()
+                source_executor.symlink_to(link_target)
+                try:
+                    with self.assertRaises(ValueError):
+                        stops.prepare_executor_source(tree, original_source, current_source, [executor])
+                finally:
+                    source_executor.unlink()
+                    source_executor.write_bytes(new_executor)
+
+                # 默认核运输时产品字节；产品后续演进交给原 reader 时，仅显式关闭这一项，执行器仍严格核验。
+                executed_product = tree / product
+                product_mode = executed_product.stat().st_mode & 0o777
+                executed_product.chmod(0o600)
+                executed_product.write_bytes(original_files[product] + b'changed\n')
+                try:
+                    with self.assertRaises(ValueError):
+                        stops.verify_executor_source(binding, tree)
+                    self.assertEqual(stops.verify_executor_source(binding, tree, verify_product=False)['files'], verified['files'])
+                finally:
+                    executed_product.write_bytes(original_files[product])
+                    executed_product.chmod(product_mode)
+
+                executed = tree / executor
+                executor_mode = executed.stat().st_mode & 0o777
+                executed.chmod(0o600)
+                executed.write_bytes(new_executor + b'changed\n')
+                try:
+                    with self.assertRaises(ValueError):
+                        stops.verify_executor_source(binding, tree, verify_product=False)
+                finally:
+                    executed.write_bytes(new_executor)
+                    executed.chmod(executor_mode)
+                executed.unlink()
+                executed.symlink_to(link_target)
+                try:
+                    with self.assertRaises(ValueError):
+                        stops.verify_executor_source(binding, tree)
+                finally:
+                    executed.unlink()
+                    executed.write_bytes(new_executor)
+                    executed.chmod(executor_mode)
+                damaged = dict(binding, sha256='0' * 64)
+                with self.assertRaises(ValueError):
+                    stops.verify_executor_source(damaged, tree)
+                self.assertEqual(stops.verify_executor_source(binding, tree)['files'], verified['files'])
+                self.assertEqual(original_stop.read_bytes(), original_stop_raw)
+                self.assertEqual(before_path.read_bytes(), before_raw)
+
+                # 模拟 v3 已真实替换目标、目录同步和最终清单尚未完成的窗口。
+                # 中断保留原 pending；后继只能沿同一意图收尾，不能重新写目标或换建世界。
+                third_executor, fourth_executor = b'VALUE = "third"\n', b'VALUE = "fourth"\n'
+                source_executor.write_bytes(third_executor)
+                third_source = source_state()
+                coordinates = tuple(root.stat().st_ino for root in (source_root, tree, record_root))
+                real_replace = stops.os.replace
+                published = []
+
+                def interrupted_publish(origin, destination, *arguments, **options):
+                    result = real_replace(origin, destination, *arguments, **options)
+                    if Path(destination) == executed:
+                        published.append(Path(destination))
+                        raise RuntimeError('执行器真实发布后中断')
+                    return result
+
+                with mock.patch.object(stops.os, 'replace', side_effect=interrupted_publish):
+                    with self.assertRaisesRegex(RuntimeError, '真实发布后中断'):
+                        stops.prepare_executor_source(tree, original_source, third_source, [executor])
+                self.assertEqual(published, [executed])
+                self.assertEqual(executed.read_bytes(), third_executor)
+                journal_key = 'executor-source:' + str(tree.resolve())
+                pending_journal = stops.load_state(journal_key)
+                self.assertIsNotNone(pending_journal['pending'])
+                self.assertEqual((tree / product).read_bytes(), original_files[product])
+                self.assertEqual(before_path.read_bytes(), before_raw)
+                retained = {raw: [stops.file_cut(path) for path in record_root.rglob('*')
+                    if path.is_file() and path.read_bytes() == raw]
+                    for raw in (new_executor, third_executor)}
+                self.assertTrue(all(retained.values()), 'v2 与 v3 的完整 raw 均须可读')
+
+                # pending 尚未收口时换成 v4 必须拒绝；该拒绝不能回退已经发布的 v3 或改原运输意图。
+                source_executor.write_bytes(fourth_executor)
+                try:
+                    with self.assertRaisesRegex(ValueError, '运输尚未完成'):
+                        stops.prepare_executor_source(tree, original_source, source_state(), [executor])
+                    self.assertEqual(executed.read_bytes(), third_executor)
+                    self.assertEqual(stops.load_state(journal_key), pending_journal)
+                finally:
+                    source_executor.write_bytes(third_executor)
+
+                def keep_published_target(origin, destination, *arguments, **options):
+                    if Path(destination) == executed:
+                        self.fail('发布后中断的同意图恢复不得再次写目标执行器')
+                    return real_replace(origin, destination, *arguments, **options)
+
+                with mock.patch.object(stops.os, 'replace', side_effect=keep_published_target):
+                    third_binding = stops.prepare_executor_source(tree, original_source, third_source, [executor])
+                self.assertIsNone(stops.load_state(journal_key)['pending'])
+                self.assertEqual(stops.verify_executor_source(third_binding, tree)['files'][executor],
+                    hashlib.sha256(third_executor).hexdigest())
+                for raw, originals in retained.items():
+                    for original in originals:
+                        self.assertEqual(stops.read_cut(original), raw, '中断续作不得覆盖 v2／v3 的原 raw')
+                self.assertEqual(tuple(root.stat().st_ino for root in (source_root, tree, record_root)), coordinates)
+                self.assertEqual((tree / product).read_bytes(), original_files[product])
+                self.assertEqual(original_stop.read_bytes(), original_stop_raw)
+                self.assertEqual(before_path.read_bytes(), before_raw)
+
+                # 同秒同长度的源码修复会碰撞普通 timestamp pyc；每份执行器绑定须使用自己的树外缓存。
+                # 仍运输同一个 foo，再起两个真实解释器导入；不能只断言缓存目录字符串不同。
+                import sys
+                from tools.official_client_capture.tests import managed_tree_copy as trees
+                cached_sources = (b'VALUE = "cache-a"\n', b'VALUE = "cache-b"\n')
+                self.assertEqual(len(cached_sources[0]), len(cached_sources[1]))
+                modified_second = 1700000000
+                cache_observations = []
+                for raw, expected_value in zip(cached_sources, ('cache-a', 'cache-b')):
+                    source_executor.write_bytes(raw)
+                    cached_binding = stops.prepare_executor_source(tree, original_source, source_state(), [executor])
+                    os.utime(executed, (modified_second, modified_second))
+                    self.assertEqual((int(executed.stat().st_mtime), executed.stat().st_size),
+                        (modified_second, len(cached_sources[0])))
+                    prefix = trees.copy_pycache_prefix(tree) / ('executor-' + cached_binding['sha256'])
+                    self.assertFalse(prefix.is_relative_to(tree), '执行器缓存必须位于原执行树之外')
+                    prefix.mkdir(parents=True, mode=0o700)
+                    environment = {**os.environ, 'PYTHONPYCACHEPREFIX': str(prefix)}
+                    environment.pop('PYTHONDONTWRITEBYTECODE', None)
+                    script = ('import json, sys; sys.path.insert(0, sys.argv[1]); import foo; '
+                        'print(json.dumps({"value": foo.VALUE, "path": foo.__file__, '
+                        '"cache": foo.__cached__, "prefix": sys.pycache_prefix}))')
+                    imported = subprocess.run([sys.executable, '-c', script, str(executed.parent)],
+                        cwd=tree, env=environment, capture_output=True, text=True, timeout=15, check=False)
+                    self.assertEqual(imported.returncode, 0, imported.stderr)
+                    observed = json.loads(imported.stdout)
+                    self.assertEqual((observed['value'], Path(observed['path']), Path(observed['prefix'])),
+                        (expected_value, executed, prefix))
+                    cache_path = Path(observed['cache'])
+                    self.assertTrue(cache_path.is_relative_to(prefix))
+                    cache_raw = cache_path.read_bytes()
+                    self.assertEqual(int.from_bytes(cache_raw[4:8], 'little'), 0, '须真实生成普通 timestamp pyc')
+                    self.assertEqual(int.from_bytes(cache_raw[8:12], 'little'), modified_second)
+                    cache_observations.append((cached_binding, prefix, cache_path, cache_raw))
+                    print('执行器独立缓存导入：' + json.dumps(observed, ensure_ascii=False, sort_keys=True))
+                self.assertNotEqual(cache_observations[0][0]['sha256'], cache_observations[1][0]['sha256'])
+                self.assertNotEqual(cache_observations[0][1], cache_observations[1][1])
+                self.assertEqual(cache_observations[0][2].read_bytes(), cache_observations[0][3],
+                    '同秒同长度修复不得覆盖旧执行器的缓存')
+                self.assertEqual((tree / product).read_bytes(), original_files[product])
+                self.assertEqual(original_stop.read_bytes(), original_stop_raw)
+                self.assertEqual(before_path.read_bytes(), before_raw)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -981,6 +981,8 @@ def _resumable_method(method: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(method)
     def execute(case: unittest.TestCase, *args: Any, **options: Any) -> Any:
+        # 以当前模块实际 __file__ 推出的根核验，不能只核 env 中的 tree 却从宿主导入执行器。
+        stops.executor_invocation_binding(REPO_ROOT)
         if not os.environ.get(METHOD_VERIFY_ENV):
             return method(case, *args, **options)
         context = stops.load_state('method-context')
@@ -1059,10 +1061,16 @@ def _run_group_body(case: unittest.TestCase, recorder: _ChainRecorder,
         records_file = output / 'records.jsonl'
         records_file.touch(mode=0o600)
     environment = {**os.environ, RECORDS_ENV: str(records_file)}
+    # 这是当前真实重验的执行器绑定，旧 method-result 仍按形成期原件读取，不能改签原输出。
+    executor_binding = stops.executor_invocation_binding(shell._tree_root())
+    if executor_binding is not None:
+        # 普通运行生成的时间戳字节码可能误中同秒同长度修复；不同执行器只能用各自的树外缓存。
+        environment['PYTHONPYCACHEPREFIX'] = str(trees.copy_pycache_prefix(shell._tree_root()) / ('executor-' + executor_binding['sha256']))
     started = time.monotonic()
     argv = [sys.executable, "-m", "unittest", "-v", *(f"{CHAIN_MODULE}.{test}" for test in scenarios)]
     if context is not None:
-        context['invocations'].append({'argv': argv, 'output': output, 'state': 'started', 'verify': verify})
+        context['invocations'].append({'argv': argv, 'output': output, 'state': 'started', 'verify': verify,
+                                       'executor': executor_binding})
         stops.save_state('method-context', context)
     process = subprocess.Popen(
         argv,
@@ -1080,6 +1088,13 @@ def _run_group_body(case: unittest.TestCase, recorder: _ChainRecorder,
             pass
         stdout, stderr = process.communicate()
     seconds = round(time.monotonic() - started, 3)
+    executor_error = None
+    if executor_binding is not None:
+        try:
+            stops.verify_executor_source(executor_binding, shell._tree_root(), verify_product=False)
+        except (ValueError, OSError) as error:
+            # 真实子进程已经退出，执行器核验失败也先保留 stdout/stderr 与实际退出原件。
+            executor_error = str(error)
     if diagnostic_seconds is not None:
         log_root = Path(os.environ["CLAUDE_RECORDED_CHAIN_RECORD_DIR"]) / "diagnostic-groups"
         log_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1093,7 +1108,8 @@ def _run_group_body(case: unittest.TestCase, recorder: _ChainRecorder,
         for name, text in (('stdout', stdout), ('stderr', stderr)):
             (output / (name + '.log')).write_text(text, encoding='utf-8')
         (output / 'exit.json').write_text(json.dumps({'argv': argv, 'returncode': process.returncode,
-            'timed_out': timed_out, 'seconds': seconds, 'verify': verify}, ensure_ascii=False), encoding='utf-8')
+            'timed_out': timed_out, 'seconds': seconds, 'verify': verify,
+            'executor': stops._encoded(executor_binding), 'executor_error': executor_error}, ensure_ascii=False), encoding='utf-8')
         bindings = {name: stops.file_cut(output / filename) for name, filename in
                     (('stdout', 'stdout.log'), ('stderr', 'stderr.log'), ('records', 'records.jsonl'), ('exit', 'exit.json'))}
         context['seconds'] += seconds
@@ -1106,20 +1122,23 @@ def _run_group_body(case: unittest.TestCase, recorder: _ChainRecorder,
     recorder.facts.setdefault("groups", []).append(
         {"step": step, "tests": list(scenarios), "seconds": seconds, "returncode": None if timed_out else process.returncode, "timeout_seconds": method_timeout,
          "inherited": verify, "cumulative_seconds": context['seconds'] if context is not None else seconds,
+         "current_executor_verified": executor_binding is not None,
          "diagnostic_only": diagnostic_seconds is not None}
     )
-    passed = not timed_out and _method_result_passed(process.returncode, stderr, len(scenarios))
+    passed = not timed_out and executor_error is None and _method_result_passed(process.returncode, stderr, len(scenarios))
     reported = [record["scenario"] for record in records]
     complete = _records_complete(records, expected)
     if bindings is not None:
         result = {'complete': passed and complete, 'expected': expected, 'returncode': process.returncode,
                   'bindings': bindings, 'diagnostic_only': diagnostic_seconds is not None,
+                  'executor': executor_binding,
                   'command_prefix': (stops.load_state('command-observations') or {}).get('commands', [])}
         # 后续重验不能覆盖最初成功的真实退出与输出原件。
         stops.save_state('method-verification' if verify else 'method-result', result)
     if not passed or not complete:
         recorder.emit()
         reason = (f"超时（{seconds} 秒，本方法独立预算 {method_timeout} 秒）" if timed_out
+                  else f"执行器字节核验失败：{executor_error}" if executor_error is not None
                   else f"退出码 {process.returncode}" if not passed else f"六项记录不全：报了 {reported}")
         case.fail(f"场景组「{step}」没有通过（{reason}）：{', '.join(scenarios)}\n{stdout[-2000:]}\n{stderr[-6000:]}")
     recorder.step(step)
@@ -3334,16 +3353,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
             if saved is not None:
                 if saved.get('chain') != chain or saved.get('diagnostic_seconds') != diagnostic_seconds:
                     raise ValueError('原链身份或预算模式变化，禁止消费另一条链或诊断结果')
-                if saved.get('source') != source:
-                    prior = saved.get('source') or {}
-                    original = prior.get('files', {})
-                    current = source['files']
-                    changed = sorted(path for path in set(original) | set(current)
-                                     if original.get(path) != current.get(path))
-                    coordinates = [key for key in ('repository', 'fixtures') if prior.get(key) != source.get(key)]
-                    detail = '、'.join(changed[:20] + coordinates)
-                    raise ValueError(f'原链输入有 {len(changed)} 个路径变化：{detail}；'
-                        '先核实际读集及原受控演进，未覆盖路径保持拒绝，不自动初始化或重跑全集')
+                stops.validate_executor_inputs(saved['source'], source)
                 if saved.get('isolation') != self._isolation_mode():
                     raise ValueError('原链隔离方式已改变，不能承接另一执行环境')
             self._run_chain_body(chain, diagnostic_seconds=diagnostic_seconds, stop=saved,
@@ -3373,6 +3383,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
         record_directory = os.environ.get("CLAUDE_RECORDED_CHAIN_RECORD_DIR")
         stdout_bytes, stderr_bytes = b"", b""
         stdout, stderr = "", ""
+        executor_binding = None
         try:
             # 连续链内还有两层来源夹具，守卫的 Unix socket 路径必须保持足够短。
             # macOS 的系统临时根本身很长；短根仍位于宿主数据根和执行副本之外。
@@ -3410,6 +3421,13 @@ class ClaudeFaultChainTests(unittest.TestCase):
                                 or any(path.is_symlink() or not path.is_dir() for path in (staging, tree, recorded_worlds))):
                             raise ValueError('原源码树或记录世界缺失，禁止重新复制补造')
                         copy_seconds = 0.0
+                    if record_directory:
+                        # 与原 copy_managed_tree 同一闭包算法；只更新其中的普通测试源码。
+                        # 产品和夹具不运输，原 source 原件不改；世界仍由原停点绑定。
+                        executor_paths = sorted(path.relative_to(REPO_ROOT).as_posix()
+                            for path in trees._closure_files(Path(__file__))
+                            if stops._executor_path(path.relative_to(REPO_ROOT).as_posix()))
+                        executor_binding = stops.prepare_executor_source(tree, stop['source'], source, executor_paths)
                     environment = trees.subprocess_env(tree, {
                         project_ledger_fixture.FIXTURE_ONLY_ENV: "1",
                         "TMPDIR": str(staging),
@@ -3420,12 +3438,15 @@ class ClaudeFaultChainTests(unittest.TestCase):
                         # 宿主数据根在 namespace 中保持只读，链体原件只写本次私有可写根。
                         "CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(recorded_worlds),
                     })
+                    environment.pop(stops.EXECUTOR_SOURCE_ENV, None)
                     if diagnostic_seconds is not None:
                         environment[diagnostic_budget.DIAGNOSTIC_TIMEOUT_ENV] = str(diagnostic_seconds)
                     if record_directory:
                         methods = recorded_worlds / 'method-records'
                         _private_record_root(methods)
                         environment[METHODS_ROOT_ENV] = str(methods)
+                        environment[stops.EXECUTOR_SOURCE_ENV] = json.dumps(stops._encoded(executor_binding))
+                        environment['PYTHONPYCACHEPREFIX'] = str(trees.copy_pycache_prefix(tree) / ('executor-' + executor_binding['sha256']))
                     # 链体自身不能把公共目录当成方法目录；每个原方法由 _run_group 唯一绑定。
                     for key in (stops.METHOD_RECORD_ENV, stops.METHOD_RESUME_ENV, METHOD_VERIFY_ENV):
                         environment.pop(key, None)
@@ -3436,6 +3457,8 @@ class ClaudeFaultChainTests(unittest.TestCase):
                         completed = subprocess.run(command, capture_output=True, cwd=str(tree), env=environment,
                                                    timeout=timeout_seconds, stdin=subprocess.DEVNULL)
                         stdout_bytes, stderr_bytes = completed.stdout or b"", completed.stderr or b""
+                        if executor_binding is not None:
+                            stops.verify_executor_source(executor_binding, tree, verify_product=False)
                     except subprocess.TimeoutExpired as error:
                         timed_out = True
                         stdout_bytes, stderr_bytes = error.stdout or b"", error.stderr or b""
@@ -3460,13 +3483,15 @@ class ClaudeFaultChainTests(unittest.TestCase):
                                        "recorded_worlds": str(recorded_worlds), "isolation": mode,
                                        "returncode": None if completed is None else completed.returncode,
                                        "timed_out": timed_out, "timeout_seconds": timeout_seconds,
+                                       "executor": stops._encoded(executor_binding),
                                        "error_type": None if error is None else type(error).__name__},
                                       handle, ensure_ascii=False, sort_keys=True, indent=2)
                             handle.write("\n")
                         state.chmod(0o600)
                         if stop is not None:
                             stop['invocations'].append({'stdout': stops.file_cut(output / 'stdout.log'),
-                                'stderr': stops.file_cut(output / 'stderr.log'), 'exit': stops.file_cut(state)})
+                                'stderr': stops.file_cut(output / 'stderr.log'), 'exit': stops.file_cut(state),
+                                'executor': executor_binding})
         finally:
             invocation_elapsed = round(time.monotonic() - started + setup_seconds, 3)
             elapsed = round(invocation_elapsed + (float(stop['seconds']) if stop is not None else 0.0), 3)

@@ -29,6 +29,7 @@ from tools.official_client_capture.tests import claude_vc5_chain_fixture as sour
 METHOD_RECORD_ENV = 'CLAUDE_FAULT_METHOD_RECORD_DIR'
 METHOD_RESUME_ENV = 'CLAUDE_FAULT_METHOD_RESUME'
 CHAIN_RESUME_ENV = 'CLAUDE_FAULT_CHAIN_RESUME'
+EXECUTOR_SOURCE_ENV = 'CLAUDE_FAULT_EXECUTOR_SOURCE'
 _ACTIVE_COMMAND_STEP = contextvars.ContextVar('claude_fault_active_command_step', default=None)
 _VERIFIED_READ_ONLY_WORLD = contextvars.ContextVar('claude_fault_verified_read_only_world', default=None)
 
@@ -129,6 +130,216 @@ def save_state(name: str, state: dict[str, Any]) -> None:
             os.close(directory_descriptor)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def _executor_path(relative: str) -> bool:
+    """本轮只更新 capture 测试执行器；夹具原件、第二根和产品源码均不是执行器。"""
+
+    path = Path(relative)
+    return (relative == path.as_posix() and not path.is_absolute() and '..' not in path.parts
+        and relative.startswith('tools/official_client_capture/tests/') and path.suffix == '.py'
+        and not {'fixtures', 'versions', '__pycache__', '.git'}.intersection(path.parts))
+
+
+def _executor_file(root: Path, relative: str, *, required: bool = True) -> Path:
+    """沿准确目录核普通文件，不能把测试运输变成符号链接写入或宿主导入旁路。"""
+
+    if not _executor_path(relative):
+        raise ValueError(f'不是允许运输的测试执行器：{relative}')
+    path = root / relative
+    for parent in path.parents:
+        if parent == root:
+            break
+        if parent.is_symlink() or not parent.is_dir():
+            raise ValueError(f'测试执行器目录缺失或含符号链接：{relative}')
+    if path.is_symlink() or (path.exists() and not path.is_file()) or (required and not path.is_file()):
+        raise ValueError(f'测试执行器不是普通文件：{relative}')
+    return path
+
+
+def _executor_product_files(tree: Path) -> dict[str, str]:
+    """保存本次运输前后的实际非执行器字节；不把该快照当成工具演进或产品成功证明。"""
+
+    files = {}
+    for directory, folders, names in os.walk(tree, followlinks=False):
+        folders[:] = sorted(name for name in folders if name not in {'.git', '__pycache__', 'versions'}
+                            and not (Path(directory) / name).is_symlink())
+        for name in sorted(names):
+            path = Path(directory) / name
+            relative = path.relative_to(tree).as_posix()
+            if path.suffix != '.pyc' and path.is_file() and not path.is_symlink() and not _executor_path(relative):
+                files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return files
+
+
+def validate_executor_inputs(original_source: dict[str, Any], current_source: dict[str, Any]) -> None:
+    """只分离本轮测试执行器变化；其它原冻结输入不允许被此本地运输掩盖。"""
+
+    for key in ('repository', 'fixtures'):
+        if original_source.get(key) != current_source.get(key):
+            raise ValueError(f'原链来源坐标变化：{key}；不能通过测试执行器运输放行')
+    original, current = original_source['files'], current_source['files']
+    changed = sorted(path for path in set(original) | set(current) if original.get(path) != current.get(path))
+    refused = [path for path in changed if not _executor_path(path) or path not in current]
+    if refused:
+        raise ValueError('原链非执行器输入变化：' + '、'.join(refused[:20]) + '；不重建世界、不自动重跑全集')
+
+
+def prepare_executor_source(tree: Path, original_source: dict[str, Any], current_source: dict[str, Any],
+                            executor_paths: list[str]) -> dict[str, Any]:
+    """把准确测试修复送入原 tree，原 source、世界和产品字节保持不变。
+
+    这是原 runner 的本地执行记录，不是新产品合同。修改旧测试执行器后必须真实运行当前重验，
+    旧 unittest 输出不获当前认证。运输意图先保存，半途退出只能继续同一字节意图，不能趁机换源码。
+    """
+
+    if record_root() is None or tree.is_symlink() or not tree.is_dir():
+        raise ValueError('测试执行器运输必须持有原链记录坐标与原普通 tree')
+    validate_executor_inputs(original_source, current_source)
+    original, current = original_source['files'], current_source['files']
+    wanted = sorted(set(executor_paths))
+    if not wanted or any(not _executor_path(path) or path not in current for path in wanted):
+        raise ValueError('测试执行器静态闭包为空、缺源码或越过允许范围')
+    source_root = Path(current_source['repository']).resolve(strict=True)
+    tree = tree.resolve(strict=True)
+    key = 'executor-source:' + str(tree)
+    journal = load_state(key) or {'history': [], 'pending': None}
+    previous = {}
+    for binding in journal['history']:
+        previous = _decoded(json.loads(read_cut(binding)))
+        if previous['tree'] != str(tree):
+            raise ValueError('测试执行器历史不属于原 tree')
+        for row in previous.get('updates', []):
+            for label, original_binding in row['bindings'].items():
+                expected = row['before_sha256'] if label == 'before' else previous['files'][row['path']]
+                if hashlib.sha256(read_cut(original_binding)).hexdigest() != expected:
+                    raise ValueError('测试执行器历史源码原件变化')
+    products = _executor_product_files(tree)
+    desired = {path: current[path] for path in wanted}
+    pending = journal['pending']
+    if pending is None:
+        rows = []
+        for relative in wanted:
+            target = _executor_file(tree, relative, required=False)
+            before = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
+            known = previous.get('files', {}).get(relative, original.get(relative))
+            if before != known:
+                raise ValueError(f'原测试执行器字节与已记录来源不同：{relative}；禁止覆盖未知修改')
+            origin = _executor_file(source_root, relative)
+            raw = origin.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != current[relative]:
+                raise ValueError(f'测试执行器源码在冻结后变化：{relative}')
+            if before != current[relative]:
+                rows.append((relative, before, raw, target.read_bytes() if target.is_file() else None))
+        document = {'tree': str(tree), 'files': desired, 'product_files': products}
+        if previous and all(previous.get(name) == value for name, value in document.items()):
+            verify_executor_source(journal['history'][-1], tree)
+            return journal['history'][-1]
+        archive = Path(tempfile.mkdtemp(prefix='executor-source-', dir=record_root()))
+        updates = []
+        for number, (relative, before, raw, old_raw) in enumerate(rows):
+            bindings = {}
+            for label, content in (('before', old_raw), ('after', raw)):
+                if content is not None:
+                    path = archive / f'{number}-{label}.py'
+                    with path.open('xb') as stream:
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    path.chmod(0o600)
+                    bindings[label] = file_cut(path)
+            updates.append({'path': relative, 'before_sha256': before, 'bindings': bindings})
+        document['updates'] = updates
+        pending = {'document': document, 'updates': updates, 'archive': archive}
+        directory = os.open(archive, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        journal['pending'] = pending
+        save_state(key, journal)
+    if (pending['document']['tree'] != str(tree) or pending['document']['files'] != desired
+            or pending['document']['product_files'] != products):
+        raise ValueError('原测试运输尚未完成且本次意图或产品字节变化；保留停点，禁止换意图')
+    for row in pending['updates']:
+        target = _executor_file(tree, row['path'], required=False)
+        raw = read_cut(row['bindings']['after'])
+        after = desired[row['path']]
+        if hashlib.sha256(raw).hexdigest() != after:
+            raise ValueError('测试运输新字节与冻结意图不同')
+        before = row['before_sha256']
+        if before is not None and hashlib.sha256(read_cut(row['bindings']['before'])).hexdigest() != before:
+            raise ValueError('测试运输原字节与冻结来源不同')
+        actual = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
+        if actual == after:
+            continue
+        if actual != before:
+            raise ValueError(f'未完成测试运输目标被修改：{row["path"]}；禁止覆盖')
+        descriptor, temporary = tempfile.mkstemp(prefix='.executor-', dir=target.parent)
+        try:
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, target)
+            directory = os.open(target.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    if _executor_product_files(tree) != products:
+        raise ValueError('测试运输改变了非执行器字节；保留现场，不执行原方法')
+    path = pending['archive'] / 'executor.json'
+    raw = (json.dumps(_encoded(pending['document']), sort_keys=True, ensure_ascii=False) + '\n').encode()
+    if path.exists():
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != raw:
+            raise ValueError('测试执行器原清单已存在但与同次运输不同')
+    else:
+        with path.open('xb') as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        path.chmod(0o600)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    binding = file_cut(path)
+    verify_executor_source(binding, tree)
+    journal['history'].append(binding)
+    journal['pending'] = None
+    save_state(key, journal)
+    return binding
+
+
+def verify_executor_source(binding: dict[str, Any], tree: Path, *, verify_product: bool = True) -> dict[str, Any]:
+    """当前 invocation 实读运输原件和准确执行器字节；产品演进仍由原世界消费者判断。"""
+
+    document = _decoded(json.loads(read_cut(binding)))
+    tree = tree.resolve(strict=True)
+    if document.get('tree') != str(tree) or not document.get('files'):
+        raise ValueError('测试执行器绑定不属于本次原 tree')
+    for relative, expected in document['files'].items():
+        if hashlib.sha256(_executor_file(tree, relative).read_bytes()).hexdigest() != expected:
+            raise ValueError(f'当前测试执行器字节变化：{relative}')
+    if verify_product and _executor_product_files(tree) != document['product_files']:
+        raise ValueError('本次测试运输的产品或夹具字节变化')
+    return document
+
+
+def executor_invocation_binding(tree: Path) -> dict[str, Any] | None:
+    """只消费原外层提供的内部绑定，不新增 CI 环境旁路；未设记录模式保持原入口。"""
+
+    encoded = os.environ.get(EXECUTOR_SOURCE_ENV)
+    if not encoded:
+        return None
+    binding = _decoded(json.loads(encoded))
+    verify_executor_source(binding, tree, verify_product=False)
+    return binding
 
 
 _INITIALIZING: set[str] = set()
