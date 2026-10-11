@@ -1,7 +1,7 @@
 """录制夹具的预算携带：保留原失败世界，仅投影剩余额度，不提供正式账本迁移。
 
 原项目账和时间账只读重放；新账以实际创建时刻起算，原起点、阶段消耗、请求键、根因和已批准延期
-在不可变收据中保留。创建失败后不能换起点重获额度；后继仅可在原执行窗口内消费双账批准的阶段延期。
+在不可变收据中保留。创建失败后不能换起点重获额度；后继只消费原 CLI 双账闭合的项目、Campaign 和阶段追加延期。
 """
 
 from __future__ import annotations
@@ -256,9 +256,11 @@ def create_ledgers(data_root: Path, *, carry_binding: Mapping[str, Any], upgrade
         source.write(initialization, frozen)
     projection = frozen["projection"]
     started = _at(projection["started_at_utc"])
-    if observed < started or observed >= _execution_deadline(snapshot):
-        raise source.replay.ReplayError("预算携带创建前总截止已到，禁止重置起点")
     project_root, time_root = data / project.ledger_dir_name("claude"), data / "control/timing"
+    if (observed < started or (observed >= _execution_deadline(snapshot)
+            and not (project_root.exists() and time_root.exists()))):
+        raise source.replay.ReplayError("预算携带创建前总截止已到，禁止重置起点")
+    # 已存在的两账由下方只读重放核验追加延期；缺任一本都不能越过原创建窗口重建。
     if not project_root.exists():
         project.create_project_ledger(project_root, project_id="claude-recorded-budget-successor",
             absolute_deadline_utc=snapshot["project_deadline_at_utc"], deadline_approved_by="recorded-fixture-carry",
@@ -315,8 +317,6 @@ def verify_budget(data_root: Path, *, carry_binding: Mapping[str, Any], now: dat
     snapshot = _snapshot(Path(document["predecessor_data_root"]), document["predecessor_campaign_id"], started)
     if projection != _projection(snapshot, started) or observed < started:
         raise source.replay.ReplayError("后继预算投影漂移或时间倒退")
-    if observed >= _execution_deadline(snapshot):
-        raise source.replay.ReplayError("后继已到原有效总截止或活动阶段截止，禁止借后继重验扩大窗口")
     project_root, time_root = data / project.ledger_dir_name("claude"), data / "control/timing"
     plan, _ = project._load_plan(project_root)
     time_plan, _ = timing._load_plan(time_root)
@@ -342,24 +342,30 @@ def verify_budget(data_root: Path, *, carry_binding: Mapping[str, Any], now: dat
     head = project._replay(project_root, plan, project._load_events(project_root), rebuild_cache=False)
     extensions = summary["deadline_extensions"]
     # 延期仍由原 CLI 写入；此处只消费同一后继真实两账的追加链。冻结的原账、初始化和计划不改写，
-    # 阶段等待的全部耗时继续计入；阶段延期不能扩张固定总窗口，也不能消除其他停线。
-    deadline = min(_execution_deadline(snapshot), _at(summary["total_deadline_at_utc"]))
+    # 全部等待成本继续计入；项目、Campaign、阶段各自批准，任何一层都不能替代另一层或消除其他停线。
+    deadline = min(_at(summary["total_deadline_at_utc"]), _at(head["effective_absolute_deadline_utc"]))
     additional = dict.fromkeys(timing.PHASE_ORDER, 0.0)
     if head["deadline_extensions"] != extensions:
         raise source.replay.ReplayError("后继延期尚未双账闭合或混入其他Campaign延期")
     for extension in extensions:
         owner = head["registered_campaigns"].get(extension["campaign_id"])
-        if (extension["scope"] != "stage" or extension["phase"] not in additional
+        if (extension["scope"] not in {"project", "campaign", "stage"}
+                or (extension["scope"] == "stage" and extension["phase"] not in additional)
+                or (extension["scope"] != "stage" and extension["phase"] is not None)
                 or not owner or owner["campaign_mode"] != "formal" or owner["target_version"] != source.VERSION
                 or owner.get("campaign_dir") != str(data / "evidence/campaigns" / extension["campaign_id"])
                 or extension["project_ledger_path"] != str(project_root)
-                or not started <= _at(extension["approved_at_utc"]) <= observed
-                or _at(extension["new_deadline_at_utc"]) > deadline):
-            raise source.replay.ReplayError("后继只接受同一正式Campaign在原固定窗口内的阶段延期")
+                or not started <= _at(extension["approved_at_utc"]) <= observed):
+            raise source.replay.ReplayError("后继只接受同一正式Campaign当前双账批准的延期")
         if not project.deadline_extension_applied(extension, head):
             raise source.replay.ReplayError("后继延期尚未双账提交")
-        additional[extension["phase"]] += (_at(extension["new_deadline_at_utc"])
-                                           - _at(extension["original_deadline_at_utc"])).total_seconds()
+        if extension["scope"] == "stage":
+            if _at(extension["new_deadline_at_utc"]) > deadline:
+                raise source.replay.ReplayError("后继阶段延期超过当前双账批准的总窗口")
+            additional[extension["phase"]] += (_at(extension["new_deadline_at_utc"])
+                                               - _at(extension["original_deadline_at_utc"])).total_seconds()
+    if observed >= deadline:
+        raise source.replay.ReplayError("后继已到有效总截止或活动阶段截止，须由原CLI追加对应层级的双账延期")
     if summary["status"] == "deadline_paused":
         raise source.replay.ReplayError("后继当前预算已暂停；须对实际待续阶段使用原CLI合法延期")
     if summary["status_before_pause"] in {"stopped", "stop_required", "abandoned"}:

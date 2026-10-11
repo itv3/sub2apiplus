@@ -958,13 +958,58 @@ class RecordedBudgetCarryTests(unittest.TestCase):
         self.assertEqual({path: path.read_bytes() for path in predecessor}, predecessor)
         self.assertEqual(self.carry.verify_accounting(paths["project_ledger"], carry_binding=binding,
             current_identity_keys=[])["precise_total"], 2)
-        # 产品允许的更大阶段延期仍不能冒充本夹具原冻结总窗口内的承接。
+        # 阶段延期不能替代 Campaign 总窗口的明确批准。
         outside = self.project.preview_deadline_extension(campaign, scope="stage", phase="VC-3",
             new_deadline_at_utc=(started + timedelta(minutes=100)).isoformat(), reason="测试越过夹具总窗口拒绝", now=moment)
         self.project.apply_deadline_extension(campaign, preview_path=Path(outside["preview_path"]),
             approve_sha256=outside["review_sha256"], approved_by="隔离夹具明确批准", now=moment)
-        with self.assertRaisesRegex(replay.ReplayError, "原固定窗口内"):
+        with self.assertRaisesRegex(replay.ReplayError, "双账批准的总窗口"):
             self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
+
+        # 项目与 Campaign 仍须各走真实 preview/apply；未批准或双账间中断一律不能放行。
+        project_deadline = self.observed + timedelta(hours=26)
+        campaign_deadline = project_deadline - timedelta(hours=1)
+        for scope, deadline in (("project", project_deadline), ("campaign", campaign_deadline)):
+            preview = self.project.preview_deadline_extension(campaign, scope=scope, phase=None,
+                new_deadline_at_utc=deadline.isoformat(), reason="保留原起点与累计成本的明确追加", now=moment)
+            with self.assertRaises(replay.ReplayError):
+                self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
+            arguments = {"preview_path": Path(preview["preview_path"]), "approve_sha256": preview["review_sha256"],
+                         "approved_by": "隔离夹具明确批准", "now": moment}
+            with self.assertRaisesRegex(self.project.ProjectLedgerError, "批准摘要"):
+                self.project.apply_deadline_extension(campaign, **{**arguments, "approve_sha256": "a" * 64})
+            with mock.patch.object(self.timing, "append_event", side_effect=RuntimeError("两账之间中断")):
+                with self.assertRaisesRegex(RuntimeError, "两账之间中断"):
+                    self.project.apply_deadline_extension(campaign, **arguments)
+            with self.assertRaisesRegex(replay.ReplayError, "双账闭合"):
+                self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
+            self.project.apply_deadline_extension(campaign, **arguments)
+            self.project.apply_deadline_extension(campaign, **arguments)
+            if scope == "project":
+                with self.assertRaisesRegex(replay.ReplayError, "双账批准的总窗口"):
+                    self.carry.verify_budget(self.data, carry_binding=binding, now=moment)
+        beyond_original = started + timedelta(minutes=96)
+        continued = self.carry.verify_budget(self.data, carry_binding=binding, now=beyond_original)
+        self.assertEqual(continued["remaining_seconds"], 4 * 60)
+        self.assertEqual(continued["original_execution_deadline_at_utc"], result["original_execution_deadline_at_utc"])
+        self.assertEqual(continued["combined_elapsed_seconds"], (beyond_original - self.started).total_seconds())
+        # 新的总窗口不会自动补当前阶段；等待全程计入，阶段到期后仍须独立批准。
+        later = self.observed + timedelta(hours=24, minutes=30)
+        with self.assertRaisesRegex(replay.ReplayError, "当前预算已暂停"):
+            self.carry.verify_budget(self.data, carry_binding=binding, now=later)
+        preview = self.project.preview_deadline_extension(campaign, scope="stage", phase="VC-3",
+            new_deadline_at_utc=campaign_deadline.isoformat(), reason="保留全程等待成本后延长当前阶段", now=later)
+        self.project.apply_deadline_extension(campaign, preview_path=Path(preview["preview_path"]),
+            approve_sha256=preview["review_sha256"], approved_by="隔离夹具明确批准", now=later)
+        extended = self.carry.verify_budget(self.data, carry_binding=binding, now=later)
+        self.assertEqual(extended["remaining_seconds"], 30 * 60)
+        self.assertEqual(extended["combined_elapsed_seconds"], (later - self.started).total_seconds())
+        self.assertEqual(extended["combined_phase_costs_seconds"]["VC-3"], (later - started).total_seconds() - 120)
+        self.assertEqual(self._ledgers(binding, later), paths)
+        self.assertEqual({path: path.read_bytes() for path in frozen}, frozen)
+        self.assertEqual({path: path.read_bytes() for path in predecessor}, predecessor)
+        self.assertEqual(self.carry.verify_accounting(paths["project_ledger"], carry_binding=binding,
+            current_identity_keys=[])["precise_total"], 2)
 
     def test_project_only_extension_cannot_open_a_window(self) -> None:
         from datetime import timedelta
