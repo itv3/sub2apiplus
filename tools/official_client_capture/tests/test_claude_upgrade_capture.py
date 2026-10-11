@@ -1715,18 +1715,20 @@ class AttemptFactsTests(unittest.TestCase):
                         stops.save_world(cursor, world)
                     save_typed(typed_record)
                     originals = {path: path.read_bytes() for path in records.rglob('*') if path.is_file()}
-                    with mock.patch.object(ControlStore, 'open_read_only', return_value=store), \
-                            mock.patch.object(stops, '_read_only_fact_index', side_effect=lambda value: contextlib.nullcontext(value)), \
-                            mock.patch.object(stops.upgrade, 'load_campaign_manifest', return_value={'campaign_id': 'scope-fixture'}), \
-                            mock.patch.object(stops.store_module, 'require_store_campaign_matches_plan'), \
-                            mock.patch.object(capture, '_host_data_root', return_value=root), \
-                            mock.patch.object(stops.vc, 'validate_vc_control'), \
-                            mock.patch.object(stops, 'refresh_world', side_effect=lambda _case, value: value), \
-                            mock.patch.object(transient.client_fixture, 'source_scope', side_effect=client_sources), \
-                            mock.patch.object(late.chain, 'seams', side_effect=lambda _path: contextlib.nullcontext()), \
-                            mock.patch.object(late.environment, 'TypedDeliveryFixture', return_value=typed), \
-                            mock.patch.object(outer.ScenarioAudit, 'revalidate', side_effect=lambda _case, name: {'scenario': name}) as audits, \
-                            mock.patch.object(stops, 'read_cut', wraps=stops.read_cut) as read_cut:
+                    # 动态管理同一组接缝，避免目标 Python 的静态嵌套块上限。
+                    with contextlib.ExitStack() as patches:
+                        patches.enter_context(mock.patch.object(ControlStore, 'open_read_only', return_value=store))
+                        patches.enter_context(mock.patch.object(stops, '_read_only_fact_index', side_effect=lambda value: contextlib.nullcontext(value)))
+                        patches.enter_context(mock.patch.object(stops.upgrade, 'load_campaign_manifest', return_value={'campaign_id': 'scope-fixture'}))
+                        patches.enter_context(mock.patch.object(stops.store_module, 'require_store_campaign_matches_plan'))
+                        patches.enter_context(mock.patch.object(capture, '_host_data_root', return_value=root))
+                        patches.enter_context(mock.patch.object(stops.vc, 'validate_vc_control'))
+                        patches.enter_context(mock.patch.object(stops, 'refresh_world', side_effect=lambda _case, value: value))
+                        patches.enter_context(mock.patch.object(transient.client_fixture, 'source_scope', side_effect=client_sources))
+                        patches.enter_context(mock.patch.object(late.chain, 'seams', side_effect=lambda _path: contextlib.nullcontext()))
+                        patches.enter_context(mock.patch.object(late.environment, 'TypedDeliveryFixture', return_value=typed))
+                        audits = patches.enter_context(mock.patch.object(outer.ScenarioAudit, 'revalidate', side_effect=lambda _case, name: {'scenario': name}))
+                        read_cut = patches.enter_context(mock.patch.object(stops, 'read_cut', wraps=stops.read_cut))
                         started = time.monotonic()
                         expected_records = [{'scenario': name} for name in expected]
                         for invocation in range(1, 3):
