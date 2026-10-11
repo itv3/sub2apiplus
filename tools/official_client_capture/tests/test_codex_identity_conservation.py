@@ -101,13 +101,18 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "_candidate_recovery_command_identity 加缺省为 Codex 的适配器参数，各调用点传清单归属客户端的适配器"
                                    "（Codex 清单得到的就是原常量，判定、命令与报错逐字不变，见 test_driver_client_table_codex_parity）。"
                                    "改动与新增的符号都在 wire、evidence 与评估读侧闭包外；10-08 首批清单编译拆分：_normalize_campaign_run_manifest 与纯批次编译器共用唯一规范化核心，严格读取入口保留绑定文件、VC-1／VC-5 门禁，Codex 运行期与历史重放仍走严格入口；"
-                                   "r2 按客户端只读元数据校验完整后继排列，Codex 返回原 _SUCCESSOR_PROTOCOLS tuple 对象，原校验器不改",
+                                   "r2 按客户端只读元数据校验完整后继排列，Codex 返回原 _SUCCESSOR_PROTOCOLS tuple 对象，原校验器不改；"
+                                   "B5b-03 原 revision 中断恢复仅新增读侧闭包外 finalize_orphaned_running_run：完整 COMMIT、唯一已启动动作"
+                                   "且 owner/monitor 双死亡时，在派发锁内幂等补 watchdog 中止与分钟尾部；monitor、reader、schema、后继顺序不改；"
+                                   "B5b-02 在既有 environment_redispatch 增加单动作首次候选采集的预约前 execution-failure 分支，"
+                                   "复核零预约零请求、逐字动作身份、正式收据及项目总账绑定，保留原失败诊断与协议顺序",
     "codex_upgrade_reconciler.py": "B1-03 对账器判定流程经适配器；原读侧函数除单独批准的 D4 目标函数外保留；B2-08 读侧闭包外的 _environment_facts、"
                                    "_deployment_receipt、_identity_facts 三处改经适配器成员（Codex 取值逐字等价）；两类对账收据的易变字段加上 "
                                    "campaign_deadline_at_utc（批准延期后同一对象能再对账，原先在这里失败关闭）；B4-05b-2 的"
                                    " validate_segment_reuse_preview 曾改成适配调用；D4 单点修复恢复 Codex 对原 segment_reuse_proofs 的静态调用，"
                                    "Claude 仍沿自身适配器。原集合核对、拒绝及统计保留，23／35 项旧依赖恢复；目标函数和由它到达的"
-                                   "适配服务面依赖按过渡原件精确登记，不修改其他旧证明符号、算法、策略屏障或忽略表",
+                                   "适配服务面依赖按过渡原件精确登记，不修改其他旧证明符号、算法、策略屏障或忽略表；"
+                                   "B5b-03 对账写入口在工具身份准入后调用孤儿 running 收口，新调用宿主不属于读侧闭包",
     "codex_upgrade_project_ledger.py": "B1-04 项目总账客户端维度：Claude v2 plan 带 client，码表、目录名与计量类别经适配器；Codex v1 逐字不变",
     "codex_upgrade_timing_ledger.py": (
         "B1-05 计时账本客户端维度：Claude v2 计划带 client，默认预算、承接表与总账目录名按客户端；Codex v1 逐字不变；"

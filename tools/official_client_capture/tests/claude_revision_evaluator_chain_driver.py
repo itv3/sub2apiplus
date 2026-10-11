@@ -26,6 +26,7 @@ from typing import Any
 from unittest import mock
 
 from tools.official_client_capture import claude_rule_assertion as assertion
+from tools.official_client_capture import claude_build_rule_assertion_results as assertion_builder
 from tools.official_client_capture import claude_tool_identity_policy as identity_policy
 from tools.official_client_capture import claude_upgrade as upgrade
 from tools.official_client_capture import claude_upgrade_compare as compare
@@ -33,6 +34,7 @@ from tools.official_client_capture import claude_upgrade_live_request_provenance
 from tools.official_client_capture import claude_upgrade_store as candidate_store
 from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 from tools.official_client_capture.tests import claude_boundary_receipt_fixture as boundary_fixture
 from tools.official_client_capture.tests import claude_candidate_build_fixture as build_fixture
@@ -249,6 +251,130 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
     def recover(self, context: dict[str, Any], action: str, *extra: Any) -> tuple[int, dict | None, str]:
         return self.source_command(["evaluation-recover", action, "--campaign-dir", context["campaign"],
             "--candidate-id", self.active_candidate, "--reviewer", "连续链审核", *extra])
+
+    def _interrupted_builder_source(self, context: dict[str, Any], sequence: int,
+                                    action: dict[str, Any]) -> dict[str, Any]:
+        """绑定已提交的原 builder 与完整 pass 前缀；不生成旧调用的退出码或成功输出。"""
+
+        campaign = context["campaign"]
+        commit_path = campaign / "control/vc/commits" / f"{sequence:04d}-vc-5.json"
+        commit = supervisor._read_vc_commit(commit_path)
+        run = Path(commit["parent_run_dir"])
+        state = supervisor._read_state(run)
+        monitor_pid = state.get("monitor_pid")
+        if (state["state"] != "running" or isinstance(monitor_pid, bool) or not isinstance(monitor_pid, int)
+                or monitor_pid <= 0 or supervisor._owner_alive(state["owner_pid"]) or supervisor._owner_alive(monitor_pid)):
+            raise ValueError("原中断 builder 必须是 owner 与 monitor 均已死亡的 running 父 run")
+        record = supervisor._read_json(run / "campaign-run-manifest.json")
+        inner = record.get("manifest")
+        if (not isinstance(inner, dict) or record.get("manifest_sha256") != supervisor._sha256(supervisor._canonical(inner))
+                or inner.get("candidate_id") != SECOND_CANDIDATE or inner.get("candidate_revision") != 2
+                or inner.get("evaluation_baseline") != 1 or inner.get("actions") != [action]
+                or inner.get("batch_sequence") != sequence or inner.get("phase") != "VC-5"
+                or inner.get("campaign_id") != campaign.name or state.get("campaign_id") != campaign.name
+                or run.parent != self.state_dir or run.name != "run-" + state["owner_nonce"]
+                or supervisor._staging_commit_for_run(campaign, state, inner, run) != commit):
+            raise ValueError("原中断 builder 的 COMMIT／动作／候选／b1 绑定不闭合")
+        root = upgrade._stage_write_target(campaign, SECOND_CANDIDATE, 1, "assertions")
+        if (root / "evaluation-run.json").exists() or (root / "results.json").exists():
+            raise ValueError("原中断 builder 已有最终输出，不能走无输出中断恢复")
+        chain = assertion_builder.EvaluationRun._load_chain(root / assertion_builder.CHECKPOINTS_DIRNAME)
+        if not chain:
+            raise ValueError("原中断 builder 没有可保留的完整检查点前缀")
+        bindings = [world_fixture.file_cut(commit_path), world_fixture.file_cut(run / "campaign-run-manifest.json")]
+        for checkpoint in chain:
+            if (checkpoint["status"] != "pass" or checkpoint["executed_by"]["run_dir"] != str(run)
+                    or checkpoint["executed_by"]["owner_nonce"] != state["owner_nonce"]
+                    or checkpoint["executed_by"]["run_manifest_sha256"] != record["manifest_sha256"]):
+                raise ValueError("原中断 builder 检查点不属于本 run 的完整 pass 前缀")
+            checkpoint_path = root / assertion_builder.CHECKPOINTS_DIRNAME / (
+                f"{checkpoint['sequence']:04d}-{checkpoint['rule']}-{checkpoint['side']}.json")
+            bindings.append(world_fixture.file_cut(checkpoint_path))
+            for field in ("document", "input_projection"):
+                path = campaign / checkpoint[field]["path"]
+                if not path.resolve().is_relative_to(root.resolve()):
+                    raise ValueError("原中断 builder 的检查点引用超出 b1 目录")
+                binding = world_fixture.file_cut(path)
+                if binding["sha256"] != checkpoint[field]["sha256"]:
+                    raise ValueError("原中断 builder 的检查点文档／投影摘要不一致")
+                bindings.append(binding)
+        return {"run_dir": run, "commit_sha256": commit["commit_sha256"],
+                "checkpoint_count": len(chain), "checkpoint_head_sha256": chain[-1]["checkpoint_sha256"],
+                "bindings": bindings}
+
+    def vc_step(self, cursor: str, key: str, context: dict[str, Any], phase: str,
+                sequence: int, action: dict[str, Any]) -> tuple[int, dict | None, str]:
+        """revision 的 b1 builder 双死亡只走正规对账与 N+1；其他命令仍用原承接接缝。"""
+
+        logical = "command-step:" + cursor + ":" + key
+        pending = world_fixture.load_state(logical)
+        recovery_name = "interrupted-builder:" + cursor
+        recovery = world_fixture.load_state(recovery_name)
+        if recovery is None and (pending is None or pending.get("status") != "pending"):
+            return super().vc_step(cursor, key, context, phase, sequence, action)
+        if (key != "builder" or phase != "VC-5" or context.get("candidate_id") != SECOND_CANDIDATE
+                or context.get("revision") != 2 or context.get("evaluation_baseline") != 1
+                or action.get("action_id") != "assert-rules"):
+            return super().vc_step(cursor, key, context, phase, sequence, action)
+        if not os.environ.get(world_fixture.METHOD_RESUME_ENV):
+            raise ValueError("原中断 builder 只能从原方法恢复入口进入")
+        campaign = context["campaign"]
+        continuation = world_fixture.require_registered_control_continuation(campaign)
+        if (set(continuation) != {"mode", "campaign", "binding"}
+                or continuation["mode"] != "registered-control-evolution"
+                or continuation["campaign"] != str(campaign.resolve())):
+            raise ValueError("原中断 builder 的正式 control 演进来源凭证不属于本 Campaign")
+        argv = [str(value) for value in ("compile-and-run-vc-batch", "--campaign-dir", campaign, "--phase", phase,
+            "--sequence", sequence, "--predecessor-checkpoint", vc.vc_checkpoint_path(campaign, "VC-4", revision=2),
+            "--action-plan", self.root / "action-plans" / f"vc-5-{sequence:04d}.json", "--state-dir", self.state_dir)]
+        registry = (world_fixture.load_state("command-step-keys") or {}).get("keys", {})
+        if (pending is None or pending.get("status") != "pending" or pending.get("argv") != argv
+                or pending.get("campaign") != campaign or registry.get(logical) != {"argv": argv, "campaign": campaign}):
+            raise ValueError("原中断 builder 的 pending／登记清单／参数不一致")
+        prefix = pending.get("observation_prefix")
+        begin = pending.get("observation_begin")
+        observations = (world_fixture.load_state("command-observations") or {}).get("commands", [])
+        if prefix is None or begin != len(prefix) or observations[:begin] != prefix:
+            raise ValueError("原中断 builder 的命令观测前缀已改变")
+        invocation = pending.get("invocation_binding")
+        if invocation is None or json.loads(world_fixture.read_cut(invocation)) != {"argv": argv}:
+            raise ValueError("原中断 builder 缺少准确的副作用前调用原件")
+        invocation_dir = invocation["path"].parent
+        if any((invocation_dir / name).exists() for name in ("stdout.log", "stderr.log", "command.json")):
+            # 完整旧输出仍交原接缝核验；不将普通 pending 变成新批次。
+            if recovery is None:
+                return super().vc_step(cursor, key, context, phase, sequence, action)
+            raise ValueError("已裁定无输出的原 builder 调用后来出现输出，禁止混用")
+        if recovery is None:
+            if observations[begin:]:
+                raise ValueError("原中断 builder 之后出现未绑定的命令，禁止推测续作位置")
+            world_fixture.verify_commands(prefix)
+            source = self._interrupted_builder_source(context, sequence, action)
+            recovery = {"original_sequence": sequence, "recovery_sequence": sequence + 1,
+                "original_pending": world_fixture.file_cut(world_fixture._state_path(logical)),
+                "invocation": invocation, "source": source, "product_continuation": continuation, "status": "pending"}
+            world_fixture.save_state(recovery_name, recovery)
+        if (recovery["original_sequence"] != sequence or recovery["recovery_sequence"] != sequence + 1
+                or recovery["invocation"] != invocation or recovery.get("product_continuation") != continuation):
+            raise ValueError("原中断 builder 的后继恢复序号／调用／演进来源绑定漂移")
+        bindings = [recovery["original_pending"], invocation, continuation["binding"], *recovery["source"]["bindings"]]
+        def verify_originals():
+            for binding in bindings:
+                raw = world_fixture.read_cut(binding)
+                if binding["offset"] != 0 or len(raw) != binding["path"].stat().st_size:
+                    raise ValueError("原中断 builder 的不可变原件后来被追加")
+        verify_originals()
+        code, reconciled, stderr = self.source_step(cursor, "reconcile-interrupted-builder",
+            ["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", recovery["source"]["run_dir"]], campaign)
+        self.assertIsNotNone(reconciled, stderr)
+        self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
+        next_sequence = recovery["recovery_sequence"]
+        outcome = super().vc_step(cursor, "builder-after-interruption", context, phase, next_sequence, action)
+        verify_originals()
+        context["next_sequence"] = max(context["next_sequence"], next_sequence + 1)
+        context["last_builder_sequence"] = next_sequence
+        world_fixture.save_state(recovery_name, {**recovery, "status": "complete"})
+        return outcome
 
     def dispatch_builder(self, context: dict[str, Any], sequence: int, *, baseline: int) -> tuple[int, dict | None, str]:
         """先刷新当前 revision 的真实候选，再走父类的 compare 与正式 builder 配置。"""

@@ -757,6 +757,115 @@ class StagingSupervisorTests(unittest.TestCase):
             outcome = supervisor.finalize_prepared_run(client.run_dir, operation="test:finalize")
             self.assertFalse(outcome["finalized"])
             self.assertEqual(outcome["state"], "aborted_prepared")
+        self._assert_running_orphan_finalize()
+
+    def _running_orphan_fixture(self, root: Path) -> tuple[Path, Path]:
+        """只替换进程启动，COMMIT、队列、事件与分钟账均由原合同构造。"""
+
+        campaign, plan = self._staging_campaign(root)
+        action = {"action_id": "work", "operation": "VC-2:work", "timeout_seconds": 5,
+                  "command": ["/bin/true"], "item_ids": ["item-a"]}
+        predecessor = {"path": "control/vc/vc-1-checkpoint.json", "sha256": "4" * 64,
+                       "phase": "VC-1", "checkpoint_sha256": "5" * 64}
+        now = datetime.now(timezone.utc)
+        batch = artifacts.build_vc_batch(campaign_plan=plan, phase="VC-2", sequence=2,
+            predecessor_checkpoint=predecessor, execute_item_ids=["item-a"], reuse_item_ids=[],
+            actions=[action], compiled_at_utc=now.isoformat(), must_start_by_utc=(now + timedelta(seconds=15)).isoformat())
+        inner = supervisor.build_batched_campaign_run_manifest(campaign_id=CAMPAIGN_ID,
+            campaign_plan_sha256=plan["plan_sha256"], batch_id=batch["batch_id"], batch_sequence=2,
+            batch_sha256=batch["batch_sha256"], phase="VC-2", predecessor_checkpoint=predecessor,
+            original_deadline_at_utc=plan["original_deadline_at_utc"], actions=batch["actions"],
+            execute_items=["item-a"], reuse_items=[], candidate_revision=None, candidate_id=None)
+        client = self._client(root)
+        process = mock.Mock(pid=987654321)
+        process.poll.return_value = None
+        with mock.patch.object(supervisor.subprocess, "Popen", return_value=process):
+            client.start(prepared=True, staging_binding=self._binding(campaign))
+        run = client.run_dir
+        self._write_json(run / "campaign-run-manifest.json", {"schema_version": inner["schema_version"],
+            "manifest_sha256": supervisor._sha256(supervisor._canonical(inner)), "manifest": inner})
+        formal = campaign / "control/vc/run-manifests/0002-vc-2.json"
+        self._write_json(formal, inner)
+        self._write_json(campaign / "control/vc/batches/0002-vc-2.json", batch)
+        commit = artifacts.build_vc_commit(campaign_id=CAMPAIGN_ID, sequence=2, phase="VC-2", staging_attempt=1,
+            batch_sha256=batch["batch_sha256"], manifest_sha256=supervisor._sha256(supervisor._canonical(inner)),
+            parent_run_dir=str(run), owner_nonce=client.owner_nonce, ledger_event_ids=[], committed_at_utc=now.isoformat())
+        self._write_json(campaign / "control/vc/commits/0002-vc-2.json", commit)
+        client.activate_committed(commit)
+        supervisor._append_event(run, event_type="action-started", operation="VC-2:work", job_id="work",
+            owner_pid=client.owner_pid, owner_nonce=client.owner_nonce, campaign_id=CAMPAIGN_ID, phase="VC-2")
+        supervisor._write_watchdog_heartbeat(run, owner_alive=True, heartbeat=None, heartbeat_age=None, status="active")
+        started = supervisor._read_state(run)["started_at_epoch"]
+        supervisor._write_minute_record(run, bucket_start=started, bucket_end=time.time(), heartbeat=None,
+            owner_alive=True, heartbeat_age=None, classification="active", reason="原分钟桶")
+        return campaign, run
+
+    def _assert_running_orphan_finalize(self) -> None:
+        """沿原 UID 核双死亡、COMMIT、唯一动作和每个写边界的重入，不启动长链。"""
+
+        # 所有拒绝都发生在写入补收口事件之前。
+        for problem in ("owner-alive", "monitor-alive", "commit-missing", "manifest-tampered",
+                        "batch-tampered", "wrong-campaign", "no-active-action", "two-active-actions"):
+            with self.subTest(orphan_rejection=problem), tempfile.TemporaryDirectory() as directory:
+                campaign, run = self._running_orphan_fixture(Path(directory).resolve())
+                state = supervisor._read_state(run)
+                if problem == "commit-missing":
+                    Path(state["staging_binding"]["commit_path"]).unlink()
+                elif problem == "manifest-tampered":
+                    record = supervisor._read_json(run / "campaign-run-manifest.json")
+                    record["manifest"]["actions"][0]["operation"] = "VC-2:other"
+                    self._write_json(run / "campaign-run-manifest.json", record)
+                elif problem == "batch-tampered":
+                    path = campaign / "control/vc/batches/0002-vc-2.json"
+                    record = supervisor._read_json(path)
+                    record["actions"][0]["operation"] = "VC-2:other"
+                    self._write_json(path, record)
+                elif problem == "wrong-campaign":
+                    record = supervisor._read_json(campaign / "campaign.json")
+                    record["campaign_id"] = "other-campaign"
+                    self._write_json(campaign / "campaign.json", record)
+                elif problem in {"no-active-action", "two-active-actions"}:
+                    supervisor._append_event(run,
+                        event_type="action-finished" if problem == "no-active-action" else "action-started",
+                        operation="VC-2:work", job_id="work", owner_pid=state["owner_pid"],
+                        owner_nonce=state["owner_nonce"], campaign_id=CAMPAIGN_ID, phase="VC-2")
+                original = {path: path.read_bytes() for path in run.iterdir() if path.is_file()}
+                def alive(pid):
+                    return ((problem == "owner-alive" and pid == state["owner_pid"])
+                            or (problem == "monitor-alive" and pid == state["monitor_pid"]))
+                with mock.patch.object(supervisor, "_owner_alive", side_effect=alive), self.assertRaises(SupervisorError):
+                    supervisor.finalize_orphaned_running_run(run, campaign_dir=campaign)
+                self.assertEqual({path: path.read_bytes() for path in run.iterdir() if path.is_file()}, original)
+        for boundary in (None, "audit-incomplete", "watchdog-aborted", "_stop_receipt",
+                         "_finalize_minute_ledger", "_set_terminal_state"):
+            with self.subTest(orphan_write_boundary=boundary), tempfile.TemporaryDirectory() as directory:
+                campaign, run = self._running_orphan_fixture(Path(directory).resolve())
+                event_prefix = (run / "events.ndjson").read_bytes()
+                minute_prefix = (run / "minute-ledger.ndjson").read_bytes()
+                with mock.patch.object(supervisor, "_owner_alive", return_value=False):
+                    if boundary is not None:
+                        function = "_append_event" if boundary in {"audit-incomplete", "watchdog-aborted"} else boundary
+                        original = getattr(supervisor, function)
+                        def interrupt(*args, **kwargs):
+                            result = original(*args, **kwargs)
+                            if function != "_append_event" or kwargs["event_type"] == boundary:
+                                raise RuntimeError("收口写入后中断")
+                            return result
+                        with mock.patch.object(supervisor, function, side_effect=interrupt), self.assertRaisesRegex(RuntimeError, "写入后中断"):
+                            supervisor.finalize_orphaned_running_run(run, campaign_dir=campaign)
+                    supervisor.finalize_orphaned_running_run(run, campaign_dir=campaign)
+                    final = {path: path.read_bytes() for path in run.iterdir() if path.is_file()}
+                    self.assertIsNone(supervisor.finalize_orphaned_running_run(run, campaign_dir=campaign))
+                self.assertEqual({path: path.read_bytes() for path in run.iterdir() if path.is_file()}, final)
+                self.assertTrue((run / "events.ndjson").read_bytes().startswith(event_prefix))
+                self.assertTrue((run / "minute-ledger.ndjson").read_bytes().startswith(minute_prefix))
+                self.assertEqual(len((run / "minute-ledger.ndjson").read_text().splitlines()), 2)
+                self.assertEqual(supervisor._audit_command(run)["integrity_errors"], [])
+                self.assertEqual([event["event_type"] for event in supervisor.load_events(run)][-2:],
+                                 ["audit-incomplete", "watchdog-aborted"])
+                stop = supervisor.read_stop_receipt(run)
+                self.assertEqual(stop["reason"], "owner-process-not-alive-after-heartbeat-gap")
+                self.assertIsNone(stop["action_outputs_sha256"])
 
     # ------------------------------------------------------------------
     # T4.4：history 过滤、COMMIT 要求与旧模型链

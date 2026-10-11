@@ -309,6 +309,10 @@ def _verify_batch_result(campaign: Path, result: dict[str, Any]) -> None:
     for previous in result.get("recorded_recoveries", []):
         if _recorded_failed_batch(campaign, source.bound(previous["action_plan"])) != previous:
             raise replay.ReplayError("完整后继原失败批次的正式对账证明漂移")
+    for previous in result.get("recorded_aborts", []):
+        if _recorded_staging_abort(campaign, source.bound(previous["action_plan"]),
+                                   Path(previous["attempt_dir"])) != previous:
+            raise replay.ReplayError("完整后继原未提交 ABORT 的原件绑定漂移")
     commit = upgrade._read_staging_commit(upgrade._staging_commit_path(campaign, result["batch_sequence"], result["phase"]))
     batch = artifacts.validate_vc_batch(source.read(Path(result["compile"]["batch"])))
     manifest = upgrade._vc_run_manifest_from_batch(batch, batch_model="staging")
@@ -379,6 +383,42 @@ def _recorded_failed_batch(campaign: Path, action_path: Path) -> dict[str, Any]:
             "stop_receipt": source.binding(run_dir / "stop-receipt.json"), "reconciliation": source.binding(receipt)}
 
 
+def _recorded_staging_abort(campaign: Path, action_path: Path, attempt_dir: Path) -> dict[str, Any]:
+    """只读验真无父 run 的 PREPARED＋ABORT；收账和新 attempt 一律交正式 compile。"""
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+
+    data = campaign.parents[2]
+    if action_path.parent != data / "control/actions":
+        raise replay.ReplayError("原未提交动作计划不属于本数据根")
+    action = source.read(source.bound(source.binding(action_path), root=data))
+    sequence = int(action_path.name.split("-", 1)[0])
+    phase = action["actions"][0]["operation"].split(":", 1)[0]
+    sequence_dir = upgrade._staging_sequence_dir(campaign, sequence, phase)
+    attempts = dict(upgrade._staging_attempt_dirs(sequence_dir))
+    if attempt_dir not in attempts.values():
+        raise replay.ReplayError("原未提交 staging attempt 不属于同序号同阶段")
+    prepared = upgrade._load_prepared_staging_attempt(campaign, attempt_dir, owner_nonce=None,
+                                                     sequence=sequence, phase=phase)
+    abort_path = attempt_dir / "ABORT"
+    abort = artifacts.validate_staging_abort(source.read(source.bound(source.binding(abort_path), root=campaign)))
+    manifest = upgrade.load_campaign_manifest(campaign)
+    plan = upgrade._vc_campaign_plan(campaign, manifest)
+    inner = prepared["run_manifest"]
+    if (abort["campaign_id"] != manifest["campaign_id"] or abort["campaign_plan_sha256"] != plan["plan_sha256"]
+            or abort["sequence"] != sequence or abort["phase"] != phase or abort["staging_attempt"] != prepared["attempt"]
+            or abort["batch_sha256"] != prepared["batch"]["batch_sha256"]
+            or abort["manifest_sha256"] != prepared["manifest_sha256"]
+            or any(abort[field] is not None for field in ("parent_run_dir", "parent_run_state", "reconciliation_receipt"))
+            or inner["campaign_id"] != manifest["campaign_id"] or inner["actions"] != action["actions"]
+            or inner["execute_items"] != action["execute_item_ids"] or inner["reuse_items"] != action["reuse_item_ids"]):
+        raise replay.ReplayError("原未提交 ABORT、PREPARED、批次与动作计划不闭合")
+    return {"sequence": sequence, "phase": phase, "attempt_dir": attempt_dir,
+            "action_plan": source.binding(action_path),
+            "files": {name: source.binding(attempt_dir / name)
+                      for name in ("PREPARED", "ABORT", "batch.json", "run-manifest.json")}}
+
+
 def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaign: Path,
                                name: str, argv: list[str], **options: Any) -> dict[str, Any]:
     """未派发继续原序号；已提交失败只消费正式对账闭合，再由原生产者派 N+1。"""
@@ -402,10 +442,20 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
     action_bindings = {path: source.binding(path) for path in previous_paths}
     for binding in action_bindings.values():
         source.bound(binding, root=data)
-    for group in ("batches", "run-manifests", "commits", "staging"):
+    for group in ("batches", "run-manifests", "commits"):
         directory = campaign / "control/vc" / group
         if directory.is_symlink() or any(directory.glob(f"{sequence:04d}-*")):
             raise replay.ReplayError("原序号已经形成批次产物，不能按派发前拒绝续作")
+    staging = campaign / "control/vc/staging"
+    staged = sorted(staging.glob(f"{sequence:04d}-*"))
+    aborted = []
+    if staging.is_symlink() or len(staged) > 1 or (staged and action_path not in current):
+        raise replay.ReplayError("原序号已经形成批次产物，缺唯一原动作计划或 staging 目录不可信")
+    if staged:
+        attempts = upgrade._staging_attempt_dirs(staged[0])
+        if not attempts:
+            raise replay.ReplayError("原序号已经形成批次产物，但缺完整未提交 ABORT")
+        aborted = [_recorded_staging_abort(campaign, action_path, path) for _number, path in attempts]
     state_root = data / "supervisor"
     if state_root.is_symlink():
         raise replay.ReplayError("原监督器目录不能是链接")
@@ -443,7 +493,8 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
         result = original(data, campaign, name, argv, **options)
     if not consumed:
         raise replay.ReplayError("拒派续作没有经过原动作计划消费者")
-    return {**result, "recorded_recoveries": recoveries} if recoveries else result
+    return {**result, **({"recorded_recoveries": recoveries} if recoveries else {}),
+            **({"recorded_aborts": aborted} if aborted else {})}
 
 
 def _recorded_batch(original: Callable[..., Any], data: Path, campaign: Path,

@@ -5386,6 +5386,10 @@ def reconcile_supervisor_run(
     _require_registered_tool_identity(identity, _ledger_facts(ledger_dir, now=observed))
     _require_resume_closed(campaign_dir, manifest, ledger_dir)
     _finalize_orphaned_prepared_run(resolved_run_dir)
+    try:
+        supervisor.finalize_orphaned_running_run(resolved_run_dir, campaign_dir=campaign_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"已启动孤儿父 run 无法终态化：{error}") from error
     orphan_backfill = _backfill_orphaned_action_failure(resolved_run_dir, campaign_dir, manifest)
     run = _run_facts(resolved_run_dir, campaign_dir, manifest)
     if orphan_backfill is not None:

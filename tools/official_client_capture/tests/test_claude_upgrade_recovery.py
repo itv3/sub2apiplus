@@ -640,6 +640,16 @@ class SupervisorRunReconcileTests(RecoveryChainCase):
         command = ["python3", "claude_upgrade.py", "capture-official", "run", "--campaign-dir", str(campaign), "--acknowledge-live-requests"]
         run_dir = _vc1_run_dir(self, campaign, "prereserve", inner=self._batch(campaign, "capture-official", command, sorted(seal_tests.SEAL_JOBS)), action_id="capture-official")
         with self.chain_patched(), self.segment_paths_forbidden():
+            # 新增孤儿 running 收口也必须在身份准入后；未登记演进时不写父 run。
+            original = {path: path.read_bytes() for path in run_dir.iterdir() if path.is_file()}
+            with mock.patch.object(reconciler, "_require_registered_tool_identity",
+                    side_effect=reconciler.ReconcilerError("未登记工具演进短验")), \
+                    mock.patch.object(supervisor, "finalize_orphaned_running_run") as finalize:
+                code, _refused, stderr = self.run_main(["reconcile-supervisor-run", "--campaign-dir", str(campaign), "--run-dir", str(run_dir)])
+                self.assertNotEqual(code, 0)
+                self.assertIn("未登记工具演进短验", stderr)
+                finalize.assert_not_called()
+            self.assertEqual({path: path.read_bytes() for path in run_dir.iterdir() if path.is_file()}, original)
             code, result, stderr = self.run_main(["reconcile-supervisor-run", "--campaign-dir", str(campaign), "--run-dir", str(run_dir)])
             self.assertEqual((code, result["status"]), (0, "recoverable"), stderr)
             self.assertEqual(result["live_request_count"], 0)

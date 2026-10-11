@@ -597,7 +597,11 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 driver._prepare_view("vc3-revision-view", campaign, **arguments)
 
     def test_real_batch_stop_reuses_original_commit_parent_and_results(self) -> None:
-        """派发前续原序号；真实失败经正式对账后 N+1 执行零请求草案，完成后不再派批次。"""
+        """VC-5 同形控制链：预约前失败→正式对账→旧准入 ABORT→同序号新 attempt→只读 complete。
+
+        真实执行 VC-3／VC-4 封存、编译、父监督器、诊断、两本账和 ABORT。动作内部只调用真实预约前
+        管理 token guard；通过后写明示的控制探针结果，不执行采集、不生成候选 attempt 或版本认证。
+        """
         from tools.official_client_capture import claude_upgrade as upgrade
         from tools.official_client_capture import codex_upgrade_supervisor as supervisor
         from tools.official_client_capture.tests import claude_fault_chain_world as stops
@@ -608,107 +612,151 @@ class RecordedFullPreparationTests(unittest.TestCase):
         self.addCleanup(case.tearDownClass)
         case.setUp()
         self.addCleanup(case.doCleanups)
-        campaign = case.campaign = case.build_batch_campaign()
+        build = case.build_batch_campaign
+        def build_with_driver_state(**options):
+            campaign = build(**options)
+            case.state_dir = case.data / "supervisor"
+            case.state_dir.mkdir(mode=0o700)
+            return campaign
+        with mock.patch.object(case, "build_batch_campaign", side_effect=build_with_driver_state):
+            campaign = case.drive_vc3_vc4_to_candidate_sealed()
+        sequence = max(upgrade._committed_vc_sequences(campaign, upgrade.load_campaign_manifest(campaign))) + 1
+        name, phase = "vc5-01-candidate-run", "VC-5"
+        argv = ["capture-candidate", "run", "--campaign-dir", str(campaign),
+                "--candidate-id", "claude-cand-r1", "--acknowledge-live-requests"]
         origin = source.write(self.data / "control/batch-origin.json", {"fixture_only": True})
         record_root = self.data / "batch-stops"
         record_root.mkdir()
         token = driver._SUCCESSOR.set({"data": case.data, "source_state": source.binding(origin)})
         self.addCleanup(driver._SUCCESSOR.reset, token)
-        producers = []
-        def produced():
-            producers.append(outcome["campaign_run"]["run_dir"])
-            return {"batches": [outcome]}
-        def verify(result):
-            driver._verify_stage_batches(campaign, result)
-
+        inject = case.root / "short-inject"
+        inject.mkdir(mode=0o700)
+        result_path = inject / "preflight-probe.json"
+        token_path = inject / "invalid-offline-token"
+        # 子动作仍走正式 CLI admission、诊断和监督协议；成功标志只属于下列显式控制探针。
+        (inject / "usercustomize.py").write_text(
+            "import json, os, sys\n"
+            f"if os.environ.get({supervisor.CAMPAIGN_RUN_ACTION_ID_ENV!r}) == {name!r}:\n"
+            f"    sys.path.insert(0, {str(vc1.REPOSITORY)!r})\n"
+            "    from types import SimpleNamespace\n"
+            "    from pathlib import Path\n"
+            "    from tools.official_client_capture import claude_upgrade_capture as capture\n"
+            "    from tools.official_client_capture import claude_upgrade_candidate_capture as candidate\n"
+            "    from tools.official_client_capture import claude_upgrade_plan as plan\n"
+            "    def control_probe(arguments):\n"
+            "        job = SimpleNamespace(steps=[{'environment': {'GATEWAY_TRIGGER': plan.CANDIDATE_TRIGGER_ACCOUNT_REFRESH}}])\n"
+            "        candidate.require_admin_token_for([job])\n"
+            "        result = {'fixture_only': True, 'scope': 'vc5-prereservation-control-probe', 'live_request_count': 0}\n"
+            f"        with Path({str(result_path)!r}).open('x') as handle:\n"
+            "            json.dump(result, handle)\n"
+            "        return result, 0\n"
+            "    capture.capture_candidate_run_command = control_probe\n", encoding="utf-8")
         def resume():
-            return driver._recorded_batch(vc1._batch, case.data, campaign, "vc2-short-audit",
-                ["classify", "--campaign-dir", str(campaign)], phase="VC-2")
+            return driver._recorded_batch(vc1._batch, case.data, campaign, name, argv, phase=phase)
 
-        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}):
-            with mock.patch.object(upgrade, "_prepare_atomic_batch_governance",
-                    side_effect=upgrade.ConfigurationError("项目总账拒绝派发：隔离测试预算暂停")):
-                with self.assertRaisesRegex(upgrade.ConfigurationError, "项目总账拒绝派发"):
-                    resume()
-            key = "recorded-full-step:batch:vc2-short-audit"
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root),
+                "PYTHONPATH": str(inject), "ADMIN_BEARER_TOKEN": "", "ADMIN_BEARER_TOKEN_FILE": str(token_path)}):
+            # 初次普通 capture 的真正管理 token guard 失败；没有任何候选预约。
+            with self.assertRaises(replay.ReplayError):
+                resume()
+            key = "recorded-full-step:batch:" + name
             self.assertEqual(stops.load_state(key)["status"], "started")
-            action_path = case.data / "control/actions/2-vc2-short-audit.json"
-            original_action = action_path.read_bytes()
-            action_path.write_bytes(original_action + b" ")
-            with self.assertRaisesRegex(replay.ReplayError, "动作计划与原字节不同"):
-                resume()
-            action_path.write_bytes(original_action)
-            staged = campaign / "control/vc/staging/0002-vc-2"
-            staged.mkdir(parents=True, mode=0o700)
-            with self.assertRaisesRegex(replay.ReplayError, "已经形成批次产物"):
-                resume()
-            staged.rmdir()
-            unknown_parent = case.data / "supervisor/run-unknown"
-            unknown_parent.mkdir(parents=True, mode=0o700)
-            unknown_parent.parent.chmod(0o700)
-            with self.assertRaises((supervisor.SupervisorError, OSError)):
-                resume()
-            unknown_parent.rmdir()
-
-            # 本轮继续同一动作，真实子进程在草案执行前中断；保留 COMMIT 和 failed 父 run。
-            inject = case.root / "short-inject"
-            inject.mkdir(mode=0o700)
-            (inject / "usercustomize.py").write_text(
-                "import os\n"
-                f"if os.environ.get({supervisor.CAMPAIGN_RUN_ACTION_ID_ENV!r}) == 'vc2-short-audit':\n"
-                "    os._exit(17)\n", encoding="utf-8")
-            with mock.patch.dict(os.environ, {"PYTHONPATH": str(inject)}):
-                with self.assertRaises(replay.ReplayError):
-                    resume()
-            failed_commit = upgrade._staging_commit_path(campaign, 2, "VC-2")
+            failed_commit = upgrade._staging_commit_path(campaign, sequence, phase)
             failed_run = Path(source.read(failed_commit)["parent_run_dir"])
-            self.assertEqual(supervisor._read_state(failed_run)["state"], "failed")
+            prior_state = supervisor._read_state(failed_run)
+            prior = supervisor._run_inner_manifest(failed_run)
+            self.assertEqual(prior_state["state"], "failed")
+            self.assertEqual((prior["phase"], prior["execute_items"], prior["actions"][0]["item_ids"]),
+                             (phase, [name], [name]))
+            self.assertEqual(supervisor.candidate_capture_recovery_action(prior, name), "capture")
+            diagnostic = failed_run / "action-diagnostics" / f"action-{name}-failure.json"
+            self.assertEqual(source.read(diagnostic)["failure_class"], "execution-failure")
+            from types import SimpleNamespace
+            from tools.official_client_capture import claude_upgrade_candidate_capture as candidate
+            from tools.official_client_capture import claude_upgrade_plan as plan
+            with self.assertRaises(upgrade.ConfigurationError) as guard:
+                candidate.require_admin_token_for([SimpleNamespace(steps=[{
+                    "environment": {"GATEWAY_TRIGGER": plan.CANDIDATE_TRIGGER_ACCOUNT_REFRESH}}])])
+            self.assertEqual(source.read(diagnostic)["error_signature"],
+                             supervisor._action_error_signature("handled-error", guard.exception))
+            action_path = case.data / "control/actions" / f"{sequence}-{name}.json"
             preserved = {path: path.read_bytes() for path in (action_path, failed_commit, failed_run / "state.json",
-                         failed_run / "campaign-run-manifest.json", failed_run / "stop-receipt.json")}
-            self.assertEqual(stops.load_state(key)["status"], "started")
+                         failed_run / "campaign-run-manifest.json", failed_run / "stop-receipt.json", diagnostic)}
+            self.assertFalse(list(campaign.glob("candidates/*/attempts/*/reservation.json")))
             with self.assertRaisesRegex(replay.ReplayError, "尚未正式对账闭合"):
                 resume()
-            self.assertFalse((case.data / "control/actions/3-vc2-short-audit.json").exists())
+            self.assertFalse((case.data / "control/actions" / f"{sequence + 1}-{name}.json").exists())
             code, reconciled, stderr = batches.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
             self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
             receipt = campaign / "control/reconciliation" / f"run-{failed_run.name}" / "supervisor-run-reconciliation.json"
             receipt_bytes = receipt.read_bytes()
+            self.assertEqual((source.read(receipt)["reservation_exists"], source.read(receipt)["live_request_count"]), (False, 0))
             receipt.unlink()
             with self.assertRaisesRegex(replay.ReplayError, "尚未正式对账闭合"):
                 resume()
             receipt.write_bytes(receipt_bytes)
             receipt.chmod(0o600)
+
+            # 复现旧 environment_redispatch 的窄拒绝；ABORT 由真实 compiler 形成并保留原件。
+            protocols = tuple((label, (lambda *a, **k: supervisor._protocol_reject("有效失败类 execution-failure 不可逐字重派"))
+                               if label == "environment_redispatch" else protocol)
+                              for label, protocol in supervisor._SUCCESSOR_PROTOCOLS)
+            with mock.patch.object(supervisor, "_SUCCESSOR_PROTOCOLS", protocols):
+                with self.assertRaisesRegex((upgrade.ConfigurationError, supervisor.SupervisorError), "不可逐字重派"):
+                    resume()
+            staged = campaign / "control/vc/staging" / f"{sequence + 1:04d}-vc-5" / "attempt-1"
+            abort = staged / "ABORT"
+            self.assertTrue(abort.is_file())
+            self.assertFalse(upgrade._staging_commit_path(campaign, sequence + 1, phase).exists())
+            originals = {path: path.read_bytes() for path in staged.iterdir() if path.is_file()}
+            next_action = case.data / "control/actions" / f"{sequence + 1}-{name}.json"
+            abort_binding = driver._recorded_staging_abort(campaign, next_action, staged)
+            successor = source.read(staged / "run-manifest.json")
+            # 无对账、多动作、已有预约与动作身份漂移均不能借新入口重派。
+            validate = supervisor._validate_batched_environment_redispatch_successor
+            self.assertTrue(validate(prior_state, prior, failed_run, successor, campaign_dir=campaign))
+            multiple = copy.deepcopy(prior)
+            multiple["actions"].append({**multiple["actions"][0], "action_id": "other"})
+            self.assertFalse(validate(prior_state, multiple, failed_run, successor, campaign_dir=campaign))
+            reserved = campaign / "candidates/claude-cand-r1/attempts/fixture-reservation"
+            from datetime import datetime, timezone
+            begun = datetime.fromtimestamp(prior_state["started_at_epoch"] + 0.1, tz=timezone.utc).isoformat()
+            source.write(reserved / "reservation.json", {"started_at_utc": begun})
+            self.assertFalse(validate(prior_state, prior, failed_run, successor, campaign_dir=campaign))
+            shutil.rmtree(reserved)
+            drift = copy.deepcopy(successor)
+            drift["actions"][0]["item_ids"] = ["other"]
+            with self.assertRaisesRegex(supervisor.SupervisorError, "漂移字段"):
+                validate(prior_state, prior, failed_run, drift, campaign_dir=campaign)
+            # 只改本次缺失的离线输入；真正 guard 通过后只执行控制探针，不生成采集成功证据。
+            token_path.write_text("deliberately-invalid-offline-fixture-token\n", encoding="utf-8")
+            token_path.chmod(0o600)
             with mock.patch.object(upgrade, "compile_and_run_vc_batch", wraps=upgrade.compile_and_run_vc_batch) as dispatch:
                 outcome = resume()
                 self.assertEqual(resume(), outcome)
                 self.assertEqual(dispatch.call_count, 1)
-            self.assertEqual(outcome["batch_sequence"], 3)
-            self.assertEqual(outcome["recorded_recoveries"][0]["sequence"], 2)
-            self.assertEqual((case.data / "control/actions/3-vc2-short-audit.json").read_bytes(), original_action)
-            for path, original in preserved.items():
+            self.assertEqual(outcome["batch_sequence"], sequence + 1)
+            self.assertEqual(outcome["commit"]["staging_attempt"], 2)
+            self.assertEqual(outcome["recorded_recoveries"][0]["sequence"], sequence)
+            self.assertEqual(outcome["recorded_aborts"], [abort_binding])
+            self.assertTrue(upgrade._staging_abort_accounted(campaign, sequence + 1, 1))
+            self.assertEqual(next_action.read_bytes(), preserved[action_path])
+            self.assertEqual(source.read(result_path)["scope"], "vc5-prereservation-control-probe")
+            self.assertFalse(list(campaign.glob("candidates/*/attempts/*/reservation.json")))
+            self.assertEqual(stops.load_state(key)["status"], "complete")
+            for path, original in {**preserved, **originals}.items():
                 self.assertEqual(path.read_bytes(), original)
+            # complete 仍必须重读旧失败对账和未提交 ABORT，不再派发新父 run。
             receipt.write_bytes(receipt_bytes + b" ")
             with self.assertRaises((replay.ReplayError, upgrade.ConfigurationError)):
                 resume()
             receipt.write_bytes(receipt_bytes)
-            self.assertEqual(stops.load_state(key)["status"], "complete")
-            self.assertEqual(action_path.read_bytes(), original_action)
+            abort.write_bytes(originals[abort] + b" ")
+            with self.assertRaises(replay.ReplayError):
+                resume()
+            abort.write_bytes(originals[abort])
+            self.assertEqual(resume(), outcome)
             case.assert_zero_requests()
-            first = driver._control_step("real-stage", produced, verify=verify)
-            self.assertEqual(driver._control_step("real-stage", produced, verify=verify), first)
-            self.assertEqual(producers, [outcome["campaign_run"]["run_dir"]])
-            changed = copy.deepcopy(first)
-            changed["batches"][0]["campaign_run"]["actions"][0]["returncode"] = 7
-            with self.assertRaisesRegex(replay.ReplayError, "COMMIT／父run"):
-                driver._verify_completed_stage(campaign, ("VC-2",), changed)
-            with self.assertRaisesRegex(replay.ReplayError, "缺原真实批次结果"):
-                driver._verify_completed_stage(campaign, ("VC-2",), {"batches": []})
-            commit = upgrade._staging_commit_path(campaign, 3, "VC-2")
-            commit.write_text("{}\n", encoding="utf-8")
-            with self.assertRaisesRegex(upgrade.ConfigurationError, "COMMIT 无法校验"):
-                # 已记录complete仍须重读正式COMMIT，不能因私有完成字样跳过其摘要验证。
-                driver._control_step("real-stage", produced, verify=verify)
-        self.assertEqual(len(producers), 1)
 
     def test_complete_main_model_cli_binds_intent_roots_and_original_stop(self) -> None:
         target = self.data.with_name("successor")

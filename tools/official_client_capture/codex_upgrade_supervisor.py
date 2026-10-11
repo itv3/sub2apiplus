@@ -3679,6 +3679,131 @@ def finalize_prepared_run(
     }
 
 
+def finalize_orphaned_running_run(run_dir: Path, *, campaign_dir: Path) -> dict[str, Any] | None:
+    """对账入口封存已启动、owner 与 monitor 均死亡的 staging 父 run。
+
+    仅补真实中止事实，不生成动作退出码或动作成功收据。原 COMMIT、队列、事件链、
+    唯一未结束动作及分钟账必须完整；之后沿用 watchdog 中止的既有对账与 N+1 合同。
+    与派发共用 state-dir 锁；各写入边界可重入，分钟账只从既有末尾补到首次检测时刻。
+    """
+
+    run_dir = _validate_state_dir(Path(run_dir), create=False)
+    state = _read_state(run_dir)
+    if state["state"] != "running" or state.get("staging_binding") is None:
+        return None
+    campaign_dir = Path(campaign_dir)
+    if (not campaign_dir.is_absolute() or campaign_dir.is_symlink()
+            or campaign_dir.resolve(strict=True) != campaign_dir):
+        raise SupervisorError("中止父 run 的 Campaign 路径不可信。")
+    lock_path = run_dir.parent / CAMPAIGN_RUN_LOCK_FILENAME
+    _validate_file(lock_path, allow_missing=True)
+    descriptor, _state_dir = _campaign_run_lock(run_dir.parent)
+    try:
+        state = _read_state(run_dir)
+        if state["state"] != "running":
+            return None
+        owner_pid, monitor_pid = state["owner_pid"], state.get("monitor_pid")
+        if isinstance(monitor_pid, bool) or not isinstance(monitor_pid, int) or monitor_pid <= 0:
+            raise SupervisorError("中止父 run 缺少可信 monitor PID。")
+        if _owner_alive(owner_pid) or _owner_alive(monitor_pid):
+            raise SupervisorError("父 run 的 owner 或 monitor 仍在线，禁止第三方终态化。")
+        binding = state["staging_binding"]
+        if (Path(binding["campaign_dir"]) != campaign_dir
+                or run_dir.name != "run-" + state["owner_nonce"]
+                or _read_json(campaign_dir / "campaign.json").get("campaign_id") != state["campaign_id"]):
+            raise SupervisorError("中止父 run 的 Campaign／原 run 路径绑定不一致。")
+        record = _read_json(run_dir / "campaign-run-manifest.json")
+        if (set(record) != {"schema_version", "manifest_sha256", "manifest"}
+                or not isinstance(record["manifest"], dict)
+                or record["manifest_sha256"] != _sha256(_canonical(record["manifest"]))):
+            raise SupervisorError("中止父 run 的原队列记录摘要不一致。")
+        inner = _normalize_campaign_run_manifest(record["manifest"])
+        if record["schema_version"] != inner["schema_version"]:
+            raise SupervisorError("中止父 run 的原队列记录 schema 不一致。")
+        if (inner["campaign_id"] != state["campaign_id"] or inner["phase"] != state["phase"]
+                or inner.get("batch_sequence") != binding["sequence"]):
+            raise SupervisorError("中止父 run 的队列身份与 state 不一致。")
+        commit = _staging_commit_for_run(campaign_dir, state, inner, run_dir)
+        if commit is None or state.get("commit_sha256") != commit["commit_sha256"]:
+            raise SupervisorError("已启动的中止父 run 没有完整 COMMIT，禁止补收口。")
+        stem = f"{commit['sequence']:04d}-{commit['phase'].lower()}.json"
+        formal = campaign_dir / "control" / "vc" / "run-manifests" / stem
+        batch_path = campaign_dir / "control" / "vc" / "batches" / stem
+        _validate_file(batch_path)
+        try:
+            batch = vc_artifacts.validate_vc_batch(_read_json(batch_path))
+        except vc_artifacts.VCArtifactError as error:
+            raise SupervisorError(f"中止父 run 的正式 batch 不完整：{error}") from error
+        if (batch["batch_sha256"] != commit["batch_sha256"]
+                or _campaign_run_manifest(formal) != inner
+                or any(batch[key] != inner[key] for key in ("campaign_id", "phase", "actions"))
+                or batch["execute_item_ids"] != inner["execute_items"]
+                or batch["reuse_item_ids"] != inner["reuse_items"]):
+            raise SupervisorError("中止父 run 的正式 batch／队列与 COMMIT 不一致。")
+        audit = _audit_command(run_dir)
+        if audit["integrity_errors"]:
+            raise SupervisorError("中止父 run 的事件或分钟账不完整：" + "、".join(audit["integrity_errors"]))
+        events = load_events(run_dir)
+        actions = {action["action_id"]: action for action in inner["actions"]}
+        active: dict[str, dict[str, Any]] = {}
+        finished: set[str] = set()
+        operation = "reconciler:orphan-owner-check"
+        reason = "owner-process-not-alive-after-heartbeat-gap"
+        partial: list[dict[str, Any]] = []
+        for event in events:
+            if any(event.get(field) != state[field] for field in ("campaign_id", "phase", "owner_pid", "owner_nonce")):
+                raise SupervisorError("中止父 run 的事件身份与原 owner 不一致。")
+            kind = event["event_type"]
+            if event.get("operation") == operation:
+                if event.get("reason") != reason or kind not in {"audit-incomplete", "watchdog-aborted"}:
+                    raise SupervisorError("中止父 run 的既有补收口事件不一致。")
+                partial.append(event)
+            elif kind in TERMINAL_STATES:
+                raise SupervisorError("中止父 run 已有其他终态事件，禁止追认。")
+            if kind not in {"action-started", "action-finished", "action-failed"}:
+                continue
+            action_id = event.get("job_id")
+            if action_id not in actions or event["operation"] != actions[action_id]["operation"]:
+                raise SupervisorError("中止父 run 的动作事件不属于原队列。")
+            if kind == "action-started":
+                if action_id in active or action_id in finished:
+                    raise SupervisorError("中止父 run 的动作重复开始。")
+                active[action_id] = event
+            else:
+                if active.pop(action_id, None) is None:
+                    raise SupervisorError("中止父 run 的动作结束事件缺少开始事件。")
+                finished.add(action_id)
+        if len(active) != 1:
+            raise SupervisorError("中止父 run 必须有唯一已启动且未结束的动作。")
+        if [event["event_type"] for event in partial] not in ([], ["audit-incomplete"], ["audit-incomplete", "watchdog-aborted"]):
+            raise SupervisorError("中止父 run 的补收口事件顺序不一致。")
+        if partial and events[-len(partial):] != partial:
+            raise SupervisorError("中止父 run 在补收口后又出现其他事件。")
+        stop_path = run_dir / "stop-receipt.json"
+        if stop_path.exists() or stop_path.is_symlink():
+            stop = read_stop_receipt(run_dir)
+            if (len(partial) != 2 or stop["event_type"] != "watchdog-aborted" or stop["reason"] != reason
+                    or any(stop[field] != state[field] for field in ("campaign_id", "phase", "owner_pid", "owner_nonce"))
+                    or stop["detected_at_epoch"] != partial[0]["recorded_at_epoch"]):
+                raise SupervisorError("中止父 run 的既有停止收据不属于本次补收口。")
+        for kind in ("audit-incomplete", "watchdog-aborted")[len(partial):]:
+            partial.append(_append_event(run_dir, event_type=kind, operation=operation,
+                owner_pid=owner_pid, owner_nonce=state["owner_nonce"], campaign_id=state["campaign_id"],
+                phase=state["phase"], status=kind, reason=reason))
+        detected = float(partial[0]["recorded_at_epoch"])
+        last_end = _last_minute_bucket_end(run_dir)
+        if last_end is not None and last_end > detected + 0.01:
+            raise SupervisorError("中止父 run 的分钟账越过首次检测时刻。")
+        _stop_receipt(run_dir, event_type="watchdog-aborted", reason=reason, detected_at_epoch=detected,
+            owner_pid=owner_pid, owner_nonce=state["owner_nonce"], campaign_id=state["campaign_id"], phase=state["phase"])
+        _finalize_minute_ledger(run_dir, now=detected, state_name="watchdog-aborted")
+        _set_terminal_state(run_dir, state="watchdog-aborted", terminal_at_epoch=detected)
+        return {"finalized": True, "state": "watchdog-aborted", "reason": reason,
+                "action_id": next(iter(active)), "run_dir": str(run_dir), "commit_sha256": commit["commit_sha256"]}
+    finally:
+        os.close(descriptor)
+
+
 def _monitor_impl(args: argparse.Namespace) -> int:
     run_dir = _validate_state_dir(Path(args.state_dir), create=False)
     state = _read_state(run_dir)
@@ -10169,7 +10294,7 @@ def _validate_batched_environment_redispatch_successor(
     *,
     campaign_dir: Path | None,
 ) -> bool:
-    """只允许已对账的 reservation 前环境失败逐字重派原批次内容。
+    """只允许已对账的 reservation 前可恢复失败逐字重派原批次内容。
 
     返回 ``False`` 表示父失败不是 ``environment-prerequisite``，应继续匹配
     其他既有恢复协议；一旦诊断明确属于环境前提失败，任何对账绑定或批次内容
@@ -10178,6 +10303,7 @@ def _validate_batched_environment_redispatch_successor(
 
     # B4-1 改法 1：入口按"终态种类＋失败动作"判定——动作级超时、中断与父进程其它异常的终态只要能定位到
     # 唯一失败动作，与 action-failed 同样进入本协议；定位不到动作的前序不硬接（返回 False）。
+    first_capture = False
     facts = _failed_parent_facts(prior_state, prior_dir, prior_manifest=prior_manifest)
     if facts is None or facts["terminal_kind"] not in FAILED_PARENT_ACTION_KINDS:
         return _protocol_reject("前序不是可归类的失败终态")
@@ -10256,13 +10382,20 @@ def _validate_batched_environment_redispatch_successor(
             owner_nonce=owner_nonce,
             run_started_at_utc=str(prior_state.get("started_at_utc", "")),
         )
+        # 首次普通候选采集在预约前失败时没有 attempt 可供恢复预览。只承接单动作 capture；
+        # 保留原诊断类别，下面仍核预约窗口、正式对账的零预约零请求以及同批次身份。
+        first_capture = (
+            effective_class == "execution-failure"
+            and _single_action(prior_manifest) is not None
+            and candidate_capture_recovery_action(prior_manifest, action_id) == "capture"
+        )
         if effective_class not in RECOVERABLE_ACTION_FAILURE_CLASSES and not (
             # B4-1 改法 5（草表 D-08）：VC-5／VC-6 零请求后处理动作以 execution-failure 收口（post-run-tooling 五判据
             # 不成立的残余情形）时，收账与 reconciler 按 candidate_post_run_recovery_action 判它可恢复并许可逐字重派；
             # 这里用同一判定放行，对账许可（receipt_passed／收据 failure_class）仍由共享绑定逐项核对。
             effective_class == "execution-failure"
             and candidate_post_run_recovery_action(prior_manifest, action_id) is not None
-        ):
+        ) and not first_capture:
             return _protocol_reject(f"有效失败类 {effective_class} 不可逐字重派")
         # B4-1 改法 8（草表 D-03）：reservation 之后的失败属 attempt 中断——reconcile-supervisor-run 拒绝这类 run，
         # 本协议（"reservation 前"）让位给恢复链协议（按 attempt 对账收据承接），不再形态相符即失败关闭；没有
@@ -10299,7 +10432,7 @@ def _validate_batched_environment_redispatch_successor(
         )
     ):
         raise SupervisorError("环境前提失败诊断没有对应的原批次动作。")
-    return _validate_reconciled_redispatch_binding(
+    accepted = _validate_reconciled_redispatch_binding(
         prior_state,
         prior_manifest,
         prior_dir,
@@ -10308,6 +10441,18 @@ def _validate_batched_environment_redispatch_successor(
         effective_class=effective_class,
         label="环境前提失败",
     )
+    if first_capture:
+        # 新增入口同时复用正式收据与项目总账绑定读者；不将单独一份时间账许可当作采集重派资格。
+        verify_supervisor_run_reconciliation_binding(
+            Path(campaign_dir),
+            campaign_id=str(prior_manifest["campaign_id"]),
+            run_id=prior_dir.name,
+            phase=str(prior_manifest["phase"]),
+            batch_sequence=prior_manifest["batch_sequence"],
+            batch_sha256=prior_manifest["batch_sha256"],
+            label="首次候选采集预约前续作",
+        )
+    return accepted
 
 
 SUPERVISOR_RUN_RECONCILIATION_SCHEMA = "supervisor-run-reconciliation/v1"

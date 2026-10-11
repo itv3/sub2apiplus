@@ -921,6 +921,140 @@ def _source_inputs() -> dict[str, Any]:
                          ('CLAUDE_2_1_226_RELAY_FIXTURE', 'CLAUDE_2_1_226_FREEZE_FIXTURE')}}
 
 
+def _continuation_methods(chain: str) -> dict[str, list[str]]:
+    """承接的全集来自原链登记，调用方不能少填一个未完成方法后冒充整链只读。"""
+
+    if chain == 'late-continuous':
+        groups = [{'_TransientSegmentScenarios._scenario_full_control_delivery': LATE_CONTINUOUS_SCENARIOS}]
+    elif chain == 'revision-continuous':
+        groups = [{'_RevisionEvaluatorScenarios._scenario_revision_evaluator_delivery': REVISION_CONTINUOUS_SCENARIOS}]
+    elif chain == 'recovery':
+        groups = [group for _step, group in RECOVERY_CHAIN_GROUPS]
+    else:
+        raise ValueError('本次产品承接未授权其它原链')
+    return {method: _expected_scenarios({method: expected}) for group in groups for method, expected in group.items()}
+
+
+def _verify_continuation_method(document: dict[str, Any], method: str, expected: list[str]) -> None:
+    row = document['methods'].get(method)
+    if (row is None or row['root'] != str(stops.record_root()) or row['expected'] != expected
+            or set(document['methods']) != set(_continuation_methods(document['chain']))):
+        raise ValueError('本次承接不是原链完整方法集合或方法坐标变化')
+    context = stops.load_state('method-context')
+    if context is None or context.get('method') != method or context.get('tree') != document['tree']:
+        raise ValueError('原方法上下文缺失或不属于同一世界')
+    if document['mode'] == 'formed-read-only':
+        for binding in row['originals']:
+            stops._read_exact_cut(binding)
+
+
+def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, Any], *,
+                                  campaign: Path | None = None, deployment: Path | None = None) -> dict[str, Any]:
+    """从真实原件生成本次测试侧凭证；不部署、不登记工具演进、不签认证。
+
+    before_files 是已归档的真实旧控制文件切点；revision 必须先完成原受监督部署及两层登记。
+    原链记录根仍由既有 CLAUDE_RECORDED_CHAIN_RECORD_DIR 指定，不增加公共放行环境变量。
+    """
+
+    root = Path(os.environ['CLAUDE_RECORDED_CHAIN_RECORD_DIR']).resolve(strict=True)
+    if root.is_symlink() or mode not in {'formed-read-only', 'registered-control-evolution'}:
+        raise ValueError('原链记录根或承接模式非法')
+    with _record_lock(root), _record_scope(root):
+        saved = stops.load_state('chain:' + chain)
+        if saved is None or saved.get('diagnostic_seconds') is not None:
+            raise ValueError('承接必须绑定原正式链停点')
+        source = _source_inputs()
+        path = root / stops.PRODUCT_CONTINUATION_FILE
+        if path.exists():
+            binding = stops.file_cut(path)
+            document = stops.verify_product_continuation(binding, tree=Path(saved['tree']),
+                                                         original_source=saved['source'], current_source=source)
+            if (document['chain'] != chain or document['mode'] != mode or document['before_files'] != before_files
+                    or document['chain_coordinates'] != {key: saved[key] for key in document['chain_coordinates']}):
+                raise ValueError('已发布承接凭证的原始意图或链坐标不同，禁止替换')
+            if mode == 'registered-control-evolution' and (
+                    campaign is None or deployment is None
+                    or document['registration']['campaign'] != str(campaign.resolve())
+                    or document['registration']['deployment']['path'] != str(deployment.resolve())):
+                raise ValueError('已发布承接凭证的 Campaign 或部署坐标不同')
+            for method, expected in _continuation_methods(chain).items():
+                with _record_scope(Path(document['methods'][method]['root'])):
+                    _verify_continuation_method(document, method, expected)
+                    if mode == 'formed-read-only':
+                        _complete_method_original(expected)
+            return binding
+        proof = stops.control_continuation_proof(saved['source'], source, before_files)
+        tree = Path(saved['tree'])
+        methods = {}
+        for method, expected in _continuation_methods(chain).items():
+            method_root = Path(saved['recorded_worlds']) / 'method-records' / hashlib.sha256(method.encode()).hexdigest()[:24]
+            if method_root.is_symlink() or not method_root.is_dir():
+                raise ValueError('原方法记录根缺失；不补建成功世界：' + method)
+            with _record_lock(method_root), _record_scope(method_root):
+                context = stops.load_state('method-context')
+                if (context is None or context.get('method') != method or context.get('expected') != expected
+                        or context.get('tree') != str(tree)):
+                    raise ValueError('原方法身份、场景全集或tree不匹配')
+                if mode == 'formed-read-only':
+                    result = _complete_method_original(expected)
+                    origin = result.get('executor')
+                    if origin is None:
+                        raise ValueError('原成功方法缺形成期执行器绑定：' + method)
+                    # 新 invocation 及验证输出可写；原业务停点、命令前缀和成功结果必须原字节保留。
+                    excluded = {hashlib.sha256(name.encode()).hexdigest() + '.json'
+                                for name in ('method-context', 'method-verification')}
+                    originals = [stops.file_cut(path) for path in sorted(method_root.glob('*.json'))
+                                 if path.name not in excluded]
+                else:
+                    origin = None
+                    result = stops.load_state('method-result')
+                    cursor = stops.load_state('cursor:revision-chain')
+                    if chain != 'revision-continuous' or (result and result.get('complete')) or cursor is None or cursor.get('phase') != 9:
+                        raise ValueError('写续作只接受本次 revision 第9阶段原未完成停点')
+                    if campaign is None or Path(cursor['campaign']).resolve() != campaign.resolve():
+                        raise ValueError('写续作必须使用第9阶段原停点的 Campaign')
+                    originals = []
+                methods[method] = {'root': str(method_root), 'expected': expected, 'originals': originals,
+                                   'executor_origin': origin}
+        registration = None
+        if mode == 'registered-control-evolution':
+            if campaign is None or deployment is None:
+                raise ValueError('revision 承接缺真实部署与原 Campaign')
+            registration = stops.registered_control_facts(tree, campaign, deployment)
+        coordinates = {key: saved[key] for key in ('chain', 'source', 'scratch_root', 'tree', 'recorded_worlds',
+                                                   'isolation', 'diagnostic_seconds', 'first_started_at_utc')}
+        document = {'schema': 'claude-fault-product-continuation/v1', 'mode': mode, 'chain': chain,
+                    'tree': str(tree), 'chain_coordinates': coordinates, 'original_source': saved['source'],
+                    'current_source': source, 'before_files': before_files, 'control_proof': proof,
+                    'product_files': stops._executor_product_files(tree), 'methods': methods,
+                    'registration': registration}
+        raw = (json.dumps(stops._encoded(document), sort_keys=True, ensure_ascii=False) + '\n').encode()
+        if path.exists():
+            if path.is_symlink() or path.read_bytes() != raw:
+                raise ValueError('原承接凭证已存在且意图不同；不得覆盖原件')
+        else:
+            descriptor, temporary = tempfile.mkstemp(prefix='.product-continuation-', dir=root)
+            try:
+                with os.fdopen(descriptor, 'wb') as stream:
+                    stream.write(raw)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                candidate = stops.file_cut(Path(temporary))
+                stops.verify_product_continuation(candidate, tree=tree, original_source=saved['source'],
+                                                   current_source=source)
+                os.link(temporary, path)
+                directory = os.open(root, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        binding = stops.file_cut(path)
+        stops.verify_product_continuation(binding, tree=tree, original_source=saved['source'], current_source=source)
+        return binding
+
+
 def _read_records(path: Path) -> list[dict[str, Any]]:
     if path.is_symlink() or not path.is_file():
         raise ValueError('原方法六项记录缺失或不是普通文件')
@@ -933,8 +1067,8 @@ def _method_result_passed(code: int | None, stderr: str, count: int = 1) -> bool
     return code == 0 and bool(lines) and lines[-1] == 'OK' and any(line.startswith(ran) for line in lines)
 
 
-def _resume_complete_method(case: unittest.TestCase, expected: list[str]) -> list[dict[str, Any]]:
-    """重验真实成功退出及六项原件；连续链由原夹具重绑其活守卫作用域。"""
+def _complete_method_original(expected: list[str]) -> dict[str, Any]:
+    """派发前先核实际成功、原命令和六项原件；缺一项都不能转入动作体。"""
 
     saved = stops.load_state('method-result')
     if saved is None or saved.get('complete') is not True or saved.get('expected') != expected:
@@ -942,7 +1076,7 @@ def _resume_complete_method(case: unittest.TestCase, expected: list[str]) -> lis
     if bool(saved.get('diagnostic_only')) != (diagnostic_budget.diagnostic_seconds() is not None):
         raise ValueError('诊断方法结果不能承接为正式认证')
     for binding in saved['bindings'].values():
-        stops.read_cut(binding)
+        stops._read_exact_cut(binding)
     command_prefix = saved.get('command_prefix')
     if command_prefix is None:
         raise ValueError('原成功方法缺完整命令观察前缀，不能只承接 unittest 输出')
@@ -960,6 +1094,15 @@ def _resume_complete_method(case: unittest.TestCase, expected: list[str]) -> lis
     stderr = stops.read_cut(saved['bindings']['stderr']).decode('utf-8')
     if not _method_result_passed(saved['returncode'], stderr):
         raise ValueError('原方法没有真实成功退出事实')
+    if not _records_complete(_read_records(saved['bindings']['records']['path']), expected):
+        raise ValueError('原方法成功输出缺少逐场景六项记录')
+    return saved
+
+
+def _resume_complete_method(case: unittest.TestCase, expected: list[str]) -> list[dict[str, Any]]:
+    """重验真实成功退出及六项原件；连续链由原夹具重绑其活守卫作用域。"""
+
+    saved = _complete_method_original(expected)
     callback = getattr(case, 'revalidate_completed_method', None)
     if callback is not None:
         records = callback(expected)
@@ -983,12 +1126,22 @@ def _resumable_method(method: Callable[..., Any]) -> Callable[..., Any]:
     def execute(case: unittest.TestCase, *args: Any, **options: Any) -> Any:
         # 以当前模块实际 __file__ 推出的根核验，不能只核 env 中的 tree 却从宿主导入执行器。
         stops.executor_invocation_binding(REPO_ROOT)
+        continuation = stops.invocation_product_continuation(REPO_ROOT)
+        formed = continuation is not None and continuation[1]['mode'] == 'formed-read-only'
+        if formed and not os.environ.get(METHOD_VERIFY_ENV):
+            raise ValueError('已形成结果承接必须走只读方法入口，禁止退回动作体')
         if not os.environ.get(METHOD_VERIFY_ENV):
             return method(case, *args, **options)
         context = stops.load_state('method-context')
         if context is None or context.get('method') != type(case).__name__ + '.' + method.__name__:
             raise ValueError('方法重验入口与原方法身份不一致')
-        records = _resume_complete_method(case, context['expected'])
+        if formed:
+            method_name = type(case).__name__ + '.' + method.__name__
+            _verify_continuation_method(continuation[1], method_name, context['expected'])
+        with stops.formed_method_read_only() if formed else contextlib.nullcontext():
+            records = _resume_complete_method(case, context['expected'])
+        if formed:
+            stops.verify_product_continuation(continuation[0], tree=REPO_ROOT)
         target = os.environ.get(RECORDS_ENV)
         if not target:
             raise ValueError('原方法重验缺六项输出坐标')
@@ -1017,15 +1170,24 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
             case.fail("独立场景已收齐失败：\n" + "\n".join(errors))
         return
     method_root = None
+    continuation = stops.invocation_product_continuation(REPO_ROOT)
+    formed = continuation is not None and continuation[1]['mode'] == 'formed-read-only'
     if os.environ.get(METHODS_ROOT_ENV):
         method = next(iter(scenarios))
-        method_root = _private_record_root(Path(os.environ[METHODS_ROOT_ENV]) /
-                                          hashlib.sha256(method.encode()).hexdigest()[:24])
+        method_root = Path(os.environ[METHODS_ROOT_ENV]) / hashlib.sha256(method.encode()).hexdigest()[:24]
+        if formed and (method_root.is_symlink() or not method_root.is_dir()):
+            raise ValueError('已成功方法原记录根缺失，禁止补建后重跑')
+        method_root = _private_record_root(method_root)
+    if formed and method_root is None:
+        raise ValueError('只读承接缺少原方法根，禁止普通动作入口')
     if method_root is not None:
         with _record_lock(method_root), _record_scope(method_root):
             context = stops.load_state('method-context')
             expected = _expected_scenarios(scenarios)
             coordinates = {'method': next(iter(scenarios)), 'expected': expected, 'tree': str(shell._tree_root())}
+            if formed:
+                _verify_continuation_method(continuation[1], next(iter(scenarios)), expected)
+                _complete_method_original(expected)
             if context is None:
                 context = {**coordinates, 'seconds': 0.0, 'invocations': []}
                 stops.save_state('method-context', context)
@@ -1033,6 +1195,8 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
                 raise ValueError('原方法、场景顺序或隔离源码根已改变，不能承接停点')
             previous = stops.load_state('method-result')
             verify = bool(previous and previous.get('complete'))
+            if formed and not verify:
+                raise ValueError('只读承接的原方法成功记录缺失，禁止执行动作体')
             resume = bool(context['invocations'])
             with _record_scope(method_root, resume=resume, verify=verify):
                 _run_group_body(case, recorder, scenarios, step, method_root=method_root, context=context,
@@ -3427,15 +3591,30 @@ class ClaudeFaultChainTests(unittest.TestCase):
             if saved is not None:
                 if saved.get('chain') != chain or saved.get('diagnostic_seconds') != diagnostic_seconds:
                     raise ValueError('原链身份或预算模式变化，禁止消费另一条链或诊断结果')
-                stops.validate_executor_inputs(saved['source'], source)
+                continuation_path = root / stops.PRODUCT_CONTINUATION_FILE
+                continuation = stops.file_cut(continuation_path) if continuation_path.exists() else None
+                stops.validate_executor_inputs(saved['source'], source, continuation)
+                if continuation is not None:
+                    document = stops.verify_product_continuation(continuation, tree=Path(saved['tree']),
+                                                                 original_source=saved['source'], current_source=source)
+                    coordinates = {key: saved[key] for key in document['chain_coordinates']}
+                    if coordinates != document['chain_coordinates'] or document['chain'] != chain:
+                        raise ValueError('承接凭证不属于原链停点，禁止换世界')
+                    for method, expected in _continuation_methods(chain).items():
+                        with _record_scope(Path(document['methods'][method]['root'])):
+                            _verify_continuation_method(document, method, expected)
+                            if document['mode'] == 'formed-read-only':
+                                _complete_method_original(expected)
                 if saved.get('isolation') != self._isolation_mode():
                     raise ValueError('原链隔离方式已改变，不能承接另一执行环境')
+            else:
+                continuation = None
             self._run_chain_body(chain, diagnostic_seconds=diagnostic_seconds, stop=saved,
-                                 source=source, setup_seconds=time.monotonic() - started)
+                                 source=source, setup_seconds=time.monotonic() - started, continuation=continuation)
 
     def _run_chain_body(self, chain: str, *, diagnostic_seconds: int | None = None,
                         stop: dict[str, Any] | None = None, source: dict[str, Any] | None = None,
-                        setup_seconds: float = 0.0) -> None:
+                        setup_seconds: float = 0.0, continuation: dict[str, Any] | None = None) -> None:
         # 诊断只允许私有调用显式给预算；公共 test 入口不能靠继承环境放宽认证。
         self.assertIsNone(diagnostic_budget.diagnostic_seconds(), "公共链不能继承诊断预算；须显式调用私有诊断入口")
         if diagnostic_seconds is not None:
@@ -3501,7 +3680,8 @@ class ClaudeFaultChainTests(unittest.TestCase):
                         executor_paths = sorted(path.relative_to(REPO_ROOT).as_posix()
                             for path in trees._closure_files(Path(__file__))
                             if stops._executor_path(path.relative_to(REPO_ROOT).as_posix()))
-                        executor_binding = stops.prepare_executor_source(tree, stop['source'], source, executor_paths)
+                        executor_binding = stops.prepare_executor_source(tree, stop['source'], source, executor_paths,
+                                                                          continuation=continuation)
                     environment = trees.subprocess_env(tree, {
                         project_ledger_fixture.FIXTURE_ONLY_ENV: "1",
                         "TMPDIR": str(staging),
@@ -3533,6 +3713,8 @@ class ClaudeFaultChainTests(unittest.TestCase):
                         stdout_bytes, stderr_bytes = completed.stdout or b"", completed.stderr or b""
                         if executor_binding is not None:
                             stops.verify_executor_source(executor_binding, tree, verify_product=False)
+                        if continuation is not None:
+                            stops.verify_product_continuation(continuation, tree=tree)
                     except subprocess.TimeoutExpired as error:
                         timed_out = True
                         stdout_bytes, stderr_bytes = error.stdout or b"", error.stderr or b""

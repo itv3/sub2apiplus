@@ -13,6 +13,9 @@ import os
 import tempfile
 import contextlib
 import contextvars
+import inspect
+import subprocess
+import sys
 
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,13 @@ CHAIN_RESUME_ENV = 'CLAUDE_FAULT_CHAIN_RESUME'
 EXECUTOR_SOURCE_ENV = 'CLAUDE_FAULT_EXECUTOR_SOURCE'
 _ACTIVE_COMMAND_STEP = contextvars.ContextVar('claude_fault_active_command_step', default=None)
 _VERIFIED_READ_ONLY_WORLD = contextvars.ContextVar('claude_fault_verified_read_only_world', default=None)
+_FORMED_METHOD_READ_ONLY = contextvars.ContextVar('claude_fault_formed_method_read_only', default=False)
+# 只覆盖本次已审核的写侧修复；仍须现算两客户端的身份及读侧闭包，路径名单不构成通过证明。
+CONTROL_CONTINUATION_PATHS = frozenset({
+    'tools/official_client_capture/codex_upgrade_supervisor.py',
+    'tools/official_client_capture/codex_upgrade_reconciler.py',
+})
+PRODUCT_CONTINUATION_FILE = 'product-continuation.json'
 
 
 def record_root() -> Path | None:
@@ -109,8 +119,12 @@ def save_state(name: str, state: dict[str, Any]) -> None:
     """普通执行原子保存停点；已验真的只读范围仅核同值原件，绝不补写。"""
 
     verified_scope = _VERIFIED_READ_ONLY_WORLD.get()
-    if verified_scope is not None:
-        if verified_scope[2] != record_root():
+    # unittest 的 setUp/tearDown 在方法装饰器之外；同一已验真凭证也约束这两段。
+    # 父 runner 的旁侧调用元数据允许追加，原业务停点与 method-result 一律只读。
+    forced = (_FORMED_METHOD_READ_ONLY.get() or
+              (name not in {'method-context', 'method-verification'} and _formed_read_only_invocation()))
+    if verified_scope is not None or forced:
+        if verified_scope is not None and verified_scope[2] != record_root():
             raise ValueError('只读重验作用域不能切换方法记录根后保存停点')
         original = load_state(name)
         if original is None or json.dumps(_encoded(original), sort_keys=True, ensure_ascii=False) != json.dumps(
@@ -181,7 +195,8 @@ def _executor_product_files(tree: Path) -> dict[str, str]:
     return files
 
 
-def validate_executor_inputs(original_source: dict[str, Any], current_source: dict[str, Any]) -> None:
+def validate_executor_inputs(original_source: dict[str, Any], current_source: dict[str, Any],
+                             continuation: dict[str, Any] | None = None) -> None:
     """只分离本轮测试执行器变化；其它原冻结输入不允许被此本地运输掩盖。"""
 
     for key in ('repository', 'fixtures'):
@@ -191,11 +206,13 @@ def validate_executor_inputs(original_source: dict[str, Any], current_source: di
     changed = sorted(path for path in set(original) | set(current) if original.get(path) != current.get(path))
     refused = [path for path in changed if not _executor_path(path) or path not in current]
     if refused:
-        raise ValueError('原链非执行器输入变化：' + '、'.join(refused[:20]) + '；不重建世界、不自动重跑全集')
+        if continuation is None or any(path not in current or _executor_path(path) for path in refused):
+            raise ValueError('原链非执行器输入变化：' + '、'.join(refused[:20]) + '；不重建世界、不自动重跑全集')
+        verify_product_continuation(continuation, original_source=original_source, current_source=current_source)
 
 
 def prepare_executor_source(tree: Path, original_source: dict[str, Any], current_source: dict[str, Any],
-                            executor_paths: list[str]) -> dict[str, Any]:
+                            executor_paths: list[str], *, continuation: dict[str, Any] | None = None) -> dict[str, Any]:
     """把准确测试修复送入原 tree，原 source、世界和产品字节保持不变。
 
     这是原 runner 的本地执行记录，不是新产品合同。修改旧测试执行器后必须真实运行当前重验，
@@ -204,7 +221,9 @@ def prepare_executor_source(tree: Path, original_source: dict[str, Any], current
 
     if record_root() is None or tree.is_symlink() or not tree.is_dir():
         raise ValueError('测试执行器运输必须持有原链记录坐标与原普通 tree')
-    validate_executor_inputs(original_source, current_source)
+    validate_executor_inputs(original_source, current_source, continuation)
+    if continuation is not None:
+        verify_product_continuation(continuation, tree=tree)
     original, current = original_source['files'], current_source['files']
     wanted = sorted(set(executor_paths))
     if not wanted or any(not _executor_path(path) or path not in current for path in wanted):
@@ -241,6 +260,8 @@ def prepare_executor_source(tree: Path, original_source: dict[str, Any], current
             if before != current[relative]:
                 rows.append((relative, before, raw, target.read_bytes() if target.is_file() else None))
         document = {'tree': str(tree), 'files': desired, 'product_files': products}
+        if continuation is not None:
+            document['product_continuation'] = continuation
         if previous and all(previous.get(name) == value for name, value in document.items()):
             verify_executor_source(journal['history'][-1], tree)
             return journal['history'][-1]
@@ -268,7 +289,8 @@ def prepare_executor_source(tree: Path, original_source: dict[str, Any], current
         journal['pending'] = pending
         save_state(key, journal)
     if (pending['document']['tree'] != str(tree) or pending['document']['files'] != desired
-            or pending['document']['product_files'] != products):
+            or pending['document']['product_files'] != products
+            or pending['document'].get('product_continuation') != continuation):
         raise ValueError('原测试运输尚未完成且本次意图或产品字节变化；保留停点，禁止换意图')
     for row in pending['updates']:
         target = _executor_file(tree, row['path'], required=False)
@@ -349,6 +371,388 @@ def executor_invocation_binding(tree: Path) -> dict[str, Any] | None:
     binding = _decoded(json.loads(encoded))
     verify_executor_source(binding, tree, verify_product=False)
     return binding
+
+
+_CONTROL_CONTINUATION_PROOFS: dict[str, dict[str, Any]] = {}
+
+
+def _read_exact_cut(binding: dict[str, Any]) -> bytes:
+    """来源凭证绑定整份原件；追加字节也不能偷偷改变授权对象。"""
+
+    raw = read_cut(binding)
+    if binding['offset'] != 0 or binding['path'].stat().st_size != binding['length']:
+        raise ValueError('承接原件必须是完整且未追加的文件')
+    return raw
+
+
+def control_continuation_proof(original: dict[str, Any], current: dict[str, Any],
+                               before_files: dict[str, Any]) -> dict[str, Any]:
+    """从实际旧字节与当前全树复算 control-only；不信凭证自报的兼容结论。"""
+
+    from tools.official_client_capture import claude_tool_identity_policy as identity
+    from tools.official_client_capture import codex_upgrade as codex
+    from tools.official_client_capture import codex_upgrade_tool_identity_policy as codex_identity
+
+    if any(original.get(key) != current.get(key) for key in ('repository', 'fixtures')):
+        raise ValueError('承接凭证不能更换来源仓库或原夹具')
+    changed = sorted(path for path in set(original['files']) | set(current['files'])
+                     if original['files'].get(path) != current['files'].get(path) and not _executor_path(path))
+    if not changed or not set(changed) <= CONTROL_CONTINUATION_PATHS or set(before_files) != set(changed):
+        raise ValueError('承接仅适用于本次两个控制写侧文件的真实变化闭集')
+    root = Path(current['repository']).resolve(strict=True)
+    policy = identity.load_policy(root / 'tools/official_client_capture' / identity.POLICY_FILENAME)
+    digests, contents = identity._managed_tree_snapshot(root, policy)
+    for key, digest in digests.items():
+        if current['files'].get('tools/' + key) != digest:
+            raise ValueError('当前来源全树与冻结输入不一致：' + key)
+    previous = {}
+    for path in changed:
+        raw = _read_exact_cut(before_files[path])
+        if (path not in original['files'] or path not in current['files']
+                or hashlib.sha256(raw).hexdigest() != original['files'][path]
+                or identity.classify_path(policy, path.removeprefix('tools/')) != 'control'):
+            raise ValueError('变化文件的原字节或身份归层不匹配：' + path)
+        previous[path.removeprefix('tools/')] = raw
+    if any(_executor_path(path) and path not in current['files'] for path in original['files']):
+        raise ValueError('控制承接凭证不能放行删除测试执行器')
+    key = hashlib.sha256(json.dumps({'digests': digests, 'original': original['files'],
+                                    'changed': changed}, sort_keys=True).encode()).hexdigest()
+    if key in _CONTROL_CONTINUATION_PROOFS:
+        return _CONTROL_CONTINUATION_PROOFS[key]
+    # 只复制受管产品字节到临时读侧快照；不碰原世界，不复制证据或测试运行数据。
+    with tempfile.TemporaryDirectory(prefix='claude-control-proof-') as directory:
+        old_root = Path(directory)
+        for relative, raw in contents.items():
+            path = old_root / 'tools' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(previous.get(relative, raw))
+        old_policy = identity.load_policy(old_root / 'tools/official_client_capture' / identity.POLICY_FILENAME)
+        memo = os.environ.pop(codex_identity.IDENTITY_MEMO_ENV, None)
+        try:
+            proofs = {}
+            for client in ('claude', 'codex'):
+                identities, readers = [], []
+                for repository, selected in ((old_root, old_policy), (root, policy)):
+                    capture_root = repository / 'tools/official_client_capture'
+                    if client == 'claude':
+                        identities.append(identity.compute_identity(selected, repository))
+                        readers.append(identity.evaluator_dependency_digests(repository, selected))
+                    else:
+                        selected = codex_identity.load_policy(capture_root / codex_identity.POLICY_FILENAME)
+                        identities.append(codex_identity.compute_identity_v2(selected, capture_root,
+                                                                           codex._tool_tree_entries(capture_root)))
+                        readers.append(codex_identity.evaluator_dependency_digests(capture_root, selected))
+                if (any(identities[0][name] != identities[1][name] for name in
+                        ('policy_sha256', 'wire_producer_sha256', 'evidence_semantics_sha256'))
+                        or readers[0] != readers[1] or identities[0]['control_sha256'] == identities[1]['control_sha256']):
+                    raise ValueError(client + ' 的本次变化不是纯控制写侧修复或读侧发生变化')
+                proofs[client] = {'before': identities[0], 'after': identities[1], 'readers': readers[0]}
+        finally:
+            if memo is not None:
+                os.environ[codex_identity.IDENTITY_MEMO_ENV] = memo
+    result = {'changed_paths': changed, 'proofs': proofs}
+    if len(_CONTROL_CONTINUATION_PROOFS) >= 2:
+        _CONTROL_CONTINUATION_PROOFS.clear()
+    _CONTROL_CONTINUATION_PROOFS[key] = result
+    return result
+
+
+def _registered_control_state(campaign: Path, deployment: Path) -> dict[str, Any]:
+    """在准确产品树内调用原消费者，只读核部署、编排器演进和 Store 登记。"""
+
+    from tools.official_client_capture import claude_upgrade as product
+    from tools.official_client_capture import claude_upgrade_store as stores
+    from tools.official_client_capture import codex_upgrade_wire_transition as wire
+    from tools.official_client_control import receipts
+    from tools.official_client_control.store import ControlStore
+
+    manifest = product.load_campaign_manifest(campaign)
+    current = product._tool_identity(include_git=False)
+    chain = product._campaign_tool_evolutions(campaign, manifest)
+    if not chain:
+        raise ValueError('原 Campaign 尚未登记控制层工具演进')
+    latest = chain[-1]
+    product._require_tool_evolution_registered(campaign, manifest, current=current, action='原故障链受控续作')
+    deployed = product._verify_current_deployment_receipt(campaign, manifest, deployment)
+    product_root = Path(product.__file__).resolve().parents[2]
+    if Path(deployed.get('production_data_root', '')).resolve() != product_root:
+        raise ValueError('部署收据没有交付到原真实产品树')
+    bound = latest['bindings']['deployment_receipt']
+    if Path(bound['path']).resolve() != deployment.resolve() or bound['sha256'] != product.file_sha256(deployment):
+        raise ValueError('部署不是最新工具演进实际绑定的收据')
+    previous = chain[-2]['to_identity'] if len(chain) > 1 else manifest['tool_identity']
+    before = {row['path']: row['sha256'] for row in previous['entries']}
+    after = {row['path']: row['sha256'] for row in current['entries']}
+    changed = sorted('tools/' + key for key in set(before) | set(after) if before.get(key) != after.get(key))
+    permitted = {'tools/official_client_capture/codex_upgrade_supervisor.py',
+                 'tools/official_client_capture/codex_upgrade_reconciler.py'}
+    if (not changed or not set(changed) <= permitted or latest['evaluator']['changed_fields']
+            or any(previous[key] != current[key] for key in
+                   ('policy_sha256', 'wire_producer_sha256', 'evidence_semantics_sha256'))):
+        raise ValueError('原世界登记的工具演进不属于本次控制写侧修复')
+    def check_impact(value):
+        if isinstance(value, dict):
+            if value.get('affected_job_ids'):
+                raise ValueError('控制写侧演进仍有受影响取证作业')
+            for item in value.values():
+                check_impact(item)
+        elif isinstance(value, list):
+            for item in value:
+                check_impact(item)
+    check_impact(latest['impact'])
+    store = ControlStore.open_read_only(stores.campaign_store_root(campaign))
+    frozen = store.load_campaign(manifest['campaign_id'])
+    stores.require_store_campaign_matches_plan(manifest, frozen)
+    registrations = receipts.tool_evolutions(store, frozen)
+    if not registrations:
+        raise ValueError('Store 尚未登记控制层工具演进')
+    reference, registration = registrations[-1]
+    current_store = receipts.current_tool_identity('claude')
+    if registration['to_identity'] != current_store:
+        raise ValueError('Store 工具登记与实际运行树不一致')
+    evolution_path = campaign / wire.EVOLUTION_DIR / f"evolution-{latest['index']:02d}.json"
+    evolution_ref = {'path': evolution_path.relative_to(campaign).as_posix(),
+                     'sha256': product.file_sha256(evolution_path)}
+    if registration['evolution_receipt'] != evolution_ref:
+        raise ValueError('Store 登记没有绑定当前编排器演进原件')
+    return {'campaign': str(campaign.resolve()), 'from': previous, 'to': current,
+            'deployment': {'path': str(deployment.resolve()), 'sha256': product.file_sha256(deployment)},
+            'evolution': evolution_ref, 'registration': reference,
+            'changed_paths': changed}
+
+
+def registered_control_facts(tree: Path, campaign: Path, deployment: Path) -> dict[str, Any]:
+    """在原真实产品树内实读两层登记；data/tools 中的两份替身不是第二套产品安装。"""
+
+    tree, campaign, deployment = (Path(path).resolve(strict=True) for path in (tree, campaign, deployment))
+    script = ('from __future__ import annotations\nimport json\nfrom pathlib import Path\n' +
+              inspect.getsource(_registered_control_state) +
+              '\nprint(json.dumps(_registered_control_state(Path(__import__("sys").argv[1]), '
+              'Path(__import__("sys").argv[2])), sort_keys=True))\n')
+    environment = {**os.environ, 'PYTHONPATH': str(tree), 'PYTHONDONTWRITEBYTECODE': '1'}
+    environment.pop('CODEX_UPGRADE_IDENTITY_MEMO', None)
+    result = subprocess.run([sys.executable, '-B', '-c', script, str(campaign), str(deployment)],
+                            cwd=tree, env=environment, capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        raise ValueError('原世界部署／双层登记未通过原消费者：' + result.stderr[-2000:])
+    return json.loads(result.stdout)
+
+
+def _recorded_recovery_evolution(campaign: Path, deployment: Path, before: str, after: str) -> None:
+    """只读证明原 recovery 场景的单次脚本演进，不为本次外部产品变化提供授权。"""
+
+    from tools.official_client_capture import claude_upgrade as product
+    from tools.official_client_capture import claude_upgrade_store as stores
+    from tools.official_client_capture import codex_upgrade_policy_certification as certification
+    from tools.official_client_control import receipts
+    from tools.official_client_control.store import ControlStore
+
+    manifest = product.load_campaign_manifest(campaign)
+    chain = product._campaign_tool_evolutions(campaign, manifest)
+    if len(chain) != 1:
+        raise ValueError('原 recovery 场景必须只有其自身登记的一次工具演进')
+    evolution = chain[0]
+    key = 'official_client_capture/claude_run_candidate_capture.sh'
+    old = {row['path']: row['sha256'] for row in manifest['tool_identity']['entries']}
+    new = {row['path']: row['sha256'] for row in evolution['to_identity']['entries']}
+    if (sorted(path for path in set(old) | set(new) if old.get(path) != new.get(path)) != [key]
+            or old.get(key) != before or new.get(key) != after):
+        raise ValueError('原 recovery 登记未精确解释唯一脚本的前后字节')
+    current = product._tool_identity(include_git=False)
+    if any(current[field] != evolution['to_identity'][field] for field in (
+            'policy_version', 'policy_sha256', 'wire_producer_sha256', 'evidence_semantics_sha256',
+            'control_sha256', 'files_sha256', 'entries')):
+        raise ValueError('原 recovery 结束产品树与其演进身份不同')
+    certification.load_deployment_receipt(deployment, client='claude', expected_identity={
+        **current, 'tool_files_sha256': current['files_sha256']})
+    bound = evolution['bindings']['deployment_receipt']
+    if Path(bound['path']) != deployment or bound['sha256'] != product.file_sha256(deployment):
+        raise ValueError('原 recovery 部署不是演进收据绑定的原件')
+    store = ControlStore.open_read_only(stores.campaign_store_root(campaign))
+    frozen = store.load_campaign(manifest['campaign_id'])
+    stores.require_store_campaign_matches_plan(manifest, frozen)
+    registrations = receipts.tool_evolutions(store, frozen)
+    if len(registrations) != 1:
+        raise ValueError('原 recovery Store 必须只有对应的一次演进登记')
+    _reference, registration = registrations[0]
+    relative = 'control/tool-evolution/evolution-01.json'
+    if (registration['to_identity'] != receipts.current_tool_identity('claude')
+            or registration['evolution_receipt'] != {
+                'path': relative, 'sha256': product.file_sha256(campaign / relative)}):
+        raise ValueError('原 recovery Store 登记未承接原演进与实际产品身份')
+
+
+def _recovery_formed_product_files(document: dict[str, Any], products: dict[str, str]) -> dict[str, str]:
+    """保留启动快照，仅由原 phase15 与既有消费者解释场景内历史变化。"""
+
+    relative = 'tools/official_client_capture/claude_run_candidate_capture.sh'
+    method = '_CandidateFaultScenarios._scenario_candidate_tool_evolution'
+    changed = sorted(path for path in set(products) | set(document['product_files'])
+                     if products.get(path) != document['product_files'].get(path))
+    row = document['methods'].get(method)
+    if document['chain'] != 'recovery' or changed != [relative] or row is None:
+        raise ValueError('原成功调用的产品快照与本次只读世界不同')
+
+    def original_state(name: str) -> dict[str, Any]:
+        path = Path(row['root']) / (hashlib.sha256(name.encode()).hexdigest() + '.json')
+        bindings = [item for item in row['originals'] if item['path'] == path]
+        if len(bindings) != 1:
+            raise ValueError('原 recovery 演进缺冻结停点：' + name)
+        envelope = json.loads(_read_exact_cut(bindings[0]))
+        payload = envelope['payload']
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        if payload.get('name') != name or envelope.get('sha256') != digest:
+            raise ValueError('原 recovery 演进停点名称或摘要损坏')
+        return _decoded(payload['state'])
+
+    cursor = original_state('cursor:candidate-evolution')
+    result = original_state('method-result')
+    copied = original_state('candidate-execution-copy')
+    tree = Path(document['tree'])
+    path = tree / relative
+    if (cursor.get('phase') != 15 or result.get('complete') is not True
+            or result.get('diagnostic_only') or result.get('executor') != row['executor_origin']
+            or cursor.get('source_path') != path or cursor['source_binding']['path'] != path
+            or hashlib.sha256(cursor['source_before']).hexdigest() != products[relative]
+            or hashlib.sha256(cursor['source_after']).hexdigest() != document['product_files'][relative]
+            or _read_exact_cut(cursor['source_binding']) != cursor['source_after']):
+        raise ValueError('原 recovery 终态或脚本前后切点不能衔接启动快照')
+    campaign = cursor['campaign']
+    if (copied['data'] != campaign.parents[2] or copied['changes'] != [{
+            'path': copied['data'] / relative, 'before': cursor['source_before'], 'after': cursor['source_after']}]
+            or (copied['data'] / relative).is_symlink()
+            or (copied['data'] / relative).read_bytes() != cursor['source_after']):
+        raise ValueError('原 recovery 执行副本没有保留同次场景演进字节')
+    _read_exact_cut(cursor['deployment_binding'])
+    deployment = cursor['deployment_binding']['path']
+    script = ('from __future__ import annotations\nfrom pathlib import Path\n' +
+              inspect.getsource(_recorded_recovery_evolution) +
+              '\nimport sys\n_recorded_recovery_evolution(Path(sys.argv[1]), Path(sys.argv[2]), '
+              'sys.argv[3], sys.argv[4])\n')
+    environment = {**os.environ, 'PYTHONPATH': str(tree), 'PYTHONDONTWRITEBYTECODE': '1'}
+    environment.pop('CODEX_UPGRADE_IDENTITY_MEMO', None)
+    verified = subprocess.run([sys.executable, '-B', '-c', script, str(campaign), str(deployment),
+                               products[relative], document['product_files'][relative]],
+                              cwd=tree, env=environment, capture_output=True, text=True, timeout=120)
+    if verified.returncode:
+        raise ValueError('原 recovery 历史演进未通过原消费者：' + verified.stderr[-2000:])
+    return {**products, relative: document['product_files'][relative]}
+
+
+def verify_product_continuation(binding: dict[str, Any], *, tree: Path | None = None,
+                                original_source: dict[str, Any] | None = None,
+                                current_source: dict[str, Any] | None = None) -> dict[str, Any]:
+    """只消费本次两种精确来源凭证；旧来源原样保留，缺件一律拒绝。"""
+
+    document = _decoded(json.loads(_read_exact_cut(binding)))
+    if (document.get('schema') != 'claude-fault-product-continuation/v1'
+            or document.get('mode') not in {'formed-read-only', 'registered-control-evolution'}):
+        raise ValueError('故障链产品承接凭证版本或模式非法')
+    if original_source is not None and document['original_source'] != original_source:
+        raise ValueError('凭证不是原链的冻结来源')
+    if current_source is not None:
+        # 凭证冻结的是本次产品演进，后续测试修复仍走原默认运输规则。
+        # 不传 continuation，避免递归放行产品、文档、夹具、删除或来源坐标变化。
+        validate_executor_inputs(document['current_source'], current_source)
+    actual_tree = Path(document['tree']).resolve(strict=True)
+    if tree is not None and actual_tree != tree.resolve(strict=True):
+        raise ValueError('承接凭证不属于本次原 tree')
+    proof = control_continuation_proof(document['original_source'],
+                                       current_source if current_source is not None else document['current_source'],
+                                       document['before_files'])
+    if document['control_proof'] != proof:
+        raise ValueError('本次 control-only 身份与读侧证明漂移')
+    if _executor_product_files(actual_tree) != document['product_files']:
+        raise ValueError('承接期间原产品或夹具字节变化')
+    if document['mode'] == 'formed-read-only':
+        if document['chain'] not in {'late-continuous', 'recovery'} or not document['methods']:
+            raise ValueError('只读承接仅接受已成功的后段链／恢复链')
+        formed_products = None
+        for method in document['methods'].values():
+            origin = method.get('executor_origin')
+            if origin is None:
+                raise ValueError('原成功方法缺形成期执行器产品快照')
+            formed = _decoded(json.loads(_read_exact_cut(origin)))
+            if (formed.get('tree') != str(actual_tree) or not isinstance(formed.get('product_files'), dict)
+                    or (formed_products is not None and formed['product_files'] != formed_products)):
+                raise ValueError('原成功调用的产品快照与本次只读世界不同')
+            formed_products = formed['product_files']
+            for item in method['originals']:
+                _read_exact_cut(item)
+        if formed_products != document['product_files']:
+            # 同一链只核一次历史演进；不按 21 个方法重复调用原产品消费者。
+            if _recovery_formed_product_files(document, formed_products) != document['product_files']:
+                raise ValueError('原 recovery 历史演进不能解释整表差异')
+        for relative in proof['changed_paths']:
+            if document['product_files'].get(relative) != document['original_source']['files'][relative]:
+                raise ValueError('只读承接必须保留原控制产品字节，不能偷换当前产品')
+    else:
+        registration = document['registration']
+        if document['chain'] != 'revision-continuous' or len(document['methods']) != 1:
+            raise ValueError('写续作仅接受本次未完成 revision 方法')
+        actual = registered_control_facts(actual_tree, Path(registration['campaign']),
+                                          Path(registration['deployment']['path']))
+        if actual != registration or actual['changed_paths'] != proof['changed_paths']:
+            raise ValueError('原世界真实登记与承接凭证不一致')
+        for relative in proof['changed_paths']:
+            key = relative.removeprefix('tools/')
+            for side, source in (('from', document['original_source']), ('to', document['current_source'])):
+                entries = {row['path']: row['sha256'] for row in actual[side]['entries']}
+                if entries[key] != source['files'][relative]:
+                    raise ValueError('原世界演进字节与本次来源变化不同')
+    return document
+
+
+def invocation_product_continuation(tree: Path) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """凭证只从已验真执行器记录传递，不提供可随意打开的环境绕过开关。"""
+
+    executor = executor_invocation_binding(tree)
+    if executor is None:
+        return None
+    document = _decoded(json.loads(read_cut(executor)))
+    binding = document.get('product_continuation')
+    if binding is None:
+        return None
+    return binding, verify_product_continuation(binding, tree=tree)
+
+
+def _formed_read_only_invocation() -> bool:
+    """既有重验标记加不可变执行器来源共同约束整个子进程；不能单靠环境开启承接。"""
+
+    if not os.environ.get('CLAUDE_FAULT_METHOD_VERIFY') or not os.environ.get(EXECUTOR_SOURCE_ENV):
+        return False
+    executor = executor_invocation_binding(Path(__file__).resolve().parents[3])
+    source = _decoded(json.loads(read_cut(executor)))
+    binding = source.get('product_continuation')
+    if binding is None:
+        return False
+    document = _decoded(json.loads(_read_exact_cut(binding)))
+    return document.get('mode') == 'formed-read-only'
+
+
+def require_registered_control_continuation(campaign: Path) -> dict[str, Any]:
+    """revision 桥每次写入前消费真实部署和双层登记；缺凭证绝不默认放行。"""
+
+    pair = invocation_product_continuation(Path(__file__).resolve().parents[3])
+    if pair is None:
+        raise ValueError('原 revision 控制续作缺少已登记产品承接凭证')
+    binding, document = pair
+    if (document['mode'] != 'registered-control-evolution'
+            or document['registration']['campaign'] != str(campaign.resolve())
+            or str(record_root()) not in {row['root'] for row in document['methods'].values()}):
+        raise ValueError('控制续作凭证模式、Campaign 或原方法坐标不匹配')
+    return {'mode': document['mode'], 'campaign': str(campaign.resolve()), 'binding': binding}
+
+
+@contextlib.contextmanager
+def formed_method_read_only():
+    """成功方法只能重读已有停点；不能补写、派新命令或落回动作体。"""
+
+    token = _FORMED_METHOD_READ_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _FORMED_METHOD_READ_ONLY.reset(token)
 
 
 _INITIALIZING: set[str] = set()
@@ -474,6 +878,8 @@ def read_cut(binding: dict[str, Any]) -> bytes:
 def begin_command(argv: list[Any]) -> dict[str, Any] | None:
     """副作用前保存真实 argv（包括调用方已冻结的批次序号）；不授权重新派发。"""
 
+    if _FORMED_METHOD_READ_ONLY.get() or _formed_read_only_invocation():
+        raise ValueError('已形成成功方法只读重验禁止派发新产品命令')
     root = record_root()
     if root is None:
         return None

@@ -1380,6 +1380,7 @@ class AttemptFactsTests(unittest.TestCase):
 
 
         self._assert_candidate_token_preflight_retry()
+        self._assert_interrupted_revision_builder()
 
         # 原 UID 内定向核验测试执行器运输：来源树、执行树和记录库都是独立的真实私有小目录。
         # 这里只换 capture/tests 内的一个 .py；产品、夹具、原 before 和来源停点均保留原字节。
@@ -1933,6 +1934,97 @@ class AttemptFactsTests(unittest.TestCase):
                         finally:
                             guard_index.write_bytes(guard_raw)
                     self.assertEqual({path: path.read_bytes() for path in records.rglob('*') if path.is_file()}, originals)
+
+    def _assert_interrupted_revision_builder(self) -> None:
+        """原 UID 核显式恢复桥；COMMIT 与双死亡由监督器原 UID 和真实续作复核。"""
+
+        from tools.official_client_capture.tests import claude_revision_evaluator_chain_driver as revision
+        stops = revision.world_fixture
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, {
+                stops.METHOD_RECORD_ENV: directory, stops.METHOD_RESUME_ENV: '1'}):
+            root = Path(directory).resolve()
+            case = revision.ClaudeRevisionEvaluatorChainDriver(methodName='runTest')
+            case.root, case.state_dir = root, root / 'supervisor'
+            campaign = root / 'original-campaign'
+            witness = root / 'original-checkpoint'
+            witness.write_bytes(b'original-pass-checkpoint\n')
+            context = {'campaign': campaign, 'candidate_id': revision.SECOND_CANDIDATE,
+                'revision': 2, 'evaluation_baseline': 1, 'next_sequence': 17}
+            cursor, action = 'builder:claude-cand-r2:b1:s15', {'action_id': 'assert-rules'}
+            def arguments(sequence):
+                return [str(value) for value in ('compile-and-run-vc-batch', '--campaign-dir', campaign,
+                    '--phase', 'VC-5', '--sequence', sequence, '--predecessor-checkpoint',
+                    revision.vc.vc_checkpoint_path(campaign, 'VC-4', revision=2), '--action-plan',
+                    root / 'action-plans' / f'vc-5-{sequence:04d}.json', '--state-dir', case.state_dir)]
+            argv = arguments(16)
+            def hard_stop():
+                stops.begin_command(argv)
+                raise RuntimeError('原 builder 无输出硬中止')
+            with self.assertRaisesRegex(RuntimeError, '无输出硬中止'):
+                stops.command_step(case, cursor, 'builder', argv, hard_stop, campaign=campaign)
+            logical = 'command-step:' + cursor + ':builder'
+            pending = stops._state_path(logical).read_bytes()
+            source = {'run_dir': case.state_dir / 'run-original', 'commit_sha256': 'a' * 64,
+                'checkpoint_count': 61, 'checkpoint_head_sha256': 'b' * 64,
+                'bindings': [stops.file_cut(witness)]}
+            continuation_path = root / 'product-continuation.json'
+            continuation_path.write_text(json.dumps({'fixture_only': True}) + '\n')
+            continuation = {'mode': 'registered-control-evolution', 'campaign': str(campaign.resolve()),
+                            'binding': stops.file_cut(continuation_path)}
+            calls = []
+            def command(arguments, result):
+                arguments = [str(value) for value in arguments]
+                calls.append(arguments)
+                invocation = stops.begin_command(arguments)
+                stops.record_command(arguments, 0, json.dumps(result) + '\n', '', pending=invocation)
+                return 0, result, ''
+            outcome = {'campaign_run': {'reason': 'queue-complete', 'fixture_only': True}}
+            case.source_command = lambda arguments: command(arguments, {'status': 'recoverable', 'fixture_only': True})
+            case.dispatch_vc5 = lambda _context, sequence, _action: command(arguments(sequence), outcome)
+            with mock.patch.object(stops, 'verify_case'), \
+                    mock.patch.object(case, '_interrupted_builder_source', return_value=source) as source_reader, \
+                    mock.patch.object(stops, 'require_registered_control_continuation', create=True,
+                                      return_value=continuation) as continuation_reader:
+                expected = (0, outcome, '')
+                continuation_reader.side_effect = ValueError('缺正式 control 演进来源凭证')
+                with self.assertRaisesRegex(ValueError, '缺正式 control 演进'):
+                    case.vc_step(cursor, 'builder', context, 'VC-5', 16, action)
+                self.assertEqual(calls, [])
+                continuation_reader.side_effect = None
+                self.assertEqual(case.vc_step(cursor, 'builder', context, 'VC-5', 16, action), expected)
+                self.assertEqual([row[0] for row in calls], ['reconcile-supervisor-run', 'compile-and-run-vc-batch'])
+                self.assertEqual(calls[1], arguments(17))
+                self.assertEqual((context['last_builder_sequence'], context['next_sequence']), (17, 18))
+                self.assertEqual(stops._state_path(logical).read_bytes(), pending)
+                self.assertEqual(stops.load_state(logical)['status'], 'pending')
+                proof = stops.load_state('interrupted-builder:' + cursor)
+                self.assertEqual((proof['original_sequence'], proof['recovery_sequence'], proof['status']), (16, 17, 'complete'))
+                # 上层游标尚未封存时重入，只消费第17批真实输出，不派原16批或第三批。
+                stops.save_state('interrupted-builder:' + cursor, {**proof, 'status': 'pending'})
+                for _index in range(2):
+                    self.assertEqual(case.vc_step(cursor, 'builder', context, 'VC-5', 16, action), expected)
+                self.assertEqual(len(calls), 2)
+                source_reader.assert_called_once_with(context, 16, action)
+                continuation_reader.return_value = {**continuation, 'campaign': str(root / 'another-campaign')}
+                with self.assertRaisesRegex(ValueError, '不属于本 Campaign'):
+                    case.vc_step(cursor, 'builder', context, 'VC-5', 16, action)
+                continuation_reader.return_value = continuation
+                self.assertEqual(stops._state_path(logical).read_bytes(), pending)
+                original_witness = witness.read_bytes()
+                witness.write_bytes(b'changed-checkpoint\n')
+                with self.assertRaisesRegex(ValueError, '原件切点'):
+                    case.vc_step(cursor, 'builder', context, 'VC-5', 16, action)
+                witness.write_bytes(original_witness)
+                witness.write_bytes(original_witness + b'appended')
+                with self.assertRaisesRegex(ValueError, '后来被追加'):
+                    case.vc_step(cursor, 'builder', context, 'VC-5', 16, action)
+                witness.write_bytes(original_witness)
+                original = stops.load_state(logical)
+                stops.save_state(logical, {**original, 'argv': arguments(15)})
+                with self.assertRaisesRegex(ValueError, '参数不一致'):
+                    case.vc_step(cursor, 'builder', context, 'VC-5', 16, action)
+                stops._state_path(logical).write_bytes(pending)
+                self.assertEqual(len(calls), 2)
 
     def _assert_candidate_token_preflight_retry(self) -> None:
         """原UID内只核命令接缝；真实Store/两账证明由候选驱动和原现场续作核验。"""
