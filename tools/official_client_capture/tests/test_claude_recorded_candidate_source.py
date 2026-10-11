@@ -6,7 +6,9 @@ import copy
 import gzip
 import hashlib
 import json
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -190,7 +192,7 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         self.state["inputs"]["bindings"][recorded.POLICY_KEY] = source.binding(self.policy_path)
         self.state_path = source.write(self.data / "control/recorded-domain-state.json", self.state)
 
-    def _copy_and_bind_recorded(self) -> dict:
+    def _copy_and_bind_recorded(self, *, installed_subprocess: bool = False) -> dict:
         """运行真实来源复制与 seal 的两步 manifest 形成函数；不派发阶段或启动客户端。"""
 
         from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
@@ -199,8 +201,44 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         self.projection_path = source.write(self.data / "control/recorded-domain-projection.json", self.projection)
         original_loader = source.load_state
         with mock.patch.object(source, "load_state", side_effect=lambda path, digest: original_loader(path, digest, isolation=False)):
-            candidate.copy_registered(self.state_path, source.binding(self.state_path)["sha256"],
-                                      self.projection_path, source.binding(self.projection_path)["sha256"])
+            if installed_subprocess:
+                original_binding = source.binding(self.original_state_path)
+                current_binding = source.binding(self.state_path)
+                old_environment = {source.STATE_ENV: str(self.original_state_path), source.DIGEST_ENV: original_binding["sha256"]}
+                script = "\n".join([
+                    "import json, os, sys",
+                    "from pathlib import Path",
+                    "from unittest import mock",
+                    "from tools.official_client_capture.tests import claude_recorded_chain_source as source",
+                    "from tools.official_client_capture.tests import claude_recorded_candidate_source as candidate",
+                    "path, digest = Path(os.environ[source.STATE_ENV]), os.environ[source.DIGEST_ENV]",
+                    "loader = source.load_state",
+                    "with mock.patch.object(source, 'load_state', side_effect=lambda p, d: loader(p, d, isolation=False)):",
+                    "    code = candidate.copy_registered(path, digest, Path(sys.argv[1]), sys.argv[2])",
+                    "print(json.dumps({'path': str(path), 'sha256': digest}))",
+                    "raise SystemExit(code)",
+                ])
+                # 这里只用一个合成probe覆盖进程边界；完整Job计划由准备用例检查，不冒充完整链资格。
+                with mock.patch.dict(os.environ, old_environment), mock.patch.object(full, "validate_frozen_inputs"):
+                    with full.installed(self.state_path, current_binding["sha256"]):
+                        child = subprocess.run([sys.executable, "-S", "-c", script, str(self.projection_path),
+                                                source.binding(self.projection_path)["sha256"]],
+                                               cwd=str(full.vc1.REPOSITORY), capture_output=True, text=True,
+                                               stdin=subprocess.DEVNULL, timeout=30, check=False)
+                        self.assertEqual(child.returncode, 0, child.stderr)
+                        self.assertEqual(json.loads(child.stdout), {"path": current_binding["path"], "sha256": current_binding["sha256"]})
+                    self.assertEqual({key: os.environ[key] for key in old_environment}, old_environment)
+                    with self.assertRaisesRegex(RuntimeError, "作用域内失败"):
+                        with full.installed(self.state_path, current_binding["sha256"]):
+                            raise RuntimeError("作用域内失败")
+                    self.assertEqual({key: os.environ[key] for key in old_environment}, old_environment)
+                    with self.assertRaises(replay.ReplayError):
+                        with full.installed(self.state_path, "f" * 64):
+                            self.fail("无效来源摘要不得进入作用域")
+                    self.assertEqual({key: os.environ[key] for key in old_environment}, old_environment)
+            else:
+                candidate.copy_registered(self.state_path, source.binding(self.state_path)["sha256"],
+                                          self.projection_path, source.binding(self.projection_path)["sha256"])
         destination = Path(self.projection["output_root"])
         directory = destination.relative_to(self.data).as_posix()
         profile = source.read(self.context.campaign_dir / "assertions/approved-assertion-profile.json")
@@ -225,8 +263,12 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         from tools.official_client_capture import claude_upgrade_evaluation_recovery as recovery
 
         self._add_shared_connection()
+        self.state["inputs"]["full_control_inputs"] = True
+        # 适配器只登记这个合成freeze坐标；本用例不执行二进制冻结或版本认证。
+        freeze_path = source.write(self.data / "control/installed-scope-freeze.json", {"fixture_only": True})
+        self.state["freeze"]["files"] = {"freeze.json": source.binding(freeze_path)}
         self._enable_recorded_policy()
-        manifest = self._copy_and_bind_recorded()
+        manifest = self._copy_and_bind_recorded(installed_subprocess=True)
         self.assertEqual(manifest["schema_version"], recorded.EVALUATION_SCHEMA)
         assertion.validate_evaluation_manifest(manifest, expected_claude_version=source.VERSION)
         observations = assertion.observations_from_manifest(manifest, self.data)

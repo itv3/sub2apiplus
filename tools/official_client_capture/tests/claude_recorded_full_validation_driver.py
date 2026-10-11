@@ -553,7 +553,10 @@ def installed(state_path: Path, digest: str) -> Iterator[Any]:
             raise replay.ReplayError("控制基线投影版本漂移")
         return policy, {"path": str(path), "sha256": source.binding(path)["sha256"]}
 
-    with vc1.installed(state_path, digest, adapter_factory=candidate_source.SourceAdapter) as adapter, \
+    # 子动作从环境重新安装来源；路径与摘要须和本作用域的适配器一致，退出后恢复前段来源。
+    # state 已通过上述校验，环境只传递绑定坐标，不代替 state 内显式的 policy 授权。
+    with mock.patch.dict(os.environ, {source.STATE_ENV: str(state_path), source.DIGEST_ENV: digest}), \
+            vc1.installed(state_path, digest, adapter_factory=candidate_source.SourceAdapter) as adapter, \
             mock.patch.object(release, "active_projection_policy", active_projection_policy), runtime_sources(state):
         yield adapter
 

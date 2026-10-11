@@ -266,10 +266,12 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
                 or monitor_pid <= 0 or supervisor._owner_alive(state["owner_pid"]) or supervisor._owner_alive(monitor_pid)):
             raise ValueError("原中断 builder 必须是 owner 与 monitor 均已死亡的 running 父 run")
         record = supervisor._read_json(run / "campaign-run-manifest.json")
+        # 原编译器已为 builder 冻结输出声明；按同一规则规范化输入，再完整比较全部动作字段。
+        expected_actions = upgrade._freeze_evaluation_output_bindings(campaign, SECOND_CANDIDATE, 1, [action])
         inner = record.get("manifest")
         if (not isinstance(inner, dict) or record.get("manifest_sha256") != supervisor._sha256(supervisor._canonical(inner))
                 or inner.get("candidate_id") != SECOND_CANDIDATE or inner.get("candidate_revision") != 2
-                or inner.get("evaluation_baseline") != 1 or inner.get("actions") != [action]
+                or inner.get("evaluation_baseline") != 1 or inner.get("actions") != expected_actions
                 or inner.get("batch_sequence") != sequence or inner.get("phase") != "VC-5"
                 or inner.get("campaign_id") != campaign.name or state.get("campaign_id") != campaign.name
                 or run.parent != self.state_dir or run.name != "run-" + state["owner_nonce"]

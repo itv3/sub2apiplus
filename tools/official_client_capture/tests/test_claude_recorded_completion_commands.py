@@ -79,6 +79,115 @@ class BatchCommandBoundaryTests(unittest.TestCase):
         vc1._validate_batch_command(delivery.finalize_action(self.campaign, "candidate-fixture", "a" * 64))
         self.assertEqual(list(self.data.iterdir()), [])
 
+        # 在原短验 UID 内覆盖承接声明，不增加公共发现集或启动父监督进程。
+        for check in (self._check_sealed_actions_reuse, self._check_nonsealed_reuse,
+                      self._check_capture_item_mismatch, self._check_invalid_sealed_attempt):
+            with self.subTest(boundary=check.__name__):
+                check()
+
+    def _check_sealed_actions_reuse(self) -> None:
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_candidate_seal as seal
+        from tools.official_client_capture.tests import test_codex_upgrade_supervisor as supervisor_fixture
+
+        fixture = supervisor_fixture.SupervisorTests(methodName="runTest")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign, _ledger, inner, attempt_root = fixture._post_run_tooling_fixture(root)
+            data = campaign.parents[2]
+            attempt = source.read(attempt_root / "attempt.json")
+            original = source.binding(attempt_root / "attempt.json")
+            expected_jobs = sorted(item["id"] for item in attempt["results"])
+            self.assertNotEqual(len(expected_jobs), 12, "本例必须能证明没有硬编码完整链的十二个 Job")
+            builder = {"script": "tools/official_client_capture/claude_build_rule_assertion_results.py",
+                       "config": {"path": "comparisons/cand-1/builder-config.json"},
+                       "output": "assertions/cand-1/results.json", "results_dir": "assertions/cand-1/rules",
+                       "evaluation_baseline": 0}
+            actions = {
+                "compare": batch.managed_action("compare", "VC-5:compare",
+                    ["compare", "--campaign-dir", str(campaign), "--candidate-id", "cand-1"], item_ids=["compare"]),
+                "acceptance": batch.managed_action("acceptance", "VC-5:acceptance",
+                    ["accept", "--campaign-dir", str(campaign), "--candidate-id", "cand-1",
+                     "--external-gate-root", str(data / "gate"), "--external-gate-receipt", "receipt.json"], item_ids=["acceptance"]),
+                "assert-rules": {"action_id": "assert-rules", "operation": "VC-5:assert-rules", "timeout_seconds": 900.0,
+                    "command": [sys.executable, str(data / builder["script"]), "--config", str(campaign / builder["config"]["path"]),
+                        "--output", str(campaign / builder["output"]), "--results-dir", str(campaign / builder["results_dir"]),
+                        "--evaluation-baseline", "0", "--reuse-authority", "none"], "item_ids": ["assert-rules"]},
+            }
+            def consume(arguments):
+                plan = source.read(arguments.action_plan)
+                self.assertEqual(plan["reuse_item_ids"], expected_jobs)
+                checked = supervisor.post_run_tooling_facts(campaign, {
+                    **inner, "actions": plan["actions"], "execute_items": plan["execute_item_ids"],
+                    "reuse_items": plan["reuse_item_ids"],
+                }, run_started_at_utc="2099-01-01T00:00:00Z")
+                self.assertTrue(checked["qualifies"], checked["reasons"])
+                return {"fixture_only": True}, 0
+            with mock.patch.object(upgrade, "load_campaign_manifest", return_value={}), \
+                    mock.patch.object(upgrade, "_current_candidate_revision", return_value=1), \
+                    mock.patch.object(upgrade, "_current_candidate_revision_record", return_value=(1, {"candidate_id": "cand-1"})), \
+                    mock.patch.object(upgrade, "_vc_checkpoint_path", return_value=campaign / "vc4.json"), \
+                    mock.patch.object(upgrade, "_vc_campaign_plan", return_value={}), \
+                    mock.patch.object(upgrade, "_replay_vc_checkpoint"), \
+                    mock.patch.object(upgrade, "_committed_vc_sequences", return_value=[]), \
+                    mock.patch.object(upgrade, "_load_stage_result", return_value={"builder": builder}), \
+                    mock.patch.object(seal, "load_round_one_result", return_value=(campaign / "result.json", {"fixture_only": True})), \
+                    mock.patch.object(seal, "sealed_attempt_context", return_value=(attempt_root, attempt)), \
+                    mock.patch.object(upgrade, "compile_and_run_vc_batch", side_effect=consume) as compiled:
+                for name, action in actions.items():
+                    with self.subTest(name=name):
+                        vc1._batch(data, campaign, name, [], phase="VC-5", action=action)
+                self.assertEqual(compiled.call_count, 3)
+            self.assertEqual(source.binding(attempt_root / "attempt.json"), original)
+
+    def _check_nonsealed_reuse(self) -> None:
+        from tools.official_client_capture import claude_upgrade as upgrade
+
+        with mock.patch.object(upgrade, "_current_candidate_revision_record") as current:
+            for phase, name in (("VC-1", "compare"), ("VC-6", "acceptance"),
+                                ("VC-5", "vc5-01-candidate-run"), ("VC-5", "candidate-seal"),
+                                ("VC-5", "vc5-02-candidate-seal-preview")):
+                with self.subTest(phase=phase, name=name):
+                    self.assertEqual(vc1._sealed_candidate_reuse(Path("/unused"), Path("/unused"), phase, name, {}, {}), [])
+            current.assert_not_called()
+
+    def _check_capture_item_mismatch(self) -> None:
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_candidate_seal as seal
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory).resolve()
+            with mock.patch.object(upgrade, "_current_candidate_revision_record", return_value=(1, {"candidate_id": "cand-1"})), \
+                    mock.patch.object(seal, "load_round_one_result") as sealed:
+                for name in ("compare", "acceptance"):
+                    action = batch.managed_action(name, "VC-5:" + name,
+                        ["capture-candidate", "run", "--campaign-dir", str(campaign), "--candidate-id", "cand-1"], item_ids=[name])
+                    with self.subTest(name=name), self.assertRaises((replay.ReplayError, batch.ConfigurationError)):
+                        vc1._sealed_candidate_reuse(campaign, campaign, "VC-5", name, action, {})
+                sealed.assert_not_called()
+            self.assertEqual(list(campaign.iterdir()), [])
+
+    def _check_invalid_sealed_attempt(self) -> None:
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_candidate_seal as seal
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory).resolve()
+            action = batch.managed_action("compare", "VC-5:compare",
+                ["compare", "--campaign-dir", str(campaign), "--candidate-id", "cand-1"], item_ids=["compare"])
+            with mock.patch.object(upgrade, "_current_candidate_revision_record", return_value=(1, {"candidate_id": "cand-1"})), \
+                    mock.patch.object(seal, "load_round_one_result", return_value=(campaign / "result.json", {})) as sealed, \
+                    mock.patch.object(seal, "sealed_attempt_context") as context:
+                for results in ([], [{"id": "job-a", "status": "failed"}],
+                                [{"id": "job-a", "status": "complete"}] * 2):
+                    context.return_value = (campaign, {"status": "awaiting_receipts", "results": results})
+                    with self.subTest(results=results), self.assertRaises(replay.ReplayError):
+                        vc1._sealed_candidate_reuse(campaign, campaign, "VC-5", "compare", action, {})
+                sealed.side_effect = batch.ConfigurationError("阶段尚未封存")
+                with self.assertRaisesRegex(batch.ConfigurationError, "阶段尚未封存"):
+                    vc1._sealed_candidate_reuse(campaign, campaign, "VC-5", "compare", action, {})
+            self.assertEqual(list(campaign.iterdir()), [])
+
 
 class RealOfflineImportTests(candidate_fixture._CandidateSealCase):
     """真实冻结 Campaign 输入源；只替换驱动的候选常量，不替换 CLI 或成功判定。"""

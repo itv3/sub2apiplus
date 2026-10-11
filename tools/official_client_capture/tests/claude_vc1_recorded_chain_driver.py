@@ -368,6 +368,53 @@ def _validate_batch_command(action: dict[str, Any]) -> None:
         raise replay.ReplayError("client-evidence 是批次之间的离线控制入口，不能由父批次执行。")
 
 
+def _sealed_candidate_reuse(
+    data: Path, campaign: Path, phase: str, name: str, action: dict[str, Any], manifest: dict[str, Any],
+) -> list[str]:
+    """只给三个已封存候选后处理动作声明实际 Job；采集、封存和交付沿用原计划。"""
+
+    if phase != "VC-5" or name not in {"compare", "assert-rules", "acceptance"}:
+        return []
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_batch as batch
+    from tools.official_client_capture import claude_upgrade_candidate_seal as seal
+
+    _revision, current = upgrade._current_candidate_revision_record(campaign, manifest)
+    candidate_id = current.get("candidate_id") if isinstance(current, dict) else None
+    if not isinstance(candidate_id, str) or not candidate_id:
+        raise replay.ReplayError("候选后处理缺少当前候选身份，不能声明 Job 承接")
+    if name == "assert-rules":
+        comparison = upgrade._load_stage_result(campaign, "compare", candidate_id)
+        builder = comparison["builder"]
+        expected = [sys.executable, str(data / builder["script"]), "--config", str(campaign / builder["config"]["path"]),
+                    "--output", str(campaign / builder["output"]), "--results-dir", str(campaign / builder["results_dir"]),
+                    "--evaluation-baseline", str(builder["evaluation_baseline"]), "--reuse-authority", "none"]
+        if action.get("command") != expected:
+            raise replay.ReplayError("断言后处理命令不属于当前候选的原 builder，不能声明 Job 承接")
+    else:
+        argv = batch._orchestrator_argv(action.get("command", []))
+        command = "compare" if name == "compare" else "accept"
+        flags = batch._paired_flags(command, argv[1:])
+        allowed = {"--campaign-dir", "--candidate-id"}
+        if name == "acceptance":
+            allowed |= {"--external-gate-root", "--external-gate-receipt"}
+        if (not argv or argv[0] != command or set(flags) != allowed
+                or flags.get("--campaign-dir") != str(campaign) or flags.get("--candidate-id") != candidate_id):
+            raise replay.ReplayError("候选后处理命令与阶段、Campaign 或当前候选不一致，不能声明 Job 承接")
+    _stage_path, stage = seal.load_round_one_result(campaign, candidate_id, manifest=manifest)
+    _attempt_root, attempt = seal.sealed_attempt_context(campaign, stage, candidate_id=candidate_id)
+    results = attempt.get("results")
+    if (attempt.get("status") != "awaiting_receipts" or not isinstance(results, list) or not results
+            or any(not isinstance(item, dict) or item.get("status") != "complete"
+                   or not isinstance(item.get("id"), str) or not item["id"] for item in results)):
+        raise replay.ReplayError("已封存候选的 Job 结果未全部完成，不能声明 Job 承接")
+    job_ids = [item["id"] for item in results]
+    if len(set(job_ids)) != len(job_ids):
+        raise replay.ReplayError("已封存候选的 Job 身份重复，不能声明 Job 承接")
+    # 只声明已完成的来源；checkpoint、预约与本 run 请求窗口仍由原监督器逐项复核。
+    return sorted(job_ids)
+
+
 def _batch(
     data: Path, campaign: Path, name: str, argv: list[str], *, phase: str = "VC-1", timeout_seconds: float = 600,
     action: dict[str, Any] | None = None,
@@ -392,7 +439,8 @@ def _batch(
     upgrade._replay_vc_checkpoint(campaign, plan, previous, revision=revision)
     sequence = max(upgrade._committed_vc_sequences(campaign, manifest), default=0) + 1
     action = source.write(data / "control" / "actions" / f"{sequence}-{name}.json", {
-        "schema_version": artifacts.VC_ACTION_PLAN_SCHEMA, "execute_item_ids": [name], "reuse_item_ids": [],
+        "schema_version": artifacts.VC_ACTION_PLAN_SCHEMA, "execute_item_ids": [name],
+        "reuse_item_ids": _sealed_candidate_reuse(data, campaign, phase, name, dispatched, manifest),
         "actions": [dispatched]})
     result, code = upgrade.compile_and_run_vc_batch(argparse.Namespace(
         campaign_dir=campaign, state_dir=data / "supervisor", phase=phase, sequence=sequence,

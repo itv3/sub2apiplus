@@ -1936,7 +1936,7 @@ class AttemptFactsTests(unittest.TestCase):
                     self.assertEqual({path: path.read_bytes() for path in records.rglob('*') if path.is_file()}, originals)
 
     def _assert_interrupted_revision_builder(self) -> None:
-        """原 UID 核显式恢复桥；COMMIT 与双死亡由监督器原 UID 和真实续作复核。"""
+        """原 UID 实读 COMMIT、编译后的完整动作与 checkpoint 链；外部存活观察及续派命令仍为显式夹具。"""
 
         from tools.official_client_capture.tests import claude_revision_evaluator_chain_driver as revision
         stops = revision.world_fixture
@@ -1946,11 +1946,15 @@ class AttemptFactsTests(unittest.TestCase):
             case = revision.ClaudeRevisionEvaluatorChainDriver(methodName='runTest')
             case.root, case.state_dir = root, root / 'supervisor'
             campaign = root / 'original-campaign'
-            witness = root / 'original-checkpoint'
-            witness.write_bytes(b'original-pass-checkpoint\n')
+            assertions = campaign / 'candidates' / revision.SECOND_CANDIDATE / 'revisions/b1/assertions'
+            write = revision.transient._write
+            witness = write(assertions / 'machine/official/SPEC-HDR-001.json', {'fixture_only': True, 'status': 'pass'})
             context = {'campaign': campaign, 'candidate_id': revision.SECOND_CANDIDATE,
                 'revision': 2, 'evaluation_baseline': 1, 'next_sequence': 17}
-            cursor, action = 'builder:claude-cand-r2:b1:s15', {'action_id': 'assert-rules'}
+            cursor = 'builder:claude-cand-r2:b1:s15'
+            action = {'action_id': 'assert-rules', 'operation': 'VC-5:assert-rules', 'item_ids': ['assert-rules'],
+                'timeout_seconds': 900.0, 'command': [revision.sys.executable, str(Path(revision.assertion_builder.__file__)),
+                    '--config', str(campaign / 'builder-config.json'), '--evaluation-baseline', '1']}
             def arguments(sequence):
                 return [str(value) for value in ('compile-and-run-vc-batch', '--campaign-dir', campaign,
                     '--phase', 'VC-5', '--sequence', sequence, '--predecessor-checkpoint',
@@ -1964,9 +1968,53 @@ class AttemptFactsTests(unittest.TestCase):
                 stops.command_step(case, cursor, 'builder', argv, hard_stop, campaign=campaign)
             logical = 'command-step:' + cursor + ':builder'
             pending = stops._state_path(logical).read_bytes()
-            source = {'run_dir': case.state_dir / 'run-original', 'commit_sha256': 'a' * 64,
-                'checkpoint_count': 61, 'checkpoint_head_sha256': 'b' * 64,
-                'bindings': [stops.file_cut(witness)]}
+            # 合成两个 pass 原件即可核恢复接线；现场的61个原件由只读脚本逐项核验，不伪造短验数量。
+            artifacts, supervisor = revision.supervisor.vc_artifacts, revision.supervisor
+            nonce = 'e' * 64
+            run = case.state_dir / ('run-' + nonce)
+            commit_path = campaign / 'control/vc/commits/0016-vc-5.json'
+            with mock.patch.object(revision.upgrade, '_stage_write_target', return_value=assertions):
+                compiled_actions = revision.upgrade._freeze_evaluation_output_bindings(
+                    campaign, revision.SECOND_CANDIDATE, 1, [action])
+            self.assertNotIn('output_bindings', action, '原 action 不得被编译侧修改')
+            inner = supervisor.build_batched_campaign_run_manifest_payload(
+                client='claude', campaign_id=campaign.name, campaign_plan_sha256='1' * 64,
+                batch_id='vc-5-0016', batch_sequence=16, batch_sha256='2' * 64, phase='VC-5',
+                candidate_id=revision.SECOND_CANDIDATE, candidate_revision=2, evaluation_baseline=1,
+                baseline_commit_sha256='3' * 64, evaluator_digests={key: '4' * 64 for key in artifacts.EVALUATOR_DIGEST_FIELDS},
+                predecessor_checkpoint={'path': 'control/vc/vc-4-r2-checkpoint.json', 'sha256': '5' * 64,
+                    'phase': 'VC-4', 'checkpoint_sha256': '6' * 64},
+                original_deadline_at_utc='2099-01-01T00:00:00Z', actions=compiled_actions,
+                execute_items=['assert-rules'], reuse_items=[])
+            manifest_sha256 = supervisor._sha256(supervisor._canonical(inner))
+            record = {'manifest': inner, 'manifest_sha256': manifest_sha256}
+            manifest_path = write(run / 'campaign-run-manifest.json', record)
+            write(campaign / 'control/vc/run-manifests/0016-vc-5.json', inner)
+            commit = artifacts.build_vc_commit(campaign_id=campaign.name, sequence=16, phase='VC-5', staging_attempt=1,
+                batch_sha256=inner['batch_sha256'], manifest_sha256=manifest_sha256, parent_run_dir=str(run),
+                owner_nonce=nonce, ledger_event_ids=['fixture-commit'], committed_at_utc='2026-10-12T00:00:00Z')
+            write(commit_path, commit)
+            write(run / 'state.json', {'schema_version': supervisor.STATE_SCHEMA, 'campaign_id': campaign.name,
+                'phase': 'VC-5', 'owner_nonce': nonce, 'owner_pid': 11111, 'monitor_pid': 22222,
+                'state': 'running', 'started_at_epoch': 1.0, 'deadline_at_epoch': 100.0,
+                'started_monotonic_ns': 1, 'deadline_monotonic_ns': 100,
+                'staging_binding': {'campaign_dir': str(campaign), 'sequence': 16, 'phase': 'VC-5',
+                    'staging_attempt': 1, 'commit_path': str(commit_path), 'prepared_marker_sha256': '7' * 64}})
+            evaluation = object.__new__(revision.assertion_builder.EvaluationRun)
+            evaluation.campaign_root, evaluation.assertions_root = campaign, assertions
+            evaluation.checkpoints_dir, evaluation.chain = assertions / 'checkpoints', []
+            evaluation.builder_sha256 = '4' * 64
+            evaluation.parent = {'run_dir': str(run), 'owner_nonce': nonce, 'run_manifest_sha256': manifest_sha256}
+            for side in ('official', 'candidate'):
+                document = write(assertions / f'machine/{side}/SPEC-HDR-001.json', {'fixture_only': True, 'status': 'pass'})
+                projection = write(assertions / f'machine/{side}/SPEC-HDR-001.inputs.json', {'fixture_only': True})
+                evaluation.write_checkpoint(rule_id='SPEC-HDR-001', side=side, status='pass', document_path=document,
+                    input_projection=projection, projection_sha256=hashlib.sha256(projection.read_bytes()).hexdigest(),
+                    command_sha256_value='8' * 64, checker_sha256='4' * 64,
+                    context={'capture_manifest': {'path': 'fixture-capture.json', 'sha256': '9' * 64},
+                        'evidence_root': str(root), 'profile_sha256': 'a' * 64, 'rule_manifest_sha256': 'b' * 64},
+                    dependency_projection_sha256='c' * 64, reused_from=None)
+            originals = {path: path.read_bytes() for path in assertions.rglob('*') if path.is_file()}
             continuation_path = root / 'product-continuation.json'
             continuation_path.write_text(json.dumps({'fixture_only': True}) + '\n')
             continuation = {'mode': 'registered-control-evolution', 'campaign': str(campaign.resolve()),
@@ -1982,9 +2030,30 @@ class AttemptFactsTests(unittest.TestCase):
             case.source_command = lambda arguments: command(arguments, {'status': 'recoverable', 'fixture_only': True})
             case.dispatch_vc5 = lambda _context, sequence, _action: command(arguments(sequence), outcome)
             with mock.patch.object(stops, 'verify_case'), \
-                    mock.patch.object(case, '_interrupted_builder_source', return_value=source) as source_reader, \
+                    mock.patch.object(revision.upgrade, '_stage_write_target', return_value=assertions), \
+                    mock.patch.object(supervisor, '_owner_alive', return_value=False), \
+                    mock.patch.object(case, '_interrupted_builder_source', wraps=case._interrupted_builder_source) as source_reader, \
                     mock.patch.object(stops, 'require_registered_control_continuation', create=True,
                                       return_value=continuation) as continuation_reader:
+                # 原规范化函数和完整来源入口都实际执行；声明或已编译清单篡改必须拒绝。
+                with self.assertRaisesRegex(ConfigurationError, 'output_bindings'):
+                    case._interrupted_builder_source(context, 16, {**action, 'output_bindings': ['wrong/output.json']})
+                manifest_raw = manifest_path.read_bytes()
+                for mutation in ('output_bindings', 'command'):
+                    damaged = json.loads(manifest_raw)
+                    if mutation == 'output_bindings':
+                        damaged['manifest']['actions'][0]['output_bindings'] = ['wrong/output.json']
+                    else:
+                        damaged['manifest']['actions'][0]['command'] += ['--unexpected', 'changed']
+                    damaged['manifest_sha256'] = supervisor._sha256(supervisor._canonical(damaged['manifest']))
+                    write(manifest_path, damaged)
+                    try:
+                        with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'COMMIT／动作／候选／b1'):
+                            case._interrupted_builder_source(context, 16, action)
+                    finally:
+                        manifest_path.write_bytes(manifest_raw)
+                self.assertEqual(calls, [])
+                source_reader.reset_mock()
                 expected = (0, outcome, '')
                 continuation_reader.side_effect = ValueError('缺正式 control 演进来源凭证')
                 with self.assertRaisesRegex(ValueError, '缺正式 control 演进'):
@@ -1999,6 +2068,8 @@ class AttemptFactsTests(unittest.TestCase):
                 self.assertEqual(stops.load_state(logical)['status'], 'pending')
                 proof = stops.load_state('interrupted-builder:' + cursor)
                 self.assertEqual((proof['original_sequence'], proof['recovery_sequence'], proof['status']), (16, 17, 'complete'))
+                self.assertEqual((proof['source']['checkpoint_count'], proof['source']['run_dir']), (2, run))
+                self.assertEqual({path: path.read_bytes() for path in originals}, originals)
                 # 上层游标尚未封存时重入，只消费第17批真实输出，不派原16批或第三批。
                 stops.save_state('interrupted-builder:' + cursor, {**proof, 'status': 'pending'})
                 for _index in range(2):
