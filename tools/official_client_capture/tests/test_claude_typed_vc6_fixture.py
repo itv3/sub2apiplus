@@ -27,7 +27,7 @@ from tools.official_client_capture.tests import claude_typed_vc6_fixture as fixt
 from tools.official_client_capture.tests import test_claude_real_delivery_integration as integration_fixture
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
 from tools.official_client_control import delivery_execution as execution
-from tools.official_client_control.canonical import canonical_json_bytes
+from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
 from tools.official_client_control.tests.fixtures import SyntheticCampaign
 
 
@@ -101,6 +101,95 @@ class TypedFixtureInputTests(unittest.TestCase):
         self.assertTrue(all(binding["path"].startswith("rollback-source/") for binding in
                             (rollback.contract_binding, rollback.official_binding, rollback.private_binding)))
         self.assertGreaterEqual(rollback.tool_identity["policy_version"], 4)
+
+        # 沿原 UID 覆盖首次初始化中断：复用基础文件和同 Store 的已封存资格，
+        # 不再调用任何建场生产器；只有原游标明确许可的未启动现场可以承接。
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        configuration, _context, environment = fixture_world(self.root)
+        candidate_qualification = copy.deepcopy(configuration['candidate']['qualification'])
+        campaign = self.root / 'evidence/campaigns/original-typed-campaign'
+        guard.private_directory(campaign)
+        control_path = self.root / 'control/recorded-delivery-control.json'
+        qualified_root = self.root / 'control/typed-vc6-rollback'
+        guard.private_directory(qualified_root)
+        qualified = integration_fixture.DeliveryCampaign(qualified_root, schema='v2', store=original.store,
+            external_root=self.root, external_prefix='control/typed-vc6-rollback/external')
+        qualified.materials = configuration
+        qualified.campaign_id = 'typed-rollback-' + canonical_sha256(candidate_qualification)[:32]
+        qualified.bootstrap_and_campaign(platforms=['linux/arm64'], campaign_purpose='validation_only')
+        qualified.discovery_and_evidence()
+        qualified.profile_objects()
+        qualified.select_profile('rollback')
+        qualified.profile_approve('validation_only')
+        qualified.strict_validate(tag='baseline')
+        sealed_path = qualified_root / 'sealed-result.json'
+        guard.write_json_once(sealed_path, {'schema_version': 'claude-upgrade-acceptance/v1',
+            'candidate_id': 'synthetic-candidate-baseline', 'production_state': 'not_activated',
+            'store': {'acceptance_ref': qualified.references['acceptance-baseline'],
+                'validation_completed_ref': qualified.references['validation-completed-baseline']}})
+        record_name = 'typed-vc6:' + str(campaign)
+        records = self.root / 'records'
+        records.mkdir(mode=0o700)
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records), stops.METHOD_RESUME_ENV: '1'}):
+            stops.save_state('cursor:typed-input', {'phase': 'VC6',
+                'initializations': {record_name: 'uninitialized'}})
+            with self.assertRaisesRegex(guard.GuardError, '游标许可'):
+                fixture._read_unstarted_fixture_world(self.root, campaign, control_path, record_name)
+            with stops.initialization_scope(record_name, cursor='typed-input', phase='VC6'), \
+                    mock.patch.object(fixture, 'fixture_world', side_effect=AssertionError('不重建基础世界')), \
+                    mock.patch.object(fixture, 'DeliveryCampaign', side_effect=AssertionError('不重建回滚资格')):
+                originals = {path: path.read_bytes() for path in self.root.rglob('*')
+                             if path.is_file() and records not in path.parents}
+                restored_configuration, restored_environment = fixture._read_unstarted_fixture_world(
+                    self.root, campaign, control_path, record_name)
+                self.assertEqual(restored_configuration, configuration)
+                self.assertEqual(restored_environment, environment)
+                restored = fixture._read_initial_rollback_qualification(
+                    original.store, self.root, restored_configuration, candidate_qualification)
+                self.assertEqual(restored['campaign_id'], qualified.campaign_id)
+                self.assertEqual(restored['candidate_ref'], qualified.references['candidate-baseline'])
+                self.assertEqual(restored['build_receipt_ref'], qualified.references['candidate-build-receipt-baseline'])
+                self.assertEqual(restored['validation_ref'], qualified.references['validation-completed-baseline'])
+                self.assertEqual(restored['acceptance_ref'], qualified.references['acceptance-baseline'])
+                self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*')
+                    if path.is_file() and records not in path.parents}, originals)
+                # 集中核拒绝边界，每项只改本测试现场，复验结束恢复相同原字节。
+                compose = self.root / configuration['paths']['compose_binding']['path']
+                state = self.root / 'state.json'
+                source_configuration = self.root / 'inputs/configuration.json'
+                mutations = [(compose, compose.read_bytes() + b' '),
+                    (state, canonical_json_bytes({**guard.read_json(state), 'switch_count': 1})),
+                    (source_configuration, canonical_json_bytes({**configuration, 'instance_id': 'changed-fixture'}))]
+                for path, content in mutations:
+                    with self.subTest(drift=path.name):
+                        previous = path.read_bytes()
+                        try:
+                            path.write_bytes(content)
+                            with self.assertRaises(guard.GuardError):
+                                fixture._read_unstarted_fixture_world(self.root, campaign, control_path, record_name)
+                        finally:
+                            path.write_bytes(previous)
+                for path in (self.root / 'guard', control_path.with_name('typed-vc6-guard.log'),
+                             campaign / 'control/typed-vc6-configuration.json'):
+                    with self.subTest(already_started=path.name):
+                        guard.write_json_once(path, {'fixture': '必须拒绝'})
+                        try:
+                            with self.assertRaisesRegex(guard.GuardError, '发布配置或守卫痕迹'):
+                                fixture._read_unstarted_fixture_world(self.root, campaign, control_path, record_name)
+                        finally:
+                            path.unlink()
+                raw = sealed_path.read_bytes()
+                try:
+                    sealed_path.unlink()
+                    with self.assertRaises(guard.GuardError):
+                        fixture._read_initial_rollback_qualification(
+                            original.store, self.root, restored_configuration, candidate_qualification)
+                finally:
+                    sealed_path.write_bytes(raw)
+                self.assertEqual({path: path.read_bytes() for path in self.root.rglob('*')
+                    if path.is_file() and records not in path.parents}, originals)
+        self.assertEqual(canonical_json_bytes(original.store.load_campaign(original.campaign_id)), original_campaign)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_same_store_requires_nonempty_unique_source_prefix(self) -> None:
         original = SyntheticCampaign(self.root, schema="v2")

@@ -944,12 +944,16 @@ def _verify_continuation_method(document: dict[str, Any], method: str, expected:
     if context is None or context.get('method') != method or context.get('tree') != document['tree']:
         raise ValueError('原方法上下文缺失或不属于同一世界')
     if document['mode'] == 'formed-read-only':
+        result = stops.load_state('method-result')
+        if result is None or result.get('complete') is not True or result.get('executor') != row['executor_origin']:
+            raise ValueError('只读承接的形成期执行器不是原成功方法绑定的原件')
         for binding in row['originals']:
             stops._read_exact_cut(binding)
 
 
 def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, Any], *,
-                                  campaign: Path | None = None, deployment: Path | None = None) -> dict[str, Any]:
+                                  campaign: Path | None = None, deployment: Path | None = None,
+                                  output_path: Path | None = None) -> dict[str, Any]:
     """从真实原件生成本次测试侧凭证；不部署、不登记工具演进、不签认证。
 
     before_files 是已归档的真实旧控制文件切点；revision 必须先完成原受监督部署及两层登记。
@@ -964,7 +968,9 @@ def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, 
         if saved is None or saved.get('diagnostic_seconds') is not None:
             raise ValueError('承接必须绑定原正式链停点')
         source = _source_inputs()
-        path = root / stops.PRODUCT_CONTINUATION_FILE
+        path = root / stops.PRODUCT_CONTINUATION_FILE if output_path is None else Path(output_path)
+        if output_path is not None and path != stops.current_product_continuation_path(root, source):
+            raise ValueError('新凭证须使用本次非测试来源绑定的准确新路径，禁止覆盖旧凭证')
         if path.exists():
             binding = stops.file_cut(path)
             document = stops.verify_product_continuation(binding, tree=Path(saved['tree']),
@@ -1028,6 +1034,8 @@ def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, 
                     'current_source': source, 'before_files': before_files, 'control_proof': proof,
                     'product_files': stops._executor_product_files(tree), 'methods': methods,
                     'registration': registration}
+        if mode == 'formed-read-only' and chain == 'revision-continuous':
+            document['registration'] = stops._revision_formed_registration(document)
         raw = (json.dumps(stops._encoded(document), sort_keys=True, ensure_ascii=False) + '\n').encode()
         if path.exists():
             if path.is_symlink() or path.read_bytes() != raw:
@@ -3660,7 +3668,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
             if saved is not None:
                 if saved.get('chain') != chain or saved.get('diagnostic_seconds') != diagnostic_seconds:
                     raise ValueError('原链身份或预算模式变化，禁止消费另一条链或诊断结果')
-                continuation_path = root / stops.PRODUCT_CONTINUATION_FILE
+                continuation_path = stops.selected_product_continuation_path(root, source)
                 continuation = stops.file_cut(continuation_path) if continuation_path.exists() else None
                 stops.validate_executor_inputs(saved['source'], source, continuation)
                 if continuation is not None:

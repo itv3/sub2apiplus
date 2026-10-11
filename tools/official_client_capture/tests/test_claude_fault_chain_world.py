@@ -160,6 +160,50 @@ class ContinuousWorldContractTests(unittest.TestCase):
         self.assertEqual(len(outer.REVISION_CONTINUOUS_SCENARIOS), 8)
         self.assertNotIn('revision-continuous', outer.PENDING_CONTINUOUS_CHAINS)
         self.assertNotIn('test_revision_continuous', outer.ClaudeFaultChainTests.__dict__)
+        # 当前控制来源使用独立凭证路径；测试后继仍消费相同产品意图，旧凭证不覆盖。
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            relative = 'tools/official_client_capture/claude_qualification_material_source.py'
+            test_relative = 'tools/official_client_capture/tests/test_claude_fault_chain_world.py'
+            source = {'repository': '/stable/fixture', 'fixtures': {},
+                      'files': {relative: '1' * 64, test_relative: '2' * 64}}
+            legacy = root / world_fixture.PRODUCT_CONTINUATION_FILE
+            legacy.write_bytes(b'original continuation')
+            current = world_fixture.current_product_continuation_path(root, source)
+            self.assertNotEqual(current, legacy)
+            self.assertEqual(world_fixture.selected_product_continuation_path(root, source), legacy)
+            current.write_bytes(b'current continuation')
+            self.assertEqual(world_fixture.selected_product_continuation_path(root, source), current)
+            successor = {**source, 'files': {**source['files'], test_relative: '3' * 64}}
+            self.assertEqual(world_fixture.current_product_continuation_path(root, successor), current)
+            changed = {**source, 'files': {**source['files'], relative: '4' * 64}}
+            self.assertNotEqual(world_fixture.current_product_continuation_path(root, changed), current)
+            self.assertEqual(legacy.read_bytes(), b'original continuation')
+            with outer._record_scope(root):
+                world_fixture.save_state('chain:revision-continuous', {'diagnostic_seconds': None})
+            with mock.patch.dict(os.environ, {'CLAUDE_RECORDED_CHAIN_RECORD_DIR': str(root)}), \
+                    mock.patch.object(outer, '_source_inputs', return_value=source):
+                with self.assertRaisesRegex(ValueError, '准确新路径'):
+                    outer.prepare_product_continuation('revision-continuous', 'formed-read-only', {},
+                        output_path=legacy)
+            # 只读凭证的执行器原件必须来自实际成功停点，不能随意换成另一个绑定。
+            method, expected = next(iter(outer._continuation_methods('revision-continuous').items()))
+            origin = world_fixture.file_cut(legacy)
+            row = {'root': str(root), 'expected': expected, 'executor_origin': origin, 'originals': [origin]}
+            document = {'mode': 'formed-read-only', 'chain': 'revision-continuous', 'tree': str(root / 'tree'),
+                        'methods': {method: row}}
+            context = {'method': method, 'tree': document['tree']}
+            result = {'complete': True, 'executor': origin}
+            with mock.patch.object(world_fixture, 'record_root', return_value=root), \
+                    mock.patch.object(world_fixture, 'load_state', side_effect=lambda name:
+                        context if name == 'method-context' else result):
+                outer._verify_continuation_method(document, method, expected)
+                result['executor'] = world_fixture.file_cut(current)
+                with self.assertRaisesRegex(ValueError, '原成功方法'):
+                    outer._verify_continuation_method(document, method, expected)
+                result.update(complete=False, executor=origin)
+                with self.assertRaisesRegex(ValueError, '原成功方法'):
+                    outer._verify_continuation_method(document, method, expected)
 
 
 class _RevisionAuditPublicationChecks(unittest.TestCase):

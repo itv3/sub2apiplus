@@ -472,6 +472,121 @@ class FrozenActiveDerivationProofTests(unittest.TestCase):
              mock.patch.object(os, "open", observe(os.open)):
             self.prove()
         self.assertFalse(observed - set(self.originals), sorted(observed - set(self.originals)))
+        self._assert_formal_vc0_p0_source_and_projection()
+
+    def _assert_formal_vc0_p0_source_and_projection(self):
+        """原 UID 内集中验证合法外置 P0、四附件及下游闭包；不签发新发布认证或执行阶段。"""
+        from tools.official_client_capture import certify_release, claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_vc as vc
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+        from tools.official_client_capture import codex_upgrade_vc_receipt as p0_reader
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+        from tools.official_client_capture.tests.control_receipt_fixtures import create_p0_gate_receipt
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+
+        campaign = self.data / "evidence/campaigns/subject-p0-fixture"
+        root = self.data / "control/subject-p0-fixture"
+        timing_root = self.data / "control/subject-p0-timing"
+        timing_root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        timing.create_ledger(timing_root, upgrade_id="subject-upgrade", baseline_version="2.1.220",
+            target_version="2.1.226", campaign_purpose="validation_only", evidence_decision="recapture",
+            started_at_utc="2026-10-12T00:00:00Z", client="claude")
+        timing_path = timing_root / "ledger.json"
+        identity = {name: str(index) * 64 for index, name in enumerate(certify_release.policy_certification.IDENTITY_FIELDS, 1)}
+        identity["policy_version"] = 16
+        # 历史认证中的坐标不授予本次资格读取权；P0 附件仍是原 finalizer 封存的真实字节绑定。
+        certificate = certify_release.compose_certification(identity=identity,
+            deployment_receipt={"path": "/historical-formation/deployment.json", "sha256": "a" * 64, "bytes": 123},
+            pre_a3_certification={"path": "/historical-formation/pre-a3.json", "sha256": "b" * 64, "bytes": 456},
+            policy_activation=None, job_rehearsal={"evidence_root": "/historical-formation", "receipt": "job.json", "sha256": "c" * 64},
+            atomic_double_rehearsal={"evidence_root": "/historical-formation", "receipt": "atomic.json", "sha256": "d" * 64},
+            campaign_run_rehearsal=None, client="claude")
+        release_path = write(root.parent, "subject-release.json", certificate)
+        p0_path = create_p0_gate_receipt(root, upgrade_id="subject-upgrade", baseline_version="2.1.220",
+            target_version="2.1.226", campaign_purpose="validation_only", release_certification=release_path)
+        p0 = p0_reader.replay(root, p0_path.name)
+        p0_sha = hashlib.sha256(p0_path.read_bytes()).hexdigest()
+        plan = artifacts.build_campaign_plan(campaign_id=campaign.name, campaign_mode="formal",
+            campaign_purpose="validation_only", baseline_version="2.1.220", target_version="2.1.226",
+            created_at_utc="2026-10-12T00:00:00Z", original_deadline_at_utc="2026-12-31T00:00:00Z",
+            timing_checkpoint_sha256="1" * 64, arm64_environment_sha256="2" * 64,
+            job_rehearsal_sha256="3" * 64, p0_gate_sha256=p0_sha)
+        plan_path = write(campaign, "control/vc/campaign-plan.json", plan)
+        checkpoint = artifacts.build_vc_checkpoint(campaign_plan=plan, phase="VC-0", status="complete",
+            predecessor_checkpoint=None, stage_receipt={"path": str(p0_path), "sha256": p0_sha},
+            completed_at_utc="2026-10-12T00:00:00Z", execute_item_ids=[], reuse_item_ids=[],
+            live_request_count=0, scanned_bytes=0)
+        checkpoint_path = write(campaign, "control/vc/vc-0-checkpoint.json", checkpoint)
+        manifest = copy.deepcopy(self.manifest)
+        manifest.update(campaign_id=campaign.name, campaign_mode="formal", campaign_purpose="validation_only",
+            baseline_version="2.1.220", target_version="2.1.226", inputs={}, predecessor=None,
+            tool_identity={"client": "claude", **identity},
+            vc_control={"campaign_plan": {"path": plan_path.relative_to(campaign).as_posix(),
+                "sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest()}},
+            control_receipts={"upgrade_timing": {"ledger_dir": str(timing_root),
+                "ledger_plan_sha256": hashlib.sha256(timing_path.read_bytes()).hexdigest()},
+                "p0_gate": {"evidence_root": str(root),
+                "receipt": {"path": p0_path.name, "sha256": p0_sha, "bytes": p0_path.stat().st_size},
+                "receipt_digest": p0["receipt_digest"], "upgrade_id": "subject-upgrade"},
+                "release_certification": {"path": str(release_path),
+                    "sha256": hashlib.sha256(release_path.read_bytes()).hexdigest(),
+                    "receipt_sha256": certificate["receipt_sha256"], "identity": certificate["identity"]}})
+        manifest_path = write(campaign, "campaign.json", manifest)
+        digest_path = campaign / "campaign.sha256"
+        digest_path.write_text(hashlib.sha256(manifest_path.read_bytes()).hexdigest() + "\n")
+        digest_path.chmod(0o600)
+        self.assertEqual(upgrade._require_formal_campaign(campaign), manifest)
+        self.assertEqual(vc.replay_vc_checkpoint(campaign, plan, "VC-0"), (checkpoint_path, checkpoint))
+
+        def collect(value=checkpoint, frozen=manifest):
+            return self.material._retain_vc_stage_source(campaign, frozen, value,
+                retain=self.retain, project_parent=self.project_parent)
+
+        originals = {path: path.read_bytes() for base in (campaign, root) for path in base.rglob("*") if path.is_file()}
+        originals[release_path] = release_path.read_bytes()
+        originals[timing_path] = timing_path.read_bytes()
+        with mock.patch.object(p0_reader, "replay", wraps=p0_reader.replay) as replay:
+            self.assertEqual(collect(), (p0_path, root))
+            replay.assert_called_once_with(root, p0_path.name)
+        required = {p0_path, release_path, timing_path, manifest_path, digest_path, plan_path, checkpoint_path,
+                    *(root / row["path"] for row in p0["evidence"])}
+        self.assertTrue({path.relative_to(self.data).as_posix() for path in required} <= set(self.originals))
+        self.assertEqual(self.parents[p0_path.relative_to(self.data).as_posix()].base_relative,
+                         root.relative_to(self.data).as_posix())
+        source, projection = self.source_and_projection()
+        closed = project_delivery_raw_bindings(source, [self.binding(checkpoint_path)], gate_projection=projection)
+        self.assertTrue({path.relative_to(self.data).as_posix() for path in required} <= {row["path"] for row in closed})
+        self.assertFalse(any("historical-formation" in row["path"] for row in closed))
+        # 同字节改坐标、其它阶段绝对路径及冻结 P0 摘要错配均不能获得原父的权限。
+        duplicate = write(root, "copy-of-p0.json", p0)
+        for value in ({**checkpoint, "phase": "VC-1"},
+                      {**checkpoint, "stage_receipt": {**checkpoint["stage_receipt"], "path": str(duplicate)}},
+                      {**checkpoint, "stage_receipt": {**checkpoint["stage_receipt"], "sha256": "f" * 64}}):
+            with self.subTest(stage_binding=value["stage_receipt"]), self.assertRaises(ControlError):
+                collect(value)
+        changed_manifest = copy.deepcopy(manifest)
+        changed_manifest["control_receipts"]["p0_gate"]["evidence_root"] = str(self.root)
+        with self.assertRaisesRegex(ControlError, "冻结原件"):
+            collect(frozen=changed_manifest)
+        # 四个角色逐个损坏必须失败；恢复原字节后仍复用同一来源，不产生副本授权。
+        for row in p0["evidence"]:
+            path = root / row["path"]
+            path.write_bytes(originals[path] + b" ")
+            with self.subTest(drifted_role=row["role"]), self.assertRaises(ControlError):
+                collect()
+            path.write_bytes(originals[path])
+        self.assertEqual(collect(), (p0_path, root))
+        # 只有精确形成期认证父得到元数据投影；同字节未知 JSON 仍按严格绑定读取并拒绝绝对路径。
+        unknown = root / "unknown-release-copy.json"
+        unknown.write_bytes(originals[release_path])
+        unknown.chmod(0o600)
+        row = {"path": unknown.relative_to(self.data).as_posix(), "sha256": hashlib.sha256(unknown.read_bytes()).hexdigest(),
+               "bytes": unknown.stat().st_size}
+        self.assertIsNone(projection.project(row, unknown.read_bytes()))
+        with self.assertRaises(ControlError):
+            project_delivery_raw_bindings(source, [row], gate_projection=projection)
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
 
     def test_non_digest_active_field_change_rejects_without_new_active_permission(self):
         from tools.official_client_control.errors import ControlError

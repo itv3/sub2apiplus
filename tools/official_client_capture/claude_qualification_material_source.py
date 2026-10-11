@@ -378,6 +378,7 @@ class VerifiedQualificationSubjectProjection:
     metadata_domains: tuple[tuple[tuple[str, ...], str], ...]
     coordinate_roots: tuple[tuple[tuple[str, ...], str], ...]
     token: object
+    resolved_bindings: tuple[tuple[tuple[str, ...], Mapping[str, Any], Mapping[str, Any]], ...] = ()
 
     def project(self, binding: Mapping[str, Any], raw: bytes) -> list[dict[str, Any]] | None:
         from copy import deepcopy
@@ -395,6 +396,13 @@ class VerifiedQualificationSubjectProjection:
                 node = node[int(key)] if isinstance(node, list) else node[key]
             return node, int(coordinate[-1]) if isinstance(node, list) else coordinate[-1]
 
+        def discard(node, key):
+            # 列表坐标来自原父字节，保留槽位才能逐个核验后续原坐标。
+            if isinstance(node, list):
+                node[key] = None
+            else:
+                del node[key]
+
         for coordinate, digest in self.metadata_domains:
             if not coordinate:
                 if canonical_sha256(document) != digest:
@@ -403,17 +411,223 @@ class VerifiedQualificationSubjectProjection:
             node, key = owner(coordinate)
             if canonical_sha256(node[key]) != digest:
                 raise ControlError("subject 投影的完整父元数据域漂移")
-            del node[key]
+            discard(node, key)
         relocated = []
+        # 绝对坐标只接受原来源合同逐字段验真后登记的有限映射；
+        # 原父字节与原字段再次核对，不能由外部 JSON 自行声明读取权限。
+        for coordinate, original, normalized in self.resolved_bindings:
+            node, key = owner(coordinate)
+            if node[key] != dict(original):
+                raise ControlError("subject 已验真绝对绑定的原字段漂移")
+            relocated.append(validate_external_binding(normalized, "subject.resolved_binding"))
+            discard(node, key)
         for coordinate, base in self.coordinate_roots:
             node, key = owner(coordinate)
             row = validate_external_binding(node[key], "subject.original_binding")
             relocated.append(validate_external_binding({**row, "path":
                 (Path(base) / row["path"]).as_posix()}, "subject.relocated_binding"))
-            del node[key]
+            discard(node, key)
         return relocated + [validate_external_binding({**row, "path":
             (Path(self.base_relative) / row["path"]).as_posix()}, "subject.projected_binding")
             for row in typed_bindings(document)]
+
+
+def _retain_vc_stage_source(campaign: Path, manifest: Mapping[str, Any], checkpoint: Mapping[str, Any], *,
+                            retain: Callable[..., bytes], project_parent: Callable[..., None]) -> tuple[Path, Path]:
+    """沿原 VC 合同保留阶段原件；只有冻结的 Formal VC-0 P0 可以使用已有数据根内的绝对坐标。
+
+    总计划原 reader 核 SHA、客户端、模式和控制绑定，原 checkpoint reader 核封存与 P0 摘要；再由
+    原 P0 replay 核自摘要及四份附件。形成期发布认证与冻结总计划逐字段、逐字节对应，仅保留其
+    历史证明元数据；其中旧部署、旧 pre-A3 坐标不授予本次资格新的读取权或执行权。
+    """
+    from . import claude_upgrade_compare as compare
+    from . import claude_upgrade_vc as vc
+    from . import certify_release
+    from . import codex_upgrade_vc_receipt as p0_reader
+
+    binding = checkpoint["stage_receipt"]
+    if not Path(str(binding.get("path", ""))).is_absolute():
+        path = compare._bound_campaign_file(campaign, binding, "subject VC 阶段")
+        retain(path, binding["sha256"])
+        return path, campaign
+    if checkpoint["phase"] != "VC-0" or manifest["campaign_mode"] != "formal":
+        raise ControlError("subject 绝对阶段收据不是冻结 Formal VC-0 P0")
+    frozen = compare._orchestrator()._require_formal_campaign(campaign)
+    if frozen != dict(manifest) or parse_json_bytes(retain(campaign / "campaign.json")) != frozen:
+        raise ControlError("subject P0 来源总计划不是原 reader 验真的冻结原件")
+    retain(campaign / "campaign.sha256")
+    plan_path = vc._bound_file(campaign, frozen["vc_control"]["campaign_plan"], "subject VC 总计划")
+    retain(plan_path, frozen["vc_control"]["campaign_plan"]["sha256"])
+    plan = vc.vc_campaign_plan(campaign, frozen)
+    controls = frozen["control_receipts"]
+    control = controls.get("p0_gate")
+    release = controls.get("release_certification")
+    if not isinstance(control, Mapping) or not isinstance(release, Mapping):
+        raise ControlError("subject Formal VC-0 缺冻结 P0 或发布认证控制绑定")
+    root = Path(control["evidence_root"])
+    data_root = compare.data_root(campaign)
+    if not root.is_absolute() or ".." in root.parts or not root.is_relative_to(data_root):
+        raise ControlError("subject P0 根越过既有可信数据根")
+    _private_root(root)
+    # manifest 原 reader 会读取冻结计时计划；保留该实际原件，不借控制域展开旧事件或旧 checkpoint。
+    timing_path = None
+    timing = controls.get("upgrade_timing")
+    if timing is not None:
+        timing_root = compare._orchestrator()._campaign_timing_ledger_dir(campaign, frozen)
+        timing_path = timing_root / "ledger.json"
+        retain(timing_path, timing["ledger_plan_sha256"])
+    path = root / _relative(control["receipt"]["path"])
+    if (dict(binding) != {"path": str(path), "sha256": control["receipt"]["sha256"]}
+            or plan["controls"]["p0_gate_sha256"] != binding["sha256"]):
+        raise ControlError("subject VC-0 阶段收据与冻结 P0 精确坐标或摘要不同源")
+    raw = retain(path, binding["sha256"])
+    if len(raw) != control["receipt"]["bytes"]:
+        raise ControlError("subject P0 原件字节数漂移")
+    receipt = p0_reader.validate_receipt(parse_json_bytes(raw), allow_historical=True)
+    evidence = {}
+    for row in receipt["evidence"]:
+        evidence_path = root / _relative(row["path"])
+        evidence_raw = retain(evidence_path, row["sha256"])
+        if len(evidence_raw) != row["bytes"]:
+            raise ControlError("subject P0 附件字节数漂移")
+        evidence[row["role"]] = (evidence_path, evidence_raw)
+    replayed = p0_reader.replay(root, control["receipt"]["path"])
+    checkpoint_path, checked = vc.replay_vc_checkpoint(campaign, plan, "VC-0")
+    if checked != dict(checkpoint) or parse_json_bytes(retain(checkpoint_path)) != checked or replayed != receipt:
+        raise ControlError("subject P0 或 VC-0 原件在原 reader 重放期间漂移")
+    subject = receipt["subject"]
+    if (receipt["kind"] != "p0_gate" or receipt["status"] != "passed"
+            or receipt["receipt_digest"] != control["receipt_digest"]
+            or subject["upgrade_id"] != control["upgrade_id"]
+            or any(subject[key] != frozen[key] for key in ("baseline_version", "target_version", "campaign_purpose"))
+            or receipt["assertions"].get("release_certification_sha256") != release["sha256"]
+            or "release_certification" not in evidence):
+        raise ControlError("subject P0 门禁、升级身份或冻结发布认证不同源")
+    release_copy, release_raw = evidence["release_certification"]
+    original_release = Path(release["path"])
+    if (not original_release.is_absolute() or release_raw != retain(original_release, release["sha256"])
+            or sha256_bytes(release_raw) != release["sha256"]):
+        raise ControlError("subject P0 发布认证附件不是冻结发布认证的原字节")
+    document = parse_json_bytes(release_raw)
+    if (document.get("schema_version") != certify_release.CLIENT_SCHEMAS["claude"]
+            or document.get("client") != "claude" or document.get("status") != "active"
+            or document.get("superseded_by") is not None
+            or document.get("identity") != release["identity"]
+            or document.get("policy_version") != frozen["tool_identity"]["policy_version"]
+            or document.get("receipt_sha256") != release["receipt_sha256"]
+            or certify_release._fingerprint({key: value for key, value in document.items()
+                if key != "receipt_sha256"}, "claude") != release["receipt_sha256"]):
+        raise ControlError("subject P0 发布认证的形成期自摘要或冻结身份漂移")
+    # 权限只给已通过上面原 reader 和冻结对照的精确父字节；不是凭 schema、文件名或同 SHA 授权。
+    # 入口控制是总计划冻结的历史元数据，资格本身只额外消费上述真实 P0 来源，不重做旧入口认证。
+    project_parent(campaign / "campaign.json", campaign, (("control_receipts",),))
+    project_parent(path, root)
+    if timing_path is not None:
+        project_parent(timing_path, timing_path.parent)
+    for evidence_path, evidence_raw in evidence.values():
+        try:
+            parse_json_bytes(evidence_raw)
+        except ControlError:
+            continue
+        project_parent(evidence_path, root, ((),) if evidence_path == release_copy else ())
+    if original_release != release_copy:
+        project_parent(original_release, data_root, ((),))
+    return path, root
+
+
+def _retain_frozen_bootstrap_controls(store: Any, campaign: Path, manifest: Mapping[str, Any],
+                                      data_root: Path, *, retain: Callable[..., bytes],
+                                      project_parent: Callable[..., None]) -> None:
+    """原 Store bootstrap 的精确控制副本沿冻结控制合同恢复坐标。
+
+    先比较冻结输入与 Store bootstrap payload，再逐字比较控制副本和
+    冻结原件。只转换计时的 ledger_plan 与环境的 facts；发布认证只保留
+    原 VC-0 已验真的形成期两个入口绑定，不把它们当成本轮认证或外根。
+    未知三字段仍从数据根严格展开，不按副本文件名单独赋予读取权。
+    """
+    from . import certify_release
+    from . import claude_upgrade as upgrade
+    from . import claude_upgrade_arm64_environment_receipt as environment
+    from . import claude_upgrade_campaign as campaign_contract
+    from . import claude_upgrade_compare as compare
+    from . import codex_upgrade_timing_ledger as timing
+    from tools.official_client_control.contracts import validate_bootstrap_payload
+
+    binding = (manifest.get("inputs") or {}).get("store_bootstrap")
+    if binding is None:
+        return
+    path = compare._bound_campaign_file(campaign, binding, "subject 冻结 bootstrap 输入")
+    bootstrap = validate_bootstrap_payload(parse_json_bytes(retain(path, binding["sha256"])))
+    stored_campaign = store.load_campaign(manifest["campaign_id"])
+    stored_bootstrap = store.load_object(stored_campaign["bootstrap_ref"])
+    if stored_bootstrap["payload"] != bootstrap:
+        raise ControlError("subject 冻结 bootstrap 输入与 Store 原件不同源")
+    bootstrap_path = store.object_path(stored_campaign["bootstrap_ref"])
+    retain(bootstrap_path, stored_campaign["bootstrap_ref"]["sha256"])
+    rows = {row["path"]: row for row in bootstrap["fw_c_receipts"]}
+    controls = manifest["control_receipts"]
+    copies = [("upgrade_timing", "timing-checkpoint.json"), ("arm64_environment", "arm64-environment.json")]
+    if manifest["campaign_mode"] == "formal":
+        copies.extend((("p0_gate", "p0-gate.json"), ("release_certification", "release-certification.json")))
+    for name, filename in copies:
+        copy_path = campaign / campaign_contract.STORE_BOOTSTRAP_SOURCE_DIR / filename
+        relative = copy_path.relative_to(data_root).as_posix()
+        row = rows.get(relative)
+        if row is None or compare._data_root_file(data_root, row, "subject bootstrap 控制副本") != copy_path:
+            raise ControlError("subject bootstrap 没有原建立合同的精确控制副本")
+        control = controls[name]
+        if name == "release_certification":
+            original_path = Path(control["path"])
+            expected_sha = control["sha256"]
+            root = data_root
+        else:
+            root = (upgrade._campaign_timing_ledger_dir(campaign, manifest) if name == "upgrade_timing"
+                else Path(control["evidence_root"]))
+            original_path = root / _relative(control["receipt"]["path"])
+            expected_sha = control["receipt"]["sha256"]
+        if not root.is_absolute() or not root.is_relative_to(data_root):
+            raise ControlError("subject bootstrap 控制原根越过既有数据根")
+        original_raw = retain(original_path, expected_sha)
+        copy_raw = retain(copy_path, row["sha256"])
+        if (copy_raw != original_raw or len(copy_raw) != row["bytes"]
+                or (name != "release_certification" and len(original_raw) != control["receipt"]["bytes"])):
+            raise ControlError("subject bootstrap 控制副本不是冻结原件的精确字节")
+        document = parse_json_bytes(original_raw)
+        roots, metadata = (), ()
+        if name == "upgrade_timing":
+            ledger = validate_external_binding(document["ledger_plan"], "subject.bootstrap.ledger_plan")
+            if (document.get("schema_version") != timing.RECEIPT_SCHEMA or ledger["path"] != "ledger.json"
+                    or ledger["sha256"] != control["ledger_plan_sha256"]
+                    or len(retain(root / ledger["path"], ledger["sha256"])) != ledger["bytes"]):
+                raise ControlError("subject bootstrap 计时原件与冻结 ledger plan 不一致")
+            roots = ((("ledger_plan",), root),)
+        elif name == "arm64_environment":
+            if environment.replay(root, control["receipt"]["path"]) != document:
+                raise ControlError("subject bootstrap 环境收据不是原 producer 重建的精确原件")
+            facts = validate_external_binding(document["facts"], "subject.bootstrap.environment.facts")
+            if len(retain(root / _relative(facts["path"]), facts["sha256"])) != facts["bytes"]:
+                raise ControlError("subject bootstrap 环境 facts 原件字节数漂移")
+            roots = ((("facts",), root),)
+        elif name == "release_certification":
+            if (document.get("schema_version") != certify_release.CLIENT_SCHEMAS["claude"]
+                    or document.get("client") != "claude" or document.get("status") != "active"
+                    or document.get("superseded_by") is not None or document.get("identity") != control["identity"]
+                    or document.get("policy_version") != manifest["tool_identity"]["policy_version"]
+                    or document.get("receipt_sha256") != control["receipt_sha256"]
+                    or certify_release._fingerprint({key: value for key, value in document.items()
+                        if key != "receipt_sha256"}, "claude") != control["receipt_sha256"]):
+                raise ControlError("subject bootstrap 发布认证与原 VC-0 冻结的历史身份不同源")
+            metadata = tuple((key,) for key in ("deployment_receipt", "pre_a3_certification", "pre_a3_reuse_receipt")
+                if document.get(key) is not None)
+        for parent_path in (copy_path, original_path):
+            key = parent_path.relative_to(data_root).as_posix()
+            # 原 P0/认证已由 VC-0 reader 登记的精确父保持原投影；
+            # 新副本只按上述有限字段转换，不扩大其历史入口权限。
+            if name == "p0_gate" and parent_path == original_path:
+                continue
+            if name == "release_certification" and parent_path == original_path:
+                continue
+            project_parent(parent_path, data_root, metadata, coordinate_roots=roots)
 
 
 def _prove_frozen_active_derivation(store: Any, external: Path, campaign: Path,
@@ -500,15 +714,15 @@ def _prove_frozen_active_derivation(store: Any, external: Path, campaign: Path,
         raise ControlError("冻结 Active 的 VC-4 不是当前精确构建原件")
     # 原 checkpoint reader 回溯到 VC-0 并读取每份阶段收据。全部原件
     # 纳入同一来源读集，不能只封存本次直接使用的 VC-2／VC-3。
-    checkpoint_parents = [vc4_path]
+    checkpoint_parents = [(vc4_path, campaign)]
     current = vc4
     while current["predecessor_checkpoint"] is not None:
         previous = current["predecessor_checkpoint"]
         path, raw = bound({key: previous[key] for key in ("path", "sha256")})
         current = parse_json_bytes(raw)
-        checkpoint_parents.append(path)
-        path, _raw = bound(current["stage_receipt"])
-        checkpoint_parents.append(path)
+        checkpoint_parents.append((path, campaign))
+        checkpoint_parents.append(_retain_vc_stage_source(campaign, manifest, current,
+            retain=retain, project_parent=project_parent))
     vc3_binding = vc4["predecessor_checkpoint"]
     if vc3_binding["phase"] != "VC-3":
         raise ControlError("冻结 Active 的直接父阶段不是 VC-3")
@@ -644,7 +858,17 @@ def _prove_frozen_active_derivation(store: Any, external: Path, campaign: Path,
     if (set(projection_binding) != {"path", "sha256"}
             or profile.SHA256_RE.fullmatch(str(projection_binding["sha256"])) is None):
         raise ControlError("冻结 Active 的投影生成器元数据不闭合")
-    _relative(projection_binding["path"])
+    # 原 VC-3 生产器可记录仓库相对路径或已登记来源的绝对路径；这里只是
+    # 联合来源已封存的生成器元数据，不据此打开文件或授予新的读取根。
+    projection_coordinate = projection_binding["path"]
+    if not isinstance(projection_coordinate, str) or not projection_coordinate:
+        raise ControlError("冻结 Active 的投影生成器坐标不闭合")
+    projection_path = Path(projection_coordinate)
+    if projection_path.is_absolute():
+        if projection_path.as_posix() != projection_coordinate or ".." in projection_path.parts:
+            raise ControlError("冻结 Active 的投影生成器绝对元数据坐标不规范")
+    else:
+        _relative(projection_coordinate)
     expected_policy = {
         "schema_version": profile.PROFILE_POLICY_SCHEMA, "campaign_id": manifest["campaign_id"],
         "baseline_version": manifest["baseline_version"], "target_version": manifest["target_version"],
@@ -769,8 +993,8 @@ def _prove_frozen_active_derivation(store: Any, external: Path, campaign: Path,
         project_parent(class_draft_path.parent / filename, classification_data)
         project_parent(campaign / classification["approved"][name]["path"], classification_data)
     project_parent(plan_path, campaign)
-    for path in checkpoint_parents:
-        project_parent(path, campaign)
+    for path, base in checkpoint_parents:
+        project_parent(path, base)
 
 
 def _retain_candidate_evaluation_draft(
@@ -853,6 +1077,541 @@ class _CandidateAttemptArchive:
 
     visiting: set[Path]
     results: dict[Path, tuple[str, dict[str, tuple[tuple[tuple[str, ...], Path], ...]]]]
+
+
+def _recorded_historical_invocation_domains(origin: Mapping[str, Any]) -> tuple[tuple[str, ...], ...]:
+    """已验录制快照内未收录的旧 v3 调用说明，不授予实际文件读取权。
+
+    原录制合同只冻结 relay、宿主、日志和 pcap；历史场景结果不代表本次
+    客户端执行或版本语义认证。只有精确原 manifest 的这个已知字段可以
+    保留为历史摘要；快照已登记的调用文件仍按真实绑定展开。
+    """
+    summary = origin["manifest"].get("scenario_result")
+    if not isinstance(summary, Mapping) or summary.get("driver") != "v3":
+        return ()
+    invocation = (summary.get("inner_result") or {}).get("invocation")
+    if not isinstance(invocation, Mapping) or set(invocation) != {"path", "sha256", "bytes"}:
+        raise ControlError("subject 历史 v3 调用说明不是原合同的三字段摘要")
+    row = validate_external_binding(invocation, "subject.historical_invocation")
+    if origin["row"]["attempt"] + "/" + row["path"] in origin["index"]["files"]:
+        return ()
+    return (("scenario_result", "inner_result", "invocation"),)
+
+
+def _retain_recorded_evaluation_materials(
+    manifest_path: Path, data_root: Path, *, retain: Callable[..., bytes],
+    project_parent: Callable[..., None],
+) -> dict[str, Any]:
+    """沿既有录制读者验真，再保留有限来源字段与各 probe 的实际原件。
+
+    不按文件名、schema 或相同摘要授权。完整 manifest 必须通过原分域合同，
+    proof、网关投影及历史副本各用原合同坐标。绝对字段逐个核原坐标、摘要和
+    字节数后转为既有数据根内的精确绑定；未知字段继续严格展开。
+    """
+    from . import claude_recorded_evaluation_contract as recorded
+
+    document = parse_json_bytes(retain(manifest_path))
+    if document.get("schema_version") != recorded.EVALUATION_SCHEMA:
+        return {}
+    views = recorded.verify_recorded_manifest(document, data_root)
+
+    def node_at(parent: Mapping[str, Any], coordinate: tuple[str, ...]) -> Any:
+        value: Any = parent
+        for key in coordinate:
+            value = value[int(key)] if isinstance(value, list) else value[key]
+        return value
+
+    def project_verified(path: Path, parent: Mapping[str, Any], coordinates: list[tuple[str, ...]],
+                         base: Path, *, metadata: tuple[tuple[str, ...], ...] = ()) -> None:
+        raw = retain(path)
+        if parse_json_bytes(raw) != dict(parent):
+            raise ControlError("subject 录制原件与原来源 reader 的结果漂移")
+        resolved, relative = [], []
+        for coordinate in coordinates:
+            source = node_at(parent, coordinate)
+            target = recorded.bound(source, root=base)
+            child = retain(target, source["sha256"])
+            if len(child) != source["bytes"]:
+                raise ControlError("subject 录制子原件字节数漂移")
+            if Path(source["path"]).is_absolute():
+                resolved.append((coordinate, target))
+            else:
+                relative.append((coordinate, base))
+        project_parent(path, base, metadata, coordinate_roots=tuple(relative),
+            resolved_bindings=tuple(resolved))
+
+    manifest_coordinates = [("recorded_evaluation", "policy"),
+        *(("recorded_evaluation", "probes", str(index))
+          for index, _item in enumerate(document["recorded_evaluation"]["probes"]))]
+    project_verified(manifest_path, document, manifest_coordinates, data_root)
+    retained_states = set()
+    for view in views.values():
+        proof = view["proof"]
+        proof_path = view["destination"] / recorded.PROBE_FILENAME
+        proof_coordinates = [(name,) for name in ("policy", "source_state", "projection", "gateway_byte_projection")]
+        proof_coordinates.extend(("copied_originals", str(index), "copied")
+            for index, _item in enumerate(proof["copied_originals"]))
+        project_verified(proof_path, proof, proof_coordinates, data_root)
+        projection_path = recorded.bound(proof["projection"], root=data_root)
+        projection = parse_json_bytes(retain(projection_path, proof["projection"]["sha256"]))
+        project_verified(projection_path, projection, [("runtime", "receipt"),
+            ("runtime", "reservation"), ("origin", "receipt"), ("v5_catalog", "file")], data_root)
+        gateway_path = recorded.bound(proof["gateway_byte_projection"], root=data_root)
+        gateway = parse_json_bytes(retain(gateway_path, proof["gateway_byte_projection"]["sha256"]))
+        gateway_coordinates = [(name,) for name in ("labels", "scenarios", "origin_manifest")]
+        if gateway["pcap_source"] is not None:
+            gateway_coordinates.append(("pcap_source",))
+        for index, connection in enumerate(gateway["connections"]):
+            for name in ("request_source", "response_source"):
+                if connection.get(name) is not None:
+                    gateway_coordinates.append(("connections", str(index), name))
+        # 投影输出坐标是本 probe 相对路径；来源字段则已由原 reader
+        # 逐字重算并绑定已有数据根，两者不能混用默认根。
+        gateway_resolved = []
+        for coordinate in gateway_coordinates:
+            source = node_at(gateway, coordinate)
+            target = recorded.bound(source, root=data_root)
+            retain(target, source["sha256"])
+            if not Path(source["path"]).is_absolute():
+                raise ControlError("subject 已验真的录制网关来源缺规范绝对坐标")
+            gateway_resolved.append((coordinate, target))
+        for item in gateway["projected_files"]:
+            target = recorded.bound(item, root=view["destination"])
+            retain(target, item["sha256"])
+        project_parent(gateway_path, view["destination"], resolved_bindings=tuple(gateway_resolved))
+
+        state_path = recorded.bound(proof["source_state"], root=data_root)
+        if state_path not in retained_states:
+            state = view["state"]
+            if parse_json_bytes(retain(state_path, proof["source_state"]["sha256"])) != state:
+                raise ControlError("subject 录制来源 state 与原读者不同源")
+            # freeze 是已冻结版本和安装形成期说明。当前录制读者只消费
+            # 其中 binary 摘要，不能因此把安装包升级为本次交付的读取依赖。
+            state_coordinates = [("snapshot",)]
+            state_coordinates.extend(("inputs", "bindings", name) for name in state["inputs"]["bindings"])
+            state_coordinates.extend(("inputs", "repository_bindings", name)
+                for name in state["inputs"].get("repository_bindings", {}))
+            project_verified(state_path, state, state_coordinates, data_root, metadata=(("freeze",),))
+            policy_path = recorded.bound(proof["policy"], root=data_root)
+            policy = view["policy"]
+            policy_coordinates = [(name,) for name in
+                ("source_state", "campaign", "project_plan", "snapshot", "assertion_profile")]
+            policy_coordinates.extend(("frozen_inputs", name) for name in recorded.FROZEN_KEYS)
+            project_verified(policy_path, policy, policy_coordinates, data_root)
+            original_state_path = recorded.bound(policy["source_state"], root=data_root)
+            original_state = parse_json_bytes(retain(original_state_path, policy["source_state"]["sha256"]))
+            original_coordinates = [("snapshot",)]
+            original_coordinates.extend(("inputs", "bindings", name) for name in original_state["inputs"]["bindings"])
+            original_coordinates.extend(("inputs", "repository_bindings", name)
+                for name in original_state["inputs"].get("repository_bindings", {}))
+            project_verified(original_state_path, original_state, original_coordinates, data_root,
+                metadata=(("freeze",),))
+            retained_states.add(state_path)
+        # 原 reader 已核 snapshot 精确行、完整文件闭集、host 双来源
+        # 及副本逐字相等；登记历史 relay 的根，保留所有真实语义读取。
+        origin = view["origin"]
+        for relative, target in origin["files"].items():
+            expected = origin["index"]["files"][relative]
+            raw = retain(target, expected["sha256"])
+            if len(raw) != expected["bytes"]:
+                raise ControlError("subject 录制 snapshot 原件字节数漂移")
+        historical_domains = _recorded_historical_invocation_domains(origin)
+        project_parent(origin["manifest_path"], origin["root"], historical_domains)
+        copied_root = view["destination"] / recorded.ORIGINAL_DIRECTORY
+        copied_manifest = copied_root / "relay-manifest.json"
+        if retain(copied_manifest) != retain(origin["manifest_path"]):
+            raise ControlError("subject 历史 relay 副本不等于已验真的 snapshot 原字节")
+        project_parent(copied_manifest, copied_root, historical_domains)
+    return views
+
+
+def _retain_recorded_relay_materials(
+    manifest_path: Path, data_root: Path, views: Mapping[str, Any], *,
+    official_attempt: tuple[Path, Mapping[str, Any]] | None = None,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> None:
+    """只转换已由真实来源逐字段证明的 relay 叶子，保留未重验的历史声明。
+
+    官方来源由已封存 attempt 的唯一步骤重构，不信未封存的 projection
+    辅助文件。候选来源沿原 v2 proof；两侧共享其冻结 snapshot 证明。
+    validator 的路径仅是历史元数据，摘要和长度须等于当前冻结模块；
+    不读取它所写的外部路径，不删整个 fixture_projection 域。
+    """
+    from . import claude_recorded_evaluation_contract as recorded
+    from . import claude_upgrade_capture as capture
+    from .capturelib import claude_fw_f_v5 as v5
+
+    if not views:
+        return
+    by_probe = {view["proof"]["logical_probe"]["probe_id"]: view for view in views.values()}
+    document = parse_json_bytes(retain(manifest_path))
+    for artifact in document["artifacts"]:
+        if artifact["kind"] != "relay_manifest":
+            continue
+        path = recorded.bound({key: artifact[key] for key in ("path", "sha256", "bytes")}, root=data_root)
+        wrapper = parse_json_bytes(retain(path, artifact["sha256"]))
+        view = by_probe.get(artifact["probe_id"])
+        if view is None or wrapper.get("probe_id") != artifact["probe_id"]:
+            raise ControlError("subject relay 与唯一已验录制 probe 不同源")
+        domain, origin, state = wrapper.get("fixture_projection"), view["origin"], view["state"]
+        if (not isinstance(domain, Mapping) or wrapper.get("fixture_only") is not True
+                or wrapper.get("formal_version_semantics_certified") is not False
+                or domain.get("current_client_executed") is not False):
+            raise ControlError("subject 已验录制 relay 缺原形成期来源说明")
+        prefix = origin["row"]["attempt"] + "/"
+        source_files = {relative[len(prefix):]: recorded.binding(target)
+            for relative, target in origin["files"].items() if relative.startswith(prefix)}
+        catalog_relative = origin["row"]["source_id"] + "/scenario-catalog.json"
+        catalog_path = Path(origin["index"]["root"]) / catalog_relative
+        catalog = {"path": str(catalog_path), **origin["index"]["files"][catalog_relative]}
+        expected = {"original_manifest": recorded.binding(origin["manifest_path"]),
+            "original_catalog": catalog, "source_files": source_files,
+            "current_scenarios": state["inputs"]["bindings"]["scenarios"],
+            "version_facts": state["inputs"]["bindings"]["version_facts"]}
+        if official_attempt is None:
+            if path != view["destination"] / "relay-manifest.json" or wrapper.get("side") != "candidate":
+                raise ControlError("subject 候选 relay 不是原 v2 reader 验真的精确封套")
+            projection = parse_json_bytes(retain(recorded.bound(view["proof"]["projection"], root=data_root)))
+            expected["runtime"], expected["origin"] = projection["runtime"], projection["origin"]
+            expected["recorded_evaluation_contract"] = recorded.binding(view["destination"] / recorded.PROBE_FILENAME)
+            expected["gateway_byte_projection"] = view["proof"]["gateway_byte_projection"]
+            copied_root = view["destination"] / recorded.ORIGINAL_DIRECTORY
+            copied_manifest = copied_root / "relay-manifest.json"
+            argv = projection["argv"]
+        else:
+            attempt_root, attempt = official_attempt
+            matches = [(result, step) for result in attempt["results"] if result["id"] == artifact["job_id"]
+                for step in result["steps"] if step.get("probe_id") == artifact["probe_id"]]
+            if len(matches) != 1 or wrapper.get("side") != "official":
+                raise ControlError("subject 官方 relay 没有已封存 attempt 的唯一步骤")
+            result, step = matches[0]
+            binding = step["host_runtime_receipt"]
+            runtime_path = attempt_root / _relative(binding["path"])
+            runtime = parse_json_bytes(retain(runtime_path, binding["sha256"]))
+            reservation_path = attempt_root / "reservation.json"
+            reservation = parse_json_bytes(retain(reservation_path))
+            nonce = capture._step_run_nonce(reservation["run_nonce"], result["id"], result["attempt_index"], step["step"])
+            if runtime["run_nonce"] != nonce or runtime.get("repo_digest_verified") is not True:
+                raise ControlError("subject 官方步骤宿主收据与原预约的运行身份断裂")
+            expected["runtime"] = {"receipt": recorded.binding(runtime_path),
+                "reservation": recorded.binding(reservation_path), "attempt_id": attempt["attempt_id"],
+                "run_nonce": nonce, "container_name": runtime["container"]["name"],
+                "container_id": runtime["container"]["id"], "runtime_image": runtime["runtime_image_reference"]}
+            origin_path = runtime_path.with_name(runtime_path.stem + ".origin.json")
+            origin_raw = retain(origin_path)
+            original_host = next(target for relative, target in origin["files"].items()
+                if relative == origin["row"].get("host_receipt", origin["row"]["source_id"]
+                    + "/runtime-receipts/" + artifact["probe_id"] + "-" + Path(origin["row"]["attempt"]).name + ".json"))
+            if origin_raw != retain(original_host):
+                raise ControlError("subject 官方步骤 origin 收据不是已验 snapshot 宿主原字节")
+            expected["origin"] = {"receipt": recorded.binding(origin_path), "run_nonce": origin["host"]["run_nonce"],
+                "source_id": origin["row"]["source_id"], "attempt": origin["row"]["attempt"],
+                "platform": "linux/amd64", "binary_sha256": state["freeze"]["binary_sha256"]}
+            copied_root, copied_manifest, argv = path.parent, path.parent / ".origin-relay-manifest.json", step["argv"]
+        expected["copied_origin_manifest"] = recorded.binding(copied_manifest)
+        if retain(copied_manifest) != retain(origin["manifest_path"]):
+            raise ControlError("subject relay 历史原件副本字节漂移")
+        historical_domains = _recorded_historical_invocation_domains(origin)
+        project_parent(copied_manifest, copied_root, historical_domains)
+        if any(domain.get(name) != value for name, value in expected.items()):
+            raise ControlError("subject relay 的有限来源字段与真实步骤或冻结 snapshot 不同源")
+        catalog_binding = domain["v5_catalog"]
+        if argv.count("--fw-f-v5-catalog") != 1 or catalog_binding["argument"] != argv[argv.index("--fw-f-v5-catalog") + 1]:
+            raise ControlError("subject relay 的 v5 目录参数与原实际步骤不同")
+        module_path = data_root / "tools/official_client_capture/capturelib/claude_fw_f_v5.py"
+        if recorded.bound(catalog_binding["file"], root=data_root) != module_path:
+            raise ControlError("subject relay v5 目录不是原数据根的固定模块")
+        if retain(module_path, catalog_binding["file"]["sha256"]) != Path(v5.__file__).read_bytes():
+            raise ControlError("subject relay 的 DATA 内 v5 模块与当前冻结模块不同")
+        metadata = []
+        for name, module in (("v4_validator", v5.v4), ("v5_validator", v5)):
+            original = domain[name]
+            raw = Path(module.__file__).read_bytes()
+            coordinate = Path(str(original.get("path", "")))
+            if (set(original) != {"path", "sha256", "bytes"} or not coordinate.is_absolute()
+                    or coordinate.as_posix() != original["path"] or ".." in coordinate.parts
+                    or original["sha256"] != sha256_bytes(raw) or original["bytes"] != len(raw)):
+                raise ControlError("subject relay 历史 validator 元数据与当前冻结模块不一致")
+            metadata.append(("fixture_projection", name))
+        source_coordinates = [("fixture_projection", name) for name in
+            ("original_manifest", "original_catalog", "current_scenarios", "version_facts", "copied_origin_manifest")]
+        source_coordinates.extend(("fixture_projection", "source_files", name) for name in source_files)
+        source_coordinates.extend(("fixture_projection", "runtime", name) for name in ("receipt", "reservation"))
+        source_coordinates.extend((("fixture_projection", "origin", "receipt"),
+            ("fixture_projection", "v5_catalog", "file")))
+        if official_attempt is None:
+            source_coordinates.extend(("fixture_projection", name) for name in
+                ("recorded_evaluation_contract", "gateway_byte_projection"))
+        resolved = []
+        for coordinate in source_coordinates:
+            value: Any = wrapper
+            for key in coordinate:
+                value = value[key]
+            target = recorded.bound(value, root=data_root)
+            retain(target, value["sha256"])
+            resolved.append((coordinate, target))
+        relative = []
+        invocation = (wrapper.get("scenario_result") or {}).get("inner_result", {}).get("invocation")
+        if invocation is not None:
+            original_invocation = origin["manifest"]["scenario_result"]["inner_result"].get("invocation")
+            if invocation != original_invocation:
+                raise ControlError("subject relay 的历史 invocation 与已验原件不同")
+            # v3 来源使用三字段文件绑定；其它来源保留 argv 与环境摘要对象。
+            # 只给真实文件绑定重定位，未知嵌套绑定仍由严格展开器检查。
+            if isinstance(invocation, Mapping) and set(invocation) == {"path", "sha256", "bytes"}:
+                coordinate = ("scenario_result", "inner_result", "invocation")
+                if coordinate in historical_domains:
+                    metadata.append(coordinate)
+                else:
+                    target = recorded.bound(invocation, root=copied_root)
+                    retain(target, invocation["sha256"])
+                    relative.append((coordinate, copied_root))
+        project_parent(path, path.parent, tuple(metadata), coordinate_roots=tuple(relative),
+            resolved_bindings=tuple(resolved))
+
+
+def _retain_official_seal_materials(
+    campaign: Path, stage: Mapping[str, Any], attempt: Mapping[str, Any], data_root: Path, *,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> None:
+    """重验已批准的官方封存附件，仅转换原合同的九个 Campaign 字段。
+
+    预览的三个附件和草稿的六份 drafts 使用 Campaign 坐标；草稿的
+    generation_key 和 Store 库存仍使用数据根。原阶段、VC-1 绑定、预览
+    自摘要、批准摘要和每份附件字节全部核对后才登记内存投影，不重做
+    采集、封存或 Store 写入，也不把整个草稿默认转换成 Campaign 根。
+    """
+    from . import claude_upgrade_compare as compare
+    from . import claude_upgrade_evidence as evidence
+    from . import claude_upgrade_seal as seal_contract
+
+    stage_path = campaign / seal_contract.STAGE_RESULT_RELATIVE
+    checked = seal_contract.load_stage_result(campaign, stage_path)
+    if checked != dict(stage) or parse_json_bytes(retain(stage_path)) != checked:
+        raise ControlError("subject 官方封存阶段不是 VC-1 绑定的精确原件")
+    seal = stage["seal"]
+    preview_path = seal_contract._verify_bound_file(campaign, seal["preview"], "subject 官方封存预览")
+    preview = parse_json_bytes(retain(preview_path, seal["preview"]["sha256"]))
+    core = {key: value for key, value in preview.items() if key != "review_sha256"}
+    if (preview.get("schema_version") != seal_contract.SEAL_PREVIEW_SCHEMA
+            or preview.get("campaign_id") != stage["campaign_id"]
+            or preview.get("attempt_id") != attempt["attempt_id"]
+            or preview.get("generation") != seal["generation"]
+            or preview.get("review_sha256") != seal["review_sha256"]
+            or preview.get("review_sha256") != seal_contract._orchestrator()._fingerprint(core)
+            or preview.get("closure", {}).get("status") != "closed"):
+        raise ControlError("subject 官方封存预览与原阶段批准的身份或自摘要不同源")
+    preview_roots = []
+    for name in ("seal_draft", "evidence_manifest", "client_checkpoint"):
+        binding = validate_external_binding(preview[name], "subject.official_preview." + name)
+        if binding != seal[name]:
+            raise ControlError("subject 官方预览附件与已批准阶段的精确绑定不同")
+        path = seal_contract._verify_bound_file(campaign, binding, "subject 官方预览附件 " + name)
+        retain(path, binding["sha256"])
+        preview_roots.append(((name,), campaign))
+    draft_path = seal_contract._verify_bound_file(campaign, seal["seal_draft"], "subject 官方封存草稿")
+    draft = parse_json_bytes(retain(draft_path, seal["seal_draft"]["sha256"]))
+    if (draft.get("schema_version") != seal_contract.SEAL_DRAFT_SCHEMA
+            or any(draft.get(key) != preview.get(key) for key in
+                ("campaign_id", "attempt_id", "generation", "closure", "metrics"))
+            or set(draft.get("drafts", {})) != set(evidence.DRAFT_FILES)):
+        raise ControlError("subject 官方草稿与已批准预览的身份或附件闭集不同源")
+    attempt_path = compare._bound_campaign_file(campaign, stage["attempt"], "subject 官方阶段 attempt")
+    generation_attempt = draft["generation_key"]["attempt"]
+    if (compare._data_root_file(data_root, generation_attempt, "subject 官方草稿 attempt") != attempt_path
+            or generation_attempt["sha256"] != stage["attempt"]["sha256"]
+            or parse_json_bytes(retain(attempt_path, generation_attempt["sha256"])) != dict(attempt)):
+        raise ControlError("subject 官方草稿没有绑定原阶段重验的精确 attempt")
+    expected_plan = {"objects": [{"name": item["name"], "object_kind": item["kind"], "ref": item["ref"]}
+        for item in draft["seal"]["objects"]], "evidence_package_ref": draft["seal"]["evidence_package_ref"],
+        "discovery_payload_sha256": canonical_sha256(draft["seal"]["discovery_payload"])}
+    if (preview["store_plan"] != expected_plan
+            or draft["seal"]["evidence_package_ref"] != stage["store"]["evidence_package_ref"]):
+        raise ControlError("subject 官方草稿的 Store 计划与已批准阶段不同源")
+    draft_roots = []
+    for name, value in draft["drafts"].items():
+        binding = validate_external_binding(value, "subject.official_draft." + name)
+        path = seal_contract._verify_bound_file(campaign, binding, "subject 官方封存草稿 " + name)
+        retain(path, binding["sha256"])
+        draft_roots.append((("drafts", name), campaign))
+    project_parent(preview_path, data_root, coordinate_roots=tuple(preview_roots))
+    project_parent(draft_path, data_root, coordinate_roots=tuple(draft_roots))
+
+
+def _retain_official_attempt_materials(
+    campaign: Path, stage: Mapping[str, Any], data_root: Path, *,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> tuple[Path, Mapping[str, Any]] | None:
+    """官方已封存原 attempt 沿原 reader 验真，再复用同一采集合同的精确附件投影。"""
+    from . import claude_upgrade as upgrade
+    from . import claude_upgrade_capture as capture
+    from . import claude_upgrade_compare as compare
+
+    if stage.get("mode") != "captured":
+        return
+    path = compare._bound_campaign_file(campaign, stage["attempt"], "subject 官方原 attempt")
+    document = parse_json_bytes(retain(path, stage["attempt"]["sha256"]))
+    if document.get("schema_version") != capture.CAPTURE_ATTEMPT_SCHEMA:
+        return
+    attempt_root, checked = upgrade._capture_stage_attempt_context(
+        campaign, stage, phase="official", candidate_id=None)
+    if path != attempt_root / "attempt.json" or document != checked:
+        raise ControlError("subject 官方 attempt 与原封存读者不是同一份原件")
+    _retain_official_seal_materials(campaign, stage, document, data_root,
+        retain=retain, project_parent=project_parent)
+    boundary = stage.get("sealed_evidence_manifest")
+    if boundary is not None:
+        _retain_candidate_sealed_boundary(campaign, boundary, retain=retain)
+    producers = _candidate_attempt_result_producers(campaign, document, attempt_root, data_root,
+        retain=retain, project_parent=project_parent)
+    _retain_candidate_run_materials(campaign, path, document, attempt_root, producers, data_root,
+        execution_attempt_id=document["attempt_id"], retain=retain, project_parent=project_parent)
+    return attempt_root, document
+
+
+def _retain_client_semantic_materials(
+    campaign: Path, attempt_root: Path, task: Mapping[str, Any], build: Mapping[str, Any], data_root: Path, *,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> None:
+    """保留原客户端读者实际消费的候选源码、预约索引与账务证明。
+
+    源码根只取精确构建绑定，文件集合沿原整树摘要规则重算；这些字节是
+    源码输入，不能把源码 JSON 中的路径误当成交付附件。项目账本仍沿原
+    重放器验真，锁只是互斥设施，不伪造为证据原件或新增 Store 图节点。
+    """
+    from . import claude_client_receipt_contract as contract
+    from . import claude_upgrade as upgrade
+    from . import claude_upgrade_mac_client_capture as mac
+    from . import codex_upgrade_project_ledger as ledger
+
+    context = contract.candidate_context(attempt_root, task["catalog"]["entry"]["client_id"])
+    if context["candidate"] != task["candidate"] or context["catalog"] != task["catalog"]:
+        raise ControlError("subject 客户端候选源码或实际 Catalog 与冻结任务不同源")
+    source_root = Path(build["source"]["root"])
+    if not source_root.is_relative_to(data_root):
+        raise ControlError("subject 候选语义源码缺已有数据根内的受管来源合同")
+    if upgrade._directory_tree_digest(source_root) != build["source"]["tree_sha256"]:
+        raise ControlError("subject 客户端实际源码整树摘要漂移")
+    for path in sorted(source_root.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        relative = path.relative_to(source_root)
+        if any(part in upgrade.SKIP_DIRECTORIES for part in relative.parts):
+            continue
+        raw = retain(path)
+        try:
+            parse_json_bytes(raw)
+        except ControlError:
+            continue
+        project_parent(path, source_root, ((),))
+    if upgrade._directory_tree_digest(source_root) != build["source"]["tree_sha256"]:
+        raise ControlError("subject 候选源码在归档读集期间漂移")
+    if task["execution"]["source_scope"] != "formal":
+        return
+    index_path = attempt_root / "client-evidence/reservations" / (task["execution"]["producer_run_id"] + ".json")
+    index, original_task = mac.validate_reservation_index(attempt_root, index_path)
+    if original_task != dict(task) or parse_json_bytes(retain(index_path)) != index:
+        raise ControlError("subject 客户端预约索引与原读者或冻结任务不同源")
+    project_parent(index_path, attempt_root,
+        coordinate_roots=((("reservation",), Path(task["execution"]["capture_root"])),))
+    project_root = Path(task["execution"]["project_ledger"])
+    if not project_root.is_relative_to(data_root) or ledger.find_project_ledger(campaign, client="claude") != project_root:
+        raise ControlError("subject 客户端账务根不是原 Campaign 已有的 Claude 项目总账")
+    snapshot = ledger._read_project_history_snapshot(project_root)
+    plan_path = project_root / "plan.json"
+    plan = parse_json_bytes(retain(plan_path))
+    if plan["plan_sha256"] != snapshot["plan_sha256"]:
+        raise ControlError("subject 客户端账务计划在原重放期间漂移")
+    ledger._initial_keys(project_root, plan)
+    for filename in ("plan.json", "initial-identity-keys.json", "head.json"):
+        path = project_root / filename
+        retain(path)
+        project_parent(path, project_root)
+    for event in snapshot["events"]:
+        path = project_root / "events" / f"{event['sequence']:06d}.json"
+        if parse_json_bytes(retain(path)) != event:
+            raise ControlError("subject 客户端账务事件与原重放链字节不同源")
+        # 原账本重放器核事件载荷、自摘要、前序链和实际请求键；载荷中
+        # 的历史登记坐标不会被赋予本次交付的追加读取权或执行权。
+        project_parent(path, project_root, (("payload",),))
+
+
+def _retain_recorded_active_inputs(
+    campaign: Path, manifest: Mapping[str, Any], data_root: Path, views: Mapping[str, Any], *,
+    retain: Callable[..., bytes], project_parent: Callable[..., None],
+) -> None:
+    """原 VC-3 派生证明完成后，核录制来源中的精确 Active 输入副本。
+
+    画像须逐字等于已证明的冻结输入；Wire 须闭合该 Release 的摘要、
+    Profile 与正式 Release/Bundle 算法。内部旧证据坐标仍是历史画像内容。
+    投影说明只把 originals 当形成期来源说明，不打开所写外部路径；
+    projected 的七份本次输入继续逐件实读，不按文件名或相同 SHA 授权。
+    """
+    from . import claude_recorded_evaluation_contract as recorded
+    from . import claude_upgrade_profile as profile
+    from . import claude_upgrade_wire_projection as wire
+
+    catalog_path, profile_path = profile._active_paths(campaign, manifest, None, None)
+    catalog_raw, profile_raw = retain(catalog_path), retain(profile_path)
+    catalog = parse_json_bytes(catalog_raw)
+    active = profile._active_release(catalog, sha256_bytes(profile_raw))
+    profile_document = parse_json_bytes(profile_raw)
+    projected_names = {"active_release_catalog", "active_profile", "active_wire", "active_projection_policy",
+        "static_baseline_anchors", "static_baseline_reachability", "review_projection_policy"}
+    seen = set()
+    for view in views.values():
+        inputs = view["state"]["inputs"]["bindings"]
+        origin_path = recorded.bound(inputs["active_projection_origin"], root=data_root)
+        if origin_path in seen:
+            continue
+        origin = parse_json_bytes(retain(origin_path, inputs["active_projection_origin"]["sha256"]))
+        if (set(origin) != {"fixture_only", "purpose", "baseline_version", "target_version", "source_version",
+                "formal_version_semantics_certified", "originals", "projected", "model_scope", "method"}
+                or origin["fixture_only"] is not True or origin["formal_version_semantics_certified"] is not False
+                or origin["purpose"] != "control_input_projection"
+                or origin["baseline_version"] != manifest["baseline_version"]
+                or origin["target_version"] != manifest["target_version"]
+                or origin["source_version"] != view["state"]["target_version"]
+                or origin["projected"] != {name: inputs[name] for name in projected_names}
+                or set(origin["originals"]) != {"profile", "wire", "catalog", "projection_policy"}):
+            raise ControlError("subject 录制 Active 投影说明与冻结来源合同不闭合")
+        for name, binding in origin["originals"].items():
+            expected_keys = {"path", "sha256"} if name == "projection_policy" else {"path", "sha256", "bytes"}
+            coordinate = Path(str(binding.get("path", "")))
+            if (set(binding) != expected_keys or not binding.get("path")
+                    or (name != "projection_policy" and not coordinate.is_absolute())
+                    or coordinate.as_posix() != binding["path"] or ".." in coordinate.parts
+                    or profile.SHA256_RE.fullmatch(str(binding.get("sha256", ""))) is None
+                    or (name != "projection_policy" and (type(binding["bytes"]) is not int or binding["bytes"] < 0))):
+                raise ControlError("subject 录制 Active 原形成期来源说明不规范")
+            if not coordinate.is_absolute():
+                _relative(binding["path"])
+        frozen = {}
+        for name in projected_names:
+            path = recorded.bound(inputs[name], root=data_root)
+            frozen[name] = (path, retain(path, inputs[name]["sha256"]))
+        if frozen["active_profile"][1] != profile_raw or frozen["active_release_catalog"][1] != catalog_raw:
+            raise ControlError("subject 录制 Active 副本不等于原 VC-3 已证明的冻结输入")
+        wire_path, wire_raw = frozen["active_wire"]
+        wire_document = parse_json_bytes(wire_raw)
+        identity = wire_document["identity"]
+        if (wire.canonical_bytes(wire_document) != wire_raw or sha256_bytes(wire_raw) != active["wire_sha256"]
+                or identity["profile_digest"] != active["profile_sha256"]
+                or identity["version"] != manifest["baseline_version"]
+                or identity["platform"] != active["platform"]):
+            raise ControlError("subject 录制 Active Wire 与冻结 Release 身份不同源")
+        release_digest, bundle_digest = wire.build_release_identity(version=manifest["baseline_version"],
+            platform=identity["platform"], profile_digest=active["profile_sha256"], wire_digest=active["wire_sha256"],
+            model_catalog_digest=identity["model_capability_catalog_digest"],
+            required_rules_manifest_sha256=active["required_rules_manifest_sha256"],
+            required_rule_count=len(profile_document["rules"]))
+        if (release_digest, bundle_digest) != (active["release_sha256"], active["bundle_sha256"]):
+            raise ControlError("subject 录制 Active Wire 不能闭合原 Release/Bundle 摘要")
+        project_parent(frozen["active_profile"][0], data_root, ((),))
+        project_parent(wire_path, data_root, ((),))
+        project_parent(origin_path, data_root, (("originals",),), resolved_bindings=tuple(
+            (("projected", name), frozen[name][0]) for name in sorted(projected_names)))
+        seen.add(origin_path)
 
 
 def _retain_candidate_attempt_materials(
@@ -982,6 +1741,9 @@ def _candidate_attempt_result_producers(
 
     producers = {}
     retained_covers = set()
+    phase = document.get("phase", "candidate")
+    if phase not in {"official", "candidate"}:
+        raise ControlError("来源采集 attempt 阶段不受原合同支持")
     for result in document["results"]:
         reused = result.get("reused_from")
         if not isinstance(reused, Mapping):
@@ -990,8 +1752,8 @@ def _candidate_attempt_result_producers(
         producer = recovery._producer(campaign, attempt_root, result)
         origin = producer.get("campaign")
         directory = Path(origin["campaign_dir"]) if origin is not None else campaign
-        candidate_id = origin["candidate_id"] if origin is not None else document["candidate_id"]
-        root = recovery._attempt_root(directory, producer["attempt_id"], "candidate", candidate_id)
+        candidate_id = origin.get("candidate_id") if origin is not None else document.get("candidate_id")
+        root = recovery._attempt_root(directory, producer["attempt_id"], phase, candidate_id)
         if (not directory.is_absolute() or ".." in directory.parts
                 or not directory.is_relative_to(data_root) or not root.is_relative_to(data_root)):
             raise ControlError("候选复用生产者越过本资格已有数据根")
@@ -1010,7 +1772,7 @@ def _candidate_attempt_result_producers(
             upgrade._reject_symlink_components(cover_directory, data_root, "归档最初前序封存 Campaign")
         layout = capture._capture_layout(campaign, upgrade.load_campaign_manifest(campaign))
         recovery._verify_reusable_evidence(campaign, result, producer, layout,
-            phase="candidate", candidate_id=document["candidate_id"])
+            phase=phase, candidate_id=document.get("candidate_id"))
         if origin is not None:
             retain(directory / "campaign.json", origin["campaign_manifest_sha256"])
         if cover is not None:
@@ -1502,7 +2264,8 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
         return raw
 
     def project_parent(path: Path, base: Path, metadata: tuple[tuple[str, ...], ...] = (),
-                       coordinate_roots: tuple[tuple[tuple[str, ...], Path], ...] = ()) -> None:
+                       coordinate_roots: tuple[tuple[tuple[str, ...], Path], ...] = (),
+                       resolved_bindings: tuple[tuple[tuple[str, ...], Path], ...] = ()) -> None:
         """只登记本调用已经由原合同验真的父，不按文件名或 schema 授权。"""
         raw = retain(path)
         if not base.is_relative_to(data_root):
@@ -1520,7 +2283,23 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
             if not root.is_relative_to(data_root):
                 raise ControlError("subject 子绑定坐标根越过已有资格数据根")
             roots.append((coordinate, root.relative_to(data_root).as_posix()))
-        row = VerifiedQualificationSubjectProjection(binding, base.relative_to(data_root).as_posix(), tuple(domains), tuple(roots), _TOKEN)
+        resolved = []
+        for coordinate, target in resolved_bindings:
+            node = document
+            for key in coordinate:
+                node = node[int(key)] if isinstance(node, list) else node[key]
+            if (not isinstance(node, Mapping) or set(node) != {"path", "sha256", "bytes"}
+                    or not Path(str(node["path"])).is_absolute() or Path(node["path"]) != target
+                    or target.as_posix() != node["path"]
+                    or not target.is_relative_to(data_root)):
+                raise ControlError("subject 绝对字段与原合同验真的精确原件坐标不一致")
+            child = retain(target, node["sha256"])
+            if len(child) != node["bytes"]:
+                raise ControlError("subject 已验真绝对字段的原件字节数漂移")
+            normalized = validate_external_binding({**node, "path": target.relative_to(data_root).as_posix()},
+                "subject.resolved_binding")
+            resolved.append((coordinate, dict(node), normalized))
+        row = VerifiedQualificationSubjectProjection(binding, base.relative_to(data_root).as_posix(), tuple(domains), tuple(roots), _TOKEN, tuple(resolved))
         previous = projections.setdefault(binding["path"], row)
         if previous != row:
             raise ControlError("subject 同一原件的父域或坐标根冲突")
@@ -1575,11 +2354,11 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
     # 构建读取器已经重放过这条精确 revision 的 checkpoint 链；归档
     # 仍须包含所有原 checkpoint 和它们绑定的阶段收据，不能只留摘要。
     checkpoint_path = vc.vc_checkpoint_path(campaign, "VC-4", revision=parent["candidate_revision"])
-    stage_paths = []
+    stage_sources = []
     while True:
         checkpoint = parse_json_bytes(retain(checkpoint_path))
-        retain_bindings(checkpoint["stage_receipt"])
-        stage_paths.append(compare._bound_campaign_file(campaign, checkpoint["stage_receipt"], "subject VC 阶段"))
+        stage_sources.append(_retain_vc_stage_source(campaign, manifest, checkpoint,
+            retain=retain, project_parent=project_parent))
         previous_checkpoint = checkpoint["predecessor_checkpoint"]
         if previous_checkpoint is None:
             break
@@ -1603,6 +2382,25 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
             or build["source"]["tree_sha256"] != candidate["payload"]["source_tree_sha256"]
             or any(build["build"][key] != stored_build["build_identity"][key] for key in ("build_id", "parameters", "toolchain"))):
         raise ControlError("门禁 subject 的 VC-4 与 Store 构建画像、镜像或源码身份不同源")
+    if read_bindings is not None or read_projections is not None:
+        _retain_frozen_bootstrap_controls(store, campaign, manifest, data_root,
+            retain=retain, project_parent=project_parent)
+        # 原 FormedContext 使用候选 revision 的首个显式形成期事实；
+        # 只归档原 API 实际选择的这一份上下文，不把整个事实维度当新图根。
+        from tools.official_client_control import receipts as formed_receipts
+        stored_campaign = store.load_campaign(qualification["campaign_id"])
+        revision_facts = formed_receipts.candidate_revision_facts(store, stored_campaign)
+        formed_receipts.require_candidate_in_revision(revision_facts, qualification["candidate_id"],
+            candidate["formed_under"], "subject 形成期上下文")
+        revision_fact = next((fact for fact in revision_facts
+            if fact["payload"]["revision"] == parent["candidate_revision"]), None)
+        if revision_fact is not None:
+            revision_ref = store.fact_ref(revision_fact)
+            revision_path = (Path(store.root) / "facts" / revision_ref["campaign_id"] / revision_ref["dimension"]
+                / f"{revision_ref['sequence']:08d}-{revision_ref['sha256']}.json")
+            revision_raw = parse_json_bytes(retain(revision_path, revision_ref["sha256"]))
+            if {**revision_raw, "_sha256": revision_ref["sha256"]} != revision_fact:
+                raise ControlError("subject 候选形成期上下文与原事实字节不同源")
     # VC-4 原合同把宿主构建参数、binary 来源和 implementation_tests
     # 的外部证据根冻结为构建元数据。实际交付制品另由 Store 库存核字节；
     # 不把这些绝对路径升级为本轮数据根的开放权限。其它字段继续严格展开。
@@ -1647,10 +2445,40 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
             retain=retain, project_parent=project_parent)
         _retain_candidate_attempt_materials(campaign, round_one, data_root,
             retain=retain, project_parent=project_parent)
+        recorded_manifest_path = compare._bound_campaign_file(campaign,
+            round_one["assertion_context"]["evaluation_manifest"], "subject 原录制评估清单")
+        recorded_views = _retain_recorded_evaluation_materials(recorded_manifest_path,
+            data_root, retain=retain, project_parent=project_parent)
+        _retain_recorded_relay_materials(recorded_manifest_path, data_root, recorded_views,
+            retain=retain, project_parent=project_parent)
         comparison_path = compare._bound_campaign_file(campaign, parent["comparison"], "subject 比较收据")
         comparison_raw = parse_json_bytes(retain(comparison_path, parent["comparison"]["sha256"]))
         if comparison_raw.get("schema_version") == compare.COMPARISON_SCHEMA:
             comparison = compare.load_stage_result(campaign, comparison_path, qualification["candidate_id"], manifest=manifest)
+            # 官方 Capture 两个绑定按比较原合同使用宿主 data 坐标；候选摘要仍为
+            # Campaign 两字段坐标。未知字段继续按默认根严格展开，不能整体转根。
+            comparison_roots = []
+            for name in ("capture_manifest", "capture_index"):
+                source = comparison["official"][name]
+                source_path = compare._data_root_file(data_root, source, "subject 官方比较来源 " + name)
+                retain(source_path, source["sha256"])
+                comparison_roots.append((("official", name), data_root))
+            if comparison["official"]["evidence_root"] != str(data_root):
+                raise ControlError("subject 官方比较来源不是原合同的数据根")
+            retain_bindings(comparison["inputs"])
+            retain_bindings([comparison["official"]["evaluation_manifest"],
+                comparison["candidate"]["evaluation_manifest"], comparison["builder"]["config"]])
+            project_parent(comparison_path, campaign, coordinate_roots=tuple(comparison_roots))
+            official_binding = comparison["inputs"]["official_stage"]
+            official_path = compare._bound_campaign_file(campaign, official_binding, "subject 官方封存阶段")
+            official_stage = parse_json_bytes(retain(official_path, official_binding["sha256"]))
+            official_attempt = _retain_official_attempt_materials(campaign, official_stage, data_root,
+                retain=retain, project_parent=project_parent)
+            if official_attempt is not None:
+                _retain_recorded_relay_materials(compare._bound_campaign_file(campaign,
+                    comparison["official"]["evaluation_manifest"], "subject 官方录制评估清单"),
+                    data_root, recorded_views, official_attempt=official_attempt,
+                    retain=retain, project_parent=project_parent)
             current_binding = comparison["inputs"]["candidate_stage"]
             current_path = compare._bound_campaign_file(campaign, current_binding, "subject 精确候选阶段")
             current_stage = parse_json_bytes(retain(current_path, current_binding["sha256"]))
@@ -1669,6 +2497,8 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
             client_receipt = parse_json_bytes(retain(client_path, client_binding["sha256"]))
             task_path = client_contract.bound_file(attempt_root, client_receipt["task"])
             task = parse_json_bytes(retain(task_path, client_receipt["task"]["sha256"]))
+            _retain_client_semantic_materials(campaign, attempt_root, task, build, data_root,
+                retain=retain, project_parent=project_parent)
             bundle_manifest = client_contract.bound_file(attempt_root, client_receipt["bundle"])
             bundle_root = bundle_manifest.parent
             capture_root = Path(task["execution"]["capture_root"])
@@ -1731,7 +2561,8 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
     # 闭合原件，不能假定验收四根已经覆盖首轮。受保护父域仍只交给
     # 原 QualificationBindingProjection 重验；外部坐标统一转回数据根。
     store_projection = QualificationBindingProjection(store)
-    pending = [dict(package_ref), dict(qualification["build_receipt_ref"])]
+    pending = [dict(package_ref), *(dict(qualification[key]) for key in
+        ("candidate_ref", "build_receipt_ref", "validation_ref", "acceptance_ref"))]
     seen = set()
     while pending:
         reference = pending.pop()
@@ -1777,16 +2608,18 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
             retain=retain, project_parent=project_parent)
     except (ConfigurationError, KeyError, TypeError, ValueError) as error:
         raise ControlError("冻结 Active 派生来源证明不闭合：" + str(error)) from error
+    if (read_bindings is not None or read_projections is not None) and recorded_views:
+        _retain_recorded_active_inputs(campaign, manifest, data_root, recorded_views,
+            retain=retain, project_parent=project_parent)
     # Campaign 内普通原件的坐标仍以 Campaign 为根；特定父域上面的
     # 显式证明优先。叶子未知 JSON 没有父合同证明，仍交给严格读者。
     campaign_parents = [campaign / "campaign.json", round_path,
         compare._bound_campaign_file(campaign, parent["comparison"], "subject 比较收据"),
-        *stage_paths,
         *[data_root / row["path"] for row in originals.values()
           if row["path"].startswith(campaign.relative_to(data_root).as_posix() + "/control/vc/")]]
-    for path in campaign_parents:
+    for path, base in [*((path, campaign) for path in campaign_parents), *stage_sources]:
         if path.relative_to(data_root).as_posix() not in projections:
-            project_parent(path, campaign)
+            project_parent(path, base)
     expected = accept.expected_gate_subject(manifest, candidate["payload"], identity)
     # 返回 subject 或向调用方交回原件权限之前，再核完整事实链及其实际
     # 字节、目录坐标和元数据；不能用读取初始时的旧索引接受期间的漂移。

@@ -40,8 +40,25 @@ _FORMED_METHOD_READ_ONLY = contextvars.ContextVar('claude_fault_formed_method_re
 CONTROL_CONTINUATION_PATHS = frozenset({
     'tools/official_client_capture/codex_upgrade_supervisor.py',
     'tools/official_client_capture/codex_upgrade_reconciler.py',
+    'tools/official_client_capture/claude_qualification_material_source.py',
 })
 PRODUCT_CONTINUATION_FILE = 'product-continuation.json'
+
+
+def current_product_continuation_path(root: Path, source: dict[str, Any]) -> Path:
+    """本次非测试来源决定新凭证坐标；测试后继沿原运输，旧凭证永不覆盖。"""
+
+    value = {**source, 'files': {key: digest for key, digest in source['files'].items()
+                               if not _executor_path(key)}}
+    digest = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return root / ('product-continuation-' + digest + '.json')
+
+
+def selected_product_continuation_path(root: Path, source: dict[str, Any]) -> Path:
+    """优先绑定本次精确来源；缺新凭证时旧路径仍须接受原严格校验。"""
+
+    current = current_product_continuation_path(root, source)
+    return current if current.exists() or current.is_symlink() else root / PRODUCT_CONTINUATION_FILE
 
 
 def record_root() -> Path | None:
@@ -398,7 +415,7 @@ def control_continuation_proof(original: dict[str, Any], current: dict[str, Any]
     changed = sorted(path for path in set(original['files']) | set(current['files'])
                      if original['files'].get(path) != current['files'].get(path) and not _executor_path(path))
     if not changed or not set(changed) <= CONTROL_CONTINUATION_PATHS or set(before_files) != set(changed):
-        raise ValueError('承接仅适用于本次两个控制写侧文件的真实变化闭集')
+        raise ValueError('承接仅适用于本次已审核控制写侧文件的真实变化闭集')
     root = Path(current['repository']).resolve(strict=True)
     policy = identity.load_policy(root / 'tools/official_client_capture' / identity.POLICY_FILENAME)
     digests, contents = identity._managed_tree_snapshot(root, policy)
@@ -442,9 +459,12 @@ def control_continuation_proof(original: dict[str, Any], current: dict[str, Any]
                         identities.append(codex_identity.compute_identity_v2(selected, capture_root,
                                                                            codex._tool_tree_entries(capture_root)))
                         readers.append(codex_identity.evaluator_dependency_digests(capture_root, selected))
+                ignored = (client == 'codex' and all(codex_identity.classify_path(selected,
+                    path.removeprefix('tools/official_client_capture/')) is None for path in changed))
                 if (any(identities[0][name] != identities[1][name] for name in
                         ('policy_sha256', 'wire_producer_sha256', 'evidence_semantics_sha256'))
-                        or readers[0] != readers[1] or identities[0]['control_sha256'] == identities[1]['control_sha256']):
+                        or readers[0] != readers[1]
+                        or (identities[0]['control_sha256'] == identities[1]['control_sha256'] and not ignored)):
                     raise ValueError(client + ' 的本次变化不是纯控制写侧修复或读侧发生变化')
                 proofs[client] = {'before': identities[0], 'after': identities[1], 'readers': readers[0]}
         finally:
@@ -485,7 +505,8 @@ def _registered_control_state(campaign: Path, deployment: Path) -> dict[str, Any
     after = {row['path']: row['sha256'] for row in current['entries']}
     changed = sorted('tools/' + key for key in set(before) | set(after) if before.get(key) != after.get(key))
     permitted = {'tools/official_client_capture/codex_upgrade_supervisor.py',
-                 'tools/official_client_capture/codex_upgrade_reconciler.py'}
+                 'tools/official_client_capture/codex_upgrade_reconciler.py',
+                 'tools/official_client_capture/claude_qualification_material_source.py'}
     if (not changed or not set(changed) <= permitted or latest['evaluator']['changed_fields']
             or any(previous[key] != current[key] for key in
                    ('policy_sha256', 'wire_producer_sha256', 'evidence_semantics_sha256'))):
@@ -639,6 +660,51 @@ def _recovery_formed_product_files(document: dict[str, Any], products: dict[str,
     return {**products, relative: document['product_files'][relative]}
 
 
+def _revision_formed_registration(document: dict[str, Any]) -> dict[str, Any]:
+    """已成功 revision 只复验形成期真实登记，不再使用其第9阶段写续作入口。
+
+    原成功方法的执行器必须直接绑定旧注册凭证；旧凭证所指产品仍在原 tree。
+    当前来源的新控制修复另由本次 control_proof 解释，不能改写旧凭证的来源。
+    """
+
+    if document['chain'] != 'revision-continuous' or len(document['methods']) != 1:
+        raise ValueError('形成期登记只接受本次已成功 revision 原方法')
+    row = next(iter(document['methods'].values()))
+    origin = _decoded(json.loads(_read_exact_cut(row['executor_origin'])))
+    if origin.get('tree') != document['tree'] or origin.get('product_continuation') is None:
+        raise ValueError('原成功 revision 缺执行器绑定的真实控制登记凭证')
+    prior = _decoded(json.loads(_read_exact_cut(origin['product_continuation'])))
+    if (prior.get('schema') != 'claude-fault-product-continuation/v1'
+            or prior.get('mode') != 'registered-control-evolution' or prior.get('chain') != document['chain']
+            or prior.get('tree') != document['tree'] or prior.get('original_source') != document['original_source']
+            or prior.get('product_files') != document['product_files']
+            or origin.get('product_files') != document['product_files']):
+        raise ValueError('原成功 revision 的形成期凭证或产品快照不一致')
+    original, formed = prior['original_source'], prior['current_source']
+    if any(original.get(key) != formed.get(key) for key in ('repository', 'fixtures')):
+        raise ValueError('原 revision 登记不得更换来源坐标或夹具')
+    changed = sorted(path for path in set(original['files']) | set(formed['files'])
+                     if original['files'].get(path) != formed['files'].get(path) and not _executor_path(path))
+    permitted = {'tools/official_client_capture/codex_upgrade_supervisor.py',
+                 'tools/official_client_capture/codex_upgrade_reconciler.py'}
+    if (not changed or not set(changed) <= permitted or prior['control_proof']['changed_paths'] != changed
+            or set(prior['before_files']) != set(changed)):
+        raise ValueError('原成功 revision 形成期登记不是原两控制文件的精确变化')
+    for relative in changed:
+        if hashlib.sha256(_read_exact_cut(prior['before_files'][relative])).hexdigest() != original['files'][relative]:
+            raise ValueError('原 revision 登记的旧字节与原 source 不同')
+    registration = prior['registration']
+    actual = registered_control_facts(Path(document['tree']), Path(registration['campaign']),
+                                      Path(registration['deployment']['path']))
+    if actual != registration or actual['changed_paths'] != changed:
+        raise ValueError('原成功 revision 的实际双层登记与形成期凭证不一致')
+    for side, source in (('from', original), ('to', formed)):
+        entries = {'tools/' + item['path']: item['sha256'] for item in actual[side]['entries']}
+        if any(entries.get(relative) != source['files'].get(relative) for relative in changed):
+            raise ValueError('原成功 revision 的登记字节未精确承接冻结来源')
+    return actual
+
+
 def verify_product_continuation(binding: dict[str, Any], *, tree: Path | None = None,
                                 original_source: dict[str, Any] | None = None,
                                 current_source: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -665,8 +731,8 @@ def verify_product_continuation(binding: dict[str, Any], *, tree: Path | None = 
     if _executor_product_files(actual_tree) != document['product_files']:
         raise ValueError('承接期间原产品或夹具字节变化')
     if document['mode'] == 'formed-read-only':
-        if document['chain'] not in {'late-continuous', 'recovery'} or not document['methods']:
-            raise ValueError('只读承接仅接受已成功的后段链／恢复链')
+        if document['chain'] not in {'late-continuous', 'recovery', 'revision-continuous'} or not document['methods']:
+            raise ValueError('只读承接仅接受本次已成功的三条原链')
         formed_products = None
         for method in document['methods'].values():
             origin = method.get('executor_origin')
@@ -683,8 +749,15 @@ def verify_product_continuation(binding: dict[str, Any], *, tree: Path | None = 
             # 同一链只核一次历史演进；不按 21 个方法重复调用原产品消费者。
             if _recovery_formed_product_files(document, formed_products) != document['product_files']:
                 raise ValueError('原 recovery 历史演进不能解释整表差异')
+        preserved = document['original_source']['files']
+        if document['chain'] == 'revision-continuous':
+            registration = _revision_formed_registration(document)
+            if document['registration'] != registration:
+                raise ValueError('本次只读 revision 没有绑定形成期实际登记')
+            preserved = {**preserved, **{'tools/' + item['path']: item['sha256']
+                                         for item in registration['to']['entries']}}
         for relative in proof['changed_paths']:
-            if document['product_files'].get(relative) != document['original_source']['files'][relative]:
+            if document['product_files'].get(relative) != preserved[relative]:
                 raise ValueError('只读承接必须保留原控制产品字节，不能偷换当前产品')
     else:
         registration = document['registration']

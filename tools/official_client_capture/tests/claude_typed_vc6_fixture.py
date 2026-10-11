@@ -632,6 +632,82 @@ def close_recorded_guards() -> None:
             instance.close(force=True)
 
 
+def _read_unstarted_fixture_world(data: Path, campaign: Path, control_path: Path, record_name: str) -> tuple[dict, dict]:
+    """只承接原游标许可、未启动守卫且未发布配置的首次初始化窗口。
+
+    基础配置、文件绑定和零动作现场全部从原坐标实读；缺件或已有守卫痕迹
+    都拒绝，不删除半产物，也不再次调用 fixture_world 覆盖原输入。
+    """
+
+    if not os.environ.get(stops.METHOD_RESUME_ENV) or not stops.initialization_allowed(record_name):
+        raise guard.GuardError('承接未完成初始化缺原游标许可')
+    forbidden = [data / 'guard', campaign / 'control/typed-vc6-configuration.json', control_path,
+        control_path.with_name('typed-vc6-guard.log'), control_path.with_name('typed-vc6-calls.jsonl'),
+        control_path.with_name('typed-vc6-physical-calls.jsonl')]
+    if any(path.exists() or path.is_symlink() for path in forbidden):
+        raise guard.GuardError('首次初始化已有发布配置或守卫痕迹，不能按未启动现场承接')
+    configuration = executor.validate_configuration(guard.read_json(data / 'inputs/configuration.json'))
+    if (configuration['schema_version'] != executor.CONFIGURATION_SCHEMA
+            or configuration['source_scope'] != 'regression_fixture'
+            or configuration['paths']['guard_root_relative'] != 'guard'):
+        raise guard.GuardError('首次初始化只能承接原基础文件夹具配置')
+    for binding in guard.all_bindings(configuration):
+        guard.check_binding(data, binding)
+    docker = configuration['runtime']['docker_binding']
+    docker_path = Path(docker['absolute_path'])
+    try:
+        docker_relative = docker_path.relative_to(data).as_posix()
+    except ValueError as error:
+        raise guard.GuardError('首次初始化的文件执行器越出原 data_root') from error
+    guard.check_binding(data, {'path': docker_relative, 'sha256': docker['sha256'], 'bytes': docker['bytes']})
+    if docker_path.stat().st_mode & 0o777 != 0o700:
+        raise guard.GuardError('首次初始化的文件执行器权限发生漂移')
+    environment = {'host_id': 'ARM64', 'architecture': 'arm64',
+        'compose_sha256': configuration['paths']['compose_binding']['sha256'], 'environment_sha256': 'c' * 64,
+        'configuration_sha256': canonical_sha256(configuration), 'network_sha256': 'd' * 64}
+    expected_state = {'image_digest': configuration['rollback']['image_digest'],
+        'runtime_profile_sha256': configuration['rollback']['runtime_profile_sha256'],
+        'environment': environment, 'switch_count': 0, 'restore_count': 0}
+    if (guard.read_json(data / 'state.json') != expected_state
+            or guard.read_json(data / 'fault.json') != {'execute': 'normal', 'restore': 'normal', 'freeze': 'normal'}):
+        raise guard.GuardError('首次初始化现场已发生动作或不再是原基础配置')
+    return configuration, environment
+
+
+def _read_initial_rollback_qualification(store: Any, data: Path, configuration: dict,
+                                         candidate_qualification: dict) -> dict:
+    """只读重验同 Store 已封存的回滚资格，不重新生产 Campaign 或收据。"""
+
+    from tools.official_client_capture import claude_qualification_material_source as materials
+    from tools.official_client_control.store import ControlStore
+
+    store = ControlStore.open_read_only(store.root)
+    sealed_path = data / 'control/typed-vc6-rollback/sealed-result.json'
+    sealed = guard.read_json(sealed_path)
+    if (sealed.get('schema_version') != 'claude-upgrade-acceptance/v1'
+            or sealed.get('candidate_id') != 'synthetic-candidate-baseline'
+            or sealed.get('production_state') != 'not_activated'):
+        raise guard.GuardError('首次初始化缺原回滚资格的独立封存终态')
+    references = guard.exact(sealed.get('store'), {'acceptance_ref', 'validation_completed_ref'}, '原回滚终态引用')
+    validation = store.load_fact(references['validation_completed_ref'])
+    payload = validation['payload']
+    qualification = {'store_relative': store.root.relative_to(data).as_posix(), 'external_root_relative': '.',
+        'campaign_id': 'typed-rollback-' + canonical_sha256(candidate_qualification)[:32],
+        'candidate_id': sealed['candidate_id'], 'candidate_ref': payload.get('candidate_ref'),
+        'build_receipt_ref': payload.get('candidate_build_receipt_ref'),
+        'validation_ref': references['validation_completed_ref'], 'acceptance_ref': references['acceptance_ref'],
+        'sealed_result_binding': guard.binding(data, sealed_path)}
+    candidate, _acceptance = materials._check_four_roots(store, qualification)
+    build = store.load_receipt(qualification['build_receipt_ref'])
+    rollback = configuration['rollback']
+    if (candidate['payload'].get('image_digest') != rollback['image_digest']
+            or build.get('image', {}).get('image_digest') != rollback['image_digest']
+            or build.get('profile_identity', {}).get('profile_digest') != rollback['runtime_profile_sha256']):
+        raise guard.GuardError('原回滚资格与首次初始化的镜像或 Profile 不一致')
+    executor.replay_qualification_graph(store, qualification, data, data)
+    return qualification
+
+
 class TypedDeliveryFixture:
     """已完成 VC-5 的原世界接入 typed 文件现场；持有守卫直到最后一次重放。"""
 
@@ -658,18 +734,29 @@ class TypedDeliveryFixture:
         if not execution.requires_current_contract(store, store_campaign):
             raise guard.GuardError("typed 共用夹具要求当前 policy 4，不能降为历史交付")
         handoff = delivery._vc5_handoff(store, store_campaign, candidate_id)
-        # 文件现场的固定路径只在空坐标上创建，不能覆盖调用方原件。
-        for relative in ("inputs", "guard", "state.json", "fault.json"):
-            if (self.data / relative).exists():
-                raise guard.GuardError(f"typed 文件现场坐标已存在：{relative}")
-        configuration, _, environment = fixture_world(self.data)
+        self.control_path = control_path or self.data / "control/typed-vc6-control.json"
+        # 已获原游标许可的半初始化只读原件；其余仍要求首次建场坐标为空。
+        existing = [relative for relative in ("inputs", "guard", "state.json", "fault.json")
+                    if (self.data / relative).exists() or (self.data / relative).is_symlink()]
+        continuing_initialization = bool(existing) and bool(os.environ.get(stops.METHOD_RESUME_ENV))
+        if continuing_initialization:
+            configuration, environment = _read_unstarted_fixture_world(
+                self.data, campaign, self.control_path, self.record_name)
+        else:
+            if existing:
+                raise guard.GuardError(f"typed 文件现场坐标已存在：{existing[0]}")
+            configuration, _, environment = fixture_world(self.data)
         profile_stage = upgrade._load_stage_result(campaign, "stage-profile")
         staged = release.load_staged_release(campaign, profile_stage["staged_release"])
         profile_path = campaign / release.STAGED_RELEASE_ROOT / staged["release_entry"]["profile"]["path"]
         if sha256_file(profile_path) != handoff["runtime_profile_sha256"]:
             raise guard.GuardError("原候选暂存 Profile 与 VC-5 构建不一致")
         profile_copy = self.data / "inputs/current-qualified-profile.json"
-        guard.write_once(profile_copy, guard.read_bytes(profile_path))
+        if continuing_initialization:
+            if guard.read_bytes(profile_copy) != guard.read_bytes(profile_path):
+                raise guard.GuardError('原候选 Profile 副本与暂存原件不一致，禁止覆盖承接')
+        else:
+            guard.write_once(profile_copy, guard.read_bytes(profile_path))
         configuration["candidate"].update(image_digest=handoff["candidate_image_digest"],
             runtime_profile_sha256=handoff["runtime_profile_sha256"], profile_binding=guard.binding(self.data, profile_copy))
         store_relative = store.root.relative_to(self.data).as_posix()
@@ -679,32 +766,36 @@ class TypedDeliveryFixture:
             "candidate_ref": handoff["candidate_ref"], "build_receipt_ref": handoff["candidate_build_receipt_ref"],
             "validation_ref": handoff["validation_completed_ref"], "acceptance_ref": handoff["acceptance_ref"],
             "sealed_result_binding": guard.binding(self.data, accept_path)}
-        rollback_root = self.data / "control/typed-vc6-rollback"
-        guard.private_directory(rollback_root)
-        rollback = DeliveryCampaign(rollback_root, schema="v2", store=store, external_root=self.data,
-                                    external_prefix="control/typed-vc6-rollback/external")
-        rollback.materials = configuration
-        rollback.campaign_id = "typed-rollback-" + canonical_sha256(candidate_qualification)[:32]
-        rollback.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
-        rollback.discovery_and_evidence()
-        rollback.profile_objects()
-        rollback.select_profile("rollback")
-        rollback.profile_approve("validation_only")
-        rollback.strict_validate(tag="baseline")
-        sealed = {"schema_version": "claude-upgrade-acceptance/v1", "candidate_id": "synthetic-candidate-baseline",
-            "store": {"acceptance_ref": rollback.references["acceptance-baseline"],
-                      "validation_completed_ref": rollback.references["validation-completed-baseline"]},
-            "production_state": "not_activated"}
-        sealed_path = rollback_root / "sealed-result.json"
-        guard.write_json_once(sealed_path, sealed)
         configuration["candidate"]["qualification"] = candidate_qualification
-        configuration["rollback"]["qualification"] = {"store_relative": store_relative, "external_root_relative": ".",
-            "campaign_id": rollback.campaign_id, "candidate_id": sealed["candidate_id"],
-            "candidate_ref": rollback.references["candidate-baseline"],
-            "build_receipt_ref": rollback.references["candidate-build-receipt-baseline"],
-            "validation_ref": rollback.references["validation-completed-baseline"],
-            "acceptance_ref": rollback.references["acceptance-baseline"],
-            "sealed_result_binding": guard.binding(self.data, sealed_path)}
+        if continuing_initialization:
+            configuration["rollback"]["qualification"] = _read_initial_rollback_qualification(
+                store, self.data, configuration, candidate_qualification)
+        else:
+            rollback_root = self.data / "control/typed-vc6-rollback"
+            guard.private_directory(rollback_root)
+            rollback = DeliveryCampaign(rollback_root, schema="v2", store=store, external_root=self.data,
+                                        external_prefix="control/typed-vc6-rollback/external")
+            rollback.materials = configuration
+            rollback.campaign_id = "typed-rollback-" + canonical_sha256(candidate_qualification)[:32]
+            rollback.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
+            rollback.discovery_and_evidence()
+            rollback.profile_objects()
+            rollback.select_profile("rollback")
+            rollback.profile_approve("validation_only")
+            rollback.strict_validate(tag="baseline")
+            sealed = {"schema_version": "claude-upgrade-acceptance/v1", "candidate_id": "synthetic-candidate-baseline",
+                "store": {"acceptance_ref": rollback.references["acceptance-baseline"],
+                          "validation_completed_ref": rollback.references["validation-completed-baseline"]},
+                "production_state": "not_activated"}
+            sealed_path = rollback_root / "sealed-result.json"
+            guard.write_json_once(sealed_path, sealed)
+            configuration["rollback"]["qualification"] = {"store_relative": store_relative, "external_root_relative": ".",
+                "campaign_id": rollback.campaign_id, "candidate_id": sealed["candidate_id"],
+                "candidate_ref": rollback.references["candidate-baseline"],
+                "build_receipt_ref": rollback.references["candidate-build-receipt-baseline"],
+                "validation_ref": rollback.references["validation-completed-baseline"],
+                "acceptance_ref": rollback.references["acceptance-baseline"],
+                "sealed_result_binding": guard.binding(self.data, sealed_path)}
         from tools.official_client_control.qualification_material_import import requires_qualification_materials
         if requires_qualification_materials(store, store_campaign):
             # 新夹具在配置与现场冻结前准备原件；不给已冻结旧 world 补叶子。
