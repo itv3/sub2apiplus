@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import multiprocessing
@@ -62,6 +63,138 @@ class DeliveryResumeEntryTests(unittest.TestCase):
         for hint in ("deliver-candidate run", "compile-and-run-vc-batch --phase VC-5", "compile-and-run-vc-batch --phase VC-6"):
             with self.subTest(hint=hint), self.assertRaises(AssertionError):
                 outer.ScenarioAudit(self, "恢复入口拒绝").check_entry({"next_command": hint}, *late.RUN_ENTRY_FRAGMENTS)
+
+
+class RevisionCheckpointTests(unittest.TestCase):
+    """只检验阶段接续；冻结 Job 用原消费者展开，运行与封存事实为明示短验输入。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tool_identity = upgrade._tool_identity(include_git=False)
+
+    def setUp(self) -> None:
+        self.fixture = driver.candidate_tests.CandidateFixture("runTest")
+        self.fixture.tool_identity = self.tool_identity
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.campaign = self.fixture.write_candidate_campaign(mode="preflight_only")
+        self.manifest = upgrade.load_campaign_manifest(self.campaign)
+        self.case = driver.ClaudeRevisionEvaluatorChainDriver("runTest")
+        self.case.source_context = self.fixture.patched
+        self.case.active_candidate, self.case.active_revision = driver.SECOND_CANDIDATE, 2
+        self.attempt_root = self.campaign / "candidates" / driver.SECOND_CANDIDATE / "attempts/short-fixture"
+        self.jobs = upgrade._campaign_jobs(self.campaign, self.manifest, "candidate", candidate_id=driver.SECOND_CANDIDATE)
+        self.attempt = {"identity": {"candidate_revision": 2},
+                        "results": [{"id": job.job_id, "disposition": "executed", "evidence_roots": []} for job in self.jobs]}
+        self.stage = {"attempt": {"path": (self.attempt_root / "attempt.json").relative_to(self.campaign).as_posix()},
+                      "store": {"validation_attempt_ref": {"fact_id": "short-r2"}}}
+
+    def test_phase5_checkpoint_only_saves_facts_and_keeps_job_serialization_rejected(self) -> None:
+        first_snapshot = {str(self.fixture.root / "old-original"): "原边界摘要"}
+        saved = {"phase": 5, "values": {"campaign": self.campaign, "manifest": self.manifest,
+            "first_snapshot": first_snapshot, "first_stage": {"store": {"validation_attempt_ref": {"fact_id": "short-r1"}}}}}
+        world = {"campaign": self.campaign, "candidate_id": driver.SECOND_CANDIDATE, "revision": 2}
+        self.case.capture_and_seal = mock.Mock(return_value=(self.attempt_root, self.attempt, self.stage))
+        self.case.boundary = mock.Mock(return_value=first_snapshot)
+        self.case.late_audit = mock.Mock()
+        captured = []
+
+        class CheckpointReached(Exception):
+            pass
+
+        def checkpoint(_case, _cursor, **values):
+            # 原序列化器是本短验的真实拒绝边界；不打桩成允许任意对象。
+            driver.world_fixture._encoded(values)
+            captured.append(values)
+            if values.get("phase") == 6:
+                raise CheckpointReached()
+
+        with mock.patch.object(driver.world_fixture, "resume_checkpoint", return_value=saved), \
+                mock.patch.object(driver.world_fixture, "restore_world", return_value=world), \
+                mock.patch.object(driver.world_fixture, "refresh_world"), \
+                mock.patch.object(driver.world_fixture, "save_world"), \
+                mock.patch.object(driver.world_fixture, "checkpoint", side_effect=checkpoint), \
+                self.assertRaises(CheckpointReached):
+            self.case.run_revision_evaluator_chain()
+        self.assertEqual(captured[-1]["phase"], 6)
+        self.assertNotIn("jobs", captured[-1]["values"])
+        self.assertEqual(captured[-1]["values"]["second_attempt"], self.attempt)
+        with self.assertRaisesRegex(TypeError, "不支持运行对象：Job"):
+            driver.world_fixture._encoded(self.jobs)
+
+    def test_phase6_reloads_original_frozen_jobs_for_current_r2(self) -> None:
+        with mock.patch.object(driver.compare, "require_current_candidate", return_value={"revision": 2}) as current, \
+                mock.patch.object(upgrade, "_campaign_jobs", wraps=upgrade._campaign_jobs) as expand:
+            jobs = self.case.revision_candidate_jobs(self.campaign, self.manifest)
+        self.assertEqual(jobs, self.jobs)
+        current.assert_called_once_with(self.campaign, self.manifest, driver.SECOND_CANDIDATE,
+                                        action="revision 原链候选 Job 闭合")
+        expand.assert_called_once_with(self.campaign, self.manifest, "candidate", candidate_id=driver.SECOND_CANDIDATE)
+        # 从 phase6 单独进入原驱动，证明实际 closure 消费重新展开的定义，而非仅测试帮助函数。
+        saved = {"phase": 6, "values": {"campaign": self.campaign, "manifest": self.manifest,
+            "second_root": self.attempt_root, "second_attempt": self.attempt, "second_stage": self.stage,
+            "invalidated": {"next_command": "revision-open"}}}
+        world = {"campaign": self.campaign, "candidate_id": driver.SECOND_CANDIDATE, "revision": 2, "records": []}
+        audit = mock.Mock()
+        audit.report.return_value = {"fixture_only": True}
+        self.case.late_audit = mock.Mock(return_value=audit)
+
+        class CheckpointReached(Exception):
+            pass
+
+        def checkpoint(_case, _cursor, **values):
+            driver.world_fixture._encoded(values)
+            if values.get("phase") == 7:
+                raise CheckpointReached()
+
+        with mock.patch.object(driver.world_fixture, "resume_checkpoint", return_value=saved), \
+                mock.patch.object(driver.world_fixture, "restore_world", return_value=world), \
+                mock.patch.object(driver.world_fixture, "save_world"), \
+                mock.patch.object(driver.world_fixture, "checkpoint", side_effect=checkpoint), \
+                mock.patch.object(driver.compare, "require_current_candidate", return_value={"revision": 2}), \
+                mock.patch.object(driver.provenance, "collect_root_provenance", return_value={"unresolved_roots": [], "precise_total": 0}), \
+                self.assertRaises(CheckpointReached):
+            self.case.run_revision_evaluator_chain()
+        self.assertEqual(audit.check_closure.call_args.kwargs["expected"], [job.job_id for job in self.jobs])
+        self.assertEqual(audit.check_closure.call_args.kwargs["executed"], [row["id"] for row in self.attempt["results"]])
+
+    def test_phase6_rejects_frozen_input_drift_or_noncurrent_revision(self) -> None:
+        with mock.patch.object(driver.compare, "require_current_candidate", return_value={"revision": 1}), \
+                self.assertRaisesRegex(AssertionError, "当前 r2"):
+            self.case.revision_candidate_jobs(self.campaign, self.manifest)
+        with mock.patch.object(driver.compare, "require_current_candidate", side_effect=upgrade.ConfigurationError("当前候选已替代")), \
+                self.assertRaisesRegex(upgrade.ConfigurationError, "当前候选已替代"):
+            self.case.revision_candidate_jobs(self.campaign, self.manifest)
+        saved = copy.deepcopy(self.manifest)
+        saved["jobs"] = [{"id": "被替换的停点任务"}]
+        with mock.patch.object(driver.compare, "require_current_candidate") as current, \
+                self.assertRaisesRegex(AssertionError, "冻结 Campaign"):
+            self.case.revision_candidate_jobs(self.campaign, saved)
+        current.assert_not_called()
+        # 原冻结文件被改动时，原 manifest/Job 读侧失败；不得仅从停点的 Job ID 反推定义。
+        scenario = self.campaign / "inputs/target-scenarios.json"
+        scenario.write_bytes(scenario.read_bytes() + b" ")
+        with mock.patch.object(driver.compare, "require_current_candidate", return_value={"revision": 2}), \
+                self.assertRaises(upgrade.ConfigurationError):
+            self.case.revision_candidate_jobs(self.campaign, self.manifest)
+
+    def test_completed_capture_checkpoint_is_read_only_across_repeated_calls(self) -> None:
+        saved = {"phase": "complete", "campaign": self.campaign,
+                 "attempt_root": self.attempt_root, "attempt": self.attempt}
+        # 产品读取返回明确的短验事实；此处只证明 completed 分支不重派或重写，不冒充整链验收。
+        with mock.patch.object(driver.world_fixture, "resume_checkpoint", return_value=saved), \
+                mock.patch.object(upgrade, "_load_capture_attempt", return_value=(self.attempt_root, self.attempt)) as read_attempt, \
+                mock.patch.object(upgrade, "_load_stage_result", return_value=self.stage) as read_stage, \
+                mock.patch.object(self.case, "prepare_runtime") as prepare, \
+                mock.patch.object(self.case, "source_step") as command, \
+                mock.patch.object(self.case, "seal") as seal, \
+                mock.patch.object(self.case, "client_inputs") as clients, \
+                mock.patch.object(driver.world_fixture, "checkpoint") as checkpoint:
+            for _ in range(2):
+                self.assertEqual(self.case.capture_and_seal(self.campaign), (self.attempt_root, self.attempt, self.stage))
+        self.assertEqual((read_attempt.call_count, read_stage.call_count), (2, 2))
+        for action in (prepare, command, seal, clients, checkpoint):
+            action.assert_not_called()
 
 
 class RevisionOfficialSourceTests(unittest.TestCase):

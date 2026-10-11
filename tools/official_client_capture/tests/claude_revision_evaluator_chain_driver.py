@@ -210,6 +210,17 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         self.assertEqual(stage["attempt"]["path"], (attempt_root / "attempt.json").relative_to(campaign).as_posix())
         return attempt_root, attempt, stage
 
+    def revision_candidate_jobs(self, campaign: Path, manifest: dict[str, Any]) -> list[upgrade.Job]:
+        """Job 不进停点；恢复时由原读侧重验冻结计划及当前 r2，再展开实际定义。"""
+
+        with self.source_context():
+            current_manifest = upgrade.load_campaign_manifest(campaign)
+            self.assertEqual(current_manifest, manifest, "revision 原链的冻结 Campaign 不得被替换")
+            current = compare.require_current_candidate(campaign, current_manifest, SECOND_CANDIDATE,
+                                                        action="revision 原链候选 Job 闭合")
+            self.assertEqual(current["revision"], 2, "候选 Job 必须属于当前 r2")
+            return upgrade._campaign_jobs(campaign, current_manifest, "candidate", candidate_id=SECOND_CANDIDATE)
+
     def gate_receipt(self, world: dict[str, Any], name: str, *, failed_gate: str | None = None) -> str:
         """当前 revision 的门禁输入采用可独立重放的环境合同；原 reader 不打桩。
 
@@ -652,7 +663,6 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         second_root = values.get('second_root')
         second_attempt = values.get('second_attempt')
         second_stage = values.get('second_stage')
-        jobs = values.get('jobs')
         r2_provenance = values.get('r2_provenance')
         counted = values.get('counted')
         roots = values.get('roots')
@@ -724,17 +734,17 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
                 second_root, second_attempt, second_stage = self.capture_and_seal(campaign)
                 self.assertEqual(self.boundary([Path(path) for path in first_snapshot]), first_snapshot)
                 self.assertEqual(second_attempt["identity"]["candidate_revision"], 2)
-                jobs = upgrade._campaign_jobs(campaign, manifest, "candidate", candidate_id=SECOND_CANDIDATE)
-                self.assertCountEqual([row["id"] for row in second_attempt["results"]], [job.job_id for job in jobs])
                 self.assertTrue(all(row["disposition"] == "executed" for row in second_attempt["results"]))
                 self.assertNotEqual(first_stage["store"]["validation_attempt_ref"], second_stage["store"]["validation_attempt_ref"])
                 world_fixture.refresh_world(self, context, candidate_id=SECOND_CANDIDATE, revision=2)
-                values.update(second_root=second_root, second_attempt=second_attempt, second_stage=second_stage, jobs=jobs)
+                values.update(second_root=second_root, second_attempt=second_attempt, second_stage=second_stage)
                 phase = 6
                 if context is not None:
                     world_fixture.save_world(cursor, context)
                 world_fixture.checkpoint(self, cursor, phase=phase, values=values, campaign=campaign)
             if phase == 6:
+                jobs = self.revision_candidate_jobs(campaign, manifest)
+                self.assertCountEqual([row["id"] for row in second_attempt["results"]], [job.job_id for job in jobs])
                 source_audit.check_trusted()
                 source_audit.check_closure(executed=[row['id'] for row in second_attempt['results']], expected=[job.job_id for job in jobs],
                     what='源码改变后 r2 的完整候选 Job',
