@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import copy
+import contextlib
+import io
 import dataclasses
 import json
 import shutil
@@ -59,6 +61,60 @@ class RecordedFullPreparationTests(unittest.TestCase):
         self.assertFalse(origin["model_scope"]["formal_model_scope_certified"])
         for path, expected in originals.items():
             self.assertEqual(source.binding(path), expected)
+        # 同一判据补核后继的完整主模型选择；原九 Job 输入仍保持原字节语义。
+        complete_data = self.data / "main-complete"
+        vc1._create_world_roots(complete_data)
+        complete = driver._inputs(complete_data, complete_main_model=True)
+        complete_review = driver.validate_frozen_inputs(complete_data, complete)
+        self.assertEqual(complete["recorded_control_scope"], driver.COMPLETE_MAIN_MODEL_SCOPE)
+        self.assertEqual((len(complete["jobs"]), len(complete["candidate_jobs"])), (12, 12))
+        self.assertEqual({side: sum(map(len, complete[side].values())) for side in ("jobs", "candidate_jobs")},
+                         {"jobs": 79, "candidate_jobs": 79})
+        self.assertEqual(complete_review["models"]["ordered"], ["claude-sonnet-5"])
+        self.assertEqual(len(source.read(source.bound(complete["bindings"]["rules"], root=complete_data))["required_rules"]), 40)
+        self.assertNotIn("official-model-capability-claude-opus-5", complete["jobs"])
+        self.assertNotIn("official-model-capability-claude-fable-5", complete["jobs"])
+
+        # 完整模板只做集合预检的通过对照；此报告不运行断言、不授予版本认证。
+        from tools.official_client_capture import claude_rule_assertion
+        from tools.official_client_capture import claude_upgrade_plan as plan
+        from tools.official_client_capture import claude_upgrade_probe_preflight as preflight
+
+        profile = claude_rule_assertion.load_profile(
+            vc1.REPOSITORY / "tools/official_client_capture/claude_rule_expectations_2_1_226.json",
+            expected_claude_version=source.VERSION, verify_frozen_digest=True,
+        )
+        complete = source.read(plan.scenario_manifest_path("2.1.285"))
+        complete_report = preflight.probe_coverage_preflight(profile, complete)
+        self.assertEqual(complete_report["status"], "passed")
+        self.assertEqual(complete_report["missing_probe_ids"], {"official": [], "candidate": []})
+
+        # 原CLI完整路径必须接上冻结前校验；局部VC-3不冒充完整40规则资格。
+        for through in ("VC-3", "VC-6"):
+            with self.subTest(through=through), mock.patch.object(vc1, "namespace_main", return_value={"status": "仅核接线"}) as namespace, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(driver.main(["--data", str(self.data), "--recorded", "/fixture/recorded", "--freeze", "/fixture/freeze",
+                                              "--parent-namespaces", "{}", "--through", through]), 0)
+                self.assertIs(namespace.call_args.kwargs["input_verifier"],
+                              driver._full_vc5_input_verifier if through == "VC-6" else None)
+        # 57个来源的局部控制资格保留，但完整40规则必须在快照与freeze之前一次报告缺失实验。
+        bindings_before = copy.deepcopy(inputs["bindings"])
+        with self.assertRaises(preflight.ProbeCoverageError) as failure:
+            driver._full_vc5_input_verifier(self.data, inputs)
+        report = failure.exception.report
+        self.assertEqual((report["rule_count"], report["files_written"], report["live_request_count"]), (40, 0, 0))
+        for side in ("official", "candidate"):
+            self.assertEqual((len(report["required_probe_ids"][side]), len(report["planned_probe_ids"][side]),
+                              len(report["missing_probe_ids"][side])), (71, 57, 22))
+        conn021 = next(row for row in report["rules"] if row["rule_id"] == "SPEC-CONN-021")
+        self.assertEqual({side: len(conn021["missing_probe_ids"][side]) for side in ("official", "candidate")},
+                         {"official": 11, "candidate": 11})
+        self.assertEqual(inputs["bindings"], bindings_before)
+        self.assertFalse((self.data / "control/snapshot").exists())
+        self.assertFalse((self.data / "official/claude-code-2.1.226").exists())
+        for path, expected in originals.items():
+            self.assertEqual(source.binding(path), expected)
+
 
     def test_default_vc1_still_uses_original_seven_complete_jobs(self) -> None:
         inputs = vc1._inputs(self.data)
@@ -84,6 +140,10 @@ class RecordedFullPreparationTests(unittest.TestCase):
 
     def test_review_bytes_and_actual_mapping_drift_are_rejected(self) -> None:
         inputs = driver._inputs(self.data)
+        changed_scope = copy.deepcopy(inputs)
+        changed_scope["recorded_control_scope"] = "unknown"
+        with self.assertRaisesRegex(replay.ReplayError, "来源选择合同未知"):
+            driver.validate_frozen_inputs(self.data, changed_scope)
         changed = copy.deepcopy(inputs)
         changed["candidate_jobs"]["candidate-generation-params"].pop()
         with self.assertRaisesRegex(replay.ReplayError, "Job 映射漂移"):
@@ -127,6 +187,22 @@ class RecordedFullPreparationTests(unittest.TestCase):
                                     for job in document["capture_jobs"] if job["phase"] == "candidate"}
         with self.assertRaisesRegex(replay.ReplayError, "candidate 冻结审核策略缺少正式 required probes"):
             driver.validate_frozen_inputs(self.data, inputs)
+        from tools.official_client_capture import claude_rule_assertion
+        from tools.official_client_capture import claude_upgrade_probe_preflight as preflight
+
+        profile = claude_rule_assertion.load_profile(
+            vc1.REPOSITORY / "tools/official_client_capture/claude_rule_expectations_2_1_226.json",
+            expected_claude_version=source.VERSION, verify_frozen_digest=True,
+        )
+        # 上述thinking探测仍由Wire required合同检查；另选画像确实引用的baseline验证分侧及reference。
+        comparison_document = copy.deepcopy(document)
+        for job in comparison_document["capture_jobs"]:
+            if job["phase"] == "candidate":
+                job["steps"] = [step for step in job["steps"] if step["probe_id"] != "v4-replay-baseline"]
+        report = preflight.probe_coverage_preflight(profile, comparison_document)
+        self.assertIn("v4-replay-baseline", report["missing_probe_ids"]["candidate"])
+        self.assertNotIn("v4-replay-baseline", report["missing_probe_ids"]["official"])
+        self.assertTrue(any(row["selector"] == "reference" for row in report["problems"]))
 
     def test_real_all_57_registered_sources_pass_v5_and_exact_origin_bindings(self) -> None:
         from tools.official_client_capture.capturelib import claude_fw_f_v5 as v5
@@ -205,7 +281,7 @@ class RecordedFullPreparationTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 23, "真实外部边界 stdout 标记\n", "真实外部边界 stderr 标记\n")
 
         environment = {"CLAUDE_2_1_226_RELAY_FIXTURE": "/fixture/relay", "CLAUDE_2_1_226_FREEZE_FIXTURE": "/fixture/freeze",
-                       shell.RECORD_DIR_ENV: original_temp, shell.RECORDS_ENV: ""}
+                       shell.RECORD_DIR_ENV: str(self.data / "external-records"), shell.RECORDS_ENV: ""}
         with mock.patch.dict(os.environ, environment), mock.patch.object(shell.platform, "system", return_value="Linux"), \
                 mock.patch.object(shell.platform, "machine", return_value="aarch64"), \
                 mock.patch.object(shell.os, "geteuid", return_value=0, create=True), \
@@ -218,6 +294,7 @@ class RecordedFullPreparationTests(unittest.TestCase):
         command = observed["argv"]
         self.assertIn(driver.ACTIVATION_MODULE, command)
         self.assertEqual(command[command.index("--through") + 1], "VC-6")
+        self.assertIn("--complete-main-model", command)
         self.assertEqual(Path(command[command.index("--data") + 1]), observed["world"] / "staging/data")
         record = source.read(observed["world"] / "record.json")
         self.assertEqual(record["status"], "unverified")
@@ -228,6 +305,117 @@ class RecordedFullPreparationTests(unittest.TestCase):
         self.assertEqual(source.bound(record["stderr"]).read_text(encoding="utf-8"), "真实外部边界 stderr 标记\n")
         self.assertEqual(tempfile.gettempdir(), original_temp)
         self.assertNotIn("_run_pending_full_validation", unittest.defaultTestLoader.getTestCaseNames(shell.ClaudeRecordedVC1ChainTests))
+
+    def test_successor_completed_action_reads_original_files_without_repeating_producer(self) -> None:
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        origin = source.write(self.data / "control/origin.json", {"fixture_only": True})
+        record_root = self.data / "private-stops"
+        record_root.mkdir()
+        artifact = source.write(self.data / "control/input.json", {"value": "原字节"})
+        action = mock.Mock(return_value={"source": source.binding(artifact)})
+        verified = mock.Mock()
+        token = driver._SUCCESSOR.set({"data": self.data, "source_state": source.binding(origin)})
+        self.addCleanup(driver._SUCCESSOR.reset, token)
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}):
+            first = driver._control_step("input", action, verify=verified, intent={"choice": "原选择"})
+            self.assertEqual(driver._control_step("input", action, verify=verified, intent={"choice": "原选择"}), first)
+            self.assertEqual((action.call_count, verified.call_count), (1, 2))
+            with self.assertRaisesRegex(replay.ReplayError, "停点意图漂移"):
+                driver._control_step("input", action, intent={"choice": "另一次选择"})
+            artifact.write_text('{"value":"改变"}\n', encoding="utf-8")
+            with self.assertRaisesRegex(replay.ReplayError, "绑定摘要或字节数漂移"):
+                driver._control_step("input", action, intent={"choice": "原选择"})
+        self.assertEqual(action.call_count, 1)
+
+    def test_successor_partial_input_is_preserved_and_never_rebuilt(self) -> None:
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        origin = source.write(self.data / "control/origin.json", {"fixture_only": True})
+        record_root = self.data / "private-stops"
+        record_root.mkdir()
+        token = driver._SUCCESSOR.set({"data": self.data, "source_state": source.binding(origin)})
+        self.addCleanup(driver._SUCCESSOR.reset, token)
+        partial = self.data / "control/partial.json"
+        def fail_after_real_input():
+            source.write(partial, {"fixture_only": True, "incomplete": True})
+            raise RuntimeError("真实边界失败")
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}):
+            with self.assertRaisesRegex(RuntimeError, "真实边界失败"):
+                driver._control_step("inputs", fail_after_real_input)
+            original = source.binding(partial)
+            with self.assertRaisesRegex(replay.ReplayError, "保留半产物且禁止猜测重建"):
+                driver._control_step("inputs", fail_after_real_input)
+            self.assertEqual(source.binding(partial), original)
+
+    def test_real_batch_stop_reuses_original_commit_parent_and_results(self) -> None:
+        """仅派发一个零请求分类草案；真实COMMIT、父run与结果验真，复用不再派批次。"""
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_capture.tests import test_claude_upgrade_batch as batches
+
+        case = batches.AtomicBatchChainTests(methodName="runTest")
+        case.setUpClass()
+        self.addCleanup(case.tearDownClass)
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        campaign = case.campaign = case.build_batch_campaign()
+        action = case.classify_action("vc2-short-audit", ["classify", "--campaign-dir", campaign])
+        outcome = case.assert_batch_passed(case.dispatch(campaign, "VC-2", 2, [action]), 2, "VC-2")
+        case.assert_zero_requests()
+        origin = source.write(self.data / "control/batch-origin.json", {"fixture_only": True})
+        record_root = self.data / "batch-stops"
+        record_root.mkdir()
+        token = driver._SUCCESSOR.set({"data": self.data, "source_state": source.binding(origin)})
+        self.addCleanup(driver._SUCCESSOR.reset, token)
+        producers = []
+        def produced():
+            producers.append(outcome["campaign_run"]["run_dir"])
+            return {"batches": [outcome]}
+        def verify(result):
+            driver._verify_stage_batches(campaign, result)
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}):
+            first = driver._control_step("real-stage", produced, verify=verify)
+            self.assertEqual(driver._control_step("real-stage", produced, verify=verify), first)
+            self.assertEqual(producers, [outcome["campaign_run"]["run_dir"]])
+            changed = copy.deepcopy(first)
+            changed["batches"][0]["campaign_run"]["actions"][0]["returncode"] = 7
+            with self.assertRaisesRegex(replay.ReplayError, "COMMIT／父run"):
+                driver._verify_completed_stage(campaign, ("VC-2",), changed)
+            with self.assertRaisesRegex(replay.ReplayError, "缺原真实批次结果"):
+                driver._verify_completed_stage(campaign, ("VC-2",), {"batches": []})
+            commit = upgrade._staging_commit_path(campaign, 2, "VC-2")
+            commit.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(upgrade.ConfigurationError, "COMMIT 无法校验"):
+                # 已记录complete仍须重读正式COMMIT，不能因私有完成字样跳过其摘要验证。
+                driver._control_step("real-stage", produced, verify=verify)
+        self.assertEqual(len(producers), 1)
+
+    def test_complete_main_model_cli_binds_intent_roots_and_original_stop(self) -> None:
+        target = self.data.with_name("successor")
+        predecessor = self.data.with_name("predecessor")
+        intent = {"schema_version": driver.BUDGET_CARRY_INTENT_SCHEMA, "data_root": str(target),
+                  "predecessor_data": str(predecessor), "predecessor_campaign_id": "original-campaign",
+                  "expected_timing_plan_sha256": "a" * 64, "expected_timing_head": {"sequence": 11, "sha256": "b" * 64},
+                  "expected_project_plan_sha256": "c" * 64, "expected_project_head": {"sequence": 19, "sha256": "d" * 64},
+                  "preserved_bindings": {"store_campaign": {}, "batch19_commit": {}}}
+        path = source.write(self.data / "external-intent.json", intent)
+        binding = source.binding(path)
+        argv = ["--data", str(target), "--recorded", "/fixture/recorded", "--freeze", "/fixture/freeze",
+                "--parent-namespaces", "{}", "--through", "VC-6", "--complete-main-model",
+                "--budget-carry-intent", str(path), "--budget-carry-intent-sha256", binding["sha256"]]
+        with mock.patch.object(source, "require_isolation"), \
+                mock.patch.object(vc1, "namespace_main", return_value={"status": "仅核参数接线"}) as namespace, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(driver.main(argv), 0)
+            self.assertEqual(namespace.call_args.kwargs["extra_readonly_roots"], (predecessor,))
+            self.assertEqual(namespace.call_args.kwargs["initialization_name"], "recorded-full-initialization")
+            self.assertIs(namespace.call_args.kwargs["input_verifier"], driver._full_vc5_input_verifier)
+            self.assertEqual(driver.main(argv), 0)
+            target.mkdir()
+            self.assertEqual(driver.main([*argv[:-1], "f" * 64]), 1)
+        self.assertEqual(source.binding(path), binding)
+        changed = source.write(self.data / "extra-intent.json", {**intent, "new_contract": True})
+        with self.assertRaisesRegex(replay.ReplayError, "字段或新数据根不闭合"):
+            driver._carry_intent(str(changed), source.binding(changed)["sha256"], target)
 
 
 if __name__ == "__main__":

@@ -890,13 +890,21 @@ def bind_capture_manifest(
 
 
 def validate_evaluation_manifest(manifest: Any, *, expected_claude_version: str) -> dict[str, Any]:
+    from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+    is_recorded = isinstance(manifest, Mapping) and manifest.get("schema_version") == recorded.EVALUATION_SCHEMA
     payload = _require_exact_keys(
         manifest,
-        required={"schema_version", "claude_version", "capture_id", "status", "artifacts"},
+        required={"schema_version", "claude_version", "capture_id", "status", "artifacts", *({"recorded_evaluation"} if is_recorded else set())},
         description="评估用 manifest",
     )
-    if payload["schema_version"] != EVALUATION_MANIFEST_SCHEMA_VERSION:
+    if payload["schema_version"] not in {EVALUATION_MANIFEST_SCHEMA_VERSION, recorded.EVALUATION_SCHEMA}:
         raise AssertionConfigurationError("评估用 manifest schema_version 不受支持")
+    if is_recorded:
+        try:
+            recorded.validate_recorded_shape(payload)
+        except recorded.RecordedEvaluationError as error:
+            raise AssertionConfigurationError(str(error)) from error
     if payload["claude_version"] != expected_claude_version:
         raise AssertionConfigurationError(f"评估用 manifest 版本 {payload['claude_version']!r} 不是 {expected_claude_version!r}")
     if payload["status"] != "complete":
@@ -1571,6 +1579,17 @@ def _lifecycle(endpoints: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def verify_evaluation_sources(manifest: Mapping[str, Any], evidence_root: Path) -> dict[str, Any]:
+    """seal 后各消费端共用的录制来源验真；不把生成时的校验当成后续授权。"""
+
+    from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+    try:
+        return recorded.verify_recorded_manifest(manifest, Path(evidence_root))
+    except recorded.RecordedEvaluationError as error:
+        raise AssertionConfigurationError(str(error)) from error
+
+
 def observations_from_manifest(manifest: Mapping[str, Any], evidence_root: Path) -> list[Observation]:
     """评估用 manifest（已校验）→ 记录；每个证据文件读前核对绑定。
 
@@ -1578,6 +1597,7 @@ def observations_from_manifest(manifest: Mapping[str, Any], evidence_root: Path)
     排出 probe 内请求序（与 FW-F 取证工具的口径相同），最后产出逐请求／响应／连接／干预记录与每个 probe 的聚合记录。
     """
 
+    recorded_views = verify_evaluation_sources(manifest, evidence_root)
     artifacts = list(manifest["artifacts"])
     contents: dict[str, bytes] = {}
     files: dict[str, Path] = {}
@@ -1611,13 +1631,34 @@ def observations_from_manifest(manifest: Mapping[str, Any], evidence_root: Path)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise AssertionConfigurationError(f"{description} {path} 不是合法 JSON") from error
 
+    if not recorded_views:
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+        for artifact in artifacts:
+            if artifact["kind"] == "relay_manifest" and load(artifact["path"], "中继清单").get("fixture_projection", {}).get(recorded.PROBE_KEY) is not None:
+                raise AssertionConfigurationError("显式分域来源不得降级成 v1 评估语义")
+
     by_directory: dict[str, list[Mapping[str, Any]]] = {}
     for artifact in artifacts:
-        by_directory.setdefault(_probe_directory(artifact["path"]), []).append(artifact)
+        logical = next((directory for directory in recorded_views if artifact["path"].startswith(directory + "/")), None)
+        by_directory.setdefault(logical or _probe_directory(artifact["path"]), []).append(artifact)
     for directory, members in sorted(by_directory.items()):
-        index_artifact = next((item for item in members if item["kind"] == "relay_index"), None)
+        recorded_view = recorded_views.get(directory)
+        index_artifact = next((item for item in members if item["kind"] == "relay_index"
+                               and (recorded_view is None or item["path"] == directory + "/relay/relay.json")), None)
         index = _relay_index(load(index_artifact["path"], "中继连接索引"), f"中继连接索引 {index_artifact['path']}") if index_artifact else None
         index_connections: dict[int, dict[str, Any]] = index["connections"] if index else {}
+        connection_indexes = {identifier: index_artifact for identifier in index_connections}
+        if recorded_view is not None:
+            from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+            shared_ids = {row["connection_id"] for row in recorded_view["proof"]["connections"] if row["domain"] == "client_shared"}
+            original_artifact = next((item for item in members if item["kind"] == "relay_index"
+                                      and item["path"] == directory + "/" + recorded.ORIGINAL_DIRECTORY + "/relay/relay.json"), None)
+            if original_artifact is not None:
+                original_index = _relay_index(load(original_artifact["path"], "官方共有连接索引"), "官方共有连接索引")
+                index_connections.update({identifier: facts for identifier, facts in original_index["connections"].items() if identifier in shared_ids})
+                connection_indexes.update({identifier: original_artifact for identifier in shared_ids})
         receipt_artifact = next((item for item in members if item["kind"] == "relay_manifest"), None)
         receipt = _runtime_receipt(load(receipt_artifact["path"], "中继清单"), f"中继清单 {receipt_artifact['path']}") if receipt_artifact else None
         probe_env = dict(receipt["injected_probe_env"]) if receipt else None
@@ -1653,6 +1694,7 @@ def observations_from_manifest(manifest: Mapping[str, Any], evidence_root: Path)
                         "response": responses[position] if position < len(responses) else None,
                         "response_artifact": response_artifact,
                         "connection": facts,
+                        "index_artifact": connection_indexes.get(connection_id),
                         "intervention": related[position] if position < len(related) else None,
                     }
                 )
@@ -1689,7 +1731,9 @@ def observations_from_manifest(manifest: Mapping[str, Any], evidence_root: Path)
                     ),
                     **{key: facts.get(key) for key in ("valid", "sni", "client_alpn", "client_alpn_offer", "upstream_alpn", "opened_at_unix_ms", "closed_at_unix_ms")},
                 },
-                [artifact["path"], *(source for source, _record in related), *([index_artifact["path"]] if index_artifact else []), *([response_artifact["path"]] if response_artifact else [])],
+                [artifact["path"], *(source for source, _record in related),
+                 *([connection_indexes[connection_id]["path"]] if connection_indexes.get(connection_id) else []),
+                 *([response_artifact["path"]] if response_artifact else [])],
             )
         parsed.sort(
             key=lambda item: (
@@ -1751,8 +1795,8 @@ def observations_from_manifest(manifest: Mapping[str, Any], evidence_root: Path)
             evidence = [item["artifact"]["path"]]
             if item["response_artifact"] is not None and response is not None:
                 evidence.append(item["response_artifact"]["path"])
-            if index_artifact is not None and item["connection"]:
-                evidence.append(index_artifact["path"])
+            if item["index_artifact"] is not None and item["connection"]:
+                evidence.append(item["index_artifact"]["path"])
             if receipt_artifact is not None and probe_env is not None:
                 evidence.append(receipt_artifact["path"])
             add(f"{item['artifact']['path']}#request-{item['position'] + 1}", item["artifact"], "claude_http_request", data, evidence)
@@ -1811,6 +1855,8 @@ def observations_from_manifest(manifest: Mapping[str, Any], evidence_root: Path)
             "production_forwarding_enabled": index["production_forwarding_enabled"] if index else None,
             "receipt": {key: receipt.get(key) for key in RECEIPT_RUN_FIELDS} if receipt else None,
         }
+        if recorded_view is not None:
+            run.update(recorded.QUALIFICATIONS, source_scope="recorded_gateway_plus_official_client_shared")
         add(f"{directory}#run", anchor, "probe_run", run, [item["path"] for item in members], scenario_ids=scenario_union)
         if receipt_artifact is not None:
             add(f"{receipt_artifact['path']}#receipt", receipt_artifact, "runtime_receipt", receipt, [receipt_artifact["path"]])
@@ -1860,11 +1906,25 @@ def project_capture_manifest(
 ) -> dict[str, Any]:
     """per-rule 投影：只留与规则场景相交的 artifact（条目逐字、按原顺序），并逐个核对绑定。"""
 
-    del evidence_root  # 投影只按 manifest 条目缩小；证据核对在 checker 解析投影时做（与 Codex 同一分工）
     payload = validate_evaluation_manifest(dict(manifest), expected_claude_version=expected_claude_version)
     rule = _profile_rule(profile, rule_id)
     scenarios = set(rule["scenario_ids"])
     artifacts = [dict(item) for item in payload["artifacts"] if scenarios & set(item["scenario_ids"])]
+    from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+    recorded_evaluation = None
+    if payload["schema_version"] == recorded.EVALUATION_SCHEMA:
+        try:
+            views = recorded.verify_recorded_manifest(payload, Path(evidence_root))
+            recorded.verify_profile(payload, profile, Path(evidence_root))
+        except recorded.RecordedEvaluationError as error:
+            raise AssertionConfigurationError(str(error)) from error
+        # 同一逻辑 probe 的端点序与分母不能因场景投影丢掉另一域；只裁掉完整不相关的 probe。
+        selected = {directory for directory in views if any(item["path"].startswith(directory + "/") for item in artifacts)}
+        artifacts = [dict(item) for item in payload["artifacts"] if any(item["path"].startswith(directory + "/") for directory in selected)]
+        recorded_evaluation = {"policy": payload["recorded_evaluation"]["policy"],
+                               "probes": [item for item in payload["recorded_evaluation"]["probes"]
+                                          if (Path(item["path"]).parent.relative_to(evidence_root).as_posix() in selected)]}
     for scenario_id in scenarios:
         full = {item["kind"] for item in payload["artifacts"] if scenario_id in item["scenario_ids"]}
         projected = {item["kind"] for item in artifacts if scenario_id in item["scenario_ids"]}
@@ -1876,6 +1936,7 @@ def project_capture_manifest(
         "capture_id": payload["capture_id"],
         "status": payload["status"],
         "artifacts": artifacts,
+        **({"recorded_evaluation": recorded_evaluation} if recorded_evaluation is not None else {}),
     }
 
 
@@ -2522,6 +2583,12 @@ def main(argv: Iterable[str] | None = None) -> int:
             )
             manifest_path = args.capture_manifest_projection
         manifest, observations = load_observations(manifest_path, args.evidence_root, args.expected_claude_version)
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+        try:
+            recorded.verify_profile(manifest, profile, args.evidence_root)
+        except recorded.RecordedEvaluationError as error:
+            raise AssertionConfigurationError(str(error)) from error
         checks = evaluate_rule(profile, args.rule_id, observations, manifest, args.side)
     except (AssertionConfigurationError, OSError, ValueError) as error:
         # 投影已核对通过时保留两项摘要（与 Codex 同一口径）：builder 据此把这次失败记进 checkpoint，而不是当成投影错位。

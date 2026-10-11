@@ -663,5 +663,271 @@ class RecordedContinuationContractTests(unittest.TestCase):
             self.assertEqual(source.bound(record["stderr"]).read_text(), "完整 CLI 原始失败")
 
 
+class RecordedReadonlyRootsTests(unittest.TestCase):
+    """只核隔离命令与来源坐标的短边界；真正只读挂载由 ARM64 隔离执行再验。"""
+
+    def setUp(self) -> None:
+        from tools.official_client_capture.tests import claude_vc1_recorded_chain_driver as driver
+
+        self.driver = driver
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.data = self.root / "successor/staging/data"
+        self.recorded = self.root / "recorded/receipt.json"
+        self.recorded.parent.mkdir(mode=0o700)
+        self.freeze = self.root / "freeze"
+        self.freeze.mkdir(mode=0o700)
+        self.original = self.root / "original/staging/data"
+        self.original.mkdir(parents=True, mode=0o700)
+        self.arguments = SimpleNamespace(data=str(self.data), recorded=str(self.recorded), freeze=str(self.freeze),
+                                         parent_namespaces=json.dumps({"mnt": "ns:[parent-mnt]", "net": "ns:[parent-net]"}))
+
+    def test_default_roots_are_unchanged(self) -> None:
+        self.assertEqual(self.driver._readonly_roots(self.arguments, ()),
+                         [str(self.recorded.parent), str(self.freeze)])
+
+    def test_original_is_bound_readonly_before_any_new_input_is_created(self) -> None:
+        with mock.patch.object(source, "require_isolation"), \
+                mock.patch.object(self.driver.subprocess, "run") as command, \
+                mock.patch.object(self.driver, "_create_world_roots", side_effect=RuntimeError("短验停在目录创建前")):
+            with self.assertRaisesRegex(RuntimeError, "短验停在目录创建前"):
+                self.driver.namespace_main(self.arguments, extra_readonly_roots=(self.original,))
+        expected = [mock.call(["mount", "--make-rprivate", "/"], check=True)]
+        for path in (self.recorded.parent, self.freeze, self.original):
+            expected.extend((mock.call(["mount", "--bind", str(path), str(path)], check=True),
+                             mock.call(["mount", "-o", "remount,bind,ro", str(path)], check=True)))
+        self.assertEqual(command.call_args_list, expected)
+        self.assertFalse(self.data.exists())
+
+    def test_invalid_extra_root_fails_before_mount_or_new_directory(self) -> None:
+        linked = self.root / "linked/staging/data"
+        linked.parent.mkdir(parents=True, mode=0o700)
+        linked.symlink_to(self.original, target_is_directory=True)
+        overlapping = self.freeze / "staging/data"
+        overlapping.mkdir(parents=True, mode=0o700)
+        with mock.patch.object(source, "require_isolation"), mock.patch.object(self.driver.subprocess, "run") as command:
+            for roots in ((Path("relative/staging/data"),), (linked,), (overlapping,), (self.original, self.original)):
+                with self.subTest(roots=roots), self.assertRaisesRegex(replay.ReplayError, "附加只读来源"):
+                    self.driver.namespace_main(self.arguments, extra_readonly_roots=roots)
+            command.assert_not_called()
+        self.assertFalse(self.data.exists())
+
+
+class RecordedBudgetCarryTests(unittest.TestCase):
+    """真实两账短验：原成本、原请求键和批准延期必须消费；不运行录制长链。"""
+
+    def setUp(self) -> None:
+        from datetime import datetime, timedelta, timezone
+        from tools.official_client_capture import codex_upgrade_project_ledger as project
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+        from tools.official_client_capture.tests import claude_recorded_budget_carry as carry
+
+        self.project, self.timing, self.carry = project, timing, carry
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.old, self.data = self.root / "original/staging/data", self.root / "successor/staging/data"
+        self.observed = datetime.now(timezone.utc)
+        self.started = self.observed - timedelta(minutes=120)
+        self.old.mkdir(parents=True, mode=0o700)
+        self.data.mkdir(parents=True, mode=0o700)
+        self.project_root = self.old / project.ledger_dir_name("claude")
+        project.create_project_ledger(self.project_root, project_id="recorded-fixture-original",
+            absolute_deadline_utc=(self.observed + timedelta(days=1)).isoformat(), deadline_approved_by="fixture",
+            estimation_policy="none", estimation_policy_approved_by="fixture", fixture_only=True,
+            initial_identity_keys=["a" * 64, "b" * 64], initial_root_cause_counts={"rc1-fixture-original": 1},
+            started_at_utc=self.started.isoformat(), client="claude")
+        self.campaign_id = "recorded-fixture-formal"
+        self.campaign = self.old / "evidence/campaigns" / self.campaign_id
+        self.campaign.mkdir(parents=True, mode=0o700)
+        self.time_root = self.old / "control/timing"
+        self.time_root.parent.mkdir(mode=0o700)
+        timing.create_ledger(self.time_root, upgrade_id="recorded-fixture-upgrade", baseline_version="2.1.225",
+            target_version=source.VERSION, campaign_purpose="validation_only", evidence_decision="recapture",
+            started_at_utc=self.started.isoformat(), client="claude")
+        source.write(self.campaign / "campaign.json", {"fixture_only": True,
+            "control_receipts": {"upgrade_timing": {"ledger_dir": str(self.time_root),
+                "ledger_plan_sha256": source.binding(self.time_root / "ledger.json")["sha256"]}}})
+        project.append_project_event(self.project_root, operation_id="register:recorded-fixture-formal",
+            event_type="campaign_registered", source_batch_sha256="f" * 64, recorded_at_utc=self.started.isoformat(),
+            payload={"campaign_id": self.campaign_id, "campaign_dir": str(self.campaign), "client": "claude",
+                "campaign_mode": "formal", "target_version": source.VERSION, "registration_batch_sha256": "f" * 64,
+                "deadline_at_utc": (self.started + timedelta(minutes=360)).isoformat()})
+        for index, phase in enumerate(("VC-0", "VC-1", "VC-2", "VC-3", "VC-4")):
+            moment = self.started + timedelta(minutes=index)
+            if phase == "VC-4":
+                timing.append_event(self.time_root, event_id="revision-one", phase=phase, event_type="stage_revision",
+                    revision=1, candidate_id="fixture-candidate", revision_commit_sha256="d" * 64,
+                    recorded_at_utc=moment.isoformat())
+            if phase != "VC-0":
+                timing.append_event(self.time_root, event_id=phase + "-started", phase=phase,
+                    event_type="stage_started", recorded_at_utc=moment.isoformat())
+            timing.append_event(self.time_root, event_id=phase + "-completed", phase=phase,
+                event_type="stage_completed", recorded_at_utc=(moment + timedelta(minutes=1)).isoformat())
+        timing.append_event(self.time_root, event_id="VC-5-started", phase="VC-5", event_type="stage_started",
+            recorded_at_utc=(self.started + timedelta(minutes=5)).isoformat())
+        store = source.write(self.campaign / "control-store/campaigns" / (self.campaign_id + ".json"), {"fixture_only": True})
+        commit = source.write(self.campaign / "control/vc/batch-000019/COMMIT", {"fixture_only": True, "sequence": 19})
+        self.preserved = {"store_campaign": source.binding(store), "batch19_commit": source.binding(commit)}
+        self.path = self.data / "control/recorded-budget-carry.json"
+
+    def _head(self) -> dict:
+        plan, _ = self.project._load_plan(self.project_root)
+        return self.project._replay(self.project_root, plan, self.project._load_events(self.project_root), rebuild_cache=False)
+
+    def _create(self, observed=None) -> dict:
+        observed = observed or self.observed
+        time_head = self.timing.inspect_ledger(self.time_root, now=observed.isoformat())
+        head = self._head()
+        return self.carry.create(self.path, data_root=self.data, predecessor_data=self.old,
+            predecessor_campaign_id=self.campaign_id, expected_timing_plan_sha256=source.binding(self.time_root / "ledger.json")["sha256"],
+            expected_timing_head={"sequence": time_head["head_sequence"], "sha256": time_head["head_sha256"]},
+            expected_project_plan_sha256=source.binding(self.project_root / "plan.json")["sha256"],
+            expected_project_head={"sequence": head["sequence"], "sha256": head["head_sha256"]},
+            preserved_bindings=self.preserved, now=observed)
+
+    def _ledgers(self, binding: dict, observed=None) -> dict:
+        return self.carry.create_ledgers(self.data, carry_binding=binding, upgrade_id="fixture-successor",
+            baseline_version="2.1.225", target_version=source.VERSION, now=observed or self.observed)
+
+    def _extension(self, scope: str, observed, *, commit: bool = True) -> None:
+        from datetime import timedelta
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+
+        time_head = self.timing.inspect_ledger(self.time_root, now=observed.isoformat())
+        head = self._head()
+        preview = {"schema_version": artifacts.DEADLINE_EXTENSION_PREVIEW_SCHEMA,
+            "campaign_id": self.campaign_id, "scope": scope, "phase": "VC-5" if scope == "stage" else None,
+            "original_deadline_at_utc": time_head["stage_deadline_at_utc" if scope == "stage" else "total_deadline_at_utc"],
+            "new_deadline_at_utc": (observed + timedelta(minutes=90)).isoformat(), "reason": "明确的录制fixture延期测试",
+            "project_ledger_path": str(self.project_root),
+            "project_ledger_head": {"sequence": head["sequence"], "sha256": head["head_sha256"]},
+            "campaign_ledger_head": {"sequence": time_head["head_sequence"], "sha256": time_head["head_sha256"]}}
+        preview["review_sha256"] = artifacts.digest(preview)
+        extension = {**preview, "schema_version": artifacts.DEADLINE_EXTENSION_SCHEMA,
+                     "approved_by": "fixture", "approved_at_utc": observed.isoformat()}
+        extension["receipt_sha256"] = artifacts.digest(extension)
+        operation = "deadline-extended-" + preview["review_sha256"]
+        self.project.append_project_event(self.project_root, operation_id=operation, event_type="deadline_extended",
+            payload={"extension": extension}, source_batch_sha256=None, recorded_at_utc=observed.isoformat())
+        if commit:
+            self.timing.append_event(self.time_root, event_id=operation, phase="VC-5", event_type="deadline_extended",
+                deadline_control=extension, recorded_at_utc=observed.isoformat())
+            event, raw = self.timing._load_events(self.time_root)[-1]
+            self.project.append_project_event(self.project_root, operation_id="deadline-extension-committed-" + preview["review_sha256"],
+                event_type="deadline_extension_committed", source_batch_sha256=None, recorded_at_utc=observed.isoformat(),
+                payload={"receipt_sha256": extension["receipt_sha256"],
+                    "campaign_event": {"sequence": event["sequence"], "sha256": self.timing._sha256_bytes(raw)}})
+
+    def test_remaining_budgets_initial_keys_and_original_costs_are_consumed(self) -> None:
+        from datetime import timedelta
+
+        binding = self._create()
+        paths = self._ledgers(binding, self.observed + timedelta(minutes=10))
+        plan = source.read(paths["ledger"] / "ledger.json")
+        self.assertEqual(plan["total_budget_minutes"], 85)
+        self.assertEqual(plan["stage_budgets_minutes"]["VC-5"], 85)
+        self.assertEqual(plan["started_at_utc"], (self.observed + timedelta(minutes=10)).isoformat())
+        result = self.carry.verify_budget(self.data, carry_binding=binding, now=self.observed + timedelta(minutes=11))
+        self.assertEqual((result["predecessor_elapsed_seconds"], result["successor_elapsed_seconds"], result["combined_elapsed_seconds"]),
+                         (7800, 60, 7860))
+        self.assertEqual(result["combined_phase_costs_seconds"]["VC-5"], 7500)
+        accounting = self.carry.verify_accounting(paths["project_ledger"], carry_binding=binding, current_identity_keys=[])
+        self.assertEqual(accounting["precise_total"], 2)
+        self.assertFalse(result["formal_ledger_migration"])
+
+    def test_repeated_initialization_keeps_first_start_and_plan_bytes(self) -> None:
+        from datetime import timedelta
+
+        binding = self._create()
+        paths = self._ledgers(binding)
+        original = {path: path.read_bytes() for path in (paths["initialization"], paths["ledger"] / "ledger.json",
+                                                         paths["project_ledger"] / "plan.json")}
+        self._ledgers(binding, self.observed + timedelta(minutes=2))
+        self.assertEqual({path: path.read_bytes() for path in original}, original)
+
+    def test_successor_preceding_stage_wait_cannot_postpone_original_active_deadline(self) -> None:
+        from datetime import timedelta
+
+        binding = self._create()
+        paths = self._ledgers(binding)
+        plan = source.read(paths["ledger"] / "ledger.json")
+        self.assertEqual(plan["total_budget_minutes"], 95)
+        with self.assertRaisesRegex(replay.ReplayError, "活动阶段截止"):
+            self.carry.verify_budget(self.data, carry_binding=binding, now=self.observed + timedelta(minutes=95))
+
+    def test_expired_original_stage_cannot_be_reopened_at_later_initialization(self) -> None:
+        from datetime import timedelta
+
+        binding = self._create()
+        with self.assertRaisesRegex(replay.ReplayError, "剩额不足.*VC-5"):
+            self._ledgers(binding, self.observed + timedelta(minutes=100))
+        self.assertFalse((self.data / self.carry.INITIALIZATION_RELATIVE).exists())
+
+    def test_expired_stage_is_rejected_before_receipt_or_ledgers(self) -> None:
+        from datetime import timedelta
+
+        with self.assertRaisesRegex(replay.ReplayError, "剩额不足.*VC-5"):
+            self._create(self.observed + timedelta(minutes=100))
+        self.assertFalse(self.path.exists())
+        self.assertFalse((self.data / "control/timing").exists())
+        self.assertFalse((self.data / self.project.ledger_dir_name("claude")).exists())
+
+    def test_expired_total_is_rejected_before_initialization(self) -> None:
+        from datetime import timedelta
+
+        binding = self._create()
+        with self.assertRaisesRegex(replay.ReplayError, "剩额不足.*总预算"):
+            self._ledgers(binding, self.observed + timedelta(minutes=250))
+        self.assertFalse((self.data / self.carry.INITIALIZATION_RELATIVE).exists())
+
+    def test_only_actual_double_ledger_extensions_supply_remaining_allowance(self) -> None:
+        from datetime import timedelta
+
+        observed = self.observed + timedelta(minutes=250)
+        self._extension("campaign", observed)
+        self._extension("stage", observed)
+        binding = self._create(observed + timedelta(seconds=1))
+        paths = self._ledgers(binding, observed + timedelta(seconds=2))
+        plan = source.read(paths["ledger"] / "ledger.json")
+        self.assertEqual((plan["total_budget_minutes"], plan["stage_budgets_minutes"]["VC-5"]), (89, 89))
+        result = self.carry.verify_budget(self.data, carry_binding=binding, now=observed + timedelta(seconds=3))
+        self.assertEqual(len(result["original_deadline_extensions"]), 2)
+        self.assertGreater(result["combined_elapsed_seconds"], 360 * 60)
+
+    def test_project_only_extension_cannot_open_a_window(self) -> None:
+        from datetime import timedelta
+
+        observed = self.observed + timedelta(minutes=250)
+        self._extension("campaign", observed, commit=False)
+        with self.assertRaisesRegex(replay.ReplayError, "尚未双账提交"):
+            self._create(observed + timedelta(seconds=1))
+        self.assertFalse(self.path.exists())
+
+    def test_original_store_and_ledger_drift_fail_closed(self) -> None:
+        binding = self._create()
+        path = Path(self.preserved["store_campaign"]["path"])
+        path.write_bytes(path.read_bytes() + b" ")
+        with self.assertRaisesRegex(replay.ReplayError, "摘要或字节数漂移"):
+            self._ledgers(binding)
+        self.assertFalse((self.data / self.carry.INITIALIZATION_RELATIVE).exists())
+
+    def test_duplicate_initial_keys_are_not_counted_again_and_new_keys_must_close(self) -> None:
+        binding = self._create()
+        paths = self._ledgers(binding)
+        root = paths["project_ledger"]
+        self.project.append_project_event(root, operation_id="fixture-requests", event_type="reconciliation_committed",
+            source_batch_sha256="e" * 64, recorded_at_utc=self.observed.isoformat(), payload={"request": {
+                "status": "resolved", "identity_keys": ["b" * 64, "c" * 64], "estimated_delta": 0,
+                "estimated_sources": [], "estimation_policy": "none", "unresolved_job_ids": [],
+                "counting_rule": "claude_model_requests/v1", "identity_key_count_total": 3,
+                "provenance_receipt_sha256": "d" * 64}})
+        result = self.carry.verify_accounting(root, carry_binding=binding, current_identity_keys=["b" * 64, "c" * 64])
+        self.assertEqual(result["precise_total"], 3)
+        with self.assertRaisesRegex(replay.ReplayError, "联合计账不闭合"):
+            self.carry.verify_accounting(root, carry_binding=binding, current_identity_keys=["b" * 64])
+
+
 if __name__ == "__main__":
     unittest.main()

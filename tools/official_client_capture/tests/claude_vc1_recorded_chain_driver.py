@@ -18,7 +18,7 @@ import sys
 import time
 import traceback
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from unittest import mock
 
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
@@ -225,10 +225,19 @@ def _plan_and_inputs(state: dict[str, Any]) -> dict[str, Path]:
     from tools.official_client_capture.tests.control_receipt_fixtures import create_p0_gate_receipt
 
     data, control = Path(state["data_root"]), Path(state["data_root"]) / "control"
-    ledger_fixture.install_claude_project_ledger(data)
-    ledger = control / "timing"
-    timing.create_ledger(ledger, upgrade_id=UPGRADE, baseline_version=BASELINE, target_version=source.VERSION,
-                         campaign_purpose="validation_only", evidence_decision="recapture", client="claude")
+    carry_binding = state["inputs"]["bindings"].get("recorded_budget_carry")
+    if carry_binding is None:
+        # 旧7／9 Job路线保持原来的创建顺序、缺省预算与计划字节。
+        ledger_fixture.install_claude_project_ledger(data)
+        ledger = control / "timing"
+        timing.create_ledger(ledger, upgrade_id=UPGRADE, baseline_version=BASELINE, target_version=source.VERSION,
+                             campaign_purpose="validation_only", evidence_decision="recapture", client="claude")
+    else:
+        # 独立录制后继必须显式携带原预算，禁止沿宽松fixture helper重新取得额度。
+        from tools.official_client_capture.tests import claude_recorded_budget_carry as budget_carry
+
+        ledger = budget_carry.create_ledgers(data, carry_binding=carry_binding, upgrade_id=UPGRADE,
+                                             baseline_version=BASELINE, target_version=source.VERSION)["ledger"]
     timing.checkpoint(ledger, "receipts/vc0-input.json")
     environment = control / "environment-p0"
     environment.mkdir(mode=0o700)
@@ -602,6 +611,22 @@ def _create_world_roots(data: Path) -> None:
     (data / "evidence/campaigns").mkdir(mode=0o700)
 
 
+def _readonly_roots(arguments: argparse.Namespace, extra_roots: Iterable[Path]) -> list[str]:
+    """默认来源坐标保持原样；显式携带的原预算世界必须是独立且无链接的 staging 目录。"""
+
+    roots = [str(Path(arguments.recorded).resolve().parent), str(Path(arguments.freeze).resolve())]
+    data = Path(arguments.data).resolve()
+    for original in extra_roots:
+        root = Path(original)
+        if (not root.is_absolute() or root.resolve() != root or not root.is_dir()
+                or "staging" not in root.parts
+                or data.is_relative_to(root) or root.is_relative_to(data)
+                or any(root.is_relative_to(Path(previous)) or Path(previous).is_relative_to(root) for previous in roots)):
+            raise replay.ReplayError("附加只读来源须为无链接且不重叠的独立 staging 目录")
+        roots.append(str(root))
+    return roots
+
+
 def namespace_main(
     arguments: argparse.Namespace, *, inputs_builder: Callable[[Path], dict[str, Any]] = _inputs,
     chain_runner: Callable[[Path, str], dict[str, Any]] = run_chain,
@@ -609,13 +634,14 @@ def namespace_main(
     initialization_name: str | None = None,
     resume_inputs: Callable[[argparse.Namespace], dict[str, Any]] | None = None,
     input_verifier: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
+    extra_readonly_roots: Iterable[Path] = (),
 ) -> dict[str, Any]:
     """外壳已 unshare；候选续作只承接私有初始化停点，不重写已形成的输入与来源副本。"""
 
     from tools.official_client_capture.tests import claude_fault_chain_world as stops
 
     data = Path(arguments.data).resolve()
-    roots = [str(Path(arguments.recorded).resolve().parent), str(Path(arguments.freeze).resolve())]
+    roots = _readonly_roots(arguments, extra_readonly_roots)
     parent_namespaces = json.loads(arguments.parent_namespaces)
     # 任何 mount 或目录写入前先验真隔离；直接在普通宿主启动驱动必须失败关闭。
     source.require_isolation({"parent_namespaces": parent_namespaces, "readonly_sources": []})

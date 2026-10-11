@@ -1447,10 +1447,16 @@ def _preview_candidate_seal(
     if not bound["drafts"]["capture_manifest"]["label_mismatches"] and bound["drafts"]["capture_manifest"]["artifacts"]:
         # 评估用 manifest（B4-03 checker 的输入）：封存的 capture manifest 加深度扫描绑定合成，seal 写、compare 只读。
         index = {entry["path"]: entry for entry in inventory["entries"]}
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
         try:
             evaluation = claude_rule_assertion.bind_capture_manifest(
                 bound["drafts"]["capture_manifest"], index, capture_id=str(attempt["attempt_id"])
             )
+            evaluation = recorded.bind_recorded_manifest(evaluation, data_root, index)
+            claude_rule_assertion.validate_evaluation_manifest(evaluation, expected_claude_version=str(manifest["target_version"]))
+        except recorded.RecordedEvaluationError as error:
+            raise ConfigurationError(f"候选录制评估分域合同不成立：{error}") from error
         except claude_rule_assertion.AssertionConfigurationError as error:
             raise ConfigurationError(f"候选评估用 manifest 合成失败：{error}") from error
         evaluation_path = seal_dir / EVALUATION_MANIFEST_FILENAME

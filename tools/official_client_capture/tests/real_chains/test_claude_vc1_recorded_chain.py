@@ -163,29 +163,94 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
 
         time_budget = certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")
         started = time.monotonic()
-        with staging_directory("claude-full-recorded-") as directory:
+        @contextlib.contextmanager
+        def successor_directory():
+            # 当前公共完整方法只选择79探针后继；旧57世界和旧位置原件不改签。
+            configured = os.environ.get(RECORD_DIR_ENV)
+            legacy = os.environ.get(RECORDS_ENV)
+            records = Path(configured) if configured else (Path(legacy).parent / (Path(legacy).stem + "-recorded-artifacts") if legacy else None)
+            intent_path, intent_digest = os.environ.get(driver.BUDGET_CARRY_INTENT_ENV), os.environ.get(driver.BUDGET_CARRY_DIGEST_ENV)
+            intent_binding = None
+            if intent_path is not None:
+                raw = source.read(Path(intent_path))
+                data = Path(raw.get("data_root", ""))
+                _intent, intent_binding = driver._carry_intent(intent_path, intent_digest, data)
+                directory = data.parent.parent
+                driver._require_client_staging(data)
+                if data != directory / "staging/data":
+                    raise source.replay.ReplayError("完整外壳预算意图须绑定原首层staging/data坐标")
+                directory.mkdir(mode=0o700, exist_ok=True)
+            elif intent_digest is not None:
+                raise source.replay.ReplayError("完整后继预算意图缺路径")
+            else:
+                directory = None
+            location = records / "complete-main-model-location.json" if records is not None else None
+            previous = None
+            if location is not None:
+                if records.is_symlink():
+                    raise ValueError("完整后继记录目录不能是链接")
+                records.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if location.exists():
+                    previous = source.read(source.bound(source.binding(location), root=records))
+                    if (previous["recorded"] != recorded or previous["freeze"] != freeze
+                            or previous["budget_carry_intent"] != intent_binding):
+                        raise ValueError("完整后继原位置与来源／预算意图漂移")
+                    saved_directory = Path(previous["world_root"])
+                    if directory is not None and directory != saved_directory:
+                        raise ValueError("完整后继不能换稳定数据根")
+                    directory = saved_directory
+                    if not directory.is_dir() or directory.is_symlink():
+                        raise ValueError("完整后继原世界已缺失，禁止重建")
+            if directory is None:
+                directory = Path(tempfile.mkdtemp(prefix="claude-full-recorded-", dir=Path(tempfile.gettempdir()).resolve()))
+            first_started = previous["started_at_epoch"] if previous else time.time()
+            if location is not None and previous is None:
+                source.write(location, {"world_root": str(directory), "recorded": recorded, "freeze": freeze,
+                    "budget_carry_intent": intent_binding, "started_at_epoch": first_started})
+            if records is not None:
+                # 稳定入口之外仍保留原外壳的位置凭证，便于既有记录消费者定位同一新世界。
+                original_location = records / (directory.name + "-location.json")
+                coordinates = {"world_root": str(directory), "data_root": str(directory / "staging/data"),
+                               "system_temp_root": str(Path(tempfile.gettempdir()).resolve())}
+                if original_location.exists():
+                    if source.read(source.bound(source.binding(original_location), root=records)) != coordinates:
+                        raise ValueError("完整后继原位置凭证坐标漂移")
+                else:
+                    source.write(original_location, coordinates)
+            yield directory, intent_path, intent_digest, first_started
+
+        with successor_directory() as (directory, intent_path, intent_digest, first_started):
             data = directory / "staging/data"
             driver._require_client_staging(data)
+            invocation = directory
+            if any((directory / name).exists() for name in ("stdout.log", "stderr.log", "record.json", "record-pending.json")):
+                invocations = directory / "invocations"
+                invocations.mkdir(mode=0o700, exist_ok=True)
+                invocation = invocations / f"{len(list(invocations.iterdir())) + 1:04d}"
+                invocation.mkdir(mode=0o700)
             command = ["unshare", "-m", "-n", sys.executable, "-m", driver.ACTIVATION_MODULE,
                        "--data", str(data), "--recorded", recorded, "--freeze", freeze, "--through", "VC-6",
+                       "--complete-main-model",
                        "--parent-namespaces", json.dumps({kind: os.readlink(f"/proc/self/ns/{kind}") for kind in ("mnt", "net")})]
+            if intent_path is not None:
+                command.extend(["--budget-carry-intent", intent_path, "--budget-carry-intent-sha256", intent_digest])
             try:
                 completed = subprocess.run(command, cwd=driver.vc1.REPOSITORY, capture_output=True, text=True,
-                                           timeout=time_budget["chain_timeout_seconds"],
+                                           timeout=min(time_budget["chain_timeout_seconds"], max(1, time_budget["chain_budget_seconds"] - (time.time() - first_started))),
                                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(directory.parent)})
             except subprocess.TimeoutExpired as error:
                 for filename, content in (("stdout.log", error.stdout or ""), ("stderr.log", error.stderr or "")):
                     value = content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
-                    (directory / filename).write_text(value, encoding="utf-8")
-                save_record(directory, {"scenario": "vc-chain.claude-full-validation-only", "fixture_only": True,
+                    (invocation / filename).write_text(value, encoding="utf-8")
+                save_record(invocation, {"scenario": "vc-chain.claude-full-validation-only", "fixture_only": True,
                                         "status": "unverified", "timeout": True, "command": command,
                                         "seconds": time.monotonic() - started,
-                                        "stdout": source.binding(directory / "stdout.log"),
-                                        "stderr": source.binding(directory / "stderr.log"),
+                                        "stdout": source.binding(invocation / "stdout.log"),
+                                        "stderr": source.binding(invocation / "stderr.log"),
                                         "formal_version_semantics_certified": False})
                 raise
-            (directory / "stdout.log").write_text(completed.stdout, encoding="utf-8")
-            (directory / "stderr.log").write_text(completed.stderr, encoding="utf-8")
+            (invocation / "stdout.log").write_text(completed.stdout, encoding="utf-8")
+            (invocation / "stderr.log").write_text(completed.stderr, encoding="utf-8")
             report_path = data / "control/recorded-full-chain-result.json"
             report, report_error = None, None
             try:
@@ -193,13 +258,13 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                     report = source.read(report_path)
             except Exception as error:
                 report_error = str(error)
-            seconds = time.monotonic() - started
+            seconds = time.time() - first_started
             record = {"scenario": "vc-chain.claude-full-validation-only", "fixture_only": True,
                       "seconds": seconds, "command": command, "returncode": completed.returncode,
-                      "stdout": source.binding(directory / "stdout.log"), "stderr": source.binding(directory / "stderr.log"),
+                      "stdout": source.binding(invocation / "stdout.log"), "stderr": source.binding(invocation / "stderr.log"),
                       "status": "unverified", "report": source.binding(report_path) if report_path.is_file() else None,
                       "report_payload": report, "report_error": report_error, "formal_version_semantics_certified": False}
-            save_record(directory, record, append=False)
+            save_record(invocation, record, append=False)
             try:
                 self.assertEqual(completed.returncode, 0, completed.stderr[-12000:] + completed.stdout[-12000:])
                 self.assertIsNone(report_error, "真实完整链报告不可读取")
@@ -217,11 +282,11 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                 source.bound(report["source_state"], root=data)
                 source.bound(report["continuation"], root=data)
             except BaseException:
-                save_record(directory, record)
+                save_record(invocation, record)
                 raise
             self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0,
                                        "seconds": seconds, "time_budget": time_budget, "report": source.binding(report_path)}
-            save_record(directory, {**record, "status": "passed", "metrics": self.real_chain_metrics})
+            save_record(invocation, {**record, "status": "passed", "metrics": self.real_chain_metrics})
 
 
 if __name__ == "__main__":

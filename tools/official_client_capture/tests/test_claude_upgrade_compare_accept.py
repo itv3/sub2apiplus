@@ -532,6 +532,13 @@ class CompareHelperTests(unittest.TestCase):
     def test_probe_request_paths_strip_query(self) -> None:
         index = {"jobs": [{"probes": [{"probe_id": "p", "connections": [{"requests": ["POST /v1/messages?beta=true HTTP/1.1", "garbage"]}]}]}]}
         self.assertEqual(compare._index_probe_request_paths(index), {"p": ["/v1/messages"]})
+        for line in ("POST /v1/messages", "POST /v1/messages?beta=true", "POST /v1/messages HTTP/1.0"):
+            with self.subTest(line=line):
+                self.assertEqual(compare._request_path(line), "/v1/messages")
+        for line in ("POST", "/v1/messages", "post /v1/messages", "POST relative", "POST /v1/messages garbage",
+                     "POST /v1/messages HTTP/2.0", "POST /v1/messages HTTP/1.1 extra", "POST /v1/messages#fragment"):
+            with self.subTest(line=line):
+                self.assertIsNone(compare._request_path(line))
 
 
 class OfficialEvaluationSourceTests(unittest.TestCase):
@@ -557,9 +564,19 @@ class OfficialEvaluationSourceTests(unittest.TestCase):
             artifact["path"] = f"{prefix}/{artifact['path']}"
         drafts = self.campaign / "official" / "seal" / "g1" / "drafts"
         capture_path = chain._write_json(drafts / "capture-manifest.json", capture)
+        # 索引按夹具原请求字节生成二段摘要，不能只手写一个端点掩盖其它已绑定请求。
+        from tools.official_client_capture import claude_rule_assertion
+
+        probe_connections: dict[str, list[dict[str, list[str]]]] = {}
+        for artifact in capture["artifacts"]:
+            if artifact["kind"] != "relay_binary" or artifact.get("derive", {}).get("parser") != "h1_request_stream":
+                continue
+            rows = claude_rule_assertion.parse_h1_requests((self.data / artifact["path"]).read_bytes(), artifact["path"])
+            probe_connections.setdefault(artifact["probe_id"], []).append({"requests": [row["request_line"] for row in rows]})
         index_path = chain._write_json(
             drafts / "capture-index.json",
-            {"jobs": [{"probes": [{"probe_id": "print", "connections": [{"requests": ["POST /v1/messages?beta=true HTTP/1.1"]}]}]}], "network_inventory": {"surfaces": [{"surface": "s", "count": 1}]}},
+            {"jobs": [{"probes": [{"probe_id": probe, "connections": connections} for probe, connections in sorted(probe_connections.items())]}],
+             "network_inventory": {"surfaces": [{"surface": "s", "count": 1}]}},
         )
         files = sorted(path for path in self.data.rglob("*") if path.is_file() and path.name != "campaign.json")
         entries = [{"path": path.relative_to(self.data).as_posix(), "sha256": chain._sha256(path), "bytes": path.stat().st_size} for path in files]
@@ -601,7 +618,20 @@ class OfficialEvaluationSourceTests(unittest.TestCase):
         self.assertIn("relay_index", kinds)
         self.assertIn("relay_response", kinds)
         self.assertEqual((source["capture_id"], source["evidence_root"], source["inventory"]["source"]), ("attempt-official", str(self.data), "official_seal"))
-        self.assertEqual(source["probe_request_paths"], {"print": ["/v1/messages"]})
+        self.assertEqual(source["probe_request_paths"],
+                         {"failure-529": ["/v1/messages"], "print": ["/v1/messages", "/v1/messages/count_tokens"]})
+        # 独立解析已经绑定的原请求字节；二段索引修复不得靠编辑比较收据得出路径。
+        from tools.official_client_capture import claude_rule_assertion
+
+        original_paths: dict[str, set[str]] = {}
+        for artifact in source["evaluation_manifest"]["artifacts"]:
+            if artifact["kind"] != "relay_binary" or artifact.get("derive", {}).get("parser") != "h1_request_stream":
+                continue
+            path = Path(source["evidence_root"]) / artifact["path"]
+            self.assertEqual((chain._sha256(path), path.stat().st_size), (artifact["sha256"], artifact["bytes"]))
+            rows = claude_rule_assertion.parse_h1_requests(path.read_bytes(), artifact["path"])
+            original_paths.setdefault(artifact["probe_id"], set()).update(row["path"] for row in rows)
+        self.assertEqual(source["probe_request_paths"], {probe: sorted(paths) for probe, paths in original_paths.items()})
 
     def test_package_binding_must_match_inventory(self) -> None:
         self.package["evidence_items"][0]["evidence_refs"][0]["sha256"] = "f" * 64

@@ -61,6 +61,7 @@ B4-06a 的 subject 要五项候选身份，Claude 的取法：
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
@@ -304,12 +305,12 @@ def candidate_gate_identity(
 
 
 def _request_path(line: str) -> str | None:
-    """请求行 ``METHOD target HTTP/x`` 的路径部分（去掉查询串）；不是请求行时为 None。"""
+    """读取二段 CaptureIndex 请求摘要或三段原 HTTP 请求行；非法行返回 None。"""
 
-    parts = str(line).split(" ")
-    if len(parts) < 3 or not parts[1].startswith("/"):
+    match = re.fullmatch(r"[A-Z]+ (/[^\s?#]*(?:\?[^\s#]*)?)(?: HTTP/1\.[01])?", str(line))
+    if match is None:
         return None
-    return parts[1].split("?", 1)[0]
+    return match.group(1).split("?", 1)[0]
 
 
 def _index_probe_request_paths(index: Mapping[str, Any]) -> dict[str, list[str]]:
@@ -462,6 +463,7 @@ def candidate_evaluation_source(campaign_dir: Path, manifest: Mapping[str, Any],
         evaluation = claude_rule_assertion.validate_evaluation_manifest(
             _read_json(manifest_path, "候选评估用 manifest"), expected_claude_version=str(manifest["target_version"])
         )
+        claude_rule_assertion.verify_evaluation_sources(evaluation, root)
     except claude_rule_assertion.AssertionConfigurationError as error:
         raise ConfigurationError(f"候选评估用 manifest 不符合合同：{error}") from error
     seal = candidate.get("seal") if isinstance(candidate.get("seal"), Mapping) else {}
@@ -495,6 +497,7 @@ def _require_source(source: Any, label: str, target_version: str) -> dict[str, A
         raise ConfigurationError(f"{label}评估来源的字段不闭合。")
     try:
         claude_rule_assertion.validate_evaluation_manifest(source["evaluation_manifest"], expected_claude_version=target_version)
+        claude_rule_assertion.verify_evaluation_sources(source["evaluation_manifest"], Path(str(source["evidence_root"])))
     except claude_rule_assertion.AssertionConfigurationError as error:
         raise ConfigurationError(f"{label}评估用 manifest 不符合合同：{error}") from error
     if not Path(str(source["evidence_root"])).is_absolute() or not Path(str(source["evidence_root"])).is_dir():

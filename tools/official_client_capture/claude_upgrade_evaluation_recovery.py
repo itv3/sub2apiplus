@@ -77,6 +77,12 @@ def candidate_failure_scope_inputs(campaign_dir: Path, candidate: Mapping[str, A
     manifest = orchestrator._read_json(path, "候选评估用 manifest")
     try:
         validated = claude_rule_assertion.validate_evaluation_manifest(manifest, expected_claude_version=str(manifest.get("claude_version", "")))
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+        if validated["schema_version"] == recorded.EVALUATION_SCHEMA:
+            from tools.official_client_capture import claude_upgrade_compare as compare
+
+            claude_rule_assertion.verify_evaluation_sources(validated, compare.data_root(Path(campaign_dir)))
     except claude_rule_assertion.AssertionConfigurationError as error:
         raise ConfigurationError(f"候选评估用 manifest 无法校验：{error}") from error
     artifact_jobs: dict[str, str] = {}

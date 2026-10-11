@@ -622,7 +622,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
         cls.grouped = v3.layer_entries(cls.policy, cls.digests)
 
     def test_every_managed_file_has_a_layer(self) -> None:
-        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 15))
+        self.assertEqual((self.policy["client"], self.policy["policy_version"]), ("claude", 16))
         self.assertEqual([entry["path"] for entry in self.grouped["defaulted"]], [])
         for layer in v3.LAYERS:
             self.assertTrue(self.grouped[layer], layer)
@@ -692,6 +692,7 @@ class ClaudePolicyFileTests(unittest.TestCase):
                 self.assertIsNone(codex_identity.classify_path(self.codex, name))
 
     def test_orchestrators_and_shared_control(self) -> None:
+        self.assertEqual(v3.classify_path(self.policy, "official_client_capture/claude_recorded_evaluation_contract.py"), "evidence_semantics")
         for key in ("official_client_capture/codex_upgrade.py", "official_client_capture/codex_upgrade_client_adapter.py"):
             self.assertIsNone(v3.classify_path(self.policy, key), key)
         self.assertEqual(v3.classify_path(self.policy, self.policy["orchestrator"]["file"]), "control")

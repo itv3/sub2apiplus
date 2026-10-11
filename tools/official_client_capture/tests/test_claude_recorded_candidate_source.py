@@ -82,6 +82,7 @@ class RecordedCandidateSourceTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         self.data, self.state = fixture.data, copy.deepcopy(fixture.state)
+        self.fixture = fixture.fixture
         original_path = fixture.fixture.supplement / f"attempts/{PROBE}/attempt-001/relay-manifest.json"
         original_root = original_path.parent
         write_relay(original_root, (original_root / "relay/conn001.client_to_upstream.bin").read_bytes(),
@@ -138,6 +139,175 @@ class RecordedCandidateSourceTests(unittest.TestCase):
             "account_id": 7, "api_key_id": 9, "base_url": "http://sub2apiplus:8080",
             "trigger": plan.candidate_trigger(PROBE), "relay_port": int(plan.CANDIDATE_RELAY_PORT), "live": True,
         }
+
+    def _add_shared_connection(self, *, mixed: bool = False, unknown: bool = False) -> None:
+        """实际补写测试来源字节，再由真实 v4 判定器与快照构造器重冻；不替换分域或 checker。"""
+
+        from tools.official_client_capture.capturelib import claude_fw_f_v4 as v4
+
+        root = self.fixture.supplement / f"attempts/{PROBE}/attempt-001"
+        index = source.read(root / "relay/relay.json")
+        request = b"HEAD /api/hello HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n"
+        if unknown:
+            request = request.replace(b"/api/hello", b"/api/unregistered")
+        response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+        if mixed:
+            request += (root / "relay/conn001.client_to_upstream.bin").read_bytes()
+            response += (root / "relay/conn001.upstream_to_client.bin").read_bytes()
+            write_relay(root, request, response)
+        else:
+            write_relay(root, request, response, connection_id=2, opened_at_unix_ms=5, closed_at_unix_ms=6)
+            updated = source.read(root / "relay/relay.json")
+            updated["connections"].extend(index["connections"])
+            (root / "relay/relay.json").write_text(json.dumps(updated), encoding="utf-8")
+        manifest = source.read(root / "relay-manifest.json")
+        dimension = v4.validate_complete_probe_evidence(
+            probe_id=PROBE, relay_root=root / "relay", scenario_summary=manifest["scenario_result"],
+            relay_integrity=manifest["relay_integrity"], pcap_receipt=manifest["tls_p_channel"])
+        manifest["dimension_evidence"] = dimension
+        (root / "relay-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        self.state["snapshot"] = replay.build_snapshot(self.data / "control/domain-snapshot", recorded=self.fixture.recorded)
+
+    def _enable_recorded_policy(self, *, formal: bool = False) -> None:
+        """短验只使用现有真实合同产生的夹具总账与冻结画像；不宣称执行了 VC-3 或现场认证。"""
+
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+        from tools.official_client_capture import codex_upgrade_project_ledger as ledger
+
+        self.context = self.runtime_context()
+        ledger.create_project_ledger(
+            self.data / "upgrade-project-ledger-claude", project_id="recorded-domain-fixture",
+            absolute_deadline_utc="2027-01-31T00:00:00Z", deadline_approved_by="fixture",
+            estimation_policy="none", estimation_policy_approved_by="fixture", fixture_only=not formal,
+            formal_open_limit=64, client="claude")
+        profile_path = self.context.campaign_dir / "assertions/approved-assertion-profile.json"
+        profile_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.copyfile(full.vc1.REPOSITORY / "tools/official_client_capture/claude_rule_expectations_2_1_226.json", profile_path)
+        self.original_state_path = source.write(self.data / "control/recorded-original-state.json", self.state)
+        policy = recorded.build_policy(self.original_state_path, campaign_path=self.context.campaign_dir / "campaign.json",
+                                       project_plan_path=self.data / "upgrade-project-ledger-claude/plan.json", assertion_profile_path=profile_path)
+        self.policy_path = source.write(self.data / "control/recorded-evaluation-policy.json", policy)
+        self.state["inputs"]["bindings"][recorded.POLICY_KEY] = source.binding(self.policy_path)
+        self.state_path = source.write(self.data / "control/recorded-domain-state.json", self.state)
+
+    def _copy_and_bind_recorded(self) -> dict:
+        """运行真实来源复制与 seal 的两步 manifest 形成函数；不派发阶段或启动客户端。"""
+
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+        from tools.official_client_capture import claude_rule_assertion as assertion
+
+        self.projection_path = source.write(self.data / "control/recorded-domain-projection.json", self.projection)
+        original_loader = source.load_state
+        with mock.patch.object(source, "load_state", side_effect=lambda path, digest: original_loader(path, digest, isolation=False)):
+            candidate.copy_registered(self.state_path, source.binding(self.state_path)["sha256"],
+                                      self.projection_path, source.binding(self.projection_path)["sha256"])
+        destination = Path(self.projection["output_root"])
+        directory = destination.relative_to(self.data).as_posix()
+        profile = source.read(self.context.campaign_dir / "assertions/approved-assertion-profile.json")
+        scenarios = [item["scenario_id"] for item in profile["scenarios"]]
+        common = {"probe_id": PROBE, "job_id": "candidate-fixture", "scenario_ids": scenarios, "labels": {"probe": PROBE}}
+        artifacts = [{**common, "path": directory + "/relay-manifest.json", "kind": "relay_manifest", "parser": "claude_relay_manifest"}]
+        for ordinal, connection in enumerate(source.read(destination / "relay/relay.json")["connections"], 1):
+            artifacts.append({**common, "path": directory + f"/relay/conn{connection['connection_id']:03d}.client_to_upstream.bin",
+                              "kind": "relay_binary", "parser": "opaque_bound_source",
+                              "connection": {"ordinal": ordinal, "connection_id": connection["connection_id"]},
+                              "derive": {"parser": "h1_request_stream", "kind": "claude_http_request"}})
+        capture = {"schema_version": assertion.CAPTURE_MANIFEST_SCHEMA_VERSION, "target_version": source.VERSION,
+                   "label_mismatches": [], "artifacts": artifacts}
+        inventory = {path.relative_to(self.data).as_posix(): replay._digest(path) for path in destination.rglob("*") if path.is_file()}
+        self.v1_manifest = assertion.bind_capture_manifest(capture, inventory, capture_id="fixture-domain")
+        return recorded.bind_recorded_manifest(self.v1_manifest, self.data, inventory)
+
+    def test_recorded_domains_consume_one_logical_probe_and_preserve_projection(self) -> None:
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+        from tools.official_client_capture import claude_rule_assertion as assertion
+        from tools.official_client_capture import claude_upgrade_compare as compare
+        from tools.official_client_capture import claude_upgrade_evaluation_recovery as recovery
+
+        self._add_shared_connection()
+        self._enable_recorded_policy()
+        manifest = self._copy_and_bind_recorded()
+        self.assertEqual(manifest["schema_version"], recorded.EVALUATION_SCHEMA)
+        assertion.validate_evaluation_manifest(manifest, expected_claude_version=source.VERSION)
+        observations = assertion.observations_from_manifest(manifest, self.data)
+        runs = [item for item in observations if item.record_type == "probe_run"]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0].data["request_count"], 2)
+        self.assertEqual(runs[0].data["message_count"], 1)
+        self.assertEqual(runs[0].data["relay_mode"], "connect")
+        self.assertFalse(runs[0].data["current_client_executed"])
+        self.assertEqual(runs[0].data["endpoints"][0], "HEAD /api/hello")
+        requests = [item for item in observations if item.record_type == "claude_http_request"]
+        self.assertEqual({item.data["connection_id"] for item in requests}, {1, 2})
+        shared = next(item for item in requests if item.data["connection_id"] == 2)
+        self.assertEqual(shared.labels["origin_platform"], "linux/amd64")
+        self.assertTrue(any("recorded-official-originals/relay/relay.json" in path for path in shared.evidence_paths))
+        self.assertEqual(len([item for item in observations if item.record_type == "runtime_receipt"]), 1)
+        profile = source.read(self.context.campaign_dir / "assertions/approved-assertion-profile.json")
+        projection = assertion.project_capture_manifest(profile, profile["rules"][0]["rule_id"], manifest, self.data, source.VERSION)
+        self.assertEqual(projection["recorded_evaluation"], manifest["recorded_evaluation"])
+        self.assertEqual(assertion.observations_from_manifest(projection, self.data), observations)
+        evaluation_path = source.write(self.context.campaign_dir / "assertions/fixture-recorded-evaluation.json", manifest)
+        fields = {key: {} for key in compare.SOURCE_FIELDS}
+        fields.update(evaluation_manifest=manifest, evidence_root=str(self.data))
+        self.assertEqual(compare._require_source(fields, "候选", source.VERSION)["evaluation_manifest"], manifest)
+        candidate_result = {"assertion_context": {"evaluation_manifest": {
+            "path": evaluation_path.relative_to(self.context.campaign_dir).as_posix(), "sha256": source.binding(evaluation_path)["sha256"]}}}
+        self.assertEqual(set(recovery.candidate_failure_scope_inputs(self.context.campaign_dir, candidate_result,
+                                                                    {"results": [{"id": "candidate-fixture"}]} )["artifact_jobs"].values()), {"candidate-fixture"})
+        with self.assertRaisesRegex(assertion.AssertionConfigurationError, "降级"):
+            assertion.observations_from_manifest(self.v1_manifest, self.data)
+        tampered = Path(self.projection["output_root"]) / recorded.ORIGINAL_DIRECTORY / "relay/conn002.client_to_upstream.bin"
+        tampered.write_bytes(tampered.read_bytes() + b" ")
+        for consumer in (lambda: assertion.observations_from_manifest(manifest, self.data),
+                         lambda: compare._require_source(fields, "候选", source.VERSION),
+                         lambda: recovery.candidate_failure_scope_inputs(self.context.campaign_dir, candidate_result, {"results": [{"id": "candidate-fixture"}]})):
+            with self.subTest(consumer=consumer), self.assertRaisesRegex(Exception, "漂移|不一致"):
+                consumer()
+
+    def test_recorded_policy_rejects_formal_mixed_unknown_and_extra_state_changes(self) -> None:
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+        self._enable_recorded_policy()
+        self.assertIsNotNone(recorded.optional_policy(self.state))
+        altered = copy.deepcopy(self.state)
+        altered["inputs"]["candidate_configuration"]["claude_account_id"] = "8"
+        with self.assertRaisesRegex(recorded.RecordedEvaluationError, "除唯一 policy"):
+            recorded.optional_policy(altered)
+        altered_policy = source.read(self.policy_path)
+        altered_policy["client"] = "codex"
+        self.policy_path.write_text(json.dumps(altered_policy), encoding="utf-8")
+        self.state["inputs"]["bindings"][recorded.POLICY_KEY] = source.binding(self.policy_path)
+        with self.assertRaisesRegex(recorded.RecordedEvaluationError, "资格|自摘要"):
+            recorded.optional_policy(self.state)
+
+    def test_recorded_mixed_connection_is_rejected_before_destination_creation(self) -> None:
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+        self._add_shared_connection(mixed=True)
+        self._enable_recorded_policy()
+        projection_path = source.write(self.data / "control/mixed-projection.json", self.projection)
+        original_loader = source.load_state
+        with mock.patch.object(source, "load_state", side_effect=lambda path, digest: original_loader(path, digest, isolation=False)), \
+                self.assertRaisesRegex(recorded.RecordedEvaluationError, "混合域"):
+            candidate.copy_registered(self.state_path, source.binding(self.state_path)["sha256"], projection_path, source.binding(projection_path)["sha256"])
+        self.assertFalse(Path(self.projection["output_root"]).exists())
+
+    def test_recorded_unknown_connection_is_rejected_before_destination_creation(self) -> None:
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+        self._add_shared_connection(unknown=True)
+        self._enable_recorded_policy()
+        origin = candidate.verify_candidate_projection(self.state, self.projection)
+        with self.assertRaisesRegex(recorded.RecordedEvaluationError, "未知端点"):
+            recorded.connection_domains(self.state, origin)
+        self.assertFalse(Path(self.projection["output_root"]).exists())
+
+    def test_recorded_policy_cannot_enable_formal_project(self) -> None:
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+
+        with self.assertRaisesRegex(recorded.RecordedEvaluationError, "正式非 fixture"):
+            self._enable_recorded_policy(formal=True)
 
     def runtime_context(self):
         """使用真正的签发上下文和实际工具文件；只构造显式的 daemon 外部观察输入。"""

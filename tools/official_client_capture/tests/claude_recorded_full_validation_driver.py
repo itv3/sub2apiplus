@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import contextvars
 import copy
 import json
 import os
@@ -19,7 +20,7 @@ import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from unittest import mock
 
 from tools.official_client_capture.tests import claude_recorded_chain_source as source
@@ -33,6 +34,11 @@ REVIEWER = "录制控制回归审核来源"
 CANDIDATE = "claude-recorded-cand-r1"
 HOST = "arm64-recorded-control-fixture"
 FULL_EXTRA_OFFICIAL_JOBS = ("official-generation-params", "official-agency-subagent")
+COMPLETE_MAIN_MODEL_SCOPE = "claude-recorded-main-model-79/v1"
+BUDGET_CARRY_INTENT_SCHEMA = "claude-recorded-budget-carry-intent/v1"
+BUDGET_CARRY_INTENT_ENV = "CLAUDE_RECORDED_BUDGET_CARRY_INTENT"
+BUDGET_CARRY_DIGEST_ENV = "CLAUDE_RECORDED_BUDGET_CARRY_INTENT_SHA256"
+_SUCCESSOR = contextvars.ContextVar("claude_full_recorded_successor", default=None)
 # 完整来源选择登记的是原第二次及其确切收据；第一次失败原件和普通评估夹具选择不变。
 FULL_SOURCE_SELECTION = {
     "source_id": "thinking-display-supplement-v1-94f7d00d704f",
@@ -68,7 +74,7 @@ def _baseline_values(value: Any) -> Any:
     return value
 
 
-def _inputs(data: Path) -> dict[str, Any]:
+def _inputs(data: Path, *, complete_main_model: bool = False) -> dict[str, Any]:
     """2.1.226 只读 Active → 2.1.220 控制基线；来源和投影分开绑定，绝不冒称真实历史制品。"""
 
     from tools.official_client_capture import claude_upgrade_profile as profile
@@ -77,7 +83,19 @@ def _inputs(data: Path) -> dict[str, Any]:
     from tools.official_client_capture.tests import test_claude_upgrade_profile as profile_fixture
     from tools.official_client_capture.tests import claude_wire_fixture as wire_fixture
 
-    inputs = vc1._inputs(data, extra_official_jobs=FULL_EXTRA_OFFICIAL_JOBS)
+    extra_jobs = FULL_EXTRA_OFFICIAL_JOBS
+    if complete_main_model:
+        from tools.official_client_capture import claude_upgrade_plan as plan
+        from tools.official_client_capture.tests import test_claude_upgrade_seal as seal_fixture
+
+        template = source.read(plan.scenario_manifest_path("2.1.285"))
+        main_jobs = {job["id"] for job in template["capture_jobs"] if job["phase"] == "official"
+                     and all(plan.step_model(step["probe_id"], step["argv"]) is None for step in job["steps"])}
+        extra_jobs = tuple(sorted(main_jobs - set(seal_fixture.SEAL_JOBS)))
+    inputs = vc1._inputs(data, extra_official_jobs=extra_jobs)
+    if complete_main_model:
+        # 这是显式新控制后继的选择；历史九 Job 冻结世界不增补、不重标。
+        inputs["recorded_control_scope"] = COMPLETE_MAIN_MODEL_SCOPE
     root = data / "control/fixture-active-projection"
     original_profile = source.read(profile_fixture.ACTIVE_PROFILE)
     projected_profile = _baseline_values(original_profile)
@@ -161,7 +179,12 @@ def validate_frozen_inputs(data: Path, inputs: dict[str, Any]) -> dict[str, Any]
         raise replay.ReplayError("完整链冻结审核策略或显式来源选择漂移")
     original = source.read(source.bound(bindings["full_scenarios"], root=data))
     template = source.read(plan.scenario_manifest_path("2.1.285"))
-    official_ids = set(seal_fixture.SEAL_JOBS) | set(FULL_EXTRA_OFFICIAL_JOBS)
+    scope = inputs.get("recorded_control_scope")
+    if scope not in (None, COMPLETE_MAIN_MODEL_SCOPE):
+        raise replay.ReplayError("录制控制后继的主模型来源选择合同未知")
+    official_ids = (set(seal_fixture.SEAL_JOBS) | set(FULL_EXTRA_OFFICIAL_JOBS) if scope is None else
+                    {job["id"] for job in template["capture_jobs"] if job["phase"] == "official"
+                     and all(plan.step_model(step["probe_id"], step["argv"]) is None for step in job["steps"])})
     official_probes = {step["probe_id"] for job in template["capture_jobs"] if job["id"] in official_ids for step in job["steps"]}
     candidate_ids = {job["id"] for job in template["capture_jobs"] if job["phase"] == "candidate"
                      and all(step["probe_id"] in official_probes for step in job["steps"])}
@@ -182,6 +205,157 @@ def validate_frozen_inputs(data: Path, inputs: dict[str, Any]) -> dict[str, Any]
         if missing:
             raise replay.ReplayError(f"{side} 冻结审核策略缺少正式 required probes：{missing}")
     return review
+
+
+def _full_vc5_input_verifier(data: Path, inputs: dict[str, Any]) -> dict[str, Any]:
+    """当前完整入口仍消费原40规则与真实探针；旧局部输入不升级为完整来源。"""
+    from tools.official_client_capture import claude_rule_assertion
+    from tools.official_client_capture import claude_upgrade_probe_preflight as preflight
+
+    validate_frozen_inputs(data, inputs)
+    profile_path = vc1.REPOSITORY / "tools/official_client_capture/claude_rule_expectations_2_1_226.json"
+    rules_path = source.bound(inputs["bindings"]["rules"], root=data)
+    profile = claude_rule_assertion.load_profile(profile_path, rules_path,
+        expected_claude_version=source.VERSION, verify_frozen_digest=True)
+    scenarios = source.read(source.bound(inputs["bindings"]["scenarios"], root=data))
+    return {"assertion_profile": source.binding(profile_path), "rules": inputs["bindings"]["rules"],
+            "scenarios": inputs["bindings"]["scenarios"], "probe_coverage": preflight.require_probe_coverage(profile, scenarios)}
+
+
+def _carry_intent(path: str | None, digest: str | None, data: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """外持意图闭集只读；消费者不刷新原账head，也不代操作员生成批准或延长期限。"""
+    if (path is None) != (digest is None):
+        raise replay.ReplayError("预算carry意图路径与外持摘要必须同时提供")
+    if path is None:
+        return None, None
+    target = Path(path)
+    binding = {"path": str(target), "sha256": digest, "bytes": target.stat().st_size}
+    document = source.read(source.bound(binding))
+    expected = {"schema_version", "data_root", "predecessor_data", "predecessor_campaign_id",
+                "expected_timing_plan_sha256", "expected_timing_head", "expected_project_plan_sha256",
+                "expected_project_head", "preserved_bindings"}
+    if (set(document) != expected or document["schema_version"] != BUDGET_CARRY_INTENT_SCHEMA
+            or document["data_root"] != str(data)):
+        raise replay.ReplayError("预算carry外持意图字段或新数据根不闭合")
+    return document, binding
+
+
+def _result_bindings(value: Any) -> list[dict[str, Any]]:
+    """停点只保存真实文件引用；路径目录只核其已形成文件，不将私有状态当正式成功。"""
+    found: dict[str, dict[str, Any]] = {}
+    def collect(item: Any) -> None:
+        if isinstance(item, dict):
+            if {"path", "sha256"} <= set(item) and Path(str(item["path"])).is_absolute():
+                path = source.bound(item)
+                found[str(path)] = source.binding(path)
+            else:
+                for child in item.values():
+                    collect(child)
+        elif isinstance(item, Path):
+            paths = sorted(item.rglob("*")) if item.is_dir() else [item]
+            for path in paths:
+                if path.is_file():
+                    found[str(path)] = source.binding(path)
+        elif isinstance(item, (tuple, list)):
+            for child in item:
+                collect(child)
+    collect(value)
+    return list(found.values())
+
+
+def _control_step(name: str, action: Callable[[], Any], *, resume_actions: bool = False,
+                  verify: Callable[[Any], None] | None = None, intent: Any = None) -> Any:
+    """原方法持久游标：完成项实读重验；未闭合输入、批次或来源停点明确失败关闭。"""
+    active = _SUCCESSOR.get()
+    if active is None:
+        return action()
+    from tools.official_client_capture.tests import claude_fault_chain_world as stops
+
+    key = "recorded-full-step:" + name
+    saved = stops.load_state(key)
+    identity = {"data": active["data"], "source_state": active["source_state"], "intent": intent}
+    if saved is not None:
+        if any(saved.get(field) != value for field, value in identity.items()):
+            raise replay.ReplayError(f"完整后继停点意图漂移：{name}")
+        if saved.get("status") == "complete":
+            for binding in saved["bindings"]:
+                source.bound(binding)
+            if verify is not None:
+                verify(saved["result"])
+            return saved["result"]
+        if saved.get("status") != "started" or not resume_actions:
+            raise replay.ReplayError(f"完整后继动作未闭合，保留半产物且禁止猜测重建：{name}")
+    else:
+        stops.save_state(key, {**identity, "status": "started"})
+    previous_fresh = active.get("fresh_step")
+    active["fresh_step"] = name if saved is None else None
+    try:
+        result = action()
+    finally:
+        active["fresh_step"] = previous_fresh
+    bindings = _result_bindings(result)
+    if verify is not None:
+        verify(result)
+    stops.save_state(key, {**identity, "status": "complete", "result": result, "bindings": bindings})
+    return result
+
+
+def _verify_batch_result(campaign: Path, result: dict[str, Any]) -> None:
+    """重验实际COMMIT、批次队列与原父run全审计；私有complete字段不能授予执行资格。"""
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+    from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+
+    commit = upgrade._read_staging_commit(upgrade._staging_commit_path(campaign, result["batch_sequence"], result["phase"]))
+    batch = artifacts.validate_vc_batch(source.read(Path(result["compile"]["batch"])))
+    manifest = upgrade._vc_run_manifest_from_batch(batch, batch_model="staging")
+    run_dir = Path(result["campaign_run"]["run_dir"])
+    # 正式父run保存的是带摘要的包装体；内层清单须经原reader验真后再逐字段比较。
+    actual_manifest = supervisor._run_inner_manifest(run_dir)
+    if actual_manifest != manifest:
+        raise replay.ReplayError("完整后继原父run清单未通过真实只读重验")
+    actual_commit = supervisor._staging_commit_for_run(campaign, supervisor._read_state(run_dir), actual_manifest, run_dir)
+    stop = supervisor.read_stop_receipt(run_dir)
+    audit = supervisor._audit_command(run_dir)
+    run = result["campaign_run"]
+    if (commit != result["commit"] or actual_commit != commit or commit["parent_run_dir"] != str(run_dir)
+            or commit["batch_sha256"] != batch["batch_sha256"]
+            or audit["audit_incomplete"] or audit["state"] != "stopped"
+            or stop["event_type"] != "stopped" or stop["reason"] != "queue-complete"
+            or result["status"] != "stopped" or run["status"] != "stopped" or run["reason"] != "queue-complete"
+            or any(run[key] != manifest[key] for key in ("campaign_id", "batch_sequence", "batch_sha256"))
+            or [item["action_id"] for item in run["actions"]] != [item["action_id"] for item in manifest["actions"]]
+            or any(item["returncode"] != 0 or item["status"] != "passed" for item in run["actions"])):
+        raise replay.ReplayError("完整后继原批次COMMIT／父run未通过真实只读重验")
+
+
+def _verify_stage_batches(campaign: Path, result: dict[str, Any]) -> None:
+    """外层完成停点也逐项重验原批次；不能靠跳过整个阶段绕开COMMIT与父run审计。"""
+    batches = result.get("batches")
+    if not isinstance(batches, list) or not batches:
+        raise replay.ReplayError("完整后继阶段缺原真实批次结果，禁止复用")
+    for batch in batches:
+        _verify_batch_result(campaign, batch)
+
+
+@contextlib.contextmanager
+def _successor_steps(state_path: Path, digest: str) -> Iterator[None]:
+    """只有显式79探针新后继启用游标；旧57入口仍保持原运行方式。"""
+    state = source.load_state(state_path, digest)
+    if state["inputs"].get("recorded_control_scope") != COMPLETE_MAIN_MODEL_SCOPE:
+        yield
+        return
+    original = vc1._batch
+    token = _SUCCESSOR.set({"data": Path(state["data_root"]), "source_state": source.binding(state_path)})
+    def recorded_batch(data, campaign, name, argv, **options):
+        return _control_step("batch:" + name, lambda: original(data, campaign, name, argv, **options),
+            intent={"data": data, "campaign": campaign, "argv": argv, "options": options},
+            verify=lambda result: _verify_batch_result(campaign, result))
+    try:
+        with mock.patch.object(vc1, "_batch", recorded_batch):
+            yield
+    finally:
+        _SUCCESSOR.reset(token)
 
 
 @contextlib.contextmanager
@@ -265,16 +439,16 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
 
     batches = []
     batches.append(vc1._batch(data, campaign, "vc2-01-classify-draft", ["classify", "--campaign-dir", str(campaign)], phase="VC-2"))
-    draft = _latest_classification(campaign)
+    draft = _control_step("vc2-draft-view", lambda: _latest_classification(campaign))
     reviewer = classify_fixture._ClassifyCase(methodName="runTest")
     docs = reviewer.resolved_documents(Path(draft["draft_dir"]))
     for row in docs["rule_migration"]["rules"]:
         row["rationale"] = "fixture_only：同一份录制官方证据用于控制流程回归，全规则继承不构成版本语义认证。"
-    review_input = reviewer.write_documents(docs, data / "control/review-inputs/vc2")
+    review_input = _control_step("vc2-review-input", lambda: reviewer.write_documents(docs, data / "control/review-inputs/vc2"))
     batches.append(vc1._batch(data, campaign, "vc2-02-classify-revision", [
         "classify", "--campaign-dir", str(campaign), "--from-revision", draft["revision"], "--revision-input", str(review_input),
     ], phase="VC-2"))
-    revised = _latest_classification(campaign)
+    revised = _control_step("vc2-revision-view", lambda: _latest_classification(campaign))
     if revised["gate"]["status"] != "closed":
         raise replay.ReplayError(f"真实 VC-2 门禁未闭合：{revised['gate']}")
     batches.append(vc1._batch(data, campaign, "vc2-03-classify-approve", [
@@ -286,7 +460,7 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
     if stage["affected_rules"] or len(stage["inherited_rules"]) != 40:
         raise replay.ReplayError("控制审核输入未形成明确的 40 规则继承分母")
     batches.append(vc1._batch(data, campaign, "vc3-01-prepare-draft", ["prepare-profile", "--campaign-dir", str(campaign)], phase="VC-3"))
-    draft = _latest_prepare(campaign)
+    draft = _control_step("vc3-draft-view", lambda: _latest_prepare(campaign))
     state = source.load_state(Path(os.environ[source.STATE_ENV]), os.environ[source.DIGEST_ENV])
     if Path(state["data_root"]) != data:
         raise replay.ReplayError("审核策略的来源状态不属于本次数据根")
@@ -300,11 +474,11 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
     for name in ("boundary_assertions", "persona_derivation", "compatibility_boundary"):
         for row in docs["joint_inputs"][name]:
             row["facts"].update(fixture_only=True, purpose="control_regression_input")
-    review_input = preparer.write_prepare(docs, data / "control/review-inputs/vc3")
+    review_input = _control_step("vc3-review-input", lambda: preparer.write_prepare(docs, data / "control/review-inputs/vc3"))
     batches.append(vc1._batch(data, campaign, "vc3-02-prepare-revision", [
         "prepare-profile", "--campaign-dir", str(campaign), "--from-revision", draft["revision"], "--revision-input", str(review_input),
     ], phase="VC-3"))
-    revised = _latest_prepare(campaign)
+    revised = _control_step("vc3-revision-view", lambda: _latest_prepare(campaign))
     if revised["gate"]["status"] != "closed":
         raise replay.ReplayError(f"真实 VC-3 准备门禁未闭合：{revised['gate']}")
     batches.append(vc1._batch(data, campaign, "vc3-03-prepare-approve", [
@@ -367,7 +541,8 @@ def _account_sealed(data: Path, campaign: Path, phase: str) -> dict[str, Any]:
             "originals": originals, "batch_files": batch_files}
 
 
-def _verify_project_accounting(campaign: Path, project_root: Path, required_operations: list[str]) -> dict[str, Any]:
+def _verify_project_accounting(campaign: Path, project_root: Path, required_operations: list[str],
+                               *, carry_binding: dict[str, Any] | None = None) -> dict[str, Any]:
     """只读核原 provenance 的全部模型请求键、精确总量与成功入账操作；不补账、不改 head。"""
 
     from tools.official_client_capture import claude_upgrade_live_request_provenance as provenance
@@ -379,8 +554,14 @@ def _verify_project_accounting(campaign: Path, project_root: Path, required_oper
     if (receipt.get("status") != "complete" or receipt["unresolved_job_ids"] or receipt["pending_job_ids"]
             or receipt["estimated_total"] != 0 or receipt["precise_total"] != len(keys)):
         raise replay.ReplayError("完整链 provenance 未形成零估计、无未决的全部精确请求键")
-    if (set(before["accounted_identity_index"]) != keys or before["precise_total"] != len(keys)
-            or before["estimated_total"] != 0):
+    carried_accounting = None
+    if carry_binding is not None:
+        from tools.official_client_capture.tests import claude_recorded_budget_carry as carry
+
+        carried_accounting = carry.verify_accounting(project_root, carry_binding=carry_binding,
+                                                     current_identity_keys=keys, project_head=before)
+    elif (set(before["accounted_identity_index"]) != keys or before["precise_total"] != len(keys)
+          or before["estimated_total"] != 0):
         raise replay.ReplayError("完整链 provenance 请求键与原项目总账未全部闭合")
     if any(before["operations"].get(operation, {}).get("event_type") != "reconciliation_committed"
            for operation in required_operations):
@@ -388,8 +569,11 @@ def _verify_project_accounting(campaign: Path, project_root: Path, required_oper
     after = project.replay_head(project_root)
     if after != before:
         raise replay.ReplayError("完整链只读请求闭合核验改变了项目总账 head")
-    return {"provenance": receipt, "project_head": after, "required_operations": required_operations,
-            "precise_identity_keys": sorted(keys), "read_only_head_unchanged": True}
+    result = {"provenance": receipt, "project_head": after, "required_operations": required_operations,
+              "precise_identity_keys": sorted(keys), "read_only_head_unchanged": True}
+    if carried_accounting is not None:
+        result["carried_accounting"] = carried_accounting
+    return result
 
 
 def _require_client_staging(data: Path) -> None:
@@ -563,39 +747,44 @@ def build_candidate(data: Path, campaign: Path) -> dict[str, Any]:
     from tools.official_client_capture import claude_upgrade_profile as profile
     from tools.official_client_capture.tests import claude_candidate_build_fixture as fixture
 
-    code, opened, _stderr = _direct(["revision-open", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--initial"])
-    if code != 0 or opened.get("revision") != 1:
-        raise replay.ReplayError("真实候选 initial revision 未建立")
-    _code, preview, _stderr = _direct(["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", CANDIDATE])
-    builder = fixture.CandidateBuildFixture(data / "control/fixture-candidate-build", campaign, CANDIDATE, run_main=_direct)
-    builder.build_source(preview=preview)
-    builder.build_artifacts()
-    builder.build_transition()
-    builder.build_implementation_receipt(preview["requirements"], vc1.UPGRADE)
-    plan_source = data / "control/candidate-plan-source"
-    subprocess.run(["git", "clone", "-q", str(builder.source), str(plan_source)], check=True, capture_output=True, timeout=60)
-    lifecycle = builder.lifecycle_dir.relative_to(builder.source)
-    dispatched = plan_source / lifecycle / "gate-plan-dispatch.json"
+    def prepare_inputs():
+        code, opened, _stderr = _direct(["revision-open", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--initial"])
+        if code != 0 or opened.get("revision") != 1:
+            raise replay.ReplayError("真实候选 initial revision 未建立")
+        _code, preview, _stderr = _direct(["plan-candidate-gates", "--campaign-dir", campaign, "--candidate-id", CANDIDATE])
+        builder = fixture.CandidateBuildFixture(data / "control/fixture-candidate-build", campaign, CANDIDATE, run_main=_direct)
+        builder.build_source(preview=preview)
+        builder.build_artifacts()
+        builder.build_transition()
+        builder.build_implementation_receipt(preview["requirements"], vc1.UPGRADE)
+        plan_source = data / "control/candidate-plan-source"
+        subprocess.run(["git", "clone", "-q", str(builder.source), str(plan_source)], check=True, capture_output=True, timeout=60)
+        lifecycle = builder.lifecycle_dir.relative_to(builder.source)
+        binaries = builder.install_fake_commands(data / "control/fixture-build-bin")
+        return {"plan_source": plan_source, "dispatched": plan_source / lifecycle / "gate-plan-dispatch.json",
+                "mapping": plan_source / lifecycle / "gate-mapping.json", "plan": source.binding(builder.plan_path),
+                "binaries": binaries, "build_argv": builder.argv()}
+    prepared = _control_step("vc4-build-inputs", prepare_inputs)
+    plan_source, dispatched = prepared["plan_source"], prepared["dispatched"]
     batches = [vc1._batch(data, campaign, "vc4-01-plan-gates", [
         "plan-candidate-gates", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE,
-        "--candidate-source", str(plan_source), "--mapping", str(plan_source / lifecycle / "gate-mapping.json"), "--output", str(dispatched),
+        "--candidate-source", str(plan_source), "--mapping", str(prepared["mapping"]), "--output", str(dispatched),
     ], phase="VC-4")]
-    if dispatched.read_bytes() != builder.plan_path.read_bytes():
+    if dispatched.read_bytes() != source.bound(prepared["plan"]).read_bytes():
         raise replay.ReplayError("真实监督门禁计划与冻结源码里的计划不一致")
-    binaries = builder.install_fake_commands(data / "control/fixture-build-bin")
-    with mock.patch.dict(os.environ, {"PATH": str(binaries) + os.pathsep + os.environ.get("PATH", "")}):
-        batches.append(vc1._batch(data, campaign, "vc4-02-record-build", builder.argv(), phase="VC-4"))
+    with mock.patch.dict(os.environ, {"PATH": str(prepared["binaries"]) + os.pathsep + os.environ.get("PATH", "")}):
+        batches.append(vc1._batch(data, campaign, "vc4-02-record-build", prepared["build_argv"], phase="VC-4"))
     manifest = upgrade.load_campaign_manifest(campaign)
     revision = upgrade._current_candidate_revision(campaign, manifest)
     if revision != 1:
         raise replay.ReplayError("候选构建未留在同一 initial revision")
     checkpoint, _payload = upgrade._replay_vc_checkpoint(campaign, upgrade._vc_campaign_plan(campaign, manifest), "VC-4", revision=revision)
     receipt = campaign / "candidates" / CANDIDATE / "build-receipt.json"
-    source.write(data / "control/full-runtime-source.json", {
+    _control_step("vc4-runtime-source", lambda: source.write(data / "control/full-runtime-source.json", {
         "fixture_only": True, "purpose": "recorded_control_runtime_source", "build_receipt": source.binding(receipt),
         "profile_stage": source.binding(campaign / profile.STAGE_RESULT_RELATIVE), "candidate_configuration": manifest["configuration"],
         "formal_version_semantics_certified": False,
-    })
+    }))
     return {"batches": batches, "revision": revision, "candidate_id": CANDIDATE,
             "build_receipt": source.binding(receipt), "checkpoint": source.binding(checkpoint),
             "external_source": "fixture_only Git/二进制/前端/镜像/实现测试观察，不表示生产构建验收"}
@@ -664,7 +853,7 @@ def capture_and_seal(data: Path, campaign: Path) -> dict[str, Any]:
     attempt = source.read(attempts[0])
     if attempt.get("status") != "awaiting_receipts" or upgrade._failed_job_ids(attempt.get("results")):
         raise replay.ReplayError("候选 run 未到真实 awaiting_receipts 停点或仍有失败 Job")
-    clients = _client_inputs(data, campaign, attempt_root, attempt)
+    clients = _control_step("vc5-client-inputs", lambda: _client_inputs(data, campaign, attempt_root, attempt))
     argv = ["capture-candidate", "seal", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE,
             "--attempt-id", attempt_root.name, *clients["seal_arguments"]]
     batches.append(vc1._batch(data, campaign, "vc5-02-candidate-seal-preview", argv, phase="VC-5"))
@@ -680,7 +869,7 @@ def capture_and_seal(data: Path, campaign: Path) -> dict[str, Any]:
     manifest = upgrade.load_campaign_manifest(campaign)
     stage_path, stage = seal.load_round_one_result(campaign, CANDIDATE, manifest=manifest)
     seal.sealed_attempt_context(campaign, stage, candidate_id=CANDIDATE)
-    accounting = _account_sealed(data, campaign, "candidate")
+    accounting = _control_step("candidate-accounting", lambda: _account_sealed(data, campaign, "candidate"))
     return {"batches": batches, "client_inputs": clients, "attempt": source.binding(attempts[0]),
             "stage": source.binding(stage_path), "store": stage["store"], "accounting": accounting}
 
@@ -794,7 +983,7 @@ def compare_and_accept(data: Path, campaign: Path) -> dict[str, Any]:
     profile = assertion_profile.load_approved_assertion_profile(campaign, manifest)
     if len(comparison["rules"]) != 40:
         raise replay.ReplayError("全规则评估分母被缩减")
-    root, receipt = candidate_gate(data, campaign)
+    root, receipt = _control_step("vc5-external-gate", lambda: candidate_gate(data, campaign))
     batches.append(vc1._batch(data, campaign, "acceptance", [
         "accept", "--campaign-dir", str(campaign), "--candidate-id", CANDIDATE,
         "--external-gate-root", str(root), "--external-gate-receipt", receipt,
@@ -812,12 +1001,12 @@ def deliver(data: Path, campaign: Path, typed_fixture: Any) -> dict[str, Any]:
 
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import claude_upgrade_delivery as delivery
-    action = typed_fixture.run_action()
+    action = _control_step("vc6-run-intent", typed_fixture.run_action)
     batches = [vc1._batch(data, campaign, delivery.RUN_ACTION_ID, [], phase="VC-6", action=action)]
     status = delivery.delivery_status(campaign, CANDIDATE)
-    if status.get("status") != "delivery_awaiting_finalize":
+    if status.get("status") not in {"delivery_awaiting_finalize", "ready_for_operator_release"}:
         raise replay.ReplayError(f"真实候选交付没有完成四阶段：{status.get('status')}")
-    action = delivery.finalize_action(campaign, CANDIDATE, status["review_sha256"])
+    action = _control_step("vc6-finalize-intent", lambda: delivery.finalize_action(campaign, CANDIDATE, status["review_sha256"]))
     batches.append(vc1._batch(data, campaign, delivery.FINALIZE_ACTION_ID, [], phase="VC-6", action=action))
     result = delivery.load_stage_result(campaign, CANDIDATE, manifest=upgrade.load_campaign_manifest(campaign))
     if (result is None or result.get("release_state") != "ready_for_operator_release"
@@ -827,7 +1016,84 @@ def deliver(data: Path, campaign: Path, typed_fixture: Any) -> dict[str, Any]:
     return {"batches": batches, "stage": result, "source": source.binding(data / "control/recorded-delivery-control.json")}
 
 
+def _freeze_recorded_evaluation_state(state_path: Path, digest: str, campaign: Path) -> dict[str, Any]:
+    """VC-3 已实际完成后冻结录制视图；不预测画像，也不覆盖前段来源合同。
+
+    后继候选来源显式消费第二份不可变 state。它保留早期 snapshot、freeze、Job 与所有来源绑定，
+    只加入已批准画像对应的 policy；原官方封存仍引用早期 state，两者不能被改称现场来源。
+    """
+
+    from tools.official_client_capture import claude_recorded_evaluation_contract as evaluation
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_assertion_profile as profiles
+    from tools.official_client_capture import codex_upgrade_project_ledger as project
+
+    state = source.load_state(state_path, digest)
+    data = Path(state["data_root"])
+    if state["inputs"].get("recorded_control_scope") != COMPLETE_MAIN_MODEL_SCOPE:
+        raise replay.ReplayError("录制评估视图只能用于显式完整主模型控制后继")
+    project_root = project.find_project_ledger(campaign, client="claude")
+    if project_root != data / project.ledger_dir_name("claude"):
+        raise replay.ReplayError("录制评估视图不能换项目总账")
+    with upgrade._campaign_lock(campaign):
+        manifest = upgrade.load_campaign_manifest(campaign)
+        profiles.freeze_approved_assertion_profile(campaign, manifest)
+        frozen = profiles.load_approved_assertion_profile(campaign, manifest)
+        payload = evaluation.build_policy(state_path, campaign_path=campaign / "campaign.json",
+                                          project_plan_path=project_root / "plan.json",
+                                          assertion_profile_path=Path(frozen["path"]))
+
+    def frozen_file(path: Path, document: dict[str, Any]) -> Path:
+        # 强杀后只接受已签出的相同字节合同；半产物、链接与不同意图一律拒绝覆盖。
+        if path.parent.resolve() != path.parent or path.is_symlink():
+            raise replay.ReplayError("录制视图冻结路径不可信")
+        if path.exists():
+            source.bound(source.binding(path), root=data / "control")
+            if source.read(path) != document:
+                raise replay.ReplayError("录制视图已冻结，不能改画像或来源意图")
+            return path
+        return source.write(path, document)
+
+    policy_path = frozen_file(data / "control/recorded-evaluation-policy.json", payload)
+    updated = copy.deepcopy(state)
+    if "recorded_evaluation_policy" in updated["inputs"]["bindings"]:
+        raise replay.ReplayError("前段来源合同不能预绑定或替换录制评估视图")
+    updated["inputs"]["bindings"]["recorded_evaluation_policy"] = source.binding(policy_path)
+    current_path = frozen_file(data / "control/recorded-evaluation-source.json", updated)
+    return {"source_state": source.binding(current_path), "original_source_state": source.binding(state_path),
+            "policy": source.binding(policy_path)}
+
+
+def _verify_completed_stage(campaign: Path, phases: tuple[str, ...], result: Any) -> None:
+    """完成阶段只有当前真实checkpoint、正式消费者与Store仍闭合才能跳过动作。"""
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_control.store import ControlStore
+
+    _verify_stage_batches(campaign, result)
+    manifest = upgrade.load_campaign_manifest(campaign)
+    plan = upgrade._vc_campaign_plan(campaign, manifest)
+    for phase in phases:
+        upgrade._replay_vc_checkpoint(campaign, plan, phase,
+            revision=1 if phase in upgrade.CANDIDATE_VC_PHASES else None)
+    ControlStore(campaign / "control-store").replay(external_root=_SUCCESSOR.get()["data"], require_external=True)
+    if "VC-3" in phases:
+        upgrade._load_stage_result(campaign, "classify")
+        upgrade._load_stage_result(campaign, "stage-profile")
+    if "VC-5" in phases:
+        upgrade._load_stage_result(campaign, "accept", CANDIDATE)
+    if "VC-6" in phases:
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        current = delivery.load_stage_result(campaign, CANDIDATE, manifest=manifest)
+        if current != result["stage"] or current.get("release_state") != "ready_for_operator_release":
+            raise replay.ReplayError("完整后继VC-6正式产物与停点不一致")
+
+
 def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
+    with _successor_steps(state_path, digest):
+        return _run_chain_body(state_path, digest)
+
+
+def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
     """完整链只有所有真实 checkpoint、Store 与两本账闭合才通过；来源标记不会升级成版本语义认证。"""
 
     from tools.official_client_capture import claude_upgrade as upgrade
@@ -840,7 +1106,10 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
     state = source.load_state(state_path, digest)
     data = Path(state["data_root"])
     _require_client_staging(data)
-    first = vc1.run_chain(state_path, digest, installer=installed)
+    def verify_first(result):
+        with installed(state_path, digest):
+            vc1.load_continuation(source.bound(result["continuation"], root=data), result["continuation"]["sha256"])
+    first = _control_step("VC0-VC1", lambda: vc1.run_chain(state_path, digest, installer=installed), verify=verify_first)
     continuation_path = Path(first["continuation"]["path"])
     continuation_digest = first["continuation"]["sha256"]
     with installed(state_path, digest):
@@ -850,17 +1119,51 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
         if project_root != data / project.ledger_dir_name("claude"):
             raise replay.ReplayError("完整链项目总账不是同一原始数据根的 Claude 总账")
         initial_project = source.binding(project_root / "plan.json")
-        official_accounting = _account_sealed(data, campaign, "official")
+        official_accounting = _control_step("official-accounting", lambda: _account_sealed(data, campaign, "official"))
         stages = {"VC-1": first, "official_accounting": official_accounting,
-                  "VC-2/3": classify_and_prepare(data, campaign), "VC-4": build_candidate(data, campaign)}
+                  "VC-2/3": _control_step("VC2-VC3", lambda: classify_and_prepare(data, campaign), resume_actions=True,
+                      verify=lambda result: _verify_completed_stage(campaign, ("VC-2", "VC-3"), result)),
+                  "VC-4": _control_step("VC4", lambda: build_candidate(data, campaign), resume_actions=True,
+                      verify=lambda result: _verify_completed_stage(campaign, ("VC-4",), result))}
+        evaluation_state = (_control_step("evaluation-state", lambda: _freeze_recorded_evaluation_state(state_path, digest, campaign))
+                            if state["inputs"].get("recorded_control_scope") == COMPLETE_MAIN_MODEL_SCOPE else None)
+    candidate_state = evaluation_state["source_state"] if evaluation_state is not None else source.binding(state_path)
     # VC-4 后再安装新的外部观察源；禁止嵌套 SourceAdapter 造成一次动作重复签发/复制。
-    with installed(state_path, digest):
+    with installed(Path(candidate_state["path"]), candidate_state["sha256"]):
         vc1.load_continuation(continuation_path, continuation_digest)
-        stages["VC-5-capture"] = capture_and_seal(data, campaign)
-        stages["VC-5-accept"] = compare_and_accept(data, campaign)
-    with installed(state_path, digest), delivery_fixture.TypedDeliveryFixture(
-            campaign, CANDIDATE, control_path=data / "control/recorded-delivery-control.json") as typed_fixture:
-        stages["VC-6"] = deliver(data, campaign, typed_fixture)
+        def verify_capture(result):
+            from tools.official_client_capture import claude_upgrade_candidate_seal as seal
+            _verify_stage_batches(campaign, result)
+            path, current = seal.load_round_one_result(campaign, CANDIDATE, manifest=upgrade.load_campaign_manifest(campaign))
+            if source.binding(path) != result["stage"] or current["store"] != result["store"]:
+                raise replay.ReplayError("完整后继候选封存正式产物与停点不一致")
+            seal.sealed_attempt_context(campaign, current, candidate_id=CANDIDATE)
+        stages["VC-5-capture"] = _control_step("VC5-capture", lambda: capture_and_seal(data, campaign),
+                                               resume_actions=True, verify=verify_capture)
+        stages["VC-5-accept"] = _control_step("VC5-accept", lambda: compare_and_accept(data, campaign), resume_actions=True,
+            verify=lambda result: _verify_completed_stage(campaign, ("VC-5",), result))
+    with installed(Path(candidate_state["path"]), candidate_state["sha256"]):
+        def run_delivery():
+            from tools.official_client_capture.tests import claude_fault_chain_world as stops
+            typed_name, cursor_name = "typed-vc6:" + str(campaign.resolve()), "recorded-full-delivery"
+            cursor = stops.load_state("cursor:" + cursor_name)
+            if _SUCCESSOR.get() is not None and cursor is None:
+                if _SUCCESSOR.get().get("fresh_step") != "VC6":
+                    raise replay.ReplayError("完整后继VC-6缺原首次建场许可，禁止重建")
+                cursor = {"phase": "VC6", "initializations": {typed_name: "uninitialized"}}
+                stops.save_state("cursor:" + cursor_name, cursor)
+            scope = (stops.initialization_scope(typed_name, cursor=cursor_name, phase="VC6")
+                     if _SUCCESSOR.get() is not None and stops.load_state(typed_name) is None else contextlib.nullcontext())
+            with scope:
+                typed_fixture = delivery_fixture.TypedDeliveryFixture(campaign, CANDIDATE,
+                    control_path=data / "control/recorded-delivery-control.json")
+            if cursor is not None:
+                cursor["initializations"][typed_name] = "complete"
+                stops.save_state("cursor:" + cursor_name, cursor)
+            with typed_fixture:
+                return deliver(data, campaign, typed_fixture)
+        stages["VC-6"] = _control_step("VC6", run_delivery, resume_actions=True,
+            verify=lambda result: _verify_completed_stage(campaign, ("VC-6",), result))
         final = vc1.load_continuation(continuation_path, continuation_digest)
         manifest = final["manifest"]
         plan = upgrade._vc_campaign_plan(campaign, manifest)
@@ -878,7 +1181,7 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
         timing_head = timing.phase_ledger_state(ledger)
         accounting_closure = _verify_project_accounting(campaign, project_root, [
             official_accounting["operation_id"], stages["VC-5-capture"]["accounting"]["operation_id"],
-        ])
+        ], carry_binding=state["inputs"]["bindings"].get("recorded_budget_carry"))
         project_head = accounting_closure["project_head"]
         if (timing_head["status"] not in {"active", "complete"} or timing_head["active_phase"] is not None
                 or timing_head["completed_phases"] != ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]):
@@ -899,8 +1202,14 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
               "full_vc0_vc6_certified": True, "formal_version_semantics_certified": False,
               "external_fixture_sources": ["历史 x64 单 npm 官方来源", "完整 Active 控制基线投影", "Docker/宿主观察",
                                            "离线候选构建输入", "Mac/边界来源输入", "外部门禁执行观察", "候选交付环境执行器"]}
-    source.write(data / "control/recorded-full-chain-result.json", report)
-    return report
+    if evaluation_state is not None:
+        report["recorded_evaluation"] = evaluation_state
+    if "recorded_budget_carry" in state["inputs"]["bindings"]:
+        from tools.official_client_capture.tests import claude_recorded_budget_carry as carry
+
+        report["budget_carry"] = carry.verify_budget(data, carry_binding=state["inputs"]["bindings"]["recorded_budget_carry"])
+    path = _control_step("full-result", lambda: source.write(data / "control/recorded-full-chain-result.json", report))
+    return source.read(path)
 
 
 def run_through_profile(state_path: Path, digest: str) -> dict[str, Any]:
@@ -935,12 +1244,57 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--freeze", required=True)
     parser.add_argument("--parent-namespaces", required=True)
     parser.add_argument("--through", required=True, choices=("VC-3", "VC-6"))
+    parser.add_argument("--complete-main-model", action="store_true", help="显式新后继：双侧12 Job／79探针与持久动作停点")
+    parser.add_argument("--budget-carry-intent", help="原两账真实延期后的外持预算意图")
+    parser.add_argument("--budget-carry-intent-sha256", help="上述意图的外持原字节摘要")
     args = parser.parse_args(argv)
     try:
         if args.through == "VC-6":
             _require_client_staging(Path(args.data))
-        report = vc1.namespace_main(args, inputs_builder=_inputs, chain_runner=run_chain if args.through == "VC-6" else run_through_profile,
-                                    activation_module=ACTIVATION_MODULE)
+        if not args.complete_main_model:
+            if args.budget_carry_intent is not None or args.budget_carry_intent_sha256 is not None:
+                raise replay.ReplayError("预算carry只允许显式完整主模型新后继")
+            report = vc1.namespace_main(args, inputs_builder=_inputs,
+                chain_runner=run_chain if args.through == "VC-6" else run_through_profile,
+                activation_module=ACTIVATION_MODULE,
+                input_verifier=_full_vc5_input_verifier if args.through == "VC-6" else None)
+        else:
+            if args.through != "VC-6":
+                raise replay.ReplayError("完整主模型新后继必须显式走VC-6")
+            data = Path(args.data)
+            if not data.is_absolute() or data.resolve() != data:
+                raise replay.ReplayError("完整主模型新后继数据根必须是准确绝对路径")
+            intent, intent_binding = _carry_intent(args.budget_carry_intent, args.budget_carry_intent_sha256, data)
+            source.require_isolation({"parent_namespaces": json.loads(args.parent_namespaces), "readonly_sources": []})
+            from tools.official_client_capture.tests import claude_fault_chain_world as stops
+            record_root = data.parent.parent / "recorded-full-stops"
+            if record_root.is_symlink():
+                raise replay.ReplayError("完整主模型停点目录不能是链接")
+            record_root.mkdir(mode=0o700, exist_ok=True)
+            expected = {"data": data, "recorded": args.recorded, "freeze": args.freeze,
+                        "budget_carry_intent": intent_binding, "scope": COMPLETE_MAIN_MODEL_SCOPE}
+            with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root),
+                                             stops.METHOD_RESUME_ENV: "1" if data.exists() else ""}):
+                previous = stops.load_state("recorded-full-intent")
+                if previous is None:
+                    if data.exists():
+                        raise replay.ReplayError("完整后继已有数据根缺原意图停点，禁止猜测补造")
+                    stops.save_state("recorded-full-intent", expected)
+                elif previous != expected:
+                    raise replay.ReplayError("完整后继原来源或外持预算意图改变")
+                def build_inputs(target):
+                    inputs = _inputs(target, complete_main_model=True)
+                    if intent is not None:
+                        from tools.official_client_capture.tests import claude_recorded_budget_carry as carry
+                        values = {key: value for key, value in intent.items() if key not in {"schema_version", "data_root"}}
+                        values["predecessor_data"] = Path(values["predecessor_data"])
+                        inputs["bindings"]["recorded_budget_carry"] = carry.create(
+                            target / "control/recorded-budget-carry.json", data_root=target, **values)
+                    return inputs
+                report = vc1.namespace_main(args, inputs_builder=build_inputs, chain_runner=run_chain,
+                    activation_module=ACTIVATION_MODULE, initialization_name="recorded-full-initialization",
+                    input_verifier=_full_vc5_input_verifier,
+                    extra_readonly_roots=() if intent is None else (Path(intent["predecessor_data"]),))
     except BaseException as error:
         traceback.print_exc()
         print(json.dumps({"status": "unverified", "fixture_only": True, "registered_chains": [], "error": str(error)}, ensure_ascii=False))
