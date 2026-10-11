@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.ci import background_validation as bv
+from tools.official_client_capture.tests import unit_inherit_fixture as inherit_fixture
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODULE = REPO_ROOT / "tools" / "ci" / "background_validation.py"
@@ -601,6 +603,230 @@ class TwoClientBackgroundValidationTests(unittest.TestCase):
         self.assertEqual(code, 3, message)
         self.assertIn("还没有后台验证", message)
         self.assertEqual(self.boundary(self.codex_run, "codex", "require-passed")[0], 0, "Codex 的收据没变，原结论照样成立")
+
+
+class BackgroundUnitInheritTests(unittest.TestCase):
+    """只验后台新增接线；用原承接夹具生产真实决策和消费证明，不重跑已通过的原生三单元实验。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.world = inherit_fixture.World(self.root / "world", scenarios=())
+        self.data = self.world.root / "data"
+        self.runroot = self.root / "run"
+        self.claude_runroot = self.root / "claude-run"
+        self.claude_deploy = self.world.control / "claude-managed-deploy-20261005t000000z.json"
+        self.claude_deploy.write_text(json.dumps({"status": "passed", "client": "claude", "identity": {"tool_files_sha256": "a" * 64}}))
+        self.bundle = self.root / "source.bundle"
+        self.bundle.write_bytes("后台接线夹具".encode())
+        self.gates = self.root / "entry-gates.sh"
+        self.gates.write_text("# 后台测试替身入口；原决策与消费验证不替换\n")
+        self.policy = self.root / "policy.json"
+        self.policy.write_text('{"schema_version":"unit-audit-policy/v1","units":{}}\n')
+        deployments = bv.deployment_set(self.data)
+        self.work = bv._bound_work_roots(self.runroot, self.data, inherit_fixture.COMMIT,
+                                        bv.latest_deployment(self.data), deployments)[0]
+        self.work.mkdir(parents=True)
+        self.marker = self.work / "preserve-source"
+        self.marker.write_text("必须保留的来源\n")
+        self.context = self.world.context(profile="full-gates", gates=sorted(("check-egress-spec", "test-capture-tools")))
+        self.request = self.world.request(context=self.context)
+        self.world.sample(inherit_fixture.T0 + 150)
+        patches = (patch.object(bv, "_unit_inherit", return_value=inherit_fixture.ui),
+                   patch.object(inherit_fixture.ui, "current_time", return_value=inherit_fixture.T0 + 150))
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        old_handler = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, old_handler)
+        self.process = type("NoProcess", (), {"pid": -1})()
+        self.original = None
+
+    def arguments(self, request: Path | None = None, *extra: str):
+        return bv._parse(["start", "--runroot", str(self.runroot), "--data-root", str(self.data),
+                          "--bundle", str(self.bundle), "--branch", "codex/claude-upgrade-finish", "--commit", inherit_fixture.COMMIT,
+                          "--work", str(self.work), "--record-store", str(self.world.store.root), "--audit-policy", str(self.policy),
+                          "--entry-gates", str(self.gates), "--parallel", "2",
+                          *(["--unit-inherit-request", str(request)] if request else []), *extra])
+
+    def failed_background(self) -> Path:
+        # 后台生命周期单测不另派子进程；正常后台的真实会话与停止由同文件原测试覆盖。
+        with patch.object(bv.subprocess, "Popen", return_value=self.process):
+            started = bv.start(self.arguments())
+        path = Path(started["result"])
+        self.original = {**bv._read(path), "status": "failed", "returncode": 1, "failed_gates": ["test-capture-tools"]}
+        bv._write(path, self.original)
+        return path
+
+    def resume(self) -> Path:
+        with patch.object(bv.subprocess, "Popen", return_value=self.process):
+            return Path(bv.start(self.arguments(self.request))["result"])
+
+    def gate_result(self, path: Path, *, damage: str | None = None, fallback: str | None = None) -> None:
+        """原 Session 逐条判定、封存三个复核点并发布；只改变 beta 输入，所以只有它生成后继正式记录。"""
+        payload = bv._read(path)
+        out = Path(payload["out"])
+        (out / "executor").mkdir(parents=True)
+        self.world.declared.clear()
+        self.world.declared["test_beta"] = [inherit_fixture.ur.value_entry("tests", "file:test_beta", "修复后的输入")]
+        original_builder = self.world.manifest_body
+        currents = {unit: self.world.current(unit) for unit in self.world.units}
+
+        def change_all(checkpoint, moment):
+            if checkpoint == fallback:
+                for unit in self.world.units:
+                    self.world.declared[unit] = [inherit_fixture.ur.value_entry("tests", f"file:{unit}", "全部输入已变化")]
+                    current = self.world.current(unit)
+                    currents[unit].inputs = current.inputs
+                    currents[unit].inputs_sha256 = current.inputs_sha256
+
+        if fallback == "queue":
+            change_all("queue", inherit_fixture.T0)
+
+        def manifest_body(*args, **kwargs):
+            body = original_builder(*args, **kwargs)
+            return inherit_fixture.ur.seal({**{key: value for key, value in body.items() if key != "manifest_sha256"},
+                                            "out_dir": str(out / "executor")}, "manifest_sha256")
+
+        with patch.object(self.world, "manifest_body", side_effect=manifest_body):
+            result = self.world.run(self.request, before=change_all, currents=currents,
+                                    context=lambda checkpoint: dict(self.context, client="claude") if fallback == "unauthorized" else self.context)
+        self.assertEqual(result.problems, [])
+        self.assertEqual(set(result.executed_records), set(self.world.units) if fallback else {"test_beta"})
+        self.assertEqual(result.manifest["counts"]["inherited"], 0 if fallback else len(self.world.units) - 1)
+        self.result = result
+        manifest = out / "executor/unit-manifest.json"
+        manifest.write_bytes(result.manifest_path.read_bytes())
+        (out / "executor/unit-inherit-decision.json").write_text(json.dumps(result.session.build_decision(result.decisions)))
+        gates = [{"gate_id": gate, "status": "passed"} for gate in self.context["gates"]]
+        summary = {"status": "passed", "profile": "full-gates", "mode": result.manifest["mode"], "gates": gates,
+                   "source": {"commit": inherit_fixture.COMMIT, "deploy_receipt": self.world.deploy.name,
+                              "deploy_receipts_others": "claude=" + self.claude_deploy.name},
+                   "record_store": str(self.world.store.root), "test_tree": str(self.work / "test-tree"),
+                   "unit_manifest": {"path": str(manifest), "manifest_sha256": result.manifest["manifest_sha256"],
+                                     "self_check": "passed"}}
+        (out / "entry-gates.json").write_text(json.dumps(summary))
+        (out / "gates-manifest.json").write_text(json.dumps({"profile": "full-gates", "gates": gates}))
+        if damage == "decision":
+            self.world.store.decision_path(result.manifest["run_id"]).unlink()
+        elif damage == "manifest":
+            manifest.unlink()
+        elif damage == "gates":
+            (out / "gates-manifest.json").write_text(json.dumps({"profile": "full-gates", "gates": gates[:1]}))
+        self.world.sample(inherit_fixture.T0 + 150)
+
+    def finish(self, path: Path, *, damage: str | None = None, fallback: str | None = None) -> dict:
+        def dispatch(argv, **kwargs):
+            self.assertEqual(argv[argv.index("--mode") + 1], "unit-inherit")
+            self.assertEqual(argv[argv.index("--work") + 1], str(self.work))
+            self.assertEqual(argv[argv.index("--unit-inherit-request") + 1], str(self.request))
+            self.assertIn("--require-deployed-all", argv)
+            self.assertEqual(kwargs["env"]["GOCACHE"], str(self.work / "go-build-cache"))
+            self.gate_result(path, damage=damage, fallback=fallback)
+            return type("CompletedGate", (), {"wait": lambda self: 0})()
+
+        with patch.object(bv.subprocess, "Popen", side_effect=dispatch):
+            self.assertEqual(bv.run(path), 0)
+        return bv._read(path)
+
+    def test_failed_background_resumes_same_work_and_both_clients_consume_the_decision(self) -> None:
+        path = self.failed_background()
+        originals = {unit: record["record_sha256"] for unit, record in self.world.records.items()}
+        self.assertEqual(self.resume(), path)
+        payload = self.finish(path)
+        self.assertEqual(payload["status"], "passed", payload)
+        history = Path(payload["predecessor"]["path"])
+        self.assertEqual(json.loads(history.read_text()), self.original)
+        self.assertEqual(bv._sha256_file(history), payload["predecessor"]["sha256"])
+        self.assertNotEqual(self.original["out"], payload["out"])
+        self.assertEqual(self.marker.read_text(), "必须保留的来源\n")
+        self.assertEqual(originals, {unit: record["record_sha256"] for unit, record in self.world.records.items()})
+        self.assertEqual(payload["unit_inherit_consumption"]["proof"]["executed"], 1)
+        for client, runroot in (("codex", self.runroot), ("claude", self.claude_runroot)):
+            for require in (False, True):
+                with self.subTest(client=client, require=require):
+                    code, reason = bv.check(runroot, self.data, client=client, require_passed=require)
+                    self.assertEqual(code, 0, reason)
+        # 同一成功后继不会再派；没有显式请求的 B-09 行为由原后台测试逐项守住。
+        with patch.object(bv.subprocess, "Popen") as process:
+            self.assertEqual(bv.start(self.arguments(self.request))["action"], "exists")
+            process.assert_not_called()
+        missing = json.loads(json.dumps(payload))
+        missing["unit_inherit_consumption"]["proof"]["consumption"] = None
+        bv._write(path, missing)
+        self.assertEqual(bv.check(self.claude_runroot, self.data, client="claude", require_passed=True)[0], 3)
+        bv._write(path, payload)
+        self.world.store.decision_path(self.result.manifest["run_id"]).unlink()
+        for client, runroot in (("codex", self.runroot), ("claude", self.claude_runroot)):
+            self.assertEqual(bv.check(runroot, self.data, client=client, require_passed=True)[0], 3)
+
+    def test_all_executed_fallback_requires_authorized_checkpoint_proofs(self) -> None:
+        path = self.failed_background()
+        for checkpoint in ("queue", "lock", "unauthorized"):
+            with self.subTest(checkpoint=checkpoint):
+                bv._write(path, self.original)
+                self.assertEqual(self.resume(), path)
+                payload = self.finish(path, fallback=checkpoint)
+                expected = "aborted" if checkpoint == "unauthorized" else "passed"
+                self.assertEqual(payload["status"], expected, payload)
+                if expected == "passed":
+                    proof = payload["unit_inherit_consumption"]["proof"]
+                    self.assertEqual((proof["inherited"], proof["executed"]), (0, len(self.world.units)))
+                    self.assertIsNotNone(proof["consumption"])
+                for client, runroot in (("codex", self.runroot), ("claude", self.claude_runroot)):
+                    code, reason = bv.check(runroot, self.data, client=client, require_passed=True)
+                    self.assertEqual(code, 3 if expected == "aborted" else 0, reason)
+
+    def test_passed_label_without_complete_decision_cannot_publish_background_success(self) -> None:
+        self.failed_background()
+        for damage in ("decision", "manifest", "gates"):
+            with self.subTest(damage=damage):
+                path = self.resume()
+                payload = self.finish(path, damage=damage)
+                self.assertEqual(payload["status"], "aborted", payload)
+                self.assertIn("后台逐单元消费不通过", payload["reason"])
+                self.assertEqual(bv.check(self.claude_runroot, self.data, client="claude", require_passed=True)[0], 3)
+
+    def test_missing_approval_wrong_scope_and_b09_mix_are_refused_before_start(self) -> None:
+        path = self.failed_background()
+        for context in (dict(self.context, client="claude"), dict(self.context, commit="d" * 40),
+                        dict(self.context, profile="entry"), dict(self.context, record_store=str(self.root / "other"))):
+            with self.subTest(context=context), patch.object(bv.subprocess, "Popen") as process:
+                request = self.world.request(context=context)
+                with self.assertRaises((bv.ValidationError, inherit_fixture.fs.ContractError)):
+                    bv.start(self.arguments(request))
+                process.assert_not_called()
+        missing = self.world.request(context=self.context, approvals=[])
+        with self.assertRaisesRegex(inherit_fixture.fs.ContractError, "批准"):
+            bv.start(self.arguments(missing))
+        with self.assertRaisesRegex(bv.ValidationError, "B-09"):
+            bv.start(self.arguments(self.request, "--rerun-full-set"))
+        self.assertEqual(bv._read(path), self.original)
+
+    def test_work_drift_and_still_live_predecessor_are_refused(self) -> None:
+        path = self.failed_background()
+        with self.assertRaisesRegex(bv.ValidationError, "保留原"):
+            bv.start(self.arguments(self.request, "--work", str(self.work / "changed")))
+        with patch.object(bv, "_group_alive", return_value=True), self.assertRaisesRegex(bv.ValidationError, "尚未退出"):
+            bv.start(self.arguments(self.request))
+        self.assertEqual(bv._read(path), self.original)
+
+    def test_request_change_after_start_is_refused_before_gate_dispatch(self) -> None:
+        self.failed_background()
+        original = self.request.read_bytes()
+        for damage in ("bytes", "reference"):
+            with self.subTest(damage=damage):
+                self.request.write_bytes(original)
+                path = self.resume()
+                if damage == "bytes":
+                    self.request.write_bytes(original + b"\n")
+                else:
+                    bv._write(path, {**bv._read(path), "unit_inherit_request": {"sha256": "0" * 64}})
+                with patch.object(bv.subprocess, "Popen") as process:
+                    self.assertEqual(bv.run(path), 3)
+                    process.assert_not_called()
+                self.assertEqual(bv._read(path)["status"], "aborted")
 
 
 if __name__ == "__main__":

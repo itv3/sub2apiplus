@@ -1623,6 +1623,149 @@ class AttemptFactsTests(unittest.TestCase):
                 self.assertEqual(original_stop.read_bytes(), original_stop_raw)
                 self.assertEqual(before_path.read_bytes(), before_raw)
 
+        self._assert_completed_method_read_scope()
+
+    def _assert_completed_method_read_scope(self) -> None:
+        """原 UID 核三个成功回调的实际接线；产品读侧在独立 prepared 短验中真实执行。"""
+
+        import time
+        from types import SimpleNamespace
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_capture.tests import claude_late_stage_chain_driver as late
+        from tools.official_client_capture.tests import claude_transient_chain_driver as transient
+        from tools.official_client_capture.tests import claude_revision_evaluator_chain_driver as revision
+        from tools.official_client_capture.tests.real_chains import test_claude_upgrade_fault_chains as outer
+        from tools.official_client_control.store import ControlStore
+
+        delivery_scenario = '后段批次 COMMIT 发布中断'
+        variants = (
+            (late.ClaudeLateStageChainDriver, None, None, [delivery_scenario]),
+            (transient.ClaudeTransientChainDriver, 'transient-chain', 13,
+                ['候选 transient 裁定与恢复段续跑', delivery_scenario]),
+            (revision.ClaudeRevisionEvaluatorChainDriver, 'revision-chain', 11,
+                ['候选源码失败与 r2 修订接续', '评估器真实修复与 b1 零采集重评',
+                 '评估器修复拒绝错误部署收据：codex', '评估器修复拒绝错误部署收据：missing-client', delivery_scenario]),
+        )
+        self.resume_scope_metrics = []
+        for case_type, cursor, phase, expected in variants:
+            with self.subTest(callback=case_type.__name__), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                records, other_records = root / 'records', root / 'other-records'
+                records.mkdir(mode=0o700)
+                other_records.mkdir(mode=0o700)
+                campaign, config, control = root / 'campaign', root / 'source.json', root / 'control.json'
+                campaign.mkdir()
+                config.write_text('{"fixture_only": true}', encoding='utf-8')
+                control.write_text('{"fixture_only": true}', encoding='utf-8')
+                case = case_type('runTest')
+                case.campaign = campaign
+                case.source_context = contextlib.nullcontext
+                source_depth = 0
+
+                @contextlib.contextmanager
+                def client_sources():
+                    nonlocal source_depth
+                    source_depth += 1
+                    try:
+                        yield
+                    finally:
+                        source_depth -= 1
+
+                store = mock.Mock()
+                store.load_campaign.return_value = {'campaign_id': 'scope-fixture'}
+                def replay(**options):
+                    if cursor is not None:
+                        self.assertGreater(source_depth, 0, '须先绑定客户端来源，再完整核世界')
+                    self.assertTrue(options['require_external'])
+                store.replay.side_effect = replay
+                typed = SimpleNamespace(control_path=control, __enter__=lambda: None, close=mock.Mock())
+                typed_record = SimpleNamespace(record_name='typed-scope-fixture', campaign=campaign,
+                    candidate_id='candidate', data=root, configuration_binding=stops.file_cut(config),
+                    control_path=control, context={'fixture_only': True}, saved_guard_identity={'fixture_only': True})
+                save_typed = late.environment.TypedDeliveryFixture._save_record
+                world = {'campaign': campaign, 'candidate_id': 'candidate', 'config_path': config}
+
+                def check_read_only_saves():
+                    # 真正的 typed 停点保存、世界保存和夹具保存共用这条只读边界。
+                    # 相同内容连临时文件都不能创建；缺失与变更不能被恢复过程补写。
+                    with mock.patch.object(stops.tempfile, 'mkstemp', side_effect=AssertionError('只读范围不能建临时文件')), \
+                            mock.patch.object(stops.os, 'replace', side_effect=AssertionError('只读范围不能替换原件')):
+                        save_typed(typed_record)
+                        stops.save_world('late-delivery', world)
+                        stops.save_case(case)
+                        for name, value in (('new-stop', {}), ('typed-live-guards', {'records': []})):
+                            with self.assertRaisesRegex(ValueError, '禁止新建或改变'):
+                                stops.save_state(name, value)
+                    for changed_root in (str(other_records), ''):
+                        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: changed_root}):
+                            for save in (lambda: stops.save_state('new-stop', {}),
+                                         lambda: stops.save_world('late-delivery', world)):
+                                with self.assertRaisesRegex(ValueError, '不能切换方法记录根'):
+                                    save()
+
+                with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records), stops.METHOD_RESUME_ENV: '1'}), \
+                        outer._record_lock(records):
+                    stops.checkpoint(case, 'delivery-fixture', phase='done', campaign=campaign, control=control)
+                    stops.save_state('late-delivery-locator', {'cursor': 'delivery-fixture', 'world': 'late-delivery'})
+                    stops.save_world('late-delivery', world)
+                    if cursor is not None:
+                        stops.checkpoint(case, cursor, phase=phase, campaign=campaign)
+                        stops.save_world(cursor, world)
+                    save_typed(typed_record)
+                    originals = {path: path.read_bytes() for path in records.rglob('*') if path.is_file()}
+                    with mock.patch.object(ControlStore, 'open_read_only', return_value=store), \
+                            mock.patch.object(stops.upgrade, 'load_campaign_manifest', return_value={'campaign_id': 'scope-fixture'}), \
+                            mock.patch.object(stops.store_module, 'require_store_campaign_matches_plan'), \
+                            mock.patch.object(capture, '_host_data_root', return_value=root), \
+                            mock.patch.object(stops.vc, 'validate_vc_control'), \
+                            mock.patch.object(stops, 'refresh_world', side_effect=lambda _case, value: value), \
+                            mock.patch.object(transient.client_fixture, 'source_scope', side_effect=client_sources), \
+                            mock.patch.object(late.chain, 'seams', side_effect=lambda _path: contextlib.nullcontext()), \
+                            mock.patch.object(late.environment, 'TypedDeliveryFixture', return_value=typed), \
+                            mock.patch.object(outer.ScenarioAudit, 'revalidate', side_effect=lambda _case, name: {'scenario': name}) as audits, \
+                            mock.patch.object(stops, 'read_cut', wraps=stops.read_cut) as read_cut:
+                        started = time.monotonic()
+                        expected_records = [{'scenario': name} for name in expected]
+                        for invocation in range(1, 3):
+                            self.assertEqual(case.revalidate_completed_method(expected), expected_records)
+                            self.assertEqual(store.replay.call_count, invocation, '同世界每次方法重验只能完整读一次')
+                            self.assertEqual(audits.call_count, invocation * len(expected), '六项审计不能因世界去重而跳过')
+                        self.assertGreaterEqual(read_cut.call_count, 2, '每次仍实读世界绑定原件')
+                        self.resume_scope_metrics.append({'callback': case_type.__name__, 'invocations': 2,
+                            'world_replays': store.replay.call_count, 'scenario_audits': audits.call_count,
+                            'original_cut_reads': read_cut.call_count, 'seconds': round(time.monotonic() - started, 6)})
+                        # 损坏仍由原绑定读侧拒绝，不能从第一次调用的成功缓存获准。
+                        raw = config.read_bytes()
+                        config.write_bytes(b'X' + raw[1:])
+                        with self.assertRaisesRegex(ValueError, '原件切点'):
+                            case.revalidate_completed_method(expected)
+                        config.write_bytes(raw)
+                        before_scope = store.replay.call_count
+                        with client_sources(), stops.verified_read_only_world(case, campaign):
+                            with stops.verified_read_only_world(case, campaign):
+                                stops.verify_case(case, campaign)
+                            self.assertEqual(store.replay.call_count, before_scope + 1)
+                            check_read_only_saves()
+                            for other_case, other_campaign in ((object(), campaign), (case, root / 'other-campaign')):
+                                with self.assertRaisesRegex(ValueError, '不能跨方法记录'):
+                                    stops.verify_case(other_case, other_campaign)
+                            with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(other_records)}), \
+                                    self.assertRaisesRegex(ValueError, '不能跨方法记录'):
+                                stops.verify_case(case, campaign)
+                        with client_sources():
+                            stops.verify_case(case, campaign)
+                        self.assertEqual(store.replay.call_count, before_scope + 2, '退出后须再次完整重验')
+                        guard_index = stops._state_path('typed-live-guards')
+                        guard_raw = guard_index.read_bytes()
+                        guard_index.unlink()
+                        try:
+                            with client_sources(), stops.verified_read_only_world(case, campaign), \
+                                    self.assertRaisesRegex(ValueError, '禁止新建或改变'):
+                                save_typed(typed_record)
+                            self.assertFalse(guard_index.exists(), '原 typed 活守卫索引缺失时禁止补建')
+                        finally:
+                            guard_index.write_bytes(guard_raw)
+                    self.assertEqual({path: path.read_bytes() for path in records.rglob('*') if path.is_file()}, originals)
 
     def _assert_candidate_token_preflight_retry(self) -> None:
         """原UID内只核命令接缝；真实Store/两账证明由候选驱动和原现场续作核验。"""

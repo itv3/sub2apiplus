@@ -817,7 +817,11 @@ sys.exit(0)
 
         own = '候选 transient 裁定与恢复段续跑'
         records = []
-        with client_fixture.source_scope():
+        state = world_fixture.load_state('cursor:transient-chain')
+        if state is None or state.get('phase') != 13 or not world_fixture.restore_case(self):
+            raise ValueError('transient 原方法未形成完整终态游标')
+        # 来源绑定完成后才核世界；前段与后段原件在同一持锁只读范围内验真。
+        with client_fixture.source_scope(), world_fixture.verified_read_only_world(self, state['campaign']):
             if own in expected:
                 saved = world_fixture.resume_checkpoint(self, 'transient-chain')
                 if saved is None or saved['phase'] != 13:

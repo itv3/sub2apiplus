@@ -256,11 +256,15 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
         locator = stops.load_state('late-delivery-locator')
         if locator is None or not os.environ.get(stops.METHOD_RESUME_ENV):
             raise ValueError('完成后段方法缺原世界定位，禁止重建或追认旧摘要')
-        state = stops.resume_checkpoint(self, locator['cursor'])
-        if state is None or state['phase'] != 'done':
+        state = stops.load_state('cursor:' + locator['cursor'])
+        if state is None or state.get('phase') != 'done' or not stops.restore_case(self):
             raise ValueError('完成后段方法没有原 done 游标')
         scope = self.source_context() if hasattr(self, 'source_context') else contextlib.nullcontext()
-        with scope:
+        # 先绑定原来源，再在同世界只读范围内共用一次完整检查；嵌套的前段重验也可沿用。
+        with scope, stops.verified_read_only_world(self, state['campaign']):
+            state = stops.resume_checkpoint(self, locator['cursor'])
+            if state is None or state['phase'] != 'done':
+                raise ValueError('完成后段方法没有原 done 游标')
             world = stops.restore_world(self, locator['world'])
             with chain.seams(world['config_path']):
                 fixture = environment.TypedDeliveryFixture(world['campaign'], world['candidate_id'])

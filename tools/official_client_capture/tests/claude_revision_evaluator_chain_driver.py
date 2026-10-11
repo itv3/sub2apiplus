@@ -887,7 +887,11 @@ class ClaudeRevisionEvaluatorChainDriver(transient.ClaudeTransientChainDriver):
         own = {'候选源码失败与 r2 修订接续', '评估器真实修复与 b1 零采集重评',
                '评估器修复拒绝错误部署收据：codex', '评估器修复拒绝错误部署收据：missing-client'}
         records = []
-        with client_fixture.source_scope():
+        state = world_fixture.load_state('cursor:revision-chain')
+        if state is None or state.get('phase') != 11 or not world_fixture.restore_case(self):
+            raise ValueError('revision 原方法未形成完整终态游标')
+        # 仅成功方法进入这个瞬时范围；未完成 revision 仍走原分阶段恢复入口。
+        with client_fixture.source_scope(), world_fixture.verified_read_only_world(self, state['campaign']):
             if own & set(expected):
                 saved = world_fixture.resume_checkpoint(self, 'revision-chain')
                 if saved is None or saved['phase'] != 11:

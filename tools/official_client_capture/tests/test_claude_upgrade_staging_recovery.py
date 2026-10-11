@@ -315,7 +315,41 @@ class StagingCommitRecoveryTests(_StagingCase):
             audit.check_history()
             audit.check_entry(reconciled, 'compile-and-run-vc-batch', '同序号')
             recorded = audit.report()
-            self.assertEqual(ScenarioAudit.revalidate(self, audit.scenario), recorded)
+            # 同一个真实 prepared 世界只重放一次 Store／VC／两账；嵌套游标仍读原件。
+            # 不替换产品读侧，统计实际重放及六项原件读取，退出作用域后必须重新核验。
+            from tools.official_client_control.store import ControlStore
+            from tools.official_client_capture.tests.real_chains import test_claude_upgrade_fault_chains as outer
+            replay_original = ControlStore.replay
+            store_replays = []
+            def observed_replay(store, *arguments, **options):
+                started = time.monotonic()
+                try:
+                    return replay_original(store, *arguments, **options)
+                finally:
+                    if store.root.resolve() == self.store_root.resolve():
+                        store_replays.append(time.monotonic() - started)
+            observed_started = time.monotonic()
+            with outer._record_lock(Path(records)), \
+                    mock.patch.object(ControlStore, 'replay', autospec=True, side_effect=observed_replay), \
+                    mock.patch.object(stops, 'read_cut', wraps=stops.read_cut) as original_reads:
+                with stops.verified_read_only_world(self, campaign):
+                    once = len(store_replays)
+                    self.assertGreater(once, 0, '须执行真实 Store 重放，不接受 mocked passed')
+                    saved = stops.resume_checkpoint(self, 'prepared-orphan')
+                    self.assertEqual(saved['campaign'], campaign)
+                    with stops.verified_read_only_world(self, campaign):
+                        stops.verify_case(self, campaign)
+                        self.assertEqual(ScenarioAudit.revalidate(self, audit.scenario), recorded)
+                    self.assertEqual(len(store_replays), once, '游标和审计之间不能反复全扫同一世界')
+                    self.assertGreater(original_reads.call_count, 0, '世界去重不能省略六项原件')
+                stops.verify_case(self, campaign)
+                self.assertEqual(len(store_replays), 2 * once, '离开只读范围后不得跨轮复用验真结果')
+                self.resume_scope_metrics = {'real_store_replays_per_world_check': once,
+                    'world_checks': 2, 'real_store_replays': len(store_replays),
+                    'original_cut_reads': original_reads.call_count,
+                    'unique_original_paths': len({str(call.args[0]['path']) for call in original_reads.call_args_list}),
+                    'store_replay_seconds': round(sum(store_replays), 6),
+                    'seconds': round(time.monotonic() - observed_started, 6)}
             # 原 stdout 的后续追加不影响既有切点；改写原前缀必须拒绝。
             saved_audit = stops.load_state('audit-complete:' + audit.scenario)
             binding = saved_audit['inputs']['entry_source']['whole']['binding']

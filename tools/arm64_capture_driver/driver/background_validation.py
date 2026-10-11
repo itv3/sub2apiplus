@@ -24,6 +24,10 @@
 
 B-09 可提供当前上下文与结束时校时凭证，覆盖完整才签发全集收据；到期自动重跑，撤销后可用 ``--rerun-full-set``。
 
+已有后台失败后，显式 ``start --unit-inherit-request <当前请求>`` 可在同一 WORK 续作：保留旧终态，只通过现有逐单元合同
+补跑不能承接的项。请求必须绑定本客户端的 full-gates／pre-ledger、当前提交、部署集合及记录库；与 B-09 签发参数互斥。
+新后台通过前实际消费已发布的决策收据；批次边界按该次消费凭证重放，不能只信 passed 标签。默认路径仍重新执行全集。
+
 两客户端都已纳管时（B5a-10；数据根 ``control`` 里两客户端都有部署收据）：仓库全量门禁两客户端只跑一次（测试集合已含 Claude
 测试），结论按「提交＋部署收据集合」绑定——集合是每个已纳管客户端最新的那一份（交换共享根的一次部署即该事务签出的每一份，
 B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘要换成集合摘要；入口门禁带 ``--require-deployed-all``，本轮
@@ -479,6 +483,137 @@ def _bound_work_roots(runroot: Path, data_root: Path, commit: str, deployment: M
             Path(data_root).parent / "entry-gates-source-work" / binding)
 
 
+def _unit_inherit() -> Any:
+    """加载原逐单元合同，后台不另写批准、来源或决策验证规则。"""
+    name = "background_unit_inherit_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "unit_inherit.py")
+        if spec is None or spec.loader is None:
+            raise ValidationError("后台逐单元承接验证器缺失")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+def _inherit_reference(request: Path, scope: Mapping[str, Any], *, check_approval: bool = True) -> dict[str, str]:
+    """启动与派发前只核固定授权对象；实时读集与三次复核仍由原入口执行器完成。"""
+    module = _unit_inherit()
+    if not request.is_absolute() or any(path.is_symlink() for path in (request, *request.parents)):
+        raise ValidationError("后台逐单元请求须为无符号链接的绝对路径")
+    reference, payload = module._read_request(request)
+    context = module.context_check(module.fs.replay_ref(payload["context"]))
+    sources = module.sources_check(payload["sources"])
+    expected = {"client": scope.get("client") or "codex", "stage": "pre-ledger", "commit": scope["commit"],
+                "profile": DEFAULT_PROFILE, "record_store": str(Path(str(scope["record_store"])).resolve()),
+                "deployment_receipts": sorted(module.deployment_set(Path(str(scope["data_root"])) / "control"),
+                                              key=lambda item: item["client"])}
+    if not payload["reuse_enabled"] or any(context.get(key) != value for key, value in expected.items()):
+        raise ValidationError("后台逐单元请求未开启承接，或客户端、提交、部署集合、阶段、组合、记录库错绑")
+    if "input_contract" in scope:
+        contract = scope["input_contract"]
+        if (_sha256_file(Path(str(scope["audit_policy"]))) != contract["full_set_files"]["audit_policy"]
+                or _sha256_file(Path(str(scope["entry_gates"]))) != contract["entry_gates_sha256"]):
+            raise ValidationError("后台逐单元策略或门禁入口在登记后变化")
+    approvals = [module.fs.replay_ref(ref) for ref in payload["approvals"]]
+    if check_approval:
+        module.approvals_check(approvals, module.binding_sha256(context, sources), module.current_time())
+    return reference
+
+
+def _inherit_reexecuted(module: Any, manifest: Mapping[str, Any], store: Any, decision: Mapping[str, Any], fixed: Any,
+                        consumption: Mapping[str, Any] | None) -> dict[str, Any]:
+    """只有已通过的复核点把承接集合缩为空，才接受原执行器的全执行回退；授权失败回退仍拒绝。"""
+    records = module.records()
+    checkpoints = decision.get("checkpoints") or []
+    if (decision.get("schema_version") != records.UNIT_INHERIT_DECISION_SCHEMA or decision.get("contract") != module.CONTRACT
+            or not records.seal_ok(decision, "decision_sha256") or decision.get("action") != "reexecute-all"
+            or decision.get("run_id") != manifest["run_id"] or decision.get("record_store") != str(store.root)
+            or tuple(item.get("checkpoint") for item in checkpoints) not in (("queue",), ("queue", "lock"))
+            or checkpoints[-1].get("inherited") != {} or not fixed.reuse_enabled
+            or set(decision.get("units") or {}) != {row["unit_id"] for row in manifest["units"]}
+            or any(row.get("disposition") != "executed" for row in manifest["units"])
+            or any(row.get("disposition") != "executed" or row.get("source") is not None for row in decision["units"].values())
+            or store.manifest(manifest["run_id"]) != manifest or records.verify_manifest(manifest, store=store, historical=True)
+            or manifest.get("environment_sha256") != fixed.context["environment_sha256"]
+            or manifest.get("policy_sha256") != fixed.context["policy_sha256"]
+            or (manifest.get("executor") or {}).get("sha256") != fixed.context["executor_sha256"]):
+        raise ValidationError("后台全执行回退缺少完整原件，或不是已授权的空承接集合")
+    for checkpoint in checkpoints:
+        module._checkpoint_proof(checkpoint, fixed, set())
+    if consumption is None:
+        moment = module.current_time()
+        clock = module.put_evidence(store.root, module.sample_clock(fixed.clock_source, moment))
+        revoked = module.put_evidence(store.root, module.query_revocation(store.root, sorted(fixed.sources["runs"]),
+                                      fixed.context["stage"], moment, fixed.campaign_status_source))
+        body = records.seal({"schema_version": module.CONSUMPTION_SCHEMA, "run_id": manifest["run_id"],
+                             "decision_sha256": decision["decision_sha256"], "purpose": "background-validation",
+                             "consumed_at_utc": module.fs.timestamp(moment), "consumer_clock": clock, "revocation": revoked,
+                             "verifier": module.verifier_files()}, "consumption_sha256")
+        module._consumption_proof(body, decision, fixed, set())
+        consumption = module.put_evidence(store.root, body)
+    else:
+        module._consumption_proof(module.fs.replay_ref(dict(consumption)), decision, fixed, set())
+    return {"run_id": manifest["run_id"], "decision_sha256": decision["decision_sha256"], "inherited": 0,
+            "executed": len(manifest["units"]), "consumption": dict(consumption), "verifier": module.verifier_files()}
+
+
+def _inherit_completion(payload: Mapping[str, Any], *, historical: bool = False) -> dict[str, Any]:
+    """新结论实际消费原决策；边界像认证核验一样重放形成期及签发时消费证明，不重签或改写旧结论。"""
+    module = _unit_inherit()
+    request = payload["unit_inherit_request"]
+    if (_inherit_reference(Path(request["path"]), payload, check_approval=not historical) != request
+            or payload["input_contract"].get("unit_inherit_request") != request):
+        raise ValidationError("后台逐单元请求在登记后变化")
+    out = Path(str(payload["out"]))
+    summary_path = out / "entry-gates.json"
+    manifest_path = out / "executor" / "unit-manifest.json"
+    plan_path = out / "gates-manifest.json"
+    summary = module.fs.read(summary_path)
+    manifest = module.fs.read(manifest_path)
+    plan = module.fs.read(plan_path)
+    reference = summary.get("unit_manifest") or {}
+    if (summary.get("status") != "passed" or summary.get("mode") != manifest.get("mode")
+            or manifest.get("mode") not in (module.MODE, "re-execute")
+            or summary.get("profile") != DEFAULT_PROFILE or plan.get("profile") != DEFAULT_PROFILE
+            or summary.get("record_store") != payload["record_store"]
+            or summary.get("test_tree") != str(Path(payload["work"]) / "test-tree")
+            or (summary.get("source") or {}).get("commit") != payload["commit"]
+            or reference.get("path") != str(manifest_path) or reference.get("self_check") != "passed"
+            or reference.get("manifest_sha256") != manifest.get("manifest_sha256")
+            or manifest.get("out_dir") != str(out / "executor")
+            or not manifest.get("units") or any(row.get("passed") is not True for row in manifest["units"])):
+        raise ValidationError("后台通过结论未绑定本次完整逐单元清单")
+    store = module.records().RecordStore(Path(str(payload["record_store"])))
+    decision_path = (store.decision_path(manifest["run_id"]) if manifest["mode"] == module.MODE
+                     else out / "executor" / "unit-inherit-decision.json")
+    decision = module.fs.read(decision_path)
+    fixed = module.replay_fixed(decision)
+    if (fixed.request_ref != request or fixed.context["profile"] != DEFAULT_PROFILE
+            or fixed.context["gates"] != sorted(row["gate_id"] for row in plan["gates"])
+            or fixed.context["gates"] != sorted(row["gate_id"] for row in summary["gates"])
+            or any(row.get("status") != "passed" for row in summary["gates"])):
+        raise ValidationError("后台门禁全集、当前请求与决策收据不一致")
+    references = {"summary": module.fs.reference(summary_path), "manifest": module.fs.reference(manifest_path),
+                  "plan": module.fs.reference(plan_path), "decision": module.fs.reference(decision_path)}
+    previous = payload.get("unit_inherit_consumption") if historical else None
+    if historical and (not isinstance(previous, dict) or previous.get("references") != references):
+        raise ValidationError("后台逐单元消费凭证缺失，或签发后的原件发生变化")
+    consumption = previous["proof"]["consumption"] if historical else None
+    if historical and (not isinstance(consumption, dict) or set(consumption) != {"path", "sha256"}):
+        raise ValidationError("后台签发时的实际消费凭证缺失")
+    proof = (module.verify_published(manifest, store.root, purpose="background-validation", historical=historical,
+                                     consumption=consumption) if manifest["mode"] == module.MODE
+             else _inherit_reexecuted(module, manifest, store, decision, fixed, consumption))
+    if historical and any(proof[key] != previous["proof"].get(key) for key in ("run_id", "decision_sha256", "inherited", "executed")):
+        raise ValidationError("后台逐单元消费凭证与实际决策不一致")
+    return {"references": references, "proof": proof}
+
+
 def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     client = getattr(args, "client", None) or "codex"
     parallel = getattr(args, "parallel", None)
@@ -509,6 +644,15 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     if bool(full_set_paths["full_set_context"]) != bool(full_set_paths["full_set_clock"]):
         raise ValidationError("B-09 签发须同时提供当前上下文和校时凭证")
     inputs["full_set_files"] = {key: _sha256_file(Path(value)) if value else None for key, value in full_set_paths.items()}
+    inherit_request = getattr(args, "unit_inherit_request", None)
+    inherit_reference = None
+    if inherit_request is not None:
+        if (args.profile != DEFAULT_PROFILE or not args.record_store or not args.work or not args.audit_policy
+                or getattr(args, "rerun_full_set", False)
+                or any(full_set_paths[key] for key in ("full_set_context", "full_set_clock", "full_set_predecessor"))):
+            raise ValidationError("后台逐单元续作须显式提供原 WORK、记录库及策略，仅限 full-gates，不能与 B-09 参数同用")
+        inherit_reference = _inherit_reference(Path(inherit_request), vars(args))
+        inputs.update(execution_contract="unit-inherit/v1", unit_inherit_request=inherit_reference)
     existing = _read(path)
     registration = registry_path(args.data_root, args.commit, deployments) if deployments is not None else None
     if registration is not None and (existing is None or effective_status(existing) not in ("running", "passed", "failed")):
@@ -519,6 +663,20 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         if other is not None and other.get("commit") == args.commit and other.get("deployments") == deployments:
             path, existing = target, other
     rerun = bool(getattr(args, "rerun_full_set", False))
+    if inherit_reference is not None:
+        if existing is None:
+            raise ValidationError("后台逐单元续作缺少同提交、同部署的原后台结论")
+        unchanged = ("bundle_sha256", "branch", "profile", "work", "entry_gates_sha256", "record_store", "parallel")
+        if ((existing.get("client") or "codex") != client or existing.get("commit") != args.commit
+                or existing.get("deployment") != deployment or existing.get("deployments") != (dict(deployments) if deployments else None)
+                or any((existing.get("input_contract") or {}).get(key) != inputs.get(key) for key in unchanged)):
+            raise ValidationError("后台逐单元续作必须保留原客户端、提交、部署、WORK、记录库、门禁及调度参数")
+        if effective_status(existing) not in ("running", "passed"):
+            if _group_alive(existing.get("pid")):
+                raise ValidationError("原后台进程组尚未退出，拒绝在同 WORK 启动后继")
+            rerun = True
+    if inherit_reference is not None and existing is not None and existing.get("full_set_receipt"):
+        raise ValidationError("已有 B-09 全集收据不能转换成后台逐单元结论")
     if existing is not None and existing.get("full_set_receipt", {}).get("status") == "issued":
         # 到期后必须新执行，不能被“同部署已有 passed”去重挡住；坏来源也先重跑。
         try:
@@ -569,12 +727,16 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         # B5a-10：两客户端都纳管时绑定部署收据集合（只有一个客户端纳管时不写，结论与改造前同形）。
         **({"deployments": dict(deployments)} if deployments is not None else {}),
     }
+    if inherit_reference is not None:
+        payload.update(mode="unit-inherit", unit_inherit_request=inherit_reference)
     if existing is not None:
         # 当前状态文件可更新；每次重新开始前保留上一执行的完整终态，便于复核失败恢复。
         saved = json.dumps(existing, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
         history = path.parent / "history" / (hashlib.sha256(saved.encode()).hexdigest() + ".json")
         if not history.exists():
             _write(history, existing)
+        if inherit_reference is not None:
+            payload["predecessor"] = {"path": str(history), "sha256": _sha256_file(history), "status": existing["status"]}
     _write(path, payload)
     if registration is not None:
         _write(registration, {"schema_version": REGISTRY_SCHEMA, "commit": args.commit, "deployments": dict(deployments),
@@ -608,7 +770,8 @@ def run(result: Path) -> int:
     # 工作树和全部 Go 缓存使用本次后台验证的独立坐标；承接判断仍交给输入合同，不强行沿用前台记录。两客户端都纳管时
     # （B5a-10）入口门禁核对每个已纳管客户端的部署（--require-deployed-all），只有一个客户端纳管时命令行与改造前相同。
     require = "--require-deployed-all" if payload.get("deployments") else "--require-deployed"
-    argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], "--mode", "re-execute", require,
+    mode = "unit-inherit" if payload.get("unit_inherit_request") else "re-execute"
+    argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], "--mode", mode, require,
             "--wait-lock", str(WAIT_LOCK_SECONDS), "--out", payload["out"]]
     for flag, key in (("--record-store", "record_store"), ("--work", "work")):
         if payload.get(key):
@@ -628,6 +791,13 @@ def run(result: Path) -> int:
     work = Path(payload["work"])
     expected_caches = {"GOCACHE": str(work / "go-build-cache"), "GOMODCACHE": str(work / "go-mod-cache"), "GOTMPDIR": str(work / "go-tmp")}
     try:
+        if (payload.get("mode") == "unit-inherit" or payload.get("unit_inherit_request")
+                or payload.get("input_contract", {}).get("execution_contract") == "unit-inherit/v1"):
+            if (payload.get("mode") != "unit-inherit" or payload["input_contract"].get("execution_contract") != "unit-inherit/v1"
+                    or payload["input_contract"].get("unit_inherit_request") != payload.get("unit_inherit_request")
+                    or _inherit_reference(Path(payload["unit_inherit_request"]["path"]), payload) != payload["unit_inherit_request"]):
+                raise ValidationError("后台逐单元运行的模式、授权与输入合同不一致")
+            argv[2:2] = ["--unit-inherit-request", payload["unit_inherit_request"]["path"], "--unit-inherit-stage", "pre-ledger"]
         # 运行期再核对已登记的资源值；修改结果或输入合同不能悄悄改变门禁的调度策略。
         parallel = payload.get("parallel")
         contract = payload.get("input_contract", {})
@@ -645,7 +815,7 @@ def run(result: Path) -> int:
             if any(item.is_symlink() for item in (directory, *directory.parents)):
                 raise ValidationError("后台缓存目录不得含符号链接")
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except (OSError, ValidationError, KeyError, TypeError) as error:
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
         _write(path, {**payload, "status": "aborted", "completed_at_utc": _utc_now(), "reason": str(error), "returncode": 3})
         return 3
     environment.update(expected_caches)
@@ -682,6 +852,11 @@ def run(result: Path) -> int:
         status, reason = "passed", None
     else:
         status, reason = "failed", f"入口门禁退出码 {returncode}"
+    if status == "passed" and current.get("unit_inherit_request"):
+        try:
+            current = {**current, "unit_inherit_consumption": _inherit_completion(current)}
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+            status, reason = "aborted", f"后台逐单元消费不通过：{error}"
     _write(path, {**current, "status": status, "completed_at_utc": _utc_now(), "reason": reason, "returncode": returncode,
                   "failed_gates": failed})
     if status == "passed" and current.get("full_set_context"):
@@ -778,6 +953,14 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
     status = effective_status(payload)
     where = f"提交 {str(payload.get('commit'))[:12]}，结论 {path}，日志 {payload.get('log')}"
     if status == "passed":
+        if (payload.get("mode") == "unit-inherit" or payload.get("unit_inherit_request")
+                or payload.get("input_contract", {}).get("execution_contract") == "unit-inherit/v1"):
+            try:
+                if payload.get("mode") != "unit-inherit" or not payload.get("unit_inherit_request"):
+                    raise ValidationError("后台逐单元结论缺少模式或请求")
+                _inherit_completion(payload, historical=True)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+                return 3, f"后台逐单元消费证明不能重放（{where}）：{error}"
         return 0, f"后台验证通过（{where}）"
     if status == "failed":
         return 3, f"后台验证失败（没通过的门禁项 {payload.get('failed_gates')}；{where}）：拒绝派发下一批，修好、定向回归、部署后重新 start"
@@ -818,6 +1001,7 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--full-set-predecessor", type=Path, help="失效的旧收据，只读关联")
     p_start.add_argument("--audit-policy", type=Path, help="B-11 已登记的严格读集策略")
     p_start.add_argument("--rerun-full-set", action="store_true", help="撤销或错绑后显式重跑全集，保留旧终态并关联旧收据")
+    p_start.add_argument("--unit-inherit-request", type=Path, help="原后台结束后在同 WORK 按当前批准请求续作，保留旧失败并重验决策")
     p_start.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="绑定哪个客户端的部署收据（缺省 codex）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)

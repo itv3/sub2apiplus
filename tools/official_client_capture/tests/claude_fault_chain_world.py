@@ -106,8 +106,17 @@ def load_state(name: str) -> dict[str, Any] | None:
 
 
 def save_state(name: str, state: dict[str, Any]) -> None:
-    """在原方法记录目录原子保存必需状态，不代写任何 Campaign 产物。"""
+    """普通执行原子保存停点；已验真的只读范围仅核同值原件，绝不补写。"""
 
+    verified_scope = _VERIFIED_READ_ONLY_WORLD.get()
+    if verified_scope is not None:
+        if verified_scope[2] != record_root():
+            raise ValueError('只读重验作用域不能切换方法记录根后保存停点')
+        original = load_state(name)
+        if original is None or json.dumps(_encoded(original), sort_keys=True, ensure_ascii=False) != json.dumps(
+                _encoded(state), sort_keys=True, ensure_ascii=False):
+            raise ValueError(f'只读重验作用域禁止新建或改变原停点：{name}')
+        return
     path = _state_path(name)
     if path is None:
         return
@@ -590,6 +599,7 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
     verified_scope = _VERIFIED_READ_ONLY_WORLD.get()
     if verified_scope is not None and (
             verified_scope[0] is not case or verified_scope[1] != campaign
+            or verified_scope[2] != record_root()
             or saved is None or saved.get('status') != 'complete'
             or ('preflight_retry' in saved and saved['preflight_retry'].get('status') != 'complete')):
         raise ValueError('已重验世界的只读作用域只允许承接同世界已完成命令，禁止新动作或补写未决命令')
@@ -810,6 +820,15 @@ def _verified_preflight_retry(case: Any, name: str, saved: dict[str, Any], invok
 def verify_case(case: Any, campaign: Path) -> None:
     """坐标绑定后用原产品读侧重验实际世界，JSON 不是恢复授权或通过证明。"""
 
+    verified_scope = _VERIFIED_READ_ONLY_WORLD.get()
+    if verified_scope is not None:
+        if (verified_scope[0] is not case or verified_scope[1] != campaign
+                or verified_scope[2] != record_root()):
+            raise ValueError('只读重验作用域不能跨方法记录、夹具对象或 Campaign')
+        # 只在已完整验真的同方法、同世界作用域内省去重复 Store／VC／两账全扫。
+        # 原命令、各历史切点及六项审计仍逐条实读；退出作用域后本标记即失效。
+        return
+
     from tools.official_client_control.store import ControlStore
     from tools.official_client_capture import claude_upgrade_capture as capture
     from tools.official_client_capture import codex_upgrade_project_ledger as project
@@ -844,7 +863,7 @@ def verified_read_only_world(case: Any, campaign: Path):
     """同一原方法持锁后，先完整重验一次世界，再逐条只读核原命令；离开即失效。"""
 
     verify_case(case, campaign)
-    token = _VERIFIED_READ_ONLY_WORLD.set((case, campaign))
+    token = _VERIFIED_READ_ONLY_WORLD.set((case, campaign, record_root()))
     try:
         yield
     finally:
@@ -885,7 +904,7 @@ WORLD_REBUILT_FIELDS = ('manifest', 'store', 'store_campaign', 'build', 'candida
 def save_world(name: str, world: dict[str, Any]) -> None:
     """只记显式原坐标与局部值；不序列化 Store、守卫或执行器对象。"""
 
-    if record_root() is None:
+    if record_root() is None and _VERIFIED_READ_ONLY_WORLD.get() is None:
         return
     unknown = set(world) - set(WORLD_FIELDS) - set(WORLD_REBUILT_FIELDS)
     if unknown:

@@ -858,7 +858,15 @@ ENTRY_SOURCE_STABILITY_REMOVED = {'tools/ci/background_validation.py': ['本轮 
                                        '                or not work.is_relative_to(bound_root) or ".." in '
                                        'work.parts):']}
 
+# 后台失败的显式逐单元后继只接原合同；默认 B-09 命令与收据由原后台回归守住。
+BACKGROUND_INHERIT_BASELINE = 'efb72f9cac3a0a5a57560a15d9f6e16d6ee9167b'
+BACKGROUND_INHERIT_DIGESTS = {'tools/ci/background_validation.py': '9411fe531352825b4ca4d0c1395cb2de290856d8773c34f3538cc4b6b2bbe890'}
+BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = ["bash", payload["entry_gates"], "--profile", payload["profile"], '
+                                       '"--mode", "re-execute", require,',
+                                       '    except (OSError, ValidationError, KeyError, TypeError) as error:']}
+
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("后台失败的受控逐单元后继", BACKGROUND_INHERIT_BASELINE, BACKGROUND_INHERIT_DIGESTS, BACKGROUND_INHERIT_REMOVED),
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_REMOVED),
     ("入口承接后台来源工作区", ENTRY_SOURCE_WORKSPACE_BASELINE, ENTRY_SOURCE_WORKSPACE_DIGESTS, ENTRY_SOURCE_WORKSPACE_REMOVED),
     ("5626固定完整79场景根真实接管", CLAUDE_FIXED_SCENARIO_ROOT_BASELINE, CLAUDE_FIXED_SCENARIO_ROOT_DIGESTS, CLAUDE_FIXED_SCENARIO_ROOT_REMOVED),
