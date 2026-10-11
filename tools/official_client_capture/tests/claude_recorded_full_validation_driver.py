@@ -345,6 +345,24 @@ def _verify_stage_batches(campaign: Path, result: dict[str, Any]) -> None:
         _verify_batch_result(campaign, batch)
 
 
+def _recorded_compiled_actions(campaign: Path, action: dict[str, Any], phase: str,
+                              inner: dict[str, Any]) -> list[dict[str, Any]]:
+    """用原编译规则还原动作；候选和基线取已验真的历史清单，全部字段仍须逐字匹配。
+
+    VC-5 的原计划可以省略 output_bindings，正式编译会补齐；不能拿补齐后的清单与原计划直接比较，
+    也不能删掉该字段放宽验真。历史清单的 null 按原合同表示 b0，其他值保持原样交编译器严格校验。
+    """
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+
+    actions = artifacts.validate_action_plan(action, phase=phase)["actions"]
+    if phase == "VC-5":
+        baseline = inner["evaluation_baseline"]
+        actions = upgrade._freeze_evaluation_output_bindings(
+            campaign, inner["candidate_id"], 0 if baseline is None else baseline, actions)
+    return actions
+
+
 def _recorded_failed_batch(campaign: Path, action_path: Path) -> dict[str, Any]:
     """只读消费已提交失败父 run 的四方对账闭合；无预约、原动作和失败原件缺一不可。"""
     from tools.official_client_capture import claude_upgrade as upgrade
@@ -365,8 +383,9 @@ def _recorded_failed_batch(campaign: Path, action_path: Path) -> dict[str, Any]:
     state, inner = supervisor._read_state(run_dir), supervisor._run_inner_manifest(run_dir)
     actual = supervisor._staging_commit_for_run(campaign, state, inner, run_dir)
     audit = supervisor._audit_command(run_dir)
+    expected_actions = _recorded_compiled_actions(campaign, action, phase, inner)
     if (actual != commit or state.get("state") != "failed" or audit["state"] != "failed" or audit["audit_incomplete"]
-            or inner["actions"] != action["actions"] or inner["execute_items"] != action["execute_item_ids"]
+            or inner["actions"] != expected_actions or inner["execute_items"] != action["execute_item_ids"]
             or inner["reuse_items"] != action["reuse_item_ids"]):
         raise replay.ReplayError("原失败批次 COMMIT、动作或父 run 审计不闭合")
     if not upgrade._supervisor_run_reconciled(campaign, run_dir):
@@ -405,12 +424,13 @@ def _recorded_staging_abort(campaign: Path, action_path: Path, attempt_dir: Path
     manifest = upgrade.load_campaign_manifest(campaign)
     plan = upgrade._vc_campaign_plan(campaign, manifest)
     inner = prepared["run_manifest"]
+    expected_actions = _recorded_compiled_actions(campaign, action, phase, inner)
     if (abort["campaign_id"] != manifest["campaign_id"] or abort["campaign_plan_sha256"] != plan["plan_sha256"]
             or abort["sequence"] != sequence or abort["phase"] != phase or abort["staging_attempt"] != prepared["attempt"]
             or abort["batch_sha256"] != prepared["batch"]["batch_sha256"]
             or abort["manifest_sha256"] != prepared["manifest_sha256"]
             or any(abort[field] is not None for field in ("parent_run_dir", "parent_run_state", "reconciliation_receipt"))
-            or inner["campaign_id"] != manifest["campaign_id"] or inner["actions"] != action["actions"]
+            or inner["campaign_id"] != manifest["campaign_id"] or inner["actions"] != expected_actions
             or inner["execute_items"] != action["execute_item_ids"] or inner["reuse_items"] != action["reuse_item_ids"]):
         raise replay.ReplayError("原未提交 ABORT、PREPARED、批次与动作计划不闭合")
     return {"sequence": sequence, "phase": phase, "attempt_dir": attempt_dir,

@@ -412,6 +412,145 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 driver._control_step("input", action, intent={"choice": "原选择"})
         self.assertEqual(action.call_count, 1)
         self._assert_recorded_assertion_timeout_selection()
+        self._assert_recorded_compiled_action_readers()
+
+    def _assert_recorded_compiled_action_readers(self) -> None:
+        """沿既有 UID 核 failed／ABORT 的读侧接线；真实编译规范化不替换，不冒称现场对账通过。
+
+        外围已验真的父 run、PREPARED 和基线读结果使用显式夹具；原件绑定、动作合同、输出冻结和
+        ABORT 自摘要校验均实跑。实际监督器与正式对账仍由既有真实批次测试覆盖。
+        """
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_baseline as baselines
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+
+        for index, baseline in enumerate((None, 1)):
+            with self.subTest(frozen_baseline=baseline):
+                campaign = self.data / "evidence/campaigns" / f"compiled-reader-{index}"
+                candidate, sequence, phase = "claude-recorded-frozen-candidate", 701 + index, "VC-5"
+                action_path = self.data / "control/actions" / f"{sequence}-assert-rules.json"
+                action = {"action_id": "assert-rules", "operation": "VC-5:assert-rules", "timeout_seconds": 900.0,
+                          "command": ["/usr/bin/python3", "/fixture/claude_build_rule_assertion_results.py",
+                                      "--evaluation-baseline", str(0 if baseline is None else baseline)],
+                          "item_ids": ["assert-rules"]}
+                action_plan = {"schema_version": artifacts.VC_ACTION_PLAN_SCHEMA, "execute_item_ids": ["assert-rules"],
+                               "reuse_item_ids": [], "actions": [action]}
+                source.write(action_path, action_plan)
+                assertions = (campaign / "assertions" / candidate if baseline is None else
+                              campaign / "candidates" / candidate / "revisions/b1/assertions")
+                baseline_commit = {"stage_sources": {"assertions": {"source": "local",
+                                   "target": assertions.relative_to(campaign).as_posix()}}}
+                # b1 的读侧接缝只提供冻结路径；输出声明仍由原编译器计算，不能随最新基线改变。
+                with mock.patch.object(baselines, "read_evaluation_baseline_commit", return_value=baseline_commit) as baseline_reader, \
+                        mock.patch.object(upgrade, "_current_evaluation_baseline", side_effect=AssertionError("不得读最新基线")):
+                    compiled = upgrade._freeze_evaluation_output_bindings(
+                        campaign, candidate, 0 if baseline is None else baseline, [action])
+                    self.assertNotIn("output_bindings", action)
+                    self.assertEqual(compiled[0]["output_bindings"], [
+                        (assertions / "checkpoints").relative_to(campaign).as_posix(),
+                        (assertions / "evaluation-run.json").relative_to(campaign).as_posix()])
+                    inner = {"campaign_id": campaign.name, "candidate_id": candidate, "evaluation_baseline": baseline,
+                             "phase": phase, "actions": compiled, "execute_items": ["assert-rules"], "reuse_items": []}
+                    run_dir = self.data / "supervisor" / f"run-compiled-reader-{index}"
+                    commit = {"fixture_only": True, "parent_run_dir": str(run_dir)}
+                    source.write(upgrade._staging_commit_path(campaign, sequence, phase), commit)
+                    for name, value in (("state.json", {"fixture_only": True, "state": "failed"}),
+                                        ("campaign-run-manifest.json", inner), ("stop-receipt.json", {"fixture_only": True})):
+                        source.write(run_dir / name, value)
+                    receipt = campaign / "control" / reconciler.RECONCILIATION_DIR / f"run-{run_dir.name}" / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
+                    source.write(receipt, {"fixture_only": True, "campaign_id": campaign.name, "reservation_exists": False,
+                                          "live_request_count": 0, "attempt_events_fabricated": False,
+                                          "run": {"run_id": run_dir.name}})
+                    attempt = upgrade._staging_sequence_dir(campaign, sequence, phase) / "attempt-1"
+                    prepared = {"attempt": 1, "batch": {"batch_sha256": "b" * 64},
+                                "manifest_sha256": "c" * 64, "run_manifest": inner}
+                    abort = artifacts.build_staging_abort(
+                        campaign_id=campaign.name, campaign_plan_sha256="a" * 64, phase=phase, sequence=sequence,
+                        staging_attempt=1, stage="parent-run-create", failure_kind="prepare-failed",
+                        error_type="FixtureError", root_cause_id="rc1-" + "d" * 20, batch_sha256="b" * 64,
+                        manifest_sha256="c" * 64, parent_run_dir=None, parent_run_state=None,
+                        reconciliation_receipt=None, recorded_at_utc="2026-10-12T00:00:00Z")
+                    for name, value in (("PREPARED", {"fixture_only": True}), ("ABORT", abort),
+                                        ("batch.json", prepared["batch"]), ("run-manifest.json", inner)):
+                        source.write(attempt / name, value)
+                    originals = {path: path.read_bytes() for root in (campaign, run_dir) for path in root.rglob("*") if path.is_file()}
+                    originals[action_path] = action_path.read_bytes()
+                    original_inner = copy.deepcopy(inner)
+                    with contextlib.ExitStack() as patches:
+                        for owner, name, value in (
+                                (upgrade, "_read_staging_commit", commit),
+                                (supervisor, "_read_state", {"state": "failed"}),
+                                (supervisor, "_run_inner_manifest", inner),
+                                (supervisor, "_staging_commit_for_run", commit),
+                                (supervisor, "_audit_command", {"state": "failed", "audit_incomplete": False}),
+                                (upgrade, "_load_prepared_staging_attempt", prepared),
+                                (upgrade, "load_campaign_manifest", {"campaign_id": campaign.name}),
+                                (upgrade, "_vc_campaign_plan", {"plan_sha256": "a" * 64})):
+                            patches.enter_context(mock.patch.object(owner, name, return_value=value))
+                        reconciled = patches.enter_context(mock.patch.object(upgrade, "_supervisor_run_reconciled", return_value=True))
+                        freeze = patches.enter_context(mock.patch.object(upgrade, "_freeze_evaluation_output_bindings",
+                                                                         wraps=upgrade._freeze_evaluation_output_bindings))
+                        readers = {"failed": lambda: driver._recorded_failed_batch(campaign, action_path),
+                                   "abort": lambda: driver._recorded_staging_abort(campaign, action_path, attempt)}
+                        for reader_name, read in readers.items():
+                            with self.subTest(reader=reader_name):
+                                outcome = read()
+                                self.assertEqual(outcome["action_plan"], source.binding(action_path))
+                                freeze.assert_called_with(campaign, candidate, 0 if baseline is None else baseline, [action])
+                                declared = copy.deepcopy(action_plan)
+                                declared["actions"][0]["output_bindings"] = compiled[0]["output_bindings"]
+                                action_path.write_text(json.dumps(declared), encoding="utf-8")
+                                self.assertEqual(read()["action_plan"], source.binding(action_path))
+                                declared["actions"][0]["output_bindings"] = ["wrong/output.json"]
+                                action_path.write_text(json.dumps(declared), encoding="utf-8")
+                                with self.assertRaisesRegex(upgrade.ConfigurationError, "output_bindings.*不一致"):
+                                    read()
+                                action_path.write_bytes(originals[action_path])
+                                for field, value in (("command", ["changed"]), ("timeout_seconds", 1800.0),
+                                                     ("operation", "VC-5:changed"), ("action_id", "changed"),
+                                                     ("item_ids", ["changed"]), ("output_bindings", ["wrong/output.json"]),
+                                                     ("output_bindings", None)):
+                                    with self.subTest(compiled_drift=field, value=value):
+                                        inner["actions"] = copy.deepcopy(compiled)
+                                        if value is None:
+                                            del inner["actions"][0][field]
+                                        else:
+                                            inner["actions"][0][field] = value
+                                        with self.assertRaisesRegex(replay.ReplayError, "不闭合"):
+                                            read()
+                                        inner["actions"] = compiled
+                                for field in ("execute_items", "reuse_items"):
+                                    original = inner[field]
+                                    inner[field] = ["changed"]
+                                    with self.assertRaisesRegex(replay.ReplayError, "不闭合"):
+                                        read()
+                                    inner[field] = original
+                                for invalid in (False, "", -1):
+                                    inner["evaluation_baseline"] = invalid
+                                    with self.assertRaisesRegex(upgrade.ConfigurationError, "评估基线号必须是非负整数"):
+                                        read()
+                                inner["evaluation_baseline"] = baseline
+                        reconciled.return_value = False
+                        with self.assertRaisesRegex(replay.ReplayError, "尚未正式对账闭合"):
+                            readers["failed"]()
+                        self.assertEqual(inner, original_inner)
+                        # 非 VC-5 动作保持原字段；即使命令名相似，也不能擅自补评估输出。
+                        ordinary = copy.deepcopy(action_plan)
+                        ordinary["actions"][0]["operation"] = "VC-4:fixture"
+                        freeze.reset_mock()
+                        self.assertEqual(driver._recorded_compiled_actions(campaign, ordinary, "VC-4", {}), ordinary["actions"])
+                        freeze.assert_not_called()
+                        malformed = {**ordinary, "unregistered": True}
+                        with self.assertRaisesRegex(artifacts.VCArtifactError, "字段不闭合"):
+                            driver._recorded_compiled_actions(campaign, malformed, "VC-4", {})
+                    if baseline is None:
+                        baseline_reader.assert_not_called()
+                    else:
+                        self.assertTrue(baseline_reader.call_args_list)
+                        self.assertTrue(all(call == mock.call(campaign, candidate, 1) for call in baseline_reader.call_args_list))
+                    self.assertEqual({path: path.read_bytes() for path in originals}, originals)
 
     def _assert_recorded_assertion_timeout_selection(self) -> None:
         """沿既有 UID 核默认时限接线；这里只核驱动选择，真实对账与批次验真仍由原控制链测试覆盖。"""
