@@ -3363,6 +3363,10 @@ class ClaudeFaultChainTests(unittest.TestCase):
     # ---- 外层：pre-A3 登记的场景入口 ----
 
     def test_recovery_chain_keeps_trusted_results_and_resumes_every_fault(self) -> None:
+        """完整恢复链含原生候选录制世界；非原生宿主未验证，不启动降级整链。"""
+
+        if not sys.platform.startswith("linux") or os.geteuid() != 0 or os.uname().machine not in {"aarch64", "arm64"}:
+            self.skipTest("未验证：正式恢复链要求 Linux ARM64 root 与 mount/net namespace")
         self._run_chain("recovery")
 
     def test_late_stage_faults_resume_seven_scenarios(self) -> None:

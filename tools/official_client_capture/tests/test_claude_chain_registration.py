@@ -65,13 +65,16 @@ class ClaudeChainRegistrationTests(unittest.TestCase):
         self.assertFalse(hasattr(case, "real_chain_metrics"))
 
     def test_late_public_entry_uses_exact_seven_scene_chain(self) -> None:
-        case = faults.ClaudeFaultChainTests("test_late_stage_faults_resume_seven_scenarios")
-        with mock.patch.object(faults.sys, "platform", "linux"), \
-                mock.patch.object(faults.os, "geteuid", return_value=0), \
-                mock.patch.object(faults.os, "uname", return_value=SimpleNamespace(machine="aarch64")), \
-                mock.patch.object(case, "_run_chain") as run:
-            case.test_late_stage_faults_resume_seven_scenarios()
-        run.assert_called_once_with("late-continuous")
+        # 两个公共入口仅做宿主准入；原生宿主仍调用各自原链，不改变任何场景集合。
+        for method, chain in (("test_late_stage_faults_resume_seven_scenarios", "late-continuous"),
+                              ("test_recovery_chain_keeps_trusted_results_and_resumes_every_fault", "recovery")):
+            case = faults.ClaudeFaultChainTests(method)
+            with self.subTest(chain=chain), mock.patch.object(faults.sys, "platform", "linux"), \
+                    mock.patch.object(faults.os, "geteuid", return_value=0), \
+                    mock.patch.object(faults.os, "uname", return_value=SimpleNamespace(machine="aarch64")), \
+                    mock.patch.object(case, "_run_chain") as run:
+                getattr(case, method)()
+            run.assert_called_once_with(chain)
         self.assertEqual(faults.CHAINS["late-continuous"]["expected"], faults.LATE_CONTINUOUS_SCENARIOS)
         self.assertEqual(len(faults.LATE_CONTINUOUS_SCENARIOS), 7)
         self.assertNotIn("late-continuous", faults.PENDING_CONTINUOUS_CHAINS)
@@ -98,15 +101,18 @@ class ClaudeChainRegistrationTests(unittest.TestCase):
 
         rows = {row[0]: row for row in pre_a3.CLAUDE_SCENARIOS}
         for platform, user_id, architecture in (("darwin", 0, "arm64"), ("linux", 1000, "aarch64"), ("linux", 0, "x86_64")):
-            with self.subTest(platform=platform, user_id=user_id, architecture=architecture), \
-                    mock.patch.object(faults.sys, "platform", platform), \
-                    mock.patch.object(faults.os, "geteuid", return_value=user_id), \
-                    mock.patch.object(faults.os, "uname", return_value=SimpleNamespace(machine=architecture)), \
-                    mock.patch.object(faults.ClaudeFaultChainTests, "_run_pending_revision_continuous") as run:
-                result = pre_a3.run_scenario(rows["vc-chain.claude-revision-evaluator-recovery"])
-                self.assertEqual(result["status"], "uncertified")
-                self.assertNotIn("metrics", result)
-                run.assert_not_called()
+            for name in ("vc-chain.claude-revision-evaluator-recovery", "vc-chain.claude-recovery-chain"):
+                with self.subTest(platform=platform, user_id=user_id, architecture=architecture, chain=name), \
+                        mock.patch.object(faults.sys, "platform", platform), \
+                        mock.patch.object(faults.os, "geteuid", return_value=user_id), \
+                        mock.patch.object(faults.os, "uname", return_value=SimpleNamespace(machine=architecture)), \
+                        mock.patch.object(faults.ClaudeFaultChainTests, "_run_pending_revision_continuous") as run, \
+                        mock.patch.object(faults.ClaudeFaultChainTests, "_run_chain") as run_chain:
+                    result = pre_a3.run_scenario(rows[name])
+                    self.assertEqual(result["status"], "uncertified")
+                    self.assertNotIn("metrics", result)
+                    run.assert_not_called()
+                    run_chain.assert_not_called()
 
     def test_late_degraded_host_and_missing_recorded_sources_are_uncertified(self) -> None:
         rows = {row[0]: row for row in pre_a3.CLAUDE_SCENARIOS}
