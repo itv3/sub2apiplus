@@ -306,6 +306,9 @@ def _verify_batch_result(campaign: Path, result: dict[str, Any]) -> None:
     from tools.official_client_capture import codex_upgrade_supervisor as supervisor
     from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 
+    for previous in result.get("recorded_recoveries", []):
+        if _recorded_failed_batch(campaign, source.bound(previous["action_plan"])) != previous:
+            raise replay.ReplayError("完整后继原失败批次的正式对账证明漂移")
     commit = upgrade._read_staging_commit(upgrade._staging_commit_path(campaign, result["batch_sequence"], result["phase"]))
     batch = artifacts.validate_vc_batch(source.read(Path(result["compile"]["batch"])))
     manifest = upgrade._vc_run_manifest_from_batch(batch, batch_model="staging")
@@ -338,9 +341,47 @@ def _verify_stage_batches(campaign: Path, result: dict[str, Any]) -> None:
         _verify_batch_result(campaign, batch)
 
 
+def _recorded_failed_batch(campaign: Path, action_path: Path) -> dict[str, Any]:
+    """只读消费已提交失败父 run 的四方对账闭合；无预约、原动作和失败原件缺一不可。"""
+    from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+    from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+    data = campaign.parents[2]
+    if action_path.parent != data / "control/actions":
+        raise replay.ReplayError("原失败动作计划不属于本数据根")
+    action = source.read(source.bound(source.binding(action_path), root=data))
+    sequence = int(action_path.name.split("-", 1)[0])
+    phase = action["actions"][0]["operation"].split(":", 1)[0]
+    commit_path = upgrade._staging_commit_path(campaign, sequence, phase)
+    commit = upgrade._read_staging_commit(commit_path)
+    run_dir = Path(commit["parent_run_dir"])
+    if run_dir.parent != data / "supervisor" or run_dir.is_symlink():
+        raise replay.ReplayError("原失败批次父 run 不属于本数据根")
+    state, inner = supervisor._read_state(run_dir), supervisor._run_inner_manifest(run_dir)
+    actual = supervisor._staging_commit_for_run(campaign, state, inner, run_dir)
+    audit = supervisor._audit_command(run_dir)
+    if (actual != commit or state.get("state") != "failed" or audit["state"] != "failed" or audit["audit_incomplete"]
+            or inner["actions"] != action["actions"] or inner["execute_items"] != action["execute_item_ids"]
+            or inner["reuse_items"] != action["reuse_item_ids"]):
+        raise replay.ReplayError("原失败批次 COMMIT、动作或父 run 审计不闭合")
+    if not upgrade._supervisor_run_reconciled(campaign, run_dir):
+        raise replay.ReplayError("原失败父 run 尚未正式对账闭合；先执行 reconcile-supervisor-run")
+    receipt = campaign / "control" / reconciler.RECONCILIATION_DIR / f"run-{run_dir.name}" / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
+    document = source.read(source.bound(source.binding(receipt), root=campaign))
+    if (document.get("campaign_id") != inner["campaign_id"] or document.get("reservation_exists") is not False
+            or document.get("live_request_count") != 0 or document.get("attempt_events_fabricated") is not False
+            or document.get("run", {}).get("run_id") != run_dir.name):
+        raise replay.ReplayError("原父 run 对账未证明无预约零请求，不能重派采集")
+    return {"sequence": sequence, "run_dir": run_dir, "action_plan": source.binding(action_path),
+            "commit": source.binding(commit_path), "run_state": source.binding(run_dir / "state.json"),
+            "run_manifest": source.binding(run_dir / "campaign-run-manifest.json"),
+            "stop_receipt": source.binding(run_dir / "stop-receipt.json"), "reconciliation": source.binding(receipt)}
+
+
 def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaign: Path,
                                name: str, argv: list[str], **options: Any) -> dict[str, Any]:
-    """只续作已有动作计划、尚无批次或父run的原序号；派发过的半产物仍交原恢复合同处理。"""
+    """未派发继续原序号；已提交失败只消费正式对账闭合，再由原生产者派 N+1。"""
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 
@@ -348,11 +389,19 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
     sequence = max(upgrade._committed_vc_sequences(campaign, manifest), default=0) + 1
     actions = data / "control/actions"
     action_path = actions / f"{sequence}-{name}.json"
-    if (list(actions.glob(f"*-{name}.json")) != [action_path]
-            or list(actions.glob(f"{sequence}-*.json")) != [action_path]):
-        raise replay.ReplayError("拒派停点缺唯一原序号动作计划，禁止重新生成")
-    action_binding = source.binding(action_path)
-    source.bound(action_binding, root=data)
+    previous_paths = sorted(actions.glob(f"*-{name}.json"), key=lambda path: int(path.name.split("-", 1)[0]))
+    previous = [path for path in previous_paths if int(path.name.split("-", 1)[0]) < sequence]
+    current = [path for path in previous_paths if path not in previous]
+    if (not previous_paths or current not in ([], [action_path])
+            or list(actions.glob(f"{sequence}-*.json")) != current
+            or (previous and [int(path.name.split("-", 1)[0]) for path in previous]
+                != list(range(int(previous[0].name.split("-", 1)[0]), sequence)))):
+        raise replay.ReplayError("拒派停点缺唯一原序号动作计划或连续原失败批次，禁止重新生成")
+    recoveries = [_recorded_failed_batch(campaign, path) for path in previous]
+    previous_runs = {item["run_dir"] for item in recoveries}
+    action_bindings = {path: source.binding(path) for path in previous_paths}
+    for binding in action_bindings.values():
+        source.bound(binding, root=data)
     for group in ("batches", "run-manifests", "commits", "staging"):
         directory = campaign / "control/vc" / group
         if directory.is_symlink() or any(directory.glob(f"{sequence:04d}-*")):
@@ -366,10 +415,11 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
         state = supervisor._read_state(run_dir)
         parent = supervisor._run_inner_manifest(run_dir)
         if (state.get("campaign_id") != manifest["campaign_id"] or parent["campaign_id"] != manifest["campaign_id"]
-                or parent["batch_sequence"] >= sequence or state.get("state") != "stopped"):
+                or parent["batch_sequence"] >= sequence
+                or state.get("state") != ("failed" if run_dir in previous_runs else "stopped")):
             raise replay.ReplayError("原监督器存在本批或未收口父run，不能按派发前拒绝续作")
         audit = supervisor._audit_command(run_dir)
-        if audit["audit_incomplete"] or audit["state"] != "stopped":
+        if audit["audit_incomplete"] or audit["state"] != ("failed" if run_dir in previous_runs else "stopped"):
             raise replay.ReplayError("前序父run未通过原审计，禁止续作拒派批次")
     original_write = source.write
     consumed = False
@@ -381,23 +431,24 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
             return original_write(path, value)
         if path != action_path or consumed:
             raise replay.ReplayError("拒派续作改变原序号或重复生成动作计划")
-        source.bound(action_binding, root=data)
         expected = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
-        if path.read_bytes() != expected:
-            raise replay.ReplayError("拒派续作动作计划与原字节不同")
+        for old_path, binding in action_bindings.items():
+            source.bound(binding, root=data)
+            if old_path.read_bytes() != expected:
+                raise replay.ReplayError("拒派续作动作计划与原字节不同")
         consumed = True
-        return path
+        return path if path in action_bindings else original_write(path, value)
 
     with mock.patch.object(source, "write", side_effect=original_action_plan):
         result = original(data, campaign, name, argv, **options)
     if not consumed:
         raise replay.ReplayError("拒派续作没有经过原动作计划消费者")
-    return result
+    return {**result, "recorded_recoveries": recoveries} if recoveries else result
 
 
 def _recorded_batch(original: Callable[..., Any], data: Path, campaign: Path,
                     name: str, argv: list[str], **options: Any) -> dict[str, Any]:
-    """完整后继批次游标：完成项重验；仅已证实未派发的原动作允许同序号继续。"""
+    """完成项重验；未派发沿原序号，已提交失败须正式对账闭合后由 N+1 续作。"""
     step = "batch:" + name
 
     def dispatch() -> dict[str, Any]:
@@ -836,6 +887,10 @@ def runtime_sources(state: dict[str, Any]) -> Iterator[None]:
         stack.enter_context(mock.patch.object(candidate, "_collect_gateway_facts", gateway_facts))
         stack.enter_context(mock.patch.object(candidate, "_read_activation_fact", activation))
         stack.enter_context(mock.patch.object(candidate, "host_facts", host_facts))
+        # 明确无效的合成凭据仅供原预约前检消费；真实 Job 已由同一录制适配器替换成白名单字节复制，
+        # 不读取宿主真实 token、不调用账号刷新 API，离开来源作用域后恢复原环境。
+        stack.enter_context(mock.patch.dict(os.environ, {"ADMIN_BEARER_TOKEN": "recorded-fixture-only-not-a-real-admin-token",
+                                                       "ADMIN_BEARER_TOKEN_FILE": ""}))
         stack.enter_context(clients.source_scope())
         delivery_control = data / "control/recorded-delivery-control.json"
         if delivery_control.exists():

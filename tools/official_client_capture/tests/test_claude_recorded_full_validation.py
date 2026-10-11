@@ -246,6 +246,10 @@ class RecordedFullPreparationTests(unittest.TestCase):
 
     def test_gate_environment_real_replay_and_tamper_rejection(self) -> None:
         from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_candidate_capture as candidate
+        from tools.official_client_capture import claude_upgrade_plan as plan
+        from types import SimpleNamespace
 
         root = self.data / "control/gate"
         root.mkdir(mode=0o700)
@@ -262,6 +266,45 @@ class RecordedFullPreparationTests(unittest.TestCase):
             arm.replay(root, bindings["after"]["path"])
         with self.assertRaises(arm.Arm64EnvironmentReceiptError):
             arm.receipts_equivalent(root, before, root, after)
+
+        # 原 token 前检保持真实执行；合成值只在已校验的录制运行来源内生效，退出和异常都恢复环境。
+        state = {"data_root": str(self.data), "inputs": {"candidate_configuration": {"service_container": "fixture-service"}}}
+        configuration = {**state["inputs"]["candidate_configuration"], "capture_container": "capture-cli",
+                         "synthetic_capture_container": "capture-cli-synthetic", "runtime_image": "runtime@sha256:" + "d" * 64}
+        manifest = {"campaign_id": "fixture-runtime", "configuration": configuration}
+        jobs = [SimpleNamespace(steps=[{"environment": {"GATEWAY_TRIGGER": plan.CANDIDATE_TRIGGER_ACCOUNT_REFRESH}}])]
+        with mock.patch.dict(os.environ, {"ADMIN_BEARER_TOKEN": "", "ADMIN_BEARER_TOKEN_FILE": ""}):
+            with driver.runtime_sources(state):
+                with self.assertRaisesRegex(candidate.ConfigurationError, "管理 token"):
+                    candidate.require_admin_token_for(jobs)
+            build = source.write(self.data / "evidence/campaigns/fixture-runtime/candidates" / driver.CANDIDATE / "build-receipt.json", {
+                "candidate_id": driver.CANDIDATE, "fixture_only": True,
+                "image": {"image_id": "sha256:" + "b" * 64, "reference": "candidate@sha256:" + "a" * 64},
+                "profile": {"profile_digest": "1" * 64, "wire_sha256": "2" * 64,
+                            "release_sha256": "3" * 64, "bundle_sha256": "4" * 64},
+                "source": {"tree_sha256": "5" * 64}, "build": {"build_id": "fixture-build"}, "deployed_version": "fixture-only",
+            })
+            profile = source.write(self.data / "control/fixture-profile-stage.json", {"fixture_only": True})
+            runtime = source.write(self.data / "control/full-runtime-source.json", {
+                "fixture_only": True, "purpose": "recorded_control_runtime_source", "build_receipt": source.binding(build),
+                "profile_stage": source.binding(profile), "candidate_configuration": configuration,
+                "formal_version_semantics_certified": False,
+            })
+            with mock.patch.object(upgrade, "load_campaign_manifest", return_value=manifest):
+                with self.assertRaisesRegex(RuntimeError, "作用域退出"):
+                    with driver.runtime_sources(state):
+                        candidate.require_admin_token_for(jobs)
+                        self.assertEqual(os.environ["ADMIN_BEARER_TOKEN"], "recorded-fixture-only-not-a-real-admin-token")
+                        raise RuntimeError("作用域退出")
+                self.assertEqual((os.environ["ADMIN_BEARER_TOKEN"], os.environ["ADMIN_BEARER_TOKEN_FILE"]), ("", ""))
+                with self.assertRaisesRegex(candidate.ConfigurationError, "管理 token"):
+                    candidate.require_admin_token_for(jobs)
+                original = runtime.read_bytes()
+                runtime.write_text(json.dumps({**source.read(runtime), "fixture_only": False}), encoding="utf-8")
+                with self.assertRaisesRegex(replay.ReplayError, "明确的控制夹具"):
+                    with driver.runtime_sources(state):
+                        self.fail("未登记来源不能启用合成凭据")
+                runtime.write_bytes(original)
 
     def test_pending_private_shell_delegates_cli_and_preserves_failure(self) -> None:
         from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as shell
@@ -554,7 +597,7 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 driver._prepare_view("vc3-revision-view", campaign, **arguments)
 
     def test_real_batch_stop_reuses_original_commit_parent_and_results(self) -> None:
-        """派发前失败只续原序号；仅执行一个真实零请求草案，完成后不再派批次。"""
+        """派发前续原序号；真实失败经正式对账后 N+1 执行零请求草案，完成后不再派批次。"""
         from tools.official_client_capture import claude_upgrade as upgrade
         from tools.official_client_capture import codex_upgrade_supervisor as supervisor
         from tools.official_client_capture.tests import claude_fault_chain_world as stops
@@ -606,11 +649,48 @@ class RecordedFullPreparationTests(unittest.TestCase):
             with self.assertRaises((supervisor.SupervisorError, OSError)):
                 resume()
             unknown_parent.rmdir()
+
+            # 本轮继续同一动作，真实子进程在草案执行前中断；保留 COMMIT 和 failed 父 run。
+            inject = case.root / "short-inject"
+            inject.mkdir(mode=0o700)
+            (inject / "usercustomize.py").write_text(
+                "import os\n"
+                f"if os.environ.get({supervisor.CAMPAIGN_RUN_ACTION_ID_ENV!r}) == 'vc2-short-audit':\n"
+                "    os._exit(17)\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"PYTHONPATH": str(inject)}):
+                with self.assertRaises(replay.ReplayError):
+                    resume()
+            failed_commit = upgrade._staging_commit_path(campaign, 2, "VC-2")
+            failed_run = Path(source.read(failed_commit)["parent_run_dir"])
+            self.assertEqual(supervisor._read_state(failed_run)["state"], "failed")
+            preserved = {path: path.read_bytes() for path in (action_path, failed_commit, failed_run / "state.json",
+                         failed_run / "campaign-run-manifest.json", failed_run / "stop-receipt.json")}
+            self.assertEqual(stops.load_state(key)["status"], "started")
+            with self.assertRaisesRegex(replay.ReplayError, "尚未正式对账闭合"):
+                resume()
+            self.assertFalse((case.data / "control/actions/3-vc2-short-audit.json").exists())
+            code, reconciled, stderr = batches.run_main(["reconcile-supervisor-run", "--campaign-dir", campaign, "--run-dir", failed_run])
+            self.assertEqual((code, reconciled["status"]), (0, "recoverable"), stderr)
+            receipt = campaign / "control/reconciliation" / f"run-{failed_run.name}" / "supervisor-run-reconciliation.json"
+            receipt_bytes = receipt.read_bytes()
+            receipt.unlink()
+            with self.assertRaisesRegex(replay.ReplayError, "尚未正式对账闭合"):
+                resume()
+            receipt.write_bytes(receipt_bytes)
+            receipt.chmod(0o600)
             with mock.patch.object(upgrade, "compile_and_run_vc_batch", wraps=upgrade.compile_and_run_vc_batch) as dispatch:
                 outcome = resume()
                 self.assertEqual(resume(), outcome)
                 self.assertEqual(dispatch.call_count, 1)
-            self.assertEqual(outcome["batch_sequence"], 2)
+            self.assertEqual(outcome["batch_sequence"], 3)
+            self.assertEqual(outcome["recorded_recoveries"][0]["sequence"], 2)
+            self.assertEqual((case.data / "control/actions/3-vc2-short-audit.json").read_bytes(), original_action)
+            for path, original in preserved.items():
+                self.assertEqual(path.read_bytes(), original)
+            receipt.write_bytes(receipt_bytes + b" ")
+            with self.assertRaises((replay.ReplayError, upgrade.ConfigurationError)):
+                resume()
+            receipt.write_bytes(receipt_bytes)
             self.assertEqual(stops.load_state(key)["status"], "complete")
             self.assertEqual(action_path.read_bytes(), original_action)
             case.assert_zero_requests()
@@ -623,7 +703,7 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 driver._verify_completed_stage(campaign, ("VC-2",), changed)
             with self.assertRaisesRegex(replay.ReplayError, "缺原真实批次结果"):
                 driver._verify_completed_stage(campaign, ("VC-2",), {"batches": []})
-            commit = upgrade._staging_commit_path(campaign, 2, "VC-2")
+            commit = upgrade._staging_commit_path(campaign, 3, "VC-2")
             commit.write_text("{}\n", encoding="utf-8")
             with self.assertRaisesRegex(upgrade.ConfigurationError, "COMMIT 无法校验"):
                 # 已记录complete仍须重读正式COMMIT，不能因私有完成字样跳过其摘要验证。
