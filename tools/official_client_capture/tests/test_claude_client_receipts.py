@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,6 +58,43 @@ class ClientReceiptContractTests(unittest.TestCase):
                          (self.task_path, self.bundle, self.capture))
         self.assertEqual({path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}, before)
         self.assertEqual(self.verify()["status"], "verified")
+        # 原 runner 的 TMPDIR 本身是 staging，cfw 世界没有第二层 staging。
+        # 沿现有材料验证三坐标与原fixture绑定，不新增方法或改写 task。
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        staging = self.root / "staging"
+        records = staging / "recorded-worlds"
+        method = records / "method-records" / "existing-method"
+        method.mkdir(mode=0o700, parents=True)
+        (staging / "tree").mkdir(mode=0o700)
+        with mock.patch.object(tempfile, "tempdir", str(staging)), mock.patch.dict(os.environ, {
+                "CLAUDE_CONTROL_CHAIN_TREE": str(staging / "tree"),
+                "CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(records),
+                stops.METHOD_RECORD_ENV: str(method)}):
+            stops.save_state("fixture:capture", {"root": staging / "data"})
+            self.assertEqual(fixture.material(self.attempt, "claude-desktop", self.values),
+                             (self.task_path, self.bundle, self.capture))
+            self.assertEqual(self.verify()["status"], "verified")
+            with mock.patch.dict(os.environ, {"CLAUDE_RECORDED_CHAIN_RECORD_DIR": str(records / "other")}):
+                with self.assertRaisesRegex(ValueError, "原 tree、记录根与 TMPDIR 不一致"):
+                    fixture.fixture_ledger(self.attempt)
+            sibling = staging / "foreign-world"
+            sibling.mkdir(mode=0o700)
+            stops.save_state("fixture:batch", {"root": sibling})
+            with self.assertRaisesRegex(ValueError, "不属于同一原夹具世界"):
+                fixture.require_same_world(self.bundle, sibling / "capture")
+            stops.save_state("fixture:batch", {"root": staging / "unrelated-world"})
+            # 候选录制驱动保留其原 root/staging/data 布局，不沿用 cfw 的边界。
+            candidate = staging / "candidate-original"
+            candidate_data = candidate / "staging/data"
+            candidate_data.mkdir(mode=0o700, parents=True)
+            stops.save_state("candidate-recorded-world", {"root": candidate, "data": candidate_data})
+            self.assertEqual(fixture.temporary_root(candidate_data), candidate)
+            from tools.official_client_capture.tests.claude_recorded_full_validation_driver import _require_client_staging
+            _require_client_staging(candidate_data)
+            stops.save_state("fixture:capture", {"root": staging / "foreign-world"})
+            with self.assertRaisesRegex(ValueError, "不属于原方法的夹具世界"):
+                fixture.fixture_ledger(self.attempt)
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns) for path in paths}, before)
 
     def test_existing_task_with_old_capture_coordinate_is_rejected_without_migration(self) -> None:
         # 只在本用例新建的反例中改变已冻结根；不搬移既有失败世界。

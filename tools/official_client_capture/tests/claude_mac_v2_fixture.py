@@ -32,6 +32,7 @@ class FixtureSourceAdapter:
             old.FixtureSourceAdapter().verify_origin(task, bundle_root, capture_root)
             return
         self._roots(task, capture_root)
+        old.require_same_world(bundle_root, capture_root)
         c.require(bundle_root.is_relative_to(old.temporary_root(capture_root)), "fixture Mac 包不在同一临时根")
         for artifact in task["client_artifacts"]:
             proof = c.read_json(c.bound_file(bundle_root, artifact["official_source"]))

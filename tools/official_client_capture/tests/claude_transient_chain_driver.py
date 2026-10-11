@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Iterator
 from unittest import mock
@@ -164,18 +165,87 @@ class ClaudeTransientChainDriver(late_control.ClaudeLateControlChainDriver):
         name = "client-inputs:" + str(attempt_root.resolve())
         saved = world_fixture.load_state(name)
         if saved is not None:
-            if not os.environ.get(world_fixture.METHOD_RESUME_ENV) or saved.get("status") != "complete":
+            if not os.environ.get(world_fixture.METHOD_RESUME_ENV):
                 raise ValueError("原客户端来源尚未形成完整原件，禁止重写或猜测收据")
-            for binding in saved["bindings"]:
-                world_fixture.read_cut(binding)
-            return saved["argv"]
-        world_fixture.save_state(name, {"status": "pending"})
+            if saved.get("status") == "complete":
+                for binding in saved["bindings"]:
+                    world_fixture.read_cut(binding)
+                return saved["argv"]
+            self._resume_unwritten_client_inputs(name, saved, campaign, attempt_root, attempt)
+        else:
+            # 先核同一 staging 与原账本，路径错误不留下含糊的材料写入 pending。
+            client_fixture.fixture_ledger(attempt_root)
+        world_fixture.save_state(name, {"status": "pending", "inputs": [
+            world_fixture.file_cut(attempt_root / "attempt.json"),
+            world_fixture.file_cut(campaign / "campaign.json")]})
         argv = self.write_clients(campaign, attempt_root, attempt)
         paths = [attempt_root / "attempt.json",
                  *(path for path in (attempt_root / "client-evidence").rglob("*") if path.is_file())]
         world_fixture.save_state(name, {"status": "complete", "argv": argv,
             "bindings": [world_fixture.file_cut(path) for path in paths]})
         return argv
+
+    def _resume_unwritten_client_inputs(self, name: str, saved: dict, campaign: Path,
+                                       attempt_root: Path, attempt: dict) -> None:
+        """只接续已有首写前路径错误；部分材料、未知 pending 或缺失败原件均拒绝。"""
+
+        result = world_fixture.load_state("method-result")
+        if (saved != {"status": "pending"} or result is None or result.get("complete")
+                or result.get("returncode") != 1):
+            raise ValueError("原客户端来源尚未形成完整原件，禁止重写或猜测收据")
+        for binding in result["bindings"].values():
+            world_fixture.read_cut(binding)
+        context = world_fixture.load_state("method-context")
+        original_exit = json.loads(world_fixture.read_cut(result["bindings"]["exit"]))
+        if (context is None or original_exit.get("argv") != [sys.executable, "-m", "unittest", "-v",
+                "tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains." + context["method"]]
+                or original_exit.get("returncode") != 1 or original_exit.get("timed_out") is not False
+                or original_exit.get("verify") is not False or original_exit.get("executor_error") is not None
+                or result.get("expected") != context.get("expected")
+                or not any(invocation.get("state") == "finished" and invocation.get("bindings") == result["bindings"]
+                           for invocation in context.get("invocations", []))):
+            raise ValueError("原客户端首写前失败不属于本方法的准确调用")
+        from tools.official_client_capture.tests import claude_chain_diagnostic_budget as budget
+        if bool(result.get("diagnostic_only")) != (budget.diagnostic_seconds() is not None):
+            raise ValueError("原客户端首写前失败的诊断模式不一致")
+        stderr = world_fixture.read_cut(result["bindings"]["stderr"]).decode("utf-8")
+        error = "tools.official_client_capture.capturelib.model.ConfigurationError: Mac 客户端证据：Mac 夹具 Campaign 必须在同一临时 staging 树"
+        if (stderr.count("Traceback (most recent call last):") != 1 or error not in stderr.splitlines()
+                or not all(fragment in stderr for fragment in (
+                "in client_inputs", "in write_clients", "in material_v1",
+                "project = fixture_ledger(attempt_root)", "in fixture_ledger",
+                "ConfigurationError: Mac 客户端证据：Mac 夹具 Campaign 必须在同一临时 staging 树"))):
+            raise ValueError("原客户端 pending 没有材料首写前的准确路径失败原件")
+        evidence = attempt_root / "client-evidence"
+        if evidence.exists() or evidence.is_symlink():
+            raise ValueError("原客户端材料已经部分形成，不能重跑首写")
+        if (campaign not in attempt_root.parents
+                or json.loads((attempt_root / "attempt.json").read_bytes()) != attempt):
+            raise ValueError("原客户端材料首写的 Campaign 或 attempt 已改变")
+        # 原命令输出和原世界由实际读侧核对；错误文本本身不是恢复授权。
+        world_fixture.verify_commands((world_fixture.load_state("command-observations") or {}).get("commands", []))
+        world_fixture.verify_case(self, campaign)
+        project = client_fixture.fixture_ledger(attempt_root)
+        values = {"campaign_id": campaign.name, "candidate_id": attempt["candidate_id"],
+                  "attempt_id": attempt_root.name, "run_nonce": attempt["run_nonce"]}
+        capture = project.parent / "server-originals" / client_fixture.contract.digest(values)[:12]
+        if capture.exists() or capture.is_symlink():
+            raise ValueError("原客户端服务端材料已经形成，不能重跑首写")
+        # 旧 pending 原文另存，旧失败输出和方法结果始终保留；随后才许可第一次写材料。
+        original = world_fixture._state_path(name)
+        raw = original.read_bytes()
+        archive = original.with_name(original.stem + ".before-material-failure.json")
+        if archive.exists():
+            if archive.is_symlink() or archive.read_bytes() != raw:
+                raise ValueError("原客户端 pending 归档与首败原文不一致")
+        else:
+            with archive.open("xb") as stream:
+                stream.write(raw)
+            archive.chmod(0o600)
+        world_fixture.save_state(name + ":before-material-resume", {
+            "failure": result["bindings"], "pending": world_fixture.file_cut(archive),
+            "attempt": world_fixture.file_cut(attempt_root / "attempt.json"),
+            "campaign": world_fixture.file_cut(campaign / "campaign.json")})
 
     def install_relay_source(self) -> None:
         """中继输入保持真实序列与完整候选封套；头值从单独控制文件读取，修复不改工具源码或旧字节。"""

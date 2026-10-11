@@ -172,6 +172,87 @@ class CandidateJobAggregationTests(unittest.TestCase):
             old = next(job for job in candidates if job["id"] == row["original_job_id"])["steps"][row["original_step_index"] - 1]
             new = next(job for job in grouped["capture_jobs"] if job["id"] == row["target_job_id"])["steps"][row["target_step_index"] - 1]
             self.assertEqual(new, driver._coordinate_projection(old, row["original_evidence_root"], row["target_evidence_root"]))
+        self._assert_partial_initialization_resume()
+
+    def _assert_partial_initialization_resume(self) -> None:
+        """原 UID 内只验初始化运输边界；隔离替身不代表 ARM64 资格或形成链成功。"""
+
+        stops = driver.stops
+        arguments = SimpleNamespace(data=str(self.data), recorded=str(self.data.parent / 'original-relay/main'),
+            freeze=str(self.data.parent / 'original-freeze'), scenario='reconcile-resume',
+            parent_namespaces=json.dumps({'mnt': 'original-parent-mnt', 'net': 'original-parent-net'}))
+        error = '录制材料不存在或不可读：' + str(
+            Path(arguments.recorded).parent / Path(driver.full.FULL_SOURCE_SELECTION['attempt']).parent)
+        argv = ['unshare', '-m', '-n', driver.sys.executable, '-B', '-m', driver.ACTIVATION_MODULE,
+            '--data', arguments.data, '--recorded', arguments.recorded, '--freeze', arguments.freeze,
+            '--scenario', arguments.scenario, '--parent-namespaces', arguments.parent_namespaces]
+        reference = self.data.parent / 'original-tools-reference'
+        relative = Path('tools/official_client_capture/product.py')
+        for root in (reference, self.data):
+            path = root / relative
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.write_text('# 原测试产品字节\n', encoding='utf-8')
+        with tempfile.TemporaryDirectory() as records, mock.patch.dict(os.environ, {
+                stops.METHOD_RECORD_ENV: records, stops.METHOD_RESUME_ENV: '1'}), \
+                mock.patch.object(driver.full.vc1, 'REPOSITORY', reference):
+            pending = stops.begin_command(argv)
+            stops.record_command(argv, 1, json.dumps({'status': 'unverified', 'fixture_only': True,
+                'registered_chains': [], 'error': error}), 'replay.build_snapshot\n_source_plan\n' + error, pending=pending)
+            segment = stops.load_state('command-observations')['commands'][-1]
+            entry = {'data': self.data, 'recorded': arguments.recorded, 'freeze': arguments.freeze,
+                     'scenario': arguments.scenario, 'segments': [segment]}
+            stops.save_state('candidate-recorded-world', {'root': self.data.parents[1], 'data': self.data})
+            stops.save_state('candidate-entry:' + arguments.scenario, entry)
+            self.assertEqual(driver._legacy_partial_initialization(arguments), self.inputs)
+            product = self.data / relative
+            product_raw = product.read_bytes()
+            product.write_bytes(product_raw + b'changed')
+            with self.assertRaisesRegex(replay.ReplayError, '非测试工具副本'):
+                driver._legacy_partial_initialization(arguments)
+            product.write_bytes(product_raw)
+            self.assertEqual(stops.load_state('candidate-entry:' + arguments.scenario), entry)
+            self.assertEqual(segment['returncode'], 1)
+            original_failure = stops.read_cut(segment['stderr'])
+            with mock.patch.object(source, 'require_isolation'), \
+                    mock.patch.object(driver.full.vc1.subprocess, 'run'), \
+                    mock.patch.object(replay, 'build_snapshot', side_effect=RuntimeError('到达原快照续作')) as snapshot:
+                def resume() -> None:
+                    driver.full.vc1.namespace_main(arguments,
+                        inputs_builder=mock.Mock(side_effect=AssertionError('禁止重调原 inputs 生产者')),
+                        chain_runner=mock.Mock(side_effect=AssertionError('禁止跳过来源直接进入形成链')),
+                        activation_module=driver.ACTIVATION_MODULE, initialization_name=driver.SOURCE_INITIALIZATION,
+                        resume_inputs=driver._legacy_partial_initialization, input_verifier=driver._verify_initialization_inputs)
+                with self.assertRaisesRegex(RuntimeError, '到达原快照续作'):
+                    resume()
+                snapshot.assert_called_once_with(self.data / 'control/snapshot', recorded=Path(arguments.recorded),
+                    source_selections=tuple(self.inputs['source_selections']))
+                self.assertEqual(stops.load_state(driver.SOURCE_INITIALIZATION)['phase'], 'snapshot-started')
+                snapshot.reset_mock()
+                half = self.data / 'control/snapshot'
+                half.mkdir()
+                with self.assertRaisesRegex(replay.ReplayError, '快照未闭合'):
+                    resume()
+                half.rmdir()
+                path = source.bound(self.inputs['bindings']['scenarios'])
+                before = path.read_bytes()
+                path.write_bytes(before + b' ')
+                with self.assertRaisesRegex(replay.ReplayError, '摘要或字节数漂移'):
+                    resume()
+                path.write_bytes(before)
+                missing = path.with_suffix('.missing')
+                path.rename(missing)
+                with self.assertRaisesRegex(replay.ReplayError, '不存在或不可读'):
+                    resume()
+                missing.rename(path)
+                origin = self.data / 'control/fixture-inputs/projection-origin.json'
+                raw = origin.read_bytes()
+                origin.write_bytes(raw + b' ')
+                with self.assertRaisesRegex(replay.ReplayError, '输入来源摘要漂移'):
+                    resume()
+                origin.write_bytes(raw)
+                snapshot.assert_not_called()
+            self.assertEqual(stops.read_cut(segment['stderr']), original_failure)
+            self.assertEqual(stops.load_state('candidate-entry:' + arguments.scenario), entry)
 
     def test_missing_probe_or_duplicate_step_mapping_is_rejected_even_with_updated_local_binding(self) -> None:
         for index, mapping in enumerate((self.aggregation["step_mapping"][:-1],
@@ -240,6 +321,21 @@ class CandidateJobAggregationTests(unittest.TestCase):
             runtime.write_bytes(runtime.read_bytes() + b' ')
             with self.assertRaisesRegex(replay.ReplayError, '摘要或字节数漂移'):
                 driver.prepare(state_path, source.binding(state_path)['sha256'])
+            runtime.write_bytes(runtime.read_bytes().rstrip())
+            stops._state_path('candidate-prepare').unlink()
+            stops.save_state('candidate-namespace', {'state_binding': source.binding(state_path),
+                'data': self.data, 'prepare_started': False})
+            def first_prepare(*_args, **_options):
+                self.assertTrue(stops.load_state('candidate-namespace')['prepare_started'])
+                self.assertEqual(stops.load_state('candidate-prepare')['phase'], 'vc1-started')
+                raise RuntimeError('首次准备已开始')
+            with mock.patch.object(driver.full.vc1, 'run_chain', side_effect=first_prepare) as first:
+                with self.assertRaisesRegex(RuntimeError, '首次准备已开始'):
+                    driver.prepare(state_path, source.binding(state_path)['sha256'])
+                stops._state_path('candidate-prepare').unlink()
+                with self.assertRaisesRegex(replay.ReplayError, '缺明确停点'):
+                    driver.prepare(state_path, source.binding(state_path)['sha256'])
+                first.assert_called_once()
         for name in ("original_scenarios", "grouped_scenarios", "grouped_labels", "baseline_scenarios"):
             with self.subTest(name=name):
                 path = source.bound(self.aggregation[name])

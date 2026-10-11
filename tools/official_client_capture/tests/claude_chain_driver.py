@@ -50,6 +50,7 @@ ACTIVATION_MODULE = "tools.official_client_capture.tests.claude_chain_driver"
 AGGREGATION_SCHEMA = "claude-recorded-candidate-job-aggregation/v1"
 PREPARED_SCHEMA = "claude-recorded-candidate-recovery-start/v1"
 PREPARED_ENV = "CLAUDE_CANDIDATE_RECORDED_START"
+SOURCE_INITIALIZATION = "candidate-source-initialization"
 SCENARIO_METHODS = {
     "reconcile-resume": "_scenario_candidate_reconcile_resume",
     "tool-evolution": "_scenario_candidate_tool_evolution",
@@ -189,6 +190,181 @@ def inputs(data: Path) -> dict[str, Any]:
                                      for job in grouped["capture_jobs"] if job["phase"] == "candidate"}
     validate_aggregation({"data_root": str(data), "inputs": configured})
     return configured
+
+
+def _partial_input_origins(data: Path) -> dict[str, Any]:
+    """绑定原输入生产者的三份来源说明；续作只读它们，不重调一次性生产者。"""
+
+    bindings = {name: source.binding(data / "control" / relative) for name, relative in (
+        ("base", "fixture-inputs/projection-origin.json"),
+        ("active", "fixture-active-projection/projection-origin.json"),
+        ("aggregation", "candidate-recovery/aggregation.json"))}
+    for value in bindings.values():
+        source.bound(value, root=data)
+    return bindings
+
+
+def _restore_partial_inputs(data: Path) -> dict[str, Any]:
+    """从完整原件恢复原 inputs 引用集合；缺件、跨根、摘要漂移均拒绝，不写任何输入。"""
+
+    _partial_input_origins(data)
+    base_root, active_root, candidate_root = [data / "control" / name for name in (
+        "fixture-inputs", "fixture-active-projection", "candidate-recovery")]
+    origin = source.read(base_root / "projection-origin.json")
+    if (set(origin) != {"fixture_only", "purpose", "target_version", "template_version", "inputs",
+                        "static_conclusions", "template_version_facts"}
+            or origin["fixture_only"] is not True or origin["purpose"] != "control_input_projection"
+            or origin["target_version"] != source.VERSION or origin["template_version"] != "2.1.285"):
+        raise replay.ReplayError("候选原基础输入来源说明不闭合")
+    base_names = {"baseline": "baseline.json", "rules": "rules.json", "scenarios": "scenarios.json",
+                  "labels": "labels.json", "inventory": "target-inventory.json",
+                  "containment": "sink-containment.json", "dispositions": "dispositions.json"}
+    records = copy.deepcopy(origin["inputs"])
+    if set(records) != {*base_names, "version_facts"}:
+        raise replay.ReplayError("候选原基础输入分母不闭合")
+    for name, filename in base_names.items():
+        if source.bound(records[name], root=data) != base_root / filename:
+            raise replay.ReplayError("候选原基础输入坐标错位")
+    facts_relative = "tools/official_client_capture/tests/fixtures/claude_recorded_version_facts.json"
+    if source.bound(records["version_facts"], root=data) != data / facts_relative:
+        raise replay.ReplayError("候选原版本事实不是原数据根副本")
+    source.bound(origin["template_version_facts"])
+    template = source.read(plan.scenario_manifest_path("2.1.285"))
+    if origin["template_version_facts"]["sha256"] != template["version_facts"]["sha256"]:
+        raise replay.ReplayError("候选原版本事实模板摘要漂移")
+    active_origin = source.read(active_root / "projection-origin.json")
+    if (set(active_origin) != {"fixture_only", "purpose", "baseline_version", "target_version", "source_version",
+            "formal_version_semantics_certified", "originals", "projected", "model_scope", "method"}
+            or active_origin["fixture_only"] is not True or active_origin["purpose"] != "control_input_projection"
+            or active_origin["baseline_version"] != full.vc1.BASELINE
+            or active_origin["target_version"] != source.VERSION or active_origin["source_version"] != source.VERSION
+            or active_origin["formal_version_semantics_certified"] is not False
+            or set(active_origin["originals"]) != {"profile", "wire", "catalog", "projection_policy"}):
+        raise replay.ReplayError("候选原 Active 输入来源说明不闭合")
+    for name in ("profile", "wire", "catalog"):
+        source.bound(active_origin["originals"][name])
+    from tools.official_client_capture import claude_upgrade_release as release
+    if active_origin["originals"]["projection_policy"] != release.active_projection_policy(source.VERSION)[1]:
+        raise replay.ReplayError("候选原 Active 策略绑定摘要漂移")
+    active_names = {"active_release_catalog": "active-release-catalog.json", "active_profile": "active-profile.json",
+        "active_wire": "active-wire.json", "active_projection_policy": "active-projection-policy.json",
+        "review_projection_policy": "review-projection-policy.json", "static_baseline_anchors": "static-baseline-anchors.json",
+        "static_baseline_reachability": "static-baseline-reachability.json"}
+    if set(active_origin["projected"]) != set(active_names):
+        raise replay.ReplayError("候选原 Active 投影分母不闭合")
+    for name, filename in active_names.items():
+        if source.bound(active_origin["projected"][name], root=data) != active_root / filename:
+            raise replay.ReplayError("候选原 Active 投影坐标错位")
+    aggregation_path = candidate_root / "aggregation.json"
+    aggregation = source.read(aggregation_path)
+    if aggregation["baseline_scenarios"] != records["scenarios"] or aggregation["original_labels"] != records["labels"]:
+        raise replay.ReplayError("候选聚合输入不属于原基础输入")
+    for name, filename in (("original_scenarios", "original-scenarios.json"),
+                           ("grouped_scenarios", "grouped-scenarios.json"), ("grouped_labels", "grouped-labels.json")):
+        if source.bound(aggregation[name], root=data) != candidate_root / filename:
+            raise replay.ReplayError("候选原聚合输入坐标错位")
+    control_path = candidate_root / "control.json"
+    expected_control = {"schema_version": source.RECOVERY_CONTROL_SCHEMA, "fixture_only": True,
+        "purpose": "regression_fixture", "control_root": str(candidate_root), "allowed_failure_probe_ids": [REFRESH_PROBE]}
+    if source.read(control_path) != expected_control or source.read(candidate_root / "failures.json") != {}:
+        raise replay.ReplayError("候选原初始化故障控制不是准备前原件")
+    bindings = {**records, **active_origin["projected"], "full_scenarios": records["scenarios"],
+        "active_projection_origin": source.binding(active_root / "projection-origin.json"),
+        "candidate_aggregation": source.binding(aggregation_path), "scenarios": aggregation["grouped_scenarios"],
+        "labels": aggregation["grouped_labels"]}
+    current = source.read(source.bound(bindings["scenarios"], root=data))
+    configured = {"bindings": bindings,
+        "candidate_configuration": {"service_container": "sub2apiplus", "keeper_container": "sub2apiplus-keeper",
+                                    "postgres_container": "sub2apiplus-postgres", "claude_account_id": "7", "api_key_id": "9"},
+        "jobs": {job["id"]: [step["probe_id"] for step in job["steps"]] for job in current["capture_jobs"] if job["phase"] == "official"},
+        "candidate_jobs": {job["id"]: [step["probe_id"] for step in job["steps"]] for job in current["capture_jobs"] if job["phase"] == "candidate"},
+        "repository_bindings": {"fixture-only/baseline.json": records["baseline"], "fixture-only/rules.json": records["rules"],
+                                facts_relative: records["version_facts"]},
+        "full_control_inputs": True, "source_selections": [copy.deepcopy(full.FULL_SOURCE_SELECTION)],
+        "candidate_recovery_control": source.binding(control_path)}
+    validate_aggregation({"data_root": str(data), "inputs": configured})
+    full.validate_frozen_inputs(data, configured)
+    source.recovery_control({"data_root": str(data), "inputs": configured})
+    return configured
+
+
+def _legacy_partial_initialization(arguments: argparse.Namespace) -> dict[str, Any]:
+    """旧缺源失败只导入原输入完成的窄停点；已有快照、准备动作或其它失败均不授予许可。"""
+
+    data = Path(arguments.data).resolve(strict=True)
+    world = stops.load_state("candidate-recorded-world")
+    entry = stops.load_state("candidate-entry:" + arguments.scenario)
+    expected = {"data": data, "scenario": arguments.scenario, "recorded": arguments.recorded, "freeze": arguments.freeze}
+    if (not os.environ.get(stops.METHOD_RESUME_ENV) or world is None or world["data"] != data
+            or world["root"] / "staging/data" != data or world["root"].is_symlink() or not world["root"].is_dir()
+            or entry is None or any(entry[key] != value for key, value in expected.items())
+            or len(entry["segments"]) != 1 or stops.load_state("candidate-namespace") is not None
+            or stops.load_state("candidate-prepare") is not None):
+        raise replay.ReplayError("候选原初始化缺唯一缺源失败原件，禁止重建")
+    segment = entry["segments"][0]
+    argv = segment["argv"]
+    prefix = ["unshare", "-m", "-n", sys.executable, "-B", "-m", ACTIVATION_MODULE,
+              "--data", str(data), "--recorded", arguments.recorded, "--freeze", arguments.freeze,
+              "--scenario", arguments.scenario, "--parent-namespaces"]
+    if len(argv) != len(prefix) + 1 or argv[:-1] != prefix:
+        raise replay.ReplayError("候选原初始化 argv 与原坐标不一致")
+    namespaces = json.loads(argv[-1])
+    if set(namespaces) != {"mnt", "net"} or any(not isinstance(value, str) or not value for value in namespaces.values()):
+        raise replay.ReplayError("候选原初始化命名空间来源不闭合")
+    code, result, stderr = stops._original_command(segment, argv)
+    missing = Path(arguments.recorded).parent / Path(full.FULL_SOURCE_SELECTION["attempt"]).parent
+    error = "录制材料不存在或不可读：" + str(missing)
+    if (code != 1 or result != {"status": "unverified", "fixture_only": True, "registered_chains": [], "error": error}
+            or not all(marker in stderr for marker in ("replay.build_snapshot", "_source_plan", error))):
+        raise replay.ReplayError("候选原初始化不是已核实的快照前缺源失败")
+    expected_roots = {"runs", "evidence", "control", "tools"}
+    expected_control = {"fixture-inputs", "fixture-active-projection", "candidate-recovery"}
+    input_members = {
+        "fixture-inputs": {"baseline.json", "rules.json", "scenarios.json", "labels.json", "target-inventory.json",
+                           "sink-containment.json", "dispositions.json", "projection-origin.json"},
+        "fixture-active-projection": {"active-profile.json", "active-wire.json", "active-release-catalog.json",
+            "active-projection-policy.json", "review-projection-policy.json", "static-baseline-anchors.json",
+            "static-baseline-reachability.json", "projection-origin.json"},
+        "candidate-recovery": {"original-scenarios.json", "grouped-scenarios.json", "grouped-labels.json",
+                               "aggregation.json", "failures.json", "control.json"}}
+    if ({path.name for path in data.iterdir()} != expected_roots
+            or {path.name for path in (data / "control").iterdir()} != expected_control
+            or {path.name for path in (data / "evidence").iterdir()} != {"campaigns"}
+            or any({path.name for path in (data / "control" / name).iterdir()} != members
+                   for name, members in input_members.items())
+            or any((data / "runs").iterdir()) or any((data / "evidence/campaigns").iterdir())):
+        raise replay.ReplayError("候选原初始化已有半快照、冻结或形成动作，禁止覆盖")
+    for name in (*expected_roots, "evidence/campaigns", *("control/" + value for value in expected_control)):
+        replay._regular(data / name, data, directory=True)
+    _verify_partial_tools(data)
+    return _restore_partial_inputs(data)
+
+
+def _verify_partial_tools(data: Path) -> None:
+    """快照前续作只沿原产品工具副本；测试修复及其生成夹具另由原执行器与输入绑定核验。"""
+
+    def product_files(root: Path) -> dict[str, str]:
+        files = {}
+        for directory, folders, names in os.walk(root, followlinks=False):
+            folders[:] = sorted(name for name in folders if name not in {"tests", "__pycache__"})
+            for path in (*(Path(directory) / name for name in folders), *(Path(directory) / name for name in names)):
+                if path.is_symlink():
+                    raise replay.ReplayError("候选原初始化工具副本含符号链接")
+                if path.is_file() and path.suffix != ".pyc":
+                    files[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return files
+
+    if product_files(data / "tools") != product_files(full.vc1.REPOSITORY / "tools"):
+        raise replay.ReplayError("候选原初始化非测试工具副本与原执行产品不一致")
+
+
+def _verify_initialization_inputs(data: Path, configured: dict[str, Any]) -> dict[str, Any]:
+    """后续每次续作复核原输入引用及来源说明；不把当前文件重新绑定为旧输入。"""
+
+    _verify_partial_tools(data)
+    if _restore_partial_inputs(data) != configured:
+        raise replay.ReplayError("候选原初始化 inputs 与原件不一致")
+    return _partial_input_origins(data)
 
 
 def validate_aggregation(state: dict[str, Any]) -> dict[str, Any]:
@@ -364,7 +540,16 @@ def prepare(state_path: Path, digest: str) -> Path:
             return path
     else:
         if os.environ.get(stops.METHOD_RESUME_ENV):
-            raise replay.ReplayError('候选原准备缺明确停点，禁止重新形成 Campaign')
+            namespace = stops.load_state('candidate-namespace')
+            if (namespace is None or namespace.get('prepare_started') is not False
+                    or namespace['state_binding'] != expected['state'] or namespace['data'] != expected['data']):
+                raise replay.ReplayError('候选原准备缺明确停点，禁止重新形成 Campaign')
+        namespace = stops.load_state('candidate-namespace')
+        if namespace is not None:
+            if namespace.get('prepare_started') is not False:
+                raise replay.ReplayError('候选原首次准备许可已使用但缺准备停点，禁止重派发')
+            # 首次准备许可只用一次；任何 Campaign 形成副作用之前先落已开始标记。
+            stops.save_state('candidate-namespace', {**namespace, 'prepare_started': True})
         saved = {**expected, 'phase': 'vc1-started'}
         stops.save_state('candidate-prepare', saved)
         first = full.vc1.run_chain(state_path, digest, installer=installed)
@@ -582,8 +767,9 @@ class ClaudeCandidateChainDriver(unittest.TestCase):
         if previous is not None:
             if not os.environ.get(stops.METHOD_RESUME_ENV) or any(previous[key] != value for key, value in expected.items()):
                 raise replay.ReplayError('候选原入口参数或原世界坐标已改变')
-            if stops.load_state('candidate-namespace') is None:
-                raise replay.ReplayError('候选原 namespace 初始化未闭合；保留原坐标，禁止重建')
+            if stops.load_state('candidate-namespace') is None and stops.load_state(SOURCE_INITIALIZATION) is None:
+                _legacy_partial_initialization(argparse.Namespace(**{key: str(value) if isinstance(value, Path) else value
+                    for key, value in expected.items()}))
             for segment in previous['segments']:
                 for field in ('stdout', 'stderr', 'command_binding', 'invocation_binding'):
                     stops.read_cut(segment[field])
@@ -810,10 +996,10 @@ def _namespace_handoff(state_path: Path, digest: str, scenario: str) -> dict[str
              'site_binding': source.binding(Path(state['data_root']) / 'control/site/sitecustomize.py'), 'scenario': scenario}
     previous = stops.load_state('candidate-namespace')
     if previous is not None:
-        if previous != value or not os.environ.get(stops.METHOD_RESUME_ENV):
+        if any(previous[key] != item for key, item in value.items()) or not os.environ.get(stops.METHOD_RESUME_ENV):
             raise replay.ReplayError('候选原 namespace 交接身份或来源发生改变')
     else:
-        stops.save_state('candidate-namespace', value)
+        stops.save_state('candidate-namespace', {**value, 'prepare_started': False})
     return run_scenario(state_path, digest, scenario)
 
 
@@ -853,10 +1039,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise replay.ReplayError('候选旧 namespace 只允许原恢复入口重绑')
             result = _resume_namespace(arguments, saved)
         else:
-            if os.environ.get(stops.METHOD_RESUME_ENV):
-                raise replay.ReplayError('候选原 namespace 缺完整交接停点，禁止重建')
             result = full.vc1.namespace_main(arguments, inputs_builder=inputs,
-                chain_runner=lambda path, digest: _namespace_handoff(path, digest, arguments.scenario), activation_module=ACTIVATION_MODULE)
+                chain_runner=lambda path, digest: _namespace_handoff(path, digest, arguments.scenario),
+                activation_module=ACTIVATION_MODULE, initialization_name=SOURCE_INITIALIZATION,
+                resume_inputs=_legacy_partial_initialization, input_verifier=_verify_initialization_inputs)
     except BaseException as error:
         traceback.print_exc()
         print(json.dumps({"status": "unverified", "fixture_only": True, "registered_chains": [], "error": str(error)}, ensure_ascii=False))

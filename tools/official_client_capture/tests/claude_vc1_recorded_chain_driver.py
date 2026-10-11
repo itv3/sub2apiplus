@@ -606,37 +606,129 @@ def namespace_main(
     arguments: argparse.Namespace, *, inputs_builder: Callable[[Path], dict[str, Any]] = _inputs,
     chain_runner: Callable[[Path, str], dict[str, Any]] = run_chain,
     activation_module: str = "tools.official_client_capture.tests.claude_vc1_recorded_chain_driver",
+    initialization_name: str | None = None,
+    resume_inputs: Callable[[argparse.Namespace], dict[str, Any]] | None = None,
+    input_verifier: Callable[[Path, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """外壳已 unshare；原始目录只读挂载后才建副本与控制输入。"""
+    """外壳已 unshare；候选续作只承接私有初始化停点，不重写已形成的输入与来源副本。"""
+
+    from tools.official_client_capture.tests import claude_fault_chain_world as stops
 
     data = Path(arguments.data).resolve()
     roots = [str(Path(arguments.recorded).resolve().parent), str(Path(arguments.freeze).resolve())]
     parent_namespaces = json.loads(arguments.parent_namespaces)
     # 任何 mount 或目录写入前先验真隔离；直接在普通宿主启动驱动必须失败关闭。
     source.require_isolation({"parent_namespaces": parent_namespaces, "readonly_sources": []})
-    if "staging" not in data.parts or data.exists() or any(data.is_relative_to(Path(root)) or Path(root).is_relative_to(data) for root in roots):
-        raise replay.ReplayError("数据根须为独立、尚不存在的 staging 目录，不能与历史来源重叠")
+    saved = stops.load_state(initialization_name) if initialization_name is not None else None
+    resume = bool(os.environ.get(stops.METHOD_RESUME_ENV))
+    expected = {"data": data, "roots": roots, "activation_module": activation_module}
+    if ("staging" not in data.parts or data.is_symlink()
+            or any(data.is_relative_to(Path(root)) or Path(root).is_relative_to(data) for root in roots)):
+        raise replay.ReplayError("数据根须为独立 staging 目录，不能与历史来源重叠")
+    if data.exists() and (initialization_name is None or not resume):
+        raise replay.ReplayError("数据根须尚不存在；已有候选根只允许原初始化停点续作")
+    if saved is not None and (not resume or any(saved[key] != value for key, value in expected.items())):
+        raise replay.ReplayError("候选原初始化停点坐标或激活模块改变")
+    if not data.exists() and (saved is not None or (initialization_name is not None and resume)):
+        raise replay.ReplayError("候选原初始化数据根已缺失，禁止重建")
     subprocess.run(["mount", "--make-rprivate", "/"], check=True)
     for root in roots:
         subprocess.run(["mount", "--bind", root, root], check=True)
         subprocess.run(["mount", "-o", "remount,bind,ro", root], check=True)
-    _create_world_roots(data)
-    shutil.copytree(REPOSITORY / "tools", data / "tools", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    inputs = inputs_builder(data)
-    snapshot = replay.build_snapshot(data / "control/snapshot", recorded=Path(arguments.recorded),
-                                     source_selections=tuple(inputs.get("source_selections", ())))
+    if data.exists():
+        if saved is None:
+            if resume_inputs is None:
+                raise replay.ReplayError("候选原初始化缺明确输入停点，禁止重调生产者")
+            inputs = resume_inputs(arguments)
+            saved = {**expected, "phase": "inputs-ready", "inputs": inputs, "parent_namespaces": parent_namespaces}
+        else:
+            inputs = saved["inputs"]
+    else:
+        _create_world_roots(data)
+        shutil.copytree(REPOSITORY / "tools", data / "tools", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        inputs = inputs_builder(data)
+        saved = {**expected, "phase": "inputs-ready", "inputs": inputs, "parent_namespaces": parent_namespaces}
+    if input_verifier is not None:
+        origins = input_verifier(data, inputs)
+        if "input_origins" in saved and origins != saved["input_origins"]:
+            raise replay.ReplayError("候选原初始化输入来源摘要漂移")
+        saved["input_origins"] = origins
+
+    def remember(phase: str, **values: Any) -> None:
+        saved.update(phase=phase, **values)
+        if initialization_name is not None:
+            stops.save_state(initialization_name, saved)
+
+    phases = ("inputs-ready", "snapshot-started", "snapshot-complete", "freeze-started", "freeze-complete",
+              "state-started", "state-complete", "site-started", "site-complete")
+    if saved["phase"] not in phases:
+        raise replay.ReplayError("候选原初始化阶段非法")
+    remember(saved["phase"])
+    freeze_root = data / "official/claude-code-2.1.226"
+    state_path, site = data / "control/recorded-source.json", data / "control/site"
+    snapshot_created = False
+    if saved["phase"] in {"inputs-ready", "snapshot-started"}:
+        if any(path.exists() or path.is_symlink() for path in (data / "control/snapshot", freeze_root, state_path, site)):
+            raise replay.ReplayError("候选原初始化快照未闭合，禁止覆盖半产物")
+        remember("snapshot-started")
+        snapshot = replay.build_snapshot(data / "control/snapshot", recorded=Path(arguments.recorded),
+                                         source_selections=tuple(inputs.get("source_selections", ())))
+        remember("snapshot-complete", snapshot=snapshot)
+        snapshot_created = True
+    snapshot = saved["snapshot"]
+    if source.bound(snapshot, root=data) != data / "control/snapshot" / replay.SNAPSHOT_DIRNAME / "index.json":
+        raise replay.ReplayError("候选原快照索引坐标改变")
     source.require_registered_jobs(snapshot, inputs)
-    freeze = source.stage_freeze(data / "official/claude-code-2.1.226", Path(arguments.freeze))
+    if not snapshot_created:
+        replay.assert_source_untouched(snapshot)
+    freeze_created = False
+    if saved["phase"] in {"snapshot-complete", "freeze-started"}:
+        if any(path.exists() or path.is_symlink() for path in (freeze_root, state_path, site)):
+            raise replay.ReplayError("候选原冻结未闭合，禁止覆盖半产物")
+        remember("freeze-started")
+        freeze = source.stage_freeze(freeze_root, Path(arguments.freeze))
+        remember("freeze-complete", freeze=freeze)
+        freeze_created = True
+    freeze = saved["freeze"]
+    if not freeze_created:
+        source.verify_origin_freeze({"freeze": freeze}, freeze_root / "freeze.json")
+        for path, original in freeze["source_sentinel"].items():
+            if replay._stat(Path(path)) != original:
+                raise replay.ReplayError("候选原冻结来源元数据漂移")
     state = {"schema_version": source.SCHEMA, "fixture_only": True, "purpose": "regression_fixture", "target_version": source.VERSION,
              "data_root": str(data), "snapshot": snapshot, "freeze": freeze, "inputs": inputs, "jobs": inputs["jobs"],
-             "parent_namespaces": parent_namespaces, "readonly_sources": roots}
-    state_path = source.write(data / "control/recorded-source.json", state)
-    digest = source.binding(state_path)["sha256"]
-    site = data / "control/site"
-    site.mkdir(mode=0o700)
-    (site / "sitecustomize.py").write_text(
-        "import os,traceback\ntry:\n from " + activation_module + " import activate\n activate()\n"
-        "except BaseException:\n traceback.print_exc()\n os._exit(97)\n", encoding="utf-8")
+             "parent_namespaces": saved["parent_namespaces"], "readonly_sources": roots}
+    if saved["phase"] in {"freeze-complete", "state-started"}:
+        remember("state-started")
+        if state_path.exists() or state_path.is_symlink():
+            replay._regular(state_path, data)
+            if source.read(state_path) != state:
+                raise replay.ReplayError("候选原来源合同未闭合，禁止覆盖")
+        else:
+            source.write(state_path, state)
+        remember("state-complete", state_binding=source.binding(state_path))
+    if source.bound(saved["state_binding"], root=data) != state_path or source.read(state_path) != state:
+        raise replay.ReplayError("候选原来源合同坐标或内容漂移")
+    digest = saved["state_binding"]["sha256"]
+    site_text = ("import os,traceback\ntry:\n from " + activation_module + " import activate\n activate()\n"
+                 "except BaseException:\n traceback.print_exc()\n os._exit(97)\n")
+    if saved["phase"] in {"state-complete", "site-started"}:
+        remember("site-started")
+        if site.exists() or site.is_symlink():
+            replay._regular(site, data, directory=True)
+            if ({path.name for path in site.iterdir()} != {"sitecustomize.py"}
+                    or (site / "sitecustomize.py").is_symlink()
+                    or (site / "sitecustomize.py").read_text(encoding="utf-8") != site_text):
+                raise replay.ReplayError("候选原激活文件未闭合，禁止覆盖")
+        else:
+            site.mkdir(mode=0o700)
+            with (site / "sitecustomize.py").open("x", encoding="utf-8") as handle:
+                handle.write(site_text)
+        remember("site-complete", site_binding=source.binding(site / "sitecustomize.py"))
+    if (source.bound(saved["site_binding"], root=data) != site / "sitecustomize.py"
+            or (site / "sitecustomize.py").read_text(encoding="utf-8") != site_text):
+        raise replay.ReplayError("候选原激活文件坐标或字节漂移")
+    source.load_state(state_path, digest)
     from tools.official_client_capture.tests.project_ledger_fixture import FIXTURE_ONLY_ENV
     with mock.patch.dict(os.environ, {source.STATE_ENV: str(state_path), source.DIGEST_ENV: digest,
                                      FIXTURE_ONLY_ENV: "1", "PYTHONDONTWRITEBYTECODE": "1",

@@ -31,11 +31,53 @@ def write(path: Path, value: Any) -> Path:
     return path
 
 
+def _recorded_layout(path: Path, temp: Path) -> tuple[Path, Path] | None:
+    """原 runner 的准确夹具根与 staging 外壳；普通单测不走此接缝。"""
+    # 录制世界用 mkdtemp 直接建在 runner 的 staging 下；只接受该
+    # runner 的三处准确坐标一致，不把任意名为 staging 的祖先当授权。
+    tree_value = os.environ.get("CLAUDE_CONTROL_CHAIN_TREE")
+    records_value = os.environ.get("CLAUDE_RECORDED_CHAIN_RECORD_DIR")
+    if temp.name == "staging" and tree_value and records_value:
+        tree, records = Path(tree_value).resolve(), Path(records_value).resolve()
+        contract.require(tree == temp / "tree" and records == temp / "recorded-worlds",
+                         "录制 Mac 来源的原 tree、记录根与 TMPDIR 不一致")
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        method_root = stops.record_root()
+        contract.require(method_root is not None and method_root.parent == records / "method-records",
+                         "录制 Mac 来源缺同一 runner 的原方法记录目录")
+        roots = [saved["root"] for name in ("capture", "batch")
+                 if (saved := stops.load_state("fixture:" + name)) is not None]
+        for root in roots:
+            if root.parent == temp and path.is_relative_to(root):
+                return root, temp.parent
+        candidate = stops.load_state("candidate-recorded-world")
+        if candidate is not None:
+            root = candidate["root"]
+            if root.parent == temp and candidate["data"] == root / "staging/data" and path.is_relative_to(root / "staging"):
+                return root, root
+        contract.require(False, "录制 Mac 来源不属于原方法的夹具世界")
+    return None
+
+
 def temporary_root(path: Path) -> Path:
+    """从实际临时树识别 staging 边界；runner 的 TMPDIR 本身可就是 staging。"""
     temp = Path(tempfile.gettempdir()).resolve()
     resolved = path.resolve()
     contract.require(resolved.is_relative_to(temp), "fixture source 只允许系统临时目录")
+    recorded = _recorded_layout(resolved, temp)
+    if recorded is not None:
+        return recorded[1]
+    contract.require(resolved != temp, "fixture source 必须位于独立临时世界")
     return temp / resolved.relative_to(temp).parts[0]
+
+
+def require_same_world(first: Path, second: Path) -> None:
+    """Mac包与捕获根必须属于同一原世界，不能借共享 staging 混入兄弟夹具。"""
+    contract.require(temporary_root(first) == temporary_root(second), "fixture 两侧原件越出同一临时根")
+    temp = Path(tempfile.gettempdir()).resolve()
+    left, right = _recorded_layout(first.resolve(), temp), _recorded_layout(second.resolve(), temp)
+    contract.require(left is None and right is None or left is not None and right is not None and left[0] == right[0],
+                     "录制 Mac 两侧原件不属于同一原夹具世界")
 
 
 def fixture_ledger(path: Path) -> Path:
@@ -45,6 +87,8 @@ def fixture_ledger(path: Path) -> Path:
     contract.require(campaign is not None and campaign.is_relative_to(staging), "Mac 夹具 Campaign 必须在同一临时 staging 树")
     root = ledger.find_project_ledger(campaign, client="claude")
     if root is None:
+        contract.require(not os.environ.get("CLAUDE_FAULT_METHOD_RECORD_DIR"),
+                         "录制 Mac 夹具缺少原 Campaign 的项目账本，不能重建")
         data_root = campaign.parents[2] if campaign.parent.name == "campaigns" and campaign.parent.parent.name == "evidence" else campaign
         data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         data_root.chmod(0o700)
@@ -80,6 +124,7 @@ class FixtureSourceAdapter:
 
     def verify_origin(self, task: Mapping[str, Any], bundle_root: Path, capture_root: Path) -> None:
         root = temporary_root(bundle_root)
+        require_same_world(bundle_root, capture_root)
         contract.require(capture_root.resolve().is_relative_to(root), "fixture capture 越出同一临时根")
         project = Path(task["execution"]["project_ledger"])
         contract.require(project.is_relative_to(root / "staging"), "fixture source 账本不在同一临时 staging 树")
