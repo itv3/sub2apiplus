@@ -23,6 +23,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -305,6 +306,60 @@ class ClaudeContractTests(ClaudeRehearsalFixture):
 
 class ClaudeRehearsalTests(ClaudeRehearsalFixture):
     """完整演练：零请求通过、封存与逐字重放、Formal 与恢复兼容、增量复用与失败重跑。"""
+
+    def test_isolated_preflight_uses_registered_execution_tree(self) -> None:
+        """入口隔离根只存预检原件，实际四棵工具树仍取登记的数据根。"""
+
+        original = self.write_campaign()
+        campaign = self.data / "staging" / "entry-dryrun-layout" / "evidence" / "campaigns" / original.name
+        campaign.parent.mkdir(parents=True)
+        shutil.copytree(original, campaign)
+        original_bytes = (campaign / "campaign.json").read_bytes()
+        with self.patched():
+            manifest = claude_upgrade.load_campaign_manifest(campaign)
+            verify_root, execution_root, container_root = claude_profile.rehearsal_execution_roots(campaign, manifest)
+            self.assertEqual(execution_root, self.tool_root)
+            self.assertEqual(verify_root, self.data)
+            self.assertEqual(container_root, str(self.tool_root))
+            with self.assertRaisesRegex(capture.ConfigurationError, "runs 根不一致"):
+                capture._capture_layout(campaign, manifest)
+            facts = self.collect(campaign, "isolated-facts.json")
+            sealed = receipt.finalize(self.evidence, "isolated-facts.json", "isolated-receipt.json", client="claude")
+            self.assertEqual(receipt.replay(self.evidence, "isolated-receipt.json", client="claude"), sealed)
+        self.assertEqual(facts["summary"]["status"], "passed")
+        self.assertEqual(facts["preflight_campaign"]["path"], str(campaign))
+        self.assertEqual((campaign / "campaign.json").read_bytes(), original_bytes)
+
+    def test_isolated_preflight_layout_rejects_invalid_scope_and_configuration(self) -> None:
+        """正式模式、外部根、过深目录、符号链接及非法容器布局均在探针前拒绝。"""
+
+        original = self.write_campaign()
+        valid = self.data / "staging" / "entry-dryrun-layout" / "evidence" / "campaigns" / original.name
+        valid.mkdir(parents=True)
+        external = self.root / "external" / "evidence" / "campaigns" / original.name
+        external.mkdir(parents=True)
+        deep = self.data / "staging" / "entry-dryrun-layout" / "nested" / "evidence" / "campaigns" / original.name
+        deep.mkdir(parents=True)
+        alias = self.data / "staging" / "alias"
+        alias.symlink_to(valid.parents[2], target_is_directory=True)
+        with self.patched():
+            manifest = claude_upgrade.load_campaign_manifest(original)
+            cases = (
+                ("正式模式", valid, dict(manifest, campaign_mode="formal"), "preflight_only"),
+                ("外部根", external, manifest, "登记数据根"),
+                ("过深根", deep, manifest, "规范目录"),
+                ("符号链接", alias / "evidence" / "campaigns" / original.name, manifest, "无符号链接"),
+                ("别名", valid, dict(manifest, configuration=dict(manifest["configuration"], capture_root="/unknown")), "登记的容器"),
+                ("工具逃逸", valid, dict(manifest, configuration=dict(manifest["configuration"], capture_tool_root="/capture/../tools/official_client_capture")), "安全绝对路径"),
+                ("工具根", valid, dict(manifest, configuration=dict(manifest["configuration"], capture_tool_root="/capture/tools/other")), "结尾"),
+                ("相同容器", valid, dict(manifest, configuration=dict(manifest["configuration"], synthetic_capture_container=CAPTURE)), "断网容器名"),
+                ("可变镜像", valid, dict(manifest, configuration=dict(manifest["configuration"], runtime_image="image:latest")), "repository@sha256"),
+            )
+            for label, current, payload, message in cases:
+                with self.subTest(case=label), self.assertRaisesRegex(receipt.JobRehearsalReceiptError, message):
+                    claude_profile.rehearsal_execution_roots(current, payload)
+        self.assertEqual(self.docker_calls(), [])
+        self.assertEqual((self.binary_calls, self.lifecycle_calls), (0, 0))
 
     def test_full_rehearsal_passes_replays_and_is_formal_compatible(self) -> None:
         campaign = self.write_campaign()

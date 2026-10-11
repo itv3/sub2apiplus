@@ -409,6 +409,72 @@ def job_contract_replay(contract: Mapping[str, Any], facts: Mapping[str, Any]) -
 # ---------------------------------------------------------------------------
 
 
+def _rehearsal_capture_layout(campaign_dir: Path, manifest: Mapping[str, Any]) -> Any:
+    """离线演练允许入口的隔离预检根，工具执行副本仍只映射到登记的真实数据根。
+
+    正式取证的 ``_capture_layout`` 要求 Campaign 与取证 runs 同根；入口空跑把预检
+    Campaign 放在 ``<登记数据根>/staging/<隔离入口>/evidence/campaigns/<id>``，它不
+    写取证 runs。因此仅在本画像接受这个固定形状，不改变正式取证的布局限制。
+    """
+
+    from tools.official_client_capture import claude_upgrade
+    from tools.official_client_capture import claude_upgrade_capture as capture
+
+    campaign = Path(campaign_dir)
+    campaign_data_root = capture._host_data_root(campaign)
+    registered_runs = Path(claude_upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT)
+    registered_data_root = registered_runs.parent.resolve(strict=True)
+    if campaign_data_root == registered_data_root:
+        return capture._capture_layout(campaign, manifest)
+    if manifest.get("campaign_mode") != "preflight_only":
+        raise _configuration_error_type()("隔离 Job 演练只接受 preflight_only Campaign。")
+    try:
+        relative = campaign_data_root.relative_to(registered_data_root)
+    except ValueError as error:
+        raise _configuration_error_type()("隔离预检根必须位于登记数据根的 staging/<隔离入口> 下。") from error
+    if (
+        len(relative.parts) != 2
+        or relative.parts[0] != "staging"
+        or not capture.SAFE_ID_RE.fullmatch(relative.parts[1])
+        or any(path.is_symlink() for path in (campaign, *campaign.parents))
+    ):
+        raise _configuration_error_type()("隔离预检根必须是无符号链接的 staging/<隔离入口> 规范目录。")
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise _configuration_error_type()("Claude Campaign 总计划缺少 configuration。")
+    capture_root = str(configuration.get("capture_root", ""))
+    tool_root = str(configuration.get("capture_tool_root", ""))
+    container = str(configuration.get("capture_container", ""))
+    synthetic_container = str(configuration.get("synthetic_capture_container", ""))
+    runtime_image = str(configuration.get("runtime_image", ""))
+    # 隔离预检仍复核正式布局的全部配置约束；它只改变 Campaign 的存放坐标。
+    for label, value in (("capture_root", capture_root), ("capture_tool_root", tool_root)):
+        if not capture.SAFE_ABSOLUTE_PATH_RE.fullmatch(value) or ".." in PurePosixPath(value).parts:
+            raise _configuration_error_type()(f"Claude Campaign configuration.{label} 不是安全绝对路径。")
+    if not capture.SAFE_ID_RE.fullmatch(container):
+        raise _configuration_error_type()("Claude Campaign configuration.capture_container 非法。")
+    if not capture.SAFE_ID_RE.fullmatch(synthetic_container) or synthetic_container == container:
+        raise _configuration_error_type()("断网容器名必须合法且与 capture_container 不同。")
+    if not capture.IMMUTABLE_IMAGE_RE.fullmatch(runtime_image):
+        raise _configuration_error_type()("Claude Campaign configuration.runtime_image 必须是 repository@sha256 引用。")
+    if PurePosixPath(tool_root).parts[-2:] != capture.EXECUTION_TREE_SUFFIX:
+        raise _configuration_error_type()("Claude Campaign configuration.capture_tool_root 必须以 tools/official_client_capture 结尾。")
+    container_runs = PurePosixPath(capture_root) / "runs"
+    if container_runs not in tuple(PurePosixPath(item) for item in claude_upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS):
+        raise _configuration_error_type()(f"capture_root 的 runs 目录 {container_runs} 不是登记的容器 runs 别名。")
+    if registered_runs.resolve(strict=False) != (registered_data_root / "runs").resolve(strict=False):
+        raise _configuration_error_type()("登记的宿主 runs 根不是规范数据根的 runs 目录。")
+    return capture.CaptureLayout(
+        host_data_root=registered_data_root,
+        capture_root=PurePosixPath(capture_root),
+        capture_container=container,
+        capture_tool_root=PurePosixPath(tool_root),
+        host_tool_root=Path(capture.__file__).resolve().parent,
+        runtime_image=runtime_image,
+        synthetic_container=synthetic_container,
+    )
+
+
 def rehearsal_execution_roots(campaign_dir: Path, manifest: Mapping[str, Any]) -> tuple[Path, Path, str]:
     """执行副本坐标：总计划 ``capture_tool_root``（容器坐标）按 B2-06 的坐标布局映射到宿主；核验根取宿主副本上两级
     （编排器 ``_verify_execution_tree`` 的约定），容器内副本就是 ``capture_tool_root``（两个容器挂载相同）。"""
@@ -416,7 +482,7 @@ def rehearsal_execution_roots(campaign_dir: Path, manifest: Mapping[str, Any]) -
     from tools.official_client_capture import claude_upgrade_capture
 
     try:
-        layout = claude_upgrade_capture._capture_layout(campaign_dir, manifest)
+        layout = _rehearsal_capture_layout(campaign_dir, manifest)
         execution_root = claude_upgrade_capture._host_path(layout.capture_tool_root, layout)
     except _configuration_error_type() as error:
         raise _error(f"Claude 采集坐标布局非法：{error}") from error
