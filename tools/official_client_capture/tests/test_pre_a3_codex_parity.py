@@ -19,6 +19,9 @@
 5a 收口（B5a-11）在此之外只许改三处顶层语句，逐项单独核对：去掉模块级 ``from tools.official_client_capture.tests import
 project_ledger_fixture``（运行时模块不导入测试目录）；``FIXTURE_ONLY_ENV`` 由引用夹具常量改为同值字面量；
 ``_bind_rehearsal_receipt`` 只改 Claude 分支的拒绝报错文字（campaign-run 分批演练绑定只属于 Codex），其余逐字不变。
+
+B5b-02 固定79场景根仅增加三个原函数的明确接口分支；各函数的前后完整 AST 摘要逐项冻结，不允许任意函数变化。
+Codex 的真实清单、门禁输入和旧 CLI 行为仍由实际生成与运行回归核对。
 """
 
 from __future__ import annotations
@@ -69,6 +72,18 @@ CLAUDE_TIME_EXPRESSION = '''claude_fault_time_budget(name)["unit_timeout_seconds
     claude_recorded_time_budget(name)["unit_timeout_seconds"]
     if client == "claude" and name in CLAUDE_RECORDED_CHAIN_IDS else
     REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS'''
+
+# B5b-02 只登记这三个原函数的已批准接口差异；前后均核完整 AST，不按函数名豁免其内容。
+B5B02_FIXED_ROOT_BASELINE_AST = {
+    "run_scenario_unit": "c7ef546aecb967f8402606e3e5f5afbec6c09d862e90c60ad9207e865bce2025",
+    "build_parser": "898f71fedcf2c1d5e095adb937c2dae2b6965fb09f17a26b4394d9ae4262f2f5",
+    "main": "402964d55722d4d16125434e4d19fa1e7949fbf36a291c2e80d0d2820ef8d01b",
+}
+B5B02_FIXED_ROOT_AST = {
+    "run_scenario_unit": "d0fd41c694c33f4cc92cf29477d300cac2abfdef531f68d7d93ad4bbd505d9c9",
+    "build_parser": "cc86a42c022262247d54899a9ff4072ba811a83cf3da097de7f0cb395d32cf10",
+    "main": "f5bd18d94e4c205c9da6117352451855b3f5fc6ad110291e90d3fdeb34b651fe",
+}
 
 
 def full_ast_dump(node: ast.AST) -> str:
@@ -148,6 +163,11 @@ class PreA3CodexParityTests(unittest.TestCase):
                 names = [item.id for item in node.targets if isinstance(item, ast.Name)] if isinstance(node, ast.Assign) else []
                 name = (node.name if isinstance(node, ast.FunctionDef) else target.id if isinstance(target, ast.Name)
                         else names[0] if len(names) == 1 else "")
+                if isinstance(node, ast.FunctionDef) and name in B5B02_FIXED_ROOT_AST:
+                    digest = hashlib.sha256(full_ast_dump(node).encode()).hexdigest()
+                    self.assertIn(digest, (B5B02_FIXED_ROOT_BASELINE_AST[name], B5B02_FIXED_ROOT_AST[name]))
+                    closeout.setdefault("fixed_root_shapes", {})[name] = digest
+                    continue
                 if name in CLAUDE_TIME_AST:
                     self.assertEqual(hashlib.sha256(full_ast_dump(node).encode()).hexdigest(), CLAUDE_TIME_AST[name])
                     closeout.setdefault("time_additions", []).append(name)
@@ -192,7 +212,9 @@ class PreA3CodexParityTests(unittest.TestCase):
         self.assertEqual(sorted(old_tables), sorted(B5A05_CLAUDE_TABLES))
         self.assertEqual(sorted(new_tables), sorted(B5A05_CLAUDE_TABLES))
         self.assertEqual(new_others, old_others,
-                         "Claude 登记表、秒数表、5a 收口三处与精确时间合同例外之外均须逐字相同")
+                         "Claude 登记表、秒数表、5a 收口三处、精确时间合同与固定根三函数精确摘要之外均须逐字相同")
+        self.assertEqual(old_closeout["fixed_root_shapes"], B5B02_FIXED_ROOT_BASELINE_AST)
+        self.assertEqual(new_closeout["fixed_root_shapes"], B5B02_FIXED_ROOT_AST)
         self.assertEqual(old_closeout.get("time_additions", []), [])
         self.assertEqual(sorted(new_closeout["time_additions"]), sorted(CLAUDE_TIME_AST))
         self.assertEqual(new_closeout["time_overrides"], 1)

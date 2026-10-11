@@ -179,7 +179,6 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                 driver._require_client_staging(data)
                 if data != directory / "staging/data":
                     raise source.replay.ReplayError("完整外壳预算意图须绑定原首层staging/data坐标")
-                directory.mkdir(mode=0o700, exist_ok=True)
             elif intent_digest is not None:
                 raise source.replay.ReplayError("完整后继预算意图缺路径")
             else:
@@ -189,7 +188,6 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
             if location is not None:
                 if records.is_symlink():
                     raise ValueError("完整后继记录目录不能是链接")
-                records.mkdir(mode=0o700, parents=True, exist_ok=True)
                 if location.exists():
                     previous = source.read(source.bound(source.binding(location), root=records))
                     if (previous["recorded"] != recorded or previous["freeze"] != freeze
@@ -201,8 +199,17 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                     directory = saved_directory
                     if not directory.is_dir() or directory.is_symlink():
                         raise ValueError("完整后继原世界已缺失，禁止重建")
+                    saved_data = directory / "staging/data"
+                    if (not saved_data.is_dir() or saved_data.is_symlink()
+                            or saved_data.resolve() != saved_data):
+                        raise ValueError("完整后继原数据根已缺失或为链接，禁止重建")
+                # 已有位置先核 W/D 完整性；首次无位置原件才允许创建记录目录与世界。
+                records.mkdir(mode=0o700, parents=True, exist_ok=True)
             if directory is None:
                 directory = Path(tempfile.mkdtemp(prefix="claude-full-recorded-", dir=Path(tempfile.gettempdir()).resolve()))
+            elif previous is None:
+                # 已有位置原件必须先核原世界存在，不能先 mkdir 把缺失世界补成空壳。
+                directory.mkdir(mode=0o700, exist_ok=True)
             first_started = previous["started_at_epoch"] if previous else time.time()
             if location is not None and previous is None:
                 source.write(location, {"world_root": str(directory), "recorded": recorded, "freeze": freeze,

@@ -1190,7 +1190,7 @@ def issue_certification(
 # E3-02：场景单元可承接——稳定命令、结果行、从单元执行记录签发
 # ---------------------------------------------------------------------------
 # 场景单元的命令只带稳定内容（场景名与场景父目录），单元规格不随运行变，入口门禁才能承接已经通过的场景；场景的临时根
-# 每次在父目录下新建，通过后删除、失败保留供排查。结论不再写结果文件，而是单元标准输出里恰好一行
+# 默认每次在父目录下新建，通过后删除、失败保留；完整79的显式固定根则始终保留。结论不再写结果文件，而是单元标准输出里恰好一行
 # ``PRE_A3_SCENARIO_RESULT <JSON>``：执行器把日志按内容摘要存进记录库，签发从记录库里的日志取这一行。
 # 执行记录（unit-execution-record/v1）与运行清单（unit-execution-manifest/v1）的格式由 tools/ci/unit_records.py 定义。
 # 认证在数据根运行，那里没有 tools/ci，所以核验算法（规范 JSON 的 sha256、记录库的路径规则、按原始字段判通过）在这里
@@ -1248,21 +1248,45 @@ def scenario_test_module(name: str, client: str = DEFAULT_CLIENT) -> str:
 
 def run_scenario_unit(
     name: str, staging_parent: Path, *, diagnostic: bool = False, client: str = DEFAULT_CLIENT,
+    scenario_root: Path | None = None,
 ) -> dict[str, Any]:
     """E3-02 的单场景入口：在 ``staging_parent`` 下新建本次的临时根跑一个场景，返回带自摘要的单场景结果
     （``pre-a3-scenario-result/v2``）。通过且零网络时删掉临时根，否则保留供排查。诊断执行（执行器下发
     ``UNIT_EXECUTOR_KIND=diagnostic``）的临时根另带前缀、结果标 ``kind=diagnostic``，不参与签发。
 
-    场景结果行的合同两客户端相同（不在附录 B 之列）：场景归属由执行记录的单元 ID（``pre-a3:claude:`` 前缀）区分。"""
+    场景结果行的合同两客户端相同（不在附录 B 之列）：场景归属由执行记录的单元 ID（``pre-a3:claude:`` 前缀）区分。
+    B5b-02 完整79场景可显式绑定父目录的固定直接子根；该根及其真实原件始终保留，恢复资格仍由原链核验。"""
 
     if name not in scenario_names(client):
         raise CertificationError(f"未登记的认证场景：{name}")
+    root = None
+    if scenario_root is not None:
+        if client != "claude" or name != "vc-chain.claude-full-validation-only":
+            raise CertificationError("固定场景根仅用于 Claude 完整79录制场景")
+        if diagnostic:
+            raise CertificationError("诊断执行不能使用完整79的固定场景根")
+        root = Path(scenario_root)
+        # 固定根不接受链接或路径归一化替身；先完成全部位置核验，再创建任何目录。
+        raw_parent = Path(staging_parent)
+        if (not root.is_absolute() or not raw_parent.is_absolute()
+                or any(path.is_symlink() for path in (root, *root.parents, raw_parent, *raw_parent.parents))
+                or root.resolve(strict=False) != root or raw_parent.resolve(strict=False) != raw_parent
+                or root.parent != raw_parent):
+            raise CertificationError("固定场景根须为无符号链接的绝对路径，且是场景父目录的直接子目录")
+        temp_root = root / "tmp"
+        if (root.is_symlink() or root.exists() and not root.is_dir()
+                or temp_root.is_symlink() or temp_root.resolve(strict=False) != temp_root
+                or temp_root.exists() and not temp_root.is_dir()):
+            raise CertificationError("固定场景根及其 tmp 必须为无符号链接的目录")
     parent = Path(staging_parent).resolve(strict=False)
     if project_ledger.STAGING_DIR_NAME not in parent.parts:
         raise CertificationError("场景父目录必须位于 staging 目录树内")
     parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    prefix = ("diagnostic-" if diagnostic else "") + _scenario_file_name(name) + "-"
-    root = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    if root is None:
+        prefix = ("diagnostic-" if diagnostic else "") + _scenario_file_name(name) + "-"
+        root = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+    else:
+        root.mkdir(mode=0o700, exist_ok=True)
     result = run_single_scenario(name, root, client=client)
     payload = _sealed({
         "schema_version": SCENARIO_RESULT_V2_SCHEMA,
@@ -1273,7 +1297,7 @@ def run_scenario_unit(
         "finished_at_utc": result["finished_at_utc"],
         "staging_root": str(root),
     }, "result_sha256")
-    if result["scenario"].get("status") == "passed" and result["network_attempts"] == 0:
+    if scenario_root is None and result["scenario"].get("status") == "passed" and result["network_attempts"] == 0:
         shutil.rmtree(root, ignore_errors=True)
     return payload
 
@@ -1988,6 +2012,8 @@ def build_parser() -> argparse.ArgumentParser:
     single.add_argument("--name", required=True)
     single.add_argument("--staging-parent", type=Path,
                         help="E3-02：场景父目录；本次临时根在其下新建，结果作为标准输出里的一行 PRE_A3_SCENARIO_RESULT")
+    single.add_argument("--scenario-root", type=Path,
+                        help="B5b-02：Claude完整79场景的固定直接子根（须与--staging-parent同用，成功和失败均保留）")
     single.add_argument("--staging-root", type=Path, help="E2-03：场景临时根（与 --result 同用）")
     single.add_argument("--result", type=Path, help="E2-03：单场景结果文件")
     issue = subparsers.add_parser("issue", help="核对场景全集与网络计数后签发（没通过只写旁路文件）")
@@ -2098,10 +2124,13 @@ def main(argv: list[str] | None = None) -> int:
         if arguments.action == "run-scenario":
             # 执行器的诊断重跑（UNIT_EXECUTOR_KIND=diagnostic）用同一条命令：临时目录另放、结果标诊断，不顶替正式执行。
             diagnostic = os.environ.get("UNIT_EXECUTOR_KIND") == "diagnostic"
+            if arguments.scenario_root is not None and arguments.staging_parent is None:
+                raise CertificationError("--scenario-root 必须与 --staging-parent 同用，不能用于旧结果文件入口")
             if arguments.staging_parent is not None:
                 if arguments.staging_root is not None or arguments.result is not None:
                     raise CertificationError("--staging-parent 不能与 --staging-root、--result 同用")
-                result = run_scenario_unit(arguments.name, arguments.staging_parent, diagnostic=diagnostic, client=client)
+                result = run_scenario_unit(arguments.name, arguments.staging_parent, diagnostic=diagnostic, client=client,
+                                           scenario_root=arguments.scenario_root)
                 record = result["scenario"]
                 print(json.dumps({"name": arguments.name, "status": record.get("status"), "network_attempts": result["network_attempts"],
                                   "seconds": record.get("seconds"), "staging_root": result["staging_root"]}, ensure_ascii=False, sort_keys=True),

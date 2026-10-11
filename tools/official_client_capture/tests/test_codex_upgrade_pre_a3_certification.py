@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1111,6 +1112,239 @@ class PreA3RecordCertificationTests(unittest.TestCase):
             for path in receipts:
                 self.assertEqual(certification.verify_certification(path)["scenario_count"], len(quick) + 1)
             self.assertEqual(list(parent.iterdir()), [], "通过的场景不留临时根")
+
+
+class PreA3FixedRecordedRootTests(unittest.TestCase):
+    """固定外壳接线的短边界；不运行79探针长链或签发正式认证。"""
+
+    name = "vc-chain.claude-full-validation-only"
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.parent = self.root / "staging/scenarios"
+        self.scenario_root = self.parent / "full79"
+        previous_tempdir = tempfile.tempdir
+        self.addCleanup(setattr, tempfile, "tempdir", previous_tempdir)
+        environment = mock.patch.dict(os.environ, {"UNIT_EXECUTOR_KIND": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def invoke(self, *extra: str, client: str = "claude") -> tuple[int, dict]:
+        """真正走产品CLI封装，只替换有长链成本的场景动作。"""
+        output = io.StringIO()
+        argv = ["run-scenario", "--client", client, "--name", self.name,
+                "--staging-parent", str(self.parent), "--scenario-root", str(self.scenario_root), *extra]
+        with contextlib.redirect_stdout(output), mock.patch("sys.stderr"):
+            code = certification.main(argv)
+        lines = [line for line in output.getvalue().splitlines() if line.startswith(certification.SCENARIO_RESULT_PREFIX)]
+        self.assertEqual(len(lines), 1, output.getvalue())
+        payload = json.loads(lines[0][len(certification.SCENARIO_RESULT_PREFIX):])
+        self.assertTrue(certification._seal_matches(payload, "result_sha256"))
+        self.assertEqual((payload["schema_version"], payload["kind"], payload["name"], payload["staging_root"]),
+                         (certification.SCENARIO_RESULT_V2_SCHEMA, "formal", self.name, str(self.scenario_root)))
+        return code, payload
+
+    def test_failed_then_passed_invocations_keep_the_same_temp_world_and_original_bytes(self) -> None:
+        from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full
+
+        states = iter(("failed", "passed", "passed"))
+        original = "原始失败原件\n".encode("utf-8")
+        observed = []
+
+        def action(scenario):
+            temp_root = Path(tempfile.gettempdir())
+            data = temp_root / "successor/staging/data"
+            full._require_client_staging(data)
+            artifact = data / "failure-original.log"
+            if artifact.exists():
+                self.assertEqual(artifact.read_bytes(), original)
+            else:
+                artifact.parent.mkdir(parents=True)
+                artifact.write_bytes(original)
+            observed.append(temp_root)
+            return {"name": scenario[0], "status": next(states), "seconds": 0.01}
+
+        with mock.patch.object(certification, "run_scenario", side_effect=action):
+            for expected_code in (1, 0, 0):
+                code, payload = self.invoke()
+                self.assertEqual(code, expected_code)
+                self.assertEqual(payload["network_attempts"], 0)
+                self.assertTrue(self.scenario_root.is_dir(), "固定根失败、成功和重入均不删除")
+        self.assertEqual(observed, [self.scenario_root / "tmp"] * 3)
+        self.assertEqual(list(self.parent.iterdir()), [self.scenario_root], "不随机建兄弟世界或加时间后缀")
+        self.assertEqual((observed[0] / "successor/staging/data/failure-original.log").read_bytes(), original)
+
+    def test_fixed_root_keeps_the_real_network_guard_and_records_the_attempt(self) -> None:
+        def action(scenario):
+            with socket.socket() as connection:
+                with self.assertRaises(certification.smoke.SmokeError):
+                    connection.connect(("127.0.0.1", 9))
+            return {"name": scenario[0], "status": "passed", "seconds": 0.01}
+
+        with mock.patch.object(certification, "run_scenario", side_effect=action):
+            code, payload = self.invoke()
+        self.assertEqual((code, payload["network_attempts"]), (1, 1))
+        self.assertTrue(self.scenario_root.is_dir())
+
+    def test_invalid_fixed_roots_fail_before_any_directory_creation(self) -> None:
+        linked = self.root / "linked"
+        linked.symlink_to(self.root, target_is_directory=True)
+        loop = self.root / "loop"
+        loop.symlink_to(loop, target_is_directory=True)
+        existing = self.root / "staging/existing"
+        existing.mkdir(parents=True)
+        (existing / "tmp").symlink_to(self.root, target_is_directory=True)
+        regular = self.root / "staging/regular"
+        regular.write_bytes(b"original")
+        cases = (
+            (self.parent, Path("relative/full79"), self.name, "claude", False),
+            (self.parent, self.root / "outside/full79", self.name, "claude", False),
+            (self.parent, self.parent / "nested/full79", self.name, "claude", False),
+            (self.root / "outside", self.root / "outside/full79", self.name, "claude", False),
+            (linked / "staging/scenarios", linked / "staging/scenarios/full79", self.name, "claude", False),
+            (loop / "staging/scenarios", loop / "staging/scenarios/full79", self.name, "claude", False),
+            (self.root / "staging", existing, self.name, "claude", False),
+            (self.root / "staging", regular, self.name, "claude", False),
+            (self.parent, self.scenario_root, "vc-chain.full-validation-only", "codex", False),
+            (self.parent, self.scenario_root, "vc-chain.claude-vc1-capture", "claude", False),
+            (self.parent, self.scenario_root, self.name, "claude", True),
+        )
+        for parent, root, name, client, diagnostic in cases:
+            with self.subTest(root=str(root), client=client, diagnostic=diagnostic), \
+                    mock.patch.object(Path, "mkdir", side_effect=AssertionError("拒绝之前不得建目录")), \
+                    mock.patch.object(certification, "run_single_scenario") as runner, \
+                    self.assertRaises(certification.CertificationError):
+                certification.run_scenario_unit(name, parent, client=client, diagnostic=diagnostic, scenario_root=root)
+            runner.assert_not_called()
+        self.assertFalse(self.parent.exists())
+        self.assertEqual(regular.read_bytes(), b"original")
+
+    def test_fixed_cli_rejects_old_options_missing_parent_and_diagnostic_before_writes(self) -> None:
+        base = ["run-scenario", "--client", "claude", "--name", self.name, "--scenario-root", str(self.scenario_root)]
+        cases = (base, [*base, "--result", str(self.root / "old.json")],
+                 [*base, "--staging-parent", str(self.parent), "--staging-root", str(self.scenario_root)],
+                 [*base, "--staging-parent", str(self.parent), "--result", str(self.root / "old.json")])
+        for argv in cases:
+            with self.subTest(argv=argv), mock.patch("sys.stderr"), \
+                    mock.patch.object(Path, "mkdir", side_effect=AssertionError("拒绝之前不得建目录")):
+                self.assertEqual(certification.main(argv), 2)
+        with mock.patch.dict(os.environ, {"UNIT_EXECUTOR_KIND": "diagnostic"}), mock.patch("sys.stderr"), \
+                mock.patch.object(Path, "mkdir", side_effect=AssertionError("诊断拒绝之前不得建目录")):
+            self.assertEqual(certification.main([*base, "--staging-parent", str(self.parent)]), 2)
+        self.assertFalse(self.parent.exists())
+
+    def full_environment(self, data: Path) -> tuple[dict, dict]:
+        """合成外持意图只测试位置消费；不创建真实预算账本，不授完整链成功。"""
+        from tools.official_client_capture.tests import claude_recorded_full_validation_driver as full
+        from tools.official_client_capture.tests import claude_recorded_chain_source as source
+        from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as shell
+
+        intent = source.write(self.root / "intent.json", {
+            "schema_version": full.BUDGET_CARRY_INTENT_SCHEMA, "data_root": str(data),
+            "predecessor_data": str(self.root / "original/staging/data"), "predecessor_campaign_id": "original",
+            "expected_timing_plan_sha256": "1" * 64, "expected_timing_head": {"sequence": 1, "sha256": "2" * 64},
+            "expected_project_plan_sha256": "3" * 64, "expected_project_head": {"sequence": 1, "sha256": "4" * 64},
+            "preserved_bindings": {},
+        })
+        intent_binding = source.binding(intent)
+        environment = {shell.RECORD_DIR_ENV: str(self.root / "records"), "CLAUDE_2_1_226_RELAY_FIXTURE": "/fixture/relay",
+                       "CLAUDE_2_1_226_FREEZE_FIXTURE": "/fixture/freeze", full.BUDGET_CARRY_INTENT_ENV: str(intent),
+                       full.BUDGET_CARRY_DIGEST_ENV: intent_binding["sha256"]}
+        return environment, intent_binding
+
+    def test_full_carry_first_initialization_and_failed_reentry_keep_the_frozen_location(self) -> None:
+        from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as shell
+        from tools.official_client_capture.tests import claude_recorded_chain_source as source
+
+        tempfile.tempdir = str(self.root)
+        world = self.root / "successor"
+        data = world / "staging/data"
+        environment, _ = self.full_environment(data)
+        records = self.root / "records"
+        original_readlink = os.readlink
+        commands = []
+
+        def launch(argv, **kwargs):
+            if argv[-1] == "true":
+                return subprocess.CompletedProcess(argv, 0)
+            self.assertEqual(Path(argv[argv.index("--data") + 1]), data)
+            self.assertEqual(kwargs["env"]["TMPDIR"], str(self.root))
+            self.assertIn("--complete-main-model", argv)
+            commands.append(argv)
+            # 只模拟失败子进程形成数据目录；外壳、位置凭证与失败日志仍走真实原入口。
+            data.mkdir(parents=True, exist_ok=True)
+            return subprocess.CompletedProcess(argv, 1, "完整CLI原始输出", "完整CLI原始失败")
+
+        with mock.patch.dict(os.environ, environment, clear=True), \
+                mock.patch.object(shell.platform, "system", return_value="Linux"), \
+                mock.patch.object(shell.platform, "machine", return_value="aarch64"), \
+                mock.patch.object(shell.os, "geteuid", return_value=0), \
+                mock.patch.object(shell.os, "readlink", side_effect=lambda path, *args, **kwargs:
+                                  "ns:[fixture]" if str(path).startswith("/proc/self/ns/") else original_readlink(path, *args, **kwargs)), \
+                mock.patch.object(shell.shutil, "which", return_value="/fixture/unshare"), \
+                mock.patch.object(shell.subprocess, "run", side_effect=launch):
+            with self.assertRaisesRegex(AssertionError, "完整CLI原始失败"):
+                shell.ClaudeRecordedVC1ChainTests()._run_pending_full_validation()
+            location = records / "complete-main-model-location.json"
+            original = location.read_bytes()
+            original_log = (world / "stderr.log").read_bytes()
+            with self.assertRaisesRegex(AssertionError, "完整CLI原始失败"):
+                shell.ClaudeRecordedVC1ChainTests()._run_pending_full_validation()
+        self.assertEqual(location.read_bytes(), original, "失败重入不改意图绑定、世界或原起点")
+        self.assertEqual((world / "stderr.log").read_bytes(), original_log)
+        self.assertEqual((world / "invocations/0001/stderr.log").read_bytes(), original_log)
+        self.assertEqual(commands[0], commands[1])
+        self.assertEqual(source.read(location)["world_root"], str(world))
+
+    def test_existing_full_location_rejects_missing_or_linked_world_data_before_any_mkdir(self) -> None:
+        from tools.official_client_capture.tests.real_chains import test_claude_vc1_recorded_chain as shell
+        from tools.official_client_capture.tests import claude_recorded_chain_source as source
+
+        tempfile.tempdir = str(self.root)
+        world = self.root / "missing-world"
+        data = world / "staging/data"
+        environment, intent_binding = self.full_environment(data)
+        records = self.root / "records"
+        location = source.write(records / "complete-main-model-location.json", {
+            "world_root": str(world), "recorded": "/fixture/relay", "freeze": "/fixture/freeze",
+            "budget_carry_intent": intent_binding, "started_at_epoch": 123.0,
+        })
+        original = location.read_bytes()
+        cases = (("缺W", "原世界已缺失"), ("缺D", "原数据根已缺失"),
+                 ("D链接", "原数据根已缺失"), ("W链接", "原世界已缺失"))
+        for label, reason in cases:
+            if label == "缺D":
+                world.mkdir()
+            elif label == "D链接":
+                data.parent.mkdir()
+                linked_data = self.root / "linked-data-world/staging/data"
+                linked_data.mkdir(parents=True)
+                data.symlink_to(linked_data, target_is_directory=True)
+            elif label == "W链接":
+                data.unlink()
+                data.parent.rmdir()
+                world.rmdir()
+                linked_world = self.root / "linked-world"
+                (linked_world / "staging/data").mkdir(parents=True)
+                world.symlink_to(linked_world, target_is_directory=True)
+            with self.subTest(label=label), mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(shell.platform, "system", return_value="Linux"), \
+                    mock.patch.object(shell.platform, "machine", return_value="aarch64"), \
+                    mock.patch.object(shell.os, "geteuid", return_value=0), \
+                    mock.patch.object(shell.shutil, "which", return_value="/fixture/unshare"), \
+                    mock.patch.object(shell.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch, \
+                    mock.patch.object(Path, "mkdir", side_effect=AssertionError("已有位置拒绝之前不得mkdir")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    shell.ClaudeRecordedVC1ChainTests()._run_pending_full_validation()
+            self.assertEqual(launch.call_count, 1, "只做原namespace能力探测，不派发完整CLI")
+            if label == "缺W":
+                self.assertFalse(world.exists(), "已有位置的缺失世界不能被mkdir补造")
+            elif label == "缺D":
+                self.assertFalse(data.exists(), "已有位置的缺失数据根不能被mkdir补造")
+        self.assertEqual(location.read_bytes(), original)
+        self.assertEqual(source.binding(self.root / "intent.json"), intent_binding)
 
 
 if __name__ == "__main__":

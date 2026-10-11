@@ -2223,7 +2223,9 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
 
     COMMAND_KEYS = {
         'candidate-reconcile': ('candidate-run', 'reconcile-first', 'reconcile-repeat', 'unapproved-refusal', 'approve-first', 'approve-repeat', 'resume', 'status'),
-        'candidate-evolution': ('candidate-run', 'evolution-preview', 'evolution-apply', 'evolution-repeat', 'status', 'reconcile', 'approve', 'resume'),
+        # 原八个键保持原顺序：未授权 resume 的真实拒绝永久保留，授权及后继调用只追加新键。
+        'candidate-evolution': ('candidate-run', 'evolution-preview', 'evolution-apply', 'evolution-repeat', 'status', 'reconcile', 'approve', 'resume',
+                                'authorize', 'authorize-repeat', 'resume-authorized'),
     }
 
     def _candidate_start(self, name: str, scenario: str) -> dict[str, Any]:
@@ -2311,13 +2313,76 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
             self.assertEqual(result['recovery_approval']['approved_sha256'], preview['review_sha256'])
         return result
 
-    def _candidate_resume_step(self, name: str, state: dict[str, Any], preview_path: str) -> dict[str, Any]:
+    def _candidate_resume_step(self, name: str, state: dict[str, Any], preview_path: str, *, key: str = 'resume') -> dict[str, Any]:
         argv = ['resume', '--campaign-dir', str(state['campaign']), '--candidate-id', chain_driver.CANDIDATE,
             '--rerun-failed', '--recovery-preview', preview_path, '--acknowledge-live-requests']
-        code, result, stderr = self._candidate_cli(name, state, 'resume', argv)
+        code, result, stderr = self._candidate_cli(name, state, key, argv)
         self.assertIsNotNone(result, stderr)
         self.assertEqual((code, result['status']), (2, 'awaiting_receipts'), stderr)
         return result
+
+    def _candidate_timing_recovery_binding(self, preview: dict[str, Any], source: dict[str, Any]) -> None:
+        """按原预览冻结状态核计时消费：active 不需解锁；审核／恢复暂停必须绑定实际授权事件。"""
+
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+
+        frozen_status = preview['campaign_ledger_head']['status']
+        binding = source['timing_recovery_event']
+        if frozen_status == 'active':
+            self.assertIsNone(binding, '原 active 预览不能补造计时恢复事件')
+            return
+        self.assertIn(frozen_status, {'recovery_required', 'stage_review_required', 'candidate_review_required'})
+        self.assertIsInstance(binding, dict, '原暂停预览的恢复来源必须绑定实际计时授权事件')
+        expected_id = f"recovery-authorized-{preview['source_attempt_id']}-{int(preview['index']):02d}"
+        self.assertEqual(binding['event_id'], expected_id)
+        rows = [(event, raw) for event, raw in timing._load_events(self.ledger_dir) if event['event_id'] == expected_id]
+        self.assertEqual(len(rows), 1, '恢复来源必须引用唯一原计时授权事件')
+        event, raw = rows[0]
+        self.assertEqual((event['event_type'], event['phase']), ('recovery_authorized', 'VC-5'))
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), binding['event_sha256'])
+
+    def _candidate_evolution_resume_steps(self, name: str, state: dict[str, Any], first_root: Path,
+                                         reconciled: dict[str, Any], audit: ScenarioAudit) -> None:
+        """保留原未授权失败，只追加授权、授权重验与后继续跑；各动作仍经原唯一命令停点。"""
+
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+
+        campaign = state['campaign']
+        first = state['first']
+        if state['phase'] == 11:
+            # 工具演进确实暂停计时账；原失败 resume 先只读承接，不改原 key、argv 或完整输出。
+            # 新世界同样实测这一零副作用拒绝，然后沿已有显式授权入口继续。
+            calls_before = self.relay_probe_calls()
+            attempts_before = sorted(path.name for path in first_root.parent.iterdir())
+            argv = ['resume', '--campaign-dir', str(campaign), '--candidate-id', chain_driver.CANDIDATE,
+                '--rerun-failed', '--recovery-preview', reconciled['recovery_preview_path'], '--acknowledge-live-requests']
+            code, result, refusal = self._candidate_cli(name, state, 'resume', argv)
+            self.assertEqual((code, result), (1, None))
+            self.assertIn('UpgradeTimingLedger 为 active（当前 recovery_required）', refusal)
+            self.assertEqual(self.relay_probe_calls(), calls_before)
+            self.assertEqual(sorted(path.name for path in first_root.parent.iterdir()), attempts_before)
+            self._candidate_save(name, state, 12, refused_resume=refusal)
+        if state['phase'] == 12:
+            argv = ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', first['attempt_id'],
+                '--authorize-recovery-preview', reconciled['recovery_preview_path']]
+            code, authorized, stderr = self._candidate_cli(name, state, 'authorize', argv)
+            self.assertIsNotNone(authorized, stderr)
+            self.assertEqual((code, authorized['status']), (0, 'authorized'), stderr)
+            self.assertIsNotNone(authorized['timing_recovery_event'])
+            self.assertEqual(timing.inspect_ledger(self.ledger_dir)['status'], 'active')
+            self._candidate_save(name, state, 13, authorized=authorized, authorized_state=audit.accounting_state())
+        if state['phase'] == 13:
+            argv = ['reconcile-attempt', '--campaign-dir', str(campaign), '--attempt-id', first['attempt_id'],
+                '--authorize-recovery-preview', reconciled['recovery_preview_path']]
+            code, repeated, stderr = self._candidate_cli(name, state, 'authorize-repeat', argv)
+            self.assertIsNotNone(repeated, stderr)
+            self.assertEqual((code, repeated['status']), (0, 'authorized'), stderr)
+            self.assertEqual({key: repeated['timing_recovery_event'][key] for key in ('event_id', 'event_sha256')},
+                {key: state['authorized']['timing_recovery_event'][key] for key in ('event_id', 'event_sha256')})
+            self._candidate_save(name, state, 14, repeated_authorization_state=audit.accounting_state())
+        if state['phase'] == 14:
+            resumed = self._candidate_resume_step(name, state, reconciled['recovery_preview_path'], key='resume-authorized')
+            self._candidate_save(name, state, 15, resumed=resumed)
 
     def _audit(self, scenario: str, campaign: Path, trusted: Iterable[Path]) -> ScenarioAudit:
         from tools.official_client_capture import claude_upgrade_store
@@ -2403,7 +2468,7 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         self.assertEqual((source['source_attempt_id'], source['execute_job_ids']), (first['attempt_id'], [chain_driver.REFRESH_JOB]))
         self.assertEqual(source['recovery_approval'], {'index': approved['recovery_approval']['index'],
             'receipt_sha256': approved['recovery_approval']['receipt_sha256']})
-        self.assertIsNotNone(source['timing_recovery_event'], '恢复批准必须绑定原计时消费事件')
+        self._candidate_timing_recovery_binding(preview, source)
         self.assertEqual(status['status'], 'candidate_awaiting_client_checkpoint')
         self.assertTrue(all(row['status'] == 'complete' for row in attempt['results']))
         counted = recovery_tests._read(campaign / reconciled['provenance_receipt']['path'])['precise_total']
@@ -2426,6 +2491,7 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
     def _scenario_candidate_tool_evolution(self) -> None:
         """原隔离脚本修复、只读演进预览、两次登记、真实对账批准与候选闭集续跑。"""
         from tools.official_client_capture import claude_upgrade
+        from tools.official_client_capture import claude_upgrade_recovery as recovery
         from tools.official_client_capture import claude_upgrade_store
         from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
@@ -2536,15 +2602,16 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         if state['phase'] == 10:
             self._candidate_reconcile_step(name, state, 'approve', first['attempt_id'], reconciled['recovery_preview'])
             self._candidate_save(name, state, 11)
-        if state['phase'] == 11:
-            resumed = self._candidate_resume_step(name, state, reconciled['recovery_preview_path'])
-            self._candidate_save(name, state, 12, resumed=resumed)
+        self._candidate_evolution_resume_steps(name, state, first_root, reconciled, audit)
         self.assertEqual(tuple(row['key'] for row in state['completed_commands']), self.COMMAND_KEYS[name])
         if stops.load_state('audit-complete:' + scenario) is not None:
             self.recorded_audit_report(ScenarioAudit.revalidate(self, scenario))
             return
         resumed = state['resumed']
         attempt_root, replayed = self.candidate_attempt(campaign, resumed['attempt_id'])
+        with self.source_context():
+            source = recovery.load_recovery_source(campaign, attempt_root)
+        self._candidate_timing_recovery_binding(reconciled['recovery_preview'], source)
         self.assertEqual(self.relay_probe_calls()[len(state['calls']):], state['calls'], '共同依赖变化后恰好重跑全部probe一次')
         self.assertEqual(recovery_tests._read(attempt_root / 'reservation.json')['tool_evolution']['index'], 1)
         store, store_campaign = claude_upgrade_store.open_campaign_store(campaign, claude_upgrade.load_campaign_manifest(campaign))
@@ -2555,7 +2622,8 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         audit.check_closure(executed=[row['id'] for row in replayed['results'] if row['disposition'] == 'executed'], expected=expected,
             reused=[row['id'] for row in replayed['results'] if row['disposition'] == 'reused'], what='完整演进判定后的候选闭集',
             source=audit.file_closure_source(attempt_root / 'attempt.json', ('results',), ('results',), row_key='id', disposition='disposition'))
-        audit.check_accounting(precise_delta=counted, root_causes=0, repeats=[('重复候选工具演进批准', state['first_state'], state['second_state'])])
+        audit.check_accounting(precise_delta=counted, root_causes=0, repeats=[('重复候选工具演进批准', state['first_state'], state['second_state']),
+            ('重复候选计时恢复授权', state['authorized_state'], state['repeated_authorization_state'])])
         audit.check_elapsed()
         audit.check_history()
         audit.check_entry(state['status']['next_command'], 'reconcile-attempt')
