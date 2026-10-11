@@ -276,6 +276,7 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, b"", b"")
             observed["argv"], observed["options"] = argv, options
             data = Path(argv[argv.index("--data") + 1])
+            data.mkdir(parents=True, exist_ok=True)
             observed["world"] = data.parent.parent
             self.addCleanup(shutil.rmtree, observed["world"])
             return subprocess.CompletedProcess(argv, 23, "真实外部边界 stdout 标记\n", "真实外部边界 stderr 标记\n")
@@ -305,6 +306,47 @@ class RecordedFullPreparationTests(unittest.TestCase):
         self.assertEqual(source.bound(record["stderr"]).read_text(encoding="utf-8"), "真实外部边界 stderr 标记\n")
         self.assertEqual(tempfile.gettempdir(), original_temp)
         self.assertNotIn("_run_pending_full_validation", unittest.defaultTestLoader.getTestCaseNames(shell.ClaudeRecordedVC1ChainTests))
+        # 首跑已过去两小时也不扣本轮挂死预算；原失败与位置凭证仍逐字保留。这里只核外壳，不授予完整链认证。
+        world = observed["world"]
+        original_record = (world / "record.json").read_bytes()
+        location_path = self.data / "external-records/complete-main-model-location.json"
+        original_location = location_path.read_bytes()
+        first_started = source.read(location_path)["started_at_epoch"]
+        second = {}
+        def resumed_command(argv, **options):
+            if argv == ["unshare", "-m", "-n", "true"]:
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+            second["argv"], second["options"] = argv, options
+            data = Path(argv[argv.index("--data") + 1])
+            state = source.write(data / "control/shell-test-source.json", {"fixture_only": True})
+            continuation = source.write(data / "control/shell-test-continuation.json", {"fixture_only": True})
+            source.write(data / "control/recorded-full-chain-result.json", {
+                "schema_version": driver.FULL_SCHEMA, "registered_chains": ["vc-chain.claude-full-validation-only"],
+                "status": "passed", "scope": "VC-0→VC-6", "fixture_only": True, "full_vc0_vc6_certified": True,
+                "formal_version_semantics_certified": False, "network_requests_this_run": 0,
+                "checkpoints": {f"VC-{index}": {} for index in range(7)},
+                "source_state": source.binding(state), "continuation": source.binding(continuation),
+            })
+            return subprocess.CompletedProcess(argv, 0, "外壳短验来源\n", "")
+        with mock.patch.dict(os.environ, environment), mock.patch.object(shell.platform, "system", return_value="Linux"), \
+                mock.patch.object(shell.platform, "machine", return_value="aarch64"), \
+                mock.patch.object(shell.os, "geteuid", return_value=0, create=True), \
+                mock.patch.object(shell.shutil, "which", return_value="/fixture/tool"), \
+                mock.patch.object(shell.os, "readlink", side_effect=lambda path: "parent-" + path.rsplit("/", 1)[-1]
+                                  if str(path).startswith("/proc/self/ns/") else original_readlink(path)), \
+                mock.patch.object(shell.subprocess, "run", side_effect=resumed_command), \
+                mock.patch.object(shell.tempfile, "mkdtemp", side_effect=AssertionError("续作不能重建原世界")), \
+                mock.patch.object(shell.time, "time", return_value=first_started + 7200), \
+                mock.patch.object(shell.time, "monotonic", side_effect=[1000.0, 1000.25, 1001.0]):
+            case._run_pending_full_validation()
+        budget = shell.certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")
+        self.assertEqual(second["options"]["timeout"], budget["chain_timeout_seconds"])
+        self.assertEqual(second["argv"], command)
+        self.assertEqual((world / "record.json").read_bytes(), original_record)
+        self.assertEqual(location_path.read_bytes(), original_location)
+        resumed = source.read(world / "invocations/0001/record.json")
+        self.assertEqual((resumed["seconds"], resumed["invocation_seconds"], resumed["first_started_at_epoch"]), (7200, 1, first_started))
+        self.assertEqual((resumed["metrics"]["seconds"], resumed["metrics"]["cumulative_wall_seconds"]), (1, 7200))
 
     def test_successor_completed_action_reads_original_files_without_repeating_producer(self) -> None:
         from tools.official_client_capture.tests import claude_fault_chain_world as stops
@@ -345,6 +387,92 @@ class RecordedFullPreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(replay.ReplayError, "保留半产物且禁止猜测重建"):
                 driver._control_step("inputs", fail_after_real_input)
             self.assertEqual(source.binding(partial), original)
+
+    def test_prepare_views_resume_original_started_with_real_reader_and_values_only(self) -> None:
+        """实际投影只保存明示值；续作拒绝追加修订、原件损坏及意图漂移，不重派批次。"""
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_profile as profile
+        from tools.official_client_capture import claude_upgrade_release as release
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_capture.tests import test_claude_upgrade_profile as fixture
+
+        case = fixture._ProfileCase(methodName="runTest")
+        case.setUpClass()
+        self.addCleanup(case.tearDownClass)
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        campaign = case.approved_vc2()
+        draft = case.prepare_draft(campaign)
+        origin = source.write(self.data / "control/prepare-origin.json", {"fixture_only": True})
+        record_root = self.data / "prepare-stops"
+        record_root.mkdir()
+        context = {"data": self.data, "source_state": source.binding(origin)}
+        token = driver._SUCCESSOR.set(context)
+        self.addCleanup(driver._SUCCESSOR.reset, token)
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(record_root)}):
+            # 草案读到一半退出时，只允许重读原唯一首次草案。
+            with self.assertRaisesRegex(RuntimeError, "纯读中断"):
+                driver._control_step("vc3-draft-view", lambda: (_ for _ in ()).throw(RuntimeError("纯读中断")))
+            draft_view = driver._prepare_view("vc3-draft-view", campaign)
+            self.assertEqual(draft_view["gate"], draft["gate"])
+            self.assertEqual(draft_view["review_sha256"], draft["review_sha256"])
+            inputs_dir = case.write_prepare(case.resolved_prepare(campaign, Path(draft["draft_dir"])), case.root / "prepare-resolved")
+            code, revised, stderr = case.revise_prepare(campaign, draft["revision"], inputs_dir)
+            self.assertEqual((code, revised["gate"]["status"]), (2, "closed"), stderr)
+            manifest = upgrade.load_campaign_manifest(campaign)
+            receipt, files = profile.load_revision(campaign, manifest["campaign_id"], revised["revision"])
+            catalog, active = profile._bound_active_paths(campaign, receipt)
+            inputs = profile.collect_inputs(campaign, manifest, catalog, active, allowed_status=profile._PREPARE_STATUSES)
+            gate = profile.evaluate_prepare(inputs, files)
+            self.assertIsInstance(gate["derived"]["projection"], release.CatalogProjection)
+            original_result = {"revision": revised["revision"], "draft_dir": Path(revised["draft_dir"]), "gate": gate,
+                               "review_sha256": revised["review_sha256"]}
+            original_files = {path.relative_to(campaign): path.read_bytes() for path in campaign.rglob("*") if path.is_file()}
+            with self.assertRaisesRegex(TypeError, "不支持运行对象：CatalogProjection"):
+                driver._control_step("vc3-revision-view", lambda: original_result)
+            key = "recorded-full-step:vc3-revision-view"
+            started = stops.load_state(key)
+            self.assertEqual(started["status"], "started")
+            self.assertFalse(list(record_root.glob(".stop-*")))
+            arguments = {"parent_revision": draft["revision"], "review_input": inputs_dir}
+            revision_file = Path(revised["draft_dir"]) / profile.PREPARE_FILES["joint_inputs"]
+            original_raw = revision_file.read_bytes()
+            revision_file.write_bytes(original_raw + b" ")
+            with self.assertRaises(profile.ConfigurationError):
+                driver._prepare_view("vc3-revision-view", campaign, **arguments)
+            self.assertEqual(stops.load_state(key), started)
+            revision_file.write_bytes(original_raw)
+            context["source_state"] = {**context["source_state"], "sha256": "f" * 64}
+            with self.assertRaisesRegex(replay.ReplayError, "停点意图漂移"):
+                driver._prepare_view("vc3-revision-view", campaign, **arguments)
+            context["source_state"] = source.binding(origin)
+            # 由正式CLI生成有效第三revision，证明不能把later/latest误当成原失败读操作。
+            later_docs = {name: json.loads((inputs_dir / filename).read_bytes()) for name, filename in profile.PREPARE_FILES.items()}
+            later_docs["joint_inputs"]["boundary_assertions"][0]["facts"]["later_revision_short_test"] = True
+            later_input = case.write_prepare(later_docs, case.root / "later-review-input")
+            code, added, stderr = case.revise_prepare(campaign, revised["revision"], later_input)
+            self.assertEqual((code, added["gate"]["status"]), (2, "closed"), stderr)
+            self.assertNotEqual(added["revision"], revised["revision"])
+            with self.assertRaisesRegex(replay.ReplayError, "禁止选择后来追加的 revision"):
+                driver._prepare_view("vc3-revision-view", campaign, **arguments)
+            self.assertEqual(stops.load_state(key), started)
+            shutil.rmtree(added["draft_dir"])
+            with mock.patch.object(vc1, "_batch") as batch, mock.patch.object(case, "write_prepare") as write_inputs, \
+                    mock.patch.object(driver, "_latest_prepare", wraps=driver._latest_prepare) as reader:
+                value = driver._prepare_view("vc3-revision-view", campaign, **arguments)
+                self.assertEqual(value["gate"], revised["gate"])
+                self.assertEqual(value["review_sha256"], revised["review_sha256"])
+                self.assertEqual(driver._prepare_view("vc3-revision-view", campaign, **arguments), value)
+                self.assertEqual(driver._prepare_view("vc3-draft-view", campaign), draft_view)
+                self.assertEqual(reader.call_count, 1)
+                reader.assert_called_once_with(campaign, revision=revised["revision"])
+                batch.assert_not_called()
+                write_inputs.assert_not_called()
+            self.assertEqual(stops.load_state(key)["status"], "complete")
+            self.assertEqual({path.relative_to(campaign): path.read_bytes() for path in campaign.rglob("*") if path.is_file()}, original_files)
+            revision_file.write_bytes(original_raw + b" ")
+            with self.assertRaisesRegex(replay.ReplayError, "绑定摘要或字节数漂移"):
+                driver._prepare_view("vc3-revision-view", campaign, **arguments)
 
     def test_real_batch_stop_reuses_original_commit_parent_and_results(self) -> None:
         """仅派发一个零请求分类草案；真实COMMIT、父run与结果验真，复用不再派批次。"""

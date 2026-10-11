@@ -243,7 +243,8 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                 command.extend(["--budget-carry-intent", intent_path, "--budget-carry-intent-sha256", intent_digest])
             try:
                 completed = subprocess.run(command, cwd=driver.vc1.REPOSITORY, capture_output=True, text=True,
-                                           timeout=min(time_budget["chain_timeout_seconds"], max(1, time_budget["chain_budget_seconds"] - (time.time() - first_started))),
+                                           # 本次挂死预算只计本轮实际调用；原两账、业务截止和首跑时刻保持不变。
+                                           timeout=min(time_budget["chain_timeout_seconds"], max(1, time_budget["chain_budget_seconds"] - (time.monotonic() - started))),
                                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": str(directory.parent)})
             except subprocess.TimeoutExpired as error:
                 for filename, content in (("stdout.log", error.stdout or ""), ("stderr.log", error.stderr or "")):
@@ -251,7 +252,8 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                     (invocation / filename).write_text(value, encoding="utf-8")
                 save_record(invocation, {"scenario": "vc-chain.claude-full-validation-only", "fixture_only": True,
                                         "status": "unverified", "timeout": True, "command": command,
-                                        "seconds": time.monotonic() - started,
+                                        "seconds": time.time() - first_started, "first_started_at_epoch": first_started,
+                                        "invocation_seconds": time.monotonic() - started,
                                         "stdout": source.binding(invocation / "stdout.log"),
                                         "stderr": source.binding(invocation / "stderr.log"),
                                         "formal_version_semantics_certified": False})
@@ -266,8 +268,10 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
             except Exception as error:
                 report_error = str(error)
             seconds = time.time() - first_started
+            invocation_seconds = time.monotonic() - started
             record = {"scenario": "vc-chain.claude-full-validation-only", "fixture_only": True,
-                      "seconds": seconds, "command": command, "returncode": completed.returncode,
+                      "seconds": seconds, "first_started_at_epoch": first_started, "invocation_seconds": invocation_seconds,
+                      "command": command, "returncode": completed.returncode,
                       "stdout": source.binding(invocation / "stdout.log"), "stderr": source.binding(invocation / "stderr.log"),
                       "status": "unverified", "report": source.binding(report_path) if report_path.is_file() else None,
                       "report_payload": report, "report_error": report_error, "formal_version_semantics_certified": False}
@@ -285,14 +289,16 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
                 self.assertFalse(report["formal_version_semantics_certified"])
                 self.assertEqual(report["network_requests_this_run"], 0)
                 self.assertEqual(set(report["checkpoints"]), {f"VC-{index}" for index in range(7)})
-                self.assertLessEqual(seconds, time_budget["chain_budget_seconds"], "ARM64 录制完整链超过当前独立预算")
+                self.assertLessEqual(invocation_seconds, time_budget["chain_budget_seconds"], "ARM64 录制完整链本次调用超过当前独立预算")
                 source.bound(report["source_state"], root=data)
                 source.bound(report["continuation"], root=data)
             except BaseException:
                 save_record(invocation, record)
                 raise
             self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0,
-                                       "seconds": seconds, "time_budget": time_budget, "report": source.binding(report_path)}
+                                       "seconds": invocation_seconds, "cumulative_wall_seconds": seconds,
+                                       "first_started_at_epoch": first_started,
+                                       "time_budget": time_budget, "report": source.binding(report_path)}
             save_record(invocation, {**record, "status": "passed", "metrics": self.real_chain_metrics})
 
 

@@ -409,23 +409,58 @@ def _latest_classification(campaign: Path) -> dict[str, Any]:
             "review_sha256": classify.review_sha256(inputs, revision, receipt, gate)}
 
 
-def _latest_prepare(campaign: Path) -> dict[str, Any]:
+def _latest_prepare(campaign: Path, *, revision: str | None = None) -> dict[str, Any]:
     """画像准备同样重读正式 revision、完整 Active 与 VC-2 Store 事实。"""
 
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import claude_upgrade_profile as profile
 
     manifest = upgrade.load_campaign_manifest(campaign)
-    revisions = profile.list_revisions(campaign, manifest["campaign_id"])
-    if not revisions:
-        raise replay.ReplayError("真实 prepare-profile 批次没有发布 revision")
-    revision = revisions[-1][0]
+    if revision is None:
+        revisions = profile.list_revisions(campaign, manifest["campaign_id"])
+        if not revisions:
+            raise replay.ReplayError("真实 prepare-profile 批次没有发布 revision")
+        revision = revisions[-1][0]
     receipt, files = profile.load_revision(campaign, manifest["campaign_id"], revision)
     catalog, active = profile._bound_active_paths(campaign, receipt)
     inputs = profile.collect_inputs(campaign, manifest, catalog, active, allowed_status=profile._PREPARE_STATUSES)
     gate = profile.evaluate_prepare(inputs, files)
-    return {"revision": revision, "draft_dir": campaign / profile.PREPARE_DRAFT_ROOT / revision, "gate": gate,
+    # 与正式 CLI 的准备摘要一致：停点只需审核门禁值，投影对象始终由原 reader 从正式输入重建。
+    return {"revision": revision, "draft_dir": campaign / profile.PREPARE_DRAFT_ROOT / revision,
+            "gate": {key: gate[key] for key in ("status", "reasons", "counts")},
             "review_sha256": profile.review_sha256(inputs, revision, receipt, gate)}
+
+
+def _prepare_view(name: str, campaign: Path, *, parent_revision: str | None = None,
+                  review_input: Path | None = None) -> dict[str, Any]:
+    """仅纯读准备视图允许重验 started；不重新派批次、不写审核输入、不保存投影运行对象。"""
+
+    def read_original_revision() -> dict[str, Any]:
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_profile as profile
+
+        manifest = upgrade.load_campaign_manifest(campaign)
+        revisions = [item[0] for item in profile.list_revisions(campaign, manifest["campaign_id"])]
+        if name == "vc3-draft-view":
+            if len(revisions) != 1 or parent_revision is not None or review_input is not None:
+                raise replay.ReplayError("原准备草案视图要求唯一首次 revision，禁止选择后来追加的草案")
+            receipt, _files = profile.load_revision(campaign, manifest["campaign_id"], revisions[0])
+            if receipt["origin"] != "machine_draft" or receipt["parent_revision"] is not None:
+                raise replay.ReplayError("原准备草案不是首次机器草案")
+        elif name == "vc3-revision-view":
+            if len(revisions) != 2 or revisions[0] != parent_revision or review_input is None:
+                raise replay.ReplayError("原准备修订视图要求原草案及唯一直接修订，禁止选择后来追加的 revision")
+            parent, _parent_files = profile.load_revision(campaign, manifest["campaign_id"], parent_revision)
+            receipt, files = profile.load_revision(campaign, manifest["campaign_id"], revisions[-1])
+            if (receipt["origin"] != "review_input" or receipt["parent_revision"] != parent_revision
+                    or receipt["inputs_sha256"] != parent["inputs_sha256"]
+                    or files != profile._read_revision_input(review_input)):
+                raise replay.ReplayError("原准备修订与已绑定的草案、冻结输入或审核文件不一致")
+        else:
+            raise replay.ReplayError("不支持此纯读准备视图")
+        return _latest_prepare(campaign, revision=revisions[-1])
+
+    return _control_step(name, read_original_revision, resume_actions=True)
 
 
 def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
@@ -460,7 +495,7 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
     if stage["affected_rules"] or len(stage["inherited_rules"]) != 40:
         raise replay.ReplayError("控制审核输入未形成明确的 40 规则继承分母")
     batches.append(vc1._batch(data, campaign, "vc3-01-prepare-draft", ["prepare-profile", "--campaign-dir", str(campaign)], phase="VC-3"))
-    draft = _control_step("vc3-draft-view", lambda: _latest_prepare(campaign))
+    draft = _prepare_view("vc3-draft-view", campaign)
     state = source.load_state(Path(os.environ[source.STATE_ENV]), os.environ[source.DIGEST_ENV])
     if Path(state["data_root"]) != data:
         raise replay.ReplayError("审核策略的来源状态不属于本次数据根")
@@ -478,7 +513,7 @@ def classify_and_prepare(data: Path, campaign: Path) -> dict[str, Any]:
     batches.append(vc1._batch(data, campaign, "vc3-02-prepare-revision", [
         "prepare-profile", "--campaign-dir", str(campaign), "--from-revision", draft["revision"], "--revision-input", str(review_input),
     ], phase="VC-3"))
-    revised = _control_step("vc3-revision-view", lambda: _latest_prepare(campaign))
+    revised = _prepare_view("vc3-revision-view", campaign, parent_revision=draft["revision"], review_input=Path(review_input))
     if revised["gate"]["status"] != "closed":
         raise replay.ReplayError(f"真实 VC-3 准备门禁未闭合：{revised['gate']}")
     batches.append(vc1._batch(data, campaign, "vc3-03-prepare-approve", [
