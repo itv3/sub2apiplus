@@ -388,6 +388,85 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 driver._control_step("inputs", fail_after_real_input)
             self.assertEqual(source.binding(partial), original)
 
+        # 评估视图是确定性冻结：真实相对画像绑定、policy 合同和原停点都参与短验；不宣称运行过 VC-3。
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_assertion_profile as profiles
+        from tools.official_client_capture import codex_upgrade_project_ledger as ledger
+        from tools.official_client_capture.tests import test_claude_recorded_candidate_source as fixture
+
+        case = fixture.RecordedCandidateSourceTests(methodName="runTest")
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        context = case.runtime_context()
+        campaign = context.campaign_dir
+        ledger.create_project_ledger(
+            case.data / "upgrade-project-ledger-claude", project_id="recorded-domain-fixture",
+            absolute_deadline_utc="2027-01-31T00:00:00Z", deadline_approved_by="fixture",
+            estimation_policy="none", estimation_policy_approved_by="fixture", fixture_only=True,
+            formal_open_limit=64, client="claude")
+        profile_path = campaign / "assertions/approved-assertion-profile.json"
+        profile_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        shutil.copyfile(vc1.REPOSITORY / "tools/official_client_capture/claude_rule_expectations_2_1_226.json", profile_path)
+        case.state["inputs"]["recorded_control_scope"] = driver.COMPLETE_MAIN_MODEL_SCOPE
+        state_path = source.write(case.data / "control/original-evaluation-state.json", case.state)
+        state_binding = source.binding(state_path)
+        original_state = state_path.read_bytes()
+        frozen = {"path": profile_path.relative_to(campaign).as_posix(), "sha256": source.binding(profile_path)["sha256"]}
+        evaluation_stops = case.data / "evaluation-stops"
+        evaluation_stops.mkdir(mode=0o700)
+        successor = {"data": case.data, "source_state": state_binding}
+        token = driver._SUCCESSOR.set(successor)
+        self.addCleanup(driver._SUCCESSOR.reset, token)
+        original_loader, original_write = source.load_state, source.write
+        policy_path = case.data / "control/recorded-evaluation-policy.json"
+        result_path = case.data / "control/recorded-evaluation-source.json"
+        key = "recorded-full-step:evaluation-state"
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(evaluation_stops)}), \
+                mock.patch.object(source, "load_state", side_effect=lambda path, digest: original_loader(path, digest, isolation=False)), \
+                mock.patch.object(upgrade, "load_campaign_manifest", return_value=context.manifest), \
+                mock.patch.object(profiles, "freeze_approved_assertion_profile"), \
+                mock.patch.object(profiles, "load_approved_assertion_profile", return_value=frozen) as profile_reader:
+            # 原失败尚未产生 policy，保存 started 后同一入口可以继续。
+            profile_reader.side_effect = FileNotFoundError("原画像相对路径失败")
+            with self.assertRaisesRegex(FileNotFoundError, "原画像相对路径失败"):
+                driver._recorded_evaluation_state(state_path, state_binding["sha256"], campaign)
+            started = stops.load_state(key)
+            self.assertEqual(started["status"], "started")
+            self.assertFalse(policy_path.exists())
+            profile_reader.side_effect = None
+            def interrupt_after_policy(path, document):
+                if path == result_path:
+                    raise RuntimeError("policy 已冻结后中断")
+                return original_write(path, document)
+            with mock.patch.object(source, "write", side_effect=interrupt_after_policy):
+                with self.assertRaisesRegex(RuntimeError, "policy 已冻结后中断"):
+                    driver._recorded_evaluation_state(state_path, state_binding["sha256"], campaign)
+            self.assertEqual(stops.load_state(key), started)
+            self.assertFalse(result_path.exists())
+            policy_bytes = policy_path.read_bytes()
+            self.assertEqual(source.read(policy_path)["assertion_profile"]["path"], str(profile_path))
+            bad_policy = source.read(policy_path)
+            bad_policy["target_version"] = "冲突画像"
+            policy_path.write_text(json.dumps(bad_policy), encoding="utf-8")
+            with self.assertRaisesRegex(replay.ReplayError, "不能改画像或来源意图"):
+                driver._recorded_evaluation_state(state_path, state_binding["sha256"], campaign)
+            policy_path.write_bytes(policy_bytes)
+            profile_reader.return_value = {**frozen, "path": "../approved-assertion-profile.json"}
+            with self.assertRaises(upgrade.ConfigurationError):
+                driver._recorded_evaluation_state(state_path, state_binding["sha256"], campaign)
+            profile_reader.return_value = frozen
+            with self.assertRaises(replay.ReplayError):
+                driver._recorded_evaluation_state(state_path, "f" * 64, campaign)
+            self.assertEqual(stops.load_state(key), started)
+            result = driver._recorded_evaluation_state(state_path, state_binding["sha256"], campaign)
+            self.assertEqual((stops.load_state(key)["status"], policy_path.read_bytes(), state_path.read_bytes()),
+                             ("complete", policy_bytes, original_state))
+            result_bytes = result_path.read_bytes()
+            with mock.patch.object(driver, "_freeze_recorded_evaluation_state", side_effect=AssertionError("完成项不能重做")) as producer:
+                self.assertEqual(driver._recorded_evaluation_state(state_path, state_binding["sha256"], campaign), result)
+                producer.assert_not_called()
+            self.assertEqual(result_path.read_bytes(), result_bytes)
+
     def test_prepare_views_resume_original_started_with_real_reader_and_values_only(self) -> None:
         """实际投影只保存明示值；续作拒绝追加修订、原件损坏及意图漂移，不重派批次。"""
         from tools.official_client_capture import claude_upgrade as upgrade

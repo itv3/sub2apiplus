@@ -1145,9 +1145,11 @@ def _freeze_recorded_evaluation_state(state_path: Path, digest: str, campaign: P
         manifest = upgrade.load_campaign_manifest(campaign)
         profiles.freeze_approved_assertion_profile(campaign, manifest)
         frozen = profiles.load_approved_assertion_profile(campaign, manifest)
+        # 正式画像 reader 返回 Campaign 相对路径；沿同一个 reader 的绑定校验解析，不能按进程 cwd 猜位置。
+        approved_path = profiles._bound_file(campaign, frozen, "录制评估的批准断言画像")
         payload = evaluation.build_policy(state_path, campaign_path=campaign / "campaign.json",
                                           project_plan_path=project_root / "plan.json",
-                                          assertion_profile_path=Path(frozen["path"]))
+                                          assertion_profile_path=approved_path)
 
     def frozen_file(path: Path, document: dict[str, Any]) -> Path:
         # 强杀后只接受已签出的相同字节合同；半产物、链接与不同意图一律拒绝覆盖。
@@ -1168,6 +1170,12 @@ def _freeze_recorded_evaluation_state(state_path: Path, digest: str, campaign: P
     current_path = frozen_file(data / "control/recorded-evaluation-source.json", updated)
     return {"source_state": source.binding(current_path), "original_source_state": source.binding(state_path),
             "policy": source.binding(policy_path)}
+
+
+def _recorded_evaluation_state(state_path: Path, digest: str, campaign: Path) -> dict[str, Any]:
+    """原 started 只重入确定性的冻结写入；已有产物须逐字段一致，完成停点仍只读验真。"""
+    return _control_step("evaluation-state", lambda: _freeze_recorded_evaluation_state(state_path, digest, campaign),
+                         resume_actions=True)
 
 
 def _verify_completed_stage(campaign: Path, phases: tuple[str, ...], result: Any) -> None:
@@ -1231,7 +1239,7 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
                       verify=lambda result: _verify_completed_stage(campaign, ("VC-2", "VC-3"), result)),
                   "VC-4": _control_step("VC4", lambda: build_candidate(data, campaign), resume_actions=True,
                       verify=lambda result: _verify_completed_stage(campaign, ("VC-4",), result))}
-        evaluation_state = (_control_step("evaluation-state", lambda: _freeze_recorded_evaluation_state(state_path, digest, campaign))
+        evaluation_state = (_recorded_evaluation_state(state_path, digest, campaign)
                             if state["inputs"].get("recorded_control_scope") == COMPLETE_MAIN_MODEL_SCOPE else None)
     candidate_state = evaluation_state["source_state"] if evaluation_state is not None else source.binding(state_path)
     # VC-4 后再安装新的外部观察源；禁止嵌套 SourceAdapter 造成一次动作重复签发/复制。
