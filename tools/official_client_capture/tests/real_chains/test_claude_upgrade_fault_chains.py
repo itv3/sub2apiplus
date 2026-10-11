@@ -2234,11 +2234,12 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
             rows = state['completed_commands']
             if tuple(row['key'] for row in rows) != self.COMMAND_KEYS[name][:len(rows)]:
                 raise ValueError('候选原命令清单不是冻结逻辑顺序的前缀')
-            for row in rows:
-                with self.source_context():
+            with self.source_context(), stops.verified_read_only_world(self, state['campaign']):
+                for row in rows:
                     outcome = stops.command_step(self, name, row['key'], row['argv'],
-                        lambda: self.fail('已完成候选命令不得重发'), campaign=state['campaign'])
-                self.assertEqual(outcome, row['outcome'], '候选原停点与完整stdout/stderr不一致')
+                        lambda: self.fail('已完成候选命令不得重发'), campaign=state['campaign'],
+                        enclosing_commands=chain_driver.original_enclosing_commands(self))
+                    self.assertEqual(outcome, row['outcome'], '候选原停点与完整stdout/stderr不一致')
         return state
 
     def _candidate_save(self, name: str, state: dict[str, Any], phase: int, **values: Any) -> None:
@@ -2249,7 +2250,8 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         if self.COMMAND_KEYS[name][len(state['completed_commands'])] != key:
             raise ValueError('候选命令不在原下一逻辑停点')
         with self.source_context():
-            outcome = stops.command_step(self, name, key, argv, lambda: self.run_main(argv), campaign=state['campaign'])
+            outcome = stops.command_step(self, name, key, argv, lambda: self.run_main(argv), campaign=state['campaign'],
+                enclosing_commands=chain_driver.original_enclosing_commands(self))
         state['completed_commands'].append({'key': key, 'argv': argv, 'outcome': outcome})
         return outcome
 
@@ -2404,6 +2406,7 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
         """原隔离脚本修复、只读演进预览、两次登记、真实对账批准与候选闭集续跑。"""
         from tools.official_client_capture import claude_upgrade
         from tools.official_client_capture import claude_upgrade_store
+        from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
         from tools.official_client_capture.tests import claude_project_ledger_fixture as ledger_fixture
         from tools.official_client_control import receipts as store_receipts
         if self.recorded_entry('tool-evolution'):
@@ -2441,11 +2444,35 @@ class _CandidateFaultScenarios(chain_driver.ClaudeCandidateChainDriver):
             self._candidate_save(name, state, 3, evolved=evolved, source_binding=stops.file_cut(path))
         stops.read_cut(state['source_binding'])
         if state['phase'] == 3:
-            self._candidate_save(name, state, 4)
-            deploy = ledger_fixture.write_claude_deploy_receipt(self.data, state['evolved'], stamp='20261008t020000z')
-            self._candidate_save(name, state, 5, deployment_binding=stops.file_cut(deploy))
+            deploy = self.data / 'control/claude-managed-deploy-20261008t020000z.json'
+            if deploy.exists() or deploy.is_symlink():
+                raise ValueError('候选演进部署的原目标已经存在，禁止建立新的写入意图')
+            created_at = datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+            with tempfile.TemporaryDirectory(prefix='cf-candidate-deploy-intent-') as directory:
+                planned = ledger_fixture.write_claude_deploy_receipt(Path(directory), state['evolved'],
+                    stamp='20261008t020000z', created_at_utc=created_at)
+                deploy_raw = planned.read_bytes()
+            self._candidate_save(name, state, 4, deploy_created_at=created_at, deploy_raw=deploy_raw,
+                deploy_path=deploy, deploy_absent_before=True)
         if state['phase'] == 4:
-            raise ValueError('候选演进部署输入未闭合，禁止重签部署或重建现场')
+            if ('deploy_raw' not in state or 'deploy_created_at' not in state
+                    or state.get('deploy_absent_before') is not True):
+                raise ValueError('候选演进部署缺同次写入意图，禁止重签部署或重建现场')
+            deploy = self.data / 'control/claude-managed-deploy-20261008t020000z.json'
+            if deploy != state.get('deploy_path'):
+                raise ValueError('候选演进部署原目标发生变化，禁止覆盖')
+            if deploy.exists() or deploy.is_symlink():
+                if deploy.is_symlink() or not deploy.is_file() or deploy.read_bytes() != state['deploy_raw']:
+                    raise ValueError('候选原部署收据与冻结的同次意图不一致，禁止覆盖')
+            else:
+                deploy = ledger_fixture.write_claude_deploy_receipt(self.data, state['evolved'],
+                    stamp='20261008t020000z', created_at_utc=state['deploy_created_at'])
+                self.assertEqual(deploy.read_bytes(), state['deploy_raw'], '原部署 helper 输出与冻结意图不同')
+            policy_certification.load_deployment_receipt(deploy, client='claude', expected_identity={
+                **{field: state['evolved'][field] for field in ('policy_version', 'policy_sha256',
+                    'wire_producer_sha256', 'evidence_semantics_sha256', 'control_sha256')},
+                'tool_files_sha256': state['evolved']['files_sha256']})
+            self._candidate_save(name, state, 5, deployment_binding=stops.file_cut(deploy))
         stops.read_cut(state['deployment_binding'])
         argv = ['tool-evolution', '--campaign-dir', str(campaign), '--fix-commit', 'b' * 40, '--reason', '修复候选采集脚本']
         if state['phase'] == 5:

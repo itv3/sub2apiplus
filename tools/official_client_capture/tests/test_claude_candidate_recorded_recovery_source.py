@@ -231,7 +231,9 @@ class CandidateJobAggregationTests(unittest.TestCase):
             self.assertEqual(driver.prepare(state_path, source.binding(state_path)['sha256']), ready)
             reader.assert_called_once()
             for phase in ('vc1-started', 'classify-started', 'build-started'):
-                stops.save_state('candidate-prepare', {**prepared, 'phase': phase})
+                stops.save_state('candidate-prepare', {**prepared, 'phase': phase,
+                    'continuation': source.binding(continuation),
+                    'classified': {'classification': source.binding(build), 'profile': source.binding(build)}})
                 with self.assertRaisesRegex(replay.ReplayError, '内部形成动作未闭合'):
                     driver.prepare(state_path, source.binding(state_path)['sha256'])
             stops.save_state('candidate-prepare', prepared)

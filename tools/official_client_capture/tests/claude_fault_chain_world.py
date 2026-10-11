@@ -12,6 +12,7 @@ import hashlib
 import os
 import tempfile
 import contextlib
+import contextvars
 
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,8 @@ from tools.official_client_capture.tests import claude_vc5_chain_fixture as sour
 METHOD_RECORD_ENV = 'CLAUDE_FAULT_METHOD_RECORD_DIR'
 METHOD_RESUME_ENV = 'CLAUDE_FAULT_METHOD_RESUME'
 CHAIN_RESUME_ENV = 'CLAUDE_FAULT_CHAIN_RESUME'
+_ACTIVE_COMMAND_STEP = contextvars.ContextVar('claude_fault_active_command_step', default=None)
+_VERIFIED_READ_ONLY_WORLD = contextvars.ContextVar('claude_fault_verified_read_only_world', default=None)
 
 
 def record_root() -> Path | None:
@@ -261,7 +264,16 @@ def begin_command(argv: list[Any]) -> dict[str, Any] | None:
         stream.flush()
         os.fsync(stream.fileno())
     path.chmod(0o600)
-    return {'directory': directory, 'invocation_binding': file_cut(path)}
+    pending = {'directory': directory, 'invocation_binding': file_cut(path)}
+    logical_name = _ACTIVE_COMMAND_STEP.get()
+    if logical_name is not None:
+        saved = load_state(logical_name)
+        if (saved is None or saved.get('status') != 'pending'
+                or saved.get('argv') != [str(item) for item in argv]
+                or saved.get('invocation_binding') is not None):
+            raise ValueError('原逻辑命令没有唯一的副作用前调用绑定，禁止派发')
+        save_state(logical_name, {**saved, 'invocation_binding': pending['invocation_binding']})
+    return pending
 
 
 def record_command(argv: list[Any], code: int | None, stdout: str | bytes, stderr: str | bytes,
@@ -326,7 +338,7 @@ def verify_commands(prefix: list[dict[str, Any]] | None = None) -> None:
                 raise ValueError('原phase的命令描述与完整输出绑定不一致')
 
 
-def _original_command(row: dict[str, Any], argv: list[str]) -> tuple[int, Any, str]:
+def _original_command(row: dict[str, Any], argv: list[str], *, allow_interrupted: bool = False) -> tuple[int | None, Any, str]:
     """实读原调用、完整输出与退出码；摘要值和后续新输出都不能替代原件。"""
 
     if row.get('command_binding') is None or row.get('invocation_binding') is None:
@@ -336,7 +348,7 @@ def _original_command(row: dict[str, Any], argv: list[str]) -> tuple[int, Any, s
     expected = {key: value for key, value in row.items() if key != 'command_binding'}
     if invocation != {'argv': argv} or descriptor != expected or row['argv'] != argv:
         raise ValueError('原逻辑命令的 argv、退出码或输出绑定不一致')
-    if type(row['returncode']) is not int:
+    if type(row['returncode']) is not int and not (allow_interrupted and row['returncode'] is None):
         raise ValueError('原逻辑命令尚未得到真实退出码，不能承接未决动作')
     stdout = read_cut(row['stdout']).decode('utf-8')
     stderr = read_cut(row['stderr']).decode('utf-8')
@@ -349,7 +361,8 @@ def _original_command(row: dict[str, Any], argv: list[str]) -> tuple[int, Any, s
 
 
 def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke: Any,
-                 *, campaign: Path | None = None) -> tuple[int, Any, str]:
+                 *, campaign: Path | None = None,
+                 enclosing_commands: list[dict[str, Any]] | None = None) -> tuple[int, Any, str]:
     """原逻辑命令唯一承接接缝；不调度阶段、不替调用方裁定未决副作用。"""
 
     if record_root() is None:
@@ -357,6 +370,11 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
     arguments = [str(item) for item in argv]
     name = 'command-step:' + cursor_name + ':' + key
     saved = load_state(name)
+    verified_scope = _VERIFIED_READ_ONLY_WORLD.get()
+    if verified_scope is not None and (
+            verified_scope[0] is not case or verified_scope[1] != campaign
+            or saved is None or saved.get('status') != 'complete'):
+        raise ValueError('已重验世界的只读作用域只允许承接同世界已完成命令，禁止新动作或补写未决命令')
     registry = load_state('command-step-keys')
     if registry is None:
         # 此检查仅拒绝清单被删除的旧世界，不从散落文件重建清单或推导命令成果。
@@ -383,6 +401,7 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
     if saved is None and name in keys:
         raise ValueError(f'已登记原命令 {key} 的停点已缺失，禁止重新派发')
     if saved is not None:
+        world_verified = False
         if saved['argv'] != arguments or saved['campaign'] != campaign:
             raise ValueError(f'原命令 {key} 的 argv／Campaign 已改变')
         if not os.environ.get(METHOD_RESUME_ENV):
@@ -398,18 +417,37 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
                     read_cut(previous[field])
         if saved['status'] != 'complete':
             rows = observations[begin:]
+            invocation = saved.get('invocation_binding')
+            if invocation is not None:
+                # 定位依据是副作用前冻结的那一次调用，不是相同 argv。
+                # 只允许调用方明示的外层 namespace 在内层输出之后追加，逐份重验原件。
+                matches = [index for index, row in enumerate(rows) if row.get('invocation_binding') == invocation]
+                if matches != [0] or rows[0]['argv'] != arguments:
+                    raise ValueError(f'原命令 {key} 的唯一调用与输出未闭合，禁止选取其它同 argv 输出')
+                tail = rows[1:]
+                if len({str(row.get('invocation_binding')) for row in tail}) != len(tail):
+                    raise ValueError(f'原命令 {key} 之后出现重复外层观测，禁止追认')
+                for row in tail:
+                    if not enclosing_commands or row not in enclosing_commands:
+                        raise ValueError(f'原命令 {key} 之后出现未绑定的额外观测，禁止追认')
+                    # 外层超时只是原中断事实；内层仍必须有真实整数退出码与正式读侧闭合。
+                    _original_command(row, row['argv'], allow_interrupted=True)
+                rows = rows[:1]
             if len(rows) != 1 or rows[0]['argv'] != arguments:
                 raise ValueError(f'原命令 {key} 已进入 pending（原观测切点 {begin}）；'
                     '须按原 COMMIT／Store／收据对账裁定，禁止盲重派或重新注入故障')
             # 只补完整日志已形成、旧前缀未改且真实世界读侧已闭合的那次命令。
-            # 缺日志、额外观测或读侧未闭合都拒绝，不能从多个同argv里挑一个。
+            # 缺日志、未绑定额外观测或读侧未闭合都拒绝，不能从多个同argv里挑一个。
             result = _original_command(rows[0], arguments)
             if campaign is not None:
                 verify_case(case, campaign)
+                world_verified = True
             saved = {**saved, 'status': 'complete', 'command': rows[0]}
             save_state(name, saved)
         result = _original_command(saved['command'], arguments)
-        if campaign is not None:
+        if saved.get('invocation_binding') is not None and saved['command'].get('invocation_binding') != saved['invocation_binding']:
+            raise ValueError(f'原命令 {key} 的完成输出未绑定副作用前唯一调用')
+        if campaign is not None and not world_verified and verified_scope is None:
             verify_case(case, campaign)
         return result
     prefix = (load_state('command-observations') or {}).get('commands', [])
@@ -424,10 +462,17 @@ def command_step(case: Any, cursor_name: str, key: str, argv: list[Any], invoke:
     keys[name] = expected_registration
     save_state('command-step-keys', registry)
     save_state(name, pending)
-    result = invoke()
+    token = _ACTIVE_COMMAND_STEP.set(name)
+    try:
+        result = invoke()
+    finally:
+        _ACTIVE_COMMAND_STEP.reset(token)
+    pending = load_state(name)
     rows = (load_state('command-observations') or {}).get('commands', [])[begin:]
     if len(rows) != 1 or rows[0]['argv'] != arguments:
         raise ValueError(f'原命令 {key} 未形成唯一真实 argv 的完整输出；保留 pending，禁止拼接摘要')
+    if pending.get('invocation_binding') is not None and rows[0].get('invocation_binding') != pending['invocation_binding']:
+        raise ValueError(f'原命令 {key} 的完整输出不属于副作用前绑定的唯一调用')
     original = _original_command(rows[0], arguments)
     if original != result:
         raise ValueError(f'原命令 {key} 的返回值与完整原 stdout／stderr 不一致')
@@ -487,6 +532,18 @@ def verify_case(case: Any, campaign: Path) -> None:
             project.read_project_history_snapshot(case.project_root)
         if hasattr(case, 'ledger_dir'):
             timing.inspect_ledger(case.ledger_dir, project_ledger_optional=True)
+
+
+@contextlib.contextmanager
+def verified_read_only_world(case: Any, campaign: Path):
+    """同一原方法持锁后，先完整重验一次世界，再逐条只读核原命令；离开即失效。"""
+
+    verify_case(case, campaign)
+    token = _VERIFIED_READ_ONLY_WORLD.set((case, campaign))
+    try:
+        yield
+    finally:
+        _VERIFIED_READ_ONLY_WORLD.reset(token)
 
 
 def resume_checkpoint(case: Any, name: str) -> dict[str, Any] | None:

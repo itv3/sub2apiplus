@@ -22,6 +22,7 @@ import tempfile
 import traceback
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterator
 from unittest import mock
 
@@ -245,6 +246,103 @@ def activate() -> None:
     full.vc1.activate(installer=installed)
 
 
+def _verify_original_prepare_world(world: dict[str, Any]) -> None:
+    """准备交接只重读原 Store、两账、checkpoint 与来源，不创建新的成功凭证。"""
+
+    data, campaign, manifest = world['data'], world['campaign'], world['manifest']
+    stops.verify_case(SimpleNamespace(
+        ledger_dir=claude_upgrade._campaign_timing_ledger_dir(campaign, manifest),
+        project_root=project.find_project_ledger(campaign, client='claude')), campaign)
+    state = world['state']
+    if Path(state['data_root']) != data:
+        raise replay.ReplayError('候选准备的原世界与来源状态不一致')
+    replay.assert_source_untouched(state['snapshot'])
+    for path, expected in state['freeze']['source_sentinel'].items():
+        if replay._stat(Path(path)) != expected:
+            raise replay.ReplayError('候选准备的原冻结来源元数据变化')
+
+
+def _resume_vc1_prepare(state_path: Path, digest: str, data: Path) -> dict[str, Any]:
+    """只承接原形成方法完整通过后的报告；只有 continuation 的半成品不算完成。"""
+
+    report_path = data / 'control/recorded-chain-result.json'
+    continuation_path = data / 'control/recorded-vc1-continuation.json'
+    if not report_path.is_file() or not continuation_path.is_file():
+        raise replay.ReplayError('候选原准备停在 vc1-started，内部形成动作未闭合；禁止整体重跑或重建')
+    report = source.read(source.bound(source.binding(report_path), root=data))
+    continuation = source.binding(continuation_path)
+    budget = certification.claude_recorded_time_budget('vc-chain.claude-vc1-capture')
+    seconds = diagnostic_budget.diagnostic_seconds()
+    if (report.get('schema_version') != 'claude-recorded-vc0-vc1-chain/v1'
+            or report.get('fixture_only') is not True or report.get('status') != 'passed'
+            or report.get('scope') != 'VC-0→VC-1' or report.get('target_version') != source.VERSION
+            or report.get('continuation') != continuation
+            or report.get('registered_chains') != ['vc-chain.claude-vc1-capture']
+            or report.get('full_vc0_vc6_certified') is not False
+            or report.get('network_requests_this_run') != 0 or report.get('time_budget') != budget
+            or report.get('diagnostic_only') != (seconds is not None)
+            or not isinstance(report.get('elapsed_seconds'), (int, float))
+            or not 0 <= report['elapsed_seconds'] <= (seconds or budget['method_timeout_seconds'])):
+        raise replay.ReplayError('候选原 VC-1 完整报告未与固定来源、模式及预算闭合')
+    world = full.vc1.load_continuation(continuation_path, continuation['sha256'])
+    if (world['state_path'] != state_path or world['state_digest'] != digest or world['data'] != data
+            or report.get('campaign') != str(world['campaign'])
+            or report.get('store_campaign_id') != world['manifest']['campaign_id']
+            or report.get('checkpoint') != world['document']['checkpoints']['VC-1']):
+        raise replay.ReplayError('候选原 VC-1 报告与 continuation 不属于同一原世界')
+    _verify_original_prepare_world(world)
+    return continuation
+
+
+def _resume_classified_prepare(world: dict[str, Any]) -> dict[str, Any]:
+    """VC-2 与 VC-3 已全部落定时，只重新消费原阶段结果与已批准准备包。"""
+
+    from tools.official_client_capture import claude_upgrade_profile as profile
+
+    data, campaign, manifest = world['data'], world['campaign'], world['manifest']
+    paths = [campaign / 'classification/result.json', campaign / profile.STAGE_RESULT_RELATIVE]
+    if not all(path.is_file() and not path.is_symlink() for path in paths):
+        raise replay.ReplayError('候选原准备停在 classify-started，内部形成动作未闭合；禁止整函数重跑')
+    classification = claude_upgrade._load_stage_result(campaign, 'classify')
+    stage = claude_upgrade._load_stage_result(campaign, 'stage-profile')
+    if classification['affected_rules'] or len(classification['inherited_rules']) != 40:
+        raise replay.ReplayError('候选原分类没有完整 40 规则继承分母')
+    prepared = profile.load_prepare_result(campaign, manifest, stage['prepared_revision'])
+    projection = json.loads(profile._prepared_files(campaign, prepared)[profile.PREPARE_FILES['projection']])
+    if projection != full.validate_frozen_inputs(data, world['state']['inputs']):
+        raise replay.ReplayError('候选原批准投影与 VC-0 前冻结输入不一致')
+    claude_upgrade._replay_vc_checkpoint(campaign, claude_upgrade._vc_campaign_plan(campaign, manifest), 'VC-3')
+    _verify_original_prepare_world(world)
+    return {'classification': source.binding(paths[0]), 'profile': source.binding(paths[1]), 'profile_store': stage['store']}
+
+
+def _resume_built_prepare(world: dict[str, Any]) -> dict[str, Any]:
+    """只绑定原 r1 构建、VC-4 与最后的运行输入；缺最后输入时不补造或重新构建。"""
+
+    from tools.official_client_capture import claude_upgrade_profile as profile
+    from tools.official_client_capture import claude_upgrade_compare as compare
+
+    data, campaign, manifest = world['data'], world['campaign'], world['manifest']
+    receipt = campaign / 'candidates' / CANDIDATE / 'build-receipt.json'
+    runtime = data / 'control/full-runtime-source.json'
+    if not all(path.is_file() and not path.is_symlink() for path in (receipt, runtime)):
+        raise replay.ReplayError('候选原准备停在 build-started，内部形成动作未闭合；禁止补造输入或重新构建')
+    if claude_upgrade._current_candidate_revision(campaign, manifest) != 1:
+        raise replay.ReplayError('候选原准备构建不再属于原 r1')
+    compare.load_candidate_build_receipt(campaign, manifest, CANDIDATE, 1)
+    checkpoint, _payload = claude_upgrade._replay_vc_checkpoint(campaign,
+        claude_upgrade._vc_campaign_plan(campaign, manifest), 'VC-4', revision=1)
+    expected = {'fixture_only': True, 'purpose': 'recorded_control_runtime_source',
+        'build_receipt': source.binding(receipt),
+        'profile_stage': source.binding(campaign / profile.STAGE_RESULT_RELATIVE),
+        'candidate_configuration': manifest['configuration'], 'formal_version_semantics_certified': False}
+    if source.read(source.bound(source.binding(runtime), root=data)) != expected:
+        raise replay.ReplayError('候选原运行输入与 r1 构建及画像不同源')
+    _verify_original_prepare_world(world)
+    return {'revision': 1, 'candidate_id': CANDIDATE, 'build_receipt': expected['build_receipt'],
+        'checkpoint': source.binding(checkpoint)}
+
+
 def prepare(state_path: Path, digest: str) -> Path:
     """原形成链的明确交接停点；恢复实读已有原件，不重新形成 VC-0→VC-4。"""
 
@@ -255,8 +353,11 @@ def prepare(state_path: Path, digest: str) -> Path:
     if saved is not None:
         if not os.environ.get(stops.METHOD_RESUME_ENV) or any(saved[key] != value for key, value in expected.items()):
             raise replay.ReplayError('候选原准备停点不是本次来源或恢复入口')
-        if saved['phase'] in {'vc1-started', 'classify-started', 'build-started'}:
-            raise replay.ReplayError(f"候选原准备停在 {saved['phase']}，原内部形成动作未闭合；保留原件，禁止整体重跑或重建")
+        if saved['phase'] == 'vc1-started':
+            with installed(state_path, digest):
+                continuation = _resume_vc1_prepare(state_path, digest, expected['data'])
+            saved.update(phase='vc1-complete', continuation=continuation)
+            stops.save_state('candidate-prepare', saved)
         if saved['phase'] == 'prepared':
             path = source.bound(saved['prepared'], root=expected['data'])
             prepared_world(state_path, digest, source.binding(path))
@@ -273,6 +374,12 @@ def prepare(state_path: Path, digest: str) -> Path:
     with installed(state_path, digest):
         world = full.vc1.load_continuation(source.bound(continuation), continuation["sha256"])
         data, campaign = world["data"], world["campaign"]
+        if saved['phase'] == 'classify-started':
+            saved.update(phase='classified', classified=_resume_classified_prepare(world))
+            stops.save_state('candidate-prepare', saved)
+        if saved['phase'] == 'build-started':
+            saved.update(phase='built', built=_resume_built_prepare(world))
+            stops.save_state('candidate-prepare', saved)
         if saved['phase'] == 'vc1-complete':
             saved['phase'] = 'classify-started'
             stops.save_state('candidate-prepare', saved)
@@ -339,6 +446,40 @@ def prepared_world(state_path: Path, digest: str, binding: dict[str, Any]) -> tu
             raise replay.ReplayError('候选恢复起点原运行观察与构建不同源')
         source.bound(ready['build_receipt'], root=campaign)
     return ready, world
+
+
+def original_enclosing_commands(case: Any) -> list[dict[str, Any]]:
+    """只返回本候选方法原 namespace 的完整退出记录，供内层未决命令核对包含关系。"""
+
+    scenario = next((name for name, method in SCENARIO_METHODS.items() if method == case._testMethodName), None)
+    if scenario is None:
+        raise replay.ReplayError('候选方法不属于原 namespace 的冻结场景集合')
+    entry = stops.load_state('candidate-entry:' + scenario)
+    if entry is None:
+        return []
+    namespace = stops.load_state('candidate-namespace')
+    if (namespace is None or entry.get('scenario') != scenario or entry.get('data') != case.data
+            or namespace.get('scenario') != scenario or namespace.get('data') != case.data
+            or namespace.get('state_path') != case.state_path or namespace.get('digest') != case.state_digest
+            or source.bound(namespace['state_binding']) != case.state_path):
+        raise replay.ReplayError('外层 namespace 与原候选方法／来源坐标不一致')
+    source.bound(namespace['site_binding'], root=case.data)
+    state = source.load_state(case.state_path, case.state_digest)
+    roots = [str(Path(entry['recorded']).resolve().parent), str(Path(entry['freeze']).resolve())]
+    if state['data_root'] != str(case.data) or roots != namespace['roots'] or roots != state['readonly_sources']:
+        raise replay.ReplayError('外层 namespace 的录制／冻结根与原来源状态不同源')
+    expected = ['unshare', '-m', '-n', sys.executable, '-B', '-m', ACTIVATION_MODULE,
+        '--data', str(case.data), '--recorded', entry['recorded'], '--freeze', entry['freeze'],
+        '--scenario', scenario, '--parent-namespaces']
+    rows = entry['segments']
+    for row in rows:
+        argv = row['argv']
+        if argv[:-1] != expected or len(argv) != len(expected) + 1:
+            raise replay.ReplayError('外层追加观测不是本方法原 namespace 的准确命令')
+        parents = json.loads(argv[-1])
+        if set(parents) != {'mnt', 'net'} or any(not isinstance(value, str) or not value for value in parents.values()):
+            raise replay.ReplayError('外层 namespace 的原父命名空间坐标不完整')
+    return rows
 
 
 class ExecutionToolCopy:

@@ -1339,6 +1339,44 @@ class AttemptFactsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'COMMIT／Store／收据'):
                     stops.command_step(first, 'command-short', 'pending', command,
                         lambda: self.fail('未决动作不得重发'))
+                # 同一原UID补核内层输出已成、外层中断日志后来追加的窗口。
+                stops.command_step(first, 'command-short', 'enclosing-gap', command, original_call)
+                gap = stops.load_state('command-step:command-short:enclosing-gap')
+                self.assertEqual(gap['invocation_binding'], gap['command']['invocation_binding'])
+                gap.pop('command')
+                gap['status'] = 'pending'
+                stops.save_state('command-step:command-short:enclosing-gap', gap)
+                enclosing_argv = ['原 namespace 中断事实', '--data', str(first.data)]
+                enclosing = stops.begin_command(enclosing_argv)
+                stops.record_command(enclosing_argv, None, '原外层部分 stdout', '原超时 stderr', pending=enclosing)
+                outer = stops.load_state('command-observations')['commands'][-1]
+                with self.assertRaisesRegex(ValueError, '未绑定的额外观测'):
+                    stops.command_step(first, 'command-short', 'enclosing-gap', command,
+                        lambda: self.fail('不能因外层日志重发内层命令'))
+                self.assertEqual(stops.command_step(first, 'command-short', 'enclosing-gap', command,
+                    lambda: self.fail('完整原内层命令不得重发'), enclosing_commands=[outer]), expected)
+                completed = stops.load_state('command-step:command-short:enclosing-gap')
+                self.assertEqual(completed['command']['invocation_binding'], completed['invocation_binding'])
+                # 相同argv的其它原调用不能替换副作用前绑定的那一次调用。
+                mismatched = {**completed, 'invocation_binding': stops.load_state('command-step:command-short:first')['invocation_binding']}
+                stops.save_state('command-step:command-short:enclosing-gap', mismatched)
+                with self.assertRaisesRegex(ValueError, '副作用前唯一调用'):
+                    stops.command_step(first, 'command-short', 'enclosing-gap', command,
+                        lambda: self.fail('不能挑选同argv的另一次成功'))
+                stops.save_state('command-step:command-short:enclosing-gap', completed)
+                # 多条完成命令共用同一瞬时只读世界检查；作用域内禁止新动作或未决补写。
+                campaign = first.data / 'same-read-only-world'
+                stops.command_step(first, 'command-short', 'readonly-first', command, original_call, campaign=campaign)
+                stops.command_step(first, 'command-short', 'readonly-second', command, original_call, campaign=campaign)
+                with mock.patch.object(stops, 'verify_case') as reader:
+                    with stops.verified_read_only_world(first, campaign):
+                        for key in ('readonly-first', 'readonly-second'):
+                            self.assertEqual(stops.command_step(first, 'command-short', key, command,
+                                lambda: self.fail('只读作用域不得重发'), campaign=campaign), expected)
+                        with self.assertRaisesRegex(ValueError, '禁止新动作'):
+                            stops.command_step(first, 'command-short', 'readonly-new', command,
+                                lambda: self.fail('只读作用域不能执行新动作'), campaign=campaign)
+                    reader.assert_called_once_with(first, campaign)
 
 
 if __name__ == "__main__":
