@@ -41,6 +41,7 @@ class Commands:
     def __init__(self, fx: Fixture) -> None:
         self.fx = fx
         self.calls: list[list[str]] = []
+        self.environments: list[dict[str, str]] = []
         self.preflight_failed: list[str] = []
         self.gates_status = "passed"
         self.pre_a3_fail = False
@@ -63,6 +64,7 @@ class Commands:
     def __call__(self, argv: Sequence[str], cwd: Path, env: dict, log: Path) -> int:
         argv = list(argv)
         self.calls.append(argv)
+        self.environments.append(dict(env))
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open("a", encoding="utf-8") as handle:
             handle.write("$ " + " ".join(argv) + "\n")
@@ -385,6 +387,11 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         gate = next(call for call in self.commands.calls if "--full-set-request" in call)
         self.assertEqual(_option(gate, "--full-set-request"), str(request))
         self.assertEqual(_option(gate, "--work"), str(self.fx.root / "background-work"))
+        for call, env in zip(self.commands.calls, self.commands.environments):
+            if call[0] == "bash" and call[1].endswith("entry-gates.sh"):
+                self.assertEqual({key: env.get(key) for key in ("GOCACHE", "GOMODCACHE", "GOTMPDIR")},
+                                 {key: os.environ.get(key) for key in ("GOCACHE", "GOMODCACHE", "GOTMPDIR")},
+                                 "B-09 不注入逐单元承接缓存，仍用原环境")
         self.orchestrate(full_set_request=request, reexecute_gates=True)
         self.assertEqual(self.commands.gates_modes[-1], "re-execute")
 
@@ -409,7 +416,10 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         _write_json(companion, {"profile": "full-gates", "approved": "续跑独立批准"})
         (self.fx.driver / "unit_inherit.py").write_text("# 逐单元承接合同替身\n", encoding="utf-8")
         original = [path.read_bytes() for path in (primary, companion)]
-        options = {"unit_inherit_request": primary, "unit_inherit_full_gates_request": companion}
+        work = self.fx.root / "source-work"
+        work.mkdir()
+        self.fx.params[eo.ES.GATE_WORK_PARAM] = "外层残留必须清除"
+        options = {"unit_inherit_request": primary, "unit_inherit_full_gates_request": companion, "full_set_work": work}
         first = self.orchestrate(to_step="atomic-double", **options)
         second = self.orchestrate(to_step="atomic-double", **options)
         third = self.orchestrate(to_step="p0-receipt", **options)
@@ -422,6 +432,37 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual([_option(call, "--profile") for call in gates], ["entry"] * 3, "脚本按 pre-A3 模式生成真实门禁全集")
         self.assertEqual(self.commands.gates_modes, ["unit-inherit"] * 3)
         self.assertEqual([path.read_bytes() for path in (primary, companion)], original, "不改写任何请求或批准")
+        self.assertEqual([_option(call, "--work") for call in gates], [str(work)] * 3)
+        # pre-A3 单独重做的调用分支也必须使用同一工作区与三缓存。
+        orchestrator = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "source-pre-a3",
+                                       steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner, **options)
+        orchestrator.outcomes["pre-a3"] = eo.Outcome("pre-a3", "run")
+        orchestrator.entry_gates_and_pre_a3(False, True)
+        self.assertEqual(_option(self.commands.calls[-1], "--profile"), "pre-a3")
+        self.assertEqual(_option(self.commands.calls[-1], "--work"), str(work))
+        expected_caches = {"GOCACHE": str(work / "go-build-cache"), "GOMODCACHE": str(work / "go-mod-cache"),
+                           "GOTMPDIR": str(work / "go-tmp")}
+        for call, env in zip(self.commands.calls, self.commands.environments):
+            actual = {key: env.get(key) for key in expected_caches}
+            if call[0] == "bash" and call[1].endswith("entry-gates.sh"):
+                self.assertEqual(actual, expected_caches)
+            else:
+                self.assertEqual(actual, {key: os.environ.get(key) for key in expected_caches}, "其它步骤不注入来源缓存")
+        self.assertEqual(orchestrator.params[eo.ES.GATE_WORK_PARAM], str(work))
+        plain = eo.Orchestrator(self.fx.params, driver_dir=self.fx.driver, run_dir=self.fx.root / "plain",
+                                steps_dir=self.fx.steps_dir, runner=self.commands, es_runner=self.fx.runner)
+        self.assertNotIn(eo.ES.GATE_WORK_PARAM, plain.params, "默认入口不能继承外层内部参数")
+        # 编排器建成后、实际门禁派发前才替换缓存目录，也必须拒绝，不能只在构造时查 work 根。
+        for name in ("go-build-cache", "go-mod-cache", "go-tmp"):
+            with self.subTest(cache=name):
+                cache = work / name
+                cache.symlink_to(self.fx.root, target_is_directory=True)
+                before = len(self.commands.calls)
+                orchestrator.outcomes["pre-a3"] = eo.Outcome("pre-a3", "run")
+                with self.assertRaisesRegex(eo.OrchestratorError, "无符号链接的规范绝对路径"):
+                    orchestrator.entry_gates_and_pre_a3(False, True)
+                self.assertEqual(len(self.commands.calls), before, "缓存链接变化时不得派发门禁子进程")
+                cache.unlink()
 
     def test_strict_audit_reaches_entry_and_pre_a3_only_calls(self) -> None:
         """主入口必须运输严格审计和登记合同，两种门禁调用分支都不能丢参数。"""
@@ -456,6 +497,18 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
         self.assertEqual(self.actions(changed)["pre-a3"], "执行／passed")
         self.assertEqual(self.actions(changed)["ledger"], "沿用")
         self.assertEqual(self.commands.count("create"), 1)
+
+        work = self.fx.root / "source-work"
+        work.mkdir()
+        options["full_set_work"] = work
+        selected = self.orchestrate(to_step="p0-receipt", **options)
+        self.assertEqual(self.actions(selected)["pre-a3"], "执行／passed")
+        self.assertEqual(self.actions(self.orchestrate(to_step="p0-receipt", **options))["pre-a3"], "沿用")
+        options["full_set_work"] = self.fx.root / "other-source-work"
+        changed_work = self.orchestrate(to_step="p0-receipt", **options)
+        self.assertEqual((changed_work["exit_code"], self.actions(changed_work)["pre-a3"], self.actions(changed_work)["ledger"]),
+                         (0, "执行／passed", "沿用"))
+        self.assertEqual(self.commands.count("create"), 1, "工作区变更只使受影响步骤失效，不重建账本")
 
     def test_changing_either_fixed_request_invalidates_pre_a3(self) -> None:
         primary, companion = self.fx.root / "entry-request.json", self.fx.root / "full-gates-request.json"
@@ -494,6 +547,19 @@ class OrchestratorCloseoutTests(OrchestratorTestCase):
             with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
                 self.assertEqual(eo.main(argv), 2)
                 self.assertIn(reason, stderr.getvalue())
+        work = self.fx.root / "source-work"
+        work.mkdir()
+        link = self.fx.root / "linked-work"
+        link.symlink_to(work, target_is_directory=True)
+        parent = self.fx.root / "linked-parent"
+        parent.symlink_to(self.fx.root, target_is_directory=True)
+        for path in ("relative", str(link), str(parent / work.name), str(work / ".." / work.name)):
+            with self.subTest(work=path), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(eo.main(["--unit-inherit-request", "/entry.json", "--full-set-work", path]), 2)
+                self.assertIn("规范绝对路径", stderr.getvalue())
+        with mock.patch.dict(os.environ, {}, clear=True), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            self.assertEqual(eo.main(["--unit-inherit-request", "/entry.json", "--full-set-work", str(work)]), 2)
+            self.assertIn("参数里没有 D 或 RUNROOT", stderr.getvalue(), "合法配对已进入原入口参数检查")
 
     def test_parallel_change_redoes_pre_a3_but_keeps_the_ledger(self) -> None:
         first = self.orchestrate(gate_parallel=2)

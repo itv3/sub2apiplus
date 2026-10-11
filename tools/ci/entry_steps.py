@@ -442,6 +442,7 @@ STEP_BY_ID: dict[str, Step] = STEP_BY_ID_BY_CLIENT["codex"]
 UNIT_INHERIT_PARAM = "UNIT_INHERIT_REQUEST"
 UNIT_INHERIT_FULL_GATES_PARAM = "UNIT_INHERIT_FULL_GATES_REQUEST"
 GATE_PARALLEL_PARAM = "ENTRY_GATES_PARALLEL"
+GATE_WORK_PARAM = "ENTRY_GATES_SOURCE_WORK"
 AUDIT_READS_PARAM = "ENTRY_GATES_AUDIT_READS"
 AUDIT_STRICT_PARAM = "ENTRY_GATES_AUDIT_STRICT"
 AUDIT_POLICY_PARAM = "ENTRY_GATES_AUDIT_POLICY"
@@ -648,6 +649,9 @@ class Context:
                           if step.step_id in UNIT_INHERIT_STEPS else step for step in steps)
         extra = _params(*(key for key in (GATE_PARALLEL_PARAM, AUDIT_READS_PARAM, AUDIT_STRICT_PARAM, AUDIT_POLICY_PARAM)
                           if key in self.params))
+        if self.unit_inherit and self.params.get(GATE_WORK_PARAM):
+            # 显式逐单元承接复用后台工作区；路径决定命令与三缓存，只绑定实际使用它的两步。
+            extra += _params(GATE_WORK_PARAM)
         if self.params.get(AUDIT_POLICY_PARAM):
             # 同一路径的策略内容变化也必须失效；登记范围由真实测试发现与执行器再核对。
             extra += (Input("upstream", "file", "{" + AUDIT_POLICY_PARAM + "}"),)

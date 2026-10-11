@@ -57,6 +57,9 @@ if config.get("sleep"):
     time.sleep(config["sleep"])
 if config.get("change_audit_policy"):
     Path(argv[argv.index("--audit-policy") + 1]).write_text(config["change_audit_policy"], encoding="utf-8")
+if config.get("change_source_work"):
+    work = Path(argv[argv.index("--full-set-work") + 1])
+    (work / "test-tree" / "source.txt").write_text("执行期间来源漂移", encoding="utf-8")
 run = Path(values["RUNROOT"]) / "entry-runs" / "20261003t000000z"
 run.mkdir(parents=True, exist_ok=True)
 steps = [{"step_id": step, "action": "执行", "status": "passed", "reasons": []} for step in config.get("passed", [])]
@@ -85,6 +88,26 @@ ledger.mkdir(parents=True)
 (ledger / "plan.json").write_text(json.dumps({"argv": args}), encoding="utf-8")
 print(json.dumps({"status": "created"}))
 """
+
+
+def source_workspace(root: Path, *, branch: str = "claude/test") -> tuple[Path, Path, str]:
+    """小型真实 Git 来源与 bundle；使用原工作区校验器验真，不模拟其返回值。"""
+    work, bundle = root / "source-work", root / "source.bundle"
+    tree = work / "test-tree"
+    tree.mkdir(parents=True)
+    def git(*args: str) -> str:
+        completed = subprocess.run(["git", "-C", str(tree), *args], capture_output=True, text=True, check=True)
+        return completed.stdout.strip()
+    git("init", "-b", branch)
+    (tree / "source.txt").write_text("原来源\n", encoding="utf-8")
+    git("add", "source.txt")
+    git("-c", "user.name=短验夹具", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+        "commit", "-m", "真实来源短验")
+    commit = git("rev-parse", "HEAD")
+    git("bundle", "create", str(bundle), branch)
+    for name in ("pycache", "go-build-cache", "go-mod-cache", "go-tmp"):
+        (work / name).mkdir()
+    return work, bundle, commit
 
 
 class EntryDryRunTests(unittest.TestCase):
@@ -404,6 +427,12 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         return self.cli("start", "--runroot", str(self.claude_runroot), "--data-root", str(self.data), "--vc-env", str(self.claude_env),
                         "--bundle", str(self.root / "x.bundle"), "--branch", "claude/test", "--commit", COMMIT, "--entry", str(self.entry), *extra)
 
+    def start_with_source_work(self, work: Path, bundle: Path, commit: str, *extra: str) -> subprocess.CompletedProcess[str]:
+        """仅本批显式工作区路径用真实 Git 提交，其它既有夹具与缺省命令不变。"""
+        return self.cli("start", "--runroot", str(self.claude_runroot), "--data-root", str(self.data), "--vc-env", str(self.claude_env),
+                        "--bundle", str(bundle), "--branch", "claude/test", "--commit", commit, "--entry", str(self.entry),
+                        "--full-set-work", str(work), *extra)
+
     def test_claude_dry_run_is_prefixed_bound_to_claude_and_classifies_pending_steps(self) -> None:
         store = pre_a3_store(self.root, {name: waiting_scenario(name) for name in CLAUDE_CHAINS})
         # B5a-09 续落实 atomic-double 之后 Claude 没有登记待接入的入口步骤：空跑里它照常执行（这里通过），只剩 pre-A3 占位。
@@ -563,6 +592,68 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
                 self.assertEqual(refused.returncode, 2)
                 self.assertIn("合同无效", refused.stderr)
 
+        work, bundle, commit = source_workspace(self.root)
+        selected = self.start_with_source_work(work, bundle, commit, "--unit-inherit-request", str(request), "--audit-policy", str(policy))
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        selected_outcome = json.loads(selected.stdout.strip().splitlines()[-1])
+        selected_payload = self.wait(selected_outcome["result"])
+        reference = dr._full_set_work_reference(work, commit=commit, bundle=bundle, branch="claude/test")
+        self.assertEqual(selected_payload["status"], "passed", selected_payload)
+        self.assertEqual(selected_payload["full_set_work"], reference)
+        self.assertTrue(Path(selected_outcome["result"]).name.endswith(f"-source-work-{reference['sha256'][:12]}.json"))
+        self.assertEqual(self.calls()[-1]["argv"], ["--to", "atomic-double", "--unit-inherit-request", str(request),
+                                                   "--audit-reads", "--audit-strict", "--audit-policy", str(policy), "--full-set-work", str(work)])
+        self.assertTrue(all(key not in self.calls()[-1]["environ"] for key in ("GOCACHE", "GOMODCACHE", "GOTMPDIR")),
+                        "空跑编排器仍是干净环境，来源缓存只由门禁子进程接收")
+        original_bundle = bundle.read_bytes()
+        bundle.write_bytes(original_bundle + b"\n")
+        with self.assertRaises(dr.DryRunError):
+            dr._verify_full_set_work(selected_payload)
+        bundle.write_bytes(original_bundle)
+        other_bundle = self.root / "same-bytes.bundle"
+        other_bundle.write_bytes(original_bundle)
+        with self.assertRaisesRegex(dr.DryRunError, "空跑启动后变化"):
+            dr._verify_full_set_work({**selected_payload, "bundle": str(other_bundle)})
+        other_work = self.root / "other-source-work"
+        other_work.mkdir()
+        subprocess.run(["git", "clone", "--quiet", "--no-hardlinks", str(work / "test-tree"), str(other_work / "test-tree")],
+                       capture_output=True, text=True, check=True)
+        for name in ("pycache", "go-build-cache", "go-mod-cache", "go-tmp"):
+            (other_work / name).mkdir()
+        other = self.start_with_source_work(other_work, bundle, commit, "--unit-inherit-request", str(request), "--audit-policy", str(policy))
+        self.assertEqual(other.returncode, 0, other.stderr)
+        other_outcome = json.loads(other.stdout.strip().splitlines()[-1])
+        self.assertNotEqual(other_outcome["result"], selected_outcome["result"], "同一提交不同来源工作区不能共用结论")
+        self.assertEqual(self.wait(other_outcome["result"])["status"], "passed")
+        orphan = self.start_with_source_work(work, bundle, commit)
+        self.assertEqual(orphan.returncode, 2)
+        self.assertIn("与 --unit-inherit-request 一起提供", orphan.stderr)
+        linked = self.root / "source-link"
+        linked.symlink_to(work, target_is_directory=True)
+        parent_link = self.root / "source-parent-link"
+        parent_link.symlink_to(self.root, target_is_directory=True)
+        for candidate in (Path("relative"), linked, parent_link / work.name, work / ".." / work.name):
+            with self.subTest(work=candidate):
+                refused = self.start_with_source_work(candidate, bundle, commit, "--unit-inherit-request", str(request))
+                self.assertEqual(refused.returncode, 2)
+                self.assertIn("规范绝对路径", refused.stderr)
+        cache = work / "go-build-cache"
+        cache.rmdir()
+        cache.symlink_to(work / "go-mod-cache", target_is_directory=True)
+        refused = self.start_with_source_work(work, bundle, commit, "--unit-inherit-request", str(request))
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("规范绝对路径", refused.stderr)
+        cache.unlink()
+        cache.mkdir()
+        wrong_commit = self.start_with_source_work(work, bundle, "d" * 40, "--unit-inherit-request", str(request))
+        self.assertEqual(wrong_commit.returncode, 2)
+        self.assertIn("提交不符", wrong_commit.stderr)
+        wrong_branch = self.cli("start", "--runroot", str(self.claude_runroot), "--data-root", str(self.data), "--vc-env", str(self.claude_env),
+                                "--bundle", str(bundle), "--branch", "wrong/test", "--commit", commit,
+                                "--full-set-work", str(work), "--unit-inherit-request", str(request))
+        self.assertEqual(wrong_branch.returncode, 2)
+        self.assertIn("分支", wrong_branch.stderr)
+
     def test_two_profile_requests_reach_the_orchestrator_and_bind_separate_conclusions(self) -> None:
         primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"
         primary.write_text(json.dumps({"profile": "entry"}), encoding="utf-8")
@@ -595,6 +686,15 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         rejected = self.wait(json.loads(mutated.stdout.strip().splitlines()[-1])["result"])
         self.assertEqual((rejected["status"], rejected["failed_steps"]), ("failed", ["entry-orchestrator"]))
         self.assertIn("策略在空跑启动后变化", rejected["reason"])
+
+        # 真实原树在执行期间变脏，替身成功也必须被结束复核拒绝。
+        work, bundle, commit = source_workspace(self.root)
+        self.configure(change_source_work=True)
+        changed_work = self.start_with_source_work(work, bundle, commit, *argv)
+        self.assertEqual(changed_work.returncode, 0, changed_work.stderr)
+        rejected_work = self.wait(json.loads(changed_work.stdout.strip().splitlines()[-1])["result"])
+        self.assertEqual((rejected_work["status"], rejected_work["failed_steps"]), ("failed", ["entry-orchestrator"]))
+        self.assertIn("来源工作区核验失败", rejected_work["reason"])
 
     def test_companion_request_requires_the_primary_and_a_regular_absolute_file(self) -> None:
         primary, companion = self.root / "entry-request.json", self.root / "full-gates-request.json"
@@ -675,6 +775,26 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
         self.assertEqual(rejected["status"], "failed", rejected)
         self.assertIn("策略在空跑启动后变化", rejected["reason"])
         self.assertEqual(self.calls(), [], "排队后策略变化不能派发编排器")
+
+        # 同一把真实串行锁下，来源树在排队期间变化也须拒绝，不能重建原树掩盖漂移。
+        work, bundle, commit = source_workspace(self.root)
+        holder = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        try:
+            started = self.start_with_source_work(work, bundle, commit, "--unit-inherit-request", str(primary))
+            self.assertEqual(started.returncode, 0, started.stderr)
+            result = json.loads(started.stdout.strip().splitlines()[-1])["result"]
+            deadline = time.monotonic() + 30
+            while not (dr._read(Path(result)) or {}).get("rehearsal_root"):
+                self.assertLess(time.monotonic(), deadline, dr._read(Path(result)))
+                time.sleep(0.05)
+            (work / "test-tree" / "source.txt").write_text("排队期间来源漂移", encoding="utf-8")
+        finally:
+            os.close(holder)
+        rejected = self.wait(result)
+        self.assertEqual(rejected["status"], "failed", rejected)
+        self.assertIn("来源工作区核验失败", rejected["reason"])
+        self.assertEqual(self.calls(), [], "排队后来源变化不能派发编排器")
 
     def test_two_clients_dry_runs_queue_on_the_gate_work_directory(self) -> None:
         # 两客户端都纳管时，后台验证通过后两份空跑几乎同时接上；编排器各跑 3 秒，后到的那份排队、两份都通过。

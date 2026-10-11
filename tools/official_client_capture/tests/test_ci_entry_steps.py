@@ -232,6 +232,18 @@ class EntryStepsAcceptanceTests(EntryStepsTestCase):
                 changed = {step.step_id for step in explicit.steps if step.spec_sha256() != default.step(step.step_id).spec_sha256()}
                 self.assertEqual(changed, {"entry-gates", "pre-a3"})
                 self.assertTrue(all(explicit.step(step.step_id) == step for step in explicit.steps))
+                inherited = es.Context({**self.fx.params, "CLIENT": client, es.UNIT_INHERIT_PARAM: "/approved.json"},
+                                       self.fx.driver, self.fx.steps_dir, self.fx.runner)
+                selected = es.Context({**inherited.params, es.GATE_WORK_PARAM: "/source-work"},
+                                      self.fx.driver, self.fx.steps_dir, self.fx.runner)
+                changed_work = {step.step_id for step in selected.steps
+                                if step.spec_sha256() != inherited.step(step.step_id).spec_sha256()}
+                self.assertEqual(changed_work, {"entry-gates", "pre-a3"})
+                for step_id in changed_work:
+                    self.assertIn(es.Input("param", "param", es.GATE_WORK_PARAM), selected.step(step_id).inputs)
+                stale = es.Context({**default.params, es.GATE_WORK_PARAM: "/outer-stale"},
+                                   self.fx.driver, self.fx.steps_dir, self.fx.runner)
+                self.assertEqual(stale.steps, default.steps, "默认与 B-09 不绑定内部工作区参数")
         self.fx.params[es.GATE_PARALLEL_PARAM] = "2"
         ctx = self.fx.ctx()
         for step_id in ("entry-gates", "pre-a3"):

@@ -225,6 +225,11 @@ class Orchestrator:
         self.reexecute_gates = reexecute_gates
         self.full_set_request = full_set_request
         self.full_set_work = full_set_work
+        # 外层同名参数不能暗中改变步骤输入；仅显式逐单元承接工作区参与这两步的输入比较。
+        self.params.pop(ES.GATE_WORK_PARAM, None)
+        if unit_inherit_request is not None and full_set_work is not None:
+            _validate_source_work(full_set_work)
+            self.params[ES.GATE_WORK_PARAM] = str(full_set_work)
         # 承接的单元重验原轨迹；本次真正执行的单元继续产出相同严格合同的记录。
         self.audit_reads = audit_reads
         # 只交给 VC-0 收口这一步：approve_sha256／approved_by／reason。
@@ -285,6 +290,15 @@ class Orchestrator:
 
     def env(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
         return {**os.environ, "PYTHONPATH": ".", "PYTHONDONTWRITEBYTECODE": "1", **(extra or {})}
+
+    def gate_env(self) -> dict[str, str]:
+        """只有显式逐单元承接门禁使用后台三缓存；其它步骤和 B-09 仍用原环境。"""
+        if self.unit_inherit_request is not None and self.full_set_work is not None:
+            work = self.full_set_work
+            _validate_source_work(work)
+            return self.env({"GOCACHE": str(work / "go-build-cache"), "GOMODCACHE": str(work / "go-mod-cache"),
+                             "GOTMPDIR": str(work / "go-tmp")})
+        return self.env()
 
     def run(self, step_id: str, argv: Sequence[str], *, cwd: Path | None = None, env: Mapping[str, str] | None = None) -> int:
         if step_id in self.masks:
@@ -418,7 +432,7 @@ class Orchestrator:
                                           *(["--unit-inherit-request", str(inherit_request)] if inherit_request else []),
                                           *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                           *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
-                                          *audit_args, *source])
+                                          *audit_args, *source], env=self.gate_env())
             summary = out / "entry-gates.json"
             try:
                 status = json.loads(summary.read_text(encoding="utf-8")).get("status")
@@ -441,7 +455,7 @@ class Orchestrator:
                                 *(["--unit-inherit-request", str(self.unit_inherit_request)] if self.unit_inherit_request else []),
                                 *(["--work", str(self.full_set_work)] if self.full_set_work else []),
                                 *(["--parallel", str(self.gate_parallel)] if self.gate_parallel is not None else []),
-                                *audit_args, *source])
+                                *audit_args, *source], env=self.gate_env())
         if pre_a3_run or refresh_reuse:
             reuse_products: dict[str, str] = {}
             pre_a3_passed = certification.is_file()
@@ -973,6 +987,14 @@ def _positive_parallel(value: str) -> int:
     return int(value)
 
 
+def _validate_source_work(work: Path) -> None:
+    """承接工作区坐标不能经链接或上级回退悄悄指向另一份来源。"""
+    roots = (work, work / "go-build-cache", work / "go-mod-cache", work / "go-tmp")
+    if (not work.is_absolute() or ".." in work.parts
+            or any(path.is_symlink() for root in roots for path in (root, *root.parents))):
+        raise OrchestratorError("逐单元承接来源工作区须为无符号链接的规范绝对路径")
+
+
 def _parse(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="入口编排器（E2-06）")
     parser.add_argument("--plan", action="store_true", help="只判定每一步沿用还是重做，不执行")
@@ -1002,9 +1024,16 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse(sys.argv[1:] if argv is None else argv)
-    if args.full_set_work and (not args.full_set_request or not args.full_set_work.is_absolute() or ".." in args.full_set_work.parts):
+    if args.full_set_work and args.unit_inherit_request is None and (
+            not args.full_set_request or not args.full_set_work.is_absolute() or ".." in args.full_set_work.parts):
         print("B-09 来源工作区须为规范绝对路径并与全集请求一起提供", file=sys.stderr)
         return 2
+    if args.full_set_work is not None and args.unit_inherit_request is not None:
+        try:
+            _validate_source_work(args.full_set_work)
+        except OrchestratorError as error:
+            print(f"入口编排：{error}", file=sys.stderr)
+            return 2
     if args.unit_inherit_request is not None and (args.full_set_request or args.reexecute_gates
                                                   or not args.unit_inherit_request.is_absolute()):
         print("入口编排：逐单元承接请求须为绝对路径，且不能与 --full-set-request、--reexecute-gates 同用", file=sys.stderr)

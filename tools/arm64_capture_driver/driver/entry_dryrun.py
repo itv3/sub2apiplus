@@ -171,7 +171,8 @@ def capture_busy(state_dir: Path | None = None) -> str | None:
 
 def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, opening: bool, reexecute: bool = False,
                 to: str | None = None, client: str = "codex", unit_inherit: str | None = None,
-                unit_inherit_full_gates: str | None = None, audit_policy: str | None = None) -> Path:
+                unit_inherit_full_gates: str | None = None, audit_policy: str | None = None,
+                full_set_work: str | None = None) -> Path:
     """结论文件：客户端前缀＋提交＋部署收据＋空跑种类（开工、冷跑计时、逐单元承接）＋终点。终点不是这种空跑的默认终点时才
     写进名字：后台验证接着的那次（到 pre-A3）与明确执行的那次（默认 atomic-double 或到 P0 收据）是不同的空跑，不能互相顶替。
     客户端前缀取客户端表（Codex 为空，与改造前同名）；逐单元承接另带主请求摘要，显式配套请求与读集策略另加各自摘要，缺省命名不变。"""
@@ -182,6 +183,8 @@ def result_path(runroot: Path, commit: str, deployment: Mapping[str, Any], *, op
         kind += f"-full-gates-{unit_inherit_full_gates[:12]}"
     if audit_policy:
         kind += f"-audit-policy-{audit_policy[:12]}"
+    if full_set_work:
+        kind += f"-source-work-{full_set_work[:12]}"
     default = OPENING_TO if opening else DEFAULT_TO
     stop = f"-to-{to}" if to and to != default else ""
     return Path(runroot) / DIRECTORY / f"{prefix}{commit[:12]}-{str(deployment['sha256'])[:12]}{kind}{stop}.json"
@@ -283,6 +286,42 @@ def _verify_audit_policy(payload: Mapping[str, Any]) -> Path | None:
     return path
 
 
+def _full_set_work_reference(work: Path, *, commit: str, bundle: Path, branch: str) -> dict[str, Any]:
+    """复用既有工作区校验器绑定原树、外置字节码缓存和 bundle；三编译缓存只绑定坐标，不递归扫描。"""
+    caches = {"GOCACHE": str(work / "go-build-cache"), "GOMODCACHE": str(work / "go-mod-cache"),
+              "GOTMPDIR": str(work / "go-tmp")}
+    if (not work.is_absolute() or ".." in work.parts
+            or any(path.is_symlink() for root in (work, *(Path(value) for value in caches.values()))
+                   for path in (root, *root.parents))):
+        raise DryRunError("逐单元承接来源工作区须为无符号链接的规范绝对路径")
+    try:
+        workspace = _sibling("entry_gates").verify_scope_workspace(work / "test-tree", work / "pycache",
+                                                                  commit=commit, bundle=bundle, branch=branch)
+    except (OSError, ValueError) as error:
+        raise DryRunError(f"逐单元承接来源工作区核验失败：{error}") from error
+    reference = {"work": str(work), "source": {"commit": commit, "bundle": str(bundle), "branch": branch},
+                 "workspace": workspace, "cache_roots": caches}
+    digest = hashlib.sha256(json.dumps(reference, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {**reference, "sha256": digest}
+
+
+def _verify_full_set_work(payload: Mapping[str, Any]) -> Path | None:
+    """排队后、派发前和收口重验同一绑定；拒绝测试树、bundle 或缓存坐标漂移。"""
+    reference = payload.get("full_set_work")
+    if reference is None:
+        return None
+    if (not payload.get("unit_inherit_request") or not isinstance(reference, dict)
+            or set(reference) != {"work", "source", "workspace", "cache_roots", "sha256"}
+            or not isinstance(reference.get("work"), str)):
+        raise DryRunError("逐单元承接来源工作区的启动绑定缺失或格式错误")
+    work = Path(reference["work"])
+    current = _full_set_work_reference(work, commit=str(payload["commit"]), bundle=Path(str(payload["bundle"])),
+                                       branch=str(payload["branch"]))
+    if current != reference:
+        raise DryRunError("逐单元承接来源工作区在空跑启动后变化，拒绝执行或收口")
+    return work
+
+
 def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     bv = _bv()
     # B5a-10：按本轮客户端绑定它最新的部署收据，结论文件名带客户端表登记的前缀（Codex 为空，与改造前相同）。
@@ -296,6 +335,11 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         raise DryRunError("--opening 已含重新执行全集，不要再加 --reexecute")
     if request is not None and (args.opening or args.reexecute):
         raise DryRunError("逐单元承接请求不能与 --opening／--reexecute（重新执行全集）同用")
+    work = getattr(args, "full_set_work", None)
+    if work is not None and request is None:
+        raise DryRunError("--full-set-work 必须与 --unit-inherit-request 一起提供")
+    work_reference = (_full_set_work_reference(Path(work), commit=args.commit, bundle=args.bundle, branch=args.branch)
+                      if work is not None else None)
     policy = getattr(args, "audit_policy", None)
     if policy is not None and request is None and not args.opening:
         raise DryRunError("--audit-policy 只与 --unit-inherit-request 或显式 --opening 一起使用")
@@ -315,7 +359,8 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         raise DryRunError(f"--to 只能到 {ALLOWED_TO[-1]}（VC-0 收口会发正式请求，演练根里不做）：{to}")
     path = result_path(args.runroot, args.commit, deployment, opening=args.opening, reexecute=args.reexecute, to=to, client=client,
                        unit_inherit=request_sha256, unit_inherit_full_gates=full_gates_sha256,
-                       audit_policy=policy_reference["sha256"] if policy_reference else None)
+                       audit_policy=policy_reference["sha256"] if policy_reference else None,
+                       full_set_work=work_reference["sha256"] if work_reference else None)
     existing = _read(path)
     if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
         return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
@@ -331,6 +376,7 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         **({"unit_inherit_full_gates_request": {"path": str(full_gates_request), "sha256": full_gates_sha256}}
            if full_gates_request is not None else {}),
         **({"audit_policy": policy_reference} if policy_reference is not None else {}),
+        **({"full_set_work": work_reference} if work_reference is not None else {}),
     }
     busy = capture_busy()
     if busy:
@@ -531,6 +577,9 @@ def _run_orchestrator(payload: Mapping[str, Any], runroot: Path, env_file: Path)
         if not payload.get("opening"):
             argv += ["--audit-reads"]
         argv += ["--audit-strict", "--audit-policy", str(policy)]
+    work = _verify_full_set_work(payload)
+    if work is not None:
+        argv += ["--full-set-work", str(work)]
     log = runroot / "entry.out"
     with log.open("ab") as handle:
         returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
@@ -578,12 +627,14 @@ def run(result: Path) -> int:
         return 0   # 排队期间已被 stop 标为 superseded
     lock_fd, waited = held
     try:
+        _verify_full_set_work(payload)
         if waited >= 1:
             payload = _update(path, serial_lock_waited_seconds=int(waited))
             if payload is None:
                 return 0
         returncode, log = _run_orchestrator(payload, runroot, env_file)
         _verify_audit_policy(payload)
+        _verify_full_set_work(payload)
     except DryRunError as error:
         _update(path, status="failed", completed_at_utc=_utc_now(), failed_steps=["entry-orchestrator"], reason=str(error))
         return 0
@@ -718,6 +769,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                          help="B5a-08 逐单元承接请求（交给入口编排器；与 --opening／--reexecute 互斥）")
     p_start.add_argument("--unit-inherit-full-gates-request", type=Path, default=None,
                          help="独立批准的 full-gates 请求；与主请求从首轮一起固定提供，两份摘要共同绑定空跑结论")
+    p_start.add_argument("--full-set-work", type=Path, default=None,
+                         help="逐单元承接来源后台工作区；只随主请求使用，复核原树、缓存和 bundle 并绑定结论")
     p_start.add_argument("--audit-policy", type=Path, default=None,
                          help="精确读集登记策略；与逐单元承接请求或显式开工模式一起使用，按摘要绑定并复核")
     p_start.add_argument("--to", default=None, help=f"编排器跑到哪一步（默认 {DEFAULT_TO}；--opening 默认 {OPENING_TO}）")

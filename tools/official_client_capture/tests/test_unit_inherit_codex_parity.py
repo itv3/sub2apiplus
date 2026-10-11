@@ -826,7 +826,23 @@ CLAUDE_FIXED_SCENARIO_ROOT_REMOVED = {'tools/official_client_capture/codex_upgra
                                                                          'arguments.staging_parent, diagnostic=diagnostic, '
                                                                          'client=client)']}
 
+# 前台与空跑显式复用后台工作区，以真实父提交7ab登记；默认与B-09不新增工作区步骤输入或缓存注入。
+ENTRY_SOURCE_WORKSPACE_BASELINE = '7ab894b24b6770d96190eea6b6b30c2a8baeb7fa'
+ENTRY_SOURCE_WORKSPACE_DIGESTS = {'tools/ci/entry_dryrun.py': 'd18da3e4429a0be4796fc28b8d57ca9e9f871bccf61cf97f54039553cbd167c2',
+ 'tools/ci/entry_orchestrator.py': 'c5e7c69def778aaca9fb1bdf63fa19fd26d2c33be306e1ba99504d3eee110362',
+ 'tools/ci/entry_steps.py': 'dc9482c0f91a8d557af74aa7e47de92c5321e37b21a19dda75da611f895d3e69'}
+ENTRY_SOURCE_WORKSPACE_REMOVED = {'tools/ci/entry_dryrun.py': ['                unit_inherit_full_gates: str | None = None, audit_policy: str | None = '
+                              'None) -> Path:',
+                              '                       audit_policy=policy_reference["sha256"] if policy_reference else '
+                              'None)'],
+ 'tools/ci/entry_orchestrator.py': ['                                          *audit_args, *source])',
+                                    '                                *audit_args, *source])',
+                                    '    if args.full_set_work and (not args.full_set_request or not '
+                                    'args.full_set_work.is_absolute() or ".." in args.full_set_work.parts):'],
+ 'tools/ci/entry_steps.py': []}
+
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
+    ("入口承接后台来源工作区", ENTRY_SOURCE_WORKSPACE_BASELINE, ENTRY_SOURCE_WORKSPACE_DIGESTS, ENTRY_SOURCE_WORKSPACE_REMOVED),
     ("5626固定完整79场景根真实接管", CLAUDE_FIXED_SCENARIO_ROOT_BASELINE, CLAUDE_FIXED_SCENARIO_ROOT_DIGESTS, CLAUDE_FIXED_SCENARIO_ROOT_REMOVED),
     ("df90c329e真实历史接管", READ_SCOPE_HISTORY_BASELINE, READ_SCOPE_HISTORY_DIGESTS, READ_SCOPE_HISTORY_REMOVED),
     ("f99137c82真实历史接管", PRIVATE_RESULT_HISTORY_BASELINE, PRIVATE_RESULT_HISTORY_DIGESTS, PRIVATE_RESULT_HISTORY_REMOVED),
