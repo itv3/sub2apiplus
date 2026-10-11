@@ -817,6 +817,70 @@ def _verified_preflight_retry(case: Any, name: str, saved: dict[str, Any], invok
     return result
 
 
+@contextlib.contextmanager
+def _read_only_fact_index(store: Any):
+    """仅供一次完整重放使用的事实索引；不采用资格视图的交付过滤。
+
+    首次验链、事实原字节和坐标签名均复用现有资格快照机制。完整重放
+    仍使用原 Store 实现，成功前显式复核快照；异常和正常退出都销毁索引。
+    """
+    from copy import deepcopy
+    from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import _QualificationStoreView
+    from tools.official_client_control.contracts import DIMENSIONS, validate_fact_ref
+    from tools.official_client_control.errors import ControlError
+    from tools.official_client_control.store import ControlStore
+
+    if store.read_only is not True:
+        raise ValueError('成功世界重验索引只能使用原只读 Store')
+    snapshot = _QualificationStoreView(store)
+
+    class ReplayStore(ControlStore):
+        """只索引事实；全部对象、收据、外部绑定和 replay 保持原消费者。"""
+
+        active = True
+
+        def require_active(self) -> None:
+            if not self.active:
+                raise ValueError('只读事实索引已退出，必须重新完整验链')
+
+        def load_campaign(self, campaign_id: str) -> dict[str, Any]:
+            self.require_active()
+            return snapshot.load_campaign(campaign_id)
+
+        def list_facts(self, campaign_id: str, dimension: str | None = None) -> list[dict[str, Any]]:
+            self.require_active()
+            if dimension is not None and dimension not in DIMENSIONS:
+                return store.list_facts(campaign_id, dimension)
+            # _fact_snapshot 保留全部原事实；不能调用会排除 deployment 的资格列表。
+            return deepcopy([fact for fact in snapshot._fact_snapshot(campaign_id)
+                             if dimension is None or fact['dimension'] == dimension])
+
+        def load_fact(self, reference: dict[str, Any]) -> dict[str, Any]:
+            self.require_active()
+            parsed = validate_fact_ref(reference)
+            snapshot._fact_snapshot(parsed['campaign_id'])
+            fact = snapshot._fact_index.get((parsed['campaign_id'], parsed['dimension'], parsed['sequence']))
+            if fact is None:
+                raise ControlError(f'事实引用不存在：{parsed}')
+            if fact['_sha256'] != parsed['sha256']:
+                raise ControlError('事实引用摘要不匹配')
+            return deepcopy(fact)
+
+        def verify_fact_snapshots(self) -> None:
+            self.require_active()
+            # 快照持有底层原 Store；收尾不能通过本索引核验自身。
+            snapshot.verify_fact_snapshots()
+
+    indexed = ReplayStore(store.root, read_only=True)
+    try:
+        yield indexed
+    finally:
+        indexed.active = False
+        snapshot._campaign_snapshots.clear()
+        snapshot._fact_snapshots.clear()
+        snapshot._fact_index.clear()
+
+
 def replay_read_only_store(store: Any, *, external_root: Path) -> dict[str, Any]:
     """原世界的一次完整重放共用精确来源和资格批次；不承接上次通过结论。
 
@@ -844,9 +908,11 @@ def replay_read_only_store(store: Any, *, external_root: Path) -> dict[str, Any]
             items[canonical_sha256(item)] = item
     # 来源生命周期须覆盖资格批次的最终复读；嵌套消费者仍只接受同一
     # Store、已声明子集、原登记通道及未漂移字节。原批量上限保持不变。
-    with execution._source_batch_scope(store, list(items.values())), \
-            execution._qualification_read_batch(store, current_execution=False):
-        result = store.replay(external_root=external_root, require_external=True)
+    with _read_only_fact_index(store) as indexed, \
+            execution._source_batch_scope(indexed, list(items.values())):
+        with execution._qualification_read_batch(indexed, current_execution=False):
+            result = indexed.replay(external_root=external_root, require_external=True)
+        indexed.verify_fact_snapshots()
     return result
 
 

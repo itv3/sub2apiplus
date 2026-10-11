@@ -434,6 +434,11 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
             self.assertIsNone(execution._SOURCE_BATCH.get())
             self.assertIsNone(execution._QUALIFICATION_READ_BATCH.get())
         self.assertEqual(results[0], results[1])
+        # 同一实际来源下与未加事实索引的原完整消费者比较，保留全部图和外部绑定。
+        with execution._source_batch_scope(read_only, batch.call_args.args[1]), \
+                execution._qualification_read_batch(read_only, current_execution=False):
+            original_result = read_only.replay(external_root=self.root, require_external=True)
+        self.assertEqual(results[0], original_result)
         self.assertEqual({path.relative_to(self.store.root): path.read_bytes()
                           for path in self.store.root.rglob("*") if path.is_file()}, before)
         with self.assertRaisesRegex(ValueError, "只读 Store"):

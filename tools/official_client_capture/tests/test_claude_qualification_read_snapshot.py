@@ -280,6 +280,25 @@ class QualificationReadSnapshotTests(unittest.TestCase):
         with self.assertRaisesRegex(guard.GuardError, "事实链发生变化"):
             self.view.verify_fact_snapshots()
 
+        # 完整重放只复用快照机制，必须继续看见全部 deployment；资格视图边界不变。
+        from tools.official_client_capture.tests import claude_fault_chain_world as world
+        complete = self.reader.list_facts(self.campaign_id)
+        reference = self.reader.fact_ref(deployment[0])
+        for _ in range(2):
+            with mock.patch.object(self.reader, "list_facts", wraps=self.reader.list_facts) as scans:
+                with world._read_only_fact_index(self.reader) as indexed:
+                    self.assertEqual(indexed.list_facts(self.campaign_id), complete)
+                    self.assertEqual(indexed.list_facts(self.campaign_id, "deployment"), deployment)
+                    returned = indexed.load_fact(reference)
+                    self.assertEqual(returned, deployment[0])
+                    returned["payload"].clear()
+                    self.assertEqual(indexed.load_fact(reference), deployment[0])
+                    self.assertEqual(scans.call_args_list, [mock.call(self.campaign_id)])
+                    indexed.verify_fact_snapshots()
+                    self.assertEqual(scans.call_args_list, [mock.call(self.campaign_id)] * 2)
+                with self.assertRaisesRegex(ValueError, "已退出"):
+                    indexed.load_fact(reference)
+
     def test_delivery_objects_receipts_and_typed_evidence_remain_forbidden(self) -> None:
         source = mock.Mock(read_only=True, root=self.root)
         source.load_object.return_value = {"payload": {
@@ -348,6 +367,33 @@ class QualificationReadSnapshotTests(unittest.TestCase):
         with mock.patch.object(WorkflowGates, "replay_campaign", replay_then_change):
             with self.assertRaisesRegex(guard.GuardError, "事实链发生变化"):
                 self.replay()
+
+        # 完整 Store 仍跑原语义重放；结束后的合法追加或只读权限变化均不得返回成功。
+        from tools.official_client_capture.tests import claude_fault_chain_world as world
+        first = self.reader.list_facts(self.campaign_id)[0]
+        path = self.fact_path(first)
+        path.chmod(0o600)
+        for mutation in ("mode", "append"):
+            changed = False
+
+            def full_replay_then_change(gates: WorkflowGates, campaign: dict, facts: list[dict]) -> object:
+                nonlocal changed
+                result = original(gates, campaign, facts)
+                if not changed:
+                    changed = True
+                    if mutation == "mode":
+                        path.chmod(0o400)
+                    else:
+                        self.append_observation()
+                return result
+
+            with self.subTest(mutation=mutation), \
+                    mock.patch.object(WorkflowGates, "replay_campaign", full_replay_then_change), \
+                    self.assertRaisesRegex(guard.GuardError, "事实链发生变化"):
+                world.replay_read_only_store(self.reader, external_root=self.fixture.external_root)
+            self.assertTrue(changed, "必须已经经过真实语义重放才注入变化")
+            if mutation == "mode":
+                path.chmod(0o600)
 
 
 class QualificationSubjectReadSnapshotTests(unittest.TestCase):

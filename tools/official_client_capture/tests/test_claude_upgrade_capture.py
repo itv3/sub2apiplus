@@ -1716,6 +1716,7 @@ class AttemptFactsTests(unittest.TestCase):
                     save_typed(typed_record)
                     originals = {path: path.read_bytes() for path in records.rglob('*') if path.is_file()}
                     with mock.patch.object(ControlStore, 'open_read_only', return_value=store), \
+                            mock.patch.object(stops, '_read_only_fact_index', side_effect=lambda value: contextlib.nullcontext(value)), \
                             mock.patch.object(stops.upgrade, 'load_campaign_manifest', return_value={'campaign_id': 'scope-fixture'}), \
                             mock.patch.object(stops.store_module, 'require_store_campaign_matches_plan'), \
                             mock.patch.object(capture, '_host_data_root', return_value=root), \
