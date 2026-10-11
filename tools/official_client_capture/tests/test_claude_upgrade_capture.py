@@ -1672,6 +1672,8 @@ class AttemptFactsTests(unittest.TestCase):
                         source_depth -= 1
 
                 store = mock.Mock()
+                store.read_only = True
+                store.list_object_refs.return_value = []
                 store.load_campaign.return_value = {'campaign_id': 'scope-fixture'}
                 def replay(**options):
                     if cursor is not None:

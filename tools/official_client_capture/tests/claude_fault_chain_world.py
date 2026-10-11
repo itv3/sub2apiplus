@@ -817,6 +817,39 @@ def _verified_preflight_retry(case: Any, name: str, saved: dict[str, Any], invok
     return result
 
 
+def replay_read_only_store(store: Any, *, external_root: Path) -> dict[str, Any]:
+    """原世界的一次完整重放共用精确来源和资格批次；不承接上次通过结论。
+
+    Store 对象仍由原读取器逐份验真，所有对象图、事实、收据与外部原件
+    继续由原 replay 消费。这里只把同一次只读调用中重复取得的来源合并，
+    资格报告在退出批次时完成验证；任何收口失败都不能返回成功结果。
+    """
+
+    from tools.official_client_control import delivery_execution as execution
+    from tools.official_client_control.canonical import canonical_sha256
+
+    if store.read_only is not True:
+        raise ValueError('成功世界重验批次只能使用原只读 Store')
+    items: dict[str, dict[str, Any]] = {}
+    for reference in store.list_object_refs('operational_evidence'):
+        payload = store.load_object(reference)['payload']
+        if payload.get('schema_version') == execution.OPERATIONAL_V2:
+            for item in execution._graph_source_items(store, payload):
+                items[canonical_sha256(item)] = item
+    for reference in store.list_object_refs('candidate_delivery_package'):
+        payload = store.load_object(reference)['payload']
+        if payload.get('schema_version') == execution.PACKAGE_V2:
+            item = execution._source_request({key: payload[key] for key in
+                ('campaign_id', 'delivery_id', 'operation_index_binding')}, payload['operation_index_origin'])
+            items[canonical_sha256(item)] = item
+    # 来源生命周期须覆盖资格批次的最终复读；嵌套消费者仍只接受同一
+    # Store、已声明子集、原登记通道及未漂移字节。原批量上限保持不变。
+    with execution._source_batch_scope(store, list(items.values())), \
+            execution._qualification_read_batch(store, current_execution=False):
+        result = store.replay(external_root=external_root, require_external=True)
+    return result
+
+
 def verify_case(case: Any, campaign: Path) -> None:
     """坐标绑定后用原产品读侧重验实际世界，JSON 不是恢复授权或通过证明。"""
 
@@ -850,7 +883,7 @@ def verify_case(case: Any, campaign: Path) -> None:
         store = ControlStore.open_read_only(store_module.campaign_store_root(campaign))
         store_campaign = store.load_campaign(manifest['campaign_id'])
         store_module.require_store_campaign_matches_plan(manifest, store_campaign)
-        store.replay(external_root=capture._host_data_root(campaign), require_external=True)
+        replay_read_only_store(store, external_root=capture._host_data_root(campaign))
         vc.validate_vc_control(campaign, manifest)
         if hasattr(case, 'project_root'):
             project.read_project_history_snapshot(case.project_root)

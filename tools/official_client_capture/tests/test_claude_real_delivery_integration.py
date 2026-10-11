@@ -407,6 +407,38 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
             self.assertEqual(len(calls), len(expected))
         self.assertEqual(self.store.list_receipt_refs("candidate_delivery"), [])
 
+        # 原成功世界使用完整 Store reader；来源取得仅合并在一次调用内，
+        # 第二次仍须重新取证。此处观察真实通道，不替换任何图校验返回值。
+        from tools.official_client_capture.tests import claude_fault_chain_world as world
+        # 资格夹具的外部原件原来独立存放；完整 Store 重放使用统一数据根。
+        # 只补原生产器已生成的字节，已有路径必须一致，不能覆盖冲突原件。
+        for source in sorted(self.fixture.external_root.rglob("*")):
+            if not source.is_file():
+                continue
+            target = self.root / source.relative_to(self.fixture.external_root)
+            if target.exists():
+                self.assertEqual(target.read_bytes(), source.read_bytes())
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open("xb") as stream:
+                    stream.write(source.read_bytes())
+                target.chmod(source.stat().st_mode & 0o777)
+        read_only = ControlStore.open_read_only(self.store.root)
+        before = {path.relative_to(self.store.root): path.read_bytes()
+                  for path in self.store.root.rglob("*") if path.is_file()}
+        results = []
+        for _ in range(2):
+            with mock.patch.object(verifier, "verify_batch", wraps=verifier.verify_batch) as batch:
+                results.append(world.replay_read_only_store(read_only, external_root=self.root))
+            batch.assert_called_once()
+            self.assertIsNone(execution._SOURCE_BATCH.get())
+            self.assertIsNone(execution._QUALIFICATION_READ_BATCH.get())
+        self.assertEqual(results[0], results[1])
+        self.assertEqual({path.relative_to(self.store.root): path.read_bytes()
+                          for path in self.store.root.rglob("*") if path.is_file()}, before)
+        with self.assertRaisesRegex(ValueError, "只读 Store"):
+            world.replay_read_only_store(self.store, external_root=self.root)
+
     def test_public_stage_validation_still_runs_complete_graph(self) -> None:
         self._complete()
         package = self.store.load_object(self._seal_review())["payload"]
