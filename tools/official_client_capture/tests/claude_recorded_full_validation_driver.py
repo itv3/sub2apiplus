@@ -11,6 +11,7 @@ import argparse
 import contextlib
 import contextvars
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -454,8 +455,69 @@ def _recorded_staging_abort(campaign: Path, action_path: Path, attempt_dir: Path
                       for name in ("PREPARED", "ABORT", "batch.json", "run-manifest.json")}}
 
 
+def _vc6_time_budget() -> dict[str, Any]:
+    """完整79方法与两层动作消费同一固定预算，不接受环境中的任意秒数。"""
+    return source.full79_time_budget()
+
+
+def _vc6_budget_action(action: dict[str, Any], budget: dict[str, Any]) -> dict[str, Any]:
+    """仅加宽两个明确交付动作；命令、配置、审核摘要及执行项完整保留。"""
+    from tools.official_client_capture import claude_upgrade_delivery as delivery
+
+    fields = {delivery.RUN_ACTION_ID: "run_timeout_seconds",
+              delivery.FINALIZE_ACTION_ID: "finalize_timeout_seconds"}
+    name = action.get("action_id")
+    if (name not in fields or action.get("operation") != "VC-6:" + name
+            or action.get("item_ids") != [name]):
+        raise replay.ReplayError("预算后继只允许两个精确VC-6交付动作")
+    old, current = action.get("timeout_seconds"), budget[fields[name]]
+    if (isinstance(old, bool) or not isinstance(old, (int, float))
+            or not 0 < old <= current):
+        raise replay.ReplayError("VC-6预算后继必须保持或加宽合法动作时限")
+    return {**action, "timeout_seconds": float(current)}
+
+
+def _vc6_plan_timeout_transition(original: dict[str, Any], current: dict[str, Any],
+                                budget: dict[str, Any]) -> None:
+    """旧计划已由原失败reader验真；整个计划唯有动作timeout可以向宽演进。"""
+    actions = original.get("actions")
+    if not isinstance(actions, list) or len(actions) != 1 or not isinstance(actions[0], dict):
+        raise replay.ReplayError("VC-6预算后继缺唯一原交付动作")
+    expected = {**original, "actions": [_vc6_budget_action(actions[0], budget)]}
+    if current != expected:
+        raise replay.ReplayError("VC-6预算后继改变了timeout以外的原完整计划")
+
+
+def _vc6_pending_step(name: str, intent: Any, *, original_intent: Any) -> tuple[str, Any]:
+    """原started仅作只读前序；较宽后继另存步骤，原complete仍走原消费者。"""
+    active = _SUCCESSOR.get()
+    if active is None:
+        return name, intent
+    from tools.official_client_capture import claude_upgrade_delivery as delivery
+    from tools.official_client_capture.tests import claude_fault_chain_world as stops
+
+    if name not in {"VC6", "batch:" + delivery.RUN_ACTION_ID, "batch:" + delivery.FINALIZE_ACTION_ID}:
+        raise replay.ReplayError("预算后继步骤超出VC-6未完成范围")
+    key = "recorded-full-step:" + name
+    saved = stops.load_state(key)
+    if saved is None or saved.get("status") == "complete":
+        return name, intent
+    identity = {"data": active["data"], "source_state": active["source_state"], "intent": original_intent}
+    if saved.get("status") != "started" or any(saved.get(field) != value for field, value in identity.items()):
+        raise replay.ReplayError("完整后继停点意图漂移：" + name)
+    path = stops._state_path(key)
+    if path is None:
+        raise replay.ReplayError("VC-6预算后继缺原持久停点")
+    original_stop = source.binding(source.bound(source.binding(path)))
+    budget = _vc6_time_budget()
+    digest = hashlib.sha256(json.dumps(budget, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    return name + ":budget:" + digest, {"execution_intent": intent, "time_budget": budget,
+                                       "original_stop": original_stop}
+
+
 def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaign: Path,
-                               name: str, argv: list[str], **options: Any) -> dict[str, Any]:
+                               name: str, argv: list[str], *, timeout_transition: bool = False,
+                               **options: Any) -> dict[str, Any]:
     """未派发继续原序号；已提交失败只消费正式对账闭合，再由原生产者派 N+1。"""
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import codex_upgrade_supervisor as supervisor
@@ -531,7 +593,13 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
         expected = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
         for old_path, binding in action_bindings.items():
             source.bound(binding, root=data)
-            if old_path.read_bytes() != expected:
+            if timeout_transition and old_path in previous:
+                # 旧失败原件按自己的完整计划对账；只允许已提交VC-6的N+1加宽时限。
+                # 当前同序号原件（包括PREPARED＋ABORT）仍必须逐字相等，不能就地换计划。
+                if options.get("phase") != "VC-6" or _SUCCESSOR.get() is None:
+                    raise replay.ReplayError("预算后继没有显式VC-6恢复作用域")
+                _vc6_plan_timeout_transition(source.read(old_path), value, _vc6_time_budget())
+            elif old_path.read_bytes() != expected:
                 raise replay.ReplayError("拒派续作动作计划与原字节不同")
         consumed = True
         return path if path in action_bindings else original_write(path, value)
@@ -563,14 +631,44 @@ def _recorded_batch(original: Callable[..., Any], data: Path, campaign: Path,
         if saved is not None and saved.get("intent") == original_intent:
             options = original_options
 
+    intent = {"data": data, "campaign": campaign, "argv": argv, "options": options}
+    timeout_transition = False
+    if (_SUCCESSOR.get() is not None and options.get("phase") == "VC-6"
+            and isinstance(options.get("action"), dict)):
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+
+        if name in {delivery.RUN_ACTION_ID, delivery.FINALIZE_ACTION_ID}:
+            saved = stops.load_state("recorded-full-step:" + step)
+            if saved is not None:
+                prior = saved.get("intent")
+                if not isinstance(prior, dict) or not isinstance(prior.get("options"), dict):
+                    raise replay.ReplayError("完整后继停点意图漂移：" + step)
+                prior_options = prior["options"]
+                prior_action = prior_options.get("action")
+                if not isinstance(prior_action, dict):
+                    raise replay.ReplayError("完整后继停点意图漂移：" + step)
+                expected = {**prior, "options": {**prior_options,
+                    "action": _vc6_budget_action(prior_action, _vc6_time_budget())}}
+                if intent != expected:
+                    raise replay.ReplayError("完整后继停点意图漂移：" + step)
+                if saved.get("status") == "complete":
+                    # 成功动作保持原时限与原意图；新的挂死上限不触发重做。
+                    options, intent = prior_options, prior
+                else:
+                    step, intent = _vc6_pending_step(step, intent, original_intent=prior)
+                    timeout_transition = True
+
     def dispatch() -> dict[str, Any]:
         active = _SUCCESSOR.get()
         if active is None or active.get("fresh_step") == step:
-            return original(data, campaign, name, argv, **options)
-        return _resume_undispatched_batch(original, data, campaign, name, argv, **options)
+            if not timeout_transition:
+                return original(data, campaign, name, argv, **options)
+        transition = {"timeout_transition": True} if timeout_transition else {}
+        return _resume_undispatched_batch(original, data, campaign, name, argv, **transition, **options)
 
     return _control_step(step, dispatch, resume_actions=True,
-        intent={"data": data, "campaign": campaign, "argv": argv, "options": options},
+        intent=intent,
         verify=lambda result: _verify_batch_result(campaign, result))
 
 
@@ -1278,11 +1376,16 @@ def deliver(data: Path, campaign: Path, typed_fixture: Any) -> dict[str, Any]:
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_capture import claude_upgrade_delivery as delivery
     action = _control_step("vc6-run-intent", typed_fixture.run_action)
+    if _SUCCESSOR.get() is not None:
+        action = _vc6_budget_action(action, _vc6_time_budget())
     batches = [vc1._batch(data, campaign, delivery.RUN_ACTION_ID, [], phase="VC-6", action=action)]
     status = delivery.delivery_status(campaign, CANDIDATE)
     if status.get("status") not in {"delivery_awaiting_finalize", "ready_for_operator_release"}:
         raise replay.ReplayError(f"真实候选交付没有完成四阶段：{status.get('status')}")
-    action = _control_step("vc6-finalize-intent", lambda: delivery.finalize_action(campaign, CANDIDATE, status["review_sha256"]))
+    action = _control_step("vc6-finalize-intent", lambda:
+        delivery.finalize_action(campaign, CANDIDATE, status["review_sha256"]))
+    if _SUCCESSOR.get() is not None:
+        action = _vc6_budget_action(action, _vc6_time_budget())
     batches.append(vc1._batch(data, campaign, delivery.FINALIZE_ACTION_ID, [], phase="VC-6", action=action))
     result = delivery.load_stage_result(campaign, CANDIDATE, manifest=upgrade.load_campaign_manifest(campaign))
     if (result is None or result.get("release_state") != "ready_for_operator_release"
@@ -1538,13 +1641,16 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
                 typed_fixture = delivery_fixture.TypedDeliveryFixture(campaign, CANDIDATE,
                     control_path=data / "control/recorded-delivery-control.json")
             if cursor is not None:
-                cursor["initializations"][typed_name] = "complete"
-                stops.save_state("cursor:" + cursor_name, cursor)
+                updated = {**cursor, "initializations": {**cursor["initializations"], typed_name: "complete"}}
+                # 首次初始化实际完成才保存；原恢复游标同值只读，不改写已完成停点。
+                if updated != cursor:
+                    stops.save_state("cursor:" + cursor_name, updated)
             # 原守卫与既有来源作用域延续到首次完成复核和最终重放结束。
             # 退出外层栈仍沿原夹具清理，不承接通过结论或建立新的守卫身份。
             delivery_read_stack.enter_context(typed_fixture)
             return deliver(data, campaign, typed_fixture)
-        stages["VC-6"] = _control_step("VC6", run_delivery, resume_actions=True,
+        vc6_step, vc6_intent = _vc6_pending_step("VC6", None, original_intent=None)
+        stages["VC-6"] = _control_step(vc6_step, run_delivery, resume_actions=True, intent=vc6_intent,
             verify=lambda result: _verify_completed_stage(campaign, ("VC-6",), result))
         final = vc1.load_continuation(continuation_path, continuation_digest)
         manifest = final["manifest"]

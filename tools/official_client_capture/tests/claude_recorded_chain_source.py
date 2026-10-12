@@ -37,6 +37,26 @@ CONTROL_PROJECTION_SCHEMA = "claude-recorded-control-envelope/v1"
 ORIGIN_MANIFEST_FILENAME = ".origin-relay-manifest.json"
 
 
+def full79_time_budget() -> dict[str, Any]:
+    """完整79回归的唯一执行上限；原方法、子外壳与最终单元消费同值。
+
+    四小时是挂死保护上限，不是预计耗时或性能通过凭证。业务三层截止、原始起点、
+    旧动作和旧失败原件仍由原消费者核验；VC-1及其它八链继续原v2时间合同。
+    不读取任意预算环境变量，也不签发预算授权或覆盖已派发动作。
+    """
+    from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
+
+    original = certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")
+    method_seconds = 4 * 3600
+    return {**original, "schema_version": "claude-recorded-chain-time-budget/v3",
+            "run_timeout_seconds": 7200, "finalize_timeout_seconds": 3600,
+            "method_timeout_seconds": method_seconds,
+            "chain_timeout_seconds": method_seconds + 60,
+            "chain_budget_seconds": method_seconds + 120,
+            "unit_timeout_seconds": method_seconds + 180,
+            "outer_timeout_seconds": method_seconds + 240}
+
+
 def read(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_bytes())
     if not isinstance(value, dict):

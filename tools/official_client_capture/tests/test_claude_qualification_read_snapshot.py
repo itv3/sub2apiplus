@@ -340,6 +340,225 @@ class QualificationReadSnapshotTests(unittest.TestCase):
         self.assertEqual(canonical_json_bytes(current), canonical_json_bytes(previous))
         self.assertEqual(current["result"], "pass")
 
+        # 沿同一 UID 加入当前夹具读侧接线。只生成小型文件现场配置，不启动守卫／VC-6。
+        # 原交接外再消费两次真实资格报告，测同一纯读方法内另开只读句柄的实际扫描。
+        import contextlib
+        from contextvars import copy_context
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture.tests import claude_typed_vc6_fixture as typed
+        from tools.official_client_capture.tests import claude_fault_chain_world as world
+        from tools.official_client_capture.tests.test_claude_real_delivery_integration import QualifiedFileRuntime
+        from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
+        from tools.official_client_control import delivery_execution as execution, qualification_bindings
+
+        configuration, context, _environment = fixture_world(self.root)
+        qualification = {**self.qualification, "store_relative": "store", "external_root_relative": "external",
+            "sealed_result_binding": configuration["candidate"]["qualification"]["sealed_result_binding"]}
+        configuration["candidate"]["qualification"] = copy.deepcopy(qualification)
+        # 此短验不消费回退资格；保留原文件现场的独立回退输入，仅对齐同根路径。
+        configuration["rollback"]["qualification"].update(store_relative="store", external_root_relative="external")
+        configuration_path = self.root / "inputs/scoped-configuration.json"
+        guard.write_json_once(configuration_path, configuration)
+        context.update(campaign_id=self.campaign_id, candidate_id=qualification["candidate_id"],
+                       data_root=str(self.root), configuration_ref=guard.binding(self.root, configuration_path))
+        control_path = self.root / "scoped-control.json"
+        guard.write_json_once(control_path, {"schema_version": typed.CONTROL_SCHEMA, "fixture_only": True,
+            "formal_version_semantics_certified": False, "context": context,
+            "calls": str(self.root / "unused-calls.jsonl"), "physical_calls": str(self.root / "unused-physical.jsonl"),
+            "failures": [], "kill_at": None, "crash_at": None, "failed_gates": []})
+        campaign = self.writer.load_campaign(self.campaign_id)
+        original_handoff, original_view = delivery._vc5_handoff, executor._QualificationStoreView
+        original_list, original_index = ControlStore.list_facts, world._read_only_fact_index
+        original_init, original_verify = original_view.__init__, original_view.verify_fact_snapshots
+        original_runtime_check = QualifiedFileRuntime.check_qualification
+        scans, views, indexes, contexts, comparisons, late_change = [], [], [], [], [], [None]
+        other_path = self.root / "other-store"
+        shutil.copytree(self.writer.root, other_path)
+        other_reader = ControlStore.open_read_only(other_path)
+        expected_fact = self.writer.load_fact(qualification["candidate_ref"])
+        use_other, other_views = [False], []
+
+        def scan(store, campaign_id, dimension=None):
+            scans.append((store, campaign_id, dimension))
+            return original_list(store, campaign_id, dimension)
+
+        def remember_view(view, store):
+            original_init(view, store)
+            views.append(view)
+
+        def verify(view):
+            # 资格子视图的尾验继续执行；只在外层原 Store 的最终复核前注入真实漂移。
+            if late_change[0] is not None and type(view._store) is ControlStore:
+                mutate, late_change[0] = late_change[0], None
+                mutate()
+            return original_verify(view)
+
+        @contextlib.contextmanager
+        def observe_index(reader):
+            with original_index(reader) as indexed:
+                indexes.append(indexed)
+                yield indexed
+
+        def consume(store, observed_campaign, candidate_id):
+            result = original_handoff(store, observed_campaign, candidate_id)
+            for _ in range(2):
+                qualification_bindings.validate_replay_report(current, qualification, store,
+                    external_root=self.fixture.external_root, trusted_data_root=self.root)
+            if use_other[0]:
+                unrelated = executor._QualificationStoreView(other_reader)
+                self.assertIs(unrelated._store, other_reader)
+                self.assertEqual(unrelated.load_fact(qualification["candidate_ref"]), expected_fact)
+                unrelated.verify_fact_snapshots()
+                other_views.append(unrelated)
+            contexts.append((copy_context(), executor._QualificationStoreView))
+            return result
+
+        with mock.patch.object(ControlStore, "list_facts", new=scan), \
+                mock.patch.object(original_view, "__init__", new=remember_view), \
+                mock.patch.object(original_view, "verify_fact_snapshots", new=verify), \
+                mock.patch.object(world, "_read_only_fact_index", new=observe_index), \
+                mock.patch.object(delivery, "_vc5_handoff", new=consume), \
+                mock.patch.object(guard.GuardClient, "call", side_effect=AssertionError("短验禁止守卫 RPC")):
+            baseline = consume(self.writer, campaign, qualification["candidate_id"])
+            baseline_scans = len(scans)
+            self.assertFalse(indexes)
+            with typed.source_scope(control_path):
+                self.assertIs(QualifiedFileRuntime.check_qualification, original_runtime_check)
+                self.assertIs(typed.ControlledFileRuntime.check_qualification, original_runtime_check)
+                for _ in range(2):
+                    scans.clear()
+                    begin = len(views)
+                    self.assertEqual(delivery._vc5_handoff(self.writer, campaign, qualification["candidate_id"]), baseline)
+                    self.assertEqual([(campaign_id, dimension) for _store, campaign_id, dimension in scans],
+                                     [(self.campaign_id, None)] * 2)
+                    self.assertLess(len(scans), baseline_scans)
+                    comparisons.append({"原完整扫描": baseline_scans, "同次复用完整扫描": len(scans)})
+                    scoped_views = [view for view in views[begin:] if view._store is indexes[-1]]
+                    self.assertEqual(len(scoped_views), 2)
+                    self.assertFalse(indexes[-1].active)
+                    for view in scoped_views:
+                        with self.assertRaisesRegex(ValueError, "已退出"):
+                            view.list_facts(self.campaign_id)
+                    copied, view_class = contexts[-1]
+                    with self.assertRaisesRegex(ValueError, "已退出"):
+                        copied.run(view_class, self.reader)
+                    self.assertIsNone(execution._SOURCE_BATCH.get())
+                    self.assertIsNone(execution._QUALIFICATION_READ_BATCH.get())
+                self.assertIsNot(indexes[-1], indexes[-2])
+
+                # 同一方法内另一个真实根也不得借当前索引；保留它独立的完整首读／尾验。
+                scans.clear()
+                use_other[0] = True
+                try:
+                    self.assertEqual(delivery._vc5_handoff(self.writer, campaign, qualification["candidate_id"]), baseline)
+                finally:
+                    use_other[0] = False
+                self.assertIsNone(other_views[-1]._scoped_index)
+                self.assertEqual(sum(store.root == other_path for store, _campaign, _dimension in scans), 2)
+                self.assertEqual(sum(store.root == self.writer.root for store, _campaign, _dimension in scans), 2)
+
+                # 只读输入和派生句柄仍按原接线，不把当前索引权限推广到其它消费者。
+                class DerivedStore(ControlStore):
+                    pass
+                for store in (self.reader, DerivedStore(self.writer.root)):
+                    scans.clear()
+                    count = len(indexes)
+                    self.assertEqual(delivery._vc5_handoff(store, campaign, qualification["candidate_id"]), baseline)
+                    self.assertEqual(len(indexes), count)
+                    self.assertEqual(len(scans), baseline_scans)
+                with execution._qualification_read_batch(self.writer, current_execution=False):
+                    scans.clear()
+                    count = len(indexes)
+                    self.assertEqual(delivery._vc5_handoff(self.writer, campaign, qualification["candidate_id"]), baseline)
+                    self.assertEqual(len(indexes), count)
+                    self.assertEqual(len(scans), baseline_scans)
+
+
+                # 原完整 replay 自建索引也要覆盖；有同根父索引时，嵌套只登记原工厂的子索引。
+                expected_replay = self.reader.replay(external_root=self.fixture.external_root, require_external=True)
+                scans.clear()
+                with world._read_only_fact_index(self.reader) as parent_index:
+                    self.assertEqual(world.replay_read_only_store(parent_index,
+                        external_root=self.fixture.external_root), expected_replay)
+                    parent_index.verify_fact_snapshots()
+                self.assertEqual(len(scans), 2)
+                self.assertFalse(parent_index.active)
+
+                # 来源批次是精确作用域对象；资格收口 active=False 时来源批次仍须活着且同一索引。
+                scans.clear()
+                with world._read_only_fact_index(self.reader) as indexed:
+                    source_batch = execution._SourceBatch(indexed, {}, {})
+                    source_token = execution._SOURCE_BATCH.set(source_batch)
+                    try:
+                        with execution._qualification_read_batch(indexed, current_execution=False):
+                            execution._QUALIFICATION_READ_BATCH.get().active = False
+                            for _ in range(2):
+                                qualification_bindings.validate_replay_report(current, qualification, indexed,
+                                    external_root=self.fixture.external_root, trusted_data_root=self.root)
+                                self.assertIs(views[-1]._store, indexed)
+                        indexed.verify_fact_snapshots()
+                    finally:
+                        source_batch.active = False
+                        execution._SOURCE_BATCH.reset(source_token)
+                self.assertEqual(len(scans), 2)
+                self.assertFalse(indexed.active)
+                with self.assertRaisesRegex(ValueError, "已退出"):
+                    views[-1].list_facts(self.campaign_id)
+
+                # 同根但不属于当前登记索引的批次不能借用；每份报告保留独立完整首读／尾验。
+                scans.clear()
+                with world._read_only_fact_index(self.reader) as indexed:
+                    source_batch = execution._SourceBatch(self.reader, {}, {})
+                    source_token = execution._SOURCE_BATCH.set(source_batch)
+                    try:
+                        qualification_bindings.validate_replay_report(current, qualification, indexed,
+                            external_root=self.fixture.external_root, trusted_data_root=self.root)
+                        self.assertIsNot(views[-1]._store, indexed)
+                        indexed.verify_fact_snapshots()
+                    finally:
+                        source_batch.active = False
+                        execution._SOURCE_BATCH.reset(source_token)
+                self.assertEqual(len(scans), 2)
+                self.assertFalse(indexed.active)
+
+                # 包入口必须调用原拒绝并销毁索引；成功包验收仍由原 typed 组合 UID 承担。
+                count = len(indexes)
+                with self.assertRaisesRegex(ControlError, "Package v2"):
+                    execution.validate_delivery_package(self.writer, {"schema_version": "invalid"})
+                self.assertEqual(len(indexes), count + 1)
+                self.assertFalse(indexes[-1].active)
+
+                reference = qualification["candidate_ref"]
+                fact_path = self.fact_path(self.writer.load_fact(reference))
+                campaign_path = self.writer.root / "campaigns" / (self.campaign_id + ".json")
+                fact_raw, campaign_raw = fact_path.read_bytes(), campaign_path.read_bytes()
+                for label, mutate in (("事实原字节", lambda: fact_path.write_bytes(fact_raw + b" ")),
+                                      ("事实权限", lambda: fact_path.chmod(0o400)),
+                                      ("Campaign 原字节", lambda: campaign_path.write_bytes(campaign_raw + b" "))):
+                    with self.subTest(late_drift=label):
+                        late_change[0] = mutate
+                        try:
+                            with self.assertRaises((ControlError, guard.GuardError)):
+                                delivery._vc5_handoff(self.writer, campaign, qualification["candidate_id"])
+                            self.assertIsNone(late_change[0])
+                            self.assertFalse(indexes[-1].active)
+                        finally:
+                            late_change[0] = None
+                            fact_path.chmod(0o600)
+                            fact_path.write_bytes(fact_raw)
+                            campaign_path.write_bytes(campaign_raw)
+                scans.clear()
+                self.assertEqual(delivery._vc5_handoff(self.writer, campaign, qualification["candidate_id"]), baseline)
+                self.assertEqual(len(scans), 2)
+                self.assertFalse(indexes[-1].active)
+            self.assertIs(executor._QualificationStoreView, original_view)
+        self.assertFalse(self.writer.read_only)
+        self.assertEqual(self.writer._file_modes, (0o600,))
+        self.assertFalse((self.root / "unused-calls.jsonl").exists())
+        self.assertFalse((self.root / "unused-physical.jsonl").exists())
+        import json
+        print(json.dumps({"同 UID 当前客户端只读扫描对照": comparisons}, ensure_ascii=False), flush=True)
+
     def test_frozen_identity_replays_after_current_tool_tree_changes(self) -> None:
         before = self.replay()
         key = "official_client_control/store.py"

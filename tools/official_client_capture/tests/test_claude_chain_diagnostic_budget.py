@@ -229,6 +229,26 @@ class DiagnosticBudgetTests(unittest.TestCase):
             self.assertLess(contract['method_timeout_seconds'], contract['chain_timeout_seconds'])
             self.assertLess(contract['chain_timeout_seconds'], contract['chain_budget_seconds'])
             self.assertLess(contract['chain_budget_seconds'], contract['unit_timeout_seconds'])
+        # full79只在原完整外壳和最终消费者选v3；共享VC1及其他八链保持原值。
+        from tools.official_client_capture.tests import claude_recorded_chain_source as source
+        contract = source.full79_time_budget()
+        self.assertEqual(contract, {
+            'schema_version': 'claude-recorded-chain-time-budget/v3', 'method_count': 1,
+            'run_timeout_seconds': 7200, 'finalize_timeout_seconds': 3600,
+            'method_timeout_seconds': 14400, 'chain_timeout_seconds': 14460,
+            'chain_budget_seconds': 14520, 'unit_timeout_seconds': 14580,
+            'outer_timeout_seconds': 14640,
+        })
+        layers = [contract[key] for key in ('method_timeout_seconds', 'chain_timeout_seconds',
+            'chain_budget_seconds', 'unit_timeout_seconds', 'outer_timeout_seconds')]
+        self.assertTrue(all(after - before == 60 for before, after in zip(layers, layers[1:])))
+        self.assertLess(contract['run_timeout_seconds'] + contract['finalize_timeout_seconds'] + 250,
+                        contract['method_timeout_seconds'])
+        self.assertEqual(chains.certification.claude_recorded_time_budget('vc-chain.claude-vc1-capture'), {
+            'schema_version': 'claude-recorded-chain-time-budget/v2', 'method_count': 1,
+            'method_timeout_seconds': 3600, 'chain_timeout_seconds': 3660,
+            'chain_budget_seconds': 3720, 'unit_timeout_seconds': 3780,
+        })
         with self.assertRaises(KeyError):
             chains.certification.claude_recorded_time_budget('vc-chain.codex')
 

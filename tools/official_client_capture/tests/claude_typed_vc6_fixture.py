@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import functools
+from contextvars import ContextVar
 import json
 import multiprocessing
 import os
@@ -495,6 +496,61 @@ def source_scope(control_path: Path) -> Iterator[None]:
         expected_store_root = (root / configuration["candidate"]["qualification"]["store_relative"]).resolve()
         original_handoff, original_validate_plan = delivery._vc5_handoff, execution.validate_plan
         original_validate_graph = execution.validate_evidence_graph
+        original_validate_package = execution.validate_delivery_package
+        original_qualification_view = executor._QualificationStoreView
+        read_store: ContextVar[Any] = ContextVar("typed_vc6_read_once_store", default=None)
+
+        class ScopedQualificationStoreView(original_qualification_view):
+            """同次纯读的资格视图使用既有事实索引；原过滤与原件校验保持完整。"""
+
+            def __init__(self, store: Any):
+                self._scoped_index = None
+                indexed = read_store.get()
+                batch = execution._SOURCE_BATCH.get()
+                if batch is not None and (batch.active is not True or batch.store is not indexed):
+                    indexed = None
+                if (indexed is not None and type(store) is ControlStore
+                        and store.read_only is True and store.root == expected_store_root):
+                    # 新句柄仍由原构造器验证根；这里只借同方法活索引，不复用资格通过结论。
+                    # 索引保留父消费者的权限闭集，资格视图仍实读原字节并做自身末尾复核。
+                    indexed.require_active()
+                    self._scoped_index = indexed
+                    store = indexed
+                super().__init__(store)
+
+            def require_current(self) -> None:
+                # 资格视图也持有事实副本；底层索引到期后不能从自己的副本返回旧记录。
+                if self._scoped_index is not None:
+                    self._scoped_index.require_active()
+
+            def load_campaign(self, campaign_id: str) -> dict[str, Any]:
+                self.require_current()
+                return super().load_campaign(campaign_id)
+
+            def _fact_snapshot(self, campaign_id: str) -> list[dict[str, Any]]:
+                self.require_current()
+                return super()._fact_snapshot(campaign_id)
+
+            def verify_fact_snapshots(self) -> None:
+                self.require_current()
+                super().verify_fact_snapshots()
+
+        @contextlib.contextmanager
+        def index_scope(store: Any) -> Iterator[Any]:
+            # 普通完整 replay 另建索引；只登记原工厂实际产出的同根活索引，不认鸭子属性。
+            previous = read_store.get()
+            eligible = (store.read_only is True and store.root == expected_store_root
+                        and (type(store) is ControlStore or store is previous))
+            with _read_only_fact_index(store) as indexed:
+                if not eligible:
+                    yield indexed
+                    return
+                indexed.require_active()
+                token = read_store.set(indexed)
+                try:
+                    yield indexed
+                finally:
+                    read_store.reset(token)
 
         def read_once(store: Any, consume: Any) -> Any:
             # 只优化本回归世界的一次只读消费；嵌套批次与其它句柄沿原接线。
@@ -507,8 +563,12 @@ def source_scope(control_path: Path) -> Iterator[None]:
             reader._root_modes, reader._file_modes = store._root_modes, store._file_modes
             with _read_only_fact_index(reader) as indexed:
                 indexed._root_modes, indexed._file_modes = reader._root_modes, reader._file_modes
-                result = consume(indexed)
-                indexed.verify_fact_snapshots()
+                token = read_store.set(indexed)
+                try:
+                    result = consume(indexed)
+                    indexed.verify_fact_snapshots()
+                finally:
+                    read_store.reset(token)
             return result
 
         def handoff(store: Any, campaign: Any, candidate_id: str) -> dict[str, Any]:
@@ -525,11 +585,19 @@ def source_scope(control_path: Path) -> Iterator[None]:
             return read_once(store, lambda indexed: original_validate_graph(indexed, payload,
                 current_execution=current_execution, frozen_configuration_ref=frozen_configuration_ref))
 
+        def validate_package(store: Any, package: Any, *, current_execution: bool = False) -> None:
+            # 原包先建立来源／资格批次；在入口包住索引，嵌套 Plan／图才使用同一次读侧。
+            read_once(store, lambda indexed: original_validate_package(indexed, package,
+                current_execution=current_execution))
+
         with mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {EXECUTOR_NAME: factory}, clear=True), \
                 mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: verify}, clear=True), \
                 mock.patch.object(delivery, "_vc5_handoff", handoff), \
                 mock.patch.object(execution, "validate_plan", validate_plan), \
-                mock.patch.object(execution, "validate_evidence_graph", validate_graph):
+                mock.patch.object(execution, "validate_evidence_graph", validate_graph), \
+                mock.patch.object(execution, "validate_delivery_package", validate_package), \
+                mock.patch.object(executor, "_QualificationStoreView", ScopedQualificationStoreView), \
+                mock.patch.object(stops, "_read_only_fact_index", index_scope):
             yield
 
 
@@ -864,12 +932,20 @@ class TypedDeliveryFixture:
         self._save_record()
 
     def _save_record(self) -> None:
-        """记录原固定坐标与活身份，不生成服务或 Campaign 的成功证据。"""
+        """首次记录固定坐标；恢复活守卫时同值只读，不改写原停点。"""
 
-        stops.save_state(self.record_name, {'campaign': self.campaign, 'candidate_id': self.candidate_id,
+        payload = {'campaign': self.campaign, 'candidate_id': self.candidate_id,
             'data': self.data, 'configuration_binding': self.configuration_binding,
             'control_path': self.control_path, 'context': self.context,
-            'guard_identity': self.saved_guard_identity})
+            'guard_identity': self.saved_guard_identity}
+        if self.restored_guard:
+            if stops.load_state(self.record_name) != payload:
+                raise guard.GuardError('恢复原typed停点与当前活身份不一致，禁止改写')
+            index = stops.load_state('typed-live-guards')
+            if index is None or self.record_name not in index['records']:
+                raise guard.GuardError('恢复原typed停点缺活守卫索引，禁止补写')
+            return
+        stops.save_state(self.record_name, payload)
         if self.saved_guard_identity is not None and stops.record_root() is not None:
             index = stops.load_state('typed-live-guards') or {'records': []}
             if self.record_name not in index['records']:

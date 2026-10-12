@@ -382,7 +382,7 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 mock.patch.object(shell.time, "time", return_value=first_started + 7200), \
                 mock.patch.object(shell.time, "monotonic", side_effect=[1000.0, 1000.25, 1001.0]):
             case._run_pending_full_validation()
-        budget = shell.certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")
+        budget = source.full79_time_budget()
         self.assertEqual(second["options"]["timeout"], budget["chain_timeout_seconds"])
         self.assertEqual(second["argv"], command)
         self.assertEqual((world / "record.json").read_bytes(), original_record)
@@ -411,10 +411,73 @@ class RecordedFullPreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(replay.ReplayError, "绑定摘要或字节数漂移"):
                 driver._control_step("input", action, intent={"choice": "原选择"})
         self.assertEqual(action.call_count, 1)
+        self._assert_vc6_timeout_successor_preserves_original_stops()
         self._assert_recorded_assertion_timeout_selection()
         self._assert_recorded_compiled_action_readers()
         self._assert_vc6_completed_source_consumers()
         self._assert_vc6_configuration_plan_gap_consumers()
+
+    def _assert_vc6_timeout_successor_preserves_original_stops(self) -> None:
+        """原UID核窄预算后继：旧成功不重做，旧started不覆写，命令漂移拒绝。"""
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+
+        budget = source.full79_time_budget()
+        original_action = {"action_id": delivery.RUN_ACTION_ID, "operation": "VC-6:" + delivery.RUN_ACTION_ID,
+            "item_ids": [delivery.RUN_ACTION_ID], "timeout_seconds": 1801.0,
+            "command": ["python3", "same-cli", "--configuration", "same-configuration"]}
+        current_action = driver._vc6_budget_action(original_action, budget)
+        old_plan = {"schema_version": "original-plan", "execute_item_ids": [delivery.RUN_ACTION_ID],
+                    "reuse_item_ids": [], "actions": [original_action]}
+        new_plan = {**old_plan, "actions": [current_action]}
+        driver._vc6_plan_timeout_transition(old_plan, new_plan, budget)
+        for field, value in (("command", ["changed"]), ("item_ids", ["other"]),
+                             ("timeout_seconds", 3600.0)):
+            with self.subTest(vc6_plan_drift=field), self.assertRaises(replay.ReplayError):
+                driver._vc6_plan_timeout_transition(old_plan,
+                    {**new_plan, "actions": [{**current_action, field: value}]}, budget)
+
+        for status in ("started", "complete"):
+            with self.subTest(vc6_stop_status=status):
+                root = self.data / ("vc6-budget-stops-" + status)
+                root.mkdir()
+                campaign = self.data / "evidence/campaigns/budget-control-only"
+                origin = source.write(self.data / ("vc6-budget-origin-" + status + ".json"), {"fixture_only": True})
+                output = source.write(self.data / ("vc6-budget-result-" + status + ".json"), {"control_only": True})
+                result = {"source": source.binding(output)}
+                active = {"data": self.data, "source_state": source.binding(origin)}
+                token = driver._SUCCESSOR.set(active)
+                try:
+                    with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(root)}):
+                        name, key = delivery.RUN_ACTION_ID, "recorded-full-step:batch:" + delivery.RUN_ACTION_ID
+                        old_options = {"phase": "VC-6", "action": original_action}
+                        intent = {"data": self.data, "campaign": campaign, "argv": [], "options": old_options}
+                        saved = {**active, "intent": intent, "status": status}
+                        if status == "complete":
+                            saved.update(result=result, bindings=[source.binding(output)])
+                        stops.save_state(key, saved)
+                        originals = {path: path.read_bytes() for path in root.iterdir()}
+                        producer = mock.Mock(return_value=result)
+                        with mock.patch.object(driver, "_resume_undispatched_batch", return_value=result) as resume, \
+                                mock.patch.object(driver, "_verify_batch_result") as verify:
+                            options = {"phase": "VC-6", "action": current_action}
+                            first = driver._recorded_batch(producer, self.data, campaign, name, [], **options)
+                            self.assertEqual(driver._recorded_batch(producer, self.data, campaign, name, [], **options), first)
+                            producer.assert_not_called()
+                            if status == "started":
+                                resume.assert_called_once_with(producer, self.data, campaign, name, [],
+                                    timeout_transition=True, **options)
+                                self.assertEqual(stops.load_state(key)["status"], "started")
+                            else:
+                                resume.assert_not_called()
+                                self.assertEqual(set(root.iterdir()), set(originals))
+                            self.assertGreaterEqual(verify.call_count, 2)
+                            with self.assertRaisesRegex(replay.ReplayError, "停点意图漂移"):
+                                driver._recorded_batch(producer, self.data, campaign, name, [], phase="VC-6",
+                                    action={**current_action, "command": ["changed"]})
+                        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+                finally:
+                    driver._SUCCESSOR.reset(token)
 
     def _assert_vc6_configuration_plan_gap_consumers(self) -> None:
         """沿原 UID 核未 Plan 窗口、资格闭包及原入口形成 Plan 后的全 Store。

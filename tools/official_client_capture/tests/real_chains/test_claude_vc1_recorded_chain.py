@@ -161,7 +161,7 @@ class ClaudeRecordedVC1ChainTests(unittest.TestCase):
             self.skipTest("未验证：宿主不允许建立完整链 mount/net namespace")
         from tools.official_client_capture.tests import claude_recorded_full_validation_driver as driver
 
-        time_budget = certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")
+        time_budget = source.full79_time_budget()
         started = time.monotonic()
         @contextlib.contextmanager
         def successor_directory():
