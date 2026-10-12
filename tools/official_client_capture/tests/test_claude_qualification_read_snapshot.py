@@ -669,11 +669,65 @@ class QualificationReadSnapshotTests(unittest.TestCase):
         self.assertEqual((recorded.verify_recorded_manifest, recorded.optional_policy, recorded._read, recorded.binding), original_recorded)
         self.assertIs(acceptance.build_contract_payload, original_contract)
 
+        # 同一 UID 核本地轮次的共同祖先去重；只是调用数断言，不充当现场耗时证明。
+        local_round_paths = [self.root / "inputs/scoped-local-round-first.txt",
+            self.root / "inputs/scoped-local-round-second.txt"]
+        for path in local_round_paths:
+            guard.write_once(path, b"local-round\n")
+        ancestors = {parent for path in local_round_paths for parent in path.parents}
+        original_lstat = Path.lstat
+        metadata_counts, round_reads, change_raw = {}, [], [False]
+        def count_metadata(path, *arguments, **options):
+            metadata_counts[path] = metadata_counts.get(path, 0) + 1
+            return original_lstat(path, *arguments, **options)
+        def round_reader(path):
+            round_reads.append(path)
+            raw = original_read_bytes(path)
+            return raw[:-1] + b" " if change_raw[0] else raw
+        local_snapshot = typed._LocalActiveFileReads(self.root, guard.GuardError)
+        try:
+            with mock.patch.object(Path, "lstat", new=count_metadata):
+                for _ in range(2):
+                    metadata_counts.clear()
+                    local_snapshot.read_all([(path, round_reader) for path in local_round_paths])
+                    self.assertEqual(metadata_counts, {path: 2 for path in ancestors | set(local_round_paths)})
+                    metadata_counts.clear()
+                    local_snapshot.verify_metadata()
+                    self.assertEqual(metadata_counts, {path: 1 for path in ancestors | set(local_round_paths)})
+                metadata_counts.clear()
+                local_snapshot.verify_full()
+                self.assertEqual(metadata_counts, {path: 3 for path in ancestors | set(local_round_paths)})
+                self.assertEqual(round_reads, local_round_paths * 3)
+                # 元数据相同也要完整尾读；返回旧字节或只扫 stat 都不能通过。
+                change_raw[0] = True
+                with self.assertRaises(guard.GuardError):
+                    local_snapshot.verify_full()
+        finally:
+            local_snapshot.close()
+        # 共同祖先只读一次也不能漏掉轮内漂移；末尾必须再次核同一坐标。
+        shared_directory = local_round_paths[0].parent
+        directory_mode = shared_directory.stat().st_mode & 0o7777
+        ancestor_snapshot = typed._LocalActiveFileReads(self.root, guard.GuardError)
+        def drift_ancestor(path):
+            raw = original_read_bytes(path)
+            shared_directory.chmod(directory_mode & ~0o200)
+            return raw
+        try:
+            with self.assertRaises(guard.GuardError):
+                ancestor_snapshot.read_all([(path, drift_ancestor) for path in local_round_paths])
+        finally:
+            ancestor_snapshot.close()
+            shared_directory.chmod(directory_mode)
+
         # 精确本地 Mapping 才消除 .items() 后的裸根二读；原 typed 绑定仍实读。
         local_path = self.root / "inputs/scoped-local-source.txt"
         guard.write_once(local_path, b"local-source\n")
         local_binding = guard.binding(self.root, local_path)
-        originals = executor._LocalSourceOriginals(self.root, [local_binding], canonical_sha256([local_binding]))
+        # 同一批次并集含本次内容未直接引用的原件；它也须在下次消费前拒绝漂移。
+        neighbor_path = self.root / "inputs/scoped-local-neighbor.txt"
+        guard.write_once(neighbor_path, b"local-neighbor\n")
+        local_rows = sorted([local_binding, guard.binding(self.root, neighbor_path)], key=lambda row: row["path"])
+        originals = executor._LocalSourceOriginals(self.root, local_rows, canonical_sha256(local_rows))
         origin = {"authority": executor.AUTHORITY, "source_scope": "regression_fixture",
             "configuration_sha256": "a" * 64, "service_instance_id": "local-read-test", "operations_index_binding": None}
         content = {"binding": local_binding, "origin": origin}
@@ -707,26 +761,63 @@ class QualificationReadSnapshotTests(unittest.TestCase):
                     mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: local_verifier}, clear=True):
                 naked_reads.clear()
                 secure_reads.clear()
+                with execution._source_batch_scope(self.reader, [source_item]):
+                    for _ in range(2):
+                        self.assertIs(execution._verified_source(self.reader, content, origin), verified)
+                    saved_local.append((copy_context(), execution._verified_source))
+                # 并集首读、两个当前 typed 绑定及并集尾读；后续并集命中核完整元数据。
+                self.assertEqual((len(naked_reads), len(secure_reads)), (0, 4))
+                copied, expired_source = saved_local[-1]
+                with self.assertRaisesRegex(guard.GuardError, "已退出"):
+                    copied.run(expired_source, self.reader, content, origin)
+                # 可写批次不采取首尾实读策略，仍逐次完整实读并集。
+                secure_reads.clear()
                 with execution._source_batch_scope(self.writer, [source_item]):
                     for _ in range(2):
                         self.assertIs(execution._verified_source(self.writer, content, origin), verified)
-                    saved_local.append((copy_context(), execution._verified_source))
-                self.assertEqual((len(naked_reads), len(secure_reads)), (0, 5))
+                self.assertEqual(len(secure_reads), 5)
+                # 纯读消费异常也完整尾读，复制上下文不能续用异常批次。
+                secure_reads.clear()
+                with self.assertRaisesRegex(RuntimeError, "本地原消费异常"):
+                    with execution._source_batch_scope(self.reader, [source_item]):
+                        execution._verified_source(self.reader, content, origin)
+                        saved_local.append((copy_context(), execution._verified_source))
+                        raise RuntimeError("本地原消费异常")
+                self.assertEqual(len(secure_reads), 3)
                 copied, expired_source = saved_local[-1]
                 with self.assertRaisesRegex(guard.GuardError, "已退出"):
-                    copied.run(expired_source, self.writer, content, origin)
+                    copied.run(expired_source, self.reader, content, origin)
                 local_raw = original_secure(local_path)
                 for label, change in (("原字节", lambda: local_path.write_bytes(local_raw + b" ")),
                         ("权限", lambda: local_path.chmod(0o400))):
                     with self.subTest(local_read_drift=label):
                         try:
                             with self.assertRaises(guard.GuardError):
-                                with execution._source_batch_scope(self.writer, [source_item]):
-                                    execution._verified_source(self.writer, content, origin)
+                                with execution._source_batch_scope(self.reader, [source_item]):
+                                    execution._verified_source(self.reader, content, origin)
                                     change()
                         finally:
                             local_path.chmod(0o600)
                             local_path.write_bytes(local_raw)
+                neighbor_raw = original_secure(neighbor_path)
+                for label, change in (("非本次绑定原字节", lambda: neighbor_path.write_bytes(neighbor_raw + b" ")),
+                        ("非本次绑定权限", lambda: neighbor_path.chmod(0o400))):
+                    immediate_failures = []
+                    with self.subTest(local_union_drift=label):
+                        try:
+                            with self.assertRaises(guard.GuardError):
+                                with execution._source_batch_scope(self.reader, [source_item]):
+                                    execution._verified_source(self.reader, content, origin)
+                                    change()
+                                    try:
+                                        execution._verified_source(self.reader, content, origin)
+                                    except guard.GuardError as error:
+                                        immediate_failures.append(error)
+                                        raise
+                            self.assertEqual(len(immediate_failures), 1)
+                        finally:
+                            neighbor_path.chmod(0o600)
+                            neighbor_path.write_bytes(neighbor_raw)
                 # 非本地 Mapping 沿原分支，不能把该优化推广到 RPC 字节快照。
                 from dataclasses import replace
                 remote = replace(verified, bytes_by_path={local_binding["path"]: local_raw})
@@ -735,8 +826,8 @@ class QualificationReadSnapshotTests(unittest.TestCase):
                 remote_verifier.verify_batch = lambda store, items: [remote for _ in items]
                 with mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: remote_verifier}, clear=True):
                     naked_reads.clear()
-                    with execution._source_batch_scope(self.writer, [source_item]):
-                        self.assertIs(execution._verified_source(self.writer, content, origin), remote)
+                    with execution._source_batch_scope(self.reader, [source_item]):
+                        self.assertIs(execution._verified_source(self.reader, content, origin), remote)
                     self.assertEqual(len(naked_reads), 1)
             self.assertIs(execution._source_batch_scope, original_source_scope)
             self.assertIs(execution._verified_source, original_source)

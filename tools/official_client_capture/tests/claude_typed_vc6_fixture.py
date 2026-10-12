@@ -127,6 +127,85 @@ class _ActiveFileReads:
         self.contracts.clear()
 
 
+class _LocalActiveFileReads(_ActiveFileReads):
+    """本地清单按轮核全体坐标；共同祖先轮首轮尾各核一次。
+
+    元数据基线仍属于同一个活批次，不缓存验证通过结论。每轮的祖先去重
+    仅合并重复 lstat；正常和异常收尾继续完整实读并核对全部原字节。
+    公共 recorded 读取仍使用原 _ActiveFileReads，不承接这里的轮次策略。
+    """
+
+    def __init__(self, root: Path, error: Any):
+        super().__init__(root, error)
+        self.ancestors: dict[Path, tuple[Any, ...]] = {}
+
+    def _coordinate(self, path: Path, *, file: bool) -> tuple[Any, ...]:
+        self.require_active()
+        if file and (not path.is_absolute() or ".." in path.parts or not path.is_relative_to(self.root)):
+            raise self.error("typed 原件读取越出本次根")
+        try:
+            info = path.lstat()
+        except OSError as error:
+            raise self.error("typed 原件或祖先已不可读") from error
+        if (stat.S_ISLNK(info.st_mode) or (file and not stat.S_ISREG(info.st_mode))
+                or (not file and not stat.S_ISDIR(info.st_mode))):
+            raise self.error("typed 原件或祖先类型发生漂移")
+        coordinate = (str(path), info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+        if file or path.is_relative_to(self.root):
+            coordinate += (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        return coordinate
+
+    def _verify_ancestors(self, paths: Any = ()) -> None:
+        self.require_active()
+        current = set(self.ancestors)
+        for path in paths:
+            if not path.is_absolute() or ".." in path.parts or not path.is_relative_to(self.root):
+                raise self.error("typed 原件读取越出本次根")
+            if path not in self.files:
+                current.update(path.parents)
+        for path in sorted(current):
+            observed = self._coordinate(path, file=False)
+            if self.ancestors.setdefault(path, observed) != observed:
+                raise self.error("typed 原件路径、权限或元数据漂移")
+
+    def read_all(self, rows: list[tuple[Path, Any]], *, current: bool = True) -> None:
+        """首读与尾读完整实读；纯读批次命中仍核全清单坐标，异常也核轮尾。"""
+        self.require_active()
+        self._verify_ancestors(path for path, _reader in rows)
+        try:
+            for path, reader in rows:
+                previous = self.files.get(path)
+                before = self._coordinate(path, file=True)
+                if previous is not None and before != previous[0]:
+                    raise self.error("typed 原件路径、权限或元数据漂移")
+                if previous is not None and not current:
+                    continue
+                raw = reader(path)
+                after = self._coordinate(path, file=True)
+                if (before != after or not isinstance(raw, bytes)
+                        or (previous is not None and raw != previous[1])):
+                    raise self.error("typed 原件实读期间或原字节发生漂移")
+                if previous is None:
+                    self.files[path] = (after, raw, reader)
+        finally:
+            self._verify_ancestors()
+
+    def verify_metadata(self) -> None:
+        self.require_active()
+        for path, (expected, _raw, _reader) in self.files.items():
+            if self._coordinate(path, file=True) != expected:
+                raise self.error("typed 原件路径、权限或元数据漂移")
+        self._verify_ancestors()
+
+    def verify_full(self) -> None:
+        self.read_all([(path, reader) for path, (_metadata, _raw, reader) in list(self.files.items())])
+        self.verify_metadata()
+
+    def close(self) -> None:
+        super().close()
+        self.ancestors.clear()
+
+
 @contextlib.contextmanager
 def _recorded_read_scope(root: Path) -> Iterator[None]:
     """只在一次原 manifest 验证内复用公共读取和画像纯计算。
@@ -691,7 +770,7 @@ def source_scope(control_path: Path) -> Iterator[None]:
                     previous[1].require_active()
                     yield
                     return
-                snapshot = _ActiveFileReads(root, guard.GuardError)
+                snapshot = _LocalActiveFileReads(root, guard.GuardError)
                 token = local_reads.set((batch, snapshot))
                 try:
                     yield
@@ -715,17 +794,17 @@ def source_scope(control_path: Path) -> Iterator[None]:
                     or type(verified.bytes_by_path) is not executor._LocalSourceOriginals
                     or verified.bytes_by_path.root != root or verified.trusted_data_root != root):
                 return original_verified_source(store, content, origin)
-            # 仅复制原 _verified_source 的精确本地分支：同一清单项只做一次当前实读，
-            # 省去 .items() 懒读后把 Mapping 清空再裸根读取的第二遍。每次消费
-            # 仍遍历清单全集；后续原来源、守卫连续性、当前实例和 typed 绑定不省略。
+            # 精确本地清单在只读批次中首尾完整实读，中间逐次核全清单坐标；
+            # 原 Mapping 不替换，所以连续性、Profile／门禁投影和 typed 的实际
+            # 绑定仍由原读者当前实读。可写批次保留每次完整实读，不提前授予输出。
             execution._origin(origin)
             verifier = execution._source_verifier(str(origin["authority"]))
             if verifier is None or batch.verifiers.get(origin["authority"]) is not verifier:
                 raise execution.ControlError("本次批量来源的 Store、通道登记或生命周期已变化")
             core = {key: value for key, value in content.items() if key != "origin"}
             originals, snapshot = verified.bytes_by_path, current[1]
-            for path in originals.bindings:
-                snapshot.read(root / path, lambda _actual, name=path: originals[name], current=True)
+            snapshot.read_all([(root / path, lambda _actual, name=path: originals[name])
+                for path in originals.bindings], current=store.read_only is not True)
             execution._check_verified_source(verified, core, origin)
             if verified.guard_continuity is not None:
                 from tools.official_client_control.canonical import parse_json_bytes
