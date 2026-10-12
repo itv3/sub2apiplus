@@ -609,7 +609,7 @@ def recorded_full79_bridge(path: Path, digest: str, *, client: str,
         plain(env.get(key))
     plain(unit["cwd"])
     if (unit["cores"] != 1 or unit["memory_mb"] != 1024 or unit["timeout_seconds"] !=
-            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):
+            certification.claude_unit_timeout_seconds("vc-chain.claude-full-validation-only")):
         raise ValueError("完整79额度或正式时间合同漂移")
     intent_path = plain(env[full.BUDGET_CARRY_INTENT_ENV])
     raw = json.loads(intent_path.read_text(encoding="utf-8"))

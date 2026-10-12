@@ -76,7 +76,7 @@ def recorded_bridge_fixture(root: Path, sources: dict[str, str]) -> tuple[Path, 
                      "run-scenario", "--client", "claude", "--name", "vc-chain.claude-full-validation-only",
                      "--staging-parent", str(parent), "--scenario-root", str(scenario)],
             "cwd": str(REPO), "env": env, "cores": 1, "memory_mb": 1024, "weight": 30.0,
-            "timeout_seconds": certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]}
+            "timeout_seconds": certification.claude_unit_timeout_seconds("vc-chain.claude-full-validation-only")}
     unit["inputs"] = entry_gates.pre_a3_inputs(
         certification.scenario_test_module("vc-chain.claude-full-validation-only", "claude").replace(".", "/") + ".py",
         entry_gates.pre_a3_fixture_resolved("claude", sources) +

@@ -46,15 +46,7 @@ def full79_time_budget() -> dict[str, Any]:
     """
     from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
 
-    original = certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")
-    method_seconds = 4 * 3600
-    return {**original, "schema_version": "claude-recorded-chain-time-budget/v3",
-            "run_timeout_seconds": 7200, "finalize_timeout_seconds": 3600,
-            "method_timeout_seconds": method_seconds,
-            "chain_timeout_seconds": method_seconds + 60,
-            "chain_budget_seconds": method_seconds + 120,
-            "unit_timeout_seconds": method_seconds + 180,
-            "outer_timeout_seconds": method_seconds + 240}
+    return certification.claude_full79_time_budget()
 
 
 def read(path: Path) -> dict[str, Any]:

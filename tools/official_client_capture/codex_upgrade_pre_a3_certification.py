@@ -994,6 +994,32 @@ def claude_recorded_time_budget(name: str) -> dict[str, Any]:
             "schema_version": "claude-recorded-chain-time-budget/v2"}
 
 
+CLAUDE_FULL79_NAME = "vc-chain.claude-full-validation-only"
+CLAUDE_FULL79_TIME_SCHEMA = "claude-recorded-chain-time-budget/v3"
+
+
+def claude_full79_time_budget() -> dict[str, Any]:
+    """完整79的 v3 时间合同：四小时只作挂死保护；与 v2 的一小时共享合同分开，仅完整79的正式消费者选用。"""
+
+    method_seconds = 4 * 3600
+    return {**claude_recorded_time_budget(CLAUDE_FULL79_NAME),
+            "schema_version": CLAUDE_FULL79_TIME_SCHEMA,
+            "run_timeout_seconds": 7200, "finalize_timeout_seconds": 3600,
+            "method_timeout_seconds": method_seconds,
+            "chain_timeout_seconds": method_seconds + 60,
+            "chain_budget_seconds": method_seconds + 120,
+            "unit_timeout_seconds": method_seconds + 180,
+            "outer_timeout_seconds": method_seconds + 240}
+
+
+def claude_unit_timeout_seconds(name: str) -> int:
+    """录制链单元的正式执行上限：完整79取 v3，VC1 保持 v2。"""
+
+    if name == CLAUDE_FULL79_NAME:
+        return claude_full79_time_budget()["unit_timeout_seconds"]
+    return claude_recorded_time_budget(name)["unit_timeout_seconds"]
+
+
 def scenario_names(client: str = DEFAULT_CLIENT) -> list[str]:
     """认证场景全集：登记的受管测试场景加上进程内实现的场景（Codex 的补账场景），顺序即认证里的顺序。"""
 
@@ -1352,7 +1378,7 @@ def plan_scenario_commands(
             "memory_mb": 1024,
             "timeout_seconds": (claude_fault_time_budget(name)["unit_timeout_seconds"]
                                 if client == "claude" and name in CLAUDE_FAULT_METHOD_COUNTS else
-                                claude_recorded_time_budget(name)["unit_timeout_seconds"]
+                                claude_unit_timeout_seconds(name)
                                 if client == "claude" and name in CLAUDE_RECORDED_CHAIN_IDS else
                                 REAL_CHAIN_TIMEOUT_SECONDS if name in real_chains else SCENARIO_TIMEOUT_SECONDS),
             "weight": SCENARIO_SECONDS.get(name, 30.0),
