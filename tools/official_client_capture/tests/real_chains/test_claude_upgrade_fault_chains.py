@@ -3505,6 +3505,7 @@ class _PredecessorMisuseScenarios(predecessor_tests._PredecessorCase):
     def _verify_predecessor(self, state: dict[str, Any]) -> None:
         """最小合成总计划没有正式 VC 控制；用其原 Store 与外部原件读侧核验，不冒充正式 Campaign。"""
 
+        from tools.official_client_capture import claude_upgrade_store as store_module
         from tools.official_client_control.store import ControlStore
 
         for binding in state['campaign_bindings']:
