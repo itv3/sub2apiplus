@@ -770,12 +770,15 @@ class QualificationReadSnapshotTests(unittest.TestCase):
                 copied, expired_source = saved_local[-1]
                 with self.assertRaisesRegex(guard.GuardError, "已退出"):
                     copied.run(expired_source, self.reader, content, origin)
-                # 可写批次不采取首尾实读策略，仍逐次完整实读并集。
+                # 可写批次沿原实读路径；审核合法重设目录权限不能变成来源漂移。
+                from tools.official_client_capture.capturelib.security import ensure_private_directory
+                naked_reads.clear()
                 secure_reads.clear()
                 with execution._source_batch_scope(self.writer, [source_item]):
                     for _ in range(2):
                         self.assertIs(execution._verified_source(self.writer, content, origin), verified)
-                self.assertEqual(len(secure_reads), 5)
+                        ensure_private_directory(local_path.parent, self.root)
+                self.assertEqual((len(naked_reads), len(secure_reads)), (2, 4))
                 # 纯读消费异常也完整尾读，复制上下文不能续用异常批次。
                 secure_reads.clear()
                 with self.assertRaisesRegex(RuntimeError, "本地原消费异常"):

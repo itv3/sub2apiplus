@@ -758,10 +758,13 @@ def source_scope(control_path: Path) -> Iterator[None]:
 
         @contextlib.contextmanager
         def source_batch_scope(store: Any, items: list[dict[str, Any]]) -> Iterator[None]:
-            # 原工厂先取得并验证精确清单；只在同根活批次内部登记读取生命周期。
+            # 原工厂先取得并验证精确清单；只为同根只读活批次登记读取生命周期。
+            # 可写消费者的审核会合法设置发布目录权限，不能冻结其目录元数据。
+            # 它们完整沿原来源读取路径，不能借只读优化跨越目录或产物写入。
             with original_source_scope(store, items):
                 batch, previous = execution._SOURCE_BATCH.get(), local_reads.get()
                 if (batch is None or batch.active is not True or batch.store is not store
+                        or store.read_only is not True
                         or store.root != expected_store_root
                         or (type(store) is not ControlStore and store is not read_store.get())):
                     yield
