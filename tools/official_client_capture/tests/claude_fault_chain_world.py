@@ -1308,10 +1308,10 @@ def _verified_preflight_retry(case: Any, name: str, saved: dict[str, Any], invok
 
 @contextlib.contextmanager
 def _read_only_fact_index(store: Any):
-    """仅供一次完整重放使用的事实索引；不采用资格视图的交付过滤。
+    """仅供一次只读消费使用的事实索引；不采用资格视图的交付过滤。
 
-    首次验链、事实原字节和坐标签名均复用现有资格快照机制。完整重放
-    仍使用原 Store 实现，成功前显式复核快照；异常和正常退出都销毁索引。
+    首次验链、事实原字节和坐标签名均复用现有资格快照机制。交接、证据图、
+    Plan 或完整重放仍调用原消费者，成功前显式复核快照；异常和正常退出都销毁索引。
     """
     from copy import deepcopy
     from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import _QualificationStoreView

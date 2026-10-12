@@ -384,12 +384,27 @@ def _recorded_failed_batch(campaign: Path, action_path: Path) -> dict[str, Any]:
     actual = supervisor._staging_commit_for_run(campaign, state, inner, run_dir)
     audit = supervisor._audit_command(run_dir)
     expected_actions = _recorded_compiled_actions(campaign, action, phase, inner)
-    if (actual != commit or state.get("state") != "failed" or audit["state"] != "failed" or audit["audit_incomplete"]
+    terminal = state.get("state")
+    if (actual != commit or terminal not in {"failed", "watchdog-aborted"} or audit["state"] != terminal
+            or audit.get("integrity_errors") or (audit["audit_incomplete"] and terminal != "watchdog-aborted")
             or inner["actions"] != expected_actions or inner["execute_items"] != action["execute_item_ids"]
             or inner["reuse_items"] != action["reuse_item_ids"]):
         raise replay.ReplayError("原失败批次 COMMIT、动作或父 run 审计不闭合")
     if not upgrade._supervisor_run_reconciled(campaign, run_dir):
         raise replay.ReplayError("原失败父 run 尚未正式对账闭合；先执行 reconcile-supervisor-run")
+    if terminal == "watchdog-aborted":
+        # 中止不是动作失败或成功；沿共享 0-W 合同核原诊断、停止收据和总账绑定。
+        # 正式消费者继续决定可重派性，不补动作退出码或改变原终态。
+        stop = supervisor.read_stop_receipt(run_dir)
+        if (stop["event_type"] != terminal
+                or any(stop[field] != state.get(field) or stop[field] != inner[field]
+                       for field in ("campaign_id", "phase"))
+                or any(stop[field] != state.get(field) for field in ("owner_pid", "owner_nonce"))):
+            raise replay.ReplayError("原中止停止收据与父 run 身份不闭合")
+        interrupted = supervisor._require_reconciled_watchdog_parent(
+            state, run_dir, campaign, prior_manifest=inner, label="完整后继原中止批次")
+        if interrupted is None or interrupted.get("reservation_exists") is not False:
+            raise replay.ReplayError("原中止批次有预约，不能按零请求父 run 重派")
     receipt = campaign / "control" / reconciler.RECONCILIATION_DIR / f"run-{run_dir.name}" / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
     document = source.read(source.bound(source.binding(receipt), root=campaign))
     if (document.get("campaign_id") != inner["campaign_id"] or document.get("reservation_exists") is not False
@@ -458,7 +473,7 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
                 != list(range(int(previous[0].name.split("-", 1)[0]), sequence)))):
         raise replay.ReplayError("拒派停点缺唯一原序号动作计划或连续原失败批次，禁止重新生成")
     recoveries = [_recorded_failed_batch(campaign, path) for path in previous]
-    previous_runs = {item["run_dir"] for item in recoveries}
+    previous_runs = {item["run_dir"]: item for item in recoveries}
     action_bindings = {path: source.binding(path) for path in previous_paths}
     for binding in action_bindings.values():
         source.bound(binding, root=data)
@@ -485,11 +500,23 @@ def _resume_undispatched_batch(original: Callable[..., Any], data: Path, campaig
         state = supervisor._read_state(run_dir)
         parent = supervisor._run_inner_manifest(run_dir)
         if (state.get("campaign_id") != manifest["campaign_id"] or parent["campaign_id"] != manifest["campaign_id"]
-                or parent["batch_sequence"] >= sequence
-                or state.get("state") != ("failed" if run_dir in previous_runs else "stopped")):
+                or parent["batch_sequence"] >= sequence):
             raise replay.ReplayError("原监督器存在本批或未收口父run，不能按派发前拒绝续作")
+        if state.get("state") != "stopped":
+            recovery = previous_runs.get(run_dir)
+            if recovery is None:
+                # 前序其他阶段的失败原件也保留；必须按其原序号计划重验正式对账。
+                # 不能把已经消费的 VC-5 失败改签 stopped，或因其存在而整体重跑。
+                candidates = list(actions.glob(f"{parent['batch_sequence']}-*.json"))
+                if len(candidates) != 1:
+                    raise replay.ReplayError("前序失败父run缺唯一原序号动作计划")
+                recovery = _recorded_failed_batch(campaign, candidates[0])
+            frozen_state = source.read(source.bound(recovery["run_state"], root=data))
+            if recovery["run_dir"] != run_dir or frozen_state != state:
+                raise replay.ReplayError("前序失败父run的正式对账绑定已漂移")
         audit = supervisor._audit_command(run_dir)
-        if audit["audit_incomplete"] or audit["state"] != ("failed" if run_dir in previous_runs else "stopped"):
+        if (audit.get("integrity_errors") or audit["state"] != state["state"]
+                or (audit["audit_incomplete"] and state["state"] != "watchdog-aborted")):
             raise replay.ReplayError("前序父run未通过原审计，禁止续作拒派批次")
     original_write = source.write
     consumed = False
@@ -1325,6 +1352,7 @@ def _verify_completed_stage(campaign: Path, phases: tuple[str, ...], result: Any
     """完成阶段只有当前真实checkpoint、正式消费者与Store仍闭合才能跳过动作。"""
     from tools.official_client_capture import claude_upgrade as upgrade
     from tools.official_client_control.store import ControlStore
+    from tools.official_client_capture.tests.claude_fault_chain_world import replay_read_only_store
 
     _verify_stage_batches(campaign, result)
     manifest = upgrade.load_campaign_manifest(campaign)
@@ -1332,7 +1360,8 @@ def _verify_completed_stage(campaign: Path, phases: tuple[str, ...], result: Any
     for phase in phases:
         upgrade._replay_vc_checkpoint(campaign, plan, phase,
             revision=1 if phase in upgrade.CANDIDATE_VC_PHASES else None)
-    ControlStore(campaign / "control-store").replay(external_root=_SUCCESSOR.get()["data"], require_external=True)
+    store = ControlStore.open_read_only(campaign / "control-store")
+    replay_read_only_store(store, external_root=_SUCCESSOR.get()["data"])
     if "VC-3" in phases:
         upgrade._load_stage_result(campaign, "classify")
         upgrade._load_stage_result(campaign, "stage-profile")
@@ -1357,6 +1386,7 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
     from tools.official_client_capture import codex_upgrade_project_ledger as project
     from tools.official_client_capture import codex_upgrade_timing_ledger as timing
     from tools.official_client_control.store import ControlStore
+    from tools.official_client_capture.tests.claude_fault_chain_world import replay_read_only_store
     from tools.official_client_capture.tests import claude_typed_vc6_fixture as delivery_fixture
 
     started = time.monotonic()
@@ -1399,7 +1429,8 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
                                                resume_actions=True, verify=verify_capture)
         stages["VC-5-accept"] = _control_step("VC5-accept", lambda: compare_and_accept(data, campaign), resume_actions=True,
             verify=lambda result: _verify_completed_stage(campaign, ("VC-5",), result))
-    with installed(Path(candidate_state["path"]), candidate_state["sha256"]):
+    with installed(Path(candidate_state["path"]), candidate_state["sha256"]), \
+            contextlib.ExitStack() as delivery_read_stack:
         def run_delivery():
             from tools.official_client_capture.tests import claude_fault_chain_world as stops
             typed_name, cursor_name = "typed-vc6:" + str(campaign.resolve()), "recorded-full-delivery"
@@ -1421,8 +1452,10 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
             if cursor is not None:
                 cursor["initializations"][typed_name] = "complete"
                 stops.save_state("cursor:" + cursor_name, cursor)
-            with typed_fixture:
-                return deliver(data, campaign, typed_fixture)
+            # 原守卫与既有来源作用域延续到首次完成复核和最终重放结束。
+            # 退出外层栈仍沿原夹具清理，不承接通过结论或建立新的守卫身份。
+            delivery_read_stack.enter_context(typed_fixture)
+            return deliver(data, campaign, typed_fixture)
         stages["VC-6"] = _control_step("VC6", run_delivery, resume_actions=True,
             verify=lambda result: _verify_completed_stage(campaign, ("VC-6",), result))
         final = vc1.load_continuation(continuation_path, continuation_digest)
@@ -1432,8 +1465,8 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
         for phase in ("VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"):
             path, _payload = upgrade._replay_vc_checkpoint(campaign, plan, phase, revision=1 if phase in upgrade.CANDIDATE_VC_PHASES else None)
             checkpoints[phase] = source.binding(path)
-        store = ControlStore(campaign / "control-store")
-        store_replay = store.replay(external_root=data, require_external=True)
+        store = ControlStore.open_read_only(campaign / "control-store")
+        store_replay = replay_read_only_store(store, external_root=data)
         store_campaign = store.load_campaign(manifest["campaign_id"])
         ledger = data / "control/timing"
         if (upgrade._campaign_timing_ledger_dir(campaign, manifest) != ledger or source.binding(project_root / "plan.json") != initial_project

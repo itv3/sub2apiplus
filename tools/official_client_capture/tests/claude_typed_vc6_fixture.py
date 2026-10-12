@@ -489,8 +489,47 @@ def source_scope(control_path: Path) -> Iterator[None]:
 
         verify.verify_batch = verify_batch
 
+        from tools.official_client_control.store import ControlStore
+        from tools.official_client_capture.tests.claude_fault_chain_world import _read_only_fact_index
+
+        expected_store_root = (root / configuration["candidate"]["qualification"]["store_relative"]).resolve()
+        original_handoff, original_validate_plan = delivery._vc5_handoff, execution.validate_plan
+        original_validate_graph = execution.validate_evidence_graph
+
+        def read_once(store: Any, consume: Any) -> Any:
+            # 只优化本回归世界的一次只读消费；嵌套批次与其它句柄沿原接线。
+            if (type(store) is not ControlStore or store.root != expected_store_root
+                    or store.read_only is not False or execution._SOURCE_BATCH.get() is not None
+                    or execution._QUALIFICATION_READ_BATCH.get() is not None):
+                return consume(store)
+            reader = ControlStore.open_read_only(store.root)
+            # 只读打开不得放宽原可写消费者的路径权限闭集。
+            reader._root_modes, reader._file_modes = store._root_modes, store._file_modes
+            with _read_only_fact_index(reader) as indexed:
+                indexed._root_modes, indexed._file_modes = reader._root_modes, reader._file_modes
+                result = consume(indexed)
+                indexed.verify_fact_snapshots()
+            return result
+
+        def handoff(store: Any, campaign: Any, candidate_id: str) -> dict[str, Any]:
+            return read_once(store, lambda indexed: original_handoff(indexed, campaign, candidate_id))
+
+        def validate_plan(store: Any, plan: Any, *, current_execution: bool = False) -> None:
+            # 原 Plan 消费者自带精确来源批次和资格批次；用途与当前身份校验原样传递。
+            read_once(store, lambda indexed: original_validate_plan(indexed, plan,
+                current_execution=current_execution))
+
+        def validate_graph(store: Any, payload: Any, *, current_execution: bool = False,
+                           frozen_configuration_ref: Any = None) -> execution.VerifiedSource:
+            # 原图读取及来源导出仍完整执行；返回前复核并销毁索引，之后才允许原封存写入。
+            return read_once(store, lambda indexed: original_validate_graph(indexed, payload,
+                current_execution=current_execution, frozen_configuration_ref=frozen_configuration_ref))
+
         with mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {EXECUTOR_NAME: factory}, clear=True), \
-                mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: verify}, clear=True):
+                mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: verify}, clear=True), \
+                mock.patch.object(delivery, "_vc5_handoff", handoff), \
+                mock.patch.object(execution, "validate_plan", validate_plan), \
+                mock.patch.object(execution, "validate_evidence_graph", validate_graph):
             yield
 
 

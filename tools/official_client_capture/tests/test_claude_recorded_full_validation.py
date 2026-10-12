@@ -413,6 +413,188 @@ class RecordedFullPreparationTests(unittest.TestCase):
         self.assertEqual(action.call_count, 1)
         self._assert_recorded_assertion_timeout_selection()
         self._assert_recorded_compiled_action_readers()
+        self._assert_vc6_completed_source_consumers()
+
+    def _assert_vc6_completed_source_consumers(self) -> None:
+        """原 UID 实跑驱动收尾和 typed 来源消费；不登记七阶段或物理交付通过。
+
+        前段动作、批次、checkpoint 与两账用准确坐标夹具隔离；只替换首次构造和文件现场。
+        原夹具进入／退出、来源登记、独立文件守卫、原件导出、来源验真和小 Store 全重放均实跑。
+        文件守卫使用既有配置 v1，封存来源为 operational_evidence/v2；不覆盖第二根资格投影。
+        """
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        from tools.official_client_capture import codex_upgrade_project_ledger as project
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_capture.tests import claude_typed_vc6_fixture as typed
+        from tools.official_client_capture.tests import test_claude_upgrade_arm64_delivery_executor as files
+        from tools.official_client_control import delivery_execution as execution
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.store import ControlStore
+        from tools.official_client_control.tests.fixtures import SyntheticCampaign
+
+        temporary = tempfile.TemporaryDirectory(prefix="typed-reader-", dir="/tmp")
+        self.addCleanup(temporary.cleanup)
+        data = Path(temporary.name).resolve() / "staging/data"
+        vc1._create_world_roots(data)
+        os.chown(data, -1, os.getegid())
+        configuration, context, _environment = files.fixture_world(data)
+        campaign = data / "evidence/campaigns/C-fixture"
+        guard.private_directory(campaign)
+        store = ControlStore.initialize(campaign / "control-store", "2026-10-12T00:00:00Z")
+        original = SyntheticCampaign(data, schema="v2", store=store,
+                                     external_root=data, external_prefix="control/typed-reader-originals")
+        original.campaign_id = "C-fixture"
+        original.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
+        self.assertGreaterEqual(original.tool_identity["policy_version"], 4)
+        for role in ("candidate", "rollback"):
+            configuration[role]["qualification"]["store_relative"] = store.root.relative_to(data).as_posix()
+        configuration["candidate"]["qualification"]["candidate_id"] = driver.CANDIDATE
+        configuration_path = data / "inputs/typed-reader-configuration.json"
+        guard.write_json_once(configuration_path, configuration)
+        context.update(candidate_id=driver.CANDIDATE, delivery_id=driver.CANDIDATE + "-d1",
+                       configuration_ref=guard.binding(data, configuration_path))
+        control_path = data / "control/recorded-delivery-control.json"
+        # 只跳过首次建场生产；进入／退出仍调用原类，守卫及 source_scope 不使用替身。
+        current = object.__new__(typed.TypedDeliveryFixture)
+        current.__dict__.update(campaign=campaign, candidate_id=driver.CANDIDATE, data=data,
+            configuration=configuration, context=context, control_path=control_path,
+            process=None, recorded_pid=None, saved_guard_identity=None, restored_guard=False, retained=False)
+        self.addCleanup(current.close)
+        records = data / "private-stops"
+        records.mkdir(mode=0o700)
+        origin = source.write(data / "control/typed-reader-state.json", {"fixture_only": True})
+        continuation_path = source.write(data / "control/typed-reader-continuation.json", {"fixture_only": True})
+        project_root = data / project.ledger_dir_name("claude")
+        source.write(project_root / "plan.json", {"fixture_only": True})
+        checkpoint_path = source.write(campaign / "control/typed-reader-checkpoint.json", {"fixture_only": True})
+        manifest = {"campaign_id": original.campaign_id}
+        stage = {"release_state": "ready_for_operator_release", "production_state": "not_activated"}
+        state = {"data_root": str(data), "inputs": {"bindings": {}}, "snapshot": {},
+                 "freeze": {"source_sentinel": {}}}
+        result_path = source.write(data / "control/typed-reader-result.json",
+                                   {"fixture_only": True, "status": "unverified"})
+        results = {"full-result": result_path, "VC0-VC1": {"continuation": source.binding(continuation_path)},
+            "official-accounting": {"operation_id": "typed-reader-official"}, "VC2-VC3": {}, "VC4": {},
+            "VC5-capture": {"accounting": {"operation_id": "typed-reader-candidate"}}, "VC5-accept": {}}
+        action_returned, installed_entries, batch_reads, consumer_reads = False, [], [], []
+        originals = {}
+        real_step, real_replay = driver._control_step, stops.replay_read_only_store
+        real_batch = executor.Arm64DeliveryExecutor.verify_origin_evidence_batch
+
+        def unchanged_files():
+            return {path: path.read_bytes() for path in data.rglob("*") if path.is_file()
+                    and records not in path.parents}
+
+        @contextlib.contextmanager
+        def installed(_path, _digest):
+            installed_entries.append(control_path.exists())
+            yield
+
+        def construct(actual_campaign, candidate_id, *, control_path):
+            self.assertEqual((actual_campaign, candidate_id), (campaign, driver.CANDIDATE))
+            self.assertFalse(control_path.exists())
+            guard.write_json_once(control_path, {"schema_version": typed.CONTROL_SCHEMA, "fixture_only": True,
+                "formal_version_semantics_certified": False, "context": context})
+            return current
+
+        def deliver(_data, _campaign, actual_fixture):
+            nonlocal action_returned, originals
+            self.assertIs(actual_fixture, current)
+            reader = executor.create_executor(typed.EXECUTOR_NAME, configuration, context)
+            snapshot = reader.freeze({"campaign_id": context["campaign_id"], "candidate_id": driver.CANDIDATE,
+                "delivery_id": context["delivery_id"], "candidate_image_digest": configuration["candidate"]["image_digest"],
+                "architecture": "linux/arm64", "runtime_profile_sha256": configuration["candidate"]["runtime_profile_sha256"],
+                "observation_window_seconds": 1, "delivery_gates": list(executor.DELIVERY_GATES)})
+            facts = snapshot["cores"]["deployment_configuration"]
+            payload = {"schema_version": execution.OPERATIONAL_V2, "persona": original.persona,
+                "manifest_id": "typed-reader-deployment", "evidence_type": "deployment_configuration",
+                "entries": [{"id": "deployment_configuration", "facts": facts}]}
+            reference = store.seal_object("operational_evidence", payload)
+            self.assertEqual(facts["origin"]["authority"], executor.AUTHORITY)
+            self.assertEqual(facts["origin"]["source_scope"], "regression_fixture")
+            self.assertEqual(store.list_object_refs("operational_evidence"), [reference])
+            self.assertEqual({path: path.read_bytes() for path in before_action}, before_action)
+            originals = unchanged_files()
+            action_returned = True
+            return {"stage": stage, "batches": [], "source": source.binding(control_path)}
+
+        def replay_store(actual_store, *, external_root):
+            self.assertTrue(action_returned)
+            self.assertEqual((actual_store.root, actual_store.read_only, external_root), (store.root, True, data))
+            # 先让实际消费者验来源；旧的内层 with 会在此因来源已撤销而拒绝，不能用空断言替代。
+            result = real_replay(actual_store, external_root=external_root)
+            self.assertIsNotNone(current.stack)
+            self.assertTrue(current.process.is_alive())
+            self.assertEqual(result["result"], "passed")
+            self.assertGreaterEqual(result["objects"], 2)
+            self.assertTrue(result["external_verified"])
+            self.assertEqual(unchanged_files(), originals)
+            consumer_reads.append(result)
+            return result
+
+        def verify_batch(reader, items):
+            batch_reads.append(action_returned)
+            return real_batch(reader, items)
+
+        def control_step(name, action, **options):
+            if name == "VC6":
+                return real_step(name, action, **options)
+            return results[name]
+
+        before_action = unchanged_files()
+        token = driver._SUCCESSOR.set({"data": data, "source_state": source.binding(origin)})
+        try:
+            with contextlib.ExitStack() as patches:
+                # 短验的系统临时根与其短 socket 根一致，仍由原临时目录合同检查。
+                patches.enter_context(mock.patch.object(tempfile, "tempdir", "/tmp"))
+                patches.enter_context(mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records)}))
+                patches.enter_context(mock.patch.dict(execution.SOURCE_VERIFIERS, {}, clear=True))
+                patches.enter_context(mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {}, clear=True))
+                for owner, name, value in (
+                        (driver.source, "load_state", state), (vc1, "load_continuation", {"campaign": campaign, "manifest": manifest}),
+                        (project, "find_project_ledger", project_root), (upgrade, "load_campaign_manifest", manifest),
+                        (upgrade, "_vc_campaign_plan", {}), (upgrade, "_replay_vc_checkpoint", (checkpoint_path, {})),
+                        (upgrade, "_campaign_timing_ledger_dir", data / "control/timing"),
+                        (driver, "_verify_project_accounting", {"project_head": {}}),
+                        (timing, "phase_ledger_state", {"status": "complete", "active_phase": None,
+                            "completed_phases": ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]}),
+                        (delivery, "load_stage_result", stage)):
+                    patches.enter_context(mock.patch.object(owner, name, return_value=value))
+                patches.enter_context(mock.patch.object(driver, "installed", new=installed))
+                patches.enter_context(mock.patch.object(driver, "_control_step", side_effect=control_step))
+                patches.enter_context(mock.patch.object(driver, "_verify_stage_batches"))
+                patches.enter_context(mock.patch.object(driver.replay, "assert_source_untouched"))
+                patches.enter_context(mock.patch.object(stops, "replay_read_only_store", side_effect=replay_store))
+                patches.enter_context(mock.patch.object(executor.Arm64DeliveryExecutor,
+                    "verify_origin_evidence_batch", autospec=True, side_effect=verify_batch))
+                patches.enter_context(mock.patch.object(typed, "serve_guard",
+                    new=lambda configuration, context, _control: files.guard_process(configuration, context)))
+                constructor = patches.enter_context(mock.patch.object(typed, "TypedDeliveryFixture", side_effect=construct))
+                producer = patches.enter_context(mock.patch.object(driver, "deliver", side_effect=deliver))
+                driver._run_chain_body(origin, source.binding(origin)["sha256"])
+                self.assertEqual(installed_entries, [False, False, False])
+                self.assertEqual(batch_reads, [False, True, True])
+                self.assertEqual(len(consumer_reads), 2)
+                constructor.assert_called_once_with(campaign, driver.CANDIDATE, control_path=control_path)
+                producer.assert_called_once_with(data, campaign, current)
+                self.assertIsNone(current.stack)
+                self.assertFalse(current.process.is_alive())
+                self.assertEqual(execution.SOURCE_VERIFIERS, {})
+                self.assertEqual(delivery.ENVIRONMENT_EXECUTORS, {})
+                # 完成停点再次消费仍实读 Store；退出来源栈不能承接上次通过，也不能重做生产器。
+                forbidden = mock.Mock(side_effect=AssertionError("完成停点不得重复生产器"))
+                with self.assertRaisesRegex(ControlError, "受管通道验收"):
+                    real_step("VC6", forbidden, resume_actions=True,
+                        verify=lambda _result: real_replay(ControlStore.open_read_only(store.root), external_root=data))
+                forbidden.assert_not_called()
+                self.assertEqual(unchanged_files(), originals)
+        finally:
+            driver._SUCCESSOR.reset(token)
+            current.close()
 
     def _assert_recorded_compiled_action_readers(self) -> None:
         """沿既有 UID 核 failed／ABORT 的读侧接线；真实编译规范化不替换，不冒称现场对账通过。
@@ -532,6 +714,54 @@ class RecordedFullPreparationTests(unittest.TestCase):
                                     with self.assertRaisesRegex(upgrade.ConfigurationError, "评估基线号必须是非负整数"):
                                         read()
                                 inner["evaluation_baseline"] = baseline
+                        # 原中止保持 watchdog 终态，只在共享 0-W 原对账证明通过后承接。
+                        # 这里核驱动调用合同；原监督器证明另由其真实合同测试和现场对账复核。
+                        state_reader, audit_reader = supervisor._read_state, supervisor._audit_command
+                        original_state, original_audit = state_reader.return_value, audit_reader.return_value
+                        state_reader.return_value = {"state": "watchdog-aborted", "campaign_id": campaign.name,
+                                                     "phase": phase, "owner_pid": os.getpid(), "owner_nonce": "typed-reader-owner"}
+                        audit_reader.return_value = {"state": "watchdog-aborted", "audit_incomplete": True,
+                                                     "integrity_errors": []}
+                        stop_path = run_dir / "stop-receipt.json"
+                        stop_path.unlink()
+                        supervisor._stop_receipt(run_dir, event_type="watchdog-aborted", reason="owner-process-not-alive",
+                            detected_at_epoch=1.0, owner_pid=os.getpid(), owner_nonce="typed-reader-owner",
+                            campaign_id=campaign.name, phase=phase)
+                        stopped_bytes = stop_path.read_bytes()
+                        try:
+                            with mock.patch.object(supervisor, "_require_reconciled_watchdog_parent",
+                                                   return_value={"reservation_exists": False}) as interruption:
+                                self.assertEqual(readers["failed"]()["action_plan"], source.binding(action_path))
+                                interruption.assert_called_once_with(state_reader.return_value, run_dir, campaign,
+                                    prior_manifest=inner, label="完整后继原中止批次")
+                                # 自摘要合法也不能冒用其他父 run 身份；reader 和身份绑定分别实跑。
+                                stopped = supervisor.read_stop_receipt(run_dir)
+                                for field, value in (("event_type", "failed"), ("campaign_id", "other-campaign"),
+                                                     ("phase", "VC-6"), ("owner_pid", os.getpid() + 1),
+                                                     ("owner_nonce", "other-owner")):
+                                    changed = {**stopped, field: value}
+                                    changed.pop("receipt_sha256")
+                                    changed["receipt_sha256"] = supervisor._sha256(supervisor._canonical(changed))
+                                    stop_path.write_text(json.dumps(changed), encoding="utf-8")
+                                    with self.assertRaisesRegex(replay.ReplayError, "停止收据.*身份不闭合"):
+                                        readers["failed"]()
+                                stop_path.write_text(json.dumps({**stopped, "receipt_sha256": "0" * 64}), encoding="utf-8")
+                                with self.assertRaisesRegex(supervisor.SupervisorError, "自摘要"):
+                                    readers["failed"]()
+                                stop_path.write_bytes(stopped_bytes)
+                                for invalid in (None, {"reservation_exists": True}):
+                                    interruption.return_value = invalid
+                                    with self.assertRaisesRegex(replay.ReplayError, "有预约"):
+                                        readers["failed"]()
+                                interruption.side_effect = supervisor.SupervisorError("原中止对账不闭合")
+                                with self.assertRaisesRegex(supervisor.SupervisorError, "原中止对账不闭合"):
+                                    readers["failed"]()
+                                audit_reader.return_value["integrity_errors"] = ["事件链漂移"]
+                                with self.assertRaisesRegex(replay.ReplayError, "审计不闭合"):
+                                    readers["failed"]()
+                        finally:
+                            state_reader.return_value, audit_reader.return_value = original_state, original_audit
+                            stop_path.write_bytes(originals[stop_path])
                         reconciled.return_value = False
                         with self.assertRaisesRegex(replay.ReplayError, "尚未正式对账闭合"):
                             readers["failed"]()

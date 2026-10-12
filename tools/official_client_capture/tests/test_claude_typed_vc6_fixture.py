@@ -303,8 +303,8 @@ class TypedFixtureInputTests(unittest.TestCase):
         self.assertIsNone(delivery.batch_action_kind(action, manifest))
         self.assertIsNone(supervisor.candidate_post_run_recovery_action(manifest, delivery.RUN_ACTION_ID))
         path.write_bytes(raw)
-        # 同一个原短验补独立守卫停点：用原 serve_guard 和原 _status 实握手，
-        # 不派发阶段、不生成 Store 结果；旧 guard 冷失效不能换 PID 追认。
+        # 同一个原短验复用独立守卫与真实资格世界，核三种纯读消费者的索引接线。
+        # 仅封存读取所需的真实 Freeze/Plan；不派发阶段，旧 guard 冷失效不能换 PID 追认。
         from tools.official_client_capture.tests import claude_fault_chain_world as stops
         from tools.official_client_control.tests.fixtures import ManagedToolTree
         from tools.official_client_control.canonical import canonical_sha256
@@ -337,10 +337,158 @@ class TypedFixtureInputTests(unittest.TestCase):
             configuration_binding=context['configuration_ref'], context=context, control_path=control_path,
             process=None, recorded_pid=None, saved_guard_identity=None, restored_guard=False,
             record_name='typed-short-live-guard')
-        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records)}):
+        import contextlib
+        from collections import Counter
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.store import ControlStore
+
+        original_handoff, original_plan = delivery._vc5_handoff, execution.validate_plan
+        original_graph, original_index = execution.validate_evidence_graph, stops._read_only_fact_index
+        indexed_reads, late_change = [], [None]
+        scan_comparison = []
+
+        @contextlib.contextmanager
+        def observed_index(reader):
+            # 只观察原读者的实际完整扫描；消费者、来源、尾验均不替换成通过结论。
+            with mock.patch.object(reader, 'list_facts', wraps=reader.list_facts) as scans:
+                with original_index(reader) as indexed:
+                    record = {'index': indexed, 'tail_started': False, 'tail_completed': False}
+                    indexed_reads.append(record)
+                    original_verify = indexed.verify_fact_snapshots
+                    def verify():
+                        record['tail_started'] = True
+                        if late_change[0] is not None:
+                            mutation, late_change[0] = late_change[0], None
+                            mutation()
+                        original_verify()
+                        record['tail_completed'] = True
+                    indexed.verify_fact_snapshots = verify
+                    try:
+                        yield indexed
+                    finally:
+                        record['scans'] = list(scans.call_args_list)
+
+        def check_expired(record, reference):
+            self.assertFalse(record['index'].active)
+            with self.assertRaisesRegex(ValueError, '已退出'):
+                record['index'].load_fact(reference)
+
+        with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records)}), \
+                mock.patch.object(stops, '_read_only_fact_index', observed_index):
             try:
                 first.__enter__()
                 identity = dict(first.saved_guard_identity)
+                writer = ControlStore(helper.store.root)
+                store_campaign = writer.load_campaign(q['campaign_id'])
+                original_deployment = writer.list_facts(q['campaign_id'], 'deployment')
+                handoff = original_handoff(writer, store_campaign, q['candidate_id'])
+                candidate_campaign = data / 'evidence/campaigns' / q['campaign_id']
+                guard.private_directory(candidate_campaign)
+                read_context = delivery.DeliveryContext(campaign_dir=candidate_campaign, manifest={},
+                    candidate_id=q['candidate_id'], revision=1, store=writer, campaign=store_campaign,
+                    ledger_dir=data / 'typed-read-ledger', data_root=data, handoff=handoff, entry={})
+                live_executor = executor.create_executor(fixture.EXECUTOR_NAME, configuration, context)
+                snapshot = delivery._freeze(read_context, live_executor, fixture.EXECUTOR_NAME,
+                    context['delivery_id'], configuration['limits']['observation_window_seconds'])
+                opened = delivery._open_typed_delivery(read_context, 1, snapshot,
+                    configuration['limits']['observation_window_seconds'])
+                plan = opened['plan']
+                freeze_payload = writer.load_object(plan['environment_freeze_ref'])['payload']
+                consumers = (
+                    ('交接', lambda: original_handoff(writer, store_campaign, q['candidate_id']),
+                     lambda: delivery._vc5_handoff(writer, store_campaign, q['candidate_id'])),
+                    ('Freeze图', lambda: original_graph(writer, freeze_payload, current_execution=True,
+                        frozen_configuration_ref=plan['executor_configuration_ref']),
+                     lambda: execution.validate_evidence_graph(writer, freeze_payload, current_execution=True,
+                        frozen_configuration_ref=plan['executor_configuration_ref'])),
+                    ('Plan', lambda: original_plan(writer, plan, current_execution=True),
+                     lambda: execution.validate_plan(writer, plan, current_execution=True)),
+                )
+                for label, raw_consume, indexed_consume in consumers:
+                    with self.subTest(consumer=label):
+                        initial = len(indexed_reads)
+                        with mock.patch.object(writer, 'list_facts', wraps=writer.list_facts) as scans:
+                            expected = raw_consume()
+                        self.assertEqual(len(indexed_reads), initial, '原基线不能借用测试索引')
+                        baseline_count = scans.call_count
+                        for _ in range(2):
+                            initial = len(indexed_reads)
+                            actual = indexed_consume()
+                            self.assertEqual(len(indexed_reads), initial + 1)
+                            record = indexed_reads[-1]
+                            counts = Counter(call.args[0] for call in record['scans'])
+                            self.assertTrue(counts)
+                            self.assertTrue(all(count == 2 for count in counts.values()),
+                                '每个已消费Campaign必须首读/收尾各完整扫描一次')
+                            self.assertTrue(all(len(call.args) == 1 and not call.kwargs
+                                for call in record['scans']), '索引底层不能继续按引用反复扫描维度')
+                            self.assertLess(len(record['scans']), baseline_count)
+                            scan_comparison.append({'消费者': label, '原扫描次数': baseline_count,
+                                                    '索引扫描次数': len(record['scans'])})
+                            self.assertTrue(record['tail_completed'])
+                            check_expired(record, q['candidate_ref'])
+                            if label == 'Freeze图':
+                                for field in ('content_sha256', 'deployment_sha256', 'configuration_sha256',
+                                              'service_instance_id', 'trusted_data_root'):
+                                    self.assertEqual(getattr(actual, field), getattr(expected, field))
+                                self.assertEqual(dict(actual.bytes_by_path), dict(expected.bytes_by_path))
+                                self.assertFalse(hasattr(actual, 'store'))
+                            else:
+                                self.assertEqual(actual, expected)
+                            self.assertIsNone(execution._SOURCE_BATCH.get())
+                            self.assertIsNone(execution._QUALIFICATION_READ_BATCH.get())
+                self.assertFalse(writer.read_only)
+                self.assertEqual(writer._file_modes, (0o600,))
+
+                reference = q['candidate_ref']
+                fact_path = writer.root / 'facts' / reference['campaign_id'] / reference['dimension'] / (
+                    f"{reference['sequence']:08d}-{reference['sha256']}.json")
+                fact_raw = fact_path.read_bytes()
+                try:
+                    # 原消费者和索引消费者都必须拒绝0400，不能借只读打开放宽0600合同。
+                    fact_path.chmod(0o400)
+                    for consume in (consumers[0][1], consumers[0][2]):
+                        with self.assertRaises(ControlError):
+                            consume()
+                finally:
+                    fact_path.chmod(0o600)
+                configuration_path = writer.object_path(plan['executor_configuration_ref'])
+                try:
+                    configuration_path.chmod(0o400)
+                    for consume in (consumers[2][1], consumers[2][2]):
+                        with self.assertRaises(ControlError):
+                            consume()
+                finally:
+                    configuration_path.chmod(0o600)
+
+                # 返回前才真实改原件，原图已完成也不得交出来源结果或交接结论。
+                for consume, mutation in ((consumers[1][2], lambda: fact_path.write_bytes(fact_raw + b' ')),
+                                          (consumers[0][2], lambda: fact_path.chmod(0o400))):
+                    initial = len(indexed_reads)
+                    late_change[0] = mutation
+                    try:
+                        with self.assertRaises((ControlError, guard.GuardError)):
+                            consume()
+                        self.assertEqual(len(indexed_reads), initial + 1)
+                        record = indexed_reads[-1]
+                        self.assertTrue(record['tail_started'])
+                        self.assertFalse(record['tail_completed'])
+                        check_expired(record, reference)
+                    finally:
+                        late_change[0] = None
+                        fact_path.chmod(0o600)
+                        fact_path.write_bytes(fact_raw)
+                # 异常后下一次也必须重新首读/尾验，不能承接前次通过或失败前索引。
+                initial = len(indexed_reads)
+                self.assertEqual(consumers[0][2](), handoff)
+                self.assertEqual(len(indexed_reads), initial + 1)
+                self.assertEqual(indexed_reads[-1]['scans'], [mock.call(q['campaign_id'])] * 2)
+                self.assertTrue(indexed_reads[-1]['tail_completed'])
+                check_expired(indexed_reads[-1], reference)
+                self.assertEqual(writer.list_facts(q['campaign_id'], 'deployment'), original_deployment)
+                self.assertFalse(Path(control_path.parent / 'calls.jsonl').exists())
+                self.assertFalse(Path(control_path.parent / 'physical.jsonl').exists())
+                print(json.dumps({'派发前实际扫描对照': scan_comparison}, ensure_ascii=False), flush=True)
                 first.close()
                 self.assertTrue(guard.owner_alive({key: identity[key]
                     for key in ('boot_id', 'pid', 'process_start', 'process_group_id')}))
