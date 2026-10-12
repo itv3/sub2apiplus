@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import copy
 import functools
 from contextvars import ContextVar
 import json
 import multiprocessing
 import os
 import signal
+import stat
 import tempfile
 import time
 import traceback
@@ -30,6 +32,8 @@ from tools.official_client_capture import claude_upgrade_delivery as delivery
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 from tools.official_client_capture import claude_upgrade_release as release
 from tools.official_client_capture import claude_upgrade_store
+from tools.official_client_capture import claude_acceptance_contract as acceptance
+from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.tests.test_claude_real_delivery_integration import DeliveryCampaign, QualifiedFileRuntime, fixture_projection
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
@@ -45,6 +49,177 @@ SEAM_ACTIONS_ENV = "CLAUDE_TYPED_VC6_ACTIONS"
 SEAM_REPOSITORY_ENV = "CLAUDE_TYPED_VC6_REPOSITORY"
 DIAGNOSTIC_ROOT_ENV = "CLAUDE_TYPED_VC6_DIAGNOSTIC_ROOT"
 _STACKS: list[contextlib.ExitStack] = []
+
+
+class _ActiveFileReads:
+    """同一次只读调用的原字节坐标；命中核元数据，收尾再次完整实读。
+
+    文件与根内祖先核设备、inode、类型权限、所有者、长度及纳秒时间；
+    根外祖先核设备、inode、类型权限和所有者，避免无关临时目录成员干扰。
+    目录闭集仍由原消费者逐次检查。活状态属于对象，复制 ContextVar
+    也不能延长寿命；退出清除原字节、解析副本及纯计算结果。
+    """
+
+    def __init__(self, root: Path, error: Any):
+        self.root, self.error, self.active = root, error, True
+        self.files: dict[Path, tuple[Any, bytes, Any]] = {}
+        self.documents: dict[Path, dict[str, Any]] = {}
+        self.digests: dict[Path, str] = {}
+        self.contracts: dict[bytes, dict[str, Any]] = {}
+
+    def require_active(self) -> None:
+        if self.active is not True:
+            raise self.error("typed 原件读取作用域已退出")
+
+    def metadata(self, path: Path) -> tuple[Any, ...]:
+        self.require_active()
+        if not path.is_absolute() or ".." in path.parts or not path.is_relative_to(self.root):
+            raise self.error("typed 原件读取越出本次根")
+        entries = []
+        try:
+            for index, current in enumerate((path, *path.parents)):
+                info = current.lstat()
+                if (stat.S_ISLNK(info.st_mode)
+                        or (index == 0 and not stat.S_ISREG(info.st_mode))
+                        or (index != 0 and not stat.S_ISDIR(info.st_mode))):
+                    raise self.error("typed 原件或祖先类型发生漂移")
+                coordinate = (str(current), info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+                if index == 0 or current.is_relative_to(self.root):
+                    coordinate += (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                entries.append(coordinate)
+        except OSError as error:
+            raise self.error("typed 原件或祖先已不可读") from error
+        return tuple(entries)
+
+    def read(self, path: Path, read_bytes: Any = None, *, current: bool = False) -> bytes:
+        self.require_active()
+        previous = self.files.get(path)
+        before = self.metadata(path)
+        if previous is not None and before != previous[0]:
+            raise self.error("typed 原件路径、权限或元数据漂移")
+        if previous is not None and not current:
+            return previous[1]
+        reader = read_bytes if read_bytes is not None else Path.read_bytes
+        raw = reader(path)
+        after = self.metadata(path)
+        if before != after or not isinstance(raw, bytes) or (previous is not None and raw != previous[1]):
+            raise self.error("typed 原件实读期间或原字节发生漂移")
+        if previous is None:
+            self.files[path] = (after, raw, reader)
+        return raw
+
+    def verify_metadata(self) -> None:
+        self.require_active()
+        for path, (expected, _raw, _reader) in self.files.items():
+            if self.metadata(path) != expected:
+                raise self.error("typed 原件路径、权限或元数据漂移")
+
+    def verify_full(self) -> None:
+        self.require_active()
+        for path, (_metadata, _raw, reader) in list(self.files.items()):
+            self.read(path, reader, current=True)
+
+    def close(self) -> None:
+        self.active = False
+        self.files.clear()
+        self.documents.clear()
+        self.digests.clear()
+        self.contracts.clear()
+
+
+@contextlib.contextmanager
+def _recorded_read_scope(root: Path) -> Iterator[None]:
+    """只在一次原 manifest 验证内复用公共读取和画像纯计算。
+
+    原 policy 校验、逐 probe 验证、附件实读及目录闭集均照常执行。
+    仅原 optional_policy 所读取的公共文件加入读集；独有 probe 原件
+    不进入缓存。每次独立 manifest 调用重新首读，正常和异常退出
+    都完整复读并失效；返回 JSON 与合同均为独立副本。
+    """
+
+    original_manifest, original_policy = recorded.verify_recorded_manifest, recorded.optional_policy
+    original_read, original_binding = recorded._read, recorded.binding
+    original_contract = acceptance.build_contract_payload
+    active: ContextVar[Any] = ContextVar("typed_vc6_recorded_public_reads", default=None)
+    collecting: ContextVar[bool] = ContextVar("typed_vc6_recorded_collect_public", default=False)
+
+    def snapshot_for(path: Path) -> Any:
+        snapshot = active.get()
+        if snapshot is not None:
+            snapshot.require_active()
+            if path.is_absolute() and path.is_relative_to(root) and (collecting.get() or path in snapshot.files):
+                return snapshot
+        return None
+
+    def binding(path: Path) -> dict[str, Any]:
+        snapshot = snapshot_for(path)
+        if snapshot is None:
+            return original_binding(path)
+        raw = snapshot.read(path)
+        if path not in snapshot.digests:
+            snapshot.digests[path] = sha256_bytes(raw)
+        return {"path": str(path), "sha256": snapshot.digests[path], "bytes": len(raw)}
+
+    def read(path: Path) -> dict[str, Any]:
+        snapshot = snapshot_for(path)
+        if snapshot is None:
+            return original_read(path)
+        try:
+            raw = snapshot.read(path)
+            if path not in snapshot.documents:
+                value = json.loads(raw, object_pairs_hook=recorded._pairs)
+                if not isinstance(value, dict):
+                    raise recorded.RecordedEvaluationError("录制合同 JSON 必须是对象")
+                snapshot.documents[path] = value
+        except (OSError, ValueError) as error:
+            raise recorded.RecordedEvaluationError(f"录制合同不能读取：{path}") from error
+        return copy.deepcopy(snapshot.documents[path])
+
+    def policy(state: Any) -> Any:
+        if active.get() is None:
+            return original_policy(state)
+        active.get().require_active()
+        token = collecting.set(True)
+        try:
+            return original_policy(state)
+        finally:
+            collecting.reset(token)
+
+    def contract(profile: Any) -> dict[str, Any]:
+        snapshot = active.get()
+        if snapshot is None or not collecting.get():
+            return original_contract(profile)
+        snapshot.verify_metadata()
+        # 原函数仍推导首次载荷；画像和侧别限定表全部进入精确输入键。
+        key = recorded._canonical([profile, sorted(acceptance.SIDE_RESTRICTED_CHECKS.items()),
+            sorted(acceptance.WIRE_RECORD_TYPES), sorted(acceptance.INTERNAL_RECORD_TYPES),
+            sorted(acceptance.KNOWN_RECORD_TYPES), acceptance.SIDES,
+            acceptance.CONTRACT_SCHEMA, acceptance.COVERAGE_CHECK_ID,
+            acceptance.MODE_DUAL_WIRE, acceptance.MODE_CANDIDATE_PROFILE])
+        if key not in snapshot.contracts:
+            snapshot.contracts[key] = copy.deepcopy(original_contract(profile))
+        return copy.deepcopy(snapshot.contracts[key])
+
+    def manifest(value: Any, observed_root: Path) -> Any:
+        if observed_root != root or value.get("schema_version") != recorded.EVALUATION_SCHEMA:
+            return original_manifest(value, observed_root)
+        snapshot = _ActiveFileReads(root, recorded.RecordedEvaluationError)
+        token = active.set(snapshot)
+        try:
+            return original_manifest(value, observed_root)
+        finally:
+            try:
+                snapshot.verify_full()
+            finally:
+                snapshot.close()
+                active.reset(token)
+
+    with mock.patch.object(recorded, "verify_recorded_manifest", manifest), \
+            mock.patch.object(recorded, "optional_policy", policy), \
+            mock.patch.object(recorded, "_read", read), \
+            mock.patch.object(recorded, "binding", binding), \
+            mock.patch.object(acceptance, "build_contract_payload", contract):
+        yield
 
 
 def _diagnostic_root() -> Path | None:
@@ -498,7 +673,70 @@ def source_scope(control_path: Path) -> Iterator[None]:
         original_validate_graph = execution.validate_evidence_graph
         original_validate_package = execution.validate_delivery_package
         original_qualification_view = executor._QualificationStoreView
+        original_source_scope, original_verified_source = execution._source_batch_scope, execution._verified_source
         read_store: ContextVar[Any] = ContextVar("typed_vc6_read_once_store", default=None)
+        local_reads: ContextVar[Any] = ContextVar("typed_vc6_local_source_reads", default=None)
+
+        @contextlib.contextmanager
+        def source_batch_scope(store: Any, items: list[dict[str, Any]]) -> Iterator[None]:
+            # 原工厂先取得并验证精确清单；只在同根活批次内部登记读取生命周期。
+            with original_source_scope(store, items):
+                batch, previous = execution._SOURCE_BATCH.get(), local_reads.get()
+                if (batch is None or batch.active is not True or batch.store is not store
+                        or store.root != expected_store_root
+                        or (type(store) is not ControlStore and store is not read_store.get())):
+                    yield
+                    return
+                if previous is not None and previous[0] is batch:
+                    previous[1].require_active()
+                    yield
+                    return
+                snapshot = _ActiveFileReads(root, guard.GuardError)
+                token = local_reads.set((batch, snapshot))
+                try:
+                    yield
+                finally:
+                    try:
+                        # 收尾仍在原 batch 失效和清空之前完整实读，异常路径同样复核。
+                        snapshot.verify_full()
+                    finally:
+                        snapshot.close()
+                        local_reads.reset(token)
+
+        def verified_source(store: Any, content: Any, origin: Any) -> execution.VerifiedSource:
+            current, batch = local_reads.get(), execution._SOURCE_BATCH.get()
+            if current is not None:
+                current[1].require_active()
+            if (current is None or current[0] is not batch or batch.active is not True
+                    or batch.store is not store or store.root != expected_store_root):
+                return original_verified_source(store, content, origin)
+            verified = batch.sources.get(canonical_sha256(execution._source_request(content, origin)))
+            if (not isinstance(verified, execution.VerifiedSource)
+                    or type(verified.bytes_by_path) is not executor._LocalSourceOriginals
+                    or verified.bytes_by_path.root != root or verified.trusted_data_root != root):
+                return original_verified_source(store, content, origin)
+            # 仅复制原 _verified_source 的精确本地分支：同一清单项只做一次当前实读，
+            # 省去 .items() 懒读后把 Mapping 清空再裸根读取的第二遍。每次消费
+            # 仍遍历清单全集；后续原来源、守卫连续性、当前实例和 typed 绑定不省略。
+            execution._origin(origin)
+            verifier = execution._source_verifier(str(origin["authority"]))
+            if verifier is None or batch.verifiers.get(origin["authority"]) is not verifier:
+                raise execution.ControlError("本次批量来源的 Store、通道登记或生命周期已变化")
+            core = {key: value for key, value in content.items() if key != "origin"}
+            originals, snapshot = verified.bytes_by_path, current[1]
+            for path in originals.bindings:
+                snapshot.read(root / path, lambda _actual, name=path: originals[name], current=True)
+            execution._check_verified_source(verified, core, origin)
+            if verified.guard_continuity is not None:
+                from tools.official_client_control.canonical import parse_json_bytes
+                identity = parse_json_bytes(verified.guard_continuity.channel_identity_bytes)
+                if not guard.owner_alive({key: identity[key]
+                        for key in ("boot_id", "pid", "process_start", "process_group_id")}):
+                    raise execution.ControlError("批量取证后的当前守卫实例已消失或 PID 被重用")
+            for binding in execution.typed_bindings(content):
+                execution._source_bytes(verified, binding)
+            snapshot.verify_metadata()
+            return verified
 
         class ScopedQualificationStoreView(original_qualification_view):
             """同次纯读的资格视图使用既有事实索引；原过滤与原件校验保持完整。"""
@@ -596,8 +834,11 @@ def source_scope(control_path: Path) -> Iterator[None]:
                 mock.patch.object(execution, "validate_plan", validate_plan), \
                 mock.patch.object(execution, "validate_evidence_graph", validate_graph), \
                 mock.patch.object(execution, "validate_delivery_package", validate_package), \
+                mock.patch.object(execution, "_source_batch_scope", source_batch_scope), \
+                mock.patch.object(execution, "_verified_source", verified_source), \
                 mock.patch.object(executor, "_QualificationStoreView", ScopedQualificationStoreView), \
-                mock.patch.object(stops, "_read_only_fact_index", index_scope):
+                mock.patch.object(stops, "_read_only_fact_index", index_scope), \
+                _recorded_read_scope(root):
             yield
 
 

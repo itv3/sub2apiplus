@@ -17,7 +17,7 @@ from unittest import mock
 
 from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
 from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
-from tools.official_client_control.canonical import canonical_json_bytes
+from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256
 from tools.official_client_control.contracts import campaign_identity_sha256
 from tools.official_client_control.errors import ControlError
 from tools.official_client_control.gates import WorkflowGates
@@ -556,6 +556,190 @@ class QualificationReadSnapshotTests(unittest.TestCase):
         self.assertEqual(self.writer._file_modes, (0o600,))
         self.assertFalse((self.root / "unused-calls.jsonl").exists())
         self.assertFalse((self.root / "unused-physical.jsonl").exists())
+
+        # 沿同一 UID 核公共读作用域本身；这里只隔离 manifest／policy 入口，
+        # 真实画像纯计算仍执行。80 次循环不是原80-probe成功世界或耗时证明。
+        from tools.official_client_capture import claude_acceptance_contract as acceptance
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+        import json
+        profile = json.loads((typed.REPOSITORY_ROOT / "tools/official_client_capture/claude_rule_expectations_2_1_226.json").read_bytes())
+        shared_path = self.root / "inputs/scoped-shared-profile.json"
+        shared_raw = canonical_json_bytes(profile)
+        guard.write_once(shared_path, shared_raw)
+        expected_contract = acceptance.build_contract_payload(profile)
+        original_contract, original_read_bytes = acceptance.build_contract_payload, Path.read_bytes
+        original_recorded = (recorded.verify_recorded_manifest, recorded.optional_policy, recorded._read, recorded.binding)
+        raw_reads, copied_reads, mutate_after, changed_final_raw = [], [], [None], [False]
+
+        def count_raw(path):
+            if path == shared_path:
+                raw_reads.append(path)
+                if changed_final_raw[0]:
+                    return shared_raw[:-1] + b" "
+            return original_read_bytes(path)
+
+        def shared_policy(state):
+            recorded.binding(shared_path)
+            document = recorded._read(shared_path)
+            result = acceptance.build_contract_payload(document)
+            # 调用者修改返回文档或载荷不能污染下一次输入／输出。
+            document["rules"].clear()
+            return result
+
+        def shared_manifest(value, observed_root):
+            result = None
+            for _ in range(value.get("repeat", 80)):
+                result = recorded.optional_policy({})
+                self.assertEqual(result, expected_contract)
+                result["rule_counts"].clear()
+            copied_reads.append((copy_context(), recorded._read))
+            if mutate_after[0] is not None:
+                mutate_after[0]()
+            return recorded.optional_policy({})
+
+        small_manifest = {"schema_version": recorded.EVALUATION_SCHEMA}
+        with mock.patch.object(recorded, "verify_recorded_manifest", new=shared_manifest), \
+                mock.patch.object(recorded, "optional_policy", new=shared_policy), \
+                mock.patch.object(acceptance, "build_contract_payload", side_effect=original_contract) as build, \
+                mock.patch.object(Path, "read_bytes", new=count_raw):
+            with typed._recorded_read_scope(self.root):
+                for _ in range(2):
+                    start, calls = len(raw_reads), build.call_count
+                    self.assertEqual(recorded.verify_recorded_manifest(small_manifest, self.root), expected_contract)
+                    self.assertEqual((len(raw_reads) - start, build.call_count - calls), (2, 1))
+                    copied, expired_read = copied_reads[-1]
+                    with self.assertRaisesRegex(recorded.RecordedEvaluationError, "已退出"):
+                        copied.run(expired_read, shared_path)
+                # 同摘要替换、权限／时间、原字节、祖先链接都不能承接旧读取。
+                replacement = shared_path.with_name("replacement-profile.json")
+                outside = self.root.parent / "outside-profile.json"
+                outside.write_bytes(shared_raw)
+
+                def replace_shared():
+                    replacement.write_bytes(shared_raw)
+                    os.replace(replacement, shared_path)
+
+                def link_shared():
+                    shared_path.unlink()
+                    shared_path.symlink_to(outside)
+
+                for label, change in (("原字节", lambda: shared_path.write_bytes(shared_raw + b" ")),
+                        ("权限", lambda: shared_path.chmod(0o400)), ("同字节inode", replace_shared),
+                        ("时间", lambda: os.utime(shared_path, ns=(shared_path.stat().st_atime_ns,
+                            shared_path.stat().st_mtime_ns + 1))), ("链接", link_shared)):
+                    with self.subTest(public_read_drift=label):
+                        mutate_after[0] = change
+                        try:
+                            with self.assertRaises(recorded.RecordedEvaluationError):
+                                recorded.verify_recorded_manifest(small_manifest, self.root)
+                        finally:
+                            mutate_after[0] = None
+                            if shared_path.is_symlink():
+                                shared_path.unlink()
+                            if shared_path.exists():
+                                shared_path.chmod(0o600)
+                            shared_path.write_bytes(shared_raw)
+                            shared_path.chmod(0o600)
+                # 元数据完全相同也必须实读原字节；不能用 stat 命中代替最终读取。
+                mutate_after[0] = lambda: changed_final_raw.__setitem__(0, True)
+                try:
+                    with self.assertRaises(recorded.RecordedEvaluationError):
+                        recorded.verify_recorded_manifest(small_manifest, self.root)
+                finally:
+                    mutate_after[0] = None
+                    changed_final_raw[0] = False
+                # 异常退出仍完整尾读并使复制上下文失效，不以异常逃过收尾。
+                def fail_after():
+                    raise RuntimeError("既有原异常")
+                mutate_after[0] = fail_after
+                start = len(raw_reads)
+                try:
+                    with self.assertRaisesRegex(RuntimeError, "既有原异常"):
+                        recorded.verify_recorded_manifest(small_manifest, self.root)
+                    self.assertEqual(len(raw_reads) - start, 2)
+                    copied, expired_read = copied_reads[-1]
+                    with self.assertRaisesRegex(recorded.RecordedEvaluationError, "已退出"):
+                        copied.run(expired_read, shared_path)
+                finally:
+                    mutate_after[0] = None
+                # 另一根不进入本次复用；原函数仍按它的原语义执行。
+                calls = build.call_count
+                self.assertEqual(recorded.verify_recorded_manifest({**small_manifest, "repeat": 1}, other_path), expected_contract)
+                self.assertEqual(build.call_count - calls, 2)
+        self.assertEqual((recorded.verify_recorded_manifest, recorded.optional_policy, recorded._read, recorded.binding), original_recorded)
+        self.assertIs(acceptance.build_contract_payload, original_contract)
+
+        # 精确本地 Mapping 才消除 .items() 后的裸根二读；原 typed 绑定仍实读。
+        local_path = self.root / "inputs/scoped-local-source.txt"
+        guard.write_once(local_path, b"local-source\n")
+        local_binding = guard.binding(self.root, local_path)
+        originals = executor._LocalSourceOriginals(self.root, [local_binding], canonical_sha256([local_binding]))
+        origin = {"authority": executor.AUTHORITY, "source_scope": "regression_fixture",
+            "configuration_sha256": "a" * 64, "service_instance_id": "local-read-test", "operations_index_binding": None}
+        content = {"binding": local_binding, "origin": origin}
+        verified = execution.VerifiedSource(content_sha256=canonical_sha256({"binding": local_binding}),
+            deployment_sha256="b" * 64, bytes_by_path=originals, configuration_sha256=origin["configuration_sha256"],
+            service_instance_id=origin["service_instance_id"], trusted_data_root=self.root)
+
+        def local_verifier(store, core, observed_origin):
+            return verified
+        local_verifier.verify_batch = lambda store, items: [verified for _ in items]
+        source_item = execution._source_request(content, origin)
+        naked_reads, secure_reads, saved_local = [], [], []
+        original_secure = guard.read_bytes
+        def count_naked(path):
+            if path == local_path:
+                naked_reads.append(path)
+            return original_read_bytes(path)
+        def count_secure(path):
+            if path == local_path:
+                secure_reads.append(path)
+            return original_secure(path)
+
+        with mock.patch.object(Path, "read_bytes", new=count_naked), mock.patch.object(guard, "read_bytes", new=count_secure), \
+                mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: local_verifier}, clear=True):
+            with execution._source_batch_scope(self.writer, [source_item]):
+                for _ in range(2):
+                    self.assertIs(execution._verified_source(self.writer, content, origin), verified)
+            self.assertEqual((len(naked_reads), len(secure_reads)), (2, 4))
+            original_source_scope, original_source = execution._source_batch_scope, execution._verified_source
+            with typed.source_scope(control_path), \
+                    mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: local_verifier}, clear=True):
+                naked_reads.clear()
+                secure_reads.clear()
+                with execution._source_batch_scope(self.writer, [source_item]):
+                    for _ in range(2):
+                        self.assertIs(execution._verified_source(self.writer, content, origin), verified)
+                    saved_local.append((copy_context(), execution._verified_source))
+                self.assertEqual((len(naked_reads), len(secure_reads)), (0, 5))
+                copied, expired_source = saved_local[-1]
+                with self.assertRaisesRegex(guard.GuardError, "已退出"):
+                    copied.run(expired_source, self.writer, content, origin)
+                local_raw = original_secure(local_path)
+                for label, change in (("原字节", lambda: local_path.write_bytes(local_raw + b" ")),
+                        ("权限", lambda: local_path.chmod(0o400))):
+                    with self.subTest(local_read_drift=label):
+                        try:
+                            with self.assertRaises(guard.GuardError):
+                                with execution._source_batch_scope(self.writer, [source_item]):
+                                    execution._verified_source(self.writer, content, origin)
+                                    change()
+                        finally:
+                            local_path.chmod(0o600)
+                            local_path.write_bytes(local_raw)
+                # 非本地 Mapping 沿原分支，不能把该优化推广到 RPC 字节快照。
+                from dataclasses import replace
+                remote = replace(verified, bytes_by_path={local_binding["path"]: local_raw})
+                def remote_verifier(store, core, observed_origin):
+                    return remote
+                remote_verifier.verify_batch = lambda store, items: [remote for _ in items]
+                with mock.patch.dict(execution.SOURCE_VERIFIERS, {executor.AUTHORITY: remote_verifier}, clear=True):
+                    naked_reads.clear()
+                    with execution._source_batch_scope(self.writer, [source_item]):
+                        self.assertIs(execution._verified_source(self.writer, content, origin), remote)
+                    self.assertEqual(len(naked_reads), 1)
+            self.assertIs(execution._source_batch_scope, original_source_scope)
+            self.assertIs(execution._verified_source, original_source)
         import json
         print(json.dumps({"同 UID 当前客户端只读扫描对照": comparisons}, ensure_ascii=False), flush=True)
 
