@@ -565,12 +565,57 @@ def formed_source_continuation_proof(original: dict[str, Any], current: dict[str
     return result
 
 
+def _formed_source_scope_guard(document: dict[str, Any], source_reader: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """同方法首尾实读准确源码和旧切点；文件与祖先身份、算法和动态绑定漂移即拒绝。
+
+    这份内存边界只证明确定性纯计算的输入未变，不替代当前方法语义或历史演进消费者。
+    目录不比较时间戳，避免其它私有临时目录的创建被误判为祖先身份变化。
+    """
+    from tools.official_client_capture import claude_tool_identity_policy as identity
+
+    source = source_reader()
+    if source != document['current_source']:
+        raise ValueError('历史来源证明首尾实际源码或来源坐标漂移')
+    repository = Path(source['repository']).resolve(strict=True)
+    policy = identity.load_policy(repository / 'tools/official_client_capture' / identity.POLICY_FILENAME)
+    digests, _contents = identity._managed_tree_snapshot(repository, policy)
+    if any(source['files'].get('tools/' + key) != digest for key, digest in digests.items()):
+        raise ValueError('历史来源证明首尾受管清单与完整源码不一致')
+    paths = {repository / relative for relative in source['files']}
+    old_cuts = {}
+    for relative, binding in document['before_files'].items():
+        old_cuts[relative] = hashlib.sha256(_read_exact_cut(binding)).hexdigest()
+        paths.add(Path(binding['path']))
+    tree = Path(document['tree'])
+    paths.update(tree / relative for relative in document['product_files'])
+    for method in document['methods'].values():
+        paths.add(Path(method['executor_origin']['path']))
+        paths.update(Path(binding['path']) for binding in method['originals'])
+    metadata = {}
+    for path in paths:
+        for member in (path, *path.parents):
+            key = str(member)
+            if key in metadata:
+                continue
+            value = member.lstat()
+            if stat.S_ISLNK(value.st_mode) or not (stat.S_ISDIR(value.st_mode) or stat.S_ISREG(value.st_mode)):
+                raise ValueError('历史来源证明文件或祖先类型不可信：' + key)
+            common = (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid)
+            metadata[key] = common if stat.S_ISDIR(value.st_mode) else (
+                *common, value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    return {'source': source, 'old_cuts': old_cuts, 'metadata': metadata,
+            'algorithm': identity._process_memo_key('formed-source-scope-guard', policy, digests, repository)}
+
+
 @contextlib.contextmanager
-def formed_source_proof_scope(binding: dict[str, Any], *, current_source: dict[str, Any]):
+def formed_source_proof_scope(binding: dict[str, Any], *, current_source: dict[str, Any],
+                              current_source_reader: Callable[[], dict[str, Any]] | None = None):
     """当前成功方法首尾完整核验；作用域内只缓存同一精确上下文的来源证明。
 
-    入口与退出都实读全树、旧原件、两客户端身份及 evaluator；退出先移除缓存，
-    缺件或漂移仍拒绝。中间重复核验凭证不会逐命令复制旧树，缓存不授写权限。
+    入口完整复算两客户端身份及 evaluator；提供实际源码读取回调时，同方法内只复用
+    这份确定性纯计算。退出仍实读全树、旧原件、准确源码与文件/祖先元数据，
+    并执行历史演进真实消费者；未提供回调时保留原首尾完整复算合同。
+    缓存不跨方法、进程或运行，不授写权限，当前方法语义仍实际执行。
     """
     if _FORMED_SOURCE_PROOF_SCOPE.get() is not None or record_root() is None:
         raise ValueError('历史来源证明作用域必须独占且绑定一个原方法根')
@@ -580,12 +625,29 @@ def formed_source_proof_scope(binding: dict[str, Any], *, current_source: dict[s
     state = {'key': _formed_source_proof_key(document['original_source'], current_source,
                                            document['before_files']),
              'proof': json.dumps(_encoded(document['source_proof']), sort_keys=True, ensure_ascii=False)}
+    if current_source_reader is not None:
+        state['boundary'] = _formed_source_scope_guard(document, current_source_reader)
+        state['continuation_sha256'] = hashlib.sha256(
+            json.dumps(_encoded(document), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        if document['chain'] == 'recovery':
+            # 入口已真实消费历史演进；中间重复核同一凭证只使用同方法内存结果。
+            state['recovery_products'] = dict(document['product_files'])
     token = _FORMED_SOURCE_PROOF_SCOPE.set(state)
     try:
         yield document
     finally:
-        _FORMED_SOURCE_PROOF_SCOPE.reset(token)
-        actual = verify_product_continuation(binding, current_source=current_source)
+        if current_source_reader is None:
+            _FORMED_SOURCE_PROOF_SCOPE.reset(token)
+            actual = verify_product_continuation(binding, current_source=current_source)
+        else:
+            try:
+                # 结束复核仍调用完整原件验证和历史演进消费者；只省重复的纯身份计算。
+                state['finishing'] = True
+                actual = verify_product_continuation(binding, current_source=current_source)
+                if _formed_source_scope_guard(document, current_source_reader) != state['boundary']:
+                    raise ValueError('历史来源证明作用域退出时源码、旧切点或元数据漂移')
+            finally:
+                _FORMED_SOURCE_PROOF_SCOPE.reset(token)
         if (actual != document or state['key'] != _formed_source_proof_key(
                 document['original_source'], current_source, document['before_files'])):
             raise ValueError('历史来源证明作用域退出时完整凭证或原件漂移')
@@ -719,6 +781,12 @@ def _recorded_recovery_evolution(campaign: Path, deployment: Path, before: str, 
 def _recovery_formed_product_files(document: dict[str, Any], products: dict[str, str]) -> dict[str, str]:
     """保留启动快照，仅由原 phase15 与既有消费者解释场景内历史变化。"""
 
+    state = _FORMED_SOURCE_PROOF_SCOPE.get()
+    if state is not None and 'recovery_products' in state and not state.get('finishing'):
+        actual = hashlib.sha256(json.dumps(_encoded(document), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+        if actual != state['continuation_sha256']:
+            raise ValueError('原 recovery 历史演进内存结果不能跨凭证复用')
+        return dict(state['recovery_products'])
     relative = 'tools/official_client_capture/claude_run_candidate_capture.sh'
     method = '_CandidateFaultScenarios._scenario_candidate_tool_evolution'
     changed = sorted(path for path in set(products) | set(document['product_files'])

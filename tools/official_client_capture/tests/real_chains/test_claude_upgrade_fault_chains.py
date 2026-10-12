@@ -1215,7 +1215,7 @@ def _revalidate_formed_method_current(binding: dict[str, Any], method: str) -> d
     # 缺失时不能靠当前产品初始化补齐；专用回调继续核各自原世界/终态游标。
     # 父 _run_group 已持原方法锁；子进程只继承同一记录 scope，不能再次 flock。
     with _record_scope(method_root, resume=True, verify=True), stops.formed_method_read_only(), \
-            stops.formed_source_proof_scope(binding, current_source=current_source) as document, \
+            stops.formed_source_proof_scope(binding, current_source=current_source, current_source_reader=_source_inputs) as document, \
             gate_material_reader_scope(), historical_material_reader_scope(REPO_ROOT) as materials:
         if (Path(document['current_source']['repository']).resolve(strict=True) != REPO_ROOT
                 or method not in _continuation_methods(document['chain'])):

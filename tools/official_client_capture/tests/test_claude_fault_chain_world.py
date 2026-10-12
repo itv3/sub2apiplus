@@ -239,6 +239,287 @@ class ContinuousWorldContractTests(unittest.TestCase):
                         pass
             self.assertIsNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
 
+        # 仍在同一既有 UID 内启用真实源码回调，实读双根、原切点、文件和祖先元数据。
+        # 只替换耗时身份算法和历史消费者进程接缝；完整凭证及 recovery 历史结构仍走原函数。
+        from tools.official_client_capture import claude_tool_identity_policy as identity
+        from tools.official_client_capture import codex_upgrade as codex
+        from tools.official_client_capture import codex_upgrade_tool_identity_policy as codex_identity
+
+        @contextlib.contextmanager
+        def formed_scope_fixture():
+            """各断言独占小目录及作用域，不能继承前一断言的缓存或受损原件。"""
+            with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+                root = Path(directory).resolve()
+                source_root, tree, method_root = root / 'source', root / 'tree', root / 'method'
+                relative = 'tools/official_client_capture/guard_source.py'
+                script_relative = 'tools/official_client_capture/claude_run_candidate_capture.sh'
+                policy = {'roots': ['tools/official_client_capture', 'tools/official_client_control'],
+                          'suffixes': ['.py', '.sh', '.json']}
+                source_path = source_root / relative
+                source_path.parent.mkdir(parents=True)
+                (source_root / 'tools/official_client_control').mkdir()
+                source_path.write_bytes(b'current_source = True\n')
+                (source_root / 'tools/official_client_control/reader.py').write_bytes(b'pass\n')
+                (source_path.parent / identity.POLICY_FILENAME).write_bytes(b'{}\n')
+                product_path, script_path = tree / relative, tree / script_relative
+                product_path.parent.mkdir(parents=True)
+                product_path.write_bytes(b'current_source = None\n')
+                script_before, script_after = b'original script\n', b'evolved script\n'
+                script_path.write_bytes(script_before)
+                formed_products = world_fixture._executor_product_files(tree)
+                script_path.write_bytes(script_after)
+                products = world_fixture._executor_product_files(tree)
+                method_root.mkdir()
+                cuts = root / 'cuts'
+                cuts.mkdir()
+                old_cut = cuts / 'source-before.py'
+                old_cut.write_bytes(product_path.read_bytes())
+                deployment = cuts / 'deployment.json'
+                deployment.write_bytes(b'{}\n')
+                origin_path = cuts / 'executor.json'
+                origin_path.write_text(json.dumps({'tree': str(tree), 'product_files': formed_products}), encoding='utf-8')
+                origin = world_fixture.file_cut(origin_path)
+                data = root / 'execution-copy'
+                copied_script = data / script_relative
+                copied_script.parent.mkdir(parents=True)
+                copied_script.write_bytes(script_after)
+                campaign = data / 'work/campaigns/recovery'
+                campaign.mkdir(parents=True)
+                stack.enter_context(outer._record_scope(method_root))
+                states = {
+                    'cursor:candidate-evolution': {'phase': 15, 'source_path': script_path,
+                        'source_binding': world_fixture.file_cut(script_path), 'source_before': script_before,
+                        'source_after': script_after, 'campaign': campaign,
+                        'deployment_binding': world_fixture.file_cut(deployment)},
+                    'method-result': {'complete': True, 'executor': origin},
+                    'candidate-execution-copy': {'data': data, 'changes': [
+                        {'path': copied_script, 'before': script_before, 'after': script_after}]},
+                }
+                originals = []
+                for name, state in states.items():
+                    world_fixture.save_state(name, state)
+                    originals.append(world_fixture.file_cut(world_fixture._state_path(name)))
+                originals.append(world_fixture.file_cut(deployment))
+
+                def read_source():
+                    digests, _contents = identity._managed_tree_snapshot(source_root, policy)
+                    return {'repository': str(source_root), 'fixtures': {},
+                            'files': {'tools/' + key: digest for key, digest in digests.items()}}
+
+                current_source = read_source()
+                original_source = copy.deepcopy(current_source)
+                original_source['files'][relative] = world_fixture.hashlib.sha256(old_cut.read_bytes()).hexdigest()
+                before_files = {relative: world_fixture.file_cut(old_cut)}
+                identity_result = {'policy_sha256': '1' * 64, 'wire_producer_sha256': '2' * 64}
+                readers = {'fixture_reader': '3' * 64}
+                proof = {'changed_paths': [relative],
+                    'paths_by_layer': {'control': [relative], 'evidence_semantics': []},
+                    'proofs': {client: {'before': identity_result, 'after': identity_result, 'readers': readers}
+                               for client in ('claude', 'codex')}}
+                method = '_CandidateFaultScenarios._scenario_candidate_tool_evolution'
+                document = {'schema': 'claude-fault-product-continuation/v2',
+                    'mode': 'formed-evidence-read-only', 'chain': 'recovery', 'tree': str(tree),
+                    'original_source': original_source, 'current_source': current_source,
+                    'before_files': before_files, 'source_proof': proof, 'product_files': products,
+                    'methods': {method: {'root': str(method_root), 'executor_origin': origin,
+                                        'originals': originals}}}
+                continuation = root / 'continuation.json'
+                continuation.write_text(json.dumps(world_fixture._encoded(document), sort_keys=True,
+                    ensure_ascii=False), encoding='utf-8')
+                stack.enter_context(mock.patch.object(identity, 'load_policy', return_value=policy))
+                stack.enter_context(mock.patch.object(identity, 'classify_path', return_value='control'))
+                claude_compute = stack.enter_context(mock.patch.object(identity, 'compute_identity', return_value=identity_result))
+                claude_readers = stack.enter_context(mock.patch.object(identity, 'evaluator_dependency_digests', return_value=readers))
+                stack.enter_context(mock.patch.object(codex_identity, 'load_policy', return_value=policy))
+                codex_compute = stack.enter_context(mock.patch.object(codex_identity, 'compute_identity_v2', return_value=identity_result))
+                codex_readers = stack.enter_context(mock.patch.object(codex_identity, 'evaluator_dependency_digests', return_value=readers))
+                stack.enter_context(mock.patch.object(codex, '_tool_tree_entries', return_value=[]))
+                # 动态 adapter 表用独立副本；漂移断言不能污染其它 UID 或真实进程绑定。
+                stack.enter_context(mock.patch.object(identity.upgrade_client_adapter, 'ADAPTER_BINDINGS',
+                    {client: dict(bindings) for client, bindings in identity.upgrade_client_adapter.ADAPTER_BINDINGS.items()}))
+                launches = stack.enter_context(mock.patch.object(world_fixture.subprocess, 'run',
+                    return_value=world_fixture.subprocess.CompletedProcess([], 0, '', '')))
+                full = stack.enter_context(mock.patch.object(world_fixture, 'verify_product_continuation',
+                    wraps=world_fixture.verify_product_continuation))
+                source_reader = mock.Mock(side_effect=read_source)
+                fixture = SimpleNamespace(root=root, source_path=source_path, old_cut=old_cut,
+                    origin_path=origin_path, cuts=cuts, document=document, current_source=current_source,
+                    original_source=original_source, before_files=before_files, proof=proof,
+                    products=products, formed_products=formed_products, launches=launches, full=full,
+                    source_reader=source_reader, claude_compute=claude_compute, codex_compute=codex_compute,
+                    claude_readers=claude_readers, codex_readers=codex_readers)
+                fixture.scope = lambda: world_fixture.formed_source_proof_scope(
+                    world_fixture.file_cut(continuation), current_source=current_source,
+                    current_source_reader=source_reader)
+                yield fixture
+
+        with formed_scope_fixture() as fixture:
+            with fixture.scope():
+                self.assertIsNotNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
+                for _ in range(6):
+                    returned = world_fixture.formed_source_continuation_proof(fixture.original_source,
+                        fixture.current_source, fixture.before_files)
+                    self.assertEqual(returned, fixture.proof)
+                    returned['changed_paths'].append('不能污染缓存')
+                    self.assertEqual(world_fixture._recovery_formed_product_files(
+                        fixture.document, fixture.formed_products), fixture.products)
+                self.assertEqual(fixture.launches.call_count, 1)
+                # 完整凭证有任何变化都不能复用入口消费者的历史结果。
+                changed_document = {**fixture.document, 'unexpected_change': True}
+                with self.assertRaisesRegex(ValueError, '跨凭证'):
+                    world_fixture._recovery_formed_product_files(changed_document, fixture.formed_products)
+            self.assertIsNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
+            self.assertEqual(fixture.full.call_count, 2)
+            self.assertEqual(fixture.source_reader.call_count, 2)
+            self.assertEqual(fixture.launches.call_count, 2)
+            # 一轮纯证明包含每个客户端各两侧身份和 evaluator；首尾不重复这一轮计算。
+            for compute in (fixture.claude_compute, fixture.codex_compute,
+                            fixture.claude_readers, fixture.codex_readers):
+                self.assertEqual(compute.call_count, 2)
+            self.assertIn('_recorded_recovery_evolution', fixture.launches.call_args.args[0][3])
+
+        for failure in ('entry_source_reader', 'exit_source_reader', 'entry_consumer',
+                        'exit_consumer', 'method_body'):
+            with self.subTest(scope_failure=failure), formed_scope_fixture() as fixture:
+                marker = '独立异常：' + failure
+                if failure == 'entry_source_reader':
+                    fixture.source_reader.side_effect = RuntimeError(marker)
+                elif failure == 'exit_source_reader':
+                    fixture.source_reader.side_effect = [fixture.current_source, RuntimeError(marker)]
+                elif failure == 'entry_consumer':
+                    fixture.launches.side_effect = RuntimeError(marker)
+                elif failure == 'exit_consumer':
+                    fixture.launches.side_effect = [fixture.launches.return_value, RuntimeError(marker)]
+                with self.assertRaisesRegex(RuntimeError, marker):
+                    with fixture.scope():
+                        if failure == 'method_body':
+                            raise RuntimeError(marker)
+                self.assertIsNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
+                if failure == 'method_body':
+                    self.assertEqual(fixture.full.call_count, 2)
+                    self.assertEqual(fixture.launches.call_count, 2)
+
+        with formed_scope_fixture() as fixture:
+            fixture.source_reader.side_effect = lambda: {**fixture.current_source, 'fixtures': {'drift': True}}
+            with self.assertRaisesRegex(ValueError, '首尾实际源码'):
+                with fixture.scope():
+                    self.fail('入口漂移不得进入方法体')
+            self.assertIsNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
+
+        for drift in ('source_bytes', 'old_cut_bytes', 'same_source_mode', 'same_original_inode',
+                      'ancestor_mode', 'ancestor_symlink', 'adapter_binding'):
+            with self.subTest(scope_drift=drift), formed_scope_fixture() as fixture:
+                with self.assertRaises(ValueError):
+                    with fixture.scope():
+                        if drift == 'source_bytes':
+                            fixture.source_path.write_bytes(b'current_source = None\n')
+                        elif drift == 'old_cut_bytes':
+                            fixture.old_cut.write_bytes(b'current_source = True\n')
+                        elif drift == 'same_source_mode':
+                            fixture.source_path.chmod(fixture.source_path.stat().st_mode ^ 0o100)
+                        elif drift == 'same_original_inode':
+                            replacement = fixture.root / 'same-executor.json'
+                            replacement.write_bytes(fixture.origin_path.read_bytes())
+                            replacement.replace(fixture.origin_path)
+                        elif drift == 'ancestor_mode':
+                            fixture.cuts.chmod(fixture.cuts.stat().st_mode ^ 0o020)
+                        elif drift == 'ancestor_symlink':
+                            moved = fixture.root / 'original-cuts'
+                            fixture.cuts.rename(moved)
+                            fixture.cuts.symlink_to(moved, target_is_directory=True)
+                        else:
+                            identity.upgrade_client_adapter.ADAPTER_BINDINGS['claude']['fixture_drift'] = 'changed'
+                self.assertIsNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
+
+        # 同一 UID 实际调用前序成功停点的验证与恢复接缝，避免缺导入直到重链末尾才暴露。
+        # 原 Campaign 切点、固定 Store 坐标和 SyntheticCampaign 恢复函数均实用原实现；不启动场景构造。
+        from tools.official_client_control.store import ControlStore
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir = root / 'original-campaign'
+            campaign_dir.mkdir()
+            campaign_files = [campaign_dir / filename for filename in ('campaign.json', 'campaign.sha256')]
+            for path in campaign_files:
+                path.write_bytes(b'original campaign bytes\n')
+            target_root = world_fixture.store_module.campaign_store_root(campaign_dir)
+            fixture_values = {'root': campaign_dir, 'external_root': root / 'target-external',
+                'store_root': target_root, 'schema': 'v2', 'campaign_id': outer.predecessor_tests.TARGET_ID,
+                'tool_sha256': 'a' * 64, 'official_binding': {'path': 'official.json', 'sha256': 'b' * 64},
+                'clock': '2026-10-12T00:00:00+00:00'}
+            state = {'phase': 6, 'campaign_dir': campaign_dir, 'predecessor_root': root / 'predecessor-store',
+                'predecessor_external': root / 'predecessor-external', 'target_fixture': fixture_values,
+                'campaign_bindings': [world_fixture.file_cut(path) for path in campaign_files]}
+            case = outer._PredecessorMisuseScenarios('runTest')
+            with mock.patch.object(outer.predecessor_tests.SyntheticCampaign, '__init__',
+                    side_effect=AssertionError('恢复必须跳过写入型构造器')):
+                restored = case._restore_fixture(fixture_values)
+            self.assertEqual(case._fixture_values(restored), fixture_values)
+            self.assertEqual(restored._clock, outer.datetime.fromisoformat(fixture_values['clock']))
+            source_store, target_store = mock.Mock(spec=ControlStore), mock.Mock(spec=ControlStore)
+            target_store.root = target_root
+            target_store.load_campaign.return_value = {
+                'tool_identity': {'tool_files_sha256': fixture_values['tool_sha256']},
+                'official_artifacts': [fixture_values['official_binding']]}
+
+            def open_store(path):
+                if path == state['predecessor_root']:
+                    return source_store
+                if path == target_root:
+                    return target_store
+                self.fail('前序恢复不得打开其它 Store 坐标')
+
+            with mock.patch.object(ControlStore, 'open_read_only', side_effect=open_store) as opened, \
+                    mock.patch.object(world_fixture.store_module, 'campaign_store_root',
+                        wraps=world_fixture.store_module.campaign_store_root) as locate, \
+                    mock.patch.object(world_fixture, 'read_cut', wraps=world_fixture.read_cut) as cuts:
+                case._verify_predecessor(state)
+                with mock.patch.object(world_fixture, 'resume_checkpoint', return_value=state) as checkpoint, \
+                        mock.patch.object(case, 'make_predecessor') as make_predecessor, \
+                        mock.patch.object(case, 'make_target') as make_target:
+                    self.assertIs(case._predecessor_start('predecessor-x86', '原已完成场景', amd64=True), state)
+                    checkpoint.assert_called_once_with(case, 'predecessor-x86')
+                    make_predecessor.assert_not_called()
+                    make_target.assert_not_called()
+                for scenario, cursor, phase in (
+                    ('跨客户端误用：x86_64 证据喂给 arm64 目标', 'predecessor-x86', 2),
+                    ('跨客户端误用：夹具收据冒充正式引用', 'predecessor-fixture-formal', 6),
+                ):
+                    with self.subTest(predecessor_resume=scenario):
+                        state['phase'] = phase
+                        row = {'scenario': scenario, 'checks': {key: {'passed': True} for key in outer.SIX_CHECKS}}
+                        with mock.patch.object(world_fixture, 'resume_checkpoint', return_value=state) as checkpoint, \
+                                mock.patch.object(outer.ScenarioAudit, 'revalidate', return_value=row) as audit:
+                            self.assertEqual(case.revalidate_completed_method([scenario]), [row])
+                        checkpoint.assert_called_once_with(case, cursor)
+                        audit.assert_called_once_with(case, scenario)
+                # 已形成命令停点只承接其返回值；CLI 和事实恢复后均实际核前序读侧，不派新动作。
+                refused = (1, None, '原停点拒绝')
+                with mock.patch.object(world_fixture, 'command_step', return_value=refused) as command, \
+                        mock.patch.object(outer.predecessor_tests, '_run_main') as dispatch:
+                    self.assertEqual(case._predecessor_cli('predecessor-x86', 'original-refusal', state,
+                        'read_only_reuse'), refused)
+                    self.assertEqual(command.call_args.args[3], outer.predecessor_tests._import_argv(
+                        campaign_dir, state['predecessor_root'], outer.predecessor_tests.PREDECESSOR_ID,
+                        'read_only_reuse'))
+                    dispatch.assert_not_called()
+                with mock.patch.object(case, 'target_store', return_value=target_store), \
+                        mock.patch.object(world_fixture, 'command_step', return_value=refused):
+                    self.assertEqual(case._predecessor_fact('predecessor-fixture-formal', 'original-fact', state,
+                        'evidence_recorded', {'original': True}, fixture_values['clock']), refused)
+                    target_store.append_fact.assert_not_called()
+                self.assertEqual(opened.call_args_list,
+                    [mock.call(state['predecessor_root']), mock.call(target_root)] * 6)
+                self.assertEqual(locate.call_args_list, [mock.call(campaign_dir)] * 6)
+                self.assertEqual(cuts.call_count, len(campaign_files) * 6)
+                self.assertEqual(source_store.replay.call_args_list, [mock.call(
+                    external_root=state['predecessor_external'], require_external=True)] * 6)
+                self.assertEqual(target_store.replay.call_args_list, [mock.call(
+                    external_root=fixture_values['external_root'], require_external=True)] * 6)
+                self.assertEqual(target_store.load_campaign.call_args_list,
+                    [mock.call(outer.predecessor_tests.TARGET_ID)] * 6)
+            self.assertEqual([path.read_bytes() for path in campaign_files], [b'original campaign bytes\n'] * 2)
+
         # 在真实独立小目录启动当前入口替身，验证 runner 的实际 cwd、argv 和退出原件。
         # 替身只用于派发合同，不替代真实材料 reader 或三链产品兼容验证。
         with tempfile.TemporaryDirectory() as directory:
