@@ -15,6 +15,7 @@ import threading
 import time
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -88,8 +89,26 @@ class QualifiedFileRuntime(FileRuntime):
     """文件现场仍走真实验收子图；不把假引用当成通过证据。"""
 
     def check_qualification(self) -> dict:
+        from tools.official_client_capture.claude_gate_material_worker import gate_material_reader_scope
+        # 文件现场和正式 runtime 使用相同的调用边界；返回后 reader 内存
+        # 证明失效，下一次资格检查重新执行原私有 reader。
+        with gate_material_reader_scope():
+            return self._check_qualification_in_scope()
+
+    def _check_completed_qualification(self, source: object) -> dict:
+        """完成后测量沿本次真实来源核材料，不在文件现场另造空来源。"""
+        from tools.official_client_capture.claude_gate_material_worker import gate_material_reader_scope
+        if (not isinstance(source, execution.VerifiedSource) or source.trusted_data_root != self.root
+                or source.configuration_sha256 != canonical_sha256(self.configuration)
+                or getattr(source.gate_projection, "successor", None) is None):
+            raise guard.GuardError("文件现场完成后资格缺本次真实材料来源")
+        execution._revalidate_guard_continuity(source, required=True)
+        with gate_material_reader_scope():
+            return self._check_qualification_in_scope(completed_source=source)
+
+    def _check_qualification_in_scope(self, *, completed_source: object = None) -> dict:
         from tools.official_client_control.qualification_material_import import (
-            requires_qualification_materials, validate_qualification_material_import,
+            requires_qualification_materials, projection_for_configuration,
         )
 
         first = self.configuration["candidate"]["qualification"]
@@ -99,12 +118,12 @@ class QualifiedFileRuntime(FileRuntime):
             raise guard.GuardError("当前第二根能力要求配置 v2 和真实导入证明，禁止降级")
         source = None
         if materials is not None:
-            source = execution.VerifiedSource("0" * 64,
+            source = completed_source if completed_source is not None else execution.VerifiedSource("0" * 64,
                 self.configuration["guard"]["deployment_receipt_binding"]["sha256"], {},
                 canonical_sha256(self.configuration), "qualification-readonly", self.root)
-            validate_qualification_material_import(store, materials, source,
-                {name: self.configuration[name]["qualification"] for name in ("candidate", "rollback")},
-                purpose="current_delivery", expected_source_scope=self.configuration["source_scope"])
+            projection = projection_for_configuration(store, self.configuration, source,
+                purpose="current_delivery")
+            source = replace(source, gate_projection=projection)
         super().check_qualification()
         reports = []
         for name in ("candidate", "rollback"):
@@ -113,8 +132,8 @@ class QualifiedFileRuntime(FileRuntime):
             reports.append(executor.replay_qualification_graph(store, qualification, self.root / qualification["external_root_relative"], self.root))
         # 文件现场把已绑定的 base/override JSON 当作现场配置；仍由真实 Store 推出两份资格，
         # 不自报通过，也不启动生产 Docker。落盘原件与生产执行器使用同一后继报告合同。
-        base = guard.read_json(guard.check_binding(self.root, self.configuration["paths"]["compose_binding"]))
-        compose = {name: {**base, **guard.read_json(guard.check_binding(self.root, self.configuration[name]["override_binding"]))}
+        base = guard.read_bound_json(self.root, self.configuration["paths"]["compose_binding"])
+        compose = {name: {**base, **guard.read_bound_json(self.root, self.configuration[name]["override_binding"])}
                    for name in ("candidate", "rollback")}
         normalized = {name: {key: value for key, value in document.items() if key != "image"}
                       for name, document in compose.items()}
@@ -231,10 +250,12 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
             time.sleep(0.01)
         self.executor = executor.create_executor("arm64-isolated", configuration, context)
         def verify(store, content, origin):
-            return execution.VerifiedSource(**self.executor.verify_origin_evidence(content, origin))
+            source = execution.VerifiedSource(**self.executor.verify_origin_evidence(content, origin))
+            return delivery.compose_parent_publication_source(store, content, origin, source)
 
         def verify_batch(store, items):
-            return [execution.VerifiedSource(**row) for row in self.executor.verify_origin_evidence_batch(items)]
+            return [delivery.compose_parent_publication_source(store, item["content"], item["origin"], execution.VerifiedSource(**row))
+                for item, row in zip(items, self.executor.verify_origin_evidence_batch(items))]
 
         verify.verify_batch = verify_batch
         source = mock.patch.dict(execution.SOURCE_VERIFIERS, {"claude-arm64-recovery-guard": verify}, clear=True)
@@ -376,13 +397,29 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         self.assertEqual(self.executor._status()["guard_identity"], identity_before)
 
     def test_package_checks_each_execution_graph_once_per_call(self) -> None:
-        self._complete()
+        # 四阶段与构包都观察真实 RPC；v2 必须消费本机精确清单，不能借旧内联回退掩盖父文件缺口。
+        rpc_actions = []
+        original_call = guard.GuardClient.call
+
+        def checked_call(client, action, payload):
+            result = original_call(client, action, payload)
+            if action.startswith("export"):
+                rpc_actions.append(action)
+                self.assertTrue(action.endswith("_local"))
+                self.assertEqual(result["originals_schema"], guard.LOCAL_ORIGINALS_SCHEMA)
+                self.assertNotIn("bytes_by_path", result)
+            return result
+
+        with mock.patch.object(guard.GuardClient, "call", new=checked_call):
+            self._complete()
+        self.assertIn("export_batch_local", rpc_actions)
         original_review = delivery._typed_package_review
         verifier = execution.SOURCE_VERIFIERS[executor.AUTHORITY]
 
         def checked_review(*arguments, **options):
             # 审核入口必须真正接入批量来源；离开它以后不能留下可复用证明。
-            with mock.patch.object(verifier, "verify_batch", wraps=verifier.verify_batch) as batch:
+            with mock.patch.object(verifier, "verify_batch", wraps=verifier.verify_batch) as batch, \
+                    mock.patch.object(guard.GuardClient, "call", new=checked_call):
                 result = original_review(*arguments, **options)
             batch.assert_called_once()
             self.assertIsNone(execution._SOURCE_BATCH.get())
@@ -390,6 +427,67 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
 
         with mock.patch.object(delivery, "_typed_package_review", side_effect=checked_review):
             package = self.store.load_object(self._seal_review())["payload"]
+        self.assertIn("export_batch_local", rpc_actions)
+        plan = self.store.load_object(package["delivery_plan_ref"])["payload"]
+        index_content = {"campaign_id": package["campaign_id"], "delivery_id": package["delivery_id"],
+                         "operation_index_binding": package["operation_index_binding"]}
+        with mock.patch.object(guard.GuardClient, "call", new=checked_call):
+            source = verifier(self.store, index_content, package["operation_index_origin"])
+        self.assertIn("export_local", rpc_actions)
+        self.assertIsInstance(source.bytes_by_path, delivery._ParentPublicationOriginals)
+        original_source = source.bytes_by_path.source
+        self.assertIsInstance(original_source.bytes_by_path, executor._LocalSourceOriginals)
+        original_paths = set(original_source.bytes_by_path)
+        publication_binding = package["publication_intent_bindings"][0]
+        publication = execution.publication_document(source, publication_binding, package["campaign_id"],
+            package["delivery_id"], Path(publication_binding["path"]).stem)
+        seed_binding = publication["seed_binding"]
+        for binding in (publication_binding, seed_binding):
+            self.assertNotIn(binding["path"], original_paths)
+            with self.assertRaisesRegex(guard.GuardError, binding["path"]):
+                execution._source_bytes(original_source, binding)
+            execution._source_bytes(source, binding)
+        with mock.patch.object(guard, "read_bytes", wraps=guard.read_bytes) as read:
+            for _ in range(2):
+                self.assertEqual(execution._source_bytes(source, seed_binding),
+                                 (self.root / seed_binding["path"]).read_bytes())
+                execution._source_bytes(source, package["operation_index_binding"])
+        self.assertEqual(read.call_count, 4, "父原件与原 guard Mapping 每次访问都必须真实读取")
+        extra_path = (self.root / publication_binding["path"]).parent / "unpublished-extra.json"
+        extra_path.write_bytes(b"{}")
+        extra = guard.binding(self.root, extra_path)
+        try:
+            with self.assertRaisesRegex(guard.GuardError, extra["path"]):
+                execution._source_bytes(source, extra)
+        finally:
+            extra_path.unlink()
+        seed_path = self.root / seed_binding["path"]
+        seed_raw = seed_path.read_bytes()
+        held_path = seed_path.with_suffix(".held")
+        try:
+            seed_path.rename(held_path)
+            with self.assertRaisesRegex(ControlError, "父发布原件缺失或漂移"):
+                execution._source_bytes(source, seed_binding)
+            seed_path.symlink_to(held_path)
+            with self.assertRaisesRegex(ControlError, "父发布原件缺失或漂移"):
+                execution._source_bytes(source, seed_binding)
+            seed_path.unlink()
+        finally:
+            if seed_path.is_symlink():
+                seed_path.unlink()
+            if held_path.exists():
+                held_path.rename(seed_path)
+        try:
+            seed_path.write_bytes(seed_raw + b" ")
+            with self.assertRaisesRegex(ControlError, "父发布原件缺失或漂移"):
+                execution._source_bytes(source, seed_binding)
+            with self.assertRaises(ControlError):
+                verifier(self.store, index_content, package["operation_index_origin"])
+        finally:
+            seed_path.write_bytes(seed_raw)
+        next_source = verifier(self.store, index_content, package["operation_index_origin"])
+        self.assertIsNot(next_source.bytes_by_path, source.bytes_by_path)
+        self.assertEqual(set(original_source.bytes_by_path), original_paths)
         original = execution.validate_evidence_graph
         expected = {canonical_sha256(self.store.load_object(reference)["payload"])
                     for reference in package["execution_evidence_refs"]}
@@ -715,7 +813,7 @@ class RealDeliveryIntegrationTests(unittest.TestCase):
         original = path.read_bytes()
         path.unlink()
         chain = delivery._chain(self.context, self.delivery["delivery_id"])
-        with self.assertRaises(delivery.ConfigurationError):
+        with self.assertRaisesRegex(ControlError, "父发布意图原件缺失或不可读"):
             delivery._typed_package_review(self.context, self.delivery, chain)
         guard.write_once(path, original)
         index_path = self.root / "guard" / "index.json"

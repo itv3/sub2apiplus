@@ -14,6 +14,7 @@ import tempfile
 import contextlib
 import contextvars
 import inspect
+import stat
 import subprocess
 import sys
 
@@ -35,7 +36,9 @@ CHAIN_RESUME_ENV = 'CLAUDE_FAULT_CHAIN_RESUME'
 EXECUTOR_SOURCE_ENV = 'CLAUDE_FAULT_EXECUTOR_SOURCE'
 _ACTIVE_COMMAND_STEP = contextvars.ContextVar('claude_fault_active_command_step', default=None)
 _VERIFIED_READ_ONLY_WORLD = contextvars.ContextVar('claude_fault_verified_read_only_world', default=None)
+_SHARED_STORE_REPLAY = contextvars.ContextVar('claude_fault_shared_store_replay', default=None)
 _FORMED_METHOD_READ_ONLY = contextvars.ContextVar('claude_fault_formed_method_read_only', default=False)
+_FORMED_SOURCE_PROOF_SCOPE = contextvars.ContextVar('claude_fault_formed_source_proof_scope', default=None)
 # 只覆盖本次已审核的写侧修复；仍须现算两客户端的身份及读侧闭包，路径名单不构成通过证明。
 CONTROL_CONTINUATION_PATHS = frozenset({
     'tools/official_client_capture/codex_upgrade_supervisor.py',
@@ -45,6 +48,7 @@ CONTROL_CONTINUATION_PATHS = frozenset({
     'tools/official_client_capture/claude_upgrade_arm64_delivery_executor.py',
 })
 PRODUCT_CONTINUATION_FILE = 'product-continuation.json'
+FORMED_READ_ONLY_MODES = frozenset({'formed-read-only', 'formed-evidence-read-only'})
 
 
 def current_product_continuation_path(root: Path, source: dict[str, Any]) -> Path:
@@ -479,6 +483,114 @@ def control_continuation_proof(original: dict[str, Any], current: dict[str, Any]
     return result
 
 
+def _formed_source_proof_key(original: dict[str, Any], current: dict[str, Any],
+                             before_files: dict[str, Any]) -> str:
+    """缓存只绑定同一原方法、完整来源表和准确旧字节切点，不跨方法或进程。"""
+    value = {'original': original, 'current': current, 'before_files': before_files,
+             'method_root': record_root(), 'executable': sys.executable}
+    return hashlib.sha256(json.dumps(_encoded(value), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def formed_source_continuation_proof(original: dict[str, Any], current: dict[str, Any],
+                               before_files: dict[str, Any]) -> dict[str, Any]:
+    """原成功方法的准确 evidence/control 差集；不把身份守恒代替当前纯验。
+
+    policy、wire 及八项 evaluator 必须守恒；材料 reader 的实际兼容结论
+    只能由当前方法消费者运行真实新 reader 得出。本证明只允许只读后继。
+    """
+
+    from tools.official_client_capture import claude_tool_identity_policy as identity
+    from tools.official_client_capture import codex_upgrade as codex
+    from tools.official_client_capture import codex_upgrade_tool_identity_policy as codex_identity
+
+    state = _FORMED_SOURCE_PROOF_SCOPE.get()
+    if state is not None:
+        if state['key'] != _formed_source_proof_key(original, current, before_files):
+            raise ValueError('历史来源证明不能跨原方法、冻结来源或旧字节切点复用')
+        return _decoded(json.loads(state['proof']))
+    if any(original.get(key) != current.get(key) for key in ('repository', 'fixtures')):
+        raise ValueError('承接凭证不能更换来源仓库或原夹具')
+    changed = sorted(path for path in set(original['files']) | set(current['files'])
+                     if original['files'].get(path) != current['files'].get(path) and not _executor_path(path))
+    if not changed or set(before_files) != set(changed) or any(path not in original["files"] or path not in current["files"] for path in changed):
+        raise ValueError('历史只读后继必须绑定非执行器真实差集及准确旧字节，不支持增删或夹具变更')
+    root = Path(current['repository']).resolve(strict=True)
+    policy = identity.load_policy(root / 'tools/official_client_capture' / identity.POLICY_FILENAME)
+    digests, contents = identity._managed_tree_snapshot(root, policy)
+    for key, digest in digests.items():
+        if current['files'].get('tools/' + key) != digest:
+            raise ValueError('当前来源全树与冻结输入不一致：' + key)
+    previous = {}
+    for path in changed:
+        raw = _read_exact_cut(before_files[path])
+        if (path not in original['files'] or path not in current['files']
+                or hashlib.sha256(raw).hexdigest() != original['files'][path]
+                or identity.classify_path(policy, path.removeprefix('tools/')) not in {'control', 'evidence_semantics'}):
+            raise ValueError('变化文件的原字节或身份归层不匹配：' + path)
+        previous[path.removeprefix('tools/')] = raw
+    if any(_executor_path(path) and path not in current['files'] for path in original['files']):
+        raise ValueError('历史只读来源凭证不能放行删除测试执行器')
+    # 临时旧源码仅复算形成期身份；当前方法验证从固定实际当前源码根加载。
+    with tempfile.TemporaryDirectory(prefix='claude-formed-source-proof-') as directory:
+        old_root = Path(directory)
+        for relative, raw in contents.items():
+            path = old_root / 'tools' / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(previous.get(relative, raw))
+        old_policy = identity.load_policy(old_root / 'tools/official_client_capture' / identity.POLICY_FILENAME)
+        memo = os.environ.pop(codex_identity.IDENTITY_MEMO_ENV, None)
+        try:
+            proofs = {}
+            for client in ('claude', 'codex'):
+                identities, readers = [], []
+                for repository, selected in ((old_root, old_policy), (root, policy)):
+                    capture_root = repository / 'tools/official_client_capture'
+                    if client == 'claude':
+                        identities.append(identity.compute_identity(selected, repository))
+                        readers.append(identity.evaluator_dependency_digests(repository, selected))
+                    else:
+                        selected = codex_identity.load_policy(capture_root / codex_identity.POLICY_FILENAME)
+                        identities.append(codex_identity.compute_identity_v2(selected, capture_root,
+                                                                           codex._tool_tree_entries(capture_root)))
+                        readers.append(codex_identity.evaluator_dependency_digests(capture_root, selected))
+                if (any(identities[0][name] != identities[1][name] for name in
+                        ('policy_sha256', 'wire_producer_sha256'))
+                        or readers[0] != readers[1]):
+                    raise ValueError(client + ' 的历史只读后继发生 policy/wire 或 evaluator 变化，不能续用原成功语义')
+                proofs[client] = {'before': identities[0], 'after': identities[1], 'readers': readers[0]}
+        finally:
+            if memo is not None:
+                os.environ[codex_identity.IDENTITY_MEMO_ENV] = memo
+    result = {'changed_paths': changed, 'paths_by_layer': {layer: [path for path in changed if identity.classify_path(policy, path.removeprefix('tools/')) == layer] for layer in ('control', 'evidence_semantics')}, 'proofs': proofs}
+    return result
+
+
+@contextlib.contextmanager
+def formed_source_proof_scope(binding: dict[str, Any], *, current_source: dict[str, Any]):
+    """当前成功方法首尾完整核验；作用域内只缓存同一精确上下文的来源证明。
+
+    入口与退出都实读全树、旧原件、两客户端身份及 evaluator；退出先移除缓存，
+    缺件或漂移仍拒绝。中间重复核验凭证不会逐命令复制旧树，缓存不授写权限。
+    """
+    if _FORMED_SOURCE_PROOF_SCOPE.get() is not None or record_root() is None:
+        raise ValueError('历史来源证明作用域必须独占且绑定一个原方法根')
+    document = verify_product_continuation(binding, current_source=current_source)
+    if document['mode'] != 'formed-evidence-read-only':
+        raise ValueError('来源证明缓存只适用于新的历史成功只读模式')
+    state = {'key': _formed_source_proof_key(document['original_source'], current_source,
+                                           document['before_files']),
+             'proof': json.dumps(_encoded(document['source_proof']), sort_keys=True, ensure_ascii=False)}
+    token = _FORMED_SOURCE_PROOF_SCOPE.set(state)
+    try:
+        yield document
+    finally:
+        _FORMED_SOURCE_PROOF_SCOPE.reset(token)
+        actual = verify_product_continuation(binding, current_source=current_source)
+        if (actual != document or state['key'] != _formed_source_proof_key(
+                document['original_source'], current_source, document['before_files'])):
+            raise ValueError('历史来源证明作用域退出时完整凭证或原件漂移')
+
+
 def _registered_control_state(campaign: Path, deployment: Path) -> dict[str, Any]:
     """在准确产品树内调用原消费者，只读核部署、编排器演进和 Store 登记。"""
 
@@ -547,6 +659,7 @@ def registered_control_facts(tree: Path, campaign: Path, deployment: Path) -> di
 
     tree, campaign, deployment = (Path(path).resolve(strict=True) for path in (tree, campaign, deployment))
     script = ('from __future__ import annotations\nimport json\nfrom pathlib import Path\n' +
+              'CONTROL_CONTINUATION_PATHS = frozenset(' + repr(sorted(CONTROL_CONTINUATION_PATHS)) + ')\n' +
               inspect.getsource(_registered_control_state) +
               '\nprint(json.dumps(_registered_control_state(Path(__import__("sys").argv[1]), '
               'Path(__import__("sys").argv[2])), sort_keys=True))\n')
@@ -708,10 +821,12 @@ def _revision_formed_registration(document: dict[str, Any]) -> dict[str, Any]:
 def verify_product_continuation(binding: dict[str, Any], *, tree: Path | None = None,
                                 original_source: dict[str, Any] | None = None,
                                 current_source: dict[str, Any] | None = None) -> dict[str, Any]:
-    """只消费本次两种精确来源凭证；旧来源原样保留，缺件一律拒绝。"""
+    """旧v1控制承接与新v2历史只读分开核；旧来源原样保留，缺件一律拒绝。"""
 
     document = _decoded(json.loads(_read_exact_cut(binding)))
-    if (document.get('schema') != 'claude-fault-product-continuation/v1'
+    evidence_formed = (document.get('schema') == 'claude-fault-product-continuation/v2'
+                       and document.get('mode') == 'formed-evidence-read-only')
+    if not evidence_formed and (document.get('schema') != 'claude-fault-product-continuation/v1'
             or document.get('mode') not in {'formed-read-only', 'registered-control-evolution'}):
         raise ValueError('故障链产品承接凭证版本或模式非法')
     if original_source is not None and document['original_source'] != original_source:
@@ -723,14 +838,16 @@ def verify_product_continuation(binding: dict[str, Any], *, tree: Path | None = 
     actual_tree = Path(document['tree']).resolve(strict=True)
     if tree is not None and actual_tree != tree.resolve(strict=True):
         raise ValueError('承接凭证不属于本次原 tree')
-    proof = control_continuation_proof(document['original_source'],
-                                       current_source if current_source is not None else document['current_source'],
-                                       document['before_files'])
-    if document['control_proof'] != proof:
-        raise ValueError('本次 control-only 身份与读侧证明漂移')
+    proof_function = formed_source_continuation_proof if evidence_formed else control_continuation_proof
+    proof = proof_function(document['original_source'],
+                           current_source if current_source is not None else document['current_source'],
+                           document['before_files'])
+    proof_field = 'source_proof' if evidence_formed else 'control_proof'
+    if document.get(proof_field) != proof or (evidence_formed and 'control_proof' in document):
+        raise ValueError('本次准确来源身份与读侧约束证明漂移')
     if _executor_product_files(actual_tree) != document['product_files']:
         raise ValueError('承接期间原产品或夹具字节变化')
-    if document['mode'] == 'formed-read-only':
+    if document['mode'] in FORMED_READ_ONLY_MODES:
         if document['chain'] not in {'late-continuous', 'recovery', 'revision-continuous'} or not document['methods']:
             raise ValueError('只读承接仅接受本次已成功的三条原链')
         formed_products = None
@@ -758,7 +875,7 @@ def verify_product_continuation(binding: dict[str, Any], *, tree: Path | None = 
                                          for item in registration['to']['entries']}}
         for relative in proof['changed_paths']:
             if document['product_files'].get(relative) != preserved[relative]:
-                raise ValueError('只读承接必须保留原控制产品字节，不能偷换当前产品')
+                raise ValueError('只读承接必须保留形成期原产品字节，不能偷换当前产品')
     else:
         registration = document['registration']
         if document['chain'] != 'revision-continuous' or len(document['methods']) != 1:
@@ -800,7 +917,7 @@ def _formed_read_only_invocation() -> bool:
     if binding is None:
         return False
     document = _decoded(json.loads(_read_exact_cut(binding)))
-    return document.get('mode') == 'formed-read-only'
+    return document.get('mode') in FORMED_READ_ONLY_MODES
 
 
 def require_registered_control_continuation(campaign: Path) -> dict[str, Any]:
@@ -1360,6 +1477,22 @@ def _read_only_fact_index(store: Any):
             # 快照持有底层原 Store；收尾不能通过本索引核验自身。
             snapshot.verify_fact_snapshots()
 
+        def _verify_external_binding(self, external_root: Path, binding: dict[str, Any]) -> None:
+            self.require_active()
+            boundary = _SHARED_STORE_REPLAY.get()
+            if boundary is not None:
+                from tools.official_client_control.canonical import resolve_relative
+                path = resolve_relative(external_root, binding['path'])
+                before = boundary._coordinate(path, directory=False)
+            super()._verify_external_binding(external_root, binding)
+            if boundary is not None:
+                # 只有原完整重放实际选出并验真的外部绑定进入足迹；不提前授予父域投影权。
+                # 原读取器已核长度及 SHA，登记只对照读前后坐标，不能再全文读取同一原件。
+                after = boundary._coordinate(path, directory=False)
+                if before != after:
+                    raise ControlError('共享整图外部原件在原验证期间漂移')
+                boundary.record_external(self, external_root, binding, after)
+
     indexed = ReplayStore(store.root, read_only=True)
     try:
         yield indexed
@@ -1370,19 +1503,11 @@ def _read_only_fact_index(store: Any):
         snapshot._fact_index.clear()
 
 
-def replay_read_only_store(store: Any, *, external_root: Path) -> dict[str, Any]:
-    """原世界的一次完整重放共用精确来源和资格批次；不承接上次通过结论。
-
-    Store 对象仍由原读取器逐份验真，所有对象图、事实、收据与外部原件
-    继续由原 replay 消费。这里只把同一次只读调用中重复取得的来源合并，
-    资格报告在退出批次时完成验证；任何收口失败都不能返回成功结果。
-    """
-
+def _read_only_store_source_items(store: Any) -> list[dict[str, Any]]:
+    """沿原对象合同形成精确来源请求，不从目录名或历史摘要推测来源。"""
     from tools.official_client_control import delivery_execution as execution
     from tools.official_client_control.canonical import canonical_sha256
 
-    if store.read_only is not True:
-        raise ValueError('成功世界重验批次只能使用原只读 Store')
     items: dict[str, dict[str, Any]] = {}
     for reference in store.list_object_refs('operational_evidence'):
         payload = store.load_object(reference)['payload']
@@ -1395,10 +1520,432 @@ def replay_read_only_store(store: Any, *, external_root: Path) -> dict[str, Any]
             item = execution._source_request({key: payload[key] for key in
                 ('campaign_id', 'delivery_id', 'operation_index_binding')}, payload['operation_index_origin'])
             items[canonical_sha256(item)] = item
+    return list(items.values())
+
+
+def _source_original_material(verified: Any, root: Path, *, error: Any) -> Any:
+    """仅提取已验精确类型的绑定；父发布及完成报告组合不读取整个懒 Mapping。
+
+    本辅助器不授予来源或准入权限，不保存字节或验证结论。调用方仍须处于
+    原活只读批次，并沿原 Mapping 完成首尾实读和中间漂移检查。最多承接
+    一层父发布与一层完成报告；未知类型交回原消费者，不从属性猜测合同。
+    """
+    from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+    from tools.official_client_capture.claude_upgrade_delivery import _ParentPublicationOriginals
+    from tools.official_client_control import delivery_execution as execution
+    from tools.official_client_control.canonical import validate_external_binding
+    from tools.official_client_control.errors import ControlError
+
+    if not isinstance(verified, execution.VerifiedSource) or verified.trusted_data_root != root:
+        return None
+
+    def merge(bindings: dict[str, Any], rows: Any) -> None:
+        for path, binding in rows.items():
+            try:
+                row = dict(validate_external_binding(dict(binding), '来源精确原件绑定'))
+            except ControlError as cause:
+                raise error('来源精确清单绑定形状或路径非法') from cause
+            if row['path'] != path or bindings.setdefault(path, row) != row:
+                raise error('来源组合对同一路径声明不同原字节')
+
+    def leaf(originals: Any) -> Any:
+        if type(originals) not in (executor._LocalSourceOriginals, executor._ProducerOriginals):
+            return None
+        if originals.root != root:
+            raise error('来源精确清单不属于同一可信数据根')
+        bindings: dict[str, Any] = {}
+        merge(bindings, originals.bindings)
+        if (type(originals) is executor._ProducerOriginals
+                and (not bindings or set(originals.metadata) != set(bindings))):
+            raise error('producer 精确清单没有逐份已验原件坐标')
+        return bindings
+
+    def extract(owner: Any, originals: Any, *, parent_allowed: bool, completed_allowed: bool) -> Any:
+        bindings = leaf(originals)
+        if bindings is not None:
+            return bindings
+        if type(originals) is executor._JoinedCompletedOriginals:
+            if not completed_allowed:
+                raise error('完成报告来源组合不能嵌套或承接其他准入清单')
+            producer, current = originals.producer, originals.current
+            if type(current) is not executor._ProducerOriginals:
+                raise error('完成报告组合缺同次精确 producer 清单')
+            bindings = extract(owner, producer, parent_allowed=parent_allowed, completed_allowed=False)
+            current_bindings = leaf(current)
+            if bindings is None or current_bindings is None:
+                raise error('完成报告组合缺原受管来源或同根报告清单')
+            merge(bindings, current_bindings)
+            if (originals.producer is not producer or originals.current is not current
+                    or frozenset(originals) != frozenset(bindings)):
+                raise error('完成报告组合路径闭集或原件提供者漂移')
+            return bindings
+        if type(originals) is _ParentPublicationOriginals:
+            if not parent_allowed:
+                raise error('父发布来源组合不能嵌套或承接其他父清单')
+            parent = originals.source
+            if (not isinstance(parent, execution.VerifiedSource) or parent.trusted_data_root != root
+                    or any(getattr(parent, field) != getattr(owner, field) for field in
+                        ('content_sha256', 'deployment_sha256', 'configuration_sha256', 'service_instance_id'))
+                    or parent.guard_continuity is not owner.guard_continuity
+                    or parent.profile_projection is not owner.profile_projection
+                    or parent.gate_projection is not owner.gate_projection):
+                raise error('父发布组合不属于同一受管根、来源及真实投影')
+            bindings = extract(parent, parent.bytes_by_path, parent_allowed=False,
+                completed_allowed=completed_allowed)
+            if bindings is None or originals.original_paths != frozenset(bindings):
+                raise error('父发布组合缺原精确清单或原路径闭集漂移')
+            merge(bindings, originals.bindings)
+            if originals.source is not parent or originals.paths != frozenset(bindings):
+                raise error('父发布组合路径闭集或原来源漂移')
+            return bindings
+        return None
+
+    originals = verified.bytes_by_path
+    bindings = extract(verified, originals, parent_allowed=True, completed_allowed=True)
+    return None if bindings is None else (bindings, originals)
+
+
+class _ReadOnlyStoreReplayBoundary:
+    """双完成阶段的局部图足迹；只有原首轮语义重放成功后才可共享计算。
+
+    五个 Store 读侧区域逐文件绑定真实字节与坐标，目录成员首尾重新枚举。
+    外部足迹来自原消费者已经验真的绑定；一次来源活批次覆盖双阶段及尾验。
+    首尾完整实读，中间核坐标与目录闭集；不允许跨 PID、根或作用域承接结论。
+    """
+
+    def __init__(self, store: Any, external_root: Path, scope_check: Callable[[], None],
+                 scope_paths: list[Path]):
+        from tools.official_client_control.errors import ControlError
+
+        if (store.read_only is not True or not external_root.is_absolute() or external_root.resolve() != external_root
+                or not store.root.is_relative_to(external_root)):
+            raise ControlError('共享整图只接受可信数据根与原只读 Store')
+        self.store, self.external_root, self.scope_check = store, external_root, scope_check
+        self.store_root = store.root
+        self.pid, self.active, self.result = os.getpid(), True, None
+        self.external_files: dict[Path, Any] = {}
+        self.external_directories: dict[Path, Any] = {}
+        self.source_paths: set[Path] | None = None
+        self.items: list[dict[str, Any]] = []
+        self.verifiers: dict[str, Any] = {}
+        self.indexed = None
+        self.source_batch = None
+        scope_check()
+        self.data_snapshot = {path: self._coordinate(path, directory=True, stable_directory=True)
+                              for path in (external_root, *external_root.parents)}
+        self.scope_files = {path: self._file(path) for path in scope_paths}
+        self.scope_ancestors = {}
+        for parent in sorted({parent for path in scope_paths for parent in path.parents}):
+            self.scope_ancestors[parent] = self._ancestor_directory(parent)
+        self.store_snapshot = self._store_snapshot()
+
+    def require_active(self) -> None:
+        from tools.official_client_control.errors import ControlError
+
+        if self.active is not True or self.pid != os.getpid():
+            raise ControlError('共享整图作用域已退出或越过原读取进程')
+
+    @staticmethod
+    def _coordinate(path: Path, *, directory: bool, stable_directory: bool = False) -> tuple[Any, ...]:
+        from tools.official_client_control.errors import ControlError
+
+        try:
+            info = path.lstat()
+        except OSError as error:
+            raise ControlError('共享整图原件或目录不可读：' + str(path)) from error
+        expected = stat.S_ISDIR if directory else stat.S_ISREG
+        if not expected(info.st_mode):
+            raise ControlError('共享整图原件或目录类型漂移：' + str(path))
+        value = (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+        # 根外祖先及 Store 根只核身份；锁目录内合法锁文件变化不属于 replay 读集。
+        if not stable_directory:
+            value += (info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        return value
+
+    def _file(self, path: Path) -> tuple[Any, ...]:
+        from tools.official_client_control.errors import ControlError
+
+        before = self._coordinate(path, directory=False)
+        raw = path.read_bytes()
+        after = self._coordinate(path, directory=False)
+        if before != after:
+            raise ControlError('共享整图原件在实读期间漂移：' + str(path))
+        return after, len(raw), hashlib.sha256(raw).hexdigest()
+
+    def _directory(self, path: Path) -> tuple[Any, ...]:
+        from tools.official_client_control.errors import ControlError
+
+        before = self._coordinate(path, directory=True)
+        members = []
+        for child in sorted(path.iterdir()):
+            info = child.lstat()
+            members.append((child.name, info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid))
+        after = self._coordinate(path, directory=True)
+        if before != after:
+            raise ControlError('共享整图目录在枚举期间漂移：' + str(path))
+        return after, tuple(members)
+
+    def _ancestor_directory(self, path: Path) -> tuple[Any, ...]:
+        return (self._directory(path) if path.is_relative_to(self.external_root) else
+                (self._coordinate(path, directory=True, stable_directory=True), None))
+
+    def _store_snapshot(self, *, full: bool = True) -> dict[Path, Any]:
+        root = self.store_root
+        observed = {path: ('ancestor', self._coordinate(path, directory=True, stable_directory=True))
+                    for path in (root, *root.parents)}
+
+        def visit(path: Path) -> None:
+            if not path.exists() and not path.is_symlink():
+                observed[path] = ('absent',)
+                return
+            if path.is_dir() and not path.is_symlink():
+                observed[path] = ('directory', self._directory(path))
+                for child in sorted(path.iterdir()):
+                    visit(child)
+            else:
+                if full:
+                    observed[path] = ('file', self._file(path))
+                else:
+                    previous = self.store_snapshot.get(path)
+                    # 只读命中仍核全体当前坐标；新成员不能借旧摘要变成已验证文件。
+                    metadata = self._coordinate(path, directory=False)
+                    observed[path] = ('file', (metadata, *previous[1][1:])
+                                      if previous is not None and previous[0] == 'file' else (metadata,))
+
+        # replay 仅打开这五类区域；locks 只由可写 _lock 使用，不扫描其内容。
+        for name in ('store.json', 'campaigns', 'facts', 'objects', 'receipts'):
+            visit(root / name)
+        return observed
+
+    def record_external(self, store: Any, root: Path, binding: dict[str, Any],
+                        coordinate: tuple[Any, ...]) -> None:
+        from tools.official_client_control.canonical import resolve_relative
+        from tools.official_client_control.errors import ControlError
+
+        self.require_active()
+        # 同根重开或资格包装仍须对应首读的真实 Store 目录身份；不能只凭路径字符串。
+        # 原 subject 可按冻结合同使用数据根内的子证据根，实际足迹仍落在同一数据根闭集中。
+        if (store.read_only is not True or store.root != self.store_root
+                or not root.is_absolute() or root.resolve() != root or not root.is_relative_to(self.external_root)
+                or self._coordinate(store.root, directory=True, stable_directory=True)
+                != self.store_snapshot[self.store_root][1]):
+            raise ControlError('共享整图外部足迹不能跨 Store 或数据根')
+        path = resolve_relative(root, binding['path'])
+        observed = coordinate, binding['bytes'], binding['sha256']
+        if self._coordinate(path, directory=False) != coordinate:
+            raise ControlError('共享整图已验证外部原件在登记前漂移')
+        if self.external_files.setdefault(path, observed) != observed:
+            raise ControlError('共享整图外部原件坐标或字节漂移')
+        for parent in path.parents:
+            previous = self.external_directories.get(parent, self.scope_ancestors.get(parent))
+            if previous is not None:
+                # 已登记共同祖先不逐文件重复枚举或 lstat；共享前后及尾验按轮核闭集。
+                continue
+            directory = self._ancestor_directory(parent)
+            if self.external_directories.setdefault(parent, directory) != directory:
+                raise ControlError('共享整图外部目录闭集或身份漂移')
+
+    def verify_files(self, *, full: bool = False) -> None:
+        from tools.official_client_control.errors import ControlError
+
+        self.require_active()
+        self.scope_check()
+        if any(self._coordinate(path, directory=True, stable_directory=True) != expected
+               for path, expected in self.data_snapshot.items()):
+            raise ControlError('共享整图数据根或祖先身份漂移')
+        if any((self._file(path) != expected if full else
+                self._coordinate(path, directory=False) != expected[0])
+               for path, expected in self.scope_files.items()):
+            raise ControlError('共享整图来源或完成停点原字节、身份、权限漂移')
+        observed_store = self._store_snapshot(full=full)
+        if observed_store != self.store_snapshot:
+            raise ControlError('共享整图 Store 原字节、身份、权限或目录闭集漂移')
+        for path, expected in self.external_files.items():
+            # 来源的完整首尾实读由原来源消费者及其原活批次收口负责；本足迹只补坐标。
+            # 不把来源清单再扫一轮，也不把它换成裸根回退或自制字节缓存。
+            actual = (self._file(path) if full and path not in (self.source_paths or set())
+                      and path not in self.scope_files else
+                      (self._coordinate(path, directory=False), *expected[1:]))
+            if actual != expected:
+                raise ControlError('共享整图外部原字节、身份或权限漂移')
+        for path, expected in {**self.scope_ancestors, **self.external_directories}.items():
+            stored = observed_store.get(path)
+            actual = stored[1] if stored is not None and stored[0] == 'directory' else self._ancestor_directory(path)
+            if actual != expected:
+                raise ControlError('共享整图外部目录闭集或身份漂移')
+
+    def _source_bindings(self, verified: Any) -> list[dict[str, Any]]:
+        """只用原已鉴权清单登记摘要；懒读 Mapping 不能通过 items 再全量读取。"""
+        from tools.official_client_control.errors import ControlError
+
+        if verified.trusted_data_root != self.external_root:
+            raise ControlError('共享整图来源原件不属于同一可信数据根')
+        material = _source_original_material(verified, self.external_root, error=ControlError)
+        if material is not None:
+            bindings, _originals = material
+            # 精确原件已由来源、父发布或本次准入验证；登记不再全量读取懒 Mapping。
+            # 原活批次、来源重验与外部足迹首尾核验仍负责实际字节和生命周期。
+            return [bindings[path] for path in sorted(bindings)]
+        # 未知来源保持原实读分支，不因恰有 bindings 属性而取得精确清单权限。
+        return [{'path': relative, 'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)}
+                for relative, raw in verified.bytes_by_path.items()]
+
+    def _record_sources(self, sources: list[Any]) -> None:
+        """原来源验证负责字节真实性，本地只合并精确绑定和原件闭集。"""
+        from tools.official_client_control.canonical import resolve_relative
+        from tools.official_client_control.errors import ControlError
+
+        originals = {}
+        for verified in sources:
+            for binding in self._source_bindings(verified):
+                if originals.setdefault(binding['path'], binding) != binding:
+                    raise ControlError('共享整图不同来源对同一路径声明不同原字节')
+        for binding in originals.values():
+            path = resolve_relative(self.external_root, binding['path'])
+            self.record_external(self.indexed, self.external_root, binding, self._coordinate(path, directory=False))
+        paths = {self.external_root / relative for relative in originals}
+        if self.source_paths is None:
+            self.source_paths = paths
+        elif paths != self.source_paths:
+            raise ControlError('共享整图真实来源原件闭集漂移')
+
+    def verify_sources(self) -> None:
+        """同一活批次沿原通道核必要字节和连续性，不新增导出及足迹全文读取。"""
+        from tools.official_client_control import delivery_execution as execution
+        from tools.official_client_control.errors import ControlError
+
+        self.require_active()
+        batch = execution._SOURCE_BATCH.get()
+        if (batch is not self.source_batch or (batch is not None
+                and (batch.active is not True or batch.store is not self.indexed))):
+            raise ControlError('共享整图来源已退出原精确活批次')
+        for authority, verifier in self.verifiers.items():
+            if execution._source_verifier(authority) is not verifier:
+                raise ControlError('共享整图来源登记已撤销或更换')
+        self._record_sources([execution._verified_source(self.indexed, item['content'], item['origin'])
+                              for item in self.items])
+
+    def verify(self, *, full: bool = False) -> None:
+        try:
+            self.verify_files()
+            self.verify_sources()
+            if full:
+                self.indexed.verify_fact_snapshots()
+                self.verify_files(full=True)
+        except BaseException:
+            self.close()
+            raise
+
+    def replay(self, store: Any, external_root: Path) -> dict[str, Any]:
+        from copy import deepcopy
+        from tools.official_client_control.errors import ControlError
+
+        try:
+            self.require_active()
+            if store.read_only is not True or store.root != self.store_root or external_root != self.external_root:
+                raise ControlError('共享整图不能跨 Store、数据根或读写用途')
+            if self.result is None:
+                self.verify_files()
+                result = _replay_read_only_store(self.indexed, external_root=external_root)
+                self.verify_files()
+                self.result = deepcopy(result)
+            else:
+                self.verify()
+            return deepcopy(self.result)
+        except BaseException:
+            # 调用方即使截住拒绝，也不能在同作用域恢复文件后承接旧图。
+            self.close()
+            raise
+
+    def close(self) -> None:
+        self.active, self.result = False, None
+        self.external_files.clear()
+        self.external_directories.clear()
+        self.store_snapshot.clear()
+        self.data_snapshot.clear()
+        self.scope_files.clear()
+        self.scope_ancestors.clear()
+        self.items.clear()
+        self.verifiers.clear()
+        self.source_paths = None
+        self.indexed, self.source_batch = None, None
+
+
+@contextlib.contextmanager
+def shared_read_only_store_replay(store: Any, *, external_root: Path, scope_check: Callable[[], None],
+                                  scope_paths: list[Path] | None = None):
+    """同 installed 的双 complete 私有作用域；尾验完成前不给下游写入释放结果。"""
+    from tools.official_client_control import delivery_execution as execution
+    from tools.official_client_control.errors import ControlError
+
+    if _SHARED_STORE_REPLAY.get() is not None:
+        raise ControlError('共享整图作用域不能嵌套或承接旧结论')
+    boundary = _ReadOnlyStoreReplayBoundary(store, external_root, scope_check, scope_paths or [])
+    token = _SHARED_STORE_REPLAY.set(boundary)
+    try:
+        # 唯一索引与一次精确来源批次覆盖两个 complete 及异常/正常尾验。
+        # typed 读取生命周期在此仍保持活态，最后完整来源复读先于批次失效。
+        with _read_only_fact_index(store) as indexed:
+            boundary.indexed = indexed
+            boundary.items = _read_only_store_source_items(indexed)
+            boundary.verifiers = {item['origin']['authority']: execution._source_verifier(item['origin']['authority'])
+                                  for item in boundary.items}
+            with execution._source_batch_scope(indexed, boundary.items):
+                boundary.source_batch = execution._SOURCE_BATCH.get()
+                if boundary.source_batch is not None:
+                    boundary._record_sources(list(boundary.source_batch.sources.values()))
+                try:
+                    yield boundary
+                    if boundary.result is None:
+                        raise ControlError('共享整图未形成完整首轮结果，不能释放阶段通过')
+                    boundary.verify(full=True)
+                finally:
+                    # 拒绝即失效；未被内部拒绝的消费者异常也必须在原活批次内尾验。
+                    if sys.exc_info()[0] is not None and boundary.active:
+                        boundary.verify(full=True)
+            # 原来源批次尾读完成后再核全部坐标，不能让收口期间漂移释放旧图。
+            boundary.verify_files()
+    finally:
+        boundary.close()
+        _SHARED_STORE_REPLAY.reset(token)
+
+
+def replay_read_only_store(store: Any, *, external_root: Path) -> dict[str, Any]:
+    """原独立调用完整重放；只有已登记的局部双完成作用域可共享纯图计算。"""
+    boundary = _SHARED_STORE_REPLAY.get()
+    if boundary is not None:
+        return boundary.replay(store, external_root)
+    return _replay_read_only_store(store, external_root=external_root)
+
+
+def _replay_read_only_store(store: Any, *, external_root: Path) -> dict[str, Any]:
+    """原世界的一次完整重放共用精确来源和资格批次；不承接上次通过结论。
+
+    Store 对象仍由原读取器逐份验真，所有对象图、事实、收据与外部原件
+    继续由原 replay 消费。这里只把同一次只读调用中重复取得的来源合并，
+    资格报告在退出批次时完成验证；任何收口失败都不能返回成功结果。
+    """
+
+    from tools.official_client_control import delivery_execution as execution
+
+    if store.read_only is not True:
+        raise ValueError('成功世界重验批次只能使用原只读 Store')
+    boundary = _SHARED_STORE_REPLAY.get()
+    if boundary is not None:
+        boundary.require_active()
+        if store is not boundary.indexed:
+            raise ValueError('共享整图首轮只能消费原唯一只读索引')
+        # 资格批次仍由原首轮完整图收口；只省重复索引和新来源出口。
+        with execution._qualification_read_batch(store, current_execution=False):
+            result = store.replay(external_root=external_root, require_external=True)
+        store.verify_fact_snapshots()
+        boundary.verify_sources()
+        return result
+    items = _read_only_store_source_items(store)
     # 来源生命周期须覆盖资格批次的最终复读；嵌套消费者仍只接受同一
     # Store、已声明子集、原登记通道及未漂移字节。原批量上限保持不变。
     with _read_only_fact_index(store) as indexed, \
-            execution._source_batch_scope(indexed, list(items.values())):
+            execution._source_batch_scope(indexed, items):
         with execution._qualification_read_batch(indexed, current_execution=False):
             result = indexed.replay(external_root=external_root, require_external=True)
         indexed.verify_fact_snapshots()

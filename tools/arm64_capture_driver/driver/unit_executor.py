@@ -69,6 +69,7 @@ import sys
 import tempfile
 import time
 import unittest
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator
@@ -126,9 +127,21 @@ def _write_json(path: Path, payload: Any) -> None:
     os.replace(temporary, path)
 
 
+_CONTROL_READ_AUDIT: ContextVar[Any] = ContextVar("unit_executor_control_read_audit", default=None)
+
+
+def _executor_files(helper: Path) -> list[Path]:
+    """本次执行与首尾核对共同冻结固定sidecar，不给普通默认执行追加合同。"""
+    adapter = _CONTROL_READ_AUDIT.get()
+    return [helper, *(adapter.sidecar_paths() if adapter is not None else [])]
+
+
 def _records_module() -> Any:
     """同目录的 unit_records.py（仓库 tools/ci 与驱动副本里都和本文件同目录）：按路径加载，不受当前目录与 PYTHONPATH 影响。"""
 
+    adapter = _CONTROL_READ_AUDIT.get()
+    if adapter is not None:
+        return adapter._records_module()
     name = "unit_records_sibling"
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "unit_records.py")
@@ -161,6 +174,9 @@ def _unit_inherit_module() -> Any:
 def _audit_module() -> Any:
     """同目录的 read_audit.py（读集审计，E3-04）：同样按路径加载。"""
 
+    adapter = _CONTROL_READ_AUDIT.get()
+    if adapter is not None:
+        return adapter
     name = "read_audit_sibling"
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "read_audit.py")
@@ -1908,7 +1924,7 @@ def _run_commands(args: argparse.Namespace) -> int:
     state_dir = args.state_dir or default_state_dir()
     records = _records_module()
     recorder = Recorder(out_dir=out_dir, mode=records.RE_EXECUTE, run_id=records.new_run_id(), policy=policy,
-                        executor=records.executor_version([args.bytecode_helper]), environment=None,
+                        executor=records.executor_version(_executor_files(args.bytecode_helper)), environment=None,
                         currents=_plain_currents(records, units, start=None, pattern=None, timeout=config.unit_timeout_seconds,
                                                  reason="命令单元清单模式（run-commands）不承接"))
     lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)
@@ -2249,6 +2265,15 @@ def _check_unit_inherit_args(args: argparse.Namespace, records: Any, request_pat
 
 
 def _run_gates(args: argparse.Namespace) -> int:
+    """当前适配器仅存活于本次门禁调用；退出、异常或下一次普通调用都恢复原默认。"""
+    token = _CONTROL_READ_AUDIT.set(None)
+    try:
+        return _run_gates_current(args)
+    finally:
+        _CONTROL_READ_AUDIT.reset(token)
+
+
+def _run_gates_current(args: argparse.Namespace) -> int:
     """``run-gates``（E2-04）：一个测试组与若干命令单元同一次运行、同一套调度（额度、独占、预约、诊断、会话清理），
     全部跑完再按门禁项汇总——一个门禁项失败不影响别的门禁项照跑。测试组在执行器的工作目录下 discover。
 
@@ -2276,6 +2301,13 @@ def _run_gates(args: argparse.Namespace) -> int:
     durations = load_durations(args.durations)
     cores = args.cores or os.cpu_count() or 1
     groups, command_units, gates, manifest = load_gates_manifest(args.manifest, machine_cores=cores)
+    # 只从当前entry的固定加载器取得四control适配器；证据不提供模块路径。
+    spec = importlib.util.spec_from_file_location("_executor_control_entry_gates", Path(__file__).resolve().with_name("entry_gates.py"))
+    entry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(entry)
+    adapter = entry.control_read_audit_for_plan(manifest)
+    _CONTROL_READ_AUDIT.set(adapter)
+    records = _records_module()
     resume_manifest_digest = records.file_sha256(args.manifest)
     parallelism = args.parallel or config.default_parallelism
     # 环境指纹要在准备共享缓存之前算：准备缓存会往本进程环境里写缓存位置。
@@ -2283,7 +2315,7 @@ def _run_gates(args: argparse.Namespace) -> int:
         environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
     except records.RecordsError as error:
         raise ExecutorError(f"门禁清单的环境事实非法：{error}") from error
-    executor = records.executor_version([args.bytecode_helper])
+    executor = records.executor_version(_executor_files(args.bytecode_helper))
     store = records.RecordStore(args.record_store) if args.record_store is not None else None
     group_units: dict[str, list[Unit]] = {}
     expected: dict[str, set[str]] = {}
@@ -2422,7 +2454,8 @@ def _run_gates(args: argparse.Namespace) -> int:
             if context is None:
                 raise ExecutorError("逐单元承接：算不出当前上下文，不能写承接提案")
             proposal = inherit_module.write_proposal(args.unit_inherit_propose, context=context,
-                                                     sources=inherit_module.propose(store.root, currents, facts, max_age_hours=max_age))
+                                                     sources=inherit_module.propose(store.root, currents, facts, max_age_hours=max_age,
+                                                                                   client=context["client"]))
             print(f"逐单元承接提案：可承接 {proposal['units']} 个单元、来源运行 {proposal['runs']} 个；批准要签的 binding_sha256 "
                   f"{proposal['binding_sha256']}（{args.unit_inherit_propose / 'binding.json'}）", file=sys.stderr)
         if args.unit_inherit_request is None:
@@ -2483,7 +2516,7 @@ def _run_gates(args: argparse.Namespace) -> int:
                     raise ExecutorError("整机预约后宿主输入漂移，拒绝重派")
         fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
         if (records.entries_sha256(fresh_environment) != recorder.environment_sha256
-                or records.executor_version([args.bytecode_helper]) != recorder.executor
+                or records.executor_version(_executor_files(args.bytecode_helper)) != recorder.executor
                 or records.file_sha256(args.manifest) != resume_manifest_digest
                 or gates_policy_digest(load_config(args.config), load_weights(args.weights), load_durations(args.durations),
                                        parallelism, manifest.get("scheduling")) != policy):
@@ -2712,7 +2745,7 @@ def main(argv: list[str] | None = None) -> int:
         state_dir = args.state_dir or default_state_dir()
         records = _records_module()
         recorder = Recorder(out_dir=out_dir, mode=records.RE_EXECUTE, run_id=records.new_run_id(), policy=policy,
-                            executor=records.executor_version([args.bytecode_helper]), environment=None,
+                            executor=records.executor_version(_executor_files(args.bytecode_helper)), environment=None,
                             currents=_plain_currents(records, units, start=args.start, pattern=args.pattern,
                                                      timeout=config.unit_timeout_seconds, reason="测试模式（run）不承接"))
         lock = hold_scheduler_lock(state_dir, wait_seconds=args.wait_seconds)

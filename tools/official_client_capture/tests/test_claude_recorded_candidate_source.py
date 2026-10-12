@@ -299,6 +299,7 @@ class RecordedCandidateSourceTests(unittest.TestCase):
                                                                     {"results": [{"id": "candidate-fixture"}]} )["artifact_jobs"].values()), {"candidate-fixture"})
         with self.assertRaisesRegex(assertion.AssertionConfigurationError, "降级"):
             assertion.observations_from_manifest(self.v1_manifest, self.data)
+        self._assert_recorded_subject_dependency_closure(evaluation_path)
         tampered = Path(self.projection["output_root"]) / recorded.ORIGINAL_DIRECTORY / "relay/conn002.client_to_upstream.bin"
         tampered.write_bytes(tampered.read_bytes() + b" ")
         for consumer in (lambda: assertion.observations_from_manifest(manifest, self.data),
@@ -306,6 +307,120 @@ class RecordedCandidateSourceTests(unittest.TestCase):
                          lambda: recovery.candidate_failure_scope_inputs(self.context.campaign_dir, candidate_result, {"results": [{"id": "candidate-fixture"}]})):
             with self.subTest(consumer=consumer), self.assertRaisesRegex(Exception, "漂移|不一致"):
                 consumer()
+
+    def _assert_recorded_subject_dependency_closure(self, evaluation_path: Path) -> None:
+        """沿同一已验单 probe 核真实 retention 与首次／后续成员拒绝，不运行交付链。"""
+        import dataclasses
+        from tools.official_client_capture import claude_recorded_evaluation_contract as recorded
+        from tools.official_client_capture import claude_qualification_material_source as material
+        from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+        from tools.official_client_control import qualification_material_import as consumer
+        from tools.official_client_control.canonical import canonical_sha256
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.delivery_execution import VerifiedSource
+
+        # 既有合成目录尚未登记 producer 身份；统一形成其要求的私有权限。
+        # 不在失败后修复路径，也不改原录制内容或任何正式来源资格。
+        for path in (self.data, *self.data.rglob("*")):
+            if path.is_dir() and not path.is_symlink():
+                path.chmod(0o700)
+            elif path.is_file() and not path.is_symlink():
+                path.chmod(0o600)
+        originals = executor._ProducerOriginals(self.data)
+        parents = {}
+
+        def retain(path, expected_sha256=None):
+            binding = originals.binding(path)
+            if expected_sha256 is not None:
+                self.assertEqual(binding["sha256"], expected_sha256)
+            return originals.add(binding)
+
+        def project_parent(path, base, metadata=(), *, coordinate_roots=(), resolved_bindings=()):
+            # 回调只保留生产 retention 返回的已验父；不替换录制合同的结果。
+            raw = retain(path)
+            document = material.parse_json_bytes(raw)
+            def node_at(coordinate):
+                node = document
+                for key in coordinate:
+                    node = node[int(key)] if isinstance(node, list) else node[key]
+                return node
+            domains = tuple((coordinate, canonical_sha256(node_at(coordinate))) for coordinate in metadata)
+            resolved = tuple((coordinate, node_at(coordinate), originals.binding(target))
+                for coordinate, target in resolved_bindings)
+            binding = originals.binding(path)
+            value = material.VerifiedQualificationSubjectProjection(binding,
+                base.relative_to(self.data).as_posix(), domains,
+                tuple((coordinate, root.relative_to(self.data).as_posix()) for coordinate, root in coordinate_roots),
+                material._TOKEN, resolved)
+            self.assertEqual(parents.setdefault(binding["path"], value), value)
+
+        views = material._retain_recorded_evaluation_materials(evaluation_path, self.data,
+            retain=retain, project_parent=project_parent)
+        self.assertEqual(len(views), 1)
+        view = next(iter(views.values()))
+        proof_path = view["destination"] / recorded.PROBE_FILENAME
+        proof_parent = parents[proof_path.relative_to(self.data).as_posix()]
+        projections = list(parents.values())
+        roots, probes, selections, members = consumer._material_recorded_subject_dependencies(
+            originals, proof_parent, projections, {})
+        self.assertEqual(len(selections), 4)
+        self.assertNotIn((self.data, "recorded-files"), selections)
+        originals._material_subject_recorded_members = tuple(sorted((path, kind, expected)
+            for (path, kind), expected in members.items()))
+        def captured():
+            return {(str(path), None, kind): consumer._successor_dependency_metadata(path,
+                enumerate_members=True, stable_directory=True, selection_kind=kind) for path, kind in selections}
+        before = captured()
+        consumer._verify_material_recorded_dependency_members(originals, before)
+        # 这里只核真实依赖元数据的后续拒绝，不授予材料消费者来源或作用域能力。
+        source_view = VerifiedSource("0" * 64, "1" * 64, originals, "0" * 64, "fixture-only", self.data)
+        snapshot = consumer._SuccessorReadSnapshot(source_view)
+        snapshot.dependencies = dict(before)
+        for path in roots | probes:
+            snapshot.dependencies[str(path)] = consumer._successor_dependency_metadata(path, stable_directory=True)
+        snapshot.revalidate_dependencies()
+        # 真实 source 和 copied 两个递归集合、两侧 relay 即时集合均不能纳入
+        # 初次验真之后新增的成员；有相同字节的未登记新路径仍然拒绝。
+        for path, kind in sorted(selections):
+            extra = path / "unregistered-same-bytes.bin"
+            extra.write_bytes(proof_path.read_bytes())
+            extra.chmod(0o600)
+            try:
+                with self.subTest(selection=kind, root=str(path)), self.assertRaises(ControlError):
+                    consumer._verify_material_recorded_dependency_members(originals, captured())
+                with self.assertRaises(ControlError):
+                    snapshot.revalidate_dependencies()
+            finally:
+                extra.unlink()
+        for path in sorted(probes):
+            if path.exists():
+                continue
+            path.write_bytes("未登记的负向探测原件".encode())
+            try:
+                with self.subTest(negative_probe=str(path)), self.assertRaises(ControlError):
+                    snapshot.revalidate_dependencies()
+            finally:
+                path.unlink()
+        # 缺子坐标证明、相同摘要的未登记坐标或伪 token 不能获得热依赖闭集。
+        incomplete = dataclasses.replace(proof_parent, resolved_bindings=tuple(row
+            for row in proof_parent.resolved_bindings if row[0] != ("source_state",)))
+        self.assertIsNone(consumer._material_recorded_subject_dependencies(originals, incomplete,
+            [incomplete if value is proof_parent else value for value in projections], {}))
+        source_binding = next(normalized for coordinate, _original, normalized in proof_parent.resolved_bindings
+            if coordinate == ("source_state",))
+        retained_binding = originals.bindings.pop(source_binding["path"])
+        try:
+            self.assertIsNone(consumer._material_recorded_subject_dependencies(originals,
+                proof_parent, projections, {}))
+            self.assertNotIn(source_binding["path"], originals.bindings)
+        finally:
+            originals.bindings[source_binding["path"]] = retained_binding
+        forged = dataclasses.replace(proof_parent, token=object())
+        self.assertIsNone(consumer._material_recorded_subject_dependencies(originals, forged,
+            [forged if value is proof_parent else value for value in projections], {}))
+        self.assertTrue(roots)
+        self.assertEqual(len(probes), 4)
+        originals.revalidate()
 
     def test_recorded_policy_rejects_formal_mixed_unknown_and_extra_state_changes(self) -> None:
         from tools.official_client_capture import claude_recorded_evaluation_contract as recorded

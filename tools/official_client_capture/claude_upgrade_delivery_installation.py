@@ -524,15 +524,13 @@ def _source_reader(store: Any, content: Mapping[str, Any], origin: Mapping[str, 
 
 
 def formal_source_verifier(store: Any, content: Mapping[str, Any], origin: Mapping[str, Any]):
-    from tools.official_client_control.delivery_execution import VerifiedSource
-    try:
-        return VerifiedSource(**_source_reader(store, content, origin).verify_origin_evidence(content, origin))
-    except (OSError, ValueError, guard.GuardError) as error:
-        raise ControlError("Claude 真实交付来源尚未完成受管通道验收：" + str(error)) from error
+    """单项复用同一正式批量入口，先匹配真实安装，再完整取得来源。"""
+    return formal_source_verifier_batch(store, [{"content": dict(content), "origin": dict(origin)}])[0]
 
 
 def formal_source_verifier_batch(store: Any, items: list[dict[str, Any]]):
     from tools.official_client_control.delivery_execution import VerifiedSource
+    from tools.official_client_capture.claude_upgrade_delivery import compose_parent_publication_source
     try:
         groups: dict[str, tuple[Any, list]] = {}
         for index, (item, reader) in enumerate(zip(items, _source_readers(store, items))):
@@ -544,7 +542,8 @@ def formal_source_verifier_batch(store: Any, items: list[dict[str, Any]]):
             if len(values) != len(indexed):
                 raise guard.GuardError("来源批量响应缺少请求项")
             for (index, _), value in zip(indexed, values):
-                output[index] = VerifiedSource(**value)
+                item = items[index]
+                output[index] = compose_parent_publication_source(store, item["content"], item["origin"], VerifiedSource(**value))
         return output
     except (OSError, ValueError, guard.GuardError) as error:
         raise ControlError("Claude 真实交付来源尚未完成受管通道验收：" + str(error)) from error

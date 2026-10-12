@@ -143,7 +143,21 @@ def read_bytes(path: Path) -> bytes:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
             raise GuardError(f"原件不是当前所有者的普通文件：{path}")
-        return stream.read()
+        content = stream.read()
+        after = os.fstat(stream.fileno())
+        try:
+            current = path.lstat()
+        except OSError as error:
+            raise GuardError(f"原件实读期间路径失效：{path}") from error
+        # 同一描述符完成实读；尾查实际路径仍指向该文件，并核权限、所有者
+        # 和写入标记。先验摘要后另开文件会把未经校验的新字节交给解析器。
+        fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_size", "st_mtime_ns", "st_ctime_ns")
+        before_state = tuple(getattr(info, field) for field in fields)
+        if (tuple(getattr(after, field) for field in fields) != before_state
+                or tuple(getattr(current, field) for field in fields) != before_state
+                or len(content) != info.st_size):
+            raise GuardError(f"原件实读期间字节、路径或权限漂移：{path}")
+        return content
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -205,16 +219,42 @@ def binding(root: Path, path: Path) -> dict[str, Any]:
     return {"path": relative, "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)}
 
 
-def check_binding(root: Path, value: Any) -> Path:
+def _read_checked_binding(root: Path, value: Any) -> tuple[Path, bytes]:
+    """同一安全实读既验绑定也交回原字节，不建立跨读取缓存。"""
     parsed = exact(value, {"path", "sha256", "bytes"}, "文件绑定")
     if not isinstance(parsed["sha256"], str) or not SHA256.fullmatch(parsed["sha256"]) or parsed["sha256"] == "0" * 64:
         raise GuardError("文件绑定摘要非法")
     if not isinstance(parsed["bytes"], int) or isinstance(parsed["bytes"], bool) or parsed["bytes"] < 0:
         raise GuardError("文件绑定长度非法")
     path = managed_path(root, parsed["path"])
-    if binding(root, path) != parsed:
+    content = read_bytes(path)
+    if len(content) != parsed["bytes"] or hashlib.sha256(content).hexdigest() != parsed["sha256"]:
         raise GuardError(f"文件绑定漂移：{parsed['path']}")
-    return path
+    # 内容实读后再次检查全部受管路径分量，拒绝祖先在读取中被换成链接。
+    managed_path(root, parsed["path"])
+    return path, content
+
+
+def check_binding(root: Path, value: Any) -> Path:
+    """保留既有返回 Path 的合同；需要消费原字节时使用下面的窄接口。"""
+    return _read_checked_binding(root, value)[0]
+
+
+def read_bound_bytes(root: Path, value: Any) -> bytes:
+    """返回本次实读并验过摘要的原字节；调用间仍逐次实读。"""
+    return _read_checked_binding(root, value)[1]
+
+
+def read_bound_json(root: Path, value: Any) -> dict[str, Any]:
+    """直接解析本次已验原字节，避免 check_binding 后第二次打开路径。"""
+    path, content = _read_checked_binding(root, value)
+    try:
+        document = parse_json_bytes(content, str(path))
+    except Exception as error:
+        raise GuardError(f"守卫原件 JSON 非法：{path}") from error
+    if not isinstance(document, dict):
+        raise GuardError(f"守卫原件必须是对象：{path}")
+    return document
 
 
 def object_ref(value: Any, kind: str, label: str) -> dict[str, str]:
@@ -359,7 +399,7 @@ class GuardEngine:
         self._startup_requested = False
 
     def _read_original(self, item: Mapping[str, Any]) -> bytes:
-        return read_bytes(check_binding(self.data_root, dict(item)))
+        return read_bound_bytes(self.data_root, dict(item))
 
     def _epoch_materials(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """实际磁盘全集决定注册链，上传列表不能裁掉中间或末尾代际。"""
@@ -434,7 +474,7 @@ class GuardEngine:
             return None
         if not registrations:
             raise GuardError("守卫注册头存在而代际全集缺失，禁止倒填")
-        last = read_json(check_binding(self.data_root, registrations[-1]))
+        last = read_bound_json(self.data_root, registrations[-1])
         registered = guard_epochs.validate_registration_chain(
             self.configuration, self.context, registrations, self._read_original,
             channel_identity=last["guard_identity"])
@@ -472,7 +512,7 @@ class GuardEngine:
     def _require_registered_producers(self, registrations: list[dict[str, Any]]) -> None:
         """追加前核既有来源；未完成的新身份不能替旧操作或 freeze 倒填注册。"""
         identities = {value["service_instance_id"]: value for value in (
-            read_json(check_binding(self.data_root, item))["guard_identity"] for item in registrations)}
+            read_bound_json(self.data_root, item)["guard_identity"] for item in registrations)}
 
         def require(document: dict[str, Any], *, identity_required: bool, origin_required: bool) -> None:
             if identity_required:
@@ -547,7 +587,7 @@ class GuardEngine:
             raise GuardError("注册追加意图不是单一末尾追加")
         previous = registrations[:-1]
         if previous:
-            identity = read_json(check_binding(self.data_root, previous[-1]))["guard_identity"]
+            identity = read_bound_json(self.data_root, previous[-1])["guard_identity"]
             registered = guard_epochs.validate_registration_chain(
                 self.configuration, self.context, previous, self._read_original, channel_identity=identity)
             guard_epochs.validate_registry_head(
@@ -560,7 +600,7 @@ class GuardEngine:
             completed_path = self.root / "epoch-registry/appends" / f"{number - 1:06d}" / "completed.json"
             if number < 2 or previous_completed.get("path") != completed_path.relative_to(self.data_root).as_posix():
                 raise GuardError("注册追加意图的前完成凭证坐标非法")
-            completed = exact(read_json(check_binding(self.data_root, previous_completed)), {
+            completed = exact(read_bound_json(self.data_root, previous_completed), {
                 "schema_version", "intent_binding", "registry_head_binding",
             }, "注册追加前完成凭证")
             exact(completed["intent_binding"], {"path", "sha256", "bytes"}, "前注册追加意图绑定")
@@ -700,7 +740,7 @@ class GuardEngine:
         self._require_registered_producers(registrations)
         stable = guard_epochs.stable_deployment_identity(self.configuration, self.context, self.identity)
         if registrations:
-            last = read_json(check_binding(self.data_root, registrations[-1]))
+            last = read_bound_json(self.data_root, registrations[-1])
             guard_epochs.validate_registration_chain(
                 self.configuration, self.context, registrations, self._read_original,
                 channel_identity=last["guard_identity"],
@@ -760,7 +800,7 @@ class GuardEngine:
         path = check_binding(self.data_root, self._epoch_binding).parent / "readiness.json"
         if not path.exists():
             index_binding = self._snapshot_index()
-            index = read_json(check_binding(self.data_root, index_binding))
+            index = read_bound_json(self.data_root, index_binding)
             rows = []
             for item in index["operations"]:
                 if item["status"] not in {"execution_committed", "restored"} or item["terminal_binding"] is None:
@@ -1163,7 +1203,7 @@ class GuardEngine:
         successful = terminal["status"] == "restored"
         restore_bindings = terminal["restoration"]["bindings"]
         if successful:
-            restored = read_json(check_binding(self.data_root, restore_bindings[0]))
+            restored = read_bound_json(self.data_root, restore_bindings[0])
             actual, checks = restored["actual"], restored["checks"]
         else:
             unknown = {"state": "unknown", "reason": "恢复尚未验证"}
@@ -1310,7 +1350,7 @@ class GuardEngine:
     def _profile_source_materials(self, origin: dict[str, Any], freeze_path: Path | None) -> list[dict[str, Any]]:
         """完整 core 已匹配后，只从其原 snapshot 和显式全操作索引选择 producer。"""
         def read_original(item: Mapping[str, Any]) -> bytes:
-            return read_bytes(check_binding(self.data_root, dict(item)))
+            return read_bound_bytes(self.data_root, dict(item))
 
         materials = []
 
@@ -1325,7 +1365,7 @@ class GuardEngine:
             add("freeze", binding(self.data_root, freeze_path), None, snapshot, "/cores/freeze/before_bindings/")
         index_binding = origin.get("operations_index_binding")
         if index_binding is not None:
-            index = read_json(check_binding(self.data_root, index_binding))
+            index = read_bound_json(self.data_root, index_binding)
             if index.get("schema_version") != INDEX_SCHEMA or index.get("configuration_sha256") != canonical_sha256(self.configuration):
                 raise GuardError("Profile producer 的索引不是同一冻结配置")
             current = {row["operation_id"]: row["prepared_binding"] for row in self._index()["operations"]}
@@ -1345,12 +1385,12 @@ class GuardEngine:
                     terminal_path = PurePosixPath(terminal_binding["path"])
                     if terminal_path.parent.as_posix() != operation.relative_to(self.data_root).as_posix() + "/terminals":
                         continue
-                    terminal = read_json(check_binding(self.data_root, terminal_binding))
+                    terminal = read_bound_json(self.data_root, terminal_binding)
                     if terminal.get("status") == "restored":
                         restoration_binding = terminal["restoration"]["bindings"][0]
                         if restoration_binding not in row["bindings"]:
                             raise GuardError("Profile recovery 的原观测不在完整操作索引")
-                        restored = read_json(check_binding(self.data_root, restoration_binding))
+                        restored = read_bound_json(self.data_root, restoration_binding)
                         add("recovery", terminal_binding, restoration_binding, restored, "/bindings/")
         return sorted(materials, key=canonical_sha256)
 
@@ -1540,7 +1580,7 @@ class GuardEngine:
                               for material in profile_materials for reference in material["proof_references"]}
             profile_projection = profile_observations.validate_profile_observation_projection(
                 self.configuration, self.context, [proof_bindings[key] for key in sorted(proof_bindings)],
-                lambda item: read_bytes(check_binding(self.data_root, dict(item))),
+                lambda item: read_bound_bytes(self.data_root, dict(item)),
                 purpose="formed_replay", producer_materials=profile_materials)
             if self.configuration.get("schema_version") == "claude-upgrade-arm64-executor-configuration/v2":
                 from dataclasses import replace
@@ -1595,8 +1635,7 @@ class GuardEngine:
                     if previous != item:
                         raise GuardError("来源闭包中同一原件存在不同绑定")
                     continue
-                path = check_binding(self.data_root, item)
-                data = read_bytes(path)
+                path, data = _read_checked_binding(self.data_root, item)
                 seen[item["path"]] = item
                 if local_originals:
                     local_bindings.append(dict(item))
@@ -1639,7 +1678,7 @@ class GuardEngine:
         saved = read_json(self.root / "configuration.json")
         if saved != {"configuration": self.configuration, "context": self.stable_context}:
             raise GuardError("守卫本地来源的保存配置或受管上下文漂移")
-        if read_json(check_binding(self.data_root, self.context["configuration_ref"])) != self.configuration:
+        if read_bound_json(self.data_root, self.context["configuration_ref"]) != self.configuration:
             raise GuardError("守卫本地来源的配置原件与冻结绑定不同")
         if origin["configuration_sha256"] != canonical_sha256(self.configuration) or origin["source_scope"] != self.identity["source_scope"] or origin["authority"] != self.identity["authority"]:
             raise GuardError("守卫本地来源不是同一匹配的固定配置")
@@ -1702,7 +1741,7 @@ class GuardClient:
 
     def __init__(self, data_root: Path, socket_relative: str, channel_key_binding: dict[str, Any], timeout_seconds: float = 300):
         self.path = managed_path(data_root, socket_relative)
-        self.key = read_bytes(check_binding(data_root, channel_key_binding))
+        self.key = read_bound_bytes(data_root, channel_key_binding)
         if len(self.key) < 32:
             raise GuardError("守卫通道密钥至少为 32 字节")
         self.timeout = timeout_seconds
@@ -1846,7 +1885,7 @@ def main(argv: list[str] | None = None) -> int:
     runtime = DockerComposeRuntime(configuration, context)
     engine = GuardEngine(configuration, context, runtime, identity)
     root = Path(context["data_root"])
-    key = read_bytes(check_binding(root, configuration["guard"]["channel_key_binding"]))
+    key = read_bound_bytes(root, configuration["guard"]["channel_key_binding"])
     serve(engine, managed_path(root, configuration["guard"]["socket_relative"]), key)
     return 0
 

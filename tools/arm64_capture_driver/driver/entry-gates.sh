@@ -248,6 +248,16 @@ if { [ -n "$FULL_SET_REQUEST" ] || [ "$MODE" = unit-inherit ]; } && [ -d "$TREE"
   if python3 -B "$DRV/entry_gates.py" verify-scope-workspace --tree "$TREE" --bytecode-cache "$PYC" \
       --commit "$PCOMMIT" --bundle "$PBUNDLE" --branch "$PBRANCH" > "$OUT/workspace-check.json"; then
     REUSE_WORKSPACE=true
+  elif [ "$MODE" = unit-inherit ] && [ "$CT_CLIENT" = claude ]; then
+    # 后继只更新真实内容差异，保留宿主快照绑定的未改实物；失败不得偷偷重克隆扩大重跑范围。
+    verify_history_tree "$TREE" || { echo "ENTRY_GATES_ABORTED：原测试树历史不合合同"; exit 3; }
+    if python3 -B "$DRV/entry_gates.py" prepare-scope-successor --tree "$TREE" --bytecode-cache "$PYC" \
+        --commit "$PCOMMIT" --bundle "$PBUNDLE" --branch "$PBRANCH" --lock-directory "$LOCK" --lock-owner "$$" \
+        > "$OUT/workspace-successor.json"; then
+      REUSE_WORKSPACE=true
+    else
+      echo "ENTRY_GATES_ABORTED：后继不满足原位内容更新条件；保留原树和缓存，不派发单元"; exit 3
+    fi
   elif [ "$MODE" = unit-inherit ]; then
     echo "B5a-08：原工作区无法重放，重建测试树（登记了宿主快照的来源记录按实际输入判失效，只重跑这些单元）"
   else

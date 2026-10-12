@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -325,3 +326,153 @@ def prepare_qualification_material_import(store: Any, sources: list[VerifiedQual
     source = VerifiedSource("0" * 64, deployment, {}, "0" * 64, plan.origin["source_instance_id"], plan.data_root)
     validate_qualification_material_import(store, binding, source, {item.role: item.qualification for item in sources}, purpose="current_import", expected_source_scope=sources[0].intake.source_scope)
     return binding
+
+
+class _MaterialPreparationView(Mapping[str, bytes]):
+    """只合并当前真实 intake 与固定 Store 原件；未知路径仍交由原来源闭集拒绝。"""
+    def __init__(self, base: Mapping[str, bytes], originals: Mapping[str, bytes]):
+        self.base = base
+        self.originals = dict(originals)
+
+    def __iter__(self):
+        return iter(self.originals)
+
+    def __len__(self):
+        return len(self.originals)
+
+    def __getitem__(self, path):
+        value = self.get(path)
+        if value is None:
+            raise KeyError(path)
+        return value
+
+    def get(self, path, default=None):
+        if path in self.originals:
+            return self.originals[path]
+        return self.base.get(path, default)
+
+
+def prepare_material_successor(store: Any, sources: list[VerifiedQualificationSource], *, managed_data_root: Path,
+                               plan_ref: Mapping[str, Any], source: Any,
+                               control_deployment_binding: Mapping[str, Any], delivery_lock_fd: int) -> dict[str, Any]:
+    """原 delivery 锁内先全验真新材料，再封存唯一关联；旧配置和旧导入不修改。"""
+    from dataclasses import replace
+    from tools.official_client_control import delivery_execution as execution
+    from tools.official_client_control.receipts import delivery_receipts, delivery_chain_state, tool_evolutions
+    from tools.official_client_control.qualification_material_import import (
+        SUCCESSOR_SCHEMA, SUCCESSOR_ENTRY, _successor_state, _validate_material_successor,
+        _store_binding, describe_material_successor_bindings, validate_material_successor,
+    )
+    from tools.official_client_control.contracts import CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS, OBJECT_SCHEMA
+    from tools.official_client_control.canonical import validate_external_binding
+    root = Path(managed_data_root)
+    if not isinstance(source, execution.VerifiedSource) or source.trusted_data_root != root:
+        raise ControlError("材料后继准备必须先取得原通道验真的同一实际来源")
+    if plan_ref.get("object_kind") != "candidate_delivery_plan":
+        raise ControlError("材料后继准备只接受实际原 Plan 引用")
+    plan = store.load_object(dict(plan_ref))["payload"]
+    campaign_root = root / "evidence/campaigns" / plan["campaign_id"]
+    lock_path = campaign_root / "control/delivery/.delivery.lock"
+    if type(delivery_lock_fd) is not int or delivery_lock_fd < 0:
+        raise ControlError("材料后继准备要求原 delivery 锁的真实 FD")
+    held = os.fstat(delivery_lock_fd)
+    actual = lock_path.lstat()
+    if not stat.S_ISREG(actual.st_mode) or actual.st_uid != os.geteuid() or stat.S_IMODE(actual.st_mode) != 0o600 or (held.st_dev, held.st_ino) != (actual.st_dev, actual.st_ino):
+        raise ControlError("材料后继锁 FD 不是本原交付的固定私有锁")
+    try:
+        fcntl.flock(delivery_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise ControlError("材料后继原交付锁正被其他执行持有") from error
+    if delivery_receipts(store, plan["campaign_id"], dict(plan_ref)):
+        raise ControlError("已有完成收据的 Plan 不能准备材料后继或重新组包")
+    configuration_facts = execution.evidence_facts(store, plan["executor_configuration_ref"], "configuration")
+    configuration = configuration_facts["configuration"]
+    execution._revalidate_guard_continuity(source, required=configuration["source_scope"] == "formal")
+    if sorted(item.role for item in sources) != ["candidate", "rollback"] or any(item.qualification != configuration[item.role]["qualification"] or item.intake.data_root != root or item.token is not _TOKEN for item in sources):
+        raise ControlError("材料后继当前来源必须恰好是原配置的两角色资格")
+    chain = tool_evolutions(store, store.load_campaign(plan["campaign_id"]))
+    if not chain:
+        raise ControlError("材料后继准备前必须先登记当前真实工具演进")
+    state = delivery_chain_state(store, plan["campaign_id"], plan["delivery_id"])
+    if not state.complete():
+        raise ControlError("材料后继准备只允许原四 pass 已完成且无待消费失效")
+    evolution_path = campaign_root / chain[-1][1]["evolution_receipt"]["path"]
+    evolution_raw, _metadata = _plain_file(evolution_path)
+    evolution_binding = {"path": evolution_path.relative_to(root).as_posix(), "sha256": sha256_bytes(evolution_raw), "bytes": len(evolution_raw)}
+    if evolution_binding["sha256"] != chain[-1][1]["evolution_receipt"]["sha256"]:
+        raise ControlError("材料后继准备登记引用的实际演进原件漂移")
+    control_binding = validate_external_binding(dict(control_deployment_binding), "material.successor.control_deployment")
+    execution._source_bytes(source, configuration_facts["binding"])
+    control_raw, _metadata = _plain_file(root / control_binding["path"])
+    if sha256_bytes(control_raw) != control_binding["sha256"] or len(control_raw) != control_binding["bytes"]:
+        raise ControlError("材料后继准备的实际控制部署 binding 漂移")
+    freeze = execution.evidence_facts(store, plan["environment_freeze_ref"], "freeze")
+    facts = {"schema_version": SUCCESSOR_SCHEMA, "client": "claude", "campaign_id": plan["campaign_id"],
+        "candidate_id": plan["candidate_id"], "delivery_id": plan["delivery_id"], "plan_ref": dict(plan_ref),
+        "executor_configuration_ref": plan["executor_configuration_ref"], "configuration_binding": configuration_facts["binding"],
+        "configuration_sha256": plan["configuration_sha256"], "predecessor_materials_binding": configuration["qualification_materials_binding"],
+        "successor_materials_binding": configuration["qualification_materials_binding"],
+        "qualification_roots_by_role": {role: qualification_roots(configuration[role]["qualification"]) for role in ("candidate", "rollback")},
+        "sealed_parent_bindings_by_role": {role: configuration[role]["qualification"]["sealed_result_binding"] for role in ("candidate", "rollback")},
+        "delivery_fact_refs": state.valid_refs(store), "environment": {key: plan[key] for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS},
+        "tool_evolution_registration_ref": chain[-1][0], "evolution_receipt_binding": evolution_binding,
+        "control_deployment_binding": control_binding, "guard_identity": freeze["guard_identity"],
+        "execution_context": {"campaign_id": plan["campaign_id"], "candidate_id": plan["candidate_id"], "delivery_id": plan["delivery_id"], "data_root": str(root), "configuration_ref": configuration_facts["binding"]}}
+    _successor_state(store, configuration, facts, source)
+    # 独立新 import 的既有 API 始终真实校验当前来源；残缺目录仍拒绝补叶子。
+    successor_binding = prepare_qualification_material_import(store, sources, managed_data_root=root)
+    if successor_binding["path"] == configuration["qualification_materials_binding"]["path"]:
+        raise ControlError("材料后继准备未取得独立新 import ID，不能占用旧坐标")
+    facts["successor_materials_binding"] = successor_binding
+    import_source = execution.VerifiedSource("0" * 64, control_binding["sha256"], {}, source.configuration_sha256,
+        source.service_instance_id, root)
+    imported = validate_qualification_material_import(store, successor_binding, import_source,
+        {item.role: item.qualification for item in sources}, purpose="current_import", expected_source_scope=configuration["source_scope"])
+    originals = {row["path"]: execution._source_bytes(import_source, row) for row in imported.archive_bindings}
+    originals[control_binding["path"]] = control_raw
+    originals[evolution_binding["path"]] = evolution_raw
+    for reference, registration in chain:
+        binding = _store_binding(store, root, reference)
+        originals[binding["path"]] = _plain_file(root / binding["path"])[0]
+        path = campaign_root / registration["evolution_receipt"]["path"]
+        originals[path.relative_to(root).as_posix()] = _plain_file(path)[0]
+    manifest_path = campaign_root / "campaign.json"
+    if manifest_path.is_file() and not manifest_path.is_symlink():
+        originals[manifest_path.relative_to(root).as_posix()] = _plain_file(manifest_path)[0]
+    prepared_source = replace(source, bytes_by_path=_MaterialPreparationView(source.bytes_by_path, originals), gate_projection=None)
+    existing = describe_material_successor_bindings(store, configuration, plan_ref=plan_ref)
+    payload = {"schema_version": "official-client-operational-evidence/v1", "persona": plan["persona"],
+        "manifest_id": canonical_sha256(facts), "entries": [{"id": SUCCESSOR_ENTRY, "facts": facts}]}
+    object_document = {"schema_version": OBJECT_SCHEMA, "object_kind": "operational_evidence", "payload": payload}
+    object_raw = canonical_json_bytes(object_document)
+    reference = {"object_kind": "operational_evidence", "sha256": sha256_bytes(object_raw)}
+    if existing is not None:
+        if existing["reference"] != reference or store.load_object(reference) != object_document:
+            raise ControlError("同一原 Plan 与有效登记已有不同完整材料关联，不能修补或分叉")
+    else:
+        _validate_material_successor(store, reference, configuration, prepared_source, purpose="current_import", plan_ref=plan_ref, pending_payload=payload)
+        if delivery_receipts(store, plan["campaign_id"], dict(plan_ref)):
+            raise ControlError("材料后继封存前原 Plan 已有完成收据，拒绝新关联")
+        sealed = store.seal_object("operational_evidence", payload)
+        if sealed != reference:
+            raise ControlError("材料后继封存引用不是完整预检的同一原字节")
+    association_path = store.object_path(reference).relative_to(root).as_posix()
+    originals[association_path] = object_raw
+    prepared_source = replace(source, bytes_by_path=_MaterialPreparationView(source.bytes_by_path, originals), gate_projection=None)
+    projection = validate_material_successor(store, reference, configuration, prepared_source, purpose="current_import", plan_ref=plan_ref)
+    from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import Arm64DeliveryExecutor, _ProducerOriginals
+    from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+    continuity = execution._revalidate_guard_continuity(prepared_source, required=configuration["source_scope"] == "formal")
+    initial = [item.as_value() for item in continuity.read_bindings] if continuity is not None else []
+    profile = source.profile_projection
+    if profile is not None:
+        initial.extend(profile.material_bindings())
+        initial.extend(profile.proof_bindings)
+    # 独立新关联已全验真，才解除 bootstrap 的历史父边界。只扩展真实
+    # producer owner 的显式 add 清单；一般 Mapping 仍须已含完整原件。
+    if isinstance(source.bytes_by_path, _ProducerOriginals):
+        Arm64DeliveryExecutor._expand_producer_originals(source.bytes_by_path, initial, projection, profile)
+    project_delivery_raw_bindings(prepared_source, initial, gate_projection=projection, profile_projection=profile)
+    if isinstance(source.bytes_by_path, _ProducerOriginals):
+        source.bytes_by_path.revalidate()
+    return {"successor_ref": reference, "successor_materials_binding": successor_binding, "projection": projection}

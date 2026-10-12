@@ -575,10 +575,9 @@ def _image_digest(value: Any, label: str) -> str:
         raise ConfigurationError(f"交付环境执行器返回非法：{error}") from error
 
 
-def _freeze(context: DeliveryContext, executor: Any, name: str, delivery_id: str, window: int) -> dict[str, Any]:
-    """执行器只读冻结当前环境，并按第二节校验返回值。"""
-
-    request = {
+def _freeze_request(context: DeliveryContext, delivery_id: str, window: int) -> dict[str, Any]:
+    """原冻结与完成后准入共用同一请求闭集，不改冻结计划的主语。"""
+    return {
         "campaign_id": context.campaign_id,
         "candidate_id": context.candidate_id,
         "delivery_id": delivery_id,
@@ -588,7 +587,10 @@ def _freeze(context: DeliveryContext, executor: Any, name: str, delivery_id: str
         "observation_window_seconds": window,
         "delivery_gates": list(DELIVERY_GATES),
     }
-    raw = executor.freeze(request)
+def _freeze(context: DeliveryContext, executor: Any, name: str, delivery_id: str, window: int) -> dict[str, Any]:
+    """执行器只读冻结当前环境，并按第二节校验返回值。"""
+
+    raw = executor.freeze(_freeze_request(context, delivery_id, window))
     _expect(isinstance(raw, Mapping), "freeze 必须返回对象")
     _expect(
         set(raw) == ({"environment", "rollback", "gates", "cores"} if getattr(executor, "contract_version", None) == EXECUTOR_V1 else {"environment", "rollback", "gates", "rollback_material", "deployment_configuration"}),
@@ -624,6 +626,38 @@ def _freeze(context: DeliveryContext, executor: Any, name: str, delivery_id: str
     for key in ("rollback_material", "deployment_configuration"):
         _expect(all(item["result"] == "pass" for item in snapshot[key]), f"{key} 必须全部通过")
     return snapshot
+
+
+def _completed_delivery_admission(context: DeliveryContext, executor: Any,
+                                  delivery: Mapping[str, Any], chain: Mapping[str, Any],
+                                  window: int, *, delivery_lock_fd: int | None = None) -> Any:
+    """只给有真实材料后继的未签完成链选择当前现场准入，不替换原冻结。"""
+    if (delivery["plan"].get("schema_version") != delivery_execution.PLAN_V2
+            or not chain["complete"] or chain["pending_invalidation_ref"] is not None
+            or chain["receipt_refs"]):
+        return None
+    from tools.official_client_control.qualification_material_import import describe_material_successor_bindings
+    configuration = delivery_execution.evidence_facts(context.store,
+        delivery["plan"]["executor_configuration_ref"], "configuration")["configuration"]
+    descriptor = describe_material_successor_bindings(context.store, configuration,
+        plan_ref=delivery["plan_ref"])
+    if descriptor is None:
+        return None
+    from .claude_upgrade_arm64_delivery_executor import VerifiedCompletedDeliveryAdmission
+    method = getattr(executor, "read_completed_delivery_admission", None)
+    if not callable(method):
+        raise ConfigurationError("材料后继已登记，当前受管执行器却没有完成后实时准入接口。")
+    admission = method(_freeze_request(context, str(delivery["delivery_id"]), window),
+        store=context.store, plan_ref=delivery["plan_ref"],
+        delivery_fact_refs=[dict(chain["valid_stage_refs"][stage]) for stage in STAGES],
+        delivery_lock_fd=delivery_lock_fd)
+    if not isinstance(admission, VerifiedCompletedDeliveryAdmission):
+        raise ConfigurationError("完成后实时准入必须由固定产品校验器返回，不能由 JSON 授权。")
+    if admission.plan_ref != delivery["plan_ref"] or admission.successor_ref != descriptor["reference"]:
+        raise ConfigurationError("完成后实时准入不属于原 Plan 与唯一当前材料后继。")
+    _environment(admission.environment, "完成后实时环境")
+    _checked_items(list(admission.gates), DELIVERY_GATES, "完成后实时门禁")
+    return admission
 
 
 def _observation(raw: Any, stage: str) -> dict[str, Any]:
@@ -755,7 +789,7 @@ def _select_delivery(context: DeliveryContext, delivery_id: str | None) -> dict[
 
 
 @contextlib.contextmanager
-def _delivery_lock(context: DeliveryContext) -> Iterator[None]:
+def _delivery_lock(context: DeliveryContext) -> Iterator[int]:
     root = ensure_private_directory(context.delivery_root, context.campaign_dir)
     path = root / LOCK_FILENAME
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -768,7 +802,9 @@ def _delivery_lock(context: DeliveryContext) -> Iterator[None]:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise ConfigurationError("另一个交付命令正在运行（交付锁被占用）：等它结束后再重跑。") from error
-        yield
+        from tools.official_client_control.qualification_material_import import _material_successor_delivery_lock
+        with _material_successor_delivery_lock(context, descriptor, path):
+            yield descriptor
     finally:
         os.close(descriptor)
 
@@ -1302,6 +1338,144 @@ def _immutable_json(path: Path, payload: Mapping[str, Any]) -> None:
     write_once(path, content)
 
 
+def _parent_publication_bytes(source: delivery_execution.VerifiedSource, binding: Mapping[str, Any]) -> bytes:
+    """只读固定父发布绑定；逐次核根祖先、路径、所有者、完整原字节与摘要。"""
+    from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+
+    root = source.trusted_data_root
+    try:
+        if root is None or not root.is_absolute() or not root.is_dir() or any(item.is_symlink() for item in (root, *root.parents)):
+            raise guard.GuardError("父发布原件受管根或祖先非法")
+        raw = guard.read_bound_bytes(root, dict(binding))
+        if any(item.is_symlink() for item in (root, *root.parents)):
+            raise guard.GuardError("父发布原件受管根或祖先在读取中漂移")
+        return raw
+    except guard.GuardError as error:
+        raise ControlError(f"父发布原件缺失或漂移：{binding['path']}") from error
+
+
+class _ParentPublicationOriginals(Mapping[str, bytes]):
+    """只组合本次 Store 已发布父绑定；原 guard 清单与逐次实读保持不变。"""
+
+    def __init__(self, source: delivery_execution.VerifiedSource, bindings: Mapping[str, Mapping[str, Any]]):
+        from types import MappingProxyType
+
+        self.source = source
+        self.bindings = MappingProxyType({path: MappingProxyType(dict(row)) for path, row in bindings.items()})
+        self.original_paths = frozenset(source.bytes_by_path)
+        self.paths = self.original_paths | frozenset(self.bindings)
+
+    def __iter__(self):
+        return iter(sorted(self.paths))
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, path: str) -> bytes:
+        if path not in self.bindings:
+            # 未登记父路径继续走原 Mapping 的拒绝，不能转入共享读者的裸根回退。
+            return self.source.bytes_by_path[path]
+        raw = _parent_publication_bytes(self.source, self.bindings[path])
+        if path in self.original_paths and self.source.bytes_by_path[path] != raw:
+            raise ControlError(f"父发布原件与 guard 同路径绑定冲突：{path}")
+        return raw
+
+    def get(self, path: str, default: Any = None) -> bytes:
+        return self[path]
+
+
+def compose_parent_publication_source(store: Any, content: Mapping[str, Any], origin: Mapping[str, Any],
+                                      source: delivery_execution.VerifiedSource) -> delivery_execution.VerifiedSource:
+    """原来源提供者验真后，为操作索引来源补入同 Plan 已发布 publication／seed。
+
+    不改变来源 authority、用途、guard 清单或任何共享消费者。每次独立来源调用
+    都从实际 Store 重新核父合同；组合 Mapping 不保存原字节，访问仍逐份实读。
+    配置与执行图来源不组合，继续保留原精确 Mapping 及其现有读取生命周期。
+    """
+    from dataclasses import replace
+    from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+    from tools.official_client_control.canonical import expect_object
+    from tools.official_client_control.contracts import validate_fact_payload
+
+    if set(content) != {"campaign_id", "delivery_id", "operation_index_binding"} or source.trusted_data_root is None:
+        return source
+    delivery_execution._check_verified_source(source, content, origin)
+    root = source.trusted_data_root
+    if not root.is_absolute() or not root.is_dir() or any(item.is_symlink() for item in (root, *root.parents)):
+        raise ControlError("父发布来源受管根或祖先非法")
+    facts = [fact for fact in store.list_facts(str(content["campaign_id"]), "deployment")
+        if fact["fact_kind"] == "candidate_delivery_recorded"
+        and fact["payload"].get("schema_version") == delivery_execution.FACT_V3
+        and fact["payload"].get("delivery_id") == content["delivery_id"]]
+    if not facts:
+        return source
+    plan_refs = {canonical_sha256(fact["payload"]["delivery_plan_ref"]) for fact in facts}
+    if len(plan_refs) != 1:
+        raise ControlError("父发布来源的同一交付包含不同 Plan")
+    plan_ref = dict(facts[0]["payload"]["delivery_plan_ref"])
+    plan = store.load_object(plan_ref)["payload"]
+    if (plan.get("schema_version") != delivery_execution.PLAN_V2
+            or any(plan[key] != content[key] for key in ("campaign_id", "delivery_id"))
+            or source.configuration_sha256 != plan["configuration_sha256"]):
+        raise ControlError("父发布来源不是同一冻结 Plan 的受管配置")
+    configuration = delivery_execution.evidence_facts(store, plan["executor_configuration_ref"], "configuration")["configuration"]
+    expected_store = guard.managed_path(root, configuration["candidate"]["qualification"]["store_relative"])
+    if store.root != expected_store:
+        raise ControlError("父发布来源不是同一冻结配置的实际 Store")
+    prefix = f"evidence/campaigns/{plan['campaign_id']}/control/delivery/{plan['delivery_id']}/publication"
+    bindings: dict[str, dict[str, Any]] = {}
+    for fact in facts:
+        payload = validate_fact_payload("candidate_delivery_recorded", fact["payload"])
+        reference = payload["execution_evidence_ref"]
+        core = delivery_execution.evidence_facts(store, reference, "stage_execution")
+        operation_id = core["operation_id"]
+        try:
+            row = guard.binding(root, guard.managed_path(root, f"{prefix}/{operation_id}.json"))
+        except guard.GuardError as error:
+            raise ControlError(f"父发布意图原件缺失或不可读：{operation_id}") from error
+        try:
+            publication = expect_object(json.loads(_parent_publication_bytes(source, row)), "delivery.publication_intent")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ControlError("父发布意图原件不是合法 JSON") from error
+        delivery_execution._exact(publication, {"schema_version", "campaign_id", "delivery_id", "operation_id", "seed_binding", "execution_evidence_ref", "payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key", "ledger_action"}, "delivery.publication_intent")
+        if (publication["schema_version"] != "claude-upgrade-delivery-publication-intent/v1"
+                or publication["campaign_id"] != plan["campaign_id"] or publication["delivery_id"] != plan["delivery_id"]
+                or publication["operation_id"] != operation_id or publication["ledger_action"] != "catch_up_delivery_events"
+                or publication["execution_evidence_ref"] != reference or publication["payload"] != payload
+                or any(core[key] != plan[key] for key in ("campaign_id", "candidate_id", "delivery_id"))
+                or core["plan_ref"] != plan_ref or payload["delivery_plan_ref"] != plan_ref
+                or core["configuration_ref"] != plan["executor_configuration_ref"]
+                or core["guard_identity"]["deployment_receipt_binding"]["sha256"] != source.deployment_sha256):
+            raise ControlError("父发布合同与同一 Plan、物理操作或受管部署不一致")
+        published = store.find_fact_by_idempotency_key(plan["campaign_id"], publication["idempotency_key"])
+        if published is None or published != fact or any(published[key] != publication[key] for key in ("payload", "issued_at_utc", "producer_run", "formed_under", "idempotency_key")):
+            raise ControlError("父发布合同缺少同字节 Store 发布事实")
+        prepared = delivery_execution._source_json(source, core["prepared_binding"])
+        request = {"stage": core["stage"], "run_nonce": core["run_nonce"], "plan_ref": plan_ref,
+            "configuration_ref": plan["executor_configuration_ref"], "stable_projection_ref": plan["stable_environment_projection_ref"],
+            "probe_recipe_ref": plan["probe_recipe_ref"], "environment": {key: plan[key] for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS}}
+        if prepared.get("operation_id") != operation_id or prepared.get("request") != request:
+            raise ControlError("父发布合同未绑定同一物理操作的修改前 request")
+        seed_binding = delivery_execution._binding(publication["seed_binding"], "delivery.publication_seed_binding")
+        if seed_binding["path"] != f"{prefix}/seeds/{canonical_sha256(request)}.json":
+            raise ControlError("父发布 seed 不在同一 request 的固定坐标")
+        try:
+            seed = expect_object(json.loads(_parent_publication_bytes(source, seed_binding)), "delivery.publication_seed")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise ControlError("父发布 seed 原件不是合法 JSON") from error
+        delivery_execution._exact(seed, {"schema_version", "campaign_id", "candidate_id", "delivery_id", "request", "previous_stage_ref", "recovery_revision", "recovery_ref", "issued_at_utc", "producer_run", "formed_under"}, "delivery.publication_seed")
+        if (seed["schema_version"] != "claude-upgrade-delivery-publication-seed/v1" or seed["request"] != request
+                or any(seed[key] != plan[key] for key in ("campaign_id", "candidate_id", "delivery_id"))
+                or any(seed[key] != publication[key] for key in ("issued_at_utc", "producer_run", "formed_under"))
+                or any(seed[key] != payload[key] for key in ("previous_stage_ref", "recovery_revision", "recovery_ref"))):
+            raise ControlError("父发布 seed 更换了修改前冻结坐标")
+        for binding in (row, seed_binding):
+            previous = bindings.setdefault(binding["path"], binding)
+            if previous != binding:
+                raise ControlError("父发布合同对同一路径声明不同原件")
+    return replace(source, bytes_by_path=_ParentPublicationOriginals(source, bindings))
+
+
 def _stage_request(delivery: Mapping[str, Any], stage: str, run_nonce: str) -> dict[str, Any]:
     plan = delivery["plan"]
     return {"stage": stage, "run_nonce": run_nonce, "plan_ref": dict(delivery["plan_ref"]), "configuration_ref": plan["executor_configuration_ref"], "stable_projection_ref": plan["stable_environment_projection_ref"], "probe_recipe_ref": plan["probe_recipe_ref"], "environment": {key: plan[key] for key in CANDIDATE_DELIVERY_ENVIRONMENT_FIELDS}}
@@ -1562,11 +1736,13 @@ def _private_bindings(context: DeliveryContext, delivery_id: str) -> list[dict[s
     return [bindings[path] for path in sorted(bindings)]
 
 
-def _package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain: Mapping[str, Any]) -> dict[str, Any]:
+def _package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain: Mapping[str, Any],
+                    *, completed_admission: Any = None, delivery_lock_fd: int | None = None) -> dict[str, Any]:
     """确定性推出私有归档清单、部署配置与交付包（不封存）；审核摘要即交付包的 ``identity_sha256``。"""
 
     if delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
-        return _typed_package_review(context, delivery, chain)
+        return _typed_package_review(context, delivery, chain, completed_admission=completed_admission,
+            delivery_lock_fd=delivery_lock_fd)
 
     delivery_id = str(delivery["delivery_id"])
     plan = delivery["plan"]
@@ -1631,10 +1807,15 @@ def _frozen_executor(context: DeliveryContext, delivery: Mapping[str, Any]) -> A
     return _environment_executor("arm64-isolated", configuration=core["configuration"], execution_context=_executor_context(context, delivery["delivery_id"], core["binding"]))
 
 
-def _typed_package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain: Mapping[str, Any]) -> dict[str, Any]:
+def _typed_package_review(context: DeliveryContext, delivery: Mapping[str, Any], chain: Mapping[str, Any],
+                         *, completed_admission: Any = None, delivery_lock_fd: int | None = None) -> dict[str, Any]:
     """从全操作索引生成归档；未入 Store 的操作、恢复未决或发布原件缺失都阻断收口。"""
 
-    inventory = _frozen_executor(context, delivery).inventory()
+    executor = _frozen_executor(context, delivery)
+    if completed_admission is None:
+        completed_admission = _completed_delivery_admission(context, executor, delivery, chain,
+            int(delivery["plan"]["observation_window_seconds"]), delivery_lock_fd=delivery_lock_fd)
+    inventory = executor.inventory()
     _expect(isinstance(inventory, Mapping) and set(inventory) == {"executions", "restorations", "operations_index_binding", "origin"}, "完整交付 inventory 字段不闭合")
     if not isinstance(inventory["executions"], list) or not inventory["executions"] or not isinstance(inventory["restorations"], list):
         raise ConfigurationError("完整交付 inventory 没有合法执行与恢复集合。")
@@ -1649,18 +1830,31 @@ def _typed_package_review(context: DeliveryContext, delivery: Mapping[str, Any],
         for core in cores:
             manifest = _typed_manifest(context, f"{delivery['delivery_id']}-{kind.replace('_', '-')}-{canonical_sha256(core)[:24]}", kind, core)
             items.extend(delivery_execution._graph_source_items(context.store, manifest))
-    with delivery_execution._source_batch_scope(context.store, items), \
+    from tools.official_client_control.qualification_material_import import _material_successor_consumer_scope
+    frozen = configuration["entries"][0]["facts"]["configuration"]
+    # 材料段必须先进入：来源批次在 __enter__ 时已调用实际 provider。
+    with _material_successor_consumer_scope(context.store, frozen,
+            plan_ref=delivery["plan_ref"], delivery_lock_fd=delivery_lock_fd), \
+            delivery_execution._source_batch_scope(context.store, items), \
             delivery_execution._qualification_read_batch(context.store, current_execution=False):
-        return _typed_package_review_inventory(context, delivery, chain, inventory)
+        try:
+            return _typed_package_review_inventory(context, delivery, chain, inventory,
+                completed_admission=completed_admission)
+        finally:
+            if completed_admission is not None:
+                completed_admission.revalidate()
 
 
 def _typed_package_review_inventory(context: DeliveryContext, delivery: Mapping[str, Any],
-                                     chain: Mapping[str, Any], inventory: Mapping[str, Any]) -> dict[str, Any]:
+                                     chain: Mapping[str, Any], inventory: Mapping[str, Any],
+                                     *, completed_admission: Any = None) -> dict[str, Any]:
     """只消费同次已声明的 inventory；逐项原合同与完整归档校验保持。"""
     plan = delivery["plan"]
     index_binding = inventory["operations_index_binding"]
     index_content = {"campaign_id": context.campaign_id, "delivery_id": delivery["delivery_id"], "operation_index_binding": index_binding}
     source = delivery_execution._verified_source(context.store, index_content, inventory["origin"])
+    if completed_admission is not None:
+        source = completed_admission.compose_source(source)
     index = delivery_execution._source_json(source, index_binding)
     if any(operation.get("status") not in {"execution_committed", "restored"} for operation in index.get("operations", [])):
         raise ConfigurationError("交付全操作索引仍有恢复未决操作，不能 finalize。")
@@ -1682,6 +1876,8 @@ def _typed_package_review_inventory(context: DeliveryContext, delivery: Mapping[
     input_material = [context.store.load_object(plan[key])["payload"] for key in delivery_execution.PLAN_EXTRA_FIELDS]
     input_material.extend(manifests)
     input_material.extend([index, index_binding, publications])
+    if completed_admission is not None:
+        input_material.append(list(completed_admission.archive_bindings))
     entries = delivery_execution.complete_delivery_raw_bindings(context.store, plan, source, input_material)
     archive = _with_identity({"schema_version": PRIVATE_ARCHIVE_MANIFEST_SCHEMA, "campaign_id": context.campaign_id, "persona": dict(context.persona), "manifest_id": f"{delivery['delivery_id']}-private-archive", "redacted": True, "entries": entries, "entry_count": len(entries), "total_bytes": sum(row["bytes"] for row in entries), "manifest_sha256": canonical_sha256(entries)})
     valid = [dict(chain["valid_stage_refs"][stage]) for stage in STAGES]
@@ -2093,7 +2289,7 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     configuration, configuration_binding = _configuration_input(context, arguments)
     executor = None
     rerun_from = arguments.rerun_from
-    with _delivery_lock(context):
+    with _delivery_lock(context) as delivery_lock_fd:
         with _write_scope(context):
             ledger_events = _catch_up_ledger(context)
         deliveries = _deliveries(context)
@@ -2139,7 +2335,19 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                         ledger_events += published["ledger_events"]
             if recovery.get("blocked") or recovery.get("unresolved_operation_ids"):
                 raise ConfigurationError("真实交付仍有恢复未决操作，修复同一恢复记录后才能继续。")
-        snapshot = _freeze(context, executor, str(arguments.environment_executor), proposed, window)
+        completed_admission = None
+        if current is not None and chain["complete"] and chain["pending_invalidation_ref"] is None:
+            if rerun_from is not None:
+                raise ConfigurationError("当前交付四阶段已通过，重跑阶段须先批准阶段失效。")
+            completed_admission = _completed_delivery_admission(context, executor, current, chain, window,
+                delivery_lock_fd=delivery_lock_fd)
+        if completed_admission is None:
+            snapshot = _freeze(context, executor, str(arguments.environment_executor), proposed, window)
+        else:
+            # 当前产品实测准入不赋予旧守卫 origin，也不重新形成 Plan。
+            snapshot = {"environment": dict(completed_admission.environment),
+                        "rollback": dict(completed_admission.rollback),
+                        "gates": list(completed_admission.gates)}
         failed_gates = [item["id"] for item in snapshot["gates"] if item["result"] != "pass"]
         if failed_gates:
             return {
@@ -2154,6 +2362,8 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
         if current is not None:
             drift = _plan_drift(current["plan"], snapshot)
             if drift:
+                if completed_admission is not None:
+                    raise ConfigurationError("完成后实时准入环境与原 Plan 不符，拒绝续用且不自动重开交付。")
                 if rerun_from is not None:
                     raise ConfigurationError("交付环境已变化，要开新交付从首阶段交付：--rerun-from 不适用。")
                 closed = _close_for_drift(context, current, chain, drift)
@@ -2181,7 +2391,8 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                     raise ConfigurationError(
                         "当前交付四阶段有效链已全部通过：已通过的阶段要重跑，须先 delivery-stage-invalidate 批准阶段失效。"
                     )
-                review = _package_review(context, current, chain)
+                review = _package_review(context, current, chain, completed_admission=completed_admission,
+                    delivery_lock_fd=delivery_lock_fd)
                 return {
                     **base,
                     "status": "awaiting_finalize",
@@ -2222,7 +2433,7 @@ def _run(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
 
 def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     context = _resolve(Path(arguments.campaign_dir), str(arguments.candidate_id), action="deliver-candidate finalize")
-    with _delivery_lock(context):
+    with _delivery_lock(context) as delivery_lock_fd:
         delivery = _select_delivery(context, arguments.delivery_id)
         _require_plan_current(context, delivery)
         chain = _chain(context, delivery["delivery_id"])
@@ -2286,7 +2497,12 @@ def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 "ledger_events": ledger_events,
                 **completion,
             }, 0
-        review = _package_review(context, delivery, chain)
+        completed_admission = None
+        if not finalized and delivery["plan"].get("schema_version") == delivery_execution.PLAN_V2:
+            completed_admission = _completed_delivery_admission(context, _frozen_executor(context, delivery),
+                delivery, chain, int(delivery["plan"]["observation_window_seconds"]), delivery_lock_fd=delivery_lock_fd)
+        review = _package_review(context, delivery, chain, completed_admission=completed_admission,
+            delivery_lock_fd=delivery_lock_fd)
         if arguments.approve_sha256 is None:
             return {
                 **_summary(context, delivery),
@@ -2308,6 +2524,8 @@ def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
             package_ref = context.session.seal_object("candidate_delivery_package", review["package"])
             if deployment_ref != review["package"]["deployment_configuration_ref"] or archive_ref != review["package"]["private_archive_manifest_ref"]:
                 raise ConfigurationError("封存后的部署配置或私有归档清单引用与交付包不一致。")
+            if completed_admission is not None:
+                completed_admission.revalidate()
             outcome = context.session._with_input(
                 package_ref,
                 lambda path: _store(
@@ -2315,6 +2533,8 @@ def _finalize(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
                      "--package-ref", path, "--allow-existing"]
                 ),
             )
+            if completed_admission is not None:
+                completed_admission.revalidate()
             ledger_events = _catch_up_ledger(context)
             completion = _complete_vc6(context, delivery, package_ref, dict(outcome["receipt_ref"]))
     return {

@@ -609,6 +609,84 @@ class EntryGatesScopeWorkspaceTests(unittest.TestCase):
         cache = root / "pycache"; cache.mkdir(); (cache / "kept").write_text("原缓存")
         return tree, cache, bundle, head
 
+    def _successor_fixture(self, root: Path, change: str = "content"):
+        """真实 clone／bundle／checked-hash 缓存布局；只准备小仓库，不派公共门禁。"""
+        source = root / "source"; source.mkdir()
+        git = ["git", "-C", str(source), "-c", "user.name=读集验收", "-c", "user.email=scope@example.invalid",
+               "-c", "commit.gpgsign=false"]
+        subprocess.run(git + ["init", "-q", "-b", "codex/scope-fixture"], check=True)
+        relative = Path("tools/official_client_capture/tests/changed.py")
+        changed = source / relative; changed.parent.mkdir(parents=True)
+        changed.write_text("VALUE = 'old'\n")
+        (changed.parent / "untouched.py").write_text("UNCHANGED = True\n")
+        (source / "frontend").mkdir()
+        (source / "frontend/pnpm-lock.yaml").write_text("lockfileVersion: 9\n")
+        (source / ".gitignore").write_text("frontend/node_modules/\n")
+        subprocess.run(git + ["add", "."], check=True)
+        subprocess.run(git + ["commit", "-qm", "原输入"], check=True)
+        old = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+        work = root / "work"; work.mkdir()
+        tree = work / "test-tree"
+        subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(source), str(tree)], check=True)
+        subprocess.run(["git", "-C", str(tree), "checkout", "-q", "--detach", old], check=True)
+        modules = tree / "frontend/node_modules"; modules.mkdir(); (modules / "kept.js").write_text("原依赖")
+        cache = work / "pycache"; cache.mkdir(); (cache / "kept").write_text("原缓存")
+        env = {**os.environ, "PYTHONPYCACHEPREFIX": str(cache), "PYTHONDONTWRITEBYTECODE": "1"}
+        compiled = subprocess.run([sys.executable, "-B", "-c",
+            "import importlib.util,py_compile,sys; p=sys.argv[1]; "
+            "py_compile.compile(p,doraise=True,invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH); "
+            "print(importlib.util.cache_from_source(p))", str(tree / relative)],
+            env=env, capture_output=True, text=True, check=True)
+        cached = Path(compiled.stdout.strip())
+        if change == "nonancestor":
+            subprocess.run(git + ["checkout", "-q", "--orphan", "unrelated"], check=True)
+            subprocess.run(git + ["rm", "-q", "-rf", "."], check=True)
+            changed.parent.mkdir(parents=True, exist_ok=True); changed.write_text("VALUE = 'new'\n")
+        elif change == "add":
+            (changed.parent / "added.py").write_text("ADDED = True\n")
+        elif change == "delete":
+            changed.unlink()
+        elif change == "rename":
+            changed.rename(changed.with_name("renamed.py"))
+        elif change == "mode":
+            changed.chmod(0o755)
+        elif change == "symlink":
+            changed.unlink(); changed.symlink_to("untouched.py")
+        else:
+            changed.write_text("VALUE = 'new'\n")
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-qm", "后继输入"], check=True)
+        target = subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip()
+        branch = "unrelated" if change == "nonancestor" else "codex/scope-fixture"
+        bundle = root / "successor.bundle"
+        subprocess.run(git + ["bundle", "create", str(bundle), branch], check=True)
+        lock = work.parent / ".entry-gates-locks" / hashlib.sha256(str(work).encode()).hexdigest() / "held"
+        for directory in (lock, work / ".entry-gates.lock"):
+            directory.mkdir(parents=True, mode=0o700); directory.chmod(0o700)
+            pid = directory / "pid"; pid.write_text(str(os.getpid()) + "\n"); pid.chmod(0o600)
+        return tree, cache, bundle, old, target, branch, lock, cached, relative
+
+    def _prepare_successor(self, fixture, *, shell: bool = False):
+        tree, cache, bundle, old, target, branch, lock, _cached, _relative = fixture
+        command = [sys.executable, "-B", str(ENTRY_GATES), "prepare-scope-successor", "--tree", str(tree),
+                   "--bytecode-cache", str(cache), "--commit", target, "--bundle", str(bundle), "--branch", branch,
+                   "--lock-directory", str(lock), "--lock-owner", str(os.getpid())]
+        if not shell:
+            return subprocess.run(command, capture_output=True, text=True)
+        out = tree.parent.parent / "out"; out.mkdir()
+        script = (REPO_ROOT / "tools/arm64_capture_driver/driver/entry-gates.sh").read_text()
+        block = script[script.index("REUSE_WORKSPACE=false"):script.index('if [ ! -d "$NM_DIR/node_modules"')]
+        # 使用真实入口准备分支及 Python CLI；小仓库只替代 >10000 条历史资格，不替代 HEAD 或内容核验。
+        setup = 'set -Eeuo pipefail\nFULL_SET_REQUEST=""; MODE=unit-inherit; CT_CLIENT=claude; INPUT_SCOPE_ARGS=()\n'
+        setup += 'verify_history_tree() { test "$(git -C "$1" rev-parse --is-shallow-repository)" = false; }\n'
+        setup += 'clone_test_tree() { echo "不允许重克隆" >&2; exit 98; }\n'
+        setup += 'printf "%s\\n" "$$" > "$LOCK/pid"; printf "%s\\n" "$$" > "$WORK/.entry-gates.lock/pid"\n'
+        completed = subprocess.run(["bash", "-c", setup + block + '\ntest "$REUSE_WORKSPACE" = true\n'],
+            capture_output=True, text=True, env={**os.environ, "TREE": str(tree), "PYC": str(cache), "WORK": str(tree.parent),
+                "PCOMMIT": target, "PBUNDLE": str(bundle), "PBRANCH": branch, "LOCK": str(lock), "OUT": str(out),
+                "DRV": str(ENTRY_GATES.parent)})
+        return completed
+
     def test_workspace_validation_preserves_original_files_and_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve(); tree, cache, bundle, head = self._fixture(root)
@@ -624,6 +702,35 @@ class EntryGatesScopeWorkspaceTests(unittest.TestCase):
             self.assertFalse(report["workspace_rebuilt"])
             self.assertTrue(ur.RepoIndex.load(tree).clean)
             self.assertEqual(before, snapshot())
+        for through_shell in (False, True):
+            with self.subTest(through_shell=through_shell), tempfile.TemporaryDirectory() as directory:
+                fixture = self._successor_fixture(Path(directory).resolve())
+                tree, cache, bundle, old, target, branch, _lock, cached, relative = fixture
+                changed = tree / relative
+                changed_inode = changed.stat().st_ino
+                untouched = [tree, tree / "tools", tree / "tools/official_client_capture", changed.parent,
+                    changed.with_name("untouched.py"), tree / "frontend", tree / "frontend/node_modules",
+                    tree / "frontend/node_modules/kept.js", cache, cache / "kept", cached]
+                untouched += [parent for parent in cached.parents if parent != cache and cache in parent.parents]
+                audit = ur._audit_module()
+                def bound():
+                    return {str(path): audit.host_snapshot(str(path)) for path in untouched}
+                bound()  # 第一次读取后再绑定；不改动或恢复任何审计元数据。
+                before = bound(); cached_bytes = cached.read_bytes()
+                result = self._prepare_successor(fixture, shell=through_shell)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(changed.read_text(), "VALUE = 'new'\n")
+                self.assertEqual(changed.stat().st_ino, changed_inode)
+                self.assertEqual(subprocess.check_output(["git", "-C", str(tree), "rev-parse", "HEAD"], text=True).strip(), target)
+                self.assertTrue(ur.RepoIndex.load(tree).clean)
+                self.assertEqual(before, bound(), "未变文件和共同目录的完整宿主快照必须原样保留")
+                run = subprocess.run([sys.executable, "-B", "-c", "import changed; print(changed.VALUE)"],
+                    cwd=changed.parent, capture_output=True, text=True,
+                    env={**os.environ, "PYTHONPYCACHEPREFIX": str(cache), "PYTHONDONTWRITEBYTECODE": "1"})
+                self.assertEqual((run.returncode, run.stdout.strip()), (0, "new"), run.stderr)
+                self.assertEqual(cached.read_bytes(), cached_bytes, "checked-hash 失效时内存编译，原缓存不得被重写")
+                self.assertFalse((changed.parent / "__pycache__").exists())
+                self.assertEqual(eg.verify_scope_workspace(tree, cache, commit=target, bundle=bundle, branch=branch)["status"], "passed")
 
     def test_missing_dirty_different_commit_or_bundle_ref_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -636,6 +743,19 @@ class EntryGatesScopeWorkspaceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "未登记变更"):
                 eg.verify_scope_workspace(tree, cache, commit=head, bundle=bundle, branch="codex/scope-fixture")
             self.assertEqual((tree / "input.txt").read_text(), "未登记变更\n", "失败不能重建或改写原树")
+        for change in ("nonancestor", "add", "delete", "rename", "mode", "symlink", "dirty", "bundle-ref"):
+            with self.subTest(successor=change), tempfile.TemporaryDirectory() as directory:
+                fixture = self._successor_fixture(Path(directory).resolve(), change)
+                tree, cache, bundle, old, target, branch, lock, cached, relative = fixture
+                if change == "dirty":
+                    (tree / relative).write_text("未登记变更\n")
+                if change == "bundle-ref":
+                    fixture = (*fixture[:5], "codex/wrong", *fixture[6:])
+                before = ((tree / relative).read_bytes(), cached.read_bytes(), (tree / relative).stat().st_ino)
+                result = self._prepare_successor(fixture)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(subprocess.check_output(["git", "-C", str(tree), "rev-parse", "HEAD"], text=True).strip(), old)
+                self.assertEqual(before, ((tree / relative).read_bytes(), cached.read_bytes(), (tree / relative).stat().st_ino))
 
     def test_parent_symlink_and_cache_inside_tree_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -646,6 +766,25 @@ class EntryGatesScopeWorkspaceTests(unittest.TestCase):
             inner = tree / "pycache"; inner.mkdir()
             with self.assertRaisesRegex(ValueError, "测试树外"):
                 eg.verify_scope_workspace(tree, inner, commit=head, bundle=bundle, branch="codex/scope-fixture")
+        for problem in ("missing-lock", "wrong-owner", "linked-path", "hardlinked-file"):
+            with self.subTest(successor=problem), tempfile.TemporaryDirectory() as directory:
+                fixture = self._successor_fixture(Path(directory).resolve())
+                tree, cache, bundle, old, target, branch, lock, cached, relative = fixture
+                if problem == "missing-lock":
+                    (lock / "pid").unlink()
+                elif problem == "wrong-owner":
+                    (lock / "pid").write_text("1\n")
+                elif problem == "linked-path":
+                    original = tree / relative
+                    original.rename(original.with_name("held.py"))
+                    original.symlink_to("held.py")
+                else:
+                    os.link(tree / relative, Path(directory) / "outside-hardlink.py")
+                before = (tree / relative).read_bytes(), cached.read_bytes()
+                result = self._prepare_successor(fixture)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(before, ((tree / relative).read_bytes(), cached.read_bytes()))
+                self.assertEqual(subprocess.check_output(["git", "-C", str(tree), "rev-parse", "HEAD"], text=True).strip(), old)
 
 
 class EntryGatesDriverCopyTests(unittest.TestCase):

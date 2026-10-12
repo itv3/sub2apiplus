@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from typing import Any, Mapping
 
@@ -27,6 +27,8 @@ class VerifiedGateProjection:
     token: object
     subject_projections: tuple[Any, ...] = ()
     reader_replays: tuple[Any, ...] = ()
+    successor: Any = None
+    verified_documents: tuple[Any, ...] = ()
 
     def project(self, parent_binding: Mapping[str, Any], raw: bytes) -> list[dict[str, Any]] | None:
         """单独调用也建立本次精确索引；索引不带来源或跨调用权限。"""
@@ -52,16 +54,25 @@ def _gate_binding_projector(proof: VerifiedGateProjection):
     )
     if not isinstance(proof, VerifiedGateProjection) or proof.token is not _TOKEN:
         raise ControlError("门禁投影不是纯校验器返回的受管结果")
-    subject_index, material_index, coordinate_index, domain_index = {}, {}, {}, {}
+    subject_index, material_index, coordinate_index, domain_index, document_index = {}, {}, {}, {}, {}
     for item in proof.subject_projections:
         if not isinstance(item, VerifiedQualificationSubjectProjection) or item.token is not subject_token:
             raise ControlError("subject 投影不能由 JSON 或任意对象授信")
         subject_index.setdefault(_binding_key(item.parent_binding), []).append(item)
     for row in proof.material_files:
         material_index.setdefault(_binding_key(row["archive_binding"]), []).append(row)
-        coordinate_index.setdefault(_material_key(row), []).append(row)
+        archive_root = row["archive_binding"]["path"].split("/files/", 1)[0]
+        coordinate_index.setdefault((archive_root, *_material_key(row)), []).append(row)
     for row in proof.domains:
         domain_index.setdefault(_binding_key(row["parent_binding"]), []).append(row)
+    if proof.verified_documents:
+        from .qualification_material_import import VerifiedMaterialSuccessor
+        if not isinstance(proof.successor, VerifiedMaterialSuccessor) or proof.successor.token is not _TOKEN:
+            raise ControlError("精确 proof／reader 文档投影缺本次完整后继权限")
+        for binding, children in proof.verified_documents:
+            if _binding_key(binding) in document_index:
+                raise ControlError("精确 proof／reader 文档投影重复")
+            document_index[_binding_key(binding)] = (dict(binding), tuple(children))
 
     def project(parent_binding: Mapping[str, Any], raw: bytes) -> list[dict[str, Any]] | None:
         key = _binding_key(parent_binding)
@@ -70,6 +81,12 @@ def _gate_binding_projector(proof: VerifiedGateProjection):
             if projected is None:
                 raise ControlError("subject 投影坐标在本次遍历期间漂移")
             return projected
+        document = document_index.get(key)
+        if document is not None:
+            binding, children = document
+            if binding != dict(parent_binding) or sha256_bytes(raw) != binding["sha256"] or len(raw) != binding["bytes"]:
+                raise ControlError("精确材料 proof／reader 原文在投影期间漂移")
+            return [dict(row) for row in children]
         materials = material_index.get(key, [])
         if materials:
             if len(materials) != 1 or materials[0]["archive_binding"] != dict(parent_binding) or sha256_bytes(raw) != parent_binding["sha256"] or len(raw) != parent_binding["bytes"]:
@@ -79,9 +96,10 @@ def _gate_binding_projector(proof: VerifiedGateProjection):
             except (ValueError, UnicodeDecodeError):
                 return []
             root_id = materials[0]["root_id"]
+            archive_root = materials[0]["archive_binding"]["path"].split("/files/", 1)[0]
             output = []
             for binding in typed_bindings(material):
-                matches = coordinate_index.get((root_id, *_binding_key(binding)), [])
+                matches = coordinate_index.get((archive_root, root_id, *_binding_key(binding)), [])
                 if len(matches) != 1 or _material_key(matches[0]) != (root_id, *_binding_key(binding)):
                     raise ControlError("复制原件未知 JSON 的下层绑定缺精确同根映射")
                 output.append(dict(matches[0]["archive_binding"]))
@@ -127,6 +145,10 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
     if gate_projection is not None:
         if not isinstance(gate_projection, VerifiedGateProjection) or gate_projection.token is not _TOKEN:
             raise ControlError("门禁投影类型或受管权限错误")
+        if gate_projection.successor is not None:
+            # 同次真实投影只提供 reader 纯结果；来源、subject、实际原件
+            # 和用途仍由完整后继校验器首尾重验，作用域退出即失效。
+            gate_projection.successor.revalidate(replace(source, gate_projection=gate_projection))
         for row in gate_projection.archive_bindings:
             previous = bindings.setdefault(row["path"], dict(row))
             if previous != dict(row):
@@ -168,4 +190,6 @@ def project_delivery_raw_bindings(source: Any, initial: Any, *, gate_projection:
                 pending.append(row["path"])
         if len(bindings) > 20000:
             raise ControlError("交付投影闭包超出固定文件数")
+    if gate_projection is not None and gate_projection.successor is not None:
+        gate_projection.successor.revalidate(replace(source, gate_projection=gate_projection))
     return [bindings[path] for path in sorted(bindings)]

@@ -781,6 +781,44 @@ class ConfigurationTests(unittest.TestCase):
                 with self.assertRaises(guard.GuardError):
                     executor.validate_configuration(config)
 
+        # 沿既有配置 UID 核原件读取合同：一次实读完成摘要和 JSON 解析，
+        # 公开 check_binding 仍返回 Path，读取后权限变化不能交出成功结果。
+        path = self.root / "inputs/single-read-configuration.json"
+        guard.write_json_once(path, self.configuration)
+        item = guard.binding(self.root, path)
+        original_read = guard.read_bytes
+        with mock.patch.object(guard, "read_bytes", wraps=original_read) as reads:
+            self.assertEqual(guard.read_bound_json(self.root, item), self.configuration)
+            reads.assert_called_once_with(path)
+        with mock.patch.object(guard, "read_bytes", wraps=original_read) as reads:
+            self.assertEqual(guard.check_binding(self.root, item), path)
+            reads.assert_called_once_with(path)
+        engine = object.__new__(guard.GuardEngine)
+        engine.data_root = self.root
+        with mock.patch.object(guard, "read_bytes", wraps=original_read) as reads:
+            self.assertEqual(engine._read_original(item), canonical_json_bytes(self.configuration))
+            reads.assert_called_once_with(path)
+        wrong = {**item, "sha256": "1" * 64}
+        with self.assertRaisesRegex(guard.GuardError, "文件绑定漂移"):
+            guard.read_bound_json(self.root, wrong)
+        original_fstat = os.fstat
+        calls = 0
+
+        def stat_then_change_mode(descriptor):
+            nonlocal calls
+            result = original_fstat(descriptor)
+            calls += 1
+            if calls == 2:
+                path.chmod(0o400)
+            return result
+
+        try:
+            with mock.patch.object(os, "fstat", new=stat_then_change_mode), \
+                    self.assertRaisesRegex(guard.GuardError, "实读期间"):
+                guard.read_bound_json(self.root, item)
+        finally:
+            path.chmod(0o600)
+
     def test_fixture_cannot_claim_independent_formal_service(self) -> None:
         with self.assertRaises(guard.GuardError):
             executor.guard_identity(self.configuration, self.context, formal=True)

@@ -46,7 +46,7 @@
 ``--reexecute``（重新执行全集）互斥。登记来源使用精确读集策略时，显式带 ``--audit-policy <策略>``，策略按原登记合同校验、
 摘要进入结论，取锁后派发前与结束收口时再次复核。策略只随逐单元承接或显式开工空跑使用；授权、撤销和来源复核仍由原门禁完成。
 后台验证接着的空跑不带请求；后台明确登记了策略时，不自动启动缺少当前批准的空跑，由操作员带请求与策略显式执行。
-Claude 完整79接线的逐单元空跑另可消费本轮已有的 pre-A3 认证：准备阶段用原认证验证器核验源文件，原字节写入演练认证
+Claude 逐单元空跑可消费本轮已有的普通或完整79接线 pre-A3 认证：准备阶段用原认证验证器核验源文件，原字节写入演练认证
 坐标，随后仍由入口复核与登记复用。源认证和原记录不改写；缺源保留首次运行，坏源明确失败，不降级另跑掩盖问题。
 
 子命令：
@@ -398,13 +398,13 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 
 
 def _copy_pre_a3_source(payload: Mapping[str, Any], values: Mapping[str, str], rehearsal: Mapping[str, str], *, client: str) -> None:
-    """只接现有 Claude bridge 的认证消费入口；旧记录的承接资格、Codex 与显式全集空跑语义不变。
+    """接入 Claude 本轮已有的认证；旧记录的承接资格、Codex 与显式全集空跑语义不变。
 
     认证本身没有另外的时长期限，合法性和历史承接期限均由原 find-reusable 校验。复制成功也不代表入口通过：后续
     entry 仍核当前静态输入及记录，并把 record-reuse 收据写到演练认证旁，不能写入只读源认证目录。
     """
 
-    if (client != "claude" or not payload.get("unit_inherit_request") or not values.get("CLAUDE_ENTRY_FULL79_SPEC")
+    if (client != "claude" or not payload.get("unit_inherit_request")
             or payload.get("opening") or payload.get("reexecute")):
         return
     location = values.get("PRE_A3_CERTIFICATION")

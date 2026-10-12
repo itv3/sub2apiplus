@@ -12,6 +12,7 @@ import atexit
 import contextlib
 import copy
 import functools
+import hashlib
 from contextvars import ContextVar
 import json
 import multiprocessing
@@ -39,7 +40,7 @@ from tools.official_client_capture.tests.test_claude_real_delivery_integration i
 from tools.official_client_capture.tests.test_claude_upgrade_arm64_delivery_executor import fixture_world
 from tools.official_client_capture.tests import claude_fault_chain_world as stops
 from tools.official_client_control import delivery_execution as execution
-from tools.official_client_control.canonical import canonical_sha256, sha256_bytes, sha256_file
+from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, sha256_bytes, sha256_file
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR_NAME = "arm64-isolated"
@@ -498,6 +499,48 @@ class ControlledFileRuntime(QualifiedFileRuntime):
                 row["result"] = "failed"
         return value
 
+    def collect_completed_delivery_admission(self, request: dict, directory: Path, stable_execution: Any, *, source: Any) -> dict:
+        """在已有文件现场边界实读资格和故障；不返回调用方预先给定的 pass。"""
+        if (not isinstance(source, execution.VerifiedSource) or source.trusted_data_root != self.root
+                or source.configuration_sha256 != canonical_sha256(self.configuration)
+                or getattr(source.gate_projection, "successor", None) is None):
+            raise guard.GuardError("typed 当前测量缺本次真实材料来源")
+        execution._revalidate_guard_continuity(source, required=True)
+        guard.private_directory(directory)
+        qualification = self._check_completed_qualification(source)
+        state = guard.read_json(self.root / "state.json")
+        fault = guard.read_json(self.root / "fault.json")
+        control = _control(self.control_path)
+        base = guard.read_bound_json(self.root, self.configuration["paths"]["compose_binding"])
+        overrides = {role: guard.read_bound_json(self.root, self.configuration[role]["override_binding"]) for role in ("candidate", "rollback")}
+        profiles = {role: guard.read_bound_bytes(self.root, self.configuration[role]["profile_binding"]) for role in ("candidate", "rollback")}
+        snapshot = {"state": state, "fault": fault, "control": control, "base": base, "overrides": overrides,
+                    "profile_sha256_by_role": {role: hashlib.sha256(raw).hexdigest() for role, raw in profiles.items()}}
+        snapshot_path = directory / "file-scene.json"
+        qualification_path = directory / "qualification.json"
+        guard.write_json_once(snapshot_path, snapshot)
+        guard.write_json_once(qualification_path, qualification)
+        target = {key: self.configuration["candidate"][key] for key in ("image_digest", "runtime_profile_sha256")}
+        observation = self.observation("stable_observed", target, directory / "observed")
+        bindings = guard.all_bindings([guard.binding(self.root, snapshot_path), guard.binding(self.root, qualification_path), observation])
+        pair = (state["image_digest"], state["runtime_profile_sha256"])
+        allowed = {(self.configuration[role]["image_digest"], self.configuration[role]["runtime_profile_sha256"]) for role in ("candidate", "rollback")}
+        failed = set(control["failed_gates"])
+        sound = fault["freeze"] == "normal" and fault["restore"] == "normal"
+        values = {"compose-diff": qualification["candidate_compose"] != qualification["rollback_compose"] and qualification["result"] == "pass",
+                  "dependency-connectivity": sound, "entry-routing": sound, "evidence-inventory": bool(bindings), "health": sound,
+                  "image-identity": pair in allowed and profiles["candidate"] != profiles["rollback"] and all(hashlib.sha256(profiles[role]).hexdigest() == self.configuration[role]["runtime_profile_sha256"] for role in profiles),
+                  "observation-window": stable_execution["result"] == "pass" and stable_execution["observed_seconds"] >= request["observation_window_seconds"] == self.configuration["limits"]["observation_window_seconds"],
+                  "rollback-availability": qualification["qualification_replays"][1]["result"] == "pass", "secret-scan": True}
+        credential = guard.read_bound_bytes(self.root, self.configuration["probes"]["credential_binding"]).strip()
+        channel_key = guard.read_bound_bytes(self.root, self.configuration["guard"]["channel_key_binding"])
+        public = canonical_json_bytes({"environment": state["environment"], "actual": observation["actual"], "request_records": observation["request_records"]})
+        values["secret-scan"] = all(secret not in raw for secret in (credential, channel_key) if secret for raw in [public, *(guard.read_bound_bytes(self.root, item) for item in observation["after_bindings"])])
+        gates = [{"id": name, "result": "pass" if values[name] and name not in failed else "failed",
+                  "facts": {"source": "current-completed-file-readonly-admission", "bindings": bindings}} for name in executor.DELIVERY_GATES]
+        return {"environment": state["environment"], "rollback": {key: self.configuration["rollback"][key] for key in ("image_digest", "runtime_profile_sha256")},
+                "actual": observation["actual"], "gates": gates, "bindings": sorted(bindings, key=lambda item: item["path"])}
+
 
 class ControlledExecutor(executor.Arm64DeliveryExecutor):
     """准备前强杀复现原替身的中断位置；armed 后强杀由独立专项另验。"""
@@ -505,6 +548,9 @@ class ControlledExecutor(executor.Arm64DeliveryExecutor):
     def __init__(self, configuration: dict, execution_context: dict, control_path: Path):
         super().__init__(configuration, execution_context)
         self.control_path = control_path
+
+    def _completed_delivery_runtime(self):
+        return ControlledFileRuntime(self.configuration, self.context, self.control_path)
 
     def prepare_stage(self, request: dict) -> dict:
         control = _control(self.control_path)
@@ -723,7 +769,7 @@ def source_scope(control_path: Path) -> Iterator[None]:
     root = Path(control["context"]["data_root"])
     configuration = guard.read_json(guard.check_binding(root, control["context"]["configuration_ref"]))
     with fixture_mac_source_scope(configuration, root):
-        reader = executor.create_executor(EXECUTOR_NAME, configuration, control["context"])
+        reader = ControlledExecutor(configuration, control["context"], control_path)
 
         def factory(name: str, observed: dict, context: dict) -> ControlledExecutor:
             stable = {key: value for key, value in context.items() if key not in {"segment", "run_nonce"}}
@@ -735,12 +781,14 @@ def source_scope(control_path: Path) -> Iterator[None]:
         def verify(store: Any, content: Any, origin: Any) -> execution.VerifiedSource:
             if store.root.resolve() != (root / configuration["candidate"]["qualification"]["store_relative"]).resolve():
                 raise guard.GuardError("typed 来源被用于其他 Store")
-            return execution.VerifiedSource(**reader.verify_origin_evidence(content, origin))
+            source = execution.VerifiedSource(**reader.verify_origin_evidence(content, origin))
+            return delivery.compose_parent_publication_source(store, content, origin, source)
 
         def verify_batch(store: Any, items: list[dict[str, Any]]) -> list[execution.VerifiedSource]:
             if store.root.resolve() != (root / configuration["candidate"]["qualification"]["store_relative"]).resolve():
                 raise guard.GuardError("typed 批量来源被用于其他 Store")
-            return [execution.VerifiedSource(**row) for row in reader.verify_origin_evidence_batch(items)]
+            return [delivery.compose_parent_publication_source(store, item["content"], item["origin"], execution.VerifiedSource(**row))
+                for item, row in zip(items, reader.verify_origin_evidence_batch(items))]
 
         verify.verify_batch = verify_batch
 
@@ -755,6 +803,10 @@ def source_scope(control_path: Path) -> Iterator[None]:
         original_source_scope, original_verified_source = execution._source_batch_scope, execution._verified_source
         read_store: ContextVar[Any] = ContextVar("typed_vc6_read_once_store", default=None)
         local_reads: ContextVar[Any] = ContextVar("typed_vc6_local_source_reads", default=None)
+
+        def local_source_material(source: Any) -> Any:
+            """与共享整图使用同一准确类型规则；不从任意 Mapping 属性推断绑定能力。"""
+            return stops._source_original_material(source, root, error=guard.GuardError)
 
         @contextlib.contextmanager
         def source_batch_scope(store: Any, items: list[dict[str, Any]]) -> Iterator[None]:
@@ -774,15 +826,42 @@ def source_scope(control_path: Path) -> Iterator[None]:
                     yield
                     return
                 snapshot = _LocalActiveFileReads(root, guard.GuardError)
-                token = local_reads.set((batch, snapshot))
+                materials = {}
+                token = local_reads.set((batch, snapshot, materials))
                 try:
+                    # 原 provider 已验真每一项；从精确类型取得绑定闭集后仍
+                    # 按其真实 Mapping 首读。父 publication／seed 不漏出
+                    # 首尾快照，元数据也不代替原件或父 Store 发布证明。
+                    selected = {}
+                    for key, source in batch.sources.items():
+                        material = local_source_material(source)
+                        if material is None:
+                            continue
+                        bindings, originals = material
+                        # producer 清单可变；首轮保存已验绑定与提供者，中途不得增减或换件。
+                        materials[key] = (source, originals, bindings)
+                        for path, binding in bindings.items():
+                            previous = selected.setdefault(path, (binding, originals))
+                            if previous[0] != binding:
+                                raise guard.GuardError("typed 批量来源对同一路径声明不同原件")
+                    snapshot.read_all([(root / path, lambda _actual, name=path, original=originals: original[name])
+                        for path, (_binding, originals) in sorted(selected.items())])
                     yield
                 finally:
                     try:
-                        # 收尾仍在原 batch 失效和清空之前完整实读，异常路径同样复核。
-                        snapshot.verify_full()
+                        try:
+                            # 可变 producer 在最后一次消费后也不得换件或增减清单。
+                            for key, (source, originals, bindings) in materials.items():
+                                material = local_source_material(source)
+                                if (batch.sources.get(key) is not source or material is None
+                                        or material[1] is not originals or material[0] != bindings):
+                                    raise guard.GuardError("typed 来源返回前精确清单、提供者或绑定闭集漂移")
+                        finally:
+                            # 收尾仍在原 batch 失效和清空之前完整实读，异常路径同样复核。
+                            snapshot.verify_full()
                     finally:
                         snapshot.close()
+                        materials.clear()
                         local_reads.reset(token)
 
         def verified_source(store: Any, content: Any, origin: Any) -> execution.VerifiedSource:
@@ -793,9 +872,10 @@ def source_scope(control_path: Path) -> Iterator[None]:
                     or batch.store is not store or store.root != expected_store_root):
                 return original_verified_source(store, content, origin)
             verified = batch.sources.get(canonical_sha256(execution._source_request(content, origin)))
-            if (not isinstance(verified, execution.VerifiedSource)
-                    or type(verified.bytes_by_path) is not executor._LocalSourceOriginals
-                    or verified.bytes_by_path.root != root or verified.trusted_data_root != root):
+            material = local_source_material(verified)
+            if material is None:
+                if canonical_sha256(execution._source_request(content, origin)) in current[2]:
+                    raise guard.GuardError("typed 本次已验来源失去精确原件清单")
                 return original_verified_source(store, content, origin)
             # 精确本地清单在只读批次中首尾完整实读，中间逐次核全清单坐标；
             # 原 Mapping 不替换，所以连续性、Profile／门禁投影和 typed 的实际
@@ -805,9 +885,14 @@ def source_scope(control_path: Path) -> Iterator[None]:
             if verifier is None or batch.verifiers.get(origin["authority"]) is not verifier:
                 raise execution.ControlError("本次批量来源的 Store、通道登记或生命周期已变化")
             core = {key: value for key, value in content.items() if key != "origin"}
-            originals, snapshot = verified.bytes_by_path, current[1]
+            bindings, originals = material
+            registered = current[2].get(canonical_sha256(execution._source_request(content, origin)))
+            if (registered is None or registered[0] is not verified or registered[1] is not originals
+                    or registered[2] != bindings):
+                raise guard.GuardError("typed 本次来源精确清单、提供者或绑定闭集漂移")
+            snapshot = current[1]
             snapshot.read_all([(root / path, lambda _actual, name=path: originals[name])
-                for path in originals.bindings], current=store.read_only is not True)
+                for path in bindings], current=store.read_only is not True)
             execution._check_verified_source(verified, core, origin)
             if verified.guard_continuity is not None:
                 from tools.official_client_control.canonical import parse_json_bytes
@@ -996,7 +1081,8 @@ def prepare_fixture_qualification_materials(store: Any, configuration: dict, dat
         return _prepare_fixture_qualification_materials(store, configuration, data_root, gate_root=gate_root)
 
 
-def _prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path) -> dict:
+def _prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path,
+                                            consume_sources: Any = None) -> dict:
     """只在显式本机夹具布局里取得来源；正式 registry 与身份均保持关闭。"""
     from tools.official_client_control import receipts
     from tools.official_client_control.store import ControlStore
@@ -1009,7 +1095,7 @@ def _prepare_fixture_qualification_materials(store: Any, configuration: dict, da
     qualification_store = ControlStore.open_read_only(store.root)
     repository = receipts._tool_repository_root()
     target_root = repository / "tools/ci"
-    if not target_root.exists() and repository != REPOSITORY_ROOT:
+    if consume_sources is None and not target_root.exists() and repository != REPOSITORY_ROOT:
         # 隔离 Store 测试树只复制两受管根；五个历史 reader 属于固定外根。
         # 仅复制缺失的隔离树模块，不改变任何资格、历史收据或正式安装。
         import shutil
@@ -1038,6 +1124,9 @@ def _prepare_fixture_qualification_materials(store: Any, configuration: dict, da
 
     registrations = {(source_module.FIXTURE_AUTHORITY, purpose): fixture_resolver for purpose in source_module.PURPOSES}
     with mock.patch.dict(source_module.QUALIFICATION_SOURCE_RESOLVERS, registrations):
+        if consume_sources is not None:
+            # 仅显式后继准备沿用本轮同一两角色来源与临时 registry；不另造来源逻辑。
+            return consume_sources(qualification_store, sources)
         return importer.prepare_qualification_material_import(qualification_store, sources, managed_data_root=data_root)
 
 
@@ -1372,6 +1461,82 @@ class TypedDeliveryFixture:
         except BaseException:
             self.close(force=not self.restored_guard)
             raise
+
+    def prepare_material_successor(self, *, plan_ref: dict | None, delivery_lock_fd: int) -> dict | None:
+        """原 driver 在交付锁内显式调用一次；握手与来源作用域本身不创建关联。
+
+        两角色沿既有明确 fixture intake 重新取得当前 reader；部署绑定只由当前
+        有效登记指向的真实演进原件推出，不能构造收据或改原 guard／配置／Plan。
+        """
+        from tools.official_client_control import receipts
+        from tools.official_client_capture import claude_qualification_material_import as importer
+        from tools.official_client_capture import claude_gate_material_worker as material_reader
+        from tools.official_client_capture.claude_gate_material_worker import _plain_file
+        from tools.official_client_control.qualification_material_import import validate_import_shape
+
+        if getattr(self, "stack", None) is None or self.configuration["source_scope"] != "regression_fixture":
+            raise guard.GuardError("typed 后继准备必须在原 __enter__ 的明确回归来源作用域内")
+        manifest = upgrade.load_campaign_manifest(self.campaign)
+        store, campaign = claude_upgrade_store.open_campaign_store(self.campaign, manifest)
+        expected_root = self.data / self.configuration["candidate"]["qualification"]["store_relative"]
+        if store.root != expected_root or campaign["campaign_id"] != self.context["campaign_id"]:
+            raise guard.GuardError("typed 后继准备必须原同根 Store 与 Campaign")
+        if plan_ref is None or self.configuration["schema_version"] != executor.MATERIAL_CONFIGURATION_SCHEMA:
+            return None
+        plan = store.load_object(plan_ref)["payload"]
+        if (plan["campaign_id"], plan["candidate_id"], plan["delivery_id"], plan["configuration_sha256"]) != (
+                self.context["campaign_id"], self.candidate_id, self.context["delivery_id"], canonical_sha256(self.configuration)):
+            raise guard.GuardError("typed 后继准备的 Plan 不是原固定交付")
+        stages = receipts.delivery_chain_state(store, plan["campaign_id"], plan["delivery_id"])
+        if not stages.complete() or stages.pending is not None:
+            return None
+        # 后继使用已有双受管根与原读取器的实物依赖解析：同级 CI 或独立
+        # driver 的五个钉住文件。读取身份计算会核完整字节，不以目录存在
+        # 代替准入，也不触发首次夹具的缺模块补拷。
+        repository = receipts._tool_repository_root()
+        original_import = validate_import_shape(guard.read_bound_json(self.data, self.configuration["qualification_materials_binding"]))
+        original_reader = guard.read_bound_json(self.data, original_import["reader_identity_binding"])
+        current_reader = material_reader.compute_gate_reader_identity(repository, formed_context={"fixture_only": True})
+        if original_reader == dict(current_reader.document):
+            return None
+        if receipts.delivery_receipts(store, plan["campaign_id"], plan_ref):
+            raise guard.GuardError("原 Plan 已有完成收据，禁止补材料关联或重新组包")
+        self._bind_live_guard()
+        chain = receipts.tool_evolutions(store, campaign)
+        if not chain:
+            raise guard.GuardError("typed 后继准备缺当前有效工具演进登记")
+        evolution = chain[-1][1]["evolution_receipt"]
+        relative = executor.validate_relative_path(evolution["path"], "typed 有效演进原件")
+        evolution_path = guard.managed_path(self.data, self.campaign.relative_to(self.data).as_posix() + "/" + relative)
+        raw, _metadata = _plain_file(evolution_path)
+        if sha256_bytes(raw) != evolution["sha256"]:
+            raise guard.GuardError("typed 后继有效登记的演进原件漂移")
+        document = executor.parse_json_bytes(raw)
+        deployment = document.get("bindings", {}).get("deployment_receipt", {})
+        locator = deployment.get("path")
+        if not isinstance(locator, str):
+            raise guard.GuardError("typed 后继演进原件缺真实控制部署坐标")
+        path = Path(locator)
+        if not path.is_absolute() or str(path) != locator or ".." in path.parts or not path.is_relative_to(self.data):
+            raise guard.GuardError("typed 后继控制部署必须演进原件所指的同数据根绝对坐标")
+        control_raw, _metadata = _plain_file(path)
+        if sha256_bytes(control_raw) != deployment.get("sha256"):
+            raise guard.GuardError("typed 后继演进所指控制部署原件漂移")
+        control_binding = {"path": path.relative_to(self.data).as_posix(), "sha256": sha256_bytes(control_raw), "bytes": len(control_raw)}
+        reader = executor.create_executor(EXECUTOR_NAME, self.configuration, self.context)
+        source = reader.read_material_successor_preparation_source(store, plan_ref=plan_ref)
+        gate_root = _fixture_qualification_gate_root(store, self.configuration["candidate"]["qualification"], self.data)
+
+        def consume_sources(qualification_store: Any, sources: list[Any]) -> dict:
+            # 产品封存与验真仍用原可写 Store；intake 使用独立同根只读句柄。
+            if qualification_store.root != store.root:
+                raise guard.GuardError("typed 后继 intake 与原 Store 不是同根")
+            return importer.prepare_material_successor(store, sources, managed_data_root=self.data,
+                plan_ref=plan_ref, source=source, control_deployment_binding=control_binding,
+                delivery_lock_fd=delivery_lock_fd)
+
+        return _prepare_fixture_qualification_materials(store, self.configuration, self.data,
+            gate_root=gate_root, consume_sources=consume_sources)
 
     def close(self, *, force: bool = False) -> None:
         if getattr(self, "stack", None) is not None:

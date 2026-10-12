@@ -943,7 +943,7 @@ def _verify_continuation_method(document: dict[str, Any], method: str, expected:
     context = stops.load_state('method-context')
     if context is None or context.get('method') != method or context.get('tree') != document['tree']:
         raise ValueError('原方法上下文缺失或不属于同一世界')
-    if document['mode'] == 'formed-read-only':
+    if document['mode'] in stops.FORMED_READ_ONLY_MODES:
         result = stops.load_state('method-result')
         if result is None or result.get('complete') is not True or result.get('executor') != row['executor_origin']:
             raise ValueError('只读承接的形成期执行器不是原成功方法绑定的原件')
@@ -961,14 +961,15 @@ def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, 
     """
 
     root = Path(os.environ['CLAUDE_RECORDED_CHAIN_RECORD_DIR']).resolve(strict=True)
-    if root.is_symlink() or mode not in {'formed-read-only', 'registered-control-evolution'}:
+    if root.is_symlink() or mode not in {*stops.FORMED_READ_ONLY_MODES, 'registered-control-evolution'}:
         raise ValueError('原链记录根或承接模式非法')
     with _record_lock(root), _record_scope(root):
         saved = stops.load_state('chain:' + chain)
         if saved is None or saved.get('diagnostic_seconds') is not None:
             raise ValueError('承接必须绑定原正式链停点')
         source = _source_inputs()
-        path = root / stops.PRODUCT_CONTINUATION_FILE if output_path is None else Path(output_path)
+        path = (stops.current_product_continuation_path(root, source) if mode == 'formed-evidence-read-only'
+                else root / stops.PRODUCT_CONTINUATION_FILE) if output_path is None else Path(output_path)
         if output_path is not None and path != stops.current_product_continuation_path(root, source):
             raise ValueError('新凭证须使用本次非测试来源绑定的准确新路径，禁止覆盖旧凭证')
         if path.exists():
@@ -986,10 +987,11 @@ def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, 
             for method, expected in _continuation_methods(chain).items():
                 with _record_scope(Path(document['methods'][method]['root'])):
                     _verify_continuation_method(document, method, expected)
-                    if mode == 'formed-read-only':
+                    if mode in stops.FORMED_READ_ONLY_MODES:
                         _complete_method_original(expected)
             return binding
-        proof = stops.control_continuation_proof(saved['source'], source, before_files)
+        proof_function = (stops.formed_source_continuation_proof if mode == 'formed-evidence-read-only' else stops.control_continuation_proof)
+        proof = proof_function(saved['source'], source, before_files)
         tree = Path(saved['tree'])
         methods = {}
         for method, expected in _continuation_methods(chain).items():
@@ -1001,7 +1003,7 @@ def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, 
                 if (context is None or context.get('method') != method or context.get('expected') != expected
                         or context.get('tree') != str(tree)):
                     raise ValueError('原方法身份、场景全集或tree不匹配')
-                if mode == 'formed-read-only':
+                if mode in stops.FORMED_READ_ONLY_MODES:
                     result = _complete_method_original(expected)
                     origin = result.get('executor')
                     if origin is None:
@@ -1034,7 +1036,10 @@ def prepare_product_continuation(chain: str, mode: str, before_files: dict[str, 
                     'current_source': source, 'before_files': before_files, 'control_proof': proof,
                     'product_files': stops._executor_product_files(tree), 'methods': methods,
                     'registration': registration}
-        if mode == 'formed-read-only' and chain == 'revision-continuous':
+        if mode == 'formed-evidence-read-only':
+            document['schema'] = 'claude-fault-product-continuation/v2'
+            document['source_proof'] = document.pop('control_proof')
+        if mode in stops.FORMED_READ_ONLY_MODES and chain == 'revision-continuous':
             document['registration'] = stops._revision_formed_registration(document)
         raw = (json.dumps(stops._encoded(document), sort_keys=True, ensure_ascii=False) + '\n').encode()
         if path.exists():
@@ -1195,6 +1200,64 @@ def _resume_complete_method(case: unittest.TestCase, expected: list[str]) -> lis
     return records
 
 
+def _revalidate_formed_method_current(binding: dict[str, Any], method: str) -> dict[str, Any]:
+    """当前实际源码进程的纯验入口；只恢复原值并调用既有成功回调。
+
+    调用方仍在原隔离 namespace。此函数不运输或改写产品，不执行 unittest
+    方法体、setUp 或初始化器，不调用部署／恢复事务；缺只读所需原值即拒绝。
+    """
+    from tools.official_client_control.qualification_material_import import historical_material_reader_scope
+    from tools.official_client_capture.claude_gate_material_worker import gate_material_reader_scope
+    pending = stops._decoded(json.loads(stops._read_exact_cut(binding)))
+    method_root = Path(pending['methods'][method]['root'])
+    current_source = _source_inputs()
+    # 绝不启动 setUp/Class 的受管树或世界构造器。原 saved case 恢复完整值，
+    # 缺失时不能靠当前产品初始化补齐；专用回调继续核各自原世界/终态游标。
+    # 父 _run_group 已持原方法锁；子进程只继承同一记录 scope，不能再次 flock。
+    with _record_scope(method_root, resume=True, verify=True), stops.formed_method_read_only(), \
+            stops.formed_source_proof_scope(binding, current_source=current_source) as document, \
+            gate_material_reader_scope(), historical_material_reader_scope(REPO_ROOT) as materials:
+        if (Path(document['current_source']['repository']).resolve(strict=True) != REPO_ROOT
+                or method not in _continuation_methods(document['chain'])):
+            raise ValueError('当前纯验必须从固定 current_source.repository 加载该原方法')
+        expected = _continuation_methods(document['chain'])[method]
+        class_name, method_name = method.split('.', 1)
+        allowed_classes = {'_BatchFaultScenarios', '_OfficialFaultScenarios', '_CandidateFaultScenarios',
+            '_DeployFaultScenarios', '_PredecessorMisuseScenarios', '_TransientSegmentScenarios', '_RevisionEvaluatorScenarios'}
+        if class_name not in allowed_classes:
+            raise ValueError('当前纯验方法不属于既有明确类集合')
+        case = globals()[class_name](methodName=method_name)
+        _verify_continuation_method(document, method, expected)
+        if not stops.restore_case(case):
+            raise ValueError('当前纯验缺原完整 case 值，不允许初始化替代')
+        if class_name in {'_BatchFaultScenarios', '_OfficialFaultScenarios'} and not getattr(case, 'campaign', None):
+            raise ValueError('当前批次/官方纯验缺原Campaign主语，不能只返回六项audit')
+        case._read_only_revalidation = True
+        records = _resume_complete_method(case, expected)
+        _verify_continuation_method(document, method, expected)
+        after = _source_inputs()
+        if after != current_source or after != document['current_source']:
+            raise ValueError('当前纯验期间固定源码或来源坐标漂移')
+        validators = {}
+        for name, module in tuple(sys.modules.items()):
+            if (not (name in {'tools.official_client_capture', 'tools.official_client_control', 'tools.ci',
+                             'tools.arm64_supervised_deploy'}
+                     or name.startswith(('tools.official_client_capture.', 'tools.official_client_control.', 'tools.ci.')))
+                    or '.tests.' in name or name.endswith('.tests') or not getattr(module, '__file__', None)):
+                continue
+            path = Path(module.__file__).resolve(strict=True)
+            if not path.is_relative_to(REPO_ROOT):
+                raise ValueError('当前纯验产品模块实际从另一源码根加载：' + name)
+            relative = path.relative_to(REPO_ROOT).as_posix()
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if after['files'].get(relative) != digest:
+                raise ValueError('当前纯验产品模块不是准确冻结源码：' + name)
+            validators[relative] = digest
+        return {'schema': 'claude-fault-current-formed-verification/v1', 'method': method,
+            'purpose': 'current-formed-read-only', 'current_source': after,
+            'validator_modules': validators, 'records': records, 'material_consumers': materials}
+
+
 def _resumable_method(method: Callable[..., Any]) -> Callable[..., Any]:
     """保留原 unittest 方法和 ID；成功停点只走原件重验，不再运行故障注入。"""
 
@@ -1203,7 +1266,7 @@ def _resumable_method(method: Callable[..., Any]) -> Callable[..., Any]:
         # 以当前模块实际 __file__ 推出的根核验，不能只核 env 中的 tree 却从宿主导入执行器。
         stops.executor_invocation_binding(REPO_ROOT)
         continuation = stops.invocation_product_continuation(REPO_ROOT)
-        formed = continuation is not None and continuation[1]['mode'] == 'formed-read-only'
+        formed = continuation is not None and continuation[1]['mode'] in stops.FORMED_READ_ONLY_MODES
         if formed and not os.environ.get(METHOD_VERIFY_ENV):
             raise ValueError('已形成结果承接必须走只读方法入口，禁止退回动作体')
         if not os.environ.get(METHOD_VERIFY_ENV):
@@ -1247,7 +1310,7 @@ def _run_group(case: unittest.TestCase, recorder: _ChainRecorder, scenarios: Map
         return
     method_root = None
     continuation = stops.invocation_product_continuation(REPO_ROOT)
-    formed = continuation is not None and continuation[1]['mode'] == 'formed-read-only'
+    formed = continuation is not None and continuation[1]['mode'] in stops.FORMED_READ_ONLY_MODES
     if os.environ.get(METHODS_ROOT_ENV):
         method = next(iter(scenarios))
         method_root = Path(os.environ[METHODS_ROOT_ENV]) / hashlib.sha256(method.encode()).hexdigest()[:24]
@@ -1312,6 +1375,115 @@ def _run_group_body(case: unittest.TestCase, recorder: _ChainRecorder,
         context['invocations'].append({'argv': argv, 'output': output, 'state': 'started', 'verify': verify,
                                        'executor': executor_binding})
         stops.save_state('method-context', context)
+    pair = stops.invocation_product_continuation(shell._tree_root())
+    if pair is not None and pair[1]['mode'] == 'formed-evidence-read-only':
+        if not verify or method_root is None or output is None or len(scenarios) != 1:
+            raise ValueError('当前历史纯验缺原完整方法、只读派发或旁侧输出坐标')
+        current_root = Path(pair[1]['current_source']['repository']).resolve(strict=True)
+        current_environment = dict(environment)
+        current_environment.pop(stops.EXECUTOR_SOURCE_ENV, None)
+        current_environment.pop('PYTHONPATH', None)
+        # -B 仍可能读取当前根中同秒同长度的旧 pyc；每次 invocation 使用从未存在的树外前缀。
+        current_pycache = output / 'current-pycache'
+        if os.path.lexists(current_pycache):
+            raise ValueError('当前纯验字节码前缀已经存在；禁止消费旧 pyc')
+        # 产品导入之前设置前缀并禁止写入；父子进程首尾都核此目录没有生成。
+        current_code = ('import json,os,sys\n'
+            'if os.path.lexists(sys.argv[4]): raise ValueError("当前纯验字节码前缀已经存在")\n'
+            'sys.pycache_prefix=sys.argv[4]\n'
+            'sys.dont_write_bytecode=True\n'
+            'sys.path.insert(0,sys.argv[1])\n'
+            'from tools.official_client_capture.tests.real_chains.test_claude_upgrade_fault_chains '
+            'import _revalidate_formed_method_current,stops\n'
+            'current_report=_revalidate_formed_method_current('
+            'stops._decoded(json.loads(sys.argv[2])),sys.argv[3])\n'
+            'if os.path.lexists(sys.argv[4]): raise ValueError("当前纯验生成了字节码前缀")\n'
+            'print(json.dumps(stops._encoded(current_report),ensure_ascii=False,sort_keys=True))')
+        current_argv = [sys.executable, '-I', '-B', '-c', current_code, str(current_root),
+            json.dumps(stops._encoded(pair[0]), ensure_ascii=False), next(iter(scenarios)), str(current_pycache)]
+        context['invocations'][-1].update(argv=current_argv, purpose='current-formed-read-only',
+                                        pycache_prefix=str(current_pycache))
+        stops.save_state('method-context', context)
+        current_process = subprocess.Popen(current_argv, cwd=current_root, env=current_environment,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, start_new_session=True)
+        current_timed_out = False
+        try:
+            current_stdout, current_stderr = current_process.communicate(timeout=method_timeout)
+        except subprocess.TimeoutExpired:
+            current_timed_out = True
+            try:
+                os.killpg(current_process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            current_stdout, current_stderr = current_process.communicate()
+        (output / 'current-stdout.log').write_text(current_stdout, encoding='utf-8')
+        (output / 'current-stderr.log').write_text(current_stderr, encoding='utf-8')
+        (output / 'current-exit.json').write_text(json.dumps({'argv': current_argv,
+            'returncode': current_process.returncode, 'timed_out': current_timed_out,
+            'purpose': 'current-formed-read-only', 'pycache_prefix': str(current_pycache),
+            'pycache_generated': os.path.lexists(current_pycache),
+            'seconds': round(time.monotonic() - started, 3)},
+            ensure_ascii=False), encoding='utf-8')
+        try:
+            if os.path.lexists(current_pycache):
+                raise ValueError('当前纯验字节码前缀生成；拒绝本次结果')
+            if current_timed_out or current_process.returncode != 0:
+                raise ValueError('当前历史成功纯验超时或拒绝；不继续原方法：' + current_stderr[-6000:])
+            stops.verify_executor_source(executor_binding, shell._tree_root(), verify_product=False)
+            current_verification = stops._decoded(json.loads(current_stdout))
+            original = _read_records(stops.load_state('method-result')['bindings']['records']['path'])
+            if (not isinstance(current_verification, dict)
+                    or current_verification.get('schema') != 'claude-fault-current-formed-verification/v1'
+                    or current_verification.get('purpose') != 'current-formed-read-only'
+                    or current_verification.get('method') != next(iter(scenarios))
+                    or current_verification.get('current_source') != pair[1]['current_source']
+                    or current_verification.get('records') != original
+                    or not _records_complete(current_verification['records'], expected)):
+                raise ValueError('当前真实消费者结果不是原方法、准确当前来源和原六项结果')
+            if time.monotonic() - started > method_timeout:
+                raise ValueError('当前纯验已耗尽原方法预算，不扩预算接纳结果')
+        except (ValueError, OSError, KeyError, TypeError) as error:
+            # 新失败只封存旁侧 invocation；原成功 method-result 的字节与绑定不动。
+            seconds = round(time.monotonic() - started, 3)
+            failure_bindings = {name: stops.file_cut(output / filename) for name, filename in
+                (('current_stdout', 'current-stdout.log'), ('current_stderr', 'current-stderr.log'),
+                 ('current_exit', 'current-exit.json'), ('records', 'records.jsonl'))}
+            context['seconds'] += seconds
+            context['invocations'][-1].update(state='finished', seconds=seconds,
+                current_argv=current_argv, bindings=failure_bindings, current_error=str(error))
+            stops.save_state('method-context', context)
+            stops.save_state('method-verification', {'complete': False, 'expected': expected,
+                'returncode': current_process.returncode, 'bindings': failure_bindings,
+                'diagnostic_only': diagnostic_seconds is not None, 'current_error': str(error)})
+            recorder.emit()
+            case.fail(str(error))
+        # v2 本次唯一消费者就是上述真实当前进程。原成功 stdout/exit/command_prefix
+        # 已由 _complete_method_original 实读保留；不再起旧 unittest，不伪造 Ran/OK。
+        records = current_verification['records']
+        with records_file.open('w', encoding='utf-8') as stream:
+            for record in records:
+                stream.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n')
+        seconds = round(time.monotonic() - started, 3)
+        bindings = {name: stops.file_cut(output / filename) for name, filename in
+            (('current_stdout', 'current-stdout.log'), ('current_stderr', 'current-stderr.log'),
+             ('current_exit', 'current-exit.json'), ('records', 'records.jsonl'))}
+        context['seconds'] += seconds
+        context['invocations'][-1].update(state='finished', seconds=seconds, bindings=bindings)
+        stops.save_state('method-context', context)
+        stops.save_state('method-verification', {'complete': True, 'expected': expected,
+            'returncode': current_process.returncode, 'bindings': bindings,
+            'diagnostic_only': diagnostic_seconds is not None, 'executor': executor_binding,
+            'purpose': 'current-formed-read-only', 'current_source': current_verification['current_source'],
+            'command_prefix': (stops.load_state('command-observations') or {}).get('commands', [])})
+        recorder.facts['scenarios'].extend(records)
+        recorder.facts.setdefault('groups', []).append({'step': step, 'tests': list(scenarios),
+            'seconds': seconds, 'returncode': current_process.returncode, 'timeout_seconds': method_timeout,
+            'inherited': True, 'cumulative_seconds': context['seconds'],
+            'current_executor_verified': executor_binding is not None,
+            'purpose': 'current-formed-read-only', 'diagnostic_only': diagnostic_seconds is not None})
+        recorder.step(step)
+        return
     process = subprocess.Popen(
         argv,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=str(shell._tree_root()), env=environment,
@@ -2904,6 +3076,49 @@ class _DeployFaultScenarios(unittest.TestCase):
         stops.save_case(self)
         stops.save_state('deploy-fixture', {'timing_dir': self.timing_dir})
 
+    def revalidate_completed_method(self, expected: list[str]) -> list[dict[str, Any]]:
+        """原六部署方法纯验当前读者：实读原日志／意图／收据与生产字节。"""
+        from tools import arm64_supervised_deploy as deploy
+        from tools.official_client_capture.tests.arm64_deploy_fixture import DeployHarness
+        allowed = {name: scenario for _step, group in RECOVERY_CHAIN_GROUPS
+            for name, scenario in group.items() if name.startswith('_DeployFaultScenarios.')}
+        method = type(self).__name__ + '.' + self._testMethodName
+        if method not in allowed or expected != [allowed[method]] or not stops.restore_case(self):
+            raise ValueError('部署纯验仅接受六个原成功方法及准确单场景')
+        values = stops.load_state('deploy-fixture')
+        if values is None:
+            raise ValueError('部署纯验缺原账本定位，不能新建')
+        self.deploy, self.timing_dir = deploy, values['timing_dir']
+        self.harness = DeployHarness(self.root / 'site', module=deploy)
+        scenario = expected[0]
+        receipts_residue = self._testMethodName in {'_scenario_deploy_one_receipt_written', '_scenario_deploy_receipts_written'}
+        name = ('deploy-receipts:' if receipts_residue else 'deploy-rollback:') + scenario
+        state = stops.load_state('cursor:' + name)
+        if state is None or state.get('phase') != (7 if receipts_residue else 9):
+            raise ValueError('部署纯验缺原完成游标，禁止运行恢复事务')
+        if self.harness.journals():
+            raise ValueError('部署纯验仍有活动交换日志，不允许补恢复')
+        for path in self.harness.retired_journals():
+            deploy.SwitchJournal.load(path)
+        key = 'complete-receipts' if receipts_residue else 'redeploy'
+        saved = stops.load_state('deploy-intent:' + name + ':' + key)
+        if saved is None:
+            raise ValueError('部署纯验缺同次部署完整意图原件')
+        journal = deploy.SwitchJournal.load(Path(saved['binding']['path']))
+        stops._read_exact_cut(saved['binding'])
+        deploy.verify_switched_entries(journal)
+        for client, relative in journal.intent['receipt_paths'].items():
+            path = Path(relative)
+            if path.is_symlink() or not path.is_file() or path not in self.harness.receipts(client):
+                raise ValueError('部署纯验缺同次客户端准确收据')
+            receipt = json.loads(path.read_bytes())
+            if receipt.get('status') != 'passed':
+                raise ValueError('部署纯验实际收据不是原成功结果')
+            if client == 'claude' and (receipt.get('client') != client
+                    or receipt.get('switch_journal_sha256') != journal.intent_sha256):
+                raise ValueError('Claude部署收据不是该原交换意图')
+        return [ScenarioAudit.revalidate(self, scenario)]
+
     # ---- 共用
 
     def _kill_at(self, install: Callable[[Any], contextlib.AbstractContextManager[Any]]) -> None:
@@ -3296,7 +3511,7 @@ class _PredecessorMisuseScenarios(predecessor_tests._PredecessorCase):
             stops.read_cut(binding)
         source = ControlStore.open_read_only(state['predecessor_root'])
         source.replay(external_root=state['predecessor_external'], require_external=True)
-        target = self.target_store(state['campaign_dir'])
+        target = ControlStore.open_read_only(store_module.campaign_store_root(state['campaign_dir']))
         fixture = self._restore_fixture(state['target_fixture'])
         target.replay(external_root=fixture.external_root, require_external=True)
         campaign = target.load_campaign(predecessor_tests.TARGET_ID)
@@ -3680,7 +3895,7 @@ class ClaudeFaultChainTests(unittest.TestCase):
                     for method, expected in _continuation_methods(chain).items():
                         with _record_scope(Path(document['methods'][method]['root'])):
                             _verify_continuation_method(document, method, expected)
-                            if document['mode'] == 'formed-read-only':
+                            if document['mode'] in stops.FORMED_READ_ONLY_MODES:
                                 _complete_method_original(expected)
                 if saved.get('isolation') != self._isolation_mode():
                     raise ValueError('原链隔离方式已改变，不能承接另一执行环境')

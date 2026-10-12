@@ -22,6 +22,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -409,6 +410,28 @@ def _unit_records_module() -> Any:
         sys.modules[name] = module
         spec.loader.exec_module(module)
     return sys.modules[name]
+
+
+def control_read_audit_for_plan(manifest: Mapping[str, Any]) -> Any:
+    """当前四control规划选择固定adapter；普通客户端与未登记单元保持历史默认。"""
+    selected = (manifest.get("audit_policy") or {}).get("units") or {}
+    names = {"pre-a3:claude:" + name for name in (
+        "vc-chain.claude-reconcile", "vc-chain.claude-deadline", "vc-chain.claude-root-cause", "vc-chain.claude-tool-evolution")}
+    if not any(unit_id in names and "runtime_contract" in declaration for unit_id, declaration in selected.items()):
+        return None
+    key = "_entry_control_read_audit_" + str(HERE).replace("/", "_")
+    if key not in sys.modules:
+        path = HERE / "control_read_audit.py"
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("当前四control固定adapter缺失或为链接")
+        spec = importlib.util.spec_from_file_location(key, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[key] = module
+        spec.loader.exec_module(module)
+    module = sys.modules[key]
+    if not module.selected_plan(manifest):
+        raise ValueError("当前规划没有匹配四control固定合同")
+    return module
 
 
 # 受管工具树（仓库相对路径）：命令单元的输入范围按它划分受管工具、测试目录、docs 与其余部分。
@@ -847,6 +870,114 @@ def verify_scope_workspace(tree: Path, bytecode_cache: Path, *, commit: str, bun
             "bundle_sha256": _unit_records_module().file_sha256(bundle), "workspace_rebuilt": False}
 
 
+def prepare_scope_successor(tree: Path, bytecode_cache: Path, *, commit: str, bundle: Path, branch: str,
+                            lock_directory: Path, lock_owner: int) -> dict[str, Any]:
+    """入口持锁后只原位更新普通文件内容；保留未改实物，仍由原工作区与读集消费者核验。
+
+    不使用 checkout 替换文件，也不恢复时间戳。仅接受干净的分离 HEAD、真实后继及同模式内容差异；新增、删除、
+    改名、链接、模式变化均拒绝。Git 对象／index／HEAD 的真实变化照常保留，读取它们的记录仍按实际输入失效。
+    """
+    for path in (tree, bytecode_cache, bundle, lock_directory):
+        if not path.is_absolute() or any(item.is_symlink() for item in (path, *path.parents)):
+            raise ValueError("后继工作区只接受无符号链接的绝对路径")
+    if (tree.name != "test-tree" or not tree.is_dir() or not (tree / ".git").is_dir()
+            or (tree / ".git").is_symlink() or not bytecode_cache.is_dir() or not bundle.is_file()):
+        raise ValueError("后继准备需要原 test-tree 克隆、普通 bundle 与现有缓存")
+    if bytecode_cache == tree or tree in bytecode_cache.parents:
+        raise ValueError("字节码缓存必须位于测试树外")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("后继准备需要完整提交号")
+    work = tree.parent
+    expected_lock = work.parent / ".entry-gates-locks" / hashlib.sha256(str(work).encode()).hexdigest() / "held"
+
+    def check_lock() -> None:
+        if lock_directory != expected_lock or lock_owner != os.getppid() or lock_owner <= 1:
+            raise ValueError("后继准备必须由持有本 WORK 锁的入口父进程调用")
+        for directory in (lock_directory, work / ".entry-gates.lock"):
+            pid_path = directory / "pid"
+            if (any(path.is_symlink() for path in (directory, pid_path)) or not directory.is_dir()
+                    or not pid_path.is_file() or directory.stat().st_uid != os.geteuid()
+                    or pid_path.stat().st_uid != os.geteuid() or pid_path.read_text().strip() != str(lock_owner)):
+                raise ValueError("后继准备的入口锁或兼容锁不属于当前父进程")
+            if stat.S_IMODE(directory.stat().st_mode) != 0o700 or stat.S_IMODE(pid_path.stat().st_mode) != 0o600:
+                raise ValueError("后继准备的入口锁权限不符")
+
+    git = ["git", "--no-optional-locks", "-C", str(tree), "-c", "core.hooksPath=/dev/null",
+           "-c", "gc.auto=0", "-c", "maintenance.auto=false"]
+
+    def run_git(*args: str) -> bytes:
+        result = subprocess.run([*git, *args], capture_output=True, stdin=subprocess.DEVNULL)
+        if result.returncode:
+            raise ValueError("后继工作区 Git 核验失败：" + " ".join(args[:2]))
+        return result.stdout
+
+    def require_clean() -> None:
+        if run_git("status", "--porcelain", "--untracked-files=all"):
+            raise ValueError("原测试树存在未登记变更，拒绝后继准备")
+        if any(row[:1] == b"S" or row[:1].islower() for row in run_git("ls-files", "-v", "-z").split(b"\0") if row):
+            raise ValueError("原测试树含隐藏工作区变化的索引标记")
+
+    check_lock()
+    if run_git("rev-parse", "--is-shallow-repository").strip() != b"false":
+        raise ValueError("后继准备拒绝浅克隆")
+    if subprocess.run([*git, "symbolic-ref", "-q", "HEAD"], capture_output=True).returncode != 1:
+        raise ValueError("后继准备只接受分离 HEAD，不修改工作分支")
+    require_clean()
+    old_head = run_git("rev-parse", "HEAD").decode().strip()
+    bundle_sha = _unit_records_module().file_sha256(bundle)
+    run_git("bundle", "verify", str(bundle))
+    refs = [line.split() for line in run_git("bundle", "list-heads", str(bundle)).decode().splitlines()]
+    if not any(value == commit and ref in {branch, "refs/heads/" + branch} for value, ref in refs):
+        raise ValueError("bundle 分支与后继提交不一致")
+    run_git("fetch", "--no-tags", "--no-write-fetch-head", "--no-auto-maintenance", str(bundle), branch)
+    run_git("merge-base", "--is-ancestor", old_head, commit)
+    raw = run_git("diff-tree", "--no-commit-id", "--no-renames", "--raw", "-r", "-z", old_head, commit).split(b"\0")
+    changes: list[tuple[Path, bytes, bytes, os.stat_result]] = []
+    for index in range(0, len(raw) - 1, 2):
+        fields = raw[index].decode().split()
+        relative = raw[index + 1].decode()
+        if (len(fields) != 5 or fields[0] not in (":100644", ":100755") or fields[1] != fields[0][1:]
+                or fields[4] != "M" or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts):
+            raise ValueError("后继只允许同模式普通文件内容修改；新增、删除、改名或模式变化须另行处理")
+        path = tree / relative
+        if any(part.is_symlink() for part in (path, *path.parents)):
+            raise ValueError("后继差异路径含符号链接")
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("后继差异必须是单链接普通文件")
+        old_data = run_git("cat-file", "blob", fields[2])
+        new_data = run_git("cat-file", "blob", fields[3])
+        if path.read_bytes() != old_data:
+            raise ValueError("后继差异文件与旧提交原始字节不符")
+        changes.append((path, old_data, new_data, info))
+    if not changes:
+        raise ValueError("后继提交没有普通文件内容差异")
+    require_clean()
+    if run_git("rev-parse", "HEAD").decode().strip() != old_head or _unit_records_module().file_sha256(bundle) != bundle_sha:
+        raise ValueError("后继准备期间原 HEAD 或 bundle 变化")
+    check_lock()
+    # 所有差异先验证并读齐，再开始写入；不创建/替换目录项，不把已变元数据伪装回来源状态。
+    for path, old_data, new_data, info in changes:
+        check_lock()
+        descriptor = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "r+b") as stream:
+            opened = os.fstat(stream.fileno())
+            if ((opened.st_dev, opened.st_ino, opened.st_nlink, opened.st_mode) !=
+                    (info.st_dev, info.st_ino, info.st_nlink, info.st_mode) or stream.read() != old_data):
+                raise ValueError("后继差异文件在原位写入前变化，拒绝继续")
+            stream.seek(0)
+            stream.write(new_data)
+            stream.truncate()
+            stream.flush()
+            os.fsync(stream.fileno())
+    check_lock()
+    run_git("read-tree", commit)
+    run_git("update-ref", "--no-deref", "HEAD", commit, old_head)
+    result = verify_scope_workspace(tree, bytecode_cache, commit=commit, bundle=bundle, branch=branch)
+    print(f"后继原位准备：{old_head} → {commit}，更新 {len(changes)} 个普通文件；未重建测试树或缓存", file=sys.stderr)
+    return result
+
+
 def _planned_test_ids(tree: Path, groups: Sequence[dict[str, Any]]) -> set[str]:
     """登记测试合同时复用现有只读规划入口；执行器仍须按本轮实际调度配置再核对。"""
     unit_ids: set[str] = set()
@@ -1249,6 +1380,14 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     workspace.add_argument("--commit", required=True)
     workspace.add_argument("--bundle", type=Path, required=True)
     workspace.add_argument("--branch", required=True)
+    successor = sub.add_parser("prepare-scope-successor", help="持有入口锁时仅原位准备普通文件内容后继")
+    successor.add_argument("--tree", type=Path, required=True)
+    successor.add_argument("--bytecode-cache", type=Path, required=True)
+    successor.add_argument("--commit", required=True)
+    successor.add_argument("--bundle", type=Path, required=True)
+    successor.add_argument("--branch", required=True)
+    successor.add_argument("--lock-directory", type=Path, required=True)
+    successor.add_argument("--lock-owner", type=int, required=True)
     export = sub.add_parser("export", help="从一次运行的执行器汇总导出门禁记录、P0 证据与预跑／全量门禁记录")
     export.add_argument("--manifest", type=Path, required=True)
     export.add_argument("--summary", type=Path, required=True)
@@ -1294,6 +1433,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "verify-scope-workspace":
             print(json.dumps(verify_scope_workspace(args.tree, args.bytecode_cache, commit=args.commit,
                                                     bundle=args.bundle, branch=args.branch), ensure_ascii=False))
+            return 0
+        if args.command == "prepare-scope-successor":
+            print(json.dumps(prepare_scope_successor(args.tree, args.bytecode_cache, commit=args.commit,
+                bundle=args.bundle, branch=args.branch, lock_directory=args.lock_directory,
+                lock_owner=args.lock_owner), ensure_ascii=False))
             return 0
         if args.command == "plan":
             launcher = json.loads(args.launcher_json)

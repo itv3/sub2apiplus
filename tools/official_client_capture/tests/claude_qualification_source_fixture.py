@@ -7,6 +7,7 @@ Release 使用原合同生成器。accept 和首轮阶段结果按真实键集�
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from tools.official_client_capture import claude_upgrade_compare as compare
 from tools.official_client_capture import claude_upgrade_release as release
 from tools.official_client_capture import claude_upgrade_vc as vc
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
 from tools.official_client_capture.tests.test_claude_upgrade_seal import write_vc_control
 from tools.official_client_capture.tests.test_claude_real_delivery_integration import DeliveryCampaign
 from tools.official_client_control.canonical import canonical_json_bytes, canonical_sha256, sha256_bytes
@@ -23,7 +25,8 @@ from tools.official_client_control.contracts import derive_identity_conditions
 
 
 def write(path: Path, document: Any) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # 中间目录也须在形成期私有创建；不能对已冻结目录补 chmod。
+    guard.private_directory(path.parent)
     path.write_bytes(canonical_json_bytes(document))
     path.chmod(0o600)
     return path
@@ -45,6 +48,23 @@ class QualificationDeliveryCampaign(DeliveryCampaign):
         super().__init__(root, schema=schema, store=store,
                          external_root=external_root, external_prefix=external_prefix)
         self.material_data_root = data_root
+
+    def _write_external(self, relative: str, content: bytes) -> dict[str, Any]:
+        """资格夹具的外部原件在创建时使用私有模式，不修改共享生产器。
+
+        保留原前缀的独占写入语义；只将本夹具新建目录及文件设为
+        0700/0600。原路径、原字节和摘要口径不变，已有文件不补权限。
+        """
+        if self.external_prefix:
+            relative = f"{self.external_prefix}/{relative}"
+        path = guard.managed_path(self.external_root, relative)
+        guard.private_directory(path.parent)
+        flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        flags |= os.O_EXCL if self.external_prefix else os.O_TRUNC
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+        return {"path": relative, "sha256": sha256_bytes(content), "bytes": len(content)}
 
     def select_profile(self, name: str) -> None:
         from copy import deepcopy

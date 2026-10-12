@@ -793,6 +793,13 @@ class ReadAuditExecutorTests(unittest.TestCase):
                 self.assertFalse(ur.derived_pass({**record, "inputs": []})[0])
             code, _, stderr = self._run(root, repo, {}, audit_policy=policy, label="without-strict")
             self.assertEqual(code, 2, stderr)
+            # 当前producer只处理四control；普通命令与空策略旧记录不能借此获得承接资格。
+            from tools.ci import control_read_audit as control_audit
+            for unit_id in ("cmd:a", "cmd:unknown"):
+                with self.subTest(producer_unit=unit_id), self.assertRaisesRegex(control_audit.AuditError, "只登记四条control"):
+                    control_audit.prepare_audit_policy(root / "gates.json", [unit_id], str(root / "private" / "output"))
+            with self.assertRaises(control_audit.AuditError):
+                control_audit.bind_audit_policy(root / "gates.json", root / "out" / "unit-manifest.json", ["cmd:a"])
 
     def test_strict_host_coverage_replays_and_missing_trace_or_input_drift_refuses_reuse(self):
         with tempfile.TemporaryDirectory() as directory:

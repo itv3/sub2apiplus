@@ -734,8 +734,7 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
             spec = self.root / "full79-spec.json"
             spec.write_text("{}", encoding="utf-8")
             values = dr._parse_env().parse(self.claude_env.read_text(encoding="utf-8"))
-            values.update({"PRE_A3_CERTIFICATION": str(source), "POLICY_ACTIVATION": str(activation),
-                           "CLAUDE_ENTRY_FULL79_SPEC": str(spec), "CLAUDE_ENTRY_FULL79_SPEC_SHA256": bv._sha256_file(spec)})
+            values.update({"PRE_A3_CERTIFICATION": str(source), "POLICY_ACTIVATION": str(activation)})
             self.claude_env.write_text(dr._env_text(values), encoding="utf-8")
             self.configure()
             source_listing = sorted(str(path.relative_to(source_root)) for path in source_root.rglob("*"))
@@ -816,18 +815,20 @@ class ClaudeEntryDryRunTests(unittest.TestCase):
                     finally:
                         changed_path.write_bytes(original)
 
-            # 缺源保留首次执行；Codex、缺请求／bridge、opening、reexecute 不消费此来源。
+            # 旧 bridge 与普通源均保留原字节复制；Codex、缺请求、opening、reexecute 不消费此来源。
             target = self.root / "unused-certification.json"
             rehearsal = {"PRE_A3_CERTIFICATION": str(target)}
+            dr._copy_pre_a3_source(payload, {**values, "CLAUDE_ENTRY_FULL79_SPEC": str(spec),
+                                           "CLAUDE_ENTRY_FULL79_SPEC_SHA256": bv._sha256_file(spec)}, rehearsal, client="claude")
+            self.assertEqual(target.read_bytes(), source_bytes)
+            target.unlink()
             dr._copy_pre_a3_source(payload, {**values, "PRE_A3_CERTIFICATION": str(self.root / "missing-source.json")},
                                    rehearsal, client="claude")
             source.write_bytes(b"invalid-unused-source")
-            for client, flags, configured in (("codex", {}, True), ("claude", {"unit_inherit_request": None}, True),
-                                                ("claude", {}, False), ("claude", {"opening": True}, True),
-                                                ("claude", {"reexecute": True}, True)):
-                with self.subTest(unchanged_branch=(client, flags, configured)):
-                    selected = values if configured else {**values, "CLAUDE_ENTRY_FULL79_SPEC": ""}
-                    dr._copy_pre_a3_source({**payload, **flags}, selected, rehearsal, client=client)
+            for client, flags in (("codex", {}), ("claude", {"unit_inherit_request": None}),
+                                   ("claude", {"opening": True}), ("claude", {"reexecute": True})):
+                with self.subTest(unchanged_branch=(client, flags)):
+                    dr._copy_pre_a3_source({**payload, **flags}, values, rehearsal, client=client)
                     self.assertFalse(target.exists())
             source.write_bytes(source_bytes)
 

@@ -849,6 +849,67 @@ class QualificationReadSnapshotTests(unittest.TestCase):
     def test_original_external_binding_verification_remains_active(self) -> None:
         binding = self.fixture.official_binding
         path = self.fixture.external_root / binding["path"]
+        # 只禁止外部原件的重复绑定；Store 的 Campaign／事实首尾实读仍须保留。
+        # 两次正式调用各自重新核原件，不能把 Store 实读也误当作可省略的读取。
+        original_verify = self.reader._verify_external_binding
+        original_binding = guard.binding
+
+        def bind_store_originals(data_root, actual_path):
+            if Path(actual_path).resolve() == path.resolve():
+                raise AssertionError("资格外部原件不得重复绑定实读")
+            return original_binding(data_root, actual_path)
+
+        for _ in range(2):
+            with mock.patch.object(self.reader, "_verify_external_binding", wraps=original_verify) as verifies, \
+                    mock.patch.object(guard, "binding", side_effect=bind_store_originals):
+                result = self.replay()
+                self.assertEqual(result["result"], "pass")
+                self.assertIn(mock.call(self.fixture.external_root, binding), verifies.call_args_list)
+        expected = {**binding, "path": path.relative_to(self.root).as_posix()}
+        self.assertEqual(executor._qualification_external_binding(self.reader,
+            self.fixture.external_root, self.root, binding), expected)
+        with self.assertRaisesRegex(guard.GuardError, "越出"):
+            executor._qualification_external_binding(self.reader, self.fixture.external_root,
+                self.root / "store", binding)
+        with mock.patch.object(executor.os, "getuid", return_value=os.getuid() + 1), \
+                self.assertRaisesRegex(guard.GuardError, "当前所有者"):
+            executor._qualification_external_binding(self.reader, self.fixture.external_root, self.root, binding)
+        with self.assertRaises(ControlError):
+            executor._qualification_external_binding(self.reader, self.fixture.external_root, self.root,
+                {**binding, "bytes": binding["bytes"] + 1})
+        moved = path.with_name(path.name + ".original-for-link-check")
+        path.rename(moved)
+        try:
+            path.symlink_to(moved)
+            with self.assertRaisesRegex(guard.GuardError, "符号链接"):
+                executor._qualification_external_binding(self.reader, self.fixture.external_root, self.root, binding)
+        finally:
+            path.unlink()
+            moved.rename(path)
+        original_mode = path.stat().st_mode & 0o777
+
+        def verify_then_change_mode(external_root, item):
+            original_verify(external_root, item)
+            path.chmod(0o400 if original_mode != 0o400 else 0o600)
+
+        try:
+            with mock.patch.object(self.reader, "_verify_external_binding", new=verify_then_change_mode), \
+                    self.assertRaisesRegex(guard.GuardError, "实读期间"):
+                executor._qualification_external_binding(self.reader, self.fixture.external_root, self.root, binding)
+        finally:
+            path.chmod(original_mode)
+        original_bytes = path.read_bytes()
+
+        def verify_then_replace(external_root, item):
+            original_verify(external_root, item)
+            replacement = path.with_name(path.name + ".same-bytes-replacement")
+            replacement.write_bytes(original_bytes)
+            replacement.chmod(original_mode)
+            replacement.replace(path)
+
+        with mock.patch.object(self.reader, "_verify_external_binding", new=verify_then_replace), \
+                self.assertRaisesRegex(guard.GuardError, "实读期间"):
+            executor._qualification_external_binding(self.reader, self.fixture.external_root, self.root, binding)
         path.write_bytes(path.read_bytes() + b"changed")
         with self.assertRaises(ControlError):
             self.replay()

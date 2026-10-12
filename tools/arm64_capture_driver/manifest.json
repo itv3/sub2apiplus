@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 111,
+  "file_count": 113,
   "files": [
     {
       "path": "README.md",
@@ -129,6 +129,18 @@
       "bytes": 43642
     },
     {
+      "path": "driver/control_read_audit.py",
+      "sha256": "dc9238ae696880cd12eb17a246a09ac354d6db330b788b66ecf35c3142da2172",
+      "mode": "0700",
+      "bytes": 32319
+    },
+    {
+      "path": "driver/control_read_audit_runtime.py",
+      "sha256": "c779562bd4a09319ebb1a3d6ade888f65405c464386976a5192dd43bee824010",
+      "mode": "0700",
+      "bytes": 36565
+    },
+    {
       "path": "driver/delivery_guard.py",
       "sha256": "e040c55eb1b55cf981852bbcaed3db129531d63a86853dfd04bc2a870e1464d4",
       "mode": "0700",
@@ -148,9 +160,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "30180dfe1877ebaece0eb89a5034658ee4028876d11f2b19fe75cabb81310d19",
+      "sha256": "e1dca4ab9830e45495aecbcc2230bc1cede25e97168a88a313c0dd24941e34b7",
       "mode": "0700",
-      "bytes": 46097
+      "bytes": 46841
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -166,15 +178,15 @@
     },
     {
       "path": "driver/entry_dryrun.py",
-      "sha256": "2255fc5fd9c5fa655fa1b4de8ab3be7dbf112095cda022984c14ffc284a0997b",
+      "sha256": "03ec4765a04984811bc5f51bc2bb9839b9b008847aca354b64dfe003de63f049",
       "mode": "0700",
-      "bytes": 54924
+      "bytes": 54868
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "617075c7370c631bcb4a479a23e8cda588b15ccbd1e638ddf05a67508572ee84",
+      "sha256": "d174726590512efe830cd1d145a6ddb0d73392b00d0faabb0f808c13c8a87c3e",
       "mode": "0700",
-      "bytes": 90495
+      "bytes": 99690
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -184,9 +196,9 @@
     },
     {
       "path": "driver/entry_orchestrator.py",
-      "sha256": "c5e7c69def778aaca9fb1bdf63fa19fd26d2c33be306e1ba99504d3eee110362",
+      "sha256": "e8a3300abcb16ed459873bc85a996b589cd8c9a03242eb98e18b33019f481dcb",
       "mode": "0700",
-      "bytes": 75911
+      "bytes": 83021
     },
     {
       "path": "driver/entry_steps.py",
@@ -418,15 +430,15 @@
     },
     {
       "path": "driver/unit_executor.py",
-      "sha256": "0413d4c3fc0b0f31acd51c7945e2b56e44aacf5f1dd723b7a5ddde589799dd0c",
+      "sha256": "08410ddb1bd59e3aac88f1f997a956d4102ab959153174043cd6faefb2676107",
       "mode": "0700",
-      "bytes": 173787
+      "bytes": 175340
     },
     {
       "path": "driver/unit_inherit.py",
-      "sha256": "9e53bddcb0c647d4c7f3a1f07b9721ff59248c7c550dbba5e9edf4738ebfc828",
+      "sha256": "820c32ffa8a37400408558e0d73aa1106c8e44dae34a75547cbe60329d2c6bc7",
       "mode": "0700",
-      "bytes": 69114
+      "bytes": 72845
     },
     {
       "path": "driver/unit_records.py",
@@ -669,5 +681,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "3ddc86060c0e2a9d7cae0703a8cb543e1a79a6556e64229062fcf3fb0a58c1d3"
+  "manifest_sha256": "3169b79ed08636802522c5507fc99d356e82f35f7aeae43cd0acbecd00e09fb1"
 }

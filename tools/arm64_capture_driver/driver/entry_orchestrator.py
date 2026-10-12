@@ -11,8 +11,9 @@
   pre-A3 都被阻塞），最后一起汇总。只有这一段全部通过才建账本。
 * 建账本之后（建账本、环境收据、checkpoint、预检 plan、Job 演练、启动探测、发布认证、P0 收据、VC-0 收口）
   按顺序执行，失败即停。重新执行同一条命令：判定为沿用的跳过，从失败的那一步接着做；账本已建就沿用，绝不重建。
-* 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、
-  或没有记录的旧产物）时换带序号的新坐标（``-r2``、``-r3`` …），实际坐标写进步骤记录，下游从记录取。
+* 沿用核步骤记录（产物存在不等于可用）：没有记录的旧产物通常换带序号的新坐标（``-r2``、``-r3`` …）。Claude 逐单元
+  承接入口已有独立 pre-A3 认证时，先由原验证器和当前输入复核，再登记真实消费；无效来源失败，不降级重跑九场景。
+  实际坐标写进步骤记录，下游从记录取。
 * Job 演练上一次失败且留下了收据时，新的一次带上它只重跑失败的作业（工具已有的 ``--rerun-failed``）。
 * VC-0 收口（E2-07）调用收口模块：它先做只读现场判定，再新建、续作或交给 VC-1 的对账恢复链；同一 Formal ID、同一账本，
   重新执行同一条命令即续作。需要批准（上限后的恢复、首批恢复预览）时这一步标「阻塞」并打印下一条命令，批准后带
@@ -374,10 +375,12 @@ class Orchestrator:
             raise OrchestratorError("完整79接线只允许Claude，文件与外持SHA必须成对提供")
         return configured
 
-    def _recorded_reuse_products(self, out: Path, certification: Path) -> dict[str, str]:
+    def _recorded_reuse_products(self, out: Path, certification: Path, *,
+                                 result: dict[str, Any] | None = None) -> dict[str, str]:
         """仅登记正式脚本调用原record-reuse的真实输出；同部署not_needed合法，缺证明不能写通过。"""
 
-        result = json.loads((out / "pre-a3-reuse.json").read_text(encoding="utf-8"))
+        if result is None:
+            result = json.loads((out / "pre-a3-reuse.json").read_text(encoding="utf-8"))
         if not isinstance(result, dict):
             raise OrchestratorError("原复用消费端输出必须是对象")
         if result.get("reused_certification") != str(certification):
@@ -392,13 +395,66 @@ class Orchestrator:
             raise OrchestratorError("原复用收据缺失或不是普通绝对路径文件")
         return {"reuse-receipt": str(path)}
 
+    def _ordinary_pre_a3_inputs(self, path: Path) -> str:
+        """普通认证沿原场景声明重算当前输入；不引入完整79的 carry 规格或承接合同。
+
+        独立九场景的记录必须包含全部当前仓库输入和六项来源；入口额外数据根输入只复核原记录实际声明过的项。
+        返回源原件摘要，调用前后都核验，不能用文件仍在代替有效性证明。
+        """
+        from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
+
+        if (not path.is_absolute() or ".." in path.parts
+                or any(item.is_symlink() for item in (path, *path.parents)) or not path.is_file()):
+            raise OrchestratorError("普通 pre-A3 源认证必须是无链接的规范绝对路径文件")
+        raw = path.read_bytes()
+        name = "entry_orchestrator_gates_sibling"
+        if name not in sys.modules:
+            spec = importlib.util.spec_from_file_location(name, HERE / "entry_gates.py")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+        gates = sys.modules[name]
+        records = gates._unit_records_module()
+        tree = (self.full_set_work or self.data.parent / "entry-gates-work") / "test-tree"
+        if any(item.is_symlink() for item in (tree, *tree.parents)):
+            raise OrchestratorError("普通 pre-A3 当前测试树不得经符号链接转向")
+        repo = records.RepoIndex.load(tree)
+        if repo.root != tree.resolve() or not repo.clean or repo.head != self.p("ENTRY_COMMIT"):
+            raise OrchestratorError("普通 pre-A3 当前测试树不是本轮干净提交")
+        try:
+            payload = certification.verify_certification(path, client="claude")
+            store = certification._RecordStore(Path(payload["record_store"]))
+            manifest = store.read(store.manifest_path(payload["unit_manifest"]["run_id"]))
+            values = {key: self.params.get(key, "") for key in self.spec["pre_a3_fixture_keys"]}
+            fixtures = gates.pre_a3_fixture_resolved("claude", values)
+            optional = {item["name"]: item for item in gates.pre_a3_data_root_inputs(self.data, "claude", pre_a3_env=values)}
+            cache: dict[Path, Any] = {}
+            for scenario in certification.scenario_names("claude"):
+                unit_id = certification.scenario_unit_prefix("claude") + scenario
+                entry = next(item for item in manifest["units"] if item["unit_id"] == unit_id)
+                record = store.read(store.record_path(unit_id, entry["record_sha256"]))
+                test_file = certification.scenario_test_module(scenario, "claude").replace(".", "/") + ".py"
+                saved = {item["name"]: item for item in record["inputs"] if item["name"] != "reexecute-only-policy"}
+                expected = {item["name"]: item for item in records.declared_inputs(
+                    repo, gates.pre_a3_inputs(test_file, fixtures, "claude"), cache)}
+                expected.update({key: optional[key] for key in saved if key in optional})
+                if set(saved) != set(expected) or any(saved[key]["sha256"] != expected[key]["sha256"] for key in expected):
+                    raise OrchestratorError("普通 pre-A3 认证的当前输入已变化或声明不完整：" + unit_id)
+            if path.read_bytes() != raw or any(item.is_symlink() for item in (path, *path.parents)):
+                raise OrchestratorError("普通 pre-A3 源认证在复核期间变化")
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, StopIteration) as error:
+            raise OrchestratorError(f"普通 pre-A3 认证输入复核失败：{error}") from error
+        return hashlib.sha256(raw).hexdigest()
+
     def entry_gates_and_pre_a3(self, gates_run: bool, pre_a3_run: bool) -> None:
         """入口门禁与 pre-A3 同一次运行（E2-04）：pre-A3 要做就纳入，否则复核并沿用记录里的认证；入口门禁沿用、只有
         pre-A3 要做时，用入口门禁的 pre-a3 组合单独签（E3-02：同一测试树、同一部署一致性核对、同一记录库，场景可承接，
         认证从单元执行记录组装）。"""
 
         # 已有步骤记录的桥接续跑也登记本次原消费端验证与真实复用收据，不修改旧九单元记录。
-        refresh_reuse = gates_run and self.ctx.client == "claude" and bool(self.params.get("CLAUDE_ENTRY_FULL79_SPEC"))
+        ordinary = (self.ctx.client == "claude" and self.unit_inherit_request is not None and not self.reexecute_gates
+                    and not any(self.params.get(key) for key in ("CLAUDE_ENTRY_FULL79_SPEC", "CLAUDE_ENTRY_FULL79_SPEC_SHA256")))
+        refresh_reuse = gates_run and (ordinary or (self.ctx.client == "claude" and bool(self.params.get("CLAUDE_ENTRY_FULL79_SPEC"))))
         steps = [step for step, needed in (("entry-gates", gates_run), ("pre-a3", pre_a3_run or refresh_reuse)) if needed]
         audit_args = (["--audit-reads"] if self.audit_reads else []) + (["--audit-strict"] if self.audit_strict else [])
         if self.audit_policy is not None:
@@ -409,14 +465,29 @@ class Orchestrator:
             activation = self.record_product("policy-activation", "activation")
             bridge = self._recorded_bridge_enabled()
             # 显式接线时已有的独立九认证交给原消费端验真，不能因缺入口步骤记录就换坐标再跑九场景。
-            external_present = bridge and pre_a3_run and Path(self.p("PRE_A3_CERTIFICATION")).exists()
+            external_present = (bridge or ordinary) and pre_a3_run and os.path.lexists(self.p("PRE_A3_CERTIFICATION"))
             run_scenarios = pre_a3_run and not external_present
             certification = (fresh(Path(self.p("PRE_A3_CERTIFICATION"))) if run_scenarios
                              else Path(self.p("PRE_A3_CERTIFICATION")) if external_present
                              else self.record_product("pre-a3", "certification"))
             source = (self.p("ENTRY_BUNDLE"), self.p("ENTRY_BRANCH"), self.p("ENTRY_COMMIT"))
             self.latest_deploy()
-        except (OrchestratorError, ES.EntryStepsError, OSError) as error:
+            ordinary_reuse = ordinary and not run_scenarios
+            if ordinary_reuse:
+                if (not certification.is_absolute() or ".." in certification.parts
+                        or any(item.is_symlink() for item in (certification, *certification.parents))
+                        or not certification.is_file()):
+                    raise OrchestratorError("普通 pre-A3 源认证必须是无链接的规范绝对路径文件")
+                source_digest = hashlib.sha256(certification.read_bytes()).hexdigest()
+                rc = self.run("pre-a3", self.py(self.spec["pre_a3_module"], "find-reusable", "--certification", str(certification),
+                              "--deployment-receipt", str(self.latest_deploy()), "--policy-activation", str(activation), *self.client_argv))
+                if rc != 0:
+                    raise OrchestratorError("普通 pre-A3 源认证未通过原 find-reusable；拒绝降级重跑九场景")
+                if (hashlib.sha256(certification.read_bytes()).hexdigest() != source_digest
+                        or any(item.is_symlink() for item in (certification, *certification.parents))):
+                    raise OrchestratorError("普通 pre-A3 源认证在原 find-reusable 期间变化")
+                # 当前测试树由下面的原入口脚本准备；首次 WORK 为空或旧 HEAD 时不能在此提前要求它存在。
+        except (RuntimeError, ES.EntryStepsError, OSError, ValueError) as error:
             for step in steps:
                 self.outcomes[step].reasons.append(f"执行前准备失败：{error}")
                 self._finish(step, False, {})
@@ -467,6 +538,23 @@ class Orchestrator:
                 except (OrchestratorError, OSError, ValueError, TypeError) as error:
                     pre_a3_passed = False
                     self.outcomes["pre-a3"].reasons.append(f"完整79接线复核失败：{error}")
+            elif ordinary_reuse:
+                try:
+                    if rc not in {0, 1}:
+                        raise OrchestratorError("正式入口未完成普通认证消费")
+                    if self._ordinary_pre_a3_inputs(certification) != source_digest:
+                        raise OrchestratorError("普通 pre-A3 源认证在入口运行期间变化")
+                    reuse_rc, result = self.run_json("pre-a3", "reuse", self.py(
+                        self.spec["pre_a3_module"], "record-reuse", "--certification", str(certification),
+                        "--deployment-receipt", str(self.latest_deploy()), "--policy-activation", str(activation),
+                        "--receipt-root", str(certification.parent), *self.client_argv))
+                    if (reuse_rc != 0 or hashlib.sha256(certification.read_bytes()).hexdigest() != source_digest
+                            or any(item.is_symlink() for item in (certification, *certification.parents))):
+                        raise OrchestratorError("普通 pre-A3 原复用消费失败或源原件发生变化")
+                    reuse_products = self._recorded_reuse_products(out, certification, result=result)
+                except (RuntimeError, OSError, ValueError, TypeError) as error:
+                    pre_a3_passed = False
+                    self.outcomes["pre-a3"].reasons.append(f"普通 pre-A3 复核失败：{error}")
             if not certification.is_file():
                 self.outcomes["pre-a3"].reasons.append(
                     f"pre-A3 认证没有签发（没通过的认证只写旁路文件 {certification.parent}/*.failed-*.json）")

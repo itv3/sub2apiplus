@@ -1624,6 +1624,45 @@ class AttemptFactsTests(unittest.TestCase):
                 self.assertEqual(original_stop.read_bytes(), original_stop_raw)
                 self.assertEqual(before_path.read_bytes(), before_raw)
 
+        # 在既有运输 UID 实读当前完整来源表核拒绝边界；CI 不能冒充受管身份变化。
+        from tools.official_client_capture.tests.real_chains import test_claude_upgrade_fault_chains as outer
+        current = outer._source_inputs()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ci_path = 'tools/ci/background_validation.py'
+            cut = root / 'historical-ci.py'
+            cut.write_text('# 历史 CI 执行上下文\n', encoding='utf-8')
+            old_digest = hashlib.sha256(cut.read_bytes()).hexdigest()
+            original = {**current, 'files': {**current['files'], ci_path: old_digest}}
+            old = {ci_path: stops.file_cut(cut)}
+            with self.assertRaisesRegex(ValueError, '归层'):
+                stops.formed_source_continuation_proof(original, current, old)
+            with self.assertRaisesRegex(ValueError, '控制写侧'):
+                stops.control_continuation_proof(original, current, old)
+            with self.assertRaisesRegex(ValueError, '准确旧字节'):
+                stops.formed_source_continuation_proof(original, current, {})
+            added = {**original, 'files': {**original['files'], 'tools/ci/added-context.py': '1' * 64}}
+            with self.assertRaisesRegex(ValueError, '不支持增删'):
+                stops.formed_source_continuation_proof(original, added, old)
+            moved = {**current, 'repository': str(root)}
+            with self.assertRaisesRegex(ValueError, '来源仓库'):
+                stops.formed_source_continuation_proof(original, moved, old)
+            changed_fixture = {**current, 'fixtures': {**current['fixtures'],
+                'CLAUDE_2_1_226_FREEZE_FIXTURE': str(root)}}
+            with self.assertRaisesRegex(ValueError, '原夹具'):
+                stops.formed_source_continuation_proof(original, changed_fixture, old)
+            evidence_path = 'tools/official_client_control/qualification_material_import.py'
+            evidence_cut = root / 'historical-material.py'
+            evidence_cut.write_text('# 历史材料消费者\n', encoding='utf-8')
+            evidence_source = {**current, 'files': {**current['files'],
+                evidence_path: hashlib.sha256(evidence_cut.read_bytes()).hexdigest()}}
+            with self.assertRaisesRegex(ValueError, '控制写侧'):
+                stops.control_continuation_proof(evidence_source, current,
+                    {evidence_path: stops.file_cut(evidence_cut)})
+            # 这些拒绝均不能改当前实际来源、旧切点或原执行树。
+            self.assertEqual(outer._source_inputs(), current)
+            self.assertEqual(stops.read_cut(old[ci_path]), cut.read_bytes())
+
         self._assert_completed_method_read_scope()
         self._assert_completed_candidate_read_scope()
 
@@ -1846,7 +1885,8 @@ class AttemptFactsTests(unittest.TestCase):
                 typed = SimpleNamespace(control_path=control, __enter__=lambda: None, close=mock.Mock())
                 typed_record = SimpleNamespace(record_name='typed-scope-fixture', campaign=campaign,
                     candidate_id='candidate', data=root, configuration_binding=stops.file_cut(config),
-                    control_path=control, context={'fixture_only': True}, saved_guard_identity={'fixture_only': True})
+                    control_path=control, context={'fixture_only': True}, saved_guard_identity={'fixture_only': True},
+                    restored_guard=False)
                 save_typed = late.environment.TypedDeliveryFixture._save_record
                 world = {'campaign': campaign, 'candidate_id': 'candidate', 'config_path': config}
 
@@ -1877,6 +1917,7 @@ class AttemptFactsTests(unittest.TestCase):
                         stops.checkpoint(case, cursor, phase=phase, campaign=campaign)
                         stops.save_world(cursor, world)
                     save_typed(typed_record)
+                    typed_record.restored_guard = True
                     originals = {path: path.read_bytes() for path in records.rglob('*') if path.is_file()}
                     # 动态管理同一组接缝，避免目标 Python 的静态嵌套块上限。
                     with contextlib.ExitStack() as patches:
@@ -1928,7 +1969,7 @@ class AttemptFactsTests(unittest.TestCase):
                         guard_index.unlink()
                         try:
                             with client_sources(), stops.verified_read_only_world(case, campaign), \
-                                    self.assertRaisesRegex(ValueError, '禁止新建或改变'):
+                                    self.assertRaisesRegex(late.environment.guard.GuardError, '缺活守卫索引'):
                                 save_typed(typed_record)
                             self.assertFalse(guard_index.exists(), '原 typed 活守卫索引缺失时禁止补建')
                         finally:

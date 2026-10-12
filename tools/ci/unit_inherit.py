@@ -57,6 +57,8 @@ import secrets
 import subprocess
 import sys
 import time
+from contextvars import ContextVar
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -85,10 +87,37 @@ fs = _sibling("full_set_receipt.py", "unit_inherit_full_set_receipt")
 ContractError = fs.ContractError
 
 
+_LEGACY_RECORDS = fs.records_module
+_CONTROL_READ_AUDIT: ContextVar[Any] = ContextVar("unit_inherit_control_read_audit", default=None)
+
+
 def records() -> Any:
     """记录与清单模块（同目录 unit_records.py）：与 B-09 共用 ``full_set_receipt.records_module`` 加载的那一份。"""
 
-    return fs.records_module()
+    adapter = _CONTROL_READ_AUDIT.get()
+    return adapter._records_module() if adapter is not None else _LEGACY_RECORDS()
+
+
+# 这是当前unit-inherit自己的固定fs实例，不修改历史target gate的模块或共享缓存。
+fs.records_module = records
+
+
+@contextmanager
+def _control_reader_scope(executor: Mapping[str, Any], client: str, unit_ids: Sequence[str]):
+    """只有当前Claude四control及执行器实物绑定同时成立才启用同一消费adapter。"""
+    adapter = None
+    files = executor.get("files") or {}
+    names = {"pre-a3:claude:" + name for name in (
+        "vc-chain.claude-reconcile", "vc-chain.claude-deadline", "vc-chain.claude-root-cause", "vc-chain.claude-tool-evolution")}
+    if client == "claude" and names & set(unit_ids) and {"control_read_audit.py", "control_read_audit_runtime.py"} & set(files):
+        adapter = _sibling("control_read_audit.py", "unit_inherit_control_read_audit_" + str(HERE).replace("/", "_"))
+        if not adapter.frozen_executor(executor):
+            raise ContractError("当前四control消费缺本次执行器的准确sidecar绑定")
+    token = _CONTROL_READ_AUDIT.set(adapter)
+    try:
+        yield
+    finally:
+        _CONTROL_READ_AUDIT.reset(token)
 
 
 def current_time() -> float:
@@ -552,6 +581,13 @@ def _carry_host_inputs(current: Any, record: Mapping[str, Any]) -> None:
 
 def assess(fixed: Fixed, currents: Mapping[str, Any], facts: Any, store_root: Path | str, *, now: float,
            revoked: set[str]) -> dict[str, Any]:
+    """形成期与消费端绑定同一固定四control adapter，普通来源仍调用原完整判断。"""
+    with _control_reader_scope(facts.executor, fixed.context["client"], list(currents)):
+        return _assess_current(fixed, currents, facts, store_root, now=now, revoked=revoked)
+
+
+def _assess_current(fixed: Fixed, currents: Mapping[str, Any], facts: Any, store_root: Path | str, *, now: float,
+           revoked: set[str]) -> dict[str, Any]:
     """逐单元判定：来源集合登记了、来源运行没撤销、来源清单已发布且摘要相符、``check_record``（要求读集闭合）全部通过才承接，
     其余单元各自执行。"""
 
@@ -592,7 +628,14 @@ def assess(fixed: Fixed, currents: Mapping[str, Any], facts: Any, store_root: Pa
     return decisions
 
 
-def propose(store_root: Path | str, currents: Mapping[str, Any], facts: Any, *, max_age_hours: float | None = None) -> dict[str, Any]:
+def propose(store_root: Path | str, currents: Mapping[str, Any], facts: Any, *, max_age_hours: float | None = None,
+            client: str = "") -> dict[str, Any]:
+    """提案沿用已计算的上下文客户端及执行器绑定，和形成、消费共用固定四control合同。"""
+    with _control_reader_scope(facts.executor, client, list(currents)):
+        return _propose_current(store_root, currents, facts, max_age_hours=max_age_hours)
+
+
+def _propose_current(store_root: Path | str, currents: Mapping[str, Any], facts: Any, *, max_age_hours: float | None = None) -> dict[str, Any]:
     """为当前每个可承接的单元在记录库里找完成时间最新、要求读集闭合时仍能承接的正式记录，组成来源集合草案（执行器
     ``--decide-only --unit-inherit-propose`` 调用）。找不到的单元不列入，运行时执行。``currents`` 不被改动。"""
 
@@ -865,7 +908,11 @@ class Session:
 
 
 def verifier_files() -> dict[str, str]:
-    return {name: fs.file_digest(HERE / name) for name in VERIFIER_FILES}
+    files = {name: fs.file_digest(HERE / name) for name in VERIFIER_FILES}
+    adapter = _CONTROL_READ_AUDIT.get()
+    if adapter is not None:
+        files.update({path.name: fs.file_digest(path) for path in adapter.sidecar_paths()})
+    return files
 
 
 def _checkpoint_proof(item: Mapping[str, Any], fixed: Fixed, inherited_runs: set[str]) -> float:
@@ -901,6 +948,21 @@ def _consumption_proof(record: Mapping[str, Any], decision: Mapping[str, Any], f
 
 
 def verify_published(manifest: Mapping[str, Any], store_root: Path | str, *, purpose: str, now: float | None = None,
+                     historical: bool = False, consumption: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """从同库正式decision的客户端与本清单executor选择当前消费合同，不信任自填开关。"""
+    client = ""
+    if {"control_read_audit.py", "control_read_audit_runtime.py"} & set((manifest.get("executor") or {}).get("files") or {}):
+        store = _LEGACY_RECORDS().RecordStore(Path(store_root).resolve())
+        decision = _LEGACY_RECORDS()._read_json(store.decision_path(str(manifest.get("run_id") or "")))
+        # context是封存引用，不能当内嵌对象取client；先按原合同重验引用与固定绑定。
+        client = replay_fixed(decision).context["client"] if decision is not None else ""
+    with _control_reader_scope(manifest.get("executor") or {}, client,
+                               [item["unit_id"] for item in manifest.get("units") or []]):
+        return _verify_published_current(manifest, store_root, purpose=purpose, now=now,
+                                          historical=historical, consumption=consumption)
+
+
+def _verify_published_current(manifest: Mapping[str, Any], store_root: Path | str, *, purpose: str, now: float | None = None,
                      historical: bool = False, consumption: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """消费端重验一次逐单元承接运行的形成期证明（规则见模块说明）。任一不满足抛 ``ContractError``（调用方拒签）。
 

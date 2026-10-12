@@ -13,6 +13,8 @@ from pathlib import Path
 
 from tools.ci import read_audit as ra
 from tools.ci import read_audit_runtime as runtime
+from tools.ci import control_read_audit as control_audit
+from tools.ci import control_read_audit_runtime as control_runtime
 from tools.ci import unit_records as records
 from tools.ci import unit_executor as executor
 
@@ -43,8 +45,19 @@ class RuntimeReadAuditTests(unittest.TestCase):
                                             "host_entries_sha256": runtime.digest([])}
         return document
 
+    def control_document(self, lines):
+        """四control模型凭证仅用于核对重放，不冒充真实Linux来源生产。"""
+        document = control_audit.filter_stream(lines, ["/"], strict=True, runtime_context=self.control_context())
+        document["runtime"]["completion"] = {"command_finished": True, "host_inputs_unchanged": True,
+            "environment_unchanged": True, "namespace_unchanged": True, "host_entries_sha256": runtime.digest([]),
+            "control_isolation_unchanged": True}
+        return document
+
     def audit(self, document, extra=()):
-        return ra.strict_audit_reads(document, [self.entry, *extra], repo_root="/repo", data_root=None)
+        control = (document.get("runtime") or {}).get("context", {}).get("control_chain") is not None
+        module = control_audit if control else ra
+        entry = self.control_context()["contract_entry"] if control else self.entry
+        return module.strict_audit_reads(document, [entry, *extra], repo_root="/repo", data_root=None)
 
     def generated_lines(self):
         return [f'1 mkdir("{self.root}/d", 0700) = 0',
@@ -59,6 +72,93 @@ class RuntimeReadAuditTests(unittest.TestCase):
         tampered = copy.deepcopy(document)
         tampered["runtime"]["output_events"] = []
         self.assertFalse(self.audit(tampered)["coverage_complete"])
+        for operation in (
+            f'1 rename("{self.root}/d/a", "{self.root}/d/b") = 0',
+            f'1 renameat(AT_FDCWD</repo>, "{self.root}/d/a", AT_FDCWD</repo>, "{self.root}/d/b") = 0',
+            f'1 renameat2(AT_FDCWD</repo>, "{self.root}/d/a", AT_FDCWD</repo>, "{self.root}/d/b", 0) = 0',
+            f'1 link("{self.root}/d/a", "{self.root}/d/b") = 0',
+            f'1 linkat(AT_FDCWD</repo>, "{self.root}/d/a", AT_FDCWD</repo>, "{self.root}/d/b", 0) = 0',
+        ):
+            with self.subTest(operation=operation):
+                moved = self.control_document(self.generated_lines()[:2] + [operation,
+                    f'1 openat(AT_FDCWD</repo>, "{self.root}/d/b", O_RDONLY) = 3<{self.root}/d/b>'])
+                self.assertTrue(self.audit(moved)["coverage_complete"], moved["runtime"]["outputs"])
+                # openat 的请求路径和返回 fd 会各记一次，不能按固定下标误删重复读取。
+                # 精确删除移动的任一端，均必须使同一次调用的双端证明失效。
+                move_name = operation.split(" ", 1)[1].split("(", 1)[0]
+                for endpoint in ("a", "b"):
+                    with self.subTest(missing_endpoint=endpoint):
+                        changed = copy.deepcopy(moved)
+                        events = changed["runtime"]["output_events"]
+                        index = next(index for index, event in enumerate(events)
+                                     if event["name"] == move_name and event["path"] == f"{self.root}/d/{endpoint}")
+                        events.pop(index)
+                        self.assertFalse(self.audit(changed)["coverage_complete"])
+        duplicate = self.control_document(self.generated_lines()[:2] + [
+            f'1 mkdir("{self.root}/d", 0700) = -1 EEXIST (File exists)',
+            f'1 link("{self.root}/d/a", "{self.root}/d/b") = 0',
+            f'1 link("{self.root}/d/a", "{self.root}/d/b") = -1 EEXIST (File exists)',
+            f'1 openat(AT_FDCWD</repo>, "{self.root}/d/b", O_RDONLY) = 3<{self.root}/d/b>'])
+        self.assertTrue(self.audit(duplicate)["coverage_complete"])
+
+        # 真实调用确认必经目录归档与对称恢复的坐标；下方模型轨迹只验证重放合同，不代表完整实测来源。
+        from tools.official_client_capture import claude_upgrade_capture as capture
+        source = Path(self.root) / "d"
+        (source / "nested").mkdir(parents=True)
+        (source / "nested" / "receipt.json").write_text("{}", encoding="utf-8")
+        actual_rename = Path.rename
+        observed_moves = []
+        def record_rename(current, target):
+            moved = actual_rename(current, target)
+            observed_moves.append((str(current), str(target)))
+            return moved
+        result = {"evidence_roots": ["/capture/runs/d"], "receipt": "/capture/runs/d/nested/receipt.json"}
+        with mock.patch.object(capture.claude_upgrade, "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT", Path(self.root)), \
+                mock.patch.object(Path, "rename", record_rename):
+            self.assertEqual(capture._archive_failed_job_evidence(result, 1), ["/capture/runs/d.failed-attempt1"])
+            self.assertEqual(result["receipt"], "/capture/runs/d.failed-attempt1/nested/receipt.json")
+            source.with_name("d.failed-attempt1").rename(source)
+        self.assertEqual(observed_moves, [(str(source), str(source.with_name("d.failed-attempt1"))),
+                                         (str(source.with_name("d.failed-attempt1")), str(source))])
+        self.assertEqual((source / "nested" / "receipt.json").read_text(encoding="utf-8"), "{}")
+        subtree = [f'1 mkdir("{self.root}/d", 0700) = 0',
+                   f'1 mkdir("{self.root}/d/nested", 0700) = 0',
+                   f'1 openat(AT_FDCWD</repo>, "{self.root}/d/nested/receipt.json", O_WRONLY|O_CREAT|O_EXCL, 0600) = 3<{self.root}/d/nested/receipt.json>']
+        for archive_name in ("d.failed-attempt1", "d.failed-attempt1-2"):
+            with self.subTest(archive_name=archive_name):
+                archived = f"{self.root}/{archive_name}"
+                moved = self.control_document(subtree + [
+                    f'1 rename("{self.root}/d", "{archived}") = 0',
+                    f'1 openat(AT_FDCWD</repo>, "{archived}/nested/receipt.json", O_RDONLY) = 3<{archived}/nested/receipt.json>',
+                    f'1 rename("{archived}", "{self.root}/d") = 0',
+                    f'1 openat(AT_FDCWD</repo>, "{self.root}/d/nested/receipt.json", O_RDONLY) = 3<{self.root}/d/nested/receipt.json>'])
+                self.assertTrue(self.audit(moved)["coverage_complete"], moved["runtime"]["outputs"])
+                changed = copy.deepcopy(moved)
+                first_move = next(index for index, event in enumerate(changed["runtime"]["output_events"])
+                                  if event["name"] == "rename")
+                changed["runtime"]["output_events"].pop(first_move + 1)
+                self.assertFalse(self.audit(changed)["coverage_complete"])
+        for before, operation in (
+            (subtree, f'1 rename("{self.root}/d", "{self.root}/d.failed-attempt0") = 0'),
+            (subtree, f'1 rename("{self.root}/d", "{self.root}/d.failed-attempt1-1") = 0'),
+            (subtree, f'1 rename("{self.root}/d", "{self.root}/d.failed-attempt1x") = 0'),
+            (subtree + [f'1 mkdir("{self.root}/other", 0700) = 0'],
+             f'1 rename("{self.root}/d", "{self.root}/other/d.failed-attempt1") = 0'),
+            (subtree + [f'1 mkdir("{self.root}/d.failed-attempt1", 0700) = 0'],
+             f'1 rename("{self.root}/d", "{self.root}/d.failed-attempt1") = 0'),
+            ([], f'1 rename("{self.root}/old", "{self.root}/old.failed-attempt1") = 0'),
+            ([f'1 mkdir("{self.root}/d.failed-attempt1", 0700) = 0'],
+             f'1 rename("{self.root}/d.failed-attempt1", "{self.root}/d") = 0'),
+            (subtree + [f'1 rename("{self.root}/d", "{self.root}/d.failed-attempt1") = 0',
+                        f'1 mkdir("{self.root}/d", 0700) = 0'],
+             f'1 rename("{self.root}/d.failed-attempt1", "{self.root}/d") = 0'),
+            (subtree + [f'1 symlink("{self.root}/d/nested/receipt.json", "{self.root}/d/linked") = 0'],
+             f'1 rename("{self.root}/d", "{self.root}/d.failed-attempt1") = 0'),
+            (subtree + [f'1 rmdir("{self.root}/d/nested") = 0'],
+             f'1 rename("{self.root}/d", "{self.root}/d.failed-attempt1") = 0'),
+        ):
+            with self.subTest(directory_operation=operation):
+                self.assertFalse(self.audit(self.control_document(before + [operation]))["coverage_complete"])
 
     def test_historical_runtime_does_not_read_current_devices_but_verifies_saved_digest(self):
         document = self.document(self.generated_lines())
@@ -77,6 +177,244 @@ class RuntimeReadAuditTests(unittest.TestCase):
         for lines in ([read], [read, create]):
             with self.subTest(lines=lines):
                 self.assertFalse(self.audit(self.document(lines))["coverage_complete"])
+        for operation in (
+            f'1 rename("/host/old", "{self.root}/d/b") = 0',
+            f'1 rename("{self.root}/d/a", "/host/new") = 0',
+            f'1 rename("{self.root}/d", "{self.root}/new-directory") = 0',
+            f'1 renameat2(AT_FDCWD</repo>, "{self.root}/d/a", AT_FDCWD</repo>, "{self.root}/d/b", RENAME_NOREPLACE) = 0',
+            f'1 link("/host/old", "{self.root}/d/b") = 0',
+            f'1 link("{self.root}/d/a", "/host/new") = 0',
+            f'1 linkat(AT_FDCWD</repo>, "{self.root}/d/a", AT_FDCWD</repo>, "{self.root}/d/b", AT_SYMLINK_FOLLOW) = 0',
+            f'1 mkdir("{self.root}/unknown", 0700) = -1 EEXIST (File exists)',
+        ):
+            with self.subTest(operation=operation):
+                self.assertFalse(self.audit(self.control_document(self.generated_lines()[:2] + [operation]))["coverage_complete"])
+
+    def control_context(self):
+        """原完整四链命令的模型凭证；空遮挡由control启动建立，反例不授予其它场景该合同。"""
+        context = copy.deepcopy(self.context)
+        context["contract_entry"] = runtime.contract_entry({**self.contract, "mask_roots": [],
+                                                             "environment_paths": sorted(runtime.ENVIRONMENT_PATHS)})
+        mask_mount = context["mounts"][0]
+        context["mounts"] = [context["mounts"][1]]
+        context["empty_masks"] = {}
+        context["setup_commands"] = ["private", self.root]
+        context["setup_trace"] = "\n".join(line for line in context["setup_trace"].splitlines() if runtime.MASK_ROOT not in line) + "\n"
+        context["setup_trace_sha256"] = hashlib.sha256(context["setup_trace"].encode()).hexdigest()
+        mask_trace = f'1 mount("tmpfs", "{runtime.MASK_ROOT}", "tmpfs", MS_RDONLY, "size=64k,mode=0755") = 0\n'
+        path = str(Path(self.directory.name).resolve() / "control.context.json")
+        context["control_chain"] = {"scenario": "vc-chain.claude-reconcile", "parent_network_namespace": "net:[200]",
+            "network_namespace": "net:[201]", "interfaces": ["lo"], "data_mount": None,
+            "mask_mount": mask_mount, "empty_mask": True, "context_path": path,
+            "setup_trace": mask_trace, "setup_trace_sha256": hashlib.sha256(mask_trace.encode()).hexdigest(),
+            "filesystem_ids": {self.root: "42", runtime.MASK_ROOT: "43"}}
+        return context
+
+    def test_control_runtime_requires_real_namespace_tmpfs_and_does_not_trust_plain_tmpdir(self):
+        """核对原 runner 的真实接线；独立 TMPDIR、凭证漂移与可见旧挂载均不能跳过原外壳。"""
+        from tools.official_client_capture.tests.real_chains import test_claude_upgrade_control_chain as shell
+        context = self.control_context()
+        control = context["control_chain"]
+        path = Path(control["context_path"])
+        path.write_text(json.dumps(context), encoding="utf-8")
+        path.chmod(0o600)
+        values = {control_runtime.CONTROL_CONTEXT_ENV: str(path), control_runtime.CONTROL_CONTEXT_DIGEST_ENV: runtime.digest(context),
+                  "TMPDIR": self.root}
+        real_is_dir = Path.is_dir
+        def directories(target):
+            if str(target) == control_runtime.CONTROL_DATA_ROOT:
+                return False
+            if str(target) == runtime.MASK_ROOT:
+                return True
+            return real_is_dir(target)
+        def filesystem(target):
+            return type("Filesystem", (), {"f_fsid": int(control["filesystem_ids"][str(target)]),
+                                          "f_flag": 0 if str(target) == self.root else shell.os.ST_RDONLY})()
+        with mock.patch.dict(shell.os.environ, {"TMPDIR": self.root}, clear=True), \
+                mock.patch.object(shell.sys, "platform", "linux"):
+            self.assertEqual(shell._scratch_root(), Path("/var/tmp"))
+        with mock.patch.dict(shell.os.environ, values, clear=True), mock.patch.object(Path, "is_dir", directories), \
+                mock.patch.object(shell.os, "readlink", side_effect=lambda path: "mnt:[101]" if path.endswith("mnt") else "net:[201]"), \
+                mock.patch.object(shell.os, "statvfs", side_effect=filesystem):
+            self.assertEqual(shell._scratch_root(), Path(self.root))
+            self.assertEqual(shell._namespace_argv(["true"]), ["true"])
+            with mock.patch.object(shell.os, "statvfs", return_value=type("OldMount", (), {"f_fsid": 99, "f_flag": 0})()):
+                with self.assertRaises(ValueError):
+                    shell._scratch_root()
+            with mock.patch.dict(shell.os.environ, {"TMPDIR": self.root + "/old-world"}):
+                with self.assertRaises(ValueError):
+                    shell._scratch_root()
+        argv = [sys.executable, "-m", control_runtime.CONTROL_MODULE, "run-scenario", "--client", "claude", "--name",
+                "vc-chain.claude-reconcile", "--staging-parent", self.root + "/staging"]
+        self.assertEqual(control_runtime.control_scenario(argv, self.root), "vc-chain.claude-reconcile")
+        self.assertIsNone(control_runtime.control_scenario([*argv[:-1], "/old/staging"], self.root))
+        self.assertIsNone(control_runtime.control_scenario([*argv[:7], "vc-chain.claude-full-validation-only", *argv[8:]], self.root))
+
+    def test_control_kernel_reads_are_bound_to_exact_self_namespace_and_bootstrap_context(self):
+        context = self.control_context()
+        path = context["control_chain"]["context_path"]
+        lines = [f'1 openat(AT_FDCWD</repo>, "{path}", O_RDONLY) = 3<{path}>',
+                 '1 readlink("/proc/self/ns/mnt", "mnt:[101]", 4096) = 9',
+                 '1 readlink("/proc/self/ns/net", "net:[201]", 4096) = 9',
+                 *self.generated_lines()]
+        document = control_audit.filter_stream(lines, ["/"], strict=True, runtime_context=context)
+        document["runtime"]["completion"] = {"command_finished": True, "host_inputs_unchanged": True,
+            "environment_unchanged": True, "namespace_unchanged": True, "host_entries_sha256": runtime.digest([]),
+            "control_isolation_unchanged": True}
+        self.assertTrue(self.audit(document)["coverage_complete"])
+        for key in ("control_events", "control_isolation_unchanged"):
+            changed = copy.deepcopy(document)
+            if key == "control_events":
+                changed["runtime"][key] = []
+            else:
+                changed["runtime"]["completion"][key] = False
+            self.assertFalse(self.audit(changed)["coverage_complete"])
+
+        for line in ('1 readlink("/proc/999/ns/mnt", "mnt:[101]", 4096) = 9',
+                     '1 readlink("/proc/self/ns/net", "net:[202]", 4096) = 9',
+                     '1 unshare(CLONE_NEWNET) = 0',
+                     '1 openat(AT_FDCWD</repo>, "/proc/self/mountinfo", O_RDONLY) = 3</proc/1/mountinfo>'):
+            changed = control_audit.filter_stream([*lines, line], ["/"], strict=True, runtime_context=context)
+            changed["runtime"]["completion"] = document["runtime"]["completion"]
+            self.assertFalse(self.audit(changed)["coverage_complete"])
+
+    def test_policy_producer_consumes_published_failed_capture_without_rewriting_old_record(self):
+        """首轮实际读集只准备新策略；原 passed／轨迹／发布清单逐字保留，缺发布或未解析流拒绝。"""
+        base = Path(self.directory.name).resolve()
+        host = base / "source.txt"
+        host.write_text("真实宿主输入", encoding="utf-8")
+        document = self.control_document([*self.generated_lines(),
+            f'1 openat(AT_FDCWD</repo>, "{host}", O_RDONLY) = 3<{host}>'])
+        store = records.RecordStore(base / "store")
+        unit_id = "pre-a3:claude:vc-chain.claude-reconcile"
+        argv = [sys.executable, "-m", control_runtime.CONTROL_MODULE, "run-scenario", "--client", "claude", "--name",
+                "vc-chain.claude-reconcile", "--staging-parent", self.root + "/staging"]
+        spec = {"type": "command", "unit_id": unit_id, "argv": argv, "cwd": "/repo", "env": {},
+                "cores": 1, "memory_mb": 128, "exclusive": False, "timeout_seconds": 120, "reservation_restartable": False}
+        trace = base / "source.trace.json"
+        trace.write_text(json.dumps(document), encoding="utf-8")
+        trace_sha256 = hashlib.sha256(trace.read_bytes()).hexdigest()
+        trace_path = store.put_log(trace, trace_sha256)
+        inputs = [document["runtime"]["context"]["contract_entry"]]
+        record = records.seal_record({"unit_id": unit_id, "unit_type": "command", "kind": "formal", "run": {"run_id": "capture-1"},
+            "spec": spec, "spec_sha256": records.sha256_json(spec), "inputs": inputs, "inputs_sha256": records.entries_sha256(inputs),
+            "environment": [], "environment_sha256": records.entries_sha256([]), "policy_sha256": "policy", "executor": {"sha256": "executor"},
+            "completed_at_utc": records.utc_now(), "passed": False, "inheritable": False, "exit_code": 0, "signal": None, "timed_out": False,
+            "read_audit": {"status": "failed", "coverage_complete": False, "coverage_scope": "all-file-paths/v1",
+                           "inputs_sha256": records.entries_sha256(inputs), "repo_root": "/repo", "data_root": None,
+                           "trace": {"sha256": trace_sha256}}})
+        path = store.put_record(record)
+        item = {"unit_id": unit_id, "disposition": "executed", "record_path": str(path), "record_sha256": record["record_sha256"],
+                "spec_sha256": record["spec_sha256"], "inputs_sha256": record["inputs_sha256"]}
+        manifest = records.build_manifest(run_id="capture-1", mode="re-execute", planned_units=[unit_id], units=[item],
+            environment=[], environment_sha256=records.entries_sha256([]), executor={"sha256": "executor"},
+            policy_sha256="policy", inheritance_max_age_hours=24, decided_at_utc=records.utc_now(), record_store=str(store.root))
+        manifest_path = store.put_manifest(manifest)
+        plan = {"schema_version": "unit-executor-gates/v1", "test_groups": [], "gates": [{"gate_id": "capture", "units": [unit_id]}],
+                "units": [{key: value for key, value in spec.items() if key != "type"}]}
+        plan_path = base / "plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        before = {target: target.read_bytes() for target in (path, trace_path, manifest_path)}
+        bound = control_audit.bind_audit_policy(plan_path, manifest_path, [unit_id])
+        self.assertEqual(bound["policy"]["units"][unit_id]["host_paths"], [str(host)])
+        self.assertEqual(bound["plan"]["units"][0]["inputs"], bound["policy"]["units"][unit_id])
+        self.assertFalse(bound["provenance"]["reuse_enabled"])
+        self.assertEqual({target: target.read_bytes() for target in before}, before)
+        source_entries = records.declared_inputs(None, bound["policy"]["units"][unit_id])
+        # 同一旧轨迹不能成为第二轮的新来源；实测完成凭证绑定的仍是首轮空 host 明细。
+        self.assertFalse(control_audit.strict_audit_reads(document, source_entries, repo_root="/repo", data_root=None)["coverage_complete"])
+        with self.assertRaises(control_audit.AuditError):
+            control_audit.bind_audit_policy(plan_path, manifest_path, ["cmd:unknown"])
+        changed = copy.deepcopy(plan)
+        changed["units"][0]["argv"] = ["false"]
+        changed_path = base / "changed-plan.json"
+        changed_path.write_text(json.dumps(changed), encoding="utf-8")
+        with self.assertRaisesRegex(control_audit.AuditError, "规格"):
+            control_audit.bind_audit_policy(changed_path, manifest_path, [unit_id])
+        trace_path.write_bytes(before[trace_path] + b" ")
+        with self.assertRaisesRegex(control_audit.AuditError, "完整解析"):
+            control_audit.bind_audit_policy(plan_path, manifest_path, [unit_id])
+        trace_path.write_bytes(before[trace_path])
+        copied = base / "copied-manifest.json"
+        copied.write_bytes(before[manifest_path])
+        manifest_path.unlink()
+        with self.assertRaises(OSError):
+            control_audit.bind_audit_policy(plan_path, copied, [unit_id])
+
+    def test_control_prepare_policy_binds_new_full_command_and_preserves_other_units(self):
+        """直接消费原 plan_scenario_commands 的完整九项；只把选中的四链输出移到新空盘，不触碰 full79旧根。"""
+        from tools.official_client_capture import codex_upgrade_pre_a3_certification as certification
+        base = Path(self.directory.name).resolve()
+        raw = certification.plan_scenario_commands(base / "original" / "staging", client="claude")
+        plan = {"schema_version": "unit-executor-gates/v1", "units": raw["units"], "test_groups": [], "gates": []}
+        path = base / "actual-nine-plan.json"
+        path.write_text(json.dumps(plan), encoding="utf-8")
+        selected = ["pre-a3:claude:" + scenario for scenario in sorted(control_runtime.CONTROL_SCENARIOS)]
+        prepared = control_audit.prepare_audit_policy(path, selected, self.root)
+        before = {item["unit_id"]: item for item in raw["units"]}
+        for item in prepared["plan"]["units"]:
+            if item["unit_id"] in selected:
+                self.assertEqual(control_runtime.control_scenario(item["argv"], self.root), item["unit_id"].removeprefix("pre-a3:claude:"))
+                self.assertEqual(item["argv"][:-1], before[item["unit_id"]]["argv"][:-1])
+            else:
+                self.assertEqual(item, before[item["unit_id"]])
+        self.assertEqual(set(prepared["policy"]["units"]), set(selected))
+        self.assertEqual(json.loads(path.read_text()), plan)
+
+        # 用原记录库、三个复核点及封存context引用核真实消费路径；此模型不代表四链外层已实测。
+        from tools.ci import entry_gates, unit_inherit
+        from tools.official_client_capture.tests import unit_inherit_fixture as fixture
+        adapter = entry_gates.control_read_audit_for_plan(prepared["plan"])
+        self.assertIsNotNone(adapter)
+        self.assertIsNone(entry_gates.control_read_audit_for_plan(plan))
+        private_records = adapter._records_module()
+        self.assertIsNot(private_records, unit_inherit._LEGACY_RECORDS())
+        token = executor._CONTROL_READ_AUDIT.set(adapter)
+        try:
+            current_executor = private_records.executor_version(executor._executor_files(executor.DEFAULT_BYTECODE_HELPER))
+            self.assertIs(executor._records_module(), private_records)
+            self.assertIs(executor._audit_module(), adapter)
+        finally:
+            executor._CONTROL_READ_AUDIT.reset(token)
+        self.assertNotIn("control_read_audit.py", records.executor_version()["files"])
+        unit_id = "pre-a3:claude:vc-chain.claude-reconcile"
+        spec = next(item for item in prepared["plan"]["units"] if item["unit_id"] == unit_id)
+        with mock.patch.object(fixture, "ur", private_records), mock.patch.dict(fixture.TESTS, {}, clear=True):
+            world = fixture.World(base / "control-consumer", scenarios=("claude:vc-chain.claude-reconcile",))
+            world.units = (unit_id,)
+            world.executor = current_executor
+            world.declared[unit_id] = private_records.declared_inputs(None, prepared["policy"]["units"][unit_id])
+            world.spec = lambda selected_id: {"type": "command", **spec}
+            world.record_inputs = lambda selected_id: world.base_inputs(selected_id)
+            trace = base / "control-consumer.trace.json"
+            trace.write_text(json.dumps(self.control_document(self.generated_lines()[:2] + [
+                f'1 rename("{self.root}/d/a", "{self.root}/d/b") = 0',
+                f'1 openat(AT_FDCWD</repo>, "{self.root}/d/b", O_RDONLY) = 3<{self.root}/d/b>'])), encoding="utf-8")
+            world.trace_sha256 = private_records.file_sha256(trace)
+            world.store.put_log(trace, world.trace_sha256)
+            source = world.source_record(unit_id, run_id="control-source")
+            world.records = {unit_id: source}
+            world.source_manifest = world.publish_run("control-source", "re-execute", {unit_id: (source, "executed")},
+                                                      decided=fixture.T0 - 3600)
+            currents = {unit_id: world.current(unit_id)}
+            self.assertEqual(unit_inherit.propose(world.store.root, currents, world.facts(fixture.T0))["units"], {})
+            proposal = unit_inherit.propose(world.store.root, currents, world.facts(fixture.T0), client="claude")
+            self.assertEqual(proposal["units"][unit_id]["record_sha256"], source["record_sha256"])
+            context = world.context(client="claude")
+            request = world.request(context=context, sources=proposal)
+            result = world.run(request, context=lambda checkpoint: context)
+            self.assertEqual(result.problems, [])
+            self.assertEqual([item["unit_id"] for item in result.manifest["units"] if item["disposition"] == "inherited"], [unit_id])
+        # 离开形成期scope后，独立消费必须从decision封存context引用重新选中同一adapter。
+        proof = unit_inherit.verify_published(result.manifest, world.store.root, purpose="control-regression", historical=True)
+        self.assertEqual(proof["inherited"], 1)
+        for sidecar in adapter.sidecar_paths():
+            self.assertEqual(proof["verifier"][sidecar.name], current_executor["files"][sidecar.name])
+        self.assertNotIn("control_read_audit.py", unit_inherit.verifier_files())
+        changed_executor = copy.deepcopy(current_executor)
+        changed_executor["files"]["control_read_audit_runtime.py"] = "0" * 64
+        with self.assertRaises(RuntimeError):
+            unit_inherit.propose(world.store.root, currents, world.facts(fixture.T0, executor=changed_executor), client="claude")
 
     def test_flag_words_in_filename_cannot_forge_creation(self):
         path = self.root + "/O_CREAT"
@@ -147,6 +485,10 @@ class RuntimeReadAuditTests(unittest.TestCase):
     def test_unobserved_children_descriptor_cwd_and_namespace_calls(self):
         trace = ra.filter_stream(['1 clone(child_stack=NULL, flags=CLONE_UNTRACED|SIGCHLD) = 2'], ["/"], strict=True)
         self.assertGreater(trace["coverage"]["unresolved"], 0)
+        for flag in ("CLONE_NEWNS", "CLONE_NEWNET", "CLONE_NEWUSER", "CLONE_NEWPID"):
+            trace = control_audit.filter_stream([f'1 clone(child_stack=NULL, flags={flag}|SIGCHLD) = 2'], ["/"], strict=True,
+                                                runtime_context=self.control_context())
+            self.assertGreater(trace["coverage"]["unresolved"], 0)
         trace = ra.filter_stream(['1 fchdir(3</repo/sub>) = 0', '1 execve("./tool", ["tool"], 0x1) = 0'], ["/"], strict=True)
         self.assertEqual(trace["coverage"]["unresolved"], 0)
         self.assertIn("/repo/sub/tool", dict(trace["accesses"]))

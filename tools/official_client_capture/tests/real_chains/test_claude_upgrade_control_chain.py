@@ -52,6 +52,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -91,6 +92,8 @@ SOURCE_REPO_ENV = "CLAUDE_CONTROL_CHAIN_SOURCE_REPO"
 ISOLATION_NAMESPACE = "namespace"
 ISOLATION_DEGRADED = "degraded"
 IDENTITY_MEMO_ENV = "CODEX_UPGRADE_IDENTITY_MEMO"
+AUDIT_CONTEXT_ENV = "UNIT_EXECUTOR_READ_AUDIT_CONTROL_CONTEXT"
+AUDIT_CONTEXT_DIGEST_ENV = "UNIT_EXECUTOR_READ_AUDIT_CONTROL_CONTEXT_SHA256"
 
 # 链体在标准输出写一行指标（最后一行有效）；外层解析后并入 real_chain_metrics。
 METRICS_PREFIX = "CLAUDE_CONTROL_CHAIN_METRICS "
@@ -145,9 +148,76 @@ SIGKILL_BETWEEN_LEDGERS = (
 # ---------------------------------------------------------------------------
 
 
+def _audit_runtime_context() -> dict[str, Any] | None:
+    """只复用当次可信启动端已建立的 m/n 与空 tmpfs；普通 TMPDIR 不会取得本轮输出资格。
+
+    启动凭证须为当前账号的只读普通文件，摘要和当下两种空间须逐项相同。再以实时 statvfs 核对实际可见
+    文件系统身份与只读标志，不能仅凭 mountinfo 中被旧层遮住的一行或已有世界目录跳过原隔离外壳。
+    原执行器还会从真实启动挂载轨迹与结束实测核对这份凭证；本函数不生成凭证或放宽审计结论。
+    """
+    path, expected = os.environ.get(AUDIT_CONTEXT_ENV), os.environ.get(AUDIT_CONTEXT_DIGEST_ENV)
+    if path is None and expected is None:
+        return None
+    if not path or not expected or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+        raise ValueError("严格 control 启动凭证不完整")
+    source = Path(path)
+    if not source.is_absolute() or str(source) != os.path.normpath(path):
+        raise ValueError("严格 control 凭证坐标不规范")
+    info = source.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
+        raise ValueError("严格 control 凭证不是当前账号的私有普通文件")
+    context = json.loads(source.read_text(encoding="utf-8"))
+    encoded = json.dumps(context, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    if hashlib.sha256(encoded).hexdigest() != expected:
+        raise ValueError("严格 control 可信启动凭证摘要不符")
+    control = context.get("control_chain") or {}
+    contract = context.get("contract_entry", {}).get("detail", {}).get("contract", {})
+    root = contract.get("temporary_root")
+    if (context.get("schema_version") != "read-audit-runtime-context/v1"
+            or control.get("scenario") not in {item["scenario"] for item in CHAINS.values()}
+            or control.get("context_path") != path or control.get("interfaces") != ["lo"]
+            or context.get("empty_temporary_root") is not True or context.get("private_mounts") is not True
+            or not isinstance(root, str) or not root.startswith("/") or str(Path(root)) != root
+            or ".." in Path(root).parts or len(Path(root).parts) < 5
+            or Path(root) == HOST_DATA_ROOT or HOST_DATA_ROOT in Path(root).parents
+            or os.readlink("/proc/self/ns/mnt") != context.get("namespace")
+            or context.get("namespace") == context.get("parent_namespace")
+            or os.readlink("/proc/self/ns/net") != control.get("network_namespace")
+            or control.get("network_namespace") == control.get("parent_network_namespace")):
+        raise ValueError("严格 control 凭证与当下 m/n 隔离不符")
+    mounts = {row["target"]: row for row in context.get("mounts", [])}
+    root_mount = mounts.get(root) or {}
+    if root_mount.get("filesystem") != "tmpfs" or "rw" not in root_mount.get("options", []):
+        raise ValueError("严格 control 临时根没有空 tmpfs 实测")
+    roles = {root: False}
+    for key, target in (("data_mount", HOST_DATA_ROOT), ("mask_mount", CODEX_CAPTURE_ROOT)):
+        row = control.get(key)
+        if target.is_dir() != (row is not None):
+            raise ValueError("严格 control 固定挂载根存在状态变化")
+        if row is not None:
+            if row.get("target") != str(target) or "ro" not in row.get("options", []):
+                raise ValueError("严格 control 固定挂载根未只读")
+            if key == "mask_mount" and (row.get("filesystem") != "tmpfs" or control.get("empty_mask") is not True):
+                raise ValueError("严格 control 生产别名没有空遮挡")
+            roles[str(target)] = True
+    if set(control.get("filesystem_ids", {})) != set(roles):
+        raise ValueError("严格 control 实际文件系统身份集合不闭合")
+    for target, readonly in roles.items():
+        actual = os.statvfs(target)
+        if str(actual.f_fsid) != control["filesystem_ids"][target] or bool(actual.f_flag & os.ST_RDONLY) != readonly:
+            raise ValueError("严格 control 实际可见文件系统身份或读写标志变化")
+    return context
+
+
 def _scratch_root() -> Path:
-    """临时根：必须在宿主数据根与执行副本之外。Linux 固定 ``/var/tmp``（pre-A3 的场景临时目录在数据根 staging 里，命名空间内
-    只读）；其它平台用系统临时目录。"""
+    """临时根必须独立于来源；仅实核后的当次空 tmpfs 使用精确 TMPDIR，普通 Linux 运行仍用 /var/tmp。"""
+
+    context = _audit_runtime_context()
+    if context is not None:
+        root = context["contract_entry"]["detail"]["contract"]["temporary_root"]
+        if os.environ.get("TMPDIR") != root:
+            raise ValueError("严格 control 外层 TMPDIR 必须等于实核后的精确空盘根")
+        return Path(root)
 
     return Path("/var/tmp") if sys.platform.startswith("linux") else Path(tempfile.gettempdir()).resolve()
 
@@ -172,6 +242,8 @@ def _copy_two_root_tree(destination: Path) -> Path:
 def _namespace_argv(argv: list[str]) -> list[str]:
     """在私有挂载＋网络命名空间里执行 ``argv``：宿主数据根只读、Codex 执行副本遮住、没有可用的网络接口。"""
 
+    if _audit_runtime_context() is not None:
+        return argv
     return ["unshare", "-m", "-n", "--propagation", "private", "sh", "-c", NAMESPACE_SCRIPT, "claude-control-chain", *argv]
 
 
@@ -272,9 +344,10 @@ def _assert_isolation(case: unittest.TestCase, recorder: _ChainRecorder) -> None
     for module in (claude_upgrade, store_receipts):
         case.assertIn(tree, Path(module.__file__).resolve().parents, f"{module.__name__} 回落到了副本树之外")
     if mode == ISOLATION_NAMESPACE:
-        interfaces = sorted(name for _index, name in socket.if_nameindex())
+        context = _audit_runtime_context()
+        interfaces = context["control_chain"]["interfaces"] if context is not None else sorted(name for _index, name in socket.if_nameindex())
         case.assertEqual(interfaces, ["lo"], "命名空间里仍有外网接口")
-        if HOST_DATA_ROOT.is_dir():
+        if HOST_DATA_ROOT.is_dir() and context is None:
             probe = HOST_DATA_ROOT / f".claude-control-chain-probe-{os.getpid()}"
             try:
                 probe.write_text("x", encoding="utf-8")

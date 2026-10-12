@@ -265,15 +265,20 @@ def _result_bindings(value: Any) -> list[dict[str, Any]]:
 
 
 def _control_step(name: str, action: Callable[[], Any], *, resume_actions: bool = False,
-                  verify: Callable[[Any], None] | None = None, intent: Any = None) -> Any:
+                  verify: Callable[[Any], None] | None = None, intent: Any = None,
+                  complete_state: dict[str, Any] | None = None) -> Any:
     """原方法持久游标：完成项实读重验；未闭合输入、批次或来源停点明确失败关闭。"""
     active = _SUCCESSOR.get()
     if active is None:
+        if complete_state is not None:
+            raise replay.ReplayError("只读完成停点缺同一后继作用域")
         return action()
     from tools.official_client_capture.tests import claude_fault_chain_world as stops
 
     key = "recorded-full-step:" + name
     saved = stops.load_state(key)
+    if complete_state is not None and (saved != complete_state or saved.get("status") != "complete"):
+        raise replay.ReplayError(f"只读完成停点已变化，禁止进入生产器：{name}")
     identity = {"data": active["data"], "source_state": active["source_state"], "intent": intent}
     if saved is not None:
         if any(saved.get(field) != value for field, value in identity.items()):
@@ -1370,6 +1375,53 @@ def compare_and_accept(data: Path, campaign: Path) -> dict[str, Any]:
             "gate": source.binding(root / receipt), "acceptance": stage}
 
 
+def _prepare_completed_material_successor(data: Path, campaign: Path, typed_fixture: Any) -> None:
+    """原完成 Plan 的材料失配只走正规后继准备，不改变首次交付或旧停点。
+
+    普通链没有交付 Plan 或四阶段尚未完成时保持原入口。已有后继仅交由
+    正式消费者验证；这里不凭取件描述授信，也不重复准备新材料。
+    """
+    from tools.official_client_capture import claude_upgrade_delivery as delivery
+    from tools.official_client_control import delivery_execution, receipts
+    from tools.official_client_control.qualification_material_import import (
+        describe_material_successor_bindings, validate_import_shape,
+    )
+    from tools.official_client_control.store import ControlStore
+    from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+
+    store = ControlStore.open_read_only(campaign / "control-store")
+    plans = [(reference, store.load_object(reference)["payload"])
+             for reference in store.list_object_refs("candidate_delivery_plan")]
+    plans = [(reference, plan) for reference, plan in plans
+             if plan["campaign_id"] == typed_fixture.context["campaign_id"]
+             and plan["candidate_id"] == CANDIDATE
+             and plan["delivery_id"] == typed_fixture.context["delivery_id"]]
+    if not plans:
+        return
+    if len(plans) != 1:
+        raise replay.ReplayError("原交付有不同 Plan，不能选择材料后继")
+    plan_ref, plan = plans[0]
+    if plan.get("schema_version") != delivery_execution.PLAN_V2:
+        return
+    chain = receipts.delivery_chain_state(store, plan["campaign_id"], plan["delivery_id"])
+    if not chain.complete() or receipts.delivery_receipts(store, plan["campaign_id"], plan_ref):
+        return
+    configuration = typed_fixture.configuration
+    proof = validate_import_shape(guard.read_bound_json(data, configuration["qualification_materials_binding"]))
+    reader = guard.read_bound_json(data, proof["reader_identity_binding"])
+    effective = receipts.effective_tool_identity(store, store.load_campaign(plan["campaign_id"]))
+    if reader["tool_identity"] == effective:
+        return
+    if describe_material_successor_bindings(store, configuration, plan_ref=plan_ref) is not None:
+        return
+    context = delivery._resolve(campaign, CANDIDATE, action="原交付材料后继准备")
+    with delivery._delivery_lock(context) as descriptor:
+        current = delivery._select_delivery(context, None)
+        if current["plan_ref"] != plan_ref:
+            raise replay.ReplayError("取锁后原当前 Plan 已变化，拒绝准备材料后继")
+        typed_fixture.prepare_material_successor(plan_ref=plan_ref, delivery_lock_fd=descriptor)
+
+
 def deliver(data: Path, campaign: Path, typed_fixture: Any) -> dict[str, Any]:
     """typed 文件现场和独立守卫给原件；Store、收据、账本与 checkpoint 由正式批次完成。"""
 
@@ -1472,6 +1524,10 @@ def _replay_completed_stage_store(campaign: Path, manifest: dict[str, Any], phas
     active = _SUCCESSOR.get()
     data = active["data"]
     store = ControlStore.open_read_only(campaign / "control-store")
+    if stops._SHARED_STORE_REPLAY.get() is not None:
+        # 共享入口已经排除无 Plan 的 prepare 窗口；不能再建索引破坏原来源批次身份。
+        stops.replay_read_only_store(store, external_root=data)
+        return
     pending = stops.load_state("recorded-full-step:VC6")
     if "VC-6" in phases or pending is None or pending.get("status") != "started":
         stops.replay_read_only_store(store, external_root=data)
@@ -1570,6 +1626,71 @@ def run_chain(state_path: Path, digest: str) -> dict[str, Any]:
         return _run_chain_body(state_path, digest)
 
 
+def _completed_stage_pair(data: Path, campaign: Path) -> dict[str, Any] | None:
+    """同来源的两份原 complete 只共享完整图计算，所有原阶段断言仍独立执行。
+
+    确切完成停点绑定到只读入口，不能因预读后停点变化误入 producer 或保存。
+    局部图足迹退出尾验通过后才返回两份结果，调用者随后才能冻结评估视图。
+    """
+    from tools.official_client_capture.tests import claude_fault_chain_world as stops
+    from tools.official_client_control.store import ControlStore
+
+    active = _SUCCESSOR.get()
+    if active is None:
+        return None
+    identity = {"data": data, "source_state": copy.deepcopy(active["source_state"]), "intent": None}
+    names = ("VC2-VC3", "VC4")
+    saved = {name: stops.load_state("recorded-full-step:" + name) for name in names}
+    if any(value is None or value.get("status") != "complete" for value in saved.values()):
+        return None
+    if active["data"] != data or any(any(value.get(key) != expected for key, expected in identity.items())
+                                    for value in saved.values()):
+        raise replay.ReplayError("双完成阶段的同一来源、数据根或停点意图漂移")
+    pending = stops.load_state("recorded-full-step:VC6")
+    typed_name = "typed-vc6:" + str(campaign.resolve())
+    saved_typed = stops.load_state(typed_name)
+    store = ControlStore.open_read_only(campaign / "control-store")
+    if pending is not None and pending.get("status") == "started":
+        if any(pending.get(key) != expected for key, expected in identity.items()):
+            raise replay.ReplayError("前序重验的原 VC-6 停点意图漂移")
+        if (saved_typed is not None
+                and not store.list_object_refs("candidate_delivery_plan")):
+            # 尚无 Plan 的特殊 prepare 窗口不共享；其原四根及窗口尾验继续独立执行。
+            return None
+
+    def scope_check() -> None:
+        if (_SUCCESSOR.get() is not active or active.get("data") != data
+                or active.get("source_state") != identity["source_state"]):
+            raise replay.ReplayError("双完成阶段已退出原来源作用域")
+        # 来源及阶段绑定已在入口按原摘要实读，首尾足迹绑定同一字节和坐标。
+        # 中间不重复全文读取；原 _control_step 仍逐阶段实核 complete 与自身绑定。
+        for name, expected in saved.items():
+            if stops.load_state("recorded-full-step:" + name) != expected:
+                raise replay.ReplayError("双完成阶段的原完整停点发生变化")
+        if stops.load_state("recorded-full-step:VC6") != pending:
+            raise replay.ReplayError("双完成阶段期间原 VC-6 窗口发生变化")
+        if stops.load_state(typed_name) != saved_typed:
+            raise replay.ReplayError("双完成阶段期间原 typed 来源停点发生变化")
+
+    def forbidden_action() -> Any:
+        raise replay.ReplayError("双完成阶段只读路径禁止执行生产器")
+
+    scope_paths = {source.bound(identity["source_state"], root=data)}
+    for name, expected in saved.items():
+        scope_paths.add(stops._state_path("recorded-full-step:" + name))
+        scope_paths.update(source.bound(binding) for binding in expected["bindings"])
+    for name, expected in (("recorded-full-step:VC6", pending), (typed_name, saved_typed)):
+        if expected is not None:
+            scope_paths.add(stops._state_path(name))
+    with stops.shared_read_only_store_replay(store, external_root=data, scope_check=scope_check,
+                                            scope_paths=sorted(scope_paths)):
+        first = _control_step("VC2-VC3", forbidden_action, complete_state=saved["VC2-VC3"],
+            verify=lambda result: _verify_completed_stage(campaign, ("VC-2", "VC-3"), result))
+        second = _control_step("VC4", forbidden_action, complete_state=saved["VC4"],
+            verify=lambda result: _verify_completed_stage(campaign, ("VC-4",), result))
+    return {"VC-2/3": first, "VC-4": second}
+
+
 def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
     """完整链只有所有真实 checkpoint、Store 与两本账闭合才通过；来源标记不会升级成版本语义认证。"""
 
@@ -1598,11 +1719,13 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
             raise replay.ReplayError("完整链项目总账不是同一原始数据根的 Claude 总账")
         initial_project = source.binding(project_root / "plan.json")
         official_accounting = _control_step("official-accounting", lambda: _account_sealed(data, campaign, "official"))
-        stages = {"VC-1": first, "official_accounting": official_accounting,
-                  "VC-2/3": _control_step("VC2-VC3", lambda: classify_and_prepare(data, campaign), resume_actions=True,
+        completed = _completed_stage_pair(data, campaign)
+        if completed is None:
+            completed = {"VC-2/3": _control_step("VC2-VC3", lambda: classify_and_prepare(data, campaign), resume_actions=True,
                       verify=lambda result: _verify_completed_stage(campaign, ("VC-2", "VC-3"), result)),
                   "VC-4": _control_step("VC4", lambda: build_candidate(data, campaign), resume_actions=True,
                       verify=lambda result: _verify_completed_stage(campaign, ("VC-4",), result))}
+        stages = {"VC-1": first, "official_accounting": official_accounting, **completed}
         evaluation_state = (_recorded_evaluation_state(state_path, digest, campaign)
                             if state["inputs"].get("recorded_control_scope") == COMPLETE_MAIN_MODEL_SCOPE else None)
     candidate_state = evaluation_state["source_state"] if evaluation_state is not None else source.binding(state_path)
@@ -1648,6 +1771,7 @@ def _run_chain_body(state_path: Path, digest: str) -> dict[str, Any]:
             # 原守卫与既有来源作用域延续到首次完成复核和最终重放结束。
             # 退出外层栈仍沿原夹具清理，不承接通过结论或建立新的守卫身份。
             delivery_read_stack.enter_context(typed_fixture)
+            _prepare_completed_material_successor(data, campaign, typed_fixture)
             return deliver(data, campaign, typed_fixture)
         vc6_step, vc6_intent = _vc6_pending_step("VC6", None, original_intent=None)
         stages["VC-6"] = _control_step(vc6_step, run_delivery, resume_actions=True, intent=vc6_intent,

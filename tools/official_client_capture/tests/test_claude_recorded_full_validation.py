@@ -416,6 +416,199 @@ class RecordedFullPreparationTests(unittest.TestCase):
         self._assert_recorded_compiled_action_readers()
         self._assert_vc6_completed_source_consumers()
         self._assert_vc6_configuration_plan_gap_consumers()
+        self._assert_completed_pair_shares_only_an_unchanged_graph()
+
+    def _assert_completed_pair_shares_only_an_unchanged_graph(self) -> None:
+        """沿原 UID 实读小 Store 的完整图与首尾足迹；阶段前段只核准确调用合同。
+
+        不替换 Store 重放结果，不登记实际 VC2/3/VC4 通过。原合法 bootstrap 对象
+        追加、对象/收据/目录删除新增、inode/模式/外部邻项及完成停点漂移均阻断下游。
+        """
+        import contextvars
+        from tools.official_client_capture import claude_upgrade as upgrade
+        from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.store import ControlStore
+        from tools.official_client_control.tests.fixtures import SyntheticCampaign
+
+        mutations = (None, "new-object", "new-campaign", "new-receipt", "new-directory", "deleted-object", "object-inode",
+                     "object-mode", "external-bytes", "external-mode", "external-neighbor", "source-inode",
+                     "source-mode", "stop", "exception")
+        for mutation in mutations:
+            with self.subTest(completed_pair_drift=mutation), tempfile.TemporaryDirectory() as temporary:
+                data = Path(temporary).resolve() / "staging/data"
+                vc1._create_world_roots(data)
+                campaign = data / "evidence/campaigns/C-pair"
+                campaign.mkdir(parents=True, mode=0o700)
+                store = ControlStore.initialize(campaign / "control-store", "2026-10-12T00:00:00Z")
+                original = SyntheticCampaign(data, store=store, external_root=data, external_prefix="control/pair-originals")
+                original.bootstrap_and_campaign()
+                origin = source.write(data / "control/pair-state.json", {"fixture_only": True})
+                origin_binding = source.binding(origin)
+                records = data / "private-pair-stops"
+                records.mkdir(mode=0o700)
+                active = {"data": data, "source_state": origin_binding}
+                token = driver._SUCCESSOR.set(active)
+                graph_calls, consumers = [], []
+                real_replay = ControlStore.replay
+                target = store.object_path(original.references["bootstrap"])
+                external = data / original.contract_binding["path"]
+                changed = False
+
+                def replace_file(path):
+                    replacement = path.with_name(path.name + ".replacement")
+                    replacement.write_bytes(path.read_bytes())
+                    replacement.chmod(path.stat().st_mode & 0o777)
+                    replacement.replace(path)
+
+                def consume(_campaign, stage, *args):
+                    nonlocal changed
+                    consumers.append(stage)
+                    if stage != "stage-profile" or mutation is None or changed:
+                        return {}
+                    changed = True
+                    if mutation == "new-object":
+                        payload = copy.deepcopy(store.load_object(original.references["bootstrap"])["payload"])
+                        payload["source_commit"] = "2" * 40
+                        store.seal_object("bootstrap", payload)
+                    elif mutation == "new-campaign":
+                        from tools.official_client_control.contracts import campaign_identity_sha256
+                        extra = copy.deepcopy(original.campaign_document)
+                        extra["campaign_id"] = "second-valid-campaign"
+                        extra["identity_sha256"] = campaign_identity_sha256(extra)
+                        store.create_campaign(extra)
+                    elif mutation == "new-receipt":
+                        directory = store.root / "receipts/candidate_build"
+                        directory.mkdir(mode=0o700)
+                        source.write(directory / ("1" * 64 + ".json"), {"unconsumed_receipt": True})
+                    elif mutation == "new-directory":
+                        (store.root / "objects/new-empty-directory").mkdir(mode=0o700)
+                    elif mutation == "deleted-object":
+                        target.unlink()
+                    elif mutation == "object-inode":
+                        replace_file(target)
+                    elif mutation == "object-mode":
+                        target.chmod(0o400)
+                    elif mutation == "external-bytes":
+                        external.write_bytes(external.read_bytes() + b"changed")
+                    elif mutation == "external-mode":
+                        external.chmod(0o400 if external.stat().st_mode & 0o777 != 0o400 else 0o600)
+                    elif mutation == "external-neighbor":
+                        source.write(external.parent / "new-neighbor.json", {"new": True})
+                    elif mutation == "source-inode":
+                        replace_file(origin)
+                    elif mutation == "source-mode":
+                        origin.chmod(0o400)
+                    elif mutation == "stop":
+                        stops.save_state("recorded-full-step:VC4", {**active, "intent": None, "status": "started"})
+                    else:
+                        raise RuntimeError("阶段原只读消费者异常")
+                    return {}
+
+                def replay_graph(actual_store, **options):
+                    graph_calls.append(actual_store.root)
+                    return real_replay(actual_store, **options)
+
+                try:
+                    with mock.patch.dict(os.environ, {stops.METHOD_RECORD_ENV: str(records)}), \
+                            contextlib.ExitStack() as patches:
+                        for name in ("VC2-VC3", "VC4"):
+                            stops.save_state("recorded-full-step:" + name, {**active, "intent": None, "status": "complete",
+                                "result": {"batches": [{"original_batch": name}]}, "bindings": [origin_binding]})
+                        patches.enter_context(mock.patch.object(upgrade, "load_campaign_manifest", return_value=original.campaign_document))
+                        patches.enter_context(mock.patch.object(upgrade, "_vc_campaign_plan", return_value={}))
+                        checkpoints = patches.enter_context(mock.patch.object(upgrade, "_replay_vc_checkpoint"))
+                        batches = patches.enter_context(mock.patch.object(driver, "_verify_stage_batches"))
+                        patches.enter_context(mock.patch.object(upgrade, "_load_stage_result", side_effect=consume))
+                        patches.enter_context(mock.patch.object(ControlStore, "replay", autospec=True, side_effect=replay_graph))
+                        producer = patches.enter_context(mock.patch.object(driver, "build_candidate"))
+                        save = patches.enter_context(mock.patch.object(stops, "save_state", wraps=stops.save_state))
+                        downstream = mock.Mock()
+
+                        def read_then_write():
+                            result = driver._completed_stage_pair(data, campaign)
+                            downstream()
+                            return result
+
+                        if mutation is None:
+                            self.assertEqual(set(read_then_write()), {"VC-2/3", "VC-4"})
+                            self.assertEqual(len(graph_calls), 1)
+                            self.assertEqual((batches.call_count, checkpoints.call_count), (2, 3))
+                            self.assertEqual(consumers, ["classify", "stage-profile"])
+                            self.assertEqual(set(read_then_write()), {"VC-2/3", "VC-4"})
+                            self.assertEqual(len(graph_calls), 2)
+                            save.assert_not_called()
+                            # 活上下文的复制不能越过退出承接图结果；locks 内容不属于原 replay 读集。
+                            reader = ControlStore.open_read_only(store.root)
+                            other_store = ControlStore.initialize(Path(temporary).resolve() / "other-store", "2026-10-12T00:00:00Z")
+                            other_reader = ControlStore.open_read_only(other_store.root)
+                            alias = data / "control/pair-subroot-alias"
+                            alias.symlink_to(external.parent, target_is_directory=True)
+                            subroot_binding = {**original.contract_binding, "path": external.name}
+                            with stops.shared_read_only_store_replay(reader, external_root=data, scope_check=lambda: None) as boundary:
+                                copied = contextvars.copy_context()
+                                first = stops.replay_read_only_store(reader, external_root=data)
+                                (store.root / "locks/ignored-read-side.lock").write_bytes(b"lock\n")
+                                self.assertEqual(stops.replay_read_only_store(reader, external_root=data), first)
+                                # 同一 Store 的原构造器重开与原资格包装可实读冻结子根，仍登记同一真实路径。
+                                reopened = ControlStore.open_read_only(store.root)
+                                self.assertIsNot(reopened, reader)
+                                with stops._read_only_fact_index(reopened) as reopened_index:
+                                    view = executor._QualificationStoreView(reopened_index)
+                                    view._verify_external_binding(external.parent, subroot_binding)
+                                    self.assertIn(external, boundary.external_files)
+                                self.assertFalse(reopened_index.active)
+                                self.assertEqual(stops.replay_read_only_store(reopened, external_root=data), first)
+                                self.assertEqual(len(graph_calls), 3)
+                            self.assertFalse(boundary.active)
+                            self.assertIsNone(boundary.result)
+                            with self.assertRaisesRegex(ControlError, "作用域已退出"):
+                                copied.run(stops.replay_read_only_store, reader, external_root=data)
+                            # 边界拒绝不同 Store、可写句柄、越界根与符号链接；不靠已验证的相同外部字节放行。
+                            outside_binding = {**original.contract_binding, "path": external.relative_to(data.parent).as_posix()}
+                            for label, actual_store, root, binding in (
+                                    ("another-store", other_reader, external.parent, subroot_binding),
+                                    ("write-store", store, external.parent, subroot_binding),
+                                    ("outside-data-root", reader, data.parent, outside_binding),
+                                    ("symlink-root", reader, alias, subroot_binding)):
+                                with self.subTest(shared_external_reject=label):
+                                    rejected = stops._ReadOnlyStoreReplayBoundary(reader, data, lambda: None, [])
+                                    try:
+                                        coordinate = rejected._coordinate(external, directory=False)
+                                        with self.assertRaisesRegex(ControlError, "不能跨 Store 或数据根"):
+                                            rejected.record_external(actual_store, root, binding, coordinate)
+                                        self.assertEqual(rejected.external_files, {})
+                                    finally:
+                                        rejected.close()
+                            # 同名路径重新打开的另一个目录也不是首读 Store；原 metadata 相同不能替代 inode 身份。
+                            with self.subTest(shared_external_reject="same-path-replaced-store"):
+                                rejected = stops._ReadOnlyStoreReplayBoundary(reader, data, lambda: None, [])
+                                saved_root = store.root.with_name(store.root.name + ".saved")
+                                try:
+                                    store.root.rename(saved_root)
+                                    shutil.copytree(saved_root, store.root)
+                                    replacement_reader = ControlStore.open_read_only(store.root)
+                                    coordinate = rejected._coordinate(external, directory=False)
+                                    with self.assertRaisesRegex(ControlError, "不能跨 Store 或数据根"):
+                                        rejected.record_external(replacement_reader, external.parent, subroot_binding, coordinate)
+                                    self.assertEqual(rejected.external_files, {})
+                                finally:
+                                    rejected.close()
+                                    if saved_root.exists():
+                                        shutil.rmtree(store.root)
+                                        saved_root.rename(store.root)
+                        else:
+                            with self.assertRaises((ControlError, replay.ReplayError, RuntimeError)):
+                                read_then_write()
+                            downstream.assert_not_called()
+                            self.assertEqual(len(graph_calls), 1)
+                            self.assertLessEqual(checkpoints.call_count, 3)
+                            self.assertEqual(save.call_count, 1 if mutation == "stop" else 0)
+                        producer.assert_not_called()
+                        self.assertIsNone(stops._SHARED_STORE_REPLAY.get())
+                finally:
+                    driver._SUCCESSOR.reset(token)
 
     def _assert_vc6_timeout_successor_preserves_original_stops(self) -> None:
         """原UID核窄预算后继：旧成功不重做，旧started不覆写，命令漂移拒绝。"""
@@ -486,6 +679,7 @@ class RecordedFullPreparationTests(unittest.TestCase):
         接缝为主候选加入宿主元数据和三件制品，不替换归属、资格或重放结论。
         typed 独立文件守卫仅 freeze；不派发交付阶段，不登记完整升级链通过。
         """
+        from collections import Counter
         from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
         from tools.official_client_capture import claude_upgrade_delivery as delivery
         from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
@@ -625,7 +819,125 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 self.assertEqual(opened_delivery["plan"]["executor_configuration_ref"], configuration_ref)
                 self.assertEqual(reader.list_object_refs("candidate_delivery_plan"), [opened_delivery["plan_ref"]])
                 completed = originals()
-                first, second = full(), full()
+                # 所有计数包装均调用原函数：区分真实出口、原必要读取和新增足迹读取。
+                original_replay, replayed = ControlStore.replay, []
+                real_batch = executor.Arm64DeliveryExecutor.verify_origin_evidence_batch
+                real_call = guard.GuardClient.call
+                real_original = executor._LocalSourceOriginals.__getitem__
+                real_round = typed._LocalActiveFileReads.read_all
+                real_footprint = stops._ReadOnlyStoreReplayBoundary._file
+                real_record = stops._ReadOnlyStoreReplayBoundary.record_external
+                exports, batches, original_reads, manifest_rounds, footprint_reads = [], [], [], [], []
+                recorded_external_roots = set()
+                source_manifest_paths, phase = set(), "entry"
+
+                def replay_graph(actual_store, **options):
+                    replayed.append(actual_store.root)
+                    return original_replay(actual_store, **options)
+
+                def verify_batch(actual_executor, items):
+                    nonlocal phase
+                    before, phase = phase, "source-export"
+                    try:
+                        result = real_batch(actual_executor, items)
+                        batches.append(len(items))
+                        for row in result:
+                            self.assertIs(type(row["bytes_by_path"]), executor._LocalSourceOriginals)
+                            source_manifest_paths.update(data / name for name in row["bytes_by_path"].bindings)
+                        return result
+                    finally:
+                        phase = before
+
+                def call_guard(client, action, payload):
+                    if action in guard.SOURCE_READ_ACTIONS:
+                        exports.append(action)
+                    return real_call(client, action, payload)
+
+                def read_original(originals, name):
+                    original_reads.append((phase, originals.root / name))
+                    return real_original(originals, name)
+
+                def read_round(snapshot, rows, *, current=True):
+                    nonlocal phase
+                    selected = [path for path, _reader in rows if current or path not in snapshot.files]
+                    before = phase
+                    if selected:
+                        phase = "manifest-tail" if snapshot.files else "manifest-first"
+                        manifest_rounds.append((phase, tuple(selected)))
+                    try:
+                        return real_round(snapshot, rows, current=current)
+                    finally:
+                        phase = before
+
+                def read_footprint(boundary, path):
+                    footprint_reads.append((phase, path))
+                    return real_footprint(boundary, path)
+
+                def record_binding(boundary, actual_store, root, binding, coordinate):
+                    count = len(footprint_reads)
+                    result = real_record(boundary, actual_store, root, binding, coordinate)
+                    self.assertEqual(len(footprint_reads), count)
+                    self.assertEqual(actual_store.root, boundary.store_root)
+                    self.assertTrue(root.is_relative_to(data))
+                    recorded_external_roots.add(root)
+                    return result
+
+                with contextlib.ExitStack() as counts:
+                    counts.enter_context(mock.patch.object(ControlStore, "replay", autospec=True, side_effect=replay_graph))
+                    counts.enter_context(mock.patch.object(executor.Arm64DeliveryExecutor,
+                        "verify_origin_evidence_batch", autospec=True, side_effect=verify_batch))
+                    counts.enter_context(mock.patch.object(guard.GuardClient, "call", autospec=True, side_effect=call_guard))
+                    counts.enter_context(mock.patch.object(executor._LocalSourceOriginals,
+                        "__getitem__", autospec=True, side_effect=read_original))
+                    counts.enter_context(mock.patch.object(typed._LocalActiveFileReads,
+                        "read_all", autospec=True, side_effect=read_round))
+                    counts.enter_context(mock.patch.object(stops._ReadOnlyStoreReplayBoundary,
+                        "_file", autospec=True, side_effect=read_footprint))
+                    counts.enter_context(mock.patch.object(stops._ReadOnlyStoreReplayBoundary,
+                        "record_external", autospec=True, side_effect=record_binding))
+                    with stops.shared_read_only_store_replay(reader, external_root=data, scope_check=lambda: None) as boundary:
+                        phase = "first-stage"
+                        first = full()
+                        self.assertIn(fixture.external_root, recorded_external_roots)
+                        first_counts = (len(exports), len(batches), len(manifest_rounds), len(footprint_reads))
+                        self.assertEqual(first_counts[:3], (1, 1, 1))
+                        phase = "second-stage"
+                        second = full()
+                        self.assertEqual((len(exports), len(batches), len(manifest_rounds), len(footprint_reads)), first_counts)
+                        self.assertTrue(any(label == "second-stage" for label, _path in original_reads))
+                        live_batch = boundary.source_batch
+                        self.assertIs(execution._SOURCE_BATCH.get(), live_batch)
+                        store_footprints = {path for path, value in boundary.store_snapshot.items() if value[0] == "file"}
+                        other_tail_footprints = set(boundary.external_files) - source_manifest_paths - store_footprints
+                        phase = "tail"
+                    self.assertEqual(replayed, [reader.root])
+                    self.assertEqual(len(exports), 1)
+                    self.assertEqual(len(batches), 1)
+                    self.assertIn(exports[0], {"export_batch", "export_batch_local"})
+                    self.assertEqual([label for label, _paths in manifest_rounds], ["manifest-first", "manifest-tail"])
+                    self.assertEqual([set(paths) for _label, paths in manifest_rounds],
+                                     [source_manifest_paths, source_manifest_paths])
+                    # Store 本体即使也在来源清单里，仍要求下面断言的完整首尾实读；
+                    # 仅来源独有原件由来源清单首尾核验，不再在足迹层重复读取。
+                    self.assertEqual([path for _label, path in footprint_reads if path in source_manifest_paths - store_footprints], [])
+                    self.assertEqual(Counter(path for _label, path in footprint_reads),
+                        Counter({path: 2 for path in store_footprints}) + Counter({path: 1 for path in other_tail_footprints}))
+                    # 出口中的构造/投影与中间 typed 实际绑定读取仍保留；不冒称它们为零。
+                    self.assertTrue(any(label == "source-export" for label, _path in original_reads))
+                    self.assertEqual(Counter(path for label, path in original_reads if label == "manifest-first"),
+                                     Counter({path: 1 for path in source_manifest_paths}))
+                    self.assertEqual(Counter(path for label, path in original_reads if label == "manifest-tail"),
+                                     Counter({path: 1 for path in source_manifest_paths}))
+                    self.assertFalse(live_batch.active)
+                    self.assertEqual(live_batch.sources, {})
+                    self.assertFalse(boundary.active)
+                    self.assertIsNone(boundary.result)
+                    phase = "independent"
+                    self.assertEqual(full(), first)
+                    self.assertEqual(replayed, [reader.root, reader.root])
+                    self.assertEqual((len(exports), len(batches)), (2, 2))
+                    self.assertEqual([label for label, _paths in manifest_rounds],
+                        ["manifest-first", "manifest-tail", "manifest-first", "manifest-tail"])
                 self.assertEqual((first["result"], first["external_verified"]), ("passed", True))
                 self.assertEqual(first, second)
                 self.assertTrue(any(row["parent_ref"] == qualification["build_receipt_ref"]
@@ -634,6 +946,34 @@ class RecordedFullPreparationTests(unittest.TestCase):
                 self.assertEqual(len(first["binding_projection"]["artifact_file_requirements"]), 3)
                 self.assertEqual(originals(), completed)
                 self.assertEqual(typed.read_calls(control_path, physical=True), [])
+
+                # 原登记撤销及外部原件漂移必须销毁局部图，不能在异常被截住后再次共享。
+                for drift in ("registration", "original"):
+                    # 原件漂移同时触发整图首验与 typed 来源尾验；两层均须拒绝，
+                    # 底层尾验的 GuardError 不改变下面的失效与内存清理判据。
+                    expected_error = ControlError if drift == "registration" else (ControlError, guard.GuardError)
+                    with self.subTest(shared_typed_drift=drift), self.assertRaises(expected_error):
+                        with stops.shared_read_only_store_replay(reader, external_root=data, scope_check=lambda: None) as boundary:
+                            full()
+                            if drift == "registration":
+                                with mock.patch.dict(execution.SOURCE_VERIFIERS, {}, clear=True):
+                                    try:
+                                        full()
+                                    finally:
+                                        self.assertFalse(boundary.active)
+                                        self.assertIsNone(boundary.result)
+                            else:
+                                artifact = fixture.external_root / next(row["binding"]["path"] for row in entries
+                                    if row["role"] == "sub2api")
+                                raw = artifact.read_bytes()
+                                try:
+                                    artifact.write_bytes(raw + b"changed")
+                                    full()
+                                finally:
+                                    artifact.write_bytes(raw)
+                                    self.assertFalse(boundary.active)
+                                    self.assertIsNone(boundary.result)
+                    self.assertIsNone(stops._SHARED_STORE_REPLAY.get())
 
                 # 原件篡改必须重新拒绝；每个负例只改本短验夹具，恢复后再真实完整重放。
                 receipt_path = reader.receipt_path(qualification["build_receipt_ref"])

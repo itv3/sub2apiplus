@@ -6,6 +6,7 @@ import contextlib
 import copy
 import json
 import os
+import py_compile
 import tempfile
 import unittest
 from pathlib import Path
@@ -204,6 +205,126 @@ class ContinuousWorldContractTests(unittest.TestCase):
                 result.update(complete=False, executor=origin)
                 with self.assertRaisesRegex(ValueError, '原成功方法'):
                     outer._verify_continuation_method(document, method, expected)
+        # 同一既有 UID 只核方法级缓存与真实进程派发合同；不运行故障方法或长链。
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            original_source = {'repository': str(root), 'fixtures': {}, 'files': {'old.py': '1' * 64}}
+            current_source = {**original_source, 'files': {'old.py': '2' * 64}}
+            before_files = {'old.py': {'path': root / 'old-cut', 'sha256': '1' * 64}}
+            proof = {'changed_paths': ['old.py'], 'paths_by_layer': {}, 'proofs': {}}
+            document = {'mode': 'formed-evidence-read-only', 'original_source': original_source,
+                        'current_source': current_source, 'before_files': before_files, 'source_proof': proof}
+            with outer._record_scope(root), mock.patch.object(world_fixture, 'verify_product_continuation',
+                    side_effect=lambda *args, **kwargs: copy.deepcopy(document)) as full:
+                with world_fixture.formed_source_proof_scope({}, current_source=current_source):
+                    for _ in range(6):
+                        returned = world_fixture.formed_source_continuation_proof(original_source, current_source, before_files)
+                        self.assertEqual(returned, proof)
+                        returned['changed_paths'].append('不能污染缓存')
+                    self.assertEqual(full.call_count, 1)
+                    changed = {**current_source, 'files': {'old.py': '3' * 64}}
+                    with self.assertRaisesRegex(ValueError, '跨原方法'):
+                        world_fixture.formed_source_continuation_proof(original_source, changed, before_files)
+                    other = root / 'other-method'
+                    other.mkdir()
+                    with outer._record_scope(other), self.assertRaisesRegex(ValueError, '跨原方法'):
+                        world_fixture.formed_source_continuation_proof(original_source, current_source, before_files)
+                self.assertEqual(full.call_count, 2)
+            self.assertIsNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
+            drifted = {**document, 'changed_at_exit': True}
+            with outer._record_scope(root), mock.patch.object(world_fixture, 'verify_product_continuation',
+                    side_effect=[copy.deepcopy(document), drifted]):
+                with self.assertRaisesRegex(ValueError, '退出时'):
+                    with world_fixture.formed_source_proof_scope({}, current_source=current_source):
+                        pass
+            self.assertIsNone(world_fixture._FORMED_SOURCE_PROOF_SCOPE.get())
+
+        # 在真实独立小目录启动当前入口替身，验证 runner 的实际 cwd、argv 和退出原件。
+        # 替身只用于派发合同，不替代真实材料 reader 或三链产品兼容验证。
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            current_root, method_root = root / 'current', root / 'method'
+            current_root.mkdir()
+            method_root.mkdir()
+            method = '_TransientSegmentScenarios._scenario_full_control_delivery'
+            expected = list(outer.LATE_CONTINUOUS_SCENARIOS)
+            rows = [{'scenario': name, 'checks': {key: {'passed': True} for key in outer.SIX_CHECKS}}
+                    for name in expected]
+            records = root / 'original-records.jsonl'
+            records.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows))
+            source = {'repository': str(current_root), 'fixtures': {}, 'files': {}}
+            report = {'schema': 'claude-fault-current-formed-verification/v1',
+                'purpose': 'current-formed-read-only', 'method': method, 'current_source': source, 'records': rows}
+            module = current_root / (outer.CHAIN_MODULE.replace('.', '/') + '.py')
+            module.parent.mkdir(parents=True)
+            module.write_text('from types import SimpleNamespace\nfrom pathlib import Path\nimport sys\n'
+                'cache_marker="cache-a"\n'
+                'stops=SimpleNamespace(_decoded=lambda value:value,_encoded=lambda value:value)\n'
+                'def _revalidate_formed_method_current(binding,method):\n'
+                '    report=' + repr(report) + '\n'
+                '    report["actual_module"]=str(Path(__file__).resolve())\n'
+                '    report["cache_marker"]=cache_marker\n'
+                '    report["actual_pycache_prefix"]=sys.pycache_prefix\n'
+                '    report["dont_write_bytecode"]=sys.dont_write_bytecode\n'
+                '    return report\n')
+            # 同秒同长度旧 pyc 必须确实存在；当前进程仍须加载变更后的源码。
+            os.utime(module, (1_700_000_000, 1_700_000_000))
+            old_size = module.stat().st_size
+            old_cache = module.parent / '__pycache__' / (module.stem + '.' + outer.sys.implementation.cache_tag + '.pyc')
+            py_compile.compile(str(module), cfile=str(old_cache), doraise=True,
+                invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP)
+            old_cache_bytes = old_cache.read_bytes()
+            module.write_text(module.read_text().replace('cache-a', 'cache-b'))
+            os.utime(module, (1_700_000_000, 1_700_000_000))
+            self.assertEqual(module.stat().st_size, old_size)
+            self.assertEqual(int(module.stat().st_mtime), 1_700_000_000)
+            binding = world_fixture.file_cut(records)
+            continuation = (binding, {'mode': 'formed-evidence-read-only', 'current_source': source})
+            recorder = outer._ChainRecorder('late-continuous')
+            context = {'seconds': 0.0, 'invocations': []}
+            with outer._record_scope(method_root), \
+                    mock.patch.object(world_fixture, 'executor_invocation_binding', return_value=binding), \
+                    mock.patch.object(world_fixture, 'verify_executor_source') as executor_check, \
+                    mock.patch.object(world_fixture, 'invocation_product_continuation', return_value=continuation), \
+                    mock.patch.object(outer.shell, '_tree_root', return_value=root), \
+                    mock.patch.object(outer.diagnostic_budget, 'diagnostic_seconds', return_value=None), \
+                    mock.patch.object(recorder, 'step'), mock.patch.object(recorder, 'emit'), \
+                    mock.patch.object(outer.subprocess, 'Popen', wraps=outer.subprocess.Popen) as launches:
+                world_fixture.save_state('method-result', {'complete': True, 'bindings': {'records': binding}})
+                original = world_fixture._state_path('method-result').read_bytes()
+                outer._run_group_body(self, recorder, {method: tuple(expected)}, '当前只读接线',
+                    method_root=method_root, context=context, verify=True)
+                self.assertEqual(launches.call_count, 1)
+                argv = launches.call_args.args[0]
+                self.assertEqual(argv[1:4], ['-I', '-B', '-c'])
+                self.assertEqual(launches.call_args.kwargs['cwd'], current_root)
+                executor_check.assert_called_once()
+                self.assertEqual(world_fixture._state_path('method-result').read_bytes(), original)
+                verified = world_fixture.load_state('method-verification')
+                self.assertTrue(verified['complete'])
+                self.assertEqual(verified['purpose'], 'current-formed-read-only')
+                exit_document = json.loads(world_fixture.read_cut(verified['bindings']['current_exit']))
+                self.assertEqual((exit_document['argv'], exit_document['returncode'], exit_document['timed_out']),
+                                 (argv, 0, False))
+                actual = world_fixture._decoded(json.loads(world_fixture.read_cut(verified['bindings']['current_stdout'])))
+                self.assertEqual(actual['actual_module'], str(module))
+                self.assertEqual(actual['cache_marker'], 'cache-b')
+                self.assertEqual(actual['actual_pycache_prefix'], argv[-1])
+                self.assertTrue(actual['dont_write_bytecode'])
+                self.assertEqual(exit_document['pycache_prefix'], argv[-1])
+                self.assertFalse(exit_document['pycache_generated'])
+                self.assertFalse(os.path.lexists(argv[-1]))
+                self.assertEqual(old_cache.read_bytes(), old_cache_bytes)
+                self.assertEqual(outer._read_records(verified['bindings']['records']['path']), rows)
+                self.assertEqual(recorder.facts['scenarios'], rows)
+                # 实际当前进程拒绝时保存失败旁侧输出，仍不派第二个旧 unittest。
+                module.write_text('raise ValueError("实际当前入口拒绝")\n')
+                with self.assertRaisesRegex(AssertionError, '当前历史成功纯验超时或拒绝'):
+                    outer._run_group_body(self, recorder, {method: tuple(expected)}, '当前拒绝接线',
+                        method_root=method_root, context=context, verify=True)
+                self.assertEqual(launches.call_count, 2)
+                self.assertFalse(world_fixture.load_state('method-verification')['complete'])
+                self.assertEqual(world_fixture._state_path('method-result').read_bytes(), original)
 
 
 class _RevisionAuditPublicationChecks(unittest.TestCase):

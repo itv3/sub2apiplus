@@ -27,8 +27,10 @@ REPOSITORY = Path(__file__).resolve().parents[3]
 
 
 def write(root: Path, relative: str, document) -> Path:
+    from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
     path = root / relative
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # parents=True 的 mode 只作用于叶目录；逐级私有创建，既有目录不改权限。
+    guard.private_directory(path.parent)
     path.write_bytes(canonical_json_bytes(document))
     path.chmod(0o600)
     return path
@@ -807,6 +809,12 @@ class MaterialImportProofTests(unittest.TestCase):
         from tools.official_client_capture.tests.claude_qualification_source_fixture import QualificationSubjectWorld, QualificationDeliveryCampaign
         from tools.official_client_capture import claude_upgrade_accept as accept
         from tools.official_client_control.canonical import canonical_sha256
+        if self._testMethodName == "test_material_successor_uses_real_registration_reader_and_frozen_originals":
+            # 此唯一用例实算全部 evaluator，须在任何事实和导入形成之前
+            # 使用真实编排器原字节；清理恢复原 stub，旧 UID 保持原夹具。
+            self.addCleanup(self.tree.restore)
+            orchestrator_key = "official_client_capture/claude_upgrade.py"
+            self.tree.write(orchestrator_key, (REPOSITORY / "tools" / orchestrator_key).read_bytes())
         temporary = tempfile.TemporaryDirectory(prefix="sealed-gate-materials-", dir="/private/tmp")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
@@ -817,6 +825,11 @@ class MaterialImportProofTests(unittest.TestCase):
         f = QualificationDeliveryCampaign(self.world, data_root=self.root, schema="v2")
         self.fixture = f
         f.materials = self.configuration
+        if self._testMethodName == "test_material_successor_uses_real_registration_reader_and_frozen_originals":
+            from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+            # 首次事实写入前私有预建 Campaign 祖先；共享 Store 的维度目录
+            # 创建会递归形成中间层，不能在事实冻结后再补权限。
+            guard.private_directory(f.store.root / "facts" / f.campaign_id)
         f.bootstrap_and_campaign(platforms=["linux/arm64"], campaign_purpose="validation_only")
         f.discovery_and_evidence()
         f.profile_objects()
@@ -837,8 +850,23 @@ class MaterialImportProofTests(unittest.TestCase):
             if role == "candidate":
                 self.gate_root = self.root / "original-gate"
                 _unused, receipt = gate_world(self.gate_root)
-                self.source_world = QualificationSubjectWorld(self.root, f, q,
-                    self.root / self.configuration[role]["profile_binding"]["path"])
+                if self._testMethodName == "test_material_successor_uses_real_registration_reader_and_frozen_originals":
+                    from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+                    # 此 UID 随后实读演进收据；先私有创建 VC 写入器会递归新建的
+                    # control 祖先，避免中间目录用默认模式形成，已有原件不补权限。
+                    guard.private_directory(self.root / "evidence/campaigns" / q["campaign_id"] / "control")
+                    # 此唯一 UID 的世界构造还会直接写摘要和递归新建 Release
+                    # 中间目录；在形成窗口令新文件/目录出生即为 0600/0700，
+                    # 并在成功或异常后恢复进程状态，不对已有原件补权限。
+                    previous_umask = os.umask(0o077)
+                    try:
+                        self.source_world = QualificationSubjectWorld(self.root, f, q,
+                            self.root / self.configuration[role]["profile_binding"]["path"])
+                    finally:
+                        os.umask(previous_umask)
+                else:
+                    self.source_world = QualificationSubjectWorld(self.root, f, q,
+                        self.root / self.configuration[role]["profile_binding"]["path"])
                 identity = self.source_world.identity
                 facts = json_read(self.gate_root / "candidate-facts.json")
                 expected = accept.expected_gate_subject(self.source_world.manifest,
@@ -876,6 +904,321 @@ class MaterialImportProofTests(unittest.TestCase):
             {role: self.configuration[role]["qualification"] for role in ("candidate", "rollback")},
             purpose=purpose, expected_source_scope="regression_fixture")
 
+    def test_material_successor_uses_real_registration_reader_and_frozen_originals(self):
+        """同一真实四 pass 世界证明后继正例及登记、材料、Plan 三类拒绝。"""
+        from dataclasses import replace
+        from tools.official_client_capture import claude_qualification_material_import as importer
+        from tools.official_client_capture import claude_qualification_material_source as material
+        from tools.official_client_capture import claude_tool_identity_policy as policy
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        from tools.official_client_capture import claude_upgrade_evolution as evolution
+        from tools.official_client_capture import claude_upgrade_vc as vc
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+        from tools.official_client_capture import codex_upgrade_wire_transition as transition
+        from tools.official_client_capture.tests import test_claude_real_delivery_integration as integration
+        from tools.official_client_control import delivery_execution as execution, receipts
+        from tools.official_client_control.canonical import canonical_sha256, sha256_bytes
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.qualification_material_import import validate_material_successor
+        from tools.official_client_control.sealed_gate_bindings import project_delivery_raw_bindings
+
+        # 首次 import 和原 Plan 形成之前，给合成 accept 接上合法的原四摘要。
+        # 之后只读这个固定 revision/baseline 原件，不能在后继阶段补造旧授权。
+        tree_policy = policy.load_policy(self.tree.path("official_client_capture/claude_tool_identity_policy_v2.json"))
+        original_evaluators = policy.evaluator_dependency_digests(self.tree.root, tree_policy)
+        q = self.configuration["candidate"]["qualification"]
+        parent_path = self.root / q["sealed_result_binding"]["path"]
+        parent = json_read(parent_path)
+        evaluation = {"schema_version": artifacts.EVALUATION_RUN_SCHEMA,
+            "campaign_id": q["campaign_id"], "candidate_id": q["candidate_id"],
+            "candidate_revision": parent["candidate_revision"], "evaluation_baseline": parent["evaluation_baseline"],
+            "derived": True, "evaluator": original_evaluators, "rules": [],
+            "checkpoint_head_sha256": None, "recorded_at_utc": "2026-08-18T02:30:00Z"}
+        evaluation["run_sha256"] = canonical_sha256(evaluation)
+        artifacts.validate_evaluation_run(evaluation)
+        evaluation_path = write(self.source_world.campaign,
+            "candidates/" + q["candidate_id"] + "/evaluation-run.json", evaluation)
+        parent["assertions"]["evaluation_run"] = {
+            "path": evaluation_path.relative_to(self.source_world.campaign).as_posix(),
+            "sha256": sha256_bytes(evaluation_path.read_bytes())}
+        write(self.root, parent_path.relative_to(self.root).as_posix(), parent)
+        q["sealed_result_binding"] = guard.binding(self.root, parent_path)
+        previous_path, previous_checkpoint = vc.replay_vc_checkpoint(self.source_world.campaign,
+            self.source_world.plan, "VC-4", revision=self.source_world.revision)
+        self.source_world.checkpoint("VC-5", parent_path, previous_path, previous_checkpoint)
+        predecessor_binding = self.prepare()
+        configuration = copy.deepcopy(self.configuration)
+        configuration.update(schema_version=integration.executor.MATERIAL_CONFIGURATION_SCHEMA,
+            qualification_materials_binding=predecessor_binding)
+
+        # 复用原文件现场、真实守卫来源和四个物理 pass；只接入本用例已验的
+        # QualificationSubjectWorld，不替换任何 Store、资格或 reader 校验器。
+        physical = integration.RealDeliveryIntegrationTests(methodName="runTest")
+        physical.tree = self.tree
+        self.addCleanup(physical.doCleanups)
+        self.addCleanup(self.tree.restore)
+        # 本唯一 UID 的物理世界也由旧夹具形成；递归目录创建只指定叶模式。
+        # 整个新世界形成窗口使用私有 umask，使全部中间目录出生即为 0700，
+        # 不按已失败路径逐个补 chmod；其他 UID 继续使用其原形成入口。
+        previous_umask = os.umask(0o077)
+        try:
+            with mock.patch.object(integration, "qualified_configuration_fixture",
+                    side_effect=lambda owner, tree: (self, configuration)):
+                physical.setUp()
+            physical._complete()
+        finally:
+            os.umask(previous_umask)
+        store = physical.store
+        plan_ref = physical.delivery["plan_ref"]
+        plan = physical.delivery["plan"]
+        facts = receipts.delivery_chain_state(store, plan["campaign_id"], plan["delivery_id"])
+        self.assertTrue(facts.complete())
+        self.assertEqual(len(facts.valid_refs(store)), 4)
+        self.assertEqual(receipts.delivery_receipts(store, plan["campaign_id"], plan_ref), [])
+        # 另一份合法 Plan 仍不能冒用原四事实；先在旧身份下封存，避免用坏 JSON
+        # 或当前工具登记缺失造成的早退代替原 Plan 绑定断言。
+        other_plan = copy.deepcopy(plan)
+        other_plan["plan_id"] += "-other"
+        other_plan["identity_sha256"] = canonical_sha256({key: value for key, value in other_plan.items() if key != "identity_sha256"})
+        other_plan_ref = store.seal_object("candidate_delivery_plan", other_plan)
+        original_paths = [store.object_path(plan_ref), self.root / physical.executor.context["configuration_ref"]["path"],
+            *[self.root / configuration[role]["qualification"]["sealed_result_binding"]["path"] for role in ("candidate", "rollback")],
+            *[path for path in (self.root / Path(predecessor_binding["path"]).parent).rglob("*") if path.is_file()]]
+        original_bytes = {path: path.read_bytes() for path in original_paths}
+        predecessor = json_read(self.root / predecessor_binding["path"])
+        old_reader = json_read(self.root / predecessor["reader_identity_binding"]["path"])
+
+        # 在隔离受管树中真实改变材料消费代码的原字节；四个 evaluator 与
+        # policy/wire 必须守恒，当前七身份由同一实际树重新计算。
+        changed_key = "official_client_control/qualification_material_import.py"
+        self.tree.write(changed_key, self.tree.path(changed_key).read_bytes() + "\n# 回归夹具：独立材料后继的受管工具演进。\n".encode())
+        current = receipts.current_tool_identity("claude")
+        self.assertNotEqual(current, old_reader["tool_identity"])
+        self.assertEqual({key: current[key] for key in ("policy_version", "policy_sha256", "wire_producer_sha256")},
+            {key: old_reader["tool_identity"][key] for key in ("policy_version", "policy_sha256", "wire_producer_sha256")})
+        self.assertEqual(policy.evaluator_dependency_digests(self.tree.root, tree_policy), original_evaluators)
+        full_identity = {**policy.compute_identity(tree_policy, self.tree.root),
+            "entries": [{"path": key, "sha256": value} for key, value in sorted(policy.managed_tree_digests(self.tree.root, tree_policy).items())],
+            "files_sha256": current["tool_files_sha256"]}
+        control_path = write(self.root, "control/material-successor-deployment.json",
+            {"schema_version": "official-client-managed-deploy/v1", "status": "passed", "client": "claude",
+             "identity": {key: value for key, value in current.items() if key != "client"},
+             "created_at_utc": "2026-10-12T01:00:00Z"})
+        control_binding = guard.binding(self.root, control_path)
+        manifest = self.source_world.manifest
+        receipt = {"schema_version": transition.EVOLUTION_SCHEMA, "index": 1,
+            "campaign_id": plan["campaign_id"], "campaign_manifest_sha256": sha256_bytes((self.source_world.campaign / "campaign.json").read_bytes()),
+            "previous_evolution_sha256": None, "from_summary": transition.identity_summary(manifest["tool_identity"]),
+            "to_summary": transition.identity_summary(full_identity), "to_identity": full_identity,
+            "to_evaluator_digests": original_evaluators,
+            "changes": {"paths_by_layer": {"evidence_semantics": [changed_key]}},
+            "impact": {"official": {}, "candidates": {}},
+            "bindings": {"deployment_receipt": {"path": str(control_path), "sha256": control_binding["sha256"],
+                "created_at_utc": "2026-10-12T01:00:00Z"}},
+            "approved_by": "synthetic-operator", "approved_at_utc": "2026-10-12T01:01:00Z"}
+        receipt["receipt_sha256"] = transition._fingerprint(receipt)
+        evolution_path = evolution.write_evolution(self.source_world.campaign, manifest, receipt)
+        registration = self.fixture.evolution_payload(approved_at_utc=receipt["approved_at_utc"])
+        registration["evolution_receipt"] = {"path": evolution_path.relative_to(self.source_world.campaign).as_posix(),
+            "sha256": sha256_bytes(evolution_path.read_bytes())}
+        registration_ref = store.seal_object("tool_evolution_registration", registration)
+        self.assertEqual(receipts.tool_evolutions(store, store.load_campaign(plan["campaign_id"]))[-1][0], registration_ref)
+
+        identity = worker.compute_gate_reader_identity(self.tree.root, formed_context={"fixture_only": True})
+        sources = []
+        for role in ("candidate", "rollback"):
+            provenance = {"fixture_contract": "qualified-gate-fixture/v1" if role == "candidate" else "explicit-no-gate-rollback/v1",
+                "formation_context": {"fixture_only": True}}
+            roots = ()
+            if role == "candidate":
+                roots = (material.freeze_root_capability(self.gate_root, "gate_evidence", authority=material.FIXTURE_AUTHORITY,
+                    reference_id="fixture-qualified-gate", reference_sha256=canonical_sha256(provenance),
+                    allowed_relative_paths=[path.relative_to(self.gate_root).as_posix() for path in sorted(self.gate_root.rglob("*")) if path.is_file()]),)
+            intake = material.VerifiedIntakeContext(material.FIXTURE_AUTHORITY, "regression_fixture", self.root,
+                self.tree.root, provenance, roots, identity, material._TOKEN)
+            sources.append(material.prepare_qualification_source(self.store, configuration[role]["qualification"], role=role, intake_context=intake))
+        def resolve(actual_store, qualification, reference, *, purpose):
+            self.assertIn(reference, sources)
+            self.assertEqual(reference.qualification, qualification)
+            material._check_four_roots(actual_store, qualification)
+            return reference
+        registrations = {(material.FIXTURE_AUTHORITY, purpose): resolve for purpose in material.PURPOSES}
+        with mock.patch.dict(material.QUALIFICATION_SOURCE_RESOLVERS, registrations), \
+                worker.gate_material_reader_scope(), \
+                mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls, \
+                delivery._delivery_lock(physical.context) as lock_fd:
+            # 当前登记完成后，在原交付锁内由真实准备入口取得来源。
+            # 后继关联尚未封存，该来源不能提前携带门禁投影。
+            original_source = physical.executor.read_material_successor_preparation_source(store, plan_ref=plan_ref)
+            self.assertIsInstance(original_source, execution.VerifiedSource)
+            self.assertIsNone(original_source.gate_projection)
+            prepared = importer.prepare_material_successor(store, sources, managed_data_root=self.root,
+                plan_ref=plan_ref, source=original_source, control_deployment_binding=control_binding, delivery_lock_fd=lock_fd)
+            projection = prepared["projection"]
+            source = projection.successor.source
+            replayed = validate_material_successor(store, prepared["successor_ref"], configuration, source,
+                purpose="formed_replay", plan_ref=plan_ref)
+            self.assertEqual(replayed.manifest(), projection.manifest())
+            self.assertGreater(calls.call_count, 0)
+            self.assertTrue(all(call.args[0].document["identity_sha256"] != old_reader["identity_sha256"] for call in calls.call_args_list))
+            self.assertNotEqual(prepared["successor_materials_binding"]["path"], predecessor_binding["path"])
+            successor = json_read(self.root / prepared["successor_materials_binding"]["path"])
+            self.assertEqual(json_read(self.root / successor["reader_identity_binding"]["path"])["tool_identity"], current)
+            for old, new in zip(predecessor["source_acquisition_bindings"], successor["source_acquisition_bindings"]):
+                self.assertEqual(json_read(self.root / old["binding"]["path"])["formation_context"],
+                    json_read(self.root / new["binding"]["path"])["formation_context"])
+            closed = project_delivery_raw_bindings(replace(source, gate_projection=replayed), [], gate_projection=replayed)
+            self.assertIn(projection.successor.object_binding, closed)
+            self.assertIn(predecessor_binding, closed)
+            self.assertIn(prepared["successor_materials_binding"], closed)
+            self.assertIn(guard.binding(self.root, store.object_path(registration_ref)), closed)
+            self.assertIn(control_binding, closed)
+            self.assertEqual({path: path.read_bytes() for path in original_bytes}, original_bytes)
+            # 沿现有文件现场边界检查正式完成准入与组包消费者；不另建世界，
+            # 不重跑四阶段，不用 JSON 或 mock 返回值代替当前门禁验真。
+            from tools.official_client_capture.tests import claude_typed_vc6_fixture as typed
+            control_path = write(self.root, "control/material-successor-file-scene.json", {
+                "schema_version": typed.CONTROL_SCHEMA, "fixture_only": True,
+                "formal_version_semantics_certified": False,
+                "context": dict(physical.executor.context), "failed_gates": [],
+            })
+            current_executor = typed.ControlledExecutor(configuration, physical.executor.context, control_path)
+            physical.executor = current_executor
+            def current_factory(name, actual_configuration, actual_context):
+                self.assertEqual(name, "arm64-isolated")
+                self.assertEqual(actual_configuration, configuration)
+                self.assertEqual(actual_context, current_executor.context)
+                return current_executor
+            with mock.patch.dict(delivery.ENVIRONMENT_EXECUTORS, {"arm64-isolated": current_factory}, clear=True):
+                current_chain = delivery._chain(physical.context, plan["delivery_id"])
+                admission = delivery._completed_delivery_admission(physical.context, current_executor,
+                    physical.delivery, current_chain, plan["observation_window_seconds"])
+                self.assertEqual(admission.plan_ref, plan_ref)
+                review = delivery._package_review(physical.context, physical.delivery, current_chain,
+                    completed_admission=admission)
+                self.assertIn(admission.report_binding, review["private_archive_manifest"]["entries"])
+                self.assertEqual(current_chain["valid_stage_refs"],
+                    delivery._chain(physical.context, plan["delivery_id"])["valid_stage_refs"])
+            self.assertEqual({path: path.read_bytes() for path in original_bytes}, original_bytes)
+            for label, path in (("实际登记原件", evolution_path),
+                    ("后继复制材料", self.root / successor["files"][0]["archive_binding"]["path"])):
+                raw = path.read_bytes()
+                try:
+                    path.write_bytes(raw + b"\n ")
+                    with self.subTest(original=label), self.assertRaises((ControlError, worker.ReaderError)):
+                        validate_material_successor(store, prepared["successor_ref"], configuration, source,
+                            purpose="formed_replay", plan_ref=plan_ref)
+                finally:
+                    path.write_bytes(raw)
+            with self.subTest(original="不同合法 Plan"), self.assertRaises(ControlError):
+                validate_material_successor(store, prepared["successor_ref"], configuration, source,
+                    purpose="formed_replay", plan_ref=other_plan_ref)
+            self.assertEqual(receipts.delivery_receipts(store, plan["campaign_id"], plan_ref), [])
+
+        # 本 UID 补核普通 sealed attempt 的真实 stat／重绑依赖；只验证局部闭集，
+        # 不把这里的两个小根或 dependency_covered 当成 full79 性能证据。
+        from tools.official_client_capture import codex_upgrade_evidence_manifest as boundary
+        from tools.official_client_capture.claude_upgrade_arm64_delivery_executor import _ProducerOriginals
+        from tools.official_client_control.qualification_material_import import (
+            _SuccessorReadSnapshot, _material_successor_sealed_boundary_dependencies,
+            _successor_dependency_metadata, _successor_sealed_stat_view)
+
+        def sealed_probe(label, *, rebind=False):
+            campaign = self.root / "inputs" / ("sealed-dependency-" + label)
+            payload = write(campaign, "evidence/nested/payload.json", {"label": label})
+            second = write(campaign, "evidence-second/payload.json", {"label": label, "root": 2})
+            evidence_roots = (payload.parent.parent, second.parent)
+            attempt_path = write(campaign, "attempts/a0/attempt.json", {"fixture_only": True})
+            manifest = boundary.build_evidence_manifest(evidence_roots,
+                checkpoint_path=attempt_path.parent / "scan-checkpoint.json")
+            manifest_path = write(campaign, "attempts/a0/evidence-manifest.json", manifest)
+            chain = []
+            if rebind:
+                metadata = payload.stat()
+                os.utime(payload, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1000000000))
+                receipt = boundary.build_boundary_rebind(manifest, manifest_path, evidence_roots,
+                    existing_rebinds=(), campaign_id=label, phase="candidate", candidate_id="c0",
+                    attempt_id="a0", operator="synthetic-operator")
+                write(campaign, "attempts/a0/evidence-manifest-rebind-01.json", receipt)
+                chain = boundary.load_boundary_rebinds(manifest_path, manifest)
+                self.assertEqual(chain, [receipt])
+            boundary.verify_manifest_boundary(manifest, evidence_roots, rebinds=chain)
+            originals = _ProducerOriginals(self.root)
+            for document in (predecessor, successor):
+                originals.add(document["reader_identity_binding"])
+            originals.add(predecessor_binding)
+            originals.add(prepared["successor_materials_binding"])
+            originals.add(guard.binding(self.root, manifest_path))
+            for index in range(1, len(chain) + 1):
+                originals.add(guard.binding(self.root,
+                    manifest_path.parent / f"evidence-manifest-rebind-{index:02d}.json"))
+            stage = {"sealed_evidence_manifest": {
+                "path": manifest_path.relative_to(campaign).as_posix(),
+                "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest()}}
+            resolved = _material_successor_sealed_boundary_dependencies(originals, campaign, stage, attempt_path)
+            self.assertIsNotNone(resolved)
+            selections, contract = resolved
+            originals._subject_dependency_roots = evidence_roots
+            originals._material_subject_selections = tuple(sorted(selections, key=lambda row: (str(row[0]), row[1])))
+            originals._material_subject_sealed_boundaries = (contract,)
+            selected_source = replace(source, bytes_by_path=originals)
+            snapshot = _SuccessorReadSnapshot(selected_source)
+            snapshot.capture_dependencies(configuration, projection.successor.facts)
+            self.assertTrue(snapshot.dependency_covered)
+            snapshot.revalidate_dependencies()
+            return campaign, payload, evidence_roots, manifest_path, originals, contract, snapshot
+
+        with self.subTest(sealed_boundary="真实清单和准确重绑链"):
+            campaign, payload, roots, manifest_path, originals, contract, snapshot = sealed_probe("positive", rebind=True)
+            self.assertEqual(contract["rebind_names"], ("evidence-manifest-rebind-01.json",))
+            for path, _prefix in contract["roots"]:
+                identity = snapshot.dependencies[(str(path), None, "sealed-boundary")][0]
+                self.assertEqual(len(identity), 9)
+                self.assertEqual(_successor_sealed_stat_view(identity)["nlink"], path.stat().st_nlink)
+            # 不匹配原 REBIND_RE 的兄弟文件不进入选择，合法嵌套空目录也不进入 stat 清单。
+            write(campaign, "attempts/a0/evidence-manifest-rebind-note.json", {"unrelated": True})
+            write(campaign, "attempts/a0/unrelated.json", {"unrelated": True})
+            guard.private_directory(payload.parent / "empty")
+            snapshot.revalidate_dependencies()
+            snapshot.finish()
+
+        for label in ("file-stat", "root-stat", "nlink", "matching-rebind", "missing-rebind"):
+            with self.subTest(sealed_boundary=label):
+                campaign, payload, roots, manifest_path, originals, contract, snapshot = sealed_probe(label, rebind=True)
+                if label == "file-stat":
+                    metadata = payload.stat()
+                    os.utime(payload, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1000000000))
+                elif label == "root-stat":
+                    metadata = roots[0].stat()
+                    os.utime(roots[0], ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1000000000))
+                elif label == "nlink":
+                    os.link(payload, campaign / "hardlink-outside-boundary.json")
+                    identity = _successor_dependency_metadata(payload, selection_kind="sealed-boundary")[0]
+                    self.assertEqual(identity[-1], 2)
+                elif label == "matching-rebind":
+                    # 新增准确匹配项即失效；内容不能被热层擅自当成已批准的新链。
+                    write(campaign, "attempts/a0/evidence-manifest-rebind-02.json", {"unapproved": True})
+                else:
+                    (manifest_path.parent / "evidence-manifest-rebind-01.json").unlink()
+                with self.assertRaises(ControlError):
+                    snapshot.revalidate_dependencies()
+
+        with self.subTest(sealed_boundary="首轮捕获不能吸收未验重绑"):
+            campaign, payload, roots, manifest_path, originals, contract, snapshot = sealed_probe("capture-gap")
+            write(campaign, "attempts/a0/evidence-manifest-rebind-01.json", {"unapproved": True})
+            changed = _SuccessorReadSnapshot(replace(source, bytes_by_path=originals))
+            changed.capture_dependencies(configuration, projection.successor.facts)
+            self.assertFalse(changed.dependency_covered)
+
+        with self.subTest(sealed_boundary="首轮捕获不能吸收 stat 漂移"):
+            campaign, payload, roots, manifest_path, originals, contract, snapshot = sealed_probe("capture-stat")
+            metadata = payload.stat()
+            os.utime(payload, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1000000000))
+            changed = _SuccessorReadSnapshot(replace(source, bytes_by_path=originals))
+            changed.capture_dependencies(configuration, projection.successor.facts)
+            self.assertFalse(changed.dependency_covered)
+
     def test_import_reuses_only_reader_and_still_rebuilds_full_subject(self):
         from dataclasses import replace
         from tools.official_client_control.delivery_execution import VerifiedSource
@@ -896,6 +1239,34 @@ class MaterialImportProofTests(unittest.TestCase):
             self.assertEqual(first.subject_projections, second.subject_projections)
             self.assertEqual(calls.call_count, 1)
             self.assertEqual(subjects.call_count, 2)
+
+        # 同一 UID 消费真实文件 runtime；首次材料投影必须交到报告尾验，
+        # 每次检查 reader 一次而 subject 两次，下一次调用不能继承旧作用域。
+        from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        from tools.official_client_capture.tests.test_claude_real_delivery_integration import QualifiedFileRuntime
+        configuration = copy.deepcopy(self.configuration)
+        configuration.update(schema_version=executor.MATERIAL_CONFIGURATION_SCHEMA,
+                             qualification_materials_binding=binding)
+        configuration_path = self.root / "inputs/reader-scope-configuration.json"
+        guard.write_json_once(configuration_path, configuration)
+        qualification = configuration["candidate"]["qualification"]
+        context = {"campaign_id": qualification["campaign_id"], "candidate_id": qualification["candidate_id"],
+                   "delivery_id": "reader-scope-d0", "segment": "dr0", "run_nonce": "reader-scope-check",
+                   "data_root": str(self.root), "configuration_ref": guard.binding(self.root, configuration_path)}
+        runtime = QualifiedFileRuntime(configuration, context)
+        with mock.patch.object(worker, "run_gate_material_reader", wraps=worker.run_gate_material_reader) as calls, \
+                mock.patch.object(material, "qualification_gate_subject", wraps=material.qualification_gate_subject) as subjects, \
+                mock.patch.object(guard, "GuardClient", side_effect=AssertionError("资格只读检查不得启动守卫")):
+            first_report = runtime.check_qualification()
+            self.assertEqual(calls.call_count, 1)
+            self.assertEqual(subjects.call_count, 2)
+            saved = runtime._qualification_source.gate_projection
+            self.assertTrue(saved.reader_replays)
+            self.assertFalse(saved.reader_replays[0].scope_token.active)
+            self.assertEqual(runtime.check_qualification(), first_report)
+            self.assertEqual(calls.call_count, 2)
+            self.assertEqual(subjects.call_count, 4)
 
     def test_import_reader_result_cannot_bypass_current_tool_admission(self):
         from dataclasses import replace
