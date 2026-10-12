@@ -63,11 +63,11 @@
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }
 # 测试树与字节码缓存默认放在数据根之外、跨轮次固定的目录：Go 在不加 -trimpath 时按包所在目录做构建缓存的键，测试树
 # 路径每轮都变的话，后端三组测试与 lint 每轮第一次都要冷编译整个 backend。记录（主体目录）仍按轮次放在 $RUNROOT 下。
 # 单元执行记录库同样在数据根之外、跨轮次固定（承接要跨运行找记录）。
-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; PRE_A3_STAGING_PARENT=""; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false
 AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=(); AUDIT_POLICY_ARGS=()
 WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0; REQUIRE_DEPLOYED_ALL=false; DEPLOY_OTHERS=""; DEPLOY_OTHERS_SOURCE=()
 FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=(); GO_WARMUP=auto
@@ -98,6 +98,7 @@ while [ "$#" -gt 0 ]; do
     --policy-activation) POLICY_ACTIVATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-certification) PRE_A3_CERTIFICATION="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pre-a3-mode) PRE_A3_SOURCE="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --pre-a3-staging-parent) PRE_A3_STAGING_PARENT="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --out) OUT="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --work) WORK="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --pycache) PYC="${2:-}"; shift 2 || { usage; exit 2; } ;;
@@ -381,8 +382,11 @@ if [ "$PROFILE" = entry ] || [ "$PROFILE" = pre-a3 ]; then
   # 数据根才有、或不保证与测试树一致的输入（冻结台账、录制数据、alpine 镜像）由门禁清单生成时在数据根算好。
   plan_pre_a3_run() {
     PRE_A3_MODE=run
+    # 正式规划的场景父目录：未给时为本轮数据根下的固定父目录；给出时须是绝对路径，三链记录根由它派生（CLAUDE_RECORDED_CHAIN_RECORD_DIR）。
+    PRE_A3_PARENT="${PRE_A3_STAGING_PARENT:-$D/staging/pre-a3-scenarios}"
+    if [[ "$PRE_A3_PARENT" != /* ]]; then echo "ENTRY_GATES_ABORTED：--pre-a3-staging-parent 必须是绝对路径：${PRE_A3_PARENT}" >&2; exit 3; fi
     UNITS="$OUT/pre-a3-units.json"
-    PA3_PARENT=$(python3 -m "$CT_PRE_A3_MODULE" plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} \
+    PA3_PARENT=$(python3 -m "$CT_PRE_A3_MODULE" plan --staging-parent "$PRE_A3_PARENT" --output "$UNITS" ${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"} \
       | python3 -c 'import json, sys; print(json.load(sys.stdin)["staging_parent"])')
     PRE_A3_ARGS=(--pre-a3-units "$UNITS" --pre-a3-data-root "$D" --pre-a3-env "PYTHONPATH=." --pre-a3-env "CODEX_UPGRADE_IDENTITY_MEMO=$CODEX_UPGRADE_IDENTITY_MEMO")
     # 工程历史来源只从本轮安全参数文件取固定白名单；干净 EXEC_ENV 不继承任意 CLAUDE_*。
