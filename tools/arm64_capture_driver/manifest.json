@@ -160,9 +160,9 @@
     },
     {
       "path": "driver/entry-gates.sh",
-      "sha256": "e1dca4ab9830e45495aecbcc2230bc1cede25e97168a88a313c0dd24941e34b7",
+      "sha256": "b19f8ff76b6ab1f40e3b76c678415dfb26e4c5945dd81f4f44fbd6ed7d788540",
       "mode": "0700",
-      "bytes": 46841
+      "bytes": 47441
     },
     {
       "path": "driver/entry-preflight.sh",
@@ -184,9 +184,9 @@
     },
     {
       "path": "driver/entry_gates.py",
-      "sha256": "d174726590512efe830cd1d145a6ddb0d73392b00d0faabb0f808c13c8a87c3e",
+      "sha256": "a0cec0364bd32ea89b4d8d8706cf68655c81acb0d0f63244ff2fd71b828793be",
       "mode": "0700",
-      "bytes": 99690
+      "bytes": 99666
     },
     {
       "path": "driver/entry_housekeeping.py",
@@ -681,5 +681,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "3169b79ed08636802522c5507fc99d356e82f35f7aeae43cd0acbecd00e09fb1"
+  "manifest_sha256": "fd59f1f2c15a5061b5fea2fc55e782897b3b7fbc555886a5e08f7aa8d9948ee5"
 }
