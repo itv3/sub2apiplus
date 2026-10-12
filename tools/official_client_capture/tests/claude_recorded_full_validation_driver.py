@@ -1348,11 +1348,100 @@ def _recorded_evaluation_state(state_path: Path, digest: str, campaign: Path) ->
                          resume_actions=True)
 
 
-def _verify_completed_stage(campaign: Path, phases: tuple[str, ...], result: Any) -> None:
-    """完成阶段只有当前真实checkpoint、正式消费者与Store仍闭合才能跳过动作。"""
+def _replay_completed_stage_store(campaign: Path, manifest: dict[str, Any], phases: tuple[str, ...]) -> None:
+    """原交付 prepare 尚未形成 Plan 时，只核前序已完成的验收闭包。
+
+    交付会先封存配置，再封存 Plan；中断窗口中的配置尚无归属根。它不能
+    被改签为已通过的完整 Store，也不能阻止原动作补齐 Plan。只有原 VC-6
+    started、原 VC-5 接受停点和固定配置仍一致、全 Store 没有 Plan 或交付
+    事实时，才用现有四根资格消费者核前序。普通阶段、后期交付及 VC-6
+    完成检查继续完整重放；最终完整 Store 检查也保持原调用。
+    """
     from tools.official_client_capture import claude_upgrade as upgrade
+    from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+    from tools.official_client_capture import claude_upgrade_delivery as delivery
+    from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+    from tools.official_client_capture import claude_upgrade_store
+    from tools.official_client_capture.tests import claude_fault_chain_world as stops
+    from tools.official_client_capture.tests import claude_typed_vc6_fixture as typed
     from tools.official_client_control.store import ControlStore
-    from tools.official_client_capture.tests.claude_fault_chain_world import replay_read_only_store
+
+    active = _SUCCESSOR.get()
+    data = active["data"]
+    store = ControlStore.open_read_only(campaign / "control-store")
+    pending = stops.load_state("recorded-full-step:VC6")
+    if "VC-6" in phases or pending is None or pending.get("status") != "started":
+        stops.replay_read_only_store(store, external_root=data)
+        return
+    identity = {"data": data, "source_state": active["source_state"], "intent": None}
+    if any(pending.get(key) != value for key, value in identity.items()):
+        raise replay.ReplayError("前序重验的原 VC-6 停点意图漂移")
+    saved_typed = stops.load_state("typed-vc6:" + str(campaign.resolve()))
+    if saved_typed is None:
+        stops.replay_read_only_store(store, external_root=data)
+        return
+
+    with stops._read_only_fact_index(store) as indexed:
+        def prepare_window() -> tuple[bool, tuple[str, ...]]:
+            """全 Store 的窗口边界须前后实读；事实尾验不能发现仅封存的新 Plan。"""
+            names = []
+            no_delivery = not indexed.list_object_refs("candidate_delivery_plan")
+            for path in sorted((indexed.root / "campaigns").iterdir()):
+                if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+                    raise replay.ReplayError("交付 prepare 窗口的 Campaign 路径不可信")
+                indexed.load_campaign(path.stem)
+                names.append(path.stem)
+                if indexed.list_facts(path.stem, "deployment"):
+                    no_delivery = False
+            return no_delivery, tuple(names)
+
+        no_delivery, campaign_names = prepare_window()
+        if not no_delivery:
+            stops.replay_read_only_store(indexed, external_root=data)
+            indexed.verify_fact_snapshots()
+            return
+        accepted = stops.load_state("recorded-full-step:VC5-accept")
+        if (accepted is None or accepted.get("status") != "complete"
+                or any(accepted.get(key) != value for key, value in identity.items())):
+            raise replay.ReplayError("交付 prepare 窗口缺少同一原 VC-5 完成停点")
+        for binding in accepted["bindings"]:
+            source.bound(binding)
+        current_accept = upgrade._load_stage_result(campaign, "accept", CANDIDATE)
+        if current_accept != accepted["result"]["acceptance"]:
+            raise replay.ReplayError("原 VC-5 接受停点与当前正式结果不一致")
+        if (saved_typed["campaign"] != campaign.resolve() or saved_typed["data"] != data
+                or saved_typed["candidate_id"] != CANDIDATE
+                or saved_typed["control_path"] != data / "control/recorded-delivery-control.json"):
+            raise replay.ReplayError("原交付 prepare 配置不属于同一 Campaign、候选或数据根")
+        control = typed._control(saved_typed["control_path"])
+        if (control["context"] != saved_typed["context"]
+                or control["context"]["data_root"] != str(data)
+                or control["context"]["configuration_ref"] != saved_typed["configuration_binding"]):
+            raise replay.ReplayError("原交付 prepare 配置上下文或绑定改变")
+        configuration = executor.validate_configuration(guard.read_json(
+            guard.check_binding(data, saved_typed["configuration_binding"])))
+        store_campaign = indexed.load_campaign(manifest["campaign_id"])
+        claude_upgrade_store.require_store_campaign_matches_plan(manifest, store_campaign)
+        handoff = delivery._vc5_handoff(indexed, store_campaign, CANDIDATE)
+        qualification = configuration["candidate"]["qualification"]
+        expected = {"store_relative": store.root.relative_to(data).as_posix(), "external_root_relative": ".",
+            "campaign_id": manifest["campaign_id"], "candidate_id": CANDIDATE,
+            "candidate_ref": handoff["candidate_ref"], "build_receipt_ref": handoff["candidate_build_receipt_ref"],
+            "validation_ref": handoff["validation_completed_ref"], "acceptance_ref": handoff["acceptance_ref"]}
+        if (any(qualification.get(key) != value for key, value in expected.items())
+                or configuration["candidate"]["image_digest"] != handoff["candidate_image_digest"]
+                or configuration["candidate"]["runtime_profile_sha256"] != handoff["runtime_profile_sha256"]):
+            raise replay.ReplayError("原交付 prepare 的四根、镜像或 Profile 与当前 VC-5 不一致")
+        delivery._vc5_entry_replay(campaign, manifest, CANDIDATE, 1, handoff)
+        executor.replay_qualification_graph(indexed, qualification, data, data)
+        if prepare_window() != (True, campaign_names):
+            raise replay.ReplayError("前序资格重验期间交付 prepare 窗口发生变化")
+        indexed.verify_fact_snapshots()
+
+
+def _verify_completed_stage(campaign: Path, phases: tuple[str, ...], result: Any) -> None:
+    """完成阶段须重验原批次、checkpoint、正式消费者和对应 Store 闭包。"""
+    from tools.official_client_capture import claude_upgrade as upgrade
 
     _verify_stage_batches(campaign, result)
     manifest = upgrade.load_campaign_manifest(campaign)
@@ -1360,8 +1449,7 @@ def _verify_completed_stage(campaign: Path, phases: tuple[str, ...], result: Any
     for phase in phases:
         upgrade._replay_vc_checkpoint(campaign, plan, phase,
             revision=1 if phase in upgrade.CANDIDATE_VC_PHASES else None)
-    store = ControlStore.open_read_only(campaign / "control-store")
-    replay_read_only_store(store, external_root=_SUCCESSOR.get()["data"])
+    _replay_completed_stage_store(campaign, manifest, phases)
     if "VC-3" in phases:
         upgrade._load_stage_result(campaign, "classify")
         upgrade._load_stage_result(campaign, "stage-profile")

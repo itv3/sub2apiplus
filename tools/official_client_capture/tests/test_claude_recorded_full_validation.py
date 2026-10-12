@@ -414,6 +414,194 @@ class RecordedFullPreparationTests(unittest.TestCase):
         self._assert_recorded_assertion_timeout_selection()
         self._assert_recorded_compiled_action_readers()
         self._assert_vc6_completed_source_consumers()
+        self._assert_vc6_configuration_plan_gap_consumers()
+
+    def _assert_vc6_configuration_plan_gap_consumers(self) -> None:
+        """沿原 UID 核未 Plan 窗口、资格闭包及原入口形成 Plan 后的全 Store。
+
+        两份候选由既有 SyntheticCampaign.strict_validate 真实形成；只在构建输入
+        接缝为主候选加入宿主元数据和三件制品，不替换归属、资格或重放结论。
+        typed 独立文件守卫仅 freeze；不派发交付阶段，不登记完整升级链通过。
+        """
+        from tools.official_client_capture import claude_upgrade_arm64_delivery_executor as executor
+        from tools.official_client_capture import claude_upgrade_delivery as delivery
+        from tools.official_client_capture import claude_upgrade_delivery_recovery_guard as guard
+        from tools.official_client_capture.tests import claude_fault_chain_world as stops
+        from tools.official_client_capture.tests import claude_typed_vc6_fixture as typed
+        from tools.official_client_capture.tests import test_claude_real_delivery_integration as integration
+        from tools.official_client_control import delivery_execution as execution, qualification_bindings
+        from tools.official_client_control.canonical import canonical_sha256
+        from tools.official_client_control.errors import ControlError
+        from tools.official_client_control.store import ControlStore
+        from tools.official_client_control.tests.fixtures import ManagedToolTree, SyntheticCampaign
+        from tools.official_client_control.tests.test_store_binding_projection import HOST_METADATA
+
+        temporary = tempfile.TemporaryDirectory(prefix="store-gap-", dir="/private/tmp")
+        self.addCleanup(temporary.cleanup)
+        tree = ManagedToolTree(Path(temporary.name) / "managed")
+        original_input = integration.DeliveryCampaign.candidate_build_input
+
+        def build_input(fixture, tag="strict"):
+            value = original_input(fixture, tag)
+            if tag != "strict":
+                return value
+            parameters = {"schema_version": qualification_bindings.STRICT_BUILD_PARAMETERS_SCHEMA,
+                "binary": copy.deepcopy(HOST_METADATA),
+                "frontend": {"builder": {"receipt": copy.deepcopy(HOST_METADATA)}}}
+            value["build_identity"].update(parameters=parameters, parameters_sha256=canonical_sha256(parameters))
+            entries = []
+            for role in sorted(qualification_bindings.STRICT_ARTIFACT_ROLES):
+                binding = fixture._write_external("artifacts/" + role, ("真实制品夹具：" + role).encode())
+                (fixture.external_root / binding["path"]).chmod(0o755)
+                entries.append({"role": role, "binding": binding, "source_sha256": "7" * 64})
+            value["artifact_inventory"] = {"entries": entries, "file_count": len(entries),
+                "total_bytes": sum(row["binding"]["bytes"] for row in entries),
+                "inventory_sha256": canonical_sha256(entries)}
+            return value
+
+        with tree.active():
+            # 原组合夹具保留当前策略和真实材料准入；不运行它的 policy12 类初始化。
+            with mock.patch.object(integration.DeliveryCampaign, "candidate_build_input", new=build_input):
+                helper, configuration = integration.qualified_configuration_fixture(self, tree)
+            fixture, data = helper.fixture, helper.root
+            os.chown(data, -1, os.getegid())
+            self.assertIsInstance(fixture, SyntheticCampaign)
+            self.assertGreaterEqual(fixture.tool_identity["policy_version"], 4)
+            reader = ControlStore.open_read_only(fixture.store.root)
+            qualification = configuration["candidate"]["qualification"]
+            candidate_id = qualification["candidate_id"]
+            build = reader.load_receipt(qualification["build_receipt_ref"])
+            entries = build["artifact_inventory"]["entries"]
+            self.assertEqual({row["role"] for row in entries}, qualification_bindings.STRICT_ARTIFACT_ROLES)
+            self.assertEqual(build["build_identity"]["parameters"]["binary"], HOST_METADATA)
+
+            # 沿现有完整 Store 专项的统一根接线，只复制已生产原字节与权限；不覆盖冲突路径。
+            for path in sorted(fixture.external_root.rglob("*")):
+                if path.is_file():
+                    target = data / path.relative_to(fixture.external_root)
+                    if target.exists():
+                        self.assertEqual(target.read_bytes(), path.read_bytes())
+                        self.assertEqual(target.stat().st_mode & 0o777, path.stat().st_mode & 0o777)
+                    else:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with target.open("xb") as stream:
+                            stream.write(path.read_bytes())
+                        target.chmod(path.stat().st_mode & 0o777)
+            campaign = data / "evidence/campaigns" / qualification["campaign_id"]
+            configuration_path = campaign / "store-gap-configuration.json"
+            guard.write_json_once(configuration_path, configuration)
+            context = {"data_root": str(data), "campaign_id": qualification["campaign_id"],
+                "candidate_id": candidate_id, "delivery_id": candidate_id + "-d1", "segment": "dr0",
+                "run_nonce": candidate_id + "-d1-dr0", "configuration_ref": guard.binding(data, configuration_path)}
+            state = guard.read_json(data / "state.json")
+            state["environment"].update(architecture="linux/arm64", configuration_sha256=canonical_sha256(configuration),
+                environment_sha256=canonical_sha256(integration.fixture_projection()))
+            guard.atomic_json(data / "state.json", state)
+            control_path = data / "store-gap-control.json"
+            guard.write_json_once(control_path, {"schema_version": typed.CONTROL_SCHEMA, "fixture_only": True,
+                "formal_version_semantics_certified": False, "context": context,
+                "calls": str(data / "store-gap-calls.jsonl"), "physical_calls": str(data / "store-gap-physical.jsonl"),
+                "failures": [], "kill_at": None, "crash_at": None, "failed_gates": []})
+            current = object.__new__(typed.TypedDeliveryFixture)
+            current.__dict__.update(campaign=campaign, candidate_id=candidate_id, data=data,
+                configuration=configuration, context=context, control_path=control_path,
+                process=None, recorded_pid=None, saved_guard_identity=None, restored_guard=False, retained=False)
+            self.addCleanup(current.close)
+            store_campaign = reader.load_campaign(qualification["campaign_id"])
+            handoff = delivery._vc5_handoff(fixture.store, store_campaign, candidate_id)
+            revision = reader.load_fact(qualification["candidate_ref"])["formed_under"]["candidate_revision"]
+            # 外围任务停点授权及 VC5 entry 由主修复接线；此处不伪造入口证明，直接隔离 Store 消费层。
+            read_context = delivery.DeliveryContext(campaign_dir=campaign, manifest=helper.source_world.manifest,
+                candidate_id=candidate_id, revision=revision, store=fixture.store, campaign=store_campaign,
+                ledger_dir=data / "store-gap-ledger", data_root=data, handoff=handoff, entry={})
+
+            def graph():
+                return executor.replay_qualification_graph(reader, qualification, fixture.external_root, data)
+
+            def full():
+                return stops.replay_read_only_store(reader, external_root=data)
+
+            def originals():
+                return {path: (path.read_bytes(), path.stat().st_mode & 0o777)
+                        for path in data.rglob("*") if path.is_file()}
+
+            with current:
+                live = executor.create_executor(typed.EXECUTOR_NAME, configuration, context)
+                window = configuration["limits"]["observation_window_seconds"]
+                snapshot = delivery._freeze(read_context, live, typed.EXECUTOR_NAME, context["delivery_id"], window)
+                configuration_payload = delivery._typed_manifest(read_context,
+                    context["delivery_id"] + "-configuration", "configuration", snapshot["cores"]["configuration"])
+                configuration_ref = read_context.session.seal_object("operational_evidence", configuration_payload)
+                self.assertEqual(reader.list_object_refs("candidate_delivery_plan"), [])
+                before = originals()
+                with self.assertRaisesRegex(ControlError, "根内规范相对路径"):
+                    full()
+                self.assertEqual(originals(), before)
+                opened, verify = [], reader._verify_external_binding
+
+                def record(root, binding):
+                    opened.append(copy.deepcopy(binding))
+                    return verify(root, binding)
+
+                with mock.patch.object(reader, "_verify_external_binding", side_effect=record):
+                    qualified = graph()
+                self.assertEqual(qualified["result"], "pass")
+                self.assertEqual(qualified["schema_version"], qualification_bindings.REPLAY_SCHEMA)
+                self.assertEqual(qualified["qualification_roots"], {key: qualification[key]
+                    for key in qualification_bindings.ROOT_FIELDS})
+                self.assertNotIn(configuration_ref, qualified["object_refs"])
+                self.assertIn(qualification["build_receipt_ref"], qualified["receipt_refs"])
+                self.assertNotIn(HOST_METADATA, opened)
+                for row in entries:
+                    self.assertIn(row["binding"], opened)
+                self.assertEqual(len(qualified["binding_projection"]["artifact_file_requirements"]), 3)
+                self.assertEqual(originals(), before)
+                # 使用同一冻结 snapshot 和原生产入口自然补齐六种输入及合法 Plan v2。
+                opened_delivery = delivery._open_typed_delivery(read_context, 1, snapshot, window)
+                self.assertEqual(opened_delivery["plan"]["schema_version"], execution.PLAN_V2)
+                self.assertEqual(opened_delivery["plan"]["executor_configuration_ref"], configuration_ref)
+                self.assertEqual(reader.list_object_refs("candidate_delivery_plan"), [opened_delivery["plan_ref"]])
+                completed = originals()
+                first, second = full(), full()
+                self.assertEqual((first["result"], first["external_verified"]), ("passed", True))
+                self.assertEqual(first, second)
+                self.assertTrue(any(row["parent_ref"] == qualification["build_receipt_ref"]
+                    and row["domain_pointer"] == "/build_identity/parameters"
+                    for row in first["binding_projection"]["parent_domains"]))
+                self.assertEqual(len(first["binding_projection"]["artifact_file_requirements"]), 3)
+                self.assertEqual(originals(), completed)
+                self.assertEqual(typed.read_calls(control_path, physical=True), [])
+
+                # 原件篡改必须重新拒绝；每个负例只改本短验夹具，恢复后再真实完整重放。
+                receipt_path = reader.receipt_path(qualification["build_receipt_ref"])
+                fact_ref = qualification["validation_ref"]
+                fact_path = reader.root / "facts" / fact_ref["campaign_id"] / fact_ref["dimension"] / (
+                    f"{fact_ref['sequence']:08d}-{fact_ref['sha256']}.json")
+                artifact = fixture.external_root / next(row["binding"]["path"] for row in entries if row["role"] == "sub2api")
+                for label, path, change in (("制品原字节", artifact, "bytes"), ("制品0755权限", artifact, "mode"),
+                                           ("构建收据原字节", receipt_path, "bytes"), ("完整事实链原字节", fact_path, "bytes")):
+                    with self.subTest(store_gap_drift=label):
+                        raw, mode = path.read_bytes(), path.stat().st_mode & 0o777
+                        try:
+                            if change == "mode":
+                                path.chmod(0o600)
+                            else:
+                                path.write_bytes(raw + b" ")
+                            with self.assertRaises((ControlError, guard.GuardError)):
+                                graph()
+                            with self.assertRaises((ControlError, guard.GuardError)):
+                                full()
+                        finally:
+                            path.write_bytes(raw)
+                            path.chmod(mode)
+                self.assertEqual(full()["result"], "passed")
+                self.assertEqual(originals(), completed)
+                self.assertEqual(typed.read_calls(control_path, physical=True), [])
+            self.assertIsNone(current.stack)
+            self.assertFalse(current.process.is_alive())
+            # 退出原来源栈后重新消费不能承接上次通过；这里不新建或追认守卫身份。
+            with self.assertRaises((ControlError, guard.GuardError)):
+                full()
 
     def _assert_vc6_completed_source_consumers(self) -> None:
         """原 UID 实跑驱动收尾和 typed 来源消费；不登记七阶段或物理交付通过。
