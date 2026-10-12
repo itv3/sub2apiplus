@@ -117,10 +117,10 @@ def _read_bound(source: Any, binding: Mapping[str, Any]) -> bytes:
     return _source_bytes(source, binding)
 
 
-def _subject_artifact_requirements(store: Any, data_root: Path, qualification: Mapping[str, Any],
+def _subject_file_requirements(store: Any, data_root: Path, qualification: Mapping[str, Any],
                                    bindings: list[dict[str, Any]], projections: list[Any],
-                                   read_parent: Callable[[Mapping[str, Any]], bytes]) -> dict[str, dict[str, Any]]:
-    """只将已验 subject 的严格构建制品要求转成数据根内的精确绑定。
+                                   read_parent: Callable[[Mapping[str, Any]], bytes]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """由已验构建父分别导出严格制品和整树源码的精确读取要求。
 
     活父投影先核原件、元数据域和坐标；既有库存合同仍负责判定严格三制品，
     不按文件名或嵌套 schema 放宽权限。返回项必须同时在父投影和真实读集中。
@@ -135,7 +135,7 @@ def _subject_artifact_requirements(store: Any, data_root: Path, qualification: M
             raise ControlError("subject 制品读集对同一路径绑定不同字节")
     external_relative = qualification["external_root_relative"]
     base = "." if external_relative == "." else validate_relative_path(external_relative, "subject.artifact_root")
-    requirements = {}
+    requirements, source_requirements = {}, {}
     for projection in projections:
         if type(projection) is not VerifiedQualificationSubjectProjection:
             raise ControlError("subject 制品要求缺原 reader 的准确父投影类型")
@@ -169,7 +169,37 @@ def _subject_artifact_requirements(store: Any, data_root: Path, qualification: M
                 raise ControlError("subject 严格制品不在已验父投影及真实绑定闭集")
             if requirements.setdefault(row["path"], row) != row:
                 raise ControlError("subject 严格制品同路径要求不同字节")
-    return requirements
+        if projection.source_root_relative is None and not projection.source_file_requirements:
+            continue
+        # 精确读集必须复算同一构建父的整树身份；路径前缀和外部 JSON 均不能授模式。
+        from tools.official_client_capture import claude_upgrade as upgrade
+        document = parse_json_bytes(raw)
+        source_root = validate_relative_path(projection.source_root_relative, "subject.source_root")
+        parameters_root = document["build_identity"]["parameters"].get("source", {}).get("root")
+        if (reference != qualification["build_receipt_ref"] or parameters_root != str(data_root / source_root)
+                or not projection.source_file_requirements):
+            raise ControlError("subject 源码模式缺同一资格构建父的精确源码根")
+        entries, current_requirements = [], {}
+        for binding, mode in projection.source_file_requirements:
+            row = dict(validate_external_binding(dict(binding), "subject.source_binding"))
+            path = Path(row["path"])
+            if not path.is_relative_to(Path(source_root)) or path == Path(source_root):
+                raise ControlError("subject 源码绑定越过原整树根")
+            relative = path.relative_to(source_root)
+            if (any(part in upgrade.SKIP_DIRECTORIES for part in relative.parts)
+                    or type(mode) is not int or mode not in {0o400, 0o600, 0o644, 0o755}
+                    or known.get(row["path"]) != row or row["path"] in current_requirements
+                    or row["path"] in requirements):
+                raise ControlError("subject 源码要求不在真实整树读集或与严格制品分类冲突")
+            entries.append({"path": relative.as_posix(), "size": row["bytes"], "sha256": row["sha256"]})
+            current_requirements[row["path"]] = {"binding": row, "mode": mode}
+        entries.sort(key=lambda row: Path(row["path"]))
+        if upgrade._fingerprint({"entries": entries}) != document["source_identity"]["source_tree_sha256"]:
+            raise ControlError("subject 源码模式读集不是同一构建父的完整整树")
+        for path, requirement in current_requirements.items():
+            if source_requirements.setdefault(path, requirement) != requirement:
+                raise ControlError("subject 源码同路径要求不同模式或字节")
+    return requirements, source_requirements
 
 
 def material_worker_spec(identity: Any, roots: list[dict[str, Any]], files: list[dict[str, Any]],
@@ -502,9 +532,11 @@ def _validate_material_import(store: Any, import_binding: Mapping[str, Any], sou
             read_bindings=subject_bindings, read_projections=current_projections)
         subject_projections.extend(current_projections)
         if type(source.bytes_by_path) is _SuccessorReadSnapshot:
-            source.bytes_by_path._register_subject_artifacts(_subject_artifact_requirements(store,
+            artifacts, sources = _subject_file_requirements(store,
                 source.trusted_data_root, q, subject_bindings, current_projections,
-                lambda binding: _read_bound(source, binding)))
+                lambda binding: _read_bound(source, binding))
+            source.bytes_by_path._register_subject_artifacts(artifacts)
+            source.bytes_by_path._register_subject_sources(sources)
         for binding in subject_bindings:
             # 对照来源能力的精确原字节，回传既有归档列表；形成期重放
             # 不得用当前磁盘的同名材料掩盖缺失或不同的历史原件。
@@ -745,6 +777,7 @@ class _SuccessorReadSnapshot(Mapping[str, bytes]):
         self.records: dict[str, tuple[bytes, Any]] = {}
         self.metadata_records: dict[tuple[str, str], Any] = {}
         self._artifact_bindings: dict[str, dict[str, Any]] = {}
+        self._source_requirements: dict[str, dict[str, Any]] = {}
         self.dependencies: dict[Any, Any] = {}
         self.dependency_covered = False
 
@@ -752,12 +785,27 @@ class _SuccessorReadSnapshot(Mapping[str, bytes]):
         """登记本次已验父合同的准确制品；已观察的模式或绑定不能重设。"""
         for path, binding in requirements.items():
             row = dict(validate_external_binding(dict(binding), "material.successor.artifact_binding"))
-            if path != row["path"] or self._artifact_bindings.setdefault(path, row) != row:
+            if (path != row["path"] or path in self._source_requirements
+                    or self._artifact_bindings.setdefault(path, row) != row):
                 raise ControlError("材料后继严格制品要求存在同坐标冲突")
             previous = self.records.get(path)
             if previous is not None and (previous[1][4] != (stat.S_IFREG | 0o755)
                     or len(previous[0]) != row["bytes"] or sha256_bytes(previous[0]) != row["sha256"]):
                 raise ControlError("材料后继严格制品要求不能替换已观察的模式或字节")
+
+    def _register_subject_sources(self, requirements: Mapping[str, Mapping[str, Any]]) -> None:
+        """只登记父证明导出的逐件源码模式；首读身份和严格制品分类不能重设。"""
+        for path, requirement in requirements.items():
+            row = dict(validate_external_binding(dict(requirement["binding"]), "material.successor.source_binding"))
+            mode = requirement["mode"]
+            current = {"binding": row, "mode": mode}
+            if (path != row["path"] or type(mode) is not int or mode not in {0o400, 0o600, 0o644, 0o755}
+                    or path in self._artifact_bindings or self._source_requirements.setdefault(path, current) != current):
+                raise ControlError("材料后继源码模式要求存在同坐标或分类冲突")
+            previous = self.records.get(path)
+            if previous is not None and (previous[1][4] != (stat.S_IFREG | mode)
+                    or len(previous[0]) != row["bytes"] or sha256_bytes(previous[0]) != row["sha256"]):
+                raise ControlError("材料后继源码要求不能替换已观察的模式或字节")
 
     def __iter__(self):
         return iter(self.records)
@@ -782,8 +830,9 @@ class _SuccessorReadSnapshot(Mapping[str, bytes]):
                 raise ControlError(f"材料后继原件祖先不是同一用户的私有目录：绑定={relative}，祖先={parent}，实际模式={stat.S_IMODE(metadata.st_mode):04o}，实际类型={stat.S_IFMT(metadata.st_mode):06o}，实际uid={metadata.st_uid}，要求目录/uid={os.geteuid()}/模式=0500或0700")
             ancestors.append((str(parent), metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_gid, metadata.st_mode))
         artifact = self._artifact_bindings.get(relative)
-        modes = {0o755} if artifact is not None else {0o600, 0o400}
-        required_mode = "0755" if artifact is not None else "0400或0600"
+        source_requirement = self._source_requirements.get(relative)
+        modes = {source_requirement["mode"]} if source_requirement is not None else ({0o755} if artifact is not None else {0o600, 0o400})
+        required_mode = f"{source_requirement['mode']:04o}" if source_requirement is not None else ("0755" if artifact is not None else "0400或0600")
         before = target.lstat()
         if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) not in modes:
             raise ControlError(f"材料后继原件类型、所有者或模式漂移：绑定={relative}，文件={target}，实际模式={stat.S_IMODE(before.st_mode):04o}，实际类型={stat.S_IFMT(before.st_mode):06o}，实际uid={before.st_uid}，要求普通文件/uid={os.geteuid()}/模式={required_mode}")
@@ -801,8 +850,9 @@ class _SuccessorReadSnapshot(Mapping[str, bytes]):
         fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_size", "st_mtime_ns", "st_ctime_ns")
         if tuple(getattr(before, key) for key in fields) != tuple(getattr(metadata, key) for key in fields):
             raise ControlError(f"材料后继原件在打开期间实例或权限漂移：绑定={relative}，文件={target}，实际模式={stat.S_IMODE(metadata.st_mode):04o}，实际类型={stat.S_IFMT(metadata.st_mode):06o}，实际uid={metadata.st_uid}，要求普通文件/uid={os.geteuid()}/模式={required_mode}")
-        if artifact is not None and (len(raw) != artifact["bytes"] or sha256_bytes(raw) != artifact["sha256"]):
-            raise ControlError("材料后继严格制品与已验父合同绑定不同")
+        required_binding = source_requirement["binding"] if source_requirement is not None else artifact
+        if required_binding is not None and (len(raw) != required_binding["bytes"] or sha256_bytes(raw) != required_binding["sha256"]):
+            raise ControlError("材料后继原件与已验制品或源码父合同绑定不同")
         if supplied is not None and supplied != raw:
             raise ControlError("材料后继原件与来源精确字节能力不同")
         identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid, metadata.st_gid, metadata.st_mode,
@@ -865,6 +915,19 @@ class _SuccessorReadSnapshot(Mapping[str, bytes]):
             if not capture(path, enumerate_members=True,
                     stable_directory=kind != "sealed-boundary", selection_kind=kind):
                 return
+            if kind == "source":
+                # 首次目录捕获也须等于已验整树，不能吸收 subject 实读之后追加的源码。
+                expected = {Path(relative).relative_to(path.relative_to(provider.root)).as_posix(): row["mode"]
+                    for relative, row in provider._source_requirements.items()
+                    if (provider.root / relative).is_relative_to(path)}
+                if not expected:
+                    return
+                members = records[(str(path), None, kind)][1]
+                if members is None or {relative for relative, _identity in members} != set(expected):
+                    raise ControlError("材料消费者源码目录全集与已验构建整树不同")
+                if any(not stat.S_ISREG(identity[2]) or stat.S_IMODE(identity[2]) != expected[relative]
+                       for relative, identity in members):
+                    raise ControlError("材料消费者源码首轮目录捕获的类型或模式漂移")
         # 封存边界首轮捕获必须仍等于已验清单或已验重绑链末，不能把首验后
         # 新出现的文件或收据直接登记成热复用的合法依赖。
         for contract in getattr(provider, "_material_subject_sealed_boundaries", ()):
@@ -1718,7 +1781,8 @@ def _successor_projection_signature(projection: Any) -> str:
     successor = projection.successor
     subjects = [{"parent_binding": dict(item.parent_binding), "base_relative": item.base_relative,
         "metadata_domains": item.metadata_domains, "coordinate_roots": item.coordinate_roots,
-        "resolved_bindings": item.resolved_bindings} for item in projection.subject_projections]
+        "resolved_bindings": item.resolved_bindings, "source_root_relative": item.source_root_relative,
+        "source_file_requirements": item.source_file_requirements} for item in projection.subject_projections]
     readers = [(sha256_bytes(item.specification_bytes), sha256_bytes(item.result_bytes))
         for item in projection.reader_replays]
     return canonical_sha256({"manifest": projection.manifest(), "parents": projection.parents, "subjects": subjects,
@@ -1861,6 +1925,8 @@ class _SuccessorConsumer:
                 return current
             snapshot = _SuccessorReadSnapshot(source)
             snapshot._artifact_bindings = {path: dict(binding) for path, binding in slot.snapshot._artifact_bindings.items()}
+            snapshot._source_requirements = {path: {"binding": dict(row["binding"]), "mode": row["mode"]}
+                for path, row in slot.snapshot._source_requirements.items()}
             snapshot.dependencies = dict(slot.snapshot.dependencies)
             snapshot.dependency_covered = True
             snapshot.revalidate_dependencies()

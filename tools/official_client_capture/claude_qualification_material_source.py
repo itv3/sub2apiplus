@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import os
 import platform
@@ -379,6 +379,8 @@ class VerifiedQualificationSubjectProjection:
     coordinate_roots: tuple[tuple[tuple[str, ...], str], ...]
     token: object
     resolved_bindings: tuple[tuple[tuple[str, ...], Mapping[str, Any], Mapping[str, Any]], ...] = ()
+    source_root_relative: str | None = None
+    source_file_requirements: tuple[tuple[Mapping[str, Any], int], ...] = ()
 
     def project(self, binding: Mapping[str, Any], raw: bytes) -> list[dict[str, Any]] | None:
         from copy import deepcopy
@@ -1498,7 +1500,7 @@ def _retain_client_semantic_materials(
         relative = path.relative_to(source_root)
         if any(part in upgrade.SKIP_DIRECTORIES for part in relative.parts):
             continue
-        raw = retain(path)
+        raw = retain(path, source_root=source_root)
         try:
             parse_json_bytes(raw)
         except ControlError:
@@ -2247,20 +2249,38 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
     store = _qualification_subject_store(store)
     originals = {}
     projections = {}
+    source_requirements = {}
+    semantic_source_root = None
     data_root = Path(data_root)
     if not data_root.is_absolute() or data_root.is_symlink() or not data_root.is_dir():
         raise ControlError("门禁 subject 缺已有可信数据根")
-    def retain(path: Path, expected_sha256: str | None = None) -> bytes:
+    def retain(path: Path, expected_sha256: str | None = None, *, source_root: Path | None = None) -> bytes:
         """只回传已验真来源的精确原件，归档调用方沿既有绑定列表闭合。"""
         if not path.is_relative_to(data_root):
             raise ControlError("门禁 subject 原件越过对应可信数据根")
-        raw, _metadata = _plain_file(path)
+        raw, metadata = _plain_file(path)
         if expected_sha256 is not None and sha256_bytes(raw) != expected_sha256:
             raise ControlError("门禁 subject 原件不在对应数据根或读取期间漂移")
         row = {"path": path.relative_to(data_root).as_posix(), "sha256": sha256_bytes(raw), "bytes": len(raw)}
         previous = originals.setdefault(row["path"], row)
         if previous != row:
             raise ControlError("门禁 subject 同坐标原件在读取期间漂移")
+        if source_root is not None:
+            # 只有原语义源码整树读取入口登记模式；普通 retain 不取得源码权限。
+            nonlocal semantic_source_root
+            if not source_root.is_relative_to(data_root) or source_root == data_root or not path.is_relative_to(source_root):
+                raise ControlError("subject 源码模式登记越过原整树根")
+            relative_root = source_root.relative_to(data_root).as_posix()
+            if semantic_source_root not in (None, relative_root):
+                raise ControlError("subject 同一构建存在不同语义源码根")
+            semantic_source_root = relative_root
+            fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_size", "st_mtime_ns", "st_ctime_ns")
+            current = path.lstat()
+            if tuple(getattr(metadata, key) for key in fields) != tuple(getattr(current, key) for key in fields):
+                raise ControlError("subject 源码文件在模式登记期间实例或权限漂移")
+            requirement = (row, stat.S_IMODE(metadata.st_mode))
+            if source_requirements.setdefault(row["path"], requirement) != requirement:
+                raise ControlError("subject 源码文件模式或绑定在整树读取期间漂移")
         return raw
 
     def project_parent(path: Path, base: Path, metadata: tuple[tuple[str, ...], ...] = (),
@@ -2620,6 +2640,13 @@ def qualification_gate_subject(store: Any, qualification: Mapping[str, Any], dat
     for path, base in [*((path, campaign) for path in campaign_parents), *stage_sources]:
         if path.relative_to(data_root).as_posix() not in projections:
             project_parent(path, base)
+    if semantic_source_root is not None:
+        # 完整原合同与重复父投影均已闭合，源码模式才依附同一资格的构建父。
+        source_parent = store.receipt_path(qualification["build_receipt_ref"]).relative_to(data_root).as_posix()
+        if source_parent not in projections:
+            raise ControlError("subject 源码模式缺同一资格构建父的已验投影")
+        projections[source_parent] = replace(projections[source_parent], source_root_relative=semantic_source_root,
+            source_file_requirements=tuple(source_requirements[path] for path in sorted(source_requirements)))
     expected = accept.expected_gate_subject(manifest, candidate["payload"], identity)
     # 返回 subject 或向调用方交回原件权限之前，再核完整事实链及其实际
     # 字节、目录坐标和元数据；不能用读取初始时的旧索引接受期间的漂移。

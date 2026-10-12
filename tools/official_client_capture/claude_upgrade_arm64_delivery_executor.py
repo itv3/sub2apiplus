@@ -109,6 +109,7 @@ class _ProducerOriginals(Mapping[str, bytes]):
         self.bindings: dict[str, dict[str, Any]] = {}
         self.metadata: dict[str, Any] = {}
         self._artifact_bindings: dict[str, dict[str, Any]] = {}
+        self._source_requirements: dict[str, dict[str, Any]] = {}
         self._byte_records: dict[str, Any] = {}
         self._subject_dependency_roots: tuple[Path, ...] | None = None
         self._subject_dependency_probes: tuple[Path, ...] = ()
@@ -118,11 +119,26 @@ class _ProducerOriginals(Mapping[str, bytes]):
         from tools.official_client_control.canonical import validate_external_binding
         for path, binding in requirements.items():
             row = dict(validate_external_binding(dict(binding), "producer 严格制品绑定"))
-            if (path != row["path"] or self._artifact_bindings.setdefault(path, row) != row
+            if (path != row["path"] or path in self._source_requirements
+                    or self._artifact_bindings.setdefault(path, row) != row
                     or (path in self.bindings and self.bindings[path] != row)):
                 raise guard.GuardError("producer 严格制品要求存在同坐标冲突")
             if path in self.metadata and self.metadata[path][3] != (stat.S_IFREG | 0o755):
                 raise guard.GuardError("producer 严格制品要求不能替换首读模式")
+
+    def _register_subject_sources(self, requirements: Mapping[str, Mapping[str, Any]]) -> None:
+        """只登记已验构建整树的精确源码模式；既有绑定和首读身份不重设。"""
+        from tools.official_client_control.canonical import validate_external_binding
+        for path, requirement in requirements.items():
+            row = dict(validate_external_binding(dict(requirement["binding"]), "producer 源码绑定"))
+            mode = requirement["mode"]
+            current = {"binding": row, "mode": mode}
+            if (path != row["path"] or type(mode) is not int or mode not in {0o400, 0o600, 0o644, 0o755}
+                    or path in self._artifact_bindings or self._source_requirements.setdefault(path, current) != current
+                    or (path in self.bindings and self.bindings[path] != row)):
+                raise guard.GuardError("producer 源码要求存在同坐标或分类冲突")
+            if path in self.metadata and self.metadata[path][3] != (stat.S_IFREG | mode):
+                raise guard.GuardError("producer 源码要求不能替换首读模式")
 
     def add(self, binding: Mapping[str, Any]) -> bytes:
         from tools.official_client_control.canonical import validate_external_binding
@@ -167,8 +183,11 @@ class _ProducerOriginals(Mapping[str, bytes]):
         path, ancestors, byte_ancestors = self._path(relative)
         info = path.lstat()
         artifact = self._artifact_bindings.get(relative)
-        modes = {0o755} if artifact is not None else {0o400, 0o600}
-        required_mode = "0755" if artifact is not None else "0400或0600"
+        source_requirement = self._source_requirements.get(relative)
+        modes = {source_requirement["mode"]} if source_requirement is not None else ({0o755} if artifact is not None else {0o400, 0o600})
+        required_mode = f"{source_requirement['mode']:04o}" if source_requirement is not None else ("0755" if artifact is not None else "0400或0600")
+        if source_requirement is not None and source_requirement["binding"] != item:
+            raise guard.GuardError("producer 源码绑定与本次原件闭集不同")
         if artifact is not None and artifact != item:
             raise guard.GuardError("producer 严格制品绑定与本次原件闭集不同")
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) not in modes:
@@ -1877,7 +1896,7 @@ class Arm64DeliveryExecutor:
                                          *, read_bindings: list[dict[str, Any]] | None = None) -> None:
         """沿原 sealed 父调用既有 subject verifier，仅加入其实际返回的精确读集。"""
         from tools.official_client_capture.claude_qualification_material_source import qualification_gate_subject
-        from tools.official_client_control.qualification_material_import import _subject_artifact_requirements, _material_successor_subject_dependencies
+        from tools.official_client_control.qualification_material_import import _subject_file_requirements, _material_successor_subject_dependencies
         dependency_bindings, dependency_projections = [], []
         for role in ("candidate", "rollback"):
             qualification = self.configuration[role]["qualification"]
@@ -1889,8 +1908,10 @@ class Arm64DeliveryExecutor:
             projections = []
             qualification_gate_subject(store, qualification, self.data_root, sealed,
                 read_bindings=bindings, read_projections=projections)
-            originals._register_subject_artifacts(_subject_artifact_requirements(store,
-                self.data_root, qualification, bindings, projections, originals.add))
+            artifacts, sources = _subject_file_requirements(store,
+                self.data_root, qualification, bindings, projections, originals.add)
+            originals._register_subject_artifacts(artifacts)
+            originals._register_subject_sources(sources)
             for binding in bindings:
                 originals.add(binding)
             dependency_bindings.extend(bindings)
