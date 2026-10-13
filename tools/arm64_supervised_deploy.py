@@ -347,8 +347,10 @@ from urllib.parse import urlsplit
 # 仅 control 层与监督器摘要变化，wire、evidence、编排器闭包和四项评估器摘要均保持原值。
 # 2026-10-11（Claude 候选批准续跑）：Codex 专属 seal 预演门禁仅适用于 Codex v2 清单；
 # Claude 沿原闭合、批准摘要与证据绑定校验继续执行。仅控制层与整树变化，四条读侧及采集／证据身份不变。
+# 2026-10-12（Claude 原批次续作，342b19b78）：监督器新增首次候选采集预约前失败的逐字重派承接，监督器摘要变为 4c91077a；
+# 部署时一直用 --expected-supervisor-digest 显式钉它，本默认值没有同步，此处补齐到当前树。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "c470f972f8b9f2f154d22ac1d5032a31ff343333aeac2708317b2d95323bcbe2"
+    "4c91077abcdaeb955357e2e1e0811b00db2f2c53f9a6d3a3ff1ef88ad4bfd84b"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
