@@ -55,7 +55,7 @@ B5A11_FIXTURE_ENV_NAME = "FIXTURE_ONLY_ENV"
 B5A11_BIND_FUNCTION = "_bind_rehearsal_receipt"
 STAGING_PARENT = Path("/root/docker/capture-cli/data/staging/pre-a3-scenarios")
 WORKDIR = Path("/root/docker/capture-cli/data")
-# B5b-03 扩时与 full79 v3 时间合同只允许十一个新增声明和 planner 中一个 Claude 专属表达式。
+# B5b-03 扩时与 full79 v4 时间合同（10-13 按普通回归实测由 v3 的四小时放宽到七小时）只允许十一个新增声明和 planner 中一个 Claude 专属表达式。
 # 固定 AST 摘要防止借历史对照例外接纳其它修改；行为与方法数由预算合同回归独立核对。
 CLAUDE_TIME_AST = {
     "CLAUDE_FAULT_CONTINUOUS_SECONDS": "c70c911e8b9ed0e8a9423ac0d8ee15dfbb48cae45f29589770ebe3b29a8e3e22",
@@ -68,9 +68,9 @@ CLAUDE_TIME_AST = {
     "claude_fault_time_budget": "8377a6f63768b145c2799c5db197dc8b37a224228c435df684e1b81603cd23f9",
 
     "CLAUDE_FULL79_NAME": "7a37f5f4d5426967525d39960081790032268c306f51c1f197a9557cd4a0618f",
-    "CLAUDE_FULL79_TIME_SCHEMA": "4d35dd1afebd59f76f4bea62d1550b2f2d75a790a90481178ce8a742e34907e5",
-    "claude_full79_time_budget": "1c5d9868115ee0b68481dbe387164a3b854c0cd4575968c8694db9400bc239d8",
-    "claude_unit_timeout_seconds": "ed3f715b8edde810c1ede2982ebd41f6e60d76e556285e5c46da3d1e736c9d16",
+    "CLAUDE_FULL79_TIME_SCHEMA": "01a4a9b34b6f44645fd880abc377b35fb108dcbde5b7002db9f7650b895047f8",
+    "claude_full79_time_budget": "1354027ec58f47b2ae9029fc1a813fcae69ba13fce27cd518fba0a3f62e3016e",
+    "claude_unit_timeout_seconds": "760199d10c79943232c4a93de55b6e67ba55f9f071f6575f48856ad81904e213",
 }
 CLAUDE_TIME_EXPRESSION = '''claude_fault_time_budget(name)["unit_timeout_seconds"]
     if client == "claude" and name in CLAUDE_FAULT_METHOD_COUNTS else

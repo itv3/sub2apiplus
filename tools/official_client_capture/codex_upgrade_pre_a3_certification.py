@@ -995,16 +995,22 @@ def claude_recorded_time_budget(name: str) -> dict[str, Any]:
 
 
 CLAUDE_FULL79_NAME = "vc-chain.claude-full-validation-only"
-CLAUDE_FULL79_TIME_SCHEMA = "claude-recorded-chain-time-budget/v3"
+CLAUDE_FULL79_TIME_SCHEMA = "claude-recorded-chain-time-budget/v4"
 
 
 def claude_full79_time_budget() -> dict[str, Any]:
-    """完整79的 v3 时间合同：四小时只作挂死保护；与 v2 的一小时共享合同分开，仅完整79的正式消费者选用。"""
+    """完整79的 v4 时间合同：七小时只作挂死保护；与 v2 的一小时共享合同分开，仅完整79的正式消费者选用。
 
-    method_seconds = 4 * 3600
+    v3 的四小时低于实测总和：10-13 固定版上的普通独立回归，VC-0～VC-5 约 41 分钟，VC-6 交付批次 1 小时 39 分，
+    交付收尾批次 44 分，VC-6 终消费 44 分，尾段读重放与结果写出还要十几分钟，总计超过四小时，被方法上限杀在尾段。
+    v4 按实测放宽：交付批次上限 3 小时、收尾批次 1.5 小时、整个方法 7 小时（实测的约 1.6 倍，留给同机并行与慢盘）；
+    三层收尾余量不变。它仍只防挂死，不是预计耗时，也不是性能通过凭证。
+    """
+
+    method_seconds = 7 * 3600
     return {**claude_recorded_time_budget(CLAUDE_FULL79_NAME),
             "schema_version": CLAUDE_FULL79_TIME_SCHEMA,
-            "run_timeout_seconds": 7200, "finalize_timeout_seconds": 3600,
+            "run_timeout_seconds": 10800, "finalize_timeout_seconds": 5400,
             "method_timeout_seconds": method_seconds,
             "chain_timeout_seconds": method_seconds + 60,
             "chain_budget_seconds": method_seconds + 120,
@@ -1013,7 +1019,7 @@ def claude_full79_time_budget() -> dict[str, Any]:
 
 
 def claude_unit_timeout_seconds(name: str) -> int:
-    """录制链单元的正式执行上限：完整79取 v3，VC1 保持 v2。"""
+    """录制链单元的正式执行上限：完整79取 v4，VC1 保持 v2。"""
 
     if name == CLAUDE_FULL79_NAME:
         return claude_full79_time_budget()["unit_timeout_seconds"]

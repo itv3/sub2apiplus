@@ -229,15 +229,15 @@ class DiagnosticBudgetTests(unittest.TestCase):
             self.assertLess(contract['method_timeout_seconds'], contract['chain_timeout_seconds'])
             self.assertLess(contract['chain_timeout_seconds'], contract['chain_budget_seconds'])
             self.assertLess(contract['chain_budget_seconds'], contract['unit_timeout_seconds'])
-        # full79只在原完整外壳和最终消费者选v3；共享VC1及其他八链保持原值。
+        # full79只在原完整外壳和最终消费者选v4（七小时挂死保护，按10-13普通回归实测放宽）；共享VC1及其他八链保持原值。
         from tools.official_client_capture.tests import claude_recorded_chain_source as source
         contract = source.full79_time_budget()
         self.assertEqual(contract, {
-            'schema_version': 'claude-recorded-chain-time-budget/v3', 'method_count': 1,
-            'run_timeout_seconds': 7200, 'finalize_timeout_seconds': 3600,
-            'method_timeout_seconds': 14400, 'chain_timeout_seconds': 14460,
-            'chain_budget_seconds': 14520, 'unit_timeout_seconds': 14580,
-            'outer_timeout_seconds': 14640,
+            'schema_version': 'claude-recorded-chain-time-budget/v4', 'method_count': 1,
+            'run_timeout_seconds': 10800, 'finalize_timeout_seconds': 5400,
+            'method_timeout_seconds': 25200, 'chain_timeout_seconds': 25260,
+            'chain_budget_seconds': 25320, 'unit_timeout_seconds': 25380,
+            'outer_timeout_seconds': 25440,
         })
         layers = [contract[key] for key in ('method_timeout_seconds', 'chain_timeout_seconds',
             'chain_budget_seconds', 'unit_timeout_seconds', 'outer_timeout_seconds')]
