@@ -22,7 +22,7 @@ import stat
 import tempfile
 import time
 import traceback
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 from unittest import mock
 
@@ -743,7 +743,8 @@ def guard_diagnostics(engine: guard.GuardEngine) -> Iterator[None]:
 
     with contextlib.ExitStack() as stack:
         for name in ("complete_startup", "status", "inspect", "prepare", "run", "finish",
-                     "heartbeat", "recover_pending", "inventory", "export", "export_batch", "watchdog"):
+                     "heartbeat", "recover_pending", "inventory", "export", "export_batch",
+                     "export_local", "export_batch_local", "watchdog"):
             stack.enter_context(mock.patch.object(engine, name, new=observe(name, getattr(engine, name))))
         yield
 
@@ -1078,6 +1079,21 @@ def _fixture_qualification_gate_root(store: Any, qualification: dict, data_root:
     return root
 
 
+_CANDIDATE_EVIDENCE_LEVELS = frozenset({"attempts", "seal", "revisions"})
+
+
+def _is_candidate_evidence_document(binding_path: str) -> bool:
+    """候选证据级文档的判定：路径形如 evidence/campaigns/<c>/candidates/<cand>/(attempts|seal|revisions)/…。
+
+    这类文档（attempt、恢复、client-evidence、封存清单等）里的绑定路径相对 attempt 根、恢复根或所在目录，不是数据根；
+    生产里由读集投影逐类展开。
+    """
+
+    parts = PurePosixPath(binding_path).parts
+    return ("candidates" in parts and len(parts) > parts.index("candidates") + 2
+            and parts[parts.index("candidates") + 2] in _CANDIDATE_EVIDENCE_LEVELS)
+
+
 @contextlib.contextmanager
 def synthetic_gate_subject_scope(enabled: bool) -> Iterator[None]:
     """合成 seam 世界的门禁 subject 只做纯推导，不请求严格读集归档。
@@ -1101,7 +1117,25 @@ def synthetic_gate_subject_scope(enabled: bool) -> Iterator[None]:
         del read_bindings, read_projections
         return real(store, qualification, data_root, parent, **kwargs)
 
-    with mock.patch.object(source_module, "qualification_gate_subject", pure):
+    from tools.official_client_control import sealed_gate_bindings as bindings_module
+
+    real_projector = bindings_module._gate_binding_projector
+
+    def projector_with_candidate_evidence_leaves(proof: Any) -> Any:
+        inner = real_projector(proof)
+
+        def project(parent_binding: Any, raw: bytes) -> Any:
+            projected = inner(parent_binding, raw)
+            if projected is None and _is_candidate_evidence_document(str(parent_binding["path"])):
+                # 合成世界没有读集投影：候选证据级文档里的绑定相对 attempt／恢复根或所在目录，不是数据根，
+                # 朴素展开必然找不到；生产里由读集投影展开，这里当叶子（文档自身仍完整实读验字节）。
+                return []
+            return projected
+
+        return project
+
+    with mock.patch.object(source_module, "qualification_gate_subject", pure), \
+            mock.patch.object(bindings_module, "_gate_binding_projector", projector_with_candidate_evidence_leaves):
         yield
 
 
