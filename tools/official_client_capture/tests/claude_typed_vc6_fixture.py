@@ -753,7 +753,9 @@ def serve_guard(configuration: dict, context: dict, control_path: Path) -> None:
 
     os.setsid()
     root = Path(context["data_root"])
-    with fixture_mac_source_scope(configuration, root):
+    # 守卫进程自己读控制文件里的合成世界声明（fork 时父进程的作用域不一定已打开）。
+    with fixture_mac_source_scope(configuration, root), \
+            synthetic_gate_subject_scope(_control(control_path).get("synthetic_gate_subject") is True):
         identity = executor.guard_identity(configuration, context, formal=False)
         engine = guard.GuardEngine(configuration, context, ControlledFileRuntime(configuration, context, control_path), identity)
         key = guard.read_bytes(guard.check_binding(root, configuration["guard"]["channel_key_binding"]))
@@ -768,7 +770,8 @@ def source_scope(control_path: Path) -> Iterator[None]:
     control = _control(control_path)
     root = Path(control["context"]["data_root"])
     configuration = guard.read_json(guard.check_binding(root, control["context"]["configuration_ref"]))
-    with fixture_mac_source_scope(configuration, root):
+    with fixture_mac_source_scope(configuration, root), \
+            synthetic_gate_subject_scope(control.get("synthetic_gate_subject") is True):
         reader = ControlledExecutor(configuration, control["context"], control_path)
 
         def factory(name: str, observed: dict, context: dict) -> ControlledExecutor:
@@ -1075,9 +1078,37 @@ def _fixture_qualification_gate_root(store: Any, qualification: dict, data_root:
     return root
 
 
-def prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path) -> dict:
+@contextlib.contextmanager
+def synthetic_gate_subject_scope(enabled: bool) -> Iterator[None]:
+    """合成 seam 世界的门禁 subject 只做纯推导，不请求严格读集归档。
+
+    ``test_claude_upgrade_vc6_batch`` 的 VC-5 链世界（Campaign、官方来源、候选源码都是合成的）不具备严格读集
+    归档要求的真实布局：没有 create_campaign 写出的 bootstrap 控制副本，官方 capture 绑定用 Campaign 坐标，
+    候选源码根也不在数据根内。subject 摘要本身仍走原函数推导，导入与消费两侧同值；严格归档由
+    ``test_claude_sealed_gate_materials`` 与 ARM64 真实链覆盖。只在显式声明的合成世界打开，
+    真实候选世界不得使用；父进程由 ``source_scope`` 持有，动作子进程由 ``install`` 经同一个 ``source_scope`` 进入。
+    """
+
+    if not enabled:
+        yield
+        return
+    from tools.official_client_capture import claude_qualification_material_source as source_module
+
+    real = source_module.qualification_gate_subject
+
+    def pure(store: Any, qualification: Any, data_root: Any, parent: Any, *, read_bindings: Any = None,
+             read_projections: Any = None, **kwargs: Any) -> Any:
+        del read_bindings, read_projections
+        return real(store, qualification, data_root, parent, **kwargs)
+
+    with mock.patch.object(source_module, "qualification_gate_subject", pure):
+        yield
+
+
+def prepare_fixture_qualification_materials(store: Any, configuration: dict, data_root: Path, *, gate_root: Path,
+                                            synthetic_gate_subject: bool = False) -> dict:
     """本轮 Mac 原 reader 的 authority 延续到来源准备和完整导入结束。"""
-    with fixture_mac_source_scope(configuration, data_root):
+    with fixture_mac_source_scope(configuration, data_root), synthetic_gate_subject_scope(synthetic_gate_subject):
         return _prepare_fixture_qualification_materials(store, configuration, data_root, gate_root=gate_root)
 
 
@@ -1230,8 +1261,10 @@ def _read_initial_rollback_qualification(store: Any, data: Path, configuration: 
 class TypedDeliveryFixture:
     """已完成 VC-5 的原世界接入 typed 文件现场；持有守卫直到最后一次重放。"""
 
-    def __init__(self, campaign: Path, candidate_id: str, *, control_path: Path | None = None):
+    def __init__(self, campaign: Path, candidate_id: str, *, control_path: Path | None = None,
+                 synthetic_gate_subject: bool = False):
         self.campaign = campaign.resolve(strict=True)
+        self.synthetic_gate_subject = synthetic_gate_subject
         self.candidate_id = candidate_id
         self.process: multiprocessing.Process | None = None
         self.recorded_pid: int | None = None
@@ -1321,7 +1354,7 @@ class TypedDeliveryFixture:
             gate_root = _fixture_qualification_gate_root(store, candidate_qualification, self.data)
             configuration.update(schema_version=executor.MATERIAL_CONFIGURATION_SCHEMA,
                 qualification_materials_binding=prepare_fixture_qualification_materials(store, configuration,
-                    self.data, gate_root=gate_root))
+                    self.data, gate_root=gate_root, synthetic_gate_subject=synthetic_gate_subject))
         self.configuration = executor.validate_configuration(configuration)
         self.configuration_path = campaign / "control/typed-vc6-configuration.json"
         guard.write_json_once(self.configuration_path, configuration)
@@ -1340,7 +1373,8 @@ class TypedDeliveryFixture:
             "formal_version_semantics_certified": False, "context": self.context,
             "calls": str(self.control_path.with_name("typed-vc6-calls.jsonl")),
             "physical_calls": str(self.control_path.with_name("typed-vc6-physical-calls.jsonl")),
-            "failures": [], "kill_at": None, "crash_at": None, "failed_gates": []})
+            "failures": [], "kill_at": None, "crash_at": None, "failed_gates": [],
+            **({"synthetic_gate_subject": True} if synthetic_gate_subject else {})})
         self._save_record()
 
     def _save_record(self) -> None:

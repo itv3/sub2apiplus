@@ -466,6 +466,9 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
     run_compare_and_assert = compare_tests.CompareAcceptChainTests.run_compare_and_assert
     assert_recorded_client_requests = compare_tests.CompareAcceptChainTests.assert_recorded_client_requests
 
+    # 本类的 VC-5 世界是合成 seam 世界：门禁 subject 只做纯推导（见 claude_typed_vc6_fixture.synthetic_gate_subject_scope）。
+    synthetic_gate_subject = True
+
     # -- 世界与派发 -------------------------------------------------------------------------------------------
 
     def setUp(self) -> None:
@@ -484,7 +487,10 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         receipt = self.gate_receipt(world, "candidate-receipt.json")
         self.assert_batch_passed(self.dispatch_vc5(world, 11, self.accept_action(campaign, receipt, world["gate_root"])), 11, "VC-5")
         self.assertTrue(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-5", revision=1).is_file())
-        fixture = vc6_fixture.TypedDeliveryFixture(campaign, CANDIDATE)
+        # 本世界的 Campaign／官方来源／候选源码是合成的，满足不了严格读集归档的真实布局（见夹具里
+        # synthetic_gate_subject_scope）；借用本函数的真实候选链路（晚段链驱动）没有这个类属性，保持严格。
+        fixture = vc6_fixture.TypedDeliveryFixture(campaign, CANDIDATE,
+                                                   synthetic_gate_subject=getattr(self, "synthetic_gate_subject", False))
         fixture.__enter__()
         self.addCleanup(fixture.close)
         world["typed_delivery"] = fixture
