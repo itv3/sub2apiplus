@@ -1176,7 +1176,9 @@ class PreA3OrderingTests(unittest.TestCase):
         self.assertIn('--pre-a3-mode run "$ENTRY_BUNDLE" "$ENTRY_BRANCH" "$ENTRY_COMMIT"', call)
         self.assertNotIn("run-commands", body)
         gates = (SCRIPTS / "entry-gates.sh").read_text(encoding="utf-8")
-        self.assertIn('plan --staging-parent "$D/staging/pre-a3-scenarios"', gates)
+        # 场景父目录缺省仍是 $D/staging/pre-a3-scenarios；--pre-a3-staging-parent 可显式指到原三链记录根所在的父目录。
+        self.assertIn('PRE_A3_PARENT="${PRE_A3_STAGING_PARENT:-$D/staging/pre-a3-scenarios}"', gates)
+        self.assertIn('plan --staging-parent "$PRE_A3_PARENT"', gates)
         self.assertIn('--unit-manifest "$OUT/executor/unit-manifest.json" --record-store "$STORE"', gates)
         self.assertNotIn("--executor-summary", gates)
         stage2 = (SCRIPTS / "stage2.sh").read_text(encoding="utf-8")

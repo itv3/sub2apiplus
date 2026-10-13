@@ -16,7 +16,8 @@ class GateProjectionIndexTests(unittest.TestCase):
         leaf = b"payload"
         child = {"path": "leaf.bin", "sha256": sha256_bytes(leaf), "bytes": len(leaf)}
         parent = canonical_json_bytes({"unknown_schema": "strict", "child": child})
-        self.raw = {"archive/parent.json": parent, "archive/leaf.bin": leaf}
+        # 归档原件在 <归档根>/files/ 下；严格投影按"/files/"之前的归档根判同根，夹具路径须带 files 段。
+        self.raw = {"archive/files/parent.json": parent, "archive/files/leaf.bin": leaf}
         self.archives = tuple({"path": path, "sha256": sha256_bytes(raw), "bytes": len(raw)}
                               for path, raw in self.raw.items())
         self.materials = tuple({"root_id": "root-a", "source_relative_path": name,

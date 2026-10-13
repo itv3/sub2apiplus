@@ -346,7 +346,8 @@ class EntryGatesTests(unittest.TestCase):
                                     capture_output=True, text=True)
             self.assertEqual((result.returncode, result.stdout), (0, expected), client)
         calls = [line for line in lines if '"$CT_PRE_A3_MODULE"' in line and "python3 -m" in line]
-        self.assertEqual(len(calls), 6, "plan、find-reusable×3、issue、record-reuse")
+        # B5a-09 固定 79 接线后 record-reuse 在桥分支（先复核固定 79 再登记）与普通分支各一条，共 7 条。
+        self.assertEqual(len(calls), 7, "plan、find-reusable×3、issue、record-reuse×2（桥分支与普通分支）")
         self.assertTrue(all('${CT_CLIENT_ARGV[@]+"${CT_CLIENT_ARGV[@]}"}' in line for line in calls))
         self.assertFalse([line for line in lines if "codex_upgrade_pre_a3_certification" in line], "模块名只从客户端表取")
 

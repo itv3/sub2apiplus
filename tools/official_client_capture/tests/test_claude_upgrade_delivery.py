@@ -470,7 +470,8 @@ class DeliveryAcceptanceTests(_DeliveryCase):
         self.executor.calls.clear()
         code, _result, stderr = self.run_delivery("--rerun-from", "rollback_verified")
         self.assertEqual(code, 1)
-        self.assertIn("先 delivery-stage-invalidate", stderr)
+        # 有效链已全部通过时的拒绝（claude_upgrade_delivery 当前交付准入）：要重跑须先批准阶段失效。
+        self.assertIn("须先批准阶段失效", stderr)
         # 不带核对参数重跑：有效链已全部通过，停在 awaiting_finalize，不重跑任何阶段。
         code, result, stderr = self.run_delivery()
         self.assertEqual((code, result["status"]), (2, "awaiting_finalize"), stderr)

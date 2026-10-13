@@ -293,7 +293,9 @@ class InstallationTests(unittest.TestCase):
                 self.assertEqual(len(verifier.verify_batch(store, items)), 2)
                 verify_install.assert_called_once()
                 load_activation.assert_called_once()
-            reader.verify_origin_evidence_batch.assert_called_once()
+            # 单项入口复用同一正式批量入口：单项一次、两项批量一次，共两次批量读取，不再走单项 RPC。
+            self.assertEqual(reader.verify_origin_evidence_batch.call_count, 2)
+            reader.verify_origin_evidence.assert_not_called()
 
     def test_fresh_process_opens_store_and_resolves_fixed_source_without_parent_registry(self):
         configuration, context, store, content, origin = self.source_values()
@@ -317,7 +319,7 @@ assert e.SOURCE_VERIFIERS == {}
 with mock.patch.object(i,'DATA_ROOT',root), mock.patch.object(i,'UNIT_ROOT',Path(v['unit_root'])), mock.patch.object(i,'_require_managed_install'), mock.patch.object(i,'_private_file',side_effect=local_private_file), mock.patch.object(i,'_read_binding',side_effect=lambda b:g.read_bytes(g.check_binding(root,b))), mock.patch.object(i,'validate_deployment_receipt'):
     store=ControlStore.open_read_only(Path(v['store']))
     configuration,context,_=i._load_activation('candidate-fixture')
-    reader=SimpleNamespace(verify_origin_evidence=lambda c,o:dict(content_sha256=canonical_sha256(c),deployment_sha256='f'*64,bytes_by_path={},configuration_sha256=o['configuration_sha256'],service_instance_id=o['service_instance_id'],trusted_data_root=root))
+    reader=SimpleNamespace(configuration=configuration,context=context,verify_origin_evidence_batch=lambda items:[dict(content_sha256=canonical_sha256(x['content']),deployment_sha256='f'*64,bytes_by_path={},configuration_sha256=x['origin']['configuration_sha256'],service_instance_id=x['origin']['service_instance_id'],trusted_data_root=root) for x in items])
     with mock.patch.object(i._executor(),'create_executor',return_value=reader):
         result=e._source_verifier(i.AUTHORITY)(store,v['content'],v['origin'])
         assert result.content_sha256 == canonical_sha256(v['content'])

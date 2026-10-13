@@ -34,12 +34,16 @@ class ConfigurationOriginalTests(unittest.TestCase):
         self.campaign_id = context["campaign_id"]
         self.delivery_id = context["delivery_id"]
         self.configuration_ref = {"object_kind": "operational_evidence", "sha256": "c" * 64}
-        self.campaign = {"schema_version": "official-client-control-campaign/v2", "client": "claude", "campaign_id": self.campaign_id}
+        self.campaign = {"schema_version": "official-client-control-campaign/v2", "client": "claude", "campaign_id": self.campaign_id,
+                         # 材料后继解析读工具演进链：夹具没有登记，冻结身份只作链首占位。
+                         "tool_identity": {"fixture": "no-tool-evolution"}}
         store_root = self.root / "control/store"
         (store_root / "campaigns").mkdir(parents=True)
         (store_root / "campaigns" / (self.campaign_id + ".json")).write_bytes(canonical_json_bytes(self.campaign))
         self.store = SimpleNamespace(root=store_root, load_object=self.load_object,
             load_campaign=lambda identifier: deepcopy(self.campaign),
+            # 材料后继解析会读已登记的工具演进；本夹具没有任何登记，空列表即"无演进链"。
+            list_object_refs=lambda kind: [],
             _verify_external_binding=lambda root, binding: guard.check_binding(root, binding))
         self.configuration = {**base, "schema_version": executor.MATERIAL_CONFIGURATION_SCHEMA,
                               "qualification_materials_binding": self.write_binding("source/material-import.json", {"fixture": "import"})}
