@@ -54,6 +54,11 @@ if os.environ.get("{supervisor.CAMPAIGN_RUN_ACTION_ID_ENV}") == "{delivery.FINAL
 class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
     """借用输入构造和命令构造，不继承原测试用例，避免每个外层场景重复运行旧用例。"""
 
+    # 本驱动及继承它的 late-control、transient、revision-evaluator 三条链共用 Vc6BatchChainTests 的合成 VC-5 世界：
+    # Campaign／官方来源／候选源码是合成的，满足不了严格读集归档的真实布局，所以门禁 subject 只做纯推导
+    # （见 claude_typed_vc6_fixture.synthetic_gate_subject_scope）。故障与恢复行为照常端到端执行，不受影响。
+    synthetic_gate_subject = True
+
     vc5_world = delivery_tests.Vc6BatchChainTests.vc5_world
     assert_action = delivery_tests.Vc6BatchChainTests.assert_action
     run_compare_and_assert = delivery_tests.Vc6BatchChainTests.run_compare_and_assert
@@ -267,7 +272,8 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
                 raise ValueError('完成后段方法没有原 done 游标')
             world = stops.restore_world(self, locator['world'])
             with chain.seams(world['config_path']):
-                fixture = environment.TypedDeliveryFixture(world['campaign'], world['candidate_id'])
+                fixture = environment.TypedDeliveryFixture(world['campaign'], world['candidate_id'],
+                                                           synthetic_gate_subject=self.synthetic_gate_subject)
                 fixture.__enter__()
                 try:
                     self.control = fixture.control_path
@@ -344,10 +350,12 @@ class ClaudeLateStageChainDriver(batch_tests._RealTreeBatchCase):
             # 首次建场须由原阶段明确许可；已有现场只绑定同一活守卫，不能另启实例。
             if state['phase'] == 'typed-initialize' and stops.load_state(typed_name) is None:
                 with stops.initialization_scope(typed_name, cursor=cursor, phase='typed-initialize'):
-                    fixture = environment.TypedDeliveryFixture(campaign, candidate)
+                    fixture = environment.TypedDeliveryFixture(campaign, candidate,
+                                                               synthetic_gate_subject=self.synthetic_gate_subject)
                     fixture.__enter__()
             else:
-                fixture = environment.TypedDeliveryFixture(campaign, candidate)
+                fixture = environment.TypedDeliveryFixture(campaign, candidate,
+                                                           synthetic_gate_subject=self.synthetic_gate_subject)
                 fixture.__enter__()
             self.addCleanup(fixture.close)
             world['typed_delivery'] = fixture

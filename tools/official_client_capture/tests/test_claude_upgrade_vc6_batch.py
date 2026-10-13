@@ -488,7 +488,9 @@ class Vc6BatchChainTests(batch_tests._RealTreeBatchCase):
         self.assert_batch_passed(self.dispatch_vc5(world, 11, self.accept_action(campaign, receipt, world["gate_root"])), 11, "VC-5")
         self.assertTrue(claude_upgrade_vc.vc_checkpoint_path(campaign, "VC-5", revision=1).is_file())
         # 本世界的 Campaign／官方来源／候选源码是合成的，满足不了严格读集归档的真实布局（见夹具里
-        # synthetic_gate_subject_scope）；借用本函数的真实候选链路（晚段链驱动）没有这个类属性，保持严格。
+        # synthetic_gate_subject_scope）；借用本函数的晚段链驱动及其继承链（late-control、transient、
+        # revision-evaluator）同样是合成世界，类属性也设为 True（10-13 H3 链 B 的 late-stage-faults 实测报
+        # 「subject bootstrap 没有原建立合同的精确控制副本」）。
         fixture = vc6_fixture.TypedDeliveryFixture(campaign, CANDIDATE,
                                                    synthetic_gate_subject=getattr(self, "synthetic_gate_subject", False))
         fixture.__enter__()

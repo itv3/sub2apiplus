@@ -284,7 +284,7 @@ class RevisionOfficialSourceTests(unittest.TestCase):
         observed = []
 
         class LayoutProbeFixture:
-            def __init__(_fixture, campaign, candidate):
+            def __init__(_fixture, campaign, candidate, *, synthetic_gate_subject=False):
                 observed.append(read_layout())
 
             def __enter__(_fixture):
