@@ -889,7 +889,7 @@ CLOSEOUT_PY_4_REMOVED = {'tools/ci/unit_executor.py': ['                        
         '                or records.executor_version([args.bytecode_helper]) != recorder.executor',
         '                            executor=records.executor_version([args.bytecode_helper]), environment=None,']}
 CLOSEOUT_PY_5_BASELINE = '5626c055719f02a8574e4d8969caea84b85ad83b'
-CLOSEOUT_PY_5_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '29f035209d1f55ce111463e29df1aca3ab81810407a255d3adc31c10edcb2666'}
+CLOSEOUT_PY_5_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '8f9ed69f6e15ae20ab2ec9bb1d56b0c841507fb17b94fd8aa473268cea73f3e7'}
 CLOSEOUT_PY_5_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['                                claude_recorded_time_budget(name)["unit_timeout_seconds"]']}
 # <<< 收尾登记常量
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
