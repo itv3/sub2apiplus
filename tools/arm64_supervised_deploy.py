@@ -349,11 +349,11 @@ from urllib.parse import urlsplit
 # Claude 沿原闭合、批准摘要与证据绑定校验继续执行。仅控制层与整树变化，四条读侧及采集／证据身份不变。
 # 2026-10-12（Claude 原批次续作，342b19b78）：监督器新增首次候选采集预约前失败的逐字重派承接，监督器摘要变为 4c91077a；
 # 部署时一直用 --expected-supervisor-digest 显式钉它，默认值没有同步。
-# 2026-10-13（Claude 升级收尾）：上述承接限定为 Claude 新合同，并要求后继与前序批次身份相同（否则让位给后面的协议）；
+# 2026-10-13（Claude 升级收尾）：上述承接限定为 Claude 新合同（Claude 的批次身份漂移仍失败关闭）；
 # Codex 候选采集动作的 execution-failure 仍不走逐字重派协议，行为与此前逐字相同。仅控制层变化，监督器摘要随之变化；
 # wire、evidence 与四项评估器摘要不变。默认值同步为当前树的监督器。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "6997337257e9956f6bb83c54122ae8c4b5dbacfeedb6aaa7d1226864750a6b1d"
+    "09b326d073066c20612d024874e4a6aebdb1c168176558584058f22a3dbf8b47"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

@@ -10385,14 +10385,12 @@ def _validate_batched_environment_redispatch_successor(
         # 首次普通候选采集在预约前失败时没有 attempt 可供恢复预览。只承接单动作 capture；
         # 保留原诊断类别，下面仍核预约窗口、正式对账的零预约零请求以及同批次身份。
         # 只对 Claude 新合同放开：Codex 候选采集动作的 execution-failure 仍不走逐字重派协议（由续跑预览协议承接），
-        # 行为与此前逐字相同。后继与前序批次身份不同（例如失败采集之后改派零请求恢复预览）时同样不属本协议：
-        # 与看门狗分支同一口径交给后面的协议，而不是在这里按"缺原批次重派许可"失败关闭。
+        # 行为与此前逐字相同；Claude 的后继与前序批次身份不同时仍按下面的共享绑定失败关闭（漂移字段）。
         first_capture = (
             run_manifest_client(prior_manifest) == "claude"
             and effective_class == "execution-failure"
             and _single_action(prior_manifest) is not None
             and candidate_capture_recovery_action(prior_manifest, action_id) == "capture"
-            and not _redispatch_identity_drift(prior_manifest, successor_manifest)
         )
         if effective_class not in RECOVERABLE_ACTION_FAILURE_CLASSES and not (
             # B4-1 改法 5（草表 D-08）：VC-5／VC-6 零请求后处理动作以 execution-failure 收口（post-run-tooling 五判据
