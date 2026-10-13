@@ -1105,6 +1105,28 @@ ENTRY_SOURCE_STABILITY_RESIDUALS = {'entry-gates.sh': ['-mkdir -p "$WORK"; chmod
                     '-mkdir -p "$STORE"; chmod 700 "$STORE"',
                     '+private_directory "$STORE"']}
 
+# >>> 收尾登记常量（自动生成，勿手改）
+CLOSEOUT_SH_1_BASELINE = '5fcdf0b6b6ba847e86f42452c975cd841832e606'
+CLOSEOUT_SH_1_DIGESTS = {'entry-gates.sh': 'b19f8ff76b6ab1f40e3b76c678415dfb26e4c5945dd81f4f44fbd6ed7d788540'}
+CLOSEOUT_SH_1_RESIDUALS = {'entry-gates.sh': ['-usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+        '-PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
+        '+usage() { echo "用法：bash entry-gates.sh [--profile entry|full-gates|preflight|pre-a3|regression] [--go-warmup auto|off] [--parallel <正整数>] [--with-gates <门禁项,…>] [--require-deployed|--require-deployed-all] [--out <目录>] [--work <目录>] [--pycache <目录>] [--policy-activation <文件>] [--pre-a3-certification <文件>] [--pre-a3-mode auto|present|run] [--pre-a3-staging-parent <绝对目录，默认 $D/staging/pre-a3-scenarios>] [--mode full-set-pass|re-execute|unit-inherit] [--full-set-request <JSON>] [--unit-inherit-request <JSON>|--unit-inherit-propose <新目录>] [--unit-inherit-stage <阶段>] [--record-store <目录>] [--audit-reads] [--audit-strict] [--audit-host-inputs <JSON>] [--audit-policy <JSON>] [--input-scope <提案>] <bundle 绝对路径> <分支> <40 位提交> [<前端依赖目录绝对路径>]" >&2; }',
+        '+PROFILE=entry; OUT=""; WORK="$(dirname "$D")/entry-gates-work"; PYC=""; PRE_A3_SOURCE=auto; PRE_A3_STAGING_PARENT=""; MODE=re-execute; STORE="$(dirname "$D")/unit-records"; AUDIT_READS=false',
+        '+    --pre-a3-staging-parent) PRE_A3_STAGING_PARENT="${2:-}"; shift 2 || { usage; exit 2; } ;;',
+        '+  elif [ "$MODE" = unit-inherit ] && [ codex = claude ]; then',
+        '+    verify_history_tree "$TREE" || { echo "ENTRY_GATES_ABORTED：原测试树历史不合合同"; exit 3; }',
+        '+    if python3 -B "$DRV/entry_gates.py" prepare-scope-successor --tree "$TREE" --bytecode-cache "$PYC" \\',
+        '+        --commit "$PCOMMIT" --bundle "$PBUNDLE" --branch "$PBRANCH" --lock-directory "$LOCK" --lock-owner "$$" \\',
+        '+        > "$OUT/workspace-successor.json"; then',
+        '+      REUSE_WORKSPACE=true',
+        '+    else',
+        '+      echo "ENTRY_GATES_ABORTED：后继不满足原位内容更新条件；保留原树和缓存，不派发单元"; exit 3',
+        '+    fi',
+        '+    PRE_A3_PARENT="${PRE_A3_STAGING_PARENT:-$D/staging/pre-a3-scenarios}"',
+        '+    if [[ "$PRE_A3_PARENT" != /* ]]; then echo "ENTRY_GATES_ABORTED：--pre-a3-staging-parent 必须是绝对路径：${PRE_A3_PARENT}" >&2; exit 3; fi',
+        '-    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$D/staging/pre-a3-scenarios" --output "$UNITS" \\',
+        '+    PA3_PARENT=$(python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification plan --staging-parent "$PRE_A3_PARENT" --output "$UNITS" \\']}
+# <<< 收尾登记常量
 LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("入口来源目录与持久协调锁", ENTRY_SOURCE_STABILITY_BASELINE, ENTRY_SOURCE_STABILITY_DIGESTS, ENTRY_SOURCE_STABILITY_RESIDUALS),
     ("B5a-09", B5A09_BASELINE_COMMIT, B5A09_SHELL_DIGESTS, B5A09_SHELL_RESIDUALS),
@@ -1120,6 +1142,9 @@ LATER_SHELL_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]
     ("engineering-disk", ENGINEERING_DISK_BASELINE_COMMIT, ENGINEERING_DISK_SHELL_DIGESTS, ENGINEERING_DISK_SHELL_RESIDUALS),
     ("B5a-09-fixture-project-guard", FIXTURE_PROJECT_GUARD_BASELINE_COMMIT, FIXTURE_PROJECT_GUARD_SHELL_DIGESTS, FIXTURE_PROJECT_GUARD_SHELL_RESIDUALS),
     ("B5a-09固定79接线", RECORDED_BRIDGE_BASELINE_COMMIT, RECORDED_BRIDGE_SHELL_DIGESTS, RECORDED_BRIDGE_SHELL_RESIDUALS),
+    # >>> 收尾登记行（自动生成，勿手改）
+    ('收尾登记 entry-gates.sh', CLOSEOUT_SH_1_BASELINE, CLOSEOUT_SH_1_DIGESTS, CLOSEOUT_SH_1_RESIDUALS),
+    # <<< 收尾登记行
 )
 
 
