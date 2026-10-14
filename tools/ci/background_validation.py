@@ -28,6 +28,26 @@ B-09 可提供当前上下文与结束时校时凭证，覆盖完整才签发全
 补跑不能承接的项。请求必须绑定本客户端的 full-gates／pre-ledger、当前提交、部署集合及记录库；与 B-09 签发参数互斥。
 新后台通过前实际消费已发布的决策收据；批次边界按该次消费凭证重放，不能只信 passed 标签。默认路径仍重新执行全集。
 
+跨提交、跨部署的后继（旧后台失败 → 修复 → 新提交新部署续作）：``start --unit-inherit-request <新请求> --unit-inherit-source-result
+<旧后台结论>`` 把一次已经结束的旧后台运行当作「来源」，在**新运行**（新结论文件、新运行目录、新运行 ID）里按新提交、新部署
+与新批准承接旧运行留下的合法记录；旧运行只读，不在它的目录上续作。允许变化的只有提交、部署、bundle、分支与入口门禁摘要；
+必须相同的是客户端、组合（仅 full-gates）、物理 WORK（与入口线的原位后继同口径，测试树和缓存沿用）、记录库与调度并发参数，
+且必须显式提供审计策略与承接请求。来源结论须是 passed 或 failed、进程组已退出，留有入口门禁摘要与已发布进记录库的运行清单
+（执行器中途终止的运行不发布清单，其成果不能承接），旧提交还须能验证是新提交的祖先（在临时对象库里用 WORK 测试树的完整历史
+加新 bundle 验证，不动测试树；真正的非祖先永远拒绝，只有「无法验证」才可用 ``--allow-unverified-ancestry`` 退化，并在结论里
+标明 unverified）。这一接线**不削弱任何承接条件**：单元记录能否承接（声明输入摘要、读集审计、记录有效期、环境指纹、两类批准有效
+且未过期、范围匹配、来源运行未撤销）仍全部由原逐单元合同（``unit_inherit.py`` 与 ``unit_records.py``）在三个复核点逐条判定，
+来源或批准失效、记录被篡改或过期、审计未通过的单元不承接、只重跑自己，原因写进清单与本结论。新结论另登记（只在使用来源
+选项的运行里出现，其余结论的形状不变）：``unit_inherit_source``（来源结论、其执行器运行 ID、提交、祖先验证方式与冻结副本）、
+``inherited_units``（每个承接项的单元、来源运行 ID、来源记录摘要、来源提交、是否来自来源后台那一轮实际执行的新记录）、
+``inherit_counts``（四个数分开统计，是一个漏斗：登记数 registered＝本次计划单元里登记为可承接的单元数（清单项 inheritable
+为真，即已登记读集审计且没有别的阻断原因）；审计通过数 audit_passed＝其中承接请求的来源集合里有来源记录、且这条记录自身读集
+审计通过并自摘要有效的；消费者接受数 consumer_accepted＝承接消费者 ``verify_published`` 实际重验接受的承接项数；实际承接数
+inherited＝运行清单里处置为承接的单元数；通过的结论要求 inherited＝consumer_accepted≤audit_passed≤registered）、``rerun_units``
+（每个重跑单元的原因类别、原文、前序状态、变化的输入名与耗时）与 ``inherit_summary``（含请求来源单元数 request_source_units）。
+没有任何单元被承接（整套重新执行）时 ``outcome`` 明确写 ``full_rerun``，不会假装承接。``check-boundary``／``check`` 的语义与
+退出码不变：当前部署没有后台记录时仍只提示先起后台；通过的跨提交后继另重放上述登记与清单、决策、消费凭证一致。
+
 两客户端都已纳管时（B5a-10；数据根 ``control`` 里两客户端都有部署收据）：仓库全量门禁两客户端只跑一次（测试集合已含 Claude
 测试），结论按「提交＋部署收据集合」绑定——集合是每个已纳管客户端最新的那一份（交换共享根的一次部署即该事务签出的每一份，
 B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘要换成集合摘要；入口门禁带 ``--require-deployed-all``，本轮
@@ -49,6 +69,8 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
   有采集在跑就让路），结果记在本结论的 ``dryrun`` 字段。
   本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用
   ``entry-dryrun.sh start ... --unit-inherit-request <请求> --audit-policy <策略>``，不自动补批准或重新执行全集。
+  跨提交后继另加 ``--unit-inherit-source-result <旧后台结论>``（只与 ``--unit-inherit-request`` 同用，``--work`` 须是旧结论的
+  WORK）与可选的 ``--allow-unverified-ancestry``（见上文）。
 * ``run``（内部）：跑入口门禁，按结论写状态。收到 SIGTERM 时把它转给入口门禁（执行器会终止全部单元会话）。
 * ``stop --runroot [--reason]``：停下在跑的后台验证并标 superseded。修复轮跑定向回归之前用：同一台机器同一时间只能有
   一个调度器，上一轮的验证也已作废。两客户端都纳管时连本运行根搭上的（别的运行根发起的）那一次一起停。
@@ -71,9 +93,11 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -129,6 +153,35 @@ CLIENT_SPECIFIC_INPUTS = frozenset({"vc_env_sha256", "work", "then_dryrun"})
 # 搭上的轮次在自己运行根留的指针（子目录，不混进本运行根的结论列表）。
 ATTACHED_DIRECTORY = "attached"
 ATTACHED_SCHEMA = "background-validation-attached/v1"
+# 跨提交、跨部署的后继（旧后台结论作来源，新运行承接它留下的合法记录）：来源登记与承接登记的合同版本。
+INHERIT_SOURCE_SCHEMA = "background-inherit-source/v1"
+INHERIT_REPORT_SCHEMA = "background-inherit-report/v1"
+_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+# 验证「旧提交是新提交的祖先」时每个 git 子进程的时限（秒）：只在临时对象库里取一次 bundle、查一次 merge-base，正常几秒内完成。
+GIT_TIMEOUT_SECONDS = 180
+# 重跑原因类别：主类别取下面顺序里第一个命中的，命中的全部类别都登记在 reason_categories。需求点名的四类原因是失败（failed）、
+# 输入变化（inputs_changed）、未审计需实时重跑（unaudited_realtime）、无来源记录（no_source）；其余几类（来源记录不可用、读集审计
+# 未通过、复核点拒绝、其它）是来源或批准失效时「不承接并给出明确原因」所需。
+RERUN_CATEGORIES = {
+    "failed": "前序后台轮次里该单元失败",
+    "source_invalid": "来源记录不可用（自摘要不符被改过、超过承接期限、清单或日志缺失、来源运行已撤销）",
+    "unaudited_realtime": "未登记读集审计或属实时检查，只验证本次执行，必须实时重跑",
+    "audit_not_passed": "来源记录的读集审计未通过或覆盖未闭合",
+    "inputs_changed": "输入、单元规格、环境、执行器或调度策略相对前序轮次已变化",
+    "no_source": "没有来源记录（来源集合未登记，记录库里也没有可承接的）",
+    "session_refused": "逐单元承接的复核点拒绝了本次承接，整次重新执行",
+    "other": "其它原因（见 reasons 原文）",
+}
+# 承接登记里计数与耗时字段的口径，原样写进 inherit_summary.definitions：结论文件自带说明，读的人不必回头翻源码。
+INHERIT_DEFINITIONS = {
+    "registered": "登记数：本次计划单元里登记为可承接的单元数（运行清单项 inheritable 为真：已登记读集审计，且没有别的阻断原因）",
+    "audit_passed": "审计通过数：其中承接请求的来源集合里有来源记录、且这条记录自身读集审计证据成立（自摘要有效、正式执行、审计通过、覆盖闭合）的单元数",
+    "consumer_accepted": "消费者接受数：承接消费者 verify_published 实际重验接受的承接项数（失败或中止的结论没有消费，写 null）",
+    "inherited": "实际承接数：运行清单里处置为承接的单元数",
+    "executed_audit_passed": "本次重跑的单元里，新执行记录的读集审计证据成立的单元数",
+    "audit_ready_after_run": "本次运行之后有读集审计通过的记录可供下一轮承接的单元数＝实际承接数＋重跑且审计通过的单元数",
+    "rerun_seconds": "各重跑单元自身耗时之和（单元并行执行，不是墙钟时间）",
+}
 
 
 class ValidationError(RuntimeError):
@@ -614,6 +667,537 @@ def _inherit_completion(payload: Mapping[str, Any], *, historical: bool = False)
     return {"references": references, "proof": proof}
 
 
+# ---------------------------------------------------------------- 跨提交、跨部署的逐单元后继（来源校验与承接登记）
+#
+# 为什么要有：H7 里故意让一个测试失败，后台形成 failed 结论并拒派；H8 修好、换了提交与部署之后，需要只重跑失败与受影响
+# 的单元，其余单元承接 H7 那一轮实际执行成功的记录。原来的续作要求同提交、同部署的原结论，H8 的提交与部署都变了，
+# 找不到原结论。这里新增的只有两件事：
+#   1. 启动时校验「来源后台结论」（旧运行只作来源，新运行是新结论、新运行目录、新运行 ID）；
+#   2. 结束时把每一条承接项的来源运行 ID 与记录摘要、四个分开的计数和每个重跑单元的原因与耗时登记进新结论。
+# 单元记录能否承接，仍然完全由原逐单元合同（unit_inherit.py 的复核点与消费者）判定，这里不放宽任何一条。
+
+
+class _AncestryUndetermined(Exception):
+    """祖先关系没能判定（环境或材料不足）。与「判定为不是祖先」不同：后者永远拒绝，前者才可经 ``--allow-unverified-ancestry`` 退化。"""
+
+
+def _git_environment() -> dict[str, str]:
+    """git 子进程的环境：去掉继承来的 ``GIT_*``（例如从 git 钩子里运行时的 GIT_DIR），免得验证落到别的仓库上；不弹交互。"""
+
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", LC_ALL="C")
+    return environment
+
+
+def _git(repo: Path | None, *args: str) -> subprocess.CompletedProcess[str]:
+    argv = ["git", "--no-optional-locks", *(["-C", str(repo)] if repo is not None else []), *args]
+    return subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=GIT_TIMEOUT_SECONDS,
+                          env=_git_environment())
+
+
+def _one_line(text: str, limit: int = 240) -> str:
+    """git 的多行输出折成一行、取最后 ``limit`` 个字符，放进一条中文原因里。"""
+
+    return " ".join(str(text).split())[-limit:]
+
+
+def _ancestry_attempt(old: str, new: str, *, bundle: Path, branch: str, work: Path, repo: Path) -> str:
+    """在临时对象库 ``repo`` 里判定 ``old`` 是不是 ``new`` 的祖先，返回验证方式的说明。
+
+    历史从哪来：增量 bundle（``git bundle create <BASE>..<分支>``）只带新提交，旧历史要靠别处。WORK 里的 ``test-tree`` 是
+    完整历史克隆（入口门禁的 ``verify_history_tree`` 要求提交数过万且非浅克隆，入口线的原位后继同样靠它做祖先核对），所以把它的
+    对象库登记为临时库的备用对象库（只读引用，不改它的任何文件、索引或引用），再把新 bundle 取进临时库。没有测试树时只剩 bundle
+    自带的历史，增量 bundle 会在前置提交校验处失败，按「无法验证」处理。
+    材料不足抛 ``_AncestryUndetermined``；确定不是祖先抛 ``ValidationError``。"""
+
+    def run(*args: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return _git(repo, *args)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise _AncestryUndetermined(f"git 执行失败：{error}") from error
+
+    try:
+        created = _git(None, "init", "--bare", "-q", str(repo))
+    except (OSError, subprocess.SubprocessError) as error:
+        raise _AncestryUndetermined(f"找不到可用的 git：{error}") from error
+    if created.returncode != 0:
+        raise _AncestryUndetermined("临时对象库创建失败：" + _one_line(created.stderr))
+    tree = Path(work) / "test-tree"
+    objects = tree / ".git" / "objects"
+    borrowed = objects.is_dir() and not any(item.is_symlink() for item in (Path(work), tree, tree / ".git", objects))
+    if borrowed:
+        alternates = repo / "objects" / "info" / "alternates"
+        alternates.parent.mkdir(parents=True, exist_ok=True)
+        alternates.write_text(str(objects) + "\n", encoding="utf-8")
+    verified = run("bundle", "verify", str(bundle))
+    if verified.returncode != 0:
+        raise _AncestryUndetermined("bundle 校验失败（它的前置提交不在可用历史里，或不是合法 bundle）："
+                                    + _one_line(verified.stderr or verified.stdout))
+    heads = run("bundle", "list-heads", str(bundle))
+    refs = [line.split() for line in heads.stdout.splitlines() if line.strip()]
+    wanted = [ref[1] for ref in refs if len(ref) >= 2 and ref[0] == new and ref[1] in {branch, "refs/heads/" + branch}]
+    if heads.returncode != 0 or not wanted:
+        # 这是参数自相矛盾（入口门禁也会拒绝），不是「无法验证」：不可用 --allow-unverified-ancestry 绕过。
+        raise ValidationError(f"bundle 里没有分支 {branch} 指向 {new[:12]}，核对不了祖先关系：请核对 --bundle、--branch 与 --commit")
+    fetched = run("-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch", "-q", "--no-tags", str(bundle),
+                  f"+{wanted[0]}:refs/heads/ancestry-new")
+    if fetched.returncode != 0:
+        raise _AncestryUndetermined("把新 bundle 取进临时对象库失败：" + _one_line(fetched.stderr))
+    for label, commit in (("新", new), ("旧", old)):
+        if run("cat-file", "-e", f"{commit}^{{commit}}").returncode != 0:
+            raise _AncestryUndetermined(f"{label}提交 {commit[:12]} 不在可用历史里（WORK 测试树的对象库加新 bundle）")
+    answer = run("merge-base", "--is-ancestor", old, new)
+    if answer.returncode == 0:
+        return "git merge-base --is-ancestor（临时对象库：" + ("WORK 测试树对象库作备用，加新 bundle）" if borrowed else "仅新 bundle 自带历史）")
+    if answer.returncode == 1:
+        raise ValidationError(f"旧提交 {old[:12]} 不是新提交 {new[:12]} 的祖先：来源后台属于另一条历史线，拒绝承接它的成果")
+    raise _AncestryUndetermined("merge-base 判定失败：" + _one_line(answer.stderr))
+
+
+def _verify_ancestry(old: str, new: str, *, bundle: Path, branch: str, work: Path, allow_unverified: bool = False) -> dict[str, Any]:
+    """旧提交是新提交的祖先（附加护栏，不替代任何承接条件）。
+
+    建议与理由：要。入口线的原位后继本来就要求「测试树旧 HEAD 是新提交的祖先」（``prepare_scope_successor``），后台线与入口线共用
+    同一个物理 WORK，来源后台留下的记录又带着该 WORK 里旧提交的读集与快照；若来源属于另一条历史线，记录的输入摘要即便恰好相同，
+    也不是「这个提交的前序」，应当在启动时就明确拒绝，而不是等入口门禁在运行中才失败。ARM64 的 WORK 具备验证条件（测试树是
+    完整历史克隆，增量 bundle 的前置提交就在其中），所以默认必须验证成功，否则拒绝。
+    返回登记用的说明：``verified``（含验证方式），或 ``unverified``（仅 ``allow_unverified`` 且材料不足时，如实写明原因）。"""
+
+    base = {"old_commit": old, "new_commit": new}
+    if old == new:
+        return {**base, "status": "verified", "method": "same-commit"}
+    scratch: Path | None = None
+    try:
+        scratch = Path(tempfile.mkdtemp(prefix="background-validation-ancestry-"))
+        method = _ancestry_attempt(old, new, bundle=Path(bundle), branch=branch, work=Path(work), repo=scratch / "history.git")
+    except (OSError, _AncestryUndetermined) as undetermined:   # 临时目录建不出来之类的环境问题同属「无法验证」
+        if not allow_unverified:
+            raise ValidationError(f"无法验证旧提交 {old[:12]} 是新提交 {new[:12]} 的祖先：{undetermined}。真正的非祖先永远拒绝；"
+                                  "只有像这样「无法验证」时，才可显式加 --allow-unverified-ancestry 退化为在结论里标明 unverified") from undetermined
+        return {**base, "status": "unverified", "method": "none", "reason": str(undetermined)}
+    finally:
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
+    return {**base, "status": "verified", "method": method}
+
+
+def _inherit_source_roots(runroot: Path, data_root: Path, source: Mapping[str, Any]) -> tuple[Path, Path]:
+    """来源结论自己的提交与部署绑定的两个 WORK 根（与它启动时 ``_bound_work_roots`` 同一算法）。"""
+
+    commit, deployment, deployments = source.get("commit"), source.get("deployment"), source.get("deployments")
+    if (not isinstance(commit, str) or not _COMMIT_PATTERN.fullmatch(commit) or not isinstance(deployment, dict)
+            or not deployment.get("sha256") or (deployments is not None and not isinstance(deployments, dict))):
+        raise ValidationError("来源后台结论缺少提交或部署绑定，确定不了它的 WORK 坐标")
+    try:
+        return _bound_work_roots(Path(runroot), Path(data_root), commit, deployment, deployments)
+    except (KeyError, TypeError, AttributeError) as error:
+        raise ValidationError(f"来源后台结论的部署绑定不完整：{error}") from error
+
+
+def _inherit_source_load(args: argparse.Namespace, source_path: Path) -> tuple[dict[str, Any], str]:
+    """读来源后台结论：只认本运行根的结论（或其 history 子目录里保存的旧终态），同一次读取得到内容与摘要。"""
+
+    path = Path(source_path)
+    root = Path(args.runroot) / DIRECTORY
+    if not path.is_absolute() or ".." in path.parts or any(item.is_symlink() for item in (path, *path.parents)):
+        raise ValidationError("来源后台结论须是无符号链接的规范绝对路径")
+    if path.parent not in (root, root / "history"):
+        raise ValidationError(f"来源后台结论必须是本运行根的后台结论（在 {root} 或其 history 子目录下）：{path}")
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw)
+    except (OSError, ValueError) as error:
+        raise ValidationError(f"来源后台结论不可读或不是合法 JSON：{path}：{error}") from error
+    if not isinstance(payload, dict) or payload.get("schema_version") != SCHEMA:
+        raise ValidationError(f"来源后台结论不是 {SCHEMA}：{path}")
+    return payload, hashlib.sha256(raw).hexdigest()
+
+
+# 来源结论的状态不能作来源时的说明（只有 passed 与 failed 且进程组已退出的结论留有可承接的成果）。
+_SOURCE_STATUS_REASONS = {
+    "running": "来源后台仍在运行，拒绝承接（running 一律拒绝）：请等它结束成 passed 或 failed 再起后继",
+    "vanished": "来源后台进程已不在而没有写结论，没有可承接的成果",
+    "aborted": "来源后台中止、没有门禁结论，不能作为承接来源",
+    "superseded": "来源后台被停下（superseded）：被停下的运行没有发布运行清单，它执行过的单元记录不能承接",
+}
+
+
+def _inherit_source_check(args: argparse.Namespace, source_path: Path, loaded: tuple[dict[str, Any], str], *, client: str,
+                          work: Path, inputs: Mapping[str, Any], result_path: Path) -> dict[str, Any]:
+    """校验来源后台结论并返回登记用的来源信息；任一项不成立抛 ``ValidationError``（中文原因）。
+
+    只校验「这个旧后台能不能当来源」，不判单元记录能不能承接：后者是原逐单元合同在三个复核点的事，一条都不放宽。"""
+
+    source, digest = loaded
+    if Path(source_path) == Path(result_path):
+        raise ValidationError("来源后台结论就是本提交与部署的当前结论：同提交、同部署的续作不要带 --unit-inherit-source-result")
+    status = effective_status(source)
+    if status not in ("passed", "failed"):
+        raise ValidationError(_SOURCE_STATUS_REASONS.get(status, f"来源后台状态 {status} 不能作为承接来源（只接受 passed、failed）"))
+    if _group_alive(source.get("pid")):
+        raise ValidationError("来源后台进程组尚未退出，拒绝在同 WORK 启动后继")
+    # 允许变化的只有提交、部署、bundle、分支与入口门禁摘要；其余与入口线的原位后继同口径，必须相同。
+    differing = []
+    if (source.get("client") or "codex") != client:
+        differing.append(f"客户端（来源 {source.get('client') or 'codex'}，本次 {client}）")
+    if source.get("profile") != args.profile or args.profile != DEFAULT_PROFILE:
+        differing.append(f"组合（来源 {source.get('profile')}，本次 {args.profile}，仅限 {DEFAULT_PROFILE}）")
+    if source.get("work") != str(work):
+        differing.append(f"WORK（来源 {source.get('work')}，本次 {work}）")
+    if source.get("record_store") != inputs.get("record_store"):
+        differing.append(f"记录库（来源 {source.get('record_store')}，本次 {inputs.get('record_store')}）")
+    if (source.get("input_contract") or {}).get("parallel") != inputs.get("parallel"):
+        differing.append(f"调度并发参数（来源 {(source.get('input_contract') or {}).get('parallel')}，本次 {inputs.get('parallel')}）")
+    if differing:
+        raise ValidationError("来源后台结论必须与本次后继同客户端、同组合、同物理 WORK、同记录库、同调度并发参数，不一致："
+                              + "；".join(differing))
+    runroot, data_root = Path(args.runroot), Path(args.data_root)
+    roots = _work_lineage(runroot, data_root, source)
+    source_work = Path(str(source["work"]))
+    if not source_work.is_absolute() or ".." in source_work.parts or not any(source_work.is_relative_to(root) for root in roots):
+        raise ValidationError("来源后台结论的 WORK 没有绑定它自己的提交与部署，疑似被改动")
+    # 来源留下的成果：入口门禁摘要与逐单元清单（执行器中途终止的运行不发布清单，其单元记录不能承接）。
+    module = _unit_inherit()
+    records = module.records()
+    out = Path(str(source.get("out") or ""))
+    try:
+        summary = module.fs.read(out / "entry-gates.json")
+        manifest = module.fs.read(out / "executor" / "unit-manifest.json")
+    except (OSError, ValueError) as error:
+        raise ValidationError(f"来源后台没有留下入口门禁摘要或逐单元清单（执行器中途终止的运行不发布清单），其成果不能承接：{error}") from error
+    reference = summary.get("unit_manifest") or {}
+    if (manifest.get("schema_version") != records.MANIFEST_SCHEMA or not records.seal_ok(manifest, "manifest_sha256")
+            or reference.get("path") != str(out / "executor" / "unit-manifest.json") or reference.get("self_check") != "passed"
+            or reference.get("manifest_sha256") != manifest.get("manifest_sha256")):
+        raise ValidationError("来源后台的逐单元清单自摘要不符，或与入口门禁摘要登记的不是同一份（自检不通过的清单不会发布）")
+    summary_commit = (summary.get("source") or {}).get("commit")
+    if summary_commit is not None and summary_commit != source.get("commit"):
+        raise ValidationError(f"来源后台结论的提交（{str(source.get('commit'))[:12]}）与它入口门禁摘要里的提交（{str(summary_commit)[:12]}）不一致")
+    run_id = str(manifest.get("run_id") or "")
+    store = records.RecordStore(Path(str(source["record_store"])))
+    if manifest.get("record_store") != str(store.root) or store.manifest(run_id) != manifest:
+        raise ValidationError(f"来源后台的运行清单（{run_id}）没有发布进本记录库，或与发布的不是同一份：其单元记录不能承接")
+    ancestry = _verify_ancestry(str(source["commit"]), str(args.commit), bundle=Path(args.bundle), branch=str(args.branch),
+                                work=source_work, allow_unverified=bool(getattr(args, "allow_unverified_ancestry", False)))
+    return {
+        "schema": INHERIT_SOURCE_SCHEMA, "result": {"path": str(source_path), "sha256": digest}, "status": status,
+        "commit": source["commit"], "branch": source.get("branch"), "deployment": source["deployment"],
+        "deployments": source.get("deployments"), "work": str(source_work), "record_store": source["record_store"],
+        "client": client, "out": str(out), "executor_run_id": run_id, "executor_manifest_sha256": manifest["manifest_sha256"],
+        "executor_mode": manifest.get("mode"), "ancestry": ancestry, "validated_at_utc": _utc_now(),
+    }
+
+
+def _request_units_from(request: Path, run_id: str) -> int:
+    """承接请求的来源集合里有多少个单元指向 ``run_id`` 那一轮的执行记录（启动时的提示：为 0 说明来源后台对这次承接没有贡献）。"""
+
+    module = _unit_inherit()
+    sources = module.sources_check(module._read_request(Path(request))[1]["sources"])
+    return sum(1 for item in sources["units"].values() if item["run_id"] == run_id)
+
+
+def _inherit_source_contract(source: Mapping[str, Any]) -> dict[str, Any]:
+    """写进输入合同的来源指纹（稳定字段）：重复执行同一条 start 命令能认出是同一次，换了来源则判输入合同不同。"""
+
+    return {"result": dict(source["result"]), "executor_run_id": source["executor_run_id"], "commit": source["commit"]}
+
+
+def _frozen_source_payload(runroot: Path, source: Mapping[str, Any]) -> dict[str, Any]:
+    """来源登记里的冻结副本（内容寻址存在本运行根的 history 目录，登记着摘要）：不在 history 目录、摘要不符、缺失或不可读都抛
+    ``ValidationError``。"""
+
+    frozen = source.get("frozen") or {}
+    path = Path(str(frozen.get("path") or ""))
+    if (not path.is_absolute() or path.parent != Path(runroot) / DIRECTORY / "history" or path.is_symlink() or not path.is_file()
+            or _sha256_file(path) != frozen.get("sha256")):
+        raise ValidationError("后台跨提交承接的来源结论冻结副本缺失或被改动")
+    payload = _read(path)
+    if payload is None:
+        raise ValidationError("后台跨提交承接的来源结论冻结副本不可读")
+    return payload
+
+
+# 跨提交后继可以一棵接一棵地接下去（H7 → H8 → H9 …），物理 WORK 始终是第一棵留下的那个；链太长多半是登记被改成了环。
+MAX_LINEAGE_DEPTH = 32
+
+
+def _work_lineage(runroot: Path, data_root: Path, payload: Mapping[str, Any], *, depth: int = 0) -> tuple[Path, ...]:
+    """一份后台结论允许使用的 WORK 根：它自己的提交与部署绑定的两个根；它本身也是跨提交后继时，再加上它的来源（沿冻结副本逐级
+    向上）允许的根——后继沿用来源的物理 WORK，而那个 WORK 绑定的是最早一棵的提交与部署。"""
+
+    roots = _inherit_source_roots(runroot, data_root, payload)
+    source = payload.get("unit_inherit_source")
+    if source is None:
+        return roots
+    if depth >= MAX_LINEAGE_DEPTH:
+        raise ValidationError("后台跨提交后继链过长，疑似登记成了环")
+    return (*roots, *_work_lineage(runroot, data_root, _frozen_source_payload(runroot, source), depth=depth + 1))
+
+
+def _inherit_source_work_roots(payload: Mapping[str, Any]) -> tuple[Path, ...]:
+    """后继结论登记的来源允许使用的 WORK 根（含来源链上更早的）；没有来源登记的结论返回空（运行期的 WORK 校验据此放宽到来源的
+    物理 WORK）。以冻结副本为准，不信任结论文件里可被改动的来源坐标。"""
+
+    source = payload.get("unit_inherit_source")
+    if source is None:
+        return ()
+    runroot = Path(payload["runroot"])
+    return _work_lineage(runroot, Path(payload["data_root"]), _frozen_source_payload(runroot, source))
+
+
+def _inherit_source_recheck(payload: Mapping[str, Any]) -> None:
+    """运行期再核对来源登记：与输入合同一致、冻结副本未被改动、WORK 仍是来源的物理 WORK。不一致抛 ``ValidationError``。"""
+
+    source = payload["unit_inherit_source"]
+    if (not isinstance(source, dict) or source.get("schema") != INHERIT_SOURCE_SCHEMA or payload.get("mode") != "unit-inherit"
+            or payload["input_contract"].get("unit_inherit_source") != _inherit_source_contract(source)
+            or source.get("work") != payload.get("work") or source.get("record_store") != payload.get("record_store")):
+        raise ValidationError("后台跨提交承接的来源登记与输入合同不一致")
+    roots = _inherit_source_work_roots(payload)   # 内含冻结副本的存在与摘要核对
+    if not any(Path(str(source["work"])).is_relative_to(root) for root in roots):
+        raise ValidationError("后台跨提交承接登记的 WORK 没有绑定来源自己的提交与部署")
+
+
+def _audit_evidence_ok(records: Any, record: Mapping[str, Any] | None, expected_sha256: str) -> bool:
+    """一条来源记录自身的读集审计证据是否成立：记录读得出、自摘要有效且就是登记的那一条、是正式执行、审计通过且覆盖闭合。
+
+    只看「审计」这一层（被篡改的记录不算审计通过）；单元执行本身是否通过、输入是否变化、是否过期等其余承接条件另由逐单元合同判定。"""
+
+    if not isinstance(record, Mapping) or not records.seal_ok(record, "record_sha256") or record.get("record_sha256") != expected_sha256:
+        return False
+    audit = record.get("read_audit")
+    return (record.get("kind") == "formal" and isinstance(audit, Mapping) and audit.get("status") == "passed"
+            and audit.get("coverage_complete") is True and audit.get("coverage_scope") == "all-file-paths/v1"
+            and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256"))
+
+
+# 比较两条记录的输入时不计这些：宿主快照与读集合同项每次重新快照，不代表仓库内容变化（逐单元合同按来源沿用并重新快照）。
+_VOLATILE_INPUTS = frozenset({"runtime-contract", "require-read-audit", "reexecute-only-policy"})
+
+
+def _input_changes(old: Mapping[str, Any] | None, new: Mapping[str, Any] | None) -> tuple[list[str], list[str]]:
+    """两条记录之间变化的输入名，以及变化的单元规格、环境、执行器、调度策略（任一条记录读不出来就返回空：不猜）。"""
+
+    if not isinstance(old, Mapping) or not isinstance(new, Mapping):
+        return [], []
+
+    def digests(record: Mapping[str, Any]) -> dict[str, Any]:
+        return {str(item.get("name")): item.get("sha256") for item in record.get("inputs") or []
+                if isinstance(item, Mapping) and not str(item.get("name")).startswith("host:") and item.get("name") not in _VOLATILE_INPUTS}
+
+    before, after = digests(old), digests(new)
+    names = sorted(name for name in set(before) | set(after) if before.get(name) != after.get(name))
+    executor = lambda record: (record.get("executor") or {}).get("sha256") if isinstance(record.get("executor"), Mapping) else None  # noqa: E731
+    context = [label for label, same in (("单元规格", old.get("spec_sha256") == new.get("spec_sha256")),
+                                         ("环境", old.get("environment_sha256") == new.get("environment_sha256")),
+                                         ("执行器", executor(old) == executor(new)),
+                                         ("调度策略", old.get("policy_sha256") == new.get("policy_sha256"))) if not same]
+    return names, context
+
+
+# 重跑原因里的文字线索（原文来自 unit_inherit.assess、unit_records.check_record 与执行器；拿不准的归 other，原文全部保留）。
+_REALTIME_HINTS = ("输入合同未闭合", "禁止承接", "标为不可承接", "本单元不可承接", "尚未闭合：本次执行记录不得承接")
+_AUDIT_HINTS = ("读集覆盖未闭合", "读集审计未通过", "完整读集轨迹")
+_SOURCE_HINTS = ("记录自摘要不符", "超过承接期限", "完成时间", "原运行的清单缺失", "清单没有发布", "没有把这条记录列为", "日志不在记录库",
+                 "已撤销", "宿主输入快照失败", "记录读不出来", "记录格式版本不对", "诊断执行的记录永不承接", "来源记录明确不可承接",
+                 "单元 ID 或类型不符", "记录不属于来源集合登记的运行")
+_CHANGED_HINTS = ("输入变了", "单元规格变了", "环境变了", "执行器变了", "调度策略版本变了")
+_NO_SOURCE_HINTS = ("来源集合没有登记这个单元", "记录库里没有这个单元的记录")
+
+
+def _classify_rerun(entry: Mapping[str, Any], predecessor: Mapping[str, Any] | None, old_record: Mapping[str, Any] | None,
+                    new_record: Mapping[str, Any] | None, *, registered: bool) -> dict[str, Any]:
+    """一个被重跑（本次执行）的单元为什么没有承接：类别、中文说明、原文与变化的输入。
+
+    结构化证据优先于文字线索：前序清单里该单元没通过、清单项标明不可承接（未登记读集审计）、前后两条记录的输入或环境摘要不同。
+    文字线索只用来认出逐单元合同给出的来源记录问题（被篡改、过期、审计未通过等）。同一个单元可以命中多个类别。"""
+
+    reasons = [str(item) for item in entry.get("reasons") or []]
+    text = "；".join(reasons)
+    found: set[str] = set()
+    if predecessor is not None and predecessor.get("disposition") != "not_run" and predecessor.get("passed") is not True:
+        found.add("failed")
+    if "该次执行没通过" in text:
+        found.add("failed")
+    if entry.get("inheritable") is False or any(hint in text for hint in _REALTIME_HINTS):
+        found.add("unaudited_realtime")
+    if any(hint in text for hint in _AUDIT_HINTS):
+        found.add("audit_not_passed")
+    if any(hint in text for hint in _SOURCE_HINTS):
+        found.add("source_invalid")
+    changed_inputs, changed_context = _input_changes(old_record, new_record)
+    if changed_inputs or changed_context or any(hint in text for hint in _CHANGED_HINTS):
+        found.add("inputs_changed")
+    if ("逐单元承接" in text and "拒绝" in text) or "不扩大承接集合" in text:
+        found.add("session_refused")
+    if not found and (not registered or any(hint in text for hint in _NO_SOURCE_HINTS)):
+        found.add("no_source")
+    if not found:
+        found.add("other")
+    ordered = [name for name in RERUN_CATEGORIES if name in found]
+    detail = []
+    if changed_inputs:
+        detail.append("变化的输入：" + "、".join(changed_inputs[:8]) + (" 等" if len(changed_inputs) > 8 else ""))
+    if changed_context:
+        detail.append("变化的环境因素：" + "、".join(changed_context))
+    return {"reason_category": ordered[0], "reason_categories": ordered,
+            "reason": "；".join([*(RERUN_CATEGORIES[name] for name in ordered), *detail]), "reasons": reasons,
+            "changed_inputs": changed_inputs[:20], "changed_context": changed_context}
+
+
+def _run_commit(module: Any, store: Any, run_id: str) -> tuple[str | None, str | None]:
+    """尽力解析一次来源运行属于哪个提交：读它入口门禁摘要里的提交，且摘要登记的清单就是这次运行的那一份。解析不出就是（None, None）。"""
+
+    try:
+        manifest = store.manifest(run_id)
+        summary = module.fs.read(Path(str(manifest["out_dir"])).parent / "entry-gates.json")
+        commit = (summary.get("source") or {}).get("commit")
+        if ((summary.get("unit_manifest") or {}).get("manifest_sha256") == manifest.get("manifest_sha256")
+                and isinstance(commit, str) and _COMMIT_PATTERN.fullmatch(commit)):
+            return commit, "entry_gates_summary"
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return None, None
+
+
+def _inherit_registry(payload: Mapping[str, Any], *, proof: Mapping[str, Any] | None) -> dict[str, Any]:
+    """从本次运行已发布的清单、承接请求与记录库现算承接登记（结论文件里的 ``inherited_units`` 等）。
+
+    ``proof`` 是承接消费者重验通过后的消费凭证（只有 passed 的结论有）；没有时（failed 的尽力登记）``consumer_accepted`` 是 None。
+    四个计数分开统计，不互相代替（一个漏斗：登记了多少、其中多少有审计过的来源记录、消费者接受了多少、实际承接了多少）：
+      * registered：本次计划单元里登记为可承接的单元数（运行清单项 ``inheritable`` 为真：已登记读集审计，且没有别的阻断原因）；
+      * audit_passed：其中承接请求的来源集合里有来源记录、且这条记录自身的读集审计证据成立的（见 ``_audit_evidence_ok``）；
+      * consumer_accepted：承接消费者 ``verify_published`` 实际重验接受的承接项数；
+      * inherited：运行清单里处置为承接的单元数。
+    登记了而没有审计过的来源记录的单元（例如只有 4 个测试单元真有可用的审计记录，其余登记单元没有）因此不会被算进后三项。
+    通过的结论要求 inherited＝consumer_accepted≤audit_passed≤registered，不满足抛 ``ContractError``（调用方拒绝通过）。"""
+
+    module = _unit_inherit()
+    records = module.records()
+    source = payload["unit_inherit_source"]
+    out = Path(str(payload["out"]))
+    manifest = module.fs.read(out / "executor" / "unit-manifest.json")
+    store = records.RecordStore(Path(str(payload["record_store"])))
+    run_id = str(manifest.get("run_id") or "")
+    if store.manifest(run_id) != manifest:
+        raise module.ContractError("本次运行清单没有发布进记录库，或与发布的不是同一份")
+    request_reference, request = module._read_request(Path(str(payload["unit_inherit_request"]["path"])))
+    if request_reference != payload["unit_inherit_request"]:
+        raise module.ContractError("承接请求在运行之后发生变化")
+    sources = module.sources_check(request["sources"])
+    predecessor = store.manifest(str(source["executor_run_id"]))
+    if predecessor is None or predecessor.get("manifest_sha256") != source["executor_manifest_sha256"]:
+        raise module.ContractError("来源后台的运行清单在记录库里缺失，或与来源登记的摘要不同")
+    predecessor_rows = {str(row.get("unit_id")): row for row in predecessor.get("units") or [] if isinstance(row, Mapping)}
+    rows = [row for row in manifest.get("units") or [] if isinstance(row, Mapping)]
+    decision = records._read_json(store.decision_path(run_id)) if manifest.get("mode") == module.MODE else None
+    commits: dict[str, tuple[str | None, str | None]] = {}
+
+    def commit_of(source_run_id: str) -> tuple[str | None, str | None]:
+        if source_run_id not in commits:
+            commits[source_run_id] = ((str(source["commit"]), "predecessor_result") if source_run_id == source["executor_run_id"]
+                                      else _run_commit(module, store, source_run_id))
+        return commits[source_run_id]
+
+    inherited_units: list[dict[str, Any]] = []
+    for row in sorted((row for row in rows if row.get("disposition") == "inherited"), key=lambda row: str(row.get("unit_id"))):
+        unit_id = str(row["unit_id"])
+        basis = row.get("basis") if isinstance(row.get("basis"), Mapping) else {}
+        origin = {"run_id": str(basis.get("run_id")), "record_sha256": str(row.get("record_sha256"))}
+        if manifest.get("mode") != module.MODE or sources["units"].get(unit_id) != origin:
+            raise module.ContractError(f"{unit_id}：承接项的来源与承接请求登记的来源不一致")
+        if decision is not None and ((decision.get("units") or {}).get(unit_id) or {}).get("source") != origin:
+            raise module.ContractError(f"{unit_id}：承接项的来源与决策收据登记的来源不一致")
+        commit, basis_of_commit = commit_of(origin["run_id"])
+        record = records._read_json(store.record_path(unit_id, origin["record_sha256"]))
+        inherited_units.append({
+            "unit_id": unit_id, "source_run_id": origin["run_id"], "source_record_sha256": origin["record_sha256"],
+            "source_commit": commit, "source_commit_basis": basis_of_commit,
+            "source_origin": "predecessor_run" if origin["run_id"] == source["executor_run_id"] else "earlier_run",
+            "source_completed_at_utc": basis.get("completed_at_utc"),
+            "source_seconds": (record or {}).get("seconds"),
+        })
+    reruns: list[dict[str, Any]] = []
+    not_run: list[str] = []
+    for row in sorted(rows, key=lambda row: str(row.get("unit_id"))):
+        if row.get("disposition") == "inherited":
+            continue
+        unit_id = str(row["unit_id"])
+        if row.get("disposition") != "executed":
+            not_run.append(unit_id)
+            continue
+        before = predecessor_rows.get(unit_id)
+        old_record = records._read_json(store.record_path(unit_id, str(before["record_sha256"]))) if before and before.get("record_sha256") else None
+        new_record = records._read_json(store.record_path(unit_id, str(row["record_sha256"]))) if row.get("record_sha256") else None
+        before_state = ("absent" if before is None else "not_run" if before.get("disposition") == "not_run"
+                        else "passed" if before.get("passed") is True else "failed")
+        reruns.append({
+            "unit_id": unit_id, **_classify_rerun(row, before, old_record, new_record, registered=unit_id in sources["units"]),
+            "predecessor_status": before_state,
+            "seconds": (new_record or {}).get("seconds"), "record_sha256": row.get("record_sha256"), "passed": row.get("passed"),
+            "audit_passed": _audit_evidence_ok(records, new_record, str(row.get("record_sha256"))),
+        })
+    eligible = {str(row["unit_id"]) for row in rows if row.get("inheritable") is True}
+    registered = len(eligible)
+    audit_passed = sum(1 for unit_id, ref in sources["units"].items() if unit_id in eligible
+                       and _audit_evidence_ok(records, records._read_json(store.record_path(unit_id, ref["record_sha256"])), ref["record_sha256"]))
+    inherited = len(inherited_units)
+    consumer_accepted = int(proof["inherited"]) if proof is not None else None
+    if proof is not None and (consumer_accepted != inherited or not inherited <= audit_passed <= registered
+                              or proof.get("run_id") != run_id or proof.get("executed") != len(reruns)):
+        raise module.ContractError(f"承接计数与消费凭证不一致：登记 {registered}、审计通过 {audit_passed}、消费者接受 {consumer_accepted}、"
+                                   f"实际承接 {inherited}（要求 实际承接＝消费者接受≤审计通过≤登记）")
+    from_predecessor = sum(1 for item in inherited_units if item["source_origin"] == "predecessor_run")
+    executed_audit_passed = sum(1 for item in reruns if item["audit_passed"])
+    return {
+        "inherited_units": inherited_units,
+        "inherit_counts": {"registered": registered, "audit_passed": audit_passed, "consumer_accepted": consumer_accepted,
+                           "inherited": inherited},
+        "rerun_units": reruns,
+        "inherit_summary": {
+            "schema": INHERIT_REPORT_SCHEMA, "run_id": run_id, "predecessor_run_id": source["executor_run_id"],
+            "predecessor_commit": source["commit"], "predecessor_result": source["result"]["path"],
+            "predecessor_ancestry": (source.get("ancestry") or {}).get("status"), "planned": len(rows),
+            "request_source_units": len(sources["units"]), "executed": len(reruns), "inherited": inherited, "not_run": not_run,
+            "rerun_failed_units": [item["unit_id"] for item in reruns if item["passed"] is not True],
+            "executed_audit_passed": executed_audit_passed, "audit_ready_after_run": inherited + executed_audit_passed,
+            "inherited_from_predecessor_run": from_predecessor, "inherited_from_earlier_runs": inherited - from_predecessor,
+            "rerun_seconds": round(sum(float(item["seconds"]) for item in reruns if isinstance(item["seconds"], (int, float))), 3),
+            "inherited_source_seconds": round(sum(float(item["source_seconds"]) for item in inherited_units
+                                                 if isinstance(item["source_seconds"], (int, float))), 3),
+            "outcome": "inherited" if inherited else "full_rerun",
+            "note": ("" if inherited else "没有任何单元被承接：本次实际是整套重新执行，不是承接结论（原因见 rerun_units）"),
+            "definitions": INHERIT_DEFINITIONS,
+        },
+    }
+
+
+def _register_inheritance(payload: Mapping[str, Any], status: str, reason: str | None) -> tuple[dict[str, Any], str, str | None]:
+    """结论落盘前登记承接：通过的结论登记失败就不能通过（中止并写明原因）；失败／中止的结论尽力登记，登记不出来只记错误。"""
+
+    proof = (payload.get("unit_inherit_consumption") or {}).get("proof") if status == "passed" else None
+    try:
+        return {**payload, **_inherit_registry(payload, proof=proof)}, status, reason
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+        if status == "passed":
+            return dict(payload), "aborted", f"后台承接登记不通过：{error}"
+        return {**payload, "inherit_report_error": str(error)}, status, reason
+
+
+def _verify_inherit_registry(payload: Mapping[str, Any], completion: Mapping[str, Any]) -> None:
+    """批次边界重放：结论里登记的承接项、四个计数和重跑类别必须与清单、决策、请求、记录库现算的一致。"""
+
+    fresh = _inherit_registry(payload, proof=completion["proof"])
+    module = _unit_inherit()
+    triples = lambda items: [(item.get("unit_id"), item.get("source_run_id"), item.get("source_record_sha256")) for item in items or []]  # noqa: E731
+    categories = lambda items: [(item.get("unit_id"), item.get("reason_category")) for item in items or []]  # noqa: E731
+    # source_commit 来自可能已被清理的入口门禁目录，重放时不比；其余登记逐项比。
+    if (triples(payload.get("inherited_units")) != triples(fresh["inherited_units"])
+            or payload.get("inherit_counts") != fresh["inherit_counts"]
+            or categories(payload.get("rerun_units")) != categories(fresh["rerun_units"])):
+        raise module.ContractError("结论里登记的承接项、四个计数或重跑原因与清单、决策、请求现算的不一致")
+
+
 def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping[str, Any]] | None = None) -> dict[str, Any]:
     client = getattr(args, "client", None) or "codex"
     parallel = getattr(args, "parallel", None)
@@ -625,8 +1209,28 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     path = result_path(args.runroot, args.commit, deployment, deployments)
     # 后台编译缓存不再依赖操作者的 GOCACHE，也不与前台准入清理共用工作目录。
     bound_roots = _bound_work_roots(args.runroot, args.data_root, args.commit, deployment, deployments)
+    # 跨提交、跨部署后继：物理 WORK 沿用来源后台的那一个（测试树与缓存不重建，与入口线的原位后继同口径），它绑定的是来源自己的
+    # 提交与部署，所以校验放宽到「本轮坐标或来源坐标」；是否恰好等于来源的 WORK 由随后的来源校验逐字核对。
+    source_option = getattr(args, "unit_inherit_source_result", None)
+    source_loaded: tuple[dict[str, Any], str] | None = None
+    source_info: dict[str, Any] | None = None
+    if getattr(args, "allow_unverified_ancestry", False) and source_option is None:
+        raise ValidationError("--allow-unverified-ancestry 只与 --unit-inherit-source-result 同用")
+    if source_option is not None:
+        if getattr(args, "unit_inherit_request", None) is None:
+            raise ValidationError("--unit-inherit-source-result 只与 --unit-inherit-request 同用")
+        source_loaded = _inherit_source_load(args, Path(source_option))
+        try:
+            bound_roots = (*bound_roots, *_work_lineage(Path(args.runroot), Path(args.data_root), source_loaded[0]))
+        except (KeyError, TypeError, AttributeError) as error:
+            raise ValidationError(f"来源后台结论的内容不合法：{error!r}") from error
     work = args.work or bound_roots[0]
     work = Path(work)
+    previous_attempt = _read(path) if source_option is None and args.work else None
+    if (previous_attempt is not None and previous_attempt.get("unit_inherit_source") is not None
+            and not any(work.is_relative_to(root) for root in bound_roots)):
+        # 本提交与部署的上一次尝试是跨提交后继，它的物理 WORK 绑定的是来源的坐标；重试时同样要带来源选项，否则这里认不出那个 WORK。
+        raise ValidationError("本提交与部署的上一次尝试是跨提交后继（物理 WORK 沿用来源后台的）：重试须带同一个 --unit-inherit-source-result")
     if (not work.is_absolute() or ".." in work.parts or not any(work.is_relative_to(root) for root in bound_roots)
             or any(item.is_symlink() for item in (work, *work.parents))):
         raise ValidationError("后台工作目录必须绑定本轮完整提交和部署摘要，不得共用其它轮次目录")
@@ -651,8 +1255,21 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
                 or getattr(args, "rerun_full_set", False)
                 or any(full_set_paths[key] for key in ("full_set_context", "full_set_clock", "full_set_predecessor"))):
             raise ValidationError("后台逐单元续作须显式提供原 WORK、记录库及策略，仅限 full-gates，不能与 B-09 参数同用")
-        inherit_reference = _inherit_reference(Path(inherit_request), vars(args))
+        try:
+            inherit_reference = _inherit_reference(Path(inherit_request), vars(args))
+        except _unit_inherit().ContractError as error:
+            if source_loaded is None:
+                raise   # 同提交、同部署的原续作路径：异常类型与改造前一致
+            raise ValidationError(f"后台跨提交承接的请求或批准不成立：{error}") from error
         inputs.update(execution_contract="unit-inherit/v1", unit_inherit_request=inherit_reference)
+        if source_loaded is not None:
+            try:
+                source_info = _inherit_source_check(args, Path(source_option), source_loaded, client=client, work=work, inputs=inputs,
+                                                    result_path=path)
+            except (KeyError, TypeError, AttributeError) as error:
+                raise ValidationError(f"来源后台结论的内容不合法：{error!r}") from error
+            source_info["request_units_from_source"] = _request_units_from(Path(inherit_request), source_info["executor_run_id"])
+            inputs["unit_inherit_source"] = _inherit_source_contract(source_info)
     existing = _read(path)
     registration = registry_path(args.data_root, args.commit, deployments) if deployments is not None else None
     if registration is not None and (existing is None or effective_status(existing) not in ("running", "passed", "failed")):
@@ -663,7 +1280,9 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         if other is not None and other.get("commit") == args.commit and other.get("deployments") == deployments:
             path, existing = target, other
     rerun = bool(getattr(args, "rerun_full_set", False))
-    if inherit_reference is not None:
+    # 带来源选项的跨提交后继：本提交、本部署还没有结论时，原结论就是来源（已在上面校验）；已有同提交同部署的上一次后继尝试时，
+    # 仍按下面原有规则相对它续作（客户端、提交、部署、WORK、记录库、门禁与调度参数逐项不变）。
+    if inherit_reference is not None and (existing is not None or source_info is None):
         if existing is None:
             raise ValidationError("后台逐单元续作缺少同提交、同部署的原后台结论")
         unchanged = ("bundle_sha256", "branch", "profile", "work", "entry_gates_sha256", "record_store", "parallel")
@@ -737,6 +1356,17 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
             _write(history, existing)
         if inherit_reference is not None:
             payload["predecessor"] = {"path": str(history), "sha256": _sha256_file(history), "status": existing["status"]}
+    if source_info is not None:
+        # 来源结论的冻结副本（内容寻址存进 history，与上面保存旧终态同一做法）：之后来源文件即使被同坐标的重跑改写，运行期与
+        # 批次边界仍按启动时校验过的这一份核对。没有同提交同部署的上一次尝试时，来源也是这次后继的直接前序。
+        frozen_text = json.dumps(source_loaded[0], ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        frozen = path.parent / "history" / (hashlib.sha256(frozen_text.encode()).hexdigest() + ".json")
+        if not frozen.exists():
+            _write(frozen, source_loaded[0])
+        source_info = {**source_info, "frozen": {"path": str(frozen), "sha256": _sha256_file(frozen)}}
+        payload["unit_inherit_source"] = source_info
+        if existing is None:
+            payload["predecessor"] = {"path": str(frozen), "sha256": source_info["frozen"]["sha256"], "status": source_info["status"]}
     _write(path, payload)
     if registration is not None:
         _write(registration, {"schema_version": REGISTRY_SCHEMA, "commit": args.commit, "deployments": dict(deployments),
@@ -751,7 +1381,15 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     current = _read(path) or payload
     if current.get("status") == "running" and current.get("pid") is None:
         _write(path, {**current, "pid": process.pid})
-    return {"action": "started", "result": str(path), "pid": process.pid, "out": str(out), "superseded": superseded}
+    started = {"action": "started", "result": str(path), "pid": process.pid, "out": str(out), "superseded": superseded}
+    if source_info is not None:
+        started["unit_inherit_source"] = {"commit": source_info["commit"], "executor_run_id": source_info["executor_run_id"],
+                                          "status": source_info["status"], "ancestry": source_info["ancestry"]["status"],
+                                          "request_units_from_source": source_info["request_units_from_source"]}
+        if not source_info["request_units_from_source"]:
+            started["unit_inherit_source"]["warning"] = ("承接请求没有登记任何指向来源后台那一轮执行记录的单元：来源后台对这次承接没有贡献，"
+                                                         "请核对请求与来源是否配套")
+    return started
 
 
 def _entry_summary(out: Path) -> dict[str, Any] | None:
@@ -797,6 +1435,10 @@ def run(result: Path) -> int:
                     or payload["input_contract"].get("unit_inherit_request") != payload.get("unit_inherit_request")
                     or _inherit_reference(Path(payload["unit_inherit_request"]["path"]), payload) != payload["unit_inherit_request"]):
                 raise ValidationError("后台逐单元运行的模式、授权与输入合同不一致")
+            if payload.get("unit_inherit_source") is not None:
+                _inherit_source_recheck(payload)   # 跨提交后继：来源登记、冻结副本与 WORK 绑定在运行期没有漂移
+            elif payload["input_contract"].get("unit_inherit_source") is not None:
+                raise ValidationError("后台逐单元运行的输入合同带来源指纹，结论里却没有来源登记")
             argv[2:2] = ["--unit-inherit-request", payload["unit_inherit_request"]["path"], "--unit-inherit-stage", "pre-ledger"]
         # 运行期再核对已登记的资源值；修改结果或输入合同不能悄悄改变门禁的调度策略。
         parallel = payload.get("parallel")
@@ -807,6 +1449,8 @@ def run(result: Path) -> int:
                 raise ValidationError("后台并发参数缺失或发生漂移")
         bound_roots = _bound_work_roots(Path(payload["runroot"]), Path(payload["data_root"]), payload["commit"],
                                        payload["deployment"], payload.get("deployments"))
+        # 跨提交后继沿用来源的物理 WORK：它绑定的是来源自己的提交与部署（来源登记在启动时已校验、上面刚复核过）。
+        bound_roots = (*bound_roots, *_inherit_source_work_roots(payload))
         if (payload.get("cache_roots") != expected_caches or payload.get("input_contract", {}).get("work") != str(work)
                 or not work.is_absolute() or not any(work.is_relative_to(root) for root in bound_roots) or ".." in work.parts):
             raise ValidationError("后台缓存合同缺失或发生漂移")
@@ -857,6 +1501,9 @@ def run(result: Path) -> int:
             current = {**current, "unit_inherit_consumption": _inherit_completion(current)}
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
             status, reason = "aborted", f"后台逐单元消费不通过：{error}"
+    if current.get("unit_inherit_source") is not None:
+        # 跨提交后继：登记每条承接项的来源与四个分开的计数、每个重跑单元的原因与耗时；通过的结论登记不出来就不能通过。
+        current, status, reason = _register_inheritance(current, status, reason)
     _write(path, {**current, "status": status, "completed_at_utc": _utc_now(), "reason": reason, "returncode": returncode,
                   "failed_gates": failed})
     if status == "passed" and current.get("full_set_context"):
@@ -958,9 +1605,20 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
             try:
                 if payload.get("mode") != "unit-inherit" or not payload.get("unit_inherit_request"):
                     raise ValidationError("后台逐单元结论缺少模式或请求")
-                _inherit_completion(payload, historical=True)
+                completion = _inherit_completion(payload, historical=True)
             except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
                 return 3, f"后台逐单元消费证明不能重放（{where}）：{error}"
+            if payload.get("unit_inherit_source") is None and (payload.get("input_contract") or {}).get("unit_inherit_source") is not None:
+                return 3, f"后台跨提交承接登记不能重放（{where}）：输入合同带来源指纹，结论里却没有来源登记"
+            if payload.get("unit_inherit_source") is not None:
+                # 跨提交后继：登记的承接项、四个计数与重跑原因也要与清单、决策、请求现算的一致，不能只信结论文件里的登记。
+                try:
+                    _verify_inherit_registry(payload, completion)
+                except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError) as error:
+                    return 3, f"后台跨提交承接登记不能重放（{where}）：{error}"
+                summary = payload.get("inherit_summary") or {}
+                return 0, (f"后台验证通过（{where}）；跨提交后继：承接 {summary.get('inherited')} 个、重跑 {summary.get('executed')} 个"
+                           + ("（没有任何单元被承接，实际是整套重新执行）" if summary.get("outcome") == "full_rerun" else ""))
         return 0, f"后台验证通过（{where}）"
     if status == "failed":
         return 3, f"后台验证失败（没通过的门禁项 {payload.get('failed_gates')}；{where}）：拒绝派发下一批，修好、定向回归、部署后重新 start"
@@ -991,7 +1649,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--commit", required=True)
     p_start.add_argument("--profile", default=DEFAULT_PROFILE)
     p_start.add_argument("--record-store", type=Path, default=None)
-    p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")
+    p_start.add_argument("--work", type=Path, default=None,
+                         help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生；带 --unit-inherit-source-result 时须是来源后台的那个 WORK")
     p_start.add_argument("--parallel", type=_positive_parallel, default=None, help="门禁单元并发数；缺省沿用执行器配置")
     p_start.add_argument("--vc-env", type=Path, default=None, help="驱动参数文件（ARM64_VC_ENV），后台运行的入口门禁要用")
     p_start.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
@@ -1002,6 +1661,12 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--audit-policy", type=Path, help="B-11 已登记的严格读集策略")
     p_start.add_argument("--rerun-full-set", action="store_true", help="撤销或错绑后显式重跑全集，保留旧终态并关联旧收据")
     p_start.add_argument("--unit-inherit-request", type=Path, help="原后台结束后在同 WORK 按当前批准请求续作，保留旧失败并重验决策")
+    p_start.add_argument("--unit-inherit-source-result", type=Path,
+                         help="跨提交、跨部署后继：旧后台的结论文件（passed／failed、进程组已退出），在同一物理 WORK 的新运行里承接它的成果；"
+                              "只与 --unit-inherit-request 同用")
+    p_start.add_argument("--allow-unverified-ancestry", action="store_true",
+                         help="旧提交是新提交祖先的验证因材料不足做不了时，退化为在结论里标明 unverified（确定不是祖先永远拒绝）；"
+                              "只与 --unit-inherit-source-result 同用")
     p_start.add_argument("--client", choices=DEPLOY_CLIENTS, default="codex", help="绑定哪个客户端的部署收据（缺省 codex）")
     p_run = sub.add_parser("run", help="（内部）跑入口门禁并写结论")
     p_run.add_argument("--result", type=Path, required=True)

@@ -7,13 +7,21 @@
 逐一核对过其余客户端的收据；另一客户端的轮次（另一运行根）start 时搭上同一次验证、不再起；两客户端的批次边界与 VC-5 前
 核对各按自己的收据取到这份结论；新部署起新验证时，登记里旧集合的在跑验证一并停下；搭上的轮次 stop 也停得下它、status 列得出
 它。只有 Codex 纳管时不写集合、不登记。
+
+跨提交、跨部署的后继（``BackgroundCrossCommitInheritTests``）：H7 一轮后台里一个测试故意失败，结论 failed、批次边界退出 3 拒派；
+H8 修好并重新部署（提交与部署收据集合都变了）后，``start --unit-inherit-request … --unit-inherit-source-result <H7 结论>`` 起新
+运行，只重跑失败与受影响的单元，其余承接 H7 那一轮实际执行成功的记录，并在新结论里登记每条承接项的来源运行 ID 与记录摘要、四个分开
+的计数和每个重跑单元的原因与耗时；来源与批准失效、记录被篡改或过期、审计未通过、祖先关系不成立时拒绝或不承接并给出明确原因。
 """
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -25,6 +33,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.ci import background_validation as bv
+from tools.official_client_capture.tests import background_cross_commit_fixture as cross
 from tools.official_client_capture.tests import unit_inherit_fixture as inherit_fixture
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -827,6 +836,742 @@ class BackgroundUnitInheritTests(unittest.TestCase):
                     self.assertEqual(bv.run(path), 3)
                     process.assert_not_called()
                 self.assertEqual(bv._read(path)["status"], "aborted")
+
+
+def tree_snapshot(root: Path) -> dict[str, tuple[int, int]]:
+    """目录树的（相对路径 → 大小、修改时间纳秒）快照：验证祖先关系的读取没有改动测试树里的任何文件。"""
+
+    return {str(path.relative_to(root)): (path.stat().st_size, path.stat().st_mtime_ns)
+            for path in sorted(Path(root).rglob("*")) if path.is_file()}
+
+
+class CrossCommitCase(unittest.TestCase):
+    """跨提交后继测试的共同基座：临时目录、SIGTERM 处理器还原、场景构造；``patch_unit_inherit`` 决定后台模块用哪个承接合同实例。"""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.patch_unit_inherit()
+        old_handler = signal.getsignal(signal.SIGTERM)
+        self.addCleanup(signal.signal, signal.SIGTERM, old_handler)
+
+    def patch_unit_inherit(self) -> None:
+        """缺省：后台模块与夹具共用同一个承接合同实例（时钟钉在替身时刻），与原承接测试同做法。"""
+
+        for patcher in (patch.object(bv, "_unit_inherit", return_value=inherit_fixture.ui),
+                        patch.object(inherit_fixture.ui, "current_time", return_value=inherit_fixture.T0 + 150)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def scenario(self, *, real_git: bool = False, name: str = "scene", **options) -> cross.Scenario:
+        git = cross.GitHistory(self.root / f"{name}-history") if real_git else None
+        scene = cross.Scenario(self, self.root / name, git=git, **options)
+        scene.start_h7()
+        return scene
+
+    def prepared(self, *, real_git: bool = False, **options) -> cross.Scenario:
+        """H7 已失败；H8 已修复并重新部署，新提交就绪（真实 git 时另有增量 bundle）。"""
+
+        scene = self.scenario(real_git=real_git, **options)
+        scene.deploy_h8()
+        scene.prepare_h8()
+        if real_git:
+            scene.advance_git()
+        return scene
+
+
+class BackgroundCrossCommitProductionLoaderTests(CrossCommitCase):
+    """后台模块不替换承接合同、走生产的按路径加载（与夹具不是同一个模块实例，只经文件交接），整条 H7→H8 路径照样成立。"""
+
+    def patch_unit_inherit(self) -> None:
+        sibling = bv._unit_inherit()
+        self.assertIsNot(sibling, inherit_fixture.ui, "生产加载的是另一个模块实例")
+        for target in (sibling, inherit_fixture.ui):
+            patcher = patch.object(target, "current_time", return_value=inherit_fixture.T0 + 150)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_h7_to_h8_works_with_the_modules_loaded_the_production_way(self) -> None:
+        scene = self.prepared(real_git=True)
+        request = scene.request()
+        path = scene.start_successor(request, real_ancestry=True)
+        payload = scene.finish_successor(path, request)
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual(payload["inherit_counts"], {"registered": 6, "audit_passed": 3, "consumer_accepted": 3, "inherited": 3})
+        self.assertEqual({item["source_run_id"] for item in payload["inherited_units"]}, {cross.H7_RUN})
+        for require in (False, True):
+            self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=require)[0], 0)
+        # 登记被改也照样被生产加载路径下的批次边界拦住。
+        forged = json.loads(json.dumps(payload))
+        forged["inherited_units"] = forged["inherited_units"][1:]
+        bv._write(path, forged)
+        self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=True)[0], 3)
+
+
+class BackgroundCrossCommitInheritTests(CrossCommitCase):
+    """跨提交、跨部署的后继：H7 一个测试故意失败 → H8 修好并重新部署后只重跑失败与受影响的单元，其余承接 H7 轮实际执行成功的记录。
+
+    世界由 ``background_cross_commit_fixture`` 搭（原承接夹具上的两轮后台）；承接提案用原合同的 ``propose`` 现算，三个复核点、
+    决策收据、清单自检与承接消费者都是原合同的真实实现，入口门禁与后台子进程是替身。"""
+
+    def test_h7_failure_refuses_batches_then_h8_inherits_h7_records_in_a_new_run(self) -> None:
+        scene = self.scenario(real_git=True)
+        h7_before = scene.h7_path.read_bytes()
+        # H7：形成 failed 结论，批次边界按各客户端自己的部署收据取到同一份结论，退出 3 拒派。
+        for client, runroot in (("codex", scene.runroot), ("claude", scene.claude_runroot)):
+            for require in (False, True):
+                code, message = bv.check(runroot, scene.data, client=client, require_passed=require)
+                self.assertEqual(code, 3, message)
+            self.assertIn("拒绝派发下一批", message)
+        # 修复并重新部署：当前部署还没有后台记录——仍只提示先起后台（语义不改），要求通过的核对退出 3。
+        scene.deploy_h8()
+        scene.prepare_h8()
+        scene.advance_git()
+        code, message = bv.check(scene.runroot, scene.data, require_passed=False)
+        self.assertEqual(code, 0, message)
+        self.assertIn("还没有后台验证", message)
+        self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=True)[0], 3)
+        # 提案用原合同现算：不受影响的单元取 H7 那一轮实际执行成功的新记录（比 SOURCE_RUN 的历史记录新），失败与受影响的、
+        # 只能实时重跑的、没有任何来源记录的单元都不在其中。
+        sources = scene.propose()
+        self.assertEqual(sorted(sources["units"]), sorted(cross.STABLE_UNITS))
+        self.assertEqual({item["run_id"] for item in sources["units"].values()}, {cross.H7_RUN})
+        self.assertEqual({unit: item["record_sha256"] for unit, item in sources["units"].items()},
+                         {unit: scene.h7_records[unit]["record_sha256"] for unit in cross.STABLE_UNITS})
+        request = scene.request(sources)
+        # 起 H8：新结论（新提交、新部署集合）、沿用 H7 的物理 WORK；旧结论原样不动。
+        started = scene.start_h8(request, real_ancestry=True)
+        self.assertNotEqual(started, scene.h7_path)
+        self.assertEqual(scene.h7_path.read_bytes(), h7_before, "旧运行只作来源，不改它的结论")
+        payload = bv._read(started)
+        self.assertEqual((payload["status"], payload["mode"], payload["commit"]), ("running", "unit-inherit", scene.c8))
+        self.assertNotEqual(payload["deployments"], scene.deployments7)
+        self.assertNotEqual(payload["out"], bv._read(scene.h7_path)["out"])
+        self.assertEqual(payload["work"], str(scene.work))
+        source = payload["unit_inherit_source"]
+        self.assertEqual((source["commit"], source["executor_run_id"], source["status"], source["ancestry"]["status"]),
+                         (scene.c7, cross.H7_RUN, "failed", "verified"))
+        self.assertIn("WORK 测试树对象库", source["ancestry"]["method"])
+        self.assertEqual(source["request_units_from_source"], 3, "启动时就提示：请求里有 3 个单元指向来源后台那一轮的执行记录")
+        self.assertEqual(scene.last_started["unit_inherit_source"]["request_units_from_source"], 3)
+        self.assertNotIn("warning", scene.last_started["unit_inherit_source"])
+        self.assertEqual(bv._sha256_file(Path(source["frozen"]["path"])), source["frozen"]["sha256"])
+        self.assertEqual(json.loads(Path(payload["predecessor"]["path"]).read_text()), scene.h7_result)
+        # 起了新验证、还没结论：批次边界放行（running），要求通过的核对仍拒绝。
+        self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=False)[0], 0)
+        self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=True)[0], 3)
+        # H8 跑完：只重跑失败与受影响的单元，其余承接 H7 轮的记录。
+        payload = scene.finish_h8(started, request)
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual(scene.marker.read_text(), "必须保留的来源\n")
+        inherited = {item["unit_id"]: item for item in payload["inherited_units"]}
+        self.assertEqual(sorted(inherited), sorted(cross.STABLE_UNITS))
+        for unit, item in inherited.items():
+            self.assertEqual((item["source_run_id"], item["source_record_sha256"], item["source_commit"], item["source_origin"]),
+                             (cross.H7_RUN, scene.h7_records[unit]["record_sha256"], scene.c7, "predecessor_run"), unit)
+            self.assertEqual(item["source_commit_basis"], "predecessor_result")
+            # 是 H7 那一轮实际执行成功的新记录，不是记录库里更早的历史记录（SOURCE_RUN 里同一个单元另有一条更早的）。
+            self.assertNotEqual(item["source_record_sha256"], scene.world.records[unit]["record_sha256"], unit)
+        # 四个数分开统计（漏斗）：登记 6（实时单元不登记），其中只有 3 个在来源集合里有审计过的来源记录，消费者接受 3，实际承接 3。
+        self.assertEqual(payload["inherit_counts"], {"registered": 6, "audit_passed": 3, "consumer_accepted": 3, "inherited": 3})
+        self.assertEqual(payload["inherit_summary"]["request_source_units"], 3)
+        reruns = {item["unit_id"]: item for item in payload["rerun_units"]}
+        self.assertEqual(set(reruns), {cross.FAILED_UNIT, cross.AFFECTED_UNIT, cross.REALTIME_UNIT, cross.NEW_UNIT})
+        self.assertEqual(set(scene.result.executed_records), set(reruns), "进入重跑队列的只有失败、受影响、实时与新增单元")
+        self.assertEqual(reruns[cross.FAILED_UNIT]["reason_category"], "failed")
+        self.assertIn("inputs_changed", reruns[cross.FAILED_UNIT]["reason_categories"])
+        self.assertEqual(reruns[cross.FAILED_UNIT]["changed_inputs"], [f"file:{cross.FAILED_UNIT}"])
+        self.assertEqual(reruns[cross.AFFECTED_UNIT]["reason_category"], "inputs_changed")
+        self.assertEqual(reruns[cross.REALTIME_UNIT]["reason_category"], "unaudited_realtime")
+        self.assertEqual(reruns[cross.NEW_UNIT]["reason_category"], "no_source")
+        self.assertEqual(reruns[cross.NEW_UNIT]["predecessor_status"], "absent")
+        for item in reruns.values():
+            self.assertEqual(item["seconds"], 1.0, "每个重跑单元记录耗时")
+            self.assertTrue(item["reason"] and item["reasons"])
+            self.assertIs(item["audit_passed"], True, "重跑单元新执行记录的读集审计结论也登记")
+        summary = payload["inherit_summary"]
+        self.assertEqual((summary["outcome"], summary["planned"], summary["executed"], summary["inherited"],
+                          summary["inherited_from_predecessor_run"], summary["inherited_from_earlier_runs"]),
+                         ("inherited", 7, 4, 3, 3, 0))
+        self.assertEqual((summary["executed_audit_passed"], summary["audit_ready_after_run"], summary["rerun_failed_units"],
+                          summary["rerun_seconds"], summary["inherited_source_seconds"]), (4, 7, [], 4.0, 3.0))
+        self.assertEqual(set(summary["definitions"]), {"registered", "audit_passed", "consumer_accepted", "inherited", "executed_audit_passed",
+                                                       "audit_ready_after_run", "rerun_seconds"}, "结论文件自带四个计数与耗时的口径说明")
+        self.assertEqual(summary["predecessor_ancestry"], "verified")
+        self.assertEqual(payload["unit_inherit_consumption"]["proof"]["inherited"], 3)
+        # 批次边界：两个客户端的通过核对（含承接消费证明与登记重放）都放行；H7 的失败结论不再是当前部署的结论。
+        for client, runroot in (("codex", scene.runroot), ("claude", scene.claude_runroot)):
+            for require in (False, True):
+                code, message = bv.check(runroot, scene.data, client=client, require_passed=require)
+                self.assertEqual(code, 0, message)
+                self.assertIn("后台验证通过", message)
+                self.assertIn("跨提交后继：承接 3 个、重跑 4 个", message)
+        self.assertEqual(scene.h7_path.read_bytes(), h7_before)
+
+    def test_the_claude_client_round_takes_the_same_path(self) -> None:
+        """真实的修复轮是 Claude 客户端：结论带 client，部署收据取 Claude 的那份，两个客户端的批次边界各按自己的收据取到它。"""
+
+        scene = self.scenario(client="claude")
+        self.assertEqual(bv._read(scene.h7_path)["client"], "claude")
+        for client, runroot in (("claude", scene.claude_runroot), ("codex", scene.runroot)):
+            self.assertEqual(bv.check(runroot, scene.data, client=client, require_passed=False)[0], 3, "H7 失败：两个客户端都拒派")
+        scene.deploy_h8()
+        scene.prepare_h8()
+        request = scene.request()
+        path = scene.start_successor(request)
+        started = bv._read(path)
+        self.assertEqual((started["client"], started["unit_inherit_source"]["client"], started["deployment"]["receipt"]),
+                         ("claude", "claude", scene.claude_d8.name))
+        finished = scene.finish_successor(path, request)
+        self.assertEqual(finished["status"], "passed", finished)
+        self.assertEqual(finished["inherit_counts"], {"registered": 6, "audit_passed": 3, "consumer_accepted": 3, "inherited": 3})
+        self.assertEqual({item["source_run_id"] for item in finished["inherited_units"]}, {cross.H7_RUN})
+        for client, runroot in (("claude", scene.claude_runroot), ("codex", scene.runroot)):
+            for require in (False, True):
+                code, message = bv.check(runroot, scene.data, client=client, require_passed=require)
+                self.assertEqual(code, 0, message)
+        # 来源是 Claude 的轮次，换 Codex 起后继（客户端不同）被拒。
+        scene.restore_h7()
+        self.assert_refused(scene, scene.request(client="codex"), "客户端（来源 claude，本次 codex）", client="codex")
+
+    # ------------------------------------------------------------------ 拒绝：选项、来源状态与身份
+
+    def results(self, scene: cross.Scenario) -> list[str]:
+        return sorted(path.name for path in (scene.runroot / "background-validation").glob("*.json"))
+
+    def assert_refused(self, scene: cross.Scenario, request: Path | None, pattern: str, *extra: str, **kwargs) -> None:
+        """起后继被拒：抛 ValidationError（中文原因含 ``pattern``），不留下新结论，来源结论原样不动。"""
+
+        before, source_before = self.results(scene), scene.h7_path.read_bytes()
+        with self.assertRaisesRegex(bv.ValidationError, pattern):
+            scene.start_successor(request, *extra, **kwargs)
+        self.assertEqual(self.results(scene), before, "拒绝时不得留下新结论")
+        self.assertEqual(scene.h7_path.read_bytes(), source_before)
+
+    def test_source_option_needs_the_request_and_the_ancestry_flag_needs_the_source(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        self.assert_refused(scene, None, "--unit-inherit-source-result 只与 --unit-inherit-request 同用")
+        self.assert_refused(scene, request, "--allow-unverified-ancestry 只与 --unit-inherit-source-result 同用",
+                            "--allow-unverified-ancestry", source=None)
+
+    def test_running_vanished_aborted_or_stopped_sources_are_refused_and_passed_is_accepted(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        for label, changes, pattern in (
+                ("仍在运行", {"status": "running", "pid": os.getpid(), "completed_at_utc": None}, "仍在运行，拒绝承接"),
+                ("进程消失", {"status": "running", "pid": 2 ** 22 + 12345, "completed_at_utc": None}, "进程已不在而没有写结论"),
+                ("中止", {"status": "aborted", "reason": "收到信号 15"}, "中止、没有门禁结论"),
+                ("被停下", {"status": "superseded", "reason": "被更新的修复轮停下"}, "被停下的运行没有发布运行清单")):
+            with self.subTest(label):
+                scene.rewrite_h7(**changes)
+                self.assert_refused(scene, request, pattern)
+        scene.restore_h7()
+        with patch.object(bv, "_group_alive", return_value=True):
+            self.assert_refused(scene, request, "进程组尚未退出")
+        # passed 的来源同样是合法来源（成果完整即可）。
+        scene.rewrite_h7(status="passed", returncode=0, failed_gates=[])
+        payload = bv._read(scene.start_successor(request))
+        self.assertEqual(payload["unit_inherit_source"]["status"], "passed")
+
+    def test_source_must_share_client_group_work_record_store_and_parallel(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        own_work = bv._bound_work_roots(scene.runroot, scene.data, scene.c8, bv.latest_deployment(scene.data),
+                                        bv.deployment_set(scene.data))[0]
+        other_store = str(scene.root / "other-store")
+        cases = (
+            ("客户端", {"client": "claude"}, {}, "客户端（来源 claude，本次 codex）"),
+            ("组合", {"profile": "entry"}, {}, "组合（来源 entry"),
+            ("记录库", {"record_store": other_store}, {}, "记录库（来源 "),
+            ("来源并发", {"input_contract": {**scene.h7_result["input_contract"], "parallel": 3}}, {}, "调度并发参数（来源 3，本次 2）"),
+            ("本次并发", {}, {"parallel": "3"}, "调度并发参数（来源 2，本次 3）"),
+            ("WORK", {}, {"work": own_work}, "WORK（来源 "),
+        )
+        for label, changes, options, pattern in cases:
+            with self.subTest(label):
+                scene.rewrite_h7(**changes)
+                self.assert_refused(scene, request, pattern, **options)
+        scene.restore_h7()
+        # 伪造来源的提交不能把别处的 WORK 说成来源的：WORK 须在「本轮坐标或来源自己的坐标」所绑定的根里。
+        scene.rewrite_h7(commit="1" * 40)
+        self.assert_refused(scene, request, "后台工作目录必须绑定")
+        scene.rewrite_h7(commit="zz")
+        self.assert_refused(scene, request, "缺少提交或部署绑定")
+        scene.rewrite_h7(input_contract=["不是对象"])   # 内容残缺的结论不能让命令行抛栈，要明确拒绝
+        self.assert_refused(scene, request, "来源后台结论的内容不合法")
+
+    def test_source_file_must_be_a_regular_result_of_this_runroot(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        directory = scene.runroot / "background-validation"
+        outside = scene.root / "elsewhere.json"
+        outside.write_bytes(scene.h7_path.read_bytes())
+        wrong_schema = directory / "wrong-schema.json"
+        wrong_schema.write_text(json.dumps({"schema_version": "other/v1"}))
+        garbage = directory / "garbage.json"
+        garbage.write_text("不是 JSON")
+        link = directory / "link.json"
+        link.symlink_to(scene.h7_path)
+        missing = directory / "missing.json"
+        for label, source, pattern in (("别的目录", outside, "必须是本运行根的后台结论"), ("格式不对", wrong_schema, "不是 background-validation/v1"),
+                                       ("不是 JSON", garbage, "不可读或不是合法 JSON"), ("符号链接", link, "无符号链接的规范绝对路径"),
+                                       ("不存在", missing, "不可读或不是合法 JSON")):
+            with self.subTest(label):
+                self.assert_refused(scene, request, pattern, source=source)
+        # 本提交、本部署的当前结论不能当来源（那是同提交同部署的原续作路径）。
+        deployment, deployments = bv.latest_deployment(scene.data), bv.deployment_set(scene.data)
+        current = bv.result_path(scene.runroot, scene.c8, deployment, deployments)
+        bv._write(current, scene.h7_result)
+        self.assert_refused(scene, request, "就是本提交与部署的当前结论", source=current)
+
+    def test_source_must_leave_a_published_manifest_and_consistent_summary(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        summary_path, manifest_path = scene.h7_out / "entry-gates.json", scene.h7_out / "executor" / "unit-manifest.json"
+        published = scene.world.store.manifest_path(cross.H7_RUN)
+
+        def edited(path: Path, change) -> None:
+            payload = json.loads(path.read_text())
+            change(payload)
+            path.write_text(json.dumps(payload))
+
+        cases = (
+            ("没有摘要", summary_path, lambda path: path.unlink(), "没有留下入口门禁摘要或逐单元清单"),
+            ("没有清单", manifest_path, lambda path: path.unlink(), "没有留下入口门禁摘要或逐单元清单"),
+            ("清单被改", manifest_path, lambda path: edited(path, lambda body: body.update(inheritance_max_age_hours=1)), "自摘要不符"),
+            ("自检未通过", summary_path, lambda path: edited(path, lambda body: body["unit_manifest"].update(self_check="failed")), "自摘要不符"),
+            ("提交不一致", summary_path, lambda path: edited(path, lambda body: body["source"].update(commit="2" * 40)), "入口门禁摘要里的提交"),
+            ("没有发布进记录库", published, lambda path: path.unlink(), "没有发布进本记录库"),
+        )
+        for label, path, damage, pattern in cases:
+            with self.subTest(label):
+                original = path.read_bytes()
+                try:
+                    damage(path)
+                    self.assert_refused(scene, request, pattern)
+                finally:
+                    path.write_bytes(original)
+        self.assertEqual(bv._read(scene.start_successor(request))["status"], "running", "还原之后可以正常起")
+
+    # ------------------------------------------------------------------ 拒绝：请求与批准
+
+    def test_expired_misscoped_or_unbound_approvals_and_a_foreign_context_are_refused(self) -> None:
+        scene = self.prepared()
+        sources = scene.propose()
+        fs = inherit_fixture.fs
+        roles = sorted(fs.APPROVAL_ROLES)
+
+        def approvals(**overrides):
+            return lambda binding: [scene.world.approval(role, binding, **overrides) for role in roles]
+
+        wrapped = "后台跨提交承接的请求或批准不成立：专项批准缺失、错绑、已撤回或过期"
+        cases = (
+            ("批准过期", {"approvals": approvals(expires_at_utc=fs.timestamp(inherit_fixture.T0 - 10))}, wrapped),
+            ("批准范围不匹配", {"approvals": approvals(scope="unit-inherit/v0")}, wrapped),
+            ("批准绑定的不是本上下文与来源集合", {"approvals": approvals(binding_sha256="0" * 64)}, wrapped),
+            ("批准已撤回", {"approvals": approvals(status="revoked")}, wrapped),
+            ("缺一类批准", {"approvals": lambda binding: [scene.world.approval(roles[0], binding)]},
+             "后台跨提交承接的请求或批准不成立：缺少三方审核及变更批准"),
+            ("请求的提交不是本次的", {"commit": scene.c7}, "请求未开启承接，或客户端、提交、部署集合、阶段、组合、记录库错绑"),
+        )
+        for label, options, pattern in cases:
+            with self.subTest(label):
+                self.assert_refused(scene, scene.request(sources, **options), pattern)
+
+    # ------------------------------------------------------------------ 祖先关系（真实 git 历史）
+
+    def test_ancestry_is_verified_with_the_work_history_and_a_foreign_history_line_is_refused(self) -> None:
+        scene = self.prepared(real_git=True)
+        git = scene.git
+        before = tree_snapshot(scene.work / "test-tree")
+        unrelated = git.bundle(scene.root / "unrelated.bundle", git.unrelated, "unrelated")
+        created: list[Path] = []
+        real_mkdtemp = tempfile.mkdtemp
+
+        def recording(*args, **kwargs) -> str:
+            created.append(Path(real_mkdtemp(*args, **kwargs)))
+            return str(created[-1])
+
+        with patch.object(tempfile, "mkdtemp", side_effect=recording):
+            # 新提交建在另一条无关历史线上：旧提交不是它的祖先——确定不是祖先，永远拒绝，显式退化开关也绕不过。
+            request = scene.request(commit=git.unrelated_new)
+            for extra in ((), ("--allow-unverified-ancestry",)):
+                self.assert_refused(scene, request, "不是新提交 [0-9a-f]{12} 的祖先", *extra, real_ancestry=True,
+                                    commit=git.unrelated_new, bundle=unrelated, branch="unrelated")
+            # bundle 里没有这个分支指向这个提交：参数自相矛盾，同样绕不过。
+            self.assert_refused(scene, scene.request(), "bundle 里没有分支 no-such-branch", "--allow-unverified-ancestry",
+                                real_ancestry=True, branch="no-such-branch")
+        # 验证用的临时对象库用完即删（成功、拒绝两种出口都删），测试树一个字节都不动。
+        self.assertEqual(len(created), 3)
+        self.assertFalse([path for path in created if path.exists()])
+        self.assertEqual(tree_snapshot(scene.work / "test-tree"), before)
+        # 旧提交的祖先关系成立：登记验证方式。
+        payload = bv._read(scene.start_successor(scene.request(), real_ancestry=True))
+        self.assertEqual(payload["unit_inherit_source"]["ancestry"],
+                         {"old_commit": scene.c7, "new_commit": scene.c8, "status": "verified",
+                          "method": "git merge-base --is-ancestor（临时对象库：WORK 测试树对象库作备用，加新 bundle）"})
+        self.assertEqual(tree_snapshot(scene.work / "test-tree"), before)
+
+    def test_unverifiable_ancestry_is_refused_unless_explicitly_degraded_and_recorded(self) -> None:
+        scene = self.prepared(real_git=True)
+        shutil.rmtree(scene.work / "test-tree")   # 没有完整历史：增量 bundle 的前置提交无处可寻
+        request = scene.request()
+        self.assert_refused(scene, request, "无法验证旧提交 [0-9a-f]{12} 是新提交 [0-9a-f]{12} 的祖先.*--allow-unverified-ancestry",
+                            real_ancestry=True)
+        payload = bv._read(scene.start_successor(request, "--allow-unverified-ancestry", real_ancestry=True))
+        ancestry = payload["unit_inherit_source"]["ancestry"]
+        self.assertEqual((ancestry["status"], ancestry["method"]), ("unverified", "none"))
+        self.assertIn("bundle 校验失败", ancestry["reason"])
+        self.assertEqual(scene.last_started["unit_inherit_source"]["ancestry"], "unverified")
+        # 没有测试树但 bundle 自带完整历史（不是增量）：只靠 bundle 就能验证，方式如实写明。
+        full = scene.git.bundle(scene.root / "full.bundle", None, cross.BRANCH)
+        verified = bv._verify_ancestry(scene.c7, scene.c8, bundle=full, branch=cross.BRANCH, work=scene.work)
+        self.assertEqual((verified["status"], verified["method"]), ("verified", "git merge-base --is-ancestor（临时对象库：仅新 bundle 自带历史）"))
+
+    def test_ancestry_decisions_for_equal_unknown_and_foreign_commits(self) -> None:
+        scene = self.prepared(real_git=True)
+        git, work = scene.git, scene.work
+        common = {"bundle": scene.h8_bundle, "branch": cross.BRANCH, "work": work}
+        self.assertEqual(bv._verify_ancestry(scene.c7, scene.c7, **common),
+                         {"old_commit": scene.c7, "new_commit": scene.c7, "status": "verified", "method": "same-commit"})
+        unknown = "1" * 40
+        with self.assertRaisesRegex(bv.ValidationError, "旧提交 111111111111 不在可用历史里"):
+            bv._verify_ancestry(unknown, scene.c8, **common)
+        degraded = bv._verify_ancestry(unknown, scene.c8, allow_unverified=True, **common)
+        self.assertEqual((degraded["status"], degraded["method"]), ("unverified", "none"))
+        with self.assertRaisesRegex(bv.ValidationError, "不是新提交"):
+            bv._verify_ancestry(git.unrelated, scene.c8, allow_unverified=True, **common)
+        with patch.object(bv, "_git", side_effect=FileNotFoundError("git")):   # 机器上没有 git：无法验证，不是「不是祖先」
+            with self.assertRaisesRegex(bv.ValidationError, "找不到可用的 git"):
+                bv._verify_ancestry(scene.c7, scene.c8, **common)
+            self.assertEqual(bv._verify_ancestry(scene.c7, scene.c8, allow_unverified=True, **common)["status"], "unverified")
+        # 同一提交换了部署（重新部署同一提交）：不需要 git 就成立，端到端可用。
+        request = scene.request(commit=scene.c7)
+        payload = bv._read(scene.start_successor(request, commit=scene.c7, real_ancestry=True))
+        self.assertEqual(payload["unit_inherit_source"]["ancestry"]["method"], "same-commit")
+
+    # ------------------------------------------------------------------ 单元级的不承接：来源失效、被篡改、过期、审计未通过
+
+    def run_successor(self, scene: cross.Scenario, sources: dict, *, damage=None, **request_options):
+        request = scene.request(sources, **request_options)
+        path = scene.start_successor(request)
+        if damage is not None:
+            damage()
+        return scene.finish_successor(path, request), path
+
+    def rerun_map(self, payload: dict) -> dict:
+        return {item["unit_id"]: item for item in payload["rerun_units"]}
+
+    def test_a_tampered_source_record_is_neither_audited_nor_inherited(self) -> None:
+        scene = self.prepared()
+        sources = scene.propose()
+        victim = inherit_fixture.EGRESS[0]
+
+        def tamper() -> None:
+            record_path = scene.world.store.record_path(victim, sources["units"][victim]["record_sha256"])
+            body = json.loads(record_path.read_text())
+            body["seconds"] = 999.0   # 改一个字段而不重算自摘要
+            record_path.write_text(json.dumps(body))
+
+        payload, path = self.run_successor(scene, sources, damage=tamper)
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual(sorted(item["unit_id"] for item in payload["inherited_units"]), sorted(set(cross.STABLE_UNITS) - {victim}))
+        # 登记 6、审计通过 2（被篡改的记录不算审计通过）、消费者接受 2、实际承接 2：四个数分开统计。
+        self.assertEqual(payload["inherit_counts"], {"registered": 6, "audit_passed": 2, "consumer_accepted": 2, "inherited": 2})
+        item = self.rerun_map(payload)[victim]
+        self.assertEqual(item["reason_category"], "source_invalid")
+        self.assertIn("记录自摘要不符（被改过）", "；".join(item["reasons"]))
+        self.assertEqual(payload["inherit_summary"]["outcome"], "inherited")
+        self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=True)[0], 0)
+
+    def test_a_source_record_without_a_passed_read_audit_is_not_inherited(self) -> None:
+        victim = inherit_fixture.EGRESS[1]
+        scene = self.prepared(h7_no_audit=(victim,))
+        sources = scene.explicit_sources({unit: scene.h7_records[unit] for unit in cross.STABLE_UNITS})
+        payload, path = self.run_successor(scene, sources)
+        self.assertEqual(payload["status"], "passed", payload)
+        self.assertEqual(sorted(item["unit_id"] for item in payload["inherited_units"]), sorted(set(cross.STABLE_UNITS) - {victim}))
+        self.assertEqual(payload["inherit_counts"], {"registered": 6, "audit_passed": 2, "consumer_accepted": 2, "inherited": 2})
+        item = self.rerun_map(payload)[victim]
+        self.assertEqual(item["reason_category"], "audit_not_passed")
+        self.assertIn("读集覆盖未闭合", "；".join(item["reasons"]))
+
+    def test_expired_or_revoked_sources_degrade_to_an_explicit_full_rerun_not_a_fake_inheritance(self) -> None:
+        for index, label in enumerate(("过期", "撤销")):
+            with self.subTest(label):
+                scene = self.prepared(name=f"scene-{index}")
+                sources = scene.propose()
+                damage, options = None, {}
+                if label == "过期":
+                    options["max_age_hours"] = 0.25   # H7 的记录完成在 30 分钟前
+                    hint = "超过承接期限"
+                else:
+                    def damage() -> None:
+                        inherit_fixture.ui.revoke(scene.world.store.root, cross.H7_RUN, reason="来源运行被撤销", actor="验收")
+                    hint = "已撤销"
+                payload, path = self.run_successor(scene, sources, damage=damage, **options)
+                self.assertEqual(payload["status"], "passed", payload)
+                self.assertEqual(payload["inherited_units"], [])
+                self.assertEqual(payload["inherit_counts"], {"registered": 6, "audit_passed": 3, "consumer_accepted": 0, "inherited": 0})
+                self.assertEqual(payload["inherit_summary"]["outcome"], "full_rerun")
+                self.assertIn("整套重新执行", payload["inherit_summary"]["note"])
+                self.assertEqual(len(payload["rerun_units"]), 7, "全部单元重新执行")
+                reruns = self.rerun_map(payload)
+                for unit in cross.STABLE_UNITS:
+                    self.assertEqual(reruns[unit]["reason_category"], "source_invalid", unit)
+                    self.assertIn(hint, "；".join(reruns[unit]["reasons"]))
+                self.assertEqual(payload["unit_inherit_consumption"]["proof"]["inherited"], 0)
+                code, message = bv.check(scene.runroot, scene.data, require_passed=True)
+                self.assertEqual(code, 0, message)
+                self.assertIn("没有任何单元被承接，实际是整套重新执行", message, "批次边界也不静默：整套重跑不冒充承接")
+
+    def test_mixed_sources_register_where_each_inherited_record_came_from(self) -> None:
+        scene = self.prepared()
+        older, stable = inherit_fixture.EGRESS[1], cross.STABLE_UNITS
+        records = {unit: scene.h7_records[unit] for unit in stable}
+        records[older] = scene.world.records[older]   # 这一条来自更早的历史（SOURCE_RUN），不是 H7 那一轮
+        payload, path = self.run_successor(scene, scene.explicit_sources(records))
+        self.assertEqual(payload["status"], "passed", payload)
+        inherited = {item["unit_id"]: item for item in payload["inherited_units"]}
+        self.assertEqual(sorted(inherited), sorted(stable))
+        for unit in set(stable) - {older}:
+            self.assertEqual((inherited[unit]["source_run_id"], inherited[unit]["source_origin"], inherited[unit]["source_commit"]),
+                             (cross.H7_RUN, "predecessor_run", scene.c7))
+        self.assertEqual((inherited[older]["source_run_id"], inherited[older]["source_origin"]), (inherit_fixture.SOURCE_RUN, "earlier_run"))
+        self.assertEqual(inherited[older]["source_record_sha256"], scene.world.records[older]["record_sha256"])
+        self.assertEqual((inherited[older]["source_commit"], inherited[older]["source_commit_basis"]), (None, None),
+                         "解析不出来源运行的提交就如实写空，不猜")
+        self.assertEqual((payload["inherit_summary"]["inherited_from_predecessor_run"], payload["inherit_summary"]["inherited_from_earlier_runs"]),
+                         (2, 1))
+
+    def test_start_warns_when_the_request_takes_nothing_from_the_source_run(self) -> None:
+        scene = self.prepared()
+        older = inherit_fixture.EGRESS[1]
+        # 请求里只有更早历史里的一条记录，没有任何单元指向来源后台那一轮：来源对这次承接没有贡献，启动时就提示（不拒绝）。
+        scene.start_successor(scene.request(scene.explicit_sources({older: scene.world.records[older]})))
+        info = scene.last_started["unit_inherit_source"]
+        self.assertEqual(info["request_units_from_source"], 0)
+        self.assertIn("没有贡献", info["warning"])
+
+    def test_a_failed_successor_still_registers_what_it_inherited_without_a_consumer_count(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        path = scene.start_successor(request)
+        payload = scene.finish_successor(path, request, returncode=1, failing="test-capture-tools")
+        self.assertEqual((payload["status"], payload["failed_gates"]), ("failed", ["test-capture-tools"]))
+        self.assertNotIn("inherit_report_error", payload)
+        self.assertEqual(payload["inherit_counts"], {"registered": 6, "audit_passed": 3, "consumer_accepted": None, "inherited": 3})
+        self.assertEqual(len(payload["inherited_units"]), 3)
+        self.assertEqual(payload["inherit_summary"]["rerun_failed_units"], [], "单元都通过，是门禁项失败")
+        code, message = bv.check(scene.runroot, scene.data, require_passed=False)
+        self.assertEqual(code, 3, message)
+        self.assertIn("拒绝派发下一批", message)
+
+    def test_a_rerun_that_fails_again_is_registered_as_such(self) -> None:
+        scene = self.prepared()
+        scene.world.failing_in_run[cross.H8_RUN] = {cross.FAILED_UNIT}   # 修复没修好：重跑之后 test_alpha 仍然失败
+        request = scene.request()
+        path = scene.start_successor(request)
+        payload = scene.finish_successor(path, request, returncode=1, failing="test-capture-tools")
+        self.assertEqual(payload["status"], "failed", payload)
+        item = {entry["unit_id"]: entry for entry in payload["rerun_units"]}[cross.FAILED_UNIT]
+        self.assertEqual((item["passed"], item["predecessor_status"], item["reason_category"]), (False, "failed", "failed"))
+        self.assertEqual(payload["inherit_summary"]["rerun_failed_units"], [cross.FAILED_UNIT])
+        self.assertEqual(payload["inherit_summary"]["executed"], 4)
+
+    def test_successor_chain_keeps_the_physical_work_and_resolves_older_source_commits(self) -> None:
+        scene = self.prepared()
+        request8 = scene.request()
+        path8 = scene.start_successor(request8)
+        failed8 = scene.finish_successor(path8, request8, returncode=1, failing="test-capture-tools")
+        self.assertEqual(failed8["status"], "failed")
+        # H8 也失败了；再修复、再部署（H9）：以 H8 的失败结论作来源，物理 WORK 仍是 H7 留下的那个。
+        scene.deploy_h9()
+        request9 = scene.request(commit=cross.C9)
+        path9 = scene.start_successor(request9, commit=cross.C9, source=path8)
+        payload = bv._read(path9)
+        self.assertEqual((payload["work"], payload["unit_inherit_source"]["executor_run_id"], payload["unit_inherit_source"]["commit"]),
+                         (str(scene.work), cross.H8_RUN, scene.c8))
+        finished = scene.finish_successor(path9, request9, run_id=cross.H9_RUN, commit=cross.C9, receipts=(scene.codex_d9, scene.claude_d9))
+        self.assertEqual(finished["status"], "passed", finished)
+        inherited = {item["unit_id"]: item for item in finished["inherited_units"]}
+        self.assertEqual(sorted(inherited), sorted([*cross.STABLE_UNITS, cross.FAILED_UNIT, cross.AFFECTED_UNIT, cross.NEW_UNIT]))
+        for unit in cross.STABLE_UNITS:   # 更早（H7 轮）的记录：来源提交从那一轮的入口门禁摘要解析
+            self.assertEqual((inherited[unit]["source_run_id"], inherited[unit]["source_origin"], inherited[unit]["source_commit"],
+                              inherited[unit]["source_commit_basis"]), (cross.H7_RUN, "earlier_run", scene.c7, "entry_gates_summary"))
+        for unit in (cross.FAILED_UNIT, cross.AFFECTED_UNIT, cross.NEW_UNIT):   # H8 那一轮实际执行成功的新记录
+            self.assertEqual((inherited[unit]["source_run_id"], inherited[unit]["source_origin"], inherited[unit]["source_commit"]),
+                             (cross.H8_RUN, "predecessor_run", scene.c8))
+        self.assertEqual([item["unit_id"] for item in finished["rerun_units"]], [cross.REALTIME_UNIT])
+        self.assertEqual(finished["inherit_counts"], {"registered": 6, "audit_passed": 6, "consumer_accepted": 6, "inherited": 6})
+        for require in (False, True):
+            self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=require)[0], 0)
+
+    # ------------------------------------------------------------------ 运行期漂移、批次边界重放、重复与重试
+
+    def test_run_refuses_a_drifted_source_registration_before_dispatching_the_gates(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        path = scene.start_successor(request)
+        original = bv._read(path)
+        source = original["unit_inherit_source"]
+
+        def drifted(**changes):
+            return {**original, "unit_inherit_source": {**source, **changes}}
+
+        frozen = Path(source["frozen"]["path"])
+        frozen_bytes = frozen.read_bytes()
+        outside = scene.root / "outside-copy.json"   # 内容与摘要都对，但不在本运行根的 history 目录里
+        outside.write_bytes(frozen_bytes)
+        stripped = {key: value for key, value in original.items() if key != "unit_inherit_source"}
+        cases = (
+            ("冻结摘要被改", drifted(frozen={**source["frozen"], "sha256": "0" * 64}), "冻结副本缺失或被改动"),
+            ("冻结副本换成别处的拷贝", drifted(frozen={"path": str(outside), "sha256": source["frozen"]["sha256"]}), "冻结副本缺失或被改动"),
+            ("来源 WORK 被改", drifted(work=str(scene.root / "elsewhere")), "来源登记与输入合同不一致"),
+            ("来源运行被改", drifted(executor_run_id="20261005t000000z-1-forged"), "来源登记与输入合同不一致"),
+            ("登记被删而合同还带指纹", stripped, "结论里却没有来源登记"),
+        )
+        for label, payload, pattern in cases:
+            with self.subTest(label):
+                bv._write(path, payload)
+                with patch.object(bv.subprocess, "Popen") as process:
+                    self.assertEqual(bv.run(path), 3)
+                    process.assert_not_called()
+                aborted = bv._read(path)
+                self.assertEqual(aborted["status"], "aborted")
+                self.assertRegex(aborted["reason"], pattern)
+        bv._write(path, original)
+        frozen.write_bytes(frozen_bytes + b"\n")   # 冻结副本的内容被动过
+        with patch.object(bv.subprocess, "Popen") as process:
+            self.assertEqual(bv.run(path), 3)
+            process.assert_not_called()
+        self.assertIn("冻结副本缺失或被改动", bv._read(path)["reason"])
+
+    def test_boundary_replays_the_registration_against_the_manifest_decision_and_request(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        path = scene.start_successor(request)
+        passed = scene.finish_successor(path, request)
+        self.assertEqual(passed["status"], "passed", passed)
+        self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=True)[0], 0)
+        for label, change in (
+                ("少登一条承接项", lambda body: body.update(inherited_units=body["inherited_units"][1:])),
+                ("来源记录摘要被改", lambda body: body["inherited_units"][0].update(source_record_sha256="0" * 64)),
+                ("来源运行被改", lambda body: body["inherited_units"][0].update(source_run_id=inherit_fixture.SOURCE_RUN)),
+                ("计数被改", lambda body: body["inherit_counts"].update(inherited=body["inherit_counts"]["inherited"] + 1)),
+                ("重跑类别被改", lambda body: body["rerun_units"][0].update(reason_category="failed")),
+                ("登记整个删掉", lambda body: body.pop("inherited_units")),
+                ("来源登记被删而合同还带指纹", lambda body: body.pop("unit_inherit_source"))):
+            with self.subTest(label):
+                forged = json.loads(json.dumps(passed))
+                change(forged)
+                bv._write(path, forged)
+                code, message = bv.check(scene.runroot, scene.data, require_passed=True)
+                self.assertEqual(code, 3, message)
+                self.assertIn("后台跨提交承接登记不能重放", message)
+                self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=False)[0], 3)
+        bv._write(path, passed)
+        self.assertEqual(bv.check(scene.runroot, scene.data, require_passed=True)[0], 0)
+
+    def test_repeating_the_start_is_idempotent_and_a_different_source_is_a_different_contract(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        path = scene.start_successor(request)
+        scene.finish_successor(path, request)
+        again = scene.start_successor(request)
+        self.assertEqual((again, scene.last_started["action"], scene.last_started["status"]), (path, "exists", "passed"))
+        frozen_copy = Path(bv._read(path)["unit_inherit_source"]["frozen"]["path"])   # 内容相同、路径不同的来源
+        self.assert_refused(scene, request, "输入或缓存隔离合同不同", source=frozen_copy)
+
+    def test_a_transiently_aborted_attempt_can_be_retried_against_the_same_source(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        path = scene.start_successor(request)
+        attempt = bv._read(path)
+        bv._write(path, {**attempt, "status": "aborted", "reason": "机器重启", "returncode": 3})
+        # 重试漏带来源选项：认不出沿用来源的物理 WORK，明确提示，不留下新结论、不改上一次尝试。
+        before = path.read_bytes()
+        with self.assertRaisesRegex(bv.ValidationError, "上一次尝试是跨提交后继.*重试须带同一个 --unit-inherit-source-result"):
+            scene.start_successor(request, source=None)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(scene.start_successor(request), path)
+        retried = bv._read(path)
+        self.assertEqual((retried["status"], retried["predecessor"]["status"]), ("running", "aborted"))
+        self.assertEqual(retried["unit_inherit_source"]["executor_run_id"], cross.H7_RUN)
+        final = scene.finish_successor(path, request)
+        self.assertEqual(final["status"], "passed", final)
+        self.assertEqual(len(final["inherited_units"]), 3)
+
+    # ------------------------------------------------------------------ 兼容：原续作路径与命令行
+
+    def test_same_commit_same_deployment_resume_keeps_its_shape_and_never_needs_the_source(self) -> None:
+        scene = self.scenario()
+        request = scene.request(commit=scene.c7)
+        path = scene.start_successor(request, commit=scene.c7, source=None, bundle=scene.dummy_bundle)
+        self.assertEqual(path, scene.h7_path, "原路径：同提交同部署续作写回同一个结论文件")
+        payload = bv._read(path)
+        self.assertEqual((payload["status"], payload["predecessor"]["status"]), ("running", "failed"))
+        self.assertNotIn("unit_inherit_source", payload)
+        self.assertNotIn("unit_inherit_source", payload["input_contract"])
+        self.assertNotIn("unit_inherit_source", scene.last_started)
+        self.assertEqual(payload["work"], str(scene.work))
+
+    def test_command_line_reports_a_refused_source_with_exit_code_two(self) -> None:
+        scene = self.prepared()
+        request = scene.request()
+        scene.rewrite_h7(status="aborted", reason="收到信号 15")
+        stderr = io.StringIO()
+        argv = scene.argv(commit=scene.c8, bundle=scene.h8_bundle, request=request, source=scene.h7_path)
+        with contextlib.redirect_stderr(stderr), patch.object(bv, "_verify_ancestry", side_effect=scene.verified):
+            self.assertEqual(bv.main(argv), 2)
+        self.assertIn("后台验证：来源后台中止、没有门禁结论", stderr.getvalue())
+        self.assertEqual(self.results(scene), [scene.h7_path.name])
+
+    # ------------------------------------------------------------------ 重跑原因分类（纯函数）
+
+    def test_rerun_reasons_are_classified_from_structured_evidence_before_text(self) -> None:
+        def entry(reasons=(), **fields):
+            return {"unit_id": "u", "disposition": "executed", "reasons": list(reasons), "inheritable": True, **fields}
+
+        def record(*names, **fields):
+            return {"inputs": [{"name": name, "sha256": digest} for name, digest in names], "spec_sha256": "s", "environment_sha256": "e",
+                    "executor": {"sha256": "x"}, "policy_sha256": "p", **fields}
+
+        failed = {"passed": False}
+        passed = {"passed": True}
+        same, other = record(("file:a", "1")), record(("file:a", "2"))
+        host_noise = record(("file:a", "1"), ("host:/etc", "9"), ("runtime-contract", "8"), ("require-read-audit", "7"))
+        cases = (
+            ("前序失败", entry(["来源集合没有登记这个单元：执行"]), failed, same, same, True, "failed", ["failed"]),
+            ("来源记录没通过", entry(["来源记录不能承接：该次执行没通过（有 1 个测试没通过）"]), passed, same, same, True, "failed", ["failed"]),
+            ("清单项不可承接", entry(["来源集合没有登记这个单元：执行"], inheritable=False), passed, same, same, False, "unaudited_realtime",
+             ["unaudited_realtime"]),
+            ("输入合同未闭合文字", entry(["输入合同未闭合：只验证本次执行结果，禁止承接"]), None, None, None, False, "unaudited_realtime",
+             ["unaudited_realtime"]),
+            ("读集未闭合", entry(["来源记录不能承接：读集覆盖未闭合，不能承接"]), passed, same, same, True, "audit_not_passed",
+             ["audit_not_passed"]),
+            ("记录被改", entry(["来源记录不能承接：记录自摘要不符（被改过）"]), passed, same, same, True, "source_invalid", ["source_invalid"]),
+            ("过期", entry(["来源记录不能承接：超过承接期限（2.0 小时前完成，期限 1.0 小时）"]), passed, same, same, True, "source_invalid",
+             ["source_invalid"]),
+            ("来源运行已撤销", entry(["来源运行 r1 已撤销：只重跑指向它的单元"]), passed, same, same, True, "source_invalid", ["source_invalid"]),
+            ("输入变了（结构化）", entry(["来源集合没有登记这个单元：执行"]), passed, same, other, False, "inputs_changed", ["inputs_changed"]),
+            ("输入变了（文字）", entry(["来源记录不能承接：输入变了：file:a"]), None, None, None, True, "inputs_changed", ["inputs_changed"]),
+            ("宿主快照等易变项不算输入变化", entry(["来源集合没有登记这个单元：执行"]), passed, same, host_noise, False, "no_source", ["no_source"]),
+            ("复核点拒绝", entry(["逐单元承接排队前复核拒绝：校时失败"]), passed, same, same, True, "session_refused", ["session_refused"]),
+            ("没有前序也没登记", entry(["来源集合没有登记这个单元：执行"]), None, None, None, False, "no_source", ["no_source"]),
+            ("登记了却说不清", entry([]), passed, same, same, True, "other", ["other"]),
+            ("失败又改了输入", entry(["来源集合没有登记这个单元：执行"]), failed, same, other, False, "failed", ["failed", "inputs_changed"]),
+        )
+        for label, row, before, old, new, registered, primary, categories in cases:
+            with self.subTest(label):
+                found = bv._classify_rerun(row, before, old, new, registered=registered)
+                self.assertEqual((found["reason_category"], found["reason_categories"]), (primary, categories), found)
+                self.assertTrue(found["reason"])
+        context = bv._classify_rerun(entry(), passed, record(("file:a", "1")), record(("file:a", "1"), executor={"sha256": "y"}),
+                                     registered=False)
+        self.assertEqual((context["reason_category"], context["changed_context"]), ("inputs_changed", ["执行器"]))
 
 
 if __name__ == "__main__":
