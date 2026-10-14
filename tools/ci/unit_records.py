@@ -1217,8 +1217,12 @@ DECLARED_CLASSES: dict[str, frozenset[str]] = {
     "toolchain": frozenset({"read", "exec", "stat", "dir", "list", "missing"}),
     # 依赖内容（Go 模块缓存）：不许写——命令在写就说明它在联网下载，违背离线合同；内容由 go.sum 与合同 cache:* 约束。
     "dependency-content": frozenset({"read", "stat", "dir", "list", "missing"}),
-    # 性能缓存（Go 构建缓存）：内容寻址，只影响速度，可读可写；初态规则由合同 cache:* 约束。
-    "performance-cache": frozenset({"read", "write", "stat", "dir", "list", "missing"}),
+    # 性能缓存（Go 构建缓存）：内容寻址，只影响速度，可读、可写、可执行；初态规则由合同 cache:* 约束。
+    # 允许 exec 的原因：Go 1.24 起 ``go run``／``go tool`` 构建出的可执行文件缓存在 GOCACHE 里，并从那里执行。Go 缓存是内容寻址、
+    # 只影响速度的缓存，信任模型与读缓存相同——读进来的缓存内容同样会影响命令的行为，执行只是它的另一种用法。风险：有人能写
+    # GOCACHE 就能替换缓存里的可执行文件，让命令去执行它；这不在威胁模型内（能写工作根的人本来就能改一切），所以不为它另加
+    # 约束。其它类（toolchain／dependency-content／system／virtual／home-config）的可执行性一律不变。
+    "performance-cache": frozenset({"read", "write", "exec", "stat", "dir", "list", "missing"}),
     # 临时输出：命令自产自销，不绑定。
     "scratch": frozenset({"read", "exec", "write", "missing", "stat", "dir", "list"}),
     # 系统库与配置：由环境指纹（dpkg 包摘要、内核、Python 版本）覆盖。
@@ -1255,6 +1259,16 @@ _DECLARED_CACHE_LOCATIONS = frozenset({"work", "tree", "tmp", "home"})
 _DECLARED_LOCK_DEFAULTS = {"lock-derived-pnpm": "frontend/pnpm-lock.yaml", "lock-derived-go-sum": "backend/go.sum"}
 # Go 等工具沿祖先目录找模块与版本控制目录时会探测这些名字（不存在）：祖先探测不算依赖仓库外内容，按内置规则放行。
 _DECLARED_ANCESTOR_PROBES = frozenset({"go.mod", "go.work", ".hg", ".svn", ".bzr", ".fossil-settings"})
+# 仓库外「噪声探测」放行根（只对 missing／stat／dir 生效，见 ``declared_coverage`` 的 C2／C3 说明）：这些目录属于系统状态——
+# PATH 搜索、cgo 编译器的头文件与库搜索路径、解析器配置、Node 逐级向上找模块，都会对它们之下大量不存在的候选路径做 stat／open。
+# 系统状态不绑定，由环境指纹近似，与 system 类同口径；读取、写入、执行存在的东西仍然要有声明前缀。
+_DECLARED_PROBE_ROOTS = ("/usr/", "/opt/", "/var/", "/run/", "/etc/", "/lib/", "/lib64/", "/bin/", "/sbin/", "/srv/", "/mnt/", "/media/",
+                         "/home/", "/root/", "/tmp/")
+# 根目录列表条目的名字（``repo.root_listing`` 为真时产生的输入条目）；``scope:`` 前缀与范围条目同一族，所以 range 不得叫这个名字。
+DECLARED_ROOT_LISTING_NAME = "root-listing"
+DECLARED_ROOT_LISTING_ENTRY = f"scope:{DECLARED_ROOT_LISTING_NAME}"
+# 写入空设备是无害的丢弃输出（merge 也按这个精确路径豁免），/dev/ 下其它路径照旧不许写。
+_DECLARED_DEV_NULL = "/dev/null"
 # 返回的未覆盖明细上限（总数另在 counts 里），避免十万路径的证据把报告撑爆。
 _DECLARED_MAX_FINDINGS = 200
 _DECLARED_SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -1461,6 +1475,12 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
       ``contracts`` 里（内容由合同绑定，例如 lock-derived-pnpm：安装锁副本必须等于锁文件条目）；这些前缀下读取不要求已跟踪，
       写入仍不允许（除非同时落在 ``repo_ignored`` 前缀内，如 vitest 缓存）。前缀互不重复，且不得包含（等于或位于其上）任何
       range 的 include、``repo.files``、``repo.list_ok``，免得安装目录的豁免吞掉已声明的输入。
+      ``repo.root_listing``（布尔，缺省 false）：命令会枚举测试树根目录（例如 make 在树根找 Makefile 与隐含规则候选，pnpm 向上找工作区
+      根），并在树根下探测一批不存在的配置候选名（``package.json``、``.browserslistrc``、``eslint.config.js``、``RCS`` 等）。为真时：
+      覆盖检查放行树根目录自身的 dir／list／stat／read，以及树根直接子项（``{TREE}/<单个名字>``）的 missing 探测；绑定方式是输入里多一个
+      ``scope:root-listing`` 条目，摘要＝测试树根下 **被 git 跟踪的顶层名字**（文件名；目录名带尾斜杠）排序后的规范化 JSON 摘要，
+      同名的跟踪文件一出现摘要就变。边界：只绑定跟踪的顶层名字，树根下未跟踪的新文件不绑定（与「未跟踪读取一律违规」同一口径）；
+      树根以下的不存在路径不在放行之列（仍要被 range 覆盖）。``root-listing`` 是保留的 range 名。
       ``repo.head`` 只能是 false：读 HEAD 的单元登记为 rerun-only 并保留 head 条目，不做声明级承接。``repo.git_history``：
       ``{commits, reason}``，``commits`` 是非空的、互不重复的 40 位小写提交号。
     * ``make_expansion``：make 目标名列表；非空时 ``Makefile`` 由展开合同覆盖，所以不得再出现在 ``repo.files`` 或任何
@@ -1482,7 +1502,10 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
     if scope["schema_version"] != DECLARED_SCOPE_SCHEMA:
         raise ValueError(f"声明范围的 schema_version 必须是 {DECLARED_SCOPE_SCHEMA}：{scope['schema_version']!r}")
     repo = scope["repo"]
-    _declared_keys(repo, optional={"ranges", "files", "list_ok", "repo_ignored", "installed_dirs", "head", "git_history"}, where="声明范围 repo")
+    _declared_keys(repo, optional={"ranges", "files", "list_ok", "repo_ignored", "installed_dirs", "root_listing", "head", "git_history"},
+                   where="声明范围 repo")
+    if "root_listing" in repo and not isinstance(repo["root_listing"], bool):
+        raise ValueError(f"repo.root_listing 必须是布尔值：{repo['root_listing']!r}")
     ranges = repo.get("ranges", [])
     if not isinstance(ranges, list):
         raise ValueError("repo.ranges 必须是数组")
@@ -1493,6 +1516,8 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
         _declared_keys(item, required={"name", "include", "exclude"}, where=where)
         if not isinstance(item["name"], str) or not _DECLARED_RANGE_NAME.fullmatch(item["name"]):
             raise ValueError(f"{where}.name 只能含小写字母、数字、点、下划线、连字符，且以字母或数字开头：{item['name']!r}")
+        if item["name"] == DECLARED_ROOT_LISTING_NAME:
+            raise ValueError(f"{where}.name 不能叫 {DECLARED_ROOT_LISTING_NAME}：它是 repo.root_listing 的条目名 {DECLARED_ROOT_LISTING_ENTRY} 保留的")
         names.append(item["name"])
         include = _declared_strings(item["include"], f"{where}.include", nonempty=True)
         exclude = _declared_strings(item["exclude"], f"{where}.exclude")
@@ -1611,7 +1636,9 @@ def _declared_scope_inputs(repo: "RepoIndex", declaration: Mapping[str, Any]) ->
     * ``declared-inputs-scope``（类别 policy）：摘要＝``sha256_json({"scope": 范围, "sample": 采样引用})``，detail 带范围全文与
       采样引用——改范围、改证据、改命令、换采样器，都让这一项变，单元失效；
     * ``scope:<名字>``：每个 range 一项（目录范围摘要，用现有的 ``RepoIndex.range_entry``）；
-    * ``file:<路径>``：每个单文件一项（现有的 ``RepoIndex.file_entry``）。
+    * ``file:<路径>``：每个单文件一项（现有的 ``RepoIndex.file_entry``）；
+    * ``scope:root-listing``（类别 tests）：只在 ``repo.root_listing`` 为真时产生，摘要＝测试树根下被 git 跟踪的顶层名字排序后的
+      规范化 JSON 摘要，detail 带名字列表（见 ``_declared_root_listing_entry``）。
 
     **没有 head**：命令不读 HEAD 提交号（读 git 历史的单元不走声明级承接）。``contract:*`` 条目不在这里产生——合同事实要
     探测当前环境，由生产侧（执行器）探测后追加；验证侧只核封存值的格式（见 ``_check_declared_audit``）。"""
@@ -1633,7 +1660,25 @@ def _declared_scope_inputs(repo: "RepoIndex", declaration: Mapping[str, Any]) ->
                                          "exclude": list(item["exclude"])}))
     for relative in scope["repo"].get("files", []):
         entries.append(repo.file_entry("tests", _repo_file(repo, relative)))
+    if scope["repo"].get("root_listing"):
+        entries.append(_declared_root_listing_entry(repo))
     return _unique(entries)
+
+
+def _declared_root_names(tracked: Iterable[str]) -> list[str]:
+    """测试树根下被 git 跟踪的顶层名字：文件取文件名，目录取目录名加尾斜杠；排序、去重。``tracked`` 是仓库相对路径的集合
+    （``RepoIndex.files`` 的键）。"""
+
+    return sorted({relative.split("/", 1)[0] + ("/" if "/" in relative else "") for relative in tracked})
+
+
+def _declared_root_listing_entry(repo: "RepoIndex") -> dict[str, Any]:
+    """``repo.root_listing`` 的输入条目：绑定「树根下被跟踪的顶层名字」这份清单。覆盖检查放行树根下一批不存在的配置候选名
+    （``package.json``、``eslint.config.js`` 等）时，它们的「不存在」就靠这个摘要兜底——同名的跟踪文件一出现，摘要就变，
+    单元不再被承接。取数用现有的 ``RepoIndex.files``，不另开 git 调用。只绑定跟踪的名字：树根下未跟踪的新文件不在里面。"""
+
+    names = _declared_root_names(repo.files)
+    return {"category": "tests", "name": DECLARED_ROOT_LISTING_ENTRY, "sha256": sha256_json(names), "detail": {"names": names}}
 
 
 _DECLARED_SAMPLE_KEYS = frozenset({"schema_version", "unit_id", "command", "sampled", "aliases", "coverage", "repo_accesses",
@@ -1807,14 +1852,28 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
       stat／dir／list／missing **不要求已跟踪**（内容由对应的 ``cache:*`` 合同绑定，不靠范围摘要）；写入不允许
       （``C4-write-installed``），除非同时落在 ``repo_ignored`` 前缀内（例如 ``frontend/node_modules/.vite/`` 的 vitest 缓存）；
       前缀之外的未跟踪读取照旧违规。
-    * **C2 仓库外路径**：取 ``outside`` 里最长前缀匹配的项，访问类型必须在该 class 允许的集合内。没有前缀命中时：某个已声明
-      ``outside`` 前缀、测试树、``{WORK}``、``{HOME}``、``{TMP}``（取自证据的 aliases）的**祖先目录**，且只有 stat／dir，视为覆盖
-      通过（与仓库内「声明内容的上级目录算覆盖」同构）；其余违规 ``C2-outside-undeclared``。
-    * **C3 missing 探测**：仓库内 missing 路径必须被 range 覆盖，或属祖先探测（树根下的 go.mod／go.work／.hg 等）。仓库外
-      因为目录聚合丢了名字，沿测试树祖先链的目录（Go 往上找 go.work 与模块、版本控制目录会逐级探测）放宽到 stat／dir／
-      missing；其它目录里的 missing 违规。
+      ``repo.root_listing`` 为真时：测试树根目录自身（``{TREE}``，不含子项）的 dir／list／stat／read 放行（写入、执行照旧违规），
+      树根直接子项（路径恰为 ``{TREE}/<单个名字>``）的 missing 探测放行——make 在树根找隐含规则候选（``RCS``、``SCCS``）、pnpm／
+      eslint 在树根找配置候选，这些名字「不存在」由输入里的 ``scope:root-listing`` 条目绑定（同名的跟踪文件一出现摘要就变）。
+      为假或缺省时与从前逐字相同。树根以下的 missing（``{TREE}/src/…``）、非声明目录的 stat 都不放行：仍要被 range 覆盖。
+    * **C2 仓库外路径**：取 ``outside`` 里最长前缀匹配的项，访问类型必须在该 class 允许的集合内。没有前缀命中时：
+      某个已声明 ``outside`` 前缀、测试树、``{WORK}``、``{HOME}``、``{TMP}``（取自证据的 aliases）的**祖先目录**，且只有 stat／dir，
+      视为覆盖通过（与仓库内「声明内容的上级目录算覆盖」同构）；**测试树的严格祖先目录**（``/``、``/var/``、``/var/tmp/``、``{WORK}``
+      等键）还放行 list／read（目录自身被枚举、被打开；Node、Go 向上找工作区根与模块根），不含它们的后代；
+      **噪声探测**：访问类型只有 missing／stat／dir 的键，满足下列任一条放行（不要求声明前缀）——路径含 ``node_modules`` 路径段
+      （Node／TypeScript／ESLint 的模块解析候选）；路径在 ``_DECLARED_PROBE_ROOTS`` 之下（``/usr/``、``/opt/``、``/var/`` 等系统目录：
+      PATH 搜索、cgo 编译器搜索路径、解析器配置的探测，系统状态不绑定、由环境指纹近似，与 system 类同口径）；路径（不分大小写）
+      等于、位于证据 aliases 里 TREE／WORK／HOME／TMP 路径之下，或是这些路径的祖先（含 ``/``；TypeScript 会对自身路径做大小写变体探测）。
+      写入、执行、对已存在的非祖先目录的 read 不在放行之列，仍要有声明前缀；其余违规 ``C2-outside-undeclared``。
+    * **C3 missing 探测**：仓库内 missing 路径必须被 range 覆盖，或属祖先探测（树根下的 go.mod／go.work／.hg 等），或（声明了
+      ``repo.root_listing`` 时）是树根的直接子项。仓库外因为目录聚合丢了名字，沿测试树祖先链的目录（Go 往上找 go.work 与模块、
+      版本控制目录会逐级探测）放宽到 stat／dir／missing（以及上面的 list／read）；噪声探测见 C2；其它目录里的 missing 违规。
     * **C4 写入**：只能写 performance-cache／scratch 类仓库外路径与 ``repo_ignored``；写入工具链、依赖内容、系统、HOME 配置、
-      声明范围内的路径一律违规（命令在写依赖缓存＝在联网下载，违背离线合同）。
+      声明范围内的路径一律违规（命令在写依赖缓存＝在联网下载，违背离线合同）。唯一的例外是精确路径 ``/dev/null``：写空设备
+      是无害的丢弃输出（采样器 merge 也按这个精确路径豁免），``/dev/`` 下其它路径照旧不许写。
+      performance-cache 类除了读写还可**执行**：Go 1.24 起 ``go run``／``go tool`` 构建出的可执行文件缓存在 GOCACHE 里并从那里执行；
+      Go 缓存是内容寻址、只影响速度的缓存，信任模型与读缓存相同。风险：有人能写 GOCACHE 就能替换缓存里的可执行文件，让命令去执行它
+      ——这不在威胁模型内（能写工作根的人本来就能改一切）。toolchain／dependency-content／system／virtual／home-config 类的可执行性不变。
     * **C5 网络**：回环地址（AF_INET／AF_INET6）放行；AF_UNIX 目标必须列在 ``scope.unix_sockets``；AF_UNSPEC（UDP 套接字
       断开关联，不是外连）放行；其它外连与不可判的目标一律违规。
     * **C6 git 命令**：命令行里出现的 40 位提交号必须都在 ``repo.git_history.commits`` 里，不得引用 HEAD 一类浮动引用，
@@ -1826,7 +1885,7 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
 
     findings: list[dict[str, Any]] = []
     counts: dict[str, Any] = {"repo_paths": 0, "outside_paths": 0, "classes": {}, "ignored_paths": 0, "installed_paths": 0, "git_paths": 0,
-                              "exempt_paths": 0, "git_commands": 0, "network": 0}
+                              "exempt_paths": 0, "root_listing_paths": 0, "probe_paths": 0, "git_commands": 0, "network": 0}
 
     def report(rule: str, path: Any, kinds: Iterable[str], reason: str) -> None:
         findings.append({"rule": rule, "path": _declared_display(path), "kinds": sorted({_declared_display(kind) for kind in kinds}),
@@ -1885,6 +1944,7 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
     ignored_dirs = [item for item in ignored if item.endswith("/")]
     ignored_globs = [_declared_glob(item) for item in ignored if not item.endswith("/")]
     installed = [item["prefix"] for item in repo.get("installed_dirs", [])]
+    root_listing = repo.get("root_listing") is True
     history = repo.get("git_history")
     make_expansion = bool(scope.get("make_expansion"))
     outside = scope.get("outside", [])
@@ -1953,8 +2013,10 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
         if relative == "":
             if kinds <= {"stat", "dir"}:
                 counts["exempt_paths"] += 1
+            elif root_listing and kinds <= {"stat", "dir", "list", "read"}:
+                counts["root_listing_paths"] += 1  # repo.root_listing：只放行树根目录自身，不含子项；写入、执行照旧违规
             else:
-                report("C1-undeclared", path, kinds, "测试树根目录只允许 stat／dir（枚举或读取树根不在任何声明里）")
+                report("C1-undeclared", path, kinds, "测试树根目录只允许 stat／dir（枚举或读取树根不在任何声明里；声明 repo.root_listing 后才许枚举与读取）")
             continue
         if relative == ".git" or relative.startswith(".git/"):
             if history is None:
@@ -1993,6 +2055,9 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
             counts["exempt_paths"] += 1
             continue
         if kinds == {"missing"}:
+            if root_listing and "/" not in relative:
+                counts["root_listing_paths"] += 1  # 树根的直接子项：它「不存在」由 scope:root-listing 条目绑定（同名跟踪文件一出现摘要就变）
+                continue
             report("C3-missing-undeclared", path, kinds, "探测了声明范围外的不存在路径（它将来出现会改变命令行为）")
         elif "list" in kinds:
             report("C1-list-undeclared", path, kinds, "枚举了声明范围外的目录：须被某个 range 覆盖或列入 repo.list_ok")
@@ -2030,6 +2095,34 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
             if name != "TREE":
                 declared_ancestors.add("{" + name + "}")
     tree_chain: set[str] = ancestors_of(roots["TREE"]) if roots["TREE"] is not None else set()
+    alias_lowered = [base.lower() for base in roots.values() if base is not None]  # 证据 aliases 里可信的绝对路径，小写（TypeScript 会探测大写变体）
+
+    def absolute_of(key: str) -> str | None:
+        """键的绝对路径写法：绝对路径键原样；{WORK}／{HOME}／{TMP} 别名键换成证据 aliases 里的绝对路径；换不出来返回 None。"""
+
+        alias = _DECLARED_ALIAS_PATH.fullmatch(key)
+        if alias is None:
+            return key if key.startswith("/") else None
+        base = roots[alias.group(1)]
+        return None if base is None else base + ("/" + alias.group(2) if alias.group(2) else "")
+
+    def is_probe_noise(key: str) -> bool:
+        """仓库外「噪声探测」：没有声明前缀命中、访问类型又只有 missing／stat／dir 的键，满足下列任一条就不要求声明——
+        (c) 路径含 ``node_modules`` 路径段（Node／TypeScript／ESLint 的模块解析候选，包括指向宿主上不存在的 /work/… 的符号链接）；
+        (a) 路径在 ``_DECLARED_PROBE_ROOTS`` 之下（系统状态，不绑定）；
+        (b) 路径（不分大小写）等于、位于证据 aliases 里 TREE／WORK／HOME／TMP 路径之下，或是这些路径的祖先（含 /）。"""
+
+        if "node_modules" in key.split("/"):
+            return True
+        absolute = absolute_of(key)
+        if absolute is None:
+            return False
+        normal = absolute.rstrip("/") or "/"
+        if any((normal + "/").startswith(root) for root in _DECLARED_PROBE_ROOTS):
+            return True
+        lowered = normal.lower()
+        return lowered == "/" or any(lowered == base or lowered.startswith(base + "/") or base.startswith(lowered + "/") for base in alias_lowered)
+
     for path, raw_kinds, _count in sample["outside_accesses"]:
         counts["outside_paths"] += 1
         kinds = set(raw_kinds)
@@ -2046,6 +2139,8 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
             entry = max(matches, key=lambda item: len(item["prefix"]))
             counts["classes"][entry["class"]] = counts["classes"].get(entry["class"], 0) + 1
             forbidden = kinds - DECLARED_CLASSES[entry["class"]]
+            if path == _DECLARED_DEV_NULL:
+                forbidden = forbidden - {"write"}  # 写空设备是无害的丢弃输出；只限这一个精确路径，/dev/ 下其它路径照旧不许写
             if forbidden:
                 rule = "C4-write-class" if "write" in forbidden else "C2-kinds"
                 report(rule, path, kinds, f"class={entry['class']}（前缀 {entry['prefix']}）不允许的访问类型 {sorted(forbidden)}")
@@ -2057,8 +2152,14 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
         if kinds <= {"stat", "dir", "missing"} and directory in tree_chain:
             counts["exempt_paths"] += 1
             continue
+        if kinds <= {"stat", "dir", "missing", "list", "read"} and directory in tree_chain:
+            counts["probe_paths"] += 1  # 测试树的严格祖先目录：目录自身被枚举、被打开（Node 向上找工作区根、Go 找模块根）；后代不在此列
+            continue
         if kinds == {"missing"} and os.path.basename(directory) in _DECLARED_ANCESTOR_PROBES and os.path.dirname(directory) in tree_chain:
             counts["exempt_paths"] += 1
+            continue
+        if kinds <= {"missing", "stat", "dir"} and is_probe_noise(path):
+            counts["probe_paths"] += 1  # 噪声探测：写入、执行、对已存在的非祖先目录的 read 仍然要有声明前缀
             continue
         report("C3-missing-undeclared" if kinds == {"missing"} else "C2-outside-undeclared", path, kinds,
                "探测了没有声明前缀的仓库外不存在路径" if kinds == {"missing"} else "访问了没有声明前缀（outside）的仓库外路径")
@@ -2322,7 +2423,8 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
     完全相同——当前环境与来源是否一致由通用的输入摘要比较保证）。返回问题列表，空＝通过。
 
     1. 范围条目：记录输入里恰有一个 ``declared-inputs-scope``，输入明细重算出的摘要等于 ``inputs_sha256``，条目的声明范围
-       通过 ``validate_declared_scope``，条目摘要等于 ``sha256_json({scope, sample})``；
+       通过 ``validate_declared_scope``，条目摘要等于 ``sha256_json({scope, sample})``；声明了 ``repo.root_listing`` 的，输入里
+       还要有恰好一个格式合格、摘要自洽的 ``scope:root-listing`` 条目（没声明就不该有）；
     2. ``read_audit``：``coverage_scope``＝``declared-inputs/v1``、覆盖闭合、状态通过、未声明数为零、绑定同一个
        ``inputs_sha256``、``sample_binding`` 与范围条目登记的单元／命令／范围／证据摘要逐项相等；
        ``sample_origin`` 取 ``registry``（缺省；证据就是登记表里的那份，``trace.sha256`` 必须等于登记的证据摘要）或 ``run``
@@ -2370,6 +2472,23 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
         return fail(f"{DECLARED_SCOPE_ENTRY} 条目的声明范围或采样引用非法：{error}")
     if entry.get("sha256") != sha256_json({"scope": scope, "sample": reference}):
         return fail(f"{DECLARED_SCOPE_ENTRY} 条目的摘要与它自带的范围全文、采样引用不符")
+    # repo.root_listing：声明了就必须有且只有一个 scope:root-listing 条目（覆盖检查对树根枚举与树根下不存在候选名的放行，靠它绑定），
+    # 没声明就不该有（range 不得叫 root-listing，不会误撞）。这里只核封存物自洽：名字清单是排序去重的字符串数组，摘要等于它的规范化
+    # JSON 摘要；清单是否等于「当前」树根下被跟踪的顶层名字，由通用的输入摘要比较保证。
+    listing = [item for item in inputs if isinstance(item, Mapping) and item.get("name") == DECLARED_ROOT_LISTING_ENTRY]
+    if scope["repo"].get("root_listing"):
+        names = listing[0].get("detail", {}).get("names") if len(listing) == 1 and isinstance(listing[0].get("detail"), dict) else None
+        try:
+            consistent = (len(listing) == 1 and listing[0].get("category") == "tests" and isinstance(names, list)
+                          and all(isinstance(name, str) for name in names) and names == sorted(set(names))
+                          and listing[0].get("sha256") == sha256_json(names))
+        except ValueError:  # 名字里有无法编码的字符
+            consistent = False
+        if not consistent:
+            problems.append(f"声明级承接：声明范围要求 repo.root_listing，但输入里没有恰好一个格式合格、摘要自洽的 {DECLARED_ROOT_LISTING_ENTRY} 条目"
+                            f"（类别 tests，detail.names 为排序去重的字符串数组，摘要等于它的规范化 JSON 摘要；实际 {len(listing)} 个）")
+    elif listing:
+        problems.append(f"声明级承接：声明范围没有 repo.root_listing，输入里却有 {DECLARED_ROOT_LISTING_ENTRY} 条目")
 
     # ---- 2. read_audit ----
     audit = record.get("read_audit")

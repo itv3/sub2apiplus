@@ -858,10 +858,14 @@ class CoverageTests(unittest.TestCase):
         sample = self.sample_with
         self.expect("C3-missing-undeclared", sample(extra_repo=[["{TREE}/other/go.mod", ["missing"], False]]), label="范围外的 missing 探测")
         self.expect("C3-missing-undeclared", sample(extra_repo=[["{TREE}/surprise", ["missing"], False]]), label="树根下不在探测名单里的名字")
-        self.expect("C3-missing-undeclared", sample(extra_outside=[["/home/x/go.work", ["missing"], 1]]), label="不是测试树祖先的目录里的探测")
-        self.expect("C3-missing-undeclared", sample(extra_outside=[["/var/tmp/gate/tree/sub/go.mod", ["missing"], 1]]), label="测试树内部不算祖先")
-        self.expect("C3-missing-undeclared", sample(extra_outside=[["/var/tmp/other", ["missing"], 1]]), label="祖先目录里的非探测名")
-        self.expect("C3-missing-undeclared", sample(extra_outside=[["/var/tmp/go.work", ["missing"], 1]], aliases={"TREE": "relative/tree"}),
+        # WP1c 起，系统目录（/usr、/var、/home 等）与别名根之下的 missing 探测按「噪声探测」放行（见 test_ci_declared_inputs_probe_rules），
+        # 下面几条改用不在放行根、也不在别名根之下的路径，继续钉住「其余仓库外 missing 探测仍要有声明前缀」。
+        self.expect("C3-missing-undeclared", sample(extra_outside=[["/data/x/go.work", ["missing"], 1]]), label="不是测试树祖先的目录里的探测")
+        self.assertTrue(self.cover(sample(extra_outside=[["/var/tmp/gate/tree/sub/go.mod", ["missing"], 1]]))["ok"],
+                        "测试树内部的 missing 探测：位于证据别名 TREE 之下，按噪声探测放行（WP1c 之前判违规）")
+        far = {"TREE": "/data/gate/tree", "WORK": "/data/gate/work", "HOME": "/root", "TMP": "/tmp"}
+        self.expect("C3-missing-undeclared", sample(extra_outside=[["/data/gate/other", ["missing"], 1]], aliases=far), label="祖先目录里的非探测名")
+        self.expect("C3-missing-undeclared", sample(extra_outside=[["/data/go.work", ["missing"], 1]], aliases={"TREE": "relative/tree"}),
                     label="证据没给出可信的测试树绝对路径时不豁免")
         for name in sorted(ur._DECLARED_ANCESTOR_PROBES):
             self.assertTrue(self.cover(sample(repo=[[f"{{TREE}}/{name}", ["missing"], False]],
@@ -1238,7 +1242,9 @@ class CoverageTests(unittest.TestCase):
 
     def test_c2_ancestor_directories_of_declared_prefixes_and_aliases_are_covered_for_metadata_only(self) -> None:
         """仓库外路径若是已声明 outside 前缀、{TREE}、{WORK}、{HOME}、{TMP} 的祖先目录（如 /、/root、/usr、/root/.config），且只有
-        stat／dir，视为覆盖通过（与仓库内「声明内容的上级目录算覆盖」同构）；读取、枚举、其余无前缀路径照旧违规。"""
+        stat／dir，视为覆盖通过（与仓库内「声明内容的上级目录算覆盖」同构）；读取、枚举、其余无前缀路径照旧违规。（WP1c 起：测试树的
+        严格祖先目录另许枚举与读取，系统目录与别名根之下的 missing／stat／dir 按「噪声探测」放行——见下面逐行说明和
+        test_ci_declared_inputs_probe_rules。）"""
 
         scope = make_scope()
         scope["outside"].append({"prefix": "{HOME}/.config/go/telemetry/", "class": "scratch"})
@@ -1257,24 +1263,31 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(good["ok"], good["undeclared"])
         repo_only = check()["counts"]["exempt_paths"]  # 样本里仓库内路径本来就有的豁免（祖先目录、list_ok、树根探测）
         self.assertEqual(good["counts"]["exempt_paths"] - repo_only, 16, "上面 18 行里 2 行被前缀覆盖，其余 16 行是祖先目录豁免")
-        # 同样的祖先目录，一旦读取、枚举或带了 missing（不在测试树祖先链上），照旧违规。
+        # 同样的祖先目录，一旦读取、枚举（不在测试树祖先链上）或带了 missing 而路径不在放行根与别名根之下，照旧违规。
+        # WP1c 起有几条放行了，改成了下面的正例：测试树的严格祖先可以被枚举、被打开（/srv/ci/ 的枚举、/ 的读取），工作根的祖先、系统目录
+        # （/usr/、/opt/）与别名根之下的 missing／stat 按「噪声探测」放行；这里的违规例改用不在放行根、不在别名根之下的目录。
         for label, row, rule in (("祖先读取", ["/usr/", ["stat", "read"], 1], "C2-outside-undeclared"),
-                                 ("测试树祖先枚举", ["/srv/ci/", ["stat", "list"], 1], "C2-outside-undeclared"),
+                                 ("工作根祖先枚举（不在测试树祖先链上）", ["/data/ci/", ["stat", "list"], 1], "C2-outside-undeclared"),
                                  ("工作根祖先读取", ["/data/ci/", ["stat", "read"], 1], "C2-outside-undeclared"),
-                                 ("工作根祖先带 missing（不在测试树祖先链上）", ["/data/", ["stat", "missing"], 1], "C2-outside-undeclared"),
                                  ("HOME 祖先读取", ["{HOME}/.config/", ["read"], 1], "C2-outside-undeclared"),
-                                 ("无关目录的 stat", ["/opt/", ["stat"], 1], "C2-outside-undeclared"),
-                                 ("无关目录的 missing", ["/opt/", ["missing"], 1], "C3-missing-undeclared"),
+                                 ("无关目录的 stat（不在放行根与别名根之下）", ["/data/other/", ["stat"], 1], "C2-outside-undeclared"),
+                                 ("无关目录的 missing（不在放行根与别名根之下）", ["/data/other/", ["missing"], 1], "C3-missing-undeclared"),
                                  ("工作根的兄弟目录", ["/data/ci/other/", ["stat"], 1], "C2-outside-undeclared"),
-                                 ("声明前缀的祖先带 missing 但不在测试树祖先链上", ["/usr/", ["stat", "missing"], 1], "C2-outside-undeclared"),
-                                 ("根目录读取", ["/", ["read"], 1], "C2-outside-undeclared")):
+                                 ("测试树祖先带写入", ["/srv/ci/", ["stat", "write"], 1], "C2-outside-undeclared"),
+                                 ("测试树祖先带执行", ["/", ["stat", "exec"], 1], "C2-outside-undeclared")):
             result = check(row)
             self.assertFalse(result["ok"], label)
             self.assertEqual([item["rule"] for item in result["undeclared"]], [rule], f"{label}：{result['undeclared']}")
+        for label, row in (("测试树祖先枚举（WP1c 起放行）", ["/srv/ci/", ["stat", "list"], 1]), ("根目录读取（测试树的严格祖先，WP1c 起放行）", ["/", ["read"], 1]),
+                           ("工作根祖先带 missing（别名根的祖先，WP1c 起放行）", ["/data/", ["stat", "missing"], 1]),
+                           ("系统目录的 stat（WP1c 起放行）", ["/opt/", ["stat"], 1]), ("系统目录的 missing（WP1c 起放行）", ["/opt/", ["missing"], 1]),
+                           ("声明前缀的祖先带 missing（WP1c 起放行）", ["/usr/", ["stat", "missing"], 1])):
+            self.assertTrue(check(row)["ok"], label)
         # 证据没给出可信的别名绝对路径时，别名祖先不放行（只剩声明前缀的祖先）。
-        broken = check(["/data/ci/", ["stat"], 1], ["/srv/ci/gate/", ["stat"], 1], ["/usr/local/", ["stat"], 1],
+        # （WP1c 起 /srv/ 之类的系统目录之下 stat 按噪声探测放行，所以这里的第二条路径换成不在放行根下的 /data2/。）
+        broken = check(["/data/ci/", ["stat"], 1], ["/data2/ci/gate/", ["stat"], 1], ["/usr/local/", ["stat"], 1],
                        aliases={"TREE": "relative", "WORK": "", "HOME": "~", "TMP": "/"})
-        self.assertEqual([item["path"] for item in broken["undeclared"]], ["/data/ci/", "/srv/ci/gate/"], "声明前缀的祖先 /usr/local/ 仍然放行")
+        self.assertEqual([item["path"] for item in broken["undeclared"]], ["/data/ci/", "/data2/ci/gate/"], "声明前缀的祖先 /usr/local/ 仍然放行")
 
     def test_c3_the_test_tree_ancestor_chain_may_show_missing_probes_in_directory_aggregates(self) -> None:
         """Go 往上找 go.work 与模块目录、版本控制目录时逐级探测祖先目录里的名字。采样器按目录聚合，名字丢了，只剩「这个祖先目录里有
@@ -1288,11 +1301,20 @@ class CoverageTests(unittest.TestCase):
 
         good = check(["/", ["missing", "stat"], 5], ["/var/", ["missing", "stat"], 5], ["/var/tmp/", ["missing", "stat", "dir"], 5], ["{WORK}/", ["missing"], 1])
         self.assertTrue(good["ok"], good["undeclared"])
-        for label, row in (("非祖先目录里的 missing", ["/opt/", ["missing"], 1]), ("祖先里有读取", ["/var/", ["missing", "read"], 1]),
-                           ("祖先里有枚举", ["/var/tmp/", ["missing", "list"], 1]), ("测试树之下的目录不算祖先", ["{WORK}/tree/", ["missing"], 1]),
-                           ("别的别名根的 missing", ["{HOME}/", ["missing"], 1])):
+        # WP1c 之前这里的违规例是「非祖先目录的 missing」「祖先里有读取／枚举」「测试树之下的目录」「别的别名根的 missing」；现在系统目录与别名根之下的
+        # missing 按噪声探测放行，测试树的严格祖先可以被枚举、被打开，这几条改成了下面的正例，违规例换成真正还要声明前缀的情形：
+        # 非祖先目录的读取与枚举、祖先里的写入与执行、测试树之下目录的读取与枚举、别的别名根的枚举。
+        for label, row in (("非祖先目录里的读取", ["/opt/", ["read"], 1]), ("非祖先目录里的枚举", ["/opt/", ["missing", "list"], 1]),
+                           ("祖先里有写入", ["/var/", ["missing", "write"], 1]), ("祖先里有执行", ["/var/tmp/", ["missing", "exec"], 1]),
+                           ("测试树之下的目录不算祖先（读取）", ["{WORK}/tree/", ["missing", "read"], 1]),
+                           ("测试树之下的目录不算祖先（枚举）", ["{WORK}/tree/", ["list"], 1]), ("别的别名根的枚举", ["{HOME}/", ["missing", "list"], 1])):
             result = check(row)
             self.assertFalse(result["ok"], label)
+        for label, row in (("非祖先目录里的 missing（系统目录，噪声探测）", ["/opt/", ["missing"], 1]), ("祖先里有读取（严格祖先，目录自身被打开）", ["/var/", ["missing", "read"], 1]),
+                           ("祖先里有枚举（严格祖先，目录自身被枚举）", ["/var/tmp/", ["missing", "list"], 1]),
+                           ("测试树之下的目录里的 missing（别名根之下，噪声探测）", ["{WORK}/tree/", ["missing"], 1]),
+                           ("别的别名根的 missing（别名根之下，噪声探测）", ["{HOME}/", ["missing"], 1])):
+            self.assertTrue(check(row)["ok"], label)
 
     def test_git_object_store_aggregate_key_and_the_other_trailing_slash_keys(self) -> None:
         sample = self.sample_with
@@ -1421,26 +1443,42 @@ class SamplerInteroperabilityTests(unittest.TestCase):
         self.assertEqual(set(chain), {"/", "/var/", "/var/tmp/", "{WORK}/"})
         self.assertTrue(all("missing" in kinds for kinds in chain.values()), chain)
         self.assertTrue(ur.declared_coverage(sample, reviewed_scope())["ok"])
-        # 证据声称的测试树不在这条链上时，这些带 missing 的祖先目录就是没有声明前缀的违规。
+        # 证据声称的测试树不在这条链上时：纯 missing／stat／dir 的探测由 WP1c 的「噪声探测」放行（/var/ 在系统目录放行根下、{WORK}/ 在别名根
+        # 之下），所以只剩读取、枚举这类超出探测的访问才是没有声明前缀的违规——给链上的键各加一个 read 来验证。
         moved = copy.deepcopy(sample)
         moved["aliases"]["TREE"] = "/elsewhere/ci/tree"
+        self.assertTrue(ur.declared_coverage(moved, reviewed_scope())["ok"], "只有 missing／stat／dir：噪声探测放行")
+        for index, (key, kinds, count) in enumerate(moved["outside_accesses"]):
+            if key in ("/", "/var/", "/var/tmp/", "{WORK}/"):
+                moved["outside_accesses"][index] = [key, sorted({*kinds, "read"}), count]
         result = ur.declared_coverage(moved, reviewed_scope())
         self.assertFalse(result["ok"])
         self.assertEqual({item["path"] for item in result["undeclared"]}, {"/var/", "/var/tmp/", "{WORK}/"}, "根目录 / 永远在任何测试树的祖先链上，所以不报")
 
     def test_every_reviewed_prefix_is_load_bearing_for_the_real_sample(self) -> None:
+        """每个评审过的前缀都不是摆设：它下面有 read／write／exec／list 这类超出探测的访问时，去掉它就有未覆盖的访问；只有 missing／
+        stat／dir 的前缀（PATH 搜索目录、不存在的 HOME 配置）在 WP1c 起属于「噪声探测」，去掉后仍然放行——声明它们只是为了绑定合同。"""
+
         sample = self.real_sample()
+        probe_only = {"missing", "stat", "dir"}
+        load_bearing = 0
         for index, entry in enumerate(reviewed_scope()["outside"]):
             prefix = entry["prefix"]
             if prefix == "{TMP}/":
                 continue  # 样本里 {TMP} 只有一次 stat：别名根自身的 stat 本来就放行，删掉前缀不影响结论
             scope = reviewed_scope()
             del scope["outside"][index]
+            beyond_probes = [key for key, kinds, _count in sample["outside_accesses"] if ur._declared_covers(prefix, key) and set(kinds) - probe_only]
             with self.subTest(prefix):
                 result = ur.declared_coverage(sample, scope)
+                if not beyond_probes:
+                    self.assertTrue(result["ok"], f"{prefix} 下只有 missing／stat／dir 的探测：去掉后仍放行（噪声探测）{result['undeclared']}")
+                    continue
+                load_bearing += 1
                 self.assertFalse(result["ok"], f"去掉 {prefix} 后应当有未覆盖的访问")
                 self.assertTrue(any(item["path"].startswith(prefix) or item["path"] + "/" == prefix for item in result["undeclared"]),
                                 (prefix, result["undeclared"]))
+        self.assertGreaterEqual(load_bearing, 5, "真实片段里要有足够多的前缀确实在承重（工具链、缓存、系统库、/proc、/sys、遥测目录）")
 
     def codegen_lines(self, *, read_back: bool) -> tuple[list[str], dict]:
         t, w = str(self.tree), str(self.root / "work")
@@ -1495,10 +1533,9 @@ class SamplerInteroperabilityTests(unittest.TestCase):
         del without_history["repo"]["git_history"]
         self.assertTrue({"C1-git-undeclared", "C6-commit-undeclared"} <= {item["rule"] for item in ur.declared_coverage(sample, without_history)["undeclared"]})
 
-    def test_reading_back_a_self_produced_file_is_allowed_by_the_verifier_but_still_marked_invalid_by_the_sampler(self) -> None:
-        """跨工作包的待办：缺口 2 在验证侧已放行「同一路径写出再读回」，但采样器的 merge 现在仍把输出区里的读回记成 untracked-read，
-        把整份采样判无效（valid 为假）。验证侧一律不采信 valid 为假的证据（C7-invalid），所以这类单元要等采样器按登记的输出区放行读回
-        之后才能真的声明。这个用例钉住现状，采样器改过之后第一个断言会变红，提醒同步更新。"""
+    def test_reading_back_a_self_produced_file_is_allowed_by_the_verifier_and_by_the_sampler_once_registered(self) -> None:
+        """缺口 2：验证侧放行「同一路径写出再读回」。采样器的 merge 不登记时仍把输出区里的读回记成 untracked-read、整份采样判无效
+        （valid 为假，验证侧不采信，C7-invalid）；用 merge --transient 登记输出区之后放行读回，整份证据通过（步骤 5 的 WP4b）。"""
 
         lines, aliases = self.codegen_lines(read_back=True)
         raw = sampler_sample(self.tree, lines, aliases, allow_unix=["/var/run/docker.sock"])
@@ -1512,11 +1549,15 @@ class SamplerInteroperabilityTests(unittest.TestCase):
         self.assertEqual([item["rule"] for item in result["undeclared"]], ["C7-invalid"], "只剩采样器自己的无效标记；覆盖规则本身放行读回")
         forced = {**sample, "valid": True, "invalid_reasons": []}
         self.assertTrue(ur.declared_coverage(forced, self.codegen_scope())["ok"], "采样器放行读回后（valid 为真），整份证据通过")
+        registered = written(sampler_sample(self.tree, lines, aliases, allow_unix=["/var/run/docker.sock"], transient=["backend/ent/schema/.entc/"]))
+        self.assertEqual((registered["valid"], registered["invalid_reasons"]), (True, []), "登记了输出区，读回不再判无效")
+        result = ur.declared_coverage(registered, self.codegen_scope())
+        self.assertTrue(result["ok"], result["undeclared"])
 
-    def test_unfinished_calls_at_eof_and_globbed_temp_files_as_the_sampler_currently_reports_them(self) -> None:
-        """跨工作包的待办（同上一个用例）：多线程进程退出时悬着的 <unfinished ...>、vite 写再读回的随机名临时文件，验证侧都按调度者
-        的裁决放行（unfinished-calls-at-eof 最多 64 个、repo_ignored 支持 glob），但采样器的 merge 现在仍把它们记成 unresolved 与
-        untracked-read，valid 为假，验证侧不采信。这个用例钉住现状；采样器改过之后前两个断言会变红，提醒同步更新。"""
+    def test_unfinished_calls_at_eof_and_globbed_temp_files_with_the_sampler_options(self) -> None:
+        """采样器改进（步骤 5 的 WP4b）之后：多线程进程退出时悬着的 <unfinished ...>（unfinished-calls-at-eof）被采样器容忍；vite 写再读回的
+        随机名临时文件用 merge --transient 登记后放行。两项合起来这份采样有效，验证侧覆盖检查通过；不登记 --transient 时读回仍被判
+        untracked-read（valid 为假，验证侧不采信）。只钉这几个不随采样器细节变化的结论，不钉计数与样例条数（采样器还会继续改）。"""
 
         t = str(self.tree)
         cwd = f"{t}/frontend"
@@ -1527,25 +1568,25 @@ class SamplerInteroperabilityTests(unittest.TestCase):
                  f'4243 openat(AT_FDCWD<{cwd}>, "{t}/backend/a.go", O_RDONLY|O_CLOEXEC <unfinished ...>',
                  f'4244 openat(AT_FDCWD<{cwd}>, "{t}/backend/go.sum", O_RDONLY|O_CLOEXEC <unfinished ...>']
         aliases = {"TREE": t, "WORK": str(self.root / "work"), "HOME": "/home/sampler", "TMP": "/tmp/sampler-tmp"}
-        raw = sampler_sample(self.tree, lines, aliases, argv=["pnpm", "--dir", "frontend", "exec", "vitest", "run"], cwd_rel=".")
-        self.assertEqual(raw["coverage"]["unresolved_reasons"], {"unfinished-calls-at-eof": 2})
-        self.assertEqual(raw["coverage"]["unfinished_calls"], 2)
-        self.assertFalse(raw["valid"])
-        self.assertTrue(any("[unresolved]" in reason and "unfinished-calls-at-eof" in reason for reason in raw["invalid_reasons"]), raw["invalid_reasons"])
+        argv = ["pnpm", "--dir", "frontend", "exec", "vitest", "run"]
+        raw = sampler_sample(self.tree, lines, aliases, argv=argv, cwd_rel=".")
+        self.assertIn("unfinished-calls-at-eof", raw["coverage"]["unresolved_reasons"], "构造的悬着调用确实被采样器识别出来")
+        self.assertFalse(raw["valid"], "没登记 --transient：读回仍判无效")
+        self.assertFalse(any("[unresolved]" in reason for reason in raw["invalid_reasons"]), "unfinished-calls-at-eof 已在容忍集合里")
         self.assertTrue(any("[untracked-read]" in reason for reason in raw["invalid_reasons"]), raw["invalid_reasons"])
-        sample = written(raw)
+        registered = sampler_sample(self.tree, lines, aliases, argv=argv, cwd_rel=".", transient=["frontend/vitest.config.ts.timestamp-*"])
+        self.assertEqual((registered["valid"], registered["invalid_reasons"]), (True, []))
+        sample = written(registered)
         rows = {path: kinds for path, kinds, _tracked in sample["repo_accesses"]}
         self.assertEqual(rows["{TREE}/frontend/vitest.config.ts.timestamp-1699999999999-0a1b2c3d4e5f.mjs"], ["read", "write"])
         scope = {"schema_version": ur.DECLARED_SCOPE_SCHEMA,
                  "repo": {"ranges": [{"name": "backend", "include": ["backend/"], "exclude": []}, {"name": "frontend", "include": ["frontend/"], "exclude": []}],
                           "repo_ignored": ["frontend/vitest.config.ts.timestamp-*"]}}
         result = ur.declared_coverage(sample, scope)
-        self.assertEqual([item["rule"] for item in result["undeclared"]], ["C7-invalid"], "只剩采样器自己的无效标记；覆盖规则与容忍集合都放行")
-        self.assertTrue(ur.declared_coverage({**sample, "valid": True, "invalid_reasons": []}, scope)["ok"])
+        self.assertTrue(result["ok"], result["undeclared"])
         without_glob = copy.deepcopy(scope)
         without_glob["repo"]["repo_ignored"] = []
-        forced = {**sample, "valid": True, "invalid_reasons": []}
-        self.assertEqual({item["rule"] for item in ur.declared_coverage(forced, without_glob)["undeclared"]}, {"C4-write-declared"},
+        self.assertEqual({item["rule"] for item in ur.declared_coverage(sample, without_glob)["undeclared"]}, {"C4-write-declared"},
                          "没有 glob 登记：随机名临时文件写在 frontend/ 范围内，违规")
 
     def test_the_sampler_command_digest_and_evidence_bytes_agree_with_the_record_layer(self) -> None:
