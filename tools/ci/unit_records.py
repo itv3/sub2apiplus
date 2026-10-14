@@ -2325,9 +2325,13 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
        通过 ``validate_declared_scope``，条目摘要等于 ``sha256_json({scope, sample})``；
     2. ``read_audit``：``coverage_scope``＝``declared-inputs/v1``、覆盖闭合、状态通过、未声明数为零、绑定同一个
        ``inputs_sha256``、``sample_binding`` 与范围条目登记的单元／命令／范围／证据摘要逐项相等；
-    3. 证据：从记录库取封存的采样证据，字节摘要等于登记的证据摘要，格式合格，属于本单元；**命令绑定**——记录封存的 spec
-       （其摘要必须等于 spec_sha256）里的 argv 等于证据的 launcher＋argv，工作目录等于 ``read_audit.repo_root``＋``cwd_rel``，
-       也就是证据描述的正是这条记录实际执行的命令；
+       ``sample_origin`` 取 ``registry``（缺省；证据就是登记表里的那份，``trace.sha256`` 必须等于登记的证据摘要）或 ``run``
+       （逐次采样：证据是这一次运行自己采样的，``trace.sha256`` 是它的字节摘要，不要求等于登记摘要；``sample_binding.evidence_sha256``
+       仍是登记的证据摘要）；
+    3. 证据：从记录库取封存的采样证据（``trace.sha256`` 指的那份），字节摘要等于 ``trace.sha256``，格式合格，属于本单元，命令摘要
+       等于登记的；采样器摘要：registry 来源只在证据自称了采样器时才要求等于登记的，run 来源要求必须有且等于登记的；
+       **命令绑定**——记录封存的 spec（其摘要必须等于 spec_sha256）里的 argv 等于证据的 launcher＋argv，工作目录等于
+       ``read_audit.repo_root``＋``cwd_rel``，也就是证据描述的正是这条记录实际执行的命令；
     4. **重算覆盖**：用 ``declared_coverage`` 对证据和范围重新计算，必须全部落在声明内。**不信任**证据或 ``read_audit`` 里写的
        结论：把 ``undeclared_count`` 改成 0 也过不了这一步；
     5. 合同：输入里的 ``contract:*`` 条目与声明范围要求的合同一一对应、格式合格（不探测当前环境）；
@@ -2377,7 +2381,8 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
         return fail(f"read_audit 不是通过的 {DECLARED_COVERAGE_SCOPE} 覆盖（coverage_scope、coverage_complete、status、undeclared_count 须全部成立）")
     if audit.get("inputs_sha256") != record.get("inputs_sha256"):
         return fail("read_audit 绑定的 inputs_sha256 与记录不符")
-    if audit.get("sample_origin", "registry") not in ("registry", "run"):
+    origin = audit.get("sample_origin", "registry")
+    if origin not in ("registry", "run"):
         return fail(f"read_audit.sample_origin 只能是 registry 或 run：{audit.get('sample_origin')!r}")
     repo_root = audit.get("repo_root")
     if not isinstance(repo_root, str) or not repo_root.startswith("/"):
@@ -2392,7 +2397,13 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
     digest = trace["sha256"]
     expected_binding = {"unit_id": record.get("unit_id"), "command_sha256": reference["command_sha256"],
                         "scope_sha256": sha256_json(scope), "evidence_sha256": reference["evidence_sha256"]}
-    if binding != expected_binding or digest != reference["evidence_sha256"]:
+    if origin == "run":
+        # run 来源（逐次采样）：trace.sha256 是这一次运行自己采样的证据的字节摘要，与登记表里的证据通常不同字节，所以不要求它等于
+        # 登记的证据摘要；sample_binding.evidence_sha256 仍须是范围条目登记的那份证据的摘要，说明这次运行是对着哪份登记证据与哪份
+        # 范围核的。本次证据自己的合格与否，由下面第 3、4 步核（封存、摘要、格式、单元、命令、采样器、重算覆盖）。
+        if binding != expected_binding:
+            return fail("read_audit（run 来源）的 sample_binding 与范围条目登记的单元、命令、范围、登记证据摘要不一致")
+    elif binding != expected_binding or digest != reference["evidence_sha256"]:
         return fail("read_audit 的证据绑定（sample_binding、trace.sha256）与范围条目登记的单元、命令、范围、证据摘要不一致")
 
     # ---- 3. 证据与命令绑定 ----
@@ -2407,7 +2418,11 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
     if sample["unit_id"] != record.get("unit_id"):
         return fail("封存的采样证据属于别的单元")
     sampler = sample["sampled"].get("sampler_sha256")
-    if sampler is not None and sampler != reference["sampler_sha256"]:
+    if origin == "run":
+        # run 来源：采样是这一次运行自己做的，所用采样器必须就是范围条目登记的那一个；证据里没写采样器摘要同样不可承接。
+        if sampler != reference["sampler_sha256"]:
+            problems.append("声明级承接：本次运行的采样证据缺少采样器摘要，或与范围条目登记的不一致（run 来源要求采样器就是登记的那一个）")
+    elif sampler is not None and sampler != reference["sampler_sha256"]:
         problems.append("声明级承接：采样证据自称的采样器摘要与范围条目登记的不一致")
     spec = record.get("spec")
     if not isinstance(spec, Mapping) or sha256_json(spec) != record.get("spec_sha256"):
