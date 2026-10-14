@@ -186,7 +186,8 @@ class InteroperabilityTests(unittest.TestCase):
         for flag in ("-f", "-qq", "--seccomp-bpf", "-y"):
             self.assertIn(flag, audit.STRACE_OPTIONS)
             self.assertIn(flag, ds.STRACE_OPTIONS)
-        self.assertEqual(ds.DECLARED_TOLERATED_UNRESOLVED, ("symlink-metadata-not-bound:",))
+        # 容忍集合：步骤 5 后续改进（WP4b）加入 unfinished-calls-at-eof（精确匹配，与登记侧一致；上限与匹配语义见 test_ci_declared_sampler_followup）。
+        self.assertEqual(ds.DECLARED_TOLERATED_UNRESOLVED, ("symlink-metadata-not-bound:", "unfinished-calls-at-eof"))
 
 
 class FilterTests(unittest.TestCase):
@@ -483,7 +484,10 @@ class MergeTests(TempCase):
             ("git-status-before", {}, {"before": (" M backend/a.go",)}, "[git-status]"),
             ("unrecognized", {"lines": ["杂散输出"]}, {}, "unrecognized-line"),
             ("unsupported-call", {"lines": ["4242 exit_group(0)                    = ?"]}, {}, "unsupported-call:exit_group"),
-            ("unfinished-at-eof", {"lines": [f'4242 openat(AT_FDCWD<{t}>, "x", O_RDONLY <unfinished ...>']}, {}, "unfinished-calls-at-eof"),
+            # 容忍 unfinished-calls-at-eof 之后，少量悬着的调用不再使采样无效（多线程进程退出时的正常现象）；反例改成超过上限 64 的 65 个
+            # （各属不同进程）。1 个、64 个仍有效、样例上限等见 test_ci_declared_sampler_followup。
+            ("unfinished-at-eof-over-cap", {"lines": [f'{5000 + index} openat(AT_FDCWD<{t}>, "x", O_RDONLY <unfinished ...>' for index in range(65)]},
+             {}, "unfinished-calls-at-eof×65 超过容忍上限 64"),
             ("untracked-read", {"lines": [open_line(cwd, f"{t}/backend/untracked.txt")]}, {}, "[untracked-read]"),
             ("network-external", {"lines": [connect_line(inet(443, "1.2.3.4"))]}, {}, "[network]"),
             ("network-external-einprogress", {"lines": [connect_line(inet(443, "1.2.3.4"), ") = -1 EINPROGRESS (Operation now in progress)")]}, {},
@@ -656,12 +660,13 @@ class DraftTests(TempCase):
         self.assertEqual(ds.validate_sample(sample), [])
 
     def test_git_history_commits_are_extracted_mechanically(self) -> None:
-        argvs = [git_line(["git", "show", f"{SHA}:docs/egress/a.json"]), git_line(["git", "merge-base", "--is-ancestor", "b" * 40, "HEAD"])]
+        # 步骤 5 的 WP4b 之后，git 命令里只要出现 HEAD 之类的浮动引用，draft 就把该单元写成 rerun-only（没有 scope，也就没有 git_history）；
+        # 所以这里只用固定的提交号（第二条命令原先是 `--is-ancestor b…b HEAD`）。含 HEAD 时的行为见 test_ci_declared_sampler_followup。
+        argvs = [git_line(["git", "show", f"{SHA}:docs/egress/a.json"]), git_line(["git", "merge-base", "--is-ancestor", "b" * 40, "c" * 40])]
         registry, review, _sample = self.draft(self.lines(argvs))
         history = registry["units"][UNIT]["scope"]["repo"]["git_history"]
-        self.assertEqual(history["commits"], [SHA, "b" * 40])
-        self.assertIn("符号引用", review)
-        self.assertIn("`HEAD`", review)
+        self.assertEqual(history["commits"], [SHA, "b" * 40, "c" * 40])
+        self.assertEqual(registry["units"][UNIT]["status"], "declared", "只用固定的提交号，git 用法固定，保持 declared")
 
     def test_an_invalid_sample_becomes_rerun_only_with_the_reason(self) -> None:
         registry, review, sample = self.draft(self.lines([write_line(str(self.tree), f"{self.tree}/wide/f1.txt")]))
