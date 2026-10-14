@@ -734,6 +734,355 @@ def host_snapshot(raw: str) -> dict[str, Any]:
             "detail": {"path": raw, "schema_version": HOST_SCHEMA, "snapshot": payload}}
 
 
+# ---------------------------------------------------------------------------
+# 宿主快照 v3：按单元实际访问方式比较
+#
+# 为什么要有：v2 快照整份相等，里面含 atime／mtime／ctime／inode，目录还绑全部直接条目。宿主上的监控程序在根目录写一个
+# 文件、relatime 的 24 小时 atime 刷新、别的进程读了该文件，都会让“只 stat 了根目录判类型”的单元整次作废（10-14 ARM64
+# 公共后台因此重起四轮）。这些变化对该单元的结果没有影响，却让审计依赖“宿主绝对安静”。
+#
+# 安全论证：单元的结果只取决于它实际观察到的信息。路径级轨迹（strace）告诉我们每个路径被怎样访问：
+#   * 读内容或执行（read／exec）→ 观察了文件内容；
+#   * 枚举目录（list，即 getdents64）→ 观察了目录的全部直接条目；
+#   * 只 stat／打开目录／读目录（stat／dir／read 于目录）→ 只观察了类型、权限、属主、（文件）大小，以及路径解析经过的
+#     符号链接和祖先目录；
+#   * 访问不存在的路径（missing）→ 观察了“不存在”。
+# 没被观察的方面变了，单元的执行轨迹不可能不同，所以不必比较；被观察的方面一个字节都不放松。
+#
+# 这个论证对“时间字段、inode、device”不成立：轨迹里看不到 fstat(fd)（打开那一下已经记过，后面的 fstat 不再出现），也
+# 分不清程序从 stat 结果里到底用了哪个字段。所以对这些字段采用的是“策略性放宽”，不是证明：默认认为单元不依赖它们，依赖
+# 的必须在审计策略里逐路径声明（metadata_dependencies），并附源码或调用合同的审核依据。典型不成立的情形：make／find
+# -newer／rsync 这类按时间比较的工具，以 mtime 做缓存键的程序，断言 mtime 的测试。“stat 路径集合一致”只证明路径覆盖，
+# 不证明字段依赖。atime 尤其不可靠：快照自己读文件、列目录就会刷新它（relatime 下超过 24 小时即刷新），声明它基本不可满足。
+#
+# 条目的 sha256 只绑“无条件比较集”（kind／target／links／ancestors／core，加上被声明的易变字段及其值）。内容摘要、目录项
+# 和 volatile 不进摘要：承接判定先比 inputs_sha256，摘要若含这些，噪声会在语义比较之前就让承接失败。代价是摘要相等不再
+# 蕴含内容相等，所以承接必须经过 unit_records.check_record 里的 host_inputs_inherit_problems 按访问方式补比。
+#
+# v2 的常量、host_snapshot 与 strict_audit_reads 对 v2 条目的行为一概不动：control 四链 sidecar 动态复用本模块的函数对象，
+# 继续产出并重放 v2；v3 只由下面这些新名字显式引入，调用点按“是不是 control 适配器”选择（unit_records.new_host_snapshot）。
+# ---------------------------------------------------------------------------
+
+HOST_SCHEMA_V3 = "read-audit-host-snapshot/v3"
+# 历史重放与新生产都认的宿主快照合同：v2 条目走旧逻辑，v3 条目走按访问方式比较的新逻辑。
+HOST_SCHEMAS = frozenset({HOST_SCHEMA, HOST_SCHEMA_V3})
+# 易变元数据（volatile 分组的全部字段，也是策略唯一允许声明的依赖字段）。
+VOLATILE_FIELDS = ("atime_ns", "mtime_ns", "ctime_ns", "inode", "device")
+# 触发比较文件内容的访问类型 / 触发比较目录项的访问类型。
+CONTENT_ACCESS_KINDS = frozenset({"read", "exec"})
+LIST_ACCESS_KINDS = frozenset({"list"})
+_V3_LINK_FIELDS = ("path", "target", "mode", "uid", "gid", "size")
+_V3_ANCESTOR_FIELDS = ("path", "mode", "uid", "gid", "link")
+
+
+def _canonical_digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _is_int(value: Any) -> bool:
+    return type(value) is int
+
+
+def normalize_metadata_dependency(value: Any) -> dict[str, Any] | None:
+    """校验并规范化一个路径的元数据依赖声明 ``{fields, basis}``：fields 是易变字段的非空子集（去重后排序），basis 是非空
+    字符串（源码位置或调用合同的审核依据）。None 表示没有声明。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"fields", "basis"}:
+        raise AuditError("元数据依赖声明须恰好含 fields 与 basis")
+    fields, basis = value["fields"], value["basis"]
+    if (not isinstance(fields, (list, tuple)) or not fields or not all(isinstance(item, str) for item in fields)
+            or len(set(fields)) != len(fields) or not set(fields) <= set(VOLATILE_FIELDS)):
+        raise AuditError("元数据依赖的字段须是 " + "／".join(VOLATILE_FIELDS) + " 的非空无重复子集")
+    if not isinstance(basis, str) or not basis.strip():
+        raise AuditError("元数据依赖须附非空的审核依据（源码位置或调用合同）")
+    return {"fields": sorted(fields), "basis": basis}
+
+
+def _check_v3_payload(payload: Any) -> None:
+    """v3 载荷的结构校验：字段集合、类型都对才交给比较函数，篡改或残缺的封存内容一律抛 AuditError，不让比较函数撞上
+    KeyError／TypeError。"""
+
+    if not isinstance(payload, Mapping):
+        raise AuditError("宿主快照 v3 载荷不是对象")
+    kind = payload.get("kind")
+    expected = {"kind", "target", "links", "ancestors"}
+    if kind in ("file", "directory"):
+        expected |= {"core", "volatile", "content_sha256" if kind == "file" else "entries"}
+    elif kind != "missing":
+        raise AuditError("宿主快照 v3 的类型不是文件、目录或缺失")
+    if set(payload) != expected:
+        raise AuditError("宿主快照 v3 的字段集合不符")
+    if not isinstance(payload["target"], str) or not payload["target"].startswith("/"):
+        raise AuditError("宿主快照 v3 的解析目标不是绝对路径")
+    if (not isinstance(payload["links"], list)
+            or not all(isinstance(link, Mapping) and set(link) == set(_V3_LINK_FIELDS) and isinstance(link["path"], str)
+                       and isinstance(link["target"], str) and all(_is_int(link[key]) for key in ("mode", "uid", "gid", "size"))
+                       for link in payload["links"])):
+        raise AuditError("宿主快照 v3 的符号链接链格式不符")
+    if (not isinstance(payload["ancestors"], list)
+            or not all(isinstance(item, Mapping) and set(item) == set(_V3_ANCESTOR_FIELDS) and isinstance(item["path"], str)
+                       and all(_is_int(item[key]) for key in ("mode", "uid", "gid"))
+                       and (item["link"] is None or isinstance(item["link"], str)) for item in payload["ancestors"])):
+        raise AuditError("宿主快照 v3 的祖先目录格式不符")
+    if kind == "missing":
+        return
+    core_keys = {"mode", "uid", "gid"} | ({"size"} if kind == "file" else set())
+    core, volatile = payload["core"], payload["volatile"]
+    if (not isinstance(core, Mapping) or set(core) != core_keys or not all(_is_int(value) for value in core.values())):
+        raise AuditError("宿主快照 v3 的核心属性格式不符")
+    if (not isinstance(volatile, Mapping) or set(volatile) != set(VOLATILE_FIELDS)
+            or not all(_is_int(value) for value in volatile.values())):
+        raise AuditError("宿主快照 v3 的易变元数据格式不符")
+    if kind == "file":
+        if not isinstance(payload["content_sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", payload["content_sha256"]) is None:
+            raise AuditError("宿主快照 v3 的内容摘要格式不符")
+    elif not isinstance(payload["entries"], list) or not all(isinstance(item, str) for item in payload["entries"]):
+        raise AuditError("宿主快照 v3 的目录项格式不符")
+
+
+def _v3_binding(payload: Mapping[str, Any], dependency: Mapping[str, Any] | None) -> dict[str, Any]:
+    """条目 sha256 的输入：无条件比较集。内容摘要、目录项、volatile 都不在里面（原因见本节说明）；被声明依赖的易变字段
+    连同声明（字段、审核依据）和当前值一起进来，声明一变、被声明字段一变，输入摘要就变。"""
+
+    binding: dict[str, Any] = {"schema_version": HOST_SCHEMA_V3, "kind": payload["kind"], "target": payload["target"],
+                               "links": payload["links"], "ancestors": payload["ancestors"]}
+    if "core" in payload:
+        binding["core"] = payload["core"]
+    if dependency is not None:
+        volatile = payload.get("volatile") or {}
+        binding["metadata_dependency"] = {"fields": dependency["fields"], "basis": dependency["basis"],
+                                          "values": {field: volatile.get(field) for field in dependency["fields"]}}
+    return binding
+
+
+def host_entry_v3(raw: str, payload: Mapping[str, Any], dependency: Any = None) -> dict[str, Any]:
+    """由路径、v3 载荷和（可选的）元数据依赖声明构造 v3 条目。生产与历史重放的自洽复核共用这一个构造函数。"""
+
+    normalized = normalize_metadata_dependency(dependency)
+    _check_v3_payload(payload)
+    detail: dict[str, Any] = {"path": raw, "schema_version": HOST_SCHEMA_V3, "snapshot": payload}
+    if normalized is not None:
+        detail["metadata_dependency"] = normalized
+    return {"category": "environment", "name": "host:" + raw,
+            "sha256": _canonical_digest(_v3_binding(payload, normalized)), "detail": detail}
+
+
+def _v3_payload(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """把 v2 载荷投影成 v3 分组：时间与 inode 挪进 volatile，符号链接链去掉自身时间和 inode，目录不带 size。"""
+
+    kind = snapshot["kind"]
+    payload: dict[str, Any] = {"kind": kind, "target": snapshot["target"],
+                               "links": [{key: link[key] for key in _V3_LINK_FIELDS} for link in snapshot["links"]],
+                               "ancestors": snapshot["ancestors"]}
+    if kind == "missing":
+        return payload
+    metadata = snapshot["metadata"]
+    core = {"mode": metadata["mode"], "uid": metadata["uid"], "gid": metadata["gid"]}
+    if kind == "file":
+        core["size"] = metadata["size"]
+        payload["content_sha256"] = snapshot["content_sha256"]
+    else:
+        payload["entries"] = snapshot["entries"]
+    payload["core"] = core
+    payload["volatile"] = {field: metadata[field] for field in VOLATILE_FIELDS}
+    return payload
+
+
+def host_snapshot_v3(raw: str, metadata_dependency: Any = None) -> dict[str, Any]:
+    """v3 宿主快照。路径合法性、符号链接解析、内容摘要与取快照期间的竞态检查都复用 v2 ``host_snapshot``（它一字不动），
+    这里只做分组投影；``metadata_dependency`` 是该路径在策略里声明的 ``{fields, basis}``（没有则 None）。"""
+
+    return host_entry_v3(raw, _v3_payload(host_snapshot(raw)["detail"]["snapshot"]), metadata_dependency)
+
+
+def is_host_entry_v3(entry: Any) -> bool:
+    return isinstance(entry, Mapping) and isinstance(entry.get("detail"), Mapping) \
+        and entry["detail"].get("schema_version") == HOST_SCHEMA_V3
+
+
+def entry_declared_fields(entry: Mapping[str, Any]) -> tuple[str, ...]:
+    """条目登记的元数据依赖字段（没有声明为空元组）。"""
+
+    dependency = (entry.get("detail") or {}).get("metadata_dependency")
+    return tuple(dependency["fields"]) if isinstance(dependency, Mapping) and isinstance(dependency.get("fields"), list) else ()
+
+
+def check_host_entry_v3(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    """v3 条目与封存内容自洽：由 detail 重建出的条目必须与传入的逐字相同（摘要、名字、声明都不能被改写而不被发现）。
+    返回封存的载荷。"""
+
+    detail = entry.get("detail") if isinstance(entry, Mapping) else None
+    path = detail.get("path") if isinstance(detail, Mapping) else None
+    if not isinstance(path, str) or not path.startswith("/") or entry.get("category") != "environment":
+        raise AuditError("宿主快照 v3 条目缺少合法路径")
+    if host_entry_v3(path, detail.get("snapshot"), detail.get("metadata_dependency")) != entry:
+        raise AuditError("宿主快照 v3 条目的摘要、名字或声明与封存内容不符")
+    return detail["snapshot"]
+
+
+_V3_REASONS = {"kind": "类型变了（文件／目录／缺失）", "target": "符号链接解析后的真实路径变了", "links": "符号链接链变了",
+               "ancestors": "祖先目录的权限、属主或链接变了", "core": "权限、属主或（文件）大小变了"}
+
+
+def host_snapshot_matches(planned: Mapping[str, Any], current: Mapping[str, Any], access_kinds: Iterable[str] | None,
+                          declared_fields: Iterable[str] = ()) -> tuple[bool, str]:
+    """按单元对该路径的实际访问方式比较两份 v3 载荷，返回（是否一致，原因）。
+
+    必比：kind、target、links、ancestors、core——不论怎样访问都会观察到（路径解析要穿过它们）。
+    访问类型含 read／exec 且是文件：再比内容摘要；含 list 且是目录：再比直接目录项；目录只被 stat／打开／read 时目录项
+    不比（保持“打开父目录不等于递归覆盖子文件”的语义，子文件各有自己的快照）。访问类型是 missing 时由 kind 比较保证
+    当前仍不存在。``declared_fields`` 是策略声明的元数据依赖，额外比 volatile 里对应字段。
+    ``access_kinds=None`` 表示访问方式未知（子命名空间启动时还没有轨迹、预约重派前）：只比必比项和声明字段。
+    访问类型只能来自 ``trace_access_modes``（要求完整性已通过的轨迹），不要自己拼。"""
+
+    for key in ("kind", "target", "links", "ancestors", "core"):
+        if planned.get(key) != current.get(key):
+            return False, _V3_REASONS[key]
+    kinds = frozenset(access_kinds or ())
+    kind = planned.get("kind")
+    if kind == "file" and kinds & CONTENT_ACCESS_KINDS and planned.get("content_sha256") != current.get("content_sha256"):
+        return False, "文件内容变了（该单元读取或执行过它）"
+    if kind == "directory" and kinds & LIST_ACCESS_KINDS and planned.get("entries") != current.get("entries"):
+        return False, "目录的直接条目变了（该单元枚举过它）"
+    old, new = planned.get("volatile") or {}, current.get("volatile") or {}
+    for field in sorted(declared_fields or ()):
+        if field not in VOLATILE_FIELDS:
+            return False, "未知的元数据依赖字段：" + str(field)
+        if old.get(field) != new.get(field):
+            return False, field + " 变了（策略声明该单元依赖它）"
+    return True, ""
+
+
+def host_snapshot_identical(planned: Mapping[str, Any], current: Mapping[str, Any]) -> tuple[bool, str]:
+    """整份载荷相等（含 volatile）：拿不到完整轨迹、访问方式不可信时的失败关闭兜底，等价于 v2 的口径。"""
+
+    return (True, "") if dict(planned) == dict(current) else (False, "快照整份不同（缺少完整轨迹，按最严格口径比较）")
+
+
+def trace_is_complete(document: Mapping[str, Any]) -> bool:
+    """轨迹完整性的判据：与 ``strict_audit_reads`` 开头一致的覆盖信息。只有严格轨迹（v2 起）带 coverage 块，所以不必
+    另列模式版本。"""
+
+    coverage = document.get("coverage") or {}
+    return (document.get("roots") == ["/"] and coverage.get("all_host_paths") is True
+            and coverage.get("stream_complete") is True and coverage.get("unresolved") == 0
+            and bool(document.get("lines")) and bool(document.get("accesses")))
+
+
+def trace_access_modes(document: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """从已通过完整性检查的严格轨迹取（路径 → 排序后的访问类型）。轨迹不完整或路径重复一律抛 AuditError：访问方式决定
+    比较什么，来源不可信时不能放松任何比较，调用方只能经由这个函数得到访问类型。"""
+
+    if not trace_is_complete(document):
+        raise AuditError("完整轨迹缺失、未结束或含未解析调用，不能由它确定访问方式")
+    modes: dict[str, tuple[str, ...]] = {}
+    for item in document["accesses"]:
+        if (not isinstance(item, (list, tuple)) or len(item) != 2 or not isinstance(item[0], str)
+                or not isinstance(item[1], (list, tuple)) or not all(isinstance(kind, str) for kind in item[1])):
+            raise AuditError("轨迹的访问记录格式不符")
+        if item[0] in modes:
+            raise AuditError("轨迹里同一路径出现了多条访问记录")
+        modes[item[0]] = tuple(sorted(set(item[1])))
+    return modes
+
+
+def host_path_modes(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]] | None) -> dict[str, list[str]]:
+    """每个 v3 宿主条目的路径在轨迹里的访问类型（没被访问的路径是空列表）。没有 v3 条目返回空字典；有 v3 条目而轨迹不
+    完整抛 AuditError。run_child 的结束凭证、replay_runtime 的复核、记录的 ``read_audit.host_path_modes`` 封存，都用它。"""
+
+    paths = sorted({entry["detail"]["path"] for entry in inputs or [] if is_host_entry_v3(entry)})
+    if not paths:
+        return {}
+    modes = trace_access_modes(document)
+    return {path: list(modes.get(path, ())) for path in paths}
+
+
+def host_snapshot_like(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """按既有宿主条目的合同版本与元数据依赖声明，重新取同一路径的现场快照：v3 条目取 v3（带同样的声明，摘要才可比），
+    其余（v2）取 v2，与过去的 ``host_snapshot(name[5:])`` 调用逐字相同。"""
+
+    name = entry.get("name") if isinstance(entry, Mapping) else None
+    if not isinstance(name, str) or not name.startswith("host:"):
+        raise AuditError("不是宿主快照条目")
+    if is_host_entry_v3(entry):
+        return host_snapshot_v3(name[5:], entry["detail"].get("metadata_dependency"))
+    return host_snapshot(name[5:])
+
+
+def host_entry_drift(entry: Mapping[str, Any]) -> str | None:
+    """预约中止后重派前的现场核对（没有轨迹，访问方式未知）：v2 条目整份相等；v3 条目只比任何访问方式下都必须一致的核心
+    集与声明字段（真正按访问方式的比较留给运行结束时与承接时）。未漂移返回 None，否则返回原因。"""
+
+    if not is_host_entry_v3(entry):
+        return None if host_snapshot(str(entry["name"])[5:]) == entry else "宿主输入快照漂移"
+    try:
+        planned = check_host_entry_v3(entry)
+        live = host_snapshot_like(entry)["detail"]["snapshot"]
+    except (OSError, ValueError, TypeError, AuditError) as error:
+        return str(error)
+    ok, reason = host_snapshot_matches(planned, live, None, entry_declared_fields(entry))
+    return None if ok else reason
+
+
+def host_inputs_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs: Sequence[Mapping[str, Any]] | None,
+                                 current_inputs: Sequence[Mapping[str, Any]] | None,
+                                 audit_summary: Mapping[str, Any] | None) -> list[str]:
+    """v3 宿主快照的承接专属核对（``unit_records.check_record`` 在轨迹重放之后调用）；没有 v3 条目时返回空，v2 记录继续走
+    旧规则（摘要整份相等 + ``strict_audit_reads`` 现取快照）。
+
+    条目摘要不含内容、目录项和易变元数据，所以摘要相等并不蕴含这些相等；这里补上：
+    1. 取记录封存的 ``host_path_modes``，必须与由完整轨迹重算的结果逐项相等（篡改或缺失即失败关闭）；
+    2. 把来源记录的每个 v3 条目与当前条目按访问方式比较——来源运行观察过的方面，现在必须仍然相同。"""
+
+    recorded = {entry["name"]: entry for entry in recorded_inputs or [] if is_host_entry_v3(entry)}
+    current = {entry["name"]: entry for entry in current_inputs or [] if is_host_entry_v3(entry)}
+    if not recorded and not current:
+        return []
+    try:
+        modes = host_path_modes(trace_document, list(recorded.values()))
+    except AuditError as error:
+        return ["宿主快照 v3 无法确定访问方式：" + str(error)]
+    problems: list[str] = []
+    if (audit_summary or {}).get("host_path_modes") != modes:
+        problems.append("记录封存的宿主访问类型缺失，或与完整轨迹重算的结果不符")
+    for name in sorted(set(recorded) | set(current)):
+        old, new = recorded.get(name), current.get(name)
+        if old is None or new is None:
+            problems.append(f"{name}：来源记录与当前输入的 v3 宿主条目集合不同")
+            continue
+        try:
+            planned, live = check_host_entry_v3(old), check_host_entry_v3(new)
+        except AuditError as error:
+            problems.append(f"{name}：{error}")
+            continue
+        if entry_declared_fields(old) != entry_declared_fields(new) or old["detail"].get("metadata_dependency") != new["detail"].get("metadata_dependency"):
+            problems.append(f"{name}：元数据依赖声明与来源记录不同")
+            continue
+        ok, reason = host_snapshot_matches(planned, live, modes.get(old["detail"]["path"], ()), entry_declared_fields(old))
+        if not ok:
+            problems.append(f"{name}：{reason}")
+    return problems
+
+
+def _verify_host_entry_v3(entry: Mapping[str, Any], modes: Mapping[str, Sequence[str]] | None, *, historical: bool) -> Mapping[str, Any]:
+    """``strict_audit_reads`` 对一个 v3 条目的核对：先自洽复核；非历史重放时再现取 v3 快照，按本次轨迹的访问方式与条目
+    比较（``modes`` 为 None 表示轨迹不完整，退到整份相等）。历史重放只校验封存内容自身，不读宿主。返回封存载荷。"""
+
+    planned = check_host_entry_v3(entry)
+    if not historical:
+        path = entry["detail"]["path"]
+        live = host_snapshot_v3(path)["detail"]["snapshot"]
+        if modes is None:
+            ok, reason = host_snapshot_identical(planned, live)
+        else:
+            ok, reason = host_snapshot_matches(planned, live, modes.get(path, ()), entry_declared_fields(entry))
+        if not ok:
+            raise AuditError("宿主输入快照漂移：" + reason)
+    return planned
+
+
 def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str, Any]] | None,
                        *, repo_root: str, data_root: str | None, historical: bool = False) -> dict[str, Any]:
     """完整观察与可承接分开判断：所有实际路径必须有事前绑定且运行后未变的精确快照。"""
@@ -752,8 +1101,23 @@ def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str
             runtime_paths = _runtime_module().replay_runtime(document, list(inputs or []), historical=historical)
         except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
             findings.append({"root": "runtime", "path": "", "kinds": [], "sample": "", "suggestion": str(error)})
+    v3_modes = None
+    if any(is_host_entry_v3(entry) for entry in inputs or []):
+        try:
+            v3_modes = trace_access_modes(document)
+        except AuditError:
+            # 轨迹不完整：上面已经报了 finding；v3 条目退到最严格的整份相等，不放松任何比较。
+            v3_modes = None
     for entry in inputs or []:
         detail = entry.get("detail") or {}
+        if detail.get("schema_version") == HOST_SCHEMA_V3:
+            # 宿主快照 v3：按本次轨迹里该路径的访问方式比较（见上面 v3 一节）；v2 条目不经过这里。
+            path = detail.get("path")
+            try:
+                snapshots[path] = _verify_host_entry_v3(entry, v3_modes, historical=historical)
+            except (OSError, ValueError, TypeError, AuditError) as error:
+                findings.append({"root": "host", "path": str(path), "kinds": [], "sample": "", "suggestion": str(error)})
+            continue
         if detail.get("schema_version") != HOST_SCHEMA:
             continue
         path = detail.get("path")
@@ -848,10 +1212,17 @@ def narrow_input_scope(record_path: Path, trace_path: Path) -> dict[str, Any]:
         excluded = _runtime_module().replay_runtime(trace, record["inputs"])
         runtime_inputs["runtime_contract"] = trace["runtime"]["context"]["contract_entry"]["detail"]["contract"]
     paths = sorted({path for path, _kinds in trace["accesses"]} - excluded)
+    # 宿主快照 v3：来源记录里声明了元数据依赖的路径，收窄后必须保留声明；否则收窄会悄悄放松对 mtime 一类字段的绑定。
+    kept = set(paths)
+    dependencies = sorted(({"path": entry["detail"]["path"], **entry["detail"]["metadata_dependency"]}
+                           for entry in record["inputs"]
+                           if is_host_entry_v3(entry) and isinstance(entry["detail"].get("metadata_dependency"), Mapping)
+                           and entry["detail"]["path"] in kept), key=lambda item: item["path"])
     return {"schema_version": "unit-read-scope-proposal/v1", "unit_id": record["unit_id"],
             "spec": record["spec"], "requires_validation": True, "reuse_enabled": False,
             "environment_sha256": record["environment_sha256"], "executor_sha256": record["executor"]["sha256"],
-            "inputs": {"host_paths": paths, "require_read_audit": True, **runtime_inputs},
+            "inputs": {"host_paths": paths, "require_read_audit": True, **runtime_inputs,
+                       **({"metadata_dependencies": dependencies} if dependencies else {})},
             "source_record": {"path": str(record_path), "sha256": hashlib.sha256(record_path.read_bytes()).hexdigest()},
             "source_trace": {"path": str(trace_path), "sha256": hashlib.sha256(trace_path.read_bytes()).hexdigest()}}
 

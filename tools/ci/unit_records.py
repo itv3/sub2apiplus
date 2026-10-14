@@ -544,16 +544,19 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
       同一受管树的依赖分析经 ``deps_cache`` 共用；
     * ``resolved``：清单生成时已算好的明细（例如数据根才有的内容）。"""
 
-    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract"}
+    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract",
+               "metadata_dependencies"}
     if not isinstance(declaration, Mapping) or set(declaration) - allowed:
         raise RecordsError(f"输入声明非法：{declaration!r}")
     paths = declaration.get("host_paths", [])
     if (not isinstance(paths, list) or not all(isinstance(path, str) for path in paths)
             or len(paths) != len(set(paths)) or not isinstance(declaration.get("require_read_audit", False), bool)):
         raise RecordsError("宿主路径须为无重复的数组，完整审计要求须为布尔值")
+    dependencies = (validate_metadata_dependencies(declaration["metadata_dependencies"], paths)
+                    if "metadata_dependencies" in declaration else {})
     entries = [repo.range_entry(spec) for spec in declaration.get("ranges") or []]
     for path in paths:
-        entries.append(_audit_module().host_snapshot(path))
+        entries.append(new_host_snapshot(path, dependencies.get(path)))
     if "runtime_contract" in declaration:
         try:
             entries.append(_audit_module()._runtime_module().contract_entry(declaration["runtime_contract"]))
@@ -586,13 +589,18 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
 
 
 def validate_audit_policy(policy: Any, unit_ids: set[str]) -> dict[str, Any]:
-    """只登记本轮真实规划的命令与测试单元；未登记单元只能重跑，未知单元拒绝。"""
+    """只登记本轮真实规划的命令与测试单元；未登记单元只能重跑，未知单元拒绝。
+
+    每个登记单元的键集合是 ``host_paths``、``require_read_audit``、``runtime_contract`` 三个必备键，外加一个可选键
+    ``metadata_dependencies``（宿主快照 v3 的元数据依赖声明，见 ``validate_metadata_dependencies``）。"""
     if (not isinstance(policy, dict) or set(policy) != {"schema_version", "default", "units"}
             or policy.get("schema_version") != "unit-audit-policy/v1" or policy.get("default") != "reexecute-only"
             or not isinstance(policy.get("units"), dict) or set(policy["units"]) - unit_ids):
         raise RecordsError("读集策略须默认重跑，且只能登记当前真实命令或测试单元")
     for unit_id, declaration in policy["units"].items():
-        if (not isinstance(declaration, dict) or set(declaration) != {"host_paths", "require_read_audit", "runtime_contract"}
+        # 三个必备键之外只允许一个可选键 metadata_dependencies（宿主快照 v3 的元数据依赖声明）；缺省时与过去完全相同。
+        if (not isinstance(declaration, dict)
+                or set(declaration) - {"metadata_dependencies"} != {"host_paths", "require_read_audit", "runtime_contract"}
                 or declaration["require_read_audit"] is not True):
             raise RecordsError(f"单元 {unit_id} 必须登记精确输入、隔离合同并要求完整审计")
         paths = declaration["host_paths"]
@@ -603,7 +611,54 @@ def validate_audit_policy(policy: Any, unit_ids: set[str]) -> dict[str, Any]:
             _audit_module()._runtime_module().validate_contract(declaration["runtime_contract"])
         except RuntimeError as error:
             raise RecordsError(str(error)) from error
+        if "metadata_dependencies" in declaration:
+            validate_metadata_dependencies(declaration["metadata_dependencies"], paths)
     return policy
+
+
+def validate_metadata_dependencies(value: Any, host_paths: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """审计策略里一个单元的元数据依赖声明 ``[{path, fields, basis}]`` 的校验，返回（路径 → 规范化的 ``{fields, basis}``）。
+
+    宿主快照 v3 默认不比较 atime／mtime／ctime／inode／device（路径级轨迹分不清程序用了 stat 的哪个字段，见
+    read_audit 的 v3 一节）；单元确实依赖其中某项时必须在这里逐路径声明：path 须是该单元 ``host_paths`` 里的路径且不重复，
+    fields 是上述五项的非空无重复子集，basis 是非空字符串（源码位置或调用合同的审核依据，没有依据不得声明）。"""
+
+    if not isinstance(value, list):
+        raise RecordsError("元数据依赖声明须是数组")
+    result: dict[str, dict[str, Any]] = {}
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {"path", "fields", "basis"}:
+            raise RecordsError("元数据依赖声明的每一项须恰好含 path、fields、basis")
+        path = item["path"]
+        if not isinstance(path, str) or path not in host_paths:
+            raise RecordsError("元数据依赖声明的路径必须出现在该单元的 host_paths 里")
+        if path in result:
+            raise RecordsError("同一路径的元数据依赖声明不能重复")
+        try:
+            result[path] = _audit_module().normalize_metadata_dependency({"fields": item["fields"], "basis": item["basis"]})
+        except RuntimeError as error:
+            raise RecordsError(f"元数据依赖声明非法（{path}）：{error}") from error
+    return result
+
+
+def _control_adapter(audit: Any) -> bool:
+    """审计模块是不是 control 四链的适配器：适配器（control_read_audit.py）复制 read_audit 的全部名字，另带
+    ``CONTROL_UNIT_IDS`` 与 ``sidecar_paths``；普通的 read_audit 模块没有这两个名字。"""
+
+    return hasattr(audit, "CONTROL_UNIT_IDS") and hasattr(audit, "sidecar_paths")
+
+
+def new_host_snapshot(path: str, dependency: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """计划期新取一份宿主快照。普通审计模块取 v3（按单元实际访问方式比较，噪声不再让单元作废）；选中 control 适配器的
+    整次运行保持 v2：control 四链的 sidecar 只认 v2，它们继续产出并重放 v2（即使这次运行里还有别的单元，也宁可统一
+    保守）。v2 没有“元数据依赖”这个语义，control 运行里出现声明直接拒绝。"""
+
+    audit = _audit_module()
+    if _control_adapter(audit):
+        if dependency is not None:
+            raise RecordsError("元数据依赖声明只适用于宿主快照 v3，control 四链运行不支持")
+        return audit.host_snapshot(path)
+    return audit.host_snapshot_v3(path, dependency)
 
 
 def _unique(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -915,11 +970,15 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
             try:
                 if stored_trace is None or not stored_trace.is_file() or file_sha256(stored_trace) != digest:
                     raise RecordsError("完整读集轨迹缺失或摘要漂移")
-                replay = _audit_module().strict_audit_reads(json.loads(stored_trace.read_text()), current.inputs,
+                trace_document = json.loads(stored_trace.read_text())
+                replay = _audit_module().strict_audit_reads(trace_document, current.inputs,
                     repo_root=str(audit.get("repo_root") or "/unbound-repo"), data_root=audit.get("data_root"),
                     historical=facts.historical_read_audit)
                 if not replay["coverage_complete"]:
                     raise RecordsError("完整读集轨迹不能按当前输入重放")
+                # 宿主快照 v3 的条目摘要只绑无条件比较集：来源记录观察过的内容／目录项在这里按它的访问方式补比，封存的访问类型
+                # 也在这里与轨迹交叉核对；没有 v3 条目（v2 记录）时返回空，行为与过去相同。
+                problems.extend(_audit_module().host_inputs_inherit_problems(trace_document, record.get("inputs"), current.inputs, audit))
             except (OSError, ValueError, RuntimeError) as error:
                 problems.append(str(error))
     completed = parse_utc(record.get("completed_at_utc"))

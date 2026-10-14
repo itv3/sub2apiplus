@@ -1188,6 +1188,15 @@ class ReadAuditor:
                 result["trace_lines"] = document.get("lines")
                 trace = self.trace_path(unit)
                 result["trace"] = {"path": str(trace), "sha256": self.records.file_sha256(trace)}
+                if result.get("coverage_complete") is True:
+                    # 宿主快照 v3：把每个宿主路径在这份已验证的严格轨迹里的访问类型封存进记录（随记录自摘要），承接时与
+                    # 轨迹重算的结果交叉核对；没有 v3 条目（v2／control）时为空，不加字段，记录与过去逐字相同。
+                    try:
+                        modes = self.module.host_path_modes(document, inputs)
+                    except self.module.AuditError:
+                        modes = {}  # 取不到就不封存；v3 记录缺该字段时承接失败关闭
+                    if modes:
+                        result["host_path_modes"] = modes
         result.setdefault("status", "failed" if result.get("undeclared_count") else "passed")
         result.setdefault("coverage_complete", False)
         result.update(inputs_sha256=current.inputs_sha256 if current else None, repo_root=self.repo_root, data_root=self.data_root)
@@ -2421,7 +2430,9 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths) or len(set(paths)) != len(paths):
                 raise ExecutorError("每个单元的宿主输入须为无重复的精确路径数组")
             current = currents[unit_id]
-            current.inputs = records._unique([*(current.inputs or []), *[_audit_module().host_snapshot(path) for path in paths],
+            # 计划期快照的合同版本由 records.new_host_snapshot 统一选择（普通运行 v3，control 适配器在位的运行 v2），
+            # 与策略 host_paths 走的 declared_inputs 是同一个选择，同名条目才会摘要一致。
+            current.inputs = records._unique([*(current.inputs or []), *[records.new_host_snapshot(path) for path in paths],
                                               records.value_entry("policy", "require-read-audit", "all-file-paths/v1")])
             current.inputs_sha256 = records.entries_sha256(current.inputs)
     if args.audit_reads:
@@ -2544,7 +2555,9 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         for unit in restarted:
             for entry in recorder.currents[unit.unit_id].inputs or []:
                 name = entry.get("name", "")
-                if name.startswith("host:") and _audit_module().host_snapshot(name[5:]) != entry:
+                # v2 条目整份相等（与过去相同）；v3 条目此刻没有轨迹，只比任何访问方式下都必须一致的核心集与声明字段，
+                # 按访问方式的比较留给运行结束与承接。
+                if name.startswith("host:") and _audit_module().host_entry_drift(entry):
                     raise ExecutorError("整机预约后宿主输入漂移，拒绝重派")
         fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
         if (records.entries_sha256(fresh_environment) != recorder.environment_sha256

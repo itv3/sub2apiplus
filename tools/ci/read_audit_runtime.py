@@ -857,10 +857,19 @@ def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]], *, hi
     if any(completion.get(key) is not True for key in
            ("host_inputs_unchanged", "environment_unchanged", "namespace_unchanged", "command_finished")):
         raise RuntimeContractError("隔离执行未结束或输入／环境在执行期间变化")
-    host_schema = _read_audit().HOST_SCHEMA
-    entries = [entry for entry in inputs if entry.get("detail", {}).get("schema_version") == host_schema]
-    if completion.get("host_entries_sha256") != digest(entries):
+    audit = _read_audit()
+    entries = _host_entries(audit, inputs)
+    if completion.get("host_entries_sha256") != host_binding_digest(audit, entries):
         raise RuntimeContractError("实际命名空间中的输入快照未绑定执行记录")
+    if any(audit.is_host_entry_v3(entry) for entry in entries):
+        # v3 快照按访问方式比较：结束凭证里封存的访问类型必须与这份完整轨迹重算的结果一致，否则凭证声称的“未变”
+        # 可能是按更宽松的访问方式得出的。纯 v2 记录没有这一项，行为与历史相同。
+        try:
+            expected_modes = audit.host_path_modes(document, entries)
+        except audit.AuditError as error:
+            raise RuntimeContractError("宿主访问类型无法由完整轨迹确定：" + str(error)) from error
+        if completion.get("host_path_modes") != expected_modes:
+            raise RuntimeContractError("宿主访问类型凭证缺失，或与完整轨迹不符")
     if document.get("schema_version") == TRACE_SCHEMA_V4:
         if runtime["context"].get("control_chain") is not None:
             # control 四链只产生并重放 v3 轨迹；v4 文档带 control 专用凭证，说明有人想绕开 control 的专用重放。
@@ -927,6 +936,113 @@ def _read_audit():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _host_entries(audit, inputs):
+    """输入明细里的宿主快照条目（v2 与 v3 两种合同），保持输入顺序。"""
+    return [entry for entry in inputs if entry.get("detail", {}).get("schema_version") in audit.HOST_SCHEMAS]
+
+
+def host_binding_digest(audit, entries):
+    """结束凭证 ``host_entries_sha256`` 的摘要口径。条目全是 v2（含空列表）时与历史完全相同，即 ``digest(entries)``；
+    v3 条目只取（名字、摘要、合同版本）视图：承接时新旧条目的内容、目录项、易变元数据可以不同，只要无条件比较集的摘要
+    相同就是同一份登记，详情的差异由 ``read_audit.host_inputs_inherit_problems`` 按访问方式比较。"""
+    return digest([{"name": entry["name"], "sha256": entry["sha256"], "schema_version": audit.HOST_SCHEMA_V3}
+                   if audit.is_host_entry_v3(entry) else entry for entry in entries])
+
+
+def _host_baseline(audit, request):
+    """子命名空间启动前取宿主基线并与登记快照比较，返回基线（before）。
+
+    纯 v2 请求与历史逐字相同：整份相等。含 v3 条目时此刻还没有轨迹，不知道单元会怎样访问，所以只比较“任何访问方式下
+    都必须一致”的核心集（类型、符号链接链、祖先目录、权限属主与文件大小）和策略声明的易变字段，不比内容摘要、目录项和
+    其它时间字段；取到的 before 作为本次运行的基准，结束时再按访问方式比较。"""
+    entries = request["host_entries"]
+    if not any(audit.is_host_entry_v3(entry) for entry in entries):
+        before = [audit.host_snapshot(path) for path in request["host_paths"]]
+        if before != entries:
+            raise RuntimeContractError("实际命名空间中的输入与登记快照不同")
+        return before
+    if request["host_paths"] != [entry.get("detail", {}).get("path") for entry in entries]:
+        raise RuntimeContractError("宿主路径与登记快照的路径不一致")
+    before = []
+    for entry in entries:
+        try:
+            live = audit.host_snapshot_like(entry)
+            if audit.is_host_entry_v3(entry):
+                ok, reason = audit.host_snapshot_matches(audit.check_host_entry_v3(entry), live["detail"]["snapshot"], None,
+                                                         audit.entry_declared_fields(entry))
+            else:
+                ok, reason = live == entry, "整份快照变了"
+        except (OSError, ValueError, TypeError, audit.AuditError) as error:
+            raise RuntimeContractError(f"实际命名空间中的输入快照失败：{entry.get('name')}（{error}）") from error
+        if not ok:
+            raise RuntimeContractError(f"实际命名空间中的输入与登记快照不同：{entry.get('name')}（{reason}）")
+        before.append(live)
+    return before
+
+
+def _host_final(audit, request):
+    """命令结束后重取宿主快照。纯 v2 请求与历史相同（取快照出错照旧向上抛）；含 v3 条目时出错记成失败标记，让结束比较
+    判“已变”，而不是丢掉已经写出的轨迹。"""
+    entries = request["host_entries"]
+    if not any(audit.is_host_entry_v3(entry) for entry in entries):
+        return [audit.host_snapshot(path) for path in request["host_paths"]]
+    after = []
+    for entry in entries:
+        try:
+            after.append(audit.host_snapshot_like(entry))
+        except (OSError, ValueError, TypeError, audit.AuditError) as error:
+            after.append({"snapshot_error": str(error)})
+    return after
+
+
+def _host_completion(audit, request, document):
+    """结束凭证里与宿主快照有关的字段。``host_entries_sha256`` 绑定的是登记的快照（纯 v2 时启动已核对 before 与它整份相同，
+    摘要与历史的 ``digest(before)`` 逐字相同）；含 v3 条目时另带 ``host_path_modes``——本次结束比较所用的访问类型，消费
+    重放时必须与完整轨迹重算的结果一致。轨迹不完整就不写访问类型，重放据此拒绝。"""
+    fields = {"host_entries_sha256": host_binding_digest(audit, request["host_entries"])}
+    if any(audit.is_host_entry_v3(entry) for entry in request["host_entries"]):
+        try:
+            fields["host_path_modes"] = audit.host_path_modes(document, request["host_entries"])
+        except audit.AuditError:
+            pass
+    return fields
+
+
+def _host_unchanged(audit, request, before, after, document):
+    """运行结束时的宿主输入核对，返回（是否未变，原因）。纯 v2 请求：``before == after``，与历史相同。
+
+    含 v3 条目时读本次的轨迹文档（访问方式只能来自通过完整性检查的轨迹），对每个 v3 路径按访问方式同时比较
+    登记↔基线与基线↔结束；任一不一致即“已变”。拿不到完整轨迹（文档缺失或不完整）就退到最严格的整份相等，不放松。"""
+    entries = request["host_entries"]
+    if not any(audit.is_host_entry_v3(entry) for entry in entries):
+        return before == after, ""
+    modes = None
+    if document is not None:
+        try:
+            modes = audit.trace_access_modes(document)
+        except audit.AuditError:
+            modes = None
+    for entry, first, last in zip(entries, before, after):
+        if "snapshot_error" in last:
+            return False, f"{entry.get('name')}：结束时取快照失败（{last['snapshot_error']}）"
+        if not audit.is_host_entry_v3(entry):
+            if first != last:
+                return False, f"{entry.get('name')}：整份快照变了"
+            continue
+        planned, start, end = (item["detail"]["snapshot"] for item in (entry, first, last))
+        path = entry["detail"]["path"]
+        fields = audit.entry_declared_fields(entry)
+        if modes is None:
+            checks = [audit.host_snapshot_identical(start, end)]
+        else:
+            kinds = modes.get(path, ())
+            checks = [audit.host_snapshot_matches(planned, start, kinds, fields), audit.host_snapshot_matches(start, end, kinds, fields)]
+        for ok, reason in checks:
+            if not ok:
+                return False, f"{entry.get('name')}：{reason}"
+    return True, ""
 
 
 def _write(path: Path, value: Any) -> None:
@@ -1015,9 +1131,7 @@ def run_child(request_path: Path, expected_digest: str) -> int:
     _write(context_path, context)
     validate_context(context, [entry])
     audit = _read_audit()
-    before = [audit.host_snapshot(path) for path in request["host_paths"]]
-    if before != request["host_entries"]:
-        raise RuntimeContractError("实际命名空间中的输入与登记快照不同")
+    before = _host_baseline(audit, request)
     # 轨迹合同版本由受管请求决定（请求带摘要，被测命令改不了）：请求里没有该键就是历史 v3，调用方式与改动前完全一致；
     # 只有 prepare 明确写入 v4 时才把开关交给过滤器。
     trace_contract = request.get("trace_contract", TRACE_CONTRACT_V3)
@@ -1027,17 +1141,24 @@ def run_child(request_path: Path, expected_digest: str) -> int:
     argv = audit.strace_argv(request["argv"], output=trace_path, roots=["/"], strict=True, runtime_context=context_path, **options)
     result = subprocess.run(argv, cwd=request["cwd"], env={**os.environ, "TMPDIR": str(root), "TMP": str(root), "TEMP": str(root)},
                             stdin=subprocess.DEVNULL, check=False)
-    after = [audit.host_snapshot(path) for path in request["host_paths"]]
-    receipt = {"context": context, "host_inputs_unchanged": before == after, "environment_unchanged": entry == contract_entry(contract),
+    after = _host_final(audit, request)
+    # 宿主快照 v3 按访问方式比较，访问方式只能来自刚写出的轨迹，所以先读轨迹再下“未变”的结论；纯 v2 请求不提前读，
+    # 与历史顺序相同。
+    host_v3 = any(audit.is_host_entry_v3(host_entry) for host_entry in request["host_entries"])
+    written = json.loads(trace_path.read_text()) if host_v3 and trace_path.is_file() else None
+    unchanged, drift = _host_unchanged(audit, request, before, after, written)
+    receipt = {"context": context, "host_inputs_unchanged": unchanged, "environment_unchanged": entry == contract_entry(contract),
                "namespace_unchanged": namespace == os.readlink("/proc/self/ns/mnt"), "returncode": result.returncode,
                "request_sha256": expected_digest, "host_entries": before}
+    if host_v3:
+        receipt["host_drift"] = drift
     _write(trace_path.with_name(trace_path.name + ".runtime.json"), receipt)
     if trace_path.is_file():
-        document = json.loads(trace_path.read_text())
+        document = written if written is not None else json.loads(trace_path.read_text())
         document.setdefault("runtime", {})["completion"] = {
             key: receipt[key] for key in ("host_inputs_unchanged", "environment_unchanged", "namespace_unchanged")}
-        document["runtime"]["completion"].update(command_finished=True, host_entries_sha256=digest(before),
-                                                returncode=result.returncode, request_sha256=expected_digest)
+        document["runtime"]["completion"].update(command_finished=True, returncode=result.returncode, request_sha256=expected_digest,
+                                                **_host_completion(audit, request, document))
         if test_transport is not None:
             try:
                 exported = export_test_results(test_transport, contract, document, bound_inputs, returncode=result.returncode)
@@ -1074,8 +1195,7 @@ def prepare(contract: dict[str, Any], *, output: Path, argv: list[str], cwd: str
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if any(root.iterdir()) or stat.S_IMODE(root.stat().st_mode) != 0o700 or root.stat().st_uid != os.geteuid():
         raise RuntimeContractError("宿主挂载点必须为空、归运行账号所有且权限为 0700")
-    host_schema = _read_audit().HOST_SCHEMA
-    entries = [entry for entry in inputs if entry.get("detail", {}).get("schema_version") == host_schema]
+    entries = _host_entries(_read_audit(), inputs)
     request = {"contract_entry": contract_entry(contract), "parent_namespace": os.readlink("/proc/self/ns/mnt"),
                "output": str(output), "argv": argv, "cwd": cwd, "host_entries": entries,
                "host_paths": [entry["detail"]["path"] for entry in entries]}
