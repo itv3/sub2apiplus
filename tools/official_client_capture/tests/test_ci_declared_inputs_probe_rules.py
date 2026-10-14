@@ -365,17 +365,18 @@ class ProbeNoiseTests(unittest.TestCase):
                 self.assertEqual(rules_of(cover(outside=[[key, ["missing"], 1]])), ["C3-missing-undeclared"], "必须是整段 node_modules")
 
     def test_paths_under_or_above_the_evidence_aliases_are_noise_ignoring_case(self) -> None:
-        # WP1e 起别名根只取 TREE／WORK／TMP；HOME 之下的探测不再是噪声（原来这里还有 /data/ci/home/.config/ 与 {HOME}/.cfg/，移到下面的违规断言）。
+        # WP1e 起 HOME 之下的探测不再是噪声，WP1f 起 TMP 也不是（采样器写下的 TMP 恒为 /tmp，是用户可写区）：别名根只取 TREE、WORK。原来这里还有
+        # /data/ci/home/.config/、{HOME}/.cfg/、/data/ci/tmp/x/、{TMP}/y/，移到下面的违规断言。
         for key in ("/data/ci/run/tree/frontend/", "/DATA/CI/RUN/TREE/FRONTEND/NODE_MODULES/.PNPM/TYPESCRIPT@5.6.3/LIB/", "/Data/Ci/Run/Tree/",
-                    "/data/ci/run/anything/deeper/", "/data/ci/tmp/x/", "{WORK}/x/", "{WORK}/", "{TMP}/y/"):
+                    "/data/ci/run/anything/deeper/", "{WORK}/x/", "{WORK}/"):
             for kinds in (["missing"], ["stat"], ["dir", "stat"]):
                 with self.subTest(key=key, kinds=kinds):
                     result = cover(outside=[[key, kinds, 1]])
                     self.assertTrue(result["ok"], result["undeclared"])
-        for key in ("/data/ci/home/.config/", "{HOME}/.cfg/", "/DATA/CI/HOME/.CONFIG/"):
+        for key in ("/data/ci/home/.config/", "{HOME}/.cfg/", "/DATA/CI/HOME/.CONFIG/", "/data/ci/tmp/x/", "{TMP}/y/", "/DATA/CI/TMP/Z/"):
             for kinds, rule in ((["missing"], "C3-missing-undeclared"), (["stat"], "C2-outside-undeclared"), (["dir", "stat"], "C2-outside-undeclared")):
-                with self.subTest(key=key, kinds=kinds, home=True):
-                    self.assertEqual(rules_of(cover(outside=[[key, kinds, 1]])), [rule], "HOME 之下的探测要登记 host-config 或归 scratch")
+                with self.subTest(key=key, kinds=kinds, home_or_tmp=True):
+                    self.assertEqual(rules_of(cover(outside=[[key, kinds, 1]])), [rule], "HOME、TMP 之下的探测要登记 host-config／scratch")
         # 读取、枚举、写入、执行不在放行之列。
         for key in ("{WORK}/x/", "/data/ci/home/.config/", "/DATA/CI/RUN/TREE/X/"):
             for kinds in (["read"], ["list"], ["write"], ["exec"]):

@@ -137,7 +137,7 @@ class GitWhitelistTests(unittest.TestCase):
             ["git", "merge-base", A, A], ["git", "merge-base", "--is-ancestor", A, A], ["git", "merge-base", "--all", A, A],
             ["git", "ls-tree", "-r", "--name-only", A, "--", "docs/egress"], ["git", "ls-tree", "-z", A, "--", ".git/HEAD"], ["git", "ls-tree", "--abbrev=8", A],
             ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", A], ["git", "diff-tree", "-r", A, A],
-            ["git", "log", "--oneline", f"{A}..{A}"], ["git", "log", "-n", "3", A], ["git", "log", "-5", A], ["git", "log", f"^{A}", A],
+            ["git", "log", "--format=%H", f"{A}..{A}"], ["git", "log", "-n", "3", A], ["git", "log", "-5", A], ["git", "log", f"^{A}", A],
             ["git", "log", f"{A}...{A}", "--format=%H"], ["git", "log", "--max-count=2", A],
             ["git", "rev-list", "--count", f"{A}...{A}"], ["git", "rev-list", "--max-count=2", A], ["git", "rev-list", "--not", f"^{A}", A],
             # “:”之后是对象内的路径，“--”之后是路径：里面出现 HEAD 之类的字样不算引用。
@@ -259,8 +259,9 @@ class GitStateReadTests(unittest.TestCase):
     def test_other_git_paths_are_unchanged(self) -> None:
         rows = (["{TREE}/.git/config", ["read"], False], ["{TREE}/.git/objects/cd/ef01", ["read"], False], ["{TREE}/.git/objects/pack/pack-1.idx", ["read"], False],
                 ["{TREE}/.git/objects/", ["read", "list"], False], ["{TREE}/.git/info/exclude", ["read", "missing"], False], ["{TREE}/.git", ["stat", "dir"], False],
-                ["{TREE}/.git/hooks", ["list"], False], ["{TREE}/.git/commondir", ["missing"], False])
-        self.assertTrue(cover(git_sample([], repo=rows))["ok"], "没有固定 git 子进程时，对象库、config 等读取仍照旧放行（声明了 git_history 即可）")
+                ["{TREE}/.git/commondir", ["missing"], False])
+        self.assertTrue(cover(git_sample([], repo=rows))["ok"], "没有固定 git 子进程时，对象库、config 等读取仍照旧放行（声明了 git_history 即可）；"
+                                                               "只 stat／dir／missing 的状态路径也不算读")
 
     def test_the_older_git_rules_keep_their_precedence(self) -> None:
         no_history = base.make_scope()
@@ -522,13 +523,27 @@ class MalformedSealedRecordTests(base.DeclaredTestCase):
 
     def test_the_route_wrapper_turns_any_malformed_content_error_into_a_problem(self) -> None:
         item = self.world.base
-        for error in (TypeError("x"), KeyError("k"), AttributeError("a"), ValueError("v"), RecursionError("r"), UnicodeError("u"), OverflowError("o")):
+        for error in (TypeError("x"), KeyError("k"), ValueError("v"), RecursionError("r"), UnicodeError("u"), OverflowError("o")):
             with self.subTest(error=type(error).__name__), mock.patch.object(ur, "_check_declared_audit", side_effect=error):
                 problems = self.world.check(item)
                 self.assertTrue(any("核验封存物时遇到畸形内容" in problem and type(error).__name__ in problem for problem in problems), problems)
-        # 包装只管畸形内容类的异常：别的异常（例如程序缺陷）不被吞掉。
-        with mock.patch.object(ur, "_check_declared_audit", side_effect=RuntimeError("bug")), self.assertRaises(RuntimeError):
-            self.world.check(item)
+        # 包装只管畸形内容会引出的那几种异常：程序缺陷最常见的 AttributeError（拼错属性名）和别的异常都不被吞掉。
+        for bug in (RuntimeError("bug"), AttributeError("no attribute"), NameError("name"), ZeroDivisionError("zero"), AssertionError("assert")):
+            with self.subTest(bug=type(bug).__name__), mock.patch.object(ur, "_check_declared_audit", side_effect=bug), self.assertRaises(type(bug)):
+                self.world.check(item)
+
+    def test_the_wrapper_names_the_frame_where_the_malformed_content_blew_up(self) -> None:
+        """问题文本里带出错帧（函数名:行号）：真正抛异常的帧，而不是包装自己，免得程序缺陷被笼统的「畸形内容」盖住。"""
+
+        def explode(store, record, current, facts):
+            raise KeyError("sha256")
+
+        with mock.patch.object(ur, "_check_declared_audit", explode):
+            problems = self.world.check(self.world.base)
+        found = [problem for problem in problems if "核验封存物时遇到畸形内容" in problem]
+        self.assertEqual(len(found), 1, problems)
+        self.assertRegex(found[0], r"出错帧 explode:\d+")
+        self.assertIn("KeyError", found[0])
 
     def test_variants_of_self_consistent_malformed_sealed_records(self) -> None:
         def entry_named(name: str):
@@ -621,23 +636,62 @@ class StartedAtTests(base.DeclaredTestCase):
 
 class NoiseTighteningTests(unittest.TestCase):
     def test_the_probe_roots_are_only_system_state(self) -> None:
-        self.assertEqual(ur._DECLARED_PROBE_ROOTS, ("/usr/", "/opt/", "/var/", "/run/", "/etc/", "/lib/", "/lib64/", "/bin/", "/sbin/"))
+        self.assertEqual(ur._DECLARED_PROBE_ROOTS, ("/usr/", "/opt/", "/var/lib/", "/var/cache/", "/var/run/", "/var/log/", "/run/", "/etc/", "/lib/",
+                                                    "/lib64/", "/bin/", "/sbin/"))
+        self.assertEqual(ur._DECLARED_PROBE_EXCLUDED, ("/run/user/",))
+        for root in ur._DECLARED_PROBE_ROOTS:
+            self.assertTrue(root.startswith("/") and root.endswith("/"), root)
+            self.assertNotIn(root, ("/var/", "/var/tmp/", "/tmp/", "/home/", "/root/"), "用户可写区与整个 /var/ 不在放行根里")
+
+    def test_var_is_split_and_only_the_system_maintained_subtrees_are_noise(self) -> None:
+        for root in ("/var/lib/", "/var/cache/", "/var/run/", "/var/log/"):
+            for kinds in (["missing"], ["stat"], ["dir", "stat"]):
+                with self.subTest(root=root, kinds=kinds):
+                    self.assertTrue(probe.cover(outside=[[f"{root}x/y/", kinds, 1]], aliases=probe.FAR)["ok"])
+        # /var/tmp、/var/spool、/var/mail、/var/www……整个 /var/ 不再放行，只放系统自己维护的那四棵子树。
+        for key in ("/var/tmp/x/", "/var/spool/x/", "/var/mail/x", "/var/www/x/", "/var/x/", "/var/tmpx/y/", "/var/libx/y/", "/var/runx/y/"):
+            with self.subTest(key=key):
+                self.assertEqual(probe.rules_of(probe.cover(outside=[[key, ["missing"], 1]], aliases=probe.FAR)), ["C3-missing-undeclared"])
+        # 而且 read／list 之类不属于探测的访问仍然不放行。
+        self.assertEqual(probe.rules_of(probe.cover(outside=[["/var/lib/x/", ["read"], 1]], aliases=probe.FAR)), ["C2-outside-undeclared"])
+
+    def test_run_is_noise_except_the_per_user_runtime_directories(self) -> None:
+        for key in ("/run/systemd/resolve/", "/run/nscd/", "/run/lock/x", "/run/"):
+            with self.subTest(key=key):
+                self.assertTrue(probe.cover(outside=[[key, ["missing"], 1]], aliases=probe.FAR)["ok"], key)
+        for key in ("/run/user/1000/x", "/run/user/", "/run/user/0/bus"):
+            with self.subTest(key=key):
+                self.assertEqual(probe.rules_of(probe.cover(outside=[[key, ["missing"], 1]], aliases=probe.FAR)), ["C3-missing-undeclared"])
+        self.assertTrue(probe.cover(outside=[["/run/userx/y", ["missing"], 1]], aliases=probe.FAR)["ok"], "/run/userx/ 不是 /run/user/（按目录判，不是字符串前缀）")
 
     def test_user_writable_areas_are_no_longer_noise(self) -> None:
-        for root in ("/tmp", "/home", "/root", "/srv", "/mnt", "/media"):
+        for root in ("/tmp", "/var/tmp", "/home", "/root", "/srv", "/mnt", "/media"):
             for kinds, rule in ((["missing"], "C3-missing-undeclared"), (["stat"], "C2-outside-undeclared"), (["dir", "stat"], "C2-outside-undeclared")):
                 with self.subTest(root=root, kinds=kinds):
                     result = probe.cover(outside=[[f"{root}/x/y/", kinds, 1]], aliases=probe.FAR)
                     self.assertEqual(probe.rules_of(result), [rule])
 
-    def test_an_alias_root_keeps_its_subtree_but_only_for_tree_work_and_tmp(self) -> None:
-        # TMP=/tmp：/tmp 之下按别名根放行（TMP 仍是别名根）；换成别处就不放行。
-        aliases = {**probe.FAR, "TMP": "/tmp"}
-        self.assertTrue(probe.cover(outside=[["/tmp/x/", ["missing"], 1], ["{TMP}/y/", ["stat"], 1]], aliases=aliases)["ok"])
-        self.assertEqual(probe.rules_of(probe.cover(outside=[["/tmp/x/", ["missing"], 1]], aliases=probe.FAR)), ["C3-missing-undeclared"])
-        for key in ("{WORK}/x/", "/data/ci/run/tree/y/", "/DATA/CI/RUN/Z/", "{TMP}/q/"):
+    def test_an_alias_root_keeps_its_subtree_only_for_tree_and_work(self) -> None:
+        """WP1e 时 TMP 还是别名根（采样器写下的 TMP 恒为 /tmp，于是 /tmp 之下的 missing／stat／dir 无条件放行，等于没去掉 /tmp 放行根）；
+        WP1f 起别名根只取 TREE、WORK。TMP 之下的探测要靠声明的 {TMP}/ 前缀（登记表里本来就是 scratch）。"""
+
+        for tmp in ("/tmp", "/data/ci/tmp"):
+            aliases = {**probe.FAR, "TMP": tmp}
+            for key in ("/tmp/x/", "{TMP}/y/", "{TMP}/q/", "/data/ci/tmp/z/"):
+                with self.subTest(tmp=tmp, key=key):
+                    self.assertEqual(probe.rules_of(probe.cover(outside=[[key, ["missing"], 1]], aliases=aliases)), ["C3-missing-undeclared"])
+                    self.assertEqual(probe.rules_of(probe.cover(outside=[[key, ["stat"], 1]], aliases=aliases)), ["C2-outside-undeclared"])
+        for key in ("{WORK}/x/", "/data/ci/run/tree/y/", "/DATA/CI/RUN/Z/"):
             with self.subTest(key=key):
                 self.assertTrue(probe.cover(outside=[[key, ["missing"], 1]], aliases=probe.FAR)["ok"])
+        # 登记表声明了 {TMP}/（scratch）后，TMP 之下照常通过——真实证据的 5 个范围都声明了它。
+        scope = probe.bare_scope()
+        scope["outside"] = [{"prefix": "{TMP}/", "class": "scratch"}]
+        aliases = {**probe.FAR, "TMP": "/tmp"}
+        self.assertTrue(probe.cover(outside=[["{TMP}/y/", ["missing", "stat", "read", "write"], 1]], scope=scope, aliases=aliases)["ok"])
+        # TMP 自身及其祖先的 stat／dir 仍由祖先目录规则放行（与 HOME 同）。
+        self.assertTrue(probe.cover(outside=[["{TMP}", ["stat", "dir"], 1], ["/", ["stat"], 1]], aliases=aliases)["ok"])
+        self.assertEqual(probe.rules_of(probe.cover(outside=[["{TMP}", ["missing"], 1]], aliases=aliases)), ["C3-missing-undeclared"])
 
     def test_home_subtree_probes_need_a_declaration(self) -> None:
         for key in ("{HOME}/.npmrc", "{HOME}/.config/pnpm/rc", "{HOME}/.config/", "{HOME}/.cache/x/", "/data/ci/home/.npmrc", "/DATA/CI/HOME/.NPMRC"):
@@ -664,8 +718,8 @@ class NoiseTighteningTests(unittest.TestCase):
         self.assertEqual(probe.rules_of(probe.cover(outside=[["{HOME}/.yarnrc", ["missing"], 1]], scope=scope, aliases=probe.FAR)), ["C3-missing-undeclared"])
 
     def test_system_state_and_node_modules_segments_are_unchanged(self) -> None:
-        for key in ("/usr/lib/x/", "/etc/ld.so.conf.d/", "/run/systemd/resolve/", "/var/lib/x/", "/opt/node/bin/", "/lib/x86_64-linux-gnu/", "/sbin/x", "/bin/y",
-                    "/lib64/z", "/home/runner/node_modules/", "/srv/a/node_modules/b/"):
+        for key in ("/usr/lib/x/", "/etc/ld.so.conf.d/", "/run/systemd/resolve/", "/var/lib/x/", "/var/cache/x/", "/var/log/x/", "/var/run/x/", "/opt/node/bin/",
+                    "/lib/x86_64-linux-gnu/", "/sbin/x", "/bin/y", "/lib64/z", "/home/runner/node_modules/", "/srv/a/node_modules/b/", "/tmp/a/node_modules/b/"):
             with self.subTest(key=key):
                 self.assertTrue(probe.cover(outside=[[key, ["missing"], 1]], aliases=probe.FAR)["ok"], key)
 
@@ -793,25 +847,86 @@ class ValidFlagTests(unittest.TestCase):
 
 
 class RelaxationSummaryTests(unittest.TestCase):
-    def test_the_docstring_lists_every_relaxation_with_its_boundary(self) -> None:
+    """``declared_coverage`` 文档开头的「放宽项汇总」按条目逐项核对：条目名与顺序、每条的理由与边界、每条的关键事实、文中点名的常量真实存在且与代码一致。
+    新增或删除任何放宽项都要同时改文档和这里——只查几个关键词的话，漏项照样绿（验收 #4 一般 4）。"""
+
+    # （条目名, 该条正文里必须出现的关键事实）。条目名是文档里 ``N. *名字*（规则）：`` 的名字。
+    ITEMS = (
+        ("噪声探测", ("_DECLARED_PROBE_ROOTS", "_DECLARED_PROBE_EXCLUDED", "node_modules", "TREE、WORK", "用户可写区", "``{HOME}``、``{TMP}``")),
+        ("祖先目录", ("read 只对 ``{WORK}/`` 这一个键放行", "stat／dir", "list 与 missing", "_DECLARED_ANCESTOR_PROBES")),
+        ("root_listing", ("scope:root-listing", "树根这一层")),
+        ("自产物读回", ("repo_ignored", "同一路径也出现", "C1-untracked-read")),
+        ("installed_dirs", ("frontend/node_modules/", "cache:node-modules", "repo_ignored")),
+        ("performance-cache 可执行", ("GOCACHE", "威胁模型", "go run")),
+        ("/dev/null 可写", ("精确路径 ``/dev/null``",)),
+        ("C6-head 的精度放宽", ("``:`` 之后", "``--`` 之后", "show、log、rev-list、ls-tree、diff-tree", "merge-base、cat-file、rev-parse")),
+        ("有固定的 git 子进程时放行状态读取", ("git_explained", "折中", "C1-git-state", "strace 分不清")),
+        (".git 非状态文件", ("objects/", "config", "description", "info/exclude", "info/attributes", "默认拒绝", "worktrees/")),
+        ("notes 的已知残余", ("--no-notes", "refs/notes/commits", "残余风险")),
+    )
+
+    def summary_items(self) -> list[tuple[int, str, str]]:
+        import re
+
+        doc = inspect.cleandoc(ur.declared_coverage.__doc__ or "")  # Python 3.13 起编译器已去掉文档字符串的公共缩进，3.12 还没有：统一处理
+        block = doc[doc.index("放宽项汇总"):doc.index("仓库外路径的键沿用采样器的约定")]
+        heads = list(re.finditer(r"^\s*(\d+)\. \*(.+?)\*（", block, re.M))
+        found = []
+        for index, head in enumerate(heads):
+            body = block[head.end():heads[index + 1].start() if index + 1 < len(heads) else len(block)]
+            found.append((int(head.group(1)), head.group(2), body))
+        return found
+
+    def test_the_summary_lists_exactly_the_expected_relaxations_in_order(self) -> None:
+        found = self.summary_items()
+        self.assertEqual([(number, name) for number, name, _body in found], [(index + 1, name) for index, (name, _facts) in enumerate(self.ITEMS)],
+                         "条目名与顺序必须和代码里的放宽项一一对应：新增放宽项要先加到文档和这个表")
+
+    def test_every_item_states_what_why_and_where_it_stops(self) -> None:
+        for number, name, body in self.summary_items():
+            with self.subTest(item=f"{number}. {name}"):
+                self.assertIn("理由", body, "每条写理由")
+                self.assertIn("边界", body, "每条写边界")
+                self.assertLess(body.index("理由"), body.index("边界"), "先理由后边界")
+                self.assertGreater(len(body.strip()), 80, "一句话不够：要写清做什么、理由、边界")
+
+    def test_every_item_carries_its_key_facts(self) -> None:
+        facts = dict(self.ITEMS)
+        for _number, name, body in self.summary_items():
+            for fact in facts[name]:
+                with self.subTest(item=name, fact=fact):
+                    self.assertIn(fact, body)
+
+    def test_identifiers_named_in_the_summary_exist_and_match_the_code(self) -> None:
+        import re
+
         doc = ur.declared_coverage.__doc__ or ""
-        self.assertIn("放宽项汇总", doc)
-        for keyword in ("噪声探测", "祖先目录", "root_listing", "自产物读回", "installed_dirs", "performance-cache 可执行", "/dev/null 可写"):
-            self.assertIn(keyword, doc, keyword)
-        summary = doc[doc.index("放宽项汇总"):doc.index("仓库外路径的键沿用采样器的约定")]
-        self.assertGreaterEqual(summary.count("边界"), 7, "每一项都写了边界")
-        self.assertGreaterEqual(summary.count("理由"), 7, "每一项都写了理由")
-        self.assertIn("read 只对 ``{WORK}/`` 这一个键放行", summary)
-        self.assertIn("``{HOME}`` 之下不在其内", summary)
-        self.assertIn("用户可写区", summary)
+        for identifier in sorted(set(re.findall(r"``(_?[Dd][Ee][Cc][Ll][Aa][Rr][Ee][Dd]_[A-Za-z_]+)``", doc))):
+            with self.subTest(identifier=identifier):
+                self.assertTrue(hasattr(ur, identifier), f"文档点名的 {identifier} 在 unit_records 里不存在（改名后文档没跟上）")
+        items = {name: body for _number, name, body in self.summary_items()}
+        noise = items["噪声探测"]
+        for root in (*ur._DECLARED_PROBE_ROOTS, *ur._DECLARED_PROBE_EXCLUDED):
+            self.assertIn(f"``{root}``", noise, f"噪声探测一条没列出放行根／排除根 {root}")
+        for area in ("/tmp", "/var/tmp", "/run/user", "/home", "/root", "/srv", "/mnt", "/media"):
+            self.assertIn(f"``{area}``", noise, f"用户可写区 {area} 要写进边界")
+            candidate = area + "/x/"
+            covered = (any(candidate.startswith(root) for root in ur._DECLARED_PROBE_ROOTS)
+                       and not any(candidate.startswith(excluded) for excluded in ur._DECLARED_PROBE_EXCLUDED))
+            self.assertFalse(covered, f"文档说 {area} 不是噪声，代码里它却被放行根盖住了：{ur._DECLARED_PROBE_ROOTS}")
+        self.assertNotIn("TREE、WORK、TMP", noise, "别名根不含 TMP")
+        self.assertNotIn("TREE／WORK／TMP", noise)
+        for name in ur._DECLARED_GIT_HARMLESS_FILES:
+            self.assertIn(name, items[".git 非状态文件"], name)
 
     def test_the_misleading_old_phrases_are_gone(self) -> None:
         doc = ur.declared_coverage.__doc__ or ""
-        for phrase in ("不含它们的后代", "不得引用 HEAD 一类浮动引用", "目录自身被枚举、被打开"):
+        for phrase in ("不含它们的后代", "不得引用 HEAD 一类浮动引用", "目录自身被枚举、被打开", "TREE／WORK／TMP"):
             self.assertNotIn(phrase, doc, phrase)
         self.assertIn("白名单", doc)
         source = Path(ur.__file__).read_text(encoding="utf-8")
         self.assertNotIn("目录自身被打开", source)
+        self.assertNotIn("对 120 字符的路径已要约 0.2 秒", source, "glob 常量注释要写真话：匹配已改成线性")
 
 
 if __name__ == "__main__":
