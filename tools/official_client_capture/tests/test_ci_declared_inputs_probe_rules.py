@@ -62,6 +62,7 @@ class PerformanceCacheExecTests(unittest.TestCase):
 
     def scope(self) -> dict:
         scope = bare_scope()
+        scope["repo"]["files"] = ["backend/go.sum"]  # WP1e 起声明 cache:go-mod-cache 必须单独列出它的锁文件
         scope["contracts"] = ["cache:go-build-cache", "cache:go-mod-cache", "host-config:gitconfig"]
         scope["outside"] = [{"prefix": "{WORK}/go-build-cache/", "class": "performance-cache", "contract": "cache:go-build-cache"},
                             {"prefix": "{WORK}/go-mod-cache/", "class": "dependency-content", "contract": "cache:go-mod-cache"},
@@ -364,12 +365,17 @@ class ProbeNoiseTests(unittest.TestCase):
                 self.assertEqual(rules_of(cover(outside=[[key, ["missing"], 1]])), ["C3-missing-undeclared"], "必须是整段 node_modules")
 
     def test_paths_under_or_above_the_evidence_aliases_are_noise_ignoring_case(self) -> None:
+        # WP1e 起别名根只取 TREE／WORK／TMP；HOME 之下的探测不再是噪声（原来这里还有 /data/ci/home/.config/ 与 {HOME}/.cfg/，移到下面的违规断言）。
         for key in ("/data/ci/run/tree/frontend/", "/DATA/CI/RUN/TREE/FRONTEND/NODE_MODULES/.PNPM/TYPESCRIPT@5.6.3/LIB/", "/Data/Ci/Run/Tree/",
-                    "/data/ci/run/anything/deeper/", "/data/ci/home/.config/", "/data/ci/tmp/x/", "{WORK}/x/", "{WORK}/", "{HOME}/.cfg/", "{TMP}/y/"):
+                    "/data/ci/run/anything/deeper/", "/data/ci/tmp/x/", "{WORK}/x/", "{WORK}/", "{TMP}/y/"):
             for kinds in (["missing"], ["stat"], ["dir", "stat"]):
                 with self.subTest(key=key, kinds=kinds):
                     result = cover(outside=[[key, kinds, 1]])
                     self.assertTrue(result["ok"], result["undeclared"])
+        for key in ("/data/ci/home/.config/", "{HOME}/.cfg/", "/DATA/CI/HOME/.CONFIG/"):
+            for kinds, rule in ((["missing"], "C3-missing-undeclared"), (["stat"], "C2-outside-undeclared"), (["dir", "stat"], "C2-outside-undeclared")):
+                with self.subTest(key=key, kinds=kinds, home=True):
+                    self.assertEqual(rules_of(cover(outside=[[key, kinds, 1]])), [rule], "HOME 之下的探测要登记 host-config 或归 scratch")
         # 读取、枚举、写入、执行不在放行之列。
         for key in ("{WORK}/x/", "/data/ci/home/.config/", "/DATA/CI/RUN/TREE/X/"):
             for kinds in (["read"], ["list"], ["write"], ["exec"]):
@@ -381,9 +387,13 @@ class ProbeNoiseTests(unittest.TestCase):
                 self.assertEqual(rules_of(cover(outside=[[key, ["missing"], 1]])), ["C3-missing-undeclared"])
 
     def test_ancestors_of_every_alias_root_may_be_probed(self) -> None:
-        # HOME 不在测试树祖先链上：/data/home/ 只能靠「别名路径的祖先」这条放行。
-        self.assertTrue(cover(outside=[["/data/home/", ["missing", "stat"], 1], ["/data/", ["missing"], 1], ["/", ["stat", "missing"], 1]],
+        # WORK／TREE／TMP 的祖先：missing／stat 都放行（噪声探测）。WP1e 起 HOME 不再算别名根：HOME 的祖先 /data/home/（不在其它别名根的
+        # 祖先链上）只放行 stat／dir（祖先目录规则，WP1e 之前还放行 missing），HOME 自身同样。
+        self.assertTrue(cover(outside=[["/data/", ["missing"], 1], ["/", ["stat", "missing"], 1], ["/data/ci/", ["missing", "stat"], 1]],
                               aliases=FAR_HOME)["ok"])
+        self.assertTrue(cover(outside=[["/data/home/", ["stat", "dir"], 1], ["{HOME}", ["stat"], 1]], aliases=FAR_HOME)["ok"])
+        self.assertEqual(rules_of(cover(outside=[["/data/home/", ["missing", "stat"], 1]], aliases=FAR_HOME)), ["C2-outside-undeclared"],
+                         "HOME 的祖先带 missing：不再是噪声")
         self.assertEqual(rules_of(cover(outside=[["/data/home/other/", ["missing"], 1]], aliases=FAR_HOME)), ["C3-missing-undeclared"])
         self.assertEqual(rules_of(cover(outside=[["/data/home/", ["list"], 1]], aliases=FAR_HOME)), ["C2-outside-undeclared"], "HOME 的祖先不在测试树祖先链上：不许枚举")
 
@@ -394,11 +404,16 @@ class ProbeNoiseTests(unittest.TestCase):
 
     def test_strict_ancestors_of_the_test_tree_may_be_listed_and_read(self) -> None:
         # FAR 的测试树链：/、/data、/data/ci、{WORK}（/data/ci/run 在键空间里写成 {WORK}）。
-        chain = [["/", ["list", "read", "missing", "stat"], 9], ["/data/", ["list", "missing"], 3], ["/data/ci/", ["read", "stat"], 2],
-                 ["{WORK}", ["read", "stat"], 1], ["{WORK}/", ["list", "missing"], 1]]
+        # WP1e 起：所有严格祖先键放行 list／dir／stat／missing，read 只对 {WORK} 这一个键放行（原来 /、/data/ci/ 这里也带 read，现在移到下面的违规断言）。
+        chain = [["/", ["list", "missing", "stat"], 9], ["/data/", ["list", "missing"], 3], ["/data/ci/", ["list", "stat"], 2],
+                 ["{WORK}", ["read", "stat"], 1], ["{WORK}/", ["list", "missing", "read"], 1]]
         result = cover(outside=chain)
         self.assertTrue(result["ok"], result["undeclared"])
         self.assertEqual(result["counts"]["probe_paths"], len(chain))
+        for key in ("/", "/data/", "/data/ci/"):
+            for kinds in (["read"], ["read", "stat"], ["list", "missing", "read"]):
+                with self.subTest(key=key, kinds=kinds, read_on_other_ancestors=True):
+                    self.assertEqual(rules_of(cover(outside=[[key, kinds, 1]])), ["C2-outside-undeclared"], "祖先键下的 read 是读了该目录下别的子项")
         # 链之外的目录、测试树的后代、别的别名根：不许枚举、不许读。
         for key in ("/data/ci/other/", "{WORK}/tree/", "{HOME}/", "{HOME}", "{TMP}/", "/data/ci/home/x/", "/opt/"):
             for kinds in (["list"], ["read"], ["missing", "list"], ["stat", "read"]):
@@ -470,8 +485,9 @@ class RealisticScenarioTests(unittest.TestCase):
             ["/var/node_modules/", ["missing"], 1], ["/var/tmp/node_modules/.vue-global-types/", ["missing"], 1],
             ["/work/frontend/node_modules/.pnpm/vitest@2.1.9/node_modules/vitest/", ["missing"], 1],
             ["/VAR/TMP/PROBE-RUN/TEST-TREE/FRONTEND/NODE_MODULES/.PNPM/TYPESCRIPT@5.6.3/LIB/", ["missing"], 1], ["{WORK}/node_modules/", ["missing"], 1],
-            ["/", ["list", "missing", "read", "stat"], 30], ["/var/", ["list", "missing", "read", "stat"], 12], ["/var/tmp/", ["list", "missing"], 6],
-            ["{WORK}", ["read", "stat"], 5], ["{WORK}/", ["list", "missing"], 4],
+            # WP1e：祖先键下不再带 read（WP4c 之后采样器把对祖先目录自身的 read 记成 dir；最终真实样本里只有 egress 两个单元的 {WORK}/ 键含 read）。
+            ["/", ["dir", "list", "missing", "stat"], 30], ["/var/", ["dir", "list", "missing", "stat"], 12], ["/var/tmp/", ["list", "missing"], 6],
+            ["{WORK}", ["read", "stat"], 5], ["{WORK}/", ["list", "missing", "read"], 4],
         ]
         repo = [["{TREE}", ["dir", "list", "read", "stat"], False], ["{TREE}/RCS", ["missing"], False], ["{TREE}/SCCS", ["missing"], False],
                 ["{TREE}/.browserslistrc", ["missing"], False], ["{TREE}/eslint.config.mjs", ["missing"], False], ["{TREE}/node_modules", ["missing"], False]]

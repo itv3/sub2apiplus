@@ -273,6 +273,7 @@ class World:
                                 "unresolved_process_events": 0, "lines": 1000}
         evidence["git_commands"] = []
         evidence["network"] = []
+        evidence["valid"] = True  # WP1e 起验证侧要求 valid 存在且为 True（缺失同样判 C7-invalid）：真实采样器的证据一定带它
         relative = f"{eg.DECLARED_SAMPLES_DIR}/{unit_id.replace(':', '-')}.sample.json"
         path = self.tree / relative
         path.parent.mkdir(parents=True, exist_ok=True)

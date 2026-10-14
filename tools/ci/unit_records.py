@@ -1265,13 +1265,34 @@ _DECLARED_CACHE_RULES = {"any-content-addressed": "performance-cache", "any-scra
 _DECLARED_CACHE_LOCATIONS = frozenset({"work", "tree", "tmp", "home"})
 # 锁文件缺省位置（缓存合同没写 lock_file 时按这两个核对）。
 _DECLARED_LOCK_DEFAULTS = {"lock-derived-pnpm": "frontend/pnpm-lock.yaml", "lock-derived-go-sum": "backend/go.sum"}
+# 声明了下面这些缓存合同，就必须把它的锁文件作为单文件条目列进 repo.files（与上面 toolchain 的做法同构）：消费者核验
+# lock-derived-pnpm／lock-derived-go-sum 时要求锁文件是输入里单独的 ``file:`` 条目（``_declared_observed_problems``：安装结果摘要
+# 必须等于那个条目的摘要）。范围校验不要求，登记表漏列时计划阶段全部通过、到记录核验才失败——所以前移到范围校验。路径与上面
+# ``_DECLARED_LOCK_DEFAULTS`` 同值（合同可以用 lock_file 改位置，但范围校验看不到合同细节，按缺省位置要求）。
+_DECLARED_CACHE_CONTRACT_LOCKS = {"cache:node-modules": "frontend/pnpm-lock.yaml", "cache:go-mod-cache": "backend/go.sum"}
+# repo.installed_dirs 的合同 → 它唯一允许的前缀。安装目录的豁免（读取不要求已跟踪）只对合同定义里写明的那个目录开放，否则登记表可以
+# 把任何不含已声明输入的目录（backend/internal/、src/gen/）登记成「未跟踪读取豁免区」，等于自己放宽合同。前缀与入口门禁侧
+# ``entry_gates.DECLARED_CACHES["node-modules"]["path"]``（frontend/node_modules）同源，另有测试在入口一侧交叉核对；消费者核验时再拿
+# 合同条目 detail.path 对一遍（``_check_declared_audit``）。新增安装目录必须先在这里评审登记。
+_DECLARED_INSTALLED_PREFIXES = {"cache:node-modules": "frontend/node_modules/"}
+# outside 前缀的宽度限制（只限这两类，其它类不动）：scratch 读写执行全放行、virtual 不绑定任何内容，所以前缀必须落在评审过的窄范围内——
+# 否则登记表可以把 /home/、/usr/ 写成 scratch（等于放开读写执行），或把任意目录写成 virtual（等于不绑定）。前缀等于表里某项，或在
+# 以 / 结尾的某项之下（更窄）才合格；/dev/null 是精确路径，只许它自己。依据：真实样本里这两类用到的前缀正好就是这些
+# （scratch：/dev/null、{TMP}/、{WORK}/go-tmp/、{HOME}/.config/go/telemetry/；virtual：/proc/、/sys/、/dev/、/run/）。改动需评审。
+_DECLARED_SCRATCH_PREFIXES = ("/dev/null", "{TMP}/", "{WORK}/go-tmp/", "{HOME}/.config/go/telemetry/")
+_DECLARED_VIRTUAL_PREFIXES = ("/proc/", "/sys/", "/dev/", "/run/")
+# repo_ignored 的 glob 里 ``*``／``?`` 合计的个数上限：正则回溯的耗时随通配符个数多项式增长（5 个通配符对 120 字符的路径已要约 0.2 秒，
+# 7 个要一分钟以上），登记表是人评审过的，4 个足够（实际只用到 1 个）。
+_DECLARED_MAX_GLOB_WILDCARDS = 4
+# 合同条目 detail 之类嵌套结构的深度上限：超限一律当作异常（不可用），不递归、不爆栈。
+_DECLARED_MAX_NESTING = 64
 # Go 等工具沿祖先目录找模块与版本控制目录时会探测这些名字（不存在）：祖先探测不算依赖仓库外内容，按内置规则放行。
 _DECLARED_ANCESTOR_PROBES = frozenset({"go.mod", "go.work", ".hg", ".svn", ".bzr", ".fossil-settings"})
-# 仓库外「噪声探测」放行根（只对 missing／stat／dir 生效，见 ``declared_coverage`` 的 C2／C3 说明）：这些目录属于系统状态——
+# 仓库外「噪声探测」放行根（只对 missing／stat／dir 生效，见 ``declared_coverage`` 的 C2／C3 说明）：这些目录属于**系统状态**——
 # PATH 搜索、cgo 编译器的头文件与库搜索路径、解析器配置、Node 逐级向上找模块，都会对它们之下大量不存在的候选路径做 stat／open。
-# 系统状态不绑定，由环境指纹近似，与 system 类同口径；读取、写入、执行存在的东西仍然要有声明前缀。
-_DECLARED_PROBE_ROOTS = ("/usr/", "/opt/", "/var/", "/run/", "/etc/", "/lib/", "/lib64/", "/bin/", "/sbin/", "/srv/", "/mnt/", "/media/",
-                         "/home/", "/root/", "/tmp/")
+# 系统状态不绑定，由环境指纹近似，与 system 类同口径；读取、写入、执行存在的东西仍然要有声明前缀。用户可写区（/tmp、/home、/root、
+# /srv、/mnt、/media）不在其列：那里的「不存在」不是系统状态，环境指纹不覆盖，必须靠声明前缀（scratch／host-config）说明。
+_DECLARED_PROBE_ROOTS = ("/usr/", "/opt/", "/var/", "/run/", "/etc/", "/lib/", "/lib64/", "/bin/", "/sbin/")
 # 根目录列表条目的名字（``repo.root_listing`` 为真时产生的输入条目）；``scope:`` 前缀与范围条目同一族，所以 range 不得叫这个名字。
 DECLARED_ROOT_LISTING_NAME = "root-listing"
 DECLARED_ROOT_LISTING_ENTRY = f"scope:{DECLARED_ROOT_LISTING_NAME}"
@@ -1287,8 +1308,9 @@ _DECLARED_RANGE_NAME = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _DECLARED_MAKE_TARGET = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+/-]*")
 _DECLARED_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _DECLARED_ALIAS_PATH = re.compile(r"\{(WORK|HOME|TMP)\}(?:/(.*))?", re.S)
-# 采样证据里 git 命令出现的 HEAD 一类引用：声明级单元不依赖 HEAD，出现就判违规。前面是路径分量、标识符字符的不算
-# （.git/HEAD、origin/HEAD 只是路径或远端引用），但「提交..HEAD」「提交...HEAD」这种范围写法里的 HEAD 要算。
+# 采样证据里 git 命令出现的 HEAD 一类引用：声明级单元不依赖 HEAD，出现就判违规（``C6-head``，给出最直接的诊断）。前面是路径分量、
+# 标识符字符的不算（.git/HEAD、origin/HEAD 只是路径；origin/HEAD 这种远端引用由下面的「固定」白名单另判），但「提交..HEAD」
+# 「提交...HEAD」这种范围写法里的 HEAD 要算。C6 的整体判据是下面的白名单（``_declared_git_usage_problem``），这条只是其中最常见的一类。
 _DECLARED_HEAD_REF = re.compile(r"(?:(?<![A-Za-z0-9_./-])|(?<=\.\.))(?:FETCH_|ORIG_|MERGE_)?HEAD(?![A-Za-z0-9_-])")
 _DECLARED_COMMIT_TOKEN = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa-f])")
 
@@ -1297,6 +1319,51 @@ _DECLARED_COMMIT_TOKEN = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa
 # （strace 没有解码 execve 参数）时，采样器留下这个哨兵而不是猜——验证侧见到它一律判违规，宁可拒绝也不漏判。
 _DECLARED_GIT_OBJECTS_KEY = "{TREE}/.git/objects/"
 _DECLARED_GIT_HIDDEN = "<argv-not-visible>"
+
+# ---- C6：git 命令必须「固定」（白名单，思路与采样器 declared_sampler.git_usage_problem 相同；验证侧是被钉住的纯函数，不 import 采样器，
+# 规则抄成这里自己的常量和函数，两边各自测试、改动需同步评审）----
+#
+# 声明级承接的前提是命令的结果只取决于范围内的文件内容。git 子进程若按 HEAD、分支、标签、远端引用、缩写、``@`` 寻址，结果就随仓库
+# 状态变化，而 ``repo.head`` 只能是 false。所以 C6 不再是「出现 HEAD 才违规」的黑名单，而是只放行下面这一类——
+#   固定＝子命令属于只读、按对象寻址的一类（show、cat-file、rev-parse、merge-base、ls-tree、diff-tree，以及 log／rev-list），选项都在
+#   放行清单内，且所有修订参数都是完整 40 位小写十六进制提交号（可带 ``:路径``、``^{tree}``、``^{commit}`` 后缀；log／rev-list 的
+#   范围两端也都得是完整提交号）。
+# 其余一律违规：HEAD／ORIG_HEAD／FETCH_HEAD／MERGE_HEAD 及其 ~／^ 变体、分支名、标签名、缩写、``@``、含 ``@{`` 的写法；
+# status、diff、describe、for-each-ref、tag、branch、ls-remote、init 等读引用库或写仓库状态的子命令；-C、-c、--git-dir 这类会换仓库或
+# 改变命令行为的全局选项；--all、--stdin、--batch 这类把引用库或标准输入带进来的选项；没给修订（缺省落到 HEAD）。拿不准一律算违规——
+# 误判的代价只是该单元保持 rerun-only，漏判的代价是登记表自相矛盾。
+# 一个固定的修订：完整 40 位小写提交号，可带 ^{tree}、^{commit} 或 :路径（路径是对象内的相对路径，里面出现 HEAD 之类的字样不算引用）。
+_DECLARED_GIT_REV = re.compile(r"[0-9a-f]{40}(?:\^\{(?:tree|commit)\}|:.*)?", re.S)
+# log／rev-list 范围两端：完整提交号（可带 ^{commit}）。
+_DECLARED_GIT_COMMIT_ARG = re.compile(r"[0-9a-f]{40}(?:\^\{commit\})?")
+_DECLARED_GIT_COUNT_OPTION = re.compile(r"-[0-9]+")
+_DECLARED_GIT_OBJECT_TYPES = frozenset({"blob", "tree", "commit", "tag"})
+# 子命令名之前允许出现的全局选项：只有这两个不改变命令作用的仓库与结果。
+_DECLARED_GIT_PLAIN_GLOBALS = frozenset({"--no-pager", "--no-optional-locks"})
+# 子命令 -> (放行的选项（精确匹配）, 放行的选项前缀, 修订参数的处理方式)。不在表里的子命令、选项一律不固定。
+#   all：``--`` 之前的位置参数全是修订，至少一个；first：只有第一个位置参数是修订，后面是路径（ls-tree）；
+#   range：log、rev-list，位置参数是固定提交、两端都是完整提交号的 A..B／A...B、或 ^固定提交，至少一个正向修订。
+_DECLARED_GIT_FIXED_SUBCOMMANDS: dict[str, tuple[frozenset[str], tuple[str, ...], str]] = {
+    "show": (frozenset({"-s", "--no-patch", "--quiet", "--stat", "--name-only", "--name-status", "--oneline", "--no-color", "-z"}),
+             ("--format=", "--pretty="), "all"),
+    "cat-file": (frozenset({"-t", "-s", "-e", "-p"}), (), "all"),
+    "rev-parse": (frozenset({"--verify", "-q", "--quiet"}), (), "all"),
+    "merge-base": (frozenset({"--is-ancestor", "--all"}), (), "all"),
+    "ls-tree": (frozenset({"-r", "-d", "-t", "-l", "--long", "--name-only", "--name-status", "--full-name", "--full-tree", "-z"}),
+                ("--abbrev=",), "first"),
+    "diff-tree": (frozenset({"-r", "-t", "-z", "-M", "-C", "--root", "--no-commit-id", "--name-only", "--name-status", "--raw", "--stat",
+                             "--no-renames", "--find-renames", "--quiet"}), (), "all"),
+    "log": (frozenset({"--oneline", "--parents", "--no-walk", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges",
+                       "--name-only", "--name-status", "--stat", "--quiet", "--no-color", "--count", "-z"}),
+            ("--format=", "--pretty=", "--max-count="), "range"),
+    "rev-list": (frozenset({"--parents", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges", "--count", "--quiet",
+                            "--objects", "--not", "-z"}), ("--max-count=",), "range"),
+}
+# .git 下「引用库与索引状态」类文件（C1-git-state）：HEAD 与三个特殊引用文件、index、packed-refs，以及 refs/、logs/ 整棵子树。
+# 命令直接读它们，等于按分支／HEAD／索引寻址；只有存在固定的 git 子进程（git 自己启动时会读 HEAD、packed-refs、refs/replace/ 等）时，
+# 这些读取才算被那个子进程解释。.git/objects/ 下的内容寻址对象、.git/config 等不在此列，仍按「声明了 git_history 即放行」处理。
+_DECLARED_GIT_STATE_FILES = frozenset({"HEAD", "ORIG_HEAD", "FETCH_HEAD", "MERGE_HEAD", "index", "packed-refs"})
+_DECLARED_GIT_STATE_TREES = frozenset({"refs", "logs"})
 
 
 def _declared_display(text: Any) -> str:
@@ -1371,7 +1438,8 @@ def _declared_ignored_item(value: Any, where: str) -> str:
 
     glob 只支持 ``*``（一段路径内任意个字符）与 ``?``（一段路径内一个字符），都不跨 /，整条相对路径必须完全匹配（不含它的
     子路径——要整个目录请写以 / 结尾的前缀）；不允许绝对路径、空／.／.. 分量、``**``（不支持跨目录）、方括号字符类；不含通配符的
-    项就是一个精确路径。例如 ``frontend/vitest.config.ts.timestamp-*``（vite 在 frontend/ 根下写、读回、再删的随机名临时文件）。"""
+    项就是一个精确路径；``*``／``?`` 合计最多 ``_DECLARED_MAX_GLOB_WILDCARDS``（4）个——匹配用正则，通配符个数多了会回溯放大
+    （见常量处的说明）。例如 ``frontend/vitest.config.ts.timestamp-*``（vite 在 frontend/ 根下写、读回、再删的随机名临时文件）。"""
 
     if isinstance(value, str) and value.endswith("/"):
         _declared_rel(value, where, directory=True)
@@ -1383,6 +1451,10 @@ def _declared_ignored_item(value: Any, where: str) -> str:
         raise ValueError(f"{where} 不支持 **（* 不跨 /，要整个目录请写以 / 结尾的前缀）：{value!r}")
     if "[" in value or "]" in value:
         raise ValueError(f"{where} 的 glob 只支持 * 与 ?，不支持方括号字符类：{value!r}")
+    wildcards = value.count("*") + value.count("?")
+    if wildcards > _DECLARED_MAX_GLOB_WILDCARDS:
+        raise ValueError(f"{where} 的 glob 通配符（* 与 ? 合计）最多 {_DECLARED_MAX_GLOB_WILDCARDS} 个，实际 {wildcards} 个"
+                         f"（正则回溯耗时随通配符个数多项式增长）：{value!r}")
     return value
 
 
@@ -1418,6 +1490,13 @@ def _declared_outside_prefix(value: Any, where: str) -> str:
     if any(part in ("", ".", "..") for part in parts):
         raise ValueError(f"{where} 不得含空、. 或 .. 分量：{value!r}")
     return value
+
+
+def _declared_prefix_within(prefix: str, allowed: Sequence[str]) -> bool:
+    """outside 前缀是否落在评审过的窄范围表里：等于表里某项，或在以 / 结尾的某项之下（只更窄，不更宽）；不以 / 结尾的项（如
+    /dev/null）是精确路径，只许它自己。"""
+
+    return any(prefix == item or (item.endswith("/") and prefix.startswith(item)) for item in allowed)
 
 
 def _declared_unix_socket(value: Any, where: str) -> str:
@@ -1476,13 +1555,16 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
       非空，``include``／``exclude`` 的每项是仓库相对前缀（见 ``_declared_rel``），不允许空串。``repo.files``：单个文件的仓库
       相对路径。``repo.list_ok``：人工评审过的可枚举目录（以 / 结尾，只放行目录本身，不递归）。``repo.repo_ignored``：命令的
       输出区（构建产物、代码生成的临时目录、前端缓存、vite 的随机名临时文件）：每项是以 / 结尾的目录前缀，或不以 / 结尾的仓库
-      相对 glob（只支持 ``*`` 与 ``?``，不跨 /，整条路径完全匹配；见 ``_declared_ignored_item``）；匹配到的路径允许写，允许读回
-      本次采样里同一路径也写过的文件，不允许读别的未跟踪路径（覆盖检查 C1）。
+      相对 glob（只支持 ``*`` 与 ``?``，合计最多 4 个，不跨 /，整条路径完全匹配；见 ``_declared_ignored_item``）；匹配到的路径允许写，
+      允许读回本次采样里同一路径也写过的文件，不允许读别的未跟踪路径（覆盖检查 C1）。
       ``repo.installed_dirs``：依赖安装目录，每项恰为 ``{prefix, contract}``——``prefix`` 是以 / 结尾的仓库
       相对前缀（例如 ``frontend/node_modules/``，pnpm 安装结果是未跟踪路径），``contract`` 是 ``cache:*`` 类合同并出现在
       ``contracts`` 里（内容由合同绑定，例如 lock-derived-pnpm：安装锁副本必须等于锁文件条目）；这些前缀下读取不要求已跟踪，
       写入仍不允许（除非同时落在 ``repo_ignored`` 前缀内，如 vitest 缓存）。前缀互不重复，且不得包含（等于或位于其上）任何
-      range 的 include、``repo.files``、``repo.list_ok``，免得安装目录的豁免吞掉已声明的输入。
+      range 的 include、``repo.files``、``repo.list_ok``，免得安装目录的豁免吞掉已声明的输入。**前缀与合同绑定**
+      （``_DECLARED_INSTALLED_PREFIXES``）：合同必须是评审过的依赖安装合同，``prefix`` 必须恰等于合同定义的安装目录（目前只有
+      ``cache:node-modules`` 对应 ``frontend/node_modules/``），否则登记表可以把任何目录登记成「未跟踪读取豁免区」；消费者核验
+      时再拿合同条目的 ``detail.path`` 对一遍。
       ``repo.root_listing``（布尔，缺省 false）：命令会枚举测试树根目录（例如 make 在树根找 Makefile 与隐含规则候选，pnpm 向上找工作区
       根），并在树根下探测一批不存在的配置候选名（``package.json``、``.browserslistrc``、``eslint.config.js``、``RCS`` 等）。为真时：
       覆盖检查放行树根目录自身的 dir／list／stat／read，以及树根直接子项（``{TREE}/<单个名字>``）的 missing 探测；绑定方式是输入里多一个
@@ -1496,9 +1578,14 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
     * ``outside``：每项 ``{prefix, class}`` 或 ``{prefix, class, contract}``；``prefix`` 见 ``_declared_outside_prefix``，互不
       重复；``class`` 取 ``DECLARED_CLASSES`` 的键；toolchain／dependency-content／performance-cache／home-config 必须带
       ``contract``，合同类型与 class 对应（toolchain、cache、cache、host-config）并出现在 ``contracts`` 里；其它 class 不得带。
+      前缀宽度：scratch（读写执行全放行）的前缀只许 ``/dev/null``、``{TMP}/``、``{WORK}/go-tmp/``、``{HOME}/.config/go/telemetry/`` 或它们
+      之下更窄的路径（``/dev/null`` 是精确路径）；virtual（不绑定）只许 ``/proc/``、``/sys/``、``/dev/``、``/run/`` 或其下更窄的路径
+      （``_DECLARED_SCRATCH_PREFIXES``／``_DECLARED_VIRTUAL_PREFIXES``，改动需评审）；其它 class 不限。
     * ``contracts``：合同 ID 列表（见 ``_declared_contract_id``）；声明了 ``toolchain:go`` 必须在 ``repo.files`` 里单独列出
       ``backend/go.mod``、``backend/go.sum``，声明了 ``toolchain:pnpm`` 必须列出 ``frontend/pnpm-lock.yaml``、
-      ``frontend/package.json``（依赖锁要有自己的单文件条目，消费者才能拿安装结果与它交叉核对）。
+      ``frontend/package.json``（依赖锁要有自己的单文件条目，消费者才能拿安装结果与它交叉核对）；声明了 ``cache:node-modules``
+      必须列出 ``frontend/pnpm-lock.yaml``，声明了 ``cache:go-mod-cache`` 必须列出 ``backend/go.sum``（``_DECLARED_CACHE_CONTRACT_LOCKS``，
+      与 toolchain 同构：消费者核验 lock-derived 规则要求锁文件是输入里单独的 ``file:`` 条目，漏列会拖到记录核验才失败）。
     * ``network``：只允许 ``"loopback-only"``（外连只许回环地址）。``unix_sockets``：允许命令连接的 AF_UNIX 目标（例如
       ``/var/run/docker.sock``）——以 / 开头的规范绝对路径（不是别名路径，不以 / 结尾，无空／.／.. 分量），互不重复，缺省为空。
     * ``requires``：命令运行期要求（可选，默认关），见 ``_declared_requires_shape``。"""
@@ -1568,6 +1655,10 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
     for tool, locks in _DECLARED_TOOLCHAIN_LOCKS.items():
         if f"toolchain:{tool}" in contracts and not set(locks) <= set(files):
             raise ValueError(f"声明了 toolchain:{tool} 就必须在 repo.files 里单独列出依赖锁 {list(locks)}")
+    for contract, lock in _DECLARED_CACHE_CONTRACT_LOCKS.items():
+        if contract in contracts and lock not in files:
+            raise ValueError(f"声明了 {contract} 就必须在 repo.files 里单独列出它的锁文件 {lock}"
+                             "（消费者核验要求锁文件是输入里单独的 file: 条目，安装结果摘要要等于它；漏列会拖到记录核验才失败）")
     installed = repo.get("installed_dirs", [])
     if not isinstance(installed, list):
         raise ValueError("repo.installed_dirs 必须是数组")
@@ -1583,6 +1674,12 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
         declared = [*includes, *files, *list_ok]
         if any(entry == prefix or entry.startswith(prefix) for entry in declared):
             raise ValueError(f"{where}.prefix 不得等于或包含已声明的 range／file／list_ok（安装目录的豁免会吞掉它们）：{prefix!r}")
+        # 前缀与合同绑定：安装目录的豁免只给合同定义里写明的那个目录（见 _DECLARED_INSTALLED_PREFIXES），登记表不能自己放宽合同。
+        allowed_prefix = _DECLARED_INSTALLED_PREFIXES.get(item["contract"])
+        if allowed_prefix is None:
+            raise ValueError(f"{where}.contract {item['contract']!r} 不是评审过的依赖安装合同（只有 {sorted(_DECLARED_INSTALLED_PREFIXES)}）")
+        if prefix != allowed_prefix:
+            raise ValueError(f"{where}.prefix 必须等于合同 {item['contract']} 定义的安装目录 {allowed_prefix!r}：{prefix!r}")
         installed_prefixes.append(prefix)
     if len(installed_prefixes) != len(set(installed_prefixes)):
         raise ValueError("repo.installed_dirs 的 prefix 必须互不重复")
@@ -1596,6 +1693,11 @@ def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
         prefixes.append(_declared_outside_prefix(item["prefix"], f"{where}.prefix"))
         if not isinstance(item["class"], str) or item["class"] not in DECLARED_CLASSES:
             raise ValueError(f"{where}.class 未知：{item['class']!r}（已知 {sorted(DECLARED_CLASSES)}）")
+        # 前缀宽度：scratch（读写执行全放行）、virtual（不绑定）只许评审过的窄范围，见 _DECLARED_SCRATCH_PREFIXES／_DECLARED_VIRTUAL_PREFIXES。
+        for class_name, allowed in (("scratch", _DECLARED_SCRATCH_PREFIXES), ("virtual", _DECLARED_VIRTUAL_PREFIXES)):
+            if item["class"] == class_name and not _declared_prefix_within(prefixes[-1], allowed):
+                raise ValueError(f"{where}：class={class_name} 的前缀只许 {list(allowed)} 或它们之下更窄的路径（范围过宽会放开读写执行或不绑定任何内容）："
+                                 f"{item['prefix']!r}")
         needed = _DECLARED_CLASS_CONTRACT.get(item["class"])
         if needed is None and "contract" in item:
             raise ValueError(f"{where}：class={item['class']} 不绑定合同，不得带 contract")
@@ -1712,7 +1814,8 @@ def _declared_validate_sample(sample: Any) -> dict[str, Any]:
       各自唯一；
     * ``git_commands``：命令行数组；``network``：``{family, target}`` 数组；``exit_code``：整数（采样超时被终止时采样器写
       null，这样的证据不会通过 C7）；
-    * 可选 ``valid``（布尔）、``invalid_reasons``（字符串数组，须与 valid 互为非）、``review``（对象，不解释）。"""
+    * 可选 ``valid``（布尔）、``invalid_reasons``（字符串数组，须与 valid 互为非）、``review``（对象，不解释）。格式上可省略，但
+      ``declared_coverage`` 要求 ``valid`` 必须存在且为 True（WP1e 起缺失同样报 C7-invalid：采样器与执行器产出的证据一定带它）。"""
 
     _declared_keys(sample, required=_DECLARED_SAMPLE_KEYS, optional=_DECLARED_SAMPLE_OPTIONAL, where="采样证据")
     if "valid" in sample and not isinstance(sample["valid"], bool):
@@ -1836,6 +1939,92 @@ def _declared_loopback(family: str, target: str) -> bool | None:
     return bool(address.is_loopback or (mapped is not None and mapped.is_loopback))
 
 
+def _declared_git_range_arg_ok(arg: str) -> bool:
+    """log／rev-list 的一个位置参数是否固定：完整提交号、^完整提交号、或两端都是完整提交号的 A..B／A...B。"""
+
+    if _DECLARED_GIT_COMMIT_ARG.fullmatch(arg):
+        return True
+    if arg.startswith("^"):
+        return _DECLARED_GIT_COMMIT_ARG.fullmatch(arg[1:]) is not None
+    for separator in ("...", ".."):  # 先试三点，免得 A...B 被两点从中间切开
+        left, found, right = arg.partition(separator)
+        if found:
+            return _DECLARED_GIT_COMMIT_ARG.fullmatch(left) is not None and _DECLARED_GIT_COMMIT_ARG.fullmatch(right) is not None
+    return False
+
+
+def _declared_git_usage_problem(argv: Sequence[str]) -> str | None:
+    """一条 git 子进程命令行是否「固定」（规则见 ``_DECLARED_GIT_FIXED_SUBCOMMANDS`` 上方的整体说明）：固定返回 None，否则返回一句话原因。
+    纯函数，不读任何状态。参数 ``argv`` 是 ``git_commands`` 里的一项（第一个词的 basename 须是 git，已由调用方先核）。"""
+
+    if not argv or os.path.basename(argv[0]) != "git":
+        return "不是 git 命令行，无法判定"
+    if _DECLARED_GIT_HIDDEN in argv:
+        return "参数不可见（strace 没有解码 execve），无法判定读了哪些修订"
+    args = list(argv[1:])
+    while args and args[0] in _DECLARED_GIT_PLAIN_GLOBALS:
+        del args[0]
+    if not args:
+        return "没有子命令"
+    if args[0].startswith("-"):
+        return f"子命令之前有全局选项 {args[0]}（-C、-c、--git-dir 一类会换仓库或改变命令行为；拿不准按不固定）"
+    name, args = args[0], args[1:]
+    rule = _DECLARED_GIT_FIXED_SUBCOMMANDS.get(name)
+    if rule is None:
+        return f"子命令 {name} 不在固定清单内（读引用库、写仓库状态或按工作区寻址；清单只有 {'、'.join(_DECLARED_GIT_FIXED_SUBCOMMANDS)}）"
+    exact, prefixes, mode = rule
+    positional: list[str] = []
+    options: set[str] = set()
+    after_separator = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if after_separator:
+            continue  # “--” 之后是路径，不是修订
+        if arg == "--":
+            after_separator = True
+        elif mode == "range" and arg == "-n":
+            if index >= len(args) or not args[index].isdigit():
+                return "-n 后面不是数字"
+            index += 1
+        elif mode == "range" and _DECLARED_GIT_COUNT_OPTION.fullmatch(arg):
+            continue
+        elif arg.startswith("-"):
+            if arg not in exact and not arg.startswith(prefixes):
+                return f"选项 {arg} 不在放行清单内（--all、--stdin、--batch 会把引用库或标准输入带进来；拿不准按不固定）"
+            options.add(arg)
+        else:
+            positional.append(arg)
+    if name == "cat-file" and positional and positional[0] in _DECLARED_GIT_OBJECT_TYPES:
+        positional = positional[1:]  # cat-file blob <对象> 的类型词
+    if mode == "first":
+        positional = positional[:1]  # ls-tree <树> <路径…>
+    if not positional:
+        return f"{name} 没有给出修订（缺省会落到 HEAD）"
+    for arg in positional:
+        if not (_declared_git_range_arg_ok(arg) if mode == "range" else _DECLARED_GIT_REV.fullmatch(arg)):
+            return f"修订参数 {arg!r} 不是完整 40 位小写提交号（HEAD、引用、分支、标签、缩写、@、相对写法都不固定）"
+    if mode == "range" and all(arg.startswith("^") for arg in positional):
+        return f"{name} 只给了排除的修订，没有正向修订（缺省会落到 HEAD）"
+    if name == "rev-parse" and "--verify" in options and len(positional) != 1:
+        return "rev-parse --verify 只接一个修订"
+    if name == "merge-base" and len(positional) < 2:
+        return "merge-base 需要两个固定修订"
+    if name == "cat-file" and len(positional) != 1:
+        return "cat-file 只放行一个固定对象"
+    return None
+
+
+def _declared_git_state_path(relative: str) -> bool:
+    """``.git`` 下的仓库内相对路径是否引用库／索引状态类文件（HEAD、特殊引用、index、packed-refs，以及 refs/、logs/ 子树）。"""
+
+    if not relative.startswith(".git/"):
+        return False
+    rest = relative[len(".git/"):]
+    return rest in _DECLARED_GIT_STATE_FILES or rest.split("/", 1)[0] in _DECLARED_GIT_STATE_TREES
+
+
 def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, command_sha256: str | None = None) -> dict[str, Any]:
     """覆盖检查（C1～C7）：采样证据里的每条访问是否落在声明范围内。**纯函数**，执行侧（登记自检、正式执行）与验证侧
     （``_check_declared_audit`` 重算）共用同一个实现；返回 ``{"ok": bool, "undeclared": [{rule, path, kinds, reason}],
@@ -1844,11 +2033,47 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
     证据或范围格式不合格也不抛异常，而是记一条 ``C0-scope``／``C7-format`` 未覆盖——调用方不必再包 try。``command_sha256``
     给定时（登记表里登记的命令摘要），C7 另核证据的命令摘要与它相等。
 
+    **放宽项汇总**——默认是失败关闭（凡不在声明里的访问都违规），下面是仅有的放宽项；每条写：做什么、为什么、边界。评审只看这张表，
+    不必翻遍后面各条规则的细则；新增任何放宽项都要先加到这里。
+
+    1. *噪声探测*（C2／C3）：仓库外、没有声明前缀命中、访问类型只有 missing／stat／dir 的键，在 ``_DECLARED_PROBE_ROOTS`` 之下
+       （``/usr/``、``/opt/``、``/var/``、``/run/``、``/etc/``、``/lib/``、``/lib64/``、``/bin/``、``/sbin/``），或路径含
+       ``node_modules`` 路径段，或（不分大小写）等于／位于证据 aliases 里 TREE／WORK／TMP 路径之下、是它们的祖先时，不要求声明前缀。
+       理由：PATH 搜索、cgo 的头文件与库搜索、解析器配置、Node 逐级向上找模块，会对这些位置做海量「不存在」探测；它们是系统状态，由环境
+       指纹近似。边界：只限 missing／stat／dir，read／list／write／exec 仍要声明前缀；用户可写区（``/tmp``、``/home``、``/root``、
+       ``/srv``、``/mnt``、``/media``）与 ``{HOME}`` 之下不在其内——HOME 下的「不存在」是影响命令行为的状态，要登记 host-config 或归
+       scratch（``{HOME}`` 自身及其祖先的 stat／dir 另由下一条放行）。
+    2. *祖先目录*（C2／C3）：已声明前缀、测试树、``{WORK}``、``{HOME}``、``{TMP}`` 的祖先目录放行 stat／dir（与仓库内「声明内容的上级
+       目录算覆盖」同构）；**测试树的严格祖先目录**键（``/``、``/var/``、``/var/tmp/``、``{WORK}`` 等）另放行 list 与 missing（Go 往上找
+       go.work 与模块、Node 向上找工作区根会逐级探测）；其中 **read 只对 ``{WORK}/`` 这一个键放行**。理由：采样器把对 ``X/child`` 的 read
+       记在父目录键 ``X/`` 下（对祖先目录自身的 read 已记成 dir），所以祖先键下剩下的 read 必然是读了该目录下别的直接子项；``{WORK}/``
+       的直接子项（go-mod-cache、go-build-cache、go-tmp、test-tree……）都是执行器自己建的工作根内容，其它祖先键下的 read 可能是
+       go.work、package.json、.npmrc 这类未登记的隐藏输入，一律违规。边界：写入、执行不放行；祖先目录下更深的后代路径不因此放行
+       （它们各自要有声明前缀）。仓库内另有祖先探测名（``_DECLARED_ANCESTOR_PROBES``：go.mod、go.work、.hg 等）在树根下的 missing 放行。
+    3. *root_listing*（C1／C3）：声明了 ``repo.root_listing`` 后，测试树根目录自身的 dir／list／stat／read 与树根直接子项的 missing
+       探测放行（make 找隐含规则候选、pnpm／eslint 找配置候选）。理由：这些名字「不存在」由输入里的 ``scope:root-listing`` 条目绑定
+       （同名的跟踪文件一出现摘要就变）。边界：只限树根这一层，写入、执行、树根以下的 missing 仍要被 range 覆盖。
+    4. *自产物读回*（C1）：``repo_ignored`` 命中的路径（命令的输出区）允许写，并允许 read／exec／list，**仅当本次采样里同一路径也出现
+       了 write**。理由：命令自己写出再读回的内容由命令自己产生，不是外部输入。边界：只读不写的未跟踪路径仍违规（``C1-untracked-read``）；已跟踪文件出现在
+       输出区是登记错误。
+    5. *installed_dirs*（C1）：依赖安装目录下的读取不要求已跟踪。理由：安装结果由锁文件决定，内容由对应的 ``cache:*`` 合同（安装锁副本必须等于锁文件）
+       绑定，不靠范围摘要。边界：前缀只能是合同定义里写明的那一个（目前只有 ``cache:node-modules`` 对应的 ``frontend/node_modules/``，范围校验与消费者
+       核验各核一遍）；写入不允许（除非同时落在 ``repo_ignored``，如 vitest 缓存），前缀之外的未跟踪读取照旧违规。
+    6. *performance-cache 可执行*（C2／C4）：Go 1.24 起 ``go run``／``go tool`` 构建出的可执行文件缓存在 GOCACHE 里并从那里执行，所以
+       performance-cache 类除读写外可执行。理由：Go 缓存是内容寻址、只影响速度的缓存，信任模型与读缓存相同。风险：有人能写 GOCACHE
+       就能替换缓存里的可执行文件，让命令去执行它——这不在威胁模型内（能写工作根的人本来就能改一切）。边界：toolchain／
+       dependency-content／system／virtual／home-config 类的可执行性不变。
+    7. */dev/null 可写*（C4）：理由：写空设备是无害的丢弃输出（采样器 merge 也按这个精确路径豁免）。边界：只限精确路径 ``/dev/null``，
+       ``/dev/`` 下其它路径照旧不许写。
+
     仓库外路径的键沿用采样器的约定：以 / 结尾是目录聚合（该目录下直接子项的访问，目录自身被枚举也算在它名下），不以 /
     结尾是精确路径（只出现在 /dev、/proc、/sys、/etc、``{HOME}`` 下和别名根自身）。
 
     * **C1 仓库内路径**（``{TREE}/相对路径``；``{TREE}/.git/objects/`` 是对象库的聚合键）：``.git/`` 下的访问只在声明了
-      ``repo.git_history`` 时允许且不得写、不得执行；命中某个 range（include 命中且不被 exclude 命中）或 files 的路径，读／执行
+      ``repo.git_history`` 时允许且不得写、不得执行；其中引用库与索引状态类文件（``HEAD``、``ORIG_HEAD``／``FETCH_HEAD``／
+      ``MERGE_HEAD``、``index``、``packed-refs``、``refs/``、``logs/``）的 read／list 还要求采样里有固定的 git 子进程解释它们（git
+      启动时会读 HEAD、packed-refs、refs/replace/；没有固定的 git 子进程就是命令自己按分支／HEAD／索引寻址），否则违规
+      （``C1-git-state``）；命中某个 range（include 命中且不被 exclude 命中）或 files 的路径，读／执行
       要求「已跟踪」（读了未跟踪文件，说明依赖不在摘要里），写入一律违规（命令不得改写声明范围内的文件）；命中 ``make_expansion``
       的 ``Makefile`` 视为被展开合同覆盖；声明内容的上级目录只看元数据（stat／dir）放行；枚举目录（list）要求目录本身被某个
       range 覆盖或列在 ``list_ok``；其它路径违规。
@@ -1864,29 +2089,28 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
       树根直接子项（路径恰为 ``{TREE}/<单个名字>``）的 missing 探测放行——make 在树根找隐含规则候选（``RCS``、``SCCS``）、pnpm／
       eslint 在树根找配置候选，这些名字「不存在」由输入里的 ``scope:root-listing`` 条目绑定（同名的跟踪文件一出现摘要就变）。
       为假或缺省时与从前逐字相同。树根以下的 missing（``{TREE}/src/…``）、非声明目录的 stat 都不放行：仍要被 range 覆盖。
-    * **C2 仓库外路径**：取 ``outside`` 里最长前缀匹配的项，访问类型必须在该 class 允许的集合内。没有前缀命中时：
-      某个已声明 ``outside`` 前缀、测试树、``{WORK}``、``{HOME}``、``{TMP}``（取自证据的 aliases）的**祖先目录**，且只有 stat／dir，
-      视为覆盖通过（与仓库内「声明内容的上级目录算覆盖」同构）；**测试树的严格祖先目录**（``/``、``/var/``、``/var/tmp/``、``{WORK}``
-      等键）还放行 list／read（目录自身被枚举、被打开；Node、Go 向上找工作区根与模块根），不含它们的后代；
-      **噪声探测**：访问类型只有 missing／stat／dir 的键，满足下列任一条放行（不要求声明前缀）——路径含 ``node_modules`` 路径段
-      （Node／TypeScript／ESLint 的模块解析候选）；路径在 ``_DECLARED_PROBE_ROOTS`` 之下（``/usr/``、``/opt/``、``/var/`` 等系统目录：
-      PATH 搜索、cgo 编译器搜索路径、解析器配置的探测，系统状态不绑定、由环境指纹近似，与 system 类同口径）；路径（不分大小写）
-      等于、位于证据 aliases 里 TREE／WORK／HOME／TMP 路径之下，或是这些路径的祖先（含 ``/``；TypeScript 会对自身路径做大小写变体探测）。
-      写入、执行、对已存在的非祖先目录的 read 不在放行之列，仍要有声明前缀；其余违规 ``C2-outside-undeclared``。
+    * **C2 仓库外路径**：取 ``outside`` 里最长前缀匹配的项，访问类型必须在该 class 允许的集合内。没有前缀命中时：祖先目录
+      （只有 stat／dir）、测试树严格祖先目录键（list／missing，read 仅 ``{WORK}/``）、噪声探测——三者的放行范围与边界见上面的「放宽项
+      汇总」第 1、2 条；写入、执行、对已存在的非祖先目录的 read 不在放行之列，仍要有声明前缀；其余违规 ``C2-outside-undeclared``。
     * **C3 missing 探测**：仓库内 missing 路径必须被 range 覆盖，或属祖先探测（树根下的 go.mod／go.work／.hg 等），或（声明了
       ``repo.root_listing`` 时）是树根的直接子项。仓库外因为目录聚合丢了名字，沿测试树祖先链的目录（Go 往上找 go.work 与模块、
-      版本控制目录会逐级探测）放宽到 stat／dir／missing（以及上面的 list／read）；噪声探测见 C2；其它目录里的 missing 违规。
+      版本控制目录会逐级探测）放宽到 stat／dir／missing／list（read 仅 ``{WORK}/``，见「放宽项汇总」第 2 条）；噪声探测见第 1 条；其它
+      目录里的 missing 违规。
     * **C4 写入**：只能写 performance-cache／scratch 类仓库外路径与 ``repo_ignored``；写入工具链、依赖内容、系统、HOME 配置、
-      声明范围内的路径一律违规（命令在写依赖缓存＝在联网下载，违背离线合同）。唯一的例外是精确路径 ``/dev/null``：写空设备
-      是无害的丢弃输出（采样器 merge 也按这个精确路径豁免），``/dev/`` 下其它路径照旧不许写。
-      performance-cache 类除了读写还可**执行**：Go 1.24 起 ``go run``／``go tool`` 构建出的可执行文件缓存在 GOCACHE 里并从那里执行；
-      Go 缓存是内容寻址、只影响速度的缓存，信任模型与读缓存相同。风险：有人能写 GOCACHE 就能替换缓存里的可执行文件，让命令去执行它
-      ——这不在威胁模型内（能写工作根的人本来就能改一切）。toolchain／dependency-content／system／virtual／home-config 类的可执行性不变。
+      声明范围内的路径一律违规（命令在写依赖缓存＝在联网下载，违背离线合同）。唯一的例外是精确路径 ``/dev/null``（放宽项汇总第 7 条）。
+      performance-cache 类除了读写还可**执行**（GOCACHE 里的 ``go run``／``go tool`` 可执行文件缓存，理由与风险见放宽项汇总第 6 条，
+      不在威胁模型内）。
     * **C5 网络**：回环地址（AF_INET／AF_INET6）放行；AF_UNIX 目标必须列在 ``scope.unix_sockets``；AF_UNSPEC（UDP 套接字
       断开关联，不是外连）放行；其它外连与不可判的目标一律违规。
-    * **C6 git 命令**：命令行里出现的 40 位提交号必须都在 ``repo.git_history.commits`` 里，不得引用 HEAD 一类浮动引用，
-      argv 不可见（采样器留下的哨兵）也违规。
-    * **C7 证据完整性**：采样器没有判这份采样无效（valid、invalid_reasons）、流已结束、unresolved 的原因全部属容忍集合
+    * **C6 git 命令**（白名单，见 ``_declared_git_usage_problem``）：只放行固定用法——子命令是 show、cat-file（不带 --batch／--stdin）、
+      rev-parse（仅 --verify／-q 且修订固定）、merge-base、ls-tree、diff-tree，以及 log／rev-list（仅当给出的范围两端都是完整提交号），
+      选项都在放行清单内，且全部修订参数都是完整 40 位小写提交号（允许 ``:路径``、``^{tree}``、``^{commit}`` 后缀）；其它一律违规
+      ``C6-git-unfixed``：-C／-c／--git-dir、--all／--stdin／--batch、没有修订参数（缺省落到 HEAD）、``@``、缩写、分支名、标签名、
+      远端引用，以及 status、diff、describe、init 一类读引用库或写仓库状态的子命令。引用 HEAD／ORIG_HEAD／FETCH_HEAD／MERGE_HEAD 及其
+      ~／^ 变体报更直接的 ``C6-head``；命令行里出现的 40 位提交号必须都在 ``repo.git_history.commits`` 里（``C6-commit-undeclared``）；
+      参数不可见（采样器留下的哨兵）、混入非 git 命令同样违规。
+    * **C7 证据完整性**：采样器没有判这份采样无效——``valid`` 必须存在且为 True（缺失同样报 ``C7-invalid``：手工证据去掉自评字段不能
+      逃过），``invalid_reasons`` 若存在必须为空；流已结束、unresolved 的原因全部属容忍集合
       （``DECLARED_TOLERATED_UNRESOLVED``）且总数与分项一致；其中 ``unfinished-calls-at-eof``（多线程进程退出时永远配不上的
       ``<unfinished ...>``）最多容忍 64 个，超过即无效，``unfinished_calls`` 也不得超出它能解释的部分；没有未归属的进程事件、
       行数大于零、退出码为零。另外 ``coverage.detached_markers``（缺省 0；被采样器丢弃并计数的 strace 垃圾行，线程中途消失
@@ -1920,9 +2144,14 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
 
     # ---- C7：证据本身是否完整可信 ----
     coverage = sample["coverage"]
-    if sample.get("valid") is False or sample.get("invalid_reasons"):
+    # 采样器（合并后）与执行器（组装逐次证据时）写出的证据一定带 valid 与 invalid_reasons：valid 必须存在且为 True，invalid_reasons
+    # 若存在必须为空。缺失同样判无效——手工构造的证据去掉 valid／review 就逃过采样器自评，等于给手改登记表留了后门。
+    if sample.get("valid") is not True or sample.get("invalid_reasons"):
         shown = "；".join(str(item) for item in (sample.get("invalid_reasons") or [])[:3])
-        report("C7-invalid", "", [], f"采样器自己判这份采样无效{'：' + shown if shown else ''}")
+        if "valid" not in sample and not shown:
+            report("C7-invalid", "", [], "采样证据没有 valid 键：采样器与执行器产出的证据一定带 valid=true，手工证据不得省略自评")
+        else:
+            report("C7-invalid", "", [], f"采样器自己判这份采样无效{'：' + shown if shown else ''}")
     if coverage["stream_complete"] is not True:
         report("C7-stream", "", [], "采样输出流没有完整结束")
     reasons = coverage["unresolved_reasons"]
@@ -1983,6 +2212,11 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
     def under_installed(relative: str) -> bool:
         return any(_matches(relative, prefix) or _matches(relative + "/", prefix) for prefix in installed)
 
+    # 采样里是否有固定的 git 子进程（至少一条，且每一条都通过 C6 的固定判定）：.git 下引用库／索引状态类文件的读取只有被它解释才放行
+    # ——git 启动时会读 HEAD、packed-refs、refs/replace/ 等；没有固定的 git 子进程，这些读取就是命令自己按分支／HEAD／索引寻址。
+    git_explained = bool(sample["git_commands"]) and all(os.path.basename(argv[0]) == "git" and _declared_git_usage_problem(argv) is None
+                                                         for argv in sample["git_commands"])
+
     directories: set[str] = set()
 
     def add_ancestors(path: str, *, itself: bool) -> None:
@@ -2040,6 +2274,9 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
                 report("C1-git-undeclared", path, kinds, "读了 .git，但声明范围没有 repo.git_history")
             elif kinds - {"read", "stat", "dir", "list", "missing"}:
                 report("C1-git-kinds", path, kinds, "对 .git 只允许读取类访问（read／stat／dir／list／missing），不得写入或执行")
+            elif kinds & {"read", "list"} and _declared_git_state_path(relative) and not git_explained:
+                report("C1-git-state", path, kinds, "读了 .git 下的引用库／索引状态（HEAD、特殊引用、index、packed-refs、refs/、logs/），"
+                                                    "但采样里没有任何固定的 git 子进程解释它们：这是按分支、HEAD 或索引寻址，结果随仓库状态变化")
             else:
                 counts["git_paths"] += 1
             continue
@@ -2112,7 +2349,9 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
             if name != "TREE":
                 declared_ancestors.add("{" + name + "}")
     tree_chain: set[str] = ancestors_of(roots["TREE"]) if roots["TREE"] is not None else set()
-    alias_lowered = [base.lower() for base in roots.values() if base is not None]  # 证据 aliases 里可信的绝对路径，小写（TypeScript 会探测大写变体）
+    # 噪声探测的别名根：只取 TREE／WORK／TMP（证据 aliases 里可信的绝对路径，小写——TypeScript 会探测大写变体）。**不含 HOME**：
+    # HOME 之下是用户配置（.npmrc、.config/…），「不存在」也是影响命令行为的状态，必须登记 host-config 或归 scratch，不能当噪声。
+    alias_lowered = [roots[name].lower() for name in ("TREE", "WORK", "TMP") if roots[name] is not None]
 
     def absolute_of(key: str) -> str | None:
         """键的绝对路径写法：绝对路径键原样；{WORK}／{HOME}／{TMP} 别名键换成证据 aliases 里的绝对路径；换不出来返回 None。"""
@@ -2126,8 +2365,9 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
     def is_probe_noise(key: str) -> bool:
         """仓库外「噪声探测」：没有声明前缀命中、访问类型又只有 missing／stat／dir 的键，满足下列任一条就不要求声明——
         (c) 路径含 ``node_modules`` 路径段（Node／TypeScript／ESLint 的模块解析候选，包括指向宿主上不存在的 /work/… 的符号链接）；
-        (a) 路径在 ``_DECLARED_PROBE_ROOTS`` 之下（系统状态，不绑定）；
-        (b) 路径（不分大小写）等于、位于证据 aliases 里 TREE／WORK／HOME／TMP 路径之下，或是这些路径的祖先（含 /）。"""
+        (a) 路径在 ``_DECLARED_PROBE_ROOTS`` 之下（系统状态，不绑定；不含用户可写区 /tmp、/home、/root 等）；
+        (b) 路径（不分大小写）等于、位于证据 aliases 里 TREE／WORK／TMP 路径之下，或是这些路径的祖先（含 /）。**不含 HOME**：
+            HOME 之下的探测必须登记 host-config 或归 scratch（HOME 自身及其祖先的 stat／dir 另由祖先目录规则放行）。"""
 
         if "node_modules" in key.split("/"):
             return True
@@ -2169,8 +2409,15 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
         if kinds <= {"stat", "dir", "missing"} and directory in tree_chain:
             counts["exempt_paths"] += 1
             continue
-        if kinds <= {"stat", "dir", "missing", "list", "read"} and directory in tree_chain:
-            counts["probe_paths"] += 1  # 测试树的严格祖先目录：目录自身被枚举、被打开（Node 向上找工作区根、Go 找模块根）；后代不在此列
+        if kinds <= {"stat", "dir", "missing", "list"} and directory in tree_chain:
+            counts["probe_paths"] += 1  # 测试树的严格祖先目录：目录自身被枚举（Node 向上找工作区根、Go 找模块根）；read 见下
+            continue
+        if kinds <= {"stat", "dir", "missing", "list", "read"} and directory == "{WORK}" and directory in tree_chain:
+            # {WORK}/ 键下的 read：采样器把对 X/child 的 read 记在父目录键 X/ 下（WP4c 之后对祖先目录自身的 read 已记成 dir），所以祖先键下
+            # 剩下的 read 必然是读了该目录下别的直接子项。只有 {WORK}/ 放行：它的直接子项（go-mod-cache、go-build-cache、go-tmp、test-tree
+            # 等）都是执行器自己建的工作根内容，真实的 egress Go 样本里这个键确有 read；/、/var/、/var/tmp/ 等其它祖先键下的 read 是读了
+            # 别的未登记文件（go.work、package.json、.npmrc……），一律违规。
+            counts["probe_paths"] += 1
             continue
         if kinds == {"missing"} and os.path.basename(directory) in _DECLARED_ANCESTOR_PROBES and os.path.dirname(directory) in tree_chain:
             counts["exempt_paths"] += 1
@@ -2199,7 +2446,7 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
         else:
             report("C5-network", target, [], f"不认识或不可判的网络协议族 {family}（只允许回环地址、登记的 AF_UNIX 目标与 AF_UNSPEC）")
 
-    # ---- C6：git 命令 ----
+    # ---- C6：git 命令（白名单：只放行固定用法，见 _declared_git_usage_problem）----
     counts["git_commands"] = len(sample["git_commands"])
     declared_commits = set((history or {}).get("commits", []))
     for argv in sample["git_commands"]:
@@ -2209,24 +2456,40 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
         if _DECLARED_GIT_HIDDEN in argv:
             report("C6-git-argv-hidden", " ".join(argv), [], "git 子进程的 argv 不可见，读了哪些历史提交说不清")
             continue
-        for argument in argv[1:]:
+        head_hit = False
+        for position, argument in enumerate(argv[1:], start=1):
             for token in _DECLARED_COMMIT_TOKEN.findall(argument):
                 if token.lower() not in declared_commits:
                     report("C6-commit-undeclared", token.lower(), [], "git 命令引用了没有登记在 repo.git_history.commits 里的提交")
-            if _DECLARED_HEAD_REF.search(argument):
+            # HEAD 一类浮动引用只看「--」之前的修订参数，并且只看修订部分（“:”之后是对象内的路径，“--”之后是路径）。
+            if "--" in argv[1:position]:
+                continue
+            if _DECLARED_HEAD_REF.search(argument.split(":", 1)[0]):
+                head_hit = True
                 report("C6-head", argument, [], "git 命令引用了 HEAD 一类浮动引用：声明级单元不依赖 HEAD")
+        if not head_hit:
+            problem = _declared_git_usage_problem(argv)
+            if problem is not None:
+                report("C6-git-unfixed", " ".join(argv), [], f"git 命令不是固定用法：{problem}")
     return finish()
 
 
 def _declared_unavailable(value: Any) -> bool:
-    """合同条目的 detail 里是否带探测失败的值（``unavailable(...)``，沿用入口步骤的约定）：探测失败的合同不能作承接依据。"""
+    """合同条目的 detail 里是否带探测失败的值（``unavailable(...)``，沿用入口步骤的约定）：探测失败的合同不能作承接依据。
 
-    if isinstance(value, str):
-        return value.startswith("unavailable")
-    if isinstance(value, dict):
-        return any(_declared_unavailable(item) for item in value.values())
-    if isinstance(value, list):
-        return any(_declared_unavailable(item) for item in value)
+    迭代遍历（不递归，免得深层嵌套的畸形封存物把解释器栈撑爆），并设嵌套深度上限 ``_DECLARED_MAX_NESTING``：超限视为不可用——
+    合法的合同条目 detail 只有两三层。"""
+
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, str):
+            if node.startswith("unavailable"):
+                return True
+        elif isinstance(node, (dict, list)):
+            if depth >= _DECLARED_MAX_NESTING:
+                return True
+            stack.extend((child, depth + 1) for child in (node.values() if isinstance(node, dict) else node))
     return False
 
 
@@ -2402,6 +2665,9 @@ def _declared_credential_problems(record: Mapping[str, Any], scope: Mapping[str,
         verified = parse_utc(item["verified_at_utc"])
         if verified is None or (started is not None and verified > started):
             problems.append(f"声明级承接：合同凭证 {full} 的 verified_at_utc 不可解析或晚于单元启动时间")
+        if started is None:
+            # 单元启动时间不可解析（None、乱码、空串、非字符串）时没法证明「运行前核验」：先后检查不能静默放过。
+            problems.append(f"声明级承接：记录的 started_at_utc 不可解析，无法证明合同凭证 {full} 是在单元启动前核验的")
         if not isinstance(item["observed"], dict):
             problems.append(f"声明级承接：合同凭证 {full} 的 observed 不是对象")
             continue
@@ -2432,7 +2698,14 @@ def _check_declared_route(store: "RecordStore", path: Path, record: dict[str, An
     problems = check_record(store, path, record, current, generic, thorough=thorough)
     if record is None or (problems and not thorough):
         return problems
-    return problems + _check_declared_audit(store, record, current, facts)
+    # 记录来自封存物：「自洽的畸形封存物」（改了明细又重算了摘要、重新封存）可能带着不可哈希的条目名、缺键的条目、几百层嵌套的合同
+    # detail。声明级核验遇到任何这类内容都要落成「不可承接」的问题，而不是让整次判定（evaluate 要逐个检查全部候选记录）崩掉。
+    # 注意：这里包的是声明级核验，不是 check_record 本身（check_record 的行为不变）。
+    try:
+        declared = _check_declared_audit(store, record, current, facts)
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, UnicodeError, OverflowError) as error:
+        declared = [f"声明级承接：核验封存物时遇到畸形内容（{type(error).__name__}：{_declared_display(str(error))[:160]}），按不可承接处理"]
+    return problems + declared
 
 
 def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], current: "Current", facts: "RunFacts") -> list[str]:
@@ -2473,6 +2746,8 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
     except (KeyError, TypeError):
         return fail("记录的输入明细格式非法")
     names = [item.get("name") for item in inputs if isinstance(item, Mapping)]
+    if not all(isinstance(name, str) for name in names):  # 名字是列表／字典之类不可哈希的值时，下面的去重会抛 TypeError
+        return fail("记录的输入明细里有条目名不是字符串")
     if len(names) != len(set(names)):
         return fail("记录的输入明细里有重名条目")
     scoped = [item for item in inputs if isinstance(item, Mapping) and item.get("name") == DECLARED_SCOPE_ENTRY]
@@ -2548,8 +2823,8 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
         if not stored.is_file() or file_sha256(stored) != digest:
             return fail("封存的采样证据缺失或摘要漂移")
         sample = _declared_validate_sample(json.loads(stored.read_text(encoding="utf-8")))
-    except (OSError, ValueError) as error:
-        return fail(f"封存的采样证据读不出来或格式非法：{error}")
+    except (OSError, ValueError, RecursionError) as error:  # run 来源的 trace.sha256 可指向记录库里任意一份日志，含深层嵌套的 JSON
+        return fail(f"封存的采样证据读不出来或格式非法：{_declared_display(str(error))[:200]}")
     command = sample["command"]
     if sample["unit_id"] != record.get("unit_id"):
         return fail("封存的采样证据属于别的单元")
@@ -2611,6 +2886,13 @@ def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], curre
         if isinstance(contract_detail, dict) and contract_detail.get("role") != "dependency-install":
             problems.append(f"声明级承接：安装目录 {item['prefix']} 绑定的合同 {item['contract']} 不是依赖安装结果合同"
                             "（role 须为 dependency-install，规则 lock-derived-pnpm）")
+        # 前缀与合同路径绑定：安装目录必须就是合同定义里写明的那个目录（合同条目 detail.path，不带尾斜杠），否则登记表可以把任何目录
+        # 登记成「未跟踪读取豁免区」。范围校验已按 _DECLARED_INSTALLED_PREFIXES 核过一遍，这里再拿封存的合同条目对一遍。
+        if isinstance(contract_detail, dict):
+            bound = contract_detail.get("path")
+            if not isinstance(bound, str) or bound + "/" != item["prefix"]:
+                problems.append(f"声明级承接：安装目录 {item['prefix']} 与合同 {item['contract']} 条目里的 path（{bound!r}）不一致"
+                                "（前缀必须等于合同 detail.path 加 /）")
     files = {str(item["name"]): str(item["sha256"]) for item in inputs if isinstance(item, Mapping) and str(item.get("name")).startswith("file:")}
     problems.extend(_declared_credential_problems(record, scope, present, files))
     return problems

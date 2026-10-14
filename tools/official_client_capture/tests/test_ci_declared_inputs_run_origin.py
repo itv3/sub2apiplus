@@ -239,10 +239,12 @@ class RulePrefixTests(unittest.TestCase):
     # 证据完整性类（一律 C7 开头）。C7-detached（被丢弃的 strace 垃圾行超过上限 64）是 WP1d 新增的第 8 条，全表因此由 29 条变为 30 条。
     EVIDENCE = frozenset({"C7-command", "C7-detached", "C7-exit", "C7-format", "C7-invalid", "C7-lines", "C7-stream", "C7-unresolved"})
     # 访问被判未声明（C1～C6，一律不以 C7 开头）。
-    ACCESS = frozenset({"C1-git-kinds", "C1-git-undeclared", "C1-ignored-tracked", "C1-list-undeclared", "C1-undeclared", "C1-untracked-read",
-                        "C2-kinds", "C2-outside-undeclared", "C3-missing-undeclared", "C4-write-class", "C4-write-declared",
+    # WP1e 新增两条：C1-git-state（读了 .git 下的引用库／索引状态而没有固定的 git 子进程解释）、C6-git-unfixed（git 命令不是固定用法，C6 白名单）；
+    # 全表因此由 30 条变为 32 条。
+    ACCESS = frozenset({"C1-git-kinds", "C1-git-state", "C1-git-undeclared", "C1-ignored-tracked", "C1-list-undeclared", "C1-undeclared",
+                        "C1-untracked-read", "C2-kinds", "C2-outside-undeclared", "C3-missing-undeclared", "C4-write-class", "C4-write-declared",
                         "C4-write-installed", "C5-network", "C5-unix-undeclared", "C6-commit-undeclared", "C6-git",
-                        "C6-git-argv-hidden", "C6-head"})
+                        "C6-git-argv-hidden", "C6-git-unfixed", "C6-head"})
     # 不以 C7 开头、但与证据形态或声明范围有关的：证据行里的未知访问类型、不规范的路径（C0-kind、C1-path、C2-path），以及声明范围本身非法
     # （C0-scope，与证据无关）。它们在采样器正常产出的证据里不会出现，出现就说明证据被改过或采样器有缺陷，按「真有问题」处理。
     SHAPE_OR_SCOPE = frozenset({"C0-kind", "C0-scope", "C1-path", "C2-path"})

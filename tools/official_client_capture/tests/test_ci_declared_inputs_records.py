@@ -106,7 +106,9 @@ def make_scope() -> dict:
             {"prefix": "{WORK}/go-tmp/", "class": "scratch"},
             {"prefix": "{TMP}/", "class": "scratch"},
             {"prefix": "/usr/lib/", "class": "system"},
-            {"prefix": "/usr/lib/secret/", "class": "virtual"},
+            # 比 /usr/lib/ 更窄、不许执行的 class（测「最长前缀的 class 生效」）。WP1e 之前这里是 virtual；virtual 的前缀现在只许 /proc/、/sys/、
+            # /dev/、/run/ 及其下，所以改用同样不许执行的 dependency-content（挂已有的 cache:go-mod-cache 合同）。
+            {"prefix": "/usr/lib/secret/", "class": "dependency-content", "contract": "cache:go-mod-cache"},
             {"prefix": "/etc/", "class": "system"},
             {"prefix": "/proc/", "class": "virtual"},
             {"prefix": "{HOME}/.gitconfig", "class": "home-config", "contract": "host-config:gitconfig"},
@@ -163,6 +165,8 @@ def make_sample(unit_id: str = "backend:go-test", *, launcher: list | None = Non
         "git_commands": [["git", "show", f"{COMMIT_A}:docs/egress/x.json"]],
         "network": [{"family": "AF_INET", "target": "127.0.0.1:5432"}, {"family": "AF_UNIX", "target": "/var/run/docker.sock"}],
         "exit_code": 0,
+        # WP1e 起 valid 必须存在且为 True（缺失同样报 C7-invalid）：采样器与执行器产出的证据一定带它，手工证据不得省略。
+        "valid": True,
     }
 
 
@@ -236,6 +240,7 @@ def frontend_sample() -> dict:
                           ["{TREE}/frontend/node_modules/.vite/results.json", ["read", "write"], False]],
         "outside_accesses": [["/opt/node-v20/bin/node", ["exec"], 1], ["/usr/lib/x/", ["read"], 2]],
         "git_commands": [], "network": [], "exit_code": 0,
+        "valid": True,  # WP1e 起必须存在且为 True
     }
 
 
@@ -246,7 +251,8 @@ def frontend_contract_entries(installed: str = FRONTEND_LOCK_SHA) -> list[dict]:
     return [
         contract_entry("toolchain", "node", version_line="v20.19.0", executable_sha256="1" * 64),
         contract_entry("toolchain", "pnpm", version_line="9.15.0", executable_sha256="2" * 64),
-        contract_entry("cache", "node-modules", role="dependency-install", location="tree", rule="lock-derived-pnpm",
+        # path 与入口门禁侧 DECLARED_CACHES["node-modules"] 的定义一致（真实合同条目的 detail 带它）；WP1e 起消费者拿它核对 installed_dirs 的前缀。
+        contract_entry("cache", "node-modules", role="dependency-install", location="tree", rule="lock-derived-pnpm", path="frontend/node_modules",
                        lock_file="frontend/pnpm-lock.yaml", installed_lock="frontend/node_modules/.pnpm/lock.yaml"),
     ]
 
@@ -587,7 +593,10 @@ class ScopeValidationTests(unittest.TestCase):
         self.assertEqual(ur.validate_declared_scope(base)["repo"]["installed_dirs"], [{"prefix": "frontend/node_modules/", "contract": "cache:node-modules"}])
         twice = frontend_scope()
         twice["repo"]["installed_dirs"].append({"prefix": "tools/node_modules/", "contract": "cache:node-modules"})
-        self.assertEqual(len(ur.validate_declared_scope(twice)["repo"]["installed_dirs"]), 2, "同一份合同可以绑定多个安装目录")
+        # WP1e 之前这里断言「同一份合同可以绑定多个安装目录」；WP1e 起前缀与合同绑定（合同定义里写明的唯一目录），第二个前缀被拒。
+        with self.assertRaises(ValueError) as caught:
+            ur.validate_declared_scope(twice)
+        self.assertIn("必须等于合同 cache:node-modules 定义的安装目录", str(caught.exception))
         for value in ([], None):
             scope = frontend_scope()
             if value is None:
@@ -845,7 +854,7 @@ class CoverageTests(unittest.TestCase):
         self.expect("C4-write-class", sample(outside=[["{HOME}/.gitconfig", ["write"], 1]]), label="写 HOME 配置")
         self.expect("C2-kinds", sample(extra_outside=[["/proc/x/", ["exec"], 1]]), label="虚拟文件系统不许执行")
         self.expect("C2-kinds", sample(outside=[["{HOME}/.gitconfig", ["read", "list"], 1]]), label="home-config 不许枚举")
-        # 最长前缀优先：/usr/lib/secret/ 比 /usr/lib/ 更具体，class 是 virtual（不许执行）。
+        # 最长前缀优先：/usr/lib/secret/ 比 /usr/lib/ 更具体，class 是 dependency-content（不许执行；WP1e 之前这里用 virtual，现在 virtual 前缀只许 /proc/ 等）。
         self.expect("C2-kinds", sample(extra_outside=[["/usr/lib/secret/key", ["exec"], 1]]), label="最长前缀的 class 生效")
         self.assertTrue(self.cover(sample(extra_outside=[["/usr/lib/other/lib.so", ["exec", "read"], 1], ["/usr/lib/secret/key", ["read"], 1]]))["ok"])
         for label, path in {"相对路径": "relative/x", "含 ..": "/a/../b", "{TREE} 路径": "{TREE}/x", "含空分量": "/a//b", "未登记别名": "{FOO}/x"}.items():
@@ -916,9 +925,13 @@ class CoverageTests(unittest.TestCase):
         self.expect("C6-git-argv-hidden", sample(git=[["git", "<argv-not-visible>"]]), label="采样器没解码到 git 的 argv（哨兵）：读了哪个提交说不清")
         self.expect("C6-git-argv-hidden", sample(git=[["git", "show", f"{COMMIT_A}:x", "<argv-not-visible>"]]), label="哨兵在任何位置都违规")
         self.assertTrue(self.cover(sample(git=[["git", "show", f"{COMMIT_A}:a.json"], ["git", "merge-base", "--is-ancestor", COMMIT_A, COMMIT_A],
-                                               ["/usr/bin/git", "cat-file", "-e", f"{COMMIT_A}^{{tree}}"], ["git", "log", "origin/HEAD", "--format=%H"],
-                                               ["git", "ls-tree", "-z", COMMIT_A, "--", ".git/HEAD"], ["git", "init"]]))["ok"],
-                        "已登记的提交、origin/HEAD、.git/HEAD 路径、不带提交号的 git init 都不违规")
+                                               ["/usr/bin/git", "cat-file", "-e", f"{COMMIT_A}^{{tree}}"],
+                                               ["git", "ls-tree", "-z", COMMIT_A, "--", ".git/HEAD"]]))["ok"],
+                        "已登记的提交、固定子命令、.git/HEAD 只是 -- 之后的路径：不违规")
+        # WP1e 之前这里还把 ["git","log","origin/HEAD","--format=%H"] 与 ["git","init"] 当作「不违规」；C6 改成白名单后两条都违规：
+        # origin/HEAD 是远端引用（不是完整提交号），init 不在固定子命令清单里（逐项的正反例见 test_ci_declared_inputs_hardening）。
+        self.expect("C6-git-unfixed", sample(git=[["git", "log", "origin/HEAD", "--format=%H"]]), label="远端引用不是固定修订")
+        self.expect("C6-git-unfixed", sample(git=[["git", "init"]]), label="init 不在固定子命令清单里")
 
     def test_c7_evidence_integrity(self) -> None:
         sample = self.sample_with
@@ -934,9 +947,13 @@ class CoverageTests(unittest.TestCase):
         timed_out = make_sample()
         timed_out["exit_code"] = None
         self.expect("C7-exit", timed_out, label="采样超时被终止时采样器写 null：格式合法，但不是 0")
-        for label, change in {"valid 为假": {"valid": False, "invalid_reasons": ["[exit] cold 退出码 1，不是 0"]},
-                              "只有 valid 为假": {"valid": False}, "只有 invalid_reasons 非空": {"invalid_reasons": ["[network] 非本机地址"]}}.items():
-            result = self.expect("C7-invalid", {**make_sample(), **change}, label=f"采样器自己判无效（{label}）：验证侧不得采信")
+        # 夹具 make_sample 自 WP1e 起带 valid: True；第三种情形（没有 valid 键、只有 invalid_reasons）要先把 valid 去掉，否则 valid 为真与
+        # invalid_reasons 非空矛盾，会先被格式核验判 C7-format。
+        for label, change, dropped in (("valid 为假", {"valid": False, "invalid_reasons": ["[exit] cold 退出码 1，不是 0"]}, ()),
+                                       ("只有 valid 为假", {"valid": False}, ()),
+                                       ("只有 invalid_reasons 非空", {"invalid_reasons": ["[network] 非本机地址"]}, ("valid",))):
+            broken = {key: value for key, value in {**make_sample(), **change}.items() if key not in dropped}
+            result = self.expect("C7-invalid", broken, label=f"采样器自己判无效（{label}）：验证侧不得采信")
             self.assertTrue(result["undeclared"][0]["reason"].startswith("采样器自己判这份采样无效"))
         self.assertTrue(self.cover({**make_sample(), "valid": True, "invalid_reasons": [], "review": {"anything": ["不解释"]}})["ok"],
                         "采样器写出的 valid／invalid_reasons／review 三个键可以出现；valid 为真时不影响覆盖结论")
@@ -1243,8 +1260,8 @@ class CoverageTests(unittest.TestCase):
     def test_c2_ancestor_directories_of_declared_prefixes_and_aliases_are_covered_for_metadata_only(self) -> None:
         """仓库外路径若是已声明 outside 前缀、{TREE}、{WORK}、{HOME}、{TMP} 的祖先目录（如 /、/root、/usr、/root/.config），且只有
         stat／dir，视为覆盖通过（与仓库内「声明内容的上级目录算覆盖」同构）；读取、枚举、其余无前缀路径照旧违规。（WP1c 起：测试树的
-        严格祖先目录另许枚举与读取，系统目录与别名根之下的 missing／stat／dir 按「噪声探测」放行——见下面逐行说明和
-        test_ci_declared_inputs_probe_rules。）"""
+        严格祖先目录另许枚举，系统目录与别名根之下的 missing／stat／dir 按「噪声探测」放行；WP1e 起 read 只对 {WORK}/ 键放行、噪声探测
+        不含 HOME 与用户可写区——见下面逐行说明和 test_ci_declared_inputs_probe_rules、test_ci_declared_inputs_hardening。）"""
 
         scope = make_scope()
         scope["outside"].append({"prefix": "{HOME}/.config/go/telemetry/", "class": "scratch"})
@@ -1264,8 +1281,9 @@ class CoverageTests(unittest.TestCase):
         repo_only = check()["counts"]["exempt_paths"]  # 样本里仓库内路径本来就有的豁免（祖先目录、list_ok、树根探测）
         self.assertEqual(good["counts"]["exempt_paths"] - repo_only, 16, "上面 18 行里 2 行被前缀覆盖，其余 16 行是祖先目录豁免")
         # 同样的祖先目录，一旦读取、枚举（不在测试树祖先链上）或带了 missing 而路径不在放行根与别名根之下，照旧违规。
-        # WP1c 起有几条放行了，改成了下面的正例：测试树的严格祖先可以被枚举、被打开（/srv/ci/ 的枚举、/ 的读取），工作根的祖先、系统目录
+        # WP1c 起有几条放行了，改成了下面的正例：测试树的严格祖先可以被枚举（/srv/ci/ 的枚举），工作根的祖先、系统目录
         # （/usr/、/opt/）与别名根之下的 missing／stat 按「噪声探测」放行；这里的违规例改用不在放行根、不在别名根之下的目录。
+        # （WP1c 曾把 / 的读取也放行，WP1e 收紧回违规：祖先键下的 read 是读了该目录下别的子项。）
         for label, row, rule in (("祖先读取", ["/usr/", ["stat", "read"], 1], "C2-outside-undeclared"),
                                  ("工作根祖先枚举（不在测试树祖先链上）", ["/data/ci/", ["stat", "list"], 1], "C2-outside-undeclared"),
                                  ("工作根祖先读取", ["/data/ci/", ["stat", "read"], 1], "C2-outside-undeclared"),
@@ -1274,11 +1292,14 @@ class CoverageTests(unittest.TestCase):
                                  ("无关目录的 missing（不在放行根与别名根之下）", ["/data/other/", ["missing"], 1], "C3-missing-undeclared"),
                                  ("工作根的兄弟目录", ["/data/ci/other/", ["stat"], 1], "C2-outside-undeclared"),
                                  ("测试树祖先带写入", ["/srv/ci/", ["stat", "write"], 1], "C2-outside-undeclared"),
-                                 ("测试树祖先带执行", ["/", ["stat", "exec"], 1], "C2-outside-undeclared")):
+                                 ("测试树祖先带执行", ["/", ["stat", "exec"], 1], "C2-outside-undeclared"),
+                                 # WP1c 起这一行曾放行（当作「目录自身被打开」）；WP1e 起收紧：采样器把对 X/child 的 read 记在父目录键 X/ 下，祖先键下的
+                                 # read 其实是读了该目录下别的直接子项，只有 {WORK}/ 键放行 read（见 test_ci_declared_inputs_hardening）。
+                                 ("根目录读取（测试树的严格祖先，read 只对 {WORK}/ 键放行）", ["/", ["read"], 1], "C2-outside-undeclared")):
             result = check(row)
             self.assertFalse(result["ok"], label)
             self.assertEqual([item["rule"] for item in result["undeclared"]], [rule], f"{label}：{result['undeclared']}")
-        for label, row in (("测试树祖先枚举（WP1c 起放行）", ["/srv/ci/", ["stat", "list"], 1]), ("根目录读取（测试树的严格祖先，WP1c 起放行）", ["/", ["read"], 1]),
+        for label, row in (("测试树祖先枚举（WP1c 起放行）", ["/srv/ci/", ["stat", "list"], 1]),
                            ("工作根祖先带 missing（别名根的祖先，WP1c 起放行）", ["/data/", ["stat", "missing"], 1]),
                            ("系统目录的 stat（WP1c 起放行）", ["/opt/", ["stat"], 1]), ("系统目录的 missing（WP1c 起放行）", ["/opt/", ["missing"], 1]),
                            ("声明前缀的祖先带 missing（WP1c 起放行）", ["/usr/", ["stat", "missing"], 1])):
@@ -1301,19 +1322,25 @@ class CoverageTests(unittest.TestCase):
 
         good = check(["/", ["missing", "stat"], 5], ["/var/", ["missing", "stat"], 5], ["/var/tmp/", ["missing", "stat", "dir"], 5], ["{WORK}/", ["missing"], 1])
         self.assertTrue(good["ok"], good["undeclared"])
-        # WP1c 之前这里的违规例是「非祖先目录的 missing」「祖先里有读取／枚举」「测试树之下的目录」「别的别名根的 missing」；现在系统目录与别名根之下的
-        # missing 按噪声探测放行，测试树的严格祖先可以被枚举、被打开，这几条改成了下面的正例，违规例换成真正还要声明前缀的情形：
+        # WP1c 之前这里的违规例是「非祖先目录的 missing」「祖先里有读取／枚举」「测试树之下的目录」「别的别名根的 missing」；WP1c 起系统目录与别名根之下的
+        # missing 按噪声探测放行，测试树的严格祖先可以被枚举，这几条改成了下面的正例，违规例换成真正还要声明前缀的情形：
         # 非祖先目录的读取与枚举、祖先里的写入与执行、测试树之下目录的读取与枚举、别的别名根的枚举。
+        # WP1e 起「祖先里有读取」又收紧回违规，只有 {WORK}/ 键放行 read：采样器把对 X/child 的 read 记在父目录键 X/ 下，祖先键下的 read 其实是
+        # 读了该目录下别的直接子项（见 test_ci_declared_inputs_hardening）。
         for label, row in (("非祖先目录里的读取", ["/opt/", ["read"], 1]), ("非祖先目录里的枚举", ["/opt/", ["missing", "list"], 1]),
+                           ("祖先里有读取（除 {WORK}/ 外的祖先键，WP1e 收紧）", ["/var/", ["missing", "read"], 1]),
+                           ("祖先里有读取（/var/tmp/ 也一样，WP1e 收紧）", ["/var/tmp/", ["read"], 1]),
                            ("祖先里有写入", ["/var/", ["missing", "write"], 1]), ("祖先里有执行", ["/var/tmp/", ["missing", "exec"], 1]),
                            ("测试树之下的目录不算祖先（读取）", ["{WORK}/tree/", ["missing", "read"], 1]),
-                           ("测试树之下的目录不算祖先（枚举）", ["{WORK}/tree/", ["list"], 1]), ("别的别名根的枚举", ["{HOME}/", ["missing", "list"], 1])):
+                           ("测试树之下的目录不算祖先（枚举）", ["{WORK}/tree/", ["list"], 1]), ("别的别名根的枚举", ["{HOME}/", ["missing", "list"], 1]),
+                           ("HOME 之下的 missing（WP1e 起不再是噪声，要登记 host-config）", ["{HOME}/", ["missing"], 1])):
             result = check(row)
             self.assertFalse(result["ok"], label)
-        for label, row in (("非祖先目录里的 missing（系统目录，噪声探测）", ["/opt/", ["missing"], 1]), ("祖先里有读取（严格祖先，目录自身被打开）", ["/var/", ["missing", "read"], 1]),
+        for label, row in (("非祖先目录里的 missing（系统目录，噪声探测）", ["/opt/", ["missing"], 1]),
+                           ("{WORK}/ 键里有读取（WORK 恰是测试树的严格祖先：它的直接子项是执行器自己建的工作根内容，WP1e 起 read 只对它放行）", ["{WORK}/", ["missing", "read"], 1]),
                            ("祖先里有枚举（严格祖先，目录自身被枚举）", ["/var/tmp/", ["missing", "list"], 1]),
                            ("测试树之下的目录里的 missing（别名根之下，噪声探测）", ["{WORK}/tree/", ["missing"], 1]),
-                           ("别的别名根的 missing（别名根之下，噪声探测）", ["{HOME}/", ["missing"], 1])):
+                           ("别的别名根的 missing（TMP 别名根之下，噪声探测）", ["{TMP}/", ["missing"], 1])):
             self.assertTrue(check(row)["ok"], label)
 
     def test_git_object_store_aggregate_key_and_the_other_trailing_slash_keys(self) -> None:
@@ -1332,7 +1359,9 @@ class CoverageTests(unittest.TestCase):
         root_sample = make_sample()
         root_sample["command"] = {"launcher": [], "argv": ["go", "version"], "cwd_rel": ".", "sha256": ur.declared_command_sha256(["go", "version"], ".")}
         self.assertTrue(self.cover(root_sample)["ok"], "测试树根作 cwd 时采样器写 .")
-        for key in ("valid", "invalid_reasons", "review"):
+        # 夹具自 WP1e 起带 valid: True（缺失同样报 C7-invalid），所以这里只断言另外两个键不在基线证据里。
+        self.assertEqual(sample["valid"], True)
+        for key in ("invalid_reasons", "review"):
             self.assertNotIn(key, sample)
         bad = {"valid": "yes"}, {"invalid_reasons": "oops"}, {"invalid_reasons": [1]}, {"review": []}, {"valid": True, "invalid_reasons": ["x"]}, \
             {"valid": False, "invalid_reasons": []}
@@ -1453,11 +1482,15 @@ class SamplerInteroperabilityTests(unittest.TestCase):
                 moved["outside_accesses"][index] = [key, sorted({*kinds, "read"}), count]
         result = ur.declared_coverage(moved, reviewed_scope())
         self.assertFalse(result["ok"])
-        self.assertEqual({item["path"] for item in result["undeclared"]}, {"/var/", "/var/tmp/", "{WORK}/"}, "根目录 / 永远在任何测试树的祖先链上，所以不报")
+        # WP1e 之前这里不报根目录 /（它永远在任何测试树的祖先链上，而祖先键下的 read 一律放行）；WP1e 起祖先键下的 read 只对 {WORK}/ 放行
+        # （且 {WORK} 得是测试树的祖先），所以 / 的 read 同样违规。真实样本本身（上面第一个断言）不受影响：采样器已把对祖先目录自身的
+        # read 记成 dir，链上各键的 kinds 里没有 read。
+        self.assertEqual({item["path"] for item in result["undeclared"]}, {"/", "/var/", "/var/tmp/", "{WORK}/"})
 
     def test_every_reviewed_prefix_is_load_bearing_for_the_real_sample(self) -> None:
         """每个评审过的前缀都不是摆设：它下面有 read／write／exec／list 这类超出探测的访问时，去掉它就有未覆盖的访问；只有 missing／
-        stat／dir 的前缀（PATH 搜索目录、不存在的 HOME 配置）在 WP1c 起属于「噪声探测」，去掉后仍然放行——声明它们只是为了绑定合同。"""
+        stat／dir 的前缀（PATH 搜索目录）在 WP1c 起属于「噪声探测」，去掉后仍然放行——声明它们只是为了绑定合同。WP1e 起 {HOME} 之下的
+        探测不再算噪声（不存在的 HOME 配置也要登记 host-config），所以 {HOME}/… 的前缀即使只有 missing 探测也是承重的。"""
 
         sample = self.real_sample()
         probe_only = {"missing", "stat", "dir"}
@@ -1471,7 +1504,9 @@ class SamplerInteroperabilityTests(unittest.TestCase):
             beyond_probes = [key for key, kinds, _count in sample["outside_accesses"] if ur._declared_covers(prefix, key) and set(kinds) - probe_only]
             with self.subTest(prefix):
                 result = ur.declared_coverage(sample, scope)
-                if not beyond_probes:
+                # WP1e 起 {HOME} 之下的探测不再是噪声（HOME 下的配置「不存在」也是影响命令行为的状态，必须登记 host-config 或归 scratch），
+                # 所以 {HOME}/… 的前缀即使只有 missing 探测也是承重的。
+                if not beyond_probes and not prefix.startswith("{HOME}/"):
                     self.assertTrue(result["ok"], f"{prefix} 下只有 missing／stat／dir 的探测：去掉后仍放行（噪声探测）{result['undeclared']}")
                     continue
                 load_bearing += 1
@@ -2047,7 +2082,9 @@ class ContractCredentialTests(DeclaredTestCase):
                                             ("性能缓存", "performance-cache", "any-content-addressed", {"root_ok": True}),
                                             ("依赖内容（go.sum 那类）", "dependency-content", "lock-derived-go-sum", {"go_sum_sha256": FRONTEND_LOCK_SHA, "verify": "ok"})):
             entries = frontend_contract_entries()
-            entries[2] = contract_entry("cache", "node-modules", role=role, location="tree", rule=rule, lock_file="frontend/pnpm-lock.yaml")
+            # path 照真实合同条目带上（WP1e 起消费者核对安装目录前缀与合同 detail.path）；这里要隔离的只有合同种类（role／rule）这一个变量。
+            entries[2] = contract_entry("cache", "node-modules", role=role, location="tree", rule=rule, path="frontend/node_modules",
+                                        lock_file="frontend/pnpm-lock.yaml")
             credentials = [{"id": "cache:node-modules", "kind": "cache", "verified_before_run": True, "verified_at_utc": stamp, "observed": observed}]
             problems = frontend_world(entries, credentials).check()
             self.assertEqual([problem for problem in problems if "不是依赖安装结果合同" not in problem], [], f"{label}：凭证本身合格，唯一的问题是合同种类不对：{problems}")
