@@ -544,6 +544,10 @@ def declared_inputs(repo: RepoIndex, declaration: Mapping[str, Any],
       同一受管树的依赖分析经 ``deps_cache`` 共用；
     * ``resolved``：清单生成时已算好的明细（例如数据根才有的内容）。"""
 
+    # 声明级承接（declared-inputs/v1）：声明里带 declared_scope 键就走专门分支；其它声明（含 control 四链的）一字不变。
+    if isinstance(declaration, Mapping) and "declared_scope" in declaration:
+        return _declared_scope_inputs(repo, declaration)
+
     allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract",
                "metadata_dependencies"}
     if not isinstance(declaration, Mapping) or set(declaration) - allowed:
@@ -903,6 +907,8 @@ class RunFacts:
     now: float
     require_read_audit: bool = False
     historical_read_audit: bool = False
+    # 声明级承接的内部标记：头部包装递归调用 check_record 取通用问题时置位，防止无限递归；外部调用方不应设置。
+    declared_route: bool = False
 
 
 @dataclass
@@ -925,6 +931,10 @@ def check_record(store: RecordStore, path: Path, record: dict[str, Any] | None, 
                  *, thorough: bool = True) -> list[str]:
     """一条候选记录不能承接的原因（空列表＝可以承接）。便宜的核对在前；``thorough`` 为假时前面已有问题就不再做贵的
     核对（读原运行清单、重算日志摘要）。"""
+
+    # 声明级承接：当前输入里有 declared-inputs-scope 条目的单元，读集判据换成声明覆盖（头部包装：递归调用本函数取通用问题）。
+    if not getattr(facts, "declared_route", False) and _declared_scope_entry(current.inputs) is not None:
+        return _check_declared_route(store, path, record, current, facts, thorough=thorough)
 
     if record is None:
         return ["记录读不出来"]
@@ -1168,6 +1178,1290 @@ def _unit_inherit_problems(manifest: Mapping[str, Any], entries: list[Any], stor
                 problems.append(f"{unit_id}：承接项的来源与决策收据不一致")
         elif row.get("disposition") != "executed":
             problems.append(f"{unit_id}：执行项在决策收据里不是执行")
+    return problems
+
+
+# ---------------------------------------------------------------------------
+# 声明级承接（declared-inputs/v1）
+#
+# 解决什么问题：命令单元（backend／frontend／egress-spec 整条命令）原先声明「整个仓库四段＋HEAD」，改任何一个文件、换任何一次
+# 提交，这些单元的输入摘要全部变化，一个都不能承接。声明级承接把输入换成「该命令真实读到的目录与文件＋外部输入合同」，并要求
+# 一份采样证据（strace 读集：仓库内逐路径、仓库外按目录聚合）证明「采样到的路径全部落在声明范围内」。
+#
+# 本章是验证侧代码，被受管工具钉住（改一个字节就要补钉值、重跑 pre-A3 九链），所以刻意写成纯函数，并守住四条信任边界：
+# 1. 记录里写的结论不可信。read_audit.undeclared_count、coverage 计数只是执行侧自己的判断；消费者一律从记录库取封存的证据
+#    文件，用 declared_coverage 重新计算——篡改结论、篡改证据、篡改范围，都过不了（见 _check_declared_audit）。
+# 2. 历史重放不读外部事实。historical_read_audit=True 时只核封存物（记录、证据、合同凭证）的格式与相互一致，绝不探测当前
+#    磁盘、docker、git：历史凭证必须在任何机器、任何时候重放出同一结论。当前环境是否仍与来源一致，由通用的 inputs_sha256
+#    比较保证（当前输入由执行器按声明实时算出，含生产侧探测的 contract:* 条目），不在本章。
+# 3. 不 import read_audit，不调用 _audit_module()。control 四链用 control_read_audit 单独加载本文件的一份实例，并把该实例的
+#    _audit_module 指到自己的适配器；本章若碰它，就等于给 control 链加了耦合。覆盖检查、证据解析、合同凭证核验全部在这里自足。
+# 4. 新分支只由两个条件触发：声明里出现 declared_scope 键（declared_inputs 头部），或当前输入里出现名为
+#    declared-inputs-scope 的条目（check_record 头部）。control 四链的声明与条目里两者都没有，永远走不到这里，
+#    既有函数与常量的行为字节不变。
+# ---------------------------------------------------------------------------
+
+DECLARED_REGISTRY_SCHEMA = "declared-inputs-registry/v1"
+DECLARED_SCOPE_SCHEMA = "declared-scope/v1"
+DECLARED_SAMPLE_SCHEMA = "declared-sample/v1"
+DECLARED_CONTRACT_SCHEMA = "declared-contract/v1"
+# 进入单元输入的条目名，以及记录 read_audit.coverage_scope 的取值。
+DECLARED_SCOPE_ENTRY = "declared-inputs-scope"
+DECLARED_COVERAGE_SCOPE = "declared-inputs/v1"
+# 访问类型沿用审计器的词汇：read／exec／write／missing 是「判」的，stat／dir／list 只是元数据。
+DECLARED_KINDS = frozenset({"read", "exec", "write", "missing", "stat", "dir", "list"})
+# 仓库外路径的 class → 允许的访问类型。语义分类只在验证侧由声明范围的 outside 完成，采样器只按目录聚合、不分类，
+# 所以不会出现两处分类规则漂移。
+DECLARED_CLASSES: dict[str, frozenset[str]] = {
+    # 工具链：只读、可执行；内容由合同 toolchain:*（版本行＋二进制摘要）绑定。
+    "toolchain": frozenset({"read", "exec", "stat", "dir", "list", "missing"}),
+    # 依赖内容（Go 模块缓存）：不许写——命令在写就说明它在联网下载，违背离线合同；内容由 go.sum 与合同 cache:* 约束。
+    "dependency-content": frozenset({"read", "stat", "dir", "list", "missing"}),
+    # 性能缓存（Go 构建缓存）：内容寻址，只影响速度，可读可写；初态规则由合同 cache:* 约束。
+    "performance-cache": frozenset({"read", "write", "stat", "dir", "list", "missing"}),
+    # 临时输出：命令自产自销，不绑定。
+    "scratch": frozenset({"read", "exec", "write", "missing", "stat", "dir", "list"}),
+    # 系统库与配置：由环境指纹（dpkg 包摘要、内核、Python 版本）覆盖。
+    "system": frozenset({"read", "exec", "stat", "dir", "list", "missing"}),
+    # 虚拟文件系统（/proc、/sys、/dev）：不绑定。
+    "virtual": frozenset({"read", "stat", "dir", "list", "missing"}),
+    # HOME 下会影响命令行为的配置：逐路径登记「存在则内容摘要，不存在则 missing」，合同 host-config:*。
+    "home-config": frozenset({"read", "stat", "missing"}),
+}
+# 容忍的 unresolved 原因（以 : 结尾的按前缀匹配，其余精确匹配）；其余原因一律判证据无效：
+# * ``symlink-metadata-not-bound:`` ——pnpm 的 node_modules 全是符号链接，lstat／O_NOFOLLOW 会让严格解析给出这类原因，它只增加
+#   计数、不丢路径；
+# * ``unfinished-calls-at-eof`` ——多线程进程（node、vitest、go）退出时，strace 不会为还在系统调用里的线程打印 resumed，流结束时
+#   就留下少量永远配不上的 ``<unfinished ...>``。被打断的调用没有返回成功，不贡献读集；但数量必须有上限（见下），免得大面积
+#   丢失的流被当成正常现象。
+DECLARED_TOLERATED_UNRESOLVED = ("symlink-metadata-not-bound:", "unfinished-calls-at-eof")
+# unfinished-calls-at-eof 的计数上限：超过即证据无效。
+_DECLARED_MAX_UNFINISHED_AT_EOF = 64
+# coverage.unfinished_samples（给评审看的悬着调用样例）的体量上限：只核类型和长度，不据此放行或拒绝。
+_DECLARED_MAX_UNFINISHED_SAMPLES = 8
+_DECLARED_MAX_SAMPLE_CHARS = 300
+
+# 声明范围 contracts 里可以列的合同类型；git-history、make-expansion 的合同由 repo.git_history、make_expansion 派生。
+_DECLARED_SCOPE_CONTRACT_TYPES = ("toolchain", "cache", "service-image", "host-config")
+# 必须挂合同的 class → 它要求的合同类型。
+_DECLARED_CLASS_CONTRACT = {"toolchain": "toolchain", "dependency-content": "cache", "performance-cache": "cache", "home-config": "host-config"}
+# 声明了某工具链，就必须把它的依赖锁作为单文件条目列进 repo.files（范围聚合摘要里的锁文件不能被消费者单独交叉核对）。
+_DECLARED_TOOLCHAIN_LOCKS = {"go": ("backend/go.mod", "backend/go.sum"), "pnpm": ("frontend/pnpm-lock.yaml", "frontend/package.json")}
+# 缓存合同的规则 → 它对应的角色；首发只实现这四条（不可变初态快照 snapshot 留到阶段 2）。
+_DECLARED_CACHE_RULES = {"any-content-addressed": "performance-cache", "any-scratch": "scratch",
+                         "lock-derived-pnpm": "dependency-install", "lock-derived-go-sum": "dependency-content"}
+_DECLARED_CACHE_LOCATIONS = frozenset({"work", "tree", "tmp", "home"})
+# 锁文件缺省位置（缓存合同没写 lock_file 时按这两个核对）。
+_DECLARED_LOCK_DEFAULTS = {"lock-derived-pnpm": "frontend/pnpm-lock.yaml", "lock-derived-go-sum": "backend/go.sum"}
+# Go 等工具沿祖先目录找模块与版本控制目录时会探测这些名字（不存在）：祖先探测不算依赖仓库外内容，按内置规则放行。
+_DECLARED_ANCESTOR_PROBES = frozenset({"go.mod", "go.work", ".hg", ".svn", ".bzr", ".fossil-settings"})
+# 返回的未覆盖明细上限（总数另在 counts 里），避免十万路径的证据把报告撑爆。
+_DECLARED_MAX_FINDINGS = 200
+_DECLARED_SHA256 = re.compile(r"[0-9a-f]{64}")
+_DECLARED_COMMIT = re.compile(r"[0-9a-f]{40}")
+_DECLARED_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
+_DECLARED_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_DECLARED_RANGE_NAME = re.compile(r"[a-z0-9][a-z0-9._-]*")
+_DECLARED_MAKE_TARGET = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+/-]*")
+_DECLARED_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_DECLARED_ALIAS_PATH = re.compile(r"\{(WORK|HOME|TMP)\}(?:/(.*))?", re.S)
+# 采样证据里 git 命令出现的 HEAD 一类引用：声明级单元不依赖 HEAD，出现就判违规。前面是路径分量、标识符字符的不算
+# （.git/HEAD、origin/HEAD 只是路径或远端引用），但「提交..HEAD」「提交...HEAD」这种范围写法里的 HEAD 要算。
+_DECLARED_HEAD_REF = re.compile(r"(?:(?<![A-Za-z0-9_./-])|(?<=\.\.))(?:FETCH_|ORIG_|MERGE_)?HEAD(?![A-Za-z0-9_-])")
+_DECLARED_COMMIT_TOKEN = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{40}(?![0-9A-Fa-f])")
+
+
+# 采样器把 .git/objects 下成千上万个内容寻址文件聚合成这一个目录键（仓库内路径里唯一带尾部 / 的键）；git 子进程的 argv 不可见
+# （strace 没有解码 execve 参数）时，采样器留下这个哨兵而不是猜——验证侧见到它一律判违规，宁可拒绝也不漏判。
+_DECLARED_GIT_OBJECTS_KEY = "{TREE}/.git/objects/"
+_DECLARED_GIT_HIDDEN = "<argv-not-visible>"
+
+
+def _declared_display(text: Any) -> str:
+    """进入报告的路径文本：strace 里的非 UTF-8 路径经 surrogateescape 读入后是孤立代理字符，原样写进 JSON（ensure_ascii=False）再
+    按 UTF-8 编码会抛异常；这里换成反斜杠转义，保证任何报告都能安全落盘。"""
+
+    return str(text).encode("utf-8", "backslashreplace").decode("utf-8")
+
+
+def _declared_reason_tolerated(reason: str) -> bool:
+    """unresolved 原因是否在容忍集合里：``DECLARED_TOLERATED_UNRESOLVED`` 里以 : 结尾的项按前缀匹配，其余项精确匹配（免得
+    ``unfinished-calls-at-eof-…`` 之类名字相近的别种原因蹭上豁免）。"""
+
+    return any(reason.startswith(item) if item.endswith(":") else reason == item for item in DECLARED_TOLERATED_UNRESOLVED)
+
+
+def declared_command_sha256(argv: Sequence[str], cwd_rel: str) -> str:
+    """命令身份摘要：去掉启动前缀（launcher）的 argv 加相对测试树根的工作目录。登记表的 command_sha256、采样证据的
+    command.sha256、记录里 sample_binding.command_sha256 都用这一个算法，命令变了证据就不再适用。"""
+
+    return sha256_json({"argv": list(argv), "cwd_rel": cwd_rel})
+
+
+def _declared_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _declared_keys(value: Any, *, required: Iterable[str] = (), optional: Iterable[str] = (), where: str) -> None:
+    """字段集合闭合：必需键缺一个、多出任何未知键都拒绝；容器只认 dict（与 JSON 一一对应）。"""
+
+    if not isinstance(value, dict):
+        raise ValueError(f"{where} 必须是对象")
+    required, optional = set(required), set(optional)
+    keys = set(value)
+    if not all(isinstance(key, str) for key in keys):
+        raise ValueError(f"{where} 的键必须是字符串")
+    missing, extra = sorted(required - keys), sorted(keys - required - optional)
+    if missing or extra:
+        raise ValueError(f"{where} 的字段集合是闭合的：缺 {missing}，多 {extra}")
+
+
+def _declared_strings(value: Any, where: str, *, nonempty: bool = False) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{where} 必须是字符串数组")
+    if len(value) != len(set(value)):
+        raise ValueError(f"{where} 里有重复项")
+    if nonempty and not value:
+        raise ValueError(f"{where} 不得为空")
+    return value
+
+
+def _declared_rel(value: Any, where: str, *, directory: bool | None = None) -> str:
+    """仓库相对路径（前缀或单个文件）：非空、不以 / 开头、无反斜杠与控制字符、无空／.／.. 分量；``directory`` 为真要求以 /
+    结尾（目录前缀），为假要求不以 / 结尾（单个文件），为 None 不限制。空串不允许：空串＝整个仓库，正是声明级承接要去掉的。"""
+
+    if not isinstance(value, str) or not value or value.startswith("/") or any(ch in value for ch in "\\\0\n\r"):
+        raise ValueError(f"{where} 必须是非空、不以 / 开头、不含反斜杠与控制字符的仓库相对路径：{value!r}")
+    if directory is True and not value.endswith("/"):
+        raise ValueError(f"{where} 必须是以 / 结尾的目录前缀：{value!r}")
+    if directory is False and value.endswith("/"):
+        raise ValueError(f"{where} 必须是单个文件路径（不以 / 结尾）：{value!r}")
+    parts = value.split("/")
+    if value.endswith("/"):
+        parts = parts[:-1]
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"{where} 不得含空、. 或 .. 分量：{value!r}")
+    return value
+
+
+def _declared_ignored_item(value: Any, where: str) -> str:
+    """``repo.repo_ignored`` 的一项：以 / 结尾的目录前缀（字面匹配，语义不变，不支持通配符），或不以 / 结尾的仓库相对 glob。
+
+    glob 只支持 ``*``（一段路径内任意个字符）与 ``?``（一段路径内一个字符），都不跨 /，整条相对路径必须完全匹配（不含它的
+    子路径——要整个目录请写以 / 结尾的前缀）；不允许绝对路径、空／.／.. 分量、``**``（不支持跨目录）、方括号字符类；不含通配符的
+    项就是一个精确路径。例如 ``frontend/vitest.config.ts.timestamp-*``（vite 在 frontend/ 根下写、读回、再删的随机名临时文件）。"""
+
+    if isinstance(value, str) and value.endswith("/"):
+        _declared_rel(value, where, directory=True)
+        if any(char in value for char in "*?[]"):
+            raise ValueError(f"{where} 以 / 结尾的是目录前缀，不支持通配符；要通配请写不以 / 结尾的 glob：{value!r}")
+        return value
+    _declared_rel(value, where, directory=False)
+    if "**" in value:
+        raise ValueError(f"{where} 不支持 **（* 不跨 /，要整个目录请写以 / 结尾的前缀）：{value!r}")
+    if "[" in value or "]" in value:
+        raise ValueError(f"{where} 的 glob 只支持 * 与 ?，不支持方括号字符类：{value!r}")
+    return value
+
+
+def _declared_glob(pattern: str) -> "re.Pattern[str]":
+    """仓库相对 glob → 正则（用 ``fullmatch`` 整条匹配）：``*`` 是一段内任意个字符、``?`` 是一段内一个字符，都不跨 /；其它
+    字符按字面。"""
+
+    return re.compile("".join("[^/]*" if char == "*" else "[^/]" if char == "?" else re.escape(char) for char in pattern))
+
+
+def _declared_outside_prefix(value: Any, where: str) -> str:
+    """outside 的前缀：绝对路径，或 {WORK}／{HOME}／{TMP} 别名加路径（{TREE} 是仓库根，不在这里写）。以 / 结尾是目录前缀，
+    否则是精确路径。整个根目录、整个 {WORK}／{HOME} 范围过宽，拒绝（{TMP} 本身就是临时目录，可以整个声明）。"""
+
+    if not isinstance(value, str) or any(ch in value for ch in "\\\0\n\r"):
+        raise ValueError(f"{where} 必须是不含反斜杠与控制字符的字符串：{value!r}")
+    alias = re.fullmatch(r"\{(WORK|HOME|TMP)\}/(.*)", value, re.S)
+    if alias is not None:
+        name, body = alias.groups()
+        if body == "":
+            if name != "TMP":
+                raise ValueError(f"{where} 不得把整个 {{{name}}} 作为前缀（范围过宽），请写到具体子目录或文件：{value!r}")
+            return value
+    elif value.startswith("/"):
+        body = value[1:]
+        if body == "":
+            raise ValueError(f"{where} 不得把根目录 / 作为前缀（范围过宽）")
+    else:
+        raise ValueError(f"{where} 只能以 /、{{WORK}}/、{{HOME}}/ 或 {{TMP}}/ 开头（{{TREE}} 是仓库根，不在 outside 里写）：{value!r}")
+    parts = body.split("/")
+    if body.endswith("/"):
+        parts = parts[:-1]
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"{where} 不得含空、. 或 .. 分量：{value!r}")
+    return value
+
+
+def _declared_unix_socket(value: Any, where: str) -> str:
+    """AF_UNIX 目标：以 / 开头的规范绝对路径（套接字是文件，不以 / 结尾；不是 {WORK} 之类的别名路径，也不是抽象套接字）。"""
+
+    if (not isinstance(value, str) or not value.startswith("/") or value.endswith("/") or any(ch in value for ch in "\\\0\n\r")
+            or any(part in ("", ".", "..") for part in value[1:].split("/"))):
+        raise ValueError(f"{where} 的每项必须是以 / 开头、不以 / 结尾、无空／.／.. 分量的规范绝对路径：{value!r}")
+    return value
+
+
+def _declared_contract_id(value: Any, where: str) -> tuple[str, str]:
+    """``contracts`` 里的合同 ID：``<类型>:<名字>``，类型限 toolchain／cache／service-image／host-config。"""
+
+    if not isinstance(value, str) or value.count(":") != 1:
+        raise ValueError(f"{where} 必须是「类型:名字」形式的合同 ID：{value!r}")
+    kind, name = value.split(":")
+    if kind not in _DECLARED_SCOPE_CONTRACT_TYPES:
+        raise ValueError(f"{where} 的合同类型未知：{kind!r}（已知 {list(_DECLARED_SCOPE_CONTRACT_TYPES)}；git-history、make-expansion "
+                         "的合同由 repo.git_history、make_expansion 派生，不在 contracts 里列）")
+    if not _DECLARED_NAME.fullmatch(name):
+        raise ValueError(f"{where} 的合同名字只能含字母、数字、点、下划线、连字符：{value!r}")
+    return kind, name
+
+
+def _declared_requires_shape(value: Any, where: str) -> dict[str, Any]:
+    """命令运行期要求：``argv_contains``（命令行里必须出现的参数）、``go_test_argv_contains``（命令是 ``go test`` 时才要求出现
+    的参数，例如防止测试结果缓存成为隐藏输入的 ``-count=1``；命令不是 go test 时不要求——同一个 Go 构建缓存也被 go vet、
+    lint 一类不接受该参数的命令使用）与 ``env_equals``（环境变量必须等于的值，例如离线运行的 GOPROXY=off）；消费者拿封存的
+    spec 与环境指纹核对。"""
+
+    _declared_keys(value, optional={"argv_contains", "go_test_argv_contains", "env_equals"}, where=where)
+    if not value:
+        raise ValueError(f"{where} 至少要有 argv_contains、go_test_argv_contains 或 env_equals 之一")
+    for key in ("argv_contains", "go_test_argv_contains"):
+        if key in value:
+            tokens = _declared_strings(value[key], f"{where}.{key}", nonempty=True)
+            if not all(tokens):
+                raise ValueError(f"{where}.{key} 的参数不得为空串")
+    if "env_equals" in value:
+        env = value["env_equals"]
+        if (not isinstance(env, dict) or not env
+                or not all(isinstance(key, str) and _DECLARED_ENV_NAME.fullmatch(key) and isinstance(item, str) for key, item in env.items())):
+            raise ValueError(f"{where}.env_equals 必须是非空的 {{环境变量名: 字符串值}}")
+    return value
+
+
+def validate_declared_scope(scope: Mapping[str, Any]) -> dict[str, Any]:
+    """校验声明范围 ``declared-scope/v1``，返回深拷贝；非法抛 ``ValueError``（文本写明违反的规则）。纯函数，不读磁盘。
+
+    规则（字段集合处处闭合：多一个键、缺一个必需键都拒绝；容器只认 dict／list，不认元组与其它映射，保证与 JSON 一一对应）：
+
+    * 顶层：``schema_version``＝``declared-scope/v1`` 与 ``repo`` 必需；``make_expansion``、``outside``、``contracts``、
+      ``network``、``unix_sockets``、``requires`` 可选（缺省＝空）。至少要声明一个 range 或 file。
+    * ``repo.ranges``：每项恰为 ``{name, include, exclude}``；``name`` 唯一（进入输入的条目名是 ``scope:<name>``）；``include``
+      非空，``include``／``exclude`` 的每项是仓库相对前缀（见 ``_declared_rel``），不允许空串。``repo.files``：单个文件的仓库
+      相对路径。``repo.list_ok``：人工评审过的可枚举目录（以 / 结尾，只放行目录本身，不递归）。``repo.repo_ignored``：命令的
+      输出区（构建产物、代码生成的临时目录、前端缓存、vite 的随机名临时文件）：每项是以 / 结尾的目录前缀，或不以 / 结尾的仓库
+      相对 glob（只支持 ``*`` 与 ``?``，不跨 /，整条路径完全匹配；见 ``_declared_ignored_item``）；匹配到的路径允许写，允许读回
+      本次采样里同一路径也写过的文件，不允许读别的未跟踪路径（覆盖检查 C1）。
+      ``repo.installed_dirs``：依赖安装目录，每项恰为 ``{prefix, contract}``——``prefix`` 是以 / 结尾的仓库
+      相对前缀（例如 ``frontend/node_modules/``，pnpm 安装结果是未跟踪路径），``contract`` 是 ``cache:*`` 类合同并出现在
+      ``contracts`` 里（内容由合同绑定，例如 lock-derived-pnpm：安装锁副本必须等于锁文件条目）；这些前缀下读取不要求已跟踪，
+      写入仍不允许（除非同时落在 ``repo_ignored`` 前缀内，如 vitest 缓存）。前缀互不重复，且不得包含（等于或位于其上）任何
+      range 的 include、``repo.files``、``repo.list_ok``，免得安装目录的豁免吞掉已声明的输入。
+      ``repo.head`` 只能是 false：读 HEAD 的单元登记为 rerun-only 并保留 head 条目，不做声明级承接。``repo.git_history``：
+      ``{commits, reason}``，``commits`` 是非空的、互不重复的 40 位小写提交号。
+    * ``make_expansion``：make 目标名列表；非空时 ``Makefile`` 由展开合同覆盖，所以不得再出现在 ``repo.files`` 或任何
+      ``repo.ranges`` 的 ``include`` 里（两种绑定并存，会让「改无关目标的 recipe」也使单元失效）。
+    * ``outside``：每项 ``{prefix, class}`` 或 ``{prefix, class, contract}``；``prefix`` 见 ``_declared_outside_prefix``，互不
+      重复；``class`` 取 ``DECLARED_CLASSES`` 的键；toolchain／dependency-content／performance-cache／home-config 必须带
+      ``contract``，合同类型与 class 对应（toolchain、cache、cache、host-config）并出现在 ``contracts`` 里；其它 class 不得带。
+    * ``contracts``：合同 ID 列表（见 ``_declared_contract_id``）；声明了 ``toolchain:go`` 必须在 ``repo.files`` 里单独列出
+      ``backend/go.mod``、``backend/go.sum``，声明了 ``toolchain:pnpm`` 必须列出 ``frontend/pnpm-lock.yaml``、
+      ``frontend/package.json``（依赖锁要有自己的单文件条目，消费者才能拿安装结果与它交叉核对）。
+    * ``network``：只允许 ``"loopback-only"``（外连只许回环地址）。``unix_sockets``：允许命令连接的 AF_UNIX 目标（例如
+      ``/var/run/docker.sock``）——以 / 开头的规范绝对路径（不是别名路径，不以 / 结尾，无空／.／.. 分量），互不重复，缺省为空。
+    * ``requires``：命令运行期要求（可选，默认关），见 ``_declared_requires_shape``。"""
+
+    if not isinstance(scope, dict):
+        raise ValueError("声明范围必须是对象")
+    _declared_keys(scope, required={"schema_version", "repo"},
+                   optional={"make_expansion", "outside", "contracts", "network", "unix_sockets", "requires"}, where="声明范围")
+    if scope["schema_version"] != DECLARED_SCOPE_SCHEMA:
+        raise ValueError(f"声明范围的 schema_version 必须是 {DECLARED_SCOPE_SCHEMA}：{scope['schema_version']!r}")
+    repo = scope["repo"]
+    _declared_keys(repo, optional={"ranges", "files", "list_ok", "repo_ignored", "installed_dirs", "head", "git_history"}, where="声明范围 repo")
+    ranges = repo.get("ranges", [])
+    if not isinstance(ranges, list):
+        raise ValueError("repo.ranges 必须是数组")
+    names: list[str] = []
+    includes: list[str] = []
+    for index, item in enumerate(ranges):
+        where = f"repo.ranges[{index}]"
+        _declared_keys(item, required={"name", "include", "exclude"}, where=where)
+        if not isinstance(item["name"], str) or not _DECLARED_RANGE_NAME.fullmatch(item["name"]):
+            raise ValueError(f"{where}.name 只能含小写字母、数字、点、下划线、连字符，且以字母或数字开头：{item['name']!r}")
+        names.append(item["name"])
+        include = _declared_strings(item["include"], f"{where}.include", nonempty=True)
+        exclude = _declared_strings(item["exclude"], f"{where}.exclude")
+        for prefix in include:
+            _declared_rel(prefix, f"{where}.include")
+        for prefix in exclude:
+            _declared_rel(prefix, f"{where}.exclude")
+        includes.extend(include)
+    if len(names) != len(set(names)):
+        raise ValueError("repo.ranges 的 name 必须唯一")
+    files = _declared_strings(repo.get("files", []), "repo.files")
+    for path in files:
+        _declared_rel(path, "repo.files", directory=False)
+    list_ok = _declared_strings(repo.get("list_ok", []), "repo.list_ok")
+    for path in list_ok:
+        _declared_rel(path, "repo.list_ok", directory=True)
+    for item in _declared_strings(repo.get("repo_ignored", []), "repo.repo_ignored"):
+        _declared_ignored_item(item, "repo.repo_ignored")
+    if not ranges and not files:
+        raise ValueError("声明范围至少要声明一个 repo.ranges 或 repo.files")
+    if repo.get("head", False) is not False:
+        raise ValueError("repo.head 只能是 false：读 HEAD 的单元登记为 rerun-only 并保留 head 条目，不做声明级承接")
+    history = repo.get("git_history")
+    commits: list[str] = []
+    if history is not None:
+        _declared_keys(history, required={"commits", "reason"}, where="repo.git_history")
+        commits = _declared_strings(history["commits"], "repo.git_history.commits", nonempty=True)
+        if not all(_DECLARED_COMMIT.fullmatch(commit) for commit in commits):
+            raise ValueError("repo.git_history.commits 的每项必须是 40 位小写十六进制提交号")
+        if not isinstance(history["reason"], str) or not history["reason"].strip():
+            raise ValueError("repo.git_history.reason 必须写明为什么读这些历史提交")
+    targets = _declared_strings(scope.get("make_expansion", []), "make_expansion")
+    if not all(_DECLARED_MAKE_TARGET.fullmatch(target) for target in targets):
+        raise ValueError("make_expansion 的每项必须是 make 目标名（字母数字开头，只含字母、数字、点、下划线、加号、连字符、斜杠）")
+    if targets and ("Makefile" in files or any(_matches("Makefile", prefix) for prefix in includes)):
+        raise ValueError("声明了 make_expansion 后，Makefile 由展开合同覆盖，不得再列进 repo.files 或被 repo.ranges 的 include 覆盖")
+    contracts = _declared_strings(scope.get("contracts", []), "contracts")
+    for contract in contracts:
+        _declared_contract_id(contract, "contracts")
+    for tool, locks in _DECLARED_TOOLCHAIN_LOCKS.items():
+        if f"toolchain:{tool}" in contracts and not set(locks) <= set(files):
+            raise ValueError(f"声明了 toolchain:{tool} 就必须在 repo.files 里单独列出依赖锁 {list(locks)}")
+    installed = repo.get("installed_dirs", [])
+    if not isinstance(installed, list):
+        raise ValueError("repo.installed_dirs 必须是数组")
+    installed_prefixes: list[str] = []
+    for index, item in enumerate(installed):
+        where = f"repo.installed_dirs[{index}]"
+        _declared_keys(item, required={"prefix", "contract"}, where=where)
+        prefix = _declared_rel(item["prefix"], f"{where}.prefix", directory=True)
+        kind, _name = _declared_contract_id(item["contract"], f"{where}.contract")
+        if kind != "cache" or item["contract"] not in contracts:
+            raise ValueError(f"{where}.contract 必须是 cache:<名字> 类型的合同，并出现在 contracts 里（安装目录的内容由合同绑定）：{item['contract']!r}")
+        # 豁免不能吞掉已声明的输入：安装目录前缀必须在 range、单文件、枚举目录的「下面」，不能等于或盖住它们。
+        declared = [*includes, *files, *list_ok]
+        if any(entry == prefix or entry.startswith(prefix) for entry in declared):
+            raise ValueError(f"{where}.prefix 不得等于或包含已声明的 range／file／list_ok（安装目录的豁免会吞掉它们）：{prefix!r}")
+        installed_prefixes.append(prefix)
+    if len(installed_prefixes) != len(set(installed_prefixes)):
+        raise ValueError("repo.installed_dirs 的 prefix 必须互不重复")
+    outside = scope.get("outside", [])
+    if not isinstance(outside, list):
+        raise ValueError("outside 必须是数组")
+    prefixes: list[str] = []
+    for index, item in enumerate(outside):
+        where = f"outside[{index}]"
+        _declared_keys(item, required={"prefix", "class"}, optional={"contract"}, where=where)
+        prefixes.append(_declared_outside_prefix(item["prefix"], f"{where}.prefix"))
+        if not isinstance(item["class"], str) or item["class"] not in DECLARED_CLASSES:
+            raise ValueError(f"{where}.class 未知：{item['class']!r}（已知 {sorted(DECLARED_CLASSES)}）")
+        needed = _DECLARED_CLASS_CONTRACT.get(item["class"])
+        if needed is None and "contract" in item:
+            raise ValueError(f"{where}：class={item['class']} 不绑定合同，不得带 contract")
+        if needed is not None:
+            if "contract" not in item:
+                raise ValueError(f"{where}：class={item['class']} 必须带 contract（{needed}:<名字>）")
+            kind, _name = _declared_contract_id(item["contract"], f"{where}.contract")
+            if kind != needed or item["contract"] not in contracts:
+                raise ValueError(f"{where}.contract 必须是 {needed}:<名字> 类型的合同，并出现在 contracts 里：{item['contract']!r}")
+    if len(prefixes) != len(set(prefixes)):
+        raise ValueError("outside 的 prefix 必须互不重复")
+    if scope.get("network", "loopback-only") != "loopback-only":
+        raise ValueError('network 只允许 "loopback-only"')
+    for target in _declared_strings(scope.get("unix_sockets", []), "unix_sockets"):
+        _declared_unix_socket(target, "unix_sockets")
+    if "requires" in scope:
+        _declared_requires_shape(scope["requires"], "requires")
+    return json.loads(json.dumps(scope, ensure_ascii=False))
+
+
+def _declared_sample_ref(value: Any) -> dict[str, str]:
+    """进入 ``declared-inputs-scope`` 条目的采样引用：恰为 evidence_sha256、command_sha256、sampler_sha256 三项（各 64 位小写
+    十六进制）。证据摘要是证据文件原始字节的 sha256（与记录里 read_audit.trace.sha256、记录库 logs/<摘要>.log 的内容寻址
+    同一个值；生产侧用规范化 JSON 字节写证据文件时，它同时等于规范化摘要）。"""
+
+    _declared_keys(value, required={"evidence_sha256", "command_sha256", "sampler_sha256"}, where="采样引用")
+    if not all(isinstance(item, str) and _DECLARED_SHA256.fullmatch(item) for item in value.values()):
+        raise ValueError("采样引用的 evidence_sha256、command_sha256、sampler_sha256 必须是 64 位小写十六进制")
+    return {key: value[key] for key in sorted(value)}
+
+
+def _declared_scope_entry(inputs: Sequence[Mapping[str, Any]] | None) -> Mapping[str, Any] | None:
+    """输入明细里的 declared-inputs-scope 条目（没有返回 None）。"""
+
+    for entry in inputs or []:
+        if isinstance(entry, Mapping) and entry.get("name") == DECLARED_SCOPE_ENTRY:
+            return entry
+    return None
+
+
+def _declared_scope_inputs(repo: "RepoIndex", declaration: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """声明级承接的输入展开（``declared_inputs`` 遇到 ``declared_scope`` 键时走这里）。
+
+    声明字典恰为 ``{"declared_scope": 声明范围, "declared_sample": 采样引用}``。展开结果：
+
+    * ``declared-inputs-scope``（类别 policy）：摘要＝``sha256_json({"scope": 范围, "sample": 采样引用})``，detail 带范围全文与
+      采样引用——改范围、改证据、改命令、换采样器，都让这一项变，单元失效；
+    * ``scope:<名字>``：每个 range 一项（目录范围摘要，用现有的 ``RepoIndex.range_entry``）；
+    * ``file:<路径>``：每个单文件一项（现有的 ``RepoIndex.file_entry``）。
+
+    **没有 head**：命令不读 HEAD 提交号（读 git 历史的单元不走声明级承接）。``contract:*`` 条目不在这里产生——合同事实要
+    探测当前环境，由生产侧（执行器）探测后追加；验证侧只核封存值的格式（见 ``_check_declared_audit``）。"""
+
+    if not isinstance(declaration, Mapping) or set(declaration) != {"declared_scope", "declared_sample"}:
+        raise RecordsError(f"声明级输入声明须恰含 declared_scope 与 declared_sample 两个键：{declaration!r}")
+    try:
+        scope = validate_declared_scope(declaration["declared_scope"])
+        sample = _declared_sample_ref(declaration["declared_sample"])
+        binding = {"scope": scope, "sample": sample}
+        # 摘要也放进 try：声明里带无法编码成 UTF-8 的字符（孤立代理字符）时 sha256_json 抛 UnicodeEncodeError（ValueError 的子类），
+        # 同样按「声明非法」报，不让别的异常类型漏出去。
+        binding_sha256 = sha256_json(binding)
+    except ValueError as error:
+        raise RecordsError(f"声明级输入声明非法：{error}") from error
+    entries = [{"category": "policy", "name": DECLARED_SCOPE_ENTRY, "sha256": binding_sha256, "detail": binding}]
+    for item in scope["repo"].get("ranges", []):
+        entries.append(repo.range_entry({"category": "tests", "name": f"scope:{item['name']}", "include": list(item["include"]),
+                                         "exclude": list(item["exclude"])}))
+    for relative in scope["repo"].get("files", []):
+        entries.append(repo.file_entry("tests", _repo_file(repo, relative)))
+    return _unique(entries)
+
+
+_DECLARED_SAMPLE_KEYS = frozenset({"schema_version", "unit_id", "command", "sampled", "aliases", "coverage", "repo_accesses",
+                                   "outside_accesses", "git_commands", "network", "exit_code"})
+# 采样器（declared_sampler.py merge）另外写入的三个键：valid／invalid_reasons 是它自己对采样有效性的判断，review 是给人看的评审
+# 材料（冷热差异、写入集合、网络、docker 等，格式不规整、体量可能很大）。验证侧不信任也不解释 review，只要求 valid 为真；
+# 手工构造的证据可以不带这三个键。
+_DECLARED_SAMPLE_OPTIONAL = frozenset({"valid", "invalid_reasons", "review"})
+
+
+def _declared_validate_sample(sample: Any) -> dict[str, Any]:
+    """采样证据 ``declared-sample/v1`` 的格式核验（字段闭合；只核结构与类型，不判断读集是否被声明覆盖——那是
+    ``declared_coverage`` 的事）。不合格抛 ``ValueError``。
+
+    * ``command``：``{launcher, argv, cwd_rel, sha256}``——``sha256`` 必须等于 ``declared_command_sha256(argv, cwd_rel)``，
+      证据自己的命令摘要必须与自己的命令内容一致；``cwd_rel`` 是相对测试树的路径，树根本身写 ``.``（或空串）；
+    * ``coverage``：``{stream_complete, unresolved, unresolved_reasons, unfinished_calls, unresolved_process_events, lines}``，
+      另可带非负整数 ``detached_markers``（冷缓存采样里 ``<pid> ???( <detached ...>`` 的 strace 标记行，由采样器预处理计数，
+      不算 unresolved），以及可选的 ``unfinished_samples``（流结束时悬着的调用样例，字符串数组，最多 8 条、每条最长 300 字符，
+      只供评审：验证侧只核类型和长度，不据其内容放行或拒绝）；
+    * ``repo_accesses``：``[路径, 访问类型数组, 是否跟踪]`` 数组，仓库内路径完整保留（唯一的目录聚合键是 ``.git/objects/``）；
+      ``outside_accesses``：``[路径, 访问类型数组, 计数]``，仓库外路径按目录聚合（键以 / 结尾＝该目录下直接子项的访问）；路径
+      各自唯一；
+    * ``git_commands``：命令行数组；``network``：``{family, target}`` 数组；``exit_code``：整数（采样超时被终止时采样器写
+      null，这样的证据不会通过 C7）；
+    * 可选 ``valid``（布尔）、``invalid_reasons``（字符串数组，须与 valid 互为非）、``review``（对象，不解释）。"""
+
+    _declared_keys(sample, required=_DECLARED_SAMPLE_KEYS, optional=_DECLARED_SAMPLE_OPTIONAL, where="采样证据")
+    if "valid" in sample and not isinstance(sample["valid"], bool):
+        raise ValueError("采样证据 valid 必须是布尔值")
+    if "invalid_reasons" in sample and (not isinstance(sample["invalid_reasons"], list)
+                                        or not all(isinstance(item, str) for item in sample["invalid_reasons"])):
+        raise ValueError("采样证据 invalid_reasons 必须是字符串数组")
+    if "valid" in sample and "invalid_reasons" in sample and sample["valid"] == bool(sample["invalid_reasons"]):
+        raise ValueError("采样证据的 valid 必须恰好等于 invalid_reasons 为空")
+    if "review" in sample and not isinstance(sample["review"], dict):
+        raise ValueError("采样证据 review 必须是对象")
+    if sample["schema_version"] != DECLARED_SAMPLE_SCHEMA:
+        raise ValueError(f"采样证据的 schema_version 必须是 {DECLARED_SAMPLE_SCHEMA}：{sample['schema_version']!r}")
+    if not isinstance(sample["unit_id"], str) or not sample["unit_id"]:
+        raise ValueError("采样证据的 unit_id 必须是非空字符串")
+    command = sample["command"]
+    _declared_keys(command, required={"launcher", "argv", "cwd_rel", "sha256"}, where="采样证据 command")
+    if not isinstance(command["launcher"], list) or not all(isinstance(item, str) for item in command["launcher"]):
+        raise ValueError("采样证据 command.launcher 必须是字符串数组")
+    if (not isinstance(command["argv"], list) or not command["argv"] or not all(isinstance(item, str) for item in command["argv"])
+            or not command["argv"][0]):
+        raise ValueError("采样证据 command.argv 必须是以非空命令名开头的字符串数组")
+    cwd_rel = command["cwd_rel"]
+    if not isinstance(cwd_rel, str):
+        raise ValueError("采样证据 command.cwd_rel 必须是字符串")
+    if cwd_rel not in ("", "."):
+        _declared_rel(cwd_rel, "采样证据 command.cwd_rel", directory=False)
+    if command["sha256"] != declared_command_sha256(command["argv"], cwd_rel):
+        raise ValueError("采样证据 command.sha256 与 command 的 argv、cwd_rel 内容不符")
+    if not isinstance(sample["sampled"], dict):
+        raise ValueError("采样证据 sampled 必须是对象")
+    aliases = sample["aliases"]
+    if not isinstance(aliases, dict) or not all(isinstance(key, str) and isinstance(item, str) for key, item in aliases.items()):
+        raise ValueError("采样证据 aliases 必须是 {别名: 路径字符串}")
+    coverage = sample["coverage"]
+    _declared_keys(coverage, required={"stream_complete", "unresolved", "unresolved_reasons", "unfinished_calls",
+                                       "unresolved_process_events", "lines"}, optional={"detached_markers", "unfinished_samples"},
+                   where="采样证据 coverage")
+    if not isinstance(coverage["stream_complete"], bool):
+        raise ValueError("采样证据 coverage.stream_complete 必须是布尔值")
+    if "unfinished_samples" in coverage:
+        samples = coverage["unfinished_samples"]
+        if (not isinstance(samples, list) or len(samples) > _DECLARED_MAX_UNFINISHED_SAMPLES
+                or not all(isinstance(item, str) and len(item) <= _DECLARED_MAX_SAMPLE_CHARS for item in samples)):
+            raise ValueError(f"采样证据 coverage.unfinished_samples 必须是字符串数组，最多 {_DECLARED_MAX_UNFINISHED_SAMPLES} 条、每条最长 "
+                             f"{_DECLARED_MAX_SAMPLE_CHARS} 字符（只供评审，验证侧不据其内容放行或拒绝）")
+    for key in ("unresolved", "unfinished_calls", "unresolved_process_events", "lines", "detached_markers"):
+        if key in coverage and (not _declared_int(coverage[key]) or coverage[key] < 0):
+            raise ValueError(f"采样证据 coverage.{key} 必须是非负整数")
+    reasons = coverage["unresolved_reasons"]
+    if (not isinstance(reasons, dict) or not all(isinstance(key, str) and key and _declared_int(item) and item >= 1
+                                                 for key, item in reasons.items())):
+        raise ValueError("采样证据 coverage.unresolved_reasons 必须是 {原因: 正整数计数}")
+    for name, width, last in (("repo_accesses", 3, bool), ("outside_accesses", 3, int)):
+        rows = sample[name]
+        if not isinstance(rows, list):
+            raise ValueError(f"采样证据 {name} 必须是数组")
+        seen: set[str] = set()
+        for row in rows:
+            if (not isinstance(row, list) or len(row) != width or not isinstance(row[0], str) or not row[0]
+                    or not isinstance(row[1], list) or not row[1] or not all(isinstance(kind, str) for kind in row[1])):
+                raise ValueError(f"采样证据 {name} 的每项必须是 [路径, 访问类型数组, {'是否跟踪' if last is bool else '计数'}]：{row!r}")
+            if (last is bool and not isinstance(row[2], bool)) or (last is int and (not _declared_int(row[2]) or row[2] < 0)):
+                raise ValueError(f"采样证据 {name} 的第三项类型不对（{'布尔值' if last is bool else '非负整数'}）：{row!r}")
+            if row[0] in seen:
+                raise ValueError(f"采样证据 {name} 的路径重复：{row[0]!r}")
+            seen.add(row[0])
+    git_commands = sample["git_commands"]
+    if (not isinstance(git_commands, list) or not all(isinstance(argv, list) and argv and all(isinstance(item, str) for item in argv)
+                                                      for argv in git_commands)):
+        raise ValueError("采样证据 git_commands 必须是命令行（非空字符串数组）的数组")
+    network = sample["network"]
+    if not isinstance(network, list):
+        raise ValueError("采样证据 network 必须是数组")
+    for item in network:
+        _declared_keys(item, required={"family", "target"}, where="采样证据 network 项")
+        if not isinstance(item["family"], str) or not isinstance(item["target"], str):
+            raise ValueError("采样证据 network 项的 family、target 必须是字符串")
+    if sample["exit_code"] is not None and not _declared_int(sample["exit_code"]):
+        raise ValueError("采样证据 exit_code 必须是整数或 null")
+    return sample
+
+
+def _declared_clean_path(text: str) -> bool:
+    """规范路径体：不含空、.、.. 分量，不含反斜杠与控制字符（允许末尾一个 /，表示目录聚合）。空串不是路径体。"""
+
+    if not text or any(ch in text for ch in "\\\0\n\r"):
+        return False
+    parts = text.split("/")
+    if text.endswith("/"):
+        parts = parts[:-1]
+    return all(part not in ("", ".", "..") for part in parts)
+
+
+def _declared_covers(prefix: str, key: str) -> bool:
+    """仓库外路径 ``key`` 是否落在声明前缀 ``prefix`` 之下：目录前缀（以 / 结尾）覆盖其下全部路径与目录自身，其它前缀只覆盖
+    精确相等的路径。"""
+
+    if prefix.endswith("/"):
+        return key.startswith(prefix) or key + "/" == prefix
+    return key == prefix
+
+
+def _declared_loopback(family: str, target: str) -> bool | None:
+    """网络目标是否回环地址（127.0.0.0/8、::1，含映射到回环的 IPv6）；解析不出返回 None。"""
+
+    import ipaddress
+
+    # 写法：IPv4 为「地址」或「地址:端口」；IPv6 为「[地址]:端口」或不带端口的「地址」（不带方括号的「地址:端口」有歧义，
+    # 整串按地址解析，解析不出就判失败）。
+    host = target
+    if target.startswith("["):
+        host = target[1:].split("]", 1)[0]
+    elif family == "AF_INET" and target.count(":") == 1:
+        host = target.split(":", 1)[0]
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    mapped = getattr(address, "ipv4_mapped", None)
+    return bool(address.is_loopback or (mapped is not None and mapped.is_loopback))
+
+
+def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, command_sha256: str | None = None) -> dict[str, Any]:
+    """覆盖检查（C1～C7）：采样证据里的每条访问是否落在声明范围内。**纯函数**，执行侧（登记自检、正式执行）与验证侧
+    （``_check_declared_audit`` 重算）共用同一个实现；返回 ``{"ok": bool, "undeclared": [{rule, path, kinds, reason}],
+    "counts": {...}}``。``undeclared`` 按（规则, 路径）排序并截断到前 200 条，总数在 ``counts["undeclared"]``。
+
+    证据或范围格式不合格也不抛异常，而是记一条 ``C0-scope``／``C7-format`` 未覆盖——调用方不必再包 try。``command_sha256``
+    给定时（登记表里登记的命令摘要），C7 另核证据的命令摘要与它相等。
+
+    仓库外路径的键沿用采样器的约定：以 / 结尾是目录聚合（该目录下直接子项的访问，目录自身被枚举也算在它名下），不以 /
+    结尾是精确路径（只出现在 /dev、/proc、/sys、/etc、``{HOME}`` 下和别名根自身）。
+
+    * **C1 仓库内路径**（``{TREE}/相对路径``；``{TREE}/.git/objects/`` 是对象库的聚合键）：``.git/`` 下的访问只在声明了
+      ``repo.git_history`` 时允许且不得写、不得执行；命中某个 range（include 命中且不被 exclude 命中）或 files 的路径，读／执行
+      要求「已跟踪」（读了未跟踪文件，说明依赖不在摘要里），写入一律违规（命令不得改写声明范围内的文件）；命中 ``make_expansion``
+      的 ``Makefile`` 视为被展开合同覆盖；声明内容的上级目录只看元数据（stat／dir）放行；枚举目录（list）要求目录本身被某个
+      range 覆盖或列在 ``list_ok``；其它路径违规。
+      ``repo_ignored`` 命中的路径（命令的输出区：以 / 结尾的目录前缀，如 ent 代码生成在测试树里写、读回、运行结束即删的临时目录；
+      或仓库相对 glob，如 vite 在 frontend/ 根下写、读回、再删的 ``vitest.config.ts.timestamp-*``）：允许写；允许 read／exec／
+      list，**但只限本次采样里同一路径也出现了 write 的路径**（命令自己写出再读回，不是外部输入）；只读不写的未跟踪路径仍然违规
+      （``C1-untracked-read``）；已跟踪文件出现在这里是登记错误。
+      ``repo.installed_dirs`` 前缀（依赖安装目录，例如 pnpm 的 ``frontend/node_modules/``，里面是未跟踪路径）下：read／exec／
+      stat／dir／list／missing **不要求已跟踪**（内容由对应的 ``cache:*`` 合同绑定，不靠范围摘要）；写入不允许
+      （``C4-write-installed``），除非同时落在 ``repo_ignored`` 前缀内（例如 ``frontend/node_modules/.vite/`` 的 vitest 缓存）；
+      前缀之外的未跟踪读取照旧违规。
+    * **C2 仓库外路径**：取 ``outside`` 里最长前缀匹配的项，访问类型必须在该 class 允许的集合内。没有前缀命中时：某个已声明
+      ``outside`` 前缀、测试树、``{WORK}``、``{HOME}``、``{TMP}``（取自证据的 aliases）的**祖先目录**，且只有 stat／dir，视为覆盖
+      通过（与仓库内「声明内容的上级目录算覆盖」同构）；其余违规 ``C2-outside-undeclared``。
+    * **C3 missing 探测**：仓库内 missing 路径必须被 range 覆盖，或属祖先探测（树根下的 go.mod／go.work／.hg 等）。仓库外
+      因为目录聚合丢了名字，沿测试树祖先链的目录（Go 往上找 go.work 与模块、版本控制目录会逐级探测）放宽到 stat／dir／
+      missing；其它目录里的 missing 违规。
+    * **C4 写入**：只能写 performance-cache／scratch 类仓库外路径与 ``repo_ignored``；写入工具链、依赖内容、系统、HOME 配置、
+      声明范围内的路径一律违规（命令在写依赖缓存＝在联网下载，违背离线合同）。
+    * **C5 网络**：回环地址（AF_INET／AF_INET6）放行；AF_UNIX 目标必须列在 ``scope.unix_sockets``；AF_UNSPEC（UDP 套接字
+      断开关联，不是外连）放行；其它外连与不可判的目标一律违规。
+    * **C6 git 命令**：命令行里出现的 40 位提交号必须都在 ``repo.git_history.commits`` 里，不得引用 HEAD 一类浮动引用，
+      argv 不可见（采样器留下的哨兵）也违规。
+    * **C7 证据完整性**：采样器没有判这份采样无效（valid、invalid_reasons）、流已结束、unresolved 的原因全部属容忍集合
+      （``DECLARED_TOLERATED_UNRESOLVED``）且总数与分项一致；其中 ``unfinished-calls-at-eof``（多线程进程退出时永远配不上的
+      ``<unfinished ...>``）最多容忍 64 个，超过即无效，``unfinished_calls`` 也不得超出它能解释的部分；没有未归属的进程事件、
+      行数大于零、退出码为零。"""
+
+    findings: list[dict[str, Any]] = []
+    counts: dict[str, Any] = {"repo_paths": 0, "outside_paths": 0, "classes": {}, "ignored_paths": 0, "installed_paths": 0, "git_paths": 0,
+                              "exempt_paths": 0, "git_commands": 0, "network": 0}
+
+    def report(rule: str, path: Any, kinds: Iterable[str], reason: str) -> None:
+        findings.append({"rule": rule, "path": _declared_display(path), "kinds": sorted({_declared_display(kind) for kind in kinds}),
+                         "reason": _declared_display(reason)})
+
+    def finish() -> dict[str, Any]:
+        ordered = sorted(findings, key=lambda item: (item["rule"], item["path"], item["reason"]))
+        counts["undeclared"] = len(ordered)
+        return {"ok": not ordered, "undeclared": ordered[:_DECLARED_MAX_FINDINGS], "counts": counts}
+
+    try:
+        scope = validate_declared_scope(scope)
+    except ValueError as error:
+        report("C0-scope", "", [], f"声明范围非法：{error}")
+        return finish()
+    try:
+        sample = _declared_validate_sample(sample)
+    except ValueError as error:
+        report("C7-format", "", [], f"采样证据格式非法：{error}")
+        return finish()
+
+    # ---- C7：证据本身是否完整可信 ----
+    coverage = sample["coverage"]
+    if sample.get("valid") is False or sample.get("invalid_reasons"):
+        shown = "；".join(str(item) for item in (sample.get("invalid_reasons") or [])[:3])
+        report("C7-invalid", "", [], f"采样器自己判这份采样无效{'：' + shown if shown else ''}")
+    if coverage["stream_complete"] is not True:
+        report("C7-stream", "", [], "采样输出流没有完整结束")
+    reasons = coverage["unresolved_reasons"]
+    for reason in sorted(reasons):
+        if not _declared_reason_tolerated(reason):
+            report("C7-unresolved", reason, [], f"存在不可容忍的未解析原因（容忍集合 {list(DECLARED_TOLERATED_UNRESOLVED)}，以 : 结尾的按前缀匹配，其余精确匹配）")
+    # 流结束时悬着的未配对调用（多线程进程退出时 strace 不为还在系统调用里的线程打印 resumed）：被容忍，但有上限。
+    at_eof = reasons.get("unfinished-calls-at-eof", 0)
+    if at_eof > _DECLARED_MAX_UNFINISHED_AT_EOF:
+        report("C7-unresolved", "unfinished-calls-at-eof", [], f"流结束时悬着的未配对调用 {at_eof} 个，超过容忍上限 {_DECLARED_MAX_UNFINISHED_AT_EOF}")
+    if coverage["unfinished_calls"] > at_eof:
+        report("C7-unresolved", "", [], f"未配对的调用 {coverage['unfinished_calls']} 个，超出被容忍的 unfinished-calls-at-eof（{at_eof}）能解释的部分")
+    if coverage["unresolved_process_events"]:
+        report("C7-unresolved", "", [], f"有 {coverage['unresolved_process_events']} 个未归属的进程事件（子进程的事件没等到父进程的派生记录，读集不完整）")
+    if coverage["unresolved"] != sum(reasons.values()):
+        report("C7-unresolved", "", [], f"unresolved 总数 {coverage['unresolved']} 与各原因计数之和不符，存在未说明的未解析项")
+    if coverage["lines"] <= 0:
+        report("C7-lines", "", [], "采样没有产生任何输出行")
+    if sample["exit_code"] != 0:
+        report("C7-exit", "", [], f"被采样的命令退出码不是 0：{sample['exit_code']}")
+    if command_sha256 is not None and sample["command"]["sha256"] != command_sha256:
+        report("C7-command", "", [], "证据的命令摘要与登记的不符（命令变了，证据不再适用）")
+
+    # ---- 声明范围的预处理 ----
+    repo = scope["repo"]
+    rules = [(item["include"], item["exclude"]) for item in repo.get("ranges", [])]
+    files = set(repo.get("files", []))
+    list_ok = {path.rstrip("/") for path in repo.get("list_ok", [])}
+    ignored = list(repo.get("repo_ignored", []))
+    ignored_dirs = [item for item in ignored if item.endswith("/")]
+    ignored_globs = [_declared_glob(item) for item in ignored if not item.endswith("/")]
+    installed = [item["prefix"] for item in repo.get("installed_dirs", [])]
+    history = repo.get("git_history")
+    make_expansion = bool(scope.get("make_expansion"))
+    outside = scope.get("outside", [])
+    unix_sockets = set(scope.get("unix_sockets", []))
+
+    def in_ranges(text: str) -> bool:
+        return any(any(_matches(text, prefix) for prefix in include) and not any(_matches(text, prefix) for prefix in exclude)
+                   for include, exclude in rules)
+
+    def covered(relative: str) -> bool:
+        # 目录自身（``relative + "/"``）也算：include 是目录前缀时，目录本身属于声明范围。
+        return in_ranges(relative) or in_ranges(relative + "/") or relative in files or (make_expansion and relative == "Makefile")
+
+    def under_ignored(relative: str) -> bool:
+        # 目录前缀：其下的全部路径（含目录自身）；glob：整条相对路径完全匹配（不含它的子路径）。
+        return (any(_matches(relative, prefix) or _matches(relative + "/", prefix) for prefix in ignored_dirs)
+                or any(pattern.fullmatch(relative) for pattern in ignored_globs))
+
+    def under_installed(relative: str) -> bool:
+        return any(_matches(relative, prefix) or _matches(relative + "/", prefix) for prefix in installed)
+
+    directories: set[str] = set()
+
+    def add_ancestors(path: str, *, itself: bool) -> None:
+        parts = path.rstrip("/").split("/")
+        for count in range(1, len(parts) + (1 if itself else 0)):
+            directories.add("/".join(parts[:count]))
+
+    for include, _exclude in rules:
+        for prefix in include:
+            add_ancestors(prefix, itself=prefix.endswith("/"))
+    for path in files:
+        add_ancestors(path, itself=False)
+    for path in list_ok:
+        add_ancestors(path, itself=True)
+    for item in ignored:
+        if item.endswith("/"):
+            add_ancestors(item, itself=True)
+            continue
+        literal: list[str] = []  # glob 的目录部分里，第一个带通配符的分量之前的字面目录
+        for part in item.split("/")[:-1]:
+            if "*" in part or "?" in part:
+                break
+            literal.append(part)
+        if literal:
+            add_ancestors("/".join(literal), itself=True)
+    for prefix in installed:
+        add_ancestors(prefix, itself=True)
+
+    # ---- C1／C3／C4：仓库内路径 ----
+    for path, raw_kinds, tracked in sample["repo_accesses"]:
+        counts["repo_paths"] += 1
+        kinds = set(raw_kinds)
+        if kinds - DECLARED_KINDS:
+            report("C0-kind", path, kinds, f"未知访问类型 {sorted(kinds - DECLARED_KINDS)}")
+            continue
+        if path == "{TREE}":
+            relative = ""
+        elif path == _DECLARED_GIT_OBJECTS_KEY:
+            relative = ".git/objects"
+        elif path.startswith("{TREE}/") and not path.endswith("/") and _declared_clean_path(path[len("{TREE}/"):]):
+            relative = path[len("{TREE}/"):]
+        else:
+            report("C1-path", path, kinds, "仓库内路径必须是 {TREE}/ 加规范相对路径（无空、.、.. 分量，不以 / 结尾；对象库聚合键 {TREE}/.git/objects/ 除外）")
+            continue
+        if relative == "":
+            if kinds <= {"stat", "dir"}:
+                counts["exempt_paths"] += 1
+            else:
+                report("C1-undeclared", path, kinds, "测试树根目录只允许 stat／dir（枚举或读取树根不在任何声明里）")
+            continue
+        if relative == ".git" or relative.startswith(".git/"):
+            if history is None:
+                report("C1-git-undeclared", path, kinds, "读了 .git，但声明范围没有 repo.git_history")
+            elif kinds - {"read", "stat", "dir", "list", "missing"}:
+                report("C1-git-kinds", path, kinds, "对 .git 只允许读取类访问（read／stat／dir／list／missing），不得写入或执行")
+            else:
+                counts["git_paths"] += 1
+            continue
+        in_installed, in_ignored = under_installed(relative), under_ignored(relative)
+        if in_installed or in_ignored:
+            # 安装目录与输出区可以重叠（node_modules/.vite/）：写入按输出区放行，读取按安装目录放行。
+            if in_ignored and tracked:
+                report("C1-ignored-tracked", path, kinds, "repo_ignored 前缀下出现了已跟踪文件，它应属声明范围而不是输出区")
+            elif "write" in kinds and not in_ignored:
+                report("C4-write-installed", path, kinds, "命令写入了依赖安装目录（安装结果由合同绑定，不许改；缓存之类的输出须另登记 repo_ignored 前缀）")
+            elif not in_installed and kinds & {"read", "exec", "list"} and "write" not in kinds:
+                report("C1-untracked-read", path, kinds, "repo_ignored 前缀下只读不写的未跟踪路径：它不是本次命令自己产出的，内容不在任何摘要里"
+                                                         "（自产物读回要求同一次采样里这个路径也出现 write）")
+            else:
+                counts["installed_paths" if in_installed else "ignored_paths"] += 1
+            continue
+        if covered(relative):
+            if "write" in kinds:
+                report("C4-write-declared", path, kinds, "命令写入了声明范围内的路径（声明范围是只读输入，输出须落在 repo_ignored 或 scratch）")
+            elif kinds & {"read", "exec"} and not tracked:
+                report("C1-untracked-read", path, kinds, "读了声明范围内的未跟踪文件，它的内容不在范围摘要里")
+            continue
+        if kinds == {"missing"} and relative in _DECLARED_ANCESTOR_PROBES:
+            counts["exempt_paths"] += 1
+            continue
+        if relative in directories and kinds <= {"stat", "dir"}:
+            counts["exempt_paths"] += 1
+            continue
+        if "list" in kinds and relative in list_ok and kinds <= {"list", "stat", "dir"}:
+            counts["exempt_paths"] += 1
+            continue
+        if kinds == {"missing"}:
+            report("C3-missing-undeclared", path, kinds, "探测了声明范围外的不存在路径（它将来出现会改变命令行为）")
+        elif "list" in kinds:
+            report("C1-list-undeclared", path, kinds, "枚举了声明范围外的目录：须被某个 range 覆盖或列入 repo.list_ok")
+        else:
+            report("C1-undeclared", path, kinds, "读写了声明范围外的仓库内路径")
+
+    # ---- C2／C3／C4：仓库外路径 ----
+    # 键空间里的祖先目录集合。键用采样器的别名写法：WORK／HOME／TMP 之下的路径是 {WORK}/… 这样的别名路径，其余是绝对路径，
+    # 所以先把证据 aliases 里的绝对路径按同样的规则（最长前缀优先）换成键的写法，再算祖先。
+    roots: dict[str, str | None] = {}
+    for name in ("TREE", "WORK", "HOME", "TMP"):
+        value = sample["aliases"].get(name)
+        roots[name] = value if isinstance(value, str) and value.startswith("/") and value == os.path.normpath(value) and value != "/" else None
+
+    def to_key(absolute: str) -> str:
+        best: tuple[str, str] | None = None
+        for name in ("WORK", "HOME", "TMP"):
+            base = roots[name]
+            if base is not None and (absolute == base or absolute.startswith(base + "/")) and (best is None or len(base) > len(best[1])):
+                best = (name, base)
+        return absolute if best is None else "{" + best[0] + "}" + absolute[len(best[1]):]
+
+    def ancestors_of(absolute: str) -> set[str]:
+        pieces = absolute.split("/")
+        return {to_key("/".join(pieces[:count]) or "/") for count in range(1, len(pieces))}
+
+    declared_ancestors: set[str] = set()
+    for entry in outside:
+        parts = entry["prefix"].rstrip("/").split("/")
+        for count in range(1, len(parts)):
+            declared_ancestors.add("/".join(parts[:count]) or "/")
+    for name, base in roots.items():
+        if base is not None:
+            declared_ancestors |= ancestors_of(base)
+            if name != "TREE":
+                declared_ancestors.add("{" + name + "}")
+    tree_chain: set[str] = ancestors_of(roots["TREE"]) if roots["TREE"] is not None else set()
+    for path, raw_kinds, _count in sample["outside_accesses"]:
+        counts["outside_paths"] += 1
+        kinds = set(raw_kinds)
+        if kinds - DECLARED_KINDS:
+            report("C0-kind", path, kinds, f"未知访问类型 {sorted(kinds - DECLARED_KINDS)}")
+            continue
+        alias = _DECLARED_ALIAS_PATH.fullmatch(path)
+        body = path[1:] if path.startswith("/") else (alias.group(2) or "x") if alias is not None else ""
+        if path.startswith("{TREE}") or (path != "/" and not _declared_clean_path(body)):
+            report("C2-path", path, kinds, "仓库外路径必须是绝对路径或 {WORK}／{HOME}／{TMP} 别名路径（规范、无 .. 分量；仓库内路径属 repo_accesses）")
+            continue
+        matches = [entry for entry in outside if _declared_covers(entry["prefix"], path)]
+        if matches:
+            entry = max(matches, key=lambda item: len(item["prefix"]))
+            counts["classes"][entry["class"]] = counts["classes"].get(entry["class"], 0) + 1
+            forbidden = kinds - DECLARED_CLASSES[entry["class"]]
+            if forbidden:
+                rule = "C4-write-class" if "write" in forbidden else "C2-kinds"
+                report(rule, path, kinds, f"class={entry['class']}（前缀 {entry['prefix']}）不允许的访问类型 {sorted(forbidden)}")
+            continue
+        directory = path.rstrip("/") or "/"
+        if kinds <= {"stat", "dir"} and directory in declared_ancestors:
+            counts["exempt_paths"] += 1
+            continue
+        if kinds <= {"stat", "dir", "missing"} and directory in tree_chain:
+            counts["exempt_paths"] += 1
+            continue
+        if kinds == {"missing"} and os.path.basename(directory) in _DECLARED_ANCESTOR_PROBES and os.path.dirname(directory) in tree_chain:
+            counts["exempt_paths"] += 1
+            continue
+        report("C3-missing-undeclared" if kinds == {"missing"} else "C2-outside-undeclared", path, kinds,
+               "探测了没有声明前缀的仓库外不存在路径" if kinds == {"missing"} else "访问了没有声明前缀（outside）的仓库外路径")
+
+    # ---- C5：网络 ----
+    counts["network"] = len(sample["network"])
+    for item in sample["network"]:
+        family, target = item["family"], item["target"]
+        if family == "AF_UNSPEC" and target == "":
+            continue  # connect 的地址族是 AF_UNSPEC：UDP 套接字断开关联，不是外连
+        if family in ("AF_INET", "AF_INET6"):
+            loopback = _declared_loopback(family, target)
+            if loopback is None:
+                report("C5-network", target, [], f"{family} 目标解析不出地址")
+            elif not loopback:
+                report("C5-network", target, [], f"{family} 外连了非回环地址")
+        elif family == "AF_UNIX":
+            if target not in unix_sockets:
+                report("C5-unix-undeclared", target, [], "AF_UNIX 目标没有列在声明范围的 unix_sockets 里")
+        else:
+            report("C5-network", target, [], f"不认识或不可判的网络协议族 {family}（只允许回环地址、登记的 AF_UNIX 目标与 AF_UNSPEC）")
+
+    # ---- C6：git 命令 ----
+    counts["git_commands"] = len(sample["git_commands"])
+    declared_commits = set((history or {}).get("commits", []))
+    for argv in sample["git_commands"]:
+        if os.path.basename(argv[0]) != "git":
+            report("C6-git", argv[0], [], "git_commands 里混入了非 git 命令")
+            continue
+        if _DECLARED_GIT_HIDDEN in argv:
+            report("C6-git-argv-hidden", " ".join(argv), [], "git 子进程的 argv 不可见，读了哪些历史提交说不清")
+            continue
+        for argument in argv[1:]:
+            for token in _DECLARED_COMMIT_TOKEN.findall(argument):
+                if token.lower() not in declared_commits:
+                    report("C6-commit-undeclared", token.lower(), [], "git 命令引用了没有登记在 repo.git_history.commits 里的提交")
+            if _DECLARED_HEAD_REF.search(argument):
+                report("C6-head", argument, [], "git 命令引用了 HEAD 一类浮动引用：声明级单元不依赖 HEAD")
+    return finish()
+
+
+def _declared_unavailable(value: Any) -> bool:
+    """合同条目的 detail 里是否带探测失败的值（``unavailable(...)``，沿用入口步骤的约定）：探测失败的合同不能作承接依据。"""
+
+    if isinstance(value, str):
+        return value.startswith("unavailable")
+    if isinstance(value, dict):
+        return any(_declared_unavailable(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_declared_unavailable(item) for item in value)
+    return False
+
+
+def _declared_contract_entry_problems(entry: Mapping[str, Any], kind: str, name: str) -> list[str]:
+    """合同条目 ``contract:<类型>:<名字>`` 的格式核验：只核封存值，不探测当前环境（历史重放不能依赖当前磁盘、docker、git）。
+
+    共同要求：摘要是 64 位十六进制；detail 带 ``schema_version``＝``declared-contract/v1``、``type``、``id``，且与条目名一致；
+    detail 里没有探测失败的值。各类型再核调研 4.x 写明的字段，文档没写明的字段不猜（宽松），以免合法记录被误拒。"""
+
+    label = f"合同条目 contract:{kind}:{name}"
+    problems: list[str] = []
+    if not isinstance(entry.get("sha256"), str) or not _DECLARED_SHA256.fullmatch(entry["sha256"]):
+        problems.append(f"{label} 的摘要不是 64 位十六进制")
+    detail = entry.get("detail")
+    if not isinstance(detail, dict):
+        return problems + [f"{label} 缺少 detail"]
+    if detail.get("schema_version") != DECLARED_CONTRACT_SCHEMA or detail.get("type") != kind or detail.get("id") != name:
+        return problems + [f"{label} 的 detail 须带 schema_version={DECLARED_CONTRACT_SCHEMA}、type={kind}、id={name}"]
+    if _declared_unavailable(detail):
+        problems.append(f"{label} 探测失败（unavailable），不能作承接依据")
+    if kind == "toolchain":
+        if not isinstance(detail.get("version_line"), str) or not detail["version_line"].strip():
+            problems.append(f"{label} 缺少版本行 version_line")
+        if not isinstance(detail.get("executable_sha256"), str) or not _DECLARED_SHA256.fullmatch(detail["executable_sha256"]):
+            problems.append(f"{label} 的可执行文件摘要 executable_sha256 不是 64 位十六进制")
+        if "requires" in detail:  # 例如打开离线要求时 toolchain:go 带 env_equals
+            try:
+                _declared_requires_shape(detail["requires"], f"{label}.requires")
+            except ValueError as error:
+                problems.append(str(error))
+    elif kind == "cache":
+        rule, role = detail.get("rule"), detail.get("role")
+        if not isinstance(rule, str) or rule not in _DECLARED_CACHE_RULES:
+            problems.append(f"{label} 的规则 rule 未知：{rule!r}（已知 {sorted(_DECLARED_CACHE_RULES)}）")
+        elif _DECLARED_CACHE_RULES[rule] != role:
+            problems.append(f"{label} 的角色 role={role!r} 与规则 {rule} 不匹配（应为 {_DECLARED_CACHE_RULES[rule]}）")
+        if not isinstance(detail.get("location"), str) or detail["location"] not in _DECLARED_CACHE_LOCATIONS:
+            problems.append(f"{label} 的 location 须是 {sorted(_DECLARED_CACHE_LOCATIONS)} 之一：{detail.get('location')!r}")
+        for key in ("lock_file", "installed_lock"):
+            if key in detail:
+                try:
+                    _declared_rel(detail[key], f"{label}.{key}", directory=False)
+                except ValueError as error:
+                    problems.append(str(error))
+        if "requires" in detail:
+            try:
+                _declared_requires_shape(detail["requires"], f"{label}.requires")
+            except ValueError as error:
+                problems.append(str(error))
+    elif kind == "service-image":
+        if not isinstance(detail.get("image_id"), str) or not _DECLARED_IMAGE_ID.fullmatch(detail["image_id"]):
+            problems.append(f"{label} 的镜像 image_id 不是 sha256:<64 位十六进制>")
+        if not isinstance(detail.get("reference"), str) or not detail["reference"]:
+            problems.append(f"{label} 缺少镜像引用 reference")
+    elif kind == "git-history" and not _DECLARED_COMMIT.fullmatch(name):
+        problems.append(f"{label} 的 ID 不是 40 位小写提交号")
+    elif kind == "make-expansion" and not _DECLARED_MAKE_TARGET.fullmatch(name):
+        problems.append(f"{label} 的 ID 不是 make 目标名")
+    return problems
+
+
+def _declared_requires_problems(requires: Mapping[str, Any], record: Mapping[str, Any], label: str) -> list[str]:
+    """命令运行期要求（argv_contains、go_test_argv_contains、env_equals）对照记录里封存的单元规格与环境指纹：``spec.env`` 里
+    显式写了的变量以它为准（单元环境覆盖执行器环境），否则看环境指纹里 ``envvar:<名字>`` 条目的摘要。``go_test_argv_contains``
+    只在命令行里有相邻的 ``go``、``test`` 两个词时才核（与入口门禁侧 ``declared_contract_problems`` 同一判法），并且要求参数出现在
+    ``go test`` 之后。"""
+
+    problems: list[str] = []
+    spec = record.get("spec") if isinstance(record.get("spec"), Mapping) else {}
+    argv = spec.get("argv") if isinstance(spec.get("argv"), list) else []
+    unit_env = spec.get("env") if isinstance(spec.get("env"), Mapping) else {}
+    environment = record.get("environment")
+    fingerprint = {str(item.get("name")): item.get("sha256") for item in (environment if isinstance(environment, list) else [])
+                   if isinstance(item, Mapping)}
+    for token in requires.get("argv_contains", []):
+        if token not in argv:
+            problems.append(f"{label} 要求命令行含 {token}，记录封存的 spec.argv 里没有")
+    go_test = next((index for index in range(len(argv) - 1) if argv[index] == "go" and argv[index + 1] == "test"), None)
+    if go_test is not None:
+        for token in requires.get("go_test_argv_contains", []):
+            if token not in argv[go_test:]:
+                problems.append(f"{label} 要求 go test 命令含 {token}，记录封存的 spec.argv 里没有")
+    for key, value in requires.get("env_equals", {}).items():
+        if key in unit_env:
+            if unit_env[key] != value:
+                problems.append(f"{label} 要求环境变量 {key}={value}，记录封存的 spec.env 里是别的值")
+        elif fingerprint.get("envvar:" + key) != sha256_bytes(f"{key}={value}".encode("utf-8")):
+            problems.append(f"{label} 要求环境变量 {key}={value}，记录封存的环境指纹里不是这个值")
+    return problems
+
+
+def _declared_observed_problems(kind: str, name: str, observed: Mapping[str, Any], detail: Mapping[str, Any],
+                                files: Mapping[str, str]) -> list[str]:
+    """运行前凭证的 ``observed`` 是否满足合同规则（调研 4.2、4.3）。``files`` 是记录输入里 ``file:<路径>`` 条目的摘要：
+    lock-derived 规则要求安装锁副本摘要不但与锁文件自己相等，还要等于输入里那个单文件条目的摘要，也就是「真实依赖」。"""
+
+    label = f"合同凭证 {kind}:{name}"
+    problems: list[str] = []
+    if kind == "cache":
+        rule = detail.get("rule")
+        if rule in ("any-content-addressed", "any-scratch"):
+            if observed.get("root_ok") is not True:
+                problems.append(f"{label} 的缓存根位置核验未通过（observed.root_ok 须为 true）")
+            hint = observed.get("entries_hint")
+            if hint is not None and (not _declared_int(hint) or hint < 0):
+                problems.append(f"{label} 的 observed.entries_hint 须是非负整数")
+        elif rule in ("lock-derived-pnpm", "lock-derived-go-sum"):
+            lock_file = detail.get("lock_file") or _DECLARED_LOCK_DEFAULTS[rule]
+            installed_key, lock_key = (("installed_lock_sha256", "lock_file_sha256") if rule == "lock-derived-pnpm"
+                                       else ("go_sum_sha256", "go_sum_sha256"))
+            installed, locked = observed.get(installed_key), observed.get(lock_key)
+            if not all(isinstance(item, str) and _DECLARED_SHA256.fullmatch(item) for item in (installed, locked)):
+                problems.append(f"{label} 的 observed.{installed_key}／{lock_key} 须是 64 位十六进制")
+            elif installed != locked:
+                problems.append(f"{label} 的安装结果与锁文件不一致（{installed_key} 不等于 {lock_key}）")
+            elif files.get(f"file:{lock_file}") != locked:
+                problems.append(f"{label} 的锁文件摘要不等于记录输入里 file:{lock_file} 条目的摘要（锁文件须作为单文件输入列出且一致）")
+            if rule == "lock-derived-go-sum" and observed.get("verify") not in ("ok", "skipped"):
+                problems.append(f"{label} 的 observed.verify 须是 ok 或 skipped")
+    elif kind == "service-image":
+        if observed.get("image_id") != detail.get("image_id"):
+            problems.append(f"{label} 的启动前镜像 Id 复核值与输入里的 image_id 不一致（镜像在 plan 之后被换过）")
+    if _declared_unavailable(observed):
+        problems.append(f"{label} 的 observed 带探测失败的值（unavailable）")
+    return problems
+
+
+def _declared_credential_problems(record: Mapping[str, Any], scope: Mapping[str, Any], contracts: Mapping[str, Mapping[str, Any]],
+                                  files: Mapping[str, str]) -> list[str]:
+    """记录新键 ``declared_contracts``（进 record_sha256、不进 inputs_sha256）的核验：运行前核验凭证数组，每项
+    ``{id, kind, verified_before_run, observed, verified_at_utc}``（可另带 ``rule``，须与合同条目的规则一致）。
+
+    * 必须有凭证的：``scope.contracts`` 里的 ``cache:*``、``service-image:*``（缓存根位置／安装锁副本／go.sum 初态、启动前镜像
+      Id 复核都是单元启动前才能拍下的事实）；其余合同（工具链、host-config、git-history、make-expansion）已由 inputs 里的
+      条目摘要绑定，凭证可有可无，有则同样核验；不在范围里的 ID 一律拒绝，重复拒绝；
+    * ``verified_before_run`` 必须是 True，``verified_at_utc`` 可解析且不晚于记录的 started_at_utc（运行前核验）；
+    * ``observed`` 必须满足合同规则（见 ``_declared_observed_problems``）。
+    凭证缺失、为 false 或 observed 不满足规则，都使记录不可承接。"""
+
+    raw = record.get("declared_contracts")
+    items = [] if raw is None else raw
+    if not isinstance(items, list):
+        return ["声明级承接：declared_contracts 不是数组"]
+    required = {contract for contract in scope.get("contracts", []) if contract.split(":", 1)[0] in ("cache", "service-image")}
+    # 允许出现凭证的合同：声明范围列出的全部合同，加上由 git_history、make_expansion 派生的合同（后两者没有凭证也行）。
+    allowed = set(scope.get("contracts", []))
+    allowed.update(f"git-history:{commit}" for commit in (scope["repo"].get("git_history") or {}).get("commits", []))
+    allowed.update(f"make-expansion:{target}" for target in scope.get("make_expansion", []))
+    started = parse_utc(record.get("started_at_utc"))
+    problems: list[str] = []
+    given: set[str] = set()
+    for index, item in enumerate(items):
+        where = f"declared_contracts[{index}]"
+        try:
+            _declared_keys(item, required={"id", "kind", "verified_before_run", "observed", "verified_at_utc"}, optional={"rule"}, where=where)
+        except ValueError as error:
+            problems.append(f"声明级承接：{error}")
+            continue
+        kind, ident = item["kind"], item["id"]
+        if kind not in (*_DECLARED_SCOPE_CONTRACT_TYPES, "git-history", "make-expansion") or not isinstance(ident, str) or not ident:
+            problems.append(f"声明级承接：{where} 的 kind／id 非法：{kind!r}／{ident!r}")
+            continue
+        full = ident if ident.startswith(f"{kind}:") else f"{kind}:{ident}"
+        if full not in allowed:
+            problems.append(f"声明级承接：{where} 的合同 {full} 不在声明范围的合同里")
+            continue
+        if full in given:
+            problems.append(f"声明级承接：合同凭证 {full} 重复")
+            continue
+        given.add(full)
+        if item["verified_before_run"] is not True:
+            problems.append(f"声明级承接：合同凭证 {full} 的 verified_before_run 不是 true（未在单元启动前核验）")
+        verified = parse_utc(item["verified_at_utc"])
+        if verified is None or (started is not None and verified > started):
+            problems.append(f"声明级承接：合同凭证 {full} 的 verified_at_utc 不可解析或晚于单元启动时间")
+        if not isinstance(item["observed"], dict):
+            problems.append(f"声明级承接：合同凭证 {full} 的 observed 不是对象")
+            continue
+        entry = contracts.get(f"contract:{full}")
+        detail = entry.get("detail") if isinstance(entry, Mapping) and isinstance(entry.get("detail"), dict) else {}
+        if "rule" in item and item["rule"] != detail.get("rule"):
+            problems.append(f"声明级承接：合同凭证 {full} 的 rule 与合同条目的规则不一致")
+        problems.extend("声明级承接：" + text for text in _declared_observed_problems(kind, full.split(":", 1)[1], item["observed"], detail, files))
+    for missing in sorted(required - given):
+        problems.append(f"声明级承接：缺少合同凭证 {missing}（该合同的初态须在单元启动前核验并写进 declared_contracts）")
+    return problems
+
+
+def _check_declared_route(store: "RecordStore", path: Path, record: dict[str, Any] | None, current: "Current", facts: "RunFacts",
+                          *, thorough: bool = True) -> list[str]:
+    """``check_record`` 头部包装：当前输入里有 ``declared-inputs-scope`` 条目的单元（声明级承接）走这里。
+
+    通用项（格式、自摘要、正式执行、单元、结论、规格、输入摘要、策略、环境、执行器、期限、原运行清单、日志）全部交给原
+    ``check_record``——复制一份 facts，``require_read_audit`` 置假（声明级单元的读集判据不是旧的 all-file-paths/v1）、
+    ``declared_route`` 置真（防递归）后调用一次，得到通用问题；然后追加声明级读集覆盖的问题（``_check_declared_audit``）。
+    没有任何一项通用核对被绕过，只是替换了「读集覆盖」这一项的判据。"""
+
+    import copy
+
+    generic = copy.copy(facts)
+    generic.require_read_audit = False
+    generic.declared_route = True
+    problems = check_record(store, path, record, current, generic, thorough=thorough)
+    if record is None or (problems and not thorough):
+        return problems
+    return problems + _check_declared_audit(store, record, current, facts)
+
+
+def _check_declared_audit(store: "RecordStore", record: Mapping[str, Any], current: "Current", facts: "RunFacts") -> list[str]:
+    """声明级读集覆盖的消费者核验（只读封存物，不探测当前磁盘、docker、git；``facts.historical_read_audit`` 为真或假时做的事
+    完全相同——当前环境与来源是否一致由通用的输入摘要比较保证）。返回问题列表，空＝通过。
+
+    1. 范围条目：记录输入里恰有一个 ``declared-inputs-scope``，输入明细重算出的摘要等于 ``inputs_sha256``，条目的声明范围
+       通过 ``validate_declared_scope``，条目摘要等于 ``sha256_json({scope, sample})``；
+    2. ``read_audit``：``coverage_scope``＝``declared-inputs/v1``、覆盖闭合、状态通过、未声明数为零、绑定同一个
+       ``inputs_sha256``、``sample_binding`` 与范围条目登记的单元／命令／范围／证据摘要逐项相等；
+    3. 证据：从记录库取封存的采样证据，字节摘要等于登记的证据摘要，格式合格，属于本单元；**命令绑定**——记录封存的 spec
+       （其摘要必须等于 spec_sha256）里的 argv 等于证据的 launcher＋argv，工作目录等于 ``read_audit.repo_root``＋``cwd_rel``，
+       也就是证据描述的正是这条记录实际执行的命令；
+    4. **重算覆盖**：用 ``declared_coverage`` 对证据和范围重新计算，必须全部落在声明内。**不信任**证据或 ``read_audit`` 里写的
+       结论：把 ``undeclared_count`` 改成 0 也过不了这一步；
+    5. 合同：输入里的 ``contract:*`` 条目与声明范围要求的合同一一对应、格式合格（不探测当前环境）；
+       ``declared_contracts`` 运行前凭证见 ``_declared_credential_problems``；命令运行期要求（requires）对照封存的 spec 核对；
+       ``repo.installed_dirs`` 绑定的合同必须是依赖安装结果合同（role＝dependency-install）。"""
+
+    problems: list[str] = []
+
+    def fail(text: str) -> list[str]:
+        problems.append("声明级承接：" + text)
+        return problems
+
+    # ---- 1. 范围条目 ----
+    inputs = record.get("inputs")
+    if not isinstance(inputs, list):
+        return fail("记录没有输入明细")
+    try:
+        if entries_sha256(inputs) != record.get("inputs_sha256"):
+            return fail("记录的输入明细重算出的摘要与 inputs_sha256 不符（明细被改过）")
+    except (KeyError, TypeError):
+        return fail("记录的输入明细格式非法")
+    names = [item.get("name") for item in inputs if isinstance(item, Mapping)]
+    if len(names) != len(set(names)):
+        return fail("记录的输入明细里有重名条目")
+    scoped = [item for item in inputs if isinstance(item, Mapping) and item.get("name") == DECLARED_SCOPE_ENTRY]
+    if len(scoped) != 1:
+        return fail(f"记录须恰含一个 {DECLARED_SCOPE_ENTRY} 条目（实际 {len(scoped)} 个）")
+    entry = scoped[0]
+    detail = entry.get("detail")
+    if entry.get("category") != "policy" or not isinstance(detail, dict) or set(detail) != {"scope", "sample"}:
+        return fail(f"{DECLARED_SCOPE_ENTRY} 条目的格式非法（须为 policy 类别，detail 恰含 scope 与 sample）")
+    try:
+        scope = validate_declared_scope(detail["scope"])
+        reference = _declared_sample_ref(detail["sample"])
+    except ValueError as error:
+        return fail(f"{DECLARED_SCOPE_ENTRY} 条目的声明范围或采样引用非法：{error}")
+    if entry.get("sha256") != sha256_json({"scope": scope, "sample": reference}):
+        return fail(f"{DECLARED_SCOPE_ENTRY} 条目的摘要与它自带的范围全文、采样引用不符")
+
+    # ---- 2. read_audit ----
+    audit = record.get("read_audit")
+    if not isinstance(audit, Mapping):
+        return fail("记录没有 read_audit")
+    if (audit.get("coverage_scope") != DECLARED_COVERAGE_SCOPE or audit.get("coverage_complete") is not True
+            or audit.get("status") != "passed" or not _declared_int(audit.get("undeclared_count")) or audit["undeclared_count"] != 0
+            or audit.get("undeclared") not in (None, [])):
+        return fail(f"read_audit 不是通过的 {DECLARED_COVERAGE_SCOPE} 覆盖（coverage_scope、coverage_complete、status、undeclared_count 须全部成立）")
+    if audit.get("inputs_sha256") != record.get("inputs_sha256"):
+        return fail("read_audit 绑定的 inputs_sha256 与记录不符")
+    if audit.get("sample_origin", "registry") not in ("registry", "run"):
+        return fail(f"read_audit.sample_origin 只能是 registry 或 run：{audit.get('sample_origin')!r}")
+    repo_root = audit.get("repo_root")
+    if not isinstance(repo_root, str) or not repo_root.startswith("/"):
+        return fail("read_audit.repo_root 缺失或不是绝对路径")
+    trace, binding = audit.get("trace"), audit.get("sample_binding")
+    if not isinstance(trace, Mapping) or not isinstance(trace.get("sha256"), str) or not _DECLARED_SHA256.fullmatch(trace["sha256"]):
+        return fail("read_audit.trace.sha256 缺失或不是 64 位十六进制")
+    try:
+        _declared_keys(binding, required={"unit_id", "command_sha256", "scope_sha256", "evidence_sha256"}, where="read_audit.sample_binding")
+    except ValueError as error:
+        return fail(str(error))
+    digest = trace["sha256"]
+    expected_binding = {"unit_id": record.get("unit_id"), "command_sha256": reference["command_sha256"],
+                        "scope_sha256": sha256_json(scope), "evidence_sha256": reference["evidence_sha256"]}
+    if binding != expected_binding or digest != reference["evidence_sha256"]:
+        return fail("read_audit 的证据绑定（sample_binding、trace.sha256）与范围条目登记的单元、命令、范围、证据摘要不一致")
+
+    # ---- 3. 证据与命令绑定 ----
+    stored = store.log_path(digest)
+    try:
+        if not stored.is_file() or file_sha256(stored) != digest:
+            return fail("封存的采样证据缺失或摘要漂移")
+        sample = _declared_validate_sample(json.loads(stored.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as error:
+        return fail(f"封存的采样证据读不出来或格式非法：{error}")
+    command = sample["command"]
+    if sample["unit_id"] != record.get("unit_id"):
+        return fail("封存的采样证据属于别的单元")
+    sampler = sample["sampled"].get("sampler_sha256")
+    if sampler is not None and sampler != reference["sampler_sha256"]:
+        problems.append("声明级承接：采样证据自称的采样器摘要与范围条目登记的不一致")
+    spec = record.get("spec")
+    if not isinstance(spec, Mapping) or sha256_json(spec) != record.get("spec_sha256"):
+        return fail("记录封存的 spec 与 spec_sha256 不符，无法据它核对命令")
+    if record.get("unit_type") != "command" or spec.get("type") != "command":
+        return fail("声明级承接只适用于命令单元")
+    if command["sha256"] != reference["command_sha256"]:
+        return fail("采样证据的命令摘要与范围条目登记的不符")
+    if spec.get("argv") != command["launcher"] + command["argv"]:
+        return fail("记录执行的命令行不是采样证据描述的那条命令（spec.argv 不等于证据的 launcher＋argv）")
+    working = os.path.normpath(os.path.join(repo_root, "" if command["cwd_rel"] == "." else command["cwd_rel"]))
+    if not isinstance(spec.get("cwd"), str) or os.path.normpath(spec["cwd"]) != working:
+        return fail("记录执行的工作目录不是采样证据描述的那个（read_audit.repo_root＋cwd_rel 与 spec.cwd 不符）")
+
+    # ---- 4. 重算覆盖（不信任任何已写下的结论）----
+    result = declared_coverage(sample, scope, command_sha256=reference["command_sha256"])
+    if not result["ok"]:
+        shown = "；".join(f"{item['rule']} {item['path'] or item['reason']}" for item in result["undeclared"][:3])
+        problems.append(f"声明级承接：重算读集覆盖不成立（共 {result['counts']['undeclared']} 处未覆盖，例如 {shown}）")
+
+    # ---- 5. 合同条目、运行前凭证、运行期要求 ----
+    expected = {f"contract:{contract}": tuple(contract.split(":", 1)) for contract in scope.get("contracts", [])}
+    for commit in (scope["repo"].get("git_history") or {}).get("commits", []):
+        expected[f"contract:git-history:{commit}"] = ("git-history", commit)
+    for target in scope.get("make_expansion", []):
+        expected[f"contract:make-expansion:{target}"] = ("make-expansion", target)
+    present = {item["name"]: item for item in inputs if isinstance(item, Mapping) and str(item.get("name")).startswith("contract:")}
+    for name in sorted(set(expected) - set(present)):
+        problems.append(f"声明级承接：缺少声明范围要求的合同条目 {name}")
+    for name in sorted(set(present) - set(expected)):
+        problems.append(f"声明级承接：多出声明范围没有要求的合同条目 {name}")
+    requirements: list[tuple[Any, str]] = [(scope["requires"], "声明范围的 requires")] if "requires" in scope else []
+    for name in sorted(set(expected) & set(present)):
+        kind, ident = expected[name]
+        problems.extend("声明级承接：" + text for text in _declared_contract_entry_problems(present[name], kind, ident))
+        contract_detail = present[name].get("detail")
+        if kind in ("cache", "toolchain") and isinstance(contract_detail, dict) and "requires" in contract_detail:
+            requirements.append((contract_detail["requires"], f"合同 {name} 的 requires"))
+    for requires, label in requirements:
+        try:
+            _declared_requires_shape(requires, label)
+        except ValueError:
+            continue  # 形状非法已在合同条目核验里报过
+        problems.extend("声明级承接：" + text for text in _declared_requires_problems(requires, record, label))
+    # 依赖安装目录里的未跟踪读取，唯一的凭据是它绑定的合同；合同必须真的是「安装结果由锁文件决定」那一类（role＝dependency-install，
+    # 规则 lock-derived-pnpm），否则一个空洞的合同（比如 any-scratch）就能放行任意未跟踪读取。
+    for item in scope["repo"].get("installed_dirs", []):
+        entry = present.get(f"contract:{item['contract']}")
+        contract_detail = entry.get("detail") if isinstance(entry, Mapping) else None
+        if isinstance(contract_detail, dict) and contract_detail.get("role") != "dependency-install":
+            problems.append(f"声明级承接：安装目录 {item['prefix']} 绑定的合同 {item['contract']} 不是依赖安装结果合同"
+                            "（role 须为 dependency-install，规则 lock-derived-pnpm）")
+    files = {str(item["name"]): str(item["sha256"]) for item in inputs if isinstance(item, Mapping) and str(item.get("name")).startswith("file:")}
+    problems.extend(_declared_credential_problems(record, scope, present, files))
     return problems
 
 
