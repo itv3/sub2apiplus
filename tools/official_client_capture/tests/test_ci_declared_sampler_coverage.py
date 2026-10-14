@@ -9,6 +9,8 @@
 * T5：起草完用登记侧的 ``declared_coverage`` 自检，不通过写 rerun-only（原因带规则统计和前 3 处），评审清单第 13 节列全部未覆盖项；
 * 祖先链目录上的 ``read`` 要区分“打开目录”与“读文件”：别名根与祖先目录的 ``read`` 记成 ``dir``。
 
+WP4d：登记侧（WP1e 起）要求声明了 cache:node-modules 就单独列出 frontend/pnpm-lock.yaml，``draft`` 补入它，前端式草案才过自检（``ClosureDraftTests``）。
+
 与登记侧的互操作都是直接断言（``repo.root_listing`` 已随 WP1c 进入登记侧）。旧用例见 ``test_ci_declared_sampler.py`` 与
 ``test_ci_declared_sampler_followup.py``：它们钉的是按读集机械归并本身，所以调用 ``draft`` 时用 ``coverage_check=False`` 关掉自检。
 """
@@ -359,6 +361,23 @@ class ClosureDraftTests(CoverageBase):
         above, _ = self.unit(self.sample(self.frontend_reads() + [stat_line(t, f"{t}/frontend")], installed_dirs=[(NODE_MODULES, NODE_CONTRACT)]))
         self.assertEqual(above["status"], "declared", above.get("reason"))
         self.assertFalse([item for item in above["scope"]["repo"]["ranges"] if item["include"][0] == "frontend/"])
+
+    def test_the_cache_contract_lock_file_is_what_makes_a_frontend_draft_registrable(self) -> None:
+        """WP4d：登记侧（WP1e 起）要求声明了 cache:node-modules 就单独列出 frontend/pnpm-lock.yaml。draft 补入它，覆盖自检才通过；拿掉它登记侧报 C0-scope。"""
+        entry, review = self.unit(self.sample(self.frontend_reads(), installed_dirs=[(NODE_MODULES, NODE_CONTRACT)]))
+        self.assertEqual(entry["status"], "declared", entry.get("reason"))
+        self.assertIn("frontend/pnpm-lock.yaml", entry["scope"]["repo"]["files"])
+        self.assertIn("`frontend/pnpm-lock.yaml`（由合同要求补入）", review)
+        self.assertIn("**覆盖自检通过**", review)
+        scope = copy.deepcopy(entry["scope"])
+        scope["repo"]["files"].remove("frontend/pnpm-lock.yaml")
+        report = self.coverage_of(scope)
+        self.assertFalse(report["ok"])
+        self.assertEqual(rules_of(report), {"C0-scope"})
+        self.assertIn("cache:node-modules", report["undeclared"][0]["reason"])
+        # 对照：没有安装目录（没有 cache:node-modules 合同）就不补，也不需要。
+        plain, _ = self.unit(self.sample())
+        self.assertNotIn("frontend/pnpm-lock.yaml", plain["scope"]["repo"]["files"])
 
     def test_a_stat_only_tracked_file_makes_the_self_check_fail_visibly(self) -> None:
         t = str(self.tree)
@@ -786,6 +805,16 @@ class CommandLineTests(CoverageBase):
         self.assertNotIn("root_listing", scope["repo"])
         self.assertEqual([item["include"][0] for item in scope["repo"]["ranges"]], ["backend/"])
         self.assertIn("已被 `--no-coverage-check` 关闭", self.review_path.read_text(encoding="utf-8"))
+
+    def test_the_draft_command_line_refuses_an_over_wide_class_prefix(self) -> None:
+        """WP4d：draft 的 --class-prefix 与登记侧一致，scratch／virtual 的前缀宽度受限；合格的照常。"""
+        self.draft(self.sample(), coverage_check=False)
+        for spec, message in (("/home/=scratch", "class=scratch 的前缀只许"), ("{TMP}=scratch", "--class-prefix 必须是"), ("/opt/=virtual", "class=virtual 的前缀只许")):
+            completed = self.run_draft("--class-prefix", spec)
+            self.assertEqual(completed.returncode, 2, spec)
+            self.assertIn(message, completed.stderr, spec)
+        good = self.run_draft("--class-prefix", "{HOME}/.config/go/telemetry/=scratch", "--class-prefix", "/run/special/=virtual")
+        self.assertEqual(good.returncode, 0, good.stderr)
 
     def test_a_failed_check_counts_as_rerun_only_in_the_command_line_summary(self) -> None:
         t = str(self.tree)

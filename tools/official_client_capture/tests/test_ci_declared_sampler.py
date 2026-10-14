@@ -9,6 +9,9 @@
 * T-D1：draft 的归并阈值、上限、未归类清单与评审清单；
 * T-R1：run 构造的 argv（launcher 在 strace 外侧、命令取自清单）、环境、冷热缓存、前后 git status、docker 钩子；用假 strace
   与假 launcher 在本机把 run、merge、draft 整条链跑通，不依赖 Linux 与真实 strace。
+
+步骤 5 WP4d：S3（execveat 与别名启动的 git 照样收集，认不出形态的 exec 行记 ``sampler:exec-unparsed``）的过滤器用例在 ``FilterTests``；S6：docker 钩子用例
+与机器上有没有 docker 无关（第二次运行把子进程环境的 PATH 限定成只含假 strace／假 launcher 的目录），CI 的 ubuntu runner 自带 docker 也稳定。
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import signal as signals
 import stat
 import subprocess
@@ -308,6 +312,99 @@ class FilterTests(unittest.TestCase):
                                                     ["git", ds.GIT_ARGV_HIDDEN], ["git", "status"]], "按 argv[0] 判定，去重，保持首次出现顺序")
         self.assertEqual(document["coverage"]["unresolved"], 0, "execve 行也照常交给严格解析器")
 
+    def test_execveat_and_alias_invocations_of_git_are_collected(self) -> None:
+        """S3：execveat 启动的 git（路径参数是 git，或 AT_EMPTY_PATH 时 dirfd 注解里的路径是 git）与别名调用（argv[0] 不是 git、可执行文件是 git）都收集；
+        不是 git 的 exec 行（execve／execveat）一律不收集，也不记未解析原因。"""
+        t = real.TREE
+        lines = [
+            f'4242 execveat(AT_FDCWD<{t}/backend>, "/usr/bin/git", ["git", "show", "{SHA}"], 0x1 /* 17 vars */, 0) = 0',
+            f'4243 execveat(3</usr/bin/git>, "", ["git", "log", "-1", "{SHA}"], 0x1 /* 17 vars */, AT_EMPTY_PATH) = 0',
+            f'4244 execveat(4</usr/bin/git>, "", ["gitx", "show", "{SHA}"], 0x1 /* 17 vars */, AT_EMPTY_PATH) = 0',  # 别名：argv[0] 不是 git，dirfd 注解里是 git
+            f'4245 execve("/usr/bin/git", ["gitx", "show", "{SHA}"], 0x1 /* 17 vars */) = 0',  # 别名，argv 与上一条相同：去重
+            f'4246 execveat(AT_FDCWD<{t}>, "/usr/bin/git", 0xffffd2a979c8, 0x2, 0) = 0',  # argv 不可见，路径是 git：哨兵
+            f'4247 execveat(5</usr/bin/git>, "", 0xffffd2a979c8, 0x2, AT_EMPTY_PATH) = 0',  # AT_EMPTY_PATH 且 argv 不可见：从 dirfd 注解取 git，哨兵
+            f'4248 execveat(AT_FDCWD<{t}>, "/usr/bin/cat", ["cat", "x"], 0x1, 0) = 0',  # 不是 git
+            f'4249 execveat(6</usr/bin/cat>, "", ["cat", "x"], 0x1, AT_EMPTY_PATH) = 0',  # 不是 git
+            f'4250 execve("/usr/bin/env", ["git", "status"], 0x1 /* 17 vars */) = 0',  # 按 argv[0] 判：env 启动的 git
+            f'4251 execveat(7, "", ["git", "tag"], 0x1, AT_EMPTY_PATH) = 0',  # 没有注解，但 argv[0] 是 git：照样收集，不需要注解
+            "4242 <... execve resumed>) = 0",  # resumed 行、路径里碰巧含 “execve(” 的普通行都不是 exec 调用行
+            f'4242 openat(AT_FDCWD<{t}>, "/tmp/execve(1)", O_RDONLY) = 3</tmp/execve(1)>',
+            f'4242 openat(AT_FDCWD<{t}>, "/tmp/x execveat(2) y", O_RDONLY) = 3</tmp/x execveat(2) y>',
+        ]
+        document = feed_all(ds.StreamAggregator(self.aliases, unit_id=UNIT), lines)
+        self.assertEqual(document["git_commands"], [["git", "show", SHA], ["git", "log", "-1", SHA], ["gitx", "show", SHA], ["git", ds.GIT_ARGV_HIDDEN],
+                                                    ["git", "status"], ["git", "tag"]], "按 argv[0] 或可执行文件的 basename 判定，去重，保持首次出现顺序")
+        self.assertNotIn("sampler:exec-unparsed", document["coverage"]["unresolved_reasons"])
+        self.assertEqual(ds.validate_raw(document), [])
+
+    def test_parse_git_execve_on_the_exec_call_shapes(self) -> None:
+        t = real.TREE
+        sentinel = ("git", ds.GIT_ARGV_HIDDEN)
+        cases = [
+            (f'1 execve("/usr/bin/git", ["git", "show", "{SHA}"], 0x1) = 0', ("git", "show", SHA)),
+            (f'execve("/usr/bin/git", ["git", "show"], 0x1) = 0', ("git", "show")),  # 没有进程号前缀
+            ('1 execve("/usr/bin/git", ["gitx", "show"], 0x1) = 0', ("gitx", "show")),  # 别名
+            ('1 execve("/opt/tools/git", ["/opt/tools/git", "show"], 0x1) = 0', ("/opt/tools/git", "show")),
+            ('1 execve("/usr/bin/git", 0x7ffd, 0x1) = 0', sentinel),
+            ('1 execve("/usr/bin/git", [], 0x1) = 0', sentinel),
+            ('1 execve("/usr/bin/cat", ["cat"], 0x1) = 0', None),
+            ('1 execve("/usr/bin/cat", 0x7ffd, 0x1) = 0', None),
+            ('1 execve("", ["x"], 0x1) = -1 ENOENT (No such file or directory)', None),  # 空路径的 execve 不会成功，也不是 git
+            ('1 execve("/usr/bin/env", ["git", "status"], 0x1) = 0', ("git", "status")),
+            (f'1 execveat(AT_FDCWD<{t}>, "git", ["git", "show"], 0x1, 0) = 0', ("git", "show")),  # 相对路径的可执行文件
+            (f'1 execveat(AT_FDCWD<{t}>, "/usr/bin/git", ["gitx"], 0x1, 0) = 0', ("gitx",)),
+            ('1 execveat(3</usr/bin/git>, "", ["gitx"], 0x1, AT_EMPTY_PATH) = 0', ("gitx",)),
+            ('1 execveat(3</usr/bin/git>, "", 0x7ffd, 0x1, AT_EMPTY_PATH) = 0', sentinel),
+            ('1 execveat(3</usr/bin/cat>, "", ["cat"], 0x1, AT_EMPTY_PATH) = 0', None),
+            ('1 execveat(3</usr/bin/cat>, "", 0x7ffd, 0x1, AT_EMPTY_PATH) = 0', None),
+            ('1 execveat(3</a,b/git>, "", ["x"], 0x1, AT_EMPTY_PATH) = 0', ("x",)),  # 注解里带逗号：dirfd 的注解是路径本身，basename 是 git
+            ('1 execveat(3, "", ["git", "tag"], 0x1, AT_EMPTY_PATH) = 0', ("git", "tag")),  # 没有注解但 argv[0] 是 git
+            ('1 execveat(3</usr/bin/git>, "/usr/bin/cat", ["cat"], 0x1, 0) = 0', None),  # 路径参数非空时看路径参数，不看 dirfd 注解
+            (f'1 execveat(3, "{t}/git", ["x"], 0x1, 0) = 0', ("x",)),
+            ("1 <... execve resumed>) = 0", None), ('1 openat(AT_FDCWD</x>, "execve(1)", O_RDONLY) = 3</x/execve(1)>', None), ("没有进程号的杂散输出", None),
+            ('1 clone(child_stack=NULL, flags=CLONE_VFORK|SIGCHLD <unfinished ...>', None),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(ds.parse_git_execve(line), expected)
+        unparsed = [
+            '1 execve(0x7ffd1234, 0x1, 0x2) = 0',  # 路径参数不是字符串
+            '1 execve(NULL, 0x1, 0x2) = -1 EFAULT (Bad address)',
+            f'1 execveat(AT_FDCWD<{t}>, 0x55d, 0x1, 0x2, 0) = 0',
+            '1 execveat(3, "", ["sh", "-c", "x"], 0x1, AT_EMPTY_PATH) = 0',  # AT_EMPTY_PATH 没有路径注解，argv[0] 又不是 git：排除不了它是 git
+            '1 execveat(3<pipe:[123]>, "", ["sh"], 0x1, AT_EMPTY_PATH) = 0',  # 注解不是绝对路径
+            '1 execveat(3<socket:[1]>, "", 0x7ffd, 0x1, AT_EMPTY_PATH) = 0',
+            '1 execveat(AT_FDCWD</x>, "", ["sh"], 0x1, AT_EMPTY_PATH) = 0',  # AT_FDCWD 的注解是当前目录，不是可执行文件
+            '1 execveat(abc',  # 残缺
+            '1 execveat(3</usr/bin/git>, "x"',  # 残缺：路径之后没有 “, ”
+        ]
+        for line in unparsed:
+            with self.subTest(line=line):
+                with self.assertRaises(ds.ExecLineUnparsed):
+                    ds.parse_git_execve(line)
+
+    def test_unrecognized_exec_forms_fail_closed_with_an_unresolved_reason(self) -> None:
+        """S3：行首是 exec 调用却认不出形态，记 sampler:exec-unparsed（带原始行样例），不悄悄漏掉；能认出的形态（包括不是 git 的）不记。"""
+        t = real.TREE
+        unparsed = ['4243 execve(0x7ffd1234, 0x1, 0x2) = 0', '4243 execveat(3, "", ["sh", "-c", "x"], 0x1, AT_EMPTY_PATH) = 0',
+                    f'4243 execveat(AT_FDCWD<{t}>, 0x55d, 0x1, 0x2, 0) = 0', '4243 execveat(3<pipe:[123]>, "", ["sh"], 0x1, AT_EMPTY_PATH) = 0']
+        for line in unparsed:
+            with self.subTest(line=line):
+                document = feed_all(ds.StreamAggregator(self.aliases, unit_id=UNIT), [line])
+                reasons = document["coverage"]["unresolved_reasons"]
+                self.assertEqual(reasons.get("sampler:exec-unparsed"), 1, reasons)
+                self.assertEqual(document["coverage"]["unresolved_samples"]["sampler:exec-unparsed"], [line.replace(t, "{TREE}")])
+                self.assertEqual(document["git_commands"], [])
+                self.assertEqual(document["coverage"]["unresolved"], sum(reasons.values()))
+                self.assertEqual(ds.validate_raw(document), [])
+        three = feed_all(ds.StreamAggregator(self.aliases, unit_id=UNIT), unparsed[:2] + [unparsed[0]])
+        self.assertEqual(three["coverage"]["unresolved_reasons"]["sampler:exec-unparsed"], 3, "每次出现都计数，样例最多 3 条")
+        self.assertEqual(len(three["coverage"]["unresolved_samples"]["sampler:exec-unparsed"]), 3)
+        # 认得出的形态不记：不是 git 的 exec、argv[0] 是 git 的 AT_EMPTY_PATH（不需要注解）。
+        fine = ['4243 execve("/usr/bin/cat", ["cat"], 0x1) = 0', '4243 execveat(3</usr/bin/cat>, "", ["cat"], 0x1, AT_EMPTY_PATH) = 0',
+                '4243 execveat(3, "", ["git", "tag"], 0x1, AT_EMPTY_PATH) = 0']
+        self.assertNotIn("sampler:exec-unparsed", feed_all(ds.StreamAggregator(self.aliases, unit_id=UNIT), fine)["coverage"]["unresolved_reasons"])
+
     def test_non_utf8_bytes_survive_the_cli_and_the_file_stays_ascii(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -505,6 +602,10 @@ class MergeTests(TempCase):
             ("write-home", {"lines": [write_line(cwd, f"{HOME}/.config/go/telemetry/x.count")]}, {}, "home-config 类"),
             ("write-unclassified", {"lines": [write_line(cwd, "/opt/other/x")]}, {}, "未归类"),
             ("git-argv-hidden", {"lines": ['4242 execve("/usr/bin/git", 0x1, 0x2) = 0']}, {}, "[git-argv]"),
+            # 步骤 5 WP4d 的 S3、S1：认不出形态的 exec 调用，和“被当作垃圾丢弃的行，它的 tid 之后又出现了”，都是不可容忍的未解析原因，采样判无效。
+            ("exec-unparsed", {"lines": ['4242 execve(0x7ffd1234, 0x1, 0x2) = 0']}, {}, "sampler:exec-unparsed"),
+            ("detached-not-terminal", {"lines": ['711353 lsetxattr(0x1, 0x2 <detached ...>', open_line(cwd, f"{t}/backend/a.go", pid=711353)]}, {},
+             "sampler:detached-not-terminal:711353"),
             ("no-lines", {"replace": []}, {}, "没有任何 strace 行"),
         ]
         for name, extra, options, expected in cases:
@@ -934,10 +1035,19 @@ class RunTests(TempCase):
         docker = ds.load_document(raw_path)["run"]["docker"]
         wanted = [{"id": "bbb222", "image": "postgres:18.1-alpine3.23"}]
         self.assertEqual(docker, {"enabled": True, "error": None, "new_containers": wanted, "created": wanted})
+        # 第二次：真的没有 docker。不能只删掉 self.bin 里的假 docker——PATH 后面的真实目录里要是装了 docker（GitHub 的 ubuntu runner 自带 /usr/bin/docker），
+        # 采样器照样找得到它，run.docker.error 就是 None，用例在装了 docker 的机器上会红（本机 Mac 没有 docker 所以一直绿）。做法与机器上有没有 docker 无关：
+        # 子进程环境的 PATH 只留 self.bin（里面是假 strace 与假 launcher，没有 docker；run 本身用到的 sh、python 都是绝对路径，不靠 PATH）。仍然是真的
+        # 子进程、真的 PATH 查找——只是这个 PATH 上解析不出 docker。
         (self.bin / "docker").unlink()
-        code, raw_path, _summary = self.run_once("cold", label="no-docker", docker_hooks=True)
+        no_docker = {**self.env, "PATH": str(self.bin)}
+        self.assertIsNone(shutil.which("docker", path=no_docker["PATH"]), "前提：这个 PATH 上没有 docker")
+        self.assertEqual(sorted(path.name for path in self.bin.iterdir()), ["fake-launcher", "strace"], "PATH 上只有假 strace 与假 launcher")
+        code, raw_path, _summary = self.run_once("cold", label="no-docker", docker_hooks=True, base_env=no_docker)
         self.assertEqual(code, 0)
-        self.assertTrue(ds.load_document(raw_path)["run"]["docker"]["error"], "Docker 不可用只记录错误，不中断采样")
+        docker = ds.load_document(raw_path)["run"]["docker"]
+        self.assertTrue(docker["error"], "Docker 不可用只记录错误，不中断采样")
+        self.assertEqual((docker["enabled"], docker["new_containers"], docker["created"]), (True, [], []))
 
     def test_command_line_exit_codes_and_error_messages(self) -> None:
         self.write_manifest(["/bin/sh", "-c", "exit 0"])

@@ -12,6 +12,15 @@
 * ``draft`` 对未固定的 git 用法（HEAD、引用、分支、标签，tag／worktree 等子命令，参数不可见）自动写成 rerun-only 并带 head: true；
 * 与登记侧（``unit_records``）互操作：常量与取值规则两边一致，前端式草案端到端被登记侧的 scope 校验与覆盖检查接受。
 
+步骤 5 WP4d（采样器对齐 WP1e 加固后的登记侧）：
+
+* ``draft`` 为缓存合同补锁文件（cache:node-modules→frontend/pnpm-lock.yaml、cache:go-mod-cache→backend/go.sum），缺失／未跟踪的只标注不凭空添加；
+* ``--installed-dir`` 的前缀与合同绑定、``--transient`` 的通配符上限 4 个、``--class-prefix`` 的 scratch／virtual 前缀宽度：命令行校验与登记侧各自测试、交叉核对
+  （常量表逐项同值、边界值逐个核对；采样器不 import 登记侧的私有常量，AST 测试钉住）；
+* S3：execveat 与别名启动的 git 照样收集，认不出形态的 exec 行失败关闭（过滤器层面的用例在 ``test_ci_declared_sampler``）。
+
+git“固定用法”判定的规格 v2（格式串白名单、``--`` 规则、ASCII 数字、删去 ``--oneline``）与 2000+ 条语料见 ``test_ci_declared_sampler_git_spec``。
+
 所有新增的 raw／sample／review 键都是可选的：不给新选项时输出与从前逐字相同，旧文件缺新键照样通过校验。
 """
 
@@ -51,6 +60,14 @@ FOLLOWUP_FILES = {
 }
 NODE_MODULES = "frontend/node_modules/"
 NODE_CONTRACT = "cache:node-modules"
+
+
+def reviewed_installed_dirs(extra: dict[str, str]):
+    """让采样器的“安装目录前缀与合同绑定”表（``ds.INSTALLED_DIR_PREFIXES``，生产里只有评审过的 ``cache:node-modules`` 一项）在 with 块里临时多几项。
+
+    WP4d 起 ``--installed-dir`` 的前缀必须恰等于合同在这张表里的安装目录（与登记侧 ``_DECLARED_INSTALLED_PREFIXES`` 一致）。下面几个用例验证的是 merge 机制本身
+    （前缀嵌套、盖住已跟踪路径、同前缀两个合同……），要用 frontend/node_modules/ 之外的前缀才造得出场景；这里假装它们也是评审过的，只改这张表，断言一字不动。"""
+    return mock.patch.dict(ds.INSTALLED_DIR_PREFIXES, extra)
 
 
 def unfinished_lines(tree: object, count: int, *, first_pid: int = 5000) -> list[str]:
@@ -368,8 +385,9 @@ class MergeFollowupTests(FollowupBase):
         self.assertEqual({key: row[key] for key in ("prefix", "contract", "reads", "unused")}, {"prefix": NODE_MODULES, "contract": NODE_CONTRACT, "reads": 3, "unused": False})
         self.assertEqual(row["sample"], [f"frontend/node_modules/.pnpm/p{index}/node_modules/p{index}/index.js" for index in range(3)])
         self.assertEqual(sample["review"]["untracked_reads"]["count"], 0)
-        # 前缀嵌套时读取记在最长的前缀名下（不重复计数）；外层前缀一条都没分到就标 unused。
-        nested = self.merge(self.raw(lines), installed_dirs=[(NODE_MODULES, NODE_CONTRACT), (f"{NODE_MODULES}.pnpm/", "cache:pnpm-store")])
+        # 前缀嵌套时读取记在最长的前缀名下（不重复计数）；外层前缀一条都没分到就标 unused。（WP4d：嵌套前缀要先让绑定表认这个合同，见 reviewed_installed_dirs）
+        with reviewed_installed_dirs({"cache:pnpm-store": f"{NODE_MODULES}.pnpm/"}):
+            nested = self.merge(self.raw(lines), installed_dirs=[(NODE_MODULES, NODE_CONTRACT), (f"{NODE_MODULES}.pnpm/", "cache:pnpm-store")])
         rows = {item["prefix"]: item for item in nested["review"]["allowances"]["installed_dirs"]}
         self.assertTrue(nested["valid"], nested["invalid_reasons"])
         self.assertEqual((rows[f"{NODE_MODULES}.pnpm/"]["reads"], rows[NODE_MODULES]["reads"], rows[NODE_MODULES]["unused"]), (3, 0, True))
@@ -382,8 +400,9 @@ class MergeFollowupTests(FollowupBase):
         wrote = self.merge(self.raw(lines + [write_line(f"{t}/frontend", f"{t}/frontend/node_modules/.cache/x.json")]), installed_dirs=[(NODE_MODULES, NODE_CONTRACT)])
         self.assertFalse(wrote["valid"])
         self.assertTrue(any("[write]" in reason and "frontend/node_modules/.cache/x.json" in reason for reason in wrote["invalid_reasons"]), wrote["invalid_reasons"])
-        ignored = self.merge(self.raw(self.good() + [open_line(f"{t}/backend", f"{t}/ignored-deps/m/index.js"), write_line(f"{t}/backend", f"{t}/ignored-deps/m/cache.json")]),
-                             installed_dirs=[("ignored-deps/", "cache:ignored-deps")])
+        with reviewed_installed_dirs({"cache:ignored-deps": "ignored-deps/"}):
+            ignored = self.merge(self.raw(self.good() + [open_line(f"{t}/backend", f"{t}/ignored-deps/m/index.js"), write_line(f"{t}/backend", f"{t}/ignored-deps/m/cache.json")]),
+                                 installed_dirs=[("ignored-deps/", "cache:ignored-deps")])
         self.assertTrue(ignored["valid"], ignored["invalid_reasons"])
         # 一条都没读到的前缀标 unused，留痕但 draft 不会采用。
         idle = self.merge(self.raw(self.good()), installed_dirs=[(NODE_MODULES, NODE_CONTRACT)])
@@ -392,26 +411,53 @@ class MergeFollowupTests(FollowupBase):
 
     def test_installed_dir_over_tracked_reads_is_refused(self) -> None:
         t = str(self.tree)
-        with self.assertRaisesRegex(ds.SamplerError, r"盖住了已跟踪的路径.*frontend/package\.json"):
-            self.merge(self.raw(self.good() + self.frontend()), installed_dirs=[("frontend/", "cache:wide")])
-        with self.assertRaisesRegex(ds.SamplerError, "盖住了已跟踪的路径"):
-            self.merge(self.raw(self.good() + [list_line(f"{t}/frontend/src")]), installed_dirs=[("frontend/src/", "cache:src")])
-        # 只做 stat 探测不算读取或枚举，不报错；前缀只是已跟踪路径的祖先（不在其下）也不报错。
-        sample = self.merge(self.raw(self.good() + [stat_line(t, f"{t}/frontend/src/a.ts")]), installed_dirs=[("frontend/src/", "cache:src")])
-        self.assertTrue(sample["valid"], sample["invalid_reasons"])
+        # WP4d：frontend/、frontend/src/ 不是评审过的安装目录，要先让绑定表认这两个合同才造得出“前缀盖住已跟踪路径”的场景（见 reviewed_installed_dirs）。
+        with reviewed_installed_dirs({"cache:wide": "frontend/", "cache:src": "frontend/src/"}):
+            with self.assertRaisesRegex(ds.SamplerError, r"盖住了已跟踪的路径.*frontend/package\.json"):
+                self.merge(self.raw(self.good() + self.frontend()), installed_dirs=[("frontend/", "cache:wide")])
+            with self.assertRaisesRegex(ds.SamplerError, "盖住了已跟踪的路径"):
+                self.merge(self.raw(self.good() + [list_line(f"{t}/frontend/src")]), installed_dirs=[("frontend/src/", "cache:src")])
+            # 只做 stat 探测不算读取或枚举，不报错；前缀只是已跟踪路径的祖先（不在其下）也不报错。
+            sample = self.merge(self.raw(self.good() + [stat_line(t, f"{t}/frontend/src/a.ts")]), installed_dirs=[("frontend/src/", "cache:src")])
+            self.assertTrue(sample["valid"], sample["invalid_reasons"])
         self.merge(self.raw(self.good() + self.frontend()), installed_dirs=[(NODE_MODULES, NODE_CONTRACT)])
+        # 没有让绑定表认这两个合同时，这两个前缀在更早的参数校验就被拒绝（不留到发现盖住已跟踪路径才报错）。
+        with self.assertRaisesRegex(ds.SamplerError, "不是评审过的依赖安装合同"):
+            self.merge(self.raw(self.good() + self.frontend()), installed_dirs=[("frontend/", "cache:wide")])
 
     def test_installed_dir_arguments_are_validated(self) -> None:
         self.assertEqual(ds.parse_installed_dir("frontend/node_modules/=cache:node-modules"), (NODE_MODULES, NODE_CONTRACT))
-        self.assertEqual(ds.parse_installed_dir("a=b/=cache:x.y_z-1"), ("a=b/", "cache:x.y_z-1"), "前缀里的 = 照字面算")
+        with reviewed_installed_dirs({"cache:x.y_z-1": "a=b/"}):  # WP4d：先让绑定表认这个合同，这一条验证的是“前缀里的 = 照字面算”的解析规则
+            self.assertEqual(ds.parse_installed_dir("a=b/=cache:x.y_z-1"), ("a=b/", "cache:x.y_z-1"), "前缀里的 = 照字面算")
         for bad in ("没有等号", "frontend/node_modules=cache:x", "/abs/=cache:x", "a/../b/=cache:x", "a/./b/=cache:x", "a//b/=cache:x", "=cache:x",
                     "a/=toolchain:go", "a/=cache:", "a/=cache", "a/=cache:x:y", "a/=cache:-x", "a/=", "a\\b/=cache:x"):
             with self.subTest(bad=bad):
                 with self.assertRaises(ds.SamplerError):
                     ds.parse_installed_dir(bad)
-        with self.assertRaisesRegex(ds.SamplerError, "两个不同的合同"):
-            self.merge(self.raw(self.good()), installed_dirs=[("a/", "cache:x"), ("a/", "cache:y")])
-        self.merge(self.raw(self.good()), installed_dirs=[("a/", "cache:x"), ("a/", "cache:x")])  # 完全相同的重复登记不报错
+        with reviewed_installed_dirs({"cache:x": "a/", "cache:y": "a/"}):  # 同样：这两条验证的是同一前缀登记两个合同的机制
+            with self.assertRaisesRegex(ds.SamplerError, "两个不同的合同"):
+                self.merge(self.raw(self.good()), installed_dirs=[("a/", "cache:x"), ("a/", "cache:y")])
+            self.merge(self.raw(self.good()), installed_dirs=[("a/", "cache:x"), ("a/", "cache:x")])  # 完全相同的重复登记不报错
+
+    def test_installed_dir_prefix_must_equal_the_directory_the_contract_defines(self) -> None:
+        """WP4d：前缀与合同绑定（登记侧 _DECLARED_INSTALLED_PREFIXES）。语法合格但不是评审过的合同、或前缀不等于合同定义的目录，一律拒绝。"""
+        for bad, message in (("a/=cache:x", "不是评审过的依赖安装合同"), ("frontend/=cache:x", "不是评审过的依赖安装合同"),
+                             ("frontend/node_modules/=cache:other", "不是评审过的依赖安装合同"), ("backend/go-mod/=cache:go-mod-cache", "不是评审过的依赖安装合同"),
+                             ("frontend/=cache:node-modules", "必须等于合同 cache:node-modules 定义的安装目录"),
+                             ("frontend/node_modules/.pnpm/=cache:node-modules", "必须等于合同 cache:node-modules 定义的安装目录"),
+                             ("frontend/node_modules/x/=cache:node-modules", "必须等于合同 cache:node-modules 定义的安装目录"),
+                             ("node_modules/=cache:node-modules", "必须等于合同 cache:node-modules 定义的安装目录"),
+                             ("Frontend/node_modules/=cache:node-modules", "必须等于合同 cache:node-modules 定义的安装目录"),
+                             ("frontend/other/=cache:node-modules", "必须等于合同 cache:node-modules 定义的安装目录")):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(ds.SamplerError, message):
+                    ds.parse_installed_dir(bad)
+        # 没有尾斜杠、多余斜杠：在更早的语法检查就拒绝。
+        for bad in ("frontend/node_modules=cache:node-modules", "frontend/node_modules//=cache:node-modules", "/frontend/node_modules/=cache:node-modules"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ds.SamplerError):
+                    ds.parse_installed_dir(bad)
+        self.assertEqual(ds.INSTALLED_DIR_PREFIXES, {NODE_CONTRACT: NODE_MODULES}, "生产里只有评审过的一项")
 
     # -- --transient ------------------------------------------------------------------
     def test_transient_exempts_written_then_read_back_paths_only(self) -> None:
@@ -551,9 +597,14 @@ class MergeFollowupTests(FollowupBase):
         self.assertEqual(document["review"]["allowances"]["unix_sockets"], ["/var/run/nscd/socket"])
         self.assertEqual(document["review"]["allowances"]["installed_dirs"][0]["contract"], NODE_CONTRACT)
         self.assertEqual(document["review"]["allowances"]["transient"][0]["pattern"], "frontend/.eslintcache")
+        # WP4d：原来这里还有 `--installed-dir frontend/=cache:x` 期望“盖住了已跟踪的路径”；现在 cache:x 不是评审过的安装合同，参数校验更早就拒绝了
+        # （子进程里没法临时改绑定表）。“盖住已跟踪路径”这条 merge 机制仍由库调用的 test_installed_dir_over_tracked_reads_is_refused 钉住，这里改成钉新的拒绝。
         for extra, message in ((["--installed-dir", "frontend/node_modules/"], "前缀=合同"), (["--installed-dir", "a/=toolchain:go"], "cache:<名字>"),
                                (["--transient", "a/**/b"], "不支持 \\*\\*"), (["--allow-unix", "@abstract"], "规范绝对路径"),
-                               (["--installed-dir", "frontend/=cache:x"], "盖住了已跟踪的路径")):
+                               (["--installed-dir", "frontend/=cache:x"], "不是评审过的依赖安装合同"),
+                               (["--installed-dir", "frontend/other/=cache:node-modules"], "必须等于合同 cache:node-modules 定义的安装目录"),
+                               (["--transient", "a/*/*/*/*/*"], "最多 4 个，实际 5 个"),
+                               (["--class-prefix", "/home/=scratch"], "class=scratch 的前缀只许"), (["--class-prefix", "/opt/=virtual"], "class=virtual 的前缀只许")):
             with self.subTest(extra=extra):
                 completed = subprocess.run([*base, *extra], capture_output=True, text=True)
                 self.assertEqual(completed.returncode, 2, completed.stdout)
@@ -687,6 +738,96 @@ class DraftFollowupTests(DraftBase):
         self.assertIn("**依赖锁文件缺失**：`backend/go.sum`、`frontend/pnpm-lock.yaml`", review)
         self.assertIn("toolchain:go：缺失", review)
 
+    # -- WP4d：缓存合同的锁文件（登记侧 WP1e 起强制：cache:node-modules → frontend/pnpm-lock.yaml，cache:go-mod-cache → backend/go.sum）------------------
+    def test_cache_contract_lock_files_follow_the_installed_dir_and_the_go_mod_cache(self) -> None:
+        from tools.ci import unit_records as ur
+        # 前端：--installed-dir 带来 cache:node-modules（installed_used 并入 contracts 之后才判）→ 补入 frontend/pnpm-lock.yaml。
+        registry, review = self.draft(self.frontend_sample())
+        entry = registry["units"][UNIT]
+        self.assertEqual(entry["status"], "declared", entry.get("reason"))
+        scope = entry["scope"]
+        self.assertIn(NODE_CONTRACT, scope["contracts"])
+        self.assertIn("frontend/pnpm-lock.yaml", scope["repo"]["files"])
+        self.assertEqual(scope["repo"]["files"], sorted(set(scope["repo"]["files"])), "files 排序、不重复")
+        self.assertIn("`frontend/pnpm-lock.yaml`（由合同要求补入）", review)
+        self.assertIn("（cache:node-modules：补入）", review)
+        ur.validate_declared_scope(scope)
+        stripped = json.loads(json.dumps(scope))
+        stripped["repo"]["files"].remove("frontend/pnpm-lock.yaml")
+        with self.assertRaisesRegex(ValueError, "声明了 cache:node-modules 就必须在 repo.files 里单独列出它的锁文件 frontend/pnpm-lock.yaml"):
+            ur.validate_declared_scope(stripped)
+        # 没有 --installed-dir（也就没有 cache:node-modules）就不补：旧行为不变。
+        plain, plain_review = self.draft(self.merge(self.raw(self.good())))
+        self.assertNotIn("frontend/pnpm-lock.yaml", plain["units"][UNIT]["scope"]["repo"]["files"])
+        self.assertNotIn("cache:node-modules：", plain_review)
+        # Go：只读了 GOMODCACHE（没有读 GOROOT，所以没有 toolchain:go）也要补 backend/go.sum——两个缓存合同各管各的，不靠工具链合同顺带。
+        t = str(self.tree)
+        only_cache = self.merge(self.raw([open_line(f"{t}/backend", f"{t}/backend/go.mod"), open_line(f"{t}/backend", f"{self.work}/go-mod-cache/cache/download/m/@v/v1.zip")]))
+        self.assertTrue(only_cache["valid"], only_cache["invalid_reasons"])
+        go_registry, go_review = self.draft(only_cache)
+        go_scope = go_registry["units"][UNIT]["scope"]
+        self.assertEqual(go_scope["contracts"], ["cache:go-mod-cache"])
+        self.assertIn("backend/go.sum", go_scope["repo"]["files"])
+        self.assertIn("`backend/go.sum`（由合同要求补入）", go_review)
+        self.assertIn("（cache:go-mod-cache：补入）", go_review)
+        self.assertNotIn("（toolchain:go：", go_review)
+        ur.validate_declared_scope(go_scope)
+
+    def test_a_lock_file_required_by_two_contracts_is_added_once_and_listed_for_both(self) -> None:
+        t = str(self.tree)
+        sample = self.merge(self.raw(self.good() + [open_line(f"{t}/backend", f"{self.work}/go-mod-cache/cache/download/m/@v/v1.zip")]))
+        registry, review = self.draft(sample)
+        scope = registry["units"][UNIT]["scope"]
+        self.assertEqual({"toolchain:go", "cache:go-mod-cache"} - set(scope["contracts"]), set())
+        self.assertEqual(scope["repo"]["files"].count("backend/go.sum"), 1, "同一个锁文件被两个合同要求，只补一次")
+        self.assertIn("`backend/go.sum`（toolchain:go：补入）；", review)
+        self.assertIn("`backend/go.sum`（cache:go-mod-cache：补入）", review)
+        self.assertEqual(review.count("`backend/go.sum`（由合同要求补入）"), 1, "文件清单里这个文件只带一次“由合同要求补入”")
+
+    def test_cache_contract_lock_files_that_are_missing_or_untracked_are_flagged_not_invented(self) -> None:
+        root = self.root / "no-cache-locks"
+        root.mkdir(exist_ok=True)
+        tree = make_repo(root, {name: text for name, text in FOLLOWUP_FILES.items() if name not in ("frontend/pnpm-lock.yaml", "backend/go.sum")})
+        (tree / "frontend" / "pnpm-lock.yaml").write_text("lockfileVersion: 9\n", encoding="utf-8")  # 磁盘上有，但没有 git add：未跟踪的同样不算
+        t = str(tree)
+        reads = [open_line(f"{t}/frontend", f"{t}/frontend/package.json"), open_line(f"{t}/frontend", f"{t}/frontend/src/a.ts"),
+                 open_line(f"{t}/frontend", f"{t}/frontend/node_modules/.pnpm/p/node_modules/p/index.js"), open_line(t, f"{self.work}/go-mod-cache/m/x")]
+        sample = ds.merge_raws([make_raw(tree, self.work, reads)], tree=tree, installed_dirs=[(NODE_MODULES, NODE_CONTRACT)])
+        self.assertTrue(sample["valid"], sample["invalid_reasons"])
+        samples = self.root / "samples-no-cache-locks"
+        samples.mkdir(exist_ok=True)
+        ds.write_document(samples / "backend-go-test.sample.json", sample)
+        # 关掉自检看原始草案：缺失／未跟踪的锁文件不凭空添加，只在评审清单里标出（两个合同各要一个文件，各标一次）。
+        registry, review = ds.draft_registry(samples, tree, coverage_check=False)
+        files = registry["units"][UNIT]["scope"]["repo"]["files"]
+        self.assertNotIn("frontend/pnpm-lock.yaml", files)
+        self.assertNotIn("backend/go.sum", files)
+        self.assertIn("**依赖锁文件缺失**：`frontend/pnpm-lock.yaml`、`backend/go.sum`", review)
+        self.assertIn("（cache:node-modules：缺失）", review)
+        self.assertIn("（cache:go-mod-cache：缺失）", review)
+        # 默认（开着自检）：登记侧的范围校验拒绝这份范围（C0-scope），条目写成 rerun-only，原因里点名缺的锁文件。
+        checked, _review = ds.draft_registry(samples, tree)
+        entry = checked["units"][UNIT]
+        self.assertEqual(entry["status"], "rerun-only")
+        self.assertTrue(entry["reason"].startswith(ds.COVERAGE_REASON_PREFIX), entry["reason"])
+        self.assertIn("C0-scope", entry["reason"])
+        self.assertTrue("frontend/pnpm-lock.yaml" in entry["reason"] or "backend/go.sum" in entry["reason"], entry["reason"])
+
+    def test_a_stale_sample_with_an_over_wide_transient_glob_is_rerun_only_not_a_crash(self) -> None:
+        """命令行校验收紧之前合并出来的旧 sample 里可能有通配符超过 4 个的模式：draft 不能因此整批崩掉，该单元转 rerun-only，原因里带登记侧的拒绝文字。"""
+        t = str(self.tree)
+        lines = self.good() + self.frontend() + [write_line(t, f"{t}/frontend/abababab")]
+        with mock.patch.object(ds, "MAX_GLOB_WILDCARDS", 99):  # 模拟旧版 merge 接受了它
+            sample = self.merge(self.raw(lines), installed_dirs=[(NODE_MODULES, NODE_CONTRACT)], transient=["frontend/*b*b*b*b*"])
+        self.assertTrue(sample["valid"], sample["invalid_reasons"])
+        self.assertEqual([row["unused"] for row in sample["review"]["allowances"]["transient"]], [False])
+        registry, review = self.draft(sample)
+        entry = registry["units"][UNIT]
+        self.assertEqual(entry["status"], "rerun-only")
+        self.assertIn("C0-scope", entry["reason"])
+        self.assertIn("最多 4 个", entry["reason"])
+        self.assertIn("**覆盖自检不通过**", review)
+
     def test_files_limit_hint_counts_the_added_lock_files(self) -> None:
         sample = self.merge(self.raw(self.good()))
         with mock.patch.object(ds, "MAX_FILES", 1):
@@ -734,7 +875,7 @@ class GitUsageClassifierTests(unittest.TestCase):
             ["git", "ls-tree", "--name-only", SHA, ".github/workflows/"], ["git", "ls-tree", "-r", f"{SHA}^{{tree}}"],
             ["git", "ls-tree", SHA, "--", "HEAD"],
             ["git", "diff-tree", "-r", "--name-only", SHA, SHA2], ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", SHA],
-            ["git", "log", "-1", "--format=%B", SHA], ["git", "log", "--oneline", f"{SHA}..{SHA2}"], ["git", "log", f"{SHA}...{SHA2}"],
+            ["git", "log", "-1", "--format=%B", SHA], ["git", "log", "--parents", f"{SHA}..{SHA2}"], ["git", "log", f"{SHA}...{SHA2}"],  # --oneline 已按规格 v2 删去
             ["git", "log", "-n", "3", SHA], ["git", "log", "-3", SHA], ["git", "log", SHA, "--", "backend/"], ["git", "log", "--max-count=2", SHA],
             ["git", "rev-list", "--parents", "-n", "1", SHA], ["git", "rev-list", "--count", SHA2, f"^{SHA}"], ["git", "rev-list", f"{SHA}..{SHA2}"],
             ["git", "rev-list", "--objects", SHA],
@@ -742,6 +883,8 @@ class GitUsageClassifierTests(unittest.TestCase):
         for argv in fixed:
             with self.subTest(argv=argv):
                 self.assertIsNone(ds.git_usage_problem(argv), " ".join(argv))
+
+    # 规格 v2 的完整判定（格式串白名单、-- 规则、ASCII 数字、--oneline 删除）与 400+ 条语料见 test_ci_declared_sampler_git_spec.py。
 
     def test_a_path_inside_a_pinned_object_is_content_not_a_reference(self) -> None:
         """修订之后的 :路径、格式串、“--”之后的路径里出现 HEAD、refs/ 的字样，不是引用。"""
@@ -851,6 +994,31 @@ class DraftGitUsageTests(DraftBase):
         self.assertNotIn("转 rerun-only", review)
         self.assertEqual(self.draft(self.merge(self.raw(self.good())))[0]["units"][UNIT]["status"], "declared", "没有 git 命令的单元不受影响")
 
+    def test_git_started_through_execveat_or_under_another_argv0_is_collected_and_fails_closed(self) -> None:
+        """S3：execveat 启动的 git 照样收集（固定的保持 declared）；argv[0] 不是 git 而可执行文件是 git 的别名调用也收集，但 draft 与登记侧都按“不是 git 命令行”失败关闭。"""
+        via_execveat = f'4243 execveat(3</usr/bin/git>, "", ["git", "show", "{SHA}:a.json"], 0x1 /* 17 vars */, AT_EMPTY_PATH) = 0'
+        pinned = self.merge(self.raw(self.good() + [via_execveat]))
+        self.assertTrue(pinned["valid"], pinned["invalid_reasons"])
+        self.assertEqual(pinned["git_commands"], [["git", "show", f"{SHA}:a.json"]])
+        registry, _review = self.draft(pinned)
+        self.assertEqual(registry["units"][UNIT]["status"], "declared", "execveat 启动的固定 git 用法与 execve 的一样保持 declared")
+        self.assertEqual(registry["units"][UNIT]["scope"]["repo"]["git_history"]["commits"], [SHA])
+        floating = self.merge(self.raw(self.good() + [f'4243 execveat(3</usr/bin/git>, "", ["git", "show", "HEAD"], 0x1, AT_EMPTY_PATH) = 0']))
+        entry = self.draft(floating)[0]["units"][UNIT]
+        self.assertEqual((entry["status"], entry["head"]), ("rerun-only", True), "execveat 启动的 git 按 HEAD 寻址：以前漏掉，现在和 execve 一样判未固定")
+        alias = self.merge(self.raw(self.good() + [f'4242 execve("/usr/bin/git", ["gitx", "show", "{SHA}"], 0x1 /* 17 vars */) = 0']))
+        self.assertEqual(alias["git_commands"], [["gitx", "show", SHA]], "argv[0] 原样保留")
+        registry, review = self.draft(alias)
+        entry = registry["units"][UNIT]
+        self.assertEqual((entry["status"], entry["head"]), ("rerun-only", True))
+        self.assertIn("gitx show", entry["reason"])
+        self.assertIn("不是 git 命令行，无法判定", review)
+        # 登记侧同样失败关闭：把这份别名调用的证据交给 declared_coverage（范围取自上面固定用法的草案），C6 报“混入了非 git 命令”。
+        from tools.ci import unit_records as ur
+        scope = self.draft(pinned)[0]["units"][UNIT]["scope"]
+        rules = {item["rule"] for item in ur.declared_coverage(json.loads(json.dumps(alias)), scope)["undeclared"]}
+        self.assertIn("C6-git", rules)
+
     def test_one_unfixed_command_among_pinned_ones_is_enough(self) -> None:
         sample = self.sample_with(["git", "show", f"{SHA}:a.json"], ["git", "cat-file", "-t", SHA], ["git", "rev-parse", "--verify", "HEAD^{commit}"])
         registry, review = self.draft(sample)
@@ -949,17 +1117,140 @@ class RecordLayerInteropTests(FollowupBase):
         for value in ("frontend/.eslintcache", "frontend/vitest.config.ts.timestamp-*", "backend/ent/schema/.entc/", "a/b?c", "*", "a/**/b", "a/**", "a/[xy]", "a]",
                       "/abs/x", "a/../b", "a/./b", "a//b", "a*/", "a?/", "", ".", "..", "a/", "a\\b", "x" * 300):
             self.assertEqual(accepted(ds.check_transient, value), accepted(ur._declared_ignored_item, value, "repo.repo_ignored"), repr(value))
+        # WP1e 起登记侧要求：声明了 cache:node-modules／cache:go-mod-cache 就必须在 repo.files 里单独列出它的锁文件，所以这里的 scope 构造要按合同补上锁文件
+        # （WP4d 调整的构造：原来只放一个 z.txt；断言不变——两边接受／拒绝同样的值）。安装目录的前缀与合同绑定（_DECLARED_INSTALLED_PREFIXES）也在这里交叉核对。
+        accepted_pairs = []
         for prefix, contract in (("frontend/node_modules/", "cache:node-modules"), ("a/", "cache:x.y_z-1"), ("a", "cache:x"), ("/a/", "cache:x"), ("a/../b/", "cache:x"),
                                  ("a//b/", "cache:x"), ("", "cache:x"), ("a/", "toolchain:go"), ("a/", "cache:"), ("a/", "cache"), ("a/", "cache:x:y"),
-                                 ("a/", "cache:-x"), ("a/", "host-config:x"), ("a/", "")):
-            scope = {"schema_version": ur.DECLARED_SCOPE_SCHEMA, "repo": {"files": ["z.txt"], "installed_dirs": [{"prefix": prefix, "contract": contract}]},
+                                 ("a/", "cache:-x"), ("a/", "host-config:x"), ("a/", ""),
+                                 # 前缀与合同绑定：唯一合格的是 (frontend/node_modules/, cache:node-modules)；前缀错写、合同错写、别的缓存合同都要两边一起拒绝。
+                                 ("frontend/node_modules/", "cache:other"), ("frontend/node_modules/", "cache:node-modules2"), ("frontend/node_modules/", "cache:Node-Modules"),
+                                 ("frontend/node_modules", "cache:node-modules"), ("frontend/node_modules//", "cache:node-modules"), ("frontend/", "cache:node-modules"),
+                                 ("frontend/node_modules/.pnpm/", "cache:node-modules"), ("frontend/node_modules/x/", "cache:node-modules"),
+                                 ("node_modules/", "cache:node-modules"), ("/frontend/node_modules/", "cache:node-modules"), ("Frontend/node_modules/", "cache:node-modules"),
+                                 ("frontend/node_modules/", "cache:go-mod-cache"), ("backend/", "cache:go-mod-cache"), ("frontend/node_modules/", "toolchain:node-modules")):
+            files = ["z.txt"]
+            if contract in ur._DECLARED_CACHE_CONTRACT_LOCKS:
+                files.append(ur._DECLARED_CACHE_CONTRACT_LOCKS[contract])
+            scope = {"schema_version": ur.DECLARED_SCOPE_SCHEMA, "repo": {"files": files, "installed_dirs": [{"prefix": prefix, "contract": contract}]},
                      "contracts": [contract]}
-            self.assertEqual(accepted(ds.check_installed_dir, prefix, contract), accepted(ur.validate_declared_scope, scope), (prefix, contract))
+            both = accepted(ds.check_installed_dir, prefix, contract)
+            self.assertEqual(both, accepted(ur.validate_declared_scope, scope), (prefix, contract))
+            if both:
+                accepted_pairs.append((prefix, contract))
+        self.assertEqual(accepted_pairs, [("frontend/node_modules/", "cache:node-modules")], "两边都接受的只有评审过的这一对")
         # glob 的匹配语义也一致：* 与 ? 不跨 /，整条路径完全匹配。
         for pattern in ("frontend/*.mjs", "frontend/tmp-?.json", "frontend/cachedir", "a/b?c/*", "*", "a/*/c"):
             for relative in ("frontend/a.mjs", "frontend/sub/a.mjs", "frontend/.mjs", "frontend/tmp-1.json", "frontend/tmp-12.json", "frontend/tmp-/.json",
                              "frontend/cachedir", "frontend/cachedir/x", "a/bxc/f", "a/bxc/f/g", "a/b/c/f", "top", "a/b/c", "a/c"):
                 self.assertEqual(ds.PathMatcher(pattern).matches(relative), ur._declared_glob(pattern).fullmatch(relative) is not None, (pattern, relative))
+
+    # -- WP4d：采样器自己的一份规则表／判定，与登记侧（WP1e 加固后）各自测试、交叉核对 ----------------------------------------------------------------
+    def test_alignment_tables_have_the_same_values_as_the_record_layer(self) -> None:
+        """采样器不 import 登记侧的私有常量，表是抄过来的自己的一份；这里用登记侧的同名常量核对同值（任何一边改了，立刻红，提醒同步评审）。"""
+        from tools.ci import unit_records as ur
+        self.assertEqual(ds.CACHE_CONTRACT_LOCK_FILES, ur._DECLARED_CACHE_CONTRACT_LOCKS, "声明了缓存合同就要单独列出的锁文件")
+        self.assertEqual(ds.INSTALLED_DIR_PREFIXES, ur._DECLARED_INSTALLED_PREFIXES, "依赖安装合同 → 它唯一允许的前缀")
+        self.assertEqual(tuple(ds.SCRATCH_CLASS_PREFIXES), tuple(ur._DECLARED_SCRATCH_PREFIXES))
+        self.assertEqual(tuple(ds.VIRTUAL_CLASS_PREFIXES), tuple(ur._DECLARED_VIRTUAL_PREFIXES))
+        self.assertEqual(ds.MAX_GLOB_WILDCARDS, ur._DECLARED_MAX_GLOB_WILDCARDS)
+        self.assertEqual((ds.MAX_GLOB_WILDCARDS, ds.DETACHED_MARKER_LIMIT), (4, 64), "数字本身也钉住：改动要同步评审")
+        self.assertEqual(ds.DETACHED_MARKER_LIMIT, ur._DECLARED_MAX_DETACHED_MARKERS)
+        self.assertEqual(ds.ANCESTOR_PROBES, ur._DECLARED_ANCESTOR_PROBES)
+        self.assertEqual(ds._CONTRACT_NAME.pattern, ur._DECLARED_NAME.pattern, "合同名字的写法")
+        # 采样器内置分类表里 scratch／virtual 两类的前缀，本来就落在登记侧评审过的窄范围内（否则 draft 写出的 outside 行会被登记侧拒绝）。
+        for prefix, cls, _contract in ds.BUILTIN_CLASSES:
+            if cls == "scratch":
+                self.assertTrue(ds.prefix_within(prefix, ds.SCRATCH_CLASS_PREFIXES), prefix)
+            if cls == "virtual":
+                self.assertTrue(ds.prefix_within(prefix, ds.VIRTUAL_CLASS_PREFIXES), prefix)
+        self.assertTrue(ds.prefix_within("/dev/null", ds.SCRATCH_CLASS_PREFIXES), "draft 为被写入的 /dev/null 补的 scratch 精确行")
+
+    def test_the_sampler_never_reads_private_names_of_the_record_layer(self) -> None:
+        """“采样器不得 import 登记侧的私有常量”：用 AST 查代码里（不含注释与字符串）没有任何以 _DECLARED／_declared 开头的名字、属性、导入。"""
+        import ast
+        tree = ast.parse(ds.HERE.read_text(encoding="utf-8"))
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, ast.alias):
+                names.add(node.name)
+        self.assertEqual(sorted(name for name in names if name.startswith(("_DECLARED", "_declared"))), [])
+        self.assertTrue("declared_coverage" in names, "对登记侧只用公开函数（覆盖自检调的就是它）")
+
+    def test_transient_wildcard_limit_agrees_with_the_record_layer(self) -> None:
+        """glob 里 * 与 ? 合计最多 4 个：边界 4（接受）与 5（拒绝）、* 与 ? 混合计数、跨目录段计数，两边一致；目录前缀不支持通配符不变。"""
+        from tools.ci import unit_records as ur
+        patterns = ["a/x", "a/*x", "a/*x*x*x*x", "a/*x*x*x*x*", "a/?x?x?x?x", "a/?x?x?x?x?", "a/*x?x*x?", "a/*x?x*x?x*", "a/*x?x*x?x?", "*/*/*/*", "*/*/*/*/*",
+                    "a/*/b/*/c/*/d/*", "a/*/b/*/c/*/d/*/e/*", "a/?*?*", "a/?*?*?", "a/" + "x*" * 4, "a/" + "x*" * 5, "a/" + "x?" * 4, "a/" + "x?" * 5,
+                    "a/**", "a/*x**x*", "a/[x]*", "a/*/", "a/?/"]
+        counts = {}
+        for pattern in patterns:
+            ours, theirs = accepted(ds.check_transient, pattern), accepted(ur._declared_ignored_item, pattern, "repo.repo_ignored")
+            self.assertEqual(ours, theirs, pattern)
+            counts[pattern] = ours
+        self.assertTrue(counts["a/*x*x*x*x"] and counts["a/?x?x?x?x"] and counts["a/*x?x*x?"] and counts["*/*/*/*"], "恰好 4 个通配符：接受")
+        self.assertFalse(counts["a/*x*x*x*x*"] or counts["a/?x?x?x?x?"] or counts["a/*x?x*x?x*"] or counts["*/*/*/*/*"], "5 个：拒绝（* 与 ? 合计）")
+        self.assertFalse(counts["a/*/"] or counts["a/?/"], "以 / 结尾的是目录前缀，不支持通配符（与通配符个数上限无关）")
+        with self.assertRaisesRegex(ds.SamplerError, r"最多 4 个，实际 5 个"):
+            ds.check_transient("a/*x?x*x?x*")
+        with self.assertRaisesRegex(ds.SamplerError, r"最多 4 个，实际 7 个"):
+            ds.check_transient("a/*?*?*?*")
+        # 匹配器与草案里的匹配器构造也走同一道校验：5 个通配符的模式建不出匹配器（草案那边按 None 跳过，交给覆盖自检）。
+        with self.assertRaises(ds.SamplerError):
+            ds.PathMatcher("a/*x*x*x*x*")
+        self.assertIsNone(ds._ignored_matcher("a/*x*x*x*x*"))
+        self.assertIsNotNone(ds._ignored_matcher("a/*x*x*x*x"))
+
+    def test_class_prefix_widths_agree_with_the_record_layer(self) -> None:
+        """class=scratch／virtual 的前缀宽度：等于表里某项，或在以 / 结尾的某项之下才合格；两边用同样的判定。边界值逐个核对。"""
+        from tools.ci import unit_records as ur
+        prefixes = ["/dev/null", "/dev/null2", "/dev/null/x", "/dev/", "/dev/shm/", "/dev/shm/x", "/dev", "/devx/", "{TMP}/", "{TMP}/x/", "{TMP}/x", "{TMP}",
+                    "/tmp/", "/tmp/x/", "/tmp", "{WORK}/go-tmp/", "{WORK}/go-tmp/x/", "{WORK}/go-tmp/x", "{WORK}/go-tmp", "{WORK}/go-tmpx/", "{WORK}/",
+                    "{WORK}/go-build-cache/", "{HOME}/.config/go/telemetry/", "{HOME}/.config/go/telemetry/local/", "{HOME}/.config/go/telemetry",
+                    "{HOME}/.config/go/", "{HOME}/", "{HOME}/.config/go/telemetryx/", "/proc/", "/proc/self/", "/proc", "/proc/self/status", "/sys/", "/sys/kernel/",
+                    "/run/", "/run/systemd/", "/run", "/runx/", "/usr/", "/usr/lib/", "/home/", "/root/", "/etc/", "/", "/var/tmp/", "/opt/"]
+        verdicts: dict[str, dict[str, bool]] = {"scratch": {}, "virtual": {}}
+        for cls in ("scratch", "virtual"):
+            for prefix in prefixes:
+                scope = {"schema_version": ur.DECLARED_SCOPE_SCHEMA, "repo": {"files": ["z.txt"]}, "outside": [{"prefix": prefix, "class": cls}]}
+                ours = accepted(ds.parse_class_prefix, f"{prefix}={cls}")
+                self.assertEqual(ours, accepted(ur.validate_declared_scope, scope), (prefix, cls))
+                verdicts[cls][prefix] = ours
+        scratch, virtual = verdicts["scratch"], verdicts["virtual"]
+        for good in ("/dev/null", "{TMP}/", "{TMP}/x/", "{TMP}/x", "{WORK}/go-tmp/", "{WORK}/go-tmp/x/", "{WORK}/go-tmp/x", "{HOME}/.config/go/telemetry/",
+                     "{HOME}/.config/go/telemetry/local/"):
+            self.assertTrue(scratch[good], f"scratch 合格：{good}")
+        for bad in ("/dev/null2", "/dev/null/x", "/dev/", "{TMP}", "/tmp/", "/tmp/x/", "{WORK}/go-tmp", "{WORK}/go-tmpx/", "{WORK}/", "{HOME}/.config/go/telemetry",
+                    "{HOME}/.config/go/", "{HOME}/", "/proc/", "/usr/", "/home/", "/", "/opt/"):
+            self.assertFalse(scratch[bad], f"scratch 不合格：{bad}")
+        for good in ("/dev/", "/dev/null", "/dev/null2", "/dev/shm/x", "/proc/", "/proc/self/", "/proc/self/status", "/sys/", "/sys/kernel/", "/run/", "/run/systemd/"):
+            self.assertTrue(virtual[good], f"virtual 合格：{good}")
+        for bad in ("/dev", "/devx/", "/proc", "/run", "/runx/", "/usr/", "/home/", "/root/", "/etc/", "/", "/var/tmp/", "/opt/", "{TMP}/", "{HOME}/"):
+            self.assertFalse(virtual[bad], f"virtual 不合格：{bad}")
+        # 其它类别不受宽度限制（与登记侧一致）：宽前缀照旧可以登记。
+        scope = {"schema_version": ur.DECLARED_SCOPE_SCHEMA, "repo": {"files": ["z.txt"]}, "outside": [{"prefix": "/usr/", "class": "system"}]}
+        self.assertTrue(accepted(ds.parse_class_prefix, "/usr/=system") and accepted(ur.validate_declared_scope, scope))
+        for spec in ("{HOME}/.config/go/telemetry/=performance-cache:cache:go-telemetry", "/opt/tool/=toolchain:toolchain:tool", "/etc/=system"):
+            self.assertTrue(accepted(ds.parse_class_prefix, spec), spec)
+        with self.assertRaisesRegex(ds.SamplerError, r"class=scratch 的前缀只许"):
+            ds.parse_class_prefix("/home/=scratch")
+        with self.assertRaisesRegex(ds.SamplerError, r"class=virtual 的前缀只许"):
+            ds.parse_class_prefix("/opt/=virtual")
+
+    def test_the_lock_file_requirement_of_the_cache_contracts_agrees_with_the_record_layer(self) -> None:
+        """声明了 cache:node-modules／cache:go-mod-cache 就必须单独列出它的锁文件：缺了登记侧拒绝，补上才接受；draft 起草的 scope 过得了这道校验。"""
+        from tools.ci import unit_records as ur
+        for contract, lock in ds.CACHE_CONTRACT_LOCK_FILES.items():
+            with self.subTest(contract=contract):
+                scope = {"schema_version": ur.DECLARED_SCOPE_SCHEMA, "repo": {"files": ["z.txt"]}, "contracts": [contract]}
+                with self.assertRaisesRegex(ValueError, f"声明了 {contract} 就必须在 repo.files 里单独列出它的锁文件 {lock}"):
+                    ur.validate_declared_scope(scope)
+                scope["repo"]["files"].append(lock)
+                ur.validate_declared_scope(scope)
 
     def frontend_lines(self) -> list[str]:
         """前端式读集（不含写 /dev/null：采样器把它当无害写入豁免，但草案把 /dev/ 归 virtual 类，登记侧不许往 virtual 类里写——见报告）。"""

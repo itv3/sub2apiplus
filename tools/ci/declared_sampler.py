@@ -27,10 +27,18 @@
 * ``--installed-dir 前缀=合同``：依赖安装目录（例如 ``frontend/node_modules/=cache:node-modules``，pnpm 的安装结果是仓库内
   未跟踪的路径）。前缀下的**读取**不再产生 ``untracked-read``；前缀下的**写入**仍按原规则判；前缀下若有已跟踪的路径被读或被
   枚举就拒绝（安装目录不能盖住已跟踪的输入）。``draft`` 写出 ``scope.repo.installed_dirs`` 并把合同并入 ``scope.contracts``。
+  前缀与合同绑定（与登记侧一致，登记侧 WP1e 起强制）：合同必须是 ``INSTALLED_DIR_PREFIXES`` 里评审过的依赖安装合同，前缀必须恰等于它
+  定义的安装目录（目前只有 ``cache:node-modules`` 对应 ``frontend/node_modules/``），否则登记表可以把任何目录登记成未跟踪读取的豁免区。
 * ``--transient 模式``：命令自产的暂存路径（例如 ``frontend/.eslintcache``、``frontend/vitest.config.ts.timestamp-*``）。
-  仓库相对的目录前缀（以 / 结尾）或 glob（只支持 * 与 ?，不跨 /，不支持 ** 与方括号）；落在其内的**未跟踪**路径，只要本次
+  仓库相对的目录前缀（以 / 结尾）或 glob（只支持 * 与 ?，合计最多 4 个，不跨 /，不支持 ** 与方括号）；落在其内的**未跟踪**路径，只要本次
   采样里被**写过**，写入与读回就不产生 ``write``、``untracked-read`` 无效原因；只读不写的路径不豁免。运行前后 git status
   必须为空的判据照旧，“写完即删”靠它兜底。``draft`` 把命中过的模式并入 ``scope.repo.repo_ignored``。
+* ``--class-prefix 前缀=类别[:合同]``：登记内置分类表没有覆盖、但经评审认定可以接受的仓库外前缀。与登记侧一致的宽度限制（登记侧 WP1e 起强制）：
+  class=scratch（读写执行全放行）的前缀只许 ``/dev/null``、``{TMP}/``、``{WORK}/go-tmp/``、``{HOME}/.config/go/telemetry/`` 或它们之下更窄的路径，
+  class=virtual（不绑定任何内容）的前缀只许 ``/proc/``、``/sys/``、``/dev/``、``/run/`` 或其下更窄的路径；其它类别不限。
+* 以上三条命令行校验（以及 ``--allow-unix``）都抄自登记侧、各自测试：采样器不 import 登记侧的私有常量（``INSTALLED_DIR_PREFIXES``、``MAX_GLOB_WILDCARDS``、
+  ``SCRATCH_CLASS_PREFIXES``、``VIRTUAL_CLASS_PREFIXES``、``CACHE_CONTRACT_LOCK_FILES`` 都是采样器自己的一份），``test_ci_declared_sampler_followup`` 用登记侧的
+  同名常量与校验函数交叉核对同值、同接受／拒绝；登记侧改了这些规则，要在这里同步评审。
 
 git 用法是否“固定”（``draft`` 的判定）：声明级承接要求结果只取决于范围内的文件，而 scope 的 ``repo.head`` 只能是 false。单元里只要有
 一条 git 子进程命令不“固定”，登记条目就写成 ``{"status": "rerun-only", "reason": …, "head": true}``（采样本身无效时 reason 里并列，
@@ -40,6 +48,13 @@ head 取或），评审清单第 11 节列出全部未固定的命令。固定�
 config、status、stash 等读引用库或写仓库状态的子命令，-C、-c、--git-dir 等全局选项，清单之外的选项，不可见的参数——都算未固定；
 拿不准一律算未固定（误判只让该单元保持 rerun-only，漏判会让登记表自相矛盾）。采样器分不清 git 命令作用在哪个仓库（测试常在临时合成
 仓库里造提交、打标签），所以按命令字面判。
+规格 v2（WP4d，独立验收 #3、#4 之后调度者统一的口径，登记侧按同一份规格改）：①选项表里没有 ``--oneline``（它等于 ``--pretty=oneline --abbrev-commit``，缩写长度随对象库
+大小与 ``core.abbrev`` 配置变化）；②``--format=``／``--pretty=`` 的取值只放行精确的 ``raw``，和“普通字符＋白名单占位符”的自定义格式串（``format:<串>``、``tformat:<串>``，
+或含 ``%`` 的无前缀值）——白名单 ``%H %T %P %an %ae %aI %at %cn %ce %cI %ct %s %b %B %n %%`` 与 ``%x`` 加两位十六进制，其余 ``%…`` 一律未固定（``%D %d %N %S %g* %(…) %h %t %p
+%ad %cd %aD %cD %ar %cr %aN`` 等都在内），命名格式（oneline、medium……）和 ``pretty.<名字>`` 配置别名也未固定；③``merge-base``、``cat-file``、``rev-parse`` 的 argv 里出现 ``--``
+一律未固定（它在这三个子命令里只是“选项结束”，其后仍是修订；``git merge-base A B -- HEAD`` 的输出随 HEAD 变化），``show``／``log``／``rev-list``／``ls-tree``／``diff-tree`` 里 ``--``
+之后才是路径；④所有“数字”判定（``-n <数字>``、``-<数字>``、``--max-count=<数字>``、``--abbrev=<数字>``）只接受 ASCII 数字，``²`` 之类的 Unicode 数字未固定。
+已知残余：``log``／``show`` 默认显示 ``refs/notes/commits`` 里的 notes（规格不要求 ``--no-notes``；被测仓库里极少见）。
 
 覆盖闭合与覆盖自检（``draft`` 的默认行为，``--no-coverage-check`` 关闭）：起草只按读集归并，可登记侧的覆盖检查（``unit_records.declared_coverage``）
 另有自己的规则，两边对不上，草案就会在登记时才被拒绝。所以 ``draft`` 先做覆盖闭合，再用登记侧的同一个函数自检：
@@ -53,6 +68,9 @@ config、status、stash 等读引用库或写仓库状态的子命令，-C、-c�
   （登记侧用树根下被跟踪的顶层名字摘要绑定）。``go.mod``、``go.work`` 这类祖先探测名登记侧本来就放行，不触发。
 * ``repo_ignored`` 的目录前缀不得与依赖安装目录前缀重叠或盖住它：落在安装目录里的被写文件、写在安装目录的上级目录或树根下的文件，改用精确路径；
   被写入的 ``/dev/null`` 在 ``outside`` 里补精确前缀 ``/dev/null``（scratch 类）；``/run/`` 归 virtual 类。
+* 依赖锁文件：登记侧规定 ``scope.contracts`` 声明了工具链合同（``toolchain:go``、``toolchain:pnpm``）或缓存合同（``cache:node-modules``→``frontend/pnpm-lock.yaml``、
+  ``cache:go-mod-cache``→``backend/go.sum``，含 ``--installed-dir`` 带来的合同），就必须在 ``repo.files`` 里单独列出它的锁文件；``draft`` 据此补入（``TOOLCHAIN_LOCK_FILES``、
+  ``CACHE_CONTRACT_LOCK_FILES``），评审清单注明“由合同要求补入”；文件必须是仓库里跟踪的，不存在或未跟踪的不凭空添加，只标“缺失”。
 * 自检：起草好的 scope 连同 sample 交给登记侧的 ``declared_coverage``（按文件路径加载同目录的 ``unit_records.py``，只读使用）。通过才写 ``declared``；
   不通过写成 ``{"status": "rerun-only", "reason": "声明级覆盖自检不通过：N 处未覆盖（规则统计…；前 3 处…）"}``（head 为 false），评审清单第 13 节
   按规则分组列出全部未覆盖项。采样本身无效、git 用法未固定的单元已是 rerun-only，不再自检；登记侧模块不可用时跳过自检并在清单里注明。
@@ -62,6 +80,17 @@ config、status、stash 等读引用库或写仓库状态的子命令，-C、-c�
 与 ???），和行尾是 `` = ?`` 而名字不是 execve、execveat、exit、exit_group 的。filter 把它们都丢弃并计入 ``coverage.detached_markers``（不新增
 coverage 键：登记侧对它是闭合的），带名字的行原样留样（别名化、≤300 字符、最多 8 条、去重）在 raw 顶层 ``detached_samples``，merge 后进
 ``review.detached_samples``，评审清单第 12 节列出；合并后总数超过 64 判采样无效。
+
+丢弃垃圾行的两项留痕与自检（只给评审看或失败关闭，不改变“个位数垃圾行无害”的口径）：
+
+* 副作用类单独计数：被丢弃的行里名字属于副作用类（``SIDE_EFFECT_CALLS``：unlink／rename／link／symlink／mkdir／rmdir／truncate／chmod／chown／各种 setxattr、
+  creat、带 O_WRONLY／O_RDWR／O_CREAT／O_TRUNC 的 open／openat、connect／sendto 等会改文件系统或对外连接的调用名；名字解析不出来或随机名的不算）的条数写在 raw 顶层
+  ``detached_side_effects``（merge 后进 ``review.detached_side_effects``，有才写；不进字段闭合的 coverage，登记侧不解释 review）。这类调用若真的生效，trace 里
+  不会有任何痕迹，是丢弃垃圾行的已知代价；``detached_samples`` 的 8 条上限里副作用类优先留样（副作用类在前）。名字随机的垃圾行很常见（见过 lsetxattr、
+  unlinkat、syscall_0x…），所以只计数留样、不按名字直接判无效。
+* 线程是否真的消失：filter 收尾时核对每条被丢弃的、带进程号前缀的垃圾行（含裸标记）——它的 tid 在之后还出现过任何行，就说明那个线程没有消失、被丢弃的那一行可能是
+  真实调用，记未解析原因 ``sampler:detached-not-terminal:<tid>``（同一个 tid 只记一次，最多 20 个不同原因，超出的合并成 ``…:more``）。追踪表内存随不同 tid 数增长
+  （上限 ``MAX_DETACHED_TIDS``，超出记 ``sampler:limit:detached-tids``），与总行数、聚合块大小无关。
 
 未解析原因的诊断样例：对每个不在容忍集合内的 ``unresolved_reasons`` 原因，filter 保留前 3 条原始 strace 行（采样根的绝对路径
 换成别名、每条截到 300 字符，最多 20 个原因），写在 raw 的 ``coverage.unresolved_samples``，merge 后进 ``review.unresolved_samples``
@@ -81,6 +110,12 @@ coverage 键：登记侧对它是闭合的），带名字的行原样留样（�
   绑定（工具链、缓存、系统库），只需知道读了哪些目录。语义分类只发生在验证侧和 draft 的前缀表里，采样本身不分类。
 * 路径别名：证据与草案里只出现 ``{TREE}``（测试树根）、``{WORK}``（Go 缓存的父目录）、``{HOME}``、``{TMP}``，采样时的
   具体绝对路径只在 ``aliases`` 里留痕，因此跨工作目录不失效。
+* **设计盲区（网络）**：网络检查只覆盖 ``connect``（``STRACE_OPTIONS`` 的 trace 集合里没有 ``sendto``／``sendmsg``／``sendmmsg``），所以 UDP 未连接套接字
+  直接向外部地址 ``sendto`` 看不到。已知用法下这不构成漏洞：TCP 外连一定经 ``connect``，glibc 与 Go 的 DNS 解析也经 ``connect``（先 ``connect`` UDP 套接字
+  再发送）。把别的写法当成“已覆盖”是错的——新增依赖裸 ``sendto`` 的命令单元前，要先扩 trace 集合并重采。trace 集合（``STRACE_OPTIONS``）不因此改动。
+* exec 调用：``execve`` 与 ``execveat`` 都收集 git 子进程的 argv（``execveat`` 的路径为空串即 AT_EMPTY_PATH 时，可执行文件取 dirfd 注解里的路径）；判定“是 git 命令”
+  看 argv[0] 的 basename 或可执行文件路径的 basename 是 git（别名调用 ``execve("/usr/bin/git", ["gitx", …])`` 也收集，argv[0] 原样保留，之后按“不是 git 命令行，
+  无法判定”失败关闭）；行首是 exec 调用却认不出形态记 ``sampler:exec-unparsed``，不悄悄漏掉。
 * strace 选项：沿用审计器的文件类调用加进程派生，另加 ``connect``（收集网络目的地）。ARM64 实测（strace 6.8）：沿用审计器的
   ``-e verbose=none`` 时，execve 的 argv 和 connect 的 sockaddr 都被打印成不透明指针——读 git 历史的提交号取不到，连接的
   目的地也判不了——所以这里改成只让 execve、execveat、connect 以 verbose 形式解码（``-e verbose=execve,execveat,connect``），
@@ -248,9 +283,30 @@ _GARBAGE_CALL = re.compile(r"\d+\s+([^\s(]+)\(")
 _DETACHED_END = "<detached ...>"
 _LOST_RESULT_END = " = ?"
 _MAY_END_WITHOUT_RESULT = frozenset({"execve", "execveat", "exit", "exit_group"})
+# 被丢弃的垃圾行里“名字属于副作用类”的单独计数（评审提示，不影响有效性判定）：这类调用若真的生效，就是会改文件系统或对外连接的调用——线程中途消失，
+# 它的结果无从得知，trace 里却一点痕迹都不留（最坏情形：被杀线程的最后一次写入／unlink／rename／外连已经生效而采样看不见）。名字解析不出来或是随机名
+# （``???``、``syscall_0x…``）的不算；真实垃圾行的名字本来就是随机的（见过 lsetxattr、unlinkat、syscall_0x…），所以只计数留样、不按名字直接判无效。
+# 名字集合：unlink／rename／link／symlink／mkdir／rmdir／mknod／truncate／chmod／chown／各种 xattr 的写入与删除／改时间戳／creat，加会对外连接或在文件系统
+# 里建节点的 connect、sendto、sendmsg、sendmmsg、bind，以及改挂载的 mount、umount；open／openat／openat2 只在参数里带写入类标志时才算。
+SIDE_EFFECT_CALLS = frozenset({
+    "unlink", "unlinkat", "rename", "renameat", "renameat2", "link", "linkat", "symlink", "symlinkat", "mkdir", "mkdirat", "rmdir", "mknod", "mknodat",
+    "truncate", "truncate64", "ftruncate", "ftruncate64", "chmod", "fchmod", "fchmodat", "fchmodat2", "chown", "chown32", "fchown", "fchown32",
+    "lchown", "lchown32", "fchownat", "setxattr", "lsetxattr", "fsetxattr", "setxattrat", "removexattr", "lremovexattr", "fremovexattr", "removexattrat",
+    "utime", "utimes", "utimensat", "futimesat", "creat", "connect", "sendto", "sendmsg", "sendmmsg", "bind", "mount", "umount", "umount2", "pivot_root"})
+_OPEN_CALLS = frozenset({"open", "openat", "openat2"})
+_WRITE_OPEN_FLAGS = re.compile(r"\bO_(?:WRONLY|RDWR|CREAT|TRUNC)\b")
+# 同一份 raw 里最多追踪多少个“出现过垃圾行的 tid”（用来核对它之后是否真的再没有任何行，见 StreamAggregator.finish）：每个 tid 存一条别名化的垃圾行
+# （≤300 字符），内存有界；超出上限即记 sampler:limit:detached-tids（失败关闭）。垃圾行总数超过 64 本来就判采样无效，上限留得很宽。
+MAX_DETACHED_TIDS = 1_000
 _CONNECT_CALL = re.compile(r"^(?:\d+\s+)?connect\((.*)$", re.S)
 _CONNECT_RESUMED = re.compile(r"^(?:\d+\s+)?<\.\.\. connect resumed>")
 _EXECVE_CALL = re.compile(r'^(?:\d+\s+)?execve\("((?:[^"\\]|\\.)*)"(?:\.\.\.)?, ')
+# execveat(dirfd, "路径", [argv], …)：dirfd 是 AT_FDCWD 或数字，-y 下带 <注解>（注解是该描述符指向的路径，可能含逗号，所以非贪婪地一直找到 “>, "” 为止）。
+# AT_EMPTY_PATH 时路径是空串，可执行文件就是 dirfd 注解里的路径（fexecve 就是这样调用的）。
+_EXECVEAT_CALL = re.compile(r'^(?:\d+\s+)?execveat\(([A-Za-z0-9_-]+(?:<.*?>)?),\s*"((?:[^"\\]|\\.)*)"(?:\.\.\.)?, ')
+# 行首（可带进程号）是 execve／execveat 调用：只认调用本身，不认 “<... execve resumed>”、路径里碰巧含这个词的行。
+_EXEC_START = re.compile(r"^(?:\d+\s+)?(execve|execveat)\(")
+_DIRFD_ANNOTATION = re.compile(r"[^<]*<(.*)>", re.S)
 _SOCK_INET = re.compile(r'sa_family=AF_INET, sin_port=htons\((\d+)\), sin_addr=inet_addr\("([^"]*)"\)')
 _SOCK_INET6 = re.compile(r'sa_family=AF_INET6, sin6_port=htons\((\d+)\),.*?inet_pton\(AF_INET6, "([^"]*)"')
 _SOCK_UNIX = re.compile(r'sa_family=AF_UNIX, sun_path=(@?)"((?:[^"\\]|\\.)*)"(\.\.\.)?')
@@ -562,15 +618,51 @@ def _parse_string_array(text: str, start: int) -> list[str] | None:
     return None
 
 
+class ExecLineUnparsed(ValueError):
+    """行首是 execve／execveat 调用，但认不出它的形态（路径参数不是字符串、execveat 的 dirfd 或路径解析不了，或 AT_EMPTY_PATH 而 dirfd 没有路径注解）：
+    无法判断被执行的是不是 git。采样器对此失败关闭——``StreamAggregator`` 记一个 ``sampler:exec-unparsed`` 未解析原因，采样随之无效，而不是悄悄漏掉。"""
+
+
 def parse_git_execve(line: str) -> tuple[str, ...] | None:
-    """execve 行里 argv[0] 是 git 时返回完整 argv；argv 不可见但可执行文件名是 git 时返回哨兵；不是 git 返回 None。"""
-    match = _EXECVE_CALL.match(line)
-    if match is None:
+    """execve／execveat 行是 git 命令时返回完整 argv；argv 不可见但可执行文件名是 git 时返回哨兵；不是 git 返回 None；不是 exec 调用行也返回 None。
+
+    判定“是 git 命令”：argv[0] 的 basename 是 git，**或**被执行的可执行文件路径的 basename 是 git（后者抓别名调用：
+    ``execve("/usr/bin/git", ["gitx", …])`` 里 argv[0] 是 gitx，可执行文件却是 git；返回的 argv 原样保留 argv[0]，``git_usage_problem`` 与登记侧
+    的 C6 看到 argv[0] 不是 git 就按“不是 git 命令行，无法判定”处理，同样失败关闭）。可执行文件路径：execve 取路径参数；execveat 取路径参数，为空串
+    （AT_EMPTY_PATH）时取 dirfd 注解里的路径（``execveat(3</usr/bin/git>, "", …, AT_EMPTY_PATH)``）。
+
+    行首是 exec 调用却认不出形态——路径参数不是字符串、execveat 的参数解析不了、AT_EMPTY_PATH 而 dirfd 没有绝对路径注解且 argv[0] 又不是 git——
+    抛 ``ExecLineUnparsed``（失败关闭，不悄悄漏掉）。"""
+    start = _EXEC_START.match(line)
+    if start is None:
         return None
-    argv = _parse_string_array(line, match.end())
+    unresolved = ExecLineUnparsed(line[:120])
+    if start.group(1) == "execve":
+        match = _EXECVE_CALL.match(line)
+        if match is None:
+            raise unresolved
+        executable: str | None = _unescape(match.group(1))
+        argv_start = match.end()
+    else:
+        match = _EXECVEAT_CALL.match(line)
+        if match is None:
+            raise unresolved
+        executable = _unescape(match.group(2))
+        if executable == "":  # AT_EMPTY_PATH：可执行文件就是 dirfd 指向的文件，路径在 dirfd 的 <…> 注解里（AT_FDCWD 的注解是当前目录，不是可执行文件）
+            annotation = _DIRFD_ANNOTATION.fullmatch(match.group(1))
+            path = _unescape(annotation.group(1)) if annotation and not match.group(1).startswith("AT_FDCWD") else ""
+            executable = path if path.startswith("/") else None
+        argv_start = match.end()
+    argv = _parse_string_array(line, argv_start)
     if argv:
-        return tuple(argv) if os.path.basename(argv[0]) == "git" else None
-    if os.path.basename(_unescape(match.group(1))) == "git":
+        if os.path.basename(argv[0]) == "git" or (executable is not None and os.path.basename(executable) == "git"):
+            return tuple(argv)
+        if executable is None:  # argv[0] 不是 git，而可执行文件认不出来：无法排除它其实是 git
+            raise unresolved
+        return None
+    if executable is None:
+        raise unresolved
+    if os.path.basename(executable) == "git":
         return ("git", GIT_ARGV_HIDDEN)
     return None
 
@@ -610,6 +702,17 @@ def parse_connect(line: str) -> tuple[str, str] | None:
     return ("unparsed", body[:120])
 
 
+def side_effect_call(line: str) -> bool:
+    """一条被丢弃的垃圾行（或它的样例文本）的调用名是否属于“副作用类”（``SIDE_EFFECT_CALLS``；open／openat／openat2 要在参数里带
+    O_WRONLY、O_RDWR、O_CREAT、O_TRUNC 才算）。名字解析不出来（不是“<进程号> <名字>(…”的形状）或是随机名（``???``、``syscall_0x…``）的不算。
+    filter 用它给垃圾行分类计数，merge 用它给样例排序（副作用类优先留样）；纯函数，只看文本。"""
+    found = _GARBAGE_CALL.match(line)
+    if found is None:
+        return False
+    name = found.group(1)
+    return name in SIDE_EFFECT_CALLS or (name in _OPEN_CALLS and _WRITE_OPEN_FLAGS.search(line) is not None)
+
+
 # ---------------------------------------------------------------------------
 # 流式聚合（filter 的核心，将来正式执行自带采样时直接复用）
 # ---------------------------------------------------------------------------
@@ -647,8 +750,17 @@ class StreamAggregator:
         # 未解析原因的原始行样例 {原因: [别名化、截断后的行]}。只收不在容忍集合内的原因（容忍的悬着调用另有 unfinished_samples）；
         # 每个原因最多 MAX_SAMPLES_PER_REASON 条、最多 MAX_SAMPLE_REASONS 个原因，先到先得。
         self.unresolved_samples: dict[str, list[str]] = {}
-        # 被当作垃圾行丢弃的带名字的 strace 行（形态 A、B）的原样样例（别名化、截断、去重），最多 MAX_DETACHED_SAMPLES 条。
-        self.detached_samples: list[str] = []
+        # 被当作垃圾行丢弃的带名字的 strace 行（形态 A、B）的原样样例（别名化、截断、去重）。两个桶各自最多 MAX_DETACHED_SAMPLES 条，输出时副作用类在前、
+        # 其它在后，合起来最多 MAX_DETACHED_SAMPLES 条——副作用类优先留样（见 detached_samples）。
+        self._samples_side: list[str] = []
+        self._samples_other: list[str] = []
+        # 被丢弃的垃圾行里名字属于副作用类（side_effect_call）的条数：只给评审看，不影响有效性判定；输出在 raw 顶层 detached_side_effects（有才写）。
+        self.side_effect_markers = 0
+        # 被丢弃的、带进程号（tid）前缀的垃圾行：tid -> 别名化的垃圾行原文。垃圾行描述的是“中途消失的线程”，它的 tid 之后不该再出现任何行；
+        # feed 里每行先问一句“这个 tid 是不是在这里面”，在就挪到 _not_terminal（tid -> (垃圾行, 之后第一次出现它的行)），finish 时转成未解析原因。
+        # 两张表合起来最多 MAX_DETACHED_TIDS 项，内存随不同 tid 数增长、与总行数无关。
+        self._garbage_tids: dict[str, str] = {}
+        self._not_terminal: dict[str, tuple[str, str]] = {}
         # 为发现“这一行引入了新的未解析原因”而保留的解析器计数快照：每行只比较一次整数（parser.unresolved），不逐行求和字典。
         self._seen_unresolved = 0
         self._seen_reasons: dict[str, int] = {}
@@ -660,8 +772,11 @@ class StreamAggregator:
     def feed(self, raw: str) -> None:
         self.lines += 1
         line = raw.rstrip("\n")
+        if self._garbage_tids:  # 见过垃圾行之后才付这个代价：这一行的 tid 若在“垃圾行的 tid”表里，那个线程其实没有消失（见 _seen_again）
+            self._seen_again(line)
         if "???(" in line and _MARKER.match(line):
             self.markers += 1
+            self._note_garbage_tid(line)
             return
         # 带名字的垃圾行（形态 A、B，见 _GARBAGE_CALL）也在这里丢弃并计数，不交给 TraceParser，也不走 connect／execve 旁路：
         # 垃圾行的名字是随机的，哪怕恰好叫 connect 或 execve，参数也是残留寄存器，不是真实的目的地或 argv。
@@ -670,7 +785,7 @@ class StreamAggregator:
             return
         if (" connect(" in line or line.startswith("connect(") or "<... connect resumed>" in line) and self._side_connect(line):
             return
-        if " execve(" in line or line.startswith("execve("):
+        if "execve" in line:  # execve／execveat 调用行（_side_execve 自己按行首精确匹配，其它碰巧含这个词的行直接略过）
             self._side_execve(line)
         parser = self.parser
         # resumed 行本身不带调用的起点（路径、参数都在 unfinished 那一行）。解析器处理 resumed 行时会把 pending 里对应的起始部分
@@ -712,11 +827,45 @@ class StreamAggregator:
         if not end.endswith(_DETACHED_END) and found.group(1) in _MAY_END_WITHOUT_RESULT:
             return False
         self.markers += 1
-        if len(self.detached_samples) < MAX_DETACHED_SAMPLES:
+        side_effect = side_effect_call(end)
+        if side_effect:
+            self.side_effect_markers += 1
+        bucket = self._samples_side if side_effect else self._samples_other
+        if len(bucket) < MAX_DETACHED_SAMPLES:
             sample = self._shorten(end)
-            if sample not in self.detached_samples:
-                self.detached_samples.append(sample)
+            if sample not in self._samples_side and sample not in self._samples_other:
+                bucket.append(sample)
+        self._note_garbage_tid(end)
         return True
+
+    @property
+    def detached_samples(self) -> list[str]:
+        """输出的垃圾行样例：副作用类在前、其它在后（各自按到达顺序），合起来最多 MAX_DETACHED_SAMPLES 条——副作用类优先留样，没有副作用类的行时与从前逐字相同。"""
+        return (self._samples_side + self._samples_other)[:MAX_DETACHED_SAMPLES]
+
+    def _note_garbage_tid(self, line: str) -> None:
+        """记下一条被丢弃的垃圾行的 tid（行首的进程号），供之后核对“它是不是真的再没有出现”。已判定不是终结的 tid 不再重复登记（同一个 tid 只记一次）；
+        追踪表满了（MAX_DETACHED_TIDS）就记 sampler:limit:detached-tids——这一条没法核对，失败关闭。"""
+        found = _PID.match(line)
+        if found is None:
+            return
+        tid = found.group(1)
+        if tid in self._not_terminal:
+            return
+        if tid not in self._garbage_tids and len(self._garbage_tids) + len(self._not_terminal) >= MAX_DETACHED_TIDS:
+            self._limit("limit:detached-tids", line)
+            return
+        self._garbage_tids[tid] = self._shorten(line)
+
+    def _seen_again(self, line: str) -> None:
+        """这一行的 tid 若是某条垃圾行的 tid：那个线程不是“中途消失”（消失的线程之后不会再有任何行），丢弃的那一行可能是真实调用，挪进 _not_terminal，
+        finish 时记 ``sampler:detached-not-terminal:<tid>``（同一个 tid 只记一次）。垃圾行自己再来一条同 tid 的垃圾行也算（一个线程不会消失两次）。"""
+        found = _PID.match(line)
+        if found is None:
+            return
+        garbage = self._garbage_tids.pop(found.group(1), None)
+        if garbage is not None:
+            self._not_terminal[found.group(1)] = (garbage, self._shorten(line))
 
     def _limit(self, reason: str, line: str | None = None) -> None:
         key = "sampler:" + reason
@@ -807,8 +956,14 @@ class StreamAggregator:
         return True
 
     def _side_execve(self, line: str) -> None:
-        """execve 行同时交给 TraceParser（它要记 exec 路径），这里另外收集 git 子进程的 argv，用于确定读了哪些历史提交。"""
-        argv = parse_git_execve(line)
+        """execve／execveat 行同时交给 TraceParser（它要记 exec 路径），这里另外收集 git 子进程的 argv，用于确定读了哪些历史提交。
+
+        行首是 exec 调用却认不出形态（见 ``ExecLineUnparsed``）：记 ``sampler:exec-unparsed`` 未解析原因并留样例，采样随之无效——失败关闭，不悄悄漏掉。"""
+        try:
+            argv = parse_git_execve(line)
+        except ExecLineUnparsed:
+            self._limit("exec-unparsed", line)
+            return
         if argv is not None and argv not in self.git_commands:
             if len(self.git_commands) >= MAX_GIT_COMMANDS:
                 self._limit("limit:git-commands", line)
@@ -910,6 +1065,16 @@ class StreamAggregator:
             reasons["sampler:connect-unfinished-at-eof"] = len(self.connect_pending)
         for reason, count in self.sampler_reasons.items():
             reasons[reason] = reasons.get(reason, 0) + count
+        # 被丢弃的垃圾行描述的是“中途消失的线程”，它的 tid 之后不该再出现任何行；出现了就说明那一行不是垃圾（线程没有消失），丢弃它可能漏掉一次真实的调用，
+        # 记 sampler:detached-not-terminal:<tid>（同一个 tid 只记一次）。不同的原因键最多 MAX_SAMPLE_REASONS 个，超出的合并成 …:more，计数是超出的 tid 数——
+        # 键数有界（不随 tid 数膨胀），总计数仍是 tid 数，保持“unresolved 等于各原因计数之和”。这些原因都不在容忍集合内，采样随之无效／证据不完整。
+        not_terminal = list(self._not_terminal.items())
+        individual, overflow = not_terminal[:MAX_SAMPLE_REASONS], not_terminal[MAX_SAMPLE_REASONS:]
+        for tid, _evidence in individual:
+            key = "sampler:detached-not-terminal:" + tid
+            reasons[key] = reasons.get(key, 0) + 1
+        if overflow:
+            reasons["sampler:detached-not-terminal:more"] = reasons.get("sampler:detached-not-terminal:more", 0) + len(overflow)
         # 流结束时仍悬着的东西也各留诊断样例。TraceParser.pending 是“进程号 → 起始部分（不含 <unfinished ...> 标记）”，拼回原行；
         # 容忍的 unfinished-calls-at-eof 放进 unfinished_samples（最多 8 条，给评审看这些悬着的是什么调用），不占未解析原因的样例额度。
         unfinished_samples = [self._shorten(f"{pid} {text}{_UNFINISHED_MARK}")
@@ -921,6 +1086,12 @@ class StreamAggregator:
                 self._keep_sample("deferred-process-events-at-eof", self._shorten(event))
         for pid in list(self.connect_pending)[:MAX_SAMPLES_PER_REASON]:
             self._keep_sample("sampler:connect-unfinished-at-eof", self._shorten(self.connect_pending_lines.get(pid, "")))
+        for tid, evidence in individual:  # 每个 tid 两条样例：被丢弃的垃圾行，和它之后第一次再出现的那一行
+            for text in evidence:
+                self._keep_sample("sampler:detached-not-terminal:" + tid, text)
+        if overflow:
+            for text in overflow[0][1]:
+                self._keep_sample("sampler:detached-not-terminal:more", text)
         coverage: dict[str, Any] = {
             "stream_complete": True, "unresolved": sum(reasons.values()), "unresolved_reasons": dict(sorted(reasons.items())),
             "unfinished_calls": len(parser.pending) + len(self.connect_pending), "unresolved_process_events": parser.deferred_count,
@@ -943,10 +1114,14 @@ class StreamAggregator:
             "network": [{"family": family, "target": target} for family, target in sorted(self.network)],
             "run": None,
         }
-        # 顶层可选键：被当作垃圾行丢弃的带名字的 strace 行的原样样例。放在 raw 顶层而不是 coverage 里——登记侧对 sample.coverage 的键集合
-        # 是闭合的，只认 detached_markers 与 unfinished_samples；merge 后进 review（登记侧不解释 review）。没有这样的行时不写。
-        if self.detached_samples:
-            document["detached_samples"] = list(self.detached_samples)
+        # 顶层可选键：被当作垃圾行丢弃的带名字的 strace 行的原样样例（副作用类在前、最多 8 条），和其中名字属于副作用类的行数。放在 raw 顶层而不是
+        # coverage 里——登记侧对 sample.coverage 的键集合是闭合的，只认 detached_markers 与 unfinished_samples；merge 后进 review（登记侧不解释 review）。
+        # 没有这样的行时都不写，输出与没有这项功能时逐字相同。
+        samples = self.detached_samples
+        if samples:
+            document["detached_samples"] = samples
+        if self.side_effect_markers:
+            document["detached_side_effects"] = self.side_effect_markers
         return document
 
 
@@ -972,8 +1147,9 @@ RAW_COVERAGE_OPTIONAL_KEYS = frozenset({"unresolved_samples", "unfinished_sample
 SAMPLE_COVERAGE_OPTIONAL_KEYS = frozenset({"unfinished_samples"})
 RAW_KEYS = frozenset({"schema_version", "unit_id", "aliases", "chunk_lines", "lines", "coverage", "repo_accesses", "outside_accesses",
                       "git_commands", "network", "run"})
-# raw 顶层的可选键（旧 raw 没有，缺省为空）：detached_samples 是被当作垃圾行丢弃的带名字的 strace 行的原样样例。
-RAW_OPTIONAL_KEYS = frozenset({"detached_samples"})
+# raw 顶层的可选键（旧 raw 没有，缺省为空）：detached_samples 是被当作垃圾行丢弃的带名字的 strace 行的原样样例（副作用类在前）；
+# detached_side_effects 是被丢弃的垃圾行里名字属于副作用类的条数（评审提示，不影响有效性判定）。
+RAW_OPTIONAL_KEYS = frozenset({"detached_samples", "detached_side_effects"})
 COMMAND_KEYS = frozenset({"launcher", "argv", "cwd_rel", "sha256"})
 RUN_KEYS = frozenset({"label", "cache", "exit_code", "signal", "timed_out", "seconds", "started_utc", "finished_utc", "command",
                       "git_status_before", "git_status_after", "commit", "kernel", "strace", "sampler_sha256", "env_overrides",
@@ -986,7 +1162,7 @@ SAMPLED_KEYS = frozenset({"commit", "utc", "kernel", "strace", "sampler_sha256",
 SAMPLED_RUN_KEYS = frozenset({"cache", "exit_code", "lines", "seconds"})
 REVIEW_KEYS = frozenset({"runs", "git_status", "untracked_reads", "writes", "network", "run_differences", "docker", "allowances",
                          "git_argv_hidden"})
-REVIEW_OPTIONAL_KEYS = frozenset({"unresolved_samples", "detached_samples"})
+REVIEW_OPTIONAL_KEYS = frozenset({"unresolved_samples", "detached_samples", "detached_side_effects"})
 # review.allowances 里新增的两类登记项（没登记时整个键不出现）。每一行的键集合是闭合的。
 INSTALLED_ROW_KEYS = frozenset({"prefix", "contract", "reads", "sample", "unused"})
 TRANSIENT_ROW_KEYS = frozenset({"pattern", "paths", "read_back", "sample", "unused"})
@@ -1035,6 +1211,14 @@ def _check_unfinished_samples(problems: list[str], where: str, samples: Any, lim
     if (not isinstance(samples, list) or len(samples) > limit
             or not all(isinstance(item, str) and len(item) <= SAMPLE_LINE_CHARS for item in samples)):
         problems.append(f"{where} 必须是字符串列表：最多 {limit} 条，每条不超过 {SAMPLE_LINE_CHARS} 字符")
+
+
+def _check_side_effect_count(problems: list[str], where: str, value: Any, coverage: Any) -> None:
+    """副作用类垃圾行的条数：非负整数，且不超过 coverage.detached_markers（它是被丢弃的垃圾行总数，副作用类只是其中一部分）。"""
+    if not _is_int(value) or value < 0:
+        problems.append(f"{where} 必须是非负整数")
+    elif isinstance(coverage, dict) and _is_int(coverage.get("detached_markers")) and value > coverage["detached_markers"]:
+        problems.append(f"{where}（{value}）不能超过 coverage.detached_markers（{coverage['detached_markers']}）")
 
 
 def _check_common(problems: list[str], document: Mapping[str, Any], *, tracked: bool) -> None:
@@ -1098,6 +1282,8 @@ def validate_raw(document: Any) -> list[str]:
         return ["raw 的 schema_version 或字段集合不符"]
     if "detached_samples" in document:
         _check_unfinished_samples(problems, "detached_samples", document["detached_samples"], MAX_DETACHED_SAMPLES)
+    if "detached_side_effects" in document:
+        _check_side_effect_count(problems, "detached_side_effects", document["detached_side_effects"], document.get("coverage"))
     if not isinstance(document["unit_id"], str) or not document["unit_id"]:
         problems.append("unit_id 必须是非空字符串")
     if not _is_int(document["lines"]) or document["lines"] < 0 or not _is_int(document["chunk_lines"]) or document["chunk_lines"] < 0:
@@ -1162,6 +1348,8 @@ def validate_sample(document: Any) -> list[str]:
                                   coverage.get("unresolved_reasons") if isinstance(coverage, dict) else None)
     if "detached_samples" in review:
         _check_unfinished_samples(problems, "review.detached_samples", review["detached_samples"], MAX_DETACHED_SAMPLES)
+    if "detached_side_effects" in review:
+        _check_side_effect_count(problems, "review.detached_side_effects", review["detached_side_effects"], document.get("coverage"))
     allowances = review["allowances"]
     if isinstance(allowances, dict):  # 旧证据的 allowances 只有 unix_sockets 与 class_prefixes，这里只核新增的两类登记项
         for key, keys in (("installed_dirs", INSTALLED_ROW_KEYS), ("transient", TRANSIENT_ROW_KEYS)):
@@ -1565,6 +1753,13 @@ CLASSES_NEEDING_CONTRACT = frozenset({"toolchain", "dependency-content", "perfor
 # 允许被命令写入的仓库外类别：只影响速度的缓存和不绑定的暂存。往工具链、依赖内容、系统或 HOME 配置里写都说明命令在改变
 # 自己的输入（例如 GOMODCACHE 被写意味着在联网下载），采样一律判无效。
 WRITABLE_CLASSES = frozenset({"performance-cache", "scratch"})
+# outside 前缀的宽度限制（只限 scratch 与 virtual 两类，其它类不动）：scratch 读写执行全放行、virtual 不绑定任何内容，所以前缀必须落在评审过的
+# 窄范围内——否则 --class-prefix 可以把 /home/、/usr/ 登记成 scratch（等于放开读写执行），或把任意目录登记成 virtual（等于不绑定）。
+# 两张表抄自登记侧 unit_records._DECLARED_SCRATCH_PREFIXES／_DECLARED_VIRTUAL_PREFIXES：采样器不 import 登记侧的私有常量，两边各自测试
+# （test_ci_declared_sampler_followup 里用登记侧的同名常量交叉核对同值），改动必须同步评审。前缀等于表里某项，或在以 / 结尾的某项之下才合格
+# （见 prefix_within）；/dev/null 是精确路径，只许它自己。依据：真实样本里这两类用到的前缀正好就是这些。
+SCRATCH_CLASS_PREFIXES = ("/dev/null", "{TMP}/", "{WORK}/go-tmp/", "{HOME}/.config/go/telemetry/")
+VIRTUAL_CLASS_PREFIXES = ("/proc/", "/sys/", "/dev/", "/run/")
 
 # （前缀, 类别, 合同）。前缀以 / 结尾表示目录前缀，否则表示精确路径及其子路径。注意 /usr/local 与 /opt 下除工具链之外的
 # 内容故意不归类：手装二进制不在 dpkg 包摘要的覆盖范围内，必须逐条人工评审，不能被一个宽前缀悄悄吞掉。
@@ -1603,8 +1798,18 @@ class Classifier:
         return None
 
 
+def prefix_within(prefix: str, allowed: Sequence[str]) -> bool:
+    """前缀是否落在评审过的窄范围表里：等于表里某项，或在以 / 结尾的某项之下（只更窄，不更宽）才合格；不以 / 结尾的项（如 /dev/null）是
+    精确路径，只许它自己。与登记侧 ``unit_records._declared_prefix_within`` 同口径（采样器自己的一份，两边各自测试）。"""
+    return any(prefix == item or (item.endswith("/") and prefix.startswith(item)) for item in allowed)
+
+
 def parse_class_prefix(spec: str) -> tuple[str, str, str | None]:
-    """``前缀=类别[:合同]`` 的人工登记，用于内置表没有覆盖、但经评审认定可以接受的路径（例如 Go 的 telemetry 计数目录）。"""
+    """``前缀=类别[:合同]`` 的人工登记，用于内置表没有覆盖、但经评审认定可以接受的路径（例如 Go 的 telemetry 计数目录）。
+
+    与登记侧一致的宽度限制：class=scratch 的前缀只许 ``SCRATCH_CLASS_PREFIXES`` 里的项或它们之下更窄的路径，class=virtual 的前缀只许
+    ``VIRTUAL_CLASS_PREFIXES`` 里的项或它们之下更窄的路径（见 ``prefix_within``）；其它类别不限。不合格报 ``SamplerError``：这样的前缀登记
+    表里写出来，登记侧的范围校验也会拒绝，不留到登记时才发现。"""
     prefix, separator, rest = spec.partition("=")
     cls, _, contract = rest.partition(":")
     if (not separator or cls not in OUTSIDE_CLASSES
@@ -1612,6 +1817,10 @@ def parse_class_prefix(spec: str) -> tuple[str, str, str | None]:
         raise SamplerError(f"--class-prefix 必须是 前缀=类别[:合同]，前缀以 / 或 {{WORK}}/、{{HOME}}/、{{TMP}}/ 开头，类别取 {'、'.join(OUTSIDE_CLASSES)}：{spec!r}")
     if cls in CLASSES_NEEDING_CONTRACT and not contract:
         raise SamplerError(f"类别 {cls} 必须带合同（前缀=类别:合同）：{spec!r}")
+    for class_name, allowed in (("scratch", SCRATCH_CLASS_PREFIXES), ("virtual", VIRTUAL_CLASS_PREFIXES)):
+        if cls == class_name and not prefix_within(prefix, allowed):
+            raise SamplerError(f"--class-prefix：class={class_name} 的前缀只许 {list(allowed)} 或它们之下更窄的路径"
+                               f"（范围过宽会放开读写执行或不绑定任何内容，登记侧会拒绝）：{spec!r}")
     return prefix, cls, contract or None
 
 
@@ -1679,12 +1888,28 @@ def check_repo_relative(value: Any, where: str, *, directory: bool | None = None
     return value
 
 
+# 依赖安装目录：合同 → 它唯一允许的前缀。安装目录的豁免（读取不要求已跟踪）只对合同定义里写明的那个目录开放，否则登记表可以把任何不含
+# 已声明输入的目录（backend/internal/、src/gen/）登记成「未跟踪读取豁免区」，等于自己放宽合同。抄自登记侧
+# unit_records._DECLARED_INSTALLED_PREFIXES：采样器不 import 登记侧的私有常量，两边各自测试（test_ci_declared_sampler_followup 用登记侧的同名
+# 常量交叉核对同值），改动必须同步评审——新增安装目录先在登记侧评审登记，再抄到这里。
+INSTALLED_DIR_PREFIXES = {"cache:node-modules": "frontend/node_modules/"}
+
+
 def check_installed_dir(prefix: Any, contract: Any) -> tuple[str, str]:
-    """依赖安装目录：前缀是以 / 结尾的仓库相对路径，合同是 ``cache:<名字>``（登记侧要求安装目录的内容由缓存类合同绑定）。"""
+    """依赖安装目录：前缀是以 / 结尾的仓库相对路径，合同是 ``cache:<名字>``（登记侧要求安装目录的内容由缓存类合同绑定）。
+
+    另与登记侧一致：合同必须是 ``INSTALLED_DIR_PREFIXES`` 里评审过的依赖安装合同，前缀必须恰等于该合同定义的安装目录（目前只有
+    ``cache:node-modules`` 对应 ``frontend/node_modules/``）——前缀多一级、少一级、换个目录、没有尾斜杠都不行。"""
     check_repo_relative(prefix, "--installed-dir 的前缀", directory=True)
     kind, separator, name = contract.partition(":") if isinstance(contract, str) else ("", "", "")
     if not separator or kind != "cache" or not _CONTRACT_NAME.fullmatch(name):
         raise SamplerError(f"--installed-dir 的合同必须是 cache:<名字>（名字只含字母、数字、点、下划线、连字符）：{contract!r}")
+    allowed = INSTALLED_DIR_PREFIXES.get(contract)
+    if allowed is None:
+        raise SamplerError(f"--installed-dir 的合同 {contract!r} 不是评审过的依赖安装合同（登记侧只认 {sorted(INSTALLED_DIR_PREFIXES)}，"
+                           "否则登记表可以把任何目录登记成未跟踪读取的豁免区）")
+    if prefix != allowed:
+        raise SamplerError(f"--installed-dir 的前缀必须等于合同 {contract} 定义的安装目录 {allowed!r}：{prefix!r}")
     return prefix, contract
 
 
@@ -1696,11 +1921,17 @@ def parse_installed_dir(spec: str) -> tuple[str, str]:
     return check_installed_dir(prefix, contract)
 
 
+# glob 里 ``*``／``?`` 合计的个数上限，抄自登记侧 unit_records._DECLARED_MAX_GLOB_WILDCARDS（采样器自己的一份，两边各自测试同值）：
+# 匹配用正则，通配符个数多了会回溯放大（5 个通配符对 120 字符的路径已要约 0.2 秒，7 个要一分钟以上）；暂存路径模式是人评审过的，4 个足够。
+MAX_GLOB_WILDCARDS = 4
+
+
 def check_transient(pattern: Any) -> str:
     """自产暂存路径的模式：仓库相对的目录前缀（以 / 结尾，字面匹配，不支持通配符），或不以 / 结尾的 glob。
 
     glob 只支持 ``*``（一段路径内任意个字符）与 ``?``（一段路径内一个字符），都不跨 /，整条相对路径必须完全匹配（不含它的
-    子路径）；不支持 ``**`` 与方括号字符类。不含通配符的项就是一个精确路径。写法与登记侧 ``repo_ignored`` 的每一项一致。
+    子路径）；不支持 ``**`` 与方括号字符类；``*``／``?`` 合计最多 ``MAX_GLOB_WILDCARDS``（4）个。不含通配符的项就是一个精确路径。写法与
+    登记侧 ``repo_ignored`` 的每一项一致。
     """
     if isinstance(pattern, str) and pattern.endswith("/"):
         check_repo_relative(pattern, "--transient", directory=True)
@@ -1712,6 +1943,10 @@ def check_transient(pattern: Any) -> str:
         raise SamplerError(f"--transient 不支持 **（* 不跨 /，要整个目录请写以 / 结尾的前缀）：{pattern!r}")
     if "[" in pattern or "]" in pattern:
         raise SamplerError(f"--transient 的 glob 只支持 * 与 ?，不支持方括号字符类：{pattern!r}")
+    wildcards = pattern.count("*") + pattern.count("?")
+    if wildcards > MAX_GLOB_WILDCARDS:
+        raise SamplerError(f"--transient 的 glob 通配符（* 与 ? 合计）最多 {MAX_GLOB_WILDCARDS} 个，实际 {wildcards} 个"
+                           f"（正则回溯耗时随通配符个数多项式增长，登记侧同样拒绝）：{pattern!r}")
     return pattern
 
 
@@ -1917,12 +2152,18 @@ def merge_raws(raws: Sequence[Mapping[str, Any]], *, tree: Path, allow_unix: Seq
     coverage_reasons: dict[str, int] = {}
     unresolved_samples: dict[str, list[str]] = {}
     unfinished_samples: list[str] = []
-    detached_samples: list[str] = []
+    # 被丢弃的垃圾行样例：各次运行按顺序合并，相同的行只留一条；副作用类（side_effect_call，按样例文本重新分类）优先留样——副作用类在前、其它在后，
+    # 合起来最多 MAX_DETACHED_SAMPLES 条。没有副作用类的行时与从前逐字相同（先到先得、最多 8 条）。
+    samples_side: list[str] = []
+    samples_other: list[str] = []
     for raw in raws:
         raw_coverage = raw["coverage"]
-        for item in raw.get("detached_samples", []):  # 旧 raw 没有这个键，缺省为空；各次运行按顺序合并，相同的行只留一条
-            if item not in detached_samples and len(detached_samples) < MAX_DETACHED_SAMPLES:
-                detached_samples.append(item)
+        for item in raw.get("detached_samples", []):  # 旧 raw 没有这个键，缺省为空
+            if item in samples_side or item in samples_other:
+                continue
+            bucket = samples_side if side_effect_call(item) else samples_other
+            if len(bucket) < MAX_DETACHED_SAMPLES:
+                bucket.append(item)
         for reason, count in raw_coverage["unresolved_reasons"].items():
             coverage_reasons[reason] = coverage_reasons.get(reason, 0) + count
         # 诊断样例（旧 raw 没有这两个键，缺省为空）：各次运行按顺序合并，相同的行只留一条，上限与 filter 里的一致。
@@ -2097,8 +2338,12 @@ def merge_raws(raws: Sequence[Mapping[str, Any]], *, tree: Path, allow_unix: Seq
     }
     if unresolved_samples:  # 可选键：按原因归类的原始行样例，登记侧不解释 review，所以放这里而不是 sample.coverage
         review["unresolved_samples"] = {reason: unresolved_samples[reason] for reason in sorted(unresolved_samples)}
-    if detached_samples:  # 可选键：被丢弃的带名字的垃圾行（形态 A、B）的原样样例，同样放 review
+    detached_samples = (samples_side + samples_other)[:MAX_DETACHED_SAMPLES]
+    if detached_samples:  # 可选键：被丢弃的带名字的垃圾行（形态 A、B）的原样样例（副作用类在前），同样放 review
         review["detached_samples"] = detached_samples
+    side_effects = sum(raw.get("detached_side_effects", 0) for raw in raws)
+    if side_effects:  # 可选键：被丢弃的垃圾行里名字属于副作用类的条数（各次运行求和），只给评审看，不影响有效性
+        review["detached_side_effects"] = side_effects
     sample = {
         "schema_version": SAMPLE_SCHEMA, "unit_id": first["unit_id"], "command": dict(runs[0]["command"]),
         "sampled": {"commit": runs[0]["commit"], "utc": max(run["finished_utc"] for run in runs), "kernel": runs[0]["kernel"],
@@ -2138,6 +2383,11 @@ ROOT_FILES = "(根目录文件)"
 # 登记侧规定：scope.contracts 声明了某个工具链（toolchain:go、toolchain:pnpm），就必须在 repo.files 里单独列出它的依赖锁文件
 # （消费者拿安装结果与锁文件交叉核对，聚合在范围摘要里的锁文件没法单独核对）。draft 据此补入，评审清单注明是“由合同要求补入”的。
 TOOLCHAIN_LOCK_FILES = {"go": ("backend/go.mod", "backend/go.sum"), "pnpm": ("frontend/pnpm-lock.yaml", "frontend/package.json")}
+# 同理，声明了下面这些缓存合同，也必须把它的锁文件作为单文件条目列进 repo.files（WP1e 起登记侧的范围校验强制：消费者核验 lock-derived-pnpm／
+# lock-derived-go-sum 时要求锁文件是输入里单独的 ``file:`` 条目，安装结果摘要要等于它；漏列会拖到记录核验才失败）。抄自登记侧
+# unit_records._DECLARED_CACHE_CONTRACT_LOCKS：采样器不 import 登记侧的私有常量，两边各自测试同值，改动必须同步评审。draft 的做法与工具链锁文件
+# 一致：合同在 scope.contracts 里（含安装目录带来的合同）就补入，文件必须是仓库里跟踪的，不存在或未跟踪的不凭空添加，只在评审清单里标“缺失”。
+CACHE_CONTRACT_LOCK_FILES = {"cache:node-modules": "frontend/pnpm-lock.yaml", "cache:go-mod-cache": "backend/go.sum"}
 _COMMIT_IN_ARGV = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
 _LEDGER_COMMIT = re.compile(r'"(?:before_commit|after_commit)"\s*:\s*"([0-9a-f]{40})"')
 # 登记侧保留的 range 名：repo.root_listing 为真时输入里多一个叫 scope:root-listing 的条目，所以任何 range 都不能叫 root-listing。
@@ -2632,20 +2882,32 @@ def coverage_review_lines(check: Mapping[str, Any]) -> list[str]:
 #   等读引用库或写仓库状态的一类；用了 -C、-c、--git-dir 这类会换仓库或改行为的全局选项；放行清单之外的选项（例如 --all、
 #   --stdin、--since 会把引用库或标准输入、当前时间带进来）；没给修订（缺省落到 HEAD）；参数不可见。拿不准一律算“未固定”——
 #   误判的代价只是该单元保持 rerun-only（每次重跑），漏判的代价是登记表自相矛盾。
+#
+# 规格 v2（步骤 5 WP4d；独立验收 #3、#4 之后调度者统一的口径。登记侧 unit_records._declared_git_usage_problem 按同一份规格改，采样器与登记侧各抄一份常量、
+# 不互相 import，由测试交叉核对；采样器这一侧的期望值写在 test_ci_declared_sampler_git_spec 里）相对此前的变化：
+#   1. 选项表里没有 --oneline（show、log）：它等于 --pretty=oneline --abbrev-commit，输出里的缩写长度随对象库大小与 core.abbrev 配置变化。
+#   2. --format=／--pretty= 的取值只放行两种：精确的 ``raw``，以及“普通字符＋白名单占位符”的自定义格式串（见 git_format_problem）；其余一律不固定。
+#   3. merge-base、cat-file、rev-parse 的 argv 里出现 ``--`` 一律不固定：它在这三个子命令里只是“选项结束”，其后仍是修订（实测
+#      ``git merge-base A B -- HEAD`` 的输出随 HEAD 变化）；show、log、rev-list、ls-tree、diff-tree 里 ``--`` 之后才是路径（沿用）。
+#   4. 所有“数字”判定（-n <数字>、-<数字>、--max-count=<数字>、--abbrev=<数字>）一律 ASCII 数字（isascii() 且 isdigit()），拒绝 ``²`` 之类的 Unicode 数字。
+# 已知残余：log／show 默认会显示 refs/notes/commits 里的 notes（规格不要求 --no-notes）；notes 在被测仓库里极少见，写进“放宽项汇总”那一类。
 
 # 一个固定的修订：完整 40 位小写十六进制提交号，可带 ^{tree}、^{commit} 或 :路径（路径是对象内的相对路径，里面出现 HEAD 之类的字样不算引用）。
 _GIT_REV = re.compile(r"[0-9a-f]{40}(?:\^\{(?:tree|commit)\}|:.*)?", re.S)
 # log／rev-list 范围两端：完整提交号（可带 ^{commit}）。
 _GIT_COMMIT = re.compile(r"[0-9a-f]{40}(?:\^\{commit\})?")
-_GIT_COUNT_OPTION = re.compile(r"-[0-9]+")
 _GIT_OBJECT_TYPES = frozenset({"blob", "tree", "commit", "tag"})
 # 子命令名之前允许出现的全局选项：只有这两个不改变命令作用的仓库与结果。
 _GIT_PLAIN_GLOBALS = frozenset({"--no-pager", "--no-optional-locks"})
+# 这三个子命令里 ``--`` 只是“选项结束”，其后的参数仍是修订（不是路径分隔）：argv 里出现 ``--`` 一律不固定。
+_GIT_DASHDASH_REVISION_SUBCOMMANDS = frozenset({"merge-base", "cat-file", "rev-parse"})
+# 取值必须是数字的选项前缀（log／rev-list 的 --max-count=，ls-tree 的 --abbrev=）。
+_GIT_NUMERIC_PREFIXES = ("--max-count=", "--abbrev=")
 # 子命令 -> (放行的选项（精确匹配）, 放行的选项前缀, 修订参数的处理方式)。不在表里的子命令、选项一律未固定。
 #   all：``--`` 之前的位置参数全是修订，至少一个；first：只有第一个位置参数是修订，后面是路径（ls-tree）；
 #   range：log、rev-list，位置参数是固定提交、两端都是完整提交号的 A..B／A...B、或 ^固定提交，至少一个正向修订。
 _GIT_FIXED_SUBCOMMANDS: dict[str, tuple[frozenset[str], tuple[str, ...], str]] = {
-    "show": (frozenset({"-s", "--no-patch", "--quiet", "--stat", "--name-only", "--name-status", "--oneline", "--no-color", "-z"}),
+    "show": (frozenset({"-s", "--no-patch", "--quiet", "--stat", "--name-only", "--name-status", "--no-color", "-z"}),
              ("--format=", "--pretty="), "all"),
     "cat-file": (frozenset({"-t", "-s", "-e", "-p"}), (), "all"),
     "rev-parse": (frozenset({"--verify", "-q", "--quiet"}), (), "all"),
@@ -2654,12 +2916,63 @@ _GIT_FIXED_SUBCOMMANDS: dict[str, tuple[frozenset[str], tuple[str, ...], str]] =
                 ("--abbrev=",), "first"),
     "diff-tree": (frozenset({"-r", "-t", "-z", "-M", "-C", "--root", "--no-commit-id", "--name-only", "--name-status", "--raw", "--stat",
                              "--no-renames", "--find-renames", "--quiet"}), (), "all"),
-    "log": (frozenset({"--oneline", "--parents", "--no-walk", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges",
+    "log": (frozenset({"--parents", "--no-walk", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges",
                        "--name-only", "--name-status", "--stat", "--quiet", "--no-color", "--count", "-z"}),
             ("--format=", "--pretty=", "--max-count="), "range"),
     "rev-list": (frozenset({"--parents", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges", "--count", "--quiet",
                             "--objects", "--not", "-z"}), ("--max-count=",), "range"),
 }
+
+
+# --format=／--pretty= 的取值（规格 v2 §2）只放行两种，其余一律不固定：
+#   1. 精确的 ``raw``（--pretty=raw、--format=raw）；
+#   2. 自定义格式串：``format:<串>``、``tformat:<串>``，或不带前缀但含 ``%`` 的值（git 把它当隐含的 tformat；--format= 与 --pretty= 在 git 里走同一个解析，
+#      所以两个选项的取值规则相同）。``<串>`` 里允许普通字符（任意不含 ``%`` 的字符：空格、字母、标点……），和下面白名单里的占位符；不在表里的 ``%…`` 序列一律不固定：
+#        %H（完整提交号） %T（完整树号） %P（完整父提交号） %an %ae %aI（严格 ISO 作者日期） %at（作者时间戳） %cn %ce %cI %ct %s %b %B %n %%，
+#        以及 %x 加恰好两位十六进制数字（如 %x00）。
+#      明确禁止：%D %d（带出 HEAD／分支／标签）、%N（notes）、%S、%g*（reflog）、%(…) 全部、%h %t %p（缩写长度随对象库大小变）、%ad %cd %aD %cD（随 log.date
+#      配置变）、%ar %cr（相对当前时间）、%aN %aE %cN %cE（读 .mailmap）、%f %e %G* %C %w %< %> %m %+ %- 等——凡不在白名单里的都不固定。
+# 不含 % 又没有 format:／tformat: 前缀、也不是精确 raw 的值，在 git 里是命名格式（oneline、short、medium、full、fuller、reference、email、mboxrd）或
+# pretty.<名字> 配置别名：它们的输出带缩写提交号、受 log.date 影响的日期，或展开结果看不见，所以不固定（规格 v2 没有明说这一类，按“只放行 raw”保守处理）。
+# 注意：这里只管“值”。``--format=``／``--pretty=`` 这两个前缀是否放行由子命令表决定（show、log 放行；rev-list、cat-file 等不放行）。
+_GIT_FORMAT_PLACEHOLDERS = frozenset({"H", "T", "P", "an", "ae", "aI", "at", "cn", "ce", "cI", "ct", "s", "b", "B", "n", "%"})
+_GIT_FORMAT_HEX = re.compile(r"x[0-9a-fA-F]{2}")  # %x 加恰好两位十六进制数字
+_GIT_FORMAT_NAMES = frozenset({"raw"})
+_GIT_FORMAT_PREFIXES = ("format:", "tformat:")
+
+
+def _ascii_digits(text: str) -> bool:
+    """非空，且全是 ASCII 数字 0-9。规格 v2 §4：所有“数字”判定一律用它（``isascii() and isdigit()``），拒绝 ``²``、``٣`` 这类 Unicode 数字。"""
+    return text.isascii() and text.isdigit()
+
+
+def git_format_problem(value: str) -> str | None:
+    """``--format=``／``--pretty=`` 的取值是否是精确的 raw，或“普通字符＋白名单占位符”的自定义格式串：是返回 None，否则返回一句话原因。规则见上面的整体说明。"""
+    if value in _GIT_FORMAT_NAMES:
+        return None
+    body = value
+    prefixed = False
+    for prefix in _GIT_FORMAT_PREFIXES:
+        if value.startswith(prefix):
+            body, prefixed = value[len(prefix):], True
+            break
+    if not prefixed and "%" not in body:
+        return (f"格式名 {value!r} 不是精确的 raw，也不是 format:／tformat: 自定义格式串（命名格式 oneline、short、medium、full、fuller、reference、email、mboxrd "
+                "和 pretty.<名字> 配置别名的输出带缩写提交号、受 log.date 影响的日期或看不见的展开）")
+    index = body.find("%")
+    while index >= 0:
+        rest = body[index + 1:]
+        if rest[:2] in _GIT_FORMAT_PLACEHOLDERS and len(rest[:2]) == 2:
+            index += 3
+        elif rest[:1] in _GIT_FORMAT_PLACEHOLDERS and rest[:1]:
+            index += 2
+        elif _GIT_FORMAT_HEX.match(rest):
+            index += 4
+        else:
+            return (f"占位符 {body[index:index + 4]!r} 不在白名单内（只放行 %H %T %P %an %ae %aI %at %cn %ce %cI %ct %s %b %B %n %% 和 %x 加两位十六进制；"
+                    "%D %d 带出引用名，%N 读 notes，%g* 读 reflog，%(…) 读引用库，%h %t %p 缩写长度随对象库变，%ad %cd %aD %cD 受 log.date 影响，%ar %cr 随当前时间变，%aN 等读 mailmap）")
+        index = body.find("%", index)
+    return None
 
 
 def _git_range_arg_ok(arg: str) -> bool:
@@ -2702,16 +3015,26 @@ def git_usage_problem(argv: Sequence[str]) -> str | None:
         if after_separator:
             continue  # “--” 之后是路径，不是修订
         if arg == "--":
+            if name in _GIT_DASHDASH_REVISION_SUBCOMMANDS:
+                return (f"{name} 的 argv 里有 --：它在 {name} 里只是“选项结束”，其后仍是修订，不是路径分隔"
+                        "（git merge-base A B -- HEAD 的输出随 HEAD 变化），一律按不固定判")
             after_separator = True
         elif mode == "range" and arg == "-n":
-            if index >= len(args) or not args[index].isdigit():
-                return "-n 后面不是数字"
+            if index >= len(args) or not _ascii_digits(args[index]):
+                return "-n 后面不是数字（只接受 ASCII 数字 0-9）"
             index += 1
-        elif mode == "range" and _GIT_COUNT_OPTION.fullmatch(arg):
-            continue
+        elif mode == "range" and arg.startswith("-") and _ascii_digits(arg[1:]):
+            continue  # -<数字>
         elif arg.startswith("-"):
             if arg not in exact and not arg.startswith(prefixes):
                 return f"选项 {arg} 不在放行清单内（可能把引用库、标准输入或当前时间带进来；拿不准按未固定）"
+            if arg.startswith(("--format=", "--pretty=")):
+                problem = git_format_problem(arg.partition("=")[2])
+                if problem is not None:
+                    return f"选项 {arg} 的取值不是精确的 raw，也不是“普通字符＋白名单占位符”的格式串：{problem}"
+            for numeric in _GIT_NUMERIC_PREFIXES:
+                if arg.startswith(numeric) and not _ascii_digits(arg[len(numeric):]):
+                    return f"选项 {arg} 的取值不是数字（只接受 ASCII 数字 0-9）"
             options.add(arg)
         else:
             positional.append(arg)
@@ -2751,7 +3074,9 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
     # scope 里（它会白白绑上一个合同，或把输出区放宽到从未观察到的路径），未命中的在评审清单里列出让人看。
     installed_used = sorted((item["prefix"], item["contract"]) for item in allowances.get("installed_dirs", []) if not item["unused"])
     transient_used = sorted({item["pattern"] for item in allowances.get("transient", []) if not item["unused"]})
-    transient_matchers = [PathMatcher(pattern) for pattern in transient_used]
+    # 旧 sample（命令行校验收紧之前合并出来的）里的模式写法可能已经不合规（例如通配符超过 4 个）：这里不抛异常、不让整批起草崩掉，匹配器取 None 跳过，
+    # 模式本身照常进 repo_ignored 草案，交给覆盖自检按登记侧的规则报 C0-scope（该单元转 rerun-only）。
+    transient_matchers = [matcher for matcher in (_ignored_matcher(pattern) for pattern in transient_used) if matcher is not None]
     installed_prefixes = tuple(prefix for prefix, _contract in installed_used)
 
     def skip_listed(relative: str) -> bool:
@@ -2801,18 +3126,18 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
                     for prefix, (cls, contract) in sorted(outside.items())]
     contracts = sorted({contract for _cls, contract in outside.values() if contract} | {contract for _prefix, contract in installed_used})
 
-    # 合同要求的依赖锁文件：登记侧规定声明了某个工具链合同，就必须在 repo.files 里单独列出它的锁文件，即使范围已经覆盖也不去重。
-    # 文件必须是仓库里跟踪的；不存在或未跟踪的不凭空添加，只在评审清单里标出。
+    # 合同要求的依赖锁文件：登记侧规定声明了某个工具链合同（toolchain:go、toolchain:pnpm）或缓存合同（cache:node-modules、cache:go-mod-cache），
+    # 就必须在 repo.files 里单独列出它的锁文件，即使范围已经覆盖也不去重。上面的 contracts 已经并入了安装目录（installed_used）带来的合同，
+    # 所以 --installed-dir 的 cache:node-modules 也在这里判。文件必须是仓库里跟踪的；不存在或未跟踪的不凭空添加，只在评审清单里标出。
+    requirements = [(f"toolchain:{tool}", lock) for tool, locks in TOOLCHAIN_LOCK_FILES.items() if f"toolchain:{tool}" in contracts for lock in locks]
+    requirements += [(contract, lock) for contract, lock in CACHE_CONTRACT_LOCK_FILES.items() if contract in contracts]
     lock_rows: list[tuple[str, str, str]] = []  # (合同, 文件, 已在 files／补入／缺失)
     added_locks: list[str] = []
-    for tool, locks in TOOLCHAIN_LOCK_FILES.items():
-        if f"toolchain:{tool}" not in contracts:
-            continue
-        for lock in locks:
-            state = "已在 files" if lock in repo["files"] else "补入" if lock in files else "缺失"
-            if state == "补入":
-                added_locks.append(lock)
-            lock_rows.append((f"toolchain:{tool}", lock, state))
+    for contract, lock in requirements:
+        state = "已在 files" if lock in repo["files"] else "补入" if lock in files else "缺失"
+        if state == "补入" and lock not in added_locks:  # 同一个锁文件被两个合同同时要求（backend/go.sum）只补一次
+            added_locks.append(lock)
+        lock_rows.append((contract, lock, state))
     if added_locks:
         repo["files"] = sorted({*repo["files"], *added_locks})
 
@@ -2925,9 +3250,10 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
             lines.append(f"| `{_md(shown)}` | {total} | {read} | {f'{read / total:.3f}' if total else '无跟踪文件'} |")
     lines += ["", f"- 单文件（files）共 {len(repo['files'])} 个，被读到的跟踪文件共 {repo['reads']} 个。"]
     if lock_rows:
-        lines.append("- 依赖锁文件（登记侧规定声明了工具链合同就必须在 files 里单独列出，范围已覆盖也不去重；“补入”＝由合同要求补入）："
+        lines.append("- 依赖锁文件（登记侧规定声明了工具链合同 toolchain:*，或缓存合同 cache:node-modules／cache:go-mod-cache，就必须在 files 里单独列出它的锁文件，"
+                     "范围已覆盖也不去重；“补入”＝由合同要求补入）："
                      + "；".join(f"`{_md(lock)}`（{_md(contract)}：{state}）" for contract, lock, state in lock_rows))
-        missing = [lock for _contract, lock, state in lock_rows if state == "缺失"]
+        missing = list(dict.fromkeys(lock for _contract, lock, state in lock_rows if state == "缺失"))  # 两个合同要同一个文件时只列一次
         if missing:
             lines.append("- **依赖锁文件缺失**：" + "、".join(f"`{_md(item)}`" for item in missing)
                          + " 不是仓库里跟踪的文件，没有补入；登记前必须人工处理，否则登记侧会拒绝这份范围。")
@@ -3083,9 +3409,14 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
         lines.append("- 它们描述的是“中途消失的线程”：Go 运行时的线程被杀或退出时，strace 把它当作还在系统调用里，用残留寄存器解码出一行名字、"
                      "参数都乱七八糟的东西（形态一以 `<detached ...>` 结尾；形态二以 ` = ?` 结尾，第一个参数是指针常量）。不携带读取信息，"
                      "已丢弃并计数，没有交给解析器。")
+        side_effects = review.get("detached_side_effects", 0)
+        if side_effects:
+            lines.append(f"- **其中名字属于副作用类的有 {side_effects} 条**（会改文件系统或对外连接的调用名：unlink／rename／link／mkdir／truncate／chmod／chown／setxattr／creat、"
+                         "带写入标志的 open／openat、connect／sendto 等；名字随机或解析不出来的不算）：线程已经消失、调用结果不可知，若它真的生效（写入、删除、改名、外连），"
+                         "trace 里不会有任何痕迹——这是丢弃垃圾行的已知代价，评审时留意；下面的样例里副作用类排在前面。")
         if garbled:
-            lines.append(f"- 带名字的垃圾行原样样例（采样根路径已换成别名，每条截到 {SAMPLE_LINE_CHARS} 字符，最多 {MAX_DETACHED_SAMPLES} 条）：")
-            lines += [f"  - `{_quote(item)}`" for item in garbled]
+            lines.append(f"- 带名字的垃圾行原样样例（采样根路径已换成别名，每条截到 {SAMPLE_LINE_CHARS} 字符，最多 {MAX_DETACHED_SAMPLES} 条，副作用类优先留样）：")
+            lines += [f"  - `{_quote(item)}`" + (" ← 副作用类" if side_effect_call(item) else "") for item in garbled]
         else:
             lines.append("- 没有带名字的垃圾行，只有裸标记。")
     lines += ["", "### 13 覆盖自检（登记侧 declared_coverage）", ""]
