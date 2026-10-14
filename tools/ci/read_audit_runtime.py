@@ -3,6 +3,11 @@
 
 本模块属于执行器的可信启动部分，代码摘要纳入执行器身份。它不能把普通宿主目录认作本轮输出；
 只有经实际挂载核对的私有 tmpfs 才能提供输出证明。未支持的内核输入和系统调用仍拒绝承接。
+
+输出归属有两套合同并存：``OutputTracker``（v3，按路径记账，rename／link／失败探测一律拒绝）保持原样，
+供历史凭证与 control 四链重放；``OutputTrackerV4``（v4，按对象身份记账）供普通受管单元使用。
+普通单元由 ``prepare`` 在受管请求里写入 ``trace_contract``，``run_child`` 据此让过滤器产出 v4 轨迹；
+control 四链有自己的 prepare／run_child，不经过这个启用点。
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ import argparse
 import errno
 import hashlib
 import importlib.util
+import itertools
 import json
 import math
 import os
@@ -37,6 +43,29 @@ MASK_ROOT = "/root/oauth-capture"
 ENVIRONMENT_PATHS = {"/proc/filesystems", "/proc/sys/crypto/fips_enabled"}
 LAUNCHER = ["unshare", "-m", "--propagation", "private", "bash", "-c",
             'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec "$@"', "entry-gates"]
+
+# 轨迹合同版本（显式开关，默认 v3）。v3 是历史合同：输出事件 6 键、旧 OutputTracker、旧重放逻辑，字节行为不变，
+# control 四链的 sidecar 复用的就是它；v4 在此基础上支持 rename／link／失败探测并对只读事件按变更纪元去重。
+# 文档版本字符串的权威定义在同目录 read_audit.py（RUNTIME_TRACE_SCHEMA_V4）；这里再存一份，是为了让重放 v3 凭证的路径
+# 不依赖同目录 read_audit.py 里新增的名字（新旧文件混用时 v3 验真也不会因此出错）。两处取值由测试比对，防止漂移。
+TRACE_SCHEMA_V4 = "read-audit-trace/v4"
+TRACE_CONTRACT_V3 = "v3"
+TRACE_CONTRACT_V4 = "v4"
+TRACE_CONTRACTS = (TRACE_CONTRACT_V3, TRACE_CONTRACT_V4)
+# 输出事件条数上限（去重之后仍超限则判失败，不静默截断）。
+MAX_OUTPUT_EVENTS = 200000
+
+# v4 事件里需要识别的系统调用名。两路径调用的两端各产生一条事件，由 role／peer 配对。
+TWO_PATH_NAMES = frozenset({"rename", "renameat", "renameat2", "link", "linkat"})
+LINK_NAMES = frozenset({"link", "linkat"})
+SYMLINK_NAMES = frozenset({"symlink", "symlinkat"})
+OPEN_NAMES = frozenset({"open", "openat", "creat"})
+# 对已证明的对象只改元数据或内容、不增删名字的调用：不改变名字空间，也不需要额外归属证明。
+METADATA_WRITE_NAMES = frozenset({"chmod", "fchmodat", "fchmodat2", "chown", "lchown", "fchownat",
+                                  "utime", "utimes", "utimensat", "futimesat", "truncate", "truncate64"})
+ROLES = ("source", "destination")
+# 这两个 renameat2 标志会让两个名字互换或在原位留下占位对象，对象身份模型不支持，一律拒绝。
+UNSUPPORTED_RENAME_FLAGS = frozenset({"RENAME_EXCHANGE", "RENAME_WHITEOUT"})
 
 
 class RuntimeContractError(RuntimeError):
@@ -400,6 +429,272 @@ class OutputTracker:
         return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(self.problems)}
 
 
+class OutputTrackerV4:
+    """v4 轨迹合同的输出归属跟踪器：按「对象身份」而不是按路径证明私有临时盘里每个名字的来源。
+
+    为什么换模型：采集工具的原子写几乎处处是「写临时文件 → rename／link 发布」，旧跟踪器（OutputTracker）对
+    rename、link 一律不认，对失败的创建探测（makedirs(exist_ok=True) 之类的 EEXIST）也一律判问题，导致大多数
+    单元的输出归属证明失败。这里改成：
+
+    * 名字 → 对象：``names`` 把绝对路径映射到对象编号；对象有类型（普通文件／目录）和当前名字个数。
+      硬链接让两个名字指向同一对象，删除其中一个名字不影响另一个；
+    * 一个名字只有来自「本轮的创建」或「对已证明名字的 rename／link」才算已证明，盘外的东西永远进不来；
+    * 写类调用失败按错误码与已知状态判，不再一刀切；读取、探测、执行类调用沿用旧规则，只要求路径已证明。
+
+    安全边界（保守拒绝，记入 problems）：符号链接、RENAME_EXCHANGE／RENAME_WHITEOUT、另一端不在盘内的两路径调用、
+    来源未证明的 rename／link、把目录硬链接、目录覆盖非空目录、目录移进自己的子目录，以及写类调用除 EEXIST／ENOENT／
+    ENOTDIR 之外的任何失败。
+
+    ``observe_event`` 返回「本事件是否改变了名字空间状态」：解析器据此推进变更纪元并决定能否对只读事件去重；
+    重放端用同一个返回值重算纪元，所以任何会改名字空间的分支都必须返回 True，反之必须返回 False。
+    """
+
+    def __init__(self, contract: dict[str, Any]) -> None:
+        self.root = validate_contract(contract)["temporary_root"]
+        # 名字 → 对象编号；对象 → 类型／名字个数；目录路径 → 直接子项个数（rmdir 与「覆盖非空目录」判定用）。
+        self.names: dict[str, int] = {self.root: 0}
+        self.kinds: dict[int, str] = {0: "directory"}
+        self.links: dict[int, int] = {0: 1}
+        self.entries: dict[str, int] = {self.root: 0}
+        self.next_object = 1
+        self.covered: set[str] = set()
+        self.problems: set[str] = set()
+
+    # ------------------------------------------------------------------ 名字表的基本操作
+
+    def _problem(self, text: str, path: str) -> None:
+        self.problems.add(text + path)
+
+    def _kind_of(self, path: str) -> str | None:
+        """名字当前指向的对象类型；未知名字返回 None。"""
+        obj = self.names.get(path)
+        return None if obj is None else self.kinds[obj]
+
+    def _create(self, path: str, kind: str) -> None:
+        """在已证明的父目录下新建对象并绑定名字（调用方已确认父目录已知、路径未知）。"""
+        obj = self.next_object
+        self.next_object += 1
+        self.names[path] = obj
+        self.kinds[obj] = kind
+        self.links[obj] = 1
+        self.entries[os.path.dirname(path)] += 1
+        if kind == "directory":
+            self.entries[path] = 0
+
+    def _unbind(self, path: str) -> None:
+        """解绑一个名字；对象失去最后一个名字后消亡。目录解绑前调用方须确认它没有子项。"""
+        obj = self.names.pop(path)
+        self.entries[os.path.dirname(path)] -= 1
+        self.entries.pop(path, None)
+        self.links[obj] -= 1
+        if self.links[obj] == 0:
+            del self.links[obj]
+            del self.kinds[obj]
+
+    def _move(self, source: str, destination: str, kind: str) -> None:
+        """把名字 source（目录则连同整棵子树）改成 destination；调用方已确认 destination 不存在且不在 source 之内。"""
+        if kind == "directory":
+            prefix = source + "/"
+            moved = [item for item in self.names if item == source or item.startswith(prefix)]
+        else:
+            moved = [source]
+        for item in moved:
+            renamed = destination + item[len(source):]
+            self.names[renamed] = self.names.pop(item)
+            if item in self.entries:
+                self.entries[renamed] = self.entries.pop(item)
+        self.entries[os.path.dirname(source)] -= 1
+        self.entries[os.path.dirname(destination)] += 1
+
+    # ------------------------------------------------------------------ 事件入口
+
+    def observe_event(self, event: dict[str, Any]) -> bool:
+        path, kind, name, succeeded = event["path"], event["kind"], event["name"], event["succeeded"]
+        if not under(path, self.root):
+            return False
+        self.covered.add(path)
+        target = event["target"]
+        if name in OPEN_NAMES and succeeded and (target is None or not under(target, self.root)):
+            self._problem("文件描述符未绑定到私有临时盘：", path)
+            return False
+        if name in TWO_PATH_NAMES:
+            return self._two_path(event)
+        if not succeeded:
+            self._failed(event)
+            return False
+        if name in SYMLINK_NAMES:
+            self._problem("私有临时盘内不允许创建符号链接：", path)
+            return False
+        known = path in self.names
+        if kind != "write":
+            # 读取、探测、执行、列目录：首次访问必须是本轮已证明的名字。
+            if not known:
+                self._problem("首次读取前未证明由本轮生成：", path)
+            return False
+        parent_is_directory = self._kind_of(os.path.dirname(path)) == "directory"
+        if name in {"mkdir", "mkdirat"}:
+            if known:
+                self._problem("创建目录时已存在：", path)
+            elif not parent_is_directory:
+                self._problem("新建目录的父目录未证明：", path)
+            else:
+                self._create(path, "directory")
+                return True
+        elif name in OPEN_NAMES:
+            if not known:
+                if (name != "creat" and "O_CREAT" not in event["flags"]) or not parent_is_directory:
+                    self._problem("首次写入缺少创建证明：", path)
+                else:
+                    self._create(path, "file")
+                    return True
+        elif name in {"unlink", "unlinkat", "rmdir"}:
+            return self._remove(path, name)
+        elif name in METADATA_WRITE_NAMES and known:
+            pass
+        else:
+            self._problem("未建立合同的输出操作：" + name + ":", path)
+        return False
+
+    def _failed(self, event: dict[str, Any]) -> None:
+        """单路径调用失败。
+
+        * 探测不存在的路径（kind 为 missing，即 ENOENT／ENOTDIR）：未知路径合法；已知名字却报不存在，轨迹与归属状态矛盾。
+        * 读取、探测、执行、列目录类调用的其他失败：它们既不创建也不删除任何东西，沿用旧规则，只要求访问的是本轮已证明的名字。
+          这一条不能收紧：python3 启动脚本时 glibc 的 realpath 会对私有目录下每一级路径 readlinkat 并得到 EINVAL，
+          执行没有执行权限的假程序会得到 EACCES，旧跟踪器对已证明路径上的这类失败一向放行。
+        * 写类调用失败（创建、删除、改名、改元数据）：按错误码与已知状态判。EEXIST 落在已知名字上是合法的「创建被拒绝」，
+          落在未知路径上说明有来源不明的对象；ENOENT／ENOTDIR 落在未知路径上是合法探测，落在已知名字上是矛盾；
+          其余任何错误码（EACCES、EISDIR、ENOTEMPTY 等）一律保守判问题。
+        """
+        path, kind, name, error = event["path"], event["kind"], event["name"], event["errno"]
+        known = path in self.names
+        if kind == "missing":
+            if known:
+                self._problem("已生成对象的缺失探测与轨迹矛盾：", path)
+        elif kind != "write":
+            if not known:
+                self._problem("首次读取前未证明由本轮生成：", path)
+        elif error == "EEXIST":
+            if not known:
+                self._problem("EEXIST 落在未知路径，与轨迹矛盾：", path)
+        elif error in {"ENOENT", "ENOTDIR"}:
+            if known:
+                self._problem("已生成对象的缺失探测与轨迹矛盾：", path)
+        else:
+            self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{name}:", path)
+
+    def _remove(self, path: str, name: str) -> bool:
+        obj = self.names.get(path)
+        if obj is None or path == self.root:
+            self._problem("删除未证明的输出：", path)
+            return False
+        kind = self.kinds[obj]
+        # unlink 只能删非目录、rmdir 只能删目录；unlinkat 是否带 AT_REMOVEDIR 不进事件，成功本身就说明形式匹配。
+        if (name == "unlink" and kind != "file") or (name == "rmdir" and kind != "directory"):
+            self._problem("删除方式与已生成对象类型不符：", path)
+            return False
+        if kind == "directory" and self.entries.get(path, 0):
+            # 内核只会删除空目录；归属状态里还有子项说明有删除没被观察到，轨迹与状态矛盾。
+            self._problem("删除了仍有已知子项的目录：", path)
+            return False
+        self._unbind(path)
+        return True
+
+    # ------------------------------------------------------------------ 两路径调用（rename／link）
+
+    def _two_path(self, event: dict[str, Any]) -> bool:
+        """rename／link 的所有判定都挂在来源端事件上；目的端事件只登记覆盖路径（上面已登记），不改状态。
+
+        这样跟踪器在两条事件之间不留隐藏状态：任何一条事件被去重或单独重放，结果都只取决于事件本身与名字表。
+        """
+        path, role, peer = event["path"], event["role"], event["peer"]
+        if event["kind"] != "write" or role not in ROLES:
+            self._problem("两路径调用缺少角色标记：", path)
+            return False
+        if peer is None or not under(peer, self.root):
+            # 另一端在盘外（或无法还原，例如 AT_EMPTY_PATH）：无法证明对象来源或去向，拒绝。
+            self._problem("两路径调用的另一端不在私有临时盘内：", path)
+            return False
+        if role == "destination":
+            return False
+        if not event["succeeded"]:
+            self._two_path_failed(event)
+            return False
+        if event["name"] in LINK_NAMES:
+            return self._link(path, peer)
+        if UNSUPPORTED_RENAME_FLAGS & set(event["flags"]):
+            self._problem("不支持 RENAME_EXCHANGE／RENAME_WHITEOUT：", path)
+            return False
+        return self._rename(path, peer)
+
+    def _two_path_failed(self, event: dict[str, Any]) -> None:
+        source, destination, error = event["path"], event["peer"], event["errno"]
+        if error == "EEXIST":
+            # link 的目标已存在，或 RENAME_NOREPLACE 的目标已存在：两端都必须是本轮已知的名字。
+            if source not in self.names or destination not in self.names:
+                self._problem("EEXIST 落在未知路径，与轨迹矛盾：", source)
+        elif error in {"ENOENT", "ENOTDIR"}:
+            # 来源不存在，或目标的父目录不存在（不是目录），都会得到这类错误；
+            # 来源已知、目标父目录也是已知目录时，这个失败无从解释。
+            if source in self.names and self._kind_of(os.path.dirname(destination)) == "directory":
+                self._problem("已生成对象的缺失探测与轨迹矛盾：", source)
+        else:
+            self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{event['name']}:", source)
+
+    def _link(self, source: str, destination: str) -> bool:
+        obj = self.names.get(source)
+        if obj is None:
+            self._problem("硬链接的来源未证明由本轮生成：", source)
+        elif self.kinds[obj] != "file":
+            self._problem("硬链接的来源不是普通文件：", source)
+        elif self._kind_of(os.path.dirname(destination)) != "directory":
+            self._problem("硬链接目标的父目录未证明：", destination)
+        elif destination in self.names:
+            self._problem("硬链接目标已存在却创建成功，与轨迹矛盾：", destination)
+        else:
+            # 目标名绑定到同一个对象：两个名字、一个对象。
+            self.names[destination] = obj
+            self.links[obj] += 1
+            self.entries[os.path.dirname(destination)] += 1
+            return True
+        return False
+
+    def _rename(self, source: str, destination: str) -> bool:
+        if self.root in (source, destination):
+            self._problem("不能移动或覆盖私有临时盘的根：", source)
+            return False
+        obj = self.names.get(source)
+        if obj is None:
+            self._problem("重命名的来源未证明由本轮生成：", source)
+            return False
+        if self._kind_of(os.path.dirname(destination)) != "directory":
+            self._problem("重命名目标的父目录未证明：", destination)
+            return False
+        kind = self.kinds[obj]
+        victim = self.names.get(destination)
+        if victim is not None:
+            if victim == obj:
+                # 同一对象的两个名字之间（含源与目标同名）：POSIX 规定成功但什么都不改。
+                return False
+            if self.kinds[victim] != kind:
+                self._problem("重命名覆盖了不同类型的已生成对象：", destination)
+                return False
+            if kind == "directory" and self.entries.get(destination, 0):
+                self._problem("目录重命名覆盖了非空目录：", destination)
+                return False
+        if kind == "directory" and destination.startswith(source + "/"):
+            self._problem("目录不能重命名到自己的子目录之下：", destination)
+            return False
+        if victim is not None:
+            # 被覆盖的名字解绑；它的对象若还有别的名字（硬链接）则继续存在。
+            self._unbind(destination)
+        self._move(source, destination, kind)
+        return True
+
+    def report(self) -> dict[str, Any]:
+        return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(self.problems)}
+
+
 def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: bool = False) -> dict[str, Any]:
     if not isinstance(context, dict) or context.get("schema_version") != CONTEXT_SCHEMA:
         raise RuntimeContractError("隔离环境凭证缺失")
@@ -458,8 +753,104 @@ def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: 
     return contract
 
 
+_V4_EVENT_KEYS = frozenset({"path", "kind", "name", "succeeded", "flags", "target", "errno", "call", "role", "peer", "epoch"})
+_V4_KINDS = frozenset({"read", "exec", "write", "missing", "stat", "dir", "list"})
+# v4 的 flags：原有的打开标志，加上 renameat2 的三个符号标志（strace 以符号输出）。v3 的校验正则保持原样不动。
+_V4_FLAG = re.compile(r"O_[A-Z0-9_]+|RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT")
+_ERRNO_NAME = re.compile(r"E[A-Z0-9]+")
+
+
+def _check_event_v4(event: Any, root: str) -> None:
+    """v4 输出事件的键集合、字段类型与字段之间的一致性；任何一项不符都按格式错误拒绝，不做宽容解释。"""
+    if not isinstance(event, dict) or set(event) != _V4_EVENT_KEYS:
+        raise RuntimeContractError("输出归属事件格式错误或越界")
+    path, kind, name = event["path"], event["kind"], event["name"]
+    succeeded, flags, target = event["succeeded"], event["flags"], event["target"]
+    error, call, role, peer, epoch = event["errno"], event["call"], event["role"], event["peer"], event["epoch"]
+    valid = (
+        all(isinstance(value, str) for value in (path, kind, name)) and bool(name) and kind in _V4_KINDS
+        and os.path.normpath(path) == path and under(path, root)
+        and isinstance(succeeded, bool)
+        and isinstance(flags, list) and all(isinstance(flag, str) and _V4_FLAG.fullmatch(flag) for flag in flags)
+        and flags == sorted(set(flags))
+        and (target is None or isinstance(target, str))
+        # 成功的调用没有错误码；失败的调用必须带形如 EEXIST 的错误码。
+        and (error is None or (isinstance(error, str) and _ERRNO_NAME.fullmatch(error) is not None))
+        and (error is None) == succeeded
+        # 缺失探测只可能来自因 ENOENT／ENOTDIR 失败的调用；不允许把别的失败改标成 missing 去躲开写类失败的错误码判定。
+        and (kind != "missing" or (not succeeded and error in {"ENOENT", "ENOTDIR"}))
+        and type(call) is int and call >= 1
+        and type(epoch) is int and epoch >= 0
+        # role／peer 只属于两路径调用：两路径调用的每条事件必须带角色，其余调用两者都为空。
+        and (role is not None) == (name in TWO_PATH_NAMES) and (role is None or role in ROLES)
+        and (peer is None or (isinstance(peer, str) and peer.startswith("/") and os.path.normpath(peer) == peer))
+        and (role is not None or peer is None))
+    if not valid:
+        raise RuntimeContractError("输出归属事件格式错误或越界")
+
+
+def _check_call_groups_v4(events: list[dict[str, Any]], root: str) -> None:
+    """同一个系统调用产生的事件必须连续、同名、结果一致；两路径调用的两端要能互相印证。
+
+    一次调用最多产生两条事件：openat 一类按请求路径与返回描述符各记一条，rename／link 一类按两端各记一条。
+    调用编号严格递增，所以把别的调用的事件拼进来、拆开配对或重排顺序都会被这里发现。
+    """
+    previous = 0
+    for call, group in itertools.groupby(events, key=lambda event: event["call"]):
+        items = list(group)
+        if call <= previous or len(items) > 2:
+            raise RuntimeContractError("输出事件的调用编号乱序、重复或同一调用的事件过多")
+        previous = call
+        first = items[0]
+        if any(item["name"] != first["name"] for item in items):
+            raise RuntimeContractError("同一调用的事件不是同名调用")
+        if len(items) == 2:
+            second = items[1]
+            if any(first[key] != second[key] for key in ("kind", "succeeded", "errno", "flags", "target")):
+                raise RuntimeContractError("同一调用的两条事件结果不一致")
+        if first["name"] not in TWO_PATH_NAMES:
+            continue
+        if len(items) == 2:
+            second = items[1]
+            if ((first["role"], second["role"]) != ROLES or first["peer"] != second["path"]
+                    or second["peer"] != first["path"]):
+                raise RuntimeContractError("两路径调用的配对事件角色或对端不自洽")
+        elif first["peer"] is not None and under(first["peer"], root):
+            # 另一端在盘内就一定有它自己的事件；只剩一端说明配对被拆开或事件被删。
+            raise RuntimeContractError("两路径调用缺少盘内另一端的事件")
+
+
+def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tuple[OutputTrackerV4, dict[str, set[str]]]:
+    """重放 v4 输出事件：先逐条与按调用分组做结构校验，再按顺序喂给跟踪器并重算变更纪元。
+
+    变更纪元 = 此前使名字空间状态发生变化的事件个数。解析器据此去重只读事件，重放端用同一个返回值自己重算，
+    每条事件携带的 epoch 必须与重算值一致——否则去重的前提（两条同键事件之间状态没变）就无从保证。
+    """
+    tracker = OutputTrackerV4(contract)
+    events = runtime.get("output_events")
+    if not isinstance(events, list) or len(events) > MAX_OUTPUT_EVENTS:
+        raise RuntimeContractError("输出归属轨迹缺失或超过上限")
+    for event in events:
+        _check_event_v4(event, tracker.root)
+    _check_call_groups_v4(events, tracker.root)
+    seen: dict[str, set[str]] = {}
+    epoch = 0
+    for event in events:
+        if event["epoch"] != epoch:
+            raise RuntimeContractError("输出事件的变更纪元与重算值不符")
+        if tracker.observe_event(event):
+            epoch += 1
+        seen.setdefault(event["path"], set()).add(event["kind"])
+    if tracker.report() != runtime.get("outputs") or tracker.problems:
+        raise RuntimeContractError("生成输出存在先读后写、来源不明或链接越界")
+    return tracker, seen
+
+
 def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]], *, historical: bool = False) -> set[str]:
-    """重放输出生成顺序、隔离身份和结束凭证；只返回确已证明的路径，不能按目录整段放行。"""
+    """重放输出生成顺序、隔离身份和结束凭证；只返回确已证明的路径，不能按目录整段放行。
+
+    按文档的 schema_version 分派：v4 走对象身份跟踪器与纪元／调用分组校验；其余（v3）走下面原样保留的旧合同。
+    """
     runtime = document.get("runtime") or {}
     contract = validate_context(runtime.get("context"), inputs, historical=historical)
     completion = runtime.get("completion") or {}
@@ -470,23 +861,29 @@ def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]], *, hi
     entries = [entry for entry in inputs if entry.get("detail", {}).get("schema_version") == host_schema]
     if completion.get("host_entries_sha256") != digest(entries):
         raise RuntimeContractError("实际命名空间中的输入快照未绑定执行记录")
-    tracker = OutputTracker(contract)
-    events = runtime.get("output_events")
-    if not isinstance(events, list) or len(events) > 200000:
-        raise RuntimeContractError("输出归属轨迹缺失或超过上限")
-    seen: dict[str, set[str]] = {}
-    for event in events:
-        if (not isinstance(event, dict) or set(event) != {"path", "kind", "name", "succeeded", "flags", "target"}
-                or not all(isinstance(event[key], str) for key in ("path", "kind", "name"))
-                or not isinstance(event["succeeded"], bool) or not isinstance(event["flags"], list)
-                or not all(isinstance(flag, str) and re.fullmatch(r"O_[A-Z0-9_]+", flag) for flag in event["flags"])
-                or (event["target"] is not None and not isinstance(event["target"], str))
-                or not under(event["path"], tracker.root)):
-            raise RuntimeContractError("输出归属事件格式错误或越界")
-        tracker.observe(event["path"], event["kind"], event["name"], "|".join(event["flags"]), event["succeeded"], event["target"])
-        seen.setdefault(event["path"], set()).add(event["kind"])
-    if tracker.report() != runtime.get("outputs") or tracker.problems:
-        raise RuntimeContractError("生成输出存在先读后写、来源不明或链接越界")
+    if document.get("schema_version") == TRACE_SCHEMA_V4:
+        if runtime["context"].get("control_chain") is not None:
+            # control 四链只产生并重放 v3 轨迹；v4 文档带 control 专用凭证，说明有人想绕开 control 的专用重放。
+            raise RuntimeContractError("v4 轨迹不得携带 control 专用凭证")
+        tracker, seen = _replay_events_v4(runtime, contract)
+    else:
+        tracker = OutputTracker(contract)
+        events = runtime.get("output_events")
+        if not isinstance(events, list) or len(events) > 200000:
+            raise RuntimeContractError("输出归属轨迹缺失或超过上限")
+        seen: dict[str, set[str]] = {}
+        for event in events:
+            if (not isinstance(event, dict) or set(event) != {"path", "kind", "name", "succeeded", "flags", "target"}
+                    or not all(isinstance(event[key], str) for key in ("path", "kind", "name"))
+                    or not isinstance(event["succeeded"], bool) or not isinstance(event["flags"], list)
+                    or not all(isinstance(flag, str) and re.fullmatch(r"O_[A-Z0-9_]+", flag) for flag in event["flags"])
+                    or (event["target"] is not None and not isinstance(event["target"], str))
+                    or not under(event["path"], tracker.root)):
+                raise RuntimeContractError("输出归属事件格式错误或越界")
+            tracker.observe(event["path"], event["kind"], event["name"], "|".join(event["flags"]), event["succeeded"], event["target"])
+            seen.setdefault(event["path"], set()).add(event["kind"])
+        if tracker.report() != runtime.get("outputs") or tracker.problems:
+            raise RuntimeContractError("生成输出存在先读后写、来源不明或链接越界")
     paths = dict(document.get("accesses") or [])
     expected = {path: set(kinds) for path, kinds in paths.items() if under(path, tracker.root)}
     if seen != expected:
@@ -621,7 +1018,13 @@ def run_child(request_path: Path, expected_digest: str) -> int:
     before = [audit.host_snapshot(path) for path in request["host_paths"]]
     if before != request["host_entries"]:
         raise RuntimeContractError("实际命名空间中的输入与登记快照不同")
-    argv = audit.strace_argv(request["argv"], output=trace_path, roots=["/"], strict=True, runtime_context=context_path)
+    # 轨迹合同版本由受管请求决定（请求带摘要，被测命令改不了）：请求里没有该键就是历史 v3，调用方式与改动前完全一致；
+    # 只有 prepare 明确写入 v4 时才把开关交给过滤器。
+    trace_contract = request.get("trace_contract", TRACE_CONTRACT_V3)
+    if trace_contract not in TRACE_CONTRACTS:
+        raise RuntimeContractError("启动请求的轨迹合同版本未知")
+    options = {} if trace_contract == TRACE_CONTRACT_V3 else {"trace_contract": trace_contract}
+    argv = audit.strace_argv(request["argv"], output=trace_path, roots=["/"], strict=True, runtime_context=context_path, **options)
     result = subprocess.run(argv, cwd=request["cwd"], env={**os.environ, "TMPDIR": str(root), "TMP": str(root), "TEMP": str(root)},
                             stdin=subprocess.DEVNULL, check=False)
     after = [audit.host_snapshot(path) for path in request["host_paths"]]
@@ -652,8 +1055,16 @@ def run_child(request_path: Path, expected_digest: str) -> int:
 
 
 def prepare(contract: dict[str, Any], *, output: Path, argv: list[str], cwd: str,
-            inputs: list[dict[str, Any]], test_spec: dict[str, Any] | None = None) -> list[str]:
-    """启动前建立专用空挂载点，写受管请求；实际文件快照在子命名空间再次核对。"""
+            inputs: list[dict[str, Any]], test_spec: dict[str, Any] | None = None,
+            trace_contract: str = TRACE_CONTRACT_V4) -> list[str]:
+    """启动前建立专用空挂载点，写受管请求；实际文件快照在子命名空间再次核对。
+
+    普通受管单元（执行器调用本函数）默认产出 v4 轨迹：请求里写入 ``trace_contract``，``run_child`` 据此让过滤器
+    产出 v4 文档。显式传 ``v3`` 时请求与改动前逐字节相同（不带该键）。control 四链有自己的 prepare／run_child，
+    不经过这里的 v4 启用点，仍然生产并重放 v3 轨迹。
+    """
+    if trace_contract not in TRACE_CONTRACTS:
+        raise RuntimeContractError("未知的轨迹合同版本")
     if not sys.platform.startswith("linux") or shutil.which("unshare") is None:
         raise RuntimeContractError("隔离合同只在具备 unshare 的 Linux 上可用")
     contract = validate_contract(contract)
@@ -668,6 +1079,8 @@ def prepare(contract: dict[str, Any], *, output: Path, argv: list[str], cwd: str
     request = {"contract_entry": contract_entry(contract), "parent_namespace": os.readlink("/proc/self/ns/mnt"),
                "output": str(output), "argv": argv, "cwd": cwd, "host_entries": entries,
                "host_paths": [entry["detail"]["path"] for entry in entries]}
+    if trace_contract != TRACE_CONTRACT_V3:
+        request["trace_contract"] = trace_contract
     if test_spec is not None:
         payload = {"unit_id": test_spec["unit_id"], "test_ids": test_spec["test_ids"]}
         transport = {"schema_version": TEST_TRANSPORT_SCHEMA, "spec": test_spec, "spec_sha256": digest(test_spec),

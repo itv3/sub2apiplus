@@ -25,7 +25,13 @@ strace 下，单元结束后按它的输入明细核对，超出声明的读取�
 以上为旧范围审计，始终标记 coverage_complete=false。B-11 严格模式不预筛路径、不跳过整仓声明，
 逐路径绑定精确宿主快照，元数据、字节码和缺失状态同样核对；不稳定、写入或未解析调用失败关闭。
 
-子命令：``filter --output <json> --root <目录> [--root …] [--strict]``；
+带隔离合同的轨迹有两个版本，由显式开关 ``trace_contract`` 选择，默认 v3（历史合同，行为不变）：
+v3 的输出事件是 6 键，rename／link／符号链接与失败的写探测一律不认；v4 的输出事件是 11 键（另有 errno、call、role、
+peer、epoch），两路径调用的两端按调用编号配对，失败调用带错误码，只读事件按「变更纪元」去重。重放按文档自己的
+schema_version 分派，所以 v3 的已封存凭证永远按旧合同只读验真。control 四链的 sidecar 原样复用本模块，不传该开关，
+仍然生产并重放 v3。
+
+子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
 """
 
@@ -45,6 +51,14 @@ from typing import Any, Iterable, Mapping, Sequence
 TRACE_SCHEMA = "read-audit-trace/v1"
 STRICT_TRACE_SCHEMA = "read-audit-trace/v2"
 RUNTIME_TRACE_SCHEMA = "read-audit-trace/v3"
+# v4：带隔离合同的轨迹的新版事件合同（显式开关，默认仍是 v3）。输出事件 11 键，两路径调用的两端用 role／peer 配对，
+# 失败调用带 errno，只读事件按变更纪元去重；配套的跟踪器是 read_audit_runtime.OutputTrackerV4。
+# v1～v3 的常量与已封存凭证按旧合同继续只读验真，行为不变；control 四链的 sidecar 原样复用本模块，所以任何
+# 新行为都必须由下面的 trace_contract 开关显式启用，默认路径不得有字节级差异。
+RUNTIME_TRACE_SCHEMA_V4 = "read-audit-trace/v4"
+TRACE_CONTRACT_V3 = "v3"
+TRACE_CONTRACT_V4 = "v4"
+TRACE_CONTRACTS = {TRACE_CONTRACT_V3: RUNTIME_TRACE_SCHEMA, TRACE_CONTRACT_V4: RUNTIME_TRACE_SCHEMA_V4}
 HOST_SCHEMA = "read-audit-host-snapshot/v2"
 REPORT_SCHEMA = "read-audit-report/v1"
 # strace 选项：只跟踪文件类调用与进程派生（子进程继承工作目录要用）；不解码 stat 等结构、不打印信号（省 strace 自己的
@@ -55,6 +69,8 @@ HERE = Path(__file__).resolve()
 MAX_FINDINGS = 200
 # 样例行截断长度。
 SAMPLE_CHARS = 300
+# 输出归属事件最多保留多少条（v4 是去重之后的条数）；超出登记 output-event-limit 未解析原因并判失败，不静默截断。
+MAX_OUTPUT_EVENTS = 200000
 
 # 数据根里不算输入的路径（数据根相对路径：以 / 结尾的是前缀，其余精确匹配 → 原因）。新增条目要写明为什么不影响结论。
 # 依据 10-02 ARM64 两轮审计（pre-A3 全部 44 个场景）。
@@ -168,6 +184,24 @@ def _operation_flags(body: str) -> set[str]:
     return {flag for flag in _argument_flags(body) if flag.startswith("O_")}
 
 
+# v4 两路径调用：第一个路径是来源（旧名），第二个是目的（新名）。
+_ROLES = ("source", "destination")
+# renameat2 标志参数里允许出现的符号。strace 以符号输出，``0`` 表示没有标志；出现其他取值（十六进制残片等）
+# 说明标志没有被完整解码，按未解析处理，不猜测。
+_RENAME_FLAG_NAMES = frozenset({"RENAME_NOREPLACE", "RENAME_EXCHANGE", "RENAME_WHITEOUT"})
+
+
+def _rename_flags(arguments: Sequence[str]) -> frozenset[str] | None:
+    """renameat2 第 5 个参数里的符号标志；参数个数不对或无法完整解码时返回 None。"""
+    if len(arguments) != 5:
+        return None
+    value = arguments[4].strip()
+    if value == "0":
+        return frozenset()
+    names = value.split("|")
+    return frozenset(names) if all(item in _RENAME_FLAG_NAMES for item in names) else None
+
+
 def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
     """只认完整返回结构里明确的普通文件或目录，不能从路径、其他参数或缩略结构猜类型。"""
     positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
@@ -246,7 +280,8 @@ def _join(directory: str | None, path: str) -> str | None:
 class TraceParser:
     """逐行解析 ``strace -f -y`` 的输出，累积（路径 → 读取方式集合）与每个路径的第一条样例行。"""
 
-    def __init__(self, *, strict: bool = False, runtime_context: dict[str, Any] | None = None) -> None:
+    def __init__(self, *, strict: bool = False, runtime_context: dict[str, Any] | None = None,
+                 trace_contract: str = TRACE_CONTRACT_V3) -> None:
         self.cwd: dict[str, str] = {}
         self.accesses: dict[str, set[str]] = {}
         self.samples: dict[str, str] = {}
@@ -263,13 +298,26 @@ class TraceParser:
         self.output_tracker = None
         self.output_events: list[dict[str, Any]] = []
         self.terminal_events: list[dict[str, Any]] = []
+        # self.event 必须保持 (调用名, 参数体, 是否成功) 三元组：control 四链的子类直接解包它。
         self.event: tuple[str, str, bool] = ("", "", False)
+        # v4 轨迹合同（显式开关，默认 v3）。以下状态只在 v4 下起作用；v3 与 control 子类的路径完全不读它们。
+        if trace_contract not in TRACE_CONTRACTS:
+            raise AuditError(f"未知的轨迹合同版本：{trace_contract}")
+        self.trace_v4 = trace_contract == TRACE_CONTRACT_V4
+        if self.trace_v4 and (not strict or runtime_context is None):
+            raise AuditError("v4 轨迹合同只用于带隔离合同的严格审计")
+        self.call_id = 0                           # 完整系统调用（unfinished／resumed 拼好之后）的递增编号
+        self.call_errno: str | None = None         # 当前调用的错误码，成功为 None
+        self.call_flags: frozenset[str] = frozenset()   # 当前调用的 RENAME_* 标志（renameat2）
+        self.call_end: tuple[str, str | None] | None = None   # 当前正在登记的两路径调用端点：(角色, 另一端路径)
+        self.epoch = 0                             # 变更纪元：此前使名字空间状态改变的事件个数
+        self.seen_events: set[tuple] = set()       # 当前纪元内已出现过的事件键，用于只读事件去重
         if runtime_context is not None:
             if not strict:
                 raise AuditError("隔离合同必须使用严格审计")
             runtime = _runtime_module()
             contract = runtime.validate_context(runtime_context, [runtime_context["contract_entry"]])
-            self.output_tracker = runtime.OutputTracker(contract)
+            self.output_tracker = (runtime.OutputTrackerV4 if self.trace_v4 else runtime.OutputTracker)(contract)
 
     def _unresolved(self, reason: str) -> None:
         """仅登记调用名与分类，不保存可能含参数、凭据或正文的原始行。"""
@@ -293,13 +341,43 @@ class TraceParser:
             descriptor = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
             target = unescape(descriptor[1]) if descriptor else None
             flags = _operation_flags(body)
+            if self.trace_v4:
+                self._record_output_event(path, kind, name, succeeded, flags, target)
+                return
             self.output_tracker.observe(path, kind, name, "|".join(flags), succeeded, target)
             # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。
-            if len(self.output_events) < 200000:
+            if len(self.output_events) < MAX_OUTPUT_EVENTS:
                 self.output_events.append({"path": path, "kind": kind, "name": name, "succeeded": succeeded,
                                            "flags": sorted(flags), "target": target})
             else:
                 self._unresolved("output-event-limit")
+
+    def _record_output_event(self, path: str, kind: str, name: str, succeeded: bool, flags: set[str],
+                             target: str | None) -> None:
+        """v4：组装 11 键事件、交给跟踪器，并按变更纪元去重后保留。
+
+        去重规则：事件没有使跟踪器状态改变，且同键事件在当前纪元已出现过，就不再追加（保留首次）。
+        同一纪元内名字空间没有任何变化，所以同键的只读事件（反复 stat、反复读同一个文件、反复列目录）对归属判定
+        不提供新信息；去掉它们是为了不撑爆事件上限（实测最大样本里 18.4 万条只读事件只有约 2300 种不同事件）。
+        使状态改变的事件永不去重，并使纪元加一——事件自身携带的是加一之前的纪元。
+        """
+        role, peer = self.call_end if self.call_end is not None else (None, None)
+        flags = flags | self.call_flags
+        event = {"path": path, "kind": kind, "name": name, "succeeded": succeeded, "flags": sorted(flags), "target": target,
+                 "errno": self.call_errno, "call": self.call_id, "role": role, "peer": peer, "epoch": self.epoch}
+        if self.output_tracker.observe_event(event):
+            self.epoch += 1
+            self.seen_events.clear()
+        else:
+            key = (path, kind, name, succeeded, self.call_errno, tuple(event["flags"]), target, role, peer, self.epoch)
+            if key in self.seen_events:
+                return
+            self.seen_events.add(key)
+        # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。
+        if len(self.output_events) < MAX_OUTPUT_EVENTS:
+            self.output_events.append(event)
+        else:
+            self._unresolved("output-event-limit")
 
     def feed(self, raw: str) -> None:
         self.lines += 1
@@ -346,6 +424,17 @@ class TraceParser:
         errno = result.group(2) if result else None
         self.event = (name, body, result is not None and errno is None and result.group(1) != "-1")
         arguments = _call_arguments(body, result)
+        # v4 逐调用状态：每个完整调用一个递增编号，同一调用产生的所有事件共享它；错误码与 renameat2 标志也在这里取好。
+        self.call_id += 1
+        self.call_errno = errno
+        self.call_flags = frozenset()
+        self.call_end = None
+        if self.trace_v4 and name == "renameat2":
+            decoded = _rename_flags(arguments)
+            if decoded is None:
+                self._unresolved("rename-flags-not-decoded:" + name)
+            else:
+                self.call_flags = decoded
         if self.strict and result and result.group(1).isdigit() and errno is None:
             flags = _argument_flags(body)
             # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
@@ -401,11 +490,17 @@ class TraceParser:
         if name in _DIRFD_READ or name in _DIRFD_PROBE or name in _DIRFD_WRITE or name in _DIRFD_EXEC:
             positions = (1,) if name == "symlinkat" else (0, 2) if name in _TWO_PATHS else (0,)
             pairs = []
-            for position in positions:
+            for slot, position in enumerate(positions):
                 directory = _ANNOTATION.fullmatch(arguments[position]) if position < len(arguments) else None
                 path = _path_argument(arguments, position + 1)
                 if directory is not None and path is not None:
-                    pairs.append((unescape(directory[2]), path))
+                    pairs.append((slot, unescape(directory[2]), path))
+            # v4：两路径调用要把两端的规范路径都算出来，哪怕另一端在盘外也要作为 peer 记下；
+            # 空路径（AT_EMPTY_PATH）或无法还原的一端没有路径，peer 记 None。
+            ends = None
+            if self.trace_v4 and name in _TWO_PATHS:
+                resolved = {slot: _join(directory, path) for slot, directory, path in pairs if path != ""}
+                ends = [resolved.get(0), resolved.get(1)]
             missing = errno in _MISSING_ERRNOS
             if name in _DIRFD_READ:
                 flags = _operation_flags(body)
@@ -419,10 +514,13 @@ class TraceParser:
                 kind = "missing" if missing else "stat" if failed else "exec"
             else:
                 kind = "missing" if missing else "stat"
-            for directory, path in pairs:
+            for slot, directory, path in pairs:
                 if path == "":
                     continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过
+                if ends is not None:
+                    self.call_end = (_ROLES[slot], ends[1 - slot])
                 self._add(_join(directory, path), kind, line)
+            self.call_end = None
             if self.strict:
                 if len(pairs) != len(positions):
                     self._unresolved("dirfd-path-not-resolved:" + name)
@@ -452,8 +550,17 @@ class TraceParser:
                 kind = "missing" if missing else "dir"
             else:
                 kind = "missing" if missing else "stat"
-            for path in strings:
+            # v4：strings 丢掉了解析失败的位置，这里单独记下每个字符串对应的端点序号，并算出两端的规范路径。
+            slots = ends = None
+            if self.trace_v4 and name in _TWO_PATHS:
+                texts = [_path_argument(arguments, position) for position in positions]
+                slots = [slot for slot, text in enumerate(texts) if text is not None]
+                ends = [_join(self.cwd.get(pid), text) if text else None for text in texts]
+            for index, path in enumerate(strings):
+                if ends is not None:
+                    self.call_end = (_ROLES[slots[index]], ends[1 - slots[index]])
                 self._add(_join(self.cwd.get(pid), path), kind, line)
+            self.call_end = None
             if self.strict:
                 if len(strings) != len(positions):
                     self._unresolved("plain-path-not-resolved:" + name)
@@ -499,7 +606,8 @@ def trace_document(parser: TraceParser, roots: Sequence[str]) -> dict[str, Any]:
                              "stream_complete": True, "unresolved_reasons": dict(sorted(parser.unresolved_reasons.items())),
                              "unfinished_calls": len(parser.pending), "unresolved_process_events": parser.deferred_count}
     if parser.output_tracker is not None:
-        value["schema_version"] = RUNTIME_TRACE_SCHEMA
+        # 版本由解析器的显式开关决定；control 子类走 v3，不会因为本模块新增 v4 而改变产出。
+        value["schema_version"] = RUNTIME_TRACE_SCHEMA_V4 if parser.trace_v4 else RUNTIME_TRACE_SCHEMA
         value["runtime"] = {"context": parser.runtime_context, "output_events": parser.output_events,
                             "outputs": parser.output_tracker.report(), "terminal_events": parser.terminal_events}
     return value
@@ -510,8 +618,8 @@ def _bytecode(path: str) -> bool:
 
 
 def filter_stream(stream: Iterable[str], roots: Sequence[str], *, strict: bool = False,
-                  runtime_context: dict[str, Any] | None = None) -> dict[str, Any]:
-    parser = TraceParser(strict=strict, runtime_context=runtime_context)
+                  runtime_context: dict[str, Any] | None = None, trace_contract: str = TRACE_CONTRACT_V3) -> dict[str, Any]:
+    parser = TraceParser(strict=strict, runtime_context=runtime_context, trace_contract=trace_contract)
     for line in stream:
         parser.feed(line)
     return trace_document(parser, roots)
@@ -532,15 +640,25 @@ def prefilter_pattern(roots: Sequence[str]) -> str:
 
 
 def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], python: str | None = None,
-                strict: bool = False, runtime_context: Path | None = None) -> list[str]:
-    """把一个单元的命令包在 strace 下：输出先经 grep 预筛，再交给本模块 ``filter``，只留各个根之下的路径。"""
+                strict: bool = False, runtime_context: Path | None = None, trace_contract: str = TRACE_CONTRACT_V3) -> list[str]:
+    """把一个单元的命令包在 strace 下：输出先经 grep 预筛，再交给本模块 ``filter``，只留各个根之下的路径。
 
+    ``trace_contract`` 是 v4 的显式开关：默认 v3 时命令行与历史完全相同；只有传 ``v4`` 才给过滤器追加
+    ``--trace-contract v4``（且必须同时是带隔离合同的严格审计）。
+    """
+
+    if trace_contract not in TRACE_CONTRACTS:
+        raise AuditError(f"未知的轨迹合同版本：{trace_contract}")
+    if trace_contract != TRACE_CONTRACT_V3 and (not strict or runtime_context is None):
+        raise AuditError("v4 轨迹合同只用于带隔离合同的严格审计")
     command = [python or sys.executable, "-B", str(HERE), "filter", "--output", str(output)]
     if strict:
         roots = ["/"]
         command.append("--strict")
     if runtime_context is not None:
         command += ["--runtime-context", str(runtime_context)]
+    if trace_contract != TRACE_CONTRACT_V3:
+        command += ["--trace-contract", trace_contract]
     for root in roots:
         command += ["--root", str(root)]
     for part in command:
@@ -622,12 +740,14 @@ def strict_audit_reads(document: Mapping[str, Any], inputs: Sequence[Mapping[str
     findings = []
     snapshots = {}
     coverage = document.get("coverage") or {}
-    if (document.get("schema_version") not in {STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA} or document.get("roots") != ["/"]
+    if (document.get("schema_version") not in {STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA_V4}
+            or document.get("roots") != ["/"]
             or coverage.get("all_host_paths") is not True or coverage.get("stream_complete") is not True
             or coverage.get("unresolved") != 0 or not document.get("lines") or not document.get("accesses")):
         findings.append({"root": "audit", "path": "", "kinds": [], "sample": "", "suggestion": "完整轨迹缺失、未结束或含未解析调用，不可承接"})
     runtime_paths: set[str] = set()
-    if document.get("schema_version") == RUNTIME_TRACE_SCHEMA:
+    # 带隔离合同的轨迹（v3、v4）都交给运行时重放；replay_runtime 按文档自己的 schema_version 选用对应合同。
+    if document.get("schema_version") in {RUNTIME_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA_V4}:
         try:
             runtime_paths = _runtime_module().replay_runtime(document, list(inputs or []), historical=historical)
         except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
@@ -724,7 +844,7 @@ def narrow_input_scope(record_path: Path, trace_path: Path) -> dict[str, Any]:
         raise AuditError("来源读集不能按当前环境重放，拒绝生成收窄提案")
     runtime_inputs = {}
     excluded = set()
-    if trace.get("schema_version") == RUNTIME_TRACE_SCHEMA:
+    if trace.get("schema_version") in {RUNTIME_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA_V4}:
         excluded = _runtime_module().replay_runtime(trace, record["inputs"])
         runtime_inputs["runtime_contract"] = trace["runtime"]["context"]["contract_entry"]["detail"]["contract"]
     paths = sorted({path for path, _kinds in trace["accesses"]} - excluded)
@@ -892,7 +1012,8 @@ def load_trace(path: Path) -> dict[str, Any]:
         document = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise AuditError(f"审计轨迹读不出来：{path}（{error}）") from error
-    if not isinstance(document, dict) or document.get("schema_version") not in {TRACE_SCHEMA, STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA}:
+    if (not isinstance(document, dict)
+            or document.get("schema_version") not in {TRACE_SCHEMA, STRICT_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA, RUNTIME_TRACE_SCHEMA_V4}):
         raise AuditError(f"审计轨迹格式不对：{path}")
     return document
 
@@ -905,6 +1026,8 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     filt.add_argument("--root", action="append", default=[], required=True)
     filt.add_argument("--strict", action="store_true")
     filt.add_argument("--runtime-context", type=Path)
+    filt.add_argument("--trace-contract", choices=sorted(TRACE_CONTRACTS), default=TRACE_CONTRACT_V3,
+                      help="带隔离合同的轨迹版本，默认 v3；v4 须与 --strict、--runtime-context 同用")
     scope = sub.add_parser("scope", help="从完整正式轨迹生成待重新验收的单元输入提案")
     scope.add_argument("--record", type=Path, required=True)
     scope.add_argument("--trace", type=Path, required=True)
@@ -924,7 +1047,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "filter":
         stream = (line.decode("utf-8", "surrogateescape") for line in sys.stdin.buffer)
         runtime_context = json.loads(args.runtime_context.read_text()) if args.runtime_context else None
-        document = filter_stream(stream, args.root, strict=args.strict, runtime_context=runtime_context)
+        document = filter_stream(stream, args.root, strict=args.strict, runtime_context=runtime_context,
+                                 trace_contract=args.trace_contract)
         temporary = args.output.with_name(f".{args.output.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(document, ensure_ascii=False) + "\n", encoding="utf-8", errors="surrogateescape")
         os.replace(temporary, args.output)
