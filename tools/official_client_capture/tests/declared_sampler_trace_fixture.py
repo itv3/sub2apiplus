@@ -121,3 +121,45 @@ DETACHED_WINDOW_LATE = """\
 """
 
 ALL_SEGMENTS = (STARTUP, DIRECTORY_LISTING, DETACHED_WINDOW, UNFINISHED_WINDOW, DETACHED_WINDOW_LATE)
+
+# ---------------------------------------------------------------------------
+# 步骤 5 的 WP4c：strace 对“中途消失的线程”打印的垃圾行（ARM64，strace 6.8，egress 自测，2026-10-14 的“一份落盘、一份喂过滤器”对照实验）。
+# Go 运行时的线程被杀或退出时，strace 把它当作还在系统调用里，用残留寄存器解码出一行名字、参数都乱七八糟的东西。四种形态各取一段原样的
+# 真实行（含前后相邻的正常行；每行一个原始字符串，反斜杠原样保留），不在 ALL_SEGMENTS 里（那组断言钉的是旧行为）：
+#   A：名字是随机的系统调用名，以 <detached ...> 收尾；  B：以 “ = ?” 收尾，第一个参数是指针常量、第二个参数恰好像路径；
+#   C：路径参数是指针的 <unfinished ...> 起始行，永远没有 resumed（按 unfinished-calls-at-eof 容忍）；  D：不带名字的裸标记。
+# ---------------------------------------------------------------------------
+
+# 形态 A：第 3 行是 lsetxattr 垃圾行，以 <detached ...> 结尾（rawtext-2 第 296833 到 296837 行）；第 4 行是 pid 711354 悬着不再回来的 newfstatat（路径参数有效，但永远没有 resumed）
+GARBLED_DETACHED_A = "\n".join([
+    r'711354 newfstatat(AT_FDCWD</tmp/egressscan-selftest753375486/mutation0>, "/var/tmp/declared-probe-cmds-20261014t125522z/hunt/gc-f2/65/659b16cba3f504b3e9ab34d6742f8329f8962daa141d2526e728ea6214f45557-d", 0x60f8db85b3b8, 0) = 0',
+    r'711354 openat(AT_FDCWD</tmp/egressscan-selftest753375486/mutation0>, "/var/tmp/declared-probe-cmds-20261014t125522z/hunt/gc-f2/65/659b16cba3f504b3e9ab34d6742f8329f8962daa141d2526e728ea6214f45557-d", O_RDONLY|O_CLOEXEC) = 6</var/tmp/declared-probe-cmds-20261014t125522z/hunt/gc-f2/65/659b16cba3f504b3e9ab34d6742f8329f8962daa141d2526e728ea6214f45557-d>',
+    r'711353 lsetxattr("\270J\321", 0x17, 0x23fdca6b7008, 39572929737628, XATTR_CREATE <detached ...>',
+    r'711354 newfstatat(AT_FDCWD</tmp/egressscan-selftest753375486/mutation0>, "/usr/local/go/src/vendor/golang.org/x/net/http/httpguts",  <unfinished ...>',
+    r'711357 openat(AT_FDCWD</tmp/egressscan-selftest753375486/mutation0>, "/usr/local/go/src/bufio", O_RDONLY|O_CLOEXEC|O_DIRECTORY) = 6</usr/local/go/src/bufio>',
+]) + "\n"
+
+# 形态 B：第 2 行是 lsetxattr 垃圾行，以 = ? 结尾，第一个参数是指针常量、第二个参数恰好像路径（rawtext-5 第 28586 行及其前后的相邻行；第 28585 行是起始行在窗口外的 resumed，略去）
+GARBLED_LOST_RESULT_B = "\n".join([
+    r'751442 newfstatat(AT_FDCWD</usr/local/go/src/internal/abi>, "/usr/local/go/src/internal/abi", 0xa5a2750e78, 0) = 0',
+    r'751440 lsetxattr(0xffffffffffffff00, "/usr/local/go/src/internal/abi", "", 0, 0) = ?',
+    r'751274 utimensat(AT_FDCWD</var/tmp/declared-probe-cmds-20261014t125522z/test-tree/backend>, "/var/tmp/declared-probe-cmds-20261014t125522z/hunt/gc-f5/1b/1bd0e7b814a828e09535fb001f8a91c34b4494f123abb888db0c224bd74ab91b-d", 0x19e4988f11f8, 0) = 0',
+    r'751169 newfstatat(AT_FDCWD</var/tmp/declared-probe-cmds-20261014t125522z/test-tree/backend>, "/var/tmp/declared-probe-cmds-20261014t125522z/hunt/go-tmp-f5/go-build1331692528/b005/_pkg_.a",  <unfinished ...>',
+]) + "\n"
+
+# 形态 D：第 3 行是不带名字的裸标记 ???( <detached ...>（rawtext-4 第 33677 到 33681 行）
+GARBLED_BARE_MARKER_D = "\n".join([
+    r'736021 newfstatat(AT_FDCWD</usr/local/go/src/math>, ".", 0xec3ef1b8f38, 0) = 0',
+    r'736021 newfstatat(AT_FDCWD</usr/local/go/src/math>, "/usr/local/go/src/math", 0xec3ef1b8ff8, 0) = 0',
+    r'736020 ???( <detached ...>',
+    r'735255 openat(AT_FDCWD</var/tmp/declared-probe-cmds-20261014t125522z/test-tree/backend>, "/dev/null", O_RDONLY|O_CLOEXEC) = 6</dev/null>',
+    r'735255 newfstatat(AT_FDCWD</var/tmp/declared-probe-cmds-20261014t125522z/test-tree/backend>, "/usr/local/go/src/math", 0x14b876932278, 0) = 0',
+]) + "\n"
+
+# 形态 C：第 2 行 newfstatat 的路径参数是指针、永远没有 resumed（rawtext-4 第 198726 行）；第 1 行与第 4 行是一对正常配对的 newfstatat
+GARBLED_UNFINISHED_POINTER_C = "\n".join([
+    r'740777 newfstatat(AT_FDCWD</tmp/egressscan-selftest2393283390/case2>, "/usr/local/go/src/math/arith_s390x.go",  <unfinished ...>',
+    r'740774 newfstatat(AT_FDCWD</tmp/egressscan-selftest2393283390/case2>, 0x1948d3defda0,  <unfinished ...>',
+    r'740780 openat(AT_FDCWD</tmp/egressscan-selftest2393283390/case2>, "/usr/local/go/src/math/rand/v2", O_RDONLY|O_CLOEXEC|O_DIRECTORY <unfinished ...>',
+    r'740777 <... newfstatat resumed>0x1948d3f075f8, AT_SYMLINK_NOFOLLOW) = 0',
+]) + "\n"

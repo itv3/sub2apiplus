@@ -41,6 +41,12 @@ config、status、stash 等读引用库或写仓库状态的子命令，-C、-c�
 拿不准一律算未固定（误判只让该单元保持 rerun-only，漏判会让登记表自相矛盾）。采样器分不清 git 命令作用在哪个仓库（测试常在临时合成
 仓库里造提交、打标签），所以按命令字面判。
 
+被丢弃的 strace 标记行：Go 运行时的线程被杀或退出时，strace 把它当作还在系统调用里，用残留寄存器解码出一行垃圾（名字是随机的系统调用名，参数
+乱七八糟）。除了不带名字的裸标记 ``<pid> ???( <detached ...>``，还有带名字的两种形态：行尾是 ``<detached ...>``（名字任意，包括 syscall_0x…
+与 ???），和行尾是 `` = ?`` 而名字不是 execve、execveat、exit、exit_group 的。filter 把它们都丢弃并计入 ``coverage.detached_markers``（不新增
+coverage 键：登记侧对它是闭合的），带名字的行原样留样（别名化、≤300 字符、最多 8 条、去重）在 raw 顶层 ``detached_samples``，merge 后进
+``review.detached_samples``，评审清单第 12 节列出；合并后总数超过 64 判采样无效。
+
 未解析原因的诊断样例：对每个不在容忍集合内的 ``unresolved_reasons`` 原因，filter 保留前 3 条原始 strace 行（采样根的绝对路径
 换成别名、每条截到 300 字符，最多 20 个原因），写在 raw 的 ``coverage.unresolved_samples``，merge 后进 ``review.unresolved_samples``
 并拼进 ``[unresolved]`` 无效原因，评审清单第 9 节逐条列出。容忍的 ``unfinished-calls-at-eof`` 另保留最多 8 条悬着调用的起始行
@@ -189,6 +195,10 @@ MAX_SAMPLES_PER_REASON = 3
 MAX_SAMPLE_REASONS = 20
 MAX_UNFINISHED_SAMPLES = 8
 SAMPLE_LINE_CHARS = 300
+# 被当作标记丢弃的 strace 行（裸标记与线程中途消失留下的垃圾行）：留的样例条数，以及合并后总数的软上限——超过判采样无效，
+# 免得大面积丢流（strace 被截断、大批线程消失）被当成正常现象。真实的 Go 单元里一份采样通常只有个位数。
+MAX_DETACHED_SAMPLES = 8
+DETACHED_MARKER_LIMIT = 64
 # 样例拼进 [unresolved] 无效原因后，整条原因文字的总长上限（超出的样例部分被截掉，原因清单本身不截）。
 INVALID_REASON_CHARS = 600
 # review.allowances 里每条登记项（安装目录、自产暂存路径）留痕的路径样例条数。
@@ -205,6 +215,18 @@ ALIAS_ROOTS = frozenset({"{WORK}", "{HOME}", "{TMP}"})
 # 必须在交给 TraceParser 之前精确识别并单独计数，否则严格解析会把它们记成 unrecognized-line。这条正则要精确：
 # 任何别的未识别行仍然让采样无效。
 _MARKER = re.compile(r"^\d+\s+\?\?\?\( <(?:detached|unfinished) \.\.\.>\s*$")
+# strace 对“中途消失的线程”打印的垃圾行（Go 运行时的线程被杀或退出时，strace 把它当作还在系统调用里，用残留寄存器解码出一行名字、
+# 参数都乱七八糟的东西）。上面 _MARKER 是其中不带名字的裸标记；带名字的有两种形态，都形如“<进程号> <名字>(…”，名字可以是任意系统
+# 调用名、syscall_0x… 或 ???：
+#   形态 A：行尾是 <detached ...>，例如 ``711353 lsetxattr("\270J\321", 0x17, 0x23fdca6b7008, 39572929737628, XATTR_CREATE <detached ...>``；
+#   形态 B：行尾是 “ = ?”（调用没有返回），例如 ``751440 lsetxattr(0xffffffffffffff00, "/usr/local/go/src/internal/abi", "", 0, 0) = ?``，
+#           第一个参数是指针常量、第二个参数却恰好像路径；调用名是 execve、execveat、exit、exit_group 的除外——它们本来就可以 “= ?”。
+# 这类行不携带任何读取信息，交给严格解析器只会制造 plain-path-not-resolved、result-or-string-incomplete、unsupported-call:syscall_0x…
+# 之类的假未解析原因，所以和裸标记一样在 filter 里丢弃并计数（计入 coverage.detached_markers，样例另存）。
+_GARBAGE_CALL = re.compile(r"\d+\s+([^\s(]+)\(")
+_DETACHED_END = "<detached ...>"
+_LOST_RESULT_END = " = ?"
+_MAY_END_WITHOUT_RESULT = frozenset({"execve", "execveat", "exit", "exit_group"})
 _CONNECT_CALL = re.compile(r"^(?:\d+\s+)?connect\((.*)$", re.S)
 _CONNECT_RESUMED = re.compile(r"^(?:\d+\s+)?<\.\.\. connect resumed>")
 _EXECVE_CALL = re.compile(r'^(?:\d+\s+)?execve\("((?:[^"\\]|\\.)*)"(?:\.\.\.)?, ')
@@ -583,6 +605,8 @@ class StreamAggregator:
         # 未解析原因的原始行样例 {原因: [别名化、截断后的行]}。只收不在容忍集合内的原因（容忍的悬着调用另有 unfinished_samples）；
         # 每个原因最多 MAX_SAMPLES_PER_REASON 条、最多 MAX_SAMPLE_REASONS 个原因，先到先得。
         self.unresolved_samples: dict[str, list[str]] = {}
+        # 被当作垃圾行丢弃的带名字的 strace 行（形态 A、B）的原样样例（别名化、截断、去重），最多 MAX_DETACHED_SAMPLES 条。
+        self.detached_samples: list[str] = []
         # 为发现“这一行引入了新的未解析原因”而保留的解析器计数快照：每行只比较一次整数（parser.unresolved），不逐行求和字典。
         self._seen_unresolved = 0
         self._seen_reasons: dict[str, int] = {}
@@ -596,6 +620,11 @@ class StreamAggregator:
         line = raw.rstrip("\n")
         if "???(" in line and _MARKER.match(line):
             self.markers += 1
+            return
+        # 带名字的垃圾行（形态 A、B，见 _GARBAGE_CALL）也在这里丢弃并计数，不交给 TraceParser，也不走 connect／execve 旁路：
+        # 垃圾行的名字是随机的，哪怕恰好叫 connect 或 execve，参数也是残留寄存器，不是真实的目的地或 argv。
+        end = line.rstrip()
+        if (end.endswith(_DETACHED_END) or end.endswith(_LOST_RESULT_END)) and self._garbled_marker(end):
             return
         if (" connect(" in line or line.startswith("connect(") or "<... connect resumed>" in line) and self._side_connect(line):
             return
@@ -612,6 +641,21 @@ class StreamAggregator:
         self._since_drain += 1
         if self.chunk_lines and self._since_drain >= self.chunk_lines:
             self._drain()
+
+    def _garbled_marker(self, end: str) -> bool:
+        """``end`` 是去掉行尾空白的一行，且以 <detached ...> 或 “ = ?” 结尾：是带名字的垃圾行（形态 A、B）就丢弃、计入 detached_markers
+        并留样例，返回 True；否则（不是“<进程号> <名字>(…”的形状，或 “= ?” 结尾而名字本来就可以不返回）返回 False，照常处理。"""
+        found = _GARBAGE_CALL.match(end)
+        if found is None:
+            return False
+        if not end.endswith(_DETACHED_END) and found.group(1) in _MAY_END_WITHOUT_RESULT:
+            return False
+        self.markers += 1
+        if len(self.detached_samples) < MAX_DETACHED_SAMPLES:
+            sample = self._shorten(end)
+            if sample not in self.detached_samples:
+                self.detached_samples.append(sample)
+        return True
 
     def _limit(self, reason: str, line: str | None = None) -> None:
         key = "sampler:" + reason
@@ -823,7 +867,7 @@ class StreamAggregator:
             coverage["unresolved_samples"] = {reason: list(self.unresolved_samples[reason]) for reason in sorted(self.unresolved_samples)}
         if unfinished_samples:
             coverage["unfinished_samples"] = unfinished_samples
-        return {
+        document: dict[str, Any] = {
             "schema_version": RAW_SCHEMA,
             "unit_id": self.unit_id,
             "aliases": dict(self.alias_table.values),
@@ -836,6 +880,11 @@ class StreamAggregator:
             "network": [{"family": family, "target": target} for family, target in sorted(self.network)],
             "run": None,
         }
+        # 顶层可选键：被当作垃圾行丢弃的带名字的 strace 行的原样样例。放在 raw 顶层而不是 coverage 里——登记侧对 sample.coverage 的键集合
+        # 是闭合的，只认 detached_markers 与 unfinished_samples；merge 后进 review（登记侧不解释 review）。没有这样的行时不写。
+        if self.detached_samples:
+            document["detached_samples"] = list(self.detached_samples)
+        return document
 
 
 def filter_stream(lines: Iterable[str], aliases: Mapping[str, str], *, unit_id: str,
@@ -860,6 +909,8 @@ RAW_COVERAGE_OPTIONAL_KEYS = frozenset({"unresolved_samples", "unfinished_sample
 SAMPLE_COVERAGE_OPTIONAL_KEYS = frozenset({"unfinished_samples"})
 RAW_KEYS = frozenset({"schema_version", "unit_id", "aliases", "chunk_lines", "lines", "coverage", "repo_accesses", "outside_accesses",
                       "git_commands", "network", "run"})
+# raw 顶层的可选键（旧 raw 没有，缺省为空）：detached_samples 是被当作垃圾行丢弃的带名字的 strace 行的原样样例。
+RAW_OPTIONAL_KEYS = frozenset({"detached_samples"})
 COMMAND_KEYS = frozenset({"launcher", "argv", "cwd_rel", "sha256"})
 RUN_KEYS = frozenset({"label", "cache", "exit_code", "signal", "timed_out", "seconds", "started_utc", "finished_utc", "command",
                       "git_status_before", "git_status_after", "commit", "kernel", "strace", "sampler_sha256", "env_overrides",
@@ -872,7 +923,7 @@ SAMPLED_KEYS = frozenset({"commit", "utc", "kernel", "strace", "sampler_sha256",
 SAMPLED_RUN_KEYS = frozenset({"cache", "exit_code", "lines", "seconds"})
 REVIEW_KEYS = frozenset({"runs", "git_status", "untracked_reads", "writes", "network", "run_differences", "docker", "allowances",
                          "git_argv_hidden"})
-REVIEW_OPTIONAL_KEYS = frozenset({"unresolved_samples"})
+REVIEW_OPTIONAL_KEYS = frozenset({"unresolved_samples", "detached_samples"})
 # review.allowances 里新增的两类登记项（没登记时整个键不出现）。每一行的键集合是闭合的。
 INSTALLED_ROW_KEYS = frozenset({"prefix", "contract", "reads", "sample", "unused"})
 TRANSIENT_ROW_KEYS = frozenset({"pattern", "paths", "read_back", "sample", "unused"})
@@ -915,11 +966,12 @@ def _check_unresolved_samples(problems: list[str], where: str, samples: Any, rea
         problems.append(f"{where} 的原因必须都出现在 coverage.unresolved_reasons 里")
 
 
-def _check_unfinished_samples(problems: list[str], where: str, samples: Any) -> None:
-    """悬着调用的起始行样例：最多 8 条、每条不超过 300 字符的字符串（登记侧对 coverage.unfinished_samples 的同一约束）。"""
-    if (not isinstance(samples, list) or len(samples) > MAX_UNFINISHED_SAMPLES
+def _check_unfinished_samples(problems: list[str], where: str, samples: Any, limit: int = MAX_UNFINISHED_SAMPLES) -> None:
+    """行样例列表：最多 limit 条、每条不超过 300 字符的字符串。悬着调用的起始行样例（登记侧对 coverage.unfinished_samples 的同一约束，
+    limit 取 8）与被丢弃的垃圾行样例共用它。"""
+    if (not isinstance(samples, list) or len(samples) > limit
             or not all(isinstance(item, str) and len(item) <= SAMPLE_LINE_CHARS for item in samples)):
-        problems.append(f"{where} 必须是字符串列表：最多 {MAX_UNFINISHED_SAMPLES} 条，每条不超过 {SAMPLE_LINE_CHARS} 字符")
+        problems.append(f"{where} 必须是字符串列表：最多 {limit} 条，每条不超过 {SAMPLE_LINE_CHARS} 字符")
 
 
 def _check_common(problems: list[str], document: Mapping[str, Any], *, tracked: bool) -> None:
@@ -978,8 +1030,11 @@ def command_digest(argv: Sequence[str], cwd_rel: str) -> str:
 
 def validate_raw(document: Any) -> list[str]:
     problems: list[str] = []
-    if not isinstance(document, dict) or set(document) != RAW_KEYS or document.get("schema_version") != RAW_SCHEMA:
+    if (not isinstance(document, dict) or not RAW_KEYS <= set(document) <= RAW_KEYS | RAW_OPTIONAL_KEYS
+            or document.get("schema_version") != RAW_SCHEMA):
         return ["raw 的 schema_version 或字段集合不符"]
+    if "detached_samples" in document:
+        _check_unfinished_samples(problems, "detached_samples", document["detached_samples"], MAX_DETACHED_SAMPLES)
     if not isinstance(document["unit_id"], str) or not document["unit_id"]:
         problems.append("unit_id 必须是非空字符串")
     if not _is_int(document["lines"]) or document["lines"] < 0 or not _is_int(document["chunk_lines"]) or document["chunk_lines"] < 0:
@@ -1042,6 +1097,8 @@ def validate_sample(document: Any) -> list[str]:
         coverage = document["coverage"]
         _check_unresolved_samples(problems, "review.unresolved_samples", review["unresolved_samples"],
                                   coverage.get("unresolved_reasons") if isinstance(coverage, dict) else None)
+    if "detached_samples" in review:
+        _check_unfinished_samples(problems, "review.detached_samples", review["detached_samples"], MAX_DETACHED_SAMPLES)
     allowances = review["allowances"]
     if isinstance(allowances, dict):  # 旧证据的 allowances 只有 unix_sockets 与 class_prefixes，这里只核新增的两类登记项
         for key, keys in (("installed_dirs", INSTALLED_ROW_KEYS), ("transient", TRANSIENT_ROW_KEYS)):
@@ -1795,8 +1852,12 @@ def merge_raws(raws: Sequence[Mapping[str, Any]], *, tree: Path, allow_unix: Seq
     coverage_reasons: dict[str, int] = {}
     unresolved_samples: dict[str, list[str]] = {}
     unfinished_samples: list[str] = []
+    detached_samples: list[str] = []
     for raw in raws:
         raw_coverage = raw["coverage"]
+        for item in raw.get("detached_samples", []):  # 旧 raw 没有这个键，缺省为空；各次运行按顺序合并，相同的行只留一条
+            if item not in detached_samples and len(detached_samples) < MAX_DETACHED_SAMPLES:
+                detached_samples.append(item)
         for reason, count in raw_coverage["unresolved_reasons"].items():
             coverage_reasons[reason] = coverage_reasons.get(reason, 0) + count
         # 诊断样例（旧 raw 没有这两个键，缺省为空）：各次运行按顺序合并，相同的行只留一条，上限与 filter 里的一致。
@@ -1826,6 +1887,11 @@ def merge_raws(raws: Sequence[Mapping[str, Any]], *, tree: Path, allow_unix: Seq
     if at_eof > DECLARED_MAX_UNFINISHED_AT_EOF:
         note("unresolved", f"unfinished-calls-at-eof×{at_eof} 超过容忍上限 {DECLARED_MAX_UNFINISHED_AT_EOF}"
                            "（少量悬着的调用是多线程进程退出时的正常现象，大面积出现说明 strace 流被截断或丢行）")
+    # 被丢弃的标记行（裸标记与垃圾行）也有软上限：个位数是 Go 运行时线程被杀或退出的正常现象，大面积出现说明流被截断或大批线程消失。
+    detached_total = sum(raw["coverage"]["detached_markers"] for raw in raws)
+    if detached_total > DETACHED_MARKER_LIMIT:
+        note("detached", f"被丢弃的 strace 标记行（detached、unfinished 裸标记与线程中途消失留下的垃圾行）共 {detached_total} 条，"
+                         f"超过容忍上限 {DETACHED_MARKER_LIMIT}（个位数是 Go 运行时线程被杀或退出的正常现象，大面积出现说明 strace 流被截断或大批线程消失，读集可能不完整）")
 
     # 自产暂存路径（--transient）：命中模式的未跟踪路径，只要本次采样里写过，它的写入和读回都是命令自己的产物，不判无效。
     # 只读不写的路径不在 transient_paths 里，仍按未跟踪读取判——外部放进来的东西不能借模式蒙混。
@@ -1966,6 +2032,8 @@ def merge_raws(raws: Sequence[Mapping[str, Any]], *, tree: Path, allow_unix: Seq
     }
     if unresolved_samples:  # 可选键：按原因归类的原始行样例，登记侧不解释 review，所以放这里而不是 sample.coverage
         review["unresolved_samples"] = {reason: unresolved_samples[reason] for reason in sorted(unresolved_samples)}
+    if detached_samples:  # 可选键：被丢弃的带名字的垃圾行（形态 A、B）的原样样例，同样放 review
+        review["detached_samples"] = detached_samples
     sample = {
         "schema_version": SAMPLE_SCHEMA, "unit_id": first["unit_id"], "command": dict(runs[0]["command"]),
         "sampled": {"commit": runs[0]["commit"], "utc": max(run["finished_utc"] for run in runs), "kernel": runs[0]["kernel"],
@@ -2533,6 +2601,20 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
         lines.append("- **注意**：读取了 .git 内部却没有提取到提交号，需要人工确认 git_history。")
     if sample["command"]["argv"][:1] == ["make"]:
         lines.append("- 该单元经 make 运行：要决定是用整个 `Makefile` 文件做输入，还是用 make_expansion 合同（草案里 make_expansion 为空）。")
+    # 被丢弃的 strace 标记行：没有就不写这一节，免得每个单元的清单都多一段空话。
+    markers, garbled = coverage["detached_markers"], review.get("detached_samples", [])
+    if markers or garbled:
+        lines += ["", "### 12 被丢弃的 strace 标记行（线程中途消失）", ""]
+        lines.append(f"- 共 {markers} 条（含裸标记 `???( <detached ...>`、`???( <unfinished ...>`，和下面这种带名字的垃圾行）；"
+                     f"合并后总数的容忍上限是 {DETACHED_MARKER_LIMIT}，超过判采样无效。")
+        lines.append("- 它们描述的是“中途消失的线程”：Go 运行时的线程被杀或退出时，strace 把它当作还在系统调用里，用残留寄存器解码出一行名字、"
+                     "参数都乱七八糟的东西（形态一以 `<detached ...>` 结尾；形态二以 ` = ?` 结尾，第一个参数是指针常量）。不携带读取信息，"
+                     "已丢弃并计数，没有交给解析器。")
+        if garbled:
+            lines.append(f"- 带名字的垃圾行原样样例（采样根路径已换成别名，每条截到 {SAMPLE_LINE_CHARS} 字符，最多 {MAX_DETACHED_SAMPLES} 条）：")
+            lines += [f"  - `{_quote(item)}`" for item in garbled]
+        else:
+            lines.append("- 没有带名字的垃圾行，只有裸标记。")
     lines.append("")
     return entry, lines
 
