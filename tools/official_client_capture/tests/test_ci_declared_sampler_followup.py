@@ -626,7 +626,9 @@ class DraftFollowupTests(DraftBase):
                  write_line(t, f"{t}/frontend/.tmp-out/a.json"), list_line(f"{t}/frontend/.tmp-out")]
         sample = self.frontend_sample(extra, transient=["frontend/.eslintcache", "frontend/vitest.config.ts.timestamp-*", "frontend/.tmp-out/", "frontend/never-written"])
         self.assertTrue(sample["valid"], sample["invalid_reasons"])
-        registry, review = self.draft(sample)
+        # 合成读集里枚举了暂存目录 frontend/.tmp-out 却没有造它的 mkdir（真实命令会有），登记侧的覆盖自检按“输出区里只读不写”拒绝；
+        # 这里钉的是 repo_ignored 的合并规则，所以关掉自检。
+        registry, review = self.draft(sample, coverage_check=False)
         repo = registry["units"][UNIT]["scope"]["repo"]
         self.assertEqual(repo["repo_ignored"], sorted({"out/", "frontend/.eslintcache", "frontend/vitest.config.ts.timestamp-*", "frontend/.tmp-out/"}),
                          "与 .gitignore 忽略的写入目录合并、排序、去重；未命中任何写入的模式不并入")
@@ -674,7 +676,9 @@ class DraftFollowupTests(DraftBase):
         sample = ds.merge_raws([make_raw(tree, self.work, lines)], tree=tree, class_prefixes=[ds.parse_class_prefix("/opt/pnpm/=toolchain:toolchain:pnpm")])
         self.assertTrue(sample["valid"], sample["invalid_reasons"])
         ds.write_document(samples / "backend-go-test.sample.json", sample)
-        registry, review = ds.draft_registry(samples, tree)
+        # 缺锁文件的仓库起草出来的 scope 过不了登记侧的覆盖自检（WP4c 起默认开启，会写成 rerun-only，见 test_ci_declared_sampler_coverage）；
+        # 这里钉的是“缺失的锁文件只标注、不凭空添加”，所以关掉自检看原始草案。
+        registry, review = ds.draft_registry(samples, tree, coverage_check=False)
         files = registry["units"][UNIT]["scope"]["repo"]["files"]
         self.assertIn("backend/go.mod", files)
         self.assertIn("frontend/package.json", files)

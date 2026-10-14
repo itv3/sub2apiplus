@@ -41,6 +41,22 @@ config、status、stash 等读引用库或写仓库状态的子命令，-C、-c�
 拿不准一律算未固定（误判只让该单元保持 rerun-only，漏判会让登记表自相矛盾）。采样器分不清 git 命令作用在哪个仓库（测试常在临时合成
 仓库里造提交、打标签），所以按命令字面判。
 
+覆盖闭合与覆盖自检（``draft`` 的默认行为，``--no-coverage-check`` 关闭）：起草只按读集归并，可登记侧的覆盖检查（``unit_records.declared_coverage``）
+另有自己的规则，两边对不上，草案就会在登记时才被拒绝。所以 ``draft`` 先做覆盖闭合，再用登记侧的同一个函数自检：
+
+* 仓库内的 missing 探测（命令找一个不存在的文件，例如 TypeScript 的模块解析候选、eslint 的配置候选）：为它所在的**最近的、不是树根的父目录**补一个
+  range（``node_modules/@types`` 补 ``node_modules/``）。range 的摘要覆盖目录下全部跟踪文件，“这里没有这个文件”也就被绑定了；目录不存在或
+  下面没有跟踪文件也照补，将来有人在里面新增跟踪文件摘要就变。只被 stat／dir、其下没有任何声明内容的目录，为目录自身补 range。已被现有
+  range 或单文件覆盖的、``.git`` 下的、依赖安装目录前缀与 ``repo_ignored`` 内的不补。树根以下的 ``node_modules/`` 是**树根**的
+  node_modules，与 ``frontend/node_modules/`` 这样的安装目录前缀不是一回事。
+* 树根目录自身被枚举或读取，或树根直接子项有 missing 探测（``package.json``、``eslint.config.js``、``RCS``……）：``repo.root_listing: true``
+  （登记侧用树根下被跟踪的顶层名字摘要绑定）。``go.mod``、``go.work`` 这类祖先探测名登记侧本来就放行，不触发。
+* ``repo_ignored`` 的目录前缀不得与依赖安装目录前缀重叠或盖住它：落在安装目录里的被写文件、写在安装目录的上级目录或树根下的文件，改用精确路径；
+  被写入的 ``/dev/null`` 在 ``outside`` 里补精确前缀 ``/dev/null``（scratch 类）；``/run/`` 归 virtual 类。
+* 自检：起草好的 scope 连同 sample 交给登记侧的 ``declared_coverage``（按文件路径加载同目录的 ``unit_records.py``，只读使用）。通过才写 ``declared``；
+  不通过写成 ``{"status": "rerun-only", "reason": "声明级覆盖自检不通过：N 处未覆盖（规则统计…；前 3 处…）"}``（head 为 false），评审清单第 13 节
+  按规则分组列出全部未覆盖项。采样本身无效、git 用法未固定的单元已是 rerun-only，不再自检；登记侧模块不可用时跳过自检并在清单里注明。
+
 被丢弃的 strace 标记行：Go 运行时的线程被杀或退出时，strace 把它当作还在系统调用里，用残留寄存器解码出一行垃圾（名字是随机的系统调用名，参数
 乱七八糟）。除了不带名字的裸标记 ``<pid> ???( <detached ...>``，还有带名字的两种形态：行尾是 ``<detached ...>``（名字任意，包括 syscall_0x…
 与 ???），和行尾是 `` = ?`` 而名字不是 execve、execveat、exit、exit_group 的。filter 把它们都丢弃并计入 ``coverage.detached_markers``（不新增
@@ -86,7 +102,10 @@ coverage 键：登记侧对它是闭合的），带名字的行原样留样（�
   不以 ``/`` 结尾的是精确路径，只出现在 /dev、/proc、/sys、/etc、``{HOME}`` 这几个需要逐条看清的前缀下和别名根自身。
   ``{WORK}/go-tmp/`` 与 ``{TMP}/`` 是暂存区，整体折叠成前缀本身。计数是各聚合块内去重后的路径出现次数之和，只作规模提示，
   不参与覆盖判定。进程号和线程号规范化：``/proc/<进程号>/`` 记成 ``/proc/self/``，``/proc/self/task/<线程号>/`` 记成
-  ``/proc/self/task/{TID}/``。
+  ``/proc/self/task/{TID}/``。聚合键丢了文件名，所以祖先链目录（别名根 TREE、WORK、HOME、TMP 自身及它们的各级祖先：``/``、``/var``、
+  ``/var/tmp``……）上的 ``read`` 要先分清：这些路径按构造就是目录，读它们只能是不带 O_DIRECTORY 地打开目录（Go 的 ``os.Open(目录)``），
+  filter 把它们的 ``read`` 记成 ``dir``。于是祖先链目录的聚合键（``/var/``）上剩下的 ``read``，一定是读了祖先目录下别的直接子项
+  （文件，或不是祖先的目录）。
 * ``coverage.unresolved`` 等于 ``unresolved_reasons`` 各计数之和；采样器自己的规模保护和流结束时仍悬着的调用也写成显式原因
   （``sampler:*``、``unfinished-calls-at-eof``、``deferred-process-events-at-eof``）。其中只有 ``unfinished-calls-at-eof``
   在容忍集合里（多线程进程退出时 strace 不为还在系统调用里的线程打印 resumed，正常现象；合并后的总数上限
@@ -167,6 +186,8 @@ ALIAS_NAMES = ("TREE", "WORK", "HOME", "TMP")
 KIND_BITS = {"read": 1, "exec": 2, "write": 4, "missing": 8, "stat": 16, "dir": 32, "list": 64}
 KIND_NAMES = sorted(KIND_BITS)  # 输出一律按字母序，与 read_audit.trace_document 的 sorted(kinds) 一致。
 _READ_EXEC = KIND_BITS["read"] | KIND_BITS["exec"]
+_READ = KIND_BITS["read"]
+_DIR = KIND_BITS["dir"]
 _WRITE = KIND_BITS["write"]
 _LIST = KIND_BITS["list"]
 
@@ -430,6 +451,26 @@ class AliasTable:
         return text
 
 
+def ancestor_keys(aliases: Mapping[str, str]) -> set[str]:
+    """采样根（TREE、WORK、HOME、TMP）的祖先链，在 ``outside_accesses`` 聚合键空间里的键：每一级目录 ``D`` 的 ``D/``（它的直接子项的访问），
+    别名根另有不带斜杠的自身键（``{WORK}``）。TREE 的子项是仓库内路径，``{TREE}/`` 这个键不会在仓库外出现，多收了也无害。"""
+    table = AliasTable(aliases)
+    keys: set[str] = set()
+    for root in table.values.values():
+        for variant in {root, os.path.realpath(root)}:
+            current = variant
+            while True:
+                aliased = table.apply(current)
+                keys.add(aliased if aliased == "/" else aliased + "/")
+                if aliased in ALIAS_ROOTS:
+                    keys.add(aliased)
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+    return keys
+
+
 def parse_aliases(items: Sequence[str]) -> dict[str, str]:
     values: dict[str, str] = {}
     for item in items:
@@ -588,6 +629,7 @@ class StreamAggregator:
         if chunk_lines < 0:
             raise SamplerError("chunk_lines 不能为负")
         self.alias_table = AliasTable(aliases)
+        self.directory_paths = self._directory_path_set()
         self.unit_id = unit_id
         self.chunk_lines = chunk_lines
         self.parser = read_audit_module().TraceParser(strict=True)
@@ -641,6 +683,25 @@ class StreamAggregator:
         self._since_drain += 1
         if self.chunk_lines and self._since_drain >= self.chunk_lines:
             self._drain()
+
+    def _directory_path_set(self) -> frozenset[str]:
+        """按构造就是目录的路径（别名化后的写法）：全部别名根（TREE、WORK、HOME、TMP）自身及其各级祖先目录（``/``、``/var``、``/var/tmp``……）。
+
+        仓库外的访问按目录聚合，丢了文件名：祖先目录 ``/var/tmp`` 被不带 O_DIRECTORY 地只读打开（Go 的 ``os.Open(目录)`` 就是这样），和读
+        ``/var/`` 下的一个文件，在聚合键 ``/var/`` 上都是 ``read``，没法区分。这些路径下面有别的别名根，必然是目录，读它只能是“打开目录”，
+        读不出任何文件内容——``_absorb`` 据此把它们的 ``read`` 记成 ``dir``。于是祖先链目录的聚合键上剩下的 ``read``，一定是读了祖先目录下
+        别的直接子项（文件，或不是祖先的目录），登记侧可以放心地不再放行它。"""
+        paths: set[str] = set()
+        for root in self.alias_table.values.values():
+            for variant in {root, os.path.realpath(root)}:
+                current = variant
+                while True:
+                    paths.add(self.alias_table.apply(current))
+                    parent = os.path.dirname(current)
+                    if parent == current:
+                        break
+                    current = parent
+        return frozenset(paths)
 
     def _garbled_marker(self, end: str) -> bool:
         """``end`` 是去掉行尾空白的一行，且以 <detached ...> 或 “ = ?” 结尾：是带名字的垃圾行（形态 A、B）就丢弃、计入 detached_markers
@@ -779,6 +840,8 @@ class StreamAggregator:
         if aliased == "{TREE}" or aliased.startswith("{TREE}/"):
             self._absorb_repo(aliased, mask)
         else:
+            if mask & _READ and aliased in self.directory_paths:
+                mask = (mask & ~_READ) | _DIR  # 目录不可能被“读”出文件内容：祖先链目录与别名根的 read 只是打开目录，记成 dir（见 _directory_path_set）
             self._absorb_outside(aliased, mask)
 
     def _absorb_repo(self, aliased: str, mask: int) -> None:
@@ -1516,7 +1579,9 @@ BUILTIN_CLASSES: tuple[tuple[str, str, str | None], ...] = (
     ("/usr/share/", "system", None), ("/usr/bin/", "system", None), ("/usr/sbin/", "system", None),
     ("/usr/include/", "system", None), ("/lib/", "system", None), ("/lib64/", "system", None),
     ("/bin/", "system", None), ("/sbin/", "system", None), ("/etc/", "system", None),
-    ("/proc/", "virtual", None), ("/sys/", "virtual", None), ("/dev/", "virtual", None),
+    # /run 是运行期状态目录（systemd 的解析器配置 /run/systemd/resolve/、nscd 套接字所在目录等）：读取它们与读 /proc、/sys 同属“宿主运行期
+    # 状态”，不绑定内容，归 virtual（只许 read／stat／dir／list／missing，写入照旧违规）。
+    ("/proc/", "virtual", None), ("/sys/", "virtual", None), ("/dev/", "virtual", None), ("/run/", "virtual", None),
     ("{HOME}/", "home-config", None),
 )
 
@@ -2075,6 +2140,35 @@ ROOT_FILES = "(根目录文件)"
 TOOLCHAIN_LOCK_FILES = {"go": ("backend/go.mod", "backend/go.sum"), "pnpm": ("frontend/pnpm-lock.yaml", "frontend/package.json")}
 _COMMIT_IN_ARGV = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
 _LEDGER_COMMIT = re.compile(r'"(?:before_commit|after_commit)"\s*:\s*"([0-9a-f]{40})"')
+# 登记侧保留的 range 名：repo.root_listing 为真时输入里多一个叫 scope:root-listing 的条目，所以任何 range 都不能叫 root-listing。
+RESERVED_RANGE_NAMES = frozenset({"root-listing"})
+# 树根下沿祖先链探测的名字（Go 找模块与工作区、各种版本控制目录）：登记侧按内置规则放行这些“不存在”的探测，不要求任何声明，所以 draft
+# 既不为它们补 range，也不为它们写 repo.root_listing。名单与登记侧 unit_records._DECLARED_ANCESTOR_PROBES 一致；万一两边漂移，
+# 覆盖自检会把多出来的未覆盖项报出来（该单元转 rerun-only），不会悄悄放行。
+ANCESTOR_PROBES = frozenset({"go.mod", "go.work", ".hg", ".svn", ".bzr", ".fossil-settings"})
+# 覆盖自检不通过时 rerun-only 原因的固定开头：总览统计和测试都按它识别“因覆盖自检转 rerun-only”的条目。
+COVERAGE_REASON_PREFIX = "声明级覆盖自检不通过"
+# 覆盖闭合只处理这几种访问类型的仓库内路径（missing 探测、被 stat／dir 的目录）；读、写、执行、枚举有各自的归并或判无效规则。
+_PROBE_KINDS = frozenset({"missing", "stat", "dir"})
+_RANGE_NAME_UNSAFE = re.compile(r"[^a-z0-9._-]")
+
+
+def range_name(directory: str) -> str:
+    """目录 → range 名。登记侧要求名字只含小写字母、数字、点、下划线、连字符，且以字母或数字开头（大写字母、@、空格、前导点都会让整份
+    scope 被拒绝）：先转小写，斜杠和其它不合规的字符换成连字符，再去掉开头的点、下划线、连字符；去空了就叫 dir。已经合规的目录
+    名（docs/egress/foundation → docs-egress-foundation）结果与从前逐字相同。"""
+    return _RANGE_NAME_UNSAFE.sub("-", directory.lower()).lstrip("._-") or "dir"
+
+
+def name_ranges(directories: Sequence[str]) -> list[str]:
+    """给一组 include 目录（已按路径排序）逐个起名；重名加数字后缀，保留名不用。"""
+    names: list[str] = []
+    for directory in directories:
+        base, name, number = range_name(directory), range_name(directory), 2
+        while name in names or name in RESERVED_RANGE_NAMES:
+            name, number = f"{base}-{number}", number + 1
+        names.append(name)
+    return names
 
 
 def directory_totals(files: Iterable[str]) -> dict[str, int]:
@@ -2148,15 +2242,179 @@ def derive_repo_scope(sample: Mapping[str, Any], files: set[str], totals: Mappin
     decide("")
     include.sort()  # 登记表要确定性：范围与单文件都按路径排序，不依赖遍历顺序
     picked.sort()
-    names: list[str] = []
-    for directory in include:
-        base, name, number = directory.replace("/", "-"), directory.replace("/", "-"), 2
-        while name in names:
-            name, number = f"{base}-{number}", number + 1
-        names.append(name)
+    names = name_ranges(include)  # 名字按登记侧的写法规范化（大写、@、前导点等不合规字符不会再让整份 scope 被拒绝）
     return {"ranges": [{"name": name, "include": [directory + "/"], "exclude": []} for name, directory in zip(names, include)],
             "files": picked, "reads": len(reads), "listed": sorted(listed), "include_dirs": include, "dir_read": dir_read,
             "read_files": reads}
+
+
+# ---------------------------------------------------------------------------
+# 覆盖闭合：让起草的 scope 通过登记侧的覆盖检查
+# ---------------------------------------------------------------------------
+#
+# derive_repo_scope 只为“读到的跟踪文件”和“被枚举的目录”声明范围。可是登记侧的覆盖检查（unit_records.declared_coverage）还要求：
+#   * 仓库内的 missing 探测（命令找一个不存在的文件，例如 TypeScript 的模块解析候选、eslint 的配置候选）必须落在某个 range 里——
+#     “它不存在”本身就是输入：将来有人把它建出来，命令行为就变；range 的摘要覆盖目录下全部跟踪文件，正好绑定这件事；
+#   * 只被 stat／dir 的仓库内目录，必须是已声明内容的上级目录（有 range 或单文件在它下面），否则要被某个 range 覆盖；
+#   * 树根目录自身被枚举或读取（make 在树根找隐含规则，pnpm 向上找工作区根），以及树根直接子项的 missing 探测，登记侧用
+#     ``repo.root_listing`` 绑定（树根永远不能成为 range：那等于重新声明整个仓库）。
+# 下面的函数机械地把这些补齐（close_repo_scope），并让 repo_ignored 不盖住安装目录（build_repo_ignored）；补不齐的（例如被 stat 的已跟踪
+# 文件）留给覆盖自检报告，不去猜。
+
+
+def _ancestor_dirs(path: str, *, itself: bool) -> set[str]:
+    """路径的各级上级目录（仓库相对、无尾斜杠）；``itself`` 为真时路径自身（目录）也算。与登记侧 add_ancestors 同构。"""
+    parts = path.rstrip("/").split("/")
+    return {"/".join(parts[:count]) for count in range(1, len(parts) + (1 if itself else 0))}
+
+
+def declared_directory_set(include_dirs: Iterable[str], files: Iterable[str], ignored_items: Iterable[str],
+                           installed_prefixes: Iterable[str]) -> set[str]:
+    """“声明内容的上级目录”集合：只被 stat／dir 的访问落在这些目录上，登记侧算覆盖通过（与仓库内“声明内容的上级目录只看元数据”同构）。
+    来源：range 的 include（含自身）、单文件的各级父目录、repo_ignored 的目录前缀（含自身）与 glob 的字面目录部分、安装目录前缀（含自身）。"""
+    directories: set[str] = set()
+    for directory in include_dirs:
+        directories |= _ancestor_dirs(directory + "/", itself=True)
+    for path in files:
+        directories |= _ancestor_dirs(path, itself=False)
+    for item in ignored_items:
+        if item.endswith("/"):
+            directories |= _ancestor_dirs(item, itself=True)
+            continue
+        literal: list[str] = []  # glob 的目录部分里，第一个带通配符的分量之前的字面目录
+        for part in item.split("/")[:-1]:
+            if "*" in part or "?" in part:
+                break
+            literal.append(part)
+        if literal:
+            directories |= _ancestor_dirs("/".join(literal), itself=True)
+    for prefix in installed_prefixes:
+        directories |= _ancestor_dirs(prefix, itself=True)
+    return directories
+
+
+def _ignored_matcher(item: str) -> PathMatcher | None:
+    """repo_ignored 一项的匹配器；写法非法的（含方括号之类，登记侧也会拒绝）返回 None，交给覆盖自检去报，不在这里抛异常。"""
+    try:
+        return PathMatcher(item)
+    except SamplerError:
+        return None
+
+
+def close_repo_scope(accesses: Sequence[Sequence[Any]], *, tracked: set[str], include_dirs: Sequence[str], declared_files: Iterable[str],
+                     ignored_items: Sequence[str], installed_prefixes: Sequence[str]) -> dict[str, Any]:
+    """按上面的三条补齐 range 与 ``root_listing``。纯函数，只读采样的仓库内访问。返回::
+
+        {"extra": [补入的 range 目录（无尾斜杠，排序）], "why": {目录: {"missing": [探测路径…], "stat": [被 stat 的目录…]}},
+         "root_listing": 是否要写 repo.root_listing, "root_listed": 树根被枚举或读取, "root_missing": [树根直接子项的 missing 探测…]}
+
+    * **missing 探测**：路径所在的最近的、不是树根的父目录补一个 range（``node_modules/@types`` 补 ``node_modules/``）；目录不存在
+      或下面没有跟踪文件也照补——range 的摘要正是“这个目录下没有（这些）跟踪文件”的绑定。已被现有 range 或单文件覆盖的不重复补，
+      浅层目录先补（它常常已经盖住深层目录的探测）。树根直接子项的 missing 探测改走 ``root_listing``；``go.mod`` 一类祖先探测名
+      （``ANCESTOR_PROBES``）登记侧本来就放行，不补也不触发。
+    * **只被 stat／dir 的目录**（没有读、没有枚举、没有写）：它既不是已声明内容的上级目录，也不在任何 range 里，就为**目录自身**补一个
+      range（``docs/legal``、``src/__tests__``）；深层的先补，补了之后它的上级目录就成了“已声明内容的上级”，不必再为它们补。
+      被 stat 的已跟踪**文件**不处理（单文件条目是“读过”的语义，宁可让覆盖自检报出来）。
+    * **树根**：``{TREE}`` 自身的访问类型含 list 或 read（且只有 stat／dir／list／read），或树根直接子项有 missing 探测 → ``root_listing``。
+
+    ``.git`` 下的路径（走 git_history）、安装目录前缀与 repo_ignored 命中的路径（登记侧另有放行规则）一概不碰。
+    """
+    files_declared = set(declared_files)
+    matchers = [matcher for matcher in (_ignored_matcher(item) for item in ignored_items) if matcher is not None]
+    dirs: list[str] = list(include_dirs)
+
+    def excluded(relative: str) -> bool:
+        return (any((relative + "/").startswith(prefix) for prefix in installed_prefixes)
+                or any(matcher.matches(relative) for matcher in matchers))
+
+    def covered(relative: str) -> bool:
+        return relative in files_declared or any(relative == directory or relative.startswith(directory + "/") for directory in dirs)
+
+    root_listed = False
+    root_missing: list[str] = []
+    missing_by_parent: dict[str, list[str]] = {}
+    stat_only: list[str] = []
+    for path, raw_kinds, _tracked in accesses:
+        kinds = set(raw_kinds)
+        if path == "{TREE}":
+            root_listed = bool(kinds & {"list", "read"}) and kinds <= {"stat", "dir", "list", "read"}
+            continue
+        if not path.startswith("{TREE}/") or path.endswith("/"):
+            continue  # {TREE}/.git/objects/ 这个聚合键不在这里处理
+        relative = path[len("{TREE}/"):]
+        if relative == ".git" or relative.startswith(".git/") or not kinds <= _PROBE_KINDS or excluded(relative) or covered(relative):
+            continue
+        if "missing" in kinds:
+            if relative in ANCESTOR_PROBES:
+                continue  # 名字里没有斜杠，只会出现在树根下；登记侧放行纯 missing 的，混合类型的它也不放行，由覆盖自检去报
+            parent = os.path.dirname(relative)
+            if parent:
+                missing_by_parent.setdefault(parent, []).append(relative)
+            elif kinds == {"missing"}:
+                root_missing.append(relative)
+        else:
+            stat_only.append(relative)
+
+    why: dict[str, dict[str, list[str]]] = {}
+    for parent in sorted(missing_by_parent, key=lambda item: (item.count("/"), item)):
+        if not covered(parent):
+            dirs.append(parent)
+            why[parent] = {"missing": [], "stat": []}
+    declared = declared_directory_set(dirs, files_declared, ignored_items, installed_prefixes)
+    for relative in sorted(set(stat_only), key=lambda item: (-item.count("/"), item)):
+        if covered(relative) or relative in tracked or relative in declared:
+            continue
+        dirs.append(relative)
+        declared |= _ancestor_dirs(relative + "/", itself=True)
+        why[relative] = {"missing": [], "stat": []}
+    # 每个探测路径归到第一个盖住它的补入 range 名下，评审清单据此说明“为什么补这个目录”。
+    for relative in sorted(item for paths in missing_by_parent.values() for item in paths):
+        owner = next((directory for directory in why if relative.startswith(directory + "/")), None)
+        if owner is not None:
+            why[owner]["missing"].append(relative)
+    for relative in sorted(set(stat_only)):
+        if relative in why:
+            why[relative]["stat"].append(relative)
+    return {"extra": sorted(why), "why": why, "root_listing": root_listed or bool(root_missing), "root_listed": root_listed,
+            "root_missing": sorted(root_missing)}
+
+
+def build_repo_ignored(written_ignored: Iterable[str], written_untracked: Iterable[str], transient: Iterable[str],
+                       installed_prefixes: Sequence[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """``repo_ignored`` 草案：被 .gitignore 忽略的写入路径所在目录，加上命中过的 --transient 模式。返回 ``(条目, 改用精确路径的记录)``。
+
+    目录前缀不得与依赖安装目录前缀重叠或包含它（登记侧的覆盖检查里 repo_ignored 先于范围判定：一个盖住 ``frontend/node_modules/`` 或
+    ``frontend/`` 的输出区，会把安装目录、乃至 range 里已跟踪的输入统统吞掉）。目录自身等于安装前缀、是它的上级、或写入发生在树根下
+    （没有可用的目录）时，改用被写文件的**精确路径**（不含通配符的项就是精确路径）；目录严格位于安装前缀之内的（``node_modules/.vite/``）
+    照旧用目录前缀——那正是登记侧允许的“安装目录里的输出区”。--transient 的目录模式盖住安装前缀时同样改成命中它的被写路径。
+    ``(原目录, 精确路径)`` 记录供评审清单说明为什么这些项是精确路径。"""
+    def overlaps(directory: str) -> bool:
+        return not directory or any(prefix.startswith(directory) for prefix in installed_prefixes)
+
+    items: set[str] = set()
+    exact: list[tuple[str, str]] = []
+    for relative in sorted(written_ignored):
+        parent = os.path.dirname(relative)
+        directory = parent + "/" if parent else ""
+        if overlaps(directory):
+            items.add(relative)
+            exact.append((directory or "(树根)", relative))
+        else:
+            items.add(directory)
+    untracked = sorted(written_untracked)
+    for pattern in sorted(set(transient)):
+        if pattern.endswith("/") and overlaps(pattern):
+            for relative in untracked:
+                if (relative + "/").startswith(pattern):
+                    items.add(relative)
+                    exact.append((pattern, relative))
+        else:
+            items.add(pattern)
+    # 本函数改用的精确路径，若已被另一项目录前缀盖住（目录前缀连目录自身也算）就是多余的：连同记录一起去掉。
+    directories = [item for item in items if item.endswith("/")]
+    swapped = {path for _directory, path in exact}
+    items = {item for item in items if item not in swapped or not any((item + "/").startswith(directory) for directory in directories)}
+    return sorted(items), [(directory, path) for directory, path in exact if path in items]
 
 
 def rollup(read_files: Iterable[str], depth: int) -> list[tuple[str, int]]:
@@ -2220,6 +2478,142 @@ def _items(lines: list[str], items: Sequence[Any], render: Any, total: int | Non
     total = len(items) if total is None else total
     if total > LIST_LIMIT:
         lines.append(f"- ……共 {total} 项，只列前 {LIST_LIMIT} 项（完整内容见证据文件）")
+
+
+# ---------------------------------------------------------------------------
+# 覆盖自检：draft 起草完 scope，用登记侧自己的覆盖检查核对一遍
+# ---------------------------------------------------------------------------
+#
+# 起草靠一条条机械规则，登记侧的覆盖检查（unit_records.declared_coverage）又有它自己的一套放行规则，两边只要有一条对不上，草案就会在
+# 登记时才被拒绝——而且往往要靠人逐条发现。这里让 draft 在写出 declared 条目之前，把起草好的 scope 连同 sample 原样交给登记侧的同一个
+# 函数核对：通过才写 declared；不通过就写成 rerun-only，原因里带规则统计和前几处，评审清单列出全部未覆盖项。这样 draft 产出的 declared
+# 条目必然能通过登记时的覆盖检查，不再靠人工发现。
+#
+# 登记侧的模块与本文件同目录（驱动目录里一起部署），按文件路径加载、只读使用；找不到、加载失败或没有这两个函数（登记侧还没合进这棵树）
+# 时跳过自检并在评审清单里注明，条目保持原状。
+
+_UNIT_RECORDS: tuple[Any, str] | None = None
+
+
+def unit_records_module() -> tuple[Any, str]:
+    """按文件路径加载同目录的 unit_records.py，返回 ``(模块, 说明)``：不可用时模块为 None，说明写明原因。结果缓存在进程内。
+
+    和 ``read_audit_module`` 一样强制不写字节码（在驱动目录或测试树里留下 __pycache__ 会让门禁前置检查直接退出）；模块要先放进
+    ``sys.modules`` 才能 exec（它的 dataclass 要按模块名查自己）。需要 ``declared_coverage`` 与 ``validate_declared_scope`` 两个函数。"""
+    global _UNIT_RECORDS
+    if _UNIT_RECORDS is None:
+        path = HERE.with_name("unit_records.py")
+        name = "_declared_sampler_unit_records"
+        module, note = None, ""
+        spec = importlib_util.spec_from_file_location(name, path) if path.is_file() else None
+        if spec is None or spec.loader is None:
+            note = f"同目录没有 {path.name}"
+        else:
+            candidate = importlib_util.module_from_spec(spec)
+            previous = sys.dont_write_bytecode
+            sys.dont_write_bytecode = True
+            try:
+                sys.modules[name] = candidate
+                spec.loader.exec_module(candidate)
+            except Exception as error:  # 任何加载失败都只是“自检不可用”，不能让 draft 本身崩掉
+                sys.modules.pop(name, None)
+                note = f"加载 {path.name} 失败：{type(error).__name__}：{error}"
+            else:
+                if all(callable(getattr(candidate, attr, None)) for attr in ("declared_coverage", "validate_declared_scope")):
+                    module = candidate
+                else:
+                    sys.modules.pop(name, None)
+                    note = f"{path.name} 里没有 declared_coverage 与 validate_declared_scope（登记侧的覆盖检查还没有合进这棵树）"
+            finally:
+                sys.dont_write_bytecode = previous
+        _UNIT_RECORDS = (module, note)
+    return _UNIT_RECORDS
+
+
+def coverage_self_check(sample: Mapping[str, Any], scope: Mapping[str, Any]) -> dict[str, Any]:
+    """用登记侧的 ``declared_coverage(sample, scope, command_sha256=…)`` 核对起草的 scope。返回 ``{"state": …}``：
+
+    * ``passed``：通过，带登记侧返回的计数 ``counts``；
+    * ``failed``：不通过，带 ``total``（未覆盖总数）、``findings``（登记侧返回的明细，最多 200 条，按规则、路径排序）、``counts``；
+    * ``skipped``：登记侧模块不可用，带 ``note``；
+    * ``error``：核对函数自己抛了异常，带 ``note``——无法证明覆盖，调用方按不通过处理（宁可 rerun-only，不能带着未核对的 scope 写 declared）。
+
+    采样证据原样传入（登记侧只读它，不改）；命令摘要用证据自己的 ``command.sha256``，与写进登记表的 ``command_sha256`` 同一个值。"""
+    module, note = unit_records_module()
+    if module is None:
+        return {"state": "skipped", "note": note}
+    try:
+        report = module.declared_coverage(sample, scope, command_sha256=sample["command"]["sha256"])
+    except Exception as error:  # 核对函数自己出错：无法证明覆盖，由调用方按不通过处理
+        return {"state": "error", "note": f"{type(error).__name__}：{error}"}
+    counts = dict(report.get("counts", {}))
+    if report["ok"]:
+        return {"state": "passed", "counts": counts}
+    return {"state": "failed", "total": counts.get("undeclared", len(report["undeclared"])), "findings": list(report["undeclared"]), "counts": counts}
+
+
+def _finding_text(item: Mapping[str, Any], limit: int = 160) -> str:
+    """一条未覆盖项压成一行：规则、路径、访问类型。路径很长时截断（go 构建缓存的路径一百多字符）。"""
+    text = f"{item['rule']} {item['path']} [{','.join(item['kinds'])}]" if item["path"] else f"{item['rule']} {item['reason']}"
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def coverage_failure_reason(check: Mapping[str, Any]) -> str:
+    """覆盖自检不通过时写进登记表的 rerun-only 原因：未覆盖总数、规则统计、前 3 处。"""
+    findings = check["findings"]
+    stats: dict[str, int] = {}
+    for item in findings:
+        stats[item["rule"]] = stats.get(item["rule"], 0) + 1
+    stat_text = "、".join(f"{rule}×{count}" for rule, count in sorted(stats.items()))
+    if check["total"] > len(findings):
+        stat_text += f"，登记侧只返回前 {len(findings)} 处明细，统计按这些算"
+    shown = "；".join(_finding_text(item) for item in findings[:3])
+    return f"{COVERAGE_REASON_PREFIX}：{check['total']} 处未覆盖（规则统计 {stat_text}；前 3 处：{shown}）"
+
+
+# 覆盖检查返回的计数里，通过时写进评审清单的几项（登记侧版本不同，计数键可能多可能少，没有的就不写）。
+_COVERAGE_COUNT_LABELS = (("repo_paths", "仓库内路径"), ("outside_paths", "仓库外目录"), ("exempt_paths", "祖先探测等豁免"), ("ignored_paths", "输出区路径"),
+                          ("installed_paths", "安装目录路径"), ("root_listing_paths", "树根枚举与探测"), ("git_paths", ".git 路径"),
+                          ("git_commands", "git 命令"), ("network", "网络目的地"))
+
+
+def coverage_review_lines(check: Mapping[str, Any]) -> list[str]:
+    """评审清单第 13 节（覆盖自检）的正文：通过、不通过（按规则分组列出全部明细）、未执行、出错、被关闭、不需要，各一种写法。"""
+    state = check["state"]
+    if state == "off":
+        return ["- 覆盖闭合与覆盖自检已被 `--no-coverage-check` 关闭：草案只按读集归并，没有为 missing 探测和只被 stat 的目录补 range，也没有用登记侧的覆盖检查核对；"
+                "登记前必须自己核对。"]
+    if state == "not-needed":
+        return ["- 本单元的采样无效或 git 用法未固定，登记状态草案已是 `rerun-only`，没有做覆盖自检。"]
+    if state == "skipped":
+        return [f"- **覆盖自检未执行**：{_md(check['note'])}；条目保持原状，登记前必须用登记侧的覆盖检查（unit_records.declared_coverage）自己核对一遍。"]
+    if state == "error":
+        return [f"- **覆盖自检无法执行**：核对函数抛出异常（{_md(check['note'])}），无法证明声明范围覆盖了采样的读集，登记状态草案已改为 `rerun-only`。"]
+    if state == "passed":
+        counts = check["counts"]
+        shown = "、".join(f"{label} {counts[key]}" for key, label in _COVERAGE_COUNT_LABELS if key in counts)
+        return [f"- **覆盖自检通过**：起草的 scope 通过了登记侧的覆盖检查（unit_records.declared_coverage）" + (f"：{shown}。" if shown else "。")]
+    findings = check["findings"]
+    groups: dict[str, list[Mapping[str, Any]]] = {}
+    for item in findings:
+        groups.setdefault(item["rule"], []).append(item)
+    lines = [f"- **覆盖自检不通过**：共 {check['total']} 处未覆盖，登记状态草案已改为 `rerun-only`。规则统计："
+             + "、".join(f"`{rule}`×{len(items)}" for rule, items in sorted(groups.items()))]
+    if check["total"] > len(findings):
+        lines.append(f"- 登记侧只返回前 {len(findings)} 处明细（总数 {check['total']}），规则统计和下面的清单都只按这些算。")
+    for rule in sorted(groups):
+        items = groups[rule]
+        reasons = sorted({item["reason"] for item in items})
+        lines.append(f"- `{_md(rule)}` ×{len(items)}" + (f"：{_md(reasons[0])}" if len(reasons) == 1 else ""))
+        for item in items[:LIST_LIMIT]:
+            where = f"`{_quote(item['path'])}` {','.join(item['kinds'])}" if item["path"] else "（无路径）"
+            lines.append(f"  - {where}" + ("" if len(reasons) == 1 else f"：{_md(item['reason'])}"))
+        if len(items) > LIST_LIMIT:
+            lines.append(f"  - ……共 {len(items)} 项，只列前 {LIST_LIMIT} 项")
+    lines.append("- 处理方向（按规则前缀，各条的具体理由见上）：`C0-` 起草的 scope 本身过不了登记侧的校验（缺依赖锁文件、登记侧不认的键……），先修它；"
+                 "`C2-`／`C3-` 里的仓库外路径多半是内置分类表没有覆盖的前缀，确认可以接受后用 `draft --class-prefix 前缀=类别[:合同]` 登记再起草；"
+                 "仓库内的 `C1-`／`C3-` 看上面的路径，最常见的是只被 stat 的已跟踪文件（覆盖闭合不替它声明，要人工决定）；`C7-` 是采样证据本身不合格，需要重新采样。")
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -2342,8 +2736,14 @@ def git_usage_problem(argv: Sequence[str]) -> str | None:
 
 
 def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree: Path, files: set[str], totals: Mapping[str, int],
-               classifier: Classifier, head: str | None, ledger: set[str] | None) -> tuple[dict[str, Any], list[str]]:
-    """一个 sample 的登记表条目和评审小节。无效采样只给 rerun-only，评审清单照样把原因和证据摘要列全。"""
+               classifier: Classifier, head: str | None, ledger: set[str] | None,
+               coverage_check: bool = True) -> tuple[dict[str, Any], list[str]]:
+    """一个 sample 的登记表条目和评审小节。无效采样只给 rerun-only，评审清单照样把原因和证据摘要列全。
+
+    ``coverage_check``（缺省开）：起草后做覆盖闭合（为 missing 探测与只被 stat 的目录补 range，树根被枚举或有 missing 探测时写
+    ``repo.root_listing``），再用登记侧的覆盖检查自检起草好的 scope，不通过就写成 rerun-only。关掉就不做这两件事，草案只按读集归并；
+    不受它影响的是分类与输出区的修正（``/run/`` 归 virtual、被写入的 ``/dev/null`` 补 scratch 行、``repo_ignored`` 不盖住安装目录）
+    和 range 名的规范化——它们没有“关掉”的理由。"""
     review, coverage = sample["review"], sample["coverage"]
     unit_id = sample["unit_id"]
     allowances = review["allowances"]
@@ -2359,11 +2759,12 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
 
     repo = derive_repo_scope(sample, files, totals, skip_listed=skip_listed if installed_prefixes or transient_matchers else None)
 
-    # 写入且被忽略的路径所在目录，加上命中过的自产暂存路径模式，作为 repo_ignored 草案。
+    # 写入且被忽略的路径所在目录，加上命中过的自产暂存路径模式，作为 repo_ignored 草案。目录前缀不得与依赖安装目录前缀重叠或包含它
+    # （见 build_repo_ignored）：落在安装目录里、或把安装目录整个盖住的，改用被写文件的精确路径。
     writes = [repo_rel(path) for path, kinds, tracked in sample["repo_accesses"]
               if "write" in kinds and not tracked and not repo_rel(path).startswith(".git")]
     ignored = git_ignored(tree, writes)
-    repo_ignored = sorted({os.path.dirname(rel) + "/" for rel in ignored if os.path.dirname(rel)} | set(transient_used))
+    repo_ignored, exact_ignored = build_repo_ignored(ignored, writes, transient_used, installed_prefixes)
 
     # 仓库外：按分类前缀归并；HOME 下逐条（要登记存在性与内容）；归不进去的逐条列未归类。
     outside: dict[str, tuple[str, str | None]] = {}
@@ -2372,7 +2773,13 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
     by_class: dict[str, int] = {}
     etc_items: list[list[Any]] = []
     home_items: list[list[Any]] = []
+    dev_null_written = False
     for key, kinds, count in sample["outside_accesses"]:
+        # 被写入的 /dev/null（丢弃输出，没有可观察状态；merge 按 DECLARED_WRITE_SINKS 豁免）：/dev/ 归 virtual 类，登记侧不许往 virtual 类里
+        # 写，所以在原有分类之外，再为这个精确路径补一行 scratch（最长前缀优先，它盖过 /dev/ 那一行；scratch 类允许写，也不绑定内容）。
+        if "write" in kinds and key in DECLARED_WRITE_SINKS:
+            outside[key] = ("scratch", None)
+            dev_null_written = True
         found = classifier.classify(key)
         # HOME 根目录自身的 stat 也是祖先探测，不是一份要登记的配置文件。
         if found is not None and key in ("{HOME}", "{HOME}/") and not set(kinds) - {"stat", "dir", "missing"}:
@@ -2409,6 +2816,16 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
     if added_locks:
         repo["files"] = sorted({*repo["files"], *added_locks})
 
+    # 覆盖闭合（在锁文件补入之后：锁文件也算已声明的单文件）：为仓库内的 missing 探测和只被 stat／dir 的目录补 range，树根被枚举或树根直接子项
+    # 有 missing 探测时标记 root_listing。补入的 range 与读集归并出的 range 合在一起重新排序、重新起名（没有补入时与从前逐字相同）。
+    closure: dict[str, Any] | None = None
+    if coverage_check:
+        closure = close_repo_scope(sample["repo_accesses"], tracked=files, include_dirs=repo["include_dirs"], declared_files=repo["files"],
+                                   ignored_items=repo_ignored, installed_prefixes=installed_prefixes)
+        if closure["extra"]:
+            merged = sorted([*repo["include_dirs"], *closure["extra"]])
+            repo["ranges"] = [{"name": name, "include": [directory + "/"], "exclude": []} for name, directory in zip(name_ranges(merged), merged)]
+
     # git 历史：从采样到的 git 子进程 argv 里机械提取 40 位提交号，符号引用（HEAD 等）只提示。
     commits: list[str] = []
     symbolic: list[str] = []
@@ -2422,6 +2839,8 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
     git_internal = [path for path, kinds, _tracked in sample["repo_accesses"]
                     if repo_rel(path).startswith(".git/") and ("read" in kinds or "exec" in kinds)]
     scope_repo: dict[str, Any] = {"ranges": repo["ranges"], "files": repo["files"], "list_ok": [], "repo_ignored": repo_ignored, "head": False}
+    if closure is not None and closure["root_listing"]:  # 可选键：树根被枚举／读取，或树根直接子项有 missing 探测（登记侧用顶层名字摘要绑定）
+        scope_repo["root_listing"] = True
     if installed_used:
         scope_repo["installed_dirs"] = [{"prefix": prefix, "contract": contract} for prefix, contract in installed_used]
     if commits:
@@ -2443,7 +2862,18 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
         more = f"；……共 {len(unfixed)} 条" if len(unfixed) > 3 else ""
         git_reason = f"git 子进程使用了未固定的修订（{shown}{more}）：结果依赖 HEAD 或引用库，不可声明级承接"
 
-    if sample["valid"] and git_reason is None:
+    # 覆盖自检：采样有效、git 用法固定（这样的单元才可能写 declared）才核对；已经是 rerun-only 的没有必要。自检不通过或核对函数出错 → rerun-only，
+    # head 为 false（原因不是读 HEAD）。登记侧模块不可用时（check["state"] == "skipped"）条目保持原状，评审清单注明没有自检。
+    check: dict[str, Any] = {"state": "not-needed"} if coverage_check else {"state": "off"}
+    coverage_reason: str | None = None
+    if coverage_check and sample["valid"] and git_reason is None:
+        check = coverage_self_check(sample, scope)
+        if check["state"] == "failed":
+            coverage_reason = coverage_failure_reason(check)
+        elif check["state"] == "error":
+            coverage_reason = f"{COVERAGE_REASON_PREFIX}：核对函数自己抛出异常（{check['note']}），无法证明声明范围覆盖了采样的读集"
+
+    if sample["valid"] and git_reason is None and coverage_reason is None:
         entry: dict[str, Any] = {"status": "declared", "scope": scope, "sample": {
             "evidence": f"{EVIDENCE_DIR}/{safe}.sample.json", "evidence_sha256": evidence_sha, "command_sha256": sample["command"]["sha256"],
             "launcher_sha256": sha256_json(sample["command"]["launcher"]), "sampled_commit": sample["sampled"]["commit"],
@@ -2454,6 +2884,8 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
         parts = [] if sample["valid"] else [("采样无效：" + "；".join(sample["invalid_reasons"]))[:800]]
         if git_reason is not None:
             parts.append(git_reason)
+        if coverage_reason is not None:  # 只在前两个原因都不成立时才会有（有了就不自检）
+            parts.append(coverage_reason)
         entry = {"status": "rerun-only", "reason": "；".join(parts)}
         if git_reason is not None:
             entry["head"] = True
@@ -2471,6 +2903,9 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
         lines.append(f"- **git 用法未固定**：{len(unfixed)} 条 git 子进程命令的修订不是完整 40 位提交号（HEAD、引用、分支、标签等），或子命令读引用库、"
                      "写仓库状态，或参数不可见；结果依赖 HEAD 或引用库，不可声明级承接，登记状态草案已改为 `rerun-only` 并带 `head: true`"
                      "（保留旧的 HEAD 输入），全部命令见第 11 节。")
+    if coverage_reason is not None:
+        lines.append(f"- **覆盖自检不通过**：起草的 scope 没能通过登记侧的覆盖检查，登记状态草案已改为 `rerun-only`（reason 以“{COVERAGE_REASON_PREFIX}”开头），"
+                     "全部未覆盖项见第 13 节。")
     lines += ["", "### 2 过宽度量（每个 include）", ""]
     if repo["include_dirs"]:
         lines += ["| include | 跟踪文件数 | 被读文件数 | 过宽（未读） | 命中率 | 被枚举 |", "|---|---|---|---|---|---|"]
@@ -2496,8 +2931,29 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
         if missing:
             lines.append("- **依赖锁文件缺失**：" + "、".join(f"`{_md(item)}`" for item in missing)
                          + " 不是仓库里跟踪的文件，没有补入；登记前必须人工处理，否则登记侧会拒绝这份范围。")
-    if len(repo["ranges"]) > MAX_RANGES or len(repo["files"]) > MAX_FILES:
-        lines.append(f"- **超限待评审**：ranges {len(repo['ranges'])}（上限 {MAX_RANGES}）、files {len(repo['files'])}（上限 {MAX_FILES}）；"
+    if closure is not None and closure["extra"]:
+        lines.append(f"- **覆盖闭合补入的 range** {len(closure['extra'])} 个（登记侧要求仓库内的 missing 探测、以及只被 stat／dir 且其下没有任何声明内容的目录"
+                     "必须落在某个 range 里；range 的摘要覆盖目录下全部跟踪文件，所以“这里没有这个文件”“这个目录里没有跟踪文件”也被绑定——"
+                     "目录不存在或下面没有跟踪文件也照补，将来有人在里面新增跟踪文件，摘要就变；上面的汇总表不含这些）：")
+        for directory in closure["extra"]:
+            reasons = closure["why"][directory]
+            parts = []
+            if reasons["missing"]:
+                parts.append(f"missing 探测 {len(reasons['missing'])} 个，例如 " + "、".join(f"`{_md(item)}`" for item in reasons["missing"][:3]))
+            if reasons["stat"]:
+                parts.append("目录自身被 stat／dir，其下没有声明内容")
+            lines.append(f"  - `{_md(directory)}/`（跟踪文件 {totals.get(directory, 0)} 个）：" + "；".join(parts))
+    if closure is not None and closure["root_listing"]:
+        why = []
+        if closure["root_listed"]:
+            why.append("测试树根目录被枚举或读取")
+        if closure["root_missing"]:
+            why.append(f"树根直接子项有 {len(closure['root_missing'])} 个 missing 探测（" + "、".join(f"`{_md(item)}`" for item in closure["root_missing"][:8])
+                       + ("……" if len(closure["root_missing"]) > 8 else "") + "）")
+        lines.append("- **`repo.root_listing: true`**：" + "；".join(why) + "。树根不能成为 range（那等于重新声明整个仓库），登记侧用“树根下被跟踪的顶层名字”的"
+                     "摘要绑定这类访问：同名的跟踪文件一出现摘要就变。这个键只有登记侧支持 root_listing 的版本才认，不认的版本会在第 13 节的覆盖自检里报 C0-scope。")
+    if len(scope_repo["ranges"]) > MAX_RANGES or len(repo["files"]) > MAX_FILES:
+        lines.append(f"- **超限待评审**：ranges {len(scope_repo['ranges'])}（上限 {MAX_RANGES}）、files {len(repo['files'])}（上限 {MAX_FILES}）；"
                      "可参考上面的汇总表决定合并到多粗。")
     _items(lines, repo["files"], lambda item: f"`{_md(item)}`" + ("（由合同要求补入）" if item in added_locks else ""))
     lines += ["", "### 3 被 list 枚举的目录（逐个决定保持 include 还是降为 list_ok）", ""]
@@ -2513,6 +2969,10 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
     lines += ["", "### 4 写入集合", ""]
     wr = review["writes"]
     lines += [f"- 仓库内被忽略的写入目录与自产暂存路径（repo_ignored 草案）：{('、'.join('`' + _md(item) + '`' for item in repo_ignored)) or '无'}"]
+    if exact_ignored:
+        lines.append(f"- **repo_ignored 里有 {len(exact_ignored)} 项改用了被写文件的精确路径**：这些路径所在的目录与依赖安装目录前缀重叠或把它整个盖住"
+                     "（或写入发生在树根下，没有可用的目录前缀）；输出区若用目录前缀，会把安装目录、乃至 range 里已跟踪的输入统统吞掉（登记侧先判输出区，再判范围）。"
+                     "原目录与精确路径（前 10 项）：" + "、".join(f"`{_md(directory)}`→`{_md(path)}`" for directory, path in exact_ignored[:10]))
     if allowances.get("transient"):
         lines.append("- 自产暂存路径（merge --transient）：落在其内的未跟踪路径只要本次采样里写过，写入与读回都不判无效；只读不写的不豁免；"
                      "运行前后 git status 必须为空的判据照旧，“写完即删”靠它兜底：")
@@ -2524,6 +2984,9 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
     _items(lines, wr["violations"]["items"], lambda item: f"`{_md(item['path'])}`：{_md(item['reason'])}", wr["violations"]["count"])
     lines.append(f"- 仓库外写入目录与类别：{('、'.join('`' + _md(key) + '`→' + _md(cls) for key, cls in wr['outside'])) or '无'}")
     lines.append(f"- 已豁免的无害写入：{('、'.join('`' + _md(item) + '`' for item in wr['sinks'])) or '无'}（写入 /dev/null 没有可观察状态）")
+    if dev_null_written:
+        lines.append("- `/dev/null` 被写入：草案 outside 在 `/dev/`（virtual 类）之外，另补了精确前缀 `/dev/null`（class=scratch）——virtual 类不许写，"
+                     "而写空设备没有可观察状态。")
     lines += ["", "### 5 untracked_reads（读取了未跟踪路径，必须为空）", ""]
     untracked = review["untracked_reads"]
     lines.append(f"- 共 {untracked['count']} 个" + ("；按前两级目录：" + "、".join(f"`{_md(prefix)}`（{count}）" for prefix, count in untracked["by_prefix"])
@@ -2577,6 +3040,16 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
     lines += [f"- 未归类 {len(unclassified)} 项（必须逐条评审，或用 `--class-prefix` 登记后重新 merge）"]
     _items(lines, unclassified, lambda item: f"`{_md(item[0])}` {_md(item[1])} ×{item[2]}")
     lines += [f"- 仅元数据的上层目录探测 {len(ancestors)} 项（PATH 搜索、Go 往上找 go.mod 等）：{('、'.join('`' + _md(item[0]) + '`' for item in ancestors[:30])) or '无'}"]
+    # 祖先链目录（测试树的各级祖先、别名根）的聚合键丢了文件名：键上的 read 可能是打开祖先目录本身（WP4c 之前的采样器记成 read，之后记成 dir），
+    # 也可能是读了祖先目录下的直接子项（文件，或不是祖先的目录）。登记侧对这类键放行 read，所以单独点出来，重采后仍剩 read 的才需要逐个确认。
+    chain = ancestor_keys(sample["aliases"])
+    ancestor_reads = [item for item in sample["outside_accesses"] if item[0] in chain and "read" in item[1]]
+    if ancestor_reads:
+        lines.append(f"- **祖先链目录的聚合键上有 read** {len(ancestor_reads)} 个：" + "、".join(f"`{_md(item[0])}`" for item in ancestor_reads[:30])
+                     + "。别名根与祖先目录自身被打开的 read，WP4c 起的采样器记成 dir；所以用新采样器采的 sample 里剩下的 read 是读了祖先目录下的直接子项"
+                       "（文件，或不是祖先的目录），聚合键丢了文件名，而登记侧对这类键放行 read——请确认读的不是意外的宿主文件。旧采样器采的 sample 里也可能只是打开了目录本身。")
+    else:
+        lines.append("- 祖先链目录的聚合键上没有 read（别名根与祖先目录自身被打开的 read，WP4c 起的采样器记成 dir）。")
     lines += [f"- HOME 下配置 {len(home_items)} 项（要逐路径登记存在性与内容）"]
     _items(lines, home_items, lambda item: f"`{_md(item[0])}` {_md(item[1])}")
     lines += [f"- /etc 下读取 {len(etc_items)} 项（环境指纹只覆盖包管理器管理的文件，手改的文件要评审）"]
@@ -2615,11 +3088,17 @@ def draft_unit(sample: Mapping[str, Any], *, evidence_sha: str, safe: str, tree:
             lines += [f"  - `{_quote(item)}`" for item in garbled]
         else:
             lines.append("- 没有带名字的垃圾行，只有裸标记。")
+    lines += ["", "### 13 覆盖自检（登记侧 declared_coverage）", ""]
+    lines += coverage_review_lines(check)
     lines.append("")
     return entry, lines
 
 
-def draft_registry(samples_dir: Path, tree: Path, *, class_prefixes: Sequence[tuple[str, str, str | None]] = ()) -> tuple[dict[str, Any], str]:
+def draft_registry(samples_dir: Path, tree: Path, *, class_prefixes: Sequence[tuple[str, str, str | None]] = (),
+                   coverage_check: bool = True) -> tuple[dict[str, Any], str]:
+    """samples_dir 下全部 ``*.sample.json`` → (登记表草案, 评审清单文本)。
+
+    ``coverage_check``（缺省开）：覆盖闭合加登记侧覆盖检查自检，见 ``draft_unit``；``--no-coverage-check`` 对应关掉这两件事。"""
     tree, samples_dir = Path(tree).resolve(), Path(samples_dir)
     paths = sorted(samples_dir.glob("*.sample.json"))
     if not paths:
@@ -2655,7 +3134,7 @@ def draft_registry(samples_dir: Path, tree: Path, *, class_prefixes: Sequence[tu
             recorded = [tuple(item) for item in document["review"]["allowances"]["class_prefixes"]]
             classifier = Classifier([*recorded, *class_prefixes])  # type: ignore[list-item]
             entry, section = draft_unit(document, evidence_sha=evidence_sha, safe=safe, tree=tree, files=files, totals=totals,
-                                        classifier=classifier, head=head, ledger=ledger)
+                                        classifier=classifier, head=head, ledger=ledger, coverage_check=coverage_check)
         except (KeyError, TypeError, IndexError, ValueError) as error:
             # validate_sample 只校验到 review 的顶层键；内层结构被手工改坏时给出明确错误，而不是回溯。
             raise SamplerError(f"单元 {document['unit_id']} 的 sample 内层结构不符（review 被改动过？）：{type(error).__name__} {error}") from error
@@ -2667,12 +3146,14 @@ def draft_registry(samples_dir: Path, tree: Path, *, class_prefixes: Sequence[tu
                     f"{len(scope['repo']['files']) if scope else '-'} | {_md(entry['status'])} |")
     valid = sum(1 for doc, _s, _h in loaded if doc["valid"])
     unfixed_units = sum(1 for entry in units.values() if entry.get("head"))  # 只有 git 用法未固定的条目带 head: true
+    uncovered_units = sum(1 for entry in units.values() if entry["status"] == "rerun-only" and entry["reason"].startswith(COVERAGE_REASON_PREFIX))
     text = ["# 声明级承接采样评审清单", "",
             "> 由 `declared_sampler.py draft` 机械生成：只按目录命中率等规则归并，**不做任何语义判断的自动放行**。每一节都需要人工确认；",
             "> 草案里的 `list_ok` 与 `make_expansion` 一律为空，由评审者决定。", "",
             f"- 采样器摘要：`{file_sha256(HERE)}`", f"- 当前树 HEAD：`{head or '未知'}`",
             f"- 单元 {len(loaded)} 个，采样有效 {valid} 个，无效 {len(loaded) - valid} 个"
-            + (f"；另有 {unfixed_units} 个因 git 用法未固定（按 HEAD、引用、分支、标签寻址）转 rerun-only 并带 head: true" if unfixed_units else ""), "",
+            + (f"；另有 {unfixed_units} 个因 git 用法未固定（按 HEAD、引用、分支、标签寻址）转 rerun-only 并带 head: true" if unfixed_units else "")
+            + (f"；另有 {uncovered_units} 个因覆盖自检不通过（起草的 scope 过不了登记侧的覆盖检查）转 rerun-only" if uncovered_units else ""), "",
             "## 总览", "", "| 单元 | 采样有效 | 仓库内路径 | 仓库外目录 | ranges | files | 登记状态草案 |", "|---|---|---|---|---|---|---|", *rows, ""]
     for section in sections:
         text += section
@@ -2730,6 +3211,9 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
     draft.add_argument("--registry-out", type=Path, required=True)
     draft.add_argument("--review-out", type=Path, required=True)
     draft.add_argument("--class-prefix", action="append", default=[], metavar="前缀=类别[:合同]")
+    draft.add_argument("--no-coverage-check", action="store_true",
+                       help="关闭覆盖闭合与覆盖自检（草案只按读集归并）。缺省会为 missing 探测和只被 stat 的目录补 range、树根被枚举时写 repo.root_listing，"
+                            "再用登记侧的覆盖检查（unit_records.declared_coverage）核对起草的 scope，不通过就写成 rerun-only")
     return parser.parse_args(list(argv))
 
 
@@ -2780,7 +3264,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                              ensure_ascii=False, sort_keys=True))
             return 0
         if args.command == "draft":
-            registry, review = draft_registry(args.samples, args.tree, class_prefixes=[parse_class_prefix(item) for item in args.class_prefix])
+            registry, review = draft_registry(args.samples, args.tree, class_prefixes=[parse_class_prefix(item) for item in args.class_prefix],
+                                              coverage_check=not args.no_coverage_check)
             write_document(args.registry_out, registry)
             args.review_out.parent.mkdir(parents=True, exist_ok=True)
             args.review_out.write_text(review, encoding="utf-8")

@@ -596,7 +596,9 @@ class DraftTests(TempCase):
         sample = ds.merge_raws([make_raw(self.tree, self.work, lines)], tree=self.tree, **options.pop("merge", {}))
         path = self.samples / "backend-go-test.sample.json"
         ds.write_document(path, sample)
-        registry, review = ds.draft_registry(self.samples, self.tree, **options)
+        # 这一组用例钉的是“按读集机械归并”本身（命中率、叶子规则、未归类前缀……），样本是合成的，仓库也没有 go.sum 之类登记侧要求的文件，
+        # 过不了登记侧的覆盖自检；所以关掉覆盖闭合与自检（步骤 5 的 WP4c 之后 draft 默认开启，开启后的行为见 test_ci_declared_sampler_coverage）。
+        registry, review = ds.draft_registry(self.samples, self.tree, **{"coverage_check": False, **options})
         return registry, review, sample
 
     def test_ranges_follow_hit_ratio_leaf_size_and_listed_directories(self) -> None:
@@ -848,7 +850,8 @@ class RunTests(TempCase):
         samples = self.root / "samples"
         samples.mkdir()
         ds.write_document(samples / "backend-go-test.sample.json", sample)
-        registry, _review = ds.draft_registry(samples, self.tree)
+        # 假 strace 产出的是合成读集，登记侧的覆盖自检（WP4c 起默认开启）不认它；这里验证的是 run→merge→draft 的链路，所以关掉自检。
+        registry, _review = ds.draft_registry(samples, self.tree, coverage_check=False)
         self.assertEqual(registry["units"][UNIT]["status"], "declared")
         self.assertEqual(registry["units"][UNIT]["sample"]["launcher_sha256"], ds.sha256_json([str(self.launcher)]))
         self.assertEqual(registry["units"][UNIT]["sample"]["runs"], 2)
