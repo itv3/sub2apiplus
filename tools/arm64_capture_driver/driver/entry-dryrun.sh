@@ -14,6 +14,8 @@
 #       可从首轮同时固定带 --unit-inherit-full-gates-request：pre-A3 沿用后选这份独立批准的实际组合请求，不改来源授权。
 #       精确读集登记另带 --audit-policy：只随承接请求或显式 --opening 使用，摘要绑定结论，取锁后及收口时复核；
 #       后台验证明确带策略时不会自动接缺少当前批准的空跑，应显式带请求与原策略执行本入口。
+#       --declared-sample off|always|every:N（步骤 5 WP3b，缺省 off）：声明级承接命令单元的读集证据来源，原样交给入口编排器，再到入口门禁与 pre-A3 的
+#       执行器；非法值立即退出 2，非 off 的取值绑定结论（结论文件名另带取值），缺省时结论与命令行不变。本脚本把 start 的其余选项原样交给 entry_dryrun.py。
 #       开跑前先做日常维护（见 housekeeping），根盘越过停线就不跑（结论 failed，没通过的一步记 disk）。
 #   housekeeping [--dry-run] [--retention-days <天>] [--keep-dryruns <次>] [--go-cache auto|off|<目录>]
 #       单独做一遍日常维护：清 Go 编译缓存里 6 小时以上没用过的条目、清理单元执行记录库（保留期默认 30 天，仍被 v2 认证与

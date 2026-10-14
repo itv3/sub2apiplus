@@ -1154,15 +1154,34 @@ DECLARED_TESTCONTAINERS_PROPERTIES = ".testcontainers.properties"
 _DECLARED_HOST_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 # 条目 detail 里只供人读、不进摘要的字段（探测到的可执行文件路径、make 展开文本前缀、解析来源）。
 DECLARED_INFO_KEYS = frozenset({"text", "executable", "resolved_from", "error"})
-# make -n 展开探测必须只读：下面这些写法会在 make 解析期执行任意命令或写文件，出现就不做展开合同（单元转 rerun-only）。
+# make -n 展开探测要尽量只读（make 自己并不保证 -n 只读，见下面的补充）：下面这些写法会在 make 解析期执行任意命令或写文件，出现就不做展开合同（单元转 rerun-only）。
 # $(shell/wildcard/eval/call) 与 include 是调研指定的；另加 file/load/guile/exec（同样有副作用）与 `VAR != cmd`（shell 赋值）。
 # 函数名后必须紧跟空白才算函数调用、include 后必须跟文件名才算指令，所以 $(file_list)、$(filter …) 或叫 include-check 的目标
 # 不会误伤；以 TAB 开头的是配方行，不做指令与赋值判断（配方里的 $(shell …) 仍然会被第一条抓到——make 打印配方时也会展开它）。
 # 整行注释先去掉再扫。
+# 步骤 5 WP3b 补充（独立验收一般 2）：-n 并不保证只读——GNU Make 手册（「实际执行」一节）说明，带 + 前缀的配方行（+ 可与 @、- 混在行首）、含
+# $(MAKE)／${MAKE} 的配方行（递归 make 要继续传 -n，所以不被拦住），以及重建 makefile 自身的规则（目标是 Makefile／makefile／GNUmakefile，
+# include 进来的文件同理，-n 也照样先重建 makefile）都会在 -n 下真的执行。所以扫描另挡三类：自重建规则与 .RECIPEPREFIX（配方行不再以 TAB 开头，
+# 扫描就认不出配方行）是解析期的，看整份文件；+ 行与 $(MAKE) 是执行期的，只看声明目标的先决条件闭包里的配方行（闭包解析不了就退回整份文件，
+# 不让与声明单元无关的目标——真实仓库的 build-backend、test-backend、test-frontend 就用 $(MAKE)——挡住所有展开合同）。
+# 保证的范围就是这份扫描：命中的写法不做展开合同；没命中却仍有副作用的写法（例如配方宏展开出 + 行）不在保证内，靠 Makefile 评审兜底。探测时另清空
+# MAKEFLAGS 与 MAKEFILES，免得调用方环境里的 -j、-t 之类选项或额外 makefile 改变展开语义。
 _DECLARED_MAKE_UNSAFE = re.compile(
     r"[$][({]\s*(?:shell|wildcard|eval|call|file|load|guile|exec)(?=\s)"
     r"|^[ ]*-?(?:include|sinclude|load)(?=[ \t]+\S)"
     r"|^(?!\t)[ ]*(?:(?:export|override|private)[ \t]+)*[^\s:=#]+[ ]*!=", re.M)
+# 在 -n 下仍会真的执行的配方行：以 + 标记（+ 可与 @、- 任意顺序混在行首的前缀里），或含 $(MAKE)／${MAKE}。
+_DECLARED_MAKE_ALWAYS_RUN = re.compile(r"^\t[@\- \t]*\+|[$][({]MAKE[)}]", re.M)
+_DECLARED_MAKE_RECIPEPREFIX = re.compile(r"^[ ]*\.RECIPEPREFIX\b", re.M)
+# make 启动时会先重建的 makefile 自身的名字（GNU Make 按 GNUmakefile、makefile、Makefile 的顺序找）。
+_DECLARED_MAKEFILE_NAMES = frozenset({"GNUmakefile", "makefile", "Makefile"})
+# 粗解析 Makefile 规则用：变量引用、赋值行、目标特定变量、特殊目标。
+_DECLARED_MAKE_VAR_REF = re.compile(r"[$](?:\(([A-Za-z0-9_.-]+)\)|\{([A-Za-z0-9_.-]+)\})")
+_DECLARED_MAKE_ASSIGN = re.compile(r"^(?:(?:export|override|private)[ \t]+)*([A-Za-z0-9_.-]+)[ \t]*(:{1,3}=|[?+!]?=)[ \t]*(.*)$")
+_DECLARED_MAKE_TARGET_VARIABLE = re.compile(r"^[^:=#]*:[ \t]*(?:(?:export|override|private)[ \t]+)*[A-Za-z0-9_.-]+[ \t]*(?::{1,3}=|[?+!]?=)")
+_DECLARED_MAKE_SPECIAL_TARGETS = frozenset({".PHONY", ".SUFFIXES", ".PRECIOUS", ".INTERMEDIATE", ".SECONDARY", ".NOTPARALLEL", ".ONESHELL",
+                                            ".POSIX", ".SILENT", ".IGNORE", ".LOW_RESOLUTION_TIME", ".DELETE_ON_ERROR",
+                                            ".EXPORT_ALL_VARIABLES", ".WAIT"})
 
 
 def _declared_records() -> Any:
@@ -1234,6 +1253,28 @@ def _declared_registry_file(tree: Path, path: Path | None) -> Path:
     return Path(path) if path is not None else Path(tree) / DECLARED_REGISTRY_PATH
 
 
+def _declared_tree_path_problem(tree: Path, path: Path) -> str | None:
+    """路径在测试树之下时：从测试树到文件的每一级都不许是符号链接，且 resolve 之后仍在测试树内；有问题返回原因，没有返回 None。
+    独立验收一般 5：只拒绝最后一级符号链接时，整个 tools/ci 或样本目录是指向树外的符号链接也能通过。测试树自己的上级目录不查（临时目录常带
+    符号链接，例如 macOS 的 /var）；不在测试树之下的路径（命令行 --declared-registry 显式指定的外部登记表，测试用）不归这里管。"""
+
+    root = Path(os.path.abspath(tree))
+    try:
+        relative = Path(os.path.abspath(path)).relative_to(root)
+    except ValueError:
+        return None
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return f"{current} 是符号链接"
+    try:
+        current.resolve().relative_to(root.resolve())
+    except ValueError:
+        return f"{path} 解析之后不在测试树内"
+    return None
+
+
 def load_declared_registry(tree: Path, *, path: Path | None = None) -> dict[str, Any] | None:
     """读测试树的登记表 ``tools/ci/command_input_scopes.json``；缺失返回 None（行为即旧声明，逐字不变）。
 
@@ -1243,12 +1284,17 @@ def load_declared_registry(tree: Path, *, path: Path | None = None) -> dict[str,
     target = _declared_registry_file(tree, path)
     if target.is_symlink():
         raise _declared_fail(None, f"登记表是符号链接：{target}")
+    problem = _declared_tree_path_problem(tree, target)
+    if problem is not None:
+        raise _declared_fail(None, f"登记表的路径不在测试树的真实目录内（{problem}）：{target}")
     if not target.exists():
         if path is not None:
             raise _declared_fail(None, f"指定的登记表不存在：{target}")
         return None
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
+    except RecursionError as error:
+        raise _declared_fail(None, f"登记表的 JSON 嵌套过深，解析不了：{target}") from error
     except (OSError, ValueError) as error:
         raise _declared_fail(None, f"登记表读不出来或不是 JSON：{target}（{error}）") from error
     if (not isinstance(payload, dict) or set(payload) != {"schema_version", "units"}
@@ -1316,9 +1362,14 @@ def _declared_load_evidence(unit_id: str, tree: Path, relative: Any) -> tuple[di
     path = Path(tree) / pure
     if path.is_symlink() or not path.is_file():
         raise _declared_fail(unit_id, f"的证据文件不存在或是符号链接：{relative}")
+    problem = _declared_tree_path_problem(Path(tree), path)
+    if problem is not None:
+        raise _declared_fail(unit_id, f"的证据路径不在测试树的真实目录内（{problem}）：{relative}")
     raw = path.read_bytes()
     try:
         evidence = json.loads(raw.decode("utf-8"))
+    except RecursionError as error:
+        raise _declared_fail(unit_id, f"的证据文件 JSON 嵌套过深，解析不了：{relative}") from error
     except ValueError as error:
         raise _declared_fail(unit_id, f"的证据文件不是 JSON：{relative}（{error}）") from error
     return evidence, hashlib.sha256(raw).hexdigest()
@@ -1414,6 +1465,10 @@ def _declared_check_entry(unit_id: str, entry: Mapping[str, Any], unit: Mapping[
         undeclared = coverage.get("undeclared") if isinstance(coverage, Mapping) else None
         raise _declared_fail(unit_id, f"登记时采样覆盖检查不通过（登记表自相矛盾）：{list(undeclared or [])[:5]}")
     _declared_check_contracts(unit_id, scope, tree)
+    if scope.get("make_expansion") and os.path.basename(command[0]) != "make":
+        # 步骤 5 WP3b（独立验收一般 7）：Makefile 靠 make 展开合同豁免（不必再整份算进输入）只对 make 命令成立。别的命令（例如 go test）要是自己去读
+        # Makefile，Makefile 里无关目标的改动不会让它失效，漏掉对 Makefile 的真实依赖，所以单元命令（去掉启动前缀后）的第一个词必须是 make。
+        raise _declared_fail(unit_id, f"声明了 make 展开合同，但单元命令的第一个词是 {command[0]!r} 而不是 make（展开合同豁免 Makefile，只对 make 命令成立）")
     return {"scope": scope, "sample": {"evidence_sha256": sample["evidence_sha256"], "command_sha256": sample["command_sha256"],
                                        "sampler_sha256": sample["sampler_sha256"]}}
 
@@ -1486,8 +1541,190 @@ def validate_declared_registry(registry: Any, units: Sequence[Mapping[str, Any]]
     _declared_resolve(registry, units, tree, launcher=launcher, audit_policy=audit_policy, input_scopes=input_scopes, strict=strict)
 
 
-def _declared_make_problem(tree: Path) -> str | None:
-    """测试树的 Makefile 能不能做 make -n 展开合同：含解析期求值的写法（见 _DECLARED_MAKE_UNSAFE）就不能，返回原因；可以返回 None。
+def _declared_make_logical_lines(text: str) -> list[str]:
+    """Makefile 的逻辑行：行尾奇数个反斜杠把下一行接上来（接缝处补一个空格——配方行里的 + 前缀只看逻辑行的行首）。"""
+
+    logical: list[str] = []
+    pending = ""
+    for line in text.split("\n"):
+        merged = pending + line
+        if (len(merged) - len(merged.rstrip("\\"))) % 2 == 1:
+            pending = merged[:-1] + " "
+            continue
+        logical.append(merged)
+        pending = ""
+    if pending:
+        logical.append(pending.rstrip())
+    return logical
+
+
+def _declared_make_colon(line: str) -> int | None:
+    """规则行里第一个不在 $(…)／${…} 内的冒号的位置；没有返回 None。"""
+
+    depth, index = 0, 0
+    while index < len(line):
+        char = line[index]
+        if char == "$" and index + 1 < len(line) and line[index + 1] in "({":
+            depth, index = depth + 1, index + 2
+            continue
+        if char in ")}" and depth > 0:
+            depth -= 1
+        elif char == ":" and depth == 0:
+            return index
+        index += 1
+    return None
+
+
+def _declared_make_expand(text: str, variables: Mapping[str, Sequence[str]], depth: int = 0, unreliable: frozenset[str] = frozenset()) -> str | None:
+    """展开 $(NAME)／${NAME}：只认 Makefile 里用 = := ::= += 定义过的普通变量；函数调用、自动变量、没定义的变量（可能来自环境）、用 ?= 定义的变量
+    （环境里同名的会覆盖它）、展开过深都返回 None（调用方据此退回整份文件的保守扫描）。"""
+
+    if depth > 8:
+        return None
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "$":
+            out.append(text[index])
+            index += 1
+            continue
+        match = _DECLARED_MAKE_VAR_REF.match(text, index)
+        if match is None or (match.group(1) or match.group(2)) not in variables or (match.group(1) or match.group(2)) in unreliable:
+            return None
+        inner = _declared_make_expand(" ".join(variables[match.group(1) or match.group(2)]), variables, depth + 1, unreliable)
+        if inner is None:
+            return None
+        out.append(inner)
+        index = match.end()
+    return "".join(out)
+
+
+def _declared_make_macro_lines(logical: Sequence[str]) -> list[str]:
+    """define … endef 宏体里的行。宏展开出来的行也可能带 + 前缀（make 看的是展开之后的行首），所以不管哪个目标引用它，宏体都在扫描范围内。"""
+
+    lines: list[str] = []
+    inside = False
+    for line in logical:
+        if inside:
+            if re.match(r"[ \t]*endef\b", line):
+                inside = False
+            else:
+                lines.append(line)
+        elif re.match(r"[ \t]*define[ \t]", line):
+            inside = True
+    return lines
+
+
+def _declared_make_parse(logical: Sequence[str]) -> dict[str, tuple[list[str], list[str]]] | None:
+    """粗解析 Makefile 的显式规则，只服务「make -n 会执行哪些配方行」这一个问题：返回 {目标: (先决条件, 配方行)}。
+    认识的写法之外一律返回 None（模式规则与静态模式规则、后缀规则、.DEFAULT、.SECONDEXPANSION、先决条件里的函数调用或没定义的变量、通配符……），
+    调用方退回整份文件的保守扫描——这里宁可解析不了，也不漏掉一条会执行的配方。条件指令里的规则不管条件真假一律计入（取并集）；
+    define 宏体里的行不是规则，由 _declared_make_macro_lines 另行收集。"""
+
+    variables: dict[str, list[str]] = {}
+    unreliable: set[str] = set()
+    rules: dict[str, tuple[list[str], list[str]]] = {}
+    current: list[str] = []
+    in_define = False
+    for line in logical:
+        if in_define:
+            in_define = re.match(r"[ \t]*endef\b", line) is None
+            continue
+        if re.match(r"[ \t]*define[ \t]", line):
+            in_define, current = True, []
+            continue
+        if line.startswith("\t"):
+            for target in current:
+                rules[target][1].append(line)
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue   # 空行与注释行不结束规则（配方行之间可以夹着它们）
+        current = []
+        if re.match(r"(?:ifeq|ifneq|ifdef|ifndef|else|endif)\b", stripped):
+            continue
+        assignment = _DECLARED_MAKE_ASSIGN.match(stripped)
+        if assignment is not None:
+            name, operator, value = assignment.groups()
+            if operator == "+=":
+                variables.setdefault(name, []).append(value)
+            elif operator in ("=", ":=", "::=", ":::="):
+                variables[name] = [value]
+            elif operator == "?=":
+                variables.setdefault(name, [value])
+                unreliable.add(name)   # 环境里同名的会覆盖它：只有真被目标名或先决条件引用到时才放弃解析
+            continue
+        if _DECLARED_MAKE_TARGET_VARIABLE.match(stripped):
+            continue   # 目标特定变量：不是依赖关系
+        colon = _declared_make_colon(stripped)
+        if colon is None:
+            if re.match(r"(?:export|unexport|vpath|undefine)\b", stripped):
+                continue
+            return None
+        head, rest = stripped[:colon], stripped[colon + 1:]
+        rest = rest[1:] if rest.startswith(":") else rest   # 双冒号规则
+        prerequisite_text, _, inline = rest.partition(";")
+        if _declared_make_colon(prerequisite_text) is not None:
+            return None   # 静态模式规则
+        frozen = frozenset(unreliable)
+        names, prerequisites = (_declared_make_expand(head, variables, 0, frozen), _declared_make_expand(prerequisite_text, variables, 0, frozen))
+        if names is None or prerequisites is None or any(char in names + prerequisites for char in "*?["):
+            return None   # 解析不了，或带通配符（make 解析时会按文件系统展开）
+        targets = [item[2:] if item.startswith("./") else item for item in names.split()]
+        if any("%" in item or item in (".DEFAULT", ".SECONDEXPANSION") or (item.startswith(".") and item not in _DECLARED_MAKE_SPECIAL_TARGETS)
+               for item in targets):
+            return None
+        targets = [item for item in targets if item not in _DECLARED_MAKE_SPECIAL_TARGETS]
+        for target in targets:
+            entry = rules.setdefault(target, ([], []))
+            entry[0].extend(item for item in prerequisites.replace("|", " ").split())
+            if inline.strip():
+                entry[1].append("\t" + inline.strip())
+        current = targets
+    return rules
+
+
+def _declared_make_self_rebuild(logical: Sequence[str]) -> str | None:
+    """规则的目标里有 Makefile／makefile／GNUmakefile（自重建规则）就返回该目标名。make 启动时会先重建 makefile 自己，-n 也一样，
+    规则的配方因此真的执行。按规则行的原始文本找（不展开变量），赋值行与配方行不看。"""
+
+    for line in logical:
+        stripped = line.strip()
+        if line.startswith("\t") or not stripped or stripped.startswith("#") or _DECLARED_MAKE_ASSIGN.match(stripped):
+            continue
+        colon = _declared_make_colon(stripped)
+        if colon is None or stripped[colon + 1:colon + 2] == "=":
+            continue
+        for item in stripped[:colon].split():
+            if (item[2:] if item.startswith("./") else item) in _DECLARED_MAKEFILE_NAMES:
+                return item
+    return None
+
+
+def _declared_make_reachable_recipes(logical: Sequence[str], targets: Sequence[str]) -> str | None:
+    """声明目标的先决条件闭包里的全部配方行（再加所有 define 宏体——宏展开出的行也可能带 +），拼成一段文本；解析不了返回 None。"""
+
+    rules = _declared_make_parse(logical)
+    if rules is None:
+        return None
+    seen: set[str] = set()
+    pending = [item[2:] if item.startswith("./") else item for item in targets]
+    recipes = ["\t" + line for line in _declared_make_macro_lines(logical)]   # 宏体当配方行扫（补一个 TAB，行首前缀的判断才一致）
+    while pending:
+        target = pending.pop()
+        if target in seen:
+            continue
+        seen.add(target)
+        prerequisites, lines = rules.get(target, ([], []))
+        recipes.extend(lines)
+        pending.extend(item[2:] if item.startswith("./") else item for item in prerequisites)
+    return "\n".join(recipes)
+
+
+def _declared_make_problem(tree: Path, targets: Sequence[str] | None = None) -> str | None:
+    """测试树的 Makefile 能不能做 make -n 展开合同：含解析期求值的写法（见 _DECLARED_MAKE_UNSAFE）、自重建规则、.RECIPEPREFIX，以及 -n 下仍会
+    执行的配方行（+ 行、$(MAKE)，见 _DECLARED_MAKE_ALWAYS_RUN）就不能，返回原因；可以返回 None。这份扫描就是只读保证的全部范围（没命中扫描的副作用写法不在保证内）。
+    ``targets`` 给了就只看这些目标的先决条件闭包里的配方行（执行期的写法只有被执行到才有副作用）；不给，或闭包解析不了，就看整份文件。
     只看 make 实际会读的那一份（GNUmakefile > makefile > Makefile）。"""
 
     for name in ("GNUmakefile", "makefile", "Makefile"):
@@ -1503,6 +1740,24 @@ def _declared_make_problem(tree: Path) -> str | None:
     match = _DECLARED_MAKE_UNSAFE.search(re.sub(r"^[ ]*#.*$", "", text, flags=re.M))
     if match:
         return f"{name} 含解析期求值的写法（{match.group(0).strip()[:40]}）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑"
+    # 步骤 5 WP3b：解析期的另两类（看整份文件）——自重建规则（make -n 也会先重建 makefile 自己）与 .RECIPEPREFIX（配方行不再以 TAB 开头）。
+    cleaned = re.sub(r"^[ ]*#.*$", "", text, flags=re.M)
+    logical = _declared_make_logical_lines(cleaned)
+    rebuilt = _declared_make_self_rebuild(logical)
+    if rebuilt is not None:
+        return f"{name} 含重建 makefile 自身的规则（目标 {rebuilt}）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑"
+    if _DECLARED_MAKE_RECIPEPREFIX.search(cleaned):
+        return f"{name} 改了 .RECIPEPREFIX（配方行不再以 TAB 开头，扫描认不出配方行）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑"
+    # 执行期的（+ 行、$(MAKE)）：给了目标就只看它们的先决条件闭包里的配方行，闭包解析不了或没给目标就看整份文件。
+    scope, scanned = "", cleaned + "".join("\n\t" + line for line in _declared_make_macro_lines(logical))
+    if targets:
+        reachable = _declared_make_reachable_recipes(logical, targets)
+        if reachable is not None:
+            scope, scanned = f"声明目标 {'、'.join(str(item) for item in targets)} 的先决条件闭包里", reachable
+    always = _DECLARED_MAKE_ALWAYS_RUN.search(scanned)
+    if always:
+        line = scanned[scanned.rfind("\n", 0, always.start()) + 1:].split("\n", 1)[0].strip()
+        return (f"{name} {scope}含 make -n 下仍会真的执行的写法（{line[:60]}）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑")
     return None
 
 
@@ -1514,7 +1769,8 @@ def apply_declared_inputs(manifest: dict[str, Any], tree: Path, *, launcher: Seq
       单元 → 各单元仍与改造前逐字相同，只多出（计数为零的）``declared_inputs`` 汇总键，记下登记表的摘要；
     * ``status=declared`` 的命令单元：``inputs`` 换成 ``{"declared_scope": scope, "declared_sample": {evidence_sha256,
       command_sha256, sampler_sha256}}``（展开由 unit_records 做，不含 head；合同条目由执行器每次算当前事实时用 declared_probe 追加）。
-      声明了 make 展开合同、而 Makefile 含解析期求值写法的，转为 rerun-only（保证展开探测永远只读）；
+      声明了 make 展开合同、而 Makefile 含解析期求值写法、自重建规则，或声明目标的先决条件闭包里有 -n 下仍会执行的配方行（+ 行、$(MAKE)）的，
+      转为 rerun-only（保守扫描挡住已知会在 make -n 下执行命令的写法；没命中扫描的副作用写法不在保证内，见 _DECLARED_MAKE_UNSAFE 旁的说明）；
     * ``status=rerun-only``：``inheritable: false`` 与 ``not_inheritable_reason``（登记的原因）；带 ``head: true`` 的保留旧的 head 条目，
       其余去掉 head；
     * 独立顶层键 ``manifest["declared_inputs"]`` 汇总：登记数、declared 数、rerun-only 数及每个 rerun-only 的原因
@@ -1533,11 +1789,13 @@ def apply_declared_inputs(manifest: dict[str, Any], tree: Path, *, launcher: Seq
     rerun = dict(resolved["rerun_only"])
     converted: dict[str, str] = {}
     declared: dict[str, dict[str, Any]] = {}
-    make_problem: str | None = None
+    make_problems: dict[tuple[str, ...], str] = {}   # 声明目标集合 → 原因（空串＝可以）；同一组目标只扫一次
     for unit_id, info in resolved["declared"].items():
         if info["scope"].get("make_expansion"):
-            if make_problem is None:
-                make_problem = _declared_make_problem(tree) or ""
+            make_key = tuple(str(item) for item in info["scope"]["make_expansion"])
+            if make_key not in make_problems:
+                make_problems[make_key] = _declared_make_problem(tree, make_key) or ""
+            make_problem = make_problems[make_key]
             if make_problem:
                 converted[unit_id] = make_problem
                 rerun[unit_id] = {"reason": make_problem, "head": False}
@@ -1869,11 +2127,13 @@ class DeclaredProbe:
     def _make_expansion(self, target: str) -> dict[str, Any]:
         """make 展开合同：``make -s --no-print-directory -n <目标>`` 的展开文本摘要，替代把整个 Makefile 当输入——只有这个目标
         实际会执行的命令变了才失效。测试树的绝对路径（$(CURDIR) 及由它派生的变量）规范化为 {TREE}，换工作根不失效。
-        只读保证由 plan 阶段的 Makefile 扫描提供（见 _declared_make_problem）。"""
+        plan 阶段的 Makefile 保守扫描（见 _declared_make_problem）把已知会在 make -n 下执行命令的写法挡在外面；没命中扫描却仍有副作用的写法不在保证内。
+        探测环境清空 MAKEFLAGS 与 MAKEFILES：调用方环境里的 -j、-t 之类选项或额外的 makefile 不该改变展开语义（单元真正执行时也是白名单环境）。"""
 
         if not _DECLARED_MAKE_TARGET.fullmatch(target):
             raise ValueError(f"make 展开目标名非法：{target!r}")
-        rc, out = self.ctx.run(["make", "-s", "--no-print-directory", "-n", target], cwd=self.tree, env=self.environ)
+        rc, out = self.ctx.run(["make", "-s", "--no-print-directory", "-n", target], cwd=self.tree,
+                               env={**self._env(), "MAKEFLAGS": "", "MAKEFILES": ""})
         if rc != 0:
             return _declared_contract_entry("make-expansion", target, {"target": target, "expansion_sha256": f"unavailable(rc={rc})",
                                                                       "lines": None, "value": f"unavailable(rc={rc})"})

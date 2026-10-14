@@ -59,6 +59,9 @@
 #   的旧规则在认证目录里找可复用的，那条规则不看测试、指南、录制数据等输入）；auto 是单独运行时的原有行为。
 #   --audit-reads（E3-04 读集审计，只许 --mode re-execute）：每个正式执行的单元包在 strace 下，核对实际读取都在声明的输入
 #   范围里（测试树单元读到数据根也报出），超出即判失败；明细在 executor/audit/read-audit.json。
+#   --declared-sample off|always|every:N（步骤 5 WP3b，缺省 off）：声明级承接命令单元的读集证据来源，原样交给执行器的同名选项——off 用登记表
+#   里的采样证据（零运行时开销）、always 每次执行都带 strace 采样并用本次采样证明读集仍在声明范围内、every:N 按记录库里该单元已有的正式记录数每 N 次
+#   采样一次。正式验证轮显式带 always；非法值立即退出 2；缺省时命令行、输出与改造前相同。
 # 退出码：0 全部门禁通过（entry 组合还要 pre-A3 认证签发或沿用成功）；1 有门禁未通过（门禁结论，测试树保留供排查）；
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077
@@ -72,6 +75,7 @@ AUDIT_STRICT=false; AUDIT_HOST_INPUTS=""; INPUT_SCOPE_ARGS=(); AUDIT_POLICY_ARGS
 WITH_GATES=""; REQUIRE_DEPLOYED=false; WAIT_LOCK=0; REQUIRE_DEPLOYED_ALL=false; DEPLOY_OTHERS=""; DEPLOY_OTHERS_SOURCE=()
 FULL_SET_REQUEST=""; MODE_EXPLICIT=false; FULL_SET_ARGS=(); GO_WARMUP=auto
 PARALLEL_ARGS=()
+DECLARED_SAMPLE=off
 UNIT_INHERIT_REQUEST=""; UNIT_INHERIT_STAGE=pre-ledger; UNIT_INHERIT_ARGS=(); UNIT_INHERIT_PROPOSE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -90,6 +94,7 @@ while [ "$#" -gt 0 ]; do
     --audit-strict) AUDIT_STRICT=true; shift ;;
     --audit-policy) AUDIT_POLICY_ARGS=(--audit-policy "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --audit-host-inputs) AUDIT_HOST_INPUTS="${2:-}"; shift 2 || { usage; exit 2; } ;;
+    --declared-sample) DECLARED_SAMPLE="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --input-scope) INPUT_SCOPE_ARGS+=(--input-scope "${2:-}"); shift 2 || { usage; exit 2; } ;;
     --with-gates) WITH_GATES="${2:-}"; shift 2 || { usage; exit 2; } ;;
     --require-deployed) REQUIRE_DEPLOYED=true; shift ;;
@@ -114,6 +119,8 @@ if ! [[ "$WITH_GATES" =~ ^([a-z0-9-]+(,[a-z0-9-]+)*)?$ ]]; then echo "--with-gat
 if ! [[ "$WAIT_LOCK" =~ ^[0-9]+$ ]]; then echo "--wait-lock 是秒数：$WAIT_LOCK" >&2; exit 2; fi
 case "$GO_WARMUP" in auto|off) ;; *) echo "未知的 Go 预热模式：$GO_WARMUP" >&2; exit 2 ;; esac
 case "$PRE_A3_SOURCE" in auto|present|run) ;; *) echo "未知的 pre-A3 来源：$PRE_A3_SOURCE" >&2; exit 2 ;; esac
+# 声明级承接的采样方式（步骤 5 WP3b）：只认 off、always、every:N（N 为正整数），最外层就拒绝别的写法，免得跑到执行器才报错。
+if ! [[ "$DECLARED_SAMPLE" =~ ^(off|always|every:[1-9][0-9]*)$ ]]; then echo "--declared-sample 只接受 off、always 或 every:N（N 为正整数）：$DECLARED_SAMPLE" >&2; exit 2; fi
 case "$MODE" in full-set-pass|re-execute|unit-inherit) ;; *) echo "未知的模式：$MODE" >&2; exit 2 ;; esac
 # B5a-08：逐单元承接请求与 B-09 全集请求互斥；只写承接提案时两种请求都不给。
 if [ -n "$UNIT_INHERIT_REQUEST" ] && [ -n "$FULL_SET_REQUEST" ]; then echo "逐单元承接请求不能与 B-09 全集请求同用" >&2; exit 2; fi
@@ -477,6 +484,8 @@ AUDIT_ARGS=()
 if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS=(--audit-reads --audit-data-root "$D"); echo "读集检查：登记覆盖的单元严格取证；未登记项仅在显式重跑策略下执行（数据根 ${D}）"; fi
 if [ "$AUDIT_STRICT" = true ]; then AUDIT_ARGS+=(--audit-strict); fi
 if [ -n "$AUDIT_HOST_INPUTS" ]; then AUDIT_ARGS+=(--audit-host-inputs "$AUDIT_HOST_INPUTS"); fi
+# 声明级承接的采样方式（步骤 5 WP3b）：原样交给执行器；缺省 off 不追加，命令行与输出和改造前相同。
+if [ "$DECLARED_SAMPLE" != off ]; then AUDIT_ARGS+=(--declared-sample "$DECLARED_SAMPLE"); echo "声明级采样：--declared-sample ${DECLARED_SAMPLE}（声明级命令单元按此取读集证据）"; fi
 if [ -n "$FULL_SET_REQUEST" ]; then
   FULL_SET_ARGS=(--full-set-request "$FULL_SET_REQUEST" --full-set-deployment "$DEPLOY")
 fi

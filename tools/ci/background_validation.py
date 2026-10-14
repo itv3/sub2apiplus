@@ -75,6 +75,10 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
   ``background-validate.sh start <bundle> <分支> <提交> …`` 原样透传（该脚本把三个位置参数之后的选项交给本脚本）；入口空跑
   ``entry_dryrun.py``／``entry-dryrun.sh`` 没有这两个选项，不要加到空跑命令上（上一段的 ``entry-dryrun.sh start`` 命令行里
   只有 ``--unit-inherit-request`` 与 ``--audit-policy`` 是它自己的选项）。
+  声明级承接的采样方式（步骤 5 WP3b）：``start --declared-sample off|always|every:N``（缺省 off）原样交给后台起的入口门禁（``entry-gates.sh``），再到执行器，
+  决定声明级命令单元的读集证据来自登记表还是每次执行自己采样（正式验证轮显式带 ``always``）；非法值在这里就拒绝。非 off 的取值进输入合同与结论
+  （同 ``--parallel``：同一提交同一部署已有不同取值的结论时须先显式停止并重新验证；逐单元续作须保持原取值），缺省时输入合同、结论与命令行与改造前
+  逐字相同；``--then-dryrun`` 接着的入口空跑不带它（要采样的空跑另用 ``entry-dryrun.sh start … --declared-sample …``，或本命令不接空跑）。
 * ``run``（内部）：跑入口门禁，按结论写状态。收到 SIGTERM 时把它转给入口门禁（执行器会终止全部单元会话）。
 * ``stop --runroot [--reason]``：停下在跑的后台验证并标 superseded。修复轮跑定向回归之前用：同一台机器同一时间只能有
   一个调度器，上一轮的验证也已作废。两客户端都纳管时连本运行根搭上的（别的运行根发起的）那一次一起停。
@@ -970,6 +974,11 @@ def _inherit_source_recheck(payload: Mapping[str, Any]) -> None:
         raise ValidationError("后台跨提交承接登记的 WORK 没有绑定来源自己的提交与部署")
 
 
+# 声明级承接（declared-inputs/v1）记录的读集覆盖口径名，与 unit_records.DECLARED_COVERAGE_SCOPE 同值（测试核对两边一致）；本模块不导入记录层，
+# 只在判断「审计证据是否成立」时认这一个口径。
+DECLARED_COVERAGE_SCOPE = "declared-inputs/v1"
+
+
 def _audit_evidence_ok(records: Any, record: Mapping[str, Any] | None, expected_sha256: str) -> bool:
     """一条来源记录自身的读集审计证据是否成立：记录读得出、自摘要有效且就是登记的那一条、是正式执行、审计通过且覆盖闭合。
 
@@ -978,6 +987,12 @@ def _audit_evidence_ok(records: Any, record: Mapping[str, Any] | None, expected_
     if not isinstance(record, Mapping) or not records.seal_ok(record, "record_sha256") or record.get("record_sha256") != expected_sha256:
         return False
     audit = record.get("read_audit")
+    if isinstance(audit, Mapping) and audit.get("coverage_scope") == DECLARED_COVERAGE_SCOPE:
+        # 声明级承接（declared-inputs/v1，步骤 5 WP3b）的记录：读集覆盖口径不是全路径，而是「采样路径全部落在声明范围内」，同样只认审计这一层——
+        # 正式执行、状态 passed、覆盖闭合、未声明数为零、审计绑定的输入摘要就是这条记录的。incomplete（只因证据不完整）与 failed（有未覆盖）的
+        # 记录都不算审计通过：认证运行里它们就该重跑（失败关闭）。其余承接条件（声明范围核验、合同凭证、证据重算）由逐单元合同的消费者判定。
+        return (record.get("kind") == "formal" and audit.get("status") == "passed" and audit.get("coverage_complete") is True
+                and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256"))
     return (record.get("kind") == "formal" and isinstance(audit, Mapping) and audit.get("status") == "passed"
             and audit.get("coverage_complete") is True and audit.get("coverage_scope") == "all-file-paths/v1"
             and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256"))
@@ -1215,6 +1230,11 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     parallel = getattr(args, "parallel", None)
     if parallel is not None and (type(parallel) is not int or parallel <= 0):
         raise ValidationError("--parallel 必须是正整数")
+    # 声明级承接的采样方式（步骤 5 WP3b）：缺省 off；只有显式非 off 才登记进输入合同与结论（缺省的合同、结论与命令行与改造前逐字相同）。
+    try:
+        sample = _declared_sample_mode(getattr(args, "declared_sample", None) or "off")
+    except argparse.ArgumentTypeError as error:
+        raise ValidationError(str(error)) from error
     deployment = latest_deployment(args.data_root, client)
     if deployments is not None and deployments.get(client) != deployment:
         raise ValidationError(f"部署收据集合里没有 {client} 当前的部署收据")
@@ -1255,6 +1275,8 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     # 只有显式指定才登记；缺省仍由既有执行器配置决定，不改变旧输入合同的字段形状。
     if parallel is not None:
         inputs["parallel"] = parallel
+    if sample != "off":
+        inputs["declared_sample"] = sample   # 同 parallel：显式指定才登记，换了取值就是另一份输入合同（须先显式停止并重新验证）
     full_set_paths = {key: str(getattr(args, key)) if getattr(args, key, None) else None
                       for key in ("full_set_context", "full_set_clock", "full_set_predecessor", "audit_policy")}
     if bool(full_set_paths["full_set_context"]) != bool(full_set_paths["full_set_clock"]):
@@ -1302,6 +1324,9 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
                 or existing.get("deployment") != deployment or existing.get("deployments") != (dict(deployments) if deployments else None)
                 or any((existing.get("input_contract") or {}).get(key) != inputs.get(key) for key in unchanged)):
             raise ValidationError("后台逐单元续作必须保留原客户端、提交、部署、WORK、记录库、门禁及调度参数")
+        if (existing.get("input_contract") or {}).get("declared_sample") != inputs.get("declared_sample"):
+            # 采样方式也是门禁参数：续作时悄悄换成缺省的 off（或反过来），读集证据的来源就变了，必须显式保持一致。
+            raise ValidationError("后台逐单元续作必须保留原采样方式（--declared-sample）")
         if effective_status(existing) not in ("running", "passed"):
             if _group_alive(existing.get("pid")):
                 raise ValidationError("原后台进程组尚未退出，拒绝在同 WORK 启动后继")
@@ -1352,6 +1377,7 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
         "data_root": str(args.data_root), "runroot": str(args.runroot), "then_dryrun": bool(args.then_dryrun),
         "failed_gates": [], "reason": None, "returncode": None, "dryrun": None,
         **({"parallel": parallel} if parallel is not None else {}),
+        **({"declared_sample": sample} if sample != "off" else {}),
         **full_set_paths,
         # B5a-01：只有非 Codex 的结论记录客户端，Codex 结论的字段逐字不变（读取时缺省按 codex）。
         **({"client": client} if client != "codex" else {}),
@@ -1428,6 +1454,9 @@ def run(result: Path) -> int:
             argv += [flag, payload[key]]
     if "parallel" in payload:
         argv += ["--parallel", str(payload["parallel"])]
+    if "declared_sample" in payload:
+        # 声明级承接的采样方式（步骤 5 WP3b）：原样交给入口门禁再到执行器；运行期下面还会核对它与输入合同一致，缺省（结论里没有）不追加。
+        argv += ["--declared-sample", str(payload["declared_sample"])]
     if payload.get("audit_policy"):
         argv += ["--audit-reads", "--audit-strict", "--audit-policy", payload["audit_policy"]]
     argv += [payload["bundle"], payload["branch"], payload["commit"]]
@@ -1459,6 +1488,15 @@ def run(result: Path) -> int:
             if (type(parallel) is not int or parallel <= 0 or type(contract.get("parallel")) is not int
                     or contract["parallel"] != parallel):
                 raise ValidationError("后台并发参数缺失或发生漂移")
+        if "declared_sample" in payload or "declared_sample" in contract:
+            # 采样方式同并发参数：结论里的取值必须是合法的规范写法、且与输入合同逐字一致，改结论不能悄悄换读集证据的来源。
+            sample = payload.get("declared_sample")
+            try:
+                canonical = _declared_sample_mode(sample) if type(sample) is str else None
+            except argparse.ArgumentTypeError:
+                canonical = None
+            if canonical is None or canonical == "off" or canonical != sample or contract.get("declared_sample") != sample:
+                raise ValidationError("后台采样方式参数缺失或发生漂移")
         bound_roots = _bound_work_roots(Path(payload["runroot"]), Path(payload["data_root"]), payload["commit"],
                                        payload["deployment"], payload.get("deployments"))
         # 跨提交后继沿用来源的物理 WORK：它绑定的是来源自己的提交与部署（来源登记在启动时已校验、上面刚复核过）。
@@ -1670,6 +1708,19 @@ def _positive_parallel(value: str) -> int:
     return int(value)
 
 
+def _declared_sample_mode(value: str) -> str:
+    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数），返回规范写法；非法在最外层就拒绝。
+    与执行器 ``unit_executor.declared_sample_mode`` 同一规则（测试核对各层一致），免得后台起了才在入口门禁里报错。"""
+
+    text = str(value).strip()
+    if text in ("off", "always"):
+        return text
+    found = re.fullmatch(r"every:([1-9][0-9]*)", text)
+    if found:
+        return f"every:{int(found.group(1))}"
+    raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{value!r}")
+
+
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1684,6 +1735,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p_start.add_argument("--work", type=Path, default=None,
                          help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生；带 --unit-inherit-source-result 时须是来源后台的那个 WORK")
     p_start.add_argument("--parallel", type=_positive_parallel, default=None, help="门禁单元并发数；缺省沿用执行器配置")
+    p_start.add_argument("--declared-sample", type=_declared_sample_mode, default="off", metavar="off|always|every:N",
+                         help="声明级承接命令单元的读集证据来源：off（缺省）用登记表证据，always 每次执行都带 strace 采样，every:N 每 N 次采样一次；"
+                              "原样交给后台起的入口门禁再到执行器，非 off 的取值进输入合同与结论")
     p_start.add_argument("--vc-env", type=Path, default=None, help="驱动参数文件（ARM64_VC_ENV），后台运行的入口门禁要用")
     p_start.add_argument("--entry-gates", type=Path, default=HERE / "entry-gates.sh")
     p_start.add_argument("--then-dryrun", action="store_true", help="通过之后接着空跑入口到 pre-A3（E4-02）")

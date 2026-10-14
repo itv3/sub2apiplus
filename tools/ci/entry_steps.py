@@ -446,6 +446,10 @@ GATE_WORK_PARAM = "ENTRY_GATES_SOURCE_WORK"
 AUDIT_READS_PARAM = "ENTRY_GATES_AUDIT_READS"
 AUDIT_STRICT_PARAM = "ENTRY_GATES_AUDIT_STRICT"
 AUDIT_POLICY_PARAM = "ENTRY_GATES_AUDIT_POLICY"
+# 声明级承接（步骤 5 WP3b）：命令单元读集证据的采样方式（--declared-sample 的取值 always 或 every:N；缺省 off 不进参数）。它决定记录里读集证据的
+# 来源（登记表证据还是本次运行自己的采样），所以和审计开关一样绑定进入口门禁与 pre-A3 两步的输入：同一提交下换了采样方式，不能沿用上一种方式留下的
+# 步骤记录。
+DECLARED_SAMPLE_PARAM = "ENTRY_GATES_DECLARED_SAMPLE"
 UNIT_INHERIT_STEPS = ("entry-gates", "pre-a3")
 UNIT_INHERIT_INPUTS = (Input("upstream", "file", "{" + UNIT_INHERIT_PARAM + "}"), *_drivers("unit_inherit.py"))
 
@@ -655,6 +659,9 @@ class Context:
         if self.params.get(AUDIT_POLICY_PARAM):
             # 同一路径的策略内容变化也必须失效；登记范围由真实测试发现与执行器再核对。
             extra += (Input("upstream", "file", "{" + AUDIT_POLICY_PARAM + "}"),)
+        if self.params.get(DECLARED_SAMPLE_PARAM):
+            # 只有显式给了 --declared-sample（非 off）才登记这一项；缺省规格的步骤输入与改造前逐字相同。
+            extra += _params(DECLARED_SAMPLE_PARAM)
         bridge_keys = ("CLAUDE_ENTRY_FULL79_SPEC", "CLAUDE_ENTRY_FULL79_SPEC_SHA256")
         if any(key in self.params for key in bridge_keys):
             if self.client != "claude" or not all(self.params.get(key) for key in bridge_keys):

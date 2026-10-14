@@ -282,6 +282,9 @@ def load_config(path: Path) -> ExecutorConfig:
     if not isinstance(timeout, (int, float)) or timeout <= 0 or not isinstance(grace, (int, float)) or grace < 0:
         raise ExecutorError("单元超时或残留进程宽限期非法")
     unit_timeouts: dict[str, float] = {}
+    if "unit_timeouts" in payload and not isinstance(payload["unit_timeouts"], dict):
+        # 键写了就必须是对象：[]、0、false、null 过去会被下面的 ``or {}`` 悄悄当成空表接受，登记过的超时表就这样无声失效；只有缺省（没有这个键）才是空表。
+        raise ExecutorError("unit_timeouts 必须是对象（单元 ID → 秒）")
     raw_timeouts = payload.get("unit_timeouts") or {}
     if not isinstance(raw_timeouts, dict):
         raise ExecutorError("unit_timeouts 必须是对象（单元 ID → 秒）")
@@ -291,6 +294,11 @@ def load_config(path: Path) -> ExecutorConfig:
     for unit_id, value in raw_timeouts.items():
         if not isinstance(unit_id, str) or not unit_id.strip():
             raise ExecutorError(f"单元超时登记的单元 ID 非法：{unit_id!r}")
+        if isinstance(value, int) and not isinstance(value, bool) and abs(value) > MAX_UNIT_TIMEOUT_SECONDS:
+            # 超大整数（如 10**400）转不成 float，下面的 math.isfinite 会抛 OverflowError 而不是 ExecutorError；它们本来就超过上限，在这里按范围拒绝
+            # （合法的值必须在默认超时与 MAX_UNIT_TIMEOUT_SECONDS 之间，绝对值超过上限的一律不合法）。报错里不带默认超时的数值：默认超时本身若也是超大整数，
+            # 格式化它又会抛 OverflowError。
+            raise ExecutorError(f"单元超时必须大于默认超时且不超过 {MAX_UNIT_TIMEOUT_SECONDS:.0f} 秒（只放宽、不缩短）：{unit_id}")
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ExecutorError(f"单元超时必须是有限秒数：{unit_id}")
         if not float(timeout) < value <= MAX_UNIT_TIMEOUT_SECONDS:
@@ -1146,7 +1154,10 @@ DECLARED_COVERAGE_SCOPE = "declared-inputs/v1"
 #   命令）；C7-format（执行器自己组装的证据格式不对，是实现缺陷，要响亮失败）；C7-invalid（组装的证据 valid 恒为真，出现说明实现有误）；C7-exit
 #   （命令本身退出码非零，单元本来就失败）。混合（既有集合内又有集合外）一律 failed。
 # 新增的覆盖规则默认不在本集合里，必须先评审归类（test_ci_declared_inputs_executor 钉住这个集合与 declared_coverage 的规则词表）。
-DECLARED_INCOMPLETE_RULES = frozenset({"C7-stream", "C7-unresolved", "C7-lines"})
+# 步骤 5 WP3b：集合里多了 C7-detached（采样器丢弃的 strace 标记行总数超过上限——个位数是 Go 运行时线程被杀或退出的正常现象，大面积出现说明流被截断或
+# 大批线程消失，读集可能不完整）。它和 C7-stream 同类：说明证据不足以证明覆盖，并没有发现违规，所以也只让该次记录不可承接。规则本身由记录层的
+# declared_coverage 产生（WP1d）；在它认识这条规则之前，这里多认一个名字没有任何效果。
+DECLARED_INCOMPLETE_RULES = frozenset({"C7-stream", "C7-unresolved", "C7-lines", "C7-detached"})
 # 合同探测会话要「看见」的 go 环境变量（与 entry_gates.DECLARED_GO_ENV_KEYS 同值，测试钉住）：go env 的生效值受它们影响，而离线值是写在单元清单的
 # env 里的（不在执行器进程环境里）——探测必须叠上单元自己的这几个值，条目里的 env 与 requirements 才是单元真正会看到的。
 _DECLARED_PROBE_ENV_KEYS = ("GOFLAGS", "GOPROXY", "GOTOOLCHAIN", "GOEXPERIMENT", "CGO_ENABLED", "GOENV")
@@ -1224,8 +1235,8 @@ def declared_audit_verdict(findings: list[dict[str, Any]]) -> str:
     """覆盖检查的未覆盖明细 → 这一次执行的读集审计结论：``passed``（没有未覆盖）、``incomplete``（规则全部属于 DECLARED_INCOMPLETE_RULES：
     只因证据不完整、没能证明覆盖，并没有发现违规）、``failed``（出现集合之外的任何规则）。判据是闭合的：集合之外一律 failed。
 
-    ``declared_coverage`` 返回的明细按（规则, 路径）排序并截断到前 200 条，截断不会漏掉集合之外的规则：集合内三条（C7-lines、C7-stream、
-    C7-unresolved）在全部规则里排在最后，任何集合之外的规则排在它们前面，若存在就一定先于它们出现在被保留的前 200 条里。"""
+    ``declared_coverage`` 返回的明细按（规则, 路径）排序并截断到前 200 条。明细被截断（总数大于返回的条数）时，看不到的那部分里可能有集合之外的规则，
+    所以 ``_declared_collect`` 在截断时一律判 failed（失败关闭）；本函数只判断「拿到的这批明细」。"""
 
     rules = {str(item.get("rule")) for item in findings}
     if not rules:
@@ -1953,6 +1964,8 @@ class ReadAuditor:
             coverage = records.declared_coverage(sample, scope, command_sha256=reference["command_sha256"])
             findings = coverage["undeclared"]
             verdict = "passed" if coverage["ok"] else (declared_audit_verdict(findings) if sampled else "failed")
+            if verdict == "incomplete" and coverage["counts"]["undeclared"] > len(findings):
+                verdict = "failed"   # 明细被截断：看不到的那部分里可能有集合之外的规则，只凭拿到的这批判不了「只是证据不完整」，失败关闭
             reason = None
             if verdict == "incomplete":
                 reason = "；".join(f"{item['rule']} {item['path'] or item['reason']}"[:160] for item in findings[:3])

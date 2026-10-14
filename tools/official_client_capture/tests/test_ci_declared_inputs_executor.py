@@ -151,7 +151,7 @@ def install(path: Path, text: str, **substitutions: str) -> Path:
 
 MAKEFILE = ("FRONTEND_CRITICAL_VITEST := \\\n\tsrc/a.spec.ts \\\n\tsrc/b.spec.ts\n"
             "test-frontend-critical:\n\t@pnpm --dir frontend exec vitest run $(FRONTEND_CRITICAL_VITEST)\n"
-            "egress-spec-go-test:\n\t@cd backend && go test ./internal/officialegress/... -count=1\n"
+            "egress-spec-go-test:\n\t@echo egress-spec-go-test\n"
             "unrelated-target:\n\t@echo unrelated\n")
 TREE_FILES = {
     ".gitignore": "node_modules/\n",
@@ -324,7 +324,9 @@ class World:
         self.units: list[dict[str, Any]] = []
         for unit_id, spec in UNIT_SPECS.items():
             script = FAILING_READER if unit_id in self.failing else READER
-            self.commands[unit_id] = [PY, "-c", script, *spec["reads"]]
+            # 声明了 make 展开合同的单元，命令必须是 make（入口自检的要求，步骤 5 WP3b）：假 PATH 里的 pnpm 只打印版本，Makefile 里的目标也只是 echo。
+            self.commands[unit_id] = (["make", "--no-print-directory", spec["make_expansion"][0]] if spec.get("make_expansion")
+                                      else [PY, "-c", script, *spec["reads"]])
         for unit_id in RERUN_ONLY:
             self.commands[unit_id] = ["/bin/sh", "deploy/check.sh"]
         self.registry_units: dict[str, Any] = {}
@@ -1111,9 +1113,12 @@ class VerdictTests(unittest.TestCase):
         return set(re.findall(r'"(C[0-9]-[a-z0-9-]+)"', inspect.getsource(ur.declared_coverage)))
 
     def test_the_incomplete_rule_set_is_pinned_and_a_subset_of_the_coverage_vocabulary(self) -> None:
-        self.assertEqual(ue.DECLARED_INCOMPLETE_RULES, frozenset({"C7-stream", "C7-unresolved", "C7-lines"}))
+        self.assertEqual(ue.DECLARED_INCOMPLETE_RULES, frozenset({"C7-stream", "C7-unresolved", "C7-lines", "C7-detached"}))
         vocabulary = self.vocabulary()
-        self.assertTrue(ue.DECLARED_INCOMPLETE_RULES <= vocabulary, "集合里的规则名必须是 declared_coverage 真有的规则")
+        # C7-detached 由记录层的 declared_coverage 产生（WP1d）。它认识这条规则之前，集合里多这个名字没有任何效果，所以「规则名必须是真有的规则」
+        # 这一条先对另外三条断言；一旦 declared_coverage 认识了 C7-detached，整个集合都必须在词表里（规则存在才断言，合入后无需改测试）。
+        known = ue.DECLARED_INCOMPLETE_RULES if "C7-detached" in vocabulary else ue.DECLARED_INCOMPLETE_RULES - {"C7-detached"}
+        self.assertTrue(known <= vocabulary, "集合里的规则名必须是 declared_coverage 真有的规则")
         self.assertEqual({rule for rule in vocabulary if rule.startswith("C7")} - ue.DECLARED_INCOMPLETE_RULES,
                          {"C7-command", "C7-exit", "C7-format", "C7-invalid"}, "其余四条 C7 规则不是偶发的证据问题，一律 failed")
         self.assertIsInstance(ue.DECLARED_INCOMPLETE_RULES, frozenset)
@@ -1134,6 +1139,105 @@ class VerdictTests(unittest.TestCase):
                 self.assertEqual(ue.declared_audit_verdict(findings(member, rule)), "failed", f"{member}＋{rule}：混合一律 failed")
         self.assertEqual(ue.declared_audit_verdict(findings("C9-brand-new-rule")), "failed", "新增的未归类规则默认 failed")
         self.assertEqual(ue.declared_audit_verdict(findings("evidence-missing")), "failed", "执行器自己的失败项也是 failed")
+
+    def test_the_detached_rule_is_incomplete_alone_and_failed_when_mixed_with_anything_else(self) -> None:
+        """WP3b：C7-detached（被丢弃的 strace 标记行总数超过上限）和 C7-stream 同类，是「证据不足以证明覆盖」而不是违规。这里是纯函数层的判定，
+        不依赖 declared_coverage 是否已经认识这条规则。"""
+
+        def findings(*rules: str) -> list[dict[str, str]]:
+            return [{"rule": rule, "path": "", "kinds": [], "reason": "x"} for rule in rules]
+
+        self.assertIn("C7-detached", ue.DECLARED_INCOMPLETE_RULES)
+        self.assertEqual(ue.declared_audit_verdict(findings("C7-detached")), "incomplete")
+        self.assertEqual(ue.declared_audit_verdict(findings("C7-detached", "C7-stream", "C7-lines", "C7-unresolved")), "incomplete")
+        for other in ("C1-undeclared", "C7-exit", "C7-command", "C7-format", "C7-invalid", "C9-new"):
+            self.assertEqual(ue.declared_audit_verdict(findings("C7-detached", other)), "failed", other)
+
+    def canned_coverage(self, total: int) -> Any:
+        """替换掉记录层的 declared_coverage：明细只有一项集合内的 C7-lines，总数由 ``total`` 说了算（大于 1 就是被截断了）。"""
+
+        real = ue._records_module().declared_coverage
+
+        def canned(sample: Any, scope: Any, **kwargs: Any) -> dict[str, Any]:
+            result = real(sample, scope, **kwargs)
+            return {**result, "ok": False, "undeclared": [{"rule": "C7-lines", "path": "", "kinds": [], "reason": "示例"}],
+                    "counts": {**result["counts"], "undeclared": total}}
+
+        return mock.patch.object(ue._records_module(), "declared_coverage", side_effect=canned)
+
+    def test_truncated_findings_fail_closed(self) -> None:
+        """明细被截断（总数大于返回的条数）时，看不到的那部分里可能有集合之外的规则：即使拿到的这批全在集合内，也判 failed，不能判『只是证据不完整』。"""
+
+        harness = Harness(self)   # 世界（含登记表自检）要在打补丁之前建好
+        with self.canned_coverage(250):
+            result, _auditor, outcome = harness.sampled_collect("backend:go-test")
+        self.assertEqual((result["status"], result["undeclared_count"]), ("failed", 250))
+        self.assertIs(outcome.passed, False, "失败关闭：整次运行判失败")
+        self.assertNotIn("declared_not_inheritable", outcome.extra)
+
+    def test_whole_findings_of_the_same_kind_stay_incomplete(self) -> None:
+        """对照：总数等于返回的条数（没截断）时，同样的集合内明细仍是 incomplete——截断守卫不影响正常情形。"""
+
+        harness = Harness(self)
+        with self.canned_coverage(1):
+            result, _auditor, outcome = harness.sampled_collect("backend:go-test")
+        self.assertEqual((result["status"], result["undeclared_count"]), ("incomplete", 0))
+        self.assertIs(outcome.passed, True)
+        self.assertTrue(outcome.extra["declared_not_inheritable"].startswith("declared-sample-incomplete:"))
+
+    def test_a_simulated_detached_rule_reaches_the_executor_as_incomplete(self) -> None:
+        """记录层还不认识 C7-detached 时，用一个包装 declared_coverage 的替身（标记行超过 64 条就多报一项 C7-detached，模拟 WP1d 的规则）走完执行器的
+        整条判定路径：只有这一项→incomplete（记录不可承接、命令结论不变）；和真访问混在一起→failed。"""
+
+        harness = Harness(self)
+        records = ue._records_module()
+        real = records.declared_coverage
+
+        def with_detached(sample: Any, scope: Any, **kwargs: Any) -> dict[str, Any]:
+            result = real(sample, scope, **kwargs)
+            if sample["coverage"].get("detached_markers", 0) > 64:
+                findings = sorted([*result["undeclared"], {"rule": "C7-detached", "path": "", "kinds": [], "reason": "被丢弃的标记行超过上限"}],
+                                  key=lambda item: (item["rule"], item["path"], item["reason"]))
+                return {**result, "ok": False, "undeclared": findings, "counts": {**result["counts"], "undeclared": len(findings)}}
+            return result
+
+        unit_id = "backend:go-test"
+        flood = lambda raw: raw["coverage"].update(detached_markers=65)   # noqa: E731
+        with mock.patch.object(records, "declared_coverage", side_effect=with_detached):
+            calm, *_ = harness.sampled_collect(unit_id)
+            result, _auditor, outcome = harness.sampled_collect(unit_id, mutate=flood)
+            cwd, tree = harness.world.cwd_of(unit_id), harness.world.tree
+            mixed, *_ = harness.sampled_collect(unit_id, lines=harness.world.good_lines(unit_id) + [open_line(cwd, str(tree / "frontend/src/x.ts"))],
+                                                mutate=flood)
+        self.assertEqual(calm["status"], "passed")
+        self.assertEqual((result["status"], result["undeclared_count"], result["incomplete"]["rules"]), ("incomplete", 0, ["C7-detached"]))
+        self.assertIs(outcome.passed, True)
+        self.assertTrue(outcome.extra["declared_not_inheritable"].startswith("declared-sample-incomplete:C7-detached"))
+        self.assertEqual(mixed["status"], "failed")
+        self.assertEqual({item["rule"] for item in mixed["undeclared"]}, {"C1-undeclared", "C7-detached"})
+
+    def test_a_detached_marker_flood_makes_the_record_incomplete_once_the_coverage_rule_exists(self) -> None:
+        """记录层的 declared_coverage 认识 C7-detached（WP1d）之后：被丢弃的标记行不超过 64 条照常通过，超过 64 条只让该次记录不可承接，
+        和别的违规混在一起则判 failed。认识这条规则之前本用例跳过；认识之后自动生效，不用改。"""
+
+        if "C7-detached" not in self.vocabulary():
+            self.skipTest("declared_coverage 还不认识 C7-detached（WP1d 合入之前）：认识之后本用例自动生效")
+        harness = Harness(self)
+        unit_id = "backend:go-test"
+
+        def flood(count: int) -> Any:
+            return lambda raw: raw["coverage"].update(detached_markers=count)
+
+        result, _auditor, outcome = harness.sampled_collect(unit_id, mutate=flood(64))
+        self.assertEqual(result["status"], "passed", "恰好 64 条不触发")
+        result, _auditor, outcome = harness.sampled_collect(unit_id, mutate=flood(65))
+        self.assertEqual((result["status"], result["undeclared_count"], result["incomplete"]["rules"]), ("incomplete", 0, ["C7-detached"]))
+        self.assertIs(outcome.passed, True, "命令结论不变，整次运行不因此失败")
+        self.assertTrue(outcome.extra["declared_not_inheritable"].startswith("declared-sample-incomplete:"))
+        cwd, tree = harness.world.cwd_of(unit_id), harness.world.tree
+        mixed, *_ = harness.sampled_collect(unit_id, lines=harness.world.good_lines(unit_id) + [open_line(cwd, str(tree / "frontend/src/x.ts"))],
+                                            mutate=flood(65))
+        self.assertEqual(mixed["status"], "failed", "集合内的 C7-detached 和真访问混在一起：failed")
 
     def test_in_set_rules_each_become_incomplete_and_everything_else_fails_when_the_stream_is_really_collected(self) -> None:
         harness = Harness(self)
@@ -2143,7 +2247,23 @@ class ControlInvariantTests(unittest.TestCase):
 
         registered = {
             "tools/ci/unit_executor.py": ["    return [helper, *(adapter.sidecar_paths() if adapter is not None else [])]"],
-            "tools/ci/entry_gates.py": ["DECLARED_REQUIRE_OFFLINE = False"],
+            "tools/ci/entry_gates.py": [
+                "DECLARED_REQUIRE_OFFLINE = False",
+                # 以下 9 行是步骤 5 WP3b 对独立验收「一般 2（make -n 展开探测并非只读）」的必要改写，逐条登记理由：
+                # ①说明不能再声称「必须只读」——make 自己并不保证 -n 只读，改成「尽量只读、保守扫描挡住已知会执行的写法」。
+                "# make -n 展开探测必须只读：下面这些写法会在 make 解析期执行任意命令或写文件，出现就不做展开合同（单元转 rerun-only）。",
+                # ②③扫描函数加 targets 形参：执行期的写法（+ 行、$(MAKE)）只扫声明目标的先决条件闭包，不让无关目标挡住所有展开合同；首行文档同步。
+                "def _declared_make_problem(tree: Path) -> str | None:",
+                '    """测试树的 Makefile 能不能做 make -n 展开合同：含解析期求值的写法（见 _DECLARED_MAKE_UNSAFE）就不能，返回原因；可以返回 None。',
+                # ④⑤⑥⑦apply_declared_inputs：文档去掉「保证永远只读」；原先整份 Makefile 只扫一次的缓存，改成按声明目标集合各扫一次。
+                "      声明了 make 展开合同、而 Makefile 含解析期求值写法的，转为 rerun-only（保证展开探测永远只读）；",
+                "    make_problem: str | None = None",
+                "            if make_problem is None:",
+                '                make_problem = _declared_make_problem(tree) or ""',
+                # ⑧⑨_make_expansion：说明改成保守扫描的真实保证范围；探测环境清空 MAKEFLAGS／MAKEFILES，调用行随之改写。
+                '        只读保证由 plan 阶段的 Makefile 扫描提供（见 _declared_make_problem）。"""',
+                '        rc, out = self.ctx.run(["make", "-s", "--no-print-directory", "-n", target], cwd=self.tree, env=self.environ)',
+            ],
         }
         for relative, expected in registered.items():
             old = git_source(relative)

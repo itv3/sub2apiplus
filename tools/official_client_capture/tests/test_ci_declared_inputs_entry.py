@@ -581,9 +581,10 @@ class RegistryValidationTests(unittest.TestCase):
             outside=({"prefix": "{HOME}/.ssh/config", "class": "home-config", "contract": "host-config:ssh-config"},)))
         self.world.write()
         self.world.plan()
-        # 通过的完整写法：make 展开配 toolchain:make，镜像配 Ryuk，提交号完整。
+        # 通过的完整写法：make 展开配 toolchain:make，镜像配 Ryuk，提交号完整。make 展开合同只配 make 命令的单元（步骤 5 WP3b 起入口自检要求命令第一个词是
+        # make，所以这里用 frontend:critical，不再用 go test 命令的 backend:go-test）。
         self.world.registry["units"].clear()
-        self.world.declare("backend:go-test", default_scope(contracts=("toolchain:go", "toolchain:make", "service-image:postgres", "service-image:redis",
+        self.world.declare("frontend:critical", default_scope(contracts=("toolchain:go", "toolchain:make", "service-image:postgres", "service-image:redis",
                                                                          "service-image:ryuk"), make_expansion=("test-frontend-critical",),
                                                            git_commits=("d" * 40,)))
         self.world.write()
@@ -1062,7 +1063,8 @@ class ContractProbeTests(unittest.TestCase):
         runner = FakeRunner({argv: (0, f"pnpm --dir frontend exec vitest run src/a.spec.ts\necho {self.tree}/frontend\n")})
         scope = default_scope(contracts=(), make_expansion=("test-frontend-critical",))
         first = eg.declared_probe(runner=runner, environ={"PATH": "/x"}, tree=self.tree).entries(declaration(scope))[0]
-        self.assertEqual(runner.calls[0][1:], (str(self.tree), {"PATH": "/x"}))
+        # 会话环境照给，另清空 MAKEFLAGS 与 MAKEFILES（步骤 5 WP3b：调用方环境里的 -j、-t 或额外 makefile 不该改变展开语义）。
+        self.assertEqual(runner.calls[0][1:], (str(self.tree), {"PATH": "/x", "MAKEFLAGS": "", "MAKEFILES": ""}))
         self.assertIn("echo {TREE}/frontend", first["detail"]["text"])
         # 换一个路径不同的树（模拟换工作根）、展开相同：规范化后摘要相同。
         other_tree = make_tree(self.root / "other")
