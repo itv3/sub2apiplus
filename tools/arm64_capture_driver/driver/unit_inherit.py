@@ -569,7 +569,9 @@ def _carry_host_inputs(current: Any, record: Mapping[str, Any]) -> None:
         if not isinstance(name, str) or name in names:
             continue
         if name.startswith("host:"):
-            additions.append(R._audit_module().host_snapshot(name[5:]))
+            # 按来源条目的合同版本（v2／v3）和元数据依赖声明重新快照：v2 条目与过去的 host_snapshot(name[5:]) 逐字相同，
+            # v3 条目取 v3，摘要才能与来源记录可比。
+            additions.append(R._audit_module().host_snapshot_like(entry))
         elif name == "runtime-contract":
             additions.append(R._audit_module()._runtime_module().contract_entry(entry["detail"]["contract"]))
         elif name == "require-read-audit":

@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
-"""C-02：入口三组后端测试前预编译一次生产包；不执行测试或 TestMain。
+"""C-02：入口三组后端测试前预编译一次生产包并补齐 Go 模块缓存；不执行测试或 TestMain。
 
 仅由显式入口调用。预热和正式测试使用同一工作目录内的 Go 缓存；失败留档并停止，
 不会签发测试通过记录。关闭预热仍执行原三组测试，不能承接本文件的编译结果。
+
+预热在 backend 目录、同一份环境、同一组三个缓存目录下依次做三步，任一步失败即整体失败：
+1. ``go build ./...``：只编译生产包，把编译缓存写热。
+2. ``go mod download``：联网把构建清单里全部模块的压缩包下载齐。第 1 步只会取到生产构建用得上的模块，
+   仅 ``go test`` 才用得上的测试专用依赖可能还缺；而后面的命令单元要求运行期离线（GOPROXY=off），
+   所以模块缓存必须在运行之前就完整。联网只发生在这一步，本文件不设置也不改写任何 Go 网络相关环境变量，
+   代理、校验库等沿用正式门禁传入的同一份环境。
+3. ``go mod verify``：不联网，校验缓存里已有模块的内容与 go.sum 一致，必须退出 0 且输出 all modules verified。
+   注意它只核对“已经在缓存里的模块”：实测（Go 1.26.6）当某个模块只有 go.mod 记录、压缩包从未下载时，
+   它照样输出 all modules verified，所以它不证明缓存完整；完整性由第 2 步成功来保证，两步缺一不可。
 """
 from __future__ import annotations
 
@@ -20,7 +30,25 @@ from pathlib import Path
 
 GATES = frozenset({'backend-go-test', 'backend-unit', 'backend-integration'})
 CACHE_NAMES = ('GOCACHE', 'GOMODCACHE', 'GOTMPDIR')
+# 回执只新增字段（module_download、module_verify、go_sum_sha256），旧字段含义不变，所以版本号不升。
 SCHEMA = 'entry-go-compile-warmup/v1'
+
+# 三步各自的内部超时（秒）。它们之和再加余量必须不超过调度器给整个预热单元的超时（见 UNIT_TIMEOUT_SECONDS）：
+# 内部超时先触发，才会留下带失败原因的收据；调度器强杀进程则来不及写收据。
+BUILD_TIMEOUT_SECONDS = 1800
+# go mod download：ARM64 上 H4 缓存副本联网补齐只用约 1 秒、增量约 100MB。即使出口只有 1MB/s，
+# 100MB 也只要约 100 秒，420 秒留约 4 倍余量。
+MODULE_DOWNLOAD_TIMEOUT_SECONDS = 420
+# go mod verify：本机离线实测真实 backend 约 2 秒；ARM64 磁盘较慢，按 10 倍保守估计也只要约 20 秒，120 秒留约 6 倍余量。
+MODULE_VERIFY_TIMEOUT_SECONDS = 120
+# 预热单元（调度器侧）总超时 = 1800 + 420 + 120 + 60。最后的 60 秒是进程启动、日志与收据落盘的余量，
+# 沿用原来 1860 = 1800 + 60 的那 60 秒。原来只有编译一步，现在多了下载和校验两步，所以由 1860 放宽到 2400。
+UNIT_TIMEOUT_SECONDS = 2400
+
+MODULE_DOWNLOAD_COMMAND = ('go', 'mod', 'download')
+MODULE_VERIFY_COMMAND = ('go', 'mod', 'verify')
+# go mod verify 成功时单独占一行输出的文字；判据见 module_verified。
+MODULE_VERIFIED_LINE = 'all modules verified'
 
 
 def digest(data):
@@ -67,8 +95,52 @@ def cache_paths(tree, work, environment):
     return paths
 
 
-def prepare(*, tree, work, manifest, output, mode='auto', environment=None, timeout=1800):
-    """每份门禁运行只调用一次；编译失败、来源漂移、外部缓存均在派发测试前拒绝。"""
+def module_verified(returncode, output):
+    """go mod verify 通过的判据：退出码为 0，并且输出里有一整行恰好是 all modules verified。
+
+    退出码和输出两者都要满足：只看退出码会放过“什么都没校验”的静默成功（例如 go 被换成空壳程序），
+    只看文字则可能被失败时夹带的同名文字误导。按整行比较，是为了拒绝 not all modules verified 之类的变体；
+    允许它前面有别的提示行（例如 go: downloading），因为真实工具链可能在补取 go.mod 时先打印那类行。
+    """
+    if returncode != 0:
+        return False
+    return any(line.strip() == MODULE_VERIFIED_LINE for line in output.decode('utf-8', 'replace').splitlines())
+
+
+def run_module_step(report, key, command, *, cwd, environment, log, timeout, digest_key, initial=None):
+    """运行一个模块缓存步骤：输出（含 stderr）写入独立日志，命令、退出码、耗时与日志摘要登记到 report[key]。
+
+    登记项在运行之前就挂到 report 上，超时或异常时收据里仍有命令和已写出的那部分日志，便于取证。
+    每步一份独立日志，摘要才能各自核对；编译日志仍是原来的 .log，不混入这里的输出，原有 log 字段含义不变。
+    返回日志全文，供调用方判定输出内容（go mod verify 需要）。
+    """
+    record = report[key] = {'command': list(command), 'returncode': None, **(initial or {})}
+    began = time.monotonic()
+    created = False
+    data = b''
+    try:
+        # 独占创建且不跟随符号链接，权限一开始就是 0600：日志是取证材料，不覆盖已有文件，也没有先宽后窄的权限窗口。
+        descriptor = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        created = True
+        with os.fdopen(descriptor, 'wb') as handle:
+            result = subprocess.run(list(command), cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+                                    stdout=handle, stderr=subprocess.STDOUT, timeout=timeout)
+        record['returncode'] = result.returncode
+    finally:
+        record['elapsed_seconds'] = time.monotonic() - began
+        if created:
+            # 只登记本函数自己创建的日志，不把别人遗留的同名文件当成本步骤的证据。
+            data = log.read_bytes()
+            record[digest_key] = {'path': str(log), 'sha256': digest(data)}
+    return data
+
+
+def prepare(*, tree, work, manifest, output, mode='auto', environment=None, timeout=BUILD_TIMEOUT_SECONDS,
+            download_timeout=MODULE_DOWNLOAD_TIMEOUT_SECONDS, verify_timeout=MODULE_VERIFY_TIMEOUT_SECONDS):
+    """每份门禁运行只调用一次；编译失败、模块下载或校验失败、来源漂移、外部缓存均在派发测试前拒绝。
+
+    timeout 仍是 go build 的超时；download_timeout、verify_timeout 分别约束后两步，三者之和见 UNIT_TIMEOUT_SECONDS。
+    """
     environment = dict(os.environ if environment is None else environment)
     tree, work = Path(tree).resolve(), Path(work).resolve()
     manifest, output = Path(manifest), Path(output)
@@ -96,6 +168,12 @@ def prepare(*, tree, work, manifest, output, mode='auto', environment=None, time
         report['cache_roots'] = {name: str(path) for name, path in paths.items()}
         before = source_binding(tree)
         report['source'] = before
+        # 模块缓存的内容由 go.sum 约束，这里单独登记它的摘要，供消费者核验“缓存初态由 go.sum 约束”。
+        # 真实仓库里 go.sum 是 backend 下的受跟踪文件，已被上面的源码绑定覆盖，编译之后、下载与校验之后会各核对一次。
+        # 没有 go.sum 只可能出现在没有外部依赖的模块里（有依赖却缺 go.sum 时，go build 要么报缺条目，
+        # 要么补写出 go.sum 而被源码变化检查拦下），此时记为 null，不拒绝。
+        go_sum = tree / 'backend/go.sum'
+        report['go_sum_sha256'] = digest(go_sum.read_bytes()) if go_sum.is_file() else None
         go = shutil.which('go', path=environment.get('PATH'))
         if go is None:
             raise ValueError('缺少 Go 编译器')
@@ -118,6 +196,29 @@ def prepare(*, tree, work, manifest, output, mode='auto', environment=None, time
             raise ValueError('Go 预编译失败，正式门禁尚未派发')
         if source_binding(tree) != before:
             raise ValueError('预编译期间后端源码发生变化')
+        # 第二步：go mod download 联网把构建清单里全部模块的压缩包补齐（含仅 go test 才用得上的依赖），
+        # 之后的命令单元要求运行期离线，缓存必须在这里一次补完。联网只发生在这一步：
+        # 这里不设置也不改写任何 Go 网络相关环境变量，代理等沿用正式门禁传入的同一份环境；
+        # 同一份环境、同一组缓存目录、同一个工作目录，补齐的模块才会落进后面命令实际使用的缓存。
+        run_module_step(report, 'module_download', MODULE_DOWNLOAD_COMMAND, cwd=tree / 'backend', environment=environment,
+                        log=output.with_suffix('.mod-download.log'), timeout=download_timeout, digest_key='log')
+        if report['module_download']['returncode']:
+            raise ValueError('Go 模块下载失败（go mod download 退出码 %d），正式门禁尚未派发'
+                             % report['module_download']['returncode'])
+        # 第三步：go mod verify 不联网，校验缓存里已有模块的内容与 go.sum 一致。退出码和输出两者为准，
+        # 见 module_verified。它不证明缓存完整（从未下载的模块它不会报错），完整性靠上一步的下载成功保证。
+        output_bytes = run_module_step(report, 'module_verify', MODULE_VERIFY_COMMAND, cwd=tree / 'backend',
+                                       environment=environment, log=output.with_suffix('.mod-verify.log'),
+                                       timeout=verify_timeout, digest_key='output', initial={'verified': False})
+        report['module_verify']['verified'] = module_verified(report['module_verify']['returncode'], output_bytes)
+        if not report['module_verify']['verified']:
+            code = report['module_verify']['returncode']
+            reason = '退出码 %d' % code if code else '输出里没有单独一行 ' + MODULE_VERIFIED_LINE
+            raise ValueError('Go 模块校验失败（go mod verify %s），正式门禁尚未派发' % reason)
+        # 下载与校验之后再核对一次源码：go mod download 在 -mod=mod 之类的环境下可能改写 go.mod 或 go.sum，
+        # 那样缓存就不是由登记的 go.sum 约束出来的了，必须拒绝。
+        if source_binding(tree) != before:
+            raise ValueError('模块下载或校验期间后端源码发生变化')
         report['status'] = 'passed'
         return report
     except BaseException as error:
@@ -142,9 +243,11 @@ def write_plan(*, tree, work, manifest, output, plan_output, launcher):
     command = [*launcher, sys.executable, '-B', str(Path(__file__).resolve())]
     for name, value in (('tree', tree), ('work', work), ('manifest', manifest), ('output', output)):
         command += ['--' + name, str(Path(value).resolve())]
+    # 单元超时 UNIT_TIMEOUT_SECONDS = 2400（原 1860，只有编译一步）：编译 1800 + 下载 420 + 校验 120 + 余量 60，
+    # 各项的依据见文件开头的常量说明。它必须大于 prepare 里三步内部超时之和，内部超时才会先触发并留下失败收据。
     payload = {'schema_version': 'unit-executor-commands/v1', 'units': [{
         'unit_id': 'prepare:go-compile', 'argv': command, 'cwd': str(Path(tree).resolve()),
-        'cores': 2, 'memory_mb': 5120, 'exclusive': True, 'timeout_seconds': 1860,
+        'cores': 2, 'memory_mb': 5120, 'exclusive': True, 'timeout_seconds': UNIT_TIMEOUT_SECONDS,
         'env': {'GOMAXPROCS': '2'}, 'weight': 1.0}]}
     with Path(plan_output).open('x') as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, indent=2) + '\n')

@@ -16,12 +16,14 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.util
 import json
 import math
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -29,6 +31,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Mapping, Sequence
 
 HERE = Path(__file__).resolve().parent
@@ -689,6 +692,7 @@ def plan_gates(
     input_scopes: Sequence[dict[str, Any]] = (),
     audit_policy: dict[str, Any] | None = None,
     recorded_bridge: dict[str, Any] | None = None,
+    declared_registry: Path | None = None,
 ) -> dict[str, Any]:
     """生成入口门禁清单（``unit-executor-gates/v1``）。
 
@@ -700,6 +704,9 @@ def plan_gates(
     E3-02：pre-A3 场景清单是新形式（单元带 ``scenario_test_file``）时按 ``pre_a3_inputs`` 声明输入、可以承接；
     旧形式仍标不可承接。
     E4-01：``with_gates`` 是人工补的门禁项（定向回归选不出时），并进组合的门禁项（``profile_gates``）。
+    声明级承接（步骤 5）：测试树里有登记表 ``tools/ci/command_input_scopes.json``（或 ``declared_registry`` 显式指定）时，
+    登记为 declared 的命令单元改用声明级输入、登记为 rerun-only 的标为不可承接（``apply_declared_inputs``）；没有登记表、
+    或单元没登记，输出与改造前逐字相同。
     """
 
     gates_wanted = profile_gates(profile, with_gates)
@@ -839,6 +846,7 @@ def plan_gates(
         for unit in units:
             if unit["unit_id"] in audit_policy["units"]:
                 unit["inputs"] = audit_policy["units"][unit["unit_id"]]
+    apply_declared_inputs(manifest, tree, launcher=launcher, input_scopes=input_scopes, registry_path=declared_registry)
     apply_input_scopes(manifest, input_scopes)
     return manifest
 
@@ -1040,6 +1048,1168 @@ def apply_input_scopes(manifest: dict[str, Any], scopes: Sequence[dict[str, Any]
         unit["input_scope"] = scope
     if test_scopes:
         manifest["test_input_scopes"] = test_scopes
+
+
+# ---------------------------------------------------------------------------
+# 命令单元声明级承接（declared-inputs/v1，步骤 5 的 WP2）：登记表加载与自检、合同探测、plan 接线
+# ---------------------------------------------------------------------------
+# 背景：65 个命令单元原来都声明「整个仓库四段＋HEAD」，改任何一个无关文件、换一次提交，65 个全部失效。声明级承接让命令的
+# 输入声明由真实读集采样得出（登记表＋证据文件），机器核查「采样路径全部落在声明范围内」，再绑定一组外部输入合同（工具链、
+# 缓存、服务镜像、git 历史、make 展开、HOME 配置）；改一个无关文件后这些单元不再重跑。
+#
+# 本节只做 entry_gates 一侧，分三块：
+# 1. 登记表读取与自检（plan 阶段，失败关闭：登记表自相矛盾就拒绝生成清单，立刻暴露，而不是留到执行时才发现）；
+# 2. 合同探测（生产侧，需要子进程；执行器每次算「当前事实」时重新探测，见 declared_probe）；
+# 3. plan_gates 接线（apply_declared_inputs）。
+# 范围校验、覆盖检查与消费者核验在 unit_records.py（validate_declared_scope、declared_coverage），这里只调用它们的公开函数，
+# 不重复实现；执行器侧的采样与前置核验在 unit_executor.py。
+#
+# 与 control 四链的关系：四链单元（pre-a3:claude:vc-chain.claude-{reconcile,deadline,root-cause,tool-evolution}）靠 audit_policy
+# 与固定 sidecar 取得读集适配器。本节对它们零触碰：登记表禁止登记任何 pre-a3 单元，不读写 audit_policy，清单上的
+# declared_inputs 汇总是独立顶层键；control_read_audit_for_plan 的选择逻辑一字未动。
+
+DECLARED_REGISTRY_SCHEMA = "declared-inputs-registry/v1"
+DECLARED_SCOPE_SCHEMA = "declared-scope/v1"
+DECLARED_SAMPLE_SCHEMA = "declared-sample/v1"
+DECLARED_CONTRACT_SCHEMA = "declared-contract/v1"
+DECLARED_SUMMARY_SCHEMA = "declared-inputs-summary/v1"
+# 登记表与采样证据都放在测试树里随提交走：改登记表不需要重部署驱动，也不动驱动清单（与 deploy_tests 读 CI 定义同一做法）。
+DECLARED_REGISTRY_PATH = "tools/ci/command_input_scopes.json"
+DECLARED_SAMPLES_DIR = "tools/ci/command_input_samples"
+DECLARED_STATUSES = ("declared", "rerun-only")
+# 命令单元全集同时出现的组合：登记表里的单元必须都在规划里（拼错单元 ID 要立刻报错）；其余组合（preflight、pre-a3、
+# regression）只规划其中一部分，登记了但本次没规划的单元直接跳过。
+DECLARED_FULL_PROFILES = ("full-gates", "entry")
+_DECLARED_SHA256 = re.compile(r"[0-9a-f]{64}")
+_DECLARED_COMMIT = re.compile(r"[0-9a-f]{40}")
+_DECLARED_MAKE_TARGET = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+/-]*")
+_DECLARED_IMAGE_REF = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@+-]*")
+_DECLARED_SAMPLE_REQUIRED = ("evidence", "evidence_sha256", "command_sha256", "launcher_sha256", "sampler_sha256")
+_DECLARED_SAMPLE_OPTIONAL = ("sampled_commit", "sampled_at_utc", "runs", "reaudit_every_days")
+
+# ---- 合同定义表 ----
+# 都是代码常量：改动会改变执行器版本（本文件在 EXECUTOR_FILES 里），声明级记录整体重新产生一次，所以只登记评审过的合同。
+# 登记表里的 scope.contracts 只写合同 ID（类型:名字），定义不由登记表给出——否则登记表可以自己放宽合同。
+DECLARED_TOOLCHAINS: dict[str, list[str]] = {
+    "go": ["go", "version"], "node": ["node", "--version"], "pnpm": ["pnpm", "--version"], "make": ["make", "--version"],
+}
+# go 命令行为受这些环境变量的「生效值」影响（go env 已合并环境变量与 go env -w 写下的配置文件）。
+DECLARED_GO_ENV_KEYS = ("GOFLAGS", "GOPROXY", "GOTOOLCHAIN", "GOEXPERIMENT", "CGO_ENABLED", "GOENV")
+DECLARED_GO_TOOLS = ("compile", "link", "asm", "vet")
+# 命令运行期离线要求（调研 Q8，调度者定为可选项）：GOFLAGS=-mod=readonly、GOPROXY=off、GOTOOLCHAIN=local 让 go 命令既不联网
+# 下载模块，也不因 go.mod 的 go 行较新而悄悄切换到下载来的工具链（那会让工具链藏进 GOMODCACHE，成为不在合同里的输入）。
+# 开关：把 DECLARED_REQUIRE_OFFLINE 改成 True（改本文件即改执行器版本，声明级记录整体重新产生一次），或在创建探测会话时
+# 显式传 require_offline=True。打开后 toolchain:go 条目带 requires.env_equals 与逐项核对结果（requirements），
+# 门禁环境没有真的注入这三个变量时 requirements.met 为 False，declared_contract_problems 会报告，单元不得承接。
+# 步骤 5 工作包 WP3：调度者 10-14 定案首发就开（ARM64 摸底证明 10 个首发命令在离线下都能通过，采样也是在这三个变量下做的，
+# 证据只对离线运行成立）。变量由 apply_declared_inputs 写进 declared Go 单元的清单 env；执行器探测合同时把单元 env 里的 Go 变量叠到
+# 探测环境上，所以 requirements.met 反映的是单元真正会看到的值。
+DECLARED_REQUIRE_OFFLINE = True
+DECLARED_OFFLINE_ENV = {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}
+# 缓存合同的稳定声明（角色、位置类别、规则）：不含缓存内容，也不含绝对路径。缓存内容会随运行由冷变热，进了摘要，
+# 首次执行就会让所有未受影响的单元失去承接资格；位置只写类别（work＝工作根内，tree＝测试树内，tmp＝临时目录），
+# 这样跨工作根也不失效。requires 里的 go_test_argv_contains 的含义：命令是 go test 时必须带这些参数（防测试结果缓存成为隐藏输入）。
+DECLARED_CACHES: dict[str, dict[str, Any]] = {
+    "go-build-cache": {"role": "performance-cache", "location": "work", "environment": "GOCACHE", "rule": "any-content-addressed",
+                       "requires": {"go_test_argv_contains": ["-count=1"]}},
+    "go-mod-cache": {"role": "dependency-content", "location": "work", "environment": "GOMODCACHE", "rule": "lock-derived-go-sum",
+                     "lock_file": "backend/go.sum"},
+    "go-tmp": {"role": "scratch", "location": "work", "environment": "GOTMPDIR", "rule": "any-scratch"},
+    "tmp": {"role": "scratch", "location": "tmp", "environment": "TMPDIR", "rule": "any-scratch"},
+    "node-modules": {"role": "dependency-install", "location": "tree", "path": "frontend/node_modules", "rule": "lock-derived-pnpm",
+                     "lock_file": "frontend/pnpm-lock.yaml", "installed_lock": "frontend/node_modules/.pnpm/lock.yaml"},
+    "vite-cache": {"role": "performance-cache", "location": "tree", "path": "frontend/node_modules/.vite", "rule": "any-content-addressed"},
+    "tsbuildinfo": {"role": "performance-cache", "location": "tree", "path": "frontend", "glob": "tsconfig*.tsbuildinfo",
+                    "rule": "any-content-addressed"},
+}
+# 服务镜像：引用从源码常量解析（不在登记表里写死），解析失败 plan 失败。postgres 可被 SUB2API_TEST_POSTGRES_IMAGE 覆盖，
+# 覆盖只对 postgres: 前缀生效（selectDockerImage，integration_harness_test.go）；redis 固定。门禁白名单环境不放行这个变量，
+# 所以门禁里实际引用恒为默认标签，但合同仍按「执行器环境里该变量的有无」计算，将来放行时不会漏绑。
+# testcontainers 起任何容器都会先起 Ryuk 回收容器，它的镜像由 testcontainers-go 的 ReaperDefaultImage 常量决定（v0.40.0 起固定、
+# 不可用环境变量覆盖），是不在测试源码里的隐藏输入，所以单独作为 ryuk 合同绑定。
+DECLARED_IMAGE_SOURCE_FILE = "backend/internal/repository/integration_harness_test.go"
+DECLARED_SERVICE_IMAGES: dict[str, dict[str, str]] = {
+    "postgres": {"const": "postgresImageTag", "override_env": "SUB2API_TEST_POSTGRES_IMAGE", "override_prefix": "postgres:"},
+    "redis": {"const": "redisImageTag"},
+    "ryuk": {"module": "github.com/testcontainers/testcontainers-go", "go_mod": "backend/go.mod", "const": "ReaperDefaultImage"},
+}
+# Ryuk 默认镜像登记表（testcontainers-go 版本 → ReaperDefaultImage）。解析顺序：GOMODCACHE 里该版本源码
+# （internal/config/config.go）优先，没有（plan 在预热编译之前，模块缓存还是空的）就用本表；两处都没有就是「解析不到」：
+# plan 阶段拒绝（登记方法：升级 testcontainers-go 时把新版本的值补进本表，测试会核对本表与 backend/go.mod 的版本一致）。
+# 解析来源只写进条目的 detail（resolved_from），不进摘要——否则缓存由冷变热会改变摘要。
+DECLARED_RYUK_DEFAULT_IMAGES = {"v0.40.0": "testcontainers/ryuk:0.13.0"}
+DECLARED_RYUK_SOURCE = "internal/config/config.go"
+# testcontainers 的 Hub 前缀配置（环境变量或 ~/.testcontainers.properties 的 hub.image.name.prefix）会给所有 Docker Hub 镜像
+# 加前缀，实际镜像名不再是源码常量；检测到时镜像条目失败关闭（image_id 记 unavailable），单元不得承接。
+DECLARED_HUB_PREFIX_ENV = "TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX"
+DECLARED_HUB_PREFIX_PROPERTY = "hub.image.name.prefix"
+# HOME 下会影响命令行为、但现状没有任何东西绑定的配置文件：存在则内容摘要，不存在记 missing（缺失也是一种状态）。
+# host-config 合同的编号是开放的：采样器（declared_sampler）按采到的 {HOME}/ 路径派生编号（{HOME}/.config/go/env →
+# host-config:config-go-env），路径写在 scope.outside 的 home-config 行里（prefix 是 {HOME}/ 下的精确文件，contract 指向合同编号），
+# 探测时从 scope 取路径——这样采样器新采到一个 HOME 配置，不必改本文件就能绑定；绑定只会增加被监视的文件，不会放宽任何合同。
+# scope 里没有对应 outside 行时，用下表兜底（编号按同一条派生规则：去掉开头的点，非字母数字换成连字符）。
+DECLARED_HOST_CONFIGS = {"gitconfig": ".gitconfig", "docker-config-json": ".docker/config.json", "npmrc": ".npmrc",
+                         "config-go-env": ".config/go/env", "testcontainers-properties": ".testcontainers.properties"}
+DECLARED_TESTCONTAINERS_PROPERTIES = ".testcontainers.properties"
+_DECLARED_HOST_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+# 条目 detail 里只供人读、不进摘要的字段（探测到的可执行文件路径、make 展开文本前缀、解析来源）。
+DECLARED_INFO_KEYS = frozenset({"text", "executable", "resolved_from", "error"})
+# make -n 展开探测要尽量只读（make 自己并不保证 -n 只读，见下面的补充）：下面这些写法会在 make 解析期执行任意命令或写文件，出现就不做展开合同（单元转 rerun-only）。
+# $(shell/wildcard/eval/call) 与 include 是调研指定的；另加 file/load/guile/exec（同样有副作用）与 `VAR != cmd`（shell 赋值）。
+# 函数名后必须紧跟空白才算函数调用、include 后必须跟文件名才算指令，所以 $(file_list)、$(filter …) 或叫 include-check 的目标
+# 不会误伤；以 TAB 开头的是配方行，不做指令与赋值判断（配方里的 $(shell …) 仍然会被第一条抓到——make 打印配方时也会展开它）。
+# 整行注释先去掉再扫。
+# 步骤 5 WP3b 补充（独立验收一般 2）：-n 并不保证只读——GNU Make 手册（「实际执行」一节）说明，带 + 前缀的配方行（+ 可与 @、- 混在行首）、含
+# $(MAKE)／${MAKE} 的配方行（递归 make 要继续传 -n，所以不被拦住），以及重建 makefile 自身的规则（目标是 Makefile／makefile／GNUmakefile，
+# include 进来的文件同理，-n 也照样先重建 makefile）都会在 -n 下真的执行。所以扫描另挡三类：自重建规则与 .RECIPEPREFIX（配方行不再以 TAB 开头，
+# 扫描就认不出配方行）是解析期的，看整份文件；+ 行与 $(MAKE) 是执行期的，只看声明目标的先决条件闭包里的配方行（闭包解析不了就退回整份文件，
+# 不让与声明单元无关的目标——真实仓库的 build-backend、test-backend、test-frontend 就用 $(MAKE)——挡住所有展开合同）。
+# 保证的范围就是这份扫描：命中的写法不做展开合同；没命中却仍有副作用的写法（例如配方宏展开出 + 行）不在保证内，靠 Makefile 评审兜底。探测时另清空
+# MAKEFLAGS 与 MAKEFILES，免得调用方环境里的 -j、-t 之类选项或额外 makefile 改变展开语义。
+_DECLARED_MAKE_UNSAFE = re.compile(
+    r"[$][({]\s*(?:shell|wildcard|eval|call|file|load|guile|exec)(?=\s)"
+    r"|^[ ]*-?(?:include|sinclude|load)(?=[ \t]+\S)"
+    r"|^(?!\t)[ ]*(?:(?:export|override|private)[ \t]+)*[^\s:=#]+[ ]*!=", re.M)
+# 在 -n 下仍会真的执行的配方行：以 + 标记（+ 可与 @、- 任意顺序混在行首的前缀里），或含 $(MAKE)／${MAKE}。
+_DECLARED_MAKE_ALWAYS_RUN = re.compile(r"^\t[@\- \t]*\+|[$][({]MAKE[)}]", re.M)
+_DECLARED_MAKE_RECIPEPREFIX = re.compile(r"^[ ]*\.RECIPEPREFIX\b", re.M)
+# make 启动时会先重建的 makefile 自身的名字（GNU Make 按 GNUmakefile、makefile、Makefile 的顺序找）。
+_DECLARED_MAKEFILE_NAMES = frozenset({"GNUmakefile", "makefile", "Makefile"})
+# 粗解析 Makefile 规则用：变量引用、赋值行、目标特定变量、特殊目标。
+_DECLARED_MAKE_VAR_REF = re.compile(r"[$](?:\(([A-Za-z0-9_.-]+)\)|\{([A-Za-z0-9_.-]+)\})")
+_DECLARED_MAKE_ASSIGN = re.compile(r"^(?:(?:export|override|private)[ \t]+)*([A-Za-z0-9_.-]+)[ \t]*(:{1,3}=|[?+!]?=)[ \t]*(.*)$")
+_DECLARED_MAKE_TARGET_VARIABLE = re.compile(r"^[^:=#]*:[ \t]*(?:(?:export|override|private)[ \t]+)*[A-Za-z0-9_.-]+[ \t]*(?::{1,3}=|[?+!]?=)")
+_DECLARED_MAKE_SPECIAL_TARGETS = frozenset({".PHONY", ".SUFFIXES", ".PRECIOUS", ".INTERMEDIATE", ".SECONDARY", ".NOTPARALLEL", ".ONESHELL",
+                                            ".POSIX", ".SILENT", ".IGNORE", ".LOW_RESOLUTION_TIME", ".DELETE_ON_ERROR",
+                                            ".EXPORT_ALL_VARIABLES", ".WAIT"})
+
+
+def _declared_records() -> Any:
+    """声明级承接依赖 unit_records 的两个纯函数（validate_declared_scope、declared_coverage）；缺失时给出明确原因。"""
+
+    records = _unit_records_module()
+    missing = [name for name in ("validate_declared_scope", "declared_coverage") if not hasattr(records, name)]
+    if missing:
+        raise ValueError("unit_records.py 缺少声明级承接所需的函数：" + "、".join(missing))
+    return records
+
+
+def _declared_sha256_json(value: Any) -> str:
+    """与执行器、记录同一份规范化 JSON 摘要，保证这里算的和消费者重算的逐字节一致。"""
+
+    return _unit_records_module().sha256_json(value)
+
+
+def _declared_file_sha256(path: Path) -> str:
+    """文件内容摘要（跟随符号链接读目标）；不存在记 missing、不是普通文件记 not-a-file、读不了记 unreadable(原因)：
+    这些值都与有内容时的摘要不同，状态变化可见。"""
+
+    try:
+        if not path.exists():
+            return "missing"
+        if not path.is_file():
+            return "not-a-file"
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as error:
+        return f"unreadable({type(error).__name__})"
+
+
+def _declared_fail(unit_id: str | None, message: str) -> ValueError:
+    return ValueError(f"声明级承接登记表：{'单元 ' + unit_id + ' ' if unit_id else ''}{message}")
+
+
+def declared_launcher_sha256(launcher: Sequence[str]) -> str:
+    """启动前缀（计划里单元 argv 开头的 unshare 等隔离命令）的规范化摘要。启动前缀不属命令身份，但它改变命令看到的文件
+    系统（ARM64 上遮住生产别名），采样时与现在不同就必须重采，所以单独登记、单独核对。本机 plan 的启动前缀为空时是空数组的摘要。"""
+
+    return _declared_sha256_json([str(part) for part in launcher])
+
+
+def declared_command_sha256(argv: Sequence[str], cwd: str | Path | None, tree: Path) -> str:
+    """命令身份摘要：去掉启动前缀的 argv ＋ 相对测试树的工作目录（测试树根记 ``.``）的规范化 JSON 摘要。
+    采样证据里的 ``command.sha256`` 用同一算法（``sha256_json({"argv", "cwd_rel"})``），命令变了证据就不再适用。"""
+
+    cwd_rel = "." if cwd is None else Path(cwd).relative_to(Path(tree)).as_posix()
+    return _declared_sha256_json({"argv": [str(part) for part in argv], "cwd_rel": cwd_rel})
+
+
+# ---- 登记表读取与自检 ----
+# 登记表格式（declared-inputs-registry/v1）：
+#   {"schema_version": "declared-inputs-registry/v1",
+#    "units": {
+#      "<单元ID>": {"status": "declared", "scope": <declared-scope/v1>,
+#                   "sample": {"evidence": "tools/ci/command_input_samples/<名>.sample.json", "evidence_sha256": <证据文件原始字节的 sha256>,
+#                              "command_sha256": <declared_command_sha256>, "launcher_sha256": <declared_launcher_sha256>,
+#                              "sampler_sha256": <采样器摘要>, 可选：sampled_commit、sampled_at_utc、runs、reaudit_every_days}},
+#      "<单元ID>": {"status": "rerun-only", "reason": "<为什么只重跑>", 可选 "head": true（读 git 历史的单元，保留旧的 head 条目）}}}
+# 采样证据文件（declared-sample/v1）由 declared_sampler 产生，登记表的各个摘要都由它起草；自检把它们与计划逐项核对。
+
+
+def _declared_registry_file(tree: Path, path: Path | None) -> Path:
+    return Path(path) if path is not None else Path(tree) / DECLARED_REGISTRY_PATH
+
+
+def _declared_tree_path_problem(tree: Path, path: Path) -> str | None:
+    """路径在测试树之下时：从测试树到文件的每一级都不许是符号链接，且 resolve 之后仍在测试树内；有问题返回原因，没有返回 None。
+    独立验收一般 5：只拒绝最后一级符号链接时，整个 tools/ci 或样本目录是指向树外的符号链接也能通过。测试树自己的上级目录不查（临时目录常带
+    符号链接，例如 macOS 的 /var）；不在测试树之下的路径（命令行 --declared-registry 显式指定的外部登记表，测试用）不归这里管。"""
+
+    root = Path(os.path.abspath(tree))
+    try:
+        relative = Path(os.path.abspath(path)).relative_to(root)
+    except ValueError:
+        return None
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return f"{current} 是符号链接"
+    try:
+        current.resolve().relative_to(root.resolve())
+    except ValueError:
+        return f"{path} 解析之后不在测试树内"
+    return None
+
+
+def load_declared_registry(tree: Path, *, path: Path | None = None) -> dict[str, Any] | None:
+    """读测试树的登记表 ``tools/ci/command_input_scopes.json``；缺失返回 None（行为即旧声明，逐字不变）。
+
+    ``path`` 显式指定（命令行 ``--declared-registry``，测试用）时必须存在。格式只做外形检查（顶层键闭合、schema 对），
+    单元级的完整自检在 ``validate_declared_registry``。符号链接一律拒绝：登记表要随提交走，不能指到树外。"""
+
+    target = _declared_registry_file(tree, path)
+    if target.is_symlink():
+        raise _declared_fail(None, f"登记表是符号链接：{target}")
+    problem = _declared_tree_path_problem(tree, target)
+    if problem is not None:
+        raise _declared_fail(None, f"登记表的路径不在测试树的真实目录内（{problem}）：{target}")
+    if not target.exists():
+        if path is not None:
+            raise _declared_fail(None, f"指定的登记表不存在：{target}")
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except RecursionError as error:
+        raise _declared_fail(None, f"登记表的 JSON 嵌套过深，解析不了：{target}") from error
+    except (OSError, ValueError) as error:
+        raise _declared_fail(None, f"登记表读不出来或不是 JSON：{target}（{error}）") from error
+    if (not isinstance(payload, dict) or set(payload) != {"schema_version", "units"}
+            or payload["schema_version"] != DECLARED_REGISTRY_SCHEMA or not isinstance(payload["units"], dict)):
+        raise _declared_fail(None, f"登记表格式非法（顶层键须恰为 schema_version、units，schema 为 {DECLARED_REGISTRY_SCHEMA}）：{target}")
+    return payload
+
+
+def _declared_known_contract(ident: str) -> bool:
+    """合同编号是不是评审过的：工具链、缓存、服务镜像是封闭表；host-config 编号开放（只要格式合法），
+    路径是否存在由 ``_declared_host_config_paths`` 另核。"""
+
+    kind, _, name = ident.partition(":")
+    return ((kind == "toolchain" and name in DECLARED_TOOLCHAINS) or (kind == "cache" and name in DECLARED_CACHES)
+            or (kind == "service-image" and name in DECLARED_SERVICE_IMAGES)
+            or (kind == "host-config" and _DECLARED_HOST_NAME.fullmatch(name) is not None))
+
+
+def _declared_host_config_paths(scope: Mapping[str, Any], name: str) -> list[str]:
+    """host-config:<name> 绑定的 HOME 相对路径（升序、去重）：取 scope.outside 里引用这个合同的 ``{HOME}/…`` 精确文件；
+    没有这样的行就用内置表兜底；都没有返回空列表。prefix 不是 {HOME}/ 下的精确文件（目录前缀、``..``、空名）就抛 ValueError——
+    home-config 逐路径登记，目录内容会随运行变化（例如遥测计数），不能当成稳定的配置绑定。"""
+
+    head, paths = "{HOME}/", set()
+    for row in scope.get("outside") or []:
+        if isinstance(row, Mapping) and row.get("contract") == f"host-config:{name}":
+            prefix = row.get("prefix")
+            if (not isinstance(prefix, str) or not prefix.startswith(head) or prefix.endswith("/") or len(prefix) == len(head)
+                    or ".." in prefix.split("/") or "\\" in prefix):
+                raise ValueError(f"host-config:{name} 的路径必须是 {head} 下的精确文件：{prefix!r}")
+            paths.add(prefix[len(head):])
+    if not paths and name in DECLARED_HOST_CONFIGS:
+        paths.add(DECLARED_HOST_CONFIGS[name])
+    return sorted(paths)
+
+
+def _declared_launcher_prefix(unit_id: str, unit: Mapping[str, Any], launcher: Sequence[str] | None, launcher_sha256: str) -> list[str]:
+    """单元 argv 里的启动前缀。给了 launcher（plan_gates 的实参）就以它为准；没给（直接调自检函数）时按登记的
+    ``launcher_sha256`` 在 argv 的前缀里反查——反查不到就是启动前缀与采样时不同。"""
+
+    argv = unit["argv"]
+    if launcher is not None:
+        prefix = [str(part) for part in launcher]
+        if argv[:len(prefix)] != prefix or len(argv) == len(prefix):
+            raise _declared_fail(unit_id, "的命令不以计划的启动前缀开头，或去掉前缀后没有命令")
+    else:
+        for size in range(len(argv)):
+            if declared_launcher_sha256(argv[:size]) == launcher_sha256:
+                prefix = list(argv[:size])
+                break
+        else:
+            raise _declared_fail(unit_id, "登记的 launcher_sha256 与计划里的启动前缀不一致（采样时的隔离环境与现在不同，必须重采）")
+    if declared_launcher_sha256(prefix) != launcher_sha256:
+        raise _declared_fail(unit_id, "登记的 launcher_sha256 与计划里的启动前缀不一致（采样时的隔离环境与现在不同，必须重采）")
+    return prefix
+
+
+def _declared_load_evidence(unit_id: str, tree: Path, relative: Any) -> tuple[dict[str, Any], str]:
+    """读采样证据文件：只许 tools/ci/command_input_samples/ 下一层的 .json 普通文件，返回（解析结果, 原始字节的 sha256）。"""
+
+    pure = PurePosixPath(relative) if isinstance(relative, str) and relative and "\\" not in relative else None
+    if (pure is None or pure.is_absolute() or ".." in pure.parts or str(pure) != relative or pure.suffix != ".json"
+            or str(pure.parent) != DECLARED_SAMPLES_DIR or pure.name.startswith(".")):
+        raise _declared_fail(unit_id, f"的证据路径必须是 {DECLARED_SAMPLES_DIR}/ 下的 .json 文件：{relative!r}")
+    path = Path(tree) / pure
+    if path.is_symlink() or not path.is_file():
+        raise _declared_fail(unit_id, f"的证据文件不存在或是符号链接：{relative}")
+    problem = _declared_tree_path_problem(Path(tree), path)
+    if problem is not None:
+        raise _declared_fail(unit_id, f"的证据路径不在测试树的真实目录内（{problem}）：{relative}")
+    raw = path.read_bytes()
+    try:
+        evidence = json.loads(raw.decode("utf-8"))
+    except RecursionError as error:
+        raise _declared_fail(unit_id, f"的证据文件 JSON 嵌套过深，解析不了：{relative}") from error
+    except ValueError as error:
+        raise _declared_fail(unit_id, f"的证据文件不是 JSON：{relative}（{error}）") from error
+    return evidence, hashlib.sha256(raw).hexdigest()
+
+
+def _declared_check_contracts(unit_id: str, scope: Mapping[str, Any], tree: Path) -> None:
+    """合同层面的自检（范围与覆盖由 unit_records 的函数负责）：合同 ID 都是评审过的、make 展开要带 make 版本、
+    服务镜像要把 Ryuk 一并绑定、镜像引用能从源码解析（解析失败 plan 失败）、git 提交号是完整的 40 位。"""
+
+    contracts = [str(item) for item in scope.get("contracts") or []]
+    unknown = sorted(item for item in contracts if not _declared_known_contract(item))
+    if unknown:
+        raise _declared_fail(unit_id, f"登记了未评审的合同：{unknown}")
+    if scope.get("make_expansion") and "toolchain:make" not in contracts:
+        raise _declared_fail(unit_id, "声明了 make 展开合同，必须同时声明 toolchain:make（make 版本变了展开语义可能变）")
+    for item in contracts:
+        if item.startswith("host-config:"):
+            try:
+                paths = _declared_host_config_paths(scope, item.partition(":")[2])
+            except ValueError as error:
+                raise _declared_fail(unit_id, f"的合同 {item} 不合法：{error}") from error
+            if not paths:
+                raise _declared_fail(unit_id, f"的合同 {item} 没有对应的 {{HOME}}/ 路径（scope.outside 里没有引用它的行，也不是内置的常见配置）")
+    images = [item.partition(":")[2] for item in contracts if item.startswith("service-image:")]
+    if images and "ryuk" not in images:
+        raise _declared_fail(unit_id, "声明了服务镜像合同，必须同时声明 service-image:ryuk（testcontainers 起任何容器都会先起 Ryuk）")
+    for name in images:
+        try:
+            _declared_image_default(Path(tree), name, os.environ, None)
+        except ValueError as error:
+            raise _declared_fail(unit_id, f"的服务镜像 {name} 引用解析不了：{error}") from error
+    repo = scope.get("repo") if isinstance(scope.get("repo"), Mapping) else {}
+    history = repo.get("git_history") if isinstance(repo.get("git_history"), Mapping) else {}
+    for commit in history.get("commits") or []:
+        if not isinstance(commit, str) or not _DECLARED_COMMIT.fullmatch(commit):
+            raise _declared_fail(unit_id, f"的 git_history 提交号必须是完整的 40 位小写十六进制：{commit!r}")
+    for target in scope.get("make_expansion") or []:
+        if not isinstance(target, str) or not _DECLARED_MAKE_TARGET.fullmatch(target):
+            raise _declared_fail(unit_id, f"的 make 展开目标名非法：{target!r}")
+
+
+def _declared_check_entry(unit_id: str, entry: Mapping[str, Any], unit: Mapping[str, Any], tree: Path,
+                          launcher: Sequence[str] | None) -> dict[str, Any]:
+    """一个 declared 登记项的完整自检，返回写进计划的声明（scope 全文＋证据绑定三摘要）。任何一项不符都抛 ValueError。
+
+    顺序：采样绑定字段形状 → 命令与启动前缀摘要和计划一致 → 证据文件摘要 → 证据自身一致 → scope 合法 → 登记时覆盖
+    必须 ok（不 ok 说明登记表自相矛盾，立即暴露）→ 合同自检。"""
+
+    records = _declared_records()
+    sample = entry["sample"]
+    required, optional = set(_DECLARED_SAMPLE_REQUIRED), set(_DECLARED_SAMPLE_OPTIONAL)
+    if not isinstance(sample, Mapping) or (required - set(sample)) or (set(sample) - required - optional):
+        raise _declared_fail(unit_id, f"的 sample 字段非法（必填 {sorted(required)}，可选 {sorted(optional)}）")
+    for key in ("evidence_sha256", "command_sha256", "launcher_sha256", "sampler_sha256"):
+        if not isinstance(sample[key], str) or not _DECLARED_SHA256.fullmatch(sample[key]):
+            raise _declared_fail(unit_id, f"的 sample.{key} 必须是 64 位小写十六进制")
+    prefix = _declared_launcher_prefix(unit_id, unit, launcher, sample["launcher_sha256"])
+    command = list(unit["argv"][len(prefix):])
+    try:
+        command_sha256 = declared_command_sha256(command, unit.get("cwd"), tree)
+    except ValueError as error:
+        raise _declared_fail(unit_id, f"的工作目录不在测试树内：{unit.get('cwd')!r}") from error
+    if command_sha256 != sample["command_sha256"]:
+        raise _declared_fail(unit_id, "登记的 command_sha256 与计划里的命令不一致（命令或工作目录变了，证据不再适用，必须重采）")
+    evidence, evidence_sha256 = _declared_load_evidence(unit_id, tree, sample["evidence"])
+    if evidence_sha256 != sample["evidence_sha256"]:
+        raise _declared_fail(unit_id, "的证据文件摘要与登记的 evidence_sha256 不一致（证据被改过或登记表没同步）")
+    recorded = evidence.get("command") if isinstance(evidence, Mapping) else None
+    if (not isinstance(evidence, Mapping) or evidence.get("schema_version") != DECLARED_SAMPLE_SCHEMA or evidence.get("unit_id") != unit_id
+            or not isinstance(recorded, Mapping) or not isinstance(recorded.get("argv"), list)
+            or not isinstance(recorded.get("launcher"), list) or not isinstance(recorded.get("cwd_rel"), str)):
+        raise _declared_fail(unit_id, f"的证据文件不是属于本单元的 {DECLARED_SAMPLE_SCHEMA}")
+    if evidence.get("valid", True) is not True:
+        # 采样器（declared_sampler）自己判过采样有效性（退出码、git status 前后、未跟踪读取、网络、写入范围等）；
+        # 它判无效的证据只能登记 rerun-only，不能当 declared 的依据。
+        raise _declared_fail(unit_id, f"的证据文件标记采样无效：{list(evidence.get('invalid_reasons') or [])[:3]}")
+    if (declared_launcher_sha256(recorded["launcher"]) != sample["launcher_sha256"]
+            or _declared_sha256_json({"argv": recorded["argv"], "cwd_rel": recorded["cwd_rel"]}) != recorded.get("sha256")
+            or recorded.get("sha256") != sample["command_sha256"]):
+        raise _declared_fail(unit_id, "的证据文件里记录的命令或启动前缀与登记的摘要不一致")
+    sampled = evidence.get("sampled")
+    if isinstance(sampled, Mapping) and sampled.get("sampler_sha256") not in (None, sample["sampler_sha256"]):
+        raise _declared_fail(unit_id, "的证据文件记录的采样器摘要与登记的 sampler_sha256 不一致")
+    try:
+        scope = records.validate_declared_scope(copy.deepcopy(entry["scope"]))
+    except (ValueError, TypeError, KeyError) as error:
+        raise _declared_fail(unit_id, f"的 scope 不合法：{error}") from error
+    try:
+        coverage = records.declared_coverage(evidence, scope)
+    except (ValueError, TypeError, KeyError) as error:
+        raise _declared_fail(unit_id, f"的覆盖检查无法完成（证据或 scope 形状不对）：{error}") from error
+    if not isinstance(coverage, Mapping) or coverage.get("ok") is not True:
+        undeclared = coverage.get("undeclared") if isinstance(coverage, Mapping) else None
+        raise _declared_fail(unit_id, f"登记时采样覆盖检查不通过（登记表自相矛盾）：{list(undeclared or [])[:5]}")
+    _declared_check_contracts(unit_id, scope, tree)
+    if scope.get("make_expansion") and os.path.basename(command[0]) != "make":
+        # 步骤 5 WP3b（独立验收一般 7）：Makefile 靠 make 展开合同豁免（不必再整份算进输入）只对 make 命令成立。别的命令（例如 go test）要是自己去读
+        # Makefile，Makefile 里无关目标的改动不会让它失效，漏掉对 Makefile 的真实依赖，所以单元命令（去掉启动前缀后）的第一个词必须是 make。
+        raise _declared_fail(unit_id, f"声明了 make 展开合同，但单元命令的第一个词是 {command[0]!r} 而不是 make（展开合同豁免 Makefile，只对 make 命令成立）")
+    return {"scope": scope, "sample": {"evidence_sha256": sample["evidence_sha256"], "command_sha256": sample["command_sha256"],
+                                       "sampler_sha256": sample["sampler_sha256"]}}
+
+
+def _declared_resolve(registry: Any, units: Sequence[Mapping[str, Any]], tree: Path, *, launcher: Sequence[str] | None,
+                      audit_policy: Any, input_scopes: Sequence[Mapping[str, Any]], strict: bool) -> dict[str, Any]:
+    """登记表自检的全部逻辑，返回应用所需的结果（validate_declared_registry 只是丢弃结果的薄封装）。
+
+    * 单元 ID：禁止登记 pre-a3:*（control 四链就在其中）；同一单元不能同时在 audit_policy 与登记表里登记，
+      也不能与 --input-scope 收窄提案重复（它们各自要求不同的审计合同，并存会互相覆盖）；
+    * ``strict``：登记的单元必须都在规划里；非 strict 时登记了但本次没规划的单元跳过（preflight 等组合只规划一部分）。
+      仅在 macOS 上执行的部署脚本测试在 Linux 上不规划，登记了也不算缺；
+    * rerun-only 必须写明原因；declared 的证据、命令、启动前缀、覆盖与合同逐项核对（见 _declared_check_entry）。"""
+
+    tree = Path(tree).resolve()
+    if (not isinstance(registry, Mapping) or set(registry) != {"schema_version", "units"}
+            or registry.get("schema_version") != DECLARED_REGISTRY_SCHEMA or not isinstance(registry.get("units"), Mapping)):
+        raise _declared_fail(None, "登记表格式非法")
+    planned = {str(unit.get("unit_id")): unit for unit in units if isinstance(unit, Mapping)}
+    policy_units = audit_policy.get("units") if isinstance(audit_policy, Mapping) else None
+    audit_ids = set(policy_units) if isinstance(policy_units, Mapping) else set()
+    scope_ids = {str(item.get("unit_id")) for item in input_scopes if isinstance(item, Mapping)}
+    tolerated_missing = {_deploy_unit_id(line) for line in MACOS_ONLY_DEPLOY_TESTS}
+    declared: dict[str, dict[str, Any]] = {}
+    rerun_only: dict[str, dict[str, Any]] = {}
+    not_in_plan: list[str] = []
+    for unit_id in sorted(registry["units"], key=str):
+        entry = registry["units"][unit_id]
+        if not isinstance(unit_id, str) or not unit_id:
+            raise _declared_fail(None, f"单元 ID 非法：{unit_id!r}")
+        if unit_id.startswith(PRE_A3_PREFIX):
+            raise _declared_fail(unit_id, "是 pre-A3 场景单元（control 四链就在其中），禁止登记声明级承接")
+        if unit_id in audit_ids:
+            raise _declared_fail(unit_id, "已在 audit_policy 里登记，不能同时登记声明级承接")
+        if unit_id in scope_ids:
+            raise _declared_fail(unit_id, "已有 --input-scope 收窄提案，不能同时登记声明级承接")
+        if not isinstance(entry, Mapping) or entry.get("status") not in DECLARED_STATUSES:
+            raise _declared_fail(unit_id, f"的 status 必须是 {'、'.join(DECLARED_STATUSES)}")
+        if entry["status"] == "rerun-only":
+            reason = entry.get("reason")
+            if set(entry) - {"status", "reason", "head"} or not isinstance(reason, str) or not reason.strip():
+                raise _declared_fail(unit_id, "登记为 rerun-only 必须写明原因（reason），且只许 status、reason、head 三个键")
+            if "head" in entry and not isinstance(entry["head"], bool):
+                raise _declared_fail(unit_id, "的 head 必须是布尔值")
+        elif set(entry) != {"status", "scope", "sample"}:
+            raise _declared_fail(unit_id, "登记为 declared 的键须恰为 status、scope、sample")
+        unit = planned.get(unit_id)
+        if unit is None:
+            if strict and unit_id not in tolerated_missing:
+                raise _declared_fail(unit_id, "不在本次规划的命令单元里（单元 ID 写错，或已改名、退役）")
+            not_in_plan.append(unit_id)
+            continue
+        argv = unit.get("argv")
+        if not isinstance(argv, list) or not argv or not all(isinstance(part, str) for part in argv):
+            raise _declared_fail(unit_id, "在计划里不是命令单元")
+        if entry["status"] == "rerun-only":
+            rerun_only[unit_id] = {"reason": entry["reason"].strip(), "head": bool(entry.get("head", False))}
+        else:
+            declared[unit_id] = _declared_check_entry(unit_id, entry, unit, tree, launcher)
+    return {"declared": declared, "rerun_only": rerun_only, "not_in_plan": not_in_plan}
+
+
+def validate_declared_registry(registry: Any, units: Sequence[Mapping[str, Any]], tree: Path, *, launcher: Sequence[str] | None = None,
+                               audit_policy: Any = None, input_scopes: Sequence[Mapping[str, Any]] = (), strict: bool = True) -> None:
+    """登记表自检（plan 阶段，失败关闭）：非法抛 ValueError，通过返回 None。
+
+    ``units`` 是规划好的命令单元（清单 ``units``）。可选参数：``launcher`` 不给时按登记的 launcher_sha256 在 argv 前缀里反查；
+    ``audit_policy``、``input_scopes`` 给出时核对重复登记；``strict=False`` 时登记了但本次没规划的单元跳过。详见 ``_declared_resolve``。"""
+
+    _declared_resolve(registry, units, tree, launcher=launcher, audit_policy=audit_policy, input_scopes=input_scopes, strict=strict)
+
+
+def _declared_make_logical_lines(text: str) -> list[str]:
+    """Makefile 的逻辑行：行尾奇数个反斜杠把下一行接上来（接缝处补一个空格——配方行里的 + 前缀只看逻辑行的行首）。"""
+
+    logical: list[str] = []
+    pending = ""
+    for line in text.split("\n"):
+        merged = pending + line
+        if (len(merged) - len(merged.rstrip("\\"))) % 2 == 1:
+            pending = merged[:-1] + " "
+            continue
+        logical.append(merged)
+        pending = ""
+    if pending:
+        logical.append(pending.rstrip())
+    return logical
+
+
+def _declared_make_colon(line: str) -> int | None:
+    """规则行里第一个不在 $(…)／${…} 内的冒号的位置；没有返回 None。"""
+
+    depth, index = 0, 0
+    while index < len(line):
+        char = line[index]
+        if char == "$" and index + 1 < len(line) and line[index + 1] in "({":
+            depth, index = depth + 1, index + 2
+            continue
+        if char in ")}" and depth > 0:
+            depth -= 1
+        elif char == ":" and depth == 0:
+            return index
+        index += 1
+    return None
+
+
+def _declared_make_expand(text: str, variables: Mapping[str, Sequence[str]], depth: int = 0, unreliable: frozenset[str] = frozenset()) -> str | None:
+    """展开 $(NAME)／${NAME}：只认 Makefile 里用 = := ::= += 定义过的普通变量；函数调用、自动变量、没定义的变量（可能来自环境）、用 ?= 定义的变量
+    （环境里同名的会覆盖它）、展开过深都返回 None（调用方据此退回整份文件的保守扫描）。"""
+
+    if depth > 8:
+        return None
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "$":
+            out.append(text[index])
+            index += 1
+            continue
+        match = _DECLARED_MAKE_VAR_REF.match(text, index)
+        if match is None or (match.group(1) or match.group(2)) not in variables or (match.group(1) or match.group(2)) in unreliable:
+            return None
+        inner = _declared_make_expand(" ".join(variables[match.group(1) or match.group(2)]), variables, depth + 1, unreliable)
+        if inner is None:
+            return None
+        out.append(inner)
+        index = match.end()
+    return "".join(out)
+
+
+def _declared_make_macro_lines(logical: Sequence[str]) -> list[str]:
+    """define … endef 宏体里的行。宏展开出来的行也可能带 + 前缀（make 看的是展开之后的行首），所以不管哪个目标引用它，宏体都在扫描范围内。"""
+
+    lines: list[str] = []
+    inside = False
+    for line in logical:
+        if inside:
+            if re.match(r"[ \t]*endef\b", line):
+                inside = False
+            else:
+                lines.append(line)
+        elif re.match(r"[ \t]*define[ \t]", line):
+            inside = True
+    return lines
+
+
+def _declared_make_parse(logical: Sequence[str]) -> dict[str, tuple[list[str], list[str]]] | None:
+    """粗解析 Makefile 的显式规则，只服务「make -n 会执行哪些配方行」这一个问题：返回 {目标: (先决条件, 配方行)}。
+    认识的写法之外一律返回 None（模式规则与静态模式规则、后缀规则、.DEFAULT、.SECONDEXPANSION、先决条件里的函数调用或没定义的变量、通配符……），
+    调用方退回整份文件的保守扫描——这里宁可解析不了，也不漏掉一条会执行的配方。条件指令里的规则不管条件真假一律计入（取并集）；
+    define 宏体里的行不是规则，由 _declared_make_macro_lines 另行收集。"""
+
+    variables: dict[str, list[str]] = {}
+    unreliable: set[str] = set()
+    rules: dict[str, tuple[list[str], list[str]]] = {}
+    current: list[str] = []
+    in_define = False
+    for line in logical:
+        if in_define:
+            in_define = re.match(r"[ \t]*endef\b", line) is None
+            continue
+        if re.match(r"[ \t]*define[ \t]", line):
+            in_define, current = True, []
+            continue
+        if line.startswith("\t"):
+            for target in current:
+                rules[target][1].append(line)
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue   # 空行与注释行不结束规则（配方行之间可以夹着它们）
+        current = []
+        if re.match(r"(?:ifeq|ifneq|ifdef|ifndef|else|endif)\b", stripped):
+            continue
+        assignment = _DECLARED_MAKE_ASSIGN.match(stripped)
+        if assignment is not None:
+            name, operator, value = assignment.groups()
+            if operator == "+=":
+                variables.setdefault(name, []).append(value)
+            elif operator in ("=", ":=", "::=", ":::="):
+                variables[name] = [value]
+            elif operator == "?=":
+                variables.setdefault(name, [value])
+                unreliable.add(name)   # 环境里同名的会覆盖它：只有真被目标名或先决条件引用到时才放弃解析
+            continue
+        if _DECLARED_MAKE_TARGET_VARIABLE.match(stripped):
+            continue   # 目标特定变量：不是依赖关系
+        colon = _declared_make_colon(stripped)
+        if colon is None:
+            if re.match(r"(?:export|unexport|vpath|undefine)\b", stripped):
+                continue
+            return None
+        head, rest = stripped[:colon], stripped[colon + 1:]
+        rest = rest[1:] if rest.startswith(":") else rest   # 双冒号规则
+        prerequisite_text, _, inline = rest.partition(";")
+        if _declared_make_colon(prerequisite_text) is not None:
+            return None   # 静态模式规则
+        frozen = frozenset(unreliable)
+        names, prerequisites = (_declared_make_expand(head, variables, 0, frozen), _declared_make_expand(prerequisite_text, variables, 0, frozen))
+        if names is None or prerequisites is None or any(char in names + prerequisites for char in "*?["):
+            return None   # 解析不了，或带通配符（make 解析时会按文件系统展开）
+        targets = [item[2:] if item.startswith("./") else item for item in names.split()]
+        if any("%" in item or item in (".DEFAULT", ".SECONDEXPANSION") or (item.startswith(".") and item not in _DECLARED_MAKE_SPECIAL_TARGETS)
+               for item in targets):
+            return None
+        targets = [item for item in targets if item not in _DECLARED_MAKE_SPECIAL_TARGETS]
+        for target in targets:
+            entry = rules.setdefault(target, ([], []))
+            entry[0].extend(item for item in prerequisites.replace("|", " ").split())
+            if inline.strip():
+                entry[1].append("\t" + inline.strip())
+        current = targets
+    return rules
+
+
+def _declared_make_self_rebuild(logical: Sequence[str]) -> str | None:
+    """规则的目标里有 Makefile／makefile／GNUmakefile（自重建规则）就返回该目标名。make 启动时会先重建 makefile 自己，-n 也一样，
+    规则的配方因此真的执行。按规则行的原始文本找（不展开变量），赋值行与配方行不看。"""
+
+    for line in logical:
+        stripped = line.strip()
+        if line.startswith("\t") or not stripped or stripped.startswith("#") or _DECLARED_MAKE_ASSIGN.match(stripped):
+            continue
+        colon = _declared_make_colon(stripped)
+        if colon is None or stripped[colon + 1:colon + 2] == "=":
+            continue
+        for item in stripped[:colon].split():
+            if (item[2:] if item.startswith("./") else item) in _DECLARED_MAKEFILE_NAMES:
+                return item
+    return None
+
+
+def _declared_make_reachable_recipes(logical: Sequence[str], targets: Sequence[str]) -> str | None:
+    """声明目标的先决条件闭包里的全部配方行（再加所有 define 宏体——宏展开出的行也可能带 +），拼成一段文本；解析不了返回 None。"""
+
+    rules = _declared_make_parse(logical)
+    if rules is None:
+        return None
+    seen: set[str] = set()
+    pending = [item[2:] if item.startswith("./") else item for item in targets]
+    recipes = ["\t" + line for line in _declared_make_macro_lines(logical)]   # 宏体当配方行扫（补一个 TAB，行首前缀的判断才一致）
+    while pending:
+        target = pending.pop()
+        if target in seen:
+            continue
+        seen.add(target)
+        prerequisites, lines = rules.get(target, ([], []))
+        recipes.extend(lines)
+        pending.extend(item[2:] if item.startswith("./") else item for item in prerequisites)
+    return "\n".join(recipes)
+
+
+def _declared_make_problem(tree: Path, targets: Sequence[str] | None = None) -> str | None:
+    """测试树的 Makefile 能不能做 make -n 展开合同：含解析期求值的写法（见 _DECLARED_MAKE_UNSAFE）、自重建规则、.RECIPEPREFIX，以及 -n 下仍会
+    执行的配方行（+ 行、$(MAKE)，见 _DECLARED_MAKE_ALWAYS_RUN）就不能，返回原因；可以返回 None。这份扫描就是只读保证的全部范围（没命中扫描的副作用写法不在保证内）。
+    ``targets`` 给了就只看这些目标的先决条件闭包里的配方行（执行期的写法只有被执行到才有副作用）；不给，或闭包解析不了，就看整份文件。
+    只看 make 实际会读的那一份（GNUmakefile > makefile > Makefile）。"""
+
+    for name in ("GNUmakefile", "makefile", "Makefile"):
+        path = Path(tree) / name
+        if path.is_file():
+            break
+    else:
+        return "测试树没有 Makefile，make 展开合同无法探测"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as error:
+        return f"读不到 {name}：{error}"
+    match = _DECLARED_MAKE_UNSAFE.search(re.sub(r"^[ ]*#.*$", "", text, flags=re.M))
+    if match:
+        return f"{name} 含解析期求值的写法（{match.group(0).strip()[:40]}）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑"
+    # 步骤 5 WP3b：解析期的另两类（看整份文件）——自重建规则（make -n 也会先重建 makefile 自己）与 .RECIPEPREFIX（配方行不再以 TAB 开头）。
+    cleaned = re.sub(r"^[ ]*#.*$", "", text, flags=re.M)
+    logical = _declared_make_logical_lines(cleaned)
+    rebuilt = _declared_make_self_rebuild(logical)
+    if rebuilt is not None:
+        return f"{name} 含重建 makefile 自身的规则（目标 {rebuilt}）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑"
+    if _DECLARED_MAKE_RECIPEPREFIX.search(cleaned):
+        return f"{name} 改了 .RECIPEPREFIX（配方行不再以 TAB 开头，扫描认不出配方行）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑"
+    # 执行期的（+ 行、$(MAKE)）：给了目标就只看它们的先决条件闭包里的配方行，闭包解析不了或没给目标就看整份文件。
+    scope, scanned = "", cleaned + "".join("\n\t" + line for line in _declared_make_macro_lines(logical))
+    if targets:
+        reachable = _declared_make_reachable_recipes(logical, targets)
+        if reachable is not None:
+            scope, scanned = f"声明目标 {'、'.join(str(item) for item in targets)} 的先决条件闭包里", reachable
+    always = _DECLARED_MAKE_ALWAYS_RUN.search(scanned)
+    if always:
+        line = scanned[scanned.rfind("\n", 0, always.start()) + 1:].split("\n", 1)[0].strip()
+        return (f"{name} {scope}含 make -n 下仍会真的执行的写法（{line[:60]}）：make -n 展开探测不是只读，不能用 make 展开合同，改为只重跑")
+    return None
+
+
+def apply_declared_inputs(manifest: dict[str, Any], tree: Path, *, launcher: Sequence[str] = (),
+                          input_scopes: Sequence[Mapping[str, Any]] = (), registry_path: Path | None = None) -> None:
+    """在 plan_gates 末尾对清单原地后处理：
+
+    * 登记表缺失 → 什么都不做，输出与改造前逐字相同，也不加 ``declared_inputs`` 键；登记表存在但没有登记任何本次规划的
+      单元 → 各单元仍与改造前逐字相同，只多出（计数为零的）``declared_inputs`` 汇总键，记下登记表的摘要；
+    * ``status=declared`` 的命令单元：``inputs`` 换成 ``{"declared_scope": scope, "declared_sample": {evidence_sha256,
+      command_sha256, sampler_sha256}}``（展开由 unit_records 做，不含 head；合同条目由执行器每次算当前事实时用 declared_probe 追加）。
+      声明了 make 展开合同、而 Makefile 含解析期求值写法、自重建规则，或声明目标的先决条件闭包里有 -n 下仍会执行的配方行（+ 行、$(MAKE)）的，
+      转为 rerun-only（保守扫描挡住已知会在 make -n 下执行命令的写法；没命中扫描的副作用写法不在保证内，见 _DECLARED_MAKE_UNSAFE 旁的说明）；
+    * ``status=rerun-only``：``inheritable: false`` 与 ``not_inheritable_reason``（登记的原因）；带 ``head: true`` 的保留旧的 head 条目，
+      其余去掉 head；
+    * 独立顶层键 ``manifest["declared_inputs"]`` 汇总：登记数、declared 数、rerun-only 数及每个 rerun-only 的原因
+      （最终汇报要求「每项重跑原因与耗时有记录」），不触碰 audit_policy 与 control 四链。
+
+    登记表自相矛盾时抛 ValueError（plan 失败）。``launcher`` 是计划的启动前缀（用来从 argv 里切出命令），``input_scopes`` 是本次
+    的收窄提案（核对重复）；两者都由 plan_gates 传入。"""
+
+    tree = Path(tree).resolve()
+    registry = load_declared_registry(tree, path=registry_path)
+    if registry is None:
+        return
+    units = manifest.get("units") or []
+    resolved = _declared_resolve(registry, units, tree, launcher=list(launcher), audit_policy=manifest.get("audit_policy"),
+                                 input_scopes=input_scopes, strict=manifest.get("profile") in DECLARED_FULL_PROFILES)
+    rerun = dict(resolved["rerun_only"])
+    converted: dict[str, str] = {}
+    declared: dict[str, dict[str, Any]] = {}
+    make_problems: dict[tuple[str, ...], str] = {}   # 声明目标集合 → 原因（空串＝可以）；同一组目标只扫一次
+    for unit_id, info in resolved["declared"].items():
+        if info["scope"].get("make_expansion"):
+            make_key = tuple(str(item) for item in info["scope"]["make_expansion"])
+            if make_key not in make_problems:
+                make_problems[make_key] = _declared_make_problem(tree, make_key) or ""
+            make_problem = make_problems[make_key]
+            if make_problem:
+                converted[unit_id] = make_problem
+                rerun[unit_id] = {"reason": make_problem, "head": False}
+                continue
+        declared[unit_id] = info
+    for unit in units:
+        unit_id = unit.get("unit_id")
+        if unit_id in declared:
+            unit["inputs"] = {"declared_scope": declared[unit_id]["scope"], "declared_sample": declared[unit_id]["sample"]}
+            if "toolchain:go" in (declared[unit_id]["scope"].get("contracts") or []):
+                # 命令运行期离线（WP3 定案）：go 命令不联网下载模块、不悄悄切换工具链。变量写进该单元清单的 env（随单元规格进记录），
+                # 已有同名变量且值不同就让 plan 失败——不悄悄覆盖，免得单元的原有设置被改掉而没人知道。
+                env = dict(unit.get("env") or {})
+                for key, value in DECLARED_OFFLINE_ENV.items():
+                    if key in env and env[key] != value:
+                        raise _declared_fail(unit_id, f"的清单 env 已有 {key}={env[key]!r}，与声明级承接要求的离线值 {value!r} 冲突（不覆盖，请先处理）")
+                    env[key] = value
+                unit["env"] = env
+        elif unit_id in rerun:
+            unit["inheritable"] = False
+            unit["not_inheritable_reason"] = rerun[unit_id]["reason"]
+            if isinstance(unit.get("inputs"), dict) and not rerun[unit_id]["head"]:
+                unit["inputs"] = {key: value for key, value in unit["inputs"].items() if key != "head"}
+    target = _declared_registry_file(tree, registry_path)
+    manifest["declared_inputs"] = {
+        "schema_version": DECLARED_SUMMARY_SCHEMA,
+        "registry": {"path": DECLARED_REGISTRY_PATH if registry_path is None else str(registry_path),
+                     "sha256": _unit_records_module().file_sha256(target)},
+        "registered": len(registry["units"]), "declared": len(declared), "rerun_only": len(rerun),
+        "not_in_plan": len(resolved["not_in_plan"]),
+        "declared_units": sorted(declared), "rerun_only_reasons": {unit_id: rerun[unit_id]["reason"] for unit_id in sorted(rerun)},
+        "converted_to_rerun_only": dict(sorted(converted.items())), "not_in_plan_units": sorted(resolved["not_in_plan"]),
+    }
+
+
+# ---- 合同探测（生产侧，需要子进程） ----
+
+
+def _go_compile_warmup_module() -> Any:
+    """同目录的 go_compile_warmup.py（三缓存目录位置检查 cache_paths 的唯一实现）：按路径加载。"""
+
+    name = "go_compile_warmup_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, HERE / "go_compile_warmup.py")
+        if spec is None or spec.loader is None:
+            raise ValueError(f"找不到同目录的 go_compile_warmup.py：{HERE}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+def declared_cache_locations(tree: Path, work: Path, environ: Mapping[str, str]) -> dict[str, Path]:
+    """GOCACHE／GOMODCACHE／GOTMPDIR 三个缓存根的位置核验，直接复用预热收据用的 ``go_compile_warmup.cache_paths``：
+    绝对路径、无符号链接、在工作根内、不在测试树内、互不包含；不合规抛 ValueError。给执行器的启动前置核验用——
+    缓存条目本身只写稳定声明，位置是否合规是「运行前凭证」，不进输入摘要。"""
+
+    return _go_compile_warmup_module().cache_paths(Path(tree).resolve(), Path(work).resolve(), environ)
+
+
+def _declared_scope_of(declaration: Mapping[str, Any]) -> Mapping[str, Any]:
+    """从单元的 declared 声明里取 scope（也接受直接给 scope 本身）。"""
+
+    if isinstance(declaration, Mapping) and isinstance(declaration.get("declared_scope"), Mapping):
+        return declaration["declared_scope"]
+    if isinstance(declaration, Mapping) and declaration.get("schema_version") == DECLARED_SCOPE_SCHEMA:
+        return declaration
+    raise ValueError("不是声明级输入声明：缺少 declared_scope")
+
+
+def _declared_contract_entry(kind: str, ident: str, facts: Mapping[str, Any], info: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """合同条目：摘要只覆盖稳定的事实（facts），人读的附加信息（info）只进 detail。facts 里不得有会随运行变化的内容。"""
+
+    body = {"schema_version": DECLARED_CONTRACT_SCHEMA, "type": kind, "id": ident, "facts": dict(facts)}
+    detail = {"schema_version": DECLARED_CONTRACT_SCHEMA, "type": kind, "id": ident, **facts, **dict(info or {})}
+    return {"category": "environment", "name": f"contract:{kind}:{ident}", "sha256": _declared_sha256_json(body), "detail": detail}
+
+
+def _declared_image_default(tree: Path, ident: str, environ: Mapping[str, str], work: Path | None) -> tuple[str, dict[str, Any], str]:
+    """服务镜像的默认引用，返回（引用, 来源说明, 解析来源）。解析不了抛 ValueError。
+
+    postgres／redis 从测试脚手架的 Go 常量解析；ryuk 从 backend/go.mod 取 testcontainers-go 版本，再读 GOMODCACHE 里该版本
+    源码的 ReaperDefaultImage，模块缓存里没有就用 DECLARED_RYUK_DEFAULT_IMAGES。"""
+
+    spec = DECLARED_SERVICE_IMAGES.get(ident)
+    if spec is None:
+        raise ValueError(f"未知的服务镜像合同：service-image:{ident}")
+    if "module" not in spec:
+        try:
+            text = (Path(tree) / DECLARED_IMAGE_SOURCE_FILE).read_text(encoding="utf-8")
+        except OSError as error:
+            raise ValueError(f"读不到服务镜像来源文件 {DECLARED_IMAGE_SOURCE_FILE}：{error}") from error
+        match = re.search(rf'^\s*{re.escape(spec["const"])}\s*=\s*"([^"\n]+)"', text, re.M)
+        if match is None or not _DECLARED_IMAGE_REF.fullmatch(match.group(1)):
+            raise ValueError(f"{DECLARED_IMAGE_SOURCE_FILE} 里解析不到常量 {spec['const']} 的镜像引用")
+        return match.group(1), {"file": DECLARED_IMAGE_SOURCE_FILE, "const": spec["const"]}, "source"
+    try:
+        go_mod = (Path(tree) / spec["go_mod"]).read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError(f"读不到 {spec['go_mod']}：{error}") from error
+    found = re.search(rf'^\s*(?:require\s+)?{re.escape(spec["module"])}\s+(v[0-9A-Za-z.+-]+)', go_mod, re.M)
+    if found is None:
+        raise ValueError(f"{spec['go_mod']} 里没有 {spec['module']} 的版本，解析不了 Ryuk 默认镜像")
+    version = found.group(1)
+    source = {"module": spec["module"], "version": version, "const": spec["const"]}
+    modcache = environ.get("GOMODCACHE") or (str(Path(work) / "go-mod-cache") if work is not None else None)
+    if modcache:
+        path = Path(modcache) / "github.com" / "testcontainers" / f"testcontainers-go@{version}" / DECLARED_RYUK_SOURCE
+        try:
+            match = re.search(rf'{re.escape(spec["const"])}\s*=\s*"([^"\n]+)"', path.read_text(encoding="utf-8"))
+        except OSError:
+            match = None
+        if match is not None and _DECLARED_IMAGE_REF.fullmatch(match.group(1)):
+            return match.group(1), source, "module-cache"
+    if version in DECLARED_RYUK_DEFAULT_IMAGES:
+        return DECLARED_RYUK_DEFAULT_IMAGES[version], source, "builtin-table"
+    raise ValueError(f"testcontainers-go {version} 的 Ryuk 默认镜像解析不到：请把它的 {spec['const']} 登记进 DECLARED_RYUK_DEFAULT_IMAGES")
+
+
+def _declared_walk(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    """条目事实里的叶子（点分路径, 值），跳过只供人读的字段。"""
+
+    if isinstance(value, Mapping):
+        return [leaf for key, item in value.items() if key not in DECLARED_INFO_KEYS for leaf in _declared_walk(item, f"{prefix}{key}.")]
+    if isinstance(value, (list, tuple)):
+        return [leaf for index, item in enumerate(value) for leaf in _declared_walk(item, f"{prefix}{index}.")]
+    return [(prefix.rstrip("."), value)]
+
+
+class DeclaredProbe:
+    """一次合同探测会话（用 ``declared_probe`` 创建）。
+
+    两条规则缺一不可：
+    1. **每个会话都重新探测**。执行器在启动、锁后复核、发布前复核各算一次「当前事实」，复核必须看到此刻的真实情况：
+       plan 与执行之间 docker pull 换了镜像、工具链被升级，沿用旧值会把已变化的环境错认成相同，把过期记录当成可承接。
+    2. **同一会话内同一事实只探测一次**。65 个单元共用同样的工具链、镜像条目，逐单元重探既慢（可执行文件要整个算摘要），
+       也会让同一次计算里出现两个互相矛盾的事实。会话内的缓存按条目键记忆，会话结束即丢弃，下一个会话从头探测。
+
+    探测失败不抛异常：值写成 ``unavailable(rc=N)``（沿用 entry_steps 的约定），与成功值不同，所以不会被错误承接；
+    ``declared_contract_problems`` 把这类情形列成原因，供执行器把单元标为不可承接。
+    """
+
+    def __init__(self, *, runner: Any = None, environ: Mapping[str, str] | None = None, tree: Path | None = None,
+                 work: Path | None = None, require_offline: bool | None = None) -> None:
+        self.steps = _entry_steps_module()
+        self.environ = None if environ is None else dict(environ)
+        self.tree = Path(tree if tree is not None else Path.cwd()).resolve()
+        self.require_offline = DECLARED_REQUIRE_OFFLINE if require_offline is None else bool(require_offline)
+        base = runner if runner is not None else self.steps.default_runner
+
+        def bound(argv: Sequence[str], env: Mapping[str, str] | None, cwd: Path | None) -> tuple[int, str]:
+            # entry_steps 的输入解析（例如 image_ref）调 ctx.run 时不带环境；统一补上本会话的环境，
+            # 保证所有探测命令（docker、go、make、git）看到的是同一份环境（缺省即进程环境，与执行器一致）。
+            return base(argv, self.environ if env is None else env, cwd)
+
+        self.ctx = self.steps.Context(params={}, driver_dir=HERE, steps_dir=Path(tempfile.gettempdir()), runner=bound)
+        cache = self._env().get("GOCACHE")
+        self.work = Path(work).resolve() if work is not None else (Path(cache).parent if cache else None)
+        self._memo: dict[tuple[str, ...], dict[str, Any]] = {}
+
+    def __call__(self, declaration: Mapping[str, Any]) -> list[dict[str, Any]]:
+        return self.entries(declaration)
+
+    def _env(self) -> Mapping[str, str]:
+        return self.environ if self.environ is not None else os.environ
+
+    def _first_line(self, argv: Sequence[str], cwd: Path) -> str:
+        rc, out = self.ctx.run(list(argv), cwd=cwd, env=self.environ)
+        lines = [line.strip() for line in str(out).splitlines() if line.strip()]
+        return lines[0][:300] if rc == 0 and lines else f"unavailable(rc={rc})"
+
+    def _which(self, name: str) -> Path | None:
+        path_value = self._env().get("PATH")
+        found = shutil.which(name, path=os.defpath if path_value is None else path_value)
+        return Path(os.path.realpath(found)) if found else None
+
+    def _memoized(self, key: tuple[str, ...], build: Any) -> dict[str, Any]:
+        if key not in self._memo:
+            self._memo[key] = build()
+        return copy.deepcopy(self._memo[key])
+
+    def _module_dir(self, repo: Mapping[str, Any]) -> Path:
+        """go 命令的工作目录＝go.mod 所在目录：go 的工具链选择（GOTOOLCHAIN=auto 时按 go.mod 的 go 行切换）取决于它，
+        在别处探测会看到与单元实际使用的不同的工具链。"""
+
+        for item in repo.get("files") or []:
+            path = item.get("path") if isinstance(item, Mapping) else item
+            if isinstance(path, str) and (path == "go.mod" or path.endswith("/go.mod")):
+                return (self.tree / path).parent
+        return self.tree / "backend" if (self.tree / "backend" / "go.mod").is_file() else self.tree
+
+    def entries(self, declaration: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """给定单元的 declared 声明，返回它的全部 ``contract:*`` 条目（按名字排序）。"""
+
+        scope = _declared_scope_of(declaration)
+        repo = scope.get("repo") if isinstance(scope.get("repo"), Mapping) else {}
+        module_dir = self._module_dir(repo)
+        found: dict[str, dict[str, Any]] = {}
+        for ident in scope.get("contracts") or []:
+            entry = self._contract(str(ident), module_dir, scope)
+            found[entry["name"]] = entry
+        history = repo.get("git_history") if isinstance(repo.get("git_history"), Mapping) else {}
+        for commit in history.get("commits") or []:
+            entry = self._memoized(("git-history", str(commit)), lambda commit=str(commit): self._git_history(commit))
+            found[entry["name"]] = entry
+        for target in scope.get("make_expansion") or []:
+            entry = self._memoized(("make-expansion", str(target)), lambda target=str(target): self._make_expansion(target))
+            found[entry["name"]] = entry
+        return [found[name] for name in sorted(found)]
+
+    def _contract(self, ident: str, module_dir: Path, scope: Mapping[str, Any]) -> dict[str, Any]:
+        kind, _, name = ident.partition(":")
+        if kind == "toolchain":
+            return self._memoized(("toolchain", name, str(module_dir) if name == "go" else ""), lambda: self._toolchain(name, module_dir))
+        if kind == "cache":
+            return self._memoized(("cache", name), lambda: self._cache(name))
+        if kind == "service-image":
+            return self._memoized(("service-image", name), lambda: self._service_image(name))
+        if kind == "host-config":
+            if not _DECLARED_HOST_NAME.fullmatch(name):
+                raise ValueError(f"未知的声明合同：{ident}")
+            paths = _declared_host_config_paths(scope, name)
+            if not paths:
+                raise ValueError(f"未知的 HOME 配置合同（scope.outside 里没有引用它的 {{HOME}}/ 行，也不是内置的常见配置）：{ident}")
+            return self._memoized(("host-config", name, *paths), lambda: self._host_config(name, paths))
+        raise ValueError(f"未知的声明合同：{ident}")
+
+    def _toolchain(self, name: str, module_dir: Path) -> dict[str, Any]:
+        """版本行＋白名单 PATH 解析到的可执行文件摘要；go 另加 GOROOT（VERSION、go、compile／link／asm／vet 的摘要）与关键环境的生效值。
+        go 在 go.mod 所在目录探测；其余在测试树根探测（单元里 pnpm 也是从树根以 --dir frontend 调用，corepack 取版本看当前目录）。"""
+
+        if name not in DECLARED_TOOLCHAINS:
+            raise ValueError(f"未知的工具链合同：toolchain:{name}")
+        cwd = module_dir if name == "go" else self.tree
+        found = self._which(name)
+        facts: dict[str, Any] = {"version_line": self._first_line(DECLARED_TOOLCHAINS[name], cwd),
+                                 "executable_sha256": "missing" if found is None else _declared_file_sha256(found)}
+        if name == "go":
+            facts.update(self._go_facts(cwd))
+        facts["value"] = facts["version_line"]
+        return _declared_contract_entry("toolchain", name, facts, {} if found is None else {"executable": str(found)})
+
+    def _go_facts(self, cwd: Path) -> dict[str, Any]:
+        keys = ("GOROOT", "GOTOOLDIR", *DECLARED_GO_ENV_KEYS)
+        rc, out = self.ctx.run(["go", "env", "-json", *keys], cwd=cwd, env=self.environ)
+        try:
+            payload = json.loads(out)
+            if rc != 0 or not isinstance(payload, dict) or not payload.get("GOROOT") or not payload.get("GOTOOLDIR"):
+                raise ValueError("go env 输出不可用")
+            values = {key: str(payload.get(key, "")) for key in keys}
+        except ValueError:
+            marker = f"unavailable(rc={rc})"
+            facts: dict[str, Any] = {"goroot": marker, "env": marker}
+        else:
+            root, tool_dir = Path(values["GOROOT"]), Path(values["GOTOOLDIR"])
+            facts = {"goroot": {"path": values["GOROOT"], "version_sha256": _declared_file_sha256(root / "VERSION"),
+                                "go_sha256": _declared_file_sha256(root / "bin" / "go"),
+                                "tools": {tool: _declared_file_sha256(tool_dir / tool) for tool in DECLARED_GO_TOOLS}},
+                     "env": {key: values[key] for key in DECLARED_GO_ENV_KEYS}}
+        if self.require_offline:
+            env = facts["env"]
+            unmet = ({key: {"expected": expected, "actual": env.get(key)} for key, expected in DECLARED_OFFLINE_ENV.items()
+                      if env.get(key) != expected} if isinstance(env, dict) else {"*": {"expected": "go env 可用", "actual": env}})
+            facts["requires"] = {"env_equals": dict(DECLARED_OFFLINE_ENV)}
+            facts["requirements"] = {"met": not unmet, "unmet": unmet}
+        return facts
+
+    def _cache(self, name: str) -> dict[str, Any]:
+        """缓存合同：只有稳定声明（角色、位置类别、规则），不含内容也不含绝对路径。"""
+
+        definition = DECLARED_CACHES.get(name)
+        if definition is None:
+            raise ValueError(f"未知的缓存合同：cache:{name}")
+        return _declared_contract_entry("cache", name, {**copy.deepcopy(definition), "value": definition["rule"]})
+
+    def _hub_prefix_configured(self) -> bool:
+        if str(self._env().get(DECLARED_HUB_PREFIX_ENV, "")).strip():
+            return True
+        home = self._env().get("HOME")
+        if not home:
+            return False
+        try:
+            text = (Path(home) / DECLARED_TESTCONTAINERS_PROPERTIES).read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return False
+        # properties 格式：键与值之间是 = 或 : 或空白；只在同一行内找值（空值不算配置）。
+        return re.search(rf'^[ \t]*{re.escape(DECLARED_HUB_PREFIX_PROPERTY)}(?:[ \t]*[=:][ \t]*|[ \t]+)\S', text, re.M) is not None
+
+    def _service_image(self, name: str) -> dict[str, Any]:
+        """服务镜像：实际引用（默认引用，postgres 可被环境变量覆盖）＋ ``docker image inspect`` 的镜像 Id（复用 entry_steps 的
+        image_ref 输入）。引用解析不了、或配置了 Hub 前缀时失败关闭：镜像 Id 记 unavailable。"""
+
+        spec = DECLARED_SERVICE_IMAGES.get(name)
+        if spec is None:
+            raise ValueError(f"未知的服务镜像合同：service-image:{name}")
+        override_env = spec.get("override_env")
+        override = str(self._env().get(override_env, "")).strip() if override_env else ""
+        try:
+            default, source, resolved_from = _declared_image_default(self.tree, name, self._env(), self.work)
+        except ValueError as error:
+            facts = {"reference": "unresolved", "default_reference": "unresolved", "source": None, "override_env": override_env,
+                     "override_value": override or None, "hub_prefix_configured": self._hub_prefix_configured(),
+                     "image_id": "unavailable(unresolved-reference)", "value": "unavailable(unresolved-reference)"}
+            return _declared_contract_entry("service-image", name, facts, {"error": str(error)})
+        reference = override if override and default.startswith(spec.get("override_prefix", "\0")) else default
+        hub_prefix = self._hub_prefix_configured()
+        if hub_prefix:
+            image_id = "unavailable(hub-prefix-configured)"
+        else:
+            probed = self.steps.resolve(self.steps.Input("environment", "image_ref", reference), self.ctx)
+            image_id = str(probed.get("detail", {}).get("value", "unavailable(missing)"))
+        facts = {"reference": reference, "default_reference": default, "source": source, "override_env": override_env,
+                 "override_value": override or None, "hub_prefix_configured": hub_prefix, "image_id": image_id, "value": image_id}
+        return _declared_contract_entry("service-image", name, facts, {"resolved_from": resolved_from})
+
+    def _git_history(self, commit: str) -> dict[str, Any]:
+        """git 历史合同：固定提交的树对象 ID。内容寻址，新提交不改旧对象，所以 HEAD 移动不使条目变化；提交缺失（浅克隆）时
+        记 unavailable。"""
+
+        if not _DECLARED_COMMIT.fullmatch(commit):
+            raise ValueError(f"git 历史合同的提交号必须是完整的 40 位小写十六进制：{commit!r}")
+        tree_id = self._first_line(["git", "rev-parse", "--verify", f"{commit}^{{tree}}"], self.tree)
+        return _declared_contract_entry("git-history", commit, {"commit": commit, "tree": tree_id, "value": tree_id})
+
+    def _make_expansion(self, target: str) -> dict[str, Any]:
+        """make 展开合同：``make -s --no-print-directory -n <目标>`` 的展开文本摘要，替代把整个 Makefile 当输入——只有这个目标
+        实际会执行的命令变了才失效。测试树的绝对路径（$(CURDIR) 及由它派生的变量）规范化为 {TREE}，换工作根不失效。
+        plan 阶段的 Makefile 保守扫描（见 _declared_make_problem）把已知会在 make -n 下执行命令的写法挡在外面；没命中扫描却仍有副作用的写法不在保证内。
+        探测环境清空 MAKEFLAGS 与 MAKEFILES：调用方环境里的 -j、-t 之类选项或额外的 makefile 不该改变展开语义（单元真正执行时也是白名单环境）。"""
+
+        if not _DECLARED_MAKE_TARGET.fullmatch(target):
+            raise ValueError(f"make 展开目标名非法：{target!r}")
+        rc, out = self.ctx.run(["make", "-s", "--no-print-directory", "-n", target], cwd=self.tree,
+                               env={**self._env(), "MAKEFLAGS": "", "MAKEFILES": ""})
+        if rc != 0:
+            return _declared_contract_entry("make-expansion", target, {"target": target, "expansion_sha256": f"unavailable(rc={rc})",
+                                                                      "lines": None, "value": f"unavailable(rc={rc})"})
+        text = str(out)
+        for absolute in sorted({str(self.tree), os.path.realpath(self.tree)}, key=len, reverse=True):
+            # 只替换整段路径前缀（后面不能紧跟路径字符），免得把共享前缀的别的目录（如 test-tree-hist）截坏。
+            text = re.sub(re.escape(absolute) + r"(?![\w.+-])", lambda _match: "{TREE}", text)
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        facts = {"target": target, "expansion_sha256": digest, "lines": len([line for line in text.splitlines() if line.strip()]),
+                 "value": digest}
+        return _declared_contract_entry("make-expansion", target, facts, {"text": text[:2000]})
+
+    def _host_config(self, name: str, paths: Sequence[str]) -> dict[str, Any]:
+        """HOME 下配置文件：每个路径存在则内容摘要，不存在记 missing（缺失也是一种状态）；位置只写 {HOME} 别名，换用户目录
+        不改摘要的含义。HOME 不可用时失败关闭（unavailable）。"""
+
+        home = self._env().get("HOME")
+        usable = bool(home) and os.path.isabs(str(home))
+        files = [{"alias": "{HOME}/" + relative, "state": _declared_file_sha256(Path(str(home)) / relative) if usable else "unavailable(no-home)"}
+                 for relative in paths]
+        value = files[0]["state"] if len(files) == 1 else _declared_sha256_json(files)
+        return _declared_contract_entry("host-config", name, {"files": files, "value": value})
+
+
+def declared_probe(*, runner: Any = None, environ: Mapping[str, str] | None = None, tree: Path | None = None,
+                   work: Path | None = None, require_offline: bool | None = None) -> DeclaredProbe:
+    """创建一个合同探测会话（探测回调工厂），给执行器经 ``ContextVar _DECLARED_PROBE`` 取用。
+
+    用法（unit_executor）：``_run_gates_current`` 加载 entry 模块后 ``_DECLARED_PROBE.set(entry.declared_probe)``（设的是工厂）；
+    ``_gate_currents`` 每次被调用时，若有命令单元的 inputs 含 ``declared_scope``，先 ``session = _DECLARED_PROBE.get()()``
+    （参数全部可省：``tree`` 缺省取当前目录＝测试树，``environ`` 缺省取进程环境，``work`` 缺省取 GOCACHE 的父目录），
+    再对每个这样的单元 ``entries = session(item["inputs"])``，把条目并进它的输入明细。每次 ``_gate_currents`` 新建会话＝
+    重新探测，会话内多个单元共享探测结果（见 DeclaredProbe）。``runner`` 是 ``entry_steps.Context`` 的注入点
+    （签名 ``(argv, env, cwd) -> (rc, stdout)``），测试用假 runner 模拟 docker／go／node／make。"""
+
+    return DeclaredProbe(runner=runner, environ=environ, tree=tree, work=work, require_offline=require_offline)
+
+
+def declared_contract_entries(declaration: Mapping[str, Any], *, runner: Any = None, environ: Mapping[str, str] | None = None,
+                              tree: Path | None = None, work: Path | None = None, require_offline: bool | None = None) -> list[dict[str, Any]]:
+    """一次性探测：给定单元的 declared 声明，现取合同事实，返回 ``contract:*`` 条目列表（每项
+    ``{category: "environment", name: "contract:<类型>:<ID>", sha256, detail: {schema_version: "declared-contract/v1", type, id, …}}``）。
+    等价于新建一个会话只探测这一个声明；要在多个单元间共享探测结果，用 ``declared_probe``。"""
+
+    return declared_probe(runner=runner, environ=environ, tree=tree, work=work, require_offline=require_offline).entries(declaration)
+
+
+def declared_contract_problems(entries: Sequence[Mapping[str, Any]], *, argv: Sequence[str] | None = None) -> list[str]:
+    """合同条目里「不能承接」的情形（空列表＝没有问题），给执行器的前置核验用：
+
+    * 任何事实值是 ``unavailable(…)``（探测失败：docker 不在、go 不在、提交缺失、镜像引用解析不了、配置了 Hub 前缀等）；
+    * 可执行文件缺失；
+    * 离线要求打开时 ``requirements.met`` 不是 True（门禁环境没有真的注入 GOFLAGS／GOPROXY／GOTOOLCHAIN）；
+    * 给了 ``argv`` 时，命令是 ``go test`` 而缺缓存合同要求的参数（如 ``-count=1``，防测试结果缓存成为隐藏输入）。``argv`` 可以带
+      启动前缀也可以不带：在其中找相邻的 ``go``、``test`` 两个词，找到才算 go test 命令。"""
+
+    problems: list[str] = []
+    words = list(argv) if argv is not None else []
+    go_test = next((index for index in range(len(words) - 1) if words[index:index + 2] == ["go", "test"]), None)
+    for entry in entries:
+        name, detail = str(entry.get("name")), entry.get("detail") or {}
+        for path, value in _declared_walk(detail):
+            if path != "value" and isinstance(value, str) and value.startswith("unavailable("):
+                problems.append(f"{name}：{path} 探测失败（{value}）")
+        if detail.get("executable_sha256") == "missing":
+            problems.append(f"{name}：找不到可执行文件")
+        requirements = detail.get("requirements")
+        if isinstance(requirements, Mapping) and requirements.get("met") is not True:
+            problems.append(f"{name}：命令运行期离线要求未满足（{requirements.get('unmet')}）")
+        requires = detail.get("requires")
+        flags = requires.get("go_test_argv_contains") if isinstance(requires, Mapping) else None
+        if flags and go_test is not None:
+            lacking = [flag for flag in flags if flag not in words[go_test:]]
+            if lacking:
+                problems.append(f"{name}：go test 命令缺少参数 {lacking}")
+    return problems
 
 
 # ---------------------------------------------------------------------------
@@ -1367,6 +2537,8 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     plan.add_argument("--audit-policy", type=Path, help="明确登记可验收输入合同；未登记单元一律重跑，不宣称覆盖完整")
     plan.add_argument("--recorded-full79-spec", type=Path, help="Claude已批准完整79单元的外持JSON")
     plan.add_argument("--recorded-full79-spec-sha256", help="上述原字节的外持SHA；不能自行刷新")
+    plan.add_argument("--declared-registry", type=Path, default=None,
+                      help="命令单元声明级承接登记表（缺省取测试树的 tools/ci/command_input_scopes.json，缺失即不启用；测试用）")
     recorded = sub.add_parser("recorded-full79-inputs", help="只读核固定79接线及真实夹具、预算来源")
     recorded.add_argument("--spec", type=Path, required=True)
     recorded.add_argument("--sha256", required=True)
@@ -1457,6 +2629,7 @@ def main(argv: list[str] | None = None) -> int:
                                   input_scopes=[json.loads(path.read_text()) for path in args.input_scope],
                                   audit_policy=json.loads(args.audit_policy.read_text()) if args.audit_policy else None,
                                   recorded_bridge=bridge,
+                                  declared_registry=args.declared_registry,
                                   with_gates=with_gates,
                                   pre_a3_units=args.pre_a3_units, pre_a3_env=pre_a3_env,
                                   pre_a3_data_inputs=data_inputs,

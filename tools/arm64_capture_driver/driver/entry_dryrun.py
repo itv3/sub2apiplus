@@ -46,6 +46,9 @@
 ``--reexecute``（重新执行全集）互斥。登记来源使用精确读集策略时，显式带 ``--audit-policy <策略>``，策略按原登记合同校验、
 摘要进入结论，取锁后派发前与结束收口时再次复核。策略只随逐单元承接或显式开工空跑使用；授权、撤销和来源复核仍由原门禁完成。
 后台验证接着的空跑不带请求；后台明确登记了策略时，不自动启动缺少当前批准的空跑，由操作员带请求与策略显式执行。
+声明级承接的采样方式（步骤 5 WP3b）：``--declared-sample off|always|every:N``（缺省 off）原样交给入口编排器，再交给入口门禁与 pre-A3 的执行器，
+决定声明级命令单元的读集证据来自登记表还是每次执行自己采样；非法值在这里就拒绝。非 off 的取值写进结论的 ``declared_sample``、结论文件名
+带 ``-declared-sample-<取值>``（采样方式不同的空跑是不同的空跑，不互相顶替），后台验证接着的空跑不带它；缺省时结论、文件名与命令行与改造前逐字相同。
 Claude 逐单元空跑可消费本轮已有的普通或完整79接线 pre-A3 认证：准备阶段用原认证验证器核验源文件，原字节写入演练认证
 坐标，随后仍由入口复核与登记复用。源认证和原记录不改写；缺源保留首次运行，坏源明确失败，不降级另跑掩盖问题。
 
@@ -346,6 +349,13 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if policy is not None and request is None and not args.opening:
         raise DryRunError("--audit-policy 只与 --unit-inherit-request 或显式 --opening 一起使用")
     policy_reference = _audit_policy_reference(Path(policy)) if policy is not None else None
+    # 声明级承接的采样方式（步骤 5 WP3b）：缺省 off；程序化调用（测试）的参数对象可能没有这个属性。只有「没给」（属性不存在或为 None）才是缺省；
+    # 空字符串是非法取值（入口脚本的正则同样拒绝），不能被 ``or`` 悄悄当成 off。
+    requested = getattr(args, "declared_sample", None)
+    try:
+        sample = _declared_sample_mode("off" if requested is None else requested)
+    except argparse.ArgumentTypeError as error:
+        raise DryRunError(str(error)) from error
     request_sha256 = None
     if request is not None:
         if not Path(request).is_absolute() or Path(request).is_symlink() or not Path(request).is_file():
@@ -363,6 +373,9 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                        unit_inherit=request_sha256, unit_inherit_full_gates=full_gates_sha256,
                        audit_policy=policy_reference["sha256"] if policy_reference else None,
                        full_set_work=work_reference["sha256"] if work_reference else None)
+    if sample != "off":
+        # 采样方式不同的空跑是不同的空跑：结论文件名带上它，不与同提交同部署的缺省空跑互相顶替（缺省 off 的文件名不变）。
+        path = path.with_name(f"{path.stem}-declared-sample-{sample.replace(':', '-')}{path.suffix}")
     existing = _read(path)
     if existing is not None and effective_status(existing) in ("running", "passed", "failed"):
         return 0, {"action": "exists", "result": str(path), "status": effective_status(existing)}
@@ -379,6 +392,8 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
            if full_gates_request is not None else {}),
         **({"audit_policy": policy_reference} if policy_reference is not None else {}),
         **({"full_set_work": work_reference} if work_reference is not None else {}),
+        # 步骤 5 WP3b：只有显式给了非 off 的采样方式才写，缺省结论与改造前同形。
+        **({"declared_sample": sample} if sample != "off" else {}),
     }
     busy = capture_busy()
     if busy:
@@ -644,6 +659,12 @@ def _run_orchestrator(payload: Mapping[str, Any], runroot: Path, env_file: Path)
     work = _verify_full_set_work(payload)
     if work is not None:
         argv += ["--full-set-work", str(work)]
+    if payload.get("declared_sample"):
+        # 声明级承接的采样方式（步骤 5 WP3b）：结论文件是磁盘上的 JSON，派发前再核一遍取值，不把载荷里的字符串原样拼进命令行。
+        try:
+            argv += ["--declared-sample", _declared_sample_mode(payload["declared_sample"])]
+        except argparse.ArgumentTypeError as error:
+            raise DryRunError(f"空跑结论里的采样方式非法：{error}") from error
     log = runroot / "entry.out"
     with log.open("ab") as handle:
         returncode = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT).returncode
@@ -817,6 +838,17 @@ def classify_failures(client: str, failed: list[Mapping[str, Any]], root: Path) 
     return classes
 
 
+def _declared_sample_mode(value: str) -> str:
+    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；非法在最外层就拒绝。
+    与执行器 ``unit_executor.declared_sample_mode`` 以及入口脚本 ``entry-gates.sh`` 的正则 ``^(off|always|every:[1-9][0-9]*)$`` 同一规则（测试核对
+    各层一致），免得空跑放过一个执行器才报错的值：**不去首尾空白**、不认换行、前导零与大小写变体、不是字符串一律拒绝；合法的取值就是规范写法，原样返回。"""
+
+    if isinstance(value, str):
+        if value in ("off", "always") or re.fullmatch(r"every:[1-9][0-9]*", value):
+            return value
+    raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{value!r}")
+
+
 def _parse(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -837,6 +869,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                          help="逐单元承接来源后台工作区；只随主请求使用，复核原树、缓存和 bundle 并绑定结论")
     p_start.add_argument("--audit-policy", type=Path, default=None,
                          help="精确读集登记策略；与逐单元承接请求或显式开工模式一起使用，按摘要绑定并复核")
+    p_start.add_argument("--declared-sample", type=_declared_sample_mode, default="off", metavar="off|always|every:N",
+                         help="声明级承接命令单元的读集证据来源：off（缺省）用登记表证据，always 每次执行都带 strace 采样，every:N 每 N 次采样一次；"
+                              "原样交给入口编排器，非 off 的取值绑定结论（结论文件名另带取值）")
     p_start.add_argument("--to", default=None, help=f"编排器跑到哪一步（默认 {DEFAULT_TO}；--opening 默认 {OPENING_TO}）")
     p_start.add_argument("--entry", type=Path, default=HERE / "entry.sh")
     p_run = sub.add_parser("run", help="（内部）建演练根、跑编排器、写结论")

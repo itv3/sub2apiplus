@@ -61,7 +61,10 @@
 #   范围里（测试树单元读到数据根也报出），超出即判失败；明细在 executor/audit/read-audit.json。
 #   --declared-sample off|always|every:N（步骤 5 WP3b，缺省 off）：声明级承接命令单元的读集证据来源，原样交给执行器的同名选项——off 用登记表
 #   里的采样证据（零运行时开销）、always 每次执行都带 strace 采样并用本次采样证明读集仍在声明范围内、every:N 按记录库里该单元已有的正式记录数每 N 次
-#   采样一次。正式验证轮显式带 always；非法值立即退出 2；缺省时命令行、输出与改造前相同。
+#   采样一次。正式验证轮显式带 always；非法值立即退出 2；缺省时命令行、输出与改造前相同。采样器 declared_sampler.py 与本脚本同在驱动目录，
+#   是执行器的运行期组成部分（含 declared 单元的运行把它的字节算进执行器版本）；登记表 tools/ci/command_input_scopes.json 在测试树、不随驱动安装。
+#   执行汇总 summary["declared_inputs"]（registered／audit_passed／audit_failed／audit_incomplete／consumer_accepted／inherited／reruns）把声明级单元的
+#   登记数、审计通过数、消费者接受数和实际承接数分开写，每个被重跑的单元带原因与耗时；见驱动 README「单元执行记录与承接」。
 # 退出码：0 全部门禁通过（entry 组合还要 pre-A3 认证签发或沿用成功）；1 有门禁未通过（门禁结论，测试树保留供排查）；
 #   2 用法错误；3 准备或执行失败（bundle、测试树、前端依赖、字节码缓存、部署不一致、并发锁、执行器出错），没有门禁结论。
 set -Eeuo pipefail; umask 077

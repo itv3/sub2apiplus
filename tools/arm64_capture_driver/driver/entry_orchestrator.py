@@ -45,6 +45,9 @@ Claude 的 ``claude_upgrade plan`` 参数；Codex 的模板为空，沿用下面
 逐单元承接续跑：主请求 ``--unit-inherit-request`` 供首轮实际 entry 组合使用，可从首轮同时固定提供另一份已独立批准的
 ``--unit-inherit-full-gates-request``。pre-A3 按步骤记录沿用时，门禁仍实时执行，实际组合是 full-gates，选用配套请求。
 两份请求始终同时进入步骤输入，不改写批准或来源，不把首轮新记录自动加入第二轮来源；没有配套请求保持原合同的拒绝与回退。
+声明级承接的采样方式（步骤 5 WP3b）：``--declared-sample off|always|every:N``（缺省 off）原样交给入口门禁与 pre-A3 两步的执行器，决定声明级命令
+单元的读集证据来自登记表还是每次执行自己采样；非法值在这里就拒绝，非 off 的取值进入这两步的输入（同一提交下换了采样方式不沿用旧步骤记录），缺省时
+命令行、参数与步骤输入与改造前逐字相同。
 退出码：0 全部完成或沿用；1 有步骤失败；2 用法或配置错误；3 被阻塞（账本输入不一致、收口需要批准或人工处置等）或已有
 编排在运行。
 """
@@ -180,7 +183,7 @@ class Orchestrator:
                  full_set_request: Path | None = None, full_set_work: Path | None = None,
                  unit_inherit_request: Path | None = None, gate_parallel: int | None = None,
                  unit_inherit_full_gates_request: Path | None = None,
-                 audit_strict: bool = False, audit_policy: Path | None = None) -> None:
+                 audit_strict: bool = False, audit_policy: Path | None = None, declared_sample: str = "off") -> None:
         self.params = dict(params)
         if audit_strict and not audit_reads:
             raise OrchestratorError("--audit-strict 必须同时启用 --audit-reads")
@@ -200,6 +203,15 @@ class Orchestrator:
             self.params[ES.AUDIT_STRICT_PARAM] = "true"
         if audit_policy is not None:
             self.params[ES.AUDIT_POLICY_PARAM] = str(audit_policy)
+        # 声明级承接（步骤 5 WP3b）：命令单元读集证据的采样方式（--declared-sample）。与审计开关同一规则：只从本次显式选项生成步骤输入，环境里的
+        # 同名键不能暗中改变；缺省 off 不写参数、不改命令行，步骤输入与改造前逐字相同。
+        try:
+            self.declared_sample = _declared_sample_mode(declared_sample)
+        except argparse.ArgumentTypeError as error:
+            raise OrchestratorError(str(error)) from error
+        self.params.pop(ES.DECLARED_SAMPLE_PARAM, None)
+        if self.declared_sample != "off":
+            self.params[ES.DECLARED_SAMPLE_PARAM] = self.declared_sample
         if gate_parallel is not None and (type(gate_parallel) is not int or gate_parallel <= 0):
             raise OrchestratorError("--gate-parallel 必须是正整数")
         self.gate_parallel = gate_parallel
@@ -459,6 +471,9 @@ class Orchestrator:
         audit_args = (["--audit-reads"] if self.audit_reads else []) + (["--audit-strict"] if self.audit_strict else [])
         if self.audit_policy is not None:
             audit_args += ["--audit-policy", str(self.audit_policy)]
+        if self.declared_sample != "off":
+            # 声明级承接的采样方式随审计参数一并交给入口门禁（entry 与 pre-A3 两次调用共用 audit_args）；缺省 off 不追加。
+            audit_args += ["--declared-sample", self.declared_sample]
         for step in steps:
             ES.begin(self.ctx.step(step), self.ctx)
         try:
@@ -1075,6 +1090,17 @@ def _positive_parallel(value: str) -> int:
     return int(value)
 
 
+def _declared_sample_mode(value: str) -> str:
+    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；非法在最外层就拒绝。
+    与执行器 ``unit_executor.declared_sample_mode`` 以及入口脚本 ``entry-gates.sh`` 的正则 ``^(off|always|every:[1-9][0-9]*)$`` 同一规则（测试核对
+    各层一致），免得编排层放过一个执行器才报错的值：**不去首尾空白**、不认换行、前导零与大小写变体、不是字符串一律拒绝；合法的取值就是规范写法，原样返回。"""
+
+    if isinstance(value, str):
+        if value in ("off", "always") or re.fullmatch(r"every:[1-9][0-9]*", value):
+            return value
+    raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{value!r}")
+
+
 def _validate_source_work(work: Path) -> None:
     """承接工作区坐标不能经链接或上级回退悄悄指向另一份来源。"""
     roots = (work, work / "go-build-cache", work / "go-mod-cache", work / "go-tmp")
@@ -1107,6 +1133,9 @@ def _parse(argv: Sequence[str]) -> argparse.Namespace:
                         help="入口门禁检查实际读集；与 --reexecute-gates 或 --unit-inherit-request 一起使用")
     parser.add_argument("--audit-strict", action="store_true", help="同时启用 --audit-reads，完整观察宿主读取并核对精确输入")
     parser.add_argument("--audit-policy", type=Path, help="测试与命令的精确输入登记策略；同时启用 --audit-reads --audit-strict")
+    parser.add_argument("--declared-sample", type=_declared_sample_mode, default="off", metavar="off|always|every:N",
+                        help="声明级承接命令单元的读集证据来源：off（缺省）用登记表证据，always 每次执行都带 strace 采样，every:N 每 N 次采样一次；"
+                             "原样交给入口门禁与 pre-A3 两步的执行器，并进入这两步的输入")
     return parser.parse_args(argv)
 
 
@@ -1173,7 +1202,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                 reexecute_gates=args.reexecute_gates, audit_reads=args.audit_reads, full_set_request=args.full_set_request,
                                 full_set_work=args.full_set_work, unit_inherit_request=args.unit_inherit_request, gate_parallel=args.gate_parallel,
                                 unit_inherit_full_gates_request=args.unit_inherit_full_gates_request,
-                                audit_strict=args.audit_strict, audit_policy=args.audit_policy)
+                                audit_strict=args.audit_strict, audit_policy=args.audit_policy, declared_sample=args.declared_sample)
     try:
         result = orchestrator.orchestrate(plan_only=args.plan, from_step=args.from_step, to_step=args.to_step)
     except OrchestratorError as error:

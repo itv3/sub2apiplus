@@ -68,6 +68,11 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
             # 4545caf5：41082f2ee 起部署到 ARM64 的受管版本，本次登记 fedb13ac 之前的生成器；其生成的收据
             # 需在后续版本上只读重放，按"修改前已部署版本"规则登记。
             "4545caf5da2d4ca6e090239c08bfde463a56dfc36e324f0afa802a81fd954bf0",
+            # 77b57e7c：基线 e9c31b016 处的受管版本（已部署），本次（声明级承接，步骤 8）同步三个验证器钉住值之前的生成器。
+            # 10-13 的 claude-closeout-registry 冻结承接收据以显式 to_sha256 列出它，claude-closeout-supervisor 收据的
+            # base_commit／current_commit 处也是它；按「修改前已部署版本」规则登记，仅供该版本已生成收据的只读重放，
+            # 新收据仍绑定当前生成器摘要。
+            "77b57e7c677cbbe4b137a8fb5ac95554bbdd5e8fab0a92883335cb50e7ad4a38",
         }
     ),
 }
@@ -76,9 +81,9 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
 TARGET_VERIFIER_SHA256S: dict[str, str] = {
     "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
     "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
-    "unit_records.py": "5fe0b37ab7f6cb118da98c2123eb1b552bb621dec43c7d644b22f394cb3af2b6",
-    "read_audit.py": "e432599e64d0011adb8c085247ef3db4a715ac07a8b771b9100c632c20998f33",
-    "read_audit_runtime.py": "11c5914ad5ca6d1ea0882f6538e90683df6d21b4d3e6989994c621f8a7db6548"
+    "unit_records.py": "04056c95428c8d94d10290e14f403a36352935088e94b230a33976caea9312fc",
+    "read_audit.py": "7f52920ec2d331309417cf0352f944705df8cb879fbeebf3c885d7d4da193a33",
+    "read_audit_runtime.py": "dca669d56ac3ff898ae51729bcf3a8542ba08ed80aa95b8fa08d5d77ed66929b"
 }
 
 

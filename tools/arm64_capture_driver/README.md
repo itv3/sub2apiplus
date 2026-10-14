@@ -316,6 +316,19 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   自检——执行＋承接＝全集、重新执行全集不得有承接项、每条承接都追到原始的正式执行记录并逐项重验、测试组记录的测试 ID 并集
   等于全集。自检不通过，门禁结论判失败；自检通过的清单才存进记录库（`runs/`），之后的运行才能承接这次的记录。单独重验：
   `python3 driver/unit_records.py verify --manifest <清单>`。
+* 命令单元的声明级承接（步骤 5，`declared-inputs/v1`）：命令单元（子检查、后端、前端、lint、部署脚本）原先按 E2-05 从宽，整个仓库加 HEAD 都是输入，
+  任何改动都让它们不可承接。现在可以在登记表 `tools/ci/command_input_scopes.json` 里给单个命令单元登记精确的输入范围（`declared`），登记表和它的
+  采样证据 `tools/ci/command_input_samples/` 放在测试树里，**不随驱动镜像安装**；不登记或登记为 `rerun-only`（附具体原因，如依赖外部网络、读 git 历史、
+  需联网回放历史依赖）的单元维持重新执行，不是退化。首版登记表覆盖全部命令单元：declared 5 个（`egress-spec:egress-scanner-check`、
+  `egress-spec:egress-spec-egressscan-self-test`、`frontend:lint`、`frontend:typecheck`、`frontend:critical`），其余 `rerun-only`。登记表在入口门禁
+  规划阶段自检（失败关闭；不能与 `audit_policy`、`--input-scope` 重复登记；禁登记 `pre-a3:*`），记录层核验由 `unit_records.py` 的 declared 章节做。
+  读集证据有两种来源：α'（缺省，`--declared-sample off`）读登记表里的采样证据；β（`--declared-sample always|every:N`）每次执行都由 `driver/declared_sampler.py`
+  在 strace 外包一层采样、过滤并当场证明读集仍在声明范围内。`declared_sampler.py` 是执行器的运行期组成部分，**必须随驱动部署**，且含 declared 单元的运行把它的
+  字节算进执行器版本。含 `toolchain:go` 合同的声明级单元运行期强制离线（`GOFLAGS=-mod=readonly GOPROXY=off GOTOOLCHAIN=local`，由 plan 阶段写进单元清单的 env；已有同名变量且值不同则 plan 失败），
+  所以 Go 预热要先把模块缓存下载齐（见 C-02）。执行汇总 `summary["declared_inputs"]` 把四个数分开：`registered`（本次计划里登记为 declared 的命令单元数，`rerun_only` 另计）、`audit_passed`
+  （其中本次执行且声明级读集审计通过的数；`audit_failed`、`audit_incomplete` 另计，承接的单元本次没有审计）、`consumer_accepted`（消费者核验接受的数，被拒的列在
+  `consumer_rejected`）、`inherited`（实际承接数），再加 `reruns`（每个被重跑的 declared／rerun-only 单元的原因与耗时）。`audit_incomplete` 的记录
+  不可承接（`inheritable=false`），命令本身的结论不变；认证运行里该单元应重跑。
 * P0（E3-03）：门禁项里有承接的单元时，入口门禁把两份 P0 证据写成 `codex-p0-offline-gate-evidence/v2`——v1 字段之外
   登记本次运行清单（run_id、自摘要、模式）、记录库、门禁项的命令单元与测试组、本次执行／承接的单元数，以及测试树的
   工具五摘要（导出时在测试树里起子进程算，与发布认证同一个函数）。P0 收据的形状不变（两条字面 make 命令、四个证据
@@ -346,6 +359,16 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 * `--audit-policy <JSON>` 登记 `unit-audit-policy/v1`，固定 `default=reexecute-only`；`units` 按本轮实际命令或测试单元 ID 列出精确 `host_paths`、`require_read_audit=true` 与 `runtime_contract`，未知 ID 拒绝。登记单元必须覆盖闭合；未登记单元执行自身，并明确记录 `inheritable=false`、`reexecute_required`、`coverage_complete=false`。未覆盖项不能成为以后承接的来源；功能与承接边界通过不代表全集读集覆盖。缺单元、错绑或登记项审计失败仍判失败。此策略不授予承接权限，真实承接仍须原 B5a-08 请求与批准。
 * `entry.sh --audit-reads --audit-strict --audit-policy <JSON>` 将严格审计与策略文件原样传给入口门禁及 pre-A3，并绑定两步输入；环境中的同名键不能隐式启用。策略登记必须匹配实际步骤的单元集合，不能把含测试 ID 的完整门禁策略直接用于只有场景命令的 pre-A3。
 * `--declared-sample off|always|every:N`（步骤 5 WP3b，缺省 `off`）决定声明级承接命令单元的读集证据来源：`off` 用登记表里的采样证据（零运行时开销），`always` 每次执行都带 strace 采样并用本次采样证明读集仍在声明范围内（正式验证轮显式带它），`every:N` 按记录库里该单元已有的正式记录数每 N 次采样一次。选项从 `background-validate.sh start`、`entry-dryrun.sh start`、`entry.sh` 或 `entry-gates.sh` 一路原样传到执行器；非法值在最外层立即拒绝（退出 2）；非 `off` 的取值进入口门禁与 pre-A3 的步骤输入、后台验证的输入合同和空跑结论（空跑结论文件名另带取值），缺省时命令行、结论与步骤输入与改造前逐字相同；后台验证通过后自动接上的入口空跑不带它。
+* 审计事件合同 `read-audit-trace/v4`（步骤 1、2，显式开关，缺省仍是 v3）：普通受管单元由 `read_audit_runtime.py prepare` 在受管请求里写入 `trace_contract`，`run_child` 据此让过滤器产出 v4 轨迹。
+  输出事件 11 键；两路径调用（rename、link 等）的两端用 `role`（source／destination）与 `peer` 配对，失败调用带 `errno`，只读事件按「变更纪元」去重（事件上限 200000 针对去重后的条数）。
+  配套的 `OutputTrackerV4` 按对象身份记账：rename（文件与目录子树迁移）、link 可证明；符号链接、`RENAME_EXCHANGE`／`RENAME_WHITEOUT`、另一端不在盘内的两路径调用、来源未证明的 rename／link 仍保守拒绝
+  （含符号链接的测试单元因此不登记进审计策略，按未登记单元每次实时重跑）；失败的读／探测／执行类调用沿用旧规则（只要求路径已证明），只有写类调用失败按 errno 判。
+  v1～v3 的常量、已封存凭证与 control 四链 sidecar（`control_read_audit*.py` 动态复用 `read_audit.py`／`unit_records.py` 的函数对象）原样保留，既有函数与常量的默认行为字节不变。
+* 宿主快照 `read-audit-host-snapshot/v3`（步骤 3；策略登记了 control 单元的运行整次仍取 v2，其余运行取 v3）按单元实际访问方式比较：只比被观察的方面（枚举过的目录才绑目录项；只 stat 的目录只绑类型、权限、属主、大小），
+  比较函数 `host_snapshot_matches`；条目摘要只绑无条件比较集，内容与目录项经 `unit_records.check_record` 里的 `host_inputs_inherit_problems` 补比。**时间字段、inode、device 是策略性放宽，不是证明**：
+  默认认为单元不依赖，依赖的必须在审计策略里逐路径登记 `metadata_dependencies` 并附审核依据；make／`find -newer`／rsync、以 mtime 做缓存键的程序、断言 mtime 的测试不成立。轨迹不完整时一律退回整份相等。
+* 受审计单元的超时按实测定（步骤 7）：`unit_executor.json` 的 `unit_timeouts`（单元 ID → 秒，上限 14400）加必填的 `unit_timeouts_basis`（公式与依据）；超时进入单元规格，所以生成正式来源前固定，
+  H7→H8 之间不得再改，改了单元规格摘要就变、旧记录无法承接。
 * 控制终端单独绑定 `/dev/tty` 标准字符设备身份和无控制终端状态；只接受轨迹明确为 `ENXIO` 的打开失败或合同内元数据检查。成功访问、其它错误、事件缺失均拒绝，不能把所有设备读取一概豁免。
 * `/bin/bash -n` 语法检查显式设置 `SHELL=/bin/bash` 并绑定到单元规格，避免精简环境下额外查询用户数据库。其它脚本的环境保持原合同；取证和完整门禁必须使用相同的入口环境，不能用 SSH 会话环境替代。
 * 单元输入可登记 `runtime_contract`（`unit-runtime-contract/v1`）：指定专用空临时挂载点、既有生产别名遮挡和明确的动态环境输入。`read_audit_runtime.py` 创建私有挂载命名空间，分别留存实际挂载轨迹与被测轨迹，在实际环境中复核外部输入前后快照。测试单元另绑定完整 `runtime-test-spec`，沿原 `run-unit` 运输测试载荷，在私有 tmpfs 生成固定结果和首次已观察失败旁路；结果回收只接受本轮创建且身份、测试集合与摘要匹配的两类产物，消费端重放同一证明。输出坐标只绑定本轮请求，不进入稳定输入；每轮重建的宿主测试清单不能充当稳定输入。旧文件、先读后写、链接逃逸、来源不明、环境漂移或结束凭证缺失均不可承接，不放开通用移动操作或宿主写入。
@@ -670,6 +693,14 @@ B4-08 的独立生产链。详细字段、断点和后继边界见
 * VC-5 验收：`vc5-accept.sh` 开头执行 `require-passed`，当前部署的后台验证必须已是 passed，否则退出 3。
 * 收尾合入前重新执行全集：`entry-gates.sh --profile full-gates --mode re-execute`（D12：专项审计、一致性验收、升级开工的入口
   空跑与收尾合入前用重新执行全集）。
+* 跨提交、跨部署承接旧后台轮次的成果（步骤 6）：`background-validate.sh start <bundle> <分支> <提交> --unit-inherit-request <新请求> --unit-inherit-source-result <旧后台结论> [--allow-unverified-ancestry]`
+  （这两个选项只有 `background_validation.py start` 支持，由该脚本把三个位置参数之后的选项原样透传；入口空跑没有它们）。旧运行只读，新运行是新结论、新运行目录、新运行 ID，旧结论冻结副本存进 `history/`。
+  允许变化的只有提交、部署、bundle、分支与入口门禁摘要；客户端、组合（仅 full-gates）、物理 WORK、记录库与并发参数必须相同，且必须显式给审计策略与承接请求。来源结论须是 passed 或 failed、
+  进程组已退出、留有入口门禁摘要与已发布的逐单元清单——**被 stop 的运行不发布清单，其成果不能承接**。旧提交须能验证是新提交的祖先（在临时对象库里用 WORK 测试树的历史加新 bundle 验证，不动测试树）：
+  确定不是祖先永远拒绝，只有「无法验证」才可加 `--allow-unverified-ancestry`，结论如实写 `ancestry.status=unverified`。承接条件一条不放宽，仍由 `unit_inherit.py`／`unit_records.py` 在三个复核点逐条判定。
+  结论多写 `inherit_counts` 四个数（漏斗：`registered`＝清单项 inheritable 的数量，`audit_passed`＝其中来源集合有记录且读集审计成立的数量，`consumer_accepted`＝`verify_published` 重验接受的数量，
+  `inherited`＝清单处置为承接的数量；通过的结论要求 `inherited = consumer_accepted ≤ audit_passed ≤ registered`）、`rerun_units`（每个重跑单元的原因与耗时）和 `inherit_summary`；
+  没有任何单元被承接时 `outcome=full_rerun`，不静默降级为「承接」。声明级记录（`declared-inputs/v1`）与读集审计记录同样被后台的审计证据检查认可。
 * 通过之后默认接着空跑入口到 pre-A3（见下一节；`start --no-dryrun` 不接），结果记在后台验证结论的 `dryrun` 字段。
 * 两客户端都纳管时（Claude 升级 B5a-10；数据根 `control` 里两客户端都有部署收据）：
   * 仓库全量门禁两客户端只跑一次（测试集合已含 Claude 测试）。结论绑定部署收据集合（每个已纳管客户端最新的一份，交换共享根
@@ -835,6 +866,12 @@ VC-5 缺省仍执行原目标平台 `make test`。在本轮参数中显式设置
 预热通过同一统一执行器的独占准备单元运行，遵守整机预约、进程回收与日志规则；任何编译失败都在正式门禁派发前停止，诊断不会重复编译或覆盖首份收据。`GOCACHE`、`GOMODCACHE`、`GOTMPDIR` 默认取本次 `--work` 根下的独立目录；显式缓存必须在该工作根内、测试树外且互不包含，外部共享目录或符号链接拒绝。后台验证沿用 A-04 已绑定的缓存目录。
 
 `go-compile-warmup.json` 记录提交、后端源码摘要、Go 二进制与环境摘要、三个缓存根、编译日志、退出码和耗时；对应准备执行器的目录为 `go-compile-warmup-executor/`。这是编译收据，不是测试通过凭证，不能承接测试结论。性能比较必须把预热和三组测试全部耗时相加，不只比较预热后的热跑部分。
+
+步骤 5 起预热在 `go build ./...` 成功且源码未变之后追加两步：`go mod download`（**整条链路唯一联网点**，不设置也不改写任何 Go 网络变量）与 `go mod verify`（退出码 0 且有单独一行 `all modules verified`），
+再核对一次源码未变（防 `-mod=mod` 环境改写 `go.sum`）；任一步失败预热即失败。目的是让声明级命令单元可以在运行期强制离线（`GOFLAGS=-mod=readonly GOPROXY=off GOTOOLCHAIN=local`）。
+收据只新增字段 `go_sum_sha256`（无 `go.sum` 记 null）、`module_download`、`module_verify`（含 `verified`），各步独立日志 `<收据名>.mod-download.log`／`.mod-verify.log`；预热单元超时由 1860 秒升到 2400 秒
+（编译 1800＋下载 420＋校验 120＋余量 60，内部三个超时之和小于单元超时，内部先触发才能留下失败收据）。**`go mod verify` 只核对缓存里已有模块的内容与 `go.sum` 一致，不证明缓存完整**——完整性靠 `go mod download` 成功保证。
+离线后仍缺模块的命令会直接失败（响亮的失败），不会静默通过。`check-egress-bootstrap-replay` 回放历史提交、需要历史依赖，所以不做声明级承接。
 
 ## B5a-08 逐单元承接（`driver/unit_inherit.py`）
 

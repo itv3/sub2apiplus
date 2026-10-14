@@ -161,5 +161,21 @@
       "reason": "单模块 ARM64 约 19 分钟（自身 16 个测试，最长一个 234 秒），按测试方法拆 6 块"
     }
   },
-  "unit_timeout_seconds": 3600
+  "unit_timeout_seconds": 3600,
+  "unit_timeouts": {
+    "test_arm64_driver_fix_and_continue#1": 4600,
+    "test_arm64_driver_fix_and_continue#2": 4500,
+    "test_claude_real_delivery_integration#1": 3700,
+    "test_claude_sealed_gate_materials": 5400,
+    "test_claude_upgrade_candidate_seal_evidence": 14400,
+    "test_claude_upgrade_compare_accept": 14400,
+    "test_claude_upgrade_vc6_batch": 8900,
+    "test_codex_upgrade#1": 5700,
+    "test_codex_upgrade#2": 6100,
+    "test_codex_upgrade#3": 6500,
+    "test_codex_upgrade#4": 6800,
+    "test_codex_upgrade_candidate_revision": 5600,
+    "test_codex_upgrade_staging_dispatch": 6000
+  },
+  "unit_timeouts_basis": "步骤 7（10-14）：受审计单元的超时按实测定，不再一律 3600 秒。公式：候选＝max(10×不审计历史最大墙钟, 2.5×审计下已观测最大墙钟)；审计下曾被 3600 秒超时截断的单元真实耗时未知，直接取上限 14400；结果向上取整到 100 秒，只登记大于默认 3600 的单元。数据：不审计历史取 ARM64 单元记录库 10-02～10-07 共 37 个运行清单里该单元成功运行的最大墙钟（8 路并行负载下）；审计下取 10-14 H4 五个公共后台轮次的单元记录（严格审计放大 4～17 倍：evaluation_recovery 233→950 秒，candidate_seal_evidence 209→被 3600 秒截断）。生成脚本在证据目录 claude-control-plane/20261014/make_unit_timeouts.py。超时随单元规格进入记录与输入比对，必须在生成正式来源之前定好，来源与后继之间不得再改，否则旧记录的规格对不上、无法承接。"
 }

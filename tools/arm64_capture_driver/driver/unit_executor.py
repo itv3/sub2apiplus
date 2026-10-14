@@ -95,6 +95,9 @@ DEFAULT_BYTECODE_SOURCES = (Path("tools"),)
 # 受管工具身份的跨进程记忆化目录（与 codex_upgrade_tool_identity_policy.IDENTITY_MEMO_ENV 同名；执行器不导入受管模块）。
 IDENTITY_MEMO_ENV = "CODEX_UPGRADE_IDENTITY_MEMO"
 CONFIG_SCHEMA = "unit-executor-config/v1"
+# 单元级超时（配置 unit_timeouts）的上限：严格审计把重单元放大 4～17 倍（10-14 实测），统一 3600 秒会让它们必超时；
+# 上限 4 小时是为了配置写错时挂死保护不至于形同虚设。
+MAX_UNIT_TIMEOUT_SECONDS = 14400.0
 WEIGHTS_SCHEMA = "capture-test-shard-weights/v1"
 DURATIONS_SCHEMA = "capture-test-durations/v1"
 UNIT_RESULT_SCHEMA = "unit-executor-unit-result/v1"
@@ -128,12 +131,28 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 _CONTROL_READ_AUDIT: ContextVar[Any] = ContextVar("unit_executor_control_read_audit", default=None)
+# 声明级承接（declared-inputs/v1，步骤 5 工作包 WP3）的两个上下文变量，用法与 _CONTROL_READ_AUDIT 相同：只在一次 run-gates 调用内有值，
+# 调用结束由 _run_gates 复位。
+# * _DECLARED_PROBE：合同探测会话工厂（entry_gates.declared_probe）。_gate_currents 每次被调用都用它建会话、对含 declared_scope 的声明取
+#   contract:* 条目——启动、锁后复核、发布前复核各探测一次，会话内同一事实只探一次。测试可以预先设成带假 runner 的工厂。
+# * _DECLARED_RUN：本次运行的声明级上下文（_DeclaredRun），清单里有 declared 单元时才创建，否则一直是 None。其余所有新分支都先看它，或看「当前
+#   输入里有没有 declared-inputs-scope 条目」——control 四链的声明与条目里两者都没有，永远走不进去。
+_DECLARED_PROBE: ContextVar[Any] = ContextVar("unit_executor_declared_probe", default=None)
+_DECLARED_RUN: ContextVar[Any] = ContextVar("unit_executor_declared_run", default=None)
 
 
 def _executor_files(helper: Path) -> list[Path]:
     """本次执行与首尾核对共同冻结固定sidecar，不给普通默认执行追加合同。"""
     adapter = _CONTROL_READ_AUDIT.get()
-    return [helper, *(adapter.sidecar_paths() if adapter is not None else [])]
+    return [helper, *(adapter.sidecar_paths() if adapter is not None else []), *_declared_executor_files()]
+
+
+def _declared_executor_files() -> list[Path]:
+    """本次运行含声明级单元时，把采样器 declared_sampler.py 的字节也算进执行器版本（逐次采样与过滤器都靠它，它变了声明级记录整体重新产生）；
+    没有声明级单元（普通运行、control 四链）返回空列表，执行器版本与改造前逐字相同。"""
+
+    run = _DECLARED_RUN.get()
+    return [Path(__file__).resolve().parent / "declared_sampler.py"] if run is not None and run.declared else []
 
 
 def _records_module() -> Any:
@@ -215,6 +234,10 @@ class ExecutorConfig:
     raw: dict[str, Any]
     reservation_grace_seconds: float | None = 30.0
     reservation_stop_seconds: float = 5.0
+    # 单元级超时覆盖：单元 ID（含 #N 分块、!exclusive）→ 秒。只放宽、不缩短，上限见 MAX_UNIT_TIMEOUT_SECONDS，
+    # 登记必须在配置的 unit_timeouts_basis 里写明依据。超时随单元规格（spec）进入记录与输入比对，所以必须在生成
+    # 正式来源之前定好，来源与后继之间不得再改，否则旧记录的规格对不上、无法承接。
+    unit_timeouts: dict[str, float] = field(default_factory=dict)
 
 
 def load_config(path: Path) -> ExecutorConfig:
@@ -258,6 +281,30 @@ def load_config(path: Path) -> ExecutorConfig:
     grace = payload.get("orphan_grace_seconds", 10)
     if not isinstance(timeout, (int, float)) or timeout <= 0 or not isinstance(grace, (int, float)) or grace < 0:
         raise ExecutorError("单元超时或残留进程宽限期非法")
+    unit_timeouts: dict[str, float] = {}
+    if "unit_timeouts" in payload and not isinstance(payload["unit_timeouts"], dict):
+        # 键写了就必须是对象：[]、0、false、null 过去会被下面的 ``or {}`` 悄悄当成空表接受，登记过的超时表就这样无声失效；只有缺省（没有这个键）才是空表。
+        raise ExecutorError("unit_timeouts 必须是对象（单元 ID → 秒）")
+    raw_timeouts = payload.get("unit_timeouts") or {}
+    if not isinstance(raw_timeouts, dict):
+        raise ExecutorError("unit_timeouts 必须是对象（单元 ID → 秒）")
+    basis = payload.get("unit_timeouts_basis")
+    if raw_timeouts and not (isinstance(basis, str) and basis.strip()):
+        raise ExecutorError("登记了 unit_timeouts 就必须在 unit_timeouts_basis 里写明依据（公式与数据来源）")
+    for unit_id, value in raw_timeouts.items():
+        if not isinstance(unit_id, str) or not unit_id.strip():
+            raise ExecutorError(f"单元超时登记的单元 ID 非法：{unit_id!r}")
+        if isinstance(value, int) and not isinstance(value, bool) and abs(value) > MAX_UNIT_TIMEOUT_SECONDS:
+            # 超大整数（如 10**400）转不成 float，下面的 math.isfinite 会抛 OverflowError 而不是 ExecutorError；它们本来就超过上限，在这里按范围拒绝
+            # （合法的值必须在默认超时与 MAX_UNIT_TIMEOUT_SECONDS 之间，绝对值超过上限的一律不合法）。报错里不带默认超时的数值：默认超时本身若也是超大整数，
+            # 格式化它又会抛 OverflowError。
+            raise ExecutorError(f"单元超时必须大于默认超时且不超过 {MAX_UNIT_TIMEOUT_SECONDS:.0f} 秒（只放宽、不缩短）：{unit_id}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ExecutorError(f"单元超时必须是有限秒数：{unit_id}")
+        if not float(timeout) < value <= MAX_UNIT_TIMEOUT_SECONDS:
+            raise ExecutorError(f"单元超时必须大于默认 {float(timeout):.0f} 秒且不超过 {MAX_UNIT_TIMEOUT_SECONDS:.0f} 秒"
+                                f"（只放宽、不缩短）：{unit_id}")
+        unit_timeouts[unit_id] = float(value)
     reservation_grace = payload.get("reservation_grace_seconds", 30)
     reservation_stop = payload.get("reservation_stop_seconds", 5)
     for name, value in (("reservation_grace_seconds", reservation_grace), ("reservation_stop_seconds", reservation_stop)):
@@ -276,6 +323,7 @@ def load_config(path: Path) -> ExecutorConfig:
         raw=payload,
         reservation_grace_seconds=float(reservation_grace) if reservation_grace is not None else None,
         reservation_stop_seconds=float(reservation_stop),
+        unit_timeouts=unit_timeouts,
     )
 
 
@@ -630,6 +678,14 @@ def plan_units(
     expected = [t for ids in grouped.values() for t in ids]
     if sorted(covered) != sorted(expected) or len(covered) != len(set(covered)):
         raise ExecutorError("单元规划的测试 ID 并集不等于全集或存在重复")
+    if config.unit_timeouts:
+        if full_set:
+            # 与拆块、独占名单同一纪律：单元改名或改拆块数后，登记的超时不能静默落空。
+            missing = sorted(set(config.unit_timeouts) - {unit.unit_id for unit in units})
+            if missing:
+                raise ExecutorError("单元超时登记了规划里不存在的单元（测试改名或改拆块数后要同步配置）：" + "、".join(missing))
+        units = [replace(unit, timeout_seconds=config.unit_timeouts[unit.unit_id]) if unit.unit_id in config.unit_timeouts else unit
+                 for unit in units]
     return units
 
 
@@ -961,6 +1017,11 @@ class Outcome:
         audit = self.extra.get("read_audit")
         if audit is not None and audit.get("status") == "reexecute_required" and self.extra.get("reexecute_only") is True:
             return True
+        if (audit is not None and audit.get("status") == "incomplete" and audit.get("coverage_scope") == DECLARED_COVERAGE_SCOPE
+                and audit.get("undeclared_count") == 0):
+            # 声明级逐次采样只因证据不完整（偶发的乱码行、缺 strace 等）没能证明读集覆盖：该次记录不可承接（Recorder 写 inheritable=False），
+            # 但命令本身的通过／失败结论不变，整次运行不因此失败。
+            return True
         if audit is not None and (audit.get("undeclared_count") != 0 or audit.get("status") != "passed"):
             return False
         return True
@@ -1043,6 +1104,12 @@ class Recorder:
                 trace = audit["trace"]
                 trace["stored"] = str(self.store.put_log(Path(trace["path"]), trace["sha256"]))
             body["read_audit"] = audit
+        if outcome.extra.get("declared_contracts"):
+            # 声明级承接的运行前核验凭证（进 record_sha256，不进 inputs_sha256）；只有 declared 记录才有这个键，普通记录与 control 记录的键集合不变。
+            body["declared_contracts"] = outcome.extra["declared_contracts"]
+        if outcome.extra.get("declared_not_inheritable"):
+            # 前置核验未通过、逐次采样的证据不完整、缺 strace：这一次执行的结论照常，但记录永不成为承接来源。
+            body.update(inheritable=False, not_inheritable_reason=outcome.extra["declared_not_inheritable"])
         if item.resumed_from:
             body["resumed_from"] = item.resumed_from
         if outcome.extra.get("observed_failure"):
@@ -1058,6 +1125,649 @@ class Recorder:
         path = self.store.put_record(record) if self.store is not None else item.record_path
         outcome.extra.update(disposition="executed", record_sha256=record["record_sha256"], record_path=str(path))
         return record
+
+
+# ---------------------------------------------------------------------------
+# 声明级承接（declared-inputs/v1）：执行器一侧的接线（步骤 5 工作包 WP3）
+# ---------------------------------------------------------------------------
+# 背景：命令单元（backend 的 go test、frontend 的检查、egress-spec 的整条 make 目标……）原来声明「整个仓库四段＋HEAD」，换一次提交全部失效。
+# 声明级承接把命令的输入换成「它真实读到的目录与文件＋外部输入合同」，再用一份采样证据（strace 读集）证明读集都落在声明范围里。范围校验、
+# 覆盖检查 C1～C7 与消费者核验在 unit_records.py，登记表自检与合同探测在 entry_gates.py，采样器在 declared_sampler.py；本节是执行器要做的四件事：
+# 1. 算当前事实时并入合同条目（_gate_currents → _declared_add_contracts）；
+# 2. 单元启动前做前置核验，拍下运行前凭证（declared_contract_preflight）；
+# 3. 单元回收时产出声明级读集结果（ReadAuditor 的 declared 分支）：α'（缺省）读登记表证据、零运行时开销；β（--declared-sample）每次执行都带
+#    strace 采样、用本次采样证明读集仍在声明范围内；
+# 4. 汇总（_declared_run_summary）：登记数、审计通过数、消费者接受数、实际承接数四个数分开统计，每个被重跑的单元写明原因与耗时。
+#
+# 触发纪律（control 四链的行为必须逐字不变）：所有新分支只由「当前输入里有 declared-inputs-scope 条目」或「声明里有 declared_scope 键」触发，
+# control 的声明与条目里两者都没有；本节任何函数都不调用 _audit_module()、不导入 read_audit——覆盖检查、证据解析、凭证核验全部用 unit_records
+# 里的纯函数，采样用 declared_sampler。
+#
+# 设计盲区（已知、有意披露，不是遗漏）：采样的网络检查只覆盖 connect。采样器给 strace 的跟踪集合（declared_sampler.STRACE_OPTIONS 的 trace=）里
+# 有 connect，没有 sendto、sendmsg、sendmmsg，所以「UDP 未连接套接字」直接 sendto／sendmsg／sendmmsg 往外部地址发包是看不到的，C5 网络规则对这条
+# 路径无效。对已知的用法这个盲区不成立：TCP 外连一定先经 connect；glibc 与 Go 的 DNS 解析（不管走 UDP 还是 TCP）都先对解析服务器 connect，
+# 目的地址会被收集到。也就是说漏掉的只可能是「自己 socket() 之后从不 connect、直接 sendto／sendmsg 的程序」；登记的单元里有没有这类程序，只能靠
+# 评审它们的实现来判断，采样本身证明不了（它看不到这类调用）。以后登记新的 declared 单元时要想到这一点；要补上这个盲区得改采样器的跟踪集合
+# （它的字节进执行器版本，改了要重采），不在执行器一侧修。
+
+DECLARED_SCOPE_ENTRY = "declared-inputs-scope"
+DECLARED_COVERAGE_SCOPE = "declared-inputs/v1"
+# 逐次采样（β）覆盖不通过时的两类处理（调度者 10-14 定案；ARM64 真实采样发现 strace 在冷缓存的 Go 编译密集运行里约每三百万行有一次单行乱码
+# 系统调用，原因未明）：
+# * 未覆盖明细里的规则**全部**属于本集合——采样输出流没有完整结束（C7-stream）、出现不可容忍的未解析调用（C7-unresolved，偶发的乱码行）、strace
+#   一行都没跟踪到（C7-lines）——说明只是证据不完整、没能证明覆盖，并没有发现违规：该次记录 status=incomplete、inheritable=False，命令本身的
+#   通过／失败结论不变，整次运行不因此失败；
+# * 出现集合之外的任何规则就是 failed，记录判失败、整次运行判失败（fail-closed，不静默降级）：C0～C6 的真访问与违规；C7-command（证据不属于这条
+#   命令）；C7-format（执行器自己组装的证据格式不对，是实现缺陷，要响亮失败）；C7-invalid（组装的证据 valid 恒为真，出现说明实现有误）；C7-exit
+#   （命令本身退出码非零，单元本来就失败）。混合（既有集合内又有集合外）一律 failed。
+# 新增的覆盖规则默认不在本集合里，必须先评审归类（test_ci_declared_inputs_executor 钉住这个集合与 declared_coverage 的规则词表）。
+# 步骤 5 WP3b：集合里多了 C7-detached（采样器丢弃的 strace 标记行总数超过上限——个位数是 Go 运行时线程被杀或退出的正常现象，大面积出现说明流被截断或
+# 大批线程消失，读集可能不完整）。它和 C7-stream 同类：说明证据不足以证明覆盖，并没有发现违规，所以也只让该次记录不可承接。规则本身由记录层的
+# declared_coverage 产生（C7-detached，标记行超过 64 条触发，WP1d 已合入）；集合里的每个名字都必须是 declared_coverage 真有的规则，测试钉住这一点。
+DECLARED_INCOMPLETE_RULES = frozenset({"C7-stream", "C7-unresolved", "C7-lines", "C7-detached"})
+# 合同探测会话要「看见」的 go 环境变量（与 entry_gates.DECLARED_GO_ENV_KEYS 同值，测试钉住）：go env 的生效值受它们影响，而离线值是写在单元清单的
+# env 里的（不在执行器进程环境里）——探测必须叠上单元自己的这几个值，条目里的 env 与 requirements 才是单元真正会看到的。
+_DECLARED_PROBE_ENV_KEYS = ("GOFLAGS", "GOPROXY", "GOTOOLCHAIN", "GOEXPERIMENT", "CGO_ENABLED", "GOENV")
+# 采样证据 declared-sample/v1 的 coverage 里验证侧（unit_records._declared_validate_sample）认识的键——字段集合是闭合的，多一个键整份证据就格式非法。
+# 前六个必填，后两个可选（detached_markers：被丢弃的 strace 标记行计数；unfinished_samples：流尾悬着的调用的起始行样例，给评审看）。
+_DECLARED_SAMPLE_COVERAGE_KEYS = ("stream_complete", "unresolved", "unresolved_reasons", "unfinished_calls", "unresolved_process_events", "lines",
+                                  "detached_markers", "unfinished_samples")
+
+
+def declared_sample_mode(text: str) -> str:
+    """命令行 ``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；非法抛 argparse 的 ArgumentTypeError。
+
+    口径与入口脚本 ``entry-gates.sh`` 的正则 ``^(off|always|every:[1-9][0-9]*)$`` 逐字相同，不做任何宽容：**不去首尾空白**、不认换行、
+    不认前导零（``every:07``）、不认大小写变体（``ALWAYS``）、不是字符串一律拒绝。合法的取值本身就是规范写法，原样返回。
+    入口编排器、入口空跑、后台验证各有一份同口径的函数，测试核对四层一致——外层放过一个内层才报错的值，或者反过来，都会让同一个
+    取值在 shell 层和 Python 层得到不同结论。"""
+
+    if isinstance(text, str):
+        if text in ("off", "always") or re.fullmatch(r"every:[1-9][0-9]*", text):
+            return text
+    raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{text!r}")
+
+
+def _declared_scope_entry_of(current: Any) -> dict[str, Any] | None:
+    """当前事实的输入明细里的 declared-inputs-scope 条目；没有返回 None。control 四链与普通单元永远没有它，所有 declared 分支都先问这一句。"""
+
+    for entry in getattr(current, "inputs", None) or []:
+        if isinstance(entry, dict) and entry.get("name") == DECLARED_SCOPE_ENTRY:
+            return entry
+    return None
+
+
+def _declared_control_governed(unit_id: Any) -> bool:
+    """这个单元是不是 control 适配器管辖的（pre-A3 场景单元，含 control 四链）：声明级登记永远不管它们。
+
+    plan 阶段的登记表自检（entry_gates.apply_declared_inputs）本来就禁止登记任何 ``pre-a3:*`` 单元，正常流程里它们到不了这里；但执行器自己不能
+    只靠上游挡——清单的顶层汇总 ``declared_inputs.rerun_only_reasons`` 是磁盘上的 JSON，若哪天被写进（或被改成带上）control 单元的 ID，
+    ``ReadAuditor._declared_exempt`` 就会放过它的读集审计，control 四链的严格审计被静默跳过。所以执行器一侧再挡一次，两条判据取并：
+    ① 当前运行里 control 适配器（``_CONTROL_READ_AUDIT``）自己声明的管辖集合 ``CONTROL_UNIT_IDS``（适配器不在位、或是测试桩没有这个属性时当空集合）；
+    ② 单元 ID 以 ``pre-a3:`` 开头——适配器拿不到（计划没选中 control）时的兜底。取并而不是二选一：任何一条认出来就不是声明级单元。"""
+
+    if not isinstance(unit_id, str):
+        return False
+    adapter = _CONTROL_READ_AUDIT.get()
+    governed = getattr(adapter, "CONTROL_UNIT_IDS", None) if adapter is not None else None
+    return unit_id.startswith("pre-a3:") or (isinstance(governed, (set, frozenset)) and unit_id in governed)
+
+
+def _declared_unit_ids(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """清单里登记了声明级承接的命令单元：（declared 状态的, rerun-only 状态的）。declared＝单元输入声明带 declared_scope 键
+    （apply_declared_inputs 的产物）；rerun-only＝清单顶层 declared_inputs 汇总里列出原因的。没有登记表的清单两个集合都空。
+
+    control 适配器管辖的单元（见 ``_declared_control_governed``）两个集合里都丢掉：即使清单里有人把它们的 ID 写进汇总的 rerun_only_reasons，
+    也不会让它们进入声明级分支，control 四链的行为与没有登记表时逐字相同。"""
+
+    declared: set[str] = set()
+    for item in manifest.get("units") or []:
+        if isinstance(item, dict) and isinstance(item.get("inputs"), dict) and "declared_scope" in item["inputs"] and isinstance(item.get("unit_id"), str):
+            declared.add(item["unit_id"])
+    summary = manifest.get("declared_inputs")
+    reasons = summary.get("rerun_only_reasons") if isinstance(summary, dict) else None
+    rerun_only = {unit_id for unit_id in reasons if isinstance(unit_id, str)} if isinstance(reasons, dict) else set()
+    return ({unit_id for unit_id in declared if not _declared_control_governed(unit_id)},
+            {unit_id for unit_id in rerun_only if not _declared_control_governed(unit_id)})
+
+
+def _declared_registered(manifest: dict[str, Any], registered: Any) -> Any:
+    """``_gate_currents`` 的「已登记」集合并入登记表里的单元（declared 与 rerun-only 都并入）：有 audit_policy 时未登记单元会被追加
+    reexecute-only-policy 并把不可承接原因写成『输入合同未闭合』；登记表里的单元走自己的声明（declared）或清单字段 inheritable:false＋登记原因
+    （rerun-only），不应被它覆盖。没有登记表（含 control 四链的计划）时原样返回，同一个对象，一字不变。"""
+
+    declared, rerun_only = _declared_unit_ids(manifest)
+    if not declared and not rerun_only:
+        return registered
+    return {**registered, **{unit_id: None for unit_id in sorted(declared | rerun_only) if unit_id not in registered}}
+
+
+def _declared_sampler_module() -> Any:
+    """同目录的 declared_sampler.py（逐次采样的 strace 选项、管道过滤器、跟踪集合都用它）：按路径加载，与 _executor_files 里算进执行器版本的是同一个文件。"""
+
+    name = "declared_sampler_sibling"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / "declared_sampler.py")
+        if spec is None or spec.loader is None:
+            raise ExecutorError("找不到同目录的 declared_sampler.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
+
+
+def declared_audit_verdict(findings: list[dict[str, Any]]) -> str:
+    """覆盖检查的未覆盖明细 → 这一次执行的读集审计结论：``passed``（没有未覆盖）、``incomplete``（规则全部属于 DECLARED_INCOMPLETE_RULES：
+    只因证据不完整、没能证明覆盖，并没有发现违规）、``failed``（出现集合之外的任何规则）。判据是闭合的：集合之外一律 failed。
+
+    ``declared_coverage`` 返回的明细按（规则, 路径）排序并截断到前 200 条。明细被截断（总数大于返回的条数）时，看不到的那部分里可能有集合之外的规则，
+    所以 ``_declared_collect`` 在截断时一律判 failed（失败关闭）；本函数只判断「拿到的这批明细」。"""
+
+    rules = {str(item.get("rule")) for item in findings}
+    if not rules:
+        return "passed"
+    return "incomplete" if rules <= DECLARED_INCOMPLETE_RULES else "failed"
+
+
+def _declared_aliases(env: dict[str, str], *, tree: str, fallback: str) -> dict[str, str]:
+    """采样路径别名（TREE、WORK、HOME、TMP）：TREE＝测试树根；WORK＝GOCACHE 的父目录（三个 Go 缓存同在工作根内，缓存位置核验已强制）；
+    HOME＝环境 HOME；TMP＝TMPDIR 或 /tmp。别名要求绝对路径且不能是根；取不到合法值时用采样目录下一个不会被访问的占位目录——这时真实的缓存读写
+    会作为没有声明前缀的绝对路径被覆盖检查拒绝，而不是被悄悄放过。"""
+
+    def usable(value: Any) -> bool:
+        return isinstance(value, str) and os.path.isabs(value) and os.path.normpath(value) != "/"
+
+    placeholder = os.path.join(fallback, "declared-alias-unavailable")
+    cache = env.get("GOCACHE")
+    work = os.path.dirname(os.path.normpath(cache)) if usable(cache) else None
+    home = env.get("HOME") if usable(env.get("HOME")) else os.path.expanduser("~")
+    tmp = env.get("TMPDIR") if usable(env.get("TMPDIR")) else "/tmp"
+    return {"TREE": tree, "WORK": work if usable(work) else placeholder, "HOME": home if usable(home) else placeholder, "TMP": tmp}
+
+
+def _declared_sample_from_raw(raw: dict[str, Any], *, unit_id: str, launcher: list[str], command: list[str], cwd_rel: str,
+                              exit_code: int | None, seconds: float, tracked: tuple[set[str], set[str]], commit: str,
+                              strace_version: str, sampler: Any, records: Any) -> dict[str, Any]:
+    """把过滤器产出的 ``declared-sample-raw/v1`` 组装成 ``declared-sample/v1``（本次运行自己的证据）。
+
+    **不调用采样器的 merge_raws 也不采信它的 valid**：merge 带「运行前后 git status 为空」这类判据，在执行器并行执行、同一测试树里多个单元同时
+    跑时没有意义，还含只属于登记表起草阶段的豁免。这里只做格式组装——仓库内路径标 tracked（git 跟踪的文件，或含跟踪文件的目录；.git 内部一律
+    否）；仓库外路径、git 命令、网络照搬 raw；覆盖计数只取证据认识的键（只给评审看的诊断样例放进 ``review``，见下面的说明）；命令取单元规格，
+    退出码取单元实际退出码；采样器摘要是本次实际运行的 declared_sampler.py 的字节摘要。``valid`` 恒为真、``invalid_reasons`` 恒空：是否合格
+    完全由 ``declared_coverage`` 判，不留两套标准。"""
+
+    files, directories = tracked
+
+    def tracked_flag(path: str) -> bool:
+        relative = "" if path == "{TREE}" else path[len("{TREE}/"):]
+        if relative == ".git" or relative.startswith(".git/"):
+            return False
+        return relative in files or relative in directories
+
+    # 证据 declared-sample/v1 的 coverage 字段集合是闭合的（unit_records 只认下面这些）。过滤器产出的 raw 里还带着只给评审看的诊断样例——
+    # coverage.unresolved_samples（按原因归类的原始行样例）与顶层 detached_samples（被当垃圾行丢弃的带名字的行）——整份照搬会被消费者判格式非法
+    # （C7-format），把「偶发乱码行只让记录不可承接」错判成整次运行失败。做法同采样器自己的合并：coverage 只取证据认识的键，诊断样例放进 review
+    # （验证侧不解释 review，但它随证据一起封存，事后能看到乱码行到底长什么样）。
+    # raw 顶层的 detached_side_effects（被丢弃的垃圾行里名字属于副作用类的条数）同样是只给评审看的计数，有才写，也放进 review，不碰 coverage 的
+    # 字段集合（那是闭合的）；它不影响覆盖检查的结论（declared_coverage 只看 coverage，不读 review），合法性已由上面的 validate_raw 核过。
+    coverage = {key: raw["coverage"][key] for key in _DECLARED_SAMPLE_COVERAGE_KEYS if key in raw["coverage"]}
+    review: dict[str, Any] = {}
+    if raw["coverage"].get("unresolved_samples"):
+        review["unresolved_samples"] = {reason: list(items) for reason, items in raw["coverage"]["unresolved_samples"].items()}
+    if raw.get("detached_samples"):
+        review["detached_samples"] = list(raw["detached_samples"])
+    if raw.get("detached_side_effects"):
+        review["detached_side_effects"] = raw["detached_side_effects"]
+
+    return {
+        "schema_version": records.DECLARED_SAMPLE_SCHEMA,
+        "unit_id": unit_id,
+        "command": {"launcher": list(launcher), "argv": list(command), "cwd_rel": cwd_rel,
+                    "sha256": records.declared_command_sha256(command, cwd_rel)},
+        "sampled": {"commit": commit, "utc": records.utc_now(), "kernel": os.uname().release, "strace": strace_version,
+                    "sampler_sha256": sampler.file_sha256(sampler.HERE),
+                    "runs": [{"cache": "formal", "exit_code": exit_code, "lines": raw["lines"], "seconds": seconds}]},
+        "aliases": dict(raw["aliases"]),
+        "coverage": coverage,
+        "repo_accesses": [[path, list(kinds), tracked_flag(path)] for path, kinds in raw["repo_accesses"]],
+        "outside_accesses": [list(row) for row in raw["outside_accesses"]],
+        "git_commands": [list(argv) for argv in raw["git_commands"]],
+        "network": [dict(item) for item in raw["network"]],
+        "exit_code": exit_code,
+        "valid": True,
+        "invalid_reasons": [],
+        **({"review": review} if review else {}),
+    }
+
+
+class _DeclaredRun:
+    """一次 run-gates 调用的声明级承接上下文（放在 ContextVar ``_DECLARED_RUN`` 里；清单里没有 declared 单元时不创建）。
+
+    * ``entry``：执行器为 control 适配器而加载的 entry_gates 模块（同一个实例）——合同探测工厂、``declared_contract_problems``、缓存位置核验都在那里；
+    * ``sample_mode``：命令行 ``--declared-sample``（off／always／every:N），缺省 off；
+    * ``store``：记录库（every:N 按库里该单元已有的正式记录数决定本次采不采样；消费者接受数自检也用它）；
+    * ``preflights``：单元启动前拍下的前置核验结果，回收时取走；
+    * ``verify_memo``：``go mod verify`` 的结果（ok／failed／timeout）按 GOMODCACHE 路径记忆——缓存在单元运行期间只读，不必每个单元核一次
+      （超时也记忆：卡住的核验整次运行只等一次，见 DECLARED_GO_VERIFY_TIMEOUT_SECONDS）；
+    * 其余是同一次调用内的小缓存（登记表、git 跟踪集合、HEAD 提交、strace 版本）。"""
+
+    def __init__(self, *, entry: Any, manifest: dict[str, Any], tree: Path, sample_mode: str, declared: set[str], rerun_only: set[str]) -> None:
+        self.entry = entry
+        self.manifest = manifest
+        self.tree = Path(tree).resolve()
+        self.sample_mode = sample_mode
+        self.declared = frozenset(declared)
+        self.rerun_only = frozenset(rerun_only)
+        self.store: Any = None
+        self.preflights: dict[str, dict[str, Any]] = {}
+        self.verify_memo: dict[tuple[str, str, str], str] = {}
+        self._registry: dict[str, Any] | None = None
+        self._tracked: tuple[set[str], set[str]] | None = None
+        self._commit: str | None = None
+        self._strace_versions: dict[str, str] = {}
+
+    def sampler_module(self) -> Any:
+        return _declared_sampler_module()
+
+    def registry(self) -> dict[str, Any]:
+        """测试树里的登记表（清单的 declared_inputs 汇总记着 plan 时用的位置）；读不到返回 {}——调用方按「找不到证据」失败关闭。"""
+
+        if self._registry is None:
+            self._registry = {}
+            summary = self.manifest.get("declared_inputs")
+            located = (summary.get("registry") or {}).get("path") if isinstance(summary, dict) and isinstance(summary.get("registry"), dict) else None
+            try:
+                if isinstance(located, str) and located and located != self.entry.DECLARED_REGISTRY_PATH:
+                    path = Path(located)
+                    loaded = self.entry.load_declared_registry(self.tree, path=path if path.is_absolute() else self.tree / path)
+                else:
+                    loaded = self.entry.load_declared_registry(self.tree)
+                self._registry = dict((loaded or {}).get("units") or {})
+            except (ValueError, OSError):
+                self._registry = {}
+        return self._registry
+
+    def evidence_file(self, unit_id: str, evidence_sha256: str) -> Path | None:
+        """登记表证据文件（α' 的读集证据）：先按登记表里写的位置找，摘要对不上再在证据目录里按摘要找；位置只许是证据目录下的 .json 普通文件。
+        找不到返回 None。"""
+
+        directory = (self.tree / self.entry.DECLARED_SAMPLES_DIR).resolve()
+        candidates: list[Path] = []
+        relative = ((self.registry().get(unit_id) or {}).get("sample") or {}).get("evidence")
+        if isinstance(relative, str) and relative:
+            candidates.append(self.tree / relative)
+        if directory.is_dir():
+            candidates.extend(sorted(directory.glob("*.json")))
+        for path in candidates:
+            try:
+                if path.is_symlink() or not path.is_file() or path.resolve().parent != directory:
+                    continue
+                if _records_module().file_sha256(path) == evidence_sha256:
+                    return path
+            except OSError:
+                continue
+        return None
+
+    def tracked(self) -> tuple[set[str], set[str]]:
+        if self._tracked is None:
+            self._tracked = self.sampler_module().tracked_sets(self.tree)
+        return self._tracked
+
+    def commit(self) -> str:
+        if self._commit is None:
+            completed = subprocess.run(["git", "-C", str(self.tree), "rev-parse", "HEAD"], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            self._commit = completed.stdout.strip() if completed.returncode == 0 and completed.stdout.strip() else "unknown"
+        return self._commit
+
+    def strace_version(self, strace: str, env: dict[str, str]) -> str:
+        if strace not in self._strace_versions:
+            self._strace_versions[strace] = self.sampler_module().strace_version(strace, env)
+        return self._strace_versions[strace]
+
+    def should_sample(self, unit_id: str) -> bool:
+        """本次执行要不要带 strace 采样：off 不采；always 每次采；every:N 按记录库里该单元已有的正式记录数（对 N 取余为 0 就采，所以第一次执行
+        必采）。没有记录库时没有历史可数，按零条算。"""
+
+        if self.sample_mode == "always":
+            return True
+        found = re.fullmatch(r"every:([1-9][0-9]*)", self.sample_mode)
+        if found is None:
+            return False
+        seen = 0
+        if self.store is not None:
+            seen = sum(1 for _path, record in self.store.candidates(unit_id) if record and record.get("kind") == "formal")
+        return seen % int(found.group(1)) == 0
+
+
+def _declared_probe_overlay(unit_env: Any) -> dict[str, str]:
+    """单元清单 env 里会影响 go env 生效值的变量（离线值就在这里）。"""
+
+    env = dict(unit_env or {})
+    return {key: str(env[key]) for key in _DECLARED_PROBE_ENV_KEYS if key in env}
+
+
+def _declared_probe_session(sessions: dict[Any, Any], unit_env: Any) -> Any:
+    """取这个单元的合同探测会话。同一次 ``_gate_currents`` 调用里，探测环境相同的单元共用一个会话（同一事实只探一次）；环境按单元 env 里的 go
+    变量区分，所以所有 declared Go 单元共用一个会话，前端等不带 go 变量的单元共用另一个。回调工厂没设置是编程错误，响亮失败。"""
+
+    factory = _DECLARED_PROBE.get()
+    if factory is None:
+        raise ExecutorError("声明级单元需要合同探测回调：_DECLARED_PROBE 没有设置")
+    overlay = _declared_probe_overlay(unit_env)
+    key = tuple(sorted(overlay.items()))
+    if key not in sessions:
+        sessions[key] = factory(environ={**os.environ, **overlay}) if overlay else factory()
+    return sessions[key]
+
+
+def _declared_add_contracts(records: Any, inputs: list[dict[str, Any]], item: dict[str, Any], sessions: dict[Any, Any]) -> list[dict[str, Any]]:
+    """declared 单元的输入明细并入 ``contract:*`` 条目（每次算当前事实都重新探测；探测失败写 unavailable 值，不抛）。"""
+
+    session = _declared_probe_session(sessions, item.get("env"))
+    return records._unique([*inputs, *session(item["inputs"])])
+
+
+def _declared_file_digest(path: Path) -> str:
+    """文件内容摘要；不存在记 missing、读不了记 unreadable(原因)。这些值都不是 64 位十六进制，凭证核验会拒绝它们。"""
+
+    try:
+        if not path.is_file():
+            return "missing"
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        return f"unreadable({type(error).__name__})"
+
+
+def _declared_tree_location_ok(tree: Path, detail: dict[str, Any]) -> tuple[bool, str | None]:
+    """位置类别是 tree 的缓存根（vite 缓存、tsbuildinfo）：路径逐级不能是符号链接；还不存在没关系（命令会创建），已匹配的 glob 项也不能是符号链接。"""
+
+    relative = detail.get("path")
+    if not isinstance(relative, str) or not relative:
+        return False, "缓存合同缺少 path"
+    base = Path(tree)
+    for part in Path(relative).parts:
+        base = base / part
+        if base.is_symlink():
+            return False, f"{base} 是符号链接"
+        if not base.exists():
+            return True, None
+    pattern = detail.get("glob")
+    if isinstance(pattern, str) and pattern and base.is_dir():
+        for match in base.glob(pattern):
+            if match.is_symlink():
+                return False, f"{match} 是符号链接"
+    return True, None
+
+
+# go mod verify（go.sum 初态核验）这一步的单独超时，秒。
+# 理由：预热（go_compile_warmup）已经做过一遍 go mod download／verify（本机真实 backend 约 2 秒，ARM64 按 10 倍保守估计约 20 秒，预热里这一步的上限
+# 是 120 秒），这里只是单元启动前冗余的二次核验。它在调度线程里同步执行（Scheduler.launch → _declared_preflight），卡住（模块缓存上的锁、
+# 坏盘、网络文件系统）就会拖住调度线程：其它运行中单元的超时检查与回收全部停滞。合同探测会话的默认 runner（entry_steps.default_runner）超时
+# 是 900 秒，对这一步太长，所以单独给 180 秒（约为预热里同一步上限的 1.5 倍）。
+# 超时按「核验没通过」处理：该单元的记录 inheritable=False、命令照跑（通过／失败结论不受影响），凭证里写明 verify=timeout 与原因。结果同
+# 正常结果一样按 GOMODCACHE 记忆（_DeclaredRun.verify_memo），三个 Go 单元共用同一份缓存时整次运行最多等这一次。测试把这个常量调小来造超时。
+DECLARED_GO_VERIFY_TIMEOUT_SECONDS = 180
+
+
+def _declared_go_mod_verify(run: _DeclaredRun, *, env: dict[str, str], cwd: Path) -> str:
+    """跑 ``go mod verify``（环境＝单元实际环境，工作目录＝go.mod 所在目录），返回 ``ok``／``failed``／``timeout``。
+
+    超时用 ``DECLARED_GO_VERIFY_TIMEOUT_SECONDS``（每次调用时现取，测试可以调小）：超过就杀掉这个子进程、不再等，返回 ``timeout``。
+    其它出错（go 不在 PATH、工作目录不存在等）与过去 ``default_runner`` 把它们折成退出码 127 同一个结果：``failed``。
+    通过的判据不变：退出码为 0 且输出里有整行 ``all modules verified``（go_compile_warmup.module_verified）。"""
+
+    try:
+        completed = subprocess.run(["go", "mod", "verify"], capture_output=True, text=True, errors="replace", env=dict(env), cwd=str(cwd),
+                                   stdin=subprocess.DEVNULL, timeout=DECLARED_GO_VERIFY_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except (OSError, subprocess.SubprocessError):
+        return "failed"
+    verified = run.entry._go_compile_warmup_module().module_verified(completed.returncode, completed.stdout.encode("utf-8", "replace"))
+    return "ok" if verified else "failed"
+
+
+def _declared_cache_credential(run: _DeclaredRun, *, detail: dict[str, Any], env: dict[str, str], files: dict[str, str],
+                               tree: Path, module_dir: Path, locations: Any) -> tuple[dict[str, Any], bool, str | None]:
+    """一个 ``cache:*`` 合同的运行前核验：返回（observed, 是否通过, 不通过的原因）。observed 的字段取廉价事实（调研 4.2）：
+    ``any-content-addressed``／``any-scratch``→``{root_ok}``；``lock-derived-pnpm``→``{installed_lock_sha256, lock_file_sha256}``；
+    ``lock-derived-go-sum``→``{go_sum_sha256, verify, root_ok}``（verify 取 ok／failed／timeout／skipped）。运行后不再对缓存目录做任何整体摘要。"""
+
+    rule = detail.get("rule")
+    location = detail.get("location")
+
+    def root_ok() -> tuple[bool, str | None]:
+        if location == "work":
+            error = locations()
+            return error is None, error
+        if location == "tmp":
+            value = env.get("TMPDIR") or "/tmp"
+            ok = os.path.isabs(value) and os.path.isdir(value)
+            return ok, None if ok else f"TMPDIR 不是存在的绝对目录：{value!r}"
+        if location == "tree":
+            return _declared_tree_location_ok(tree, detail)
+        return False, f"不认识的位置类别 {location!r}"
+
+    if rule in ("any-content-addressed", "any-scratch"):
+        ok, why = root_ok()
+        observed: dict[str, Any] = {"root_ok": ok}
+        if why:
+            observed["problem"] = why
+        return observed, ok, why
+    if rule == "lock-derived-pnpm":
+        lock_file = detail.get("lock_file") or "frontend/pnpm-lock.yaml"
+        installed_lock = detail.get("installed_lock") or "frontend/node_modules/.pnpm/lock.yaml"
+        locked, installed = _declared_file_digest(tree / lock_file), _declared_file_digest(tree / installed_lock)
+        observed = {"installed_lock_sha256": installed, "lock_file_sha256": locked}
+        if not re.fullmatch(r"[0-9a-f]{64}", locked) or not re.fullmatch(r"[0-9a-f]{64}", installed):
+            why = f"锁文件或安装锁副本读不到（{lock_file}={locked}，{installed_lock}={installed}）"
+        elif installed != locked:
+            why = f"node_modules 的安装锁副本 {installed_lock} 与 {lock_file} 不是同一份（安装结果不是按当前锁文件装的）"
+        elif files.get(f"file:{lock_file}") != locked:
+            why = f"锁文件摘要不等于输入里 file:{lock_file} 条目的摘要"
+        else:
+            why = None
+        if why:
+            observed["problem"] = why
+        return observed, why is None, why
+    if rule == "lock-derived-go-sum":
+        lock_file = detail.get("lock_file") or "backend/go.sum"
+        go_sum = _declared_file_digest(tree / lock_file)
+        located, why = root_ok()
+        verify = "skipped"
+        if located:
+            # go mod verify：不联网，只核对「缓存里已有模块」的内容与 go.sum 一致，**不证明缓存完整**（模块只有 .mod、压缩包从未下载时它也输出
+            # all modules verified）；缓存完整性由预热里 go mod download 成功保证，运行期离线、缺模块会让命令直接失败。
+            key = (env.get("GOMODCACHE") or "", str(module_dir), go_sum)
+            if key not in run.verify_memo:
+                run.verify_memo[key] = _declared_go_mod_verify(run, env=env, cwd=module_dir)
+            verify = run.verify_memo[key]
+            if verify == "timeout":
+                why = (f"go mod verify 超过 {DECLARED_GO_VERIFY_TIMEOUT_SECONDS:g} 秒还没结束，已放弃等待（预热已核验过一遍，这里是冗余的二次核验，"
+                       f"卡住不能拖住调度线程）：按核验没通过处理")
+            elif verify != "ok":
+                why = "go mod verify 没有通过（退出码非零，或输出里没有 all modules verified）"
+            elif files.get(f"file:{lock_file}") != go_sum:
+                why = f"go.sum 摘要不等于输入里 file:{lock_file} 条目的摘要"
+        observed = {"go_sum_sha256": go_sum, "verify": verify, "root_ok": located}
+        if why:
+            observed["problem"] = why
+        return observed, why is None, why
+    return {"root_ok": False, "problem": f"不认识的缓存规则 {rule!r}"}, False, f"不认识的缓存规则 {rule!r}"
+
+
+def _declared_preflight_checks(run: _DeclaredRun, unit: "Unit", current: Any, verified_at: str, credentials: list[dict[str, Any]],
+                               problems: list[str]) -> None:
+    entry = _declared_scope_entry_of(current)
+    scope = entry["detail"]["scope"]
+    inputs = [item for item in current.inputs or [] if isinstance(item, dict)]
+    contracts = {item["name"]: item for item in inputs if str(item.get("name", "")).startswith("contract:")}
+    files = {item["name"]: item["sha256"] for item in inputs if str(item.get("name", "")).startswith("file:")}
+    env = {**os.environ, **dict(unit.env)}
+    tree = run.tree
+
+    # 合同条目自带的「不能承接」情形：探测失败（unavailable）、可执行缺失、离线要求未满足、go test 缺 -count=1（防测试结果缓存成为隐藏输入）。
+    problems.extend(run.entry.declared_contract_problems(list(contracts.values()), argv=list(unit.command)))
+    # 合同要求的变量必须真的在单元环境里等于要求值：门禁白名单环境不会替我们设，离线值只能来自单元清单的 env。
+    for name in sorted(contracts):
+        requires = (contracts[name].get("detail") or {}).get("requires")
+        for key, value in sorted((requires.get("env_equals") or {}).items() if isinstance(requires, dict) else []):
+            if env.get(key) != value:
+                problems.append(f"{name}：合同要求单元环境里 {key}={value}，实际是 {env.get(key)!r}")
+
+    # 本次前置核验用自己的探测会话（环境＝单元实际环境）：重探服务镜像与 git 提交、跑 go mod verify。
+    session = (_DECLARED_PROBE.get() or run.entry.declared_probe)(environ=env)
+    memo: list[str | None] = []
+
+    def locations() -> str | None:
+        """三个 Go 缓存目录的位置核验，直接复用预热收据用的 go_compile_warmup.cache_paths：绝对路径、无符号链接、在工作根内、不在测试树内、
+        互不包含。工作根＝GOCACHE 的父目录（与探测会话、预热同一约定）。结果在本次核验内只算一次。"""
+
+        if not memo:
+            try:
+                cache = env.get("GOCACHE")
+                if not cache:
+                    raise ValueError("单元环境里没有 GOCACHE")
+                run.entry.declared_cache_locations(tree, Path(cache).parent, env)
+                memo.append(None)
+            except ValueError as error:
+                memo.append(str(error))
+        return memo[0]
+
+    repo = scope.get("repo") or {}
+    module_dir = next((tree / Path(path).parent for path in repo.get("files") or [] if path == "go.mod" or path.endswith("/go.mod")), tree / "backend")
+    images = [ident for ident in sorted(scope.get("contracts") or []) if ident.startswith("service-image:")]
+    commits = list((repo.get("git_history") or {}).get("commits") or [])
+    fresh: dict[str, dict[str, Any]] = {}
+    if images or commits:
+        # 单元启动前再探一次，与算 Current 时的值比较：防 plan 之后 docker pull 换了镜像、历史提交被浅克隆丢掉。只重探需要的合同，不重算工具链摘要。
+        reduced = {"schema_version": scope.get("schema_version", "declared-scope/v1"), "contracts": images,
+                   "repo": {"git_history": {"commits": commits, "reason": "启动前复核"}} if commits else {}}
+        fresh = {item["name"]: item for item in session.entries(reduced)}
+
+    def credential(kind: str, ident: str, ok: bool, observed: dict[str, Any], rule: Any = None) -> None:
+        item: dict[str, Any] = {"id": ident, "kind": kind, "verified_before_run": bool(ok), "observed": observed, "verified_at_utc": verified_at}
+        if rule is not None:
+            item["rule"] = rule
+        credentials.append(item)
+
+    for ident in sorted(scope.get("contracts") or []):
+        kind, _, name = ident.partition(":")
+        detail = (contracts.get(f"contract:{ident}") or {}).get("detail") or {}
+        if kind == "cache":
+            observed, ok, why = _declared_cache_credential(run, detail=detail, env=env, files=files, tree=tree, module_dir=module_dir,
+                                                           locations=locations)
+            credential("cache", name, ok, observed, detail.get("rule"))
+            if not ok:
+                problems.append(f"contract:{ident}：{why or '核验未通过'}")
+        elif kind == "service-image":
+            new_id = ((fresh.get(f"contract:{ident}") or {}).get("detail") or {}).get("image_id")
+            old_id = detail.get("image_id")
+            ok = isinstance(new_id, str) and not new_id.startswith("unavailable") and new_id == old_id
+            credential("service-image", name, ok, {"image_id": new_id})
+            if not ok:
+                problems.append(f"contract:{ident}：启动前复核的镜像 Id {new_id!r} 与算当前事实时的 {old_id!r} 不一致（镜像被换过，或探测失败）")
+    for commit in commits:
+        old_tree = ((contracts.get(f"contract:git-history:{commit}") or {}).get("detail") or {}).get("tree")
+        new_tree = ((fresh.get(f"contract:git-history:{commit}") or {}).get("detail") or {}).get("tree")
+        ok = isinstance(new_tree, str) and not new_tree.startswith("unavailable") and new_tree == old_tree
+        credential("git-history", commit, ok, {"commit": commit, "tree": new_tree})
+        if not ok:
+            problems.append(f"contract:git-history:{commit}：启动前复核的树对象 {new_tree!r} 与算当前事实时的 {old_tree!r} 不一致（提交缺失或探测失败）")
+
+
+def declared_contract_preflight(unit: "Unit", current: Any) -> dict[str, Any]:
+    """声明级命令单元启动前的前置核验（只对**要执行**的单元做，``Scheduler.launch`` 之前；回收后由 ``ReadAuditor.declared_finish`` 取走凭证）。
+
+    核验：缓存根的位置（复用预热的 ``cache_paths``：绝对、无符号链接、在工作根内且互不包含）；node_modules 安装锁副本与 pnpm-lock.yaml 字节相同
+    （且等于输入里的锁文件条目）；go.sum 初态（``go mod verify``，按 GOMODCACHE 路径记忆；它只核对缓存里已有模块的内容，**不证明缓存完整**）；
+    ``go test`` 带 ``-count=1``；服务镜像 Id 与算当前事实时相同；声明的 git 历史提交仍然存在；合同要求的离线环境变量真的在单元环境里。
+
+    返回 ``{"credentials": [...], "problems": [...], "verified_at_utc": ...}``：凭证数组直接进记录的 ``declared_contracts``（每项
+    ``{id, kind, verified_before_run, observed, verified_at_utc[, rule]}``，格式见 unit_records 的 ``_declared_credential_problems``）；problems 非空
+    则该次记录 inheritable=False，永不成为承接来源。核验自己出错也不拖垮调度器：记成一条问题，该次记录不可承接。"""
+
+    run = _DECLARED_RUN.get()
+    verified_at = _utc_now()
+    credentials: list[dict[str, Any]] = []
+    problems: list[str] = []
+    try:
+        if run is None:
+            raise ExecutorError("没有声明级运行上下文")
+        _declared_preflight_checks(run, unit, current, verified_at, credentials, problems)
+    except Exception as error:  # noqa: BLE001 - 前置核验自身出错不能让调度器中止整次运行：该次记录不可承接，原因写明
+        problems.append(f"前置核验自身出错：{type(error).__name__}: {error}")
+    return {"credentials": credentials, "problems": problems, "verified_at_utc": verified_at}
+
+
+def _declared_run_summary(records: Any, *, run: _DeclaredRun, outcomes: list["Outcome"], decisions: dict[str, Any], currents: dict[str, Any],
+                          store: Any, facts: Any) -> dict[str, Any]:
+    """汇总里的 ``declared_inputs``（方案 6.4 第 5 条）：四个数分开，再加每个被重跑单元的原因与耗时。
+
+    * ``registered``：本次计划里登记为 declared 的命令单元数（``rerun_only`` 另计：登记为只重跑的单元数）；
+    * ``audit_passed``：其中本次**执行**了且声明级读集审计通过的单元数（``audit_failed``、``audit_incomplete`` 另计，承接的单元本次没有审计）；
+    * ``consumer_accepted``：消费者核验接受的单元数——承接的单元（承接决策本身就是消费者核验的接受）加本次执行的单元里，刚写下的记录按承接用的
+      同一个 ``check_record`` 核验也被接受的（记录库里没有这条记录或没有记录库时无从核验，只算承接的）；被拒的单元及前三条原因列在 ``consumer_rejected``；
+    * ``inherited``：实际承接的单元数；
+    * ``reruns``：每个被重跑的 declared／rerun-only 单元的 ``{kind, reasons, seconds[, not_inheritable_reason]}``。"""
+
+    by_unit = {outcome.unit.unit_id: outcome for outcome in outcomes}
+    executed = [unit_id for unit_id in sorted(run.declared) if unit_id in by_unit and by_unit[unit_id].extra.get("disposition", "executed") == "executed"]
+    inherited = [unit_id for unit_id in sorted(run.declared) if unit_id in by_unit and by_unit[unit_id].extra.get("disposition") == "inherited"]
+    audits = {unit_id: (by_unit[unit_id].extra.get("read_audit") or {}) for unit_id in executed}
+    accepted = list(inherited)
+    rejected: dict[str, list[str]] = {}
+    checked = store is not None
+    if checked:
+        check_facts = replace(facts, now=time.time())
+        for unit_id in executed:
+            path = Path(str(by_unit[unit_id].extra.get("record_path") or ""))
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                problems = records.check_record(store, path, record, currents[unit_id], check_facts)
+            except Exception as error:  # noqa: BLE001 - 汇总里的自检不能拖垮整次运行：核验出错记成「不接受」及原因
+                problems = [f"消费者核验没能完成：{type(error).__name__}: {error}"]
+            if problems:
+                rejected[unit_id] = problems[:3]
+            else:
+                accepted.append(unit_id)
+    reruns: dict[str, dict[str, Any]] = {}
+    for kind, members in (("declared", run.declared), ("rerun-only", run.rerun_only)):
+        for unit_id in sorted(members):
+            outcome = by_unit.get(unit_id)
+            if outcome is None or outcome.extra.get("disposition", "executed") != "executed":
+                continue
+            row: dict[str, Any] = {"kind": kind, "reasons": list(decisions[unit_id].reasons) if unit_id in decisions else [],
+                                   "seconds": outcome.seconds}
+            current = currents.get(unit_id)
+            if current is not None and current.reason:
+                row["not_inheritable_reason"] = current.reason
+            if outcome.extra.get("declared_not_inheritable"):
+                row["record_not_inheritable_reason"] = outcome.extra["declared_not_inheritable"]
+            reruns[unit_id] = row
+    registry_total = ((run.manifest.get("declared_inputs") or {}).get("registered")) if isinstance(run.manifest.get("declared_inputs"), dict) else None
+    return {
+        "registered": len(run.declared), "rerun_only": len(run.rerun_only), "registry_total": registry_total,
+        "audit_passed": sum(1 for unit_id in executed if audits[unit_id].get("status") == "passed"),
+        "audit_failed": sum(1 for unit_id in executed if audits[unit_id].get("status") == "failed"),
+        "audit_incomplete": sum(1 for unit_id in executed if audits[unit_id].get("status") == "incomplete"),
+        "consumer_accepted": len(accepted), "consumer_rejected": rejected,
+        "consumer_check": "checked" if checked else "skipped-no-record-store",
+        "inherited": len(inherited), "executed": len(executed), "sample_mode": run.sample_mode, "reruns": reruns,
+    }
+
+
+def _declared_sync_auditor(scheduler: Any, currents: dict[str, Any]) -> None:
+    """锁后复核重算了当前事实：只为声明级单元建的审计器（挂在调度器上、不在 _run_gates_current 的 auditor 变量里）要跟着换新的事实，
+    旧代码只更新那个变量。普通审计器（含 control 四链的）不动。"""
+
+    auditor = getattr(scheduler, "auditor", None)
+    if auditor is not None and getattr(auditor, "declared_only", False):
+        auditor.currents = currents
 
 
 class ReadAuditor:
@@ -1076,6 +1786,10 @@ class ReadAuditor:
         self.strict = strict
         # B5a-08：逐单元承接时承接的单元（不执行、没有轨迹；它们的读集已由 check_record 按来源记录的轨迹重放核过）。
         self.inherited: frozenset[str] = frozenset()
+        # 声明级承接（WP3）：逐单元的 wrap→collect 状态（采样路径、启动前缀、降级原因、单元实际结果）；declared_only＝只为声明级单元建的审计器
+        # （没给 --audit-reads、清单里却有 declared 单元时），它对其它单元什么都不做——不包 strace、不产生 read_audit。
+        self._declared_state: dict[str, dict[str, Any]] = {}
+        self.declared_only = False
 
     def trace_path(self, unit: Unit) -> Path:
         # 可读前缀不能保证唯一；完整单元 ID 摘要防止标点替换和长名称截断造成轨迹串用。
@@ -1091,6 +1805,10 @@ class ReadAuditor:
 
     def wrap(self, unit: Unit, argv: list[str]) -> list[str]:
         current = self.currents.get(unit.unit_id)
+        if _declared_scope_entry_of(current) is not None:
+            return self._declared_wrap(unit, argv, current)
+        if self.declared_only or self._declared_exempt(unit):
+            return argv
         if current and any(entry.get("name") == "reexecute-only-policy" for entry in current.inputs or []):
             return argv
         if self.skipped(unit):
@@ -1124,6 +1842,15 @@ class ReadAuditor:
     def collect(self, unit: Unit) -> dict[str, Any]:
         current = self.currents.get(unit.unit_id)
         inputs = current.inputs if current is not None else None
+        if _declared_scope_entry_of(current) is not None:
+            return self._declared_collect(unit, current)
+        if self._declared_exempt(unit):
+            # 登记为 rerun-only 的命令单元：与旧的「声明了整个仓库的单元不审计」同一个结果形状，另带 declared_exempt 标记让 report 的承接边界
+            # 判定认得它（它的记录本来就不可承接，见 _declared_exempt）。
+            result = {"skipped": "登记为 rerun-only 的命令单元（永不成为承接来源），不审计", "undeclared_count": 0, "undeclared": [],
+                      "status": "passed", "coverage_complete": False, "coverage_scope": "not-observed", "declared_exempt": "rerun-only"}
+            self.results[unit.unit_id] = result
+            return result
         policy = next((entry for entry in inputs or [] if entry.get("name") == "reexecute-only-policy"), None)
         if policy is not None:
             if current.inheritable:
@@ -1156,11 +1883,265 @@ class ReadAuditor:
                 result["trace_lines"] = document.get("lines")
                 trace = self.trace_path(unit)
                 result["trace"] = {"path": str(trace), "sha256": self.records.file_sha256(trace)}
+                if result.get("coverage_complete") is True:
+                    # 宿主快照 v3：把每个宿主路径在这份已验证的严格轨迹里的访问类型封存进记录（随记录自摘要），承接时与
+                    # 轨迹重算的结果交叉核对；没有 v3 条目（v2／control）时为空，不加字段，记录与过去逐字相同。
+                    try:
+                        modes = self.module.host_path_modes(document, inputs)
+                    except self.module.AuditError:
+                        modes = {}  # 取不到就不封存；v3 记录缺该字段时承接失败关闭
+                    if modes:
+                        result["host_path_modes"] = modes
         result.setdefault("status", "failed" if result.get("undeclared_count") else "passed")
         result.setdefault("coverage_complete", False)
         result.update(inputs_sha256=current.inputs_sha256 if current else None, repo_root=self.repo_root, data_root=self.data_root)
         self.results[unit.unit_id] = result
         return result
+
+    # -- 声明级承接（declared-inputs/v1，WP3）---------------------------------------------------------------------------
+    # 下面的方法只在「当前输入里有 declared-inputs-scope 条目」的单元上被调用（_declared_exempt 例外：见它的说明）；control 四链与普通单元不会进来。
+
+    def handles_declared(self, unit: Unit) -> bool:
+        return _declared_scope_entry_of(self.currents.get(unit.unit_id)) is not None
+
+    def _declared_exempt(self, unit: Unit) -> bool:
+        """登记表里登记为 rerun-only 的命令单元：读集审计放过它们（永不成为承接来源，审计对它们没有意义）。
+
+        过去它们靠两条路被放过，登记之后两条路都走不通了：非严格审计按「声明了整个仓库的单元不审计」跳过，登记后清单标了 inheritable:false、
+        当前输入明细为空，审计会报「单元没有输入明细，无从核对」；有 audit_policy 的严格审计运行里，没登记的单元会被追加 reexecute-only-policy
+        条目，而声明级承接把登记表里的单元并入「已登记」集合（不追加该条目，否则 rerun-only 的原因会被覆盖），它们就会被严格审计去审，必然失败。
+        这里统一放行：不包 strace、结果形状同旧的「声明了整个仓库的单元不审计」，report 的承接边界判定另认 declared_exempt 标记。
+        它们的记录本来就不可承接（清单 inheritable:false），所以放行不放宽任何承接。
+
+        control 适配器管辖的单元（control 四链、其它 pre-A3 场景单元）永远不放行，不管声明级上下文里的 rerun_only 集合写了什么：放行它们等于静默跳过
+        它们的严格审计。``_declared_unit_ids`` 已经把它们挡在集合之外；这里是第二道（上下文可以不经清单直接构造），判据见 ``_declared_control_governed``。"""
+
+        run = _DECLARED_RUN.get()
+        return (run is not None and unit.unit_id in run.rerun_only
+                and not _declared_control_governed(unit.unit_id)
+                and _declared_scope_entry_of(self.currents.get(unit.unit_id)) is None)
+
+    def note_outcome(self, outcome: "Outcome") -> None:
+        """回收时由调度器在 collect 之前调用：声明级单元的逐次采样要把单元实际的退出码、信号与耗时写进证据。其它单元什么都不做。"""
+
+        if self.handles_declared(outcome.unit):
+            self._declared_state.setdefault(outcome.unit.unit_id, {})["outcome"] = outcome
+
+    def _declared_cwd_rel(self, unit: Unit) -> str | None:
+        """单元工作目录相对测试树根的路径（树根记 "."）；不在测试树内返回 None。"""
+
+        cwd, root = os.path.normpath(unit.cwd or os.getcwd()), os.path.normpath(self.repo_root)
+        if cwd == root:
+            return "."
+        return cwd[len(root) + 1:] if cwd.startswith(root + os.sep) else None
+
+    def _declared_wrap(self, unit: Unit, argv: list[str], current: Any) -> list[str]:
+        """声明级单元的 wrap。
+
+        α'（缺省）：零运行时开销，原样返回 argv；读集证据在 collect 时取登记表里的那份。
+        β（--declared-sample always／every:N）：剥掉启动前缀，把命令包进采样器的 strace（选项沿用 ``declared_sampler.STRACE_OPTIONS``），
+        strace 的输出经 ``-o '|…'`` 交给过滤器进程（采样器的 filter 子命令，不在被跟踪的进程树内）；**启动前缀放在 strace 外侧**——命令看到的
+        挂载命名空间与正式执行完全相同，而 unshare、mount 这类未建模的调用不进轨迹（与采样器 run 的做法一致，调研 5.3）。
+        启动前缀怎么切：命令身份（登记的 command_sha256）是去掉前缀的 argv 加相对树根的工作目录的摘要，按前缀长度逐个试，摘要对得上的切法就是；
+        一种切法都对不上说明执行的命令不是登记的那条，collect 判失败（fail-closed）。
+        取不到 strace、过滤器管道路径不安全、别名非法等采样基础设施问题不使整次运行失败：降级为不包 strace 照常执行，collect 记为证据不完整
+        （status=incomplete），该次记录不可承接。"""
+
+        run = _DECLARED_RUN.get()
+        state: dict[str, Any] = {"sampled": False}
+        self._declared_state[unit.unit_id] = state
+        if run is None or not run.should_sample(unit.unit_id):
+            return argv
+        reference = _declared_scope_entry_of(current)["detail"]["sample"]
+        cwd_rel = self._declared_cwd_rel(unit)
+        split = None
+        if cwd_rel is not None:
+            split = next((size for size in range(len(unit.command))
+                          if self.records.declared_command_sha256(unit.command[size:], cwd_rel) == reference["command_sha256"]), None)
+        if split is None:
+            state["identity"] = (f"单元的命令行与工作目录（相对树根 {cwd_rel!r}）在启动前缀的任何切法下，命令摘要都不等于范围条目登记的 "
+                                 f"command_sha256：执行的不是登记的那条命令")
+            return argv
+        launcher, command = list(unit.command[:split]), list(unit.command[split:])
+        sampler = run.sampler_module()
+        env = {**os.environ, **dict(unit.env)}
+        strace = shutil.which("strace", path=env.get("PATH"))
+        if strace is None:
+            state["degraded"] = "no-strace：PATH 里找不到 strace，逐次采样做不了"
+            return argv
+        trace = self.trace_path(unit)
+        base = trace.name.removesuffix(".trace.json")
+        raw, sample_path = trace.with_name(base + ".declared-raw.json"), trace.with_name(base + ".declared-sample.json")
+        try:
+            aliases = _declared_aliases(env, tree=self.repo_root, fallback=str(self.dir))
+            sampler.AliasTable(aliases)
+            pipe = sampler.filter_pipe(output=raw, unit_id=unit.unit_id, aliases=aliases, chunk_lines=sampler.DEFAULT_CHUNK_LINES)
+        except sampler.SamplerError as error:
+            state["degraded"] = f"filter-pipe：{error}"
+            return argv
+        for stale in (raw, sample_path):
+            with contextlib.suppress(FileNotFoundError):
+                stale.unlink()
+        state.update(sampled=True, launcher=launcher, command=command, cwd_rel=cwd_rel, raw=raw, sample=sample_path, aliases=aliases,
+                     strace=strace, strace_env=env)
+        return sampler.build_strace_argv(launcher=launcher, strace=strace, pipe=pipe, cwd=unit.cwd or os.getcwd(), command=command)
+
+    def _declared_collect(self, unit: Unit, current: Any) -> dict[str, Any]:
+        """声明级单元的读集结果（写进记录的 ``read_audit``，格式见调研 3.3）。
+
+        证据来源：α'（sample_origin=registry）是登记表里的证据文件，字节摘要必须等于范围条目登记的 evidence_sha256；β（sample_origin=run）是本次
+        运行自己采样出的 ``declared-sample/v1``。两者都以 ``trace={path, sha256}`` 带出（Recorder 把它封存进记录库 logs/<摘要>.log），并由
+        ``declared_coverage`` 重算覆盖——执行侧与消费者共用同一个纯函数。
+
+        结论：覆盖通过→passed；α' 覆盖不通过→failed（登记表证据在 plan 时已验过，现在不过说明登记表与代码不一致，整次运行判失败）；β 覆盖不通过按
+        ``DECLARED_INCOMPLETE_RULES`` 分两类——规则全在集合内→incomplete（只因证据不完整，记录不可承接、命令结论不变），出现集合之外的规则→failed
+        （fail-closed，整次运行判失败）。命令身份不符、证据文件缺失或被改过、组装的证据格式不对一律 failed。取不到 strace 等降级情形记为 incomplete。"""
+
+        records = self.records
+        run = _DECLARED_RUN.get()
+        state = self._declared_state.pop(unit.unit_id, None) or {}
+        entry = _declared_scope_entry_of(current)
+        scope, reference = entry["detail"]["scope"], entry["detail"]["sample"]
+        sampled = bool(state.get("sampled"))
+        result: dict[str, Any] = {
+            "coverage_scope": DECLARED_COVERAGE_SCOPE, "inputs_sha256": current.inputs_sha256, "repo_root": self.repo_root,
+            "data_root": self.data_root, "sample_origin": "run" if sampled else "registry",
+            "sample_binding": {"unit_id": unit.unit_id, "command_sha256": reference["command_sha256"],
+                               "scope_sha256": records.sha256_json(scope), "evidence_sha256": reference["evidence_sha256"]}}
+
+        def finish(status: str, *, findings: list[dict[str, Any]] | None = None, count: int | None = None, trace: dict[str, str] | None = None,
+                   counts: dict[str, Any] | None = None, reason: str | None = None) -> dict[str, Any]:
+            failed = status == "failed"
+            result.update(status=status, coverage_complete=status == "passed", undeclared_count=(count if count is not None else len(findings or []))
+                          if failed else 0, undeclared=list(findings or [])[:200] if failed else [])
+            if trace is not None:
+                result["trace"] = trace
+            if counts is not None:
+                result["coverage"] = counts
+            if status == "incomplete":
+                result["incomplete"] = {"reason": reason, "rules": sorted({item["rule"] for item in findings or []}),
+                                        "count": count if count is not None else len(findings or [])}
+            self.results[unit.unit_id] = result
+            return result
+
+        def finding(rule: str, text: str, path: str = "") -> dict[str, Any]:
+            return {"rule": rule, "path": path, "kinds": [], "reason": text}
+
+        def judge(sample: dict[str, Any], trace: dict[str, str]) -> dict[str, Any]:
+            coverage = records.declared_coverage(sample, scope, command_sha256=reference["command_sha256"])
+            findings = coverage["undeclared"]
+            verdict = "passed" if coverage["ok"] else (declared_audit_verdict(findings) if sampled else "failed")
+            if verdict == "incomplete" and coverage["counts"]["undeclared"] > len(findings):
+                verdict = "failed"   # 明细被截断：看不到的那部分里可能有集合之外的规则，只凭拿到的这批判不了「只是证据不完整」，失败关闭
+            reason = None
+            if verdict == "incomplete":
+                reason = "；".join(f"{item['rule']} {item['path'] or item['reason']}"[:160] for item in findings[:3])
+            return finish(verdict, findings=findings, count=coverage["counts"]["undeclared"], trace=trace, counts=coverage["counts"], reason=reason)
+
+        if state.get("identity"):
+            return finish("failed", findings=[finding("C7-command", state["identity"])])
+        if state.get("degraded"):
+            return finish("incomplete", findings=[], reason=state["degraded"])
+        if sampled:
+            outcome = state.get("outcome")
+            raw_path, sample_path = state["raw"], state["sample"]
+            if not raw_path.is_file():
+                return finish("incomplete", findings=[], reason="filter-output-missing：过滤器没有产出采样结果（被中途清理或崩溃），读集没能证明")
+            sampler = run.sampler_module()
+            try:
+                raw = json.loads(raw_path.read_text(encoding="utf-8"))
+                problems = sampler.validate_raw(raw)
+                if problems:
+                    raise ValueError("；".join(problems[:3]))
+                sample = _declared_sample_from_raw(
+                    raw, unit_id=unit.unit_id, launcher=state["launcher"], command=state["command"], cwd_rel=state["cwd_rel"],
+                    exit_code=getattr(outcome, "exit_code", None), seconds=float(getattr(outcome, "seconds", 0.0) or 0.0), tracked=run.tracked(),
+                    commit=run.commit(), strace_version=run.strace_version(state["strace"], state["strace_env"]), sampler=sampler, records=records)
+                sampler.write_document(sample_path, sample)
+                digest = records.file_sha256(sample_path)
+            except Exception as error:  # noqa: BLE001 - 组装证据出错是实现缺陷，响亮失败（C7-format），不降级
+                return finish("failed", findings=[finding("C7-format", f"本次采样证据没能组装：{type(error).__name__}: {error}")])
+            return judge(sample, {"path": str(sample_path), "sha256": digest})
+        # α'：登记表证据。
+        evidence_path = run.evidence_file(unit.unit_id, reference["evidence_sha256"]) if run is not None else None
+        if evidence_path is None:
+            return finish("failed", findings=[finding("evidence-missing", "找不到字节摘要等于范围条目登记的 evidence_sha256 的登记表证据文件")])
+        try:
+            data = evidence_path.read_bytes()
+            evidence = json.loads(data.decode("utf-8"))
+            command = evidence["command"]
+            if evidence["unit_id"] != unit.unit_id:
+                raise ValueError(f"证据属于别的单元：{evidence['unit_id']!r}")
+            cwd_rel = self._declared_cwd_rel(unit)
+            if list(unit.command) != list(command["launcher"]) + list(command["argv"]) or cwd_rel is None or (command["cwd_rel"] or ".") != cwd_rel:
+                return finish("failed", findings=[finding("C7-command", "单元的命令行或工作目录不是登记表证据描述的那条命令（argv 不等于证据的 launcher＋argv，或 cwd_rel 不符）")])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            return finish("failed", findings=[finding("evidence-format", f"登记表证据读不出来或形状不对：{type(error).__name__}: {error}")])
+        return judge(evidence, {"path": str(evidence_path), "sha256": reference["evidence_sha256"]})
+
+    def declared_finish(self, item: "Running", outcome: "Outcome", audit: dict[str, Any]) -> None:
+        """声明级单元回收后的收尾（调度器在 collect 之后调用）：带出运行前核验凭证 ``declared_contracts``，并把「这一次记录不可承接」的原因交给
+        Recorder——前置核验没通过（缓存位置、安装锁、go.sum 初态、-count=1、镜像 Id、git 提交、离线变量）、逐次采样的证据不完整（含缺 strace 降级）。
+        这一次执行的通过／失败结论不受影响。其它单元什么都不做。"""
+
+        unit_id = item.unit.unit_id
+        if not self.handles_declared(item.unit):
+            return
+        run = _DECLARED_RUN.get()
+        preflight = run.preflights.pop(unit_id, None) if run is not None else None
+        reasons: list[str] = []
+        if preflight is None:
+            reasons.append("declared-contract-preflight:该单元启动前没有做前置核验")
+        else:
+            if preflight["credentials"]:
+                outcome.extra["declared_contracts"] = preflight["credentials"]
+            reasons.extend(f"declared-contract-preflight:{problem}" for problem in preflight["problems"][:5])
+        if audit.get("status") == "incomplete":
+            reasons.append(f"declared-sample-incomplete:{(audit.get('incomplete') or {}).get('reason') or '证据不完整'}")
+        if reasons:
+            outcome.extra["declared_not_inheritable"] = "；".join(reasons)
+
+    def _declared_report(self) -> dict[str, Any] | None:
+        """read-audit.json 里的 declared 段（只有存在声明级结果时才有）：各状态的单元、证据来源计数、审计策略下放行的 rerun-only 单元。"""
+
+        rows = {unit_id: result for unit_id, result in self.results.items() if result.get("coverage_scope") == DECLARED_COVERAGE_SCOPE}
+        exempt = sorted(unit_id for unit_id, result in self.results.items() if result.get("declared_exempt"))
+        if not rows and not exempt:
+            return None
+        of = lambda status: sorted(unit_id for unit_id, result in rows.items() if result.get("status") == status)  # noqa: E731
+        return {"units": sorted(rows), "passed": of("passed"), "failed": of("failed"), "incomplete": of("incomplete"),
+                "sample_origin": {origin: sorted(unit_id for unit_id, result in rows.items() if result.get("sample_origin") == origin)
+                                  for origin in ("registry", "run")},
+                "rerun_only_exempt": exempt}
+
+    def declared_extra(self) -> dict[str, Any]:
+        """汇总里 ``read_audit`` 段要追加的键（``declared``）：没有声明级结果时是空字典，汇总与改造前逐字相同。"""
+
+        declared = self._declared_report()
+        return {} if declared is None else {"declared": declared}
+
+    def _declared_enforced(self, expected: set[str], missing: list[str], nonempty: bool) -> bool:
+        """严格审计且结果里有声明级特例时，重新判定承接边界是否闭合。原判据只认「覆盖闭合且通过」与「带 reexecute-only-policy 的强制重跑」；
+        这里在它们之外多认两类声明级结果——逐次采样证据不完整的 declared 单元（记录不可承接）、审计策略下放行的 rerun-only 单元（本来就不可承接）。
+        原判据一字不改，只在它判不过、且存在这两类结果时才多看一遍。"""
+
+        if not (self.strict and nonempty and not missing and set(self.results) == expected):
+            return False
+        for unit_id, result in self.results.items():
+            current = self.currents[unit_id]
+            if result.get("coverage_complete") is True and result.get("status") == "passed":
+                continue
+            if (result.get("status") == "reexecute_required" and result.get("coverage_complete") is False and current.inheritable is False
+                    and any(entry.get("name") == "reexecute-only-policy" and entry.get("sha256") == result.get("reexecute_policy_sha256")
+                            for entry in current.inputs or [])):
+                continue
+            if result.get("declared_exempt") == "rerun-only" and result.get("coverage_complete") is False and current.inheritable is False:
+                continue
+            if (result.get("status") == "incomplete" and result.get("coverage_scope") == DECLARED_COVERAGE_SCOPE
+                    and result.get("coverage_complete") is False and result.get("undeclared_count") == 0):
+                continue
+            return False
+        return True
 
     def report(self) -> dict[str, Any]:
         """写 ``audit/read-audit.json`` 并返回汇总里的那一段。"""
@@ -1184,6 +2165,10 @@ class ReadAuditor:
                                      and entry.get("sha256") == result.get("reexecute_policy_sha256")
                                      for entry in self.currents[unit_id].inputs or []))
                             for unit_id, result in self.results.items()))
+        if self.strict and not enforced and any(result.get("declared_exempt") or result.get("status") == "incomplete"
+                                                 for result in self.results.values()):
+            # 声明级特例（逐次采样证据不完整、审计策略下放行的 rerun-only）：原判据不认识，另判一遍；原判据本身不改。
+            enforced = self._declared_enforced(expected, missing, nonempty)
         path = self.dir / "read-audit.json"
         report = {"schema_version": self.module.REPORT_SCHEMA, "repo_root": self.repo_root, "data_root": self.data_root,
                   "data_root_exempt": dict(self.module.DATA_ROOT_EXEMPT),
@@ -1193,6 +2178,9 @@ class ReadAuditor:
                   "reexecute_required_units": reexecute, "reuse_boundary_enforced": enforced}
         if self.inherited:
             report["inherited_units"] = sorted(self.inherited)
+        declared = self._declared_report()
+        if declared is not None:
+            report["declared"] = declared  # 仅在存在声明级结果时追加；汇总里的同名键由 declared_extra 在调用处追加
         _write_json(path, report)
         return {"enabled": True, "report": str(path), "units": len(self.results) - len(skipped), "skipped_whole_repo": len(skipped),
                 "units_with_findings": flagged[:50], "undeclared_total": total,
@@ -1337,6 +2325,17 @@ class Scheduler:
         return units
 
     # -- 启动与回收 -----------------------------------------------------------
+    def _declared_preflight(self, unit: Unit, kind: str) -> None:
+        """声明级命令单元启动前的前置核验（只对要执行的正式单元做，见 declared_contract_preflight）。结果放进声明级上下文，回收后由
+        ReadAuditor.declared_finish 取走。其它单元（含 control 四链）什么都不做。"""
+
+        run = _DECLARED_RUN.get()
+        if run is None or kind != "formal" or not unit.command:
+            return
+        current = self.recorder.currents.get(unit.unit_id)
+        if _declared_scope_entry_of(current) is not None:
+            run.preflights[unit.unit_id] = declared_contract_preflight(unit, current)
+
     def launch(self, unit: Unit, kind: str) -> None:
         safe = unit.unit_id.replace("#", "-").replace("!", "-")
         suffix = "" if kind == "formal" else f".{kind}"
@@ -1360,6 +2359,7 @@ class Scheduler:
             _write_json(tests_path, {"unit_id": unit.unit_id, "test_ids": list(unit.test_ids)})
             argv = self.unit_argv or [sys.executable, str(Path(__file__).resolve()), "run-unit"]
             argv = [*unit.launcher, *argv, "--start", str(self.start), "--tests-file", str(tests_path), "--result", str(result_path)]
+        self._declared_preflight(unit, kind)
         if self.auditor is not None and kind == "formal":
             # 读集审计（E3-04）：strace 在最外层（启动前缀、切目录的 shell 都在它下面），轨迹经管道交给过滤器。
             argv = self.auditor.wrap(unit, argv)
@@ -1491,10 +2491,14 @@ class Scheduler:
                             saved = item.record_path.with_suffix('.interrupted-trace.json')
                             shutil.copyfile(trace, saved)
                             outcome.extra["reservation_interruption"]["partial_trace"] = {"path": str(saved), "sha256": self.recorder.records.file_sha256(saved)}
+                elif self.auditor is not None and self.auditor.declared_only and not self.auditor.handles_declared(item.unit):
+                    pass  # 只为声明级单元建的审计器：其它单元不审计，记录里没有 read_audit
                 elif self.auditor is not None and item.kind == "formal":
+                    self.auditor.note_outcome(outcome)
                     audit = self.auditor.collect(item.unit)
                     outcome.extra["read_audit"] = audit
                     outcome.extra["reexecute_only"] = audit.get("status") == "reexecute_required"
+                    self.auditor.declared_finish(item, outcome, audit)
                 self.recorder.write(item, outcome)
                 self.event("exit", unit=item.unit.unit_id, kind=item.kind, pid=pid, exit_code=outcome.exit_code, signal=outcome.signal,
                            timed_out=outcome.timed_out, orphans=len(orphans), seconds=outcome.seconds)
@@ -1778,6 +2782,10 @@ def _parse(argv: list[str]) -> argparse.Namespace:
                            help="数据根：测试树单元读到这里一律报出；工作目录在这里的单元（pre-A3 场景）按与仓库同布局核对")
             p.add_argument("--audit-strict", action="store_true", help="全路径严格审计；宿主输入未绑定或解析不完整时拒绝通过")
             p.add_argument("--audit-host-inputs", type=Path, help="逐单元精确宿主输入清单，运行前生成快照并要求完整读集重放")
+            # 声明级承接（declared-inputs/v1，步骤 5）：读集证据的来源。
+            p.add_argument("--declared-sample", type=declared_sample_mode, default="off", metavar="off|always|every:N",
+                           help="声明级命令单元的读集证据来源：off（缺省）用登记表里的采样证据，零运行时开销；always 每次执行都带 strace 采样，用本次采样证明读集"
+                                "仍在声明范围内（覆盖失败判失败；只因证据不完整则该次记录不可承接、命令结论不变）；every:N 按记录库里该单元已有的正式记录数，每 N 次采样一次")
     unit = sub.add_parser("run-unit")
     unit.add_argument("--start", type=Path, required=True)
     test_source = unit.add_mutually_exclusive_group(required=True)
@@ -2092,6 +3100,15 @@ def _print_gates_summary(summary: dict[str, Any]) -> None:
               file=sys.stderr)
         for unit_id in audit["units_with_findings"][:10]:
             print(f"  未声明读取：{unit_id}", file=sys.stderr)
+    declared = summary.get("declared_inputs") or {}
+    if declared:
+        print(f"声明级承接（采样 {declared['sample_mode']}）：登记 {declared['registered']} 个（只重跑 {declared['rerun_only']} 个），本次执行 {declared['executed']} 个，"
+              f"审计通过 {declared['audit_passed']}、失败 {declared['audit_failed']}、证据不完整 {declared['audit_incomplete']}；消费者接受 {declared['consumer_accepted']}；"
+              f"实际承接 {declared['inherited']}", file=sys.stderr)
+        for unit_id, row in list(declared["reruns"].items())[:10]:
+            print(f"  重跑 {unit_id}（{row['kind']}，{row['seconds']:.1f} 秒）：{'；'.join(row['reasons'])[:200]}", file=sys.stderr)
+        for unit_id, problems in list(declared["consumer_rejected"].items())[:10]:
+            print(f"  消费者不接受 {unit_id}：{'；'.join(problems)[:300]}", file=sys.stderr)
     passed = sum(1 for gate in summary["gates"] if gate["status"] == "passed")
     print(f"门禁 {len(summary['gates'])} 项，通过 {passed} 项，用时 {summary['elapsed_seconds']:.3f}s", file=sys.stderr)
     print("OK" if summary["status"] == "passed" else f"FAILED (gates={len(summary['gates']) - passed})", file=sys.stderr)
@@ -2109,6 +3126,7 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     items = {item["unit_id"]: item for item in manifest.get("units") or [] if isinstance(item, dict)}
     audit_policy = manifest.get("audit_policy")
     registered = audit_policy["units"] if audit_policy is not None else {}
+    registered = _declared_registered(manifest, registered)  # 声明级承接：登记表里的单元（declared 与 rerun-only）也算已登记；没有登记表时原样不变
     test_scopes = {scope["unit_id"]: scope for scope in manifest.get("test_input_scopes", [])}
     repo, problem = None, ""
     try:
@@ -2120,6 +3138,8 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
     currents: dict[str, Any] = {}
     # 同一棵受管树的静态依赖分析只建一次：采集工具测试组与声明了测试模块的命令单元（pre-A3 场景，E3-02）共用。
     deps_cache: dict[Path, Any] = {}
+    # 声明级承接：本次调用的合同探测会话（探测环境相同的单元共用一个，会话内同一事实只探一次；每次调用重新探测）。
+    declared_sessions: dict[Any, Any] = {}
 
     def current(unit: Unit, spec: dict[str, Any], inputs: list[dict[str, Any]] | None, reason: str) -> Any:
         if inputs is not None and not unit.command and any(item.get("name") == "runtime-contract" for item in inputs):
@@ -2172,6 +3192,8 @@ def _gate_currents(records: Any, *, groups: list[DiscoverGroup], group_units: di
         else:
             try:
                 inputs = records.declared_inputs(repo, item["inputs"], deps_cache)
+                if isinstance(item["inputs"], dict) and "declared_scope" in item["inputs"]:
+                    inputs = _declared_add_contracts(records, inputs, item, declared_sessions)  # 声明级单元并入合同条目（现探测）
             except (records.RecordsError, OSError, ValueError) as error:
                 reason = f"输入算不出来：{error}"
         currents[unit.unit_id] = current(unit, spec, inputs, reason)
@@ -2267,10 +3289,14 @@ def _check_unit_inherit_args(args: argparse.Namespace, records: Any, request_pat
 def _run_gates(args: argparse.Namespace) -> int:
     """当前适配器仅存活于本次门禁调用；退出、异常或下一次普通调用都恢复原默认。"""
     token = _CONTROL_READ_AUDIT.set(None)
+    # 声明级承接的两个上下文变量同样只活在本次调用里：探测工厂复位成调用前的值（测试可以预先设成带假 runner 的工厂），运行上下文清空。
+    declared_tokens = (_DECLARED_PROBE.set(_DECLARED_PROBE.get()), _DECLARED_RUN.set(None))
     try:
         return _run_gates_current(args)
     finally:
         _CONTROL_READ_AUDIT.reset(token)
+        _DECLARED_RUN.reset(declared_tokens[1])
+        _DECLARED_PROBE.reset(declared_tokens[0])
 
 
 def _run_gates_current(args: argparse.Namespace) -> int:
@@ -2308,6 +3334,16 @@ def _run_gates_current(args: argparse.Namespace) -> int:
     adapter = entry.control_read_audit_for_plan(manifest)
     _CONTROL_READ_AUDIT.set(adapter)
     records = _records_module()
+    # 声明级承接（步骤 5 WP3）：合同探测工厂（调用前已经设了就沿用，测试可预设带假 runner 的）与本次运行的声明级上下文——清单里登记了声明级承接
+    # （declared 或 rerun-only）才创建，之后所有声明级分支都以它或「输入里有 declared-inputs-scope 条目」为触发条件；要在算执行器版本之前设好。
+    if _DECLARED_PROBE.get() is None:
+        _DECLARED_PROBE.set(entry.declared_probe)
+    declared_units, rerun_only_units = _declared_unit_ids(manifest)
+    declared_run = None
+    if declared_units or rerun_only_units:
+        declared_run = _DeclaredRun(entry=entry, manifest=manifest, tree=Path.cwd(), sample_mode=getattr(args, "declared_sample", "off"),
+                                    declared=declared_units, rerun_only=rerun_only_units)
+        _DECLARED_RUN.set(declared_run)
     resume_manifest_digest = records.file_sha256(args.manifest)
     parallelism = args.parallel or config.default_parallelism
     # 环境指纹要在准备共享缓存之前算：准备缓存会往本进程环境里写缓存位置。
@@ -2317,6 +3353,8 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         raise ExecutorError(f"门禁清单的环境事实非法：{error}") from error
     executor = records.executor_version(_executor_files(args.bytecode_helper))
     store = records.RecordStore(args.record_store) if args.record_store is not None else None
+    if declared_run is not None:
+        declared_run.store = store
     group_units: dict[str, list[Unit]] = {}
     expected: dict[str, set[str]] = {}
     for group in groups:
@@ -2389,7 +3427,9 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             if not isinstance(paths, list) or not all(isinstance(path, str) for path in paths) or len(set(paths)) != len(paths):
                 raise ExecutorError("每个单元的宿主输入须为无重复的精确路径数组")
             current = currents[unit_id]
-            current.inputs = records._unique([*(current.inputs or []), *[_audit_module().host_snapshot(path) for path in paths],
+            # 计划期快照的合同版本由 records.new_host_snapshot 统一选择（普通运行 v3，control 适配器在位的运行 v2），
+            # 与策略 host_paths 走的 declared_inputs 是同一个选择，同名条目才会摘要一致。
+            current.inputs = records._unique([*(current.inputs or []), *[records.new_host_snapshot(path) for path in paths],
                                               records.value_entry("policy", "require-read-audit", "all-file-paths/v1")])
             current.inputs_sha256 = records.entries_sha256(current.inputs)
     if args.audit_reads:
@@ -2512,7 +3552,9 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         for unit in restarted:
             for entry in recorder.currents[unit.unit_id].inputs or []:
                 name = entry.get("name", "")
-                if name.startswith("host:") and _audit_module().host_snapshot(name[5:]) != entry:
+                # v2 条目整份相等（与过去相同）；v3 条目此刻没有轨迹，只比任何访问方式下都必须一致的核心集与声明字段，
+                # 按访问方式的比较留给运行结束与承接。
+                if name.startswith("host:") and _audit_module().host_entry_drift(entry):
                     raise ExecutorError("整机预约后宿主输入漂移，拒绝重派")
         fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
         if (records.entries_sha256(fresh_environment) != recorder.environment_sha256
@@ -2528,6 +3570,11 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         auditor=auditor,
         resume_validator=validate_resume,
     )
+    if auditor is None and declared_units:
+        # 没给 --audit-reads、清单里却有 declared 单元：建一个只管声明级单元的非严格审计器挂在调度器上（对其它单元什么都不做）。局部变量 auditor
+        # 保持 None——汇总里不出现旧的 read_audit 段，声明级的审计结果走 summary["declared_inputs"]，审计失败的单元照常使门禁失败。
+        scheduler.auditor = ReadAuditor(out_dir=out_dir, repo_root=Path.cwd(), data_root=args.audit_data_root, currents=currents, strict=False)
+        scheduler.auditor.declared_only = True
     try:
         # 锁可能排队很久：重新读请求、现场身份、输入、环境和动态凭证。
         if full_set_verdict is not None and any(d.inherit for d in decisions.values()):
@@ -2539,6 +3586,13 @@ def _run_gates_current(args: argparse.Namespace) -> int:
                 original_resume_basis = resume_basis(current_now)
                 currents = current_now
                 recorder.currents = currents
+                # 这里只需要同步「只为声明级单元建的审计器」，不需要同步 --audit-reads 建的常规审计器（独立验收 #3 一般 8 怀疑过这一点，实测证伪）：
+                # 进入本分支的前提是 B-09／B-10 判定里有可承接的单元，而判定只有在 --mode full-set-pass 下才会放行（其它模式下 reuse_enabled 被压成
+                # False，assess 一律判全部重跑，没有可承接单元，本分支不进）；--audit-reads 却只许与 --mode re-execute（或逐单元承接，它与 B-09 请求
+                # 互斥）同用，否则前面就报错退出。所以进到这里时不会有常规审计器，该同步的只有 declared_only 的那个。锁后复核之后常规审计器拿着旧事实的
+                # 情形，唯一可达的是下面的逐单元承接分支，那里已经同步了（auditor.currents = currents）。这几个前提和同步行为都有测试钉住
+                # （test_ci_declared_inputs_executor 的 AuditorFactsSyncTests），以后谁放宽了前提，测试会先红。
+                _declared_sync_auditor(scheduler, currents)
                 facts.now = time.time()
                 fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
                 fresh_facts = replace(facts, environment=fresh_environment, environment_sha256=records.entries_sha256(fresh_environment))
@@ -2569,6 +3623,7 @@ def _run_gates_current(args: argparse.Namespace) -> int:
             original_resume_basis = resume_basis(current_now)
             currents = current_now
             recorder.currents = currents
+            _declared_sync_auditor(scheduler, currents)
             fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])
             facts = replace(facts, environment=fresh_environment, environment_sha256=records.entries_sha256(fresh_environment),
                             now=time.time())
@@ -2685,10 +3740,15 @@ def _run_gates_current(args: argparse.Namespace) -> int:
         })
         if inherit_verdict is not None:
             summary["unit_inherit_decision"] = inherit_verdict
+        if declared_run is not None:
+            # 声明级承接的四个数（登记、审计通过、消费者接受、实际承接）与每个被重跑单元的原因和耗时；清单已发布，所以刚写下的记录能按承接用的同一个核验检查。
+            summary["declared_inputs"] = _declared_run_summary(records, run=declared_run, outcomes=outcomes, decisions=decisions,
+                                                               currents=currents, store=store, facts=facts)
         if bytecode["status"] == "failed" or problems:
             summary["status"] = "failed"
         if auditor is not None:
             summary["read_audit"] = auditor.report()
+            summary["read_audit"].update(auditor.declared_extra())  # 只有存在声明级结果时才多一个 declared 键
             if summary["read_audit"]["status"] != "passed":
                 summary["status"] = "failed"
         _write_json(out_dir / "summary.json", summary)

@@ -10,6 +10,10 @@
 #       --declared-sample off|always|every:N（步骤 5 WP3b，缺省 off）：声明级承接命令单元的读集证据来源，原样交给后台起的入口门禁再到执行器（正式验证轮
 #       显式带 always）；非法值立即退出 2，非 off 的取值进结论的输入合同，缺省时结论与命令行不变。通过之后默认接着的入口空跑不带它（要采样的空跑
 #       另用 entry-dryrun.sh start … --declared-sample …，或本命令加 --no-dryrun）。本脚本把三个位置参数之后的选项原样交给 background_validation.py。
+#       --unit-inherit-request <请求> --unit-inherit-source-result <旧后台结论> [--allow-unverified-ancestry]（步骤 6）：跨提交、跨部署承接旧后台轮次的成果——
+#       旧结论须 passed／failed、进程组已退出且留有已发布的逐单元清单（被 stop 的运行不发布清单，其成果不能承接）；--work 须是旧结论的 WORK；旧提交须能
+#       验证是新提交的祖先（确定不是则永远拒绝，只有「无法验证」才可加 --allow-unverified-ancestry，结论标 unverified）；没有任何单元被承接时结论
+#       outcome=full_rerun。这两个选项只有本命令 start 支持，入口空跑 entry-dryrun.sh 没有。
 #   stop [--reason <原因>]   停下在跑的后台验证（修复轮跑定向回归之前）
 #   check-boundary            批次边界：当前部署的结论 failed／aborted 退出 3（拒绝派发下一批），其余退出 0
 #   require-passed            VC-5 验收前：当前部署的结论是 passed 才退出 0，否则退出 3
