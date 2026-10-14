@@ -1101,7 +1101,10 @@ DECLARED_GO_TOOLS = ("compile", "link", "asm", "vet")
 # 开关：把 DECLARED_REQUIRE_OFFLINE 改成 True（改本文件即改执行器版本，声明级记录整体重新产生一次），或在创建探测会话时
 # 显式传 require_offline=True。打开后 toolchain:go 条目带 requires.env_equals 与逐项核对结果（requirements），
 # 门禁环境没有真的注入这三个变量时 requirements.met 为 False，declared_contract_problems 会报告，单元不得承接。
-DECLARED_REQUIRE_OFFLINE = False
+# 步骤 5 工作包 WP3：调度者 10-14 定案首发就开（ARM64 摸底证明 10 个首发命令在离线下都能通过，采样也是在这三个变量下做的，
+# 证据只对离线运行成立）。变量由 apply_declared_inputs 写进 declared Go 单元的清单 env；执行器探测合同时把单元 env 里的 Go 变量叠到
+# 探测环境上，所以 requirements.met 反映的是单元真正会看到的值。
+DECLARED_REQUIRE_OFFLINE = True
 DECLARED_OFFLINE_ENV = {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}
 # 缓存合同的稳定声明（角色、位置类别、规则）：不含缓存内容，也不含绝对路径。缓存内容会随运行由冷变热，进了摘要，
 # 首次执行就会让所有未受影响的单元失去承接资格；位置只写类别（work＝工作根内，tree＝测试树内，tmp＝临时目录），
@@ -1544,6 +1547,15 @@ def apply_declared_inputs(manifest: dict[str, Any], tree: Path, *, launcher: Seq
         unit_id = unit.get("unit_id")
         if unit_id in declared:
             unit["inputs"] = {"declared_scope": declared[unit_id]["scope"], "declared_sample": declared[unit_id]["sample"]}
+            if "toolchain:go" in (declared[unit_id]["scope"].get("contracts") or []):
+                # 命令运行期离线（WP3 定案）：go 命令不联网下载模块、不悄悄切换工具链。变量写进该单元清单的 env（随单元规格进记录），
+                # 已有同名变量且值不同就让 plan 失败——不悄悄覆盖，免得单元的原有设置被改掉而没人知道。
+                env = dict(unit.get("env") or {})
+                for key, value in DECLARED_OFFLINE_ENV.items():
+                    if key in env and env[key] != value:
+                        raise _declared_fail(unit_id, f"的清单 env 已有 {key}={env[key]!r}，与声明级承接要求的离线值 {value!r} 冲突（不覆盖，请先处理）")
+                    env[key] = value
+                unit["env"] = env
         elif unit_id in rerun:
             unit["inheritable"] = False
             unit["not_inheritable_reason"] = rerun[unit_id]["reason"]
