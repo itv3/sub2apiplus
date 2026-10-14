@@ -236,8 +236,8 @@ class RunOriginTests(base.DeclaredTestCase):
 class RulePrefixTests(unittest.TestCase):
     """``declared_coverage`` 的规则名约定：C7 开头＝证据完整性（执行器据此判「只因证据不完整」），C0～C6＝其它。"""
 
-    # 证据完整性类（一律 C7 开头）。
-    EVIDENCE = frozenset({"C7-command", "C7-exit", "C7-format", "C7-invalid", "C7-lines", "C7-stream", "C7-unresolved"})
+    # 证据完整性类（一律 C7 开头）。C7-detached（被丢弃的 strace 垃圾行超过上限 64）是 WP1d 新增的第 8 条，全表因此由 29 条变为 30 条。
+    EVIDENCE = frozenset({"C7-command", "C7-detached", "C7-exit", "C7-format", "C7-invalid", "C7-lines", "C7-stream", "C7-unresolved"})
     # 访问被判未声明（C1～C6，一律不以 C7 开头）。
     ACCESS = frozenset({"C1-git-kinds", "C1-git-undeclared", "C1-ignored-tracked", "C1-list-undeclared", "C1-undeclared", "C1-untracked-read",
                         "C2-kinds", "C2-outside-undeclared", "C3-missing-undeclared", "C4-write-class", "C4-write-declared",

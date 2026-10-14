@@ -1241,6 +1241,14 @@ DECLARED_CLASSES: dict[str, frozenset[str]] = {
 DECLARED_TOLERATED_UNRESOLVED = ("symlink-metadata-not-bound:", "unfinished-calls-at-eof")
 # unfinished-calls-at-eof 的计数上限：超过即证据无效。
 _DECLARED_MAX_UNFINISHED_AT_EOF = 64
+# coverage.detached_markers 的计数上限：超过即报 C7-detached（属「证据不完整」类）。detached_markers 是采样器的过滤器丢弃并计数的
+# strace 垃圾行——线程在系统调用中途消失（被杀、被分离、进程退出）时，strace 打不出配对的 resumed，只留下无法解析的标记行
+# （不带名字的 ``<pid> ???( <detached ...>``，以及带名字但行尾是 ``<detached ...>`` 或 `` = ?`` 的乱码行）。这些行不携带读取信息，
+# 丢弃本身无害，个位数是 Go／node 运行时的正常现象；但大面积出现说明 strace 流被截断或大批线程消失，丢掉的行里可能有真实的读取，
+# 整条流都不可信。上限与采样器 ``merge_raws`` 判采样无效的上限（``declared_sampler.DETACHED_MARKER_LIMIT``）同为 64——但那条
+# 只管登记表里「合并后」的证据；逐次采样（β）的证据由执行器直接从过滤器的 raw 组装、不经 ``merge_raws``，那条上限管不到它。
+# 所以上限必须落在登记表证据与逐次证据共用的 ``declared_coverage`` 里，两条路径一视同仁（别两套标准）。
+_DECLARED_MAX_DETACHED_MARKERS = 64
 # coverage.unfinished_samples（给评审看的悬着调用样例）的体量上限：只核类型和长度，不据此放行或拒绝。
 _DECLARED_MAX_UNFINISHED_SAMPLES = 8
 _DECLARED_MAX_SAMPLE_CHARS = 300
@@ -1697,8 +1705,8 @@ def _declared_validate_sample(sample: Any) -> dict[str, Any]:
       证据自己的命令摘要必须与自己的命令内容一致；``cwd_rel`` 是相对测试树的路径，树根本身写 ``.``（或空串）；
     * ``coverage``：``{stream_complete, unresolved, unresolved_reasons, unfinished_calls, unresolved_process_events, lines}``，
       另可带非负整数 ``detached_markers``（冷缓存采样里 ``<pid> ???( <detached ...>`` 的 strace 标记行，由采样器预处理计数，
-      不算 unresolved），以及可选的 ``unfinished_samples``（流结束时悬着的调用样例，字符串数组，最多 8 条、每条最长 300 字符，
-      只供评审：验证侧只核类型和长度，不据其内容放行或拒绝）；
+      不算 unresolved；这里只核类型，上限 64 由 ``declared_coverage`` 的 ``C7-detached`` 管），以及可选的 ``unfinished_samples``
+      （流结束时悬着的调用样例，字符串数组，最多 8 条、每条最长 300 字符，只供评审：验证侧只核类型和长度，不据其内容放行或拒绝）；
     * ``repo_accesses``：``[路径, 访问类型数组, 是否跟踪]`` 数组，仓库内路径完整保留（唯一的目录聚合键是 ``.git/objects/``）；
       ``outside_accesses``：``[路径, 访问类型数组, 计数]``，仓库外路径按目录聚合（键以 / 结尾＝该目录下直接子项的访问）；路径
       各自唯一；
@@ -1881,7 +1889,10 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
     * **C7 证据完整性**：采样器没有判这份采样无效（valid、invalid_reasons）、流已结束、unresolved 的原因全部属容忍集合
       （``DECLARED_TOLERATED_UNRESOLVED``）且总数与分项一致；其中 ``unfinished-calls-at-eof``（多线程进程退出时永远配不上的
       ``<unfinished ...>``）最多容忍 64 个，超过即无效，``unfinished_calls`` 也不得超出它能解释的部分；没有未归属的进程事件、
-      行数大于零、退出码为零。"""
+      行数大于零、退出码为零。另外 ``coverage.detached_markers``（缺省 0；被采样器丢弃并计数的 strace 垃圾行，线程中途消失
+      留下的标记行）最多 64 条，超过报 **C7-detached**（只报一条，reason 写明上限与实际数）：少量无害，大面积出现说明流不可信。
+      这条上限与采样器合并时判无效的上限同值，但逐次采样（β）的证据不经采样器合并，所以必须在这个共用函数里核，登记表证据与
+      逐次证据一视同仁。证据不完整类的规则一律以 ``C7`` 开头。"""
 
     findings: list[dict[str, Any]] = []
     counts: dict[str, Any] = {"repo_paths": 0, "outside_paths": 0, "classes": {}, "ignored_paths": 0, "installed_paths": 0, "git_paths": 0,
@@ -1928,6 +1939,12 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
         report("C7-unresolved", "", [], f"有 {coverage['unresolved_process_events']} 个未归属的进程事件（子进程的事件没等到父进程的派生记录，读集不完整）")
     if coverage["unresolved"] != sum(reasons.values()):
         report("C7-unresolved", "", [], f"unresolved 总数 {coverage['unresolved']} 与各原因计数之和不符，存在未说明的未解析项")
+    # 被采样器丢弃并计数的 strace 垃圾行（线程中途消失留下的标记行）：个位数无害，超过上限说明流不可信（见常量处的说明）。键可缺省，
+    # 缺省按 0 算；只报一条（reason 写明上限与实际数），不随垃圾行的数量膨胀。校验已保证它是非负整数。
+    detached = coverage.get("detached_markers", 0)
+    if detached > _DECLARED_MAX_DETACHED_MARKERS:
+        report("C7-detached", "", [], f"被采样器丢弃的 strace 垃圾行（线程中途消失留下的 detached 标记行）共 {detached} 条，超过上限 "
+                                      f"{_DECLARED_MAX_DETACHED_MARKERS}（少量是多线程进程的正常现象，大面积出现说明 strace 流被截断或大批线程消失，读集可能不完整）")
     if coverage["lines"] <= 0:
         report("C7-lines", "", [], "采样没有产生任何输出行")
     if sample["exit_code"] != 0:
