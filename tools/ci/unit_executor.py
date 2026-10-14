@@ -95,6 +95,9 @@ DEFAULT_BYTECODE_SOURCES = (Path("tools"),)
 # 受管工具身份的跨进程记忆化目录（与 codex_upgrade_tool_identity_policy.IDENTITY_MEMO_ENV 同名；执行器不导入受管模块）。
 IDENTITY_MEMO_ENV = "CODEX_UPGRADE_IDENTITY_MEMO"
 CONFIG_SCHEMA = "unit-executor-config/v1"
+# 单元级超时（配置 unit_timeouts）的上限：严格审计把重单元放大 4～17 倍（10-14 实测），统一 3600 秒会让它们必超时；
+# 上限 4 小时是为了配置写错时挂死保护不至于形同虚设。
+MAX_UNIT_TIMEOUT_SECONDS = 14400.0
 WEIGHTS_SCHEMA = "capture-test-shard-weights/v1"
 DURATIONS_SCHEMA = "capture-test-durations/v1"
 UNIT_RESULT_SCHEMA = "unit-executor-unit-result/v1"
@@ -215,6 +218,10 @@ class ExecutorConfig:
     raw: dict[str, Any]
     reservation_grace_seconds: float | None = 30.0
     reservation_stop_seconds: float = 5.0
+    # 单元级超时覆盖：单元 ID（含 #N 分块、!exclusive）→ 秒。只放宽、不缩短，上限见 MAX_UNIT_TIMEOUT_SECONDS，
+    # 登记必须在配置的 unit_timeouts_basis 里写明依据。超时随单元规格（spec）进入记录与输入比对，所以必须在生成
+    # 正式来源之前定好，来源与后继之间不得再改，否则旧记录的规格对不上、无法承接。
+    unit_timeouts: dict[str, float] = field(default_factory=dict)
 
 
 def load_config(path: Path) -> ExecutorConfig:
@@ -258,6 +265,22 @@ def load_config(path: Path) -> ExecutorConfig:
     grace = payload.get("orphan_grace_seconds", 10)
     if not isinstance(timeout, (int, float)) or timeout <= 0 or not isinstance(grace, (int, float)) or grace < 0:
         raise ExecutorError("单元超时或残留进程宽限期非法")
+    unit_timeouts: dict[str, float] = {}
+    raw_timeouts = payload.get("unit_timeouts") or {}
+    if not isinstance(raw_timeouts, dict):
+        raise ExecutorError("unit_timeouts 必须是对象（单元 ID → 秒）")
+    basis = payload.get("unit_timeouts_basis")
+    if raw_timeouts and not (isinstance(basis, str) and basis.strip()):
+        raise ExecutorError("登记了 unit_timeouts 就必须在 unit_timeouts_basis 里写明依据（公式与数据来源）")
+    for unit_id, value in raw_timeouts.items():
+        if not isinstance(unit_id, str) or not unit_id.strip():
+            raise ExecutorError(f"单元超时登记的单元 ID 非法：{unit_id!r}")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ExecutorError(f"单元超时必须是有限秒数：{unit_id}")
+        if not float(timeout) < value <= MAX_UNIT_TIMEOUT_SECONDS:
+            raise ExecutorError(f"单元超时必须大于默认 {float(timeout):.0f} 秒且不超过 {MAX_UNIT_TIMEOUT_SECONDS:.0f} 秒"
+                                f"（只放宽、不缩短）：{unit_id}")
+        unit_timeouts[unit_id] = float(value)
     reservation_grace = payload.get("reservation_grace_seconds", 30)
     reservation_stop = payload.get("reservation_stop_seconds", 5)
     for name, value in (("reservation_grace_seconds", reservation_grace), ("reservation_stop_seconds", reservation_stop)):
@@ -276,6 +299,7 @@ def load_config(path: Path) -> ExecutorConfig:
         raw=payload,
         reservation_grace_seconds=float(reservation_grace) if reservation_grace is not None else None,
         reservation_stop_seconds=float(reservation_stop),
+        unit_timeouts=unit_timeouts,
     )
 
 
@@ -630,6 +654,14 @@ def plan_units(
     expected = [t for ids in grouped.values() for t in ids]
     if sorted(covered) != sorted(expected) or len(covered) != len(set(covered)):
         raise ExecutorError("单元规划的测试 ID 并集不等于全集或存在重复")
+    if config.unit_timeouts:
+        if full_set:
+            # 与拆块、独占名单同一纪律：单元改名或改拆块数后，登记的超时不能静默落空。
+            missing = sorted(set(config.unit_timeouts) - {unit.unit_id for unit in units})
+            if missing:
+                raise ExecutorError("单元超时登记了规划里不存在的单元（测试改名或改拆块数后要同步配置）：" + "、".join(missing))
+        units = [replace(unit, timeout_seconds=config.unit_timeouts[unit.unit_id]) if unit.unit_id in config.unit_timeouts else unit
+                 for unit in units]
     return units
 
 
