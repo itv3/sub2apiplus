@@ -668,8 +668,10 @@ class ApplyDeclaredInputsTests(unittest.TestCase):
         self.assertEqual(unit["inputs"]["declared_scope"], entry["scope"])
         self.assertEqual(unit["inputs"]["declared_sample"],
                          {key: entry["sample"][key] for key in ("evidence_sha256", "command_sha256", "sampler_sha256")})
-        self.assertEqual({key: value for key, value in unit.items() if key != "inputs"},
-                         {key: value for key, value in before["backend:go-test"].items() if key != "inputs"}, "命令、额度、环境都不变")
+        # 命令、额度不变；声明了 toolchain:go 合同的单元，清单 env 只新增三个离线变量（步骤 5 WP3：命令运行期离线首发就开）。
+        self.assertEqual({key: value for key, value in unit.items() if key not in ("inputs", "env")},
+                         {key: value for key, value in before["backend:go-test"].items() if key not in ("inputs", "env")}, "命令、额度不变")
+        self.assertEqual(unit.get("env"), {**(before["backend:go-test"].get("env") or {}), **eg.DECLARED_OFFLINE_ENV}, "env 只新增三个离线变量")
         self.assertTrue(unit.get("inheritable", True))
 
     def test_rerun_only_units_are_marked_not_inheritable_with_their_reason(self) -> None:
@@ -850,7 +852,8 @@ class ContractProbeTests(unittest.TestCase):
                 self.assertEqual(after["go-test"], before["go-test"])
                 self.assertNotEqual(after["integration"], before["integration"])
         tc = self.fresh()
-        entries = self.entries(integration, tc)
+        # 本用例只关心镜像 Id；离线要求（常量缺省已开）由 test_offline_requirement_switch 单独覆盖，这里显式关掉。
+        entries = self.entries(integration, tc, require_offline=False)
         postgres = next(entry for entry in entries if entry["name"] == "contract:service-image:postgres")
         self.assertEqual(postgres["detail"]["image_id"], tc.image_ids["postgres:18.1-alpine3.23"])
         self.assertEqual(postgres["detail"]["reference"], "postgres:18.1-alpine3.23")
@@ -869,7 +872,8 @@ class ContractProbeTests(unittest.TestCase):
         """命令运行期离线要求（可选项）：开关打开后 toolchain:go 条目带 requires.env_equals 与逐项核对结果。"""
 
         scope = default_scope(contracts=("toolchain:go",))
-        off = self.entries(scope)[0]
+        self.assertIs(eg.DECLARED_REQUIRE_OFFLINE, True, "首发就开（步骤 5 WP3）：常量缺省为开")
+        off = self.entries(scope, require_offline=False)[0]
         self.assertNotIn("requires", off["detail"])
         self.assertNotIn("requirements", off["detail"])
         on = self.entries(scope, require_offline=True)[0]

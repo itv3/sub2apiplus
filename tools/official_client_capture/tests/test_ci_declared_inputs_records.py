@@ -1666,7 +1666,8 @@ class EntryGatesInteroperabilityTests(unittest.TestCase):
 
     def test_real_probe_entries_pass_the_consumer_checks_end_to_end(self) -> None:
         scope = make_scope()
-        entries = self.toolchain.probe().entries(entry_scaffold.declaration(scope))
+        # 离线要求（入口门禁侧常量缺省已开）由下面的离线用例单独覆盖；本用例只对齐格式，显式关掉。
+        entries = self.toolchain.probe(require_offline=False).entries(entry_scaffold.declaration(scope))
         self.assertEqual(sorted(entry["name"] for entry in entries), sorted(entry["name"] for entry in make_contract_entries()),
                          "探测产出的合同条目名恰为声明范围要求的那一组（含由 git_history、make_expansion 派生的）")
         cache = next(entry for entry in entries if entry["name"] == "contract:cache:go-build-cache")["detail"]
@@ -1680,7 +1681,7 @@ class EntryGatesInteroperabilityTests(unittest.TestCase):
         self.assertEqual(entry_gates.declared_contract_problems(entries, argv=world.spec()["argv"]), [], "入口门禁侧自己的前置判断同样通过")
 
     def test_both_sides_reject_a_go_test_command_without_the_required_flag(self) -> None:
-        entries = self.toolchain.probe().entries(entry_scaffold.declaration(make_scope()))
+        entries = self.toolchain.probe(require_offline=False).entries(entry_scaffold.declaration(make_scope()))
         argv = ["go", "test", "./..."]
         sample = make_sample()
         sample["command"]["argv"] = argv
