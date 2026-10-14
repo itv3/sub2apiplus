@@ -53,7 +53,8 @@ config、status、stash 等读引用库或写仓库状态的子命令，-C、-c�
 或含 ``%`` 的无前缀值）——白名单 ``%H %T %P %an %ae %aI %at %cn %ce %cI %ct %s %b %B %n %%`` 与 ``%x`` 加两位十六进制，其余 ``%…`` 一律未固定（``%D %d %N %S %g* %(…) %h %t %p
 %ad %cd %aD %cD %ar %cr %aN`` 等都在内），命名格式（oneline、medium……）和 ``pretty.<名字>`` 配置别名也未固定；③``merge-base``、``cat-file``、``rev-parse`` 的 argv 里出现 ``--``
 一律未固定（它在这三个子命令里只是“选项结束”，其后仍是修订；``git merge-base A B -- HEAD`` 的输出随 HEAD 变化），``show``／``log``／``rev-list``／``ls-tree``／``diff-tree`` 里 ``--``
-之后才是路径；④所有“数字”判定（``-n <数字>``、``-<数字>``、``--max-count=<数字>``、``--abbrev=<数字>``）只接受 ASCII 数字，``²`` 之类的 Unicode 数字未固定。
+之后才是路径；④所有“数字”判定（``-n <数字>``、``-<数字>``、``--max-count=<数字>``）只接受 ASCII 数字，``²`` 之类的 Unicode 数字未固定；⑤``ls-tree --abbrev=<n>`` 未固定（WP1g：
+``<n>`` 只是缩写长度的下限，对象库出现碰撞时输出会更长；拿不准一律算未固定，没有任何已登记单元用它）。
 已知残余：``log``／``show`` 默认显示 ``refs/notes/commits`` 里的 notes（规格不要求 ``--no-notes``；被测仓库里极少见）。
 
 覆盖闭合与覆盖自检（``draft`` 的默认行为，``--no-coverage-check`` 关闭）：起草只按读集归并，可登记侧的覆盖检查（``unit_records.declared_coverage``）
@@ -1922,7 +1923,8 @@ def parse_installed_dir(spec: str) -> tuple[str, str]:
 
 
 # glob 里 ``*``／``?`` 合计的个数上限，抄自登记侧 unit_records._DECLARED_MAX_GLOB_WILDCARDS（采样器自己的一份，两边各自测试同值）：
-# 匹配用正则，通配符个数多了会回溯放大（5 个通配符对 120 字符的路径已要约 0.2 秒，7 个要一分钟以上）；暂存路径模式是人评审过的，4 个足够。
+# WP1g 起匹配本身是线性的（见 PathMatcher：按 / 分段、每段双指针，不再是会回溯放大的正则），这个上限只剩登记表卫生的意义——
+# 暂存路径模式是人评审过的，4 个通配符足够，更多的多半是写错了。
 MAX_GLOB_WILDCARDS = 4
 
 
@@ -1946,26 +1948,59 @@ def check_transient(pattern: Any) -> str:
     wildcards = pattern.count("*") + pattern.count("?")
     if wildcards > MAX_GLOB_WILDCARDS:
         raise SamplerError(f"--transient 的 glob 通配符（* 与 ? 合计）最多 {MAX_GLOB_WILDCARDS} 个，实际 {wildcards} 个"
-                           f"（正则回溯耗时随通配符个数多项式增长，登记侧同样拒绝）：{pattern!r}")
+                           f"（登记表卫生上限，登记侧同样拒绝）：{pattern!r}")
     return pattern
+
+
+def _glob_segment_matches(pattern: str, text: str) -> bool:
+    """一段（不含 /）的通配符匹配：``*`` 是任意个字符（含零个）、``?`` 是恰好一个字符，其它字符按字面。经典的双指针算法——只记最近一个 ``*``
+    的回退点，遇到不匹配就让那个 ``*`` 多吞一个字符再试；时间 O(len(pattern)×len(text))，没有正则那样随通配符个数多项式放大的回溯
+    （WP1g：旧实现把 ``*`` 译成 ``[^/]*`` 的正则，``out/*a*a*a*b`` 对 1000 字符的路径要 25 秒以上）。与登记侧 ``unit_records._declared_glob`` 同一个
+    算法（采样器自己的一份，两边不互相 import，测试里用旧正则和登记侧的实现对拍）。"""
+
+    p = t = 0
+    star = -1  # 最近一个 * 在 pattern 里的位置
+    mark = 0  # 那个 * 目前吞到 text 的位置
+    while t < len(text):
+        if p < len(pattern) and pattern[p] == "*":
+            star, mark = p, t
+            p += 1
+        elif p < len(pattern) and (pattern[p] == "?" or pattern[p] == text[t]):
+            p += 1
+            t += 1
+        elif star >= 0:
+            p = star + 1
+            mark += 1
+            t = mark
+        else:
+            return False
+    while p < len(pattern) and pattern[p] == "*":
+        p += 1
+    return p == len(pattern)
 
 
 class PathMatcher:
     """仓库相对路径的匹配器，语义与登记侧 ``repo_ignored`` 一致：目录前缀（含目录自身）或不跨 / 的 glob（整条路径完全匹配）。
 
-    不用 ``fnmatch``：它的 ``*`` 会跨 /，``frontend/*.mjs`` 就会误中 ``frontend/node_modules/x/y.mjs``。
+    不用 ``fnmatch``：它的 ``*`` 会跨 /，``frontend/*.mjs`` 就会误中 ``frontend/node_modules/x/y.mjs``。glob 的匹配是线性的：先按 / 切段，段数必须
+    相同，再逐段做通配符匹配（``_glob_segment_matches``；没有通配符的段直接比相等），所以 ``*``／``?`` 永远不会跨 /。对外行为不变：``pattern``、
+    ``directory`` 两个属性，``matches(相对路径) -> bool``。
     """
 
     def __init__(self, pattern: str) -> None:
         self.pattern = check_transient(pattern)
         self.directory = pattern.endswith("/")
-        self._regex = None if self.directory else re.compile(
-            "".join("[^/]*" if char == "*" else "[^/]" if char == "?" else re.escape(char) for char in pattern))
+        # glob 的每一段连同「有没有通配符」预先算好（匹配可能被调用几十万次）；目录前缀不需要。
+        self._segments = None if self.directory else tuple((segment, "*" in segment or "?" in segment) for segment in pattern.split("/"))
 
     def matches(self, relative: str) -> bool:
         if self.directory:
             return (relative + "/").startswith(self.pattern)  # 加一个 / 才能把目录自身（a/b）也算进前缀 a/b/
-        return self._regex.fullmatch(relative) is not None  # type: ignore[union-attr]
+        parts = relative.split("/")
+        if len(parts) != len(self._segments):  # type: ignore[arg-type]
+            return False
+        return all(part == segment if not wild else _glob_segment_matches(segment, part)
+                   for (segment, wild), part in zip(self._segments, parts))  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -2889,7 +2924,8 @@ def coverage_review_lines(check: Mapping[str, Any]) -> list[str]:
 #   2. --format=／--pretty= 的取值只放行两种：精确的 ``raw``，以及“普通字符＋白名单占位符”的自定义格式串（见 git_format_problem）；其余一律不固定。
 #   3. merge-base、cat-file、rev-parse 的 argv 里出现 ``--`` 一律不固定：它在这三个子命令里只是“选项结束”，其后仍是修订（实测
 #      ``git merge-base A B -- HEAD`` 的输出随 HEAD 变化）；show、log、rev-list、ls-tree、diff-tree 里 ``--`` 之后才是路径（沿用）。
-#   4. 所有“数字”判定（-n <数字>、-<数字>、--max-count=<数字>、--abbrev=<数字>）一律 ASCII 数字（isascii() 且 isdigit()），拒绝 ``²`` 之类的 Unicode 数字。
+#   4. 所有“数字”判定（-n <数字>、-<数字>、--max-count=<数字>）一律 ASCII 数字（isascii() 且 isdigit()），拒绝 ``²`` 之类的 Unicode 数字。
+#   5. ls-tree 的 --abbrev=<n> 去掉（WP1g）：<n> 只是缩写长度的下限，对象库里出现碰撞时输出会更长；拿不准一律算不固定，没有任何已登记单元用它。
 # 已知残余：log／show 默认会显示 refs/notes/commits 里的 notes（规格不要求 --no-notes）；notes 在被测仓库里极少见，写进“放宽项汇总”那一类。
 
 # 一个固定的修订：完整 40 位小写十六进制提交号，可带 ^{tree}、^{commit} 或 :路径（路径是对象内的相对路径，里面出现 HEAD 之类的字样不算引用）。
@@ -2901,8 +2937,8 @@ _GIT_OBJECT_TYPES = frozenset({"blob", "tree", "commit", "tag"})
 _GIT_PLAIN_GLOBALS = frozenset({"--no-pager", "--no-optional-locks"})
 # 这三个子命令里 ``--`` 只是“选项结束”，其后的参数仍是修订（不是路径分隔）：argv 里出现 ``--`` 一律不固定。
 _GIT_DASHDASH_REVISION_SUBCOMMANDS = frozenset({"merge-base", "cat-file", "rev-parse"})
-# 取值必须是数字的选项前缀（log／rev-list 的 --max-count=，ls-tree 的 --abbrev=）。
-_GIT_NUMERIC_PREFIXES = ("--max-count=", "--abbrev=")
+# 取值必须是数字的选项前缀（log／rev-list 的 --max-count=；ls-tree 的 --abbrev= 已在 WP1g 去掉）。
+_GIT_NUMERIC_PREFIXES = ("--max-count=",)
 # 子命令 -> (放行的选项（精确匹配）, 放行的选项前缀, 修订参数的处理方式)。不在表里的子命令、选项一律未固定。
 #   all：``--`` 之前的位置参数全是修订，至少一个；first：只有第一个位置参数是修订，后面是路径（ls-tree）；
 #   range：log、rev-list，位置参数是固定提交、两端都是完整提交号的 A..B／A...B、或 ^固定提交，至少一个正向修订。
@@ -2913,7 +2949,7 @@ _GIT_FIXED_SUBCOMMANDS: dict[str, tuple[frozenset[str], tuple[str, ...], str]] =
     "rev-parse": (frozenset({"--verify", "-q", "--quiet"}), (), "all"),
     "merge-base": (frozenset({"--is-ancestor", "--all"}), (), "all"),
     "ls-tree": (frozenset({"-r", "-d", "-t", "-l", "--long", "--name-only", "--name-status", "--full-name", "--full-tree", "-z"}),
-                ("--abbrev=",), "first"),
+                (), "first"),
     "diff-tree": (frozenset({"-r", "-t", "-z", "-M", "-C", "--root", "--no-commit-id", "--name-only", "--name-status", "--raw", "--stat",
                              "--no-renames", "--find-renames", "--quiet"}), (), "all"),
     "log": (frozenset({"--parents", "--no-walk", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges",

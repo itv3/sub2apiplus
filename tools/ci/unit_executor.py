@@ -1312,12 +1312,16 @@ def _declared_sample_from_raw(raw: dict[str, Any], *, unit_id: str, launcher: li
     # coverage.unresolved_samples（按原因归类的原始行样例）与顶层 detached_samples（被当垃圾行丢弃的带名字的行）——整份照搬会被消费者判格式非法
     # （C7-format），把「偶发乱码行只让记录不可承接」错判成整次运行失败。做法同采样器自己的合并：coverage 只取证据认识的键，诊断样例放进 review
     # （验证侧不解释 review，但它随证据一起封存，事后能看到乱码行到底长什么样）。
+    # raw 顶层的 detached_side_effects（被丢弃的垃圾行里名字属于副作用类的条数）同样是只给评审看的计数，有才写，也放进 review，不碰 coverage 的
+    # 字段集合（那是闭合的）；它不影响覆盖检查的结论（declared_coverage 只看 coverage，不读 review），合法性已由上面的 validate_raw 核过。
     coverage = {key: raw["coverage"][key] for key in _DECLARED_SAMPLE_COVERAGE_KEYS if key in raw["coverage"]}
     review: dict[str, Any] = {}
     if raw["coverage"].get("unresolved_samples"):
         review["unresolved_samples"] = {reason: list(items) for reason, items in raw["coverage"]["unresolved_samples"].items()}
     if raw.get("detached_samples"):
         review["detached_samples"] = list(raw["detached_samples"])
+    if raw.get("detached_side_effects"):
+        review["detached_side_effects"] = raw["detached_side_effects"]
 
     return {
         "schema_version": records.DECLARED_SAMPLE_SCHEMA,

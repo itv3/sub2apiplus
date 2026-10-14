@@ -14,7 +14,7 @@
    卡住的核验按「没通过」处理、记录不可承接、命令照跑、整次运行只等一次）；
 3. 逐次采样 β：启动前缀在 strace 外侧、覆盖失败分 failed／incomplete 两类（``DECLARED_INCOMPLETE_RULES``，集合内四条各自触发变 incomplete，
    集合外每一类变 failed，混合变 failed）、缺 strace 降级、每 N 次采样；采样器过滤器 raw 里只给评审看的诊断样例
-   （coverage.unresolved_samples、顶层 detached_samples）进证据的 review、不进字段闭合的 coverage；
+   （coverage.unresolved_samples、顶层 detached_samples、顶层 detached_side_effects 计数）进证据的 review、不进字段闭合的 coverage，覆盖结论不变；
 4. 汇总（T20）：登记数、审计通过数、消费者接受数、实际承接数四个数分开，每个被重跑的单元有原因与耗时；
 5. ``_gate_currents`` 的合同探测、已登记集合、探测会话共享；
 6. entry_gates 的两处新增：declared Go 单元的清单 env 带三个离线变量（非 Go 单元与 rerun-only 单元的 env 不变），
@@ -986,10 +986,32 @@ class SampledEvidenceTests(unittest.TestCase):
         sample = json.loads(ur.RecordStore(world.store).log_path(record["read_audit"]["trace"]["sha256"]).read_text(encoding="utf-8"))
         self.assertEqual(sample["coverage"]["detached_markers"], 2)
         self.assertEqual(sample["coverage"]["unresolved_reasons"], {}, "垃圾行不再留下假的未解析原因")
-        self.assertEqual(sample["review"], {"detached_samples": [garbage_a, garbage_b]}, "原样行随证据封存")
+        # 夹具里的两条真实垃圾行名字都是 lsetxattr（副作用类）：采样器在 raw 顶层记 detached_side_effects=2，执行器也把它放进证据的 review（WP1g），
+        # 与原样行并列；coverage 的字段集合仍然闭合，记录的结论不变（上面的 passed／inheritable、下面的消费者核验）。
+        self.assertEqual(sample["review"], {"detached_samples": [garbage_a, garbage_b], "detached_side_effects": 2}, "原样行与副作用类条数随证据封存")
+        self.assertNotIn("detached_side_effects", sample["coverage"], "计数只进 review，不进字段闭合的 coverage")
         self.assertNotIn("/usr/local/go/src/internal/abi", json.dumps(sample["outside_accesses"]), "形态 B 里像路径的参数不算一次读取")
         self.assertEqual(ur.check_record(ur.RecordStore(world.store), ur.RecordStore(world.store).record_path("backend:go-test", record["record_sha256"]),
                                          record, current_for(record), facts_for(record)), [], "消费者照样接受")
+
+    def test_dropped_garbage_lines_of_a_non_side_effect_name_leave_no_side_effect_count_in_the_evidence(self) -> None:
+        """被丢弃的垃圾行里没有副作用类名字时，raw 不写 detached_side_effects（有才写），证据的 review 里也就没有这个键：只留原样行样例。
+        混着副作用类的行时，计数只数副作用类那几条（总数 detached_markers 仍是全部被丢弃的行）。"""
+
+        plain = "711006 syscall_0x15a17b(0, 0x42ce66593f50, 0, 0x8, 0, 0x2 <detached ...>"
+        side = '711008 lsetxattr(0xffffffffffffff00, "/p", "", 0, 0) = ?'
+        for lines, expected_review, markers in (([plain], {"detached_samples": [plain]}, 1),
+                                                ([plain, side], {"detached_samples": [side, plain], "detached_side_effects": 1}, 2)):
+            with self.subTest(lines=len(lines)):
+                world = World(self)
+                world.plan_good_strace(**{"backend:go-test": world.good_lines("backend:go-test") + lines})
+                first = self.sampled(world)
+                self.assertEqual(first.code, 0, first.stderr[-2500:])
+                record = world.record_of(first, "backend:go-test")
+                self.assertEqual((record["read_audit"]["status"], record["passed"], record["inheritable"]), ("passed", True, True), "结论不变")
+                sample = json.loads(ur.RecordStore(world.store).log_path(record["read_audit"]["trace"]["sha256"]).read_text(encoding="utf-8"))
+                self.assertEqual(sample["coverage"]["detached_markers"], markers)
+                self.assertEqual(sample["review"], expected_review)
 
     def test_tolerated_unfinished_calls_at_eof_keep_their_samples_in_the_evidence_and_the_record_passes(self) -> None:
         """多线程进程退出时永远配不上的 <unfinished ...>（形态 C）：不超过上限就被容忍；过滤器留的起始行样例是证据认识的可选键
@@ -1451,6 +1473,47 @@ class PureHelperTests(unittest.TestCase):
         plain = ue._declared_sample_from_raw(bare, unit_id="u", launcher=[], command=["go", "test"], cwd_rel="backend", exit_code=0, seconds=1.0,
                                              tracked=(set(), set()), commit="c" * 40, strace_version="6.8", sampler=ds, records=ue._records_module())
         self.assertNotIn("review", plain, "没有诊断样例就不带 review 键")
+
+    def test_the_side_effect_count_of_the_raw_goes_into_review_only_and_changes_no_verdict(self) -> None:
+        """采样器在 raw 顶层新增的 ``detached_side_effects``（被丢弃的垃圾行里名字属于副作用类的条数，有才写）：执行器把它同 ``detached_samples`` 一样放进证据的
+        review——验证侧不解释 review，所以覆盖检查的结论与没有这个键时逐项相同；coverage 的字段集合不变（闭合），没有这个键或为 0 时 review 里也没有。"""
+
+        from tools.official_client_capture.tests import test_ci_declared_inputs_records as records_tests
+
+        raw = {"lines": 9, "aliases": {"TREE": "/t", "WORK": "/w", "HOME": "/h", "TMP": "/tmp"},
+               "coverage": {"stream_complete": True, "unresolved": 0, "unresolved_reasons": {}, "unfinished_calls": 0, "unresolved_process_events": 0,
+                            "lines": 9, "detached_markers": 3},
+               "detached_samples": ['711008 lsetxattr(0xffffffffffffff00, "/p", "", 0, 0) = ?', "711006 syscall_0x15a17b(0x1 <detached ...>"],
+               "detached_side_effects": 1,
+               "repo_accesses": [], "outside_accesses": [], "git_commands": [], "network": []}
+
+        def build(document: dict[str, Any]) -> dict[str, Any]:
+            return ue._declared_sample_from_raw(document, unit_id="u", launcher=[], command=["go", "test"], cwd_rel="backend", exit_code=0, seconds=1.0,
+                                                tracked=(set(), set()), commit="c" * 40, strace_version="6.8", sampler=ds, records=ue._records_module())
+
+        sample = build(raw)
+        ur._declared_validate_sample(sample)
+        self.assertEqual(sample["review"], {"detached_samples": raw["detached_samples"], "detached_side_effects": 1})
+        self.assertEqual(sample["coverage"], raw["coverage"], "coverage 原样照搬 raw 的（证据认识的）键，没有多也没有少")
+        self.assertLessEqual(set(sample["coverage"]), set(ue._DECLARED_SAMPLE_COVERAGE_KEYS), "coverage 的字段集合没变（闭合）")
+        self.assertNotIn("detached_side_effects", sample["coverage"])
+        self.assertNotIn("detached_side_effects", sample)
+        for absent in ({key: value for key, value in raw.items() if key != "detached_side_effects"}, {**raw, "detached_side_effects": 0}):
+            without = build(absent)
+            self.assertNotIn("detached_side_effects", without["review"], "没有这个键或为 0（采样器不写）时，review 里也没有")
+            self.assertEqual(without["coverage"], sample["coverage"])
+            self.assertEqual(without["repo_accesses"], sample["repo_accesses"])
+        # 计数与样例各自独立地进 review：只有计数没有样例（raw 校验允许）时 review 里只有计数；两者都有时并列。
+        only_count = build({**raw, "detached_samples": []})
+        self.assertEqual(only_count["review"], {"detached_side_effects": 1})
+        self.assertEqual(build({**raw, "detached_side_effects": 3})["review"]["detached_side_effects"], 3, "原样照搬计数，不改写")
+        # 覆盖结论不变：同一份范围对「带计数的证据」与「不带计数的证据」给出逐项相同的结果；合格的证据加上这个计数仍然合格。
+        scope = records_tests.make_scope()
+        plain = records_tests.make_sample()
+        counted = {**plain, "review": {"detached_side_effects": 7, "detached_samples": ["711008 lsetxattr(0x1) = ?"]}}
+        self.assertEqual(ur.declared_coverage(counted, scope), ur.declared_coverage(plain, scope))
+        self.assertIs(ur.declared_coverage(counted, scope)["ok"], True)
+        ur._declared_validate_sample(counted)
 
 
 class WrapTests(unittest.TestCase):

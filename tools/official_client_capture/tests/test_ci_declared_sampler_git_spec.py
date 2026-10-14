@@ -38,7 +38,8 @@ GIT = "git"
 # 常量表（规格 v2 §1、§2、§3）：字面量，与采样器的实现逐项相等
 # ---------------------------------------------------------------------------
 
-# 子命令 -> (精确选项集, 前缀集, 修订参数的处理方式)。规格 §1：相对 WP1e 的表，只删去 show 与 log 的 --oneline，其余不变。
+# 子命令 -> (精确选项集, 前缀集, 修订参数的处理方式)。规格 §1：相对 WP1e 的表，删去 show 与 log 的 --oneline；WP1g 再删去 ls-tree 的 --abbrev= 前缀
+# （<n> 只是缩写长度的下限，对象库出现碰撞时输出会更长），其余不变。
 #   all：-- 之前的位置参数全是修订，至少一个；first：只有第一个位置参数是修订，后面是路径（ls-tree）；
 #   range：log、rev-list，位置参数是固定提交、两端都是完整提交号的 A..B／A...B、或 ^固定提交，至少一个正向修订。
 GIT_SPEC_V2_SUBCOMMANDS = {
@@ -46,7 +47,7 @@ GIT_SPEC_V2_SUBCOMMANDS = {
     "cat-file": (frozenset({"-t", "-s", "-e", "-p"}), (), "all"),
     "rev-parse": (frozenset({"--verify", "-q", "--quiet"}), (), "all"),
     "merge-base": (frozenset({"--is-ancestor", "--all"}), (), "all"),
-    "ls-tree": (frozenset({"-r", "-d", "-t", "-l", "--long", "--name-only", "--name-status", "--full-name", "--full-tree", "-z"}), ("--abbrev=",), "first"),
+    "ls-tree": (frozenset({"-r", "-d", "-t", "-l", "--long", "--name-only", "--name-status", "--full-name", "--full-tree", "-z"}), (), "first"),
     "diff-tree": (frozenset({"-r", "-t", "-z", "-M", "-C", "--root", "--no-commit-id", "--name-only", "--name-status", "--raw", "--stat", "--no-renames",
                              "--find-renames", "--quiet"}), (), "all"),
     "log": (frozenset({"--parents", "--no-walk", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges", "--name-only", "--name-status",
@@ -293,9 +294,14 @@ def _build_corpus() -> tuple[list[tuple[list[str], bool]], list[tuple[list[str],
 
     # ---- 7. 数字（规格 §4）：只接受 ASCII 数字 ----
     for argv in (("log", "-n", "3", A), ("log", "-n", "0", A), ("log", "-n", "10", A), ("log", "-3", A), ("log", "-0", A), ("log", "--max-count=3", A), ("log", "--max-count=0", A),
-                 ("rev-list", "-n", "1", A), ("rev-list", "-5", A), ("rev-list", "--max-count=2", A), ("ls-tree", "--abbrev=7", A), ("ls-tree", "--abbrev=40", A),
-                 ("log", "-n", "007", A)):
+                 ("rev-list", "-n", "1", A), ("rev-list", "-5", A), ("rev-list", "--max-count=2", A), ("log", "-n", "007", A)):
         fixed(GIT, *argv)
+    # WP1g：ls-tree 的 --abbrev=<n> 去掉（<n> 只是缩写长度的下限，对象库出现碰撞时输出更长）：数字再合规也不固定，别的子命令更不放行。
+    for argv in (("ls-tree", "--abbrev=7", A), ("ls-tree", "--abbrev=40", A), ("ls-tree", "--abbrev=0", A), ("ls-tree", "-r", "--abbrev=7", A),
+                 ("ls-tree", "--abbrev=7", A, "--", "docs"), ("ls-tree", A, "--abbrev=7"), ("ls-tree", "--abbrev=7", "--name-only", A, "docs/egress"),
+                 ("show", "--abbrev=7", A), ("log", "--abbrev=7", A), ("rev-list", "--abbrev=7", A), ("diff-tree", "--abbrev=7", A, B)):
+        unfixed(GIT, *argv)
+    fixed(GIT, "ls-tree", "-r", "--name-only", A)  # 同一条命令去掉 --abbrev= 就是固定的
     for argv in (("log", "-n", "²", A), ("log", "-n", "٣", A), ("log", "-n", "１２", A), ("log", "-n", "-1", A), ("log", "-n", "", A), ("log", "-n", A), ("log", "-n"), ("log", A, "-n"),
                  ("log", "-²", A), ("log", "-٣", A), ("log", "-３", A), ("log", "-3x", A), ("log", "-", A), ("log", "--max-count=²", A), ("log", "--max-count=٣", A),
                  ("log", "--max-count=", A), ("log", "--max-count=-1", A), ("log", "--max-count=3x", A), ("log", "--max-count=3.5", A), ("log", "--max-count= 3", A),
@@ -353,7 +359,8 @@ class GitSpecV2Tables(unittest.TestCase):
     def test_plain_globals_dashdash_subcommands_and_numeric_prefixes_equal_the_spec(self) -> None:
         self.assertEqual(ds._GIT_PLAIN_GLOBALS, GIT_SPEC_V2_PLAIN_GLOBALS)
         self.assertEqual(ds._GIT_DASHDASH_REVISION_SUBCOMMANDS, GIT_SPEC_V2_DASHDASH_REVISION_SUBCOMMANDS)
-        self.assertEqual(ds._GIT_NUMERIC_PREFIXES, ("--max-count=", "--abbrev="))
+        self.assertEqual(ds._GIT_NUMERIC_PREFIXES, ("--max-count=",), "WP1g：ls-tree 的 --abbrev= 已去掉，数字前缀只剩 --max-count=")
+        self.assertEqual(ds._GIT_FIXED_SUBCOMMANDS["ls-tree"][1], (), "ls-tree 没有任何带值的前缀选项")
         self.assertEqual(ds._GIT_OBJECT_TYPES, frozenset({"blob", "tree", "commit", "tag"}))
 
     def test_the_format_whitelist_equals_the_spec(self) -> None:

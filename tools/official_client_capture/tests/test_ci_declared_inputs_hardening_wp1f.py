@@ -209,7 +209,7 @@ class GitFormatTests(unittest.TestCase):
 
     def test_numbers_are_ascii_digits_only(self) -> None:
         for good in (["git", "log", "-n", "3", A], ["git", "log", "-5", A], ["git", "log", "--max-count=10", A], ["git", "rev-list", "--max-count=2", A],
-                     ["git", "ls-tree", "--abbrev=8", A], ["git", "log", "-n", "0", A]):
+                     ["git", "log", "-n", "0", A]):
             with self.subTest(argv=good):
                 self.assertIsNone(ur._declared_git_usage_problem(good))
         for bad in (["git", "log", "-n", "²", A], ["git", "log", "-n", "٣", A], ["git", "log", "-n", "３", A], ["git", "log", "-n", "x", A], ["git", "log", "-n", "", A],
@@ -218,6 +218,27 @@ class GitFormatTests(unittest.TestCase):
                     ["git", "ls-tree", "--abbrev=x", A], ["git", "log", "-n"]):
             with self.subTest(argv=bad):
                 self.assertIsNotNone(ur._declared_git_usage_problem(bad), bad)
+
+    def test_ls_tree_abbrev_is_not_fixed_whatever_the_number(self) -> None:
+        """WP1g：``ls-tree --abbrev=<n>`` 的 ``<n>`` 只是缩写长度的下限，对象库里出现碰撞时输出会更长，所以不固定；没有任何已登记单元用它。
+        数字再合规（ASCII、含 0 与 40）也不固定，写在位置参数前后、与别的选项并用、别的子命令里也都不固定；去掉它的同一条命令仍然固定。"""
+
+        self.assertNotIn("--abbrev=", ur._DECLARED_GIT_FIXED_SUBCOMMANDS["ls-tree"][1])
+        self.assertEqual(ur._DECLARED_GIT_FIXED_SUBCOMMANDS["ls-tree"][1], ())
+        self.assertEqual(ur._DECLARED_GIT_NUMERIC_PREFIXES, ("--max-count=",))
+        for argv in (["git", "ls-tree", "--abbrev=7", A], ["git", "ls-tree", "--abbrev=8", A], ["git", "ls-tree", "--abbrev=40", A], ["git", "ls-tree", "--abbrev=0", A],
+                     ["git", "ls-tree", "-r", "--abbrev=7", A], ["git", "ls-tree", A, "--abbrev=7"], ["git", "ls-tree", "--abbrev=7", A, "--", "docs"],
+                     ["git", "ls-tree", "--abbrev=7", "--name-only", A, "docs/egress"], ["git", "--no-pager", "ls-tree", "--abbrev=7", A],
+                     ["git", "show", "--abbrev=7", A], ["git", "log", "--abbrev=7", A], ["git", "rev-list", "--abbrev=7", A]):
+            with self.subTest(argv=argv):
+                problem = ur._declared_git_usage_problem(argv)
+                self.assertIsNotNone(problem, argv)
+                self.assertIn("--abbrev=", problem)
+                self.assertIn("C6-git-unfixed", rules(cover(git_sample([argv]))))
+        for argv in (["git", "ls-tree", "-r", "--name-only", A], ["git", "ls-tree", A], ["git", "ls-tree", "-l", A, "docs/egress"]):
+            with self.subTest(argv=argv):
+                self.assertIsNone(ur._declared_git_usage_problem(argv))
+                self.assertTrue(cover(git_sample([argv]))["ok"])
 
 
 # ---------------------------------------------------------------------------
@@ -339,15 +360,15 @@ class GlobLinearTests(unittest.TestCase):
         """WP1e 的回溯正则：``out/*a*a*a*b`` 对 400 字符 0.85 秒、600 字符 4.1 秒、1000 字符超过 25 秒；线性匹配对 5000 字符也是毫秒级。"""
 
         patterns = ("out/*a*a*a*b", "out/*a*a*a*a", "out/?*a*a*b", "out/*a?a*a*b", "out/a*a*a*a*", "out/*?*?*?", "out/?a*?a*a*b")
+        # 故意不用 subTest：长度从小到大，第一个超时就让整个用例失败（回溯实现遇到 5000 字符会算上几个小时，不能让后面的长度继续跑）。
         for length in (120, 600, 1000, 5000):
             path = "a" * length
             for pattern in patterns:
-                with self.subTest(pattern=pattern, length=length):
-                    start = time.perf_counter()
-                    matched = ur._declared_glob(pattern).fullmatch(f"out/{path}")
-                    elapsed = time.perf_counter() - start
-                    self.assertLess(elapsed, 0.5, f"{pattern} 对 {length} 字符耗时 {elapsed:.3f} 秒")
-                    self.assertIn(matched, (True, None))
+                start = time.perf_counter()
+                matched = ur._declared_glob(pattern).fullmatch(f"out/{path}")
+                elapsed = time.perf_counter() - start
+                self.assertLess(elapsed, 0.5, f"{pattern} 对 {length} 字符耗时 {elapsed:.3f} 秒")
+                self.assertIn(matched, (True, None))
 
     def test_declared_coverage_with_a_worst_case_glob_and_long_paths_is_fast(self) -> None:
         for length in (600, 1000, 5000):
@@ -360,10 +381,10 @@ class GlobLinearTests(unittest.TestCase):
                 start = time.perf_counter()
                 result = ur.declared_coverage(sample, scope)
                 elapsed = time.perf_counter() - start
-                with self.subTest(pattern=pattern, length=length):
-                    self.assertLess(elapsed, 0.5, f"整个覆盖检查耗时 {elapsed:.3f} 秒")
-                    # *a*a*a*b 匹配第二条（以 b 结尾的 a 串）：它被当作输出区，只剩第一个模式下的另一条违规或全部通过。
-                    self.assertIsInstance(result["ok"], bool)
+                # 同样不用 subTest：第一个超时就失败，不让更长的路径继续跑。
+                self.assertLess(elapsed, 0.5, f"整个覆盖检查耗时 {elapsed:.3f} 秒（{pattern}，{length} 字符）")
+                # *a*a*a*b 匹配第二条（以 b 结尾的 a 串）：它被当作输出区，只剩第一个模式下的另一条违规或全部通过。
+                self.assertIsInstance(result["ok"], bool)
 
     def test_the_wildcard_limit_is_kept_as_hygiene(self) -> None:
         ur.validate_declared_scope(probe.bare_scope(repo_ignored=["out/*a*a*a*b"]))

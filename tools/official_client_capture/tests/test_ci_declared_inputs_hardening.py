@@ -135,7 +135,7 @@ class GitWhitelistTests(unittest.TestCase):
             ["git", "cat-file", "-p", A], ["git", "cat-file", "-t", A], ["git", "cat-file", "blob", f"{A}:x"], ["git", "cat-file", "-e", f"{A}^{{tree}}"],
             ["git", "rev-parse", "--verify", f"{A}^{{commit}}"], ["git", "rev-parse", "-q", "--verify", A], ["git", "rev-parse", A],
             ["git", "merge-base", A, A], ["git", "merge-base", "--is-ancestor", A, A], ["git", "merge-base", "--all", A, A],
-            ["git", "ls-tree", "-r", "--name-only", A, "--", "docs/egress"], ["git", "ls-tree", "-z", A, "--", ".git/HEAD"], ["git", "ls-tree", "--abbrev=8", A],
+            ["git", "ls-tree", "-r", "--name-only", A, "--", "docs/egress"], ["git", "ls-tree", "-z", A, "--", ".git/HEAD"], ["git", "ls-tree", "-l", A],
             ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", A], ["git", "diff-tree", "-r", A, A],
             ["git", "log", "--format=%H", f"{A}..{A}"], ["git", "log", "-n", "3", A], ["git", "log", "-5", A], ["git", "log", f"^{A}", A],
             ["git", "log", f"{A}...{A}", "--format=%H"], ["git", "log", "--max-count=2", A],

@@ -1332,8 +1332,9 @@ _DECLARED_GIT_HIDDEN = "<argv-not-visible>"
 #   固定＝子命令属于只读、按对象寻址的一类（show、cat-file、rev-parse、merge-base、ls-tree、diff-tree，以及 log／rev-list），选项都在
 #   放行清单内，且所有修订参数都是完整 40 位小写十六进制提交号（可带 ``:路径``、``^{tree}``、``^{commit}`` 后缀；log／rev-list 的
 #   范围两端也都得是完整提交号）。选项的值同样受限：``--format=``／``--pretty=`` 只放行精确的 ``raw`` 与「普通字符＋白名单占位符」的
-#   自定义格式串（占位符表见 ``_DECLARED_GIT_FORMAT_PLACEHOLDERS``）；数字选项（``-n``、``-<数字>``、``--max-count=``、``--abbrev=``）只认
-#   ASCII 数字；``--oneline`` 已删（它等于 ``--pretty=oneline --abbrev-commit``，缩写长度随对象库大小与 core.abbrev 变化）。
+#   自定义格式串（占位符表见 ``_DECLARED_GIT_FORMAT_PLACEHOLDERS``）；数字选项（``-n``、``-<数字>``、``--max-count=``）只认
+#   ASCII 数字；``--oneline`` 已删（它等于 ``--pretty=oneline --abbrev-commit``，缩写长度随对象库大小与 core.abbrev 变化）；``ls-tree --abbrev=<n>``
+#   也已删（``<n>`` 只是缩写长度的下限，对象库里出现碰撞时输出会更长；拿不准一律算违规，没有任何已登记单元用它）。
 #   ``--`` 的含义因子命令而异：merge-base、cat-file、rev-parse 里它只是「选项结束」，其后的参数仍是修订（``merge-base A B -- HEAD`` 的结果
 #   随 HEAD 变化），所以这三个子命令的 argv 里出现 ``--`` 就不固定；show、log、rev-list、ls-tree、diff-tree 里 ``--`` 之后才是路径。
 #   （与采样器 ``git_usage_problem`` 同口径，规格见两边的测试；验证器是被钉住的纯函数，不 import 采样器。）
@@ -1359,7 +1360,7 @@ _DECLARED_GIT_FIXED_SUBCOMMANDS: dict[str, tuple[frozenset[str], tuple[str, ...]
     "rev-parse": (frozenset({"--verify", "-q", "--quiet"}), (), "all"),
     "merge-base": (frozenset({"--is-ancestor", "--all"}), (), "all"),
     "ls-tree": (frozenset({"-r", "-d", "-t", "-l", "--long", "--name-only", "--name-status", "--full-name", "--full-tree", "-z"}),
-                ("--abbrev=",), "first"),
+                (), "first"),
     "diff-tree": (frozenset({"-r", "-t", "-z", "-M", "-C", "--root", "--no-commit-id", "--name-only", "--name-status", "--raw", "--stat",
                              "--no-renames", "--find-renames", "--quiet"}), (), "all"),
     "log": (frozenset({"--parents", "--no-walk", "--reverse", "--topo-order", "--date-order", "--first-parent", "--no-merges",
@@ -1371,7 +1372,7 @@ _DECLARED_GIT_FIXED_SUBCOMMANDS: dict[str, tuple[frozenset[str], tuple[str, ...]
 # 带值的前缀选项：格式选项的值只放行精确 raw 与白名单占位符的自定义格式串；数字选项的值只认 ASCII 数字（``s.isascii() and s.isdigit()``，
 # 拒绝 ``²`` 之类的 Unicode 数字）。
 _DECLARED_GIT_FORMAT_PREFIXES = ("--format=", "--pretty=")
-_DECLARED_GIT_NUMERIC_PREFIXES = ("--max-count=", "--abbrev=")
+_DECLARED_GIT_NUMERIC_PREFIXES = ("--max-count=",)
 # 自定义格式串里放行的占位符（其余 ``%…`` 序列一律不固定），外加 ``%x`` 与恰好两位十六进制数字（如 ``%x00``）。禁止的占位符及理由：
 # ``%D %d`` 带出 HEAD／分支／标签，``%N`` 是 notes，``%S`` 是来源引用，``%g*`` 是 reflog，``%(…)`` 全部（describe、decorate、trailers 等）读引用库，
 # ``%h %t %p`` 的缩写长度随对象库大小变，``%ad %cd %aD %cD`` 随 log.date 配置变，``%ar %cr`` 是相对当前时间，``%aN %aE %cN %cE`` 读 .mailmap。

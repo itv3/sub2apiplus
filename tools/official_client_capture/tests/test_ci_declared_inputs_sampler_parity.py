@@ -156,6 +156,22 @@ class GitCorpusParityTests(unittest.TestCase):
                 self.assertIsInstance(problem, str, argv)
                 self.assertTrue(problem, argv)
 
+    def test_ls_tree_abbrev_is_unfixed_in_both_modules_and_in_the_corpus(self) -> None:
+        """WP1g：``ls-tree --abbrev=<n>`` 去掉（``<n>`` 只是缩写长度的下限，对象库出现碰撞时输出会更长）：两个模块都判不固定，语料里有这条期望，
+        常量表里 ls-tree 没有带值前缀、数字前缀只剩 ``--max-count=``。"""
+
+        index = {tuple(argv): expected for argv, expected in spec.GIT_SPEC_V2_CORPUS}
+        for argv in (["git", "ls-tree", "--abbrev=7", A], ["git", "ls-tree", "--abbrev=40", A], ["git", "ls-tree", "-r", "--abbrev=7", A]):
+            with self.subTest(argv=argv):
+                self.assertIs(index.get(tuple(argv)), False, "语料里有这条且期望不固定")
+                self.assertIsNotNone(ds.git_usage_problem(argv))
+                self.assertIsNotNone(ur._declared_git_usage_problem(argv))
+        self.assertIs(index[("git", "ls-tree", "-r", "--name-only", A)], True, "去掉 --abbrev= 的同一条命令仍然固定")
+        self.assertEqual(ds._GIT_FIXED_SUBCOMMANDS["ls-tree"][1], ())
+        self.assertEqual(ur._DECLARED_GIT_FIXED_SUBCOMMANDS["ls-tree"][1], ())
+        self.assertEqual(ds._GIT_NUMERIC_PREFIXES, ("--max-count=",))
+        self.assertEqual(ur._DECLARED_GIT_NUMERIC_PREFIXES, ("--max-count=",))
+
     def test_the_two_spec_ambiguities_are_resolved_the_conservative_way(self) -> None:
         self.assertGreaterEqual(len(spec.GIT_SPEC_V2_UNSPECIFIED), 20)
         for argv, expected, _note in spec.GIT_SPEC_V2_UNSPECIFIED:
