@@ -22,7 +22,7 @@
   },
   "coverage": {
     "detached_markers": 0,
-    "lines": 741978,
+    "lines": 753053,
     "stream_complete": true,
     "unfinished_calls": 0,
     "unresolved": 69900,
@@ -34,23 +34,23 @@
   "invalid_reasons": [],
   "network": [{"family": "AF_INET", "target": "127.0.0.1:3000"}, {"family": "AF_UNIX", "target": "/var/run/nscd/socket"}],
   "outside_accesses": [
-    ["/", ["dir", "list", "missing", "stat"], 23],
+    ["/", ["dir", "list", "missing", "stat"], 24],
     ["/VAR/TMP/DECLARED-PROBE-CMDS-20261014T125522Z/TEST-TREE/FRONTEND/NODE_MODULES/.PNPM/TYPESCRIPT@5.6.3/NODE_MODULES/TYPESCRIPT/LIB/", ["missing"], 1],
     ["/bin/", ["exec"], 4],
     ["/dev/null", ["read"], 4],
     ["/etc", ["stat"], 4],
-    ["/etc/host.conf", ["read"], 1],
-    ["/etc/hosts", ["read"], 1],
+    ["/etc/host.conf", ["read"], 2],
+    ["/etc/hosts", ["read"], 2],
     ["/etc/ld.so.cache", ["read"], 4],
     ["/etc/ld.so.preload", ["missing"], 4],
     ["/etc/locale.alias", ["read"], 4],
     ["/etc/localtime", ["read", "stat"], 4],
-    ["/etc/netsvc.conf", ["missing"], 1],
-    ["/etc/nsswitch.conf", ["read", "stat"], 1],
-    ["/etc/resolv.conf", ["read", "stat"], 1],
+    ["/etc/netsvc.conf", ["missing"], 2],
+    ["/etc/nsswitch.conf", ["read", "stat"], 2],
+    ["/etc/resolv.conf", ["read", "stat"], 2],
     ["/etc/selinux/config", ["missing"], 1],
     ["/etc/ssl/openssl.cnf", ["read"], 4],
-    ["/etc/svc.conf", ["missing"], 1],
+    ["/etc/svc.conf", ["missing"], 2],
     ["/lib/aarch64-linux-gnu/", ["read"], 34],
     ["/node_modules/", ["missing"], 1],
     ["/node_modules/node:fs/", ["missing"], 1],
@@ -83,15 +83,15 @@
     ["/proc/stat", ["read"], 4],
     ["/proc/sys/vm/overcommit_memory", ["read"], 4],
     ["/proc/version", ["read"], 1],
-    ["/run/systemd/resolve/", ["read"], 1],
+    ["/run/systemd/resolve/", ["read"], 2],
     ["/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq", ["missing"], 4],
     ["/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq", ["missing"], 4],
     ["/sys/devices/system/cpu/cpu2/cpufreq/scaling_cur_freq", ["missing"], 4],
     ["/sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq", ["missing"], 4],
     ["/sys/devices/system/cpu/online", ["read"], 1],
     ["/sys/devices/system/node/node1", ["missing"], 1],
-    ["/sys/fs/cgroup/user.slice/user-0.slice/session-30934.scope/memory.high", ["read"], 4],
-    ["/sys/fs/cgroup/user.slice/user-0.slice/session-30934.scope/memory.max", ["read"], 4],
+    ["/sys/fs/cgroup/user.slice/user-0.slice/session-31060.scope/memory.high", ["read"], 4],
+    ["/sys/fs/cgroup/user.slice/user-0.slice/session-31060.scope/memory.max", ["read"], 4],
     ["/sys/fs/selinux", ["missing"], 1],
     ["/sys/kernel/mm/transparent_hugepage/hpage_pmd_size", ["read"], 1],
     ["/usr/", ["stat"], 5],
@@ -128,7 +128,7 @@
     ["{HOME}/.node_modules", ["missing"], 4],
     ["{HOME}/.npmrc", ["missing"], 1],
     ["{TMP}", ["stat"], 1],
-    ["{TMP}/", ["dir", "list", "read", "stat", "write"], 1592],
+    ["{TMP}/", ["dir", "list", "read", "stat", "write"], 1576],
     ["{WORK}", ["dir", "stat"], 4],
     ["{WORK}/", ["list", "missing"], 12],
     ["{WORK}/node_modules/", ["missing"], 1],
@@ -10572,8 +10572,8 @@
     ["{TREE}/frontend/vitest.config.mjs", ["missing"], false],
     ["{TREE}/frontend/vitest.config.mts", ["missing"], false],
     ["{TREE}/frontend/vitest.config.ts", ["read", "stat"], true],
-    ["{TREE}/frontend/vitest.config.ts.timestamp-1791997621435-9fb9b6d8f8966.mjs", ["read", "stat", "write"], false],
-    ["{TREE}/frontend/vitest.config.ts.timestamp-1791997680074-82968c1e20117.mjs", ["read", "stat", "write"], false],
+    ["{TREE}/frontend/vitest.config.ts.timestamp-1792014404533-292308a87931b.mjs", ["read", "stat", "write"], false],
+    ["{TREE}/frontend/vitest.config.ts.timestamp-1792014459246-6ed37c10f91ae.mjs", ["read", "stat", "write"], false],
     ["{TREE}/lerna.json", ["missing"], false],
     ["{TREE}/node_modules", ["missing"], false],
     ["{TREE}/node_modules/jsdom", ["missing"], false],
@@ -10626,7 +10626,7 @@
         }
       ],
       "transient": [
-        {"paths": 2, "pattern": "frontend/vitest.config.ts.timestamp-*", "read_back": 2, "sample": ["frontend/vitest.config.ts.timestamp-1791997621435-9fb9b6d8f8966.mjs", "frontend/vitest.config.ts.timestamp-1791997680074-82968c1e20117.mjs"], "unused": false}
+        {"paths": 2, "pattern": "frontend/vitest.config.ts.timestamp-*", "read_back": 2, "sample": ["frontend/vitest.config.ts.timestamp-1792014404533-292308a87931b.mjs", "frontend/vitest.config.ts.timestamp-1792014459246-6ed37c10f91ae.mjs"], "unused": false}
       ],
       "unix_sockets": ["/var/run/nscd/socket"]
     },
@@ -10640,14 +10640,14 @@
         "count": 3,
         "items": [
           ["{TREE}/frontend/node_modules/.vite", [0]],
-          ["{TREE}/frontend/vitest.config.ts.timestamp-1791997621435-9fb9b6d8f8966.mjs", [0]],
-          ["{TREE}/frontend/vitest.config.ts.timestamp-1791997680074-82968c1e20117.mjs", [1]]
+          ["{TREE}/frontend/vitest.config.ts.timestamp-1792014404533-292308a87931b.mjs", [0]],
+          ["{TREE}/frontend/vitest.config.ts.timestamp-1792014459246-6ed37c10f91ae.mjs", [1]]
         ]
       }
     },
     "runs": [
-      {"cache": "cold", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T17:07:58Z", "label": "cold1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T17:07:00Z", "timed_out": false},
-      {"cache": "warm", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T17:08:56Z", "label": "warm1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T17:07:59Z", "timed_out": false}
+      {"cache": "cold", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T21:47:37Z", "label": "cold1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T21:46:43Z", "timed_out": false},
+      {"cache": "warm", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T21:48:31Z", "label": "warm1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T21:47:38Z", "timed_out": false}
     ],
     "untracked_reads": {"by_prefix": [], "count": 0, "sample": []},
     "writes": {
@@ -10661,12 +10661,12 @@
     "commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
     "kernel": "6.17.0-1020-oracle",
     "runs": [
-      {"cache": "cold", "exit_code": 0, "lines": 368741, "seconds": 58.317},
-      {"cache": "warm", "exit_code": 0, "lines": 373237, "seconds": 57.762}
+      {"cache": "cold", "exit_code": 0, "lines": 373838, "seconds": 54.406},
+      {"cache": "warm", "exit_code": 0, "lines": 379215, "seconds": 53.42}
     ],
-    "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4",
+    "sampler_sha256": "d5e431fb4e23a734e1477a9b496a132e532f7c363fe7ea23f4f9b5b229f3b7cd",
     "strace": "6.8",
-    "utc": "2026-10-14T17:08:56Z"
+    "utc": "2026-10-14T21:48:31Z"
   },
   "schema_version": "declared-sample/v1",
   "unit_id": "frontend:critical",

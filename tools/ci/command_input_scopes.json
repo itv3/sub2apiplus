@@ -2,59 +2,59 @@
   "schema_version": "declared-inputs-registry/v1",
   "units": {
     "backend:backend-lint": {
-      "reason": "golangci-lint：读整个 backend 源码树与 lint／模块缓存；未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 15.8 秒）",
+      "reason": "golangci-lint：读整个 backend 源码树与 lint／模块缓存；未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 15.8 秒）",
       "status": "rerun-only"
     },
     "backend:go-test": {
-      "reason": "测试解析并连接真实主机名（example.com、api.kimi.com、www.googleapis.com 等，见 urlvalidator.ValidateResolvedIP、channel_monitor_ssrf），结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）（历史中位 559.8 秒）",
+      "reason": "采样到连向外部 DNS 解析器（端口 53）与外网 HTTPS（端口 443）的连接（backend:go-test 样本里有 Cloudflare 地址段）；测试会解析并连接真实主机名，结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）（历史中位 559.8 秒）",
       "status": "rerun-only"
     },
     "backend:integration": {
-      "reason": "测试解析并连接真实主机名（example.com、api.kimi.com、www.googleapis.com 等，见 urlvalidator.ValidateResolvedIP、channel_monitor_ssrf），结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）；另需 Docker 守护进程与 testcontainers 镜像（历史中位 578.0 秒）",
+      "reason": "采样到连向外部 DNS 解析器（端口 53）与外网 HTTPS（端口 443，含 205.185.123.167:443）的连接，另连 /var/run/docker.sock；测试会解析并连接真实主机名，结果依赖外部 DNS 与网络，且需 Docker 守护进程与 testcontainers 镜像，不可声明级承接（10-14 ARM64 真实采样证实）（历史中位 578.0 秒）",
       "status": "rerun-only"
     },
     "backend:lint-integration": {
-      "reason": "golangci-lint（integration 标签）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 12.5 秒）",
+      "reason": "golangci-lint（integration 标签）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 12.5 秒）",
       "status": "rerun-only"
     },
     "backend:lint-unit": {
-      "reason": "golangci-lint（unit 标签）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 9.6 秒）",
+      "reason": "golangci-lint（unit 标签）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 9.6 秒）",
       "status": "rerun-only"
     },
     "backend:unit": {
-      "reason": "测试解析并连接真实主机名（example.com、api.kimi.com、www.googleapis.com 等，见 urlvalidator.ValidateResolvedIP、channel_monitor_ssrf），结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）（历史中位 618.6 秒）",
+      "reason": "采样到连向外部 DNS 解析器（端口 53）与外网 HTTPS（端口 443）的连接（backend:unit 样本里约 30 个非回环 IP，含 Google、Cloudflare 地址段）；测试会解析并连接真实主机名（代码见 urlvalidator.ValidateResolvedIP、channel_monitor_ssrf），结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）（历史中位 618.6 秒）",
       "status": "rerun-only"
     },
     "capture:prerequisites": {
-      "reason": "环境实时检查（typescript 摘要比对与 node 版本）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "环境实时检查（typescript 摘要比对与 node 版本）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "deploy:apple-container.sh-syntax": {
-      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "deploy:test-caddyfile-cache.sh": {
-      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "deploy:tests-apple-container-test.sh": {
-      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状",
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化",
       "status": "rerun-only"
     },
     "deploy:tests-docker-compose-gateway-env-test.sh": {
-      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.1 秒）",
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 1.1 秒）",
       "status": "rerun-only"
     },
     "deploy:tests-docker-compose-security-test.sh": {
-      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "deploy:tests-docker-compose-simple-mode-env-test.sh": {
-      "reason": "调 docker compose（依赖 docker CLI 与插件，实时）；未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.8 秒）",
+      "reason": "调 docker compose（依赖 docker CLI 与插件，实时）；未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 1.8 秒）",
       "status": "rerun-only"
     },
     "deploy:tests-docker-runtime-resources-test.sh": {
-      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:check-egress-bootstrap-replay": {
@@ -75,12 +75,12 @@
       "sample": {
         "command_sha256": "84792a730eb5904847ade54b10e068e417cb8909ed1847fb498b446a76a080bf",
         "evidence": "tools/ci/command_input_samples/egress-spec-egress-scanner-check.sample.json",
-        "evidence_sha256": "8df9c35d380ead86ee541f0b7c863740c810f0f105df96c9eb86d1a7aa07bceb",
+        "evidence_sha256": "b496349bd03c087129bdf90ff7c63f9c06f9b68bbf663e77f829c80d8cb8afbb",
         "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
         "runs": 2,
-        "sampled_at_utc": "2026-10-14T16:59:23Z",
+        "sampled_at_utc": "2026-10-14T21:39:35Z",
         "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
-        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+        "sampler_sha256": "d5e431fb4e23a734e1477a9b496a132e532f7c363fe7ea23f4f9b5b229f3b7cd"
       },
       "scope": {
         "contracts": [
@@ -409,51 +409,51 @@
       "status": "declared"
     },
     "egress-spec:egress-spec-audit-index-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset5-symbols": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 10.9 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 10.9 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset5-symbols-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset6-benchmark": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset6-benchmark-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset6-conflict": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset6-conflict-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset6-transition": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-changeset6-transition-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-egressscan-self-test": {
       "sample": {
         "command_sha256": "6b596d946c3520287ef5cd88fcb958114083fba57ad9ef1288ff9344c661db86",
         "evidence": "tools/ci/command_input_samples/egress-spec-egress-spec-egressscan-self-test.sample.json",
-        "evidence_sha256": "eadeeedf3d87d2bc9ef65fc4faa6c898fd087f8e26581df832964420e95d8cb8",
+        "evidence_sha256": "0c943d34d33d0122a701101d69bf6e03b31a7ef8c5157c90a92193b755b209e7",
         "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
         "runs": 2,
-        "sampled_at_utc": "2026-10-14T17:02:19Z",
+        "sampled_at_utc": "2026-10-14T21:42:20Z",
         "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
-        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+        "sampler_sha256": "d5e431fb4e23a734e1477a9b496a132e532f7c363fe7ea23f4f9b5b229f3b7cd"
       },
       "scope": {
         "contracts": [
@@ -759,7 +759,7 @@
       "status": "declared"
     },
     "egress-spec:egress-spec-fw-d-transition-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-completeness": {
@@ -768,7 +768,7 @@
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-completeness-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-r-disposition": {
@@ -777,7 +777,7 @@
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-r-disposition-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-runtime-evidence": {
@@ -786,7 +786,7 @@
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-runtime-evidence-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-workspace": {
@@ -795,11 +795,11 @@
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-fw-e-workspace-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-go-build": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 21.8 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 21.8 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-go-test": {
@@ -808,15 +808,15 @@
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-go-vet": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.1 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 1.1 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-gofmt": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.5 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.5 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-httpclient-guard": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.1 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 1.1 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-ledger-completeness": {
@@ -825,79 +825,79 @@
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-maintenance-conflict": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-maintenance-conflict-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-maintenance-transition": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-maintenance-transition-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-multi-persona-transition": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-multi-persona-transition-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-profile-enums": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.5 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.5 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-profile-snapshot": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.5 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.5 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-release-bindings": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-release-graph": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.6 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.6 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-repository-guard": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 5.4 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 5.4 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-runtime-catalog": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.7 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.7 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-runtime-catalog-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-service-guard": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 7.1 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 7.1 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-sink-stats": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-version-leak": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 2.0 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 2.0 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-version-leak-self-test": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 0.3 秒）",
       "status": "rerun-only"
     },
     "egress-spec:egress-spec-wire-diff": {
-      "reason": "go run -mod=mod 允许改写 go.mod／go.sum 并可能联网下载 wire 及其依赖，不可离线承接（历史中位 19.0 秒）",
+      "reason": "go run -mod=mod 允许改写 go.mod／go.sum 并可能联网下载 wire 及其依赖，不可离线承接（静态推断，未做采样验证）（历史中位 19.0 秒）",
       "status": "rerun-only"
     },
     "egress-spec:test-official-client-control": {
-      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 19.0 秒）",
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；登记前它在带审计策略的全集运行里已是不可承接（现状），登记表只是把这个状态明写为 rerun-only，不是新增退化（历史中位 19.0 秒）",
       "status": "rerun-only"
     },
     "egress-spec:test-upstream-merge-tools": {
@@ -909,12 +909,12 @@
       "sample": {
         "command_sha256": "8b62e00ad484903759c28029843eff90f995576b034935ad69210343f754283b",
         "evidence": "tools/ci/command_input_samples/frontend-critical.sample.json",
-        "evidence_sha256": "6eb8b20948149c959025e57ba6ff6bce812a9499f085b63420715d2e6ebc16cf",
+        "evidence_sha256": "9e41281e7790425b9a69801a332c25ced16a45f509e7d1f9c7276203b54e452f",
         "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
         "runs": 2,
-        "sampled_at_utc": "2026-10-14T17:08:56Z",
+        "sampled_at_utc": "2026-10-14T21:48:31Z",
         "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
-        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+        "sampler_sha256": "d5e431fb4e23a734e1477a9b496a132e532f7c363fe7ea23f4f9b5b229f3b7cd"
       },
       "scope": {
         "contracts": [
@@ -1064,12 +1064,12 @@
       "sample": {
         "command_sha256": "1993173cd53fa505ccee5ae480d4d3299d3524621c6090f850582694402a3684",
         "evidence": "tools/ci/command_input_samples/frontend-lint.sample.json",
-        "evidence_sha256": "b814ded27114a4f91078ab4b075159ac944c6cc2093611805ca16c26623d5617",
+        "evidence_sha256": "5004bf686c9670bc28a67109218b2d52ac08f2ee03795d6d09ceef109b6a9284",
         "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
         "runs": 2,
-        "sampled_at_utc": "2026-10-14T17:04:44Z",
+        "sampled_at_utc": "2026-10-14T21:44:38Z",
         "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
-        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+        "sampler_sha256": "d5e431fb4e23a734e1477a9b496a132e532f7c363fe7ea23f4f9b5b229f3b7cd"
       },
       "scope": {
         "contracts": [
@@ -1195,12 +1195,12 @@
       "sample": {
         "command_sha256": "3ada8eb24c2efc73f1a00d1ac973c2ae786bc14f45b3c0f3b11d7533d0851db8",
         "evidence": "tools/ci/command_input_samples/frontend-typecheck.sample.json",
-        "evidence_sha256": "822606771fcd90590b7925d08daad8ccda228c96eb36fd57856b17da2f7873c4",
+        "evidence_sha256": "4685e686fb5871a1efdd3d0fee85438fdf796fce3c52f33b13efb3061cd3e9aa",
         "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
         "runs": 2,
-        "sampled_at_utc": "2026-10-14T17:06:59Z",
+        "sampled_at_utc": "2026-10-14T21:46:42Z",
         "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
-        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+        "sampler_sha256": "d5e431fb4e23a734e1477a9b496a132e532f7c363fe7ea23f4f9b5b229f3b7cd"
       },
       "scope": {
         "contracts": [

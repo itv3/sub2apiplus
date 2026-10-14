@@ -22,7 +22,7 @@
   },
   "coverage": {
     "detached_markers": 0,
-    "lines": 791669,
+    "lines": 791677,
     "stream_complete": true,
     "unfinished_calls": 0,
     "unresolved": 4796,
@@ -79,8 +79,8 @@
     ["/sys/devices/system/cpu/cpu1/cpufreq/scaling_cur_freq", ["missing"], 1],
     ["/sys/devices/system/cpu/cpu2/cpufreq/scaling_cur_freq", ["missing"], 1],
     ["/sys/devices/system/cpu/cpu3/cpufreq/scaling_cur_freq", ["missing"], 1],
-    ["/sys/fs/cgroup/user.slice/user-0.slice/session-30934.scope/memory.high", ["read"], 1],
-    ["/sys/fs/cgroup/user.slice/user-0.slice/session-30934.scope/memory.max", ["read"], 1],
+    ["/sys/fs/cgroup/user.slice/user-0.slice/session-31060.scope/memory.high", ["read"], 1],
+    ["/sys/fs/cgroup/user.slice/user-0.slice/session-31060.scope/memory.max", ["read"], 1],
     ["/sys/fs/selinux", ["missing"], 1],
     ["/usr/bin/", ["exec", "read", "stat"], 5],
     ["/usr/lib/aarch64-linux-gnu/", ["read"], 9],
@@ -7540,8 +7540,8 @@
     "network": {"loopback": 0, "unix_allowed": [], "violations": []},
     "run_differences": {"outside": {"count": 0, "items": []}, "repo": {"count": 0, "items": []}},
     "runs": [
-      {"cache": "cold", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T17:03:34Z", "label": "cold1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T17:02:19Z", "timed_out": false},
-      {"cache": "warm", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T17:04:44Z", "label": "warm1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T17:03:34Z", "timed_out": false}
+      {"cache": "cold", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T21:43:30Z", "label": "cold1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T21:42:21Z", "timed_out": false},
+      {"cache": "warm", "env_overrides": {"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOTOOLCHAIN": "local"}, "filter_wait_seconds": 0.0, "finished_utc": "2026-10-14T21:44:38Z", "label": "warm1", "no_go_cache": true, "signal": null, "started_utc": "2026-10-14T21:43:30Z", "timed_out": false}
     ],
     "untracked_reads": {"by_prefix": [], "count": 0, "sample": []},
     "writes": {"outside": [], "repo_ignored": [], "sinks": [], "violations": {"count": 0, "items": []}}
@@ -7550,12 +7550,12 @@
     "commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
     "kernel": "6.17.0-1020-oracle",
     "runs": [
-      {"cache": "cold", "exit_code": 0, "lines": 395835, "seconds": 74.619},
-      {"cache": "warm", "exit_code": 0, "lines": 395834, "seconds": 69.948}
+      {"cache": "cold", "exit_code": 0, "lines": 395840, "seconds": 68.554},
+      {"cache": "warm", "exit_code": 0, "lines": 395837, "seconds": 68.258}
     ],
-    "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4",
+    "sampler_sha256": "d5e431fb4e23a734e1477a9b496a132e532f7c363fe7ea23f4f9b5b229f3b7cd",
     "strace": "6.8",
-    "utc": "2026-10-14T17:04:44Z"
+    "utc": "2026-10-14T21:44:38Z"
   },
   "schema_version": "declared-sample/v1",
   "unit_id": "frontend:lint",
