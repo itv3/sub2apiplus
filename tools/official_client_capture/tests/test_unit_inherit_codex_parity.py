@@ -866,31 +866,54 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
                                        '    except (OSError, ValidationError, KeyError, TypeError) as error:']}
 
 # >>> 收尾登记常量（自动生成，勿手改）
-CLOSEOUT_PY_1_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/entry_dryrun.py': '03ec4765a04984811bc5f51bc2bb9839b9b008847aca354b64dfe003de63f049'}
-CLOSEOUT_PY_1_REMOVED = {'tools/ci/entry_dryrun.py': []}
-CLOSEOUT_PY_2_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
-CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_gates.py': 'a0cec0364bd32ea89b4d8d8706cf68655c81acb0d0f63244ff2fd71b828793be'}
-CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_gates.py': ['            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
-CLOSEOUT_PY_3_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
-CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_orchestrator.py': 'e8a3300abcb16ed459873bc85a996b589cd8c9a03242eb98e18b33019f481dcb'}
-CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、',
+CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '2290c5b58a37e00de8a41a46f5bfb1a7fac0a3122c14527e7a48f0ada57e5b9e'}
+CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
+        '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
+        '        inherit_reference = _inherit_reference(Path(inherit_request), vars(args))',
+        '    if inherit_reference is not None:',
+        '    return {"action": "started", "result": str(path), "pid": process.pid, "out": str(out), "superseded": superseded}',
+        '                _inherit_completion(payload, historical=True)',
+        '    p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")']}
+CLOSEOUT_PY_2_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
+CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '192d34fa355265e8d094425df699a07b0eb2c1632d6d2bc55280da7b18e0c84c'}
+CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': []}
+CLOSEOUT_PY_3_BASELINE = 'eecf1845e3159257db55314ba20a13702a414e8e'
+CLOSEOUT_PY_3_DIGESTS = {'tools/ci/entry_gates.py': 'c72b89c668989ecb04f90ceaad8abe3c3554c3c16fc4f304799d450653c1afee'}
+CLOSEOUT_PY_3_REMOVED = {'tools/ci/entry_gates.py': ['            certification.claude_recorded_time_budget("vc-chain.claude-full-validation-only")["unit_timeout_seconds"]):']}
+CLOSEOUT_PY_4_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
+CLOSEOUT_PY_4_DIGESTS = {'tools/ci/entry_orchestrator.py': '4f45830872e05e732b507db210bf861f34f4bd7b752f4d2763e0c1e5732e1f2b'}
+CLOSEOUT_PY_4_REMOVED = {'tools/ci/entry_orchestrator.py': ['* 沿用只看步骤记录（产物存在不等于可用）：没有记录的旧产物一律不沿用；只写一次的正式坐标被占用（上次失败的残留、',
         '  或没有记录的旧产物）时换带序号的新坐标（``-r2``、``-r3`` …），实际坐标写进步骤记录，下游从记录取。',
+        '                 audit_strict: bool = False, audit_policy: Path | None = None) -> None:',
         '    def _recorded_reuse_products(self, out: Path, certification: Path) -> dict[str, str]:',
         '        result = json.loads((out / "pre-a3-reuse.json").read_text(encoding="utf-8"))',
         '        refresh_reuse = gates_run and self.ctx.client == "claude" and bool(self.params.get("CLAUDE_ENTRY_FULL79_SPEC"))',
         '            external_present = bridge and pre_a3_run and Path(self.p("PRE_A3_CERTIFICATION")).exists()',
-        '        except (OrchestratorError, ES.EntryStepsError, OSError) as error:']}
-CLOSEOUT_PY_4_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
-CLOSEOUT_PY_4_DIGESTS = {'tools/ci/unit_executor.py': '08410ddb1bd59e3aac88f1f997a956d4102ab959153174043cd6faefb2676107'}
-CLOSEOUT_PY_4_REMOVED = {'tools/ci/unit_executor.py': ['                        executor=records.executor_version([args.bytecode_helper]), environment=None,',
+        '        except (OrchestratorError, ES.EntryStepsError, OSError) as error:',
+        '                                audit_strict=args.audit_strict, audit_policy=args.audit_policy)']}
+CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
+CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '3f3f1eb4ba7ee472cf1effa7a561ff86fb5388f50a1dfe4239461101cb9d4a58'}
+CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
+CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
+CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'bd7610348455b4d8e580cbd3b4ada9e2e8fc8cce38dbaa6fec7aeb0d4ceda1d7'}
+CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['                        executor=records.executor_version([args.bytecode_helper]), environment=None,',
         '    executor = records.executor_version([args.bytecode_helper])',
+        '            current.inputs = records._unique([*(current.inputs or []), *[_audit_module().host_snapshot(path) for path in paths],',
         '                                                     sources=inherit_module.propose(store.root, currents, facts, max_age_hours=max_age))',
+        '                if name.startswith("host:") and _audit_module().host_snapshot(name[5:]) != entry:',
         '                or records.executor_version([args.bytecode_helper]) != recorder.executor',
         '                            executor=records.executor_version([args.bytecode_helper]), environment=None,']}
-CLOSEOUT_PY_5_BASELINE = '5626c055719f02a8574e4d8969caea84b85ad83b'
-CLOSEOUT_PY_5_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '8f9ed69f6e15ae20ab2ec9bb1d56b0c841507fb17b94fd8aa473268cea73f3e7'}
-CLOSEOUT_PY_5_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['                                claude_recorded_time_budget(name)["unit_timeout_seconds"]']}
+CLOSEOUT_PY_7_BASELINE = 'df90c329e3ba2b659ac7667b897e38a7a35d6269'
+CLOSEOUT_PY_7_DIGESTS = {'tools/ci/unit_records.py': '04056c95428c8d94d10290e14f403a36352935088e94b230a33976caea9312fc'}
+CLOSEOUT_PY_7_REMOVED = {'tools/ci/unit_records.py': ['    allowed = {"ranges", "files", "test_modules", "head", "resolved", "host_paths", "require_read_audit", "runtime_contract"}',
+        '        entries.append(_audit_module().host_snapshot(path))',
+        '    """只登记本轮真实规划的命令与测试单元；未登记单元只能重跑，未知单元拒绝。"""',
+        '        if (not isinstance(declaration, dict) or set(declaration) != {"host_paths", "require_read_audit", "runtime_contract"}',
+        '                replay = _audit_module().strict_audit_reads(json.loads(stored_trace.read_text()), current.inputs,']}
+CLOSEOUT_PY_8_BASELINE = '5626c055719f02a8574e4d8969caea84b85ad83b'
+CLOSEOUT_PY_8_DIGESTS = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': '8f9ed69f6e15ae20ab2ec9bb1d56b0c841507fb17b94fd8aa473268cea73f3e7'}
+CLOSEOUT_PY_8_REMOVED = {'tools/official_client_capture/codex_upgrade_pre_a3_certification.py': ['                                claude_recorded_time_budget(name)["unit_timeout_seconds"]']}
 # <<< 收尾登记常量
 LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str]]], ...] = (
     ("后台失败的受控逐单元后继", BACKGROUND_INHERIT_BASELINE, BACKGROUND_INHERIT_DIGESTS, BACKGROUND_INHERIT_REMOVED),
@@ -930,11 +953,14 @@ LATER_SOURCE_BASELINES: tuple[tuple[str, str, dict[str, str], dict[str, list[str
     ("空跑审计策略透传", ENTRY_DRYRUN_AUDIT_BASELINE_COMMIT,
      ENTRY_DRYRUN_AUDIT_SOURCE_DIGESTS, ENTRY_DRYRUN_AUDIT_SOURCE_REMOVED_LINES),
     # >>> 收尾登记行（自动生成，勿手改）
-    ('收尾登记 entry_dryrun.py', CLOSEOUT_PY_1_BASELINE, CLOSEOUT_PY_1_DIGESTS, CLOSEOUT_PY_1_REMOVED),
-    ('收尾登记 entry_gates.py', CLOSEOUT_PY_2_BASELINE, CLOSEOUT_PY_2_DIGESTS, CLOSEOUT_PY_2_REMOVED),
-    ('收尾登记 entry_orchestrator.py', CLOSEOUT_PY_3_BASELINE, CLOSEOUT_PY_3_DIGESTS, CLOSEOUT_PY_3_REMOVED),
-    ('收尾登记 unit_executor.py', CLOSEOUT_PY_4_BASELINE, CLOSEOUT_PY_4_DIGESTS, CLOSEOUT_PY_4_REMOVED),
-    ('收尾登记 codex_upgrade_pre_a3_certification.py', CLOSEOUT_PY_5_BASELINE, CLOSEOUT_PY_5_DIGESTS, CLOSEOUT_PY_5_REMOVED),
+    ('收尾登记 background_validation.py', CLOSEOUT_PY_1_BASELINE, CLOSEOUT_PY_1_DIGESTS, CLOSEOUT_PY_1_REMOVED),
+    ('收尾登记 entry_dryrun.py', CLOSEOUT_PY_2_BASELINE, CLOSEOUT_PY_2_DIGESTS, CLOSEOUT_PY_2_REMOVED),
+    ('收尾登记 entry_gates.py', CLOSEOUT_PY_3_BASELINE, CLOSEOUT_PY_3_DIGESTS, CLOSEOUT_PY_3_REMOVED),
+    ('收尾登记 entry_orchestrator.py', CLOSEOUT_PY_4_BASELINE, CLOSEOUT_PY_4_DIGESTS, CLOSEOUT_PY_4_REMOVED),
+    ('收尾登记 entry_steps.py', CLOSEOUT_PY_5_BASELINE, CLOSEOUT_PY_5_DIGESTS, CLOSEOUT_PY_5_REMOVED),
+    ('收尾登记 unit_executor.py', CLOSEOUT_PY_6_BASELINE, CLOSEOUT_PY_6_DIGESTS, CLOSEOUT_PY_6_REMOVED),
+    ('收尾登记 unit_records.py', CLOSEOUT_PY_7_BASELINE, CLOSEOUT_PY_7_DIGESTS, CLOSEOUT_PY_7_REMOVED),
+    ('收尾登记 codex_upgrade_pre_a3_certification.py', CLOSEOUT_PY_8_BASELINE, CLOSEOUT_PY_8_DIGESTS, CLOSEOUT_PY_8_REMOVED),
     # <<< 收尾登记行
 )
 # B5a-08 之后按设计改过的入口步骤声明：客户端 → 步骤 → (新增的输入名, 移除的输入名, 理由)。Codex 一侧不得出现。
