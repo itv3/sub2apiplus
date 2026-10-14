@@ -1,0 +1,1340 @@
+{
+  "schema_version": "declared-inputs-registry/v1",
+  "units": {
+    "backend:backend-lint": {
+      "reason": "golangci-lint：读整个 backend 源码树与 lint／模块缓存；未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 15.8 秒）",
+      "status": "rerun-only"
+    },
+    "backend:go-test": {
+      "reason": "测试解析并连接真实主机名（example.com、api.kimi.com、www.googleapis.com 等，见 urlvalidator.ValidateResolvedIP、channel_monitor_ssrf），结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）（历史中位 559.8 秒）",
+      "status": "rerun-only"
+    },
+    "backend:integration": {
+      "reason": "测试解析并连接真实主机名（example.com、api.kimi.com、www.googleapis.com 等，见 urlvalidator.ValidateResolvedIP、channel_monitor_ssrf），结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）；另需 Docker 守护进程与 testcontainers 镜像（历史中位 578.0 秒）",
+      "status": "rerun-only"
+    },
+    "backend:lint-integration": {
+      "reason": "golangci-lint（integration 标签）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 12.5 秒）",
+      "status": "rerun-only"
+    },
+    "backend:lint-unit": {
+      "reason": "golangci-lint（unit 标签）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 9.6 秒）",
+      "status": "rerun-only"
+    },
+    "backend:unit": {
+      "reason": "测试解析并连接真实主机名（example.com、api.kimi.com、www.googleapis.com 等，见 urlvalidator.ValidateResolvedIP、channel_monitor_ssrf），结果依赖外部 DNS 与网络，不可声明级承接（10-14 ARM64 真实采样证实）（历史中位 618.6 秒）",
+      "status": "rerun-only"
+    },
+    "capture:prerequisites": {
+      "reason": "环境实时检查（typescript 摘要比对与 node 版本）：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "deploy:apple-container.sh-syntax": {
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "deploy:test-caddyfile-cache.sh": {
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "deploy:tests-apple-container-test.sh": {
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状",
+      "status": "rerun-only"
+    },
+    "deploy:tests-docker-compose-gateway-env-test.sh": {
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.1 秒）",
+      "status": "rerun-only"
+    },
+    "deploy:tests-docker-compose-security-test.sh": {
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "deploy:tests-docker-compose-simple-mode-env-test.sh": {
+      "reason": "调 docker compose（依赖 docker CLI 与插件，实时）；未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.8 秒）",
+      "status": "rerun-only"
+    },
+    "deploy:tests-docker-runtime-resources-test.sh": {
+      "reason": "部署脚本检查：未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:check-egress-bootstrap-replay": {
+      "head": true,
+      "reason": "回放历史提交 38a9929e 的源码需要历史依赖，离线下 go/packages 加载 darwin/arm64 缺模块（10-14 实验证实），运行期需联网；且读 git 历史（历史中位 39.2 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:check-egress-seal": {
+      "head": true,
+      "reason": "读 git 历史（git ls-tree／cat-file／rev-parse／merge-base --is-ancestor／diff），结果依赖提交图与引用，保留 head 重跑（cmd/egressseal）（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:check-egress-spec-local-source": {
+      "reason": "读仓库外且被 .gitignore 忽略的 local-analysis 源码树（CODEX_0_149_1_SOURCE_ROOT），其内容不在仓库摘要里（历史中位 0.9 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-scanner-check": {
+      "sample": {
+        "command_sha256": "84792a730eb5904847ade54b10e068e417cb8909ed1847fb498b446a76a080bf",
+        "evidence": "tools/ci/command_input_samples/egress-spec-egress-scanner-check.sample.json",
+        "evidence_sha256": "8df9c35d380ead86ee541f0b7c863740c810f0f105df96c9eb86d1a7aa07bceb",
+        "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
+        "runs": 2,
+        "sampled_at_utc": "2026-10-14T16:59:23Z",
+        "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
+        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+      },
+      "scope": {
+        "contracts": [
+          "cache:go-build-cache",
+          "cache:go-mod-cache",
+          "host-config:config-go-env",
+          "host-config:go",
+          "host-config:go-bin-darwin-arm64-cleanup-ingress-reject-logs",
+          "host-config:go-bin-darwin-arm64-egressbindingdump",
+          "host-config:go-bin-darwin-arm64-egresscatalogpromote",
+          "host-config:go-bin-darwin-arm64-egresscatalogstage",
+          "host-config:go-bin-darwin-arm64-egressconflictinventory",
+          "host-config:go-bin-darwin-arm64-egressprofiledump",
+          "host-config:go-bin-darwin-arm64-egressreleasegraphdump",
+          "host-config:go-bin-darwin-arm64-egressruntimedump",
+          "host-config:go-bin-darwin-arm64-egressscan",
+          "host-config:go-bin-darwin-arm64-egressseal",
+          "host-config:go-bin-darwin-arm64-jwtgen",
+          "host-config:go-bin-darwin-arm64-profit-preview",
+          "host-config:go-bin-darwin-arm64-server",
+          "host-config:go-bin-linux-amd64-cleanup-ingress-reject-logs",
+          "host-config:go-bin-linux-amd64-egressbindingdump",
+          "host-config:go-bin-linux-amd64-egresscatalogpromote",
+          "host-config:go-bin-linux-amd64-egresscatalogstage",
+          "host-config:go-bin-linux-amd64-egressconflictinventory",
+          "host-config:go-bin-linux-amd64-egressprofiledump",
+          "host-config:go-bin-linux-amd64-egressreleasegraphdump",
+          "host-config:go-bin-linux-amd64-egressruntimedump",
+          "host-config:go-bin-linux-amd64-egressscan",
+          "host-config:go-bin-linux-amd64-egressseal",
+          "host-config:go-bin-linux-amd64-jwtgen",
+          "host-config:go-bin-linux-amd64-profit-preview",
+          "host-config:go-bin-linux-amd64-server",
+          "host-config:go-go-mod",
+          "host-config:go-src",
+          "toolchain:go",
+          "toolchain:node"
+        ],
+        "make_expansion": [],
+        "network": "loopback-only",
+        "outside": [
+          {
+            "class": "system",
+            "prefix": "/bin/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/dev/"
+          },
+          {
+            "class": "scratch",
+            "prefix": "/dev/null"
+          },
+          {
+            "class": "system",
+            "prefix": "/etc/"
+          },
+          {
+            "class": "system",
+            "prefix": "/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:node",
+            "prefix": "/opt/node-v20/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/proc/"
+          },
+          {
+            "class": "system",
+            "prefix": "/sbin/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/sys/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/bin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/include/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/lib/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/libexec/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:go",
+            "prefix": "/usr/local/go/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/sbin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/share/"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:config-go-env",
+            "prefix": "{HOME}/.config/go/env"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{HOME}/.config/go/telemetry/"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go",
+            "prefix": "{HOME}/go"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-cleanup-ingress-reject-logs",
+            "prefix": "{HOME}/go/bin/darwin_arm64/cleanup-ingress-reject-logs"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressbindingdump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressbindingdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egresscatalogpromote",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egresscatalogpromote"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egresscatalogstage",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egresscatalogstage"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressconflictinventory",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressconflictinventory"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressprofiledump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressprofiledump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressreleasegraphdump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressreleasegraphdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressruntimedump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressruntimedump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressscan",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressscan"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressseal",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressseal"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-jwtgen",
+            "prefix": "{HOME}/go/bin/darwin_arm64/jwtgen"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-profit-preview",
+            "prefix": "{HOME}/go/bin/darwin_arm64/profit-preview"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-server",
+            "prefix": "{HOME}/go/bin/darwin_arm64/server"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-cleanup-ingress-reject-logs",
+            "prefix": "{HOME}/go/bin/linux_amd64/cleanup-ingress-reject-logs"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressbindingdump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressbindingdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egresscatalogpromote",
+            "prefix": "{HOME}/go/bin/linux_amd64/egresscatalogpromote"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egresscatalogstage",
+            "prefix": "{HOME}/go/bin/linux_amd64/egresscatalogstage"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressconflictinventory",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressconflictinventory"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressprofiledump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressprofiledump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressreleasegraphdump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressreleasegraphdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressruntimedump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressruntimedump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressscan",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressscan"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressseal",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressseal"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-jwtgen",
+            "prefix": "{HOME}/go/bin/linux_amd64/jwtgen"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-profit-preview",
+            "prefix": "{HOME}/go/bin/linux_amd64/profit-preview"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-server",
+            "prefix": "{HOME}/go/bin/linux_amd64/server"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-go-mod",
+            "prefix": "{HOME}/go/go.mod"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-src",
+            "prefix": "{HOME}/go/src"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{TMP}/"
+          },
+          {
+            "class": "performance-cache",
+            "contract": "cache:go-build-cache",
+            "prefix": "{WORK}/go-build-cache/"
+          },
+          {
+            "class": "dependency-content",
+            "contract": "cache:go-mod-cache",
+            "prefix": "{WORK}/go-mod-cache/"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{WORK}/go-tmp/"
+          }
+        ],
+        "repo": {
+          "files": [
+            "Makefile",
+            "backend/go.mod",
+            "backend/go.sum",
+            "docs/egress/consolidation/removal-receipts.json",
+            "docs/egress/lifecycle/catalog-amendments.json",
+            "docs/egress/lifecycle/migration-receipts.json",
+            "docs/egress/lifecycle/pre-bootstrap-supplements.json",
+            "docs/egress/maintenance/bootstrap-inventory-lock.json",
+            "docs/egress/maintenance/removal-receipts.json",
+            "docs/egress/maintenance/scanner-algorithm-successor.json",
+            "docs/egress/migration/migration-receipts.json",
+            "docs/egress/migration/removal-receipts.json"
+          ],
+          "head": false,
+          "list_ok": [],
+          "ranges": [
+            {
+              "exclude": [],
+              "include": [
+                "backend/"
+              ],
+              "name": "backend"
+            },
+            {
+              "exclude": [],
+              "include": [
+                "docs/egress/foundation/"
+              ],
+              "name": "docs-egress-foundation"
+            },
+            {
+              "exclude": [],
+              "include": [
+                "docs/egress/release/"
+              ],
+              "name": "docs-egress-release"
+            }
+          ],
+          "repo_ignored": [],
+          "root_listing": true
+        },
+        "schema_version": "declared-scope/v1"
+      },
+      "status": "declared"
+    },
+    "egress-spec:egress-spec-audit-index-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset5-symbols": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 10.9 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset5-symbols-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset6-benchmark": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset6-benchmark-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset6-conflict": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset6-conflict-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset6-transition": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-changeset6-transition-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-egressscan-self-test": {
+      "sample": {
+        "command_sha256": "6b596d946c3520287ef5cd88fcb958114083fba57ad9ef1288ff9344c661db86",
+        "evidence": "tools/ci/command_input_samples/egress-spec-egress-spec-egressscan-self-test.sample.json",
+        "evidence_sha256": "eadeeedf3d87d2bc9ef65fc4faa6c898fd087f8e26581df832964420e95d8cb8",
+        "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
+        "runs": 2,
+        "sampled_at_utc": "2026-10-14T17:02:19Z",
+        "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
+        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+      },
+      "scope": {
+        "contracts": [
+          "cache:go-build-cache",
+          "cache:go-mod-cache",
+          "host-config:config-go-env",
+          "host-config:go",
+          "host-config:go-bin-darwin-arm64-cleanup-ingress-reject-logs",
+          "host-config:go-bin-darwin-arm64-egressbindingdump",
+          "host-config:go-bin-darwin-arm64-egresscatalogpromote",
+          "host-config:go-bin-darwin-arm64-egresscatalogstage",
+          "host-config:go-bin-darwin-arm64-egressconflictinventory",
+          "host-config:go-bin-darwin-arm64-egressprofiledump",
+          "host-config:go-bin-darwin-arm64-egressreleasegraphdump",
+          "host-config:go-bin-darwin-arm64-egressruntimedump",
+          "host-config:go-bin-darwin-arm64-egressscan",
+          "host-config:go-bin-darwin-arm64-egressseal",
+          "host-config:go-bin-darwin-arm64-jwtgen",
+          "host-config:go-bin-darwin-arm64-profit-preview",
+          "host-config:go-bin-darwin-arm64-server",
+          "host-config:go-bin-linux-amd64-cleanup-ingress-reject-logs",
+          "host-config:go-bin-linux-amd64-egressbindingdump",
+          "host-config:go-bin-linux-amd64-egresscatalogpromote",
+          "host-config:go-bin-linux-amd64-egresscatalogstage",
+          "host-config:go-bin-linux-amd64-egressconflictinventory",
+          "host-config:go-bin-linux-amd64-egressprofiledump",
+          "host-config:go-bin-linux-amd64-egressreleasegraphdump",
+          "host-config:go-bin-linux-amd64-egressruntimedump",
+          "host-config:go-bin-linux-amd64-egressscan",
+          "host-config:go-bin-linux-amd64-egressseal",
+          "host-config:go-bin-linux-amd64-jwtgen",
+          "host-config:go-bin-linux-amd64-profit-preview",
+          "host-config:go-bin-linux-amd64-server",
+          "host-config:go-go-mod",
+          "host-config:go-src",
+          "toolchain:go",
+          "toolchain:node"
+        ],
+        "make_expansion": [],
+        "network": "loopback-only",
+        "outside": [
+          {
+            "class": "system",
+            "prefix": "/bin/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/dev/"
+          },
+          {
+            "class": "scratch",
+            "prefix": "/dev/null"
+          },
+          {
+            "class": "system",
+            "prefix": "/etc/"
+          },
+          {
+            "class": "system",
+            "prefix": "/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:node",
+            "prefix": "/opt/node-v20/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/proc/"
+          },
+          {
+            "class": "system",
+            "prefix": "/sbin/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/sys/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/bin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/include/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/lib/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/libexec/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:go",
+            "prefix": "/usr/local/go/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/sbin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/share/"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:config-go-env",
+            "prefix": "{HOME}/.config/go/env"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{HOME}/.config/go/telemetry/"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go",
+            "prefix": "{HOME}/go"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-cleanup-ingress-reject-logs",
+            "prefix": "{HOME}/go/bin/darwin_arm64/cleanup-ingress-reject-logs"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressbindingdump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressbindingdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egresscatalogpromote",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egresscatalogpromote"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egresscatalogstage",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egresscatalogstage"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressconflictinventory",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressconflictinventory"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressprofiledump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressprofiledump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressreleasegraphdump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressreleasegraphdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressruntimedump",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressruntimedump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressscan",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressscan"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-egressseal",
+            "prefix": "{HOME}/go/bin/darwin_arm64/egressseal"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-jwtgen",
+            "prefix": "{HOME}/go/bin/darwin_arm64/jwtgen"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-profit-preview",
+            "prefix": "{HOME}/go/bin/darwin_arm64/profit-preview"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-darwin-arm64-server",
+            "prefix": "{HOME}/go/bin/darwin_arm64/server"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-cleanup-ingress-reject-logs",
+            "prefix": "{HOME}/go/bin/linux_amd64/cleanup-ingress-reject-logs"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressbindingdump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressbindingdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egresscatalogpromote",
+            "prefix": "{HOME}/go/bin/linux_amd64/egresscatalogpromote"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egresscatalogstage",
+            "prefix": "{HOME}/go/bin/linux_amd64/egresscatalogstage"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressconflictinventory",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressconflictinventory"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressprofiledump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressprofiledump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressreleasegraphdump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressreleasegraphdump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressruntimedump",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressruntimedump"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressscan",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressscan"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-egressseal",
+            "prefix": "{HOME}/go/bin/linux_amd64/egressseal"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-jwtgen",
+            "prefix": "{HOME}/go/bin/linux_amd64/jwtgen"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-profit-preview",
+            "prefix": "{HOME}/go/bin/linux_amd64/profit-preview"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-bin-linux-amd64-server",
+            "prefix": "{HOME}/go/bin/linux_amd64/server"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-go-mod",
+            "prefix": "{HOME}/go/go.mod"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:go-src",
+            "prefix": "{HOME}/go/src"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{TMP}/"
+          },
+          {
+            "class": "performance-cache",
+            "contract": "cache:go-build-cache",
+            "prefix": "{WORK}/go-build-cache/"
+          },
+          {
+            "class": "dependency-content",
+            "contract": "cache:go-mod-cache",
+            "prefix": "{WORK}/go-mod-cache/"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{WORK}/go-tmp/"
+          }
+        ],
+        "repo": {
+          "files": [
+            "Makefile",
+            "backend/go.mod",
+            "backend/go.sum"
+          ],
+          "head": false,
+          "list_ok": [],
+          "ranges": [
+            {
+              "exclude": [],
+              "include": [
+                "backend/"
+              ],
+              "name": "backend"
+            }
+          ],
+          "repo_ignored": [],
+          "root_listing": true
+        },
+        "schema_version": "declared-scope/v1"
+      },
+      "status": "declared"
+    },
+    "egress-spec:egress-spec-fw-d-transition-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-completeness": {
+      "head": true,
+      "reason": "读 git 历史（git ls-tree／cat-file／rev-parse／merge-base --is-ancestor／diff），结果依赖提交图与引用，保留 head 重跑（历史中位 0.5 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-completeness-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-r-disposition": {
+      "head": true,
+      "reason": "读 git 历史（git ls-tree／cat-file／rev-parse／merge-base --is-ancestor／diff），结果依赖提交图与引用，保留 head 重跑（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-r-disposition-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-runtime-evidence": {
+      "head": true,
+      "reason": "读 git 历史（git ls-tree／cat-file／rev-parse／merge-base --is-ancestor／diff），结果依赖提交图与引用，保留 head 重跑（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-runtime-evidence-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-workspace": {
+      "head": true,
+      "reason": "读 git 历史（git ls-tree／cat-file／rev-parse／merge-base --is-ancestor／diff），结果依赖提交图与引用，保留 head 重跑（历史中位 0.9 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-fw-e-workspace-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-go-build": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 21.8 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-go-test": {
+      "head": true,
+      "reason": "git 子进程使用了未固定的修订（merge-base --is-ancestor … HEAD、rev-parse --verify HEAD^{commit}）：结果依赖 HEAD，不可声明级承接（历史中位 141.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-go-vet": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.1 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-gofmt": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.5 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-httpclient-guard": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 1.1 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-ledger-completeness": {
+      "head": true,
+      "reason": "读 git 历史（git ls-tree／cat-file／rev-parse／merge-base --is-ancestor／diff），结果依赖提交图与引用，保留 head 重跑（历史中位 2.8 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-maintenance-conflict": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-maintenance-conflict-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-maintenance-transition": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-maintenance-transition-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-multi-persona-transition": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-multi-persona-transition-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-profile-enums": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.5 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-profile-snapshot": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.5 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-release-bindings": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-release-graph": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.6 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-repository-guard": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 5.4 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-runtime-catalog": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.7 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-runtime-catalog-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-service-guard": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 7.1 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-sink-stats": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-version-leak": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 2.0 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-version-leak-self-test": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 0.3 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:egress-spec-wire-diff": {
+      "reason": "go run -mod=mod 允许改写 go.mod／go.sum 并可能联网下载 wire 及其依赖，不可离线承接（历史中位 19.0 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:test-official-client-control": {
+      "reason": "未采样：声明级承接收益（每轮至多省这几秒）低于采样与评审成本；带审计策略的全集运行里它本来就不可承接，维持原状（历史中位 19.0 秒）",
+      "status": "rerun-only"
+    },
+    "egress-spec:test-upstream-merge-tools": {
+      "head": true,
+      "reason": "git 子进程使用了未固定的修订（main、origin、refs/heads/…、tag、worktree，测试在合成仓库里操作但采样器分不清）：保守按依赖引用库处理（历史中位 42.8 秒）",
+      "status": "rerun-only"
+    },
+    "frontend:critical": {
+      "sample": {
+        "command_sha256": "8b62e00ad484903759c28029843eff90f995576b034935ad69210343f754283b",
+        "evidence": "tools/ci/command_input_samples/frontend-critical.sample.json",
+        "evidence_sha256": "6eb8b20948149c959025e57ba6ff6bce812a9499f085b63420715d2e6ebc16cf",
+        "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
+        "runs": 2,
+        "sampled_at_utc": "2026-10-14T17:08:56Z",
+        "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
+        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+      },
+      "scope": {
+        "contracts": [
+          "cache:node-modules",
+          "host-config:config-pnpm-rc",
+          "host-config:node-libraries",
+          "host-config:node-modules",
+          "host-config:npmrc",
+          "toolchain:go",
+          "toolchain:node"
+        ],
+        "make_expansion": [],
+        "network": "loopback-only",
+        "outside": [
+          {
+            "class": "system",
+            "prefix": "/bin/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/dev/"
+          },
+          {
+            "class": "system",
+            "prefix": "/etc/"
+          },
+          {
+            "class": "system",
+            "prefix": "/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:node",
+            "prefix": "/opt/node-v20/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/proc/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/run/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/sys/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/bin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:go",
+            "prefix": "/usr/local/go/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/sbin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/share/"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:config-pnpm-rc",
+            "prefix": "{HOME}/.config/pnpm/rc"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:node-libraries",
+            "prefix": "{HOME}/.node_libraries"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:node-modules",
+            "prefix": "{HOME}/.node_modules"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:npmrc",
+            "prefix": "{HOME}/.npmrc"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{TMP}/"
+          }
+        ],
+        "repo": {
+          "files": [
+            "Makefile",
+            "backend/go.mod",
+            "backend/go.sum",
+            "frontend/pnpm-lock.yaml"
+          ],
+          "head": false,
+          "installed_dirs": [
+            {
+              "contract": "cache:node-modules",
+              "prefix": "frontend/node_modules/"
+            }
+          ],
+          "list_ok": [],
+          "ranges": [
+            {
+              "exclude": [],
+              "include": [
+                "frontend/"
+              ],
+              "name": "frontend"
+            },
+            {
+              "exclude": [],
+              "include": [
+                "node_modules/"
+              ],
+              "name": "node_modules"
+            },
+            {
+              "exclude": [],
+              "include": [
+                "src/__tests__/"
+              ],
+              "name": "src-__tests__"
+            }
+          ],
+          "repo_ignored": [
+            "frontend/node_modules/.vite/",
+            "frontend/node_modules/.vite/vitest/",
+            "frontend/vitest.config.ts.timestamp-*"
+          ],
+          "root_listing": true
+        },
+        "schema_version": "declared-scope/v1",
+        "unix_sockets": [
+          "/var/run/nscd/socket"
+        ]
+      },
+      "status": "declared"
+    },
+    "frontend:lint": {
+      "sample": {
+        "command_sha256": "1993173cd53fa505ccee5ae480d4d3299d3524621c6090f850582694402a3684",
+        "evidence": "tools/ci/command_input_samples/frontend-lint.sample.json",
+        "evidence_sha256": "b814ded27114a4f91078ab4b075159ac944c6cc2093611805ca16c26623d5617",
+        "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
+        "runs": 2,
+        "sampled_at_utc": "2026-10-14T17:04:44Z",
+        "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
+        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+      },
+      "scope": {
+        "contracts": [
+          "cache:node-modules",
+          "host-config:config-pnpm-rc",
+          "host-config:node-libraries",
+          "host-config:node-modules",
+          "host-config:npmrc",
+          "toolchain:go",
+          "toolchain:node"
+        ],
+        "make_expansion": [],
+        "network": "loopback-only",
+        "outside": [
+          {
+            "class": "system",
+            "prefix": "/bin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/etc/"
+          },
+          {
+            "class": "system",
+            "prefix": "/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:node",
+            "prefix": "/opt/node-v20/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/proc/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/run/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/sys/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/bin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:go",
+            "prefix": "/usr/local/go/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/sbin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/share/"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:config-pnpm-rc",
+            "prefix": "{HOME}/.config/pnpm/rc"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:node-libraries",
+            "prefix": "{HOME}/.node_libraries"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:node-modules",
+            "prefix": "{HOME}/.node_modules"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:npmrc",
+            "prefix": "{HOME}/.npmrc"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{TMP}/"
+          }
+        ],
+        "repo": {
+          "files": [
+            "backend/go.mod",
+            "backend/go.sum",
+            "frontend/pnpm-lock.yaml"
+          ],
+          "head": false,
+          "installed_dirs": [
+            {
+              "contract": "cache:node-modules",
+              "prefix": "frontend/node_modules/"
+            }
+          ],
+          "list_ok": [],
+          "ranges": [
+            {
+              "exclude": [],
+              "include": [
+                "frontend/"
+              ],
+              "name": "frontend"
+            }
+          ],
+          "repo_ignored": [
+            "frontend/.eslintcache"
+          ],
+          "root_listing": true
+        },
+        "schema_version": "declared-scope/v1"
+      },
+      "status": "declared"
+    },
+    "frontend:typecheck": {
+      "sample": {
+        "command_sha256": "3ada8eb24c2efc73f1a00d1ac973c2ae786bc14f45b3c0f3b11d7533d0851db8",
+        "evidence": "tools/ci/command_input_samples/frontend-typecheck.sample.json",
+        "evidence_sha256": "822606771fcd90590b7925d08daad8ccda228c96eb36fd57856b17da2f7873c4",
+        "launcher_sha256": "b2b1f05f3ae98f6d363b37fbcbb40151a0826a6c396576a023e94f27af34495c",
+        "runs": 2,
+        "sampled_at_utc": "2026-10-14T17:06:59Z",
+        "sampled_commit": "65ee6438fcc609920f21c5772955c50a1804a08c",
+        "sampler_sha256": "4689bddd88d3f6da0e9a90af6dc4e64224d318858a2a5757dcf0cbe2eae9cab4"
+      },
+      "scope": {
+        "contracts": [
+          "cache:node-modules",
+          "host-config:config-pnpm-rc",
+          "host-config:node-libraries",
+          "host-config:node-modules",
+          "host-config:npmrc",
+          "toolchain:go",
+          "toolchain:node"
+        ],
+        "make_expansion": [],
+        "network": "loopback-only",
+        "outside": [
+          {
+            "class": "system",
+            "prefix": "/bin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/etc/"
+          },
+          {
+            "class": "system",
+            "prefix": "/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:node",
+            "prefix": "/opt/node-v20/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/proc/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/run/"
+          },
+          {
+            "class": "virtual",
+            "prefix": "/sys/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/bin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/lib/"
+          },
+          {
+            "class": "toolchain",
+            "contract": "toolchain:go",
+            "prefix": "/usr/local/go/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/sbin/"
+          },
+          {
+            "class": "system",
+            "prefix": "/usr/share/"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:config-pnpm-rc",
+            "prefix": "{HOME}/.config/pnpm/rc"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:node-libraries",
+            "prefix": "{HOME}/.node_libraries"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:node-modules",
+            "prefix": "{HOME}/.node_modules"
+          },
+          {
+            "class": "home-config",
+            "contract": "host-config:npmrc",
+            "prefix": "{HOME}/.npmrc"
+          },
+          {
+            "class": "scratch",
+            "prefix": "{TMP}/"
+          }
+        ],
+        "repo": {
+          "files": [
+            "backend/go.mod",
+            "backend/go.sum",
+            "frontend/pnpm-lock.yaml"
+          ],
+          "head": false,
+          "installed_dirs": [
+            {
+              "contract": "cache:node-modules",
+              "prefix": "frontend/node_modules/"
+            }
+          ],
+          "list_ok": [],
+          "ranges": [
+            {
+              "exclude": [],
+              "include": [
+                "docs/legal/"
+              ],
+              "name": "docs-legal"
+            },
+            {
+              "exclude": [],
+              "include": [
+                "frontend/"
+              ],
+              "name": "frontend"
+            },
+            {
+              "exclude": [],
+              "include": [
+                "node_modules/"
+              ],
+              "name": "node_modules"
+            }
+          ],
+          "repo_ignored": [
+            "frontend/node_modules/.vue-global-types/"
+          ],
+          "root_listing": true
+        },
+        "schema_version": "declared-scope/v1"
+      },
+      "status": "declared"
+    }
+  }
+}
