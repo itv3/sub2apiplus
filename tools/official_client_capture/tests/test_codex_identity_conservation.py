@@ -8,6 +8,7 @@ Claude 升级控制面改造的 wire 层、evidence 层、两个编排器闭包�
 SHA 钉死的过渡原件登记逐符号及整文件前后值。B5a-09／10 测试单元读集接线再次改变两个钉住常量，只由独立后继
 精确登记；先逆向回到不变的 10-08 原图，再逐步逆向回到 B5a-08 的原图并还原两个旧常量，
 最终与原始基线图逐字段、逐摘要相同。D4 恢复的 23／35 项是旧证明依赖，不是可删除的兼容例外；未来未登记变化照常拒绝。
+其后两次门禁收据生成器的登记（H3 收尾的只读重放登记、步骤 8 的三个钉住值与旧生成器登记）各由一份独立后继精确登记，逆向链依次回到前一份的后图。
 
 基线由 B1-01 开工前的 main（见基线的 ``source_commit``）算出，固化在
 ``fixtures/codex_identity_conservation_baseline.json``；本项目各批不得改动基线，文件摘要钉在 ``BASELINE_SHA256``。
@@ -155,7 +156,9 @@ REGISTERED_CONTROL_CHANGES: dict[str, str] = {
                                    "（Codex 两种模式的结果与报错逐字不变，见 test_unit_inherit_codex_parity）",
     "codex_upgrade_gate_receipt.py": "B5a-08 只改钉住常量 TARGET_VERIFIER_SHA256S 里 unit_records.py 的摘要：常量在评估器读侧闭包内，按"
                                      " REGISTERED_EVALUATOR_READER_CHANGES 单独登记；B5a-09／10 测试单元读集接线同步 unit_records.py 与"
-                                     " read_audit.py 两个钉住值，并登记上一已部署生成器只读重放摘要；两个常量的新后值由独立精确后继证明",
+                                     " read_audit.py 两个钉住值，并登记上一已部署生成器只读重放摘要；两个常量的新后值由独立精确后继证明；"
+                                     "声明级承接（步骤 8）同步 unit_records／read_audit／read_audit_runtime 三个钉住值并登记 77b57e7c 的只读重放摘要，"
+                                     "两个常量的新后值由第三份独立精确后继证明",
     "codex_upgrade_vc_artifacts.py": "B3-04 只在文件末尾新增客户端中立候选构建收据合同 official-client-upgrade-candidate-build-receipt/v1"
                                      "（两个函数与合同常量，只由 Claude 编排器签发）；Codex 的 build_candidate_build_receipt 与读侧闭包内的"
                                      " validate_candidate_build_receipt 等既有符号原位不动，新增符号不被 Codex 任何身份闭包引用",
@@ -200,6 +203,11 @@ READER_SUCCESSOR_PHASE = "B5a09-test-read-pins"
 READER_SUCCESSOR2_PATH = BASELINE_PATH.with_name("codex_identity_conservation_reader_transition_20261013.json")
 READER_SUCCESSOR2_SHA256 = "e1aea18e2a88074c380cee5850f4b3d50ac3c10718c472a44f7f23093eaaaa65"
 READER_SUCCESSOR2_PHASE = "H3-closeout-replay-registry"
+# 步骤 8：声明级承接（步骤 1～7）改了 unit_records／read_audit／read_audit_runtime，门禁收据生成器的三个验证器钉住值同步，
+# 修改前已部署的生成器 77b57e7c 登记进只读重放登记——两个既有常量同时变化；第三份后继单独钉住，前三份原件不改写。
+READER_SUCCESSOR3_PATH = BASELINE_PATH.with_name("codex_identity_conservation_reader_transition_20261015.json")
+READER_SUCCESSOR3_SHA256 = "06f36b43ba6dd9a7cb382030b6c26f40c37ae8c360af0f81deeab0b219fd7cbb"
+READER_SUCCESSOR3_PHASE = "step8-declared-inputs-pins"
 REGISTERED_REPLAY_SUCCESSOR_SYMBOLS = frozenset({"codex_upgrade_gate_receipt:REGISTERED_REPLAY_PRODUCER_HASHES"})
 REGISTERED_PIN_SUCCESSOR_SYMBOLS = frozenset({
     "codex_upgrade_gate_receipt:TARGET_VERIFIER_SHA256S",
@@ -353,15 +361,63 @@ def _restore_pinned_reader_successor2(closure: dict[str, Any], field: str, succe
     return {**payload, "closure_sha256": change["before_sha256"]}
 
 
+def _load_reader_successor3(path: Path = READER_SUCCESSOR3_PATH) -> dict[str, Any]:
+    """步骤 8 的第三后继（三个钉住值＋只读重放登记）单独钉住；不改写前三份已封存的过渡原件。"""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("读侧第三后继原件必须是普通文件")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != READER_SUCCESSOR3_SHA256:
+        raise ValueError("读侧第三后继原件摘要与钉住值不符")
+    successor = json.loads(raw)
+    if (successor.get("schema_version") != "codex-identity-conservation-reader-transition/v1"
+            or successor.get("transition_id") != "step8-declared-inputs-pins-20261015"
+            or successor.get("baseline_sha256") != BASELINE_SHA256
+            or successor.get("predecessor_transition") != {
+                "path": READER_SUCCESSOR2_PATH.name, "sha256": READER_SUCCESSOR2_SHA256}):
+        raise ValueError("读侧第三后继合同或前序原件绑定不符")
+    return successor
+
+
+def _restore_pinned_reader_successor3(closure: dict[str, Any], field: str, successor3: dict[str, Any],
+                                      successor2: dict[str, Any]) -> dict[str, Any]:
+    """只逆向本轮两个常量；完整图必须逐字段回到第二后继的后图。"""
+
+    if tuple(step["phase"] for step in successor3["steps"]) != (READER_SUCCESSOR3_PHASE,):
+        raise ValueError("读侧第三后继阶段次序或集合不符")
+    if successor3["before_readers"][field] != successor2["after_readers"][field]:
+        raise ValueError("读侧第三后继前图不是第二后继的精确后图")
+    change = successor3["steps"][0]["readers"][field]
+    if (change["modules"] != []
+            or {row["key"] for row in change["symbols"]} != REGISTERED_PIN_SUCCESSOR_SYMBOLS
+            or any(row["before"] is None or row["after"] is None or not row["reason"] for row in change["symbols"])
+            or change["before_sha256"] != successor3["before_readers"][field]["closure_sha256"]
+            or change["after_sha256"] != successor3["after_readers"][field]["closure_sha256"]):
+        raise ValueError("读侧第三后继必须精确登记两个既有常量且不含整文件变化")
+    if closure != successor3["after_readers"][field]:
+        raise ValueError("当前读侧图不是第三后继登记的完整后图")
+    payload = _reader_payload(closure)
+    if tip._fingerprint(payload) != change["after_sha256"]:
+        raise ValueError("当前读侧图与第三后继摘要不符")
+    _inverse_reader_records(payload, "symbols", change["symbols"])
+    if (tip._fingerprint(payload) != change["before_sha256"]
+            or payload != _reader_payload(successor2["after_readers"][field])):
+        raise ValueError("两个常量逆向没有回到第二后继的完整后图")
+    return {**payload, "closure_sha256": change["before_sha256"]}
+
+
 def _restore_registered_reader(closure: dict[str, Any], field: str, transition: dict[str, Any],
                                successor: dict[str, Any] | None = None,
-                               successor2: dict[str, Any] | None = None) -> dict[str, Any]:
-    """当前真实图 → 第二后继 → 第一后继 → 恢复后继 → r2 → D4 → B5a-08 → 原始基线；逐步核实际摘要。"""
+                               successor2: dict[str, Any] | None = None,
+                               successor3: dict[str, Any] | None = None) -> dict[str, Any]:
+    """当前真实图 → 第三后继 → 第二后继 → 第一后继 → 恢复后继 → r2 → D4 → B5a-08 → 原始基线；逐步核实际摘要。"""
 
     if field not in {item for item, _roots in READER_FIELDS}:
         raise ValueError("未知读侧摘要字段")
     successor = successor or _load_reader_successor()
-    closure = _restore_pinned_reader_successor2(closure, field, successor2 or _load_reader_successor2(), successor)
+    successor2 = successor2 or _load_reader_successor2()
+    closure = _restore_pinned_reader_successor3(closure, field, successor3 or _load_reader_successor3(), successor2)
+    closure = _restore_pinned_reader_successor2(closure, field, successor2, successor)
     closure = _restore_pinned_reader_successor(closure, field, successor, transition)
     payload = _reader_payload(closure)
     if tip._fingerprint(payload) != closure["closure_sha256"]:
@@ -408,6 +464,7 @@ class CodexIdentityConservationTest(unittest.TestCase):
         cls.transition = _load_reader_transition()
         cls.successor = _load_reader_successor()
         cls.successor2 = _load_reader_successor2()
+        cls.successor3 = _load_reader_successor3()
         cls.readers = {
             field: tip.evaluator_reader_closure(cls.policy, TOOL_ROOT, list(roots), digests)
             for field, roots in READER_FIELDS
@@ -431,7 +488,7 @@ class CodexIdentityConservationTest(unittest.TestCase):
                 self.assertEqual(change[field]["before"], self.baseline[field], f"登记的变化前摘要必须就是基线：{field}")
                 expected[field] = change[field]["after"]
         for field, _roots in READER_FIELDS:
-            expected[field] = self.successor2["after_readers"][field]["closure_sha256"]
+            expected[field] = self.successor3["after_readers"][field]["closure_sha256"]
         for field, value in current.items():
             self.assertEqual(value, expected[field], f"Codex 身份敏感摘要变化：{field}")
         for layer, expected in self.baseline["orchestrator_closure_sha256"].items():
@@ -478,7 +535,7 @@ class CodexIdentityConservationTest(unittest.TestCase):
         self.assertEqual(len(change["reasons"]), 4)
         for field, _roots in READER_FIELDS:
             with self.subTest(field=field):
-                self.assertEqual(self.readers[field], self.successor2["after_readers"][field])
+                self.assertEqual(self.readers[field], self.successor3["after_readers"][field])
                 restored = _restore_registered_reader(self.readers[field], field, self.transition)
                 self.assertEqual(tip._fingerprint(restored), self.baseline[field])
                 self.assertEqual(restored, _reader_payload(self.transition["before_readers"][field]))
@@ -585,12 +642,12 @@ class CodexIdentityConservationTest(unittest.TestCase):
         self.assertEqual(successor2["source_file_sha256"]["before"], {
             "codex_upgrade_gate_receipt.py": "4545caf5da2d4ca6e090239c08bfde463a56dfc36e324f0afa802a81fd954bf0"})
         self.assertEqual(successor2["source_file_sha256"]["after"], {
-            "codex_upgrade_gate_receipt.py": hashlib.sha256((TOOL_ROOT / "codex_upgrade_gate_receipt.py").read_bytes()).hexdigest()})
+            "codex_upgrade_gate_receipt.py": "77b57e7c677cbbe4b137a8fb5ac95554bbdd5e8fab0a92883335cb50e7ad4a38"})
         self.assertEqual(tuple(step["phase"] for step in successor2["steps"]), (READER_SUCCESSOR2_PHASE,))
         for field, _roots in READER_FIELDS:
             with self.subTest(field=field):
                 before, after = successor2["before_readers"][field], successor2["after_readers"][field]
-                self.assertEqual(after, self.readers[field])
+                self.assertEqual(after, self.successor3["before_readers"][field])
                 for key in ("schema_version", "roots", "barriers", "module_barriers", "modules"):
                     self.assertEqual(before[key], after[key], f"第二后继不能改变原图字段：{key}")
                 old = {f"{row['module']}:{row['name']}": row for row in before["symbols"]}
@@ -615,12 +672,64 @@ class CodexIdentityConservationTest(unittest.TestCase):
                 else:
                     damaged["before_readers"][field]["barriers"].append("unregistered")
                 with self.subTest(field=field, case=case), self.assertRaises(ValueError):
-                    _restore_pinned_reader_successor2(self.readers[field], field, damaged, self.successor)
+                    _restore_pinned_reader_successor2(self.successor3["before_readers"][field], field, damaged, self.successor)
         with tempfile.TemporaryDirectory(prefix="codex-replay-registry-successor-", dir="/private/tmp") as temporary:
             path = Path(temporary) / READER_SUCCESSOR2_PATH.name
             path.write_bytes(READER_SUCCESSOR2_PATH.read_bytes() + b"\n")
             with self.assertRaisesRegex(ValueError, "摘要与钉住值不符"):
                 _load_reader_successor2(path)
+
+    def test_step8_pin_successor_is_frozen_and_scope_is_exact(self) -> None:
+        """第三后继只连两个既有常量（三个验证器钉住值＋只读重放登记），不覆盖前三份登记、不改原图或身份敏感产出。"""
+
+        successor3 = self.successor3
+        self.assertEqual(successor3["before_readers"], self.successor2["after_readers"])
+        self.assertEqual(successor3["sensitive_identity"]["before"], self.successor2["sensitive_identity"]["after"])
+        self.assertEqual(successor3["sensitive_identity"]["after"], successor3["sensitive_identity"]["before"])
+        self.assertEqual(successor3["algorithm_sha256"], hashlib.sha256(Path(tip.__file__).read_bytes()).hexdigest())
+        self.assertEqual(successor3["source_commits"], {
+            "before": "e9c31b016a09090ea5c426c4676617b3e3cf1f24",
+            "after": "0a779bb72255cebd7a66b90b05a9c42dda6bacdb",
+        })
+        self.assertEqual(successor3["source_file_sha256"]["before"], {
+            "codex_upgrade_gate_receipt.py": "77b57e7c677cbbe4b137a8fb5ac95554bbdd5e8fab0a92883335cb50e7ad4a38"})
+        self.assertEqual(successor3["source_file_sha256"]["after"], {
+            "codex_upgrade_gate_receipt.py": hashlib.sha256((TOOL_ROOT / "codex_upgrade_gate_receipt.py").read_bytes()).hexdigest()})
+        self.assertEqual(tuple(step["phase"] for step in successor3["steps"]), (READER_SUCCESSOR3_PHASE,))
+        for field, _roots in READER_FIELDS:
+            with self.subTest(field=field):
+                before, after = successor3["before_readers"][field], successor3["after_readers"][field]
+                self.assertEqual(after, self.readers[field])
+                for key in ("schema_version", "roots", "barriers", "module_barriers", "modules"):
+                    self.assertEqual(before[key], after[key], f"第三后继不能改变原图字段：{key}")
+                old = {f"{row['module']}:{row['name']}": row for row in before["symbols"]}
+                new = {f"{row['module']}:{row['name']}": row for row in after["symbols"]}
+                self.assertEqual({key for key in old.keys() | new.keys() if old.get(key) != new.get(key)},
+                                 REGISTERED_PIN_SUCCESSOR_SYMBOLS)
+                self.assertEqual(_restore_pinned_reader_successor3(after, field, successor3, self.successor2), before)
+
+    def test_step8_pin_successor_missing_extra_or_changed_record_is_rejected(self) -> None:
+        """第三后继少一项、夹带符号、改变后值、改前图或改原件均不能通过。"""
+
+        for field, _roots in READER_FIELDS:
+            for case in ("缺常量", "额外常量", "改变后值", "改变前图"):
+                damaged = copy.deepcopy(self.successor3)
+                records = damaged["steps"][0]["readers"][field]["symbols"]
+                if case == "缺常量":
+                    records.pop()
+                elif case == "额外常量":
+                    records.append({**copy.deepcopy(records[0]), "key": "unregistered:extra"})
+                elif case == "改变后值":
+                    records[0]["after"]["sha256"] = "0" * 64
+                else:
+                    damaged["before_readers"][field]["barriers"].append("unregistered")
+                with self.subTest(field=field, case=case), self.assertRaises(ValueError):
+                    _restore_pinned_reader_successor3(self.readers[field], field, damaged, self.successor2)
+        with tempfile.TemporaryDirectory(prefix="codex-step8-pin-successor-", dir="/private/tmp") as temporary:
+            path = Path(temporary) / READER_SUCCESSOR3_PATH.name
+            path.write_bytes(READER_SUCCESSOR3_PATH.read_bytes() + b"\n")
+            with self.assertRaisesRegex(ValueError, "摘要与钉住值不符"):
+                _load_reader_successor3(path)
 
     def test_d4_restored_dependencies_are_original_and_not_an_exemption(self) -> None:
         """D4 恢复旧 23／35 项，没有把缺陷时期的丢读集当成可接受的基线。"""
