@@ -148,6 +148,67 @@ class AuditEvidenceTruthTableTests(unittest.TestCase):
             with self.subTest(label):
                 self.assertFalse(self.verdict(record), f"{label}：自述通过也不能算审计通过")
 
+    def test_an_undeclared_count_that_only_compares_equal_to_zero_is_not_established(self) -> None:
+        """独立验收 #5 一般 4：``False == 0``、``0.0 == 0`` 在 Python 里成立，重新封存的记录把 ``read_audit.undeclared_count`` 改成 ``False`` 或 ``0.0``
+        不能冒充「未声明数为零」。只认类型恰为 int 且等于 0；声明级与旧口径两个分支都一样。"""
+
+        for scope in (DECLARED, LEGACY):
+            self.assertTrue(self.verdict(sealed(read_audit=audit(scope, undeclared_count=0))), f"{scope}：基准，整数 0 成立")
+            for label, value in {"布尔 False": False, "浮点 0.0": 0.0, "浮点 -0.0": -0.0, "布尔 True": True, "整数 1": 1, "整数 -1": -1,
+                                 "字符串 '0'": "0", "空字符串": "", "None": None, "空数组": [], "数组 [0]": [0], "对象": {}, "浮点 0.5": 0.5}.items():
+                with self.subTest(scope=scope, value=label):
+                    self.assertFalse(self.verdict(sealed(read_audit=audit(scope, undeclared_count=value))), f"{scope}：未声明数是 {label}")
+
+    def test_an_int_subclass_does_not_pass_as_an_exact_zero(self) -> None:
+        class ZeroLike(int):
+            pass
+
+        self.assertTrue(bv._exact_zero(0))
+        for value in (ZeroLike(0), False, 0.0, None, "0", 0j, [0]):
+            with self.subTest(value=repr(value)):
+                self.assertFalse(bv._exact_zero(value))
+
+    def test_two_missing_or_malformed_inputs_digests_do_not_pass_as_equal(self) -> None:
+        """审计绑定的输入摘要与记录自己的输入摘要用 ``==`` 比，两边都缺（``None == None``）、两边都是同一个非摘要的值就会冒充「摘要一致」。
+        现在两边都得是 64 位小写十六进制字符串且相等。"""
+
+        without = {key: value for key, value in audit().items() if key != "inputs_sha256"}
+        self.assertTrue(self.verdict(sealed(read_audit=audit())), "基准：两边都是同一个 64 位十六进制摘要")
+        for scope in (DECLARED, LEGACY):
+            body = {**without, "coverage_scope": scope}
+            cases = {
+                "两边都缺": sealed(read_audit=body, inputs_sha256=None),
+                "审计缺、记录里是 None 字符串": sealed(read_audit=body, inputs_sha256="None"),
+                "两边都是空字符串": sealed(read_audit={**body, "inputs_sha256": ""}, inputs_sha256=""),
+                "两边都是同一个短串": sealed(read_audit={**body, "inputs_sha256": "abc"}, inputs_sha256="abc"),
+                "两边都是同一个大写摘要": sealed(read_audit={**body, "inputs_sha256": "A" * 64}, inputs_sha256="A" * 64),
+                "两边都是同一个数字": sealed(read_audit={**body, "inputs_sha256": 123}, inputs_sha256=123),
+                "两边都是同一个数组": sealed(read_audit={**body, "inputs_sha256": ["a" * 64]}, inputs_sha256=["a" * 64]),
+                "两边都是 64 位但不是十六进制": sealed(read_audit={**body, "inputs_sha256": "z" * 64}, inputs_sha256="z" * 64),
+                "后面带换行": sealed(read_audit={**body, "inputs_sha256": "a" * 64 + "\n"}, inputs_sha256="a" * 64 + "\n"),
+            }
+            for label, record in cases.items():
+                with self.subTest(scope=scope, case=label):
+                    self.assertFalse(self.verdict(record), f"{scope}：{label}")
+            self.assertTrue(self.verdict(sealed(read_audit={**without, "coverage_scope": scope, "inputs_sha256": "0" * 64}, inputs_sha256="0" * 64)),
+                            f"{scope}：两边相同的合格摘要成立")
+
+    def test_the_other_fields_have_no_loose_equality_problem(self) -> None:
+        """同类字段逐个核过：``kind``／``status``／``coverage_scope`` 是与字符串字面量比较，非字符串永远不等；``coverage_complete`` 是 ``is True``。
+        布尔、数字、数组、大小写变体都不成立。"""
+
+        for scope in (DECLARED, LEGACY):
+            self.assertTrue(self.verdict(sealed(read_audit=audit(scope, coverage_complete=True))), "基准：布尔 True 成立")
+            for value in (1, 1.0, "true", "yes", [True], None, False):
+                with self.subTest(field="coverage_complete", value=repr(value)):
+                    self.assertFalse(self.verdict(sealed(read_audit=audit(scope, coverage_complete=value))))
+            for value in (True, 1, "Passed", "PASSED", ["passed"], None, ""):
+                with self.subTest(field="status", value=repr(value)):
+                    self.assertFalse(self.verdict(sealed(read_audit=audit(scope, status=value))))
+            for value in (True, 1, "Formal", ["formal"], None):
+                with self.subTest(field="kind", value=repr(value)):
+                    self.assertFalse(self.verdict(sealed(read_audit=audit(scope), kind=value)))
+
     def test_the_structure_checks_do_not_touch_the_legacy_judgement(self) -> None:
         """旧口径 all-file-paths/v1 的记录没有声明范围条目、trace 与绑定的形态要求：判定一字不变。"""
 

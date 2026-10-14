@@ -638,7 +638,7 @@ class NoiseTighteningTests(unittest.TestCase):
     def test_the_probe_roots_are_only_system_state(self) -> None:
         self.assertEqual(ur._DECLARED_PROBE_ROOTS, ("/usr/", "/opt/", "/var/lib/", "/var/cache/", "/var/run/", "/var/log/", "/run/", "/etc/", "/lib/",
                                                     "/lib64/", "/bin/", "/sbin/"))
-        self.assertEqual(ur._DECLARED_PROBE_EXCLUDED, ("/run/user/",))
+        self.assertEqual(ur._DECLARED_PROBE_EXCLUDED, ("/run/user/", "/var/run/user/"), "/var/run 是 /run 的符号链接，两种写法的 user/ 都排除")
         for root in ur._DECLARED_PROBE_ROOTS:
             self.assertTrue(root.startswith("/") and root.endswith("/"), root)
             self.assertNotIn(root, ("/var/", "/var/tmp/", "/tmp/", "/home/", "/root/"), "用户可写区与整个 /var/ 不在放行根里")
@@ -664,8 +664,33 @@ class NoiseTighteningTests(unittest.TestCase):
                 self.assertEqual(probe.rules_of(probe.cover(outside=[[key, ["missing"], 1]], aliases=probe.FAR)), ["C3-missing-undeclared"])
         self.assertTrue(probe.cover(outside=[["/run/userx/y", ["missing"], 1]], aliases=probe.FAR)["ok"], "/run/userx/ 不是 /run/user/（按目录判，不是字符串前缀）")
 
+    def test_var_run_user_is_excluded_exactly_like_run_user(self) -> None:
+        """独立验收 #5 一般 1：``/var/run`` 在 systemd 主机上是 ``/run`` 的符号链接，``/var/run/user/1000/x`` 就是 ``/run/user/1000/x``。只排除 ``/run/user/``
+        时，这条路径的 missing／stat／dir 探测仍被 ``/var/run/`` 放行根放行，与文档和 ``/run/user/…`` 本身被拒绝矛盾。现在两种写法同样判违规；
+        ``/var/run/`` 的其余部分（docker.pid 一类系统状态）仍是噪声。"""
+
+        for key in ("/var/run/user/1000/x", "/var/run/user/1000/", "/var/run/user/", "/var/run/user", "/var/run/user/0/bus", "/var/run/user/1000/systemd/private"):
+            for kinds, rule in ((["missing"], "C3-missing-undeclared"), (["stat"], "C2-outside-undeclared"), (["dir", "stat"], "C2-outside-undeclared"),
+                                (["missing", "stat"], "C2-outside-undeclared")):
+                with self.subTest(key=key, kinds=kinds):
+                    self.assertEqual(probe.rules_of(probe.cover(outside=[[key, kinds, 1]], aliases=probe.FAR)), [rule], "与 /run/user/ 同样判违规")
+                    twin = key.replace("/var/run/user", "/run/user", 1)
+                    self.assertEqual(probe.rules_of(probe.cover(outside=[[twin, kinds, 1]], aliases=probe.FAR)), [rule], "符号链接的另一端本来就判违规")
+        # /var/run/ 的其余部分、以及名字只是前缀相同的目录，照原样放行（按目录判，不是字符串前缀）。
+        for key in ("/var/run/foo", "/var/run/foo/bar/", "/var/run/docker.pid", "/var/run/", "/var/run/userx/y", "/var/run/users/1000", "/var/run/utmp"):
+            for kinds in (["missing"], ["stat"], ["dir", "stat"]):
+                with self.subTest(key=key, kinds=kinds):
+                    self.assertTrue(probe.cover(outside=[[key, kinds, 1]], aliases=probe.FAR)["ok"], key)
+        # 不属于探测的访问（read／list）本来就不放行；排除只影响噪声放行，登记了声明前缀的路径照常可用。
+        self.assertEqual(probe.rules_of(probe.cover(outside=[["/var/run/user/1000/x", ["read"], 1]], aliases=probe.FAR)), ["C2-outside-undeclared"])
+        scope = probe.bare_scope()
+        scope["outside"] = [{"prefix": "/var/run/user/1000/", "class": "system"}]
+        self.assertTrue(probe.cover(outside=[["/var/run/user/1000/x", ["missing", "stat", "read"], 1]], scope=scope, aliases=probe.FAR)["ok"], "声明了前缀就合法")
+        self.assertEqual(probe.rules_of(probe.cover(outside=[["/var/run/user/1001/x", ["missing"], 1]], scope=scope, aliases=probe.FAR)),
+                         ["C3-missing-undeclared"], "声明前缀只管它自己的子树")
+
     def test_user_writable_areas_are_no_longer_noise(self) -> None:
-        for root in ("/tmp", "/var/tmp", "/home", "/root", "/srv", "/mnt", "/media"):
+        for root in ("/tmp", "/var/tmp", "/home", "/root", "/srv", "/mnt", "/media", "/var/run/user"):
             for kinds, rule in ((["missing"], "C3-missing-undeclared"), (["stat"], "C2-outside-undeclared"), (["dir", "stat"], "C2-outside-undeclared")):
                 with self.subTest(root=root, kinds=kinds):
                     result = probe.cover(outside=[[f"{root}/x/y/", kinds, 1]], aliases=probe.FAR)
@@ -852,7 +877,8 @@ class RelaxationSummaryTests(unittest.TestCase):
 
     # （条目名, 该条正文里必须出现的关键事实）。条目名是文档里 ``N. *名字*（规则）：`` 的名字。
     ITEMS = (
-        ("噪声探测", ("_DECLARED_PROBE_ROOTS", "_DECLARED_PROBE_EXCLUDED", "node_modules", "TREE、WORK", "用户可写区", "``{HOME}``、``{TMP}``")),
+        ("噪声探测", ("_DECLARED_PROBE_ROOTS", "_DECLARED_PROBE_EXCLUDED", "node_modules", "TREE、WORK", "用户可写区", "``{HOME}``、``{TMP}``",
+                  "``/var/run/user/``", "符号链接", "同样排除")),
         ("祖先目录", ("read 只对 ``{WORK}/`` 这一个键放行", "stat／dir", "list 与 missing", "_DECLARED_ANCESTOR_PROBES")),
         ("root_listing", ("scope:root-listing", "树根这一层")),
         ("自产物读回", ("repo_ignored", "同一路径也出现", "C1-untracked-read")),
@@ -908,7 +934,17 @@ class RelaxationSummaryTests(unittest.TestCase):
         noise = items["噪声探测"]
         for root in (*ur._DECLARED_PROBE_ROOTS, *ur._DECLARED_PROBE_EXCLUDED):
             self.assertIn(f"``{root}``", noise, f"噪声探测一条没列出放行根／排除根 {root}")
-        for area in ("/tmp", "/var/tmp", "/run/user", "/home", "/root", "/srv", "/mnt", "/media"):
+        # 放行根与排除根各自要写在点名它们的那个括号里（不能只在别处顺带提一句）：「``_DECLARED_PROBE_ROOTS`` 之下（……）」「``_DECLARED_PROBE_EXCLUDED``（……）」。
+        roots_text = re.search(r"``_DECLARED_PROBE_ROOTS`` 之下\s*（(.+?)）", noise, re.S)
+        excluded_text = re.search(r"``_DECLARED_PROBE_EXCLUDED``（(.+?)）", noise, re.S)
+        self.assertIsNotNone(roots_text, "汇总要在「_DECLARED_PROBE_ROOTS 之下」后面的括号里列出全部放行根")
+        self.assertIsNotNone(excluded_text, "汇总要在「_DECLARED_PROBE_EXCLUDED」后面的括号里列出全部排除根")
+        for root in ur._DECLARED_PROBE_ROOTS:
+            self.assertIn(f"``{root}``", roots_text.group(1), f"放行根 {root} 要写在放行根的括号里")
+        for root in ur._DECLARED_PROBE_EXCLUDED:
+            self.assertIn(f"``{root}``", excluded_text.group(1), f"排除根 {root} 要写在排除根的括号里")
+        self.assertEqual(len(re.findall(r"``(/[^`]*)``", excluded_text.group(1))), len(ur._DECLARED_PROBE_EXCLUDED), "括号里不多列排除根")
+        for area in ("/tmp", "/var/tmp", "/run/user", "/var/run/user", "/home", "/root", "/srv", "/mnt", "/media"):
             self.assertIn(f"``{area}``", noise, f"用户可写区 {area} 要写进边界")
             candidate = area + "/x/"
             covered = (any(candidate.startswith(root) for root in ur._DECLARED_PROBE_ROOTS)

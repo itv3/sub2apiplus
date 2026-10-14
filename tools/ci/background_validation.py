@@ -981,6 +981,22 @@ DECLARED_SCOPE_ENTRY = "declared-inputs-scope"
 # 声明级记录的 read_audit.sample_origin 只有这两种：registry＝登记表里的证据文件，run＝本次执行自己采样出的证据。
 DECLARED_SAMPLE_ORIGINS = ("registry", "run")
 
+_AUDIT_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _exact_zero(value: Any) -> bool:
+    """类型恰为 ``int`` 且等于 0。``False == 0``、``0.0 == 0`` 在 Python 里都成立，但封存物里的未声明数是 ``False`` 或 ``0.0`` 说明它不是执行器写的：
+    不能冒充「未声明数为零」（独立验收 #5 一般 4）。``type(x) is int`` 同时排除 bool 与 int 的任何子类。"""
+
+    return type(value) is int and value == 0
+
+
+def _same_inputs_digest(audit_digest: Any, record_digest: Any) -> bool:
+    """审计绑定的输入摘要就是记录自己的输入摘要：两边都得是 64 位小写十六进制字符串且相等。直接 ``==`` 会让两边都缺（``None == None``）的
+    封存物冒充「摘要一致」。"""
+
+    return isinstance(audit_digest, str) and _AUDIT_DIGEST.fullmatch(audit_digest) is not None and audit_digest == record_digest
+
 
 def _audit_evidence_ok(records: Any, record: Mapping[str, Any] | None, expected_sha256: str) -> bool:
     """一条来源记录自身的读集审计证据是否成立：记录读得出、自摘要有效且就是登记的那一条、是正式执行、审计通过且覆盖闭合。
@@ -1008,15 +1024,17 @@ def _audit_evidence_ok(records: Any, record: Mapping[str, Any] | None, expected_
                          if isinstance(item, Mapping) and item.get("name") == DECLARED_SCOPE_ENTRY]
         trace, binding, unit_id = audit.get("trace"), audit.get("sample_binding"), record.get("unit_id")
         digest = trace.get("sha256") if isinstance(trace, Mapping) else None
+        # 判型要严（独立验收 #5 一般 4）：未声明数只认类型恰为 int 且等于 0（False、0.0 不行），输入摘要两边都得是 64 位十六进制且相等（None == None 不行）；
+        # kind／status／coverage_scope 是与字符串字面量比较（非字符串永远不等），coverage_complete 本来就是 ``is True``，没有同样的宽松等于问题。
         return (record.get("kind") == "formal" and audit.get("status") == "passed" and audit.get("coverage_complete") is True
-                and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256")
+                and _exact_zero(audit.get("undeclared_count")) and _same_inputs_digest(audit.get("inputs_sha256"), record.get("inputs_sha256"))
                 and len(scope_entries) == 1
                 and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
                 and isinstance(unit_id, str) and isinstance(binding, Mapping) and binding.get("unit_id") == unit_id
                 and audit.get("sample_origin") in DECLARED_SAMPLE_ORIGINS)
     return (record.get("kind") == "formal" and isinstance(audit, Mapping) and audit.get("status") == "passed"
             and audit.get("coverage_complete") is True and audit.get("coverage_scope") == "all-file-paths/v1"
-            and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256"))
+            and _exact_zero(audit.get("undeclared_count")) and _same_inputs_digest(audit.get("inputs_sha256"), record.get("inputs_sha256")))
 
 
 # 比较两条记录的输入时不计这些：宿主快照与读集合同项每次重新快照，不代表仓库内容变化（逐单元合同按来源沿用并重新快照）。

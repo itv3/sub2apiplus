@@ -1292,11 +1292,12 @@ _DECLARED_ANCESTOR_PROBES = frozenset({"go.mod", "go.work", ".hg", ".svn", ".bzr
 # 仓库外「噪声探测」放行根（只对 missing／stat／dir 生效，见 ``declared_coverage`` 的 C2／C3 说明）：这些目录属于**系统状态**——
 # PATH 搜索、cgo 编译器的头文件与库搜索路径、解析器配置、Node 逐级向上找模块，都会对它们之下大量不存在的候选路径做 stat／open。
 # 系统状态不绑定，由环境指纹近似，与 system 类同口径；读取、写入、执行存在的东西仍然要有声明前缀。用户可写区不在其列：/tmp、/var/tmp、
-# /run/user、/home、/root、/srv、/mnt、/media 里的「不存在」不是系统状态，环境指纹不覆盖，必须靠声明前缀（scratch／host-config）说明。
+# /run/user、/var/run/user、/home、/root、/srv、/mnt、/media 里的「不存在」不是系统状态，环境指纹不覆盖，必须靠声明前缀（scratch／host-config）说明。
 # 所以 /var/ 不整个放行，只放系统自己维护的 /var/lib/、/var/cache/、/var/run/、/var/log/（/var/tmp/、/var/spool/ 等不在内）；/run/ 放行但
-# 排除 /run/user/（每个登录用户的运行时目录）。
+# 排除 /run/user/（每个登录用户的运行时目录）。/var/run 在 systemd 主机上是 /run 的符号链接，/var/run/user/… 就是 /run/user/…，所以排除表里
+# 两种写法都要有：/var/run/ 留在放行根里（/var/run/docker.pid 这类系统状态照旧算噪声），只把 /var/run/user/ 排除。
 _DECLARED_PROBE_ROOTS = ("/usr/", "/opt/", "/var/lib/", "/var/cache/", "/var/run/", "/var/log/", "/run/", "/etc/", "/lib/", "/lib64/", "/bin/", "/sbin/")
-_DECLARED_PROBE_EXCLUDED = ("/run/user/",)
+_DECLARED_PROBE_EXCLUDED = ("/run/user/", "/var/run/user/")
 # 根目录列表条目的名字（``repo.root_listing`` 为真时产生的输入条目）；``scope:`` 前缀与范围条目同一族，所以 range 不得叫这个名字。
 DECLARED_ROOT_LISTING_NAME = "root-listing"
 DECLARED_ROOT_LISTING_ENTRY = f"scope:{DECLARED_ROOT_LISTING_NAME}"
@@ -1386,6 +1387,9 @@ _DECLARED_GIT_DASHDASH_PATH_COMMANDS = frozenset({"show", "log", "rev-list", "ls
 # （HEAD 与各种特殊引用、index、packed-refs、refs/、logs/、worktrees/、modules/、rebase-*/、sequencer/、BISECT_*、shallow、info/grafts、
 # *.lock、hooks/……）都算状态——命令直接读它们，等于按分支／HEAD／索引寻址。只有采样里存在固定的 git 子进程（git 自己启动时会读 HEAD、
 # packed-refs、refs/replace/ 等）时才放行这些读取，这是个折中：strace 分不清是哪个进程读的（见 ``declared_coverage`` 文档的放宽项汇总）。
+# 下面四个文件算「无害」，只因为它们不改变对象库里读到的提交内容；但它们是未跟踪文件、内容不绑定进输入，而 git 的默认输出格式受 config 影响
+# （log.decorate、core.abbrev、format.pretty、log.date……），所以不带显式 --format 的 show／log 的输出可能随这些配置变化——这是已接受并披露的残余
+# （放宽项汇总第 10 条），当前登记的 declared 单元没有 git 命令。
 _DECLARED_GIT_HARMLESS_FILES = frozenset({"config", "description", "info/exclude", "info/attributes"})
 
 
@@ -2154,12 +2158,13 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
 
     1. *噪声探测*（C2／C3）：仓库外、没有声明前缀命中、访问类型只有 missing／stat／dir 的键，在 ``_DECLARED_PROBE_ROOTS`` 之下
        （``/usr/``、``/opt/``、``/var/lib/``、``/var/cache/``、``/var/run/``、``/var/log/``、``/run/``、``/etc/``、``/lib/``、``/lib64/``、
-       ``/bin/``、``/sbin/``）且不在 ``_DECLARED_PROBE_EXCLUDED``（``/run/user/``）之下，或路径含 ``node_modules`` 路径段，或（不分大小写）
-       等于／位于证据 aliases 里 TREE、WORK 路径之下、是它们的祖先时，不要求声明前缀。理由：PATH 搜索、cgo 的头文件与库搜索、解析器配置、
+       ``/bin/``、``/sbin/``）且不在 ``_DECLARED_PROBE_EXCLUDED``（``/run/user/``、``/var/run/user/``）之下，或路径含 ``node_modules`` 路径段，
+       或（不分大小写）等于／位于证据 aliases 里 TREE、WORK 路径之下、是它们的祖先时，不要求声明前缀。理由：PATH 搜索、cgo 的头文件与库搜索、解析器配置、
        Node 逐级向上找模块，会对这些位置做海量「不存在」探测；它们是系统状态，由环境指纹近似。边界：只限 missing／stat／dir，read／list／write／
-       exec 仍要声明前缀；用户可写区（``/tmp``、``/var/tmp``、``/run/user``、``/home``、``/root``、``/srv``、``/mnt``、``/media``）与
+       exec 仍要声明前缀；用户可写区（``/tmp``、``/var/tmp``、``/run/user``、``/var/run/user``、``/home``、``/root``、``/srv``、``/mnt``、``/media``）与
        ``{HOME}``、``{TMP}`` 之下不在其内——那里的「不存在」是影响命令行为的状态，要登记 host-config 或归 scratch（``{HOME}``、``{TMP}`` 自身及其
-       祖先的 stat／dir 另由下一条放行）。
+       祖先的 stat／dir 另由下一条放行）。``/var/run`` 在 systemd 主机上是 ``/run`` 的符号链接（``/var/run/user/…`` 就是 ``/run/user/…``），所以
+       ``/var/run/user/`` 与 ``/run/user/`` 同样排除，``/var/run/`` 的其余部分仍是放行根。
     2. *祖先目录*（C2／C3）：已声明前缀、测试树、``{WORK}``、``{HOME}``、``{TMP}`` 的祖先目录放行 stat／dir（与仓库内「声明内容的上级
        目录算覆盖」同构）；**测试树的严格祖先目录**键（``/``、``/var/``、``/var/tmp/``、``{WORK}`` 等）另放行 list 与 missing（Go 往上找
        go.work 与模块、Node 向上找工作区根会逐级探测）；其中 **read 只对 ``{WORK}/`` 这一个键放行**。理由：采样器把对 ``X/child`` 的 read
@@ -2191,8 +2196,11 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
        边界：这是个折中——只要有一条固定的 git 子进程，命令自己对 .git/HEAD、refs/heads/*、index、logs/ 的直接读取也被一并放行；没有固定的
        git 子进程时，状态读取一律违规（``C1-git-state``）；放行的只是 read／list，写入、执行照旧违规。
     10. *.git 非状态文件*（C1）：声明了 ``repo.git_history`` 时，``.git`` 下 ``objects/`` 子树和 config、description、info/exclude、info/attributes
-       的读取放行（不得写、不得执行）。理由：对象库是内容寻址的，那几个配置文件不改变读到的提交内容。边界：其余一律算状态、默认拒绝
+       的读取放行（不得写、不得执行）。理由：对象库是内容寻址的，那几个配置文件不改变对象库里读到的提交内容。边界：其余一律算状态、默认拒绝
        （worktrees/、modules/、rebase-*/、sequencer/、BISECT_*、CHERRY_PICK_HEAD、REVERT_HEAD、shallow、info/grafts、*.lock、hooks/ 等）。
+       已知残余（已接受并披露）：config、info/attributes 是未跟踪文件、内容不绑定进输入，而 git 的默认输出格式受 config 影响（log.decorate、
+       core.abbrev、format.pretty、log.date 等），所以不带显式 --format 的 ``git show``／``git log`` 的输出可能随这些配置变化；当前登记的 declared
+       单元没有 git 命令。
     11. *notes 的已知残余*（C6）：``git log``／``git show`` 默认显示 ``refs/notes/commits`` 的 notes，固定判定不要求 ``--no-notes``。理由：notes 在被测
        仓库里极少见。边界：被测仓库启用了 notes 时，放行的 argv 的输出会随 notes 变化——这是接受的残余风险，不是被拦住的。
 
@@ -2499,7 +2507,7 @@ def declared_coverage(sample: Mapping[str, Any], scope: Mapping[str, Any], *, co
         """仓库外「噪声探测」：没有声明前缀命中、访问类型又只有 missing／stat／dir 的键，满足下列任一条就不要求声明——
         (c) 路径含 ``node_modules`` 路径段（Node／TypeScript／ESLint 的模块解析候选，包括指向宿主上不存在的 /work/… 的符号链接）；
         (a) 路径在 ``_DECLARED_PROBE_ROOTS`` 之下且不在 ``_DECLARED_PROBE_EXCLUDED`` 之下（系统状态，不绑定；不含用户可写区
-            /tmp、/var/tmp、/run/user、/home、/root 等）；
+            /tmp、/var/tmp、/run/user 与同源的 /var/run/user、/home、/root 等）；
         (b) 路径（不分大小写）等于、位于证据 aliases 里 TREE／WORK 路径之下，或是这些路径的祖先（含 /）。**不含 HOME 与 TMP**：
             它们之下的探测必须登记 host-config／scratch（HOME、TMP 自身及其祖先的 stat／dir 另由祖先目录规则放行）。"""
 

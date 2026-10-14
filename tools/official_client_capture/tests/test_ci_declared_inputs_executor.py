@@ -524,6 +524,19 @@ def facts_for(record: dict[str, Any], **overrides: Any) -> Any:
     return ur.RunFacts(**values)
 
 
+def assert_go_mod_verify_ran_in_the_module_root(case: unittest.TestCase, world: "World", log_line: str) -> None:
+    """假 go 的日志行（``FAKE_GO_LOG`` 里 ``mod verify`` 那一行）记着它被调用时的 ``os.getcwd()``：``go mod verify`` 必须在含 ``go.mod`` 的模块根目录
+    （测试树的 backend/）里跑——真实 go 在没有 go.mod 的目录（例如测试树根）里 ``go mod verify`` 会失败，三个 Go 单元的记录就全部不可承接
+    （失败关闭，丢的是承接收益）。独立验收 #5 一般 6：此前没有任何用例断言工作目录，把 ``cwd=str(cwd)`` 改成 ``cwd=None`` 所有测试仍全绿。"""
+
+    entry = json.loads(log_line)
+    case.assertEqual(entry["argv"], ["mod", "verify"], log_line)
+    cwd = Path(entry["cwd"])
+    case.assertEqual(cwd, world.tree / "backend", f"go mod verify 的工作目录应是测试树里的 backend/（go.mod 所在目录），实际 {cwd}")
+    case.assertTrue((cwd / "go.mod").is_file(), f"go mod verify 的工作目录里必须有 go.mod：{cwd}")
+    case.assertNotEqual(cwd, world.tree, "不能在测试树根（没有 go.mod）里跑")
+
+
 class EndToEndInheritanceTests(unittest.TestCase):
     """方案 6.4 的正例与反例（T4～T8、T10、T11）：Run1 重新执行全集，改动并提交后 Run2 全集通过模式只重跑受影响的单元。"""
 
@@ -730,6 +743,7 @@ class ContractAndPreflightTests(unittest.TestCase):
         verifies = [line for line in world.go_log.read_text(encoding="utf-8").splitlines() if '"argv": ["mod", "verify"]' in line]
         self.assertEqual(len(verifies), 1, "三个 Go 单元共用同一个 GOMODCACHE：同一次执行器调用里只核一次")
         self.assertIn("GOMODCACHE", verifies[0])
+        assert_go_mod_verify_ran_in_the_module_root(self, world, verifies[0])
         for unit_id in GO_UNITS:
             record = world.record_of(first, unit_id)
             self.assertIs(record["inheritable"], False, unit_id)
@@ -1857,6 +1871,11 @@ class PreflightTests(unittest.TestCase):
         count = verifies()
         self.check(harness, "backend:go-test", unit=self.with_env(harness.unit_by_id["backend:go-test"], GOMODCACHE=str(other)))
         self.assertEqual(verifies(), count + 1)
+        # 每一次 go mod verify（含换了 GOMODCACHE 的那次）都在含 go.mod 的模块根目录 backend/ 里跑，而不是测试树根（独立验收 #5 一般 6）。
+        lines = [line for line in harness.world.go_log.read_text(encoding="utf-8").splitlines() if '"argv": ["mod", "verify"]' in line]
+        self.assertGreaterEqual(len(lines), 2)
+        for line in lines:
+            assert_go_mod_verify_ran_in_the_module_root(self, harness.world, line)
 
     def test_a_go_mod_verify_that_outlives_its_own_timeout_is_cut_off_and_judged_not_verified(self) -> None:
         """go mod verify 有自己的超时（DECLARED_GO_VERIFY_TIMEOUT_SECONDS，每次调用现取）：超过就杀掉子进程、不再等，核验按没通过处理；
