@@ -409,9 +409,9 @@ class JsonDepthTests(unittest.TestCase):
 
 class InstallPrefixCrossCheckTests(unittest.TestCase):
     """WP1e 交叉核对：记录层按合同路径绑定 installed_dirs 前缀的常量表，必须与入口层 DECLARED_CACHES 里 dependency-install 合同的 path 同源。
-    常量表（名字以 WP1e 实际合入为准，先按 ``_DECLARED_INSTALL_PREFIXES`` 找）合入之前本用例跳过；合入之后自动生效。"""
+    常量表在 WP1e 合入后叫 ``_DECLARED_INSTALLED_PREFIXES``（合同 ID → 安装目录前缀）；其它写法留作兜底，找不到任何一个名字时本用例跳过。"""
 
-    NAMES = ("_DECLARED_INSTALL_PREFIXES", "DECLARED_INSTALL_PREFIXES")
+    NAMES = ("_DECLARED_INSTALLED_PREFIXES", "_DECLARED_INSTALL_PREFIXES", "DECLARED_INSTALL_PREFIXES")
 
     def table(self) -> dict[str, str]:
         records = eg._unit_records_module()
