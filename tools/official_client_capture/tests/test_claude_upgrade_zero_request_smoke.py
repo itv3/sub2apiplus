@@ -51,7 +51,7 @@ class ClaudeZeroRequestSmokeTests(unittest.TestCase):
                 with self.assertRaises(smoke.SmokeError):
                     guarded_socket.connect(("127.0.0.1", 9))
         self.assertEqual(len(guard.attempts), 1)
-        self.assertIs(socket.socket.connect, guard._original_connect)  # 守卫退出后 socket 恢复原样
+        self.assertIs(socket.socket.connect, guard._original_connect, "网络守卫退出后必须恢复原 socket.connect")
 
     def test_smoke_rejects_non_staging_root_and_writes_receipt_once(self) -> None:
         with self.assertRaisesRegex(smoke.SmokeError, "staging"):
