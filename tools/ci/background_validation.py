@@ -62,15 +62,19 @@ B5a-01 的双收据），写进结论的 ``deployments``，文件名的部署摘
 
 子命令：
 
-* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：
+* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]
+  [--audit-policy <策略>] [--unit-inherit-request <请求> [--unit-inherit-source-result <旧后台结论> [--allow-unverified-ancestry]]]``：
   绑定数据根最新部署收据；同一提交＋同一部署已有在跑或已有 passed／failed 结论就不重复起，打印现有结论；在跑的其它后台
   验证先停下、标 superseded；然后在新会话里起 ``run``。``--then-dryrun``（E4-02 日常化）：通过之后接着起入口空跑
   （``entry_dryrun.py start --to pre-a3``，同一份记录库；门禁结论仍须满足 B-09 完整合同，缺失时重新执行；
   有采集在跑就让路），结果记在本结论的 ``dryrun`` 字段。
-  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用
+  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用另一个脚本——入口空跑
   ``entry-dryrun.sh start ... --unit-inherit-request <请求> --audit-policy <策略>``，不自动补批准或重新执行全集。
   跨提交后继另加 ``--unit-inherit-source-result <旧后台结论>``（只与 ``--unit-inherit-request`` 同用，``--work`` 须是旧结论的
-  WORK）与可选的 ``--allow-unverified-ancestry``（见上文）。
+  WORK）与可选的 ``--allow-unverified-ancestry``（见上文）。**这两个选项只有本脚本的 ``start`` 支持**，经
+  ``background-validate.sh start <bundle> <分支> <提交> …`` 原样透传（该脚本把三个位置参数之后的选项交给本脚本）；入口空跑
+  ``entry_dryrun.py``／``entry-dryrun.sh`` 没有这两个选项，不要加到空跑命令上（上一段的 ``entry-dryrun.sh start`` 命令行里
+  只有 ``--unit-inherit-request`` 与 ``--audit-policy`` 是它自己的选项）。
 * ``run``（内部）：跑入口门禁，按结论写状态。收到 SIGTERM 时把它转给入口门禁（执行器会终止全部单元会话）。
 * ``stop --runroot [--reason]``：停下在跑的后台验证并标 superseded。修复轮跑定向回归之前用：同一台机器同一时间只能有
   一个调度器，上一轮的验证也已作废。两客户端都纳管时连本运行根搭上的（别的运行根发起的）那一次一起停。
@@ -682,15 +686,23 @@ class _AncestryUndetermined(Exception):
 
 
 def _git_environment() -> dict[str, str]:
-    """git 子进程的环境：去掉继承来的 ``GIT_*``（例如从 git 钩子里运行时的 GIT_DIR），免得验证落到别的仓库上；不弹交互。"""
+    """git 子进程的环境：去掉继承来的 ``GIT_*``（例如从 git 钩子里运行时的 GIT_DIR），免得验证落到别的仓库上；不弹交互。
+
+    同时屏蔽系统与全局 git 配置（``GIT_CONFIG_NOSYSTEM=1``、``GIT_CONFIG_GLOBAL=/dev/null``）：祖先验证只在一个刚建的临时
+    裸库里验 bundle、取新提交、查 merge-base，不需要、也不该受运行账号 ``~/.gitconfig`` 或 XDG 配置的影响——那里的
+    ``core.hooksPath`` 会让 ``fetch`` 更新引用时执行钩子（``reference-transaction``），``init.templateDir`` 会把模板里的钩子
+    复制进临时库。``GIT_CONFIG_GLOBAL`` 需要 git 2.32 及以上，更老的 git 不认它，所以 ``_git`` 的命令行上另有
+    ``-c core.hooksPath=/dev/null`` 作第二道防线。"""
 
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", LC_ALL="C")
+    environment.update(GIT_TERMINAL_PROMPT="0", GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", LC_ALL="C")
     return environment
 
 
 def _git(repo: Path | None, *args: str) -> subprocess.CompletedProcess[str]:
-    argv = ["git", "--no-optional-locks", *(["-C", str(repo)] if repo is not None else []), *args]
+    # ``-c core.hooksPath=/dev/null`` 放在子命令之前，对所有子命令一律生效：不论钩子来自全局配置、模板还是临时库自己的
+    # hooks 目录，都不会被执行（git 到 /dev/null 下找不到钩子文件）。主要防的是 ``fetch`` 更新引用时的 reference-transaction。
+    argv = ["git", "--no-optional-locks", *(["-C", str(repo)] if repo is not None else []), "-c", "core.hooksPath=/dev/null", *args]
     return subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=GIT_TIMEOUT_SECONDS,
                           env=_git_environment())
 
@@ -1588,6 +1600,25 @@ def _chain_dryrun(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- 批次边界与 VC-5 前核对
 
+
+def _ancestry_note(source: Any) -> str:
+    """跨提交后继通过提示里的祖先验证状态说明。
+
+    已验证（``verified``）不追加任何文字，提示与过去逐字相同。``unverified``（用 ``--allow-unverified-ancestry`` 放行的）
+    和结论里看不出状态的情形都显眼地写出来：这个状态过去只留在结论文件的 ``unit_inherit_source.ancestry`` 里，
+    ``check-boundary``／``require-passed`` 的提示看起来与已验证的后继没有区别，读提示的人注意不到祖先关系其实没验证过。"""
+
+    ancestry = source.get("ancestry") if isinstance(source, Mapping) else None
+    status = ancestry.get("status") if isinstance(ancestry, Mapping) else None
+    if status == "verified":
+        return ""
+    if status == "unverified":
+        old = str(ancestry.get("old_commit") or "")[:12]
+        return (f"；【警告：祖先关系未验证】旧提交 {old} 是否为本提交的祖先没有验证成功（{ancestry.get('reason')}），"
+                "本后继是用 --allow-unverified-ancestry 放行的：请人工确认两个提交在同一条历史线上")
+    return "；【警告：结论里没有可识别的祖先验证状态（应为 verified 或 unverified）】"
+
+
 def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str = "codex") -> tuple[int, str]:
     """批次边界（``require_passed`` 为假）或 VC-5 验收前（为真）的判定：（退出码，说明）。"""
 
@@ -1618,7 +1649,8 @@ def check(runroot: Path, data_root: Path, *, require_passed: bool, client: str =
                     return 3, f"后台跨提交承接登记不能重放（{where}）：{error}"
                 summary = payload.get("inherit_summary") or {}
                 return 0, (f"后台验证通过（{where}）；跨提交后继：承接 {summary.get('inherited')} 个、重跑 {summary.get('executed')} 个"
-                           + ("（没有任何单元被承接，实际是整套重新执行）" if summary.get("outcome") == "full_rerun" else ""))
+                           + ("（没有任何单元被承接，实际是整套重新执行）" if summary.get("outcome") == "full_rerun" else "")
+                           + _ancestry_note(payload.get("unit_inherit_source")))
         return 0, f"后台验证通过（{where}）"
     if status == "failed":
         return 3, f"后台验证失败（没通过的门禁项 {payload.get('failed_gates')}；{where}）：拒绝派发下一批，修好、定向回归、部署后重新 start"

@@ -166,7 +166,11 @@ def test_result_bytes(value: dict[str, Any]) -> bytes:
 
 
 def write_test_output(path: Path, value: dict[str, Any]) -> None:
-    """只在本轮私有盘写两种测试产物；直接写入，保留通用 rename 的拒绝规则。"""
+    """只在本轮私有盘写两种测试产物；一律以 O_CREAT|O_EXCL 直接写目标名，不走「写临时文件再 rename」。
+
+    为什么不用 rename：v3 合同（历史凭证、control 四链的重放仍按它）的跟踪器对 rename 一律拒绝，写成「临时文件 + rename」
+    在 v3 下得不到输出归属证明。v4 合同的跟踪器（OutputTrackerV4）已经能证明 rename，但这个函数要同时满足两种合同，
+    所以保持直接写入——O_EXCL 创建本身就是最干净的「首次写入」创建证明，两个合同都认。"""
     if path.name not in {TEST_RESULT_NAME, TEST_FAILURE_NAME}:
         raise RuntimeContractError("专用测试输出类型非法")
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -445,6 +449,11 @@ class OutputTrackerV4:
     来源未证明的 rename／link、把目录硬链接、目录覆盖非空目录、目录移进自己的子目录，以及写类调用除 EEXIST／ENOENT／
     ENOTDIR 之外的任何失败。
 
+    另有三道「内核不可能产生的成功」自检——硬链接成功却目的名字已知、``O_CREAT|O_EXCL`` 创建成功却落在已知名字上、
+    ``RENAME_NOREPLACE`` 成功却目的名字已知：内核只会在目的不存在时让这三种调用成功，轨迹却声称成功，说明名字表与真实
+    状态已经脱节，所以判矛盾（记入 problems，不改名字表）。这三道自检不会放行任何东西——这类声明本来也不会把未证明的名字
+    变成已证明——但少一道自检，就少一次发现「归属状态已经和真实文件系统对不上」的机会。
+
     ``observe_event`` 返回「本事件是否改变了名字空间状态」：解析器据此推进变更纪元并决定能否对只读事件去重；
     重放端用同一个返回值重算纪元，所以任何会改名字空间的分支都必须返回 True，反之必须返回 False。
     """
@@ -459,6 +468,10 @@ class OutputTrackerV4:
         self.next_object = 1
         self.covered: set[str] = set()
         self.problems: set[str] = set()
+        # 上一条事件若创建了某个文件名，这里记着它的路径；下一条事件一到就被取出并清除（只对紧邻的下一条事件有效）。只服务于
+        # O_CREAT|O_EXCL 的矛盾自检：解析器对一次 openat／open 调用产生两条紧挨着的事件（请求路径一条、返回描述符的真实路径一条，
+        # 路径相同），创建名字的是第一条，第二条落在刚创建的名字上，不是矛盾。不影响任何事件的返回值，也不影响名字表。
+        self._created_by_previous: str | None = None
 
     # ------------------------------------------------------------------ 名字表的基本操作
 
@@ -509,6 +522,8 @@ class OutputTrackerV4:
     # ------------------------------------------------------------------ 事件入口
 
     def observe_event(self, event: dict[str, Any]) -> bool:
+        # 取出「上一条事件刚创建的路径」并清除：它只对紧邻的这一条事件有效（说明见 __init__）。
+        created_by_previous, self._created_by_previous = self._created_by_previous, None
         path, kind, name, succeeded = event["path"], event["kind"], event["name"], event["succeeded"]
         if not under(path, self.root):
             return False
@@ -546,7 +561,18 @@ class OutputTrackerV4:
                     self._problem("首次写入缺少创建证明：", path)
                 else:
                     self._create(path, "file")
+                    self._created_by_previous = path
                     return True
+            elif "O_CREAT" in event["flags"] and "O_EXCL" in event["flags"] and created_by_previous != path:
+                # O_CREAT|O_EXCL 只在路径原先不存在时才会成功（已存在的名字，不论文件、目录还是符号链接，内核一律返回
+                # EEXIST）。成功却落在已知名字上，说明名字表与真实状态已经脱节，判矛盾；矛盾不改名字表，所以仍返回 False。
+                # 紧邻豁免：上一条事件刚创建了这个名字——解析器对一次 openat／open 调用产出两条紧挨着的事件（请求路径＋返回
+                # 描述符的真实路径），第二条落在第一条刚创建的名字上，那是同一次创建，不是矛盾。真实解析器给这两条事件
+                # 相同的调用编号，本可以精确区分；这里不靠调用编号，是因为既有的随机对拍测试用两个调用编号不同的相邻事件表示
+                # 一次调用，要让它们零改动通过。代价：紧挨着创建事件的第二次 O_EXCL 成功也被放过；隔了别的事件、或豁免用掉
+                # 之后的又一次重复，仍判矛盾。
+                # creat 系统调用没有 O_EXCL 标志（等价于 O_CREAT|O_WRONLY|O_TRUNC），重新打开已知文件是合法的，不在此列。
+                self._problem("O_CREAT|O_EXCL 创建成功却落在已知名字上，与轨迹矛盾：", path)
         elif name in {"unlink", "unlinkat", "rmdir"}:
             return self._remove(path, name)
         elif name in METADATA_WRITE_NAMES and known:
@@ -625,7 +651,7 @@ class OutputTrackerV4:
         if UNSUPPORTED_RENAME_FLAGS & set(event["flags"]):
             self._problem("不支持 RENAME_EXCHANGE／RENAME_WHITEOUT：", path)
             return False
-        return self._rename(path, peer)
+        return self._rename(path, peer, noreplace="RENAME_NOREPLACE" in event["flags"])
 
     def _two_path_failed(self, event: dict[str, Any]) -> None:
         source, destination, error = event["path"], event["peer"], event["errno"]
@@ -659,7 +685,7 @@ class OutputTrackerV4:
             return True
         return False
 
-    def _rename(self, source: str, destination: str) -> bool:
+    def _rename(self, source: str, destination: str, *, noreplace: bool = False) -> bool:
         if self.root in (source, destination):
             self._problem("不能移动或覆盖私有临时盘的根：", source)
             return False
@@ -673,6 +699,12 @@ class OutputTrackerV4:
         kind = self.kinds[obj]
         victim = self.names.get(destination)
         if victim is not None:
+            if noreplace:
+                # RENAME_NOREPLACE：目的名字已存在时内核一律返回 EEXIST（同一对象的两个名字、源与目的同名也一样），所以这一
+                # 条必须排在下面「同一对象：成功但什么都不改」之前。成功却目的名字已知，说明名字表与真实状态已经脱节，
+                # 与上面「硬链接成功却目的已知」同口径判矛盾；矛盾不改名字表，返回 False。
+                self._problem("RENAME_NOREPLACE 成功却目标名字已存在，与轨迹矛盾：", destination)
+                return False
             if victim == obj:
                 # 同一对象的两个名字之间（含源与目标同名）：POSIX 规定成功但什么都不改。
                 return False
@@ -1013,8 +1045,17 @@ def _host_completion(audit, request, document):
 def _host_unchanged(audit, request, before, after, document):
     """运行结束时的宿主输入核对，返回（是否未变，原因）。纯 v2 请求：``before == after``，与历史相同。
 
-    含 v3 条目时读本次的轨迹文档（访问方式只能来自通过完整性检查的轨迹），对每个 v3 路径按访问方式同时比较
-    登记↔基线与基线↔结束；任一不一致即“已变”。拿不到完整轨迹（文档缺失或不完整）就退到最严格的整份相等，不放松。"""
+    含 v3 条目时读本次的轨迹文档（访问方式只能来自通过完整性检查的轨迹）：
+
+    * 轨迹完整：对每个 v3 路径按访问方式同时比较「登记↔基线」与「基线↔结束」两对，任一不一致即“已变”；
+    * 拿不到完整轨迹（文档缺失或不完整）：只比较「基线↔结束」，口径是最严格的整份相等（连时间字段都算），**不再比较**
+      「登记↔基线」。这比访问方式口径在「基线↔结束」一对上更严，但少了「登记↔基线」一对，仍然正确，原因有二：
+      1. 「登记↔基线」里不依赖访问方式的部分（类型、符号链接链、祖先目录、权限属主、文件大小、策略声明的易变字段）在子命名
+         空间启动前已由 ``_host_baseline`` 比较过，不一致当场拒绝启动被测命令；只有依赖访问方式的内容摘要／目录项补比才
+         需要轨迹，没有完整轨迹本来就做不了；
+      2. 轨迹不完整的单元本身就判失败（严格读集审计报“完整轨迹缺失、未结束或含未解析调用，不可承接”），结束凭证也不会写入宿主
+         访问类型（``_host_completion`` 算不出来就不写），重放时因“宿主访问类型无法由完整轨迹确定”被拒绝——所以这条路径
+         得出的“未变”结论永远不可能被拿去承接，它只是单元失败时的现场诊断。"""
     entries = request["host_entries"]
     if not any(audit.is_host_entry_v3(entry) for entry in entries):
         return before == after, ""

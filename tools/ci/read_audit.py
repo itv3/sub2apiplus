@@ -475,6 +475,13 @@ class TraceParser:
             elif self.strict:
                 self._unresolved("directory-fd-not-resolved:fchdir")
             return
+        # 目录枚举只认 getdents64。宿主快照 v3 只对「出现过 list 访问」的目录绑定直接目录项（见下文 v3 一节），而 list 访问只
+        # 来自这里的 getdents64 事件；strace 选项（见 strace_argv）也只跟踪 getdents64。这个前提的影响：
+        #   * ARM64 没有 getdents（非 64）这个系统调用，所以当前运行环境不受影响；
+        #   * x86_64 上旧 libc 或静态链接的程序可能用 getdents 枚举目录：strace 的 trace 列表里没有它，不会输出这些调用行，
+        #     解析器看不到，目录项就不会被绑定——这是「观察不到」（漏观察），不是失败关闭；
+        #   * 要在 x86_64 上审计，需要同时做两件事：把 getdents 加进 strace 的 trace 列表，并在这里把它与 getdents64 同样处理
+        #     （现在解析器若收到 getdents 行，会按「不支持的调用」登记 unsupported-call:getdents，整条轨迹失败关闭）。
         if name == "getdents64":
             annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
             if annotation:
@@ -669,6 +676,8 @@ def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], pyth
         raise AuditError("预筛表达式里有单引号，不能交给 shell")
     pipe = " ".join(command) if strict else f"grep --line-buffered -E '{pattern}' | " + " ".join(command)
     # 文件描述符切目录、命名空间变更和未建模的外部通信必须可见；未知调用保持失败关闭。
+    # 目录枚举只跟踪 getdents64：目录项只在出现 getdents64 枚举事件时绑定（见解析器里 getdents64 分支的注释）。ARM64 没有
+    # getdents（非 64）系统调用，当前环境不受影响；x86_64 上旧 libc 或静态链接程序用 getdents 枚举目录时，这里观察不到。
     options = ["-s", "4096", "-e", "verbose=%%stat", "-e", "abbrev=!%%stat",
                "-e", "trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
                "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg"] if strict else []
@@ -1026,6 +1035,30 @@ def host_entry_drift(entry: Mapping[str, Any]) -> str | None:
     return None if ok else reason
 
 
+def _v3_entries_by_name(inputs: Any, label: str) -> tuple[dict[str, Mapping[str, Any]], list[str]]:
+    """把输入明细里的 v3 宿主条目按名字归拢（同名后者覆盖前者，与过去一致），同时找出格式畸形的 v3 条目。
+
+    畸形指：是 v3 条目（detail 带 v3 合同版本）但名字或路径不是字符串。这样的条目没法按名字归拢，也没法取访问类型，过去会在
+    补比里抛 KeyError／TypeError，让整次承接评估崩溃；现在登记一条问题（失败关闭），由调用方整体返回。输入明细本身不是列表
+    （缺省的 None 除外）同样算畸形。不是 v3 条目的元素（None、字符串、没有 detail 的字典、v2 条目……）不属于补比对象，照旧
+    忽略——它们若真被改过，会反映在输入摘要或记录自摘要上，由调用方的其它核对发现。``label`` 只用于问题文案。"""
+
+    found: dict[str, Mapping[str, Any]] = {}
+    if inputs is None:
+        return found, []
+    if not isinstance(inputs, (list, tuple)):
+        return found, [f"{label}的输入明细不是列表，无法核对 v3 宿主条目"]
+    malformed: list[str] = []
+    for index, entry in enumerate(inputs):
+        if not is_host_entry_v3(entry):
+            continue
+        if not isinstance(entry.get("name"), str) or not isinstance(entry["detail"].get("path"), str):
+            malformed.append(f"{label}的第 {index + 1} 项是格式畸形的 v3 宿主条目（名字或路径不是字符串）")
+            continue
+        found[entry["name"]] = entry
+    return found, malformed
+
+
 def host_inputs_inherit_problems(trace_document: Mapping[str, Any], recorded_inputs: Sequence[Mapping[str, Any]] | None,
                                  current_inputs: Sequence[Mapping[str, Any]] | None,
                                  audit_summary: Mapping[str, Any] | None) -> list[str]:
@@ -1034,16 +1067,25 @@ def host_inputs_inherit_problems(trace_document: Mapping[str, Any], recorded_inp
 
     条目摘要不含内容、目录项和易变元数据，所以摘要相等并不蕴含这些相等；这里补上：
     1. 取记录封存的 ``host_path_modes``，必须与由完整轨迹重算的结果逐项相等（篡改或缺失即失败关闭）；
-    2. 把来源记录的每个 v3 条目与当前条目按访问方式比较——来源运行观察过的方面，现在必须仍然相同。"""
+    2. 把来源记录的每个 v3 条目与当前条目按访问方式比较——来源运行观察过的方面，现在必须仍然相同。
 
-    recorded = {entry["name"]: entry for entry in recorded_inputs or [] if is_host_entry_v3(entry)}
-    current = {entry["name"]: entry for entry in current_inputs or [] if is_host_entry_v3(entry)}
+    来源记录是可被改写的输入：v3 条目缺名字、名字或路径类型不对，或读集轨迹本身畸形时，返回问题（失败关闭），不抛异常
+    （否则一条畸形记录就能让整次承接评估中断）。良构输入的返回值与过去逐字相同。"""
+
+    recorded, bad_recorded = _v3_entries_by_name(recorded_inputs, "来源记录")
+    current, bad_current = _v3_entries_by_name(current_inputs, "当前输入")
+    if bad_recorded or bad_current:
+        # 有畸形的 v3 条目：失败关闭。畸形条目没法归拢，继续往下比较其余条目也没有意义。
+        return [*bad_recorded, *bad_current]
     if not recorded and not current:
         return []
     try:
         modes = host_path_modes(trace_document, list(recorded.values()))
     except AuditError as error:
         return ["宿主快照 v3 无法确定访问方式：" + str(error)]
+    except (KeyError, TypeError, AttributeError) as error:
+        # 轨迹文档本身畸形（不是对象、覆盖信息或访问记录的类型不对）：和完整性不足同样失败关闭，不让异常穿出去。
+        return [f"宿主快照 v3 无法确定访问方式：来源记录的读集轨迹格式畸形（{type(error).__name__}：{error}）"]
     problems: list[str] = []
     if (audit_summary or {}).get("host_path_modes") != modes:
         problems.append("记录封存的宿主访问类型缺失，或与完整轨迹重算的结果不符")
