@@ -1091,15 +1091,13 @@ def _positive_parallel(value: str) -> int:
 
 
 def _declared_sample_mode(value: str) -> str:
-    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数），返回规范写法；非法在最外层就拒绝。
-    与执行器 ``unit_executor.declared_sample_mode`` 同一规则（测试核对两边一致），免得编排层放过一个执行器才报错的值。"""
+    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；非法在最外层就拒绝。
+    与执行器 ``unit_executor.declared_sample_mode`` 以及入口脚本 ``entry-gates.sh`` 的正则 ``^(off|always|every:[1-9][0-9]*)$`` 同一规则（测试核对
+    各层一致），免得编排层放过一个执行器才报错的值：**不去首尾空白**、不认换行、前导零与大小写变体、不是字符串一律拒绝；合法的取值就是规范写法，原样返回。"""
 
-    text = str(value).strip()
-    if text in ("off", "always"):
-        return text
-    found = re.fullmatch(r"every:([1-9][0-9]*)", text)
-    if found:
-        return f"every:{int(found.group(1))}"
+    if isinstance(value, str):
+        if value in ("off", "always") or re.fullmatch(r"every:[1-9][0-9]*", value):
+            return value
     raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{value!r}")
 
 

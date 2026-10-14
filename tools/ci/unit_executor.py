@@ -1142,6 +1142,13 @@ class Recorder:
 # 触发纪律（control 四链的行为必须逐字不变）：所有新分支只由「当前输入里有 declared-inputs-scope 条目」或「声明里有 declared_scope 键」触发，
 # control 的声明与条目里两者都没有；本节任何函数都不调用 _audit_module()、不导入 read_audit——覆盖检查、证据解析、凭证核验全部用 unit_records
 # 里的纯函数，采样用 declared_sampler。
+#
+# 设计盲区（已知、有意披露，不是遗漏）：采样的网络检查只覆盖 connect。采样器给 strace 的跟踪集合（declared_sampler.STRACE_OPTIONS 的 trace=）里
+# 有 connect，没有 sendto、sendmsg、sendmmsg，所以「UDP 未连接套接字」直接 sendto／sendmsg／sendmmsg 往外部地址发包是看不到的，C5 网络规则对这条
+# 路径无效。对已知的用法这个盲区不成立：TCP 外连一定先经 connect；glibc 与 Go 的 DNS 解析（不管走 UDP 还是 TCP）都先对解析服务器 connect，
+# 目的地址会被收集到。也就是说漏掉的只可能是「自己 socket() 之后从不 connect、直接 sendto／sendmsg 的程序」；登记的单元里有没有这类程序，只能靠
+# 评审它们的实现来判断，采样本身证明不了（它看不到这类调用）。以后登记新的 declared 单元时要想到这一点；要补上这个盲区得改采样器的跟踪集合
+# （它的字节进执行器版本，改了要重采），不在执行器一侧修。
 
 DECLARED_SCOPE_ENTRY = "declared-inputs-scope"
 DECLARED_COVERAGE_SCOPE = "declared-inputs/v1"
@@ -1156,7 +1163,7 @@ DECLARED_COVERAGE_SCOPE = "declared-inputs/v1"
 # 新增的覆盖规则默认不在本集合里，必须先评审归类（test_ci_declared_inputs_executor 钉住这个集合与 declared_coverage 的规则词表）。
 # 步骤 5 WP3b：集合里多了 C7-detached（采样器丢弃的 strace 标记行总数超过上限——个位数是 Go 运行时线程被杀或退出的正常现象，大面积出现说明流被截断或
 # 大批线程消失，读集可能不完整）。它和 C7-stream 同类：说明证据不足以证明覆盖，并没有发现违规，所以也只让该次记录不可承接。规则本身由记录层的
-# declared_coverage 产生（WP1d）；在它认识这条规则之前，这里多认一个名字没有任何效果。
+# declared_coverage 产生（C7-detached，标记行超过 64 条触发，WP1d 已合入）；集合里的每个名字都必须是 declared_coverage 真有的规则，测试钉住这一点。
 DECLARED_INCOMPLETE_RULES = frozenset({"C7-stream", "C7-unresolved", "C7-lines", "C7-detached"})
 # 合同探测会话要「看见」的 go 环境变量（与 entry_gates.DECLARED_GO_ENV_KEYS 同值，测试钉住）：go env 的生效值受它们影响，而离线值是写在单元清单的
 # env 里的（不在执行器进程环境里）——探测必须叠上单元自己的这几个值，条目里的 env 与 requirements 才是单元真正会看到的。
@@ -1168,14 +1175,16 @@ _DECLARED_SAMPLE_COVERAGE_KEYS = ("stream_complete", "unresolved", "unresolved_r
 
 
 def declared_sample_mode(text: str) -> str:
-    """命令行 ``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；返回规范写法，非法抛 argparse 的 ArgumentTypeError。"""
+    """命令行 ``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；非法抛 argparse 的 ArgumentTypeError。
 
-    value = str(text).strip()
-    if value in ("off", "always"):
-        return value
-    found = re.fullmatch(r"every:([1-9][0-9]*)", value)
-    if found:
-        return f"every:{int(found.group(1))}"
+    口径与入口脚本 ``entry-gates.sh`` 的正则 ``^(off|always|every:[1-9][0-9]*)$`` 逐字相同，不做任何宽容：**不去首尾空白**、不认换行、
+    不认前导零（``every:07``）、不认大小写变体（``ALWAYS``）、不是字符串一律拒绝。合法的取值本身就是规范写法，原样返回。
+    入口编排器、入口空跑、后台验证各有一份同口径的函数，测试核对四层一致——外层放过一个内层才报错的值，或者反过来，都会让同一个
+    取值在 shell 层和 Python 层得到不同结论。"""
+
+    if isinstance(text, str):
+        if text in ("off", "always") or re.fullmatch(r"every:[1-9][0-9]*", text):
+            return text
     raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{text!r}")
 
 
@@ -1188,9 +1197,28 @@ def _declared_scope_entry_of(current: Any) -> dict[str, Any] | None:
     return None
 
 
+def _declared_control_governed(unit_id: Any) -> bool:
+    """这个单元是不是 control 适配器管辖的（pre-A3 场景单元，含 control 四链）：声明级登记永远不管它们。
+
+    plan 阶段的登记表自检（entry_gates.apply_declared_inputs）本来就禁止登记任何 ``pre-a3:*`` 单元，正常流程里它们到不了这里；但执行器自己不能
+    只靠上游挡——清单的顶层汇总 ``declared_inputs.rerun_only_reasons`` 是磁盘上的 JSON，若哪天被写进（或被改成带上）control 单元的 ID，
+    ``ReadAuditor._declared_exempt`` 就会放过它的读集审计，control 四链的严格审计被静默跳过。所以执行器一侧再挡一次，两条判据取并：
+    ① 当前运行里 control 适配器（``_CONTROL_READ_AUDIT``）自己声明的管辖集合 ``CONTROL_UNIT_IDS``（适配器不在位、或是测试桩没有这个属性时当空集合）；
+    ② 单元 ID 以 ``pre-a3:`` 开头——适配器拿不到（计划没选中 control）时的兜底。取并而不是二选一：任何一条认出来就不是声明级单元。"""
+
+    if not isinstance(unit_id, str):
+        return False
+    adapter = _CONTROL_READ_AUDIT.get()
+    governed = getattr(adapter, "CONTROL_UNIT_IDS", None) if adapter is not None else None
+    return unit_id.startswith("pre-a3:") or (isinstance(governed, (set, frozenset)) and unit_id in governed)
+
+
 def _declared_unit_ids(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
     """清单里登记了声明级承接的命令单元：（declared 状态的, rerun-only 状态的）。declared＝单元输入声明带 declared_scope 键
-    （apply_declared_inputs 的产物）；rerun-only＝清单顶层 declared_inputs 汇总里列出原因的。没有登记表的清单两个集合都空。"""
+    （apply_declared_inputs 的产物）；rerun-only＝清单顶层 declared_inputs 汇总里列出原因的。没有登记表的清单两个集合都空。
+
+    control 适配器管辖的单元（见 ``_declared_control_governed``）两个集合里都丢掉：即使清单里有人把它们的 ID 写进汇总的 rerun_only_reasons，
+    也不会让它们进入声明级分支，control 四链的行为与没有登记表时逐字相同。"""
 
     declared: set[str] = set()
     for item in manifest.get("units") or []:
@@ -1199,7 +1227,8 @@ def _declared_unit_ids(manifest: dict[str, Any]) -> tuple[set[str], set[str]]:
     summary = manifest.get("declared_inputs")
     reasons = summary.get("rerun_only_reasons") if isinstance(summary, dict) else None
     rerun_only = {unit_id for unit_id in reasons if isinstance(unit_id, str)} if isinstance(reasons, dict) else set()
-    return declared, rerun_only
+    return ({unit_id for unit_id in declared if not _declared_control_governed(unit_id)},
+            {unit_id for unit_id in rerun_only if not _declared_control_governed(unit_id)})
 
 
 def _declared_registered(manifest: dict[str, Any], registered: Any) -> Any:
@@ -1318,7 +1347,8 @@ class _DeclaredRun:
     * ``sample_mode``：命令行 ``--declared-sample``（off／always／every:N），缺省 off；
     * ``store``：记录库（every:N 按库里该单元已有的正式记录数决定本次采不采样；消费者接受数自检也用它）；
     * ``preflights``：单元启动前拍下的前置核验结果，回收时取走；
-    * ``verify_memo``：``go mod verify`` 的结果按 GOMODCACHE 路径记忆——缓存在单元运行期间只读，不必每个单元核一次；
+    * ``verify_memo``：``go mod verify`` 的结果（ok／failed／timeout）按 GOMODCACHE 路径记忆——缓存在单元运行期间只读，不必每个单元核一次
+      （超时也记忆：卡住的核验整次运行只等一次，见 DECLARED_GO_VERIFY_TIMEOUT_SECONDS）；
     * 其余是同一次调用内的小缓存（登记表、git 跟踪集合、HEAD 提交、strace 版本）。"""
 
     def __init__(self, *, entry: Any, manifest: dict[str, Any], tree: Path, sample_mode: str, declared: set[str], rerun_only: set[str]) -> None:
@@ -1469,11 +1499,39 @@ def _declared_tree_location_ok(tree: Path, detail: dict[str, Any]) -> tuple[bool
     return True, None
 
 
-def _declared_cache_credential(run: _DeclaredRun, session: Any, *, detail: dict[str, Any], env: dict[str, str], files: dict[str, str],
+# go mod verify（go.sum 初态核验）这一步的单独超时，秒。
+# 理由：预热（go_compile_warmup）已经做过一遍 go mod download／verify（本机真实 backend 约 2 秒，ARM64 按 10 倍保守估计约 20 秒，预热里这一步的上限
+# 是 120 秒），这里只是单元启动前冗余的二次核验。它在调度线程里同步执行（Scheduler.launch → _declared_preflight），卡住（模块缓存上的锁、
+# 坏盘、网络文件系统）就会拖住调度线程：其它运行中单元的超时检查与回收全部停滞。合同探测会话的默认 runner（entry_steps.default_runner）超时
+# 是 900 秒，对这一步太长，所以单独给 180 秒（约为预热里同一步上限的 1.5 倍）。
+# 超时按「核验没通过」处理：该单元的记录 inheritable=False、命令照跑（通过／失败结论不受影响），凭证里写明 verify=timeout 与原因。结果同
+# 正常结果一样按 GOMODCACHE 记忆（_DeclaredRun.verify_memo），三个 Go 单元共用同一份缓存时整次运行最多等这一次。测试把这个常量调小来造超时。
+DECLARED_GO_VERIFY_TIMEOUT_SECONDS = 180
+
+
+def _declared_go_mod_verify(run: _DeclaredRun, *, env: dict[str, str], cwd: Path) -> str:
+    """跑 ``go mod verify``（环境＝单元实际环境，工作目录＝go.mod 所在目录），返回 ``ok``／``failed``／``timeout``。
+
+    超时用 ``DECLARED_GO_VERIFY_TIMEOUT_SECONDS``（每次调用时现取，测试可以调小）：超过就杀掉这个子进程、不再等，返回 ``timeout``。
+    其它出错（go 不在 PATH、工作目录不存在等）与过去 ``default_runner`` 把它们折成退出码 127 同一个结果：``failed``。
+    通过的判据不变：退出码为 0 且输出里有整行 ``all modules verified``（go_compile_warmup.module_verified）。"""
+
+    try:
+        completed = subprocess.run(["go", "mod", "verify"], capture_output=True, text=True, errors="replace", env=dict(env), cwd=str(cwd),
+                                   stdin=subprocess.DEVNULL, timeout=DECLARED_GO_VERIFY_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    except (OSError, subprocess.SubprocessError):
+        return "failed"
+    verified = run.entry._go_compile_warmup_module().module_verified(completed.returncode, completed.stdout.encode("utf-8", "replace"))
+    return "ok" if verified else "failed"
+
+
+def _declared_cache_credential(run: _DeclaredRun, *, detail: dict[str, Any], env: dict[str, str], files: dict[str, str],
                                tree: Path, module_dir: Path, locations: Any) -> tuple[dict[str, Any], bool, str | None]:
     """一个 ``cache:*`` 合同的运行前核验：返回（observed, 是否通过, 不通过的原因）。observed 的字段取廉价事实（调研 4.2）：
     ``any-content-addressed``／``any-scratch``→``{root_ok}``；``lock-derived-pnpm``→``{installed_lock_sha256, lock_file_sha256}``；
-    ``lock-derived-go-sum``→``{go_sum_sha256, verify, root_ok}``。运行后不再对缓存目录做任何整体摘要。"""
+    ``lock-derived-go-sum``→``{go_sum_sha256, verify, root_ok}``（verify 取 ok／failed／timeout／skipped）。运行后不再对缓存目录做任何整体摘要。"""
 
     rule = detail.get("rule")
     location = detail.get("location")
@@ -1522,11 +1580,12 @@ def _declared_cache_credential(run: _DeclaredRun, session: Any, *, detail: dict[
             # all modules verified）；缓存完整性由预热里 go mod download 成功保证，运行期离线、缺模块会让命令直接失败。
             key = (env.get("GOMODCACHE") or "", str(module_dir), go_sum)
             if key not in run.verify_memo:
-                code, output = session.ctx.run(["go", "mod", "verify"], cwd=module_dir)
-                verified = run.entry._go_compile_warmup_module().module_verified(code, str(output).encode("utf-8", "replace"))
-                run.verify_memo[key] = "ok" if verified else "failed"
+                run.verify_memo[key] = _declared_go_mod_verify(run, env=env, cwd=module_dir)
             verify = run.verify_memo[key]
-            if verify != "ok":
+            if verify == "timeout":
+                why = (f"go mod verify 超过 {DECLARED_GO_VERIFY_TIMEOUT_SECONDS:g} 秒还没结束，已放弃等待（预热已核验过一遍，这里是冗余的二次核验，"
+                       f"卡住不能拖住调度线程）：按核验没通过处理")
+            elif verify != "ok":
                 why = "go mod verify 没有通过（退出码非零，或输出里没有 all modules verified）"
             elif files.get(f"file:{lock_file}") != go_sum:
                 why = f"go.sum 摘要不等于输入里 file:{lock_file} 条目的摘要"
@@ -1596,7 +1655,7 @@ def _declared_preflight_checks(run: _DeclaredRun, unit: "Unit", current: Any, ve
         kind, _, name = ident.partition(":")
         detail = (contracts.get(f"contract:{ident}") or {}).get("detail") or {}
         if kind == "cache":
-            observed, ok, why = _declared_cache_credential(run, session, detail=detail, env=env, files=files, tree=tree, module_dir=module_dir,
+            observed, ok, why = _declared_cache_credential(run, detail=detail, env=env, files=files, tree=tree, module_dir=module_dir,
                                                            locations=locations)
             credential("cache", name, ok, observed, detail.get("rule"))
             if not ok:
@@ -1848,10 +1907,14 @@ class ReadAuditor:
         当前输入明细为空，审计会报「单元没有输入明细，无从核对」；有 audit_policy 的严格审计运行里，没登记的单元会被追加 reexecute-only-policy
         条目，而声明级承接把登记表里的单元并入「已登记」集合（不追加该条目，否则 rerun-only 的原因会被覆盖），它们就会被严格审计去审，必然失败。
         这里统一放行：不包 strace、结果形状同旧的「声明了整个仓库的单元不审计」，report 的承接边界判定另认 declared_exempt 标记。
-        它们的记录本来就不可承接（清单 inheritable:false），所以放行不放宽任何承接。"""
+        它们的记录本来就不可承接（清单 inheritable:false），所以放行不放宽任何承接。
+
+        control 适配器管辖的单元（control 四链、其它 pre-A3 场景单元）永远不放行，不管声明级上下文里的 rerun_only 集合写了什么：放行它们等于静默跳过
+        它们的严格审计。``_declared_unit_ids`` 已经把它们挡在集合之外；这里是第二道（上下文可以不经清单直接构造），判据见 ``_declared_control_governed``。"""
 
         run = _DECLARED_RUN.get()
         return (run is not None and unit.unit_id in run.rerun_only
+                and not _declared_control_governed(unit.unit_id)
                 and _declared_scope_entry_of(self.currents.get(unit.unit_id)) is None)
 
     def note_outcome(self, outcome: "Outcome") -> None:
@@ -3519,6 +3582,12 @@ def _run_gates_current(args: argparse.Namespace) -> int:
                 original_resume_basis = resume_basis(current_now)
                 currents = current_now
                 recorder.currents = currents
+                # 这里只需要同步「只为声明级单元建的审计器」，不需要同步 --audit-reads 建的常规审计器（独立验收 #3 一般 8 怀疑过这一点，实测证伪）：
+                # 进入本分支的前提是 B-09／B-10 判定里有可承接的单元，而判定只有在 --mode full-set-pass 下才会放行（其它模式下 reuse_enabled 被压成
+                # False，assess 一律判全部重跑，没有可承接单元，本分支不进）；--audit-reads 却只许与 --mode re-execute（或逐单元承接，它与 B-09 请求
+                # 互斥）同用，否则前面就报错退出。所以进到这里时不会有常规审计器，该同步的只有 declared_only 的那个。锁后复核之后常规审计器拿着旧事实的
+                # 情形，唯一可达的是下面的逐单元承接分支，那里已经同步了（auditor.currents = currents）。这几个前提和同步行为都有测试钉住
+                # （test_ci_declared_inputs_executor 的 AuditorFactsSyncTests），以后谁放宽了前提，测试会先红。
                 _declared_sync_auditor(scheduler, currents)
                 facts.now = time.time()
                 fresh_environment = records.merge_environment(records.executor_environment(os.environ), manifest.get("environment") or [])

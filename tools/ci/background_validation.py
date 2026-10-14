@@ -974,9 +974,12 @@ def _inherit_source_recheck(payload: Mapping[str, Any]) -> None:
         raise ValidationError("后台跨提交承接登记的 WORK 没有绑定来源自己的提交与部署")
 
 
-# 声明级承接（declared-inputs/v1）记录的读集覆盖口径名，与 unit_records.DECLARED_COVERAGE_SCOPE 同值（测试核对两边一致）；本模块不导入记录层，
-# 只在判断「审计证据是否成立」时认这一个口径。
+# 声明级承接（declared-inputs/v1）记录的读集覆盖口径名与范围条目名，与 unit_records.DECLARED_COVERAGE_SCOPE、DECLARED_SCOPE_ENTRY 同值（测试核对
+# 各处一致）；本模块不导入记录层，只在判断「审计证据是否成立」时认这两个名字。
 DECLARED_COVERAGE_SCOPE = "declared-inputs/v1"
+DECLARED_SCOPE_ENTRY = "declared-inputs-scope"
+# 声明级记录的 read_audit.sample_origin 只有这两种：registry＝登记表里的证据文件，run＝本次执行自己采样出的证据。
+DECLARED_SAMPLE_ORIGINS = ("registry", "run")
 
 
 def _audit_evidence_ok(records: Any, record: Mapping[str, Any] | None, expected_sha256: str) -> bool:
@@ -991,8 +994,26 @@ def _audit_evidence_ok(records: Any, record: Mapping[str, Any] | None, expected_
         # 声明级承接（declared-inputs/v1，步骤 5 WP3b）的记录：读集覆盖口径不是全路径，而是「采样路径全部落在声明范围内」，同样只认审计这一层——
         # 正式执行、状态 passed、覆盖闭合、未声明数为零、审计绑定的输入摘要就是这条记录的。incomplete（只因证据不完整）与 failed（有未覆盖）的
         # 记录都不算审计通过：认证运行里它们就该重跑（失败关闭）。其余承接条件（声明范围核验、合同凭证、证据重算）由逐单元合同的消费者判定。
+        #
+        # 只信记录自述（read_audit 里的字段）不够：任何单元的记录都能自述「声明级、通过、覆盖闭合、0 未声明、摘要一致」。所以在自述之外还要求
+        # 记录的结构真的像一条声明级记录——这些是执行器写声明级记录时一定带上的、可以只看记录本身核对的事实（统计口径用的轻量检查；真正的放行判据
+        # 仍是消费者核验 check_record，它会重算覆盖，这里不替它做、也不改它）：
+        # ① 记录输入里恰有一个 declared-inputs-scope 条目（范围条目是声明级单元的输入，缺了或重复了说明它不是按声明范围算的输入）；
+        # ② read_audit.trace 是对象且带 64 位十六进制的 sha256（封存的采样证据，不论来源是登记表还是本次采样）；
+        # ③ read_audit.sample_binding 是对象，且其 unit_id 就是这条记录的单元（证据绑定在这个单元上，不是别的单元的）；
+        # ④ read_audit.sample_origin 是 registry 或 run。
+        # 记录是封存物，自摘要有效不等于内容规矩（伪造者可以封存任意形状）：每一项都先核类型再取值，形状不对一律判不成立，不抛异常。
+        inputs = record.get("inputs")
+        scope_entries = [item for item in (inputs if isinstance(inputs, list) else [])
+                         if isinstance(item, Mapping) and item.get("name") == DECLARED_SCOPE_ENTRY]
+        trace, binding, unit_id = audit.get("trace"), audit.get("sample_binding"), record.get("unit_id")
+        digest = trace.get("sha256") if isinstance(trace, Mapping) else None
         return (record.get("kind") == "formal" and audit.get("status") == "passed" and audit.get("coverage_complete") is True
-                and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256"))
+                and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256")
+                and len(scope_entries) == 1
+                and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
+                and isinstance(unit_id, str) and isinstance(binding, Mapping) and binding.get("unit_id") == unit_id
+                and audit.get("sample_origin") in DECLARED_SAMPLE_ORIGINS)
     return (record.get("kind") == "formal" and isinstance(audit, Mapping) and audit.get("status") == "passed"
             and audit.get("coverage_complete") is True and audit.get("coverage_scope") == "all-file-paths/v1"
             and audit.get("undeclared_count") == 0 and audit.get("inputs_sha256") == record.get("inputs_sha256"))
@@ -1231,8 +1252,10 @@ def _start_locked(args: argparse.Namespace, *, deployments: Mapping[str, Mapping
     if parallel is not None and (type(parallel) is not int or parallel <= 0):
         raise ValidationError("--parallel 必须是正整数")
     # 声明级承接的采样方式（步骤 5 WP3b）：缺省 off；只有显式非 off 才登记进输入合同与结论（缺省的合同、结论与命令行与改造前逐字相同）。
+    # 只有「没给」（属性不存在或为 None）才是缺省；空字符串是非法取值（入口脚本的正则同样拒绝），不能被 ``or`` 悄悄当成 off。
+    requested = getattr(args, "declared_sample", None)
     try:
-        sample = _declared_sample_mode(getattr(args, "declared_sample", None) or "off")
+        sample = _declared_sample_mode("off" if requested is None else requested)
     except argparse.ArgumentTypeError as error:
         raise ValidationError(str(error)) from error
     deployment = latest_deployment(args.data_root, client)
@@ -1709,15 +1732,13 @@ def _positive_parallel(value: str) -> int:
 
 
 def _declared_sample_mode(value: str) -> str:
-    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数），返回规范写法；非法在最外层就拒绝。
-    与执行器 ``unit_executor.declared_sample_mode`` 同一规则（测试核对各层一致），免得后台起了才在入口门禁里报错。"""
+    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；非法在最外层就拒绝。
+    与执行器 ``unit_executor.declared_sample_mode`` 以及入口脚本 ``entry-gates.sh`` 的正则 ``^(off|always|every:[1-9][0-9]*)$`` 同一规则（测试核对
+    各层一致），免得后台起了才在入口门禁里报错：**不去首尾空白**、不认换行、前导零与大小写变体、不是字符串一律拒绝；合法的取值就是规范写法，原样返回。"""
 
-    text = str(value).strip()
-    if text in ("off", "always"):
-        return text
-    found = re.fullmatch(r"every:([1-9][0-9]*)", text)
-    if found:
-        return f"every:{int(found.group(1))}"
+    if isinstance(value, str):
+        if value in ("off", "always") or re.fullmatch(r"every:[1-9][0-9]*", value):
+            return value
     raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{value!r}")
 
 

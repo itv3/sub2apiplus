@@ -40,9 +40,16 @@ CI = REPO_ROOT / "tools" / "ci"
 DRIVER = REPO_ROOT / "tools" / "arm64_capture_driver" / "driver"
 COMMIT = "a" * 40
 
-VALID = {"off": "off", "always": "always", "every:1": "every:1", "every:3": "every:3", " every:12 ": "every:12", "\talways\n": "always"}
-INVALID = ["", " ", "on", "every", "every:", "every:0", "every:-1", "every:x", "every:1.5", "every:07", "ALWAYS", "Off", "every:3 4", "every: 3",
-           "always;touch x", "off always", "--declared-sample"]
+# 取值口径与入口脚本 entry-gates.sh 的正则 ^(off|always|every:[1-9][0-9]*)$ 逐字相同：合法的取值本身就是规范写法，原样返回；
+# 首尾空白、换行、前导零、大小写变体一律拒绝（过去 Python 四层先 strip() 再判，比 shell 宽，独立验收 #3 一般 11）。
+VALID = {"off": "off", "always": "always", "every:1": "every:1", "every:3": "every:3", "every:12": "every:12", "every:100": "every:100"}
+WHITESPACE = [" off", "off ", " always", "always ", "always\n", "\nalways", "\talways\n", " every:12 ", " every:3", "every:3 ", "every:3\n", "every:3\r",
+              "every:3\r\n", "\u00a0always", "always\u00a0", "every:3\u3000", "alwa\nys"]
+INVALID = ["", " ", "on", "every", "every:", "every:0", "every:-1", "every:x", "every:1.5", "every:07", "every:00", "ALWAYS", "Always", "Off", "OFF", "EVERY:3",
+           "Every:3", "every:3 4", "every: 3", "every :3", "every:\u0663", "every:\uff13", "always;touch x", "off always", "--declared-sample", *WHITESPACE]
+# \u5176\u5b83\u6587\u5b57\u7684\u6570\u5b57\uff08\u963f\u62c9\u4f2f-\u5370\u5ea6\u6570\u5b57\u4e09\u3001\u5168\u89d2\u6570\u5b57\u4e09\uff09\uff1aPython \u7684 [0-9] \u53ea\u8ba4 ASCII \u6570\u5b57\uff0c\u6c38\u8fdc\u62d2\u7edd\uff1bshell \u6b63\u5219\u7684 [0-9] \u4f1a\u4e0d\u4f1a\u5339\u914d\u5b83\u4eec\u53d6\u51b3\u4e8e locale \u7684
+# \u6392\u5e8f\u89c4\u5219\uff0c\u6240\u4ee5\u53ea\u5728 Python \u56db\u5c42\u7684\u62d2\u7edd\u7528\u4f8b\u91cc\u51fa\u73b0\uff0c\u4e0d\u8fdb\u300c\u9010\u503c\u5bf9\u7167 shell\u300d\u3002
+SHELL_LOCALE_DEPENDENT = {"every:\u0663", "every:\uff13"}
 
 
 class ModeValidatorTests(unittest.TestCase):
@@ -56,6 +63,34 @@ class ModeValidatorTests(unittest.TestCase):
             for layer, validator in self.VALIDATORS.items():
                 with self.subTest(layer=layer, raw=raw):
                     self.assertEqual(validator(raw), canonical)
+                    self.assertEqual(canonical, raw, "合法的取值就是规范写法：不做任何规范化")
+
+    def test_no_layer_trims_whitespace_or_newlines(self) -> None:
+        """独立验收 #3 一般 11：shell 层的正则拒绝首尾空白与换行，Python 四层过去先 strip() 再判，同一个取值在两层得到不同结论。现在四层一样严格。"""
+
+        for raw in WHITESPACE:
+            for layer, validator in self.VALIDATORS.items():
+                with self.subTest(layer=layer, raw=raw), self.assertRaises(argparse.ArgumentTypeError):
+                    validator(raw)
+
+    def test_the_python_layers_agree_with_the_shell_regex_value_by_value(self) -> None:
+        """逐值对照：把 entry-gates.sh 里的取值校验原样截出来在 bash 里跑，同一批取值的结论（接受／拒绝）和四个 Python 校验函数必须一致。"""
+
+        shell = EntryGatesScriptTests()
+        for raw in [*VALID, *INVALID]:
+            if raw in SHELL_LOCALE_DEPENDENT:
+                continue   # shell 的 [0-9] 会不会匹配其它文字的数字取决于 locale 的排序规则，不拿来对照；Python 一侧的拒绝由别的用例钉住
+            code, line, _stderr = shell.parse("--declared-sample", raw)
+            accepted_by_shell = code == 0 and line == f"SAMPLE={raw}"
+            if code == 0:
+                self.assertEqual(line, f"SAMPLE={raw}", "shell 接受时不改写取值")
+            for layer, validator in self.VALIDATORS.items():
+                try:
+                    validator(raw)
+                    accepted = True
+                except argparse.ArgumentTypeError:
+                    accepted = False
+                self.assertEqual(accepted, accepted_by_shell, f"{layer} 与 shell 对 {raw!r} 的结论不同（shell 退出码 {code}）")
 
     def test_every_layer_refuses_the_same_values_with_the_same_kind_of_error(self) -> None:
         for raw in INVALID:
@@ -97,7 +132,7 @@ class OutermostRejectionTests(unittest.TestCase):
     def test_background_validation_start_refuses_before_touching_anything(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            for raw in ("sometimes", "every:0", ""):
+            for raw in ("sometimes", "every:0", "", " always", "always\n", " every:3 "):
                 with self.subTest(raw=raw):
                     completed = self.run_cli(CI / "background_validation.py", "start", "--runroot", str(root / "run"), "--data-root", str(root / "data"),
                                              "--bundle", str(root / "x.bundle"), "--branch", "x", "--commit", COMMIT, "--declared-sample", raw)
@@ -108,7 +143,7 @@ class OutermostRejectionTests(unittest.TestCase):
     def test_entry_dryrun_start_refuses_before_touching_anything(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            for raw in ("sometimes", "every:0", ""):
+            for raw in ("sometimes", "every:0", "", " always", "always\n", " every:3 "):
                 with self.subTest(raw=raw):
                     completed = self.run_cli(CI / "entry_dryrun.py", "start", "--runroot", str(root / "run"), "--data-root", str(root / "data"),
                                              "--vc-env", str(root / "env.sh"), "--bundle", str(root / "x.bundle"), "--branch", "x", "--commit", COMMIT,
@@ -118,7 +153,7 @@ class OutermostRejectionTests(unittest.TestCase):
             self.assertEqual(list(root.iterdir()), [])
 
     def test_entry_orchestrator_refuses_before_looking_for_any_parameter(self) -> None:
-        for raw in ("sometimes", "every:0", ""):
+        for raw in ("sometimes", "every:0", "", " always", "always\n", " every:3 "):
             with self.subTest(raw=raw):
                 completed = self.run_cli(CI / "entry_orchestrator.py", "--declared-sample", raw)
                 self.assertEqual(completed.returncode, 2, completed.stderr)
@@ -126,8 +161,9 @@ class OutermostRejectionTests(unittest.TestCase):
                 self.assertNotIn("参数里没有 D 或 RUNROOT", completed.stderr, "在检查环境参数之前就拒绝了")
 
     def test_the_orchestrator_constructor_refuses_too(self) -> None:
-        with self.assertRaisesRegex(eo.OrchestratorError, "--declared-sample"):
-            eo.Orchestrator({}, driver_dir=DRIVER, run_dir=DRIVER, steps_dir=DRIVER, declared_sample="sometimes")
+        for raw in ("sometimes", "", " always", "always\n", "every:03"):
+            with self.subTest(raw=raw), self.assertRaisesRegex(eo.OrchestratorError, "--declared-sample"):
+                eo.Orchestrator({}, driver_dir=DRIVER, run_dir=DRIVER, steps_dir=DRIVER, declared_sample=raw)
 
 
 class EntryGatesScriptTests(unittest.TestCase):
@@ -153,7 +189,7 @@ class EntryGatesScriptTests(unittest.TestCase):
                 self.assertEqual(self.parse("--declared-sample", raw)[:2], (0, f"SAMPLE={raw}"))
 
     def test_invalid_values_exit_2_at_the_script_boundary(self) -> None:
-        for raw in ("sometimes", "every:0", "every:", "every:x", "ALWAYS", "", "every:07", "always extra"):
+        for raw in ("sometimes", "every:0", "every:", "every:x", "ALWAYS", "", "every:07", "always extra", *WHITESPACE):
             with self.subTest(raw=raw):
                 code, _line, stderr = self.parse("--declared-sample", raw)
                 self.assertEqual(code, 2, stderr)
@@ -428,8 +464,19 @@ class DryRunPassthroughTests(unittest.TestCase):
                 run.assert_not_called()
 
     def test_start_refuses_an_invalid_mode_programmatically_too(self) -> None:
-        with mock.patch.object(dr, "capture_busy", return_value=None), self.assertRaisesRegex(dr.DryRunError, "--declared-sample"):
-            dr.start(self.namespace(declared_sample="sometimes"))
+        for raw in ("sometimes", "", " always", "always\n", "every:03"):
+            with self.subTest(raw=raw), mock.patch.object(dr, "capture_busy", return_value=None), self.assertRaisesRegex(dr.DryRunError, "--declared-sample"):
+                dr.start(self.namespace(declared_sample=raw))
+
+    def test_only_a_missing_mode_means_off_an_empty_string_is_an_invalid_value(self) -> None:
+        """过去 ``getattr(args, "declared_sample", None) or "off"`` 把空字符串也当成缺省 off；入口脚本的正则拒绝空串，这里同口径：只有没给（属性不存在或 None）才是 off。"""
+
+        self.assertEqual(self.start()[1]["action"], "started")
+        namespace = self.namespace()
+        self.assertFalse(hasattr(namespace, "declared_sample"))
+        with mock.patch.object(dr, "capture_busy", return_value=None), mock.patch.object(dr.subprocess, "Popen", return_value=mock.Mock(pid=os.getpid())):
+            code, outcome = dr.start(self.namespace(declared_sample=None))
+        self.assertEqual((code, outcome["action"]), (0, "exists"), "None 与不传是同一种空跑")
 
 
 class BackgroundPassthroughTests(unittest.TestCase):
@@ -502,12 +549,31 @@ PY
                 self.assertIn("输入或缓存隔离合同不同", refused.stderr)
 
     def test_invalid_values_are_refused_before_any_background_process_starts(self) -> None:
-        for raw in ("sometimes", "every:0", ""):
+        for raw in ("sometimes", "every:0", "", " always", "always\n", "every:3 "):
             with self.subTest(raw=raw):
                 refused = self.start(COMMIT_A, "--declared-sample", raw)
                 self.assertEqual(refused.returncode, 2)
                 self.assertIn("--declared-sample", refused.stderr)
         self.assertFalse(self.argv_log.exists(), "没有起过入口门禁")
+
+    def test_start_refuses_an_empty_or_padded_mode_programmatically_and_only_a_missing_one_means_off(self) -> None:
+        """与入口脚本的正则同口径（空串、首尾空白、换行都拒绝）：过去 ``getattr(…) or "off"`` 把空串悄悄当成缺省 off。只有没给（None）才是 off。"""
+
+        h = self.helper
+        arguments = ["start", "--runroot", str(h.runroot), "--data-root", str(h.data), "--bundle", str(h.root / "x.bundle"),
+                     "--branch", "codex/test", "--commit", COMMIT_A, "--entry-gates", str(h.gates)]
+        for raw in ("", " always", "always\n", "every:03"):
+            args = bv._parse(arguments)
+            args.declared_sample = raw
+            # 万一哪天又放过了这些取值，也不能真起后台进程（那会让回归变成一个挂住的测试）：起进程直接当失败。
+            with (self.subTest(raw=raw), mock.patch.object(bv.subprocess, "Popen", side_effect=AssertionError("非法取值不得起后台进程")),
+                  self.assertRaisesRegex(bv.ValidationError, "--declared-sample")):
+                bv.start(args)
+        args = bv._parse(arguments)
+        args.declared_sample = None
+        with mock.patch.object(bv.subprocess, "Popen", return_value=mock.Mock(pid=-1)):
+            started = bv.start(args)
+        self.assertNotIn("declared_sample", bv._read(Path(started["result"])), "None 与不传一样是缺省 off：结论里没有这个键")
 
     def test_run_refuses_a_conclusion_whose_mode_drifted_from_the_input_contract(self) -> None:
         h = self.helper

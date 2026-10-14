@@ -349,9 +349,11 @@ def start(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     if policy is not None and request is None and not args.opening:
         raise DryRunError("--audit-policy 只与 --unit-inherit-request 或显式 --opening 一起使用")
     policy_reference = _audit_policy_reference(Path(policy)) if policy is not None else None
-    # 声明级承接的采样方式（步骤 5 WP3b）：缺省 off；程序化调用（测试）的参数对象可能没有这个属性。
+    # 声明级承接的采样方式（步骤 5 WP3b）：缺省 off；程序化调用（测试）的参数对象可能没有这个属性。只有「没给」（属性不存在或为 None）才是缺省；
+    # 空字符串是非法取值（入口脚本的正则同样拒绝），不能被 ``or`` 悄悄当成 off。
+    requested = getattr(args, "declared_sample", None)
     try:
-        sample = _declared_sample_mode(getattr(args, "declared_sample", None) or "off")
+        sample = _declared_sample_mode("off" if requested is None else requested)
     except argparse.ArgumentTypeError as error:
         raise DryRunError(str(error)) from error
     request_sha256 = None
@@ -837,15 +839,13 @@ def classify_failures(client: str, failed: list[Mapping[str, Any]], root: Path) 
 
 
 def _declared_sample_mode(value: str) -> str:
-    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数），返回规范写法；非法在最外层就拒绝。
-    与执行器 ``unit_executor.declared_sample_mode`` 同一规则（测试核对各层一致），免得空跑放过一个执行器才报错的值。"""
+    """``--declared-sample`` 的取值：``off``（缺省）、``always`` 或 ``every:N``（N 为正整数）；非法在最外层就拒绝。
+    与执行器 ``unit_executor.declared_sample_mode`` 以及入口脚本 ``entry-gates.sh`` 的正则 ``^(off|always|every:[1-9][0-9]*)$`` 同一规则（测试核对
+    各层一致），免得空跑放过一个执行器才报错的值：**不去首尾空白**、不认换行、前导零与大小写变体、不是字符串一律拒绝；合法的取值就是规范写法，原样返回。"""
 
-    text = str(value).strip()
-    if text in ("off", "always"):
-        return text
-    found = re.fullmatch(r"every:([1-9][0-9]*)", text)
-    if found:
-        return f"every:{int(found.group(1))}"
+    if isinstance(value, str):
+        if value in ("off", "always") or re.fullmatch(r"every:[1-9][0-9]*", value):
+            return value
     raise argparse.ArgumentTypeError(f"--declared-sample 只接受 off、always 或 every:N（N 为正整数）：{value!r}")
 
 

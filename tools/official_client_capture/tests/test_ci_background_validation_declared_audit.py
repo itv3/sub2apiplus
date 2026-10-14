@@ -9,6 +9,9 @@ consumer_accepted ＝ 实际承接数 inherited，不满足就抛 ``ContractErro
 
 * ``_audit_evidence_ok`` 的真值表：通过的 declared 记录成立；incomplete（只因证据不完整）与 failed（有未覆盖）的记录不成立；
   篡改、非正式执行、审计绑定的输入摘要不符、覆盖没闭合等也不成立；旧口径 ``all-file-paths/v1`` 的判定一字不变；
+* 伪造记录的反例（独立验收 #3 一般 7）：``read_audit`` 里自述「声明级、通过、覆盖闭合、0 未声明、摘要一致」不够，记录自己的结构也要像一条声明级记录——
+  输入里恰有一个 ``declared-inputs-scope`` 条目、``read_audit.trace`` 带 64 位十六进制 ``sha256``、``sample_binding`` 是对象且 ``unit_id`` 就是这条
+  记录的单元、``sample_origin`` 是 registry 或 run；缺任何一项都不成立。放行判据仍是消费者核验 ``check_record``（被钉住的验证器，不在这里改）；
 * 漏斗：同一次后台承接里，通过的 declared 来源记录进 audit_passed、重跑单元新记录的审计结论如实登记，四个数与消费凭证一致；
   把口径认知换回旧的就会撞上 ``ContractError``（回归证明）。
 """
@@ -35,14 +38,21 @@ DECLARED = "declared-inputs/v1"
 LEGACY = "all-file-paths/v1"
 
 
-def sealed(**fields: Any) -> dict[str, Any]:
-    """合成一条自摘要有效的记录（只带 ``_audit_evidence_ok`` 看的字段）。"""
+SCOPE_ENTRY = {"category": "environment", "name": "declared-inputs-scope", "sha256": "c" * 64, "detail": {}}
 
-    return ur.seal_record({"unit_id": "u", "kind": "formal", "inputs_sha256": "a" * 64, **fields})
+
+def sealed(**fields: Any) -> dict[str, Any]:
+    """合成一条自摘要有效的记录（只带 ``_audit_evidence_ok`` 看的字段；缺省输入里有恰好一个声明范围条目，像一条声明级记录）。"""
+
+    return ur.seal_record({"unit_id": "u", "kind": "formal", "inputs_sha256": "a" * 64, "inputs": [SCOPE_ENTRY], **fields})
 
 
 def audit(scope: str = DECLARED, **changes: Any) -> dict[str, Any]:
-    body = {"coverage_scope": scope, "coverage_complete": True, "status": "passed", "undeclared_count": 0, "inputs_sha256": "a" * 64}
+    """合成的 ``read_audit``：缺省是一条合格的声明级审计（带封存证据的摘要、绑定到单元 u 的 sample_binding、登记表来源）。"""
+
+    body = {"coverage_scope": scope, "coverage_complete": True, "status": "passed", "undeclared_count": 0, "inputs_sha256": "a" * 64,
+            "trace": {"path": "/x/evidence.json", "sha256": "d" * 64}, "sample_origin": "registry",
+            "sample_binding": {"unit_id": "u", "command_sha256": "e" * 64, "scope_sha256": "f" * 64, "evidence_sha256": "d" * 64}}
     body.update(changes)
     return body
 
@@ -57,6 +67,11 @@ class AuditEvidenceTruthTableTests(unittest.TestCase):
         self.assertEqual(bv.DECLARED_COVERAGE_SCOPE, DECLARED)
         self.assertEqual(ur.DECLARED_COVERAGE_SCOPE, DECLARED)
         self.assertEqual(dx.ue.DECLARED_COVERAGE_SCOPE, DECLARED)
+        self.assertEqual(bv.DECLARED_SCOPE_ENTRY, "declared-inputs-scope")
+        self.assertEqual(ur.DECLARED_SCOPE_ENTRY, bv.DECLARED_SCOPE_ENTRY)
+        self.assertEqual(dx.ue.DECLARED_SCOPE_ENTRY, bv.DECLARED_SCOPE_ENTRY)
+        self.assertEqual(SCOPE_ENTRY["name"], bv.DECLARED_SCOPE_ENTRY, "夹具里的范围条目名与真实名字一致")
+        self.assertEqual(bv.DECLARED_SAMPLE_ORIGINS, ("registry", "run"), "执行器只写这两种证据来源")
 
     def test_a_passed_declared_audit_is_established(self) -> None:
         self.assertTrue(self.verdict(sealed(read_audit=audit())))
@@ -77,6 +92,73 @@ class AuditEvidenceTruthTableTests(unittest.TestCase):
         for label, body in cases.items():
             with self.subTest(label):
                 self.assertFalse(self.verdict(sealed(read_audit=body)))
+
+    def test_acceptable_variations_of_a_declared_record_stay_established(self) -> None:
+        """收紧只收紧「像不像一条声明级记录」，不误伤真记录会有的形态：别的输入条目、trace 与绑定里多出来的键、两种证据来源。"""
+
+        other = {"category": "tests", "name": "scope:backend", "sha256": "2" * 64, "detail": {}}
+        for label, record in {
+            "登记表来源": sealed(read_audit=audit(sample_origin="registry")),
+            "本次采样来源": sealed(read_audit=audit(sample_origin="run")),
+            "范围条目旁边还有别的输入条目": sealed(read_audit=audit(), inputs=[other, SCOPE_ENTRY, {**other, "name": "contract:toolchain:go"}]),
+            "trace 里多一个 stored 路径（执行器真会写）": sealed(read_audit=audit(trace={"path": "/x", "sha256": "d" * 64, "stored": "/y"})),
+            "sample_binding 里多一个键": sealed(read_audit=audit(sample_binding={"unit_id": "u", "extra": 1})),
+        }.items():
+            with self.subTest(label):
+                self.assertTrue(self.verdict(record), label)
+
+    def test_a_forged_declared_record_that_only_claims_the_audit_is_not_established(self) -> None:
+        """独立验收 #3 一般 7：声明级分支过去只信 ``read_audit`` 的自述——任何单元类型的记录都能自述「声明级、通过、覆盖闭合、0 未声明、摘要一致」
+        而被算进审计通过。现在记录自己的结构也要像一条声明级记录：输入里恰有一个范围条目、trace 带 64 位十六进制摘要、sample_binding 绑定到这个单元、
+        证据来源是 registry 或 run。逐项缺失或造假都不成立（基准是同一条合格记录，只变一处）。"""
+
+        self.assertTrue(self.verdict(sealed(read_audit=audit())), "基准：合格的声明级记录成立")
+        without = lambda key: {name: value for name, value in audit().items() if name != key}   # noqa: E731
+        binding = {"unit_id": "u", "command_sha256": "e" * 64, "scope_sha256": "f" * 64, "evidence_sha256": "d" * 64}
+        cases = {
+            "输入里没有范围条目（别的单元类型的记录自述声明级）": sealed(read_audit=audit(), inputs=[]),
+            "输入里有两个范围条目": sealed(read_audit=audit(), inputs=[SCOPE_ENTRY, {**SCOPE_ENTRY, "sha256": "9" * 64}]),
+            "输入不是数组": sealed(read_audit=audit(), inputs={"declared-inputs-scope": SCOPE_ENTRY}),
+            "输入是 None": sealed(read_audit=audit(), inputs=None),
+            "输入里只有别的条目": sealed(read_audit=audit(), inputs=[{"category": "tests", "name": "repo:all", "sha256": "1" * 64, "detail": {}}]),
+            "输入里的条目不是对象": sealed(read_audit=audit(), inputs=["declared-inputs-scope"]),
+            "审计里没有 trace": sealed(read_audit=without("trace")),
+            "trace 不是对象": sealed(read_audit=audit(trace="/x/evidence.json")),
+            "trace 没有 sha256": sealed(read_audit=audit(trace={"path": "/x/evidence.json"})),
+            "trace.sha256 不是字符串": sealed(read_audit=audit(trace={"path": "/x", "sha256": 7})),
+            "trace.sha256 太短": sealed(read_audit=audit(trace={"path": "/x", "sha256": "d" * 63})),
+            "trace.sha256 太长": sealed(read_audit=audit(trace={"path": "/x", "sha256": "d" * 65})),
+            "trace.sha256 带大写": sealed(read_audit=audit(trace={"path": "/x", "sha256": "D" * 64})),
+            "trace.sha256 不是十六进制": sealed(read_audit=audit(trace={"path": "/x", "sha256": "z" * 64})),
+            "trace.sha256 后面带换行": sealed(read_audit=audit(trace={"path": "/x", "sha256": "d" * 64 + "\n"})),
+            "审计里没有 sample_binding": sealed(read_audit=without("sample_binding")),
+            "sample_binding 不是对象": sealed(read_audit=audit(sample_binding="u")),
+            "sample_binding 是数组": sealed(read_audit=audit(sample_binding=[binding])),
+            "sample_binding 没有 unit_id": sealed(read_audit=audit(sample_binding={key: value for key, value in binding.items() if key != "unit_id"})),
+            "sample_binding 绑定的是别的单元": sealed(read_audit=audit(sample_binding={**binding, "unit_id": "other"})),
+            "sample_binding.unit_id 不是字符串": sealed(read_audit=audit(sample_binding={**binding, "unit_id": ["u"]})),
+            "记录没有单元且绑定也没有": sealed(unit_id=None, read_audit=audit(sample_binding={"command_sha256": "e" * 64})),
+            "审计里没有 sample_origin": sealed(read_audit=without("sample_origin")),
+            "sample_origin 是 none": sealed(read_audit=audit(sample_origin="none")),
+            "sample_origin 大小写不对": sealed(read_audit=audit(sample_origin="Registry")),
+            "sample_origin 是数组": sealed(read_audit=audit(sample_origin=["registry"])),
+            "sample_origin 是 None": sealed(read_audit=audit(sample_origin=None)),
+        }
+        for label, record in cases.items():
+            with self.subTest(label):
+                self.assertFalse(self.verdict(record), f"{label}：自述通过也不能算审计通过")
+
+    def test_the_structure_checks_do_not_touch_the_legacy_judgement(self) -> None:
+        """旧口径 all-file-paths/v1 的记录没有声明范围条目、trace 与绑定的形态要求：判定一字不变。"""
+
+        legacy = audit(LEGACY)
+        for label, record in {
+            "没有输入条目": sealed(read_audit=legacy, inputs=[]),
+            "没有 sample_binding／sample_origin": sealed(read_audit={key: value for key, value in legacy.items() if key not in ("sample_binding", "sample_origin")}),
+            "没有 trace": sealed(read_audit={key: value for key, value in legacy.items() if key != "trace"}),
+        }.items():
+            with self.subTest(label):
+                self.assertTrue(self.verdict(record), label)
 
     def test_the_record_itself_must_be_a_sealed_formal_execution(self) -> None:
         record = sealed(read_audit=audit())
@@ -149,6 +231,27 @@ class RealRecordsTests(unittest.TestCase):
         sampled = world.record_of(incomplete_run, "backend:integration")
         self.assertEqual((sampled["read_audit"]["sample_origin"], sampled["read_audit"]["status"]), ("run", "passed"))
         self.assertTrue(ok(incomplete_run, "backend:integration"), "β：本次采样来源、通过")
+        # 收紧后的结构要求，真记录一直满足：恰有一个范围条目、trace 带 64 位十六进制摘要、绑定到自己的单元、来源是 registry 或 run。
+        for record in (registry, sampled):
+            part = record["read_audit"]
+            self.assertEqual(sum(1 for item in record["inputs"] if item["name"] == "declared-inputs-scope"), 1)
+            self.assertRegex(part["trace"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(part["sample_binding"]["unit_id"], record["unit_id"])
+            self.assertIn(part["sample_origin"], ("registry", "run"))
+        # 在真记录上造假（改完重新封存，自摘要有效）：去掉范围条目、把绑定改到别的单元、把来源改成不认识的值——都不成立。
+        for label, change in {
+            "去掉范围条目": lambda body: body.update(inputs=[item for item in body["inputs"] if item["name"] != "declared-inputs-scope"]),
+            "重复范围条目": lambda body: body.update(inputs=[*body["inputs"], *[item for item in body["inputs"] if item["name"] == "declared-inputs-scope"]]),
+            "绑定到别的单元": lambda body: body["read_audit"]["sample_binding"].update(unit_id="backend:integration"),
+            "去掉证据摘要": lambda body: body["read_audit"].pop("trace"),
+            "来源改成别的值": lambda body: body["read_audit"].update(sample_origin="elsewhere"),
+        }.items():
+            with self.subTest(f"真记录上造假：{label}"):
+                body = json.loads(json.dumps({key: value for key, value in registry.items() if key != "record_sha256"}))
+                change(body)
+                forged = ur.seal_record(body)
+                self.assertTrue(ur.seal_ok(forged, "record_sha256"), "造假的记录自摘要有效——只信自述的统计会把它算成审计通过")
+                self.assertFalse(bv._audit_evidence_ok(ur, forged, forged["record_sha256"]))
         weak = world.record_of(incomplete_run, "backend:go-test")
         self.assertEqual((weak["read_audit"]["status"], weak["passed"], weak["inheritable"]), ("incomplete", True, False))
         self.assertFalse(ok(incomplete_run, "backend:go-test"), "incomplete：命令结论不变，但读集证据不足以认证")

@@ -5,20 +5,25 @@
 ``_run_gates_current`` 的探测回调与四个计数、``--declared-sample off|always|every:N``），以及 ``tools/ci/entry_gates.py`` 的两处极小新增
 （离线开关＝True、declared Go 单元的清单 env 注入三个离线变量）。
 
-测试分七组：
+测试分八组：
 
 1. 端到端（真跑执行器进程，``python3 -c`` 脚本代替 go／pnpm／make，假 go／docker／node／pnpm／strace 放在 PATH 里）：方案 6.4 的正例
    （T4：改一个无关的 Claude 测试文件，声明级单元全部承接、只剩 rerun-only 重跑）与反例（T5～T8：改后端源码、改 docs/egress 基线、
    改 Makefile 里前端关键集合、换镜像 Id、缓存写热、node_modules 安装锁不一致）；
-2. 记录与凭证（T9～T13）：写下的记录能被 ``unit_records`` 的消费者核验接受，凭证与前置核验失败的各种情形；
-3. 逐次采样 β：启动前缀在 strace 外侧、覆盖失败分 failed／incomplete 两类（``DECLARED_INCOMPLETE_RULES``，集合内三条各自触发变 incomplete，
+2. 记录与凭证（T9～T13）：写下的记录能被 ``unit_records`` 的消费者核验接受，凭证与前置核验失败的各种情形（含 ``go mod verify`` 自己的超时：
+   卡住的核验按「没通过」处理、记录不可承接、命令照跑、整次运行只等一次）；
+3. 逐次采样 β：启动前缀在 strace 外侧、覆盖失败分 failed／incomplete 两类（``DECLARED_INCOMPLETE_RULES``，集合内四条各自触发变 incomplete，
    集合外每一类变 failed，混合变 failed）、缺 strace 降级、每 N 次采样；采样器过滤器 raw 里只给评审看的诊断样例
    （coverage.unresolved_samples、顶层 detached_samples）进证据的 review、不进字段闭合的 coverage；
 4. 汇总（T20）：登记数、审计通过数、消费者接受数、实际承接数四个数分开，每个被重跑的单元有原因与耗时；
 5. ``_gate_currents`` 的合同探测、已登记集合、探测会话共享；
 6. entry_gates 的两处新增：declared Go 单元的清单 env 带三个离线变量（非 Go 单元与 rerun-only 单元的 env 不变），
    ``declared_contract_problems`` 在门禁环境缺这三个变量时报告、齐全时不报告；
-7. control 四链不变回归（T-C6～T-C12）：基线提交的执行器与新版并排（``git show`` 取出作独立模块），对同一批 control 夹具逐字比较。
+7. control 四链不变回归（T-C6～T-C12）：基线提交的执行器与新版并排（``git show`` 取出作独立模块），对同一批 control 夹具逐字比较——
+   包括用假 unshare／strace 垫片走通的 ``wrap`` 成功路径、清单顶层 rerun_only_reasons 里混进 control 单元 ID 时它们仍被严格审计、
+   基线提交读不到时本机跳过而 CI 失败；
+8. 锁后复核之后审计器拿的必须是新事实（``AuditorFactsSyncTests``）：逐单元承接分支里常规审计器与只为声明级单元建的审计器都同步；B-09／B-10 分支里
+   常规审计器与锁后复核不会同时存在（两个前提各有测试）。
 
 测试里的路径、提交号、摘要都是合成值；本机没有 strace，逐次采样的 strace 输出由假 strace 按单元合成（经 ``-o '|…'`` 管道交给真实的过滤器进程）。
 """
@@ -31,6 +36,7 @@ import copy
 import dataclasses
 import functools
 import hashlib
+import io
 import json
 import os
 import re
@@ -72,7 +78,7 @@ FAILING_READER = READER + "sys.exit(3)\n"
 # ---------------------------------------------------------------------------
 
 FAKE_GO = """#!@PY@
-import json, os, sys
+import json, os, sys, time
 args = sys.argv[1:]
 state = os.environ.get("FAKE_STATE_DIR", "")
 if os.environ.get("FAKE_GO_LOG"):
@@ -87,6 +93,9 @@ elif args[:2] == ["env", "-json"]:
         values.setdefault(key, os.environ.get(key, ""))
     print(json.dumps(values))
 elif args[:2] == ["mod", "verify"]:
+    # go-verify-sleep 文件里写秒数：verify 先睡这么久（造「卡住的 go mod verify」，用来测它自己的超时）。
+    if os.path.exists(os.path.join(state, "go-verify-sleep")):
+        time.sleep(float(open(os.path.join(state, "go-verify-sleep")).read()))
     if os.path.exists(os.path.join(state, "go-verify-fail")):
         print("go: example.com/dep@v1.0.0: checksum mismatch")
         sys.exit(1)
@@ -400,7 +409,7 @@ class World:
         return _git(self.tree, "rev-parse", "HEAD").strip()
 
     def set_image_id(self, reference: str, image_id: str) -> None:
-        (self.state / ("image-" + reference.replace("/", "_").replace(":", "_"))).write_text(image_id + "\n", encoding="utf-8")
+        self.image_override_file(reference).write_text(image_id + "\n", encoding="utf-8")
 
     def flag(self, name: str, on: bool = True) -> None:
         path = self.state / name
@@ -408,6 +417,20 @@ class World:
             path.write_text("1", encoding="utf-8")
         else:
             path.unlink(missing_ok=True)
+
+    def flag_text(self, name: str, text: str | None) -> None:
+        """带内容的状态文件（假工具读它的内容）：text 为 None 就删掉。"""
+
+        path = self.state / name
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(text, encoding="utf-8")
+
+    def image_override_file(self, reference: str) -> Path:
+        """假 docker 读的「这个镜像引用的 Id 被换成了什么」文件（World.set_image_id 写的就是它）。"""
+
+        return self.state / ("image-" + reference.replace("/", "_").replace(":", "_"))
 
     def set_strace_plan(self, plan: dict[str, Any]) -> None:
         self.strace_plan.write_text(json.dumps(plan), encoding="utf-8")
@@ -440,13 +463,23 @@ class World:
 
     # -- 运行 --------------------------------------------------------------------------------------------------------
 
-    def run(self, *extra: str, mode: str = "re-execute", env: dict[str, str] | None = None, expect_summary: bool = True) -> Run:
+    def run(self, *extra: str, mode: str = "re-execute", env: dict[str, str] | None = None, expect_summary: bool = True,
+            bootstrap: str | None = None) -> Run:
+        """真跑一次 run-gates。``bootstrap`` 是一段在执行器模块 import 之后、``main`` 之前运行的 Python 代码（里面的 ``ue`` 就是执行器模块）：
+        用来在子进程里调小模块常量、给模块级函数挂钩子——这些改不了命令行，又要走完整的调度流程。"""
+
         self.runs += 1
         out = self.root / f"out-{self.runs}"
-        command = [PY, str(EXECUTOR), "run-gates", "--manifest", str(self.manifest_path), "--config", str(self.config),
-                   "--weights", str(self.root / "none.json"), "--durations", str(self.root / "none.json"), "--parallel", "4", "--cores", "4",
-                   "--state-dir", str(self.root / "state"), "--out-dir", str(out), "--shared-caches", "off", "--record-store", str(self.store),
-                   "--mode", mode, *extra]
+        arguments = ["run-gates", "--manifest", str(self.manifest_path), "--config", str(self.config),
+                     "--weights", str(self.root / "none.json"), "--durations", str(self.root / "none.json"), "--parallel", "4", "--cores", "4",
+                     "--state-dir", str(self.root / "state"), "--out-dir", str(out), "--shared-caches", "off", "--record-store", str(self.store),
+                     "--mode", mode, *extra]
+        if bootstrap is None:
+            command = [PY, str(EXECUTOR), *arguments]
+        else:
+            program = ("import os, sys\nsys.path.insert(0, os.environ['PYTHONPATH'])\nimport tools.ci.unit_executor as ue\n"
+                       + bootstrap + "\nsys.exit(ue.main(sys.argv[1:]))\n")
+            command = [PY, "-c", program, *arguments]
         completed = subprocess.run(command, cwd=self.tree, capture_output=True, text=True, timeout=600, env={**self.environment, **(env or {})})
         summary_path, manifest_path = out / "summary.json", out / "unit-manifest.json"
         summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.is_file() else {}
@@ -715,6 +748,46 @@ class ContractAndPreflightTests(unittest.TestCase):
         third = world.run(mode="full-set-pass")
         self.assertEqual(third.inherited, set(DECLARED_IDS))
 
+    def test_a_go_mod_verify_that_hangs_makes_the_go_records_uninheritable_but_the_commands_still_run(self) -> None:
+        """go mod verify 在调度线程里同步执行，卡住不能拖住调度线程：这一步有自己的超时（模块常量 DECLARED_GO_VERIFY_TIMEOUT_SECONDS，缺省 180 秒，
+        这里在子进程里调成 1 秒），超时按「核验没通过」处理——三个 Go 单元的记录不可承接、命令照跑（结论不变、整次运行不失败）、凭证里写明
+        原因；卡住的核验整次运行只等一次（结果按 GOMODCACHE 记忆）。"""
+
+        world = World(self)
+        world.flag_text("go-verify-sleep", "60")   # 假 go 的 verify 睡 60 秒；没有超时的话这一轮要等一分钟
+        began = time.monotonic()
+        first = world.run(bootstrap="ue.DECLARED_GO_VERIFY_TIMEOUT_SECONDS = 1")
+        elapsed = time.monotonic() - began
+        self.assertEqual(first.code, 0, first.stderr[-2000:])
+        self.assertLess(elapsed, 50, "没有被 60 秒的 verify 拖住")
+        verifies = [line for line in world.go_log.read_text(encoding="utf-8").splitlines() if '"argv": ["mod", "verify"]' in line]
+        self.assertEqual(len(verifies), 1, "三个 Go 单元共用同一个 GOMODCACHE：超时的核验也只做一次，不是每个单元各等一次")
+        for unit_id in GO_UNITS:
+            record = world.record_of(first, unit_id)
+            self.assertIs(record["passed"], True, f"{unit_id}：命令照跑，结论不受影响")
+            self.assertIs(record["inheritable"], False, unit_id)
+            self.assertIn("declared-contract-preflight", record["not_inheritable_reason"])
+            self.assertIn("go mod verify 超过 1 秒还没结束", record["not_inheritable_reason"], "原因里写明是超时")
+            credential = {item["id"]: item for item in record["declared_contracts"]}["go-mod-cache"]
+            self.assertIs(credential["verified_before_run"], False)
+            self.assertEqual(credential["observed"]["verify"], "timeout", "凭证里写明是超时，不是普通的核验失败")
+            self.assertIn("超过 1 秒", credential["observed"]["problem"])
+            self.assertIs(credential["observed"]["root_ok"], True)
+            self.assertTrue(record["read_audit"]["status"] == "passed", "读集审计是另一回事：照常通过")
+        self.assertTrue(world.record_of(first, "frontend:critical")["inheritable"], "不声明 go 缓存合同的前端单元不受影响")
+        # 卡住的是来源记录：下一轮这些单元不被承接、要重跑；核验恢复后新记录可承接。
+        world.flag_text("go-verify-sleep", None)
+        second = world.run(mode="full-set-pass")
+        self.assertEqual(second.executed, set(GO_UNITS) | set(RERUN_ONLY))
+        self.assertEqual(second.inherited, {"frontend:critical"})
+        for unit_id in GO_UNITS:
+            credential = {item["id"]: item for item in world.record_of(second, unit_id)["declared_contracts"]}["go-mod-cache"]
+            self.assertEqual((world.record_of(second, unit_id)["inheritable"], credential["observed"]["verify"]), (True, "ok"))
+
+    def test_the_default_go_mod_verify_timeout_is_180_seconds(self) -> None:
+        self.assertEqual(ue.DECLARED_GO_VERIFY_TIMEOUT_SECONDS, 180)
+        self.assertLess(ue.DECLARED_GO_VERIFY_TIMEOUT_SECONDS, 900, "比合同探测会话默认 runner（entry_steps.default_runner）的 900 秒短")
+
     def test_t9_a_changed_toolchain_reruns_only_the_units_that_declare_it(self) -> None:
         world = World(self)
         world.run()
@@ -774,9 +847,11 @@ class ContractAndPreflightTests(unittest.TestCase):
         self.assertNotIn("declared", run_without_declared_units_summary(self)["read_audit"], "没有声明级结果的审计汇总里没有 declared 键")
 
     def test_sample_flag_accepts_only_off_always_or_every_n(self) -> None:
-        for good, expected in (("off", "off"), ("always", "always"), ("every:3", "every:3"), (" every:12 ", "every:12")):
+        for good, expected in (("off", "off"), ("always", "always"), ("every:3", "every:3"), ("every:12", "every:12")):
             self.assertEqual(ue.declared_sample_mode(good), expected)
-        for bad in ("", "on", "every", "every:0", "every:-1", "every:x", "every:1.5", "ALWAYS", "every:3 4"):
+        # 与入口脚本 entry-gates.sh 的正则同样严格（独立验收 #3 一般 11）：首尾空白、换行、前导零、大小写变体都拒绝，不做任何规范化。
+        for bad in ("", "on", "every", "every:0", "every:-1", "every:x", "every:1.5", "ALWAYS", "every:3 4", " every:12 ", " off", "off ", "always\n", "\talways",
+                    "every:3\n", "every:03", "Every:3", None, 3, ["always"]):
             with self.subTest(bad=bad), self.assertRaises(Exception) as caught:
                 ue.declared_sample_mode(bad)
             self.assertIn("--declared-sample", str(caught.exception))
@@ -787,6 +862,11 @@ class ContractAndPreflightTests(unittest.TestCase):
         self.assertIn("--declared-sample", completed.stderr)
         self.assertEqual(ue._parse(["run-gates", "--manifest", "m.json"]).declared_sample, "off", "缺省 off")
         self.assertEqual(ue._parse(["run-gates", "--manifest", "m.json", "--declared-sample", "every:4"]).declared_sample, "every:4")
+        for padded in (" always", "always\n", "every:4 ", "every:04"):   # 命令行解析层同样不规范化
+            with self.subTest(padded=padded), contextlib.redirect_stderr(io.StringIO()) as captured, self.assertRaises(SystemExit) as exited:
+                ue._parse(["run-gates", "--manifest", "m.json", "--declared-sample", padded])
+            self.assertEqual(exited.exception.code, 2)
+            self.assertIn("--declared-sample", captured.getvalue())
 
 
 # ---------------------------------------------------------------------------
@@ -1115,10 +1195,10 @@ class VerdictTests(unittest.TestCase):
     def test_the_incomplete_rule_set_is_pinned_and_a_subset_of_the_coverage_vocabulary(self) -> None:
         self.assertEqual(ue.DECLARED_INCOMPLETE_RULES, frozenset({"C7-stream", "C7-unresolved", "C7-lines", "C7-detached"}))
         vocabulary = self.vocabulary()
-        # C7-detached 由记录层的 declared_coverage 产生（WP1d）。它认识这条规则之前，集合里多这个名字没有任何效果，所以「规则名必须是真有的规则」
-        # 这一条先对另外三条断言；一旦 declared_coverage 认识了 C7-detached，整个集合都必须在词表里（规则存在才断言，合入后无需改测试）。
-        known = ue.DECLARED_INCOMPLETE_RULES if "C7-detached" in vocabulary else ue.DECLARED_INCOMPLETE_RULES - {"C7-detached"}
-        self.assertTrue(known <= vocabulary, "集合里的规则名必须是 declared_coverage 真有的规则")
+        # C7-detached 由记录层的 declared_coverage 产生（WP1d 已合入）：集合里的每个规则名都必须是 declared_coverage 真有的规则，没有例外。
+        # 谁在词表里删掉了一条规则（或改了名），这里立刻红，而不是悄悄让执行器多认一个永远不会出现的名字。
+        self.assertIn("C7-detached", vocabulary, "记录层必须认识 C7-detached（WP1d）")
+        self.assertTrue(ue.DECLARED_INCOMPLETE_RULES <= vocabulary, "集合里的规则名必须是 declared_coverage 真有的规则")
         self.assertEqual({rule for rule in vocabulary if rule.startswith("C7")} - ue.DECLARED_INCOMPLETE_RULES,
                          {"C7-command", "C7-exit", "C7-format", "C7-invalid"}, "其余四条 C7 规则不是偶发的证据问题，一律 failed")
         self.assertIsInstance(ue.DECLARED_INCOMPLETE_RULES, frozenset)
@@ -1130,7 +1210,7 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(ue.declared_audit_verdict([]), "passed")
         for rule in sorted(ue.DECLARED_INCOMPLETE_RULES):
             self.assertEqual(ue.declared_audit_verdict(findings(rule)), "incomplete", rule)
-        self.assertEqual(ue.declared_audit_verdict(findings(*sorted(ue.DECLARED_INCOMPLETE_RULES))), "incomplete", "集合内三条叠在一起仍是 incomplete")
+        self.assertEqual(ue.declared_audit_verdict(findings(*sorted(ue.DECLARED_INCOMPLETE_RULES))), "incomplete", "集合内四条叠在一起仍是 incomplete")
         outside = sorted(self.vocabulary() - ue.DECLARED_INCOMPLETE_RULES)
         self.assertGreaterEqual(len(outside), 20)
         for rule in outside:
@@ -1185,9 +1265,10 @@ class VerdictTests(unittest.TestCase):
         self.assertIs(outcome.passed, True)
         self.assertTrue(outcome.extra["declared_not_inheritable"].startswith("declared-sample-incomplete:"))
 
-    def test_a_simulated_detached_rule_reaches_the_executor_as_incomplete(self) -> None:
-        """记录层还不认识 C7-detached 时，用一个包装 declared_coverage 的替身（标记行超过 64 条就多报一项 C7-detached，模拟 WP1d 的规则）走完执行器的
-        整条判定路径：只有这一项→incomplete（记录不可承接、命令结论不变）；和真访问混在一起→failed。"""
+    def test_the_executor_classifies_a_detached_finding_by_the_rule_name_alone(self) -> None:
+        """执行器的归类只认规则名，与记录层怎样算出 C7-detached（阈值多少）无关。记录层的真规则阈值是 64 条（见下一个用例）；这里用一个包装
+        declared_coverage 的替身，把阈值故意压到 3 条（标记行超过 3 条就多报一项 C7-detached），所以 5 条标记行只有替身会报——
+        走完执行器的整条判定路径：只有这一项→incomplete（记录不可承接、命令结论不变）；和真访问混在一起→failed。"""
 
         harness = Harness(self)
         records = ue._records_module()
@@ -1195,14 +1276,14 @@ class VerdictTests(unittest.TestCase):
 
         def with_detached(sample: Any, scope: Any, **kwargs: Any) -> dict[str, Any]:
             result = real(sample, scope, **kwargs)
-            if sample["coverage"].get("detached_markers", 0) > 64:
-                findings = sorted([*result["undeclared"], {"rule": "C7-detached", "path": "", "kinds": [], "reason": "被丢弃的标记行超过上限"}],
+            if sample["coverage"].get("detached_markers", 0) > 3 and not any(item["rule"] == "C7-detached" for item in result["undeclared"]):
+                findings = sorted([*result["undeclared"], {"rule": "C7-detached", "path": "", "kinds": [], "reason": "被丢弃的标记行超过替身的阈值"}],
                                   key=lambda item: (item["rule"], item["path"], item["reason"]))
                 return {**result, "ok": False, "undeclared": findings, "counts": {**result["counts"], "undeclared": len(findings)}}
             return result
 
         unit_id = "backend:go-test"
-        flood = lambda raw: raw["coverage"].update(detached_markers=65)   # noqa: E731
+        flood = lambda raw: raw["coverage"].update(detached_markers=5)   # noqa: E731 - 低于真规则的 64，只有替身会触发
         with mock.patch.object(records, "declared_coverage", side_effect=with_detached):
             calm, *_ = harness.sampled_collect(unit_id)
             result, _auditor, outcome = harness.sampled_collect(unit_id, mutate=flood)
@@ -1216,12 +1297,12 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(mixed["status"], "failed")
         self.assertEqual({item["rule"] for item in mixed["undeclared"]}, {"C1-undeclared", "C7-detached"})
 
-    def test_a_detached_marker_flood_makes_the_record_incomplete_once_the_coverage_rule_exists(self) -> None:
-        """记录层的 declared_coverage 认识 C7-detached（WP1d）之后：被丢弃的标记行不超过 64 条照常通过，超过 64 条只让该次记录不可承接，
-        和别的违规混在一起则判 failed。认识这条规则之前本用例跳过；认识之后自动生效，不用改。"""
+    def test_a_detached_marker_flood_makes_the_record_incomplete(self) -> None:
+        """记录层的 declared_coverage 的 C7-detached 规则（WP1d）：被丢弃的标记行不超过 64 条照常通过，超过 64 条只让该次记录不可承接，
+        和别的违规混在一起则判 failed。规则必须存在——记录层丢了这条规则，本用例**失败**而不是跳过（过去在规则合入之前自动跳过，
+        合入之后依然保留跳过逻辑，等于一道随时可以悄悄失效的保护）。"""
 
-        if "C7-detached" not in self.vocabulary():
-            self.skipTest("declared_coverage 还不认识 C7-detached（WP1d 合入之前）：认识之后本用例自动生效")
+        self.assertIn("C7-detached", self.vocabulary(), "记录层的 declared_coverage 必须认识 C7-detached（WP1d）：没有它，大面积被丢弃的标记行无人拦")
         harness = Harness(self)
         unit_id = "backend:go-test"
 
@@ -1254,6 +1335,7 @@ class VerdictTests(unittest.TestCase):
             "C7-unresolved（乱码行）": dict(lines=good + [GARBAGE]),
             "C7-unresolved（流尾悬着的调用超过上限）": dict(mutate=stream(unresolved=65, unresolved_reasons={"unfinished-calls-at-eof": 65}, unfinished_calls=65)),
             "C7-lines": dict(lines=[]),
+            "C7-detached（被丢弃的标记行超过 64 条）": dict(mutate=stream(detached_markers=65)),
         }
         for label, options in in_set.items():
             with self.subTest(label):
@@ -1713,6 +1795,49 @@ class PreflightTests(unittest.TestCase):
         self.check(harness, "backend:go-test", unit=self.with_env(harness.unit_by_id["backend:go-test"], GOMODCACHE=str(other)))
         self.assertEqual(verifies(), count + 1)
 
+    def test_a_go_mod_verify_that_outlives_its_own_timeout_is_cut_off_and_judged_not_verified(self) -> None:
+        """go mod verify 有自己的超时（DECLARED_GO_VERIFY_TIMEOUT_SECONDS，每次调用现取）：超过就杀掉子进程、不再等，核验按没通过处理；
+        结果同其它结果一样按 GOMODCACHE 记忆，第二个单元不再等第二次。"""
+
+        harness = Harness(self)
+        world = harness.world
+        world.flag_text("go-verify-sleep", "60")
+        verifies = lambda: world.go_log.read_text(encoding="utf-8").count('"argv": ["mod", "verify"]')  # noqa: E731
+        with mock.patch.object(ue, "DECLARED_GO_VERIFY_TIMEOUT_SECONDS", 1):
+            began = time.monotonic()
+            first = self.check(harness, "backend:go-test")
+            waited = time.monotonic() - began
+            began = time.monotonic()
+            second = self.check(harness, "backend:integration")
+            waited_again = time.monotonic() - began
+        self.assertLess(waited, 30, "超时生效：没有等满 60 秒")
+        self.assertLess(waited_again, 30)
+        self.assertEqual(verifies(), 1, "第二个单元沿用记忆的超时结果，没有再跑一次")
+        for result in (first, second):
+            mod = self.by_id(result)["go-mod-cache"]
+            self.assertEqual((mod["verified_before_run"], mod["observed"]["verify"], mod["observed"]["root_ok"]), (False, "timeout", True))
+            self.assertIn("go mod verify 超过 1 秒还没结束", mod["observed"]["problem"])
+            self.assertTrue(any("contract:cache:go-mod-cache" in problem and "go mod verify 超过 1 秒" in problem for problem in result["problems"]),
+                            result["problems"])
+            self.assertIs(self.by_id(result)["go-build-cache"]["verified_before_run"], True, "别的合同凭证不受影响")
+        self.assertEqual(self.check(harness, "frontend:critical")["problems"], [], "不声明 go 缓存合同的单元不受影响")
+        # 对照：sleep 不超过超时（并且常量比睡眠长）时，verify 通过，凭证写 ok——超时只因为「卡住」才触发。
+        world.flag_text("go-verify-sleep", "0.2")
+        other = harness.world.work / "fresh-mod-cache"
+        other.mkdir()
+        unit = self.with_env(harness.unit_by_id["backend:go-test"], GOMODCACHE=str(other))   # 另一份缓存：不吃记忆
+        with mock.patch.object(ue, "DECLARED_GO_VERIFY_TIMEOUT_SECONDS", 30):
+            ok = self.by_id(self.check(harness, "backend:go-test", unit=unit))["go-mod-cache"]
+        self.assertEqual((ok["verified_before_run"], ok["observed"]["verify"]), (True, "ok"))
+
+    def test_a_missing_go_binary_is_a_failed_verify_not_a_timeout_and_not_an_exception(self) -> None:
+        harness = Harness(self)
+        unit = harness.unit_by_id["backend:go-test"]
+        bare = self.with_env(unit, PATH="/nonexistent-dir-for-test")
+        mod = self.by_id(self.check(harness, "backend:go-test", unit=bare))["go-mod-cache"]
+        self.assertEqual((mod["verified_before_run"], mod["observed"]["verify"]), (False, "failed"))
+        self.assertIn("go mod verify 没有通过", mod["observed"]["problem"])
+
     def test_the_service_image_id_is_probed_again_just_before_the_unit_starts(self) -> None:
         runner = ToggleRunner()
         harness = Harness(self, probe=functools.partial(eg.declared_probe, runner=runner))
@@ -2026,6 +2151,21 @@ def load_baseline(relative: str, name: str) -> types.ModuleType | None:
     return module
 
 
+def require_baseline(relative: str, name: str) -> types.ModuleType:
+    """基线提交的源码模块。读不到基线时：本机（环境变量 CI 为空）跳过——浅克隆、离线都可能读不到，不该挡住本机开发；CI 环境（环境变量 CI 非空，
+    GitHub Actions 会设）**失败**——CI 的检出是完整历史（fetch-depth: 0），读不到就是配置出了问题，照样跳过的话，control 四链的逐字回归
+    会在 CI 上悄悄变成空检查（历史被 squash／rebase 改写之后尤其如此）。"""
+
+    module = load_baseline(relative, name)
+    if module is None:
+        message = f"读不到基线提交 {BASELINE_COMMIT} 的 {relative}（浅克隆或不在仓库内）"
+        if os.environ.get("CI"):
+            raise AssertionError(message + "：CI 环境必须读得到基线提交（actions/checkout 要 fetch-depth: 0；基线提交被改写过的话要换成新的 BASELINE_COMMIT），"
+                                           "否则 control 四链的逐字回归在 CI 上静默失效")
+        raise unittest.SkipTest(message)
+    return module
+
+
 def call_outcome(call: Any) -> tuple[str, Any]:
     """一次调用的结果或报错（异常类名＋消息）：两边逐字比较用（macOS 上 control 的隔离合同会报同一个错）。"""
 
@@ -2035,15 +2175,21 @@ def call_outcome(call: Any) -> tuple[str, Any]:
         return type(error).__name__, str(error)
 
 
+# control 的隔离合同（read_audit_runtime／control_read_audit_runtime 的 prepare）只在具备 unshare 的 Linux 上可用：先看 sys.platform 与 PATH 里有没有
+# unshare，再读 /proc/self/ns/{mnt,net}。本机（macOS）与没装这些工具的镜像上 wrap 因此只会报同一个错，成功路径永远没被比较过。
+# ControlInvariantTests.linux_isolation 用下面的垫片补上：PATH 里放假的 unshare／strace（可执行文件，wrap 只检查它们在不在，不会真的运行）、
+# sys.platform 当作 linux、/proc/self/ns/* 读不到时给一个固定值（读得到时用真实值——CI 上就是真实值）。
+FAKE_NAMESPACES = {"/proc/self/ns/mnt": "mnt:[4026531840]", "/proc/self/ns/net": "net:[4026531992]"}
+FAKE_NAMESPACE_TOOL = "#!/bin/sh\nexit 0\n"
+
+
 class ControlInvariantTests(unittest.TestCase):
     """基线提交的执行器与新版并排，对同一批 control 夹具逐字比较（调研 7.4 的 T-C6～T-C12）。所有新分支只由 declared-inputs-scope
     条目触发，control 的声明与条目里永远没有它。"""
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.baseline = load_baseline("tools/ci/unit_executor.py", "unit_executor_wp3_baseline")
-        if cls.baseline is None:
-            raise unittest.SkipTest(f"读不到基线提交 {BASELINE_COMMIT} 的 tools/ci/unit_executor.py（浅克隆或不在仓库内）")
+        cls.baseline = require_baseline("tools/ci/unit_executor.py", "unit_executor_wp3_baseline")
 
     def setUp(self) -> None:
         from tools.ci import control_read_audit as control_audit
@@ -2081,6 +2227,37 @@ class ControlInvariantTests(unittest.TestCase):
         stack.enter_context(contextlib.chdir(self.tree))
         self.control_ids = list(self.selected)
         self.policy_ids = [unit["unit_id"] for unit in units if unit["unit_id"] not in self.control_ids]
+        # 本测试自己的垫片目录：假的 unshare／strace（见 FAKE_NAMESPACES 上面的说明）。只在 linux_isolation() 的窗口里才进 PATH。
+        self.shim_bin = self.root / "shim-bin"
+        self.shim_bin.mkdir()
+        for tool in ("unshare", "strace"):
+            install(self.shim_bin / tool, FAKE_NAMESPACE_TOOL)
+
+    @contextlib.contextmanager
+    def linux_isolation(self) -> Any:
+        """窗口内让 control 四个单元的 ``wrap`` 在任何机器上都走成功路径：PATH 前面放假的 unshare／strace、``sys.platform`` 当作 linux、
+        ``/proc/self/ns/*`` 读不到时给固定值（读得到时用真实值）、/dev/null 与 /dev/tty 的设备号当作 Linux 上的 (1,3) 与 (5,0)
+        （隔离合同在 linux 上核对设备身份，macOS 的设备号不同）。新旧两个执行器在窗口内看到的世界完全一样，所以返回的 argv 必须逐字相同。
+        在本来就具备这些条件的 Linux 上，这些替换都是空操作（真实值与替换值相同）。"""
+
+        real_readlink, real_major, real_minor = os.readlink, os.major, os.minor
+        char_devices = {os.lstat(path).st_rdev: (major, minor) for path, major, minor in (("/dev/null", 1, 3), ("/dev/tty", 5, 0)) if os.path.exists(path)}
+
+        def readlink(path: Any, *args: Any, **kwargs: Any) -> Any:
+            try:
+                return real_readlink(path, *args, **kwargs)
+            except OSError:
+                if str(path) in FAKE_NAMESPACES:
+                    return FAKE_NAMESPACES[str(path)]
+                raise
+
+        with contextlib.ExitStack() as window:
+            window.enter_context(mock.patch.dict(os.environ, {"PATH": f"{self.shim_bin}{os.pathsep}{os.environ.get('PATH', '')}"}))
+            window.enter_context(mock.patch.object(sys, "platform", "linux"))
+            window.enter_context(mock.patch.object(os, "readlink", readlink))
+            window.enter_context(mock.patch.object(os, "major", lambda rdev: char_devices[rdev][0] if rdev in char_devices else real_major(rdev)))
+            window.enter_context(mock.patch.object(os, "minor", lambda rdev: char_devices[rdev][1] if rdev in char_devices else real_minor(rdev)))
+            yield
 
     def load(self, module: Any) -> tuple[list[Any], dict[str, Any]]:
         _groups, units, _gates, manifest = module.load_gates_manifest(self.manifest_path, machine_cores=4)
@@ -2123,33 +2300,242 @@ class ControlInvariantTests(unittest.TestCase):
         self.assertEqual(self.digest(new), self.digest(old), "登记表只管登记表里的单元，control 与普通单元一字不变")
         self.assertIsNotNone(run)
 
+    def request_file(self, auditor: Any, unit: Any) -> str:
+        """这个审计器为这个单元写下的隔离请求文件的内容（control 单元的 wrap 成功时才有；没有就是空串）。"""
+
+        trace = auditor.trace_path(unit)
+        path = trace.with_name(trace.name + ".request.json")
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+    @staticmethod
+    def clear_audit_dir(auditor: Any) -> None:
+        """清空审计器的 audit 目录里的文件（目录本身留着：下一次 wrap 要往里写请求文件）。"""
+
+        for child in auditor.dir.iterdir():
+            child.unlink()
+
+    def wrap_both(self, new_auditor: Any, old_auditor: Any, unit: Any) -> tuple[tuple[str, Any], tuple[str, Any], str, str]:
+        """同一个单元在新旧两个审计器上各 wrap 一次：返回（新的结果, 旧的结果, 新写的请求文件, 旧写的请求文件）。
+
+        **两个审计器必须用同一个 out_dir**：成功的 wrap 返回的 argv 里嵌着该审计器的轨迹路径与请求文件路径（``<out_dir>/audit/<单元名>-<单元 ID 的
+        sha256>.trace.json.request.json``，后缀摘要是单元 ID 的 sha256、不是随机数），``--request-sha256`` 又是整份请求（含输出路径）的摘要——
+        out_dir 不同则路径与摘要必然不同，逐字比较永远不等（真有 unshare 的 Linux 上，过去给新旧两边用 audit-new／audit-old 的写法
+        就红了八个子项）。先后各 wrap 一次，中间清空 audit 目录，旧的看不到新的留下的东西；请求文件每次都覆盖写，所以每次 wrap 之后立刻读。"""
+
+        argv = ["/bin/sh", "-c", 'cd -- "$0" && exec "$@"', unit.cwd, *unit.command]
+        self.assertEqual(new_auditor.dir, old_auditor.dir, "新旧审计器必须共用 audit 目录，否则路径派生出来的 argv 必然不同")
+        new = call_outcome(lambda: new_auditor.wrap(unit, argv))
+        new_request = self.request_file(new_auditor, unit)
+        self.clear_audit_dir(new_auditor)
+        old = call_outcome(lambda: old_auditor.wrap(unit, argv))
+        old_request = self.request_file(old_auditor, unit)
+        self.clear_audit_dir(old_auditor)
+        return new, old, new_request, old_request
+
     def test_t_c6_wrap_collect_and_report_behave_identically_with_a_declared_run_in_the_process(self) -> None:
+        """T-C6：``wrap``／``collect``／``report`` 与基线逐字相同，进程里有没有声明级运行上下文都一样。
+
+        独立验收 #3 一般 5：这条用例过去在没有 unshare／strace 的机器（本机 macOS）上比的是「新旧两边抛同一个 RuntimeContractError」，control 四链
+        ``wrap`` 的成功路径从来没被比过；而在有真实 unshare 的 Linux 上，新旧审计器用了不同的 out_dir，成功路径的 argv 里嵌着的轨迹路径与请求摘要必然
+        不同，反而红了八个子项（四个 control 单元 × 两种标签）。现在：**无论机器上有没有真工具，窗口内都用自己的假 unshare／strace 垫片放在 PATH
+        最前面**（linux_isolation），control 单元的 wrap 总是走成功路径并逐字比较（argv 与写下的请求文件），新旧审计器共用 out_dir。"""
+
         self.declared_context()
         currents = self.currents(ue)
         units, _manifest = self.load(ue)
-        for label, context in (("没有声明级上下文", False), ("同进程里有声明级上下文", True)):
-            if context is False:
-                token = ue._DECLARED_RUN.set(None)
-            else:
-                token = None
+        for number, (label, context) in enumerate((("没有声明级上下文", False), ("同进程里有声明级上下文", True))):
+            token = None if context else ue._DECLARED_RUN.set(None)
             try:
-                new_auditor = ue.ReadAuditor(out_dir=self.root / "audit-new", repo_root=self.tree, data_root=None, currents=currents, strict=True)
-                old_auditor = self.baseline.ReadAuditor(out_dir=self.root / "audit-old", repo_root=self.tree, data_root=None, currents=currents, strict=True)
-                for unit in units:
-                    argv = ["/bin/sh", "-c", 'cd -- "$0" && exec "$@"', unit.cwd, *unit.command]
-                    with self.subTest(label=label, unit=unit.unit_id):
-                        self.assertEqual(call_outcome(lambda: new_auditor.wrap(unit, argv)), call_outcome(lambda: old_auditor.wrap(unit, argv)),
-                                         "wrap 返回的 argv（或报的错）与基线逐字相同")
-                        if unit.unit_id in self.policy_ids:
-                            self.assertEqual(new_auditor.collect(unit), old_auditor.collect(unit))
-                new_report, old_report = new_auditor.report(), old_auditor.report()
-                self.assertEqual({key: value for key, value in new_report.items() if key != "report"},
-                                 {key: value for key, value in old_report.items() if key != "report"}, label)
-                self.assertNotIn("declared", json.loads(Path(new_report["report"]).read_text(encoding="utf-8")), "没有声明级结果：报告里没有 declared 键")
-                self.assertEqual(new_auditor.declared_extra(), {})
+                with self.linux_isolation():
+                    out_dir = self.root / f"audit-{number}"
+                    new_auditor = ue.ReadAuditor(out_dir=out_dir, repo_root=self.tree, data_root=None, currents=currents, strict=True)
+                    old_auditor = self.baseline.ReadAuditor(out_dir=out_dir, repo_root=self.tree, data_root=None, currents=currents, strict=True)
+                    for unit in units:
+                        with self.subTest(label=label, unit=unit.unit_id):
+                            new, old, new_request, old_request = self.wrap_both(new_auditor, old_auditor, unit)
+                            self.assertEqual(new[0], "ok", f"wrap 在垫片窗口里必须成功——不是和基线报同一个异常就算过：{new}")
+                            self.assertEqual(new, old, "wrap 返回的 argv 与基线逐字相同")
+                            self.assertEqual(new_request, old_request, "写下的请求文件（含请求摘要）与基线逐字相同")
+                            if unit.unit_id in self.control_ids:
+                                self.assertEqual(new[1][:5], ["unshare", "-m", "-n", "--propagation", "unchanged"], "control 四链是带新网络命名空间的隔离启动前缀")
+                                self.assertEqual(json.loads(new_request)["control_scenario"], unit.unit_id.removeprefix("pre-a3:claude:"))
+                            else:
+                                self.assertEqual(new[1], ["/bin/sh", "-c", 'cd -- "$0" && exec "$@"', unit.cwd, *unit.command], "没登记的普通命令单元：原样返回 argv")
+                            if unit.unit_id in self.policy_ids:
+                                self.assertEqual(new_auditor.collect(unit), old_auditor.collect(unit))
+                    new_report = new_auditor.report()
+                    new_report_text = Path(new_report["report"]).read_text(encoding="utf-8")   # 两个审计器共用报告路径：新的写完立刻读
+                    old_report = old_auditor.report()
+                    self.assertEqual({key: value for key, value in new_report.items() if key != "report"},
+                                     {key: value for key, value in old_report.items() if key != "report"}, label)
+                    self.assertNotIn("declared", json.loads(new_report_text), "没有声明级结果：报告里没有 declared 键")
+                    self.assertEqual(new_auditor.declared_extra(), {})
             finally:
                 if token is not None:
                     ue._DECLARED_RUN.reset(token)
+
+    def test_t_c6_turns_red_when_the_new_wrap_deviates_by_a_single_argument(self) -> None:
+        """变异自检：故意让新实现的 wrap 对 control 单元多一个参数（或改一个、少一个），T-C6 必须变红——证明这个逐字比较是有力的，
+        不是「新旧两边碰巧抛同一个异常」或「比了两个空值」。把 T-C6 当子用例嵌套运行，断言它失败，失败的恰是 4 个 control 单元 × 2 种标签。"""
+
+        original = ue.ReadAuditor.wrap
+        controls = frozenset(self.control_ids)
+        variants = {
+            "多一个参数": lambda result: [*result, "--mutant-extra-argument"],
+            "改掉一个参数": lambda result: [*result[:4], "private", *result[5:]],
+            "少一个参数": lambda result: result[:-1],
+        }
+        for label, deviate in variants.items():
+            def mutated(auditor: Any, unit: Any, argv: list[str], deviate: Any = deviate) -> list[str]:
+                result = original(auditor, unit, argv)
+                return deviate(result) if unit.unit_id in controls else result
+
+            with self.subTest(label), mock.patch.object(ue.ReadAuditor, "wrap", mutated):
+                case = type(self)("test_t_c6_wrap_collect_and_report_behave_identically_with_a_declared_run_in_the_process")
+                result = unittest.TestResult()
+                case.run(result)
+            self.assertFalse(result.wasSuccessful(), f"{label}：新实现的 wrap 偏离基线，T-C6 必须变红")
+            self.assertFalse(result.errors, [text for _test, text in result.errors][:1])
+            self.assertEqual(len(result.failures), 8, f"{label}：4 个 control 单元 × 2 种标签")
+            self.assertTrue(all("wrap 返回的 argv 与基线逐字相同" in text for _test, text in result.failures), label)
+
+    def test_the_shims_really_decide_whether_the_success_path_is_reachable(self) -> None:
+        """对照：窗口外（没有 unshare、platform 不是 linux 的机器）wrap 报错；窗口内成功——证明 T-C6 比较的是成功路径，不是自说自话。窗口结束后环境完全
+        复原；在本来就是 Linux 的机器上，窗口里的替换（PATH 前置垫片之外）是空操作：能读到的真实值不被改写，真实的命名空间与设备号照旧。"""
+
+        units, _manifest = self.load(ue)
+        unit = next(unit for unit in units if unit.unit_id == self.control_ids[0])
+        currents = self.currents(ue)
+        argv = ["/bin/sh", "-c", 'cd -- "$0" && exec "$@"', unit.cwd, *unit.command]
+        auditor = ue.ReadAuditor(out_dir=self.root / "audit-shim", repo_root=self.tree, data_root=None, currents=currents, strict=True)
+        platform, path, readlink = sys.platform, os.environ.get("PATH"), os.readlink
+
+        def real_namespace(name: str) -> str | None:
+            try:
+                return os.readlink(f"/proc/self/ns/{name}")
+            except OSError:
+                return None
+
+        real = {name: real_namespace(name) for name in ("mnt", "net")}
+        with self.linux_isolation():
+            self.assertEqual(call_outcome(lambda: auditor.wrap(unit, argv))[0], "ok")
+            self.assertEqual(sys.platform, "linux")
+            self.assertEqual(shutil.which("unshare"), str(self.shim_bin / "unshare"), "窗口内 PATH 前面是垫片目录")
+            self.assertEqual(shutil.which("strace"), str(self.shim_bin / "strace"))
+            # 在本来就是 Linux 的机器上，窗口里的替换必须是空操作：真实值读得到就是真实值；读不到才用固定值。
+            for name, value in real.items():
+                self.assertEqual(os.readlink(f"/proc/self/ns/{name}"), value if value is not None else FAKE_NAMESPACES[f"/proc/self/ns/{name}"], name)
+            self.assertEqual((os.major(os.lstat("/dev/null").st_rdev), os.minor(os.lstat("/dev/null").st_rdev)), (1, 3), "/dev/null 按 Linux 的设备号 (1,3)")
+            if os.path.exists("/dev/tty"):
+                self.assertEqual((os.major(os.lstat("/dev/tty").st_rdev), os.minor(os.lstat("/dev/tty").st_rdev)), (5, 0), "/dev/tty 按 Linux 的设备号 (5,0)")
+            link = self.root / "probe-link"
+            link.symlink_to("probe-target")
+            self.assertEqual(os.readlink(link), "probe-target", "不在垫片名单里的路径照常走真实的 readlink")
+            with self.assertRaises(OSError):
+                os.readlink(self.root / "no-such-link")
+        self.assertEqual((sys.platform, os.environ.get("PATH"), os.readlink), (platform, path, readlink), "窗口结束后环境复原")
+        if not (sys.platform.startswith("linux") and shutil.which("unshare")):
+            outcome = call_outcome(lambda: auditor.wrap(unit, argv))
+            self.assertEqual((outcome[0], "unshare" in outcome[1]), ("RuntimeContractError", True), "窗口外：没有隔离工具的机器上只会报错")
+
+    def forged_manifest(self, rerun_only: dict[str, str]) -> dict[str, Any]:
+        manifest = copy.deepcopy(self.manifest)
+        manifest["declared_inputs"] = {"schema_version": eg.DECLARED_SUMMARY_SCHEMA, "declared_units": [], "rerun_only_reasons": rerun_only,
+                                       "registered": len(rerun_only)}
+        return manifest
+
+    def test_control_units_in_the_rerun_only_reasons_are_not_declared_units_and_change_nothing(self) -> None:
+        """独立验收 #3 重要 2：plan 阶段禁止登记 pre-a3:* 单元，但执行器自己不能只靠上游挡——清单顶层 declared_inputs.rerun_only_reasons 若带了 control
+        单元的 ID，旧代码里 ReadAuditor._declared_exempt 会放过它们（wrap 不再包隔离启动前缀、collect 返回 not-observed 的 passed），control 四链的
+        严格审计被静默跳过。现在：清单层（_declared_unit_ids）和运行层（_declared_exempt）各挡一次，行为与基线逐字相同。"""
+
+        control = {unit_id: "伪造的 rerun-only 登记" for unit_id in self.control_ids}
+        forged = self.forged_manifest({**control, "plain:cmd": "真正登记的 rerun-only 单元"})
+        # 第一道：清单层。control 单元从两个集合里丢掉，没登记表的 control 计划就没有声明级上下文。
+        declared, rerun_only = ue._declared_unit_ids(forged)
+        self.assertEqual((declared, rerun_only), (set(), {"plain:cmd"}))
+        self.assertEqual(ue._declared_unit_ids(self.forged_manifest(control)), (set(), set()), "只有 control 的假登记：等于没有登记表")
+        for adapter in (self.adapter, None):   # 适配器在位时认它的 CONTROL_UNIT_IDS；不在位（计划没选中 control）时靠 pre-a3: 前缀兜底
+            token = ue._CONTROL_READ_AUDIT.set(adapter)
+            try:
+                self.assertEqual(ue._declared_unit_ids(forged), (set(), {"plain:cmd"}))
+            finally:
+                ue._CONTROL_READ_AUDIT.reset(token)
+        # 登记的 declared 单元（输入声明带 declared_scope）同理：control 的丢掉，别的保留。
+        with_declared = copy.deepcopy(forged)
+        with_declared["units"].append({"unit_id": self.control_ids[0], "argv": ["true"], "cwd": str(self.tree), "inputs": {"declared_scope": {}}})
+        with_declared["units"].append({"unit_id": "backend:go-test", "argv": ["true"], "cwd": str(self.tree), "inputs": {"declared_scope": {}}})
+        self.assertEqual(ue._declared_unit_ids(with_declared), ({"backend:go-test"}, {"plain:cmd"}))
+        # control 单元的当前事实（gate_currents）与基线逐字相同，不受假登记影响（假登记里真正登记的 plain:cmd 照旧按登记表走，不拿来比）。
+        new_digest, old_digest = self.digest(self.currents(ue, forged)), self.digest(self.currents(self.baseline))
+        for unit_id in self.control_ids:
+            self.assertEqual(new_digest[unit_id], old_digest[unit_id], unit_id)
+
+        units, _manifest = self.load(ue)
+        currents = self.currents(ue, forged)
+        control_units = [unit for unit in units if unit.unit_id in self.control_ids]
+        plain = next(unit for unit in units if unit.unit_id == "plain:cmd")
+        run = ue._DeclaredRun(entry=eg, manifest=forged, tree=self.tree, sample_mode="off", declared=declared, rerun_only=rerun_only)
+        token = ue._DECLARED_RUN.set(run)
+        try:
+            with self.linux_isolation():
+                new_auditor = ue.ReadAuditor(out_dir=self.root / "audit-shared", repo_root=self.tree, data_root=None, currents=currents, strict=True)
+                old_auditor = self.baseline.ReadAuditor(out_dir=self.root / "audit-shared", repo_root=self.tree, data_root=None, currents=currents, strict=True)
+                for unit in control_units:
+                    with self.subTest(layer="清单层", unit=unit.unit_id):
+                        new, old, new_request, old_request = self.wrap_both(new_auditor, old_auditor, unit)
+                        self.assertEqual(new[0], "ok")
+                        self.assertEqual((new, new_request), (old, old_request), "wrap：仍然包隔离启动前缀，与基线逐字相同")
+                        self.assertEqual(new_auditor.collect(unit), old_auditor.collect(unit), "collect：严格审计的结果（没有轨迹就是失败）与基线逐字相同")
+                self.assertTrue(new_auditor._declared_exempt(plain), "对照：真正登记的 rerun-only 单元照旧被放行")
+                self.assertEqual({key: value for key, value in new_auditor.report().items() if key != "report"},
+                                 {key: value for key, value in old_auditor.report().items() if key != "report"}, "汇总逐字相同")
+        finally:
+            ue._DECLARED_RUN.reset(token)
+
+        # 第二道：运行层。声明级上下文可以不经清单直接构造（独立验收的最小复现就这样造的），_declared_exempt 自己也要挡。
+        direct = ue._DeclaredRun(entry=eg, manifest={}, tree=self.tree, sample_mode="off", declared=set(), rerun_only=set(self.control_ids) | {"plain:cmd"})
+        token = ue._DECLARED_RUN.set(direct)
+        try:
+            with self.linux_isolation():
+                new_auditor = ue.ReadAuditor(out_dir=self.root / "audit-direct", repo_root=self.tree, data_root=None, currents=currents, strict=True)
+                old_auditor = self.baseline.ReadAuditor(out_dir=self.root / "audit-direct", repo_root=self.tree, data_root=None, currents=currents, strict=True)
+                for unit in control_units:
+                    with self.subTest(layer="运行层", unit=unit.unit_id):
+                        self.assertFalse(new_auditor._declared_exempt(unit))
+                        new, old, new_request, old_request = self.wrap_both(new_auditor, old_auditor, unit)
+                        self.assertEqual(new[0], "ok")
+                        self.assertEqual((new, new_request), (old, old_request))
+                        self.assertEqual(new_auditor.collect(unit), old_auditor.collect(unit))
+                        self.assertNotIn("declared_exempt", new_auditor.results[unit.unit_id])
+                self.assertTrue(new_auditor._declared_exempt(plain))
+        finally:
+            ue._DECLARED_RUN.reset(token)
+
+    def test_the_control_governed_test_takes_the_union_of_the_adapter_set_and_the_pre_a3_prefix(self) -> None:
+        governed = ue._declared_control_governed
+        for unit_id in self.control_ids:
+            self.assertTrue(governed(unit_id), unit_id)
+        self.assertTrue(governed("pre-a3:vc-chain.something-else"), "任何 pre-a3 单元都不是声明级单元（登记表自检也禁止登记它们）")
+        for unit_id in ("backend:go-test", "frontend:critical", "deploy:check", "plain:cmd", "xpre-a3:claude:vc-chain.claude-reconcile", "", "pre-a3"):
+            self.assertFalse(governed(unit_id), unit_id)
+        for not_text in (None, 3, ["pre-a3:x"], {"pre-a3:x": 1}):
+            self.assertFalse(governed(not_text), not_text)
+        # 适配器的集合与前缀取并：适配器说它管辖一个不带 pre-a3: 前缀的 ID，也要认；适配器是缺这个属性的桩时当空集合，前缀照认。
+        stub = types.SimpleNamespace(CONTROL_UNIT_IDS=frozenset({"odd:adapter-governed"}))
+        token = ue._CONTROL_READ_AUDIT.set(stub)
+        try:
+            self.assertTrue(governed("odd:adapter-governed"))
+            self.assertTrue(governed("pre-a3:claude:anything"))
+            self.assertFalse(governed("odd:other"))
+        finally:
+            ue._CONTROL_READ_AUDIT.reset(token)
+        bare = ue._CONTROL_READ_AUDIT.set(types.SimpleNamespace(sidecar_paths=lambda: []))
+        try:
+            self.assertFalse(governed("odd:adapter-governed"))
+            self.assertTrue(governed("pre-a3:claude:anything"))
+        finally:
+            ue._CONTROL_READ_AUDIT.reset(bare)
 
     def test_t_c8_control_records_have_the_same_keys_and_values_as_the_baseline(self) -> None:
         currents = self.currents(ue)
@@ -2275,6 +2661,54 @@ class ControlInvariantTests(unittest.TestCase):
                                                 f"若是后续批次合法改写了这个文件，请把 BASELINE_COMMIT 换成该批次之后的提交，并重新确认 control 四链的回归（本组其余用例）")
 
 
+class BaselineRequirementTests(unittest.TestCase):
+    """基线提交读不到时（独立验收 #3 一般 5②）：本机跳过，CI（环境变量 CI 非空）失败——CI 上悄悄跳过会让 control 四链的逐字回归静默变成空检查。"""
+
+    @staticmethod
+    def unreadable() -> Any:
+        return mock.patch.object(sys.modules[__name__], "load_baseline", return_value=None)
+
+    @staticmethod
+    def raised(call: Any) -> BaseException | None:
+        """调用抛出的异常（没抛返回 None）。SkipTest 也当成可断言的结果：在 assertRaises 里抛出 SkipTest 会让整个用例变成「跳过」而不是失败，
+        「CI 上悄悄跳过」恰恰是要拦的退化，不能让断言自己被它吞掉。"""
+
+        try:
+            call()
+        except BaseException as error:  # noqa: BLE001 - 要断言的就是抛出了什么
+            return error
+        return None
+
+    def test_in_ci_an_unreadable_baseline_is_a_failure_for_the_whole_control_group(self) -> None:
+        for value in ("true", "1", "yes", "false", "x"):   # 只看「非空」：GitHub Actions 设的是 true，别的非空值同样按 CI 处理
+            with self.subTest(CI=value), mock.patch.dict(os.environ, {"CI": value}), self.unreadable():
+                for label, call in (("require_baseline", lambda: require_baseline("tools/ci/unit_executor.py", "baseline_probe")),
+                                    ("ControlInvariantTests.setUpClass", ControlInvariantTests.setUpClass)):   # 整组：setUpClass 失败＝类里所有用例都报错
+                    error = self.raised(call)
+                    self.assertIsInstance(error, AssertionError, f"{label}：CI 上读不到基线必须失败，不能跳过（{error!r}）")
+                    self.assertIn("CI 环境必须读得到基线提交", str(error))
+
+    def test_locally_an_unreadable_baseline_skips(self) -> None:
+        for label, ci in (("没有 CI 变量", None), ("CI 为空字符串", "")):
+            environment = {key: value for key, value in os.environ.items() if key != "CI"}
+            if ci is not None:
+                environment["CI"] = ci
+            with self.subTest(label), mock.patch.dict(os.environ, environment, clear=True), self.unreadable():
+                with self.assertRaises(unittest.SkipTest):
+                    require_baseline("tools/ci/unit_executor.py", "baseline_probe")
+                with self.assertRaises(unittest.SkipTest):
+                    ControlInvariantTests.setUpClass()
+
+    def test_a_readable_baseline_is_returned_in_both_environments(self) -> None:
+        for label, environment in (("CI", {"CI": "true"}), ("本机", {})):
+            with self.subTest(label), mock.patch.dict(os.environ, environment):
+                if label == "本机":
+                    os.environ.pop("CI", None)
+                module = require_baseline("tools/ci/unit_executor.py", "unit_executor_wp3_baseline_probe")
+                self.assertTrue(hasattr(module, "ReadAuditor"))
+                self.assertFalse(hasattr(module, "_declared_unit_ids"), "基线是声明级承接之前的执行器")
+
+
 # ---------------------------------------------------------------------------
 # 第六组：逐单元承接（unit-inherit）模式与严格审计策略下的端到端
 # ---------------------------------------------------------------------------
@@ -2368,6 +2802,194 @@ class UnitInheritEndToEndTests(unittest.TestCase):
         world.commit({UNRELATED_CLAUDE_TEST: PASS + "# 又一次无关\n"})
         third = self.inherit("third")
         self.assertEqual(third.inherited, set(DECLARED_IDS))
+
+
+# 引导代码模板：在执行器取得调度锁之前（锁排队期间事实变化）把 postgres 的镜像 Id 换掉，造出「锁后复核重算的当前事实与排队前不同」。
+# 换掉哪个文件写在代码里（@FILE@），不走环境变量——环境变量会进环境指纹，多一个变量就让承接上下文与请求登记的不同。
+LOCK_TIME_IMAGE_SWAP = (
+    "_real_lock = ue.hold_scheduler_lock\n"
+    "def _hooked_lock(*args, **kwargs):\n"
+    "    open(@FILE@, 'w').write('sha256:' + '9' * 64 + chr(10))\n"
+    "    return _real_lock(*args, **kwargs)\n"
+    "ue.hold_scheduler_lock = _hooked_lock\n")
+# 替身 full_set_receipt：只记录 assess 收到的请求里 reuse_enabled 是什么，判定恒为全部重跑。
+STUB_FULL_SET_RECEIPT = """
+import json, os
+from types import SimpleNamespace
+
+def read(path):
+    return {"schema_version": "full-set-request/v1", "reuse_enabled": True, "receipt": None}
+
+def live_check(request, **kwargs):
+    return None
+
+def assess(request, currents, facts, *, gate_ids, now):
+    with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"reuse_enabled": request["reuse_enabled"], "units": len(currents)}) + "\\n")
+    verdict = {"schema_version": "full-set-decision/v1", "decided_at_utc": "2026-10-15T00:00:00Z", "eligible": False,
+               "reuse_enabled": request["reuse_enabled"] is True, "action": "reexecute-all", "reasons": ["替身：全部重跑"],
+               "actor": {"effective_uid": os.geteuid(), "host": "stub"}, "source_receipt": None, "source_run_id": None, "expires_at_utc": None}
+    return verdict, {unit_id: SimpleNamespace(inherit=False, reasons=["替身：全部重跑"], record=None, record_path=None) for unit_id in currents}
+"""
+# 替身 full_set_receipt（能真承接的版本）：逐单元用执行器自己的 records.evaluate 判定（等价于 full-set-pass 不带请求时的逐单元承接，
+# 也就是 B-10 的「承接匹配的单元」），每次被调用把承接的单元记进日志。记录库路径与日志路径写在代码里（@STORE@、@LOG@），不走环境变量
+# （环境变量会进环境指纹，多一个变量所有来源记录都不可承接）。
+STUB_B09_RECEIPT = """
+import dataclasses, json, sys
+
+records = sys.modules["unit_records_sibling"]   # 执行器已加载的记录层，同一个实例
+STORE, LOG = @STORE@, @LOG@
+
+def read(path):
+    return {"schema_version": "full-set-request/v1", "reuse_enabled": True, "receipt": None}
+
+def live_check(request, **kwargs):
+    return None
+
+def assess(request, currents, facts, *, gate_ids, now):
+    store = records.RecordStore(STORE)
+    judged = dataclasses.replace(facts, require_read_audit=True, max_age_hours=24, now=now, historical_read_audit=False)
+    decisions = {unit_id: records.evaluate(store, current, judged) for unit_id, current in currents.items()}
+    inherited = sorted(unit_id for unit_id, decision in decisions.items() if decision.inherit)
+    with open(LOG, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"inherited": inherited}) + chr(10))
+    verdict = {"schema_version": "full-set-decision/v1", "decided_at_utc": "2026-10-15T00:00:00Z", "eligible": bool(inherited), "reuse_enabled": True,
+               "action": "inherit-matching-units" if inherited else "reexecute-all", "reasons": [], "actor": {"effective_uid": 0, "host": "stub"},
+               "source_receipt": None, "source_run_id": None, "expires_at_utc": None}
+    return verdict, decisions
+"""
+STUB_RECEIPT_SWAP = (
+    "import importlib.util\n"
+    "_real_spec = importlib.util.spec_from_file_location\n"
+    "def _swapped_spec(name, location=None, *args, **kwargs):\n"
+    "    if name == '_full_set_receipt':\n"
+    "        location = os.environ['STUB_RECEIPT']\n"
+    "    return _real_spec(name, location, *args, **kwargs)\n"
+    "importlib.util.spec_from_file_location = _swapped_spec\n")
+
+
+class AuditorFactsSyncTests(unittest.TestCase):
+    """锁后复核重算了当前事实之后，挂在调度器上的审计器拿的必须是新事实（独立验收 #3 一般 8）。
+
+    报告怀疑：B-09 锁后复核里新增的 ``_declared_sync_auditor`` 只同步 ``declared_only`` 的审计器，``--audit-reads`` 建的常规审计器在审声明级单元时，
+    复核重算 currents 之后审计结果里的 ``inputs_sha256`` 仍是旧的（读记录的消费者会拒绝，失败关闭）。结论：**B-09／B-10 分支里触发不了**——
+    进入该分支要求判定里有可承接的单元，那只有 ``--mode full-set-pass`` 才有；而 ``--audit-reads`` 与 full-set-pass 互斥（要真跑才有读集）。
+    **唯一可达的锁后复核＋常规审计器是逐单元承接分支，那里一直有同步（auditor.currents = currents）**。下面把这些前提和同步行为都钉住。"""
+
+    def fixture(self) -> UnitInheritEndToEndTests:
+        helper = UnitInheritEndToEndTests("test_an_unrelated_change_inherits_every_declared_unit_and_the_published_proof_verifies")
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        return helper
+
+    def test_the_sync_helper_updates_only_the_auditor_built_for_declared_units(self) -> None:
+        old, new = {"u": "旧事实"}, {"u": "新事实"}
+        declared_only, regular = types.SimpleNamespace(currents=old, declared_only=True), types.SimpleNamespace(currents=old, declared_only=False)
+        ue._declared_sync_auditor(types.SimpleNamespace(auditor=declared_only), new)
+        ue._declared_sync_auditor(types.SimpleNamespace(auditor=regular), new)
+        ue._declared_sync_auditor(types.SimpleNamespace(auditor=None), new)
+        ue._declared_sync_auditor(types.SimpleNamespace(), new)
+        self.assertIs(declared_only.currents, new, "只为声明级单元建的审计器：换成新事实")
+        self.assertIs(regular.currents, old, "常规审计器由调用处自己同步（逐单元承接分支），这个函数不碰它")
+
+    def recheck(self, *audit_args: str) -> None:
+        fixture = self.fixture()
+        world = fixture.world
+        first = world.run()
+        self.assertEqual(first.code, 0, first.stderr[-2000:])
+        source = world.record_of(first, "backend:integration")
+        world.commit({UNRELATED_CLAUDE_TEST: PASS + "# 无关\n"})
+        request = fixture.request("lock")
+        fixture.sample()
+        swap = world.image_override_file("postgres:18.1-alpine3.23")
+        run = world.run(*fixture.inherit_args(request), *audit_args, mode="unit-inherit", bootstrap=LOCK_TIME_IMAGE_SWAP.replace("@FILE@", repr(str(swap))))
+        self.assertEqual(run.code, 0, run.stderr[-3000:])
+        self.assertEqual(run.manifest["mode"], "unit-inherit", run.summary.get("unit_inherit_decision"))
+        self.assertEqual(run.inherited, {"backend:go-test", "frontend:critical", "egress-spec:egress-spec-go-test"}, "排队前复核时大家都能承接，锁后复核把换了镜像的挤出来")
+        self.assertEqual(run.executed, {"backend:integration", "deploy:check"})
+        record = world.record_of(run, "backend:integration")
+        self.assertNotEqual(record["inputs_sha256"], source["inputs_sha256"], "锁后复核重算的当前事实确实变了（镜像 Id 被换过）")
+        audit = record["read_audit"]
+        self.assertEqual(audit["inputs_sha256"], record["inputs_sha256"], "审计器用的是锁后复核重算的事实：审计绑定的输入摘要等于记录的")
+        self.assertEqual((audit["status"], audit["coverage_complete"], record["inheritable"]), ("passed", True, True))
+        credential = {item["id"]: item for item in record["declared_contracts"]}["postgres"]
+        self.assertEqual((credential["verified_before_run"], credential["observed"]["image_id"]), (True, "sha256:" + "9" * 64))
+        declared = run.summary["declared_inputs"]
+        self.assertEqual((declared["inherited"], declared["audit_passed"], declared["consumer_accepted"], declared["consumer_rejected"]), (3, 1, 4, {}),
+                         "消费者接受重跑出来的这条记录；审计摘要不一致的话这里会被拒")
+        if "--audit-reads" in audit_args:
+            self.assertEqual(run.summary["read_audit"]["status"], "passed")
+            self.assertIn("backend:integration", run.summary["read_audit"]["declared"]["passed"])
+        else:
+            self.assertNotIn("read_audit", run.summary, "没给 --audit-reads：只有只为声明级单元建的审计器，汇总里没有旧的 read_audit 段")
+
+    def test_a_regular_audit_reads_auditor_holds_the_lock_time_facts_after_the_unit_inherit_recheck(self) -> None:
+        self.recheck("--audit-reads")
+
+    def test_the_declared_only_auditor_holds_the_lock_time_facts_after_the_unit_inherit_recheck(self) -> None:
+        self.recheck()
+
+    def test_audit_reads_cannot_be_combined_with_the_mode_in_which_the_b09_recheck_runs(self) -> None:
+        """B-09／B-10 的锁后复核只在 full-set-pass 模式下才会进（别的模式没有可承接单元）；--audit-reads 在这个模式下直接报错退出——
+        两个前提合起来，常规审计器和 B-09 锁后复核不会同时存在。谁放宽了 --audit-reads 的模式限制，这里先红。"""
+
+        world = World(self)
+        missing = str(world.root / "no-such-request.json")
+        for label, extra in (("全集通过", ()), ("B-09 请求", ("--full-set-request", missing)), ("B-10 请求", ("--target-platform-request", missing))):
+            with self.subTest(label):
+                run = world.run("--audit-reads", *extra, mode="full-set-pass", expect_summary=False)
+                self.assertEqual(run.code, 2, run.stderr[-1500:])
+                self.assertIn("读集审计要真跑才有读集", run.stderr)
+        # 对照：re-execute 模式下 --audit-reads 照常可用。
+        self.assertEqual(world.run("--audit-reads").code, 0)
+
+    def test_a_b09_request_is_assessed_with_reuse_switched_off_in_every_mode_but_full_set_pass(self) -> None:
+        """前提的另一半：非 full-set-pass 模式下执行器把请求里的 reuse_enabled 压成 False 再交给评估器，评估器在 reuse 关闭时一律判全部重跑
+        （真实评估器的行为见 full_set_receipt.assess：reuse 关闭就抛 ContractError「真实承接开关关闭」），所以这些模式下 B-09 锁后复核分支不进。
+        这里用替身评估器只看执行器交给它的请求。"""
+
+        world = World(self)
+        stub, log, request = world.root / "stub_full_set_receipt.py", world.root / "stub.log", world.root / "request.json"
+        stub.write_text(STUB_FULL_SET_RECEIPT, encoding="utf-8")
+        request.write_text("{}", encoding="utf-8")
+        for mode, expected in (("re-execute", False), ("full-set-pass", True)):
+            with self.subTest(mode=mode):
+                log.unlink(missing_ok=True)
+                run = world.run("--full-set-request", str(request), mode=mode, bootstrap=STUB_RECEIPT_SWAP,
+                                env={"STUB_RECEIPT": str(stub), "STUB_LOG": str(log)})
+                self.assertEqual(run.code, 0, run.stderr[-2000:])
+                seen = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+                self.assertEqual([item["reuse_enabled"] for item in seen], [expected], f"{mode}：评估器收到的请求里 reuse_enabled")
+                self.assertEqual(run.executed, set(DECLARED_IDS) | set(RERUN_ONLY), "替身判全部重跑：所有单元都执行")
+
+    def test_the_b09_lock_time_recheck_gives_the_declared_only_auditor_the_new_facts(self) -> None:
+        """B-09 的锁后复核分支（full-set-pass＋请求）里 ``_declared_sync_auditor`` 同步的就是只为声明级单元建的审计器——这个分支里只可能有它。
+        用替身评估器（按 records.evaluate 逐单元判定，等价于 B-10 的「承接匹配的单元」）走这条分支：排队前复核时四个声明级单元都可承接，取得调度锁之前
+        镜像 Id 被换掉，锁后复核重算的当前事实里 backend:integration 变了、被挤出承接集合，重新执行；它的读集审计必须绑定锁后复核的新事实。"""
+
+        world = World(self)
+        first = world.run()
+        self.assertEqual(first.code, 0, first.stderr[-2000:])
+        source = world.record_of(first, "backend:integration")
+        world.commit({UNRELATED_CLAUDE_TEST: PASS + "# 无关\n"})
+        stub, log, request = world.root / "stub_b09_receipt.py", world.root / "stub-b09.log", world.root / "request.json"
+        stub.write_text(STUB_B09_RECEIPT.replace("@STORE@", repr(str(world.store))).replace("@LOG@", repr(str(log))), encoding="utf-8")
+        request.write_text("{}", encoding="utf-8")
+        swap = world.image_override_file("postgres:18.1-alpine3.23")
+        bootstrap = (STUB_RECEIPT_SWAP.replace("os.environ['STUB_RECEIPT']", repr(str(stub))) + LOCK_TIME_IMAGE_SWAP.replace("@FILE@", repr(str(swap))))
+        run = world.run("--full-set-request", str(request), mode="full-set-pass", bootstrap=bootstrap)
+        self.assertEqual(run.code, 0, run.stderr[-3000:])
+        calls = [json.loads(line)["inherited"] for line in log.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(calls, [sorted(DECLARED_IDS), sorted(set(DECLARED_IDS) - {"backend:integration"})],
+                         "评估器被调用两次：排队前四个声明级单元都承接；锁后复核时 backend:integration 的当前事实变了，被挤出")
+        self.assertEqual(run.inherited, set(DECLARED_IDS) - {"backend:integration"})
+        self.assertEqual(run.executed, {"backend:integration", "deploy:check"})
+        record = world.record_of(run, "backend:integration")
+        self.assertNotEqual(record["inputs_sha256"], source["inputs_sha256"], "锁后复核重算的当前事实确实变了")
+        self.assertEqual(record["read_audit"]["inputs_sha256"], record["inputs_sha256"], "审计器用的是锁后复核重算的事实")
+        declared = run.summary["declared_inputs"]
+        self.assertEqual((declared["inherited"], declared["audit_passed"], declared["consumer_accepted"], declared["consumer_rejected"]), (3, 1, 4, {}))
+        self.assertNotIn("read_audit", run.summary, "full-set-pass 下不允许 --audit-reads：这里只有只为声明级单元建的审计器")
 
 
 class StrictPolicyEndToEndTests(unittest.TestCase):
