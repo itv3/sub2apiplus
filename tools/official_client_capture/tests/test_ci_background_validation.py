@@ -226,6 +226,34 @@ class BackgroundValidationTests(unittest.TestCase):
         restarted = self.start(COMMIT_A)
         self.assertEqual(restarted["action"], "started", "被停下的可以重新起")
 
+    def test_start_records_the_run_process_start_identity_so_stop_can_verify_the_pid(self) -> None:
+        """R7b：结论里记下 run 进程的启动标识（``pid_start``）。pid 被无关进程复用（后台被 SIGKILL 或机器重启而结论仍是 running）时，
+        stop 动手前据此核对，对不上就不动。"""
+
+        started = self.start(COMMIT_A, FAKE_GATES_SLEEP="60")
+        payload = self.wait(started["result"], until=("running",))
+        self.assertTrue(payload["pid_start"])
+        self.assertEqual(payload["pid_start"], bv.process_identity(payload["pid"]))
+
+    def test_stop_output_carries_the_notes_when_the_payload_has_no_start_identity(self) -> None:
+        """旧结论没有 ``pid_start``：stop 只按进程组处理，并把这一点写进 stop 的输出（``notes``），不再静默。"""
+
+        started = self.start(COMMIT_A, FAKE_GATES_SLEEP="60")
+        payload = self.wait(started["result"], until=("running",))
+        legacy = {key: value for key, value in payload.items() if key != "pid_start"}
+        bv._write(Path(started["result"]), legacy)
+        completed = self.cli("stop", "--runroot", str(self.runroot), "--reason", "测试")
+        output = json.loads(completed.stdout)
+        self.assertEqual(output["stopped"], [Path(started["result"]).name])
+        self.assertTrue(any("pid_start" in note for note in output["notes"]), output)
+        self.assertFalse(bv._pid_alive(payload["pid"]), "旧结论仍按进程组终止")
+
+    def test_stop_output_has_no_notes_key_when_nothing_needs_saying(self) -> None:
+        started = self.start(COMMIT_A, FAKE_GATES_SLEEP="60")
+        self.wait(started["result"], until=("running",))
+        output = json.loads(self.cli("stop", "--runroot", str(self.runroot)).stdout)
+        self.assertEqual(list(output), ["stopped"])
+
     def test_stop_waits_for_the_whole_group_to_finish_cleaning_up(self) -> None:
         """组长收到 SIGTERM 立即退出（Linux 上随即被回收），组员还在清理：要等整组退出才补发 SIGKILL。原来只等组长，
         执行器终止单元会话做到一半就被杀，排在后面的单元留在后台继续跑（E4-02 验收实测）。这里直接造一个进程组：组长

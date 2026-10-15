@@ -136,7 +136,7 @@ class _Group(base._Fixture):
 
     @staticmethod
     def payload(leader: subprocess.Popen) -> dict:
-        return {"pid": leader.pid}
+        return {"pid": leader.pid, "pid_start": bv.process_identity(leader.pid)}
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -242,7 +242,8 @@ class TerminateSurvivesSnapshotFaultsTests(_Group):
 
 
 def _add_fault_tests() -> None:
-    for fault in ("table-raises", "empty-table", "proc-listing-oserror", "ps-fails", "snapshot-fails-in-grace-loop", "kill-snapshot-raises"):
+    for fault in ("table-raises", "empty-table", "proc-listing-oserror", "ps-fails", "proc-garbage", "snapshot-fails-in-grace-loop",
+                  "kill-snapshot-raises"):
         label = fault.replace("-", "_")
         setattr(TerminateSurvivesSnapshotFaultsTests, f"test_sigterm_is_still_delivered_when_{label}",
                 lambda self, name=fault: self.check_sigterm_still_delivered(name))
@@ -454,6 +455,101 @@ class SchedulerKillItemsWarnsTests(base._SchedulerFixture):
         self.assert_all_gone()
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# 重要 3：pid 复用保护（pid_start）
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class StalePidTests(_Group):
+    PARENT = textwrap.dedent(
+        '''
+        import subprocess, sys, time
+        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", sys.argv[1] + "-child"], start_new_session=True)
+        time.sleep(300)
+        '''
+    )
+
+    def unrelated_group(self) -> subprocess.Popen:
+        """无关的进程组组长，它下面带一个另起会话的子进程（正是旧版只动进程组、新版会连子树一起杀的那种对象）。"""
+
+        parent = subprocess.Popen([sys.executable, "-c", self.PARENT, self.marker], start_new_session=True)
+        threading.Thread(target=parent.wait, daemon=True).start()
+        self.addCleanup(lambda: parent.poll() is None and parent.kill())
+        wait_until(lambda: len(marked_processes(self.marker)) == 2, "无关的进程组没有起来")
+        return parent
+
+    def test_a_reused_pid_with_a_different_start_identity_is_left_alone(self) -> None:
+        parent = self.unrelated_group()
+        notes: list[str] = []
+        with mock.patch.object(bv, "STOP_GRACE_SECONDS", 1.0):
+            bv._terminate({"pid": parent.pid, "pid_start": "an-older-process-that-held-this-pid"}, notes)
+        time.sleep(0.5)
+        self.assertEqual(len(marked_processes(self.marker)), 2, "无关进程组及其另起会话的子进程必须存活")
+        self.assertIsNone(parent.poll())
+        self.assertTrue(any("复用" in note or "另一个进程" in note for note in notes), f"输出里写明没有动手：{notes}")
+
+    def test_legacy_payload_without_pid_start_only_gets_the_process_group_treatment(self) -> None:
+        """旧结论（没有 pid_start）：只按旧行为处理进程组，绝不做整棵子树清理——另起会话的子进程存活。"""
+
+        parent = self.unrelated_group()
+        notes: list[str] = []
+        with mock.patch.object(bv, "STOP_GRACE_SECONDS", 1.0):
+            bv._terminate({"pid": parent.pid}, notes)
+        wait_until(lambda: parent.poll() is not None, "旧行为：进程组组长被 SIGTERM／SIGKILL")
+        self.assertEqual(len(marked_processes(self.marker)), 1, "另起会话的子进程不在进程组里，旧行为不动它")
+        self.assertTrue(any("pid_start" in note for note in notes), notes)
+
+    def test_matching_start_identity_cleans_the_whole_tree(self) -> None:
+        parent = self.unrelated_group()
+        with mock.patch.object(bv, "STOP_GRACE_SECONDS", 1.0):
+            notes = bv._terminate({"pid": parent.pid, "pid_start": bv.process_identity(parent.pid)})
+        self.assertEqual(notes, [])
+        wait_until(lambda: not marked_processes(self.marker), "核对通过后整棵子树（含另起会话的）被清掉")
+
+    def test_leader_gone_but_group_alive_still_cleans_the_tree(self) -> None:
+        """run 进程已经退出而同组成员还在（10-14 事故的形态）：内核在进程组存在期间不会复用这个 pid 号，放行子树清理。"""
+
+        member = (
+            "import subprocess, sys, time\n"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)', sys.argv[1] + '-detached'], start_new_session=True)\n"
+            "time.sleep(300)\n"
+        )
+        script = textwrap.dedent(
+            '''
+            import subprocess, sys, time
+            subprocess.Popen([sys.executable, "-c", sys.argv[2], sys.argv[1] + "-member"])
+            time.sleep(0.8)
+            '''
+        )
+        leader = subprocess.Popen([sys.executable, "-c", script, self.marker, member], start_new_session=True)
+        identity = bv.process_identity(leader.pid)
+        wait_until(lambda: len(marked_processes(self.marker)) == 3, "成员没有起来")
+        leader.wait(timeout=20)   # 组长走了并被回收，同组成员还在
+        self.assertTrue(bv._group_alive(leader.pid))
+        with mock.patch.object(bv, "STOP_GRACE_SECONDS", 1.0):
+            notes = bv._terminate({"pid": leader.pid, "pid_start": identity})
+        self.assertEqual(notes, [])
+        wait_until(lambda: not marked_processes(self.marker), "组长已走时同组成员与另起会话的后代都要清掉")
+
+    def test_unreadable_start_identity_falls_back_to_the_group_with_a_note(self) -> None:
+        leader, work = self.signal_group("record")
+        payload = self.payload(leader)
+        with mock.patch.object(bv, "_probe", side_effect=OSError(errno.EMFILE, "Too many open files")):
+            notes = bv._terminate(payload)
+        self.assertTrue((work / "leader.termed").exists())
+        wait_until(lambda: not bv._group_alive(leader.pid), "整组退出")
+        self.assertTrue(any("核对不了身份" in note for note in notes), notes)
+
+    def test_process_identity_is_stable_and_none_for_missing_pids(self) -> None:
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", self.marker], start_new_session=True)
+        self.addCleanup(self.reap, child)
+        wait_until(lambda: bv.process_identity(child.pid) is not None, "读不到刚起的进程的启动标识")
+        first = bv.process_identity(child.pid)
+        self.assertTrue(first)
+        self.assertEqual(bv.process_identity(child.pid), first)
+        self.assertIsNone(bv.process_identity(2 ** 22 + 4321))
+
+
 class EarlierSnapshotIsKeptTests(base._Fixture):
     def test_earlier_snapshot_is_still_used_when_every_later_one_fails(self) -> None:
         """第一次快照（SIGTERM 之前）取到了整棵树；之后每次重取都失败。组长与执行器替身收到 SIGTERM 就退出，另起会话的单元、嵌套、
@@ -469,7 +565,7 @@ class EarlierSnapshotIsKeptTests(base._Fixture):
         self.addCleanup(lambda: leader.poll() is None and leader.kill())
         wait_until((work / "ready").exists, "进程组没有就绪")
         wait_until(lambda: len(marked_processes(self.marker)) == 5, f"进程数不对：{marked_processes(self.marker)}")
-        payload = {"pid": leader.pid}
+        payload = {"pid": leader.pid, "pid_start": bv.process_identity(leader.pid)}
         real = bv._tree_snapshot
         calls = {"n": 0}
 
