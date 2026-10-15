@@ -476,6 +476,28 @@ class OutputTrackerV4:
 
     ``observe_event`` 返回「本事件是否改变了名字空间状态」：解析器据此推进变更纪元并决定能否对只读事件去重；
     重放端用同一个返回值重算纪元，所以任何会改名字空间的分支都必须返回 True，反之必须返回 False。
+
+    WP-R8（乱序容忍：待补证／销账）：``strace -f`` 按「各被追踪进程的系统调用返回被 tracer 处理的先后」逐行输出，不是因果顺序——
+    进程 A 的 ``openat(O_CREAT)`` 在内核里早已完成，但 A 停在退出点等 tracer 取走，进程 B 紧接着的 ``stat`` 却先被打印。
+    于是私有盘里会出现「先成功读到、后看到创建事件」的名字（10-15 ARM64 实测：supervisor 心跳进程写 minute-ledger.ndjson、主进程 stat 它）。
+    原规则把这样的成功读取立即判为「首次读取前未证明由本轮生成」，把正常行为判成失败。现在改成两步：
+
+    * **待补证**：私有盘内一个**未证明名字**上的、**不改名字空间且要求对象存在**的访问——kind 不是 write 也不是 missing 的事件，
+      不论成功还是失败（EACCES、EINVAL 一类的失败同样意味着对象存在）——不立即判问题，而是把这个名字记进 ``awaiting``。
+      这类事件仍然返回 False（没有改变名字空间：对象早已存在，跟踪器只是记了一笔债）；
+    * **销账**：之后只要出现**同一个名字**的创建——``O_CREAT`` 的 open／creat、mkdir／mkdirat、symlink／symlinkat、
+      link／linkat 的目的名字、rename／renameat／renameat2 把别处对象（目录则连同子树）改名到该名字——就从 ``awaiting`` 里划掉；
+    * **清算**：轨迹结束仍未销账的名字，在 ``report()`` 里以与原来相同的文字（「首次读取前未证明由本轮生成：」+ 路径）报为问题。
+      ``report()`` 只读取不修改状态，多次调用结果相同，重放端据此与文档里的 ``outputs`` 逐字相等比对。
+
+    为什么这样安全（无需给乱序容忍窗口设上限）：私有盘是单元启动时检查为空的 tmpfs（``empty_temporary_root``），挂载在新的
+    挂载命名空间里，只有本单元被追踪的进程树能在里面创建对象；每一种创建方式要么被跟踪器建模，要么被解析器登记未解析
+    （bind、mknodat 判问题、AT_EMPTY_PATH 的 linkat 另一端不在盘内……）而使整份轨迹失败。所以盘内任何存在的名字必有一次可见的建模
+    创建，该创建事件一定出现在轨迹里（只是可能比读取晚），而「从未创建却存在」的名字永远销不了账、必在清算时被报出。
+    窗口不设上限的理由：乱序量取决于 tracer 的唤醒调度（可达上千条事件），任何上限都是任意数字；而销账只认**同一个名字**，
+    窗口多长都不会让一个从未被创建的名字通过。读取内容类事件（``read``）比 ``stat`` 多暴露的是文件内容，但盘内内容只可能来自
+    本单元自己的进程（它读取的宿主文件各有自己的宿主路径事件，由宿主快照逐项核对），所以并不新增任何宿主信息；
+    宿主路径（不在私有盘内）不适用本规则，仍由宿主快照与策略声明判定。
     """
 
     def __init__(self, contract: dict[str, Any]) -> None:
@@ -492,6 +514,9 @@ class OutputTrackerV4:
         self.link_text: dict[int, str] = {}
         self.covered: set[str] = set()
         self.problems: set[str] = set()
+        # WP-R8：待补证的名字（当时未证明、却已被成功读取／探测的名字），按首次出现顺序；值恒为 None，只用字典保持确定的顺序。
+        # 创建该名字的事件到达时划掉；轨迹结束仍留在这里的，由 ``report()`` 报为问题。
+        self.awaiting: dict[str, None] = {}
         # 上一条事件若创建了某个文件名，这里记着它的路径；下一条事件一到就被取出并清除（只对紧邻的下一条事件有效）。只服务于
         # O_CREAT|O_EXCL 的矛盾自检：解析器对一次 openat／open 调用产生两条紧挨着的事件（请求路径一条、返回描述符的真实路径一条，
         # 路径相同），创建名字的是第一条，第二条落在刚创建的名字上，不是矛盾。不影响任何事件的返回值，也不影响名字表。
@@ -506,6 +531,14 @@ class OutputTrackerV4:
         """名字当前指向的对象类型；未知名字返回 None。"""
         obj = self.names.get(path)
         return None if obj is None else self.kinds[obj]
+
+    def _await(self, path: str) -> None:
+        """WP-R8：记一笔待补证——未证明的名字被成功读取／探测，等同名字的创建事件来销账（见类说明）。"""
+        self.awaiting.setdefault(path, None)
+
+    def _settle(self, path: str) -> None:
+        """WP-R8：名字刚被绑定到一个对象（创建、硬链接目的、rename 带入），划掉它的待补证。只认同一个名字。"""
+        self.awaiting.pop(path, None)
 
     def _create(self, path: str, kind: str, text: str | None = None) -> None:
         """在已证明的父目录下新建对象并绑定名字（调用方已确认父目录已知、路径未知）。
@@ -522,6 +555,7 @@ class OutputTrackerV4:
             self.entries[path] = 0
         if kind == "symlink":
             self.link_text[obj] = text if text is not None else ""
+        self._settle(path)
 
     def _unbind(self, path: str) -> None:
         """解绑一个名字；对象失去最后一个名字后消亡。目录解绑前调用方须确认它没有子项。"""
@@ -546,6 +580,7 @@ class OutputTrackerV4:
             self.names[renamed] = self.names.pop(item)
             if item in self.entries:
                 self.entries[renamed] = self.entries.pop(item)
+            self._settle(renamed)
         self.entries[os.path.dirname(source)] -= 1
         self.entries[os.path.dirname(destination)] += 1
 
@@ -656,9 +691,9 @@ class OutputTrackerV4:
             return self._create_symlink(event)
         known = path in self.names
         if kind != "write":
-            # 读取、探测、执行、列目录：首次访问必须是本轮已证明的名字。
+            # 读取、探测、执行、列目录：名字未证明时不立即判问题，记待补证，等同名字的创建事件来销账（WP-R8，见类说明）。
             if not known:
-                self._problem("首次读取前未证明由本轮生成：", path)
+                self._await(path)
             return False
         parent_is_directory = self._kind_of(os.path.dirname(path)) == "directory"
         if name in {"mkdir", "mkdirat"}:
@@ -699,7 +734,8 @@ class OutputTrackerV4:
         """单路径调用失败。
 
         * 探测不存在的路径（kind 为 missing，即 ENOENT／ENOTDIR）：未知路径合法；已知名字却报不存在，轨迹与归属状态矛盾。
-        * 读取、探测、执行、列目录类调用的其他失败：它们既不创建也不删除任何东西，沿用旧规则，只要求访问的是本轮已证明的名字。
+        * 读取、探测、执行、列目录类调用的其他失败：它们既不创建也不删除任何东西，沿用旧规则，只要求访问的是本轮已证明的名字
+          （未证明的名字记待补证，等创建事件销账，见类说明 WP-R8；轨迹结束仍未销账才报问题）。
           这一条不能收紧：python3 启动脚本时 glibc 的 realpath 会对私有目录下每一级路径 readlinkat 并得到 EINVAL，
           执行没有执行权限的假程序会得到 EACCES，旧跟踪器对已证明路径上的这类失败一向放行。
         * 写类调用失败（创建、删除、改名、改元数据）：按错误码与已知状态判。EEXIST 落在已知名字上是合法的「创建被拒绝」，
@@ -712,8 +748,9 @@ class OutputTrackerV4:
             if known:
                 self._problem("已生成对象的缺失探测与轨迹矛盾：", path)
         elif kind != "write":
+            # 同上：失败的读取类调用（EACCES、EINVAL……）同样意味着对象存在，名字未证明时记待补证。
             if not known:
-                self._problem("首次读取前未证明由本轮生成：", path)
+                self._await(path)
         elif error == "EEXIST":
             if not known:
                 self._problem("EEXIST 落在未知路径，与轨迹矛盾：", path)
@@ -799,6 +836,7 @@ class OutputTrackerV4:
             self.names[destination] = obj
             self.links[obj] += 1
             self.entries[os.path.dirname(destination)] += 1
+            self._settle(destination)
             return True
         return False
 
@@ -842,7 +880,11 @@ class OutputTrackerV4:
         return True
 
     def report(self) -> dict[str, Any]:
-        return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(self.problems)}
+        """覆盖路径与问题清单。清算在这里完成：仍待补证的名字按原文字报为「首次读取前未证明由本轮生成」。
+        只读取状态、不修改，所以可以任意次调用（解析器出文档时一次，重放端复核时一次），结果相同。"""
+        problems = set(self.problems)
+        problems.update("首次读取前未证明由本轮生成：" + path for path in self.awaiting)
+        return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(problems)}
 
 
 def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: bool = False) -> dict[str, Any]:
@@ -997,7 +1039,9 @@ def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tupl
         if tracker.observe_event(event):
             epoch += 1
         seen.setdefault(event["path"], set()).add(event["kind"])
-    if tracker.report() != runtime.get("outputs") or tracker.problems:
+    # WP-R8：清算后的问题（含仍待补证的名字）才是完整结论，所以看 report() 而不是只看 tracker.problems 属性。
+    report = tracker.report()
+    if report != runtime.get("outputs") or report["problems"]:
         raise RuntimeContractError("生成输出存在先读后写、来源不明或链接越界")
     return tracker, seen
 
