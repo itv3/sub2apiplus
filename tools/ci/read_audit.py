@@ -31,6 +31,11 @@ peer、epoch），两路径调用的两端按调用编号配对，失败调用�
 schema_version 分派，所以 v3 的已封存凭证永远按旧合同只读验真。control 四链的 sidecar 原样复用本模块，不传该开关，
 仍然生产并重放 v3。
 
+WP-R2（解析器加固第二轮）：ARM64 真实环境里把正常行为判成未解析的几处缺口，只在 v4 合同下放宽（v3 一字不变）：失败的 getcwd
+（ERANGE／ENOENT）、``utimensat(fd, NULL, …)``（futimens）、解码后的 ``openat2``（标志取自 ``struct open_how``）、AF_UNIX 流式
+套接字的创建，以及连接 AF_UNIX 绝对路径得到 ENOENT（登记为对该路径的 missing 探测）。v4 的 strace 选项因此多解码 openat2 与
+connect、多跟踪 bind；v4 的输出事件上限单列为 ``MAX_OUTPUT_EVENTS_V4``。每处放宽的依据与相邻的仍被拒绝的情形见各辅助函数的说明。
+
 子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
 """
@@ -228,6 +233,103 @@ def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
         re.escape(key) + r"\s*=\s*(?:S_IFREG|S_IFDIR)(?:\|(?:0[0-7]+|S_ISUID|S_ISGID|S_ISVTX))*", modes[0]) is not None
 
 
+# ---------------------------------------------------------------------------
+# WP-R2：以下辅助函数与常量只服务于 v4 轨迹合同下的几处放宽（ARM64 真实环境把正常行为判成未解析的缺口）。
+# 每一处放宽都写明“这个系统调用在这种情形下能暴露什么宿主信息”，暴露不了才放宽；解析器里的调用点都以 ``self.trace_v4`` 为
+# 前提，v3（含 control 四链与 declared_sampler 复用的默认路径）的行为一字不变。
+# ---------------------------------------------------------------------------
+
+# 失败的 getcwd 只带这两个错误码：ERANGE（缓冲区装不下，glibc 会换更大的缓冲区重试，ARM64 实测约 5500 次）与 ENOENT
+# （工作目录已被删除）。失败时内核不向缓冲区写入任何路径，缓冲区参数只是指针；两个结果都只取决于调用方自己的参数或进程自己的
+# 工作目录状态（目录被删要么是被测程序自己删的——写调用已单独登记，要么是宿主目录漂移——快照比对会拦下），不读取宿主路径信息。
+# 其他错误码（实测没有出现）和成功却取不到字符串的 getcwd 仍判未解析。
+_GETCWD_BENIGN_ERRNOS = frozenset({"ERANGE", "ENOENT"})
+_FD_ANNOTATION = re.compile(r"(\d+)<(" + _ANN + r")>")
+_SOCKET_ANNOTATION = re.compile(r"\d+<socket:\[\d+\]>")
+_OPEN_FLAG_NAME = re.compile(r"O_[A-Z0-9_]+")
+_UNIX_DOMAINS = frozenset({"AF_UNIX", "AF_LOCAL"})
+# 只放行 AF_UNIX 流式套接字：它能携带路径的系统调用只有 bind 与 connect（流式套接字用 sendto 带地址会得到 EISCONN／被忽略），
+# 而 v4 的 strace 选项已把 bind、connect 都纳入跟踪；数据报套接字可以 sendto 带路径地址、而 sendto 太常见不能逐条跟踪，所以仍判不支持。
+_UNIX_STREAM_FLAGS = frozenset({"SOCK_CLOEXEC", "SOCK_NONBLOCK"})
+
+
+def _futimens_target(arguments: Sequence[str]) -> str | None:
+    """``utimensat(fd, NULL, times, 0)``（即 futimens）的作用对象：路径参数为 NULL 时系统调用作用于 fd 本身。
+
+    只认完整形态：四个参数、路径是 NULL、标志是 0（NULL 路径配非零标志内核返回 EINVAL）、第一个参数是真实描述符
+    （十进制编号，不是 AT_FDCWD——AT_FDCWD 配 NULL 路径内核得到 EFAULT）并带 ``-y`` 的路径标注，且标注是绝对路径
+    （管道、套接字之类的标注不是路径）。返回标注里的路径；任何不符返回 None，由调用方登记未解析。
+    暴露的信息：只是对该已打开对象改时间，不读取任何宿主内容；对象路径照常按“写”登记，宿主路径上的写由读集审计另行拦下。
+    """
+    if len(arguments) != 4 or arguments[1].strip() != "NULL" or arguments[3].strip() != "0":
+        return None
+    match = _FD_ANNOTATION.fullmatch(arguments[0].strip())
+    if match is None:
+        return None
+    path = unescape(match.group(2))
+    if not path.startswith("/") or "\x00" in path:
+        return None
+    return os.path.normpath(path)
+
+
+def _openat2_flags(arguments: Sequence[str]) -> frozenset[str] | None:
+    """``openat2`` 第三个参数 ``struct open_how`` 解码后 ``flags=`` 字段里的打开标志。
+
+    结构只是指针（strace 未解码）、被省略号截断、没有恰好一个 flags 字段，或标志里有不是 ``O_*`` 符号的片段（十六进制残片等）
+    时返回 None——这些情形下标志不可见，不能猜。
+    """
+    if len(arguments) != 4:
+        return None
+    value = arguments[2].strip()
+    if not value.startswith("{") or not value.endswith("}"):
+        return None
+    fields = _call_arguments(value[1:-1], None)
+    flag_fields = [field for field in fields if re.match(r"flags\s*=", field)]
+    if not fields or len(flag_fields) != 1 or any(field == "..." for field in fields):
+        return None
+    names = flag_fields[0].split("=", 1)[1].strip().split("|")
+    if not all(_OPEN_FLAG_NAME.fullmatch(name) for name in names):
+        return None
+    return frozenset(names)
+
+
+def _is_unix_stream_socket(arguments: Sequence[str]) -> bool:
+    """``socket(AF_UNIX|AF_LOCAL, SOCK_STREAM[|SOCK_CLOEXEC][|SOCK_NONBLOCK], 0)``。
+
+    创建一个本机流式套接字本身不读取任何宿主信息（不碰文件系统路径）；之后携带路径的 bind／connect 都在跟踪里单独判。
+    其他域（AF_INET／AF_INET6／AF_NETLINK／AF_PACKET……意味着网络或内核通信）、数据报与其他类型、非零协议一律不在此列。
+    """
+    if len(arguments) != 3:
+        return False
+    domain, kind, protocol = (argument.strip() for argument in arguments)
+    parts = kind.split("|")
+    return (domain in _UNIX_DOMAINS and protocol == "0" and parts[0] == "SOCK_STREAM"
+            and set(parts[1:]) <= _UNIX_STREAM_FLAGS and len(set(parts)) == len(parts))
+
+
+def _connect_unix_path(arguments: Sequence[str]) -> str | None:
+    """``connect(fd<socket:[N]>, {sa_family=AF_UNIX, sun_path="/绝对路径"}, len)`` 里的路径。
+
+    要求：描述符带套接字标注、地址结构被完整解码（strace 选项 verbose=…connect）、恰好两个字段、域是 AF_UNIX、sun_path 是
+    完整的带引号字符串（抽象套接字 ``@"…"``、被截断、缺字段都不是）、路径是不含 NUL 的绝对路径。不符返回 None。
+    """
+    if len(arguments) != 3 or _SOCKET_ANNOTATION.fullmatch(arguments[0].strip()) is None or re.fullmatch(r"\d+", arguments[2].strip()) is None:
+        return None
+    value = arguments[1].strip()
+    if not value.startswith("{") or not value.endswith("}"):
+        return None
+    fields = _call_arguments(value[1:-1], None)
+    if len(fields) != 2 or fields[0] not in {"sa_family=" + domain for domain in _UNIX_DOMAINS}:
+        return None
+    match = re.fullmatch(r'sun_path="(' + _ESC + r')"', fields[1])
+    if match is None:
+        return None
+    path = unescape(match.group(1))
+    if not path.startswith("/") or "\x00" in path:
+        return None
+    return os.path.normpath(path)
+
+
 class AuditError(RuntimeError):
     """审计配置或轨迹文件不可用。"""
 
@@ -383,7 +485,7 @@ class TraceParser:
             if key in self.seen_events:
                 return
             self.seen_events.add(key)
-        # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。
+        # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。v4 用自己的上限（见常量处的版本语义说明）。
         if len(self.output_events) < MAX_OUTPUT_EVENTS_V4:
             self.output_events.append(event)
         else:
@@ -505,6 +607,14 @@ class TraceParser:
             return
         failed = errno is not None
         if name in _DIRFD_READ or name in _DIRFD_PROBE or name in _DIRFD_WRITE or name in _DIRFD_EXEC:
+            if self.trace_v4 and name == "utimensat":
+                # WP-R2 第 2 项：futimens(fd) 在系统调用层是 utimensat(fd, NULL, times, 0)，作用对象就是 fd 自己，路径参数为
+                # NULL。按“对该描述符标注路径的写（改时间）”登记，kind 与带路径的 utimensat 一致，输出归属跟踪器照对已知对象的
+                # 元数据写处理；没有路径标注的 fd、AT_FDCWD 配 NULL 等异常形态不在此列，落到下面的未解析判定。
+                target_path = _futimens_target(arguments)
+                if target_path is not None:
+                    self._add(target_path, "write", line)
+                    return
             positions = (1,) if name == "symlinkat" else (0, 2) if name in _TWO_PATHS else (0,)
             pairs = []
             for slot, position in enumerate(positions):
@@ -523,8 +633,14 @@ class TraceParser:
                 flags = _operation_flags(body)
                 kind = ("write" if _WRITE_FLAGS.search("|".join(flags)) else "missing" if missing else "stat" if failed
                         else "dir" if "O_DIRECTORY" in flags else "read")
-                if self.strict and name == "openat2" and not flags:
-                    self._unresolved("open-flags-not-decoded:openat2")
+                if self.strict and name == "openat2":
+                    if self.trace_v4:
+                        # WP-R2 第 3 项：v4 的 strace 选项解码 ``struct open_how``，标志只认 ``flags=`` 字段，并要求与整行扫描
+                        # 出的打开标志一致（两者不一致或结构没解码出来 = 标志不可见，判未解析）；v3 沿用“整行没有任何标志”的旧判据。
+                        if _openat2_flags(arguments) != frozenset(flags):
+                            self._unresolved("open-flags-not-decoded:openat2")
+                    elif not flags:
+                        self._unresolved("open-flags-not-decoded:openat2")
             elif name in _DIRFD_WRITE:
                 kind = "write"
             elif name in _DIRFD_EXEC:
@@ -551,6 +667,10 @@ class TraceParser:
         if name in _PLAIN_READ or name in _PLAIN_PROBE or name in _PLAIN_WRITE or name in _PLAIN_EXEC:
             positions = (1,) if name in {"symlink", "inotify_add_watch"} else (0, 1) if name in _TWO_PATHS else (0,)
             strings = [path for position in positions if (path := _path_argument(arguments, position)) is not None]
+            if self.trace_v4 and name == "getcwd" and failed and not strings and errno in _GETCWD_BENIGN_ERRNOS:
+                # WP-R2 第 1 项：失败的 getcwd（ERANGE／ENOENT）缓冲区参数是指针不是字符串，内核没有写出任何路径，不读取宿主
+                # 路径信息：不登记访问、不登记未解析，也不更新工作目录。成功却取不到字符串的 getcwd 仍落到下面的未解析判定。
+                return
             if self.strict and pid not in self.cwd and any(path and not path.startswith("/") for path in strings):
                 self._defer(pid, line)
                 return
@@ -591,6 +711,18 @@ class TraceParser:
                 if joined:
                     self.cwd[pid] = joined
             return
+        if self.trace_v4 and name == "socket" and _is_unix_stream_socket(arguments):
+            # WP-R2 第 4 项（一）：创建本机流式套接字本身不暴露宿主信息，不登记未解析；携带路径的 bind／connect 另行判定
+            # （v4 的 strace 选项把 bind 也纳入跟踪，bind 落到下面的 unsupported-call:bind）。
+            return
+        if self.trace_v4 and name == "connect" and errno == "ENOENT":
+            # WP-R2 第 4 项（二）：连接 AF_UNIX 绝对路径得到 ENOENT（glibc 的 nscd／NSS 探测）。结果取决于该宿主路径是否存在，
+            # 所以登记为对该路径的“missing”探测访问，由策略的宿主路径声明决定通过与否。成功、ECONNREFUSED、EACCES 等任何其他
+            # 结果（意味着与外部进程通信或权限探测）、相对路径、抽象套接字、网络地址都不进这里，保持 unsupported-call:connect。
+            socket_path = _connect_unix_path(arguments)
+            if socket_path is not None:
+                self._add(socket_path, "missing", line)
+                return
         if self.strict:
             self._unresolved("unsupported-call:" + name)
 
@@ -688,9 +820,18 @@ def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], pyth
     # 文件描述符切目录、命名空间变更和未建模的外部通信必须可见；未知调用保持失败关闭。
     # 目录枚举只跟踪 getdents64：目录项只在出现 getdents64 枚举事件时绑定（见解析器里 getdents64 分支的注释）。ARM64 没有
     # getdents（非 64）系统调用，当前环境不受影响；x86_64 上旧 libc 或静态链接程序用 getdents 枚举目录时，这里观察不到。
-    options = ["-s", "4096", "-e", "verbose=%%stat", "-e", "abbrev=!%%stat",
-               "-e", "trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
-               "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg"] if strict else []
+    verbose = "verbose=%%stat"
+    traced = ("trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
+              "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg")
+    if trace_contract == TRACE_CONTRACT_V4:
+        # WP-R2：只加在 v4 合同上，v3 的命令行逐字节不变（由黄金值测试守住）。
+        #   * 解码 openat2 的 ``struct open_how``（第 3 项，否则标志是指针、不可见）与 connect 的 ``sockaddr``（第 4 项，
+        #     否则目的地是指针、不可见）；必须与 %%stat 合在同一个 verbose= 限定里，不依赖多个同类 -e 的叠加／覆盖语义；
+        #   * 跟踪 bind：socket(AF_UNIX 流式) 放行后，携带路径的调用里 bind（会在宿主路径建套接字文件，或以 EADDRINUSE 暴露
+        #     路径存在与否）原先因 socket 整体不支持而被间接拦住，现在必须自己可见、落到 unsupported-call:bind。
+        verbose += ",openat2,connect"
+        traced += ",bind"
+    options = ["-s", "4096", "-e", verbose, "-e", "abbrev=!%%stat", "-e", traced] if strict else []
     return ["strace", *STRACE_OPTIONS, *options, "-o", "|" + pipe, "--", *argv]
 
 

@@ -1049,7 +1049,18 @@ class WiringTests(AuditFixture):
         v4_pipe = v4[v4.index("-o") + 1]
         self.assertTrue(v4_pipe.endswith("filter --output /out/t.json --strict --runtime-context /out/context.json "
                                          "--trace-contract v4 --root /"), v4_pipe)
-        self.assertEqual([item for item in v4 if item != v4_pipe], [item for item in default if item != pipe])
+        # WP-R2：v4 除了管道里多一个 --trace-contract v4，另有两处选项变化（verbose 多解码 openat2、connect，trace 多跟踪 bind）；
+        # 其余每一个 token 都与 v3 逐字相同（v3 本身的黄金值见 test_ci_read_audit_wp_r2）。
+        expected_v4 = []
+        for item in default:
+            if item == pipe:
+                continue
+            if item == "verbose=%%stat":
+                item = "verbose=%%stat,openat2,connect"
+            elif item.startswith("trace=%file,getdents64"):
+                item += ",bind"
+            expected_v4.append(item)
+        self.assertEqual([item for item in v4 if item != v4_pipe], expected_v4)
 
     def test_filter_subcommand_produces_v4_only_when_asked(self) -> None:
         context = self.base / "context.json"
