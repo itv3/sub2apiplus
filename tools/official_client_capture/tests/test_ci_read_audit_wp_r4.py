@@ -440,6 +440,15 @@ class HostSymlinkLstatTests(R4Fixture):
             with self.subTest(call=call):
                 self.assertEqual(self.reasons_of([self.lstat_line(call=call)], "v3"), {f"symlink-metadata-not-bound:{call}": 1})
 
+    def test_the_host_rule_itself_requires_a_zero_return(self) -> None:
+        """lstat 系成功只会返回 0，所以调用点不会传别的值；规则自己仍把“返回 0”写成条件（直接调用固定它，防止调用点以后变化）。"""
+        parser = self.parse([])
+        arguments = ["AT_FDCWD</repo>", f'"{self.link}"', self.link_struct(), "AT_SYMLINK_NOFOLLOW"]
+        self.assertTrue(parser._host_symlink_lstat("newfstatat", arguments, "1", "0"))
+        for returned in ("1", "-1", "3", "?"):
+            with self.subTest(returned=returned):
+                self.assertFalse(parser._host_symlink_lstat("newfstatat", arguments, "1", returned))
+
 
 # =====================================================================================================================
 # R4-1  自有进程树的 /proc/<pid>/… 与 /proc/self/…
@@ -512,6 +521,14 @@ class ProcUnitInternalTests(R4Fixture):
                  self.stat_line(self.OWN, "/proc/self/task/201"), self.open_line(self.OWN, "/proc/self/task/201/stat"),
                  self.open_line(self.OWN, "/proc/100/task/200/maps")]
         self.assertEqual(set(self.accesses(lines)), {"/etc/hostname", "/etc"})
+
+    def test_only_positive_clone_results_are_pids(self) -> None:
+        """clone 的返回值只有大于 0 才是子进程号（0 是子进程一侧、负数是失败）；/proc/0 不是本轨迹的进程。"""
+        lines = [self.open_line(self.OWN, "/etc/hostname"), f'{self.OWN} clone(child_stack=NULL, flags=SIGCHLD) = 0',
+                 f'{self.OWN} clone(child_stack=NULL, flags=SIGCHLD) = -1 EAGAIN (Resource temporarily unavailable)',
+                 self.open_line(self.OWN, "/proc/0/stat"), self.open_line(self.OWN, "/proc/-1/stat")]
+        accessed = self.accesses(lines)
+        self.assertEqual(set(accessed) - {"/etc/hostname"}, {"/proc/0/stat", "/proc/-1/stat"})
 
     def test_a_pid_known_only_from_its_own_trace_lines_counts_too(self) -> None:
         """fork 的返回行可以晚于子进程自己的输出；任何一方先出现都进集合。"""
@@ -670,6 +687,103 @@ class ProcUnitInternalTests(R4Fixture):
         for label, line in cases.items():
             with self.subTest(label=label):
                 self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1}, label)
+
+
+# =====================================================================================================================
+# R4-2 / R4-3  /dev/tty 的失败写探测与 /dev/null 的读写：核对结论是“无需改动”，这里固定它并固定相邻形态仍被拒绝
+# =====================================================================================================================
+
+
+class DevNullAndTerminalTests(R4Fixture):
+    """调度者的普查把 ``/dev/tty``（kinds ``["write"]``）和 ``/dev/null``（``write``）列为未声明读取，但**整份真实语料**走完整套
+    严格审计（探查脚本在会话暂存目录 ``wp-r4/corpus_covered.py``）显示它们都已经被 ``replay_runtime`` 覆盖：
+
+    * ``/dev/null``：``kinds ⊆ {read, write, stat}`` 即覆盖（``replay_runtime`` 末尾的固定条款）；
+    * ``/dev/tty``：失败的 ``open/openat`` 且 ``ENXIO``（无控制终端）是合同允许的探测，``terminal_events`` 与访问集合互相印证即覆盖，
+      访问类型叫 ``write`` 还是 ``stat`` 都不影响（事件自带 kind，两边同一个变量）。
+
+    普查里出现在“未声明”清单，是 ``replay_runtime`` 没有成功时（别的缺陷让重放抛错，``runtime_paths`` 为空）所有靠重放覆盖的路径一并显示
+    的假象，不是这两类本身的缺口。所以 R4-2、R4-3 不改任何代码：改了反而会动第二、三轮已固定的失败调用语义（私有盘内失败的创建、
+    EEXIST／ENOENT 的归属判定）。语料里“带写标志却失败”的调用只有两类：``/dev/tty`` ENXIO 与私有盘内 ENOENT/EEXIST，宿主路径上
+    没有任何实例，所以也没有把宿主路径上失败的写打开降级为探测的证据——保持失败关闭（见下面的固定测试）。
+    """
+
+    def chain(self, lines: list[str]) -> tuple[dict[str, Any], dict[str, Any], set[str]]:
+        document = self.document(self.pad(lines))
+        report = self.audit(document)
+        try:
+            covered = runtime.replay_runtime(document, [self.entry])
+        except runtime.RuntimeContractError:
+            covered = set()      # 重放拒绝（例如终端访问超出合同）：没有任何路径被覆盖，整次审计另有 runtime 类 finding
+        return document, report, covered
+
+    def undeclared(self, lines: list[str]) -> list[tuple[str, list[str]]]:
+        _document, report, _covered = self.chain(lines)
+        return [(item["path"], item["kinds"]) for item in report["undeclared"]]
+
+    def test_dev_null_reads_and_writes_are_covered(self) -> None:
+        lines = ['1 openat(AT_FDCWD</repo>, "/dev/null", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3</dev/null>',        # shell 的 >/dev/null
+                 '2 openat(AT_FDCWD</repo>, "/dev/null", O_RDWR|O_CLOEXEC) = 3</dev/null>',                      # subprocess.DEVNULL
+                 '3 openat(AT_FDCWD</repo>, "/dev/null", O_RDONLY) = 3</dev/null>',                              # 读恒空
+                 f'4 newfstatat(AT_FDCWD</repo>, "/dev/null", {DIR_STRUCT.replace("S_IFDIR|0555", "S_IFCHR|0666")}, 0) = 0']
+        document, report, covered = self.chain(lines)
+        self.assertEqual(dict(document["accesses"])["/dev/null"], ["read", "stat", "write"])
+        self.assertIn("/dev/null", covered)
+        self.assertEqual((report["status"], report["undeclared_count"]), ("passed", 0), report["undeclared"])
+
+    def test_the_failed_terminal_probe_is_covered_whatever_its_kind_is_called(self) -> None:
+        """open("/dev/tty", O_RDWR) 在无控制终端时 ENXIO：访问类型是 write（有写标志），重放的终端合同照样覆盖。"""
+        probe = '1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR|O_NONBLOCK) = -1 ENXIO (No such device or address)'
+        document, report, covered = self.chain([probe, '1 stat("/dev/tty", 0x1) = 0'])
+        self.assertEqual(dict(document["accesses"])["/dev/tty"], ["stat", "write"])
+        self.assertIn("/dev/tty", covered)
+        self.assertEqual((report["status"], report["undeclared_count"]), ("passed", 0), report["undeclared"])
+
+    def test_other_devices_and_aliases_are_still_refused(self) -> None:
+        for path in ("/dev/zero", "/dev/urandom", "/dev/random", "/dev/full", "/dev/stdin", "/dev/stdout", "/dev/fd/0", "/dev/shm/x", "/dev/ptmx"):
+            with self.subTest(path=path):
+                self.assertEqual(self.undeclared([f'1 openat(AT_FDCWD</repo>, "{path}", O_RDONLY) = 3<{path}>']), [(path, ["read"])])
+
+    def test_paths_under_dev_null_are_a_known_gap_and_stay_closed(self) -> None:
+        """git 的 core.hooksPath=/dev/null 会 faccessat("/dev/null/reference-transaction")（ENOTDIR，语料里出现过）：不是 /dev/null 本身，
+        目前不覆盖，保持失败关闭（列入未解决问题，不在本轮范围）。"""
+        line = '1 faccessat(AT_FDCWD</repo>, "/dev/null/reference-transaction", X_OK) = -1 ENOTDIR (Not a directory)'
+        self.assertEqual(self.undeclared([line]), [("/dev/null/reference-transaction", ["missing"])])
+
+    def test_a_successful_or_otherwise_failing_terminal_open_is_refused(self) -> None:
+        for line in ('1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR) = 3</dev/tty>',
+                     '1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR) = -1 EACCES (Permission denied)',
+                     '1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR) = -1 ENOENT (No such file or directory)',
+                     '1 chmod("/dev/tty", 0600) = 0'):
+            with self.subTest(line=line):
+                self.assertFalse(self.chain([line])[1]["coverage_complete"])
+
+    def test_an_alias_through_proc_fd_or_a_host_symlink_is_not_the_exact_dev_null_path(self) -> None:
+        """/proc/self/fd/1 → /dev/null：描述符注解里的 /dev/null 被覆盖，但请求路径 /proc/self/fd/1 不在 R4-1 的白名单里，仍是未声明项。
+        指向 /dev/null 的宿主符号链接：host_snapshot 拒绝指向设备的链接，没法声明。"""
+        line = '1 openat(AT_FDCWD</repo>, "/proc/self/fd/1", O_WRONLY) = 3</dev/null>'
+        self.assertEqual(self.undeclared([line]), [("/proc/self/fd/1", ["write"])])
+        alias = self.base / "null-alias"
+        os.symlink("/dev/null", alias)
+        with self.assertRaises(ra.AuditError):
+            ra.host_snapshot_v3(str(alias))
+        line = f'1 openat(AT_FDCWD</repo>, "{alias}", O_WRONLY) = 3</dev/null>'
+        self.assertEqual(self.undeclared([line]), [(str(alias), ["write"])])
+
+    def test_a_failed_write_open_on_a_host_path_is_still_a_write_no_evidence_to_relax(self) -> None:
+        """没有证据就不放宽：宿主路径上失败的带写标志打开仍按 write 登记（语料里只有 /dev/tty 与私有盘内两类）。"""
+        for errno_text in ("EACCES (Permission denied)", "EROFS (Read-only file system)", "ENOENT (No such file or directory)"):
+            with self.subTest(errno=errno_text):
+                line = f'1 openat(AT_FDCWD</repo>, "/etc/shadow", O_WRONLY|O_CREAT, 0600) = -1 {errno_text}'
+                kinds = dict(self.chain([line])[0]["accesses"])["/etc/shadow"]
+                self.assertEqual(kinds, ["write"])
+
+    def test_v3_covers_the_same_two_paths_identically(self) -> None:
+        """重放里的这两条固定条款 v3 本来就有（control 四链与历史凭证依赖它）；本轮没有改它们。"""
+        lines = self.pad(['1 openat(AT_FDCWD</repo>, "/dev/null", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3</dev/null>',
+                          '1 openat(AT_FDCWD</repo>, "/dev/tty", O_RDWR|O_NONBLOCK) = -1 ENXIO (No such device or address)'])
+        document = self.document(lines, contract="v3")
+        self.assertTrue(self.audit(document)["coverage_complete"])
 
 
 if __name__ == "__main__":  # pragma: no cover
