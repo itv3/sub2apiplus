@@ -786,5 +786,83 @@ class DevNullAndTerminalTests(R4Fixture):
         self.assertTrue(self.audit(document)["coverage_complete"])
 
 
+# =====================================================================================================================
+# R4-4  identity-memo（调研结论的可行性证据；不改任何代码）
+# =====================================================================================================================
+
+
+class PrivateIdentityMemoTests(R4Fixture):
+    """``CODEX_UPGRADE_IDENTITY_MEMO`` 指向私有临时盘内的目录时，memo 的读写是普通的“本单元自己生成的输出”。
+
+    背景与结论见提交说明与交付报告：memo 是内容寻址的纯函数缓存（文件名＝键材料摘要，读取时核对键全等、结果摘要、普通文件、
+    属主与 0600），共享时每个受审计单元对 ``<--out-dir>/identity-memo`` 的读写都落在宿主路径上，路径随每轮运行目录变，无法静态声明；
+    推荐把受审计单元的 memo 目录定在各自私有临时盘里（``run_child`` 在子进程环境里把该变量指向 ``<temporary_root>/identity-memo``）。
+    本类用 Python 实际会产生的系统调用序列（``Path.mkdir(parents=True, exist_ok=True)``、``NamedTemporaryFile(delete=False)``、
+    ``os.replace``、``finally`` 里的 ``unlink(missing_ok=True)``、``os.open(O_RDONLY|O_NOFOLLOW|O_NONBLOCK)``）证明：这套读写在 v4 输出归属下
+    整链通过（含同一单元的第二个进程命中、并发首次未命中各自发布），而共享在宿主路径上的同样序列整次失败。
+    """
+
+    DIGEST = "0123456789abcdef" * 4
+
+    def memo(self, relative: str = "") -> str:
+        return f"{self.root}/identity-memo" + (f"/{relative}" if relative else "")
+
+    def sequence(self, pid: int, *, kind: str = "evaluator", suffix: str = "ab12cd34", directory: str | None = None, hit: bool = False,
+                 directory_exists: bool = False) -> list[str]:
+        """一个进程对 memo 的一次访问：未命中（ENOENT）→ 建目录（已存在则 EEXIST）→ 写临时文件 → 原子发布 → 清理 → 再读；命中则只读。"""
+        base = directory or self.memo()
+        final, temporary = f"{base}/{kind}-{self.DIGEST}.json", f"{base}/.{kind}-{self.DIGEST}.json.{suffix}.tmp"
+        read = f'{pid} openat(AT_FDCWD</repo>, "{final}", O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC) = 3<{final}>'
+        if hit:
+            return [read]
+        return [f'{pid} openat(AT_FDCWD</repo>, "{final}", O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC) = -1 ENOENT (No such file or directory)',
+                f'{pid} mkdirat(AT_FDCWD</repo>, "{base}", 0700) = ' + ("-1 EEXIST (File exists)" if directory_exists else "0"),
+                f'{pid} openat(AT_FDCWD</repo>, "{temporary}", O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600) = 4<{temporary}>',
+                f'{pid} renameat(AT_FDCWD</repo>, "{temporary}", AT_FDCWD</repo>, "{final}") = 0',
+                f'{pid} unlinkat(AT_FDCWD</repo>, "{temporary}", 0) = -1 ENOENT (No such file or directory)', read]
+
+    def test_first_miss_then_publish_then_a_second_process_hits(self) -> None:
+        lines = self.sequence(1) + self.sequence(2, hit=True) + self.sequence(2, kind="identity-v2", directory_exists=True)
+        document = self.assertPasses(lines)
+        self.assertEqual(document["runtime"]["outputs"]["problems"], [])
+        paths = {event["path"] for event in document["runtime"]["output_events"]}
+        self.assertIn(self.memo(f"evaluator-{self.DIGEST}.json"), paths)
+        self.assertIn(self.memo(f"identity-v2-{self.DIGEST}.json"), paths)
+
+    def test_two_processes_that_both_miss_publish_to_the_same_name(self) -> None:
+        """并发首次未命中各自计算、各用独立临时文件原子发布：后到的 rename 覆盖先到的同类型文件，合法。"""
+        final = self.memo(f"evaluator-{self.DIGEST}.json")
+        first, second = self.memo(f".evaluator-{self.DIGEST}.json.ab12cd34.tmp"), self.memo(f".evaluator-{self.DIGEST}.json.zz99yy88.tmp")
+        miss = 'openat(AT_FDCWD</repo>, "%s", O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC) = -1 ENOENT (No such file or directory)' % final
+        lines = [f"1 {miss}", f"2 {miss}",                                     # 两个进程都没命中
+                 f'1 mkdirat(AT_FDCWD</repo>, "{self.memo()}", 0700) = 0',
+                 f'2 mkdirat(AT_FDCWD</repo>, "{self.memo()}", 0700) = -1 EEXIST (File exists)',
+                 f'1 openat(AT_FDCWD</repo>, "{first}", O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600) = 4<{first}>',
+                 f'2 openat(AT_FDCWD</repo>, "{second}", O_RDWR|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC, 0600) = 4<{second}>',
+                 f'1 renameat(AT_FDCWD</repo>, "{first}", AT_FDCWD</repo>, "{final}") = 0',
+                 f'2 renameat(AT_FDCWD</repo>, "{second}", AT_FDCWD</repo>, "{final}") = 0',     # 覆盖同类型文件
+                 f'1 unlinkat(AT_FDCWD</repo>, "{first}", 0) = -1 ENOENT (No such file or directory)',
+                 f'2 unlinkat(AT_FDCWD</repo>, "{second}", 0) = -1 ENOENT (No such file or directory)',
+                 f'1 openat(AT_FDCWD</repo>, "{final}", O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC) = 3<{final}>']
+        self.assertPasses(lines)
+
+    def test_the_same_sequence_on_a_shared_host_directory_fails_the_audit(self) -> None:
+        """共享时 memo 目录是 ``<out-dir>/identity-memo``（宿主路径）：每个文件的读、写、发布都是未声明的宿主访问，路径还随每轮变化。"""
+        shared = "/root/docker/capture-cli/evidence/run-20261015T1000/executor/identity-memo"
+        lines = self.sequence(1, directory=shared)
+        document = self.document(self.pad(lines))
+        report = self.audit(document)
+        self.assertFalse(report["coverage_complete"])
+        paths = {item["path"] for item in report["undeclared"]}
+        self.assertIn(f"{shared}/evaluator-{self.DIGEST}.json", paths)
+        self.assertIn(shared, paths)
+
+    def test_a_cache_entry_nobody_in_this_unit_published_is_not_trusted(self) -> None:
+        """私有盘是空盘：读一个本单元没发布过的 memo 文件（例如偷偷从别处复制进来）判“首次读取前未证明由本轮生成”。"""
+        final = self.memo(f"evaluator-{self.DIGEST}.json")
+        lines = self.base_lines() + [f'1 openat(AT_FDCWD</repo>, "{final}", O_RDONLY|O_NOFOLLOW|O_NONBLOCK) = 3<{final}>']
+        self.assertFailsClosed(lines, where="tracker", fragment="首次读取前未证明由本轮生成")
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
