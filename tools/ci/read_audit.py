@@ -62,6 +62,12 @@ WP-R7a（解析器加固第七轮 a，同样只在 v4 合同下，落实第三�
 与跟踪器记着的链接文本交叉核对；（5）删除 ``/proc/self`` 自己的 lstat 豁免（无真实样本支撑，且不可能让任何真实场景多通过一次），
 数字字段加长度上限。逐类全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r7a.py 的模块说明。
 
+WP-R10（解析器加固第十轮，同样只在 v4 合同下）：strace ≥ 5.19 对「已被别的进程原子替换或删除的文件」的描述符／目录注解，在右尖括号之后紧跟
+``(deleted)``（``3</路径>(deleted)``）；心跳文件“写临时文件再改名发布”时，被打开的旧文件在 openat 返回前后被替换，返回行因此多出这一段，
+v3 的结果正则要求注解后直接结尾，同一行登记 openat 三联（dirfd-path-not-resolved、opened-fd-not-resolved、result-or-string-incomplete）。
+v4 另用 ``_RESULT_V4``／``_ANNOTATION_V4``／``_RETURNED_FD_V4``／``_FD_ANNOTATION_V4``：注解之后允许一个紧跟的 ``(deleted)``，路径仍取尖括号里的原路径，
+归属照旧由 ``under(path, root)`` 判；尖括号里面的旧形态不规整。依据与逐项反例见常量处的说明和 tools/official_client_capture/tests/test_ci_read_audit_wp_r10.py。
+
 子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
 """
@@ -188,6 +194,38 @@ _ANNOTATED_VALUE = re.compile(r"<" + _ANN + r">")
 _QUOTED = re.compile(r'"(' + _ESC + r')"')
 # 返回值在行尾：「) = 值[<解析路径>][ 错误码 (说明)]」；从行尾匹配，参数里出现类似字样也不会误判。
 _RESULT = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">)?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
+# 返回描述符的真实路径标注（「) = 数字<路径>」且在行尾）：成功的 open 类调用靠它核对「描述符落在哪里」。
+_RETURNED_FD = re.compile(r"\)\s*=\s*\d+<(" + _ANN + r")>\s*$")
+
+# ---------------------------------------------------------------------------
+# WP-R10（审计解析器加固第十轮，仅 v4）：描述符标注右尖括号之后的 ``(deleted)`` 后缀。
+#
+# 背景（10-15 ARM64 真实严格审计，strace 6.8，选项含 ``-y``）：被打开的 ``heartbeat.json`` 在 openat 返回前后被别的进程用
+# ``renameat`` 原子替换（心跳文件“写临时文件再改名发布”），strace 在读 /proc/<pid>/fd/N 得到「路径 (deleted)」时，把
+# `` (deleted)`` 从路径里剥出来、打在右尖括号**之后**，整行形如
+#     ``<... openat resumed>)           = 3</…/run-9e484e75…/heartbeat.json>(deleted)``
+# v3 的 ``_RESULT``／``_ANNOTATION`` 要求注解后直接结尾，于是 ``result`` 为 None，同一行同时登记 dirfd-path-not-resolved、
+# opened-fd-not-resolved、result-or-string-incomplete 三个未解析原因，单元整体失败。同样的后缀也可能出现在参数里的 fd／目录
+# 注解上（``3</path>(deleted)`` 作 dirfd、``getdents64`` 的目录、``AT_FDCWD</path>(deleted)`` 的工作目录）。
+#
+# 语义：尖括号里的路径仍是该描述符当时指向的路径（内核 d_path 对已脱链的目录项，沿父链给出完整路径再加 `` (deleted)``），
+# ``(deleted)`` 只表示这个路径上的对象之后被替换或删除。解析按尖括号里的原路径登记访问，路径归属（盘内／盘外）仍由
+# ``under(path, root)`` 判，后缀不改变归属——宿主路径照旧按宿主访问登记并要求声明覆盖。
+#
+# 写法（已核对 strace 上游）：``(deleted)`` 紧跟右尖括号、无空格。依据：strace 源码 ``src/util.c`` 的
+# ``print_quoted_string_in_angle_brackets``——先打 ``<`` 路径 ``>``，``deleted`` 为真时再 ``tprints_string("(deleted)")``；NEWS 5.19
+# （2022-08-12）「"(deleted)" 标记现在打在尖括号外面」。5.19 之前把 `` (deleted)`` 留在尖括号里面，那是旧形态。ARM64 的 strace 6.8
+# 实测与此一致。所以只认 ``>(deleted)``；``> (deleted)``（带空格）没有任何版本的真实样本，不接受（失败关闭，测试固定）。刻意**不**接受：
+#   * 尖括号**里面**的旧形态 ``3</x (deleted)>``（strace 5.19 之前）：无法与一个真名为「x (deleted)」的文件区分，
+#     所以仍按字面路径处理（登记的是路径「/x (deleted)」，它没被创建过／没有声明过，自然失败关闭），不在这里规整；
+#   * 返回值数字之前或没有注解时的 ``(deleted)``、多个后缀、任何空格、大小写不同、后缀之后的任何文字：都不是 strace 的输出形态。
+# v3 与 control 四链的 ``_RESULT``／``_ANNOTATION``／``_RETURNED_FD`` 一字不改，解析器按 ``trace_v4`` 在构造时选用下面的 v4 版本。
+# ---------------------------------------------------------------------------
+_DELETED_SUFFIX = r"(?:\(deleted\))?"
+_ANNOTATION_V4 = re.compile(r"(AT_FDCWD|-?\d+)<(" + _ANN + r")>" + _DELETED_SUFFIX)
+_RESULT_V4 = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">" + _DELETED_SUFFIX
+                        + r")?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
+_RETURNED_FD_V4 = re.compile(r"\)\s*=\s*\d+<(" + _ANN + r")>" + _DELETED_SUFFIX + r"\s*$")
 
 
 def _call_arguments(body: str, result: re.Match | None) -> list[str]:
@@ -493,6 +531,7 @@ def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
 # 其他错误码（实测没有出现）和成功却取不到字符串的 getcwd 仍判未解析。
 _GETCWD_BENIGN_ERRNOS = frozenset({"ERANGE", "ENOENT"})
 _FD_ANNOTATION = re.compile(r"(\d+)<(" + _ANN + r")>")
+_FD_ANNOTATION_V4 = re.compile(r"(\d+)<(" + _ANN + r")>" + _DELETED_SUFFIX)   # WP-R10：同 _ANNOTATION_V4，允许尖括号之后的 (deleted)
 _SOCKET_ANNOTATION = re.compile(r"\d+<socket:\[\d+\]>")
 _OPEN_FLAG_NAME = re.compile(r"O_[A-Z0-9_]+")
 _UNIX_DOMAINS = frozenset({"AF_UNIX", "AF_LOCAL"})
@@ -502,17 +541,19 @@ _UNIX_DOMAINS = frozenset({"AF_UNIX", "AF_LOCAL"})
 _UNIX_STREAM_FLAGS = frozenset({"SOCK_CLOEXEC", "SOCK_NONBLOCK"})
 
 
-def _futimens_target(arguments: Sequence[str]) -> str | None:
+def _futimens_target(arguments: Sequence[str], annotation: re.Pattern[str] = _FD_ANNOTATION) -> str | None:
     """``utimensat(fd, NULL, times, 0)``（即 futimens）的作用对象：路径参数为 NULL 时系统调用作用于 fd 本身。
 
     只认完整形态：四个参数、路径是 NULL、标志是 0（NULL 路径配非零标志内核返回 EINVAL）、第一个参数是真实描述符
     （十进制编号，不是 AT_FDCWD——AT_FDCWD 配 NULL 路径内核得到 EFAULT）并带 ``-y`` 的路径标注，且标注是绝对路径
     （管道、套接字之类的标注不是路径）。返回标注里的路径；任何不符返回 None，由调用方登记未解析。
     暴露的信息：只是对该已打开对象改时间，不读取任何宿主内容；对象路径照常按“写”登记，宿主路径上的写由读集审计另行拦下。
+    ``annotation`` 默认是 v3 的原正则（标注后必须直接结尾）；v4 调用方传 ``_FD_ANNOTATION_V4``（WP-R10：标注之后允许 ``(deleted)``，
+    路径取尖括号里的原路径，后缀不改变归属）。
     """
     if len(arguments) != 4 or arguments[1].strip() != "NULL" or arguments[3].strip() != "0":
         return None
-    match = _FD_ANNOTATION.fullmatch(arguments[0].strip())
+    match = annotation.fullmatch(arguments[0].strip())
     if match is None:
         return None
     path = unescape(match.group(2))
@@ -696,6 +737,11 @@ class TraceParser:
         self.trace_v4 = trace_contract == TRACE_CONTRACT_V4
         if self.trace_v4 and (not strict or runtime_context is None):
             raise AuditError("v4 轨迹合同只用于带隔离合同的严格审计")
+        # WP-R10：取描述符注解、结果行、返回描述符路径的三个正则按合同选用。v3（含 control 子类，它们走 v3 构造）用原正则，
+        # 注解之后必须直接结尾；v4 的版本在右尖括号后另允许一个 ``(deleted)``，见常量处的说明。
+        self.annotation_pattern = _ANNOTATION_V4 if self.trace_v4 else _ANNOTATION
+        self.result_pattern = _RESULT_V4 if self.trace_v4 else _RESULT
+        self.returned_fd_pattern = _RETURNED_FD_V4 if self.trace_v4 else _RETURNED_FD
         self.call_id = 0                           # 完整系统调用（unfinished／resumed 拼好之后）的递增编号
         self.call_errno: str | None = None         # 当前调用的错误码，成功为 None
         self.call_flags: frozenset[str] = frozenset()   # 当前调用的 RENAME_* 标志（renameat2）
@@ -741,12 +787,12 @@ class TraceParser:
         self.samples.setdefault(path, line[:SAMPLE_CHARS])
         if self.output_tracker is not None and path == "/dev/tty":
             name, body, succeeded = self.event
-            result = _RESULT.search(body)
+            result = self.result_pattern.search(body)
             self.terminal_events.append({"name": name, "kind": kind, "errno": result.group(2) if result else None,
                                          "succeeded": succeeded})
         if self.output_tracker is not None and _under(path, self.output_tracker.root):
             name, body, succeeded = self.event
-            descriptor = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+            descriptor = self.returned_fd_pattern.search(body)
             target = unescape(descriptor[1]) if descriptor else None
             flags = _operation_flags(body)
             if self.trace_v4:
@@ -835,7 +881,7 @@ class TraceParser:
             if name in _SPAWN:
                 self.spawn_cwd[pid] = self.cwd.get(pid)
             return
-        result = None if unfinished else _RESULT.search(body)
+        result = None if unfinished else self.result_pattern.search(body)
         if self.strict and (result is None or re.search(r'"\s*\.\.\.', body)):
             self._unresolved("result-or-string-incomplete:" + name)
         errno = result.group(2) if result else None
@@ -898,7 +944,7 @@ class TraceParser:
                 # WP-R7a（验收一般-4，纵深防御）：readlink 返回的文本必须与跟踪器记着的链接文本一致，见该方法。
                 self._unresolved("symlink-readlink-text-contradicts-record:" + name)
         for argument in arguments:
-            annotation = _ANNOTATION.fullmatch(argument)
+            annotation = self.annotation_pattern.fullmatch(argument)
             if annotation is None:
                 continue
             if annotation.group(1) == "AT_FDCWD":
@@ -923,7 +969,7 @@ class TraceParser:
                     self.lines -= 1
             return
         if name == "fchdir":
-            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
+            annotation = self.annotation_pattern.fullmatch(arguments[0]) if arguments else None
             if annotation and unescape(annotation[2]).startswith("/") and errno is None:
                 directory = unescape(annotation[2])
                 self.cwd[pid] = directory
@@ -939,7 +985,7 @@ class TraceParser:
         #   * 要在 x86_64 上审计，需要同时做两件事：把 getdents 加进 strace 的 trace 列表，并在这里把它与 getdents64 同样处理
         #     （现在解析器若收到 getdents 行，会按「不支持的调用」登记 unsupported-call:getdents，整条轨迹失败关闭）。
         if name == "getdents64":
-            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
+            annotation = self.annotation_pattern.fullmatch(arguments[0]) if arguments else None
             if annotation:
                 path = unescape(annotation.group(2))
                 if path.startswith("/"):
@@ -955,14 +1001,14 @@ class TraceParser:
                 # WP-R2 第 2 项：futimens(fd) 在系统调用层是 utimensat(fd, NULL, times, 0)，作用对象就是 fd 自己，路径参数为
                 # NULL。按“对该描述符标注路径的写（改时间）”登记，kind 与带路径的 utimensat 一致，输出归属跟踪器照对已知对象的
                 # 元数据写处理；没有路径标注的 fd、AT_FDCWD 配 NULL 等异常形态不在此列，落到下面的未解析判定。
-                target_path = _futimens_target(arguments)
+                target_path = _futimens_target(arguments, _FD_ANNOTATION_V4)
                 if target_path is not None:
                     self._add(target_path, "write", line)
                     return
             positions = (1,) if name == "symlinkat" else (0, 2) if name in _TWO_PATHS else (0,)
             pairs = []
             for slot, position in enumerate(positions):
-                directory = _ANNOTATION.fullmatch(arguments[position]) if position < len(arguments) else None
+                directory = self.annotation_pattern.fullmatch(arguments[position]) if position < len(arguments) else None
                 path = _path_argument(arguments, position + 1)
                 if directory is not None and path is not None:
                     pairs.append((slot, unescape(directory[2]), path))
@@ -1018,7 +1064,7 @@ class TraceParser:
                 if len(pairs) != len(positions):
                     self._unresolved("dirfd-path-not-resolved:" + name)
                 # 返回描述符展示解引用后的真实路径，防止用树内链接掩盖宿主机读取。
-                target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+                target = self.returned_fd_pattern.search(body)
                 if target and name in _DIRFD_READ:
                     self._add(_join(None, unescape(target[1])), kind, line)
                 elif name in _DIRFD_READ and not failed:
@@ -1065,7 +1111,7 @@ class TraceParser:
             if self.strict:
                 if len(strings) != len(positions):
                     self._unresolved("plain-path-not-resolved:" + name)
-                target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+                target = self.returned_fd_pattern.search(body)
                 if target and name in _PLAIN_READ:
                     self._add(_join(None, unescape(target[1])), kind, line)
                 elif name in _PLAIN_READ and not failed:
@@ -1143,7 +1189,7 @@ class TraceParser:
     def _single_path(self, name: str, arguments: Sequence[str], pid: str) -> str | None:
         """lstat 一类单路径调用的规范路径（与后面通用分支的算法一致）；空路径（AT_EMPTY_PATH）或无法还原时返回 None。"""
         if name in _DIRFD_PROBE:
-            directory = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
+            directory = self.annotation_pattern.fullmatch(arguments[0]) if arguments else None
             path = _path_argument(arguments, 1)
             if directory is None or not path:
                 return None
