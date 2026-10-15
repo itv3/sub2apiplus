@@ -219,6 +219,10 @@ _RETURNED_FD = re.compile(r"\)\s*=\s*\d+<(" + _ANN + r")>\s*$")
 #   * 尖括号**里面**的旧形态 ``3</x (deleted)>``（strace 5.19 之前）：无法与一个真名为「x (deleted)」的文件区分，
 #     所以仍按字面路径处理（登记的是路径「/x (deleted)」，它没被创建过／没有声明过，自然失败关闭），不在这里规整；
 #   * 返回值数字之前或没有注解时的 ``(deleted)``、多个后缀、任何空格、大小写不同、后缀之后的任何文字：都不是 strace 的输出形态。
+# 已知的不可区分（WP-R13，独立验收 O-2）：strace ≥ 5.19 把路径末尾的 `` (deleted)`` 一律剥出来打在尖括号之后，所以一个**字面名字**就带空格的
+# ``x (deleted)`` 的活文件，与“已被删除的 x”打印出来完全一样（都是 ``<…/x>(deleted)``）；解析器按剥掉后缀的 ``x`` 登记。后果只可能是**误报**
+# （跟踪器认为 ``x``——而不是真实的 ``x (deleted)``——被创建过，之后对 ``x`` 的缺失探测会被判与轨迹矛盾），不会漏检：请求路径事件里保留的是真名，
+# 宿主路径上的访问仍按真名登记。strace 源码对这一点的依据（``print_quoted_string_in_angle_brackets`` 的实现）未在本机独立核实。
 # v3 与 control 四链的 ``_RESULT``／``_ANNOTATION``／``_RETURNED_FD`` 一字不改，解析器按 ``trace_v4`` 在构造时选用下面的 v4 版本。
 # ---------------------------------------------------------------------------
 _DELETED_SUFFIX = r"(?:\(deleted\))?"
@@ -626,11 +630,15 @@ def _is_unix_stream_socket(arguments: Sequence[str]) -> bool:
             and set(parts[1:]) <= _UNIX_STREAM_FLAGS and len(set(parts)) == len(parts))
 
 
-def _connect_unix_path(arguments: Sequence[str]) -> str | None:
-    """``connect(fd<socket:[N]>, {sa_family=AF_UNIX, sun_path="/绝对路径"}, len)`` 里的路径。
+def _connect_unix_raw_path(arguments: Sequence[str]) -> str | None:
+    """``connect(fd<socket:[N]>, {sa_family=AF_UNIX, sun_path="/绝对路径"}, len)`` 里的**原始**路径（未规范化，WP-R13 T1）。
 
     要求：描述符带套接字标注、地址结构被完整解码（strace 选项 verbose=…connect）、恰好两个字段、域是 AF_UNIX、sun_path 是
     完整的带引号字符串（抽象套接字 ``@"…"``、被截断、缺字段都不是）、路径是不含 NUL 的绝对路径。不符返回 None。
+
+    为什么要单独返回原始写法：内核按原始字符串解析 ``sun_path``（``link/../x`` 会先解引用 ``link`` 再取目标的父目录），而
+    ``os.path.normpath`` 会把它文本规范化成别的路径。符号链接路径形态检查（``TraceParser._check_path_form``）必须看原始写法，
+    所以调用点用本函数取原始路径、先检查再规范化；``_connect_unix_path`` 保留为“已规范化路径”的老接口。
     """
     if len(arguments) != 3 or _SOCKET_ANNOTATION.fullmatch(arguments[0].strip()) is None or re.fullmatch(r"\d+", arguments[2].strip()) is None:
         return None
@@ -646,7 +654,13 @@ def _connect_unix_path(arguments: Sequence[str]) -> str | None:
     path = unescape(match.group(1))
     if not path.startswith("/") or "\x00" in path:
         return None
-    return os.path.normpath(path)
+    return path
+
+
+def _connect_unix_path(arguments: Sequence[str]) -> str | None:
+    """同 ``_connect_unix_raw_path``，但返回规范化之后的路径（老接口，行为不变）。"""
+    raw = _connect_unix_raw_path(arguments)
+    return None if raw is None else os.path.normpath(raw)
 
 
 class AuditError(RuntimeError):
@@ -1057,7 +1071,8 @@ class TraceParser:
                     continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过（读类调用沿用基线；上面的写类调用 v4 另行登记）
                 if ends is not None:
                     self.call_end = (_ROLES[slot], ends[1 - slot])
-                self._add(self._checked_join(directory, path, check=ends is None), kind, line)
+                self._add(self._checked_join(directory, path, check=ends is None),
+                          self._two_path_end_kind(kind, slot, ends, failed, missing), line)
             self.call_end = None
             self._relocate_working_directories(name, ends)
             if self.strict:
@@ -1105,7 +1120,8 @@ class TraceParser:
             for index, path in enumerate(strings):
                 if ends is not None:
                     self.call_end = (_ROLES[slots[index]], ends[1 - slots[index]])
-                self._add(self._checked_join(self.cwd.get(pid), path, check=ends is None), kind, line)
+                self._add(self._checked_join(self.cwd.get(pid), path, check=ends is None),
+                          self._two_path_end_kind(kind, slots[index] if ends is not None else 0, ends, failed, missing), line)
             self.call_end = None
             self._relocate_working_directories(name, ends)
             if self.strict:
@@ -1129,9 +1145,16 @@ class TraceParser:
             # WP-R2 第 4 项（二）：连接 AF_UNIX 绝对路径得到 ENOENT（glibc 的 nscd／NSS 探测）。结果取决于该宿主路径是否存在，
             # 所以登记为对该路径的“missing”探测访问，由策略的宿主路径声明决定通过与否。成功、ECONNREFUSED、EACCES 等任何其他
             # 结果（意味着与外部进程通信或权限探测）、相对路径、抽象套接字、网络地址都不进这里，保持 unsupported-call:connect。
-            socket_path = _connect_unix_path(arguments)
-            if socket_path is not None:
-                self._add(socket_path, "missing", line)
+            raw_socket_path = _connect_unix_raw_path(arguments)
+            if raw_socket_path is not None:
+                # WP-R13（T1，独立验收阻断项 B-1）：sun_path 与其它路径参数一样要过符号链接路径形态检查——存在符号链接对象时，
+                # ``<R>/ln/../zz-sock``（``ln`` 指向宿主目录）规范化成 ``<R>/zz-sock``，内核实际探测的却是宿主路径 ``/zz-sock``；
+                # ``<R>/ln/``、``<R>/ln/.`` 迫使内核解引用链接。形态不安全时登记 symlink-path-form-unsafe（整次审计失败关闭），
+                # 并且**不**登记规范化后的盘内名字——那个名字不是内核探测的路径，登记了反而把宿主探测藏成合法的盘内缺失探测。
+                # 检查必须看未规范化的原始写法，所以这里取原始路径，检查之后才规范化。
+                if self._check_path_form(None, raw_socket_path):
+                    return
+                self._add(os.path.normpath(raw_socket_path), "missing", line)
                 return
         if self.trace_v4 and name in _NAMESPACE_CALLS:
             self.pid_space_untrusted = True
@@ -1172,12 +1195,34 @@ class TraceParser:
             if directory is not None:
                 self.spawn_cwd[pid] = moved(directory)
 
-    def _check_path_form(self, directory: str | None, path: str) -> None:
+    def _two_path_end_kind(self, kind: str, slot: int, ends: Sequence[str | None] | None, failed: bool, missing: bool) -> str:
+        """两路径调用某一端登记给宿主路径审计的访问类型（WP-R13，T2.1，仅 v4）。
+
+        默认就是调用本身的类型（link／rename 一类是 ``write``）。唯一的例外：**失败的**调用，且这一端是**盘外的来源**、另一端
+        （目的）在私有盘内——典型是 ``os.link(宿主缓存文件, 盘内路径)`` 得到 EXDEV（私有盘是独立 tmpfs，跨设备）之后回退到复制。
+        失败的 link／rename 没有任何命名空间效果，对盘外来源做的只是“按路径查找”：存在性（ENOENT／ENOTDIR 记 ``missing``）与所在设备
+        （其余错误码记 ``stat``）。若仍记 ``write``，严格审计里这条宿主路径永远不能被快照覆盖（``strict_audit_reads`` 对文件快照只接受
+        read／exec／stat），整个单元就算输出归属通过也永远不可承接。其余一切情形（成功的调用、盘内来源、盘外目的、两端都在盘内、
+        一端还原不出路径）保持原类型 ``write``，因而不放松任何检出。
+        """
+        if (not self.trace_v4 or ends is None or not failed or slot != 0 or self.output_tracker is None
+                or ends[0] is None or ends[1] is None):
+            return kind
+        root = self.output_tracker.root
+        if not _under(ends[0], root) and _under(ends[1], root):
+            return "missing" if missing else "stat"
+        return kind
+
+    def _check_path_form(self, directory: str | None, path: str) -> bool:
         """v4 的符号链接路径形态检查：存在符号链接对象时，``..``／结尾斜杠等写法可能让规范化后的路径与内核实际解析的对象不同，
-        见 ``_path_form_hazard``。有风险就登记未解析，让整次审计失败关闭。"""
+        见 ``_path_form_hazard``。有风险就登记未解析，让整次审计失败关闭。
+
+        返回是否登记了风险（WP-R13：connect 的调用点据此决定不登记盘内名字；其余调用点沿用“路径照常返回、事件照常记录”，忽略返回值）。"""
         if (self.trace_v4 and _join(directory, path) is not None and self.output_tracker.has_symlinks()
                 and _path_form_hazard(self.output_tracker, directory, path)):
             self._unresolved("symlink-path-form-unsafe")
+            return True
+        return False
 
     def _checked_join(self, directory: str | None, path: str, *, check: bool = True) -> str | None:
         """``_join`` 加 v4 的符号链接路径形态检查（``_check_path_form``）。路径照常返回（事件照常记录）。

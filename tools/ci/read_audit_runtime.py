@@ -87,7 +87,14 @@ UNSUPPORTED_RENAME_FLAGS = frozenset({"RENAME_EXCHANGE", "RENAME_WHITEOUT"})
 # 所以「删除没被观察到」这类真实的状态脱节照旧被发现。取值依据：同一时刻每个被追踪进程至多有一个停在退出点的系统调用，
 # 乱序量级由同时被追踪的进程数决定；10-16 收割 #9 的实测样本只差 1。512 远大于实测、又不是「无限」（无上限会让任何探测都被放过）。
 # 窗口之外还有一道证据门槛（``OutputTrackerV4.probed_missing``）：该名字被绑定之前必须已被探测过缺失，见类说明 WP-R11。
+# 诚实说明（WP-R13）：这道证据门槛的区分力有限——创建者通常“先探测、再创建”，几乎每个被创建的名字都有先行探测，所以它只挡得住从未被探测过缺失的名字；
+# 实际的约束主要来自上面的调用编号窗口。
 LATE_MISSING_PROBE_WINDOW_CALLS = 512
+# WP-R13（T2.2，仅 v4）：打开标志里只要出现其中任何一个，就不是“只读打开”。``O_PATH`` 也在内：它得到的描述符不能读内容，
+# 却能被 ``openat(fd, "")`` 之类转成别的访问，后续使用不可见，不属于本放行要放的“读盘外宿主文件”。
+NOT_READ_ONLY_OPEN_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_TMPFILE", "O_PATH"})
+# 只有这几个调用按“路径打开并返回描述符”处理且带得出描述符真实路径标注（creat 是写，不在此列）。
+FOREIGN_READ_OPEN_NAMES = frozenset({"open", "openat", "openat2"})
 
 
 class RuntimeContractError(RuntimeError):
@@ -548,6 +555,22 @@ class OutputTrackerV4:
     窗口规则要满足「同键 ⇒ 同判定」，所以去重键里加了「这条缺失探测是否落在窗口内」一位（``_late_gap``），否则窗口内被放过的首条探测
     会把之后窗口外、本该判矛盾的同键探测当作重复丢掉。``bound_call``／``probed_missing`` 不进 ``report()`` 与文档，只有名字表、问题清单照旧。
     只放宽这一类矛盾：「创建时已存在」「O_CREAT|O_EXCL 落在已知名字上」「删除未证明的输出」、写类调用的 ENOENT 等一律不变。
+
+    诚实说明（WP-R13，独立验收 O-1）：先行探测证据的区分力有限——「先检查、再创建」是创建者的通用写法，几乎每个被创建的名字都会有先行缺失探测，
+    所以这道门槛能挡住的只是「从未被探测过缺失的名字」（既有测试里的矛盾夹具、单进程里的真矛盾），对真实轨迹几乎不筛选；实际的约束主要来自 512 的调用编号窗口。
+    另外名字被删除后再次被探测缺失、再被创建，证据会重新生效。被放过的只是「盘内已生成名字的缺失探测与记录矛盾」这类一致性自检，不暴露宿主信息，
+    不构成检出损失。
+
+    WP-R13（两处新增放行，都只在盘外宿主路径一侧，不放松对盘内对象的任何判定）：
+
+    * **T2.1 失败的“引入”**（``_two_path_failed_import``）：``os.link(盘外缓存文件, 盘内路径)`` 在独立 tmpfs 上得到 EXDEV，随后回退成复制
+      （``prepare_copy_pycache`` 的做法，每个 .pyc 一次）。盘外来源、盘内目的的**失败** link／rename 没有命名空间效果，盘外一端只是对宿主路径的存在性／所在设备探测，
+      由解析器登记成宿主路径访问（失败时登记 ``stat``／``missing``，不再是永远不可声明的 ``write``）；盘内目的按失败调用的规则判。
+      成功的、盘内来源盘外目的的（任何结果）、另一端还原不出路径的，仍判“另一端不在私有临时盘内”。
+    * **T2.2 经自己的符号链接读盘外宿主文件**（``_own_link_foreign_read``）：采集工具把标准库缓存目录建成指向盘外共享层的符号链接，python 经它成功只读打开 .pyc。
+      成功打开的描述符真实路径标注已被解析器登记为宿主读取；这条放行只在链接对象是本轮创建、标注等于“链接文本＋剩余分量”等全部条件成立时生效，
+      不把盘外路径记成本单元创建的对象，链接对象本身仍是本轮创建的对象（unlink 合法）。放行与否进去重键（只在放行时追加一位）。
+    两处都不改名字表、不推进变更纪元。
     """
 
     def __init__(self, contract: dict[str, Any]) -> None:
@@ -793,7 +816,13 @@ class OutputTrackerV4:
             state += (self._kind_of(os.path.dirname(path)) == "directory",)
             if name in OPEN_NAMES and {"O_CREAT", "O_EXCL"} <= set(event["flags"]):
                 state += (self._created_by_previous == path,)
-        return own + state
+        key = own + state
+        if kind == "read" and self._own_link_foreign_read(event):
+            # WP-R13（T2.2）：经自己的符号链接读盘外文件是否被放行，取决于链接对象的文本（键里的路径版本号、“是否经链接”两位都盖不住：
+            # 同名链接被删除重建成指向别处的链接，这两位都不变）。把放行结论本身放进键：放行的事件与按原规则判问题的事件键不同，
+            # 同键 ⇒ 同判定仍成立。只在放行时追加，所以其余事件的键与以前逐字相同。
+            key += ("own-link-foreign-read",)
+        return key
 
     def consumes_hidden_state(self) -> bool:
         """下一条事件是否会消耗隐藏状态：上一条事件刚创建了某个文件名。这样的事件必须保留（见 ``dedup_key``）。"""
@@ -816,6 +845,11 @@ class OutputTrackerV4:
             # WP-R3：存在符号链接对象时，先判是否会解引用它（没有链接时这一整段被跳过）。排在“返回描述符落点”检查之前：
             # 经链接打开得到盘外的描述符，两种问题都成立，这里的说明更具体；返回描述符那一检查仍是第二道防线，对非链接名字照旧生效。
             if self._through_symlink(path):
+                if self._own_link_foreign_read(event):
+                    # WP-R13（T2.2）：经本单元自己建的符号链接、读盘外宿主文件（描述符的真实路径已由解析器登记为宿主读取）：
+                    # 不是对本单元输出的读取，也不是问题；不记名字、不改状态。注意这里直接返回，跳过下面的“描述符未绑定到私有临时盘”检查——
+                    # 这类读取的描述符按定义就落在盘外，宿主读取由宿主路径声明审计负责。判据与边界见 ``_own_link_foreign_read``。
+                    return False
                 self._problem("路径的中间分量是符号链接，属于跟随式访问：" + name + ":", path)
                 return False
             if self.is_symlink(path):
@@ -937,13 +971,22 @@ class OutputTrackerV4:
         """rename／link 的所有判定都挂在来源端事件上；目的端事件只登记覆盖路径（上面已登记），不改状态。
 
         这样跟踪器在两条事件之间不留隐藏状态：任何一条事件被去重或单独重放，结果都只取决于事件本身与名字表。
+        例外（WP-R13）：另一端在盘外时只有盘内一端产生事件；其中“失败的引入”（盘内目的、盘外来源、调用失败）交给
+        ``_two_path_failed_import``，其余（成功的、盘内来源盘外目的的、另一端还原不出路径的）仍判“另一端不在私有临时盘内”。
         """
         path, role, peer = event["path"], event["role"], event["peer"]
         if event["kind"] != "write" or role not in ROLES:
             self._problem("两路径调用缺少角色标记：", path)
             return False
         if peer is None or not under(peer, self.root):
-            # 另一端在盘外（或无法还原，例如 AT_EMPTY_PATH）：无法证明对象来源或去向，拒绝。
+            if peer is not None and role == "destination" and not event["succeeded"]:
+                # WP-R13（T2.1）：失败的“引入”——盘外来源、盘内目的的 link／rename 失败（典型：``os.link(宿主缓存文件, 盘内路径)`` 得到
+                # EXDEV，随后回退成复制）。失败的调用没有任何命名空间效果，盘外一端只是对宿主路径的存在性／所在设备探测，由解析器登记成
+                # 宿主路径访问、归宿主路径声明审计，不归输出归属；盘内一端仍按失败调用的规则判，见 ``_two_path_failed_import``。
+                self._two_path_failed_import(event)
+                return False
+            # 另一端在盘外（或无法还原，例如 AT_EMPTY_PATH）：无法证明对象来源或去向，拒绝。成功的调用（把宿主文件引入私有盘、或把
+            # 私有盘里的对象送出去）、失败的“送出”（盘内来源、盘外目的）、另一端还原不出路径的，一律仍判问题。
             self._problem("两路径调用的另一端不在私有临时盘内：", path)
             return False
         if role == "destination":
@@ -957,6 +1000,68 @@ class OutputTrackerV4:
             self._problem("不支持 RENAME_EXCHANGE／RENAME_WHITEOUT：", path)
             return False
         return self._rename(path, peer, noreplace="RENAME_NOREPLACE" in event["flags"])
+
+    def _two_path_failed_import(self, event: dict[str, Any]) -> None:
+        """WP-R13（T2.1）：盘外来源、盘内目的（``event`` 是目的端事件）的失败 link／rename，对盘内目的名字按失败调用的规则判。
+
+        * ``EXDEV``：跨设备。私有盘是独立的 tmpfs，来源在盘外时 link／rename 必然得到它——合法的无效果失败（两端都在盘内时它没有
+          解释，仍走 ``_two_path_failed`` 的“未建立合同的失败调用”）；
+        * ``EEXIST``：目的已存在（内核先查目的是否存在、后查跨设备）。目的名字必须是本轮已知的，否则有来源不明的对象，与盘内两端时同口径；
+        * ``ENOENT``／``ENOTDIR``：来源（盘外，宿主事实）不存在，或目的的父目录不存在。盘外来源没有名字表可对照，目的父目录缺失
+          本来也不在 ``_two_path_failed`` 的判定范围，所以不判；
+        * 其余任何错误码（EACCES、EPERM、EROFS、EMLINK……）：与盘内两端时一样，保守判“未建立合同的失败调用”。
+        不改名字表、不返回“改变状态”，所以不推进变更纪元（调用方 ``_two_path`` 返回 False）。
+        """
+        destination, error = event["path"], event["errno"]
+        if error == "EXDEV" or error in {"ENOENT", "ENOTDIR"}:
+            return
+        if error == "EEXIST":
+            if destination not in self.names:
+                self._problem("EEXIST 落在未知路径，与轨迹矛盾：", destination)
+        else:
+            self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{event['name']}:", destination)
+
+    def _own_link_foreign_read(self, event: dict[str, Any]) -> bool:
+        """WP-R13（T2.2，仅 v4）：事件是不是“经本单元自己创建的符号链接、成功地只读打开盘外宿主文件”。
+
+        背景：采集工具给副本树建 ``.pycache-prefix``，把标准库缓存目录建成指向盘外共享层的符号链接（``symlinkat`` 成功，目标在盘外），
+        python 随后经这条链接 ``openat`` 读 ``.pyc``。原规则把路径中间分量是符号链接的一切访问都判“跟随式访问”（因为跟随后的路径是宿主输入，
+        strace 对非描述符调用不会打印）；但**成功打开**的调用会在返回值里带出描述符的真实路径标注（``-y``），解析器已把这个盘外路径登记成宿主读取，
+        由宿主路径声明审计核对内容快照，信息没有被藏起来。这时读取的是宿主文件，不是对本单元输出的读取，也不是问题。
+
+        只有下列条件**全部**满足才放行，任何一条不满足都保持原判定（返回 False）：
+
+        1. 事件是成功的 ``open``／``openat``／``openat2``（不含 ``creat``），``kind`` 为 ``read``，没有错误码，打开标志里没有
+           ``O_WRONLY``／``O_RDWR``／``O_CREAT``／``O_TRUNC``／``O_APPEND``／``O_TMPFILE``／``O_PATH``。失败的打开没有描述符标注，
+           内核实际探测的宿主路径没有登记，必须仍判问题；stat／access／readlink／execve 等跟随式调用同理（没有标注可对）；
+        2. 事件路径本身不是符号链接名字（否则打开会再跟随一层，是第二个链接）；
+        3. 事件路径的真祖先里**恰好一个**是本轮创建、跟踪器仍记着的符号链接名字（两层链接、没有链接都不放行）；
+        4. 事件的 ``target``（描述符真实路径标注）是规范化的绝对路径、在盘外，并且**等于**“该链接记录的链接文本（相对文本按链接所在目录解析）
+           ＋ 请求路径里链接之后的剩余分量”。对不上说明内核实际落点与跟踪器记着的链接不是一回事（链接被没观察到的路径替换、
+           链接目标里还有宿主上的符号链接等），失败关闭。链接文本指向盘内时 ``target`` 在盘内，同样不放行。
+        5. 事件路径是规范化的（事件里的路径恒如此）：``..`` 在解析器一侧已被规范化抹掉，经链接的 ``..``／结尾斜杠写法由解析器的
+           ``symlink-path-form-unsafe`` 登记未解析，整次审计失败关闭，不靠这里。
+        """
+        if not self.link_text:
+            return False
+        path, target = event["path"], event["target"]
+        if (event["name"] not in FOREIGN_READ_OPEN_NAMES or event["kind"] != "read" or not event["succeeded"]
+                or event["errno"] is not None or set(event["flags"]) & NOT_READ_ONLY_OPEN_FLAGS
+                or not isinstance(target, str) or not target.startswith("/") or os.path.normpath(target) != target
+                or under(target, self.root) or os.path.normpath(path) != path or self.is_symlink(path)):
+            return False
+        links = []
+        parent = os.path.dirname(path)
+        while len(parent) > len(self.root):
+            if self.is_symlink(parent):
+                links.append(parent)
+            parent = os.path.dirname(parent)
+        if len(links) != 1:
+            return False
+        link = links[0]
+        text = self.link_text[self.names[link]]
+        base = text if text.startswith("/") else os.path.join(os.path.dirname(link), text)
+        return target == os.path.normpath(os.path.join(base, path[len(link) + 1:]))
 
     def _two_path_failed(self, event: dict[str, Any]) -> None:
         source, destination, error = event["path"], event["peer"], event["errno"]
@@ -1182,6 +1287,11 @@ def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tupl
 
     变更纪元 = 此前使名字空间状态发生变化的事件个数。解析器按名字级版本去重（WP-R9，键里不含纪元），重放端用同一个返回值自己
     重算纪元，每条事件携带的 epoch 必须与重算值一致——任何改状态的事件都不会被去重，被删掉或伪造一条，之后所有事件的纪元都对不上。
+
+    重放保证的边界（WP-R13，独立验收 O-3）：保证的是“**信息承载事件**被删必失败”——改状态的事件（纪元对不上）、构成名字表/问题清单/路径集合/访问类型
+    集合唯一来源的事件（``seen`` 与访问集合不闭合、``outputs`` 与重算不符）、两路径调用的配对事件（调用分组校验）。**对名字表、问题清单、路径集合都
+    无贡献的冗余事件**（例如对已知名字的重复 stat、openat 两条同路径事件中的第二条）被删不会失败——这正是名字级去重的前提（删掉后重放得到的结论不变），
+    不是缺陷。需求里“删掉任意一条事件重放都失败”的字面说法应读作前一种。
     """
     tracker = OutputTrackerV4(contract)
     events = runtime.get("output_events")
