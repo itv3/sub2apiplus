@@ -33,7 +33,7 @@ from unittest import mock
 from tools.ci import read_audit as ra
 from tools.ci import read_audit_runtime as runtime
 from tools.official_client_capture.tests.test_ci_read_audit_v4_tracker import Builder
-from tools.official_client_capture.tests.test_ci_read_audit_wp_r3 import R3Fixture, STAT_LNK
+from tools.official_client_capture.tests.test_ci_read_audit_wp_r3 import R3Fixture, STAT_LNK, STAT_REG
 
 
 def _hazard_before_wp_r7a(tracker: Any, base: str | None, raw: str) -> bool:
@@ -474,3 +474,167 @@ class NamespaceClonesTests(R7aFixture):
         for line in ('100 unshare(CLONE_NEWPID) = 0', '100 clone(child_stack=NULL, flags=CLONE_NEWPID|SIGCHLD) = 400'):
             parser.feed(line)
         self.assertFalse(parser.pid_space_untrusted, "v3 不维护 pid 空间状态")
+
+
+# =====================================================================================================================
+# 纵深防御：readlink 返回的文本、lstat 的 st_size 与记录的链接文本交叉核对
+# =====================================================================================================================
+
+
+class LinkRecordCrossCheckTests(R7aFixture):
+    """跟踪器记着本单元写下的每个符号链接的文本；链接名字上的 readlink 返回什么、lstat 报告的 st_size 是多少，都必须与它一致。
+    这些值本来只可能来自被测代码自己写入的链接，所以正常轨迹永远一致；一旦不一致，说明名字背后的对象已不是本单元写下的那个
+    （例如被某个没观察到的路径替换成别的链接），名字表不能再相信，尽早失败关闭。
+    """
+
+    def link_lines(self, text: str = "testing") -> list[str]:
+        return self.base_lines() + [self.symlink_line("d/l", text)]
+
+    def test_matching_sizes_and_texts_pass_for_every_spelling(self) -> None:
+        for text in ("testing", "/etc/passwd", "a b\\tc", "\\303\\251", "x" * 300):
+            for call in ("lstat", "lstat64", "newfstatat", "fstatat64", "statx"):
+                with self.subTest(text=text, call=call):
+                    self.assertPasses(self.link_lines(text) + [self.lstat_line("d/l", call)])
+            for call in ("readlink", "readlinkat"):
+                with self.subTest(text=text, readlink=call):
+                    self.assertPasses(self.link_lines(text) + [self.readlink_line("d/l", call)])
+
+    def test_the_size_is_counted_in_bytes_after_unescaping(self) -> None:
+        self.assertEqual(self.recorded_size("d/l"), 7, "夹具默认值")
+        self.declare_link_text("d/l", "\\303\\251")                       # é：UTF-8 两个字节
+        self.assertEqual(self.recorded_size("d/l"), 2)
+        lines = self.link_lines("\\303\\251")
+        self.assertPasses(lines + [self.lstat_line("d/l")])
+        self.assertFailsClosed(lines + [self.lstat_line("d/l", struct=STAT_LNK.replace("st_size=7", "st_size=1"))], where="parser",
+                               fragment="symlink-lstat-size-contradicts-text")
+
+    def test_a_size_that_differs_from_the_recorded_text_is_refused(self) -> None:
+        for call in ("lstat", "lstat64", "newfstatat", "fstatat64"):
+            for wrong in ("0", "6", "8", "4096"):
+                with self.subTest(call=call, size=wrong):
+                    line = self.lstat_line("d/l", call, struct=STAT_LNK.replace("st_size=7", f"st_size={wrong}"))
+                    document = self.assertFailsClosed(self.link_lines() + [line], where="parser", fragment="symlink-lstat-size-contradicts-text")
+                    self.assertEqual(document["coverage"]["unresolved_reasons"], {f"symlink-lstat-size-contradicts-text:{call}": 1},
+                                     "只登记这一条专门的原因，不重复登记 symlink-metadata-not-bound")
+
+    def test_statx_size_is_checked_with_its_own_field_name(self) -> None:
+        line = self.lstat_line("d/l", "statx")
+        self.assertPasses(self.link_lines() + [line])
+        wrong = line.replace("stx_size=7", "stx_size=70")
+        self.assertFailsClosed(self.link_lines() + [wrong], where="parser", fragment="symlink-lstat-size-contradicts-text:statx")
+        # st_size 不是 statx 的字段名：写成 st_size 等于没有 stx_size。
+        renamed = line.replace("stx_size=7", "st_size=7")
+        self.assertFailsClosed(self.link_lines() + [renamed], where="parser", fragment="symlink-lstat-size-not-decoded:statx")
+
+    def test_a_size_that_cannot_be_read_unambiguously_is_refused(self) -> None:
+        good = STAT_LNK
+        variants = {
+            "缺字段": good.replace(" st_size=7,", ""),
+            "重复字段": good.replace("st_size=7,", "st_size=7, st_size=7,"),
+            "十六进制": good.replace("st_size=7", "st_size=0x7"),
+            "前导零": good.replace("st_size=7", "st_size=07"),
+            "带符号": good.replace("st_size=7", "st_size=+7"),
+            "负数": good.replace("st_size=7", "st_size=-7"),
+            "名字": good.replace("st_size=7", "st_size=SEVEN"),
+            "带注释": good.replace("st_size=7", "st_size=7 /* x */"),
+            "二十一位数字": good.replace("st_size=7", "st_size=" + "9" * 21),
+            "超长数字串不崩": good.replace("st_size=7", "st_size=" + "9" * 5000),
+        }
+        for label, struct in variants.items():
+            with self.subTest(label=label):
+                self.assertFailsClosed(self.link_lines() + [self.lstat_line("d/l", struct=struct)], where="parser",
+                                       fragment="symlink-lstat-size-not-decoded")
+
+    def test_the_other_lstat_rules_are_untouched_by_the_size_check(self) -> None:
+        """缩略结构、非链接结构、返回非 0 的 lstat 仍走原来的路径（symlink-metadata-not-bound 或矛盾），不进新的核对。"""
+        abbreviated = '{st_mode=S_IFLNK|0777, ...}'
+        _document, reasons, _problems = self.outcome(self.link_lines() + [self.lstat_line("d/l", struct=abbreviated)])
+        self.assertEqual(reasons, {"symlink-metadata-not-bound:newfstatat": 1})
+        _document, reasons, _problems = self.outcome(self.link_lines() + [self.lstat_line("d/l", struct=STAT_REG)])
+        self.assertEqual(reasons, {"symlink-state-contradicts-stat:newfstatat": 1})
+
+    def test_a_readlink_that_returns_another_text_is_refused(self) -> None:
+        for call in ("readlink", "readlinkat"):
+            for label, text in (("完全不同", "elsewhere"), ("多一个字符", "testingx"), ("少一个字符", "testin"), ("大小写", "Testing"),
+                                ("空串", "")):
+                with self.subTest(call=call, label=label):
+                    line = self.readlink_line("d/l", call, text=text)
+                    self.assertFailsClosed(self.link_lines() + [line], where="parser", fragment="symlink-readlink-text-contradicts-record")
+
+    def test_a_readlink_return_value_must_equal_the_number_of_bytes(self) -> None:
+        for call, template in (("readlink", '1 readlink("{path}", "testing", 4096) = {n}'),
+                               ("readlinkat", '1 readlinkat(AT_FDCWD</repo>, "{path}", "testing", 4096) = {n}')):
+            self.assertPasses(self.link_lines() + [template.format(path=self.p("d/l"), n=7)])
+            for wrong in (6, 8, 0, 4096):
+                with self.subTest(call=call, n=wrong):
+                    self.assertFailsClosed(self.link_lines() + [template.format(path=self.p("d/l"), n=wrong)], where="parser",
+                                           fragment="symlink-readlink-text-contradicts-record")
+
+    def test_a_small_buffer_truncates_the_text_and_the_prefix_is_what_must_come_back(self) -> None:
+        path = self.p("d/l")
+        for call, template in (("readlink", '1 readlink("{path}", "{buffer}", {size}) = {n}'),
+                               ("readlinkat", '1 readlinkat(AT_FDCWD</repo>, "{path}", "{buffer}", {size}) = {n}')):
+            ok = [("tes", 3, 3), ("t", 1, 1), ("testing", 7, 7), ("testing", 4096, 7), ("testing", 8, 7)]
+            for buffer, size, n in ok:
+                with self.subTest(call=call, ok=(buffer, size, n)):
+                    self.assertPasses(self.link_lines() + [template.format(path=path, buffer=buffer, size=size, n=n)])
+            bad = [("testing", 3, 7), ("testing", 3, 3), ("tes", 3, 7), ("tex", 3, 3), ("tes", 4096, 3)]
+            for buffer, size, n in bad:
+                with self.subTest(call=call, bad=(buffer, size, n)):
+                    self.assertFailsClosed(self.link_lines() + [template.format(path=path, buffer=buffer, size=size, n=n)], where="parser",
+                                           fragment="symlink-readlink-text-contradicts-record")
+
+    def test_a_readlink_buffer_that_is_not_a_complete_string_cannot_be_confirmed(self) -> None:
+        path = self.p("d/l")
+        for label, line in (("指针", f'1 readlinkat(AT_FDCWD</repo>, "{path}", 0x7ffd1000, 4096) = 7'),
+                            ("被截断", f'1 readlinkat(AT_FDCWD</repo>, "{path}", "testing"..., 4096) = 7'),
+                            ("bufsiz 不是整数", f'1 readlinkat(AT_FDCWD</repo>, "{path}", "testing", sizeof(buf)) = 7'),
+                            ("bufsiz 十六进制", f'1 readlinkat(AT_FDCWD</repo>, "{path}", "testing", 0x1000) = 7')):
+            with self.subTest(label=label):
+                document, reasons, _problems = self.outcome(self.link_lines() + [line])
+                self.assertIn("symlink-readlink-text-contradicts-record:readlinkat", reasons)
+                self.assertFalse(self.audit(document)["coverage_complete"])
+
+    def test_readlink_with_a_relative_path_through_a_directory_descriptor_is_checked_too(self) -> None:
+        d = self.p("d")
+        self.assertPasses(self.link_lines() + [f'1 readlinkat(5<{d}>, "l", "testing", 4096) = 7'])
+        self.assertFailsClosed(self.link_lines() + [f'1 readlinkat(5<{d}>, "l", "other", 4096) = 5'], where="parser",
+                               fragment="symlink-readlink-text-contradicts-record")
+        self.assertFailsClosed(self.link_lines() + [f'1 chdir("{d}") = 0', '1 readlink("l", "other", 4096) = 5'], where="parser",
+                               fragment="symlink-readlink-text-contradicts-record:readlink")
+
+    def test_failed_readlinks_and_other_names_are_not_this_check(self) -> None:
+        """失败的 readlink 没有返回文本（EINVAL 在已证明的链接上是矛盾，由跟踪器判）；不是链接的名字由跟踪器一侧判。"""
+        _document, reasons, problems = self.outcome(self.link_lines() + [f'1 readlinkat(AT_FDCWD</repo>, "{self.p("d/l")}", 0x1, 4096) = '
+                                                                          '-1 EINVAL (Invalid argument)'])
+        self.assertNotIn("symlink-readlink-text-contradicts-record:readlinkat", reasons)
+        self.assertTrue(problems, "跟踪器：已证明的链接上不可能出现 EINVAL")
+        _document, reasons, _problems = self.outcome(self.base_lines() + [self.create_line("d/f"),
+                                                                          f'1 readlinkat(AT_FDCWD</repo>, "{self.p("d/f")}", "x", 4096) = 1'])
+        self.assertNotIn("symlink-readlink-text-contradicts-record:readlinkat", reasons, "普通文件名字：不在记录里，核对不适用")
+
+    def test_a_host_link_is_not_checked_against_any_record(self) -> None:
+        """私有盘之外的链接是宿主访问，由快照绑定其文本；这里没有记录可核对。"""
+        host = '1 readlinkat(AT_FDCWD</repo>, "/usr/bin/python3", "python3.12", 4096) = 10'
+        _document, reasons, _problems = self.outcome(self.link_lines() + [host])
+        self.assertNotIn("symlink-readlink-text-contradicts-record:readlinkat", reasons)
+
+    def test_a_replaced_link_is_caught_before_the_names_table_is_trusted_again(self) -> None:
+        """场景：同名链接被换成文本长度不同的另一个（rename 覆盖）——名字表随之更新，核对使用的是新文本，旧文本的 lstat 不再通过。"""
+        r = self.root
+        lines = self.link_lines("testing") + [self.symlink_line("d/m", "other-link"),
+                                              f'1 rename("{r}/d/m", "{r}/d/l") = 0']
+        self.declare_link_text("d/l", "other-link")
+        self.assertPasses(lines + [self.lstat_line("d/l"), self.readlink_line("d/l")])
+        self.declare_link_text("d/l", "testing")
+        self.assertFailsClosed(lines + [self.lstat_line("d/l"), self.readlink_line("d/l")], where="parser",
+                               fragment="contradicts")
+
+    def test_v3_and_the_default_parser_do_not_run_the_checks(self) -> None:
+        wrong = self.readlink_line("d/l", text="other")
+        document = self.document(self.link_lines() + [wrong], contract="v3")
+        self.assertNotIn("symlink-readlink-text-contradicts-record:readlinkat", document["coverage"]["unresolved_reasons"])
+        parser = ra.TraceParser(strict=True)
+        for line in self.link_lines() + [wrong, self.lstat_line("d/l", struct=STAT_LNK.replace("st_size=7", "st_size=70"))]:
+            parser.feed(line)
+        self.assertEqual({key for key in parser.unresolved_reasons if "contradicts" in key or "size" in key}, set())

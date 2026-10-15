@@ -82,24 +82,45 @@ class R3Fixture(CorpusFixture):
 
     # ---- 创建 ----
     def symlink_line(self, relative: str, text: str = "testing", *, call: str = "symlinkat", result: str = "0") -> str:
+        # WP-R7a：解析器现在把 lstat 的 st_size 和 readlink 返回的文本与记录的链接文本交叉核对，所以夹具要让后面的 lstat／readlink 行与这里
+        # 写下的文本一致：记住每个相对路径最近一次成功创建时的（strace 转义形态的）文本。
+        if result == "0":
+            self.declare_link_text(relative, text)
         if call == "symlink":
             return f'1 symlink("{text}", "{self.p(relative)}") = {result}'
         return f'1 symlinkat("{text}", AT_FDCWD</repo>, "{self.p(relative)}") = {result}'
 
     # ---- 不跟随的元数据 ----
-    def lstat_line(self, relative: str, call: str = "newfstatat", *, struct: str = STAT_LNK, tail: str = "0") -> str:
+    def declare_link_text(self, relative: str, text: str) -> None:
+        """告诉夹具：后面的 lstat／readlink 行里，该相对路径上的链接文本是 ``text``（strace 转义形态）。链接被改名后的新路径、或行在
+        链接创建之前就已求值的用例，用它显式声明。"""
+        self.__dict__.setdefault("recorded_texts", {})[relative] = text
+
+    def recorded_text(self, relative: str, default: str = "testing") -> str:
+        """该相对路径最近一次 ``symlink_line`` 写下的链接文本（strace 转义形态）；没创建过的名字用语料里 git 探测的 ``testing``。"""
+        return self.__dict__.get("recorded_texts", {}).get(relative, default)
+
+    def recorded_size(self, relative: str) -> int:
+        return len(ra.unescape(self.recorded_text(relative)).encode("utf-8", "surrogateescape"))
+
+    def lstat_line(self, relative: str, call: str = "newfstatat", *, struct: str | None = None, tail: str = "0") -> str:
         path = self.p(relative)
+        size = self.recorded_size(relative)
+        struct = STAT_LNK.replace("st_size=7", f"st_size={size}") if struct is None else struct
         if call in {"lstat", "lstat64"}:
             return f'1 {call}("{path}", {struct}) = {tail}'
         if call == "statx":
-            return f'1 statx(AT_FDCWD</repo>, "{path}", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_BASIC_STATS|STATX_MNT_ID, {STATX_LNK}) = {tail}'
+            statx = STATX_LNK.replace("stx_size=7", f"stx_size={size}")
+            return f'1 statx(AT_FDCWD</repo>, "{path}", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_BASIC_STATS|STATX_MNT_ID, {statx}) = {tail}'
         return f'1 {call}(AT_FDCWD</repo>, "{path}", {struct}, AT_SYMLINK_NOFOLLOW) = {tail}'
 
-    def readlink_line(self, relative: str, call: str = "readlinkat", text: str = "testing") -> str:
+    def readlink_line(self, relative: str, call: str = "readlinkat", text: str | None = None) -> str:
         path = self.p(relative)
+        text = self.recorded_text(relative) if text is None else text      # 默认返回创建时写下的文本（WP-R7a 交叉核对）
+        length = len(ra.unescape(text).encode("utf-8", "surrogateescape"))
         if call == "readlink":
-            return f'1 readlink("{path}", "{text}", 4096) = {len(text)}'
-        return f'1 readlinkat(AT_FDCWD</repo>, "{path}", "{text}", 4096) = {len(text)}'
+            return f'1 readlink("{path}", "{text}", 4096) = {length}'
+        return f'1 readlinkat(AT_FDCWD</repo>, "{path}", "{text}", 4096) = {length}'
 
     def unlink_line(self, relative: str, call: str = "unlinkat", flags: str = "0") -> str:
         if call == "unlink":
@@ -507,6 +528,7 @@ class FollowingAccessIsRefusedTests(R3Fixture):
 
     def test_non_following_calls_on_the_link_name_pass(self) -> None:
         l = self.p("d/l")
+        self.declare_link_text("d/l", "/etc/passwd")     # 下面的 lstat／readlink 行先于 with_link 求值，链接文本要提前声明（WP-R7a 交叉核对）
         cases = {
             "lstat": self.lstat_line("d/l", "lstat"), "newfstatat NOFOLLOW": self.lstat_line("d/l"),
             "statx NOFOLLOW": self.lstat_line("d/l", "statx"), "readlink": self.readlink_line("d/l", "readlink"),
@@ -586,6 +608,7 @@ class FollowingAccessIsRefusedTests(R3Fixture):
                         "第 1 道防线关闭后，原有的描述符落点检查仍然拦住经链接读盘外文件")
 
     def test_a_link_pointing_outside_is_not_a_read_by_itself(self) -> None:
+        self.declare_link_text("d/l", "/etc/passwd")     # 参数先于 with_link 求值（WP-R7a 交叉核对）
         lines = self.with_link("/etc/passwd", self.lstat_line("d/l"), self.readlink_line("d/l", text="/etc/passwd"), self.unlink_line("d/l"))
         document = self.assertPasses(lines)
         self.assertNotIn("/etc/passwd", dict((item[0], item[1]) for item in document["accesses"]),
@@ -606,6 +629,8 @@ class FollowingAccessIsRefusedTests(R3Fixture):
         self.assertFailsClosed(self.with_link("/etc/passwd", self.create_line("d/l")), where="tracker")
 
     def test_a_directory_containing_a_link_moves_with_it_and_old_names_are_not_proven(self) -> None:
+        for moved in ("d/n/l", "d/s/l"):
+            self.declare_link_text(moved, "/etc/passwd")   # 链接随目录改名，新路径上的链接文本要声明（WP-R7a 交叉核对）
         lines = self.base_lines() + [self.mkdir_line("d/s"), self.symlink_line("d/s/l", "/etc/passwd"),
                                      f'1 rename("{self.p("d/s")}", "{self.p("d/n")}") = 0', self.lstat_line("d/n/l")]
         self.assertPasses(lines)

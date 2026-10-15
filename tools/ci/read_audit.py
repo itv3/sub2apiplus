@@ -149,6 +149,7 @@ _PLAIN_WRITE = frozenset({"creat", "mkdir", "rmdir", "unlink", "rename", "link",
 _PLAIN_EXEC = frozenset({"execve"})
 _TWO_PATHS = frozenset({"rename", "link", "renameat", "renameat2", "linkat"})
 _RENAME_CALLS = frozenset({"rename", "renameat", "renameat2"})
+_READLINK_CALLS = frozenset({"readlink", "readlinkat"})
 # WP-R7a（验收 I-1）：v4 的“子进程不可观察”判据。v3 只认 CLONE_UNTRACED／CLONE_NEWNS（历史合同，一字不变）；v4 认任何 CLONE_NEW*——
 # CLONE_NEWPID 的子进程在新 PID 命名空间里，它再 clone 返回的是命名空间内的小编号（2、3…），与宿主上的进程撞号；CLONE_NEWUSER／NEWNET／
 # NEWIPC／NEWUTS／NEWCGROUP／NEWTIME 同样意味着命名空间变化，没有建立任何子空间合同（control 四链的 sidecar 早已这样判）。
@@ -348,6 +349,26 @@ def _returned_plain_link_stat(name: str, arguments: Sequence[str], *, proc_self:
         return mode == "S_IFLNK|0777" and (uid, gid, size) == ("0", "0", "0")
     return (mode == "S_IFLNK|0777" and all(value is not None and re.fullmatch(r"0|[1-9][0-9]*", value) for value in (uid, gid, size))
             and int(size) >= 1)  # type: ignore[arg-type]
+
+
+# lstat 一类调用的返回结构在第几个参数（statx 的在第 5 个）。
+_STAT_RESULT_POSITIONS = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
+# 十进制无符号整数（至多 20 位，u64 的上限）：不带前导零、符号、指数；位数上限同时封死超长数字串让 ``int()`` 抛 ValueError 的路径。
+_DECIMAL_U64 = re.compile(r"0|[1-9][0-9]{0,19}")
+
+
+def _stat_field(name: str, arguments: Sequence[str], key: str) -> str | None:
+    """lstat 一类调用的完整返回结构里恰有一个 ``st_<key>``（statx 是 ``stx_<key>``）字段时，返回其取值文本；结构缺失、被省略号缩略、
+    字段缺失或重复时返回 None（WP-R7a：交叉核对用，看不清就不核对、由调用方按“没有确认”处理）。"""
+    position = _STAT_RESULT_POSITIONS.get(name)
+    if position is None or position >= len(arguments):
+        return None
+    value = arguments[position].strip()
+    if not value.startswith("{") or not value.endswith("}") or "..." in value:
+        return None
+    prefix = "stx_" if name == "statx" else "st_"
+    hits = [field for field in _call_arguments(value[1:-1], None) if re.match(re.escape(prefix + key) + r"\s*=", field)]
+    return hits[0].split("=", 1)[1].strip() if len(hits) == 1 else None
 
 
 def _plain_path_text(raw: str | None) -> bool:
@@ -865,6 +886,9 @@ class TraceParser:
                 # 反方向的互相印证：内核说这是普通文件或目录（完整解码、返回 0），跟踪器却记着它是符号链接——名字表与真实状态已经脱节
                 # （例如链接被某个没观察到的路径替换）。不能继续相信后面基于名字表的任何判定，登记未解析。
                 self._unresolved("symlink-state-contradicts-stat:" + name)
+            if self.trace_v4 and name in _READLINK_CALLS and self._readlink_contradicts_record(name, arguments, pid, result.group(1)):
+                # WP-R7a（验收一般-4，纵深防御）：readlink 返回的文本必须与跟踪器记着的链接文本一致，见该方法。
+                self._unresolved("symlink-readlink-text-contradicts-record:" + name)
         for argument in arguments:
             annotation = _ANNOTATION.fullmatch(argument)
             if annotation is None:
@@ -1120,7 +1144,45 @@ class TraceParser:
         if returned != "0" or self.output_tracker is None or not _returned_link_stat(name, arguments):
             return False
         path = self._single_path(name, arguments, pid)
-        return path is not None and _under(path, self.output_tracker.root) and self.output_tracker.is_symlink(path)
+        if path is None or not _under(path, self.output_tracker.root) or not self.output_tracker.is_symlink(path):
+            return False
+        # WP-R7a（验收一般-4，纵深防御）：lstat 暴露的 st_size 就是链接文本的字节数（私有盘是 tmpfs，符号链接的 i_size 恒等于文本长度），
+        # 必须与跟踪器记着的链接文本长度一致。不一致、或返回结构里没有看得懂的 st_size，说明这个名字背后的对象已不是本单元写下的那个
+        # （例如被某个没观察到的路径替换成别的链接）：登记专门的未解析原因，整次审计失败关闭（仍视为已豁免，不再重复登记 symlink-metadata-not-bound）。
+        size = _stat_field(name, arguments, "size")
+        recorded = self._tracked_link_text(path)
+        if size is None or _DECIMAL_U64.fullmatch(size) is None:
+            self._unresolved("symlink-lstat-size-not-decoded:" + name)
+        elif recorded is not None and int(size) != len(recorded.encode("utf-8", "surrogateescape")):
+            self._unresolved("symlink-lstat-size-contradicts-text:" + name)
+        return True
+
+    def _tracked_link_text(self, path: str) -> str | None:
+        """跟踪器此刻记着的、该名字上的符号链接文本（原样，从不解引用）；不是已证明的符号链接名字时返回 None。"""
+        tracker = self.output_tracker
+        obj = None if tracker is None else tracker.names.get(path)
+        return None if obj is None else tracker.link_text.get(obj)
+
+    def _readlink_contradicts_record(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
+        """成功的 readlink／readlinkat 落在跟踪器记着的符号链接名字上时，返回的文本必须就是记录的链接文本（WP-R7a，仅 v4）。
+
+        内核把链接文本的前 ``bufsiz`` 个字节拷进缓冲区、返回拷贝的字节数，所以期望值是“记录文本的字节串截到 bufsiz”，返回值等于它的长度。
+        缓冲区不是完整引号字符串（被 ``-s`` 截断、没有解码）、bufsiz 不是十进制整数、文本或长度对不上，都算矛盾。链接不在私有盘内、
+        跟踪器不认识这个名字时不核对（宿主链接是宿主访问，由快照绑定；未知名字由跟踪器一侧判）。
+        """
+        recorded_text = None
+        path = self._single_path(name, arguments, pid)
+        if path is not None and self.output_tracker is not None and _under(path, self.output_tracker.root):
+            recorded_text = self._tracked_link_text(path)
+        if recorded_text is None:
+            return False
+        buffer_index = 2 if name in _DIRFD_PROBE else 1
+        text = _path_argument(arguments, buffer_index)
+        size = arguments[buffer_index + 1].strip() if buffer_index + 1 < len(arguments) else ""
+        if text is None or _DECIMAL_U64.fullmatch(size) is None:
+            return True
+        expected = recorded_text.encode("utf-8", "surrogateescape")[:int(size)]
+        return text.encode("utf-8", "surrogateescape") != expected or returned != str(len(expected))
 
     def _host_symlink_lstat(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
         """lstat 一类调用成功得到宿主上真符号链接的元数据（WP-R4，R6-2，仅 v4）：放行为对该路径的 stat 访问。

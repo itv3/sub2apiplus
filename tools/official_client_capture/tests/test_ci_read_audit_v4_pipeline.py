@@ -126,15 +126,22 @@ class RandomPipelineTests(AuditFixture):
 
     def render_nofollow_stat(self, event: dict[str, Any], name: str, plain_argument: str, argument: str, anchor: str) -> str:
         """lstat 的五种写法；成功时返回结构按节点真实类型完整解码，失败（缺失探测）时结构是指针。"""
-        mode = STAT_MODES[self.fs.lookup(event["path"]).kind] if event["succeeded"] else None
+        node = self.fs.lookup(event["path"]) if event["succeeded"] else None
+        mode = STAT_MODES[node.kind] if node is not None else None
+        # WP-R7a：解析器把符号链接 lstat 的 st_size 与记录的链接文本长度交叉核对，所以链接的返回结构要带上真实的 st_size。
+        link_size = len(node.text) if node is not None and node.kind == "symlink" else None
+
+        def struct_of(prefix: str) -> str:
+            if mode is None:
+                return "0x1"
+            return f"{{{prefix}mode={mode}" + (f", {prefix}size={link_size}" if link_size is not None else "") + "}"
+
         if name in {"lstat", "lstat64"}:
-            struct = f"{{st_mode={mode}}}" if mode else "0x1"
-            return f'1 {name}("{plain_argument}", {struct}) = {self.result(event, "0")}'
+            return f'1 {name}("{plain_argument}", {struct_of("st_")}) = {self.result(event, "0")}'
         if name == "statx":
-            struct = f"{{stx_mode={mode}}}" if mode else "0x1"
-            return (f'1 statx({anchor}, "{argument}", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_BASIC_STATS, {struct}) = '
+            return (f'1 statx({anchor}, "{argument}", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_BASIC_STATS, {struct_of("stx_")}) = '
                     f'{self.result(event, "0")}')
-        struct = f"{{st_mode={mode}}}" if mode else "0x1"
+        struct = struct_of("st_")
         return f'1 {name}({anchor}, "{argument}", {struct}, AT_SYMLINK_NOFOLLOW) = {self.result(event, "0")}'
 
     def render_pair(self, source: dict[str, Any], destination: dict[str, Any], rng: random.Random) -> str:
