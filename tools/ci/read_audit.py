@@ -55,6 +55,13 @@ links 条目绑定的字段（``_host_symlink_lstat``）；（3）R4-1：本轨�
 （/dev/null 的读写）核对后不需要改解析器：``read_audit_runtime.replay_runtime`` 已覆盖，测试固定了这一点。
 逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r4.py 的模块说明。
 
+WP-R7a（解析器加固第七轮 a，同样只在 v4 合同下，落实第三、四轮两份独立验收报告）：（1）S-1：路径形态检查补上“``..`` 之后的落点是链接名字”
+（``link/x/..`` 沿链接进入宿主目录再文本回到链接名字），并让两路径调用的检查先于任何一端的事件交给跟踪器（``rename("ln", "ln/../y")``，对拍发现）；
+（2）S-2：成功的 rename 之后各进程的文本工作目录跟着目录改名（``_relocate_working_directories``）；（3）I-1：``unobservable-child`` 扩到任何
+``CLONE_NEW*``，出现 CLONE_NEW*／unshare／setns 之后 pid 空间不再可信（``pid_space_untrusted``）；（4）readlink 返回的文本、lstat 的 ``st_size``
+与跟踪器记着的链接文本交叉核对；（5）删除 ``/proc/self`` 自己的 lstat 豁免（无真实样本支撑，且不可能让任何真实场景多通过一次），
+数字字段加长度上限。逐类全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r7a.py 的模块说明。
+
 子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
 """
@@ -313,7 +320,7 @@ def _o_path_directory_open(flags: Iterable[str]) -> bool:
     return "O_DIRECTORY" in flags
 
 
-def _returned_plain_link_stat(name: str, arguments: Sequence[str], *, proc_self: bool = False) -> bool:
+def _returned_plain_link_stat(name: str, arguments: Sequence[str]) -> bool:
     """宿主符号链接 lstat 放宽的结构判据（WP-R4，R6-2，仅 v4 使用）：完整返回结构里的 mode 恰为 ``S_IFLNK|0777``，且 uid、gid、
     size 各恰有一个十进制整数字段、size 至少为 1。
 
@@ -325,29 +332,16 @@ def _returned_plain_link_stat(name: str, arguments: Sequence[str], *, proc_self:
     * uid／gid 缺失、重复或不是十进制整数（例如被省略号截断、写成名字）→ 拒绝；
     * ``size >= 1``：链接文本至少一个字节。procfs 的魔法链接（``/proc/self``、``/proc/<pid>/exe``、``cwd``、``fd/N``）st_size 为 0，
       它们解引用到宿主路径，不是普通磁盘链接，在这里被挡掉（它们也无法有 v3 快照：``host_snapshot`` 拒绝 /proc）。
-    省略号（缩略结构）一律拒绝，不能从路径或缩略结构猜类型。
+    省略号（缩略结构）一律拒绝——哪怕四个必需字段齐备（被截掉的只是不绑定的字段，安全上等价，但“看得清才放行”比逐案推理简单）。
+    数字至多 20 位（``_DECIMAL_U64``，u64 的上限）：真实 strace 的这些字段都是 u32／u64，更长的数字串只可能是构造出来的，
+    同时避免超长数字串让 ``int()`` 抛 ValueError（WP-R7a，第四轮验收一般-1）。
 
-    ``proc_self=True``（WP-R4，R4-1，仅给 ``/proc/self``、``/proc/thread-self`` 自己的 lstat 用）反过来要求 uid、gid、size 都恰为 ``0``：
-    这两个魔法链接由内核固定创建为 root:root、权限 0777、大小 0，返回值只是内核常量，不携带宿主信息。
+    WP-R7a：``/proc/self``、``/proc/thread-self`` 自己的 lstat 不再放行（原 ``proc_self`` 子规则已删除）：没有任何真实样本支撑，
+    而逐分量走 ``/proc/self/…`` 的 realpath 必先 lstat ``/proc`` 本身，那是对宿主 ``/proc`` 的 stat 访问，无法有快照，
+    审计无论如何失败，该子规则不可能让任何真实场景多通过一次。
     """
-    positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
-    position = positions.get(name)
-    if position is None or position >= len(arguments):
-        return False
-    value = arguments[position].strip()
-    if not value.startswith("{") or not value.endswith("}") or "..." in value:
-        return False
-    fields = _call_arguments(value[1:-1], None)
-    prefix = "stx_" if name == "statx" else "st_"
-
-    def only(key: str) -> str | None:
-        hits = [field for field in fields if re.match(re.escape(prefix + key) + r"\s*=", field)]
-        return hits[0].split("=", 1)[1].strip() if len(hits) == 1 else None
-
-    mode, uid, gid, size = (only(key) for key in ("mode", "uid", "gid", "size"))
-    if proc_self:
-        return mode == "S_IFLNK|0777" and (uid, gid, size) == ("0", "0", "0")
-    return (mode == "S_IFLNK|0777" and all(value is not None and re.fullmatch(r"0|[1-9][0-9]*", value) for value in (uid, gid, size))
+    mode, uid, gid, size = (_stat_field(name, arguments, key) for key in ("mode", "uid", "gid", "size"))
+    return (mode == "S_IFLNK|0777" and all(value is not None and _DECIMAL_U64.fullmatch(value) for value in (uid, gid, size))
             and int(size) >= 1)  # type: ignore[arg-type]
 
 
@@ -884,12 +878,10 @@ class TraceParser:
                 # WP-R4（R6-2，仅 v4）：宿主上的真符号链接（不在私有盘内）、返回结构完整解码为 ``S_IFLNK|0777`` 且路径写法无 ``..``／
                 # 结尾斜杠时，lstat 暴露的是链接自身的 mode／uid／gid／size，这些正是 v3 快照 links 条目绑定的字段——按对该路径的
                 # stat 访问登记，覆盖检查要求该路径有 v3 快照（见 ``_host_symlink_lstat``）。其余情形仍登记。
-                # WP-R4（R4-1，仅 v4）：``/proc/self``、``/proc/thread-self`` 自己的 lstat 是内核常量（root:root、0777、大小 0），属于单元内部状态，
-                # 不登记任何访问（``_proc_self_lstat``）；/proc 下其余魔法链接（exe、cwd、root、fd/N）size 为 0 且不在此列，仍判。
+                # /proc 下的魔法链接（self、exe、cwd、root、fd/N）size 为 0 且在 /proc 之下，不在以上两类里，仍判（WP-R7a：``/proc/self`` 的 lstat 豁免已删除）。
                 if not (self.trace_v4 and nofollow_stat
                         and (self._tracked_symlink_lstat(name, arguments, pid, result.group(1))
-                             or self._host_symlink_lstat(name, arguments, pid, result.group(1))
-                             or self._proc_self_lstat(name, arguments, pid, result.group(1)))):
+                             or self._host_symlink_lstat(name, arguments, pid, result.group(1)))):
                     self._unresolved("symlink-metadata-not-bound:" + name)
             elif self.trace_v4 and nofollow_stat and self._single_path_is_tracked_symlink(name, arguments, pid):
                 # 反方向的互相印证：内核说这是普通文件或目录（完整解码、返回 0），跟踪器却记着它是符号链接——名字表与真实状态已经脱节
@@ -1235,19 +1227,6 @@ class TraceParser:
             # /proc、/sys、/dev 是虚拟文件系统：``host_snapshot`` 拒绝它们（无法有 v3 快照），它们的魔法链接不是磁盘上的普通链接。
             return False
         return _plain_path_text(_path_argument(arguments, 1 if name in _DIRFD_PROBE else 0))
-
-    def _proc_self_lstat(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
-        """``lstat("/proc/self")``／``lstat("/proc/thread-self")``（WP-R4，R4-1，仅 v4）：单元自己的“我是谁”魔法链接，不登记访问。
-
-        ``os.path.realpath("/proc/self/stat")``、``Path.resolve()`` 会逐分量 lstat 到它。内核把这两个链接创建为 root:root、权限 0777、
-        大小 0，返回结构是常量；链接文本（readlink 的结果）是调用者自己的 pid／tid，本来就属于单元内部（读它是 ``stat`` 类访问，
-        由 ``_unit_internal_proc`` 的目录形态放行）。放行要求：返回 0、结构完整且 uid／gid／size 都是 0（``proc_self=True``）、规范化路径
-        恰为这两个名字之一、原始写法无 ``.``／``..``。``/proc/<pid>`` 自己是目录不是链接；``/proc/self/exe`` 等魔法链接不在此列。
-        """
-        if returned != "0" or not self.call_plain_paths or not _returned_plain_link_stat(name, arguments, proc_self=True):
-            return False
-        return (self._single_path(name, arguments, pid) in {"/proc/self", "/proc/thread-self"}
-                and _plain_path_text(_path_argument(arguments, 1 if name in _DIRFD_PROBE else 0)))
 
     def _defer(self, pid: str, line: str) -> None:
         """等待父进程归属，限制缓存量；超过上限仍拒绝覆盖，不猜测工作目录。"""

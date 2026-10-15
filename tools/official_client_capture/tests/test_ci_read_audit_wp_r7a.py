@@ -27,14 +27,17 @@ I-2       4 个非等价存活变异（/proc 自身、/proc/self/{root,cwd,exe,f
 from __future__ import annotations
 
 import os
+import re
+import unittest
 from typing import Any
 from unittest import mock
 
 from tools.ci import read_audit as ra
 from tools.ci import read_audit_runtime as runtime
-from tools.official_client_capture.tests.test_ci_read_audit_v4_tracker import Builder
+from tools.official_client_capture.tests import test_ci_read_audit_v4_tracker as tracker_tests
+from tools.official_client_capture.tests.test_ci_read_audit_v4_tracker import Builder, D
 from tools.official_client_capture.tests.test_ci_read_audit_wp_r3 import R3Fixture, STAT_LNK, STAT_REG
-from tools.official_client_capture.tests.test_ci_read_audit_wp_r4 import DIR_STRUCT, R4Fixture
+from tools.official_client_capture.tests.test_ci_read_audit_wp_r4 import DIR_STRUCT, RAW_LSTAT_PYTHON3, R4Fixture
 
 
 def _hazard_before_wp_r7a(tracker: Any, base: str | None, raw: str) -> bool:
@@ -868,3 +871,119 @@ class ProcRegistrationBoundaryTests(R4Fixture):
         for line in (self.open_line(leaf), self.open_line(leaf, "O_RDONLY"), self.stat_line(leaf, errno="EACCES"), self.stat_line(leaf, errno="ENOENT")):
             with self.subTest(line=line[:60]):
                 self.assertEqual(self.accesses([line]), {})
+
+
+# =====================================================================================================================
+# 一般项：数字字段长度上限、/proc/self lstat 豁免的删除、存活变异 P03／X05／X08／M15
+# =====================================================================================================================
+
+
+class StructureEdgeCaseTests(R4Fixture):
+    """宿主符号链接 lstat（R6-2）返回结构的边角：超长数字串不崩，省略号结构一律拒绝；``/proc/self`` 自己的 lstat 不再有豁免。"""
+
+    def with_size(self, text: str) -> str:
+        return RAW_LSTAT_PYTHON3.replace("st_size=10", f"st_size={text}")
+
+    def test_the_baseline_line_is_accepted(self) -> None:
+        parser = self.parse([RAW_LSTAT_PYTHON3])
+        self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {"/usr/bin/python3": {"stat"}}))
+
+    def test_overlong_digit_strings_do_not_crash_and_stay_unresolved(self) -> None:
+        """第四轮验收一般-1：4300 位以上的十进制串让 ``int()`` 抛 ValueError，过滤进程退出、轨迹缺失。现在字段至多 20 位。"""
+        for field in ("st_size", "st_uid", "st_gid"):
+            for digits in (21, 25, 4300, 5000, 100000):
+                with self.subTest(field=field, digits=digits):
+                    line = re.sub(field + r"=\d+", f"{field}={'9' * digits}", RAW_LSTAT_PYTHON3, count=1)
+                    self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_the_u64_boundary_is_twenty_digits(self) -> None:
+        for size, accepted in (("18446744073709551615", True), ("1" + "0" * 19, True), ("1" + "0" * 20, False)):
+            with self.subTest(size=size):
+                parser = self.parse([self.with_size(size)])
+                self.assertEqual(parser.unresolved_reasons, {} if accepted else {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_a_truncated_structure_is_refused_even_when_all_four_required_fields_are_present(self) -> None:
+        """第四轮验收 M15：四个必需字段齐备、末尾带省略号——被截掉的只是不绑定的字段，安全上等价；这里固定“一律拒绝”的口径。"""
+        prefix = RAW_LSTAT_PYTHON3.split("{st_dev")[0]
+        cases = {
+            "紧凑": prefix + '{st_mode=S_IFLNK|0777, st_uid=0, st_gid=0, st_size=10, ...}, AT_SYMLINK_NOFOLLOW) = 0',
+            "在结构末尾": RAW_LSTAT_PYTHON3.replace("st_ctime_nsec=958971067}", "st_ctime_nsec=958971067, ...}"),
+            "在字段之间": RAW_LSTAT_PYTHON3.replace("st_blocks=0, ", "st_blocks=0, ..., "),
+        }
+        for label, line in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_a_realpath_walk_over_proc_self_fails_the_audit_through_proc_itself(self) -> None:
+        """删除 ``/proc/self`` lstat 豁免的依据：``realpath("/proc/self/…")`` 必先 lstat ``/proc`` 本身，那是对宿主 ``/proc`` 的 stat 访问，
+        无法有快照，审计无论如何失败——所以该豁免不可能让任何真实场景多通过一次。"""
+        proc_dir = ('{st_dev=makedev(0, 0x1a), st_ino=1, st_mode=S_IFDIR|0555, st_nlink=9, st_uid=0, st_gid=0, st_blksize=1024, st_blocks=0, st_size=0, '
+                    'st_atime=1, st_mtime=1, st_ctime=1}')
+        link = ('{st_dev=makedev(0, 0x1a), st_ino=2, st_mode=S_IFLNK|0777, st_nlink=1, st_uid=0, st_gid=0, st_blksize=1024, st_blocks=0, st_size=0, '
+                'st_atime=1, st_mtime=1, st_ctime=1}')
+        lines = [self.mkdir_line("d"), f'1 newfstatat(AT_FDCWD</repo>, "/proc", {proc_dir}, AT_SYMLINK_NOFOLLOW) = 0',
+                 f'1 newfstatat(AT_FDCWD</repo>, "/proc/self", {link}, AT_SYMLINK_NOFOLLOW) = 0']
+        document = self.document(lines)
+        reasons = document["coverage"]["unresolved_reasons"]
+        self.assertEqual(reasons, {"symlink-metadata-not-bound:newfstatat": 1}, "只剩 /proc/self 这一条：它不再有豁免")
+        self.assertIn("/proc", {path for path, _kinds in document["accesses"]}, "/proc 自身登记为宿主访问")
+        self.assertFalse(self.audit(document)["coverage_complete"])
+
+
+class TrackedLinkStatStructureTests(R7aFixture):
+    """跟踪器记着的、本单元自己创建的链接，lstat 返回结构的 ``st_mode`` 必须恰有一个字段且恰是 ``S_IFLNK[|0777…]``（第三轮验收 P03／X05）。"""
+
+    def tracked(self, struct: str) -> dict[str, int]:
+        return self.reasons([*self.base_lines(), self.symlink_line("d/l"), self.lstat_line("d/l", struct=struct)])
+
+    def test_the_well_formed_structure_is_the_only_one_exempt(self) -> None:
+        self.assertEqual(self.tracked(STAT_LNK), {})
+
+    def test_two_mode_fields_are_refused(self) -> None:
+        """P03：重复的 ``st_mode`` 字段（哪怕两个都是 S_IFLNK）——结构被改写过，不能说看懂了。"""
+        both = STAT_LNK.replace("st_mode=S_IFLNK|0777,", "st_mode=S_IFLNK|0777, st_mode=S_IFLNK|0777,")
+        mixed = STAT_LNK.replace("st_mode=S_IFLNK|0777,", "st_mode=S_IFLNK|0777, st_mode=S_IFREG|0644,")
+        mixed_reverse = STAT_LNK.replace("st_mode=S_IFLNK|0777,", "st_mode=S_IFREG|0644, st_mode=S_IFLNK|0777,")
+        for label, struct in (("两个都是链接", both), ("链接加普通文件", mixed), ("普通文件加链接", mixed_reverse)):
+            with self.subTest(label=label):
+                self.assertEqual(self.tracked(struct), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_trailing_text_after_the_link_type_is_refused(self) -> None:
+        """X05：``S_IFLNK`` 之后只许是八进制权限位或 ``S_ISUID``／``S_ISGID``／``S_ISVTX``，其余任何尾巴都不是。"""
+        for label, mode in (("粘连文字", "S_IFLNK|0777garbage"), ("空格加文字", "S_IFLNK|0777 junk"), ("另一个类型", "S_IFLNK|S_IFREG"),
+                            ("竖线后空", "S_IFLNK|"), ("类型名粘连", "S_IFLNKx|0777"), ("十六进制权限", "S_IFLNK|0x1ff"), ("十进制权限位", "S_IFLNK|0889"),
+                            ("注释", "S_IFLNK|0777 /* x */"), ("小写", "s_iflnk|0777"), ("多余竖线", "S_IFLNK||0777")):
+            with self.subTest(label=label):
+                self.assertEqual(self.tracked(STAT_LNK.replace("S_IFLNK|0777", mode)), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_legal_permission_suffixes_are_exempt(self) -> None:
+        for mode in ("S_IFLNK|0777", "S_IFLNK|S_ISVTX|0777", "S_IFLNK|S_ISUID|S_ISGID|0777", "S_IFLNK"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.tracked(STAT_LNK.replace("S_IFLNK|0777", mode)), {})
+
+
+class ElOopOnlyForOpenCallsTests(unittest.TestCase):
+    """第三轮验收 X08：链接名字上“带 ``O_NOFOLLOW`` 的打开得 ELOOP”才放行；同样的标志与错误码出现在别的调用名上不放行（事件层，不依赖 strace 语法）。"""
+
+    def problems_of(self, name: str, flags: tuple[str, ...] = ("O_NOFOLLOW",), kind: str = "stat") -> int:
+        """在一个刚建好链接 ``D/l`` 的新跟踪器上喂一个 ELOOP 事件，返回报出的问题条数（每次新建，问题集合是集合，重复文本不会累加）。"""
+        b = Builder()
+        tracker = tracker_tests.run(b.mkdir(D), b.symlink(D + "/l", "x"))[0]
+        tracker.observe_event(b.event(name, D + "/l", kind=kind, flags=flags, ok=False, errno="ELOOP"))
+        return len(tracker.problems)
+
+    def test_open_family_with_o_nofollow_passes(self) -> None:
+        for name in ("open", "openat", "openat2"):
+            with self.subTest(name=name):
+                self.assertEqual(self.problems_of(name), 0)
+
+    def test_the_same_flags_and_errno_on_any_other_call_name_are_refused(self) -> None:
+        # symlink／link／rename 一族在链接名字上走“通用判定”分支（它们有自己的规则，不经过这张白名单），所以不在这里。
+        for name in ("chdir", "access", "faccessat", "stat", "newfstatat", "execve", "truncate", "statfs", "getxattr", "inotify_add_watch",
+                     "utimensat", "chmod", "readlink", "mkdir", "rmdir", "unknown_call"):
+            with self.subTest(name=name):
+                self.assertEqual(self.problems_of(name), 1, name)
+
+    def test_without_o_nofollow_or_with_o_path_even_the_open_family_is_refused(self) -> None:
+        self.assertEqual(self.problems_of("openat", flags=("O_RDONLY",)), 1)
+        self.assertEqual(self.problems_of("openat", flags=("O_NOFOLLOW", "O_PATH")), 1)

@@ -662,31 +662,18 @@ class ProcUnitInternalTests(R4Fixture):
         self.assertEqual(self.parse(lines, "v3").accesses, self.parse(lines, "v3").accesses)
         self.assertTrue({"/proc/3983820/stat", "/proc/3983820/status", "/proc/self/status", "/proc/3983820"} <= set(parser.accesses))
 
-    # ---- /proc/self 自己的 lstat ----
-    def proc_self_lstat(self, path: str, *, uid: int = 0, gid: int = 0, size: int = 0, mode: str = "S_IFLNK|0777", flags: str = "AT_SYMLINK_NOFOLLOW") -> str:
-        struct = ('{st_dev=makedev(0, 0x1a), st_ino=811905223, st_mode=%s, st_nlink=1, st_uid=%d, st_gid=%d, st_blksize=1024, st_blocks=0, st_size=%d, '
+    # ---- /proc/self 自己的 lstat：WP-R7a 起不再放行（原“内核常量”子规则已删除，理由见 ``_returned_plain_link_stat`` 的说明） ----
+    def proc_self_lstat(self, path: str, *, flags: str = "AT_SYMLINK_NOFOLLOW") -> str:
+        struct = ('{st_dev=makedev(0, 0x1a), st_ino=811905223, st_mode=S_IFLNK|0777, st_nlink=1, st_uid=0, st_gid=0, st_blksize=1024, st_blocks=0, st_size=0, '
                   'st_atime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_atime_nsec=102163350, st_mtime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, '
-                  'st_mtime_nsec=102163350, st_ctime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_ctime_nsec=102163350}') % (mode, uid, gid, size)
+                  'st_mtime_nsec=102163350, st_ctime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_ctime_nsec=102163350}')
         return f'{self.OWN} newfstatat(AT_FDCWD</repo>, "{path}", {struct}, {flags}) = 0'
 
-    def test_lstat_of_proc_self_is_a_kernel_constant(self) -> None:
-        for path in ("/proc/self", "/proc/thread-self"):
-            with self.subTest(path=path):
-                parser = self.parse([self.proc_self_lstat(path)])
-                self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {}))
-                self.assertEqual(self.reasons_of([self.proc_self_lstat(path)], "v3"), {"symlink-metadata-not-bound:newfstatat": 1})
-
-    def test_lstat_of_other_proc_links_or_changed_constants_stays_unresolved(self) -> None:
-        cases = {
-            "exe": self.proc_self_lstat("/proc/self/exe"), "cwd": self.proc_self_lstat("/proc/self/cwd"), "root": self.proc_self_lstat("/proc/self/root"),
-            "fd": self.proc_self_lstat("/proc/self/fd/3"), "别人的 self": self.proc_self_lstat("/proc/1/exe"),
-            "size 不是 0": self.proc_self_lstat("/proc/self", size=4), "uid 不是 0": self.proc_self_lstat("/proc/self", uid=501),
-            "gid 不是 0": self.proc_self_lstat("/proc/self", gid=20), "权限不是 0777": self.proc_self_lstat("/proc/self", mode="S_IFLNK|0755"),
-            "带 .. 写法": self.proc_self_lstat("/proc/self/../self"), "结尾斜杠": self.proc_self_lstat("/proc/self/"),
-        }
-        for label, line in cases.items():
-            with self.subTest(label=label):
-                self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1}, label)
+    def test_lstat_of_proc_self_and_the_other_proc_magic_links_stays_unresolved(self) -> None:
+        for path in ("/proc/self", "/proc/thread-self", "/proc/self/exe", "/proc/self/cwd", "/proc/self/root", "/proc/self/fd/3", "/proc/1/exe"):
+            for contract in ("v3", "v4"):
+                with self.subTest(path=path, contract=contract):
+                    self.assertEqual(self.reasons_of([self.proc_self_lstat(path)], contract), {"symlink-metadata-not-bound:newfstatat": 1})
 
 
 # =====================================================================================================================
