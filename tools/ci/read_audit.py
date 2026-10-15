@@ -27,7 +27,7 @@ strace 下，单元结束后按它的输入明细核对，超出声明的读取�
 
 带隔离合同的轨迹有两个版本，由显式开关 ``trace_contract`` 选择，默认 v3（历史合同，行为不变）：
 v3 的输出事件是 6 键，rename／link／符号链接与失败的写探测一律不认；v4 的输出事件是 11 键（另有 errno、call、role、
-peer、epoch），两路径调用的两端按调用编号配对，失败调用带错误码，只读事件按「变更纪元」去重。重放按文档自己的
+peer、epoch），两路径调用的两端按调用编号配对，失败调用带错误码，重复事件按「名字级版本」去重（WP-R9）。重放按文档自己的
 schema_version 分派，所以 v3 的已封存凭证永远按旧合同只读验真。control 四链的 sidecar 原样复用本模块，不传该开关，
 仍然生产并重放 v3。
 
@@ -76,7 +76,7 @@ TRACE_SCHEMA = "read-audit-trace/v1"
 STRICT_TRACE_SCHEMA = "read-audit-trace/v2"
 RUNTIME_TRACE_SCHEMA = "read-audit-trace/v3"
 # v4：带隔离合同的轨迹的新版事件合同（显式开关，默认仍是 v3）。输出事件 11 键，两路径调用的两端用 role／peer 配对，
-# 失败调用带 errno，只读事件按变更纪元去重；配套的跟踪器是 read_audit_runtime.OutputTrackerV4。
+# 失败调用带 errno，重复事件按名字级版本去重（WP-R9，早先按全局变更纪元）；配套的跟踪器是 read_audit_runtime.OutputTrackerV4。
 # v1～v3 的常量与已封存凭证按旧合同继续只读验真，行为不变；control 四链的 sidecar 原样复用本模块，所以任何
 # 新行为都必须由下面的 trace_contract 开关显式启用，默认路径不得有字节级差异。
 RUNTIME_TRACE_SCHEMA_V4 = "read-audit-trace/v4"
@@ -101,6 +101,9 @@ MAX_OUTPUT_EVENTS = 200000
 # 上限的唯一作用是内存／时间保护：合成负载实测（路径长度取真实值约 190 字符，事件互不相同、无法去重）100 万条时解析约 80 秒、
 # 峰值约 3.2 GiB，轨迹 JSON 约 1.1 GiB，读回重放约 8 秒、峰值约 3.8 GiB；50 万条约 1.6／2.4 GiB（完整表见
 # tools/official_client_capture/tests/test_ci_read_audit_wp_r2.py 的文档字符串）。
+# WP-R9（名字级去重）之后的实测：与 compare_accept 同形态的合成负载（982,000 行 strace，约 124 万条事件，读取类占 96%）旧规则保留
+# 929,619 条，新规则保留 117,416 条（解析耗时相同，轨迹 JSON 258→45 MiB，峰值内存 1.3 GiB→0.6 GiB）；事件互不相同时新增的去重键集
+# 约多 8% 内存。所以上限数值不用再提（余量约 8 倍），见 tools/official_client_capture/tests/test_ci_read_audit_wp_r8.py 的模块说明。
 # 版本语义：只对 read-audit-trace/v4 生效，v3 与 control 四链不变；已被旧上限截断的轨迹带 output-event-limit 未解析原因
 # （coverage.unresolved>0），验真永远判失败，与这里的数值无关——上限调高不会让任何旧的失败轨迹变成通过。
 # read_audit_runtime.py 里有一份同值常量（重放端超限即拒绝），两处必须相等：由 test_ci_audit_hardening_h1 的
@@ -660,7 +663,7 @@ class TraceParser:
         self.call_end: tuple[str, str | None] | None = None   # 当前正在登记的两路径调用端点：(角色, 另一端路径)
         self.call_link: str | None = None          # 当前 symlink／symlinkat 调用的链接文本（WP-R3，原样记下，不解引用）
         self.epoch = 0                             # 变更纪元：此前使名字空间状态改变的事件个数
-        self.seen_events: set[tuple] = set()       # 当前纪元内已出现过的事件键，用于只读事件去重
+        self.seen_events: set[tuple] = set()       # 已保留的非改状态事件的去重键（名字级，见 _record_output_event），不随纪元清空
         # WP-R4（R4-1，仅 v4）：本轨迹里出现过的被追踪进程／线程号（行首 pid、clone／fork／vfork 的返回值；pid 复用时先后属于不同进程都算
         # 轨迹内部，无需区分）。``_add`` 据此把“自有进程树的 /proc/<pid>/… 白名单叶文件”视为单元内部状态，见 ``_unit_internal_proc``。
         self.traced_pids: set[str] = set()
@@ -715,23 +718,27 @@ class TraceParser:
 
     def _record_output_event(self, path: str, kind: str, name: str, succeeded: bool, flags: set[str],
                              target: str | None) -> None:
-        """v4：组装 11 键事件、交给跟踪器，并按变更纪元去重后保留。
+        """v4：组装 11 键事件、交给跟踪器，并按名字级去重键去重后保留。
 
-        去重规则：事件没有使跟踪器状态改变，且同键事件在当前纪元已出现过，就不再追加（保留首次）。
-        同一纪元内名字空间没有任何变化，所以同键的只读事件（反复 stat、反复读同一个文件、反复列目录）对归属判定
-        不提供新信息；去掉它们是为了不撑爆事件上限（实测最大样本里 18.4 万条只读事件只有约 2300 种不同事件）。
-        使状态改变的事件永不去重，并使纪元加一——事件自身携带的是加一之前的纪元。
+        去重规则（WP-R9）：事件没有使跟踪器状态改变，且同键事件已经保留过，就不再追加（保留首次）。键由跟踪器给出
+        （``OutputTrackerV4.dedup_key``）：事件自身的全部字段，加上它判定所依赖的那几个名字的版本号——键相同则跟踪器对两条事件的
+        判定完全相同，所以同键的重复事件（反复 stat、反复读同一个文件、反复列目录）对归属判定不提供新信息。键里没有全局变更纪元：
+        对别的名字的写、rename、unlink 不会使这个名字上的重复读取失效（WP-R8 之前按纪元去重，写密集的单元里全局纪元被切得很碎，
+        10-15 实测 compare_accept 的 128 万条事件里 88% 是对私有盘内路径的重复成功 stat／读）；这个名字（或带着它的目录）
+        自己变了才会换新版本号。键为 None 的事件（成功的两路径调用、成功的 mkdir／unlink／rmdir／symlink）和紧跟在文件创建之后的事件永远保留。
+        使状态改变的事件永不去重，并使纪元加一——事件自身携带的是加一之前的纪元；``epoch`` 字段与重放端的重算语义不变。
         """
         role, peer = self.call_end if self.call_end is not None else (None, None)
         flags = flags | self.call_flags
         event = {"path": path, "kind": kind, "name": name, "succeeded": succeeded, "flags": sorted(flags), "target": target,
                  "errno": self.call_errno, "call": self.call_id, "role": role, "peer": peer, "epoch": self.epoch}
-        if self.output_tracker.observe_event(event):
+        tracker = self.output_tracker
+        key = tracker.dedup_key(event)                    # 必须先于 observe_event：键描述的是事件到达时名字的状态
+        forced = tracker.consumes_hidden_state()          # 紧跟在文件创建之后的事件会消耗隐藏状态，必须保留
+        if tracker.observe_event(event):
             self.epoch += 1
-            self.seen_events.clear()
-        else:
-            key = (path, kind, name, succeeded, self.call_errno, tuple(event["flags"]), target, role, peer, self.epoch)
-            if key in self.seen_events:
+        elif key is not None:
+            if key in self.seen_events and not forced:
                 return
             self.seen_events.add(key)
         # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。v4 用自己的上限（见常量处的版本语义说明）。

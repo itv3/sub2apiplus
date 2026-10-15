@@ -225,7 +225,9 @@ class RandomPipelineTests(AuditFixture):
         self.assertGreater(failed_pairs, 100, "失败的 rename／link（ENOENT／EEXIST）要足够多")
         self.assertGreater(symlinks, 60, "成功的符号链接创建要足够多，否则符号链接的流水线对拍是空转")
         self.assertGreater(nofollow, 60, "不跟随的 stat（五种写法）要足够多")
-        self.assertGreater(readlinks, 20, "成功的 readlink 要足够多")
+        # WP-R9：这里数的是去重之后保留下来的事件；名字级去重把同一个链接名字上重复的 readlink 合并了（此前按全局纪元去重，
+        # 同样的输入保留得更多），所以门槛随之从 20 调到 10——12 个种子合计仍保留 20 条（不同的 链接名字×版本）上的成功 readlink，不是空转。
+        self.assertGreater(readlinks, 10, "成功的 readlink 要足够多")
 
     def test_the_same_random_streams_under_the_old_contract_still_reject_what_v3_never_supported(self) -> None:
         """同样的行流按 v3 合同解析：解析本身不受开关影响，但 rename／link 与失败探测仍被旧合同拒绝。
