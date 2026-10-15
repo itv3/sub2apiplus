@@ -359,16 +359,18 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
 * `--audit-policy <JSON>` 登记 `unit-audit-policy/v1`，固定 `default=reexecute-only`；`units` 按本轮实际命令或测试单元 ID 列出精确 `host_paths`、`require_read_audit=true` 与 `runtime_contract`，未知 ID 拒绝。登记单元必须覆盖闭合；未登记单元执行自身，并明确记录 `inheritable=false`、`reexecute_required`、`coverage_complete=false`。未覆盖项不能成为以后承接的来源；功能与承接边界通过不代表全集读集覆盖。缺单元、错绑或登记项审计失败仍判失败。此策略不授予承接权限，真实承接仍须原 B5a-08 请求与批准。
 * `entry.sh --audit-reads --audit-strict --audit-policy <JSON>` 将严格审计与策略文件原样传给入口门禁及 pre-A3，并绑定两步输入；环境中的同名键不能隐式启用。策略登记必须匹配实际步骤的单元集合，不能把含测试 ID 的完整门禁策略直接用于只有场景命令的 pre-A3。
 * `--declared-sample off|always|every:N`（步骤 5 WP3b，缺省 `off`）决定声明级承接命令单元的读集证据来源：`off` 用登记表里的采样证据（零运行时开销），`always` 每次执行都带 strace 采样并用本次采样证明读集仍在声明范围内（正式验证轮显式带它），`every:N` 按记录库里该单元已有的正式记录数每 N 次采样一次。选项从 `background-validate.sh start`、`entry-dryrun.sh start`、`entry.sh` 或 `entry-gates.sh` 一路原样传到执行器；非法值在最外层立即拒绝（退出 2）；非 `off` 的取值进入口门禁与 pre-A3 的步骤输入、后台验证的输入合同和空跑结论（空跑结论文件名另带取值），缺省时命令行、结论与步骤输入与改造前逐字相同；后台验证通过后自动接上的入口空跑不带它。
-* 审计事件合同 `read-audit-trace/v4`（步骤 1、2，显式开关，缺省仍是 v3）：普通受管单元由 `read_audit_runtime.py prepare` 在受管请求里写入 `trace_contract`，`run_child` 据此让过滤器产出 v4 轨迹。
+* 审计事件合同 `read-audit-trace/v4`（步骤 1、2；各入口的缺省不同）：`read_audit.py filter`／`strace_argv` 的开关缺省仍是 v3（显式传 `v4` 才产出 v4，且必须同时是带隔离合同的严格审计）；
+  `read_audit_runtime.py prepare` 对带隔离合同（`runtime_contract`）的普通受管单元默认请求 v4：在受管请求里写入 `trace_contract`，`run_child` 据此让过滤器产出 v4 轨迹，执行器调用 `prepare` 时不传该参数，所以走执行器的这类单元缺省就是 v4；
+  `prepare` 显式传 `v3`、或请求里没有该键时 `run_child` 按 v3，与改动前逐字节相同；control 四链有自己的 prepare／run_child，仍产出并重放 v3。
   输出事件 11 键；两路径调用（rename、link 等）的两端用 `role`（source／destination）与 `peer` 配对，失败调用带 `errno`，只读事件按「变更纪元」去重（事件上限 200000 针对去重后的条数）。
   配套的 `OutputTrackerV4` 按对象身份记账：rename（文件与目录子树迁移）、link 可证明；符号链接、`RENAME_EXCHANGE`／`RENAME_WHITEOUT`、另一端不在盘内的两路径调用、来源未证明的 rename／link 仍保守拒绝
-  （含符号链接的测试单元因此不登记进审计策略，按未登记单元每次实时重跑）；失败的读／探测／执行类调用沿用旧规则（只要求路径已证明），只有写类调用失败按 errno 判。
+  （符号链接的拒绝是代码约束，登记表不替它挡：把会在私有临时盘里创建符号链接的单元（带隔离合同）登记进审计策略，入口不会拒绝，但运行后输出归属证明失败、该单元审计判失败；所以审计策略的候选生成——仓库外的证据脚本，按静态线索筛——不登记这类测试单元，它们按未登记单元每次实时重跑）；失败的读／探测／执行类调用沿用旧规则（只要求路径已证明），只有写类调用失败按 errno 判。
   v1～v3 的常量、已封存凭证与 control 四链 sidecar（`control_read_audit*.py` 动态复用 `read_audit.py`／`unit_records.py` 的函数对象）原样保留，既有函数与常量的默认行为字节不变。
-* 宿主快照 `read-audit-host-snapshot/v3`（步骤 3；策略登记了 control 单元的运行整次仍取 v2，其余运行取 v3）按单元实际访问方式比较：只比被观察的方面（枚举过的目录才绑目录项；只 stat 的目录只绑类型、权限、属主、大小），
+* 宿主快照 `read-audit-host-snapshot/v3`（步骤 3；策略登记了 control 单元的运行整次仍取 v2，其余运行取 v3）按单元实际访问方式比较：只比被观察的方面（枚举过的目录才绑目录项；只 stat 的目录只绑类型、权限、属主；大小只对文件绑定），
   比较函数 `host_snapshot_matches`；条目摘要只绑无条件比较集，内容与目录项经 `unit_records.check_record` 里的 `host_inputs_inherit_problems` 补比。**时间字段、inode、device 是策略性放宽，不是证明**：
   默认认为单元不依赖，依赖的必须在审计策略里逐路径登记 `metadata_dependencies` 并附审核依据；make／`find -newer`／rsync、以 mtime 做缓存键的程序、断言 mtime 的测试不成立。轨迹不完整时一律退回整份相等。
-* 受审计单元的超时按实测定（步骤 7）：`unit_executor.json` 的 `unit_timeouts`（单元 ID → 秒，上限 14400）加必填的 `unit_timeouts_basis`（公式与依据）；超时进入单元规格，所以生成正式来源前固定，
-  H7→H8 之间不得再改，改了单元规格摘要就变、旧记录无法承接。
+* 受审计单元的超时按实测定（步骤 7）：`unit_executor.json` 的 `unit_timeouts`（单元 ID → 秒，上限 14400）登记了 `unit_timeouts` 就必须在 `unit_timeouts_basis` 里写明依据（公式与数据来源，没有 `unit_timeouts` 时不必填）；超时进入单元规格，所以要在产生正式来源之前定好，
+  来源与其后继之间不得再改，改了单元规格摘要就变、旧记录无法承接。
 * 控制终端单独绑定 `/dev/tty` 标准字符设备身份和无控制终端状态；只接受轨迹明确为 `ENXIO` 的打开失败或合同内元数据检查。成功访问、其它错误、事件缺失均拒绝，不能把所有设备读取一概豁免。
 * `/bin/bash -n` 语法检查显式设置 `SHELL=/bin/bash` 并绑定到单元规格，避免精简环境下额外查询用户数据库。其它脚本的环境保持原合同；取证和完整门禁必须使用相同的入口环境，不能用 SSH 会话环境替代。
 * 单元输入可登记 `runtime_contract`（`unit-runtime-contract/v1`）：指定专用空临时挂载点、既有生产别名遮挡和明确的动态环境输入。`read_audit_runtime.py` 创建私有挂载命名空间，分别留存实际挂载轨迹与被测轨迹，在实际环境中复核外部输入前后快照。测试单元另绑定完整 `runtime-test-spec`，沿原 `run-unit` 运输测试载荷，在私有 tmpfs 生成固定结果和首次已观察失败旁路；结果回收只接受本轮创建且身份、测试集合与摘要匹配的两类产物，消费端重放同一证明。输出坐标只绑定本轮请求，不进入稳定输入；每轮重建的宿主测试清单不能充当稳定输入。旧文件、先读后写、链接逃逸、来源不明、环境漂移或结束凭证缺失均不可承接，不放开通用移动操作或宿主写入。
