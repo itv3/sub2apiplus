@@ -355,3 +355,122 @@ class WorkingDirectoryFollowsRenameTests(R7aFixture):
                 for line in lines:
                     parser.feed(line)
                 self.assertEqual(parser.cwd["1"], f"{r}/x", "v3 一字不变：工作目录不随 rename 改写")
+
+
+# =====================================================================================================================
+# I-1：CLONE_NEW*（尤其 CLONE_NEWPID）击穿“已见 pid 集合”
+# =====================================================================================================================
+
+
+class NamespaceClonesTests(R7aFixture):
+    """``CLONE_NEWPID`` 的子进程活在新 PID 命名空间里：它再 ``clone`` 返回的是命名空间内的小编号（2、3…），strace 的行首 pid 却是宿主编号。
+    解析器把这个小编号当作“本轨迹的 pid”，之后宿主 ``/proc/2/status`` 被当作单元内部状态放行（验收 I-1）。
+
+    处置：v4 的 ``unobservable-child`` 判据从 ``CLONE_(UNTRACED|NEWNS)`` 扩到任何 ``CLONE_NEW*``（control 四链的 sidecar 早已这样判）；
+    此外轨迹里出现过任何 ``CLONE_NEW*``、``unshare``、``setns`` 之后，pid 空间不再可信，/proc 内部状态放宽一律不适用。
+    """
+
+    NEWPID_REPRODUCTION = ['100 clone(child_stack=NULL, flags=CLONE_NEWPID|SIGCHLD) = 400',
+                           '400 clone(child_stack=NULL, flags=SIGCHLD) = 2',
+                           '100 openat(AT_FDCWD</repo>, "/proc/2/status", O_RDONLY|O_CLOEXEC) = 3</proc/2/status>']
+
+    def test_the_acceptance_reproduction_is_unresolved_and_the_proc_read_stays_a_host_access(self) -> None:
+        lines = self.pad(self.NEWPID_REPRODUCTION)
+        parser = self.parse(lines)
+        self.assertEqual(parser.unresolved_reasons, {"unobservable-child:clone": 1})
+        self.assertEqual(parser.accesses["/proc/2/status"], {"read"}, "第二道防线：pid 空间不可信之后，/proc/2/status 仍是宿主访问")
+        self.assertEqual(parser.unit_proc_accesses, 0)
+        self.assertFailsClosed(lines, where="parser", fragment="unobservable-child")
+
+    def test_the_baseline_before_this_round_accepted_it(self) -> None:
+        """对照：用旧判据（只认 UNTRACED／NEWNS）并关掉第二道防线，复现行整套审计通过——证明验收者的绕过是真的。"""
+        lines = self.pad(self.NEWPID_REPRODUCTION)
+        with mock.patch.object(ra, "_CLONE_UNOBSERVABLE_V4", ra._CLONE_UNOBSERVABLE_V3), \
+                mock.patch.object(ra, "_CLONE_NEW_ANY", ra.re.compile(r"(?!)")):
+            document, reasons, problems = self.outcome(lines)
+            self.assertEqual((reasons, problems), ({}, []))
+            self.assertTrue(self.audit(document)["coverage_complete"])
+
+    def test_the_second_line_of_defence_alone_keeps_the_host_proc_read_registered(self) -> None:
+        """只关第一道（unobservable-child），第二道（pid 空间不可信）仍使 /proc/2/status 登记为宿主访问，从而该路径无法有 v3 快照、审计失败。"""
+        lines = self.pad(self.NEWPID_REPRODUCTION)
+        with mock.patch.object(ra, "_CLONE_UNOBSERVABLE_V4", ra._CLONE_UNOBSERVABLE_V3):
+            document, reasons, _problems = self.outcome(lines)
+            self.assertEqual(reasons, {})
+            self.assertIn("/proc/2/status", {path for path, _kinds in document["accesses"]})
+            self.assertFalse(self.audit(document)["coverage_complete"])
+
+    def test_clone3_with_a_namespace_flag_is_the_same(self) -> None:
+        lines = self.pad(['100 clone3({flags=CLONE_NEWPID|CLONE_PARENT_SETTID, exit_signal=SIGCHLD, stack=NULL, stack_size=0}, 88) = 400',
+                          '400 clone(child_stack=NULL, flags=SIGCHLD) = 2',
+                          '100 openat(AT_FDCWD</repo>, "/proc/2/status", O_RDONLY|O_CLOEXEC) = 3</proc/2/status>'])
+        self.assertEqual(self.parse(lines).unresolved_reasons, {"unobservable-child:clone3": 1})
+        self.assertFailsClosed(lines, where="parser", fragment="unobservable-child:clone3")
+
+    def test_every_clone_new_flag_is_unobservable_under_v4(self) -> None:
+        for flag in ("CLONE_NEWPID", "CLONE_NEWNS", "CLONE_NEWUSER", "CLONE_NEWNET", "CLONE_NEWIPC", "CLONE_NEWUTS", "CLONE_NEWCGROUP",
+                     "CLONE_NEWTIME"):
+            for call in ("clone", "clone3", "fork", "vfork"):
+                body = f"{{flags={flag}|SIGCHLD}}, 88" if call == "clone3" else f"child_stack=NULL, flags={flag}|SIGCHLD"
+                line = f"100 {call}({body}) = 400"
+                with self.subTest(flag=flag, call=call):
+                    self.assertEqual(self.reasons([line]), {f"unobservable-child:{call}": 1})
+
+    def test_unfinished_and_resumed_clones_are_judged_on_the_joined_call(self) -> None:
+        lines = ['100 clone(child_stack=NULL, flags=CLONE_NEWPID|SIGCHLD <unfinished ...>', '100 <... clone resumed>) = 400']
+        self.assertEqual(self.reasons(lines), {"unobservable-child:clone": 1})
+
+    def test_ordinary_clones_stay_observable_and_their_children_keep_the_proc_allowance(self) -> None:
+        """正例：线程、vfork、普通 fork 的标志里没有 CLONE_NEW*，行为与改动前一致；子进程仍属于本轨迹。"""
+        lines = ['100 clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_SIGHAND|CLONE_THREAD|CLONE_SYSVSEM|CLONE_SETTLS|'
+                 'CLONE_PARENT_SETTID|CLONE_CHILD_CLEARTID, parent_tid=[401]) = 401',
+                 '100 clone(child_stack=NULL, flags=CLONE_VM|CLONE_VFORK|SIGCHLD) = 402',
+                 '100 clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, child_tidptr=0x7f) = 403',
+                 '100 vfork() = 404', '100 fork() = 405',
+                 '100 openat(AT_FDCWD</repo>, "/proc/401/status", O_RDONLY|O_CLOEXEC) = 3</proc/401/status>',
+                 '100 openat(AT_FDCWD</repo>, "/proc/405/stat", O_RDONLY|O_CLOEXEC) = 3</proc/405/stat>']
+        parser = self.parse(self.pad(lines))
+        self.assertEqual((parser.unresolved_reasons, parser.pid_space_untrusted, parser.unit_proc_accesses), ({}, False, 4))   # 每次 openat 登记两次（请求路径＋描述符标注）
+        self.assertNotIn("/proc/401/status", parser.accesses)
+
+    def test_clone_untraced_is_still_unobservable(self) -> None:
+        self.assertEqual(self.reasons(['100 clone(child_stack=NULL, flags=CLONE_UNTRACED|SIGCHLD) = 400']), {"unobservable-child:clone": 1})
+
+    def test_unshare_and_setns_are_unsupported_and_make_the_pid_space_untrusted(self) -> None:
+        """``unshare(CLONE_NEWPID)`` 之后调用者自己不变，但它的后续子进程在新 PID 命名空间里；``setns`` 同理。两者本来就是 unsupported-call。"""
+        for label, namespace_call in (("unshare NEWPID", '100 unshare(CLONE_NEWPID) = 0'),
+                                      ("unshare 全部", '100 unshare(CLONE_NEWNS|CLONE_NEWPID|CLONE_NEWUSER) = 0'),
+                                      ("unshare 失败", '100 unshare(CLONE_NEWPID) = -1 EPERM (Operation not permitted)'),
+                                      ("setns", '100 setns(5<pid:[4026531836]>, CLONE_NEWPID) = 0'),
+                                      ("unshare 非命名空间标志", '100 unshare(CLONE_FS) = 0')):
+            lines = self.pad([namespace_call, '100 clone(child_stack=NULL, flags=SIGCHLD) = 400',
+                              '400 clone(child_stack=NULL, flags=SIGCHLD) = 2',
+                              '100 openat(AT_FDCWD</repo>, "/proc/2/status", O_RDONLY|O_CLOEXEC) = 3</proc/2/status>'])
+            with self.subTest(label=label):
+                parser = self.parse(lines)
+                name = namespace_call.split()[1].split("(")[0]
+                self.assertEqual(parser.unresolved_reasons, {f"unsupported-call:{name}": 1})
+                self.assertTrue(parser.pid_space_untrusted)
+                self.assertEqual(parser.accesses["/proc/2/status"], {"read"})
+                self.assertFailsClosed(lines, where="parser", fragment="unsupported-call")
+
+    def test_reads_of_the_own_proc_state_before_any_namespace_change_are_still_internal(self) -> None:
+        """只有“之后”才不可信：命名空间调用之前已经发生的、属于本轨迹的 /proc 读取不受影响（它们是当时的真实情况）。"""
+        lines = self.pad(['100 clone(child_stack=NULL, flags=SIGCHLD) = 401',
+                          '100 openat(AT_FDCWD</repo>, "/proc/401/status", O_RDONLY|O_CLOEXEC) = 3</proc/401/status>',
+                          '100 unshare(CLONE_NEWPID) = 0',
+                          '100 openat(AT_FDCWD</repo>, "/proc/401/stat", O_RDONLY|O_CLOEXEC) = 3</proc/401/stat>'])
+        parser = self.parse(lines)
+        self.assertNotIn("/proc/401/status", parser.accesses)
+        self.assertEqual(parser.accesses["/proc/401/stat"], {"read"})
+
+    def test_v3_is_unchanged_it_only_knows_untraced_and_newns(self) -> None:
+        for flag, expected in (("CLONE_NEWNS", {"unobservable-child:clone": 1}), ("CLONE_UNTRACED", {"unobservable-child:clone": 1}),
+                               ("CLONE_NEWPID", {}), ("CLONE_NEWUSER", {}), ("CLONE_NEWNET", {})):
+            with self.subTest(flag=flag):
+                self.assertEqual(self.reasons([f'100 clone(child_stack=NULL, flags={flag}|SIGCHLD) = 400'], "v3"), expected)
+        parser = ra.TraceParser(strict=True, runtime_context=self.context)
+        self.assertFalse(parser.pid_space_untrusted)
+        for line in ('100 unshare(CLONE_NEWPID) = 0', '100 clone(child_stack=NULL, flags=CLONE_NEWPID|SIGCHLD) = 400'):
+            parser.feed(line)
+        self.assertFalse(parser.pid_space_untrusted, "v3 不维护 pid 空间状态")

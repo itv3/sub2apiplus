@@ -149,6 +149,15 @@ _PLAIN_WRITE = frozenset({"creat", "mkdir", "rmdir", "unlink", "rename", "link",
 _PLAIN_EXEC = frozenset({"execve"})
 _TWO_PATHS = frozenset({"rename", "link", "renameat", "renameat2", "linkat"})
 _RENAME_CALLS = frozenset({"rename", "renameat", "renameat2"})
+# WP-R7a（验收 I-1）：v4 的“子进程不可观察”判据。v3 只认 CLONE_UNTRACED／CLONE_NEWNS（历史合同，一字不变）；v4 认任何 CLONE_NEW*——
+# CLONE_NEWPID 的子进程在新 PID 命名空间里，它再 clone 返回的是命名空间内的小编号（2、3…），与宿主上的进程撞号；CLONE_NEWUSER／NEWNET／
+# NEWIPC／NEWUTS／NEWCGROUP／NEWTIME 同样意味着命名空间变化，没有建立任何子空间合同（control 四链的 sidecar 早已这样判）。
+_CLONE_UNOBSERVABLE_V3 = re.compile(r"\bCLONE_(?:UNTRACED|NEWNS)\b")
+_CLONE_UNOBSERVABLE_V4 = re.compile(r"\bCLONE_(?:UNTRACED|NEW[A-Z0-9_]+)\b")
+_CLONE_NEW_ANY = re.compile(r"\bCLONE_NEW[A-Z0-9_]+\b")
+# 能把调用者或之后的子进程带进新命名空间的非 clone 系统调用（unshare(CLONE_NEWPID) 之后的子进程在新 PID 命名空间里；setns 加入别的命名空间）。
+# 它们本身在 strict 下就是 unsupported-call 未解析；v4 另外据此让 pid 空间不再可信（见 TraceParser.pid_space_untrusted）。
+_NAMESPACE_CALLS = frozenset({"unshare", "setns"})
 _SPAWN = frozenset({"clone", "clone3", "fork", "vfork"})
 _WRITE_FLAGS = re.compile(r"\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b")
 _MISSING_ERRNOS = frozenset({"ENOENT", "ENOTDIR"})
@@ -675,6 +684,10 @@ class TraceParser:
         # 轨迹内部，无需区分）。``_add`` 据此把“自有进程树的 /proc/<pid>/… 白名单叶文件”视为单元内部状态，见 ``_unit_internal_proc``。
         self.traced_pids: set[str] = set()
         self.call_plain_paths = True               # 当前调用的路径参数都没有 ``.``／``..`` 分量（v4；有则 /proc 内部状态放宽不适用）
+        # WP-R7a（验收 I-1，仅 v4）：轨迹里出现过任何 CLONE_NEW*、unshare、setns 之后置真：此后 pid／tid 编号不再对应同一个 PID 空间，
+        # “已见 pid 集合”不能再证明某个 /proc/<pid> 属于本轨迹进程树，/proc 内部状态放宽一律不适用（整次审计本来也已因
+        # unobservable-child／unsupported-call 失败关闭，这是第二道防线：即使将来有人放宽了那两条，/proc/<小编号> 也不会被当作内部状态）。
+        self.pid_space_untrusted = False
         self.unit_proc_accesses = 0                # 被判为单元内部状态、没有登记为访问的 /proc 访问条数（只供测试与诊断，不进轨迹）
         if runtime_context is not None:
             if not strict:
@@ -693,7 +706,7 @@ class TraceParser:
             if self.strict:
                 self._unresolved("path-not-resolved")
             return
-        if self.trace_v4 and self.call_plain_paths and _unit_internal_proc(path, kind, self.traced_pids):
+        if self.trace_v4 and self.call_plain_paths and not self.pid_space_untrusted and _unit_internal_proc(path, kind, self.traced_pids):
             # WP-R4（R4-1）：自有进程树的 /proc/<pid>/… 白名单叶文件是单元内部状态，不登记为宿主访问；判据与不放行的形态见该函数。
             self.unit_proc_accesses += 1
             return
@@ -861,8 +874,10 @@ class TraceParser:
                 if directory.startswith("/"):
                     self.cwd[pid] = directory
         if name in _SPAWN:
-            if self.strict and re.search(r"\bCLONE_(?:UNTRACED|NEWNS)\b", body):
+            if self.strict and (_CLONE_UNOBSERVABLE_V4 if self.trace_v4 else _CLONE_UNOBSERVABLE_V3).search(body):
                 self._unresolved("unobservable-child:" + name)
+            if self.trace_v4 and _CLONE_NEW_ANY.search(body):
+                self.pid_space_untrusted = True
             inherited = self.spawn_cwd.pop(pid, self.cwd.get(pid))
             if self.trace_v4 and result and result.group(1).isdigit() and int(result.group(1)) > 0 and errno is None:
                 self.traced_pids.add(result.group(1))   # 子进程（线程）号：它之后可能被同一进程树里的别人当作 /proc/<pid> 读取
@@ -1030,6 +1045,8 @@ class TraceParser:
             if socket_path is not None:
                 self._add(socket_path, "missing", line)
                 return
+        if self.trace_v4 and name in _NAMESPACE_CALLS:
+            self.pid_space_untrusted = True
         if self.strict:
             self._unresolved("unsupported-call:" + name)
 
