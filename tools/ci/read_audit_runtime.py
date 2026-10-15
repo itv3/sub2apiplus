@@ -45,7 +45,7 @@ LAUNCHER = ["unshare", "-m", "--propagation", "private", "bash", "-c",
             'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec "$@"', "entry-gates"]
 
 # 轨迹合同版本（显式开关，默认 v3）。v3 是历史合同：输出事件 6 键、旧 OutputTracker、旧重放逻辑，字节行为不变，
-# control 四链的 sidecar 复用的就是它；v4 在此基础上支持 rename／link／失败探测并对只读事件按变更纪元去重。
+# control 四链的 sidecar 复用的就是它；v4 在此基础上支持 rename／link／失败探测并对重复事件按名字级版本去重（WP-R9）。
 # 文档版本字符串的权威定义在同目录 read_audit.py（RUNTIME_TRACE_SCHEMA_V4）；这里再存一份，是为了让重放 v3 凭证的路径
 # 不依赖同目录 read_audit.py 里新增的名字（新旧文件混用时 v3 验真也不会因此出错）。两处取值由测试比对，防止漂移。
 TRACE_SCHEMA_V4 = "read-audit-trace/v4"
@@ -76,6 +76,9 @@ READLINK_NAMES = frozenset({"readlink", "readlinkat"})
 METADATA_WRITE_NAMES = frozenset({"chmod", "fchmodat", "fchmodat2", "chown", "lchown", "fchownat",
                                   "utime", "utimes", "utimensat", "futimesat", "truncate", "truncate64"})
 ROLES = ("source", "destination")
+# WP-R9：成功时永远不参与去重的写类调用（``OutputTrackerV4.dedup_key`` 返回 None）：创建／删除目录项与符号链接几乎总是改名字空间，
+# 被拒绝时的判定又依赖子项个数等没有版本号覆盖的状态，保留它们的代价（实测合计约 2.5 万条）可以忽略，换来键的正确性证明更简单。
+NEVER_DEDUP_WRITES = frozenset({"mkdir", "mkdirat", "unlink", "unlinkat", "rmdir"}) | SYMLINK_NAMES
 # 这两个 renameat2 标志会让两个名字互换或在原位留下占位对象，对象身份模型不支持，一律拒绝。
 UNSUPPORTED_RENAME_FLAGS = frozenset({"RENAME_EXCHANGE", "RENAME_WHITEOUT"})
 
@@ -474,8 +477,51 @@ class OutputTrackerV4:
     状态已经脱节，所以判矛盾（记入 problems，不改名字表）。这三道自检不会放行任何东西——这类声明本来也不会把未证明的名字
     变成已证明——但少一道自检，就少一次发现「归属状态已经和真实文件系统对不上」的机会。
 
-    ``observe_event`` 返回「本事件是否改变了名字空间状态」：解析器据此推进变更纪元并决定能否对只读事件去重；
+    ``observe_event`` 返回「本事件是否改变了名字空间状态」：解析器据此推进变更纪元、并决定该事件是否一定保留（改了状态的事件永不去重）；
     重放端用同一个返回值重算纪元，所以任何会改名字空间的分支都必须返回 True，反之必须返回 False。
+
+    WP-R8（乱序容忍：待补证／销账）：``strace -f`` 按「各被追踪进程的系统调用返回被 tracer 处理的先后」逐行输出，不是因果顺序——
+    进程 A 的 ``openat(O_CREAT)`` 在内核里早已完成，但 A 停在退出点等 tracer 取走，进程 B 紧接着的 ``stat`` 却先被打印。
+    于是私有盘里会出现「先成功读到、后看到创建事件」的名字（10-15 ARM64 实测：supervisor 心跳进程写 minute-ledger.ndjson、主进程 stat 它）。
+    原规则把这样的成功读取立即判为「首次读取前未证明由本轮生成」，把正常行为判成失败。现在改成两步：
+
+    * **待补证**：私有盘内一个**未证明名字**上的、**不改名字空间且要求对象存在**的访问——kind 不是 write 也不是 missing 的事件，
+      不论成功还是失败（EACCES、EINVAL 一类的失败同样意味着对象存在）——不立即判问题，而是把这个名字记进 ``awaiting``。
+      这类事件仍然返回 False（没有改变名字空间：对象早已存在，跟踪器只是记了一笔债）；
+    * **销账**：之后只要出现**同一个名字**的创建——``O_CREAT`` 的 open／creat、mkdir／mkdirat、symlink／symlinkat、
+      link／linkat 的目的名字、rename／renameat／renameat2 把别处对象（目录则连同子树）改名到该名字——就从 ``awaiting`` 里划掉；
+    * **清算**：轨迹结束仍未销账的名字，在 ``report()`` 里以与原来相同的文字（「首次读取前未证明由本轮生成：」+ 路径）报为问题。
+      ``report()`` 只读取不修改状态，多次调用结果相同，重放端据此与文档里的 ``outputs`` 逐字相等比对。
+
+    为什么这样安全（无需给乱序容忍窗口设上限）：私有盘是单元启动时检查为空的 tmpfs（``empty_temporary_root``），挂载在新的
+    挂载命名空间里，只有本单元被追踪的进程树能在里面创建对象；每一种创建方式要么被跟踪器建模，要么被解析器登记未解析
+    （bind、mknodat 判问题、AT_EMPTY_PATH 的 linkat 另一端不在盘内……）而使整份轨迹失败。所以盘内任何存在的名字必有一次可见的建模
+    创建，该创建事件一定出现在轨迹里（只是可能比读取晚），而「从未创建却存在」的名字永远销不了账、必在清算时被报出。
+    窗口不设上限的理由：乱序量取决于 tracer 的唤醒调度（可达上千条事件），任何上限都是任意数字；而销账只认**同一个名字**，
+    窗口多长都不会让一个从未被创建的名字通过。读取内容类事件（``read``）比 ``stat`` 多暴露的是文件内容，但盘内内容只可能来自
+    本单元自己的进程（它读取的宿主文件各有自己的宿主路径事件，由宿主快照逐项核对），所以并不新增任何宿主信息；
+    宿主路径（不在私有盘内）不适用本规则，仍由宿主快照与策略声明判定。
+
+    WP-R9（名字级去重）：解析器要对重复的输出事件去重（10-15 实测 compare_accept 产生 128 万条事件，88% 是对私有盘内路径的
+    重复成功 stat／读；全局变更纪元被约 5.5 万条写／rename／unlink 切得太碎，去重效果有限）。去重的前提是「两条事件的判定相同」，
+    而一条事件的判定只取决于**它所涉及的几个名字**的状态，不取决于整个名字空间。所以这里给每个名字一个**版本号**
+    （``versions``：名字 → 唯一且单调的整数，未出现过的名字为 0），任何改变该名字**存在性、对象身份或待补证状态**的操作——创建、
+    解绑、rename 的来源与目的（目录则连同整棵子树的每个名字）、硬链接目的、待补证的记账与销账——都给被影响的名字换一个新版本号；
+    ``dedup_key(event)`` 在事件**到达时**（先于 ``observe_event``）给出去重键：事件本身的全部字段，加上它判定所依赖的状态：
+
+    * 路径自己的版本号（⇒ 名字是否已知、指向哪个对象、对象类型是否符号链接、是否待补证）；
+    * 路径的某个祖先是否符号链接（``_through_symlink``，只在存在符号链接对象时才可能为真；目录被改名／删除再换成链接，
+      祖先的绑定变了，这一位随之变化，不需要「子树失效」的额外记账）；
+    * 写类事件还要加「父目录是否已证明为目录」（创建失败判定用）；
+    * 两路径调用的失败事件，两端的版本号、两端「是否经符号链接」与目的端父目录是否为目录（来源端与目的端事件用同一份
+      归一化的状态，保证一次调用的两条事件要么一起被去重、要么一起保留，不破坏重放端的配对检查）。
+
+    键相同 ⇒ 判定相同：随机对拍（test_ci_read_audit_wp_r8）逐条核对「同一个键的所有事件，观察结果（是否改状态、新增问题）完全一致」。
+    不参与去重（``dedup_key`` 返回 None，永远保留）的事件：成功的两路径调用、成功的 mkdir／unlink／rmdir／symlink（它们的
+    判定还依赖子项个数等没有版本号覆盖的状态，且几乎总是改名字空间）。另有一类即使键重复也必须保留：紧跟在一次文件创建之后的
+    那条事件（``consumes_hidden_state``，它会消耗 ``_created_by_previous`` 这个隐藏状态，重放端必须看到它，才能和解析端消耗得一样）。
+    注意：键里**没有**全局变更纪元——对其它名字的写、rename、unlink 不会使这个名字上的重复读取失效；而对这个名字
+    （或带着它的目录）的任何改变都会换新版本号，使之后的同样读取重新保留一条。
     """
 
     def __init__(self, contract: dict[str, Any]) -> None:
@@ -492,6 +538,13 @@ class OutputTrackerV4:
         self.link_text: dict[int, str] = {}
         self.covered: set[str] = set()
         self.problems: set[str] = set()
+        # WP-R8：待补证的名字（当时未证明、却已被成功读取／探测的名字），按首次出现顺序；值恒为 None，只用字典保持确定的顺序。
+        # 创建该名字的事件到达时划掉；轨迹结束仍留在这里的，由 ``report()`` 报为问题。
+        self.awaiting: dict[str, None] = {}
+        # WP-R9：名字 → 版本号（见类说明）。版本号取自单调递增的 ``_clock``，所以同一个名字的两个版本号绝不相等，
+        # 「名字被删除后又重新创建成同样的对象」也不会和旧版本混同。
+        self.versions: dict[str, int] = {}
+        self._clock = 0
         # 上一条事件若创建了某个文件名，这里记着它的路径；下一条事件一到就被取出并清除（只对紧邻的下一条事件有效）。只服务于
         # O_CREAT|O_EXCL 的矛盾自检：解析器对一次 openat／open 调用产生两条紧挨着的事件（请求路径一条、返回描述符的真实路径一条，
         # 路径相同），创建名字的是第一条，第二条落在刚创建的名字上，不是矛盾。不影响任何事件的返回值，也不影响名字表。
@@ -507,6 +560,22 @@ class OutputTrackerV4:
         obj = self.names.get(path)
         return None if obj is None else self.kinds[obj]
 
+    def _touch(self, path: str) -> None:
+        """WP-R9：名字的存在性、对象身份或待补证状态变了，给它换一个新版本号。"""
+        self._clock += 1
+        self.versions[path] = self._clock
+
+    def _await(self, path: str) -> None:
+        """WP-R8：记一笔待补证——未证明的名字被成功读取／探测，等同名字的创建事件来销账（见类说明）。"""
+        if path not in self.awaiting:
+            self.awaiting[path] = None
+            self._touch(path)
+
+    def _settle(self, path: str) -> None:
+        """WP-R8：名字刚被绑定到一个对象（创建、硬链接目的、rename 带入），划掉它的待补证。只认同一个名字。
+        调用点都紧跟在绑定名字（``_touch``）之后，版本号已经换过，这里不用再换。"""
+        self.awaiting.pop(path, None)
+
     def _create(self, path: str, kind: str, text: str | None = None) -> None:
         """在已证明的父目录下新建对象并绑定名字（调用方已确认父目录已知、路径未知）。
 
@@ -515,6 +584,7 @@ class OutputTrackerV4:
         obj = self.next_object
         self.next_object += 1
         self.names[path] = obj
+        self._touch(path)
         self.kinds[obj] = kind
         self.links[obj] = 1
         self.entries[os.path.dirname(path)] += 1
@@ -522,10 +592,12 @@ class OutputTrackerV4:
             self.entries[path] = 0
         if kind == "symlink":
             self.link_text[obj] = text if text is not None else ""
+        self._settle(path)
 
     def _unbind(self, path: str) -> None:
         """解绑一个名字；对象失去最后一个名字后消亡。目录解绑前调用方须确认它没有子项。"""
         obj = self.names.pop(path)
+        self._touch(path)
         self.entries[os.path.dirname(path)] -= 1
         self.entries.pop(path, None)
         self.links[obj] -= 1
@@ -544,8 +616,11 @@ class OutputTrackerV4:
         for item in moved:
             renamed = destination + item[len(source):]
             self.names[renamed] = self.names.pop(item)
+            self._touch(item)            # 来源端的名字消失（目录则连同子树里的每个名字）
+            self._touch(renamed)         # 目的端的名字出现
             if item in self.entries:
                 self.entries[renamed] = self.entries.pop(item)
+            self._settle(renamed)
         self.entries[os.path.dirname(source)] -= 1
         self.entries[os.path.dirname(destination)] += 1
 
@@ -620,6 +695,46 @@ class OutputTrackerV4:
             return True
         return False
 
+    # ------------------------------------------------------------------ 去重键（WP-R9）
+
+    def _through(self, path: str) -> bool:
+        """路径的某个真祖先是否符号链接；没有符号链接对象时恒为 False（省掉逐级查找）。"""
+        return self._through_symlink(path) if self.link_text else False
+
+    def dedup_key(self, event: dict[str, Any]) -> tuple | None:
+        """事件到达时的去重键：键相同 ⇒ 跟踪器对这两条事件的判定（是否改名字空间、新增哪些问题）完全相同。
+
+        必须在 ``observe_event`` **之前**调用——键描述的是事件到达时相关名字的状态。返回 None 表示这条事件永远保留，原因见类说明。
+        解析器只对「observe_event 返回 False」的事件按此键去重；返回 True 的事件（改了名字空间）本来就永不去重。
+        两路径调用的两条事件共用同一份归一化状态（来源端、目的端各自的版本与是否经链接），所以一次失败调用的两条事件
+        要么都被去重、要么都保留——重放端要求盘内两端成对出现。
+        隐藏状态 ``_created_by_previous`` 只被「``O_CREAT|O_EXCL`` 成功落在已知名字上」的矛盾自检读取，所以只有这类事件的键里带
+        「它是不是刚被上一条事件创建」这一位；另外，紧跟在创建之后的**任何**事件都会消耗该隐藏状态，必须保留
+        （``consumes_hidden_state``），否则重放端少看一条事件，隐藏状态的消耗就和解析端不同。
+        """
+        name, kind, path, peer, role = event["name"], event["kind"], event["path"], event["peer"], event["role"]
+        succeeded = event["succeeded"]
+        own = (path, kind, name, succeeded, event["errno"], tuple(event["flags"]), event["target"], role, peer)
+        versions = self.versions
+        if name in TWO_PATH_NAMES:
+            if succeeded or role not in ROLES or peer is None or not under(peer, self.root):
+                return None        # 成功的两路径调用要么改状态、要么是「同一对象」的空操作，两端一律保留；畸形事件本身就是问题
+            source, destination = (path, peer) if role == "source" else (peer, path)
+            return own + (versions.get(source, 0), versions.get(destination, 0), self._through(source), self._through(destination),
+                          self._kind_of(os.path.dirname(destination)) == "directory")
+        if succeeded and kind == "write" and name in NEVER_DEDUP_WRITES:
+            return None
+        state = (versions.get(path, 0), self._through(path))
+        if kind == "write":
+            state += (self._kind_of(os.path.dirname(path)) == "directory",)
+            if name in OPEN_NAMES and {"O_CREAT", "O_EXCL"} <= set(event["flags"]):
+                state += (self._created_by_previous == path,)
+        return own + state
+
+    def consumes_hidden_state(self) -> bool:
+        """下一条事件是否会消耗隐藏状态：上一条事件刚创建了某个文件名。这样的事件必须保留（见 ``dedup_key``）。"""
+        return self._created_by_previous is not None
+
     # ------------------------------------------------------------------ 事件入口
 
     def observe_event(self, event: dict[str, Any]) -> bool:
@@ -656,9 +771,9 @@ class OutputTrackerV4:
             return self._create_symlink(event)
         known = path in self.names
         if kind != "write":
-            # 读取、探测、执行、列目录：首次访问必须是本轮已证明的名字。
+            # 读取、探测、执行、列目录：名字未证明时不立即判问题，记待补证，等同名字的创建事件来销账（WP-R8，见类说明）。
             if not known:
-                self._problem("首次读取前未证明由本轮生成：", path)
+                self._await(path)
             return False
         parent_is_directory = self._kind_of(os.path.dirname(path)) == "directory"
         if name in {"mkdir", "mkdirat"}:
@@ -699,7 +814,8 @@ class OutputTrackerV4:
         """单路径调用失败。
 
         * 探测不存在的路径（kind 为 missing，即 ENOENT／ENOTDIR）：未知路径合法；已知名字却报不存在，轨迹与归属状态矛盾。
-        * 读取、探测、执行、列目录类调用的其他失败：它们既不创建也不删除任何东西，沿用旧规则，只要求访问的是本轮已证明的名字。
+        * 读取、探测、执行、列目录类调用的其他失败：它们既不创建也不删除任何东西，沿用旧规则，只要求访问的是本轮已证明的名字
+          （未证明的名字记待补证，等创建事件销账，见类说明 WP-R8；轨迹结束仍未销账才报问题）。
           这一条不能收紧：python3 启动脚本时 glibc 的 realpath 会对私有目录下每一级路径 readlinkat 并得到 EINVAL，
           执行没有执行权限的假程序会得到 EACCES，旧跟踪器对已证明路径上的这类失败一向放行。
         * 写类调用失败（创建、删除、改名、改元数据）：按错误码与已知状态判。EEXIST 落在已知名字上是合法的「创建被拒绝」，
@@ -712,8 +828,9 @@ class OutputTrackerV4:
             if known:
                 self._problem("已生成对象的缺失探测与轨迹矛盾：", path)
         elif kind != "write":
+            # 同上：失败的读取类调用（EACCES、EINVAL……）同样意味着对象存在，名字未证明时记待补证。
             if not known:
-                self._problem("首次读取前未证明由本轮生成：", path)
+                self._await(path)
         elif error == "EEXIST":
             if not known:
                 self._problem("EEXIST 落在未知路径，与轨迹矛盾：", path)
@@ -797,8 +914,10 @@ class OutputTrackerV4:
         else:
             # 目标名绑定到同一个对象：两个名字、一个对象。
             self.names[destination] = obj
+            self._touch(destination)
             self.links[obj] += 1
             self.entries[os.path.dirname(destination)] += 1
+            self._settle(destination)
             return True
         return False
 
@@ -842,7 +961,11 @@ class OutputTrackerV4:
         return True
 
     def report(self) -> dict[str, Any]:
-        return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(self.problems)}
+        """覆盖路径与问题清单。清算在这里完成：仍待补证的名字按原文字报为「首次读取前未证明由本轮生成」。
+        只读取状态、不修改，所以可以任意次调用（解析器出文档时一次，重放端复核时一次），结果相同。"""
+        problems = set(self.problems)
+        problems.update("首次读取前未证明由本轮生成：" + path for path in self.awaiting)
+        return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(problems)}
 
 
 def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: bool = False) -> dict[str, Any]:
@@ -979,8 +1102,8 @@ def _check_call_groups_v4(events: list[dict[str, Any]], root: str) -> None:
 def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tuple[OutputTrackerV4, dict[str, set[str]]]:
     """重放 v4 输出事件：先逐条与按调用分组做结构校验，再按顺序喂给跟踪器并重算变更纪元。
 
-    变更纪元 = 此前使名字空间状态发生变化的事件个数。解析器据此去重只读事件，重放端用同一个返回值自己重算，
-    每条事件携带的 epoch 必须与重算值一致——否则去重的前提（两条同键事件之间状态没变）就无从保证。
+    变更纪元 = 此前使名字空间状态发生变化的事件个数。解析器按名字级版本去重（WP-R9，键里不含纪元），重放端用同一个返回值自己
+    重算纪元，每条事件携带的 epoch 必须与重算值一致——任何改状态的事件都不会被去重，被删掉或伪造一条，之后所有事件的纪元都对不上。
     """
     tracker = OutputTrackerV4(contract)
     events = runtime.get("output_events")
@@ -997,7 +1120,9 @@ def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tupl
         if tracker.observe_event(event):
             epoch += 1
         seen.setdefault(event["path"], set()).add(event["kind"])
-    if tracker.report() != runtime.get("outputs") or tracker.problems:
+    # WP-R8：清算后的问题（含仍待补证的名字）才是完整结论，所以看 report() 而不是只看 tracker.problems 属性。
+    report = tracker.report()
+    if report != runtime.get("outputs") or report["problems"]:
         raise RuntimeContractError("生成输出存在先读后写、来源不明或链接越界")
     return tracker, seen
 
