@@ -36,6 +36,15 @@ WP-R2（解析器加固第二轮）：ARM64 真实环境里把正常行为判成
 套接字的创建，以及连接 AF_UNIX 绝对路径得到 ENOENT（登记为对该路径的 missing 探测）。v4 的 strace 选项因此多解码 openat2 与
 connect、多跟踪 bind；v4 的输出事件上限单列为 ``MAX_OUTPUT_EVENTS_V4``。每处放宽的依据与相邻的仍被拒绝的情形见各辅助函数的说明。
 
+WP-R3（解析器加固第三轮，同样只在 v4 合同下）：私有盘内“本单元自己创建的符号链接”被输出归属接受（``read_audit_runtime.OutputTrackerV4``
+里的 ``symlink`` 对象，链接文本原样记在事件的 ``target`` 字段、从不解引用），并保证一切会解引用链接的访问仍然失败关闭。解析器侧
+的配合有四处：（1）事件 ``flags`` 带上调用的 ``AT_*`` 标志（白名单 ``AT_FLAGS_V4``，名单之外登记 at-flag-not-decoded），lstat
+才能与 stat 区分；（2）lstat 到跟踪器仍记着的、本单元创建的链接不再登记 symlink-metadata-not-bound，宿主上的真链接、不是本单元
+创建的、返回结构没完整解码为 S_IFLNK 的仍登记；反方向（内核说普通文件、跟踪器说链接）登记 symlink-state-contradicts-stat；（3）存在符号链接
+对象时，路径写法 ``link/``、``link/.``、``link/..`` 与链接后的 ``..`` 会让文本规范化与内核实际解析的对象不一致，登记
+symlink-path-form-unsafe；（4）symlink／symlinkat 的链接文本缺失或被截断登记 symlink-text-not-decoded。``O_PATH|O_NOFOLLOW`` 的打开
+不豁免。逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r3.py 的模块说明。
+
 子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
 """
@@ -217,6 +226,16 @@ def _rename_flags(arguments: Sequence[str]) -> frozenset[str] | None:
     return frozenset(names) if all(item in _RENAME_FLAG_NAMES for item in names) else None
 
 
+# WP-R3：v4 事件 flags 里允许出现的 AT_* 标志（白名单）。read_audit_runtime.py 里有一份同值常量（两个文件互不导入），
+# 两处必须相等，由 test_ci_read_audit_wp_r3 守住。名单之外的 AT_* 标志（AT_FDCWD 是描述符取值，不算标志）登记
+# at-flag-not-decoded 未解析：看不懂的标志可能改变“是否跟随符号链接”之类的语义，不能默默丢掉。
+AT_FLAGS_V4 = frozenset({"AT_SYMLINK_NOFOLLOW", "AT_SYMLINK_FOLLOW", "AT_REMOVEDIR", "AT_EMPTY_PATH", "AT_NO_AUTOMOUNT",
+                         "AT_EACCESS", "AT_STATX_SYNC_AS_STAT", "AT_STATX_FORCE_SYNC", "AT_STATX_DONT_SYNC"})
+_LSTAT_NAMES = frozenset({"lstat", "lstat64"})
+_FSTATAT_NAMES = frozenset({"newfstatat", "fstatat64", "statx"})
+_SYMLINK_CALLS = frozenset({"symlink", "symlinkat"})
+
+
 def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
     """只认完整返回结构里明确的普通文件或目录，不能从路径、其他参数或缩略结构猜类型。"""
     positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
@@ -231,6 +250,57 @@ def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
     modes = [field for field in fields if re.match(re.escape(key) + r"\s*=", field)]
     return len(modes) == 1 and re.fullmatch(
         re.escape(key) + r"\s*=\s*(?:S_IFREG|S_IFDIR)(?:\|(?:0[0-7]+|S_ISUID|S_ISGID|S_ISVTX))*", modes[0]) is not None
+
+
+def _returned_link_stat(name: str, arguments: Sequence[str]) -> bool:
+    """与 ``_returned_non_link_stat`` 对称：完整返回结构里 ``st_mode``／``stx_mode`` 明确是符号链接（S_IFLNK）。
+
+    只服务于 v4 的“lstat 到本单元自己创建的符号链接”豁免（见 ``TraceParser._tracked_symlink_lstat``）：返回结构必须被完整
+    解码（没有省略号、恰好一个 mode 字段、类型就是 S_IFLNK），不能从路径或缩略结构猜类型。
+    """
+    positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
+    position = positions.get(name)
+    if position is None or position >= len(arguments):
+        return False
+    value = arguments[position].strip()
+    if not value.startswith("{") or not value.endswith("}") or "..." in value:
+        return False
+    fields = _call_arguments(value[1:-1], None)
+    key = "stx_mode" if name == "statx" else "st_mode"
+    modes = [field for field in fields if re.match(re.escape(key) + r"\s*=", field)]
+    return len(modes) == 1 and re.fullmatch(
+        re.escape(key) + r"\s*=\s*S_IFLNK(?:\|(?:0[0-7]+|S_ISUID|S_ISGID|S_ISVTX))*", modes[0]) is not None
+
+
+def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
+    """原始路径参数的写法，会不会让“文本规范化后的路径”与内核实际解析的对象不是同一个——只在存在符号链接对象时才可能。
+
+    解析器用 ``os.path.normpath`` 把路径规范化成绝对路径，这对没有符号链接的目录树是等价的；一旦有符号链接对象，
+    有三种写法会让规范化“骗人”（都是 Linux 的真实语义）：
+
+    * ``link/..``、``a/link/../b``：内核先解引用 link 再取目标的父目录，规范化却直接回到 link 的父目录；
+    * ``link/``、``link/.``：结尾的斜杠或 ``.`` 迫使内核解引用最后的链接，哪怕调用本身是 lstat／readlink 这类“不跟随”的调用；
+    * 同理 ``link/./x`` 之类经过链接的中间分量，规范化后是 ``…/link/x``，由跟踪器的“中间分量是符号链接”检查拦下，不在这里。
+
+    本函数沿原始写法逐个分量走一遍（起点是 dirfd／工作目录的规范路径或根），遇到 ``..`` 时若当前位置是存活的符号链接名字、
+    或结尾带斜杠／``.`` 时当前位置是符号链接名字，就判有风险。返回 True 时调用方登记未解析，整次审计失败关闭。
+    """
+    if not raw or not tracker.has_symlinks():
+        return False
+    current = "/" if raw.startswith("/") else base
+    if current is None:
+        return False
+    parts = raw.split("/")
+    for component in parts:
+        if component in ("", "."):
+            continue
+        if component == "..":
+            if tracker.is_symlink(current):
+                return True
+            current = os.path.dirname(current) or "/"
+        else:
+            current = os.path.join(current, component)
+    return (raw.endswith("/") or parts[-1] == ".") and tracker.is_symlink(current)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +492,7 @@ class TraceParser:
         self.call_errno: str | None = None         # 当前调用的错误码，成功为 None
         self.call_flags: frozenset[str] = frozenset()   # 当前调用的 RENAME_* 标志（renameat2）
         self.call_end: tuple[str, str | None] | None = None   # 当前正在登记的两路径调用端点：(角色, 另一端路径)
+        self.call_link: str | None = None          # 当前 symlink／symlinkat 调用的链接文本（WP-R3，原样记下，不解引用）
         self.epoch = 0                             # 变更纪元：此前使名字空间状态改变的事件个数
         self.seen_events: set[tuple] = set()       # 当前纪元内已出现过的事件键，用于只读事件去重
         if runtime_context is not None:
@@ -454,6 +525,9 @@ class TraceParser:
             target = unescape(descriptor[1]) if descriptor else None
             flags = _operation_flags(body)
             if self.trace_v4:
+                if name in _SYMLINK_CALLS:
+                    # WP-R3：符号链接创建调用没有返回描述符，事件的 target 字段改存链接文本（原样、不解引用），跟踪器据此记录对象。
+                    target = self.call_link
                 self._record_output_event(path, kind, name, succeeded, flags, target)
                 return
             self.output_tracker.observe(path, kind, name, "|".join(flags), succeeded, target)
@@ -541,12 +615,24 @@ class TraceParser:
         self.call_errno = errno
         self.call_flags = frozenset()
         self.call_end = None
+        self.call_link = None
         if self.trace_v4 and name == "renameat2":
             decoded = _rename_flags(arguments)
             if decoded is None:
                 self._unresolved("rename-flags-not-decoded:" + name)
             else:
                 self.call_flags = decoded
+        if self.trace_v4:
+            # WP-R3：事件要带上调用的 AT_* 标志（lstat 与 stat、unlinkat 的 AT_REMOVEDIR 都靠它区分）。AT_FDCWD 是描述符取值，
+            # 不是标志；名单之外的 AT_* 标志看不懂，登记未解析而不是默默丢掉。
+            at_flags = frozenset(flag for flag in _argument_flags(body) if flag.startswith("AT_") and flag != "AT_FDCWD")
+            if at_flags - AT_FLAGS_V4:
+                self._unresolved("at-flag-not-decoded:" + name)
+            self.call_flags = self.call_flags | (at_flags & AT_FLAGS_V4)
+            if name in _SYMLINK_CALLS:
+                self.call_link = _path_argument(arguments, 0)
+                if self.call_link is None:
+                    self._unresolved("symlink-text-not-decoded:" + name)
         if self.strict and result and result.group(1).isdigit() and errno is None:
             flags = _argument_flags(body)
             # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
@@ -556,7 +642,15 @@ class TraceParser:
                              or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags))
             if ((nofollow_stat and not (result.group(1) == "0" and _returned_non_link_stat(name, arguments)))
                     or (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags)):
-                self._unresolved("symlink-metadata-not-bound:" + name)
+                # WP-R3（仅 v4）：lstat 到“本单元自己创建、跟踪器当前仍记着的符号链接”不登记 symlink-metadata-not-bound——
+                # 那是链接自己的元数据，内容由被测代码自己写入，没有宿主依赖。宿主上的真链接、不在私有盘内的、不是本单元创建的
+                # 一律仍登记。O_PATH|O_NOFOLLOW 的打开不豁免（得到的描述符后续可被 openat(fd, "") 等转成跟随，不可见）。
+                if not (self.trace_v4 and nofollow_stat and self._tracked_symlink_lstat(name, arguments, pid, result.group(1))):
+                    self._unresolved("symlink-metadata-not-bound:" + name)
+            elif self.trace_v4 and nofollow_stat and self._single_path_is_tracked_symlink(name, arguments, pid):
+                # 反方向的互相印证：内核说这是普通文件或目录（完整解码、返回 0），跟踪器却记着它是符号链接——名字表与真实状态已经脱节
+                # （例如链接被某个没观察到的路径替换）。不能继续相信后面基于名字表的任何判定，登记未解析。
+                self._unresolved("symlink-state-contradicts-stat:" + name)
         for argument in arguments:
             annotation = _ANNOTATION.fullmatch(argument)
             if annotation is None:
@@ -652,7 +746,7 @@ class TraceParser:
                     continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过
                 if ends is not None:
                     self.call_end = (_ROLES[slot], ends[1 - slot])
-                self._add(_join(directory, path), kind, line)
+                self._add(self._checked_join(directory, path), kind, line)
             self.call_end = None
             if self.strict:
                 if len(pairs) != len(positions):
@@ -696,7 +790,7 @@ class TraceParser:
             for index, path in enumerate(strings):
                 if ends is not None:
                     self.call_end = (_ROLES[slots[index]], ends[1 - slots[index]])
-                self._add(_join(self.cwd.get(pid), path), kind, line)
+                self._add(self._checked_join(self.cwd.get(pid), path), kind, line)
             self.call_end = None
             if self.strict:
                 if len(strings) != len(positions):
@@ -725,6 +819,44 @@ class TraceParser:
                 return
         if self.strict:
             self._unresolved("unsupported-call:" + name)
+
+    def _checked_join(self, directory: str | None, path: str) -> str | None:
+        """``_join`` 加 v4 的符号链接路径形态检查：存在符号链接对象时，``..``／结尾斜杠等写法可能让规范化后的路径
+        与内核实际解析的对象不同，见 ``_path_form_hazard``。路径照常返回（事件照常记录），同时登记未解析让整次审计失败关闭。"""
+        joined = _join(directory, path)
+        if (self.trace_v4 and joined is not None and self.output_tracker.has_symlinks()
+                and _path_form_hazard(self.output_tracker, directory, path)):
+            self._unresolved("symlink-path-form-unsafe")
+        return joined
+
+    def _single_path(self, name: str, arguments: Sequence[str], pid: str) -> str | None:
+        """lstat 一类单路径调用的规范路径（与后面通用分支的算法一致）；空路径（AT_EMPTY_PATH）或无法还原时返回 None。"""
+        if name in _DIRFD_PROBE:
+            directory = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
+            path = _path_argument(arguments, 1)
+            if directory is None or not path:
+                return None
+            return _join(unescape(directory[2]), path)
+        path = _path_argument(arguments, 0)
+        return _join(self.cwd.get(pid), path) if path else None
+
+    def _single_path_is_tracked_symlink(self, name: str, arguments: Sequence[str], pid: str) -> bool:
+        path = self._single_path(name, arguments, pid)
+        return (path is not None and self.output_tracker is not None and _under(path, self.output_tracker.root)
+                and self.output_tracker.is_symlink(path))
+
+    def _tracked_symlink_lstat(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
+        """lstat 一类调用成功得到“链接自己的元数据”，且该链接正是本单元在私有盘内创建、跟踪器仍记着的符号链接。
+
+        条件全部满足才豁免 symlink-metadata-not-bound：返回值是 0、返回结构被完整解码且 st_mode 明确是符号链接、
+        路径落在私有盘内、跟踪器此刻把这个名字登记为符号链接对象。这样跟踪器的认识与内核的返回互相印证——跟踪器说是链接而
+        内核说是普通文件（或反之）、链接在宿主上、链接不是本单元创建的，都不满足，保持原判。路径写法有风险
+        （``link/`` 迫使内核解引用）的情形由 ``_checked_join`` 另行登记。
+        """
+        if returned != "0" or self.output_tracker is None or not _returned_link_stat(name, arguments):
+            return False
+        path = self._single_path(name, arguments, pid)
+        return path is not None and _under(path, self.output_tracker.root) and self.output_tracker.is_symlink(path)
 
     def _defer(self, pid: str, line: str) -> None:
         """等待父进程归属，限制缓存量；超过上限仍拒绝覆盖，不猜测工作目录。"""

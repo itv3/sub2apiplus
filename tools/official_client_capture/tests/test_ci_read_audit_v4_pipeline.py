@@ -8,6 +8,9 @@
 * 没有未解析调用、没有任何归属问题，重放通过；
 * 解析器里跟踪器最终的名字表、对象身份与子项计数，与真实文件系统逐项一致；
 * 同一份行流按 v3 合同解析，结论与改动前一致（rename／link 被旧合同拒绝），说明开关只影响 v4。
+
+WP-R3 起随机历史里也有符号链接：创建（symlink／symlinkat，含 EEXIST 等失败）、lstat（五种写法，返回结构按真实节点类型完整解码）、
+readlink／readlinkat、对链接的 unlink 与 rename 覆盖。渲染出的行经解析器后，链接对象与链接文本必须和真实文件系统一致。
 """
 
 from __future__ import annotations
@@ -20,14 +23,20 @@ from tools.ci import read_audit as ra
 from tools.official_client_capture.tests import test_ci_read_audit_v4_tracker as simulation
 from tools.official_client_capture.tests.test_ci_read_audit_v4_trace import AuditFixture
 
-ERRNO_TEXT = {"EEXIST": "File exists", "ENOENT": "No such file or directory", "ENOTDIR": "Not a directory"}
+ERRNO_TEXT = {"EEXIST": "File exists", "ENOENT": "No such file or directory", "ENOTDIR": "Not a directory",
+              "EINVAL": "Invalid argument"}
+STAT_MODES = {"symlink": "S_IFLNK|0777", "file": "S_IFREG|0644", "directory": "S_IFDIR|0700"}
 
 
 class RandomPipelineTests(AuditFixture):
     """随机历史走完整条流水线。"""
 
-    def render(self, events: list[dict[str, Any]], rng: random.Random) -> list[str]:
-        """把模拟器产出的一个调用的事件渲染成 strace 行；同一调用的重复事件（请求路径与返回描述符）只渲染一行。"""
+    def render(self, events: list[dict[str, Any]], rng: random.Random, fs: Any = None) -> list[str]:
+        """把模拟器产出的一个调用的事件渲染成 strace 行；同一调用的重复事件（请求路径与返回描述符）只渲染一行。
+
+        ``fs`` 是刚执行完这个操作的模拟文件系统：lstat 的返回结构要按节点的真实类型完整解码（链接是 S_IFLNK）。lstat 不改状态，
+        所以此刻查到的类型就是 lstat 时的类型。"""
+        self.fs = fs
         lines: list[str] = []
         index = 0
         while index < len(events):
@@ -75,7 +84,8 @@ class RandomPipelineTests(AuditFixture):
     def render_single(self, event: dict[str, Any], rng: random.Random) -> str:
         path = self.real(event["path"])
         name = event["name"]
-        dirfd, argument = self.location(path, rng, plain_ok=name in {"mkdir", "unlink", "rmdir"} and path != self.root)
+        plain_names = {"mkdir", "unlink", "rmdir", "lstat", "lstat64", "readlink", "symlink"}
+        dirfd, argument = self.location(path, rng, plain_ok=name in plain_names and path != self.root)
         anchor = dirfd or self.cwd_annotation
         if name in {"mkdir", "mkdirat"}:
             call = f'mkdir("{argument}", 0700)' if not dirfd else f'mkdirat({dirfd}, "{argument}", 0700)'
@@ -85,12 +95,27 @@ class RandomPipelineTests(AuditFixture):
         if name == "openat" and "O_CREAT" in event["flags"]:
             tail = f"3<{path}>" if event["succeeded"] else self.result(event, "")
             return f'1 openat({anchor}, "{argument}", {"|".join(event["flags"])}, 0600) = {tail}'
+        # 只有不带 dirfd 的“纯路径”调用（symlink、readlink、lstat）：描述符标注不会出现在行里，所以带标注的写法要换成完整的绝对路径。
+        plain_argument = argument if not dirfd else path
+        if name in {"symlink", "symlinkat"}:
+            text = event["target"]
+            call = f'symlink("{text}", "{plain_argument}")' if name == "symlink" else f'symlinkat("{text}", {anchor}, "{argument}")'
+            return f"1 {call} = {self.result(event, '0')}"
+        if name in {"readlink", "readlinkat"}:
+            text = self.fs.lookup(event["path"]).text if event["succeeded"] else ""
+            outcome = self.result(event, str(len(text or "")))
+            buffer = f'"{text}"' if event["succeeded"] else "0x1"
+            if name == "readlink":
+                return f'1 readlink("{plain_argument}", {buffer}, 4096) = {outcome}'
+            return f'1 readlinkat({anchor}, "{argument}", {buffer}, 4096) = {outcome}'
+        if name in {"lstat", "lstat64"} or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in event["flags"]):
+            return self.render_nofollow_stat(event, name, plain_argument, argument, anchor)
         if name == "newfstatat" and event["kind"] == "stat":
             return f'1 newfstatat({anchor}, "{argument}", {{st_mode=S_IFREG|0644}}, 0) = 0'
         if name == "newfstatat":                                     # 缺失探测
             return f'1 newfstatat({anchor}, "{argument}", 0x1, 0) = {self.result(event, "0")}'
-        if name == "unlink":
-            call = f'unlink("{argument}")' if not dirfd else f'unlinkat({dirfd}, "{argument}", 0)'
+        if name in {"unlink", "unlinkat"}:
+            call = f'unlink("{argument}")' if not dirfd and name == "unlink" else f'unlinkat({anchor}, "{argument}", 0)'
             return f"1 {call} = {self.result(event, '0')}"
         if name == "rmdir":
             call = f'rmdir("{argument}")' if not dirfd else f'unlinkat({dirfd}, "{argument}", AT_REMOVEDIR)'
@@ -98,6 +123,19 @@ class RandomPipelineTests(AuditFixture):
         if name == "utimensat":
             return f'1 utimensat({anchor}, "{argument}", NULL, 0) = 0'
         raise AssertionError(f"渲染器不认识这个事件：{event}")
+
+    def render_nofollow_stat(self, event: dict[str, Any], name: str, plain_argument: str, argument: str, anchor: str) -> str:
+        """lstat 的五种写法；成功时返回结构按节点真实类型完整解码，失败（缺失探测）时结构是指针。"""
+        mode = STAT_MODES[self.fs.lookup(event["path"]).kind] if event["succeeded"] else None
+        if name in {"lstat", "lstat64"}:
+            struct = f"{{st_mode={mode}}}" if mode else "0x1"
+            return f'1 {name}("{plain_argument}", {struct}) = {self.result(event, "0")}'
+        if name == "statx":
+            struct = f"{{stx_mode={mode}}}" if mode else "0x1"
+            return (f'1 statx({anchor}, "{argument}", AT_STATX_SYNC_AS_STAT|AT_SYMLINK_NOFOLLOW, STATX_BASIC_STATS, {struct}) = '
+                    f'{self.result(event, "0")}')
+        struct = f"{{st_mode={mode}}}" if mode else "0x1"
+        return f'1 {name}({anchor}, "{argument}", {struct}, AT_SYMLINK_NOFOLLOW) = {self.result(event, "0")}'
 
     def render_pair(self, source: dict[str, Any], destination: dict[str, Any], rng: random.Random) -> str:
         first, second = self.real(source["path"]), self.real(destination["path"])
@@ -140,11 +178,11 @@ class RandomPipelineTests(AuditFixture):
         for _ in range(steps):
             events = helper.apply_random_operation(rng, fs, builder, statistics)
             if events:
-                lines += self.render(events, rng)
+                lines += self.render(events, rng, fs)
         return self.interleave(lines, rng), fs
 
     def test_random_histories_pass_the_whole_v4_pipeline_and_match_the_filesystem(self) -> None:
-        checked = successful_pairs = failed_pairs = 0
+        checked = successful_pairs = failed_pairs = symlinks = nofollow = readlinks = 0
         for seed in range(12):
             lines, fs = self.history(500 + seed, 160)
             parser = ra.TraceParser(strict=True, runtime_context=self.context, trace_contract="v4")
@@ -168,23 +206,41 @@ class RandomPipelineTests(AuditFixture):
                 self.assertEqual(tracker.kinds[tracker.names[path]], kinds[path], f"{path} {context}")
             self.assertEqual({frozenset(group) for group in groups_real.values()},
                              {frozenset(group) for group in groups_tracked.values()}, context)
+            # WP-R3：符号链接对象与链接文本（原样，不解引用）必须和真实文件系统一致。
+            self.assertEqual({tracker.names[path]: fs.lookup(path.replace(self.root, simulation.ROOT)).text
+                              for path, kind in kinds.items() if kind == "symlink"}, tracker.link_text, context)
             checked += len(lines)
+            for event in parser.output_events:
+                if event["name"] in {"symlink", "symlinkat"} and event["succeeded"]:
+                    symlinks += 1
+                elif event["name"] in {"lstat", "lstat64", "newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in event["flags"]:
+                    nofollow += 1
+                elif event["name"] in {"readlink", "readlinkat"} and event["succeeded"]:
+                    readlinks += 1
             pairs = [event for event in parser.output_events if event["role"] == "source"]
             successful_pairs += sum(1 for event in pairs if event["succeeded"])
             failed_pairs += sum(1 for event in pairs if not event["succeeded"])
         self.assertGreater(checked, 1500, "随机流水线测试必须真的跑过足够多的调用")
         self.assertGreater(successful_pairs, 150, "成功的 rename／link 要足够多，否则流水线对拍是空转")
         self.assertGreater(failed_pairs, 100, "失败的 rename／link（ENOENT／EEXIST）要足够多")
+        self.assertGreater(symlinks, 60, "成功的符号链接创建要足够多，否则符号链接的流水线对拍是空转")
+        self.assertGreater(nofollow, 60, "不跟随的 stat（五种写法）要足够多")
+        self.assertGreater(readlinks, 20, "成功的 readlink 要足够多")
 
     def test_the_same_random_streams_under_the_old_contract_still_reject_what_v3_never_supported(self) -> None:
-        """同样的行流按 v3 合同解析：解析本身不受开关影响（没有未解析调用），但 rename／link 与失败探测仍被旧合同拒绝。"""
+        """同样的行流按 v3 合同解析：解析本身不受开关影响，但 rename／link 与失败探测仍被旧合同拒绝。
+
+        WP-R3：唯一的例外是 lstat 到真链接——v3 一字不变，所以每一次对链接的 lstat 仍登记 symlink-metadata-not-bound（v4 靠跟踪器
+        记着“这是本单元创建的链接”才豁免）；除此之外没有任何未解析调用。"""
         rejected = 0
         for seed in range(4):
             lines, _fs = self.history(900 + seed, 160)
             document = self.completed(ra.filter_stream([line + "\n" for line in lines], ["/"], strict=True,
                                                        runtime_context=self.context))
             self.assertEqual(document["schema_version"], ra.RUNTIME_TRACE_SCHEMA)
-            self.assertEqual(document["coverage"]["unresolved"], 0)
+            reasons = document["coverage"]["unresolved_reasons"]
+            self.assertTrue(all(key.startswith("symlink-metadata-not-bound:") for key in reasons), reasons)
+            self.assertEqual(sum(reasons.values()), sum(1 for line in lines if "S_IFLNK" in line), reasons)
             self.assertTrue(all(len(event) == 6 for event in document["runtime"]["output_events"]))
             if any(line.split("(", 1)[0].split(" ", 1)[-1] in {"rename", "renameat", "renameat2", "link", "linkat"} for line in lines):
                 rejected += 1

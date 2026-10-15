@@ -8,6 +8,8 @@
 * 失败调用按错误码与已知状态的判定表；
 * 随机历史对拍：独立实现的「真实文件系统」按 POSIX 语义生成合法历史，跟踪器必须零问题，且名字表、对象身份、子项计数
   与真实状态逐步一致，「状态是否改变」的返回值也必须与真实状态是否改变一致（解析器用它推进变更纪元并决定能否去重）。
+  WP-R3 起合法历史里也有符号链接：创建（含 EEXIST／父目录缺失等失败）、unlink、rename 覆盖与被覆盖、lstat、readlink；
+  “该拒绝的跟随式访问”另由 test_ci_read_audit_wp_r3 的差分对拍覆盖。
 """
 
 from __future__ import annotations
@@ -57,6 +59,20 @@ class Builder:
 
     def unlink(self, path: str, name: str = "unlink", **kw: Any) -> list[dict[str, Any]]:
         return [self.event(name, path, **kw)]
+
+    def symlink(self, path: str, text: str | None = "testing", name: str = "symlinkat", **kw: Any) -> list[dict[str, Any]]:
+        """符号链接创建：事件的 target 字段是链接文本（原样，不解引用）。"""
+        return [self.event(name, path, target=text, **kw)]
+
+    def lstat(self, path: str, name: str = "newfstatat", *, ok: bool = True, errno: str | None = None) -> list[dict[str, Any]]:
+        """不跟随的元数据读取：lstat 本身，或带 AT_SYMLINK_NOFOLLOW 的 fstatat 系。失败时 ENOENT／ENOTDIR 是缺失探测。"""
+        flags = () if name in {"lstat", "lstat64"} else ("AT_SYMLINK_NOFOLLOW",)
+        kind = "missing" if not ok and errno in {"ENOENT", "ENOTDIR"} else "stat"
+        return [self.event(name, path, kind=kind, flags=flags, ok=ok, errno=errno)]
+
+    def readlink(self, path: str, name: str = "readlinkat", *, ok: bool = True, errno: str | None = None) -> list[dict[str, Any]]:
+        kind = "missing" if not ok and errno in {"ENOENT", "ENOTDIR"} else "stat"
+        return [self.event(name, path, kind=kind, ok=ok, errno=errno)]
 
     def pair(self, name: str, source: str, destination: str, *, ok: bool = True, errno: str | None = None,
              flags: tuple[str, ...] = ()) -> list[dict[str, Any]]:
@@ -268,11 +284,19 @@ class TrackerNegativeTests(unittest.TestCase):
     def assertProblem(self, problems: list[str], fragment: str) -> None:
         self.assertTrue(any(fragment in item for item in problems), f"应报出「{fragment}」，实际：{problems}")
 
-    def test_symbolic_links_are_refused(self) -> None:
+    def test_symbolic_link_creation_needs_a_recorded_text_a_free_name_and_a_proven_parent(self) -> None:
+        """WP-R3：创建符号链接本身不再被一刀切拒绝，但缺链接文本、名字已被占用、父目录未证明时仍判问题。
+        原先固定“符号链接一律拒绝”的断言在这里被有意识地改写；带完整信息的创建见 SymlinkTrackerTests。"""
         b = self.b
         for name in ("symlink", "symlinkat"):
-            with self.subTest(name=name):
+            with self.subTest(name=name, case="没有链接文本"):
                 self.assertProblem(self.problems(b.mkdir(D), b.create(D + "/a"), [b.event(name, D + "/s")]), "符号链接")
+            with self.subTest(name=name, case="链接文本为空"):
+                self.assertProblem(self.problems(b.mkdir(D), b.symlink(D + "/s", "", name=name)), "符号链接")
+            with self.subTest(name=name, case="名字已被占用"):
+                self.assertProblem(self.problems(b.mkdir(D), b.create(D + "/a"), b.symlink(D + "/a", "x", name=name)), "已知名字")
+            with self.subTest(name=name, case="父目录未证明"):
+                self.assertProblem(self.problems(b.mkdir(D), b.symlink(D + "/nodir/s", "x", name=name)), "父目录未证明")
 
     def test_exchange_and_whiteout_flags_are_refused(self) -> None:
         b = self.b
@@ -374,7 +398,7 @@ class TrackerNegativeTests(unittest.TestCase):
 
     def test_unmodelled_write_operations_are_refused(self) -> None:
         b = self.b
-        for name in ("mknod", "mknodat", "setxattr", "removexattr", "openat2"):
+        for name in ("mknod", "mknodat", "setxattr", "removexattr"):
             with self.subTest(name=name):
                 self.assertProblem(self.problems(b.mkdir(D), b.create(D + "/a"), [b.event(name, D + "/a")]), "未建立合同的输出操作")
         self.assertProblem(self.problems(b.mkdir(D), [b.event("chmod", D + "/unknown")]), "未建立合同的输出操作")
@@ -448,11 +472,12 @@ class TrackerFailureRuleTests(unittest.TestCase):
 class _SimNode:
     """独立实现的「真实文件系统」节点：目录有子项表，普通文件只有身份。硬链接就是同一个节点出现在两个父目录项里。"""
 
-    __slots__ = ("kind", "children")
+    __slots__ = ("kind", "children", "text")
 
-    def __init__(self, kind: str) -> None:
-        self.kind = kind
+    def __init__(self, kind: str, text: str | None = None) -> None:
+        self.kind = kind          # "directory"、"file"，或 WP-R3 起的 "symlink"（text 是链接文本，不解引用）
         self.children: dict[str, _SimNode] = {}
+        self.text = text
 
 
 class _SimFs:
@@ -479,6 +504,17 @@ class _SimFs:
     def parent_of(self, path: str) -> tuple[_SimNode | None, str]:
         parts = self.parts(path)
         return self.lookup(self.root + "".join("/" + part for part in parts[:-1])), parts[-1]
+
+    def through_symlink(self, path: str) -> bool:
+        """路径的某个中间分量（不含最后一个）当前是符号链接：内核解析它时必然解引用——独立于跟踪器的“真实语义”判定。"""
+        node: _SimNode | None = self.top
+        for part in self.parts(path)[:-1]:
+            node = node.children.get(part) if node is not None and node.kind == "directory" else None
+            if node is None:
+                return False
+            if node.kind == "symlink":
+                return True
+        return False
 
     def failure_errno(self, path: str) -> str:
         """路径解析失败时内核会给的错误码：途中遇到普通文件是 ENOTDIR，遇到缺失的名字是 ENOENT。"""
@@ -548,7 +584,9 @@ class TrackerSimulationTests(unittest.TestCase):
         fs = _SimFs(ROOT)
         tracker = runtime.OutputTrackerV4(CONTRACT)
         builder = Builder()
-        statistics = {"calls": 0, "rename_ok": 0, "link_ok": 0, "overwrite": 0, "failed": 0, "dir_move": 0, "noop": 0}
+        statistics = {"calls": 0, "rename_ok": 0, "link_ok": 0, "overwrite": 0, "failed": 0, "dir_move": 0, "noop": 0,
+                      "symlink_ok": 0, "symlink_failed": 0, "lstat_link": 0, "readlink_ok": 0, "unlink_link": 0,
+                      "rename_link": 0, "rename_over_link": 0}
         for step in range(steps):
             before = fs.snapshot()
             events = self.apply_random_operation(rng, fs, builder, statistics)
@@ -579,18 +617,29 @@ class TrackerSimulationTests(unittest.TestCase):
         for ident, group in groups_tracked.items():
             self.assertEqual(tracker.links[ident], len(group), "名字个数必须一致：" + context)
         self.assertEqual(set(tracker.kinds), set(groups_tracked), "不应残留已消亡对象：" + context)
+        # 符号链接对象：集合与链接文本必须和真实状态一致（文本原样，从不解引用），消亡的链接不应残留文本。
+        self.assertEqual({tracker.names[path]: fs.lookup(path).text for path, kind in kinds.items() if kind == "symlink"},
+                         tracker.link_text, "符号链接对象与链接文本必须一致：" + context)
         # 目录的直接子项个数；普通文件不应有子项计数。
         for path, kind in kinds.items():
             if kind == "directory":
                 self.assertEqual(tracker.entries[path], len(fs.lookup(path).children), f"子项计数不一致 {path}：" + context)
         self.assertEqual(set(tracker.entries), {path for path, kind in kinds.items() if kind == "directory"}, context)
 
+    LINK_TEXTS = ("testing", "../x", "/etc/passwd", "d1/a", "a b", "..")
+
     def apply_random_operation(self, rng: random.Random, fs: _SimFs, b: Builder,
                                statistics: dict[str, int]) -> list[dict[str, Any]]:
-        """随机挑一个操作，按真实语义改 fs，返回应当产生的事件；返回空表示本轮跳过（不属于合法历史的操作不生成）。"""
+        """随机挑一个操作，按真实语义改 fs，返回应当产生的事件；返回空表示本轮跳过（不属于合法历史的操作不生成）。
+
+        WP-R3 起合法历史里有符号链接：创建、被 unlink、被 rename 与覆盖别的名字、被 lstat／readlink；任何会解引用链接的操作
+        （路径的中间分量是链接、对链接名字的 stat／open／chmod 等）都不属于合法历史，在这里跳过——它们由差分对拍专门检验。
+        """
         operation = rng.choice(["mkdir", "create", "create", "reuse", "read", "stat", "unlink", "rmdir", "rename", "rename",
-                                "rename", "link", "link", "meta", "noreplace"])
-        path = self.new_path(rng, fs) if operation in {"mkdir", "create", "reuse"} else self.existing_path(rng, fs)
+                                "rename", "link", "link", "meta", "noreplace", "symlink", "symlink", "lstat", "readlink"])
+        path = self.new_path(rng, fs) if operation in {"mkdir", "create", "reuse", "symlink"} else self.existing_path(rng, fs)
+        if fs.through_symlink(path):
+            return []
         node = fs.lookup(path)
         parent, leaf = fs.parent_of(path)
         parent_is_dir = parent is not None and parent.kind == "directory"
@@ -608,28 +657,58 @@ class TrackerSimulationTests(unittest.TestCase):
             if node is not None:
                 if operation == "create":
                     statistics["failed"] += 1
-                    return b.create(path, extra, ok=False, errno="EEXIST")
+                    return b.create(path, extra, ok=False, errno="EEXIST")     # O_EXCL 不跟随：符号链接同样得 EEXIST
                 if node.kind != "file":
-                    return []  # 对目录以写方式打开会得到 EISDIR，那是被拒绝的失败，不属于合法历史
+                    return []  # 对目录以写方式打开会得到 EISDIR；对符号链接会跟随它——都不属于合法历史
                 return b.create(path, extra) + b.create(path, extra)
             if not parent_is_dir:
                 statistics["failed"] += 1
                 return b.create(path, extra, ok=False, errno=fs.failure_errno(path))
             parent.children[leaf] = _SimNode("file")
             return b.create(path, extra) + b.create(path, extra)
-        if operation in {"read", "stat"}:
+        if operation == "symlink":
+            text = rng.choice(self.LINK_TEXTS)
+            name = rng.choice(["symlink", "symlinkat"])
+            if node is not None:
+                statistics["symlink_failed"] += 1
+                return b.symlink(path, text, name=name, ok=False, errno="EEXIST")
+            if not parent_is_dir:
+                statistics["symlink_failed"] += 1
+                return b.symlink(path, text, name=name, ok=False, errno=fs.failure_errno(path))
+            parent.children[leaf] = _SimNode("symlink", text)
+            statistics["symlink_ok"] += 1
+            return b.symlink(path, text, name=name)
+        if operation in {"read", "stat", "lstat"}:
+            lstat_name = rng.choice(["lstat", "lstat64", "newfstatat", "fstatat64", "statx"])
             if node is None:
                 statistics["failed"] += 1
-                return b.probe(path, fs.failure_errno(path))
+                errno = fs.failure_errno(path)
+                return b.lstat(path, lstat_name, ok=False, errno=errno) if operation == "lstat" else b.probe(path, errno)
+            if node.kind == "symlink":
+                statistics["lstat_link"] += 1       # 对链接名字只有不跟随的 lstat 是合法的；read／stat 在这里一律改成 lstat
+                return b.lstat(path, lstat_name)
+            if operation == "lstat":
+                return b.lstat(path, lstat_name)
             return b.read(path) if node.kind == "file" and operation == "read" else b.stat(path)
+        if operation == "readlink":
+            name = rng.choice(["readlink", "readlinkat"])
+            if node is None:
+                statistics["failed"] += 1
+                return b.readlink(path, name, ok=False, errno=fs.failure_errno(path))
+            if node.kind == "symlink":
+                statistics["readlink_ok"] += 1
+                return b.readlink(path, name)
+            return b.readlink(path, name, ok=False, errno="EINVAL")           # 不是链接：glibc realpath 常见的 EINVAL
         if operation == "unlink":
             if node is None:
                 statistics["failed"] += 1
                 return b.unlink(path, ok=False, errno=fs.failure_errno(path))
-            if node.kind != "file":
+            if node.kind not in {"file", "symlink"}:
                 return []
+            if node.kind == "symlink":
+                statistics["unlink_link"] += 1
             del parent.children[leaf]
-            return b.unlink(path)
+            return b.unlink(path, name=rng.choice(["unlink", "unlinkat"]))
         if operation == "rmdir":
             if node is None:
                 statistics["failed"] += 1
@@ -639,11 +718,13 @@ class TrackerSimulationTests(unittest.TestCase):
             del parent.children[leaf]
             return b.unlink(path, name="rmdir")
         if operation == "meta":
-            return [] if node is None else [b.event("utimensat", path)]
+            return [] if node is None or node.kind == "symlink" else [b.event("utimensat", path)]     # 对链接做 utimensat 会跟随
         # 两路径调用：rename／renameat2(NOREPLACE)／link。
         # 目标：约四成选已存在的路径（覆盖、同对象、NOREPLACE 被拒），其余选已存在目录下的新名字。
         source = path
         destination = self.existing_path(rng, fs) if rng.random() < 0.4 else self.new_path(rng, fs)
+        if fs.through_symlink(destination):
+            return []
         src, dst = node, fs.lookup(destination)
         dst_parent, dst_leaf = fs.parent_of(destination)
         dst_parent_is_dir = dst_parent is not None and dst_parent.kind == "directory"
@@ -652,7 +733,7 @@ class TrackerSimulationTests(unittest.TestCase):
                 statistics["failed"] += 1
                 return b.link(source, destination, ok=False, errno=fs.failure_errno(source))
             if src.kind != "file":
-                return []
+                return []                                    # 目录不能硬链接；硬链接符号链接这里一律不生成（跟踪器拒绝）
             if dst is not None:
                 statistics["failed"] += 1
                 return b.link(source, destination, ok=False, errno="EEXIST")
@@ -681,11 +762,16 @@ class TrackerSimulationTests(unittest.TestCase):
         if src.kind == "directory" and _inside(destination, source):
             return []
         if dst is not None:
-            if dst.kind != src.kind or (dst.kind == "directory" and dst.children):
+            # 目录只能覆盖空目录，非目录（普通文件或符号链接）只能覆盖非目录——普通文件与符号链接可以互相覆盖。
+            if (dst.kind == "directory") != (src.kind == "directory") or (dst.kind == "directory" and dst.children):
                 return []
             statistics["overwrite"] += 1
+            if dst.kind == "symlink":
+                statistics["rename_over_link"] += 1
         if src.kind == "directory":
             statistics["dir_move"] += 1
+        if src.kind == "symlink":
+            statistics["rename_link"] += 1
         src_parent, src_leaf = fs.parent_of(source)
         del src_parent.children[src_leaf]
         dst_parent.children[dst_leaf] = src
@@ -693,7 +779,9 @@ class TrackerSimulationTests(unittest.TestCase):
         return b.rename(source, destination, name=name, flags=flags)
 
     def test_random_valid_histories_match_the_real_filesystem_semantics(self) -> None:
-        totals = {"calls": 0, "rename_ok": 0, "link_ok": 0, "overwrite": 0, "dir_move": 0, "noop": 0, "failed": 0}
+        totals = {"calls": 0, "rename_ok": 0, "link_ok": 0, "overwrite": 0, "dir_move": 0, "noop": 0, "failed": 0,
+                  "symlink_ok": 0, "symlink_failed": 0, "lstat_link": 0, "readlink_ok": 0, "unlink_link": 0, "rename_link": 0,
+                  "rename_over_link": 0}
         for seed in range(40):
             statistics = self.run_history(seed, 400)
             for key in totals:
@@ -704,6 +792,14 @@ class TrackerSimulationTests(unittest.TestCase):
         self.assertGreater(totals["overwrite"], 20, totals)
         self.assertGreater(totals["dir_move"], 20, totals)
         self.assertGreater(totals["failed"], 1000, totals)
+        # WP-R3：符号链接的各类分支也必须真的被覆盖到。
+        self.assertGreater(totals["symlink_ok"], 300, totals)
+        self.assertGreater(totals["symlink_failed"], 100, totals)
+        self.assertGreater(totals["lstat_link"], 100, totals)
+        self.assertGreater(totals["readlink_ok"], 50, totals)
+        self.assertGreater(totals["unlink_link"], 50, totals)
+        self.assertGreater(totals["rename_link"], 30, totals)
+        self.assertGreater(totals["rename_over_link"], 5, totals)
 
 
 if __name__ == "__main__":

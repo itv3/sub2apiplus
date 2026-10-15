@@ -18,7 +18,8 @@
 * R2-3 ``openat2``：strace 解码 ``struct open_how`` 后标志才可见；``O_PATH|O_NOFOLLOW`` 仍走 symlink-metadata-not-bound；
 * R2-4 ``socket(AF_UNIX, SOCK_STREAM…)``：创建本身不碰路径；``connect`` 到 AF_UNIX 绝对路径且 ENOENT 登记为 missing 探测；
   其余结果／相对路径／抽象套接字／网络地址仍判 unsupported-call:connect；v4 同时跟踪 bind（否则放行 socket 后 bind 不可见）；
-* R2-5 私有盘内符号链接探测：**未放宽**（依赖输出归属先接受符号链接创建，属于更大的改动，见 ``SymlinkProbeStillRejectedTests``）；
+* R2-5 私有盘内符号链接探测：第二轮未放宽（依赖输出归属先接受符号链接创建）；第三轮（WP-R3，见 ``test_ci_read_audit_wp_r3``）让输出归属
+  接受本单元自己创建的符号链接并保持一切跟随式访问失败关闭，本模块的 ``SymlinkProbeAcceptedAfterWpR3Tests`` 随之由“固定应被拒”改成“应通过”；
 * R2-6 ``MAX_OUTPUT_EVENTS_V4``：见下表；
 * R2-7 openat 三联未解析：无法复现，只固定“哪些形态会产生这三个原因”的假设（``OpenatTripleHypothesisTests``），不放宽。
 
@@ -557,31 +558,37 @@ class StraceArgvTests(CorpusFixture):
 # =====================================================================================================================
 
 
-class SymlinkProbeStillRejectedTests(CorpusFixture):
+class SymlinkProbeAcceptedAfterWpR3Tests(CorpusFixture):
     """git 在临时盘里做符号链接支持探测：O_EXCL 建同名文件再删，再 symlinkat、lstat、unlinkat（语料里 19 次）。
 
-    这里**固定当前的失败关闭行为**，而不是期望它通过：解析器登记 symlink-metadata-not-bound；输出归属跟踪器另外拒绝
-    私有盘内的符号链接创建（“私有临时盘内不允许创建符号链接”），于是链接名字未被证明、后续 lstat 与 unlinkat 也各被拒绝。
-    只放宽解析器那一条没有意义——重放仍会因归属问题拒绝整份轨迹；要放行必须先让归属接受符号链接创建并保证之后没有任何
-    “跟随链接”的访问（见调度者记忆里 10-14 对 v2 原型的结论），那是更大的、需要单独评审的改动。有人做了这个改动时，
-    本类的断言应当被有意识地改写，而不是悄悄通过。
+    第二轮曾在这里**固定当时的失败关闭行为**（解析器登记 symlink-metadata-not-bound，输出归属跟踪器拒绝私有盘内创建符号链接，
+    重放因此拒绝整份轨迹），并注明“有人做了这个改动时，本类的断言应当被有意识地改写，而不是悄悄通过”。第三轮（WP-R3）做了
+    这个改动：输出归属接受本单元自己创建的符号链接，解析器对“lstat 到跟踪器仍记着的、本单元创建的链接”不再登记，同时一切会
+    解引用链接的访问仍然失败关闭。所以 v4 下这份序列现在应当通过；v3 的结论逐字不变。完整的放行／拒绝全表、跟随式访问的
+    反例与差分对拍见 ``test_ci_read_audit_wp_r3``。
     """
 
     def lines(self) -> list[str]:
         base = [f'1 mkdir("{self.root}/tmpwzmo6c4w", 0700) = 0', f'1 mkdir("{self.root}/tmpwzmo6c4w/history", 0700) = 0']
         return base + RAW_GIT_PROBE
 
-    def test_the_probe_is_unresolved_and_rejected_by_the_tracker(self) -> None:
+    def test_the_probe_is_accepted_under_v4(self) -> None:
         document = self.document(self.lines())
-        self.assertEqual(document["coverage"]["unresolved_reasons"], {"symlink-metadata-not-bound:newfstatat": 1})
-        problems = document["runtime"]["outputs"]["problems"]
-        self.assertTrue(any("私有临时盘内不允许创建符号链接" in text for text in problems), problems)
-        self.assertTrue(any("首次读取前未证明由本轮生成" in text for text in problems), problems)
-        self.assertTrue(any("删除未证明的输出" in text for text in problems), problems)
-        self.assertRejected(document)
+        self.assertEqual(document["coverage"]["unresolved_reasons"], {})
+        self.assertEqual(document["runtime"]["outputs"]["problems"], [])
+        self.assertAccepted(document)
+        runtime.replay_runtime(document, [self.entry])
 
     def test_the_same_probe_under_v3_has_the_same_unresolved_reason(self) -> None:
         self.assertEqual(self.reasons(self.lines(), "v3"), {"symlink-metadata-not-bound:newfstatat": 1})
+        document = self.document(self.lines(), contract="v3")
+        problems = document["runtime"]["outputs"]["problems"]
+        self.assertTrue(any("链接或移动操作尚无输出归属证明" in text for text in problems), problems)
+        self.assertRejected(document)
+
+    def test_a_lone_lstat_of_a_link_nobody_created_is_still_unresolved(self) -> None:
+        """豁免只给“本单元自己创建、跟踪器仍记着”的链接：孤零零的 lstat（宿主上的链接、不是本单元创建的）保持原判。"""
+        self.assertEqual(self.reasons([RAW_GIT_PROBE[4]]), {"symlink-metadata-not-bound:newfstatat": 1})
 
     def test_lstat_of_a_regular_file_is_not_the_problem(self) -> None:
         """对照：lstat 一个普通文件（完整解码为 S_IFREG）早就不登记 symlink-metadata-not-bound，缺口只在真链接。"""
@@ -792,8 +799,7 @@ class FullCorpusReplayTests(CorpusFixture):
                                    {"plain-path-not-resolved:getcwd": 4904, "unsupported-call:socket": 38, "unsupported-call:connect": 38,
                                     "symlink-metadata-not-bound:newfstatat": 19, "dirfd-path-not-resolved:utimensat": 9,
                                     "open-flags-not-decoded:openat2": 3},
-                                   {"unsupported-call:connect": 38, "symlink-metadata-not-bound:newfstatat": 19,
-                                    "open-flags-not-decoded:openat2": 3}),
+                                   {"unsupported-call:connect": 38, "open-flags-not-decoded:openat2": 3}),     # WP-R3 起 19 次符号链接探测通过
     }
     POINTER_CONNECT = re.compile(r"(connect\(\d+<socket:\[\d+\]>, )0x[0-9a-f]+(, 110\b)")      # 含 unfinished 拆行的写法
 

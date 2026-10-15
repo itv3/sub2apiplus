@@ -62,7 +62,15 @@ MAX_OUTPUT_EVENTS_V4 = 1000000
 TWO_PATH_NAMES = frozenset({"rename", "renameat", "renameat2", "link", "linkat"})
 LINK_NAMES = frozenset({"link", "linkat"})
 SYMLINK_NAMES = frozenset({"symlink", "symlinkat"})
-OPEN_NAMES = frozenset({"open", "openat", "creat"})
+# WP-R3：openat2 是和 openat 同构的“按路径打开并返回描述符”的调用（标志在 struct open_how 里，解析器已解码），
+# 原先不在这里，于是用 openat2 创建／写私有盘文件会被判“未建立合同的输出操作”，而且“返回描述符落在私有盘外”的检查被整个跳过。
+OPEN_NAMES = frozenset({"open", "openat", "openat2", "creat"})
+# WP-R3：对符号链接“名字本身”不跟随的只读调用。对一个符号链接对象，只有这些调用（连同下面 _symlink_name_verdict 里列的
+# unlink、rename、创建被拒绝等）才不会解引用链接：lstat 系读的是链接自己的 inode 元数据，readlink 读的是链接文本。
+# 这两者的内容都是被测代码自己写进去的（symlink 调用的参数），不含任何宿主信息。
+LSTAT_NAMES = frozenset({"lstat", "lstat64"})
+FSTATAT_NAMES = frozenset({"newfstatat", "fstatat64", "statx"})
+READLINK_NAMES = frozenset({"readlink", "readlinkat"})
 # 对已证明的对象只改元数据或内容、不增删名字的调用：不改变名字空间，也不需要额外归属证明。
 METADATA_WRITE_NAMES = frozenset({"chmod", "fchmodat", "fchmodat2", "chown", "lchown", "fchownat",
                                   "utime", "utimes", "utimensat", "futimesat", "truncate", "truncate64"})
@@ -443,14 +451,22 @@ class OutputTrackerV4:
     rename、link 一律不认，对失败的创建探测（makedirs(exist_ok=True) 之类的 EEXIST）也一律判问题，导致大多数
     单元的输出归属证明失败。这里改成：
 
-    * 名字 → 对象：``names`` 把绝对路径映射到对象编号；对象有类型（普通文件／目录）和当前名字个数。
+    * 名字 → 对象：``names`` 把绝对路径映射到对象编号；对象有类型（普通文件／目录／符号链接）和当前名字个数。
       硬链接让两个名字指向同一对象，删除其中一个名字不影响另一个；
     * 一个名字只有来自「本轮的创建」或「对已证明名字的 rename／link」才算已证明，盘外的东西永远进不来；
     * 写类调用失败按错误码与已知状态判，不再一刀切；读取、探测、执行类调用沿用旧规则，只要求路径已证明。
 
-    安全边界（保守拒绝，记入 problems）：符号链接、RENAME_EXCHANGE／RENAME_WHITEOUT、另一端不在盘内的两路径调用、
-    来源未证明的 rename／link、把目录硬链接、目录覆盖非空目录、目录移进自己的子目录，以及写类调用除 EEXIST／ENOENT／
-    ENOTDIR 之外的任何失败。
+    符号链接（WP-R3）：私有盘内可以创建符号链接，对象类型为 ``symlink``，链接文本（symlink 调用的第一个参数）原样记在
+    ``link_text`` 里，**永远不解引用**。链接对象只能被“不跟随”的调用碰到——unlink／unlinkat、rename 的任一端、
+    lstat 系（lstat、AT_SYMLINK_NOFOLLOW 的 fstatat／statx）、readlink、创建被拒绝（EEXIST）、O_NOFOLLOW 打开得到 ELOOP；
+    其余一切对链接名字的访问（打开、stat、access、chdir、execve、chmod……）以及一切路径的**中间分量**是链接的访问，
+    都按“跟随式访问”判问题——因为这些调用会解引用链接，而解引用后的路径是宿主输入，strace 对非描述符调用不会把它打印出来。
+    为什么这样安全：不跟随的调用只会读到链接 inode 自己的元数据和链接文本，两者都是被测代码自己写入的；
+    会解引用的调用一律失败关闭，所以链接指向盘外（``/etc/passwd``）本身不构成读取，只有真的去跟随时才报。
+
+    安全边界（保守拒绝，记入 problems）：跟随式访问、RENAME_EXCHANGE／RENAME_WHITEOUT、另一端不在盘内的两路径调用、
+    来源未证明的 rename／link、把目录或符号链接硬链接、目录覆盖非空目录、目录移进自己的子目录，以及写类调用除
+    EEXIST／ENOENT／ENOTDIR 之外的任何失败。
 
     另有三道「内核不可能产生的成功」自检——硬链接成功却目的名字已知、``O_CREAT|O_EXCL`` 创建成功却落在已知名字上、
     ``RENAME_NOREPLACE`` 成功却目的名字已知：内核只会在目的不存在时让这三种调用成功，轨迹却声称成功，说明名字表与真实
@@ -469,6 +485,10 @@ class OutputTrackerV4:
         self.links: dict[int, int] = {0: 1}
         self.entries: dict[str, int] = {self.root: 0}
         self.next_object = 1
+        # WP-R3：符号链接对象 → 链接文本（symlink 调用的第一个参数，原样保存，从不解引用）。键集合就是“当前存活的符号链接
+        # 对象”：符号链接不能被硬链接（_link 拒绝），所以每个链接对象恰有一个名字；为空时所有符号链接检查直接跳过，
+        # 没有符号链接的普通单元（绝大多数）不付任何额外开销。
+        self.link_text: dict[int, str] = {}
         self.covered: set[str] = set()
         self.problems: set[str] = set()
         # 上一条事件若创建了某个文件名，这里记着它的路径；下一条事件一到就被取出并清除（只对紧邻的下一条事件有效）。只服务于
@@ -486,8 +506,11 @@ class OutputTrackerV4:
         obj = self.names.get(path)
         return None if obj is None else self.kinds[obj]
 
-    def _create(self, path: str, kind: str) -> None:
-        """在已证明的父目录下新建对象并绑定名字（调用方已确认父目录已知、路径未知）。"""
+    def _create(self, path: str, kind: str, text: str | None = None) -> None:
+        """在已证明的父目录下新建对象并绑定名字（调用方已确认父目录已知、路径未知）。
+
+        ``text`` 只给符号链接：链接文本原样记下，不解释、不解引用。
+        """
         obj = self.next_object
         self.next_object += 1
         self.names[path] = obj
@@ -496,6 +519,8 @@ class OutputTrackerV4:
         self.entries[os.path.dirname(path)] += 1
         if kind == "directory":
             self.entries[path] = 0
+        if kind == "symlink":
+            self.link_text[obj] = text if text is not None else ""
 
     def _unbind(self, path: str) -> None:
         """解绑一个名字；对象失去最后一个名字后消亡。目录解绑前调用方须确认它没有子项。"""
@@ -506,6 +531,7 @@ class OutputTrackerV4:
         if self.links[obj] == 0:
             del self.links[obj]
             del self.kinds[obj]
+            self.link_text.pop(obj, None)
 
     def _move(self, source: str, destination: str, kind: str) -> None:
         """把名字 source（目录则连同整棵子树）改成 destination；调用方已确认 destination 不存在且不在 source 之内。"""
@@ -522,6 +548,77 @@ class OutputTrackerV4:
         self.entries[os.path.dirname(source)] -= 1
         self.entries[os.path.dirname(destination)] += 1
 
+    # ------------------------------------------------------------------ 符号链接（WP-R3）
+
+    def has_symlinks(self) -> bool:
+        """当前是否有存活的符号链接对象；解析器据此决定要不要做路径形态检查，本类据此跳过全部符号链接检查。"""
+        return bool(self.link_text)
+
+    def is_symlink(self, path: str) -> bool:
+        """路径此刻是不是一个已证明的符号链接名字（只看名字表，从不解引用）。"""
+        obj = self.names.get(path)
+        return obj is not None and obj in self.link_text
+
+    def _through_symlink(self, path: str) -> bool:
+        """路径的某个**真祖先**（不含路径自身、不含根）是符号链接名字：内核解析这条路径时必然解引用该链接。
+
+        哪怕链接指向盘内、哪怕调用本身失败（ENOENT 同样取决于链接目标那一端的宿主状态），都算跟随式访问。
+        """
+        parent = os.path.dirname(path)
+        while len(parent) > len(self.root):
+            if self.is_symlink(parent):
+                return True
+            parent = os.path.dirname(parent)
+        return False
+
+    def _symlink_name_verdict(self, event: dict[str, Any]) -> str:
+        """事件的路径本身（最后一个分量）此刻是符号链接名字时，这个调用是否会解引用它。
+
+        返回 ``"ok"``（不跟随，且不改名字表，直接放行）、``"generic"``（不跟随，交给下面的通用判定：unlink／rename／
+        创建被拒绝，它们对名字表的影响由通用逻辑负责）或 ``"problem"``（会跟随、或没有合同，一律判问题）。
+        白名单之外的调用名一律是 ``problem``——新增系统调用默认失败关闭。每一项能暴露什么宿主信息：
+
+        * ``unlink``／``unlinkat``、``rename*`` 的任一端：作用在目录项上，Linux 不解引用最后一个分量；
+        * ``lstat``／``lstat64``、带 ``AT_SYMLINK_NOFOLLOW`` 的 ``newfstatat``／``fstatat64``／``statx``：读链接自己的 inode 元数据；
+        * ``readlink``／``readlinkat``：读链接文本，而它是被测代码自己写的；
+        * 对已存在名字的创建被拒绝（``mkdir``／``mknod``／``symlink`` 的 EEXIST，带 ``O_CREAT|O_EXCL`` 的打开得 EEXIST）：
+          O_EXCL 不跟随链接；其余创建调用不解引用最后一个分量；
+        * 带 ``O_NOFOLLOW`` 的打开得 ``ELOOP``：内核在碰到链接时就拒绝，没有读取目标的任何信息。``O_PATH|O_NOFOLLOW`` 会
+          成功地得到一个指向链接本身的描述符，之后 ``openat(fd, "")``、``/proc/self/fd`` 等都能把它转成跟随——
+          这类描述符的后续使用不可见，保持失败关闭（解析器同样仍登记 symlink-metadata-not-bound）。
+        失败的 lstat／readlink（EACCES 之类）在已证明的链接上不可能出现，按矛盾判问题。
+        """
+        name, ok, error, flags = event["name"], event["succeeded"], event["errno"], set(event["flags"])
+        if name in TWO_PATH_NAMES or name in SYMLINK_NAMES or name in {"unlink", "unlinkat"}:
+            return "generic"
+        if name in LSTAT_NAMES or name in READLINK_NAMES or (name in FSTATAT_NAMES and "AT_SYMLINK_NOFOLLOW" in flags):
+            return "ok" if ok and event["kind"] == "stat" else "problem"
+        if not ok and error == "EEXIST":
+            if name in {"mkdir", "mkdirat", "mknod", "mknodat"}:
+                return "generic"
+            if name in OPEN_NAMES and name != "creat" and {"O_CREAT", "O_EXCL"} <= flags:
+                return "generic"
+        if not ok and error == "ELOOP" and name in OPEN_NAMES and "O_NOFOLLOW" in flags and "O_PATH" not in flags:
+            return "ok"
+        return "problem"
+
+    def _create_symlink(self, event: dict[str, Any]) -> bool:
+        """symlink／symlinkat 成功：在已证明的父目录下新建符号链接对象，链接文本原样记下（事件 target 字段）。
+
+        暴露的宿主信息：无——创建链接不读取链接文本指向的任何东西，目标是否存在、是否在盘内都不影响调用结果。
+        """
+        path, text = event["path"], event["target"]
+        if not isinstance(text, str) or text == "":
+            self._problem("符号链接的链接文本未记录或为空，与成功的创建矛盾：", path)
+        elif path in self.names:
+            self._problem("符号链接创建成功却落在已知名字上，与轨迹矛盾：", path)
+        elif self._kind_of(os.path.dirname(path)) != "directory":
+            self._problem("新建符号链接的父目录未证明：", path)
+        else:
+            self._create(path, "symlink", text)
+            return True
+        return False
+
     # ------------------------------------------------------------------ 事件入口
 
     def observe_event(self, event: dict[str, Any]) -> bool:
@@ -532,6 +629,20 @@ class OutputTrackerV4:
             return False
         self.covered.add(path)
         target = event["target"]
+        if self.link_text:
+            # WP-R3：存在符号链接对象时，先判是否会解引用它（没有链接时这一整段被跳过）。排在“返回描述符落点”检查之前：
+            # 经链接打开得到盘外的描述符，两种问题都成立，这里的说明更具体；返回描述符那一检查仍是第二道防线，对非链接名字照旧生效。
+            if self._through_symlink(path):
+                self._problem("路径的中间分量是符号链接，属于跟随式访问：" + name + ":", path)
+                return False
+            if self.is_symlink(path):
+                verdict = self._symlink_name_verdict(event)
+                if verdict == "problem":
+                    self._problem("跟随符号链接的访问或没有合同的调用（链接名字只允许 unlink、rename、lstat、readlink 等不跟随的调用）："
+                                  + name + ":", path)
+                    return False
+                if verdict == "ok":
+                    return False
         if name in OPEN_NAMES and succeeded and (target is None or not under(target, self.root)):
             self._problem("文件描述符未绑定到私有临时盘：", path)
             return False
@@ -541,8 +652,7 @@ class OutputTrackerV4:
             self._failed(event)
             return False
         if name in SYMLINK_NAMES:
-            self._problem("私有临时盘内不允许创建符号链接：", path)
-            return False
+            return self._create_symlink(event)
         known = path in self.names
         if kind != "write":
             # 读取、探测、执行、列目录：首次访问必须是本轮已证明的名字。
@@ -577,7 +687,7 @@ class OutputTrackerV4:
                 # creat 系统调用没有 O_EXCL 标志（等价于 O_CREAT|O_WRONLY|O_TRUNC），重新打开已知文件是合法的，不在此列。
                 self._problem("O_CREAT|O_EXCL 创建成功却落在已知名字上，与轨迹矛盾：", path)
         elif name in {"unlink", "unlinkat", "rmdir"}:
-            return self._remove(path, name)
+            return self._remove(path, name, event["flags"])
         elif name in METADATA_WRITE_NAMES and known:
             pass
         else:
@@ -612,14 +722,17 @@ class OutputTrackerV4:
         else:
             self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{name}:", path)
 
-    def _remove(self, path: str, name: str) -> bool:
+    def _remove(self, path: str, name: str, flags: list[str] | None = None) -> bool:
         obj = self.names.get(path)
         if obj is None or path == self.root:
             self._problem("删除未证明的输出：", path)
             return False
         kind = self.kinds[obj]
-        # unlink 只能删非目录、rmdir 只能删目录；unlinkat 是否带 AT_REMOVEDIR 不进事件，成功本身就说明形式匹配。
-        if (name == "unlink" and kind != "file") or (name == "rmdir" and kind != "directory"):
+        # unlink 只能删非目录（普通文件或符号链接）、rmdir 只能删目录；unlinkat 不带 AT_REMOVEDIR 时删非目录。
+        # WP-R3：事件现在带 AT_* 标志，所以成功的 unlinkat 带着 AT_REMOVEDIR 却落在非目录上能直接判矛盾（内核不会让它成功）；
+        # 反过来“不带 AT_REMOVEDIR 的 unlinkat 删目录”这个方向保持旧宽容（既有测试与历史事件流不带标志），不收紧。
+        if ((name == "unlink" and kind not in {"file", "symlink"}) or (name == "rmdir" and kind != "directory")
+                or (name == "unlinkat" and "AT_REMOVEDIR" in (flags or []) and kind != "directory")):
             self._problem("删除方式与已生成对象类型不符：", path)
             return False
         if kind == "directory" and self.entries.get(path, 0):
@@ -711,7 +824,8 @@ class OutputTrackerV4:
             if victim == obj:
                 # 同一对象的两个名字之间（含源与目标同名）：POSIX 规定成功但什么都不改。
                 return False
-            if self.kinds[victim] != kind:
+            if (self.kinds[victim] == "directory") != (kind == "directory"):
+                # 目录只能覆盖空目录、非目录（普通文件或符号链接）只能覆盖非目录；POSIX 允许符号链接与普通文件互相覆盖。
                 self._problem("重命名覆盖了不同类型的已生成对象：", destination)
                 return False
             if kind == "directory" and self.entries.get(destination, 0):
@@ -790,8 +904,14 @@ def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: 
 
 _V4_EVENT_KEYS = frozenset({"path", "kind", "name", "succeeded", "flags", "target", "errno", "call", "role", "peer", "epoch"})
 _V4_KINDS = frozenset({"read", "exec", "write", "missing", "stat", "dir", "list"})
-# v4 的 flags：原有的打开标志，加上 renameat2 的三个符号标志（strace 以符号输出）。v3 的校验正则保持原样不动。
-_V4_FLAG = re.compile(r"O_[A-Z0-9_]+|RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT")
+# WP-R3：v4 事件 flags 里允许出现的 ``AT_*`` 标志（strace 以符号输出的 dirfd 类调用的标志参数）。此前 v4 事件丢掉了它们，
+# 所以 lstat（AT_SYMLINK_NOFOLLOW）与 stat 无法区分、unlinkat 的 AT_REMOVEDIR 看不见。这是白名单：解析器遇到名单之外的
+# AT_* 标志登记 at-flag-not-decoded 未解析（AT_FDCWD 是描述符取值不是标志，不算），重放端遇到名单之外的标志按格式错误拒绝。
+# read_audit.py 里有一份同值常量（两个文件互不导入），两处必须相等，由 test_ci_read_audit_wp_r3 守住。
+AT_FLAGS_V4 = frozenset({"AT_SYMLINK_NOFOLLOW", "AT_SYMLINK_FOLLOW", "AT_REMOVEDIR", "AT_EMPTY_PATH", "AT_NO_AUTOMOUNT",
+                         "AT_EACCESS", "AT_STATX_SYNC_AS_STAT", "AT_STATX_FORCE_SYNC", "AT_STATX_DONT_SYNC"})
+# v4 的 flags：原有的打开标志，加上 renameat2 的三个符号标志与上面的 AT_* 标志（strace 以符号输出）。v3 的校验正则保持原样不动。
+_V4_FLAG = re.compile(r"O_[A-Z0-9_]+|RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT|" + "|".join(sorted(AT_FLAGS_V4)))
 _ERRNO_NAME = re.compile(r"E[A-Z0-9]+")
 
 
