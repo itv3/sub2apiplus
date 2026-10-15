@@ -1001,6 +1001,8 @@ FREEZE_ROUNDS = 8
 # 在这个次数内重试（轮与轮之间睡 KILL_VERIFY_RETRY_SECONDS 秒）；仍核对不了就对它发 SIGCONT 解冻并记告警，绝不把进程留在 STOPPED 里。
 KILL_VERIFY_ATTEMPTS = 5
 KILL_VERIFY_RETRY_SECONDS = 0.1
+# abort 回收各单元根进程最多等多久（秒）；根进程已被 SIGKILL，正常毫秒级回收，这个上限只防不可中断睡眠一类的极端情形无限阻塞。
+ABORT_REAP_SECONDS = 10.0
 _TAG_PREFIX = (RUN_TAG_ENV + "=").encode()
 # 进程文件系统根（测试用假的 /proc 树覆盖 Linux 分支；生产永远是 /proc）。
 PROC_ROOT = Path("/proc")
@@ -2564,10 +2566,28 @@ class Scheduler:
         try:
             self._kill_items(items)
         finally:
-            for item in items:
-                with contextlib.suppress(ChildProcessError):
-                    os.waitpid(item.pid, 0)
-                self.running.pop(item.pid, None)
+            self._reap_roots(items)
+
+    def _reap_roots(self, items: list[Running]) -> None:
+        """回收各单元的根进程，**有界**：第二次 Ctrl-C 可能落在 ``_kill_items`` 取快照的阶段，那时根进程还活着，原来无条件
+        ``waitpid(pid, 0)`` 会永久阻塞（基线只是把 KeyboardInterrupt 抛出去，不卡住）。所以先对仍未回收的根补发 SIGKILL（未回收
+        的僵尸占着 pid，不会被复用），再用 WNOHANG 限时轮询回收；再被打断就直接抛出去，已发出的 SIGKILL 不丢。"""
+
+        for item in items:
+            if item.pid in self.running:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(item.pid, signal.SIGKILL)
+        deadline = time.monotonic() + ABORT_REAP_SECONDS
+        for item in items:
+            while True:
+                try:
+                    waited, _status = os.waitpid(item.pid, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if waited != 0 or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.01)
+            self.running.pop(item.pid, None)
 
     def cores_in_use(self) -> float:
         return sum(item.unit.quota.cores for item in self.running.values())
@@ -2679,39 +2699,42 @@ class Scheduler:
 
     def _kill_items(self, items: list[Running]) -> None:
         """冻结再 SIGKILL 这些单元的全部存活进程（含根进程与另起会话的后代）。取快照、冻结、终止的细节见 ``kill_processes``。
-        进程表读不到或出错时回落到原来的按进程组和会话杀：仍在被跟踪（尚未回收）的根进程一定会被杀。清理中遇到的告警
-        （冻结后核对不了身份而改发 SIGCONT 等）写成 ``tree-kill-warning`` 事件。"""
+        进程表读不到或出错时回落到原来的按进程组和会话杀：仍在被跟踪（尚未回收）的根进程一定会被杀——这一段放在 ``finally`` 里，
+        第二次 Ctrl-C 之类的中断也不会跳过它。清理中遇到的告警（冻结后核对不了身份而改发 SIGCONT 等）写成 ``tree-kill-warning`` 事件。"""
 
         warnings: list[str] = []
         try:
-            table = process_table()
-            index = tag_index(table)
-            for item in items:
-                self._remember(item, table, tags=True, index=index)   # 先于任何信号：之后根进程一死，ppid 链就断了
-
-            def find() -> dict[int, ProcInfo]:
+            try:
                 table = process_table()
                 index = tag_index(table)
-                return {pid: info for item in items for pid, info in self._survivors(item, table, index=index).items()}
+                for item in items:
+                    self._remember(item, table, tags=True, index=index)   # 先于任何信号：之后根进程一死，ppid 链就断了
 
-            killed = kill_processes(find, warnings)
-            if killed:
-                self.event("tree-kill", units=sorted(item.unit.unit_id for item in items), killed=len(killed))
-        except Exception as error:   # noqa: BLE001 - 清理路径不能因为进程表出错而放过根进程；原因留事件，不吞
-            with contextlib.suppress(OSError):
-                self.event("tree-kill-error", error=repr(error))
-        if warnings:
-            with contextlib.suppress(OSError):
-                self.event("tree-kill-warning", units=sorted(item.unit.unit_id for item in items), warnings=warnings)
-        for item in items:
-            if item.pid in self.running:   # 已被回收的根进程，其 pid 可能已被复用，不再按 pid 发信号
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.killpg(item.pid, signal.SIGKILL)
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(item.pid, signal.SIGKILL)
-            for member in _session_members(item.pid):
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(member, signal.SIGKILL)
+                def find() -> dict[int, ProcInfo]:
+                    table = process_table()
+                    index = tag_index(table)
+                    return {pid: info for item in items for pid, info in self._survivors(item, table, index=index).items()}
+
+                killed = kill_processes(find, warnings)
+                if killed:
+                    self.event("tree-kill", units=sorted(item.unit.unit_id for item in items), killed=len(killed))
+            except Exception as error:   # noqa: BLE001 - 清理路径不能因为进程表出错而放过根进程；原因留事件，不吞
+                with contextlib.suppress(OSError):
+                    self.event("tree-kill-error", error=repr(error))
+            if warnings:
+                with contextlib.suppress(OSError):
+                    self.event("tree-kill-warning", units=sorted(item.unit.unit_id for item in items), warnings=warnings)
+        finally:
+            for item in items:
+                if item.pid in self.running:   # 已被回收的根进程，其 pid 可能已被复用，不再按 pid 发信号
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(item.pid, signal.SIGKILL)
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.kill(item.pid, signal.SIGKILL)
+                with contextlib.suppress(OSError):
+                    for member in _session_members(item.pid):
+                        with contextlib.suppress(ProcessLookupError, PermissionError):
+                            os.kill(member, signal.SIGKILL)
 
     def _resume_pending(self, kind: str) -> list[Unit]:
         if not self.deferred or self.reservation.current() is not None:

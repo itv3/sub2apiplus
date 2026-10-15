@@ -826,6 +826,59 @@ class _ScriptUnits(base._SchedulerFixture):
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
 
+class AbortSecondInterruptTests(_ScriptUnits):
+    def test_a_second_interrupt_during_abort_neither_hangs_nor_loses_the_kill(self) -> None:
+        """第二次 Ctrl-C 落在 ``_kill_items`` 取快照的阶段，那时根进程还活着：原来 ``waitpid(pid, 0)`` 永久阻塞。现在 abort 把
+        KeyboardInterrupt 抛出去，但根进程已被 SIGKILL 并回收、``running`` 清空。"""
+
+        scheduler = self.scheduler()
+        self.start(scheduler, "a", "keep")
+        self.start(scheduler, "b", "keep")
+        roots = list(scheduler.running)
+        result: dict = {}
+
+        def run() -> None:
+            try:
+                with mock.patch.object(scheduler, "_kill_items", side_effect=KeyboardInterrupt):
+                    scheduler.abort()
+            except KeyboardInterrupt:
+                result["interrupted"] = True
+            except BaseException as error:   # noqa: BLE001
+                result["error"] = repr(error)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(30)
+        if thread.is_alive():   # 基线上会卡在这里：先放掉根进程，免得守护线程一直挂着
+            self.kill_roots(scheduler)
+            thread.join(10)
+            self.fail("abort 对二次中断卡住了（waitpid 永久阻塞）")
+        self.assertTrue(result.get("interrupted"), result)
+        for pid in roots:
+            self.assertFalse(alive(pid), "被打断的 abort 也已对单元根进程发出 SIGKILL")
+        self.assertEqual(scheduler.running, {})
+
+    def test_abort_is_bounded_even_when_the_root_cannot_be_reaped(self) -> None:
+        """限时回收：根进程一直不退（这里用假的 waitpid 模拟不可中断睡眠），abort 在 ``ABORT_REAP_SECONDS`` 之后放手而不是无限阻塞。"""
+
+        scheduler = self.scheduler()
+        self.start(scheduler, "a", "keep")
+        root = next(iter(scheduler.running))
+        real_waitpid = os.waitpid
+
+        def stuck(pid, flags):
+            if pid != root:
+                return real_waitpid(pid, flags)   # 别的（含 subprocess 内部）照常
+            self.assertTrue(flags & os.WNOHANG, "回收根进程不得用会永久阻塞的 waitpid(pid, 0)")
+            return (0, 0)   # 这个根「回收不掉」
+
+        began = time.monotonic()
+        with mock.patch.object(ue, "ABORT_REAP_SECONDS", 0.5), mock.patch.object(ue.os, "waitpid", side_effect=stuck):
+            scheduler.abort()
+        self.assertLess(time.monotonic() - began, 15)
+        self.assertEqual(scheduler.running, {})
+
+
 class ReservationSigkillSnapshotFirstTests(_ScriptUnits):
     def test_a_detached_fork_storm_is_frozen_not_chased(self) -> None:
         for path in ("reservation-sigkill", "abort", "orphan-cleanup"):
@@ -924,6 +977,65 @@ class FreezeRoundsAreBoundedTests(base._Fixture):
         with mock.patch.object(bv, "_refresh_snapshot", side_effect=endless):
             self.bounded(lambda: bv._kill_snapshot({}, None, []))
         self.assertLessEqual(calls["n"], bv.FREEZE_ROUNDS + 3)
+
+
+# 单元根起一个与自己同会话同进程组的孩子（会话成员），再起一个另起会话的孩子。
+SESSION_CHILD_SCRIPT = textwrap.dedent(
+    r'''
+    import subprocess, sys, time
+    from pathlib import Path
+
+    marker, work = sys.argv[1], Path(sys.argv[2])
+    SLEEP = "import time; time.sleep(300)"
+    plain = subprocess.Popen([sys.executable, "-c", SLEEP, marker + "-plain"])
+    detached = subprocess.Popen([sys.executable, "-c", SLEEP, marker + "-detached"], start_new_session=True)
+    (work / "ready").write_text(f"{plain.pid} {detached.pid}")
+    time.sleep(300)
+    '''
+)
+
+
+class InterruptedAbortStillClearsTheUnitsTests(_ScriptUnits):
+    def test_an_interrupt_inside_the_tree_snapshot_still_kills_session_members_and_roots(self) -> None:
+        """第二次 Ctrl-C 落在 ``_kill_items`` 的快照阶段（还什么都没冻结）：``kill_processes`` 抛出 KeyboardInterrupt，
+        按进程组和会话杀的兜底放在 ``finally`` 里，仍然把单元根和会话成员杀掉。"""
+
+        scheduler = self.scheduler()
+        work = self.start_script(scheduler, "sess", SESSION_CHILD_SCRIPT)
+        plain, _detached = (int(value) for value in (work / "ready").read_text().split())
+        root = next(iter(scheduler.running))
+        real = ue.process_table
+        calls = {"n": 0}
+
+        def table():
+            calls["n"] += 1
+            if calls["n"] >= 2:   # 第一次（_kill_items 开头的名册）放行，第二次落在 find() 里：什么都还没冻结
+                raise KeyboardInterrupt
+            return real()
+
+        with mock.patch.object(ue, "process_table", side_effect=table), self.assertRaises(KeyboardInterrupt):
+            scheduler.abort()
+        self.assertFalse(alive(plain), "同会话的成员由 finally 里的兜底杀掉")
+        self.assertFalse(alive(root))
+        self.assertEqual(scheduler.running, {})
+
+    def test_an_interrupt_during_verification_leaves_nothing_stopped(self) -> None:
+        scheduler = self.scheduler()
+        work = self.start_script(scheduler, "sess2", SESSION_CHILD_SCRIPT)
+        _plain, detached = (int(value) for value in (work / "ready").read_text().split())
+        real = ue._read_start
+        fired = {"n": 0}
+
+        def reader(pid):
+            if pid == detached and stopped(pid) and not fired["n"]:
+                fired["n"] += 1
+                raise KeyboardInterrupt
+            return real(pid)
+
+        with mock.patch.object(ue, "_read_start", side_effect=reader), self.assertRaises(KeyboardInterrupt):
+            scheduler.abort()
+        self.assertEqual(fired["n"], 1)
+        self.assert_all_gone("被中断的复核也要把冻结的进程杀完，一个都不能停着")
 
 
 class EarlierSnapshotIsKeptTests(base._Fixture):
