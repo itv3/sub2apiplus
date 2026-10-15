@@ -43,6 +43,45 @@ marked_processes = base.marked_processes
 wait_until = base.wait_until
 
 
+def stat_of(pid: int) -> str:
+    """``ps`` 看到的进程状态（T 开头＝STOPPED；空串＝进程已不在）。macOS 与 Linux 一致。"""
+
+    try:
+        completed = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, timeout=10,
+                                   env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"})
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+    return completed.stdout.strip()
+
+
+def stopped(pid: int) -> bool:
+    return stat_of(pid)[:1] == "T"
+
+
+def flaky_reader(real, victim_pid: int, *, failures: int | None, sticky: bool = True, forge=None):
+    """包一层「读单个进程启动标识」的函数，模拟冻结之后复核的瞬时故障。
+
+    冻结之前（受害者还没被 SIGSTOP）一律放行，否则根本冻不住；从读到它处于 STOPPED 状态那一次起开始注入：注入 ``failures`` 次
+    （``None``＝一直）。``sticky``＝一旦开始注入，即使之后它被解冻（SIGCONT）也继续注入——模拟「故障不是瞬时的」；非 sticky 只在它
+    停着的时候注入。``forge`` 给了就不抛异常，改成把读到的结果交给它改写（模拟读到的是别的进程）。返回 (读取函数, 计数器)。"""
+
+    counter = {"n": 0, "armed": False}
+
+    def reader(pid):
+        if pid == victim_pid:
+            frozen_now = stopped(pid)
+            if frozen_now:
+                counter["armed"] = True
+            if (frozen_now or (sticky and counter["armed"])) and (failures is None or counter["n"] < failures):
+                counter["n"] += 1
+                if forge is None:
+                    raise OSError(errno.EMFILE, "Too many open files (injected)")
+                return forge(real(pid))
+        return real(pid)
+
+    return reader, counter
+
+
 # 进程组替身：组长（测试起，新会话和新进程组的首进程）+ 同组的一个子进程；两者收到 SIGTERM 都先写一个文件再按模式退出或不退出。
 SIGNAL_GROUP_SCRIPT = textwrap.dedent(
     r'''
@@ -203,7 +242,7 @@ class TerminateSurvivesSnapshotFaultsTests(_Group):
 
 
 def _add_fault_tests() -> None:
-    for fault in ("table-raises", "empty-table", "proc-listing-oserror", "snapshot-fails-in-grace-loop", "kill-snapshot-raises"):
+    for fault in ("table-raises", "empty-table", "proc-listing-oserror", "ps-fails", "snapshot-fails-in-grace-loop", "kill-snapshot-raises"):
         label = fault.replace("-", "_")
         setattr(TerminateSurvivesSnapshotFaultsTests, f"test_sigterm_is_still_delivered_when_{label}",
                 lambda self, name=fault: self.check_sigterm_still_delivered(name))
@@ -228,7 +267,191 @@ class _both:
         return False
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# 重要 2：冻结后的身份复核瞬时失败不得留下 STOPPED 的进程（执行器与后台验证各一套）
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class _FrozenVerifyCases:
+    """两个模块共用的用例；子类给出：``reader_module``／``reader_name``（注入点）、``kill(victims, notes)``。"""
+
+    def setUp(self) -> None:   # noqa: N802
+        super().setUp()
+        self.victims: list[subprocess.Popen] = []
+        patcher = mock.patch.object(self.module, "KILL_VERIFY_RETRY_SECONDS", 0.01)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def spawn(self) -> subprocess.Popen:
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", self.marker], start_new_session=True)
+        self.victims.append(process)
+        self.addCleanup(self.reap, process)
+        wait_until(lambda: self.known(process.pid), "进程表里看不到刚起的进程")
+        return process
+
+    def flaky(self, victim: subprocess.Popen, *, failures: int | None, sticky: bool = True, forged: str | None = None):
+        reader, counter = flaky_reader(getattr(self.module, self.reader_name), victim.pid, failures=failures, sticky=sticky,
+                                       forge=(lambda real: self.forge(real, forged)) if forged is not None else None)
+        return mock.patch.object(self.module, self.reader_name, side_effect=reader), counter
+
+    def assert_not_stopped(self, *victims: subprocess.Popen) -> None:
+        for victim in victims:
+            wait_until(lambda: not stopped(victim.pid), f"进程 {victim.pid} 被留在 STOPPED（T）状态：{stat_of(victim.pid)!r}", seconds=10)
+
+    def test_verification_fails_twice_then_succeeds_the_process_is_still_killed(self) -> None:
+        victim = self.spawn()
+        patch, counter = self.flaky(victim, failures=2)
+        notes: list[str] = []
+        with patch:
+            killed = self.kill([victim], notes)
+        self.assertEqual(counter["n"], 2, "复核真的失败了两次")
+        self.assertIn(victim.pid, killed)
+        self.assertEqual(victim.wait(timeout=10), -signal.SIGKILL)
+        self.assertEqual(notes, [], "重试成功就没有告警")
+
+    def test_verification_fails_until_the_last_attempt_then_succeeds(self) -> None:
+        victim = self.spawn()
+        patch, counter = self.flaky(victim, failures=self.module.KILL_VERIFY_ATTEMPTS - 1)
+        notes: list[str] = []
+        with patch:
+            killed = self.kill([victim], notes)
+        self.assertIn(victim.pid, killed, "第 N 次（最后一次）才成功也算成功")
+        self.assertEqual(victim.wait(timeout=10), -signal.SIGKILL)
+
+    def test_verification_that_never_succeeds_unfreezes_and_warns_instead_of_leaving_stopped(self) -> None:
+        victim = self.spawn()
+        patch, _counter = self.flaky(victim, failures=None, sticky=True)   # 冻结之后读它的启动标识永远失败，解冻后也一样
+        notes: list[str] = []
+        began = time.monotonic()
+        with patch:
+            self.kill([victim], notes)
+        self.assertLess(time.monotonic() - began, 10, "重试有界")
+        self.assert_not_stopped(victim)
+        self.assertIsNone(victim.poll(), "核对不了身份就不盲杀（保护 pid 复用的前提），它只是被解冻")
+        self.assertTrue(any(str(victim.pid) in note and "SIGCONT" in note for note in notes), f"要记告警：{notes}")
+
+    def test_process_unfrozen_after_failed_verification_is_swept_once_it_can_be_verified_again(self) -> None:
+        """冻结期间读不了、解冻之后又读得了（复核故障是瞬时的）：留下的 SIGCONT 不是终点，后面的扫荡轮次把它杀掉。"""
+
+        victim = self.spawn()
+        patch, _counter = self.flaky(victim, failures=None, sticky=False)   # 只在它停着的时候读不了
+        notes: list[str] = []
+        with patch:
+            killed = self.kill([victim], notes)
+        self.assertEqual(victim.wait(timeout=10), -signal.SIGKILL)
+        self.assertIn(victim.pid, killed)
+        self.assertTrue(any("SIGCONT" in note for note in notes), "中间解冻过的要有告警")
+
+    def test_verification_that_finds_another_process_cancels_the_freeze(self) -> None:
+        """核对出 pid 已经是别的进程（冻结时被复用）：被冻住的是无辜进程，撤销冻结，更不能杀。"""
+
+        victim = self.spawn()
+        patch, _counter = self.flaky(victim, failures=None, sticky=True, forged="forged-start-time")
+        notes: list[str] = []
+        with patch:
+            self.kill([victim], notes)
+        self.assert_not_stopped(victim)
+        self.assertIsNone(victim.poll(), "启动标识对不上的进程不得被杀")
+
+    def test_only_the_unverifiable_process_is_spared_the_others_are_killed(self) -> None:
+        good, flaky = self.spawn(), self.spawn()
+        patch, _counter = self.flaky(flaky, failures=None, sticky=True)
+        notes: list[str] = []
+        with patch:
+            killed = self.kill([good, flaky], notes)
+        self.assertIn(good.pid, killed)
+        self.assertEqual(good.wait(timeout=10), -signal.SIGKILL)
+        self.assert_not_stopped(flaky)
+        self.assertIsNone(flaky.poll())
+
+    def test_second_interrupt_during_verification_still_finishes_every_frozen_process(self) -> None:
+        """第二次 Ctrl-C 落在复核上：中断先记下，其余冻结的进程照常处理，最后才把 KeyboardInterrupt 抛出去，不留 STOPPED。"""
+
+        first, second = self.spawn(), self.spawn()
+        real = getattr(self.module, self.reader_name)
+        state = {"fired": False}
+
+        def reader(pid):
+            if pid == first.pid and stopped(first.pid) and not state["fired"]:
+                state["fired"] = True
+                raise KeyboardInterrupt
+            return real(pid)
+
+        notes: list[str] = []
+        with mock.patch.object(self.module, self.reader_name, side_effect=reader), self.assertRaises(KeyboardInterrupt):
+            self.kill([first, second], notes)
+        self.assertTrue(state["fired"])
+        for victim in (first, second):
+            self.assertEqual(victim.wait(timeout=10), -signal.SIGKILL, "被冻结的进程在中断之后也要被杀")
+
+
 _add_fault_tests()
+
+
+class ExecutorFrozenVerifyTests(_FrozenVerifyCases, base._Fixture):
+    module = ue
+    reader_name = "_read_start"
+
+    @staticmethod
+    def known(pid):
+        return pid in ue.process_table()
+
+    @staticmethod
+    def forge(real, forged):
+        return None if real is None else (forged, real[1])
+
+    def kill(self, victims, notes):
+        table = ue.process_table()
+        infos = {victim.pid: table[victim.pid] for victim in victims}
+        return ue.kill_processes(lambda: {pid: info for pid, info in infos.items() if self.state_alive(pid)}, notes)
+
+    @staticmethod
+    def state_alive(pid):
+        state = stat_of(pid)
+        return bool(state) and not state.startswith("Z")
+
+
+class ValidationFrozenVerifyTests(_FrozenVerifyCases, base._Fixture):
+    module = bv
+    reader_name = "_probe"
+
+    @staticmethod
+    def known(pid):
+        return pid in bv._process_table()
+
+    @staticmethod
+    def forge(real, forged):
+        return None if real is None else (real[0], real[1], forged, real[3])
+
+    def kill(self, victims, notes):
+        starts = {victim.pid: bv._process_table()[victim.pid][2] for victim in victims}
+        return bv._kill_snapshot(starts, None, notes)
+
+
+class SchedulerKillItemsWarnsTests(base._SchedulerFixture):
+    """调度器层：冻结后核对不了身份而改发 SIGCONT 的，在事件流里留 ``tree-kill-warning``，且 abort 之后没有进程停在 STOPPED。"""
+
+    def events(self) -> list[dict]:
+        path = self.root / "out" / "events.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_abort_leaves_nothing_stopped_and_records_a_warning_when_verification_keeps_failing(self) -> None:
+        scheduler = self.scheduler()
+        work = self.start(scheduler, "a", "keep")
+        grand = int((work / "grand.pid").read_text())
+        reader, _counter = flaky_reader(ue._read_start, grand, failures=None, sticky=True)
+        with mock.patch.object(ue, "_read_start", side_effect=reader), mock.patch.object(ue, "KILL_VERIFY_RETRY_SECONDS", 0.01):
+            scheduler.abort()
+        wait_until(lambda: not stopped(grand), "孙辈不能留在 STOPPED", seconds=10)
+        self.assertTrue(alive(grand), "核对不了身份的孙辈只被解冻，没有被盲杀")
+        warnings = [event for event in self.events() if event["event"] == "tree-kill-warning"]
+        self.assertTrue(warnings and any(str(grand) in text for event in warnings for text in event["warnings"]), self.events())
+        for process_id in marked_processes(self.marker):
+            if process_id != grand:
+                self.assertFalse(stopped(process_id), f"进程 {process_id} 停在 STOPPED")
+        # 收尾：故障消失后（不再注入）再清一次，孙辈被杀。
+        os.kill(grand, signal.SIGKILL)
+        self.assert_all_gone()
 
 
 class EarlierSnapshotIsKeptTests(base._Fixture):
