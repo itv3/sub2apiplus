@@ -984,6 +984,13 @@ class TraceParser:
                 kind = "missing" if missing else "stat" if failed else "exec"
             else:
                 kind = "missing" if missing else "stat"
+            if self.trace_v4 and name in _TWO_PATHS:
+                # WP-R7a（对拍发现）：两路径调用的路径形态检查必须在任何一端的事件交给跟踪器之前全部做完。来源端事件一到，跟踪器就执行 rename／link，
+                # 名字表随之改变；再检查目的端时，``link/../y`` 里的 ``link`` 已经被这次调用自己改名，不再是链接名字，检查看不见风险
+                # （``rename("R/ln", "R/ln/../y")``：内核经 ln 进入宿主目录再回到 ``/``，把链接移到了宿主根目录，旧行为整套审计通过）。
+                for _slot, directory, path in pairs:
+                    if path != "":
+                        self._check_path_form(directory, path)
             for slot, directory, path in pairs:
                 if path == "":
                     if self.trace_v4 and name in _EMPTY_PATH_WRITE_CALLS and "AT_EMPTY_PATH" in self.call_flags:
@@ -996,7 +1003,7 @@ class TraceParser:
                     continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过（读类调用沿用基线；上面的写类调用 v4 另行登记）
                 if ends is not None:
                     self.call_end = (_ROLES[slot], ends[1 - slot])
-                self._add(self._checked_join(directory, path), kind, line)
+                self._add(self._checked_join(directory, path, check=ends is None), kind, line)
             self.call_end = None
             self._relocate_working_directories(name, ends)
             if self.strict:
@@ -1038,10 +1045,13 @@ class TraceParser:
                 texts = [_path_argument(arguments, position) for position in positions]
                 slots = [slot for slot, text in enumerate(texts) if text is not None]
                 ends = [_join(self.cwd.get(pid), text) if text else None for text in texts]
+            if ends is not None:
+                for path in strings:                  # 同上：先检查全部路径写法，再把任何一端的事件交给跟踪器（见 dirfd 分支的说明）
+                    self._check_path_form(self.cwd.get(pid), path)
             for index, path in enumerate(strings):
                 if ends is not None:
                     self.call_end = (_ROLES[slots[index]], ends[1 - slots[index]])
-                self._add(self._checked_join(self.cwd.get(pid), path), kind, line)
+                self._add(self._checked_join(self.cwd.get(pid), path, check=ends is None), kind, line)
             self.call_end = None
             self._relocate_working_directories(name, ends)
             if self.strict:
@@ -1108,14 +1118,19 @@ class TraceParser:
             if directory is not None:
                 self.spawn_cwd[pid] = moved(directory)
 
-    def _checked_join(self, directory: str | None, path: str) -> str | None:
-        """``_join`` 加 v4 的符号链接路径形态检查：存在符号链接对象时，``..``／结尾斜杠等写法可能让规范化后的路径
-        与内核实际解析的对象不同，见 ``_path_form_hazard``。路径照常返回（事件照常记录），同时登记未解析让整次审计失败关闭。"""
-        joined = _join(directory, path)
-        if (self.trace_v4 and joined is not None and self.output_tracker.has_symlinks()
+    def _check_path_form(self, directory: str | None, path: str) -> None:
+        """v4 的符号链接路径形态检查：存在符号链接对象时，``..``／结尾斜杠等写法可能让规范化后的路径与内核实际解析的对象不同，
+        见 ``_path_form_hazard``。有风险就登记未解析，让整次审计失败关闭。"""
+        if (self.trace_v4 and _join(directory, path) is not None and self.output_tracker.has_symlinks()
                 and _path_form_hazard(self.output_tracker, directory, path)):
             self._unresolved("symlink-path-form-unsafe")
-        return joined
+
+    def _checked_join(self, directory: str | None, path: str, *, check: bool = True) -> str | None:
+        """``_join`` 加 v4 的符号链接路径形态检查（``_check_path_form``）。路径照常返回（事件照常记录）。
+        ``check=False`` 给两路径调用：它们的检查已在任何事件交给跟踪器之前做完（见调用处），这里不再重复登记。"""
+        if check:
+            self._check_path_form(directory, path)
+        return _join(directory, path)
 
     def _single_path(self, name: str, arguments: Sequence[str], pid: str) -> str | None:
         """lstat 一类单路径调用的规范路径（与后面通用分支的算法一致）；空路径（AT_EMPTY_PATH）或无法还原时返回 None。"""

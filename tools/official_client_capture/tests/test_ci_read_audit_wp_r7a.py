@@ -638,3 +638,107 @@ class LinkRecordCrossCheckTests(R7aFixture):
         for line in self.link_lines() + [wrong, self.lstat_line("d/l", struct=STAT_LNK.replace("st_size=7", "st_size=70"))]:
             parser.feed(line)
         self.assertEqual({key for key in parser.unresolved_reasons if "contradicts" in key or "size" in key}, set())
+
+
+# =====================================================================================================================
+# 对拍发现：两路径调用的路径形态检查要先于任何事件交给跟踪器
+# =====================================================================================================================
+
+
+def _check_after_the_events_like_before(self: ra.TraceParser, directory: str | None, path: str) -> None:
+    """（变异用）关掉先行检查。"""
+
+
+class TwoPathCallsAreCheckedBeforeTheTrackerMovesAnythingTests(R7aFixture):
+    """含宿主目录的对拍（见 ``HostDifferentialTests``）发现：``rename("R/ln", "R/ln/../y")``——内核经链接 ``ln``（→ ``ln2`` → ``/etc``）进入宿主目录、
+    ``..`` 回到 ``/``，把链接 ``ln`` 移到了宿主根目录 ``/y``；解析器却把目的端写成 ``R/y``，整套审计通过。
+
+    原因是顺序：两路径调用的来源端事件一到，跟踪器就执行 rename，名字表里的 ``ln`` 已被这次调用自己改走；再对目的端做路径形态检查时，
+    ``R/ln/..`` 里的 ``ln`` 不再是链接名字，``_path_form_hazard`` 看不到风险。现在两端的检查都在任何事件交给跟踪器之前做完。
+    """
+
+    HAZARD = "symlink-path-form-unsafe"
+
+    def chain_lines(self) -> list[str]:
+        """``ln`` →（相对）``ln2`` →（绝对）``/etc``：经 ln 的任何解析都落进宿主。"""
+        return self.base_lines() + [self.symlink_line("ln", "ln2"), self.symlink_line("ln2", "/etc")]
+
+    def two_path_calls(self, source: str, destination: str, tail: str = "= 0") -> dict[str, str]:
+        r = self.root
+        s, d = f"{r}/{source}", f"{r}/{destination}"
+        return {
+            "rename": f'1 rename("{s}", "{d}") {tail}',
+            "renameat": f'1 renameat(AT_FDCWD</repo>, "{s}", AT_FDCWD</repo>, "{d}") {tail}',
+            "renameat2": f'1 renameat2(AT_FDCWD</repo>, "{s}", AT_FDCWD</repo>, "{d}", 0) {tail}',
+            "renameat2 NOREPLACE": f'1 renameat2(AT_FDCWD</repo>, "{s}", AT_FDCWD</repo>, "{d}", RENAME_NOREPLACE) {tail}',
+        }
+
+    def test_the_destination_that_goes_through_the_source_link_is_unsafe(self) -> None:
+        for label, line in self.two_path_calls("ln", "ln/../y").items():
+            with self.subTest(label=label):
+                document = self.assertFailsClosed(self.chain_lines() + [line], where="parser", fragment=self.HAZARD)
+                self.assertEqual(document["coverage"]["unresolved_reasons"], {self.HAZARD: 1}, "只登记一次，不因先行检查而重复")
+
+    def test_the_source_that_goes_through_a_link_the_call_itself_moves_is_unsafe(self) -> None:
+        r = self.root
+        for label, line in self.two_path_calls("ln/../y", "ln").items():
+            with self.subTest(label=label):
+                self.assertFailsClosed(self.chain_lines() + [line], where="parser", fragment=self.HAZARD)
+        # 先 lstat 看得见的目的端：同一次调用里来源是链接 ln、目的端经过 ln2（另一个链接）。
+        line = f'1 rename("{r}/ln", "{r}/ln2/../y") = 0'
+        self.assertFailsClosed(self.chain_lines() + [line], where="parser", fragment=self.HAZARD)
+
+    def test_failed_two_path_calls_are_checked_the_same_way(self) -> None:
+        for error in ("ENOENT", "ENOTDIR", "EEXIST"):
+            for label, line in self.two_path_calls("nobody", "ln/../y", f"= -1 {error} (x)").items():
+                with self.subTest(error=error, label=label):
+                    self.assertFailsClosed(self.chain_lines() + [line], where="parser", fragment=self.HAZARD)
+
+    def test_hard_links_are_checked_before_the_event_too(self) -> None:
+        r = self.root
+        lines = self.chain_lines() + [self.create_line("d/f")]
+        for label, line in {"link": f'1 link("{r}/d/f", "{r}/ln/../y") = 0',
+                            "linkat": f'1 linkat(AT_FDCWD</repo>, "{r}/d/f", AT_FDCWD</repo>, "{r}/ln/../y", 0) = 0'}.items():
+            with self.subTest(label=label):
+                self.assertFailsClosed(lines + [line], where="parser", fragment=self.HAZARD)
+
+    def test_dirfd_and_working_directory_spellings(self) -> None:
+        r = self.root
+        cases = {
+            "dirfd 相对写法": f'1 renameat2(5<{r}>, "ln", 5<{r}>, "ln/../y", 0) = 0',
+            "工作目录相对写法": ['1 chdir("%s") = 0' % r, '1 rename("ln", "ln/../y") = 0'],
+        }
+        for label, tail in cases.items():
+            with self.subTest(label=label):
+                self.assertFailsClosed(self.chain_lines() + (tail if isinstance(tail, list) else [tail]), where="parser", fragment=self.HAZARD)
+
+    def test_the_old_order_passes_the_whole_audit(self) -> None:
+        """对照：把先行检查关掉、回到“交给跟踪器之后再检查目的端”的旧顺序，同一条轨迹整套审计通过（所以上面确实是新逻辑拦下的）。"""
+        line = self.two_path_calls("ln", "ln/../y")["rename"]
+        original = ra.TraceParser._check_path_form
+
+        def old_checked_join(self_, directory, path, *, check=True):
+            original(self_, directory, path)
+            return ra._join(directory, path)
+
+        with mock.patch.object(ra.TraceParser, "_check_path_form", _check_after_the_events_like_before), \
+                mock.patch.object(ra.TraceParser, "_checked_join", old_checked_join):
+            document, reasons, problems = self.outcome(self.chain_lines() + [line])
+            self.assertEqual((reasons, problems), ({}, []))
+            self.assertTrue(self.audit(document)["coverage_complete"])
+
+    def test_ordinary_two_path_calls_are_unaffected(self) -> None:
+        r = self.root
+        lines = self.chain_lines() + [self.mkdir_line("d/a"), self.create_line("d/a/f")]
+        for label, line in {"同目录改名": f'1 rename("{r}/d/a/f", "{r}/d/a/g") = 0',
+                            "跨目录改名": f'1 rename("{r}/d/a/f", "{r}/d/h") = 0',
+                            "目的端含 .. 但不经链接": f'1 rename("{r}/d/a/f", "{r}/d/a/../h") = 0',
+                            "改名链接本身（新名字干净）": f'1 rename("{r}/ln", "{r}/d/moved") = 0',
+                            "renameat2 NOREPLACE": f'1 renameat2(AT_FDCWD</repo>, "{r}/d/a/f", AT_FDCWD</repo>, "{r}/d/n", RENAME_NOREPLACE) = 0'}.items():
+            with self.subTest(label=label):
+                document, reasons, problems = self.outcome(lines + [line])
+                self.assertEqual((reasons, problems), ({}, []), label)
+
+    def test_v3_has_no_path_form_check_at_all(self) -> None:
+        document = self.document(self.chain_lines() + [self.two_path_calls("ln", "ln/../y")["rename"]], contract="v3")
+        self.assertNotIn(self.HAZARD, document["coverage"]["unresolved_reasons"])
