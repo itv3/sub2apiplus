@@ -2,7 +2,7 @@
 
 * 解析：用 strace 6.8 的真实行格式（``-f -y``）构造 rename／renameat／renameat2／link／linkat，含 unfinished／resumed
   拆行、多进程交错、一端在盘外、失败行与截断行，核对 call／role／peer／errno／flags／epoch；
-* 去重：30 万条相同只读事件去重后只剩几条且通过；超过 20 万条互不相同的事件仍判 output-event-limit 失败；
+* 去重：30 万条相同只读事件去重后只剩几条且通过；超过上限的互不相同事件仍判 output-event-limit 失败（v3 上限 20 万，v4 上限见 WP-R2）；
 * 重放：合成 strace 行 → ``filter_stream`` → ``replay_runtime`` 通过；篡改 call 配对、role、peer、epoch、errno 等任一字段都被拒绝；
 * 兼容：v4 只由显式开关 ``trace_contract`` 启用，默认仍是 v3；v3 凭证按旧合同验真；control 四链（原样复用 read_audit.py）
   生产并重放的仍是 v3，不受影响；
@@ -340,7 +340,7 @@ class TraceParserTests(AuditFixture):
 
 
 class DedupAndLimitTests(AuditFixture):
-    """只读事件按变更纪元去重；上限仍是 200,000 条，去重后超限照旧判失败。"""
+    """只读事件按变更纪元去重；v3 上限 200,000 条（v4 上限 WP-R2 起单列），去重后超限照旧判失败。"""
 
     def parser(self, contract: str = "v4") -> ra.TraceParser:
         parser = ra.TraceParser(strict=True, runtime_context=self.context, trace_contract=contract)
@@ -391,16 +391,20 @@ class DedupAndLimitTests(AuditFixture):
         self.assertFalse(self.audit(document)["coverage_complete"])
 
     def test_more_than_the_limit_of_distinct_events_still_fails_with_output_event_limit(self) -> None:
-        parser = self.parser()
-        prelude_events = len(parser.output_events)
-        extra = 100
-        pushed = ra.MAX_OUTPUT_EVENTS + extra
-        for index in range(pushed):
-            self.push_read(parser, "d/a", target=f"{self.root}/alias{index}")    # 目标路径各不相同 → 键各不相同 → 无法去重
-        document = self.finish(parser)
-        self.assertEqual(len(document["runtime"]["output_events"]), ra.MAX_OUTPUT_EVENTS)
+        # WP-R2：v4 的上限单列为 MAX_OUTPUT_EVENTS_V4（1,000,000）；这里把它调小，只验证“去重后超限仍判失败”的机制，
+        # 不用真的推 100 万条事件（真实上限的合成负载实测见 test_ci_read_audit_wp_r2）。
+        limit = 20_000
+        with mock.patch.object(ra, "MAX_OUTPUT_EVENTS_V4", limit):
+            parser = self.parser()
+            prelude_events = len(parser.output_events)
+            extra = 100
+            pushed = limit + extra
+            for index in range(pushed):
+                self.push_read(parser, "d/a", target=f"{self.root}/alias{index}")    # 目标路径各不相同 → 键各不相同 → 无法去重
+            document = self.finish(parser)
+        self.assertEqual(len(document["runtime"]["output_events"]), limit)
         self.assertEqual(document["coverage"]["unresolved_reasons"],
-                         {"output-event-limit": prelude_events + pushed - ra.MAX_OUTPUT_EVENTS})
+                         {"output-event-limit": prelude_events + pushed - limit})
         report = self.audit(document)
         self.assertFalse(report["coverage_complete"])
         # 事件本身都合法，轨迹判失败的唯一原因就是撞上了事件上限（登记为未解析调用）。
@@ -408,7 +412,7 @@ class DedupAndLimitTests(AuditFixture):
 
     def test_the_limit_applies_after_deduplication_in_line_mode_too(self) -> None:
         """逐行解析路径同样去重后计数：把上限临时调小，第 limit+1 条互不相同的事件登记 output-event-limit。"""
-        with mock.patch.object(ra, "MAX_OUTPUT_EVENTS", 12):
+        with mock.patch.object(ra, "MAX_OUTPUT_EVENTS_V4", 12):
             lines = self.prelude() + [self.read_line("d/a")] * 50
             document = self.document(lines)
             self.assertLess(len(document["runtime"]["output_events"]), 12, "重复读取去重后不撞上限")
@@ -740,9 +744,11 @@ class ReplayTests(AuditFixture):
     def test_event_list_over_the_limit_is_rejected(self) -> None:
         document = self.good()
         template = document["runtime"]["output_events"][0]
-        document["runtime"]["output_events"] = [dict(template, call=i + 1) for i in range(runtime.MAX_OUTPUT_EVENTS + 1)]
-        with self.assertRaisesRegex(runtime.RuntimeContractError, "超过上限"):
-            runtime.replay_runtime(document, [self.entry])
+        # WP-R2：v4 重放端的上限单列为 MAX_OUTPUT_EVENTS_V4；调小后验证“超限即拒绝”的机制（真实数值见 test_ci_read_audit_wp_r2）。
+        with mock.patch.object(runtime, "MAX_OUTPUT_EVENTS_V4", 50):
+            document["runtime"]["output_events"] = [dict(template, call=i + 1) for i in range(runtime.MAX_OUTPUT_EVENTS_V4 + 1)]
+            with self.assertRaisesRegex(runtime.RuntimeContractError, "超过上限"):
+                runtime.replay_runtime(document, [self.entry])
 
 
 class CompatibilityTests(AuditFixture):

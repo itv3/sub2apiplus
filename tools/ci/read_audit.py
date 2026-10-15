@@ -70,7 +70,17 @@ MAX_FINDINGS = 200
 # 样例行截断长度。
 SAMPLE_CHARS = 300
 # 输出归属事件最多保留多少条（v4 是去重之后的条数）；超出登记 output-event-limit 未解析原因并判失败，不静默截断。
+# 这是 v3 合同的上限（历史合同，含 control 四链与已封存凭证的重放），数值不变；v4 的上限单列为 MAX_OUTPUT_EVENTS_V4。
 MAX_OUTPUT_EVENTS = 200000
+# v4 合同的上限（WP-R2 第 6 项）。依据：10-15 ARM64 实测 1 小时写入密集单元（vc6_batch）在 v4 去重后，超出旧上限的事件有
+# 358,504 条（每超出一条登记一次 output-event-limit），即该单元共约 558,504 条输出事件，旧上限 200000 把正常单元判成失败。
+# 上限的唯一作用是内存／时间保护：合成负载实测（路径长度取真实值约 190 字符，事件互不相同、无法去重）100 万条时解析约 80 秒、
+# 峰值约 3.2 GiB，轨迹 JSON 约 1.1 GiB，读回重放约 8 秒、峰值约 3.8 GiB；50 万条约 1.6／2.4 GiB（完整表见
+# tools/official_client_capture/tests/test_ci_read_audit_wp_r2.py 的文档字符串）。
+# 版本语义：只对 read-audit-trace/v4 生效，v3 与 control 四链不变；已被旧上限截断的轨迹带 output-event-limit 未解析原因
+# （coverage.unresolved>0），验真永远判失败，与这里的数值无关——上限调高不会让任何旧的失败轨迹变成通过。
+# read_audit_runtime.py 里有一份同值常量（重放端超限即拒绝），两处必须相等，由 test_ci_audit_hardening_h1 守住。
+MAX_OUTPUT_EVENTS_V4 = 1000000
 
 # 数据根里不算输入的路径（数据根相对路径：以 / 结尾的是前缀，其余精确匹配 → 原因）。新增条目要写明为什么不影响结论。
 # 依据 10-02 ARM64 两轮审计（pre-A3 全部 44 个场景）。
@@ -374,7 +384,7 @@ class TraceParser:
                 return
             self.seen_events.add(key)
         # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。
-        if len(self.output_events) < MAX_OUTPUT_EVENTS:
+        if len(self.output_events) < MAX_OUTPUT_EVENTS_V4:
             self.output_events.append(event)
         else:
             self._unresolved("output-event-limit")

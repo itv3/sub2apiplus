@@ -52,8 +52,11 @@ TRACE_SCHEMA_V4 = "read-audit-trace/v4"
 TRACE_CONTRACT_V3 = "v3"
 TRACE_CONTRACT_V4 = "v4"
 TRACE_CONTRACTS = (TRACE_CONTRACT_V3, TRACE_CONTRACT_V4)
-# 输出事件条数上限（去重之后仍超限则判失败，不静默截断）。
+# 输出事件条数上限（去重之后仍超限则判失败，不静默截断）。这是 v3 合同的上限，数值不变（历史凭证与 control 四链按它验真）。
 MAX_OUTPUT_EVENTS = 200000
+# v4 合同的上限，与 read_audit.py 里的同名常量必须相等（两个文件互不导入，由 test_ci_audit_hardening_h1 守住）。版本语义：只对
+# read-audit-trace/v4 生效；已被旧上限截断的轨迹带 output-event-limit 未解析原因，验真永远失败，与本数值无关。
+MAX_OUTPUT_EVENTS_V4 = 1000000
 
 # v4 事件里需要识别的系统调用名。两路径调用的两端各产生一条事件，由 role／peer 配对。
 TWO_PATH_NAMES = frozenset({"rename", "renameat", "renameat2", "link", "linkat"})
@@ -860,7 +863,7 @@ def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tupl
     """
     tracker = OutputTrackerV4(contract)
     events = runtime.get("output_events")
-    if not isinstance(events, list) or len(events) > MAX_OUTPUT_EVENTS:
+    if not isinstance(events, list) or len(events) > MAX_OUTPUT_EVENTS_V4:
         raise RuntimeContractError("输出归属轨迹缺失或超过上限")
     for event in events:
         _check_event_v4(event, tracker.root)
