@@ -9,6 +9,9 @@
   优先法均衡）；登记为独占的测试（模块、类或单个方法）单独拆成「独占单元」。
 * **隔离**：每个单元一个子进程，自成会话与进程组（``posix_spawn`` 的 ``setsid``），日志单独一份；一个单元被信号
   终止只影响它自己。单元结束后扫描它会话里的残留子孙进程，宽限期后终止并记录。
+  **清理按后代子树而不只是按会话**（WP-R5）：单元里的测试自己另起会话的进程（嵌套的 ``run-unit`` 等）也算该单元的后代——
+  按单元启动标记、在世期间记的后代名册和 ppid 子树找到，先冻结（SIGSTOP）再统一 SIGKILL，发信号前核对 pid＋启动时间防复用；
+  中断（``abort``）、超时、预约中止、单元退出后的残留清理都走这一套，见下文「进程树快照与后代清理」。
 * **额度**：每个单元声明核数与内存，调度器保证在跑单元的额度之和不超过整机（核数取 ``os.cpu_count()``，内存取
   可用内存的八成）；单元内部的并行度经环境变量 ``UNIT_EXECUTOR_CORES``、``GOMAXPROCS`` 下发。``--parallel``
   只限制同时在跑的单元个数，设成多大都不会突破整机额度。
@@ -971,6 +974,217 @@ def _session_members(session_id: int) -> list[int]:
     return members
 
 
+# ---------------------------------------------------------------------------
+# 进程树快照与后代清理（WP-R5）
+# ---------------------------------------------------------------------------
+#
+# 为什么：单元是 ``posix_spawn(setsid=True)`` 起的，每个单元一个会话，原来的清理只按会话杀。单元里的测试若自己再起
+# 嵌套的 ``unit_executor.py run-unit`` 并 ``start_new_session``（``test_claude_real_delivery_integration`` 就是这样），
+# 嵌套进程的会话号是它自己，不在单元会话里：后台 stop 之后它成了 PPID=1 的孤儿，继续持锁运行（10-14、10-15 实测）。
+#
+# 怎么找：属于某个单元的进程 = 单元根进程 + 单元会话成员 + 环境里带本单元启动标记的进程（``UNIT_EXECUTOR_RUN_TAG``，
+# 子进程默认继承环境）+ 调度器在单元在世期间记下的后代名册（pid＋启动时间，兜底「环境被清空又先成了孤儿」的后代），
+# 再取这些进程的 ppid 子树。**必须在杀任何进程之前取快照**：父进程一死，孙辈就改挂到 init，ppid 链断了。
+#
+# 怎么杀：先 SIGSTOP 冻结、反复取快照直到不再出现新进程（防止它们在被杀的过程中继续 fork），再统一 SIGKILL。冻结顺带
+# 钉住 pid：停住的进程不会自己退出，pid 在 SIGKILL 前不会被复用。每次发信号前都核对「pid＋启动时间」与快照一致，
+# 不一致（pid 已被复用）就不动。没有 /proc 时（macOS 本机测试）进程表走 ``ps``。
+
+RUN_TAG_ENV = "UNIT_EXECUTOR_RUN_TAG"
+# 单元在世期间每隔多久刷新一次后代名册（秒）。
+LEDGER_REFRESH_SECONDS = 2.0
+# 单元超时后先发 SIGTERM，再过这么久仍在就整棵子树 SIGKILL。
+TIMEOUT_KILL_GRACE_SECONDS = 30.0
+# 冻结阶段最多取几轮快照（每轮冻结新出现的进程）；正常一两轮就收敛。
+FREEZE_ROUNDS = 8
+_TAG_PREFIX = (RUN_TAG_ENV + "=").encode()
+# 进程文件系统根（测试用假的 /proc 树覆盖 Linux 分支；生产永远是 /proc）。
+PROC_ROOT = Path("/proc")
+
+
+@dataclass(frozen=True)
+class ProcInfo:
+    """进程表的一行。``start`` 是启动时间的不透明标识（Linux：/proc stat 的 starttime 刻度；后备：ps 的 lstart 文本），
+    只用来和快照比较是不是同一个进程（防 pid 复用），不做时间运算。"""
+
+    pid: int
+    ppid: int
+    sid: int | None
+    start: str
+    state: str
+
+
+def _has_proc() -> bool:
+    return (PROC_ROOT / "self" / "stat").is_file()
+
+
+def _process_table_proc() -> dict[int, ProcInfo]:
+    table: dict[int, ProcInfo] = {}
+    for entry in PROC_ROOT.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[-1].split()
+            table[int(entry.name)] = ProcInfo(int(entry.name), int(fields[1]), int(fields[3]), fields[19], fields[0])
+        except (OSError, ValueError, IndexError):
+            continue
+    return table
+
+
+def _process_table_ps() -> dict[int, ProcInfo]:
+    """没有 /proc 时（macOS）的后备：``ps`` 列出全部进程，会话号用 ``os.getsid`` 补。"""
+
+    try:
+        completed = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,lstart="], capture_output=True, text=True,
+                                   env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"}, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    table: dict[int, ProcInfo] = {}
+    for line in completed.stdout.splitlines():
+        parts = line.split(None, 3)
+        if len(parts) < 4:
+            continue
+        try:
+            pid, ppid = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        try:
+            sid: int | None = os.getsid(pid)
+        except OSError:
+            sid = None
+        table[pid] = ProcInfo(pid, ppid, sid, " ".join(parts[3].split()), parts[2])
+    return table
+
+
+def process_table() -> dict[int, ProcInfo]:
+    """当前全部进程（pid → 一行）。读不到时返回空表：调用方按「没有可清理的」处理，并走原来的按会话清理兜底。"""
+
+    return _process_table_proc() if _has_proc() else _process_table_ps()
+
+
+def descendants_of(table: dict[int, ProcInfo], roots: Any) -> set[int]:
+    """根进程（表里存在的）连同按 ppid 往下的全部后代，不论它们后来是否另起了会话或进程组。"""
+
+    children: dict[int, list[int]] = {}
+    for info in table.values():
+        children.setdefault(info.ppid, []).append(info.pid)
+    seen: set[int] = set()
+    stack = [pid for pid in roots if pid in table]
+    while stack:
+        pid = stack.pop()
+        if pid not in seen:
+            seen.add(pid)
+            stack.extend(children.get(pid, ()))
+    return seen
+
+
+def protected_pids(table: dict[int, ProcInfo]) -> set[int]:
+    """绝不能动的进程：调用方自己和它的全部祖先（沿 ppid 往上）。"""
+
+    protected = {os.getpid()}
+    pid = os.getpid()
+    while pid in table and table[pid].ppid > 0 and table[pid].ppid not in protected:
+        pid = table[pid].ppid
+        protected.add(pid)
+    return protected
+
+
+def tag_index(table: dict[int, ProcInfo]) -> dict[str, set[int]]:
+    """环境里带启动标记的进程，按标记链的每一段建索引：段 → 进程集合。标记链是「外层:内层:…」（单元里再起的调度器把自己的标记
+    接在外层标记后面），所以外层按自己那一段也认得出内层单元的进程。Linux 读 /proc/<pid>/environ（同属主才读得到）；没有 /proc
+    时用 ``ps -E`` 尽力而为。一次扫描服务全部单元，不要对每个单元各扫一遍。"""
+
+    index: dict[str, set[int]] = {}
+
+    def add(pid: int, value: str) -> None:
+        for token in value.split(":"):
+            if token:
+                index.setdefault(token, set()).add(pid)
+
+    if _has_proc():
+        for pid, info in table.items():
+            if info.state[:1] in ("Z", "X"):
+                continue
+            try:
+                data = (PROC_ROOT / str(pid) / "environ").read_bytes()
+            except OSError:
+                continue
+            for item in data.split(b"\0"):
+                if item.startswith(_TAG_PREFIX):
+                    add(pid, item[len(_TAG_PREFIX):].decode("ascii", "replace"))
+                    break
+        return index
+    try:
+        completed = subprocess.run(["ps", "-A", "-ww", "-E", "-o", "pid=,command="], capture_output=True, text=True,
+                                   env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"}, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return index
+    pattern = re.compile(r"(?:^|\s)" + re.escape(RUN_TAG_ENV) + r"=(\S+)")
+    for line in completed.stdout.splitlines():
+        head, _, rest = line.strip().partition(" ")
+        match = pattern.search(rest)
+        if head.isdigit() and int(head) in table and match:
+            add(int(head), match.group(1))
+    return index
+
+
+def tagged_pids(token: str, table: dict[int, ProcInfo]) -> set[int]:
+    """环境里带标记 ``token``（标记链中的任一段）的进程。"""
+
+    return set(tag_index(table).get(token, ()))
+
+
+def _same_process(pid: int, info: ProcInfo) -> bool:
+    """pid 现在还是快照里的那个进程：启动时间一致、没有成僵尸。"""
+
+    if _has_proc():
+        try:
+            fields = (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[-1].split()
+        except OSError:
+            return False
+        return len(fields) > 19 and fields[19] == info.start and fields[0] not in ("Z", "X")
+    current = _process_table_ps().get(pid)
+    return current is not None and current.start == info.start and current.state[:1] not in ("Z", "X")
+
+
+def _signal_if_same(pid: int, info: ProcInfo, sig: int) -> bool:
+    if not _same_process(pid, info):
+        return False
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def kill_processes(find: Any) -> list[int]:
+    """终止 ``find()`` 给出的进程（pid → ProcInfo）：先反复冻结直到不再出现新进程，再统一 SIGKILL，最后再扫荡几次。
+    返回实际发过 SIGKILL 的 pid。``find`` 每轮重新取快照，所以冻结期间新 fork 出来的后代下一轮就看得到。"""
+
+    frozen: dict[int, ProcInfo] = {}
+    try:
+        for _ in range(FREEZE_ROUNDS):
+            fresh = {pid: info for pid, info in find().items() if pid not in frozen}
+            if not fresh:
+                break
+            for pid, info in fresh.items():
+                if _signal_if_same(pid, info, signal.SIGSTOP):
+                    frozen[pid] = info
+    finally:
+        # 无论冻结阶段出什么错，冻住的都要杀掉，不能把停住的进程留在后台。
+        killed = [pid for pid, info in frozen.items() if _signal_if_same(pid, info, signal.SIGKILL)]
+    for _ in range(3):
+        stray = {pid: info for pid, info in find().items() if pid not in frozen}
+        if not stray:
+            break
+        for pid, info in stray.items():
+            if _signal_if_same(pid, info, signal.SIGKILL):
+                frozen[pid] = info
+                killed.append(pid)
+        time.sleep(0.05)
+    return sorted(killed)
+
+
 @dataclass
 class Running:
     unit: Unit
@@ -985,6 +1199,10 @@ class Running:
     interruption: dict[str, Any] | None = None
     stop_started: float | None = None
     resumed_from: list[dict[str, Any]] = field(default_factory=list)
+    # 本次启动独有的随机标记（经环境变量 UNIT_EXECUTOR_RUN_TAG 下发，子进程继承）；清理时靠它认出不在 ppid 链上的孤儿。
+    tag: str = ""
+    # 后代名册：单元在世期间见过的后代 pid → 启动时间标识（见 Scheduler._remember）。
+    known: dict[int, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -2236,6 +2454,7 @@ class Scheduler:
         self.deferred: list[tuple[Unit, str]] = []
         self.attempts: dict[tuple[str, str], int] = {}
         self.interruptions: list[dict[str, Any]] = []
+        self._ledger_at = time.monotonic()
 
     # -- 事件与预约 -----------------------------------------------------------
     def event(self, name: str, **payload: Any) -> None:
@@ -2246,13 +2465,16 @@ class Scheduler:
     def abort(self) -> None:
         """调度器自身出错或被中断：终止全部在跑单元（整个会话），不留后台进程。"""
 
-        for pid in list(self.running):
-            for member in [pid, *_session_members(pid)]:
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(member, signal.SIGKILL)
-            with contextlib.suppress(ChildProcessError):
-                os.waitpid(pid, 0)
-            self.running.pop(pid, None)
+        # WP-R5：先取全部在跑单元的整棵子树（含另起会话的后代）快照、冻结、再统一 SIGKILL（见模块里「进程树快照与后代清理」），
+        # 之后回收各单元根进程。进程表读不到或出错时回落到原来的按进程组和会话 SIGKILL，根进程一定会被杀。
+        items = list(self.running.values())
+        try:
+            self._kill_items(items)
+        finally:
+            for item in items:
+                with contextlib.suppress(ChildProcessError):
+                    os.waitpid(item.pid, 0)
+                self.running.pop(item.pid, None)
 
     def cores_in_use(self) -> float:
         return sum(item.unit.quota.cores for item in self.running.values())
@@ -2310,6 +2532,88 @@ class Scheduler:
         for member in _session_members(pid):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(member, sig)
+        # WP-R5：再加上单元自己另起会话的后代。SIGKILL 档走「冻结再终止」（_kill_items），其它信号发给当前能找到的全部存活进程。
+        item = self.running.get(pid)
+        if item is None:
+            return
+        if sig == signal.SIGKILL:
+            self._kill_items([item])
+            return
+        self._remember(item, tags=True)
+        for member, info in self._survivors(item).items():
+            _signal_if_same(member, info, sig)
+
+    # -- 后代清理（WP-R5）---------------------------------------------------------
+    def _survivors(self, item: Running, table: dict[int, ProcInfo] | None = None, *, tags: bool = True,
+                   index: dict[str, set[int]] | None = None) -> dict[int, ProcInfo]:
+        """单元现在还活着的全部进程（pid → 进程表行，不含僵尸、调用方自己和它的祖先）：单元根进程、单元会话成员、
+        名册里仍是同一个进程的、环境带本单元标记的（``tags=False`` 时跳过，省掉逐进程读环境；多个单元一起找时传入同一份
+        ``index``，只扫一遍环境），再加上它们的 ppid 子树。"""
+
+        table = process_table() if table is None else table
+        if not table:
+            return {}
+        # 根进程本身只在它还没被回收时才按 pid 认：回收之后这个 pid 可能已被别的进程复用（会话号不会：会话还有成员时 pid 不会被复用）。
+        tracked = item.pid in self.running
+        roots = {pid for pid, info in table.items() if (tracked and pid == item.pid) or info.sid == item.pid}
+        roots |= {pid for pid, start in item.known.items() if pid in table and table[pid].start == start}
+        if tags and item.tag:
+            roots |= (tag_index(table) if index is None else index).get(item.tag, set())
+        protected = protected_pids(table)
+        return {pid: table[pid] for pid in descendants_of(table, roots)
+                if pid not in protected and table[pid].state[:1] not in ("Z", "X")}
+
+    def _remember(self, item: Running, table: dict[int, ProcInfo] | None = None, *, tags: bool = False,
+                  index: dict[str, set[int]] | None = None) -> None:
+        """把单元现在的存活进程记进后代名册（同时丢掉已经不在、或 pid 已被复用的旧条目）。发信号之前、超时、预约中止
+        都要先调用：根进程一死，孙辈的 ppid 链就断了，名册是那之后唯一能认出环境被清空的孤儿的依据。"""
+
+        table = process_table() if table is None else table
+        alive = {pid: start for pid, start in item.known.items() if pid in table and table[pid].start == start}
+        alive.update({pid: info.start for pid, info in self._survivors(item, table, tags=tags, index=index).items()})
+        item.known = alive
+
+    def _refresh_ledger(self) -> None:
+        """每隔 ``LEDGER_REFRESH_SECONDS`` 秒给全部在跑单元刷新一次名册（一次进程表，不读环境）。"""
+
+        now = time.monotonic()
+        if not self.running or now - self._ledger_at < LEDGER_REFRESH_SECONDS:
+            return
+        self._ledger_at = now
+        table = process_table()
+        for item in self.running.values():
+            self._remember(item, table)
+
+    def _kill_items(self, items: list[Running]) -> None:
+        """冻结再 SIGKILL 这些单元的全部存活进程（含根进程与另起会话的后代）。取快照、冻结、终止的细节见 ``kill_processes``。
+        进程表读不到或出错时回落到原来的按进程组和会话杀：仍在被跟踪（尚未回收）的根进程一定会被杀。"""
+
+        try:
+            table = process_table()
+            index = tag_index(table)
+            for item in items:
+                self._remember(item, table, tags=True, index=index)   # 先于任何信号：之后根进程一死，ppid 链就断了
+
+            def find() -> dict[int, ProcInfo]:
+                table = process_table()
+                index = tag_index(table)
+                return {pid: info for item in items for pid, info in self._survivors(item, table, index=index).items()}
+
+            killed = kill_processes(find)
+            if killed:
+                self.event("tree-kill", units=sorted(item.unit.unit_id for item in items), killed=len(killed))
+        except Exception as error:   # noqa: BLE001 - 清理路径不能因为进程表出错而放过根进程；原因留事件，不吞
+            with contextlib.suppress(OSError):
+                self.event("tree-kill-error", error=repr(error))
+        for item in items:
+            if item.pid in self.running:   # 已被回收的根进程，其 pid 可能已被复用，不再按 pid 发信号
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(item.pid, signal.SIGKILL)
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(item.pid, signal.SIGKILL)
+            for member in _session_members(item.pid):
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(member, signal.SIGKILL)
 
     def _resume_pending(self, kind: str) -> list[Unit]:
         if not self.deferred or self.reservation.current() is not None:
@@ -2363,6 +2667,10 @@ class Scheduler:
         if self.auditor is not None and kind == "formal":
             # 读集审计（E3-04）：strace 在最外层（启动前缀、切目录的 shell 都在它下面），轨迹经管道交给过滤器。
             argv = self.auditor.wrap(unit, argv)
+        # 本次启动独有的标记，随环境传给单元的全部子孙（清理时认孤儿用，WP-R5）。外层调度器的单元里再起调度器时，外层标记
+        # 已在环境里：接成「外层:自己」的标记链，外层按任一段都认得出内层单元的进程。
+        tag = os.urandom(8).hex()
+        parent_tags = os.environ.get(RUN_TAG_ENV, "")
         env = {
             **os.environ,
             # 单元内部并行度：默认按额度向上取整（至少 1）。单元自己显式给出的（如后端 Go 测试按 0.7 核排程、内部仍要
@@ -2372,6 +2680,7 @@ class Scheduler:
             **dict(unit.env),
             "UNIT_EXECUTOR_UNIT": unit.unit_id,
             "UNIT_EXECUTOR_KIND": kind,
+            RUN_TAG_ENV: f"{parent_tags}:{tag}" if parent_tags else tag,
             # 同目录的 unit_records.py：按闭包复制受管树的测试辅助（managed_tree_copy）在数据根里没有 tools/ci，靠它找到与
             # 输入声明同一份的闭包算法（E3-04）。UNIT_EXECUTOR_ 开头的变量不进环境指纹，也不在单元规格里。
             "UNIT_EXECUTOR_RECORDS_MODULE": str(Path(__file__).resolve().parent / "unit_records.py"),
@@ -2390,39 +2699,46 @@ class Scheduler:
         executable = argv[0] if os.sep in argv[0] else (shutil.which(argv[0], path=env.get("PATH")) or argv[0])
         pid = os.posix_spawn(executable, argv, env, file_actions=actions, setsid=True)
         self.running[pid] = Running(unit, pid, time.monotonic(), log_path, result_path, record_path, kind, started_at_utc=_utc_now())
+        self.running[pid].tag = tag
         self.running[pid].resumed_from = [row for row in self.interruptions if row["unit_id"] == unit.unit_id and row["kind"] == kind]
         self.max_cores_in_use = max(self.max_cores_in_use, self.cores_in_use())
         self.event("start", unit=unit.unit_id, kind=kind, pid=pid, cores=unit.quota.cores, attempt=attempt)
 
-    def _clean_orphans(self, session_id: int, *, interrupted: bool = False) -> list[int]:
+    def _clean_orphans(self, item: Running, *, interrupted: bool = False) -> list[int]:
+        """单元根进程退出（已回收）之后清理它留下的全部残留：会话成员，以及另起会话的后代（按启动标记、名册和 ppid 子树找）。
+        先给宽限期等它们自己退出；仍在的先 SIGTERM，1 秒后还在就冻结再 SIGKILL。返回宽限期过后仍存活的进程号（记入单元记录）。"""
+
         deadline = time.monotonic() + (0 if interrupted else self.config.orphan_grace_seconds)
-        members = _session_members(session_id)
+        members = self._survivors(item)
         while members and time.monotonic() < deadline:
             time.sleep(POLL_SECONDS)
-            members = _session_members(session_id)
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            for pid in _session_members(session_id):
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(pid, sig)
-            if sig == signal.SIGTERM and _session_members(session_id):
+            members = self._survivors(item)
+        orphans = sorted(members)
+        if members:
+            self._remember(item, tags=True)
+            for pid, info in members.items():
+                _signal_if_same(pid, info, signal.SIGTERM)
+            if self._survivors(item):
                 time.sleep(1.0)
-        return members
+            self._kill_items([item])
+        return orphans
 
     def reap(self, *, block: bool) -> list[Outcome]:
         finished: list[Outcome] = []
         while True:
+            self._refresh_ledger()
             for pid, item in list(self.running.items()):
                 elapsed = time.monotonic() - item.started
-                # 单元自带超时（命令单元）优先，否则用调度配置的统一超时；先 SIGTERM，30 秒后仍在就 SIGKILL。
+                # 单元自带超时（命令单元）优先，否则用调度配置的统一超时；先 SIGTERM，30 秒后仍在就整棵子树 SIGKILL。
                 limit = item.unit.timeout_seconds or self.config.unit_timeout_seconds
                 if item.stop_started is None and elapsed > limit and not item.timed_out:
                     item.timed_out = True
+                    self._remember(item, tags=True)   # 先记名册再发信号：根进程一死，另起会话的后代就只能靠名册和标记认
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.killpg(pid, signal.SIGTERM)
                     self.event("timeout", unit=item.unit.unit_id, pid=pid)
-                elif item.timed_out and elapsed > limit + 30:
-                    with contextlib.suppress(ProcessLookupError, PermissionError):
-                        os.killpg(pid, signal.SIGKILL)
+                elif item.timed_out and elapsed > limit + TIMEOUT_KILL_GRACE_SECONDS:
+                    self._kill_items([item])
                 try:
                     waited, status, usage = os.wait4(pid, os.WNOHANG)
                 except ChildProcessError:
@@ -2436,7 +2752,7 @@ class Scheduler:
                                 raise ExecutorError("预约中止无法终止仍存活单元，拒绝授予整机")
                     continue
                 del self.running[pid]
-                orphans = self._clean_orphans(pid, interrupted=item.interruption is not None)
+                orphans = self._clean_orphans(item, interrupted=item.interruption is not None)
                 exit_code = os.waitstatus_to_exitcode(status)
                 outcome = Outcome(
                     unit=item.unit,
@@ -2457,15 +2773,8 @@ class Scheduler:
                 interrupted = (item.interruption is not None and
                                (exit_code in (0, 128 + signal.SIGTERM, 128 + signal.SIGKILL, -signal.SIGTERM, -signal.SIGKILL)))
                 if item.interruption is not None:
-                    # 无论原单元是否已经失败，都须核对会话清理后才能授予整机。
-                    active = []
-                    for member in _session_members(pid):
-                        try:
-                            state = (Path('/proc') / str(member) / 'stat').read_text().rsplit(')', 1)[-1].split()[0]
-                        except FileNotFoundError:
-                            continue
-                        if state not in ('Z', 'X'):
-                            active.append(member)
+                    # 无论原单元是否已经失败，都须核对清理后（含另起会话的后代）不再有活跃进程才能授予整机；僵尸与已退出的不算。
+                    active = sorted(self._survivors(item))
                     if active:
                         raise ExecutorError(f"预约中止后会话仍有活跃进程：{active}")
                 if interrupted and not item.unit.command:
@@ -3764,6 +4073,7 @@ def _run_gates_current(args: argparse.Namespace) -> int:
 def _terminate_like_interrupt() -> None:
     """SIGTERM 与 Ctrl-C 一样走中断清理：调度器 ``abort`` 终止全部在跑单元（整个会话）、不留后台进程，退出码 143。
     单元各自成会话，原来 SIGTERM 直接结束调度进程、单元会留在后台继续占核；修复轮停下上一轮的后台验证（E4-01）靠这一条。"""
+    # WP-R5：abort 带走的不只是会话成员，还有单元里另起会话的后代（嵌套的 run-unit 等），见「进程树快照与后代清理」。
 
     def handler(signum: int, _frame: Any) -> None:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)   # 清理期间不再被打断

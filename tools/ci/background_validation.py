@@ -412,22 +412,151 @@ def for_deployment(runroot: Path, deployment: Mapping[str, Any], *, client: str 
 
 # ---------------------------------------------------------------- 启动、停止与后台运行
 
+# ---------------------------------------------------------------- 进程树快照（WP-R5）
+#
+# 为什么：``_terminate`` 原来只管进程组。执行器给每个单元起的是新会话（不在组里），单元里的测试还可能再起嵌套的
+# 另起会话的进程（``test_claude_real_delivery_integration`` 的嵌套 ``unit_executor.py run-unit``）：执行器没来得及
+# abort 它们就被 SIGKILL（或根本没响应 SIGTERM）时，这些进程成了 PPID=1 的孤儿继续持锁运行（10-14、10-15 实测）。
+# 做法：**在发任何信号之前**按 ppid 取 run 进程的整棵后代树（含进程组成员），宽限期内每轮并入新出现的后代，最终对快照里
+# 仍存活的全部进程（不只进程组）先冻结再 SIGKILL。快照记 pid＋启动时间，发信号前核对一致，防 pid 复用误杀。
+#
+# 这里自带一份进程表，不去加载 ``unit_executor.py``：stop 路径不依赖 3800 行的执行器模块能否导入。两份实现的一致性由
+# 测试核对（``test_ci_unit_executor_descendant_cleanup``）。
+
+FREEZE_ROUNDS = 8
+# 进程文件系统根（测试用假的 /proc 树覆盖 Linux 分支；生产永远是 /proc）。
+PROC_ROOT = Path("/proc")
+
+
+def _process_table() -> dict[int, tuple[int, int, str, str]]:
+    """全部进程：pid → (ppid, pgid, 启动时间标识, 状态)。Linux 读 /proc；没有 /proc 时（macOS）用 ``ps``。读不到时返回空表。"""
+
+    table: dict[int, tuple[int, int, str, str]] = {}
+    if (PROC_ROOT / "self" / "stat").is_file():
+        for entry in PROC_ROOT.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                fields = (entry / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[-1].split()
+                table[int(entry.name)] = (int(fields[1]), int(fields[2]), fields[19], fields[0])
+            except (OSError, ValueError, IndexError):
+                continue
+        return table
+    try:
+        completed = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,lstart="], capture_output=True, text=True,
+                                   env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"}, stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return table
+    for line in completed.stdout.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) == 5:
+            try:
+                table[int(parts[0])] = (int(parts[1]), int(parts[2]), " ".join(parts[4].split()), parts[3])
+            except ValueError:
+                continue
+    return table
+
+
+def _tree_snapshot(root: int | None, previous: Mapping[int, str] | None = None) -> dict[int, str]:
+    """``root`` 进程的整棵后代树加它的进程组成员（另起会话的后代也在内，按 ppid 找），再并上 ``previous`` 里仍是同一个进程
+    （pid＋启动时间一致）的那些及其后代；结果 pid → 启动时间标识。绝不含调用方自己和它的祖先，也不含已成僵尸的。"""
+
+    table = _process_table()
+    protected = {os.getpid()}
+    pid = os.getpid()
+    while pid in table and table[pid][0] > 0 and table[pid][0] not in protected:
+        pid = table[pid][0]
+        protected.add(pid)
+    seeds = {pid for pid, row in table.items() if root is not None and (pid == root or row[1] == root)}
+    seeds |= {pid for pid, start in (previous or {}).items() if pid in table and table[pid][2] == start}
+    children: dict[int, list[int]] = {}
+    for pid, row in table.items():
+        children.setdefault(row[0], []).append(pid)
+    seen: set[int] = set()
+    stack = list(seeds)
+    while stack:
+        pid = stack.pop()
+        if pid not in seen:
+            seen.add(pid)
+            stack.extend(children.get(pid, ()))
+    return {pid: table[pid][2] for pid in seen if pid not in protected and table[pid][3][:1] not in ("Z", "X")}
+
+
+def _signal_if_same(pid: int, start: str, sig: int) -> bool:
+    """pid 现在还是快照里那个进程（启动时间一致）才发信号；pid 已被复用或进程已走就什么也不做。"""
+
+    row = _proc_row(pid) if (PROC_ROOT / "self" / "stat").is_file() else _process_table().get(pid)
+    if row is None or row[2] != start or row[3][:1] in ("Z", "X"):
+        return False
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def _proc_row(pid: int) -> tuple[int, int, str, str] | None:
+    try:
+        fields = (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[-1].split()
+        return int(fields[1]), int(fields[2]), fields[19], fields[0]
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _kill_snapshot(snapshot: Mapping[int, str], root: int | None = None) -> list[int]:
+    """终止快照里仍存活的全部进程（以及它们此后新生的后代、``root`` 的进程组成员）：先反复冻结（SIGSTOP）直到不再出现新进程，
+    防止它们在被杀的过程中继续 fork，再统一 SIGKILL；最后对进程组补一次 SIGKILL。返回实际发过 SIGKILL 的 pid。"""
+
+    frozen: dict[int, str] = {}
+    try:
+        for _ in range(FREEZE_ROUNDS):
+            fresh = {pid: start for pid, start in _tree_snapshot(root, {**snapshot, **frozen}).items() if pid not in frozen}
+            if not fresh:
+                break
+            for pid, start in fresh.items():
+                if _signal_if_same(pid, start, signal.SIGSTOP):
+                    frozen[pid] = start
+    finally:
+        # 无论冻结阶段出什么错，冻住的都要杀掉，不能把停住的进程留在后台。
+        killed = [pid for pid, start in frozen.items() if _signal_if_same(pid, start, signal.SIGKILL)]
+    if root is not None:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(int(root), signal.SIGKILL)
+    for _ in range(3):
+        stray = {pid: start for pid, start in _tree_snapshot(root, {**snapshot, **frozen}).items() if pid not in frozen}
+        if not stray:
+            break
+        for pid, start in stray.items():
+            if _signal_if_same(pid, start, signal.SIGKILL):
+                frozen[pid] = start
+                killed.append(pid)
+        time.sleep(0.05)
+    return sorted(killed)
+
+
 def _terminate(payload: Mapping[str, Any]) -> None:
-    """终止后台运行的整个进程组：先 SIGTERM（执行器收到后终止全部单元会话），等整组退出、超过宽限再 SIGKILL。
+    """终止后台运行的整棵进程树：先取快照，再 SIGTERM 整组（执行器收到后终止全部单元），等整组退出、超过宽限再 SIGKILL，
+    最终对**快照里仍存活的全部进程**（不只进程组）冻结后 SIGKILL。
 
     要等整组而不是只等组长：组长（``run`` 进程）收到 SIGTERM 立即退出，原来据此马上对整组发 SIGKILL，执行器正在逐个
-    终止单元会话就被杀掉，排在后面的单元（各自成会话、不在本组里）留在后台继续跑（E4-02 验收实测）。"""
+    终止单元会话就被杀掉，排在后面的单元（各自成会话、不在本组里）留在后台继续跑（E4-02 验收实测）。
+
+    快照必须在发信号之前取（WP-R5）：执行器没来得及 abort 就退出或被杀时，单元（各自成会话）与它们里面另起会话的嵌套进程
+    都成了孤儿，ppid 链已断，事后找不到；``test_claude_real_delivery_integration`` 的嵌套 ``run-unit`` 就是这样留下来持锁运行的
+    （10-14、10-15 实测）。宽限期内每轮把新出现的后代并进快照（执行器还在启停单元）；整组一退出就动手清剩下的，不空等宽限。"""
 
     pid = payload.get("pid")
     if not _group_alive(pid):
         return
+    root = int(pid)
+    snapshot = _tree_snapshot(root)
     with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(int(pid), signal.SIGTERM)
+        os.killpg(root, signal.SIGTERM)
     deadline = time.monotonic() + STOP_GRACE_SECONDS
-    while _group_alive(pid) and time.monotonic() < deadline:
+    while _group_alive(root) and time.monotonic() < deadline:
         time.sleep(0.2)
-    with contextlib.suppress(ProcessLookupError, PermissionError):
-        os.killpg(int(pid), signal.SIGKILL)
+        snapshot = _tree_snapshot(root, snapshot)
+    _kill_snapshot(snapshot, root)
 
 
 def stop(runroot: Path, reason: str, *, keep: Path | None = None, with_dryruns: bool = True) -> list[str]:
