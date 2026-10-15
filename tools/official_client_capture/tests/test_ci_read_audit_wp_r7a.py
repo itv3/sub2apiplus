@@ -692,6 +692,18 @@ class TwoPathCallsAreCheckedBeforeTheTrackerMovesAnythingTests(R7aFixture):
         line = f'1 rename("{r}/ln", "{r}/ln2/../y") = 0'
         self.assertFailsClosed(self.chain_lines() + [line], where="parser", fragment=self.HAZARD)
 
+    def test_a_hazard_that_survives_the_call_is_registered_exactly_once(self) -> None:
+        """失败的两路径调用不改变跟踪器状态，所以如果先行检查之后 ``_checked_join`` 又检查一次，同一个风险会登记两次（变异检验的 M04／M05）。
+        两端都有风险时各登记一次（共两次），是正确的计数。"""
+        for label, line in self.two_path_calls("nobody", "ln/../y", "= -1 ENOENT (x)").items():
+            with self.subTest(label=label):
+                self.assertEqual(self.outcome(self.chain_lines() + [line])[1], {self.HAZARD: 1}, label)
+        r = self.root
+        both = f'1 rename("{r}/ln/../x", "{r}/ln/../y") = -1 ENOENT (x)'
+        self.assertEqual(self.outcome(self.chain_lines() + [both])[1], {self.HAZARD: 2})
+        both_at = f'1 renameat2(AT_FDCWD</repo>, "{r}/ln/../x", AT_FDCWD</repo>, "{r}/ln/../y", 0) = -1 ENOENT (x)'
+        self.assertEqual(self.outcome(self.chain_lines() + [both_at])[1], {self.HAZARD: 2})
+
     def test_failed_two_path_calls_are_checked_the_same_way(self) -> None:
         for error in ("ENOENT", "ENOTDIR", "EEXIST"):
             for label, line in self.two_path_calls("nobody", "ln/../y", f"= -1 {error} (x)").items():
@@ -913,6 +925,19 @@ class StructureEdgeCaseTests(R4Fixture):
         for label, line in cases.items():
             with self.subTest(label=label):
                 self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_links_in_virtual_filesystems_are_not_ordinary_host_links_at_the_parser_level(self) -> None:
+        """第四轮验收 M45／M46（及本轮变异检验的 M34）：``/proc``、``/sys``、``/dev`` 下的符号链接即使 st_size≥1（``/proc/mounts`` 是 11、
+        ``/dev/fd`` 是 13）也不放行为宿主 stat 访问。整套审计里它们本来也会因 ``host_snapshot`` 拒绝虚拟路径而失败，所以这是冗余防线；
+        这里在解析器一侧固定它，免得将来有人删掉冗余后依赖的前提悄悄变化。"""
+        for path, size in (("/proc/mounts", 11), ("/proc/net", 8), ("/proc/self/mounts", 9), ("/dev/fd", 13), ("/dev/stdout", 15),
+                           ("/dev/stdin", 15), ("/sys/class/net/lo", 8), ("/sys/dev/block/8:1", 9)):
+            line = RAW_LSTAT_PYTHON3.replace('"/usr/bin/python3"', f'"{path}"').replace("st_size=10", f"st_size={size}")
+            with self.subTest(path=path):
+                self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1})
+        ordinary = RAW_LSTAT_PYTHON3.replace('"/usr/bin/python3"', '"/usr/lib/libx.so.1"').replace("st_size=10", "st_size=11")
+        parser = self.parse([ordinary])
+        self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {"/usr/lib/libx.so.1": {"stat"}}), "对照：同样的结构在普通磁盘路径上放行")
 
     def test_a_realpath_walk_over_proc_self_fails_the_audit_through_proc_itself(self) -> None:
         """删除 ``/proc/self`` lstat 豁免的依据：``realpath("/proc/self/…")`` 必先 lstat ``/proc`` 本身，那是对宿主 ``/proc`` 的 stat 访问，
