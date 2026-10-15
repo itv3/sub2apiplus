@@ -100,12 +100,9 @@
       ]
     },
     {
-      "reason": "监督器 campaign 的 `monitor` 看门狗子进程（codex_upgrade_supervisor.py monitor）以单元进程自己为 owner（用例里 owner_pid=os.getpid()）；严格读集审计下 strace 把心跳拖慢，并发时看门狗判 owner 心跳过期并 SIGTERM 单元进程（10-15 ARM64 收割 #5／#7／#8 三次实证：内核 tracepoint 抓到 monitor 子进程→单元 run-unit 进程的 SIGTERM，单元 returncode -15；单跑同一用例 plain／strace 都通过约 108 秒）。同类的 driver_wait 心跳脉冲计数用例在变慢环境里只数到 1 次（期望≥2）。按既有独占名单的纪律补登记，单独成 `…!exclusive` 单元、独占运行，不进审计策略。",
+      "reason": "监督器 campaign 的 `monitor` 看门狗子进程（codex_upgrade_supervisor.py monitor）以单元进程自己为 owner（用例里 owner_pid=os.getpid()）；严格读集审计下 strace 把心跳拖慢，并发时看门狗判 owner 心跳过期并 SIGTERM 单元进程（10-15 ARM64 收割 #5／#7／#8 三次实证：内核 tracepoint 抓到 monitor 子进程→单元 run-unit 进程的 SIGTERM，单元 returncode -15；单跑同一用例 plain／strace 都通过约 108 秒）。同类的 driver_wait 心跳脉冲计数用例在变慢环境里只数到 1 次（期望≥2）。按既有独占名单的纪律补登记，单独成 `…!exclusive` 单元、独占运行，不进审计策略。10-16 收割 #9 第二次实测：第 6 片的 item53_successor 用例也被同一看门狗终止（不在原四个用例名单里）。该模块 16 个用例里 13 个经辅助方法（_item45_owner_lost_segment、_item53_prereservation_run、_run_arguments 等）涉及 monitor／看门狗／心跳参数，另有 _apply_transient 这类辅助方法按名字看不出是否起 monitor（transient_apply 用例原名单已实证被杀却无任何标记），静态上分不清哪些安全，改为整类独占，不再逐个补名单",
       "tests": [
-        "test_codex_upgrade_evaluation_attempt_recovery.AttemptRecoveryTests.test_item48_segment_deadline_failure_closes_out_as_segment_recovery_then_protocol_15_accepts",
-        "test_codex_upgrade_evaluation_attempt_recovery.AttemptRecoveryTests.test_d07_watchdog_segment_parent_with_diagnostic_is_claimed_through_0w",
-        "test_codex_upgrade_evaluation_attempt_recovery.AttemptRecoveryTests.test_item53_segment_failure_before_reservation_redispatches_same_segment",
-        "test_codex_upgrade_evaluation_attempt_recovery.AttemptRecoveryTests.test_transient_apply_opens_attempt_recovery_baseline",
+        "test_codex_upgrade_evaluation_attempt_recovery.AttemptRecoveryTests",
         "test_arm64_driver_wait.UploadHeartbeatTests.test_real_upload_loop_pulses_and_stops_after_ready"
       ]
     }
@@ -152,7 +149,7 @@
   "reservation_grace_seconds": 30,
   "reservation_stop_seconds": 5,
   "schema_version": "unit-executor-config/v1",
-  "source": "ARM64 实测（E2-01，2026-10-01）：额度与拆块按提交 517ef4304 上 3 路并行逐模块测量的 CPU／墙钟比与内存峰值；默认并行度按提交 88202e274 上 4／6／8 路全量实测（16.3／15.5／14.5 分钟）；独占名单按 6、8 路全量与负载实验定位；A-07.2（2026-10-05）依据完整提交 e509f7523782edc62664c29e825ec5e645bacf03 的四片实测，仅将修复轮模块由两块细分为四块",
+  "source": "ARM64 实测（E2-01，2026-10-01）：额度与拆块按提交 517ef4304 上 3 路并行逐模块测量的 CPU／墙钟比与内存峰值；默认并行度按提交 88202e274 上 4／6／8 路全量实测（16.3／15.5／14.5 分钟）；独占名单按 6、8 路全量与负载实验定位；A-07.2（2026-10-05）依据完整提交 e509f7523782edc62664c29e825ec5e645bacf03 的四片实测，仅将修复轮模块由两块细分为四块；10-16：test_codex_upgrade_evaluation_attempt_recovery 整类改为独占后，原按 6 块拆分的登记不再有可拆的普通用例，已从 splits 删除（拆块与整类独占不能并存，否则计划里没有 #1～#6 单元）",
   "splits": {
     "test_arm64_driver_fix_and_continue": {
       "chunks": 4,
@@ -165,10 +162,6 @@
     "test_codex_upgrade": {
       "chunks": 4,
       "reason": "单模块 ARM64 约 7.8 分钟（359 个测试），拆 4 块"
-    },
-    "test_codex_upgrade_evaluation_attempt_recovery": {
-      "chunks": 6,
-      "reason": "单模块 ARM64 约 19 分钟（自身 16 个测试，最长一个 234 秒），按测试方法拆 6 块"
     }
   },
   "unit_timeout_seconds": 3600,
