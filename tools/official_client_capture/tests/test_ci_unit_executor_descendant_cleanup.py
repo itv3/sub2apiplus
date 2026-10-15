@@ -713,6 +713,12 @@ class BackgroundTerminateTests(_Fixture):
         wait_until(lambda: len(marked_processes(self.marker)) == 5, f"进程数不对：{marked_processes(self.marker)}")
         return leader
 
+    @staticmethod
+    def run_payload(leader: subprocess.Popen) -> dict:
+        """后台结论的样子：pid 加上 ``start`` 时记下的启动标识（R7b：没有 ``pid_start`` 的旧结论只按进程组处理）。"""
+
+        return {"pid": leader.pid, "pid_start": bv.process_identity(leader.pid)}
+
     def test_group_dies_on_sigterm_but_nested_session_orphans_are_killed_at_once(self) -> None:
         """组长与执行器替身收到 SIGTERM 就退出（相当于执行器没来得及 abort 单元）：单元会话里的后代成了孤儿，
         ppid 链已断。快照在发 SIGTERM 之前取，所以仍能认出并杀掉；整组一退出就动手，不空等 60 秒宽限。"""
@@ -721,7 +727,7 @@ class BackgroundTerminateTests(_Fixture):
         bystander = self.bystander()
         began = time.monotonic()
         with mock.patch.object(bv, "STOP_GRACE_SECONDS", 25.0):
-            bv._terminate({"pid": leader.pid})
+            bv._terminate(self.run_payload(leader))
         self.assertLess(time.monotonic() - began, 12, "组已经没了就不该空等宽限期")
         self.assert_all_gone("另起会话的单元、嵌套与孙辈必须被清掉")
         self.assertTrue(alive(bystander), "旁观进程不得被误杀")
@@ -732,7 +738,7 @@ class BackgroundTerminateTests(_Fixture):
 
         leader = self.group("late")
         with mock.patch.object(bv, "STOP_GRACE_SECONDS", 25.0):
-            bv._terminate({"pid": leader.pid})
+            bv._terminate(self.run_payload(leader))
         self.assert_all_gone("SIGTERM 之后才出现的另起会话的后代也必须被清掉")
 
     def test_group_ignoring_sigterm_is_killed_after_grace_together_with_session_descendants(self) -> None:
@@ -740,7 +746,7 @@ class BackgroundTerminateTests(_Fixture):
         bystander = self.bystander()
         began = time.monotonic()
         with mock.patch.object(bv, "STOP_GRACE_SECONDS", 1.0):
-            bv._terminate({"pid": leader.pid})
+            bv._terminate(self.run_payload(leader))
         self.assertGreaterEqual(time.monotonic() - began, 1.0, "组还活着就要等满宽限期")
         self.assert_all_gone("宽限期过后 SIGKILL 要带上快照里的全部存活进程")
         self.assertTrue(alive(bystander))

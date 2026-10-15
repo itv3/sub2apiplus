@@ -997,6 +997,12 @@ LEDGER_REFRESH_SECONDS = 2.0
 TIMEOUT_KILL_GRACE_SECONDS = 30.0
 # 冻结阶段最多取几轮快照（每轮冻结新出现的进程）；正常一两轮就收敛。
 FREEZE_ROUNDS = 8
+# 冻结之后、SIGKILL 之前要再核对一次「pid＋启动时间」。读进程信息偶发失败（fd 耗尽、内存紧张、读到乱码、ps 超时）不等于「进程没了」：
+# 在这个次数内重试（轮与轮之间睡 KILL_VERIFY_RETRY_SECONDS 秒）；仍核对不了就对它发 SIGCONT 解冻并记告警，绝不把进程留在 STOPPED 里。
+KILL_VERIFY_ATTEMPTS = 5
+KILL_VERIFY_RETRY_SECONDS = 0.1
+# abort 回收各单元根进程最多等多久（秒）；根进程已被 SIGKILL，正常毫秒级回收，这个上限只防不可中断睡眠一类的极端情形无限阻塞。
+ABORT_REAP_SECONDS = 10.0
 _TAG_PREFIX = (RUN_TAG_ENV + "=").encode()
 # 进程文件系统根（测试用假的 /proc 树覆盖 Linux 分支；生产永远是 /proc）。
 PROC_ROOT = Path("/proc")
@@ -1031,14 +1037,14 @@ def _process_table_proc() -> dict[int, ProcInfo]:
     return table
 
 
-def _process_table_ps() -> dict[int, ProcInfo]:
-    """没有 /proc 时（macOS）的后备：``ps`` 列出全部进程，会话号用 ``os.getsid`` 补。"""
+def _process_table_ps_strict() -> dict[int, ProcInfo]:
+    """没有 /proc 时（macOS）的后备：``ps`` 列出全部进程，会话号用 ``os.getsid`` 补。``ps`` 起不来、超时或没有输出就报错
+    （OSError／SubprocessError），不把「读不到」伪装成「一个进程都没有」——冻结后的复核要靠它区分「进程没了」和「暂时核对不了」。"""
 
-    try:
-        completed = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,lstart="], capture_output=True, text=True,
-                                   env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"}, stdin=subprocess.DEVNULL, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return {}
+    completed = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,lstart="], capture_output=True, text=True,
+                               env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"}, stdin=subprocess.DEVNULL, timeout=30)
+    if completed.returncode != 0 and not completed.stdout.strip():
+        raise OSError(f"ps 失败（退出码 {completed.returncode}）：{completed.stderr.strip()[:200]}")
     table: dict[int, ProcInfo] = {}
     for line in completed.stdout.splitlines():
         parts = line.split(None, 3)
@@ -1054,6 +1060,15 @@ def _process_table_ps() -> dict[int, ProcInfo]:
             sid = None
         table[pid] = ProcInfo(pid, ppid, sid, " ".join(parts[3].split()), parts[2])
     return table
+
+
+def _process_table_ps() -> dict[int, ProcInfo]:
+    """同上，但 ``ps`` 读不到时返回空表（取快照用：空表＝没有可清理的，调用方走按会话和进程组的兜底）。"""
+
+    try:
+        return _process_table_ps_strict()
+    except (OSError, subprocess.SubprocessError):
+        return {}
 
 
 def process_table() -> dict[int, ProcInfo]:
@@ -1134,17 +1149,41 @@ def tagged_pids(token: str, table: dict[int, ProcInfo]) -> set[int]:
     return set(tag_index(table).get(token, ()))
 
 
-def _same_process(pid: int, info: ProcInfo) -> bool:
-    """pid 现在还是快照里的那个进程：启动时间一致、没有成僵尸。"""
+def _read_start(pid: int) -> tuple[str, str] | None:
+    """单个进程现在的 (启动时间标识, 状态)。进程已经不在返回 ``None``；读不了（fd 耗尽、内存紧张、读到乱码或截断的 stat、
+    ``ps`` 失败／超时）抛 OSError／ValueError／SubprocessError——调用方据此区分「确实没了」和「暂时核对不了」，
+    故障注入测试也从这里下手。"""
 
     if _has_proc():
         try:
-            fields = (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[-1].split()
-        except OSError:
-            return False
-        return len(fields) > 19 and fields[19] == info.start and fields[0] not in ("Z", "X")
-    current = _process_table_ps().get(pid)
-    return current is not None and current.start == info.start and current.state[:1] not in ("Z", "X")
+            text = (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+        except (FileNotFoundError, ProcessLookupError, NotADirectoryError):
+            return None   # 进程已退出（ENOENT／ESRCH），不是读故障
+        fields = text.rsplit(")", 1)[-1].split()
+        if len(fields) <= 19:
+            raise ValueError(f"/proc/{pid}/stat 字段不足：{text[:80]!r}")
+        return fields[19], fields[0]
+    current = _process_table_ps_strict().get(pid)
+    return None if current is None else (current.start, current.state)
+
+
+def _identity(pid: int, info: ProcInfo) -> str:
+    """pid 现在和快照里那个进程的关系：``same``（启动时间一致、没成僵尸）、``gone``（已不在或已成僵尸）、``other``（pid 已被
+    另一个进程复用）、``unknown``（读不了，暂时核对不了）。"""
+
+    try:
+        current = _read_start(pid)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return "unknown"
+    if current is None or current[1][:1] in ("Z", "X"):
+        return "gone"
+    return "same" if current[0] == info.start else "other"
+
+
+def _same_process(pid: int, info: ProcInfo) -> bool:
+    """pid 现在还是快照里的那个进程：启动时间一致、没有成僵尸。"""
+
+    return _identity(pid, info) == "same"
 
 
 def _signal_if_same(pid: int, info: ProcInfo, sig: int) -> bool:
@@ -1157,9 +1196,96 @@ def _signal_if_same(pid: int, info: ProcInfo, sig: int) -> bool:
     return True
 
 
-def kill_processes(find: Any) -> list[int]:
-    """终止 ``find()`` 给出的进程（pid → ProcInfo）：先反复冻结直到不再出现新进程，再统一 SIGKILL，最后再扫荡几次。
-    返回实际发过 SIGKILL 的 pid。``find`` 每轮重新取快照，所以冻结期间新 fork 出来的后代下一轮就看得到。"""
+def _abbreviate(text: str, limit: int = 300) -> str:
+    """过长的命令行保留开头和结尾（``python -c <很长的代码> 参数…`` 的参数在最后，掐掉尾巴就认不出是谁了）。"""
+
+    return text if len(text) <= limit else text[:200] + " … " + text[-(limit - 203):]
+
+
+def command_lines(pids: list[int], limit: int = 20) -> dict[str, str]:
+    """前 ``limit`` 个进程的命令行（过长的保留头尾，共约 300 字符），诊断留证用；读不到的略过。Linux 读 /proc/<pid>/cmdline，
+    没有 /proc 时用 ps。"""
+
+    found: dict[str, str] = {}
+    chosen = pids[:limit]
+    if _has_proc():
+        for pid in chosen:
+            try:
+                raw = (PROC_ROOT / str(pid) / "cmdline").read_bytes()
+            except OSError:
+                continue
+            found[str(pid)] = _abbreviate(raw.replace(b"\0", b" ").decode("utf-8", "replace").strip())
+        return found
+    try:
+        completed = subprocess.run(["ps", "-ww", "-o", "pid=,command=", "-p", ",".join(str(pid) for pid in chosen)], capture_output=True,
+                                   text=True, env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"}, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return found
+    for line in completed.stdout.splitlines():
+        head, _, rest = line.strip().partition(" ")
+        if head.isdigit():
+            found[head] = _abbreviate(rest.strip())
+    return found
+
+
+def kill_frozen(frozen: dict[int, ProcInfo], warnings: list[str] | None = None) -> list[int]:
+    """杀掉已经 SIGSTOP 冻结的进程，保证**不会有进程留在 STOPPED 里**。返回实际发过 SIGKILL 的 pid。
+
+    杀之前再核对一次身份。读进程信息偶发失败（``unknown``）不能当成「进程没了」：在 ``KILL_VERIFY_ATTEMPTS`` 轮内重试；仍核对不了的
+    对它发 SIGCONT 解冻并写进 ``warnings``——不在这里盲杀，因为核对不了身份时按「pid＋启动时间」才发信号的保护就失效了；
+    解冻后它仍在 ``find`` 的结果里，调用方后面的扫荡轮次还会再核对、再杀。核对出 ``other``（冻结的瞬间 pid 已被复用，
+    比如「核对通过」与「发 SIGSTOP」之间原进程退出、pid 被别的进程拿走）说明被冻住的是无辜进程，同样发 SIGCONT 撤销冻结。
+    第二次 Ctrl-C 等中断落在这里：先把其余冻结进程处理完，最后再把中断抛出去，已发出的 SIGKILL 不丢、也不留停住的进程。"""
+
+    warnings = [] if warnings is None else warnings
+    killed: list[int] = []
+    interrupted: BaseException | None = None
+    pending = dict(frozen)
+    for _ in range(KILL_VERIFY_ATTEMPTS):
+        retry: dict[int, ProcInfo] = {}
+        for pid, info in pending.items():
+            try:
+                state = _identity(pid, info)
+                if state == "same":
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        killed.append(pid)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        warnings.append(f"进程 {pid} 已冻结但无权发 SIGKILL（权限不足），仍处于停住状态")
+                elif state == "other":
+                    _unfreeze(pid)
+                    warnings.append(f"冻结的 pid {pid} 在核对时已是另一个进程（pid 被复用），已发 SIGCONT 撤销冻结")
+                elif state == "unknown":
+                    retry[pid] = info
+            except BaseException as error:   # noqa: BLE001 - 见函数说明：中断先记下，处理完其余进程再抛
+                interrupted = interrupted or error
+                retry[pid] = info
+        pending = retry
+        if not pending:
+            break
+        try:
+            time.sleep(KILL_VERIFY_RETRY_SECONDS)
+        except BaseException as error:   # noqa: BLE001
+            interrupted = interrupted or error
+    for pid in pending:
+        _unfreeze(pid)
+        warnings.append(f"进程 {pid} 冻结后连续 {KILL_VERIFY_ATTEMPTS} 次核对不了身份，已发 SIGCONT 解冻（没有杀；请核对它是否是遗留进程）")
+    if interrupted is not None:
+        raise interrupted
+    return killed
+
+
+def _unfreeze(pid: int) -> None:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.kill(pid, signal.SIGCONT)
+
+
+def kill_processes(find: Any, warnings: list[str] | None = None) -> list[int]:
+    """终止 ``find()`` 给出的进程（pid → ProcInfo）：先反复冻结直到不再出现新进程，再统一 SIGKILL（见 ``kill_frozen``，
+    不会留下停住的进程），最后再扫荡几次。返回实际发过 SIGKILL 的 pid；核对不了身份而改发 SIGCONT 的写进 ``warnings``。
+    ``find`` 每轮重新取快照，所以冻结期间新 fork 出来的后代下一轮就看得到。"""
 
     frozen: dict[int, ProcInfo] = {}
     try:
@@ -1171,15 +1297,16 @@ def kill_processes(find: Any) -> list[int]:
                 if _signal_if_same(pid, info, signal.SIGSTOP):
                     frozen[pid] = info
     finally:
-        # 无论冻结阶段出什么错，冻住的都要杀掉，不能把停住的进程留在后台。
-        killed = [pid for pid, info in frozen.items() if _signal_if_same(pid, info, signal.SIGKILL)]
+        # 无论冻结阶段出什么错，冻住的都要杀掉（或至少解冻），不能把停住的进程留在后台。
+        killed = kill_frozen(frozen, warnings)
+    sent = set(killed)
     for _ in range(3):
-        stray = {pid: info for pid, info in find().items() if pid not in frozen}
+        stray = {pid: info for pid, info in find().items() if pid not in sent}
         if not stray:
             break
         for pid, info in stray.items():
             if _signal_if_same(pid, info, signal.SIGKILL):
-                frozen[pid] = info
+                sent.add(pid)
                 killed.append(pid)
         time.sleep(0.05)
     return sorted(killed)
@@ -2471,10 +2598,28 @@ class Scheduler:
         try:
             self._kill_items(items)
         finally:
-            for item in items:
-                with contextlib.suppress(ChildProcessError):
-                    os.waitpid(item.pid, 0)
-                self.running.pop(item.pid, None)
+            self._reap_roots(items)
+
+    def _reap_roots(self, items: list[Running]) -> None:
+        """回收各单元的根进程，**有界**：第二次 Ctrl-C 可能落在 ``_kill_items`` 取快照的阶段，那时根进程还活着，原来无条件
+        ``waitpid(pid, 0)`` 会永久阻塞（基线只是把 KeyboardInterrupt 抛出去，不卡住）。所以先对仍未回收的根补发 SIGKILL（未回收
+        的僵尸占着 pid，不会被复用），再用 WNOHANG 限时轮询回收；再被打断就直接抛出去，已发出的 SIGKILL 不丢。"""
+
+        for item in items:
+            if item.pid in self.running:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(item.pid, signal.SIGKILL)
+        deadline = time.monotonic() + ABORT_REAP_SECONDS
+        for item in items:
+            while True:
+                try:
+                    waited, _status = os.waitpid(item.pid, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if waited != 0 or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.01)
+            self.running.pop(item.pid, None)
 
     def cores_in_use(self) -> float:
         return sum(item.unit.quota.cores for item in self.running.values())
@@ -2527,21 +2672,40 @@ class Scheduler:
 
     def _signal_session(self, pid: int, sig: int) -> None:
         """主进程组和会话内其它组一起停止，避免只杀包装器就提前让出整机。"""
+        item = self.running.get(pid)
+        if item is not None:
+            # WP-R5：**先取快照再发信号**。SIGKILL 档原来先杀进程组和会话成员、之后才在 ``_kill_items`` 里取快照：根进程与会话成员
+            # 一死，环境被清空、又没来得及进名册的另起会话后代就改挂 init，再也找不到了。这里先把单元现在的全部存活进程记进名册
+            # （pid＋启动时间，含按标记、按 ppid 子树找到的），后面的 ``_kill_items`` 靠名册照样认得出它们。
+            self._remember_quietly(item)
         with contextlib.suppress(ProcessLookupError):
             os.killpg(pid, sig)
         for member in _session_members(pid):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(member, sig)
         # WP-R5：再加上单元自己另起会话的后代。SIGKILL 档走「冻结再终止」（_kill_items），其它信号发给当前能找到的全部存活进程。
-        item = self.running.get(pid)
         if item is None:
             return
         if sig == signal.SIGKILL:
             self._kill_items([item])
             return
-        self._remember(item, tags=True)
-        for member, info in self._survivors(item).items():
+        try:
+            survivors = self._survivors(item)
+        except Exception as error:   # noqa: BLE001 - 进程表读不到不能让预约中止的 SIGTERM 档半途崩掉；原因留事件
+            with contextlib.suppress(OSError):
+                self.event("tree-kill-error", error=repr(error), stage="signal-session")
+            return
+        for member, info in survivors.items():
             _signal_if_same(member, info, sig)
+
+    def _remember_quietly(self, item: Running) -> None:
+        """发信号之前先记名册；读进程表出错时只留事件、不抛——名册是锦上添花的依据，不能因为它拦住后面的信号。"""
+
+        try:
+            self._remember(item, tags=True)
+        except Exception as error:   # noqa: BLE001
+            with contextlib.suppress(OSError):
+                self.event("tree-kill-error", error=repr(error), stage="remember")
 
     # -- 后代清理（WP-R5）---------------------------------------------------------
     def _survivors(self, item: Running, table: dict[int, ProcInfo] | None = None, *, tags: bool = True,
@@ -2586,34 +2750,42 @@ class Scheduler:
 
     def _kill_items(self, items: list[Running]) -> None:
         """冻结再 SIGKILL 这些单元的全部存活进程（含根进程与另起会话的后代）。取快照、冻结、终止的细节见 ``kill_processes``。
-        进程表读不到或出错时回落到原来的按进程组和会话杀：仍在被跟踪（尚未回收）的根进程一定会被杀。"""
+        进程表读不到或出错时回落到原来的按进程组和会话杀：仍在被跟踪（尚未回收）的根进程一定会被杀——这一段放在 ``finally`` 里，
+        第二次 Ctrl-C 之类的中断也不会跳过它。清理中遇到的告警（冻结后核对不了身份而改发 SIGCONT 等）写成 ``tree-kill-warning`` 事件。"""
 
+        warnings: list[str] = []
         try:
-            table = process_table()
-            index = tag_index(table)
-            for item in items:
-                self._remember(item, table, tags=True, index=index)   # 先于任何信号：之后根进程一死，ppid 链就断了
-
-            def find() -> dict[int, ProcInfo]:
+            try:
                 table = process_table()
                 index = tag_index(table)
-                return {pid: info for item in items for pid, info in self._survivors(item, table, index=index).items()}
+                for item in items:
+                    self._remember(item, table, tags=True, index=index)   # 先于任何信号：之后根进程一死，ppid 链就断了
 
-            killed = kill_processes(find)
-            if killed:
-                self.event("tree-kill", units=sorted(item.unit.unit_id for item in items), killed=len(killed))
-        except Exception as error:   # noqa: BLE001 - 清理路径不能因为进程表出错而放过根进程；原因留事件，不吞
-            with contextlib.suppress(OSError):
-                self.event("tree-kill-error", error=repr(error))
-        for item in items:
-            if item.pid in self.running:   # 已被回收的根进程，其 pid 可能已被复用，不再按 pid 发信号
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.killpg(item.pid, signal.SIGKILL)
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(item.pid, signal.SIGKILL)
-            for member in _session_members(item.pid):
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(member, signal.SIGKILL)
+                def find() -> dict[int, ProcInfo]:
+                    table = process_table()
+                    index = tag_index(table)
+                    return {pid: info for item in items for pid, info in self._survivors(item, table, index=index).items()}
+
+                killed = kill_processes(find, warnings)
+                if killed:
+                    self.event("tree-kill", units=sorted(item.unit.unit_id for item in items), killed=len(killed))
+            except Exception as error:   # noqa: BLE001 - 清理路径不能因为进程表出错而放过根进程；原因留事件，不吞
+                with contextlib.suppress(OSError):
+                    self.event("tree-kill-error", error=repr(error))
+            if warnings:
+                with contextlib.suppress(OSError):
+                    self.event("tree-kill-warning", units=sorted(item.unit.unit_id for item in items), warnings=warnings)
+        finally:
+            for item in items:
+                if item.pid in self.running:   # 已被回收的根进程，其 pid 可能已被复用，不再按 pid 发信号
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(item.pid, signal.SIGKILL)
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.kill(item.pid, signal.SIGKILL)
+                with contextlib.suppress(OSError):
+                    for member in _session_members(item.pid):
+                        with contextlib.suppress(ProcessLookupError, PermissionError):
+                            os.kill(member, signal.SIGKILL)
 
     def _resume_pending(self, kind: str) -> list[Unit]:
         if not self.deferred or self.reservation.current() is not None:
@@ -2715,7 +2887,11 @@ class Scheduler:
             members = self._survivors(item)
         orphans = sorted(members)
         if members:
-            self._remember(item, tags=True)
+            # 留证：单元记录里 ``orphans`` 只有个数，而 ``capture_ci`` 对任何孤儿判分片失败；残留是哪些命令要在事件流里能查到
+            # （WP-R5 起另起会话的残留也计入，第一次在 ARM64／CI 全量跑时靠它定位既有测试的泄漏）。
+            with contextlib.suppress(Exception):
+                self.event("orphans", unit=item.unit.unit_id, pids=orphans, commands=command_lines(orphans))
+            self._remember_quietly(item)
             for pid, info in members.items():
                 _signal_if_same(pid, info, signal.SIGTERM)
             if self._survivors(item):
@@ -2733,7 +2909,7 @@ class Scheduler:
                 limit = item.unit.timeout_seconds or self.config.unit_timeout_seconds
                 if item.stop_started is None and elapsed > limit and not item.timed_out:
                     item.timed_out = True
-                    self._remember(item, tags=True)   # 先记名册再发信号：根进程一死，另起会话的后代就只能靠名册和标记认
+                    self._remember_quietly(item)   # 先记名册再发信号：根进程一死，另起会话的后代就只能靠名册和标记认
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.killpg(pid, signal.SIGTERM)
                     self.event("timeout", unit=item.unit.unit_id, pid=pid)
