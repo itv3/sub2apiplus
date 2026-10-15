@@ -441,5 +441,236 @@ class HostSymlinkLstatTests(R4Fixture):
                 self.assertEqual(self.reasons_of([self.lstat_line(call=call)], "v3"), {f"symlink-metadata-not-bound:{call}": 1})
 
 
+# =====================================================================================================================
+# R4-1  自有进程树的 /proc/<pid>/… 与 /proc/self/…
+# =====================================================================================================================
+
+# 逐字取自 raw-diag-driverwait.gz／raw-diag-ingress.gz 的 /proc 访问（工作目录前缀写成 WORK）。
+RAW_PROC_OWN_STAT = (f'3983820 openat(AT_FDCWD<{DRIVER_WAIT_ROOT}/tmpp0ryn47e>, "/proc/3983820/stat", O_RDONLY) = 3</proc/3983820/stat>')
+RAW_PROC_OWN_STATUS = (f'3983820 openat(AT_FDCWD<{DRIVER_WAIT_ROOT}/tmpp0ryn47e>, "/proc/3983820/status", O_RDONLY) = 3</proc/3983820/status>')
+RAW_PROC_SELF_STATUS = (f'3983820 openat(AT_FDCWD<{DRIVER_WAIT_ROOT}/tmpp0ryn47e>, "/proc/self/status", O_RDONLY) = 3</proc/3983820/status>')
+RAW_PROC_SELF_MAPS = f'3965846 openat(AT_FDCWD<{WORK}/test-tree>, "/proc/self/maps", O_RDONLY) = 3</proc/3965846/maps>'
+DIR_STRUCT = ('{st_dev=makedev(0, 0x1a), st_ino=811908183, st_mode=S_IFDIR|0555, st_nlink=9, st_uid=0, st_gid=0, st_blksize=1024, '
+              'st_blocks=0, st_size=0, st_atime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_atime_nsec=102163350, '
+              'st_mtime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_mtime_nsec=102163350, '
+              'st_ctime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_ctime_nsec=102163350}')
+RAW_PROC_OWN_DIR = f'3983820 newfstatat(AT_FDCWD<{DRIVER_WAIT_ROOT}/tmpp0ryn47e>, "/proc/3983820", {DIR_STRUCT}, 0) = 0'
+RAW_PROC_SELF_TASK = f'3983820 newfstatat(AT_FDCWD<{DRIVER_WAIT_ROOT}/tmpp0ryn47e>, "/proc/self/task", {DIR_STRUCT}, 0) = 0'
+ENVIRONMENT_READS = ['/proc/filesystems', '/proc/uptime', '/proc/sys/crypto/fips_enabled', '/proc/self/mountinfo', '/proc/self/mounts',
+                     '/proc/self/cgroup']
+
+
+class ProcUnitInternalTests(R4Fixture):
+    """``/proc/<pid>/{stat,status,maps,…}`` 只在 pid 属于本轨迹进程树时是单元内部状态。"""
+
+    OWN = 100
+
+    def open_line(self, pid: int, target: str, flags: str = "O_RDONLY|O_CLOEXEC", *, resolved: str | None = None, cwd: str = "/repo") -> str:
+        resolved = target if resolved is None else resolved
+        return f'{pid} openat(AT_FDCWD<{cwd}>, "{target}", {flags}) = 3<{resolved}>'
+
+    def stat_line(self, pid: int, target: str, *, errno: str = "", cwd: str = "/repo") -> str:
+        tail = f"= -1 {errno}" if errno else "= 0"
+        return f'{pid} newfstatat(AT_FDCWD<{cwd}>, "{target}", {DIR_STRUCT if not errno else "0x7ffd1234"}, 0) {tail}'
+
+    def clone_line(self, parent: int, child: int, flags: str = "CLONE_VM|CLONE_FS|CLONE_FILES|SIGCHLD") -> str:
+        return f'{parent} clone(child_stack=NULL, flags={flags}) = {child}'
+
+    def accesses(self, lines: list[str], contract: str = "v4") -> dict[str, set[str]]:
+        parser = self.parse(lines, contract)
+        self.assertEqual(parser.unresolved_reasons, {}, parser.unresolved_reasons)
+        return parser.accesses
+
+    # ---- 正例 ----
+    def test_the_corpus_lines_of_the_own_process_are_not_host_accesses(self) -> None:
+        lines = [RAW_PROC_OWN_STAT, RAW_PROC_OWN_STATUS, RAW_PROC_SELF_STATUS, RAW_PROC_OWN_DIR, RAW_PROC_SELF_TASK, RAW_PROC_SELF_MAPS]
+        parser = self.parse(lines)
+        self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {}))
+        self.assertEqual(parser.unit_proc_accesses, 2 + 2 + 2 + 1 + 1 + 2 - 0 + 0, "每条打开两次（请求路径＋描述符注解），目录 stat 一次")
+        # 同样的行在 v3 下全部登记（一字不变）。
+        legacy = self.parse(lines, "v3").accesses
+        self.assertEqual(set(legacy), {"/proc/3983820/stat", "/proc/3983820/status", "/proc/self/status", "/proc/3983820", "/proc/self/task",
+                                       "/proc/self/maps", "/proc/3965846/maps"})
+
+    def test_the_whole_audit_passes_with_own_proc_reads_and_a_generated_output(self) -> None:
+        lines = self.base_lines() + [self.create_line("d/a"), self.open_line(1, "/proc/self/stat", resolved="/proc/1/stat"),
+                                     self.open_line(1, "/proc/1/status"), self.open_line(1, "/proc/self/maps", resolved="/proc/1/maps"),
+                                     self.stat_line(1, "/proc/self/task"), self.stat_line(1, "/proc/1")]
+        document = self.assertPasses(lines)
+        self.assertEqual([path for path, _kinds in document["accesses"] if path.startswith("/proc")], [])
+
+    def test_children_threads_and_resumed_clones_extend_the_traced_set(self) -> None:
+        lines = [self.open_line(self.OWN, "/etc/hostname"),
+                 self.clone_line(self.OWN, 200),                                          # fork
+                 f'{self.OWN} clone(child_stack=0x7f00, flags=CLONE_VM|CLONE_THREAD|CLONE_SIGHAND) = 201',   # 线程
+                 f'{self.OWN} clone(child_stack=NULL, flags=CLONE_VM|SIGCHLD <unfinished ...>',               # 被打断
+                 f'{self.OWN + 1} chdir("/etc") = 0',
+                 f'{self.OWN} <... clone resumed>) = 202',
+                 f'{self.OWN} vfork() = 203',
+                 self.open_line(self.OWN, "/proc/200/stat"), self.open_line(self.OWN, "/proc/201/comm"),
+                 self.open_line(self.OWN, "/proc/202/status"), self.open_line(self.OWN, "/proc/203/cmdline"),
+                 self.stat_line(self.OWN, "/proc/self/task/201"), self.open_line(self.OWN, "/proc/self/task/201/stat"),
+                 self.open_line(self.OWN, "/proc/100/task/200/maps")]
+        self.assertEqual(set(self.accesses(lines)), {"/etc/hostname", "/etc"})
+
+    def test_a_pid_known_only_from_its_own_trace_lines_counts_too(self) -> None:
+        """fork 的返回行可以晚于子进程自己的输出；任何一方先出现都进集合。"""
+        lines = [self.open_line(300, "/etc/hostname"), self.open_line(self.OWN, "/proc/300/status")]
+        self.assertEqual(set(self.accesses(lines)), {"/etc/hostname"})
+
+    def test_pid_reuse_is_still_the_traced_process_tree(self) -> None:
+        lines = [self.open_line(self.OWN, "/etc/hostname"), self.clone_line(self.OWN, 400), self.open_line(400, "/proc/400/stat"),
+                 self.clone_line(self.OWN, 400), self.open_line(self.OWN, "/proc/400/stat")]
+        self.assertEqual(set(self.accesses(lines)), {"/etc/hostname"})
+
+    def test_all_whitelisted_leaves_and_kinds(self) -> None:
+        leaves = ("stat", "statm", "status", "cmdline", "comm", "maps", "smaps", "smaps_rollup", "io", "limits", "oom_score", "oom_score_adj")
+        lines = [self.open_line(self.OWN, "/etc/hostname")]
+        for leaf in leaves:
+            lines += [self.open_line(self.OWN, f"/proc/{self.OWN}/{leaf}"), self.open_line(self.OWN, f"/proc/self/{leaf}", resolved=f"/proc/{self.OWN}/{leaf}"),
+                      self.open_line(self.OWN, f"/proc/thread-self/{leaf}", resolved=f"/proc/{self.OWN}/task/{self.OWN}/{leaf}"),
+                      f'{self.OWN} openat(AT_FDCWD<{"/repo"}>, "/proc/{self.OWN}/{leaf}", O_RDONLY) = -1 EACCES (Permission denied)',
+                      f'{self.OWN} openat(AT_FDCWD</repo>, "/proc/{self.OWN}/{leaf}", O_RDONLY) = -1 ENOENT (No such file or directory)']
+        self.assertEqual(set(self.accesses(lines)), {"/etc/hostname"})
+
+    def test_directories_allow_metadata_only(self) -> None:
+        lines = [self.open_line(self.OWN, "/etc/hostname"), self.open_line(self.OWN, "/proc/self", "O_RDONLY|O_DIRECTORY", resolved=f"/proc/{self.OWN}"),
+                 self.stat_line(self.OWN, "/proc/self"), self.stat_line(self.OWN, "/proc/thread-self"), self.stat_line(self.OWN, f"/proc/{self.OWN}/task"),
+                 self.stat_line(self.OWN, f"/proc/{self.OWN}/task/{self.OWN}"), self.stat_line(self.OWN, f"/proc/{self.OWN}", errno="ENOENT")]
+        self.assertEqual(set(self.accesses(lines)), {"/etc/hostname"})
+
+    # ---- 反例：不属于本轨迹的 pid ----
+    def test_other_processes_are_host_state(self) -> None:
+        """整张进程表扫描（test_arm64_driver_wait 的 1…310，每个 pid 三次访问）：只有自己与子进程被放行，其余全部仍是宿主访问。"""
+        lines = [self.open_line(self.OWN, "/etc/hostname"), self.clone_line(self.OWN, 150)]
+        for pid in range(1, 311):
+            lines += [self.stat_line(self.OWN, f"/proc/{pid}"), self.open_line(self.OWN, f"/proc/{pid}/stat"), self.open_line(self.OWN, f"/proc/{pid}/status")]
+        accessed = self.accesses(lines)
+        outside = {pid for pid in range(1, 311) if f"/proc/{pid}" in accessed}
+        self.assertEqual(outside, set(range(1, 311)) - {self.OWN, 150}, "自己与子进程没登记，其余 308 个都登记")
+        self.assertTrue(all(f"/proc/{pid}/{leaf}" in accessed for pid in outside for leaf in ("stat", "status")))
+        document = self.document(lines)
+        self.assertFalse(self.audit(document)["coverage_complete"])
+
+    def test_a_pid_that_never_appeared_in_the_trace_is_not_internal_even_if_it_looks_plausible(self) -> None:
+        for target in ("/proc/1/stat", "/proc/99999/status", f"/proc/{self.OWN + 1}/maps", f"/proc/{self.OWN}0/stat"):
+            with self.subTest(target=target):
+                lines = [self.open_line(self.OWN, "/etc/hostname"), self.open_line(self.OWN, target)]
+                self.assertIn(target, self.accesses(lines))
+
+    def test_a_pid_only_learned_after_the_read_is_not_retroactive(self) -> None:
+        """集合按轨迹顺序增长：先读、后来才出现的 pid 不回溯放行（保守，宁可失败关闭）。"""
+        lines = [self.open_line(self.OWN, "/proc/500/stat"), self.clone_line(self.OWN, 500)]
+        self.assertIn("/proc/500/stat", self.accesses(lines))
+
+    def test_leading_zero_and_non_canonical_pids_are_not_the_traced_pid(self) -> None:
+        lines = [self.open_line(self.OWN, "/etc/hostname"), self.open_line(self.OWN, f"/proc/0{self.OWN}/stat"),
+                 self.open_line(self.OWN, f"/proc/{self.OWN}.0/stat"), self.open_line(self.OWN, "/proc/-1/stat"), self.open_line(self.OWN, "/proc/task/stat")]
+        accessed = self.accesses(lines)
+        self.assertEqual(set(accessed) - {"/etc/hostname"}, {f"/proc/0{self.OWN}/stat", f"/proc/{self.OWN}.0/stat", "/proc/-1/stat", "/proc/task/stat"})
+
+    def test_an_unknown_thread_id_is_not_internal(self) -> None:
+        lines = [self.open_line(self.OWN, "/etc/hostname"), self.open_line(self.OWN, f"/proc/{self.OWN}/task/999/stat"),
+                 self.open_line(self.OWN, "/proc/self/task/999/stat", resolved=f"/proc/{self.OWN}/task/999/stat")]
+        self.assertEqual(set(self.accesses(lines)) - {"/etc/hostname"}, {f"/proc/{self.OWN}/task/999/stat", "/proc/self/task/999/stat"})
+
+    # ---- 反例：不在白名单里的叶、魔法链接、其它 /proc 路径 ----
+    def test_names_outside_the_whitelist_stay_host_accesses(self) -> None:
+        names = ("root/etc/passwd", "cwd/x", "exe", "fd/3", "fdinfo/3", "environ", "ns/mnt", "mem", "net/dev", "mountinfo", "mounts", "cgroup",
+                 "auxv", "wchan", "attr/current", "stack", "syscall", "personality", "pagemap", "root", "cwd", "fd", "ns", "map_files/1-2",
+                 "task/%d/environ" % self.OWN, "task/%d/root/etc" % self.OWN, "task/%d/fd/3" % self.OWN, "task/%d/stat/x" % self.OWN, "stat/x")
+        for who in (f"{self.OWN}", "self", "thread-self"):
+            for name in names:
+                with self.subTest(who=who, name=name):
+                    target = f"/proc/{who}/{name}"
+                    lines = [self.open_line(self.OWN, "/etc/hostname"), self.open_line(self.OWN, target, resolved=f"/proc/{self.OWN}/{name}")]
+                    self.assertIn(target, self.accesses(lines))
+
+    def test_the_target_of_a_magic_link_is_still_registered_from_the_descriptor_annotation(self) -> None:
+        """/proc/self/root/etc/passwd 解引用到宿主文件：请求路径不放行，描述符注解里的真实路径 /etc/passwd 是普通宿主访问。"""
+        lines = [self.open_line(self.OWN, "/etc/hostname"),
+                 self.open_line(self.OWN, "/proc/self/root/etc/passwd", resolved="/etc/passwd"),
+                 self.open_line(self.OWN, "/proc/self/cwd/secret", resolved="/home/u/secret")]
+        accessed = self.accesses(lines)
+        self.assertEqual(set(accessed), {"/etc/hostname", "/proc/self/root/etc/passwd", "/etc/passwd", "/proc/self/cwd/secret", "/home/u/secret"})
+
+    def test_other_proc_paths_are_unchanged(self) -> None:
+        for path in ENVIRONMENT_READS:
+            with self.subTest(path=path):
+                accessed = self.accesses([self.open_line(self.OWN, path), self.open_line(self.OWN, "/etc/hostname")])
+                self.assertIn(path, accessed)
+        lines = [f'{self.OWN} openat(AT_FDCWD</repo>, "/proc/sys/crypto/fips_enabled", O_RDONLY) = -1 ENOENT (No such file or directory)']
+        self.assertEqual(self.accesses(lines), {"/proc/sys/crypto/fips_enabled": {"missing"}})
+
+    def test_writes_executes_and_enumerations_are_not_internal(self) -> None:
+        cases = {
+            "写打开 oom_score_adj": self.open_line(self.OWN, "/proc/self/oom_score_adj", "O_WRONLY|O_CLOEXEC", resolved=f"/proc/{self.OWN}/oom_score_adj"),
+            "读写打开 comm": self.open_line(self.OWN, "/proc/self/comm", "O_RDWR", resolved=f"/proc/{self.OWN}/comm"),
+            "O_CREAT 打开": self.open_line(self.OWN, f"/proc/{self.OWN}/stat", "O_WRONLY|O_CREAT", resolved=f"/proc/{self.OWN}/stat"),
+            "chmod": f'{self.OWN} chmod("/proc/self/stat", 0600) = -1 EPERM (Operation not permitted)',
+            "成功的执行": f'{self.OWN} execve("/proc/self/stat", ["x"], 0x1) = 0',
+        }
+        for label, line in cases.items():
+            with self.subTest(label=label):
+                accessed = self.accesses([self.open_line(self.OWN, "/etc/hostname"), line])
+                self.assertTrue(any(path.startswith("/proc/") for path in accessed), (label, accessed))
+        listing = [self.open_line(self.OWN, "/etc/hostname"), f'{self.OWN} getdents64(3</proc/{self.OWN}>, 0x1234, 32768) = 600',
+                   f'{self.OWN} getdents64(3</proc/{self.OWN}/task>, 0x1234, 32768) = 100']
+        accessed = self.accesses(listing)
+        self.assertEqual({path: kinds for path, kinds in accessed.items() if path.startswith("/proc")},
+                         {f"/proc/{self.OWN}": {"list"}, f"/proc/{self.OWN}/task": {"list"}}, "枚举（getdents64）不放行")
+
+    def test_paths_spelled_with_dot_components_are_not_internal(self) -> None:
+        """/proc/self/cwd/.. 在内核里回到工作目录的父目录，文本规范化却得到 /proc/self：写法带 .. 或 . 时整个调用不适用放宽。"""
+        for raw, normalised in (("/proc/self/cwd/../stat", "/proc/self/stat"), (f"/proc/{self.OWN}/../{self.OWN}/stat", f"/proc/{self.OWN}/stat"),
+                                (f"/proc/{self.OWN}/./stat", f"/proc/{self.OWN}/stat"), ("/proc/self/root/../stat", "/proc/self/stat")):
+            with self.subTest(raw=raw):
+                lines = [self.open_line(self.OWN, "/etc/hostname"), self.open_line(self.OWN, raw, resolved="/home/stat")]
+                accessed = self.accesses(lines)
+                self.assertEqual(normalised, os.path.normpath(raw))
+                self.assertIn(normalised, accessed, "规范化后的路径被登记（没有因为白名单而丢掉）")
+                self.assertIn("/home/stat", accessed)
+        lines = [self.open_line(self.OWN, "/etc/hostname"), f'{self.OWN} openat(AT_FDCWD</proc/{self.OWN}>, "../{self.OWN}/stat", O_RDONLY) = 3</proc/{self.OWN}/stat>']
+        self.assertIn(f"/proc/{self.OWN}/stat", self.accesses(lines))
+
+    def test_relative_paths_against_an_annotated_proc_directory_fd(self) -> None:
+        lines = [self.open_line(self.OWN, "/etc/hostname"), self.open_line(self.OWN, "status", cwd=f"/proc/{self.OWN}", resolved=f"/proc/{self.OWN}/status"),
+                 self.open_line(self.OWN, "environ", cwd=f"/proc/{self.OWN}", resolved=f"/proc/{self.OWN}/environ")]
+        self.assertEqual(set(self.accesses(lines)) - {"/etc/hostname"}, {f"/proc/{self.OWN}/environ"})
+
+    def test_v3_registers_every_one_of_them(self) -> None:
+        lines = [RAW_PROC_OWN_STAT, RAW_PROC_OWN_STATUS, RAW_PROC_SELF_STATUS, RAW_PROC_OWN_DIR]
+        parser = self.parse(lines, "v3")
+        self.assertEqual(parser.unit_proc_accesses, 0)
+        self.assertEqual(self.parse(lines, "v3").accesses, self.parse(lines, "v3").accesses)
+        self.assertTrue({"/proc/3983820/stat", "/proc/3983820/status", "/proc/self/status", "/proc/3983820"} <= set(parser.accesses))
+
+    # ---- /proc/self 自己的 lstat ----
+    def proc_self_lstat(self, path: str, *, uid: int = 0, gid: int = 0, size: int = 0, mode: str = "S_IFLNK|0777", flags: str = "AT_SYMLINK_NOFOLLOW") -> str:
+        struct = ('{st_dev=makedev(0, 0x1a), st_ino=811905223, st_mode=%s, st_nlink=1, st_uid=%d, st_gid=%d, st_blksize=1024, st_blocks=0, st_size=%d, '
+                  'st_atime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_atime_nsec=102163350, st_mtime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, '
+                  'st_mtime_nsec=102163350, st_ctime=1792047374 /* 2026-10-15T06:56:14.102163350+0000 */, st_ctime_nsec=102163350}') % (mode, uid, gid, size)
+        return f'{self.OWN} newfstatat(AT_FDCWD</repo>, "{path}", {struct}, {flags}) = 0'
+
+    def test_lstat_of_proc_self_is_a_kernel_constant(self) -> None:
+        for path in ("/proc/self", "/proc/thread-self"):
+            with self.subTest(path=path):
+                parser = self.parse([self.proc_self_lstat(path)])
+                self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {}))
+                self.assertEqual(self.reasons_of([self.proc_self_lstat(path)], "v3"), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_lstat_of_other_proc_links_or_changed_constants_stays_unresolved(self) -> None:
+        cases = {
+            "exe": self.proc_self_lstat("/proc/self/exe"), "cwd": self.proc_self_lstat("/proc/self/cwd"), "root": self.proc_self_lstat("/proc/self/root"),
+            "fd": self.proc_self_lstat("/proc/self/fd/3"), "别人的 self": self.proc_self_lstat("/proc/1/exe"),
+            "size 不是 0": self.proc_self_lstat("/proc/self", size=4), "uid 不是 0": self.proc_self_lstat("/proc/self", uid=501),
+            "gid 不是 0": self.proc_self_lstat("/proc/self", gid=20), "权限不是 0777": self.proc_self_lstat("/proc/self", mode="S_IFLNK|0755"),
+            "带 .. 写法": self.proc_self_lstat("/proc/self/../self"), "结尾斜杠": self.proc_self_lstat("/proc/self/"),
+        }
+        for label, line in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1}, label)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

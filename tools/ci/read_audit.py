@@ -49,7 +49,11 @@ WP-R4（解析器加固第四轮，同样只在 v4 合同下）：（1）R6-1：
 不再判 symlink-metadata-not-bound——内核保证最后一个分量是目录，不是链接自身（``_o_path_directory_open``）；缺 O_DIRECTORY 的仍判；
 （2）R6-2：宿主上真符号链接的 lstat（返回结构完整解码为 ``S_IFLNK|0777``、uid／gid／size 是十进制整数且 size≥1、路径写法无 ``.``／``..``／
 ``//``／结尾斜杠、不在私有盘内）登记为对该路径的 stat 访问，由覆盖检查要求该路径有 v3 快照——lstat 暴露的 mode／uid／gid／size 正是快照
-links 条目绑定的字段（``_host_symlink_lstat``）。逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r4.py 的模块说明。
+links 条目绑定的字段（``_host_symlink_lstat``）；（3）R4-1：本轨迹进程树自己的 ``/proc/<pid>/…``（pid 取自行首 pid 与 clone／fork／vfork 的返回值）里的白名单
+叶文件（stat、status、maps、cmdline……）与 ``/proc/self``／``/proc/thread-self`` 视为单元内部状态，不登记为宿主访问；root／cwd／exe／fd／environ／ns／mem／net、
+非本轨迹的 pid、写与枚举、原始写法带 ``.``／``..`` 的调用一律照旧（``_unit_internal_proc``）。R4-2（失败的带写标志 open：/dev/tty 的 ENXIO）与 R4-3
+（/dev/null 的读写）核对后不需要改解析器：``read_audit_runtime.replay_runtime`` 已覆盖，测试固定了这一点。
+逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r4.py 的模块说明。
 
 子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
@@ -298,7 +302,7 @@ def _o_path_directory_open(flags: Iterable[str]) -> bool:
     return "O_DIRECTORY" in flags
 
 
-def _returned_plain_link_stat(name: str, arguments: Sequence[str]) -> bool:
+def _returned_plain_link_stat(name: str, arguments: Sequence[str], *, proc_self: bool = False) -> bool:
     """宿主符号链接 lstat 放宽的结构判据（WP-R4，R6-2，仅 v4 使用）：完整返回结构里的 mode 恰为 ``S_IFLNK|0777``，且 uid、gid、
     size 各恰有一个十进制整数字段、size 至少为 1。
 
@@ -311,6 +315,9 @@ def _returned_plain_link_stat(name: str, arguments: Sequence[str]) -> bool:
     * ``size >= 1``：链接文本至少一个字节。procfs 的魔法链接（``/proc/self``、``/proc/<pid>/exe``、``cwd``、``fd/N``）st_size 为 0，
       它们解引用到宿主路径，不是普通磁盘链接，在这里被挡掉（它们也无法有 v3 快照：``host_snapshot`` 拒绝 /proc）。
     省略号（缩略结构）一律拒绝，不能从路径或缩略结构猜类型。
+
+    ``proc_self=True``（WP-R4，R4-1，仅给 ``/proc/self``、``/proc/thread-self`` 自己的 lstat 用）反过来要求 uid、gid、size 都恰为 ``0``：
+    这两个魔法链接由内核固定创建为 root:root、权限 0777、大小 0，返回值只是内核常量，不携带宿主信息。
     """
     positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
     position = positions.get(name)
@@ -327,6 +334,8 @@ def _returned_plain_link_stat(name: str, arguments: Sequence[str]) -> bool:
         return hits[0].split("=", 1)[1].strip() if len(hits) == 1 else None
 
     mode, uid, gid, size = (only(key) for key in ("mode", "uid", "gid", "size"))
+    if proc_self:
+        return mode == "S_IFLNK|0777" and (uid, gid, size) == ("0", "0", "0")
     return (mode == "S_IFLNK|0777" and all(value is not None and re.fullmatch(r"0|[1-9][0-9]*", value) for value in (uid, gid, size))
             and int(size) >= 1)  # type: ignore[arg-type]
 
@@ -336,6 +345,67 @@ def _plain_path_text(raw: str | None) -> bool:
     （``..`` 会在符号链接之后回到目标的父目录，结尾斜杠迫使内核解引用最后的链接，见 ``_path_form_hazard``）。"""
     return (raw is not None and raw != "" and not raw.endswith("/") and "//" not in raw
             and not {".", ".."} & set(raw.split("/")))
+
+
+# ---------------------------------------------------------------------------
+# WP-R4（R4-1）：自有进程树的 /proc/<pid>/… 与 /proc/self/…。pid 随运行变，不可能在策略里静态声明；而 ``host_snapshot`` 也拒绝
+# /proc 路径（虚拟路径不能冒充稳定快照），所以这类访问永远无法靠声明覆盖。下面的判据决定哪些访问是“单元自己的内部状态”。
+# ---------------------------------------------------------------------------
+
+# 只读文本叶文件白名单：这些文件描述该进程自己的运行状态。放行的理由与边界（每项能暴露什么）：
+#   * stat／statm／status／io／limits／oom_score／oom_score_adj：进程自己的状态、内存与资源统计，随运行而变，本来就不可能是可复现输入；
+#   * cmdline／comm：进程自己的命令行与线程名，由被测程序自己（或其父进程）设定；
+#   * maps／smaps／smaps_rollup：进程自己的地址空间布局。其中出现的映射文件路径，都已经因为被 mmap 而在轨迹里作为独立的
+#     打开访问登记过（需要各自的快照），这里不重复；地址、偏移是 ASLR 随机值。
+# 刻意不在名单里的（继续按宿主访问判，需要声明或保持失败关闭）：root／cwd／exe／fd／fdinfo（魔法链接或解引用到宿主路径、枚举描述符）、
+# environ（可能含宿主环境）、ns／mem／net／mountinfo／mounts／cgroup／attr／auxv／wchan（宿主命名空间、内核或容器配置）、task 之下的
+# 非叶文件。pid 必须出现在本轨迹里（行首 pid 或 clone 返回值），别的进程的状态是宿主输入。
+_PROC_UNIT_LEAVES = frozenset({"stat", "statm", "status", "cmdline", "comm", "maps", "smaps", "smaps_rollup", "io", "limits",
+                               "oom_score", "oom_score_adj"})
+# 叶文件允许的访问类型：读、失败的打开／stat（EACCES、ESRCH 等，探测）、不存在（进程已退出）。写、执行、枚举都不放行。
+_PROC_FILE_KINDS = frozenset({"read", "stat", "missing"})
+# 目录本身（/proc/<pid>、/proc/<pid>/task、/proc/<pid>/task/<tid>）允许的访问类型：stat、打开、不存在；不放行枚举（list）——
+# 枚举内核的目录项集合会随内核版本与配置而变。
+_PROC_DIR_KINDS = frozenset({"stat", "dir", "missing"})
+# 永远指向调用者自己的别名；作为 pid 位置的取值只在第一级有效（task 之下的线程号必须是本轨迹里出现过的真实编号）。
+_PROC_SELF_NAMES = frozenset({"self", "thread-self"})
+
+
+def _no_dot_components(raw: str) -> bool:
+    """原始路径参数没有 ``.``／``..`` 分量。"""
+    return not {".", ".."} & set(raw.split("/"))
+
+
+def _unit_internal_proc(path: str, kind: str, traced: set[str] | frozenset[str]) -> bool:
+    """路径是否属于“本轨迹进程树自己的 /proc 状态”，且访问类型在白名单里。
+
+    形态（``<p>`` 为 ``self``／``thread-self`` 或本轨迹出现过的规范十进制 pid，``<t>`` 为本轨迹出现过的 pid／tid）：
+
+    * ``/proc/self``、``/proc/thread-self``、``/proc/<p>``、``/proc/<p>/task``、``/proc/<p>/task/<t>``：目录元数据（stat／打开／不存在）；
+    * ``/proc/<p>/<叶>``、``/proc/<p>/task/<t>/<叶>``：白名单叶文件，读／探测。
+
+    其余一律返回 False：非本轨迹的 pid（别的进程的状态是宿主输入）、前导零的 pid（内核拒绝，且不等于规范编号）、
+    ``root／cwd／exe／fd／environ／ns／mem／net…`` 等不在白名单里的名字、更深的路径、写与枚举。
+    传入的路径是规范化后的绝对路径；原始写法带 ``..``／``.`` 的调用由调用方先挡掉（``TraceParser.call_plain_paths``）。
+    """
+    if not path.startswith("/proc/"):
+        return False
+    parts = path[len("/proc/"):].split("/")
+    if parts[0] not in _PROC_SELF_NAMES and parts[0] not in traced:
+        return False
+    rest = parts[1:]
+    if not rest:
+        return kind in _PROC_DIR_KINDS
+    if len(rest) == 1:
+        if rest[0] in _PROC_UNIT_LEAVES:
+            return kind in _PROC_FILE_KINDS
+        return rest[0] == "task" and kind in _PROC_DIR_KINDS
+    if rest[0] != "task" or rest[1] not in traced:
+        return False
+    tail = rest[2:]
+    if not tail:
+        return kind in _PROC_DIR_KINDS
+    return len(tail) == 1 and tail[0] in _PROC_UNIT_LEAVES and kind in _PROC_FILE_KINDS
 
 
 def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
@@ -591,6 +661,11 @@ class TraceParser:
         self.call_link: str | None = None          # 当前 symlink／symlinkat 调用的链接文本（WP-R3，原样记下，不解引用）
         self.epoch = 0                             # 变更纪元：此前使名字空间状态改变的事件个数
         self.seen_events: set[tuple] = set()       # 当前纪元内已出现过的事件键，用于只读事件去重
+        # WP-R4（R4-1，仅 v4）：本轨迹里出现过的被追踪进程／线程号（行首 pid、clone／fork／vfork 的返回值；pid 复用时先后属于不同进程都算
+        # 轨迹内部，无需区分）。``_add`` 据此把“自有进程树的 /proc/<pid>/… 白名单叶文件”视为单元内部状态，见 ``_unit_internal_proc``。
+        self.traced_pids: set[str] = set()
+        self.call_plain_paths = True               # 当前调用的路径参数都没有 ``.``／``..`` 分量（v4；有则 /proc 内部状态放宽不适用）
+        self.unit_proc_accesses = 0                # 被判为单元内部状态、没有登记为访问的 /proc 访问条数（只供测试与诊断，不进轨迹）
         if runtime_context is not None:
             if not strict:
                 raise AuditError("隔离合同必须使用严格审计")
@@ -607,6 +682,10 @@ class TraceParser:
         if not path:
             if self.strict:
                 self._unresolved("path-not-resolved")
+            return
+        if self.trace_v4 and self.call_plain_paths and _unit_internal_proc(path, kind, self.traced_pids):
+            # WP-R4（R4-1）：自有进程树的 /proc/<pid>/… 白名单叶文件是单元内部状态，不登记为宿主访问；判据与不放行的形态见该函数。
+            self.unit_proc_accesses += 1
             return
         self.accesses.setdefault(path, set()).add(kind)
         self.samples.setdefault(path, line[:SAMPLE_CHARS])
@@ -666,6 +745,8 @@ class TraceParser:
         line = raw.rstrip("\n")
         match = _LINE.match(line)
         pid, rest = (match.group(1), match.group(2)) if match else ("0", line)
+        if self.trace_v4 and match:
+            self.traced_pids.add(pid)
         if self.strict and pid in self.deferred:
             self._defer(pid, line)
             return
@@ -729,6 +810,10 @@ class TraceParser:
                 self.call_link = _path_argument(arguments, 0)
                 if self.call_link is None:
                     self._unresolved("symlink-text-not-decoded:" + name)
+            # WP-R4（R4-1）：任何一个字符串参数带 ``.``／``..`` 分量，规范化后的路径就可能不是内核解析的对象（``/proc/self/cwd/..`` 会回到
+            # 工作目录的父目录，文本规范化却得到 ``/proc/self``），这时 /proc 内部状态放宽一律不适用。
+            self.call_plain_paths = all(_no_dot_components(unescape(quoted[1])) for quoted in
+                                        (_QUOTED.fullmatch(argument) for argument in arguments) if quoted is not None)
         if self.strict and result and result.group(1).isdigit() and errno is None:
             flags = _argument_flags(body)
             # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
@@ -746,9 +831,12 @@ class TraceParser:
                 # WP-R4（R6-2，仅 v4）：宿主上的真符号链接（不在私有盘内）、返回结构完整解码为 ``S_IFLNK|0777`` 且路径写法无 ``..``／
                 # 结尾斜杠时，lstat 暴露的是链接自身的 mode／uid／gid／size，这些正是 v3 快照 links 条目绑定的字段——按对该路径的
                 # stat 访问登记，覆盖检查要求该路径有 v3 快照（见 ``_host_symlink_lstat``）。其余情形仍登记。
+                # WP-R4（R4-1，仅 v4）：``/proc/self``、``/proc/thread-self`` 自己的 lstat 是内核常量（root:root、0777、大小 0），属于单元内部状态，
+                # 不登记任何访问（``_proc_self_lstat``）；/proc 下其余魔法链接（exe、cwd、root、fd/N）size 为 0 且不在此列，仍判。
                 if not (self.trace_v4 and nofollow_stat
                         and (self._tracked_symlink_lstat(name, arguments, pid, result.group(1))
-                             or self._host_symlink_lstat(name, arguments, pid, result.group(1)))):
+                             or self._host_symlink_lstat(name, arguments, pid, result.group(1))
+                             or self._proc_self_lstat(name, arguments, pid, result.group(1)))):
                     self._unresolved("symlink-metadata-not-bound:" + name)
             elif self.trace_v4 and nofollow_stat and self._single_path_is_tracked_symlink(name, arguments, pid):
                 # 反方向的互相印证：内核说这是普通文件或目录（完整解码、返回 0），跟踪器却记着它是符号链接——名字表与真实状态已经脱节
@@ -766,6 +854,8 @@ class TraceParser:
             if self.strict and re.search(r"\bCLONE_(?:UNTRACED|NEWNS)\b", body):
                 self._unresolved("unobservable-child:" + name)
             inherited = self.spawn_cwd.pop(pid, self.cwd.get(pid))
+            if self.trace_v4 and result and result.group(1).isdigit() and int(result.group(1)) > 0 and errno is None:
+                self.traced_pids.add(result.group(1))   # 子进程（线程）号：它之后可能被同一进程树里的别人当作 /proc/<pid> 读取
             if result and result.group(1).isdigit() and int(result.group(1)) > 0 and inherited:
                 child = result.group(1)
                 self.cwd.setdefault(child, inherited)
@@ -992,9 +1082,23 @@ class TraceParser:
         if returned != "0" or self.output_tracker is None or not _returned_plain_link_stat(name, arguments):
             return False
         path = self._single_path(name, arguments, pid)
-        if path is None or _under(path, self.output_tracker.root):
+        if path is None or _under(path, self.output_tracker.root) or any(_under(path, virtual) for virtual in ("/proc", "/sys", "/dev")):
+            # /proc、/sys、/dev 是虚拟文件系统：``host_snapshot`` 拒绝它们（无法有 v3 快照），它们的魔法链接不是磁盘上的普通链接。
             return False
         return _plain_path_text(_path_argument(arguments, 1 if name in _DIRFD_PROBE else 0))
+
+    def _proc_self_lstat(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
+        """``lstat("/proc/self")``／``lstat("/proc/thread-self")``（WP-R4，R4-1，仅 v4）：单元自己的“我是谁”魔法链接，不登记访问。
+
+        ``os.path.realpath("/proc/self/stat")``、``Path.resolve()`` 会逐分量 lstat 到它。内核把这两个链接创建为 root:root、权限 0777、
+        大小 0，返回结构是常量；链接文本（readlink 的结果）是调用者自己的 pid／tid，本来就属于单元内部（读它是 ``stat`` 类访问，
+        由 ``_unit_internal_proc`` 的目录形态放行）。放行要求：返回 0、结构完整且 uid／gid／size 都是 0（``proc_self=True``）、规范化路径
+        恰为这两个名字之一、原始写法无 ``.``／``..``。``/proc/<pid>`` 自己是目录不是链接；``/proc/self/exe`` 等魔法链接不在此列。
+        """
+        if returned != "0" or not self.call_plain_paths or not _returned_plain_link_stat(name, arguments, proc_self=True):
+            return False
+        return (self._single_path(name, arguments, pid) in {"/proc/self", "/proc/thread-self"}
+                and _plain_path_text(_path_argument(arguments, 1 if name in _DIRFD_PROBE else 0)))
 
     def _defer(self, pid: str, line: str) -> None:
         """等待父进程归属，限制缓存量；超过上限仍拒绝覆盖，不猜测工作目录。"""
