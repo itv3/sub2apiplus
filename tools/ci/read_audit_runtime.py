@@ -81,6 +81,13 @@ ROLES = ("source", "destination")
 NEVER_DEDUP_WRITES = frozenset({"mkdir", "mkdirat", "unlink", "unlinkat", "rmdir"}) | SYMLINK_NAMES
 # 这两个 renameat2 标志会让两个名字互换或在原位留下占位对象，对象身份模型不支持，一律拒绝。
 UNSUPPORTED_RENAME_FLAGS = frozenset({"RENAME_EXCHANGE", "RENAME_WHITEOUT"})
+# WP-R11（仅 v4）：「已生成对象的缺失探测」的乱序容忍窗口，单位是调用编号。strace -f 的行序不是因果序：进程 B 对某名字的 ENOENT 探测
+# 在内核里先于进程 A 的创建完成，但 B 停在退出点等 tracer 取走，A 的创建行先被打印，B 的探测行排在创建事件之后。名字刚被绑定
+# （创建、硬链接目的、rename 带入）之后，调用编号相差不超过本常量的缺失探测按乱序处理，不判矛盾、不改名字表；超出窗口仍判矛盾，
+# 所以「删除没被观察到」这类真实的状态脱节照旧被发现。取值依据：同一时刻每个被追踪进程至多有一个停在退出点的系统调用，
+# 乱序量级由同时被追踪的进程数决定；10-16 收割 #9 的实测样本只差 1。512 远大于实测、又不是「无限」（无上限会让任何探测都被放过）。
+# 窗口之外还有一道证据门槛（``OutputTrackerV4.probed_missing``）：该名字被绑定之前必须已被探测过缺失，见类说明 WP-R11。
+LATE_MISSING_PROBE_WINDOW_CALLS = 512
 
 
 class RuntimeContractError(RuntimeError):
@@ -522,6 +529,25 @@ class OutputTrackerV4:
     那条事件（``consumes_hidden_state``，它会消耗 ``_created_by_previous`` 这个隐藏状态，重放端必须看到它，才能和解析端消耗得一样）。
     注意：键里**没有**全局变更纪元——对其它名字的写、rename、unlink 不会使这个名字上的重复读取失效；而对这个名字
     （或带着它的目录）的任何改变都会换新版本号，使之后的同样读取重新保留一条。
+
+    WP-R11（缺失探测的乱序容忍：窗口＋先行探测证据）：``strace -f`` 的行序不是因果序（见 WP-R8），同一道理也适用于「不存在」：
+    进程 B 对名字 N 的 ``newfstatat`` 在内核里先于进程 A 创建 N 就返回了 ENOENT，但 B 的行被打印在 A 的创建行之后（10-16 ARM64 收割 #9，
+    ``test_codex_upgrade_staging_dispatch`` 的 ``watchdog-heartbeats.ndjson``：创建调用编号 1101718、这条探测 1101719）。原规则把
+    「已知名字上的缺失探测」一律判矛盾，于是正常行为被判失败。现在在两个条件**同时**成立时按乱序放过（不判问题、不改名字表）：
+
+    * **窗口**：探测的调用编号减去名字最近一次被绑定（创建、硬链接目的、rename 带入，目录 rename 连同子树每个名字）的调用编号，
+      落在 ``[0, LATE_MISSING_PROBE_WINDOW_CALLS]``；名字被解绑即忘掉绑定编号。探测或绑定缺少整数调用编号、探测编号小于绑定编号、
+      超出窗口，都退化为原行为（判矛盾）；
+    * **先行探测证据**：名字被绑定之前，轨迹里已经出现过对同一个名字的缺失探测（``probed_missing``：名字未知时的 ENOENT／ENOTDIR 探测，
+      失败的 rename／link 在目的父目录已证明时来源名字的 ENOENT 也算）。乱序要求有另一个进程恰好在创建的瞬间探测这个名字，
+      而「先探测、再创建」是被测代码里轮询、检查后创建这类写法的共同形态；没有任何先行探测的名字，创建后紧跟的 ENOENT
+      更可能是真实的状态脱节（或单进程里的矛盾），保持判矛盾。代价：从未被探测过缺失、第一次被探测就恰好与创建乱序的名字不被放过
+      （失败关闭，可再放宽）。证据只是布尔位（名字在不在 ``probed_missing`` 里），不依赖先行探测的调用编号，所以解析器去重丢掉
+      的重复探测不会让重放端得到不同的证据（同一个名字、同一个版本期内，第一条探测一定被保留）。
+
+    窗口规则要满足「同键 ⇒ 同判定」，所以去重键里加了「这条缺失探测是否落在窗口内」一位（``_late_gap``），否则窗口内被放过的首条探测
+    会把之后窗口外、本该判矛盾的同键探测当作重复丢掉。``bound_call``／``probed_missing`` 不进 ``report()`` 与文档，只有名字表、问题清单照旧。
+    只放宽这一类矛盾：「创建时已存在」「O_CREAT|O_EXCL 落在已知名字上」「删除未证明的输出」、写类调用的 ENOENT 等一律不变。
     """
 
     def __init__(self, contract: dict[str, Any]) -> None:
@@ -549,6 +575,13 @@ class OutputTrackerV4:
         # O_CREAT|O_EXCL 的矛盾自检：解析器对一次 openat／open 调用产生两条紧挨着的事件（请求路径一条、返回描述符的真实路径一条，
         # 路径相同），创建名字的是第一条，第二条落在刚创建的名字上，不是矛盾。不影响任何事件的返回值，也不影响名字表。
         self._created_by_previous: str | None = None
+        # WP-R11：缺失探测的乱序容忍状态（见类说明）。``probed_missing``：目前未知、却已被探测过缺失的名字（绑定时划掉）；
+        # ``bound_call``：名字 → 最近一次被绑定时的调用编号，只记「绑定前有过缺失探测」的名字，名字被解绑或改走时清掉，事件没有
+        # 整数调用编号时也不记；``_event_call``：当前正在处理的事件的调用编号（非整数为 None），只在 ``observe_event`` 内有效。
+        # 三者只服务于缺失探测的乱序判断，不进 ``report()``，也不改变任何事件的返回值。
+        self.probed_missing: set[str] = set()
+        self.bound_call: dict[str, int] = {}
+        self._event_call: int | None = None
 
     # ------------------------------------------------------------------ 名字表的基本操作
 
@@ -564,6 +597,28 @@ class OutputTrackerV4:
         """WP-R9：名字的存在性、对象身份或待补证状态变了，给它换一个新版本号。"""
         self._clock += 1
         self.versions[path] = self._clock
+
+    def _bind_call(self, path: str) -> None:
+        """WP-R11：名字刚被绑定到一个对象。绑定前有过缺失探测（先行探测证据）且本事件有整数调用编号，才记下绑定它的调用编号；
+        否则不记，该名字上之后的缺失探测不享受乱序容忍（退化为原行为）。先行探测的记账在此划掉（名字已经存在了）。"""
+        evidenced = path in self.probed_missing
+        self.probed_missing.discard(path)
+        if evidenced and self._event_call is not None:
+            self.bound_call[path] = self._event_call
+        else:
+            self.bound_call.pop(path, None)
+
+    def _late_gap(self, call: Any, path: str) -> bool:
+        """WP-R11：编号为 ``call`` 的缺失探测，落在已知名字 ``path`` 上，是否可按「strace 行序乱序」放过。
+
+        条件：名字绑定前有过缺失探测（``bound_call`` 只给这样的名字记编号）；探测与绑定都有整数调用编号（bool 不算整数）；
+        ``0 <= 探测编号 - 绑定编号 <= LATE_MISSING_PROBE_WINDOW_CALLS``。
+        任何一项不满足（含探测编号小于绑定编号，即轨迹顺序与调用编号矛盾）都返回 False——退化为原行为（判矛盾）。
+        """
+        bound = self.bound_call.get(path)
+        if bound is None or type(call) is not int:
+            return False
+        return 0 <= call - bound <= LATE_MISSING_PROBE_WINDOW_CALLS
 
     def _await(self, path: str) -> None:
         """WP-R8：记一笔待补证——未证明的名字被成功读取／探测，等同名字的创建事件来销账（见类说明）。"""
@@ -585,6 +640,7 @@ class OutputTrackerV4:
         self.next_object += 1
         self.names[path] = obj
         self._touch(path)
+        self._bind_call(path)
         self.kinds[obj] = kind
         self.links[obj] = 1
         self.entries[os.path.dirname(path)] += 1
@@ -598,6 +654,7 @@ class OutputTrackerV4:
         """解绑一个名字；对象失去最后一个名字后消亡。目录解绑前调用方须确认它没有子项。"""
         obj = self.names.pop(path)
         self._touch(path)
+        self.bound_call.pop(path, None)
         self.entries[os.path.dirname(path)] -= 1
         self.entries.pop(path, None)
         self.links[obj] -= 1
@@ -618,6 +675,8 @@ class OutputTrackerV4:
             self.names[renamed] = self.names.pop(item)
             self._touch(item)            # 来源端的名字消失（目录则连同子树里的每个名字）
             self._touch(renamed)         # 目的端的名字出现
+            self.bound_call.pop(item, None)
+            self._bind_call(renamed)
             if item in self.entries:
                 self.entries[renamed] = self.entries.pop(item)
             self._settle(renamed)
@@ -721,10 +780,15 @@ class OutputTrackerV4:
                 return None        # 成功的两路径调用要么改状态、要么是「同一对象」的空操作，两端一律保留；畸形事件本身就是问题
             source, destination = (path, peer) if role == "source" else (peer, path)
             return own + (versions.get(source, 0), versions.get(destination, 0), self._through(source), self._through(destination),
-                          self._kind_of(os.path.dirname(destination)) == "directory")
+                          self._kind_of(os.path.dirname(destination)) == "directory",
+                          self._late_gap(event.get("call"), source))
         if succeeded and kind == "write" and name in NEVER_DEDUP_WRITES:
             return None
         state = (versions.get(path, 0), self._through(path))
+        if kind == "missing":
+            # WP-R11：缺失探测的判定还取决于它与名字绑定处的调用编号差（是否在乱序窗口内），而键里没有调用编号，所以把这一位放进键，
+            # 否则「窗口内被放过的首条探测」会把之后窗口外、本该判矛盾的同键探测当作重复丢掉。
+            state += (self._late_gap(event.get("call"), path),)
         if kind == "write":
             state += (self._kind_of(os.path.dirname(path)) == "directory",)
             if name in OPEN_NAMES and {"O_CREAT", "O_EXCL"} <= set(event["flags"]):
@@ -744,6 +808,9 @@ class OutputTrackerV4:
         if not under(path, self.root):
             return False
         self.covered.add(path)
+        # WP-R11：本事件的调用编号（非整数一律当作没有），名字被绑定时记入 bound_call。
+        call = event.get("call")
+        self._event_call = call if type(call) is int else None
         target = event["target"]
         if self.link_text:
             # WP-R3：存在符号链接对象时，先判是否会解引用它（没有链接时这一整段被跳过）。排在“返回描述符落点”检查之前：
@@ -825,7 +892,11 @@ class OutputTrackerV4:
         path, kind, name, error = event["path"], event["kind"], event["name"], event["errno"]
         known = path in self.names
         if kind == "missing":
-            if known:
+            # WP-R11：名字未知时记一笔先行探测证据；名字已知时，若它绑定前有过缺失探测、且这条探测的调用编号紧随绑定之后
+            # （窗口内），是 strace -f 的行序乱序（探测在内核里先于创建完成），不是矛盾；否则（含没有整数调用编号）仍判矛盾。
+            if not known:
+                self.probed_missing.add(path)
+            elif not self._late_gap(self._event_call, path):
                 self._problem("已生成对象的缺失探测与轨迹矛盾：", path)
         elif kind != "write":
             # 同上：失败的读取类调用（EACCES、EINVAL……）同样意味着对象存在，名字未证明时记待补证。
@@ -896,8 +967,14 @@ class OutputTrackerV4:
         elif error in {"ENOENT", "ENOTDIR"}:
             # 来源不存在，或目标的父目录不存在（不是目录），都会得到这类错误；
             # 来源已知、目标父目录也是已知目录时，这个失败无从解释。
-            if source in self.names and self._kind_of(os.path.dirname(destination)) == "directory":
-                self._problem("已生成对象的缺失探测与轨迹矛盾：", source)
+            # WP-R11：目标父目录已证明时，这个错误只能来自来源缺失——来源未知则记一笔先行探测证据；来源已知时，若它绑定前有过缺失探测、
+            # 且失败调用的编号紧随绑定之后（窗口内），是 strace -f 的行序乱序（失败调用在内核里先于来源的创建完成），不是矛盾。
+            # 目标父目录缺失造成的 ENOENT 不在此列（目标一端的乱序容忍不在 WP-R11 范围内，仍按原规则判）。
+            if self._kind_of(os.path.dirname(destination)) == "directory":
+                if source not in self.names:
+                    self.probed_missing.add(source)
+                elif not self._late_gap(self._event_call, source):
+                    self._problem("已生成对象的缺失探测与轨迹矛盾：", source)
         else:
             self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{event['name']}:", source)
 
@@ -915,6 +992,7 @@ class OutputTrackerV4:
             # 目标名绑定到同一个对象：两个名字、一个对象。
             self.names[destination] = obj
             self._touch(destination)
+            self._bind_call(destination)
             self.links[obj] += 1
             self.entries[os.path.dirname(destination)] += 1
             self._settle(destination)
