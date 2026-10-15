@@ -681,12 +681,25 @@ class OutputEventLimitAgreementTests(unittest.TestCase):
         self.assertGreater(parser.MAX_OUTPUT_EVENTS, 0)
         self.assertEqual(parser.MAX_OUTPUT_EVENTS, replay.MAX_OUTPUT_EVENTS)
 
+    def test_parser_and_replay_v4_limits_are_equal(self) -> None:
+        """v4 合同的上限（MAX_OUTPUT_EVENTS_V4）同样两端各一份，只改一边会让两端对“多少条算超限”意见不一：
+        解析器侧大于重放侧→重放拒绝（失败关闭），反之重放放过解析器已按更小上限判失败的轨迹。验收发现注释声称这里守着、实际只比了 v3，现补上。"""
+        parser = load_standalone("read_audit.py", "h1_parser_standalone_v4")
+        replay = load_standalone("read_audit_runtime.py", "h1_replay_standalone_v4")
+        self.assertIs(type(parser.MAX_OUTPUT_EVENTS_V4), int)
+        self.assertIs(type(replay.MAX_OUTPUT_EVENTS_V4), int)
+        self.assertGreater(parser.MAX_OUTPUT_EVENTS_V4, parser.MAX_OUTPUT_EVENTS, "v4 上限只会比 v3 大")
+        self.assertEqual(parser.MAX_OUTPUT_EVENTS_V4, replay.MAX_OUTPUT_EVENTS_V4)
+        self.assertEqual((parser.MAX_OUTPUT_EVENTS, replay.MAX_OUTPUT_EVENTS), (200000, 200000), "v3 上限不因 v4 而变")
+
     def test_the_two_modules_stay_independent(self) -> None:
         """等值靠测试守住，而不是改成互相导入：重放端的源码里不引用解析器的常量，解析器也不引用重放端。"""
         parser_source = (CI_DIR / "read_audit.py").read_text(encoding="utf-8")
         replay_source = (CI_DIR / "read_audit_runtime.py").read_text(encoding="utf-8")
         self.assertRegex(parser_source, r"(?m)^MAX_OUTPUT_EVENTS = \d+$")
         self.assertRegex(replay_source, r"(?m)^MAX_OUTPUT_EVENTS = \d+$")
+        self.assertRegex(parser_source, r"(?m)^MAX_OUTPUT_EVENTS_V4 = \d+$")
+        self.assertRegex(replay_source, r"(?m)^MAX_OUTPUT_EVENTS_V4 = \d+$")
         self.assertNotIn("from read_audit import", replay_source)
         self.assertNotIn("from read_audit_runtime import", parser_source)
 

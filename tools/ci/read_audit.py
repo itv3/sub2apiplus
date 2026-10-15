@@ -93,7 +93,8 @@ MAX_OUTPUT_EVENTS = 200000
 # tools/official_client_capture/tests/test_ci_read_audit_wp_r2.py 的文档字符串）。
 # 版本语义：只对 read-audit-trace/v4 生效，v3 与 control 四链不变；已被旧上限截断的轨迹带 output-event-limit 未解析原因
 # （coverage.unresolved>0），验真永远判失败，与这里的数值无关——上限调高不会让任何旧的失败轨迹变成通过。
-# read_audit_runtime.py 里有一份同值常量（重放端超限即拒绝），两处必须相等，由 test_ci_audit_hardening_h1 守住。
+# read_audit_runtime.py 里有一份同值常量（重放端超限即拒绝），两处必须相等：由 test_ci_audit_hardening_h1 的
+# test_parser_and_replay_v4_limits_are_equal 守住（test_ci_read_audit_wp_r2 的 OutputEventLimitTests.test_constants 另有一份同样的断言）。
 MAX_OUTPUT_EVENTS_V4 = 1000000
 
 # 数据根里不算输入的路径（数据根相对路径：以 / 结尾的是前缀，其余精确匹配 → 原因）。新增条目要写明为什么不影响结论。
@@ -234,6 +235,8 @@ AT_FLAGS_V4 = frozenset({"AT_SYMLINK_NOFOLLOW", "AT_SYMLINK_FOLLOW", "AT_REMOVED
 _LSTAT_NAMES = frozenset({"lstat", "lstat64"})
 _FSTATAT_NAMES = frozenset({"newfstatat", "fstatat64", "statx"})
 _SYMLINK_CALLS = frozenset({"symlink", "symlinkat"})
+# 带空路径与 AT_EMPTY_PATH 时作用于 dirfd 自己、会改对象元数据的调用（v4 按写登记；基线直接跳过，宿主文件只读打开后用它改时间不留任何 write）。
+_EMPTY_PATH_WRITE_CALLS = frozenset({"utimensat", "fchownat", "fchmodat2"})
 
 
 def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
@@ -318,7 +321,8 @@ _FD_ANNOTATION = re.compile(r"(\d+)<(" + _ANN + r")>")
 _SOCKET_ANNOTATION = re.compile(r"\d+<socket:\[\d+\]>")
 _OPEN_FLAG_NAME = re.compile(r"O_[A-Z0-9_]+")
 _UNIX_DOMAINS = frozenset({"AF_UNIX", "AF_LOCAL"})
-# 只放行 AF_UNIX 流式套接字：它能携带路径的系统调用只有 bind 与 connect（流式套接字用 sendto 带地址会得到 EISCONN／被忽略），
+# 只放行 AF_UNIX 流式套接字：它能携带路径的系统调用只有 bind 与 connect（流式套接字用 sendto／sendmsg 带地址，内核不会按该地址查找路径：
+# 已连接的得到 EISCONN，未连接的得到 EOPNOTSUPP），
 # 而 v4 的 strace 选项已把 bind、connect 都纳入跟踪；数据报套接字可以 sendto 带路径地址、而 sendto 太常见不能逐条跟踪，所以仍判不支持。
 _UNIX_STREAM_FLAGS = frozenset({"SOCK_CLOEXEC", "SOCK_NONBLOCK"})
 
@@ -361,6 +365,35 @@ def _openat2_flags(arguments: Sequence[str]) -> frozenset[str] | None:
     if not all(_OPEN_FLAG_NAME.fullmatch(name) for name in names):
         return None
     return frozenset(names)
+
+
+# openat2 的 resolve= 里“不改变被探测路径”的符号：它们只会让调用更容易失败（BENEATH 拒绝逃出 dirfd 的路径，NO_SYMLINKS／NO_MAGICLINKS
+# 拒绝经过符号链接，NO_XDEV 拒绝跨挂载点），成功时解析出的对象与不带它们完全相同。RESOLVE_IN_ROOT 会把 ``..`` 与绝对路径钳在 dirfd
+# 之内（解析器按字面规范化就会记错路径），RESOLVE_CACHED 让结果取决于缓存状态——都不在此列。
+_OPENAT2_SAFE_RESOLVE = frozenset({"RESOLVE_BENEATH", "RESOLVE_NO_SYMLINKS", "RESOLVE_NO_MAGICLINKS", "RESOLVE_NO_XDEV"})
+
+
+def _openat2_resolve_ok(arguments: Sequence[str]) -> bool:
+    """``openat2`` 的 ``struct open_how`` 里恰好一个 ``resolve=`` 字段，且取值是 ``0`` 或只由安全符号用 ``|`` 连接（不重复）。
+
+    验收缺陷 M-1：``RESOLVE_IN_ROOT`` 的失败调用没有返回描述符的真实路径注解可核对，解析器按字面拼出的路径就会把内核真正探测的
+    ``<dirfd>/…`` 宿主路径记成别的（可能恰在私有盘根下的）合法缺失探测。结构只是指针、被省略号截断、缺字段、重复字段、取值含未知符号或
+    十六进制残片时一律返回 False——看不清就按失败关闭处理。
+    """
+    if len(arguments) != 4:
+        return False
+    value = arguments[2].strip()
+    if not value.startswith("{") or not value.endswith("}"):
+        return False
+    fields = _call_arguments(value[1:-1], None)
+    resolve_fields = [field for field in fields if re.match(r"resolve\s*=", field)]
+    if not fields or len(resolve_fields) != 1 or any(field == "..." for field in fields):
+        return False
+    text = resolve_fields[0].split("=", 1)[1].strip()
+    if text == "0":
+        return True
+    names = text.split("|")
+    return all(name in _OPENAT2_SAFE_RESOLVE for name in names) and len(set(names)) == len(names)
 
 
 def _is_unix_stream_socket(arguments: Sequence[str]) -> bool:
@@ -731,7 +764,8 @@ class TraceParser:
                     if self.trace_v4:
                         # WP-R2 第 3 项：v4 的 strace 选项解码 ``struct open_how``，标志只认 ``flags=`` 字段，并要求与整行扫描
                         # 出的打开标志一致（两者不一致或结构没解码出来 = 标志不可见，判未解析）；v3 沿用“整行没有任何标志”的旧判据。
-                        if _openat2_flags(arguments) != frozenset(flags):
+                        # 验收 M-1：``resolve=`` 也必须看得清且不改变路径解析（见 _openat2_resolve_ok），否则同样判未解析。
+                        if _openat2_flags(arguments) != frozenset(flags) or not _openat2_resolve_ok(arguments):
                             self._unresolved("open-flags-not-decoded:openat2")
                     elif not flags:
                         self._unresolved("open-flags-not-decoded:openat2")
@@ -743,7 +777,14 @@ class TraceParser:
                 kind = "missing" if missing else "stat"
             for slot, directory, path in pairs:
                 if path == "":
-                    continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过
+                    if self.trace_v4 and name in _EMPTY_PATH_WRITE_CALLS and "AT_EMPTY_PATH" in self.call_flags:
+                        # 对 dirfd 自己的元数据写（utimensat／fchownat／fchmodat2 的 AT_EMPTY_PATH 形态，与 futimens 同类）：按对标注路径的写登记。
+                        # 标注必须是绝对路径（AT_FDCWD 的标注就是工作目录）；管道、套接字之类的标注不是路径，看不清作用对象，判未解析。
+                        if directory.startswith("/") and "\x00" not in directory:
+                            self._add(os.path.normpath(directory), "write", line)
+                        else:
+                            self._unresolved("empty-path-fd-not-a-path:" + name)
+                    continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过（读类调用沿用基线；上面的写类调用 v4 另行登记）
                 if ends is not None:
                     self.call_end = (_ROLES[slot], ends[1 - slot])
                 self._add(self._checked_join(directory, path), kind, line)

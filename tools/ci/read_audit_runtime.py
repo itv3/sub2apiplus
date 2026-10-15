@@ -54,7 +54,8 @@ TRACE_CONTRACT_V4 = "v4"
 TRACE_CONTRACTS = (TRACE_CONTRACT_V3, TRACE_CONTRACT_V4)
 # 输出事件条数上限（去重之后仍超限则判失败，不静默截断）。这是 v3 合同的上限，数值不变（历史凭证与 control 四链按它验真）。
 MAX_OUTPUT_EVENTS = 200000
-# v4 合同的上限，与 read_audit.py 里的同名常量必须相等（两个文件互不导入，由 test_ci_audit_hardening_h1 守住）。版本语义：只对
+# v4 合同的上限，与 read_audit.py 里的同名常量必须相等（两个文件互不导入）：由 test_ci_audit_hardening_h1 的
+# test_parser_and_replay_v4_limits_are_equal 守住（test_ci_read_audit_wp_r2 的 OutputEventLimitTests.test_constants 另有一份同样的断言）。版本语义：只对
 # read-audit-trace/v4 生效；已被旧上限截断的轨迹带 output-event-limit 未解析原因，验真永远失败，与本数值无关。
 MAX_OUTPUT_EVENTS_V4 = 1000000
 
