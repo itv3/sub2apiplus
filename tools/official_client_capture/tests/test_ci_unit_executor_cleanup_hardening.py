@@ -925,13 +925,27 @@ class OrphanCleanupTests(_ScriptUnits):
         self.assertLess(time.monotonic() - began, 9.0)
         self.assert_all_gone()
 
-    def test_orphans_that_outlive_the_grace_period_are_counted_signalled_then_killed(self) -> None:
+    def test_orphans_that_outlive_the_grace_period_are_counted_signalled_then_killed_with_evidence(self) -> None:
         scheduler = self.scheduler(grace=1.0)
         work = self.start_script(scheduler, "stubborn", GRACE_SCRIPT, "300")
         outcomes = scheduler.reap(block=True)
         self.assertEqual(len(outcomes[0].orphans), 1)
         self.assertTrue((work / "termed").exists(), "宽限期过后先礼貌地发 SIGTERM")
         self.assert_all_gone("不退出的孤儿最终被 SIGKILL")
+        orphan_events = [event for event in self.events() if event["event"] == "orphans"]
+        self.assertEqual(len(orphan_events), 1, "残留留证：capture_ci 对任何孤儿判失败，要能查到是哪个命令")
+        self.assertEqual(orphan_events[0]["pids"], outcomes[0].orphans)
+        self.assertTrue(any(self.marker in command for command in orphan_events[0]["commands"].values()), orphan_events[0])
+
+    def test_clean_exit_leaves_no_orphan_event(self) -> None:
+        scheduler = self.scheduler(grace=0.0)
+        command = (sys.executable, "-B", "-c", "pass")
+        unit = ue.Unit(unit_id="quiet", module="quiet", test_ids=(), quota=ue.Quota(1, 128), exclusive=False, weight=1.0,
+                       command=command, cwd=str(self.root))
+        scheduler.launch(unit, "formal")
+        outcomes = scheduler.reap(block=True)
+        self.assertEqual(outcomes[0].orphans, [])
+        self.assertEqual([event for event in self.events() if event["event"] in ("orphans", "tree-kill", "tree-kill-warning", "tree-kill-error")], [])
 
 
 class SurvivorSemanticsTests(_ScriptUnits):

@@ -1196,6 +1196,38 @@ def _signal_if_same(pid: int, info: ProcInfo, sig: int) -> bool:
     return True
 
 
+def _abbreviate(text: str, limit: int = 300) -> str:
+    """过长的命令行保留开头和结尾（``python -c <很长的代码> 参数…`` 的参数在最后，掐掉尾巴就认不出是谁了）。"""
+
+    return text if len(text) <= limit else text[:200] + " … " + text[-(limit - 203):]
+
+
+def command_lines(pids: list[int], limit: int = 20) -> dict[str, str]:
+    """前 ``limit`` 个进程的命令行（过长的保留头尾，共约 300 字符），诊断留证用；读不到的略过。Linux 读 /proc/<pid>/cmdline，
+    没有 /proc 时用 ps。"""
+
+    found: dict[str, str] = {}
+    chosen = pids[:limit]
+    if _has_proc():
+        for pid in chosen:
+            try:
+                raw = (PROC_ROOT / str(pid) / "cmdline").read_bytes()
+            except OSError:
+                continue
+            found[str(pid)] = _abbreviate(raw.replace(b"\0", b" ").decode("utf-8", "replace").strip())
+        return found
+    try:
+        completed = subprocess.run(["ps", "-ww", "-o", "pid=,command=", "-p", ",".join(str(pid) for pid in chosen)], capture_output=True,
+                                   text=True, env={"LC_ALL": "C", "PATH": "/bin:/usr/bin"}, stdin=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return found
+    for line in completed.stdout.splitlines():
+        head, _, rest = line.strip().partition(" ")
+        if head.isdigit():
+            found[head] = _abbreviate(rest.strip())
+    return found
+
+
 def kill_frozen(frozen: dict[int, ProcInfo], warnings: list[str] | None = None) -> list[int]:
     """杀掉已经 SIGSTOP 冻结的进程，保证**不会有进程留在 STOPPED 里**。返回实际发过 SIGKILL 的 pid。
 
@@ -2855,6 +2887,10 @@ class Scheduler:
             members = self._survivors(item)
         orphans = sorted(members)
         if members:
+            # 留证：单元记录里 ``orphans`` 只有个数，而 ``capture_ci`` 对任何孤儿判分片失败；残留是哪些命令要在事件流里能查到
+            # （WP-R5 起另起会话的残留也计入，第一次在 ARM64／CI 全量跑时靠它定位既有测试的泄漏）。
+            with contextlib.suppress(Exception):
+                self.event("orphans", unit=item.unit.unit_id, pids=orphans, commands=command_lines(orphans))
             self._remember_quietly(item)
             for pid, info in members.items():
                 _signal_if_same(pid, info, signal.SIGTERM)
