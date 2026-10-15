@@ -30,7 +30,9 @@ R4-3      /dev/null 的读写                                 （无需改动：
 
 from __future__ import annotations
 
+import os
 import unittest
+from typing import Any
 
 from tools.ci import read_audit as ra
 from tools.ci import read_audit_runtime as runtime
@@ -47,6 +49,15 @@ RAW_OPENAT2_CROSS_CHECK = (
     f'O_DIRECTORY, resolve=RESOLVE_BENEATH}}, 24) = 5<{DRIVER_WAIT_ROOT}/tmpxrrn675b/remote/impl-logs/cross-check>')
 
 
+# harvest5 里 compare_accept／vc6_batch 的 symlink-metadata-not-bound:newfstatat（同一路径至少 24 次）。样本在 600 字符处被诊断脚本截断，
+# 结尾 ``AT_SYMLINK_NOFOLLOW) = 0`` 是按 strace 格式补全的；其余逐字取自样本。
+RAW_LSTAT_PYTHON3 = (
+    f'1130194 newfstatat(AT_FDCWD<{WORK}/test-tree>, "/usr/bin/python3", {{st_dev=makedev(0x8, 0x1), st_ino=4175, st_mode=S_IFLNK|0777, '
+    'st_nlink=1, st_uid=0, st_gid=0, st_blksize=4096, st_blocks=0, st_size=10, st_atime=1792034259 /* 2026-10-15T03:17:39.027062149+0000 */, '
+    'st_atime_nsec=27062149, st_mtime=1762949744 /* 2025-11-12T12:15:44+0000 */, st_mtime_nsec=0, '
+    'st_ctime=1765539113 /* 2025-12-12T11:31:53.958971067+0000 */, st_ctime_nsec=958971067}, AT_SYMLINK_NOFOLLOW) = 0')
+
+
 class R4Fixture(R3Fixture):
     """第三轮夹具的延伸：私有根用语料里 test_arm64_driver_wait 的真实根。本类没有 test_ 方法。"""
 
@@ -61,6 +72,21 @@ class R4Fixture(R3Fixture):
 
     def reasons_of(self, lines: list[str], contract: str = "v4") -> dict[str, int]:
         return dict(self.parse(lines, contract).unresolved_reasons)
+
+    def host_document(self, lines: list[str], paths: list[str] | tuple[str, ...] = ()) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """带宿主快照的 v4 文档：``paths`` 里的每个路径取现场 v3 快照作为登记条目，结束凭证按真实合同写好。"""
+        entries = [ra.host_snapshot_v3(str(path)) for path in paths]
+        document = ra.filter_stream(lines, ["/"], strict=True, runtime_context=self.context, trace_contract="v4")
+        extra: dict[str, Any] = {"host_entries_sha256": runtime.host_binding_digest(runtime._read_audit(), entries)}
+        try:
+            extra["host_path_modes"] = ra.host_path_modes(document, entries)
+        except ra.AuditError:
+            pass   # 轨迹不完整：真实凭证同样不写访问类型，重放据此拒绝
+        return self.completed(document, **extra), entries
+
+    def host_report(self, lines: list[str], paths: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+        document, entries = self.host_document(lines, paths)
+        return ra.strict_audit_reads(document, [self.entry, *entries], repo_root="/repo", data_root=None)
 
 
 # =====================================================================================================================
@@ -162,6 +188,257 @@ class OPathDirectoryTests(R4Fixture):
         lines = self.base_lines() + [
             f'1 openat(AT_FDCWD</repo>, "{self.p("nobody-made-this")}", O_RDONLY|O_NOFOLLOW|O_PATH|O_DIRECTORY) = 3<{self.p("nobody-made-this")}>']
         self.assertFailsClosed(lines, where="tracker", fragment="首次读取前未证明由本轮生成")
+
+
+# =====================================================================================================================
+# R6-2  宿主上真符号链接的 lstat
+# =====================================================================================================================
+
+
+class HostSymlinkLstatTests(R4Fixture):
+    """``os.path.realpath(sys.executable)``／``Path.resolve()`` 逐分量 lstat 到宿主真链接。
+
+    结论：lstat 暴露的是链接自身的 mode／uid／gid／size（＝链接文本长度），正是 v3 快照 ``links`` 条目绑定的字段；dev／ino／时间／
+    nlink／blocks 不在快照里（与普通文件 stat 同口径，区别见 ``read_audit.TraceParser._host_symlink_lstat``）。所以登记为对该路径的
+    stat 访问，由覆盖检查要求该路径有 v3 快照。
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.bin = self.base / "usr" / "bin"
+        self.bin.mkdir(parents=True)
+        (self.bin / "python3.12").write_text("#!/bin/sh\n", encoding="utf-8")
+        os.symlink("python3.12", self.bin / "python3")
+        self.link = str(self.bin / "python3")
+        self.target = str(self.bin / "python3.12")
+
+    # ---- 行与结构的拼装 ----
+    def link_struct(self, path: str | None = None, *, mode: str = "S_IFLNK|0777", drop: tuple[str, ...] = (), extra: tuple[str, ...] = (),
+                    **override: Any) -> str:
+        """lstat 返回结构：数值取自真实 ``os.lstat``（所以 uid／gid 是测试进程自己的，不是 0），可逐项覆盖、删除、追加。"""
+        info = os.lstat(path or self.link)
+        values = {"st_dev": "makedev(0x8, 0x1)", "st_ino": str(info.st_ino), "st_mode": mode, "st_nlink": "1", "st_uid": str(info.st_uid),
+                  "st_gid": str(info.st_gid), "st_blksize": "4096", "st_blocks": "0", "st_size": str(info.st_size),
+                  "st_atime": "1792034259 /* 2026-10-15T03:17:39.027062149+0000 */", "st_atime_nsec": "27062149",
+                  "st_mtime": "1762949744 /* 2025-11-12T12:15:44+0000 */", "st_mtime_nsec": "0",
+                  "st_ctime": "1765539113 /* 2025-12-12T11:31:53.958971067+0000 */", "st_ctime_nsec": "958971067"}
+        values.update({key: str(value) for key, value in override.items()})
+        fields = [f"{key}={value}" for key, value in values.items() if key not in drop] + list(extra)
+        return "{" + ", ".join(fields) + "}"
+
+    def statx_struct(self, path: str | None = None, *, mode: str = "S_IFLNK|0777") -> str:
+        info = os.lstat(path or self.link)
+        return (f"{{stx_mask=STATX_BASIC_STATS|STATX_MNT_ID, stx_blksize=4096, stx_attributes=0, stx_nlink=1, stx_uid={info.st_uid}, "
+                f"stx_gid={info.st_gid}, stx_mode={mode}, stx_ino={info.st_ino}, stx_size={info.st_size}, stx_blocks=0, "
+                "stx_attributes_mask=STATX_ATTR_COMPRESSED|STATX_ATTR_IMMUTABLE, "
+                "stx_atime={tv_sec=1792047380, tv_nsec=696287249} /* 2026-10-15T06:56:20.696287249+0000 */, "
+                "stx_rdev_major=0, stx_rdev_minor=0, stx_dev_major=0, stx_dev_minor=105}")
+
+    def lstat_line(self, path: str | None = None, call: str = "newfstatat", *, struct: str | None = None, flags: str = "AT_SYMLINK_NOFOLLOW",
+                   tail: str = "0", dirfd: str = "/repo") -> str:  # type: ignore[override]
+        path = path or self.link
+        if call in {"lstat", "lstat64"}:
+            return f'1 {call}("{path}", {struct or self.link_struct(path)}) = {tail}'
+        if call == "statx":
+            return (f'1 statx(AT_FDCWD<{dirfd}>, "{path}", AT_STATX_SYNC_AS_STAT|{flags}, STATX_BASIC_STATS|STATX_MNT_ID, '
+                    f'{struct or self.statx_struct(path)}) = {tail}')
+        return f'1 {call}(AT_FDCWD<{dirfd}>, "{path}", {struct or self.link_struct(path)}, {flags}) = {tail}'
+
+    def accepted_as_stat(self, line: str, path: str | None = None, *, reasons: dict[str, int] | None = None) -> None:
+        parser = self.parse([line])
+        self.assertEqual((parser.unresolved_reasons, parser.accesses), (reasons or {}, {path or self.link: {"stat"}}), line[:160])
+
+    # ---- 正例 ----
+    def test_the_harvest_line_is_a_stat_of_the_host_path_not_unresolved(self) -> None:
+        parser = self.parse([RAW_LSTAT_PYTHON3])
+        self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {"/usr/bin/python3": {"stat"}}))
+        self.assertEqual(self.reasons_of([RAW_LSTAT_PYTHON3], "v3"), {"symlink-metadata-not-bound:newfstatat": 1}, "v3 一字不变")
+
+    def test_every_lstat_spelling_is_accepted(self) -> None:
+        for call in ("newfstatat", "fstatat64", "lstat", "lstat64", "statx"):
+            with self.subTest(call=call):
+                self.accepted_as_stat(self.lstat_line(call=call))
+
+    def test_a_relative_path_resolves_against_the_annotated_directory_fd(self) -> None:
+        line = f'1 newfstatat(3<{self.bin}>, "python3", {self.link_struct()}, AT_SYMLINK_NOFOLLOW) = 0'
+        self.accepted_as_stat(line)
+
+    def test_a_plain_lstat_resolves_relative_paths_against_the_working_directory(self) -> None:
+        lines = [f'1 chdir("{self.bin}") = 0', f'1 lstat("python3", {self.link_struct()}) = 0']
+        parser = self.parse(lines)
+        self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {str(self.bin): {"dir"}, self.link: {"stat"}}))
+
+    def test_uid_and_gid_need_not_be_zero_because_the_snapshot_binds_them(self) -> None:
+        """不要求 uid／gid 为 0：快照 links 条目绑定了它们（见下面的 ``test_the_v3_snapshot_binds_every_field_lstat_can_observe``）。"""
+        for uid, gid in ((0, 0), (501, 20), (65534, 65534), (4294967295, 4294967295)):
+            with self.subTest(uid=uid, gid=gid):
+                self.accepted_as_stat(self.lstat_line(struct=self.link_struct(st_uid=uid, st_gid=gid)))
+
+    def test_lstat_of_a_regular_file_or_directory_is_not_this_class_and_unchanged(self) -> None:
+        for mode in ("S_IFREG|0644", "S_IFDIR|0755"):
+            with self.subTest(mode=mode):
+                self.accepted_as_stat(self.lstat_line(struct=self.link_struct(mode=mode)))
+
+    def test_a_following_stat_is_not_this_class(self) -> None:
+        """没有 AT_SYMLINK_NOFOLLOW 的 stat 是跟随式，内核不会返回 S_IFLNK；这里即使硬造这样的结构也不走本类（不登记原因、也不放行）。"""
+        line = f'1 newfstatat(AT_FDCWD</repo>, "{self.link}", {self.link_struct()}, 0) = 0'
+        self.accepted_as_stat(line)
+
+    def test_a_failed_lstat_is_still_a_missing_probe(self) -> None:
+        line = f'1 newfstatat(AT_FDCWD</repo>, "{self.link}x", 0x7ffd1234, AT_SYMLINK_NOFOLLOW) = -1 ENOENT (No such file or directory)'
+        parser = self.parse([line])
+        self.assertEqual((parser.unresolved_reasons, parser.accesses), ({}, {self.link + "x": {"missing"}}))
+
+    # ---- 端到端：覆盖检查要求该路径有 v3 快照 ----
+    def test_the_audit_needs_the_path_to_be_declared_and_then_passes(self) -> None:
+        lines = self.pad([self.lstat_line()])
+        report = self.host_report(lines)
+        self.assertEqual((report["status"], [(item["root"], item["path"], item["kinds"]) for item in report["undeclared"]]),
+                         ("failed", [("host", self.link, ["stat"])]), "没声明：未声明项（声明缺口由策略补）")
+        report = self.host_report(lines, [self.link])
+        self.assertEqual((report["status"], report["undeclared_count"]), ("passed", 0), report["undeclared"])
+
+    def test_the_v3_snapshot_binds_every_field_lstat_can_observe(self) -> None:
+        """核对放宽的依据：链接自己的 mode／uid／gid／size／链接文本都在 links 条目里，进条目摘要，比较时无条件比较。"""
+        entry = ra.host_snapshot_v3(self.link)
+        links = entry["detail"]["snapshot"]["links"]
+        info = os.lstat(self.link)
+        self.assertEqual(links, [{"path": self.link, "target": "python3.12", "mode": info.st_mode, "uid": info.st_uid, "gid": info.st_gid,
+                                  "size": info.st_size}])
+        self.assertEqual(tuple(links[0]), ra._V3_LINK_FIELDS)
+        planned = entry["detail"]["snapshot"]
+        for key, changed in (("mode", info.st_mode ^ 0o7), ("uid", info.st_uid + 1), ("gid", info.st_gid + 1), ("size", info.st_size + 1),
+                             ("target", "python3.13")):
+            with self.subTest(field=key):
+                tampered = {**planned, "links": [{**links[0], key: changed}]}
+                for kinds in (["stat"], None, []):
+                    ok, reason = ra.host_snapshot_matches(planned, tampered, kinds, ())
+                    self.assertEqual((ok, reason), (False, ra._V3_REASONS["links"]), (key, kinds))
+                self.assertNotEqual(ra.host_entry_v3(self.link, tampered)["sha256"], entry["sha256"], "条目摘要随之改变")
+
+    def test_replacing_the_link_after_the_snapshot_fails_the_audit_closed(self) -> None:
+        lines = self.pad([self.lstat_line()])
+        document, entries = self.host_document(lines, [self.link])
+        os.unlink(self.link)
+        (self.bin / "python3.13").write_text("x", encoding="utf-8")
+        os.symlink("python3.13", self.link)
+        report = ra.strict_audit_reads(document, [self.entry, *entries], repo_root="/repo", data_root=None)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(any(item["root"] == "host" and "漂移" in item["suggestion"] for item in report["undeclared"]), report["undeclared"])
+
+    def test_a_dangling_link_has_a_missing_snapshot_and_stays_closed(self) -> None:
+        dangling = str(self.bin / "dangling")
+        os.symlink("nowhere", dangling)
+        report = self.host_report(self.pad([self.lstat_line(dangling)]), [dangling])
+        self.assertEqual((report["status"], [item["path"] for item in report["undeclared"]]), ("failed", [dangling]))
+
+    def test_a_realpath_walk_needs_each_component_declared(self) -> None:
+        """realpath(sys.executable)：逐级 lstat 目录（普通对象，沿用旧规则）、lstat 链接（本类）、再读目标。"""
+        lines = self.pad([self.lstat_line(str(self.bin.parent), struct=self.link_struct(str(self.bin.parent), mode="S_IFDIR|0755")),
+                          self.lstat_line(str(self.bin), struct=self.link_struct(str(self.bin), mode="S_IFDIR|0755")),
+                          self.lstat_line(),
+                          f'1 openat(AT_FDCWD</repo>, "{self.target}", O_RDONLY|O_CLOEXEC) = 3<{self.target}>'])
+        declared = [str(self.bin.parent), str(self.bin), self.link, self.target]
+        self.assertEqual(self.host_report(lines, declared)["status"], "passed")
+        for missing in declared:
+            with self.subTest(undeclared=missing):
+                report = self.host_report(lines, [path for path in declared if path != missing])
+                self.assertEqual((report["status"], [item["path"] for item in report["undeclared"]]), ("failed", [missing]))
+
+    # ---- 反例：返回结构 ----
+    def test_a_mode_other_than_exactly_lnk_0777_stays_unresolved(self) -> None:
+        for mode in ("S_IFLNK|0755", "S_IFLNK|0666", "S_IFLNK|0777|S_ISVTX", "S_IFLNK", "S_IFLNK|0000", "S_IFLNK|777"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.reasons_of([self.lstat_line(struct=self.link_struct(mode=mode))]),
+                                 {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_uid_gid_and_size_must_each_be_one_decimal_integer(self) -> None:
+        cases = {
+            "缺 uid": self.link_struct(drop=("st_uid",)), "缺 gid": self.link_struct(drop=("st_gid",)), "缺 size": self.link_struct(drop=("st_size",)),
+            "重复 uid": self.link_struct(extra=("st_uid=0",)), "重复 gid": self.link_struct(extra=("st_gid=0",)),
+            "重复 size": self.link_struct(extra=("st_size=10",)),
+            "uid 是名字": self.link_struct(st_uid="root"), "gid 是名字": self.link_struct(st_gid="wheel"),
+            "size 是十六进制": self.link_struct(st_size="0xa"), "size 是负数": self.link_struct(st_size="-1"),
+            "uid 带前导零": self.link_struct(st_uid="00"), "size 为 0（procfs 魔法链接那种）": self.link_struct(st_size="0"),
+            "size 带单位": self.link_struct(st_size="10B"),
+        }
+        for label, struct in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.reasons_of([self.lstat_line(struct=struct)]), {"symlink-metadata-not-bound:newfstatat": 1}, label)
+
+    def test_truncated_pointer_or_missing_structures_stay_unresolved(self) -> None:
+        cases = {"缩略结构": "{st_mode=S_IFLNK|0777, ...}", "返回结构是指针": "0x7ffd1234",
+                 "只有 mode": "{st_mode=S_IFLNK|0777}", "类型是字符设备": self.link_struct(mode="S_IFCHR|0666"),
+                 "类型是套接字": self.link_struct(mode="S_IFSOCK|0755")}
+        for label, struct in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.reasons_of([self.lstat_line(struct=struct)]), {"symlink-metadata-not-bound:newfstatat": 1}, label)
+        # 结构没有右括号：整个调用解析不出参数，除了本原因还会多一条 dirfd-path-not-resolved（都是未解析，整次审计失败关闭）。
+        broken = self.reasons_of([self.lstat_line(struct="{st_mode=S_IFLNK|0777")])
+        self.assertIn("symlink-metadata-not-bound:newfstatat", broken)
+
+    def test_statx_structure_is_checked_with_stx_field_names(self) -> None:
+        good = self.statx_struct()
+        self.accepted_as_stat(self.lstat_line(call="statx", struct=good))
+        for label, struct in {"类型是字符设备": self.statx_struct(mode="S_IFCHR|0666"),
+                              "权限不是 0777": self.statx_struct(mode="S_IFLNK|0755"),
+                              "缺 uid": good.replace(f"stx_uid={os.lstat(self.link).st_uid}, ", ""),
+                              "用了 st_ 前缀的字段名": good.replace("stx_", "st_")}.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.reasons_of([self.lstat_line(call="statx", struct=struct)]),
+                                 {"symlink-metadata-not-bound:statx": 1}, label)
+
+    # ---- 反例：路径写法 ----
+    def test_path_spellings_that_can_make_the_normalised_path_wrong_stay_unresolved(self) -> None:
+        cases = {
+            "含 .. 分量": f"{self.bin}/../bin/python3", "含 . 分量": f"{self.bin}/./python3", "结尾斜杠": self.link + "/",
+            "结尾 /.": self.link + "/.", "双斜杠": f"{self.bin}//python3", "以 .. 结尾": f"{self.link}/..",
+        }
+        for label, raw in cases.items():
+            for call in ("newfstatat", "lstat"):
+                with self.subTest(label=label, call=call):
+                    line = self.lstat_line(raw, call=call, struct=self.link_struct())
+                    self.assertEqual(self.reasons_of([line]), {f"symlink-metadata-not-bound:{call}": 1}, label)
+
+    def test_relative_spellings_with_dot_components_stay_unresolved(self) -> None:
+        for raw in ("../bin/python3", "./python3", "."):
+            with self.subTest(raw=raw):
+                line = f'1 newfstatat(3<{self.bin}>, "{raw}", {self.link_struct()}, AT_SYMLINK_NOFOLLOW) = 0'
+                self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_an_empty_path_with_at_empty_path_stays_unresolved(self) -> None:
+        line = f'1 newfstatat(3<{self.link}>, "", {self.link_struct()}, AT_EMPTY_PATH|AT_SYMLINK_NOFOLLOW) = 0'
+        self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    # ---- 反例：魔法链接与私有盘内 ----
+    def test_procfs_magic_links_are_not_ordinary_host_links(self) -> None:
+        """/proc/self、/proc/<pid>/exe、cwd、fd/N 是魔法链接：st_size 为 0（挡在本类之外），而且它们无法有 v3 快照（host_snapshot 拒绝 /proc）。"""
+        for path in ("/proc/self", "/proc/self/exe", "/proc/self/cwd", "/proc/self/root", "/proc/self/fd/3", "/proc/1234/exe"):
+            with self.subTest(path=path):
+                line = self.lstat_line(path, struct=self.link_struct(st_size="0"))
+                self.assertEqual(self.reasons_of([line]), {"symlink-metadata-not-bound:newfstatat": 1})
+        with self.assertRaises(ra.AuditError):
+            ra.host_snapshot_v3("/proc/self/exe")
+
+    def test_a_link_in_the_private_root_that_this_unit_did_not_create_stays_unresolved(self) -> None:
+        for path in (self.p("d/l"), self.p("d/never-created")):
+            with self.subTest(path=path):
+                line = f'1 newfstatat(AT_FDCWD</repo>, "{path}", {self.link_struct()}, AT_SYMLINK_NOFOLLOW) = 0'
+                self.assertEqual(self.reasons_of(self.base_lines() + [line]), {"symlink-metadata-not-bound:newfstatat": 1})
+
+    def test_a_link_this_unit_created_in_the_private_root_still_passes_via_the_tracker(self) -> None:
+        lines = self.base_lines() + [self.symlink_line("d/l"), super().lstat_line("d/l")]
+        self.assertPasses(lines)
+
+    def test_the_mask_root_is_not_exempt(self) -> None:
+        line = f'1 newfstatat(AT_FDCWD</repo>, "{runtime.MASK_ROOT}/link", {self.link_struct()}, AT_SYMLINK_NOFOLLOW) = 0'
+        report = self.host_report(self.pad([line]))
+        self.assertEqual(report["status"], "failed", "生产别名遮挡下只有根目录元数据与缺失探测被覆盖，链接的 stat 没有快照")
+
+    def test_nothing_changes_for_v3_documents(self) -> None:
+        for call in ("newfstatat", "lstat", "statx"):
+            with self.subTest(call=call):
+                self.assertEqual(self.reasons_of([self.lstat_line(call=call)], "v3"), {f"symlink-metadata-not-bound:{call}": 1})
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -240,10 +240,14 @@ class ParserSymlinkTests(R3Fixture):
                 self.assertPasses(lines)
 
     def test_lstat_of_a_link_the_tracker_does_not_know_keeps_the_old_verdict(self) -> None:
-        """宿主上的真链接、不在私有盘内的、不是本单元创建的：没有合同，仍登记 symlink-metadata-not-bound。"""
+        """私有盘内不是本单元创建（或已不存在）的链接：没有合同，仍登记 symlink-metadata-not-bound。
+
+        WP-R4（R6-2）：这里原来还有一条“宿主路径”（``/usr/bin/python3`` 的 lstat）固定仍登记；第四轮起宿主上的真符号链接在返回结构
+        完整解码为 ``S_IFLNK|0777`` 且路径写法无 ``..``／结尾斜杠时登记为 stat 访问（由覆盖检查要求该路径有 v3 快照），该形态的正反例
+        移到 ``test_ci_read_audit_wp_r4.HostSymlinkLstatTests``；本测试只保留私有盘内的几种。
+        """
         cases = {
             "私有盘内但本单元没创建": self.base_lines() + [self.lstat_line("d/l")],
-            "宿主路径": [self.mkdir_line("d"), '1 newfstatat(AT_FDCWD</repo>, "/usr/bin/python3", ' + STAT_LNK + ', AT_SYMLINK_NOFOLLOW) = 0'],
             "已经被删除的链接": self.base_lines() + [self.symlink_line("d/l"), self.unlink_line("d/l"), self.lstat_line("d/l")],
             "同名的普通文件": self.base_lines() + [self.create_line("d/l"), self.lstat_line("d/l")],
         }

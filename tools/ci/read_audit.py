@@ -45,6 +45,12 @@ WP-R3（解析器加固第三轮，同样只在 v4 合同下）：私有盘内�
 symlink-path-form-unsafe；（4）symlink／symlinkat 的链接文本缺失或被截断登记 symlink-text-not-decoded。``O_PATH|O_NOFOLLOW`` 的打开
 不豁免。逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r3.py 的模块说明。
 
+WP-R4（解析器加固第四轮，同样只在 v4 合同下）：（1）R6-1：成功的 ``O_PATH|O_NOFOLLOW|O_DIRECTORY`` 打开（open／openat／openat2）按“打开目录”登记，
+不再判 symlink-metadata-not-bound——内核保证最后一个分量是目录，不是链接自身（``_o_path_directory_open``）；缺 O_DIRECTORY 的仍判；
+（2）R6-2：宿主上真符号链接的 lstat（返回结构完整解码为 ``S_IFLNK|0777``、uid／gid／size 是十进制整数且 size≥1、路径写法无 ``.``／``..``／
+``//``／结尾斜杠、不在私有盘内）登记为对该路径的 stat 访问，由覆盖检查要求该路径有 v3 快照——lstat 暴露的 mode／uid／gid／size 正是快照
+links 条目绑定的字段（``_host_symlink_lstat``）。逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r4.py 的模块说明。
+
 子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
 """
@@ -290,6 +296,46 @@ def _o_path_directory_open(flags: Iterable[str]) -> bool:
     ``_symlink_name_verdict``：O_PATH 的成功打开一律判问题，与本函数互不依赖。
     """
     return "O_DIRECTORY" in flags
+
+
+def _returned_plain_link_stat(name: str, arguments: Sequence[str]) -> bool:
+    """宿主符号链接 lstat 放宽的结构判据（WP-R4，R6-2，仅 v4 使用）：完整返回结构里的 mode 恰为 ``S_IFLNK|0777``，且 uid、gid、
+    size 各恰有一个十进制整数字段、size 至少为 1。
+
+    为什么逐字段要求（而不只要 ``_returned_link_stat`` 的“类型是 S_IFLNK”）：放宽的依据是“lstat 暴露的字段都被 v3 快照的 links 条目绑定”
+    （path／target／mode／uid／gid／size，见 ``_V3_LINK_FIELDS``），所以这几个字段必须在返回结构里看得见、看得懂，缺一个就不能说
+    被绑定的就是被观察的：
+
+    * ``0777``：Linux 上符号链接的权限位恒为 0777；不是说明结构被改写或平台不同，保持失败关闭；
+    * uid／gid 缺失、重复或不是十进制整数（例如被省略号截断、写成名字）→ 拒绝；
+    * ``size >= 1``：链接文本至少一个字节。procfs 的魔法链接（``/proc/self``、``/proc/<pid>/exe``、``cwd``、``fd/N``）st_size 为 0，
+      它们解引用到宿主路径，不是普通磁盘链接，在这里被挡掉（它们也无法有 v3 快照：``host_snapshot`` 拒绝 /proc）。
+    省略号（缩略结构）一律拒绝，不能从路径或缩略结构猜类型。
+    """
+    positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
+    position = positions.get(name)
+    if position is None or position >= len(arguments):
+        return False
+    value = arguments[position].strip()
+    if not value.startswith("{") or not value.endswith("}") or "..." in value:
+        return False
+    fields = _call_arguments(value[1:-1], None)
+    prefix = "stx_" if name == "statx" else "st_"
+
+    def only(key: str) -> str | None:
+        hits = [field for field in fields if re.match(re.escape(prefix + key) + r"\s*=", field)]
+        return hits[0].split("=", 1)[1].strip() if len(hits) == 1 else None
+
+    mode, uid, gid, size = (only(key) for key in ("mode", "uid", "gid", "size"))
+    return (mode == "S_IFLNK|0777" and all(value is not None and re.fullmatch(r"0|[1-9][0-9]*", value) for value in (uid, gid, size))
+            and int(size) >= 1)  # type: ignore[arg-type]
+
+
+def _plain_path_text(raw: str | None) -> bool:
+    """原始路径参数的写法没有 ``.``／``..`` 分量、没有 ``//``、不以斜杠结尾：规范化后的路径就是内核解析的路径本身
+    （``..`` 会在符号链接之后回到目标的父目录，结尾斜杠迫使内核解引用最后的链接，见 ``_path_form_hazard``）。"""
+    return (raw is not None and raw != "" and not raw.endswith("/") and "//" not in raw
+            and not {".", ".."} & set(raw.split("/")))
 
 
 def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
@@ -697,7 +743,12 @@ class TraceParser:
                 # WP-R3（仅 v4）：lstat 到“本单元自己创建、跟踪器当前仍记着的符号链接”不登记 symlink-metadata-not-bound——
                 # 那是链接自己的元数据，内容由被测代码自己写入，没有宿主依赖。宿主上的真链接、不在私有盘内的、不是本单元创建的
                 # 一律仍登记。O_PATH|O_NOFOLLOW 的打开不豁免（得到的描述符后续可被 openat(fd, "") 等转成跟随，不可见）。
-                if not (self.trace_v4 and nofollow_stat and self._tracked_symlink_lstat(name, arguments, pid, result.group(1))):
+                # WP-R4（R6-2，仅 v4）：宿主上的真符号链接（不在私有盘内）、返回结构完整解码为 ``S_IFLNK|0777`` 且路径写法无 ``..``／
+                # 结尾斜杠时，lstat 暴露的是链接自身的 mode／uid／gid／size，这些正是 v3 快照 links 条目绑定的字段——按对该路径的
+                # stat 访问登记，覆盖检查要求该路径有 v3 快照（见 ``_host_symlink_lstat``）。其余情形仍登记。
+                if not (self.trace_v4 and nofollow_stat
+                        and (self._tracked_symlink_lstat(name, arguments, pid, result.group(1))
+                             or self._host_symlink_lstat(name, arguments, pid, result.group(1)))):
                     self._unresolved("symlink-metadata-not-bound:" + name)
             elif self.trace_v4 and nofollow_stat and self._single_path_is_tracked_symlink(name, arguments, pid):
                 # 反方向的互相印证：内核说这是普通文件或目录（完整解码、返回 0），跟踪器却记着它是符号链接——名字表与真实状态已经脱节
@@ -917,6 +968,33 @@ class TraceParser:
             return False
         path = self._single_path(name, arguments, pid)
         return path is not None and _under(path, self.output_tracker.root) and self.output_tracker.is_symlink(path)
+
+    def _host_symlink_lstat(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
+        """lstat 一类调用成功得到宿主上真符号链接的元数据（WP-R4，R6-2，仅 v4）：放行为对该路径的 stat 访问。
+
+        背景：``os.path.realpath(sys.executable)``、``Path.resolve()`` 会逐分量 lstat，路径恒为 ``/usr/bin/python3`` 这类真链接
+        （ARM64 实测 compare_accept、vc6_batch 等单元 ≥24 次，同一路径）。原来一律登记 symlink-metadata-not-bound，单元永远不可承接。
+
+        能暴露什么：lstat 返回链接自身的 inode 属性——mode（恒 0777）、uid、gid、size（＝链接文本长度）、nlink、blksize、blocks，
+        以及 dev、ino 与三个时间。v3 宿主快照对**每个沿途符号链接**（含路径本身）在 ``links`` 条目里绑定 path／target／mode／
+        uid／gid／size（``_V3_LINK_FIELDS``，比对时无条件比较、进条目摘要），所以前面几项被观察到的字段全部被绑定；运行前后快照
+        不变（``host_inputs_unchanged``）则观察到的值就等于登记值。没有绑定的是 dev／ino／时间／nlink／blocks：与 v3 对普通文件
+        stat 的口径一致（那里 dev／ino／时间属 volatile，只有声明了依赖的路径才比较；nlink、blocks 本来就不在快照里）。**唯一的
+        差别**：普通文件的 volatile 可以在策略 ``metadata_dependencies`` 里声明依赖，符号链接自己的时间／ino 在 v3 里不进快照，
+        无法声明；依赖链接自身 mtime 的单元极罕见（realpath／resolve 只看 S_ISLNK），记为未决问题，见 test_ci_read_audit_wp_r4 的说明。
+
+        放行条件（全部满足）：返回 0；返回结构完整解码，``S_IFLNK|0777`` 且 uid／gid／size 看得懂（``_returned_plain_link_stat``）；
+        路径能还原且**不在私有盘内**（盘内的链接走 ``_tracked_symlink_lstat``：只认本单元自己创建的）；原始路径参数的写法没有
+        ``.``／``..`` 分量、``//``、结尾斜杠（``_plain_path_text``，否则规范化后的路径可能不是内核真正解析的对象）。
+        放行后该路径以 ``stat`` 登记，严格覆盖检查要求它有精确的 v3 快照：没声明就是未声明项（声明缺口由策略补，不是解析器的事）；
+        目标悬空的链接快照是 ``missing`` 类型，与 ``stat`` 访问不匹配，仍失败关闭。
+        """
+        if returned != "0" or self.output_tracker is None or not _returned_plain_link_stat(name, arguments):
+            return False
+        path = self._single_path(name, arguments, pid)
+        if path is None or _under(path, self.output_tracker.root):
+            return False
+        return _plain_path_text(_path_argument(arguments, 1 if name in _DIRFD_PROBE else 0))
 
     def _defer(self, pid: str, line: str) -> None:
         """等待父进程归属，限制缓存量；超过上限仍拒绝覆盖，不猜测工作目录。"""
