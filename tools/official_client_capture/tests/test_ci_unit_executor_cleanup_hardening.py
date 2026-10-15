@@ -880,6 +880,19 @@ class AbortSecondInterruptTests(_ScriptUnits):
 
 
 class ReservationSigkillSnapshotFirstTests(_ScriptUnits):
+    def test_scrubbed_descendants_are_found_even_though_the_roots_die_first(self) -> None:
+        """预约中止的 SIGKILL 档：根进程和会话成员先被杀，环境被清空（没有标记）又没来得及进名册的另起会话后代，改挂 init 之后
+        再也找不到。必须先取快照（记名册）再发信号。把名册刷新间隔拉到 1000 秒，排除「周期性名册恰好记到了」。"""
+
+        scheduler = self.scheduler()
+        with mock.patch.object(ue, "LEDGER_REFRESH_SECONDS", 1000.0):
+            self.start(scheduler, "scrubbed", "scrub-keep")
+            item = next(iter(scheduler.running.values()))
+            self.assertEqual(item.known, {}, "名册一条都没有，才能说明靠的是发信号前的那次记录")
+            scheduler._signal_session(item.pid, signal.SIGKILL)
+            self.assert_all_gone("环境被清空的另起会话后代也要在 SIGKILL 档被清掉")
+            scheduler.reap(block=True)
+
     def test_a_detached_fork_storm_is_frozen_not_chased(self) -> None:
         for path in ("reservation-sigkill", "abort", "orphan-cleanup"):
             with self.subTest(path=path):

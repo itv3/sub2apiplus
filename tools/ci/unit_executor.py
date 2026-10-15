@@ -2640,21 +2640,40 @@ class Scheduler:
 
     def _signal_session(self, pid: int, sig: int) -> None:
         """主进程组和会话内其它组一起停止，避免只杀包装器就提前让出整机。"""
+        item = self.running.get(pid)
+        if item is not None:
+            # WP-R5：**先取快照再发信号**。SIGKILL 档原来先杀进程组和会话成员、之后才在 ``_kill_items`` 里取快照：根进程与会话成员
+            # 一死，环境被清空、又没来得及进名册的另起会话后代就改挂 init，再也找不到了。这里先把单元现在的全部存活进程记进名册
+            # （pid＋启动时间，含按标记、按 ppid 子树找到的），后面的 ``_kill_items`` 靠名册照样认得出它们。
+            self._remember_quietly(item)
         with contextlib.suppress(ProcessLookupError):
             os.killpg(pid, sig)
         for member in _session_members(pid):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(member, sig)
         # WP-R5：再加上单元自己另起会话的后代。SIGKILL 档走「冻结再终止」（_kill_items），其它信号发给当前能找到的全部存活进程。
-        item = self.running.get(pid)
         if item is None:
             return
         if sig == signal.SIGKILL:
             self._kill_items([item])
             return
-        self._remember(item, tags=True)
-        for member, info in self._survivors(item).items():
+        try:
+            survivors = self._survivors(item)
+        except Exception as error:   # noqa: BLE001 - 进程表读不到不能让预约中止的 SIGTERM 档半途崩掉；原因留事件
+            with contextlib.suppress(OSError):
+                self.event("tree-kill-error", error=repr(error), stage="signal-session")
+            return
+        for member, info in survivors.items():
             _signal_if_same(member, info, sig)
+
+    def _remember_quietly(self, item: Running) -> None:
+        """发信号之前先记名册；读进程表出错时只留事件、不抛——名册是锦上添花的依据，不能因为它拦住后面的信号。"""
+
+        try:
+            self._remember(item, tags=True)
+        except Exception as error:   # noqa: BLE001
+            with contextlib.suppress(OSError):
+                self.event("tree-kill-error", error=repr(error), stage="remember")
 
     # -- 后代清理（WP-R5）---------------------------------------------------------
     def _survivors(self, item: Running, table: dict[int, ProcInfo] | None = None, *, tags: bool = True,
@@ -2836,7 +2855,7 @@ class Scheduler:
             members = self._survivors(item)
         orphans = sorted(members)
         if members:
-            self._remember(item, tags=True)
+            self._remember_quietly(item)
             for pid, info in members.items():
                 _signal_if_same(pid, info, signal.SIGTERM)
             if self._survivors(item):
@@ -2854,7 +2873,7 @@ class Scheduler:
                 limit = item.unit.timeout_seconds or self.config.unit_timeout_seconds
                 if item.stop_started is None and elapsed > limit and not item.timed_out:
                     item.timed_out = True
-                    self._remember(item, tags=True)   # 先记名册再发信号：根进程一死，另起会话的后代就只能靠名册和标记认
+                    self._remember_quietly(item)   # 先记名册再发信号：根进程一死，另起会话的后代就只能靠名册和标记认
                     with contextlib.suppress(ProcessLookupError, PermissionError):
                         os.killpg(pid, signal.SIGTERM)
                     self.event("timeout", unit=item.unit.unit_id, pid=pid)
