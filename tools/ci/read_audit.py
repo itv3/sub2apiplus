@@ -412,14 +412,21 @@ def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
     """原始路径参数的写法，会不会让“文本规范化后的路径”与内核实际解析的对象不是同一个——只在存在符号链接对象时才可能。
 
     解析器用 ``os.path.normpath`` 把路径规范化成绝对路径，这对没有符号链接的目录树是等价的；一旦有符号链接对象，
-    有三种写法会让规范化“骗人”（都是 Linux 的真实语义）：
+    有四种写法会让规范化“骗人”（都是 Linux 的真实语义）：
 
     * ``link/..``、``a/link/../b``：内核先解引用 link 再取目标的父目录，规范化却直接回到 link 的父目录；
+    * ``link/x/..``、``link/x/y/../..``（WP-R7a，验收 S-1）：内核沿 link 下降到目标目录里的 ``x``、再回到目标目录；文本规范化
+      却把 ``x/..`` 抵消、落回 link 名字本身。此时调用在 ``link`` 这个名字上看起来是“不跟随的探测”（mkdir／symlink／open(O_EXCL)
+      的 EEXIST，rename 失败的 ENOENT），内核实际却在宿主目录里查了 ``x``，宿主上 ``x`` 是否存在被暴露。判据：``..`` 的落点
+      本身是符号链接名字——只有先沿链接下降过，``..`` 才可能落回链接名字；
     * ``link/``、``link/.``：结尾的斜杠或 ``.`` 迫使内核解引用最后的链接，哪怕调用本身是 lstat／readlink 这类“不跟随”的调用；
     * 同理 ``link/./x`` 之类经过链接的中间分量，规范化后是 ``…/link/x``，由跟踪器的“中间分量是符号链接”检查拦下，不在这里。
 
     本函数沿原始写法逐个分量走一遍（起点是 dirfd／工作目录的规范路径或根），遇到 ``..`` 时若当前位置是存活的符号链接名字、
-    或结尾带斜杠／``.`` 时当前位置是符号链接名字，就判有风险。返回 True 时调用方登记未解析，整次审计失败关闭。
+    或 ``..`` 之后的落点是符号链接名字、或结尾带斜杠／``.`` 时当前位置是符号链接名字，就判有风险。完整性论证：文本走法经过某个链接
+    名字时，要么最终路径里它仍是真祖先（跟踪器的“中间分量是符号链接”检查拦下），要么被 ``..`` 抵消——抵消发生的那一步，
+    ``..`` 之前的位置是链接（第一个判据）或 ``..`` 的落点就是链接（第二个判据）；走法从不经过任何链接名字时，文本规范化与
+    内核解析等价。返回 True 时调用方登记未解析，整次审计失败关闭。
     """
     if not raw or not tracker.has_symlinks():
         return False
@@ -434,6 +441,8 @@ def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
             if tracker.is_symlink(current):
                 return True
             current = os.path.dirname(current) or "/"
+            if tracker.is_symlink(current):
+                return True   # WP-R7a（S-1）：沿链接下降后用 ``..`` 回到链接名字
         else:
             current = os.path.join(current, component)
     return (raw.endswith("/") or parts[-1] == ".") and tracker.is_symlink(current)
