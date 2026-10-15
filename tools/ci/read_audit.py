@@ -148,6 +148,7 @@ _PLAIN_WRITE = frozenset({"creat", "mkdir", "rmdir", "unlink", "rename", "link",
                           "utime", "utimes", "setxattr", "lsetxattr", "removexattr", "lremovexattr", "mknod"})
 _PLAIN_EXEC = frozenset({"execve"})
 _TWO_PATHS = frozenset({"rename", "link", "renameat", "renameat2", "linkat"})
+_RENAME_CALLS = frozenset({"rename", "renameat", "renameat2"})
 _SPAWN = frozenset({"clone", "clone3", "fork", "vfork"})
 _WRITE_FLAGS = re.compile(r"\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b")
 _MISSING_ERRNOS = frozenset({"ENOENT", "ENOTDIR"})
@@ -958,6 +959,7 @@ class TraceParser:
                     self.call_end = (_ROLES[slot], ends[1 - slot])
                 self._add(self._checked_join(directory, path), kind, line)
             self.call_end = None
+            self._relocate_working_directories(name, ends)
             if self.strict:
                 if len(pairs) != len(positions):
                     self._unresolved("dirfd-path-not-resolved:" + name)
@@ -1002,6 +1004,7 @@ class TraceParser:
                     self.call_end = (_ROLES[slots[index]], ends[1 - slots[index]])
                 self._add(self._checked_join(self.cwd.get(pid), path), kind, line)
             self.call_end = None
+            self._relocate_working_directories(name, ends)
             if self.strict:
                 if len(strings) != len(positions):
                     self._unresolved("plain-path-not-resolved:" + name)
@@ -1029,6 +1032,40 @@ class TraceParser:
                 return
         if self.strict:
             self._unresolved("unsupported-call:" + name)
+
+    def _relocate_working_directories(self, name: str, ends: Sequence[str | None] | None) -> None:
+        """成功的 rename 之后，让落在被改名路径之下的各进程文本工作目录跟着改名（WP-R7a，验收 S-2，仅 v4）。
+
+        内核里工作目录是目录对象，跟着目录走：进程 ``chdir`` 进 ``x``、``x`` 被改名为 ``y`` 之后，它的工作目录就是 ``y``。解析器的
+        ``self.cwd`` 是文本，只在三处更新（``AT_FDCWD<…>`` 标注、``fchdir``、成功的 ``chdir``），rename 不更新；于是 plain（不带 ``at``）
+        的系统调用——ARM64 上有 execve、chdir、truncate、statfs、getxattr 族、inotify_add_watch 等——走相对路径时，解析器还原出已经
+        不存在的旧目录名，看不见改名后目录里的符号链接：``execve("ln/zzz") = -1 ENOENT`` 被当成对未知名字的合法缺失探测，内核实际
+        却经 ``ln`` 在宿主目录里查了 ``zzz``。（``*at`` 系调用每次都带真实工作目录的标注，不受影响。）
+
+        改写规则：``ends`` 是调用两端的规范路径（来源、目的）；每个进程的工作目录（以及尚未被子进程取走的 ``spawn_cwd``）若等于来源
+        或落在来源之下，前缀换成目的。``RENAME_EXCHANGE`` 两端互换，所以目的之下的也换回来源。覆盖已有空目录时，原来在被覆盖目录
+        里的进程的工作目录是已被删除的目录（内核对它的查找一律 ENOENT，不碰任何宿主路径），文本不改：之后它走相对路径得到的
+        文本路径要么是未知名字（合法缺失探测，与内核的 ENOENT 一致），要么恰是改名过来的子树里的名字（保守地被当作已知名字处理，
+        至多多判一次问题）。失败的 rename 不改任何目录，一端还原不出路径时也不改（那一端的“路径未还原”已另行登记未解析）。
+        """
+        if (not self.trace_v4 or name not in _RENAME_CALLS or ends is None or not self.event[2]
+                or ends[0] is None or ends[1] is None):
+            return
+        source, destination = ends[0], ends[1]
+        exchange = "RENAME_EXCHANGE" in self.call_flags
+
+        def moved(directory: str) -> str:
+            if directory == source or directory.startswith(source + "/"):
+                return destination + directory[len(source):]
+            if exchange and (directory == destination or directory.startswith(destination + "/")):
+                return source + directory[len(destination):]
+            return directory
+
+        for pid, directory in self.cwd.items():
+            self.cwd[pid] = moved(directory)
+        for pid, directory in self.spawn_cwd.items():
+            if directory is not None:
+                self.spawn_cwd[pid] = moved(directory)
 
     def _checked_join(self, directory: str | None, path: str) -> str | None:
         """``_join`` 加 v4 的符号链接路径形态检查：存在符号链接对象时，``..``／结尾斜杠等写法可能让规范化后的路径

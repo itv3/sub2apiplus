@@ -184,3 +184,174 @@ class DotDotBackOntoTheLinkTests(R7aFixture):
         document = self.document(lines, contract="v3")
         self.assertNotIn(self.HAZARD, document["coverage"]["unresolved_reasons"])
         self.assertTrue(any("链接或移动操作尚无输出归属证明" in text for text in document["runtime"]["outputs"]["problems"]))
+
+
+# =====================================================================================================================
+# S-2：目录被改名后，文本工作目录跟着走
+# =====================================================================================================================
+
+
+class WorkingDirectoryFollowsRenameTests(R7aFixture):
+    """内核里工作目录是目录对象，跟着目录改名；解析器的文本工作目录原来只在 ``AT_FDCWD<…>`` 标注、``fchdir``、成功的 ``chdir`` 时更新。
+
+    场景（验收 S-2）：``chdir`` 进 ``x``，在 ``x`` 里建链接 ``ln``→``/etc``，把 ``x`` 改名 ``y``，再用 plain 系统调用走相对路径经链接并失败
+    （ENOENT）。旧行为：解析器还原出已经不存在的 ``…/x/ln/zzz``，看不见链接，通过。
+    """
+
+    def x_then_renamed(self, destination: str = "y") -> list[str]:
+        r = self.root
+        return [f'1 mkdir("{r}/x", 0777) = 0', f'1 chdir("{r}/x") = 0', f'1 symlink("/etc", "{r}/x/ln") = 0',
+                f'1 rename("{r}/x", "{r}/{destination}") = 0']
+
+    def test_the_acceptance_reproduction_fails_closed(self) -> None:
+        lines = self.x_then_renamed() + ['1 execve("ln/zzz", ["zzz"], 0x7ffd /* 1 var */) = -1 ENOENT (No such file or directory)']
+        self.assertFailsClosed(lines, where="tracker", fragment="中间分量是符号链接")
+
+    def test_every_plain_call_through_the_relative_link_fails_closed_after_the_rename(self) -> None:
+        probes = {
+            "execve": '1 execve("ln/zzz", ["zzz"], 0x7ffd /* 1 var */) = -1 ENOENT (No such file or directory)',
+            "chdir ENOENT": '1 chdir("ln/ssh") = -1 ENOENT (No such file or directory)',
+            "chdir 成功": '1 chdir("ln/ssh") = 0',
+            "truncate": '1 truncate("ln/passwd", 0) = -1 EACCES (Permission denied)',
+            "statfs": '1 statfs("ln/ssh", 0x7ffd) = -1 ENOENT (No such file or directory)',
+            "getxattr": '1 getxattr("ln/passwd", "user.x", 0x7ffd, 8) = -1 ENODATA (No data available)',
+            "inotify_add_watch": '1 inotify_add_watch(4<anon_inode:inotify>, "ln/ssh", IN_ALL_EVENTS) = -1 ENOENT (No such file or directory)',
+        }
+        for label, line in probes.items():
+            with self.subTest(label=label):
+                self.assertFailsClosed(self.x_then_renamed() + [line], where="tracker", fragment="中间分量是符号链接")
+
+    def test_the_same_probe_passed_before_the_working_directory_followed_the_rename(self) -> None:
+        """对照：把改写关掉（旧行为），同一条轨迹整套审计通过——所以上面的失败关闭确实来自本轮的改写。"""
+        lines = self.x_then_renamed() + ['1 execve("ln/zzz", ["zzz"], 0x7ffd /* 1 var */) = -1 ENOENT (No such file or directory)']
+        with mock.patch.object(ra.TraceParser, "_relocate_working_directories", lambda self_, name, ends: None):
+            document, reasons, problems = self.outcome(lines)
+            self.assertTrue(self.audit(document)["coverage_complete"], (reasons, problems))
+
+    def test_a_legitimate_relative_call_in_the_renamed_directory_passes(self) -> None:
+        """旧行为在这里反而是假失败：相对路径被还原到已不存在的 x 之下，新建目录的父目录“未证明”。"""
+        r = self.root
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 chdir("{r}/x") = 0', f'1 rename("{r}/x", "{r}/y") = 0',
+                 '1 mkdir("sub", 0777) = 0', '1 mkdir("sub/inner", 0777) = 0', '1 truncate("nobody", 0) = -1 ENOENT (x)']
+        document = self.assertPasses(lines)
+        paths = {event["path"] for event in document["runtime"]["output_events"] if event["name"] == "mkdir"}
+        self.assertEqual(paths, {f"{r}/x", f"{r}/y/sub", f"{r}/y/sub/inner"})
+
+    def test_the_working_directory_text_itself(self) -> None:
+        r = self.root
+        parser = self.parse(self.x_then_renamed())
+        self.assertEqual(parser.cwd, {"1": f"{r}/y"})
+        self.assertEqual(parser.unresolved_reasons, {})
+
+    def test_a_working_directory_below_the_renamed_directory_moves_with_it(self) -> None:
+        r = self.root
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 mkdir("{r}/x/a", 0777) = 0', f'1 mkdir("{r}/x/a/b", 0777) = 0',
+                 f'1 chdir("{r}/x/a/b") = 0', f'1 rename("{r}/x/a", "{r}/z") = 0']
+        parser = self.parse(lines)
+        self.assertEqual(parser.cwd["1"], f"{r}/z/b")
+        # 与“前缀相同但不是子目录”的名字区分开：x/ab 不是 x/a 的子目录。
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 mkdir("{r}/x/a", 0777) = 0', f'1 mkdir("{r}/x/ab", 0777) = 0',
+                 f'1 chdir("{r}/x/ab") = 0', f'1 rename("{r}/x/a", "{r}/z") = 0']
+        self.assertEqual(self.parse(lines).cwd["1"], f"{r}/x/ab")
+
+    def test_every_process_whose_working_directory_is_below_moves_and_the_others_do_not(self) -> None:
+        r = self.root
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 mkdir("{r}/x/sub", 0777) = 0', f'1 mkdir("{r}/other", 0777) = 0',
+                 f'1 chdir("{r}/x") = 0', f'2 chdir("{r}/x/sub") = 0', f'3 chdir("{r}/other") = 0', f'4 chdir("{r}") = 0',
+                 f'3 rename("{r}/x", "{r}/y") = 0']
+        parser = self.parse(lines)
+        self.assertEqual(parser.cwd, {"1": f"{r}/y", "2": f"{r}/y/sub", "3": f"{r}/other", "4": r})
+
+    def test_a_second_process_probing_through_the_link_after_the_rename_fails_closed(self) -> None:
+        r = self.root
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 symlink("/etc", "{r}/x/ln") = 0', f'2 chdir("{r}/x") = 0',
+                 f'1 rename("{r}/x", "{r}/y") = 0', '2 execve("ln/zzz", ["zzz"], 0x7ffd /* 1 var */) = -1 ENOENT (x)']
+        self.assertFailsClosed(lines, where="tracker", fragment="中间分量是符号链接")
+
+    def test_the_working_directory_equal_to_the_renamed_directory_and_a_chain_of_renames(self) -> None:
+        r = self.root
+        lines = [f'1 mkdir("{r}/a", 0777) = 0', f'1 chdir("{r}/a") = 0', f'1 rename("{r}/a", "{r}/b") = 0',
+                 f'1 rename("{r}/b", "{r}/c") = 0', f'1 mkdir("{r}/d", 0777) = 0', f'1 rename("{r}/c", "{r}/d/e") = 0']
+        parser = self.parse(lines)
+        self.assertEqual(parser.cwd["1"], f"{r}/d/e")
+        self.assertEqual(parser.unresolved_reasons, {})
+
+    def test_a_failed_rename_changes_no_working_directory(self) -> None:
+        r = self.root
+        for error in ("ENOENT", "EEXIST", "ENOTEMPTY", "EXDEV", "EINVAL"):
+            with self.subTest(error=error):
+                lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 chdir("{r}/x") = 0', f'1 rename("{r}/x", "{r}/y") = -1 {error} (x)']
+                self.assertEqual(self.parse(lines).cwd["1"], f"{r}/x")
+
+    def test_rename_over_an_empty_directory_leaves_the_victims_working_directory_text_alone(self) -> None:
+        """被覆盖的目录里的进程，工作目录成了已删除的目录；文本不改（见 ``_relocate_working_directories`` 的说明）。"""
+        r = self.root
+        lines = [f'1 mkdir("{r}/src", 0777) = 0', f'1 mkdir("{r}/victim", 0777) = 0', f'2 chdir("{r}/victim") = 0',
+                 f'1 chdir("{r}/src") = 0', f'1 rename("{r}/src", "{r}/victim") = 0']
+        parser = self.parse(lines)
+        self.assertEqual(parser.cwd, {"1": f"{r}/victim", "2": f"{r}/victim"}, "改名者的工作目录跟着走；被覆盖目录里的进程文本不变")
+        self.assertEqual(parser.unresolved_reasons, {})
+
+    def test_the_conservative_direction_after_an_overwrite_is_never_a_pass_through_a_link(self) -> None:
+        """被覆盖目录里的进程走相对路径，文本路径落在改名过来的子树里：有链接就保守地判问题，绝不会反过来放行。"""
+        r = self.root
+        lines = [f'1 mkdir("{r}/src", 0777) = 0', f'1 symlink("/etc", "{r}/src/ln") = 0', f'1 mkdir("{r}/victim", 0777) = 0',
+                 f'2 chdir("{r}/victim") = 0', f'1 rename("{r}/src", "{r}/victim") = 0',
+                 '2 execve("ln/zzz", ["zzz"], 0x7ffd /* 1 var */) = -1 ENOENT (x)']
+        self.assertFailsClosed(lines, where="tracker", fragment="中间分量是符号链接")
+
+    def test_the_dirfd_spellings_renameat_and_renameat2_follow_too(self) -> None:
+        r = self.root
+        base = [f'1 mkdir("{r}/x", 0777) = 0', f'1 chdir("{r}/x") = 0']
+        cases = {
+            "renameat": f'1 renameat(AT_FDCWD<{r}/x>, "{r}/x", AT_FDCWD<{r}/x>, "{r}/y") = 0',
+            "renameat2 标志 0": f'1 renameat2(AT_FDCWD<{r}/x>, "{r}/x", AT_FDCWD<{r}/x>, "{r}/y", 0) = 0',
+            "renameat2 NOREPLACE": f'1 renameat2(AT_FDCWD<{r}/x>, "{r}/x", AT_FDCWD<{r}/x>, "{r}/y", RENAME_NOREPLACE) = 0',
+            "renameat2 WHITEOUT": f'1 renameat2(AT_FDCWD<{r}/x>, "{r}/x", AT_FDCWD<{r}/x>, "{r}/y", RENAME_WHITEOUT) = 0',
+            "相对来源（dirfd 是根）": f'1 renameat(5<{r}>, "x", 5<{r}>, "y") = 0',
+        }
+        for label, line in cases.items():
+            with self.subTest(label=label):
+                parser = self.parse(base + [line])
+                # 注意：前面的 AT_FDCWD<…/x> 标注会把调用时刻的工作目录刷新成 x；调用之后工作目录应是 y。
+                self.assertEqual(parser.cwd["1"], f"{r}/y", label)
+
+    def test_exchange_swaps_both_sides(self) -> None:
+        r = self.root
+        lines = [f'1 mkdir("{r}/a", 0777) = 0', f'1 mkdir("{r}/b", 0777) = 0', f'1 mkdir("{r}/b/in", 0777) = 0',
+                 f'1 chdir("{r}/a") = 0', f'2 chdir("{r}/b/in") = 0', f'3 chdir("{r}") = 0',
+                 f'3 renameat2(AT_FDCWD<{r}>, "{r}/a", AT_FDCWD<{r}>, "{r}/b", RENAME_EXCHANGE) = 0']
+        parser = self.parse(lines)
+        self.assertEqual(parser.cwd, {"1": f"{r}/b", "2": f"{r}/a/in", "3": r})
+        # 跟踪器仍拒绝 exchange（这里只固定文本工作目录与内核一致）。
+        self.assertTrue(any("RENAME_EXCHANGE" in problem for problem in parser.output_tracker.problems))
+
+    def test_a_clone_in_flight_inherits_the_moved_directory(self) -> None:
+        """父进程的 clone 还没返回（unfinished）时，别的进程改名了它的工作目录；子进程继承的是改名后的目录。"""
+        r = self.root
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 chdir("{r}/x") = 0', '1 clone(child_stack=NULL, flags=SIGCHLD) <unfinished ...>',
+                 f'2 chdir("{r}") = 0', f'2 rename("{r}/x", "{r}/y") = 0', '1 <... clone resumed>) = 7']
+        parser = self.parse(lines)
+        self.assertEqual((parser.cwd["1"], parser.cwd["7"]), (f"{r}/y", f"{r}/y"))
+
+    def test_a_link_created_before_the_rename_in_the_children_cwd_is_still_seen(self) -> None:
+        r = self.root
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 symlink("/etc", "{r}/x/ln") = 0', f'1 chdir("{r}/x") = 0',
+                 '1 clone(child_stack=NULL, flags=SIGCHLD) = 8', f'1 rename("{r}/x", "{r}/y") = 0',
+                 '8 execve("ln/zzz", ["zzz"], 0x7ffd /* 1 var */) = -1 ENOENT (x)']
+        self.assertFailsClosed(lines, where="tracker", fragment="中间分量是符号链接")
+
+    def test_at_calls_never_needed_the_rewrite_and_still_see_the_link(self) -> None:
+        r = self.root
+        lines = self.x_then_renamed() + [f'1 openat(AT_FDCWD<{r}/y>, "ln/zzz", O_RDONLY) = -1 ENOENT (x)']
+        self.assertFailsClosed(lines, where="tracker", fragment="中间分量是符号链接")
+
+    def test_v3_does_not_touch_the_working_directories(self) -> None:
+        r = self.root
+        lines = [f'1 mkdir("{r}/x", 0777) = 0', f'1 chdir("{r}/x") = 0', f'1 rename("{r}/x", "{r}/y") = 0']
+        for label, parser in (("v3 带隔离合同", ra.TraceParser(strict=True, runtime_context=self.context)),
+                              ("默认解析器（声明级采样、control 四链）", ra.TraceParser(strict=True))):
+            with self.subTest(label=label):
+                for line in lines:
+                    parser.feed(line)
+                self.assertEqual(parser.cwd["1"], f"{r}/x", "v3 一字不变：工作目录不随 rename 改写")
