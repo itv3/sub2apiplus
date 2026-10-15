@@ -34,6 +34,7 @@ from tools.ci import read_audit as ra
 from tools.ci import read_audit_runtime as runtime
 from tools.official_client_capture.tests.test_ci_read_audit_v4_tracker import Builder
 from tools.official_client_capture.tests.test_ci_read_audit_wp_r3 import R3Fixture, STAT_LNK, STAT_REG
+from tools.official_client_capture.tests.test_ci_read_audit_wp_r4 import DIR_STRUCT, R4Fixture
 
 
 def _hazard_before_wp_r7a(tracker: Any, base: str | None, raw: str) -> bool:
@@ -742,3 +743,128 @@ class TwoPathCallsAreCheckedBeforeTheTrackerMovesAnythingTests(R7aFixture):
     def test_v3_has_no_path_form_check_at_all(self) -> None:
         document = self.document(self.chain_lines() + [self.two_path_calls("ln", "ln/../y")["rename"]], contract="v3")
         self.assertNotIn(self.HAZARD, document["coverage"]["unresolved_reasons"])
+
+
+# =====================================================================================================================
+# I-2：/proc 登记边界的四处“实现正确但测试守不住”（第四轮验收的非等价存活变异）
+# =====================================================================================================================
+
+
+class ProcRegistrationBoundaryTests(R4Fixture):
+    """每条用例对应验收报告里一个存活变异：去掉那处判断，原来的 72 条新用例与其余读集审计测试全绿；有了这里的用例就会红。
+
+    * M37 ``/proc`` 自身（遍历整张宿主进程表的 ``getdents64(/proc)``、``stat /proc``）必须仍是宿主访问；
+    * M38 ``/proc/<p>/<单个非叶非 task 的名字>``（``root``／``cwd``／``exe``／``fd``……）的 stat／打开目录／chdir／不存在探测必须仍是宿主访问；
+    * M31 ``/proc/<p>/<非 task 的名字>/<已见 pid>/<叶>`` 必须仍是宿主访问（``root``／``cwd`` 会被内核解引用到宿主目录里名为 ``<pid>`` 的东西）；
+    * M41 ``task/<tid>/<叶>`` 的写与执行必须仍是宿主访问（顶层叶文件的写早有测试，task 之下的没有）。
+    """
+
+    OWN = 100
+
+    def open_line(self, target: str, flags: str = "O_RDONLY|O_CLOEXEC", *, resolved: str | None = None) -> str:
+        return f'{self.OWN} openat(AT_FDCWD</repo>, "{target}", {flags}) = 3<{target if resolved is None else resolved}>'
+
+    def stat_line(self, target: str, *, errno: str = "") -> str:
+        return f'{self.OWN} newfstatat(AT_FDCWD</repo>, "{target}", {DIR_STRUCT if not errno else "0x7ffd1234"}, 0) = {"-1 " + errno if errno else "0"}'
+
+    def accesses(self, lines: list[str]) -> dict[str, set[str]]:
+        parser = self.parse([self.open_line("/etc/hostname")] + lines)
+        self.assertEqual(parser.unresolved_reasons, {})
+        accessed = dict(parser.accesses)
+        accessed.pop("/etc/hostname")
+        return accessed
+
+    # ---- M37 ----
+    def test_proc_itself_is_always_a_host_access(self) -> None:
+        """遍历整张宿主进程表是最重要的失败关闭（语料里有 8 次）；/proc 自身在任何访问类型下都不属于单元内部状态。"""
+        cases = {
+            "枚举": (f'{self.OWN} getdents64(3</proc>, 0x1234, 32768) = 600', {"list"}),
+            "stat": (self.stat_line("/proc"), {"stat"}),
+            "stat 失败": (self.stat_line("/proc", errno="EACCES"), {"stat"}),
+            "打开目录": (self.open_line("/proc", "O_RDONLY|O_DIRECTORY|O_CLOEXEC"), {"dir"}),
+            "chdir": (f'{self.OWN} chdir("/proc") = 0', {"dir"}),
+            "不存在探测": (self.stat_line("/proc", errno="ENOENT"), {"missing"}),
+        }
+        for label, (line, kinds) in cases.items():
+            with self.subTest(label=label):
+                self.assertEqual(self.accesses([line]), {"/proc": kinds})
+
+    def test_a_process_table_scan_is_not_internal_even_for_the_own_pid_when_it_goes_through_proc_itself(self) -> None:
+        lines = [f'{self.OWN} getdents64(3</proc>, 0x1234, 32768) = 600', self.stat_line(f"/proc/{self.OWN}"),
+                 self.open_line(f"/proc/{self.OWN}/status")]
+        accessed = self.accesses(lines)
+        self.assertEqual(accessed, {"/proc": {"list"}}, "自己的 pid 照旧放行；但枚举 /proc 本身仍登记")
+        self.assertFalse(self.audit(self.document([self.open_line("/etc/hostname")] + lines))["coverage_complete"])
+
+    # ---- M38 ----
+    def test_magic_link_and_descriptor_directories_are_host_accesses_for_every_metadata_kind(self) -> None:
+        names = ("root", "cwd", "exe", "fd", "fdinfo", "ns", "map_files", "attr", "net", "environ", "auxv", "mountinfo")
+        for who in ("self", "thread-self", str(self.OWN)):
+            for name in names:
+                target = f"/proc/{who}/{name}"
+                cases = {
+                    "stat（跟随）": (self.stat_line(target), {"stat"}),
+                    "stat 失败": (self.stat_line(target, errno="EACCES"), {"stat"}),
+                    "不存在探测": (self.stat_line(target, errno="ENOENT"), {"missing"}),
+                    "打开目录": (self.open_line(target, "O_RDONLY|O_DIRECTORY|O_CLOEXEC", resolved="/home/secret"), {"dir"}),
+                    "chdir": (f'{self.OWN} chdir("{target}") = 0', {"dir"}),
+                }
+                for label, (line, kinds) in cases.items():
+                    with self.subTest(who=who, name=name, label=label):
+                        accessed = self.accesses([line])
+                        self.assertEqual(accessed.get(target), kinds, (target, accessed))
+
+    def test_task_is_the_only_directory_name_that_is_internal(self) -> None:
+        """对照：同样的 stat／打开目录／不存在，换成 ``task`` 就是单元内部状态（M38 去掉判断后 root／cwd 就和它一样了）。"""
+        for line in (self.stat_line("/proc/self/task"), self.open_line("/proc/self/task", "O_RDONLY|O_DIRECTORY", resolved=f"/proc/{self.OWN}/task"),
+                     self.stat_line(f"/proc/{self.OWN}/task", errno="ENOENT")):
+            with self.subTest(line=line[:60]):
+                self.assertEqual(self.accesses([line]), {})
+
+    # ---- M31 ----
+    def test_a_seen_pid_below_a_non_task_directory_is_a_host_access(self) -> None:
+        """``/proc/100/root/100/status`` 内核会解引用 root 到宿主根目录，再去读宿主 ``/100/status``——不是本进程的状态。"""
+        for middle in ("root", "cwd", "exe", "fd", "fdinfo", "ns", "map_files", "net"):
+            for leaf in ("status", "stat", "comm", "maps"):
+                for who in ("self", str(self.OWN)):
+                    target = f"/proc/{who}/{middle}/{self.OWN}/{leaf}"
+                    with self.subTest(target=target):
+                        accessed = self.accesses([self.open_line(target, resolved=f"/{self.OWN}/{leaf}")])
+                        self.assertIn(target, accessed)
+
+    def test_the_real_task_form_is_the_only_internal_one(self) -> None:
+        for target in (f"/proc/{self.OWN}/task/{self.OWN}/status", f"/proc/self/task/{self.OWN}/stat", f"/proc/thread-self/stat"):
+            with self.subTest(target=target):
+                self.assertEqual(self.accesses([self.open_line(target)]), {})
+
+    # ---- M41 ----
+    def test_task_leaves_are_not_writable_or_executable_internal_state(self) -> None:
+        leaf = f"/proc/{self.OWN}/task/{self.OWN}/comm"
+        via_self = f"/proc/self/task/{self.OWN}/comm"
+        cases = {
+            "写打开": self.open_line(leaf, "O_WRONLY|O_CLOEXEC"),
+            "读写打开": self.open_line(via_self, "O_RDWR"),
+            "O_CREAT": self.open_line(leaf, "O_WRONLY|O_CREAT|O_TRUNC", resolved=leaf),
+            "O_APPEND": self.open_line(leaf, "O_WRONLY|O_APPEND"),
+            "成功的 execve": f'{self.OWN} execve("{leaf}", ["comm"], 0x1) = 0',
+            "chmod": f'{self.OWN} chmod("{leaf}", 0600) = -1 EPERM (Operation not permitted)',
+            "truncate": f'{self.OWN} truncate("{leaf}", 0) = -1 EACCES (Permission denied)',
+            "unlink": f'{self.OWN} unlink("{leaf}") = -1 EPERM (Operation not permitted)',
+            "utimensat": f'{self.OWN} utimensat(AT_FDCWD</repo>, "{leaf}", NULL, 0) = -1 EPERM (Operation not permitted)',
+        }
+        for label, line in cases.items():
+            with self.subTest(label=label):
+                accessed = self.accesses([line])
+                self.assertTrue(any(path in {leaf, via_self} for path in accessed), (label, accessed))
+
+    def test_task_directories_are_not_enumerable_internal_state(self) -> None:
+        for directory in (f"/proc/{self.OWN}/task", f"/proc/{self.OWN}/task/{self.OWN}"):
+            with self.subTest(directory=directory):
+                self.assertEqual(self.accesses([f'{self.OWN} getdents64(3<{directory}>, 0x1234, 32768) = 100']), {directory: {"list"}})
+
+    def test_the_read_forms_of_the_same_leaves_stay_internal(self) -> None:
+        """对照：同一个叶文件的只读打开、只读探测放行，上面的写与执行才有“不放行”的意义。"""
+        leaf = f"/proc/{self.OWN}/task/{self.OWN}/comm"
+        for line in (self.open_line(leaf), self.open_line(leaf, "O_RDONLY"), self.stat_line(leaf, errno="EACCES"), self.stat_line(leaf, errno="ENOENT")):
+            with self.subTest(line=line[:60]):
+                self.assertEqual(self.accesses([line]), {})

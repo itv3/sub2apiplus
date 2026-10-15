@@ -388,6 +388,11 @@ def _plain_path_text(raw: str | None) -> bool:
 #   * cmdline／comm：进程自己的命令行与线程名，由被测程序自己（或其父进程）设定；
 #   * maps／smaps／smaps_rollup：进程自己的地址空间布局。其中出现的映射文件路径，都已经因为被 mmap 而在轨迹里作为独立的
 #     打开访问登记过（需要各自的快照），这里不重复；地址、偏移是 ASLR 随机值。
+# 诚实声明（WP-R7a，第四轮验收一般-3）：名单里的文件**确实带宿主态**——``status`` 的 Cpus_allowed／Mems_allowed／Cap*／Seccomp／Groups、``limits``
+# （继承自宿主会话的 rlimit）、``oom_score``（随宿主总内存）、``stat`` 的 starttime／processor。放行它们是需求的明文要求，理由是它们与不被
+# 审计跟踪的 ``getuid()``／``sched_getaffinity()``／``getrlimit()`` 同类：被测程序本来就能用系统调用直接读到同样的值，审计从不把这类
+# 系统调用当作宿主输入；这里放行的是“经由 /proc 读同样的值”，不是新增的信息通道。读到的内容会影响程序行为，所以依赖它们的单元
+# 在不同宿主上本来就不可复现——这一点由承接口径（同机、同环境）而不是读集审计保证。
 # 刻意不在名单里的（继续按宿主访问判，需要声明或保持失败关闭）：root／cwd／exe／fd／fdinfo（魔法链接或解引用到宿主路径、枚举描述符）、
 # environ（可能含宿主环境）、ns／mem／net／mountinfo／mounts／cgroup／attr／auxv／wchan（宿主命名空间、内核或容器配置）、task 之下的
 # 非叶文件。pid 必须出现在本轨迹里（行首 pid 或 clone 返回值），别的进程的状态是宿主输入。
@@ -701,8 +706,12 @@ class TraceParser:
         self.call_link: str | None = None          # 当前 symlink／symlinkat 调用的链接文本（WP-R3，原样记下，不解引用）
         self.epoch = 0                             # 变更纪元：此前使名字空间状态改变的事件个数
         self.seen_events: set[tuple] = set()       # 当前纪元内已出现过的事件键，用于只读事件去重
-        # WP-R4（R4-1，仅 v4）：本轨迹里出现过的被追踪进程／线程号（行首 pid、clone／fork／vfork 的返回值；pid 复用时先后属于不同进程都算
-        # 轨迹内部，无需区分）。``_add`` 据此把“自有进程树的 /proc/<pid>/… 白名单叶文件”视为单元内部状态，见 ``_unit_internal_proc``。
+        # WP-R4（R4-1，仅 v4）：本轨迹里出现过的被追踪进程／线程号（行首 pid、clone／fork／vfork 的返回值）。``_add`` 据此把“自有进程树的
+        # /proc/<pid>/… 白名单叶文件”视为单元内部状态，见 ``_unit_internal_proc``。
+        # 取舍（WP-R7a，第四轮验收一般-3）：pid 复用时，先后属于不同进程的同一个编号都算轨迹内部，不区分先后，也不回溯（先读后出现的 pid 不放行）。
+        # 理由：Linux 默认的 pid 分配是循环递增（pid_max 通常 ≥ 32768），单元生命周期内几乎不会绕一圈复用；即使复用，读到的也是同一个 pid
+        # 编号在当时指向的、属于本轨迹进程树之外的进程的白名单叶文件——与上面“带宿主态”同一量级的暴露，不构成新的通道。
+        # 命名空间变化（CLONE_NEW*、unshare、setns）后编号空间本身不再可信，见 ``pid_space_untrusted``。
         self.traced_pids: set[str] = set()
         self.call_plain_paths = True               # 当前调用的路径参数都没有 ``.``／``..`` 分量（v4；有则 /proc 内部状态放宽不适用）
         # WP-R7a（验收 I-1，仅 v4）：轨迹里出现过任何 CLONE_NEW*、unshare、setns 之后置真：此后 pid／tid 编号不再对应同一个 PID 空间，
