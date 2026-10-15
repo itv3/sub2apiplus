@@ -550,6 +550,382 @@ class StalePidTests(_Group):
         self.assertIsNone(bv.process_identity(2 ** 22 + 4321))
 
 
+# ---------------------------------------------------------------------------------------------------------------------
+# 重要 4：真实进程的「相似环境标记」旁观者
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+class LookalikeMarkerBystanderTests(base._SchedulerFixture):
+    """标记按 ``:`` 分段、整段精确匹配。旁观者（同 uid、不是单元的后代）的环境标记是目标标记的前缀、超串、截断、链里别的段……
+    在 abort、超时、预约中止（SIGKILL 档）、单元退出后的残留清理之后都必须存活；对照组（环境里带完全相同的标记，或标记链里有一段相同）
+    必须被清掉——否则「旁观者存活」可能只是因为根本没有按标记找过。"""
+
+    def lookalike_values(self, tag: str) -> dict[str, str]:
+        # 全部带一个非十六进制字符或长度不同，保证不可能恰好等于随机生成的十六进制标记
+        return {
+            "prefix": tag[:8],
+            "truncated": tag[:-1],
+            "superstring": tag + "x",
+            "prepended": "x" + tag,
+            "other-chain": "deadbeefdeadbeef:cafebabecafebabe",
+            "chain-with-superstring-segments": f"deadbeefdeadbeef:{tag}x:x{tag}",
+        }
+
+    def spawn_with_tag(self, name: str, value: str, marker: str) -> subprocess.Popen:
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)", marker + "-" + name], start_new_session=True,
+                                   env={**os.environ, ue.RUN_TAG_ENV: value})
+        self.bystanders.append(process)
+        return process
+
+    def arrange(self, scheduler: ue.Scheduler, mode: str, *, timeout: float | None = None):
+        work = self.start(scheduler, "u", mode, timeout=timeout)
+        item = next(iter(scheduler.running.values()))
+        lookalikes = {name: self.spawn_with_tag(name, value, self.bystander_marker) for name, value in self.lookalike_values(item.tag).items()}
+        controls = {"exact": self.spawn_with_tag("exact", item.tag, self.marker),
+                    "exact-in-chain": self.spawn_with_tag("chain", f"deadbeefdeadbeef:{item.tag}", self.marker)}
+        everyone = [process.pid for process in (*lookalikes.values(), *controls.values())]
+        wait_until(lambda: all(pid in ue.process_table() for pid in everyone), "旁观者没有进入进程表")
+        wait_until(lambda: {process.pid for process in controls.values()} <= ue.tag_index(ue.process_table()).get(item.tag, set()),
+                   "对照组的标记没有被进程表读到（环境读取有问题，旁观者存活就不能说明什么）")
+        return work, item, lookalikes, controls
+
+    def check_survivors(self, lookalikes, controls) -> None:
+        for name, process in lookalikes.items():
+            self.assertTrue(alive(process.pid), f"相似标记的旁观者 {name} 被误杀")
+        self.assert_all_gone("单元树和带完全相同标记的对照组必须被清掉")
+        for name, process in controls.items():
+            wait_until(lambda: process.poll() is not None or not alive(process.pid), f"对照组 {name} 应被清掉")
+
+    def test_abort_spares_lookalike_markers(self) -> None:
+        scheduler = self.scheduler()
+        _work, _item, lookalikes, controls = self.arrange(scheduler, "keep")
+        scheduler.abort()
+        self.check_survivors(lookalikes, controls)
+
+    def test_timeout_cleanup_spares_lookalike_markers(self) -> None:
+        scheduler = self.scheduler()
+        _work, _item, lookalikes, controls = self.arrange(scheduler, "keep", timeout=1.0)
+        outcomes = scheduler.reap(block=True)
+        self.assertTrue(outcomes[0].timed_out)
+        self.check_survivors(lookalikes, controls)
+
+    def test_reservation_sigkill_stage_spares_lookalike_markers(self) -> None:
+        scheduler = self.scheduler()
+        _work, item, lookalikes, controls = self.arrange(scheduler, "keep")
+        scheduler._signal_session(item.pid, signal.SIGKILL)
+        scheduler.reap(block=True)
+        self.check_survivors(lookalikes, controls)
+
+    def test_orphan_cleanup_after_the_unit_exits_spares_lookalike_markers(self) -> None:
+        scheduler = self.scheduler()
+        _work, _item, lookalikes, controls = self.arrange(scheduler, "exit")
+        outcomes = scheduler.reap(block=True)
+        self.assertEqual(len(outcomes), 1)
+        self.check_survivors(lookalikes, controls)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# 重要 4：嵌套执行器——内层 abort 保护祖先、兄弟与自己；外层 stop 把内层单元当后代清掉
+# ---------------------------------------------------------------------------------------------------------------------
+
+# 外层单元的根：除了启动内层调度器的进程外，还有两个与内层无关的「兄弟」（一个另起会话、一个同会话）。
+SHIM_SCRIPT = textwrap.dedent(
+    r'''
+    import json, os, subprocess, sys, time
+    from pathlib import Path
+
+    repo, marker, work = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+    SLEEP = "import time; time.sleep(300)"
+    sibling = subprocess.Popen([sys.executable, "-c", SLEEP, marker + "-sibling"], start_new_session=True)
+    plain = subprocess.Popen([sys.executable, "-c", SLEEP, marker + "-plain"])
+    driver = subprocess.Popen([sys.executable, "-B", str(work / "driver.py"), repo, marker, str(work), str(os.getpid()), str(sibling.pid),
+                               str(plain.pid)], start_new_session=True)
+    (work / "shim.json").write_text(json.dumps({"shim": os.getpid(), "sibling": sibling.pid, "plain": plain.pid, "driver": driver.pid}))
+    while True:
+        time.sleep(300)
+    '''
+)
+
+# 内层调度器：相当于测试里自己起的 ``unit_executor.py run-unit``（另起会话的进程），里面有一个内层单元（嵌套＋孙辈）。
+DRIVER_SCRIPT = textwrap.dedent(
+    r'''
+    import json, os, subprocess, sys, time
+    from pathlib import Path
+
+    repo, marker, work = sys.argv[1], sys.argv[2], Path(sys.argv[3])
+    shim_pid, sibling_pid, plain_pid = (int(value) for value in sys.argv[4:7])
+    INNER_ABORTS = __INNER_ABORTS__
+    sys.path.insert(0, repo)
+    from tools.ci import unit_executor as ue
+
+
+    class Recorder:
+        def __init__(self):
+            self.currents = {}
+
+        def write(self, item, outcome):
+            outcome.extra.setdefault("record_path", "")
+            outcome.extra.setdefault("record_sha256", "")
+            return {}
+
+
+    def alive(pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        return bool(state) and not state.startswith("Z")
+
+
+    out = work / "inner-out"
+    out.mkdir()
+    config = ue.ExecutorConfig(default_parallelism=1, default_quota=ue.Quota(1, 128), quotas={}, splits={}, exclusive=(),
+                               unit_timeout_seconds=600, orphan_grace_seconds=0.0, raw={})
+    scheduler = ue.Scheduler(out_dir=out, state_dir=work / "inner-state", parallelism=1, machine_cores=4, machine_memory=4096,
+                             config=config, policy="p", start=work, recorder=Recorder())
+    inner_work = work / "inner"
+    inner_work.mkdir()
+    unit = ue.Unit(unit_id="inner", module="inner", test_ids=(), quota=ue.Quota(1, 128), exclusive=False, weight=1.0,
+                   command=(sys.executable, "-B", str(work / "nest.py"), marker + "-inner", str(inner_work), "keep"), cwd=str(work))
+    scheduler.launch(unit, "formal")
+    deadline = time.time() + 30
+    while not (inner_work / "ready").exists():
+        assert time.time() < deadline, "inner unit did not become ready"
+        time.sleep(0.05)
+    tracked = {"inner_root": next(iter(scheduler.running)), "nested": int((inner_work / "nested.pid").read_text()),
+               "grand": int((inner_work / "grand.pid").read_text())}
+    (work / "inner.ready").write_text(json.dumps(tracked))
+    if INNER_ABORTS:
+        while not (work / "abort-now").exists():
+            time.sleep(0.05)
+        scheduler.abort()
+        survivors = {"inner_root": tracked["inner_root"], "nested": tracked["nested"], "grand": tracked["grand"],
+                     "shim": shim_pid, "sibling": sibling_pid, "plain": plain_pid, "driver": os.getpid()}
+        (work / "after.json").write_text(json.dumps({name: alive(pid) for name, pid in survivors.items()}))
+    while True:
+        time.sleep(300)
+    '''
+)
+
+
+class NestedExecutorTests(base._SchedulerFixture):
+    def launch_nested(self, inner_aborts: bool):
+        scheduler = self.scheduler()
+        work = self.root / "outer"
+        work.mkdir()
+        (work / "driver.py").write_text(DRIVER_SCRIPT.replace("__INNER_ABORTS__", repr(inner_aborts)), encoding="utf-8")
+        (work / "nest.py").write_text(base.NEST_SCRIPT, encoding="utf-8")
+        (work / "shim.py").write_text(SHIM_SCRIPT, encoding="utf-8")
+        unit = ue.Unit(unit_id="outer", module="outer", test_ids=(), quota=ue.Quota(1, 128), exclusive=False, weight=1.0,
+                       command=(sys.executable, "-B", str(work / "shim.py"), str(REPO_ROOT), self.marker, str(work)), cwd=str(self.root))
+        scheduler.launch(unit, "formal")
+        wait_until((work / "inner.ready").exists, "内层单元没有就绪", seconds=40)
+        wait_until((work / "shim.json").exists, "外层根没有写出兄弟进程号", seconds=10)
+        return scheduler, work, json.loads((work / "inner.ready").read_text()), json.loads((work / "shim.json").read_text())
+
+    def test_inner_abort_protects_its_ancestors_siblings_and_itself(self) -> None:
+        scheduler, work, _inner, _outer = self.launch_nested(True)
+        bystander = self.bystander()
+        (work / "abort-now").touch()
+        wait_until((work / "after.json").exists, "内层 abort 没有完成", seconds=40)
+        after = json.loads((work / "after.json").read_text())
+        for name in ("inner_root", "nested", "grand"):
+            self.assertFalse(after[name], f"内层单元的 {name} 应被内层 abort 清掉")
+        for name in ("shim", "sibling", "plain", "driver"):
+            self.assertTrue(after[name], f"内层 abort 不得动外层的 {name}（祖先、兄弟、自己）")
+        self.assertTrue(alive(bystander))
+        self.assertTrue(alive(os.getpid()))
+        # 外层 abort 再把外层单元里剩下的（兄弟、内层调度器自己）全部带走
+        scheduler.abort()
+        self.assert_all_gone("外层 abort 之后外层单元里的全部进程都要清掉")
+        self.assertTrue(alive(bystander))
+
+    def test_outer_abort_takes_the_inner_units_as_descendants(self) -> None:
+        scheduler, _work, inner, outer = self.launch_nested(False)
+        bystander = self.bystander()
+        # 外层根＋兄弟 2＋内层调度器＋内层单元的根、嵌套、孙辈
+        self.assertEqual(len(marked_processes(self.marker)), 7, marked_processes(self.marker))
+        scheduler.abort()
+        self.assert_all_gone("外层 stop 时内层单元（另起会话的嵌套、孙辈、内层调度器）算外层的后代，必须一并清掉")
+        for pid in (*inner.values(), *outer.values()):
+            self.assertFalse(alive(pid), f"进程 {pid} 应已被清掉")
+        self.assertTrue(alive(bystander))
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# 一般：abort 的二次中断、预约中止先取快照、冻结防漏网、残留清理的宽限与留证、僵尸与轮数上限
+# ---------------------------------------------------------------------------------------------------------------------
+
+# 单元根起一个另起会话的「风暴进程」，它持续 fork 另起会话的睡眠进程；根本身不 fork。杀掉根不会让风暴停下来，
+# 必须把风暴进程冻结住才收得干净（对应「预约 SIGKILL 档不走冻结」「stop 路径冻结」这类变异）。
+DETACHED_STORM_SCRIPT = textwrap.dedent(
+    r'''
+    import subprocess, sys, time
+    from pathlib import Path
+
+    marker, work = sys.argv[1], Path(sys.argv[2])
+    STORMER = (
+        "import subprocess, sys, time\n"
+        "deadline = time.time() + 40\n"
+        "while time.time() < deadline:\n"
+        "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)', sys.argv[1] + '-storm'], start_new_session=True)\n"
+        "    time.sleep(0.003)\n"
+    )
+    stormer = subprocess.Popen([sys.executable, "-c", STORMER, marker + "-stormer"], start_new_session=True)
+    (work / "ready").write_text(str(stormer.pid))
+    time.sleep(300)
+    '''
+)
+
+# 单元根起一个另起会话的孩子后自己立刻退出。孩子收到 SIGTERM 只写个文件不退出，``delay`` 秒后自己退出。
+GRACE_SCRIPT = textwrap.dedent(
+    r'''
+    import os, signal, subprocess, sys, time
+    from pathlib import Path
+
+    marker, work, delay = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
+    CHILD = (
+        "import os, signal, sys, time\n"
+        "from pathlib import Path\n"
+        "work = Path(sys.argv[1])\n"
+        "def term(signum, frame):\n"
+        "    (work / 'termed').write_text('1')\n"
+        "signal.signal(signal.SIGTERM, term)\n"
+        "(work / 'child.pid').write_text(str(os.getpid()))\n"
+        "end = time.time() + float(sys.argv[2])\n"
+        "while time.time() < end:\n"
+        "    time.sleep(0.05)\n"
+    )
+    child = subprocess.Popen([sys.executable, "-c", CHILD, str(work), delay, marker + "-child"], start_new_session=True)
+    while not (work / "child.pid").exists():
+        time.sleep(0.02)
+    (work / "ready").write_text("1")
+    sys.exit(0)
+    '''
+)
+
+
+class _ScriptUnits(base._SchedulerFixture):
+    def start_script(self, scheduler: ue.Scheduler, name: str, script: str, *extra: str, timeout: float | None = None) -> Path:
+        work = self.root / name
+        work.mkdir()
+        path = self.root / f"{name}.py"
+        path.write_text(script, encoding="utf-8")
+        unit = ue.Unit(unit_id=name, module=name, test_ids=(), quota=ue.Quota(1, 128), exclusive=False, weight=1.0,
+                       command=(sys.executable, "-B", str(path), self.marker + "-" + name, str(work), *extra), cwd=str(self.root),
+                       timeout_seconds=timeout)
+        scheduler.launch(unit, "formal")
+        wait_until((work / "ready").exists, f"单元 {name} 没有进入就绪状态")
+        return work
+
+    def events(self) -> list[dict]:
+        path = self.root / "out" / "events.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+class ReservationSigkillSnapshotFirstTests(_ScriptUnits):
+    def test_a_detached_fork_storm_is_frozen_not_chased(self) -> None:
+        for path in ("reservation-sigkill", "abort", "orphan-cleanup"):
+            with self.subTest(path=path):
+                self.setUp()
+                scheduler = self.scheduler()
+                work = self.start_script(scheduler, "storm", DETACHED_STORM_SCRIPT)
+                wait_until(lambda: len(marked_processes(self.marker)) >= 8, "fork 风暴没有起来")
+                item = next(iter(scheduler.running.values()))
+                if path == "reservation-sigkill":
+                    scheduler._signal_session(item.pid, signal.SIGKILL)
+                    scheduler.reap(block=True)
+                elif path == "abort":
+                    scheduler.abort()
+                else:
+                    os.kill(item.pid, signal.SIGTERM)   # 单元根自己退出，风暴进程成了孤儿，走残留清理
+                    scheduler.reap(block=True)
+                self.assert_all_gone(f"{path}: 风暴进程必须被冻住再杀，不能留下新 fork 出来的进程")
+                self.assertFalse(alive(int((work / "ready").read_text())))
+
+
+class OrphanCleanupTests(_ScriptUnits):
+    def test_orphans_that_exit_within_the_grace_period_are_neither_signalled_nor_counted(self) -> None:
+        scheduler = self.scheduler(grace=10.0)
+        work = self.start_script(scheduler, "polite", GRACE_SCRIPT, "1.5")
+        began = time.monotonic()
+        outcomes = scheduler.reap(block=True)
+        self.assertEqual(outcomes[0].orphans, [], "宽限期内自己退出的不算孤儿")
+        self.assertFalse((work / "termed").exists(), "宽限期内自己退出的不该收到 SIGTERM")
+        self.assertGreaterEqual(time.monotonic() - began, 1.0, "要等它自己退出，而不是立刻动手")
+        self.assertLess(time.monotonic() - began, 9.0)
+        self.assert_all_gone()
+
+    def test_orphans_that_outlive_the_grace_period_are_counted_signalled_then_killed(self) -> None:
+        scheduler = self.scheduler(grace=1.0)
+        work = self.start_script(scheduler, "stubborn", GRACE_SCRIPT, "300")
+        outcomes = scheduler.reap(block=True)
+        self.assertEqual(len(outcomes[0].orphans), 1)
+        self.assertTrue((work / "termed").exists(), "宽限期过后先礼貌地发 SIGTERM")
+        self.assert_all_gone("不退出的孤儿最终被 SIGKILL")
+
+
+class SurvivorSemanticsTests(_ScriptUnits):
+    def test_zombies_are_never_survivors(self) -> None:
+        """僵尸（已退出、等父进程回收）不是活着的残留：预约中止后核对「不再有活跃进程」时若把它算进去会误拒授予整机。"""
+
+        scheduler = self.scheduler()
+        zombie = subprocess.Popen([sys.executable, "-c", "pass"])   # 不 wait：留成僵尸
+        self.addCleanup(zombie.wait)
+        wait_until(lambda: stat_of(zombie.pid)[:1] == "Z", "没有造出僵尸")
+        table = ue.process_table()
+        item = ue.Running(ue.Unit(unit_id="z", module="z", test_ids=(), quota=ue.Quota(1, 128), exclusive=False, weight=1.0,
+                                  command=("true",), cwd=str(self.root)), 2 ** 22 - 1, 0.0, self.root / "l", self.root / "r",
+                          self.root / "c", "formal", known={zombie.pid: table[zombie.pid].start})
+        self.assertEqual(scheduler._survivors(item, table), {}, "名册里的僵尸不算存活")
+
+    def test_tag_index_skips_zombies_even_when_their_environment_is_readable(self) -> None:
+        proc = self.root / "proc"
+        (proc / "self").mkdir(parents=True)
+        (proc / "self" / "stat").write_text("1 (self) S 0 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 0 0\n")
+        for pid, state in ((20, "Z"), (21, "S")):
+            (proc / str(pid)).mkdir()
+            (proc / str(pid) / "stat").write_text(f"{pid} (cmd) {state} 1 {pid} {pid} 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 {pid}00 100 200\n")
+            (proc / str(pid) / "environ").write_bytes(b"UNIT_EXECUTOR_RUN_TAG=feedface\0")
+        with mock.patch.object(ue, "PROC_ROOT", proc):
+            self.assertEqual(ue.tagged_pids("feedface", ue.process_table()), {21})
+
+
+class FreezeRoundsAreBoundedTests(base._Fixture):
+    """快照永远收敛不了（每轮冒出一个新进程）时，冻结阶段也只做有限轮——不能让 stop／abort 因此永远不返回。"""
+
+    def bounded(self, function, seconds: float = 30.0) -> None:
+        thread = threading.Thread(target=function, daemon=True)
+        thread.start()
+        thread.join(seconds)
+        self.assertFalse(thread.is_alive(), "冻结轮数没有上限，调用永不返回")
+
+    def test_executor_kill_processes_stops_after_freeze_rounds(self) -> None:
+        calls = {"n": 0}
+
+        def endless() -> dict:
+            calls["n"] += 1
+            pid = 2 ** 22 + 1000 + calls["n"]   # 不存在的 pid：冻结不了，所以下一轮又当「新进程」
+            return {pid: ue.ProcInfo(pid, 1, pid, "fake", "S")}
+
+        self.bounded(lambda: ue.kill_processes(endless))
+        self.assertLessEqual(calls["n"], ue.FREEZE_ROUNDS + 3, "冻结最多 FREEZE_ROUNDS 轮，扫荡最多 3 轮")
+
+    def test_validation_kill_snapshot_stops_after_freeze_rounds(self) -> None:
+        calls = {"n": 0}
+
+        def endless(root, previous, notes):
+            calls["n"] += 1
+            return {**previous, 2 ** 22 + 1000 + calls["n"]: "fake"}
+
+        with mock.patch.object(bv, "_refresh_snapshot", side_effect=endless):
+            self.bounded(lambda: bv._kill_snapshot({}, None, []))
+        self.assertLessEqual(calls["n"], bv.FREEZE_ROUNDS + 3)
+
+
 class EarlierSnapshotIsKeptTests(base._Fixture):
     def test_earlier_snapshot_is_still_used_when_every_later_one_fails(self) -> None:
         """第一次快照（SIGTERM 之前）取到了整棵树；之后每次重取都失败。组长与执行器替身收到 SIGTERM 就退出，另起会话的单元、嵌套、
@@ -580,6 +956,27 @@ class EarlierSnapshotIsKeptTests(base._Fixture):
             bv._terminate(payload, notes)
         self.assertTrue(notes)
         self.assert_all_gone("靠第一次快照也要把孤儿清掉")
+
+
+class ValidationDetachedStormTests(base._Fixture):
+    def test_terminate_freezes_a_detached_stormer_that_keeps_forking_after_the_leader_dies(self) -> None:
+        stormer = (
+            "import subprocess, sys, time\n"
+            "deadline = time.time() + 40\n"
+            "while time.time() < deadline:\n"
+            "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)', sys.argv[1] + '-storm'], start_new_session=True)\n"
+            "    time.sleep(0.003)\n"
+        )
+        script = ("import subprocess, sys, time\n"
+                  "subprocess.Popen([sys.executable, '-c', sys.argv[2], sys.argv[1] + '-stormer'], start_new_session=True)\n"
+                  "time.sleep(300)\n")
+        leader = subprocess.Popen([sys.executable, "-c", script, self.marker, stormer], start_new_session=True)
+        threading.Thread(target=leader.wait, daemon=True).start()
+        self.addCleanup(lambda: leader.poll() is None and leader.kill())
+        wait_until(lambda: len(marked_processes(self.marker)) >= 8, "fork 风暴没有起来")
+        with mock.patch.object(bv, "STOP_GRACE_SECONDS", 5.0):
+            bv._terminate({"pid": leader.pid, "pid_start": bv.process_identity(leader.pid)})
+        self.assert_all_gone("组长一死风暴进程成了孤儿仍在 fork：必须冻住再杀，不留新 fork 出来的进程")
 
 
 if __name__ == "__main__":
