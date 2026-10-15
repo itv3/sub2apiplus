@@ -310,9 +310,19 @@ class Openat2Tests(CorpusFixture):
         self.assertAccepted(document)
 
     def test_decoded_o_path_o_nofollow_still_goes_to_symlink_metadata_not_bound(self) -> None:
-        """调度者在 ARM64 上实测的解码形态：标志现在可见，但 O_PATH|O_NOFOLLOW 打开的可能是链接自身，仍缺合同。"""
-        parser = self.parse([DECODED_OPENAT2_ARM64])
+        """调度者在 ARM64 上实测的解码形态：标志现在可见，但 O_PATH|O_NOFOLLOW 打开的可能是链接自身，仍缺合同。
+
+        WP-R4（R6-1）：这条原来用带 ``O_DIRECTORY`` 的 tar 形态（``DECODED_OPENAT2_ARM64``）固定“仍缺合同”；第四轮起
+        ``O_PATH|O_NOFOLLOW|O_DIRECTORY`` 的成功打开按“打开目录”登记（内核保证最后一个分量是目录，见
+        ``read_audit._o_path_directory_open``，配套测试在 ``test_ci_read_audit_wp_r4``），所以这里改用**不带** ``O_DIRECTORY`` 的形态——
+        那才可能打开链接自身，必须仍然失败关闭；v3 对带 ``O_DIRECTORY`` 的形态的结论不变。
+        """
+        without_directory = DECODED_OPENAT2_ARM64.replace("|O_PATH|O_DIRECTORY", "|O_PATH")
+        self.assertNotEqual(without_directory, DECODED_OPENAT2_ARM64)
+        parser = self.parse([without_directory])
         self.assertEqual(parser.unresolved_reasons, {"symlink-metadata-not-bound:openat2": 1})
+        self.assertEqual(self.parse([DECODED_OPENAT2_ARM64], "v3").unresolved_reasons, {"symlink-metadata-not-bound:openat2": 1})
+        self.assertEqual(self.parse([DECODED_OPENAT2_ARM64]).unresolved_reasons, {}, "v4：带 O_DIRECTORY 的成功打开是打开目录")
 
     def test_decoded_write_flags_are_classified_as_writes(self) -> None:
         line = f'9 openat2(AT_FDCWD</tmp>, "x", {{flags=O_WRONLY|O_CREAT|O_EXCL, mode=0644, resolve=0}}, 24) = 3</tmp/x>'

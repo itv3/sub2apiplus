@@ -275,6 +275,23 @@ def _returned_link_stat(name: str, arguments: Sequence[str]) -> bool:
         re.escape(key) + r"\s*=\s*S_IFLNK(?:\|(?:0[0-7]+|S_ISUID|S_ISGID|S_ISVTX))*", modes[0]) is not None
 
 
+def _o_path_directory_open(flags: Iterable[str]) -> bool:
+    """成功的 ``O_PATH|O_NOFOLLOW`` 打开同时带 ``O_DIRECTORY``：打开的是目录，不是“链接自身”（WP-R4，R6-1，仅 v4 使用）。
+
+    内核语义：``O_DIRECTORY`` 在路径解析末尾核对最后一个分量必须是目录（``path_lookupat`` 的 ``LOOKUP_DIRECTORY`` 检查，
+    ``O_PATH`` 路径同样经过它），``O_NOFOLLOW`` 又让最后一个分量是符号链接时不跟随，于是链接名字得到 ``ENOTDIR``；
+    调用成功就说明最后一个分量（或结尾带斜杠时被内核跟随到的目标）是目录。这正是 ``tar``、``rm -rf``（fts）、Go 的 ``os.Root``
+    这类“逐级安全下降”的惯用写法。能暴露的宿主信息：只有“它是目录”，与普通的打开目录一致；返回描述符注解里的真实路径
+    照常登记（结尾斜杠被跟随时，登记的是跟随后的目标目录，需要自己的快照）。
+
+    仍判 symlink-metadata-not-bound 的形态（此函数返回 False 或调用方不走这里）：没有 ``O_DIRECTORY``（可能打开链接自身，
+    之后 ``openat(fd, "")`` 等能把描述符转成跟随）；调用失败（本函数只在成功分支被调用，失败的调用不进该分支）；标志没解码
+    （openat2 的结构是指针时早就登记 open-flags-not-decoded）。输出归属一侧对私有盘内已知符号链接名字的成功打开另有
+    ``_symlink_name_verdict``：O_PATH 的成功打开一律判问题，与本函数互不依赖。
+    """
+    return "O_DIRECTORY" in flags
+
+
 def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
     """原始路径参数的写法，会不会让“文本规范化后的路径”与内核实际解析的对象不是同一个——只在存在符号链接对象时才可能。
 
@@ -673,8 +690,10 @@ class TraceParser:
             # 真链接、未知或缩略类型，以及链接自身的描述符仍缺合同，必须拒绝承接。
             nofollow_stat = (name in {"lstat", "lstat64"}
                              or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags))
-            if ((nofollow_stat and not (result.group(1) == "0" and _returned_non_link_stat(name, arguments)))
-                    or (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags)):
+            # WP-R4（R6-1，仅 v4）：成功的 O_PATH|O_NOFOLLOW|O_DIRECTORY 打开不是“链接自身的元数据”——见 ``_o_path_directory_open``。
+            o_path_nofollow = (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags
+                               and not (self.trace_v4 and _o_path_directory_open(flags)))
+            if ((nofollow_stat and not (result.group(1) == "0" and _returned_non_link_stat(name, arguments))) or o_path_nofollow):
                 # WP-R3（仅 v4）：lstat 到“本单元自己创建、跟踪器当前仍记着的符号链接”不登记 symlink-metadata-not-bound——
                 # 那是链接自己的元数据，内容由被测代码自己写入，没有宿主依赖。宿主上的真链接、不在私有盘内的、不是本单元创建的
                 # 一律仍登记。O_PATH|O_NOFOLLOW 的打开不豁免（得到的描述符后续可被 openat(fd, "") 等转成跟随，不可见）。
