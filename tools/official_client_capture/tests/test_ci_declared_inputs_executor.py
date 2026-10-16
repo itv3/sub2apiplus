@@ -2714,7 +2714,49 @@ class ControlInvariantTests(unittest.TestCase):
         import difflib
 
         registered = {
-            "tools/ci/unit_executor.py": ["    return [helper, *(adapter.sidecar_paths() if adapter is not None else [])]"],
+            "tools/ci/unit_executor.py": [
+                "    return [helper, *(adapter.sidecar_paths() if adapter is not None else [])]",
+                # 以下 29 行是审计器加固（步骤 10 开发循环 WP-R5）对单元进程清理的必要改写，纯新增之外的被改写行逐组登记理由：
+                # ①abort（WP-R5「进程树快照与后代清理」）：原先逐个在跑单元按 pid 与它所在会话的成员 SIGKILL 再 waitpid(pid, 0)，单元里的测试自己另起会话的后代
+                # （嵌套的 run-unit 等）逃过清理；改成先取全部在跑单元的整棵子树快照、冻结、统一 SIGKILL（_kill_items），再有界地回收根进程（_reap_roots，
+                # 第二次 Ctrl-C 落在取快照阶段时，原来无条件 waitpid 会永久阻塞），所以原来这 6 行被替换。
+                "        for pid in list(self.running):",
+                "            for member in [pid, *_session_members(pid)]:",
+                "                    os.kill(member, signal.SIGKILL)",
+                "            with contextlib.suppress(ChildProcessError):",
+                "                os.waitpid(pid, 0)",
+                "            self.running.pop(pid, None)",
+                # ②_clean_orphans：参数由会话号 session_id 改成单元 item，残留成员改由 _survivors(item) 取（会话成员加另起会话的后代，按启动标记、名册和 ppid 子树找），
+                # 宽限期后改为先 SIGTERM、仍在则冻结后统一 SIGKILL（_kill_items），原来按会话号逐信号循环的 9 行被替换；返回值仍是宽限期后仍存活的进程号。
+                "    def _clean_orphans(self, session_id: int, *, interrupted: bool = False) -> list[int]:",
+                "        members = _session_members(session_id)",
+                "            members = _session_members(session_id)",
+                "        for sig in (signal.SIGTERM, signal.SIGKILL):",
+                "            for pid in _session_members(session_id):",
+                "                with contextlib.suppress(ProcessLookupError, PermissionError):",
+                "                    os.kill(pid, sig)",
+                "            if sig == signal.SIGTERM and _session_members(session_id):",
+                "        return members",
+                # ③单元超时：注释同步（SIGKILL 的对象由进程组改为整棵子树）；30 秒宽限常量化为 TIMEOUT_KILL_GRACE_SECONDS，到期改调 _kill_items 杀整棵子树，
+                # 原来只对进程组 os.killpg(SIGKILL)，另起会话的后代不受影响。
+                "                # 单元自带超时（命令单元）优先，否则用调度配置的统一超时；先 SIGTERM，30 秒后仍在就 SIGKILL。",
+                "                elif item.timed_out and elapsed > limit + 30:",
+                "                    with contextlib.suppress(ProcessLookupError, PermissionError):",
+                "                        os.killpg(pid, signal.SIGKILL)",
+                # ④reap：调用 _clean_orphans 的实参由 pid 改为单元 item，随②的签名变化。
+                "                orphans = self._clean_orphans(pid, interrupted=item.interruption is not None)",
+                # ⑤预约中止后的活跃进程核对：原先自己读 /proc/<成员>/stat 判僵尸，只看原会话的成员；改成复用 _survivors(item)（含另起会话的后代，僵尸与已退出的不算），
+                # 核对口径只会更严（多算另起会话的后代），失败仍是同一个 ExecutorError。
+                "                    # 无论原单元是否已经失败，都须核对会话清理后才能授予整机。",
+                "                    active = []",
+                "                    for member in _session_members(pid):",
+                "                        try:",
+                "                            state = (Path('/proc') / str(member) / 'stat').read_text().rsplit(')', 1)[-1].split()[0]",
+                "                        except FileNotFoundError:",
+                "                            continue",
+                "                        if state not in ('Z', 'X'):",
+                "                            active.append(member)",
+            ],
             "tools/ci/entry_gates.py": [
                 "DECLARED_REQUIRE_OFFLINE = False",
                 # 以下 9 行是步骤 5 WP3b 对独立验收「一般 2（make -n 展开探测并非只读）」的必要改写，逐条登记理由：

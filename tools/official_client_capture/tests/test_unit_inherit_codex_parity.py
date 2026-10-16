@@ -867,14 +867,37 @@ BACKGROUND_INHERIT_REMOVED = {'tools/ci/background_validation.py': ['    argv = 
 
 # >>> 收尾登记常量（自动生成，勿手改）
 CLOSEOUT_PY_1_BASELINE = 'a421a444f64faa6f9e6f49ccce23ca9bcf7aeeda'
-CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': '2290c5b58a37e00de8a41a46f5bfb1a7fac0a3122c14527e7a48f0ada57e5b9e'}
+CLOSEOUT_PY_1_DIGESTS = {'tools/ci/background_validation.py': 'be7e6a6d9041796644e04e883ff8ce2d4b440ed19dc7b44d8fecd3a49eb9caef'}
 CLOSEOUT_PY_1_REMOVED = {'tools/ci/background_validation.py': ['* ``start --runroot --data-root --bundle --branch --commit [--profile] [--record-store] [--work] [--vc-env] [--then-dryrun]``：',
         '  本次带 ``--audit-policy`` 时记为 skipped：策略来源需要当前逐单元批准，操作员应显式调用',
+        'def _terminate(payload: Mapping[str, Any]) -> None:',
+        '    """终止后台运行的整个进程组：先 SIGTERM（执行器收到后终止全部单元会话），等整组退出、超过宽限再 SIGKILL。',
+        '    终止单元会话就被杀掉，排在后面的单元（各自成会话、不在本组里）留在后台继续跑（E4-02 验收实测）。"""',
+        '',
+        '        return',
+        '    with contextlib.suppress(ProcessLookupError, PermissionError):',
+        '        os.killpg(int(pid), signal.SIGTERM)',
+        '    deadline = time.monotonic() + STOP_GRACE_SECONDS',
+        '    while _group_alive(pid) and time.monotonic() < deadline:',
+        '        time.sleep(0.2)',
+        '    with contextlib.suppress(ProcessLookupError, PermissionError):',
+        '        os.killpg(int(pid), signal.SIGKILL)',
+        '',
+        '',
+        'def stop(runroot: Path, reason: str, *, keep: Path | None = None, with_dryruns: bool = True) -> list[str]:',
+        '    发起的）那一次也停（B5a-10）。"""',
+        '        _terminate(current)',
+        'def stop_registered(data_root: Path, reason: str, *, keep: Path) -> list[str]:',
+        '        _terminate(current)',
         '        inherit_reference = _inherit_reference(Path(inherit_request), vars(args))',
         '    if inherit_reference is not None:',
+        '    superseded = stop(args.runroot, f"被提交 {args.commit[:12]} 在部署 {deployment[\'receipt\']} 上的后台验证取代", keep=path)',
+        '                                      keep=path)',
+        '        _write(path, {**current, "pid": process.pid})',
         '    return {"action": "started", "result": str(path), "pid": process.pid, "out": str(out), "superseded": superseded}',
         '                _inherit_completion(payload, historical=True)',
-        '    p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")']}
+        '    p_start.add_argument("--work", type=Path, default=None, help="只允许本轮完整提交及部署摘要目录或其子目录；缺省自动派生")',
+        '            print(json.dumps({"stopped": stop(args.runroot, args.reason)}, ensure_ascii=False))']}
 CLOSEOUT_PY_2_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_2_DIGESTS = {'tools/ci/entry_dryrun.py': '192d34fa355265e8d094425df699a07b0eb2c1632d6d2bc55280da7b18e0c84c'}
 CLOSEOUT_PY_2_REMOVED = {'tools/ci/entry_dryrun.py': []}
@@ -896,8 +919,37 @@ CLOSEOUT_PY_5_BASELINE = 'cf691738ba83d7fe6474ffdf134cd680372b21b8'
 CLOSEOUT_PY_5_DIGESTS = {'tools/ci/entry_steps.py': '3f3f1eb4ba7ee472cf1effa7a561ff86fb5388f50a1dfe4239461101cb9d4a58'}
 CLOSEOUT_PY_5_REMOVED = {'tools/ci/entry_steps.py': []}
 CLOSEOUT_PY_6_BASELINE = 'f99137c82d44adfab8d95b53005b65f5b8de401c'
-CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': 'bd7610348455b4d8e580cbd3b4ada9e2e8fc8cce38dbaa6fec7aeb0d4ceda1d7'}
-CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['                        executor=records.executor_version([args.bytecode_helper]), environment=None,',
+CLOSEOUT_PY_6_DIGESTS = {'tools/ci/unit_executor.py': '6ab9a69743215a49939436889770a8a6df3e36a759a9fe41dce3fe1774e15c0a'}
+CLOSEOUT_PY_6_REMOVED = {'tools/ci/unit_executor.py': ['        for pid in list(self.running):',
+        '            for member in [pid, *_session_members(pid)]:',
+        '                    os.kill(member, signal.SIGKILL)',
+        '            with contextlib.suppress(ChildProcessError):',
+        '                os.waitpid(pid, 0)',
+        '            self.running.pop(pid, None)',
+        '    def _clean_orphans(self, session_id: int, *, interrupted: bool = False) -> list[int]:',
+        '        members = _session_members(session_id)',
+        '            members = _session_members(session_id)',
+        '        for sig in (signal.SIGTERM, signal.SIGKILL):',
+        '            for pid in _session_members(session_id):',
+        '                with contextlib.suppress(ProcessLookupError, PermissionError):',
+        '                    os.kill(pid, sig)',
+        '            if sig == signal.SIGTERM and _session_members(session_id):',
+        '        return members',
+        '                # 单元自带超时（命令单元）优先，否则用调度配置的统一超时；先 SIGTERM，30 秒后仍在就 SIGKILL。',
+        '                elif item.timed_out and elapsed > limit + 30:',
+        '                    with contextlib.suppress(ProcessLookupError, PermissionError):',
+        '                        os.killpg(pid, signal.SIGKILL)',
+        '                orphans = self._clean_orphans(pid, interrupted=item.interruption is not None)',
+        '                    # 无论原单元是否已经失败，都须核对会话清理后才能授予整机。',
+        '                    active = []',
+        '                    for member in _session_members(pid):',
+        '                        try:',
+        "                            state = (Path('/proc') / str(member) / 'stat').read_text().rsplit(')', 1)[-1].split()[0]",
+        '                        except FileNotFoundError:',
+        '                            continue',
+        "                        if state not in ('Z', 'X'):",
+        '                            active.append(member)',
+        '                        executor=records.executor_version([args.bytecode_helper]), environment=None,',
         '    executor = records.executor_version([args.bytecode_helper])',
         '            current.inputs = records._unique([*(current.inputs or []), *[_audit_module().host_snapshot(path) for path in paths],',
         '                                                     sources=inherit_module.propose(store.root, currents, facts, max_age_hours=max_age))',
