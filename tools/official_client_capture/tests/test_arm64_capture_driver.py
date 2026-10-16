@@ -1239,6 +1239,54 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
                "stdlib_cached_exists": os.path.isfile(json.__cached__)}, handle)
 """
 
+# 启动钩子预热的故障注入包装器：在独立进程里加载真实的 bytecode_cache.py（prepare 会改 sys.pycache_prefix 与环境变量，
+# 不能在测试进程里跑），把标准库那两份预编译换成空操作（只为省时间，预热与标准库预编译互相独立），再按模式替换
+# subprocess.run 里“启动钩子预热”那一次调用，经真实的 main() 走完整条路径，逐模式打印 {退出码, 最后一行摘要, 预热调用参数}。
+_WARMUP_FAULT_WRAPPER = r'''
+import contextlib, importlib.util, io, json, subprocess, sys
+from pathlib import Path
+
+helper, base, source = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+spec = importlib.util.spec_from_file_location("bytecode_cache_under_test", helper)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+real_run, real_compile_dir = subprocess.run, module.compileall.compile_dir
+mode, calls = ["ok"], []
+
+
+def compile_dir(path, *args, **kwargs):
+    return real_compile_dir(path, *args, **kwargs) if Path(str(path)) == source else True
+
+
+def fake_run(argv, *args, **kwargs):
+    if list(argv[1:]) != ["-c", "pass"]:
+        return real_run(argv, *args, **kwargs)
+    environment = kwargs.get("env") or {}
+    calls.append({"argv": list(argv), "dontwrite_in_env": "PYTHONDONTWRITEBYTECODE" in environment,
+                  "prefix_env": environment.get("PYTHONPYCACHEPREFIX"), "timeout": kwargs.get("timeout"),
+                  "stdin_is_devnull": kwargs.get("stdin") == subprocess.DEVNULL})
+    if mode[0] == "oserror":
+        raise OSError("起不来")
+    if mode[0] == "timeout":
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+    if mode[0] == "exit3":
+        return subprocess.CompletedProcess(argv, 3, None, "boom")
+    return real_run(argv, *args, **kwargs)
+
+
+module.compileall.compile_dir = compile_dir
+subprocess.run = fake_run
+result = {}
+for name in ("ok", "oserror", "timeout", "exit3"):
+    mode[0] = name
+    calls.clear()
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = module.main([str(base / ("pycache-" + name)), str(source)])
+    result[name] = {"exit": code, "summary": json.loads(buffer.getvalue().strip().splitlines()[-1]), "calls": list(calls)}
+print(json.dumps(result))
+'''
+
 
 class GateBytecodeEnvironmentTests(unittest.TestCase):
     """修好接着跑第 67 项：ARM64 上跑 make test 的门禁只读使用预编译的树外字节码缓存。
@@ -1258,10 +1306,10 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
     }
     HELPER = SCRIPTS / "bytecode_cache.py"
 
-    def _run_helper(self, *arguments: str) -> tuple[subprocess.CompletedProcess[str], dict]:
+    def _run_helper(self, *arguments: str, extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
         environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONPYCACHEPREFIX"}}
         result = subprocess.run([sys.executable, str(self.HELPER), *arguments], capture_output=True, text=True,
-                                env={**environment, "PYTHONDONTWRITEBYTECODE": "1"})
+                                env={**environment, "PYTHONDONTWRITEBYTECODE": "1", **(extra_env or {})})
         lines = result.stdout.strip().splitlines()
         return result, (json.loads(lines[-1]) if lines else {})
 
@@ -1356,6 +1404,89 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
             self.assertTrue((inner_source / "keep.py").is_file(), "拒绝时不得清空包含源码树的目录")
             self.assertFalse((source / "pycache-inside").exists())
             self.assertFalse((root / "cache-dir").exists())
+
+    def test_helper_warms_startup_hooks_so_later_writable_interpreters_leave_the_shared_cache_unchanged(self) -> None:
+        """ARM64 收割：解释器启动一定导入的 dist-packages 钩子（_distutils_hack、apport_python_hook）不在预编译范围内，
+        第一个不禁写字节码的解释器（故意去掉 PYTHONDONTWRITEBYTECODE 的用例）会把它们的 .pyc 写进共享层，
+        计划期登记成“不存在”的路径随之变样，后续受审计单元整批秒败。预热后，不禁写的解释器再启动，共享层一个字节都不变。
+
+        钩子用 sitecustomize（PYTHONPATH 目录里，等价于 dist-packages 的位置：不在标准库、也不在源码目录）加它导入的同目录模块
+        来模拟，所以在没有 dist-packages 的机器上同样有区分力；对照组证明这类钩子确实会被不禁写的解释器写进空缓存。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "tree" / "tools"
+            (source / "pkg").mkdir(parents=True)
+            (source / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            (source / "pkg" / "mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+            hooks = root / "hooks"
+            hooks.mkdir()
+            (hooks / "sitecustomize.py").write_text("import startup_hook_dependency\n", encoding="utf-8")
+            (hooks / "startup_hook_dependency.py").write_text("VALUE = 1\n", encoding="utf-8")
+            tag = sys.implementation.cache_tag
+            hook_pyc = {f"sitecustomize.{tag}.pyc", f"startup_hook_dependency.{tag}.pyc"}
+            # 不禁写、前缀指向缓存目录的解释器：与“故意去掉 PYTHONDONTWRITEBYTECODE 起解释器”的用例同一种环境。
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in {"PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX", "PYTHONPATH"}}
+
+            def writable_interpreter(prefix: Path) -> None:
+                probe = subprocess.run([sys.executable, "-c", "pass"], capture_output=True, text=True,
+                                       env={**environment, "PYTHONPATH": str(hooks), "PYTHONPYCACHEPREFIX": str(prefix)})
+                self.assertEqual(probe.returncode, 0, probe.stderr)
+
+            def files(prefix: Path) -> dict[str, int]:
+                return {str(path.relative_to(prefix)): path.stat().st_mtime_ns for path in prefix.rglob("*") if path.is_file()}
+
+            control = root / "pycache-control"
+            control.mkdir()
+            writable_interpreter(control)
+            self.assertTrue(hook_pyc <= {Path(name).name for name in files(control)},
+                            "对照：没有预热的缓存里，不禁写的解释器启动时会把启动钩子的 .pyc 写进去（共享层被污染的方式）")
+            prefix = root / "pycache-warm"
+            result, summary = self._run_helper(str(prefix), str(source), extra_env={"PYTHONPATH": str(hooks)})
+            self.assertEqual((result.returncode, summary["status"]), (0, "ready"), result.stdout + result.stderr)
+            self.assertEqual(summary["startup_warmup"]["status"], "ok", summary["startup_warmup"])
+            self.assertGreaterEqual(summary["startup_warmup"]["new_pyc"], 2, "预热至少写入了两个钩子模块的 .pyc")
+            self.assertTrue(hook_pyc <= {Path(name).name for name in files(prefix)}, "钩子 .pyc 已在共享层里")
+            before = files(prefix)
+            writable_interpreter(prefix)
+            self.assertEqual(files(prefix), before, "预热之后，不禁写的解释器启动不再新增或改写共享层里的任何文件")
+            self.assertEqual(list(root.rglob("__pycache__")), [], "任何位置都不产生 __pycache__（写入只落在前缀内）")
+
+    def test_helper_warmup_runs_a_plain_interpreter_that_may_write_only_into_the_cache(self) -> None:
+        """预热调用的参数：同一个解释器空跑 -c pass；环境去掉 PYTHONDONTWRITEBYTECODE、前缀指向缓存目录；60 秒超时；stdin 为 DEVNULL。
+        预热失败（起不来、超时、非零退出）不使 prepare 失败：status 仍是 ready、退出码仍是 0，失败记在 startup_warmup 里。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            source = root / "tree" / "tools"
+            (source / "pkg").mkdir(parents=True)
+            (source / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+            wrapper = root / "wrapper.py"
+            wrapper.write_text(_WARMUP_FAULT_WRAPPER, encoding="utf-8")
+            environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONPYCACHEPREFIX"}}
+            result = subprocess.run([sys.executable, str(wrapper), str(self.HELPER), str(root), str(source)], capture_output=True,
+                                    text=True, env={**environment, "PYTHONDONTWRITEBYTECODE": "1", "UNIT_EXECUTOR_CORES": "1"})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            outcomes = json.loads(result.stdout.strip().splitlines()[-1])
+            ok = outcomes["ok"]
+            self.assertEqual((ok["exit"], ok["summary"]["status"]), (0, "ready"))
+            self.assertEqual(ok["summary"]["startup_warmup"]["status"], "ok")
+            self.assertEqual(len(ok["calls"]), 1, "只起一次预热解释器")
+            call = ok["calls"][0]
+            self.assertEqual(call["argv"], [sys.executable, "-c", "pass"])
+            self.assertFalse(call["dontwrite_in_env"], "预热环境必须去掉 PYTHONDONTWRITEBYTECODE，解释器才会写缓存")
+            self.assertEqual(call["prefix_env"], str(root / "pycache-ok"), "写入落在缓存目录之内")
+            self.assertEqual((call["timeout"], call["stdin_is_devnull"]), (60, True))
+            for name, expected in (("oserror", "起不来"), ("timeout", "60"), ("exit3", "boom")):
+                with self.subTest(failure=name):
+                    outcome = outcomes[name]
+                    self.assertEqual((outcome["exit"], outcome["summary"]["status"]), (0, "ready"), "预热失败不使 prepare 失败")
+                    warmup = outcome["summary"]["startup_warmup"]
+                    self.assertEqual((warmup["status"], warmup["new_pyc"]), ("failed", 0))
+                    self.assertIn(expected, warmup["detail"], "失败原因写进摘要，不静默")
+                    self.assertEqual(outcome["summary"]["leaked_pycache"], [])
+                    self.assertEqual(len(outcome["calls"]), 1)
 
     def test_isolated_gate_run_unsets_the_production_identity_memo(self) -> None:
         """E2-02：门禁跑测试树，身份记忆化交给统一调度执行器在记录目录里新建，不混用生产缓存。"""

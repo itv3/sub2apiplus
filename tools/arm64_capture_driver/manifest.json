@@ -52,9 +52,9 @@
     },
     {
       "path": "driver/bytecode_cache.py",
-      "sha256": "ab9cdf33994d1bc8a1b6614dd5fad48d8c4544f664ffad8c613bc7797a41db6e",
+      "sha256": "e7a552cc2708884e80a5118e7a21ceb4ef6c830d11dde64cba4d9998523d6824",
       "mode": "0700",
-      "bytes": 7602
+      "bytes": 11165
     },
     {
       "path": "driver/catalog_chain.py",
@@ -687,5 +687,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "532be6e1d7cab85f4de78da7a0da64af23d97ceaf88ca81f64e0fe12fbc9151e"
+  "manifest_sha256": "4b6fdbf64c6abc4ba9d84ea592904d73115e51fc56a29ebe28141ef41c6eea0a"
 }

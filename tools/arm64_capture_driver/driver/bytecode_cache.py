@@ -22,7 +22,15 @@
 * 源码目录按内容摘要失效（PEP 552 checked-hash，E2-02）：解释器加载时核对源文件摘要，测试在同一秒内对源码做
   长度不变的修改（故障注入）也会回落为从源码编译，不会执行旧字节码；副本受管树也按内容复用这些 .pyc
   （tests/managed_tree_copy.py）。标准库不会被改，仍按时间戳校验，启动时不必读源码算摘要；
-* 最后一行输出 JSON 摘要（status／prefix／标准库与各源码目录的 .pyc 数）。
+* 启动钩子预热：标准库预编译跳过了 site-packages／dist-packages，而解释器启动一定会导入其中的钩子（Debian／Ubuntu 的
+  ``_distutils_hack`` 经 .pth、``apport_python_hook`` 经 sitecustomize）。这些钩子没有 .pyc 时，任何一个不禁写字节码的
+  解释器（例如故意去掉 PYTHONDONTWRITEBYTECODE 的 ``test_launcher_never_writes_bytecode_next_to_relay``）一启动就把它们
+  写进共享层；受读集审计的单元在计划期把这些路径登记成“不存在”，写入之后所有后续启动的单元都判“输入与登记快照不同”而
+  秒败（ARM64 收割里一次污染 45 个单元）。所以标准库与源码预编译之后，再用同一解释器空跑一次 ``-c pass``（去掉
+  PYTHONDONTWRITEBYTECODE、前缀指向缓存目录），把钩子 .pyc 一次写好。预热失败不使 prepare 失败（缓存本身仍可用），
+  结果记在摘要的 ``startup_warmup``（status 为 ok／failed，new_pyc 为新增 .pyc 个数，失败时带 detail），不静默；
+  预热在泄漏检查之前执行，万一在源码目录旁写出 ``__pycache__``，照样按“泄漏”判失败；
+* 最后一行输出 JSON 摘要（status／prefix／标准库与各源码目录的 .pyc 数／startup_warmup）。
 """
 
 from __future__ import annotations
@@ -33,12 +41,16 @@ import os
 import py_compile
 import re
 import shutil
+import subprocess
 import sys
 import sysconfig
 from pathlib import Path
 
 # 标准库里不属于解释器启动与受管工具依赖的部分：第三方包目录与 Python 自带测试集。
 STDLIB_SKIP = re.compile(r"[/\\](site-packages|dist-packages|test|tests|idlelib|turtledemo)[/\\]")
+
+# 启动钩子预热子进程的超时（秒）：空跑一次解释器通常几十毫秒，卡住就放弃，不拖住预编译。
+WARMUP_TIMEOUT_SECONDS = 60
 
 
 def _mirror(prefix: Path, source: Path) -> Path:
@@ -64,6 +76,40 @@ def _count_pyc(prefix: Path, source: Path) -> int:
 
 def _overlaps(left: Path, right: Path) -> bool:
     return left == right or left in right.parents or right in left.parents
+
+
+def _count_all_pyc(prefix: Path) -> int:
+    """缓存目录下全部 .pyc 的个数（预热前后相减得到新增数）。"""
+
+    return sum(1 for _ in prefix.rglob("*.pyc"))
+
+
+def _warm_startup_hooks(prefix: Path) -> dict[str, object]:
+    """启动钩子预热：让解释器启动时一定会导入、但尚未缓存的钩子模块把 .pyc 写进缓存目录（原因见模块说明）。
+
+    只在 ``prepare`` 已通过全部防呆、缓存目录已重建之后调用。子进程环境＝当前环境去掉 ``PYTHONDONTWRITEBYTECODE``，
+    ``PYTHONPYCACHEPREFIX`` 指向缓存目录（所以写入只会落在前缀之内，不会在任何源码旁留 ``__pycache__``），其余变量原样保留，
+    让它与后续测试单元起的解释器看到同一批启动钩子。失败（起不来、超时、非零退出）只记入返回值，不抛出。
+    """
+
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONDONTWRITEBYTECODE"}
+    environment["PYTHONPYCACHEPREFIX"] = str(prefix)
+    before = _count_all_pyc(prefix)
+    failure = ""
+    try:
+        completed = subprocess.run([sys.executable, "-c", "pass"], env=environment, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors="replace",
+                                   timeout=WARMUP_TIMEOUT_SECONDS)
+        if completed.returncode != 0:
+            failure = f"预热解释器退出码 {completed.returncode}：{(completed.stderr or '').strip()[-300:]}"
+    except subprocess.TimeoutExpired:
+        failure = f"预热解释器超过 {WARMUP_TIMEOUT_SECONDS} 秒没有退出"
+    except OSError as error:
+        failure = f"预热解释器没有起来：{error}"
+    result: dict[str, object] = {"status": "failed" if failure else "ok", "new_pyc": _count_all_pyc(prefix) - before}
+    if failure:
+        result["detail"] = failure
+    return result
 
 
 def prepare(prefix: Path, sources: list[Path]) -> dict[str, object]:
@@ -105,6 +151,8 @@ def prepare(prefix: Path, sources: list[Path]) -> dict[str, object]:
         source_counts[str(source)] = _count_pyc(prefix, source)
         if source_counts[str(source)] == 0:
             failed.append(str(source))
+    # 启动钩子预热放在标准库与源码预编译之后、泄漏检查之前：万一预热在源码旁写出了 __pycache__，下面的检查照样拦住。
+    warmup = _warm_startup_hooks(prefix)
     leaked = sorted(str(path) for source in physical_sources for path in source.rglob("__pycache__"))
     return {
         "status": "ready" if not failed and not leaked else "failed",
@@ -115,6 +163,7 @@ def prepare(prefix: Path, sources: list[Path]) -> dict[str, object]:
         "sources_pyc": source_counts,
         "failed_sources": sorted(set(failed)),
         "leaked_pycache": leaked[:5],
+        "startup_warmup": warmup,
     }
 
 
