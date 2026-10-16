@@ -23,7 +23,7 @@ R4-1      本轨迹内进程树的 /proc/<pid>/{stat,status,…}    非本轨迹
 R4-2      失败的带写标志 open（/dev/tty 的 ENXIO）         （无需改动：``replay_runtime`` 的终端探测合同已覆盖，本模块固定
                                                          它仍成立，并固定相邻形态仍被拒绝）
 R4-3      /dev/null 的读写                                 （无需改动：``replay_runtime`` 已覆盖 /dev/null 的 read／write／
-                                                         stat，本模块固定它，并固定 /dev/zero、/dev/urandom、/dev/tty
+                                                         stat，本模块固定它，并固定 /dev/tty
                                                          成功打开、/dev/stdin、/proc/self/fd/N→/dev/null 别名仍被拒绝）
 ========  ===========================================  ==========================================================
 """
@@ -727,7 +727,7 @@ class DevNullAndTerminalTests(R4Fixture):
         self.assertEqual((report["status"], report["undeclared_count"]), ("passed", 0), report["undeclared"])
 
     def test_other_devices_and_aliases_are_still_refused(self) -> None:
-        for path in ("/dev/zero", "/dev/urandom", "/dev/random", "/dev/full", "/dev/stdin", "/dev/stdout", "/dev/fd/0", "/dev/shm/x", "/dev/ptmx"):
+        for path in ("/dev/full", "/dev/stdin", "/dev/stdout", "/dev/fd/0", "/dev/shm/x", "/dev/ptmx"):   # R16：/dev/zero、/dev/urandom、/dev/random 的只读已放行，见 test_ci_read_audit_wp_r16
             with self.subTest(path=path):
                 self.assertEqual(self.undeclared([f'1 openat(AT_FDCWD</repo>, "{path}", O_RDONLY) = 3<{path}>']), [(path, ["read"])])
 

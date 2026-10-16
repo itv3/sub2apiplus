@@ -2318,12 +2318,12 @@ class ControlInvariantTests(unittest.TestCase):
     @contextlib.contextmanager
     def linux_isolation(self) -> Any:
         """窗口内让 control 四个单元的 ``wrap`` 在任何机器上都走成功路径：PATH 前面放假的 unshare／strace、``sys.platform`` 当作 linux、
-        ``/proc/self/ns/*`` 读不到时给固定值（读得到时用真实值）、/dev/null 与 /dev/tty 的设备号当作 Linux 上的 (1,3) 与 (5,0)
+        ``/proc/self/ns/*`` 读不到时给固定值（读得到时用真实值）、/dev/null、/dev/tty、/dev/zero、/dev/random、/dev/urandom 的设备号当作 Linux 上的 (1,3)、(5,0)、(1,5)、(1,8)、(1,9)
         （隔离合同在 linux 上核对设备身份，macOS 的设备号不同）。新旧两个执行器在窗口内看到的世界完全一样，所以返回的 argv 必须逐字相同。
         在本来就具备这些条件的 Linux 上，这些替换都是空操作（真实值与替换值相同）。"""
 
         real_readlink, real_major, real_minor = os.readlink, os.major, os.minor
-        char_devices = {os.lstat(path).st_rdev: (major, minor) for path, major, minor in (("/dev/null", 1, 3), ("/dev/tty", 5, 0)) if os.path.exists(path)}
+        char_devices = {os.lstat(path).st_rdev: (major, minor) for path, major, minor in (("/dev/null", 1, 3), ("/dev/tty", 5, 0), ("/dev/zero", 1, 5), ("/dev/random", 1, 8), ("/dev/urandom", 1, 9)) if os.path.exists(path)}
 
         def readlink(path: Any, *args: Any, **kwargs: Any) -> Any:
             try:
