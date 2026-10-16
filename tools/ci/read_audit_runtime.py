@@ -44,6 +44,36 @@ ENVIRONMENT_PATHS = {"/proc/filesystems", "/proc/sys/crypto/fips_enabled"}
 LAUNCHER = ["unshare", "-m", "--propagation", "private", "bash", "-c",
             'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec "$@"', "entry-gates"]
 
+# R16：无状态字符设备。这几个设备的内容不是“宿主状态输入”，所以不需要（也无法——宿主快照拒绝 /dev 下的路径）用快照声明，
+# 重放时按「路径 + 访问类型上界」直接放行：路径在表里、且该路径的访问类型集合是表中允许集合的子集，才算已证明；类型越界（写、执行、
+# 当目录打开或枚举、不存在探测）保持原行为——不覆盖，进入未声明清单。
+#
+# * /dev/null：读恒为空、写即丢弃，两者都与宿主状态无关，所以 read／write／stat 都放行（本条是改动前就有的固定条款，行为不变）。
+# * /dev/zero：读恒为零字节，不携带任何宿主信息；只放行 read／stat。写它虽然也是丢弃，但没有合法用途，不放行。
+# * /dev/urandom、/dev/random：内核熵源。库初始化（OpenSSL、hashlib、uuid 等）会打开它们读熵，读到的字节本来就每次不同，
+#   单元的结论不应当、也无法依赖具体字节，所以读不算宿主输入；只放行 read／stat。
+#   **写**这两个设备会把数据混入内核熵池，改变内核状态，一律不放行（这是与 /dev/null 的关键区别）。
+#
+# 其它虚拟或设备路径（/dev/ptmx、/dev/shm/*、/dev/tty、/dev/sda、/proc/*、/sys/*）不在此表，全部保持原行为，不得借此放宽；
+# /dev/tty 另有终端探测合同（见 replay_runtime 的 terminal_events 一段）。
+STATELESS_DEVICE_KINDS = {
+    "/dev/null": frozenset({"read", "write", "stat"}),
+    "/dev/zero": frozenset({"read", "stat"}),
+    "/dev/urandom": frozenset({"read", "stat"}),
+    "/dev/random": frozenset({"read", "stat"}),
+}
+# 合同建立时对上表里新增三个设备的身份校验：必须是字符设备，且在 Linux 上设备号（major, minor）相符。
+# /dev/null（1,3）仍由 ``contract_entry`` 内联校验——它的身份摘要进入合同 payload（``null_device``），改动前就是这样；
+# 这三个设备**只校验、不进 payload**，所以合同摘要与改动前逐字节相同，旧记录里封存的 ``runtime-contract`` 条目不受影响。
+# 代价：封存的合同条目本身不证明这三个设备的身份；身份由建立合同的现场核对（``prepare``、``run_child``，以及非历史重放时
+# ``validate_context`` 重算的 ``contract_entry``），历史重放只验封存条目的摘要，不读现场设备。
+# 放行了却不核对过它是什么，等于信任一个任意文件；所以“表里每个设备”必须在 /dev/null 或这张表里有身份校验（测试固定这一点）。
+STATELESS_DEVICE_NUMBERS = {
+    "/dev/zero": (1, 5),
+    "/dev/random": (1, 8),
+    "/dev/urandom": (1, 9),
+}
+
 # 轨迹合同版本（显式开关，默认 v3）。v3 是历史合同：输出事件 6 键、旧 OutputTracker、旧重放逻辑，字节行为不变，
 # control 四链的 sidecar 复用的就是它；v4 在此基础上支持 rename／link／失败探测并对重复事件按名字级版本去重（WP-R9）。
 # 文档版本字符串的权威定义在同目录 read_audit.py（RUNTIME_TRACE_SCHEMA_V4）；这里再存一份，是为了让重放 v3 凭证的路径
@@ -375,6 +405,19 @@ def environment_snapshot(path: str) -> dict[str, Any]:
     return {"path": path, "kind": "file", "content_sha256": hashlib.sha256(content).hexdigest()}
 
 
+def _check_stateless_device(path: str, numbers: tuple[int, int]) -> None:
+    """校验 ``path`` 是标准字符设备：lstat 不跟随链接，所以被替换成链接、普通文件或目录都会失败；Linux 上还要设备号相符。
+
+    与 /dev/null、/dev/tty 的校验同形态：非 Linux 平台（设备号编号各不相同）只核对“是字符设备”。
+    设备不存在时 ``os.lstat`` 抛 OSError，同样向上传播（失败关闭，与 /dev/null 一致）。
+    只校验、不返回内容——这些设备的身份不进入合同 payload，合同摘要因此不变。
+    """
+    device = os.lstat(path)
+    if not stat.S_ISCHR(device.st_mode) or (sys.platform.startswith("linux")
+            and (os.major(device.st_rdev), os.minor(device.st_rdev)) != numbers):
+        raise RuntimeContractError(f"{path} 设备身份不符")
+
+
 def contract_entry(value: Any) -> dict[str, Any]:
     contract = validate_contract(value)
     device = os.lstat("/dev/null")
@@ -386,6 +429,9 @@ def contract_entry(value: Any) -> dict[str, Any]:
     if not stat.S_ISCHR(terminal.st_mode) or (sys.platform.startswith("linux")
             and (os.major(terminal.st_rdev), os.minor(terminal.st_rdev)) != (5, 0)):
         raise RuntimeContractError("/dev/tty 设备身份不符")
+    # R16：重放会把对这三个设备的只读访问当作已证明（见 STATELESS_DEVICE_KINDS），所以合同建立时先核对它们确是标准设备；不进 payload。
+    for stateless_path, stateless_numbers in STATELESS_DEVICE_NUMBERS.items():
+        _check_stateless_device(stateless_path, stateless_numbers)
     try:
         descriptor = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     except OSError as error:
@@ -1384,7 +1430,9 @@ def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]], *, hi
         covered.add("/dev/tty")
     environment = {entry["path"]: entry for entry in runtime["context"]["contract_entry"]["detail"]["environment"]}
     for path, kinds in paths.items():
-        if path == "/dev/null" and set(kinds) <= {"read", "write", "stat"}:
+        # R16：无状态字符设备按「路径 + 访问类型上界」放行（/dev/null 是其中一项，行为与改动前逐项相同）。路径精确匹配；
+        # 路径在表里但类型越界时与改动前一样不覆盖（继续走下面的分支，那些分支对 /dev 下的路径也不会放行）。
+        if path in STATELESS_DEVICE_KINDS and set(kinds) <= STATELESS_DEVICE_KINDS[path]:
             covered.add(path)
         elif path in environment:
             allowed = {"missing"} if environment[path]["kind"] == "missing" else {"read", "stat"}
