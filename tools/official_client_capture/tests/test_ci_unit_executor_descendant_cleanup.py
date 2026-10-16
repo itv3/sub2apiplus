@@ -567,6 +567,12 @@ class SurvivorSelectionTests(_SchedulerFixture):
 
 class LaunchTagTests(_SchedulerFixture):
     def test_every_launch_gets_its_own_run_tag_in_the_unit_environment(self) -> None:
+        # 本用例自己也可能在执行器里跑（门禁、CI）：外层标记已在环境里时，调度器按设计把标记写成「外层:自己的」（见下一个用例），
+        # 这里要看的是单层语义，所以先把外层标记从环境里拿掉；用例结束恢复，不影响同进程里的其它用例。
+        outer_env = mock.patch.dict(os.environ)
+        outer_env.start()
+        self.addCleanup(outer_env.stop)
+        os.environ.pop(ue.RUN_TAG_ENV, None)
         sched = self.scheduler()
         sentinel = self.root / "env.txt"
         command = (sys.executable, "-B", "-c",
