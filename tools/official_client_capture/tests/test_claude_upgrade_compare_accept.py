@@ -46,6 +46,10 @@ from tools.official_client_capture.tests import claude_evaluator_fixture as eval
 from tools.official_client_capture.tests import claude_vc5_chain_fixture as chain
 from tools.official_client_capture.tests import test_claude_upgrade_batch as batch_tests
 
+# 严格读集审计（strace）会把动作耗时放大 4～17 倍，产品默认的 900 秒动作超时在审计下会误判 VC-5:acceptance 超时（ARM64 收割 #9 实测）；
+# 测试里显式给足动作超时，不改产品常量（claude_upgrade_batch.DEFAULT_ACTION_TIMEOUT_SECONDS 是受管文件）。
+AUDIT_SAFE_ACTION_TIMEOUT_SECONDS = 7200.0
+
 CANDIDATE = "claude-cand-r1"
 ATTEMPT_ID = "attempt-0001"
 HOST = "arm64-runner"
@@ -173,14 +177,15 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
             )
 
     def compare_action(self, campaign: Path) -> dict[str, Any]:
-        return batch_tests.batch.managed_action("compare", "VC-5:compare", ["compare", "--campaign-dir", campaign, "--candidate-id", CANDIDATE], item_ids=["compare"])
+        return batch_tests.batch.managed_action("compare", "VC-5:compare", ["compare", "--campaign-dir", campaign, "--candidate-id", CANDIDATE], item_ids=["compare"],
+                                                timeout_seconds=AUDIT_SAFE_ACTION_TIMEOUT_SECONDS)
 
     def assert_action(self, campaign: Path, comparison: dict[str, Any]) -> dict[str, Any]:
         builder = comparison["builder"]
         return {
             "action_id": "assert-rules",
             "operation": "VC-5:assert-rules",
-            "timeout_seconds": 900.0,
+            "timeout_seconds": AUDIT_SAFE_ACTION_TIMEOUT_SECONDS,
             "command": [
                 sys.executable, str(BUILDER), "--config", str(campaign / builder["config"]["path"]), "--output", str(campaign / builder["output"]),
                 "--results-dir", str(campaign / builder["results_dir"]), "--evaluation-baseline", str(builder["evaluation_baseline"]),
@@ -194,6 +199,7 @@ class CompareAcceptChainTests(batch_tests._RealTreeBatchCase):
             "VC-5:acceptance",
             ["accept", "--campaign-dir", campaign, "--candidate-id", CANDIDATE, "--external-gate-root", gate_root, "--external-gate-receipt", receipt],
             item_ids=["acceptance"],
+            timeout_seconds=AUDIT_SAFE_ACTION_TIMEOUT_SECONDS,
         )
 
     def gate_receipt(self, world: dict[str, Any], name: str, *, failed_gate: str | None = None) -> str:
