@@ -1,0 +1,78 @@
+{
+  "base_commit": "b5cceb46f455b1e4aa9d27c791e55899fcfb85e9",
+  "changed_path_count": 15,
+  "current_commit": "34e7f8e3ab6b339b83f1c18963fd7480ca6cd35c",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5906,
+  "frozen_path_count": 2015,
+  "identity_sha256": "fa8a2c78daac49ae8e1c7b73b06a71bd2bca2eab30678ec9479cf2ad9776bb9b",
+  "issued_at_utc": "2026-10-16T04:48:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-step10-audit-hardening-20261016-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "fa764324c944ed716fa838b7260fb40540095140f14bbc918b8ac9beacbe5cb6"
+      ],
+      "reason": "审计器加固（步骤 10 开发循环 R2～R16）同步 read_audit／read_audit_runtime 两个验证器钉住值并登记修改前已部署的门禁收据生成器的只读重放摘要；不改变身份算法、判定、画像或线上配置，旧单元认证不冒充当前认证。 path=tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-closeout-registry-20261013-freeze-successor.json",
+        "docs/egress/maintenance/claude-step8-declared-inputs-20261015-freeze-successor.json",
+        "docs/egress/maintenance/claude-strict-stat-20261011-freeze-successor.json",
+        "docs/egress/maintenance/claude-test-read-transport-20261011-freeze-successor.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-b10-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-b10-history-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-b10-replay-20261005-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c06-verifier-binding-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-merge-verifier-permissions-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-midpoint-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item32-to-44-fix-and-continue-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1c007eb4357dbcc2d706fad05546677e934c001cf671e870b358f5e4cc633d97"
+    }
+  ],
+  "unregistered_path_count": 14,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/README.md",
+    "tools/arm64_capture_driver/driver/background_validation.py",
+    "tools/arm64_capture_driver/driver/entry-gates.sh",
+    "tools/arm64_capture_driver/driver/read_audit.py",
+    "tools/arm64_capture_driver/driver/read_audit_runtime.py",
+    "tools/arm64_capture_driver/driver/unit_executor.json",
+    "tools/arm64_capture_driver/driver/unit_executor.py",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_reader_transition_20261016.json",
+    "tools/official_client_capture/tests/test_ci_declared_inputs_executor.py",
+    "tools/official_client_capture/tests/test_ci_declared_sample_passthrough.py",
+    "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+    "tools/official_client_capture/tests/test_driver_client_table_codex_parity.py",
+    "tools/official_client_capture/tests/test_unit_inherit_codex_parity.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
