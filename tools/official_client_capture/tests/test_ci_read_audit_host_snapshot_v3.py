@@ -48,6 +48,29 @@ def matches(planned: dict, current: dict, kinds, fields=()) -> bool:
     return ra.host_snapshot_matches(planned, current, kinds, fields)[0]
 
 
+# 夹具文件／目录的初始权限，创建后立刻显式设置，使用例结论与进程 umask 无关。
+# 用例里把权限改成 0o600／0o750 来制造“权限变了”，有的还会再恢复成 0o644／0o755：
+# 若初始权限取决于 umask，真实入口门禁（entry-gates.sh 在 clone 测试树后 umask 077）里文件本来就是 0o600，
+# chmod 不产生任何变化，期望的“权限变了”就不成立（11 个用例确定性失败），而 umask 022 下全过。
+# 不用 os.umask() 改进程全局状态：它会污染同进程并行的其它用例。
+FILE_MODE = 0o644
+DIR_MODE = 0o755
+
+
+def make_dir(path: Path) -> Path:
+    """建目录并显式设为 ``DIR_MODE``（不依赖 umask）。"""
+    path.mkdir()
+    os.chmod(path, DIR_MODE)
+    return path
+
+
+def write_file(path: Path, text: str) -> Path:
+    """写文件并显式设为 ``FILE_MODE``（不依赖 umask）。"""
+    path.write_text(text, encoding="utf-8")
+    os.chmod(path, FILE_MODE)
+    return path
+
+
 class TempTree(unittest.TestCase):
     """带一棵真实临时目录的测试基类：一个有两个条目的目录、一个 8 字节文件。"""
 
@@ -55,12 +78,10 @@ class TempTree(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name).resolve()
-        self.dir = self.root / "dir"
-        self.dir.mkdir()
-        (self.dir / "a.txt").write_text("甲", encoding="utf-8")
-        (self.dir / "b.txt").write_text("乙", encoding="utf-8")
-        self.file = self.root / "input.txt"
-        self.file.write_text("12345678", encoding="utf-8")
+        self.dir = make_dir(self.root / "dir")
+        write_file(self.dir / "a.txt", "甲")
+        write_file(self.dir / "b.txt", "乙")
+        self.file = write_file(self.root / "input.txt", "12345678")
 
 
 class HostSnapshotComparisonTests(TempTree):
@@ -142,7 +163,7 @@ class HostSnapshotComparisonTests(TempTree):
     def test_declared_inode_dependency_sees_atomic_replacement(self) -> None:
         planned = snapshot(self.file)
         replacement = self.root / "input.new"
-        replacement.write_text("12345678", encoding="utf-8")
+        write_file(replacement, "12345678")   # 与原文件同样显式设成 FILE_MODE，否则 umask 077 下替换物权限不同，先于 inode 被判“权限变了”
         os.replace(replacement, self.file)
         current = snapshot(self.file)
         self.assertNotEqual(planned["volatile"]["inode"], current["volatile"]["inode"])
@@ -607,13 +628,10 @@ class HostSnapshotRuntimeTests(AuditFixture):
 
     def setUp(self) -> None:
         super().setUp()
-        self.host = self.base / "host"
-        self.host.mkdir()
-        self.dir = self.host / "dir"
-        self.dir.mkdir()
-        (self.dir / "a.txt").write_text("甲", encoding="utf-8")
-        self.file = self.host / "input.txt"
-        self.file.write_text("12345678", encoding="utf-8")
+        self.host = make_dir(self.base / "host")
+        self.dir = make_dir(self.host / "dir")
+        write_file(self.dir / "a.txt", "甲")
+        self.file = write_file(self.host / "input.txt", "12345678")
         self.audit_module = runtime._read_audit()
 
     def entries(self, dependency: dict | None = None) -> list:
@@ -898,6 +916,10 @@ class HostSnapshotRecordTests(unittest.TestCase):
         trace_path.write_text(json.dumps(stat_trace, ensure_ascii=False), encoding="utf-8")
         digest = ur.file_sha256(trace_path)
         self.world.store.put_log(trace_path, digest)
+        # World 夹具用 write_text 建宿主文件，权限取决于 umask；下面要 chmod 成 0o600 来制造“权限变了”，所以在发布 v3 来源记录
+        # （取快照）之前显式设成 FILE_MODE，结论与 umask 无关。只在本用例里设：World 默认的 v2 记录是整份快照（含 ctime），
+        # 在 setUp 里 chmod 会让别的用例的默认记录漂移。
+        os.chmod(self.host, FILE_MODE)
         record = self.publish(trace_sha256=digest, modes={str(self.host): ["stat"]}, run_id="stat-run")
         self.assertEqual(self.check(record)[0], [])
         self.same_size_change()
