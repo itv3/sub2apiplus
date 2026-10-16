@@ -370,7 +370,17 @@ execute 清理须用当前 `cleanup_context.py` 解析并绑定 VC-5／VC-6／ca
   比较函数 `host_snapshot_matches`；条目摘要只绑无条件比较集，内容与目录项经 `unit_records.check_record` 里的 `host_inputs_inherit_problems` 补比。**时间字段、inode、device 是策略性放宽，不是证明**：
   默认认为单元不依赖，依赖的必须在审计策略里逐路径登记 `metadata_dependencies` 并附审核依据；make／`find -newer`／rsync、以 mtime 做缓存键的程序、断言 mtime 的测试不成立。轨迹不完整时一律退回整份相等。
 * 受审计单元的超时按实测定（步骤 7）：`unit_executor.json` 的 `unit_timeouts`（单元 ID → 秒，上限 14400）登记了 `unit_timeouts` 就必须在 `unit_timeouts_basis` 里写明依据（公式与数据来源，没有 `unit_timeouts` 时不必填）；超时进入单元规格，所以要在产生正式来源之前定好，
-  来源与其后继之间不得再改，改了单元规格摘要就变、旧记录无法承接。
+  来源与其后继之间不得再改，改了单元规格摘要就变、旧记录无法承接。现登记 15 个单元；`test_claude_sealed_gate_materials`（原 5400）、`test_claude_typed_vc6_fixture`、`test_claude_upgrade_recovery` 在严格审计下被截断，按公式取上限 14400。
+* 调度配置 `unit_executor.json` 的独占名单（`exclusive`，条目必须写明根因，测试前缀可到模块、类或单个方法）：登记的测试单独成 `<模块>!exclusive` 单元，在并行段之后逐个单跑，期间不派发别的单元。
+  严格审计下 strace 会把测试里的心跳和看门狗拖慢，监督器 `monitor` 看门狗一类用例并发时会把单元自己终止，所以这类用例按根因登记为独占；`test_codex_upgrade_evaluation_attempt_recovery` 现在整类（`AttemptRecoveryTests`）独占，
+  原按 6 块拆分的登记随之删除（整类全部独占时普通部分为空，不产生任何 `#N` 单元）。
+* 严格审计运行不共享身份记忆化（步骤 10）：`entry-gates.sh` 带 `--audit-reads` 时（含 `--audit-strict`）给执行器 `run-gates` 追加 `--identity-memo off`，不带的运行不追加、命令行不变。
+  执行器缺省把环境变量 `CODEX_UPGRADE_IDENTITY_MEMO` 设成本次运行输出目录下的 `identity-memo`，全部单元共用这个路径随运行变化的可变宿主目录，单元对它的读写在严格读集审计里无法声明；
+  `off` 让执行器清除该变量（环境里原有的也清掉），各单元自己重算受管工具身份，慢一点，但不再共享可变宿主状态。身份记忆目录这类只决定缓存位置的环境变量本来就不算进单元规格（见「单元执行记录与承接」）。
+* 共享字节码缓存的启动钩子预热（步骤 10，`driver/bytecode_cache.py`）：标准库预编译跳过 site-packages／dist-packages，而解释器启动一定会导入其中的钩子（Debian／Ubuntu 的 `_distutils_hack`、`apport_python_hook`）。
+  这些钩子没有 .pyc 时，任何不禁写字节码的解释器一启动就会把它们写进共享层；受审计单元在计划期把这些路径登记成「不存在」，写入之后启动的单元全部判「输入与登记快照不同」。所以标准库与源码目录预编译之后，
+  再用同一解释器空跑一次 `-c pass`（去掉 `PYTHONDONTWRITEBYTECODE`，`PYTHONPYCACHEPREFIX` 指向缓存目录）把钩子 .pyc 一次写好。预热在泄漏检查之前执行；失败不使 `prepare` 失败（缓存本身仍可用），
+  结果记在摘要的 `startup_warmup:{status,new_pyc}`（status 为 ok／failed，new_pyc 为新增 .pyc 个数，失败时带 detail），不静默。
 * 控制终端单独绑定 `/dev/tty` 标准字符设备身份和无控制终端状态；只接受轨迹明确为 `ENXIO` 的打开失败或合同内元数据检查。成功访问、其它错误、事件缺失均拒绝，不能把所有设备读取一概豁免。
 * `/bin/bash -n` 语法检查显式设置 `SHELL=/bin/bash` 并绑定到单元规格，避免精简环境下额外查询用户数据库。其它脚本的环境保持原合同；取证和完整门禁必须使用相同的入口环境，不能用 SSH 会话环境替代。
 * 单元输入可登记 `runtime_contract`（`unit-runtime-contract/v1`）：指定专用空临时挂载点、既有生产别名遮挡和明确的动态环境输入。`read_audit_runtime.py` 创建私有挂载命名空间，分别留存实际挂载轨迹与被测轨迹，在实际环境中复核外部输入前后快照。测试单元另绑定完整 `runtime-test-spec`，沿原 `run-unit` 运输测试载荷，在私有 tmpfs 生成固定结果和首次已观察失败旁路；结果回收只接受本轮创建且身份、测试集合与摘要匹配的两类产物，消费端重放同一证明。输出坐标只绑定本轮请求，不进入稳定输入；每轮重建的宿主测试清单不能充当稳定输入。旧文件、先读后写、链接逃逸、来源不明、环境漂移或结束凭证缺失均不可承接，不放开通用移动操作或宿主写入。

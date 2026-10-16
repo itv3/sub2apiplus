@@ -220,8 +220,24 @@ class EntryGatesScriptTests(unittest.TestCase):
 
     def test_it_travels_with_the_audit_arguments_in_a_fixed_order(self) -> None:
         items, _output = self.forwarded(AUDIT_READS="true", AUDIT_STRICT="true", AUDIT_HOST_INPUTS="/h.json", DECLARED_SAMPLE="always")
-        self.assertEqual(items, ["--audit-reads", "--audit-data-root", "/data", "--audit-strict", "--audit-host-inputs", "/h.json", "--declared-sample", "always"])
-        self.assertEqual(self.forwarded(AUDIT_READS="true")[0], ["--audit-reads", "--audit-data-root", "/data"], "不带采样方式时审计参数与改造前相同")
+        # 步骤 10：审计运行（--audit-reads）给执行器追加 --identity-memo off，位置在 --audit-strict 之后、宿主输入清单之前；其余参数的相对次序不变。
+        self.assertEqual(items, ["--audit-reads", "--audit-data-root", "/data", "--audit-strict", "--identity-memo", "off",
+                                 "--audit-host-inputs", "/h.json", "--declared-sample", "always"])
+        self.assertEqual(self.forwarded(AUDIT_READS="true")[0], ["--audit-reads", "--audit-data-root", "/data", "--identity-memo", "off"],
+                         "不带采样方式时审计参数只多审计运行关闭身份记忆化的那一对")
+
+    def test_identity_memo_is_switched_off_only_in_audit_runs(self) -> None:
+        """步骤 10：审计运行关闭身份记忆化（执行器缺省的 identity-memo 目录挂在本次运行输出目录下、随运行变化，严格读集审计无法声明对它的读写），
+        普通运行的执行器命令行不变。"""
+
+        for strict in ("false", "true"):
+            with self.subTest(strict=strict):
+                items, _output = self.forwarded(AUDIT_READS="true", AUDIT_STRICT=strict)
+                self.assertEqual(items.count("--identity-memo"), 1, items)
+                self.assertEqual(items[items.index("--identity-memo") + 1], "off")
+        for values in ({}, {"DECLARED_SAMPLE": "always"}, {"AUDIT_HOST_INPUTS": "/h.json"}):
+            with self.subTest(values=values):
+                self.assertNotIn("--identity-memo", self.forwarded(**values)[0], "不带 --audit-reads 的运行不追加")
 
     def test_the_single_executor_invocation_expands_the_audit_arguments(self) -> None:
         """脚本里只有一处起 run-gates，且它展开 AUDIT_ARGS——采样方式经 AUDIT_ARGS 转交，所以不会有哪一次调用漏掉它。"""

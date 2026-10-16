@@ -58,7 +58,9 @@
 #   pre-A3 来源由编排器按步骤记录判定后指定——present 只复核并沿用已有认证，run 一定新跑（不按「工具五摘要与策略未变」
 #   的旧规则在认证目录里找可复用的，那条规则不看测试、指南、录制数据等输入）；auto 是单独运行时的原有行为。
 #   --audit-reads（E3-04 读集审计，只许 --mode re-execute）：每个正式执行的单元包在 strace 下，核对实际读取都在声明的输入
-#   范围里（测试树单元读到数据根也报出），超出即判失败；明细在 executor/audit/read-audit.json。
+#   范围里（测试树单元读到数据根也报出），超出即判失败；明细在 executor/audit/read-audit.json。审计运行同时给执行器 run-gates 追加
+#   --identity-memo off：执行器缺省把 CODEX_UPGRADE_IDENTITY_MEMO 设成「本次运行输出目录/identity-memo」，各单元共用这个随运行变化的
+#   可变宿主目录，对它的读写在严格读集审计里无法声明；关闭后各单元自己重算受管工具身份（慢一点），不再共享可变宿主状态。不带 --audit-reads 的运行不追加。
 #   --declared-sample off|always|every:N（步骤 5 WP3b，缺省 off）：声明级承接命令单元的读集证据来源，原样交给执行器的同名选项——off 用登记表
 #   里的采样证据（零运行时开销）、always 每次执行都带 strace 采样并用本次采样证明读集仍在声明范围内、every:N 按记录库里该单元已有的正式记录数每 N 次
 #   采样一次。正式验证轮显式带 always；非法值立即退出 2；缺省时命令行、输出与改造前相同。采样器 declared_sampler.py 与本脚本同在驱动目录，
@@ -486,6 +488,9 @@ EXEC_RC=0
 AUDIT_ARGS=()
 if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS=(--audit-reads --audit-data-root "$D"); echo "读集检查：登记覆盖的单元严格取证；未登记项仅在显式重跑策略下执行（数据根 ${D}）"; fi
 if [ "$AUDIT_STRICT" = true ]; then AUDIT_ARGS+=(--audit-strict); fi
+# 审计运行关闭身份记忆化：缺省的 identity-memo 目录挂在本次运行输出目录下，各单元共用、内容随运行变化，严格读集审计无法声明对它的读写；
+# 关闭后各单元自己重算（慢一点），不共享可变宿主状态。只在审计运行里追加，普通运行的命令行不变。
+if [ "$AUDIT_READS" = true ]; then AUDIT_ARGS+=(--identity-memo off); fi
 if [ -n "$AUDIT_HOST_INPUTS" ]; then AUDIT_ARGS+=(--audit-host-inputs "$AUDIT_HOST_INPUTS"); fi
 # 声明级承接的采样方式（步骤 5 WP3b）：原样交给执行器；缺省 off 不追加，命令行与输出和改造前相同。
 if [ "$DECLARED_SAMPLE" != off ]; then AUDIT_ARGS+=(--declared-sample "$DECLARED_SAMPLE"); echo "声明级采样：--declared-sample ${DECLARED_SAMPLE}（声明级命令单元按此取读集证据）"; fi

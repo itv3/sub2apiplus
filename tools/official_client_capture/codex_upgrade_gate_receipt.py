@@ -73,6 +73,10 @@ REGISTERED_REPLAY_PRODUCER_HASHES: dict[str, frozenset[str]] = {
             # base_commit／current_commit 处也是它；按「修改前已部署版本」规则登记，仅供该版本已生成收据的只读重放，
             # 新收据仍绑定当前生成器摘要。
             "77b57e7c677cbbe4b137a8fb5ac95554bbdd5e8fab0a92883335cb50e7ad4a38",
+            # fa764324：基线 b5cceb46f 处的受管版本（已部署，第 8 步 H6 受监督部署的生成器），本次（审计器加固，步骤 10）同步 read_audit／read_audit_runtime 两个验证器钉住值之前的生成器。
+            # claude-step8-declared-inputs-20261015 冻结承接收据以显式 to_sha256 列出它（77b57e7c→fa764324）；按「修改前已部署版本」规则登记，
+            # 仅供该版本已生成收据的只读重放，新收据仍绑定当前生成器摘要。
+            "fa764324c944ed716fa838b7260fb40540095140f14bbc918b8ac9beacbe5cb6",
         }
     ),
 }
@@ -82,8 +86,8 @@ TARGET_VERIFIER_SHA256S: dict[str, str] = {
     "target_platform_gate.py": "8251194da6982b08d63d808761797f9b1d809f2be00a58b753e5917d7e4f8299",
     "full_set_receipt.py": "365303e2278d9b8f4601bc43c640a67293cb3b1bf0bfa1a73d94760e31cec50d",
     "unit_records.py": "04056c95428c8d94d10290e14f403a36352935088e94b230a33976caea9312fc",
-    "read_audit.py": "7f52920ec2d331309417cf0352f944705df8cb879fbeebf3c885d7d4da193a33",
-    "read_audit_runtime.py": "dca669d56ac3ff898ae51729bcf3a8542ba08ed80aa95b8fa08d5d77ed66929b"
+    "read_audit.py": "3bb651c55ba1b27b96cc1e275736b5b85ae82ea29ea1c6c05aaa4e1f2563ff8c",
+    "read_audit_runtime.py": "47927d277c74290136d6204aa1c4d531b8df8a4cca6c6120210699f17ec8d13a"
 }
 
 

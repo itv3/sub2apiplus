@@ -27,9 +27,46 @@ strace 下，单元结束后按它的输入明细核对，超出声明的读取�
 
 带隔离合同的轨迹有两个版本，由显式开关 ``trace_contract`` 选择，默认 v3（历史合同，行为不变）：
 v3 的输出事件是 6 键，rename／link／符号链接与失败的写探测一律不认；v4 的输出事件是 11 键（另有 errno、call、role、
-peer、epoch），两路径调用的两端按调用编号配对，失败调用带错误码，只读事件按「变更纪元」去重。重放按文档自己的
+peer、epoch），两路径调用的两端按调用编号配对，失败调用带错误码，重复事件按「名字级版本」去重（WP-R9）。重放按文档自己的
 schema_version 分派，所以 v3 的已封存凭证永远按旧合同只读验真。control 四链的 sidecar 原样复用本模块，不传该开关，
 仍然生产并重放 v3。
+
+WP-R2（解析器加固第二轮）：ARM64 真实环境里把正常行为判成未解析的几处缺口，只在 v4 合同下放宽（v3 一字不变）：失败的 getcwd
+（ERANGE／ENOENT）、``utimensat(fd, NULL, …)``（futimens）、解码后的 ``openat2``（标志取自 ``struct open_how``）、AF_UNIX 流式
+套接字的创建，以及连接 AF_UNIX 绝对路径得到 ENOENT（登记为对该路径的 missing 探测）。v4 的 strace 选项因此多解码 openat2 与
+connect、多跟踪 bind；v4 的输出事件上限单列为 ``MAX_OUTPUT_EVENTS_V4``。每处放宽的依据与相邻的仍被拒绝的情形见各辅助函数的说明。
+
+WP-R3（解析器加固第三轮，同样只在 v4 合同下）：私有盘内“本单元自己创建的符号链接”被输出归属接受（``read_audit_runtime.OutputTrackerV4``
+里的 ``symlink`` 对象，链接文本原样记在事件的 ``target`` 字段、从不解引用），并保证一切会解引用链接的访问仍然失败关闭。解析器侧
+的配合有四处：（1）事件 ``flags`` 带上调用的 ``AT_*`` 标志（白名单 ``AT_FLAGS_V4``，名单之外登记 at-flag-not-decoded），lstat
+才能与 stat 区分；（2）lstat 到跟踪器仍记着的、本单元创建的链接不再登记 symlink-metadata-not-bound，宿主上的真链接、不是本单元
+创建的、返回结构没完整解码为 S_IFLNK 的仍登记；反方向（内核说普通文件、跟踪器说链接）登记 symlink-state-contradicts-stat；（3）存在符号链接
+对象时，路径写法 ``link/``、``link/.``、``link/..`` 与链接后的 ``..`` 会让文本规范化与内核实际解析的对象不一致，登记
+symlink-path-form-unsafe；（4）symlink／symlinkat 的链接文本缺失或被截断登记 symlink-text-not-decoded。``O_PATH|O_NOFOLLOW`` 的打开
+不豁免。逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r3.py 的模块说明。
+
+WP-R4（解析器加固第四轮，同样只在 v4 合同下）：（1）R6-1：成功的 ``O_PATH|O_NOFOLLOW|O_DIRECTORY`` 打开（open／openat／openat2）按“打开目录”登记，
+不再判 symlink-metadata-not-bound——内核保证最后一个分量是目录，不是链接自身（``_o_path_directory_open``）；缺 O_DIRECTORY 的仍判；
+（2）R6-2：宿主上真符号链接的 lstat（返回结构完整解码为 ``S_IFLNK|0777``、uid／gid／size 是十进制整数且 size≥1、路径写法无 ``.``／``..``／
+``//``／结尾斜杠、不在私有盘内）登记为对该路径的 stat 访问，由覆盖检查要求该路径有 v3 快照——lstat 暴露的 mode／uid／gid／size 正是快照
+links 条目绑定的字段（``_host_symlink_lstat``）；（3）R4-1：本轨迹进程树自己的 ``/proc/<pid>/…``（pid 取自行首 pid 与 clone／fork／vfork 的返回值）里的白名单
+叶文件（stat、status、maps、cmdline……）与 ``/proc/self``／``/proc/thread-self`` 视为单元内部状态，不登记为宿主访问；root／cwd／exe／fd／environ／ns／mem／net、
+非本轨迹的 pid、写与枚举、原始写法带 ``.``／``..`` 的调用一律照旧（``_unit_internal_proc``）。R4-2（失败的带写标志 open：/dev/tty 的 ENXIO）与 R4-3
+（/dev/null 的读写）核对后不需要改解析器：``read_audit_runtime.replay_runtime`` 已覆盖，测试固定了这一点。
+逐类放行／拒绝全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r4.py 的模块说明。
+
+WP-R7a（解析器加固第七轮 a，同样只在 v4 合同下，落实第三、四轮两份独立验收报告）：（1）S-1：路径形态检查补上“``..`` 之后的落点是链接名字”
+（``link/x/..`` 沿链接进入宿主目录再文本回到链接名字），并让两路径调用的检查先于任何一端的事件交给跟踪器（``rename("ln", "ln/../y")``，对拍发现）；
+（2）S-2：成功的 rename 之后各进程的文本工作目录跟着目录改名（``_relocate_working_directories``）；（3）I-1：``unobservable-child`` 扩到任何
+``CLONE_NEW*``，出现 CLONE_NEW*／unshare／setns 之后 pid 空间不再可信（``pid_space_untrusted``）；（4）readlink 返回的文本、lstat 的 ``st_size``
+与跟踪器记着的链接文本交叉核对；（5）删除 ``/proc/self`` 自己的 lstat 豁免（无真实样本支撑，且不可能让任何真实场景多通过一次），
+数字字段加长度上限。逐类全表见 tools/official_client_capture/tests/test_ci_read_audit_wp_r7a.py 的模块说明。
+
+WP-R10（解析器加固第十轮，同样只在 v4 合同下）：strace ≥ 5.19 对「已被别的进程原子替换或删除的文件」的描述符／目录注解，在右尖括号之后紧跟
+``(deleted)``（``3</路径>(deleted)``）；心跳文件“写临时文件再改名发布”时，被打开的旧文件在 openat 返回前后被替换，返回行因此多出这一段，
+v3 的结果正则要求注解后直接结尾，同一行登记 openat 三联（dirfd-path-not-resolved、opened-fd-not-resolved、result-or-string-incomplete）。
+v4 另用 ``_RESULT_V4``／``_ANNOTATION_V4``／``_RETURNED_FD_V4``／``_FD_ANNOTATION_V4``：注解之后允许一个紧跟的 ``(deleted)``，路径仍取尖括号里的原路径，
+归属照旧由 ``under(path, root)`` 判；尖括号里面的旧形态不规整。依据与逐项反例见常量处的说明和 tools/official_client_capture/tests/test_ci_read_audit_wp_r10.py。
 
 子命令：``filter --output <json> --root <目录> [--root …] [--strict] [--runtime-context <json> [--trace-contract v4]]``；
 ``scope --record <正式库记录> --trace <库内轨迹> --output <新提案>`` 生成须重新严格验收的收窄提案。
@@ -52,7 +89,7 @@ TRACE_SCHEMA = "read-audit-trace/v1"
 STRICT_TRACE_SCHEMA = "read-audit-trace/v2"
 RUNTIME_TRACE_SCHEMA = "read-audit-trace/v3"
 # v4：带隔离合同的轨迹的新版事件合同（显式开关，默认仍是 v3）。输出事件 11 键，两路径调用的两端用 role／peer 配对，
-# 失败调用带 errno，只读事件按变更纪元去重；配套的跟踪器是 read_audit_runtime.OutputTrackerV4。
+# 失败调用带 errno，重复事件按名字级版本去重（WP-R9，早先按全局变更纪元）；配套的跟踪器是 read_audit_runtime.OutputTrackerV4。
 # v1～v3 的常量与已封存凭证按旧合同继续只读验真，行为不变；control 四链的 sidecar 原样复用本模块，所以任何
 # 新行为都必须由下面的 trace_contract 开关显式启用，默认路径不得有字节级差异。
 RUNTIME_TRACE_SCHEMA_V4 = "read-audit-trace/v4"
@@ -70,7 +107,21 @@ MAX_FINDINGS = 200
 # 样例行截断长度。
 SAMPLE_CHARS = 300
 # 输出归属事件最多保留多少条（v4 是去重之后的条数）；超出登记 output-event-limit 未解析原因并判失败，不静默截断。
+# 这是 v3 合同的上限（历史合同，含 control 四链与已封存凭证的重放），数值不变；v4 的上限单列为 MAX_OUTPUT_EVENTS_V4。
 MAX_OUTPUT_EVENTS = 200000
+# v4 合同的上限（WP-R2 第 6 项）。依据：10-15 ARM64 实测 1 小时写入密集单元（vc6_batch）在 v4 去重后，超出旧上限的事件有
+# 358,504 条（每超出一条登记一次 output-event-limit），即该单元共约 558,504 条输出事件，旧上限 200000 把正常单元判成失败。
+# 上限的唯一作用是内存／时间保护：合成负载实测（路径长度取真实值约 190 字符，事件互不相同、无法去重）100 万条时解析约 80 秒、
+# 峰值约 3.2 GiB，轨迹 JSON 约 1.1 GiB，读回重放约 8 秒、峰值约 3.8 GiB；50 万条约 1.6／2.4 GiB（完整表见
+# tools/official_client_capture/tests/test_ci_read_audit_wp_r2.py 的文档字符串）。
+# WP-R9（名字级去重）之后的实测：与 compare_accept 同形态的合成负载（982,000 行 strace，约 124 万条事件，读取类占 96%）旧规则保留
+# 929,619 条，新规则保留 117,416 条（解析耗时相同，轨迹 JSON 258→45 MiB，峰值内存 1.3 GiB→0.6 GiB）；事件互不相同时新增的去重键集
+# 约多 8% 内存。所以上限数值不用再提（余量约 8 倍），见 tools/official_client_capture/tests/test_ci_read_audit_wp_r8.py 的模块说明。
+# 版本语义：只对 read-audit-trace/v4 生效，v3 与 control 四链不变；已被旧上限截断的轨迹带 output-event-limit 未解析原因
+# （coverage.unresolved>0），验真永远判失败，与这里的数值无关——上限调高不会让任何旧的失败轨迹变成通过。
+# read_audit_runtime.py 里有一份同值常量（重放端超限即拒绝），两处必须相等：由 test_ci_audit_hardening_h1 的
+# test_parser_and_replay_v4_limits_are_equal 守住（test_ci_read_audit_wp_r2 的 OutputEventLimitTests.test_constants 另有一份同样的断言）。
+MAX_OUTPUT_EVENTS_V4 = 1000000
 
 # 数据根里不算输入的路径（数据根相对路径：以 / 结尾的是前缀，其余精确匹配 → 原因）。新增条目要写明为什么不影响结论。
 # 依据 10-02 ARM64 两轮审计（pre-A3 全部 44 个场景）。
@@ -113,6 +164,17 @@ _PLAIN_WRITE = frozenset({"creat", "mkdir", "rmdir", "unlink", "rename", "link",
                           "utime", "utimes", "setxattr", "lsetxattr", "removexattr", "lremovexattr", "mknod"})
 _PLAIN_EXEC = frozenset({"execve"})
 _TWO_PATHS = frozenset({"rename", "link", "renameat", "renameat2", "linkat"})
+_RENAME_CALLS = frozenset({"rename", "renameat", "renameat2"})
+_READLINK_CALLS = frozenset({"readlink", "readlinkat"})
+# WP-R7a（验收 I-1）：v4 的“子进程不可观察”判据。v3 只认 CLONE_UNTRACED／CLONE_NEWNS（历史合同，一字不变）；v4 认任何 CLONE_NEW*——
+# CLONE_NEWPID 的子进程在新 PID 命名空间里，它再 clone 返回的是命名空间内的小编号（2、3…），与宿主上的进程撞号；CLONE_NEWUSER／NEWNET／
+# NEWIPC／NEWUTS／NEWCGROUP／NEWTIME 同样意味着命名空间变化，没有建立任何子空间合同（control 四链的 sidecar 早已这样判）。
+_CLONE_UNOBSERVABLE_V3 = re.compile(r"\bCLONE_(?:UNTRACED|NEWNS)\b")
+_CLONE_UNOBSERVABLE_V4 = re.compile(r"\bCLONE_(?:UNTRACED|NEW[A-Z0-9_]+)\b")
+_CLONE_NEW_ANY = re.compile(r"\bCLONE_NEW[A-Z0-9_]+\b")
+# 能把调用者或之后的子进程带进新命名空间的非 clone 系统调用（unshare(CLONE_NEWPID) 之后的子进程在新 PID 命名空间里；setns 加入别的命名空间）。
+# 它们本身在 strict 下就是 unsupported-call 未解析；v4 另外据此让 pid 空间不再可信（见 TraceParser.pid_space_untrusted）。
+_NAMESPACE_CALLS = frozenset({"unshare", "setns"})
 _SPAWN = frozenset({"clone", "clone3", "fork", "vfork"})
 _WRITE_FLAGS = re.compile(r"\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b")
 _MISSING_ERRNOS = frozenset({"ENOENT", "ENOTDIR"})
@@ -132,6 +194,42 @@ _ANNOTATED_VALUE = re.compile(r"<" + _ANN + r">")
 _QUOTED = re.compile(r'"(' + _ESC + r')"')
 # 返回值在行尾：「) = 值[<解析路径>][ 错误码 (说明)]」；从行尾匹配，参数里出现类似字样也不会误判。
 _RESULT = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">)?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
+# 返回描述符的真实路径标注（「) = 数字<路径>」且在行尾）：成功的 open 类调用靠它核对「描述符落在哪里」。
+_RETURNED_FD = re.compile(r"\)\s*=\s*\d+<(" + _ANN + r")>\s*$")
+
+# ---------------------------------------------------------------------------
+# WP-R10（审计解析器加固第十轮，仅 v4）：描述符标注右尖括号之后的 ``(deleted)`` 后缀。
+#
+# 背景（10-15 ARM64 真实严格审计，strace 6.8，选项含 ``-y``）：被打开的 ``heartbeat.json`` 在 openat 返回前后被别的进程用
+# ``renameat`` 原子替换（心跳文件“写临时文件再改名发布”），strace 在读 /proc/<pid>/fd/N 得到「路径 (deleted)」时，把
+# `` (deleted)`` 从路径里剥出来、打在右尖括号**之后**，整行形如
+#     ``<... openat resumed>)           = 3</…/run-9e484e75…/heartbeat.json>(deleted)``
+# v3 的 ``_RESULT``／``_ANNOTATION`` 要求注解后直接结尾，于是 ``result`` 为 None，同一行同时登记 dirfd-path-not-resolved、
+# opened-fd-not-resolved、result-or-string-incomplete 三个未解析原因，单元整体失败。同样的后缀也可能出现在参数里的 fd／目录
+# 注解上（``3</path>(deleted)`` 作 dirfd、``getdents64`` 的目录、``AT_FDCWD</path>(deleted)`` 的工作目录）。
+#
+# 语义：尖括号里的路径仍是该描述符当时指向的路径（内核 d_path 对已脱链的目录项，沿父链给出完整路径再加 `` (deleted)``），
+# ``(deleted)`` 只表示这个路径上的对象之后被替换或删除。解析按尖括号里的原路径登记访问，路径归属（盘内／盘外）仍由
+# ``under(path, root)`` 判，后缀不改变归属——宿主路径照旧按宿主访问登记并要求声明覆盖。
+#
+# 写法（已核对 strace 上游）：``(deleted)`` 紧跟右尖括号、无空格。依据：strace 源码 ``src/util.c`` 的
+# ``print_quoted_string_in_angle_brackets``——先打 ``<`` 路径 ``>``，``deleted`` 为真时再 ``tprints_string("(deleted)")``；NEWS 5.19
+# （2022-08-12）「"(deleted)" 标记现在打在尖括号外面」。5.19 之前把 `` (deleted)`` 留在尖括号里面，那是旧形态。ARM64 的 strace 6.8
+# 实测与此一致。所以只认 ``>(deleted)``；``> (deleted)``（带空格）没有任何版本的真实样本，不接受（失败关闭，测试固定）。刻意**不**接受：
+#   * 尖括号**里面**的旧形态 ``3</x (deleted)>``（strace 5.19 之前）：无法与一个真名为「x (deleted)」的文件区分，
+#     所以仍按字面路径处理（登记的是路径「/x (deleted)」，它没被创建过／没有声明过，自然失败关闭），不在这里规整；
+#   * 返回值数字之前或没有注解时的 ``(deleted)``、多个后缀、任何空格、大小写不同、后缀之后的任何文字：都不是 strace 的输出形态。
+# 已知的不可区分（WP-R13，独立验收 O-2）：strace ≥ 5.19 把路径末尾的 `` (deleted)`` 一律剥出来打在尖括号之后，所以一个**字面名字**就带空格的
+# ``x (deleted)`` 的活文件，与“已被删除的 x”打印出来完全一样（都是 ``<…/x>(deleted)``）；解析器按剥掉后缀的 ``x`` 登记。后果只可能是**误报**
+# （跟踪器认为 ``x``——而不是真实的 ``x (deleted)``——被创建过，之后对 ``x`` 的缺失探测会被判与轨迹矛盾），不会漏检：请求路径事件里保留的是真名，
+# 宿主路径上的访问仍按真名登记。strace 源码对这一点的依据（``print_quoted_string_in_angle_brackets`` 的实现）未在本机独立核实。
+# v3 与 control 四链的 ``_RESULT``／``_ANNOTATION``／``_RETURNED_FD`` 一字不改，解析器按 ``trace_v4`` 在构造时选用下面的 v4 版本。
+# ---------------------------------------------------------------------------
+_DELETED_SUFFIX = r"(?:\(deleted\))?"
+_ANNOTATION_V4 = re.compile(r"(AT_FDCWD|-?\d+)<(" + _ANN + r")>" + _DELETED_SUFFIX)
+_RESULT_V4 = re.compile(r"\)\s*=\s*(-?\d+|\?)(?:<" + _ANN + r">" + _DELETED_SUFFIX
+                        + r")?(?:\s+(E[A-Z0-9]+)(?:\s+\([^)]*\))?)?\s*$")
+_RETURNED_FD_V4 = re.compile(r"\)\s*=\s*\d+<(" + _ANN + r")>" + _DELETED_SUFFIX + r"\s*$")
 
 
 def _call_arguments(body: str, result: re.Match | None) -> list[str]:
@@ -202,6 +300,18 @@ def _rename_flags(arguments: Sequence[str]) -> frozenset[str] | None:
     return frozenset(names) if all(item in _RENAME_FLAG_NAMES for item in names) else None
 
 
+# WP-R3：v4 事件 flags 里允许出现的 AT_* 标志（白名单）。read_audit_runtime.py 里有一份同值常量（两个文件互不导入），
+# 两处必须相等，由 test_ci_read_audit_wp_r3 守住。名单之外的 AT_* 标志（AT_FDCWD 是描述符取值，不算标志）登记
+# at-flag-not-decoded 未解析：看不懂的标志可能改变“是否跟随符号链接”之类的语义，不能默默丢掉。
+AT_FLAGS_V4 = frozenset({"AT_SYMLINK_NOFOLLOW", "AT_SYMLINK_FOLLOW", "AT_REMOVEDIR", "AT_EMPTY_PATH", "AT_NO_AUTOMOUNT",
+                         "AT_EACCESS", "AT_STATX_SYNC_AS_STAT", "AT_STATX_FORCE_SYNC", "AT_STATX_DONT_SYNC"})
+_LSTAT_NAMES = frozenset({"lstat", "lstat64"})
+_FSTATAT_NAMES = frozenset({"newfstatat", "fstatat64", "statx"})
+_SYMLINK_CALLS = frozenset({"symlink", "symlinkat"})
+# 带空路径与 AT_EMPTY_PATH 时作用于 dirfd 自己、会改对象元数据的调用（v4 按写登记；基线直接跳过，宿主文件只读打开后用它改时间不留任何 write）。
+_EMPTY_PATH_WRITE_CALLS = frozenset({"utimensat", "fchownat", "fchmodat2"})
+
+
 def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
     """只认完整返回结构里明确的普通文件或目录，不能从路径、其他参数或缩略结构猜类型。"""
     positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
@@ -216,6 +326,341 @@ def _returned_non_link_stat(name: str, arguments: Sequence[str]) -> bool:
     modes = [field for field in fields if re.match(re.escape(key) + r"\s*=", field)]
     return len(modes) == 1 and re.fullmatch(
         re.escape(key) + r"\s*=\s*(?:S_IFREG|S_IFDIR)(?:\|(?:0[0-7]+|S_ISUID|S_ISGID|S_ISVTX))*", modes[0]) is not None
+
+
+def _returned_link_stat(name: str, arguments: Sequence[str]) -> bool:
+    """与 ``_returned_non_link_stat`` 对称：完整返回结构里 ``st_mode``／``stx_mode`` 明确是符号链接（S_IFLNK）。
+
+    只服务于 v4 的“lstat 到本单元自己创建的符号链接”豁免（见 ``TraceParser._tracked_symlink_lstat``）：返回结构必须被完整
+    解码（没有省略号、恰好一个 mode 字段、类型就是 S_IFLNK），不能从路径或缩略结构猜类型。
+    """
+    positions = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
+    position = positions.get(name)
+    if position is None or position >= len(arguments):
+        return False
+    value = arguments[position].strip()
+    if not value.startswith("{") or not value.endswith("}") or "..." in value:
+        return False
+    fields = _call_arguments(value[1:-1], None)
+    key = "stx_mode" if name == "statx" else "st_mode"
+    modes = [field for field in fields if re.match(re.escape(key) + r"\s*=", field)]
+    return len(modes) == 1 and re.fullmatch(
+        re.escape(key) + r"\s*=\s*S_IFLNK(?:\|(?:0[0-7]+|S_ISUID|S_ISGID|S_ISVTX))*", modes[0]) is not None
+
+
+def _o_path_directory_open(flags: Iterable[str]) -> bool:
+    """成功的 ``O_PATH|O_NOFOLLOW`` 打开同时带 ``O_DIRECTORY``：打开的是目录，不是“链接自身”（WP-R4，R6-1，仅 v4 使用）。
+
+    内核语义：``O_DIRECTORY`` 在路径解析末尾核对最后一个分量必须是目录（``path_lookupat`` 的 ``LOOKUP_DIRECTORY`` 检查，
+    ``O_PATH`` 路径同样经过它），``O_NOFOLLOW`` 又让最后一个分量是符号链接时不跟随，于是链接名字得到 ``ENOTDIR``；
+    调用成功就说明最后一个分量（或结尾带斜杠时被内核跟随到的目标）是目录。这正是 ``tar``、``rm -rf``（fts）、Go 的 ``os.Root``
+    这类“逐级安全下降”的惯用写法。能暴露的宿主信息：只有“它是目录”，与普通的打开目录一致；返回描述符注解里的真实路径
+    照常登记（结尾斜杠被跟随时，登记的是跟随后的目标目录，需要自己的快照）。
+
+    仍判 symlink-metadata-not-bound 的形态（此函数返回 False 或调用方不走这里）：没有 ``O_DIRECTORY``（可能打开链接自身，
+    之后 ``openat(fd, "")`` 等能把描述符转成跟随）；调用失败（本函数只在成功分支被调用，失败的调用不进该分支）；标志没解码
+    （openat2 的结构是指针时早就登记 open-flags-not-decoded）。输出归属一侧对私有盘内已知符号链接名字的成功打开另有
+    ``_symlink_name_verdict``：O_PATH 的成功打开一律判问题，与本函数互不依赖。
+    """
+    return "O_DIRECTORY" in flags
+
+
+def _returned_plain_link_stat(name: str, arguments: Sequence[str]) -> bool:
+    """宿主符号链接 lstat 放宽的结构判据（WP-R4，R6-2，仅 v4 使用）：完整返回结构里的 mode 恰为 ``S_IFLNK|0777``，且 uid、gid、
+    size 各恰有一个十进制整数字段、size 至少为 1。
+
+    为什么逐字段要求（而不只要 ``_returned_link_stat`` 的“类型是 S_IFLNK”）：放宽的依据是“lstat 暴露的字段都被 v3 快照的 links 条目绑定”
+    （path／target／mode／uid／gid／size，见 ``_V3_LINK_FIELDS``），所以这几个字段必须在返回结构里看得见、看得懂，缺一个就不能说
+    被绑定的就是被观察的：
+
+    * ``0777``：Linux 上符号链接的权限位恒为 0777；不是说明结构被改写或平台不同，保持失败关闭；
+    * uid／gid 缺失、重复或不是十进制整数（例如被省略号截断、写成名字）→ 拒绝；
+    * ``size >= 1``：链接文本至少一个字节。procfs 的魔法链接（``/proc/self``、``/proc/<pid>/exe``、``cwd``、``fd/N``）st_size 为 0，
+      它们解引用到宿主路径，不是普通磁盘链接，在这里被挡掉（它们也无法有 v3 快照：``host_snapshot`` 拒绝 /proc）。
+    省略号（缩略结构）一律拒绝——哪怕四个必需字段齐备（被截掉的只是不绑定的字段，安全上等价，但“看得清才放行”比逐案推理简单）。
+    数字至多 20 位（``_DECIMAL_U64``，u64 的上限）：真实 strace 的这些字段都是 u32／u64，更长的数字串只可能是构造出来的，
+    同时避免超长数字串让 ``int()`` 抛 ValueError（WP-R7a，第四轮验收一般-1）。
+
+    WP-R7a：``/proc/self``、``/proc/thread-self`` 自己的 lstat 不再放行（原 ``proc_self`` 子规则已删除）：没有任何真实样本支撑，
+    而逐分量走 ``/proc/self/…`` 的 realpath 必先 lstat ``/proc`` 本身，那是对宿主 ``/proc`` 的 stat 访问，无法有快照，
+    审计无论如何失败，该子规则不可能让任何真实场景多通过一次。
+    """
+    mode, uid, gid, size = (_stat_field(name, arguments, key) for key in ("mode", "uid", "gid", "size"))
+    return (mode == "S_IFLNK|0777" and all(value is not None and _DECIMAL_U64.fullmatch(value) for value in (uid, gid, size))
+            and int(size) >= 1)  # type: ignore[arg-type]
+
+
+# lstat 一类调用的返回结构在第几个参数（statx 的在第 5 个）。
+_STAT_RESULT_POSITIONS = {"lstat": 1, "lstat64": 1, "newfstatat": 2, "fstatat64": 2, "statx": 4}
+# 十进制无符号整数（至多 20 位，u64 的上限）：不带前导零、符号、指数；位数上限同时封死超长数字串让 ``int()`` 抛 ValueError 的路径。
+_DECIMAL_U64 = re.compile(r"0|[1-9][0-9]{0,19}")
+
+
+def _stat_field(name: str, arguments: Sequence[str], key: str) -> str | None:
+    """lstat 一类调用的完整返回结构里恰有一个 ``st_<key>``（statx 是 ``stx_<key>``）字段时，返回其取值文本；结构缺失、被省略号缩略、
+    字段缺失或重复时返回 None（WP-R7a：交叉核对用，看不清就不核对、由调用方按“没有确认”处理）。"""
+    position = _STAT_RESULT_POSITIONS.get(name)
+    if position is None or position >= len(arguments):
+        return None
+    value = arguments[position].strip()
+    if not value.startswith("{") or not value.endswith("}") or "..." in value:
+        return None
+    prefix = "stx_" if name == "statx" else "st_"
+    hits = [field for field in _call_arguments(value[1:-1], None) if re.match(re.escape(prefix + key) + r"\s*=", field)]
+    return hits[0].split("=", 1)[1].strip() if len(hits) == 1 else None
+
+
+def _plain_path_text(raw: str | None) -> bool:
+    """原始路径参数的写法没有 ``.``／``..`` 分量、没有 ``//``、不以斜杠结尾：规范化后的路径就是内核解析的路径本身
+    （``..`` 会在符号链接之后回到目标的父目录，结尾斜杠迫使内核解引用最后的链接，见 ``_path_form_hazard``）。"""
+    return (raw is not None and raw != "" and not raw.endswith("/") and "//" not in raw
+            and not {".", ".."} & set(raw.split("/")))
+
+
+# ---------------------------------------------------------------------------
+# WP-R4（R4-1）：自有进程树的 /proc/<pid>/… 与 /proc/self/…。pid 随运行变，不可能在策略里静态声明；而 ``host_snapshot`` 也拒绝
+# /proc 路径（虚拟路径不能冒充稳定快照），所以这类访问永远无法靠声明覆盖。下面的判据决定哪些访问是“单元自己的内部状态”。
+# ---------------------------------------------------------------------------
+
+# 只读文本叶文件白名单：这些文件描述该进程自己的运行状态。放行的理由与边界（每项能暴露什么）：
+#   * stat／statm／status／io／limits／oom_score／oom_score_adj：进程自己的状态、内存与资源统计，随运行而变，本来就不可能是可复现输入；
+#   * cmdline／comm：进程自己的命令行与线程名，由被测程序自己（或其父进程）设定；
+#   * maps／smaps／smaps_rollup：进程自己的地址空间布局。其中出现的映射文件路径，都已经因为被 mmap 而在轨迹里作为独立的
+#     打开访问登记过（需要各自的快照），这里不重复；地址、偏移是 ASLR 随机值。
+# 诚实声明（WP-R7a，第四轮验收一般-3）：名单里的文件**确实带宿主态**——``status`` 的 Cpus_allowed／Mems_allowed／Cap*／Seccomp／Groups、``limits``
+# （继承自宿主会话的 rlimit）、``oom_score``（随宿主总内存）、``stat`` 的 starttime／processor。放行它们是需求的明文要求，理由是它们与不被
+# 审计跟踪的 ``getuid()``／``sched_getaffinity()``／``getrlimit()`` 同类：被测程序本来就能用系统调用直接读到同样的值，审计从不把这类
+# 系统调用当作宿主输入；这里放行的是“经由 /proc 读同样的值”，不是新增的信息通道。读到的内容会影响程序行为，所以依赖它们的单元
+# 在不同宿主上本来就不可复现——这一点由承接口径（同机、同环境）而不是读集审计保证。
+# 刻意不在名单里的（继续按宿主访问判，需要声明或保持失败关闭）：root／cwd／exe／fd／fdinfo（魔法链接或解引用到宿主路径、枚举描述符）、
+# environ（可能含宿主环境）、ns／mem／net／mountinfo／mounts／cgroup／attr／auxv／wchan（宿主命名空间、内核或容器配置）、task 之下的
+# 非叶文件。pid 必须出现在本轨迹里（行首 pid 或 clone 返回值），别的进程的状态是宿主输入。
+_PROC_UNIT_LEAVES = frozenset({"stat", "statm", "status", "cmdline", "comm", "maps", "smaps", "smaps_rollup", "io", "limits",
+                               "oom_score", "oom_score_adj"})
+# 叶文件允许的访问类型：读、失败的打开／stat（EACCES、ESRCH 等，探测）、不存在（进程已退出）。写、执行、枚举都不放行。
+_PROC_FILE_KINDS = frozenset({"read", "stat", "missing"})
+# 目录本身（/proc/<pid>、/proc/<pid>/task、/proc/<pid>/task/<tid>）允许的访问类型：stat、打开、不存在；不放行枚举（list）——
+# 枚举内核的目录项集合会随内核版本与配置而变。
+_PROC_DIR_KINDS = frozenset({"stat", "dir", "missing"})
+# 永远指向调用者自己的别名；作为 pid 位置的取值只在第一级有效（task 之下的线程号必须是本轨迹里出现过的真实编号）。
+_PROC_SELF_NAMES = frozenset({"self", "thread-self"})
+
+
+def _no_dot_components(raw: str) -> bool:
+    """原始路径参数没有 ``.``／``..`` 分量。"""
+    return not {".", ".."} & set(raw.split("/"))
+
+
+def _unit_internal_proc(path: str, kind: str, traced: set[str] | frozenset[str]) -> bool:
+    """路径是否属于“本轨迹进程树自己的 /proc 状态”，且访问类型在白名单里。
+
+    形态（``<p>`` 为 ``self``／``thread-self`` 或本轨迹出现过的规范十进制 pid，``<t>`` 为本轨迹出现过的 pid／tid）：
+
+    * ``/proc/self``、``/proc/thread-self``、``/proc/<p>``、``/proc/<p>/task``、``/proc/<p>/task/<t>``：目录元数据（stat／打开／不存在）；
+    * ``/proc/<p>/<叶>``、``/proc/<p>/task/<t>/<叶>``：白名单叶文件，读／探测。
+
+    其余一律返回 False：非本轨迹的 pid（别的进程的状态是宿主输入）、前导零的 pid（内核拒绝，且不等于规范编号）、
+    ``root／cwd／exe／fd／environ／ns／mem／net…`` 等不在白名单里的名字、更深的路径、写与枚举。
+    传入的路径是规范化后的绝对路径；原始写法带 ``..``／``.`` 的调用由调用方先挡掉（``TraceParser.call_plain_paths``）。
+    """
+    if not path.startswith("/proc/"):
+        return False
+    parts = path[len("/proc/"):].split("/")
+    if parts[0] not in _PROC_SELF_NAMES and parts[0] not in traced:
+        return False
+    rest = parts[1:]
+    if not rest:
+        return kind in _PROC_DIR_KINDS
+    if len(rest) == 1:
+        if rest[0] in _PROC_UNIT_LEAVES:
+            return kind in _PROC_FILE_KINDS
+        return rest[0] == "task" and kind in _PROC_DIR_KINDS
+    if rest[0] != "task" or rest[1] not in traced:
+        return False
+    tail = rest[2:]
+    if not tail:
+        return kind in _PROC_DIR_KINDS
+    return len(tail) == 1 and tail[0] in _PROC_UNIT_LEAVES and kind in _PROC_FILE_KINDS
+
+
+def _path_form_hazard(tracker: Any, base: str | None, raw: str) -> bool:
+    """原始路径参数的写法，会不会让“文本规范化后的路径”与内核实际解析的对象不是同一个——只在存在符号链接对象时才可能。
+
+    解析器用 ``os.path.normpath`` 把路径规范化成绝对路径，这对没有符号链接的目录树是等价的；一旦有符号链接对象，
+    有四种写法会让规范化“骗人”（都是 Linux 的真实语义）：
+
+    * ``link/..``、``a/link/../b``：内核先解引用 link 再取目标的父目录，规范化却直接回到 link 的父目录；
+    * ``link/x/..``、``link/x/y/../..``（WP-R7a，验收 S-1）：内核沿 link 下降到目标目录里的 ``x``、再回到目标目录；文本规范化
+      却把 ``x/..`` 抵消、落回 link 名字本身。此时调用在 ``link`` 这个名字上看起来是“不跟随的探测”（mkdir／symlink／open(O_EXCL)
+      的 EEXIST，rename 失败的 ENOENT），内核实际却在宿主目录里查了 ``x``，宿主上 ``x`` 是否存在被暴露。判据：``..`` 的落点
+      本身是符号链接名字——只有先沿链接下降过，``..`` 才可能落回链接名字；
+    * ``link/``、``link/.``：结尾的斜杠或 ``.`` 迫使内核解引用最后的链接，哪怕调用本身是 lstat／readlink 这类“不跟随”的调用；
+    * 同理 ``link/./x`` 之类经过链接的中间分量，规范化后是 ``…/link/x``，由跟踪器的“中间分量是符号链接”检查拦下，不在这里。
+
+    本函数沿原始写法逐个分量走一遍（起点是 dirfd／工作目录的规范路径或根），遇到 ``..`` 时若当前位置是存活的符号链接名字、
+    或 ``..`` 之后的落点是符号链接名字、或结尾带斜杠／``.`` 时当前位置是符号链接名字，就判有风险。完整性论证：文本走法经过某个链接
+    名字时，要么最终路径里它仍是真祖先（跟踪器的“中间分量是符号链接”检查拦下），要么被 ``..`` 抵消——抵消发生的那一步，
+    ``..`` 之前的位置是链接（第一个判据）或 ``..`` 的落点就是链接（第二个判据）；走法从不经过任何链接名字时，文本规范化与
+    内核解析等价。返回 True 时调用方登记未解析，整次审计失败关闭。
+    """
+    if not raw or not tracker.has_symlinks():
+        return False
+    current = "/" if raw.startswith("/") else base
+    if current is None:
+        return False
+    parts = raw.split("/")
+    for component in parts:
+        if component in ("", "."):
+            continue
+        if component == "..":
+            if tracker.is_symlink(current):
+                return True
+            current = os.path.dirname(current) or "/"
+            if tracker.is_symlink(current):
+                return True   # WP-R7a（S-1）：沿链接下降后用 ``..`` 回到链接名字
+        else:
+            current = os.path.join(current, component)
+    return (raw.endswith("/") or parts[-1] == ".") and tracker.is_symlink(current)
+
+
+# ---------------------------------------------------------------------------
+# WP-R2：以下辅助函数与常量只服务于 v4 轨迹合同下的几处放宽（ARM64 真实环境把正常行为判成未解析的缺口）。
+# 每一处放宽都写明“这个系统调用在这种情形下能暴露什么宿主信息”，暴露不了才放宽；解析器里的调用点都以 ``self.trace_v4`` 为
+# 前提，v3（含 control 四链与 declared_sampler 复用的默认路径）的行为一字不变。
+# ---------------------------------------------------------------------------
+
+# 失败的 getcwd 只带这两个错误码：ERANGE（缓冲区装不下，glibc 会换更大的缓冲区重试，ARM64 实测约 5500 次）与 ENOENT
+# （工作目录已被删除）。失败时内核不向缓冲区写入任何路径，缓冲区参数只是指针；两个结果都只取决于调用方自己的参数或进程自己的
+# 工作目录状态（目录被删要么是被测程序自己删的——写调用已单独登记，要么是宿主目录漂移——快照比对会拦下），不读取宿主路径信息。
+# 其他错误码（实测没有出现）和成功却取不到字符串的 getcwd 仍判未解析。
+_GETCWD_BENIGN_ERRNOS = frozenset({"ERANGE", "ENOENT"})
+_FD_ANNOTATION = re.compile(r"(\d+)<(" + _ANN + r")>")
+_FD_ANNOTATION_V4 = re.compile(r"(\d+)<(" + _ANN + r")>" + _DELETED_SUFFIX)   # WP-R10：同 _ANNOTATION_V4，允许尖括号之后的 (deleted)
+_SOCKET_ANNOTATION = re.compile(r"\d+<socket:\[\d+\]>")
+_OPEN_FLAG_NAME = re.compile(r"O_[A-Z0-9_]+")
+_UNIX_DOMAINS = frozenset({"AF_UNIX", "AF_LOCAL"})
+# 只放行 AF_UNIX 流式套接字：它能携带路径的系统调用只有 bind 与 connect（流式套接字用 sendto／sendmsg 带地址，内核不会按该地址查找路径：
+# 已连接的得到 EISCONN，未连接的得到 EOPNOTSUPP），
+# 而 v4 的 strace 选项已把 bind、connect 都纳入跟踪；数据报套接字可以 sendto 带路径地址、而 sendto 太常见不能逐条跟踪，所以仍判不支持。
+_UNIX_STREAM_FLAGS = frozenset({"SOCK_CLOEXEC", "SOCK_NONBLOCK"})
+
+
+def _futimens_target(arguments: Sequence[str], annotation: re.Pattern[str] = _FD_ANNOTATION) -> str | None:
+    """``utimensat(fd, NULL, times, 0)``（即 futimens）的作用对象：路径参数为 NULL 时系统调用作用于 fd 本身。
+
+    只认完整形态：四个参数、路径是 NULL、标志是 0（NULL 路径配非零标志内核返回 EINVAL）、第一个参数是真实描述符
+    （十进制编号，不是 AT_FDCWD——AT_FDCWD 配 NULL 路径内核得到 EFAULT）并带 ``-y`` 的路径标注，且标注是绝对路径
+    （管道、套接字之类的标注不是路径）。返回标注里的路径；任何不符返回 None，由调用方登记未解析。
+    暴露的信息：只是对该已打开对象改时间，不读取任何宿主内容；对象路径照常按“写”登记，宿主路径上的写由读集审计另行拦下。
+    ``annotation`` 默认是 v3 的原正则（标注后必须直接结尾）；v4 调用方传 ``_FD_ANNOTATION_V4``（WP-R10：标注之后允许 ``(deleted)``，
+    路径取尖括号里的原路径，后缀不改变归属）。
+    """
+    if len(arguments) != 4 or arguments[1].strip() != "NULL" or arguments[3].strip() != "0":
+        return None
+    match = annotation.fullmatch(arguments[0].strip())
+    if match is None:
+        return None
+    path = unescape(match.group(2))
+    if not path.startswith("/") or "\x00" in path:
+        return None
+    return os.path.normpath(path)
+
+
+def _openat2_flags(arguments: Sequence[str]) -> frozenset[str] | None:
+    """``openat2`` 第三个参数 ``struct open_how`` 解码后 ``flags=`` 字段里的打开标志。
+
+    结构只是指针（strace 未解码）、被省略号截断、没有恰好一个 flags 字段，或标志里有不是 ``O_*`` 符号的片段（十六进制残片等）
+    时返回 None——这些情形下标志不可见，不能猜。
+    """
+    if len(arguments) != 4:
+        return None
+    value = arguments[2].strip()
+    if not value.startswith("{") or not value.endswith("}"):
+        return None
+    fields = _call_arguments(value[1:-1], None)
+    flag_fields = [field for field in fields if re.match(r"flags\s*=", field)]
+    if not fields or len(flag_fields) != 1 or any(field == "..." for field in fields):
+        return None
+    names = flag_fields[0].split("=", 1)[1].strip().split("|")
+    if not all(_OPEN_FLAG_NAME.fullmatch(name) for name in names):
+        return None
+    return frozenset(names)
+
+
+# openat2 的 resolve= 里“不改变被探测路径”的符号：它们只会让调用更容易失败（BENEATH 拒绝逃出 dirfd 的路径，NO_SYMLINKS／NO_MAGICLINKS
+# 拒绝经过符号链接，NO_XDEV 拒绝跨挂载点），成功时解析出的对象与不带它们完全相同。RESOLVE_IN_ROOT 会把 ``..`` 与绝对路径钳在 dirfd
+# 之内（解析器按字面规范化就会记错路径），RESOLVE_CACHED 让结果取决于缓存状态——都不在此列。
+_OPENAT2_SAFE_RESOLVE = frozenset({"RESOLVE_BENEATH", "RESOLVE_NO_SYMLINKS", "RESOLVE_NO_MAGICLINKS", "RESOLVE_NO_XDEV"})
+
+
+def _openat2_resolve_ok(arguments: Sequence[str]) -> bool:
+    """``openat2`` 的 ``struct open_how`` 里恰好一个 ``resolve=`` 字段，且取值是 ``0`` 或只由安全符号用 ``|`` 连接（不重复）。
+
+    验收缺陷 M-1：``RESOLVE_IN_ROOT`` 的失败调用没有返回描述符的真实路径注解可核对，解析器按字面拼出的路径就会把内核真正探测的
+    ``<dirfd>/…`` 宿主路径记成别的（可能恰在私有盘根下的）合法缺失探测。结构只是指针、被省略号截断、缺字段、重复字段、取值含未知符号或
+    十六进制残片时一律返回 False——看不清就按失败关闭处理。
+    """
+    if len(arguments) != 4:
+        return False
+    value = arguments[2].strip()
+    if not value.startswith("{") or not value.endswith("}"):
+        return False
+    fields = _call_arguments(value[1:-1], None)
+    resolve_fields = [field for field in fields if re.match(r"resolve\s*=", field)]
+    if not fields or len(resolve_fields) != 1 or any(field == "..." for field in fields):
+        return False
+    text = resolve_fields[0].split("=", 1)[1].strip()
+    if text == "0":
+        return True
+    names = text.split("|")
+    return all(name in _OPENAT2_SAFE_RESOLVE for name in names) and len(set(names)) == len(names)
+
+
+def _is_unix_stream_socket(arguments: Sequence[str]) -> bool:
+    """``socket(AF_UNIX|AF_LOCAL, SOCK_STREAM[|SOCK_CLOEXEC][|SOCK_NONBLOCK], 0)``。
+
+    创建一个本机流式套接字本身不读取任何宿主信息（不碰文件系统路径）；之后携带路径的 bind／connect 都在跟踪里单独判。
+    其他域（AF_INET／AF_INET6／AF_NETLINK／AF_PACKET……意味着网络或内核通信）、数据报与其他类型、非零协议一律不在此列。
+    """
+    if len(arguments) != 3:
+        return False
+    domain, kind, protocol = (argument.strip() for argument in arguments)
+    parts = kind.split("|")
+    return (domain in _UNIX_DOMAINS and protocol == "0" and parts[0] == "SOCK_STREAM"
+            and set(parts[1:]) <= _UNIX_STREAM_FLAGS and len(set(parts)) == len(parts))
+
+
+def _connect_unix_raw_path(arguments: Sequence[str]) -> str | None:
+    """``connect(fd<socket:[N]>, {sa_family=AF_UNIX, sun_path="/绝对路径"}, len)`` 里的**原始**路径（未规范化，WP-R13 T1）。
+
+    要求：描述符带套接字标注、地址结构被完整解码（strace 选项 verbose=…connect）、恰好两个字段、域是 AF_UNIX、sun_path 是
+    完整的带引号字符串（抽象套接字 ``@"…"``、被截断、缺字段都不是）、路径是不含 NUL 的绝对路径。不符返回 None。
+
+    为什么要单独返回原始写法：内核按原始字符串解析 ``sun_path``（``link/../x`` 会先解引用 ``link`` 再取目标的父目录），而
+    ``os.path.normpath`` 会把它文本规范化成别的路径。符号链接路径形态检查（``TraceParser._check_path_form``）必须看原始写法，
+    所以调用点用本函数取原始路径、先检查再规范化；``_connect_unix_path`` 保留为“已规范化路径”的老接口。
+    """
+    if len(arguments) != 3 or _SOCKET_ANNOTATION.fullmatch(arguments[0].strip()) is None or re.fullmatch(r"\d+", arguments[2].strip()) is None:
+        return None
+    value = arguments[1].strip()
+    if not value.startswith("{") or not value.endswith("}"):
+        return None
+    fields = _call_arguments(value[1:-1], None)
+    if len(fields) != 2 or fields[0] not in {"sa_family=" + domain for domain in _UNIX_DOMAINS}:
+        return None
+    match = re.fullmatch(r'sun_path="(' + _ESC + r')"', fields[1])
+    if match is None:
+        return None
+    path = unescape(match.group(1))
+    if not path.startswith("/") or "\x00" in path:
+        return None
+    return path
+
+
+def _connect_unix_path(arguments: Sequence[str]) -> str | None:
+    """同 ``_connect_unix_raw_path``，但返回规范化之后的路径（老接口，行为不变）。"""
+    raw = _connect_unix_raw_path(arguments)
+    return None if raw is None else os.path.normpath(raw)
 
 
 class AuditError(RuntimeError):
@@ -306,12 +751,31 @@ class TraceParser:
         self.trace_v4 = trace_contract == TRACE_CONTRACT_V4
         if self.trace_v4 and (not strict or runtime_context is None):
             raise AuditError("v4 轨迹合同只用于带隔离合同的严格审计")
+        # WP-R10：取描述符注解、结果行、返回描述符路径的三个正则按合同选用。v3（含 control 子类，它们走 v3 构造）用原正则，
+        # 注解之后必须直接结尾；v4 的版本在右尖括号后另允许一个 ``(deleted)``，见常量处的说明。
+        self.annotation_pattern = _ANNOTATION_V4 if self.trace_v4 else _ANNOTATION
+        self.result_pattern = _RESULT_V4 if self.trace_v4 else _RESULT
+        self.returned_fd_pattern = _RETURNED_FD_V4 if self.trace_v4 else _RETURNED_FD
         self.call_id = 0                           # 完整系统调用（unfinished／resumed 拼好之后）的递增编号
         self.call_errno: str | None = None         # 当前调用的错误码，成功为 None
         self.call_flags: frozenset[str] = frozenset()   # 当前调用的 RENAME_* 标志（renameat2）
         self.call_end: tuple[str, str | None] | None = None   # 当前正在登记的两路径调用端点：(角色, 另一端路径)
+        self.call_link: str | None = None          # 当前 symlink／symlinkat 调用的链接文本（WP-R3，原样记下，不解引用）
         self.epoch = 0                             # 变更纪元：此前使名字空间状态改变的事件个数
-        self.seen_events: set[tuple] = set()       # 当前纪元内已出现过的事件键，用于只读事件去重
+        self.seen_events: set[tuple] = set()       # 已保留的非改状态事件的去重键（名字级，见 _record_output_event），不随纪元清空
+        # WP-R4（R4-1，仅 v4）：本轨迹里出现过的被追踪进程／线程号（行首 pid、clone／fork／vfork 的返回值）。``_add`` 据此把“自有进程树的
+        # /proc/<pid>/… 白名单叶文件”视为单元内部状态，见 ``_unit_internal_proc``。
+        # 取舍（WP-R7a，第四轮验收一般-3）：pid 复用时，先后属于不同进程的同一个编号都算轨迹内部，不区分先后，也不回溯（先读后出现的 pid 不放行）。
+        # 理由：Linux 默认的 pid 分配是循环递增（pid_max 通常 ≥ 32768），单元生命周期内几乎不会绕一圈复用；即使复用，读到的也是同一个 pid
+        # 编号在当时指向的、属于本轨迹进程树之外的进程的白名单叶文件——与上面“带宿主态”同一量级的暴露，不构成新的通道。
+        # 命名空间变化（CLONE_NEW*、unshare、setns）后编号空间本身不再可信，见 ``pid_space_untrusted``。
+        self.traced_pids: set[str] = set()
+        self.call_plain_paths = True               # 当前调用的路径参数都没有 ``.``／``..`` 分量（v4；有则 /proc 内部状态放宽不适用）
+        # WP-R7a（验收 I-1，仅 v4）：轨迹里出现过任何 CLONE_NEW*、unshare、setns 之后置真：此后 pid／tid 编号不再对应同一个 PID 空间，
+        # “已见 pid 集合”不能再证明某个 /proc/<pid> 属于本轨迹进程树，/proc 内部状态放宽一律不适用（整次审计本来也已因
+        # unobservable-child／unsupported-call 失败关闭，这是第二道防线：即使将来有人放宽了那两条，/proc/<小编号> 也不会被当作内部状态）。
+        self.pid_space_untrusted = False
+        self.unit_proc_accesses = 0                # 被判为单元内部状态、没有登记为访问的 /proc 访问条数（只供测试与诊断，不进轨迹）
         if runtime_context is not None:
             if not strict:
                 raise AuditError("隔离合同必须使用严格审计")
@@ -329,19 +793,26 @@ class TraceParser:
             if self.strict:
                 self._unresolved("path-not-resolved")
             return
+        if self.trace_v4 and self.call_plain_paths and not self.pid_space_untrusted and _unit_internal_proc(path, kind, self.traced_pids):
+            # WP-R4（R4-1）：自有进程树的 /proc/<pid>/… 白名单叶文件是单元内部状态，不登记为宿主访问；判据与不放行的形态见该函数。
+            self.unit_proc_accesses += 1
+            return
         self.accesses.setdefault(path, set()).add(kind)
         self.samples.setdefault(path, line[:SAMPLE_CHARS])
         if self.output_tracker is not None and path == "/dev/tty":
             name, body, succeeded = self.event
-            result = _RESULT.search(body)
+            result = self.result_pattern.search(body)
             self.terminal_events.append({"name": name, "kind": kind, "errno": result.group(2) if result else None,
                                          "succeeded": succeeded})
         if self.output_tracker is not None and _under(path, self.output_tracker.root):
             name, body, succeeded = self.event
-            descriptor = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+            descriptor = self.returned_fd_pattern.search(body)
             target = unescape(descriptor[1]) if descriptor else None
             flags = _operation_flags(body)
             if self.trace_v4:
+                if name in _SYMLINK_CALLS:
+                    # WP-R3：符号链接创建调用没有返回描述符，事件的 target 字段改存链接文本（原样、不解引用），跟踪器据此记录对象。
+                    target = self.call_link
                 self._record_output_event(path, kind, name, succeeded, flags, target)
                 return
             self.output_tracker.observe(path, kind, name, "|".join(flags), succeeded, target)
@@ -354,27 +825,31 @@ class TraceParser:
 
     def _record_output_event(self, path: str, kind: str, name: str, succeeded: bool, flags: set[str],
                              target: str | None) -> None:
-        """v4：组装 11 键事件、交给跟踪器，并按变更纪元去重后保留。
+        """v4：组装 11 键事件、交给跟踪器，并按名字级去重键去重后保留。
 
-        去重规则：事件没有使跟踪器状态改变，且同键事件在当前纪元已出现过，就不再追加（保留首次）。
-        同一纪元内名字空间没有任何变化，所以同键的只读事件（反复 stat、反复读同一个文件、反复列目录）对归属判定
-        不提供新信息；去掉它们是为了不撑爆事件上限（实测最大样本里 18.4 万条只读事件只有约 2300 种不同事件）。
-        使状态改变的事件永不去重，并使纪元加一——事件自身携带的是加一之前的纪元。
+        去重规则（WP-R9）：事件没有使跟踪器状态改变，且同键事件已经保留过，就不再追加（保留首次）。键由跟踪器给出
+        （``OutputTrackerV4.dedup_key``）：事件自身的全部字段，加上它判定所依赖的那几个名字的版本号——键相同则跟踪器对两条事件的
+        判定完全相同，所以同键的重复事件（反复 stat、反复读同一个文件、反复列目录）对归属判定不提供新信息。键里没有全局变更纪元：
+        对别的名字的写、rename、unlink 不会使这个名字上的重复读取失效（WP-R8 之前按纪元去重，写密集的单元里全局纪元被切得很碎，
+        10-15 实测 compare_accept 的 128 万条事件里 88% 是对私有盘内路径的重复成功 stat／读）；这个名字（或带着它的目录）
+        自己变了才会换新版本号。键为 None 的事件（成功的两路径调用、成功的 mkdir／unlink／rmdir／symlink）和紧跟在文件创建之后的事件永远保留。
+        使状态改变的事件永不去重，并使纪元加一——事件自身携带的是加一之前的纪元；``epoch`` 字段与重放端的重算语义不变。
         """
         role, peer = self.call_end if self.call_end is not None else (None, None)
         flags = flags | self.call_flags
         event = {"path": path, "kind": kind, "name": name, "succeeded": succeeded, "flags": sorted(flags), "target": target,
                  "errno": self.call_errno, "call": self.call_id, "role": role, "peer": peer, "epoch": self.epoch}
-        if self.output_tracker.observe_event(event):
+        tracker = self.output_tracker
+        key = tracker.dedup_key(event)                    # 必须先于 observe_event：键描述的是事件到达时名字的状态
+        forced = tracker.consumes_hidden_state()          # 紧跟在文件创建之后的事件会消耗隐藏状态，必须保留
+        if tracker.observe_event(event):
             self.epoch += 1
-            self.seen_events.clear()
-        else:
-            key = (path, kind, name, succeeded, self.call_errno, tuple(event["flags"]), target, role, peer, self.epoch)
-            if key in self.seen_events:
+        elif key is not None:
+            if key in self.seen_events and not forced:
                 return
             self.seen_events.add(key)
-        # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。
-        if len(self.output_events) < MAX_OUTPUT_EVENTS:
+        # 仅保存归属重放所需字段，不能把完整执行参数或文件内容写进轨迹。v4 用自己的上限（见常量处的版本语义说明）。
+        if len(self.output_events) < MAX_OUTPUT_EVENTS_V4:
             self.output_events.append(event)
         else:
             self._unresolved("output-event-limit")
@@ -384,6 +859,8 @@ class TraceParser:
         line = raw.rstrip("\n")
         match = _LINE.match(line)
         pid, rest = (match.group(1), match.group(2)) if match else ("0", line)
+        if self.trace_v4 and match:
+            self.traced_pids.add(pid)
         if self.strict and pid in self.deferred:
             self._defer(pid, line)
             return
@@ -418,7 +895,7 @@ class TraceParser:
             if name in _SPAWN:
                 self.spawn_cwd[pid] = self.cwd.get(pid)
             return
-        result = None if unfinished else _RESULT.search(body)
+        result = None if unfinished else self.result_pattern.search(body)
         if self.strict and (result is None or re.search(r'"\s*\.\.\.', body)):
             self._unresolved("result-or-string-incomplete:" + name)
         errno = result.group(2) if result else None
@@ -429,12 +906,28 @@ class TraceParser:
         self.call_errno = errno
         self.call_flags = frozenset()
         self.call_end = None
+        self.call_link = None
         if self.trace_v4 and name == "renameat2":
             decoded = _rename_flags(arguments)
             if decoded is None:
                 self._unresolved("rename-flags-not-decoded:" + name)
             else:
                 self.call_flags = decoded
+        if self.trace_v4:
+            # WP-R3：事件要带上调用的 AT_* 标志（lstat 与 stat、unlinkat 的 AT_REMOVEDIR 都靠它区分）。AT_FDCWD 是描述符取值，
+            # 不是标志；名单之外的 AT_* 标志看不懂，登记未解析而不是默默丢掉。
+            at_flags = frozenset(flag for flag in _argument_flags(body) if flag.startswith("AT_") and flag != "AT_FDCWD")
+            if at_flags - AT_FLAGS_V4:
+                self._unresolved("at-flag-not-decoded:" + name)
+            self.call_flags = self.call_flags | (at_flags & AT_FLAGS_V4)
+            if name in _SYMLINK_CALLS:
+                self.call_link = _path_argument(arguments, 0)
+                if self.call_link is None:
+                    self._unresolved("symlink-text-not-decoded:" + name)
+            # WP-R4（R4-1）：任何一个字符串参数带 ``.``／``..`` 分量，规范化后的路径就可能不是内核解析的对象（``/proc/self/cwd/..`` 会回到
+            # 工作目录的父目录，文本规范化却得到 ``/proc/self``），这时 /proc 内部状态放宽一律不适用。
+            self.call_plain_paths = all(_no_dot_components(unescape(quoted[1])) for quoted in
+                                        (_QUOTED.fullmatch(argument) for argument in arguments) if quoted is not None)
         if self.strict and result and result.group(1).isdigit() and errno is None:
             flags = _argument_flags(body)
             # v2 快照只绑定路径解析所需的链接属性，不绑定正常解析可能刷新的链接访问时间。
@@ -442,11 +935,30 @@ class TraceParser:
             # 真链接、未知或缩略类型，以及链接自身的描述符仍缺合同，必须拒绝承接。
             nofollow_stat = (name in {"lstat", "lstat64"}
                              or (name in {"newfstatat", "fstatat64", "statx"} and "AT_SYMLINK_NOFOLLOW" in flags))
-            if ((nofollow_stat and not (result.group(1) == "0" and _returned_non_link_stat(name, arguments)))
-                    or (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags)):
-                self._unresolved("symlink-metadata-not-bound:" + name)
+            # WP-R4（R6-1，仅 v4）：成功的 O_PATH|O_NOFOLLOW|O_DIRECTORY 打开不是“链接自身的元数据”——见 ``_o_path_directory_open``。
+            o_path_nofollow = (name in {"open", "openat", "openat2"} and {"O_PATH", "O_NOFOLLOW"} <= flags
+                               and not (self.trace_v4 and _o_path_directory_open(flags)))
+            if ((nofollow_stat and not (result.group(1) == "0" and _returned_non_link_stat(name, arguments))) or o_path_nofollow):
+                # WP-R3（仅 v4）：lstat 到“本单元自己创建、跟踪器当前仍记着的符号链接”不登记 symlink-metadata-not-bound——
+                # 那是链接自己的元数据，内容由被测代码自己写入，没有宿主依赖。宿主上的真链接、不在私有盘内的、不是本单元创建的
+                # 一律仍登记。O_PATH|O_NOFOLLOW 的打开不豁免（得到的描述符后续可被 openat(fd, "") 等转成跟随，不可见）。
+                # WP-R4（R6-2，仅 v4）：宿主上的真符号链接（不在私有盘内）、返回结构完整解码为 ``S_IFLNK|0777`` 且路径写法无 ``..``／
+                # 结尾斜杠时，lstat 暴露的是链接自身的 mode／uid／gid／size，这些正是 v3 快照 links 条目绑定的字段——按对该路径的
+                # stat 访问登记，覆盖检查要求该路径有 v3 快照（见 ``_host_symlink_lstat``）。其余情形仍登记。
+                # /proc 下的魔法链接（self、exe、cwd、root、fd/N）size 为 0 且在 /proc 之下，不在以上两类里，仍判（WP-R7a：``/proc/self`` 的 lstat 豁免已删除）。
+                if not (self.trace_v4 and nofollow_stat
+                        and (self._tracked_symlink_lstat(name, arguments, pid, result.group(1))
+                             or self._host_symlink_lstat(name, arguments, pid, result.group(1)))):
+                    self._unresolved("symlink-metadata-not-bound:" + name)
+            elif self.trace_v4 and nofollow_stat and self._single_path_is_tracked_symlink(name, arguments, pid):
+                # 反方向的互相印证：内核说这是普通文件或目录（完整解码、返回 0），跟踪器却记着它是符号链接——名字表与真实状态已经脱节
+                # （例如链接被某个没观察到的路径替换）。不能继续相信后面基于名字表的任何判定，登记未解析。
+                self._unresolved("symlink-state-contradicts-stat:" + name)
+            if self.trace_v4 and name in _READLINK_CALLS and self._readlink_contradicts_record(name, arguments, pid, result.group(1)):
+                # WP-R7a（验收一般-4，纵深防御）：readlink 返回的文本必须与跟踪器记着的链接文本一致，见该方法。
+                self._unresolved("symlink-readlink-text-contradicts-record:" + name)
         for argument in arguments:
-            annotation = _ANNOTATION.fullmatch(argument)
+            annotation = self.annotation_pattern.fullmatch(argument)
             if annotation is None:
                 continue
             if annotation.group(1) == "AT_FDCWD":
@@ -454,9 +966,13 @@ class TraceParser:
                 if directory.startswith("/"):
                     self.cwd[pid] = directory
         if name in _SPAWN:
-            if self.strict and re.search(r"\bCLONE_(?:UNTRACED|NEWNS)\b", body):
+            if self.strict and (_CLONE_UNOBSERVABLE_V4 if self.trace_v4 else _CLONE_UNOBSERVABLE_V3).search(body):
                 self._unresolved("unobservable-child:" + name)
+            if self.trace_v4 and _CLONE_NEW_ANY.search(body):
+                self.pid_space_untrusted = True
             inherited = self.spawn_cwd.pop(pid, self.cwd.get(pid))
+            if self.trace_v4 and result and result.group(1).isdigit() and int(result.group(1)) > 0 and errno is None:
+                self.traced_pids.add(result.group(1))   # 子进程（线程）号：它之后可能被同一进程树里的别人当作 /proc/<pid> 读取
             if result and result.group(1).isdigit() and int(result.group(1)) > 0 and inherited:
                 child = result.group(1)
                 self.cwd.setdefault(child, inherited)
@@ -467,7 +983,7 @@ class TraceParser:
                     self.lines -= 1
             return
         if name == "fchdir":
-            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
+            annotation = self.annotation_pattern.fullmatch(arguments[0]) if arguments else None
             if annotation and unescape(annotation[2]).startswith("/") and errno is None:
                 directory = unescape(annotation[2])
                 self.cwd[pid] = directory
@@ -483,7 +999,7 @@ class TraceParser:
         #   * 要在 x86_64 上审计，需要同时做两件事：把 getdents 加进 strace 的 trace 列表，并在这里把它与 getdents64 同样处理
         #     （现在解析器若收到 getdents 行，会按「不支持的调用」登记 unsupported-call:getdents，整条轨迹失败关闭）。
         if name == "getdents64":
-            annotation = _ANNOTATION.fullmatch(arguments[0]) if arguments else None
+            annotation = self.annotation_pattern.fullmatch(arguments[0]) if arguments else None
             if annotation:
                 path = unescape(annotation.group(2))
                 if path.startswith("/"):
@@ -495,10 +1011,18 @@ class TraceParser:
             return
         failed = errno is not None
         if name in _DIRFD_READ or name in _DIRFD_PROBE or name in _DIRFD_WRITE or name in _DIRFD_EXEC:
+            if self.trace_v4 and name == "utimensat":
+                # WP-R2 第 2 项：futimens(fd) 在系统调用层是 utimensat(fd, NULL, times, 0)，作用对象就是 fd 自己，路径参数为
+                # NULL。按“对该描述符标注路径的写（改时间）”登记，kind 与带路径的 utimensat 一致，输出归属跟踪器照对已知对象的
+                # 元数据写处理；没有路径标注的 fd、AT_FDCWD 配 NULL 等异常形态不在此列，落到下面的未解析判定。
+                target_path = _futimens_target(arguments, _FD_ANNOTATION_V4)
+                if target_path is not None:
+                    self._add(target_path, "write", line)
+                    return
             positions = (1,) if name == "symlinkat" else (0, 2) if name in _TWO_PATHS else (0,)
             pairs = []
             for slot, position in enumerate(positions):
-                directory = _ANNOTATION.fullmatch(arguments[position]) if position < len(arguments) else None
+                directory = self.annotation_pattern.fullmatch(arguments[position]) if position < len(arguments) else None
                 path = _path_argument(arguments, position + 1)
                 if directory is not None and path is not None:
                     pairs.append((slot, unescape(directory[2]), path))
@@ -513,26 +1037,49 @@ class TraceParser:
                 flags = _operation_flags(body)
                 kind = ("write" if _WRITE_FLAGS.search("|".join(flags)) else "missing" if missing else "stat" if failed
                         else "dir" if "O_DIRECTORY" in flags else "read")
-                if self.strict and name == "openat2" and not flags:
-                    self._unresolved("open-flags-not-decoded:openat2")
+                if self.strict and name == "openat2":
+                    if self.trace_v4:
+                        # WP-R2 第 3 项：v4 的 strace 选项解码 ``struct open_how``，标志只认 ``flags=`` 字段，并要求与整行扫描
+                        # 出的打开标志一致（两者不一致或结构没解码出来 = 标志不可见，判未解析）；v3 沿用“整行没有任何标志”的旧判据。
+                        # 验收 M-1：``resolve=`` 也必须看得清且不改变路径解析（见 _openat2_resolve_ok），否则同样判未解析。
+                        if _openat2_flags(arguments) != frozenset(flags) or not _openat2_resolve_ok(arguments):
+                            self._unresolved("open-flags-not-decoded:openat2")
+                    elif not flags:
+                        self._unresolved("open-flags-not-decoded:openat2")
             elif name in _DIRFD_WRITE:
                 kind = "write"
             elif name in _DIRFD_EXEC:
                 kind = "missing" if missing else "stat" if failed else "exec"
             else:
                 kind = "missing" if missing else "stat"
+            if self.trace_v4 and name in _TWO_PATHS:
+                # WP-R7a（对拍发现）：两路径调用的路径形态检查必须在任何一端的事件交给跟踪器之前全部做完。来源端事件一到，跟踪器就执行 rename／link，
+                # 名字表随之改变；再检查目的端时，``link/../y`` 里的 ``link`` 已经被这次调用自己改名，不再是链接名字，检查看不见风险
+                # （``rename("R/ln", "R/ln/../y")``：内核经 ln 进入宿主目录再回到 ``/``，把链接移到了宿主根目录，旧行为整套审计通过）。
+                for _slot, directory, path in pairs:
+                    if path != "":
+                        self._check_path_form(directory, path)
             for slot, directory, path in pairs:
                 if path == "":
-                    continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过
+                    if self.trace_v4 and name in _EMPTY_PATH_WRITE_CALLS and "AT_EMPTY_PATH" in self.call_flags:
+                        # 对 dirfd 自己的元数据写（utimensat／fchownat／fchmodat2 的 AT_EMPTY_PATH 形态，与 futimens 同类）：按对标注路径的写登记。
+                        # 标注必须是绝对路径（AT_FDCWD 的标注就是工作目录）；管道、套接字之类的标注不是路径，看不清作用对象，判未解析。
+                        if directory.startswith("/") and "\x00" not in directory:
+                            self._add(os.path.normpath(directory), "write", line)
+                        else:
+                            self._unresolved("empty-path-fd-not-a-path:" + name)
+                    continue  # AT_EMPTY_PATH：对已打开的文件描述符操作，打开那一下已经记过（读类调用沿用基线；上面的写类调用 v4 另行登记）
                 if ends is not None:
                     self.call_end = (_ROLES[slot], ends[1 - slot])
-                self._add(_join(directory, path), kind, line)
+                self._add(self._checked_join(directory, path, check=ends is None),
+                          self._two_path_end_kind(kind, slot, ends, failed, missing), line)
             self.call_end = None
+            self._relocate_working_directories(name, ends)
             if self.strict:
                 if len(pairs) != len(positions):
                     self._unresolved("dirfd-path-not-resolved:" + name)
                 # 返回描述符展示解引用后的真实路径，防止用树内链接掩盖宿主机读取。
-                target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+                target = self.returned_fd_pattern.search(body)
                 if target and name in _DIRFD_READ:
                     self._add(_join(None, unescape(target[1])), kind, line)
                 elif name in _DIRFD_READ and not failed:
@@ -541,6 +1088,10 @@ class TraceParser:
         if name in _PLAIN_READ or name in _PLAIN_PROBE or name in _PLAIN_WRITE or name in _PLAIN_EXEC:
             positions = (1,) if name in {"symlink", "inotify_add_watch"} else (0, 1) if name in _TWO_PATHS else (0,)
             strings = [path for position in positions if (path := _path_argument(arguments, position)) is not None]
+            if self.trace_v4 and name == "getcwd" and failed and not strings and errno in _GETCWD_BENIGN_ERRNOS:
+                # WP-R2 第 1 项：失败的 getcwd（ERANGE／ENOENT）缓冲区参数是指针不是字符串，内核没有写出任何路径，不读取宿主
+                # 路径信息：不登记访问、不登记未解析，也不更新工作目录。成功却取不到字符串的 getcwd 仍落到下面的未解析判定。
+                return
             if self.strict and pid not in self.cwd and any(path and not path.startswith("/") for path in strings):
                 self._defer(pid, line)
                 return
@@ -563,15 +1114,20 @@ class TraceParser:
                 texts = [_path_argument(arguments, position) for position in positions]
                 slots = [slot for slot, text in enumerate(texts) if text is not None]
                 ends = [_join(self.cwd.get(pid), text) if text else None for text in texts]
+            if ends is not None:
+                for path in strings:                  # 同上：先检查全部路径写法，再把任何一端的事件交给跟踪器（见 dirfd 分支的说明）
+                    self._check_path_form(self.cwd.get(pid), path)
             for index, path in enumerate(strings):
                 if ends is not None:
                     self.call_end = (_ROLES[slots[index]], ends[1 - slots[index]])
-                self._add(_join(self.cwd.get(pid), path), kind, line)
+                self._add(self._checked_join(self.cwd.get(pid), path, check=ends is None),
+                          self._two_path_end_kind(kind, slots[index] if ends is not None else 0, ends, failed, missing), line)
             self.call_end = None
+            self._relocate_working_directories(name, ends)
             if self.strict:
                 if len(strings) != len(positions):
                     self._unresolved("plain-path-not-resolved:" + name)
-                target = re.search(r'\)\s*=\s*\d+<(' + _ANN + r')>\s*$', body)
+                target = self.returned_fd_pattern.search(body)
                 if target and name in _PLAIN_READ:
                     self._add(_join(None, unescape(target[1])), kind, line)
                 elif name in _PLAIN_READ and not failed:
@@ -581,8 +1137,194 @@ class TraceParser:
                 if joined:
                     self.cwd[pid] = joined
             return
+        if self.trace_v4 and name == "socket" and _is_unix_stream_socket(arguments):
+            # WP-R2 第 4 项（一）：创建本机流式套接字本身不暴露宿主信息，不登记未解析；携带路径的 bind／connect 另行判定
+            # （v4 的 strace 选项把 bind 也纳入跟踪，bind 落到下面的 unsupported-call:bind）。
+            return
+        if self.trace_v4 and name == "connect" and errno == "ENOENT":
+            # WP-R2 第 4 项（二）：连接 AF_UNIX 绝对路径得到 ENOENT（glibc 的 nscd／NSS 探测）。结果取决于该宿主路径是否存在，
+            # 所以登记为对该路径的“missing”探测访问，由策略的宿主路径声明决定通过与否。成功、ECONNREFUSED、EACCES 等任何其他
+            # 结果（意味着与外部进程通信或权限探测）、相对路径、抽象套接字、网络地址都不进这里，保持 unsupported-call:connect。
+            raw_socket_path = _connect_unix_raw_path(arguments)
+            if raw_socket_path is not None:
+                # WP-R13（T1，独立验收阻断项 B-1）：sun_path 与其它路径参数一样要过符号链接路径形态检查——存在符号链接对象时，
+                # ``<R>/ln/../zz-sock``（``ln`` 指向宿主目录）规范化成 ``<R>/zz-sock``，内核实际探测的却是宿主路径 ``/zz-sock``；
+                # ``<R>/ln/``、``<R>/ln/.`` 迫使内核解引用链接。形态不安全时登记 symlink-path-form-unsafe（整次审计失败关闭），
+                # 并且**不**登记规范化后的盘内名字——那个名字不是内核探测的路径，登记了反而把宿主探测藏成合法的盘内缺失探测。
+                # 检查必须看未规范化的原始写法，所以这里取原始路径，检查之后才规范化。
+                if self._check_path_form(None, raw_socket_path):
+                    return
+                self._add(os.path.normpath(raw_socket_path), "missing", line)
+                return
+        if self.trace_v4 and name in _NAMESPACE_CALLS:
+            self.pid_space_untrusted = True
         if self.strict:
             self._unresolved("unsupported-call:" + name)
+
+    def _relocate_working_directories(self, name: str, ends: Sequence[str | None] | None) -> None:
+        """成功的 rename 之后，让落在被改名路径之下的各进程文本工作目录跟着改名（WP-R7a，验收 S-2，仅 v4）。
+
+        内核里工作目录是目录对象，跟着目录走：进程 ``chdir`` 进 ``x``、``x`` 被改名为 ``y`` 之后，它的工作目录就是 ``y``。解析器的
+        ``self.cwd`` 是文本，只在三处更新（``AT_FDCWD<…>`` 标注、``fchdir``、成功的 ``chdir``），rename 不更新；于是 plain（不带 ``at``）
+        的系统调用——ARM64 上有 execve、chdir、truncate、statfs、getxattr 族、inotify_add_watch 等——走相对路径时，解析器还原出已经
+        不存在的旧目录名，看不见改名后目录里的符号链接：``execve("ln/zzz") = -1 ENOENT`` 被当成对未知名字的合法缺失探测，内核实际
+        却经 ``ln`` 在宿主目录里查了 ``zzz``。（``*at`` 系调用每次都带真实工作目录的标注，不受影响。）
+
+        改写规则：``ends`` 是调用两端的规范路径（来源、目的）；每个进程的工作目录（以及尚未被子进程取走的 ``spawn_cwd``）若等于来源
+        或落在来源之下，前缀换成目的。``RENAME_EXCHANGE`` 两端互换，所以目的之下的也换回来源。覆盖已有空目录时，原来在被覆盖目录
+        里的进程的工作目录是已被删除的目录（内核对它的查找一律 ENOENT，不碰任何宿主路径），文本不改：之后它走相对路径得到的
+        文本路径要么是未知名字（合法缺失探测，与内核的 ENOENT 一致），要么恰是改名过来的子树里的名字（保守地被当作已知名字处理，
+        至多多判一次问题）。失败的 rename 不改任何目录，一端还原不出路径时也不改（那一端的“路径未还原”已另行登记未解析）。
+        """
+        if (not self.trace_v4 or name not in _RENAME_CALLS or ends is None or not self.event[2]
+                or ends[0] is None or ends[1] is None):
+            return
+        source, destination = ends[0], ends[1]
+        exchange = "RENAME_EXCHANGE" in self.call_flags
+
+        def moved(directory: str) -> str:
+            if directory == source or directory.startswith(source + "/"):
+                return destination + directory[len(source):]
+            if exchange and (directory == destination or directory.startswith(destination + "/")):
+                return source + directory[len(destination):]
+            return directory
+
+        for pid, directory in self.cwd.items():
+            self.cwd[pid] = moved(directory)
+        for pid, directory in self.spawn_cwd.items():
+            if directory is not None:
+                self.spawn_cwd[pid] = moved(directory)
+
+    def _two_path_end_kind(self, kind: str, slot: int, ends: Sequence[str | None] | None, failed: bool, missing: bool) -> str:
+        """两路径调用某一端登记给宿主路径审计的访问类型（WP-R13，T2.1，仅 v4）。
+
+        默认就是调用本身的类型（link／rename 一类是 ``write``）。唯一的例外：**失败的**调用，且这一端是**盘外的来源**、另一端
+        （目的）在私有盘内——典型是 ``os.link(宿主缓存文件, 盘内路径)`` 得到 EXDEV（私有盘是独立 tmpfs，跨设备）之后回退到复制。
+        失败的 link／rename 没有任何命名空间效果，对盘外来源做的只是“按路径查找”：存在性（ENOENT／ENOTDIR 记 ``missing``）与所在设备
+        （其余错误码记 ``stat``）。若仍记 ``write``，严格审计里这条宿主路径永远不能被快照覆盖（``strict_audit_reads`` 对文件快照只接受
+        read／exec／stat），整个单元就算输出归属通过也永远不可承接。其余一切情形（成功的调用、盘内来源、盘外目的、两端都在盘内、
+        一端还原不出路径）保持原类型 ``write``，因而不放松任何检出。
+        """
+        if (not self.trace_v4 or ends is None or not failed or slot != 0 or self.output_tracker is None
+                or ends[0] is None or ends[1] is None):
+            return kind
+        root = self.output_tracker.root
+        if not _under(ends[0], root) and _under(ends[1], root):
+            return "missing" if missing else "stat"
+        return kind
+
+    def _check_path_form(self, directory: str | None, path: str) -> bool:
+        """v4 的符号链接路径形态检查：存在符号链接对象时，``..``／结尾斜杠等写法可能让规范化后的路径与内核实际解析的对象不同，
+        见 ``_path_form_hazard``。有风险就登记未解析，让整次审计失败关闭。
+
+        返回是否登记了风险（WP-R13：connect 的调用点据此决定不登记盘内名字；其余调用点沿用“路径照常返回、事件照常记录”，忽略返回值）。"""
+        if (self.trace_v4 and _join(directory, path) is not None and self.output_tracker.has_symlinks()
+                and _path_form_hazard(self.output_tracker, directory, path)):
+            self._unresolved("symlink-path-form-unsafe")
+            return True
+        return False
+
+    def _checked_join(self, directory: str | None, path: str, *, check: bool = True) -> str | None:
+        """``_join`` 加 v4 的符号链接路径形态检查（``_check_path_form``）。路径照常返回（事件照常记录）。
+        ``check=False`` 给两路径调用：它们的检查已在任何事件交给跟踪器之前做完（见调用处），这里不再重复登记。"""
+        if check:
+            self._check_path_form(directory, path)
+        return _join(directory, path)
+
+    def _single_path(self, name: str, arguments: Sequence[str], pid: str) -> str | None:
+        """lstat 一类单路径调用的规范路径（与后面通用分支的算法一致）；空路径（AT_EMPTY_PATH）或无法还原时返回 None。"""
+        if name in _DIRFD_PROBE:
+            directory = self.annotation_pattern.fullmatch(arguments[0]) if arguments else None
+            path = _path_argument(arguments, 1)
+            if directory is None or not path:
+                return None
+            return _join(unescape(directory[2]), path)
+        path = _path_argument(arguments, 0)
+        return _join(self.cwd.get(pid), path) if path else None
+
+    def _single_path_is_tracked_symlink(self, name: str, arguments: Sequence[str], pid: str) -> bool:
+        path = self._single_path(name, arguments, pid)
+        return (path is not None and self.output_tracker is not None and _under(path, self.output_tracker.root)
+                and self.output_tracker.is_symlink(path))
+
+    def _tracked_symlink_lstat(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
+        """lstat 一类调用成功得到“链接自己的元数据”，且该链接正是本单元在私有盘内创建、跟踪器仍记着的符号链接。
+
+        条件全部满足才豁免 symlink-metadata-not-bound：返回值是 0、返回结构被完整解码且 st_mode 明确是符号链接、
+        路径落在私有盘内、跟踪器此刻把这个名字登记为符号链接对象。这样跟踪器的认识与内核的返回互相印证——跟踪器说是链接而
+        内核说是普通文件（或反之）、链接在宿主上、链接不是本单元创建的，都不满足，保持原判。路径写法有风险
+        （``link/`` 迫使内核解引用）的情形由 ``_checked_join`` 另行登记。
+        """
+        if returned != "0" or self.output_tracker is None or not _returned_link_stat(name, arguments):
+            return False
+        path = self._single_path(name, arguments, pid)
+        if path is None or not _under(path, self.output_tracker.root) or not self.output_tracker.is_symlink(path):
+            return False
+        # WP-R7a（验收一般-4，纵深防御）：lstat 暴露的 st_size 就是链接文本的字节数（私有盘是 tmpfs，符号链接的 i_size 恒等于文本长度），
+        # 必须与跟踪器记着的链接文本长度一致。不一致、或返回结构里没有看得懂的 st_size，说明这个名字背后的对象已不是本单元写下的那个
+        # （例如被某个没观察到的路径替换成别的链接）：登记专门的未解析原因，整次审计失败关闭（仍视为已豁免，不再重复登记 symlink-metadata-not-bound）。
+        size = _stat_field(name, arguments, "size")
+        recorded = self._tracked_link_text(path)
+        if size is None or _DECIMAL_U64.fullmatch(size) is None:
+            self._unresolved("symlink-lstat-size-not-decoded:" + name)
+        elif recorded is not None and int(size) != len(recorded.encode("utf-8", "surrogateescape")):
+            self._unresolved("symlink-lstat-size-contradicts-text:" + name)
+        return True
+
+    def _tracked_link_text(self, path: str) -> str | None:
+        """跟踪器此刻记着的、该名字上的符号链接文本（原样，从不解引用）；不是已证明的符号链接名字时返回 None。"""
+        tracker = self.output_tracker
+        obj = None if tracker is None else tracker.names.get(path)
+        return None if obj is None else tracker.link_text.get(obj)
+
+    def _readlink_contradicts_record(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
+        """成功的 readlink／readlinkat 落在跟踪器记着的符号链接名字上时，返回的文本必须就是记录的链接文本（WP-R7a，仅 v4）。
+
+        内核把链接文本的前 ``bufsiz`` 个字节拷进缓冲区、返回拷贝的字节数，所以期望值是“记录文本的字节串截到 bufsiz”，返回值等于它的长度。
+        缓冲区不是完整引号字符串（被 ``-s`` 截断、没有解码）、bufsiz 不是十进制整数、文本或长度对不上，都算矛盾。链接不在私有盘内、
+        跟踪器不认识这个名字时不核对（宿主链接是宿主访问，由快照绑定；未知名字由跟踪器一侧判）。
+        """
+        recorded_text = None
+        path = self._single_path(name, arguments, pid)
+        if path is not None and self.output_tracker is not None and _under(path, self.output_tracker.root):
+            recorded_text = self._tracked_link_text(path)
+        if recorded_text is None:
+            return False
+        buffer_index = 2 if name in _DIRFD_PROBE else 1
+        text = _path_argument(arguments, buffer_index)
+        size = arguments[buffer_index + 1].strip() if buffer_index + 1 < len(arguments) else ""
+        if text is None or _DECIMAL_U64.fullmatch(size) is None:
+            return True
+        expected = recorded_text.encode("utf-8", "surrogateescape")[:int(size)]
+        return text.encode("utf-8", "surrogateescape") != expected or returned != str(len(expected))
+
+    def _host_symlink_lstat(self, name: str, arguments: Sequence[str], pid: str, returned: str) -> bool:
+        """lstat 一类调用成功得到宿主上真符号链接的元数据（WP-R4，R6-2，仅 v4）：放行为对该路径的 stat 访问。
+
+        背景：``os.path.realpath(sys.executable)``、``Path.resolve()`` 会逐分量 lstat，路径恒为 ``/usr/bin/python3`` 这类真链接
+        （ARM64 实测 compare_accept、vc6_batch 等单元 ≥24 次，同一路径）。原来一律登记 symlink-metadata-not-bound，单元永远不可承接。
+
+        能暴露什么：lstat 返回链接自身的 inode 属性——mode（恒 0777）、uid、gid、size（＝链接文本长度）、nlink、blksize、blocks，
+        以及 dev、ino 与三个时间。v3 宿主快照对**每个沿途符号链接**（含路径本身）在 ``links`` 条目里绑定 path／target／mode／
+        uid／gid／size（``_V3_LINK_FIELDS``，比对时无条件比较、进条目摘要），所以前面几项被观察到的字段全部被绑定；运行前后快照
+        不变（``host_inputs_unchanged``）则观察到的值就等于登记值。没有绑定的是 dev／ino／时间／nlink／blocks：与 v3 对普通文件
+        stat 的口径一致（那里 dev／ino／时间属 volatile，只有声明了依赖的路径才比较；nlink、blocks 本来就不在快照里）。**唯一的
+        差别**：普通文件的 volatile 可以在策略 ``metadata_dependencies`` 里声明依赖，符号链接自己的时间／ino 在 v3 里不进快照，
+        无法声明；依赖链接自身 mtime 的单元极罕见（realpath／resolve 只看 S_ISLNK），记为未决问题，见 test_ci_read_audit_wp_r4 的说明。
+
+        放行条件（全部满足）：返回 0；返回结构完整解码，``S_IFLNK|0777`` 且 uid／gid／size 看得懂（``_returned_plain_link_stat``）；
+        路径能还原且**不在私有盘内**（盘内的链接走 ``_tracked_symlink_lstat``：只认本单元自己创建的）；原始路径参数的写法没有
+        ``.``／``..`` 分量、``//``、结尾斜杠（``_plain_path_text``，否则规范化后的路径可能不是内核真正解析的对象）。
+        放行后该路径以 ``stat`` 登记，严格覆盖检查要求它有精确的 v3 快照：没声明就是未声明项（声明缺口由策略补，不是解析器的事）；
+        目标悬空的链接快照是 ``missing`` 类型，与 ``stat`` 访问不匹配，仍失败关闭。
+        """
+        if returned != "0" or self.output_tracker is None or not _returned_plain_link_stat(name, arguments):
+            return False
+        path = self._single_path(name, arguments, pid)
+        if path is None or _under(path, self.output_tracker.root) or any(_under(path, virtual) for virtual in ("/proc", "/sys", "/dev")):
+            # /proc、/sys、/dev 是虚拟文件系统：``host_snapshot`` 拒绝它们（无法有 v3 快照），它们的魔法链接不是磁盘上的普通链接。
+            return False
+        return _plain_path_text(_path_argument(arguments, 1 if name in _DIRFD_PROBE else 0))
 
     def _defer(self, pid: str, line: str) -> None:
         """等待父进程归属，限制缓存量；超过上限仍拒绝覆盖，不猜测工作目录。"""
@@ -678,9 +1420,18 @@ def strace_argv(argv: Sequence[str], *, output: Path, roots: Sequence[str], pyth
     # 文件描述符切目录、命名空间变更和未建模的外部通信必须可见；未知调用保持失败关闭。
     # 目录枚举只跟踪 getdents64：目录项只在出现 getdents64 枚举事件时绑定（见解析器里 getdents64 分支的注释）。ARM64 没有
     # getdents（非 64）系统调用，当前环境不受影响；x86_64 上旧 libc 或静态链接程序用 getdents 枚举目录时，这里观察不到。
-    options = ["-s", "4096", "-e", "verbose=%%stat", "-e", "abbrev=!%%stat",
-               "-e", "trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
-               "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg"] if strict else []
+    verbose = "verbose=%%stat"
+    traced = ("trace=%file,getdents64,clone,clone3,fork,vfork,fchdir,unshare,setns,"
+              "open_by_handle_at,io_uring_setup,socket,connect,accept,accept4,sendmsg,recvmsg")
+    if trace_contract == TRACE_CONTRACT_V4:
+        # WP-R2：只加在 v4 合同上，v3 的命令行逐字节不变（由黄金值测试守住）。
+        #   * 解码 openat2 的 ``struct open_how``（第 3 项，否则标志是指针、不可见）与 connect 的 ``sockaddr``（第 4 项，
+        #     否则目的地是指针、不可见）；必须与 %%stat 合在同一个 verbose= 限定里，不依赖多个同类 -e 的叠加／覆盖语义；
+        #   * 跟踪 bind：socket(AF_UNIX 流式) 放行后，携带路径的调用里 bind（会在宿主路径建套接字文件，或以 EADDRINUSE 暴露
+        #     路径存在与否）原先因 socket 整体不支持而被间接拦住，现在必须自己可见、落到 unsupported-call:bind。
+        verbose += ",openat2,connect"
+        traced += ",bind"
+    options = ["-s", "4096", "-e", verbose, "-e", "abbrev=!%%stat", "-e", traced] if strict else []
     return ["strace", *STRACE_OPTIONS, *options, "-o", "|" + pipe, "--", *argv]
 
 

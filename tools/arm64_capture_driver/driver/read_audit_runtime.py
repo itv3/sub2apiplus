@@ -44,28 +44,87 @@ ENVIRONMENT_PATHS = {"/proc/filesystems", "/proc/sys/crypto/fips_enabled"}
 LAUNCHER = ["unshare", "-m", "--propagation", "private", "bash", "-c",
             'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec "$@"', "entry-gates"]
 
+# R16：无状态字符设备。这几个设备的内容不是“宿主状态输入”，所以不需要（也无法——宿主快照拒绝 /dev 下的路径）用快照声明，
+# 重放时按「路径 + 访问类型上界」直接放行：路径在表里、且该路径的访问类型集合是表中允许集合的子集，才算已证明；类型越界（写、执行、
+# 当目录打开或枚举、不存在探测）保持原行为——不覆盖，进入未声明清单。
+#
+# * /dev/null：读恒为空、写即丢弃，两者都与宿主状态无关，所以 read／write／stat 都放行（本条是改动前就有的固定条款，行为不变）。
+# * /dev/zero：读恒为零字节，不携带任何宿主信息；只放行 read／stat。写它虽然也是丢弃，但没有合法用途，不放行。
+# * /dev/urandom、/dev/random：内核熵源。库初始化（OpenSSL、hashlib、uuid 等）会打开它们读熵，读到的字节本来就每次不同，
+#   单元的结论不应当、也无法依赖具体字节，所以读不算宿主输入；只放行 read／stat。
+#   **写**这两个设备会把数据混入内核熵池，改变内核状态，一律不放行（这是与 /dev/null 的关键区别）。
+#
+# 其它虚拟或设备路径（/dev/ptmx、/dev/shm/*、/dev/tty、/dev/sda、/proc/*、/sys/*）不在此表，全部保持原行为，不得借此放宽；
+# /dev/tty 另有终端探测合同（见 replay_runtime 的 terminal_events 一段）。
+STATELESS_DEVICE_KINDS = {
+    "/dev/null": frozenset({"read", "write", "stat"}),
+    "/dev/zero": frozenset({"read", "stat"}),
+    "/dev/urandom": frozenset({"read", "stat"}),
+    "/dev/random": frozenset({"read", "stat"}),
+}
+# 合同建立时对上表里新增三个设备的身份校验：必须是字符设备，且在 Linux 上设备号（major, minor）相符。
+# /dev/null（1,3）仍由 ``contract_entry`` 内联校验——它的身份摘要进入合同 payload（``null_device``），改动前就是这样；
+# 这三个设备**只校验、不进 payload**，所以合同摘要与改动前逐字节相同，旧记录里封存的 ``runtime-contract`` 条目不受影响。
+# 代价：封存的合同条目本身不证明这三个设备的身份；身份由建立合同的现场核对（``prepare``、``run_child``，以及非历史重放时
+# ``validate_context`` 重算的 ``contract_entry``），历史重放只验封存条目的摘要，不读现场设备。
+# 放行了却不核对过它是什么，等于信任一个任意文件；所以“表里每个设备”必须在 /dev/null 或这张表里有身份校验（测试固定这一点）。
+STATELESS_DEVICE_NUMBERS = {
+    "/dev/zero": (1, 5),
+    "/dev/random": (1, 8),
+    "/dev/urandom": (1, 9),
+}
+
 # 轨迹合同版本（显式开关，默认 v3）。v3 是历史合同：输出事件 6 键、旧 OutputTracker、旧重放逻辑，字节行为不变，
-# control 四链的 sidecar 复用的就是它；v4 在此基础上支持 rename／link／失败探测并对只读事件按变更纪元去重。
+# control 四链的 sidecar 复用的就是它；v4 在此基础上支持 rename／link／失败探测并对重复事件按名字级版本去重（WP-R9）。
 # 文档版本字符串的权威定义在同目录 read_audit.py（RUNTIME_TRACE_SCHEMA_V4）；这里再存一份，是为了让重放 v3 凭证的路径
 # 不依赖同目录 read_audit.py 里新增的名字（新旧文件混用时 v3 验真也不会因此出错）。两处取值由测试比对，防止漂移。
 TRACE_SCHEMA_V4 = "read-audit-trace/v4"
 TRACE_CONTRACT_V3 = "v3"
 TRACE_CONTRACT_V4 = "v4"
 TRACE_CONTRACTS = (TRACE_CONTRACT_V3, TRACE_CONTRACT_V4)
-# 输出事件条数上限（去重之后仍超限则判失败，不静默截断）。
+# 输出事件条数上限（去重之后仍超限则判失败，不静默截断）。这是 v3 合同的上限，数值不变（历史凭证与 control 四链按它验真）。
 MAX_OUTPUT_EVENTS = 200000
+# v4 合同的上限，与 read_audit.py 里的同名常量必须相等（两个文件互不导入）：由 test_ci_audit_hardening_h1 的
+# test_parser_and_replay_v4_limits_are_equal 守住（test_ci_read_audit_wp_r2 的 OutputEventLimitTests.test_constants 另有一份同样的断言）。版本语义：只对
+# read-audit-trace/v4 生效；已被旧上限截断的轨迹带 output-event-limit 未解析原因，验真永远失败，与本数值无关。
+MAX_OUTPUT_EVENTS_V4 = 1000000
 
 # v4 事件里需要识别的系统调用名。两路径调用的两端各产生一条事件，由 role／peer 配对。
 TWO_PATH_NAMES = frozenset({"rename", "renameat", "renameat2", "link", "linkat"})
 LINK_NAMES = frozenset({"link", "linkat"})
 SYMLINK_NAMES = frozenset({"symlink", "symlinkat"})
-OPEN_NAMES = frozenset({"open", "openat", "creat"})
+# WP-R3：openat2 是和 openat 同构的“按路径打开并返回描述符”的调用（标志在 struct open_how 里，解析器已解码），
+# 原先不在这里，于是用 openat2 创建／写私有盘文件会被判“未建立合同的输出操作”，而且“返回描述符落在私有盘外”的检查被整个跳过。
+OPEN_NAMES = frozenset({"open", "openat", "openat2", "creat"})
+# WP-R3：对符号链接“名字本身”不跟随的只读调用。对一个符号链接对象，只有这些调用（连同下面 _symlink_name_verdict 里列的
+# unlink、rename、创建被拒绝等）才不会解引用链接：lstat 系读的是链接自己的 inode 元数据，readlink 读的是链接文本。
+# 这两者的内容都是被测代码自己写进去的（symlink 调用的参数），不含任何宿主信息。
+LSTAT_NAMES = frozenset({"lstat", "lstat64"})
+FSTATAT_NAMES = frozenset({"newfstatat", "fstatat64", "statx"})
+READLINK_NAMES = frozenset({"readlink", "readlinkat"})
 # 对已证明的对象只改元数据或内容、不增删名字的调用：不改变名字空间，也不需要额外归属证明。
 METADATA_WRITE_NAMES = frozenset({"chmod", "fchmodat", "fchmodat2", "chown", "lchown", "fchownat",
                                   "utime", "utimes", "utimensat", "futimesat", "truncate", "truncate64"})
 ROLES = ("source", "destination")
+# WP-R9：成功时永远不参与去重的写类调用（``OutputTrackerV4.dedup_key`` 返回 None）：创建／删除目录项与符号链接几乎总是改名字空间，
+# 被拒绝时的判定又依赖子项个数等没有版本号覆盖的状态，保留它们的代价（实测合计约 2.5 万条）可以忽略，换来键的正确性证明更简单。
+NEVER_DEDUP_WRITES = frozenset({"mkdir", "mkdirat", "unlink", "unlinkat", "rmdir"}) | SYMLINK_NAMES
 # 这两个 renameat2 标志会让两个名字互换或在原位留下占位对象，对象身份模型不支持，一律拒绝。
 UNSUPPORTED_RENAME_FLAGS = frozenset({"RENAME_EXCHANGE", "RENAME_WHITEOUT"})
+# WP-R11（仅 v4）：「已生成对象的缺失探测」的乱序容忍窗口，单位是调用编号。strace -f 的行序不是因果序：进程 B 对某名字的 ENOENT 探测
+# 在内核里先于进程 A 的创建完成，但 B 停在退出点等 tracer 取走，A 的创建行先被打印，B 的探测行排在创建事件之后。名字刚被绑定
+# （创建、硬链接目的、rename 带入）之后，调用编号相差不超过本常量的缺失探测按乱序处理，不判矛盾、不改名字表；超出窗口仍判矛盾，
+# 所以「删除没被观察到」这类真实的状态脱节照旧被发现。取值依据：同一时刻每个被追踪进程至多有一个停在退出点的系统调用，
+# 乱序量级由同时被追踪的进程数决定；10-16 收割 #9 的实测样本只差 1。512 远大于实测、又不是「无限」（无上限会让任何探测都被放过）。
+# 窗口之外还有一道证据门槛（``OutputTrackerV4.probed_missing``）：该名字被绑定之前必须已被探测过缺失，见类说明 WP-R11。
+# 诚实说明（WP-R13）：这道证据门槛的区分力有限——创建者通常“先探测、再创建”，几乎每个被创建的名字都有先行探测，所以它只挡得住从未被探测过缺失的名字；
+# 实际的约束主要来自上面的调用编号窗口。
+LATE_MISSING_PROBE_WINDOW_CALLS = 512
+# WP-R13（T2.2，仅 v4）：打开标志里只要出现其中任何一个，就不是“只读打开”。``O_PATH`` 也在内：它得到的描述符不能读内容，
+# 却能被 ``openat(fd, "")`` 之类转成别的访问，后续使用不可见，不属于本放行要放的“读盘外宿主文件”。
+NOT_READ_ONLY_OPEN_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_TMPFILE", "O_PATH"})
+# 只有这几个调用按“路径打开并返回描述符”处理且带得出描述符真实路径标注（creat 是写，不在此列）。
+FOREIGN_READ_OPEN_NAMES = frozenset({"open", "openat", "openat2"})
 
 
 class RuntimeContractError(RuntimeError):
@@ -346,6 +405,19 @@ def environment_snapshot(path: str) -> dict[str, Any]:
     return {"path": path, "kind": "file", "content_sha256": hashlib.sha256(content).hexdigest()}
 
 
+def _check_stateless_device(path: str, numbers: tuple[int, int]) -> None:
+    """校验 ``path`` 是标准字符设备：lstat 不跟随链接，所以被替换成链接、普通文件或目录都会失败；Linux 上还要设备号相符。
+
+    与 /dev/null、/dev/tty 的校验同形态：非 Linux 平台（设备号编号各不相同）只核对“是字符设备”。
+    设备不存在时 ``os.lstat`` 抛 OSError，同样向上传播（失败关闭，与 /dev/null 一致）。
+    只校验、不返回内容——这些设备的身份不进入合同 payload，合同摘要因此不变。
+    """
+    device = os.lstat(path)
+    if not stat.S_ISCHR(device.st_mode) or (sys.platform.startswith("linux")
+            and (os.major(device.st_rdev), os.minor(device.st_rdev)) != numbers):
+        raise RuntimeContractError(f"{path} 设备身份不符")
+
+
 def contract_entry(value: Any) -> dict[str, Any]:
     contract = validate_contract(value)
     device = os.lstat("/dev/null")
@@ -357,6 +429,9 @@ def contract_entry(value: Any) -> dict[str, Any]:
     if not stat.S_ISCHR(terminal.st_mode) or (sys.platform.startswith("linux")
             and (os.major(terminal.st_rdev), os.minor(terminal.st_rdev)) != (5, 0)):
         raise RuntimeContractError("/dev/tty 设备身份不符")
+    # R16：重放会把对这三个设备的只读访问当作已证明（见 STATELESS_DEVICE_KINDS），所以合同建立时先核对它们确是标准设备；不进 payload。
+    for stateless_path, stateless_numbers in STATELESS_DEVICE_NUMBERS.items():
+        _check_stateless_device(stateless_path, stateless_numbers)
     try:
         descriptor = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     except OSError as error:
@@ -440,22 +515,108 @@ class OutputTrackerV4:
     rename、link 一律不认，对失败的创建探测（makedirs(exist_ok=True) 之类的 EEXIST）也一律判问题，导致大多数
     单元的输出归属证明失败。这里改成：
 
-    * 名字 → 对象：``names`` 把绝对路径映射到对象编号；对象有类型（普通文件／目录）和当前名字个数。
+    * 名字 → 对象：``names`` 把绝对路径映射到对象编号；对象有类型（普通文件／目录／符号链接）和当前名字个数。
       硬链接让两个名字指向同一对象，删除其中一个名字不影响另一个；
     * 一个名字只有来自「本轮的创建」或「对已证明名字的 rename／link」才算已证明，盘外的东西永远进不来；
     * 写类调用失败按错误码与已知状态判，不再一刀切；读取、探测、执行类调用沿用旧规则，只要求路径已证明。
 
-    安全边界（保守拒绝，记入 problems）：符号链接、RENAME_EXCHANGE／RENAME_WHITEOUT、另一端不在盘内的两路径调用、
-    来源未证明的 rename／link、把目录硬链接、目录覆盖非空目录、目录移进自己的子目录，以及写类调用除 EEXIST／ENOENT／
-    ENOTDIR 之外的任何失败。
+    符号链接（WP-R3）：私有盘内可以创建符号链接，对象类型为 ``symlink``，链接文本（symlink 调用的第一个参数）原样记在
+    ``link_text`` 里，**永远不解引用**。链接对象只能被“不跟随”的调用碰到——unlink／unlinkat、rename 的任一端、
+    lstat 系（lstat、AT_SYMLINK_NOFOLLOW 的 fstatat／statx）、readlink、创建被拒绝（EEXIST）、O_NOFOLLOW 打开得到 ELOOP；
+    其余一切对链接名字的访问（打开、stat、access、chdir、execve、chmod……）以及一切路径的**中间分量**是链接的访问，
+    都按“跟随式访问”判问题——因为这些调用会解引用链接，而解引用后的路径是宿主输入，strace 对非描述符调用不会把它打印出来。
+    为什么这样安全：不跟随的调用只会读到链接 inode 自己的元数据和链接文本，两者都是被测代码自己写入的；
+    会解引用的调用一律失败关闭，所以链接指向盘外（``/etc/passwd``）本身不构成读取，只有真的去跟随时才报。
+
+    安全边界（保守拒绝，记入 problems）：跟随式访问、RENAME_EXCHANGE／RENAME_WHITEOUT、另一端不在盘内的两路径调用、
+    来源未证明的 rename／link、把目录或符号链接硬链接、目录覆盖非空目录、目录移进自己的子目录，以及写类调用除
+    EEXIST／ENOENT／ENOTDIR 之外的任何失败。
 
     另有三道「内核不可能产生的成功」自检——硬链接成功却目的名字已知、``O_CREAT|O_EXCL`` 创建成功却落在已知名字上、
     ``RENAME_NOREPLACE`` 成功却目的名字已知：内核只会在目的不存在时让这三种调用成功，轨迹却声称成功，说明名字表与真实
     状态已经脱节，所以判矛盾（记入 problems，不改名字表）。这三道自检不会放行任何东西——这类声明本来也不会把未证明的名字
     变成已证明——但少一道自检，就少一次发现「归属状态已经和真实文件系统对不上」的机会。
 
-    ``observe_event`` 返回「本事件是否改变了名字空间状态」：解析器据此推进变更纪元并决定能否对只读事件去重；
+    ``observe_event`` 返回「本事件是否改变了名字空间状态」：解析器据此推进变更纪元、并决定该事件是否一定保留（改了状态的事件永不去重）；
     重放端用同一个返回值重算纪元，所以任何会改名字空间的分支都必须返回 True，反之必须返回 False。
+
+    WP-R8（乱序容忍：待补证／销账）：``strace -f`` 按「各被追踪进程的系统调用返回被 tracer 处理的先后」逐行输出，不是因果顺序——
+    进程 A 的 ``openat(O_CREAT)`` 在内核里早已完成，但 A 停在退出点等 tracer 取走，进程 B 紧接着的 ``stat`` 却先被打印。
+    于是私有盘里会出现「先成功读到、后看到创建事件」的名字（10-15 ARM64 实测：supervisor 心跳进程写 minute-ledger.ndjson、主进程 stat 它）。
+    原规则把这样的成功读取立即判为「首次读取前未证明由本轮生成」，把正常行为判成失败。现在改成两步：
+
+    * **待补证**：私有盘内一个**未证明名字**上的、**不改名字空间且要求对象存在**的访问——kind 不是 write 也不是 missing 的事件，
+      不论成功还是失败（EACCES、EINVAL 一类的失败同样意味着对象存在）——不立即判问题，而是把这个名字记进 ``awaiting``。
+      这类事件仍然返回 False（没有改变名字空间：对象早已存在，跟踪器只是记了一笔债）；
+    * **销账**：之后只要出现**同一个名字**的创建——``O_CREAT`` 的 open／creat、mkdir／mkdirat、symlink／symlinkat、
+      link／linkat 的目的名字、rename／renameat／renameat2 把别处对象（目录则连同子树）改名到该名字——就从 ``awaiting`` 里划掉；
+    * **清算**：轨迹结束仍未销账的名字，在 ``report()`` 里以与原来相同的文字（「首次读取前未证明由本轮生成：」+ 路径）报为问题。
+      ``report()`` 只读取不修改状态，多次调用结果相同，重放端据此与文档里的 ``outputs`` 逐字相等比对。
+
+    为什么这样安全（无需给乱序容忍窗口设上限）：私有盘是单元启动时检查为空的 tmpfs（``empty_temporary_root``），挂载在新的
+    挂载命名空间里，只有本单元被追踪的进程树能在里面创建对象；每一种创建方式要么被跟踪器建模，要么被解析器登记未解析
+    （bind、mknodat 判问题、AT_EMPTY_PATH 的 linkat 另一端不在盘内……）而使整份轨迹失败。所以盘内任何存在的名字必有一次可见的建模
+    创建，该创建事件一定出现在轨迹里（只是可能比读取晚），而「从未创建却存在」的名字永远销不了账、必在清算时被报出。
+    窗口不设上限的理由：乱序量取决于 tracer 的唤醒调度（可达上千条事件），任何上限都是任意数字；而销账只认**同一个名字**，
+    窗口多长都不会让一个从未被创建的名字通过。读取内容类事件（``read``）比 ``stat`` 多暴露的是文件内容，但盘内内容只可能来自
+    本单元自己的进程（它读取的宿主文件各有自己的宿主路径事件，由宿主快照逐项核对），所以并不新增任何宿主信息；
+    宿主路径（不在私有盘内）不适用本规则，仍由宿主快照与策略声明判定。
+
+    WP-R9（名字级去重）：解析器要对重复的输出事件去重（10-15 实测 compare_accept 产生 128 万条事件，88% 是对私有盘内路径的
+    重复成功 stat／读；全局变更纪元被约 5.5 万条写／rename／unlink 切得太碎，去重效果有限）。去重的前提是「两条事件的判定相同」，
+    而一条事件的判定只取决于**它所涉及的几个名字**的状态，不取决于整个名字空间。所以这里给每个名字一个**版本号**
+    （``versions``：名字 → 唯一且单调的整数，未出现过的名字为 0），任何改变该名字**存在性、对象身份或待补证状态**的操作——创建、
+    解绑、rename 的来源与目的（目录则连同整棵子树的每个名字）、硬链接目的、待补证的记账与销账——都给被影响的名字换一个新版本号；
+    ``dedup_key(event)`` 在事件**到达时**（先于 ``observe_event``）给出去重键：事件本身的全部字段，加上它判定所依赖的状态：
+
+    * 路径自己的版本号（⇒ 名字是否已知、指向哪个对象、对象类型是否符号链接、是否待补证）；
+    * 路径的某个祖先是否符号链接（``_through_symlink``，只在存在符号链接对象时才可能为真；目录被改名／删除再换成链接，
+      祖先的绑定变了，这一位随之变化，不需要「子树失效」的额外记账）；
+    * 写类事件还要加「父目录是否已证明为目录」（创建失败判定用）；
+    * 两路径调用的失败事件，两端的版本号、两端「是否经符号链接」与目的端父目录是否为目录（来源端与目的端事件用同一份
+      归一化的状态，保证一次调用的两条事件要么一起被去重、要么一起保留，不破坏重放端的配对检查）。
+
+    键相同 ⇒ 判定相同：随机对拍（test_ci_read_audit_wp_r8）逐条核对「同一个键的所有事件，观察结果（是否改状态、新增问题）完全一致」。
+    不参与去重（``dedup_key`` 返回 None，永远保留）的事件：成功的两路径调用、成功的 mkdir／unlink／rmdir／symlink（它们的
+    判定还依赖子项个数等没有版本号覆盖的状态，且几乎总是改名字空间）。另有一类即使键重复也必须保留：紧跟在一次文件创建之后的
+    那条事件（``consumes_hidden_state``，它会消耗 ``_created_by_previous`` 这个隐藏状态，重放端必须看到它，才能和解析端消耗得一样）。
+    注意：键里**没有**全局变更纪元——对其它名字的写、rename、unlink 不会使这个名字上的重复读取失效；而对这个名字
+    （或带着它的目录）的任何改变都会换新版本号，使之后的同样读取重新保留一条。
+
+    WP-R11（缺失探测的乱序容忍：窗口＋先行探测证据）：``strace -f`` 的行序不是因果序（见 WP-R8），同一道理也适用于「不存在」：
+    进程 B 对名字 N 的 ``newfstatat`` 在内核里先于进程 A 创建 N 就返回了 ENOENT，但 B 的行被打印在 A 的创建行之后（10-16 ARM64 收割 #9，
+    ``test_codex_upgrade_staging_dispatch`` 的 ``watchdog-heartbeats.ndjson``：创建调用编号 1101718、这条探测 1101719）。原规则把
+    「已知名字上的缺失探测」一律判矛盾，于是正常行为被判失败。现在在两个条件**同时**成立时按乱序放过（不判问题、不改名字表）：
+
+    * **窗口**：探测的调用编号减去名字最近一次被绑定（创建、硬链接目的、rename 带入，目录 rename 连同子树每个名字）的调用编号，
+      落在 ``[0, LATE_MISSING_PROBE_WINDOW_CALLS]``；名字被解绑即忘掉绑定编号。探测或绑定缺少整数调用编号、探测编号小于绑定编号、
+      超出窗口，都退化为原行为（判矛盾）；
+    * **先行探测证据**：名字被绑定之前，轨迹里已经出现过对同一个名字的缺失探测（``probed_missing``：名字未知时的 ENOENT／ENOTDIR 探测，
+      失败的 rename／link 在目的父目录已证明时来源名字的 ENOENT 也算）。乱序要求有另一个进程恰好在创建的瞬间探测这个名字，
+      而「先探测、再创建」是被测代码里轮询、检查后创建这类写法的共同形态；没有任何先行探测的名字，创建后紧跟的 ENOENT
+      更可能是真实的状态脱节（或单进程里的矛盾），保持判矛盾。代价：从未被探测过缺失、第一次被探测就恰好与创建乱序的名字不被放过
+      （失败关闭，可再放宽）。证据只是布尔位（名字在不在 ``probed_missing`` 里），不依赖先行探测的调用编号，所以解析器去重丢掉
+      的重复探测不会让重放端得到不同的证据（同一个名字、同一个版本期内，第一条探测一定被保留）。
+
+    窗口规则要满足「同键 ⇒ 同判定」，所以去重键里加了「这条缺失探测是否落在窗口内」一位（``_late_gap``），否则窗口内被放过的首条探测
+    会把之后窗口外、本该判矛盾的同键探测当作重复丢掉。``bound_call``／``probed_missing`` 不进 ``report()`` 与文档，只有名字表、问题清单照旧。
+    只放宽这一类矛盾：「创建时已存在」「O_CREAT|O_EXCL 落在已知名字上」「删除未证明的输出」、写类调用的 ENOENT 等一律不变。
+
+    诚实说明（WP-R13，独立验收 O-1）：先行探测证据的区分力有限——「先检查、再创建」是创建者的通用写法，几乎每个被创建的名字都会有先行缺失探测，
+    所以这道门槛能挡住的只是「从未被探测过缺失的名字」（既有测试里的矛盾夹具、单进程里的真矛盾），对真实轨迹几乎不筛选；实际的约束主要来自 512 的调用编号窗口。
+    另外名字被删除后再次被探测缺失、再被创建，证据会重新生效。被放过的只是「盘内已生成名字的缺失探测与记录矛盾」这类一致性自检，不暴露宿主信息，
+    不构成检出损失。
+
+    WP-R13（两处新增放行，都只在盘外宿主路径一侧，不放松对盘内对象的任何判定）：
+
+    * **T2.1 失败的“引入”**（``_two_path_failed_import``）：``os.link(盘外缓存文件, 盘内路径)`` 在独立 tmpfs 上得到 EXDEV，随后回退成复制
+      （``prepare_copy_pycache`` 的做法，每个 .pyc 一次）。盘外来源、盘内目的的**失败** link／rename 没有命名空间效果，盘外一端只是对宿主路径的存在性／所在设备探测，
+      由解析器登记成宿主路径访问（失败时登记 ``stat``／``missing``，不再是永远不可声明的 ``write``）；盘内目的按失败调用的规则判。
+      成功的、盘内来源盘外目的的（任何结果）、另一端还原不出路径的，仍判“另一端不在私有临时盘内”。
+    * **T2.2 经自己的符号链接读盘外宿主文件**（``_own_link_foreign_read``）：采集工具把标准库缓存目录建成指向盘外共享层的符号链接，python 经它成功只读打开 .pyc。
+      成功打开的描述符真实路径标注已被解析器登记为宿主读取；这条放行只在链接对象是本轮创建、标注等于“链接文本＋剩余分量”等全部条件成立时生效，
+      不把盘外路径记成本单元创建的对象，链接对象本身仍是本轮创建的对象（unlink 合法）。放行与否进去重键（只在放行时追加一位）。
+    两处都不改名字表、不推进变更纪元。
     """
 
     def __init__(self, contract: dict[str, Any]) -> None:
@@ -466,12 +627,30 @@ class OutputTrackerV4:
         self.links: dict[int, int] = {0: 1}
         self.entries: dict[str, int] = {self.root: 0}
         self.next_object = 1
+        # WP-R3：符号链接对象 → 链接文本（symlink 调用的第一个参数，原样保存，从不解引用）。键集合就是“当前存活的符号链接
+        # 对象”：符号链接不能被硬链接（_link 拒绝），所以每个链接对象恰有一个名字；为空时所有符号链接检查直接跳过，
+        # 没有符号链接的普通单元（绝大多数）不付任何额外开销。
+        self.link_text: dict[int, str] = {}
         self.covered: set[str] = set()
         self.problems: set[str] = set()
+        # WP-R8：待补证的名字（当时未证明、却已被成功读取／探测的名字），按首次出现顺序；值恒为 None，只用字典保持确定的顺序。
+        # 创建该名字的事件到达时划掉；轨迹结束仍留在这里的，由 ``report()`` 报为问题。
+        self.awaiting: dict[str, None] = {}
+        # WP-R9：名字 → 版本号（见类说明）。版本号取自单调递增的 ``_clock``，所以同一个名字的两个版本号绝不相等，
+        # 「名字被删除后又重新创建成同样的对象」也不会和旧版本混同。
+        self.versions: dict[str, int] = {}
+        self._clock = 0
         # 上一条事件若创建了某个文件名，这里记着它的路径；下一条事件一到就被取出并清除（只对紧邻的下一条事件有效）。只服务于
         # O_CREAT|O_EXCL 的矛盾自检：解析器对一次 openat／open 调用产生两条紧挨着的事件（请求路径一条、返回描述符的真实路径一条，
         # 路径相同），创建名字的是第一条，第二条落在刚创建的名字上，不是矛盾。不影响任何事件的返回值，也不影响名字表。
         self._created_by_previous: str | None = None
+        # WP-R11：缺失探测的乱序容忍状态（见类说明）。``probed_missing``：目前未知、却已被探测过缺失的名字（绑定时划掉）；
+        # ``bound_call``：名字 → 最近一次被绑定时的调用编号，只记「绑定前有过缺失探测」的名字，名字被解绑或改走时清掉，事件没有
+        # 整数调用编号时也不记；``_event_call``：当前正在处理的事件的调用编号（非整数为 None），只在 ``observe_event`` 内有效。
+        # 三者只服务于缺失探测的乱序判断，不进 ``report()``，也不改变任何事件的返回值。
+        self.probed_missing: set[str] = set()
+        self.bound_call: dict[str, int] = {}
+        self._event_call: int | None = None
 
     # ------------------------------------------------------------------ 名字表的基本操作
 
@@ -483,26 +662,75 @@ class OutputTrackerV4:
         obj = self.names.get(path)
         return None if obj is None else self.kinds[obj]
 
-    def _create(self, path: str, kind: str) -> None:
-        """在已证明的父目录下新建对象并绑定名字（调用方已确认父目录已知、路径未知）。"""
+    def _touch(self, path: str) -> None:
+        """WP-R9：名字的存在性、对象身份或待补证状态变了，给它换一个新版本号。"""
+        self._clock += 1
+        self.versions[path] = self._clock
+
+    def _bind_call(self, path: str) -> None:
+        """WP-R11：名字刚被绑定到一个对象。绑定前有过缺失探测（先行探测证据）且本事件有整数调用编号，才记下绑定它的调用编号；
+        否则不记，该名字上之后的缺失探测不享受乱序容忍（退化为原行为）。先行探测的记账在此划掉（名字已经存在了）。"""
+        evidenced = path in self.probed_missing
+        self.probed_missing.discard(path)
+        if evidenced and self._event_call is not None:
+            self.bound_call[path] = self._event_call
+        else:
+            self.bound_call.pop(path, None)
+
+    def _late_gap(self, call: Any, path: str) -> bool:
+        """WP-R11：编号为 ``call`` 的缺失探测，落在已知名字 ``path`` 上，是否可按「strace 行序乱序」放过。
+
+        条件：名字绑定前有过缺失探测（``bound_call`` 只给这样的名字记编号）；探测与绑定都有整数调用编号（bool 不算整数）；
+        ``0 <= 探测编号 - 绑定编号 <= LATE_MISSING_PROBE_WINDOW_CALLS``。
+        任何一项不满足（含探测编号小于绑定编号，即轨迹顺序与调用编号矛盾）都返回 False——退化为原行为（判矛盾）。
+        """
+        bound = self.bound_call.get(path)
+        if bound is None or type(call) is not int:
+            return False
+        return 0 <= call - bound <= LATE_MISSING_PROBE_WINDOW_CALLS
+
+    def _await(self, path: str) -> None:
+        """WP-R8：记一笔待补证——未证明的名字被成功读取／探测，等同名字的创建事件来销账（见类说明）。"""
+        if path not in self.awaiting:
+            self.awaiting[path] = None
+            self._touch(path)
+
+    def _settle(self, path: str) -> None:
+        """WP-R8：名字刚被绑定到一个对象（创建、硬链接目的、rename 带入），划掉它的待补证。只认同一个名字。
+        调用点都紧跟在绑定名字（``_touch``）之后，版本号已经换过，这里不用再换。"""
+        self.awaiting.pop(path, None)
+
+    def _create(self, path: str, kind: str, text: str | None = None) -> None:
+        """在已证明的父目录下新建对象并绑定名字（调用方已确认父目录已知、路径未知）。
+
+        ``text`` 只给符号链接：链接文本原样记下，不解释、不解引用。
+        """
         obj = self.next_object
         self.next_object += 1
         self.names[path] = obj
+        self._touch(path)
+        self._bind_call(path)
         self.kinds[obj] = kind
         self.links[obj] = 1
         self.entries[os.path.dirname(path)] += 1
         if kind == "directory":
             self.entries[path] = 0
+        if kind == "symlink":
+            self.link_text[obj] = text if text is not None else ""
+        self._settle(path)
 
     def _unbind(self, path: str) -> None:
         """解绑一个名字；对象失去最后一个名字后消亡。目录解绑前调用方须确认它没有子项。"""
         obj = self.names.pop(path)
+        self._touch(path)
+        self.bound_call.pop(path, None)
         self.entries[os.path.dirname(path)] -= 1
         self.entries.pop(path, None)
         self.links[obj] -= 1
         if self.links[obj] == 0:
             del self.links[obj]
             del self.kinds[obj]
+            self.link_text.pop(obj, None)
 
     def _move(self, source: str, destination: str, kind: str) -> None:
         """把名字 source（目录则连同整棵子树）改成 destination；调用方已确认 destination 不存在且不在 source 之内。"""
@@ -514,10 +742,137 @@ class OutputTrackerV4:
         for item in moved:
             renamed = destination + item[len(source):]
             self.names[renamed] = self.names.pop(item)
+            self._touch(item)            # 来源端的名字消失（目录则连同子树里的每个名字）
+            self._touch(renamed)         # 目的端的名字出现
+            self.bound_call.pop(item, None)
+            self._bind_call(renamed)
             if item in self.entries:
                 self.entries[renamed] = self.entries.pop(item)
+            self._settle(renamed)
         self.entries[os.path.dirname(source)] -= 1
         self.entries[os.path.dirname(destination)] += 1
+
+    # ------------------------------------------------------------------ 符号链接（WP-R3）
+
+    def has_symlinks(self) -> bool:
+        """当前是否有存活的符号链接对象；解析器据此决定要不要做路径形态检查，本类据此跳过全部符号链接检查。"""
+        return bool(self.link_text)
+
+    def is_symlink(self, path: str) -> bool:
+        """路径此刻是不是一个已证明的符号链接名字（只看名字表，从不解引用）。"""
+        obj = self.names.get(path)
+        return obj is not None and obj in self.link_text
+
+    def _through_symlink(self, path: str) -> bool:
+        """路径的某个**真祖先**（不含路径自身、不含根）是符号链接名字：内核解析这条路径时必然解引用该链接。
+
+        哪怕链接指向盘内、哪怕调用本身失败（ENOENT 同样取决于链接目标那一端的宿主状态），都算跟随式访问。
+        """
+        parent = os.path.dirname(path)
+        while len(parent) > len(self.root):
+            if self.is_symlink(parent):
+                return True
+            parent = os.path.dirname(parent)
+        return False
+
+    def _symlink_name_verdict(self, event: dict[str, Any]) -> str:
+        """事件的路径本身（最后一个分量）此刻是符号链接名字时，这个调用是否会解引用它。
+
+        返回 ``"ok"``（不跟随，且不改名字表，直接放行）、``"generic"``（不跟随，交给下面的通用判定：unlink／rename／
+        创建被拒绝，它们对名字表的影响由通用逻辑负责）或 ``"problem"``（会跟随、或没有合同，一律判问题）。
+        白名单之外的调用名一律是 ``problem``——新增系统调用默认失败关闭。每一项能暴露什么宿主信息：
+
+        * ``unlink``／``unlinkat``、``rename*`` 的任一端：作用在目录项上，Linux 不解引用最后一个分量；
+        * ``lstat``／``lstat64``、带 ``AT_SYMLINK_NOFOLLOW`` 的 ``newfstatat``／``fstatat64``／``statx``：读链接自己的 inode 元数据；
+        * ``readlink``／``readlinkat``：读链接文本，而它是被测代码自己写的；
+        * 对已存在名字的创建被拒绝（``mkdir``／``mknod``／``symlink`` 的 EEXIST，带 ``O_CREAT|O_EXCL`` 的打开得 EEXIST）：
+          O_EXCL 不跟随链接；其余创建调用不解引用最后一个分量；
+        * 带 ``O_NOFOLLOW`` 的打开得 ``ELOOP``：内核在碰到链接时就拒绝，没有读取目标的任何信息。``O_PATH|O_NOFOLLOW`` 会
+          成功地得到一个指向链接本身的描述符，之后 ``openat(fd, "")``、``/proc/self/fd`` 等都能把它转成跟随——
+          这类描述符的后续使用不可见，保持失败关闭（解析器同样仍登记 symlink-metadata-not-bound）。
+        失败的 lstat／readlink（EACCES 之类）在已证明的链接上不可能出现，按矛盾判问题。
+        """
+        name, ok, error, flags = event["name"], event["succeeded"], event["errno"], set(event["flags"])
+        if name in TWO_PATH_NAMES or name in SYMLINK_NAMES or name in {"unlink", "unlinkat"}:
+            return "generic"
+        if name in LSTAT_NAMES or name in READLINK_NAMES or (name in FSTATAT_NAMES and "AT_SYMLINK_NOFOLLOW" in flags):
+            return "ok" if ok and event["kind"] == "stat" else "problem"
+        if not ok and error == "EEXIST":
+            if name in {"mkdir", "mkdirat", "mknod", "mknodat"}:
+                return "generic"
+            if name in OPEN_NAMES and name != "creat" and {"O_CREAT", "O_EXCL"} <= flags:
+                return "generic"
+        if not ok and error == "ELOOP" and name in OPEN_NAMES and "O_NOFOLLOW" in flags and "O_PATH" not in flags:
+            return "ok"
+        return "problem"
+
+    def _create_symlink(self, event: dict[str, Any]) -> bool:
+        """symlink／symlinkat 成功：在已证明的父目录下新建符号链接对象，链接文本原样记下（事件 target 字段）。
+
+        暴露的宿主信息：无——创建链接不读取链接文本指向的任何东西，目标是否存在、是否在盘内都不影响调用结果。
+        """
+        path, text = event["path"], event["target"]
+        if not isinstance(text, str) or text == "":
+            self._problem("符号链接的链接文本未记录或为空，与成功的创建矛盾：", path)
+        elif path in self.names:
+            self._problem("符号链接创建成功却落在已知名字上，与轨迹矛盾：", path)
+        elif self._kind_of(os.path.dirname(path)) != "directory":
+            self._problem("新建符号链接的父目录未证明：", path)
+        else:
+            self._create(path, "symlink", text)
+            return True
+        return False
+
+    # ------------------------------------------------------------------ 去重键（WP-R9）
+
+    def _through(self, path: str) -> bool:
+        """路径的某个真祖先是否符号链接；没有符号链接对象时恒为 False（省掉逐级查找）。"""
+        return self._through_symlink(path) if self.link_text else False
+
+    def dedup_key(self, event: dict[str, Any]) -> tuple | None:
+        """事件到达时的去重键：键相同 ⇒ 跟踪器对这两条事件的判定（是否改名字空间、新增哪些问题）完全相同。
+
+        必须在 ``observe_event`` **之前**调用——键描述的是事件到达时相关名字的状态。返回 None 表示这条事件永远保留，原因见类说明。
+        解析器只对「observe_event 返回 False」的事件按此键去重；返回 True 的事件（改了名字空间）本来就永不去重。
+        两路径调用的两条事件共用同一份归一化状态（来源端、目的端各自的版本与是否经链接），所以一次失败调用的两条事件
+        要么都被去重、要么都保留——重放端要求盘内两端成对出现。
+        隐藏状态 ``_created_by_previous`` 只被「``O_CREAT|O_EXCL`` 成功落在已知名字上」的矛盾自检读取，所以只有这类事件的键里带
+        「它是不是刚被上一条事件创建」这一位；另外，紧跟在创建之后的**任何**事件都会消耗该隐藏状态，必须保留
+        （``consumes_hidden_state``），否则重放端少看一条事件，隐藏状态的消耗就和解析端不同。
+        """
+        name, kind, path, peer, role = event["name"], event["kind"], event["path"], event["peer"], event["role"]
+        succeeded = event["succeeded"]
+        own = (path, kind, name, succeeded, event["errno"], tuple(event["flags"]), event["target"], role, peer)
+        versions = self.versions
+        if name in TWO_PATH_NAMES:
+            if succeeded or role not in ROLES or peer is None or not under(peer, self.root):
+                return None        # 成功的两路径调用要么改状态、要么是「同一对象」的空操作，两端一律保留；畸形事件本身就是问题
+            source, destination = (path, peer) if role == "source" else (peer, path)
+            return own + (versions.get(source, 0), versions.get(destination, 0), self._through(source), self._through(destination),
+                          self._kind_of(os.path.dirname(destination)) == "directory",
+                          self._late_gap(event.get("call"), source))
+        if succeeded and kind == "write" and name in NEVER_DEDUP_WRITES:
+            return None
+        state = (versions.get(path, 0), self._through(path))
+        if kind == "missing":
+            # WP-R11：缺失探测的判定还取决于它与名字绑定处的调用编号差（是否在乱序窗口内），而键里没有调用编号，所以把这一位放进键，
+            # 否则「窗口内被放过的首条探测」会把之后窗口外、本该判矛盾的同键探测当作重复丢掉。
+            state += (self._late_gap(event.get("call"), path),)
+        if kind == "write":
+            state += (self._kind_of(os.path.dirname(path)) == "directory",)
+            if name in OPEN_NAMES and {"O_CREAT", "O_EXCL"} <= set(event["flags"]):
+                state += (self._created_by_previous == path,)
+        key = own + state
+        if kind == "read" and self._own_link_foreign_read(event):
+            # WP-R13（T2.2）：经自己的符号链接读盘外文件是否被放行，取决于链接对象的文本（键里的路径版本号、“是否经链接”两位都盖不住：
+            # 同名链接被删除重建成指向别处的链接，这两位都不变）。把放行结论本身放进键：放行的事件与按原规则判问题的事件键不同，
+            # 同键 ⇒ 同判定仍成立。只在放行时追加，所以其余事件的键与以前逐字相同。
+            key += ("own-link-foreign-read",)
+        return key
+
+    def consumes_hidden_state(self) -> bool:
+        """下一条事件是否会消耗隐藏状态：上一条事件刚创建了某个文件名。这样的事件必须保留（见 ``dedup_key``）。"""
+        return self._created_by_previous is not None
 
     # ------------------------------------------------------------------ 事件入口
 
@@ -528,7 +883,29 @@ class OutputTrackerV4:
         if not under(path, self.root):
             return False
         self.covered.add(path)
+        # WP-R11：本事件的调用编号（非整数一律当作没有），名字被绑定时记入 bound_call。
+        call = event.get("call")
+        self._event_call = call if type(call) is int else None
         target = event["target"]
+        if self.link_text:
+            # WP-R3：存在符号链接对象时，先判是否会解引用它（没有链接时这一整段被跳过）。排在“返回描述符落点”检查之前：
+            # 经链接打开得到盘外的描述符，两种问题都成立，这里的说明更具体；返回描述符那一检查仍是第二道防线，对非链接名字照旧生效。
+            if self._through_symlink(path):
+                if self._own_link_foreign_read(event):
+                    # WP-R13（T2.2）：经本单元自己建的符号链接、读盘外宿主文件（描述符的真实路径已由解析器登记为宿主读取）：
+                    # 不是对本单元输出的读取，也不是问题；不记名字、不改状态。注意这里直接返回，跳过下面的“描述符未绑定到私有临时盘”检查——
+                    # 这类读取的描述符按定义就落在盘外，宿主读取由宿主路径声明审计负责。判据与边界见 ``_own_link_foreign_read``。
+                    return False
+                self._problem("路径的中间分量是符号链接，属于跟随式访问：" + name + ":", path)
+                return False
+            if self.is_symlink(path):
+                verdict = self._symlink_name_verdict(event)
+                if verdict == "problem":
+                    self._problem("跟随符号链接的访问或没有合同的调用（链接名字只允许 unlink、rename、lstat、readlink 等不跟随的调用）："
+                                  + name + ":", path)
+                    return False
+                if verdict == "ok":
+                    return False
         if name in OPEN_NAMES and succeeded and (target is None or not under(target, self.root)):
             self._problem("文件描述符未绑定到私有临时盘：", path)
             return False
@@ -538,13 +915,12 @@ class OutputTrackerV4:
             self._failed(event)
             return False
         if name in SYMLINK_NAMES:
-            self._problem("私有临时盘内不允许创建符号链接：", path)
-            return False
+            return self._create_symlink(event)
         known = path in self.names
         if kind != "write":
-            # 读取、探测、执行、列目录：首次访问必须是本轮已证明的名字。
+            # 读取、探测、执行、列目录：名字未证明时不立即判问题，记待补证，等同名字的创建事件来销账（WP-R8，见类说明）。
             if not known:
-                self._problem("首次读取前未证明由本轮生成：", path)
+                self._await(path)
             return False
         parent_is_directory = self._kind_of(os.path.dirname(path)) == "directory"
         if name in {"mkdir", "mkdirat"}:
@@ -574,7 +950,7 @@ class OutputTrackerV4:
                 # creat 系统调用没有 O_EXCL 标志（等价于 O_CREAT|O_WRONLY|O_TRUNC），重新打开已知文件是合法的，不在此列。
                 self._problem("O_CREAT|O_EXCL 创建成功却落在已知名字上，与轨迹矛盾：", path)
         elif name in {"unlink", "unlinkat", "rmdir"}:
-            return self._remove(path, name)
+            return self._remove(path, name, event["flags"])
         elif name in METADATA_WRITE_NAMES and known:
             pass
         else:
@@ -585,7 +961,8 @@ class OutputTrackerV4:
         """单路径调用失败。
 
         * 探测不存在的路径（kind 为 missing，即 ENOENT／ENOTDIR）：未知路径合法；已知名字却报不存在，轨迹与归属状态矛盾。
-        * 读取、探测、执行、列目录类调用的其他失败：它们既不创建也不删除任何东西，沿用旧规则，只要求访问的是本轮已证明的名字。
+        * 读取、探测、执行、列目录类调用的其他失败：它们既不创建也不删除任何东西，沿用旧规则，只要求访问的是本轮已证明的名字
+          （未证明的名字记待补证，等创建事件销账，见类说明 WP-R8；轨迹结束仍未销账才报问题）。
           这一条不能收紧：python3 启动脚本时 glibc 的 realpath 会对私有目录下每一级路径 readlinkat 并得到 EINVAL，
           执行没有执行权限的假程序会得到 EACCES，旧跟踪器对已证明路径上的这类失败一向放行。
         * 写类调用失败（创建、删除、改名、改元数据）：按错误码与已知状态判。EEXIST 落在已知名字上是合法的「创建被拒绝」，
@@ -595,11 +972,16 @@ class OutputTrackerV4:
         path, kind, name, error = event["path"], event["kind"], event["name"], event["errno"]
         known = path in self.names
         if kind == "missing":
-            if known:
+            # WP-R11：名字未知时记一笔先行探测证据；名字已知时，若它绑定前有过缺失探测、且这条探测的调用编号紧随绑定之后
+            # （窗口内），是 strace -f 的行序乱序（探测在内核里先于创建完成），不是矛盾；否则（含没有整数调用编号）仍判矛盾。
+            if not known:
+                self.probed_missing.add(path)
+            elif not self._late_gap(self._event_call, path):
                 self._problem("已生成对象的缺失探测与轨迹矛盾：", path)
         elif kind != "write":
+            # 同上：失败的读取类调用（EACCES、EINVAL……）同样意味着对象存在，名字未证明时记待补证。
             if not known:
-                self._problem("首次读取前未证明由本轮生成：", path)
+                self._await(path)
         elif error == "EEXIST":
             if not known:
                 self._problem("EEXIST 落在未知路径，与轨迹矛盾：", path)
@@ -609,14 +991,17 @@ class OutputTrackerV4:
         else:
             self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{name}:", path)
 
-    def _remove(self, path: str, name: str) -> bool:
+    def _remove(self, path: str, name: str, flags: list[str] | None = None) -> bool:
         obj = self.names.get(path)
         if obj is None or path == self.root:
             self._problem("删除未证明的输出：", path)
             return False
         kind = self.kinds[obj]
-        # unlink 只能删非目录、rmdir 只能删目录；unlinkat 是否带 AT_REMOVEDIR 不进事件，成功本身就说明形式匹配。
-        if (name == "unlink" and kind != "file") or (name == "rmdir" and kind != "directory"):
+        # unlink 只能删非目录（普通文件或符号链接）、rmdir 只能删目录；unlinkat 不带 AT_REMOVEDIR 时删非目录。
+        # WP-R3：事件现在带 AT_* 标志，所以成功的 unlinkat 带着 AT_REMOVEDIR 却落在非目录上能直接判矛盾（内核不会让它成功）；
+        # 反过来“不带 AT_REMOVEDIR 的 unlinkat 删目录”这个方向保持旧宽容（既有测试与历史事件流不带标志），不收紧。
+        if ((name == "unlink" and kind not in {"file", "symlink"}) or (name == "rmdir" and kind != "directory")
+                or (name == "unlinkat" and "AT_REMOVEDIR" in (flags or []) and kind != "directory")):
             self._problem("删除方式与已生成对象类型不符：", path)
             return False
         if kind == "directory" and self.entries.get(path, 0):
@@ -632,13 +1017,22 @@ class OutputTrackerV4:
         """rename／link 的所有判定都挂在来源端事件上；目的端事件只登记覆盖路径（上面已登记），不改状态。
 
         这样跟踪器在两条事件之间不留隐藏状态：任何一条事件被去重或单独重放，结果都只取决于事件本身与名字表。
+        例外（WP-R13）：另一端在盘外时只有盘内一端产生事件；其中“失败的引入”（盘内目的、盘外来源、调用失败）交给
+        ``_two_path_failed_import``，其余（成功的、盘内来源盘外目的的、另一端还原不出路径的）仍判“另一端不在私有临时盘内”。
         """
         path, role, peer = event["path"], event["role"], event["peer"]
         if event["kind"] != "write" or role not in ROLES:
             self._problem("两路径调用缺少角色标记：", path)
             return False
         if peer is None or not under(peer, self.root):
-            # 另一端在盘外（或无法还原，例如 AT_EMPTY_PATH）：无法证明对象来源或去向，拒绝。
+            if peer is not None and role == "destination" and not event["succeeded"]:
+                # WP-R13（T2.1）：失败的“引入”——盘外来源、盘内目的的 link／rename 失败（典型：``os.link(宿主缓存文件, 盘内路径)`` 得到
+                # EXDEV，随后回退成复制）。失败的调用没有任何命名空间效果，盘外一端只是对宿主路径的存在性／所在设备探测，由解析器登记成
+                # 宿主路径访问、归宿主路径声明审计，不归输出归属；盘内一端仍按失败调用的规则判，见 ``_two_path_failed_import``。
+                self._two_path_failed_import(event)
+                return False
+            # 另一端在盘外（或无法还原，例如 AT_EMPTY_PATH）：无法证明对象来源或去向，拒绝。成功的调用（把宿主文件引入私有盘、或把
+            # 私有盘里的对象送出去）、失败的“送出”（盘内来源、盘外目的）、另一端还原不出路径的，一律仍判问题。
             self._problem("两路径调用的另一端不在私有临时盘内：", path)
             return False
         if role == "destination":
@@ -653,6 +1047,68 @@ class OutputTrackerV4:
             return False
         return self._rename(path, peer, noreplace="RENAME_NOREPLACE" in event["flags"])
 
+    def _two_path_failed_import(self, event: dict[str, Any]) -> None:
+        """WP-R13（T2.1）：盘外来源、盘内目的（``event`` 是目的端事件）的失败 link／rename，对盘内目的名字按失败调用的规则判。
+
+        * ``EXDEV``：跨设备。私有盘是独立的 tmpfs，来源在盘外时 link／rename 必然得到它——合法的无效果失败（两端都在盘内时它没有
+          解释，仍走 ``_two_path_failed`` 的“未建立合同的失败调用”）；
+        * ``EEXIST``：目的已存在（内核先查目的是否存在、后查跨设备）。目的名字必须是本轮已知的，否则有来源不明的对象，与盘内两端时同口径；
+        * ``ENOENT``／``ENOTDIR``：来源（盘外，宿主事实）不存在，或目的的父目录不存在。盘外来源没有名字表可对照，目的父目录缺失
+          本来也不在 ``_two_path_failed`` 的判定范围，所以不判；
+        * 其余任何错误码（EACCES、EPERM、EROFS、EMLINK……）：与盘内两端时一样，保守判“未建立合同的失败调用”。
+        不改名字表、不返回“改变状态”，所以不推进变更纪元（调用方 ``_two_path`` 返回 False）。
+        """
+        destination, error = event["path"], event["errno"]
+        if error == "EXDEV" or error in {"ENOENT", "ENOTDIR"}:
+            return
+        if error == "EEXIST":
+            if destination not in self.names:
+                self._problem("EEXIST 落在未知路径，与轨迹矛盾：", destination)
+        else:
+            self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{event['name']}:", destination)
+
+    def _own_link_foreign_read(self, event: dict[str, Any]) -> bool:
+        """WP-R13（T2.2，仅 v4）：事件是不是“经本单元自己创建的符号链接、成功地只读打开盘外宿主文件”。
+
+        背景：采集工具给副本树建 ``.pycache-prefix``，把标准库缓存目录建成指向盘外共享层的符号链接（``symlinkat`` 成功，目标在盘外），
+        python 随后经这条链接 ``openat`` 读 ``.pyc``。原规则把路径中间分量是符号链接的一切访问都判“跟随式访问”（因为跟随后的路径是宿主输入，
+        strace 对非描述符调用不会打印）；但**成功打开**的调用会在返回值里带出描述符的真实路径标注（``-y``），解析器已把这个盘外路径登记成宿主读取，
+        由宿主路径声明审计核对内容快照，信息没有被藏起来。这时读取的是宿主文件，不是对本单元输出的读取，也不是问题。
+
+        只有下列条件**全部**满足才放行，任何一条不满足都保持原判定（返回 False）：
+
+        1. 事件是成功的 ``open``／``openat``／``openat2``（不含 ``creat``），``kind`` 为 ``read``，没有错误码，打开标志里没有
+           ``O_WRONLY``／``O_RDWR``／``O_CREAT``／``O_TRUNC``／``O_APPEND``／``O_TMPFILE``／``O_PATH``。失败的打开没有描述符标注，
+           内核实际探测的宿主路径没有登记，必须仍判问题；stat／access／readlink／execve 等跟随式调用同理（没有标注可对）；
+        2. 事件路径本身不是符号链接名字（否则打开会再跟随一层，是第二个链接）；
+        3. 事件路径的真祖先里**恰好一个**是本轮创建、跟踪器仍记着的符号链接名字（两层链接、没有链接都不放行）；
+        4. 事件的 ``target``（描述符真实路径标注）是规范化的绝对路径、在盘外，并且**等于**“该链接记录的链接文本（相对文本按链接所在目录解析）
+           ＋ 请求路径里链接之后的剩余分量”。对不上说明内核实际落点与跟踪器记着的链接不是一回事（链接被没观察到的路径替换、
+           链接目标里还有宿主上的符号链接等），失败关闭。链接文本指向盘内时 ``target`` 在盘内，同样不放行。
+        5. 事件路径是规范化的（事件里的路径恒如此）：``..`` 在解析器一侧已被规范化抹掉，经链接的 ``..``／结尾斜杠写法由解析器的
+           ``symlink-path-form-unsafe`` 登记未解析，整次审计失败关闭，不靠这里。
+        """
+        if not self.link_text:
+            return False
+        path, target = event["path"], event["target"]
+        if (event["name"] not in FOREIGN_READ_OPEN_NAMES or event["kind"] != "read" or not event["succeeded"]
+                or event["errno"] is not None or set(event["flags"]) & NOT_READ_ONLY_OPEN_FLAGS
+                or not isinstance(target, str) or not target.startswith("/") or os.path.normpath(target) != target
+                or under(target, self.root) or os.path.normpath(path) != path or self.is_symlink(path)):
+            return False
+        links = []
+        parent = os.path.dirname(path)
+        while len(parent) > len(self.root):
+            if self.is_symlink(parent):
+                links.append(parent)
+            parent = os.path.dirname(parent)
+        if len(links) != 1:
+            return False
+        link = links[0]
+        text = self.link_text[self.names[link]]
+        base = text if text.startswith("/") else os.path.join(os.path.dirname(link), text)
+        return target == os.path.normpath(os.path.join(base, path[len(link) + 1:]))
+
     def _two_path_failed(self, event: dict[str, Any]) -> None:
         source, destination, error = event["path"], event["peer"], event["errno"]
         if error == "EEXIST":
@@ -662,8 +1118,14 @@ class OutputTrackerV4:
         elif error in {"ENOENT", "ENOTDIR"}:
             # 来源不存在，或目标的父目录不存在（不是目录），都会得到这类错误；
             # 来源已知、目标父目录也是已知目录时，这个失败无从解释。
-            if source in self.names and self._kind_of(os.path.dirname(destination)) == "directory":
-                self._problem("已生成对象的缺失探测与轨迹矛盾：", source)
+            # WP-R11：目标父目录已证明时，这个错误只能来自来源缺失——来源未知则记一笔先行探测证据；来源已知时，若它绑定前有过缺失探测、
+            # 且失败调用的编号紧随绑定之后（窗口内），是 strace -f 的行序乱序（失败调用在内核里先于来源的创建完成），不是矛盾。
+            # 目标父目录缺失造成的 ENOENT 不在此列（目标一端的乱序容忍不在 WP-R11 范围内，仍按原规则判）。
+            if self._kind_of(os.path.dirname(destination)) == "directory":
+                if source not in self.names:
+                    self.probed_missing.add(source)
+                elif not self._late_gap(self._event_call, source):
+                    self._problem("已生成对象的缺失探测与轨迹矛盾：", source)
         else:
             self._problem(f"未建立合同的失败调用（{error or '无错误码'}）：{event['name']}:", source)
 
@@ -680,8 +1142,11 @@ class OutputTrackerV4:
         else:
             # 目标名绑定到同一个对象：两个名字、一个对象。
             self.names[destination] = obj
+            self._touch(destination)
+            self._bind_call(destination)
             self.links[obj] += 1
             self.entries[os.path.dirname(destination)] += 1
+            self._settle(destination)
             return True
         return False
 
@@ -708,7 +1173,8 @@ class OutputTrackerV4:
             if victim == obj:
                 # 同一对象的两个名字之间（含源与目标同名）：POSIX 规定成功但什么都不改。
                 return False
-            if self.kinds[victim] != kind:
+            if (self.kinds[victim] == "directory") != (kind == "directory"):
+                # 目录只能覆盖空目录、非目录（普通文件或符号链接）只能覆盖非目录；POSIX 允许符号链接与普通文件互相覆盖。
                 self._problem("重命名覆盖了不同类型的已生成对象：", destination)
                 return False
             if kind == "directory" and self.entries.get(destination, 0):
@@ -724,7 +1190,11 @@ class OutputTrackerV4:
         return True
 
     def report(self) -> dict[str, Any]:
-        return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(self.problems)}
+        """覆盖路径与问题清单。清算在这里完成：仍待补证的名字按原文字报为「首次读取前未证明由本轮生成」。
+        只读取状态、不修改，所以可以任意次调用（解析器出文档时一次，重放端复核时一次），结果相同。"""
+        problems = set(self.problems)
+        problems.update("首次读取前未证明由本轮生成：" + path for path in self.awaiting)
+        return {"root": self.root, "paths": sorted(self.covered), "problems": sorted(problems)}
 
 
 def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: bool = False) -> dict[str, Any]:
@@ -787,8 +1257,14 @@ def validate_context(context: Any, inputs: list[dict[str, Any]], *, historical: 
 
 _V4_EVENT_KEYS = frozenset({"path", "kind", "name", "succeeded", "flags", "target", "errno", "call", "role", "peer", "epoch"})
 _V4_KINDS = frozenset({"read", "exec", "write", "missing", "stat", "dir", "list"})
-# v4 的 flags：原有的打开标志，加上 renameat2 的三个符号标志（strace 以符号输出）。v3 的校验正则保持原样不动。
-_V4_FLAG = re.compile(r"O_[A-Z0-9_]+|RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT")
+# WP-R3：v4 事件 flags 里允许出现的 ``AT_*`` 标志（strace 以符号输出的 dirfd 类调用的标志参数）。此前 v4 事件丢掉了它们，
+# 所以 lstat（AT_SYMLINK_NOFOLLOW）与 stat 无法区分、unlinkat 的 AT_REMOVEDIR 看不见。这是白名单：解析器遇到名单之外的
+# AT_* 标志登记 at-flag-not-decoded 未解析（AT_FDCWD 是描述符取值不是标志，不算），重放端遇到名单之外的标志按格式错误拒绝。
+# read_audit.py 里有一份同值常量（两个文件互不导入），两处必须相等，由 test_ci_read_audit_wp_r3 守住。
+AT_FLAGS_V4 = frozenset({"AT_SYMLINK_NOFOLLOW", "AT_SYMLINK_FOLLOW", "AT_REMOVEDIR", "AT_EMPTY_PATH", "AT_NO_AUTOMOUNT",
+                         "AT_EACCESS", "AT_STATX_SYNC_AS_STAT", "AT_STATX_FORCE_SYNC", "AT_STATX_DONT_SYNC"})
+# v4 的 flags：原有的打开标志，加上 renameat2 的三个符号标志与上面的 AT_* 标志（strace 以符号输出）。v3 的校验正则保持原样不动。
+_V4_FLAG = re.compile(r"O_[A-Z0-9_]+|RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT|" + "|".join(sorted(AT_FLAGS_V4)))
 _ERRNO_NAME = re.compile(r"E[A-Z0-9]+")
 
 
@@ -855,12 +1331,17 @@ def _check_call_groups_v4(events: list[dict[str, Any]], root: str) -> None:
 def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tuple[OutputTrackerV4, dict[str, set[str]]]:
     """重放 v4 输出事件：先逐条与按调用分组做结构校验，再按顺序喂给跟踪器并重算变更纪元。
 
-    变更纪元 = 此前使名字空间状态发生变化的事件个数。解析器据此去重只读事件，重放端用同一个返回值自己重算，
-    每条事件携带的 epoch 必须与重算值一致——否则去重的前提（两条同键事件之间状态没变）就无从保证。
+    变更纪元 = 此前使名字空间状态发生变化的事件个数。解析器按名字级版本去重（WP-R9，键里不含纪元），重放端用同一个返回值自己
+    重算纪元，每条事件携带的 epoch 必须与重算值一致——任何改状态的事件都不会被去重，被删掉或伪造一条，之后所有事件的纪元都对不上。
+
+    重放保证的边界（WP-R13，独立验收 O-3）：保证的是“**信息承载事件**被删必失败”——改状态的事件（纪元对不上）、构成名字表/问题清单/路径集合/访问类型
+    集合唯一来源的事件（``seen`` 与访问集合不闭合、``outputs`` 与重算不符）、两路径调用的配对事件（调用分组校验）。**对名字表、问题清单、路径集合都
+    无贡献的冗余事件**（例如对已知名字的重复 stat、openat 两条同路径事件中的第二条）被删不会失败——这正是名字级去重的前提（删掉后重放得到的结论不变），
+    不是缺陷。需求里“删掉任意一条事件重放都失败”的字面说法应读作前一种。
     """
     tracker = OutputTrackerV4(contract)
     events = runtime.get("output_events")
-    if not isinstance(events, list) or len(events) > MAX_OUTPUT_EVENTS:
+    if not isinstance(events, list) or len(events) > MAX_OUTPUT_EVENTS_V4:
         raise RuntimeContractError("输出归属轨迹缺失或超过上限")
     for event in events:
         _check_event_v4(event, tracker.root)
@@ -873,7 +1354,9 @@ def _replay_events_v4(runtime: dict[str, Any], contract: dict[str, Any]) -> tupl
         if tracker.observe_event(event):
             epoch += 1
         seen.setdefault(event["path"], set()).add(event["kind"])
-    if tracker.report() != runtime.get("outputs") or tracker.problems:
+    # WP-R8：清算后的问题（含仍待补证的名字）才是完整结论，所以看 report() 而不是只看 tracker.problems 属性。
+    report = tracker.report()
+    if report != runtime.get("outputs") or report["problems"]:
         raise RuntimeContractError("生成输出存在先读后写、来源不明或链接越界")
     return tracker, seen
 
@@ -947,7 +1430,9 @@ def replay_runtime(document: dict[str, Any], inputs: list[dict[str, Any]], *, hi
         covered.add("/dev/tty")
     environment = {entry["path"]: entry for entry in runtime["context"]["contract_entry"]["detail"]["environment"]}
     for path, kinds in paths.items():
-        if path == "/dev/null" and set(kinds) <= {"read", "write", "stat"}:
+        # R16：无状态字符设备按「路径 + 访问类型上界」放行（/dev/null 是其中一项，行为与改动前逐项相同）。路径精确匹配；
+        # 路径在表里但类型越界时与改动前一样不覆盖（继续走下面的分支，那些分支对 /dev 下的路径也不会放行）。
+        if path in STATELESS_DEVICE_KINDS and set(kinds) <= STATELESS_DEVICE_KINDS[path]:
             covered.add(path)
         elif path in environment:
             allowed = {"missing"} if environment[path]["kind"] == "missing" else {"read", "stat"}
