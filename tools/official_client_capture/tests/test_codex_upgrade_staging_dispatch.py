@@ -102,13 +102,12 @@ class StagingDispatchTests(unittest.TestCase):
 
     def _arguments(self, fixture: dict[str, object], phase: str, sequence: int, action_plan: Path):
         arguments = self.helper._vc_chain_arguments(fixture, phase, sequence, action_plan)
-        # 共享 helper（test_codex_upgrade._vc_chain_arguments）给 5 秒看门狗，但那个文件在 pre-A3 九链的静态依赖
-        # 闭包里，改它会让九链记录作废，所以在这里就地覆盖。单元进程自己当 owner（terminate_owner 取默认 True）：
+        # 共享 helper（pre-A3 九链静态依赖闭包里那个大测试文件里的 _vc_chain_arguments）给 5 秒看门狗，那个文件
+        # 改不得（改它会让九链记录作废），所以在这里就地覆盖。单元进程自己当 owner（terminate_owner 取默认 True）：
         # COMMIT 回调里的同步计算不发心跳，本机约 0.3 秒；ARM64 严格审计（strace）下放大 4～17 倍，会贴到
-        # 5 秒，监督器判 owner 失联并 SIGTERM 整个单元进程（10-17 实测：
-        # test_codex_upgrade_evaluation_recovery 被杀，返回码 -15；同类计算在本类里同样存在）。本类断言不依赖
-        # 看门狗时长；owner 被杀类用例（_run_driver 子进程 SIGKILL）靠 owner 已死即时判定，不等看门狗到期。
-        # 故放宽到 30 秒。
+        # 5 秒，监督器判 owner 失联并 SIGTERM 整个单元进程（10-17 实测：evaluation_recovery 单元被杀，
+        # 返回码 -15；同类计算在本类里同样存在）。本类断言不依赖看门狗时长；owner 子进程自己 os._exit 的
+        # 用例（_run_driver）靠 owner 已死即时判定，不等看门狗到期。故放宽到 30 秒。
         arguments.watchdog_timeout_seconds = 30.0
         return arguments
 

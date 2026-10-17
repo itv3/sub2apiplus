@@ -114,10 +114,9 @@ class _ChainMixin:
             heartbeat_seconds=0.2,
             # 单元进程自己当 owner（terminate_owner 取默认 True）：COMMIT 回调与动作前的评估器摘要核对
             # 是不发心跳的同步计算，本机各约 0.3 秒；ARM64 严格审计（strace）下放大 4～17 倍，会贴到
-            # 5 秒，监督器判 owner 失联并 SIGTERM 整个单元进程（10-17 实测：
-            # test_codex_upgrade_evaluation_recovery 被杀，返回码 -15）。本类断言不依赖看门狗时长，
-            # 正常路径不变慢（心跳仍是 0.2 秒）；owner 被杀类用例靠 owner 已死即时判定，不等看门狗到期。
-            # 故放宽到 30 秒。
+            # 5 秒，监督器判 owner 失联并 SIGTERM 整个单元进程（10-17 实测：evaluation_recovery 单元
+            # 被杀，返回码 -15）。本类没有断言看门狗到期的用例，断言不依赖看门狗时长，
+            # 正常路径不变慢（心跳仍是 0.2 秒）。故放宽到 30 秒。
             watchdog_timeout_seconds=30.0,
             ledger_interval_seconds=0.2,
         )
