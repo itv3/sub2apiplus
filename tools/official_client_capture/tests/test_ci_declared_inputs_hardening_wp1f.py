@@ -513,7 +513,9 @@ class CommittedRegistryTests(unittest.TestCase):
                 result = ur.declared_coverage(sample, entry["scope"], command_sha256=entry["sample"]["command_sha256"])
                 self.assertTrue(result["ok"], result["undeclared"][:5])
                 checked += 1
-        self.assertGreaterEqual(checked, 5, "首版登记表有 5 个 declared 单元")
+        # H10：frontend 三个单元在生产 WORK 位置会向上探测 {HOME} 祖先目录里不存在的配置文件，覆盖规则只许 /、/var/、/var/tmp/、{WORK}/ 为祖先，
+        # 正式后台带采样时读集审计判未声明读取，已降为 rerun-only（理由写在 command_input_scopes.json 里）；这里剩 2 个 declared 单元。
+        self.assertGreaterEqual(checked, 2, "登记表有 2 个 declared 单元（egress-scanner-check、egress-spec-egressscan-self-test）")
 
 
 if __name__ == "__main__":
