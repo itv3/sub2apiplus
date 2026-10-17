@@ -389,8 +389,20 @@ class NativeCaptureTests(unittest.TestCase):
         self._start("reject", amount=1)
         connection = self._connection()
         self.assertEqual(self._post(connection, b"not-json"), b"rejected")
-        with self.assertRaises((OSError, http.client.HTTPException)):
-            self._post(connection, b"second")
+        # http.client 会把请求头和请求体拆成两次 send；引擎读到超预算的请求头后即停读，
+        # 迟到的请求体不会被读取（原件里该请求正文为空），结果取决于两次 send 的间隔，
+        # 在 ARM64 满载下偶发失败（10-17 实测）。引擎只保证同一已持久化片段里的正文被保留，
+        # 所以这里把整条 POST（头＋体）用一次 sendall 写出，让正文确定落在同一个片段里。
+        head = (f"POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1:{self.listener_port}\r\n"
+                "Content-Type: application/json\r\nContent-Length: 6\r\n\r\n").encode("ascii")
+        connection.sock.sendall(head + b"second")
+        connection.sock.settimeout(3)
+        try:
+            leftover = connection.sock.recv(4096)
+        except OSError:
+            # 连接被引擎复位也算“没有回包”，与干净关闭（EOF）等价。
+            leftover = b""
+        self.assertEqual(leftover, b"")
         result, root, _native = self._closed()
         self.assertEqual(result["status"], "truncated")
         requests = _rows(root / "native-requests.jsonl")

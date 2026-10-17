@@ -952,7 +952,10 @@ class PreActionIdentityCheckTests(unittest.TestCase):
             if drift_side_effect is not None:
                 stack.enter_context(mock.patch.object(supervisor, "_evaluator_identity_drift", side_effect=drift_side_effect))
             return supervisor._campaign_run_locked(
-                argparse.Namespace(heartbeat_seconds=0.05, watchdog_timeout_seconds=1.0, ledger_interval_seconds=0.05),
+                # 这里单元进程自己当 owner，动作前的评估器摘要核对是不发心跳的同步计算；慢核
+                # （ARM64 aarch64 带 strace）上可能超过 1 秒，监督器会判 owner 失联并 SIGTERM
+                # 单元进程，整个独占单元被终止（10-17 实测）。本类断言不依赖看门狗时长，故放宽。
+                argparse.Namespace(heartbeat_seconds=0.05, watchdog_timeout_seconds=30.0, ledger_interval_seconds=0.05),
                 manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir, commit=committing, owner_nonce="a" * 64, staging_binding=binding,
             )
 
