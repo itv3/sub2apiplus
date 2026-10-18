@@ -1,0 +1,57 @@
+{
+  "base_commit": "19111fb2dac64bda1615577ba826285ceed2afcd",
+  "changed_path_count": 1,
+  "current_commit": "5ceed28daa01ac5840fdeda64dd6c5e6c920c17d",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5908,
+  "frozen_path_count": 2015,
+  "identity_sha256": "046ea6bd254b91865a4abb27c358aaa823d2e51a4e99aa0aa9818d7e1e79ceef",
+  "issued_at_utc": "2026-10-18T23:30:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-ci-linux-runner-env-20261019-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "8678aeac6c07501f8bb7374440930500f9b75a48c961ea159950ade5dc6ca816"
+      ],
+      "reason": "CI 工作流为 Linux 运行器对齐受管验证环境：新增建立受管临时根 /private/tmp、/root 可遍历与检出文件模式规整的步骤，并让采集工具分片测试在 umask 022 下运行，仅工作流变更 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-a071-ci-executor-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a073-bytecode-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a074-identity-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um8-release-version-sync-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0099f7a5b9241fec5c82c5625cdb502da9e02a5f4eb1f22c477adceed5b82e35"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
