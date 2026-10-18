@@ -53,6 +53,17 @@ jobs:
       # Linux 运行器默认没有这个目录，不建会让这些测试以 FileNotFoundError 整批报错。
       - name: 建立受管临时根 /private/tmp
         run: sudo install -d -m 1777 /private/tmp
+      # 受管验证环境（ARM64）是 root 用户、umask 022；GitHub 运行器是非 root 用户、umask 002，检出的文件是 0664。
+      # 两处差异各让一个用例出错，这里让运行器在这两点上与验证环境一致：
+      # ① managed_driver_module 与 test_missing_formal_contracts_never_fall_back_to_repository_code 用
+      #    Path("/root/arm64-capture-driver").exists() 判断本机有没有受管驱动安装；/root 对非 root 不可遍历时，
+      #    stat 抛 PermissionError 而不是返回 False。只给 /root 加「其他人可遍历」位，仍不能列目录。
+      # ② 受管 reader 登记只认 0400/0444/0500/0555/0600/0644/0700/0755，0664/0775 会被判「前驱 reader 原模式非法」；
+      #    把检出树去掉组与其他人的写位，得到与 umask 022 检出相同的 0644/0755（可执行位不变）。
+      - name: 对齐受管验证环境（/root 可遍历、检出文件模式 0644/0755）
+        run: |
+          sudo chmod o+x /root
+          chmod -R go-w "${GITHUB_WORKSPACE}"
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -71,7 +82,10 @@ jobs:
       - name: Official client capture tool tests (shard ${{ matrix.shard }}/4)
         env:
           CAPTURE_TEST_OUT_DIR: ${{ runner.temp }}/capture-shard-${{ matrix.shard }}
-        run: make test-capture-tools-shard CAPTURE_TEST_SHARDS=4 SHARD_INDEX=${{ matrix.shard }}
+        # umask 设为 022：测试夹具新建的文件与 ARM64 验证环境同为 0644，不随运行器默认的 002 变成 0664。
+        run: |
+          umask 022
+          make test-capture-tools-shard CAPTURE_TEST_SHARDS=4 SHARD_INDEX=${{ matrix.shard }}
       - name: 保存分片身份、覆盖、结果与计时证据
         if: always()
         uses: actions/upload-artifact@v7
