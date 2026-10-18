@@ -1312,11 +1312,13 @@ Campaign；先记录最后合法检查点、根因和唯一下一动作，再独
 
 认证链：策略兼容（策略版本变化时）→ 当前部署的策略激活 → pre-A3 → 发布认证 issue／verify，四个入口都带
 `--client claude`。兼容收据与激活认证与 Codex 同一合同，身份按 Claude schema v3 引擎计算；当前
-`policy_version=15` 已实现；兼容、激活、演进登记与部署分别核对当前原件，发布认证状态以下文结论为准，不能把引擎／策略版本混作认证状态。pre-A3 签
+`policy_version=16` 已实现；兼容、激活、演进登记与部署分别核对当前原件，发布认证状态以下文结论为准，不能把引擎／策略版本混作认证状态。pre-A3 签
 `pre-a3-path-certification/v3`，缺省坐标为 `control/policy-certification/claude-pre-a3-path-certification-<stamp>.json`；
 发布认证签 `tool-release-certification/v2`，绑定 Claude 部署收据的五摘要、pre-A3 认证、完整 Job 演练
 （当前 `official-client-job-rehearsal-receipt/v2`，双受管根及失败生命周期探针；v1仅按形成期只读重放）与 atomic-double 收据，只能在具备 Go 与 Docker
 的 Linux ARM64 上签发。按客户端分组的实现见[官方客户端升级控制面](OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md)。
+
+**当前认证状态**：Claude 的发布认证已生效：已按当前部署签发并校验通过（`certify_release.py issue --client claude` 与 `verify --client claude` 均退出 0，签 `tool-release-certification/v2`，状态 `active`）；九条必需链全部 passed，pre-A3 认证经复用收据跨部署沿用，Job 演练与 atomic-double 均为零请求原件。该状态只证明受管工具链已认证，不代表 Formal 准入完成、真账号升级或生产已通过；重新部署后须按下文合同重新核对 pre-A3 复用并重新 `issue`／`verify`。
 
 Claude 的 pre-A3 按注册表执行全部已登记真实链，单元 ID 为 `pre-a3:claude:<场景>`，与 Codex 单元同一记录库、互不承接。
 发布准入另要求下列九条必需链全部齐备；尚未登记、未执行、失败或跳过的必需链均阻止签发，不能以已登记子集通过替代完整覆盖：
@@ -2621,7 +2623,7 @@ Claude 项目总账默认目录为 `<数据根>/upgrade-project-ledger-claude`�
 同目标根因跨 Campaign／revision／基线累计，稳定维度不包含本轮 Campaign ID；码表迁移继承旧计数。
 修复凭证闭合后按前表放行，不能通过换 revision 清零。
 
-Claude 策略 **schema 仍是 v3，`policy_version=15` 已实现，文件名仍为**
+Claude 策略 **schema 仍是 v3，`policy_version=16` 已实现，文件名仍为**
 [`claude_tool_identity_policy_v2.json`](../tools/official_client_capture/claude_tool_identity_policy_v2.json)，
 由 `claude_tool_identity_policy.py` 计算双受管根 `tools/official_client_capture`、`tools/official_client_control`
 及运行时绑定、符号闭包和五摘要。`tool-evolution preview／apply` 登记 wire／evidence／control 变化，policy
@@ -2632,13 +2634,14 @@ schema v3 与文件名保持既有合同，不能把 policy 版本或本机局�
 `.m` 只进入 Claude 身份；旧v1启动仍拒绝，编译或离线结构通过不授予完整事件、执行映像、
 正式来源或产品启动能力。v13新增独立内部owned-v2计划、控制、原生有界管线与只读封存重放；三条pipe按实际自进程handle／peerhandle核实例隔离。本轮只做私有编译和离线验收，没有执行collector／probe或创建ES；五能力旗标恒false，签名／部署authority、完整窗口、实际产品与transport-map仍待。v12 显式登记门禁第二根、Profile 观测副本与冻结来源父、守卫注册及连续性纯合同；当前 Job 消费双受管根 v2，当前守卫通道使用带不可变注册头的连续性 v2。完整链、门禁及现场结果按本轮原件复核。v14 增加真实产品物料冻结与只读计划的 wire 归层、固定守卫安装及来源解析的 control 接线；本机实现不授现场认证。
 
-当前 v15 将中性捕获字节、H2 与依赖核心以及实际 Darwin provider 显式归 `wire_producer`；
+v15 将中性捕获字节、H2 与依赖核心以及实际 Darwin provider 显式归 `wire_producer`；
 运行库核验、正式捕获原件合同、`ProductEvidenceRecorder`、产品日志／模块／ES／NE 原件及收口语义归
 `evidence_semantics`；旧夹具用途策略、固定正式捕获服务、受管来源、跨机认证桥、限定产品工厂与 root broker 归
 `control`。旧 `regression_fixture` 用途不变，实际 formal 来源仍须核固定安装、两端部署、原 task 和签名资格；
 路径映射只消费原认证合同，离线重放不重新启动产品。
 v15 已有形成期[精确冻结承接](egress/maintenance/claude-tool-engineering-final-20261010-successor.json)和
 受监督部署原件 `claude-managed-deploy-20261010t043317z.json`，该原件只证明其绑定的 `4cc10d585` 源码。
+当前 v16 把固定录制分域 policy 与 probe proof 归 `evidence_semantics`，来源仅在显式冻结绑定时启用；gateway 维持纯投影，client_shared 保留 amd64 官方原件，两域只聚合一次；真实批准画像与原 40 条验收合同不变，正式非 fixture 总账及混合／未知连接拒绝，不授现场或正式版本资格。
 当前部署仍须按选定原件的 bindings 重核客户端、策略、五摘要及文档摘要，发布认证按 §4.0.5 核验；
 代码、私有编译及无账号回归不能代替 OAuth、原生权限、签名资格或真实请求验收。共同边界见
 [Framework §5.3.4](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#534-失败恢复与身份边界)。官方／候选分别按
