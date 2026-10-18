@@ -49,6 +49,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      # 采集工具与客户端控制的测试把受管临时根固定为 macOS 的 /private/tmp（与 ARM64 验证环境一致）；
+      # Linux 运行器默认没有这个目录，不建会让这些测试以 FileNotFoundError 整批报错。
+      - name: 建立受管临时根 /private/tmp
+        run: sudo install -d -m 1777 /private/tmp
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -89,6 +93,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      # 采集工具与客户端控制的测试把受管临时根固定为 macOS 的 /private/tmp（与 ARM64 验证环境一致）；
+      # Linux 运行器默认没有这个目录，不建会让这些测试以 FileNotFoundError 整批报错。
+      - name: 建立受管临时根 /private/tmp
+        run: sudo install -d -m 1777 /private/tmp
       - name: Codex 出站规格与封存门禁
         run: |
           default_branch="${{ github.event.repository.default_branch }}"
