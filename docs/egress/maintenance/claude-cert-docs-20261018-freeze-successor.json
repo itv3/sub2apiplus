@@ -1,0 +1,69 @@
+{
+  "base_commit": "93a958f9501435a94a7875b022c0855b56af7062",
+  "changed_path_count": 2,
+  "current_commit": "8b4f9c6ef424a051456c2540bc9284a3547e1973",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5907,
+  "frozen_path_count": 2015,
+  "identity_sha256": "8f5e6175c4580fc3f23d5e991e79a5a5fb8f1defa12314a6f98ff247f0baa6ec",
+  "issued_at_utc": "2026-10-18T15:58:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-cert-docs-20261018-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "e794b4a15bdf3c71e27383782e37f7addde2bb3ab30a25bad648330c2ec4a3de"
+      ],
+      "reason": "Claude 发布认证已按当前部署签发并通过校验：文档中 Claude 当前策略版本改为 16，并在 Claude 指南 §4.0.5 补当前认证状态，仅文字变更 path=docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-b407-r01-20261010-successor.json",
+        "docs/egress/maintenance/claude-fault-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-long-chain-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-neutral-docs-tests-20261010-successor.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/claude-tool-boundaries-docs-20261010-successor.json",
+        "docs/egress/maintenance/claude-tool-engineering-final-20261010-successor.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-ab-mac-recovery-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-document-job-local-20261009-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5d891687087c3b83107260817c78af7bd6b11682d05f3eba4047ee9275923d28"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "docs/OFFICIAL_CLIENT_UPGRADE_CONTROL_PLANE.md"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
