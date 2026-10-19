@@ -269,6 +269,7 @@ COMPOSE_PROJECT_NAME=sub2apiplus
 POSTGRES_PASSWORD=<随机强密码>
 JWT_SECRET=<openssl rand -hex 32>
 TOTP_ENCRYPTION_KEY=<openssl rand -hex 32>
+ADMIN_EMAIL=<自定义后台登录邮箱，可选>
 ADMIN_PASSWORD=<自定义后台密码，可选>
 SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=<openssl rand -hex 32>
 SUB2APIPLUS_KEEPER_PROJECTS=homeproxy
@@ -279,8 +280,8 @@ SUB2APIPLUS_KEEPER_PROJECTS=homeproxy
 ```sh
 docker compose up -d
 curl -fsS http://127.0.0.1:8080/health
-# 未设置 ADMIN_PASSWORD 时查看首次密码
-docker compose logs sub2api | grep "admin password"
+# 未设置 ADMIN_EMAIL / ADMIN_PASSWORD 时，从首次启动日志查看随机生成的登录邮箱与一次性密码
+docker compose logs sub2api | grep "Generated admin"
 ```
 
 后台地址为 `http://<服务器IP>:8080`。登录后先添加 API 账号，并确认平台、可用模型和模型成本配置正常。
@@ -422,6 +423,7 @@ docker compose restart sub2api
 | `POSTGRES_PASSWORD` | PostgreSQL 密码，必须固定保存。 |
 | `JWT_SECRET` | 登录会话签名密钥，生产环境必须固定。 |
 | `TOTP_ENCRYPTION_KEY` | TOTP 加密密钥，生产环境必须固定。 |
+| `ADMIN_EMAIL` | 管理员登录邮箱（即登录用户名）；留空时首次启动随机生成，从首次启动日志（`docker compose logs sub2api`）查看。 |
 | `ADMIN_PASSWORD` | 管理员初始密码；留空时从 `docker compose logs sub2api` 查看自动生成值。 |
 | `SUB2APIPLUS_KEEPER_INTERNAL_TOKEN` | 主服务与 keeper 的内部鉴权 token，双方必须一致。 |
 | `SUB2APIPLUS_KEEPER_BASE_URL` | 主服务代理 keeper Web/API 时使用的地址；写入主服务 `.env` 并由 compose 注入。留空时默认 `http://sub2apiplus-keeper:38090`。 |
