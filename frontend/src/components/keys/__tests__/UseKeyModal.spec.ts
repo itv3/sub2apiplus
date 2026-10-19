@@ -960,6 +960,7 @@ describe('UseKeyModal', () => {
   )
 
   // Scenario: the platform-preferred model remains selected when the downloaded catalog contains it.
+  // 清单里的首选项（gpt-5.6-sol）须与 UseKeyModal 中 composite 的首选一致，且排在首项 claude-opus-4-8 之后，才能证明选中的是首选而不是清单首项。
   it('keeps the preferred Composite default when it exists in the catalog', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
@@ -967,7 +968,7 @@ describe('UseKeyModal', () => {
       text: async () => JSON.stringify({
         models: [
           { slug: 'claude-opus-4-8' },
-          { slug: 'gpt-5.5' }
+          { slug: 'gpt-5.6-sol' }
         ]
       })
     }))
@@ -1002,8 +1003,8 @@ describe('UseKeyModal', () => {
     const config = wrapper.findAll('pre code')
       .map((code) => code.text())
       .find((content) => content.includes('[model_providers.sub2api]'))
-    expect(config).toContain('model = "gpt-5.5"')
-    expect(config).toContain('review_model = "gpt-5.5"')
+    expect(config).toContain('model = "gpt-5.6-sol"')
+    expect(config).toContain('review_model = "gpt-5.6-sol"')
   })
 
   it('offers remote and optional file catalogs for OpenAI in both transport modes and on both platforms', async () => {
