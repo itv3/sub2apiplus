@@ -1,0 +1,172 @@
+{
+  "base_commit": "4161cc5bdedf68d2663ba69f488106e393596f2e",
+  "changed_path_count": 4,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5913,
+  "frozen_path_count": 2015,
+  "identity_sha256": "0e52372c75b428740563c619489295749425f4bf3542764c44d4684cee4f47ce",
+  "issued_at_utc": "2026-10-19T09:10:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_trace.py",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "rule_id": "codex-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-encrypted-content-recovery-20261019-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "89300984a3d93e7389fe6577337f589648ee83618f2be1fcb1c5155df3551ce2"
+      ],
+      "reason": "用户已确认旧会话加密内容恢复修复及冻结登记：统一 HTTP 与 SSE 的安全恢复入口，仅重绑 openai_gateway_forward.go 的源码快照及当前 fact map 的映射摘要；测试清单、事实、验收判据与旧收据保持原样。 path=backend/internal/service/openai_gateway_forward.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-legacy-compact-release-gate-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d6de34edc7aaf5a3a32d6e016fbc32de41f92f931e44478f21d14ca000c71afb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_response_handling.go",
+      "predecessor_sha256s": [
+        "83d5155c10776ad6f7d00ea31c18b77681f4b8fef772cd321ab85072580d8827"
+      ],
+      "reason": "用户已确认旧会话加密内容恢复修复及冻结登记：统一 HTTP 与 SSE 的安全恢复入口，仅重绑 openai_gateway_forward.go 的源码快照及当前 fact map 的映射摘要；测试清单、事实、验收判据与旧收据保持原样。 path=backend/internal/service/openai_gateway_response_handling.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6c8b4088bcc9c05fdfd75facd13310b5322ce28126c7609a09f1757843be42cc"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "predecessor_sha256s": [
+        "0126f35add457cee871808eed63f7be7d94f5dd2361bf1b33ef282c712409370"
+      ],
+      "reason": "用户已确认旧会话加密内容恢复修复及冻结登记：统一 HTTP 与 SSE 的安全恢复入口，仅重绑 openai_gateway_forward.go 的源码快照及当前 fact map 的映射摘要；测试清单、事实、验收判据与旧收据保持原样。 path=tools/official_client_capture/candidate_test_fact_map_0_160_0.json",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.13-3-candidate-snapshot-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a1c01f5cd4d67e78ad7137761a1874413fdb6348cf3de55f9932d6561ef89c11"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "b8e53183cd572b1623a5c8fb90b93b08bed1976b1480b2b1ba79f5e4db6303c0"
+      ],
+      "reason": "用户已确认旧会话加密内容恢复修复及冻结登记：统一 HTTP 与 SSE 的安全恢复入口，仅重绑 openai_gateway_forward.go 的源码快照及当前 fact map 的映射摘要；测试清单、事实、验收判据与旧收据保持原样。 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-0160-candidate-impl-r1-20261003-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-candidate-snapshot-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c093-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-c095-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-spec-sha-fanout-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-candidate-approved-expectations-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-guide-part2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-items71-73-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-tls003-title-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-registration-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-guide-part2-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0160-registration-20261003-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-guide-part2-history-audit-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-ws-tool-continuation-fallback-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m1-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-official-egress-body-copies-m2-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b3eb271da023b6b6f30bd3746e14f39b8a2876199d8fa47cc1d018781c8f2ddb"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}
