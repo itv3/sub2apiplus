@@ -87,7 +87,8 @@ export async function fetchAntigravityOfficialModels(): Promise<AntigravityOffic
       .map((model) => ({ ...model, id: model.id.trim() }))
   } catch (e) {
     console.warn('[fetchAntigravityOfficialModels] API failed', e)
-    return []
+    // 失败时不写缓存；若并发的其他请求已成功写入缓存则沿用它，否则返回空数组（下次调用会重试）
+    return _antigravityOfficialModelsCache.value ?? []
   }
   return _antigravityOfficialModelsCache.value
 }
@@ -395,11 +396,19 @@ export async function fetchAntigravityDefaultMappings(): Promise<{ from: string;
     return _antigravityDefaultMappingsCache
   }
   try {
-    const descriptors = await fetchAntigravityOfficialModels()
-    if (_antigravityOfficialModelsCache.value === null) {
+    await fetchAntigravityOfficialModels()
+    // 并发场景：await 期间其他请求可能已成功并写好默认映射缓存，直接沿用，
+    // 避免较旧请求失败后的空结果把成功缓存覆盖成空数组
+    if (_antigravityDefaultMappingsCache !== null) {
+      return _antigravityDefaultMappingsCache
+    }
+    // 官方描述表缓存仍为空：本次请求失败且没有并发成功者，返回空数组但不缓存，下次调用重试
+    const official = _antigravityOfficialModelsCache.value
+    if (official === null) {
       return []
     }
-    _antigravityDefaultMappingsCache = descriptorsToDisplayMappings(descriptors)
+    // 以官方缓存（而不是 await 的返回值）生成映射：请求失败时返回值是空兜底，不能据此写缓存
+    _antigravityDefaultMappingsCache = descriptorsToDisplayMappings(official)
   } catch (e) {
     console.warn('[fetchAntigravityDefaultMappings] API failed, using empty fallback', e)
     return []
