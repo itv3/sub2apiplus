@@ -1,0 +1,49 @@
+{
+  "base_commit": "164103e8d11d93c1679d7fa987e99586c25a806f",
+  "changed_path_count": 1,
+  "current_commit": "20a553593b21237639094349fbae209b646e2ac7",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5920,
+  "frozen_path_count": 2015,
+  "identity_sha256": "10b41f8b58d1bd76c874fd91809be01aa5c3b442909db24103b9d0af5e429e1c",
+  "issued_at_utc": "2026-10-19T11:43:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-hotpath-compaction-test-20261019-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_service_hotpath_test.go",
+      "predecessor_sha256s": [
+        "747581145c30e8caec18b7bc6c875f0db794c83c47de663bf10f88e567555621"
+      ],
+      "reason": "加密压缩项 HTTP 恢复用例同步到 654b62efb 的旧会话安全恢复语义（仅测试文件） path=backend/internal/service/openai_gateway_service_hotpath_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e27f9f5beafaf77ab6f4db48276737c074a8f6413808d5fd7e846aa3fa97858c"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
