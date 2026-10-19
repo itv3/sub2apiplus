@@ -47,6 +47,27 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DRIVER_ROOT = REPO_ROOT / "tools" / "arm64_capture_driver"
 SCRIPTS = DRIVER_ROOT / "driver"
 
+# 关掉 git 的自动维护（gc.auto／maintenance.auto）。
+#
+# 背景：新版 git（CI 使用 2.55）会把 fetch／commit 之后的自动维护放到后台脱离进程里跑（git maintenance run --auto），
+# 该进程会写 .git/objects 下的文件（如 maintenance.lock）；而这些用例用 TemporaryDirectory 建测试库，退出时递归删除，
+# 后台进程还在写时就会与清理竞争，偶发 “Directory not empty: .git/objects”。本机较老的 git 不易复现，但 trace2 里同样
+# 能看到 maintenance run 事件。测试库只是一次性夹具，从不需要维护，所以统一关掉。
+#
+# 两种写法分别覆盖两类调用：
+# * 测试进程里直接调用的 git：由下面的 _git 在命令行上加 -c maintenance.auto=false -c gc.auto=0；
+# * 被测驱动脚本（gates.sh prepare 等）里调用的 git：命令行是驱动自己拼的，测试改不到，改经 _DriverFixture.env
+#   注入下面的 GIT_CONFIG_COUNT 环境变量（git 2.31 及以上支持）。
+# 驱动自己的临时库早有同样做法（driver/background_validation.py、driver/entry_gates.py 里的
+# -c gc.auto=0 -c maintenance.auto=false）。
+_GIT_NO_AUTO_MAINTENANCE_ENV = {
+    "GIT_CONFIG_COUNT": "2",
+    "GIT_CONFIG_KEY_0": "maintenance.auto",
+    "GIT_CONFIG_VALUE_0": "false",
+    "GIT_CONFIG_KEY_1": "gc.auto",
+    "GIT_CONFIG_VALUE_1": "0",
+}
+
 
 def _load_driver():
     import importlib.util
@@ -520,7 +541,8 @@ class _DriverFixture:
         })
         self.env_file.write_text("".join(f"{k}=\"{v}\"\n" for k, v in values.items()), encoding="utf-8")
         self.env_file.chmod(0o600)
-        self.env = {"ARM64_VC_ENV": str(self.env_file)}
+        # 被测驱动脚本里的 git 也不起后台维护（理由见模块顶部的 _GIT_NO_AUTO_MAINTENANCE_ENV）。
+        self.env = {"ARM64_VC_ENV": str(self.env_file), **_GIT_NO_AUTO_MAINTENANCE_ENV}
 
 
 class Vc5AllResumeTests(unittest.TestCase):
@@ -1619,11 +1641,15 @@ class GateBytecodeEnvironmentTests(unittest.TestCase):
 
 
 def _git(cwd: Path, *arguments: str) -> str:
-    """测试用 git：固定提交身份、关掉签名与钩子，不读开发机的个人配置差异。"""
+    """测试用 git：固定提交身份、关掉签名与钩子，不读开发机的个人配置差异。
+
+    同时关掉自动维护（maintenance.auto／gc.auto）：后台维护进程会与 TemporaryDirectory 的清理竞争，
+    偶发 “Directory not empty: .git/objects”，原因与做法见模块顶部 _GIT_NO_AUTO_MAINTENANCE_ENV 的说明。
+    """
 
     result = subprocess.run(
         ["git", "-c", "user.name=vc0-test", "-c", "user.email=vc0-test@example.invalid", "-c", "commit.gpgsign=false",
-         "-c", "core.hooksPath=/dev/null", *arguments],
+         "-c", "core.hooksPath=/dev/null", "-c", "maintenance.auto=false", "-c", "gc.auto=0", *arguments],
         cwd=str(cwd), capture_output=True, text=True)
     if result.returncode != 0:
         raise AssertionError(f"git {' '.join(arguments)} 失败：{result.stdout}{result.stderr}")
