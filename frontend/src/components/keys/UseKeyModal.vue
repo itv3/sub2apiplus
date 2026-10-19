@@ -1027,7 +1027,8 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
-  const model = selectCodexCatalogModel('gpt-5.5')
+  // ChatGPT OAuth 已退役 gpt-5.5，清单为空时的回退值改用 gpt-5.6-sol，与后端 openai.DefaultModels 首项一致
+  const model = selectCodexCatalogModel('gpt-5.6-sol')
   const reasoningEffortLine = codexReasoningEffortTomlLine(model)
 
   // config.toml content
@@ -1378,7 +1379,7 @@ supports_websockets = false${codexModelCatalogMode.value === 'remote' ? '\n\n[fe
 function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
-  const model = selectCodexCatalogModel('gpt-5.5')
+  const model = selectCodexCatalogModel('gpt-5.6-sol')
   const reasoningEffortLine = codexReasoningEffortTomlLine(model)
 
   // 生成启用 WebSocket 的 config.toml 内容
