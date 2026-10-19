@@ -11,6 +11,15 @@ SHA 钉死的过渡原件登记逐符号及整文件前后值。B5a-09／10 测�
 其后三次门禁收据生成器的登记（H3 收尾的只读重放登记、步骤 8 的三个钉住值与旧生成器登记、步骤 10 的 read_audit／read_audit_runtime 两个钉住值与旧生成器登记）
 各由一份独立后继精确登记，逆向链依次回到前一份的后图。
 
+evidence 层另有一份独立的过渡登记（``fixtures/codex_identity_conservation_evidence_transition_20261019.json``，SHA 钉死）：
+Codex 候选测试事实映射 ``candidate_test_fact_map_0_160_0.json`` 里 ``openai_gateway_forward.go`` 的源码快照先后被主干修复与
+上游 v0.2.17 合并重绑，映射摘要常量 ``FROZEN_MAPPING_SHA256`` 所在的 ``candidate_test_trace.py`` 同步变化，两个文件都归
+evidence_semantics 层，基线的 ``evidence_semantics_sha256`` 因此改变。登记只放“基线→当前”的累计替换，测试做三件事：
+字节级逆向（把当前文件里每处登记的后值文本换回前值，重算的文件摘要必须等于基线记录的文件摘要）；结构证明（事实映射除登记的
+源码快照 sha256 字段外逐叶不变，映射摘要常量文件除注释外只有一条随映射文件摘要同步的赋值）；摘要复算（两个文件换回基线摘要后
+重算的 ``evidence_semantics_sha256`` 必须等于基线）。该登记只放行这两个文件，绝不写进 ``REGISTERED_CONTROL_CHANGES`` 冒充
+control 层；缺一条、多一条、改一条或文件另有改动都拒绝，再次重绑必须重新生成登记并另行审核。
+
 基线由 B1-01 开工前的 main（见基线的 ``source_commit``）算出，固化在
 ``fixtures/codex_identity_conservation_baseline.json``；本项目各批不得改动基线，文件摘要钉在 ``BASELINE_SHA256``。
 """
@@ -21,11 +30,14 @@ import ast
 import copy
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_tool_identity_policy as tip
 
@@ -232,6 +244,17 @@ REGISTERED_ADAPTER_DEPENDENCIES = frozenset({
 })
 REGISTERED_METADATA_SYMBOLS = frozenset({"upgrade_client_adapter:ADAPTER_BINDINGS", "upgrade_client_adapter:ADAPTER_MEMBERS"})
 REGISTERED_D4_SYMBOL = "codex_upgrade_reconciler:validate_segment_reuse_preview"
+
+# evidence 层过渡登记（见模块说明）：事实映射的源码快照重绑，以及映射摘要常量文件的同步变化。登记文件摘要钉死，改它必须另行审核
+# 并更新钉住值；再次重绑时重新生成“基线→最新”的累计登记，不能原地改文件后沿用旧钉住值。登记只放行下面两个 evidence 层文件，
+# 放行路径只有这份过渡登记，绝不进入 ``REGISTERED_CONTROL_CHANGES``。
+EVIDENCE_TRANSITION_PATH = BASELINE_PATH.with_name("codex_identity_conservation_evidence_transition_20261019.json")
+EVIDENCE_TRANSITION_SHA256 = "56708829d59a293e0ddd20202d62391865b6476725da27e5407bd11e5fd74d74"
+EVIDENCE_TRANSITION_ID = "evidence-source-snapshot-rebind-20261019"
+EVIDENCE_FACT_MAP = "candidate_test_fact_map_0_160_0.json"
+EVIDENCE_TRACE = "candidate_test_trace.py"
+EVIDENCE_TRANSITION_PATHS = frozenset({EVIDENCE_FACT_MAP, EVIDENCE_TRACE})
+HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 def _reader_payload(closure: dict[str, Any]) -> dict[str, Any]:
@@ -504,6 +527,224 @@ def _restore_registered_reader(closure: dict[str, Any], field: str, transition: 
     return payload
 
 
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """JSON 对象出现重复键就拒绝，避免后一个值悄悄盖掉前一个。"""
+
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise ValueError("JSON 对象键重复")
+    return result
+
+
+def _load_evidence_transition(path: Path = EVIDENCE_TRANSITION_PATH) -> dict[str, Any]:
+    """加载 evidence 层过渡登记：必须是普通文件、摘要等于钉住值，并绑定原始基线。
+
+    改写登记不能获得新的期望：摘要对不上钉住值立即失败，新登记必须另行审核并更新钉住值。"""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("evidence 层过渡登记必须是普通文件")
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != EVIDENCE_TRANSITION_SHA256:
+        raise ValueError("evidence 层过渡登记摘要与钉住值不符")
+    transition = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    if (transition.get("schema_version") != "codex-identity-conservation-evidence-transition/v1"
+            or transition.get("transition_id") != EVIDENCE_TRANSITION_ID
+            or transition.get("baseline_sha256") != BASELINE_SHA256):
+        raise ValueError("evidence 层过渡登记合同或原始基线绑定不符")
+    return transition
+
+
+def _evidence_registrations(transition: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """按路径索引逐文件登记；文件集合必须正好是事实映射与映射摘要常量两个 evidence 层文件，不重复、不缺少、不多出。"""
+
+    files = transition["files"]
+    registrations = {item["path"]: item for item in files}
+    if len(registrations) != len(files) or set(registrations) != EVIDENCE_TRANSITION_PATHS:
+        raise ValueError("evidence 层过渡登记的文件集合必须正好是事实映射与映射摘要常量两个文件")
+    return registrations
+
+
+def _read_evidence_file(path: str) -> bytes:
+    """读取受管树里的 evidence 层文件；符号链接或非普通文件不接受。"""
+
+    target = TOOL_ROOT / path
+    if target.is_symlink() or not target.is_file():
+        raise ValueError(f"evidence 层文件必须是受管树里的普通文件：{path}")
+    return target.read_bytes()
+
+
+def _occurrence_starts(raw: bytes, needle: bytes) -> list[int]:
+    """needle 在 raw 里的全部起点；允许重叠计数，防止自重叠文本被低估成一次。"""
+
+    starts: list[int] = []
+    position = raw.find(needle)
+    while position != -1:
+        starts.append(position)
+        position = raw.find(needle, position + 1)
+    return starts
+
+
+def _restore_registered_evidence_file(raw: bytes, registration: dict[str, Any]) -> bytes:
+    """逆向证明（字节级）：把当前文件里每处登记的后值文本换回前值，重算的摘要必须等于基线里该文件的摘要。
+
+    先核当前字节的摘要就是登记的后值；每处后值文本必须在当前字节里恰好出现一次、各处位置互不重叠；换回前值后的字节摘要
+    必须等于登记的前值（即基线条目）。少登记、多登记、改前后值或文件另有改动，都到不了基线摘要。"""
+
+    path = registration["path"]
+    if hashlib.sha256(raw).hexdigest() != registration["after_sha256"]:
+        raise ValueError(f"evidence 层文件当前摘要不是登记的后值：{path}")
+    spans: list[tuple[int, int, bytes]] = []
+    for replacement in registration["replacements"]:
+        after, before = replacement["after"].encode("utf-8"), replacement["before"].encode("utf-8")
+        if not after or after == before:
+            raise ValueError(f"登记的替换必须有非空后值且前后不同：{path}")
+        starts = _occurrence_starts(raw, after)
+        if len(starts) != 1:
+            raise ValueError(f"登记的后值文本必须在当前文件里恰好出现一次（实际 {len(starts)} 次）：{path}")
+        spans.append((starts[0], starts[0] + len(after), before))
+    spans.sort(key=lambda item: item[0])
+    if any(first[1] > second[0] for first, second in zip(spans, spans[1:])):
+        raise ValueError(f"登记的替换位置不得重叠：{path}")
+    pieces: list[bytes] = []
+    cursor = 0
+    for start, end, before in spans:
+        pieces.extend((raw[cursor:start], before))
+        cursor = end
+    pieces.append(raw[cursor:])
+    restored = b"".join(pieces)
+    if hashlib.sha256(restored).hexdigest() != registration["before_sha256"]:
+        raise ValueError(f"逆向替换没有回到基线里的文件摘要：{path}")
+    return restored
+
+
+def _json_differences(current: Any, original: Any, path: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
+    """逐叶比较两份 JSON 值，返回内容不同的叶子路径；类型、键集合或数组长度不同时整个节点记一处。"""
+
+    if isinstance(current, dict) and isinstance(original, dict):
+        if current.keys() != original.keys():
+            return [path]
+        return [difference for key in current for difference in _json_differences(current[key], original[key], (*path, key))]
+    if isinstance(current, list) and isinstance(original, list):
+        if len(current) != len(original):
+            return [path]
+        return [difference for index, (left, right) in enumerate(zip(current, original))
+                for difference in _json_differences(left, right, (*path, index))]
+    return [] if type(current) is type(original) and current == original else [path]
+
+
+def _prove_fact_map_structure(raw: bytes, restored: bytes, registration: dict[str, Any]) -> None:
+    """结构证明：事实映射与逆向还原后的文件相比，只有登记的源码快照 sha256 字段不同。
+
+    测试清单、事实、规则、``test_file_sha256`` 与顶层字段逐叶相同；登记的定位必须唯一命中一个 ``source_files`` 条目，该条目
+    当前值等于登记后值、还原值等于登记前值。"""
+
+    current = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+    original = json.loads(restored, object_pairs_hook=_reject_duplicate_keys)
+    expected: list[tuple[Any, ...]] = []
+    for replacement in registration["replacements"]:
+        locator = replacement["locator"]
+        hits = [(index, position) for index, test in enumerate(current["tests"]) if test["name"] == locator["test"]
+                for position, source in enumerate(test["source_files"]) if source["path"] == locator["source_file"]]
+        if len(hits) != 1:
+            raise ValueError("登记的定位必须唯一命中一个源码快照条目")
+        index, position = hits[0]
+        if (current["tests"][index]["source_files"][position]["sha256"] != replacement["after"]
+                or original["tests"][index]["source_files"][position]["sha256"] != replacement["before"]):
+            raise ValueError("登记的源码快照前后值与文件内容不符")
+        expected.append(("tests", index, "source_files", position, "sha256"))
+    if sorted(map(repr, _json_differences(current, original))) != sorted(map(repr, expected)):
+        raise ValueError("事实映射在登记的源码快照 sha256 字段之外还有变化")
+
+
+def _prove_frozen_mapping_constant(registration: dict[str, Any], fact_map: dict[str, Any]) -> None:
+    """结构证明：映射摘要常量文件的登记只有一处连续文本，文本里除注释行外只有一条 ``FROZEN_MAPPING_SHA256`` 字符串赋值，
+    赋值的前后值正好是事实映射文件摘要的前后值——常量随映射文件摘要同步，别的代码一概不动。"""
+
+    replacements = registration["replacements"]
+    if len(replacements) != 1 or replacements[0]["locator"] != {"constant": "FROZEN_MAPPING_SHA256"}:
+        raise ValueError("映射摘要常量文件必须恰好登记一处 FROZEN_MAPPING_SHA256 替换")
+    values: dict[str, str] = {}
+    for side in ("before", "after"):
+        code = "\n".join(line for line in replacements[0][side].splitlines() if not line.lstrip().startswith("#"))
+        try:
+            body = ast.parse(code).body
+        except SyntaxError as error:
+            raise ValueError("映射摘要常量登记文本除注释外必须是合法的 Python 赋值语句") from error
+        if (len(body) != 1 or not isinstance(body[0], ast.Assign) or len(body[0].targets) != 1
+                or not isinstance(body[0].targets[0], ast.Name) or body[0].targets[0].id != "FROZEN_MAPPING_SHA256"
+                or not isinstance(body[0].value, ast.Constant) or not isinstance(body[0].value.value, str)):
+            raise ValueError("映射摘要常量登记文本除注释外必须只有一条 FROZEN_MAPPING_SHA256 字符串赋值")
+        values[side] = body[0].value.value
+    if (values["before"], values["after"]) != (fact_map["before_sha256"], fact_map["after_sha256"]):
+        raise ValueError("映射摘要常量没有随事实映射文件摘要同步")
+
+
+def _restore_registered_evidence(transition: dict[str, Any], *, baseline: dict[str, Any], policy: dict[str, Any],
+                                 entries: list[dict[str, str]], evidence_closure_sha256: str,
+                                 read_file: Callable[[str], bytes] | None = None) -> dict[str, Any]:
+    """当前 evidence 层 → 逐文件字节逆向（含结构证明）→ 重算 evidence 层摘要，必须回到基线；任一环节对不上就抛 ValueError。
+
+    ``evidence_semantics_sha256`` 是 ``{"entries": evidence 层每个文件的（路径，文件字节摘要）, "orchestrator_closure_sha256":
+    evidence 编排器闭包摘要}`` 的指纹，所以文件字节的任何变化都会改它。这里把登记的两个文件换回基线摘要（摘要来自字节逆向，不是
+    照抄登记），其余 evidence 层文件必须本来就等于基线，再用同一个闭包摘要重算。"""
+
+    read = read_file or _read_evidence_file
+    registrations = _evidence_registrations(transition)
+    before = {entry["path"]: entry["sha256"] for entry in baseline["entries"]}
+    after = {entry["path"]: entry["sha256"] for entry in entries}
+    if evidence_closure_sha256 != baseline["orchestrator_closure_sha256"]["evidence_semantics"]:
+        raise ValueError("evidence 层编排器闭包摘要与基线不符：过渡登记只覆盖文件内容的变化")
+    raws: dict[str, bytes] = {}
+    restored: dict[str, bytes] = {}
+    for path, registration in sorted(registrations.items()):
+        if tip.classify_path(policy, path) != "evidence_semantics":
+            raise ValueError(f"登记的文件不在 evidence 层：{path}")
+        if before.get(path) != registration["before_sha256"]:
+            raise ValueError(f"登记的前值不是基线里的文件摘要：{path}")
+        if after.get(path) != registration["after_sha256"]:
+            raise ValueError(f"登记的后值不是当前受管树里的文件摘要：{path}")
+        raws[path] = read(path)
+        restored[path] = _restore_registered_evidence_file(raws[path], registration)
+    _prove_fact_map_structure(raws[EVIDENCE_FACT_MAP], restored[EVIDENCE_FACT_MAP], registrations[EVIDENCE_FACT_MAP])
+    _prove_frozen_mapping_constant(registrations[EVIDENCE_TRACE], registrations[EVIDENCE_FACT_MAP])
+    restored_entries: list[dict[str, str]] = []
+    for entry in tip.layer_entries(policy, entries)["evidence_semantics"]:
+        path = entry["path"]
+        digest = hashlib.sha256(restored[path]).hexdigest() if path in restored else entry["sha256"]
+        if digest != before.get(path):
+            raise ValueError(f"evidence 层出现未登记的文件变化：{path}")
+        restored_entries.append({"path": path, "sha256": digest})
+    digest = tip._fingerprint({"entries": restored_entries, "orchestrator_closure_sha256": evidence_closure_sha256})
+    if digest != baseline["evidence_semantics_sha256"]:
+        raise ValueError("逆向后重算的 evidence 层摘要不等于基线")
+    return {"evidence_semantics_sha256": digest, "files": {path: hashlib.sha256(data).hexdigest() for path, data in restored.items()}}
+
+
+def _evidence_change_problems(policy: dict[str, Any], before: dict[str, str], after: dict[str, str],
+                              registrations: dict[str, dict[str, Any]]) -> list[str]:
+    """test ② 的 evidence 层分支：只有过渡登记里前后摘要都精确匹配的 evidence 层文件才允许变化，登记的文件必须真的变了。
+
+    放行只经由 evidence 层过渡登记，不能写进 ``REGISTERED_CONTROL_CHANGES`` 冒充 control 层；其余层（wire、control）的
+    变化仍由 test ② 原有的逐文件 control 登记检查。返回问题清单，空表示通过。"""
+
+    problems: list[str] = []
+    changed = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+    changed_evidence = [path for path in changed if tip.classify_path(policy, path) == "evidence_semantics"]
+    for path in changed_evidence:
+        registration = registrations.get(path)
+        if registration is None:
+            problems.append(f"Codex evidence 层文件变化未登记：{path}")
+        elif (before.get(path), after.get(path)) != (registration["before_sha256"], registration["after_sha256"]):
+            problems.append(f"Codex evidence 层文件前后摘要与过渡登记不符：{path}")
+    for path in sorted(registrations):
+        if path not in changed_evidence:
+            problems.append(f"过渡登记的文件没有变化或不在 evidence 层：{path}")
+    for path in sorted(set(registrations) | set(changed_evidence)):
+        if path in REGISTERED_CONTROL_CHANGES:
+            problems.append(f"evidence 层文件不得登记进 REGISTERED_CONTROL_CHANGES 冒充 control 层：{path}")
+    return problems
+
+
 class CodexIdentityConservationTest(unittest.TestCase):
     """基线固定；身份敏感摘要逐字相等；control 层变化逐文件登记；迁入符号不在闭包内。"""
 
@@ -522,6 +763,8 @@ class CodexIdentityConservationTest(unittest.TestCase):
         cls.successor2 = _load_reader_successor2()
         cls.successor3 = _load_reader_successor3()
         cls.successor4 = _load_reader_successor4()
+        cls.evidence_transition = _load_evidence_transition()
+        cls.evidence_registrations = _evidence_registrations(cls.evidence_transition)
         cls.readers = {
             field: tip.evaluator_reader_closure(cls.policy, TOOL_ROOT, list(roots), digests)
             for field, roots in READER_FIELDS
@@ -532,7 +775,7 @@ class CodexIdentityConservationTest(unittest.TestCase):
         self.assertEqual(self.baseline["schema_version"], "codex-identity-conservation-baseline/v1")
 
     def test_identity_sensitive_digests_match_baseline(self) -> None:
-        """① 产出身份守恒；读侧摘要取已审核过渡的后值，并由独立测试逐项逆向证明。"""
+        """① 产出身份守恒；读侧摘要取已审核过渡的后值，evidence 层摘要取 evidence 层过渡登记的后值，并由独立测试逐项逆向证明。"""
 
         current = {
             "wire_producer_sha256": self.identity["wire_producer_sha256"],
@@ -546,6 +789,12 @@ class CodexIdentityConservationTest(unittest.TestCase):
                 expected[field] = change[field]["after"]
         for field, _roots in READER_FIELDS:
             expected[field] = self.successor4["after_readers"][field]["closure_sha256"]
+        # evidence 层摘要被事实映射源码快照重绑与映射摘要常量同步改变：登记的前值必须就是基线，期望取登记的后值；
+        # 从后值逐字节逆向回基线由 test_evidence_transition_reverse_proof_restores_baseline_digests 独立证明。
+        evidence = self.evidence_transition["sensitive_identity"]
+        self.assertEqual(evidence["before"]["evidence_semantics_sha256"], self.baseline["evidence_semantics_sha256"],
+                         "登记的变化前摘要必须就是基线：evidence_semantics_sha256")
+        expected["evidence_semantics_sha256"] = evidence["after"]["evidence_semantics_sha256"]
         for field, value in current.items():
             self.assertEqual(value, expected[field], f"Codex 身份敏感摘要变化：{field}")
         for layer, expected in self.baseline["orchestrator_closure_sha256"].items():
@@ -564,7 +813,10 @@ class CodexIdentityConservationTest(unittest.TestCase):
         )
 
     def test_tree_changes_are_registered_control_changes(self) -> None:
-        """② control、策略与整树摘要的变化逐文件对应登记清单；不得有按默认层归类的文件。"""
+        """② control、策略与整树摘要的变化逐文件对应登记清单；不得有按默认层归类的文件。
+
+        evidence 层文件的变化不走 control 登记：只有 evidence 层过渡登记里前后摘要都精确匹配的两个文件放行，
+        其余 evidence 层变化与 wire 层变化照常因“未登记”失败。"""
 
         before = {entry["path"]: entry["sha256"] for entry in self.baseline["entries"]}
         after = {entry["path"]: entry["sha256"] for entry in self.entries}
@@ -573,8 +825,12 @@ class CodexIdentityConservationTest(unittest.TestCase):
             layer = tip.classify_path(self.policy, path)
             if layer is None:
                 continue
+            if layer == "evidence_semantics":
+                continue  # evidence 层只经过渡登记放行，由下面的 _evidence_change_problems 逐文件核对
             self.assertIn(path, REGISTERED_CONTROL_CHANGES, f"Codex 受管文件变化未登记：{path}（{layer} 层）")
             self.assertEqual(layer, "control", f"Codex 受管文件变化不在 control 层：{path}（{layer} 层）")
+        self.assertEqual(_evidence_change_problems(self.policy, before, after, self.evidence_registrations), [],
+                         "Codex evidence 层文件变化必须与 evidence 层过渡登记逐文件精确一致")
         self.assertEqual(self.identity["defaulted_paths"], [], "新增受管文件必须在 Codex 策略里登记层级")
         self.assertEqual(
             self.identity["policy_sha256"] != self.baseline["policy_sha256"],
@@ -952,6 +1208,434 @@ class CodexIdentityConservationTest(unittest.TestCase):
                     self.assertNotEqual(closure["closure_sha256"], self.readers[field]["closure_sha256"])
                     with self.assertRaises(ValueError):
                         _restore_registered_reader(closure, field, self.transition)
+
+    # ------------------------------------------------------------------
+    # evidence 层过渡登记：事实映射的源码快照重绑与映射摘要常量同步
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _unique_hex_token(raw: bytes, excluded: set[str]) -> str:
+        """文件里恰好出现一次、且不在 excluded 里的一个 64 位十六进制串；用来构造“登记外”的替换。"""
+
+        tokens = HEX64.findall(raw.decode("utf-8"))
+        for token in tokens:
+            if tokens.count(token) == 1 and token not in excluded:
+                return token
+        raise AssertionError("文件里没有可用的唯一十六进制串")
+
+    @staticmethod
+    def _flip_last_character(text: str) -> str:
+        """改掉文本最后一个字符，得到一个必然不同、长度不变的文本。"""
+
+        return text[:-1] + ("0" if text[-1] != "0" else "1")
+
+    def _restore_evidence(self, transition: dict[str, Any] | None = None, *, entries: list[dict[str, str]] | None = None,
+                          read_file: Callable[[str], bytes] | None = None, closure: str | None = None,
+                          policy: dict[str, Any] | None = None) -> dict[str, Any]:
+        """用真实的基线、策略与当前受管树调用整条 evidence 层逆向证明；各参数用来换成被篡改的输入。"""
+
+        return _restore_registered_evidence(
+            transition or self.evidence_transition, baseline=self.baseline, policy=policy or self.policy,
+            entries=entries or self.entries,
+            evidence_closure_sha256=closure or self.identity["orchestrator_closures"]["evidence_semantics"]["closure_sha256"],
+            read_file=read_file)
+
+    def _tampered_world(self, path: str, mutate: Callable[[bytes], bytes]) -> tuple[bytes, list[dict[str, str]], Callable[[str], bytes]]:
+        """把一个 evidence 层文件改成 mutate(原字节) 的世界：返回新字节、该文件摘要同步的受管树清单和读文件函数。"""
+
+        original = _read_evidence_file(path)
+        tampered = mutate(original)
+        self.assertNotEqual(tampered, original, "构造的篡改必须真的改了文件")
+        digest = hashlib.sha256(tampered).hexdigest()
+        entries = [{**entry, "sha256": digest} if entry["path"] == path else entry for entry in self.entries]
+        return tampered, entries, lambda requested: tampered if requested == path else _read_evidence_file(requested)
+
+    def test_evidence_transition_is_frozen_and_scope_is_exact(self) -> None:
+        """evidence 层过渡登记：原件钉死，前值就是基线，后值就是当前真实值，范围只含事实映射与映射摘要常量两个 evidence 层文件。"""
+
+        transition = self.evidence_transition
+        self.assertEqual(transition["baseline_sha256"], BASELINE_SHA256)
+        self.assertEqual(transition["source_commits"], {"baseline": self.baseline["source_commit"]})
+        self.assertEqual(transition["algorithm_sha256"], hashlib.sha256(Path(tip.__file__).read_bytes()).hexdigest())
+        self.assertEqual(transition["layer"], "evidence_semantics")
+        # 敏感身份：前值逐字等于基线，后值逐字等于当前真实计算值，两者只差 evidence 层摘要一项。
+        before, after = transition["sensitive_identity"]["before"], transition["sensitive_identity"]["after"]
+        self.assertEqual(before, {
+            "builder_sha256": self.baseline["builder_sha256"],
+            "checker_sha256": self.baseline["checker_sha256"],
+            "evidence_semantics_sha256": self.baseline["evidence_semantics_sha256"],
+            "orchestrator_closure_sha256": self.baseline["orchestrator_closure_sha256"],
+            "wire_producer_sha256": self.baseline["wire_producer_sha256"],
+        })
+        self.assertEqual(after, {
+            "builder_sha256": self.evaluator["builder_sha256"],
+            "checker_sha256": self.evaluator["checker_sha256"],
+            "evidence_semantics_sha256": self.identity["evidence_semantics_sha256"],
+            "orchestrator_closure_sha256": {
+                layer: self.identity["orchestrator_closures"][layer]["closure_sha256"]
+                for layer in ("evidence_semantics", "wire_producer")},
+            "wire_producer_sha256": self.identity["wire_producer_sha256"],
+        })
+        self.assertEqual({key for key in before if before[key] != after[key]}, {"evidence_semantics_sha256"})
+        # 文件范围：正好两个 evidence 层文件，前后摘要钉在测试里；它们不在 control 登记清单里。
+        registrations = self.evidence_registrations
+        self.assertEqual(set(registrations), EVIDENCE_TRANSITION_PATHS)
+        self.assertEqual(set(registrations) & set(REGISTERED_CONTROL_CHANGES), set(), "evidence 层文件不得冒充 control 层登记")
+        baseline_files = {entry["path"]: entry["sha256"] for entry in self.baseline["entries"]}
+        current_files = {entry["path"]: entry["sha256"] for entry in self.entries}
+        pinned = {
+            EVIDENCE_FACT_MAP: ("0126f35add457cee871808eed63f7be7d94f5dd2361bf1b33ef282c712409370",
+                                "5d4c2b7a7ee6c5e8c28235cfd6458805aeddac403057346357b3c57d70c2a957"),
+            EVIDENCE_TRACE: ("b8e53183cd572b1623a5c8fb90b93b08bed1976b1480b2b1ba79f5e4db6303c0",
+                             "4c44c20a41c32f4b9163c26aea37bda392487e173f01b77df7bf1fa589c308a9"),
+        }
+        for path, (old, new) in pinned.items():
+            with self.subTest(path=path):
+                registration = registrations[path]
+                self.assertEqual(tip.classify_path(self.policy, path), "evidence_semantics")
+                self.assertEqual((registration["before_sha256"], registration["after_sha256"]), (old, new))
+                self.assertEqual((baseline_files[path], current_files[path]), (old, new))
+                self.assertEqual(len(registration["replacements"]), 1, "累计替换只登记一处")
+        fact_map = registrations[EVIDENCE_FACT_MAP]
+        self.assertEqual(fact_map["kind"], "fact-map-source-snapshot-rebind")
+        (snapshot,) = fact_map["replacements"]
+        self.assertEqual(snapshot["locator"], {
+            "test": "TestCandidateTraceCodex0145OAuthFallbackSameInvocation",
+            "source_file": "backend/internal/service/openai_gateway_forward.go",
+        })
+        self.assertEqual((snapshot["before"], snapshot["after"]), (
+            "89300984a3d93e7389fe6577337f589648ee83618f2be1fcb1c5155df3551ce2",
+            "3d41a73eeaef7107163154a2e2c833d6a09296ec41d2cb3cc211f0613b6c2fca",
+        ))
+        self.assertEqual(registrations[EVIDENCE_TRACE]["kind"], "frozen-mapping-sha256-constant")
+        # 两次重绑（主干修复、上游 v0.2.17 合并）的历史链与累计替换首尾相接，映射文件摘要同理。
+        history = transition["history"]
+        self.assertEqual(len(history), 2)
+        self.assertRegex(history[0]["commit"], r"^654b62efb[0-9a-f]{31}$")
+        snapshots, digests = [step["source_snapshot"] for step in history], [step["fact_map_sha256"] for step in history]
+        self.assertEqual(snapshots[0]["before"], snapshot["before"])
+        self.assertEqual(snapshots[0]["after"], snapshots[1]["before"])
+        self.assertEqual(snapshots[1]["after"], snapshot["after"])
+        self.assertEqual(digests[0]["before"], fact_map["before_sha256"])
+        self.assertEqual(digests[0]["after"], digests[1]["before"])
+        self.assertEqual(digests[1]["after"], fact_map["after_sha256"])
+
+    def test_evidence_transition_reverse_proof_restores_baseline_digests(self) -> None:
+        """逆向证明：当前两个 evidence 层文件逐处换回登记的前值，文件摘要回到基线条目，重算的 evidence 层摘要回到基线。"""
+
+        restored = self._restore_evidence()
+        baseline_files = {entry["path"]: entry["sha256"] for entry in self.baseline["entries"]}
+        self.assertEqual(restored["files"], {path: baseline_files[path] for path in EVIDENCE_TRANSITION_PATHS})
+        self.assertEqual(restored["evidence_semantics_sha256"], self.baseline["evidence_semantics_sha256"])
+        # 当前 evidence 层摘要正是登记的后值，与逆向回到的基线不同：变化确实存在，并被登记完整解释。
+        after = self.evidence_transition["sensitive_identity"]["after"]["evidence_semantics_sha256"]
+        self.assertEqual(self.identity["evidence_semantics_sha256"], after)
+        self.assertNotEqual(after, restored["evidence_semantics_sha256"])
+        # 事实映射：后值在当前文件里恰好一次、前值一次也没有；逆向后正好相反，长度不变（纯 64 位摘要重绑）。
+        registration = self.evidence_registrations[EVIDENCE_FACT_MAP]
+        (snapshot,) = registration["replacements"]
+        raw = _read_evidence_file(EVIDENCE_FACT_MAP)
+        original = _restore_registered_evidence_file(raw, registration)
+        after_text, before_text = snapshot["after"].encode(), snapshot["before"].encode()
+        self.assertEqual((raw.count(after_text), raw.count(before_text)), (1, 0))
+        self.assertEqual((original.count(after_text), original.count(before_text)), (0, 1))
+        self.assertEqual(len(raw), len(original))
+
+    def test_evidence_transition_changes_only_registered_snapshot_fields(self) -> None:
+        """结构证明：事实映射与逆向还原后只差登记的那一个源码快照 sha256；映射摘要常量文件除登记的注释与常量赋值外语法树逐节点相同。"""
+
+        fact_registration = self.evidence_registrations[EVIDENCE_FACT_MAP]
+        raw = _read_evidence_file(EVIDENCE_FACT_MAP)
+        original = _restore_registered_evidence_file(raw, fact_registration)
+        _prove_fact_map_structure(raw, original, fact_registration)
+        current, before = json.loads(raw), json.loads(original)
+        differences = _json_differences(current, before)
+        self.assertEqual(len(differences), 1)
+        self.assertEqual(differences[0][0::2], ("tests", "source_files", "sha256"))
+        test = current["tests"][differences[0][1]]
+        self.assertEqual((test["name"], test["source_files"][differences[0][3]]["path"]),
+                         ("TestCandidateTraceCodex0145OAuthFallbackSameInvocation",
+                          "backend/internal/service/openai_gateway_forward.go"))
+        # 其余逐项相同：顶层字段、测试清单（包、名字、测试文件及其摘要）、事实、源码快照的路径清单。
+        self.assertEqual({key: value for key, value in current.items() if key != "tests"},
+                         {key: value for key, value in before.items() if key != "tests"})
+        keys = ("package", "name", "test_file", "test_file_sha256", "facts")
+        self.assertEqual([[item[key] for key in keys] for item in current["tests"]],
+                         [[item[key] for key in keys] for item in before["tests"]])
+        self.assertEqual([[source["path"] for source in item["source_files"]] for item in current["tests"]],
+                         [[source["path"] for source in item["source_files"]] for item in before["tests"]])
+
+        trace_registration = self.evidence_registrations[EVIDENCE_TRACE]
+        trace_raw = _read_evidence_file(EVIDENCE_TRACE)
+        trace_original = _restore_registered_evidence_file(trace_raw, trace_registration)
+        _prove_frozen_mapping_constant(trace_registration, fact_registration)
+
+        def mapping_constant(source: bytes) -> str:
+            node = next(node for node in ast.parse(source.decode("utf-8")).body if isinstance(node, ast.Assign)
+                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "FROZEN_MAPPING_SHA256")
+            return node.value.value
+
+        def code_without_mapping_constant(source: bytes) -> str:
+            tree = ast.parse(source.decode("utf-8"))
+            for node in tree.body:
+                if (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                        and node.targets[0].id == "FROZEN_MAPPING_SHA256"):
+                    node.value = ast.Constant("")
+            return ast.dump(tree)
+
+        # 常量在当前文件里就是当前事实映射文件的摘要，还原后就是基线事实映射的摘要；代码除这一个常量外逐节点相同。
+        self.assertEqual(mapping_constant(trace_raw), hashlib.sha256(raw).hexdigest())
+        self.assertEqual(mapping_constant(trace_original), fact_registration["before_sha256"])
+        self.assertEqual(code_without_mapping_constant(trace_raw), code_without_mapping_constant(trace_original))
+
+    def test_evidence_transition_missing_extra_or_changed_record_is_rejected(self) -> None:
+        """登记少一条、多一条、改一条前后值或改文件摘要，字节逆向都回不到基线；文件集合缺／多、前后值不符、闭包变化也拒绝。"""
+
+        for path in sorted(EVIDENCE_TRANSITION_PATHS):
+            raw = _read_evidence_file(path)
+            registration = self.evidence_registrations[path]
+            registered_text = " ".join(item[side] for item in registration["replacements"] for side in ("before", "after"))
+            token = self._unique_hex_token(raw, set(HEX64.findall(registered_text)))
+            self.assertGreater(raw.count(b"sha256"), 1, "构造“后值文本出现多次”用的文本必须在文件里重复")
+            for case, message in (
+                ("缺一条替换", "没有回到基线"),
+                ("多一条凭空替换", "恰好出现一次（实际 0 次）"),
+                ("多一条后值出现多次的替换", r"恰好出现一次（实际 (?:[2-9]|[1-9]\d+) 次）"),
+                ("重复登记同一条", "不得重叠"),
+                ("多一条无关替换", "没有回到基线"),
+                ("改后值", "恰好出现一次（实际 0 次）"),
+                ("改前值", "没有回到基线"),
+                ("改文件前值", "没有回到基线"),
+                ("改文件后值", "不是登记的后值"),
+            ):
+                damaged = copy.deepcopy(registration)
+                replacements = damaged["replacements"]
+                if case == "缺一条替换":
+                    replacements.pop()
+                elif case == "多一条凭空替换":
+                    replacements.append({**copy.deepcopy(replacements[0]), "after": "登记里凭空多出的后值文本", "before": "x"})
+                elif case == "多一条后值出现多次的替换":
+                    replacements.append({**copy.deepcopy(replacements[0]), "after": "sha256", "before": "SHA256"})
+                elif case == "重复登记同一条":
+                    replacements.append(copy.deepcopy(replacements[0]))
+                elif case == "多一条无关替换":
+                    replacements.append({**copy.deepcopy(replacements[0]), "after": token, "before": "0" * 64})
+                elif case == "改后值":
+                    replacements[0]["after"] = self._flip_last_character(replacements[0]["after"])
+                elif case == "改前值":
+                    replacements[0]["before"] = self._flip_last_character(replacements[0]["before"])
+                elif case == "改文件前值":
+                    damaged["before_sha256"] = self._flip_last_character(damaged["before_sha256"])
+                else:
+                    damaged["after_sha256"] = self._flip_last_character(damaged["after_sha256"])
+                with self.subTest(path=path, case=case), self.assertRaisesRegex(ValueError, message):
+                    _restore_registered_evidence_file(raw, damaged)
+
+        # 整条证明：登记文件集合缺一个、多一个、重复一个，登记的前后值不是基线／当前值，evidence 编排器闭包变化，
+        # 登记之外的 evidence 层文件有变化，都拒绝。
+        for case, message in (
+            ("缺一个文件", "文件集合"),
+            ("多一个文件", "文件集合"),
+            ("重复一个文件", "文件集合"),
+            ("登记前值不是基线", "前值不是基线"),
+            ("登记后值不是当前值", "后值不是当前受管树"),
+            ("闭包变化", "闭包摘要与基线不符"),
+            ("别的 evidence 层文件有变化", "出现未登记的文件变化：candidate_rule_assertion.py"),
+            ("别的 evidence 层文件被删除", "重算的 evidence 层摘要不等于基线"),
+            ("登记的文件被策略改归别层", "不在 evidence 层"),
+        ):
+            damaged, closure, entries, policy = copy.deepcopy(self.evidence_transition), None, None, None
+            if case == "缺一个文件":
+                damaged["files"].pop()
+            elif case == "多一个文件":
+                damaged["files"].append({**copy.deepcopy(damaged["files"][0]), "path": "candidate_rule_assertion.py"})
+            elif case == "重复一个文件":
+                damaged["files"].append(copy.deepcopy(damaged["files"][0]))
+            elif case == "登记前值不是基线":
+                damaged["files"][0]["before_sha256"] = "0" * 64
+            elif case == "登记后值不是当前值":
+                damaged["files"][0]["after_sha256"] = "0" * 64
+            elif case == "闭包变化":
+                closure = "0" * 64
+            elif case == "别的 evidence 层文件有变化":
+                entries = [{**entry, "sha256": "0" * 64} if entry["path"] == "candidate_rule_assertion.py" else entry
+                           for entry in self.entries]
+            elif case == "别的 evidence 层文件被删除":
+                entries = [entry for entry in self.entries if entry["path"] != "candidate_rule_assertion.py"]
+            else:
+                policy = copy.deepcopy(self.policy)
+                policy["layers"]["evidence_semantics"]["prefixes"].remove("candidate_test_fact_map_")
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, message):
+                self._restore_evidence(damaged, entries=entries, closure=closure, policy=policy)
+
+        # 结构证明：定位不到条目、定位冒用别的条目、还原结果另有结构或内容差异，都拒绝。
+        fact_registration = self.evidence_registrations[EVIDENCE_FACT_MAP]
+        fact_raw = _read_evidence_file(EVIDENCE_FACT_MAP)
+        fact_original = _restore_registered_evidence_file(fact_raw, fact_registration)
+        for case, message in (("定位不到条目", "唯一命中"), ("定位冒用别的条目", "前后值与文件内容不符")):
+            damaged = copy.deepcopy(fact_registration)
+            locator = damaged["replacements"][0]["locator"]
+            if case == "定位不到条目":
+                locator["test"] = "TestNoSuchCandidateTrace"
+            else:
+                locator["source_file"] = "backend/internal/service/official_egress_integration.go"
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, message):
+                _prove_fact_map_structure(fact_raw, fact_original, damaged)
+        for case, old, new in (
+            ("还原结果多一处事实差异", b'"fact_id": "a08.connection-lifecycle"', b'"fact_id": "a08.connection-lifecycle-x"'),
+            ("还原结果多一个键", b'"codex_version": "0.160.0",', b'"codex_version": "0.160.0",\n  "unregistered_key": 1,'),
+        ):
+            altered = fact_original.replace(old, new, 1)
+            self.assertNotEqual(altered, fact_original)
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, "之外还有变化"):
+                _prove_fact_map_structure(fact_raw, altered, fact_registration)
+        # 定位命中多处（同名测试出现两次）同样拒绝，不能靠含糊的定位蒙混。
+        located = fact_registration["replacements"][0]["locator"]["test"]
+        doubled, doubled_original = json.loads(fact_raw), json.loads(fact_original)
+        for data in (doubled, doubled_original):
+            data["tests"].append(copy.deepcopy(next(item for item in data["tests"] if item["name"] == located)))
+        with self.subTest(case="定位命中多处"), self.assertRaisesRegex(ValueError, "唯一命中"):
+            _prove_fact_map_structure(json.dumps(doubled).encode("utf-8"), json.dumps(doubled_original).encode("utf-8"),
+                                      fact_registration)
+
+        # 映射摘要常量：夹带（合法或不合法的）代码、常量没随映射文件摘要同步、登记两处、定位改名，都拒绝。
+        trace_registration = self.evidence_registrations[EVIDENCE_TRACE]
+        hunk_after = trace_registration["replacements"][0]["after"]
+        for case, message in (
+            ("夹带代码", "只有一条"),
+            ("夹带不合法的代码", "合法的 Python"),
+            ("常量没随映射摘要同步", "没有随事实映射文件摘要同步"),
+            ("登记两处", "恰好登记一处"),
+            ("定位改名", "恰好登记一处"),
+        ):
+            damaged = copy.deepcopy(trace_registration)
+            replacement = damaged["replacements"][0]
+            if case == "夹带代码":
+                replacement["after"] = hunk_after + "import os\n"
+            elif case == "夹带不合法的代码":
+                replacement["after"] = hunk_after + "((\n"
+            elif case == "常量没随映射摘要同步":
+                replacement["after"] = hunk_after.replace(fact_registration["after_sha256"], "0" * 64)
+            elif case == "登记两处":
+                damaged["replacements"].append(copy.deepcopy(replacement))
+            else:
+                replacement["locator"] = {"constant": "FROZEN_PROFILE_SHA256"}
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, message):
+                _prove_frozen_mapping_constant(damaged, fact_registration)
+
+    def test_evidence_transition_unregistered_file_change_is_rejected(self) -> None:
+        """事实映射或映射摘要常量文件出现登记外的改动：只改文件、同步改登记的后值、甚至把改动也登记成替换，都拒绝。"""
+
+        fact_raw = _read_evidence_file(EVIDENCE_FACT_MAP)
+        last_test_file_sha256 = json.loads(fact_raw)["tests"][-1]["test_file_sha256"].encode()
+        mutations = {
+            EVIDENCE_FACT_MAP: (
+                ("改一条事实", b'"fact_id": "a08.connection-lifecycle"', b'"fact_id": "a08.connection-lifecycle-x"', "前后值与文件内容不符"),
+                ("改测试文件摘要", last_test_file_sha256, b"0" * 64, "前后值与文件内容不符"),
+                ("改版本号", b'"codex_version": "0.160.0"', b'"codex_version": "0.160.1"', "前后值与文件内容不符"),
+            ),
+            EVIDENCE_TRACE: (
+                ("改导入行", b"from __future__ import annotations",
+                 "from __future__ import annotations  # 登记外改动".encode("utf-8"), "恰好登记一处"),
+            ),
+        }
+        for path, cases in mutations.items():
+            for case, old, new, structure_message in cases:
+                tampered, entries, read_file = self._tampered_world(path, lambda raw, old=old, new=new: raw.replace(old, new, 1))
+                # 只改文件：受管树里该文件的摘要已不是登记的后值。
+                with self.subTest(path=path, case=case, how="只改文件"), self.assertRaisesRegex(ValueError, "后值不是当前受管树"):
+                    self._restore_evidence(entries=entries, read_file=read_file)
+                # 同步改登记的后值：字节逆向到不了基线。
+                synced = copy.deepcopy(self.evidence_transition)
+                item = next(item for item in synced["files"] if item["path"] == path)
+                item["after_sha256"] = hashlib.sha256(tampered).hexdigest()
+                with self.subTest(path=path, case=case, how="同步改登记后值"), self.assertRaisesRegex(ValueError, "没有回到基线"):
+                    self._restore_evidence(synced, entries=entries, read_file=read_file)
+                # 把改动也登记成一条替换：字节逆向能回到基线，结构证明拒绝。
+                item["replacements"].append({"locator": copy.deepcopy(item["replacements"][0]["locator"]),
+                                             "before": old.decode("utf-8"), "after": new.decode("utf-8"), "reason": "冒充登记"})
+                with self.subTest(path=path, case=case, how="把改动登记成替换"), self.assertRaisesRegex(ValueError, structure_message):
+                    self._restore_evidence(synced, entries=entries, read_file=read_file)
+
+    def test_evidence_tree_change_registration_is_exact_and_not_a_control_change(self) -> None:
+        """② 的 evidence 层分支：登记的两个文件前后摘要精确匹配且真的变了；别的 evidence 层变化、登记缺失、再次重绑、
+        冒充 control 层登记一律产生问题，REGISTERED_CONTROL_CHANGES 里没有这两个文件。"""
+
+        before = {entry["path"]: entry["sha256"] for entry in self.baseline["entries"]}
+        after = {entry["path"]: entry["sha256"] for entry in self.entries}
+        registrations = self.evidence_registrations
+        self.assertEqual(_evidence_change_problems(self.policy, before, after, registrations), [])
+        without_trace = {path: item for path, item in registrations.items() if path != EVIDENCE_TRACE}
+        for case, new, registered, message in (
+            ("事实映射再次重绑", {**after, EVIDENCE_FACT_MAP: "0" * 64}, registrations,
+             f"前后摘要与过渡登记不符：{EVIDENCE_FACT_MAP}"),
+            ("映射摘要常量文件再次变化", {**after, EVIDENCE_TRACE: "0" * 64}, registrations,
+             f"前后摘要与过渡登记不符：{EVIDENCE_TRACE}"),
+            ("映射摘要常量文件登记缺失", after, without_trace, f"变化未登记：{EVIDENCE_TRACE}"),
+            ("登记的事实映射其实没变", {**after, EVIDENCE_FACT_MAP: before[EVIDENCE_FACT_MAP]}, registrations,
+             f"没有变化或不在 evidence 层：{EVIDENCE_FACT_MAP}"),
+            ("别的 evidence 层文件变化", {**after, "candidate_rule_assertion.py": "0" * 64}, registrations,
+             "变化未登记：candidate_rule_assertion.py"),
+            ("新增 evidence 层文件", {**after, "candidate_test_fact_map_0_999_0.json": "0" * 64}, registrations,
+             "变化未登记：candidate_test_fact_map_0_999_0.json"),
+            ("删除 evidence 层文件", {path: digest for path, digest in after.items() if path != "candidate_rule_assertion.py"},
+             registrations, "变化未登记：candidate_rule_assertion.py"),
+        ):
+            with self.subTest(case=case):
+                problems = _evidence_change_problems(self.policy, before, new, registered)
+                self.assertTrue(any(message in problem for problem in problems), problems)
+        # 策略把事实映射改归别的层：登记不再放行它。
+        reclassified = copy.deepcopy(self.policy)
+        reclassified["layers"]["evidence_semantics"]["prefixes"].remove("candidate_test_fact_map_")
+        problems = _evidence_change_problems(reclassified, before, after, registrations)
+        self.assertTrue(any(f"没有变化或不在 evidence 层：{EVIDENCE_FACT_MAP}" in problem for problem in problems), problems)
+        # 登记的文件被塞进 control 登记清单冒充 control 层：同样产生问题。
+        with mock.patch.dict(REGISTERED_CONTROL_CHANGES, {EVIDENCE_FACT_MAP: "冒充 control 层登记"}):
+            problems = _evidence_change_problems(self.policy, before, after, registrations)
+        self.assertTrue(any("冒充 control 层" in problem for problem in problems), problems)
+        self.assertNotIn(EVIDENCE_FACT_MAP, REGISTERED_CONTROL_CHANGES)
+        self.assertNotIn(EVIDENCE_TRACE, REGISTERED_CONTROL_CHANGES)
+
+    def test_tree_change_check_rejects_unregistered_changes_in_every_layer(self) -> None:
+        """② 本身在被篡改的受管树清单上运行：evidence 层只放行登记的两个文件，wire 层与 control 层的未登记变化照常拒绝。"""
+
+        name = "test_tree_changes_are_registered_control_changes"
+        baseline_files = {entry["path"]: entry["sha256"] for entry in self.baseline["entries"]}
+        unregistered_control = next(path for path in sorted(baseline_files) if path not in REGISTERED_CONTROL_CHANGES
+                                    and tip.classify_path(self.policy, path) == "control")
+        getattr(type(self)(name), name)()  # 对照：受管树未被篡改时 ② 通过。
+        for case, changes, expected in (
+            ("事实映射再次重绑", {EVIDENCE_FACT_MAP: "0" * 64}, f"前后摘要与过渡登记不符：{EVIDENCE_FACT_MAP}"),
+            ("映射摘要常量文件再次变化", {EVIDENCE_TRACE: "0" * 64}, f"前后摘要与过渡登记不符：{EVIDENCE_TRACE}"),
+            ("别的 evidence 层文件变化", {"candidate_rule_assertion.py": "0" * 64}, "变化未登记：candidate_rule_assertion.py"),
+            ("新增 evidence 层文件", {"candidate_test_fact_map_0_999_0.json": "0" * 64},
+             "变化未登记：candidate_test_fact_map_0_999_0.json"),
+            ("新增 wire 层文件", {"drive_unregistered_probe.py": "0" * 64}, "未登记：drive_unregistered_probe.py（wire_producer 层）"),
+            ("control 层文件未登记变化", {unregistered_control: "0" * 64}, f"未登记：{unregistered_control}（control 层）"),
+        ):
+            digests = {entry["path"]: entry["sha256"] for entry in self.entries}
+            digests.update(changes)
+            tampered = type(self)(name)
+            tampered.entries = [{"path": path, "sha256": digest} for path, digest in sorted(digests.items())]
+            with self.subTest(case=case), self.assertRaisesRegex(AssertionError, re.escape(expected)):
+                getattr(tampered, name)()
+
+    def test_modified_evidence_transition_original_is_rejected(self) -> None:
+        """改 evidence 层过渡登记不能获得新的期望：多一个字节、改一个字符、路径不是普通文件都立即失败。"""
+
+        raw = EVIDENCE_TRANSITION_PATH.read_bytes()
+        with tempfile.TemporaryDirectory(prefix="codex-evidence-transition-", dir="/private/tmp") as temporary:
+            path = Path(temporary) / EVIDENCE_TRANSITION_PATH.name
+            for case, damaged in (("多一个字节", raw + b"\n"), ("改一个字符", raw.replace(b"89300984", b"89300985", 1))):
+                self.assertNotEqual(damaged, raw)
+                path.write_bytes(damaged)
+                with self.subTest(case=case), self.assertRaisesRegex(ValueError, "摘要与钉住值不符"):
+                    _load_evidence_transition(path)
+            with self.subTest(case="路径是目录"), self.assertRaisesRegex(ValueError, "普通文件"):
+                _load_evidence_transition(Path(temporary))
+            with self.subTest(case="路径不存在"), self.assertRaisesRegex(ValueError, "普通文件"):
+                _load_evidence_transition(Path(temporary) / "不存在的登记.json")
+        self.assertEqual(_load_evidence_transition(), self.evidence_transition)
 
     def test_migrated_symbols_stay_outside_identity_closures(self) -> None:
         """③ 迁入共享模块的函数与常量不得属于 wire、evidence 或评估读侧闭包。"""

@@ -1,0 +1,95 @@
+{
+  "algorithm_sha256": "7c7178121a8a09f5f95410ee37ef1d361c9aa89bf4981dee707170471aad7b6f",
+  "baseline_sha256": "e4310febbaeae49e74bbbe32b0093e7866d3c2302ead04db5d35c309d37814a1",
+  "certification_status": "本机精确证据层后继；不代表正式工具演进、部署或发布重认证。",
+  "files": [
+    {
+      "after_sha256": "5d4c2b7a7ee6c5e8c28235cfd6458805aeddac403057346357b3c57d70c2a957",
+      "before_sha256": "0126f35add457cee871808eed63f7be7d94f5dd2361bf1b33ef282c712409370",
+      "kind": "fact-map-source-snapshot-rebind",
+      "path": "candidate_test_fact_map_0_160_0.json",
+      "replacements": [
+        {
+          "after": "3d41a73eeaef7107163154a2e2c833d6a09296ec41d2cb3cc211f0613b6c2fca",
+          "before": "89300984a3d93e7389fe6577337f589648ee83618f2be1fcb1c5155df3551ce2",
+          "locator": {
+            "source_file": "backend/internal/service/openai_gateway_forward.go",
+            "test": "TestCandidateTraceCodex0145OAuthFallbackSameInvocation"
+          },
+          "reason": "该源码文件在两次变更里被修改，映射里的源码快照 sha256 重绑到仓库实物摘要；测试清单、事实、规则与 test_file_sha256 不动。"
+        }
+      ]
+    },
+    {
+      "after_sha256": "4c44c20a41c32f4b9163c26aea37bda392487e173f01b77df7bf1fa589c308a9",
+      "before_sha256": "b8e53183cd572b1623a5c8fb90b93b08bed1976b1480b2b1ba79f5e4db6303c0",
+      "kind": "frozen-mapping-sha256-constant",
+      "path": "candidate_test_trace.py",
+      "replacements": [
+        {
+          "after": "# 2026-10-19（合并上游 v0.2.17）：上游在 openai_gateway_forward.go 统一三个入口的上游协议分流、透传 Responses Lite\n# 标志、扩展加密内容报错判定；合并时保留 mimic 守卫，官方出站分支不透传 Lite、不注入 web_search 历史声明，\n# thinking_signature_invalid 判定只对 API Key 生效（老板已确认）。映射只重绑该源码快照，测试、事实与规则语义不变。\nFROZEN_MAPPING_SHA256 = (\n    \"5d4c2b7a7ee6c5e8c28235cfd6458805aeddac403057346357b3c57d70c2a957\"\n)\n",
+          "before": "FROZEN_MAPPING_SHA256 = (\n    \"0126f35add457cee871808eed63f7be7d94f5dd2361bf1b33ef282c712409370\"\n)\n",
+          "locator": {
+            "constant": "FROZEN_MAPPING_SHA256"
+          },
+          "reason": "常量等于事实映射文件的摘要，随之更新；合并提交在常量上方追加三行日期注释，除此之外文件逐字节同基线。"
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "commit": "654b62efbf81f50bfa69b87aae5987909c21cc23",
+      "fact_map_sha256": {
+        "after": "a1c01f5cd4d67e78ad7137761a1874413fdb6348cf3de55f9932d6561ef89c11",
+        "before": "0126f35add457cee871808eed63f7be7d94f5dd2361bf1b33ef282c712409370"
+      },
+      "source_snapshot": {
+        "after": "d6de34edc7aaf5a3a32d6e016fbc32de41f92f931e44478f21d14ca000c71afb",
+        "before": "89300984a3d93e7389fe6577337f589648ee83618f2be1fcb1c5155df3551ce2"
+      },
+      "step": "主干：旧会话加密内容恢复修复"
+    },
+    {
+      "fact_map_sha256": {
+        "after": "5d4c2b7a7ee6c5e8c28235cfd6458805aeddac403057346357b3c57d70c2a957",
+        "before": "a1c01f5cd4d67e78ad7137761a1874413fdb6348cf3de55f9932d6561ef89c11"
+      },
+      "source_snapshot": {
+        "after": "3d41a73eeaef7107163154a2e2c833d6a09296ec41d2cb3cc211f0613b6c2fca",
+        "before": "d6de34edc7aaf5a3a32d6e016fbc32de41f92f931e44478f21d14ca000c71afb"
+      },
+      "step": "上游 v0.2.17 合并（试验区 r2，老板已确认）"
+    }
+  ],
+  "layer": "evidence_semantics",
+  "reason": "主干 654b62efb（旧会话加密内容恢复修复）与上游 v0.2.17 合并（老板已确认）先后修改了 backend/internal/service/openai_gateway_forward.go，事实映射按既有做法重绑该文件的源码快照（映射里的快照摘要必须等于仓库实物，test_candidate_test_trace 逐文件核对），映射摘要常量随映射文件摘要同步。",
+  "schema_version": "codex-identity-conservation-evidence-transition/v1",
+  "scope": "Codex 候选测试事实映射只发生源码快照重绑：backend/internal/service/openai_gateway_forward.go 的 sha256 一处，基线值到当前值的累计替换；映射摘要常量所在的 candidate_test_trace.py 只同步 FROZEN_MAPPING_SHA256，并在常量上方追加日期注释。两个文件都属 evidence_semantics 层，基线的 evidence_semantics_sha256 因此变为登记的后值。不改变身份算法、基线、wire 层、编排器闭包、checker／builder 摘要、读侧摘要，也不改变候选测试清单、事实、规则或 test_file_sha256。",
+  "sensitive_identity": {
+    "after": {
+      "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
+      "checker_sha256": "e45c5968cfae486e2cd06e07f0377727a4a09bf46d169969cc1dd7b7a660bf86",
+      "evidence_semantics_sha256": "ba7b0cb3ea21fd1741ff20f1fbfcd9d378aae592756a3c95cdd0d752b36443be",
+      "orchestrator_closure_sha256": {
+        "evidence_semantics": "21013c96e30f30b4263256d0d2635fa83408b19e46e60f9a58290ab2b45d3de8",
+        "wire_producer": "dd8a5e07b621d302ad9e15cff25d8218ffeed442009a473b5fbcc4b17461907b"
+      },
+      "wire_producer_sha256": "973b9b347412146c8c5bb1d0f62f2746d158b8950ff5f125f387e8db5b1bef05"
+    },
+    "before": {
+      "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
+      "checker_sha256": "e45c5968cfae486e2cd06e07f0377727a4a09bf46d169969cc1dd7b7a660bf86",
+      "evidence_semantics_sha256": "1bf2eefa5711626e6e743e08c94893c4c245f18f869e418063a5cf6c7faba132",
+      "orchestrator_closure_sha256": {
+        "evidence_semantics": "21013c96e30f30b4263256d0d2635fa83408b19e46e60f9a58290ab2b45d3de8",
+        "wire_producer": "dd8a5e07b621d302ad9e15cff25d8218ffeed442009a473b5fbcc4b17461907b"
+      },
+      "wire_producer_sha256": "973b9b347412146c8c5bb1d0f62f2746d158b8950ff5f125f387e8db5b1bef05"
+    }
+  },
+  "source_commits": {
+    "baseline": "17c87351a1f30dd5946986017553382619226833"
+  },
+  "transition_id": "evidence-source-snapshot-rebind-20261019"
+}

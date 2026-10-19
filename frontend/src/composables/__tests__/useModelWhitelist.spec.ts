@@ -26,13 +26,42 @@ import {
   getModelsByPlatform,
   getOfficialAntigravityDisplayMappings,
   getOfficialAntigravityModelIDs,
-getPresetMappingsByPlatform,
+  getPresetMappingsByPlatform,
   splitModelMappingObject
 } from '../useModelWhitelist'
+import { BUILTIN_PLATFORM_CATALOG, resetPlatformCatalog, setPlatformCatalog } from '@/constants/platformCatalog'
 
 describe('useModelWhitelist', () => {
   beforeAll(async () => {
     await fetchAntigravityOfficialModels()
+  })
+
+  it('平台清单中没有内置模型列表的多协议供应商不预填白名单', () => {
+    setPlatformCatalog({
+      ...BUILTIN_PLATFORM_CATALOG,
+      platforms: [
+        ...BUILTIN_PLATFORM_CATALOG.platforms,
+        {
+          id: 'acme_router',
+          display_name: 'Acme Router',
+          gateway: 'openai',
+          cn_provider: false,
+          multi_protocol: {
+            default_mode: 'standard',
+            routing: 'by_model',
+            modes: [{ mode: 'standard', base_urls: { chat_completions: 'https://api.acme-router.example/v1' } }]
+          }
+        }
+      ]
+    })
+    try {
+      expect(getModelsByPlatform('acme_router')).toEqual([])
+      expect(getModelsByPlatform('kimi').length).toBeGreaterThan(0)
+      // 非多协议供应商的未知平台维持原有回退。
+      expect(getModelsByPlatform('bedrock')).toEqual(getModelsByPlatform('anthropic'))
+    } finally {
+      resetPlatformCatalog()
+    }
   })
 
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
@@ -77,7 +106,8 @@ describe('useModelWhitelist', () => {
 
   it('Claude 模型列表包含新发布的 Claude 模型', () => {
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5-1')
-    expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5-1')
+    // Antigravity 白名单只来自后端官方描述表（桩数据里没有 Fable），与下方 fable-5 / opus-4-8 的反向断言保持一致。
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-fable-5-1')
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-5-5')
     expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-5-5')
@@ -94,6 +124,16 @@ describe('useModelWhitelist', () => {
     ]))
     expect(getPresetMappingsByPlatform('bedrock')).toEqual(expect.arrayContaining([
       expect.objectContaining({ label: 'Sonnet 5.5', from: 'claude-sonnet-5-5', to: 'global.anthropic.claude-sonnet-5-5' })
+    ]))
+  })
+
+  it('Claude 默认白名单保存后允许 Haiku 5.5，预设使用同一模型 ID', () => {
+    const models: string[] = getModelsByPlatform('anthropic')
+    const mapping: Record<string, string> | null = buildModelMappingObject('whitelist', models, [])
+
+    expect(mapping?.['claude-haiku-5-5']).toBe('claude-haiku-5-5')
+    expect(getPresetMappingsByPlatform('anthropic')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Haiku 5.5', from: 'claude-haiku-5-5', to: 'claude-haiku-5-5' })
     ]))
   })
 
@@ -195,6 +235,14 @@ describe('useModelWhitelist', () => {
       { from: 'Claude Opus 4.6 Thinking', to: 'claude-opus-4-6-thinking' },
       { from: 'GPT-OSS 120B Medium', to: 'gpt-oss-120b-medium' }
     ])
+  })
+
+  // 上游把 Antigravity 的 Argon 模型与预设写死在前端；本分支的 Antigravity 模型与预设只来自后端官方描述表，
+  // 所以这里只断言 gemini 平台的 Argon 真实 ID，以及别名不会被当作 Antigravity 发包 model。
+  // Argon 三档在描述表提供时能否进入白名单与预设，见文件末尾“官方描述表包含 Gemini 4 Argon 时”。
+  it('Gemini 4 Argon 在 gemini 平台使用真实模型 ID，别名不会出现在 antigravity 白名单', () => {
+    expect(getModelsByPlatform('gemini')).toContain('gemini-4-argon')
+    expect(getModelsByPlatform('antigravity')).not.toContain('gemini-4-argon')
   })
 
   it('whitelist 模式会忽略通配符条目', () => {
@@ -302,6 +350,41 @@ describe('Antigravity 官方模型缓存失败重试', () => {
       expect(getAntigravityOfficialModels).toHaveBeenCalledTimes(2)
     } finally {
       warnSpy.mockRestore()
+      vi.doUnmock('@/api/admin/accounts')
+    }
+  })
+})
+
+describe('Antigravity 官方描述表包含 Gemini 4 Argon 时', () => {
+  it('白名单使用三档真实模型 ID，预设映射由描述表生成而不是前端硬编码', async () => {
+    vi.resetModules()
+    const argonModels = [
+      { id: 'gemini-4-argon-high', display_name: 'Gemini 4 Argon High', model_enum: 'MODEL_PLACEHOLDER_ARGON_HIGH', thinking_budget: 10000, created_at: '2026-10-15T00:00:00Z', is_reasoning: true },
+      { id: 'gemini-4-argon-medium', display_name: 'Gemini 4 Argon Medium', model_enum: 'MODEL_PLACEHOLDER_ARGON_MEDIUM', thinking_budget: 4000, created_at: '2026-10-15T00:00:00Z', is_reasoning: true },
+      { id: 'gemini-4-argon-low', display_name: 'Gemini 4 Argon Low', model_enum: 'MODEL_PLACEHOLDER_ARGON_LOW', thinking_budget: 1000, created_at: '2026-10-15T00:00:00Z', is_reasoning: true }
+    ]
+
+    vi.doMock('@/api/admin/accounts', () => ({
+      getAntigravityDefaultModelMapping: vi.fn(),
+      getAntigravityOfficialModels: vi.fn(async () => ({
+        models: argonModels,
+        mapping: Object.fromEntries(argonModels.map((model) => [model.id, model.id]))
+      }))
+    }))
+
+    try {
+      const module = await import('../useModelWhitelist')
+      await module.fetchAntigravityOfficialModels()
+
+      const agModels = module.getModelsByPlatform('antigravity')
+      expect(agModels).toEqual(['gemini-4-argon-high', 'gemini-4-argon-medium', 'gemini-4-argon-low'])
+      expect(agModels).not.toContain('gemini-4-argon')
+      expect(module.getPresetMappingsByPlatform('antigravity')).toEqual([
+        expect.objectContaining({ label: 'Gemini 4 Argon High', from: 'Gemini 4 Argon High', to: 'gemini-4-argon-high' }),
+        expect.objectContaining({ label: 'Gemini 4 Argon Medium', from: 'Gemini 4 Argon Medium', to: 'gemini-4-argon-medium' }),
+        expect.objectContaining({ label: 'Gemini 4 Argon Low', from: 'Gemini 4 Argon Low', to: 'gemini-4-argon-low' })
+      ])
+    } finally {
       vi.doUnmock('@/api/admin/accounts')
     }
   })

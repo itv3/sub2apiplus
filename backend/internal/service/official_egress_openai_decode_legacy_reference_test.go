@@ -53,7 +53,7 @@ func legacyNormalizeOpenAIResponsesLegacyIngress(body []byte) ([]byte, bool, err
 	if hasMessages {
 		messages, messagesAreArray := messagesValue.([]any)
 		if messagesAreArray && len(messages) > 0 {
-			legacy, err := convertLegacyResponsesMessages(body)
+			legacy, err := convertLegacyResponsesMessages(nil, body)
 			if err != nil {
 				return body, false, err
 			}

@@ -41,7 +41,7 @@ nano .env
 ./apple-container.sh status
 ```
 
-启动后访问 `http://localhost:8080`。如果 `ADMIN_PASSWORD` 为空，可从应用日志中获取自动生成的管理员密码：
+启动后访问 `http://localhost:8080`。如果 `ADMIN_EMAIL` / `ADMIN_PASSWORD` 为空，可从应用日志中获取自动生成的管理员邮箱（登录用户名）和密码：
 
 ```bash
 ./apple-container.sh logs app

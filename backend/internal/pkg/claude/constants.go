@@ -22,6 +22,9 @@ const (
 	BetaMidConversationSystem    = "mid-conversation-system-2026-04-07"
 	// 旧版结构化输出兼容标记；仅在客户端显式请求时透传。
 	BetaStructuredOutputs = "structured-outputs-2025-11-13"
+	// Tool-change compatibility tokens; never enabled without an explicit client request.
+	BetaMidConversationToolChanges = "mid-conversation-tool-changes-2026-07-01"
+	BetaInlineTools                = "inline-tools-2026-09-15"
 
 	// 新增（对齐官方 CLI 2.1.9x 以来的流量）
 	BetaPromptCachingScope          = "prompt-caching-scope-2026-01-05"
@@ -219,6 +222,12 @@ var DefaultModels = []Model{
 		Type:        "model",
 		DisplayName: "Claude Haiku 4.5",
 		CreatedAt:   "2025-10-01T00:00:00Z",
+	},
+	{
+		ID:          "claude-haiku-5-5",
+		Type:        "model",
+		DisplayName: "Claude Haiku 5.5",
+		CreatedAt:   "2026-10-07T00:00:00Z",
 	},
 }
 

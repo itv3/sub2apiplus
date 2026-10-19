@@ -32,9 +32,15 @@ const (
 	PlatformMiniMax  = "minimax"  // MiniMax (M 系列)
 	PlatformTypeSafe = "typesafe" // TypeSafe AI System One (Jev)
 	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
-	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
+	// 值保持 opencode_go 以兼容已落库的账号、分组、配额与 Composite 路由。
 	PlatformOpenCodeGo = "opencode_go"
-	PlatformComposite  = "composite"
+	// PlatformCommandCode 是 Command Code Provider API（多模型聚合，积分计费，
+	// 订阅套餐另有 5 小时 / 每周滚动窗口）。
+	PlatformCommandCode = "command_code"
+	// PlatformCline 是 Cline API（多模型聚合，OpenAI 兼容 Chat Completions；按量积分计费，
+	// 另有 ClinePass 订阅）。
+	PlatformCline     = "cline"
+	PlatformComposite = "composite"
 )
 
 // Account mode constants 区分国产供应商的「按量付费（余额）」与「Coding Plan」两种接入方式。
@@ -107,8 +113,18 @@ const AntigravityGemini31ProAgentModel = "gemini-pro-agent"
 var DefaultAntigravityModelMapping = antigravity.OfficialModelMapping()
 
 // AntigravityCompatibilityModelMapping 保留历史入口和旧客户端别名，但不作为默认展示模型。
+// 上游新增的 Claude 5.5 三档与 Gemini 4 Argon 三档也登记在这里（简称落到 high 档）：
+// 它们不属于官方 8 模型，只有账号显式白名单放行对应自映射条目时才会真正发出。
 var AntigravityCompatibilityModelMapping = map[string]string{
 	"claude-fable-5":                 "claude-sonnet-4-6",
+	"claude-opus-5-5":                "claude-opus-5-5-high",
+	"claude-opus-5-5-high":           "claude-opus-5-5-high",
+	"claude-opus-5-5-medium":         "claude-opus-5-5-medium",
+	"claude-opus-5-5-low":            "claude-opus-5-5-low",
+	"claude-sonnet-5-5":              "claude-sonnet-5-5-high",
+	"claude-sonnet-5-5-high":         "claude-sonnet-5-5-high",
+	"claude-sonnet-5-5-medium":       "claude-sonnet-5-5-medium",
+	"claude-sonnet-5-5-low":          "claude-sonnet-5-5-low",
 	"claude-opus-4-8":                "claude-opus-4-6-thinking",
 	"claude-opus-4-7":                "claude-opus-4-6-thinking",
 	"claude-opus-4-6":                "claude-opus-4-6-thinking",
@@ -153,6 +169,10 @@ var AntigravityCompatibilityModelMapping = map[string]string{
 	"gemini-3.8-flash-low":           "gemini-3.8-flash-low",
 	"gemini-3.8-flash-medium":        "gemini-3.8-flash-medium",
 	"gemini-3.8-flash-tiered":        "gemini-3.8-flash-tiered",
+	"gemini-4-argon":                 "gemini-4-argon-high",
+	"gemini-4-argon-high":            "gemini-4-argon-high",
+	"gemini-4-argon-low":             "gemini-4-argon-low",
+	"gemini-4-argon-medium":          "gemini-4-argon-medium",
 	"gpt-oss-120b-medium":            "gpt-oss-120b-medium",
 	"tab_flash_lite_preview":         "gemini-3.5-flash-extra-low",
 }

@@ -3,15 +3,118 @@
 package antigravity
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestBuildUserAgentUsesHubClientFamily(t *testing.T) {
+	if got := BuildUserAgent(" 2.23.0 "); got != "antigravity/hub/2.23.0 darwin/arm64" {
+		t.Fatalf("Hub client family must be sent with the configured version: %q", got)
+	}
+}
+
+func TestBuildUserAgentValidatesCustomVersion(t *testing.T) {
+	previous := defaultUserAgentVersion
+	defaultUserAgentVersion = "2.23.0"
+	t.Cleanup(func() { defaultUserAgentVersion = previous })
+	for _, tc := range []struct {
+		version string
+		want    string
+	}{
+		{version: " 3.4.5 ", want: "antigravity/hub/3.4.5 darwin/arm64"},
+		{version: "", want: "antigravity/hub/2.23.0 darwin/arm64"},
+		{version: "hub/3.4.5", want: "antigravity/hub/2.23.0 darwin/arm64"},
+		{version: "3.4", want: "antigravity/hub/2.23.0 darwin/arm64"},
+		{version: "3.4.5\r\nInjected: header", want: "antigravity/hub/2.23.0 darwin/arm64"},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			if got := BuildUserAgent(tc.version); got != tc.want {
+				t.Fatalf("custom version must be validated before building Hub user agent: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+type userAgentVersionTestContextKey struct{}
+
+func withTestUserAgentVersionResolver(t *testing.T) {
+	t.Helper()
+	userAgentVersionMu.RLock()
+	previous := userAgentVersionResolver
+	userAgentVersionMu.RUnlock()
+	SetUserAgentVersionResolver(func(ctx context.Context) string {
+		version, _ := ctx.Value(userAgentVersionTestContextKey{}).(string)
+		return version
+	})
+	t.Cleanup(func() { SetUserAgentVersionResolver(previous) })
+}
+
+func TestGetUserAgentForContextPreservesVersionOverride(t *testing.T) {
+	withTestUserAgentVersionResolver(t)
+	previous := defaultUserAgentVersion
+	defaultUserAgentVersion = "2.23.0"
+	t.Cleanup(func() { defaultUserAgentVersion = previous })
+	for _, tc := range []struct {
+		version string
+		want    string
+	}{
+		{version: " 3.4.5 ", want: "antigravity/hub/3.4.5 darwin/arm64"},
+		{version: "invalid", want: "antigravity/hub/2.23.0 darwin/arm64"},
+	} {
+		ctx := context.WithValue(context.Background(), userAgentVersionTestContextKey{}, tc.version)
+		if got := GetUserAgentForContext(ctx); got != tc.want {
+			t.Fatalf("context version override must use Hub family: got %q, want %q", got, tc.want)
+		}
+	}
+	if got := GetUserAgentForContext(nil); got != "antigravity/hub/2.23.0 darwin/arm64" { //nolint:staticcheck // SA1012：此处正是要验证 nil context 的容错
+		t.Fatalf("nil context must keep the default Hub user agent: %q", got)
+	}
+}
+
+func TestGetUserAgentEnvironmentOverride(t *testing.T) {
+	const expectedVersionEnv = "SUB2API_TEST_EXPECTED_ANTIGRAVITY_VERSION"
+	if expected := os.Getenv(expectedVersionEnv); expected != "" {
+		if got := GetDefaultUserAgentVersion(); got != expected {
+			t.Fatalf("environment version must be loaded during initialization: got %q, want %q", got, expected)
+		}
+		if got := GetUserAgent(); got != "antigravity/hub/"+expected+" darwin/arm64" {
+			t.Fatalf("environment override must keep Hub family: %q", got)
+		}
+		return
+	}
+	for _, tc := range []struct {
+		version string
+		want    string
+	}{
+		{version: " 3.4.5 ", want: "3.4.5"},
+		{version: "invalid", want: DefaultUserAgentVersion},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command(binary, "-test.run=^TestGetUserAgentEnvironmentOverride$")
+			for _, variable := range os.Environ() {
+				if !strings.HasPrefix(variable, AntigravityUserAgentVersionEnv+"=") && !strings.HasPrefix(variable, expectedVersionEnv+"=") {
+					command.Env = append(command.Env, variable)
+				}
+			}
+			command.Env = append(command.Env, AntigravityUserAgentVersionEnv+"="+tc.version, expectedVersionEnv+"="+tc.want)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("environment override failed: %v\n%s", err, output)
+			}
+		})
+	}
+}
 
 // ---------------------------------------------------------------------------
 // getClientSecret

@@ -1048,7 +1048,7 @@ supports_standalone_web_search = true
 ${generateCodexProviderAuthConfig(apiKey)}
 
 [features]
-goals = true`
+${codexModelCatalogMode.value === 'remote' ? 'api_key_model_discovery = true\n' : ''}goals = true`
 
   return buildOpenAICodexFileConfigs(configDir, configContent, apiKey)
 }
@@ -1291,8 +1291,7 @@ requires_openai_auth = false
 # Grok/Sub2API path is HTTP/SSE; disable WS (Codex may otherwise try WebSocket first)
 supports_websockets = false
 
-# Optional:
-# [features]
+${codexModelCatalogMode.value === 'remote' ? '[features]\napi_key_model_discovery = true\n\n# Optional:' : '# Optional:\n# [features]'}
 # goals = true`
 
   return [
@@ -1339,6 +1338,8 @@ function generateRoutedCodexFiles(
     minimax: 'MiniMax',
     opencode_go: 'OpenCode',
     typesafe: 'TypeSafe / Jev',
+    command_code: 'Command Code',
+    cline: 'Cline',
     composite: 'Composite'
   }
   const label = labels[platform]
@@ -1358,7 +1359,7 @@ base_url = "${baseUrl}"
 ${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = "${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}"\n` : ''}env_key = "SUB2API_API_KEY"
 wire_api = "responses"
 requires_openai_auth = false
-supports_websockets = false`
+supports_websockets = false${codexModelCatalogMode.value === 'remote' ? '\n\n[features]\napi_key_model_discovery = true' : ''}`
 
   return [
     { path: isWindows ? 'PowerShell' : 'Terminal', content: envContent },
@@ -1398,7 +1399,7 @@ supports_standalone_web_search = true
 ${generateCodexProviderAuthConfig(apiKey)}
 
 [features]
-goals = true`
+${codexModelCatalogMode.value === 'remote' ? 'api_key_model_discovery = true\n' : ''}goals = true`
 
   return buildOpenAICodexFileConfigs(configDir, configContent, apiKey)
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"sort"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 const (
@@ -71,7 +73,7 @@ func (s *GatewayService) GetCompositeProtocolModelSources(ctx context.Context, g
 
 	for platform, modelSet := range modelSets {
 		if _, forceDefault := forceDefaultPlatforms[platform]; forceDefault {
-			sources[platform] = nil
+			sources[platform] = compositeOpenAIDefaultsSource(platform, protocolAccounts[platform])
 			continue
 		}
 
@@ -84,12 +86,35 @@ func (s *GatewayService) GetCompositeProtocolModelSources(ctx context.Context, g
 			// 未配置映射的 OpenAI 账号，就不能因另一账号的部分映射而
 			// 隐藏默认模型。
 			models = supplementUnmappedOpenAIModels(protocolAccounts[platform], models)
+			if len(models) == 0 {
+				// 没有任何显式映射：沿用默认模型（调用方回落默认清单），但要剔除被 GPT-5.5 退役规则挡掉的模型。
+				sources[platform] = compositeOpenAIDefaultsSource(platform, protocolAccounts[platform])
+				continue
+			}
+			// 与普通 OpenAI 目录一致（上游 GPT-5.5 退役）：已对 ChatGPT 订阅账号退役的模型不再列出；
+			// 过滤后清单为空时保持非 nil 空列表，表示权威结果，调用方不得回落默认清单把退役模型加回来。
+			models = filterRetiredOpenAIModelIDs(protocolAccounts[platform], models)
 		}
 		sort.Strings(models)
 		sources[platform] = models
 	}
 
 	return sources
+}
+
+// compositeOpenAIDefaultsSource 返回「沿用默认模型」场景下 OpenAI 平台的模型来源：
+// 默认清单里没有模型被 GPT-5.5 退役规则挡掉时返回 nil，由调用方回落默认清单；
+// 有模型被挡掉时返回已剔除退役模型的显式默认清单，调用方不得再回落。其它平台一律返回 nil。
+func compositeOpenAIDefaultsSource(platform string, accounts []Account) []string {
+	if platform != PlatformOpenAI {
+		return nil
+	}
+	defaults := openai.DefaultModelIDs()
+	filtered := filterRetiredOpenAIModelIDs(accounts, defaults)
+	if len(filtered) == len(defaults) {
+		return nil
+	}
+	return filtered
 }
 
 func normalizeCompositeModelListProtocol(protocol string) string {

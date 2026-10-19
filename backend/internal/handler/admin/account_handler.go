@@ -1271,7 +1271,7 @@ func (h *AccountHandler) UpdateExtra(c *gin.Context) {
 // 网关会按"现状即证据"默认走 Responses。
 func (h *AccountHandler) scheduleOpenAIResponsesProbe(account *service.Account) {
 	if account == nil || account.Type != service.AccountTypeAPIKey ||
-		(account.Platform != service.PlatformOpenAI && !service.IsCNProvider(account.Platform)) {
+		(account.Platform != service.PlatformOpenAI && !account.RoutesProtocolByInbound()) {
 		return
 	}
 	if h.accountTestService == nil {
@@ -2973,7 +2973,7 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 		return models
 	}
 
-	// Handle Antigravity accounts: return Claude + Gemini models
+	// Explicit account mappings expose their request-side names to connectivity tests.
 	if account.Platform == service.PlatformAntigravity {
 		mapping := service.AdvertisedModelMappingForAccount(account)
 		if len(mapping) == 0 {
@@ -3077,9 +3077,14 @@ func antigravityModelsForMapping(mapping map[string]string) []antigravity.Claude
 
 	ids := make([]string, 0, len(mapping))
 	for id := range mapping {
-		if trimmed := strings.TrimSpace(id); trimmed != "" {
+		// 通配符键（如 claude-*）不是具体模型，不能作为连通性测试可选项；
+		// 与上游一致：全是通配符时回落默认模型。
+		if trimmed := strings.TrimSpace(id); trimmed != "" && !strings.Contains(trimmed, "*") {
 			ids = append(ids, trimmed)
 		}
+	}
+	if len(ids) == 0 {
+		return defaults
 	}
 	sort.Strings(ids)
 

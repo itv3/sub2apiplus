@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
@@ -53,11 +54,11 @@ func buildOpenAIResponsesURL(base string) string {
 }
 
 // buildOpenAIResponsesURLForPlatform 组装 Responses 端点（平台感知）。
-// DeepSeek 官方 Responses 端点为 /responses（无 /v1 前缀，适配 Codex）；
-// 其余平台维持 /v1/responses。
+// 供应商 profile 声明了 ResponsesPath 时按其拼接（如 DeepSeek 为无 /v1 前缀的
+// /responses）；其余平台维持 /v1/responses。
 func buildOpenAIResponsesURLForPlatform(platform string, base string) string {
-	if platform == PlatformDeepseek {
-		return buildOpenAIEndpointURL(base, "/responses")
+	if profile := LookupProviderProfile(platform); profile != nil && profile.ResponsesPath != "" {
+		return buildOpenAIEndpointURL(base, profile.ResponsesPath)
 	}
 	return buildOpenAIResponsesURL(base)
 }
@@ -1500,6 +1501,31 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 
 // 返回仍对应最终只读正文的索引，供随后 bridge 准备复用；任何改写都会使旧索引失效。
 func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body []byte, account *Account, responsesLite bool, indexOut **officialJSONRawIndex) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{ResponsesLite: responsesLite, IndexOut: indexOut})
+}
+
+func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(cfg *config.Config, body []byte, account *Account, responsesLite bool) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{Config: cfg, ResponsesLite: responsesLite})
+}
+
+// 同时带配置（旧版 Responses 入站改写需要）与索引输出的变体，供 WebSocket 入站转发使用。
+func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfigAndIndex(cfg *config.Config, body []byte, account *Account, responsesLite bool, indexOut **officialJSONRawIndex) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{Config: cfg, ResponsesLite: responsesLite, IndexOut: indexOut})
+}
+
+type openAIResponsesCompatibilityOptions struct {
+	Config        *config.Config
+	ResponsesLite bool
+	// Compact marks the /responses/compact wire shape, which is left as-is
+	// by request-shape compatibility rewrites such as web_search history.
+	Compact bool
+	// IndexOut 非空时，若最终正文仍与构建过的只读索引一致则回填该索引，供随后 bridge 准备复用。
+	IndexOut **officialJSONRawIndex
+}
+
+func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *Account, opts openAIResponsesCompatibilityOptions) ([]byte, bool, error) {
+	responsesLite := opts.ResponsesLite
+	indexOut := opts.IndexOut
 	if indexOut != nil {
 		*indexOut = nil
 	}
@@ -1510,7 +1536,7 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body []byte, ac
 	changed := false
 	if account.IsOpenAIOAuthLike() {
 		var err error
-		normalized, changed, err = normalizeOpenAIResponsesLegacyIngress(body)
+		normalized, changed, err = normalizeOpenAIResponsesLegacyIngressWithConfig(opts.Config, body)
 		if err != nil {
 			return body, false, err
 		}
@@ -1566,6 +1592,16 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(body []byte, ac
 			}
 			normalized = next
 			changed = true
+		}
+		// 经官方出站定型器定型的 Codex OAuth 请求不得被网关代注入 web_search 工具（也不钉 tool_choice）；
+		// 仅不经官方出站定型的账号（OpenAI SetupToken）沿用上游语义。
+		if !opts.Compact && !account.UsesOfficialEgressProfile() {
+			webSearchBody, webSearchChanged, err := ensureOpenAIOAuthWebSearchToolForHistoryBody(normalized, responsesLite)
+			if err != nil {
+				return body, false, fmt.Errorf("normalize websocket body: %w", err)
+			}
+			normalized = webSearchBody
+			changed = changed || webSearchChanged
 		}
 	}
 	needsOrphanCleanup := account != nil && account.IsOpenAIOAuthLike() &&

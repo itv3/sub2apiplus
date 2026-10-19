@@ -58,6 +58,28 @@ func isOpenAIInvalidEncryptedContentError(payload []byte) bool {
 		gjson.GetBytes(payload, "code").String() == openAIWSFallbackReasonInvalidEncryptedContent
 }
 
+// isOpenAIInvalidEncryptedContentErrorForAccount 在通用判定之上叠加上游新增的 thinking_signature_invalid
+// 形态（加密内容无法验证或解析），且只对 OpenAI API Key 账号生效：Codex OAuth 官方出站的判定保持只认
+// invalid_encrypted_content，行为与合并前完全一致。
+func isOpenAIInvalidEncryptedContentErrorForAccount(account *Account, payload []byte) bool {
+	if isOpenAIInvalidEncryptedContentError(payload) {
+		return true
+	}
+	return account != nil && account.IsOpenAIApiKey() && isOpenAIThinkingSignatureEncryptedContentRejection(payload)
+}
+
+// isOpenAIThinkingSignatureEncryptedContentRejection 判断是否为 thinking_signature_invalid 形态的
+// 加密推理内容被拒：错误码必须匹配，且文案同时含「加密内容」「无法验证」「无法解密或解析」三段特征。
+func isOpenAIThinkingSignatureEncryptedContentRejection(payload []byte) bool {
+	if extractUpstreamErrorCode(payload) != "thinking_signature_invalid" {
+		return false
+	}
+	message := extractUpstreamErrorMessage(payload)
+	return strings.Contains(message, "The encrypted content") &&
+		strings.Contains(message, "could not be verified") &&
+		strings.Contains(message, "could not be decrypted or parsed")
+}
+
 // 压缩项可能是早期上下文的唯一副本。本次没有可靠的历史重建来源，因此任何
 // 加密压缩项都会关闭 HTTP 恢复与缓存预清洗，不能套用通用清洗函数整项删除。
 func openAIHTTPEncryptedRecoveryHasCompaction(reqBody map[string]any) bool {
@@ -199,7 +221,7 @@ func writeOpenAIEncryptedContentFailure(c *gin.Context, resp *http.Response, str
 		c.Header("Cache-Control", "no-cache")
 		c.Header("X-Accel-Buffering", "no")
 		payload := []byte(`{"error":` + openAIEncryptedContentErrorJSON + `}`)
-		if _, err := io.WriteString(c.Writer, buildOpenAIResponseFailedSSE(responseID, model, payload, openAIEncryptedContentRecoveryHint)); err != nil {
+		if _, err := io.WriteString(c.Writer, buildOpenAIResponseFailedSSE(responseID, model, 0, payload, openAIEncryptedContentRecoveryHint)); err != nil {
 			return fmt.Errorf("write encrypted content failure: %w", err)
 		}
 		c.Writer.Flush()

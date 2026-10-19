@@ -404,7 +404,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		responsesLite := isOpenAIResponsesLiteWebSocketPayload(normalized)
 		var normalizedIndex *officialJSONRawIndex
-		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithIndex(normalized, account, responsesLite, &normalizedIndex); compatibilityErr != nil {
+		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfigAndIndex(s.cfg, normalized, account, responsesLite, &normalizedIndex); compatibilityErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", compatibilityErr)
 		} else if compatibilityChanged {
 			normalized = compatibilityBody

@@ -581,6 +581,8 @@ func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID in
 	w := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(w)
 	ginCtx.Request = (&http.Request{}).WithContext(ctx)
+	// 上游新增：标记为后台测试，账号测试日志据此区分手动测试与定时测试。
+	ginCtx.Set(accountTestBackgroundKey, true)
 
 	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, "", AccountTestModeDefault)
 

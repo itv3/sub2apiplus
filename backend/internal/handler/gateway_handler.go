@@ -52,12 +52,14 @@ type GatewayHandler struct {
 	errorPassthroughService   *service.ErrorPassthroughService
 	contentModerationService  *service.ContentModerationService
 	securityAuditCoordinator  *securityaudit.Coordinator
-	concurrencyHelper         *ConcurrencyHelper
-	userMsgQueueHelper        *UserMsgQueueHelper
-	maxAccountSwitches        int
-	maxAccountSwitchesGemini  int
-	cfg                       *config.Config
-	settingService            *service.SettingService
+	// geminiCachedContentService 管理 Gemini 显式缓存；为 nil 时相关接口不可用。
+	geminiCachedContentService *service.GeminiCachedContentService
+	concurrencyHelper          *ConcurrencyHelper
+	userMsgQueueHelper         *UserMsgQueueHelper
+	maxAccountSwitches         int
+	maxAccountSwitchesGemini   int
+	cfg                        *config.Config
+	settingService             *service.SettingService
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -1173,8 +1175,8 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	if platform == service.PlatformComposite {
 		protocol := compositeModelListProtocolForRequest(c)
 		// TypeSafe 模型只能经 /v1/systemone 使用：通用 OpenAI 兼容模型列表按上游语义列出，
-		// Anthropic 协议（Claude 客户端）的模型列表不列。
-		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID, protocol,
+		// Anthropic 协议（Claude 客户端）的模型列表不列。显式路由别名不限端点（endpoint 为空）。
+		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID, protocol, "",
 			protocol == service.CompositeModelListProtocolOpenAI)
 		if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 			source := availableModels
@@ -1197,7 +1199,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	if len(availableModels) > 0 {
+	if len(availableModels) > 0 || (platform == service.PlatformOpenAI && availableModels != nil) {
 		writeModelsList(c, platform, availableModels)
 		return
 	}
@@ -1290,13 +1292,19 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 		platform = group.Platform
 	}
 	if platform == service.PlatformComposite {
-		availableModels := h.compositeAvailableModels(ctx, groupID, service.CompositeModelListProtocolOpenAI, false)
-		if group.ModelAllowlistEnabled() {
-			return group.ModelAllowlist.FilterForListing(availableModels)
-		}
+		availableModels := h.compositeAvailableModels(ctx, groupID, service.CompositeModelListProtocolOpenAI, service.CompositeRouteEndpointResponses, false)
 		// Composite Codex 清单属于 OpenAI 协议；没有对应协议账号时返回空目录，
 		// 不能回退到包含 Anthropic/Gemini/Antigravity 的全协议默认目录。
-		return availableModels
+		models := availableModels
+		if group.ModelAllowlistEnabled() {
+			models = group.ModelAllowlist.FilterForListing(models)
+		}
+		// 上游语义：白名单之后再剔除有效 Responses 路由实际落到 TypeSafe 的模型，
+		// 路由查询失败时保留账号派生的清单。
+		if filtered, err := h.gatewayService.FilterCompositeCodexModels(ctx, group.ID, models); err == nil {
+			return filtered
+		}
+		return models
 	}
 
 	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
@@ -1311,16 +1319,19 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 }
 
 // compositeAvailableModels 列出组合分组按指定协议可服务的模型。
+// protocol 决定账号派生的模型来源（openai／anthropic，见 GetCompositeProtocolModelSources）；
+// endpoint 用于追加上游新增的「显式路由别名」（空串表示不限端点，Codex 目录传 Responses 端点）。
 // includeSystemOne 为真时另列 TypeSafe 模型：它们只能经 /v1/systemone 使用，
 // 不属于任何 LLM 协议的模型来源，Codex 目录与 Anthropic 协议列表都必须排除。
-func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *int64, protocol string, includeSystemOne bool) []string {
+func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *int64, protocol, endpoint string, includeSystemOne bool) []string {
 	if h == nil || h.gatewayService == nil {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
 	modelSources := h.gatewayService.GetCompositeProtocolModelSources(ctx, groupID, protocol)
-	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformTypeSafe} {
+	// 平台顺序沿用平台清单（上游把硬编码平台列表改为由清单派生）。
+	for _, platform := range domain.CompositePrecedencePlatformIDs() {
 		platformModels, hasProtocolAccount := modelSources[platform]
 		if platform == service.PlatformTypeSafe {
 			// TypeSafe 账号只服务 /v1/systemone 原生协议，不在任何 LLM 协议的模型来源里；
@@ -1336,7 +1347,8 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 		if !hasProtocolAccount {
 			continue
 		}
-		if len(platformModels) == 0 {
+		// OpenAI 的非 nil 空列表表示 GPT-5.5 退役等过滤后已无可列模型，不能回落默认清单把退役模型加回来。
+		if len(platformModels) == 0 && (platform != service.PlatformOpenAI || platformModels == nil) {
 			// CN 供应商没有静态默认模型列表（defaultModelIDsForPlatform 的
 			// default 分支是 Claude 列表），composite 下只暴露账号映射键。
 			if !service.IsMultiProtocolAPIKeyProvider(platform) {
@@ -1353,6 +1365,16 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 			}
 			seen[model] = struct{}{}
 			models = append(models, model)
+		}
+	}
+	// A route can expose a public ID that no account model mapping contains.
+	// On lookup failure, retain the existing account-derived catalog only.
+	if routeModels, err := h.gatewayService.GetCompositeRouteModels(ctx, groupID, endpoint, includeSystemOne); err == nil {
+		for _, model := range routeModels {
+			if _, ok := seen[model]; !ok {
+				seen[model] = struct{}{}
+				models = append(models, model)
+			}
 		}
 	}
 	return models
@@ -1475,6 +1497,9 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 // 与平台默认列表（fallbackModels）。账号映射为空时回落默认列表；Anthropic
 // 平台两者取并集，其余平台以账号映射键为准。
 func modelListingSource(platform string, availableModels, fallbackModels []string) []string {
+	if platform == service.PlatformOpenAI && availableModels != nil {
+		return availableModels
+	}
 	if len(availableModels) == 0 {
 		return fallbackModels
 	}
@@ -1518,10 +1543,13 @@ func defaultModelIDsForPlatform(platform string) []string {
 	case service.PlatformComposite:
 		ids := make([]string, 0)
 		seen := make(map[string]struct{})
-		// TypeSafe is deliberately absent: jev-latest only works through
-		// /v1/systemone, so the static fallback never advertises it to LLM
-		// clients. compositeAvailableModels lists it when the group can serve it.
-		for _, concretePlatform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo} {
+		for _, concretePlatform := range domain.CompositePrecedencePlatformIDs() {
+			// TypeSafe is deliberately skipped: jev-latest only works through
+			// /v1/systemone, so the static fallback never advertises it to LLM
+			// clients. compositeAvailableModels lists it when the group can serve it.
+			if concretePlatform == service.PlatformTypeSafe {
+				continue
+			}
 			for _, id := range defaultModelIDsForPlatform(concretePlatform) {
 				if _, ok := seen[id]; ok {
 					continue

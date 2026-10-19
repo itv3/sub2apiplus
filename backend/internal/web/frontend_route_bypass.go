@@ -14,11 +14,26 @@ func shouldBypassEmbeddedFrontend(path string) bool {
 		strings.HasPrefix(trimmed, "/setup/") ||
 		trimmed == "/health" ||
 		trimmed == "/models" ||
+		strings.HasPrefix(trimmed, "/models/") ||
 		trimmed == "/messages/count_tokens" ||
 		trimmed == "/responses" ||
 		strings.HasPrefix(trimmed, "/responses/") ||
 		trimmed == "/chat/completions" ||
+		trimmed == "/embeddings" ||
 		trimmed == "/alpha/search" ||
+		// 以下裸路径别名来自上游：与 routes/gateway.go 注册的根路径别名一一对应。
+		trimmed == "/web_search" ||
+		trimmed == "/x_search" ||
+		trimmed == "/tts" ||
+		trimmed == "/stt" ||
+		trimmed == "/realtime" ||
+		trimmed == "/custom-voices" ||
+		strings.HasPrefix(trimmed, "/custom-voices/") ||
+		trimmed == "/contents/generations/tasks" ||
+		strings.HasPrefix(trimmed, "/contents/generations/tasks/") ||
+		trimmed == "/v3/contents/generations/tasks" ||
+		strings.HasPrefix(trimmed, "/v3/contents/generations/tasks/") ||
 		strings.HasPrefix(trimmed, "/images/") ||
+		trimmed == "/videos" ||
 		strings.HasPrefix(trimmed, "/videos/")
 }

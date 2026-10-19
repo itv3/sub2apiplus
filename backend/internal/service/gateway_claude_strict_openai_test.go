@@ -176,7 +176,8 @@ func TestClaudeStrictOpenAIBranchesBeforeLegacyConverters(t *testing.T) {
 		path       string
 		legacyCall string
 	}{
-		{path: "gateway_forward_as_chat_completions.go", legacyCall: "apicompat.ChatCompletionsToResponses"},
+		// 上游把 apicompat.ChatCompletionsToResponses 收敛为带配置的 chatCompletionsToResponses（最小输出 token 下限）。
+		{path: "gateway_forward_as_chat_completions.go", legacyCall: "chatCompletionsToResponses("},
 		{path: "gateway_forward_as_responses.go", legacyCall: "adaptResponsesClientToolsForAnthropic"},
 	}
 	for _, check := range checks {

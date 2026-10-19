@@ -24,6 +24,8 @@ const (
 	Videos               = "/v1/videos"
 	SeedanceTasks        = "/api/v3/contents/generations/tasks"
 	GeminiModels         = "/v1beta/models"
+	// GeminiCachedContents 是 Gemini 显式缓存管理接口（上游 v0.2.17 新增）。
+	GeminiCachedContents = "/v1beta/cachedContents"
 )
 
 // NormalizeInboundEndpoint 将带平台前缀、裸路径或 Codex 直连别名的入口路径
@@ -69,6 +71,8 @@ func NormalizeInboundEndpoint(path string) string {
 		return Responses
 	case strings.Contains(path, GeminiModels):
 		return GeminiModels
+	case strings.Contains(path, GeminiCachedContents):
+		return GeminiCachedContents
 	default:
 		return path
 	}

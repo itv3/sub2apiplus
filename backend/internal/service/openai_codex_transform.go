@@ -97,6 +97,14 @@ type codexOAuthTransformOptions struct {
 	// PreserveTopLevelSemantics 用于非 Responses Lite 模型，禁止把标准
 	// Responses 顶层参数强制改写成 Lite 固定画像。
 	PreserveTopLevelSemantics bool
+	// ResponsesLite 决定注入的托管工具声明在哪里（上游新增）：Lite 请求不接受顶层托管工具，
+	// 需放进 input 的 additional_tools 条目。
+	ResponsesLite bool
+	// DeclareHistoryWebSearchTool 允许网关在历史重放了 web_search_call 而未声明 web_search 工具时
+	// 代为补入工具声明（上游语义）。默认关闭：凡经官方出站定型器定型的 Codex OAuth 请求，出站字节必须
+	// 与官方客户端一致，网关不得代注入工具，也不得把 tool_choice 钉成 none；调用方只对不经官方出站定型的
+	// 账号（例如 OpenAI SetupToken）显式打开。
+	DeclareHistoryWebSearchTool bool
 }
 
 const (
@@ -379,6 +387,13 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		} else {
 			reqBody["input"] = []any{}
 		}
+		result.Modified = true
+	}
+
+	// Runs after input filtering so it sees the final replayed history. The
+	// compact endpoint has its own wire shape and is left untouched.
+	// 本分支：仅在调用方明确放行（非官方出站定型的账号）时才执行，见 DeclareHistoryWebSearchTool。
+	if opts.DeclareHistoryWebSearchTool && !opts.IsCompact && ensureOpenAIOAuthWebSearchToolForHistory(reqBody, opts.ResponsesLite) {
 		result.Modified = true
 	}
 

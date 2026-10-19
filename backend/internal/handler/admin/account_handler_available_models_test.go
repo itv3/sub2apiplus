@@ -418,6 +418,52 @@ func TestAccountHandlerGetAvailableModels_GeminiGoogleOneUsesConservativeCatalog
 	require.NotContains(t, ids, "gemini-2.5-flash-image")
 }
 
+// 本分支的 Antigravity 可用模型口径：未配置映射时只公布官方模型（外加原生图片模型）；显式映射只公布「自映射」条目，
+// 不公布仅作请求别名的键。上游对应的表驱动用例（以 antigravity.DefaultModels() 全目录与「公布别名键」为期望）
+// 与该口径冲突，改为只保留其中仍然适用的通配符约束：含 * 的键不是具体模型，不能作为连通性测试可选项。
+func TestAccountHandlerGetAvailableModels_AntigravitySkipsWildcardKeys(t *testing.T) {
+	cases := []struct {
+		name        string
+		credentials map[string]any
+		wantIDs     []string // 为 nil 表示只断言「非空且不含通配符」
+	}{
+		{name: "self-mapped wildcard keys are skipped", credentials: map[string]any{"model_mapping": map[string]any{
+			"claude-sonnet-4-6": "claude-sonnet-4-6", "claude-*": "claude-*",
+		}}, wantIDs: []string{"claude-sonnet-4-6"}},
+		{name: "string mapping skips wildcard alias", credentials: map[string]any{"model_mapping": map[string]string{
+			"gemini-pro-agent": "gemini-pro-agent", "gemini-*": "gemini-3-flash-agent",
+		}}, wantIDs: []string{"gemini-pro-agent"}},
+		{name: "wildcard only never lists wildcard names", credentials: map[string]any{"model_mapping": map[string]any{
+			"claude-*": "claude-sonnet-4-6", "gemini-3*": "gemini-3-flash",
+		}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &availableModelsAdminService{
+				stubAdminService: newStubAdminService(),
+				account:          service.Account{ID: 51, Platform: service.PlatformAntigravity, Type: service.AccountTypeOAuth, Credentials: tc.credentials},
+			}
+			rec := httptest.NewRecorder()
+			setupAvailableModelsRouter(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/51/models", nil))
+			require.Equal(t, http.StatusOK, rec.Code)
+			var resp struct {
+				Data []antigravity.ClaudeModel `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			ids := make([]string, 0, len(resp.Data))
+			for _, model := range resp.Data {
+				require.NotContains(t, model.ID, "*")
+				ids = append(ids, model.ID)
+			}
+			if tc.wantIDs == nil {
+				require.NotEmpty(t, ids)
+				return
+			}
+			require.Equal(t, tc.wantIDs, ids)
+		})
+	}
+}
+
 func TestAccountHandlerSyncUpstreamModels_ConfigErrorReturnsBadRequest(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),

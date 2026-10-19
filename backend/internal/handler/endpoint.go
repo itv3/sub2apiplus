@@ -33,6 +33,7 @@ const (
 	EndpointVideos               = gatewayendpoint.Videos
 	EndpointSeedanceTasks        = gatewayendpoint.SeedanceTasks
 	EndpointGeminiModels         = gatewayendpoint.GeminiModels
+	EndpointGeminiCachedContents = gatewayendpoint.GeminiCachedContents
 )
 
 const EndpointAntigravityGenerateContent = "/v1internal:streamGenerateContent"
@@ -54,6 +55,7 @@ const (
 //	"/v1/chat/completions"       → "/v1/chat/completions"
 //	"/openai/v1/responses/foo"   → "/v1/responses"
 //	"/v1beta/models/gemini:gen"  → "/v1beta/models"
+//	"/v1beta/cachedContents/abc" → "/v1beta/cachedContents"
 //
 // The OpenAI Responses API is also exposed via a few bare/alias
 // routes that do not carry a "/v1/" prefix (top-level bare route and
@@ -95,7 +97,7 @@ func NormalizeInboundEndpoint(path string) string {
 //     retain their paths. Grok raw Chat requests override this through the
 //     forwarding result consumed by resolveOpenAIUpstreamEndpoint.
 //   - Anthropic  → /v1/messages
-//   - Gemini     → /v1beta/models
+//   - Gemini     → /v1beta/models（显式缓存管理接口保留 /v1beta/cachedContents）
 //   - Antigravity → /v1/messages (Claude) or gemini (Gemini)
 //   - Antigravity routes may target either Claude or Gemini, so the
 //     inbound endpoint is used to distinguish.
@@ -131,6 +133,9 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 		return EndpointSystemOne
 
 	case service.PlatformGemini:
+		if inbound == EndpointGeminiCachedContents {
+			return EndpointGeminiCachedContents
+		}
 		return EndpointGeminiModels
 
 	case service.PlatformAntigravity:
