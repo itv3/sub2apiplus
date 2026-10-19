@@ -1,4 +1,5 @@
-"""预检报告前五项的纯函数测试，以及试扫描树的离线 go mod tidy（-X ours 拼出的 go.mod 不一致）回归。"""
+"""预检报告前五项的纯函数测试，试扫描树的离线 go mod tidy（-X ours 拼出的 go.mod 不一致）回归，
+以及预检公共离线 env（GONOPROXY=none、GOVCS=*:off 等，挡住命中 GOPRIVATE 的模块绕过 GOPROXY 直连）的断言。"""
 
 from __future__ import annotations
 
@@ -29,6 +30,7 @@ from tools.upstream_merge.preflight_report import (
     template_validity,
     tool_bundle_disturbance,
 )
+from tools.upstream_merge.tests.test_covered_tags import CoveredTagsFixture
 from tools.upstream_merge.tests.test_workflow import SyntheticRepository, run
 from tools.upstream_merge.workflow import (
     SCAN_ONLY_RULES_RELATIVE,
@@ -592,17 +594,18 @@ class UpstreamSinkScanTest(unittest.TestCase):
 
 
 # 假 go（POSIX sh）：只认 "mod tidy"，其余参数一律失败。每次调用把现场追加到 $FAKE_GO_LOG，并把当时看到的
-# go.mod 存到 $FAKE_GO_SEEN；必须在 GOPROXY=off、GOSUMDB=off 下运行，否则视为联网、非零退出。
+# go.mod 存到 $FAKE_GO_SEEN；必须在 GOPROXY=off、GOSUMDB=off、GONOPROXY=none、GOVCS=*:off 下运行，否则视为
+# 可能联网（GONOPROXY 不是 none 时，命中 GOPRIVATE 的私有模块会绕过 GOPROXY=off 直连）、非零退出。
 # $FAKE_GO_MODE：ok（默认）给 go.mod 写入“已整理”标记并写出 go.sum；fail 模拟离线缺依赖；noop 什么也不改。
 FAKE_GO = """#!/bin/sh
 if [ "$1 $2" != "mod tidy" ]; then
   echo "fake go: 不支持的参数: $*" >&2
   exit 2
 fi
-echo "cwd=$(pwd) GOPROXY=$GOPROXY GOSUMDB=$GOSUMDB" >> "$FAKE_GO_LOG"
+echo "cwd=$(pwd) GOPROXY=$GOPROXY GOSUMDB=$GOSUMDB GONOPROXY=$GONOPROXY GOVCS=$GOVCS" >> "$FAKE_GO_LOG"
 cp go.mod "$FAKE_GO_SEEN"
-if [ "$GOPROXY" != "off" ] || [ "$GOSUMDB" != "off" ]; then
-  echo "fake go: go mod tidy 必须离线运行（GOPROXY=off、GOSUMDB=off）" >&2
+if [ "$GOPROXY" != "off" ] || [ "$GOSUMDB" != "off" ] || [ "$GONOPROXY" != "none" ] || [ "$GOVCS" != "*:off" ]; then
+  echo "fake go: go mod tidy 必须离线运行（GOPROXY=off、GOSUMDB=off、GONOPROXY=none、GOVCS=*:off）" >&2
   exit 3
 fi
 case "$FAKE_GO_MODE" in
@@ -707,7 +710,13 @@ class UpstreamSinkScanGoModTidyTest(unittest.TestCase):
             # 故意给出“联网”的代理与校验库：被测代码必须自己把 go mod tidy 钉成离线。
             "GOPROXY": "https://proxy.example.invalid",
             "GOSUMDB": "sum.example.invalid",
+            # 再故意给出会让 go 绕过 GOPROXY 直连的私有模块设置（GOPRIVATE、GONOPROXY 都命中 example.invalid），
+            # 以及放开的 VCS：同样必须被强制覆盖（实测 GOVCS=*:off 单独挡不住，要靠 GONOPROXY=none 断根）。
+            "GOPRIVATE": "example.invalid",
+            "GONOPROXY": "example.invalid",
+            "GOVCS": "*:all",
         }
+        self.caller_env = env
         return _preflight_upstream_sink_scan(self.root, fork_head, self.upstream, work, env)
 
     def assert_main_repository_untouched(self) -> None:
@@ -723,10 +732,18 @@ class UpstreamSinkScanGoModTidyTest(unittest.TestCase):
         # 整理之后扫描得出结论，列出上游新增、尚未登记的发送点。
         self.assertEqual(parsed["outcome"], "drift")
         self.assertEqual([item["scan_candidate_id"] for item in parsed["added"]], [UPSTREAM_SINK])
-        # 只整理一次，在试扫描树的 backend 目录，且无视调用方传入的联网设置、强制离线。
+        # 只整理一次，在试扫描树的 backend 目录，且无视调用方传入的联网设置、强制离线：代理与校验库关掉，
+        # 命中 GOPRIVATE 的私有模块也不许绕过代理直连（GONOPROXY=none），VCS 一律禁用（GOVCS=*:off）。
         calls = self.go_log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(calls), 1)
-        self.assertRegex(calls[0], r"^cwd=\S*/upstream-sink-scan/backend GOPROXY=off GOSUMDB=off$")
+        self.assertRegex(
+            calls[0],
+            r"^cwd=\S*/upstream-sink-scan/backend GOPROXY=off GOSUMDB=off GONOPROXY=none GOVCS=\*:off$",
+        )
+        # 强制离线只作用于 go mod tidy 自己的 env 副本，不改调用方传入的 env（随后的扫描仍用调用方的 env）。
+        self.assertEqual(self.caller_env["GOPROXY"], "https://proxy.example.invalid")
+        self.assertEqual(self.caller_env["GONOPROXY"], "example.invalid")
+        self.assertEqual(self.caller_env["GOVCS"], "*:all")
         # 整理时看到的是拼合后的 go.mod：冲突块取 fork 侧（v1.1.0），非冲突区带入上游新增的依赖。
         seen = self.go_seen.read_text(encoding="utf-8")
         self.assertIn("example.com/dep v1.1.0", seen)
@@ -820,6 +837,111 @@ class UpstreamSinkScanGoModTidyTest(unittest.TestCase):
         self.assertEqual(parsed["outcome"], "error")
         self.assertIn("go mod tidy 未能执行", scanner_coverage(parsed, {})["error"])
         self.assert_main_repository_untouched()
+
+
+# 预检里 go 命令共用的离线环境强制值。原因与实测见 workflow._preflight_go_mod_tidy 的 docstring：命中 GOPRIVATE／
+# GONOPROXY 的私有模块会绕过 GOPROXY=off 直连，靠 GONOPROXY=none（必须非空，空串会回落到 go env -w 配置）断根；
+# GOVCS=*:off 对未知域名在 go-import 元数据探测之后才生效，单独挡不住，只作兜底。
+FORCED_GO_OFFLINE_ENV = {"GOPROXY": "off", "GOSUMDB": "off", "GONOPROXY": "none", "GOVCS": "*:off"}
+# 故意让进程环境带上会破坏离线保证的值：联网的代理与校验库、命中私有模块的 GOPRIVATE／GONOPROXY、放开的 GOVCS、
+# 允许自动下载工具链的 GOTOOLCHAIN。预检公共 env 必须把它们强制覆盖。
+HOSTILE_PROCESS_ENV = {
+    "GOPROXY": "https://proxy.example.invalid",
+    "GOSUMDB": "sum.example.invalid",
+    "GOPRIVATE": "example.invalid",
+    "GONOPROXY": "example.invalid",
+    "GOVCS": "*:all",
+    "GOTOOLCHAIN": "auto",
+}
+
+
+class PreflightGoOfflineEnvTest(unittest.TestCase):
+    """用 mock 的 run_process 捕获 env：go mod tidy 与 _preflight_check 默认 env 都强制 go 命令离线。"""
+
+    def test_go_mod_tidy_forces_offline_env_on_a_copy_of_the_callers_env(self) -> None:
+        finished = subprocess.CompletedProcess([], 0, "", "")
+        with tempfile.TemporaryDirectory() as directory:
+            scan_tree = Path(directory)
+            (scan_tree / "backend").mkdir()
+            (scan_tree / "backend/go.mod").write_text("module example.com/fake\n\ngo 1.27.0\n", encoding="utf-8")
+            caller_env = {"PATH": os.environ.get("PATH", ""), "GOFLAGS": "-mod=mod", **HOSTILE_PROCESS_ENV}
+            before = dict(caller_env)
+            with mock.patch.object(workflow, "run_process", return_value=finished) as run_process:
+                result = workflow._preflight_go_mod_tidy(scan_tree, caller_env)
+        self.assertEqual(result["status"], "passed")
+        env = run_process.call_args.kwargs["env"]
+        # 四个变量全部被强制成离线值，无论调用方传了什么。
+        self.assertEqual({name: env[name] for name in FORCED_GO_OFFLINE_ENV}, FORCED_GO_OFFLINE_ENV)
+        # 其余变量原样带上（包括调用方的 GOPRIVATE：不删用户的变量，靠 GONOPROXY=none 压过它）。
+        self.assertEqual((env["GOPRIVATE"], env["GOFLAGS"]), ("example.invalid", "-mod=mod"))
+        # 只作用于自己的副本，不改调用方传入的 env。
+        self.assertEqual(caller_env, before)
+
+    def test_preflight_check_default_env_is_offline_even_if_process_env_is_not(self) -> None:
+        finished = subprocess.CompletedProcess([], 0, "ok\n", "")
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict(os.environ, HOSTILE_PROCESS_ENV), mock.patch.object(
+            workflow, "run_process", return_value=finished
+        ) as run_process:
+            result = workflow._preflight_check("go-build", ["go", "build", "./..."], Path(directory))
+        self.assertEqual(result["status"], "passed")
+        env = run_process.call_args.kwargs["env"]
+        self.assertEqual({name: env[name] for name in FORCED_GO_OFFLINE_ENV}, FORCED_GO_OFFLINE_ENV)
+        self.assertEqual((env["GOTOOLCHAIN"], env["GIT_TERMINAL_PROMPT"]), ("local", "0"))
+        self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
+        self.assertEqual(env["GOPRIVATE"], "example.invalid")
+
+
+class RunPreflightOfflineEnvTest(CoveredTagsFixture):
+    """经 run_preflight 端到端：offline_env 强制离线，并原样交给所有会跑 go 的预检环节。"""
+
+    def test_every_go_consumer_receives_the_forced_offline_env(self) -> None:
+        request = {
+            "plan_id": "preflight-offline-env",
+            "repository": {"managed_ref": "refs/heads/main"},
+            "upstream": self.upstream(tag="v1.0.1"),
+            "gates": [],
+        }
+        request_path = self.root.parent / "request.json"
+        request_path.write_text(json.dumps(request) + "\n", encoding="utf-8")
+        captured: dict[str, dict[str, str]] = {}
+
+        def spy_sink_scan(_root, _fork_head, _upstream_commit, _temporary_root, env):
+            captured["sink_scan"] = env
+            raise UpstreamMergeError("测试仓库不包含扫描器")
+
+        def spy_secret_scan(_root, fork_head, _gates, _temporary_root, env):
+            captured["secret_scan"] = env
+            return {
+                "status": "passed",
+                "method": "测试替身",
+                "gate_id": "10-secret-scan",
+                "source_commit": fork_head,
+                "exit_code": 0,
+            }
+
+        def spy_snapshot(*_args, **kwargs):
+            captured.setdefault("snapshot", kwargs["env"])
+            raise UpstreamMergeError("测试仓库不包含扫描器")
+
+        with mock.patch.dict(os.environ, HOSTILE_PROCESS_ENV), mock.patch.object(
+            workflow, "load_request", return_value=request
+        ), mock.patch.object(workflow, "_preflight_upstream_sink_scan", side_effect=spy_sink_scan), mock.patch.object(
+            workflow, "_preflight_secret_scan", side_effect=spy_secret_scan
+        ), mock.patch.object(workflow, "run_egress_snapshot", side_effect=spy_snapshot), mock.patch.object(
+            workflow, "tool_bundle_disturbance", return_value={"status": "passed", "changed_paths": []}
+        ):
+            workflow.run_preflight(request_path, self.root)
+        self.assertEqual(set(captured), {"sink_scan", "secret_scan", "snapshot"})
+        for consumer, env in captured.items():
+            with self.subTest(consumer=consumer):
+                self.assertEqual({name: env[name] for name in FORCED_GO_OFFLINE_ENV}, FORCED_GO_OFFLINE_ENV)
+                self.assertEqual((env["GOTOOLCHAIN"], env["GIT_TERMINAL_PROMPT"]), ("local", "0"))
+                self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
+                # 进程环境里的 GOPRIVATE 原样保留：靠强制 GONOPROXY=none 压过它，不去删用户的变量。
+                self.assertEqual(env["GOPRIVATE"], "example.invalid")
+        # 三个环节拿到的是同一份 offline_env，不是各自拼的。
+        self.assertIs(captured["secret_scan"], captured["sink_scan"])
+        self.assertIs(captured["snapshot"], captured["sink_scan"])
 
 
 if __name__ == "__main__":

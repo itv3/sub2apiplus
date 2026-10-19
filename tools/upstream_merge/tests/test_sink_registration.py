@@ -258,6 +258,56 @@ class SinkRegistrationDraftTest(unittest.TestCase):
                 self.assertIn(identifier, message)
                 self.assertIn(field, message)
 
+    def test_notes_top_level_fields_with_version_text_are_rejected(self) -> None:
+        """merge_group、receipt_tag 同样逐字写进 Go 源码（mergeGroup 字符串、承接收据路径字符串），而它们的格式正则
+        允许点号：人工回灌 upstream-v0.2.18-additions 能通过格式校验，起草时必须被版本号防线拒绝，并点明字段与版本串。"""
+
+        cases = (
+            ("merge_group", "upstream-v0.2.18-additions", "0.2.18"),
+            ("receipt_tag", "v0.2.18-scanner-pending-additions-20261004", "0.2.18"),
+            # 版本号在值的开头或结尾（没有 v 前缀）也要拦：与 Go 测试同一正则的边界。
+            ("merge_group", "1.2.3-additions", "1.2.3"),
+            ("receipt_tag", "scanner-pending-additions-0.2.18", "0.2.18"),
+        )
+        for field, value, version in cases:
+            with self.subTest(field=field, value=value):
+                # 先确认这个值本身能通过顶层字段的格式校验，保证被拒的原因是版本号防线而不是“非法”。
+                self.assertRegex(value, r"\A[a-z0-9][a-z0-9.-]*\Z")
+                notes = default_notes(self.sinks, upstream_tag="v0.2.18", date="20261004")
+                notes[field] = value
+                with self.assertRaises(UpstreamMergeError) as caught:
+                    draft_sink_registration(
+                        self.root, self.sinks, upstream_tag="v0.2.18", date="20261004", notes=notes
+                    )
+                message = str(caught.exception)
+                self.assertIn("版本泄漏", message)
+                self.assertIn(f"notes.{field}", message)
+                self.assertIn(f"“{version}”", message)
+                self.assertNotIn("非法", message)
+
+    def test_default_top_level_fields_pass_the_version_guard(self) -> None:
+        """默认 merge_group、receipt_tag 用 v0218 这种压缩写法，不是三段版本号，版本号防线必须放行；
+        两段、四段数字的回灌值同样不误拒（与 Go 测试同一正则）。"""
+
+        notes = default_notes(self.sinks, upstream_tag="v0.2.18", date="20261004")
+        self.assertEqual(notes["merge_group"], "upstream-v0218-additions")
+        self.assertEqual(notes["receipt_tag"], "v0218-scanner-pending-additions-20261004")
+        draft = draft_sink_registration(self.root, self.sinks, upstream_tag="v0.2.18", date="20261004", notes=notes)
+        self.assertEqual(draft["receipt_tag"], "v0218-scanner-pending-additions-20261004")
+        self.assertIn('\t\tmergeGroup:        "upstream-v0218-additions",\n', draft["patch"])
+        # 不传 notes 时走默认起草，同样通过。
+        self.assertEqual(
+            draft_sink_registration(self.root, self.sinks, upstream_tag="v0.2.18", date="20261004")["patch"],
+            draft["patch"],
+        )
+        notes["merge_group"] = "upstream-v0218-batch-1.2-additions"
+        notes["receipt_tag"] = "v0218-scanner-pending-additions-1.2.3.4"
+        relaxed = draft_sink_registration(self.root, self.sinks, upstream_tag="v0.2.18", date="20261004", notes=notes)
+        self.assertIn('\t\tmergeGroup:        "upstream-v0218-batch-1.2-additions",\n', relaxed["patch"])
+        self.assertIn(
+            "upstream-v0218-scanner-pending-additions-1.2.3.4-freeze-successor.json", relaxed["patch"]
+        )
+
     def test_version_guard_ignores_numbers_that_are_not_three_segment_versions(self) -> None:
         """防线与 Go 测试同一正则：四段数字、两段数字、v0213 这种压缩写法都不算三段版本号，不误拒。"""
 
@@ -316,6 +366,24 @@ class SinkRegistrationDraftTest(unittest.TestCase):
         self.assertEqual(second["notes"], str(edited))
         with self.assertRaisesRegex(UpstreamMergeError, "禁止覆盖"):
             write_sink_registration(self.root, self._report(), outside / "second.patch", notes_path=edited)
+
+    def test_rejected_top_level_notes_write_no_patch(self) -> None:
+        """人工把 merge_group／receipt_tag 改成含三段版本号后经 --notes 回灌：起草被拒，且不留下半截补丁文件。"""
+
+        outside = self._outside()
+        for field, value in (
+            ("merge_group", "upstream-v0.2.13-additions"),
+            ("receipt_tag", "v0.2.13-scanner-pending-additions-20261004"),
+        ):
+            with self.subTest(field=field):
+                notes = default_notes(self.sinks, upstream_tag="v0.2.13", date="20261004")
+                notes[field] = value
+                edited = outside / f"bad-{field}.notes.json"
+                edited.write_text(json.dumps(notes, ensure_ascii=False), encoding="utf-8")
+                output = outside / f"bad-{field}.patch"
+                with self.assertRaisesRegex(UpstreamMergeError, f"notes.{field} 含三段版本号“0.2.13”"):
+                    write_sink_registration(self.root, self._report(), output, notes_path=edited)
+                self.assertFalse(output.exists())
 
     def test_write_draft_in_designated_private_root(self) -> None:
         (self.root / ".gitignore").write_text("/local-analysis/\n", encoding="utf-8")

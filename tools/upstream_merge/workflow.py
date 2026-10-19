@@ -694,6 +694,10 @@ def _preflight_check(
         "PYTHONDONTWRITEBYTECODE": "1",
         "GOPROXY": "off",
         "GOSUMDB": "off",
+        # 命中 GOPRIVATE／GONOPROXY 的模块否则会绕过 GOPROXY=off 直连联网；必须是非空值才压得过 go env -w 配置，
+        # GOVCS 作兜底（原因与实测见 _preflight_go_mod_tidy 的 docstring）。
+        "GONOPROXY": "none",
+        "GOVCS": "*:off",
         "GOTOOLCHAIN": "local",
         "GIT_TERMINAL_PROMPT": "0",
     }
@@ -870,8 +874,23 @@ def _preflight_go_mod_tidy(scan_tree: Path, env: dict[str, str]) -> dict[str, An
     2000 字符），跳过时另有 ``reason``。整理失败既不抛异常也不中断预检（go mod tidy 失败时不会写文件），
     扫描照常继续，由调用方把结果如实记入报告。
 
-    环境以传入的 ``env`` 为底，但这里自己再强制 ``GOPROXY=off``、``GOSUMDB=off``：无论调用方传什么，
-    整理都只用本机模块缓存，绝不联网。
+    环境以传入的 ``env`` 为底，但这里自己再强制下面四个变量：无论调用方的 env、还是用户用 ``go env -w``
+    写进配置文件的值怎么设，整理都只用本机模块缓存，绝不联网。各变量挡什么（go1.27.2 本机实测，用依赖
+    ``example.invalid`` 下不存在模块的临时模块逐项验证；联网与否用本机假代理记录请求来判定）：
+
+    * ``GOPROXY=off``：不走任何模块代理（含默认的 proxy.golang.org）。
+    * ``GOSUMDB=off``：不向校验库（sum.golang.org）查询。
+    * ``GONOPROXY=none``：**断根的一条**。命中 ``GOPRIVATE``／``GONOPROXY`` 的模块会绕开 ``GOPROXY``、直接拉取
+      （直连版本控制，或向模块所在域名发起 go-import 元数据的 HTTPS 请求）；实测 ``GOPRIVATE=example.invalid``
+      时仍然报 ``https fetch: Get "https://example.invalid/..."``。``none`` 是 ``go help private`` 示例里用来覆盖
+      GOPRIVATE 的值（一个不会匹配任何模块路径的模式）；强制它之后，私有模块也只剩 ``module lookup disabled by
+      GOPROXY=off``，假代理上一个请求都收不到。必须用非空值：Go 把值为空串的环境变量当作未设置，会回落到
+      ``go env -w`` 写下的配置文件，空串挡不住配置里的 ``GOPRIVATE``；非空的环境变量优先级高于配置文件，
+      所以 ``none`` 压得过调用方 env 与配置文件里的 ``GOPRIVATE``、``GONOPROXY``。
+    * ``GOVCS=*:off``：禁止对任何模块路径使用版本控制工具，作兜底保留。它**单独不够**：对未知域名，Go 先向该域名
+      发请求探测 go-import 元数据，拿到响应之后才检查 GOVCS（实测只设 ``GOVCS=*:off`` 时，假代理仍收到
+      ``CONNECT example.invalid:443`` 与 ``GET .../nodep?go-get=1``，随后才报 ``GOVCS disallows using git``），
+      所以挡不住这一步探测；只有 github.com 这类已知托管站，它才在联网前就拒绝。
     """
 
     argv = list(GO_MOD_TIDY_ARGV)
@@ -884,7 +903,8 @@ def _preflight_go_mod_tidy(scan_tree: Path, env: dict[str, str]) -> dict[str, An
             "changed": False,
             "reason": "试扫描树不含 backend/go.mod",
         }
-    tidy_env = {**env, "GOPROXY": "off", "GOSUMDB": "off"}
+    # 四个变量各自的作用与实测结论见上面的 docstring；其中 GONOPROXY=none 才是断掉私有模块直连的那一条。
+    tidy_env = {**env, "GOPROXY": "off", "GOSUMDB": "off", "GONOPROXY": "none", "GOVCS": "*:off"}
     before = _go_module_files(backend)
     try:
         completed = run_process(argv, cwd=backend, check=False, env=tidy_env)
@@ -1112,6 +1132,10 @@ def run_preflight(
         "PYTHONDONTWRITEBYTECODE": "1",
         "GOPROXY": "off",
         "GOSUMDB": "off",
+        # 命中 GOPRIVATE／GONOPROXY 的模块否则会绕过 GOPROXY=off 直连联网；必须是非空值才压得过 go env -w 配置，
+        # GOVCS 作兜底（原因与实测见 _preflight_go_mod_tidy 的 docstring）。
+        "GONOPROXY": "none",
+        "GOVCS": "*:off",
         "GOTOOLCHAIN": "local",
         "GIT_TERMINAL_PROMPT": "0",
     }

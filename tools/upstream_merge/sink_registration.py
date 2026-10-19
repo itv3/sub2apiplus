@@ -15,8 +15,10 @@ v0.2.10、v0.2.13 两次合并前，都要在主干手改几处才能让试合�
 
 说明文字先按函数与文件起草，同时写出 notes 文件；要改写说明时改 notes，再用
 ``sink-registration-draft --notes`` 重新生成补丁（算法摘要随文字重算），不要在应用补丁之后手改源码。
-写进 Go 源码的说明（``classify_rationale``、``rationale``）不得含三段版本号，否则会被版本泄漏检查
-拦下：默认说明不带版本，回灌的 notes 若含版本号，起草时直接拒绝（见 ``VERSION_LITERAL_RE``）。
+逐字写进 Go 源码的文字不得含三段版本号，否则会被版本泄漏检查拦下，共四个字段：每个发送点的说明
+（``classify_rationale``、``rationale``），以及 notes 顶层的 ``merge_group``（写进 ``mergeGroup`` 字符串）
+和 ``receipt_tag``（拼进承接收据变量的路径字符串）。默认值都不带版本（批次只用 v0218 这种压缩写法），
+回灌的 notes 若含版本号，起草时直接拒绝（见 ``VERSION_LITERAL_RE``）。
 上游新增的发送点几乎都是第三方平台（范围外）；范围内的发送点牵涉官方出站画像，不在本模块起草范围。
 """
 
@@ -43,13 +45,20 @@ NOTES_SCHEMA = "official-egress-upstream-sink-registration-notes/v1"
 CANDIDATE_RE = re.compile(r"^(?P<function>[^@#]+)@(?P<file>[^@#]+)#(?P<kind>[a-z0-9_]+)#(?P<ordinal>[0-9]+)$")
 # 三段版本号（前后不能紧邻数字或点）。与 backend/internal/service/official_egress_version_leak_ast_test.go
 # 里的 versionLiteralRE 是同一个正则（Go 的 \d 只匹配 ASCII 数字，故加 re.ASCII 保持同一语义）。
-# 登记说明（classify_rationale、rationale）会逐字写进 classify.go 与 post_bootstrap_acceptance.go 的字符串，
-# 含这种形态的内容会被 TestOfficialEgressVersionLeakAST、TestVersionLeakDebtClosureIsComplete 拦下；
-# v0.2.17 合并时默认说明带“上游 v0.2.17”，只能手工改文字才通过。批次信息改由 name／mergeGroup／
-# evidenceRef 承载，它们只含 v0217 这种压缩写法，不是三段版本，现有检查放行。
+# 登记文字（每个发送点的 classify_rationale、rationale，以及 notes 顶层的 merge_group、receipt_tag）会逐字写进
+# classify.go 与 post_bootstrap_acceptance.go 的字符串，含这种形态的内容会被 TestOfficialEgressVersionLeakAST、
+# TestVersionLeakDebtClosureIsComplete 拦下；v0.2.17 合并时默认说明带“上游 v0.2.17”，只能手工改文字才通过。
+# 批次信息改由 name／mergeGroup／evidenceRef 承载，默认值只含 v0217 这种压缩写法，不是三段版本，现有检查放行。
 VERSION_LITERAL_RE = re.compile(r"(?:^|[^\d.])(\d+\.\d+\.\d+)(?:[^\d.]|$)", re.ASCII)
-# 写进 Go 源码的说明字段；successor_reason、reviewed_by 只写进 JSON 后继文件，不受此限。
+# 每个发送点（notes.sinks[]）里逐字写进 Go 源码的说明字段。注意它只管发送点自己的这两个字段，
+# notes 顶层同样写进 Go 源码的两个字段另见 GO_SOURCE_TOP_LEVEL_FIELDS，不在此元组里。
+# successor_reason、reviewed_by 只写进 JSON 后继文件，不受此限。
 GO_SOURCE_TEXT_FIELDS = ("classify_rationale", "rationale")
+# notes 顶层同样逐字写进 Go 源码的两个字段，须另行检查：merge_group 写进 post_bootstrap_acceptance.go 每个
+# 登记条目的 mergeGroup 字符串，receipt_tag 拼进承接收据变量（upstream<批次>PendingAdditionsEvidence）的
+# 收据路径字符串。它们的格式正则 [a-z0-9][a-z0-9.-]* 允许点号，所以 upstream-v0.2.18-additions 这样的
+# 回灌值能通过格式校验，必须靠版本号防线拦下；默认值（v0218 压缩写法）不含点号版本，仍然通过。
+GO_SOURCE_TOP_LEVEL_FIELDS = ("merge_group", "receipt_tag")
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 DATE_RE = re.compile(r"^\d{8}$")
 CLASSIFY_OPEN = "var classifyRules = []classifyRule{\n"
@@ -176,8 +185,19 @@ def _validate_notes(notes: dict[str, Any], sinks: Sequence[dict[str, Any]]) -> d
         if sink.get("missing_classification"):
             _go_string(str(entry.get("classify_rationale") or ""))
         _go_string(str(entry.get("rationale") or ""))
-    # 防线：人工改写后回灌的说明不得含三段版本号。这两个字段会逐字进 Go 源码，带版本号就会被
-    # 版本泄漏检查拦下，与其等到跑完 Go 测试才发现，不如在起草补丁时直接拒绝。
+    # 防线：人工改写后回灌的、逐字写进 Go 源码的文字不得含三段版本号，带版本号就会被版本泄漏检查拦下，
+    # 与其等到跑完 Go 测试才发现，不如在起草补丁时直接拒绝。先查 notes 顶层的 merge_group、receipt_tag：
+    # 它们的格式正则允许点号，人工回灌 upstream-v0.2.18-additions 能通过上面的格式校验，只能靠这里拦下。
+    for field in GO_SOURCE_TOP_LEVEL_FIELDS:
+        found = VERSION_LITERAL_RE.search(notes[field])
+        if found is not None:
+            raise UpstreamMergeError(
+                f"notes.{field} 含三段版本号“{found.group(1)}”："
+                "该值会逐字写进 Go 源码（mergeGroup 字符串、承接收据路径字符串），"
+                "会被版本泄漏检查（TestOfficialEgressVersionLeakAST）拦下；"
+                "请改成不带三段版本号的写法，批次用 v0218 这种压缩写法"
+            )
+    # 再查每个发送点的说明字段（classify_rationale、rationale）。
     for identifier, entry in sorted(by_id.items()):
         for field in GO_SOURCE_TEXT_FIELDS:
             value = entry.get(field)
