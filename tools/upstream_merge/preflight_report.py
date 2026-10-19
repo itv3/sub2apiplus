@@ -1,4 +1,4 @@
-"""预检报告的前五项独立计算（第六项 CI 作业覆盖见 ``ci_jobs.py``）。
+"""预检报告的前五项独立计算（第六项 CI 作业覆盖见 ``ci_jobs.py``，第七项主干密钥扫描见 ``workflow.py``）。
 
 预检在试合并之外还必须回答四个问题：request 模板是否过期、上游是否改动了工具闭集、
 上游改动命中了多少冻结台账路径、上游是否新增了扫描器要分类的发送点。v0.2.3 合并
@@ -9,6 +9,11 @@
 deferred，上游新增的 4 个发送点直到 Plan 003 门禁才暴露。现在预检另建一棵 ``-X ours``
 试扫描树（冲突块取 fork 侧，仅供扫描），在其上运行 ``make egress-scanner-check``，把
 "未匹配任何分类规则"与"[新增]"两类列为尚未在主干预先登记的上游新增发送点。
+
+``-X ours`` 对 ``backend/go.mod`` 的冲突块取 fork 侧、非冲突区带入上游改动，拼出的 go.mod 常与 go.sum、
+源码不一致，扫描器报 "go: updates to go.mod needed" 而得不出结论（v0.2.17 合并预检即如此）。现在扫描前先
+在试扫描树离线 ``go mod tidy``，结果记入 ``go_mod_tidy``；整理失败且扫描因此没有结论时，报告的 ``error``
+前面会加上整理失败的说明。
 """
 
 from __future__ import annotations
@@ -327,8 +332,15 @@ DRIFT_LINE_RE = re.compile(r"^\s+\[(新增|变更|消失)\]\s+(\S+)")
 LIST_LINE_RE = re.compile(r"^\s+-\s+([^\s：]+)")
 DRIFT_KEYS = {"新增": "added", "变更": "changed", "消失": "removed"}
 UPSTREAM_SCAN_METHOD = (
-    "受维护分支 HEAD 与目标 tag 以 -X ours 试合并（冲突块取 fork 侧，仅供扫描），在试扫描树上运行 "
+    "受维护分支 HEAD 与目标 tag 以 -X ours 试合并（冲突块取 fork 侧，仅供扫描），先在试扫描树离线 "
+    "go mod tidy 修正拼合后的 backend/go.mod（失败如实记入 go_mod_tidy），再运行 "
     "make egress-scanner-check；冲突块内的上游新增发送点看不到，由试验区完整门禁兜底"
+)
+# 试扫描树离线 go mod tidy 失败、且扫描器因此没有得出结论（outcome=error）时，加在报告 error 前面的说明，
+# 让 run_preflight 里"上游发送点试扫描未得出结论"那条阻断能直接看出根因。
+GO_MOD_TIDY_FAILED_HINT = (
+    "试扫描树离线 go mod tidy 失败：上游新增依赖可能不在本机模块缓存，"
+    "可先在联网环境对上游 tag 执行 go mod download 后重跑预检"
 )
 REGISTRATION_HINT = (
     "在主干 backend/cmd/egressscan/post_bootstrap_acceptance.go 的 reviewedPostBootstrapSinkAdditions "
@@ -416,14 +428,24 @@ def _rename_candidates(removed: list[dict[str, Any]], added: list[dict[str, Any]
     return pairs
 
 
+def _go_mod_tidy_failed(go_mod_tidy: Any) -> bool:
+    return isinstance(go_mod_tidy, dict) and go_mod_tidy.get("status") == "failed"
+
+
 def scanner_coverage(upstream_scan: dict[str, Any] | None, candidate_merge: dict[str, Any]) -> dict[str, Any]:
-    """第五项：上游新增发送点是否已在主干预先登记（UM-13），另附试合并无冲突时的 fork→候选差异。"""
+    """第五项：上游新增发送点是否已在主干预先登记（UM-13），另附试合并无冲突时的 fork→候选差异。
+
+    ``go_mod_tidy`` 原样带出试扫描树的离线 ``go mod tidy`` 结果（试扫描没有产出结果时为 None）。
+    整理失败但扫描仍得出结论（passed／drift 等）时只记录、不额外阻断；整理失败且扫描因此没有得出
+    结论（outcome=error）时，报告的 ``error`` 前面加上整理失败的说明，让阻断信息直接看出根因。
+    """
 
     if not isinstance(upstream_scan, dict):
         return {
             "status": "failed",
             "method": UPSTREAM_SCAN_METHOD,
             "reason": "试扫描没有产出结果",
+            "go_mod_tidy": None,
             "candidate_merge": candidate_merge,
         }
     # 同一发送点可能既缺分类规则（第一轮）又在补临时分类后报"[新增]"（第二轮），按 ID 合并。
@@ -442,10 +464,12 @@ def scanner_coverage(upstream_scan: dict[str, Any] | None, candidate_merge: dict
         status = "failed"
     else:
         status = "passed"
+    go_mod_tidy = upstream_scan.get("go_mod_tidy")
     report: dict[str, Any] = {
         "status": status,
         "method": UPSTREAM_SCAN_METHOD,
         "scan_exit_code": upstream_scan["exit_code"],
+        "go_mod_tidy": go_mod_tidy,
         "unregistered_added_count": len(unregistered),
         "unregistered_added_sinks": unregistered,
         "unclassified_sinks": upstream_scan["unclassified"],
@@ -461,7 +485,12 @@ def scanner_coverage(upstream_scan: dict[str, Any] | None, candidate_merge: dict
     if unregistered:
         report["registration_hint"] = REGISTRATION_HINT
     if upstream_scan["outcome"] == "error":
-        report["error"] = upstream_scan.get("error", "")
+        error = upstream_scan.get("error", "")
+        if _go_mod_tidy_failed(go_mod_tidy):
+            exit_code = go_mod_tidy.get("exit_code")
+            detail = f"退出码 {exit_code}" if isinstance(exit_code, int) else "未能执行"
+            error = f"{GO_MOD_TIDY_FAILED_HINT}（go mod tidy {detail}）。扫描器输出：{error}"
+        report["error"] = error
     return report
 
 

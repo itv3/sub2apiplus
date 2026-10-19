@@ -845,6 +845,70 @@ def _write_scan_only_rules(scan_tree: Path, identifiers: list[str]) -> None:
     successor_path.write_text(json.dumps(successor, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+# 试扫描树里 backend/go.mod 的离线整理。-X ours 对同一 hunk 冲突的 go.mod 取 fork 侧、非冲突区带入上游改动，
+# 拼出的 go.mod 与 go.sum、源码常不一致，make egress-scanner-check 随即报 "go: updates to go.mod needed"，
+# 扫描得不出结论（outcome=error）；v0.2.17 合并预检就是这样失败的，当时只能 mock 掉扫描函数手工补 tidy。
+GO_MOD_TIDY_ARGV = ("go", "mod", "tidy")
+GO_MOD_TIDY_ERROR_TAIL = 2000
+
+
+def _go_module_files(backend: Path) -> tuple[bytes | None, bytes | None]:
+    """读取 go.mod 与 go.sum 的原始字节（文件不存在记 None），用来判断 go mod tidy 有没有改动它们。"""
+
+    def read(name: str) -> bytes | None:
+        path = backend / name
+        return path.read_bytes() if path.is_file() else None
+
+    return read("go.mod"), read("go.sum")
+
+
+def _preflight_go_mod_tidy(scan_tree: Path, env: dict[str, str]) -> dict[str, Any]:
+    """在试扫描树的 ``backend`` 目录离线执行一次 ``go mod tidy``，返回可直接写进预检报告的结果。
+
+    返回结构固定：``status``（passed／failed／skipped）、``argv``、``exit_code``（未执行记 None）、
+    ``changed``（go.mod 或 go.sum 的内容是否被改动）；失败时另有 ``error``（stderr 加 stdout 的末尾
+    2000 字符），跳过时另有 ``reason``。整理失败既不抛异常也不中断预检（go mod tidy 失败时不会写文件），
+    扫描照常继续，由调用方把结果如实记入报告。
+
+    环境以传入的 ``env`` 为底，但这里自己再强制 ``GOPROXY=off``、``GOSUMDB=off``：无论调用方传什么，
+    整理都只用本机模块缓存，绝不联网。
+    """
+
+    argv = list(GO_MOD_TIDY_ARGV)
+    backend = scan_tree / "backend"
+    if not (backend / "go.mod").is_file():
+        return {
+            "status": "skipped",
+            "argv": argv,
+            "exit_code": None,
+            "changed": False,
+            "reason": "试扫描树不含 backend/go.mod",
+        }
+    tidy_env = {**env, "GOPROXY": "off", "GOSUMDB": "off"}
+    before = _go_module_files(backend)
+    try:
+        completed = run_process(argv, cwd=backend, check=False, env=tidy_env)
+    except OSError as error:
+        # 本机找不到 go 等启动失败：同样只记录，不中断预检。
+        return {
+            "status": "failed",
+            "argv": argv,
+            "exit_code": None,
+            "changed": False,
+            "error": f"无法执行 go mod tidy：{error}",
+        }
+    result: dict[str, Any] = {
+        "status": "passed" if completed.returncode == 0 else "failed",
+        "argv": argv,
+        "exit_code": completed.returncode,
+        "changed": _go_module_files(backend) != before,
+    }
+    if completed.returncode != 0:
+        output = "\n".join(part for part in (completed.stderr.strip(), completed.stdout.strip()) if part)
+        result["error"] = output[-GO_MOD_TIDY_ERROR_TAIL:]
+    return result
+
+
 def _preflight_upstream_sink_scan(
     root: Path,
     fork_head: str,
@@ -857,6 +921,8 @@ def _preflight_upstream_sink_scan(
     在临时 detached worktree 里以 ``-X ours`` 合入目标提交：非冲突区完整带入上游改动（上游新增的
     文件与函数都在），冲突块一律取 fork 侧，保证 fork 的扫描器、分类规则与登记清单原样可用；
     ``-X ours`` 解决不了的修改／删除等冲突按 fork 侧处理（fork 有则保留，fork 删了则删除）。
+    冲突处理之后、扫描之前，先在这棵树的 ``backend`` 目录离线 ``go mod tidy`` 一次，修正拼合后可能
+    不一致的 ``backend/go.mod``（结果记入返回值的 ``go_mod_tidy``，失败不中断）。
     这棵树只供扫描，不提交、不进入任何收据；随后运行 ``make egress-scanner-check``，由调用方
     把"未匹配任何分类规则"与"[新增]"列为待预先登记的发送点。
     """
@@ -887,6 +953,11 @@ def _preflight_upstream_sink_scan(
                 target = scan_tree / path
                 if target.is_file() or target.is_symlink():
                     target.unlink()
+        # 冲突处理完、第一次扫描之前：-X ours 拼出的 backend/go.mod 可能与 go.sum、源码不一致，
+        # 先离线整理，否则扫描器报 "go: updates to go.mod needed" 而得不出结论。整理失败不中断，
+        # 结果带回报告（上游新增依赖不在本机模块缓存时会失败，由 scanner_coverage 给出提示）。
+        go_mod_tidy = _preflight_go_mod_tidy(scan_tree, env)
+
         def check() -> dict[str, Any]:
             completed = run_process(
                 ("make", "--no-print-directory", "egress-scanner-check"),
@@ -906,9 +977,113 @@ def _preflight_upstream_sink_scan(
             parsed["unclassified"] = unclassified
             parsed["temporarily_classified"] = [item["scan_candidate_id"] for item in unclassified]
         parsed["unresolved_conflict_count"] = len(stages)
+        parsed["go_mod_tidy"] = go_mod_tidy
         return parsed
     finally:
         run_git(root, "worktree", "remove", "--force", str(scan_tree), check=False)
+
+
+# §5.2.2 第七项“主干密钥扫描”。v0.2.17 合并时，U-4 的 10-secret-scan 不在基线 7 项里（基线检查是本机私有
+# 脚本，仓库里约束不到它），合并时才第一次扫到主干 tools/arm64_capture_driver 下的合成凭据，作废了一个 Plan。
+# 预检由工具执行、request 已读入，因此直接执行 request 里与 U-4 同一份 secret_scan 门禁，把问题前移到
+# plan-create 之前。
+SECRET_SCAN_CATEGORY = "secret_scan"
+SECRET_SCAN_METHOD = (
+    "与 U-4 同一份 secret_scan 门禁定义（含精确摘要白名单），对受维护分支 HEAD 的只读检出执行；"
+    "另建 detached worktree，不扫主仓库工作树，未提交的改动不在扫描范围内"
+)
+SECRET_SCAN_OUTPUT_TAIL = 4000
+# 门禁 argv／cwd 里的 {名字} 占位符；与 gates-run 的 _expand_gate_value 用同一判据。
+GATE_PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
+
+
+def _preflight_secret_scan(
+    root: Path,
+    fork_head: str,
+    gates: Sequence[Any],
+    temporary_root: Path,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    """主干密钥扫描：执行 request 里与 U-4 同一份 ``secret_scan`` 门禁，对象是受维护分支 HEAD 的只读检出。
+
+    * 门禁取自 ``gates`` 中 ``category == "secret_scan"`` 的条目，必须恰好一个，且 ``mode`` 为 command。
+    * 在 ``temporary_root`` 下另建 detached worktree 检出 ``fork_head`` 来扫，不扫主仓库工作树本身——
+      否则会扫到未提交的改动；``{repository}``、``{source_repository}`` 都渲染成该检出路径，渲染后仍有
+      其他占位符就不执行；``cwd`` 沿用 gates-run 的安全规则（``_gate_cwd``）。
+    * 用传入的离线环境执行，结束后在 ``finally`` 里移除该 worktree。
+    * 任何异常都转成 failed 项返回，不向外抛出：预检要把问题写进报告并阻断，而不是中途崩溃。
+
+    返回 ``status``（passed／failed）、``method``、``gate_id``、``source_commit``、``exit_code``（没跑出
+    结论记 None）；门禁非零退出时另有 ``output``（stdout 加 stderr 的末尾 4000 字符），没跑出结论
+    （缺门禁、占位符未解析、执行异常等）时另有 ``reason``。
+    """
+
+    report: dict[str, Any] = {
+        "status": "failed",
+        "method": SECRET_SCAN_METHOD,
+        "gate_id": None,
+        "source_commit": fork_head,
+        "exit_code": None,
+    }
+    checkout = temporary_root / "secret-scan-checkout"
+    checkout_requested = False
+    try:
+        matched = [gate for gate in gates if isinstance(gate, dict) and gate.get("category") == SECRET_SCAN_CATEGORY]
+        if len(matched) != 1:
+            report["reason"] = (
+                f"request 的 gates 里必须恰好有一个 category={SECRET_SCAN_CATEGORY} 的门禁，实际 {len(matched)} 个"
+            )
+            return report
+        gate = matched[0]
+        report["gate_id"] = gate.get("id")
+        raw_argv = gate.get("argv")
+        raw_cwd = gate.get("cwd")
+        if gate.get("mode") != "command":
+            report["reason"] = f"{SECRET_SCAN_CATEGORY} 门禁的 mode 必须是 command，实际 {gate.get('mode')!r}"
+            return report
+        if (
+            not isinstance(raw_argv, list)
+            or not raw_argv
+            or not all(isinstance(item, str) and item for item in raw_argv)
+            or not isinstance(raw_cwd, str)
+        ):
+            report["reason"] = f"{SECRET_SCAN_CATEGORY} 门禁的 argv 必须是非空字符串数组、cwd 必须是字符串"
+            return report
+
+        def render(value: str) -> str:
+            return value.replace("{repository}", str(checkout)).replace("{source_repository}", str(checkout))
+
+        argv = [render(item) for item in raw_argv]
+        cwd_text = render(raw_cwd)
+        leftover = sorted({match for text in (*argv, cwd_text) for match in GATE_PLACEHOLDER_RE.findall(text)})
+        if leftover:
+            report["reason"] = f"{SECRET_SCAN_CATEGORY} 门禁渲染后仍有未解析的占位符 {leftover}，预检不执行"
+            return report
+        if cwd_text != ".":
+            # 先校验 cwd 的写法（只能是根内相对路径），不合格就不必另建检出。
+            safe_relative_path(cwd_text, f"{SECRET_SCAN_CATEGORY} 门禁 cwd")
+
+        # 先标记再建检出：worktree add 中途失败也要在 finally 里清理可能的残留（没有残留时 remove 失败被忽略）。
+        checkout_requested = True
+        run_git(root, "worktree", "add", "--detach", str(checkout), fork_head)
+        completed = run_process(argv, cwd=_gate_cwd(checkout, cwd_text), check=False, env=env)
+        report["exit_code"] = completed.returncode
+        if completed.returncode == 0:
+            report["status"] = "passed"
+        else:
+            report["output"] = (completed.stdout + completed.stderr)[-SECRET_SCAN_OUTPUT_TAIL:]
+        return report
+    except Exception as error:  # noqa: BLE001 - 预检必须成项：任何异常都写进报告并阻断，不向外抛出
+        report["status"] = "failed"
+        report["reason"] = f"主干密钥扫描没有跑出结论：{type(error).__name__}：{error}"
+        return report
+    finally:
+        if checkout_requested:
+            try:
+                run_git(root, "worktree", "remove", "--force", str(checkout), check=False)
+            except OSError:
+                # 清理失败不改变扫描结论：run_preflight 收尾时还会 worktree prune，并整个删除临时目录。
+                pass
 
 
 def run_preflight(
@@ -963,9 +1138,10 @@ def run_preflight(
     merge_base_value = merge_base(root, fork_head, upstream["commit"])
     covered_tags_report = _preflight_covered_tags(root, upstream, merge_base_value, blockers)
 
-    # §5.2.2 的六项报告：模板有效性、闭集受扰、冲突闭集、冻结覆盖、扫描器覆盖、CI 作业覆盖。
-    # 六项都不依赖试合并结果，因冲突而 blocked 时仍然输出；扫描器覆盖另建 -X ours 试扫描树（UM-13），
-    # CI 作业覆盖比对上游两棵树的工作流与 ci_job_coverage.json 登记表（UM-14）。
+    # §5.2.2 的七项报告：模板有效性、闭集受扰、冲突闭集、冻结覆盖、扫描器覆盖、CI 作业覆盖、主干密钥扫描。
+    # 七项都不依赖试合并结果，因冲突而 blocked 时仍然输出；扫描器覆盖另建 -X ours 试扫描树（UM-13），
+    # CI 作业覆盖比对上游两棵树的工作流与 ci_job_coverage.json 登记表（UM-14），主干密钥扫描对受维护分支
+    # HEAD 的只读检出执行 request 里与 U-4 同一份 secret_scan 门禁，把合并时才暴露的主干凭据问题前移。
     report: dict[str, Any] = {}
     try:
         template = load_request_template(root)
@@ -987,6 +1163,7 @@ def run_preflight(
     conflict_paths: list[str] = []
     merge_exit_code: int | None = None
     upstream_scan: dict[str, Any] | None = None
+    secret_scan: dict[str, Any] = {}
     try:
         try:
             upstream_scan = _preflight_upstream_sink_scan(
@@ -994,6 +1171,8 @@ def run_preflight(
             )
         except (OSError, UpstreamMergeError) as error:
             checks.append({"id": "upstream-sink-scan", "status": "failed", "error": str(error)})
+        # 第七项：主干密钥扫描。内部已把任何异常转成 failed 项，这里不会抛出。
+        secret_scan = _preflight_secret_scan(root, fork_head, request.get("gates") or [], temporary_root, offline_env)
         run_git(root, "worktree", "add", "--detach", str(worktree), fork_head)
         completed = run_git(
             worktree,
@@ -1121,6 +1300,19 @@ def run_preflight(
         blockers.append(f"CI 作业未登记本机覆盖方式（纳入本机门禁或登记为只在 CI 跑）：{listed}")
     elif ci_jobs_report["status"] == "failed":
         blockers.append("上游 CI 作业差异未得出结论：" + ci_jobs_report.get("error", ""))
+    # 主干密钥扫描没通过：与 U-4 同一份门禁，合并时才暴露会作废已建的 Plan，所以 plan-create 前就要在主干处置。
+    if secret_scan.get("status") != "passed":
+        label = secret_scan.get("gate_id") or SECRET_SCAN_CATEGORY
+        if secret_scan.get("reason"):
+            # 没跑出结论（request 缺门禁、占位符未解析、执行异常等）：先修好再重跑预检，不是删凭据能解决的。
+            blockers.append(
+                f"主干密钥扫描未通过（与 U-4 {label} 同一门禁）：{secret_scan['reason']}；须先修复后重跑预检"
+            )
+        else:
+            blockers.append(
+                f"主干密钥扫描未通过（与 U-4 {label} 同一门禁），须在 plan-create 前于主干处置："
+                "删除真实凭据，或确认为合成串后在标准模板按摘要精确放行（改门禁须经老板同意），然后重封基线"
+            )
     result = _stage_document(
         # preflight 没有 LoadedPlan，使用显式输入摘要构造独立 envelope。
         # 该摘要不参与任何正式 U-0 身份绑定。
@@ -1147,6 +1339,7 @@ def run_preflight(
                 ),
                 "scanner_coverage": coverage,
                 "ci_job_coverage": ci_jobs_report,
+                "secret_scan": secret_scan,
             },
             "scanner_snapshot": (
                 {

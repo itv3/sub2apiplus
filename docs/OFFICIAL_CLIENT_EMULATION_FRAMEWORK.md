@@ -467,10 +467,11 @@ tag 发布已超过 14 天时，下一次官方客户端升级的 VC-0 之前必
   `freeze-successor-generate --dry-run` 查看。
 
 预检报告写到仓库外或上述 Git 忽略的私有目录。预检在临时隔离 worktree 中试合并，试合并无冲突时再执行 egressscan 快照、
-`go build`、`go vet` 与官方 egress 目标包测试；另建一棵 `-X ours` 试扫描树（冲突块取 fork 侧，只供扫描）
-运行 `make egress-scanner-check`。预检不修改受版本控制的源码、不 fetch、不 push、不产生权威阶段制品，报告中
-`non_authoritative` 必须为 `true`。报告的 `report` 对象固定包含六项，任何一项被跳过或失败都标为阻断；
-六项都不依赖试合并结果，因冲突而 blocked 时照常输出：
+`go build`、`go vet` 与官方 egress 目标包测试；另建一棵 `-X ours` 试扫描树（冲突块取 fork 侧，只供扫描），
+先离线 `go mod tidy` 修正拼合后的 `backend/go.mod`（失败如实记入报告），再运行 `make egress-scanner-check`。
+预检不修改受版本控制的源码、不 fetch、不 push、不产生权威阶段制品，报告中
+`non_authoritative` 必须为 `true`。报告的 `report` 对象固定包含七项，任何一项被跳过或失败都标为阻断；
+七项都不依赖试合并结果，因冲突而 blocked 时照常输出：
 
 | 项 | 内容 |
 |---|---|
@@ -480,6 +481,7 @@ tag 发布已超过 14 天时，下一次官方客户端升级的 VC-0 之前必
 | 冻结覆盖 | 上游改动命中的冻结台账路径数及注册表要求的额外动作；命中 Campaign fact map 规则的文件，在 `plan-create` 前把上游 diff 一次汇总给老板确认，确认后按注册表规则处理，不等到台账阶段才停下 |
 | 扫描器覆盖 | 上游新增、尚未在主干预先登记的发送点（含缺分类规则的），须在 `plan-create` 前预先登记并重封基线；报告旁附可直接应用的登记补丁，改说明文字只改 notes 后重新生成，不在应用后手改；范围内发送点须人工登记，决定不接通的在试验 worktree 删除调用。冲突块内的上游新增看不到，由试验 worktree 的完整门禁兜底；试合并无冲突时另附 fork 与候选树的发送点差异 |
 | CI 作业覆盖 | 上游新增、删除或改动的 CI 作业逐个对照 `tools/upstream_merge/ci_job_coverage.json`：纳入本机检查线或登记为只在 CI 跑；候选 CI 会运行却未登记的作业（含 fork 自身的）阻断；只在 CI 跑的作业在试验 worktree 先执行一次 |
+| 主干密钥扫描 | 在受维护分支 HEAD 的只读检出上执行 request 中与 U-4 同一份 `secret_scan` 门禁（含精确摘要白名单）；命中须在 `plan-create` 前于主干处置并重封基线，不留到 U-4 才暴露 |
 
 预检通过后仍必须重新执行 U-0，不能把预检报告当作 U-0 收据。
 

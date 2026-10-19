@@ -17,6 +17,7 @@ from tools.upstream_merge.sink_registration import (
     ACCEPTANCE_RELATIVE,
     CLASSIFY_RELATIVE,
     SUCCESSOR_RELATIVE,
+    VERSION_LITERAL_RE,
     default_notes,
     draft_sink_registration,
     parse_candidate,
@@ -122,7 +123,12 @@ class SinkRegistrationDraftTest(unittest.TestCase):
 
         classify = (self.root / CLASSIFY_RELATIVE).read_text(encoding="utf-8")
         # 缺分类的文件在规则表末尾补精确规则；已被前缀规则分类的文件不动分类规则。
-        self.assertIn('\toos("service/account_test_service_typesafe.go", "上游 v0.2.13 新增发送点', classify)
+        # 写进 Go 源码的默认说明不带版本号，否则会被版本泄漏检查拦下（v0.2.17 合并时手工改过文字）。
+        self.assertIn(
+            '\toos("service/account_test_service_typesafe.go", '
+            '"上游新增发送点（*AccountTestService.testTypeSafeAccountConnection），范围外"),\n',
+            classify,
+        )
         self.assertLess(classify.index('"service/gateway_"'), classify.index("account_test_service_typesafe.go"))
         self.assertNotIn("gateway_systemone.go", classify)
 
@@ -165,6 +171,100 @@ class SinkRegistrationDraftTest(unittest.TestCase):
         successor = json.loads((self.root / SUCCESSOR_RELATIVE).read_text(encoding="utf-8"))
         self.assertEqual(successor["reason"], "人工复核后的原因")
         self.assertEqual(successor["to_sha256"], _scanner_algorithm_digest(self.root / "backend/cmd/egressscan"))
+
+    @staticmethod
+    def _added_lines_by_file(patch: str) -> dict[str, list[str]]:
+        """按文件拆开补丁，收集每个文件的新增行（``+`` 开头，排除 ``+++`` 文件头），去掉行首的 ``+``。"""
+
+        result: dict[str, list[str]] = {}
+        current: str | None = None
+        for line in patch.splitlines():
+            if line.startswith("diff --git "):
+                current = line.split(" b/", 1)[1]
+                result[current] = []
+            elif current is not None and line.startswith("+") and not line.startswith("+++"):
+                result[current].append(line[1:])
+        return result
+
+    def test_default_notes_carry_no_version_text(self) -> None:
+        """默认说明会逐字写进 Go 源码，不得带三段版本号（v0.2.17 合并时因此被版本泄漏检查拦下）。"""
+
+        notes = default_notes(self.sinks, upstream_tag="v0.2.13", date="20261004")
+        by_id = {entry["scan_candidate_id"]: entry for entry in notes["sinks"]}
+        self.assertEqual(
+            by_id[MISSING]["classify_rationale"],
+            "上游新增发送点（*AccountTestService.testTypeSafeAccountConnection），范围外",
+        )
+        self.assertEqual(
+            by_id[MISSING]["rationale"],
+            "上游新增发送点（*AccountTestService.testTypeSafeAccountConnection，"
+            "service/account_test_service_typesafe.go），按范围外登记，不承载官方 OAuth 出站。",
+        )
+        self.assertEqual(
+            by_id[CLASSIFIED]["rationale"],
+            "上游新增发送点（*GatewayService.ForwardSystemOne，service/gateway_systemone.go），"
+            "按范围外登记，不承载官方 OAuth 出站。",
+        )
+        for entry in notes["sinks"]:
+            for field in ("classify_rationale", "rationale"):
+                if entry[field] is not None:
+                    self.assertIsNone(VERSION_LITERAL_RE.search(entry[field]), (entry["name"], field))
+        # 批次信息改由 name／mergeGroup／收据路径承载，只用 v0213 这种压缩写法，不是三段版本。
+        for entry in notes["sinks"]:
+            self.assertIn("-v0213-", entry["name"])
+            self.assertIsNone(VERSION_LITERAL_RE.search(entry["name"]))
+        self.assertIsNone(VERSION_LITERAL_RE.search(notes["merge_group"]))
+        self.assertIsNone(VERSION_LITERAL_RE.search(notes["receipt_tag"]))
+
+    def test_default_patch_has_no_version_literal_in_go_sources(self) -> None:
+        """默认 notes 生成的补丁里，classify.go 与 post_bootstrap_acceptance.go 的新增行都不含三段版本号。"""
+
+        draft = draft_sink_registration(self.root, self.sinks, upstream_tag="v0.2.13", date="20261004")
+        sections = self._added_lines_by_file(draft["patch"])
+        for relative in (CLASSIFY_RELATIVE, ACCEPTANCE_RELATIVE):
+            # 新增行必须非空，避免补丁拆分出错时空循环假绿。
+            self.assertTrue(sections[relative], relative)
+            for line in sections[relative]:
+                self.assertIsNone(VERSION_LITERAL_RE.search(line), (relative, line))
+        # 自检：同一正则确实能在补丁里找到版本号。后继 JSON 的 reason 带“上游 v0.2.13”，它不进 Go 源码，允许保留。
+        self.assertTrue(any(VERSION_LITERAL_RE.search(line) for line in sections[SUCCESSOR_RELATIVE]))
+        # 应用补丁后整个文件（含上下文行）同样不含三段版本号。
+        self._apply(draft["patch"])
+        for relative in (CLASSIFY_RELATIVE, ACCEPTANCE_RELATIVE):
+            text = (self.root / relative).read_text(encoding="utf-8")
+            self.assertIsNone(VERSION_LITERAL_RE.search(text), relative)
+
+    def test_notes_with_version_text_are_rejected(self) -> None:
+        """人工改写回灌的说明若带三段版本号，写进 Go 源码会被版本泄漏检查拦下，起草时直接拒绝并点明发送点与字段。"""
+
+        cases = (
+            (MISSING, "rationale", "v0.2.13 批次新增，范围外"),
+            (MISSING, "classify_rationale", "上游 v0.2.13 新增发送点，范围外"),
+            (MISSING, "rationale", "沿用 1.2.3 的做法"),
+            # classify_rationale 不是 None 就要检查，哪怕该发送点本来不需要补分类规则。
+            (CLASSIFIED, "classify_rationale", "上游 v0.2.13 新增发送点，范围外"),
+        )
+        for identifier, field, text in cases:
+            with self.subTest(identifier=identifier, field=field, text=text):
+                notes = default_notes(self.sinks, upstream_tag="v0.2.13", date="20261004")
+                entry = next(item for item in notes["sinks"] if item["scan_candidate_id"] == identifier)
+                entry[field] = text
+                with self.assertRaises(UpstreamMergeError) as caught:
+                    draft_sink_registration(
+                        self.root, self.sinks, upstream_tag="v0.2.13", date="20261004", notes=notes
+                    )
+                message = str(caught.exception)
+                self.assertIn("版本泄漏", message)
+                self.assertIn(identifier, message)
+                self.assertIn(field, message)
+
+    def test_version_guard_ignores_numbers_that_are_not_three_segment_versions(self) -> None:
+        """防线与 Go 测试同一正则：四段数字、两段数字、v0213 这种压缩写法都不算三段版本号，不误拒。"""
+
+        notes = default_notes(self.sinks, upstream_tag="v0.2.13", date="20261004")
+        notes["sinks"][0]["rationale"] = "回环地址 127.0.0.1，v0213 批次，第 1.2 节说明，日期 20261004"
+        draft = draft_sink_registration(self.root, self.sinks, upstream_tag="v0.2.13", date="20261004", notes=notes)
+        self.assertIn("回环地址 127.0.0.1，v0213 批次，第 1.2 节说明，日期 20261004", draft["patch"])
 
     def test_notes_must_match_listed_sinks_and_registered_sinks_are_skipped(self) -> None:
         notes = default_notes(self.sinks, upstream_tag="v0.2.13", date="20261004")

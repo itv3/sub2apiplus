@@ -15,6 +15,8 @@ v0.2.10、v0.2.13 两次合并前，都要在主干手改几处才能让试合�
 
 说明文字先按函数与文件起草，同时写出 notes 文件；要改写说明时改 notes，再用
 ``sink-registration-draft --notes`` 重新生成补丁（算法摘要随文字重算），不要在应用补丁之后手改源码。
+写进 Go 源码的说明（``classify_rationale``、``rationale``）不得含三段版本号，否则会被版本泄漏检查
+拦下：默认说明不带版本，回灌的 notes 若含版本号，起草时直接拒绝（见 ``VERSION_LITERAL_RE``）。
 上游新增的发送点几乎都是第三方平台（范围外）；范围内的发送点牵涉官方出站画像，不在本模块起草范围。
 """
 
@@ -39,6 +41,15 @@ SUCCESSOR_RELATIVE = "docs/egress/maintenance/scanner-algorithm-successor.json"
 NOTES_SCHEMA = "official-egress-upstream-sink-registration-notes/v1"
 
 CANDIDATE_RE = re.compile(r"^(?P<function>[^@#]+)@(?P<file>[^@#]+)#(?P<kind>[a-z0-9_]+)#(?P<ordinal>[0-9]+)$")
+# 三段版本号（前后不能紧邻数字或点）。与 backend/internal/service/official_egress_version_leak_ast_test.go
+# 里的 versionLiteralRE 是同一个正则（Go 的 \d 只匹配 ASCII 数字，故加 re.ASCII 保持同一语义）。
+# 登记说明（classify_rationale、rationale）会逐字写进 classify.go 与 post_bootstrap_acceptance.go 的字符串，
+# 含这种形态的内容会被 TestOfficialEgressVersionLeakAST、TestVersionLeakDebtClosureIsComplete 拦下；
+# v0.2.17 合并时默认说明带“上游 v0.2.17”，只能手工改文字才通过。批次信息改由 name／mergeGroup／
+# evidenceRef 承载，它们只含 v0217 这种压缩写法，不是三段版本，现有检查放行。
+VERSION_LITERAL_RE = re.compile(r"(?:^|[^\d.])(\d+\.\d+\.\d+)(?:[^\d.]|$)", re.ASCII)
+# 写进 Go 源码的说明字段；successor_reason、reviewed_by 只写进 JSON 后继文件，不受此限。
+GO_SOURCE_TEXT_FIELDS = ("classify_rationale", "rationale")
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 DATE_RE = re.compile(r"^\d{8}$")
 CLASSIFY_OPEN = "var classifyRules = []classifyRule{\n"
@@ -104,7 +115,11 @@ def _go_string(text: str) -> str:
 
 
 def default_notes(sinks: Sequence[dict[str, Any]], *, upstream_tag: str, date: str) -> dict[str, Any]:
-    """按函数与文件起草的 notes；人改写后经 --notes 回灌，补丁与算法摘要随之重算。"""
+    """按函数与文件起草的 notes；人改写后经 --notes 回灌，补丁与算法摘要随之重算。
+
+    ``classify_rationale``、``rationale`` 会逐字写进 Go 源码，默认文字因此不带任何版本号
+    （见 ``VERSION_LITERAL_RE``）；批次信息由 ``name``、``merge_group``、收据路径承载。
+    """
 
     slug = tag_slug(upstream_tag)
     entries: list[dict[str, Any]] = []
@@ -121,11 +136,11 @@ def default_notes(sinks: Sequence[dict[str, Any]], *, upstream_tag: str, date: s
                 "scan_candidate_id": parsed["scan_candidate_id"],
                 "name": name,
                 "classify_rationale": (
-                    f"上游 {upstream_tag} 新增发送点（{parsed['function']}），范围外"
+                    f"上游新增发送点（{parsed['function']}），范围外"
                     if sink.get("missing_classification")
                     else None
                 ),
-                "rationale": f"{slug} 批次上游新增发送点（{location}），按范围外登记，不承载官方 OAuth 出站。",
+                "rationale": f"上游新增发送点（{location}），按范围外登记，不承载官方 OAuth 出站。",
             }
         )
     return {
@@ -161,6 +176,20 @@ def _validate_notes(notes: dict[str, Any], sinks: Sequence[dict[str, Any]]) -> d
         if sink.get("missing_classification"):
             _go_string(str(entry.get("classify_rationale") or ""))
         _go_string(str(entry.get("rationale") or ""))
+    # 防线：人工改写后回灌的说明不得含三段版本号。这两个字段会逐字进 Go 源码，带版本号就会被
+    # 版本泄漏检查拦下，与其等到跑完 Go 测试才发现，不如在起草补丁时直接拒绝。
+    for identifier, entry in sorted(by_id.items()):
+        for field in GO_SOURCE_TEXT_FIELDS:
+            value = entry.get(field)
+            if value is None:
+                continue
+            found = VERSION_LITERAL_RE.search(str(value))
+            if found is not None:
+                raise UpstreamMergeError(
+                    f"notes 里发送点 {identifier} 的 {field} 含三段版本号“{found.group(1)}”："
+                    "该说明会逐字写进 Go 源码，会被版本泄漏检查（TestOfficialEgressVersionLeakAST）拦下；"
+                    "请改成不带版本号的说明，批次信息由 name／mergeGroup／evidenceRef 承载"
+                )
     return by_id
 
 
