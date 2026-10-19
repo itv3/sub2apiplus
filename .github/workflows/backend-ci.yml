@@ -60,10 +60,35 @@ jobs:
       #    stat 抛 PermissionError 而不是返回 False。只给 /root 加「其他人可遍历」位，仍不能列目录。
       # ② 受管 reader 登记只认 0400/0444/0500/0555/0600/0644/0700/0755，0664/0775 会被判「前驱 reader 原模式非法」；
       #    把检出树去掉组与其他人的写位，得到与 umask 022 检出相同的 0644/0755（可执行位不变）。
-      - name: 对齐受管验证环境（/root 可遍历、检出文件模式 0644/0755）
+      # ③ 运行器镜像构建时对 /opt 做了 chmod -R 777（actions/runner-images 的 configure-system.sh），预装在工具缓存里
+      #    的 Python（标准库源码、字节码、扩展模块、解释器）会是 0777；受管 reader 的运行库登记逐个记录这些文件的
+      #    原模式，0777 同样会被判「前驱 reader 原模式非法」。把 Python 安装树也去掉组与其他人的写位，得到 0755。
+      #    （这一条是据镜像脚本的推断，规整前那次诊断打印的清单就是证据。）
+      # 下面的诊断函数（只读，失败不影响作业）用受管 reader 自己的命令列出运行库登记，打印原模式不在允许集合里的
+      # 文件：规整 Python 安装树前后各打一次，前一次留作根因证据，后一次应为 0 个；若不是 0，下一轮排查直接看清单。
+      - name: 对齐受管验证环境（/root 可遍历、检出文件与 Python 安装树模式 0644/0755）
         run: |
+          reader_mode_audit() {
+            env -i LC_ALL=C PATH=/usr/bin:/bin "${pythonLocation}/bin/python" -I -B -S \
+              tools/official_client_capture/claude_gate_material_worker.py \
+              --runtime-manifest --repository "${GITHUB_WORKSPACE}" > "${RUNNER_TEMP}/reader-runtime.json" || return 0
+            python -B -c '
+          import json, sys
+          allowed = {"0400", "0444", "0500", "0555", "0600", "0644", "0700", "0755"}
+          rows = json.load(open(sys.argv[1]))["files"]
+          bad = [row for row in rows if row["mode"] not in allowed]
+          print("运行库登记文件数:", len(rows), " 模式不合规:", len(bad))
+          for row in bad[:40]:
+              print("  ", row["mode"], row["absolute_path"])
+          ' "${RUNNER_TEMP}/reader-runtime.json"
+          }
           sudo chmod o+x /root
           chmod -R go-w "${GITHUB_WORKSPACE}"
+          echo "【规整 Python 安装树前】"
+          reader_mode_audit || true
+          sudo chmod -R go-w "${pythonLocation}"
+          echo "【规整 Python 安装树后】"
+          reader_mode_audit || true
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
         with:
