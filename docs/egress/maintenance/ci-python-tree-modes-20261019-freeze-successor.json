@@ -1,0 +1,58 @@
+{
+  "base_commit": "e21fd59bddab348d05bc69ec10021f21ea783182",
+  "changed_path_count": 1,
+  "current_commit": "c02a47a513be1c394dc46edc065f998c0759d0e5",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5910,
+  "frozen_path_count": 2015,
+  "identity_sha256": "deb56787e51d117b9311fea2fa8183db53868797dda9f89b4471ec774d1bbeb2",
+  "issued_at_utc": "2026-10-19T00:38:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-ci-python-tree-modes-20261019-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "0099f7a5b9241fec5c82c5625cdb502da9e02a5f4eb1f22c477adceed5b82e35"
+      ],
+      "reason": "CI 工作流在 capture-tools 的对齐步骤里规整 Python 安装树权限，并加入受管 reader 运行库登记的只读诊断，仅工作流变更 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/ci-linux-runner-env-20261019-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-a071-ci-executor-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a073-bytecode-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a074-identity-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um8-release-version-sync-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2a93ebf74cccb44d357dea2200020275f1bce1808e39d4dd3aab056d2d832cc2"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
