@@ -1,0 +1,65 @@
+{
+  "base_commit": "fc60d29e62016652dbe3d83a4985b7305cb717b5",
+  "changed_path_count": 4,
+  "current_commit": "a4560331387b222b846678c44b1869d660a952e6",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6371,
+  "frozen_path_count": 2263,
+  "identity_sha256": "f3476df4e0b23c68381aa5a317ac362e69ff40bfea514859eacd31492b6b1317",
+  "issued_at_utc": "2026-10-19T23:15:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-merge-tools-v0217-offline-guard-20261020-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/upstream_merge/workflow.py",
+      "predecessor_sha256s": [
+        "4680f7d0f187e3d7fc27cc9ec92da5f7e2884242bd8dab2882a34af03fd4ca65"
+      ],
+      "reason": "合并工具 v0217 缺陷修复的验收补修：预检 Go 命令（试扫描树 go mod tidy、offline_env、_preflight_check 默认 env）再强制 GONOPROXY=none 与 GOVCS=*:off，命中 GOPRIVATE 的模块也不再联网；登记草稿版本号防线补查 notes 顶层 merge_group、receipt_tag；不改变官方客户端画像、Persona、wire 或出站 path=tools/upstream_merge/workflow.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-covered-tags-um2-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-tools-v0217-defects-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-base-tools-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tooling-batch4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um14-preflight-ci-jobs-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um16-gates-frontend-deps-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um17-source-transition-issued-at-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um19-gate-fast-first-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um21-gate-interpreter-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um22-first-round-drafts-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um9-replay-and-revision-tools-20261001-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "4ac1ce824a65b4a132c8ba9744f5c170c2f03e101bda13ae56f8dabb20cf5ee3"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/upstream_merge/sink_registration.py",
+    "tools/upstream_merge/tests/test_preflight_report.py",
+    "tools/upstream_merge/tests/test_sink_registration.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
