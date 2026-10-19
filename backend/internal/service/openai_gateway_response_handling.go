@@ -250,6 +250,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	sawResponseFailed := false
 	terminalEventType := ""
 	responsesSemanticOutputSeen := false
+	encryptedRecoveryUnsafeOutputSeen := false
+	encryptedFailureLogged := false
 	capacityFailoverSuppressedLogged := false
 	failedMessage := ""
 	clientOutputStarted := false
@@ -502,6 +504,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				suppressCurrentEvent = true
 			}
 			observer.ObserveOpenAI(dataBytes, eventType)
+			if !encryptedRecoveryUnsafeOutputSeen && openAIEncryptedContentEventBlocksRecovery(dataBytes, eventType) {
+				encryptedRecoveryUnsafeOutputSeen = true
+			}
 			// 初始上游 data 的 type 只解析一次：原始值保持终止事件的精确匹配，规范化值供后续分支复用。
 			if openAIStreamEventIsTerminalWithType(data, eventType) {
 				sawTerminalEvent = true
@@ -523,6 +528,27 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			cyberHit := false
 			if eventType == "response.failed" || eventType == "error" {
+				invalidEncryptedFailure := account != nil && account.Platform == PlatformOpenAI && isOpenAIInvalidEncryptedContentError(dataBytes)
+				if invalidEncryptedFailure {
+					if stageFirstOutput && !clientDisconnected && !openAIStreamClientOutputStarted(c, clientOutputStarted) && !eventStartsClientOutput && !responsesSemanticOutputSeen {
+						// 首段元数据仍由本次 attempt 暂存，返回后随 stage 关闭丢弃。
+						// Forward 决定是否清洗并重试，错误事件本身不能提前提交。
+						sawFailedEvent = true
+						streamEarlyErr = &openAIEncryptedContentRecoverySignal{
+							responseID: responseID, safeToRetry: !encryptedRecoveryUnsafeOutputSeen && time.Since(startTime) <= openAIEncryptedContentRecoveryWindow,
+							reason: "unsafe_upstream_output",
+						}
+						return
+					}
+					dataBytes = withOpenAIEncryptedContentRecoveryHint(dataBytes)
+					data = string(dataBytes)
+					line = "data: " + data
+					if !encryptedFailureLogged {
+						s.recordOpenAIEncryptedContentRecovery(c, account, resp.Header, mappedModel, "", "sse", "final_failure", "output_committed", 0, true)
+						encryptedFailureLogged = true
+					}
+					MarkResponseCommitted(c)
+				}
 				if codexFailureTerminal && eventType == "error" {
 					sawBareError = true
 					bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
@@ -566,7 +592,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 						s.handleOpenAIStreamTerminalAccountSideEffects(c, account, dataBytes, failedMessage, resp.Header, mappedModel)
 						bareErrorAccountSideEffectsPending = false
 					}
-					if eventType == "response.failed" {
+					if eventType == "response.failed" && !invalidEncryptedFailure {
 						// Once semantic output is committed, failover replay is unsafe. Keep
 						// the terminal event on the existing stream, but retain the upstream
 						// request ID and payload for operations diagnostics.
@@ -1714,6 +1740,13 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
+		if account != nil && account.Platform == PlatformOpenAI && isOpenAIInvalidEncryptedContentError(terminalPayload) {
+			return nil, &openAIEncryptedContentRecoverySignal{
+				responseID:  extractOpenAIResponseIDFromJSONBytes(terminalPayload),
+				safeToRetry: len(body) <= openAIFirstOutputStageMaxBytes && !openAIEncryptedContentSSEBlocksRecovery(bodyText),
+				reason:      "unsafe_buffered_output",
+			}
+		}
 		msg := extractOpenAISSEErrorMessage(terminalPayload)
 		if msg == "" {
 			msg = "Upstream compact response failed"

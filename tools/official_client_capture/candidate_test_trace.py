@@ -151,7 +151,7 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-06（发版静态检查收口）：移除已无调用的 WS 身份和正文复制包装函数，
 # 仅重绑两份生产源码的三处快照；候选测试、事实和断言规则保持不变。
 FROZEN_MAPPING_SHA256 = (
-    "0126f35add457cee871808eed63f7be7d94f5dd2361bf1b33ef282c712409370"
+    "a1c01f5cd4d67e78ad7137761a1874413fdb6348cf3de55f9932d6561ef89c11"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
