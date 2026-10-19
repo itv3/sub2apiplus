@@ -634,9 +634,9 @@ var classifyRules = []classifyRule{
 	oos("service/openai_gateway_count_tokens.go", "count_tokens 兼容路径"),
 	oos("service/gateway_", "Anthropic 网关"),
 	oos("service/openai_images.go", "图片兼容层其余部分走第三方上游"),
-	oos("service/model_protocol_catalog.go", "上游 v0.2.17 新增：API Key 多协议供应商模型目录拉取，范围外"),
-	oos("service/cline_usage.go", "上游 v0.2.17 新增：Cline 平台用量查询，范围外"),
-	oos("service/command_code_usage.go", "上游 v0.2.17 新增：Command Code 平台用量查询，范围外"),
+	oos("service/model_protocol_catalog.go", "上游新增：API Key 多协议供应商模型目录拉取，范围外"),
+	oos("service/cline_usage.go", "上游新增：Cline 平台用量查询，范围外"),
+	oos("service/command_code_usage.go", "上游新增：Command Code 平台用量查询，范围外"),
 }
 
 // classify 匹配规则。受审 candidateExact 优先，其次是 funcExact，最后才是

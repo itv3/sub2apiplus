@@ -1,8 +1,8 @@
 {
   "schema_version": "official-egress-scanner-algorithm-successor/v1",
   "from_sha256": "cde48d629935dae1d3add70cdb76aeeac6a2a127b041476b8e279869bdf26767",
-  "to_sha256": "6b1bcb45e93f23e4907fe02b8cea89d398243c38a18849911d4bb1dec6c106f0",
-  "source_transition": "docs/egress/maintenance/upstream-v0217-scanner-pending-additions-20261019-freeze-successor.json",
+  "to_sha256": "334dec0748b06f5b40d79c48d7742feb8a983555edc1fd28a0eeb51e6d188c1e",
+  "source_transition": "docs/egress/maintenance/upstream-v0217-scanner-rule-wording-20261019-freeze-successor.json",
   "reviewed_by": "sub2api-v0.2.17-merge-scanner-pending-additions",
-  "reason": "上游 v0.2.17 合并前在主干预先登记纯新增发送点：5 个范围外发送点（upstream-v0217-do-upstream、upstream-v0217-do-gemini-models-get、upstream-v0217-fetch-model-protocol-catalog、upstream-v0217-get、upstream-v0217-get-5）按 mergeGroup upstream-v0217-additions 登记“合并前整组缺失、合并后整组齐全”，并补 3 条 out-of-scope 分类规则；不改写 bootstrap inventory；单跳从 bootstrap lock 摘要承接到当前扫描器摘要（sink-registration-draft 起草）。"
+  "reason": "上游 v0.2.17 合并前在主干预先登记纯新增发送点：5 个范围外发送点（upstream-v0217-do-upstream、upstream-v0217-do-gemini-models-get、upstream-v0217-fetch-model-protocol-catalog、upstream-v0217-get、upstream-v0217-get-5）按 mergeGroup upstream-v0217-additions 登记“合并前整组缺失、合并后整组齐全”，并补 3 条 out-of-scope 分类规则；不改写 bootstrap inventory；单跳从 bootstrap lock 摘要承接到当前扫描器摘要（sink-registration-draft 起草）。随后把 3 条新增分类规则说明中的上游版本号去掉（Go 源码不得出现版本号字面量，版本泄漏检查），只改说明文字，单跳承接到改字后的扫描器摘要。"
 }
