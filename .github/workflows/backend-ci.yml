@@ -233,14 +233,14 @@ jobs:
       - name: golangci-lint (unit)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13
+          version: v2.14.0
           args: --timeout=30m --build-tags=unit
           working-directory: backend
           skip-save-cache: true
       - name: golangci-lint (integration)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13
+          version: v2.14.0
           args: --timeout=30m --build-tags=integration
           working-directory: backend
           skip-save-cache: true

@@ -554,6 +554,48 @@
       "reviewed_by": "upstream-v0.1.180-merge-audit",
       "review_ref": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#52-合并-sub2api-上游更新",
       "rationale": "上游将 Chat Completions 兼容回退管线的 HTTPUpstream 直连收口到共享 doOpenAIUpstream；该 API Key/Grok 兼容入口不能接管官方 Codex OAuth。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*GeminiMessagesCompatService.ForwardAIStudioGET@backend/internal/service/gemini_messages_compat_service.go#facade_http_upstream_do#1",
+        "file": "backend/internal/service/gemini_messages_compat_service.go",
+        "func": "*GeminiMessagesCompatService.ForwardAIStudioGET",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).Do",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "48569920b96c",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "",
+        "purpose": "",
+        "persona": "out-of-scope",
+        "endpoint_evidence": "not_applicable",
+        "routes": null,
+        "is_facade": false,
+        "backend": "-",
+        "target_backend": "-",
+        "enforcement_state": "not_applicable",
+        "owner": "-",
+        "migration_changeset": "-",
+        "expiry_condition": "",
+        "rationale": "Gemini 兼容层",
+        "line_hint": 2766
+      },
+      "kind": "out_of_scope_refactored",
+      "source_blob_sha256": "4a29c1272298702f05e89cbf339b9c448f42ed498956ef0d0b54a5ff1c86dba4",
+      "reviewed_by": "upstream-v0.2.17-merge-audit",
+      "review_ref": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#52-合并-sub2api-上游更新",
+      "rationale": "上游删除 Gemini AI Studio GET 透传入口 ForwardAIStudioGET（连同 SelectAccountForAIStudioEndpoints），模型列表请求改由 gemini_models_endpoints.go 的 doGeminiModelsGET 发出；目标仍为 Gemini／Vertex 模型接口，属范围外平台，不承载 Claude 或 Codex 官方 OAuth 出站。"
     }
   ]
 }
