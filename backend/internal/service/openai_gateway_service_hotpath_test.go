@@ -652,7 +652,10 @@ func TestOpenAIGatewayService_Forward_StoreFalseReusesScopedInvalidEncryptedDige
 	require.False(t, gjson.GetBytes(upstream.bodies[2], "previous_response_id").Exists())
 }
 
-func TestOpenAIGatewayService_Forward_HTTPRetryRecoveryDropsCompaction(t *testing.T) {
+// 本分支语义（654b62efb）：请求历史含加密压缩项时无法可靠重建早期上下文，HTTP 恢复必须关闭——
+// 不清洗、不重试，向客户端明确返回「请新建会话」错误。合并前该用例沿用旧语义（丢弃压缩项后重试），
+// 在 main 上已是红的，这里改写为 fork 语义。
+func TestOpenAIGatewayService_Forward_HTTPRetryRecoveryRefusesCompaction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := &httpUpstreamRecorder{
 		responses: []*http.Response{
@@ -690,12 +693,11 @@ func TestOpenAIGatewayService_Forward_HTTPRetryRecoveryDropsCompaction(t *testin
 
 	body := []byte(`{"model":"gpt-5.6-sol","stream":false,"input":[{"id":"cmp_stale","type":"compaction","encrypted_content":"gAAA"},{"type":"message","content":[{"type":"input_text","text":"hi"}]}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Len(t, upstream.bodies, 2)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Len(t, upstream.bodies, 1, "含加密压缩项的历史不得清洗后重试")
 	require.Equal(t, "compaction", gjson.GetBytes(upstream.bodies[0], "input.0.type").String())
-	require.Equal(t, "message", gjson.GetBytes(upstream.bodies[1], "input.0.type").String())
-	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.1").Exists())
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestOpenAIGatewayService_Forward_CodexSparkRejectsEscapedInputImage(t *testing.T) {
