@@ -1,0 +1,173 @@
+{
+  "base_commit": "3cb0331c85aca9a5877ecdb4b0f7d724e82249c3",
+  "changed_path_count": 7,
+  "current_commit": "ebc30f0ad66ecb68a53877b2c74acaa46d4a2a2e",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6364,
+  "frozen_path_count": 2263,
+  "identity_sha256": "fc13ae1bcdf01a4e354e73daa810b737f0423e6dceff172cbf415dc4da6b7382",
+  "issued_at_utc": "2026-10-19T22:06:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0.2.17-followups-20261020-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "1372d47f00443bdbaf4af482e30869b2eded2ac2e6d1eed0a0ce3b10493f364f"
+      ],
+      "reason": "v0.2.17 合并后收尾：补前端关键用例清单、Codex 配置回退模型改为 gpt-5.6-sol、路由版 Codex 配置 openai／composite 首选同步改为 gpt-5.6-sol、Antigravity 默认映射缓存并发修复与用例改写、README 补 ADMIN_EMAIL 说明；不改画像、Persona、wire 或出站 path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/claude-tool-engineering-final-20261010-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upgrade-a071-ci-executor-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a073-bytecode-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a074-identity-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-ab-mac-recovery-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b304a-vc4-driver-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b5b03-recovery-chain-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-midpoint-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-projection-gate-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r11-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item69-audit-index-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-item70-retained-profiles-20260929-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-r18-vc1-recorded-chains-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-01-unit-executor-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-entry-gates-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-entry-e2-04-make-test-dedup-20261002-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-gates-um1-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um13-preflight-upstream-sinks-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um19-gate-fast-first-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um20-capture-unit-executor-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0213-prep-frontend-critical-20261004-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "e0d6ed3e16c9c5d0d3e8bae37f203030644afceb773f66d25d856b53ef2e1f5d"
+    },
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "d9a763e1e428b99b0799cb8f1db2ca49ed726eb4700538a4fe0c40e1e579dcd7"
+      ],
+      "reason": "v0.2.17 合并后收尾：补前端关键用例清单、Codex 配置回退模型改为 gpt-5.6-sol、路由版 Codex 配置 openai／composite 首选同步改为 gpt-5.6-sol、Antigravity 默认映射缓存并发修复与用例改写、README 补 ADMIN_EMAIL 说明；不改画像、Persona、wire 或出站 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "76ad899a50c3392786eab0274383f42ceef2a31c9aa279506dff0c491de3796a"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/keys/UseKeyModal.vue",
+      "predecessor_sha256s": [
+        "940794d59ec12c7995bf35b8633b994b3bb9be334150ba8acc87bc55a821d161"
+      ],
+      "reason": "v0.2.17 合并后收尾：补前端关键用例清单、Codex 配置回退模型改为 gpt-5.6-sol、路由版 Codex 配置 openai／composite 首选同步改为 gpt-5.6-sol、Antigravity 默认映射缓存并发修复与用例改写、README 补 ADMIN_EMAIL 说明；不改画像、Persona、wire 或出站 path=frontend/src/components/keys/UseKeyModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "389a1d526a0ba6ee0050a1cc53f3fc95f66516e72cc06884b97e21c06ccd5280"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "predecessor_sha256s": [
+        "29115107cd4517b0dcecf261862997c62d367dd65c341349b3cdab0af56a73f6"
+      ],
+      "reason": "v0.2.17 合并后收尾：补前端关键用例清单、Codex 配置回退模型改为 gpt-5.6-sol、路由版 Codex 配置 openai／composite 首选同步改为 gpt-5.6-sol、Antigravity 默认映射缓存并发修复与用例改写、README 补 ADMIN_EMAIL 说明；不改画像、Persona、wire 或出站 path=frontend/src/components/keys/__tests__/UseKeyModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7fd794b8be1cc067c538018bf6165532138fcb01791813f1a6de99db95164479"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/composables/__tests__/antigravityMappings.retry.spec.ts",
+      "predecessor_sha256s": [
+        "7080c09ac62ade293847a3a3a6751e6b5b45dc864d0c674242fb389343096907"
+      ],
+      "reason": "v0.2.17 合并后收尾：补前端关键用例清单、Codex 配置回退模型改为 gpt-5.6-sol、路由版 Codex 配置 openai／composite 首选同步改为 gpt-5.6-sol、Antigravity 默认映射缓存并发修复与用例改写、README 补 ADMIN_EMAIL 说明；不改画像、Persona、wire 或出站 path=frontend/src/composables/__tests__/antigravityMappings.retry.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "350b1a5e900f22772577f4c440da01093e8f469f0e57355d86e765b226832246"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/composables/useModelWhitelist.ts",
+      "predecessor_sha256s": [
+        "178d04126210177cc17ce5d4c317bac25f8b727c9a012ad28f13d3b0ad0af119"
+      ],
+      "reason": "v0.2.17 合并后收尾：补前端关键用例清单、Codex 配置回退模型改为 gpt-5.6-sol、路由版 Codex 配置 openai／composite 首选同步改为 gpt-5.6-sol、Antigravity 默认映射缓存并发修复与用例改写、README 补 ADMIN_EMAIL 说明；不改画像、Persona、wire 或出站 path=frontend/src/composables/useModelWhitelist.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "708b95f20c0c2f09d003be77ea1d4473b0beef9e478e7006809d6c7c9ab48775"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
