@@ -16,7 +16,7 @@
 > 的事实结论。
 >
 > **当前状态**：当前规则证据仍为 2.1.226；升级控制面与真实执行／发布认证的完成度见 §3.6。
-> 生产 Active 由 selector 与实际部署收据联合判定；旧 FW-H 运行坐标只供历史审计，不作为当前续跑入口。
+> 生产 Active 由 selector 与实际部署收据联合判定；旧 FW-H 运行坐标已失去续跑资格，不作为当前续跑入口。
 
 ---
 
@@ -982,7 +982,7 @@ advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法�
 历史 Sonnet 与三模型 FW-G 继续证明各自批准范围内的 2.1.226 出站画像，公开凭证为
 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)和
 [三模型 FW-G 验收收据](egress/maintenance/claude-fw-g-three-model-acceptance.json)。FW-E～FW-H 的迁移条款、
-旧机器职责和旧 official-client-only 续作记录集中到[历史审计文档](CLAUDE_CODE_CLIENT_EMULATION_HISTORY_AUDIT.md)；
+旧机器职责和旧 official-client-only 续作记录已不再随文档保留（原文见 git 提交 `a15d6cd5a`），已完成事项以原收据为准；
 它们不再承担当前运行入口或生产状态判据。
 
 目标 stable 仍是本轮 Schema、Snapshot 和实现的设计权威：先完成目标证据与发现清零，再生成目标画像，
@@ -1010,7 +1010,7 @@ Claude 的生产 Active 身份必须同时满足
 
 2.1.226 的 FW-F Campaign `claude-code-2_1_226-fw-f-required-rules-v5-20260819` Store 停在
 `profile_approved`。已封存官方证据、40 条 RequiredRules、106 条画像原子断言与 4 条客户端本地断言保持原
-效力，可作后继回归夹具；相关发现清零与纠正事实见[历史审计文档](CLAUDE_CODE_CLIENT_EMULATION_HISTORY_AUDIT.md)。
+效力，可作后继回归夹具；相关发现清零与纠正事实见[清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)与[语义规则纠正收据](egress/maintenance/fw-e-semantic-rule-correction/receipt.json)。
 历史导入默认只读，不因迁移工具就授予新版本正式证据资格。
 
 本次工具升级的能力边界如下，源码入口存在与完整现场认证分别记录：
@@ -1025,8 +1025,8 @@ Claude 的生产 Active 身份必须同时满足
 | 完整链与认证 | B5b-02 来源快照与 VC-0→VC-1 连续驱动源码已接入，仅限 `fixture_only／regression_fixture`；连续链、完整链与故障链须分别具有完整实际执行记录，当前发布认证按 §4.0.5 指定原件的校验结果判定；工具认证不代表真账号升级或生产已通过 |
 | 生产激活 | B4-08 另批；候选交付与生产激活的权限、收据及终态分开，见 §4.6 |
 
-旧 §3.6.1 的 DMIT／Vircs 运行坐标已失去续跑资格，原记录完整保存在
-[历史审计文档](CLAUDE_CODE_CLIENT_EMULATION_HISTORY_AUDIT.md)。当前环境与证据归档以第六部分为准。
+旧 §3.6.1 的 DMIT／Vircs 运行坐标已失去续跑资格，原记录不再随文档保留。
+当前环境与证据归档以第六部分为准。
 
 ---
 
@@ -1797,7 +1797,7 @@ VC-3 使用只包含本阶段已知事实的 Profile policy（`claude-upgrade-pr
 候选环境收据或 AcceptanceFact。
 
 历史 `claude_fw_f_profile.py` 会初始化新 Store／Campaign，故只保留为 2.1.226 的历史重放工具；原命令与
-聚合 policy 限制见[历史审计文档](CLAUDE_CODE_CLIENT_EMULATION_HISTORY_AUDIT.md)。当前 `prepare-profile`／
+聚合 policy 限制不再随文档保留。当前 `prepare-profile`／
 `stage-profile` 已在原 Store 内依次承接 `rule_classification_recorded`、`evidence_approved` 与
 `profile_approved`，动态绑定规则／原子集合、执行或继承范围及模型差异。新轮次使用本节的
 `claude-upgrade-profile-policy/v1`，不复制包含未来 Candidate／Acceptance 身份的历史 FW-G policy。
@@ -2207,8 +2207,8 @@ ARM64_VC_ENV="$VC_ENV" bash "$DRIVER/vc5-all.sh"
 
 封存由当前 `claude_upgrade_candidate_seal.py` 写 Store 的执行计划、ValidationAttempt、场景四阶段、
 CandidateEvidencePackage 与评估 manifest，绑定候选、attempt、原始 inventory、前后环境、恢复报告、秘密
-扫描和摘要。只扫描已登记证据根；旧 FW-G 聚合脚本和[历史审计文档](CLAUDE_CODE_CLIENT_EMULATION_HISTORY_AUDIT.md)
-里的 live-matrix 均不承担后继版本封存。封存后仅 mtime／ctime／inode 漂移可走 §4.7 的元数据重绑，内容或
+扫描和摘要。只扫描已登记证据根；旧 FW-G 聚合脚本
+不承担后继版本封存。封存后仅 mtime／ctime／inode 漂移可走 §4.7 的元数据重绑，内容或
 权限变化不能借此放行。
 
 ### 4.5.4 离线比较
@@ -2286,7 +2286,7 @@ Claude 不建立 Codex 的 canonical-import，VC-6 沿同一 Store Candidate／A
 见 §4.6。两个用途都不能在 VC-5 提前声明完成。
 
 历史 Store 使用其收据登记的 external root 和形成期工具重放，不能拿当前工作区替换再把差异误判为历史
-规则失败。历史凭证与已失效的运行坐标统一见[历史审计文档](CLAUDE_CODE_CLIENT_EMULATION_HISTORY_AUDIT.md)。
+规则失败。历史凭证以原收据为准，已失效的运行坐标不再保留。
 
 ### 4.5.8 评估失败的分类与局部恢复
 
