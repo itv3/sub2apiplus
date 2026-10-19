@@ -1,0 +1,70 @@
+{
+  "base_commit": "7653a7ae4f1ef4be6cca2a07a510b16e4cf0bd2c",
+  "changed_path_count": 2,
+  "current_commit": "0e4eca5d505c6c4a08fb8ea81d5ae15e5294015b",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5912,
+  "frozen_path_count": 2015,
+  "identity_sha256": "66ed3751c08d0becdf8f42ee68d57f4b75dac8aea7b7e974b182b03c7b55628c",
+  "issued_at_utc": "2026-10-19T05:26:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-history-audit-removal-20261019-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "5d891687087c3b83107260817c78af7bd6b11682d05f3eba4047ee9275923d28"
+      ],
+      "reason": "Claude 指南里指向已删除历史审计文档的 7 处引用改写（第 1013 行改为直接链接清零收据与语义规则纠正收据），仅文字变更；同次删除不在冻结登记里的历史审计文档 path=docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-b407-r01-20261010-successor.json",
+        "docs/egress/maintenance/claude-cert-docs-20261018-freeze-successor.json",
+        "docs/egress/maintenance/claude-fault-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+        "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/claude-long-chain-time-v2-20261010-successor.json",
+        "docs/egress/maintenance/claude-neutral-docs-tests-20261010-successor.json",
+        "docs/egress/maintenance/claude-official-client-only-transition.json",
+        "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+        "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+        "docs/egress/maintenance/claude-tool-boundaries-docs-20261010-successor.json",
+        "docs/egress/maintenance/claude-tool-engineering-final-20261010-successor.json",
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-claude-ab-mac-recovery-20261008-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-b1-control-plane-20261007-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-document-job-local-20261009-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a80aed9ae0b31d84261709fbb83ed77f1a09e3428c1cfd19982d797beb87b215"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "docs/CLAUDE_CODE_CLIENT_EMULATION_HISTORY_AUDIT.md"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
