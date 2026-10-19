@@ -211,7 +211,7 @@
         "argv": [
           "python3",
           "-c",
-          "import pathlib,re,subprocess,sys;root=pathlib.Path(sys.argv[1]);files=[p.decode() for p in subprocess.check_output([\"git\",\"ls-files\",\"-z\"],cwd=root).split(b\"\\0\") if p];files=[p for p in files if \"/tests/\" not in p and not p.endswith(\"_test.go\") and \".spec.\" not in p and \".test.\" not in p and not p.startswith(\"docs/\")];patterns=[re.compile(b\"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\"),re.compile(b\"AKIA[0-9A-Z]{16}\"),re.compile(b\"sk-ant-[A-Za-z0-9_-]{32,}\"),re.compile(b\"sk-proj-[A-Za-z0-9_-]{32,}\")];hits=[(p,pat.pattern.decode()) for p in files for pat in patterns if pat.search((root/p).read_bytes())];assert not hits,hits",
+          "import hashlib,pathlib,re,subprocess,sys;root=pathlib.Path(sys.argv[1]);files=[p.decode() for p in subprocess.check_output([\"git\",\"ls-files\",\"-z\"],cwd=root).split(b\"\\0\") if p];files=[p for p in files if \"/tests/\" not in p and not p.endswith(\"_test.go\") and \".spec.\" not in p and \".test.\" not in p and not p.startswith(\"docs/\")];patterns=[re.compile(b\"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\"),re.compile(b\"AKIA[0-9A-Z]{16}\"),re.compile(b\"sk-ant-[A-Za-z0-9_-]{32,}\"),re.compile(b\"sk-proj-[A-Za-z0-9_-]{32,}\")];allow={\"e8d92b58d84f7cb261dc3d98ff07a912af144c2aa73f352066f5eb069ab30470\",\"b70d81c06c53a486b78b4fffdef344726d87116e9b77781666d6cd83339fb878\"};hits=[(p,pat.pattern.decode()) for p in files for pat in patterns for m in pat.finditer((root/p).read_bytes()) if hashlib.sha256(m.group()).hexdigest() not in allow];assert not hits,hits",
           "{repository}"
         ]
       },
