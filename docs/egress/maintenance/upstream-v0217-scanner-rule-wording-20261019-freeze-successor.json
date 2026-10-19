@@ -1,0 +1,70 @@
+{
+  "base_commit": "0be6566b7d2b75bd478813c77d40eb3c70b389f1",
+  "changed_path_count": 2,
+  "current_commit": "a4463b970f1543944c4769fb976eb893c5c67a04",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 5922,
+  "frozen_path_count": 2015,
+  "identity_sha256": "01735899b18adaa07f98b2434b858711c253efd76e97ad9298c4f3b4a063f433",
+  "issued_at_utc": "2026-10-19T11:54:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "single_hop_file",
+      "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
+      "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。合并前预先登记上游新增发送点时，预检写出的登记补丁（sink-registration-draft）已含这一跳。",
+      "path": "backend/cmd/egressscan/classify.go",
+      "rule_id": "scanner-algorithm-successor",
+      "verification": [
+        "cd backend && go run ./cmd/egressscan -mode self-test",
+        "make check-egress-spec-ci"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-v0217-scanner-rule-wording-20261019-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/cmd/egressscan/classify.go",
+      "predecessor_sha256s": [
+        "2e25b33ffd1cdfc4ca3b62b9e5f5ab172743920105d42ffe9a200e1bc78fb7b1"
+      ],
+      "reason": "去掉 3 条新增范围外分类规则说明中的上游版本号（版本泄漏检查），只改说明文字 path=backend/cmd/egressscan/classify.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-egress-prerequisite-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-scanner-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-v0210-scanner-classify-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0213-scanner-pending-additions-20261004-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0217-scanner-pending-additions-20261019-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a8cc303b4e0aa2884984773e464d3aed099b4050b401a2cae2833c896d6db19f"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "docs/egress/maintenance/scanner-algorithm-successor.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "cd backend && go run ./cmd/egressscan -mode self-test"
+  ]
+}
