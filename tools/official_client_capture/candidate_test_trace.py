@@ -244,8 +244,17 @@ FROZEN_MAPPING_SHA256 = (
 # （all_contains 改 all_not_contains，选择器不变）；SPEC-BODY-009 的 turn-metadata-keys 的 allowed／required 各增 history_initialization
 # （字典序位于 context_window_id 与 installation_id 之间），并同步两处说明文字。验收契约现算由 4ad36477… 变为 f1d2866e…，
 # 新旧契约载荷逐项比较只差 SPEC-BODY-006 第 4 项检查 ID，规则数与 dual_wire=25／candidate_profile=18 的模式计数不变。
+# 2026-10-20（0.163.0 主线模型改 gpt-6.1-sol，建 Campaign 前）：上游 0.163 目录里非 Lite 模型只剩已下线的 gpt-5.5，主线轨道改为 Lite 模型，
+# 判据随之改写，摘要由 656a3584… 换为 5c4569a1…。载荷逐项审核：叶子 2109 个，数量不变、无增删，值变共 13 处，分两类——
+# ①SPEC-BODY-006 的两个检查改为主线 Lite 形态：第 3 项 nonlite-instructions-absent 改名 main-instructions-absent（选择器 where 的 mode 值由
+# non_lite 改 lite，说明文字同步），第 4 项 nonlite-tools-present 改名 main-additional-tools-present（断言路径由 data.body.top_level_fields_in_order
+# 改 data.body.shape.input._types、取值由 tools 改 additional_tools，选择器 mode 值由 non_lite 改 lite，说明文字同步）——依据上游 0.163 core/src/client.rs
+# build_responses_request：请求体已无顶层 instructions，Lite 模型的工具目录进 input 前导的 additional_tools 项、顶层无 tools；
+# ②场景 A04（scenarios[3]）与场景 A06（scenarios[5]）的描述、前置条件 use_responses_lite=false 改为 true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite
+# 声明）、A04 的触发说明改为“使用主线模型”。验收契约现算由 f1d2866e… 变为 706df763…，新旧契约载荷逐项比较只差 SPEC-BODY-006 第 4、5 项的检查 ID
+# （expected_check_ids 两个叶子），规则数 43 与 dual_wire=25／candidate_profile=18 的模式计数不变；候选侧 nonlite-image-tool 检查与映射文件摘要不变。
 FROZEN_PROFILE_SHA256 = (
-    "656a35843f709d4936b11c0dfb620ee69dd4a133fb34354e4f7eb50e66c3186a"
+    "5c4569a1d434ac7541e1ce940669f1ebe1b25d01014a6c59b6b2530a7bb2b74a"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
