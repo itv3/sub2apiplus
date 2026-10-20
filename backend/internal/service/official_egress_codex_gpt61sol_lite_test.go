@@ -30,10 +30,13 @@ import (
 
 const gpt61SolInstructions = "gpt-6.1-sol lite instructions"
 
-// gpt61SolSnapshotManifest 是账号清单快照：只列 gpt-6.1-sol，接管后其余模型都是“已知不支持 Lite”。
-const gpt61SolSnapshotManifest = `{"models":[{"slug":"gpt-6.1-sol","visibility":"list","use_responses_lite":true,` +
-	`"supports_parallel_tool_calls":true,"default_reasoning_level":"low","default_reasoning_summary":"none",` +
-	`"supports_reasoning_summary_parameter":true}]}`
+// gpt61SolSnapshotManifest 是账号清单快照：列出 gpt-6.1-sol 与已有 Lite 模型 gpt-5.6-luna（WS 线上形态的对照模型），
+// 接管后其余模型都是“已知不支持 Lite”。
+const gpt61SolSnapshotManifest = `{"models":[` +
+	`{"slug":"gpt-6.1-sol","visibility":"list","use_responses_lite":true,"supports_parallel_tool_calls":true,` +
+	`"default_reasoning_level":"low","default_reasoning_summary":"none","supports_reasoning_summary_parameter":true},` +
+	`{"slug":"gpt-5.6-luna","visibility":"list","use_responses_lite":true,"supports_parallel_tool_calls":true,` +
+	`"default_reasoning_level":"medium","default_reasoning_summary":"none","supports_reasoning_summary_parameter":true}]}`
 
 // gpt61SolRespond 是终端的应答：/models 拉取失败（冷启动不得靠拉取得到能力），其余用默认应答。
 func gpt61SolRespond(request codexGateWireRequest) codexGateWireResponse {
@@ -187,6 +190,19 @@ func TestGPT61SolNonLiteInboundIsShapedAsLiteOnOAuthWSEgressFromHTTPIngress(t *t
 				requireGPT61SolLiteShape(t, raw, "gpt-6.1-sol", slot == mode, frameLabel)
 				requireGPT61SolLiteFields(t, raw, frameLabel)
 			}
+
+			// WS 上游的握手与帧不带单独的 Lite 头或标记（画像里 Lite 在 WS 上只体现为正文结构）；与已有 Lite 模型
+			// gpt-5.6-luna 同一条件下的握手头顺序、首帧顶层字段序必须逐项相同，说明 gpt-6.1-sol 没有自己的特殊形态。
+			lunaServer, lunaGate := gpt61SolWSGate(t, slot, snapshot)
+			lunaHandshake, lunaErr := lunaGate.forwardViaWebSocket(t, lunaServer, gpt61SolNonLiteBody("gpt-5.6-luna"), nil)
+			require.NoError(t, lunaErr, label+"（对照 gpt-5.6-luna）")
+			lunaFrames := codexGateResponseCreateFrames(lunaHandshake)
+			require.NotEmpty(t, lunaFrames, label)
+			require.Equal(t, lunaHandshake.headerNames, handshake.headerNames, label+"：握手头与 gpt-5.6-luna 同形")
+			require.Equal(t, codexGateJSONFieldOrder(t, lunaFrames[0]), codexGateJSONFieldOrder(t, frames[0]),
+				label+"：首帧顶层字段序与 gpt-5.6-luna 同形")
+			require.Equal(t, gjson.GetBytes(lunaFrames[0], "client_metadata.@keys").Raw, gjson.GetBytes(frames[0], "client_metadata.@keys").Raw,
+				label+"：首帧 client_metadata 的键与 gpt-5.6-luna 同形")
 		}
 	}
 }
