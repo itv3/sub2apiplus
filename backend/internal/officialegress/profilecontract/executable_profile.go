@@ -215,6 +215,8 @@ type OptionalSections struct {
 	WebSocketContinuation *WebSocketContinuationSection `json:",omitempty"`
 	ReasoningEffort       *ReasoningEffortSection       `json:",omitempty"`
 	ImageGeneration       *ImageGenerationSection       `json:",omitempty"`
+	BaseInstructions      *BaseInstructionsSection      `json:",omitempty"`
+	AccessPrograms        *AccessProgramsSection        `json:",omitempty"`
 }
 
 // Optional 返回可选节投影的副本。
@@ -545,6 +547,10 @@ func compileCrossSections(profile ProfileSpec, compiled *ExecutableProfile) erro
 				compiled.optional.ReasoningEffort = value
 			case *ImageGenerationSection:
 				compiled.optional.ImageGeneration = value
+			case *BaseInstructionsSection:
+				compiled.optional.BaseInstructions = value
+			case *AccessProgramsSection:
+				compiled.optional.AccessPrograms = value
 			}
 		}
 	}
@@ -629,6 +635,86 @@ func validateExecutableCrossReferences(
 			}
 		}
 	}
+	if err := validateBaseInstructionsCrossReferences(profile, endpointIDs); err != nil {
+		return err
+	}
+	return validateAccessProgramsCrossReferences(profile)
+}
+
+// 端点 Body.Fields 里与基础指令载体、access_programs 相关的字段名。
+const (
+	bodyFieldInstructions   = "instructions"
+	bodyFieldInput          = "input"
+	bodyFieldAccessPrograms = "access_programs"
+)
+
+// bodyFieldNames 返回端点 Body.Fields 的字段名集合；端点不存在时第二个返回值为 false。
+func (p ExecutableProfile) bodyFieldNames(endpointID string) (map[string]bool, bool) {
+	for _, endpoint := range p.endpoints {
+		if endpoint.ID != endpointID {
+			continue
+		}
+		names := make(map[string]bool, len(endpoint.Body.Fields))
+		for _, field := range endpoint.Body.Fields {
+			names[field.Name] = true
+		}
+		return names, true
+	}
+	return nil, false
+}
+
+// validateBaseInstructionsCrossReferences 要求 BaseInstructions 节与端点 Body.Fields 互不矛盾：
+// 声明基础指令改由 input 消息承载后，所列端点就不能再把 instructions 当作顶层字段发送，
+// 同时必须有 input 字段来承载那条 developer 消息。节缺省时不施加任何要求，
+// 较早版本画像（Body.Fields 含 instructions）照旧通过。
+func validateBaseInstructionsCrossReferences(profile ExecutableProfile, endpointIDs map[string]struct{}) error {
+	section := profile.optional.BaseInstructions
+	if section == nil {
+		return nil
+	}
+	for _, endpointID := range section.EndpointIDs {
+		if _, ok := endpointIDs[endpointID]; !ok {
+			return fmt.Errorf("BaseInstructions 引用了未知 endpoint: %s", endpointID)
+		}
+		fields, _ := profile.bodyFieldNames(endpointID)
+		if fields[bodyFieldInstructions] {
+			return fmt.Errorf("BaseInstructions 与端点 %s 的 Body.Fields 矛盾：基础指令改由 input 消息承载，Body.Fields 不得再含 %s",
+				endpointID, bodyFieldInstructions)
+		}
+		if !fields[bodyFieldInput] {
+			return fmt.Errorf("BaseInstructions 所列端点 %s 的 Body.Fields 缺少 %s，无处承载基础指令消息",
+				endpointID, bodyFieldInput)
+		}
+	}
+	return nil
+}
+
+// validateAccessProgramsCrossReferences 要求 AccessPrograms 节与端点 Body.Fields 同时成立：
+//   - 节缺省：任何端点都不得声明 access_programs，否则入站值没有值域校验，会被隐性透传；
+//   - 节存在：两个 Responses 端点都必须声明 access_programs，否则画像自相矛盾。
+func validateAccessProgramsCrossReferences(profile ExecutableProfile) error {
+	section := profile.optional.AccessPrograms
+	if section == nil {
+		for _, endpoint := range profile.endpoints {
+			for _, field := range endpoint.Body.Fields {
+				if field.Name == bodyFieldAccessPrograms {
+					return fmt.Errorf("端点 %s 的 Body.Fields 声明了 %s，但画像缺少 AccessPrograms 节",
+						endpoint.ID, bodyFieldAccessPrograms)
+				}
+			}
+		}
+		return nil
+	}
+	for _, endpointID := range responsesEndpointIDs {
+		fields, exists := profile.bodyFieldNames(endpointID)
+		if !exists {
+			return fmt.Errorf("AccessPrograms 节存在，但画像缺少端点 %s", endpointID)
+		}
+		if !fields[bodyFieldAccessPrograms] {
+			return fmt.Errorf("AccessPrograms 节存在，但端点 %s 的 Body.Fields 没有声明 %s",
+				endpointID, bodyFieldAccessPrograms)
+		}
+	}
 	return nil
 }
 
@@ -698,6 +784,8 @@ func executableProfileDigest(profile ExecutableProfile) (string, error) {
 		WebSocketContinuation *WebSocketContinuationSection `json:",omitempty"`
 		ReasoningEffort       *ReasoningEffortSection       `json:",omitempty"`
 		ImageGeneration       *ImageGenerationSection       `json:",omitempty"`
+		BaseInstructions      *BaseInstructionsSection      `json:",omitempty"`
+		AccessPrograms        *AccessProgramsSection        `json:",omitempty"`
 	}{
 		Version: profile.version, Endpoints: profile.endpoints, Transports: profile.transports,
 		Features: profile.features, Surfaces: profile.surfaces,
@@ -711,6 +799,8 @@ func executableProfileDigest(profile ExecutableProfile) (string, error) {
 		WebSocketContinuation: profile.optional.WebSocketContinuation,
 		ReasoningEffort:       profile.optional.ReasoningEffort,
 		ImageGeneration:       profile.optional.ImageGeneration,
+		BaseInstructions:      profile.optional.BaseInstructions,
+		AccessPrograms:        profile.optional.AccessPrograms,
 	}
 	raw, err := json.Marshal(projection)
 	if err != nil {

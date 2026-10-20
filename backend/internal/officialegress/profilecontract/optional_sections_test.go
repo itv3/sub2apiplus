@@ -38,6 +38,11 @@ func withAllOptionalSections(t *testing.T) (SnapshotDoc, SnapshotDoc) {
 	extended.WebSocketContinuation = json.RawMessage(`{"ResetOn":["account_owner","auth_revision"]}`)
 	extended.ReasoningEffort = json.RawMessage(`{"CustomNumericSerialization":"u64_integer"}`)
 	extended.ImageGeneration = json.RawMessage(`{"DefaultBackground":"opaque","TransparentBackground":"transparent","EditImageReferences":["file_id","image_url"]}`)
+	// 基础指令载体与 access_programs 两节要求端点 Body.Fields 与之自洽（交叉校验），
+	// 所以同时把两个 Responses 端点改成较新版本的字段形态；base 保持原样不受影响。
+	extended.BaseInstructions = json.RawMessage(`{"Carrier":"input_developer_message","ContentItemKind":"model.base_instructions","EndpointIDs":["responses_http","responses_ws"],"IDPrefix":"msg"}`)
+	extended.AccessPrograms = json.RawMessage(`{"AllowedCyberPrograms":["standard"]}`)
+	extended.Endpoints = endpointsWithNewerBodyContract(base.Endpoints)
 	return base, extended
 }
 
@@ -143,7 +148,7 @@ func TestOptionalSectionsRoundTripAndEnterDigests(t *testing.T) {
 	optional := executable.Optional()
 	if optional.CookieJar == nil || optional.WorkspaceRouting == nil || optional.TurnMetadata == nil ||
 		optional.ClientMetadata == nil || optional.TurnState == nil || optional.WebSocketRetry == nil ||
-		optional.WebSocketContinuation == nil {
+		optional.WebSocketContinuation == nil || optional.BaseInstructions == nil || optional.AccessPrograms == nil {
 		t.Fatal("可选节执行投影不完整")
 	}
 	if optional.WorkspaceRouting.NonDefaultAction != "fail_closed" || !optional.TurnMetadata.AnalyticsEnabled {

@@ -40,6 +40,8 @@ type SnapshotDoc struct {
 	WebSocketContinuation json.RawMessage     `json:"WebSocketContinuation,omitempty"`
 	ReasoningEffort       json.RawMessage     `json:"ReasoningEffort,omitempty"`
 	ImageGeneration       json.RawMessage     `json:"ImageGeneration,omitempty"`
+	BaseInstructions      json.RawMessage     `json:"BaseInstructions,omitempty"`
+	AccessPrograms        json.RawMessage     `json:"AccessPrograms,omitempty"`
 	Transports            []SnapshotTransport `json:"Transports"`
 	Endpoints             []SnapshotEndpoint  `json:"Endpoints"`
 	Digest                string              `json:"Digest"`
@@ -158,6 +160,8 @@ func (doc *SnapshotDoc) optionalSectionFields() []*json.RawMessage {
 		&doc.WebSocketContinuation,
 		&doc.ReasoningEffort,
 		&doc.ImageGeneration,
+		&doc.BaseInstructions,
+		&doc.AccessPrograms,
 	}
 }
 
