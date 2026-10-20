@@ -1,11 +1,11 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "60b7e4525a567152ce0c03ee0f284ec89e7b02c6",
+ "source_commit": "ded8a3846cae630ac3bf0795b44fe8d6df429aa4",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "1fa38711067b8b70ff57eca8f4611f60dcc57352a00a9ff12a3fd9e1f273af8c",
+ "files_sha256": "a09288e23e01240081f69cea2a455c1cddb217c96ceec40c6f8576ca6f406b5b",
  "wire_producer_sha256": "b12832f147b6f0b36e5c4096a81f94acde0d23191548a2c0182f8a0ab176cc7d",
- "evidence_semantics_sha256": "cb688893bfe4f931f1b723de541953edfd58dcca632d0e18da10d024356399d7",
+ "evidence_semantics_sha256": "490b2a1181c6f521ea6af58a02d37aee2c82919dfb6ed086c1084a7c2f4e0ced",
  "control_sha256": "8be99b6962a06827a7c4244fad9b7620dc9a4233be9a5136bf16d105b5c028c5",
  "orchestrator_closure_sha256": {
   "wire_producer": "043e50b2ada13a68d3769951d4b49ca88f1e1786683dfba89dd6882b2ce1b111",
@@ -1190,7 +1190,7 @@
   },
   {
    "path": "candidate_rule_expectations_0_163_0.json",
-   "sha256": "caee29915b722b01857f2f42a42478b187f0b5d7c2c4bd78b4df62fc779b6c17"
+   "sha256": "656a35843f709d4936b11c0dfb620ee69dd4a133fb34354e4f7eb50e66c3186a"
   },
   {
    "path": "candidate_test_fact_map.schema.json",
@@ -1234,7 +1234,7 @@
   },
   {
    "path": "candidate_test_trace.py",
-   "sha256": "a8b2154d83e9d627ebf123c794ea13bd9098a754711c2b931f782d5a90d8d64d"
+   "sha256": "9406fe42f8c303732f2d933e8bb763f435c868ad51c38d4b1cd871de96b3ccfd"
   },
   {
    "path": "candidate_test_trace_receipt.schema.json",
@@ -2670,7 +2670,7 @@
   },
   {
    "path": "profile_rule_patches_0_163_0.json",
-   "sha256": "f4dbffd7eef49454999a42afbc8d7912af2d511ba4e7b03db1c7c29b67f3eafa"
+   "sha256": "cfd752eb7183fa3083583ad06c67c1fcd726ab3538adcffaaab6042d6e1f5873"
   },
   {
    "path": "relay_extract.py",
