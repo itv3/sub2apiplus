@@ -1,13 +1,16 @@
 package service
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
@@ -228,10 +231,39 @@ func officialCodexBaseInstructionsInputItems(payload map[string]any) ([]any, err
 	}
 }
 
+// rebuildOfficialCodexBaseInstructionsInput 重建 input：先去掉前导系统区里的旧副本（带节标记的基础指令消息，
+// 以及与指令同文本的 developer／system 消息），rendered 非空时再把它插到前导 additional_tools 之后。
+// 总是返回新切片，原切片不被改动。rendered 为空时只去重、不插入（WS 增量帧上正文与连接上已发送的相同时使用）。
+func rebuildOfficialCodexBaseInstructionsInput(
+	input []any,
+	section *profilecontract.BaseInstructionsSection,
+	trimmedText string,
+	rendered json.RawMessage,
+) []any {
+	prefixEnd := officialCodexLeadingSystemPrefixEnd(input)
+	rebuilt := make([]any, 0, len(input)+1)
+	inserted := rendered == nil
+	for index, item := range input {
+		isTools := isOfficialCodexAdditionalToolsItem(item)
+		if index < prefixEnd && !isTools &&
+			(isOfficialCodexBaseInstructionsItem(section, item) || isOfficialCodexInstructionsCopy(item, trimmedText)) {
+			continue
+		}
+		if !inserted && !isTools {
+			rebuilt = append(rebuilt, rendered)
+			inserted = true
+		}
+		rebuilt = append(rebuilt, item)
+	}
+	if !inserted {
+		rebuilt = append(rebuilt, rendered)
+	}
+	return rebuilt
+}
+
 // installOfficialCodexBaseInstructions 把官方形态的基础指令消息安装到 payload["input"]：
-// 先去掉前导系统区里的旧副本（带节标记的基础指令消息，以及与指令同文本的 developer／system 消息），
-// 再插到前导 additional_tools 之后。空白指令不生成消息，与官方“文本为空不生成”一致。
-// payload["input"] 总是换成新切片，原切片不被改动。
+// 先去掉前导系统区里的旧副本，再插到前导 additional_tools 之后（见 rebuildOfficialCodexBaseInstructionsInput）。
+// 空白指令不生成消息，与官方“文本为空不生成”一致。payload["input"] 总是换成新切片，原切片不被改动。
 func installOfficialCodexBaseInstructions(
 	payload map[string]any,
 	section *profilecontract.BaseInstructionsSection,
@@ -250,25 +282,7 @@ func installOfficialCodexBaseInstructions(
 	if err != nil {
 		return err
 	}
-	prefixEnd := officialCodexLeadingSystemPrefixEnd(input)
-	rebuilt := make([]any, 0, len(input)+1)
-	inserted := false
-	for index, item := range input {
-		isTools := isOfficialCodexAdditionalToolsItem(item)
-		if index < prefixEnd && !isTools &&
-			(isOfficialCodexBaseInstructionsItem(section, item) || isOfficialCodexInstructionsCopy(item, trimmed)) {
-			continue
-		}
-		if !inserted && !isTools {
-			rebuilt = append(rebuilt, rendered)
-			inserted = true
-		}
-		rebuilt = append(rebuilt, item)
-	}
-	if !inserted {
-		rebuilt = append(rebuilt, rendered)
-	}
-	payload["input"] = rebuilt
+	payload["input"] = rebuildOfficialCodexBaseInstructionsInput(input, section, trimmed, rendered)
 	return nil
 }
 
@@ -428,4 +442,184 @@ func (c *officialOpenAIHTTPBodyContract) inboundTaggedMessageText(kind string) (
 		}
 	}
 	return "", false
+}
+
+// WebSocket 帧上的基础指令。
+//
+// WS 与 HTTP 共用同一种官方形态消息，差别在于 WS 是连接上的续链协议：官方客户端在一条链的第一帧（预热帧或首个业务帧）
+// 带上基础指令消息，之后用 previous_response_id 续链的增量帧不再重复。第三方客户端则习惯在每一帧都带上顶层
+// instructions（公开 Responses API 的 instructions 不随续链继承）。所以 WS 载体按“链”决策：
+//   - 新链（帧里没有 previous_response_id）：把正文安装成官方形态消息，并在连接状态里记下正文摘要；
+//   - 续链帧带了正文：与连接上已发送的摘要相同就丢弃（含 input 里的旧副本），避免历史里堆出重复的基础指令；
+//     不同则作为新的基础指令消息追加并更新摘要，同时提示一次；
+//   - 续链帧没带正文：不动。
+//
+// 基础指令消息是预编码字节，装进 input 之后帧里就有非对象项，所以安装必须排在逐项 turn_id 补写之后；
+// 补写函数也要豁免已经带标记的基础指令消息（见 finalizeOfficialOpenAIWSInputTurnMetadata）。
+
+// officialCodexBaseInstructionsDigest 是基础指令正文的 SHA-256。
+type officialCodexBaseInstructionsDigest = [sha256.Size]byte
+
+type officialCodexWSBaseInstructionsAction int
+
+const (
+	// officialCodexWSBaseInstructionsNone：本帧没有可用的基础指令正文，input 不动。
+	officialCodexWSBaseInstructionsNone officialCodexWSBaseInstructionsAction = iota
+	// officialCodexWSBaseInstructionsInstall：把正文安装成官方形态消息（新链、首次、或正文变了）。
+	officialCodexWSBaseInstructionsInstall
+	// officialCodexWSBaseInstructionsDrop：续链帧重复了连接上已发送的正文，只去掉旧副本、不再安装。
+	officialCodexWSBaseInstructionsDrop
+)
+
+// planBaseInstructions 按本帧是否续链、是否带正文以及正文摘要，决定怎么处理并更新连接状态。
+// replaced 表示这是续链帧上换了一段不同的正文（连接上之前已经发送过另一段）。
+func (s *officialOpenAIWSDerivedState) planBaseInstructions(
+	chained bool,
+	sourced bool,
+	digest officialCodexBaseInstructionsDigest,
+) (action officialCodexWSBaseInstructionsAction, replaced bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !sourced {
+		if !chained {
+			// 新链没有基础指令：此后这条链上就没有，之后续链帧再带正文按首次对待。
+			s.baseInstructionsSent = false
+		}
+		return officialCodexWSBaseInstructionsNone, false
+	}
+	if chained && s.baseInstructionsSent && s.baseInstructionsDigest == digest {
+		return officialCodexWSBaseInstructionsDrop, false
+	}
+	replaced = chained && s.baseInstructionsSent
+	s.baseInstructionsSent = true
+	s.baseInstructionsDigest = digest
+	return officialCodexWSBaseInstructionsInstall, replaced
+}
+
+// officialCodexTaggedBaseInstructionsMessage 在 input 前缀里找带节标记的 developer 消息，返回其正文（不去空白）。
+// 只看前几项：官方基础指令消息的位置固定在 additional_tools 之后，不必为此遍历整份历史。
+func officialCodexTaggedBaseInstructionsMessage(
+	rawInput any,
+	section *profilecontract.BaseInstructionsSection,
+) (string, bool) {
+	input, ok := rawInput.([]any)
+	if !ok {
+		return "", false
+	}
+	if len(input) > officialCodexInboundPrefixScanLimit {
+		input = input[:officialCodexInboundPrefixScanLimit]
+	}
+	for _, rawItem := range input {
+		item, isObject := rawItem.(map[string]any)
+		if !isObject {
+			continue
+		}
+		if message, found := officialCodexTaggedDeveloperMessage(item); found &&
+			slices.Contains(message.kinds, section.ContentItemKind) {
+			return message.text, true
+		}
+	}
+	return "", false
+}
+
+// officialCodexLeadingInstructionsCopyExists 判断 input 前导系统区里是否还留着与指令同文本的 developer／system 消息。
+func officialCodexLeadingInstructionsCopyExists(rawInput any, trimmedText string) bool {
+	input, ok := rawInput.([]any)
+	if !ok || trimmedText == "" {
+		return false
+	}
+	for _, item := range input[:officialCodexLeadingSystemPrefixEnd(input)] {
+		if isOfficialCodexInstructionsCopy(item, trimmedText) {
+			return true
+		}
+	}
+	return false
+}
+
+// officialCodexWSBaseInstructionsSource 决定 WS 帧上基础指令的正文，优先级：
+//  1. 候选帧里现存的顶层 instructions（第三方客户端的写法）；非字符串失败关闭，空白视同没有正文。
+//     顶层字段存在就由它说了算，不再看 input，与 HTTP 载体一致；
+//  2. 候选帧 input 前缀里仍带节标记的 developer 消息；
+//  3. 原始帧 input 前缀里带节标记的 developer 消息，且候选帧前导系统区里还留着同文本的副本。官方较新版本客户端的帧
+//     没有顶层字段；OAuth 兼容层会把 input 项的 internal_chat_message_metadata_passthrough 剥掉，标记随之丢失，
+//     只能在原始帧上认。要求候选帧里还有副本，是为了不把兼容层有意删除的消息复活。
+//
+// 都没有时返回 sourced=false。original 可以为空。
+func officialCodexWSBaseInstructionsSource(
+	original map[string]any,
+	candidate map[string]any,
+	section *profilecontract.BaseInstructionsSection,
+) (text string, sourced bool, err error) {
+	if current, present := candidate["instructions"]; present {
+		value, isString := current.(string)
+		if !isString {
+			return "", false, errors.New("OpenAI official egress third-party instructions must be a string")
+		}
+		return value, strings.TrimSpace(value) != "", nil
+	}
+	if message, found := officialCodexTaggedBaseInstructionsMessage(candidate["input"], section); found {
+		return message, true, nil
+	}
+	if original != nil {
+		if message, found := officialCodexTaggedBaseInstructionsMessage(original["input"], section); found &&
+			officialCodexLeadingInstructionsCopyExists(candidate["input"], strings.TrimSpace(message)) {
+			return message, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// applyOfficialCodexWSBaseInstructions 是 WS 派生帧在画像声明 BaseInstructions 节（且列出 responses_ws）时对基础指令
+// 的处理：text／sourced 来自 officialCodexWSBaseInstructionsSource，顶层 instructions 已由调用方取走并删除。
+// 必须在逐项 turn_id 补写之后调用（安装的是预编码字节）。
+func applyOfficialCodexWSBaseInstructions(
+	payload map[string]any,
+	state *officialOpenAIWSDerivedState,
+	section *profilecontract.BaseInstructionsSection,
+	threadID string,
+	text string,
+	sourced bool,
+) error {
+	trimmed := strings.TrimSpace(text)
+	sourced = sourced && trimmed != ""
+	chained := strings.TrimSpace(officialOpenAIString(payload, "previous_response_id")) != ""
+	var digest officialCodexBaseInstructionsDigest
+	if sourced {
+		digest = sha256.Sum256([]byte(text))
+	}
+	action, replaced := state.planBaseInstructions(chained, sourced, digest)
+	switch action {
+	case officialCodexWSBaseInstructionsInstall:
+		if replaced {
+			warnOfficialCodexBaseInstructionsChanged()
+		}
+		return installOfficialCodexBaseInstructions(payload, section, threadID, text)
+	case officialCodexWSBaseInstructionsDrop:
+		input, err := officialCodexBaseInstructionsInputItems(payload)
+		if err != nil {
+			return err
+		}
+		payload["input"] = rebuildOfficialCodexBaseInstructionsInput(input, section, trimmed, nil)
+	}
+	return nil
+}
+
+// officialCodexBaseInstructionsChangedWarned 让“连接上基础指令正文变了”的提示每个进程只打一次：
+// 正文变化有合法来源（用户切换了模式），不该刷屏，但值得让运维知道网关确实追加了新消息。
+var officialCodexBaseInstructionsChangedWarned atomic.Bool
+
+func warnOfficialCodexBaseInstructionsChanged() {
+	if !officialCodexBaseInstructionsChangedWarned.CompareAndSwap(false, true) {
+		return
+	}
+	logger.LegacyPrintf(
+		"service.official_egress_openai",
+		"[Codex] WebSocket 连接上的续链帧带了与已发送基础指令不同的 instructions，已作为新的基础指令消息追加（同一进程只提示一次）",
+	)
+}
+
+// officialCodexWSBaseInstructionsCarrier 返回 mode 对应画像在 WS 端点上的基础指令载体节；未启用时为 nil。
+func officialCodexWSBaseInstructionsCarrier(mode string) *profilecontract.BaseInstructionsSection {
+	section, _ := officialCodexBaseInstructionsCarrier(mode, officialCodexEndpointResponsesWS)
+	return section
 }
