@@ -39666,6 +39666,51 @@ def _prior_complete_results(
                 )
             recorded_key = item.get("incremental_result_key")
             needs_rebase = False
+
+            def _metadata_matches(
+                metadata_item: Mapping[str, Any] = metadata_item,
+                item: Mapping[str, Any] = item,
+                expected_job: Job = expected_job,
+                recorded_execution_sha256: Any = recorded_execution_sha256,
+                permitted_rebase_paths: set[str] = permitted_rebase_paths,
+            ) -> bool:
+                if _historical_result_metadata_matches(
+                    metadata_item,
+                    expected_job,
+                    identity,
+                    frozen_tool if isinstance(frozen_tool, Mapping) else None,
+                    str(recorded_execution_sha256),
+                    current_tool=current_tool,
+                    allowed_high_risk_path_changes=permitted_rebase_paths,
+                    validated_current_production_sha256=(
+                        validated_current_production_sha256
+                    ),
+                ):
+                    return True
+                # 工具演进口径下，承接结果在上一跳承接时若结果键没有变化就没有重绑，记录的组件摘要仍是冻结工具写下的
+                # （Campaign 冻结身份）；此时按源 attempt 生产身份核对会不命中。再次承接这类结果时，改按 Campaign 冻结身份
+                # 验真——同一组元数据与依赖核对，且承接链的出处必须可证明（每一跳的 source_receipt 与原始执行结果逐字段一致）。
+                # 已按源 attempt 生产身份重绑过的结果走上面的第一次核对，行为不变。
+                if (
+                    evolution_context is not None
+                    and not cross_campaign_source
+                    and item.get("disposition") == "reused"
+                    and _reused_result_origin(history_campaign_dir, history_relative, item) is not None
+                ):
+                    return _historical_result_metadata_matches(
+                        item,
+                        expected_job,
+                        identity,
+                        frozen_manifest.get("tool_identity") if isinstance(frozen_manifest.get("tool_identity"), Mapping) else None,
+                        str(recorded_execution_sha256),
+                        current_tool=current_tool,
+                        allowed_high_risk_path_changes=permitted_rebase_paths,
+                        validated_current_production_sha256=(
+                            validated_current_production_sha256
+                        ),
+                    )
+                return False
+
             if recorded_key is None:
                 if not global_tool_unchanged:
                     continue
@@ -39673,20 +39718,7 @@ def _prior_complete_results(
                 # 路径迁移、组件重新归类或低风险评估修复都会改变当前键。
                 # 先按冻结身份验证历史键，成功后只在新 attempt 中重绑当前
                 # execution／component／result key，绝不回写历史收据。
-                if not _historical_result_metadata_matches(
-                    metadata_item,
-                    expected_job,
-                    identity,
-                    frozen_tool if isinstance(frozen_tool, Mapping) else None,
-                    str(recorded_execution_sha256),
-                    current_tool=current_tool,
-                    allowed_high_risk_path_changes=(
-                        permitted_rebase_paths
-                    ),
-                    validated_current_production_sha256=(
-                        validated_current_production_sha256
-                    ),
-                ):
+                if not _metadata_matches():
                     continue
                 needs_rebase = True
             else:
@@ -39699,20 +39731,7 @@ def _prior_complete_results(
                     "environment_sha256",
                     "dependency_sha256",
                 }.issubset(item):
-                    if not _historical_result_metadata_matches(
-                        metadata_item,
-                        expected_job,
-                        identity,
-                        frozen_tool if isinstance(frozen_tool, Mapping) else None,
-                        str(recorded_execution_sha256),
-                        current_tool=current_tool,
-                        allowed_high_risk_path_changes=(
-                            permitted_rebase_paths
-                        ),
-                        validated_current_production_sha256=(
-                            validated_current_production_sha256
-                        ),
-                    ):
+                    if not _metadata_matches():
                         continue
             reused_item = (
                 _rebase_reused_result(
