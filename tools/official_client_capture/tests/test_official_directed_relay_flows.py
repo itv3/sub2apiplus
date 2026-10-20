@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import json
+import socket
+import ssl
 import tempfile
 import time
 import unittest
@@ -30,6 +32,7 @@ from tools.official_client_capture.tests.official_relay_harness import (
     read_ws_messages_until,
     run_script_check,
     script_check_code,
+    server_text_messages,
     sse_events,
     ws_upgrade_request,
 )
@@ -160,6 +163,75 @@ class IncompleteTerminalRelayFlowTest(RelayFlowCase):
         faults = self.records(connections, intervention="stream_fault:incomplete-terminal:ws")
         self.assertEqual(len(faults), 1)
         self.assertEqual(faults[0]["post_terminal_request"], "ws_generate")
+
+
+def read_ws_terminal_messages(connection: ssl.SSLSocket, count: int) -> list[dict]:
+    """读服务端帧直到收齐 count 条终态事件（completed／incomplete／failed），或对端关闭／超时。"""
+
+    terminal_types = {"response.completed", "response.incomplete", "response.failed"}
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = connection.recv(65536)
+        if not chunk:
+            return []
+        data += chunk
+    _head, _, rest = data.partition(b"\r\n\r\n")
+    while True:
+        messages = server_text_messages(rest)
+        if sum(1 for item in messages if item.get("type") in terminal_types) >= count:
+            return messages
+        try:
+            chunk = connection.recv(65536)
+        except (ssl.SSLError, ConnectionError, TimeoutError, socket.timeout):
+            return messages
+        if not chunk:
+            return messages
+        rest += chunk
+
+
+class SyntheticModelFollowsRequestFlowTest(RelayFlowCase):
+    """受控流内故障应答的 response.model 跟随真实请求（0.163.0 起主线是 gpt-6.1-sol，不能再回显 gpt-5.5）。
+
+    客户端并不读这个字段判断服务端换模型（见 upstream_byte_relay._OFFICIAL_SYNTHETIC_MODEL 的说明），这里保证的是
+    封存证据里的合成字节与请求自洽，并锁定受控应答不带 openai-model 信号（ModelReroute 的唯一来源）。
+    """
+
+    def test_http_fault_answers_with_the_model_of_the_request(self) -> None:
+        with self.relay("--stream-fault", "interrupted", "--stream-fault-transport", "http") as relay:
+            with relay.connect() as connection:
+                connection.sendall(post_responses(body=b'{"model":"gpt-6.1-sol","input":[]}'))
+                head, body = read_http_response(connection)
+            relay.stop()
+        stream = sse_events(body)
+        self.assertEqual([event["type"] for event in stream], ["response.created", "response.incomplete"])
+        self.assertEqual([event["response"]["model"] for event in stream], ["gpt-6.1-sol", "gpt-6.1-sol"])
+        self.assertNotIn(b"openai-model", head.lower())
+
+    def test_http_fault_without_a_model_keeps_the_historical_default(self) -> None:
+        with self.relay("--stream-fault", "flex-unavailable", "--stream-fault-transport", "http") as relay:
+            with relay.connect() as connection:
+                connection.sendall(post_responses(body=b'{"input":[]}'))
+                _head, body = read_http_response(connection)
+            relay.stop()
+        self.assertEqual([event["response"]["model"] for event in sse_events(body)], ["gpt-5.5", "gpt-5.5"])
+
+    def test_ws_fault_answers_each_message_with_its_own_model(self) -> None:
+        with self.relay("--stream-fault", "interrupted", "--stream-fault-transport", "ws") as relay:
+            with relay.connect() as connection:
+                connection.sendall(ws_upgrade_request())
+                connection.sendall(client_text_frame({"type": "response.create", "generate": False, "model": "gpt-6.1-sol"}))
+                connection.sendall(client_text_frame({"type": "response.create", "input": [], "model": "gpt-6.1-sol"}))
+                connection.sendall(client_text_frame({"type": "response.create", "input": [], "model": "gpt-6-astra"}))
+                messages = read_ws_terminal_messages(connection, 3)
+            relay.stop()
+        terminals = [message for message in messages if message["type"] in {"response.completed", "response.incomplete"}]
+        # 预热（completed）、首个生成请求（interrupted 故障）、第二个模型的续发（completed）。
+        self.assertEqual([message["type"] for message in terminals],
+                         ["response.completed", "response.incomplete", "response.completed"])
+        self.assertEqual(
+            [message["response"]["model"] for message in terminals],
+            ["gpt-6.1-sol", "gpt-6.1-sol", "gpt-6-astra"],
+        )
 
 
 POST_LINE = "POST /backend-api/codex/responses HTTP/1.1"

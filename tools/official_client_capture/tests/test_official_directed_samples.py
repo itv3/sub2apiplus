@@ -56,6 +56,7 @@ from tools.official_client_capture.upstream_byte_relay import (
     _official_ws_handshake,
     _overloaded_503_response,
     _post_terminal_request_kind,
+    _request_model,
     _ws_upgrade_429_fallback_post,
     _ws_upgrade_429_response,
 )
@@ -367,6 +368,81 @@ class OfficialSyntheticEventsTest(unittest.TestCase):
         self.assertIsNone(_official_ws_handshake(b"GET / HTTP/1.1\r\nhost: x\r\n\r\n"))
 
 
+    def test_response_model_follows_the_request_model_in_every_constructor(self) -> None:
+        """受控应答的 response.model 跟随请求（0.163.0 起主线是 gpt-6.1-sol），不传 model 时仍是历史默认值。"""
+
+        model = "gpt-6.1-sol"
+        batches = {
+            "flex-unavailable": _official_stream_fault_events("flex-unavailable", "resp_a", model),
+            "interrupted": _official_stream_fault_events("interrupted", "resp_b", model),
+            "incomplete-terminal": _official_stream_fault_events("incomplete-terminal", "resp_c", model),
+            "message": _official_message_events("resp_d", "OK", model),
+            "imagegen-call": _official_imagegen_call_events("resp_e", model),
+        }
+        for name, events in batches.items():
+            # output_item.done 只带 item，没有 response 对象；其余事件的 response.model 必须跟随请求。
+            responses = [event for event in events if "response" in event]
+            self.assertGreaterEqual(len(responses), 2, name)
+            for event in responses:
+                with self.subTest(constructor=name, event=event["type"]):
+                    self.assertEqual(event["response"]["model"], model)
+        for events in (
+            _official_stream_fault_events("interrupted", "resp_f"),
+            _official_message_events("resp_g", "OK"),
+            _official_imagegen_call_events("resp_h"),
+        ):
+            for event in events:
+                if "response" in event:
+                    self.assertEqual(event["response"]["model"], "gpt-5.5")
+
+    def test_request_model_accepts_only_a_plain_slug(self) -> None:
+        self.assertEqual(_request_model({"model": "gpt-6.1-sol", "input": []}), "gpt-6.1-sol")
+        self.assertEqual(_request_model({"model": "gpt-6-astra"}), "gpt-6-astra")
+        for payload in (
+            None,
+            [],
+            "gpt-6.1-sol",
+            {},
+            {"model": ""},
+            {"model": 6},
+            {"model": ["gpt-6.1-sol"]},
+            {"model": "gpt 6"},
+            {"model": "gpt/6"},
+            {"model": "x" * 129},
+        ):
+            with self.subTest(payload=payload):
+                self.assertIsNone(_request_model(payload))
+
+    def test_synthetic_answers_carry_no_openai_model_signal(self) -> None:
+        """锁定 ModelReroute 不会由受控应答触发的前提。
+
+        0.163.0 的客户端只从响应头 openai-model（HTTP 响应头、WS 握手响应头）以及事件里 response.headers／headers 对象的
+        openai-model、x-openai-model 取“服务端报告的模型”（codex-api/src/sse/responses.rs、endpoint/responses_websocket.rs），
+        不读 response.model；ModelReroute 警告只由该信号与请求模型不一致触发。受控应答因此绝不能带这个信号：
+        响应头、WS 握手头与任何事件 JSON 里都不得出现 openai-model 或 headers 对象。
+        """
+
+        events = [
+            *_official_stream_fault_events("flex-unavailable", "resp_a", "gpt-6.1-sol"),
+            *_official_stream_fault_events("interrupted", "resp_b", "gpt-6.1-sol"),
+            *_official_stream_fault_events("incomplete-terminal", "resp_c", "gpt-6.1-sol"),
+            *_official_message_events("resp_d", "OK", "gpt-6.1-sol"),
+            *_official_imagegen_call_events("resp_e", "gpt-6.1-sol"),
+        ]
+        for event in events:
+            text = json.dumps(event, ensure_ascii=False).lower()
+            self.assertNotIn("openai-model", text)
+            self.assertNotIn('"headers"', text)
+        head, _, _body = _official_sse_response(events[:2]).partition(b"\r\n\r\n")
+        self.assertNotIn(b"openai-model", head.lower())
+        handshake = _official_ws_handshake(
+            b"GET /backend-api/codex/responses HTTP/1.1\r\nupgrade: websocket\r\n"
+            b"sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nsec-websocket-extensions: permessage-deflate\r\n\r\n"
+        )
+        self.assertIsNotNone(handshake)
+        self.assertNotIn(b"openai-model", handshake.lower())
+
+
 class FailurePathResponseTest(unittest.TestCase):
     """0.163.0 失败路径定向样本：受控 503／429 的字节形状与降级 POST 的时间线标记（纯函数，不起中继）。"""
 
@@ -571,6 +647,25 @@ class StreamFaultWebSocketTest(unittest.TestCase):
         ])
         self.assertEqual(meta["stream_fault_ws_actions"], ["stream_fault_interrupted", "continuation_completed"])
         self.assertNotIn("post_terminal_request", meta)
+
+    def test_every_answer_follows_the_model_of_its_own_response_create(self) -> None:
+        """预热、故障、续发三类应答的 response.model 都取各自 response.create 的 model；缺 model 的请求退回历史默认值。"""
+
+        compressor = zlib.compressobj(wbits=-15)
+        messages, meta, _ = self.serve("interrupted", [
+            client_text({"type": "response.create", "generate": False, "model": "gpt-6.1-sol"}, compressor=compressor),
+            client_text({"type": "response.create", "input": [], "model": "gpt-6.1-sol"}, compressor=compressor),
+            client_text({"type": "response.create", "input": [], "model": "gpt-6-astra"}, compressor=compressor),
+            client_text({"type": "response.create", "input": []}, compressor=compressor),
+        ])
+        self.assertEqual(meta["stream_fault_ws_actions"],
+                         ["warmup_completed", "stream_fault_interrupted", "continuation_completed", "continuation_completed"])
+        models = [message["response"]["model"] for message in messages if "response" in message]
+        # 每条应答：created＋终态各带一个 response 对象。
+        self.assertEqual(models[:2], ["gpt-6.1-sol"] * 2)  # 预热
+        self.assertEqual(models[2:4], ["gpt-6.1-sol"] * 2)  # 故障
+        self.assertEqual(models[4:5] + models[5:6], ["gpt-6-astra", "gpt-6-astra"])  # 续发（另一个模型）
+        self.assertEqual(models[6:], ["gpt-5.5", "gpt-5.5"])  # 缺 model → 历史默认值
 
     def test_non_response_create_message_is_recorded_as_error(self) -> None:
         _messages, meta, _ = self.serve("interrupted", [client_text({"type": "session.update"})])
