@@ -47,6 +47,9 @@ if __name__ == "__main__":
 
 from tools.official_client_capture.capturelib.model import (
     ConfigurationError,
+    has_track_policy,
+    main_track_uses_responses_lite,
+    track_expected_use_responses_lite,
     track_models_for_version,
 )
 from tools.official_client_capture.capturelib.security import (
@@ -2528,6 +2531,20 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
                 )
             ):
                 raise ConfigurationError(f"场景任务 {index} 的模型轨道契约非法。")
+            # 显式的 Lite 期望必须等于目标版本在 capturelib.model 里的声明：主线是不是 Lite 模型随
+            # 版本变化（0.163.0 起为 Lite），清单手写一个与声明相反的值，模型条件收据就会拿错误坐标
+            # 去比对上游目录，真实采集到收据环节才失败。早于模型政策表的版本（0.145.0 清单）没有
+            # 声明可对照，保持清单自身的口径。
+            if has_track_policy(payload["codex_version"]):
+                declared_lite = track_expected_use_responses_lite(
+                    payload["codex_version"], job["track"]
+                )
+                if job["expected_use_responses_lite"] is not declared_lite:
+                    raise ConfigurationError(
+                        f"场景任务 {index} 的 expected_use_responses_lite 与 Codex "
+                        f"{payload['codex_version']} 的 {job['track']} 轨道声明"
+                        f"（{str(declared_lite).lower()}）不一致。"
+                    )
         if not isinstance(job.get("required"), bool):
             raise ConfigurationError(f"场景任务 {index} required 必须是布尔值。")
         receipts = job.get("required_scenario_receipts")
@@ -2576,6 +2593,40 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
                     f"候选场景任务 {index} 步骤 {step_index} 必须从 Campaign "
                     "target_version 注入 CODEX_VERSION。"
                 )
+            # 步骤环境变量里镜像的 Lite 期望由采集脚本消费（EXPECT_USE_RESPONSES_LITE 给模型条件收据，
+            # COMPACTION_FIRST_USE_RESPONSES_LITE 给压缩场景的受控目录），作业演练收据还会拿前者与作业
+            # 字段比对。它们与作业字段一样必须等于目标版本声明；否则脚本侧会按错误坐标核对上游目录，
+            # 真实采集跑到那一步才失败。早于模型政策表的版本（0.145.0 清单）没有声明可对照。
+            if has_track_policy(payload["codex_version"]):
+                environment = step["environment"]
+                for mirror_key, mirror_track in (
+                    (
+                        "EXPECT_USE_RESPONSES_LITE",
+                        environment.get("MODEL_TRACK") or job.get("track"),
+                    ),
+                    ("COMPACTION_FIRST_USE_RESPONSES_LITE", "main"),
+                ):
+                    if mirror_key not in environment:
+                        continue
+                    if (
+                        environment[mirror_key] not in {"true", "false"}
+                        or mirror_track not in {"main", "lite"}
+                    ):
+                        raise ConfigurationError(
+                            f"场景任务 {index} 步骤 {step_index} 的 {mirror_key} "
+                            "必须是 true／false，且能判定所属模型轨道。"
+                        )
+                    declared_mirror = str(
+                        track_expected_use_responses_lite(
+                            payload["codex_version"], mirror_track
+                        )
+                    ).lower()
+                    if environment[mirror_key] != declared_mirror:
+                        raise ConfigurationError(
+                            f"场景任务 {index} 步骤 {step_index} 的 {mirror_key} 与 Codex "
+                            f"{payload['codex_version']} 的 {mirror_track} 轨道声明"
+                            f"（{declared_mirror}）不一致。"
+                        )
     # R16：一份清单要么全部作业声明显式依赖，要么全部不声明；半迁移会让未声明的
     # 作业继续走旧的引用扫描，重新引入注释依赖与慢路径。
     declared_jobs = sum(
@@ -2888,6 +2939,14 @@ def load_scenario_jobs(
         )
         if not set(covers).issubset(scenario_coverage):
             raise ConfigurationError(f"{job_id} 的 covers 未被绑定场景证明。")
+        # 清单没写模型字段的作业默认走主线轨道；它的 Lite 期望取目标版本的声明（0.163.0 起主线
+        # 是 Lite 模型），不再固定为 False。清单显式写了字段的作业，一致性已在形状校验里核对。
+        job_track = str(raw.get("track", "main"))
+        default_expected_lite = (
+            track_expected_use_responses_lite(payload["codex_version"], job_track)
+            if has_track_policy(payload["codex_version"])
+            else False
+        )
         jobs.append(
             Job(
                 job_id=job_id,
@@ -2904,12 +2963,12 @@ def load_scenario_jobs(
                 required_scenario_receipts=tuple(
                     str(item) for item in raw["required_scenario_receipts"]
                 ),
-                track=str(raw.get("track", "main")),
+                track=job_track,
                 model_id=_format_template(
                     str(raw.get("model_id", "{model}")), context
                 ),
                 expected_use_responses_lite=bool(
-                    raw.get("expected_use_responses_lite", False)
+                    raw.get("expected_use_responses_lite", default_expected_lite)
                 ),
                 required_model_receipt=bool(
                     raw.get("required_model_receipt", False)
@@ -10229,7 +10288,12 @@ def _validate_upgrade_pair_models(
     model: str,
     lite_model: str,
 ) -> None:
-    """校验受管升级对及其双轨模型坐标，未知组合一律失败关闭。"""
+    """校验受管升级对及其双轨模型坐标，未知组合一律失败关闭。
+
+    模型集合与主线 Lite 声明都取自 capturelib.model：集合决定 ``--model`` 能不能用，
+    声明决定主线作业的 use_responses_lite 期望（0.163.0 起主线是 Lite 模型）。这里顺带
+    读一次声明，让“目标版本缺主线 Lite 声明”在 plan 阶段就失败，而不是拖到作业演练。
+    """
 
     upgrade_pair = (baseline_version, target_version)
     if upgrade_pair not in SUPPORTED_UPGRADE_PAIRS:
@@ -10238,6 +10302,7 @@ def _validate_upgrade_pair_models(
         )
     main_models = track_models_for_version(target_version, "main")
     lite_models = track_models_for_version(target_version, "lite")
+    main_track_uses_responses_lite(target_version)
     if model not in main_models:
         raise ConfigurationError(
             f"{baseline_version}→{target_version} 主升级线"

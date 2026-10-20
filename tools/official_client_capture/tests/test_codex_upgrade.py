@@ -15411,16 +15411,17 @@ class CodexUpgradeTest(unittest.TestCase):
                     codex_upgrade._validate_upgrade_pair_models(**values)
 
     def test_0163_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
-        """0.163.0（内置目录相对 0.160.0 只少了 model_messages 里值为 null 的 instructions_variables 键）沿用 gpt-5.5 主线与
-        Astra Lite 轨（不换成默认模型 gpt-6.1-sol）；新升级对只登记自 0.160.0 起跳，0.160.0 仍是真实 Active，旧升级对保留。"""
+        """0.163.0：gpt-5.5 在 ChatGPT 账号侧已下线（上游拒绝），老板令主线改用内置目录排第一的默认模型 gpt-6.1-sol
+        （use_responses_lite=true，所以 0.163.0 的主线轨道本身就是 Lite）；Lite 轨仍是 gpt-6-astra。
+        新升级对只登记自 0.160.0 起跳，0.160.0 仍是真实 Active，旧升级对（主线仍是 gpt-5.5）保留且一字不改。"""
 
         codex_upgrade._validate_upgrade_pair_models(
             baseline_version="0.160.0",
             target_version="0.163.0",
-            model="gpt-5.5",
+            model="gpt-6.1-sol",
             lite_model="gpt-6-astra",
         )
-        # 0.160.0 登记的升级对不因新增 0.163.0 而失效。
+        # 0.160.0 登记的升级对不因新增 0.163.0 而失效，主线仍是 gpt-5.5。
         codex_upgrade._validate_upgrade_pair_models(
             baseline_version="0.157.0",
             target_version="0.160.0",
@@ -15431,13 +15432,16 @@ class CodexUpgradeTest(unittest.TestCase):
         mutations = (
             ({"baseline_version": "0.157.0"}, "不支持的 Codex 升级对"),
             ({"target_version": "0.162.0"}, "不支持的 Codex 升级对"),
-            ({"model": "gpt-6.1-sol"}, "主升级线只能使用 gpt-5.5"),
+            # 已下线的旧主线、以及同族的 gpt-6-luna 都不是 0.163.0 的主线模型。
+            ({"model": "gpt-5.5"}, "主升级线只能使用 gpt-6.1-sol"),
+            ({"model": "gpt-6-luna"}, "主升级线只能使用 gpt-6.1-sol"),
             ({"lite_model": "gpt-6.1-sol"}, "Lite 专项只能使用 gpt-6-astra"),
+            ({"lite_model": "gpt-5.5"}, "Lite 专项只能使用 gpt-6-astra"),
         )
         baseline = {
             "baseline_version": "0.160.0",
             "target_version": "0.163.0",
-            "model": "gpt-5.5",
+            "model": "gpt-6.1-sol",
             "lite_model": "gpt-6-astra",
         }
         for mutation, message in mutations:

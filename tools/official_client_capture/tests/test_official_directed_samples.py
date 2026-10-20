@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -1345,6 +1346,30 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
     # 相对 0.157.0 清单新增的官方定向作业，以及其中含中继合成应答（标签必须标 relay_synthetic）的子集。
     DIRECTED_JOBS = NEW_OFFICIAL_JOBS
     SYNTHETIC = SYNTHETIC_JOBS
+    # 主线模型占位（只用于让脚本校验走到 CAPTURE_HOST_DATA_ROOT 这一关，不影响断言）。
+    MAIN_MODEL = "gpt-5.5"
+    # 与旧清单相比允许不同的步骤环境变量镜像：0.163.0 起主线是 Lite 模型，EXPECT_USE_RESPONSES_LITE 改值、
+    # COMPACTION_FIRST_USE_RESPONSES_LITE 新增，其余执行参数不变。取值本身由 test_main_track_models 按声明
+    # 逐版本锁定，这里比较旧清单时两侧都去掉这些键，免得把声明驱动的变化当成执行参数漂移。
+    DECLARED_MIRROR_KEYS: tuple[str, ...] = ()
+
+    def comparable_steps(self, steps: list) -> list:
+        """去掉声明驱动的环境变量镜像之后的步骤，供与旧清单逐字比较。"""
+
+        result = copy.deepcopy(steps)
+        for step in result:
+            for key in self.DECLARED_MIRROR_KEYS:
+                step["environment"].pop(key, None)
+        return result
+
+    def assert_carried_fields_equal(self, current: dict, previous: dict) -> None:
+        for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots", "covers"):
+            if field == "steps":
+                self.assertEqual(
+                    self.comparable_steps(current[field]), self.comparable_steps(previous[field]), field
+                )
+            else:
+                self.assertEqual(current[field], previous[field], field)
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -1364,9 +1389,7 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
         self.assertEqual(set(self.previous_jobs) - set(self.jobs), set())
         for job_id, previous in self.previous_jobs.items():
             with self.subTest(job_id=job_id):
-                current = self.jobs[job_id]
-                for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots", "covers"):
-                    self.assertEqual(current[field], previous[field], field)
+                self.assert_carried_fields_equal(self.jobs[job_id], previous)
 
     def test_new_job_environments_pass_script_validation(self) -> None:
         substitutions = {
@@ -1374,7 +1397,7 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
             "{capture_root}": "/root/oauth-capture",
             "{target_version}": self.TARGET_VERSION,
             "{relay_codex_bin}": "/opt/codex/bin/codex",
-            "{model}": "gpt-5.5",
+            "{model}": self.MAIN_MODEL,
             "{lite_model}": "gpt-6-astra",
             "{campaign_id}": self.UNIT_CAMPAIGN_ID,
         }
@@ -1458,6 +1481,9 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
     UNIT_CAMPAIGN_ID = "c01630-unit"
     DIRECTED_JOBS = NEW_OFFICIAL_JOBS | NEW_0163_JOBS
     SYNTHETIC = SYNTHETIC_JOBS | SYNTHETIC_0163_JOBS
+    # 0.163.0 起的主线模型（Lite，gpt-5.5 已下线）。
+    MAIN_MODEL = "gpt-6.1-sol"
+    DECLARED_MIRROR_KEYS = ("EXPECT_USE_RESPONSES_LITE", "COMPACTION_FIRST_USE_RESPONSES_LITE")
 
     def environment(self, job_id: str) -> dict:
         return self.jobs[job_id]["steps"][0]["environment"]
@@ -1471,10 +1497,32 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
         self.assertEqual(set(base_jobs) - set(self.jobs), set())
         for job_id, previous in base_jobs.items():
             with self.subTest(job_id=job_id):
-                current = self.jobs[job_id]
-                # 描述里的版本号表述已随 0.163.0 替换，执行参数（以及绑定的场景与规则）才是不变量。
-                for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots", "covers"):
-                    self.assertEqual(current[field], previous[field], field)
+                # 描述里的版本号表述已随 0.163.0 替换，执行参数（以及绑定的场景与规则）才是不变量；
+                # 唯一允许的差异是声明驱动的 Lite 期望镜像（见 DECLARED_MIRROR_KEYS）。
+                self.assert_carried_fields_equal(self.jobs[job_id], previous)
+        # 镜像键只允许出现在已知的几个作业里，且取值已按 0.163.0 的主线 Lite 声明改成 true。
+        mirrored = {
+            job_id
+            for job_id, job in self.jobs.items()
+            if any(key in step["environment"] for step in job["steps"] for key in self.DECLARED_MIRROR_KEYS)
+        }
+        self.assertEqual(
+            mirrored,
+            {
+                "official-relay-http-response",
+                "official-relay-http-response-plain",
+                "official-relay-legacy-compact-default",
+                "official-lite-http-response",
+                "official-lite-legacy-compact-default",
+                "official-lite-ws-turnstate",
+                "official-relay-comp-hash-changed",
+                "official-relay-model-downshift",
+            },
+        )
+        for job_id in mirrored:
+            for key in self.DECLARED_MIRROR_KEYS:
+                if key in self.environment(job_id):
+                    self.assertEqual(self.environment(job_id)[key], "true", f"{job_id} {key}")
         phases = lambda jobs: [job["phase"] for job in jobs.values()]  # noqa: E731 - 局部小工具
         self.assertEqual(phases(self.jobs).count("candidate"), phases(base_jobs).count("candidate"))
         self.assertEqual(phases(self.jobs).count("official"), phases(base_jobs).count("official") + len(NEW_0163_JOBS))

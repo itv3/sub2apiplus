@@ -25,9 +25,12 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 # 各目标版本双轨采集的模型坐标权威定义。
 #
-# 收录进主线的唯一条件是上游 /models 元数据给出 use_responses_lite=false：主线判据
-# （BODY-006、EP-014、H1-004 等）整体建立在非 Lite 形态上，混进一个 Lite 模型会让
-# 全部主线样本的语义翻转，而不是少采一条。两个集合都实测自官方 /models 原文，
+# 收录进主线的条件是上游 /models 元数据给出的 use_responses_lite 与该版本在
+# MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION 里声明的主线 Lite 标志一致：0.160.0 及更早的
+# 版本声明主线为非 Lite（use_responses_lite=false），主线判据（BODY-006、EP-014、H1-004 等）
+# 整体建立在非 Lite 形态上，混进一个 Lite 模型会让全部主线样本的语义翻转，而不是少采一条；
+# 0.163.0 起主线换成 Lite 模型，声明为 true，作业期望、模型条件收据、探针与合成目录都读
+# 这份声明，不在各处另写版本号分支。两个集合都实测自官方 /models 原文，
 # 0.147.0 的官方证据：gpt-5.4／gpt-5.5 为 false，gpt-5.6-luna 为 true；
 # 0.149.1 的官方证据：gpt-5.5／gpt-5.4-mini 为 false，
 # gpt-5.6-terra／gpt-5.6-luna 为 true；0.151.0 在 ARM64 的 initialize-only
@@ -45,12 +48,18 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # 由 VC-1 目录证据复核。
 # 0.163.0 的内置目录：model_presets.rs 与 0.160.0 逐字节相同；models.json 的 11 个 slug 及其顺序与 0.160.0 完全相同，
 # 每个条目只有 model_messages 里值为 null 的 instructions_variables 键不再序列化，其余字段逐字相同，gpt-5.5（false）
-# 与 gpt-6-astra（true）的可见性和 Lite 标记不变，同样沿用这两个模型，由 VC-1 目录证据复核。
+# 与 gpt-6-astra（true）的可见性和 Lite 标记不变。但 2026-10-20 ARM64 首个官方作业被上游拒绝：gpt-5.5 在 ChatGPT 账号侧已下线
+# （上游报 "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account"，客户端另报
+# "Model metadata for gpt-5.5 not found"），老板令 0.163.0 的主线模型改用 gpt-6.1-sol——它是客户端内置目录里排第一的默认模型
+# （priority=1，use_responses_lite=true、supports_parallel_tool_calls=true、visibility=list、default_reasoning_level=low、
+# default_verbosity=low）。这是语义变化而不是换名：内置目录里 gpt-5.5 是唯一 use_responses_lite=false 的模型，换成 gpt-6.1-sol 后
+# 0.163.0 的主线轨道本身就是 Lite，所以在 MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION 里把 0.163.0 声明为 true；Lite 轨仍沿用
+# gpt-6-astra（true），可见性和 Lite 标记以 VC-1 目录证据复核。
 #
-# 主线只收录已在本升级中实际采过或即将采的两个，而不是所有 non-lite 模型——没被
+# 主线只收录已在本升级中实际采过或即将采的模型，而不是所有同 Lite 标志的模型——没被
 # 实测过的模型不进白名单，保持 fail-closed。改这些集合必须同步 h1_wire_probe 的
-# 受控 /models 载荷与 extract_compaction_reason 的 ALLOWED_MODELS，
-# test_main_track_models.py 锁定三者一致。
+# 受控 /models 载荷、upstream_byte_relay 的合成 /models 目录与 extract_compaction_reason 的
+# ALLOWED_MODELS，test_main_track_models.py 锁定它们与本表及主线 Lite 声明一致。
 TRACK_MODELS_BY_CODEX_VERSION = {
     "0.147.0": {
         "main": ("gpt-5.4", "gpt-5.5"),
@@ -85,9 +94,34 @@ TRACK_MODELS_BY_CODEX_VERSION = {
         "lite": ("gpt-6-astra",),
     },
     "0.163.0": {
-        "main": ("gpt-5.5",),
+        # gpt-5.5 已下线，主线改用内置目录排第一的默认模型 gpt-6.1-sol（Lite）；见上方说明。
+        "main": ("gpt-6.1-sol",),
         "lite": ("gpt-6-astra",),
     },
+}
+
+# 各目标版本主线轨道的 use_responses_lite 声明：True 表示主线模型本身就是 Lite 模型。
+#
+# Lite 轨按定义恒为 True，不在这里登记；这里只回答“主线是不是 Lite”。键集合必须与
+# TRACK_MODELS_BY_CODEX_VERSION 逐版本相同——新增版本时必须显式表态，不允许缺省，缺省
+# 为非 Lite 会让“主线换成 Lite 模型”这种语义变化在登记时悄悄漏掉（由
+# test_main_track_models.py 锁定键集合相同）。0.160.0 及更早的版本一字不改，都是 False。
+#
+# 运行时读这份声明的地方（codex_upgrade）：升级对校验、场景清单加载（没写模型字段的作业
+# 默认期望）、清单形状校验（显式字段与环境变量镜像必须与声明一致）；作业演练收据再拿环境
+# 变量镜像与作业字段比对，模型条件收据按作业字段核对上游目录。h1 探针与候选 relay 的合成
+# /models 目录是静态载荷，它们的 Lite 标志由 test_main_track_models.py 逐版本锁定与声明一致。
+# 共享代码不得再比较版本号字面量。
+MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION: dict[str, bool] = {
+    "0.147.0": False,
+    "0.149.1": False,
+    "0.151.0": False,
+    "0.154.0": False,
+    "0.156.1": False,
+    "0.157.0": False,
+    "0.159.2": False,
+    "0.160.0": False,
+    "0.163.0": True,
 }
 
 
@@ -121,6 +155,47 @@ def track_models_for_version(codex_version: str, track: str) -> tuple[str, ...]:
             f"Codex {codex_version} 缺少 {track} 模型轨道。"
         )
     return models
+
+
+def has_track_policy(codex_version: str) -> bool:
+    """目标版本是否登记了模型轨道政策（早于政策表的 0.145.0 清单没有）。"""
+
+    return codex_version in TRACK_MODELS_BY_CODEX_VERSION
+
+
+def track_expected_use_responses_lite(codex_version: str, track: str) -> bool:
+    """目标版本某条轨道的模型应有的 use_responses_lite；缺政策或缺声明时失败关闭。
+
+    Lite 轨按定义恒为 True；主线按 MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION 声明
+    （0.160.0 及更早为 False，0.163.0 起为 True）。作业默认期望、模型条件收据的期望坐标
+    和场景清单显式字段的一致性校验都读这里，调用方不得自行比较版本号。
+    """
+
+    # 版本或轨道缺政策时，与 track_models_for_version 一样失败关闭。
+    track_models_for_version(codex_version, track)
+    if track == "lite":
+        return True
+    declared = MAIN_TRACK_RESPONSES_LITE_BY_CODEX_VERSION.get(codex_version)
+    if not isinstance(declared, bool):
+        raise ConfigurationError(
+            f"缺少 Codex {codex_version} 的主线 use_responses_lite 声明。"
+        )
+    return declared
+
+
+def main_track_uses_responses_lite(codex_version: str) -> bool:
+    """目标版本的主线模型是否是 Lite 模型。"""
+
+    return track_expected_use_responses_lite(codex_version, "main")
+
+
+def model_expected_use_responses_lite(codex_version: str, model: str) -> bool:
+    """目标版本政策里某个模型应有的 use_responses_lite；不在两条轨道里则失败关闭。"""
+
+    for track in ("main", "lite"):
+        if model in track_models_for_version(codex_version, track):
+            return track_expected_use_responses_lite(codex_version, track)
+    raise ConfigurationError(f"Codex {codex_version} 的模型轨道政策不含 {model}。")
 
 
 class ConfigurationError(ValueError):

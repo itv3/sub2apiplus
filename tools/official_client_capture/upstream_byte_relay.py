@@ -81,16 +81,25 @@ _SYNTHETIC_CORE_CFUV_COOKIE = (
 # Lite，VC-5 的 H1-004／EP-014 因此失败。接管后每个模型不再以 bundled 打底，
 # 缺 default_reasoning_level 即 effort 为空、缺 default_reasoning_summary 即 serde
 # 默认 auto，所以保留的每条都必须补全五个能力位。
-# 改动必须同步 capturelib.model 的轨道政策；tests/test_main_track_models.py 锁定。
+# 改动必须同步 capturelib.model 的轨道政策与主线 Lite 声明；tests/test_main_track_models.py 锁定。
 _SYNTHETIC_MODEL_METADATA: tuple[tuple[str, str, bool, str], ...] = (
     # (slug, display_name, use_responses_lite, default_reasoning_level)
     ("gpt-6-astra", "GPT-6 Astra", True, "medium"),
     ("gpt-5.6-sol", "GPT-5.6 Sol", True, "low"),
     ("gpt-5.6-luna", "GPT-5.6 Luna", True, "medium"),
     ("gpt-5.5", "GPT-5.5", False, "medium"),
+    # 0.163.0 起的主线模型（Lite）。default_reasoning_level 取 0.163 内置目录 models.json 的 low，
+    # 与 gpt-6-astra 的合成值（medium，来自真实上游账号清单）不同，须以 VC-1 目录证据复核账号清单。
+    ("gpt-6.1-sol", "GPT-6.1 Sol", True, "low"),
 )
-_SYNTHETIC_CORE_MODEL_SLUGS = ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5")
-_SYNTHETIC_AUX_MODEL_SLUGS = ("gpt-6-astra", "gpt-5.6-luna")
+_SYNTHETIC_CORE_MODEL_SLUGS = (
+    "gpt-6-astra",
+    "gpt-5.6-sol",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-6.1-sol",
+)
+_SYNTHETIC_AUX_MODEL_SLUGS = ("gpt-6-astra", "gpt-5.6-luna", "gpt-6.1-sol")
 
 
 def synthetic_models_payload(slugs: tuple[str, ...]) -> bytes:

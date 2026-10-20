@@ -2514,7 +2514,7 @@
         "A01",
         "A04"
       ],
-      "description": "主线 {model}：普通非 Lite HTTP Responses 与启动 models 原始字节",
+      "description": "主线 {model}（0.163.0 起是 Lite 模型）：普通 HTTP Responses 与启动 models 原始字节",
       "required": true,
       "steps": [
         {
@@ -2533,7 +2533,7 @@
             "SCENARIO_JOB_ID": "official-relay-http-response",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "main",
-            "EXPECT_USE_RESPONSES_LITE": "false",
+            "EXPECT_USE_RESPONSES_LITE": "true",
             "REQUIRE_REQUEST_METHOD": "POST",
             "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
           },
@@ -2554,7 +2554,7 @@
       "required_scenario_receipts": [],
       "track": "main",
       "model_id": "{model}",
-      "expected_use_responses_lite": false,
+      "expected_use_responses_lite": true,
       "required_model_receipt": true,
       "tool_dependencies": [
         "build_compaction_model_catalog.py",
@@ -2589,7 +2589,7 @@
       "scenario_ids": [
         "A04"
       ],
-      "description": "主线 {model}：关闭请求压缩的非 Lite HTTP Responses 负样本",
+      "description": "主线 {model}（0.163.0 起是 Lite 模型）：关闭请求压缩的 HTTP Responses 负样本",
       "required": true,
       "steps": [
         {
@@ -2608,7 +2608,7 @@
             "SCENARIO_JOB_ID": "official-relay-http-response-plain",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "main",
-            "EXPECT_USE_RESPONSES_LITE": "false",
+            "EXPECT_USE_RESPONSES_LITE": "true",
             "REQUIRE_REQUEST_METHOD": "POST",
             "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
           },
@@ -2625,7 +2625,7 @@
       "required_scenario_receipts": [],
       "track": "main",
       "model_id": "{model}",
-      "expected_use_responses_lite": false,
+      "expected_use_responses_lite": true,
       "required_model_receipt": true,
       "tool_dependencies": [
         "build_compaction_model_catalog.py",
@@ -2867,7 +2867,7 @@
         "A09",
         "A10"
       ],
-      "description": "legacy compact 不可达正场景（主线默认维度）：主线 {model}，沿用 --disable remote_compaction_v2 与 model_auto_compact_token_limit=4000，不注入 turn-state；模型条件收据证明 use_responses_lite=false；自动压缩必须走 /responses + compaction_trigger（context_limit），全量上行字节不得出现 /responses/compact",
+      "description": "legacy compact 不可达正场景（主线默认维度）：主线 {model}，沿用 --disable remote_compaction_v2 与 model_auto_compact_token_limit=4000，不注入 turn-state；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）；自动压缩必须走 /responses + compaction_trigger（context_limit），全量上行字节不得出现 /responses/compact",
       "required": true,
       "steps": [
         {
@@ -2886,7 +2886,7 @@
             "SCENARIO_JOB_ID": "official-relay-legacy-compact-default",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "main",
-            "EXPECT_USE_RESPONSES_LITE": "false",
+            "EXPECT_USE_RESPONSES_LITE": "true",
             "FORBID_REQUEST_PATHS": "/backend-api/codex/responses/compact",
             "EXPECT_COMPACTION_REASON": "context_limit"
           },
@@ -2903,7 +2903,7 @@
       "required_scenario_receipts": [],
       "track": "main",
       "model_id": "{model}",
-      "expected_use_responses_lite": false,
+      "expected_use_responses_lite": true,
       "required_model_receipt": true,
       "tool_dependencies": [
         "build_compaction_model_catalog.py",
@@ -3789,6 +3789,7 @@
             "CODEX_VERSION": "{target_version}",
             "CODEX_BIN": "{relay_codex_bin}",
             "COMPACTION_SECOND_MODEL": "{lite_model}",
+            "COMPACTION_FIRST_USE_RESPONSES_LITE": "true",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-comp-hash-changed",
             "SCENARIO": "comp-hash-changed"
@@ -3850,6 +3851,7 @@
             "CODEX_VERSION": "{target_version}",
             "CODEX_BIN": "{relay_codex_bin}",
             "COMPACTION_SECOND_MODEL": "{lite_model}",
+            "COMPACTION_FIRST_USE_RESPONSES_LITE": "true",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-model-downshift",
             "SCENARIO": "model-downshift"
@@ -4444,7 +4446,7 @@
       "required_scenario_receipts": [],
       "track": "main",
       "model_id": "{model}",
-      "expected_use_responses_lite": false,
+      "expected_use_responses_lite": true,
       "required_model_receipt": false,
       "tool_dependencies": [
         "build_compaction_model_catalog.py",

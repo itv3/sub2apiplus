@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import subprocess
 import sys
@@ -1189,6 +1190,72 @@ class JobRehearsalReceiptTests(unittest.TestCase):
                     target_scenario=scenario,
                     extra_jobs=None,
                 )
+
+    def test_0163_model_condition_identity_tracks_the_main_track_declaration(self) -> None:
+        """0.163.0 起主线是 Lite 模型：演练收据拿步骤环境变量镜像与作业字段比对，两者必须同时跟声明走。
+
+        作业字段（expected_use_responses_lite）和环境变量镜像（EXPECT_USE_RESPONSES_LITE、MODEL_TRACK）
+        任何一个与另一个不一致，演练收据都按“模型条件收据身份漂移”失败关闭；清单加载另有声明交叉校验，
+        这里锁定的是演练这一环：6 个声明模型收据的作业（3 个主线、3 个 Lite 轨）逐个通过，反向篡改逐个被拒。
+        """
+
+        scenario_path = Path(receipt.__file__).with_name("codex_upgrade_scenarios_0_163_0.json")
+        manifest = json.loads(scenario_path.read_text(encoding="utf-8"))
+        by_type = {
+            "string": "value",
+            "integer": "1",
+            "absolute_path": "/tmp/campaign-fixture",
+            "sha256": "a" * 64,
+            "image_reference": "capture-runtime@sha256:" + "b" * 64,
+        }
+        context = {
+            item["name"]: str(item["default"]) if "default" in item else by_type[item["type"]]
+            for item in manifest["variable_contract"]
+        }
+        context.update(target_version="0.163.0", model="gpt-6.1-sol", lite_model="gpt-6-astra")
+        jobs = codex_upgrade.load_scenario_jobs(
+            scenario_path, context, expected_version="0.163.0", require_bindings=True
+        )
+        receipt_jobs = {job.job_id: job for job in jobs if job.required_model_receipt}
+        self.assertEqual(
+            sorted(receipt_jobs),
+            [
+                "official-lite-http-response",
+                "official-lite-legacy-compact-default",
+                "official-lite-ws-turnstate",
+                "official-relay-http-response",
+                "official-relay-http-response-plain",
+                "official-relay-legacy-compact-default",
+            ],
+        )
+        main_ids = [job_id for job_id, job in receipt_jobs.items() if job.track == "main"]
+        self.assertEqual(len(main_ids), 3)
+
+        def with_environment(job, **changes):
+            steps = copy.deepcopy(job.steps)
+            steps[0]["environment"].update(changes)
+            return dataclasses.replace(job, steps=steps)
+
+        with mock.patch.object(receipt, "_syntax_probe", return_value=("host", [])):
+            for job_id, job in receipt_jobs.items():
+                with self.subTest(job=job_id, case="声明一致"):
+                    # 0.163.0 的主线与 Lite 轨作业都声明 Lite：作业字段与环境变量镜像都是 true。
+                    self.assertIs(job.expected_use_responses_lite, True)
+                    self.assertEqual(job.steps[0]["environment"]["EXPECT_USE_RESPONSES_LITE"], "true")
+                    self.assertEqual(receipt._job_probe(job, "capture-cli")["status"], "passed")
+            for job_id, job in receipt_jobs.items():
+                drifted = {
+                    "环境变量镜像回退 false": with_environment(job, EXPECT_USE_RESPONSES_LITE="false"),
+                    "作业字段回退 false": dataclasses.replace(job, expected_use_responses_lite=False),
+                    "轨道镜像错位": with_environment(
+                        job, MODEL_TRACK="lite" if job.track == "main" else "main"
+                    ),
+                }
+                for name, mutated in drifted.items():
+                    with self.subTest(job=job_id, case=name), self.assertRaisesRegex(
+                        receipt.JobRehearsalReceiptError, "模型条件收据身份漂移"
+                    ):
+                        receipt._job_probe(mutated, "capture-cli")
 
     def test_schema_matches_runtime_version(self) -> None:
         schema = json.loads(

@@ -42,8 +42,10 @@ SSE_RESPONSE = (
 # 后续的 /responses 请求根本不会发出，也就采集不到真正要对比的 POST 形态。
 #
 # 两条轨道的模型都必须在清单里有条目，且 use_responses_lite 必须与真实上游元数据
-# 一致。载荷取 0.147.0 与 0.149.1 已受管模型的并集，历史复算与新 Campaign
-# 均须从同一份显式模型政策校验 Lite 条件。
+# 一致。载荷取各版本已受管模型的并集（0.163.0 起并入主线 Lite 模型 gpt-6.1-sol），
+# 历史复算与新 Campaign 均须从同一份显式模型政策校验 Lite 条件；每个 slug 的标志
+# 必须等于所有收录它的版本里的声明（主线按 capturelib.model 的主线 Lite 声明，
+# Lite 轨恒为 true），由 tests/test_main_track_models.py 逐版本锁定。
 # 缺条目时 CLI 查不到模型元数据会落到默认值，采集条件就与标签声明脱节——本探针是
 # 受控上游，元数据由这里权威给出，写错即等于伪造 Lite 条件。清单必须覆盖
 # capturelib.model 的 MAIN_TRACK_MODELS 与 LITE_TRACK_MODELS，由
@@ -65,6 +67,9 @@ MODELS_BODY = (
     b'"visibility":"list","use_responses_lite":true,'
     b'"supports_parallel_tool_calls":true},'
     b'{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
+    b'"visibility":"list","use_responses_lite":true,'
+    b'"supports_parallel_tool_calls":true},'
+    b'{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol",'
     b'"visibility":"list","use_responses_lite":true,'
     b'"supports_parallel_tool_calls":true}]}'
 )
