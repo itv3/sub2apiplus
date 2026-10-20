@@ -348,6 +348,34 @@ def matches_expected_profile(match: dict, expected_reason: str) -> bool:
     )
 
 
+def unexpected_reason_matches(matches: list[dict], exact: list[dict], expected_reason: str) -> list[dict]:
+    """找出“原因不是期望原因”的压缩请求；缺它们之一，场景就不算干净。
+
+    model_downshift 有一个自然的后续：降档压缩由旧模型（窗口大的那个）完成，随后目标模型的第一个请求若压缩后上下文
+    仍高于它自己（更小）的自动压缩阈值，客户端会在目标模型上再触发一次 context_limit 压缩。0.163.0 起主线与 Lite 轨
+    都是 Lite 模型，两者压缩后的保留量相同，这次后续压缩在 0.163.0 的 model-downshift 作业里真实出现（VC-1 首批实采：
+    gpt-6.1-sol 上一次 model_downshift，随后 gpt-6-astra 上一次 context_limit）。它既不是期望原因被别的原因顶替，也不是
+    降档之前的异常压缩，所以只在这一种形态下不计为“非预期”：期望原因是 model_downshift，至少有一次精确匹配，
+    且这次压缩的原因是 context_limit、发生在不同于降档压缩所用模型的模型上（即降档之后的目标模型）。其余一律照旧：
+    同一模型上的额外压缩、任何别的原因、别的期望原因下的额外压缩，都仍然判为非预期。该后续压缩仍原样留在 matches 里，
+    证据完整保留，只是不再让场景因它判失败。
+    """
+    unexpected = [
+        match for match in matches
+        if match["compaction"].get("reason") != expected_reason
+    ]
+    if expected_reason != "model_downshift" or not exact:
+        return unexpected
+    downshift_models = {match.get("model") for match in exact}
+    return [
+        match for match in unexpected
+        if not (
+            match["compaction"].get("reason") == "context_limit"
+            and match.get("model") not in downshift_models
+        )
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--relay-dir", required=True)
@@ -367,10 +395,7 @@ def main() -> int:
         for match in matches
         if matches_expected_profile(match, args.expected_reason)
     ]
-    unexpected = [
-        match for match in matches
-        if match["compaction"].get("reason") != args.expected_reason
-    ]
+    unexpected = unexpected_reason_matches(matches, exact, args.expected_reason)
     matched_integrity = matched_connection_integrity(relay_dir, exact)
     clean = (
         integrity["clean"] if args.integrity_scope == "all" else matched_integrity["clean"]
