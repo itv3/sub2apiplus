@@ -238,8 +238,14 @@ FROZEN_MAPPING_SHA256 = (
 # 里差异共 12 处且全是版本号（codex_version 1、官方原始字节描述 2、UA 前缀／后缀 3、正则转义版本号 2、client_version 查询值 2、
 # EP-006 描述 1、A15 触发描述 1），把新文件里的版本号换回后与 0.160.0 版逐字节相同；规则、场景、检查 ID 与判据载荷不变。
 # 验收契约现算仍为 4ad36477…（dual_wire=25／candidate_profile=18），新旧画像的契约载荷逐项相等。0.160.0 画像文件保留不动。
+# 2026-10-20（0.163.0 开工前定稿，建 Campaign 前）：按源码分析与官方单测改写 5 条判据，摘要由 caee2991… 换为 656a3584…。载荷逐项审核：
+# 叶子差异共 5 类——SPEC-BODY-001 的 http-closed-fields／ws-closed-fields 与 SPEC-WS-005 的 field-slots 的 allowed 序（删 instructions，
+# stream／service_tier 前置，末位增 access_programs）；SPEC-BODY-006 的 nonlite-fields-present 改为 nonlite-instructions-absent
+# （all_contains 改 all_not_contains，选择器不变）；SPEC-BODY-009 的 turn-metadata-keys 的 allowed／required 各增 history_initialization
+# （字典序位于 context_window_id 与 installation_id 之间），并同步两处说明文字。验收契约现算由 4ad36477… 变为 f1d2866e…，
+# 新旧契约载荷逐项比较只差 SPEC-BODY-006 第 4 项检查 ID，规则数与 dual_wire=25／candidate_profile=18 的模式计数不变。
 FROZEN_PROFILE_SHA256 = (
-    "caee29915b722b01857f2f42a42478b187f0b5d7c2c4bd78b4df62fc779b6c17"
+    "656a35843f709d4936b11c0dfb620ee69dd4a133fb34354e4f7eb50e66c3186a"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

@@ -1,7 +1,571 @@
 {
-  "schema_version": "codex-upgrade-profile-rule-patches/v1",
+  "schema_version": "codex-upgrade-profile-rule-patches/v2",
   "baseline_version": "0.160.0",
   "target_version": "0.163.0",
   "active_profile_sha256": "affe6f66b4c817a205225ffda0524d3c5f9802271e50ecab8d1369c5523a1384",
-  "rule_patches": []
+  "rule_patches": [
+    {
+      "rule_ids": [
+        "SPEC-BODY-001",
+        "SPEC-BODY-006"
+      ],
+      "op": "remove",
+      "path": "/Endpoints/ID=responses_http/Body/Fields/Name=instructions",
+      "before": {
+        "Name": "instructions",
+        "Required": false,
+        "OmitWhen": "empty_string",
+        "Condition": ""
+      },
+      "after": null
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-001"
+      ],
+      "op": "add",
+      "path": "/Endpoints/ID=responses_http/Body/Fields/Name=access_programs",
+      "before": null,
+      "after": {
+        "Name": "access_programs",
+        "Required": false,
+        "OmitWhen": "none",
+        "Condition": ""
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-001"
+      ],
+      "op": "replace",
+      "path": "/Endpoints/ID=responses_http/Body/Fields",
+      "before": [
+        {
+          "Name": "model",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "input",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "tools",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "tool_choice",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "parallel_tool_calls",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "reasoning",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "store",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream_options",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "include",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "service_tier",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": "not_guardian_review_request"
+        },
+        {
+          "Name": "prompt_cache_key",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "text",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "client_metadata",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "access_programs",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        }
+      ],
+      "after": [
+        {
+          "Name": "model",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "service_tier",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": "not_guardian_review_request"
+        },
+        {
+          "Name": "input",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "tools",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "tool_choice",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "parallel_tool_calls",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "reasoning",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "store",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream_options",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "include",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "prompt_cache_key",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "text",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "client_metadata",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "access_programs",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        }
+      ]
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-001",
+        "SPEC-BODY-006",
+        "SPEC-WS-005"
+      ],
+      "op": "remove",
+      "path": "/Endpoints/ID=responses_ws/Body/Fields/Name=instructions",
+      "before": {
+        "Name": "instructions",
+        "Required": false,
+        "OmitWhen": "empty_string",
+        "Condition": ""
+      },
+      "after": null
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-001",
+        "SPEC-WS-005"
+      ],
+      "op": "add",
+      "path": "/Endpoints/ID=responses_ws/Body/Fields/Name=access_programs",
+      "before": null,
+      "after": {
+        "Name": "access_programs",
+        "Required": false,
+        "OmitWhen": "none",
+        "Condition": ""
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-001",
+        "SPEC-WS-005"
+      ],
+      "op": "replace",
+      "path": "/Endpoints/ID=responses_ws/Body/Fields",
+      "before": [
+        {
+          "Name": "type",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "model",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "previous_response_id",
+          "Required": false,
+          "OmitWhen": "none_or_unreusable_prefix",
+          "Condition": ""
+        },
+        {
+          "Name": "input",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "tools",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "tool_choice",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "parallel_tool_calls",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "reasoning",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "store",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream_options",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "include",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "service_tier",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": "not_guardian_review_request"
+        },
+        {
+          "Name": "prompt_cache_key",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "text",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "generate",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "client_metadata",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "access_programs",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        }
+      ],
+      "after": [
+        {
+          "Name": "type",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "model",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "service_tier",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": "not_guardian_review_request"
+        },
+        {
+          "Name": "previous_response_id",
+          "Required": false,
+          "OmitWhen": "none_or_unreusable_prefix",
+          "Condition": ""
+        },
+        {
+          "Name": "input",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "tools",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "tool_choice",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "parallel_tool_calls",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "reasoning",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "store",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "stream_options",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "include",
+          "Required": true,
+          "OmitWhen": "",
+          "Condition": ""
+        },
+        {
+          "Name": "prompt_cache_key",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "text",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "generate",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "client_metadata",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        },
+        {
+          "Name": "access_programs",
+          "Required": false,
+          "OmitWhen": "none",
+          "Condition": ""
+        }
+      ]
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-006"
+      ],
+      "op": "add",
+      "path": "/BaseInstructions",
+      "before": null,
+      "after": {
+        "Carrier": "input_developer_message",
+        "ContentItemKind": "model.base_instructions",
+        "EndpointIDs": [
+          "responses_http",
+          "responses_ws"
+        ],
+        "IDPrefix": "msg"
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-001"
+      ],
+      "op": "add",
+      "path": "/AccessPrograms",
+      "before": null,
+      "after": {
+        "AllowedCyberPrograms": [
+          "standard"
+        ]
+      }
+    },
+    {
+      "rule_ids": [
+        "SPEC-BODY-009"
+      ],
+      "op": "replace",
+      "path": "/TurnMetadata/Keys",
+      "before": [
+        "agent_name",
+        "analytics_enabled",
+        "auto_review_enabled",
+        "context_window_id",
+        "installation_id",
+        "model",
+        "node_repl_auto_review_required",
+        "node_repl_disabled",
+        "reasoning_effort",
+        "request_kind",
+        "root_turn_id",
+        "sandbox",
+        "sandbox_mode",
+        "session_id",
+        "thread_id",
+        "thread_source",
+        "turn_id",
+        "turn_started_at_unix_ms",
+        "turn_trigger",
+        "window_id",
+        "window_number"
+      ],
+      "after": [
+        "agent_name",
+        "analytics_enabled",
+        "auto_review_enabled",
+        "context_window_id",
+        "history_initialization",
+        "installation_id",
+        "model",
+        "node_repl_auto_review_required",
+        "node_repl_disabled",
+        "reasoning_effort",
+        "request_kind",
+        "root_turn_id",
+        "sandbox",
+        "sandbox_mode",
+        "session_id",
+        "thread_id",
+        "thread_source",
+        "turn_id",
+        "turn_started_at_unix_ms",
+        "turn_trigger",
+        "window_id",
+        "window_number"
+      ]
+    }
+  ]
 }

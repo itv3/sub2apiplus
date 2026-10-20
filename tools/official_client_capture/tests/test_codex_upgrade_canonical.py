@@ -929,7 +929,8 @@ class CanonicalImportTests(unittest.TestCase):
 
     def test_0163_patch_manifest_binds_real_active_profile(self) -> None:
         """0.163.0 补丁清单绑定当前 active 的 0.160.0 画像文件摘要（文件字节的 SHA-256，不是画像 Digest 也不是文件名），
-        补丁为空（VC-2 定稿后承接）。"""
+        并把非 Lite 基础指令载体、access_programs、字段序重排与 turn metadata 新键这四条受影响规则的画像变化
+        逐条登记成 v2 补丁（开工前定稿，建 Campaign 之后改它属于证据语义层演进）。"""
 
         active_profile = (
             ROOT
@@ -940,13 +941,20 @@ class CanonicalImportTests(unittest.TestCase):
             ROOT / "tools/official_client_capture/profile_rule_patches_0_163_0.json"
         )
         patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(patch_payload["schema_version"], "codex-upgrade-profile-rule-patches/v2")
         self.assertEqual(patch_payload["baseline_version"], "0.160.0")
         self.assertEqual(patch_payload["target_version"], "0.163.0")
         self.assertEqual(
             patch_payload["active_profile_sha256"],
             codex_upgrade.file_sha256(active_profile),
         )
-        self.assertEqual(patch_payload["rule_patches"], [])
+        affected = sorted(
+            {rule for patch in patch_payload["rule_patches"] for rule in patch["rule_ids"]}
+        )
+        self.assertEqual(
+            affected,
+            ["SPEC-BODY-001", "SPEC-BODY-006", "SPEC-BODY-009", "SPEC-WS-005"],
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             fixture_root = Path(directory)
@@ -957,6 +965,17 @@ class CanonicalImportTests(unittest.TestCase):
                 "0.160.0",
                 "0.163.0",
             )
+            # 目标画像按补丁的 after 值独立装配：键控列表的增删由逐步应用校验，这里只放最终形态。
+            endpoints = {item["ID"]: item for item in target_payload["Endpoints"]}
+            for patch in patch_payload["rule_patches"]:
+                path = patch["path"]
+                if path in {"/BaseInstructions", "/AccessPrograms"}:
+                    target_payload[path[1:]] = patch["after"]
+                elif path == "/TurnMetadata/Keys":
+                    target_payload["TurnMetadata"]["Keys"] = patch["after"]
+                elif path.endswith("/Body/Fields") and patch["op"] == "replace":
+                    endpoint_id = path.split("/")[2].removeprefix("ID=")
+                    endpoints[endpoint_id]["Body"]["Fields"] = patch["after"]
             target_payload["Digest"] = "f" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"
@@ -973,7 +992,15 @@ class CanonicalImportTests(unittest.TestCase):
                             "classification": "inherit",
                             "baseline_rule": "SPEC-CODEX-IDENTITY",
                             "target_rule": "SPEC-CODEX-IDENTITY",
-                        }
+                        },
+                        *(
+                            {
+                                "classification": "change",
+                                "baseline_rule": rule,
+                                "target_rule": rule,
+                            }
+                            for rule in affected
+                        ),
                     ],
                 },
             )
@@ -985,8 +1012,14 @@ class CanonicalImportTests(unittest.TestCase):
                 patch_manifest_path=patch_manifest,
             )
             self.assertEqual(result["status"], "complete")
-            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["affected_rule_ids"], affected)
             self.assertEqual(result["live_request_count"], 0)
+            self.assertEqual(
+                result["rule_field_paths"]["SPEC-BODY-009"],
+                ["/TurnMetadata/Keys"],
+            )
+            self.assertIn("/AccessPrograms", result["rule_field_paths"]["SPEC-BODY-001"])
+            self.assertIn("/BaseInstructions", result["rule_field_paths"]["SPEC-BODY-006"])
 
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

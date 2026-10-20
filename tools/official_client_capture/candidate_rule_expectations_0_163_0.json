@@ -812,7 +812,8 @@
             "allowed": [
               "type",
               "model",
-              "instructions",
+              "stream",
+              "service_tier",
               "previous_response_id",
               "input",
               "tools",
@@ -820,14 +821,13 @@
               "parallel_tool_calls",
               "reasoning",
               "store",
-              "stream",
               "stream_options",
               "include",
-              "service_tier",
               "prompt_cache_key",
               "text",
               "generate",
-              "client_metadata"
+              "client_metadata",
+              "access_programs"
             ],
             "operator": "all_ordered_subset_of",
             "path": "data.top_level_fields_in_order",
@@ -1703,20 +1703,20 @@
           "assertion": {
             "allowed": [
               "model",
-              "instructions",
+              "stream",
+              "service_tier",
               "input",
               "tools",
               "tool_choice",
               "parallel_tool_calls",
               "reasoning",
               "store",
-              "stream",
               "stream_options",
               "include",
-              "service_tier",
               "prompt_cache_key",
               "text",
-              "client_metadata"
+              "client_metadata",
+              "access_programs"
             ],
             "operator": "all_ordered_subset_of",
             "path": "data.body.top_level_fields_in_order",
@@ -1757,7 +1757,8 @@
             "allowed": [
               "type",
               "model",
-              "instructions",
+              "stream",
+              "service_tier",
               "previous_response_id",
               "input",
               "tools",
@@ -1765,14 +1766,13 @@
               "parallel_tool_calls",
               "reasoning",
               "store",
-              "stream",
               "stream_options",
               "include",
-              "service_tier",
               "prompt_cache_key",
               "text",
               "generate",
-              "client_metadata"
+              "client_metadata",
+              "access_programs"
             ],
             "operator": "all_ordered_subset_of",
             "path": "data.top_level_fields_in_order",
@@ -2153,12 +2153,12 @@
         },
         {
           "assertion": {
-            "operator": "all_contains",
+            "operator": "all_not_contains",
             "path": "data.body.top_level_fields_in_order",
             "value": "instructions"
           },
-          "description": "非 Lite 的 Responses 请求体保留 instructions 和 tools",
-          "id": "nonlite-fields-present",
+          "description": "非 Lite 的 Responses 请求体顶层不再有 instructions，基础指令改由 input 最前的 developer 消息承载",
+          "id": "nonlite-instructions-absent",
           "select": {
             "record_type": "http_request",
             "scenario_ids": [
@@ -2600,6 +2600,7 @@
               "analytics_enabled",
               "auto_review_enabled",
               "context_window_id",
+              "history_initialization",
               "installation_id",
               "model",
               "node_repl_auto_review_required",
@@ -2622,6 +2623,7 @@
             "path": "data.keys",
             "required": [
               "analytics_enabled",
+              "history_initialization",
               "installation_id",
               "model",
               "reasoning_effort",
@@ -2636,7 +2638,7 @@
               "window_id"
             ]
           },
-          "description": "turn metadata 序列化键是画像 21 键的有序子集，且含网关可信生成的 13 键（含四个新增键；官方另 8 键网关无可信取值、不仿真）",
+          "description": "turn metadata 序列化键是画像 22 键的有序子集，且含网关可信生成的 14 键（含五个新增键；官方另 8 键网关无可信取值、不仿真）",
           "id": "turn-metadata-keys",
           "select": {
             "record_type": "serialization_boundary",
@@ -2669,7 +2671,7 @@
           }
         }
       ],
-      "description": "x-codex-turn-metadata 的键为画像 TurnMetadata.Keys（21 键）的有序子集，必含 0.156.1 起新增的 analytics_enabled、model、reasoning_effort、turn_trigger 及网关既有键，默认配置 analytics_enabled=true",
+      "description": "x-codex-turn-metadata 的键为画像 TurnMetadata.Keys（22 键）的有序子集，必含 0.156.1 起新增的 analytics_enabled、model、reasoning_effort、turn_trigger，0.163 起新增的 history_initialization 及网关既有键，默认配置 analytics_enabled=true",
       "rule_id": "SPEC-BODY-009",
       "scenario_ids": [
         "A04"
