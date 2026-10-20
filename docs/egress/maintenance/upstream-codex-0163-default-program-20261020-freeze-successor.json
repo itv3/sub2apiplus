@@ -1,0 +1,50 @@
+{
+  "base_commit": "d4c60264adb26303db55c5af0195ef9886833970",
+  "changed_path_count": 3,
+  "current_commit": "38e0b423b33fa567a5ead522b9ee61e5dc1976f2",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6389,
+  "frozen_path_count": 2263,
+  "identity_sha256": "4d333be24c08d9f18efdf9c7ac85443f0c3da06cd5e4be78505b2b7a0a9f1bd4",
+  "issued_at_utc": "2026-10-20T05:29:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0163-default-program-20261020-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "098c1eff9b1fea4bec2c6d269e004c2f435cf1074fc7ec52e739214ecbc1822f"
+      ],
+      "reason": "按上游合并流程规则在最终 revision 一次性登记冻结台账的精确后继摘要（codex-0163-default-program-20261020）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c73784c3f470771c40fb432ec9d1c02850cddfca05abcc0fcae36a0f5e95e7e9"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/official_client_capture/profile_rule_patches_0_163_0.json",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_163_0.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
