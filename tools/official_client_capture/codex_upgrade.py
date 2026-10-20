@@ -39292,6 +39292,27 @@ def _reserve_candidate_capture_attempt(
         return attempt_root, reservation, static_receipt
 
 
+def _rebase_paths_since(
+    reference_tool: Mapping[str, Any],
+    current_tool: Mapping[str, Any],
+    already_allowed: Iterable[str] = (),
+) -> set[str]:
+    """参照身份到当前树之间变化、且属于允许重绑组件（评估器、编排器、控制面等低风险与登记放行的组件）的路径，并上已放行路径。
+
+    工具演进口径下 ``_evolution_reuse_context`` 只算“源 attempt 生产身份到当前树”的变化；按 Campaign 冻结身份回退验真时，
+    参照身份更早，这段变化里同样属于允许重绑组件的路径（每次演进登记时已按逐作业依赖证明不影响未受影响作业）也要放行，
+    否则它们会被当成真实产出侧改动拒绝。高风险产出侧路径不在允许组件内，仍不放行。
+    """
+
+    before = _tool_entry_digest_map(reference_tool)
+    after = _tool_entry_digest_map(current_tool)
+    changed = {path for path in set(before) | set(after) if before.get(path) != after.get(path)}
+    allowed = {
+        path for path in changed if _tool_component_for_path(path) in _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
+    }
+    return set(already_allowed) | allowed
+
+
 def _prior_complete_results(
     campaign_dir: Path,
     relative: Path,
@@ -39697,14 +39718,19 @@ def _prior_complete_results(
                     and item.get("disposition") == "reused"
                     and _reused_result_origin(history_campaign_dir, history_relative, item) is not None
                 ):
+                    original_tool = frozen_manifest.get("tool_identity")
+                    if not isinstance(original_tool, Mapping):
+                        return False
                     return _historical_result_metadata_matches(
                         item,
                         expected_job,
                         identity,
-                        frozen_manifest.get("tool_identity") if isinstance(frozen_manifest.get("tool_identity"), Mapping) else None,
+                        original_tool,
                         str(recorded_execution_sha256),
                         current_tool=current_tool,
-                        allowed_high_risk_path_changes=permitted_rebase_paths,
+                        allowed_high_risk_path_changes=_rebase_paths_since(
+                            original_tool, current_tool, permitted_rebase_paths
+                        ),
                         validated_current_production_sha256=(
                             validated_current_production_sha256
                         ),

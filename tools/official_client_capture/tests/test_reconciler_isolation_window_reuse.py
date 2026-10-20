@@ -176,3 +176,38 @@ class StrictPreJobFailureShapeTests(unittest.TestCase):
 
     def test_pending_must_be_exactly_planned_minus_carried(self) -> None:
         self.assertFalse(self.check({"before_probe": None}, pending=("job-b",)))
+
+
+class RebasePathsSinceTests(unittest.TestCase):
+    """按 Campaign 冻结身份回退验真时放行的路径：参照身份到当前树之间变化且属允许重绑组件的路径，加已放行路径。
+
+    允许重绑组件指 producer／relay／runtime／shared／scenario／evaluator：演进登记时已逐作业裁定影响，受影响作业并入执行闭集，
+    其余作业的声明依赖不含这些变化；编排器／控制面／环境面本来就在组件比较里豁免，不需要放行。
+    """
+
+    @staticmethod
+    def tool(**digests: str) -> dict:
+        entries = [{"path": name.replace("__", "."), "sha256": value} for name, value in sorted(digests.items())]
+        return {"entries": entries}
+
+    def test_changed_allowed_component_paths_are_included_and_unchanged_ones_are_not(self) -> None:
+        reference = self.tool(some_helper__py="1" * 64, capture__py="2" * 64, stable__py="3" * 64)
+        current = self.tool(some_helper__py="9" * 64, capture__py="8" * 64, stable__py="3" * 64)
+        allowed = codex_upgrade._rebase_paths_since(reference, current)
+        self.assertEqual(allowed, {"some_helper.py", "capture.py"})
+
+    def test_added_and_removed_allowed_component_paths_are_included(self) -> None:
+        reference = self.tool(some_helper__py="1" * 64)
+        current = self.tool(capture__py="2" * 64)
+        self.assertEqual(codex_upgrade._rebase_paths_since(reference, current), {"some_helper.py", "capture.py"})
+
+    def test_changed_orchestrator_and_control_paths_are_not_added(self) -> None:
+        reference = self.tool(codex_upgrade__py="1" * 64, codex_upgrade_reconciler__py="2" * 64)
+        current = self.tool(codex_upgrade__py="9" * 64, codex_upgrade_reconciler__py="8" * 64)
+        self.assertEqual(codex_upgrade._rebase_paths_since(reference, current), set())
+
+    def test_already_allowed_paths_are_kept_and_result_is_the_union(self) -> None:
+        reference = self.tool(some_helper__py="1" * 64)
+        current = self.tool(some_helper__py="9" * 64)
+        allowed = codex_upgrade._rebase_paths_since(reference, current, {"other.py"})
+        self.assertEqual(allowed, {"other.py", "some_helper.py"})
