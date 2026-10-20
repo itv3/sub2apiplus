@@ -11,16 +11,32 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
-// officialCodexBodyFieldOrderForMode 每次从正式 ReleaseCatalog 投影字段槽位。
-// 字段序不再保存在包级 active 切片中；最终 compiler 仍会按调用级 Bundle 再校验。
-func officialCodexBodyFieldOrderForMode(mode, endpointID string) ([]string, error) {
+// officialCodexReleaseProfileForBodyOrder 是字段序入口取画像的步骤，抽成包级变量只为让测试能在
+// 目标版本画像入库之前注入合成画像：字段序入口不经过 officialCodexExecutableProfileForMode，
+// 该入口的替换点够不到 Body.Fields，合成画像夹具因此无法覆盖顶层字段的重排、删除与新增。
+//
+// 默认实现逐字复刻抽取之前的取画像行为：按调用冻结的 mode 原样解析正式 ReleaseCatalog，
+// 不做 normalizeOfficialClientProfileMode 那种“非 previous 一律 active”的宽松化——
+// 空串与非法值照旧在这里失败关闭，差分测试锁定它与原入口的结果和错误逐一相同。
+// 生产代码不得改写；替换它的测试不得并行执行。
+var officialCodexReleaseProfileForBodyOrder = func(mode string) (profilecontract.ExecutableProfile, error) {
 	release, err := officialegress.DefaultReleaseCatalog().Resolve(
 		officialegress.ReleaseMode(mode),
 	)
 	if err != nil {
+		return profilecontract.ExecutableProfile{}, err
+	}
+	return release.ExecutableProfile(), nil
+}
+
+// officialCodexBodyFieldOrderForMode 每次从正式 ReleaseCatalog 投影字段槽位。
+// 字段序不再保存在包级 active 切片中；最终 compiler 仍会按调用级 Bundle 再校验。
+func officialCodexBodyFieldOrderForMode(mode, endpointID string) ([]string, error) {
+	profile, err := officialCodexReleaseProfileForBodyOrder(mode)
+	if err != nil {
 		return nil, err
 	}
-	return officialCodexBodyFieldOrderFromProfile(release.ExecutableProfile(), endpointID)
+	return officialCodexBodyFieldOrderFromProfile(profile, endpointID)
 }
 
 func officialCodexBodyFieldOrderFromProfile(
