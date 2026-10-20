@@ -24,6 +24,7 @@ from unittest import mock
 from tools.official_client_capture import assertion_gate
 from tools.official_client_capture import candidate_evidence_guard
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture.capturelib.model import main_track_uses_responses_lite
 from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture.tests import runtime_egress_fixtures
 from tools.official_client_capture import codex_upgrade_evidence_manifest
@@ -15502,13 +15503,28 @@ class CodexUpgradeTest(unittest.TestCase):
                     for rule in profile["rules"]
                     for check in rule["checks"]
                 }
+                expected_pinned = [
+                    ("SPEC-HDR-007", "responses-session-id"),
+                    ("SPEC-HDR-007", "responses-thread-id"),
+                    ("SPEC-WS-002", "optional-missing-covered"),
+                ]
+                if main_track_uses_responses_lite(target_version):
+                    # 主线是 Lite 模型：目标版本官方侧标签声明里不再有 mode=non_lite（主线样本都标 mode=lite），
+                    # 冻结画像按 mode=non_lite 选择的两个 BODY-006 检查在官方证据上结构性不可达，登记为延后项交 VC-2
+                    # 批准画像裁决（批准画像里它们已改写成主线 Lite 形态的等价检查）。
+                    self.assertEqual(retired["mode"], frozenset({"non_lite"}))
+                    expected_pinned = sorted(
+                        [
+                            *expected_pinned,
+                            ("SPEC-BODY-006", "nonlite-fields-present"),
+                            ("SPEC-BODY-006", "nonlite-tools-present"),
+                        ]
+                    )
+                else:
+                    self.assertNotIn("mode", retired)
                 self.assertEqual(
                     sorted(key for key, pins in pinned.items() if pins),
-                    [
-                        ("SPEC-HDR-007", "responses-session-id"),
-                        ("SPEC-HDR-007", "responses-thread-id"),
-                        ("SPEC-WS-002", "optional-missing-covered"),
-                    ],
+                    expected_pinned,
                 )
 
     def test_plan_rejects_package_helper_digest_mismatch(self) -> None:

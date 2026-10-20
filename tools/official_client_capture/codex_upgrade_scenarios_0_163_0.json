@@ -280,10 +280,10 @@
     },
     {
       "scenario_id": "A04",
-      "description": "Responses HTTP 非 Lite、按样本标注压缩条件及条件 Header 矩阵",
-      "trigger": "使用非 Lite 模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支。",
+      "description": "Responses HTTP 主线轨道（0.163.0 起主线是 Lite 模型）、按样本标注压缩条件及条件 Header 矩阵",
+      "trigger": "使用主线模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支。",
       "preconditions": [
-        "use_responses_lite=false",
+        "use_responses_lite=true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite 声明）",
         "压缩开启与关闭样本分别以 labels.compression 标注",
         "各条件分支分别留有正负样本"
       ],
@@ -340,10 +340,10 @@
     },
     {
       "scenario_id": "A06",
-      "description": "Responses WS 非 Lite、warmup 与增量帧",
+      "description": "Responses WS 主线轨道（0.163.0 起主线是 Lite 模型）、warmup 与增量帧",
       "trigger": "在同一 WS 会话依次执行 warmup、首轮和可复用前缀的增量请求。",
       "preconditions": [
-        "use_responses_lite=false",
+        "use_responses_lite=true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite 声明）",
         "上游返回可复用 previous_response_id",
         "原始 WS 帧完整"
       ],

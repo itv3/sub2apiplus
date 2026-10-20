@@ -162,7 +162,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "surface": "models",
             "endpoint_class": "auxiliary",
             "provider": "openai_oauth",
@@ -185,13 +185,13 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "compression": "zstd",
             "body_length": "automatic",
             "provider": "openai_oauth",
             "variant": "http_default"
           },
-          "rationale": "主线 v2 模型条件成功收据同时证明目标模型 use_responses_lite=false，并以 responses_request 角色绑定实际 POST Responses 原始请求；连接号不参与证据语义。"
+          "rationale": "主线 v2 模型条件成功收据同时证明目标模型 use_responses_lite=true（0.163.0 起主线是 Lite 模型），并以 responses_request 角色绑定实际 POST Responses 原始请求；连接号不参与证据语义。"
         }
       ]
     },
@@ -214,7 +214,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "compression": "plain",
             "body_length": "automatic",
             "provider": "openai_oauth",
@@ -293,7 +293,7 @@
           },
           "labels": {
             "transport": "http",
-            "mode": "non_lite",
+            "mode": "lite",
             "residency": "us",
             "variant": "default",
             "body_length": "automatic",
@@ -320,7 +320,7 @@
           },
           "labels": {
             "transport": "http",
-            "mode": "non_lite",
+            "mode": "lite",
             "residency": "unset",
             "variant": "default",
             "body_length": "automatic",
@@ -342,12 +342,12 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "runtime_metrics",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A06 是非 Lite WS 会话；本 job 显式开启 runtime_metrics，只能作为条件头正例，禁止再冒充默认握手。"
+          "rationale": "A06 是主线 WS 会话（0.163.0 起主线是 Lite 模型）；本 job 显式开启 runtime_metrics，只能作为条件头正例，禁止再冒充默认握手。"
         }
       ]
     },
@@ -382,7 +382,7 @@
           },
           "labels": {
             "transport": "http",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -409,7 +409,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "turn_state",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "auto",
@@ -432,7 +432,7 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "turn_state",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "auto",
@@ -460,14 +460,14 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "auto",
             "provider": "openai_oauth",
             "body_length": "automatic"
           },
-          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=false。本条派生 HTTP/1.1 请求观测，供「全量上行无 POST /backend-api/codex/responses/compact」的不可达断言使用；变体与 remote_compaction_v2=disabled_explicitly 由采集参数给出，不从被测字节反推。0.154 的 session_header_scope、compression、cookie_state 只描述 legacy 请求，目标版本已无该请求，故删除。"
+          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）。本条派生 HTTP/1.1 请求观测，供「全量上行无 POST /backend-api/codex/responses/compact」的不可达断言使用；变体与 remote_compaction_v2=disabled_explicitly 由采集参数给出，不从被测字节反推。0.154 的 session_header_scope、compression、cookie_state 只描述 legacy 请求，目标版本已无该请求，故删除。"
         },
         {
           "glob": "relay/*.client_to_upstream.bin",
@@ -483,13 +483,13 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "auto",
             "provider": "openai_oauth"
           },
-          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=false。内置 OpenAI provider 默认走 WS，V2 压缩请求位于 response.create 帧内；本条派生 WS 帧观测，证明显式关闭后仍选择 V2（input 末项 compaction_trigger）。"
+          "rationale": "主线 {model} 默认槽位维度；模型条件收据证明 use_responses_lite=true（0.163.0 起主线 {model} 是 Lite 模型）。内置 OpenAI provider 默认走 WS，V2 压缩请求位于 response.create 帧内；本条派生 WS 帧观测，证明显式关闭后仍选择 V2（input 末项 compaction_trigger）。"
         }
       ]
     },
@@ -590,7 +590,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "beta",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "auto",
@@ -613,7 +613,7 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "beta",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "auto",
@@ -641,7 +641,7 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "compression": "zstd",
             "body_length": "automatic",
@@ -669,7 +669,7 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "v2_config_disabled",
             "compression": "zstd",
             "body_length": "automatic",
@@ -699,7 +699,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "images",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -726,7 +726,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "images",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -752,7 +752,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "auxiliary",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -778,7 +778,7 @@
           },
           "labels": {
             "transport": "http",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -806,11 +806,11 @@
             "transport": "http",
             "track": "main",
             "variant": "http_default",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "WS 重试预算耗尽后改发 HTTP POST，由 h1 探针记录最终 wire 形态。0.156.1 起的记录还包含启动期 GET /backend-api/wham/accounts/check（探针合成 NO_CONSTRAINT 响应，属受控上游，与 models 合成同类）；断言须按 data.path 选择 POST /backend-api/codex/responses。本 job 走主线 {model}=gpt-5.5，探针受控清单给出 use_responses_lite=false，故 mode 只能是 non_lite。"
+          "rationale": "WS 重试预算耗尽后改发 HTTP POST，由 h1 探针记录最终 wire 形态。0.156.1 起的记录还包含启动期 GET /backend-api/wham/accounts/check（探针合成 NO_CONSTRAINT 响应，属受控上游，与 models 合成同类）；断言须按 data.path 选择 POST /backend-api/codex/responses。本 job 走主线 {model}=gpt-6.1-sol，探针受控清单给出 use_responses_lite=true，故 mode 只能是 lite。"
         }
       ]
     },
@@ -848,7 +848,7 @@
             "transport": "http",
             "ca_mode": "custom",
             "compaction_mode": "manual",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -874,7 +874,7 @@
           "labels": {
             "transport": "http",
             "compaction_mode": "auto",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -900,7 +900,7 @@
           "labels": {
             "transport": "http",
             "compaction_mode": "auto",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -926,7 +926,7 @@
           "labels": {
             "transport": "http",
             "compaction_mode": "auto",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -952,7 +952,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "auxiliary",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -992,7 +992,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "auxiliary",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -1032,7 +1032,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "auxiliary",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -1072,7 +1072,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "endpoint_class": "auxiliary",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -1096,7 +1096,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "auxiliary",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
@@ -1137,7 +1137,7 @@
             "transport": "http",
             "ca_mode": "custom",
             "endpoint_class": "auxiliary",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -1160,7 +1160,7 @@
             "transport": "http",
             "ca_mode": "custom",
             "endpoint_class": "auxiliary",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -1187,7 +1187,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "manual",
@@ -1211,7 +1211,7 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "remote_compaction_v2": "disabled_explicitly",
             "compaction_mode": "manual",
@@ -1266,11 +1266,11 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "tui_mode": "daemon",
             "provider": "openai_oauth"
           },
-          "rationale": "采集参数固定 SCENARIO=daemon-tui：独立冷启动 CODEX_HOME、TUI 不带任何 CLI 覆盖，作业以 codex app-server daemon version 与进程表判定 daemon 模式（不成立即失败），主会话固定 {model}（main、non_lite）。派生 websocket_trace 同时产出 daemon 启动期 HTTP 请求（models、accounts/check、wham 等）与 Responses WS 帧。现有判据只从各自规则的场景里选样本，不会误选本场景；VC-2 按证据修订 SPEC-HDR-005 的 daemon 条件判据时以 labels.tui_mode 选择。"
+          "rationale": "采集参数固定 SCENARIO=daemon-tui：独立冷启动 CODEX_HOME、TUI 不带任何 CLI 覆盖，作业以 codex app-server daemon version 与进程表判定 daemon 模式（不成立即失败），主会话固定 {model}（main、lite）。派生 websocket_trace 同时产出 daemon 启动期 HTTP 请求（models、accounts/check、wham 等）与 Responses WS 帧。现有判据只从各自规则的场景里选样本，不会误选本场景；VC-2 按证据修订 SPEC-HDR-005 的 daemon 条件判据时以 labels.tui_mode 选择。"
         }
       ]
     },
@@ -1292,7 +1292,7 @@
           },
           "labels": {
             "transport": "http",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "retry_after": "present",
             "body_length": "automatic",
@@ -1320,13 +1320,13 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "reasoning_effort_numeric",
             "reasoning_effort_config": "numeric",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "作业固定主线 {model}（非 Lite，与 official-relay-ws-default 同样按作业模型参数标 track/mode）、只走 HTTP 的 provider 与数字档位配置，variant／reasoning_effort_config 由采集参数推出。不取模型条件收据：上游可能拒绝该档位，成功收据会误判样本不成立；不标 compression、residency，免得被压缩与 residency 判据误选。"
+          "rationale": "作业固定主线 {model}（0.163.0 起是 Lite 模型，与 official-relay-ws-default 同样按作业模型参数标 track/mode）、只走 HTTP 的 provider 与数字档位配置，variant／reasoning_effort_config 由采集参数推出。不取模型条件收据：上游可能拒绝该档位，成功收据会误判样本不成立；不标 compression、residency，免得被压缩与 residency 判据误选。"
         }
       ]
     },
@@ -1375,12 +1375,12 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "flex_unavailable",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（flex-unavailable）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（flex-unavailable）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1402,12 +1402,12 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "interrupted",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（interrupted）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（interrupted）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1429,12 +1429,12 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "interrupted",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（interrupted）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（interrupted）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1456,7 +1456,7 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "ws_idle_close",
             "provider": "openai_oauth"
           },
@@ -1482,7 +1482,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "images",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "image_transparent",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -1509,7 +1509,7 @@
           "labels": {
             "transport": "http",
             "endpoint_class": "images",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "image_edit_file_id",
             "upstream_response": "relay_synthetic",
             "body_length": "automatic",
@@ -1563,12 +1563,12 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "incomplete_terminal",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（incomplete-terminal）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（incomplete-terminal）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1590,12 +1590,12 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "incomplete_terminal",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "故障种类（incomplete-terminal）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+          "rationale": "故障种类（incomplete-terminal）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
         }
       ]
     },
@@ -1617,13 +1617,13 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "ws_retry_after",
             "retry_after": "present",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "中继对每个 Responses WS 升级回 429 + retry-after: 2（作业参数 RELAY_WS_UPGRADE_429_RETRY_AFTER 决定，retry_after=present 由此推出），客户端重试用尽后改发 HTTP POST，所以按与 official-relay-conn-retry 相同的口径标 transport=http（升级请求与降级 POST 同在 h1 请求流里）；upstream_response=relay_synthetic 标明本作业含中继合成的 429、不得当作生产自然成功（降级 POST 转发生产）。主线 {model} 非 Lite。重试次数、间隔与降级前等待是 PROTO-002 的判定对象，只由原始字节与 relay.json 的 ws_upgrade_429／ws_upgrade_429_fallback_post 核对，不反推进标签。"
+          "rationale": "中继对每个 Responses WS 升级回 429 + retry-after: 2（作业参数 RELAY_WS_UPGRADE_429_RETRY_AFTER 决定，retry_after=present 由此推出），客户端重试用尽后改发 HTTP POST，所以按与 official-relay-conn-retry 相同的口径标 transport=http（升级请求与降级 POST 同在 h1 请求流里）；upstream_response=relay_synthetic 标明本作业含中继合成的 429、不得当作生产自然成功（降级 POST 转发生产）。主线 {model}（0.163.0 起是 Lite 模型）。重试次数、间隔与降级前等待是 PROTO-002 的判定对象，只由原始字节与 relay.json 的 ws_upgrade_429／ws_upgrade_429_fallback_post 核对，不反推进标签。"
         }
       ]
     },
@@ -1646,13 +1646,13 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "server_overloaded",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth",
             "retry_after": "present"
           },
-          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 附带 retry-after: 2 由作业参数 RELAY_RETRY_PROBE_RETRY_AFTER 决定，retry_after=present 由此推出，其余标签与无值对照逐项相同，保证两者只差这一个条件；主线 {model} 非 Lite。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
+          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 附带 retry-after: 2 由作业参数 RELAY_RETRY_PROBE_RETRY_AFTER 决定，retry_after=present 由此推出，其余标签与无值对照逐项相同，保证两者只差这一个条件；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
         }
       ]
     },
@@ -1675,12 +1675,12 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "server_overloaded",
             "upstream_response": "relay_synthetic",
             "provider": "openai_oauth"
           },
-          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 不附 Retry-After（对照样本，无 retry_after 标签，约定同 official-relay-conn-retry）；主线 {model} 非 Lite。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
+          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 不附 Retry-After（对照样本，无 retry_after 标签，约定同 official-relay-conn-retry）；主线 {model}（0.163.0 起是 Lite 模型）。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
         }
       ]
     },
@@ -2033,13 +2033,13 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "compression": "zstd",
             "body_length": "automatic",
             "session_header_scope": "responses_or_compact",
             "provider": "openai_oauth"
           },
-          "rationale": "驱动序列第 2 个 POST 是 default 轮：非 Lite、zstd、cookie jar 已由 prime 轮建立。不标 variant——A03 的 variant 维度由 Lite 轨承载（该场景 precondition 是 use_responses_lite=true），非 Lite 轮只作为 mode 对照。"
+          "rationale": "驱动序列第 2 个 POST 是 default 轮：主线模型（0.163.0 起是 Lite 模型）、zstd、cookie jar 已由 prime 轮建立。不标 variant——A03 的 variant 维度由 Lite 轨承载（该场景 precondition 是 use_responses_lite=true），主线轮只作为 track 对照。"
         },
         {
           "glob": "scenarios/A03/relay/conn004.client_to_upstream.bin",
@@ -2113,10 +2113,10 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "provider": "openai_oauth"
           },
-          "rationale": "A04 的三次 models GET（账号特性变更前后网关启动期各一次），非 Lite 主线模型；GET 无 body，不标 body_length/compression。"
+          "rationale": "A04 的三次 models GET（账号特性变更前后网关启动期各一次），主线模型（0.163.0 起是 Lite 模型）；GET 无 body，不标 body_length/compression。"
         },
         {
           "glob": "scenarios/A04/relay/conn002.client_to_upstream.bin",
@@ -2132,7 +2132,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "residency": "unset",
             "compression": "plain",
             "body_length": "automatic",
@@ -2154,7 +2154,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "residency": "us",
             "compression": "plain",
             "body_length": "automatic",
@@ -2176,13 +2176,13 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "residency": "unset",
             "compression": "plain",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "驱动第 3、4 个 POST 是 memgen 与 parent-thread 条件头轮（set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与非 Lite body 判据。"
+          "rationale": "驱动第 3、4 个 POST 是 memgen 与 parent-thread 条件头轮（set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与主线 body 判据。"
         },
         {
           "glob": "scenarios/A04/relay/conn008.client_to_upstream.bin",
@@ -2198,7 +2198,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "reasoning_effort_numeric",
             "reasoning_effort_config": "numeric",
             "reasoning_effort_inbound": "integer",
@@ -2223,7 +2223,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "reasoning_effort_numeric",
             "reasoning_effort_config": "numeric",
             "reasoning_effort_inbound": "string",
@@ -2281,14 +2281,14 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "cookie_state": "absent",
             "session_header_scope": "responses_or_compact",
             "compression": "plain",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "0.157.0 起官方 WS 握手带账号 Cookie（来自先前响应的 Set-Cookie），而 A04 调整账号特性会重启网关清空进程内 Cookie jar；A05 在启动期 models 之后先发一次与 A04 同形的非 Lite 明文请求（官方入口、独立会话）建立 jar，relay 候选扩展只对这一次下发 _cfuvid。预热本身是冷 jar（cookie_state=absent），不属于任何官方变体，不标 variant。"
+          "rationale": "0.157.0 起官方 WS 握手带账号 Cookie（来自先前响应的 Set-Cookie），而 A04 调整账号特性会重启网关清空进程内 Cookie jar；A05 在启动期 models 之后先发一次与 A04 同形的主线明文请求（官方入口、独立会话）建立 jar，relay 候选扩展只对这一次下发 _cfuvid。预热本身是冷 jar（cookie_state=absent），不属于任何官方变体，不标 variant。"
         },
         {
           "glob": "scenarios/A05/relay/conn00[34].client_to_upstream.bin",
@@ -2360,11 +2360,11 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "default",
             "provider": "openai_oauth"
           },
-          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（非 Lite 主线模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）。",
+          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（主线模型，0.163.0 起是 Lite 模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）。",
           "frame_labels": {
             "0": {
               "frame_role": "warmup"
@@ -2399,7 +2399,7 @@
           "labels": {
             "transport": "websocket",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "provider": "openai_oauth"
           },
           "rationale": "A07 前六个连接是受控中继按冻结次数（A07_WS_FAILURE_COUNT=6）注入 502 的 WS 握手重试；transport=websocket 由升级请求形态与场景配置共同推出。"
@@ -2418,7 +2418,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "variant": "http_default",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -2453,7 +2453,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "provider": "openai_oauth"
           },
           "rationale": "A08 首连接为启动期 models GET；生命周期判据走 connection_lifecycle 内部记录，relay 样本提供跨调用连接的原始字节佐证。"
@@ -2472,7 +2472,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "body_length": "automatic",
             "session_header_scope": "responses_or_compact",
             "provider": "openai_oauth"
@@ -2507,7 +2507,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "compaction_mode": "manual",
             "body_length": "automatic",
             "provider": "openai_oauth"
@@ -2528,7 +2528,7 @@
           "labels": {
             "transport": "http",
             "track": "main",
-            "mode": "non_lite",
+            "mode": "lite",
             "compaction_mode": "auto",
             "body_length": "automatic",
             "provider": "openai_oauth"

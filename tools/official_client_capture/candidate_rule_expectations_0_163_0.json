@@ -2157,8 +2157,8 @@
             "path": "data.body.top_level_fields_in_order",
             "value": "instructions"
           },
-          "description": "非 Lite 的 Responses 请求体顶层不再有 instructions，基础指令改由 input 最前的 developer 消息承载",
-          "id": "nonlite-instructions-absent",
+          "description": "主线（0.163.0 起为 Lite 模型）的 Responses 请求体顶层没有 instructions，基础指令改由 input 的 developer 消息承载",
+          "id": "main-instructions-absent",
           "select": {
             "record_type": "http_request",
             "scenario_ids": [
@@ -2168,7 +2168,7 @@
               {
                 "operator": "equal",
                 "path": "labels.mode",
-                "value": "non_lite"
+                "value": "lite"
               },
               {
                 "operator": "equal",
@@ -2186,11 +2186,11 @@
         {
           "assertion": {
             "operator": "all_contains",
-            "path": "data.body.top_level_fields_in_order",
-            "value": "tools"
+            "path": "data.body.shape.input._types",
+            "value": "additional_tools"
           },
-          "description": "非 Lite 的 Responses 请求体保留 tools",
-          "id": "nonlite-tools-present",
+          "description": "主线（0.163.0 起为 Lite 模型）的 Responses 请求体把工具目录放在 input 的 additional_tools 项里（Lite 形态，顶层不再有 tools）",
+          "id": "main-additional-tools-present",
           "select": {
             "record_type": "http_request",
             "scenario_ids": [
@@ -2200,7 +2200,7 @@
               {
                 "operator": "equal",
                 "path": "labels.mode",
-                "value": "non_lite"
+                "value": "lite"
               },
               {
                 "operator": "equal",
@@ -4056,9 +4056,9 @@
       "trigger": "使用 Lite 模型执行两轮 HTTP Responses，并由受控上游在首轮注入 turn-state"
     },
     {
-      "description": "Responses HTTP 非 Lite、按样本标注压缩条件及条件 Header 矩阵",
+      "description": "Responses HTTP 主线轨道（0.163.0 起主线是 Lite 模型）、按样本标注压缩条件及条件 Header 矩阵",
       "preconditions": [
-        "use_responses_lite=false",
+        "use_responses_lite=true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite 声明）",
         "压缩开启与关闭样本分别以 labels.compression 标注",
         "各条件分支分别留有正负样本"
       ],
@@ -4067,7 +4067,7 @@
         "process_trace"
       ],
       "scenario_id": "A04",
-      "trigger": "使用非 Lite 模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支"
+      "trigger": "使用主线模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支"
     },
     {
       "description": "Responses WS Lite S2、turn-state 与压缩上下文",
@@ -4084,9 +4084,9 @@
       "trigger": "执行两轮 Lite WS 会话并由受控上游回送 response.metadata turn-state"
     },
     {
-      "description": "Responses WS 非 Lite、warmup 与增量帧",
+      "description": "Responses WS 主线轨道（0.163.0 起主线是 Lite 模型）、warmup 与增量帧",
       "preconditions": [
-        "use_responses_lite=false",
+        "use_responses_lite=true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite 声明）",
         "上游返回可复用 previous_response_id",
         "原始 WS 帧完整"
       ],

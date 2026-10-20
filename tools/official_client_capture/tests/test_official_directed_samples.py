@@ -1649,30 +1649,31 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
         self.assertIn("降级前先等到最近一次 Retry-After 的截止时间", self.jobs["official-relay-ws-retry-after"]["description"])
 
     def test_0163_directed_labels_follow_job_parameters(self) -> None:
+        # 0.163.0 起主线（track=main）是 Lite 模型，标签 mode 随之为 lite（旧版本的主线标 non_lite）。
         expected = {
             "official-relay-cyber-access-ws": ("websocket_trace", {
                 "transport": "websocket", "track": "lite", "mode": "lite",
                 "variant": "cyber_access_standard", "provider": "openai_oauth",
             }),
             "official-relay-stream-incomplete-http": ("process_trace", {
-                "transport": "http", "track": "main", "mode": "non_lite", "variant": "incomplete_terminal",
+                "transport": "http", "track": "main", "mode": "lite", "variant": "incomplete_terminal",
                 "upstream_response": "relay_synthetic", "provider": "openai_oauth",
             }),
             "official-relay-stream-incomplete-ws": ("websocket_trace", {
-                "transport": "websocket", "track": "main", "mode": "non_lite", "variant": "incomplete_terminal",
+                "transport": "websocket", "track": "main", "mode": "lite", "variant": "incomplete_terminal",
                 "upstream_response": "relay_synthetic", "provider": "openai_oauth",
             }),
             # 升级请求与降级 POST 同在 h1 请求流里，按 official-relay-conn-retry 的口径标 transport=http。
             "official-relay-ws-retry-after": ("process_trace", {
-                "transport": "http", "track": "main", "mode": "non_lite", "variant": "ws_retry_after",
+                "transport": "http", "track": "main", "mode": "lite", "variant": "ws_retry_after",
                 "retry_after": "present", "upstream_response": "relay_synthetic", "provider": "openai_oauth",
             }),
             "official-relay-server-overloaded-retry-after": ("process_trace", {
-                "transport": "http", "track": "main", "mode": "non_lite", "variant": "server_overloaded",
+                "transport": "http", "track": "main", "mode": "lite", "variant": "server_overloaded",
                 "retry_after": "present", "upstream_response": "relay_synthetic", "provider": "openai_oauth",
             }),
             "official-relay-server-overloaded": ("process_trace", {
-                "transport": "http", "track": "main", "mode": "non_lite", "variant": "server_overloaded",
+                "transport": "http", "track": "main", "mode": "lite", "variant": "server_overloaded",
                 "upstream_response": "relay_synthetic", "provider": "openai_oauth",
             }),
         }
