@@ -15,6 +15,11 @@
 0.163.0 在建 Campaign 之前又补了三个定向样本（提交 A）：exec 的 --cyber-access-program standard 固定 WS 帧末位的条件字段
 access_programs（A05，Lite）；流内 response.incomplete(max_output_tokens) 的终止语义（HTTP、WS 各一，A07）——本轮结束、
 不重试、不降级，采集脚本接受 codex exec 的非零退出码，并核对注入之后没有任何 Responses 请求。
+
+提交 B 又补了失败路径的三个定向样本（都只记时间线，不对客户端行为设硬门限）：WS 升级回 429＋Retry-After 的重试与降级前等待
+（A07，中继对每个 Responses WS 升级都回 429，降级 POST 转发生产）；HTTP 503 server_is_overloaded 带与不带 Retry-After 的一对
+（A07／A08，conn-retry 同族）。后者中继对**每个** Responses POST 都回 503——传输层本来就对所有 5xx 重试 4 次，只有重试预算用尽之后
+才暴露 0.163 的采样层差异（ServerOverloaded 带 Retry-After 才再重试）。
 """
 
 from __future__ import annotations
@@ -34,8 +39,10 @@ import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
+from tools.official_client_capture.tests.official_relay_harness import run_script_check, script_check_code
 from tools.official_client_capture.upstream_byte_relay import (
     _OFFICIAL_IMAGE_EDIT_CALL_ID,
+    _OVERLOADED_503_BODY,
     Relay,
     _WsFrameActivity,
     _decoded_request_json,
@@ -46,7 +53,10 @@ from tools.official_client_capture.upstream_byte_relay import (
     _official_sse_response,
     _official_stream_fault_events,
     _official_ws_handshake,
+    _overloaded_503_response,
     _post_terminal_request_kind,
+    _ws_upgrade_429_fallback_post,
+    _ws_upgrade_429_response,
 )
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +79,9 @@ NEW_0163_JOBS = {
     "official-relay-cyber-access-ws",
     "official-relay-stream-incomplete-http",
     "official-relay-stream-incomplete-ws",
+    "official-relay-ws-retry-after",
+    "official-relay-server-overloaded-retry-after",
+    "official-relay-server-overloaded",
 }
 # 含中继合成应答的作业（证据标签必须标 upstream_response=relay_synthetic）。
 SYNTHETIC_JOBS = {
@@ -80,6 +93,9 @@ SYNTHETIC_JOBS = {
 SYNTHETIC_0163_JOBS = {
     "official-relay-stream-incomplete-http",
     "official-relay-stream-incomplete-ws",
+    "official-relay-ws-retry-after",
+    "official-relay-server-overloaded-retry-after",
+    "official-relay-server-overloaded",
 }
 
 
@@ -169,6 +185,11 @@ def relay_with(tmp: str, **overrides) -> Relay:
         "stream_fault_transport": "",
         "synthesize_image_edit_file_id": "",
         "close_idle_ws_after": "",
+        "ws_upgrade_429_retry_after": "",
+        "retry_probe": "",
+        "retry_probe_target": "models",
+        "retry_probe_retry_after": "",
+        "retry_probe_wait": 15.0,
     }
     fields.update(overrides)
     relay = Relay.__new__(Relay)
@@ -343,6 +364,65 @@ class OfficialSyntheticEventsTest(unittest.TestCase):
         self.assertIn(f"sec-websocket-accept: {accept}\r\n".encode("ascii"), wire)
         self.assertIn(b"sec-websocket-extensions: permessage-deflate\r\n", wire)
         self.assertIsNone(_official_ws_handshake(b"GET / HTTP/1.1\r\nhost: x\r\n\r\n"))
+
+
+class FailurePathResponseTest(unittest.TestCase):
+    """0.163.0 失败路径定向样本：受控 503／429 的字节形状与降级 POST 的时间线标记（纯函数，不起中继）。"""
+
+    POST = "POST /backend-api/codex/responses HTTP/1.1"
+
+    @staticmethod
+    def split(response: bytes) -> tuple[list[str], dict[str, str], bytes]:
+        head, _, body = response.partition(b"\r\n\r\n")
+        lines = head.decode("ascii").split("\r\n")
+        return lines, dict(line.split(": ", 1) for line in lines[1:]), body
+
+    def test_overloaded_503_carries_the_server_is_overloaded_code_and_optional_retry_after(self) -> None:
+        for retry_after in ("", "2"):
+            with self.subTest(retry_after=retry_after):
+                lines, headers, body = self.split(_overloaded_503_response(retry_after))
+                self.assertEqual(lines[0], "HTTP/1.1 503 Service Unavailable")
+                self.assertEqual(headers["content-type"], "application/json")
+                self.assertEqual(headers["connection"], "keep-alive", "保持连接：重试是否复用连接是 CONN-001 的核对对象")
+                self.assertEqual(int(headers["content-length"]), len(body))
+                # 客户端按 body 的 error.code 把 503 映射成 ServerOverloaded（codex-api/src/api_bridge.rs 第 105-110 行 [0.163.0]）。
+                self.assertEqual(json.loads(body), {"error": {"code": "server_is_overloaded"}})
+                self.assertEqual(body, _OVERLOADED_503_BODY)
+                if retry_after:
+                    self.assertEqual(headers["retry-after"], retry_after)
+                else:
+                    self.assertNotIn("retry-after", headers)
+
+    def test_ws_upgrade_429_has_an_empty_body_a_retry_after_and_closes_the_connection(self) -> None:
+        lines, headers, body = self.split(_ws_upgrade_429_response("2"))
+        self.assertEqual(lines[0], "HTTP/1.1 429 Too Many Requests")
+        self.assertEqual(headers, {"retry-after": "2", "content-length": "0", "connection": "close"})
+        self.assertEqual(body, b"")
+
+    def test_fallback_post_marker_records_the_wait_since_the_last_429(self) -> None:
+        marker = _ws_upgrade_429_fallback_post(
+            retry_after_seconds=2, upgrade_count=6, last_sent_unix_ms=1_000, head_received_unix_ms=3_050,
+            request_line=self.POST,
+        )
+        self.assertEqual(marker, {
+            "ws_upgrade_429_count": 6,
+            "retry_after_seconds": 2,
+            "last_ws_upgrade_429_sent_unix_ms": 1_000,
+            "request_head_received_unix_ms": 3_050,
+            "since_last_ws_upgrade_429_ms": 2_050,
+        })
+
+    def test_fallback_post_marker_only_marks_responses_posts_after_a_429(self) -> None:
+        common = {"retry_after_seconds": 2, "upgrade_count": 3, "last_sent_unix_ms": 1_000, "head_received_unix_ms": 1_500}
+        for label, overrides in (
+            ("还没有升级 429", {"upgrade_count": 0, "last_sent_unix_ms": None}),
+            ("有计数却没有时刻", {"last_sent_unix_ms": None}),
+            ("WS 升级本身不是降级请求", {"request_line": "GET /backend-api/codex/responses HTTP/1.1"}),
+            ("其它端点的 POST", {"request_line": "POST /backend-api/codex/responses/compact HTTP/1.1"}),
+            ("models 查询", {"request_line": "GET /backend-api/codex/models?client_version=0.163.0 HTTP/1.1"}),
+        ):
+            with self.subTest(label):
+                self.assertIsNone(_ws_upgrade_429_fallback_post(**{"request_line": self.POST, **common, **overrides}))
 
 
 class ImageEditChainDecisionTest(unittest.TestCase):
@@ -603,7 +683,22 @@ class RelayArgumentValidationTest(unittest.TestCase):
             ("--close-idle-ws-after", "0"): "--close-idle-ws-after 必须是 1～600 的整数秒",
             ("--close-idle-ws-after", "601"): "--close-idle-ws-after 必须是 1～600 的整数秒",
             ("--retry-probe", "disconnect", "--retry-probe-retry-after", "2"):
-                "--retry-probe-retry-after 只能与 --retry-probe keepalive-500 同用",
+                "--retry-probe-retry-after 只能与 --retry-probe keepalive-500 或 persistent-503-overloaded 同用",
+            ("--retry-probe", "persistent-503-overloaded", "--retry-probe-target", "responses",
+             "--retry-probe-retry-after", "soon"):
+                "--retry-probe-retry-after 只能与 --retry-probe keepalive-500 或 persistent-503-overloaded 同用",
+            ("--retry-probe", "persistent-503-overloaded"):
+                "--retry-probe persistent-503-overloaded 只适用于 --retry-probe-target responses",
+            ("--retry-probe", "persistent-503-overloaded", "--retry-probe-target", "models"):
+                "--retry-probe persistent-503-overloaded 只适用于 --retry-probe-target responses",
+            ("--ws-upgrade-429-retry-after", "0"): "--ws-upgrade-429-retry-after 必须是 1～600 的整数秒",
+            ("--ws-upgrade-429-retry-after", "601"): "--ws-upgrade-429-retry-after 必须是 1～600 的整数秒",
+            ("--ws-upgrade-429-retry-after", "2s"): "--ws-upgrade-429-retry-after 必须是 1～600 的整数秒",
+            ("--ws-upgrade-429-retry-after", "2", "--force-ws-fallback-426"): "彼此互斥",
+            ("--ws-upgrade-429-retry-after", "2", "--retry-probe", "keepalive-500"): "彼此互斥",
+            ("--ws-upgrade-429-retry-after", "2", "--stream-fault", "interrupted", "--stream-fault-transport", "ws"):
+                "彼此互斥",
+            ("--ws-upgrade-429-retry-after", "2", "--close-idle-ws-after", "30"): "彼此互斥",
             ("--stream-fault", "interrupted", "--stream-fault-transport", "ws", "--close-idle-ws-after", "30"):
                 "彼此互斥",
             ("--close-idle-ws-after", "30", "--force-ws-fallback-426"): "彼此互斥",
@@ -664,9 +759,21 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
             ("ws-default", {"RELAY_CLOSE_IDLE_WS_AFTER": "30"}, "只用于对应的定向样本场景"),
             ("image", {"RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID": "file-c01592imageeditprobe"}, "只用于对应的定向样本场景"),
             ("conn-retry", {"RELAY_RETRY_PROBE": "disconnect", "RELAY_RETRY_PROBE_RETRY_AFTER": "2"},
-             "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 同用"),
+             "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 或 persistent-503-overloaded 同用"),
             ("conn-retry", {"RELAY_RETRY_PROBE_RETRY_AFTER": "2"},
-             "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 同用"),
+             "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 或 persistent-503-overloaded 同用"),
+            ("conn-retry", {"RELAY_RETRY_PROBE": "keepalive-503"},
+             "RELAY_RETRY_PROBE 只能是 keepalive-500、disconnect 或 persistent-503-overloaded"),
+            ("conn-retry", {"RELAY_RETRY_PROBE": "persistent-503-overloaded", "RELAY_RETRY_PROBE_TARGET": "responses",
+                            "RELAY_RETRY_PROBE_RETRY_AFTER": "soon"},
+             "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 或 persistent-503-overloaded 同用"),
+            ("ws-retry-after", {}, "ws-retry-after 必须设置 RELAY_WS_UPGRADE_429_RETRY_AFTER"),
+            ("ws-retry-after", {"RELAY_WS_UPGRADE_429_RETRY_AFTER": "0"},
+             "RELAY_WS_UPGRADE_429_RETRY_AFTER 必须是 1～600 的整数秒"),
+            ("ws-retry-after", {"RELAY_WS_UPGRADE_429_RETRY_AFTER": "601"},
+             "RELAY_WS_UPGRADE_429_RETRY_AFTER 必须是 1～600 的整数秒"),
+            ("ws-default", {"RELAY_WS_UPGRADE_429_RETRY_AFTER": "2"}, "只用于对应的定向样本场景"),
+            ("conn-retry", {"RELAY_WS_UPGRADE_429_RETRY_AFTER": "2"}, "只用于对应的定向样本场景"),
         ]
         for scenario, environment, message in cases:
             with self.subTest(scenario=scenario, environment=environment):
@@ -722,6 +829,43 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
         )
         self.assertEqual(misuse.returncode, 2, misuse.stderr)
         self.assertIn("只用于对应的定向样本场景", misuse.stderr)
+
+    def test_ws_retry_after_requires_0163_and_runs_on_the_builtin_ws_provider(self) -> None:
+        environment = {"RELAY_WS_UPGRADE_429_RETRY_AFTER": "2"}
+        old = self.run_until_validation("ws-retry-after", CODEX_VERSION="0.160.0", **environment)
+        self.assertEqual(old.returncode, 2, old.stderr)
+        self.assertIn("ws-retry-after 需要 Codex >=0.163.0", old.stderr)
+        self.assert_passes_validation(self.run_until_validation("ws-retry-after", **environment))
+        case = self.source[self.source.index("  ws-retry-after)\n"):]
+        case = case[:case.index(";;")]
+        self.assertIn("prompt='请只回复 OK，不要做任何其他事。'", case)
+        # 内置 provider 默认 WS：不换 provider、不关任何 feature，客户端字节与普通 WS 轮次相同，差别全在中继的 429。
+        self.assertNotIn("extra_args", case)
+        self.assertNotIn("http_probe_provider", case)
+
+    def test_persistent_overloaded_probe_needs_the_responses_target_and_0163(self) -> None:
+        base = {"RELAY_RETRY_PROBE": "persistent-503-overloaded", "RELAY_RETRY_PROBE_TARGET": "responses"}
+        for environment in (
+            base,
+            {**base, "RELAY_RETRY_PROBE_RETRY_AFTER": "2"},
+            {**base, "RELAY_FORCE_WS_FALLBACK_426": "1", "RELAY_RETRY_PROBE_RETRY_AFTER": "2"},
+        ):
+            with self.subTest(environment=environment):
+                self.assert_passes_validation(self.run_until_validation("conn-retry", **environment))
+                old = self.run_until_validation("conn-retry", CODEX_VERSION="0.160.0", **environment)
+                self.assertEqual(old.returncode, 2, old.stderr)
+                self.assertIn("RELAY_RETRY_PROBE=persistent-503-overloaded 需要 Codex >=0.163.0", old.stderr)
+        for extra in ({}, {"RELAY_RETRY_PROBE_TARGET": "models"}):
+            with self.subTest(extra=extra):
+                result = self.run_until_validation("conn-retry", RELAY_RETRY_PROBE="persistent-503-overloaded", **extra)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("只适用于 RELAY_RETRY_PROBE_TARGET=responses", result.stderr)
+        # 既有两个探针取值与 Retry-After 的搭配不受影响（0.145 起即可采）。
+        for mode in ("keepalive-500", "disconnect"):
+            with self.subTest(mode=mode):
+                self.assert_passes_validation(self.run_until_validation(
+                    "conn-retry", CODEX_VERSION="0.160.0", RELAY_RETRY_PROBE=mode, RELAY_RETRY_PROBE_TARGET="responses",
+                ))
 
     def test_numeric_reasoning_effort_prompts(self) -> None:
         http_case = self.source[self.source.index("  reasoning-numeric-http)\n"):]
@@ -830,6 +974,142 @@ class TerminalFaultCheckTest(unittest.TestCase):
                 code, report = self.run_check([{**self.WS_FAULT, "stream_fault_ws_actions": actions}], "ws")
                 self.assertEqual(code, 1, report)
                 self.assertEqual(report["failures"], ["ws-fault-action-not-exactly-once"])
+
+
+class EmbeddedCheckCase(unittest.TestCase):
+    """从采集脚本里取出某个 heredoc 核对块的 Python，喂假 relay.json 原样执行。"""
+
+    MARKER = ""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.code = script_check_code(cls.MARKER)
+
+    def run_check(self, connections: list[dict], *arguments: str) -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory() as tmp:
+            relay_json = Path(tmp) / "relay.json"
+            relay_json.write_text(json.dumps({"connections": connections}), encoding="utf-8")
+            return run_script_check(self.code, relay_json, *arguments)
+
+
+class WsUpgrade429CheckTest(EmbeddedCheckCase):
+    """「升级 429 降级等待核对」：硬判据只有结构性的两条，等待时长与间隔只记事实。"""
+
+    MARKER = 'ws_retry_after_report=$(docker exec -i "$capture_container" python3 - \\\n'
+
+    @staticmethod
+    def upgrade(connection_id: int, sequence: int, head_ms: int, sent_ms: int) -> dict:
+        return {"connection_id": connection_id, "intervention": "ws_upgrade_429", "ws_upgrade_429": {
+            "sequence": sequence, "retry_after_seconds": 2,
+            "request_head_received_unix_ms": head_ms, "response_sent_unix_ms": sent_ms,
+        }}
+
+    @staticmethod
+    def fallback(connection_id: int, head_ms: int, last_sent_ms: int) -> dict:
+        return {"connection_id": connection_id, "request_line": "POST /backend-api/codex/responses HTTP/1.1",
+                "ws_upgrade_429_fallback_post": {
+                    "ws_upgrade_429_count": 3, "retry_after_seconds": 2,
+                    "last_ws_upgrade_429_sent_unix_ms": last_sent_ms, "request_head_received_unix_ms": head_ms,
+                    "since_last_ws_upgrade_429_ms": head_ms - last_sent_ms,
+                }}
+
+    def test_passes_and_records_the_timeline_when_the_client_waited(self) -> None:
+        connections = [
+            {"connection_id": 1, "request_line": "GET /backend-api/codex/models?client_version=0.163.0 HTTP/1.1"},
+            self.upgrade(2, 1, 1_000, 1_001), self.upgrade(3, 2, 3_010, 3_011), self.upgrade(4, 3, 5_020, 5_021),
+            self.fallback(5, 7_040, 5_021),
+        ]
+        code, report = self.run_check(connections, "2", "0")
+        self.assertEqual(code, 0, report)
+        self.assertEqual((report["status"], report["failures"]), ("passed", []))
+        self.assertEqual(report["upgrade_attempt_count"], 3)
+        self.assertEqual(report["gaps_between_upgrade_attempts_ms"], [2_009, 2_009])
+        self.assertEqual(report["http_fallback_post_count"], 1)
+        self.assertEqual(report["fallback_since_last_upgrade_429_ms"], 2_019)
+        self.assertIs(report["fallback_waited_retry_after"], True)
+        self.assertEqual((report["retry_after_seconds"], report["exec_exit_status"]), (2, 0))
+
+    def test_a_client_that_did_not_wait_is_recorded_not_rejected(self) -> None:
+        """降级前没等到截止时间也是证据（0.160 就是这样）：采集阶段不丢，由 VC-2 对着样本判。"""
+
+        connections = [self.upgrade(2, 1, 1_000, 1_001), self.fallback(3, 1_300, 1_001)]
+        code, report = self.run_check(connections, "2", "")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["status"], "passed")
+        self.assertIs(report["fallback_waited_retry_after"], False)
+        self.assertEqual(report["fallback_since_last_upgrade_429_ms"], 299)
+        self.assertIsNone(report["exec_exit_status"])
+
+    def test_requires_an_injected_429_and_a_following_fallback_post(self) -> None:
+        for connections, failures in (
+            ([], ["no-ws-upgrade-429-injected", "no-http-fallback-post-after-429"]),
+            ([self.fallback(3, 5_000, 1_000)], ["no-ws-upgrade-429-injected"]),
+            ([self.upgrade(2, 1, 1_000, 1_001)], ["no-http-fallback-post-after-429"]),
+        ):
+            with self.subTest(failures=failures):
+                code, report = self.run_check(connections, "2", "1")
+                self.assertEqual(code, 1, report)
+                self.assertEqual((report["status"], report["failures"]), ("failed", failures))
+
+
+class OverloadedTimelineCheckTest(EmbeddedCheckCase):
+    """「过载 503 重试时间线核对」：硬判据是回过受控 503 且同连接没有非目标请求，请求数与间隔只记事实。"""
+
+    MARKER = 'overloaded_report=$(docker exec -i "$capture_container" python3 - \\\n'
+
+    @staticmethod
+    def served(attempt: int, head_ms: int, sent_ms: int, *, retry_after: int | None = 2) -> dict:
+        return {"attempt": attempt, "request_line": "POST /backend-api/codex/responses HTTP/1.1",
+                "retry_after_seconds": retry_after,
+                "request_head_received_unix_ms": head_ms, "response_sent_unix_ms": sent_ms}
+
+    def test_records_request_count_and_gaps_across_connections(self) -> None:
+        # 6 轮 × 5 个请求：同一轮内连接复用，轮间换新连接——按到达时刻排序后统计，与连接划分无关。
+        first = [self.served(index + 1, 2_050 * index, 2_050 * index + 1) for index in range(3)]
+        second = [self.served(index + 4, 6_150 + 2_050 * index, 6_151 + 2_050 * index) for index in range(2)]
+        connections = [
+            {"connection_id": 4, "overloaded_503_attempts": second, "overloaded_503_end": "client_closed"},
+            {"connection_id": 2, "overloaded_503_attempts": first, "overloaded_503_end": "client_closed"},
+        ]
+        code, report = self.run_check(connections, "2", "1")
+        self.assertEqual(code, 0, report)
+        self.assertEqual((report["status"], report["failures"]), ("passed", []))
+        self.assertEqual(report["request_count"], 5)
+        self.assertEqual(report["connection_ids"], [2, 4])
+        self.assertEqual(report["gaps_ms"], [2_049, 2_049, 2_049, 2_049])
+        self.assertEqual(report["min_gap_ms"], 2_049)
+        self.assertIs(report["all_gaps_at_least_retry_after"], True)
+        self.assertEqual((report["retry_after_seconds"], report["exec_exit_status"]), (2, 1))
+
+    def test_short_gaps_are_recorded_not_rejected(self) -> None:
+        attempts = [self.served(1, 0, 1), self.served(2, 700, 701), self.served(3, 2_900, 2_901)]
+        code, report = self.run_check(
+            [{"connection_id": 2, "overloaded_503_attempts": attempts}], "2", "1"
+        )
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["gaps_ms"], [699, 2_199])
+        self.assertIs(report["all_gaps_at_least_retry_after"], False)
+
+    def test_control_without_retry_after_has_no_gap_verdict(self) -> None:
+        heads = [0, 220, 650, 1_500, 3_200]  # 指数退避的量级：200 ms 起每次约翻倍
+        attempts = [self.served(index + 1, head, head + 1, retry_after=None) for index, head in enumerate(heads)]
+        code, report = self.run_check([{"connection_id": 2, "overloaded_503_attempts": attempts}], "", "1")
+        self.assertEqual(code, 0, report)
+        self.assertEqual(report["request_count"], 5)
+        self.assertIsNone(report["retry_after_seconds"])
+        self.assertIsNone(report["all_gaps_at_least_retry_after"])
+        self.assertEqual(len(report["gaps_ms"]), 4)
+
+    def test_requires_a_served_503_and_no_unexpected_request(self) -> None:
+        code, report = self.run_check([{"connection_id": 1}], "2", "0")
+        self.assertEqual((code, report["failures"]), (1, ["no-overloaded-503-served"]))
+        self.assertEqual(report["request_count"], 0)
+        self.assertIsNone(report["min_gap_ms"])
+        connections = [{"connection_id": 2, "overloaded_503_attempts": [self.served(1, 0, 1)],
+                        "overloaded_503_end": "unexpected_request"}]
+        code, report = self.run_check(connections, "2", "0")
+        self.assertEqual((code, report["failures"]), (1, ["unexpected-request-on-overloaded-connection"]))
+        self.assertEqual(report["unexpected_request_connection_ids"], [2])
 
 
 class Scenario0159ManifestParameterTest(unittest.TestCase):
@@ -990,6 +1270,14 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
                                                       ["SPEC-PROTO-002"]),
             "official-relay-stream-incomplete-ws": (["A07"], "stream-fault", ("GET", "/backend-api/codex/responses"),
                                                     ["SPEC-PROTO-002"]),
+            "official-relay-ws-retry-after": (["A07"], "ws-retry-after", ("POST", "/backend-api/codex/responses"),
+                                              ["SPEC-PROTO-002"]),
+            "official-relay-server-overloaded-retry-after": (
+                ["A07", "A08"], "conn-retry", ("POST", "/backend-api/codex/responses"),
+                ["SPEC-CONN-001", "SPEC-PROTO-002"]),
+            "official-relay-server-overloaded": (
+                ["A07", "A08"], "conn-retry", ("POST", "/backend-api/codex/responses"),
+                ["SPEC-CONN-001", "SPEC-PROTO-002"]),
         }
         scenarios = {item["scenario_id"]: set(item["covers"]) for item in self.manifest["evidence_scenarios"]}
         rules = set(json.loads((TOOL_ROOT / "codex_upgrade_rules_0_163_0.json").read_text(encoding="utf-8"))["required_rules"])
@@ -1046,6 +1334,51 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
                     self.jobs[f"official-relay-stream-interrupted-{transport}"]["covers"],
                 )
 
+    def test_ws_retry_after_job_sets_only_the_429_switch_on_the_builtin_ws_provider(self) -> None:
+        """不与 426 强制降级等其它干预同用（那会让客户端绕过重试等待直接降级），也不换 provider：差别全在中继的 429。"""
+
+        job = self.jobs["official-relay-ws-retry-after"]
+        environment = self.environment("official-relay-ws-retry-after")
+        self.assertEqual(environment["RELAY_WS_UPGRADE_429_RETRY_AFTER"], "2")
+        self.assertEqual([key for key in environment if key.startswith("RELAY_")], ["RELAY_WS_UPGRADE_429_RETRY_AFTER"])
+        self.assertEqual(environment["MODEL"], "{model}")
+        self.assertNotIn("track", job, "主线作业，不带 Lite 字段")
+        self.assertEqual(job["suites"], ["full"])
+        self.assertEqual(job["required_scenario_receipts"], [])
+
+    def test_server_overloaded_pair_is_a_conn_retry_chain_that_differs_only_by_retry_after(self) -> None:
+        with_retry_after = self.environment("official-relay-server-overloaded-retry-after")
+        control = self.environment("official-relay-server-overloaded")
+        self.assertEqual(with_retry_after["RELAY_RETRY_PROBE_RETRY_AFTER"], "2")
+        self.assertNotIn("RELAY_RETRY_PROBE_RETRY_AFTER", control)
+        self.assertEqual(
+            {key: value for key, value in with_retry_after.items() if key not in {"RUN_ID", "RELAY_RETRY_PROBE_RETRY_AFTER"}},
+            {key: value for key, value in control.items() if key != "RUN_ID"},
+            "有值对照与无值样本只差 Retry-After 一个条件",
+        )
+        # 与 conn-retry 同族：同一场景、426 强制降级、responses 目标；差别只有探针取值与目标请求断言。
+        conn_retry = self.environment("official-relay-conn-retry")
+        self.assertEqual(
+            {key for key in set(control) | set(conn_retry) if control.get(key) != conn_retry.get(key)},
+            {"RUN_ID", "RELAY_RETRY_PROBE", "REQUIRE_REQUEST_METHOD", "REQUIRE_REQUEST_PATH"},
+        )
+        self.assertEqual(control["RELAY_RETRY_PROBE"], "persistent-503-overloaded")
+        for job_id in ("official-relay-server-overloaded-retry-after", "official-relay-server-overloaded"):
+            with self.subTest(job_id=job_id):
+                self.assertEqual(self.jobs[job_id]["scenario_ids"], self.jobs["official-relay-conn-retry-after"]["scenario_ids"])
+                self.assertEqual(set(self.jobs[job_id]["covers"]), set(self.jobs["official-relay-conn-retry-after"]["covers"]))
+
+    def test_new_failure_path_descriptions_state_the_two_retry_layers(self) -> None:
+        """描述要把「传输层照样重试、差异只在采样层」写明，避免被读成「无 Retry-After 就不重试」。"""
+
+        control = self.jobs["official-relay-server-overloaded"]["description"]
+        self.assertIn("传输层照样重试", control)
+        self.assertIn("5 个请求", control)
+        with_retry_after = self.jobs["official-relay-server-overloaded-retry-after"]["description"]
+        self.assertIn("30 个请求", with_retry_after)
+        self.assertIn("0.160 恒终止", with_retry_after)
+        self.assertIn("降级前先等到最近一次 Retry-After 的截止时间", self.jobs["official-relay-ws-retry-after"]["description"])
+
     def test_0163_directed_labels_follow_job_parameters(self) -> None:
         expected = {
             "official-relay-cyber-access-ws": ("websocket_trace", {
@@ -1060,6 +1393,19 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
                 "transport": "websocket", "track": "main", "mode": "non_lite", "variant": "incomplete_terminal",
                 "upstream_response": "relay_synthetic", "provider": "openai_oauth",
             }),
+            # 升级请求与降级 POST 同在 h1 请求流里，按 official-relay-conn-retry 的口径标 transport=http。
+            "official-relay-ws-retry-after": ("process_trace", {
+                "transport": "http", "track": "main", "mode": "non_lite", "variant": "ws_retry_after",
+                "retry_after": "present", "upstream_response": "relay_synthetic", "provider": "openai_oauth",
+            }),
+            "official-relay-server-overloaded-retry-after": ("process_trace", {
+                "transport": "http", "track": "main", "mode": "non_lite", "variant": "server_overloaded",
+                "retry_after": "present", "upstream_response": "relay_synthetic", "provider": "openai_oauth",
+            }),
+            "official-relay-server-overloaded": ("process_trace", {
+                "transport": "http", "track": "main", "mode": "non_lite", "variant": "server_overloaded",
+                "upstream_response": "relay_synthetic", "provider": "openai_oauth",
+            }),
         }
         for job_id, (derive_kind, labels) in expected.items():
             with self.subTest(job_id=job_id):
@@ -1067,8 +1413,13 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
                 self.assertEqual(len(rules), 1)
                 self.assertEqual(rules[0]["labels"], labels)
                 self.assertEqual(rules[0]["derive"], {"parser": "h1_request_stream", "kind": derive_kind})
+                self.assertEqual(rules[0]["glob"], "relay/*.client_to_upstream.bin")
                 self.assertEqual(rules[0]["scenario_ids"], self.jobs[job_id]["scenario_ids"])
                 self.assertTrue(rules[0]["rationale"])
+        # 过载 503 的一对只差 retry_after 标签（约定同 official-relay-conn-retry／-after：无值样本不带该标签）。
+        with_retry_after = self.labels["official-relay-server-overloaded-retry-after"]["rules"][0]["labels"]
+        control = self.labels["official-relay-server-overloaded"]["rules"][0]["labels"]
+        self.assertEqual({k: v for k, v in with_retry_after.items() if k != "retry_after"}, control)
         # 终止型故障的标签与 interrupted 同构，只差 variant。
         for transport, suffix in (("http", "http"), ("ws", "ws")):
             incomplete = self.labels[f"official-relay-stream-incomplete-{suffix}"]["rules"][0]["labels"]

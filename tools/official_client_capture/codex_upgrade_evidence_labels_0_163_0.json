@@ -1600,6 +1600,91 @@
       ]
     },
     {
+      "job_id": "official-relay-ws-retry-after",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "ws_retry_after",
+            "retry_after": "present",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "中继对每个 Responses WS 升级回 429 + retry-after: 2（作业参数 RELAY_WS_UPGRADE_429_RETRY_AFTER 决定，retry_after=present 由此推出），客户端重试用尽后改发 HTTP POST，所以按与 official-relay-conn-retry 相同的口径标 transport=http（升级请求与降级 POST 同在 h1 请求流里）；upstream_response=relay_synthetic 标明本作业含中继合成的 429、不得当作生产自然成功（降级 POST 转发生产）。主线 {model} 非 Lite。重试次数、间隔与降级前等待是 PROTO-002 的判定对象，只由原始字节与 relay.json 的 ws_upgrade_429／ws_upgrade_429_fallback_post 核对，不反推进标签。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-server-overloaded-retry-after",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07",
+            "A08"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "server_overloaded",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth",
+            "retry_after": "present"
+          },
+          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 附带 retry-after: 2 由作业参数 RELAY_RETRY_PROBE_RETRY_AFTER 决定，retry_after=present 由此推出，其余标签与无值对照逐项相同，保证两者只差这一个条件；主线 {model} 非 Lite。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-server-overloaded",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07",
+            "A08"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "server_overloaded",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "与 official-relay-conn-retry／-after 同族：426 强制降级 HTTP 后，中继对每个 Responses POST 回 503 server_is_overloaded（由作业参数 RELAY_RETRY_PROBE=persistent-503-overloaded 决定），upstream_response=relay_synthetic 标明本作业的 Responses 应答全部是中继合成、不得当作生产自然成功；503 不附 Retry-After（对照样本，无 retry_after 标签，约定同 official-relay-conn-retry）；主线 {model} 非 Lite。请求次数与相邻请求的间隔是 PROTO-002／CONN-001 的判定对象，只由原始字节与 relay.json 的 overloaded_503_attempts 核对，不反推进标签。"
+        }
+      ]
+    },
+    {
       "job_id": "candidate-core-direct",
       "side": "candidate",
       "rules": [

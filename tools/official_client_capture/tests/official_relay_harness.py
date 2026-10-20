@@ -33,6 +33,7 @@ from pathlib import Path
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
 RELAY_PY = TOOL_ROOT / "upstream_byte_relay.py"
+RELAY_SCRIPT = TOOL_ROOT / "run_official_relay_scenario.sh"
 OPENSSL = shutil.which("openssl")
 WEBSOCKET_KEY = "dGhlIHNhbXBsZSBub25jZQ=="
 
@@ -139,6 +140,31 @@ class RelayProcess:
             self._stderr_handle.close()
         if self._temp is not None:
             self._temp.cleanup()
+
+
+# ── 采集脚本里的核对块 ──────────────────────────────────────────────────────────────
+
+def script_check_code(marker: str) -> str:
+    """取出采集脚本里以 ``marker`` 开头的 heredoc 核对块的 Python 源码（原样，不改一个字）。
+
+    marker 是核对块所在命令替换的起始文本（变量名、``$(docker exec -i "$capture_container" python3 -`` 与行尾续行符，
+    再加换行），块以 ``<<'PY'`` 开始、以独占一行的 ``PY`` 结束。
+    """
+
+    source = RELAY_SCRIPT.read_text(encoding="utf-8")
+    start = source.index(marker)
+    body_start = source.index("<<'PY'\n", start) + len("<<'PY'\n")
+    return source[body_start:source.index("\nPY\n", body_start) + 1]
+
+
+def run_script_check(code: str, relay_json: Path, *arguments: str) -> tuple[int, dict]:
+    """像采集脚本那样执行核对块：``python3 - <relay.json> <参数…>``，返回 (退出码, 标准输出里的 JSON 报告)。"""
+
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code, str(relay_json), *arguments],
+        text=True, capture_output=True, check=False,
+    )
+    return result.returncode, json.loads(result.stdout)
 
 
 # ── h1／WS 字节辅助 ─────────────────────────────────────────────────────────────

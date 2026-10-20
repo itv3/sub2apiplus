@@ -1468,6 +1468,83 @@ def _post_terminal_request_kind(
     return None
 
 
+# ── 0.163.0 失败路径定向样本：HTTP 503 server_is_overloaded 与 WS 升级 429（Retry-After）─────────────────
+# 两者都是「服务端受控回错，观察客户端等多久、重试几次、是否降级」的样本：客户端发出的请求字节仍是官方原样，被受控
+# 应答的请求不转发生产（production_forwarded=false），等待与次数的时间线记入连接元数据，由 relay.json 的时刻差核对。
+#
+# 过载 503（--retry-probe persistent-503-overloaded，可选 --retry-probe-retry-after）
+#   body 为 {"error":{"code":"server_is_overloaded"}}。客户端有两层重试，0.160 与 0.163 的差异只在上层：
+#   - 传输层 run_with_retry 对所有 5xx 重试（provider 默认 retry_5xx=true、request_max_retries=4、基准退避 200 ms：
+#     codex-api/src/endpoint/session.rs 第 139-151 行、codex-client/src/retry.rs 第 23-41、84-118 行、
+#     model-provider-info/src/lib.rs 第 67-68、454-460、499-503 行 [0.163.0]），带 Retry-After 时等到其截止时间再发、
+#     否则指数退避。所以「无 Retry-After 就不重试」并不成立——传输层照样连发 5 个请求。
+#   - 采样层 handle_response_stream_error（stream_max_retries 默认 5，core/src/responses_retry.rs 第 57-167 行 [0.163.0]）：
+#     503 且 code=server_is_overloaded 映射成 ServerOverloaded，Retry-After 随错误传递（codex-api/src/api_bridge.rs 第 22-49、
+#     65、105-110 行）；ServerOverloaded 的 retry_delay 由 0.160 的恒终止（protocol/src/error.rs 第 413 行 [0.160.0]）改为
+#     「仅当带服务端 Retry-After 时按其延迟重试」（同文件第 438-440 行 [0.163.0]）。
+#   因此要让两层行为都暴露，必须对每个 Responses POST 都回 503，而不是像 keepalive-500 那样只回首个、其余转发生产：
+#   带 Retry-After 时预期 6 轮 × 5 个 = 30 个请求（每轮传输层间隔等 Retry-After，轮间采样层再等一次），不带时 5 个请求后终止。
+#
+# WS 升级 429（--ws-upgrade-429-retry-after SECONDS）
+#   握手失败时 0.163 起解析 Retry-After（codex-api/src/endpoint/responses_websocket.rs 第 592-611 行 [0.163.0]；0.160.0 写死
+#   retry_after: None，第 565-584 行）；429 无论 body 是否可识别都落到 RetryLimit（api_bridge.rs 第 185-244 行），其 retry_delay
+#   同上「仅当带 Retry-After 时重试」，0.160 恒终止（升级 429 直接结束本轮）。带 Retry-After 的升级 429 因此被采样层重试
+#   stream_max_retries 次，用尽后改发 HTTP，且降级前先等到最近一次 Retry-After 的截止时间（core/src/responses_retry.rs 第
+#   120-129 行 [0.163.0]；0.160.0 第 119-135 行是 TODO、不等待）。每个 Responses WS 升级都回 429（只回一次的话，下一次重试直接成功，
+#   永远走不到降级），降级 POST 照常转发生产。
+_RETRY_PROBE_PERSISTENT_503 = "persistent-503-overloaded"
+_RETRY_PROBE_MODES = ("keepalive-500", "disconnect", _RETRY_PROBE_PERSISTENT_503)
+_OVERLOADED_503_BODY = b'{"error":{"code":"server_is_overloaded"}}'
+_RESPONSES_POST_REQUEST_LINE = "POST /backend-api/codex/responses HTTP/1.1"
+
+
+def _overloaded_503_response(retry_after: str = "") -> bytes:
+    """过载 503：JSON body 带 error.code=server_is_overloaded，可选 Retry-After（整数秒），保持连接（keep-alive）。"""
+
+    lines = [b"HTTP/1.1 503 Service Unavailable\r\n", b"content-type: application/json\r\n"]
+    if retry_after:
+        lines.append(b"retry-after: " + retry_after.encode("ascii") + b"\r\n")
+    lines.append(f"content-length: {len(_OVERLOADED_503_BODY)}\r\n".encode("ascii"))
+    lines.append(b"connection: keep-alive\r\n\r\n")
+    return b"".join(lines) + _OVERLOADED_503_BODY
+
+
+def _ws_upgrade_429_response(retry_after: str) -> bytes:
+    """WS 升级 429：空 body 带 Retry-After（整数秒），响应后断开连接（升级被拒的连接不会再承载请求）。"""
+
+    return (
+        b"HTTP/1.1 429 Too Many Requests\r\n"
+        b"retry-after: " + retry_after.encode("ascii") + b"\r\n"
+        b"content-length: 0\r\n"
+        b"connection: close\r\n\r\n"
+    )
+
+
+def _ws_upgrade_429_fallback_post(
+    *,
+    retry_after_seconds: int,
+    upgrade_count: int,
+    last_sent_unix_ms: int | None,
+    head_received_unix_ms: int,
+    request_line: str,
+) -> dict | None:
+    """升级 429 之后到达的 Responses HTTP POST（降级）的时间线记录；不是降级请求则返回 None。
+
+    只记事实、不判成败：since_last_ws_upgrade_429_ms 是「最近一次 429 写完」到「降级 POST 请求头读到」的间隔，
+    「降级前是否等到 Retry-After 截止」由它与 retry_after_seconds 的比较核对（见采集脚本的升级 429 核对）。
+    """
+
+    if upgrade_count <= 0 or last_sent_unix_ms is None or request_line != _RESPONSES_POST_REQUEST_LINE:
+        return None
+    return {
+        "ws_upgrade_429_count": upgrade_count,
+        "retry_after_seconds": retry_after_seconds,
+        "last_ws_upgrade_429_sent_unix_ms": last_sent_unix_ms,
+        "request_head_received_unix_ms": head_received_unix_ms,
+        "since_last_ws_upgrade_429_ms": head_received_unix_ms - last_sent_unix_ms,
+    }
+
+
 def _official_message_events(response_id: str, text: str) -> list[dict]:
     """受控正常完成：一条 assistant 消息加 completed。"""
 
@@ -1872,6 +1949,9 @@ class Relay:
         self._image_edit_call_issued = False
         self._image_edit_lock = asyncio.Lock()
         self._idle_close_applied = False
+        # 0.163.0 失败路径定向样本：WS 升级 429 的累计次数与最近一次 429 写完的时刻（毫秒），降级 POST 据此算等待时长。
+        self._ws_upgrade_429_count = 0
+        self._ws_upgrade_429_last_sent_ms: int | None = None
         self._preconnected_upstream: PreconnectedUpstream | None = None
         self._preconnected_upstream_lock = asyncio.Lock()
         self._preconnect_duration_ms: float | None = None
@@ -2443,13 +2523,17 @@ class Relay:
         async with self._retry_probe_lock:
             self._retry_probe_attempts += 1
             attempt = self._retry_probe_attempts
-        action = "forward_to_production"
-        if attempt == 1:
-            action = (
-                "synthetic_500_keepalive"
-                if self.args.retry_probe == "keepalive-500"
-                else "disconnect"
-            )
+        if self.args.retry_probe == _RETRY_PROBE_PERSISTENT_503:
+            # 持续过载：每个目标请求都由中继受控应答，没有转发生产的 attempt。
+            action = "synthetic_503_server_is_overloaded"
+        else:
+            action = "forward_to_production"
+            if attempt == 1:
+                action = (
+                    "synthetic_500_keepalive"
+                    if self.args.retry_probe == "keepalive-500"
+                    else "disconnect"
+                )
         self._log_intervention({
             "type": "conn_retry_probe",
             "mode": self.args.retry_probe,
@@ -2465,6 +2549,84 @@ class Relay:
         if self.args.retry_probe_target == "models":
             return request_line.startswith("GET /backend-api/codex/models?")
         return request_line == "POST /backend-api/codex/responses HTTP/1.1"
+
+    async def _serve_persistent_overloaded_503(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        rec: "ByteRecorder",
+        conn_id: int,
+        meta: dict,
+        head: bytes,
+        request_line: str,
+        head_received_unix_ms: int,
+    ) -> None:
+        """persistent-503-overloaded：这条连接上每个目标 Responses POST 都回 keep-alive 503，不转发生产。
+
+        首个请求头已读（head）。循环：读完 body 并记录、回 503（可选 Retry-After）、等同连接的下一个请求头。
+        客户端关闭连接、retry_probe_wait 秒仍无请求、或来了非目标请求时结束；新连接上的重试由 handle() 再走到这里，
+        跨连接的序号靠全局 attempt 计数。每个请求的时间线（请求头读到／响应写完）记入 overloaded_503_attempts，
+        「重试间隔不短于 Retry-After」由相邻两项的时刻差核对。
+        """
+
+        retry_after = self.args.retry_probe_retry_after
+        response = _overloaded_503_response(retry_after)
+        meta["intervention"] = f"conn_retry_probe:{self.args.retry_probe}"
+        meta["production_forwarded"] = False
+        attempts = meta.setdefault("overloaded_503_attempts", [])
+        while True:
+            attempt = await self._claim_retry_probe_attempt(conn_id, request_line)
+            meta.setdefault("retry_probe_attempts", []).append({
+                "attempt": attempt,
+                "request_line": request_line,
+            })
+            rec.write("client_to_upstream", head)
+            try:
+                body = await self._read_h1_body(reader, head)
+            except (asyncio.IncompleteReadError, ConnectionError, ssl.SSLError, OSError) as error:
+                meta["error"] = f"过载 503 样本的请求体未读完：{type(error).__name__}"
+                meta["valid"] = False
+                return
+            if body:
+                rec.write("client_to_upstream", body)
+            rec.write("upstream_to_client", response)
+            writer.write(response)
+            await writer.drain()
+            entry = {
+                "attempt": attempt,
+                "request_line": request_line,
+                "retry_after_seconds": int(retry_after) if retry_after else None,
+                "request_head_received_unix_ms": head_received_unix_ms,
+                "response_sent_unix_ms": round(time.time() * 1000),
+            }
+            attempts.append(entry)
+            self._log_intervention({
+                "type": "overloaded_503_served",
+                "connection_id": conn_id,
+                "production_forwarded": False,
+                **entry,
+            })
+            try:
+                head = await asyncio.wait_for(
+                    reader.readuntil(b"\r\n\r\n"),
+                    timeout=self.args.retry_probe_wait,
+                )
+            except asyncio.TimeoutError:
+                meta["overloaded_503_end"] = "idle_timeout"
+                meta["valid"] = True
+                return
+            except (asyncio.IncompleteReadError, ConnectionError, ssl.SSLError, OSError):
+                meta["overloaded_503_end"] = "client_closed"
+                meta["valid"] = True
+                return
+            head_received_unix_ms = round(time.time() * 1000)
+            request_line = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+            if not self._is_retry_probe_target(request_line):
+                rec.write("client_to_upstream", head)
+                meta["error"] = f"过载 503 样本的同连接上收到非目标请求：{request_line}"
+                meta["overloaded_503_end"] = "unexpected_request"
+                meta["valid"] = False
+                return
 
     @staticmethod
     async def _read_h1_body(reader: asyncio.StreamReader, head: bytes) -> bytes:
@@ -2874,6 +3036,8 @@ class Relay:
             initial_body = b""
             initial_head_recorded = False
             request_line = ""
+            # 首个请求头读到的墙钟时刻（毫秒）：失败路径定向样本据此计算相邻请求的间隔（见 _serve_persistent_overloaded_503）。
+            head_received_unix_ms = 0
             is_responses_ws = False
             force_this_file_c2pa = False
             forward_head = None
@@ -2889,6 +3053,7 @@ class Relay:
                 or self.args.stream_fault
                 or self.args.synthesize_image_edit_file_id
                 or self.args.close_idle_ws_after
+                or self.args.ws_upgrade_429_retry_after
             )
             if intervention_enabled:
                 if cli_alpn not in {None, "http/1.1"}:
@@ -2896,6 +3061,7 @@ class Relay:
                     meta["valid"] = False
                     return
                 initial_head = await reader.readuntil(b"\r\n\r\n")
+                head_received_unix_ms = round(time.time() * 1000)
                 request_line = initial_head.split(b"\r\n", 1)[0].decode(
                     "latin-1", "replace"
                 )
@@ -3233,6 +3399,12 @@ class Relay:
                     return
 
                 is_retry_probe_target = self._is_retry_probe_target(request_line)
+                if self.args.retry_probe == _RETRY_PROBE_PERSISTENT_503 and is_retry_probe_target:
+                    await self._serve_persistent_overloaded_503(
+                        reader, writer, rec, conn_id, meta,
+                        initial_head, request_line, head_received_unix_ms,
+                    )
+                    return
                 if self.args.retry_probe and is_retry_probe_target:
                     attempt = await self._claim_retry_probe_attempt(
                         conn_id,
@@ -3358,6 +3530,52 @@ class Relay:
                         "connection_id": conn_id,
                         "request_line": request_line,
                     })
+                if self.args.ws_upgrade_429_retry_after:
+                    retry_after_seconds = int(self.args.ws_upgrade_429_retry_after)
+                    fallback_post = _ws_upgrade_429_fallback_post(
+                        retry_after_seconds=retry_after_seconds,
+                        upgrade_count=self._ws_upgrade_429_count,
+                        last_sent_unix_ms=self._ws_upgrade_429_last_sent_ms,
+                        head_received_unix_ms=head_received_unix_ms,
+                        request_line=request_line,
+                    )
+                    if fallback_post is not None:
+                        # 升级 429 之后到达的 Responses POST 就是降级请求：只记时间线，请求照常转发生产。
+                        meta["ws_upgrade_429_fallback_post"] = fallback_post
+                        self._log_intervention({
+                            "type": "ws_upgrade_429_fallback_post",
+                            "connection_id": conn_id,
+                            "request_line": request_line,
+                            **fallback_post,
+                        })
+                    if is_responses_ws:
+                        # 每个 Responses WS 升级都回 429 + Retry-After，不转发生产；升级请求字节与受控应答完整记录。
+                        self._ws_upgrade_429_count += 1
+                        rec.write("client_to_upstream", initial_head)
+                        initial_head_recorded = True
+                        response = _ws_upgrade_429_response(self.args.ws_upgrade_429_retry_after)
+                        rec.write("upstream_to_client", response)
+                        writer.write(response)
+                        await writer.drain()
+                        sent_unix_ms = round(time.time() * 1000)
+                        self._ws_upgrade_429_last_sent_ms = sent_unix_ms
+                        meta["valid"] = True
+                        meta["intervention"] = "ws_upgrade_429"
+                        meta["production_forwarded"] = False
+                        meta["ws_upgrade_429"] = {
+                            "sequence": self._ws_upgrade_429_count,
+                            "retry_after_seconds": retry_after_seconds,
+                            "request_head_received_unix_ms": head_received_unix_ms,
+                            "response_sent_unix_ms": sent_unix_ms,
+                        }
+                        self._log_intervention({
+                            "type": "ws_upgrade_429",
+                            "connection_id": conn_id,
+                            "request_line": request_line,
+                            "production_forwarded": False,
+                            **meta["ws_upgrade_429"],
+                        })
+                        return
                 if (self.args.stream_fault and not self._stream_fault_applied
                         and self.args.stream_fault_transport == "http"
                         and request_line == "POST /backend-api/codex/responses HTTP/1.1"):
@@ -3841,10 +4059,12 @@ def main() -> None:
     )
     ap.add_argument(
         "--retry-probe",
-        choices=("keepalive-500", "disconnect"),
+        choices=_RETRY_PROBE_MODES,
         default="",
-        help=("仅对首个 models GET：返回一次 500 并保持连接，或无响应断连；"
-              "后续 attempt 转发真实上游，用于核验同一上层调用内的连接复用"),
+        help=("keepalive-500／disconnect 仅对首个目标请求（默认 models GET）：返回一次 500 并保持连接，或无响应断连；"
+              "后续 attempt 转发真实上游，用于核验同一上层调用内的连接复用。persistent-503-overloaded（0.163 起）对**每个**"
+              "Responses POST 都回 keep-alive 503（body error.code=server_is_overloaded，可附 --retry-probe-retry-after），"
+              "不转发生产，仅适用于 --retry-probe-target responses，用于核验两层重试的次数与间隔"),
     )
     ap.add_argument(
         "--retry-probe-target",
@@ -3857,8 +4077,9 @@ def main() -> None:
     ap.add_argument(
         "--retry-probe-retry-after",
         default="",
-        help=("仅 keepalive-500：受控 500 附带 retry-after 头（非负整数秒）。0.159 起客户端 retry 以服务端"
-              " Retry-After 截止时间等待，两次 attempt 的间隔由 retry_probe_timing 精确记录"),
+        help=("仅 keepalive-500 或 persistent-503-overloaded：受控 500／503 附带 retry-after 头（非负整数秒）。0.159 起客户端 retry"
+              " 以服务端 Retry-After 截止时间等待，keepalive-500 的两次 attempt 间隔由 retry_probe_timing 精确记录，"
+              "persistent-503-overloaded 的逐请求时间线记入 overloaded_503_attempts"),
     )
     ap.add_argument(
         "--stream-fault",
@@ -3886,13 +4107,30 @@ def main() -> None:
         default="",
         help="官方定向样本：首条转发中的 Responses WS 双向空闲达到该秒数（1～600）后由中继以服务端身份关闭",
     )
+    ap.add_argument(
+        "--ws-upgrade-429-retry-after",
+        default="",
+        help=("官方定向样本（0.163 起）：对**每个** Responses WS 升级回 429 并附该 Retry-After 整数秒（1～600），不转发生产；"
+              "之后到达的 Responses HTTP POST（降级）照常转发。升级时间线记入连接元数据 ws_upgrade_429，"
+              "降级 POST 与最近一次 429 的间隔记入 ws_upgrade_429_fallback_post"),
+    )
     ap.add_argument("--timeout", type=int, default=180)
     args = ap.parse_args()
     if args.retry_probe_retry_after and (
-        args.retry_probe != "keepalive-500"
+        args.retry_probe not in ("keepalive-500", _RETRY_PROBE_PERSISTENT_503)
         or not re.fullmatch(r"[0-9]{1,3}", args.retry_probe_retry_after)
     ):
-        ap.error("--retry-probe-retry-after 只能与 --retry-probe keepalive-500 同用，且为 0～999 的整数秒")
+        ap.error(
+            "--retry-probe-retry-after 只能与 --retry-probe keepalive-500 或 persistent-503-overloaded 同用，"
+            "且为 0～999 的整数秒"
+        )
+    if args.retry_probe == _RETRY_PROBE_PERSISTENT_503 and args.retry_probe_target != "responses":
+        ap.error("--retry-probe persistent-503-overloaded 只适用于 --retry-probe-target responses")
+    if args.ws_upgrade_429_retry_after and (
+        not re.fullmatch(r"[0-9]{1,3}", args.ws_upgrade_429_retry_after)
+        or not 1 <= int(args.ws_upgrade_429_retry_after) <= 600
+    ):
+        ap.error("--ws-upgrade-429-retry-after 必须是 1～600 的整数秒")
     if bool(args.stream_fault) != bool(args.stream_fault_transport):
         ap.error("--stream-fault 与 --stream-fault-transport 必须同时提供")
     if args.synthesize_image_edit_file_id and not _SAFE_FILE_ID_RE.fullmatch(args.synthesize_image_edit_file_id):
@@ -3907,6 +4145,7 @@ def main() -> None:
             ("--stream-fault", bool(args.stream_fault)),
             ("--synthesize-image-edit-file-id", bool(args.synthesize_image_edit_file_id)),
             ("--close-idle-ws-after", bool(args.close_idle_ws_after)),
+            ("--ws-upgrade-429-retry-after", bool(args.ws_upgrade_429_retry_after)),
         ) if enabled
     ]
     other_interventions = bool(

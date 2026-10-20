@@ -122,6 +122,13 @@ if [[ $scenario == "cyber-access-ws" ]] && (( codex_major == 0 && codex_minor < 
   echo "cyber-access-ws 需要 Codex >=0.161.0（codex exec 的 --cyber-access-program 选项）。" >&2
   exit 2
 fi
+# ws-retry-after（0.163 起）：WS 握手失败的 Retry-After 到 0.163 才被解析（codex-api/src/endpoint/responses_websocket.rs 第
+# 592-611 行 [0.163.0]，0.160.0 写死 retry_after: None），升级 429 在 0.160 是终止错误、不重试也不降级，跑下去得不到
+# 「重试等待与降级前等待」样本，在任何请求之前拒绝。
+if [[ $scenario == "ws-retry-after" ]] && (( codex_major == 0 && codex_minor < 163 )); then
+  echo "ws-retry-after 需要 Codex >=0.163.0（WS 握手 4xx 的 Retry-After 与降级前等待）。" >&2
+  exit 2
+fi
 # 定向样本场景与中继受控开关必须成对出现：场景只决定客户端怎么发，受控应答由中继开关决定。
 # 用 if 链而非 case 语句：启动探测测试把脚本里第一个按场景分支的 case 语句当作提示词表，解析 TUI 场景标记。
 if [[ $scenario == stream-fault ]]; then
@@ -139,8 +146,13 @@ elif [[ $scenario == ws-idle-close-tui ]]; then
     echo "ws-idle-close-tui 必须设置 RELAY_CLOSE_IDLE_WS_AFTER。" >&2
     exit 2
   fi
-elif [[ -n ${RELAY_STREAM_FAULT:-}${RELAY_STREAM_FAULT_TRANSPORT:-}${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-}${RELAY_CLOSE_IDLE_WS_AFTER:-} ]]; then
-  echo "RELAY_STREAM_FAULT*／RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID／RELAY_CLOSE_IDLE_WS_AFTER 只用于对应的定向样本场景。" >&2
+elif [[ $scenario == ws-retry-after ]]; then
+  if [[ -z ${RELAY_WS_UPGRADE_429_RETRY_AFTER:-} ]]; then
+    echo "ws-retry-after 必须设置 RELAY_WS_UPGRADE_429_RETRY_AFTER。" >&2
+    exit 2
+  fi
+elif [[ -n ${RELAY_STREAM_FAULT:-}${RELAY_STREAM_FAULT_TRANSPORT:-}${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-}${RELAY_CLOSE_IDLE_WS_AFTER:-}${RELAY_WS_UPGRADE_429_RETRY_AFTER:-} ]]; then
+  echo "RELAY_STREAM_FAULT*／RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID／RELAY_CLOSE_IDLE_WS_AFTER／RELAY_WS_UPGRADE_429_RETRY_AFTER 只用于对应的定向样本场景。" >&2
   exit 2
 fi
 # 受控开关的取值在任何 docker 调用之前校验（中继参数解析会再核对一次）。
@@ -171,10 +183,34 @@ if [[ -n ${RELAY_CLOSE_IDLE_WS_AFTER:-} ]] && {
   echo "RELAY_CLOSE_IDLE_WS_AFTER 必须是 1～600 的整数秒。" >&2
   exit 2
 fi
-# 0.159 起 retry 等待遵守服务端 Retry-After：只给 keepalive 500 附带该头，与不带该头的同一受控链成对比较。
-if [[ -n ${RELAY_RETRY_PROBE_RETRY_AFTER:-} ]] && [[ ${RELAY_RETRY_PROBE:-} != keepalive-500 || ! $RELAY_RETRY_PROBE_RETRY_AFTER =~ ^[0-9]{1,3}$ ]]; then
-  echo "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 同用，且为 0～999 的整数秒。" >&2
+if [[ -n ${RELAY_WS_UPGRADE_429_RETRY_AFTER:-} ]] && {
+  [[ ! $RELAY_WS_UPGRADE_429_RETRY_AFTER =~ ^[0-9]{1,3}$ ]] || (( 10#$RELAY_WS_UPGRADE_429_RETRY_AFTER < 1 || 10#$RELAY_WS_UPGRADE_429_RETRY_AFTER > 600 ))
+}; then
+  echo "RELAY_WS_UPGRADE_429_RETRY_AFTER 必须是 1～600 的整数秒。" >&2
   exit 2
+fi
+# RELAY_RETRY_PROBE 的取值在任何 docker 调用之前校验（组装中继参数时还会核对一次）。用 if 链而非 case 语句，原因见上面的场景配对校验。
+if [[ -n ${RELAY_RETRY_PROBE:-} && $RELAY_RETRY_PROBE != keepalive-500 && $RELAY_RETRY_PROBE != disconnect && $RELAY_RETRY_PROBE != persistent-503-overloaded ]]; then
+  echo "RELAY_RETRY_PROBE 只能是 keepalive-500、disconnect 或 persistent-503-overloaded。" >&2
+  exit 2
+fi
+# 0.159 起 retry 等待遵守服务端 Retry-After：只给 keepalive 500（或 0.163 起的持续过载 503）附带该头，与不带该头的同一受控链成对比较。
+if [[ -n ${RELAY_RETRY_PROBE_RETRY_AFTER:-} ]] && [[ ( ${RELAY_RETRY_PROBE:-} != keepalive-500 && ${RELAY_RETRY_PROBE:-} != persistent-503-overloaded ) || ! $RELAY_RETRY_PROBE_RETRY_AFTER =~ ^[0-9]{1,3}$ ]]; then
+  echo "RELAY_RETRY_PROBE_RETRY_AFTER 只能与 RELAY_RETRY_PROBE=keepalive-500 或 persistent-503-overloaded 同用，且为 0～999 的整数秒。" >&2
+  exit 2
+fi
+# persistent-503-overloaded 对每个 Responses POST 都回 503（server_is_overloaded），用于核验两层重试的次数与间隔：
+# ServerOverloaded 带 Retry-After 才在采样层重试是 0.163 起的行为（protocol/src/error.rs 第 438-440 行 [0.163.0]，0.160.0 恒终止），
+# 更早的版本跑下去只会得到 5 个请求的传输层重试，在任何请求之前拒绝；目标端点只能是 responses。
+if [[ ${RELAY_RETRY_PROBE:-} == persistent-503-overloaded ]]; then
+  if [[ ${RELAY_RETRY_PROBE_TARGET:-} != responses ]]; then
+    echo "RELAY_RETRY_PROBE=persistent-503-overloaded 只适用于 RELAY_RETRY_PROBE_TARGET=responses。" >&2
+    exit 2
+  fi
+  if (( codex_major == 0 && codex_minor < 163 )); then
+    echo "RELAY_RETRY_PROBE=persistent-503-overloaded 需要 Codex >=0.163.0（ServerOverloaded 带 Retry-After 的采样层重试）。" >&2
+    exit 2
+  fi
 fi
 # 只走 HTTP 的 OAuth provider（与 http-response 同一组覆盖）：给定向样本复用，逐项作为 -c 参数。
 http_probe_provider_config=(
@@ -818,8 +854,8 @@ if [[ -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
 fi
 if [[ -n ${RELAY_RETRY_PROBE:-} ]]; then
   case "$RELAY_RETRY_PROBE" in
-    keepalive-500|disconnect) ;;
-    *) echo "RELAY_RETRY_PROBE 只能是 keepalive-500 或 disconnect。" >&2; exit 2 ;;
+    keepalive-500|disconnect|persistent-503-overloaded) ;;
+    *) echo "RELAY_RETRY_PROBE 只能是 keepalive-500、disconnect 或 persistent-503-overloaded。" >&2; exit 2 ;;
   esac
   relay_intervention_args+=(--retry-probe "$RELAY_RETRY_PROBE")
   if [[ -n ${RELAY_RETRY_PROBE_TARGET:-} ]]; then
@@ -844,6 +880,9 @@ if [[ -n ${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-} ]]; then
 fi
 if [[ -n ${RELAY_CLOSE_IDLE_WS_AFTER:-} ]]; then
   relay_intervention_args+=(--close-idle-ws-after "$RELAY_CLOSE_IDLE_WS_AFTER")
+fi
+if [[ -n ${RELAY_WS_UPGRADE_429_RETRY_AFTER:-} ]]; then
+  relay_intervention_args+=(--ws-upgrade-429-retry-after "$RELAY_WS_UPGRADE_429_RETRY_AFTER")
 fi
 if [[ $scenario == "file-upload" && $a14_c2pa_expectation == positive ]]; then
   relay_intervention_args+=(--force-file-c2pa-reservation)
@@ -1277,6 +1316,14 @@ case "$scenario" in
     if [[ $RELAY_STREAM_FAULT_TRANSPORT == http ]]; then
       extra_args="$http_probe_provider_args"
     fi ;;
+  ws-retry-after)
+    # SPEC-PROTO-002（0.163 起）：每个 Responses WS 升级都由中继回 429 + Retry-After（RELAY_WS_UPGRADE_429_RETRY_AFTER 秒），
+    # 内置 provider 默认 WS。0.163 起握手失败的 Retry-After 被解析，429 落到 RetryLimit 且「带 Retry-After 才重试」
+    # （codex-api/src/endpoint/responses_websocket.rs 第 592-611 行、protocol/src/error.rs 第 438-440 行 [0.163.0]；0.160 里
+    # 升级 429 是终止错误）：采样层按 Retry-After 重试 stream_max_retries 次，用尽后改发 HTTP，且降级前先等到最近一次
+    # Retry-After 的截止时间（core/src/responses_retry.rs 第 120-129 行 [0.163.0]）。降级后的 POST 照常转发生产、完成本轮；
+    # 升级尝试与降级 POST 的到达时刻由中继记入 relay.json，下面的「升级 429 降级等待核对」整理成时间线。
+    prompt='请只回复 OK，不要做任何其他事。' ;;
   ws-idle-close-tui)
     # SPEC-PROTO-002（0.159 起）：服务端关闭的空闲 WS 在下次请求前直接重建，不再先写入死连接、白耗一次重试
     # （codex-api/src/endpoint/responses_websocket.rs 第 225-231 行）。同一 TUI 会话两轮：第一轮完成后首条 WS
@@ -1667,6 +1714,10 @@ else
       # 不算采集失败；样本是否成立由下面的终止型流内故障核对（请求数与有无重试／降级）判定。
       echo "ℹ 终止型流内故障：第 $i 轮 codex exec 以 $exec_status 退出（0.163 起非零是预期）。" >&2
     fi
+    if [[ ${RELAY_RETRY_PROBE:-} == persistent-503-overloaded ]]; then
+      # 每个 Responses POST 都回 503，重试预算用尽后 codex exec 必然以错误结束；样本是否成立由下面的过载 503 核对判定。
+      echo "ℹ 持续过载 503：第 $i 轮 codex exec 以 $exec_status 退出（所有 Responses 请求都被回 503，非零是预期）。" >&2
+    fi
     if [[ $scenario == "file-upload" ]]; then
       extract_a14_tool_call "$work_dir/exec-$i.log"
     fi
@@ -1940,6 +1991,133 @@ PY
   write_observation "stream-fault-terminal.json" "$terminal_check"
   if (( terminal_check_status != 0 )); then
     echo "❌ 终止型流内故障核对不成立（故障后出现了重试、降级或续发，或故障未恰好注入一次）：$terminal_check" >&2
+    exit 1
+  fi
+fi
+
+# 升级 429 降级等待核对（RELAY_WS_UPGRADE_429_RETRY_AFTER，0.163 起）：中继对每个 Responses WS 升级回 429 + Retry-After，
+# 把每次升级尝试（ws_upgrade_429）与升级之后到达的 Responses HTTP POST（ws_upgrade_429_fallback_post，即降级）的到达时刻
+# 记入 relay.json 的连接元数据。本核对把它们整理成时间线写入 scenario-observations/ws-retry-after-timeline.json：
+# - 硬判据只有两条（结构性）：至少注入过一次升级 429；注入之后确有降级 POST，否则这一轮不含「重试预算用尽后降级」。
+# - 「降级前是否等到 Retry-After 截止」「相邻升级尝试的间隔」只记事实（fallback_waited_retry_after、gaps…），不判成败：
+#   间隔是 VC-2 对着样本核对的对象，采集阶段不能因为客户端行为与预期不符就丢掉证据。首次升级尝试可能来自预热，
+#   与采样层重试的间隔不一定等于 Retry-After，所以不对单个间隔设硬门限。
+if [[ -n ${RELAY_WS_UPGRADE_429_RETRY_AFTER:-} ]]; then
+  echo "=== 升级 429 降级等待核对 ==="
+  ws_retry_after_status=0
+  ws_retry_after_report=$(docker exec -i "$capture_container" python3 - \
+      "/capture/runs/$run_id/relay/relay.json" \
+      "$RELAY_WS_UPGRADE_429_RETRY_AFTER" \
+      "$last_exec_status" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+relay_json, retry_after, exec_status = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+connections = json.loads(Path(relay_json).read_text(encoding="utf-8")).get("connections", [])
+upgrades = sorted(
+    (item["ws_upgrade_429"] for item in connections if isinstance(item.get("ws_upgrade_429"), dict)),
+    key=lambda entry: entry["request_head_received_unix_ms"],
+)
+fallbacks = sorted(
+    (item["ws_upgrade_429_fallback_post"] for item in connections
+     if isinstance(item.get("ws_upgrade_429_fallback_post"), dict)),
+    key=lambda entry: entry["request_head_received_unix_ms"],
+)
+# 相邻两次升级尝试的间隔：上一次 429 写完到下一次请求头读到。
+gaps = [after["request_head_received_unix_ms"] - before["response_sent_unix_ms"] for before, after in zip(upgrades, upgrades[1:])]
+failures = []
+if not upgrades:
+    failures.append("no-ws-upgrade-429-injected")
+if not fallbacks:
+    failures.append("no-http-fallback-post-after-429")
+since = fallbacks[0]["since_last_ws_upgrade_429_ms"] if fallbacks else None
+print(json.dumps({
+    "schema_version": "relay-ws-upgrade-429/v1",
+    "status": "failed" if failures else "passed",
+    "failures": failures,
+    "retry_after_seconds": retry_after,
+    "upgrade_attempt_count": len(upgrades),
+    "upgrade_attempts": upgrades,
+    "gaps_between_upgrade_attempts_ms": gaps,
+    "http_fallback_post_count": len(fallbacks),
+    "fallback_since_last_upgrade_429_ms": since,
+    "fallback_waited_retry_after": None if since is None else since >= retry_after * 1000,
+    "exec_exit_status": int(exec_status) if exec_status.isdigit() else None,
+}, ensure_ascii=False, sort_keys=True))
+sys.exit(1 if failures else 0)
+PY
+  ) || ws_retry_after_status=$?
+  if [[ -z $ws_retry_after_report ]]; then
+    echo "❌ 升级 429 降级等待核对没有输出，无法证明本轮含重试后的降级。" >&2
+    exit 1
+  fi
+  write_observation "ws-retry-after-timeline.json" "$ws_retry_after_report"
+  if (( ws_retry_after_status != 0 )); then
+    echo "❌ 升级 429 降级等待核对不成立（没有注入升级 429，或注入之后没有降级 POST）：$ws_retry_after_report" >&2
+    exit 1
+  fi
+fi
+
+# 过载 503 重试时间线核对（RELAY_RETRY_PROBE=persistent-503-overloaded，0.163 起）：中继对每个 Responses POST 都回 503
+# （server_is_overloaded，可选 Retry-After），逐请求的到达／应答时刻记入 relay.json 的 overloaded_503_attempts。
+# 本核对整理成 scenario-observations/server-overloaded-timeline.json：
+# - 硬判据：至少回过一次受控 503；同连接上没有出现非目标请求（出现则该连接的字节流不再是纯粹的重试序列）。
+# - 请求总数与相邻请求的间隔只记事实（request_count、gaps_ms、all_gaps_at_least_retry_after），不判成败：
+#   带 Retry-After 时预期 30 个请求且每个间隔不短于 Retry-After，不带时预期 5 个请求按指数退避，两者之差正是 0.163 的采样层行为，
+#   由 VC-2 对着样本核对。
+if [[ ${RELAY_RETRY_PROBE:-} == persistent-503-overloaded ]]; then
+  echo "=== 过载 503 重试时间线核对 ==="
+  overloaded_status=0
+  overloaded_report=$(docker exec -i "$capture_container" python3 - \
+      "/capture/runs/$run_id/relay/relay.json" \
+      "${RELAY_RETRY_PROBE_RETRY_AFTER:-}" \
+      "$last_exec_status" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+relay_json, retry_after_text, exec_status = sys.argv[1], sys.argv[2], sys.argv[3]
+retry_after = int(retry_after_text) if retry_after_text.isdigit() else None
+connections = json.loads(Path(relay_json).read_text(encoding="utf-8")).get("connections", [])
+attempts = []
+for item in connections:
+    for entry in item.get("overloaded_503_attempts") or []:
+        attempts.append({**entry, "connection_id": item.get("connection_id")})
+attempts.sort(key=lambda entry: entry["request_head_received_unix_ms"])
+# 相邻两个请求的间隔：上一个 503 写完到下一个请求头读到（客户端的等待时长）。
+gaps = [after["request_head_received_unix_ms"] - before["response_sent_unix_ms"] for before, after in zip(attempts, attempts[1:])]
+unexpected = [item.get("connection_id") for item in connections if item.get("overloaded_503_end") == "unexpected_request"]
+failures = []
+if not attempts:
+    failures.append("no-overloaded-503-served")
+if unexpected:
+    failures.append("unexpected-request-on-overloaded-connection")
+print(json.dumps({
+    "schema_version": "relay-server-overloaded/v1",
+    "status": "failed" if failures else "passed",
+    "failures": failures,
+    "retry_after_seconds": retry_after,
+    "request_count": len(attempts),
+    "connection_ids": sorted({entry["connection_id"] for entry in attempts if entry.get("connection_id") is not None}),
+    "gaps_ms": gaps,
+    "min_gap_ms": min(gaps) if gaps else None,
+    "all_gaps_at_least_retry_after": (
+        all(gap >= retry_after * 1000 for gap in gaps) if retry_after and gaps else None
+    ),
+    "unexpected_request_connection_ids": unexpected,
+    "exec_exit_status": int(exec_status) if exec_status.isdigit() else None,
+}, ensure_ascii=False, sort_keys=True))
+sys.exit(1 if failures else 0)
+PY
+  ) || overloaded_status=$?
+  if [[ -z $overloaded_report ]]; then
+    echo "❌ 过载 503 重试时间线核对没有输出，无法证明本轮含受控 503 的重试序列。" >&2
+    exit 1
+  fi
+  write_observation "server-overloaded-timeline.json" "$overloaded_report"
+  if (( overloaded_status != 0 )); then
+    echo "❌ 过载 503 重试时间线核对不成立（没有回过受控 503，或同连接收到非目标请求）：$overloaded_report" >&2
     exit 1
   fi
 fi

@@ -5115,6 +5115,204 @@
       ]
     },
     {
+      "id": "official-relay-ws-retry-after",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07"
+      ],
+      "description": "SPEC-PROTO-002 WS 握手失败的 Retry-After 定向样本（0.163 起）：内置 provider 默认 WS，中继对**每个** Responses WS 升级回 429 并附 retry-after: 2（不转发生产，production_forwarded=false 记入干预日志与 relay.json 的 ws_upgrade_429）。0.163 起握手失败的 Retry-After 被解析，429 带 Retry-After 才重试：采样层按其截止时间重试 stream_max_retries 次，用尽后改发 HTTP POST，且降级前先等到最近一次 Retry-After 的截止时间（0.160 对同一 429 直接结束本轮，不重试也不降级）；降级 POST 照常转发生产、完成本轮。中继把每次升级尝试与降级 POST 的到达时刻记入 relay.json（ws_upgrade_429／ws_upgrade_429_fallback_post），采集脚本整理成 scenario-observations/ws-retry-after-timeline.json，「降级前等到 Retry-After 截止」由时间差核对（首次升级尝试可能来自预热，不对单个间隔设硬门限）；脚本只要求至少注入过一次升级 429 且之后确有降级 POST",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-ws-retry-after",
+            "SCENARIO": "ws-retry-after",
+            "RELAY_WS_UPGRADE_429_RETRY_AFTER": "2",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-ws-retry-after"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-server-overloaded-retry-after",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07",
+        "A08"
+      ],
+      "description": "SPEC-CONN-001／SPEC-PROTO-002 过载 503 定向样本（0.163 起，带 Retry-After）：与 official-relay-conn-retry 同一受控链（426 强制降级 HTTP），但中继对**每个** Responses POST 都回 keep-alive 503（body {\"error\":{\"code\":\"server_is_overloaded\"}}，附 retry-after: 2），不转发生产（production_forwarded=false 记入干预日志与 relay.json）。客户端有两层重试：传输层对所有 5xx 重试 4 次（共 5 个请求，带 Retry-After 时每次都等其截止时间），用尽后 503+server_is_overloaded 映射成 ServerOverloaded——0.163 起它带 Retry-After 才由采样层再重试（0.160 恒终止，只有传输层那 5 个请求），预期 6 轮×5 个=30 个请求，相邻请求间隔都不短于 2 秒。中继逐请求的到达／应答时刻记入 relay.json 的 overloaded_503_attempts，采集脚本整理成 scenario-observations/server-overloaded-timeline.json；codex exec 以非零退出码结束是预期结果（脚本只要求至少回过一次受控 503，请求总数与间隔只记事实，由 VC-2 核对）；与无 Retry-After 的 official-relay-server-overloaded 只差 Retry-After 一个条件",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-server-overloaded-retry-after",
+            "SCENARIO": "conn-retry",
+            "RELAY_FORCE_WS_FALLBACK_426": "1",
+            "RELAY_RETRY_PROBE": "persistent-503-overloaded",
+            "RELAY_RETRY_PROBE_TARGET": "responses",
+            "RELAY_RETRY_PROBE_RETRY_AFTER": "2",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-server-overloaded-retry-after"
+      ],
+      "covers": [
+        "SPEC-CONN-001",
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-server-overloaded",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07",
+        "A08"
+      ],
+      "description": "SPEC-CONN-001／SPEC-PROTO-002 过载 503 定向样本（0.163 起，无 Retry-After 对照）：与 official-relay-conn-retry 同一受控链（426 强制降级 HTTP），但中继对**每个** Responses POST 都回 keep-alive 503（body {\"error\":{\"code\":\"server_is_overloaded\"}}，不附 Retry-After），不转发生产（production_forwarded=false 记入干预日志与 relay.json）。客户端有两层重试：传输层对所有 5xx 重试 4 次（共 5 个请求，按 200 ms 起的指数退避），用尽后 503+server_is_overloaded 映射成 ServerOverloaded——没有服务端建议延迟，采样层不再重试、本轮在这 5 个请求后终止（所以「无 Retry-After 不重试」只在采样层成立，传输层照样重试）。中继逐请求的到达／应答时刻记入 relay.json 的 overloaded_503_attempts，采集脚本整理成 scenario-observations/server-overloaded-timeline.json；codex exec 以非零退出码结束是预期结果（脚本只要求至少回过一次受控 503，请求总数与间隔只记事实，由 VC-2 核对）；与 official-relay-server-overloaded-retry-after 只差 Retry-After 一个条件",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-server-overloaded",
+            "SCENARIO": "conn-retry",
+            "RELAY_FORCE_WS_FALLBACK_426": "1",
+            "RELAY_RETRY_PROBE": "persistent-503-overloaded",
+            "RELAY_RETRY_PROBE_TARGET": "responses",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-server-overloaded"
+      ],
+      "covers": [
+        "SPEC-CONN-001",
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
       "id": "candidate-frozen-core",
       "phase": "candidate",
       "suites": [
