@@ -139,3 +139,40 @@ class IsolatedAttemptContinuityTests(unittest.TestCase):
             self.assertIsNone(
                 codex_upgrade._verify_environment_continuity(self.campaign, Path("official"), set(), {"kind": "before"})
             )
+
+
+class StrictPreJobFailureShapeTests(unittest.TestCase):
+    """before 探针已取到的 attempt 不是严格的“首个 Job 前失败”，它承接的作业仍按普通失败 attempt 的规则复用。"""
+
+    PLANNED = {"job-a", "job-b", "job-c"}
+
+    def check(self, environment, *, results=("job-a",), carried=("job-a",), failed=(), pending=("job-b", "job-c")):
+        attempt = {} if environment is None else {"environment": environment}
+        return codex_upgrade._is_strict_pre_job_failure(
+            attempt,
+            planned_ids=set(self.PLANNED),
+            result_ids=set(results),
+            carried_ids=list(carried),
+            failed_ids=list(failed),
+            pending_ids=list(pending),
+        )
+
+    def test_before_probe_missing_is_the_strict_shape(self) -> None:
+        self.assertTrue(self.check({"before_probe": None, "after_probe": {"path": "x"}}))
+
+    def test_before_probe_taken_is_a_normal_failed_attempt(self) -> None:
+        self.assertFalse(self.check({"before_probe": {"path": "environment/before/probe-manifest.json"}}))
+
+    def test_no_environment_object_keeps_the_original_judgement(self) -> None:
+        self.assertTrue(self.check(None))
+        self.assertTrue(self.check("not-a-mapping"))
+
+    def test_empty_results_without_carry_is_still_strict_when_before_probe_is_missing(self) -> None:
+        self.assertTrue(self.check({"before_probe": None}, results=(), carried=(), pending=("job-a", "job-b", "job-c")))
+
+    def test_any_failed_job_or_extra_result_is_not_a_pre_job_failure(self) -> None:
+        self.assertFalse(self.check({"before_probe": None}, failed=("job-b",)))
+        self.assertFalse(self.check({"before_probe": None}, results=("job-a", "job-b")))
+
+    def test_pending_must_be_exactly_planned_minus_carried(self) -> None:
+        self.assertFalse(self.check({"before_probe": None}, pending=("job-b",)))
