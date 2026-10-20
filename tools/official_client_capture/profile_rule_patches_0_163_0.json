@@ -510,7 +510,8 @@
       "after": {
         "AllowedCyberPrograms": [
           "standard"
-        ]
+        ],
+        "DefaultCyberProgram": "standard"
       }
     },
     {
