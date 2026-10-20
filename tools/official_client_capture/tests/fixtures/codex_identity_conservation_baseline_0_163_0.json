@@ -1,20 +1,20 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "4d565f9b8833912224038edf3a1b6bd939cc693b",
+ "source_commit": "4025dd0cf40a2405a296d5dafa246a038d90118a",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "a33d623d78d4ed182f7630d150b3bc299fa0b63342c33da6068524a9aba7ea9a",
- "wire_producer_sha256": "b12832f147b6f0b36e5c4096a81f94acde0d23191548a2c0182f8a0ab176cc7d",
- "evidence_semantics_sha256": "0c35c3a10e904fde58bcfae6dd081035e278fb943f461c0e1f1e3c009a1a3647",
- "control_sha256": "8be99b6962a06827a7c4244fad9b7620dc9a4233be9a5136bf16d105b5c028c5",
+ "files_sha256": "7a5a2b8ffdf3644df961e58550a17aeb265a9aa9cc63c71d8e66bab9d4184779",
+ "wire_producer_sha256": "8f0f9256ffa976fa780127e54cb7eee8eace7791ea8c8bc3d417a16835c5bfe2",
+ "evidence_semantics_sha256": "72d56c7876e477bb6f81ec02112060c082275214c7766ca0a02962e9f180bbb1",
+ "control_sha256": "273179c85243484c1eb309a69f8fa60f68ce9134463b404a222b1ea222c96486",
  "orchestrator_closure_sha256": {
-  "wire_producer": "043e50b2ada13a68d3769951d4b49ca88f1e1786683dfba89dd6882b2ce1b111",
-  "evidence_semantics": "c6f26389e26fc74fe4142f73eacaedfd8572c8ef221e3bf3108424b78a8a5e76"
+  "wire_producer": "44ae71c952a273a9941a867272ee1ce1411ebf18622c94e8db684bde7e6f91b8",
+  "evidence_semantics": "e93d27b9f0e45767279d0868136679c219e270e54bf8ec2c5e0778f96765518b"
  },
  "checker_sha256": "e45c5968cfae486e2cd06e07f0377727a4a09bf46d169969cc1dd7b7a660bf86",
  "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
- "compare_reader_sha256": "f1dd9fce031f8d51be4f464541a80b12e036d131ddf334291c64f25c56afc4fd",
- "accept_reader_sha256": "13da31c031b097b74eac2480e4c68249fa229ad4b7e9fb953961b574441d98b7",
+ "compare_reader_sha256": "85f647d3e1adb11140a85ca239af957ef12bed0659b315366d662b8749dfdbd2",
+ "accept_reader_sha256": "9471a8145181f171dadb5d6d2b14e8a56aeaf02c3b3b3d5fb534e29b84f5f644",
  "layer_counts": {
   "wire_producer": 57,
   "evidence_semantics": 66,
@@ -1102,7 +1102,7 @@
   },
   {
    "path": "build_compaction_model_catalog.py",
-   "sha256": "91f08f1bc455cbd92186da51e96e7f777ab30d276c7686d03a784b860381119c"
+   "sha256": "401ba7a08146c00fb03f86d608a0d71db4338e55635cf00445dbe27bc68b85f3"
   },
   {
    "path": "build_evidence_catalog.py",
@@ -1190,7 +1190,7 @@
   },
   {
    "path": "candidate_rule_expectations_0_163_0.json",
-   "sha256": "656a35843f709d4936b11c0dfb620ee69dd4a133fb34354e4f7eb50e66c3186a"
+   "sha256": "5c4569a1d434ac7541e1ce940669f1ebe1b25d01014a6c59b6b2530a7bb2b74a"
   },
   {
    "path": "candidate_test_fact_map.schema.json",
@@ -1234,7 +1234,7 @@
   },
   {
    "path": "candidate_test_trace.py",
-   "sha256": "9406fe42f8c303732f2d933e8bb763f435c868ad51c38d4b1cd871de96b3ccfd"
+   "sha256": "5d3f517cafc01c1085f512b6be3845cf343da7519f12d1cba73126446983cba0"
   },
   {
    "path": "candidate_test_trace_receipt.schema.json",
@@ -1286,7 +1286,7 @@
   },
   {
    "path": "capturelib/model.py",
-   "sha256": "021019d0d7c4835c48902d18c40f00787963537553c62012701381ad5276449f"
+   "sha256": "04aa9caea7911021f926b8f0e91bba78040f536b49016a9b940b50fbd48e603c"
   },
   {
    "path": "capturelib/recovery.py",
@@ -1974,7 +1974,7 @@
   },
   {
    "path": "codex_upgrade.py",
-   "sha256": "570643fe0bc6489cdf0f1287db45754328024a6b96546f55b49f679c9d3ebd3d"
+   "sha256": "ca756181f95310f481817291acb15468b927598f70163f76b5fa88551237eb9e"
   },
   {
    "path": "codex_upgrade_action_output_binding.schema.json",
@@ -2186,7 +2186,7 @@
   },
   {
    "path": "codex_upgrade_evidence_labels_0_163_0.json",
-   "sha256": "3d08adb5076c091ceffa513b4dbc4547c5c9bf2e651cd73ec465e775af5cf307"
+   "sha256": "209c192a20c42aa0c2b03ed39cf04f149fe6a6ef9e04bc2b39572473e6b580ed"
   },
   {
    "path": "codex_upgrade_evidence_manifest.py",
@@ -2414,7 +2414,7 @@
   },
   {
    "path": "codex_upgrade_scenarios_0_163_0.json",
-   "sha256": "6b7f0639ba770328f5b84d62de6b0eb940a18b32d8d847828c068d8cda38e667"
+   "sha256": "afb6dd47217121776bd19e6547847281f2ac4a786d21f6552bf3dfaff9554eef"
   },
   {
    "path": "codex_upgrade_seal_failure.schema.json",
@@ -2598,7 +2598,7 @@
   },
   {
    "path": "extract_compaction_reason.py",
-   "sha256": "e7037fda2b0173f5b0fab06903bc16c3a70bd08405a3758112a7c58a929e778e"
+   "sha256": "55d812adb6d889cf2ad3799e75c4eebef41252a1e1f15824ff5783df51cb2477"
   },
   {
    "path": "fixtures/claude_fw_f_v4_hook.py",
@@ -2610,7 +2610,7 @@
   },
   {
    "path": "h1_wire_probe.py",
-   "sha256": "162d8af18802ce19908544f7f1bd1cfd1a9811d2a1b5b750f66f2696af8def69"
+   "sha256": "c2b90046284c9e1caae44bc16f9ec2be4787544969e0ec7866048a049db7cd5b"
   },
   {
    "path": "hooks/exact_bash_hook.py",
@@ -2722,7 +2722,7 @@
   },
   {
    "path": "run_official_relay_scenario.sh",
-   "sha256": "ca5e4819cd4e9676a44c048fe3ffd6ead49a6b1059870c41db710767b37ac4ba"
+   "sha256": "e922fb8462bc9e2a644b91e04f01d0cd1dc66b31703ba64a5afec9eb655a059c"
   },
   {
    "path": "run_sub2api_direct_matrix.sh",
@@ -2778,7 +2778,7 @@
   },
   {
    "path": "upstream_byte_relay.py",
-   "sha256": "09dc49684ee2fef89fcfb6d8d1dc20b4a44752c07aecb0d28738148cb251cd06"
+   "sha256": "f3b2a61303b777538e4bc19b87aff6e27fb246b3ed6287d9537b9a1f2622791e"
   }
  ]
 }
