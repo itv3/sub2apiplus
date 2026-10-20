@@ -382,7 +382,9 @@ func TestOpenAIGatewayService_OAuthRetriesExactRejectedStatus(t *testing.T) {
 	}}
 	upstream.responses[1].Header.Set("Content-Type", "text/event-stream")
 
-	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+	svc := newOpenAIRejectedFieldTestService(upstream)
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 固定下标
+	result, err := svc.Forward(
 		context.Background(), newOpenAIRejectedFieldTestContext(body), newOpenAIOAuthNamespaceTestAccount(), body,
 	)
 

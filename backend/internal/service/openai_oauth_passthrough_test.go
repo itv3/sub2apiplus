@@ -264,6 +264,7 @@ func TestOpenAIGatewayService_OAuthResponsesPromotesSystemMessageWithoutDuplicat
 
 	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的顶层 instructions 与 input 项数
 	account := &Account{
 		ID:          124,
 		Name:        "openai-oauth",
@@ -559,6 +560,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamUsesBuiltInProfileAndKeepsT
 
 	// Use the gateway method that reads token from credentials when provider is nil.
 	svc.openAITokenProvider = nil
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的顶层 instructions 契约
 
 	// 模型清单请求现在与业务请求共用 httpUpstream（官方画像要求两者同栈），而本用例的
 	// mock 对所有请求返回同一份 SSE。预置能力快照可跳过清单拉取，让用例专注 passthrough。
@@ -583,7 +585,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamUsesBuiltInProfileAndKeepsT
 
 	// 2) only auth is replaced; inbound auth/cookie are not forwarded
 	require.Equal(t, "Bearer oauth-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	// 用例固定在旧画像槽位，出站 UA 是该槽位发布节点的身份，不是 Active 的。
+	_, legacyUserAgent := officialCodexBuildIdentityForMode(t, requireOfficialCodexLegacyBaseProfileMode(t))
+	require.Equal(t, legacyUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Empty(t, upstream.lastReq.Header.Get("Cookie"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Api-Key"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Goog-Api-Key"))
@@ -678,6 +682,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_PreservesNamespaceRequest(t *test
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 固定下标
 	svc.openaiModelCapabilities.replaceFromManifest(
 		125,
 		[]byte(`{"models":[{"slug":"gpt-5.5","visibility":"list","use_responses_lite":false}]}`),
@@ -1083,6 +1088,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefau
 				Body:       io.NopCloser(strings.NewReader(responseBody)),
 			}}
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的顶层 instructions 默认值
 			if !stream {
 				// 非流式子用例走 legacy compact，只在仍声明该端点的画像槽位上可用：候选期是
 				// Active，晋升后是 Previous 中的旧画像；流式子用例仍走 Active 的普通 Responses。
@@ -1189,6 +1195,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledStillNormalizesNonLitePro
 		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: upstream,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的顶层 instructions 契约
 
 	account := &Account{
 		ID:             123,

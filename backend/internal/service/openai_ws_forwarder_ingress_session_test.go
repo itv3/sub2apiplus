@@ -666,6 +666,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 首帧只带 developer 上下文：断言旧画像的预热帧构造
 	svc.openaiModelCapabilities.replaceFromManifest(
 		31,
 		[]byte(`{"models":[{"slug":"gpt-5.5","use_responses_lite":true}]}`),

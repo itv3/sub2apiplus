@@ -189,12 +189,14 @@ func TestOpenAIOfficialEgressNonLiteUsesOfficialTopLevelContract(t *testing.T) {
 	}`)
 	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(payload)
 	require.NoError(t, err)
+	// 断言旧画像的顶层 instructions 契约：晋升前是 active，晋升后旧画像在 previous。
+	legacyMode := requireOfficialCodexLegacyBaseProfileMode(t)
 	identity, err := deriveOfficialOpenAIHTTPIdentity(
 		nil,
 		newOfficialOpenAIHTTPTestAccount(94),
 		payload,
 		contract,
-		officialClientProfileModeActive,
+		legacyMode,
 	)
 	require.NoError(t, err)
 
@@ -205,7 +207,7 @@ func TestOpenAIOfficialEgressNonLiteUsesOfficialTopLevelContract(t *testing.T) {
 		officialOpenAIReasoningDefaults{},
 		officialOpenAIHTTPBodyOptions{
 			SupportsParallelTools: true,
-			ProfileMode:           officialClientProfileModeActive,
+			ProfileMode:           legacyMode,
 		},
 	)
 	require.NoError(t, err)

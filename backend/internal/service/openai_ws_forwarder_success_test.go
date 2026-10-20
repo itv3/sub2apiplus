@@ -771,6 +771,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 固定下标
 	account := &Account{
 		ID:          29,
 		Name:        "openai-oauth",
@@ -806,9 +807,11 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.True(t, gjson.Get(requestJSON, "stream").Bool(), "OAuth Codex 规范化后应强制 stream=true")
 	require.Equal(t, "native-wsv2", gjson.Get(requestJSON, "input.0.namespace").String(), "OAuth WSv2 应保留原生 namespace")
 	require.Equal(t, openAIWSBetaV2Value, captureDialer.lastHeaders.Get("OpenAI-Beta"))
-	require.Equal(t, activeOpenAICodexVersionForTest(), captureDialer.lastHeaders.Get("version"))
+	// 用例固定在旧画像槽位，出站版本与 UA 是该槽位发布节点的身份，不是 Active 的。
+	legacyVersion, legacyUserAgent := officialCodexBuildIdentityForMode(t, requireOfficialCodexLegacyBaseProfileMode(t))
+	require.Equal(t, legacyVersion, captureDialer.lastHeaders.Get("version"))
 	require.Equal(t, "remote_compaction_v2", captureDialer.lastHeaders.Get("x-codex-beta-features"))
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), captureDialer.lastHeaders.Get("user-agent"))
+	require.Equal(t, legacyUserAgent, captureDialer.lastHeaders.Get("user-agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, captureDialer.lastHeaders.Get("originator"))
 	require.Equal(t, "Bearer oauth-token-1", captureDialer.lastHeaders.Get("authorization"))
 	require.Equal(t, "chatgpt-test-account-29", captureDialer.lastHeaders.Get("chatgpt-account-id"))
@@ -868,6 +871,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 固定下标
 
 	account := &Account{
 		ID:          5662,

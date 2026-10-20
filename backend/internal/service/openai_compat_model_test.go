@@ -1603,6 +1603,7 @@ func TestForwardAsAnthropic_ForcedCodexInstructionsTemplatePrependsRenderedInstr
 		}},
 		httpUpstream: upstream,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的顶层 instructions
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",
@@ -1650,6 +1651,7 @@ func TestForwardAsAnthropic_ForcedCodexInstructionsTemplateUsesCachedTemplateCon
 		}},
 		httpUpstream: upstream,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的顶层 instructions
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",

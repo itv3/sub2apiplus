@@ -171,7 +171,11 @@ func requireLegacyHTTPBytes(t *testing.T, mode string) int {
 
 func TestFinalizeOfficialOpenAIHTTPBodyKeepsLegacyBytesWhenBaseInstructionsSectionAbsent(t *testing.T) {
 	require.Len(t, legacyHTTPInstructionGoldens, 44)
-	require.Equal(t, 44, requireLegacyHTTPBytes(t, officialClientProfileModeActive))
+	// 黄金值固定的是“节缺省时”的出站字节，所以取正式目录里不声明该节的旧画像槽位：晋升前是 active，
+	// 晋升后 active 已是声明该节的较新画像、旧画像退居 previous。
+	legacyMode := requireOfficialCodexLegacyBaseProfileMode(t)
+	require.Nil(t, officialCodexOptionalSectionsForMode(legacyMode).BaseInstructions, "底稿槽位必须不声明 BaseInstructions 节")
+	require.Equal(t, 44, requireLegacyHTTPBytes(t, legacyMode))
 }
 
 // previous 槽位装了合成画像，但合成画像不声明 BaseInstructions 节：门控按调用冻结的 mode 解析各自画像的节，

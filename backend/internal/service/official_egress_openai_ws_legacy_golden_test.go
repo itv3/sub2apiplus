@@ -397,7 +397,13 @@ func requireWSLegacyOutcomes(t *testing.T, got map[string]wsLegacyOutcome) {
 
 func TestOpenAIWSFramesKeepLegacyOutputWhenSectionsAbsent(t *testing.T) {
 	require.Len(t, wsLegacyGoldens, 80)
-	requireWSLegacyOutcomes(t, collectWSLegacyOutcomes(t, officialClientProfileModeActive))
+	// 黄金值固定的是“节缺省时”的出站字节，所以取正式目录里不声明这两个节的旧画像槽位：晋升前是 active，
+	// 晋升后 active 已是声明它们的较新画像、旧画像退居 previous。
+	legacyMode := requireOfficialCodexLegacyBaseProfileMode(t)
+	sections := officialCodexOptionalSectionsForMode(legacyMode)
+	require.Nil(t, sections.BaseInstructions, "底稿槽位必须不声明 BaseInstructions 节")
+	require.Nil(t, sections.AccessPrograms, "底稿槽位必须不声明 AccessPrograms 节")
+	requireWSLegacyOutcomes(t, collectWSLegacyOutcomes(t, legacyMode))
 }
 
 // previous 槽位装了合成画像，但合成画像不声明基础指令载体节与 access_programs 值域节：门控按调用冻结的 mode

@@ -44,6 +44,7 @@ func TestOpenAIGatewayServiceForwardWSv2TreatsToolHistoryBeforeUserAsHistorical(
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 固定下标
 	account := openAIWSToolTurnRecoveryOAuthAccount(9201)
 	svc.openaiModelCapabilities.replaceFromManifest(
 		account.ID,
@@ -111,6 +112,7 @@ func TestOpenAIGatewayServiceForwardWSv2AmbiguousToolTurnFallsBackToHTTP(t *test
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 HTTP 回退正文下标
 	account := openAIWSToolTurnRecoveryOAuthAccount(9202)
 	svc.openaiModelCapabilities.replaceFromManifest(
 		account.ID,

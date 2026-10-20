@@ -272,6 +272,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		account,
 		"wss://chatgpt.com/backend-api/codex/responses",
 		firstPayload,
+		legacyProfileConfigForTest(t), // 断言旧画像的帧形态（顶层 instructions 取走、逐项 turn_id）
 	)
 	require.NoError(t, err)
 	egressContext, exists := OfficialEgressContextFromContext(ctx)
@@ -653,6 +654,7 @@ func TestOpenAIOfficialEgressWSDerivedNonLiteUsesOfficialContract(t *testing.T) 
 		newOfficialOpenAIHTTPTestAccount(94),
 		"wss://chatgpt.com/backend-api/codex/responses",
 		payload,
+		legacyProfileConfigForTest(t), // 断言旧画像的顶层 instructions 契约
 	)
 	require.NoError(t, err)
 	finalized, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(ctx, payload, payload, "", false)

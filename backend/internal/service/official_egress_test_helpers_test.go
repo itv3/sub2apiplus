@@ -6,10 +6,38 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/stretchr/testify/require"
 )
 
 var officialEgressTestRuntimes sync.Map
+
+// legacyProfileConfigForTest 返回发布指针固定在旧画像槽位的配置（见 officialCodexLegacyBaseProfileMode）。
+func legacyProfileConfigForTest(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := &config.Config{}
+	cfg.Gateway.OfficialClientProfiles.Mode = requireOfficialCodexLegacyBaseProfileMode(t)
+	return cfg
+}
+
+// useOfficialCodexLegacyProfile 把整个用例固定在旧画像槽位上：服务的发布指针配置与它使用的 Codex runtime
+// 同时指向旧画像（晋升前是 active，晋升后是 previous），二者必须一致，HTTP／WS 出站上下文读配置，
+// Compiler／Executor 读 runtime。runtime 显式注入服务实例，不改任何包级变量，可用于 t.Parallel 的用例。
+//
+// 适用于断言「旧画像的最终线上形态」的用例，例如顶层 instructions 的位置、input 项的固定下标：
+// 这些形态由画像决定，晋升后 Active 换成较新画像，形态随之改变，用例本身不是在检查画像切换。较新画像的
+// 对应语义由晋升后门禁与较新画像的单元用例覆盖。
+func useOfficialCodexLegacyProfile(t *testing.T, svc *OpenAIGatewayService) {
+	t.Helper()
+	mode := requireOfficialCodexLegacyBaseProfileMode(t)
+	if svc.cfg == nil {
+		svc.cfg = &config.Config{}
+	}
+	svc.cfg.Gateway.OfficialClientProfiles.Mode = mode
+	require.NotNil(t, svc.httpUpstream, "固定旧画像 runtime 需要服务已配置 HTTPUpstream")
+	svc.officialEgress = newOfficialEgressTestRuntimeForMode(t, svc.httpUpstream, mode)
+}
 
 func init() {
 	officialEgressTestRuntimeFactory = func(

@@ -119,6 +119,7 @@ func TestOpenAIGatewayService_Forward_NormalizesCompactionTriggerAfterHistoryCle
 		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_trigger","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 	}}
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 下标与项数
 	account := &Account{
 		ID: 4, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},

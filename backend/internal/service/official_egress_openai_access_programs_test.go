@@ -506,17 +506,20 @@ func TestFinalizeOfficialOpenAIHTTPBodyAccessProgramsFollowTheSectionDataOnTarge
 }
 
 // withAccessProgramsSectionButFieldsWithoutIt 模拟“节存在、端点的字段表没有声明 access_programs”：可选节入口读带默认程序的合成画像，
-// 字段序入口读不含该字段的 Active 画像。合法的画像契约不允许这种组合（节存在则两个 Responses 端点都必须声明字段），
+// 字段序入口读不含该字段的旧画像（晋升前是 Active，晋升后是 previous）。合法的画像契约不允许这种组合（节存在则两个 Responses 端点都必须声明字段），
 // 这里用两个可替换入口拆开构造，验证调用点对“端点没有声明字段”的防御：不能补出字段表之外的字段。
 func withAccessProgramsSectionButFieldsWithoutIt(t *testing.T) {
 	t.Helper()
 	accessProgramsProfile(t, "standard")
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	// 字段表取正式目录里不声明 access_programs 的旧画像：晋升前是 active，晋升后旧画像在 previous。
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(
+		officialegress.ReleaseMode(requireOfficialCodexLegacyBaseProfileMode(t)),
+	)
 	require.NoError(t, err)
-	activeProfile := release.ExecutableProfile()
+	legacyProfile := release.ExecutableProfile()
 	previous := officialCodexReleaseProfileForBodyOrder
 	officialCodexReleaseProfileForBodyOrder = func(string) (profilecontract.ExecutableProfile, error) {
-		return activeProfile, nil
+		return legacyProfile, nil
 	}
 	t.Cleanup(func() { officialCodexReleaseProfileForBodyOrder = previous })
 }
