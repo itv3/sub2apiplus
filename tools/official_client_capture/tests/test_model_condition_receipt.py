@@ -310,6 +310,87 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 use_responses_lite=True,
             )
 
+    def test_0163_主线轨道是_Lite_模型时的收据正反例(self) -> None:
+        """0.163.0 起主线 gpt-6.1-sol 本身是 Lite：track=main 与 use_responses_lite=true 可以同时成立。
+
+        收据只比对“作业声明的期望坐标”与上游目录、实际请求的事实，不把主线轨道和非 Lite 绑死；
+        期望写成旧语义（false）时必须失败关闭，已下线模型从目录里消失时也必须失败关闭。
+        """
+
+        catalog = {
+            "models": [
+                {"slug": "gpt-6.1-sol", "use_responses_lite": True},
+                {"slug": "gpt-6-astra", "use_responses_lite": True},
+                {"slug": "gpt-5.5", "use_responses_lite": False},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run", request_model="gpt-6.1-sol")
+            (root / "relay" / "conn001.upstream_to_client.bin").write_bytes(_h1_response(catalog))
+            receipt = build_receipt(
+                root=root,
+                job_id="official-relay-http-response",
+                run_id="campaign-main-lite",
+                track="main",
+                expected_model="gpt-6.1-sol",
+                expected_lite=True,
+            )
+            self.assertEqual((receipt["track"], receipt["model_id"]), ("main", "gpt-6.1-sol"))
+            self.assertTrue(receipt["use_responses_lite"])
+            self.assertEqual(receipt["observed_request_models"], ["gpt-6.1-sol"])
+            validate_receipt(
+                receipt,
+                root=root,
+                job_id="official-relay-http-response",
+                track="main",
+                model_id="gpt-6.1-sol",
+                use_responses_lite=True,
+            )
+            # 反例一：沿用旧主线语义（期望非 Lite）→ 建收据失败，复核同样失败。
+            with self.assertRaisesRegex(ModelConditionReceiptError, "预期为 False"):
+                build_receipt(
+                    root=root,
+                    job_id="official-relay-http-response",
+                    run_id="campaign-main-lite",
+                    track="main",
+                    expected_model="gpt-6.1-sol",
+                    expected_lite=False,
+                )
+            with self.assertRaisesRegex(ModelConditionReceiptError, "use_responses_lite 不一致"):
+                validate_receipt(
+                    receipt,
+                    root=root,
+                    job_id="official-relay-http-response",
+                    track="main",
+                    model_id="gpt-6.1-sol",
+                    use_responses_lite=False,
+                )
+            # 反例二：目录里没有目标模型（已下线的 gpt-5.5 上游不再给出元数据）→ 失败关闭。
+            offline = {"models": [item for item in catalog["models"] if item["slug"] != "gpt-6.1-sol"]}
+            (root / "relay" / "conn001.upstream_to_client.bin").write_bytes(_h1_response(offline))
+            with self.assertRaisesRegex(ModelConditionReceiptError, "未唯一给出目标模型"):
+                build_receipt(
+                    root=root,
+                    job_id="official-relay-http-response",
+                    run_id="campaign-main-lite",
+                    track="main",
+                    expected_model="gpt-6.1-sol",
+                    expected_lite=True,
+                )
+        # 反例三：请求实际发的是旧主线 gpt-5.5（模型 fallback）→ 失败关闭。
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run", request_model="gpt-5.5")
+            (root / "relay" / "conn001.upstream_to_client.bin").write_bytes(_h1_response(catalog))
+            with self.assertRaisesRegex(ModelConditionReceiptError, "fallback"):
+                build_receipt(
+                    root=root,
+                    job_id="official-relay-http-response",
+                    run_id="campaign-main-lite",
+                    track="main",
+                    expected_model="gpt-6.1-sol",
+                    expected_lite=True,
+                )
+
     def test_角色被改绑到错误请求时失败关闭(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(Path(directory) / "run")
