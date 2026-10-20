@@ -48,6 +48,7 @@ compaction_reason=""
 compaction_first_model=""
 compaction_second_model=""
 compaction_second_track=""
+compaction_first_lite=""
 compaction_catalog=""
 
 configure_compaction_models() {
@@ -74,9 +75,18 @@ configure_compaction_models() {
     echo "压缩场景的首模型与第二模型必须不同。" >&2
     exit 2
   fi
+  # 首模型（主线模型）应有的 use_responses_lite：0.160.0 及更早的主线是非 Lite 模型，缺省 false
+  # 保持历史 Job 语义；0.163.0 起主线是 Lite 模型，场景清单显式注入 true（取自 capturelib.model
+  # 的主线 Lite 声明，清单加载时与声明交叉校验）。comp_hash／窗口由受控目录改写，与该标志无关。
+  local first_lite=${COMPACTION_FIRST_USE_RESPONSES_LITE:-false}
+  if [[ $first_lite != true && $first_lite != false ]]; then
+    echo "COMPACTION_FIRST_USE_RESPONSES_LITE 必须是 true 或 false。" >&2
+    exit 2
+  fi
   compaction_first_model=$model
   compaction_second_model=$secondary
   compaction_second_track=$secondary_track
+  compaction_first_lite=$first_lite
 }
 
 # **必须关掉的非必要流量**（§1.5.4）。不关的后果是实测的：一次三轮对话 58 个请求里
@@ -1182,6 +1192,7 @@ case "$scenario" in
       --first-model "$compaction_first_model" \
       --second-model "$compaction_second_model" \
       --second-track "$compaction_second_track" \
+      --first-use-responses-lite "$compaction_first_lite" \
       --reason "$compaction_reason"
     chmod 600 "$work_dir/comp-hash-catalog.json" ;;
   model-downshift)
@@ -1204,6 +1215,7 @@ case "$scenario" in
       --first-model "$compaction_first_model" \
       --second-model "$compaction_second_model" \
       --second-track "$compaction_second_track" \
+      --first-use-responses-lite "$compaction_first_lite" \
       --reason "$compaction_reason"
     chmod 600 "$work_dir/model-downshift-catalog.json" ;;
   oauth-refresh)

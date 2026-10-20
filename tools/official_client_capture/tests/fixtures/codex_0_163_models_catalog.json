@@ -1,0 +1,58 @@
+{
+  "models": [
+    {
+      "slug": "gpt-6.1-sol",
+      "display_name": "GPT-6.1-Sol",
+      "description": "Latest workhorse model for coding and everyday work.",
+      "visibility": "list",
+      "priority": 1,
+      "use_responses_lite": true,
+      "supports_parallel_tool_calls": true,
+      "default_reasoning_level": "low",
+      "default_reasoning_summary": "none",
+      "supports_reasoning_summary_parameter": true,
+      "default_verbosity": "low",
+      "support_verbosity": true,
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "auto_compact_token_limit": null,
+      "comp_hash": "3000"
+    },
+    {
+      "slug": "gpt-6-astra",
+      "display_name": "GPT-6-Astra",
+      "description": "Frontier intelligence for the most demanding work.",
+      "visibility": "list",
+      "priority": 2,
+      "use_responses_lite": true,
+      "supports_parallel_tool_calls": true,
+      "default_reasoning_level": "low",
+      "default_reasoning_summary": "none",
+      "supports_reasoning_summary_parameter": true,
+      "default_verbosity": "low",
+      "support_verbosity": true,
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "auto_compact_token_limit": null,
+      "comp_hash": "3000"
+    },
+    {
+      "slug": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "description": "Legacy coding model.",
+      "visibility": "list",
+      "priority": 13,
+      "use_responses_lite": false,
+      "supports_parallel_tool_calls": true,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "supports_reasoning_summary_parameter": true,
+      "default_verbosity": "low",
+      "support_verbosity": true,
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "auto_compact_token_limit": null,
+      "comp_hash": "2911"
+    }
+  ]
+}

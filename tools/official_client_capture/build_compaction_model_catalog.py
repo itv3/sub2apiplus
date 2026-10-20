@@ -42,8 +42,16 @@ def build_catalog(
     second_model: str,
     second_track: str,
     reason: str,
+    first_use_responses_lite: bool = False,
 ) -> dict[str, Any]:
-    """校验两个模型的真实轨道，并只改写压缩触发字段。"""
+    """校验两个模型的真实轨道，并只改写压缩触发字段。
+
+    ``first_use_responses_lite`` 是首模型（主线模型）应有的 use_responses_lite，取目标版本
+    在 capturelib.model 里的主线 Lite 声明：0.160.0 及更早的主线是非 Lite 模型（默认 False，
+    历史 Job 没有该参数时语义不变），0.163.0 起主线换成 Lite 模型（True）。触发 comp_hash_changed
+    与 model_downshift 的是下面改写的 comp_hash／窗口字段，与 Lite 标志无关，所以这里只核对
+    目录里的真实标志与冻结声明一致，不放宽成“两种都接受”。
+    """
 
     if (
         not MODEL_RE.fullmatch(first_model)
@@ -69,8 +77,12 @@ def build_catalog(
     if set(matches) != {first_model, second_model}:
         missing = sorted({first_model, second_model} - set(matches))
         raise CatalogError("压缩场景模型目录缺少唯一模型：" + "、".join(missing))
-    if matches[first_model].get("use_responses_lite") is not False:
-        raise CatalogError("压缩场景首模型必须是 use_responses_lite=false 的 Main 模型。")
+    if matches[first_model].get("use_responses_lite") is not first_use_responses_lite:
+        raise CatalogError(
+            "压缩场景首模型必须是 "
+            f"use_responses_lite={str(first_use_responses_lite).lower()} 的 Main 模型"
+            "（与目标版本的主线 Lite 声明一致）。"
+        )
     expected_second_lite = second_track == "lite"
     if matches[second_model].get("use_responses_lite") is not expected_second_lite:
         raise CatalogError(
@@ -126,6 +138,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--first-model", required=True)
     parser.add_argument("--second-model", required=True)
     parser.add_argument("--second-track", choices=("main", "lite"), required=True)
+    # 首模型（主线模型）应有的 use_responses_lite；缺省 false 保持 0.160.0 及更早 Job 的语义，
+    # 0.163.0 起的场景清单显式传 true（主线是 Lite 模型）。
+    parser.add_argument(
+        "--first-use-responses-lite",
+        choices=("true", "false"),
+        default="false",
+    )
     parser.add_argument(
         "--reason",
         choices=("comp_hash_changed", "model_downshift"),
@@ -143,6 +162,7 @@ def main() -> int:
             second_model=arguments.second_model,
             second_track=arguments.second_track,
             reason=arguments.reason,
+            first_use_responses_lite=arguments.first_use_responses_lite == "true",
         )
         _write_catalog(arguments.output, payload)
     except (CatalogError, OSError) as error:
