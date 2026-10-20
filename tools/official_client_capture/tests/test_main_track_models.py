@@ -406,6 +406,49 @@ class MainTrackModelTests(unittest.TestCase):
             self.assertEqual(environment["COMPACTION_SECOND_MODEL"], "{lite_model}")
             self.assertEqual(environment["COMPACTION_FIRST_USE_RESPONSES_LITE"], "true")
 
+    def test_lite_main_compaction_jobs_use_the_lite_threshold(self) -> None:
+        """主线是 Lite 模型时，靠阈值触发自动压缩的主线作业不得比 Lite 轨作业的阈值更高。
+
+        依据：采集脚本注释与提交 798f51d80 记载，Lite 模型的 legacy compact 自动触发不如非 Lite 稳（k44 成功、k46 整轮
+        未触发，job 却因收据仍能从 WS 帧取到模型判 complete），Lite 专项因此下调到 2000。0.163.0 的主线 gpt-6.1-sol 与
+        gpt-6-astra 同属 Lite（tool_mode=code_mode_only、同一 comp_hash 与窗口），走同一条触发路径，主线作业继续用脚本默认的
+        4000 会重蹈 k46；阈值只决定“多早触发”，EXPECT_COMPACTION_REASON=context_limit 与反向路径断言都不变。
+        """
+
+        script = (TOOL_ROOT / "run_official_relay_scenario.sh").read_text(encoding="utf-8")
+        default = int(re.search(r"compact_token_limit=\$\{COMPACT_TOKEN_LIMIT:-(\d+)\}", script).group(1))
+        # 脚本里恰有三个场景把 compact_token_limit 传给 model_auto_compact_token_limit。
+        self.assertEqual(script.count("model_auto_compact_token_limit=$compact_token_limit"), 3)
+        scenarios = {"turnstate-compact", "legacy-compact-default", "legacy-compact-beta"}
+        checked = []
+        for version in TRACK_MODELS_BY_CODEX_VERSION:
+            if not main_track_uses_responses_lite(version):
+                continue
+            path = TOOL_ROOT / f"codex_upgrade_scenarios_{version.replace('.', '_')}.json"
+            if not path.is_file():
+                continue
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            by_id = {job["id"]: job for job in manifest["capture_jobs"]}
+            lite_limit = int(by_id["official-lite-legacy-compact-default"]["steps"][0]["environment"]["COMPACT_TOKEN_LIMIT"])
+            self.assertLess(lite_limit, default)
+            main_jobs = [
+                job for job in manifest["capture_jobs"]
+                if job["steps"][0]["environment"].get("SCENARIO") in scenarios
+                and job["steps"][0]["environment"].get("MODEL") == "{model}"
+            ]
+            self.assertEqual(len(main_jobs), 3, version)
+            for job in main_jobs:
+                limit = int(job["steps"][0]["environment"].get("COMPACT_TOKEN_LIMIT", default))
+                self.assertLessEqual(limit, lite_limit, f"{version} {job['id']}")
+            checked.append(version)
+        self.assertEqual(checked, ["0.163.0"], "主线声明为 Lite 的版本都要被检查到")
+        # 旧版本（主线非 Lite）的主线作业不受这条约束，仍用脚本默认值——一字不改。
+        legacy = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_160_0.json").read_text(encoding="utf-8"))
+        for job in legacy["capture_jobs"]:
+            environment = job["steps"][0]["environment"]
+            if environment.get("SCENARIO") in scenarios and environment.get("MODEL") == "{model}":
+                self.assertNotIn("COMPACT_TOKEN_LIMIT", environment, job["id"])
+
     def test_scenario_validation_rejects_declaration_drift(self) -> None:
         """清单手写的 Lite 期望与声明相反时，形状校验当场失败，而不是拖到模型条件收据环节。"""
 

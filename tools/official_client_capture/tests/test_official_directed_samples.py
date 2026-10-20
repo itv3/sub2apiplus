@@ -1447,13 +1447,15 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
     # COMPACTION_FIRST_USE_RESPONSES_LITE 新增，其余执行参数不变。取值本身由 test_main_track_models 按声明
     # 逐版本锁定，这里比较旧清单时两侧都去掉这些键，免得把声明驱动的变化当成执行参数漂移。
     DECLARED_MIRROR_KEYS: tuple[str, ...] = ()
+    # 同理：主线是 Lite 模型时，依赖自动压缩阈值的主线作业沿用 Lite 轨的 COMPACT_TOKEN_LIMIT（0.163.0 起）。
+    DECLARED_THRESHOLD_KEYS: tuple[str, ...] = ()
 
     def comparable_steps(self, steps: list) -> list:
-        """去掉声明驱动的环境变量镜像之后的步骤，供与旧清单逐字比较。"""
+        """去掉声明驱动的环境变量镜像与阈值之后的步骤，供与旧清单逐字比较。"""
 
         result = copy.deepcopy(steps)
         for step in result:
-            for key in self.DECLARED_MIRROR_KEYS:
+            for key in (*self.DECLARED_MIRROR_KEYS, *self.DECLARED_THRESHOLD_KEYS):
                 step["environment"].pop(key, None)
         return result
 
@@ -1579,6 +1581,7 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
     # 0.163.0 起的主线模型（Lite，gpt-5.5 已下线）。
     MAIN_MODEL = "gpt-6.1-sol"
     DECLARED_MIRROR_KEYS = ("EXPECT_USE_RESPONSES_LITE", "COMPACTION_FIRST_USE_RESPONSES_LITE")
+    DECLARED_THRESHOLD_KEYS = ("COMPACT_TOKEN_LIMIT",)
 
     def environment(self, job_id: str) -> dict:
         return self.jobs[job_id]["steps"][0]["environment"]
@@ -1618,6 +1621,21 @@ class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
             for key in self.DECLARED_MIRROR_KEYS:
                 if key in self.environment(job_id):
                     self.assertEqual(self.environment(job_id)[key], "true", f"{job_id} {key}")
+        # 自动压缩阈值：Lite 轨一直是 2000，0.163.0 起三个依赖阈值的主线作业也是 2000（此前默认 4000）。
+        thresholds = {
+            job_id: self.environment(job_id)["COMPACT_TOKEN_LIMIT"]
+            for job_id in self.jobs
+            if "COMPACT_TOKEN_LIMIT" in self.environment(job_id)
+        }
+        self.assertEqual(
+            thresholds,
+            {
+                "official-relay-turnstate-compact": "2000",
+                "official-relay-legacy-compact-default": "2000",
+                "official-relay-legacy-compact-beta": "2000",
+                "official-lite-legacy-compact-default": "2000",
+            },
+        )
         phases = lambda jobs: [job["phase"] for job in jobs.values()]  # noqa: E731 - 局部小工具
         self.assertEqual(phases(self.jobs).count("candidate"), phases(base_jobs).count("candidate"))
         self.assertEqual(phases(self.jobs).count("official"), phases(base_jobs).count("official") + len(NEW_0163_JOBS))
