@@ -8,6 +8,12 @@
   },
   "entries": [
     {
+      "path": "backend/internal/service/official_egress_codex_direct_body.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.163.0 候选（晋升演练）：直接交给 Executor 的 Responses 请求体（用量探针、管理员测试连接）按 Executor 实际冻结的发布槽位整理，端点画像闭集不声明顶层 instructions 时去掉该字段，避免 Compiler 对闭集外字段失败关闭；闭集仍声明时恒等，直接决定官方出站请求体是否携带该字段。"
+    },
+    {
       "path": "backend/internal/service/official_egress_codex_profile_optional.go",
       "file_type": "regular",
       "kind": "surface_addition",
