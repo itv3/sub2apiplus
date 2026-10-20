@@ -8824,8 +8824,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model",
         required=True,
         help=(
-            "主升级线模型，必须属于目标版本 main 轨道"
-            "（上游 use_responses_lite=false）。"
+            "主升级线模型，必须属于目标版本 main 轨道；其上游 use_responses_lite "
+            "取目标版本的主线 Lite 声明（0.160.0 及更早为 false，0.163.0 起为 true）。"
         ),
     )
     plan.add_argument(
