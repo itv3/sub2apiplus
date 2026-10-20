@@ -229,6 +229,7 @@ func TestCodexWebSocketFirstFrameWithoutBaseInstructionsFallsBackToDefaultInstru
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	control, hasControl := codexGateControlReleaseMode(t, mode)
+	t.Logf("目标槽位=%s（声明了 WS 基础指令载体） 对照槽位=%s（旧画像，有对照=%v）", mode, control, hasControl)
 
 	cases := []struct {
 		name         string
@@ -329,6 +330,7 @@ func TestOpenAIWSToolContinuationFullHistoryFallbackWithoutInstructionsOpensNewC
 	section := codexGateExecutableProfile(t, mode).Optional().BaseInstructions
 	require.NotNil(t, section)
 	control, hasControl := codexGateControlReleaseMode(t, mode)
+	t.Logf("目标槽位=%s（声明了 WS 基础指令载体） 对照槽位=%s（旧画像，有对照=%v）", mode, control, hasControl)
 
 	original := openAIWSFullHistoryFallbackFrame(false)
 	frame, err := sjson.DeleteBytes(original, "instructions")
@@ -389,6 +391,7 @@ func TestOpenAIWSToolContinuationFullHistoryFallbackWithoutInstructionsOpensNewC
 func useOfficialCodexBaseInstructionsCarrierProfile(t *testing.T, svc *OpenAIGatewayService) {
 	t.Helper()
 	mode := codexGateTargetReleaseMode(t, "基础指令走 input 载体且列出 responses_ws", codexGateBaseInstructionsCarrierDeclared)
+	t.Logf("固定到载体画像槽位=%s", mode)
 	if svc.cfg == nil {
 		svc.cfg = &config.Config{}
 	}
