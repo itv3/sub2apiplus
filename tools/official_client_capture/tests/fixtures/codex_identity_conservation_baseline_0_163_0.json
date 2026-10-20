@@ -1,11 +1,11 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "e0a6a47ea95c4d8e17d00d3139d341eb837f8331",
+ "source_commit": "60b7e4525a567152ce0c03ee0f284ec89e7b02c6",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "7fe1c17b558a896648f71f807592a7a26da3cfcffe54390273d4c2a96ce5c11b",
- "wire_producer_sha256": "2586f04be33b5381b63802679bfe97e4383d7f5fe275de704b9ae98481e65515",
- "evidence_semantics_sha256": "3cd2a96194bf084931c0ed0efa5a0181e2af11cec6f3e900f409efde4f8d75a5",
+ "files_sha256": "1fa38711067b8b70ff57eca8f4611f60dcc57352a00a9ff12a3fd9e1f273af8c",
+ "wire_producer_sha256": "b12832f147b6f0b36e5c4096a81f94acde0d23191548a2c0182f8a0ab176cc7d",
+ "evidence_semantics_sha256": "cb688893bfe4f931f1b723de541953edfd58dcca632d0e18da10d024356399d7",
  "control_sha256": "8be99b6962a06827a7c4244fad9b7620dc9a4233be9a5136bf16d105b5c028c5",
  "orchestrator_closure_sha256": {
   "wire_producer": "043e50b2ada13a68d3769951d4b49ca88f1e1786683dfba89dd6882b2ce1b111",
@@ -2186,7 +2186,7 @@
   },
   {
    "path": "codex_upgrade_evidence_labels_0_163_0.json",
-   "sha256": "4b7f3f109306deb1bbc6df01707f6585999a36daa8d237e981ec7a546ed5d269"
+   "sha256": "3d08adb5076c091ceffa513b4dbc4547c5c9bf2e651cd73ec465e775af5cf307"
   },
   {
    "path": "codex_upgrade_evidence_manifest.py",
@@ -2414,7 +2414,7 @@
   },
   {
    "path": "codex_upgrade_scenarios_0_163_0.json",
-   "sha256": "e422f8ee44e18a1a2686f89261b4d8f0249dbb404c38ff741768a81c287d5b84"
+   "sha256": "6b7f0639ba770328f5b84d62de6b0eb940a18b32d8d847828c068d8cda38e667"
   },
   {
    "path": "codex_upgrade_seal_failure.schema.json",
@@ -2722,7 +2722,7 @@
   },
   {
    "path": "run_official_relay_scenario.sh",
-   "sha256": "0a8ebe70ef5d3a163e9b2e4e625730df99d4e55ffcc25242251e163d6ac34f58"
+   "sha256": "ca5e4819cd4e9676a44c048fe3ffd6ead49a6b1059870c41db710767b37ac4ba"
   },
   {
    "path": "run_sub2api_direct_matrix.sh",
@@ -2778,7 +2778,7 @@
   },
   {
    "path": "upstream_byte_relay.py",
-   "sha256": "22bc3c03f6e2014d92f03f3d611d8044676b409eb370e928ecbf2c6602aa8025"
+   "sha256": "09dc49684ee2fef89fcfb6d8d1dc20b4a44752c07aecb0d28738148cb251cd06"
   }
  ]
 }
