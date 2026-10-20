@@ -364,7 +364,7 @@ class FaultInjectionTests(HarnessCase):
         old_capture = harness.tree(CAPTURE)
         self.assertEqual(harness.run(), 0)
         receipts = harness.receipts("codex")
-        self.assertEqual([path.name for path in receipts], ["codex-01600-supervisor-enable-20261007t120000z.json"])
+        self.assertEqual([path.name for path in receipts], ["codex-01630-supervisor-enable-20261007t120000z.json"])
         raw = receipts[0].read_bytes()
         payload = json.loads(raw)
         self.assertEqual(set(payload), CODEX_RECEIPT_FIELDS)
@@ -572,7 +572,7 @@ class SwitchJournalTests(unittest.TestCase):
             "unmanaged_affected_clients": [], "managed_roots": [CAPTURE], "control_root": str(self.control),
             "production_data_root": str(self.root / "data"), "production_doc_root": str(self.root / "data" / "docs"),
             "transaction_root": str(self.root / "data" / "docs" / ".t"),
-            "receipt_paths": {"codex": str(self.control / "codex-01600-supervisor-enable-20261007t120000z.json")},
+            "receipt_paths": {"codex": str(self.control / "codex-01630-supervisor-enable-20261007t120000z.json")},
             "roots": [], "preparers": [self.entry], "documents": [],
         }
         intent.update(changes)

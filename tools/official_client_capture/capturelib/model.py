@@ -43,6 +43,9 @@ SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 # 由 VC-1 目录证据复核。
 # 0.160.0 的内置目录（models-manager/models.json 与 model_presets.rs）与 0.159.2 逐字节相同，同样沿用这两个模型，
 # 由 VC-1 目录证据复核。
+# 0.163.0 的内置目录：model_presets.rs 与 0.160.0 逐字节相同；models.json 的 11 个 slug 及其顺序与 0.160.0 完全相同，
+# 每个条目只有 model_messages 里值为 null 的 instructions_variables 键不再序列化，其余字段逐字相同，gpt-5.5（false）
+# 与 gpt-6-astra（true）的可见性和 Lite 标记不变，同样沿用这两个模型，由 VC-1 目录证据复核。
 #
 # 主线只收录已在本升级中实际采过或即将采的两个，而不是所有 non-lite 模型——没被
 # 实测过的模型不进白名单，保持 fail-closed。改这些集合必须同步 h1_wire_probe 的
@@ -78,6 +81,10 @@ TRACK_MODELS_BY_CODEX_VERSION = {
         "lite": ("gpt-6-astra",),
     },
     "0.160.0": {
+        "main": ("gpt-5.5",),
+        "lite": ("gpt-6-astra",),
+    },
+    "0.163.0": {
         "main": ("gpt-5.5",),
         "lite": ("gpt-6-astra",),
     },

@@ -34,10 +34,10 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_160_0.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_163_0.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_160_0.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_163_0.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
 #
@@ -153,8 +153,12 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-19（合并上游 v0.2.17）：上游在 openai_gateway_forward.go 统一三个入口的上游协议分流、透传 Responses Lite
 # 标志、扩展加密内容报错判定；合并时保留 mimic 守卫，官方出站分支不透传 Lite、不注入 web_search 历史声明，
 # thinking_signature_invalid 判定只对 API Key 生效（老板已确认）。映射只重绑该源码快照，测试、事实与规则语义不变。
+# 2026-10-20（0.163.0 版本登记）：目标版本升到 0.163.0，默认映射改指 candidate_test_fact_map_0_163_0.json；该文件由 0.160.0
+# 版（含上面历次源码快照重绑后的现状，摘要 5d4c2b7a…）原样复制并逐字替换版本号。载荷逐项审核：383 个叶子里唯一差异是
+# codex_version（0.160.0→0.163.0）一处，把新文件里的版本号换回后与 0.160.0 版逐字节相同；测试、事实宇宙与源码快照不变。
+# 0.160.0 映射文件保留不动（它仍是当前 Active 的登记件）。
 FROZEN_MAPPING_SHA256 = (
-    "5d4c2b7a7ee6c5e8c28235cfd6458805aeddac403057346357b3c57d70c2a957"
+    "d02db61ba130d45af55b52c1946365045bcf1c42f025b40f3f39c68777555329"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -229,8 +233,13 @@ FROZEN_MAPPING_SHA256 = (
 # 其余判据载荷不变。
 # 2026-10-07：随主手册第二部分摘要重绑 source_spec_sha256（删除历史审计链接，见 candidate_rule_assertion 同日注释）；
 # 0.160.0 断言画像的规则、场景、检查 ID 与判据载荷逐字不变，diff 仅 source_spec_sha256 一行。
+# 2026-10-20（0.163.0 版本登记）：目标版本升到 0.163.0，默认断言画像改指 candidate_rule_expectations_0_163_0.json；该文件由
+# 0.160.0 版（VC-5 批准修订 b2 与第二章新摘要之后的现状，摘要 c29dea53…）复制并逐字替换版本号。载荷逐项审核：2107 个叶子
+# 里差异共 12 处且全是版本号（codex_version 1、官方原始字节描述 2、UA 前缀／后缀 3、正则转义版本号 2、client_version 查询值 2、
+# EP-006 描述 1、A15 触发描述 1），把新文件里的版本号换回后与 0.160.0 版逐字节相同；规则、场景、检查 ID 与判据载荷不变。
+# 验收契约现算仍为 4ad36477…（dual_wire=25／candidate_profile=18），新旧画像的契约载荷逐项相等。0.160.0 画像文件保留不动。
 FROZEN_PROFILE_SHA256 = (
-    "c29dea53d6211abe503692d6010807a8bec1be908d796d88b9deafac26edbb54"
+    "caee29915b722b01857f2f42a42478b187f0b5d7c2c4bd78b4df62fc779b6c17"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

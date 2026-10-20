@@ -52,7 +52,7 @@ CONTAINER_OUTPUTS = {
     "enable:supervisor-help": "usage: codex_upgrade_supervisor.py",
     "enable:verify-container-tool": json.dumps({"sha256": "c" * 64, "uid": 0, "gid": 0, "mode": 0o644}),
     "enable:verify-codex-binaries": json.dumps([
-        {"path": "/opt/codex-0.160.0/bin/codex", "version": "0.160.0", "returncode": 0, "stdout": "codex-cli 0.160.0"},
+        {"path": "/opt/codex-0.163.0/bin/codex", "version": "0.163.0", "returncode": 0, "stdout": "codex-cli 0.163.0"},
     ]),
 }
 
@@ -220,7 +220,7 @@ class DeployHarness:
             capture = side / deploy.CAPTURE_ROOT
             write(capture / "codex_upgrade_supervisor.py", SUPERVISOR_SOURCE)
             write(capture / "capture.py", f"VERSION = {label!r}\n")
-            write(capture / "codex_upgrade_scenarios_0_160_0.json", json.dumps({"label": label}))
+            write(capture / "codex_upgrade_scenarios_0_163_0.json", json.dumps({"label": label}))
             write(capture / "tests" / "test_tool.py", f"# {label}\n")
             write(side / "tools" / deploy.MANAGED_ASSERTION_PREPARER, NEW_PREPARER if label == "new" else OLD_PREPARER)
         write(self.staging / deploy.CONTROL_ROOT / "store.py", "STORE = 'new'\n")
@@ -336,7 +336,7 @@ class DeployHarness:
                 stack.enter_context(mock.patch.object(
                     module, "verify_pre_a3_scenario_entries",
                     return_value={"scenario_count": 1, "real_chain_registration": []}))
-            stack.enter_context(mock.patch.object(module, "read_target_codex_version", return_value="0.160.0"))
+            stack.enter_context(mock.patch.object(module, "read_target_codex_version", return_value="0.163.0"))
             if self.codex_identity_v2 is not None:
                 stack.enter_context(mock.patch.object(module, "staging_identity_v2", return_value=dict(self.codex_identity_v2)))
             stack.enter_context(mock.patch.object(module, "project_ledger_summary", return_value=None))
