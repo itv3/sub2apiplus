@@ -1089,8 +1089,20 @@ func (index *officialJSONRawIndex) lookupComposite(value any) int32 {
 	return -1
 }
 
+// isOfficialJSONPreEncodedItem 判断数组项是否是调用方预先编码好的 JSON 字节（json.RawMessage）。
+// 这类项的字节形态（例如官方键序）由调用方负责，不与原始数组元素做内容或位置配对：
+// 相等判断需要解码候选元素，而 RawMessage 不可哈希，逐个候选解码会把一次只读的前缀插入放大成
+// 对整段 input 的解码；位置配对还会占用原元素，让后面的原元素失去内容匹配。
+func isOfficialJSONPreEncodedItem(item any) bool {
+	_, preEncoded := item.(json.RawMessage)
+	return preEncoded
+}
+
 // matchArrayItem 在原始数组元素中按内容找出首个未被占用且相等的元素下标；找不到返回 -1。
 func (index *officialJSONRawIndex) matchArrayItem(item any, originalItems []int32, used []bool) int {
+	if isOfficialJSONPreEncodedItem(item) {
+		return -1
+	}
 	hash, hashable := index.hashValue(item)
 	for i, candidate := range originalItems {
 		if used[i] {
@@ -1197,10 +1209,11 @@ func officialJSONAppendArray(index *officialJSONRawIndex, out []byte, items []an
 			out = append(out, ',')
 		}
 		match := -1
-		if index != nil {
+		preEncoded := isOfficialJSONPreEncodedItem(item)
+		if index != nil && !preEncoded {
 			match = index.matchArrayItem(item, originalItems, used)
 		}
-		if match < 0 && i < len(originalItems) && !used[i] {
+		if match < 0 && !preEncoded && i < len(originalItems) && !used[i] {
 			match = i
 		}
 		child := int32(-1)

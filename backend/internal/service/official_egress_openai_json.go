@@ -308,11 +308,13 @@ func officialJSONMemberValue(index *officialJSONRawIndex, value any, node int32)
 			segments = append(segments, []byte{','})
 		}
 		// 与 officialJSONAppendArray 完全相同：先按内容匹配，再尝试未占用的同位置节点。
+		// 预编码的 json.RawMessage 项不参与任何配对（见 isOfficialJSONPreEncodedItem）。
 		match := -1
-		if index != nil {
+		preEncoded := isOfficialJSONPreEncodedItem(item)
+		if index != nil && !preEncoded {
 			match = index.matchArrayItem(item, originalItems, used)
 		}
-		if match < 0 && i < len(originalItems) && !used[i] {
+		if match < 0 && !preEncoded && i < len(originalItems) && !used[i] {
 			match = i
 		}
 		child := int32(-1)
