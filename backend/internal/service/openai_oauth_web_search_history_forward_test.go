@@ -88,6 +88,10 @@ func TestForward_OAuthWebSearchHistoryDeclaresTool(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
 			s := newWebSearchHistoryOAuthSetup(t, tc.passthrough, tc.accountType)
+			if !tc.inject {
+				// 官方出站分支断言旧画像的 input 固定下标；非官方出站（SetupToken）不属于 Codex 画像，不受槽位影响。
+				useOfficialCodexLegacyProfile(t, s.svc)
+			}
 			if tc.lite {
 				s.c.Request.Header.Set(responsesLiteHeader, "true")
 			}
