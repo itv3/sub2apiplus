@@ -108,10 +108,13 @@ func requireWSItemTurnIDs(t *testing.T, frame []byte, turnID string, label strin
 	}
 }
 
+// wsBaseFrameModel 是 buildWSLegacyDerivedPayload 写死的帧内模型；没有来源时的默认指令按它选择。
+const wsBaseFrameModel = "gpt-5.6-luna"
+
 // wsBaseVariant 是一种第三方首帧形态及其在非 Lite 与 Lite 下的预期。
 type wsBaseVariant struct {
 	wsLegacyVariant
-	// text 是期望的基础指令正文；空串表示没有正文，不装基础指令消息。
+	// text 是期望装进基础指令消息的正文（有来源时是来源正文，没有来源时是模型默认指令）。
 	text string
 	// first 是首帧 input 的预期序列，lite 时用 firstLite。
 	first, firstLite []string
@@ -122,6 +125,7 @@ func wsBaseVariants() []wsBaseVariant {
 	const helper = `"You are a helper."`
 	agents := `{"type":"message","role":"developer","content":[{"type":"input_text","text":"AGENTS rules."}]}`
 	staleTagged := baseInstructionsTaggedItem
+	fallback := defaultCodexSynthInstructions(wsBaseFrameModel)
 	return []wsBaseVariant{
 		{wsLegacyVariant{"plain", helper, `[` + user + `]`, ""}, wsBaseHelperText,
 			[]string{"BASE", "message:user"}, []string{"tools", "BASE", "message:user"}},
@@ -137,10 +141,12 @@ func wsBaseVariants() []wsBaseVariant {
 			[]string{"BASE", "message:developer", "message:user"}, []string{"tools", "BASE", "message:developer", "message:user"}},
 		{wsLegacyVariant{"special", `"指令 a<b>&c \"q\"\n"`, `[` + user + `]`, ""}, "指令 a<b>&c \"q\"\n",
 			[]string{"BASE", "message:user"}, []string{"tools", "BASE", "message:user"}},
-		{wsLegacyVariant{"no_instructions", "", `[` + user + `]`, ""}, "",
-			[]string{"message:user"}, []string{"tools", "message:user"}},
-		{wsLegacyVariant{"blank", `"   "`, `[` + user + `]`, ""}, "",
-			[]string{"message:user"}, []string{"tools", "message:user"}},
+		// 没有来源（没有顶层 instructions，或只有空白）的新链首帧回退到模型默认 Codex 指令，
+		// 与 HTTP 对缺 instructions 的 OAuth 请求注入默认指令是同一个来源和函数。
+		{wsLegacyVariant{"no_instructions", "", `[` + user + `]`, ""}, fallback,
+			[]string{"BASE", "message:user"}, []string{"tools", "BASE", "message:user"}},
+		{wsLegacyVariant{"blank", `"   "`, `[` + user + `]`, ""}, fallback,
+			[]string{"BASE", "message:user"}, []string{"tools", "BASE", "message:user"}},
 	}
 }
 
@@ -151,6 +157,7 @@ func TestOpenAIWSFramesInstallOfficialBaseInstructionsOnTargetSlot(t *testing.T)
 		for _, variant := range wsBaseVariants() {
 			label := variant.name + "/lite=" + strconv.FormatBool(lite)
 			payload := buildWSLegacyDerivedPayload(variant.wsLegacyVariant)
+			require.Equal(t, wsBaseFrameModel, gjson.GetBytes(payload, "model").String(), label+"：默认指令按帧内模型选择")
 			ctx, egressContext := wsBaseContext(t, lite, payload)
 
 			first, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(ctx, payload, payload, "", false)
@@ -163,22 +170,14 @@ func TestOpenAIWSFramesInstallOfficialBaseInstructionsOnTargetSlot(t *testing.T)
 			require.False(t, gjson.GetBytes(first, "instructions").Exists(), "%s：画像声明了载体就不能再发顶层 instructions", label)
 			requireWSItemTurnIDs(t, first, gjson.GetBytes(first, "client_metadata.turn_id").String(), label+"/first")
 			firstBase := wsBaseItems(first)
-			if variant.text == "" {
-				require.Empty(t, firstBase, label)
-			} else {
-				require.Equal(t, []string{wsBaseExpectedItem(t, section, egressContext, variant.text)}, firstBase, label+"：官方形态消息原样出现")
-				sent, digest := wsBaseState(egressContext)
-				require.True(t, sent, label)
-				require.Equal(t, sha256.Sum256([]byte(variant.text)), digest, label)
-			}
+			require.Equal(t, []string{wsBaseExpectedItem(t, section, egressContext, variant.text)}, firstBase, label+"：官方形态消息原样出现")
+			sent, digest := wsBaseState(egressContext)
+			require.True(t, sent, label)
+			require.Equal(t, sha256.Sum256([]byte(variant.text)), digest, label)
 			keys := jsonTopLevelKeys(t, string(first))
 			require.True(t, isSubsequenceOf(keys, syntheticNewerWSBodyOrder), "%s：顶层键序必须跟随画像字段序：%v", label, keys)
 
 			prewarm, inject, err := buildDerivedOpenAIOfficialEgressWSPrewarmFrame(ctx, first)
-			if !lite && variant.text == "" {
-				require.ErrorContains(t, err, "requires developer context", label+"：没有前缀时保持旧的失败关闭")
-				continue
-			}
 			require.NoError(t, err, label)
 			require.True(t, inject, label)
 			var wantPrewarm []string
@@ -403,18 +402,20 @@ func TestOpenAIWSBaseInstructionsFollowTheChainOnTargetSlot(t *testing.T) {
 		require.Equal(t, []string{"message:user"}, describeWSInput(frame5), label)
 		sentWith(wsBaseOtherText)
 
-		// 6. 新链没带任何基础指令：连接上这条链就没有基础指令。
+		// 6. 新链没带任何基础指令来源：回退到模型默认 Codex 指令（与 HTTP 注入默认指令同一个来源和函数），
+		// 连接上记下默认正文的摘要。
 		noInstructions := buildWSLegacyDerivedPayload(wsLegacyVariant{name: "bare", input: `[` + baseInstructionsUserItem + `]`})
 		frame6 := prepare(noInstructions, "")
-		require.Empty(t, wsBaseItems(frame6), label)
-		sent, _ := wsBaseState(egressContext)
-		require.False(t, sent, label+"：新链没带正文就清除记录")
+		defaultText := defaultCodexSynthInstructions(wsBaseFrameModel)
+		require.Equal(t, []string{wsBaseExpectedItem(t, section, egressContext, defaultText)}, wsBaseItems(frame6), label)
+		sentWith(defaultText)
 
-		// 7. 清除之后续链带正文：按首次对待，追加但不提示。
+		// 7. 回退装入默认指令之后，续链帧带了客户端自己的正文：与已发送的默认正文不同，
+		// 作为新的基础指令消息追加，并提示一次。
 		officialCodexBaseInstructionsChangedWarned.Store(false)
 		frame7 := prepare(incremental(wsBaseHelperText), wsBasePrevID)
 		require.Equal(t, []string{"BASE", "message:user"}, describeWSInput(frame7), label)
-		require.False(t, officialCodexBaseInstructionsChangedWarned.Load(), label+"：首次追加不提示")
+		require.True(t, officialCodexBaseInstructionsChangedWarned.Load(), label+"：换了一段正文要提示")
 		sentWith(wsBaseHelperText)
 
 		// 8. 新链同一段正文：仍然安装（新链上的上下文里还没有它）。
@@ -484,9 +485,10 @@ func TestOpenAIWSOfficialPrewarmFrameKeepsTheBaseInstructionsPassthrough(t *test
 	}
 }
 
-// 带标记但正文空白的消息没有可用的基础指令正文：网关不安装、不去重，消息留在原处；它的 passthrough 仍然豁免逐项 turn_id 补写。
+// 带标记但正文空白的消息没有可用的基础指令正文，等同没有来源：新链回退到模型默认 Codex 指令，空白的旧标记消息被默认
+// 基础指令消息取代（不留两条）；安装的消息 passthrough 只带内容标记，仍然豁免逐项 turn_id 补写。
 func TestOpenAIWSTaggedBaseInstructionsWithBlankTextKeepsItsPassthrough(t *testing.T) {
-	wsBaseSection(t)
+	section := wsBaseSection(t)
 	blankTagged := `{"type":"message","id":"msg_blank","role":"developer","content":[{"type":"input_text","text":"   "}],` +
 		`"internal_chat_message_metadata_passthrough":{"content_item_kinds":["model.base_instructions"]}}`
 	payload := buildWSLegacyDerivedPayload(wsLegacyVariant{
@@ -496,12 +498,15 @@ func TestOpenAIWSTaggedBaseInstructionsWithBlankTextKeepsItsPassthrough(t *testi
 		ctx, egressContext := wsBaseContext(t, lite, payload)
 		final, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(ctx, payload, payload, "", false)
 		require.NoError(t, err)
-		require.Len(t, wsBaseItems(final), 1, "lite=%v：空白正文的消息原样留着", lite)
+		defaultText := defaultCodexSynthInstructions(wsBaseFrameModel)
+		require.Equal(t, []string{wsBaseExpectedItem(t, section, egressContext, defaultText)}, wsBaseItems(final),
+			"lite=%v：空白正文的标记消息被默认基础指令取代，只剩一条", lite)
 		item := gjson.GetBytes(final, "input.#(internal_chat_message_metadata_passthrough.content_item_kinds)")
 		require.Equal(t, wsBaseTaggedPassthrough, item.Get("internal_chat_message_metadata_passthrough").Raw,
-			"lite=%v：passthrough 保持原样，不补 turn_id", lite)
-		sent, _ := wsBaseState(egressContext)
-		require.False(t, sent, "lite=%v：没有可用正文，不记录", lite)
+			"lite=%v：passthrough 只带内容标记，不补 turn_id", lite)
+		sent, digest := wsBaseState(egressContext)
+		require.True(t, sent, "lite=%v：回退装入了默认正文，要记录", lite)
+		require.Equal(t, sha256.Sum256([]byte(defaultText)), digest, "lite=%v", lite)
 	}
 }
 

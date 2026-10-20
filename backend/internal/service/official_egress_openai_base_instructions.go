@@ -572,6 +572,14 @@ func officialCodexWSBaseInstructionsSource(
 // applyOfficialCodexWSBaseInstructions 是 WS 派生帧在画像声明 BaseInstructions 节（且列出 responses_ws）时对基础指令
 // 的处理：text／sourced 来自 officialCodexWSBaseInstructionsSource，顶层 instructions 已由调用方取走并删除。
 // 必须在逐项 turn_id 补写之后调用（安装的是预编码字节）。
+//
+// 新链帧（此时 previous_response_id 已是全量历史回退之后的最终值）既没有顶层 instructions（空白视同没有）也没有可用的
+// 带标记消息时，回退到模型默认 Codex 指令，与 HTTP 路径对缺 instructions 的 OAuth 请求注入默认指令是同一个来源和同一个
+// 函数（defaultCodexSynthInstructions），再按有来源的新链安装成官方形态的基础指令消息。网关的目的是让上游始终看到官方
+// 形态：官方形态的新链首帧带基础指令，预热帧也只承载这段前缀；不回退的话，第三方客户端只发普通 developer 消息的首帧
+// 会因为预热帧没有可承载的前缀而构造失败。
+// 有来源时行为不变；续链帧没有来源时也不回退（链上的基础指令已经在这条链的第一帧里了）。画像没有声明载体节时本函数
+// 不会被调用，旧画像的帧与旧形态逐字节相同。
 func applyOfficialCodexWSBaseInstructions(
 	payload map[string]any,
 	state *officialOpenAIWSDerivedState,
@@ -583,6 +591,13 @@ func applyOfficialCodexWSBaseInstructions(
 	trimmed := strings.TrimSpace(text)
 	sourced = sourced && trimmed != ""
 	chained := strings.TrimSpace(officialOpenAIString(payload, "previous_response_id")) != ""
+	if !sourced && !chained {
+		// 模型取帧内最终发往上游的 model，与 HTTP 注入默认指令取最终上游模型一致；空模型和未知模型也交给同一个函数处理，
+		// 回退结果与 HTTP 完全相同。
+		text = defaultCodexSynthInstructions(officialOpenAIString(payload, "model"))
+		trimmed = strings.TrimSpace(text)
+		sourced = trimmed != ""
+	}
 	var digest officialCodexBaseInstructionsDigest
 	if sourced {
 		digest = sha256.Sum256([]byte(text))
