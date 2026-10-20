@@ -40028,6 +40028,26 @@ def _verify_environment_continuity(
         / "probe-manifest.json"
     )
     if after_path.is_symlink() or not after_path.is_file():
+        # 被环境隔离作废且带污染窗口的 attempt：窗口之前完成的作业按隔离收据保留复用（resume 的失败 attempt 范围计算同口径），
+        # 环境边界是隔离收据登记的干净环境复核（修复后新取、晚于污染），不是该 attempt 自己的 after 探针——监督器在作业失败后
+        # 停了采集容器，独立 after 探针本来就取不到（0.163.0 VC-1 首批实采）。没有隔离、隔离无窗口、跨 Campaign 来源仍原样拒绝。
+        isolation = None
+        if source_campaign_dir is None:
+            phase_name = "official" if history_relative == Path("official") else "candidate"
+            candidate_name = None if phase_name == "official" else history_relative.name
+            isolation = _attempt_isolation_receipt(history_campaign_dir, phase_name, candidate_name, source_attempt)
+        if isolation is not None and _contamination_window_start_epoch(isolation) is not None:
+            clean_environment = isolation.get("clean_environment")
+            return {
+                "schema_version": "codex-upgrade-attempt-continuity/v1",
+                "source_attempt_id": source_attempt,
+                "compared_kinds": [],
+                "environment_boundary": "environment_isolation",
+                "isolation_sha256": str(isolation["isolation_sha256"]),
+                "clean_environment_sha256": (
+                    str(clean_environment.get("sha256")) if isinstance(clean_environment, Mapping) else None
+                ),
+            }
         raise ConfigurationError("被承接 attempt 缺少 after 环境探针，无法证明连续性。")
     after_manifest = _read_json(after_path, "被承接 attempt 的 after 探针")
     previous = _probe_snapshot_digests(after_manifest)

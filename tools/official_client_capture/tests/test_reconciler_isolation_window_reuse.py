@@ -90,3 +90,52 @@ class IsolationWindowReuseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IsolatedAttemptContinuityTests(unittest.TestCase):
+    """被隔离且带窗口的 attempt 没有 after 探针时，连续性核对改用隔离收据里的干净环境作边界；其余情形照旧拒绝。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.campaign = Path(self._tmp.name)
+        (self.campaign / "official" / "attempts" / ATTEMPT_ID).mkdir(parents=True)
+        self.isolation = {
+            "index": 1,
+            "isolation_sha256": "a" * 64,
+            "clean_environment": {"sha256": "b" * 64},
+            "contamination_started_at_utc": WINDOW_START,
+        }
+
+    def verify(self, *, isolation: dict | None, **kwargs):
+        with mock.patch.object(codex_upgrade, "_attempt_isolation_receipt", return_value=isolation):
+            return codex_upgrade._verify_environment_continuity(
+                self.campaign, Path("official"), {ATTEMPT_ID}, {"kind": "before"}, **kwargs
+            )
+
+    def test_isolation_with_window_replaces_the_missing_after_probe(self) -> None:
+        record = self.verify(isolation=self.isolation)
+        self.assertEqual(record["environment_boundary"], "environment_isolation")
+        self.assertEqual(record["source_attempt_id"], ATTEMPT_ID)
+        self.assertEqual(record["isolation_sha256"], "a" * 64)
+        self.assertEqual(record["clean_environment_sha256"], "b" * 64)
+        self.assertEqual(record["compared_kinds"], [])
+
+    def test_missing_after_probe_without_isolation_is_still_rejected(self) -> None:
+        with self.assertRaises(codex_upgrade.ConfigurationError):
+            self.verify(isolation=None)
+
+    def test_isolation_without_a_window_is_still_rejected(self) -> None:
+        without_window = {key: value for key, value in self.isolation.items() if key != "contamination_started_at_utc"}
+        with self.assertRaises(codex_upgrade.ConfigurationError):
+            self.verify(isolation=without_window)
+
+    def test_cross_campaign_source_never_uses_the_isolation_shortcut(self) -> None:
+        with self.assertRaises(codex_upgrade.ConfigurationError):
+            self.verify(isolation=self.isolation, source_campaign_dir=self.campaign, source_relative=Path("official"))
+
+    def test_no_carried_attempt_means_no_continuity_record(self) -> None:
+        with mock.patch.object(codex_upgrade, "_attempt_isolation_receipt", return_value=self.isolation):
+            self.assertIsNone(
+                codex_upgrade._verify_environment_continuity(self.campaign, Path("official"), set(), {"kind": "before"})
+            )
