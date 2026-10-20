@@ -1031,10 +1031,15 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 			modified = true
 		}
 	}
-	// access_programs 的值域：画像声明了 AccessPrograms 节时，入站取值只有落在节的子集内才允许出站，
-	// 其余整字段删除并告警；第一版从不生成缺席的字段。放在顶层字段闭集剔除之后——画像在 Body.Fields
-	// 里声明了该字段它才会留到这里。画像没有该节时 access_programs 已被闭集剔除，这里是恒等操作。
-	if normalizeOfficialCodexAccessPrograms(payload, officialCodexAccessProgramsSection(options.ProfileMode)) {
+	// access_programs：画像声明了 AccessPrograms 节时，入站取值只有落在节的子集内才允许出站，其余整字段删除并告警；
+	// 节里写了默认程序，请求又没有（或被删光了）access_programs，就补出默认程序，位置跟随画像字段序（末位）。
+	// 放在顶层字段闭集剔除之后——画像在 Body.Fields 里声明了该字段它才会留到这里。画像没有该节时
+	// access_programs 已被闭集剔除，这里是恒等操作。
+	if normalizeOfficialCodexAccessPrograms(
+		payload,
+		officialCodexAccessProgramsSection(options.ProfileMode),
+		officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
+	) {
 		modified = true
 	}
 	// 非 Lite 的 parallel_tool_calls 允许入口/兼容层显式值，但不得越过

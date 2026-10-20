@@ -384,9 +384,10 @@ func TestFinalizeOfficialOpenAIHTTPBodyEmitsProfileFieldOrderWithBaseInstruction
 	})
 	final, _, _, err := finalizeBaseInstructionsHTTP(t, officialClientProfileModePrevious, false, "entry", body)
 	require.NoError(t, err)
-	// 合成画像的字段序：stream 前置，没有 instructions；载荷里不存在的字段不输出。
+	// 合成画像的字段序：stream 前置，没有 instructions；载荷里不存在的字段不输出。access_programs 在画像字段表末位，
+	// 合成画像的值域节写了默认程序，入站没带时由网关补出。
 	require.Equal(t,
-		[]string{"model", "stream", "input", "tool_choice", "parallel_tool_calls", "reasoning", "store", "include"},
+		[]string{"model", "stream", "input", "tool_choice", "parallel_tool_calls", "reasoning", "store", "include", "access_programs"},
 		jsonTopLevelKeys(t, string(final)))
 }
 

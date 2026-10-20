@@ -10,17 +10,22 @@ import (
 
 // 请求体条件字段 access_programs：画像 AccessPrograms 节。
 //
-// 较新版本的 Responses 请求体可携带 access_programs（形如 {"cyber":"standard"}）。网关没有账号资格信息，
-// 所以入站取值只有落在画像节 AllowedCyberPrograms 之内才允许出站；其余取值（子集外的程序、非对象、多余的键、
-// 非字符串）一律整字段删除并告警，既不原样透传，也不试图“修复”成某个允许的取值。多余的键意味着画像没有覆盖的
-// 程序类型，网关无法判断它是否影响账号资格，所以连同合法的 cyber 一起删除。
+// 较新版本的 Responses 请求体可携带 access_programs（形如 {"cyber":"standard"}）。官方客户端在 ChatGPT 账号、
+// 模型目录通告了默认程序且用户没有主动切换时，每个回合请求都会带默认程序，写在请求体末位；预热帧（generate=false）
+// 不绑定回合程序，不带；压缩请求与 guardian 请求沿用回合上下文的程序，同样带。
 //
-// 第一版只透传、不生成：入站没带就不带，节里即使写了 DefaultCyberProgram 也不使用——是否给某类账号默认开启
-// 交给将来的账号级策略。画像没有这个节时本文件的函数都是恒等操作，access_programs 仍按旧逻辑被顶层字段闭集
-// 剔除（并按“画像闭集外字段”告警），出站字节与引入该节之前相同。
+// 网关没有账号资格信息，处理分两步：
+//  1. 校验：入站取值只有落在画像节 AllowedCyberPrograms 之内才允许出站；其余取值（子集外的程序、非对象、多余的键、
+//     非字符串）一律整字段删除并告警，既不原样透传，也不试图“修复”成某个允许的取值。多余的键意味着画像没有覆盖的
+//     程序类型，网关无法判断它是否影响账号资格，所以连同合法的 cyber 一起删除。
+//  2. 生成：画像节写了 DefaultCyberProgram 时，非预热请求在校验之后仍然没有 access_programs（入站没带，或带的
+//     被删除了），就生成 {"cyber":"<默认程序>"}；画像节没有默认程序时只做校验、从不生成。
 //
-// 调用点：HTTP 定型、WS 派生首帧。预热帧、链帧与工具续接帧都由已经归一化的首帧改写而来，原样继承其中的
-// access_programs，不需要再各自处理。
+// 画像没有这个节时本文件的函数都是恒等操作，access_programs 仍按旧逻辑被顶层字段闭集剔除（并按“画像闭集外字段”
+// 告警），出站字节与引入该节之前相同。
+//
+// 调用点：HTTP 定型、WS 派生帧。链帧与工具续接帧都由已经归一化的帧改写而来，原样继承其中的 access_programs；
+// 网关补出的预热帧由业务帧改写而来，要把继承来的 access_programs 去掉（见 removeOfficialCodexAccessProgramsForPrewarm）。
 
 const (
 	officialCodexAccessProgramsField    = "access_programs"
@@ -81,26 +86,57 @@ func officialCodexAccessProgramsReject(
 	return "", program
 }
 
-// normalizeOfficialCodexAccessPrograms 按画像节的值域归一化 payload 顶层的 access_programs，返回 payload 是否
-// 被改动（即字段被删除）。section 为 nil、字段不存在或取值合法时不做任何改动；绝不生成缺席的字段。
+// normalizeOfficialCodexAccessPrograms 按画像节归一化 payload 顶层的 access_programs，返回 payload 是否被改动：
+// 先校验（越界取值整字段删除并告警），再在允许生成时按节的默认程序补出缺席的字段。section 为 nil 时不做任何改动。
+// allowGenerate 由调用方按请求性质给出：预热帧、或端点的字段表没有声明 access_programs 时为 false，只校验不生成。
+// 默认程序不在值域里（画像契约不允许，这里防御）时同样不生成。
 func normalizeOfficialCodexAccessPrograms(
+	payload map[string]any,
+	section *profilecontract.AccessProgramsSection,
+	allowGenerate bool,
+) bool {
+	if section == nil || payload == nil {
+		return false
+	}
+	modified := false
+	if value, exists := payload[officialCodexAccessProgramsField]; exists {
+		if reason, program := officialCodexAccessProgramsReject(value, section); reason != "" {
+			delete(payload, officialCodexAccessProgramsField)
+			warnOfficialCodexAccessProgramsDropped(reason, program, section.AllowedCyberPrograms)
+			modified = true
+		}
+	}
+	if _, exists := payload[officialCodexAccessProgramsField]; exists || !allowGenerate {
+		return modified
+	}
+	if program := section.DefaultCyberProgram; program != "" && slices.Contains(section.AllowedCyberPrograms, program) {
+		payload[officialCodexAccessProgramsField] = map[string]any{officialCodexAccessProgramsCyberKey: program}
+		modified = true
+	}
+	return modified
+}
+
+// removeOfficialCodexAccessProgramsForPrewarm 去掉网关补出的预热帧上继承自业务帧的 access_programs：
+// 官方预热帧（generate=false）不绑定回合程序，不带这个字段。section 为 nil 时不做任何改动。
+func removeOfficialCodexAccessProgramsForPrewarm(
 	payload map[string]any,
 	section *profilecontract.AccessProgramsSection,
 ) bool {
 	if section == nil || payload == nil {
 		return false
 	}
-	value, exists := payload[officialCodexAccessProgramsField]
-	if !exists {
-		return false
-	}
-	reason, program := officialCodexAccessProgramsReject(value, section)
-	if reason == "" {
+	if _, exists := payload[officialCodexAccessProgramsField]; !exists {
 		return false
 	}
 	delete(payload, officialCodexAccessProgramsField)
-	warnOfficialCodexAccessProgramsDropped(reason, program, section.AllowedCyberPrograms)
 	return true
+}
+
+// officialCodexAccessProgramsGenerationAllowed 判断端点的顶层字段闭集是否声明了 access_programs：
+// 没有声明的端点不能补出这个字段（它会被闭集剔除，补了也是错的形态）。
+func officialCodexAccessProgramsGenerationAllowed(allowedTopLevel map[string]struct{}) bool {
+	_, declared := allowedTopLevel[officialCodexAccessProgramsField]
+	return declared
 }
 
 // isOfficialCodexAccessProgramsToken 判断程序名是否只含小写字母、数字与下划线且不超过回显上限：

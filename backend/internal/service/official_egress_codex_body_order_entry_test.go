@@ -100,6 +100,7 @@ func syntheticNewerBodyContractMutation(t *testing.T) func(*profilecontract.Snap
 		})
 		doc.AccessPrograms = syntheticServiceRawSection(t, profilecontract.AccessProgramsSection{
 			AllowedCyberPrograms: []string{"standard"},
+			DefaultCyberProgram:  "standard",
 		})
 	}
 }

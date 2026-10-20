@@ -723,10 +723,15 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	); err != nil {
 		return nil, result, err
 	}
-	// access_programs 的值域，与 HTTP 定型共用同一个函数；预热帧、链帧与工具续接帧由本函数的输出改写而来，
-	// 原样继承这里归一化后的取值。画像没有 AccessPrograms 节时是恒等操作。
+	// access_programs：校验与默认生成，与 HTTP 定型共用同一个函数。预热帧（generate=false）不绑定回合程序，只校验不生成；
+	// 其余帧（首帧、增量帧、工具续接的完整历史帧）都生成。链帧与工具续接收敛帧由本函数的输出改写而来，原样继承这里的取值；
+	// 网关补出的预热帧要去掉继承来的取值（见 buildDerivedOpenAIOfficialEgressWSPrewarmFrame）。画像没有该节时是恒等操作。
+	generateFlag, _ := payload["generate"].(bool)
+	isPrewarmFrame := !generateFlag && payload["generate"] != nil
 	accessProgramsModified := normalizeOfficialCodexAccessPrograms(
-		payload, officialCodexAccessProgramsSection(egressContext.ProfileMode()),
+		payload,
+		officialCodexAccessProgramsSection(egressContext.ProfileMode()),
+		!isPrewarmFrame && officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
 	)
 
 	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
@@ -1002,6 +1007,8 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 	payload["input"] = prewarmInput
 	payload["generate"] = false
 	delete(payload, "previous_response_id")
+	// 业务帧上补出的 access_programs 不属于预热帧：官方预热帧不绑定回合程序。
+	removeOfficialCodexAccessProgramsForPrewarm(payload, officialCodexAccessProgramsSection(egressContext.ProfileMode()))
 	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadata(
 		egressContext,
 		payload,
