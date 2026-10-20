@@ -1,7 +1,7 @@
 {
   "sink_id": "codex.quota.wham",
   "anchor": true,
-  "release_mode": "previous",
+  "release_mode": "active",
   "method": "GET",
   "host_template": "chatgpt.com",
   "final_host": "chatgpt.com",
@@ -16,14 +16,14 @@
   "profile_validation_result": "passed",
   "attempt_ordinal": 1,
   "attempt_reason": "initial",
-  "release_digest": "8f0a460dfffe3db458d1e85f2499b39eb5fa87be93c3e5e77a9cba7c46440dca",
-  "profile_digest": "3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d",
-  "bundle_digest": "d8f9195222997ee96d59c6488246a0b3e52cd8c64e6deed196ea100025903cc0",
+  "release_digest": "13d4130c79dd23ec78181ee079541d220702145dbfd7a957084fae56e62e030b",
+  "profile_digest": "d33a4f097f86d57929995760b7e51c4ddf672e5f2db5cb36c0d0815afc3ad12c",
+  "bundle_digest": "960e7d9264cd65892bb7c0300d05b59315c1c36e1078689e618ed798241d33f5",
   "backend": "http_upstream",
   "adapter_id": "officialegress.http_upstream",
-  "transport_id": "codex-0.157.0-http-ubuntu24-native-long-lived",
-  "connection_identity_digest": "ba50b557ef16352891c6963cebf7850cc8781d703a624bc15ab4facc6e837ede",
-  "connection_pool_digest": "fa72bcdb53df58e59357902406f600535c3d2e2799beb842be3c7093afe03f2d",
+  "transport_id": "codex-0.160.0-http-ubuntu24-native-long-lived",
+  "connection_identity_digest": "d4be70d391f0ff3b43919dfc65965807d131aad6996d3291721afef460732716",
+  "connection_pool_digest": "6aaa7afcea3079df0ecd027a61ec012c789a5064dde3a20c077a8e154341fa3a",
   "tls_profile_digest": "2fe3df1e56e020f4ec6103deb2b644704bfbfd86fa5a2278a576cf8d47a7c89b",
   "normalization": {
     "HeaderMode": "lowercase",
@@ -35,8 +35,8 @@
       "name": "user-agent",
       "wire_name": "user-agent",
       "value_kind": "static_or_synthetic_safe",
-      "safe_value": "codex_exec/0.157.0 (Ubuntu 24.4.0; aarch64) unknown (codex_exec; 0.157.0)",
-      "value_sha256": "6abcc0ea6d1d6b374329a165a115d87ad80e58c37dffd97bf07382554602503e"
+      "safe_value": "codex_exec/0.160.0 (Ubuntu 24.4.0; aarch64) unknown (codex_exec; 0.160.0)",
+      "value_sha256": "a43059ded3066fb961347240746e136174e2b5742c0d3c04dd44ecbc7c52a6f0"
     },
     {
       "name": "authorization",
@@ -69,11 +69,11 @@
     }
   ],
   "body": {
-    "encoding": "",
+    "encoding": "none",
     "ordered_fields": null,
     "type_shape": null,
     "synthetic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "compression": "",
+    "compression": "none",
     "compression_level": 3,
     "credential_bearing": false
   },
