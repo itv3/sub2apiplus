@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
@@ -57,7 +59,23 @@ func withOfficialCodexSyntheticPreviousProfile(
 }
 
 // syntheticNewerProfileMutation 是较新版本合成画像的完整改写：顶层字段重排与删增、基础指令载体节、
-// access_programs 值域节。后续阶段按需在这里追加其他节与键。
+// access_programs 值域节、turn metadata 的 history_initialization 键。后续阶段按需在这里追加其他节与键。
 func syntheticNewerProfileMutation(t *testing.T) func(*profilecontract.SnapshotDoc) {
-	return syntheticNewerBodyContractMutation(t)
+	bodyContract := syntheticNewerBodyContractMutation(t)
+	return func(doc *profilecontract.SnapshotDoc) {
+		bodyContract(doc)
+		syntheticDeclareTurnMetadataKey(t, doc, "history_initialization")
+	}
+}
+
+// syntheticDeclareTurnMetadataKey 在合成画像的 TurnMetadata 节里声明一个键（保持排序去重）。
+func syntheticDeclareTurnMetadataKey(t *testing.T, doc *profilecontract.SnapshotDoc, key string) {
+	t.Helper()
+	var section profilecontract.TurnMetadataSection
+	require.NoError(t, json.Unmarshal(doc.TurnMetadata, &section))
+	if !slices.Contains(section.Keys, key) {
+		section.Keys = append(section.Keys, key)
+		slices.Sort(section.Keys)
+	}
+	doc.TurnMetadata = syntheticServiceRawSection(t, section)
 }
