@@ -406,6 +406,29 @@ class MainTrackModelTests(unittest.TestCase):
             self.assertEqual(environment["COMPACTION_SECOND_MODEL"], "{lite_model}")
             self.assertEqual(environment["COMPACTION_FIRST_USE_RESPONSES_LITE"], "true")
 
+    def test_embedded_lite_expectations_in_commands_follow_the_declaration(self) -> None:
+        """命令里内嵌的 --expect-use-responses-lite（official-core 的 /models 补采脚本）与声明一致，且不是空检查。"""
+
+        counts = {}
+        for version in TRACK_MODELS_BY_CODEX_VERSION:
+            path = TOOL_ROOT / f"codex_upgrade_scenarios_{version.replace('.', '_')}.json"
+            if not path.is_file():
+                continue
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            found_values = []
+            for job in manifest["capture_jobs"]:
+                declared = str(track_expected_use_responses_lite(version, job.get("track", "main"))).lower()
+                for step in job["steps"]:
+                    for argument in step["argv"]:
+                        for found in re.findall(r"--expect-use-responses-lite[ =]+(true|false)\b", argument):
+                            self.assertEqual(found, declared, f"{version} {job['id']}")
+                            found_values.append((job["id"], found))
+            counts[version] = found_values
+        # 0.160.0 及更早的主线是非 Lite：补采脚本期望 false；0.163.0 起主线是 Lite：期望 true（此前漏改会让
+        # 补采驱动在 /models 被客户端取消的路径上拿 false 去比对 Lite 主线模型，三次尝试全部失败）。
+        self.assertEqual(counts["0.160.0"], [("official-core", "false")])
+        self.assertEqual(counts["0.163.0"], [("official-core", "true")])
+
     def test_lite_main_compaction_jobs_use_the_lite_threshold(self) -> None:
         """主线是 Lite 模型时，靠阈值触发自动压缩的主线作业不得比 Lite 轨作业的阈值更高。
 
@@ -496,6 +519,16 @@ class MainTrackModelTests(unittest.TestCase):
                     "environment"
                 ].update(COMPACTION_FIRST_USE_RESPONSES_LITE="false"),
                 "COMPACTION_FIRST_USE_RESPONSES_LITE 与 Codex 0.163.0 的 main 轨道声明",
+            ),
+            (
+                "内嵌的补采期望写回 false",
+                lambda jobs: jobs["official-core"]["steps"][1].update(
+                    argv=[
+                        item.replace("--expect-use-responses-lite true", "--expect-use-responses-lite false")
+                        for item in jobs["official-core"]["steps"][1]["argv"]
+                    ]
+                ),
+                "内嵌的 --expect-use-responses-lite false 与 Codex 0.163.0 的 main 轨道声明",
             ),
             (
                 "镜像取值不是 true／false",

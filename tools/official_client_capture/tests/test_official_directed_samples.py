@@ -30,6 +30,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -1457,6 +1458,13 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
         for step in result:
             for key in (*self.DECLARED_MIRROR_KEYS, *self.DECLARED_THRESHOLD_KEYS):
                 step["environment"].pop(key, None)
+            if self.DECLARED_MIRROR_KEYS:
+                # 命令里内嵌的 --expect-use-responses-lite（official-core 的 /models 补采脚本）同样随主线声明变化；
+                # 取值本身由 test_main_track_models 按声明逐版本锁定，这里抹成占位再比较其余字节。
+                step["argv"] = [
+                    re.sub(r"--expect-use-responses-lite[ =]+(true|false)\b", "--expect-use-responses-lite <声明>", item)
+                    for item in step["argv"]
+                ]
         return result
 
     def assert_carried_fields_equal(self, current: dict, previous: dict) -> None:

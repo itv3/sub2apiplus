@@ -2627,6 +2627,26 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
                             f"{payload['codex_version']} 的 {mirror_track} 轨道声明"
                             f"（{declared_mirror}）不一致。"
                         )
+                # 内嵌在命令里的 --expect-use-responses-lite（例如 official-core 的 /models 补采脚本）同样按作业轨道
+                # 核对：它写成与声明相反的值，补采驱动会拿错误期望去比对上游目录，真实采集时才失败。
+                embedded_track = job.get("track", "main")
+                if embedded_track in {"main", "lite"} and isinstance(step.get("argv"), list):
+                    declared_embedded = str(
+                        track_expected_use_responses_lite(payload["codex_version"], embedded_track)
+                    ).lower()
+                    for argument in step["argv"]:
+                        if not isinstance(argument, str):
+                            continue
+                        for found in re.findall(
+                            r"--expect-use-responses-lite[ =]+(true|false)\b", argument
+                        ):
+                            if found != declared_embedded:
+                                raise ConfigurationError(
+                                    f"场景任务 {index} 步骤 {step_index} 命令里内嵌的 "
+                                    f"--expect-use-responses-lite {found} 与 Codex "
+                                    f"{payload['codex_version']} 的 {embedded_track} 轨道声明"
+                                    f"（{declared_embedded}）不一致。"
+                                )
     # R16：一份清单要么全部作业声明显式依赖，要么全部不声明；半迁移会让未声明的
     # 作业继续走旧的引用扫描，重新引入注释依赖与慢路径。
     declared_jobs = sum(
