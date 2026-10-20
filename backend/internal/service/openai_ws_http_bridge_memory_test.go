@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -58,6 +60,45 @@ func TestPrepareOpenAIWSHTTPBridgeSharedDecodeMatchesLegacy(t *testing.T) {
 			require.Equal(t, want, got, "桥接准备必须保持 json.Marshal 原有键序、HTML 转义与数字字面值")
 		})
 	}
+}
+
+// wsHTTPBridgeCreatedAtField 匹配事件里 created_at 的数字字面值（捕获组是数字）。
+var wsHTTPBridgeCreatedAtField = regexp.MustCompile(`"created_at":(\d+)`)
+
+// normalizeWSHTTPBridgeCreatedAt 把转发给 WS 客户端的事件里的 created_at 数字归一化成占位 0，返回归一化后的事件
+// 和这一侧出现过的全部 created_at 取值（取值由 requireWSHTTPBridgeCreatedAtStamped 另行校验）。
+//
+// 为什么要归一化：created_at 由生产代码在一条流第一次用到时取 time.Now().Unix() 补写（responsesCreatedAtStamper），
+// 没有可注入的时钟。legacy 与 current 是先后各跑一次，两次之间墙钟可能跨过整秒边界，两侧的 created_at 就会差 1，
+// 与桥接语义无关（机器负载高时更常见）。这里只归一化这一个字段，事件里其余字节仍逐字节比较。
+func normalizeWSHTTPBridgeCreatedAt(t *testing.T, messages [][]byte) ([][]byte, []int64) {
+	t.Helper()
+	normalized := make([][]byte, len(messages))
+	var values []int64
+	for i, message := range messages {
+		for _, match := range wsHTTPBridgeCreatedAtField.FindAllSubmatch(message, -1) {
+			value, err := strconv.ParseInt(string(match[1]), 10, 64)
+			require.NoError(t, err)
+			values = append(values, value)
+		}
+		normalized[i] = wsHTTPBridgeCreatedAtField.ReplaceAll(message, []byte(`"created_at":0`))
+	}
+	return normalized, values
+}
+
+// requireWSHTTPBridgeCreatedAtStamped 校验被归一化掉的 created_at 取值，避免归一化把真正的回归一并掩盖：每侧的终态事件
+// 必须带 created_at，一条流只有一个取值（stamper 的约定），取值是正数，两侧是同一时刻附近的墙钟读数（相差不超过 30 秒，
+// 能拦住 0、毫秒时间戳之类的错误）。
+func requireWSHTTPBridgeCreatedAtStamped(t *testing.T, legacy, current []int64) {
+	t.Helper()
+	for side, values := range map[string][]int64{"legacy": legacy, "current": current} {
+		require.NotEmpty(t, values, "%s：转发的终态事件必须带 created_at", side)
+		for _, value := range values {
+			require.Equal(t, values[0], value, "%s：同一条流只有一个 created_at", side)
+		}
+		require.Positive(t, values[0], "%s：created_at 必须是正数", side)
+	}
+	require.InDelta(t, legacy[0], current[0], 30, "两侧的 created_at 必须是同一时刻附近的墙钟读数")
 }
 
 func TestOfficialEgressWSHTTPBridgeMatchesLegacyWire(t *testing.T) {
@@ -133,7 +174,10 @@ func TestOfficialEgressWSHTTPBridgeMatchesLegacyWire(t *testing.T) {
 			current, currentMessages := run(false)
 			require.NoError(t, legacy.err)
 			require.NoError(t, current.err)
-			require.Equal(t, legacyMessages, currentMessages, "转发给 WS 客户端的事件保持一致")
+			legacyEvents, legacyCreatedAt := normalizeWSHTTPBridgeCreatedAt(t, legacyMessages)
+			currentEvents, currentCreatedAt := normalizeWSHTTPBridgeCreatedAt(t, currentMessages)
+			require.Equal(t, legacyEvents, currentEvents, "转发给 WS 客户端的事件保持一致（created_at 是时钟读数，取值另行校验）")
+			requireWSHTTPBridgeCreatedAtStamped(t, legacyCreatedAt, currentCreatedAt)
 			require.NotEmpty(t, current.calls)
 			require.Len(t, current.calls, len(legacy.calls))
 			if fixture.retry {
