@@ -1112,6 +1112,227 @@ class OverloadedTimelineCheckTest(EmbeddedCheckCase):
         self.assertEqual(report["unexpected_request_connection_ids"], [2])
 
 
+class ScriptCheckBlocksShellGlueTest(unittest.TestCase):
+    """三个核对块（终止型流内故障、升级 429 降级等待、过载 503 时间线）在 bash 里的胶水：命令替换取报告、
+    ``|| status=$?``、空输出判断、write_observation、失败时的提示与 ``exit 1``。
+
+    Python 判据已由各自的测试锁定；这里把块原样抽出来，用一个只转发 ``docker exec -i <容器> python3 - …`` 的垫片在宿主上
+    执行，补上「脚本这一层有没有写错」的核对——这些块第一次真实运行是在采集容器里，出错就是一轮白采（Campaign 建立后
+    采集脚本冻结，发现晚了只能走新 Campaign）。
+    """
+
+    # 块名 → (起始文本, 下一段的起始文本, 观测文件名)
+    BLOCKS = {
+        "terminal": ('if [[ ${RELAY_STREAM_FAULT:-} == incomplete-terminal ]]; then\n  echo "=== 终止型流内故障核对 ==="',
+                     "\n# 升级 429 降级等待核对", "stream-fault-terminal.json"),
+        "ws": ('if [[ -n ${RELAY_WS_UPGRADE_429_RETRY_AFTER:-} ]]; then\n  echo "=== 升级 429 降级等待核对 ==="',
+               "\n# 过载 503 重试时间线核对", "ws-retry-after-timeline.json"),
+        "overloaded": ('if [[ ${RELAY_RETRY_PROBE:-} == persistent-503-overloaded ]]; then\n  echo "=== 过载 503 重试时间线核对 ==="',
+                       "\n# tcpdump 此前只在 EXIT 陷阱里停", "server-overloaded-timeline.json"),
+    }
+    # 假 docker：只认 ``docker exec -i <容器> python3 - <参数…>``（标准输入是块里的 heredoc），把参数里的容器内路径换成宿主临时目录。
+    DRIVER = r'''
+set -Eeuo pipefail
+capture_container=fake-capture
+run_id=glue-run
+last_exec_status=${LAST_EXEC_STATUS-}
+write_observation() { printf '%s' "$2" > "$OBS_DIR/$1"; }
+docker() {
+  [[ $1 == exec && $2 == -i && $3 == "$capture_container" && $4 == python3 && $5 == - ]] || { echo "非预期的 docker 调用: $*" >&2; return 99; }
+  shift 5
+  local args=() arg
+  for arg in "$@"; do args+=("${arg/#\/capture\/runs\/$run_id\//$RUN_ROOT/}"); done
+  python3 - "${args[@]}"
+}
+'''
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        source = RELAY_SCRIPT.read_text(encoding="utf-8")
+        cls.code = {}
+        for name, (start_marker, end_marker, _observation) in cls.BLOCKS.items():
+            start = source.index(start_marker)
+            cls.code[name] = source[start:source.index(end_marker, start)]
+
+    def run_block(self, name: str, connections: list[dict] | None, **environment: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, observations = Path(tmp) / "run", Path(tmp) / "observations"
+            (root / "relay").mkdir(parents=True)
+            observations.mkdir()
+            if connections is not None:
+                (root / "relay" / "relay.json").write_text(json.dumps({"connections": connections}), encoding="utf-8")
+            script = self.DRIVER + self.code[name] + '\necho "块之后的语句已执行"\n'
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1",
+                   "OBS_DIR": str(observations), "RUN_ROOT": str(root), **environment}
+            result = subprocess.run([BASH, "-c", script], env=env, text=True, capture_output=True, check=False)
+            observation_path = observations / self.BLOCKS[name][2]
+            observation = json.loads(observation_path.read_text(encoding="utf-8")) if observation_path.exists() else None
+        return result, observation
+
+    TERMINAL_ENV = {"RELAY_STREAM_FAULT": "incomplete-terminal", "RELAY_STREAM_FAULT_TRANSPORT": "http", "LAST_EXEC_STATUS": "1"}
+    WS_ENV = {"RELAY_WS_UPGRADE_429_RETRY_AFTER": "2", "LAST_EXEC_STATUS": "0"}
+    OVERLOADED_ENV = {"RELAY_RETRY_PROBE": "persistent-503-overloaded", "RELAY_RETRY_PROBE_RETRY_AFTER": "2", "LAST_EXEC_STATUS": "1"}
+    HTTP_FAULT = {"connection_id": 5, "intervention": "stream_fault:incomplete-terminal:http"}
+    UPGRADE = {"connection_id": 2, "ws_upgrade_429": {
+        "sequence": 1, "retry_after_seconds": 2, "request_head_received_unix_ms": 1_000, "response_sent_unix_ms": 1_001}}
+    FALLBACK = {"connection_id": 3, "ws_upgrade_429_fallback_post": {
+        "ws_upgrade_429_count": 1, "retry_after_seconds": 2, "last_ws_upgrade_429_sent_unix_ms": 1_001,
+        "request_head_received_unix_ms": 3_100, "since_last_ws_upgrade_429_ms": 2_099}}
+    SERVED = {"connection_id": 2, "overloaded_503_attempts": [
+        {"attempt": 1, "request_line": "POST /backend-api/codex/responses HTTP/1.1", "retry_after_seconds": 2,
+         "request_head_received_unix_ms": 0, "response_sent_unix_ms": 1}]}
+
+    def test_passing_check_writes_the_observation_and_lets_the_script_continue(self) -> None:
+        for name, environment, connections in (
+            ("terminal", self.TERMINAL_ENV, [self.HTTP_FAULT]),
+            ("ws", self.WS_ENV, [self.UPGRADE, self.FALLBACK]),
+            ("overloaded", self.OVERLOADED_ENV, [self.SERVED]),
+        ):
+            with self.subTest(name=name):
+                result, observation = self.run_block(name, connections, **environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("块之后的语句已执行", result.stdout)
+                self.assertEqual(observation["status"], "passed")
+                self.assertEqual(observation["failures"], [])
+
+    def test_failing_check_still_writes_the_observation_then_stops_the_script(self) -> None:
+        for name, environment, connections, message in (
+            ("terminal", self.TERMINAL_ENV, [self.HTTP_FAULT, {"connection_id": 9, "post_terminal_request": "http_post"}],
+             "终止型流内故障核对不成立"),
+            ("ws", self.WS_ENV, [self.UPGRADE], "升级 429 降级等待核对不成立"),
+            ("overloaded", self.OVERLOADED_ENV, [{"connection_id": 1}], "过载 503 重试时间线核对不成立"),
+        ):
+            with self.subTest(name=name):
+                result, observation = self.run_block(name, connections, **environment)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertNotIn("块之后的语句已执行", result.stdout)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(observation["status"], "failed", "失败也要留下观测文件，便于事后看原因")
+
+    def test_a_check_that_prints_nothing_stops_the_script_without_an_observation(self) -> None:
+        for name, environment, message in (
+            ("terminal", self.TERMINAL_ENV, "终止型流内故障核对没有输出"),
+            ("ws", self.WS_ENV, "升级 429 降级等待核对没有输出"),
+            ("overloaded", self.OVERLOADED_ENV, "过载 503 重试时间线核对没有输出"),
+        ):
+            with self.subTest(name=name):
+                result, observation = self.run_block(name, None, **environment)  # relay.json 不存在：核对块自己崩溃
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertIsNone(observation)
+
+    def test_blocks_are_skipped_when_their_switch_is_not_set(self) -> None:
+        for name in self.BLOCKS:
+            with self.subTest(name=name):
+                result, observation = self.run_block(name, [], LAST_EXEC_STATUS="0")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("块之后的语句已执行", result.stdout)
+                self.assertNotIn("===", result.stdout)
+                self.assertIsNone(observation)
+
+
+class ScriptAssembledRelayArgumentsTest(unittest.TestCase):
+    """采集脚本按作业环境拼出的中继参数，必须能被中继自己的参数解析接受。
+
+    脚本里的开关名、取值与中继里的 argparse 各写各的，最容易对不上；这里取 0.163.0 清单里每个走中继脚本的官方作业，用它的环境
+    把脚本里「拼中继参数」那一段原样跑一遍，再把拼出的参数交给真实的中继解析（证书文件故意不存在：参数通过之后中继会在加载
+    证书时以 FileNotFoundError 退出，参数不合法则是 argparse 的退出码 2）。
+    """
+
+    SUBSTITUTIONS = {
+        "{capture_container}": "capture-cli", "{capture_root}": "/root/oauth-capture", "{target_version}": "0.163.0",
+        "{relay_codex_bin}": "/opt/codex/bin/codex", "{model}": "gpt-5.5", "{lite_model}": "gpt-6-astra",
+        "{campaign_id}": "c01630-unit",
+    }
+    EXPECTED = {
+        "official-relay-ws-retry-after": ["--ws-upgrade-429-retry-after", "2"],
+        "official-relay-server-overloaded-retry-after": [
+            "--force-ws-fallback-426", "--retry-probe", "persistent-503-overloaded", "--retry-probe-target", "responses",
+            "--retry-probe-retry-after", "2",
+        ],
+        "official-relay-server-overloaded": [
+            "--force-ws-fallback-426", "--retry-probe", "persistent-503-overloaded", "--retry-probe-target", "responses",
+        ],
+        "official-relay-conn-retry-after": [
+            "--force-ws-fallback-426", "--retry-probe", "keepalive-500", "--retry-probe-target", "responses",
+            "--retry-probe-retry-after", "2",
+        ],
+        "official-relay-stream-incomplete-http": ["--stream-fault", "incomplete-terminal", "--stream-fault-transport", "http"],
+        "official-relay-stream-incomplete-ws": ["--stream-fault", "incomplete-terminal", "--stream-fault-transport", "ws"],
+        "official-relay-cyber-access-ws": [],
+    }
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        source = RELAY_SCRIPT.read_text(encoding="utf-8")
+        start = source.index("relay_intervention_args=()\n")
+        cls.assembly = source[start:source.index("if [[ $capture_client_hello == 1 ]]; then", start)]
+        manifest = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_163_0.json").read_text(encoding="utf-8"))
+        cls.environments = {}
+        for job in manifest["capture_jobs"]:
+            step = job["steps"][0]
+            if job["phase"] != "official" or not step["argv"][-1].endswith("run_official_relay_scenario.sh"):
+                continue
+            environment = {}
+            for key, value in step["environment"].items():
+                for placeholder, concrete in cls.SUBSTITUTIONS.items():
+                    value = value.replace(placeholder, concrete)
+                environment[key] = value
+            cls.environments[job["id"]] = environment
+
+    def assembled(self, environment: dict[str, str]) -> list[str]:
+        script = (
+            "set -Eeuo pipefail\n"
+            f"scenario={environment.get('SCENARIO', '')}\n"
+            f"require_model_receipt={environment.get('REQUIRE_MODEL_CONDITION_RECEIPT', '0')}\n"
+            f"a14_c2pa_expectation={environment.get('A14_C2PA_EXPECTATION', '')}\n"
+            + self.assembly
+            + 'if (( ${#relay_intervention_args[@]} )); then printf "%s\\n" "${relay_intervention_args[@]}"; fi\n'
+        )
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **environment}
+        result = subprocess.run([BASH, "-c", script], env=env, text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.splitlines()
+
+    def relay_parse(self, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            # 与脚本启动中继的命令行同形（证书路径换成不存在的文件）。
+            return subprocess.run(
+                [sys.executable, "-B", str(RELAY_PY),
+                 "--cert", f"{tmp}/missing.crt", "--key", f"{tmp}/missing.key", "--mode", "direct", "--port", "443",
+                 "--upstream-host", "chatgpt.com", "--upstream-ip", "127.0.0.1", "--upstream-map", "chatgpt.com=127.0.0.1",
+                 "--codex-version", "0.163.0", "--output", f"{tmp}/out", "--timeout", "1800", *arguments],
+                text=True, capture_output=True, check=False,
+            )
+
+    def test_every_official_relay_job_assembles_arguments_the_relay_accepts(self) -> None:
+        self.assertGreaterEqual(len(self.environments), 40)
+        for job_id, environment in sorted(self.environments.items()):
+            with self.subTest(job_id=job_id):
+                arguments = self.assembled(environment)
+                result = self.relay_parse(arguments)
+                self.assertNotEqual(result.returncode, 2, f"{arguments}\n{result.stderr}")
+                self.assertNotIn("upstream_byte_relay.py: error:", result.stderr)
+                self.assertIn("FileNotFoundError", result.stderr, "参数通过解析后应停在加载证书，而不是别处")
+
+    def test_new_directed_jobs_assemble_exactly_their_switches(self) -> None:
+        for job_id, expected in self.EXPECTED.items():
+            with self.subTest(job_id=job_id):
+                self.assertEqual(self.assembled(self.environments[job_id]), expected)
+
+    def test_relay_still_rejects_the_script_level_misuse_the_script_does_not_catch(self) -> None:
+        """脚本只在开头校验取值与搭配；开关之间的互斥由中继参数解析兜底（两层都在）。"""
+
+        for arguments in (
+            ["--ws-upgrade-429-retry-after", "2", "--force-ws-fallback-426"],
+            ["--retry-probe", "persistent-503-overloaded", "--retry-probe-target", "responses", "--ws-upgrade-429-retry-after", "2"],
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.relay_parse(arguments)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("彼此互斥", result.stderr)
+
+
 class Scenario0159ManifestParameterTest(unittest.TestCase):
     """0.160.0 清单（由 0.159.2 版改名）：沿用 0.157.0 的全部作业执行参数，新增 9 个官方定向样本作业。
 
