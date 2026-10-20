@@ -1,11 +1,11 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "ded8a3846cae630ac3bf0795b44fe8d6df429aa4",
+ "source_commit": "4d565f9b8833912224038edf3a1b6bd939cc693b",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "a09288e23e01240081f69cea2a455c1cddb217c96ceec40c6f8576ca6f406b5b",
+ "files_sha256": "a33d623d78d4ed182f7630d150b3bc299fa0b63342c33da6068524a9aba7ea9a",
  "wire_producer_sha256": "b12832f147b6f0b36e5c4096a81f94acde0d23191548a2c0182f8a0ab176cc7d",
- "evidence_semantics_sha256": "490b2a1181c6f521ea6af58a02d37aee2c82919dfb6ed086c1084a7c2f4e0ced",
+ "evidence_semantics_sha256": "0c35c3a10e904fde58bcfae6dd081035e278fb943f461c0e1f1e3c009a1a3647",
  "control_sha256": "8be99b6962a06827a7c4244fad9b7620dc9a4233be9a5136bf16d105b5c028c5",
  "orchestrator_closure_sha256": {
   "wire_producer": "043e50b2ada13a68d3769951d4b49ca88f1e1786683dfba89dd6882b2ce1b111",
@@ -1658,11 +1658,11 @@
   },
   {
    "path": "claude_rule_assertion.py",
-   "sha256": "6d4d9f9d2b7d9bd90c9bcefbb4b917cf9eac499bed59f048c92bc1451471c27a"
+   "sha256": "2ffb25aedbd35ac27d59ea04ec10d6bdd8b2f4b16cb59a85f2fd953ab5e64044"
   },
   {
    "path": "claude_rule_expectations_2_1_226.json",
-   "sha256": "4705d28891eec81a04fe871560a2a03b7534051daef77b0413383b91a42fdd05"
+   "sha256": "48c54407f83d0603b04b3836bbf129c28fce96e4d2db720777097d60bd81b341"
   },
   {
    "path": "claude_rule_expectations_templates.json",
@@ -2670,7 +2670,7 @@
   },
   {
    "path": "profile_rule_patches_0_163_0.json",
-   "sha256": "cfd752eb7183fa3083583ad06c67c1fcd726ab3538adcffaaab6042d6e1f5873"
+   "sha256": "52c78562bd1478e40f8c67564a91c817a866161a141b1a3b4fb628935469af73"
   },
   {
    "path": "relay_extract.py",
