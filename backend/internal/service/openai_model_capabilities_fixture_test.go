@@ -18,8 +18,9 @@ import (
 // 不依赖脚手架的前提下发现清单写错的守卫。
 //
 // 基线 fixture 来自 Codex CLI 0.145.0 的 /backend-api/codex/models 真实抓包；
-// 本次画像升级新增的条目单独记在 codex_models_capabilities_0154_additions.json
-// （来源为官方内置 models-manager 目录），并额外核对 reasoning 默认能力位。
+// 后续画像升级新增的条目分别记在 codex_models_capabilities_0154_additions.json 与
+// codex_models_capabilities_0163_additions.json（来源为官方内置 models-manager 目录），并额外核对
+// reasoning 默认能力位。
 // 官方新增模型或改变能力位时这条会失败——那是预期信号，应当同步更新 fixture
 // 与 bundled，而不是放宽断言。
 func TestBundledOpenAIModelCapabilitiesMatchesCapturedManifest(t *testing.T) {
@@ -43,14 +44,20 @@ func TestBundledOpenAIModelCapabilitiesMatchesCapturedManifest(t *testing.T) {
 	}
 	baseline := loadFixture("testdata/official_egress/codex_models_capabilities_0145.json")
 	additions := loadFixture("testdata/official_egress/codex_models_capabilities_0154_additions.json")
+	additions0163 := loadFixture("testdata/official_egress/codex_models_capabilities_0163_additions.json")
 
-	expected := make(map[string]fixtureModel, len(baseline)+len(additions))
+	expected := make(map[string]fixtureModel, len(baseline)+len(additions)+len(additions0163))
 	for _, model := range baseline {
 		expected[model.Slug] = model
 	}
 	for _, model := range additions {
 		_, duplicated := expected[model.Slug]
 		require.False(t, duplicated, "增量 fixture 不得重复基线模型 %s", model.Slug)
+		expected[model.Slug] = model
+	}
+	for _, model := range additions0163 {
+		_, duplicated := expected[model.Slug]
+		require.False(t, duplicated, "增量 fixture 不得重复已有模型 %s", model.Slug)
 		expected[model.Slug] = model
 	}
 
@@ -113,4 +120,43 @@ func TestOpenAIResponsesLiteCapabilityResolvesFromBundledWithoutManifest(t *test
 	require.True(t,
 		service.resolveOpenAIResponsesLiteCapability(account, []byte(`{"model":"gpt-6"}`)),
 		"别名 gpt-6 必须解析到 gpt-6-astra 并判为 Lite")
+}
+
+// 0.163 主线模型 gpt-6.1-sol 是 Lite 模型：无账号 manifest（冷启动或 /models 拉取失败退避期）时也必须判为 Lite，
+// 否则会把它当未知模型判成非 Lite，出站丢失 Lite 头与 reasoning.context（gpt-6-astra 当年踩过同一个坑）。
+// reasoning 默认能力位取官方内置目录值（effort=low）；真实账号清单的取值要等 VC-1 目录证据复核，复核若不同，
+// 应同步修改 bundled 与 fixture，不要放宽这里的断言。
+func TestOpenAIResponsesLiteCapabilityResolvesGPT61SolFromBundledWithoutManifest(t *testing.T) {
+	service := &OpenAIGatewayService{}
+	account := newOfficialOpenAIHTTPTestAccount(94)
+
+	// 公开写法、大小写与 effort 后缀写法都必须落到同一个 slug 并得到同一组能力位。
+	for _, model := range []string{"gpt-6.1-sol", "GPT-6.1-Sol", "gpt-6.1-sol-high", "gpt-6.1-sol-xhigh", "openai/gpt-6.1-sol"} {
+		capabilities := service.resolveOpenAIModelCapabilities(account, []byte(`{"model":"`+model+`"}`))
+		require.True(t, capabilities.UseResponsesLite, "%s 在无账号 manifest 时必须判为 Lite", model)
+		require.True(t, capabilities.SupportsParallelToolCalls, model)
+		require.True(t, capabilities.ReasoningDefaultsKnown, model)
+		require.Equal(t, "low", capabilities.DefaultReasoningLevel, model)
+		require.Equal(t, "none", capabilities.DefaultReasoningSummary, model)
+		require.True(t, capabilities.SupportsReasoningSummaryParameter, model)
+	}
+
+	// 账号模型映射把别名映射到 gpt-6.1-sol 时，按映射后的真实模型查表。
+	mapped := newOfficialOpenAIHTTPTestAccount(94)
+	mapped.Credentials["model_mapping"] = map[string]any{"my-sol": "gpt-6.1-sol"}
+	require.True(t, service.resolveOpenAIResponsesLiteCapability(mapped, []byte(`{"model":"my-sol"}`)),
+		"映射到 gpt-6.1-sol 的别名必须判为 Lite")
+
+	// 账号 manifest 接管后，以 manifest 为准（含 manifest 把它标成非 Lite 的情形），bundled 不再兜底。
+	owned := &OpenAIGatewayService{}
+	owned.openaiModelCapabilities.replaceFromManifest(94, []byte(
+		`{"models":[{"slug":"gpt-6.1-sol","visibility":"list","use_responses_lite":false,"supports_parallel_tool_calls":true,"default_reasoning_level":"medium"}]}`,
+	))
+	fromManifest := owned.resolveOpenAIModelCapabilities(account, []byte(`{"model":"gpt-6.1-sol"}`))
+	require.False(t, fromManifest.UseResponsesLite, "账号 manifest 的同名条目拥有更高优先级")
+	require.Equal(t, "medium", fromManifest.DefaultReasoningLevel)
+
+	// 旁证：已有 Lite 模型与非 Lite 模型的结论不受影响。
+	require.True(t, service.resolveOpenAIResponsesLiteCapability(account, []byte(`{"model":"gpt-6-astra"}`)))
+	require.False(t, service.resolveOpenAIResponsesLiteCapability(account, []byte(`{"model":"gpt-5.5"}`)))
 }

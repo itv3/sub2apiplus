@@ -1,0 +1,7 @@
+{
+  "_source": "Codex CLI 0.163.0 官方源码内置模型目录 codex-rs/models-manager/models.json（rust-v0.163.0，sha256 943ca7fe1d19ed019054158303f0dbbd80b3bef43b3aa425a71aa7cb3fb52c2b）中的 gpt-6.1-sol 条目：visibility=list、use_responses_lite=true、supports_parallel_tool_calls=true、default_reasoning_level=low、default_reasoning_summary=none、supports_reasoning_summary_parameter=true、default_verbosity=low、tool_mode=code_mode_only。同名条目的能力位在 rust-v0.160.0 的内置目录（sha256 fd219bd9f061278275f528939f82f54d2eb97df4b25c23b022adbe48813d920b）里完全相同，只有 model_messages 文本不同。",
+  "_purpose": "bundledOpenAIModelCapabilities 相对 codex_models_capabilities_0154_additions.json 的增量权威来源：0.163 主线模型改用 gpt-6.1-sol，它是 Lite 模型，缺失时冷启动或 /models 拉取失败退避期会被判成非 Lite。default_reasoning_level 取官方内置目录值（low）；真实账号清单（/backend-api/codex/models 的远端响应）里的取值尚未采集，要等本轮 VC-1 目录证据复核：gpt-6-astra 的先例是内置目录为 low、远端真实响应为 medium，所以复核后若 gpt-6.1-sol 的远端值与这里不同，应同步修改本文件与 bundled，而不是放宽断言。本文件不覆盖内置目录里同样缺失的 gpt-6-sol、gpt-6-luna、gpt-daybreak-blue-latest、gpt-daybreak-red-latest。",
+  "models": [
+    {"slug": "gpt-6.1-sol", "visibility": "list", "use_responses_lite": true, "supports_parallel_tool_calls": true, "default_reasoning_level": "low", "default_reasoning_summary": "none", "supports_reasoning_summary_parameter": true}
+  ]
+}
