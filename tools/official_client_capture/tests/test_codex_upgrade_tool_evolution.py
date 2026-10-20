@@ -1063,6 +1063,76 @@ class ToolEvolutionPreviewTests(unittest.TestCase):
             self.assertEqual(wt.load_evolutions(fixture.campaign_dir, fixture.manifest), [])
 
 
+class EvolutionReuseContextTests(unittest.TestCase):
+    """续跑复用的演进上下文：失败源本身就是最新演进之后产出的 attempt 时，仍按源 attempt 生产身份核对。
+
+    背景（0.163.0 VC-1）：第二次失败的源 attempt 在全部演进登记之后才创建，序号之后没有新演进，旧实现因此返回 None，
+    续跑落回“Campaign 冻结身份对当前树”的旧评估 transition 口径，把前序演进的证据层变化当成未授权的产出侧变化拒绝，
+    批准前的复用核对（R17）抛“评估 transition 包含产出侧变化”，恢复批准卡死。
+    """
+
+    def _context(self, fixture: EvolutionFixture, current_tool: dict, reservation: dict) -> dict | None:
+        with mock.patch.object(codex_upgrade, "_load_capture_reservation", return_value=reservation):
+            return codex_upgrade._evolution_reuse_context(
+                fixture.campaign_dir,
+                fixture.manifest,
+                phase="official",
+                candidate_id=None,
+                attempt_root=fixture.root / "attempt",
+                current_tool=current_tool,
+            )
+
+    def test_no_registered_evolution_keeps_the_frozen_identity_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            self.assertIsNone(self._context(fixture, fixture.identity, {}))
+
+    def test_source_attempt_already_under_latest_evolution_still_gets_a_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            first_to = fixture.mutated_identity(fixture.identity, "run_candidate_core_capture.sh")
+            first = fixture.payload(index=1, previous=None, from_identity=fixture.identity, to_identity=first_to,
+                                    changed_paths=["run_candidate_core_capture.sh"])
+            wt.write_evolution(fixture.campaign_dir, fixture.manifest, first)
+            reservation = {"tool_evolution": {"index": 1, "receipt_sha256": first["receipt_sha256"]}}
+            context = self._context(fixture, first_to, reservation)
+            self.assertIsNotNone(context)
+            self.assertEqual(context["production_index"], 1)
+            self.assertEqual(context["evolution_indexes"], [])
+            self.assertEqual(context["affected_job_ids"], [])
+            self.assertEqual(context["allowed_paths"], [])
+            self.assertEqual(context["production_identity"]["files_sha256"], first_to["files_sha256"])
+
+    def test_source_attempt_before_a_later_evolution_still_reports_the_cumulative_impact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            first_to = fixture.mutated_identity(fixture.identity, "run_candidate_core_capture.sh")
+            first = fixture.payload(index=1, previous=None, from_identity=fixture.identity, to_identity=first_to,
+                                    changed_paths=["run_candidate_core_capture.sh"])
+            wt.write_evolution(fixture.campaign_dir, fixture.manifest, first)
+            second_to = fixture.mutated_identity(first_to, "codex_upgrade_supervisor.py", marker="1")
+            second = fixture.payload(index=2, previous=first, from_identity=first_to, to_identity=second_to,
+                                     official_affected=["official-core"])
+            wt.write_evolution(fixture.campaign_dir, fixture.manifest, second)
+            reservation = {"tool_evolution": {"index": 1, "receipt_sha256": first["receipt_sha256"]}}
+            context = self._context(fixture, second_to, reservation)
+            self.assertEqual(context["production_index"], 1)
+            self.assertEqual(context["evolution_indexes"], [2])
+            self.assertEqual(context["affected_job_ids"], ["official-core"])
+
+    def test_unregistered_drift_is_still_refused_when_nothing_is_newer_than_the_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = EvolutionFixture(Path(directory).resolve())
+            first_to = fixture.mutated_identity(fixture.identity, "run_candidate_core_capture.sh")
+            first = fixture.payload(index=1, previous=None, from_identity=fixture.identity, to_identity=first_to,
+                                    changed_paths=["run_candidate_core_capture.sh"])
+            wt.write_evolution(fixture.campaign_dir, fixture.manifest, first)
+            reservation = {"tool_evolution": {"index": 1, "receipt_sha256": first["receipt_sha256"]}}
+            drifted = fixture.mutated_identity(first_to, "codex_upgrade_supervisor.py", marker="2")
+            with self.assertRaises(codex_upgrade.ToolEvolutionRequired):
+                self._context(fixture, drifted, reservation)
+
+
 class EvolutionRecoveryScopeTests(unittest.TestCase):
     """续跑闭集、seal 核对与对账前置对工具演进的口径。"""
 
