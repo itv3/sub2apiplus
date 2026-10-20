@@ -1351,8 +1351,14 @@ async def _read_websocket_frame(reader: asyncio.StreamReader) -> bytes:
 # （codex-api/src/error.rs parse_flex_unavailable）；response.incomplete 只有 incomplete_details.reason
 # 为 interrupted 才按完成处理且 end_turn=false（codex-api/src/sse/responses.rs）；完成事件要求 response.id，
 # usage 的 input_tokens／output_tokens／total_tokens 必填。
+#
+# 0.163.0 起新增 incomplete-terminal：response.incomplete 的 reason 既不是 interrupted 也不是 content_filter
+# （这里取 max_output_tokens）时，客户端由原来的 ApiError::Stream（可重试，codex-api/src/sse/responses.rs:431-434
+# [160]）改为 ApiError::ResponseIncomplete（codex-api/src/sse/responses.rs:432-451、657-665 [163]），映射成
+# CodexErr::ResponseIncomplete，retry_delay 恒为 None（protocol/src/error.rs:421 [163]）：终止本轮、不重试、不降级，
+# codex exec 以非零退出码结束。WS 路径走同一个 process_responses_event（responses_websocket.rs:866 [163]）。
 _OFFICIAL_SYNTHETIC_MODEL = "gpt-5.5"
-_OFFICIAL_STREAM_FAULT_KINDS = ("flex-unavailable", "interrupted")
+_OFFICIAL_STREAM_FAULT_KINDS = ("flex-unavailable", "interrupted", "incomplete-terminal")
 _OFFICIAL_STREAM_FAULT_TRANSPORTS = ("http", "ws")
 # 1×1 透明 PNG：file_id 编辑链的 images/edits 合成结果，客户端只解码并按需落盘。
 _OFFICIAL_SYNTHETIC_PNG_B64 = (
@@ -1393,7 +1399,7 @@ def _official_created_event(response_id: str) -> dict:
 
 
 def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
-    """受控流内故障：created 之后以 failed（flex_unavailable）或 incomplete（interrupted）结束。"""
+    """受控流内故障：created 之后以 failed（flex_unavailable）或 incomplete（interrupted／max_output_tokens）结束。"""
 
     if kind == "flex-unavailable":
         terminal = {
@@ -1421,9 +1427,45 @@ def _official_stream_fault_events(kind: str, response_id: str) -> list[dict]:
                 usage=_official_usage(0),
             ),
         }
+    elif kind == "incomplete-terminal":
+        # 与 interrupted 的差别只有 reason：max_output_tokens 在 0.163 起是终止错误。usage 取正输出量，
+        # 贴近服务端因输出上限截断时的形态（客户端对 usage 只做宽松解析）。
+        terminal = {
+            "type": "response.incomplete",
+            "response": _official_response(
+                response_id,
+                "incomplete",
+                output=[],
+                incomplete_details={"reason": "max_output_tokens"},
+                usage=_official_usage(16),
+            ),
+        }
     else:
         raise ValueError(f"未知流内故障：{kind}")
     return [_official_created_event(response_id), terminal]
+
+
+def _post_terminal_request_kind(
+    kind: str,
+    fault_applied: bool,
+    *,
+    is_responses_ws: bool,
+    request_line: str,
+) -> str | None:
+    """终止型流内故障（incomplete-terminal）注入之后又到达的 Responses 请求种类；没有则返回 None。
+
+    0.163 起该故障是终止错误（见上方说明）：故障应答之后不应再出现任何 Responses 请求。新的 WS 升级
+    （重试）或 HTTP POST（降级或重试）都说明客户端行为偏离终止语义，样本不能当作该行为的证据。这里只做
+    标记、不拦截：请求照常转发，偏离的字节同样被完整记录，由采集脚本对 relay.json 的标记失败关闭。
+    """
+
+    if kind != "incomplete-terminal" or not fault_applied:
+        return None
+    if is_responses_ws:
+        return "ws_upgrade"
+    if request_line == "POST /backend-api/codex/responses HTTP/1.1":
+        return "http_post"
+    return None
 
 
 def _official_message_events(response_id: str, text: str) -> list[dict]:
@@ -2105,6 +2147,10 @@ class Relay:
             else:
                 events = _official_message_events(response_id, "OK")
                 action = "continuation_completed"
+                # 终止型故障（incomplete-terminal）之后还有生成请求：客户端把它当成可重试或可续发，行为偏离终止语义，
+                # 在连接元数据里留标记（请求仍照常合成完成，字节完整记录），采集脚本据此失败关闭。
+                if kind == "incomplete-terminal":
+                    meta.setdefault("post_terminal_request", "ws_generate")
             for event in events:
                 data = _encode_server_text_frame(
                     json.dumps(event, ensure_ascii=False, separators=(",", ":"))
@@ -3296,6 +3342,22 @@ class Relay:
                     request_line == "GET /backend-api/codex/responses HTTP/1.1"
                     and b"\r\nupgrade: websocket\r\n" in initial_head.lower()
                 )
+                post_terminal = _post_terminal_request_kind(
+                    self.args.stream_fault,
+                    self._stream_fault_applied,
+                    is_responses_ws=is_responses_ws,
+                    request_line=request_line,
+                )
+                if post_terminal is not None:
+                    # 终止型故障已应答之后又来了 Responses 请求（重试或降级）：只标记，请求照常转发并完整记录。
+                    meta["post_terminal_request"] = post_terminal
+                    self._log_intervention({
+                        "type": "stream_fault_post_terminal_request",
+                        "kind": self.args.stream_fault,
+                        "request": post_terminal,
+                        "connection_id": conn_id,
+                        "request_line": request_line,
+                    })
                 if (self.args.stream_fault and not self._stream_fault_applied
                         and self.args.stream_fault_transport == "http"
                         and request_line == "POST /backend-api/codex/responses HTTP/1.1"):
@@ -3803,7 +3865,8 @@ def main() -> None:
         choices=_OFFICIAL_STREAM_FAULT_KINDS,
         default="",
         help=("官方定向样本：对首个 Responses 受控应答流内故障（flex-unavailable 为 response.failed，"
-              "interrupted 为 response.incomplete），必须同时给 --stream-fault-transport"),
+              "interrupted 为 response.incomplete(reason=interrupted)，incomplete-terminal 为 0.163 起的终止型 "
+              "response.incomplete(reason=max_output_tokens)），必须同时给 --stream-fault-transport"),
     )
     ap.add_argument(
         "--stream-fault-transport",

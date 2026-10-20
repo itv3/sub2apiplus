@@ -4920,6 +4920,201 @@
       ]
     },
     {
+      "id": "official-relay-cyber-access-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A05"
+      ],
+      "description": "SPEC-BODY-001／SPEC-WS-005 条件字段 access_programs 定向样本（0.163 起）：Lite 专项 {lite_model} 经内置 provider 默认 WS，用 codex exec 的 --cyber-access-program standard 确定性固定 response.create 末位的条件字段 access_programs（0.163 的 Daybreak 默认开启后该字段取决于服务端 /models 目录，自然出现不保证；0.160 的 exec 没有该选项）。上游是否接受该程序不影响样本，请求断言只要求 Responses WS 握手已发出",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{lite_model}",
+            "RUN_ID": "{campaign_id}-official-cyber-access-ws",
+            "SCENARIO": "cyber-access-ws",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-cyber-access-ws"
+      ],
+      "covers": [
+        "SPEC-BODY-001",
+        "SPEC-WS-005"
+      ],
+      "required_scenario_receipts": [],
+      "track": "lite",
+      "model_id": "{lite_model}",
+      "expected_use_responses_lite": true,
+      "required_model_receipt": false,
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-stream-incomplete-http",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07"
+      ],
+      "description": "SPEC-PROTO-002 流内故障定向样本（0.163 起）：只走 HTTP 的 OAuth provider，首个 POST Responses由中继受控应答（不转发生产，production_forwarded=false 记入干预日志与 relay.json），流内 response.incomplete(incomplete_details.reason=max_output_tokens)：0.163 起该事件（reason 既非 interrupted 也非 content_filter）是终止错误——本轮结束、不重试、不降级，codex exec 以非零退出码结束（0.160 对同一事件按可重试的流错误处理）；采集脚本接受非零退出码，并核对注入之后没有任何 Responses 请求（重试、降级或同连接续发）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-stream-incomplete-http",
+            "SCENARIO": "stream-fault",
+            "RELAY_STREAM_FAULT": "incomplete-terminal",
+            "RELAY_STREAM_FAULT_TRANSPORT": "http",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-stream-incomplete-http"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
+      "id": "official-relay-stream-incomplete-ws",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07"
+      ],
+      "description": "SPEC-PROTO-002 流内故障定向样本（0.163 起）：默认 WS，首条 Responses WS（整条本地合成）由中继受控应答（不转发生产，production_forwarded=false 记入干预日志与 relay.json），流内 response.incomplete(incomplete_details.reason=max_output_tokens)：0.163 起该事件（reason 既非 interrupted 也非 content_filter）是终止错误——本轮结束、不重试、不降级，codex exec 以非零退出码结束（0.160 对同一事件按可重试的流错误处理）；采集脚本接受非零退出码，并核对注入之后没有任何 Responses 请求（重试、降级或同连接续发）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-stream-incomplete-ws",
+            "SCENARIO": "stream-fault",
+            "RELAY_STREAM_FAULT": "incomplete-terminal",
+            "RELAY_STREAM_FAULT_TRANSPORT": "ws",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-stream-incomplete-ws"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": [],
+      "tool_dependencies": [
+        "build_compaction_model_catalog.py",
+        "build_scenario_facts.py",
+        "capturelib/security.py",
+        "check_sample_integrity.py",
+        "drive_codex_auth_refresh.py",
+        "drive_codex_compaction_reason.py",
+        "drive_codex_daemon.py",
+        "drive_codex_file_image_edit.py",
+        "drive_codex_memgen.py",
+        "drive_codex_model_catalog.py",
+        "drive_codex_realtime.py",
+        "drive_codex_tui.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "run_codex_compact_scenario.py",
+        "run_official_relay_scenario.sh",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py",
+        "upstream_byte_relay.py"
+      ]
+    },
+    {
       "id": "candidate-frozen-core",
       "phase": "candidate",
       "suites": [

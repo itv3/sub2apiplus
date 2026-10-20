@@ -11,6 +11,10 @@
 - 中继与采集脚本都在任何请求之前拒绝非法取值与错误搭配；
 - 0.160.0 场景清单（由 0.159.2 版改名）沿用作业的执行参数与 0.157.0 逐字相同，新增作业的环境能通过脚本校验；
   0.163.0 场景清单（由 0.160.0 版复制并替换版本号）同样如此。
+
+0.163.0 在建 Campaign 之前又补了三个定向样本（提交 A）：exec 的 --cyber-access-program standard 固定 WS 帧末位的条件字段
+access_programs（A05，Lite）；流内 response.incomplete(max_output_tokens) 的终止语义（HTTP、WS 各一，A07）——本轮结束、
+不重试、不降级，采集脚本接受 codex exec 的非零退出码，并核对注入之后没有任何 Responses 请求。
 """
 
 from __future__ import annotations
@@ -42,6 +46,7 @@ from tools.official_client_capture.upstream_byte_relay import (
     _official_sse_response,
     _official_stream_fault_events,
     _official_ws_handshake,
+    _post_terminal_request_kind,
 )
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +63,23 @@ NEW_OFFICIAL_JOBS = {
     "official-relay-ws-idle-close",
     "official-relay-image-transparent",
     "official-relay-image-edit-file-id",
+}
+# 0.163.0 清单在 0.160.0 的基础上（建 Campaign 之前）新增的官方定向样本。
+NEW_0163_JOBS = {
+    "official-relay-cyber-access-ws",
+    "official-relay-stream-incomplete-http",
+    "official-relay-stream-incomplete-ws",
+}
+# 含中继合成应答的作业（证据标签必须标 upstream_response=relay_synthetic）。
+SYNTHETIC_JOBS = {
+    "official-relay-stream-flex-unavailable",
+    "official-relay-stream-interrupted-http",
+    "official-relay-stream-interrupted-ws",
+    "official-relay-image-edit-file-id",
+}
+SYNTHETIC_0163_JOBS = {
+    "official-relay-stream-incomplete-http",
+    "official-relay-stream-incomplete-ws",
 }
 
 
@@ -219,6 +241,57 @@ class OfficialSyntheticEventsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             _official_stream_fault_events("unknown", "resp_z")
 
+    def test_incomplete_terminal_is_incomplete_with_max_output_tokens(self) -> None:
+        """0.163 起的终止型故障：created 之后 response.incomplete，reason 既非 interrupted 也非 content_filter。
+
+        形状按 codex-api/src/sse/responses.rs 第 419-453 行 [0.163.0]：reason 取 incomplete_details.reason，
+        response.id 与 usage 被读进 ResponseIncomplete（usage 解析失败只是丢弃，不影响分类）。
+        """
+
+        created, incomplete = _official_stream_fault_events("incomplete-terminal", "resp_t")
+        self.assertEqual(created["type"], "response.created")
+        self.assertEqual(incomplete["type"], "response.incomplete")
+        self.assert_response_contract(incomplete["response"], "resp_t")
+        self.assertEqual(incomplete["response"]["status"], "incomplete")
+        self.assertEqual(incomplete["response"]["incomplete_details"], {"reason": "max_output_tokens"})
+        self.assertNotIn(incomplete["response"]["incomplete_details"]["reason"], {"interrupted", "content_filter"})
+        usage = incomplete["response"]["usage"]
+        for field in ("input_tokens", "output_tokens", "total_tokens"):
+            self.assertIsInstance(usage[field], int, field)
+        self.assertEqual(usage["total_tokens"], usage["input_tokens"] + usage["output_tokens"])
+        # 与 interrupted 的差别只有 reason 与 usage 量：事件类型、状态、响应对象结构完全同构。
+        _created, interrupted = _official_stream_fault_events("interrupted", "resp_t")
+        self.assertEqual(set(incomplete["response"]), set(interrupted["response"]))
+        self.assertEqual(incomplete["type"], interrupted["type"])
+
+    def test_post_terminal_request_kind_marks_only_requests_after_the_fault(self) -> None:
+        post = "POST /backend-api/codex/responses HTTP/1.1"
+        upgrade = "GET /backend-api/codex/responses HTTP/1.1"
+        # 终止型故障尚未注入：任何请求都不是「故障之后」。
+        self.assertIsNone(_post_terminal_request_kind("incomplete-terminal", False, is_responses_ws=True, request_line=upgrade))
+        self.assertIsNone(_post_terminal_request_kind("incomplete-terminal", False, is_responses_ws=False, request_line=post))
+        # 注入之后：新的 WS 升级（重试）与 HTTP POST（降级或重试）分别标记。
+        self.assertEqual(
+            _post_terminal_request_kind("incomplete-terminal", True, is_responses_ws=True, request_line=upgrade), "ws_upgrade"
+        )
+        self.assertEqual(
+            _post_terminal_request_kind("incomplete-terminal", True, is_responses_ws=False, request_line=post), "http_post"
+        )
+        # 其它请求（models、accounts/check、analytics 等）不是 Responses 请求，不标记。
+        self.assertIsNone(_post_terminal_request_kind(
+            "incomplete-terminal", True, is_responses_ws=False,
+            request_line="GET /backend-api/codex/models?client_version=0.163.0 HTTP/1.1",
+        ))
+        self.assertIsNone(_post_terminal_request_kind(
+            "incomplete-terminal", True, is_responses_ws=False,
+            request_line="POST /backend-api/codex/analytics-events/events HTTP/1.1",
+        ))
+        # 其它故障种类（interrupted 的续发是预期行为）与未配置故障都不标记。
+        for kind in ("interrupted", "flex-unavailable", ""):
+            with self.subTest(kind=kind):
+                self.assertIsNone(_post_terminal_request_kind(kind, True, is_responses_ws=True, request_line=upgrade))
+                self.assertIsNone(_post_terminal_request_kind(kind, True, is_responses_ws=False, request_line=post))
+
     def test_message_and_imagegen_call_complete_with_id_and_usage(self) -> None:
         message_events = _official_message_events("resp_m", "EDIT-OK")
         self.assertEqual([event["type"] for event in message_events],
@@ -379,6 +452,45 @@ class StreamFaultWebSocketTest(unittest.TestCase):
         failed = next(message for message in messages if message["type"] == "response.failed")
         self.assertEqual(failed["response"]["error"]["code"], "flex_unavailable")
 
+    def test_incomplete_terminal_faults_once_and_leaves_no_post_terminal_mark(self) -> None:
+        """0.163 的终止语义：预热完成、首个生成请求回终止型 incomplete，之后客户端不再发生成请求。"""
+
+        compressor = zlib.compressobj(wbits=-15)
+        messages, meta, interventions = self.serve("incomplete-terminal", [
+            client_text({"type": "response.create", "generate": False}, compressor=compressor),
+            client_text({"type": "response.create", "input": []}, compressor=compressor),
+        ])
+        self.assertEqual(meta["stream_fault_ws_actions"], ["warmup_completed", "stream_fault_incomplete-terminal"])
+        self.assertEqual(meta["intervention"], "stream_fault:incomplete-terminal:ws")
+        self.assertIs(meta["production_forwarded"], False)
+        self.assertNotIn("post_terminal_request", meta)
+        terminal = [message for message in messages if message["type"] == "response.incomplete"]
+        self.assertEqual(len(terminal), 1)
+        self.assertEqual(terminal[0]["response"]["incomplete_details"], {"reason": "max_output_tokens"})
+        self.assertTrue(all(event["production_forwarded"] is False for event in interventions))
+
+    def test_incomplete_terminal_marks_a_generate_request_after_the_fault(self) -> None:
+        """故障之后同连接又来生成请求：客户端把终止当成可续发，行为偏离，必须留标记（请求照常合成完成并记录）。"""
+
+        messages, meta, _ = self.serve("incomplete-terminal", [
+            client_text({"type": "response.create", "input": []}),
+            client_text({"type": "response.create", "input": [], "previous_response_id": "x"}),
+        ])
+        self.assertEqual(meta["stream_fault_ws_actions"], ["stream_fault_incomplete-terminal", "continuation_completed"])
+        self.assertEqual(meta["post_terminal_request"], "ws_generate")
+        self.assertEqual([m["type"] for m in messages if m["type"] != "response.created"],
+                         ["response.incomplete", "response.output_item.done", "response.completed"])
+
+    def test_other_kinds_never_carry_the_post_terminal_mark(self) -> None:
+        """interrupted 的续发是预期行为，不得被当成偏离。"""
+
+        _messages, meta, _ = self.serve("interrupted", [
+            client_text({"type": "response.create", "input": []}),
+            client_text({"type": "response.create", "input": []}),
+        ])
+        self.assertEqual(meta["stream_fault_ws_actions"], ["stream_fault_interrupted", "continuation_completed"])
+        self.assertNotIn("post_terminal_request", meta)
+
     def test_non_response_create_message_is_recorded_as_error(self) -> None:
         _messages, meta, _ = self.serve("interrupted", [client_text({"type": "session.update"})])
         self.assertEqual(meta["error"], "受控流内故障 WS 只接受 response.create")
@@ -483,7 +595,10 @@ class RelayArgumentValidationTest(unittest.TestCase):
     def test_invalid_official_directed_arguments_exit_2(self) -> None:
         cases = {
             ("--stream-fault", "interrupted"): "--stream-fault 与 --stream-fault-transport 必须同时提供",
+            ("--stream-fault", "incomplete-terminal"): "--stream-fault 与 --stream-fault-transport 必须同时提供",
             ("--stream-fault-transport", "ws"): "--stream-fault 与 --stream-fault-transport 必须同时提供",
+            ("--stream-fault", "incomplete-terminal", "--stream-fault-transport", "http", "--force-ws-fallback-426"):
+                "彼此互斥",
             ("--synthesize-image-edit-file-id", "file-short"): "--synthesize-image-edit-file-id 必须形如",
             ("--close-idle-ws-after", "0"): "--close-idle-ws-after 必须是 1～600 的整数秒",
             ("--close-idle-ws-after", "601"): "--close-idle-ws-after 必须是 1～600 的整数秒",
@@ -503,6 +618,8 @@ class RelayArgumentValidationTest(unittest.TestCase):
         result = self.run_relay("--stream-fault", "throttled", "--stream-fault-transport", "ws")
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid choice", result.stderr)
+        # 合法种类清单（argparse 在非法取值的报错里列出）含 0.163 起的终止型故障。
+        self.assertIn("incomplete-terminal", result.stderr)
 
 
 class OfficialDirectedScenarioWiringTest(unittest.TestCase):
@@ -529,9 +646,15 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
         cases = [
             ("stream-fault", {}, "stream-fault 必须同时设置 RELAY_STREAM_FAULT 与 RELAY_STREAM_FAULT_TRANSPORT"),
             ("stream-fault", {"RELAY_STREAM_FAULT": "throttled", "RELAY_STREAM_FAULT_TRANSPORT": "ws"},
-             "RELAY_STREAM_FAULT 只能是 flex-unavailable 或 interrupted"),
+             "RELAY_STREAM_FAULT 只能是 flex-unavailable、interrupted 或 incomplete-terminal"),
             ("stream-fault", {"RELAY_STREAM_FAULT": "interrupted", "RELAY_STREAM_FAULT_TRANSPORT": "h2"},
              "RELAY_STREAM_FAULT_TRANSPORT 只能是 http 或 ws"),
+            ("stream-fault", {"RELAY_STREAM_FAULT": "incomplete-terminal"},
+             "stream-fault 必须同时设置 RELAY_STREAM_FAULT 与 RELAY_STREAM_FAULT_TRANSPORT"),
+            ("stream-fault", {"RELAY_STREAM_FAULT": "incomplete-terminal", "RELAY_STREAM_FAULT_TRANSPORT": "h2"},
+             "RELAY_STREAM_FAULT_TRANSPORT 只能是 http 或 ws"),
+            ("ws-default", {"RELAY_STREAM_FAULT": "incomplete-terminal", "RELAY_STREAM_FAULT_TRANSPORT": "ws"},
+             "只用于对应的定向样本场景"),
             ("image-edit-file-id", {}, "image-edit-file-id 必须设置 RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID"),
             ("image-edit-file-id", {"RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID": "file-bad"},
              "RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID 必须形如"),
@@ -562,6 +685,44 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
                 self.assertIn(f"{scenario} 需要 Codex >=0.158.0", result.stderr)
                 self.assert_passes_validation(self.run_until_validation(scenario, **environment))
 
+    def test_incomplete_terminal_requires_0163_and_passes_on_both_transports(self) -> None:
+        for transport in ("http", "ws"):
+            environment = {"RELAY_STREAM_FAULT": "incomplete-terminal", "RELAY_STREAM_FAULT_TRANSPORT": transport}
+            with self.subTest(transport=transport):
+                old = self.run_until_validation("stream-fault", CODEX_VERSION="0.160.0", **environment)
+                self.assertEqual(old.returncode, 2, old.stderr)
+                self.assertIn("RELAY_STREAM_FAULT=incomplete-terminal 需要 Codex >=0.163.0", old.stderr)
+                self.assert_passes_validation(self.run_until_validation("stream-fault", **environment))
+        # 既有两个故障种类不受 0.163 门限影响（0.159 起即可采）。
+        for kind in ("flex-unavailable", "interrupted"):
+            with self.subTest(kind=kind):
+                self.assert_passes_validation(self.run_until_validation(
+                    "stream-fault", CODEX_VERSION="0.160.0",
+                    RELAY_STREAM_FAULT=kind, RELAY_STREAM_FAULT_TRANSPORT="ws",
+                ))
+
+    def test_cyber_access_scenario_requires_0161_and_fixes_the_program_on_exec(self) -> None:
+        old = self.run_until_validation("cyber-access-ws", CODEX_VERSION="0.160.0")
+        self.assertEqual(old.returncode, 2, old.stderr)
+        self.assertIn("cyber-access-ws 需要 Codex >=0.161.0", old.stderr)
+        self.assert_passes_validation(self.run_until_validation("cyber-access-ws"))
+        case = self.source[self.source.index("  cyber-access-ws)\n"):]
+        case = case[:case.index(";;")]
+        self.assertIn("extra_args='--cyber-access-program standard'", case)
+        self.assertNotIn("http_probe_provider", case, "access_programs 按 provider id 过滤：必须走内置 provider 的默认 WS")
+        # 展开后是 codex exec 的两个词，取值属于 exec/src/cli.rs 的 ValueEnum（standard|daybreak_blue|daybreak_red）。
+        words = subprocess.run(
+            [BASH, "-c", "extra_args='--cyber-access-program standard'\nprintf '%s\\n' $extra_args\n"],
+            text=True, capture_output=True, check=True,
+        ).stdout.split("\n")
+        self.assertEqual(words[:2], ["--cyber-access-program", "standard"])
+        # 该场景不需要任何中继受控开关：误带故障开关时按「只用于对应的定向样本场景」拒绝。
+        misuse = self.run_until_validation(
+            "cyber-access-ws", RELAY_STREAM_FAULT="incomplete-terminal", RELAY_STREAM_FAULT_TRANSPORT="ws"
+        )
+        self.assertEqual(misuse.returncode, 2, misuse.stderr)
+        self.assertIn("只用于对应的定向样本场景", misuse.stderr)
+
     def test_numeric_reasoning_effort_prompts(self) -> None:
         http_case = self.source[self.source.index("  reasoning-numeric-http)\n"):]
         http_case = http_case[:http_case.index(";;")]
@@ -589,6 +750,88 @@ class OfficialDirectedScenarioWiringTest(unittest.TestCase):
         self.assertEqual(" ".join(f"-c {item}" for item in items), http_response.strip()[len('extra_args="'):-len('" ;;')])
 
 
+class TerminalFaultCheckTest(unittest.TestCase):
+    """采集脚本里的「终止型流内故障核对」：取出脚本内嵌的 Python 原样执行（假 relay.json），锁定判据。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        source = RELAY_SCRIPT.read_text(encoding="utf-8")
+        start = source.index('terminal_check=$(docker exec -i "$capture_container" python3 - \\\n')
+        body_start = source.index("<<'PY'\n", start) + len("<<'PY'\n")
+        cls.code = source[body_start:source.index("\nPY\n", body_start) + 1]
+
+    def run_check(self, connections: list[dict], transport: str, exec_status: str = "1") -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory() as tmp:
+            relay_json = Path(tmp) / "relay.json"
+            relay_json.write_text(json.dumps({"connections": connections}), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-I", "-c", self.code, str(relay_json), transport, exec_status],
+                text=True, capture_output=True, check=False,
+            )
+        return result.returncode, json.loads(result.stdout)
+
+    HTTP_FAULT = {"connection_id": 5, "intervention": "stream_fault:incomplete-terminal:http", "production_forwarded": False}
+    WS_FAULT = {
+        "connection_id": 4, "intervention": "stream_fault:incomplete-terminal:ws", "production_forwarded": False,
+        "stream_fault_ws_actions": ["warmup_completed", "stream_fault_incomplete-terminal"],
+    }
+    OTHERS = [{"connection_id": 1, "request_line": "GET /backend-api/codex/models?client_version=0.163.0 HTTP/1.1"},
+              {"connection_id": 2, "request_line": "GET /backend-api/wham/accounts/check HTTP/1.1"}]
+
+    def test_passes_when_the_fault_is_injected_once_and_nothing_follows(self) -> None:
+        for transport, fault in (("http", self.HTTP_FAULT), ("ws", self.WS_FAULT)):
+            with self.subTest(transport=transport):
+                code, report = self.run_check([*self.OTHERS, fault], transport)
+                self.assertEqual(code, 0, report)
+                self.assertEqual(report["status"], "passed")
+                self.assertEqual(report["failures"], [])
+                self.assertEqual(report["fault_connection_ids"], [fault["connection_id"]])
+                self.assertEqual(report["post_terminal_requests"], [])
+                self.assertEqual(report["exec_exit_status"], 1)
+
+    def test_exec_exit_status_is_recorded_but_never_judged(self) -> None:
+        for status, expected in (("0", 0), ("1", 1), ("", None), ("abc", None)):
+            with self.subTest(status=status):
+                code, report = self.run_check([self.HTTP_FAULT], "http", status)
+                self.assertEqual(code, 0, report)
+                self.assertEqual(report["exec_exit_status"], expected)
+
+    def test_retry_or_downgrade_after_the_fault_fails_closed(self) -> None:
+        for request in ("ws_upgrade", "http_post", "ws_generate"):
+            with self.subTest(request=request):
+                retry = {"connection_id": 9, "request_line": "POST /backend-api/codex/responses HTTP/1.1",
+                         "post_terminal_request": request}
+                code, report = self.run_check([*self.OTHERS, self.WS_FAULT, retry], "ws")
+                self.assertEqual(code, 1, report)
+                self.assertEqual(report["failures"], ["responses-request-after-terminal-fault"])
+                self.assertEqual(report["post_terminal_requests"], [{"connection_id": 9, "request": request}])
+        # 同连接续发：标记落在合成故障连接自己的元数据上。
+        continued = {**self.WS_FAULT, "post_terminal_request": "ws_generate",
+                     "stream_fault_ws_actions": ["warmup_completed", "stream_fault_incomplete-terminal", "continuation_completed"]}
+        code, report = self.run_check([continued], "ws")
+        self.assertEqual((code, report["failures"]), (1, ["responses-request-after-terminal-fault"]))
+
+    def test_fault_must_be_injected_exactly_once_with_the_matching_transport(self) -> None:
+        for connections, transport in (
+            ([*self.OTHERS], "http"),
+            ([self.HTTP_FAULT, {**self.HTTP_FAULT, "connection_id": 6}], "http"),
+            ([self.HTTP_FAULT], "ws"),
+            ([self.WS_FAULT], "http"),
+            ([{**self.HTTP_FAULT, "intervention": "stream_fault:interrupted:http"}], "http"),
+        ):
+            with self.subTest(transport=transport, connections=connections):
+                code, report = self.run_check(connections, transport)
+                self.assertEqual(code, 1, report)
+                self.assertEqual(report["failures"], ["fault-not-injected-exactly-once"])
+
+    def test_ws_fault_connection_must_carry_exactly_one_terminal_action(self) -> None:
+        for actions in ([], ["warmup_completed"], ["stream_fault_incomplete-terminal", "stream_fault_incomplete-terminal"]):
+            with self.subTest(actions=actions):
+                code, report = self.run_check([{**self.WS_FAULT, "stream_fault_ws_actions": actions}], "ws")
+                self.assertEqual(code, 1, report)
+                self.assertEqual(report["failures"], ["ws-fault-action-not-exactly-once"])
+
+
 class Scenario0159ManifestParameterTest(unittest.TestCase):
     """0.160.0 清单（由 0.159.2 版改名）：沿用 0.157.0 的全部作业执行参数，新增 9 个官方定向样本作业。
 
@@ -598,6 +841,9 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
     MANIFEST_SUFFIX = "0_160_0"
     TARGET_VERSION = "0.160.0"
     UNIT_CAMPAIGN_ID = "c01600-unit"
+    # 相对 0.157.0 清单新增的官方定向作业，以及其中含中继合成应答（标签必须标 relay_synthetic）的子集。
+    DIRECTED_JOBS = NEW_OFFICIAL_JOBS
+    SYNTHETIC = SYNTHETIC_JOBS
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -613,7 +859,7 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
         cls.labels = {entry["job_id"]: entry for entry in labels["entries"]}
 
     def test_carried_jobs_keep_0157_execution_parameters(self) -> None:
-        self.assertEqual(set(self.jobs) - set(self.previous_jobs), NEW_OFFICIAL_JOBS)
+        self.assertEqual(set(self.jobs) - set(self.previous_jobs), self.DIRECTED_JOBS)
         self.assertEqual(set(self.previous_jobs) - set(self.jobs), set())
         for job_id, previous in self.previous_jobs.items():
             with self.subTest(job_id=job_id):
@@ -631,7 +877,7 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
             "{lite_model}": "gpt-6-astra",
             "{campaign_id}": self.UNIT_CAMPAIGN_ID,
         }
-        for job_id in sorted(NEW_OFFICIAL_JOBS):
+        for job_id in sorted(self.DIRECTED_JOBS):
             with self.subTest(job_id=job_id):
                 job = self.jobs[job_id]
                 self.assertEqual(job["phase"], "official")
@@ -691,13 +937,8 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
         self.assertIn("SPEC-BODY-006", a05["covers"])
 
     def test_new_jobs_have_label_entries_marking_synthetic_upstream(self) -> None:
-        synthetic = {
-            "official-relay-stream-flex-unavailable",
-            "official-relay-stream-interrupted-http",
-            "official-relay-stream-interrupted-ws",
-            "official-relay-image-edit-file-id",
-        }
-        for job_id in sorted(NEW_OFFICIAL_JOBS):
+        synthetic = self.SYNTHETIC
+        for job_id in sorted(self.DIRECTED_JOBS):
             with self.subTest(job_id=job_id):
                 entry = self.labels[job_id]
                 self.assertEqual(entry["side"], "official")
@@ -709,11 +950,131 @@ class Scenario0159ManifestParameterTest(unittest.TestCase):
 
 
 class Scenario0163ManifestParameterTest(Scenario0159ManifestParameterTest):
-    """0.163.0 清单（由 0.160.0 版复制并逐字替换版本号）：同样沿用 0.157.0 的全部作业执行参数，保留 9 个官方定向样本作业。"""
+    """0.163.0 清单（由 0.160.0 版复制）：沿用 0.157.0 的全部作业执行参数，保留 9 个官方定向样本，另在建 Campaign 之前新增三个。"""
 
     MANIFEST_SUFFIX = "0_163_0"
     TARGET_VERSION = "0.163.0"
     UNIT_CAMPAIGN_ID = "c01630-unit"
+    DIRECTED_JOBS = NEW_OFFICIAL_JOBS | NEW_0163_JOBS
+    SYNTHETIC = SYNTHETIC_JOBS | SYNTHETIC_0163_JOBS
+
+    def environment(self, job_id: str) -> dict:
+        return self.jobs[job_id]["steps"][0]["environment"]
+
+    def test_job_set_is_the_0160_set_plus_the_new_directed_jobs(self) -> None:
+        """0.163.0 清单 = 0.160.0 清单 + 新增的官方定向作业；候选侧不新增 capture 作业，既有作业的执行参数不变。"""
+
+        base = json.loads((TOOL_ROOT / "codex_upgrade_scenarios_0_160_0.json").read_text(encoding="utf-8"))
+        base_jobs = {job["id"]: job for job in base["capture_jobs"]}
+        self.assertEqual(set(self.jobs) - set(base_jobs), NEW_0163_JOBS)
+        self.assertEqual(set(base_jobs) - set(self.jobs), set())
+        for job_id, previous in base_jobs.items():
+            with self.subTest(job_id=job_id):
+                current = self.jobs[job_id]
+                # 描述里的版本号表述已随 0.163.0 替换，执行参数（以及绑定的场景与规则）才是不变量。
+                for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots", "covers"):
+                    self.assertEqual(current[field], previous[field], field)
+        phases = lambda jobs: [job["phase"] for job in jobs.values()]  # noqa: E731 - 局部小工具
+        self.assertEqual(phases(self.jobs).count("candidate"), phases(base_jobs).count("candidate"))
+        self.assertEqual(phases(self.jobs).count("official"), phases(base_jobs).count("official") + len(NEW_0163_JOBS))
+        # 新作业按序插在官方作业段末尾（候选作业之前），与 0.159.2 的先例一致。
+        order = [job["id"] for job in self.manifest["capture_jobs"]]
+        last_official = max(index for index, job in enumerate(self.manifest["capture_jobs"]) if job["phase"] == "official")
+        self.assertTrue(all(order.index(job_id) <= last_official for job_id in NEW_0163_JOBS))
+
+    def test_0163_directed_jobs_bind_scenarios_models_and_request_assertions(self) -> None:
+        expected = {
+            "official-relay-cyber-access-ws": (["A05"], "cyber-access-ws", ("GET", "/backend-api/codex/responses"),
+                                               ["SPEC-BODY-001", "SPEC-WS-005"]),
+            "official-relay-stream-incomplete-http": (["A07"], "stream-fault", ("POST", "/backend-api/codex/responses"),
+                                                      ["SPEC-PROTO-002"]),
+            "official-relay-stream-incomplete-ws": (["A07"], "stream-fault", ("GET", "/backend-api/codex/responses"),
+                                                    ["SPEC-PROTO-002"]),
+        }
+        scenarios = {item["scenario_id"]: set(item["covers"]) for item in self.manifest["evidence_scenarios"]}
+        rules = set(json.loads((TOOL_ROOT / "codex_upgrade_rules_0_163_0.json").read_text(encoding="utf-8"))["required_rules"])
+        for job_id, (scenario_ids, scenario, request, covers) in expected.items():
+            with self.subTest(job_id=job_id):
+                job = self.jobs[job_id]
+                environment = self.environment(job_id)
+                self.assertEqual(job["scenario_ids"], scenario_ids)
+                self.assertEqual(environment["SCENARIO"], scenario)
+                self.assertEqual((environment["REQUIRE_REQUEST_METHOD"], environment["REQUIRE_REQUEST_PATH"]), request)
+                self.assertEqual(job["covers"], covers)
+                # covers 属于批准的 43 条，且被其绑定的证据场景证明（plan 的升级审计按同一口径拒绝）。
+                self.assertLessEqual(set(covers), rules)
+                self.assertLessEqual(set(covers), set().union(*(scenarios[item] for item in scenario_ids)))
+                self.assertEqual(job["phase"], "official")
+                self.assertEqual(job["suites"], ["full"])
+                self.assertEqual(job["required_scenario_receipts"], [])
+
+    def test_cyber_access_job_mirrors_the_numeric_ws_lite_sample(self) -> None:
+        """与 official-relay-reasoning-numeric-ws 同构：Lite 轨、内置 provider 默认 WS、不取模型收据，只差场景。"""
+
+        cyber = self.jobs["official-relay-cyber-access-ws"]
+        numeric = self.jobs["official-relay-reasoning-numeric-ws"]
+        self.assertEqual(self.environment("official-relay-cyber-access-ws")["MODEL"], "{lite_model}")
+        for field in ("track", "model_id", "expected_use_responses_lite", "required_model_receipt", "scenario_ids", "suites"):
+            self.assertEqual(cyber[field], numeric[field], field)
+        self.assertEqual(
+            (cyber["track"], cyber["model_id"], cyber["expected_use_responses_lite"], cyber["required_model_receipt"]),
+            ("lite", "{lite_model}", True, False),
+        )
+        differing = {
+            key for key in set(self.environment("official-relay-cyber-access-ws")) | set(self.environment("official-relay-reasoning-numeric-ws"))
+            if self.environment("official-relay-cyber-access-ws").get(key) != self.environment("official-relay-reasoning-numeric-ws").get(key)
+        }
+        self.assertEqual(differing, {"RUN_ID", "SCENARIO"})
+        # 不带任何中继受控开关：请求字节全部转发生产，条件字段由客户端按显式程序自己写。
+        self.assertFalse([key for key in self.environment("official-relay-cyber-access-ws") if key.startswith("RELAY_")])
+
+    def test_incomplete_terminal_jobs_pair_with_the_interrupted_samples(self) -> None:
+        """终止型故障作业与同传输的 interrupted 作业只差故障种类（与 RUN_ID）：行为差异只来自 reason。"""
+
+        for transport in ("http", "ws"):
+            with self.subTest(transport=transport):
+                incomplete = self.environment(f"official-relay-stream-incomplete-{transport}")
+                interrupted = self.environment(f"official-relay-stream-interrupted-{transport}")
+                self.assertEqual(incomplete["RELAY_STREAM_FAULT"], "incomplete-terminal")
+                self.assertEqual(incomplete["RELAY_STREAM_FAULT_TRANSPORT"], transport)
+                self.assertEqual(
+                    {key: value for key, value in incomplete.items() if key not in {"RUN_ID", "RELAY_STREAM_FAULT"}},
+                    {key: value for key, value in interrupted.items() if key not in {"RUN_ID", "RELAY_STREAM_FAULT"}},
+                )
+                self.assertEqual(
+                    self.jobs[f"official-relay-stream-incomplete-{transport}"]["covers"],
+                    self.jobs[f"official-relay-stream-interrupted-{transport}"]["covers"],
+                )
+
+    def test_0163_directed_labels_follow_job_parameters(self) -> None:
+        expected = {
+            "official-relay-cyber-access-ws": ("websocket_trace", {
+                "transport": "websocket", "track": "lite", "mode": "lite",
+                "variant": "cyber_access_standard", "provider": "openai_oauth",
+            }),
+            "official-relay-stream-incomplete-http": ("process_trace", {
+                "transport": "http", "track": "main", "mode": "non_lite", "variant": "incomplete_terminal",
+                "upstream_response": "relay_synthetic", "provider": "openai_oauth",
+            }),
+            "official-relay-stream-incomplete-ws": ("websocket_trace", {
+                "transport": "websocket", "track": "main", "mode": "non_lite", "variant": "incomplete_terminal",
+                "upstream_response": "relay_synthetic", "provider": "openai_oauth",
+            }),
+        }
+        for job_id, (derive_kind, labels) in expected.items():
+            with self.subTest(job_id=job_id):
+                rules = self.labels[job_id]["rules"]
+                self.assertEqual(len(rules), 1)
+                self.assertEqual(rules[0]["labels"], labels)
+                self.assertEqual(rules[0]["derive"], {"parser": "h1_request_stream", "kind": derive_kind})
+                self.assertEqual(rules[0]["scenario_ids"], self.jobs[job_id]["scenario_ids"])
+                self.assertTrue(rules[0]["rationale"])
+        # 终止型故障的标签与 interrupted 同构，只差 variant。
+        for transport, suffix in (("http", "http"), ("ws", "ws")):
+            incomplete = self.labels[f"official-relay-stream-incomplete-{suffix}"]["rules"][0]["labels"]
+            interrupted = self.labels[f"official-relay-stream-interrupted-{suffix}"]["rules"][0]["labels"]
+            self.assertEqual({k: v for k, v in incomplete.items() if k != "variant"},
+                             {k: v for k, v in interrupted.items() if k != "variant"})
 
 
 if __name__ == "__main__":

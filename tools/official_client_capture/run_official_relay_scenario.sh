@@ -42,6 +42,8 @@ turns=${TURNS:-1}
 scenario=${SCENARIO:-}
 model_catalog_only=${MODEL_CATALOG_ONLY:-0}
 extra_args=""
+# 最近一轮 codex exec 的退出码：终止型流内故障样本据此记录「本轮以错误结束」的事实（见 incomplete-terminal 核对）。
+last_exec_status=""
 compaction_reason=""
 compaction_first_model=""
 compaction_second_model=""
@@ -112,6 +114,14 @@ if [[ $scenario == "image-transparent" || $scenario == "image-edit-file-id" ]] &
   echo "$scenario 需要 Codex >=0.158.0（imagegen 透明背景与 file-backed 编辑）。" >&2
   exit 2
 fi
+# cyber-access-ws 用 codex exec 的 --cyber-access-program（取值 standard|daybreak_blue|daybreak_red）。该选项 0.160.0 的 exec 没有
+# （exec/src/lib.rs 第 1179 行恒向 turn/start 传 None），0.163.0 的 exec/src/cli.rs 第 34、88-94 行有；最低版本取 0.161.0
+# （调度者给定，本地源码仓库只含 0.160.0 与 0.163.0 两个标签，0.161～0.162 未逐版核对）。更早的版本因未知选项退出、
+# 一个请求都不发，在任何请求之前拒绝。
+if [[ $scenario == "cyber-access-ws" ]] && (( codex_major == 0 && codex_minor < 161 )); then
+  echo "cyber-access-ws 需要 Codex >=0.161.0（codex exec 的 --cyber-access-program 选项）。" >&2
+  exit 2
+fi
 # 定向样本场景与中继受控开关必须成对出现：场景只决定客户端怎么发，受控应答由中继开关决定。
 # 用 if 链而非 case 语句：启动探测测试把脚本里第一个按场景分支的 case 语句当作提示词表，解析 TUI 场景标记。
 if [[ $scenario == stream-fault ]]; then
@@ -136,13 +146,20 @@ fi
 # 受控开关的取值在任何 docker 调用之前校验（中继参数解析会再核对一次）。
 if [[ -n ${RELAY_STREAM_FAULT:-} ]]; then
   case "$RELAY_STREAM_FAULT" in
-    flex-unavailable|interrupted) ;;
-    *) echo "RELAY_STREAM_FAULT 只能是 flex-unavailable 或 interrupted。" >&2; exit 2 ;;
+    flex-unavailable|interrupted|incomplete-terminal) ;;
+    *) echo "RELAY_STREAM_FAULT 只能是 flex-unavailable、interrupted 或 incomplete-terminal。" >&2; exit 2 ;;
   esac
   case "${RELAY_STREAM_FAULT_TRANSPORT:-}" in
     http|ws) ;;
     *) echo "RELAY_STREAM_FAULT_TRANSPORT 只能是 http 或 ws。" >&2; exit 2 ;;
   esac
+  # incomplete-terminal 是 0.163 起的终止语义（response.incomplete 的 reason 非 interrupted／content_filter 时终止本轮，
+  # codex-api/src/sse/responses.rs 第 432-451、657-665 行 [0.163.0]；0.160.0 同一事件按可重试的流错误处理）。更早的版本跑下去
+  # 只会得到重试样本，白耗配额，在任何请求之前拒绝。
+  if [[ $RELAY_STREAM_FAULT == incomplete-terminal ]] && (( codex_major == 0 && codex_minor < 163 )); then
+    echo "RELAY_STREAM_FAULT=incomplete-terminal 需要 Codex >=0.163.0（response.incomplete 终止语义）。" >&2
+    exit 2
+  fi
 fi
 if [[ -n ${RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID:-} && ! $RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID =~ ^file[-_][A-Za-z0-9_-]{8,64}$ ]]; then
   echo "RELAY_SYNTHESIZE_IMAGE_EDIT_FILE_ID 必须形如 file-<8～64 位字母数字下划线连字符>。" >&2
@@ -1240,10 +1257,22 @@ case "$scenario" in
     # 同上，内置 provider 默认 WS：response.create 的 reasoning.effort 同一结构体、同样按整数发送。
     prompt='请只回复 OK，不要做任何其他事。'
     extra_args='-c model_reasoning_effort="3"' ;;
+  cyber-access-ws)
+    # SPEC-BODY-001／SPEC-WS-005（0.163 起）：Daybreak 默认开启后 TUI／exec 的 turn/start 会按服务端模型目录携带
+    # cyberAccessProgram，经 for_provider（按 provider id 过滤，内置 provider 才通过）与 for_auth（ChatGPT 登录恒放行）
+    # 落成 ResponsesApiRequest／ResponseCreateWsRequest 的末位条件字段 access_programs: {"cyber": "standard"}
+    # （codex-api/src/common.rs 第 278-304、330-360 行，core/src/cyber_access_program.rs 第 40-64 行 [0.163.0]）。
+    # 该字段是否自然出现取决于服务端 /models 目录，所以用 exec 的 --cyber-access-program standard（exec/src/lib.rs
+    # 第 1214-1215 行：显式给定即用，不查目录）确定性固定它，内置 provider 默认 WS。HTTP 形态用只走 HTTP 的自定义
+    # provider 采不到（按 provider id 过滤）。上游是否接受该程序不影响样本，请求断言只要求 Responses WS 握手已发出。
+    prompt='请只回复 OK，不要做任何其他事。'
+    extra_args='--cyber-access-program standard' ;;
   stream-fault)
     # SPEC-PROTO-002（0.159 起）：流内 response.failed(code=flex_unavailable) 不可重试、不降级；
-    # response.incomplete(reason=interrupted) 按完成处理且 end_turn=false。首个 Responses 由中继按
-    # RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 受控应答（ws 时整条首个 WS 本地合成），其余照常。
+    # response.incomplete(reason=interrupted) 按完成处理且 end_turn=false。0.163 起 response.incomplete 的 reason 既非
+    # interrupted 也非 content_filter（incomplete-terminal，取 max_output_tokens）是终止错误：不重试、不降级，codex exec
+    # 以非零退出码结束。首个 Responses 由中继按 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 受控应答
+    # （ws 时整条首个 WS 本地合成），其余照常。
     prompt='请只回复 OK，不要做任何其他事。'
     if [[ $RELAY_STREAM_FAULT_TRANSPORT == http ]]; then
       extra_args="$http_probe_provider_args"
@@ -1632,6 +1661,12 @@ else
       sleep "$UPSTREAM_CAPACITY_RETRY_DELAY"
     done
     tail -3 "$work_dir/exec-$i.log" || true
+    last_exec_status=$exec_status
+    if [[ ${RELAY_STREAM_FAULT:-} == incomplete-terminal ]]; then
+      # 0.163 起 response.incomplete(max_output_tokens) 是终止错误，codex exec 以错误结束、退出码非零是预期结果，
+      # 不算采集失败；样本是否成立由下面的终止型流内故障核对（请求数与有无重试／降级）判定。
+      echo "ℹ 终止型流内故障：第 $i 轮 codex exec 以 $exec_status 退出（0.163 起非零是预期）。" >&2
+    fi
     if [[ $scenario == "file-upload" ]]; then
       extract_a14_tool_call "$work_dir/exec-$i.log"
     fi
@@ -1845,6 +1880,66 @@ PY
       echo "❌ 本轮未发出目标请求 ${REQUIRE_REQUEST_METHOD:-POST} ${REQUIRE_REQUEST_PATH:-}，样本不成立。" >&2
     fi
     echo "❌ 请求断言不成立：$request_assertions" >&2
+    exit 1
+  fi
+fi
+
+# 终止型流内故障核对（RELAY_STREAM_FAULT=incomplete-terminal，0.163 起）：response.incomplete(max_output_tokens) 是终止错误，
+# 受控应答之后不得再出现任何 Responses 请求（重试、降级或同连接续发），否则这一轮不是 0.163 终止行为的证据。偏离由中继
+# 在连接元数据里标记 post_terminal_request（见 upstream_byte_relay._post_terminal_request_kind），本核对读 relay.json：
+# - 恰有一条连接带 stream_fault:incomplete-terminal:<传输> 干预标记（故障确实注入了一次）；
+# - ws 传输时那条连接的受控动作里恰有一次 stream_fault_incomplete-terminal；
+# - 没有任何连接带 post_terminal_request。
+# 结果写入 scenario-observations/stream-fault-terminal.json，同时记录最近一轮 codex exec 的退出码（非零是预期，只记事实不判成败）。
+if [[ ${RELAY_STREAM_FAULT:-} == incomplete-terminal ]]; then
+  echo "=== 终止型流内故障核对 ==="
+  terminal_check_status=0
+  terminal_check=$(docker exec -i "$capture_container" python3 - \
+      "/capture/runs/$run_id/relay/relay.json" \
+      "$RELAY_STREAM_FAULT_TRANSPORT" \
+      "$last_exec_status" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+relay_json, transport, exec_status = sys.argv[1], sys.argv[2], sys.argv[3]
+connections = json.loads(Path(relay_json).read_text(encoding="utf-8")).get("connections", [])
+expected = f"stream_fault:incomplete-terminal:{transport}"
+fault_connections = [item for item in connections if item.get("intervention") == expected]
+post_terminal = [
+    {"connection_id": item.get("connection_id"), "request": item["post_terminal_request"]}
+    for item in connections
+    if item.get("post_terminal_request")
+]
+failures = []
+if len(fault_connections) != 1:
+    failures.append("fault-not-injected-exactly-once")
+elif transport == "ws":
+    actions = fault_connections[0].get("stream_fault_ws_actions") or []
+    if actions.count("stream_fault_incomplete-terminal") != 1:
+        failures.append("ws-fault-action-not-exactly-once")
+if post_terminal:
+    failures.append("responses-request-after-terminal-fault")
+print(json.dumps({
+    "schema_version": "relay-stream-fault-terminal/v1",
+    "status": "failed" if failures else "passed",
+    "failures": failures,
+    "kind": "incomplete-terminal",
+    "transport": transport,
+    "fault_connection_ids": [item.get("connection_id") for item in fault_connections],
+    "post_terminal_requests": post_terminal,
+    "exec_exit_status": int(exec_status) if exec_status.isdigit() else None,
+}, ensure_ascii=False, sort_keys=True))
+sys.exit(1 if failures else 0)
+PY
+  ) || terminal_check_status=$?
+  if [[ -z $terminal_check ]]; then
+    echo "❌ 终止型流内故障核对没有输出，无法证明本轮在故障后终止。" >&2
+    exit 1
+  fi
+  write_observation "stream-fault-terminal.json" "$terminal_check"
+  if (( terminal_check_status != 0 )); then
+    echo "❌ 终止型流内故障核对不成立（故障后出现了重试、降级或续发，或故障未恰好注入一次）：$terminal_check" >&2
     exit 1
   fi
 fi

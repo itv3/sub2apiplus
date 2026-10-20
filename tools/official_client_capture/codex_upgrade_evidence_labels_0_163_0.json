@@ -1520,6 +1520,86 @@
       ]
     },
     {
+      "job_id": "official-relay-cyber-access-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "cyber_access_standard",
+            "provider": "openai_oauth"
+          },
+          "rationale": "作业固定 Lite 专项 {lite_model}（Lite 标记由同一 Campaign 的 Lite 专项模型条件收据证明，本作业不取收据：上游可能拒绝该程序），默认 WS 与 --cyber-access-program standard 由采集参数决定，variant=cyber_access_standard 由此推出；A05 是 WS Lite 场景，与 official-relay-reasoning-numeric-ws 同构。access_programs 是否出现、出现在哪些帧（预热、首帧、增量帧）是 BODY-001／WS-005 的判定对象，不反推进标签。不标 compression／body_length，variant 独立，不会被 default 与 turn_state 判据误选。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-stream-incomplete-http",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "incomplete_terminal",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "故障种类（incomplete-terminal）、承载传输（http）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-stream-incomplete-ws",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "incomplete_terminal",
+            "upstream_response": "relay_synthetic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "故障种类（incomplete-terminal）、承载传输（ws）与受控应答全部由作业参数 RELAY_STREAM_FAULT／RELAY_STREAM_FAULT_TRANSPORT 决定，upstream_response=relay_synthetic 标明本作业含中继合成应答、不得当作生产自然成功；主线 {model} 非 Lite。请求次数与是否降级是 PROTO-002 的判定对象，只由原始字节核对，不反推进标签。"
+        }
+      ]
+    },
+    {
       "job_id": "candidate-core-direct",
       "side": "candidate",
       "rules": [
