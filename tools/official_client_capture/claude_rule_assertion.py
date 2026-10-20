@@ -126,7 +126,7 @@ EXPECTATIONS_COMMAND = "expectations"
 # 仓库基线画像（claude_rule_expectations_<版本>.json）的冻结摘要，按版本登记；只用于仓库基线的冻结核对，compare／accept
 # 用批准画像的精确摘要（``--expected-profile-sha256``）。
 FROZEN_PROFILE_SHA256S: dict[str, str] = {
-    "2.1.226": "4705d28891eec81a04fe871560a2a03b7534051daef77b0413383b91a42fdd05",
+    "2.1.226": "48c54407f83d0603b04b3836bbf129c28fce96e4d2db720777097d60bd81b341",
 }
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
