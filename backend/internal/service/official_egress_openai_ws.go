@@ -723,6 +723,11 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	); err != nil {
 		return nil, result, err
 	}
+	// access_programs 的值域，与 HTTP 定型共用同一个函数；预热帧、链帧与工具续接帧由本函数的输出改写而来，
+	// 原样继承这里归一化后的取值。画像没有 AccessPrograms 节时是恒等操作。
+	accessProgramsModified := normalizeOfficialCodexAccessPrograms(
+		payload, officialCodexAccessProgramsSection(egressContext.ProfileMode()),
+	)
 
 	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		egressContext,
@@ -773,6 +778,12 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 		result.Modifications = append(result.Modifications, OfficialEgressModification{
 			Kind:  "frame",
 			Field: "tools.image_gen",
+		})
+	}
+	if accessProgramsModified {
+		result.Modifications = append(result.Modifications, OfficialEgressModification{
+			Kind:  "frame",
+			Field: officialCodexAccessProgramsField,
 		})
 	}
 	return finalized, result, nil

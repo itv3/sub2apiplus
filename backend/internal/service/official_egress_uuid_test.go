@@ -599,6 +599,7 @@ func TestOfficialEgressPackageLevelMapsAreAudited(t *testing.T) {
 	audited := map[string]string{
 		"officialOpenAIHTTPTurnStarts":           "键为 账号ID|session UUID|turn UUID，带 2 小时 TTL 与 8192 条上限",
 		"officialOpenAIProjectedFieldsSeen":      "键为被投影字段名列表，256 条封顶",
+		"officialCodexAccessProgramsWarned":      "键为 拒绝原因|程序名：原因取自固定的 5 个值，程序名只有不超过 32 字节的小写字母、数字、下划线才回显，其余记为 other，64 条封顶",
 		"officialCodexTrustedConditionalHeaders": "静态常量表",
 		"officialOpenAICompactionReasons":        "静态常量表",
 	}
