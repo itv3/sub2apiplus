@@ -137,11 +137,15 @@ func requireLegacyAccessProgramsHTTPOutcomes(t *testing.T, got map[string]legacy
 
 func TestFinalizeOfficialOpenAIHTTPBodyDropsAccessProgramsWhenSectionAbsent(t *testing.T) {
 	require.Len(t, legacyAccessProgramsHTTPGoldens, 38)
-	requireLegacyAccessProgramsHTTPOutcomes(t, collectLegacyAccessProgramsHTTPOutcomes(t, officialClientProfileModeActive))
+	// 黄金值固定的是“节缺省时”的出站字节，所以取正式目录里不声明该节的旧画像槽位：晋升前是 active，
+	// 晋升后 active 已是声明该节的较新画像、旧画像退居 previous。
+	legacyMode := requireOfficialCodexLegacyBaseProfileMode(t)
+	require.Nil(t, officialCodexAccessProgramsSection(legacyMode), "底稿槽位必须不声明 AccessPrograms 节")
+	requireLegacyAccessProgramsHTTPOutcomes(t, collectLegacyAccessProgramsHTTPOutcomes(t, legacyMode))
 }
 
 // previous 槽位装了合成画像，但合成画像不声明 AccessPrograms 节：门控按调用冻结的 mode 解析各自画像的节，
-// 没有节就走旧逻辑，结果与 Active 槽位逐项相同。
+// 没有节就走旧逻辑，结果与旧画像槽位（晋升前是 Active，晋升后夹具让 active 读旧画像）逐项相同。
 func TestFinalizeOfficialOpenAIHTTPBodyDropsAccessProgramsOnPreviousSlotWithoutSection(t *testing.T) {
 	synthetic := withOfficialCodexSyntheticPreviousProfile(t, nil)
 	require.Nil(t, synthetic.Optional().AccessPrograms)

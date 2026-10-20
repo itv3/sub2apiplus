@@ -14,18 +14,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 合成画像夹具：以正式目录 Active release 的 ProfileSpec 为底稿，应用快照改写后重新
-// 编译可执行画像，并临时替换 officialCodexExecutableProfileForMode，使 service 读到
+// 合成画像夹具：以正式目录里“旧画像”槽位（见 officialCodexLegacyBaseProfileMode）release 的 ProfileSpec 为底稿，
+// 应用快照改写后重新编译可执行画像，并临时替换 officialCodexExecutableProfileForMode，使 service 读到
 // “声明了新可选节／新条件／新来源”的画像。正式目录不被修改；用例结束自动恢复。
 //
 // 注意：替换的是包级入口，使用本夹具的用例不得并行执行。
+
+// officialCodexLegacyBaseProfileMode 返回正式目录里“旧画像”所在的槽位：尚未声明基础指令载体节
+// （BaseInstructions）与 access_programs 值域节（AccessPrograms）的画像。
+//
+// 合成画像夹具要在旧画像上叠加“只增加某项特征”的改写，用例也要拿旧画像作对照，所以底稿与对照都必须
+// 是旧画像，而不是写死的 active：
+//   - 晋升前（含候选态）：active 是旧画像，返回 active，行为与引入本函数之前逐字一致；
+//   - 晋升后：active 已是较新画像，旧画像退居 previous，返回 previous；
+//   - 两个槽位都已声明这两个节（再下一轮升级之后）：不存在旧画像，返回 false，调用方不能再合成“只增加某项特征”
+//     的画像，需要改用别的底稿。
+//
+// 直接读正式 ReleaseCatalog，不经过 service 的包级画像入口，避免被其他夹具注入的合成画像影响。
+func officialCodexLegacyBaseProfileMode() (string, bool) {
+	for _, mode := range []string{officialClientProfileModeActive, officialClientProfileModePrevious} {
+		release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseMode(mode))
+		if err != nil {
+			continue
+		}
+		optional := release.ExecutableProfile().Optional()
+		if optional.BaseInstructions == nil && optional.AccessPrograms == nil {
+			return mode, true
+		}
+	}
+	return "", false
+}
+
+// requireOfficialCodexLegacyBaseProfileMode 是测试用封装：找不到旧画像槽位时直接失败。
+func requireOfficialCodexLegacyBaseProfileMode(t *testing.T) string {
+	t.Helper()
+	mode, found := officialCodexLegacyBaseProfileMode()
+	require.True(t, found, "正式目录的两个槽位都已声明基础指令载体节与 access_programs 值域节，没有可作底稿与对照的旧画像")
+	return mode
+}
 
 func withOfficialCodexSyntheticProfile(
 	t *testing.T,
 	mutate func(*profilecontract.SnapshotDoc),
 ) profilecontract.ExecutableProfile {
 	t.Helper()
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(
+		officialegress.ReleaseMode(requireOfficialCodexLegacyBaseProfileMode(t)),
+	)
 	require.NoError(t, err)
 	doc := release.Profile().ToSnapshot()
 	if mutate != nil {

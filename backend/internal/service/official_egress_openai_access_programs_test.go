@@ -353,7 +353,8 @@ func TestWarnOfficialCodexAccessProgramsDroppedDedupesAndCaps(t *testing.T) {
 }
 
 func TestOfficialCodexAccessProgramsSectionFollowsTheFrozenMode(t *testing.T) {
-	require.Nil(t, officialCodexAccessProgramsSection(officialClientProfileModeActive))
+	// 夹具之前先确认旧画像槽位本来就不声明该节：晋升前是 active，晋升后 active 已是较新画像、旧画像在 previous。
+	require.Nil(t, officialCodexAccessProgramsSection(requireOfficialCodexLegacyBaseProfileMode(t)))
 	synthetic := accessProgramsProfile(t, "standard")
 	require.NotNil(t, synthetic.Optional().AccessPrograms)
 	section := officialCodexAccessProgramsSection(officialClientProfileModePrevious)

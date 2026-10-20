@@ -119,40 +119,45 @@ func TestFinalizeOfficialOpenAIHTTPBodyMembersMatchesBytes(t *testing.T) {
 		if _, err := captureOfficialOpenAIHTTPBodyContract(body); err != nil {
 			continue
 		}
-		for _, compact := range []bool{false, true} {
-			for _, lite := range []bool{false, true} {
-				for defaultsIndex, defaults := range defaultsVariants {
-					options := officialOpenAIHTTPBodyOptions{
-						IsCompact: compact, UseResponsesLite: lite, SupportsParallelTools: true,
-						ProfileMode: officialClientProfileModeActive,
+		// 两个槽位各比一遍：差分只关心“成员写出”与“整体编码”两条路径是否逐字节一致，与哪张画像无关；
+		// 晋升前后 active／previous 各是旧画像与较新画像之一，两张都覆盖才不随槽位漂移。
+		// 较新画像声明基础指令载体节，定型必须带线程 ID，两路共用同一个。
+		for _, profileMode := range []string{officialClientProfileModeActive, officialClientProfileModePrevious} {
+			for _, compact := range []bool{false, true} {
+				for _, lite := range []bool{false, true} {
+					for defaultsIndex, defaults := range defaultsVariants {
+						options := officialOpenAIHTTPBodyOptions{
+							IsCompact: compact, UseResponsesLite: lite, SupportsParallelTools: true,
+							ProfileMode: profileMode, ThreadID: testOfficialOpenAISessionID,
+						}
+						label := name + " mode=" + profileMode + " compact=" + strconv.FormatBool(compact) +
+							" lite=" + strconv.FormatBool(lite) + " defaults=" + strconv.Itoa(defaultsIndex)
+						legacyContract, err := captureOfficialOpenAIHTTPBodyContract(body)
+						require.NoError(t, err)
+						legacy, legacyModified, legacyErr := finalizeOfficialOpenAIHTTPBody(
+							body, legacyContract, officialOpenAIHTTPIdentity{}, defaults, options,
+						)
+						currentContract, err := captureOfficialOpenAIHTTPBodyContract(body)
+						require.NoError(t, err)
+						payload, index, err := decodeOfficialJSONObjectSharingBody(body)
+						require.NoError(t, err)
+						members, currentModified, currentErr := finalizeOfficialOpenAIHTTPBodyPayloadMembers(
+							payload, body, index, currentContract, defaults, options,
+						)
+						if decodeSharingErrorParity(t, label, legacyErr, currentErr) {
+							require.Equal(t, legacyErr.Error(), currentErr.Error(), label)
+							continue
+						}
+						require.Equal(t, legacyModified, currentModified, label)
+						if !currentModified {
+							require.Nil(t, members, label)
+							require.Equal(t, string(body), string(legacy), label)
+							continue
+						}
+						require.Equal(t, string(legacy), string(officialegress.AppendJSONObjectMembers(nil, members)),
+							"%s：成员写出必须与改造前定型正文逐字节一致", label)
+						compared++
 					}
-					label := name + " compact=" + strconv.FormatBool(compact) + " lite=" + strconv.FormatBool(lite) +
-						" defaults=" + strconv.Itoa(defaultsIndex)
-					legacyContract, err := captureOfficialOpenAIHTTPBodyContract(body)
-					require.NoError(t, err)
-					legacy, legacyModified, legacyErr := finalizeOfficialOpenAIHTTPBody(
-						body, legacyContract, officialOpenAIHTTPIdentity{}, defaults, options,
-					)
-					currentContract, err := captureOfficialOpenAIHTTPBodyContract(body)
-					require.NoError(t, err)
-					payload, index, err := decodeOfficialJSONObjectSharingBody(body)
-					require.NoError(t, err)
-					members, currentModified, currentErr := finalizeOfficialOpenAIHTTPBodyPayloadMembers(
-						payload, body, index, currentContract, defaults, options,
-					)
-					if decodeSharingErrorParity(t, label, legacyErr, currentErr) {
-						require.Equal(t, legacyErr.Error(), currentErr.Error(), label)
-						continue
-					}
-					require.Equal(t, legacyModified, currentModified, label)
-					if !currentModified {
-						require.Nil(t, members, label)
-						require.Equal(t, string(body), string(legacy), label)
-						continue
-					}
-					require.Equal(t, string(legacy), string(officialegress.AppendJSONObjectMembers(nil, members)),
-						"%s：成员写出必须与改造前定型正文逐字节一致", label)
-					compared++
 				}
 			}
 		}
@@ -195,6 +200,9 @@ func TestOfficialEgressHTTPRequestMembersBodyReadsFinalBytes(t *testing.T) {
 		require.True(t, ok)
 		contract, err := captureOfficialOpenAIHTTPBodyContract(body)
 		require.NoError(t, err)
+		// 画像声明基础指令载体节时，定型按线程 ID 计算消息 id：取请求冻结的线程字段，与生产装配同源。
+		threadID, err := requiredOfficialEgressFieldValue(egressContext, OfficialEgressFieldThreadID)
+		require.NoError(t, err, name)
 		expected, modified, err := finalizeOfficialOpenAIHTTPBody(
 			body, contract, officialOpenAIHTTPIdentity{},
 			officialOpenAIReasoningDefaultsFromContext(egressContext),
@@ -202,6 +210,7 @@ func TestOfficialEgressHTTPRequestMembersBodyReadsFinalBytes(t *testing.T) {
 				UseResponsesLite:      egressContext.responsesLite,
 				SupportsParallelTools: egressContext.parallelTools,
 				ProfileMode:           egressContext.ProfileMode(),
+				ThreadID:              threadID,
 			},
 		)
 		require.NoError(t, err)

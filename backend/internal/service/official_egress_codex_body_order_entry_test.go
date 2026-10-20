@@ -105,15 +105,17 @@ func syntheticNewerBodyContractMutation(t *testing.T) func(*profilecontract.Snap
 	}
 }
 
-// withOfficialCodexBodyOrderProfile 以正式目录 Active 画像为底稿，应用快照改写后重新编译，并临时替换
-// officialCodexReleaseProfileForBodyOrder，使字段序入口（以及经它的 HTTP／WS 编码、顶层白名单与 WS HTTP 桥）
-// 读到合成画像的 Body.Fields。正式目录不被修改，用例结束自动恢复。
+// withOfficialCodexBodyOrderProfile 以正式目录里的旧画像（见 officialCodexLegacyBaseProfileMode）为底稿，应用快照
+// 改写后重新编译，并临时替换 officialCodexReleaseProfileForBodyOrder，使字段序入口（以及经它的 HTTP／WS 编码、
+// 顶层白名单与 WS HTTP 桥）读到合成画像的 Body.Fields。正式目录不被修改，用例结束自动恢复。
 //
 // 它与 withOfficialCodexSyntheticProfile 各管一个入口、互不影响：后者替换可选节等入口，够不到字段序；
 // 需要同时覆盖两者的用例叠加使用即可（两个夹具的 Cleanup 各自恢复各自的入口）。
 func withOfficialCodexBodyOrderProfile(t *testing.T, mutate func(*profilecontract.SnapshotDoc)) profilecontract.ExecutableProfile {
 	t.Helper()
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(
+		officialegress.ReleaseMode(requireOfficialCodexLegacyBaseProfileMode(t)),
+	)
 	require.NoError(t, err)
 	doc := release.Profile().ToSnapshot()
 	if mutate != nil {
@@ -233,11 +235,13 @@ func TestOfficialCodexBodyFieldOrderEntryPassesModeVerbatimAndPropagatesErrors(t
 }
 
 func TestOfficialCodexBodyFieldOrderEntryCanBeReplacedBySyntheticProfile(t *testing.T) {
-	formalHTTP, err := officialCodexBodyFieldOrderForMode(officialClientProfileModeActive, officialCodexEndpointResponsesHTTP)
+	// 对照取正式目录里的旧画像槽位：晋升前是 active，晋升后 active 已是较新画像、旧画像在 previous。
+	legacyMode := requireOfficialCodexLegacyBaseProfileMode(t)
+	formalHTTP, err := officialCodexBodyFieldOrderForMode(legacyMode, officialCodexEndpointResponsesHTTP)
 	require.NoError(t, err)
-	formalWS, err := officialCodexBodyFieldOrderForMode(officialClientProfileModeActive, officialCodexEndpointResponsesWS)
+	formalWS, err := officialCodexBodyFieldOrderForMode(legacyMode, officialCodexEndpointResponsesWS)
 	require.NoError(t, err)
-	// 前提：合成画像的字段序必须区别于正式 Active 画像，否则替换不可观察。
+	// 前提：合成画像的字段序必须区别于正式旧画像，否则替换不可观察。
 	require.NotEqual(t, syntheticNewerHTTPBodyOrder, formalHTTP)
 	require.NotEqual(t, syntheticNewerWSBodyOrder, formalWS)
 
@@ -245,7 +249,7 @@ func TestOfficialCodexBodyFieldOrderEntryCanBeReplacedBySyntheticProfile(t *test
 	require.NotNil(t, synthetic.Optional().BaseInstructions)
 	require.NotNil(t, synthetic.Optional().AccessPrograms)
 	// 两个入口各管各的：字段序夹具不改可选节读取入口。
-	require.Nil(t, officialCodexOptionalSectionsForMode(officialClientProfileModeActive).BaseInstructions)
+	require.Nil(t, officialCodexOptionalSectionsForMode(legacyMode).BaseInstructions)
 
 	for _, mode := range []string{officialClientProfileModeActive, officialClientProfileModePrevious} {
 		gotHTTP, err := officialCodexBodyFieldOrderForMode(mode, officialCodexEndpointResponsesHTTP)
@@ -274,17 +278,19 @@ func TestOfficialCodexBodyFieldOrderEntryCanBeReplacedBySyntheticProfile(t *test
 }
 
 func TestOfficialCodexBodyFieldOrderEntryIsRestoredAfterSyntheticProfile(t *testing.T) {
-	before, err := officialCodexBodyFieldOrderForMode(officialClientProfileModeActive, officialCodexEndpointResponsesWS)
+	// 观察对象取正式目录里的旧画像槽位：合成画像的字段序与较新的正式画像相同，只有旧画像能看出替换。
+	legacyMode := requireOfficialCodexLegacyBaseProfileMode(t)
+	before, err := officialCodexBodyFieldOrderForMode(legacyMode, officialCodexEndpointResponsesWS)
 	require.NoError(t, err)
 
 	t.Run("替换期间", func(t *testing.T) {
 		withOfficialCodexBodyOrderProfile(t, syntheticNewerBodyContractMutation(t))
-		during, err := officialCodexBodyFieldOrderForMode(officialClientProfileModeActive, officialCodexEndpointResponsesWS)
+		during, err := officialCodexBodyFieldOrderForMode(legacyMode, officialCodexEndpointResponsesWS)
 		require.NoError(t, err)
 		require.NotEqual(t, before, during, "替换期间入口应读到合成画像")
 	})
 
-	after, err := officialCodexBodyFieldOrderForMode(officialClientProfileModeActive, officialCodexEndpointResponsesWS)
+	after, err := officialCodexBodyFieldOrderForMode(legacyMode, officialCodexEndpointResponsesWS)
 	require.NoError(t, err)
 	require.Equal(t, before, after, "夹具的 Cleanup 必须把入口恢复为默认实现")
 	// 恢复的仍是严格的默认实现。
