@@ -449,7 +449,9 @@ func (c *officialOpenAIHTTPBodyContract) inboundTaggedMessageText(kind string) (
 // WS 与 HTTP 共用同一种官方形态消息，差别在于 WS 是连接上的续链协议：官方客户端在一条链的第一帧（预热帧或首个业务帧）
 // 带上基础指令消息，之后用 previous_response_id 续链的增量帧不再重复。第三方客户端则习惯在每一帧都带上顶层
 // instructions（公开 Responses API 的 instructions 不随续链继承）。所以 WS 载体按“链”决策：
-//   - 新链（帧里没有 previous_response_id）：把正文安装成官方形态消息，并在连接状态里记下正文摘要；
+//   - 新链（帧里没有 previous_response_id）：把正文安装成官方形态消息，并在连接状态里记下正文摘要；既没有顶层
+//     instructions 也没有可用的带标记消息时，回退到模型默认 Codex 指令（与 HTTP 缺 instructions 时注入的默认指令是同一个
+//     来源和函数），按有来源处理；
 //   - 续链帧带了正文：与连接上已发送的摘要相同就丢弃（含 input 里的旧副本），避免历史里堆出重复的基础指令；
 //     不同则作为新的基础指令消息追加并更新摘要，同时提示一次；
 //   - 续链帧没带正文：不动。
