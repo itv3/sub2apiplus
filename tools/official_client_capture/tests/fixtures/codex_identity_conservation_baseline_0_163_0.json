@@ -1,15 +1,15 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "4025dd0cf40a2405a296d5dafa246a038d90118a",
+ "source_commit": "2bc56dd77594c7f067d47d062b29db76686f877b",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "7a5a2b8ffdf3644df961e58550a17aeb265a9aa9cc63c71d8e66bab9d4184779",
+ "files_sha256": "e03d238a15870c0ac4f273e1bae66ebc4646c5be1a5ae5da4a27eaea878020ab",
  "wire_producer_sha256": "8f0f9256ffa976fa780127e54cb7eee8eace7791ea8c8bc3d417a16835c5bfe2",
- "evidence_semantics_sha256": "72d56c7876e477bb6f81ec02112060c082275214c7766ca0a02962e9f180bbb1",
- "control_sha256": "273179c85243484c1eb309a69f8fa60f68ce9134463b404a222b1ea222c96486",
+ "evidence_semantics_sha256": "932a6a65997e82045cfa3a3fe8fdf061bee42045a4b27439a996702d86d7c8c7",
+ "control_sha256": "1fcc8067eab5b4792399830086b500590565834a281ba1eee3e9fb4aa9691ce2",
  "orchestrator_closure_sha256": {
   "wire_producer": "44ae71c952a273a9941a867272ee1ce1411ebf18622c94e8db684bde7e6f91b8",
-  "evidence_semantics": "e93d27b9f0e45767279d0868136679c219e270e54bf8ec2c5e0778f96765518b"
+  "evidence_semantics": "9346bb8c3dff7c1ac231748f4e3ba2b4d38dbdf801b11679ad01bb8ad0766011"
  },
  "checker_sha256": "e45c5968cfae486e2cd06e07f0377727a4a09bf46d169969cc1dd7b7a660bf86",
  "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
@@ -305,6 +305,7 @@
     "_is_official_sealed_control_epoch_source",
     "_is_policy_v2_identity",
     "_is_rfc3339_timestamp",
+    "_is_strict_pre_job_failure",
     "_is_world_traversable_executable",
     "_isolated_contamination_keys",
     "_isolation_invalidated_attempts",
@@ -1974,7 +1975,7 @@
   },
   {
    "path": "codex_upgrade.py",
-   "sha256": "ca756181f95310f481817291acb15468b927598f70163f76b5fa88551237eb9e"
+   "sha256": "699a9ae4a9c011f01a02ba3ee674aa14f35bf3298dca8c4b6c6b97aea939fe9d"
   },
   {
    "path": "codex_upgrade_action_output_binding.schema.json",
@@ -2310,7 +2311,7 @@
   },
   {
    "path": "codex_upgrade_reconciler.py",
-   "sha256": "b1fa2564943c717a9fe284dd364f9d91e7b9052c1adc593d321d8923ca1abcd4"
+   "sha256": "6a709357826d03df55a32ef3b489e0a80d3612b34bb4a52b8df46560704c523a"
   },
   {
    "path": "codex_upgrade_restoration_report.schema.json",
@@ -2598,7 +2599,7 @@
   },
   {
    "path": "extract_compaction_reason.py",
-   "sha256": "55d812adb6d889cf2ad3799e75c4eebef41252a1e1f15824ff5783df51cb2477"
+   "sha256": "9ca192f44bd504b7f50eb35472ee3e1650f6e87414441568d73b4bb13ee2ac35"
   },
   {
    "path": "fixtures/claude_fw_f_v4_hook.py",
