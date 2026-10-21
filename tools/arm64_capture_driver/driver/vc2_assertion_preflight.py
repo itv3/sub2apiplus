@@ -31,6 +31,11 @@ from tools.official_client_capture import candidate_rule_assertion as checker
 from tools.official_client_capture import codex_upgrade as upgrade
 
 SCHEMA = "arm64-vc2-assertion-preflight/v1"
+# 官方侧只执行 dual_wire 规则的 wire 判据：验收契约（acceptance_contract）规定 dual_wire 规则两侧各执行一次单规则断言，
+# candidate_profile 规则只验证候选并绑定官方权威摘要（build_rule_assertion_results、assertion_gate 的官方侧同口径）。
+# candidate_profile 规则的 wire 判据依赖候选侧专有的标签与探针（如 frame_role、image_edit_input、endpoint_class 只覆盖探针端点），
+# 在官方证据上实跑必然失败（0.160.0 官方证据同样 8 项失败，非 0.163.0 回归），因此这里只登记待候选验收。
+OFFICIAL_EXECUTED_MODES = frozenset({contract.MODE_DUAL_WIRE})
 INPUTS = {
     "target_rule_manifest": "target-rules.json", "migration_manifest": "rule-migration.json",
     "scenario_manifest": "scenarios.json", "profile_manifest": "profile.json",
@@ -142,6 +147,9 @@ def evaluate(profile, manifest, observations):
                     "validation_mode": payload["validation_modes"][rule_id], "structure": "passed"}
             if not contract.check_applies_to_side(payload, rule_id, check["id"], "official"):
                 rows.append({**base, "status": "pending_candidate", "reason": "official_side_not_applicable"})
+                continue
+            if base["validation_mode"] not in OFFICIAL_EXECUTED_MODES:
+                rows.append({**base, "status": "pending_candidate", "reason": "official_side_executes_dual_wire_only"})
                 continue
             if check["select"]["record_type"] in contract.INTERNAL_RECORD_TYPES:
                 rows.append({**base, "status": "pending_candidate", "reason": "requires_candidate_internal_evidence"})

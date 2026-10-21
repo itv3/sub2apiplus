@@ -21,6 +21,11 @@ class PreflightTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.module = load_script("vc2_assertion_preflight")
+        # 机制类用例用 SPEC-EP-022（candidate_profile）当夹具，要求它的 wire 判据在官方证据上实跑；
+        # 默认口径（只实跑 dual_wire）由下面专门的用例锁定。
+        modes = mock.patch.object(self.module, "OFFICIAL_EXECUTED_MODES", frozenset({"dual_wire", "candidate_profile"}))
+        modes.start()
+        self.addCleanup(modes.stop)
         self.config = {"D": str(self.root), "NEW": "isolated-a03", "IN": "a03-inputs", "TARGET_VERSION": "0.160.0",
                        "PROFILE_ID": "isolated-profile", "ACTIVE_PROFILE": str(self.root / "active.json"),
                        "PROFILE_PATCH_JSON": str(self.root / "patch.json")}
@@ -216,6 +221,40 @@ class PreflightTests(unittest.TestCase):
         result = self.module.evaluate(profile, {"artifacts": []}, [])
         self.assertEqual((result["rule_count"], result["check_count"]), (43, 138))
         self.assertEqual(result["counts"], {"failed": 94, "pending_candidate": 44})
+
+    def test_official_side_executes_dual_wire_rules_only_by_default(self):
+        """契约：dual_wire 两侧各跑一次，candidate_profile 只验候选并绑定官方权威摘要；官方证据上实跑后者必然误判。"""
+        with mock.patch.object(self.module, "OFFICIAL_EXECUTED_MODES", frozenset({"dual_wire"})):
+            result = self.collect()
+        self.assertEqual(result["results"]["status"], "passed")
+        self.assertEqual(result["results"]["counts"], {"pending_candidate": 2})
+        self.assertEqual({row["reason"] for row in result["results"]["checks"]}, {"official_side_executes_dual_wire_only"})
+        self.assertEqual(self.module.OFFICIAL_EXECUTED_MODES, frozenset({"dual_wire", "candidate_profile"}))
+        # 模块缺省值本身：只有 dual_wire。
+        fresh = load_script("vc2_assertion_preflight")
+        self.assertEqual(fresh.OFFICIAL_EXECUTED_MODES, frozenset({fresh.contract.MODE_DUAL_WIRE}))
+
+    def test_default_modes_never_fail_candidate_profile_checks_on_official_evidence(self):
+        """0.160.0／0.163.0 官方证据实测：候选侧专有标签的 8 个判据在官方证据上必然不过，缺省口径下只能是待候选。"""
+        known = {("SPEC-WS-005", "warmup-generate-false"), ("SPEC-BODY-001", "http-closed-fields"),
+                 ("SPEC-EP-001", "independent-image-endpoints"), ("SPEC-EP-022", "image-header-order"),
+                 ("SPEC-EP-022", "generation-background-default-opaque"), ("SPEC-EP-022", "generation-background-transparent"),
+                 ("SPEC-EP-022", "edit-file-id-reference"), ("SPEC-EP-022", "edit-file-id-without-url")}
+        for version in ("0_160_0", "0_163_0"):
+            with self.subTest(version=version):
+                profile = self.module.checker.load_profile(
+                    REPO_ROOT / f"tools/official_client_capture/candidate_rule_expectations_{version}.json",
+                    REPO_ROOT / f"tools/official_client_capture/codex_upgrade_rules_{version}.json",
+                    verify_frozen_digest=False, expected_codex_version=version.replace("_", "."))
+                with mock.patch.object(self.module, "OFFICIAL_EXECUTED_MODES", frozenset({"dual_wire"})):
+                    result = self.module.evaluate(profile, {"artifacts": []}, [])
+                rows = {(row["rule_id"], row["check_id"]): row for row in result["checks"]}
+                self.assertTrue(known.issubset(rows))
+                for key in known:
+                    self.assertEqual(rows[key]["status"], "pending_candidate", key)
+                    self.assertEqual(rows[key]["reason"], "official_side_executes_dual_wire_only", key)
+                self.assertEqual({row["validation_mode"] for row in result["checks"] if row["status"] == "failed"}, {"dual_wire"})
+                self.assertEqual(sum(result["counts"].values()), result["check_count"])
 
 
 class ApprovalSequenceTests(unittest.TestCase):

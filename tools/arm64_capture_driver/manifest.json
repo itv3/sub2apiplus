@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "8b9a004bd4f72dad7bddd71d92cf3c5893457b868fecbe2e8aae66204cc2feff",
+      "sha256": "a02f2e10547db1ab14bff7f9303fbfa4124e23d104724539eeea09ab590f4122",
       "mode": "0600",
-      "bytes": 120010
+      "bytes": 120314
     },
     {
       "path": "driver/arm64-full-gates.sh",
@@ -502,9 +502,9 @@
     },
     {
       "path": "driver/vc2_assertion_preflight.py",
-      "sha256": "b1c26d76e4ad5dc132027ee90722327377234cf41f955b9250fa6fbff4b6efae",
+      "sha256": "e956c650fb47b07ef90f16079e60311ecedcda4f7a53c9a1a456146f12dc926b",
       "mode": "0700",
-      "bytes": 15664
+      "bytes": 16551
     },
     {
       "path": "driver/vc4-all.sh",
@@ -687,5 +687,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "c22608dd3acbb8ece76f7335482c770a23bed4c4ab44924abc0b8fe6c45cf311"
+  "manifest_sha256": "74e904bad09f1576f0f44b4dc4a7f1ac2fd92b33cb9ab3da5b2afccf9e43e9c0"
 }
