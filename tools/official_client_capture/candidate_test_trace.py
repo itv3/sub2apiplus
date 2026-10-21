@@ -157,8 +157,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 版（含上面历次源码快照重绑后的现状，摘要 5d4c2b7a…）原样复制并逐字替换版本号。载荷逐项审核：383 个叶子里唯一差异是
 # codex_version（0.160.0→0.163.0）一处，把新文件里的版本号换回后与 0.160.0 版逐字节相同；测试、事实宇宙与源码快照不变。
 # 0.160.0 映射文件保留不动（它仍是当前 Active 的登记件）。
+# 2026-10-21（0.163.0 VC-4 候选实现）：候选按画像 BaseInstructions／AccessPrograms／TurnMetadata 节改动已登记的
+# `official_egress_openai_http.go`、`official_egress_openai_ws.go` 与 `official_egress_openai_turn_metadata_section.go`；映射只重绑这三份源码快照，
+# 不改变测试、事实宇宙或规则语义（载荷审核：仅 source_files 的 sha256 叶子变化）。
 FROZEN_MAPPING_SHA256 = (
-    "d02db61ba130d45af55b52c1946365045bcf1c42f025b40f3f39c68777555329"
+    "299ef7356b5a409d03a94883ac02e64700998e6346ce0eee637453ac66c07b8a"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
