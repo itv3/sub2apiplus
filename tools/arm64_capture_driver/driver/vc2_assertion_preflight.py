@@ -34,7 +34,7 @@ SCHEMA = "arm64-vc2-assertion-preflight/v1"
 # 官方侧只执行 dual_wire 规则的 wire 判据：验收契约（acceptance_contract）规定 dual_wire 规则两侧各执行一次单规则断言，
 # candidate_profile 规则只验证候选并绑定官方权威摘要（build_rule_assertion_results、assertion_gate 的官方侧同口径）。
 # candidate_profile 规则的 wire 判据依赖候选侧专有的标签与探针（如 frame_role、image_edit_input、endpoint_class 只覆盖探针端点），
-# 在官方证据上实跑必然失败（0.160.0 官方证据同样 8 项失败，非 0.163.0 回归），因此这里只登记待候选验收。
+# 在官方证据上实跑必然失败（上一版本自己的官方证据同样失败，不是新版本回归），因此这里只登记待候选验收。
 OFFICIAL_EXECUTED_MODES = frozenset({contract.MODE_DUAL_WIRE})
 INPUTS = {
     "target_rule_manifest": "target-rules.json", "migration_manifest": "rule-migration.json",

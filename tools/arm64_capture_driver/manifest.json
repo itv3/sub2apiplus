@@ -502,9 +502,9 @@
     },
     {
       "path": "driver/vc2_assertion_preflight.py",
-      "sha256": "e956c650fb47b07ef90f16079e60311ecedcda4f7a53c9a1a456146f12dc926b",
+      "sha256": "bca566ed3e6a5b2040ea9134cc7500b87b87e88e076a9678fbdad8aac1530a33",
       "mode": "0700",
-      "bytes": 16551
+      "bytes": 16561
     },
     {
       "path": "driver/vc4-all.sh",
@@ -687,5 +687,5 @@
       "bytes": 29410
     }
   ],
-  "manifest_sha256": "74e904bad09f1576f0f44b4dc4a7f1ac2fd92b33cb9ab3da5b2afccf9e43e9c0"
+  "manifest_sha256": "4f9013ed209adbdec02facb493c04b3a531f020f05b7186619dd752c451039be"
 }
