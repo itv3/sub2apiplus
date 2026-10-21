@@ -35335,10 +35335,20 @@ def _phase_evaluation_recovery_scope(
         raise ConfigurationError("失败 attempt 没有可重跑 Job，禁止建立 transition。")
 
     checkpoint = attempt.get("job_checkpoint")
+    # 首个作业执行中被出口暂停打断、环境恢复失败而被环境隔离（或证据根冲突隔离）作废的 attempt（2026-10-21 VC-5 批次 25 实测）：
+    # 作业收据与 checkpoint 都来不及写，结果为空、checkpoint 链零记录，before 探针已取到所以不是严格的首个 Job 前失败。
+    # 它没有任何可复用或可重放的作业：执行闭集是全部冻结作业，环境边界改绑隔离收据，不再要求至少一条 checkpoint 记录。
+    empty_invalidated_source = (
+        (isolation_receipt is not None or conflict_quarantine is not None)
+        and not result_by_id
+        and isinstance(checkpoint, Mapping)
+        and int(checkpoint.get("record_count", -1)) == 0
+    )
     if not isinstance(checkpoint, Mapping) or (
         pre_job_failure
         and int(checkpoint.get("record_count", -1)) != len(carried_ids)
         or not pre_job_failure
+        and not empty_invalidated_source
         and int(checkpoint.get("record_count", 0)) <= 0
     ):
         raise ConfigurationError("失败 attempt 缺少可重放 Job checkpoint。")
