@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -568,7 +569,11 @@ func TestTokenRefreshService_ProviderConcurrencyGateIsSharedAcrossBackgroundAndC
 		"all entry points must share the configured per-provider upstream concurrency cap")
 }
 
-func TestTokenRefreshService_SaturatedProviderPreservesConcurrencyAndActualQPSStartSpacing(t *testing.T) {
+// runSaturatedProviderQPSScenario runs the saturated-provider scenario once and
+// returns a description of the first start-spacing violation, or "" when the
+// gate paced every start. Everything that is not wall-clock timing is asserted
+// with require on the spot.
+func runSaturatedProviderQPSScenario(t *testing.T) string {
 	const (
 		providerConcurrency = 2
 		providerQPS         = 20
@@ -654,16 +659,45 @@ func TestTokenRefreshService_SaturatedProviderPreservesConcurrencyAndActualQPSSt
 	// tests nothing.
 	minimumObservedSpacing := configuredSpacing / 10
 	actualMinimumSpacing := starts[1].Sub(starts[0])
+	violation := ""
 	for i := 1; i < len(starts); i++ {
 		spacing := starts[i].Sub(starts[i-1])
 		if spacing < actualMinimumSpacing {
 			actualMinimumSpacing = spacing
 		}
-		require.GreaterOrEqualf(t, spacing, minimumObservedSpacing,
-			"upstream starts %d and %d violated configured QPS spacing", i-1, i)
+		if violation == "" && spacing < minimumObservedSpacing {
+			violation = fmt.Sprintf("upstream starts %d and %d violated configured QPS spacing: %s < %s",
+				i-1, i, spacing, minimumObservedSpacing)
+		}
 	}
 	t.Logf("max_active=%d configured_concurrency=%d minimum_start_spacing=%s configured_spacing=%s",
 		refresher.maxActive.Load(), providerConcurrency, actualMinimumSpacing, configuredSpacing)
+	return violation
+}
+
+// The spacing floor is read from wall-clock stamps taken after the rate gate has
+// already released each goroutine, so a descheduled goroutine on a saturated
+// machine compresses one observed gap without the gate having done anything
+// wrong: this assertion failed at 2.2ms against the 5ms floor while the
+// full-gates run kept every core busy, on top of the 13ms and 37ms failures
+// recorded above. A gate that really bursts does it on every run, because the
+// scenario is deterministic (the first two attempts finish together) and an
+// unpaced gate lands three orders of magnitude below the floor each time. So the
+// scenario is repeated and the test only fails when every repetition violates the
+// spacing, while the deterministic properties (every attempt succeeds, the
+// provider semaphore saturates) stay strict on each repetition.
+func TestTokenRefreshService_SaturatedProviderPreservesConcurrencyAndActualQPSStartSpacing(t *testing.T) {
+	const scenarioRuns = 3
+	violations := make([]string, 0, scenarioRuns)
+	for run := 1; run <= scenarioRuns; run++ {
+		violation := runSaturatedProviderQPSScenario(t)
+		if violation == "" {
+			return
+		}
+		t.Logf("scenario run %d/%d: %s", run, scenarioRuns, violation)
+		violations = append(violations, violation)
+	}
+	require.Failf(t, "QPS start spacing violated in every scenario run", "%s", strings.Join(violations, "; "))
 }
 
 func TestTokenRefreshService_ProductionPathRatesOnlyActualRefreshAfterSameAccountContention(t *testing.T) {
