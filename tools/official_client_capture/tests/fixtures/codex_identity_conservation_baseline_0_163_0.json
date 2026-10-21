@@ -1,11 +1,11 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "2bc56dd77594c7f067d47d062b29db76686f877b",
+ "source_commit": "ae11ff2c60d814c754d2f1ab865e84d10cdd6968",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "e03d238a15870c0ac4f273e1bae66ebc4646c5be1a5ae5da4a27eaea878020ab",
+ "files_sha256": "5fd345e7bac99926a186bd312aa7ef4fedb890923f6bed57803d629bb3006081",
  "wire_producer_sha256": "8f0f9256ffa976fa780127e54cb7eee8eace7791ea8c8bc3d417a16835c5bfe2",
- "evidence_semantics_sha256": "932a6a65997e82045cfa3a3fe8fdf061bee42045a4b27439a996702d86d7c8c7",
+ "evidence_semantics_sha256": "00786b9372974da2bb933d3cdaf78e605191458ab9940df03bd5f3fb82969959",
  "control_sha256": "1fcc8067eab5b4792399830086b500590565834a281ba1eee3e9fb4aa9691ce2",
  "orchestrator_closure_sha256": {
   "wire_producer": "44ae71c952a273a9941a867272ee1ce1411ebf18622c94e8db684bde7e6f91b8",
@@ -1231,11 +1231,11 @@
   },
   {
    "path": "candidate_test_fact_map_0_163_0.json",
-   "sha256": "d02db61ba130d45af55b52c1946365045bcf1c42f025b40f3f39c68777555329"
+   "sha256": "299ef7356b5a409d03a94883ac02e64700998e6346ce0eee637453ac66c07b8a"
   },
   {
    "path": "candidate_test_trace.py",
-   "sha256": "5d3f517cafc01c1085f512b6be3845cf343da7519f12d1cba73126446983cba0"
+   "sha256": "c89d246b34ab359f3f4deb2ff4db1a19676141af6c904cc363032829c3a83ca5"
   },
   {
    "path": "candidate_test_trace_receipt.schema.json",
