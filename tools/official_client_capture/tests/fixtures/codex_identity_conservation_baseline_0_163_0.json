@@ -1,10 +1,10 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "ee61713abfa32bf22ef7f9e0a1c5f9b0dad4450b",
+ "source_commit": "3709a4964d2c6e38d5350c5a0e6504d8c7ad9dfc",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "ef21d82a9c80d98f21e27b8b39c3bc5eea3cde886fbf1bb1b0b543fd0c4110e9",
- "wire_producer_sha256": "8f0f9256ffa976fa780127e54cb7eee8eace7791ea8c8bc3d417a16835c5bfe2",
+ "files_sha256": "5a528cf646789ffa8f1dea936707240a44a6390a78e50cd2d4e885b667c650b2",
+ "wire_producer_sha256": "9f18a4fa7cb22d1f90f37d24a2416fbf15257305db28a746d8650e6f379ef0a7",
  "evidence_semantics_sha256": "3b307dbcdd389e2301d5ddc4569fc8e726fff519d76abe62d638b0cccc8065d7",
  "control_sha256": "bffcd1c70c9f65bc8ae39ea60435e0000ac5ecab14fa53347d0d08f1fb17384e",
  "orchestrator_closure_sha256": {
@@ -2683,11 +2683,11 @@
   },
   {
    "path": "run_candidate_aux_capture.sh",
-   "sha256": "e0397334ac610aae767ec6f408a975298b33739e8efe892aa34117f0afba44be"
+   "sha256": "cca16a36b4be6fb195c028d03e84e02aa95259e25191d44995088ed8a4e21138"
   },
   {
    "path": "run_candidate_core_capture.sh",
-   "sha256": "2d633175f8193fccfa392716be57d78280b80304ec211145a7d3ed5c0e34bd09"
+   "sha256": "65045ba465483998f8536df9b7b2a60fb20798c34275335cbe6a49519b003fcc"
   },
   {
    "path": "run_candidate_trace_test.sh",
@@ -2707,11 +2707,11 @@
   },
   {
    "path": "run_h1_wire_probe.sh",
-   "sha256": "4d736c8a390d9c6862c73fb001155b34d0dc9afec084491810df252f7772aa4b"
+   "sha256": "f06d8e554430398831a3cae3051d34dac896224b8e132ea47fe1be63784dabed"
   },
   {
    "path": "run_images_wire_probe.sh",
-   "sha256": "b071a566f1348a9f3a45152be1ac8c4426f2114033833d6509fd2be248782e7f"
+   "sha256": "2e784cdfedd7a6d769836e5b09d7aaa61954bce0d9a721ddf96c2da313a24c22"
   },
   {
    "path": "run_official_codex_compact_capture.sh",
@@ -2731,7 +2731,7 @@
   },
   {
    "path": "run_sub2api_openai_mitm_matrix.sh",
-   "sha256": "14df4df1a2731d46f70270049a27b3a9eb5b5d0e2c828476c866ad6109386f75"
+   "sha256": "45f7d86f9f76f918221a35392c8dd296f1ca0925bd3c5d441c8cfb6973d304b0"
   },
   {
    "path": "runtime_host_receipt.py",
