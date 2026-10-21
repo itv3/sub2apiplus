@@ -2756,8 +2756,13 @@ def load_approved_recovery_preview(
     phase: str,
     candidate_id: str | None,
     recovery_revision: str | None = None,
+    consume_authorization: bool = True,
 ) -> dict[str, Any]:
-    """resume 衔接：只接受当前 Campaign 内、已批准、工具身份仍相同的恢复预览（段模式按 ar<k> 定位）。"""
+    """resume 衔接：只接受当前 Campaign 内、已批准、工具身份仍相同的恢复预览（段模式按 ar<k> 定位）。
+
+    ``consume_authorization=False`` 供零请求预览只读复算用：账本必须已经授权消费过这份预览，
+    绝不在这里追加 ``recovery_authorized`` 事件。
+    """
 
     adapter = _adapter()
     if not isinstance(preview_path, Path):
@@ -2869,6 +2874,11 @@ def load_approved_recovery_preview(
                 current_campaign_head = _ledger_facts(ledger_dir, now=_utc_now())
                 existing_sha256 = _ledger_event_sha256(ledger_dir, event_id)
                 if current_campaign_head.get("status") in authorizable:
+                    if not consume_authorization:
+                        raise ReconcilerError(
+                            "恢复预览尚未被授权消费：先执行 reconcile-attempt --authorize-recovery-preview，"
+                            "零请求预览不代为授权"
+                        )
                     if (
                         current_campaign_head.get("head_sequence") != sequence
                         or current_campaign_head.get("head_sha256")
@@ -6067,6 +6077,67 @@ def reconcile_staging_abort(
         result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
         result["next_command"] = stop["next_action"]
     return result
+
+
+@_client_entry
+def authorized_orphan_recovery_preview(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> dict[str, Any] | None:
+    """零请求恢复预览（``resume --rerun-failed --preview-recovery``）承接已对账的孤儿 attempt。
+
+    孤儿 attempt 没有 attempt.json，resume 的失败源选取（``_latest_failed_attempt_for_identity``）取不到可验证源，
+    它的补跑闭集只由已批准的恢复预览冻结（B0）。真实补跑经 ``--recovery-preview`` 拿到这份预览；而监督器协议把零请求
+    预览命令逐字固定、没有预览路径参数，所以预览模式由本函数在 Campaign 内定位同一份预览：该阶段（候选则该候选）
+    最新的 attempt 是已对账的孤儿，且其最新的已批准预览已被授权消费时，返回与真实补跑同一口径校验过的载荷；
+    不适用（最新 attempt 带 attempt.json、没有对账收据、没有已批准预览）时返回 None，resume 沿用原有拒绝。
+    只读：不追加账本事件，预览尚未授权消费就拒绝，绝不在零请求预览里代为授权。
+    """
+
+    adapter = _adapter()
+    attempts = adapter.orchestrator._ordered_capture_attempts(campaign_dir, phase, candidate_id)
+    if not attempts:
+        return None
+    latest_root = attempts[0][0]
+    attempt_path = latest_root / "attempt.json"
+    if attempt_path.exists() or attempt_path.is_symlink():
+        return None
+    if attempt_reconciled_terminal(campaign_dir, latest_root.name) is None:
+        return None
+    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{latest_root.name}")
+    if not receipt_dir.is_dir():
+        return None
+    approvals: dict[int, dict[str, Any]] = {}
+    for child in sorted(receipt_dir.iterdir()):
+        if APPROVAL_RE.fullmatch(child.name):
+            payload = _read_json(child, "恢复批准收据")
+            index = payload.get("preview_index")
+            if isinstance(index, int) and not isinstance(index, bool):
+                approvals[index] = payload
+    chosen: Path | None = None
+    chosen_index = 0
+    for child in sorted(receipt_dir.iterdir()):
+        match = PREVIEW_RE.fullmatch(child.name)
+        if not match:
+            continue
+        index = int(match.group(1))
+        approval = approvals.get(index)
+        if approval is None or index <= chosen_index:
+            continue
+        if approval.get("approved_sha256") != _read_json(child, "恢复预览").get("review_sha256"):
+            continue
+        chosen, chosen_index = child, index
+    if chosen is None:
+        return None
+    return load_approved_recovery_preview(
+        campaign_dir,
+        chosen,
+        phase=phase,
+        candidate_id=candidate_id,
+        consume_authorization=False,
+    )
 
 
 def attempt_reconciled_terminal(campaign_dir: Path, attempt_id: str) -> dict[str, Any] | None:

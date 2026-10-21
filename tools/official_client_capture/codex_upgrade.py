@@ -56856,6 +56856,19 @@ def _resume_campaign(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
                 )
             except reconciler.ReconcilerError as error:
                 raise ConfigurationError(str(error)) from error
+        elif _requires_complete_vc_artifacts(manifest) and getattr(arguments, "recovery_preview_payload", None) is None:
+            # 零请求预览没有 --recovery-preview 路径：已对账的孤儿 attempt（无 attempt.json）取不到可验证的失败源，
+            # 闭集只由已批准且已授权的恢复预览冻结，按真实补跑同一口径只读取回这份预览（最新 attempt 不是已对账孤儿时为 None）。
+            from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+            try:
+                arguments.recovery_preview_payload = reconciler.authorized_orphan_recovery_preview(
+                    arguments.campaign_dir,
+                    phase=phase,
+                    candidate_id=arguments.candidate_id if phase == "candidate" else None,
+                )
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(str(error)) from error
         result = _run_capture_attempt(arguments, phase)
         return result, 0 if result.get("status") in CAPTURE_SUCCESS_STATUSES else 2
     if current == "planned":

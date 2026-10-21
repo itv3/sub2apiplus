@@ -21890,6 +21890,89 @@ class CodexUpgradeTest(unittest.TestCase):
                 with self.assertRaisesRegex(reconciler.ReconcilerError, "工具身份已变化"):
                     reconciler.load_approved_recovery_preview(campaign_dir, preview_path, phase="official", candidate_id=None)
 
+    def test_b0_zero_request_preview_adopts_authorized_orphan_preview(self) -> None:
+        """零请求恢复预览（--preview-recovery）没有预览路径参数：已对账孤儿的闭集取同一份已批准且已授权的预览。
+
+        VC-5 候选采集在 Job 循环中被截停会留下没有 attempt.json 的孤儿 attempt；监督器协议规定失败批次之后只能是零请求预览，
+        而失败源选取跳过没有 attempt.json 的 attempt，预览恒报"没有唯一可验证的失败源"。预览模式因此按真实补跑同一口径
+        取回已批准预览；预览尚未授权消费时拒绝（不代为授权），最新 attempt 不是已对账孤儿时不适用。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        def preview_resume(campaign_dir: Path) -> dict[str, object]:
+            captured: dict[str, object] = {}
+
+            def fake_run(arguments: argparse.Namespace, phase: str) -> dict[str, object]:
+                captured["phase"] = phase
+                captured["payload"] = getattr(arguments, "recovery_preview_payload", None)
+                return {"status": "recovery_plan"}
+
+            with mock.patch.object(codex_upgrade, "_run_capture_attempt", side_effect=fake_run):
+                codex_upgrade._resume_campaign(
+                    argparse.Namespace(
+                        campaign_dir=campaign_dir,
+                        candidate_id=None,
+                        rerun_failed=True,
+                        recovery_preview=None,
+                        preview_recovery=True,
+                        assertions=None,
+                        external_gate_root=None,
+                        external_gate_receipt=None,
+                    )
+                )
+            return captured
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            # 采集失败的真实形态：Campaign 账本处于 recovery_required，等待恢复批准被授权消费。
+            codex_upgrade_timing_ledger.append_event(
+                fixture["timing_ledger"],
+                event_id="post-reservation-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-attempt",
+            )
+            attempt_id = self._b0_orphan_attempt(fixture)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable")
+            preview = result["recovery_preview"]
+            preview_path = Path(result["recovery_preview_path"])
+            self.assertFalse(preview["source_attempt_receipt_exists"])
+            self.assertEqual(preview["campaign_ledger_head"]["status"], "recovery_required")
+
+            # 预览未批准：不适用（None），resume 沿用失败源拒绝。
+            self.assertIsNone(preview_resume(campaign_dir)["payload"])
+            reconciler.approve_recovery_preview(campaign_dir, attempt_id, approve_sha256=preview["review_sha256"])
+            # 已批准但尚未授权消费：零请求预览不代为授权。
+            events_before = self._b0_ledger_events(fixture["timing_ledger"])
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未被授权消费"):
+                preview_resume(campaign_dir)
+            self.assertEqual(self._b0_ledger_events(fixture["timing_ledger"]), events_before)
+
+            reconciler.authorize_recovery_preview(campaign_dir, attempt_id, preview_path)
+            events_authorized = self._b0_ledger_events(fixture["timing_ledger"])
+            captured = preview_resume(campaign_dir)
+            self.assertEqual(captured["phase"], "official")
+            payload = captured["payload"]
+            self.assertEqual(payload["execute_job_ids"], ["official-test"])
+            self.assertEqual(payload["reuse_job_ids"], [])
+            self.assertFalse(payload["source_attempt_receipt_exists"])
+            self.assertEqual(payload["approval"]["approved_sha256"], preview["review_sha256"])
+            self.assertEqual(payload["preview_path"], str(preview_path.resolve()))
+            # 只读：重复预览不追加任何账本事件。
+            preview_resume(campaign_dir)
+            self.assertEqual(self._b0_ledger_events(fixture["timing_ledger"]), events_authorized)
+
+            # 更新的 attempt 出现后，孤儿不再是最新 attempt：不适用。
+            self._b0_orphan_attempt(fixture)
+            self.assertIsNone(
+                reconciler.authorized_orphan_recovery_preview(campaign_dir, phase="official", candidate_id=None)
+            )
+
     def test_b0_reconcile_attempt_same_root_cause_limit_stops_the_line(self) -> None:
         """同根因第二次失败使总账计数到达上限：stage_abandoned、stop_the_line 与 campaign_terminal。"""
 
