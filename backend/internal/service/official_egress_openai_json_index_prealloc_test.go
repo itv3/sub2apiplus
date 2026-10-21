@@ -82,6 +82,9 @@ func TestOfficialJSONRawIndexPreallocatesNodeTable(t *testing.T) {
 	t.Logf("正文 %.1f MiB：%d 个节点，节点表 %.1f MiB，建索引共分配 %.1f MiB",
 		float64(len(body))/(1<<20), len(index.nodes), float64(nodeTable)/(1<<20), float64(allocated)/(1<<20))
 	require.Equal(t, cap(index.nodes), len(index.nodes))
-	// 节点表一次到位；其余为各对象的成员表、数组元素表等小块，合计不超过节点表本身。
-	require.Less(t, allocated, nodeTable*2, "建索引分配 %d 字节，不得再是节点表（%d 字节）的数倍", allocated, nodeTable)
+	// 节点表一次到位；其余为各对象的成员表、数组元素表等小块，合计与节点表同量级（实测约 1.0～1.03 倍）。
+	// 上限取 3 倍而不是 2 倍：2 倍恰好贴着"节点表＋小块"的正常值（ARM64 整机满载时 sync.Pool 被其它用例触发的 GC 清空，
+	// 小块多分配约 3% 就越线，实测 1345296 对 1323680）。回归（节点表从 64 起按约 1.25 倍反复扩容）累计分配约为节点表的
+	// 5 倍再加小块，约 6 倍，3 倍仍然响亮失败。
+	require.Less(t, allocated, nodeTable*3, "建索引分配 %d 字节，不得再是节点表（%d 字节）的数倍", allocated, nodeTable)
 }
