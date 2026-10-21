@@ -167,13 +167,29 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
 }
 chmod 600 "$tls_dir"/*
 
+# 监督器按完整容器 ID 钉住 docker exec 目标（C-04）。64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器解析不了，
+# 写进代理配置也连不上。所以 Sub2API 一侧用的主机名一律取这个容器实例的真实名称；没钉 ID 时就是 CAPTURE_CONTAINER 本身。
+resolve_capture_host() {
+  local resolved=$capture_container
+  if [[ $capture_container =~ ^[0-9a-f]{64}$ ]]; then
+    resolved=$(docker inspect -f '{{.Name}}' "$capture_container" 2>/dev/null || true)
+    resolved=${resolved#/}
+  fi
+  if [[ ! $resolved =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
+    echo "无法取得采集容器 $capture_container 在共享网络里的主机名。" >&2
+    exit 1
+  fi
+  capture_host=$resolved
+}
+resolve_capture_host
+
 # 探针跑在 capture-cli 容器内：宿主机 443 已被占用，而 capture-cli 与 Sub2API 共享
 # 业务网络。capture-cli 可能同时加入抓包专网，不能按 Docker map 的迭代顺序取第一个
 # IP；必须从 Sub2API 容器内解析别名，得到两者真正可达的共享网络地址。
-probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_container" 2>/dev/null \
+probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_host" 2>/dev/null \
   | awk 'NR == 1 {print $1}' || true)
 if [[ ! $probe_ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-  echo "无法从 $service_container 解析 $capture_container 的共享网络 IPv4 地址。" >&2
+  echo "无法从 $service_container 解析 $capture_host 的共享网络 IPv4 地址。" >&2
   exit 1
 fi
 

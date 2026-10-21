@@ -413,17 +413,20 @@ class MitmMatrixProxyHostTest(unittest.TestCase):
 
     两处不一致时 DNS 检查照样通过，真正出站却解析不到，账号被判 upstream transport
     error 而熔断，后续 job 一路 503／WS 1013——症状离根因很远（k54）。
+    监督器按完整容器 ID 钉住 CAPTURE_CONTAINER 之后（C-04），这个变量改为 ``capture_host``
+    （该容器实例的真实名称），ID 不能当主机名用。
     """
 
-    def test_proxy_row_uses_capture_container_variable(self) -> None:
+    def test_proxy_row_uses_the_reachability_check_host_variable(self) -> None:
         source = (
             Path(__file__).resolve().parents[1] / "run_sub2api_openai_mitm_matrix.sh"
         ).read_text()
         insert = next(
             line for line in source.splitlines() if "insert into proxies" in line
         )
-        self.assertIn("'$capture_container'", insert)
+        self.assertIn("'$capture_host'", insert)
         self.assertNotIn("'capture-cli'", insert)
+        self.assertIn('getent hosts "$capture_host"', source)
 
 
 class MitmMatrixCodexIsolationTest(unittest.TestCase):

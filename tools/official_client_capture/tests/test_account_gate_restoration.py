@@ -8,7 +8,9 @@ accounts —— k15～k18、k23 的候选采集都因此从中途开始连续失
 
 from __future__ import annotations
 
+import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -197,7 +199,7 @@ class WireProbeRuntimeSelectionTest(unittest.TestCase):
         for name, source in self.sources.items():
             with self.subTest(script=name):
                 self.assertIn(
-                    'docker exec "$service_container" getent ahostsv4 "$capture_container"',
+                    'docker exec "$service_container" getent ahostsv4 "$capture_host"',
                     source,
                 )
                 self.assertNotIn(
@@ -240,3 +242,110 @@ class WireProbeRuntimeSelectionTest(unittest.TestCase):
                 self.assertIn("count(*) filter (where a.id = $account_id)", source)
                 self.assertIn('eligible_shape != "1|1"', source)
                 self.assertIn("单账号隔离分组", source)
+
+
+HOST_SCRIPTS = (
+    "run_h1_wire_probe.sh",
+    "run_images_wire_probe.sh",
+    "run_candidate_core_capture.sh",
+    "run_candidate_aux_capture.sh",
+    "run_sub2api_openai_mitm_matrix.sh",
+)
+PINNED_CONTAINER_ID = "c377e75c1fc3a98272be51816e2fd741cdf9a29e5d9c42dd12ab53fbcb875ea9"
+
+
+class CaptureHostResolutionTest(unittest.TestCase):
+    """监督器按完整容器 ID 钉住 CAPTURE_CONTAINER（C-04）后，Sub2API 一侧的主机名必须取容器真实名称。
+
+    64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器里 ``getent hosts`` 必败，写进代理配置也连不上。
+    candidate-core-mitm 因此在首检上确定性失败（0.163 VC-5 批次 22、27）；此前没有任何测试用过 ID 形态的
+    CAPTURE_CONTAINER，所以这个缺陷从 C-04 起一直潜伏。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        root = Path(__file__).parents[1]
+        cls.sources = {
+            name: (root / name).read_text(encoding="utf-8") for name in HOST_SCRIPTS
+        }
+
+    @staticmethod
+    def _function_source(source: str) -> str:
+        start = source.index("resolve_capture_host() {")
+        return source[start : source.index("\n}\n", start) + 3]
+
+    def test_container_value_is_never_used_as_a_hostname(self) -> None:
+        for name, source in self.sources.items():
+            with self.subTest(script=name):
+                for forbidden in (
+                    'getent hosts "$capture_container"',
+                    'getent ahostsv4 "$capture_container"',
+                    "'$capture_container',",
+                    'PROXY_HOST: "$capture_container"',
+                ):
+                    self.assertNotIn(forbidden, source)
+                self.assertEqual(source.count("resolve_capture_host() {"), 1)
+                self.assertEqual(source.count("\nresolve_capture_host\n"), 1)
+                call = source.index("\nresolve_capture_host\n")
+                # 最早的运行期使用是 getent 解析；其余使用（代理配置、Live attestation 注入）都在它之后执行。
+                getent_use = re.search(r'getent (hosts|ahostsv4) "\$capture_host"', source)
+                self.assertIsNotNone(getent_use)
+                self.assertLess(call, getent_use.start())
+                proxy_use = re.search(r"values \('\$proxy_name','http','\$capture_host'", source)
+                if proxy_use is not None:
+                    self.assertLess(call, proxy_use.start())
+                if "deploy_with_live_attestation()" in source:
+                    self.assertLess(call, source.index("if ! deploy_with_live_attestation; then"))
+
+    def test_all_scripts_share_one_resolution_function(self) -> None:
+        functions = {name: self._function_source(source) for name, source in self.sources.items()}
+        self.assertEqual(len(set(functions.values())), 1, functions.keys())
+
+    def _resolve(self, capture_container: str, docker_body: str):
+        function = self._function_source(self.sources[HOST_SCRIPTS[0]])
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            docker = fake_bin / "docker"
+            docker.write_text("#!/bin/bash\n" + docker_body, encoding="utf-8")
+            docker.chmod(0o700)
+            script = (
+                'set -euo pipefail\ncapture_container="$1"\n'
+                + function
+                + 'resolve_capture_host\nprintf "%s\\n" "$capture_host"\n'
+            )
+            return subprocess.run(
+                ["/bin/bash", "-c", script, "bash", capture_container],
+                text=True,
+                capture_output=True,
+                env={"PATH": f"{fake_bin}:/usr/bin:/bin", "HOME": tmp},
+                check=False,
+            )
+
+    def test_pinned_id_resolves_to_the_real_container_name(self) -> None:
+        result = self._resolve(
+            PINNED_CONTAINER_ID,
+            'if [[ $1 == inspect && $4 == "$PINNED" ]]; then printf "/capture-cli\\n"; exit 0; fi\nexit 1\n'.replace(
+                "$PINNED", PINNED_CONTAINER_ID
+            ),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "capture-cli")
+
+    def test_plain_name_is_used_as_is_without_calling_docker(self) -> None:
+        result = self._resolve("capture-cli", "echo called >&2\nexit 9\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "capture-cli")
+        self.assertEqual(result.stderr, "")
+
+    def test_unresolvable_pinned_id_fails_closed(self) -> None:
+        result = self._resolve(PINNED_CONTAINER_ID, "exit 1\n")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("无法取得采集容器", result.stderr)
+
+    def test_invalid_name_fails_closed(self) -> None:
+        for value in ("bad name", "-leading-dash", "a" * 64 + "!"):
+            with self.subTest(value=value):
+                result = self._resolve(value, "exit 9\n")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("无法取得采集容器", result.stderr)

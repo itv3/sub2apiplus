@@ -407,7 +407,23 @@ if [[ $current_proxy != NULL || $current_fallback != NULL ]]; then
   echo "账号 #$codex_account_id 已绑定代理或 fallback，拒绝覆盖。" >&2
   exit 1
 fi
-if ! docker exec "$service_container" getent hosts "$capture_container" >/dev/null; then
+# 监督器按完整容器 ID 钉住 docker exec 目标（C-04）。64 位十六进制 ID 超过 DNS 标签 63 位的上限：Sub2API 容器解析不了，
+# 写进代理配置也连不上。所以 Sub2API 一侧用的主机名一律取这个容器实例的真实名称；没钉 ID 时就是 CAPTURE_CONTAINER 本身。
+resolve_capture_host() {
+  local resolved=$capture_container
+  if [[ $capture_container =~ ^[0-9a-f]{64}$ ]]; then
+    resolved=$(docker inspect -f '{{.Name}}' "$capture_container" 2>/dev/null || true)
+    resolved=${resolved#/}
+  fi
+  if [[ ! $resolved =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]; then
+    echo "无法取得采集容器 $capture_container 在共享网络里的主机名。" >&2
+    exit 1
+  fi
+  capture_host=$resolved
+}
+resolve_capture_host
+
+if ! docker exec "$service_container" getent hosts "$capture_host" >/dev/null; then
   echo "Sub2API 容器无法解析 capture-cli。" >&2
   exit 1
 fi
@@ -425,11 +441,11 @@ if [[ $keeper_was_running == true ]]; then
 fi
 
 proxy_id=$(
-  # host 必须用 $capture_container，不能写死容器名：第 135 行的 DNS 可达性检查用的就是
+  # host 必须用 $capture_host（该容器实例的真实名称），不能写死容器名：第 135 行的 DNS 可达性检查用的就是
   # 它，两处不一致时检查照样通过，而服务真正出站时解析不到写死的名字，报
   # `connect to proxy: lookup capture-cli: no such host`，账号随即被判 upstream
   # transport error 而临时熔断——后续 job 全部拿到 503／WS 1013，看起来像时序问题。
-  db_query "insert into proxies (name,protocol,host,port,status,fallback_mode) values ('$proxy_name','http','$capture_container',18080,'active','none') returning id"
+  db_query "insert into proxies (name,protocol,host,port,status,fallback_mode) values ('$proxy_name','http','$capture_host',18080,'active','none') returning id"
 )
 if [[ ! $proxy_id =~ ^[0-9]+$ ]]; then
   echo "创建临时代理失败。" >&2
