@@ -93,7 +93,8 @@ func TestGuardEvaluatorGlobalBulkheadIsNonBlocking(t *testing.T) {
 	start := time.Now()
 	_, err := evaluator.Evaluate(context.Background(), cfg, PromptSnapshot{ScanText: "two", PromptLength: 3})
 	require.Error(t, err)
-	require.Less(t, time.Since(start), 200*time.Millisecond)
+	// The blocked variant would wait out the 2000ms endpoint timeout; 1500ms still proves non-blocking on a loaded machine.
+	require.Less(t, time.Since(start), 1500*time.Millisecond)
 	require.Equal(t, int64(1), metrics.Snapshot().BulkheadFull)
 	close(release)
 	require.NoError(t, <-done)
@@ -123,7 +124,8 @@ func TestGuardEvaluatorPerNodeBulkheadIsNonBlocking(t *testing.T) {
 	started := time.Now()
 	_, err := evaluator.Evaluate(context.Background(), cfg, PromptSnapshot{ScanText: "two", PromptLength: 3})
 	require.Error(t, err)
-	require.Less(t, time.Since(started), 200*time.Millisecond)
+	// The blocked variant would wait out the 2000ms endpoint timeout; 1500ms still proves non-blocking on a loaded machine.
+	require.Less(t, time.Since(started), 1500*time.Millisecond)
 	require.GreaterOrEqual(t, metrics.Snapshot().BulkheadFull, int64(1))
 	close(release)
 	require.NoError(t, <-done)
@@ -203,7 +205,7 @@ func TestGuardEvaluatorFlagSharedDeadlineFailClosedAndContextCancel(t *testing.T
 			calls++
 			if endpoint.ID == "first" {
 				select {
-				case <-time.After(35 * time.Millisecond):
+				case <-time.After(20 * time.Millisecond):
 					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
 				case <-ctx.Done():
 					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: true, Cause: ctx.Err()}
@@ -216,19 +218,21 @@ func TestGuardEvaluatorFlagSharedDeadlineFailClosedAndContextCancel(t *testing.T
 		evaluator := newGuardEvaluator(scanner, nil, metrics, 2, 2)
 		started := time.Now()
 		_, err := evaluator.Evaluate(context.Background(), guardConfig(
-			ActiveEndpoint{ID: "first", Enabled: true, TimeoutMS: 70, InputLimit: 100},
-			ActiveEndpoint{ID: "second", Enabled: true, TimeoutMS: 500, InputLimit: 100},
+			ActiveEndpoint{ID: "first", Enabled: true, TimeoutMS: 500, InputLimit: 100},
+			ActiveEndpoint{ID: "second", Enabled: true, TimeoutMS: 10000, InputLimit: 100},
 		), PromptSnapshot{ScanText: "deadline", PromptLength: 8})
 		elapsed := time.Since(started)
 		require.Error(t, err)
 		require.Equal(t, 2, calls)
 		// The bound only has to prove the failover shared the first endpoint's
-		// 70ms deadline instead of taking the second endpoint's own 500ms one.
-		// An unshared deadline lands at ~535ms, so 350ms still fails loudly
-		// while leaving room for scheduler delay on a busy CI machine. A
-		// tighter bound made this test flaky, not stricter.
-		require.Less(t, elapsed, 350*time.Millisecond)
-		require.GreaterOrEqual(t, elapsed, 50*time.Millisecond)
+		// 500ms deadline instead of taking the second endpoint's own 10s one.
+		// An unshared deadline lands at ~10s, so 3s still fails loudly while
+		// leaving room for scheduler delay on a fully loaded machine: the first
+		// endpoint fails after 20ms, so the failover (calls == 2) only goes
+		// missing if the scheduler stalls for most of the 500ms shared deadline.
+		// The earlier 70ms/35ms/350ms version flaked under full CI load.
+		require.Less(t, elapsed, 3*time.Second)
+		require.GreaterOrEqual(t, elapsed, 400*time.Millisecond)
 		require.Equal(t, int64(1), metrics.Snapshot().Failovers)
 		require.Equal(t, int64(1), metrics.Snapshot().Timeouts)
 	})

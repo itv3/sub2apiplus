@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -58,6 +59,19 @@ func TestPrepareOpenAIWSHTTPBridgeSharedDecodeMatchesLegacy(t *testing.T) {
 			require.Equal(t, want, got, "桥接准备必须保持 json.Marshal 原有键序、HTML 转义与数字字面值")
 		})
 	}
+}
+
+// officialEgressBridgeCreatedAtPattern 匹配转发给 WS 客户端的响应事件里的 created_at 秒级时间戳。
+var officialEgressBridgeCreatedAtPattern = regexp.MustCompile(`"created_at":\s*\d+`)
+
+// normalizeOfficialEgressBridgeCreatedAt 把事件里的 created_at 归一化成 0：legacy／current 两次运行先后各取一次墙钟，
+// 两次之间跨过整秒时值差 1，这与桥接的字节行为无关（生产代码用墙钟生成该字段），不归一化就会随机红。
+func normalizeOfficialEgressBridgeCreatedAt(messages [][]byte) [][]byte {
+	normalized := make([][]byte, len(messages))
+	for i, message := range messages {
+		normalized[i] = officialEgressBridgeCreatedAtPattern.ReplaceAll(message, []byte(`"created_at":0`))
+	}
+	return normalized
 }
 
 func TestOfficialEgressWSHTTPBridgeMatchesLegacyWire(t *testing.T) {
@@ -133,7 +147,7 @@ func TestOfficialEgressWSHTTPBridgeMatchesLegacyWire(t *testing.T) {
 			current, currentMessages := run(false)
 			require.NoError(t, legacy.err)
 			require.NoError(t, current.err)
-			require.Equal(t, legacyMessages, currentMessages, "转发给 WS 客户端的事件保持一致")
+			require.Equal(t, normalizeOfficialEgressBridgeCreatedAt(legacyMessages), normalizeOfficialEgressBridgeCreatedAt(currentMessages), "转发给 WS 客户端的事件保持一致（created_at 墙钟秒数除外）")
 			require.NotEmpty(t, current.calls)
 			require.Len(t, current.calls, len(legacy.calls))
 			if fixture.retry {
