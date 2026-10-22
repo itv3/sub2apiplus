@@ -1,0 +1,45 @@
+{
+  "base_commit": "c26cf8bba621e1a4d58a2c3ca8efbac4124225fd",
+  "changed_path_count": 1,
+  "current_commit": "245bf1d2b26f128adac6c70c0a19a5d11632b116",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6415,
+  "frozen_path_count": 2263,
+  "identity_sha256": "e25d00e386a4f3795b5e8f283b5aa52e09dd0ffe2854e484f7fda7b305f4f8e2",
+  "issued_at_utc": "2026-10-22T03:15:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01630-alloc-measure-helper-20261022-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_uuid_test.go",
+      "predecessor_sha256s": [
+        "bb1b2ae3256c6198e4a5d77ff6bdb47c4557ea5543e83f59e9f92a69e940e814"
+      ],
+      "reason": "满载下共用的分配测量辅助函数读数被后台协程抬高（后台验证 #10 的 TestNewOpenAIRequestViewAllocatesOnlyExtractedFields：56664 对 4096）：测量期间只留一个 P，并补回归用例；official_egress_uuid_test.go 属 0.151 Formal 恢复 addition 冻结集合，登记冻结承接 path=backend/internal/service/official_egress_uuid_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "fc79b1fa447288e89e757eb4e4a82b06d3fb49007e5adc4f8f563c47c6f8c73d"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
