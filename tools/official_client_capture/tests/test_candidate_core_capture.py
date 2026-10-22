@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -477,3 +478,118 @@ class MitmMatrixCodexIsolationTest(unittest.TestCase):
         self.assertIn("pcap_scanned_bytes=0", self.source)
         self.assertIn("preserve_active_failure()", self.source)
         self.assertNotIn("WS pcap", self.source)
+
+
+def _zstd_compress(data: bytes) -> bytes:
+    try:
+        import zstandard
+
+        return zstandard.ZstdCompressor().compress(data)
+    except ImportError:
+        result = subprocess.run(["zstd", "-c"], input=data, capture_output=True, check=False)
+        if result.returncode != 0:
+            raise unittest.SkipTest("没有 zstd 压缩能力")
+        return result.stdout
+
+
+def _request(path: str, headers: list[str], body: bytes = b"") -> bytes:
+    head = f"POST {path} HTTP/1.1\r\n" + "".join(f"{line}\r\n" for line in headers)
+    return head.encode() + b"\r\n" + body
+
+
+LITE_HEADERS = [
+    "version: 0.163.0",
+    "content-encoding: zstd",
+    "x-openai-internal-codex-responses-lite: true",
+]
+
+
+class CoreCaptureLiteMainTrackChecksTest(unittest.TestCase):
+    """0.163.0 起主线模型是 Lite：A04 的 Responses 请求全是 zstd 压缩的 Lite 请求，A10 的 trigger 要解压后再数。
+
+    候选核心采集脚本收尾处原先把 A04 当“非 Lite 明文”（出现 zstd 就失败），并在压缩后的原始字节里数 A10 的
+    compaction_trigger；主线改 Lite 时漏改了这个脚本，VC-5 批次 29 的 candidate-frozen-core 因此失败。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        source = (Path(__file__).parents[1] / "run_candidate_core_capture.sh").read_text(encoding="utf-8")
+        start = source.index("def _decoded_request_body(data):")
+        end = source.index("\nPY\n\ncapture_status=complete", start)
+        cls.block = source[start:end]
+        cls.source = source
+
+    def test_old_non_lite_plaintext_assertion_is_gone(self) -> None:
+        self.assertNotIn("A04 非 Lite 明文场景意外出现 zstd", self.source)
+        self.assertIn("A04 主线 Lite 样本应为 zstd 压缩的 Lite 请求", self.source)
+
+    def _run(self, a04: list[bytes], a10: list[bytes]) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for scenario, requests in (("A04", a04), ("A10", a10)):
+                relay = root / "scenarios" / scenario / "relay"
+                relay.mkdir(parents=True)
+                for index, data in enumerate(requests, 1):
+                    (relay / f"conn{index:03d}.client_to_upstream.bin").write_bytes(data)
+            exec(compile(self.block, "core-capture-tail", "exec"), {"root": root, "Path": Path})
+
+    def _lite_post(self, text: bytes) -> bytes:
+        body = _zstd_compress(text)
+        return _request("/backend-api/codex/responses", LITE_HEADERS + [f"content-length: {len(body)}"], body)
+
+    def test_lite_zstd_a04_and_decompressed_a10_triggers_pass(self) -> None:
+        # 可压缩的大正文：压缩后原始字节里只留一份字面量，三个请求合计看不到四个；解压后才有 120 个。
+        needle = b'"type":"compaction_trigger"'
+        a10 = [self._lite_post(b"{" + (needle + b",") * 40 + b"}") for _ in range(3)]
+        self.assertLess(sum(raw.count(needle) for raw in a10), 4)
+        self._run(
+            a04=[
+                _request("/backend-api/codex/models?client_version=0.163.0", ["version: 0.163.0"]).replace(
+                    b"POST", b"GET", 1
+                ),
+                self._lite_post(b'{"model":"gpt-6.1-sol"}'),
+            ],
+            a10=a10,
+        )
+
+    def test_chunked_zstd_bodies_are_decoded_before_counting(self) -> None:
+        trigger = b'{"input":[{"type":"compaction_trigger"}]}'
+        compressed = _zstd_compress(trigger)
+        chunked = (
+            f"{len(compressed):x}\r\n".encode() + compressed + b"\r\n0\r\n\r\n"
+        )
+        data = _request(
+            "/backend-api/codex/responses",
+            LITE_HEADERS + ["transfer-encoding: chunked"],
+            chunked,
+        )
+        self._run(a04=[self._lite_post(b"{}")], a10=[data] * 4)
+
+    def test_plaintext_a04_post_fails_closed(self) -> None:
+        plain = _request("/backend-api/codex/responses", ["version: 0.163.0"], b"{}")
+        with self.assertRaises(SystemExit) as caught:
+            self._run(a04=[plain], a10=[self._lite_post(b'"type":"compaction_trigger"')] * 4)
+        self.assertIn("A04 主线 Lite 样本应为 zstd 压缩的 Lite 请求", str(caught.exception))
+
+    def test_a04_without_lite_header_fails_closed(self) -> None:
+        body = _zstd_compress(b"{}")
+        no_lite = _request(
+            "/backend-api/codex/responses",
+            ["version: 0.163.0", "content-encoding: zstd"],
+            body,
+        )
+        with self.assertRaises(SystemExit):
+            self._run(a04=[no_lite], a10=[self._lite_post(b'"type":"compaction_trigger"')] * 4)
+
+    def test_a04_without_responses_request_fails_closed(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            self._run(a04=[], a10=[self._lite_post(b'"type":"compaction_trigger"')] * 4)
+        self.assertIn("A04 没有抓到 Responses 请求", str(caught.exception))
+
+    def test_too_few_a10_triggers_fail_closed(self) -> None:
+        with self.assertRaises(SystemExit) as caught:
+            self._run(
+                a04=[self._lite_post(b"{}")],
+                a10=[self._lite_post(b'"type":"compaction_trigger"')] * 3,
+            )
+        self.assertIn("A10 未抓到四个真实 compaction_trigger", str(caught.exception))
