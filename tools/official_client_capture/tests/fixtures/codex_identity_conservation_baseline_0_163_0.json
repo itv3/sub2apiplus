@@ -1,10 +1,10 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "3709a4964d2c6e38d5350c5a0e6504d8c7ad9dfc",
+ "source_commit": "144b60340b0df6b6b49af52b4b66b1d97475ec25",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "5a528cf646789ffa8f1dea936707240a44a6390a78e50cd2d4e885b667c650b2",
- "wire_producer_sha256": "9f18a4fa7cb22d1f90f37d24a2416fbf15257305db28a746d8650e6f379ef0a7",
+ "files_sha256": "8414716c5d0c7c4e23e002f32fff92f60a911a4baf2a4dba4ad4149dac0f39e0",
+ "wire_producer_sha256": "c30ea7d012cdd1b91da1c3a2dae227e2490c270a44dea18874a8fab782737dac",
  "evidence_semantics_sha256": "3b307dbcdd389e2301d5ddc4569fc8e726fff519d76abe62d638b0cccc8065d7",
  "control_sha256": "bffcd1c70c9f65bc8ae39ea60435e0000ac5ecab14fa53347d0d08f1fb17384e",
  "orchestrator_closure_sha256": {
@@ -2687,7 +2687,7 @@
   },
   {
    "path": "run_candidate_core_capture.sh",
-   "sha256": "65045ba465483998f8536df9b7b2a60fb20798c34275335cbe6a49519b003fcc"
+   "sha256": "7923a72ce7e130c4501d71c1c6538eef2e8663a2f679d0f8ce4b7d5bc4a9debd"
   },
   {
    "path": "run_candidate_trace_test.sh",
