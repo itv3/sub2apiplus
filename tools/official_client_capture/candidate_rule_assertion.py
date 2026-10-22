@@ -81,8 +81,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-10-07 删除过时的 Codex CLI 历史审计后，主手册第二部分去掉指向它的链接（改为当前态表述，规则正文不变），
 # 第二部分摘要变为 476f9d55…，十二份场景／预期清单的 source_spec 摘要随之重绑；0.149.1 基线的规则、场景、
 # selector 与验收判据载荷逐字不变（diff 仅该一行）。
+# 2026-10-23（0.163.0 收尾）：指南第二部分按 0.163.0 改写，第二章摘要由 476f9d55… 变为 b6fa9dcc…，十四份场景／期望清单的
+# source_spec 摘要随之重绑；0.149.1 基线的规则、场景、selector 与验收判据载荷逐字不变（diff 仅该一行）。
 FROZEN_PROFILE_SHA256 = (
-    "34f34b69a34baba5ee5dc283b4a497afb8b39a3c6fa2fcdf1ba70a52353c03d9"
+    "1e5019184764592ddbb9606a89cad30b8884e4c1a0f469e1e647bde11a68ca6c"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

@@ -260,8 +260,10 @@ FROZEN_MAPPING_SHA256 = (
 # 与本期望清单逐字节相同），摘要由 5c4569a1… 换为 c66552c6…。载荷逐项审核：只改该检查的 select（where 增加 content-encoding not_equal ["zstd"]）、
 # assertion（all_absent 改为 count_equal 0）与 description 三处，检查项 ID、规则级字段（含 scenario_ids）与其余 42 条规则不变；
 # 验收契约 706df763… 不变（approval-revision 第一类判据要求契约逐字相同）。
+# 2026-10-23（0.163.0 收尾，同日第二次）：指南第二部分按 0.163.0 改写，第二章摘要由 476f9d55… 变为 b6fa9dcc…，期望清单的
+# source_spec_sha256 随之重绑，摘要由 c66552c6… 换为 a8b0ed45…；载荷除该一行外逐字不变。
 FROZEN_PROFILE_SHA256 = (
-    "c66552c61008cfff14f99330e25f59c254dda197fa00ae9a8ab0a6b39b2b4543"
+    "a8b0ed45c63eb89a99363f6749182ed2b6b167907a96188153d71ffc79e1df51"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
