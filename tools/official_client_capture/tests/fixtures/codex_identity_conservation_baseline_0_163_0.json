@@ -1,20 +1,20 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "144b60340b0df6b6b49af52b4b66b1d97475ec25",
+ "source_commit": "044c71143795f03ed38b5de8927d5d71621ffe81",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "8414716c5d0c7c4e23e002f32fff92f60a911a4baf2a4dba4ad4149dac0f39e0",
+ "files_sha256": "d35ff45ad94d8c36b8b06bbbf8fad3edc30acb8c12bd70460bac41f82339bb90",
  "wire_producer_sha256": "c30ea7d012cdd1b91da1c3a2dae227e2490c270a44dea18874a8fab782737dac",
- "evidence_semantics_sha256": "3b307dbcdd389e2301d5ddc4569fc8e726fff519d76abe62d638b0cccc8065d7",
+ "evidence_semantics_sha256": "e2267b5704c8299b491ec95e2c3ecf61cba64231ec5fa517fbcb21df70745915",
  "control_sha256": "bffcd1c70c9f65bc8ae39ea60435e0000ac5ecab14fa53347d0d08f1fb17384e",
  "orchestrator_closure_sha256": {
   "wire_producer": "44ae71c952a273a9941a867272ee1ce1411ebf18622c94e8db684bde7e6f91b8",
-  "evidence_semantics": "a5e891d18b7dc18131e1987874cff45c1301dbe621c94a87cdd4d4bc701b6678"
+  "evidence_semantics": "fb0f175a1c5cc2e57cb86b8e52fbc23f4457db182ed1ef06f92c50579ee4a69b"
  },
  "checker_sha256": "e45c5968cfae486e2cd06e07f0377727a4a09bf46d169969cc1dd7b7a660bf86",
  "builder_sha256": "7cd21dbcf713a2bda61e6039163321ec351cd45309eca716eedb274e4e879ea0",
- "compare_reader_sha256": "85f647d3e1adb11140a85ca239af957ef12bed0659b315366d662b8749dfdbd2",
- "accept_reader_sha256": "9471a8145181f171dadb5d6d2b14e8a56aeaf02c3b3b3d5fb534e29b84f5f644",
+ "compare_reader_sha256": "16cb0517a81b14d4459f1eb50420e8ec2bcc3071fe58766889653d74b77f77de",
+ "accept_reader_sha256": "40d128c2827f55912e289ae883cde92429f7ab0eb4403ccc9dca85d835de999a",
  "layer_counts": {
   "wire_producer": 57,
   "evidence_semantics": 66,
@@ -2307,7 +2307,7 @@
   },
   {
    "path": "codex_upgrade_receipt_finalizer.py",
-   "sha256": "02bc3d7e4d7b8df11a0c8ce3289dd270275d748c67cc19d83e27b00c3c3a1e78"
+   "sha256": "b7550a819e53b7e8e893f75a6ea00858dfa4f150ad6d9db742e793df7467c879"
   },
   {
    "path": "codex_upgrade_reconciler.py",
