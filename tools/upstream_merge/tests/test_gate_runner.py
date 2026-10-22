@@ -151,12 +151,14 @@ class RunLanesTest(unittest.TestCase):
     def test_interrupted_run_keeps_finished_lanes(self) -> None:
         # 第二条线向本进程发 SIGTERM（相当于 gates-run 或操作员中途终止）：第一条线的日志已经写出，
         # 第三条线不再启动；不写汇总表与状态文件。
+        # 子进程发完信号后挂住、等被收掉，保证中止在第二条线运行期间生效：若它立刻退出，满载时工作线程
+        # 可能抢在主线程处理信号之前启动第三条线（后台验证 #15 出现过，第三条线被启动后以 -15 收掉）。
         log_dir = self.root / "gate-logs"
         log_dir.mkdir()
         status = self.root / "status.json"
         lanes = [
             Lane("first", (python_step("quick", "print('from-first')"),)),
-            Lane("second", (python_step("interrupt", "import os, signal; os.kill(os.getppid(), signal.SIGTERM)"),)),
+            Lane("second", (python_step("interrupt", "import os, signal, time; os.kill(os.getppid(), signal.SIGTERM); time.sleep(60)"),)),
             Lane("third", (python_step("never", "print('from-third')"),)),
         ]
         with self.assertRaises(KeyboardInterrupt):
