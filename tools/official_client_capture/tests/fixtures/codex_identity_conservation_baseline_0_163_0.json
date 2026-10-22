@@ -1,11 +1,11 @@
 {
  "schema_version": "codex-identity-conservation-baseline/v1",
- "source_commit": "73493de5c999e3c728a1f6738d088e53d287e549",
+ "source_commit": "86cf6bf8cd8a96ba2e3a07519e2a3c01d2b5f403",
  "policy_version": 8,
  "policy_sha256": "fe90f3ec22da23b3d979e18f378d109376c07b00d37933cb7ff9204076d7743b",
- "files_sha256": "07d414b517761f8fae8999f8fabbb52b9ffb1ece8c5b79d48a585c062199bc83",
- "wire_producer_sha256": "c30ea7d012cdd1b91da1c3a2dae227e2490c270a44dea18874a8fab782737dac",
- "evidence_semantics_sha256": "fc6abf07744783c0af9b979c5276ee154d022c90a91c0a8bbfb6a5c165ead57c",
+ "files_sha256": "c08ad63a3fbcbedf56bc60abb4c98a135ae017407f67ec890d6d6bc8c5c51b1e",
+ "wire_producer_sha256": "7cea003e5de97e9565e7dc6f643211cf5cec2cf0892555cc225d5cc7e48ce155",
+ "evidence_semantics_sha256": "92a1abe22f975b3345bc4e91a22a98f03d2c1bc0ce5b57ad200d911483aaf1c9",
  "control_sha256": "bffcd1c70c9f65bc8ae39ea60435e0000ac5ecab14fa53347d0d08f1fb17384e",
  "orchestrator_closure_sha256": {
   "wire_producer": "44ae71c952a273a9941a867272ee1ce1411ebf18622c94e8db684bde7e6f91b8",
@@ -1191,7 +1191,7 @@
   },
   {
    "path": "candidate_rule_expectations_0_163_0.json",
-   "sha256": "5c4569a1d434ac7541e1ce940669f1ebe1b25d01014a6c59b6b2530a7bb2b74a"
+   "sha256": "c66552c61008cfff14f99330e25f59c254dda197fa00ae9a8ab0a6b39b2b4543"
   },
   {
    "path": "candidate_test_fact_map.schema.json",
@@ -1231,11 +1231,11 @@
   },
   {
    "path": "candidate_test_fact_map_0_163_0.json",
-   "sha256": "d02db61ba130d45af55b52c1946365045bcf1c42f025b40f3f39c68777555329"
+   "sha256": "299ef7356b5a409d03a94883ac02e64700998e6346ce0eee637453ac66c07b8a"
   },
   {
    "path": "candidate_test_trace.py",
-   "sha256": "5d3f517cafc01c1085f512b6be3845cf343da7519f12d1cba73126446983cba0"
+   "sha256": "c89d246b34ab359f3f4deb2ff4db1a19676141af6c904cc363032829c3a83ca5"
   },
   {
    "path": "candidate_test_trace_receipt.schema.json",
@@ -2687,7 +2687,7 @@
   },
   {
    "path": "run_candidate_core_capture.sh",
-   "sha256": "7923a72ce7e130c4501d71c1c6538eef2e8663a2f679d0f8ce4b7d5bc4a9debd"
+   "sha256": "300b234c4484b1332a568699636cb1a2c7af662775a72c67e53317227fa66dc7"
   },
   {
    "path": "run_candidate_trace_test.sh",
