@@ -1,0 +1,180 @@
+{
+  "base_commit": "a345ee6b3909b8f755ab4909374ed2089b40a160",
+  "changed_path_count": 9,
+  "current_commit": "28838bf5af053f0a50995ef73be1c313f3225f19",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6486,
+  "frozen_path_count": 2263,
+  "identity_sha256": "8a6e4db9cd6996975df65f635d4f8826302c18e0954a517768fb1a63f5a1097c",
+  "issued_at_utc": "2026-10-22T21:55:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-release-v0.2.17-3-security-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "e472a6e1b718898bda31d6a72d49588a3b22329799d0acd58c0732f005f66ede"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/ci-linux-runner-env-20261019-freeze-successor.json",
+        "docs/egress/maintenance/ci-python-tree-modes-20261019-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upgrade-a071-ci-executor-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a073-bytecode-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upgrade-a074-identity-engineering-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-capture-test-sharding-20260928-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-ci-evidence-um7-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-um8-release-version-sync-20260930-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2be045924a7cf7f91ef8d427d3c1a174c7236c9a4ad962f3455c106c3cb70c4f"
+    },
+    {
+      "old_path": "",
+      "path": ".github/workflows/release.yml",
+      "predecessor_sha256s": [
+        "0eb484130ab6d8d0a40d62c7a4763f36847041d584043506cca807f0df05a49a"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=.github/workflows/release.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "36e8ca6a2e2636f96c9d3902d294597258bb10aaa643000748fd8184774bf4ad"
+    },
+    {
+      "old_path": "",
+      "path": ".github/workflows/security-scan.yml",
+      "predecessor_sha256s": [
+        "1dca0527f861a728737f7053a9f6e11dcce6e7261745aec1a6b51a0db4d1b7fd"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=.github/workflows/security-scan.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "24337c051bb5796cdbe31687e0486780251d1fda5176d3f6efbe4ffab613743e"
+    },
+    {
+      "old_path": "",
+      "path": "Dockerfile",
+      "predecessor_sha256s": [
+        "da096675c126e15062166e0e9a852bcc1e33b8e7848ae1eee283a6da243c8969"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=Dockerfile",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "00ffb5bbc693a6453dd660973b029c1e5dbfbbdd70b00cec4af7b01280f0cc74"
+    },
+    {
+      "old_path": "",
+      "path": "backend/Dockerfile",
+      "predecessor_sha256s": [
+        "25361f7767e208df5125856fa4bef54875b33b5850e63440dfd54dc74eacb60b"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=backend/Dockerfile",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "598f28020d56670cddba0564aee6f2bc290b9f7a61133a745d5e5c09b1d8065b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/go.mod",
+      "predecessor_sha256s": [
+        "7d85d1170e6b58527dea581aeb74c46b6a699ae5c7115cd6e17d9c30c9f0b885"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=backend/go.mod",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ca4abf36d8b896c2140b236cdb90dee412fb5191c8497f0ad36020f5e28c7b99"
+    },
+    {
+      "old_path": "",
+      "path": "deploy/Dockerfile",
+      "predecessor_sha256s": [
+        "f7a66ea7b95688211801c532274ff6a4dde8458423d7a2df13d69eb9c7495a64"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=deploy/Dockerfile",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "179a2ba3d35d0d2c056970371ca80107bc3928d7514a651cf7ae381293edc790"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/package.json",
+      "predecessor_sha256s": [
+        "17dc95ce5638cf657c55aba09455240af73a7ebdeaa4595b4c2ca49099bb74b8"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=frontend/package.json",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.13-3-frontend-security-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c376b2d146038c106a072df15acf381e74763b1fc1405271e3e30e5e0e82747d"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/pnpm-lock.yaml",
+      "predecessor_sha256s": [
+        "1d8e54cc8e1f1bd3e7593805f607d9314ff81dab98ab5a9a6396475e148b26ce"
+      ],
+      "reason": "发布 v0.2.17-3 前修复安全扫描新增告警：Go 补丁版本升至 1.27.3（GO-2026-6809 crypto/x509，摘上游 cacc80b86 并同步工作流与三个 Dockerfile）、follow-redirects 锁定至 1.16.1、dompurify 升至 3.4.17；登记工具链、工作流、依赖清单和锁文件的精确后继摘要，不放宽安全例外或冻结门禁 path=frontend/pnpm-lock.yaml",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.13-3-frontend-security-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f8db731dbe42ac0e796312724424b826817ca528ad847c8aa1aad7193c908f30"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
