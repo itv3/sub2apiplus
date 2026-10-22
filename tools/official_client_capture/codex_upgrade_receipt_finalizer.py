@@ -53,6 +53,13 @@ LEGACY_REPLAY_PRODUCER_HASHES = frozenset(
         "06fe9886cf3bdab552dc61e556011bf8377f04389fa52a3536a457636052d788",
         # 当前 0.151 恢复 attempt 的不可变 restoration 收据所绑定版本。
         "491cbf961309176dd73b0569df6afedb55ed270e6fc3ee695e9779f451e0760f",
+        # ef262c618（0.151 画像升级与增量编排）起到 91ed69147 的版本：0.154～0.160 各轮与 0.163 本轮在
+        # 10-22 09:58Z 部署之前生成的 restoration、observed-profile、Kilo 绑定等收据都由它产出
+        # （包括批次 31 十个候选作业的 restoration 收据），只读重放。
+        "02bc3d7e4d7b8df11a0c8ce3289dd270275d748c67cc19d83e27b00c3c3a1e78",
+        # 044c71143（Kilo HTTP 时间顺序判据改为用量晚于入站）到 95b742c6a 的版本：10-22 09:58Z 部署到 ARM64，
+        # 在被本次补登记取代之前没有生成任何收据；它是冻结承接图里的部署边界，按门禁要求登记为只读重放身份。
+        "b7550a819e53b7e8e893f75a6ea00858dfa4f150ad6d9db742e793df7467c879",
     }
 )
 
