@@ -1,0 +1,75 @@
+{
+  "base_commit": "1805a0e5ef02156f41bc16e04b900e191e0f9645",
+  "changed_path_count": 6,
+  "current_commit": "194bcfdc578e2b45d9436e933175695bf8106f57",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6417,
+  "frozen_path_count": 2263,
+  "identity_sha256": "bf516ae49cd3bc46ab88814b4587b834b808b922ea15ba61345c4d12fa44bdf8",
+  "issued_at_utc": "2026-10-22T03:37:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01630-alloc-measure-hardening-20261022-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/json_scan_test.go",
+      "predecessor_sha256s": [
+        "01689a123ae8c4a8a371e40cadb22556008d04d44ca6dfd6d9752fb827839387"
+      ],
+      "reason": "满载下其余直接读内存统计的单次窗口用例（握手元数据 256 KiB 上限读到 28 万～48 万字节，被测函数实际只分配 1456 字节）改用单 P、取多次最小值的测量函数；只改测试，不改被测代码与断言上限；登记冻结承接 path=backend/internal/officialegress/json_scan_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "d906c68fc43ecff6d1286dd51f7be5f21b34e38b47fd5c9c2a49cdb6b531896d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_apikey_item_id_test.go",
+      "predecessor_sha256s": [
+        "364fd78ab9df2a22eca507bf762073a65e6f639bddac7ac23a0a96f1b6d8bdd5"
+      ],
+      "reason": "满载下其余直接读内存统计的单次窗口用例（握手元数据 256 KiB 上限读到 28 万～48 万字节，被测函数实际只分配 1456 字节）改用单 P、取多次最小值的测量函数；只改测试，不改被测代码与断言上限；登记冻结承接 path=backend/internal/service/openai_gateway_apikey_item_id_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e6979c3265a75c785e705ff8dda5e3db7e1f179f7c1e5aafd3d68858daf1b846"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_lite_precheck_test.go",
+      "predecessor_sha256s": [
+        "8d8a5a9fa2d99c4b6688f4fdb39112f7f9711c6d296d237c52c79971287fe156"
+      ],
+      "reason": "满载下其余直接读内存统计的单次窗口用例（握手元数据 256 KiB 上限读到 28 万～48 万字节，被测函数实际只分配 1456 字节）改用单 P、取多次最小值的测量函数；只改测试，不改被测代码与断言上限；登记冻结承接 path=backend/internal/service/openai_responses_lite_precheck_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9b85a464c93269e4f3f28fd40f779f028d852705dd36f766e6c67d8067d09e57"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "backend/internal/officialegress/request_body_shared_test.go",
+    "backend/internal/service/official_egress_ws_metadata_memory_test.go",
+    "backend/internal/service/openai_ws_http_bridge_memory_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
