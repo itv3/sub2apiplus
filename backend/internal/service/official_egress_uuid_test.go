@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,8 +241,13 @@ func TestDigestOfficialOpenAIMessageContentMatchesLegacyText(t *testing.T) {
 
 func testMeasureAllocatedBytes(t *testing.T, run func()) uint64 {
 	t.Helper()
+	// 满载机器上，前面用例遗留的后台协程和日志写入会在测量窗口里同时分配，把“只复制几个短字段”这类上限用例的读数
+	// 抬高到几十 KB（后台验证 #10：56664 对 4096，取三次最小值也一样）。测量期间把 P 数降到 1，遗留协程在窗口内
+	// 无法并行运行；仍取多次中的最小值，并在每次测量前强制 GC，让基线干净。
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
 	best := ^uint64(0)
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 5; attempt++ {
 		var before, after runtime.MemStats
 		runtime.GC()
 		runtime.ReadMemStats(&before)
@@ -252,6 +258,39 @@ func testMeasureAllocatedBytes(t *testing.T, run func()) uint64 {
 		}
 	}
 	return best
+}
+
+var testAllocNoiseSink atomic.Value
+
+// 回归：满载时其它协程会在测量窗口里同时分配（后台验证 #10 的 TestNewOpenAIRequestViewAllocatesOnlyExtractedFields：
+// 读数 56664，上限 4096）。辅助函数在窗口内只留一个 P，后台协程无法并行分配，读数只反映被测函数自己。
+func TestMeasureAllocatedBytesIgnoresBackgroundAllocation(t *testing.T) {
+	stop := make(chan struct{})
+	defer close(stop)
+	for i := 0; i < 4; i++ {
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					testAllocNoiseSink.Store(make([]byte, 2048))
+					time.Sleep(20 * time.Microsecond)
+				}
+			}
+		}()
+	}
+	var kept []byte
+	allocated := testMeasureAllocatedBytes(t, func() {
+		kept = make([]byte, 1024)
+		for index := range kept {
+			kept[index] = 1
+		}
+	})
+	require.Len(t, kept, 1024)
+	require.GreaterOrEqual(t, allocated, uint64(1024))
+	require.Less(t, allocated, uint64(8192),
+		"后台协程的分配不得计入被测函数：读数 %d 字节", allocated)
 }
 
 func testBuildLargeOfficialOpenAIBody(t *testing.T, userMessages int, textBytes int) []byte {
