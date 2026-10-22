@@ -1232,7 +1232,7 @@ done
 wait_action A03 responses_http_success 4
 stop_capture
 
-# A04：非 Lite 明文；账号管理态与经过 metadata 交叉验证的条件头分别形成正负样本。
+# A04：入站触发是非 Lite 明文（主线模型由网关按模型清单走 Lite、按官方默认配置 zstd 出站）；账号管理态与经过 metadata 交叉验证的条件头分别形成正负样本。
 start_capture A04
 trigger_root="$work_dir/scenarios/A04/trigger"
 write_request_body "$trigger_root/non-lite.json" "$main_model" non_lite a04-baseline
@@ -2720,8 +2720,10 @@ def _decoded_request_body(data):
     return body
 
 
-# 0.163.0 起主线模型是 Lite（gpt-6.1-sol）：A04 的 Responses 请求全部是 zstd 压缩的 Lite 请求（官方样本同形），
-# 不再是“非 Lite 明文”；A10 的 compaction_trigger 在压缩后的原始字节里找不到明文 JSON，要先还原再数。
+# 0.163.0 起主线模型是 Lite（gpt-6.1-sol）：候选 A04 的 Responses 请求全部是 zstd 压缩的 Lite 请求——候选在 Lite 主线固定呈现官方默认配置
+# （enable_request_compression 为 Stable 默认开启），不跟随入站关闭压缩；官方 A04 的压缩关闭样本不带 content-encoding，
+# 这一差异由批准画像 SPEC-BODY-002/responses-plain 的 b2 修订覆盖（不得出现 zstd 以外的编码）。不再是“非 Lite 明文”；
+# A10 的 compaction_trigger 在压缩后的原始字节里找不到明文 JSON，要先还原再数。
 a04_posts = [
     data
     for data in (

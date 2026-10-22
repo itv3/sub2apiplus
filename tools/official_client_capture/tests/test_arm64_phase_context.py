@@ -363,6 +363,47 @@ class PhaseContextTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "退役收据"):
                     phase_context._vc6_receipts(context, plan)
 
+    def vc6_delivery_plan(self, mode="1"):
+        """与 VC-6 交付脚本同形的交付登记计划（非 canonical，第 1 次不带归档／清理收据，第 2 次带）。"""
+        command = ["/usr/bin/python3", "codex_upgrade.py", "deliver-candidate", "--campaign-dir", str(self.campaign),
+                   "--candidate-id", self.config["CAND"], "--attempt-id", self.attempt_id, "--build-receipt", "build-receipt.json"]
+        if mode == "1":
+            item, operation = "vc6-delivery-archive-pending", "VC-6:deliver-candidate-archive-pending"
+        else:
+            command += ["--private-archive-receipt", "private-archive.json", "--cleanup-decision-receipt", "cleanup-decision.json"]
+            item, operation = "vc6-delivery", "VC-6:deliver-candidate"
+        return {"actions": [{"action_id": "vc6-deliver-" + mode, "operation": operation, "timeout_seconds": 1800,
+                             "command": command, "item_ids": [item]}], "execute_item_ids": [item]}
+
+    def test_vc6_delivery_batches_bind_current_campaign_without_canonical_receipts(self):
+        # 交付登记不含 canonical 项，canonical_batch_binding 按设计返回 None；改正前驱动把它当“未绑定”拒绝，
+        # 0.163.0 的 VC-6 第 44 批因此派不出去。现在按交付批次核对绑定后放行，不读 canonical 收据、不写任何文件。
+        context = self.vc6_context()
+        before = self.base.snapshot()
+        for mode in ("1", "2"):
+            with self.subTest(mode=mode):
+                phase_context._vc6_receipts(context, self.vc6_delivery_plan(mode))
+        self.cu._canonical_activation_receipt.assert_not_called()
+        self.assertEqual(before, self.base.snapshot())
+
+    def test_vc6_delivery_batch_rejects_wrong_binding_and_foreign_actions(self):
+        context = self.vc6_context()
+        for flag, value in (("--attempt-id", "old"), ("--campaign-dir", str(self.campaign) + "-other"), ("--candidate-id", "other")):
+            with self.subTest(flag=flag):
+                plan = self.vc6_delivery_plan("2")
+                command = plan["actions"][0]["command"]
+                command[command.index(flag) + 1] = value
+                with self.assertRaisesRegex(ValueError, "VC-6 计划未绑定"):
+                    phase_context._vc6_receipts(context, plan)
+        plan = self.vc6_delivery_plan("1")
+        plan["actions"][0]["operation"] = "VC-6:other-step"
+        with self.assertRaisesRegex(ValueError, "只允许交付登记"):
+            phase_context._vc6_receipts(context, plan)
+        plan = self.vc6_delivery_plan("1")
+        plan["execute_item_ids"] = ["vc6-delivery", "vc6-delivery-archive-pending"]
+        with self.assertRaisesRegex(ValueError, "恰由交付动作承载"):
+            phase_context._vc6_receipts(context, plan)
+
     def generate(self, *, old_candidate_dir=None):
         report = self.resolve(mode="attempt")
         fake_config, fake_admission, fake_phase = mock.Mock(), mock.Mock(), mock.Mock()

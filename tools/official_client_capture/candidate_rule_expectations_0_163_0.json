@@ -1876,10 +1876,10 @@
         },
         {
           "assertion": {
-            "operator": "all_absent",
-            "path": "data.header_values.content-encoding"
+            "operator": "count_equal",
+            "value": 0
           },
-          "description": "压缩关闭时 Responses 不发送 content-encoding",
+          "description": "压缩关闭样本（A04，labels.compression=plain）的 Responses 请求不得出现 zstd 以外的 content-encoding：官方显式关闭压缩时不发送该头；候选的 Lite 主线固定呈现官方默认配置（enable_request_compression 为 Stable 且默认开启），统一发 zstd，不跟随入站关闭压缩",
           "id": "responses-plain",
           "select": {
             "record_type": "http_request",
@@ -1896,6 +1896,13 @@
                 "operator": "equal",
                 "path": "labels.compression",
                 "value": "plain"
+              },
+              {
+                "operator": "not_equal",
+                "path": "data.header_values.content-encoding",
+                "value": [
+                  "zstd"
+                ]
               }
             ]
           }
