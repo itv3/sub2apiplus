@@ -256,8 +256,12 @@ FROZEN_MAPPING_SHA256 = (
 # ②场景 A04（scenarios[3]）与场景 A06（scenarios[5]）的描述、前置条件 use_responses_lite=false 改为 true（主线模型 gpt-6.1-sol，按 capturelib.model 的主线 Lite
 # 声明）、A04 的触发说明改为“使用主线模型”。验收契约现算由 f1d2866e… 变为 706df763…，新旧契约载荷逐项比较只差 SPEC-BODY-006 第 4、5 项的检查 ID
 # （expected_check_ids 两个叶子），规则数 43 与 dual_wire=25／candidate_profile=18 的模式计数不变；候选侧 nonlite-image-tool 检查与映射文件摘要不变。
+# 2026-10-23（0.163.0 收尾）：期望清单的 SPEC-BODY-002/responses-plain 对齐 VC-5 批准修订 b2（approval-revision 1，修订画像 c66552c6…，
+# 与本期望清单逐字节相同），摘要由 5c4569a1… 换为 c66552c6…。载荷逐项审核：只改该检查的 select（where 增加 content-encoding not_equal ["zstd"]）、
+# assertion（all_absent 改为 count_equal 0）与 description 三处，检查项 ID、规则级字段（含 scenario_ids）与其余 42 条规则不变；
+# 验收契约 706df763… 不变（approval-revision 第一类判据要求契约逐字相同）。
 FROZEN_PROFILE_SHA256 = (
-    "5c4569a1d434ac7541e1ce940669f1ebe1b25d01014a6c59b6b2530a7bb2b74a"
+    "c66552c61008cfff14f99330e25f59c254dda197fa00ae9a8ab0a6b39b2b4543"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
