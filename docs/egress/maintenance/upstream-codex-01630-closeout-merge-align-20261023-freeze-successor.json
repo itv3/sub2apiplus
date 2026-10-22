@@ -1,0 +1,93 @@
+{
+  "base_commit": "dab242cd23fcd9fced12410a63bd18f835a3427b",
+  "changed_path_count": 8,
+  "current_commit": "f4ce7209e0a91f5e20031bd2e63d332b7f02953f",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6467,
+  "frozen_path_count": 2263,
+  "identity_sha256": "975c0def9d8fd72614d17387535724f072251c59cdd25efab8332484b5a8ab2e",
+  "issued_at_utc": "2026-10-22T18:06:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01630-closeout-merge-align-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_uuid_test.go",
+      "predecessor_sha256s": [
+        "fc79b1fa447288e89e757eb4e4a82b06d3fb49007e5adc4f8f563c47c6f8c73d"
+      ],
+      "reason": "0.163 收尾：合入候选分支后两边都改过的服务层测试文件合并、期望清单 SPEC-BODY-002 对齐 VC-5 批准修订、A04 注释更正、交付批次阶段解析测试与第十二次身份守恒基线重封 path=backend/internal/service/official_egress_uuid_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-alloc-measure-helper-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "ad6c42a1d90fd7f598b9efa74f81498e2ee4f8a25e64d991248184f3a913be0e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_apikey_item_id_test.go",
+      "predecessor_sha256s": [
+        "e6979c3265a75c785e705ff8dda5e3db7e1f179f7c1e5aafd3d68858daf1b846"
+      ],
+      "reason": "0.163 收尾：合入候选分支后两边都改过的服务层测试文件合并、期望清单 SPEC-BODY-002 对齐 VC-5 批准修订、A04 注释更正、交付批次阶段解析测试与第十二次身份守恒基线重封 path=backend/internal/service/openai_gateway_apikey_item_id_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-01630-alloc-measure-hardening-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "637982e579900f77614add4a0f5fd98410b03d80404f2897126ba718280adac4"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "b7bd296d6c4f7230e030949e7bb04345ecb534bb019350683e9e091c8644d02a"
+      ],
+      "reason": "0.163 收尾：合入候选分支后两边都改过的服务层测试文件合并、期望清单 SPEC-BODY-002 对齐 VC-5 批准修订、A04 注释更正、交付批次阶段解析测试与第十二次身份守恒基线重封 path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-default-program-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-capture-host-name-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-core-capture-lite-asserts-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-finalizer-replay-registration-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-fix-and-continue-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-kilo-usage-order-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-orphan-preview-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-zero-result-isolated-source-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f5993b8a1efea5611fc569fa99d7887725fd4ae8cb473bd4f863d207d2cae2f7"
+    }
+  ],
+  "unregistered_path_count": 5,
+  "unregistered_paths": [
+    "backend/internal/service/openai_ws_http_bridge_memory_test.go",
+    "tools/official_client_capture/candidate_rule_expectations_0_163_0.json",
+    "tools/official_client_capture/run_candidate_core_capture.sh",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_163_0.json",
+    "tools/official_client_capture/tests/test_arm64_phase_context.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
