@@ -424,7 +424,13 @@ class ResumeInputTests(unittest.TestCase):
 
     @staticmethod
     def git(*args, cwd=None):
-        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+        # 测试库是一次性夹具，关掉自动维护（-c maintenance.auto=false -c gc.auto=0）。CI 的 git 2.55 会把
+        # commit／fetch 之后的 git maintenance run --auto 放到后台脱离进程里跑，它改写 .git/objects 时正好撞上
+        # setUp 里紧接着的三次 clone，clone 偶发以 128 退出（10-23 CI capture-tools 第 1 片两次运行都因此失败）。
+        # 背景与另一种写法（经环境变量注入）见 test_arm64_capture_driver 的 _GIT_NO_AUTO_MAINTENANCE_ENV 注释；
+        # 被测的 vc4_resume 只调用只读的 git status／rev-parse，不会触发自动维护，所以只需改这里。
+        return subprocess.run(["git", "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args], cwd=cwd,
+                              capture_output=True, text=True, check=True).stdout.strip()
 
     def checkpoint(self):
         resume.write_once(self.evidence / "upload-wait.json", {"schema_version": resume.SCHEMA, "stage": "upload-wait",
