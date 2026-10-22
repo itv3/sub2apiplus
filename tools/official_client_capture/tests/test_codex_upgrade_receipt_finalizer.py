@@ -896,10 +896,23 @@ class ReceiptFinalizerTests(unittest.TestCase):
         self.assertEqual(payload["protocol"], "openai-responses")
         self.assertEqual(payload["entrypoint"], "/v1/responses")
 
-    def test_kilo_compatible_rejects_usage_before_http_response(self) -> None:
+    def test_kilo_compatible_accepts_usage_recorded_before_http_completion(self) -> None:
+        # 候选网关在请求处理内同步落用量，HTTP 用量可以早于访问日志的完成时间（实测早 0.15 毫秒）；
+        # 只要晚于入站、归属字段逐项相等且在 attempt 窗口内，就是同一次请求的用量。
         facts = self._kilo_facts()
         usage = json.loads(facts["usage_audit"].read_text(encoding="utf-8"))
         usage["recorded_at_utc"] = "2026-07-31T00:00:02.500Z"
+        self._write_json("usage-audit.json", usage)
+        self.assertEqual(self._run(self._kilo_argv(facts)), 0)
+        self.assertTrue((self.root / "kilo-compatible.json").exists())
+
+    def test_kilo_compatible_rejects_usage_before_http_ingress(self) -> None:
+        # 早于入站的用量不可能属于这次请求，仍然拒绝（窗口内、但在入站之前）。
+        facts = self._kilo_facts()
+        ingress = json.loads(facts["ingress"].read_text(encoding="utf-8"))
+        usage = json.loads(facts["usage_audit"].read_text(encoding="utf-8"))
+        usage["recorded_at_utc"] = "2026-07-31T00:00:00.500Z"
+        self.assertLess(usage["recorded_at_utc"], ingress["received_at_utc"])
         self._write_json("usage-audit.json", usage)
         self.assertEqual(self._run(self._kilo_argv(facts)), 2)
         self.assertFalse((self.root / "kilo-compatible.json").exists())
