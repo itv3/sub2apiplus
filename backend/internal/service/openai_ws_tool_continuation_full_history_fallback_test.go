@@ -58,7 +58,10 @@ func openAIWSFullHistoryFallbackFrame(referenceOnly bool) []byte {
 	if referenceOnly {
 		secondCall = `{"type":"item_reference","id":"call_fh_2"},`
 	}
-	return []byte(`{"type":"response.create","model":"gpt-5.5","stream":true,"store":false,"input":[` +
+	// 顶层 instructions 是基础指令的来源（较新画像把它装成 input 里的官方形态消息，旧画像照旧保留顶层字段）；
+	// 没有来源的原形态由 ...WithoutInstructionsOpensNewChainOnCarrierSlot 用例覆盖。
+	return []byte(`{"type":"response.create","model":"gpt-5.5","stream":true,"store":false,` +
+		`"instructions":"full history fallback base instructions","input":[` +
 		`{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer context"}]},` +
 		`{"type":"message","role":"user","content":[{"type":"input_text","text":"run tools"}]},` +
 		`{"type":"function_call","call_id":"call_fh_1","name":"shell","arguments":"{\"command\":[\"ls\"]}"},` +

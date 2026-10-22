@@ -956,6 +956,18 @@ func openAIWHAMMappingFallbackReason(err error) string {
 	}
 }
 
+// buildOpenAICodexProbePayload 构造用量探针的 Responses 业务正文（改动前内联在 probeOpenAICodexSnapshot 里的
+// 逐字搬移）。这里只准备业务语义；字段线序、画像元数据与压缩由 Executor compiler 统一定型。
+// Usage probe 仍须提供 Responses 端点要求的完整业务闭集。
+func buildOpenAICodexProbePayload(modelID string) map[string]any {
+	payload := createOpenAITestPayload(modelID, "", true, 0)
+	payload["tool_choice"] = "auto"
+	payload["parallel_tool_calls"] = false
+	payload["reasoning"] = map[string]any{"effort": "low", "summary": "auto"}
+	payload["include"] = []string{"reasoning.encrypted_content"}
+	return payload
+}
+
 func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account) (map[string]any, error) {
 	if account == nil || !account.IsOAuth() {
 		return nil, nil
@@ -967,17 +979,20 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	if accessToken == "" && !account.IsOpenAIAgentIdentity() {
 		return nil, fmt.Errorf("no access token available")
 	}
-	modelID := openaipkg.CodexUsageProbeModel
-	payload := createOpenAITestPayload(modelID, "", true, 0)
-	// 这里只准备业务语义；字段线序、画像元数据与压缩由 Executor compiler
-	// 统一定型。Usage probe 仍须提供 Responses 端点要求的完整业务闭集。
-	payload["tool_choice"] = "auto"
-	payload["parallel_tool_calls"] = false
-	payload["reasoning"] = map[string]any{"effort": "low", "summary": "auto"}
-	payload["include"] = []string{"reasoning.encrypted_content"}
+	payload := buildOpenAICodexProbePayload(openaipkg.CodexUsageProbeModel)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal openai probe payload: %w", err)
+	}
+	var httpUpstream HTTPUpstream
+	if s.openAIQuotaService != nil {
+		httpUpstream = s.openAIQuotaService.httpUpstream
+	}
+	// 探针正文直接交给 Executor，不经过 Forward 的定型层：按 Executor 实际使用的发布槽位整理最终字节，
+	// 画像闭集不再声明顶层 instructions 时去掉它（见 shapeOfficialCodexDirectResponsesBody）。
+	// 这里只为取发布槽位而解析 runtime，解析失败时正文原样保留，错误仍由下面原有的解析点报告。
+	if runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, httpUpstream); runtimeErr == nil {
+		payloadBytes, _ = shapeOfficialCodexDirectResponsesBody(payloadBytes, runtimeState)
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -1021,10 +1036,6 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
-	}
-	var httpUpstream HTTPUpstream
-	if s.openAIQuotaService != nil {
-		httpUpstream = s.openAIQuotaService.httpUpstream
 	}
 	officialEgress, err := resolveOfficialEgressRuntime(s.officialEgress, httpUpstream)
 	if err != nil {

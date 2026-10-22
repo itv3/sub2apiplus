@@ -43,6 +43,10 @@ const (
 	SectionReasoningEffort = "ReasoningEffort"
 	// SectionImageGeneration：imagegen 出站的 background 取值与编辑图片引用形态（SPEC-EP-022）。
 	SectionImageGeneration = "ImageGeneration"
+	// SectionBaseInstructions：基础指令的承载方式（不再发顶层 instructions，改为 input 最前的 developer 消息）。
+	SectionBaseInstructions = "BaseInstructions"
+	// SectionAccessPrograms：请求体条件字段 access_programs 的出站值域。
+	SectionAccessPrograms = "AccessPrograms"
 )
 
 // OptionalSectionNames 按快照字段顺序列出全部可选节；顺序也是数据，不排序。
@@ -56,6 +60,8 @@ var OptionalSectionNames = []string{
 	SectionWebSocketContinuation,
 	SectionReasoningEffort,
 	SectionImageGeneration,
+	SectionBaseInstructions,
+	SectionAccessPrograms,
 }
 
 // CookieJarSection 声明共享 Cookie jar 接受的 Cookie 名与 WS 握手回写。
@@ -166,15 +172,59 @@ type ImageGenerationSection struct {
 	EditImageReferences []string `json:"EditImageReferences"`
 }
 
+// BaseInstructionsSection 声明基础指令（base instructions）的承载方式。
+//
+// 较新版本的非 Lite 请求体不再发送顶层 instructions：基础指令作为 input 最前的 developer 消息承载，
+// 消息的 internal_chat_message_metadata_passthrough 以 content_item_kinds 标记它的身份。节存在即表示
+// 该版本画像采用这种载体，节缺省表示旧逻辑（顶层 instructions；Lite 请求的迁入形态不变）。
+// 声明本节时，EndpointIDs 所列端点的 Body.Fields 不得再含 instructions，且必须含 input
+// （交叉校验见 validateBaseInstructionsCrossReferences），避免画像自相矛盾。
+type BaseInstructionsSection struct {
+	// Carrier：承载形态，目前只支持 input_developer_message。
+	Carrier string `json:"Carrier"`
+	// ContentItemKind：消息 passthrough 里 content_item_kinds 的唯一取值（点分小写标识）。
+	ContentItemKind string `json:"ContentItemKind"`
+	// EndpointIDs：适用的 Responses 端点（排序去重，取值 responses_http、responses_ws，必须存在于同一画像）。
+	EndpointIDs []string `json:"EndpointIDs"`
+	// IDPrefix：消息 id 的前缀；id = 前缀_UUIDv5(UUIDv5(NAMESPACE_OID, thread_id), 指令正文)。
+	IDPrefix string `json:"IDPrefix"`
+}
+
+// AccessProgramsSection 声明请求体条件字段 access_programs 的出站值域。
+//
+// 较新版本的 Responses 请求体可携带 access_programs（形如 {"cyber":"standard"}）。账号是否有资格由服务端裁决，
+// 网关没有账号资格信息，所以画像只列出允许出站的 cyber 程序子集，入站取值落在子集之外时由执行层丢弃，
+// 而不是原样透传。本节与两个 Responses 端点 Body.Fields 中的 access_programs 声明必须同时存在
+// （交叉校验见 validateAccessProgramsCrossReferences）：声明了字段却没有值域，会让入站值隐性透传。
+type AccessProgramsSection struct {
+	// AllowedCyberPrograms：允许出站的 cyber 程序（排序去重，取值 daybreak_blue、daybreak_red、standard）。
+	AllowedCyberPrograms []string `json:"AllowedCyberPrograms"`
+	// DefaultCyberProgram：入站未携带时默认生成的程序。缺省表示不默认生成；存在时必须属于
+	// AllowedCyberPrograms，且不得显式写成空串（空串会让规范化 JSON 多出一种与缺省等价的表示）。
+	DefaultCyberProgram string `json:"DefaultCyberProgram,omitempty"`
+}
+
 var (
 	sectionTokenPattern   = regexp.MustCompile(`^[a-z0-9_]+$`)
 	cookieNamePattern     = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	headerNamePattern     = regexp.MustCompile(`^[a-z0-9-]+$`)
 	errOptionalSectionNil = errors.New("可选节不得显式为 null")
 
+	// contentItemKindPattern 约束基础指令消息的 content_item_kinds 取值：至少两段、点分的小写标识。
+	contentItemKindPattern = regexp.MustCompile(`^[a-z_]+(\.[a-z_]+)+$`)
+	// messageIDPrefixPattern 约束基础指令消息 id 的前缀。
+	messageIDPrefixPattern = regexp.MustCompile(`^[a-z]{2,8}$`)
+
 	imageReferenceKinds = map[string]bool{
 		"file_id":   true,
 		"image_url": true,
+	}
+
+	// cyberProgramKinds 是 access_programs.cyber 的取值全集；画像节只能从中挑出允许出站的子集。
+	cyberProgramKinds = map[string]bool{
+		"daybreak_blue": true,
+		"daybreak_red":  true,
+		"standard":      true,
 	}
 
 	continuationResetKinds = map[string]bool{
@@ -185,6 +235,9 @@ var (
 		"late_tool_result_metadata": true,
 	}
 )
+
+// responsesEndpointIDs 是基础指令载体与 access_programs 所约束的两个 Responses 端点（已排序）。
+var responsesEndpointIDs = []string{"responses_http", "responses_ws"}
 
 // DecodeOptionalSection 严格解码并校验一个可选节；未知节名、未知字段或非法取值均返回错误。
 func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
@@ -212,6 +265,10 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 		target = &ReasoningEffortSection{}
 	case SectionImageGeneration:
 		target = &ImageGenerationSection{}
+	case SectionBaseInstructions:
+		target = &BaseInstructionsSection{}
+	case SectionAccessPrograms:
+		target = &AccessProgramsSection{}
 	default:
 		return nil, fmt.Errorf("未知可选节: %s", name)
 	}
@@ -221,6 +278,13 @@ func DecodeOptionalSection(name string, raw json.RawMessage) (any, error) {
 		for key, value := range fields {
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 				return nil, fmt.Errorf("可选节 %s 的字段 %s 不得显式为 null", name, key)
+			}
+		}
+		// omitempty 的字符串字段同理不得显式写成空串：空串解码后与缺省无法区分，
+		// 规范化 JSON 却会保留它，同一份语义于是对应两种官方摘要。
+		if name == SectionAccessPrograms {
+			if value, declared := fields["DefaultCyberProgram"]; declared && bytes.Equal(bytes.TrimSpace(value), []byte(`""`)) {
+				return nil, fmt.Errorf("可选节 %s 的字段 DefaultCyberProgram 存在时不得为空串", name)
 			}
 		}
 	}
@@ -348,6 +412,38 @@ func validateOptionalSection(name string, value any) error {
 		}
 		if !slices.Contains(section.EditImageReferences, "image_url") {
 			return errors.New("EditImageReferences 必须包含 image_url")
+		}
+		return nil
+	case *BaseInstructionsSection:
+		if section.Carrier != "input_developer_message" {
+			return fmt.Errorf("Carrier 只支持 input_developer_message，实际 %q", section.Carrier)
+		}
+		if !contentItemKindPattern.MatchString(section.ContentItemKind) {
+			return fmt.Errorf("ContentItemKind 必须是点分小写标识，实际 %q", section.ContentItemKind)
+		}
+		if err := requireSortedUnique("EndpointIDs", section.EndpointIDs, sectionTokenPattern); err != nil {
+			return err
+		}
+		for _, endpointID := range section.EndpointIDs {
+			if !slices.Contains(responsesEndpointIDs, endpointID) {
+				return fmt.Errorf("EndpointIDs 含不支持的端点: %s", endpointID)
+			}
+		}
+		if !messageIDPrefixPattern.MatchString(section.IDPrefix) {
+			return fmt.Errorf("IDPrefix 必须是 2 到 8 位小写字母，实际 %q", section.IDPrefix)
+		}
+		return nil
+	case *AccessProgramsSection:
+		if err := requireSortedUnique("AllowedCyberPrograms", section.AllowedCyberPrograms, sectionTokenPattern); err != nil {
+			return err
+		}
+		for _, program := range section.AllowedCyberPrograms {
+			if !cyberProgramKinds[program] {
+				return fmt.Errorf("AllowedCyberPrograms 含未知程序: %s", program)
+			}
+		}
+		if section.DefaultCyberProgram != "" && !slices.Contains(section.AllowedCyberPrograms, section.DefaultCyberProgram) {
+			return fmt.Errorf("DefaultCyberProgram 必须属于 AllowedCyberPrograms，实际 %q", section.DefaultCyberProgram)
 		}
 		return nil
 	default:

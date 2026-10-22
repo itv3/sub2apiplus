@@ -1010,6 +1010,15 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if accountMimicCodexCLI {
 		payloadBytes = mimicProfile.RewriteBody(payloadBytes)
 	}
+	// OAuth 官方出口的测试正文直接交给 Executor，不经过 Forward 的定型层：按 Executor 实际使用的发布槽位整理最终字节，
+	// 画像闭集不再声明顶层 instructions 时去掉它（见 shapeOfficialCodexDirectResponsesBody）。必须排在 mimic 改写之后：
+	// 影子账号借父账号的 OAuth 凭据走官方出口时，mimic 会把默认 instructions 补回来。API-Key 与非官方出口的 OAuth
+	// 不属于 Codex 画像，正文不动；这里只为取发布槽位而解析 runtime，解析失败时正文原样保留，错误仍由下面原有的解析点报告。
+	if isOAuth && officialEgressEnabled {
+		if runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream); runtimeErr == nil {
+			payloadBytes, _ = shapeOfficialCodexDirectResponsesBody(payloadBytes, runtimeState)
+		}
+	}
 
 	// Send test_start event once. A task-invalid Agent Identity response may
 	// restart this probe after registering a replacement task.

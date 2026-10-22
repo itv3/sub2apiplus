@@ -1068,7 +1068,9 @@ func TestForwardAsChatCompletions_OAuthDoesNotInjectDefaultInstructions(t *testi
 	require.NotContains(t, string(upstream.lastBody), "Communicate with the user by streaming thinking")
 }
 
-func forwardOAuthChatCompletionsForUpstreamBody(t *testing.T, body []byte) []byte {
+// forwardOAuthChatCompletionsForUpstreamBody 经 Chat Completions 兼容层把请求发到 OAuth 账号，返回上游收到的正文。
+// legacyProfile 为 true 时固定在旧画像槽位：用例断言旧画像的顶层 instructions 与 input 项数。
+func forwardOAuthChatCompletionsForUpstreamBody(t *testing.T, body []byte, legacyProfile bool) []byte {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
@@ -1083,6 +1085,9 @@ func forwardOAuthChatCompletionsForUpstreamBody(t *testing.T, body []byte) []byt
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"stop before response parsing"}}`)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	if legacyProfile {
+		useOfficialCodexLegacyProfile(t, svc)
+	}
 	account := &Account{
 		ID:          4,
 		Name:        "openai-oauth",
@@ -1106,7 +1111,7 @@ func TestForwardAsChatCompletions_OAuthPromotesSystemMessageWithoutDuplication(t
 	const systemPrompt = "Unique system prefix for token accounting."
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"system","content":"` + systemPrompt + `"},{"role":"user","content":"hello"}],"stream":false}`)
 
-	upstreamBody := forwardOAuthChatCompletionsForUpstreamBody(t, body)
+	upstreamBody := forwardOAuthChatCompletionsForUpstreamBody(t, body, true)
 
 	require.Equal(t, systemPrompt, gjson.GetBytes(upstreamBody, "instructions").String())
 	require.Equal(t, int64(1), gjson.GetBytes(upstreamBody, "input.#").Int())
@@ -1118,7 +1123,7 @@ func TestForwardAsChatCompletions_OAuthJsonObjectKeepsSystemMessageInInput(t *te
 	const systemPrompt = "Return JSON only."
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"system","content":"` + systemPrompt + `"},{"role":"user","content":"symbol data"}],"response_format":{"type":" JSON_OBJECT "},"stream":false}`)
 
-	upstreamBody := forwardOAuthChatCompletionsForUpstreamBody(t, body)
+	upstreamBody := forwardOAuthChatCompletionsForUpstreamBody(t, body, true)
 
 	require.Equal(t, systemPrompt, gjson.GetBytes(upstreamBody, "instructions").String())
 	require.Equal(t, int64(1), gjson.GetBytes(upstreamBody, "input.#").Int())
@@ -1130,7 +1135,7 @@ func TestForwardAsChatCompletions_OAuthKeepsMixedSystemContentInInput(t *testing
 	const systemPrompt = "Inspect this reference image."
 	body := []byte(`{"model":"gpt-5.4","messages":[{"role":"system","content":[{"type":"text","text":"` + systemPrompt + `"},{"type":"image_url","image_url":{"url":"https://example.com/reference.png"}}]},{"role":"user","content":"hello"}],"stream":false}`)
 
-	upstreamBody := forwardOAuthChatCompletionsForUpstreamBody(t, body)
+	upstreamBody := forwardOAuthChatCompletionsForUpstreamBody(t, body, false)
 
 	require.False(t, gjson.GetBytes(upstreamBody, "instructions").Exists())
 	require.Equal(t, int64(2), gjson.GetBytes(upstreamBody, "input.#").Int())

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -59,6 +60,10 @@ type officialOpenAIWSDerivedState struct {
 	// 即断线后客户端重发的完整历史。此时本轮不做工具续接收敛，把全部工具输出视为历史，
 	// 按携带完整历史的普通轮次在新连接上开新链。其他入口从不写这个标记，保持失败关闭。
 	fullHistoryFallback bool
+	// baseInstructionsSent／baseInstructionsDigest 记录这条连接上当前链已经发送过的基础指令正文摘要，仅在画像声明基础指令
+	// 载体节时使用：续链帧上重复的同一段正文据此丢弃，换了一段才追加（见 applyOfficialCodexWSBaseInstructions）。
+	baseInstructionsSent   bool
+	baseInstructionsDigest officialCodexBaseInstructionsDigest
 }
 
 // setFullHistoryFallback 记录本轮是否按“断线后重发的完整历史”开新链。
@@ -604,7 +609,7 @@ func prepareOpenAIOfficialEgressSemanticWSFrame(
 		}
 	}
 
-	modified, err := finalizeOfficialOpenAIWSInputTurnMetadata(candidatePayload)
+	modified, err := finalizeOfficialOpenAIWSInputTurnMetadata(candidatePayload, nil)
 	if err != nil {
 		return nil, result, err
 	}
@@ -639,7 +644,7 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	body *officialWSFrameBody,
 ) ([]byte, OfficialEgressFinalizationResult, error) {
 	result := OfficialEgressFinalizationResult{}
-	payload, index, err := decodeAndValidateUnifiedOpenAIWSBusinessContract(
+	payload, index, originalPayload, err := decodeAndValidateUnifiedOpenAIWSBusinessContract(
 		original,
 		candidate,
 		expectedPreviousResponseID,
@@ -657,6 +662,20 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 			)
 		}
 		return candidate, result, nil
+	}
+
+	// 画像声明基础指令载体节（且列出 responses_ws）时，基础指令正文在 Lite 迁移与顶层字段闭集剔除之前取走：
+	// 顶层 instructions 不在该画像的 WS 字段表里，留着会被闭集静默剔除；官方形态消息在逐项 turn_id 补写之后才安装。
+	baseInstructionsSection := officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode())
+	baseInstructionsText, baseInstructionsSourced := "", false
+	if baseInstructionsSection != nil {
+		baseInstructionsText, baseInstructionsSourced, err = officialCodexWSBaseInstructionsSource(
+			originalPayload, payload, baseInstructionsSection,
+		)
+		if err != nil {
+			return nil, result, err
+		}
+		delete(payload, "instructions")
 	}
 
 	originalCallIDs := collectOfficialOpenAICallIDs(payload)
@@ -723,6 +742,16 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	); err != nil {
 		return nil, result, err
 	}
+	// access_programs：校验与默认生成，与 HTTP 定型共用同一个函数。预热帧（generate=false）不绑定回合程序，只校验不生成；
+	// 其余帧（首帧、增量帧、工具续接的完整历史帧）都生成。链帧与工具续接收敛帧由本函数的输出改写而来，原样继承这里的取值；
+	// 网关补出的预热帧要去掉继承来的取值（见 buildDerivedOpenAIOfficialEgressWSPrewarmFrame）。画像没有该节时是恒等操作。
+	generateFlag, _ := payload["generate"].(bool)
+	isPrewarmFrame := !generateFlag && payload["generate"] != nil
+	accessProgramsModified := normalizeOfficialCodexAccessPrograms(
+		payload,
+		officialCodexAccessProgramsSection(egressContext.ProfileMode()),
+		!isPrewarmFrame && officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
+	)
 
 	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		egressContext,
@@ -734,8 +763,20 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
-	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload, baseInstructionsSection); err != nil {
 		return nil, result, err
+	}
+	if baseInstructionsSection != nil {
+		threadID, err := requiredOfficialEgressFieldValue(egressContext, OfficialEgressFieldThreadID)
+		if err != nil {
+			return nil, result, err
+		}
+		if err := applyOfficialCodexWSBaseInstructions(
+			payload, egressContext.openAIWSDerived, baseInstructionsSection, threadID,
+			baseInstructionsText, baseInstructionsSourced,
+		); err != nil {
+			return nil, result, err
+		}
 	}
 	if !reflect.DeepEqual(originalCallIDs, collectOfficialOpenAICallIDs(payload)) {
 		return nil, result, errors.New(
@@ -775,6 +816,12 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 			Field: "tools.image_gen",
 		})
 	}
+	if accessProgramsModified {
+		result.Modifications = append(result.Modifications, OfficialEgressModification{
+			Kind:  "frame",
+			Field: officialCodexAccessProgramsField,
+		})
+	}
 	return finalized, result, nil
 }
 
@@ -787,7 +834,7 @@ func validateUnifiedOpenAIWSBusinessContract(
 	expectedPreviousResponseID string,
 	allowControlledReplay bool,
 ) error {
-	_, _, err := decodeAndValidateUnifiedOpenAIWSBusinessContract(
+	_, _, _, err := decodeAndValidateUnifiedOpenAIWSBusinessContract(
 		original, candidate, expectedPreviousResponseID, allowControlledReplay, nil,
 	)
 	return err
@@ -795,55 +842,56 @@ func validateUnifiedOpenAIWSBusinessContract(
 
 // decodeAndValidateUnifiedOpenAIWSBusinessContract 将校验后的候选树直接交给定型器，
 // 避免校验完丢弃再整帧解码。比较只读取树，绝不改写业务输入和借用的源正文。
+// 第三个返回值是入口原始帧的树：原始帧与候选帧字节相同时与候选树是同一个对象，改写候选树前要先读完需要的内容。
 func decodeAndValidateUnifiedOpenAIWSBusinessContract(
 	original, candidate []byte,
 	expectedPreviousResponseID string,
 	allowControlledReplay bool,
 	body *officialWSFrameBody,
-) (map[string]any, *officialJSONRawIndex, error) {
+) (map[string]any, *officialJSONRawIndex, map[string]any, error) {
 	originalPayload, originalIndex, err := body.decode(original)
 	if err != nil {
-		return nil, nil, fmt.Errorf("decode unified OpenAI official egress ingress WebSocket frame: %w", err)
+		return nil, nil, nil, fmt.Errorf("decode unified OpenAI official egress ingress WebSocket frame: %w", err)
 	}
 	if strings.TrimSpace(officialOpenAIString(originalPayload, "type")) != officialOpenAIWSResponseCreateType {
 		if !bytes.Equal(original, candidate) {
-			return nil, nil, errors.New("OpenAI official egress unknown WebSocket frame was modified")
+			return nil, nil, nil, errors.New("OpenAI official egress unknown WebSocket frame was modified")
 		}
-		return originalPayload, originalIndex, nil
+		return originalPayload, originalIndex, originalPayload, nil
 	}
 	candidatePayload, candidateIndex := originalPayload, originalIndex
 	if !officialForwardSameBody(original, candidate) {
 		candidatePayload, candidateIndex, err = body.decode(candidate)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("decode unified OpenAI official egress outbound WebSocket frame: %w", err)
+		return nil, nil, nil, fmt.Errorf("decode unified OpenAI official egress outbound WebSocket frame: %w", err)
 	}
 	if strings.TrimSpace(officialOpenAIString(candidatePayload, "type")) != officialOpenAIWSResponseCreateType {
-		return nil, nil, errors.New("OpenAI official egress WebSocket frame type was modified")
+		return nil, nil, nil, errors.New("OpenAI official egress WebSocket frame type was modified")
 	}
 	if allowControlledReplay {
-		return candidatePayload, candidateIndex, nil
+		return candidatePayload, candidateIndex, originalPayload, nil
 	}
 	originalPrevious, originalPreviousPresent := originalPayload["previous_response_id"]
 	candidatePrevious, candidatePreviousPresent := candidatePayload["previous_response_id"]
 	if originalPreviousPresent != candidatePreviousPresent || !reflect.DeepEqual(originalPrevious, candidatePrevious) {
-		return nil, nil, errors.New("OpenAI official egress WebSocket previous_response_id was modified")
+		return nil, nil, nil, errors.New("OpenAI official egress WebSocket previous_response_id was modified")
 	}
 	if originalPreviousPresent {
 		originalValue, _ := originalPrevious.(string)
 		if strings.TrimSpace(expectedPreviousResponseID) != "" &&
 			strings.TrimSpace(originalValue) != strings.TrimSpace(expectedPreviousResponseID) {
-			return nil, nil, errors.New("OpenAI official egress WebSocket previous_response_id conflicts with prior response")
+			return nil, nil, nil, errors.New("OpenAI official egress WebSocket previous_response_id conflicts with prior response")
 		}
 	}
 	equal, err := equalOfficialOpenAIWSBusinessHistory(originalPayload, candidatePayload)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !equal {
-		return nil, nil, errors.New("OpenAI official egress WebSocket input was modified")
+		return nil, nil, nil, errors.New("OpenAI official egress WebSocket input was modified")
 	}
-	return candidatePayload, candidateIndex, nil
+	return candidatePayload, candidateIndex, originalPayload, nil
 }
 
 // injectOfficialOpenAIWSTurnState 把上游握手返回的连接级 turn-state 写入
@@ -969,6 +1017,9 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 		return nil, false, nil
 	}
 
+	// 画像声明基础指令载体节时，预热帧的 input 只取前缀：additional_tools 与官方形态的基础指令消息，
+	// 其余 developer 消息留给正式业务帧；节缺省时沿用旧逻辑（additional_tools 与全部 developer 消息）。
+	baseInstructionsSection := officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode())
 	input, _ := payload["input"].([]any)
 	prewarmInput := make([]any, 0, len(input))
 	for _, rawItem := range input {
@@ -978,7 +1029,14 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 		}
 		itemType := strings.TrimSpace(officialOpenAIString(item, "type"))
 		role := strings.TrimSpace(officialOpenAIString(item, "role"))
-		if itemType == officialOpenAIAdditionalToolsType || role == "developer" {
+		switch {
+		case itemType == officialOpenAIAdditionalToolsType:
+			prewarmInput = append(prewarmInput, item)
+		case baseInstructionsSection != nil:
+			if isOfficialCodexBaseInstructionsItem(baseInstructionsSection, item) {
+				prewarmInput = append(prewarmInput, item)
+			}
+		case role == "developer":
 			prewarmInput = append(prewarmInput, item)
 		}
 	}
@@ -991,6 +1049,8 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 	payload["input"] = prewarmInput
 	payload["generate"] = false
 	delete(payload, "previous_response_id")
+	// 业务帧上补出的 access_programs 不属于预热帧：官方预热帧不绑定回合程序。
+	removeOfficialCodexAccessProgramsForPrewarm(payload, officialCodexAccessProgramsSection(egressContext.ProfileMode()))
 	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadata(
 		egressContext,
 		payload,
@@ -1000,7 +1060,7 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
-	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload, baseInstructionsSection); err != nil {
 		return nil, false, err
 	}
 
@@ -1044,12 +1104,17 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 			err,
 		)
 	}
+	// 画像声明基础指令载体节时，官方形态的基础指令消息与 additional_tools 一样已在预热帧登记，正式帧不再重复。
+	baseInstructionsSection := officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode())
 	input, _ := payload["input"].([]any)
 	businessInput := make([]any, 0, len(input))
 	for _, rawItem := range input {
 		item, ok := rawItem.(map[string]any)
 		if ok &&
 			strings.TrimSpace(officialOpenAIString(item, "type")) == officialOpenAIAdditionalToolsType {
+			continue
+		}
+		if ok && baseInstructionsSection != nil && isOfficialCodexBaseInstructionsItem(baseInstructionsSection, item) {
 			continue
 		}
 		businessInput = append(businessInput, rawItem)
@@ -1079,7 +1144,7 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
-	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload, baseInstructionsSection); err != nil {
 		return nil, err
 	}
 
@@ -1413,7 +1478,9 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
-	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(
+		payload, officialCodexWSBaseInstructionsCarrier(egressContext.ProfileMode()),
+	); err != nil {
 		return nil, false, err
 	}
 
@@ -1432,7 +1499,10 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 // finalizeOfficialOpenAIWSInputTurnMetadata 对齐 Codex OAuth WebSocket 的
 // 逐项 Turn 元数据。官方预热帧不携带该字段；业务帧中每个 input 项都带有
 // 所属轮次的 turn_id，历史项保留历史轮次，当前后缀使用 client_metadata.turn_id。
-func finalizeOfficialOpenAIWSInputTurnMetadata(payload map[string]any) (bool, error) {
+func finalizeOfficialOpenAIWSInputTurnMetadata(
+	payload map[string]any,
+	baseInstructions *profilecontract.BaseInstructionsSection,
+) (bool, error) {
 	input, ok := payload["input"].([]any)
 	if !ok {
 		return false, errors.New(
@@ -1455,6 +1525,9 @@ func finalizeOfficialOpenAIWSInputTurnMetadata(payload map[string]any) (bool, er
 		for _, rawItem := range input {
 			item, valid := rawItem.(map[string]any)
 			if !valid {
+				continue
+			}
+			if baseInstructions != nil && isOfficialCodexBaseInstructionsItem(baseInstructions, item) {
 				continue
 			}
 			if _, exists := item[officialOpenAIWSItemTurnMetadata]; exists {
@@ -1507,6 +1580,10 @@ func finalizeOfficialOpenAIWSInputTurnMetadata(payload map[string]any) (bool, er
 					"OpenAI official egress WebSocket input item %d must be object",
 					itemIndex,
 				)
+			}
+			// 官方形态的基础指令消息的 passthrough 只带 content_item_kinds，不补 turn_id，也不校验。
+			if baseInstructions != nil && isOfficialCodexBaseInstructionsItem(baseInstructions, item) {
+				continue
 			}
 			itemMetadata, exists := item[officialOpenAIWSItemTurnMetadata]
 			if !exists {

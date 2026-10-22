@@ -70,6 +70,16 @@ type officialOpenAIHTTPBodyContract struct {
 	include                      any
 	parallelPresent              bool
 	parallelToolCalls            any
+	// inboundTaggedMessages 记录入站 input 前缀里带内容标记（internal_chat_message_metadata_passthrough
+	// 的 content_item_kinds）的 developer 消息。入站规范化会剥掉这个标记，画像声明基础指令载体时要靠这份
+	// 记录识别官方客户端自带的基础指令。只读记录，不改 input；画像没有声明该载体时不被使用。
+	inboundTaggedMessages []officialOpenAIHTTPTaggedMessage
+}
+
+// officialOpenAIHTTPTaggedMessage 是入站 input 里一条带内容标记的 developer 消息：标记集合与正文原文。
+type officialOpenAIHTTPTaggedMessage struct {
+	kinds []string
+	text  string
 }
 
 type officialOpenAIHTTPIdentity struct {
@@ -318,7 +328,9 @@ func captureOfficialOpenAIHTTPBodyContractWithIndex(body []byte, index *official
 			contract.clientMetadata = cloneOfficialOpenAIMap(metadata)
 		}
 	}
-	contract.additionalTools, contract.callIDs = collectOfficialOpenAIInputContractFromIndex(index, index.memberNode(root, "input"))
+	inputNode := index.memberNode(root, "input")
+	contract.additionalTools, contract.callIDs = collectOfficialOpenAIInputContractFromIndex(index, inputNode)
+	contract.inboundTaggedMessages = collectOfficialOpenAIInboundTaggedMessagesFromIndex(index, inputNode)
 	return contract, nil
 }
 
@@ -414,6 +426,7 @@ func (b *officialForwardHTTPBody) captureContract(c *gin.Context, body []byte) (
 			return nil, captureErr
 		}
 		headers.additionalTools, headers.callIDs = contract.additionalTools, contract.callIDs
+		headers.inboundTaggedMessages = contract.inboundTaggedMessages
 		contract = headers
 	}
 	if err == nil && b != nil && b.liteDefaults {
@@ -660,6 +673,7 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			SupportsParallelTools: egressContext.parallelTools,
 			UserAgent:             officialOpenAIInboundUserAgent(c),
 			ProfileMode:           egressContext.ProfileMode(),
+			ThreadID:              identity.threadID,
 		},
 	)
 	if err != nil {
@@ -783,6 +797,9 @@ type officialOpenAIHTTPBodyOptions struct {
 	// UserAgent 只用于投影告警定位来源，不参与任何定型决策。
 	UserAgent   string
 	ProfileMode string
+	// ThreadID 是本次请求派生出的官方线程 ID，只用于画像声明基础指令载体时计算消息 id；
+	// 画像没有声明该载体时不被读取。
+	ThreadID string
 }
 
 func finalizeOfficialOpenAIHTTPBody(
@@ -870,25 +887,14 @@ func finalizeOfficialOpenAIHTTPBodyPayloadMembers(
 	return members, true, nil
 }
 
-// finalizeOfficialOpenAIHTTPBodyPayloadInPlace 就地完成全部定型改写与 call_id 校验，返回正文是否
-// 被改写；编码由调用方按需要的形态（整段字节或顶层成员）完成。
-func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
+// finalizeLegacyOfficialOpenAIHTTPInstructions 是画像没有声明 BaseInstructions 节时对顶层 instructions
+// 的定型，逐字搬迁自 finalizeOfficialOpenAIHTTPBodyPayloadInPlace：Lite 迁入 input 的 developer 消息，
+// 非 Lite 保留顶层字段。返回 payload 是否被改动。
+func finalizeLegacyOfficialOpenAIHTTPInstructions(
 	payload map[string]any,
 	contract *officialOpenAIHTTPBodyContract,
-	reasoningDefaults officialOpenAIReasoningDefaults,
-	options officialOpenAIHTTPBodyOptions,
+	useResponsesLite bool,
 ) (bool, error) {
-	if contract == nil {
-		return false, errors.New("OpenAI official egress body contract is nil")
-	}
-	if payload == nil {
-		return false, errors.New("OpenAI official egress decoded body is nil")
-	}
-	// 解构一次，保持下方定型逻辑的可读性与原实现一致。
-	isCompact := options.IsCompact
-	useResponsesLite := options.UseResponsesLite
-	supportsParallelTools := options.SupportsParallelTools
-
 	modified := false
 	// 顶层 instructions 的所有权必须以入口契约为准，而不能由当前模型是否
 	// Responses Lite 反推。工具续接、模型能力刷新等路径可能把同一请求切到
@@ -945,9 +951,44 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 		}
 		modified = true
 	}
+	return modified, nil
+}
+
+// finalizeOfficialOpenAIHTTPBodyPayloadInPlace 就地完成全部定型改写与 call_id 校验，返回正文是否
+// 被改写；编码由调用方按需要的形态（整段字节或顶层成员）完成。
+func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
+	payload map[string]any,
+	contract *officialOpenAIHTTPBodyContract,
+	reasoningDefaults officialOpenAIReasoningDefaults,
+	options officialOpenAIHTTPBodyOptions,
+) (bool, error) {
+	if contract == nil {
+		return false, errors.New("OpenAI official egress body contract is nil")
+	}
+	if payload == nil {
+		return false, errors.New("OpenAI official egress decoded body is nil")
+	}
+	// 解构一次，保持下方定型逻辑的可读性与原实现一致。
+	isCompact := options.IsCompact
+	useResponsesLite := options.UseResponsesLite
+	supportsParallelTools := options.SupportsParallelTools
+
+	// 顶层 instructions 的处理分两种：画像声明了 BaseInstructions 节（且列出该端点）时，基础指令以官方形态
+	// 安装进 input 前缀，Lite 与非 Lite 同形；画像没有声明时沿用旧逻辑，见
+	// finalizeLegacyOfficialOpenAIHTTPInstructions。节缺省的画像出站字节与引入该节之前逐字节相同。
 	endpointID := officialCodexEndpointResponsesHTTP
 	if isCompact {
 		endpointID = officialCodexEndpointResponsesCompact
+	}
+	var modified bool
+	var err error
+	if carrier, carrierActive := officialCodexBaseInstructionsCarrier(options.ProfileMode, endpointID); carrierActive {
+		modified, err = applyOfficialCodexBaseInstructionsCarrier(payload, contract, carrier, options.ThreadID)
+	} else {
+		modified, err = finalizeLegacyOfficialOpenAIHTTPInstructions(payload, contract, useResponsesLite)
+	}
+	if err != nil {
+		return false, err
 	}
 	allowedTopLevel, err := officialOpenAITopLevelAllowSetForMode(
 		options.ProfileMode,
@@ -989,6 +1030,17 @@ func finalizeOfficialOpenAIHTTPBodyPayloadInPlace(
 		if profileModified {
 			modified = true
 		}
+	}
+	// access_programs：画像声明了 AccessPrograms 节时，入站取值只有落在节的子集内才允许出站，其余整字段删除并告警；
+	// 节里写了默认程序，请求又没有（或被删光了）access_programs，就补出默认程序，位置跟随画像字段序（末位）。
+	// 放在顶层字段闭集剔除之后——画像在 Body.Fields 里声明了该字段它才会留到这里。画像没有该节时
+	// access_programs 已被闭集剔除，这里是恒等操作。
+	if normalizeOfficialCodexAccessPrograms(
+		payload,
+		officialCodexAccessProgramsSection(options.ProfileMode),
+		officialCodexAccessProgramsGenerationAllowed(allowedTopLevel),
+	) {
+		modified = true
 	}
 	// 非 Lite 的 parallel_tool_calls 允许入口/兼容层显式值，但不得越过
 	// 当前模型能力；缺少显式值时才使用能力默认值。Lite 和 compact 始终

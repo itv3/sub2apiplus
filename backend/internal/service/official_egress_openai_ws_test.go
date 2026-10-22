@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -272,6 +273,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		account,
 		"wss://chatgpt.com/backend-api/codex/responses",
 		firstPayload,
+		legacyProfileConfigForTest(t), // 断言旧画像的帧形态（顶层 instructions 取走、逐项 turn_id）
 	)
 	require.NoError(t, err)
 	egressContext, exists := OfficialEgressContextFromContext(ctx)
@@ -653,6 +655,7 @@ func TestOpenAIOfficialEgressWSDerivedNonLiteUsesOfficialContract(t *testing.T) 
 		newOfficialOpenAIHTTPTestAccount(94),
 		"wss://chatgpt.com/backend-api/codex/responses",
 		payload,
+		legacyProfileConfigForTest(t), // 断言旧画像的顶层 instructions 契约
 	)
 	require.NoError(t, err)
 	finalized, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(ctx, payload, payload, "", false)
@@ -943,7 +946,9 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 }
 
 func TestOpenAIOfficialEgressWSFrameAddsHistoricalAndCurrentTurnMetadata(t *testing.T) {
-	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
+	// 断言旧画像的 input 固定下标：声明了基础指令载体的画像对没有来源的新链首帧会在最前面装入默认基础指令消息，
+	// 下标随之后移（基础指令消息本身不带逐项 turn_id），该形态由载体槽位的基础指令用例覆盖。
+	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t, legacyProfileConfigForTest(t))
 	original := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
 		"type":"response.create",
 		"input":[
@@ -1190,8 +1195,10 @@ func applyOfficialOpenAIChildWSHeadersForTest(
 	}
 }
 
+// newOfficialOpenAIWSContextForTest 构造第三方 WS 入口的派生上下文；cfgs 非空时按其发布指针固定画像槽位，缺省取 Active。
 func newOfficialOpenAIWSContextForTest(
 	t *testing.T,
+	cfgs ...*config.Config,
 ) (context.Context, *OfficialEgressContext, *gin.Context, []byte) {
 	t.Helper()
 	firstPayload := newOfficialOpenAIWSFirstFrameForTest(t)
@@ -1206,6 +1213,7 @@ func newOfficialOpenAIWSContextForTest(
 		account,
 		"wss://chatgpt.com/backend-api/codex/responses",
 		firstPayload,
+		cfgs...,
 	)
 	require.NoError(t, err)
 	egressContext, exists := OfficialEgressContextFromContext(ctx)

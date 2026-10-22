@@ -19,11 +19,35 @@ import (
 
 // turn metadata 目标版本新键。
 const (
-	officialCodexTurnMetadataKeyAnalyticsEnabled = "analytics_enabled"
-	officialCodexTurnMetadataKeyModel            = "model"
-	officialCodexTurnMetadataKeyReasoningEffort  = "reasoning_effort"
-	officialCodexTurnMetadataKeyTurnTrigger      = "turn_trigger"
+	officialCodexTurnMetadataKeyAnalyticsEnabled      = "analytics_enabled"
+	officialCodexTurnMetadataKeyHistoryInitialization = "history_initialization"
+	officialCodexTurnMetadataKeyModel                 = "model"
+	officialCodexTurnMetadataKeyReasoningEffort       = "reasoning_effort"
+	officialCodexTurnMetadataKeyTurnTrigger           = "turn_trigger"
 )
+
+// history_initialization 描述会话历史是怎样建立的，是运行时级属性：同一线程的所有 Responses 请求
+// （含 WebSocket 预热握手与预热帧、压缩请求）取同一个值，压缩之后也不变。官方客户端恒带这个键，
+// 缺失本身就可分辨，所以画像声明该键时恒写入。网关不跟踪入站会话的历史来源，默认给新会话的取值；
+// 扩展里显式给出的值必须落在官方取值闭集内，留给将来受限透传使用。取值与版本无关。
+const officialCodexHistoryInitializationNew = "new"
+
+var officialCodexHistoryInitializationValues = []string{
+	officialCodexHistoryInitializationNew, "cleared", "cold_resume", "warm_fork", "cold_fork", "supplied_history",
+}
+
+// officialCodexHistoryInitialization 返回网关默认给出的 history_initialization：新会话。
+func officialCodexHistoryInitialization() string {
+	return officialCodexHistoryInitializationNew
+}
+
+// validateOfficialCodexHistoryInitialization 要求取值落在官方取值闭集内。
+func validateOfficialCodexHistoryInitialization(value string) error {
+	if !slices.Contains(officialCodexHistoryInitializationValues, value) {
+		return fmt.Errorf("turn metadata history_initialization 不在官方取值闭集：%q", value)
+	}
+	return nil
+}
 
 // turn_trigger 取值取自官方客户端源码的常量：exec 入口为 exec，TUI 用户输入为 user，
 // guardian 审阅会话为 guardian_review，内部记忆合并为 memory_consolidation；普通子代理
@@ -44,6 +68,9 @@ type officialCodexTurnMetadataExtension struct {
 	ReasoningEffort string
 	// TurnTrigger 是本轮触发来源；prewarm 等不属于某一轮的请求留空。
 	TurnTrigger string
+	// HistoryInitialization 是会话历史的建立方式。与上面“没有可信取值就省略”的键不同：留空取默认的新会话，
+	// 画像声明该键时恒写入；非空时必须落在官方取值闭集内。
+	HistoryInitialization string
 }
 
 // officialCodexTurnTrigger 按入口与会话种类给出 turn_trigger 取值；无法确定时返回空串。
@@ -113,6 +140,16 @@ func applyOfficialCodexTurnMetadataSection(
 	if declared(officialCodexTurnMetadataKeyAnalyticsEnabled) {
 		// 按官方取证值固定，不透传下游入站的取值。
 		values[officialCodexTurnMetadataKeyAnalyticsEnabled] = section.AnalyticsEnabled
+	}
+	if declared(officialCodexTurnMetadataKeyHistoryInitialization) {
+		value := strings.TrimSpace(extension.HistoryInitialization)
+		if value == "" {
+			value = officialCodexHistoryInitialization()
+		}
+		if err := validateOfficialCodexHistoryInitialization(value); err != nil {
+			return err
+		}
+		values[officialCodexTurnMetadataKeyHistoryInitialization] = value
 	}
 	if model := strings.TrimSpace(extension.Model); model != "" && declared(officialCodexTurnMetadataKeyModel) {
 		values[officialCodexTurnMetadataKeyModel] = model

@@ -11,16 +11,32 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
-// officialCodexBodyFieldOrderForMode 每次从正式 ReleaseCatalog 投影字段槽位。
-// 字段序不再保存在包级 active 切片中；最终 compiler 仍会按调用级 Bundle 再校验。
-func officialCodexBodyFieldOrderForMode(mode, endpointID string) ([]string, error) {
+// officialCodexReleaseProfileForBodyOrder 是字段序入口取画像的步骤，抽成包级变量只为让测试能在
+// 目标版本画像入库之前注入合成画像：字段序入口不经过 officialCodexExecutableProfileForMode，
+// 该入口的替换点够不到 Body.Fields，合成画像夹具因此无法覆盖顶层字段的重排、删除与新增。
+//
+// 默认实现逐字复刻抽取之前的取画像行为：按调用冻结的 mode 原样解析正式 ReleaseCatalog，
+// 不做 normalizeOfficialClientProfileMode 那种“非 previous 一律 active”的宽松化——
+// 空串与非法值照旧在这里失败关闭，差分测试锁定它与原入口的结果和错误逐一相同。
+// 生产代码不得改写；替换它的测试不得并行执行。
+var officialCodexReleaseProfileForBodyOrder = func(mode string) (profilecontract.ExecutableProfile, error) {
 	release, err := officialegress.DefaultReleaseCatalog().Resolve(
 		officialegress.ReleaseMode(mode),
 	)
 	if err != nil {
+		return profilecontract.ExecutableProfile{}, err
+	}
+	return release.ExecutableProfile(), nil
+}
+
+// officialCodexBodyFieldOrderForMode 每次从正式 ReleaseCatalog 投影字段槽位。
+// 字段序不再保存在包级 active 切片中；最终 compiler 仍会按调用级 Bundle 再校验。
+func officialCodexBodyFieldOrderForMode(mode, endpointID string) ([]string, error) {
+	profile, err := officialCodexReleaseProfileForBodyOrder(mode)
+	if err != nil {
 		return nil, err
 	}
-	return officialCodexBodyFieldOrderFromProfile(release.ExecutableProfile(), endpointID)
+	return officialCodexBodyFieldOrderFromProfile(profile, endpointID)
 }
 
 func officialCodexBodyFieldOrderFromProfile(
@@ -53,13 +69,13 @@ func marshalOfficialOpenAIWSJSONFromProfile(
 }
 
 // officialOpenAITurnMetadataFieldOrder 对齐官方 turn metadata 结构体的声明序：
-// turn_trigger 位于 thread_source 与 sandbox 之间，analytics_enabled 位于
-// turn_started_at_unix_ms 与 compaction 之间，model、reasoning_effort 属于结构体末尾
-// 按键名排序展开的附加表。新键只在画像 TurnMetadata 节声明时写入，旧画像的键集中
+// history_initialization 紧跟 request_kind，turn_trigger 位于 thread_source 与 sandbox 之间，
+// analytics_enabled 位于 turn_started_at_unix_ms 与 compaction 之间，model、reasoning_effort
+// 属于结构体末尾按键名排序展开的附加表。新键只在画像 TurnMetadata 节声明时写入，旧画像的键集中
 // 不含它们，插入这些位置不改变旧画像的输出字节。
 var officialOpenAITurnMetadataFieldOrder = []string{
 	"installation_id", "session_id", "thread_id", "turn_id", "window_id",
-	"request_kind", "thread_source", "turn_trigger", "sandbox", "turn_started_at_unix_ms",
+	"request_kind", "history_initialization", "thread_source", "turn_trigger", "sandbox", "turn_started_at_unix_ms",
 	"analytics_enabled", "compaction", "model", "reasoning_effort",
 }
 
@@ -292,11 +308,13 @@ func officialJSONMemberValue(index *officialJSONRawIndex, value any, node int32)
 			segments = append(segments, []byte{','})
 		}
 		// 与 officialJSONAppendArray 完全相同：先按内容匹配，再尝试未占用的同位置节点。
+		// 预编码的 json.RawMessage 项不参与任何配对（见 isOfficialJSONPreEncodedItem）。
 		match := -1
-		if index != nil {
+		preEncoded := isOfficialJSONPreEncodedItem(item)
+		if index != nil && !preEncoded {
 			match = index.matchArrayItem(item, originalItems, used)
 		}
-		if match < 0 && i < len(originalItems) && !used[i] {
+		if match < 0 && !preEncoded && i < len(originalItems) && !used[i] {
 			match = i
 		}
 		child := int32(-1)

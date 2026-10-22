@@ -18,13 +18,23 @@ func TestMarshalOfficialOpenAIHTTPJSONUsesCodexFieldOrder(t *testing.T) {
 		"reasoning":       map[string]any{"effort": "high"},
 		"service_tier":    "priority",
 	}
-	body, err := marshalOfficialOpenAIHTTPJSON(officialClientProfileModeActive, payload, false)
-	require.NoError(t, err)
-	text := string(body)
-	require.Less(t, strings.Index(text, `"model"`), strings.Index(text, `"input"`))
-	require.Less(t, strings.Index(text, `"input"`), strings.Index(text, `"reasoning"`))
-	require.Less(t, strings.Index(text, `"reasoning"`), strings.Index(text, `"service_tier"`))
-	require.Less(t, strings.Index(text, `"service_tier"`), strings.Index(text, `"client_metadata"`))
+	// 两个正式槽位各验证一遍：旧画像（不声明基础指令载体）的顶层字段序是 model、input、reasoning、
+	// service_tier、client_metadata；较新画像把 stream、service_tier 前置，service_tier 位于 input 之前。
+	// 晋升前后 active／previous 各是其中一种，按结构事实区分，不写死槽位名。
+	legacyMode, hasLegacy := officialCodexLegacyBaseProfileMode()
+	for _, mode := range []string{officialClientProfileModeActive, officialClientProfileModePrevious} {
+		body, err := marshalOfficialOpenAIHTTPJSON(mode, payload, false)
+		require.NoError(t, err, mode)
+		text := string(body)
+		want := []string{`"model"`, `"service_tier"`, `"input"`, `"reasoning"`, `"client_metadata"`}
+		if hasLegacy && mode == legacyMode {
+			want = []string{`"model"`, `"input"`, `"reasoning"`, `"service_tier"`, `"client_metadata"`}
+		}
+		for index := 1; index < len(want); index++ {
+			require.Less(t, strings.Index(text, want[index-1]), strings.Index(text, want[index]),
+				"%s 槽位：%s 必须位于 %s 之前，实际 %s", mode, want[index-1], want[index], text)
+		}
+	}
 }
 
 func TestMarshalOfficialOpenAIWSJSONConsumesFrozenProfile(t *testing.T) {

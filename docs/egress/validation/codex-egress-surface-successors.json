@@ -8,10 +8,28 @@
   },
   "entries": [
     {
+      "path": "backend/internal/service/official_egress_codex_direct_body.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.163.0 候选（晋升演练）：直接交给 Executor 的 Responses 请求体（用量探针、管理员测试连接）按 Executor 实际冻结的发布槽位整理，端点画像闭集不声明顶层 instructions 时去掉该字段，避免 Compiler 对闭集外字段失败关闭；闭集仍声明时恒等，直接决定官方出站请求体是否携带该字段。"
+    },
+    {
       "path": "backend/internal/service/official_egress_codex_profile_optional.go",
       "file_type": "regular",
       "kind": "surface_addition",
       "reason": "Codex 0.157.0 候选（VC-4）：service 读取当前 release 画像可选节／新条件／新来源的唯一入口，画像未声明时调用方保持旧逻辑，直接决定官方出站形态。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_access_programs.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.163.0 候选（C2d）：按画像 AccessPrograms 节校验请求体 access_programs 的出站值域，越出子集的取值整字段删除并告警，第一版从不默认生成，直接决定官方出站请求体是否携带该条件字段。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_base_instructions.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.163.0 候选（C2a）：按画像 BaseInstructions 节把基础指令以官方形态（稳定 id、passthrough 标记、官方键序）安装进 input 前缀，识别并去重旧副本，直接决定官方出站请求体形态。"
     },
     {
       "path": "backend/internal/service/official_egress_openai_turn_metadata_section.go",

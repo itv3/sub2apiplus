@@ -627,6 +627,38 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_FollowupCreateCa
 // 契约拒绝，两者都会断开连接。桥接自身的注入逻辑由 openai_codex_transform_test.go
 // 与 openai_image_generation_controls_test.go 覆盖。
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSkipsCodexImageBridge(t *testing.T) {
+	// 首帧只带 developer 上下文：这里固定在旧画像槽位，断言旧画像的预热帧构造。
+	// 声明了基础指令载体的画像对同样首帧的预热帧构造由下面的载体槽位用例覆盖。
+	runOfficialEgressSkipsCodexImageBridge(t, useOfficialCodexLegacyProfile)
+}
+
+// 载体槽位的原形态用例：同一组帧（首帧只有 developer 上下文，没有顶层 instructions、没有带标记的消息）固定在声明了
+// WS 基础指令载体的画像槽位（候选态在 previous，晋升后在 active）。首帧是画像的连接级 prewarm，没有来源的新链回退到
+// 模型默认 Codex 指令，预热帧只承载这条默认基础指令消息，桥接工具与桥接指令仍不注入。
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSkipsCodexImageBridgeOnCarrierSlot(t *testing.T) {
+	writes := runOfficialEgressSkipsCodexImageBridge(t, useOfficialCodexBaseInstructionsCarrierProfile)
+	require.GreaterOrEqual(t, len(writes), 1)
+	prewarm := requestToJSONString(writes[0])
+	require.False(t, gjson.Get(prewarm, "generate").Bool(), "前提：首帧是 generate=false 的连接级 prewarm")
+	require.False(t, gjson.Get(prewarm, "instructions").Exists(), "载体画像的预热帧没有顶层 instructions")
+	kinds := gjson.Get(prewarm, `input.#(internal_chat_message_metadata_passthrough.content_item_kinds)#`).Array()
+	require.Len(t, kinds, 1, "预热帧 input 里恰有一条基础指令消息：%s", prewarm)
+	require.Equal(t, wsDefaultInstructionsHTTPOracle(t, "gpt-5.5"), kinds[0].Get("content.0.text").String(),
+		"基础指令消息的正文是模型默认 Codex 指令")
+	require.Len(t, gjson.Get(prewarm, "input").Array(), 1, "预热帧 input 只有前缀，developer 上下文留给业务帧")
+	business := requestToJSONString(writes[1])
+	require.Empty(t, gjson.Get(business, `input.#(internal_chat_message_metadata_passthrough.content_item_kinds)#`).Array(),
+		"业务帧不重复基础指令")
+	require.Equal(t, "developer context", gjson.Get(business, `input.#(role=="developer").content.0.text`).String(),
+		"首帧的 developer 上下文随业务帧发出")
+}
+
+// runOfficialEgressSkipsCodexImageBridge 驱动 OfficialEgressSkipsCodexImageBridge 的全部帧与断言，画像槽位由 pinProfile 固定；
+// 返回上游捕获连接上依次写入的帧，供调用方追加与槽位相关的断言。
+func runOfficialEgressSkipsCodexImageBridge(
+	t *testing.T,
+	pinProfile func(*testing.T, *OpenAIGatewayService),
+) []map[string]any {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -666,6 +698,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
+	pinProfile(t, svc)
 	svc.openaiModelCapabilities.replaceFromManifest(
 		31,
 		[]byte(`{"models":[{"slug":"gpt-5.5","use_responses_lite":true}]}`),
@@ -869,6 +902,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 	functionPayload := requestToJSONString(captureConn.writes[3])
 	require.Equal(t, "image_gen.imagegen",
 		gjson.Get(functionPayload, `input.#(type=="additional_tools").tools.0.name`).String())
+	return captureConn.writes
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_DedicatedModeDoesNotReuseConnAcrossSessions(t *testing.T) {

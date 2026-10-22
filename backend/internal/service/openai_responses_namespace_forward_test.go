@@ -52,7 +52,9 @@ func TestOpenAIGatewayService_OAuthPreservesCodexNamespaceTools(t *testing.T) {
 	}}
 	c := newOpenAIRejectedFieldTestContext(body)
 
-	result, err := newOpenAINamespaceTestService(upstream).Forward(
+	svc := newOpenAINamespaceTestService(upstream)
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 固定下标
+	result, err := svc.Forward(
 		context.Background(), c, newOpenAIOAuthNamespaceTestAccount(), body,
 	)
 
@@ -180,7 +182,9 @@ func TestOpenAIGatewayService_OAuthFlattenFlagRestoresLegacyBehavior(t *testing.
 	account := newOpenAIOAuthNamespaceTestAccount()
 	account.Extra = map[string]any{"openai_responses_flatten_namespaces": true}
 
-	result, err := newOpenAINamespaceTestService(upstream).Forward(
+	svc := newOpenAINamespaceTestService(upstream)
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的 input 固定下标
+	result, err := svc.Forward(
 		context.Background(), c, account, body,
 	)
 

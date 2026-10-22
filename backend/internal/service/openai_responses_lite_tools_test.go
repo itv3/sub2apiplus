@@ -401,6 +401,7 @@ func TestOpenAIGatewayServiceForward_RoutesHostedWebSearchOutOfLite(t *testing.T
 
 	upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_hosted_web_search")}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	useOfficialCodexLegacyProfile(t, svc) // 断言旧画像的顶层 instructions
 	svc.openaiModelCapabilities.replaceFromManifest(502, []byte(
 		`{"models":[{"slug":"gpt-5.6-sol","visibility":"list","use_responses_lite":true,"supports_parallel_tool_calls":true}]}`,
 	))

@@ -15,8 +15,13 @@ import (
 // ============================================================================
 // 请求体序列化类受影响规则（数字推理档位、imagegen 背景与编辑引用）的晋升后门禁。
 //
-// 两条门禁都以 codexGateDiscriminatingReleaseMode 定位目标槽位：只有目标画像声明对应可选节，
-// 另一槽位作对照，证明行为确实由画像节驱动、回退旧画像时不会带出新行为。
+// 两条门禁都以 codexGateTargetReleaseMode 定位槽位：
+//   - 恰好一个槽位声明对应可选节（引入该节的那一轮）：该槽位就是目标，另一槽位作对照，证明行为
+//     确实由画像节驱动、回退旧画像时不会带出新行为；
+//   - 两个槽位都声明（后续升级继承了这两项特征，目标画像进入 previous 后的常态）：两条门禁不再承担
+//     判别职责，改在版本较旧、也就是当初批准这些语义的槽位上继续重放，作为既有批准语义的回归，
+//     “另一槽位没有该节”的对照随之跳过。后续目标版本对相同规则的新语义由各自轮次的判别式门禁覆盖。
+// 断言本身与引入这两项特征的那一轮完全相同，没有放宽。
 // ============================================================================
 
 // SPEC-BODY-006（change）：自定义推理档位能按 u64 解析时，Responses 请求体以 JSON 整数发出。
@@ -31,7 +36,7 @@ import (
 //
 // 对照：另一槽位没有 ReasoningEffort 节，同一入站的 reasoning.effort 在 wire 上是字符串 "3"。
 func TestCodexNumericReasoningEffortReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "ReasoningEffort 节把可按 u64 解析的自定义档位定型为 JSON 整数",
+	mode := codexGateTargetReleaseMode(t, "ReasoningEffort 节把可按 u64 解析的自定义档位定型为 JSON 整数",
 		func(profile profilecontract.ExecutableProfile) bool {
 			section := profile.Optional().ReasoningEffort
 			return section != nil && section.CustomNumericSerialization == "u64_integer"
@@ -110,7 +115,7 @@ const codexGateImageFileIDEditBody = `{"model":"gpt-image-2","prompt":"make it b
 // 对照：另一槽位没有 ImageGeneration 节，background 原样透传（auto 仍是 auto、缺省不补），file_id 编辑在
 // 出站前以 400 拒绝、wire 上没有 edits 请求。
 func TestCodexImagesBackgroundAndFileReferenceReplaysApprovedSemanticsOnTargetRelease(t *testing.T) {
-	mode := codexGateDiscriminatingReleaseMode(t, "ImageGeneration 节声明 opaque 默认背景与 file_id 编辑引用",
+	mode := codexGateTargetReleaseMode(t, "ImageGeneration 节声明 opaque 默认背景与 file_id 编辑引用",
 		func(profile profilecontract.ExecutableProfile) bool {
 			section := profile.Optional().ImageGeneration
 			return section != nil && section.DefaultBackground == "opaque" &&
