@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -247,15 +246,18 @@ func TestSanitizeOpenAIResponsesInputItemIDs_AllocationGrowthIsLinear(t *testing
 		return []byte(`{"model":"gpt-5.6-sol","input":[` + strings.Join(items, ",") + `]}`)
 	}
 	allocatedBytes := func(body []byte) uint64 {
-		runtime.GC()
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		sanitized, changed, err := sanitizeOpenAIResponsesInputItemIDs(body)
-		runtime.ReadMemStats(&after)
+		var sanitized []byte
+		var changed bool
+		var err error
+		// 满载时其它协程的分配会混进单次窗口，改用 testMeasureAllocatedBytes（窗口内只留一个 P、取多次最小值）；
+		// sanitizeOpenAIResponsesInputItemIDs 不改入参，重复执行结果一致。
+		allocated := testMeasureAllocatedBytes(t, func() {
+			sanitized, changed, err = sanitizeOpenAIResponsesInputItemIDs(body)
+		})
 		require.NoError(t, err)
 		require.True(t, changed)
 		require.NotEmpty(t, sanitized)
-		return after.TotalAlloc - before.TotalAlloc
+		return allocated
 	}
 
 	smallAllocated := allocatedBytes(makeBody(20))

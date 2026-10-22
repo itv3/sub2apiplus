@@ -45,8 +45,13 @@ func legacyEncodeNames(d *orderedJSONDocument, names []string) []byte {
 }
 
 func sharedBodyMeasureAllocated(run func()) uint64 {
+	// 满载机器上，其它协程会在测量窗口里同时分配，把上限只有几 KiB 的用例的读数抬高；
+	// 测量期间把 P 数降到 1，其它协程无法并行分配，并取多次中的最小值
+	// （与 service 包的 testMeasureAllocatedBytes 同一做法）。
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
 	best := ^uint64(0)
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 5; attempt++ {
 		var before, after runtime.MemStats
 		runtime.GC()
 		runtime.ReadMemStats(&before)

@@ -2,7 +2,6 @@ package service
 
 import (
 	"bytes"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -101,15 +100,16 @@ func TestResponsesLitePrecheckDoesNotAmplifyNormalizedBody(t *testing.T) {
 	}
 	_, _ = b.WriteString(`]}`)
 	body := []byte(b.String())
-	runtime.GC()
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	out, changed, err := normalizeOpenAIResponsesLiteToolsPayload(body)
-	runtime.ReadMemStats(&after)
+	var out []byte
+	var changed bool
+	var err error
+	// 满载时其它协程的分配会混进单次窗口，改用 testMeasureAllocatedBytes（窗口内只留一个 P、取多次最小值）。
+	allocated := float64(testMeasureAllocatedBytes(t, func() {
+		out, changed, err = normalizeOpenAIResponsesLiteToolsPayload(body)
+	}))
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.True(t, bytes.Equal(out, body))
-	allocated := float64(after.TotalAlloc - before.TotalAlloc)
 	t.Logf("正文 %.1f MiB：预检分配 %.2f MiB", float64(len(body))/1024/1024, allocated/1024/1024)
 	require.Less(t, allocated, float64(len(body))/8, "已规范化的 Lite 正文不应再被解码")
 }

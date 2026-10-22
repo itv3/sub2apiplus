@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -35,11 +34,14 @@ func TestOfficialOpenAIWSTurnMetadataFieldsMatchFullDecode(t *testing.T) {
 
 func TestOfficialOpenAIWSTurnMetadataDoesNotCopyHistory(t *testing.T) {
 	body := []byte(`{"model":"gpt","reasoning":{"effort":"high"},"input":[{"text":"` + strings.Repeat("x", 4<<20) + `"}]}`)
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	payload, err := decodeOfficialOpenAIWSTurnMetadataFields(body)
-	runtime.ReadMemStats(&after)
+	var payload map[string]any
+	var err error
+	// 直接读一次内存统计会把其它协程的分配也算进窗口（满载压测里读到 485584 字节，上限 256 KiB）；
+	// 改用 testMeasureAllocatedBytes：窗口内只留一个 P、取多次最小值。
+	allocated := testMeasureAllocatedBytes(t, func() {
+		payload, err = decodeOfficialOpenAIWSTurnMetadataFields(body)
+	})
 	require.NoError(t, err)
 	require.Equal(t, "gpt", payload["model"])
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(256<<10), "握手提取小字段不能复制历史正文")
+	require.Less(t, allocated, uint64(256<<10), "握手提取小字段不能复制历史正文")
 }

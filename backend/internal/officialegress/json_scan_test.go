@@ -3,7 +3,6 @@ package officialegress
 import (
 	"bytes"
 	"math/rand"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -183,13 +182,9 @@ func TestOrderedJSONScannerDoesNotAmplifyLargeBody(t *testing.T) {
 	}
 	_, _ = b.WriteString(`],"metadata":{"a":"b"}}`)
 	source := []byte(b.String())
+	// 满载时其它协程的分配会混进单次窗口（上限只有 64 KiB），改用 sharedBodyMeasureAllocated：窗口内只留一个 P、取多次最小值。
 	measure := func(run func()) float64 {
-		runtime.GC()
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		run()
-		runtime.ReadMemStats(&after)
-		return float64(after.TotalAlloc - before.TotalAlloc)
+		return float64(sharedBodyMeasureAllocated(run))
 	}
 	fast := measure(func() {
 		if _, err := newOrderedJSONDocument(source); err != nil {

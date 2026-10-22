@@ -8,7 +8,6 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -246,22 +245,24 @@ func TestOpenAIWSHTTPBridgeCanonicalSegmentsMatchJSONMarshal(t *testing.T) {
 func TestOpenAIWSHTTPBridgeCanonicalSegmentsBoundSmallFragmentMemory(t *testing.T) {
 	const count = 1024
 	long := []byte(`"` + strings.Repeat("x", 4096) + `"`)
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	writer := openAIWSHTTPBridgeJSONSegments{}
-	writer.appendByte('[')
-	for i := range count {
-		if i > 0 {
-			writer.appendByte(',')
+	var writer openAIWSHTTPBridgeJSONSegments
+	// 满载时其它协程的分配会混进单次窗口，改用 testMeasureAllocatedBytes（窗口内只留一个 P、取多次最小值）；
+	// 每次测量都从空写入器开始，结束后 writer 留着最后一次的完整结果，供下面核对 wire 字节。
+	allocated := testMeasureAllocatedBytes(t, func() {
+		writer = openAIWSHTTPBridgeJSONSegments{}
+		writer.appendByte('[')
+		for i := range count {
+			if i > 0 {
+				writer.appendByte(',')
+			}
+			writer.appendBytes(long)
 		}
-		writer.appendBytes(long)
-	}
-	writer.appendByte(']')
-	writer.flush()
-	runtime.ReadMemStats(&after)
+		writer.appendByte(']')
+		writer.flush()
+	})
 	// 除原 token 外只有约 1KiB 的标点与片段描述；给运行时噪声留宽余量，
 	// 仍足以拦截旧实现每个 token 额外分配 4KiB 的回归。
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(512<<10))
+	require.Less(t, allocated, uint64(512<<10))
 	var expected bytes.Buffer
 	_ = expected.WriteByte('[')
 	for i := range count {
