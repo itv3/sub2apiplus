@@ -1,0 +1,59 @@
+{
+  "base_commit": "95b742c6a8fd5a55141d81a411af2e2c63466cf6",
+  "changed_path_count": 4,
+  "current_commit": "804f0a6023ab3c3d8bc2924b86ffd372815438a8",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6423,
+  "frozen_path_count": 2263,
+  "identity_sha256": "f576bbe1dbdcdd52b2884d58c6798a6cd5e50590ed882f9097f134e48fb72f61",
+  "issued_at_utc": "2026-10-22T11:42:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01630-finalizer-replay-registration-20261022-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "32d50b742a68c227379198132a871ec0e0a34fcf5c58c5671d2f4f03036e6771"
+      ],
+      "reason": "收据生成器补登记两个部署边界处的旧摘要为只读重放身份（后台验证 #15 的生成器重放登记门禁失败）、上游合并工具中止用例消除竞态、第十一次重封身份守恒基线；登记冻结承接 path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-default-program-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-capture-host-name-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-core-capture-lite-asserts-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-fix-and-continue-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-kilo-usage-order-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-orphan-preview-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-zero-result-isolated-source-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b7bd296d6c4f7230e030949e7bb04345ecb534bb019350683e9e091c8644d02a"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_receipt_finalizer.py",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_163_0.json",
+    "tools/upstream_merge/tests/test_gate_runner.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
