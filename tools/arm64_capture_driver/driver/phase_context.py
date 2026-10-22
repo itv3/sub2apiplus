@@ -446,7 +446,7 @@ def _vc6_receipts(context, plan):
     group = artifacts.canonical_batch_binding(plan["actions"], execute_item_ids=plan["execute_item_ids"], phase="VC-6")
     if group is None:
         # 不含 canonical 项的 VC-6 批次只有交付登记（deliver-candidate 两次）。canonical_batch_binding 按设计对它返回
-        # None，原实现把 None 一律当“未绑定”拒绝，交付批次因此派不出去（0.163.0 的 VC-6 第 44 批首次走到）。
+        # None，原实现把 None 一律当“未绑定”拒绝，交付批次因此派不出去（10-05 加入该校验后，Codex 升级第一次走到 VC-6 交付批次时暴露）。
         _vc6_delivery_plan(context, plan)
         return
     if (group["campaign_dir"], group["candidate_id"], group["attempt_id"]) != (

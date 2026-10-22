@@ -1593,6 +1593,14 @@ class PhaseContextCodexParityTests(unittest.TestCase):
         "-            _vc5_plan(context, plan)",
         "+            (_claude_vc5_plan if isinstance(context, ClaudeContext) else _vc5_plan)(context, plan)",
     ]
+    # 10-23 Codex 修正：不含 canonical 项的 VC-6 计划（交付登记）改由 _vc6_delivery_plan 核对绑定，canonical 批次的校验不变。
+    VC6_RECEIPTS_RESIDUALS = [
+        '-    if group is None or (group["campaign_dir"], group["candidate_id"], group["attempt_id"]) != (',
+        "+    if group is None:",
+        "+        _vc6_delivery_plan(context, plan)",
+        "+        return",
+        '+    if (group["campaign_dir"], group["candidate_id"], group["attempt_id"]) != (',
+    ]
 
     def segments(self, text: str) -> dict[str, str]:
         import ast
@@ -1606,15 +1614,20 @@ class PhaseContextCodexParityTests(unittest.TestCase):
         self.assertIsNotNone(source)
         before = self.segments(source.decode("utf-8"))
         after = self.segments((DRIVER / "phase_context.py").read_text(encoding="utf-8"))
-        self.assertEqual(sorted(set(after) - set(before)), ["ClaudeContext", "_claude_vc5_plan"])
+        # _vc6_delivery_plan 与 _vc6_receipts 的改动不属于 B5b-01b：10-23 修正 VC-6 交付登记批次被误拒（Codex 缺陷修复），
+        # 新增定义单列放行，_vc6_receipts 的改动钉成 VC6_RECEIPTS_RESIDUALS，其余 Codex 定义仍须逐字未改。
+        self.assertEqual(sorted(set(after) - set(before)), ["ClaudeContext", "_claude_vc5_plan", "_vc6_delivery_plan"])
         for name, text in before.items():
-            if name == "resolve":
+            if name in {"resolve", "_vc6_receipts"}:
                 continue
             with self.subTest(definition=name):
                 self.assertEqual(after[name], text)
         changed = [line for line in difflib.unified_diff(before["resolve"].splitlines(), after["resolve"].splitlines(), lineterm="", n=0)
                    if line[:1] in "+-" and not line.startswith(("+++", "---")) and not line[1:].strip().startswith("#")]
         self.assertEqual(changed, self.RESOLVE_RESIDUALS)
+        receipts = [line for line in difflib.unified_diff(before["_vc6_receipts"].splitlines(), after["_vc6_receipts"].splitlines(), lineterm="", n=0)
+                    if line[:1] in "+-" and not line.startswith(("+++", "---")) and not line[1:].strip().startswith("#")]
+        self.assertEqual(receipts, self.VC6_RECEIPTS_RESIDUALS)
 
 
 class EntryLedgerAndPreflightCodexParityTests(unittest.TestCase):
