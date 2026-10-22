@@ -533,6 +533,22 @@ class TypedArmedRecoveryTests(unittest.TestCase):
     _stop_guard = integration_fixture.RealDeliveryIntegrationTests._stop_guard
     _seal_review = integration_fixture.RealDeliveryIntegrationTests._seal_review
 
+    def _poll_state(self) -> dict:
+        """轮询 worker 进度时读取 state.json，遇到“实读期间漂移”就短暂重试。
+
+        worker 在另一进程里按原子替换写 state.json；守卫的严格读在读前读后核对 inode、大小与时间戳，
+        读的过程中文件恰好被替换就失败关闭（生产原件本该如此）。10-23 CI 满载时这一轮询就撞上过一次。
+        轮询只需要某个一致时刻的读数，所以这里重试；退出轮询后的断言仍直接用严格读，口径不变。
+        """
+
+        path = self.root / "state.json"
+        for _ in range(50):
+            try:
+                return guard.read_json(path)
+            except guard.GuardError:
+                time.sleep(0.01)
+        return guard.read_json(path)
+
     def test_armed_worker_kill_restores_then_publishes_original_failure_and_resumes_new_segment(self) -> None:
         guard.atomic_json(self.root / "fault.json", {"execute": "wait", "restore": "normal", "freeze": "normal"})
         worker = multiprocessing.get_context("fork").Process(target=armed_worker,
@@ -544,7 +560,7 @@ class TypedArmedRecoveryTests(unittest.TestCase):
         # 测试等待覆盖既有三次 RPC 的独立保护；不改变通道、租约或产品阶段时限。
         wait_seconds = 3 * self.executor.client.timeout
         deadline = started + wait_seconds
-        state = guard.read_json(self.root / "state.json")
+        state = self._poll_state()
         while state["switch_count"] != 1:
             alive = worker.is_alive()
             if not alive or time.monotonic() >= deadline:
@@ -567,7 +583,7 @@ class TypedArmedRecoveryTests(unittest.TestCase):
                 # 诊断留在原 unittest 日志中，不泄漏配置、凭据或现场内容。
                 self.fail("动作没有在独立守卫 armed 后开始物理操作：" + json.dumps(diagnostic, ensure_ascii=False))
             time.sleep(0.01)
-            state = guard.read_json(self.root / "state.json")
+            state = self._poll_state()
         print(json.dumps({"typed_armed_wait": {"elapsed_seconds": round(time.monotonic() - started, 3),
             "wait_seconds": wait_seconds, "switch_count": state["switch_count"]}}, ensure_ascii=False), flush=True)
         index = guard.read_json(self.root / "guard/index.json")
