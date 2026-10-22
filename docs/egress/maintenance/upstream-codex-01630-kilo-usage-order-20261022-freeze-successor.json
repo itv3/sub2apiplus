@@ -1,0 +1,58 @@
+{
+  "base_commit": "91ed69147a568eabf3425ccbb51e0f6407f75a41",
+  "changed_path_count": 4,
+  "current_commit": "8ef63cd6e0edab702070b4a7764656c2b92797f2",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6422,
+  "frozen_path_count": 2263,
+  "identity_sha256": "76ced4cc63d254127dc4d9a61fd6af743d23d563d8f0e1ab01cc219f8a07cec1",
+  "issued_at_utc": "2026-10-22T09:51:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01630-kilo-usage-order-20261022-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "predecessor_sha256s": [
+        "67b83a20b86d1bacacb4161c2caf766266f3927c7ce16aeb5e68fcd0166fc82e"
+      ],
+      "reason": "VC-5 seal 链生成 Kilo 收据时，HTTP 用量记录比访问日志的完成时间早 0.15 毫秒（候选网关合入上游后同步落用量），原判据误判乱序；HTTP 顺序判据改为与 WebSocket 一致（用量晚于入站），并第十次重封身份守恒基线；登记冻结承接 path=tools/official_client_capture/tests/test_codex_identity_conservation.py",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0163-default-program-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-main-lite-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-preplan-final-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0163-registration-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-capture-host-name-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-core-capture-lite-asserts-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-fix-and-continue-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-orphan-preview-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-zero-result-isolated-source-20261022-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "32d50b742a68c227379198132a871ec0e0a34fcf5c58c5671d2f4f03036e6771"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_receipt_finalizer.py",
+    "tools/official_client_capture/tests/fixtures/codex_identity_conservation_baseline_0_163_0.json",
+    "tools/official_client_capture/tests/test_codex_upgrade_receipt_finalizer.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
