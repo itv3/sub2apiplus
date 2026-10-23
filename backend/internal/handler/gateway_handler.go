@@ -1224,11 +1224,6 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	if platform == service.PlatformAntigravity {
-		writeModelsList(c, service.PlatformAntigravity, antigravity.OfficialModelIDs())
-		return
-	}
-
 	writeModelsListResponse(c, claude.DefaultModels)
 }
 
@@ -1534,7 +1529,12 @@ func defaultModelIDsForPlatform(platform string) []string {
 		}
 		return ids
 	case service.PlatformAntigravity:
-		return antigravity.OfficialModelIDs()
+		models := antigravity.DefaultModels()
+		ids := make([]string, 0, len(models))
+		for _, model := range models {
+			ids = append(ids, model.ID)
+		}
+		return ids
 	case service.PlatformAnthropic:
 		return claude.DefaultModelIDs()
 	case service.PlatformGrok:
@@ -1593,21 +1593,20 @@ func mergeModelIDs(primary, secondary []string) []string {
 // AntigravityModels 返回 Antigravity 支持的全部模型
 // GET /antigravity/models
 func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
-	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
-	var groupID *int64
-	if apiKey != nil && apiKey.Group != nil {
-		groupID = &apiKey.Group.ID
-	}
-	models := antigravity.OfficialModelIDs()
-	if h.gatewayService != nil {
-		if availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, service.PlatformAntigravity); len(availableModels) > 0 {
-			models = availableModels
-		}
-	}
+	models := antigravity.DefaultModels()
 	if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
-		models = apiKey.Group.ModelAllowlist.FilterForListing(models)
+		filtered := make([]antigravity.ClaudeModel, 0, len(models))
+		for _, model := range models {
+			if apiKey.Group.ModelAllowlist.Allows(model.ID) {
+				filtered = append(filtered, model)
+			}
+		}
+		models = filtered
 	}
-	writeModelsList(c, service.PlatformAntigravity, models)
+	c.JSON(http.StatusOK, gin.H{
+		"object": "list",
+		"data":   models,
+	})
 }
 
 func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service.APIKey {

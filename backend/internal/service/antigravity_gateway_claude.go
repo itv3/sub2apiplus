@@ -61,16 +61,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	// 应用 thinking 模式自动后缀：如果 thinking 开启且目标是 claude-sonnet-4-5，自动改为 thinking 版本
 	thinkingEnabled := claudeReq.Thinking != nil && (claudeReq.Thinking.Type == "enabled" || claudeReq.Thinking.Type == "adaptive")
 	mappedModel = applyThinkingModelSuffix(mappedModel, thinkingEnabled)
-	if !isAntigravityAllowedModel(account, mappedModel) {
-		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
-		return nil, s.writeClaudeError(c, http.StatusForbidden, "permission_error", fmt.Sprintf("model %s not in whitelist", mappedModel))
-	}
-	billingModel := antigravity.ResolveClaudeUpstreamModel(&claudeReq, mappedModel)
-	if !isAntigravityAllowedModel(account, billingModel) {
-		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
-		return nil, s.writeClaudeError(c, http.StatusForbidden, "permission_error", fmt.Sprintf("model %s not in whitelist", billingModel))
-	}
-	upstreamRequestModel := billingModel
+	billingModel := mappedModel
 
 	// 获取 access_token
 	if s.tokenProvider == nil {
@@ -125,7 +116,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		settingService:  s.settingService,
 		accountRepo:     s.accountRepo,
 		handleError:     s.handleUpstreamError,
-		requestedModel:  upstreamRequestModel,
+		requestedModel:  originalModel,
 		isStickySession: isStickySession, // Forward 由上层判断粘性会话
 		groupID:         0,               // Forward 方法没有 groupID，由上层处理粘性会话清除
 		sessionHash:     "",              // Forward 方法没有 sessionHash，由上层处理粘性会话清除
@@ -211,7 +202,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					settingService:  s.settingService,
 					accountRepo:     s.accountRepo,
 					handleError:     s.handleUpstreamError,
-					requestedModel:  upstreamRequestModel,
+					requestedModel:  originalModel,
 					isStickySession: isStickySession,
 					groupID:         0,  // Forward 方法没有 groupID，由上层处理粘性会话清除
 					sessionHash:     "", // Forward 方法没有 sessionHash，由上层处理粘性会话清除
@@ -339,7 +330,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 							settingService:  s.settingService,
 							accountRepo:     s.accountRepo,
 							handleError:     s.handleUpstreamError,
-							requestedModel:  upstreamRequestModel,
+							requestedModel:  originalModel,
 							isStickySession: isStickySession,
 							groupID:         0,
 							sessionHash:     "",
@@ -398,7 +389,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				}
 			}
 
-			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, upstreamRequestModel, 0, "", isStickySession)
+			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, originalModel, 0, "", isStickySession)
 
 			// 精确匹配服务端配置类 400 错误，触发同账号重试 + failover
 			if resp.StatusCode == http.StatusBadRequest {

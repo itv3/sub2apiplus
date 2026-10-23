@@ -40,42 +40,6 @@ func generateStableSessionID(contents []GeminiContent) string {
 	return "-" + strconv.FormatInt(n, 10)
 }
 
-func generateAntigravityRequestIdentity() (requestID string, trajectoryID string) {
-	conversationID := uuid.New().String()
-	trajectoryID = uuid.New().String()
-	return fmt.Sprintf("agent/%s/%d/%s/2", conversationID, time.Now().UnixMilli(), trajectoryID), trajectoryID
-}
-
-func buildAntigravityRequestLabels(model, trajectoryID string) map[string]string {
-	if strings.TrimSpace(trajectoryID) == "" {
-		return nil
-	}
-
-	usedClaude := "false"
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-") {
-		usedClaude = "true"
-	}
-
-	labels := map[string]string{
-		"last_step_index":          "1",
-		"trajectory_id":            trajectoryID,
-		"used_claude":              usedClaude,
-		"used_claude_conservative": usedClaude,
-	}
-	if modelEnum := OfficialModelEnum(model); modelEnum != "" {
-		labels["model_enum"] = modelEnum
-	}
-	return labels
-}
-
-func OfficialRequestIdentity() (requestID string, trajectoryID string) {
-	return generateAntigravityRequestIdentity()
-}
-
-func OfficialRequestLabels(model, trajectoryID string) map[string]string {
-	return buildAntigravityRequestLabels(model, trajectoryID)
-}
-
 type TransformOptions struct {
 	EnableIdentityPatch bool
 	// IdentityPatch 可选：自定义注入到 systemInstruction 开头的身份防护提示词；
@@ -90,6 +54,9 @@ func DefaultTransformOptions() TransformOptions {
 		EnableMCPXML:        true,
 	}
 }
+
+// webSearchFallbackModel web_search 请求使用的降级模型
+const webSearchFallbackModel = "gemini-2.5-flash"
 
 // MaxTokensBudgetPadding max_tokens 自动调整时在 budget_tokens 基础上增加的额度
 // Claude API 要求 max_tokens > thinking.budget_tokens，否则返回 400 错误
@@ -128,9 +95,12 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 因此不能再强制切到 gemini-2.5-flash，否则 Codex 等带 shell 工具的请求会整单失败。
 	useWebSearchRequest := hasWebSearchTool(claudeReq.Tools) && !hasClientFunctionTools(claudeReq.Tools)
 	requestType := "agent"
-	targetModel := ResolveClaudeUpstreamModel(claudeReq, mappedModel)
+	targetModel := mappedModel
 	if useWebSearchRequest {
 		requestType = "web_search"
+		if targetModel != webSearchFallbackModel {
+			targetModel = webSearchFallbackModel
+		}
 	}
 
 	// 检测是否启用 thinking
@@ -158,11 +128,10 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 3. 构建 generationConfig
 	reqForConfig := claudeReq
 	if strippedThinking {
-		// 如果因缺失/无效 signature 将 thinking block 降级为普通文本，
-		// 需要显式关闭上游 thinking，避免 signature/结构校验错误。
+		// If we had to downgrade thinking blocks to plain text due to missing/invalid signatures,
+		// disable upstream thinking mode to avoid signature/structure validation errors.
 		reqCopy := *claudeReq
-		reqCopy.Thinking = &ThinkingConfig{Type: "disabled"}
-		reqCopy.suppressOfficialThinking = true
+		reqCopy.Thinking = nil
 		reqForConfig = &reqCopy
 	}
 	if targetModel != "" && targetModel != reqForConfig.Model {
@@ -175,14 +144,11 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 4. 构建 tools
 	tools := buildTools(claudeReq.Tools)
 
-	requestID, trajectoryID := generateAntigravityRequestIdentity()
-
 	// 5. 构建内部请求
 	innerRequest := GeminiRequest{
 		Contents: contents,
 		// 总是生成 sessionId，基于用户消息内容
 		SessionID: generateStableSessionID(contents),
-		Labels:    buildAntigravityRequestLabels(targetModel, trajectoryID),
 	}
 
 	// toolConfig must always be present: upstream rejects requests without it,
@@ -214,7 +180,7 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 6. 包装为 v1internal 请求
 	v1Req := V1InternalRequest{
 		Project:     projectID,
-		RequestID:   requestID,
+		RequestID:   "agent-" + uuid.New().String(),
 		UserAgent:   "antigravity", // 固定值，与官方客户端一致
 		RequestType: requestType,
 		Model:       targetModel,
@@ -222,18 +188,6 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	}
 
 	return json.Marshal(v1Req)
-}
-
-// ResolveClaudeUpstreamModel 返回 Claude 请求实际发往 Antigravity 的模型，请求改写与计费共用。
-// 仅在「只有内置 web_search、没有客户端 function tools」时切到 web_search 兜底模型：
-// v1internal 不支持内置工具与 functionDeclarations 混用，混用时丢弃内置搜索并保留原模型
-// （与上游 6c2d2ed04 一致），否则带 shell 等工具的请求会整单失败。
-func ResolveClaudeUpstreamModel(claudeReq *ClaudeRequest, mappedModel string) string {
-	targetModel := strings.TrimSpace(mappedModel)
-	if claudeReq != nil && hasWebSearchTool(claudeReq.Tools) && !hasClientFunctionTools(claudeReq.Tools) {
-		return OfficialWebSearchFallbackModel
-	}
-	return targetModel
 }
 
 // antigravityIdentity Antigravity identity 提示词
@@ -713,7 +667,7 @@ func extractToolResultInlineParts(content json.RawMessage) []GeminiPart {
 // buildGenerationConfig 构建 generationConfig
 const (
 	defaultMaxOutputTokens    = 64000
-	maxOutputTokensUpperBound = 65535
+	maxOutputTokensUpperBound = 65000
 	maxOutputTokensClaude     = 64000
 )
 
@@ -733,45 +687,20 @@ func isAntigravityOpusHighTierModel(model string) bool {
 		strings.HasPrefix(lower, "claude-opus-4-8")
 }
 
-func suppressAntigravityGenerationParams(model string) bool {
-	return IsGeminiReasoningModel(model) || IsOfficialModelID(model)
-}
-
 func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 	maxLimit := maxOutputTokensLimit(req.Model)
 	config := &GeminiGenerationConfig{
 		MaxOutputTokens: defaultMaxOutputTokens, // 默认最大输出
 	}
 
-	suppressParams := suppressAntigravityGenerationParams(req.Model)
-	if !suppressParams {
+	isReasoning := IsGeminiReasoningModel(req.Model)
+	if !isReasoning {
 		config.StopSequences = DefaultStopSequences
 	}
 
 	// 如果请求中指定了 MaxTokens，使用请求值
 	if req.MaxTokens > 0 {
 		config.MaxOutputTokens = req.MaxTokens
-	}
-
-	// Antigravity 官方模型按抓包固定 thinkingBudget，客户端 thinking 不覆盖上游发包。
-	if budget, ok := DefaultThinkingBudget(req.Model); ok {
-		if req.suppressOfficialThinking {
-			if config.MaxOutputTokens > maxLimit {
-				config.MaxOutputTokens = maxLimit
-			}
-			return config
-		}
-		config.ThinkingConfig = &GeminiThinkingConfig{
-			IncludeThoughts: true,
-			ThinkingBudget:  budget,
-		}
-		if adjusted, changed := ensureMaxTokensGreaterThanBudget(config.MaxOutputTokens, budget); changed {
-			config.MaxOutputTokens = adjusted
-		}
-		if config.MaxOutputTokens > maxLimit {
-			config.MaxOutputTokens = maxLimit
-		}
-		return config
 	}
 
 	// Thinking 配置
@@ -812,7 +741,7 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 	}
 
 	// 其他参数
-	if !suppressParams {
+	if !isReasoning {
 		if req.Temperature != nil {
 			config.Temperature = req.Temperature
 		}

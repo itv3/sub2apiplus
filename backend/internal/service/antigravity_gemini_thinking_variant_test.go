@@ -105,9 +105,8 @@ func TestResolveGeminiThinkingVariant(t *testing.T) {
 		{"bare model absent from whitelist: configured variant still resolved", map[string]string{
 			"gemini-3.7-flash-medium": "gemini-3.7-flash-medium",
 		}, "gemini-3.7-flash", budget("4000"), "gemini-3.7-flash-medium", true},
-		// 空 credentials 映射 → 走 DefaultAntigravityModelMapping；本分支默认目录只含官方 8 模型，
-		// 不含 3.8 flash 分档（兼容透传只在兼容表中），因此不推导变体。
-		{"empty mapping falls back to default catalog", map[string]string{}, "gemini-3.8-flash", budget("-1"), "", false},
+		// 空 credentials 映射保留默认目录兼容行为。
+		{"empty mapping falls back to default catalog", map[string]string{}, "gemini-3.8-flash", budget("-1"), "gemini-3.8-flash-high", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -220,44 +220,28 @@ func TestShouldFallbackGeminiModel_DelegatesScopeFallback(t *testing.T) {
 func TestGeminiV1BetaGetModel_CompositeAntigravityRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// 本分支的 Antigravity 模型详情只认官方 8 模型：上游用 gemini-4-argon-high 作示例，
-	// 这里改用官方模型 gemini-3-flash-agent 验证「composite 路由到 antigravity 的 gemini 模型可查」，
-	// 并补一条断言：非官方模型（gemini-4-argon-high）返回 404。
-	for _, tc := range []struct {
-		name         string
-		requestModel string
-		upstream     string
-		wantStatus   int
-		wantBody     string
-	}{
-		{"composite route to antigravity gemini model succeeds", "gemini-3-flash", "gemini-3-flash-agent", http.StatusOK, "models/gemini-3-flash-agent"},
-		{"composite route to non-official antigravity gemini model is not found", "gemini-4-argon", "gemini-4-argon-high", http.StatusNotFound, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(rec)
-			req := httptest.NewRequest(http.MethodGet, "/v1beta/models/"+tc.requestModel, nil)
-			req = req.WithContext(service.WithCompositeRouteDecision(req.Context(), service.CompositeRouteDecision{
-				Matched:        true,
-				TargetPlatform: service.PlatformAntigravity,
-				UpstreamModel:  tc.upstream,
-			}))
-			c.Request = req
-			c.Params = gin.Params{{Key: "model", Value: tc.requestModel}}
-			groupID := int64(4)
-			c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-				ID:      1,
-				GroupID: &groupID,
-				Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
-			})
-
-			(&GatewayHandler{}).GeminiV1BetaGetModel(c)
-			require.Equal(t, tc.wantStatus, rec.Code, rec.Body.String())
-			if tc.wantBody != "" {
-				require.Contains(t, rec.Body.String(), tc.wantBody)
-			}
+	t.Run("composite route to antigravity gemini model succeeds", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		req := httptest.NewRequest(http.MethodGet, "/v1beta/models/gemini-4-argon", nil)
+		req = req.WithContext(service.WithCompositeRouteDecision(req.Context(), service.CompositeRouteDecision{
+			Matched:        true,
+			TargetPlatform: service.PlatformAntigravity,
+			UpstreamModel:  "gemini-4-argon-high",
+		}))
+		c.Request = req
+		c.Params = gin.Params{{Key: "model", Value: "gemini-4-argon"}}
+		groupID := int64(4)
+		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+			ID:      1,
+			GroupID: &groupID,
+			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
 		})
-	}
+
+		(&GatewayHandler{}).GeminiV1BetaGetModel(c)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Contains(t, rec.Body.String(), "models/gemini-4-argon-high")
+	})
 
 	t.Run("composite route to antigravity claude model is rejected on v1beta", func(t *testing.T) {
 		rec := httptest.NewRecorder()

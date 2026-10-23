@@ -776,9 +776,6 @@ func (s *AccountTestService) fetchUpstreamModelList(ctx context.Context, account
 		return nil, nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
-	if account.Platform == PlatformAntigravity {
-		return dedupeAndSortModelIDs(models), body, nil
-	}
 	return models, body, nil
 }
 

@@ -10,19 +10,19 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 | 上游 | `https://github.com/Wei-Shaw/sub2api` |
 | 版本与差异 | 源码版本以 `backend/cmd/server/VERSION` 为准，已发布版本以 GitHub Releases 为准。自定义差异看最近一次合并的上游 tag 至 `HEAD`，合并点可用 `git log --oneline --grep='sync upstream'` 查到。 |
 | Docker 镜像 | `ghcr.io/itv3/sub2apiplus` |
-| 命名约定 | 对外使用 `sub2apiplus` / `Sub2API Plus`；主服务 Go module 和 import 保留 `github.com/Wei-Shaw/sub2api`，降低上游合并成本；keeper 为独立 module `github.com/itv3/sub2apiplus/keeper`，无上游对应物。 |
-| Go / 客户端版本 | 主服务 `go 1.26.6`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 固定 Claude CLI `2.1.231`，Codex 的 `CODEX_RELEASE` 当前仍为 `latest`，无缓存重建时记录实际安装版本。 |
+| 命名约定 | 对外使用 `sub2apiplus` / `Sub2API Plus`；主服务 Go module 和 import 保留 `github.com/Wei-Shaw/sub2api`，降低上游合并成本。 |
+| Go 版本 | 主服务 `go 1.27.3`（`backend/go.mod`）。 |
 | Docker 命名 | Compose service 保留 `sub2api`；默认容器名为 `sub2apiplus`、`sub2apiplus-postgres`、`sub2apiplus-redis`。 |
 
 维护原则：
 
 1. 长期跟随上游主线，发布版本按上游 release/tag 对齐。
-2. Plus 账号级开关优先放入 `account.Extra`；mimic / 保活 / 三方客户端兼容走 Plus 设置页，Antigravity 走账号编辑页；OAuth 官方客户端伪装为内置能力，不提供账号级开关。
+2. Plus 账号级开关优先放入 `account.Extra`；mimic / 三方客户端兼容走 Plus 设置页；OAuth 官方客户端伪装为内置能力，不提供账号级开关。
 3. Docker 更新默认只替换应用容器，不动 PostgreSQL、Redis、反向代理配置、`.env` 和数据目录。
 
 ## 1. Plus 增强功能
 
-管理后台侧边栏“Plus 增强功能”进入 `/admin/settings/plus-enhancements`，包含“API Key 官方客户端兼容”“账号保活”和“三方客户端兼容”三个 Tab；Antigravity 的模型、映射、官方伪装和计费配置位于账号创建/编辑页。
+管理后台侧边栏“Plus 增强功能”进入 `/admin/settings/plus-enhancements`，包含“API Key 官方客户端兼容”和“三方客户端兼容”两个 Tab。
 
 ### 1.1 OAuth 官方客户端伪装
 
@@ -61,16 +61,15 @@ API Key 基准与 OAuth 仿真使用相同的 direct／MITM 证据分层，但�
 4. 非官方客户端命中 mimic 时，关键身份 header 不允许被账号级 header override 覆盖；官方客户端跳过 mimic 后不应用该保护。
 5. OpenAI Codex mimic 的 `/v1/messages` 固定进入 Responses mimic 链路，不受 `force_chat_completions`、普通 Responses probe false 或 `openai_responses_supported=false` 影响。
 6. OpenAI Codex mimic 只支持 HTTP/SSE 上游，命中时不进入 Responses WebSocket（WS 画像在 registry 中只存档不激活）；跳过 mimic 的官方 Codex 客户端按普通 API Key 账号的全局/账号 WS 开关、force HTTP 和 WSv2 mode 选择路由。该判断同时作用于账号调度、粘性账号复核和最终转发。
-7. 官方客户端识别只依据 Gateway 入站请求上下文（UA、`originator`、`metadata.user_id`）。没有入站上下文的内部入口不做该识别，因此不会因为实际发起方是官方 CLI 而跳过 mimic；keeper 的 OpenAI 出口是另一回事，它按设计就不走 mimic 链路，而不是被识别成官方客户端后跳过。
+7. 官方客户端识别只依据 Gateway 入站请求上下文（UA、`originator`、`metadata.user_id`）。没有入站上下文的内部入口不做该识别，因此不会因为实际发起方是官方 CLI 而跳过 mimic。
 8. 管理后台账号测试在 HTTP 200 且流以 EOF、`[DONE]` 或 `message_stop` 任一路径正常结束时判成功；非 200、或正文命中服务暂不可用降级文案时失败并保留上游错误。
 
-三个入口的实际行为：
+两个入口的实际行为：
 
 | 入口 | 客户端识别 | Anthropic | OpenAI |
 |---|---|---|---|
 | Gateway 公网入口 | 按 UA / `originator` / `metadata.user_id` 识别 | 官方客户端跳过 mimic | 官方客户端跳过 mimic |
 | 管理后台账号测试 | 不识别（传入空 Gin Context） | 走 Claude Code CLI API Key 画像 | 走 Codex CLI API Key 画像 |
-| keeper 内部代理 | 不识别 | `/v1/messages` 开关打开即走 active 画像 | 不做 mimic，按 header allowlist 透传官方 Codex CLI 形态 |
 
 ```json
 {"anthropic_apikey_mimic_claude_code":true,"openai_apikey_mimic_codex_cli":true,"enable_tls_fingerprint":true}
@@ -133,122 +132,34 @@ OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态�
 - mimic 只对齐 header、body、TLS 和路由，不复制服务端隐藏 prompt、账号状态、产品 memory 或 UI 上下文，也不替换响应文本或清洗客户端正文身份。
 - Anthropic `active` 画像在启用 mimic 和 `enable_tls_fingerprint` 后，未指定 `tls_fingerprint_profile_id` 时使用内置 Claude Code TLS Profile；`previous` 回退画像才使用标准 Transport。管理员显式选择的固定或随机 TLS Profile 始终优先。
 - Codex CLI `active` 画像在开启 TLS fingerprint 时使用 2026-07-26 抓包的 direct 30-cipher/空 ALPN 或 proxy h2 传输画像；管理员显式选择的 TLS profile 仍优先。API Key WebSocket 由路由决策层强制回落 HTTP，不会因注册表中存在未激活 WS 画像而开启（规则见 §1.2.1 第 6 条）。
-- OpenAI `previous` 回退画像与 Anthropic 同规则：Desktop 画像没有可复用的实抓 TLS，未指定 `tls_fingerprint_profile_id` 时使用标准 Transport。TLS 决策只能来自请求级画像，正式 Gateway、账号测试、能力探测和 keeper 内部代理共用同一判定，任何路径都不得自行重解析出另一个 mode 的画像。
+- OpenAI `previous` 回退画像与 Anthropic 同规则：Desktop 画像没有可复用的实抓 TLS，未指定 `tls_fingerprint_profile_id` 时使用标准 Transport。TLS 决策只能来自请求级画像，正式 Gateway、账号测试和能力探测共用同一判定，任何路径都不得自行重解析出另一个 mode 的画像。
 - HTTP/1.1 与 HTTP/2 Transport 的 `DisableCompression` 由 TLS Profile 的 `Transport` 字段驱动，不是固定值：Codex 的 direct/proxy/WS 画像显式设 `true` 以避免自动注入 gzip，Anthropic 画像未设置该字段（等于 `false`）；两者都不影响显式压缩响应的受控解压。
 - Codex base instructions 由 `CodexBaseInstructionsForModel()` 按模型分四条分支：含 `codex` 的模型走 `DefaultInstructions`，`gpt-5.5` 走最新版本，`gpt-5.2` 与 `gpt-5.1` 各有单独维护的 prompt（内容为空时回退最新），其余模型回退最新版本。
 - `Anthropic-Dangerous-Direct-Browser-Access: true` 在 `claude.DefaultHeaders` 共享常量和 registry 的 Wire Profile 中各有一份，分别服务非 mimic 路径与 mimic 出站，取值一致且都对应 2026-07-26 Claude Code CLI `2.1.220` API 实抓；mimic 运行时只读取自己的 Wire Profile，不回写共享常量。
 - 管理后台账号测试只有在 HTTP 200、收到正常 SSE 内容并以 `message_stop` 结束时才成功；非 200 或 HTTP 200 但正文仅为服务暂不可用降级文案时都必须失败并保留上游错误。
 - 效果应以第三方中转站实际收到的上游请求为准，不能只看 usage 页面中的客户端入口 `USER-AGENT`。
 
-### 1.3 Antigravity 增强
-
-Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账号默认白名单、默认映射和 `/models` 收敛到官方抓包确认的 8 个模型，同时保留账号编辑页“自定义模型名称”入口，允许管理员手动把后续新增的 Google / Antigravity 模型加入该账号白名单。
-
-| 界面显示名 | 官方发包 model | 固定 `thinkingBudget` |
-|---|---|---:|
-| Claude Opus 4.6 Thinking | `claude-opus-4-6-thinking` | 1024 |
-| Claude Sonnet 4.6 | `claude-sonnet-4-6` | 1024 |
-| GPT-OSS 120B Medium | `gpt-oss-120b-medium` | 8192 |
-| Gemini 3.1 Pro High | `gemini-pro-agent` | 10001 |
-| Gemini 3.1 Pro Low | `gemini-3.1-pro-low` | 1001 |
-| Gemini 3.5 Flash High | `gemini-3-flash-agent` | 10000 |
-| Gemini 3.5 Flash Low | `gemini-3.5-flash-extra-low` | 1000 |
-| Gemini 3.5 Flash Medium | `gemini-3.5-flash-low` | 4000 |
-
-> 上表的显示名与发包 model 存在系统性错位——界面「Gemini 3.5 Flash Low」发 `gemini-3.5-flash-extra-low`、「Medium」发 `gemini-3.5-flash-low`，「Gemini 3.1 Pro High」发 `gemini-pro-agent`；`thinkingBudget` 的 `10001`/`1001` 也不是整数。这些都与官方抓包一致，不是笔误，改成"看起来对"的值会直接改坏发包行为。
-
-| 主题 | 行为 |
-|---|---|
-| 默认集合 | `model_mapping` 缺失或为空时，旧账号默认允许并展示官方 8 模型；新账号创建时默认写入 16 条——8 条 `模型 ID -> 模型 ID` 自映射和 8 条 `界面显示名 -> 模型 ID` 映射。管理员可通过“自定义模型名称”追加模型，手动“同步上游支持的模型”保存真实结果。 |
-| 显式白名单 | 非空 `model_mapping` 中规范化后的 `model -> model` 自映射构成唯一允许集合，官方模型不会隐式补回；显式配置但无法解析出有效字符串映射时按空白名单处理。 |
-| 映射与别名 | 模型映射保存“客户端请求模型名 -> 实际发包 model”，键既可以是模型 ID，也可以是界面显示名（默认落库的 8 条显示名映射即属此类）。但允许集合只由 `model -> model` 自映射构成，所以显示名映射、普通映射、通配符和 `gemini-3.1-pro-high` 等历史别名都只负责解析、不扩大允许集合，最终目标必须命中允许集合；历史别名不进入默认白名单或 `/models`。 |
-| 模型广告 | `/antigravity/v1/models` 展示账号实际允许的界面模型和手动加入的模型，不展示兼容别名。**已知问题**：允许集合为空时（见“显式白名单”行）该端点仍回落展示官方 8 模型，而此时任何请求都会被拒 403，广告集合与可用集合完全不相交；修复方向是空集合时返回空列表。 |
-| `web_search` | 固定使用 `gemini-3.5-flash-low`（即上表界面显示的 **Gemini 3.5 Flash Medium**）；存在显式白名单时必须保留该模型的自映射，不能绕过白名单。 |
-| 官方伪装 | UA 默认为 `antigravity/hub/2.2.1 darwin/arm64`，版本号可由 `ANTIGRAVITY_USER_AGENT_VERSION` 环境变量或后台“网关转发 → `antigravity_user_agent_version`”覆盖；默认 8 模型忽略客户端 `thinking` / `output_config.effort`，使用表中固定预算；在内层 `request.labels` 补 `model_enum/trajectory_id` 等官方标签并生成同源 `requestId`，过滤无关 stop / sampling 参数。手动追加模型按其名称发包，无需进入全局官方模型表。 |
-| 计费 | 按最终实际发包模型 `UpstreamModel` 查价，日志保留外部模型，且优先于渠道 `requested` / `channel_mapped`；`gpt-oss-120b-medium` 每 1M tokens 为输入 `$0.05`、缓存读取 `$0.01`、输出 `$0.20`。 |
-
-### 1.4 账号保活
-
-账号保活用于在 OpenAI / Anthropic API Key 账号空闲超过配置间隔后，通过官方 `codex` / `claude` 客户端在真实项目目录发起低频请求，维持上游账号活跃。
-
-#### 1.4.1 架构、生效范围与配置
-
-1. 主服务管理配置、账号引用、成本、最近使用时间和历史；`keeper/` 以独立 `sub2apiplus-keeper` sidecar 运行，负责调度官方客户端、worker 目录、会话、日志和本地 Web/API。
-2. OpenAI 使用 `codex`，Anthropic 使用 `claude`；仅支持相应平台的 API Key 账号，OAuth、setup-token、upstream 等账号不进入候选。
-3. 不同账号可并行执行，同一账号通过 `Running` 状态防止重复执行。
-4. keeper 获取按账号、按平台签发的短期 scoped proxy token；官方客户端进程不能获得全局 `SUB2APIPLUS_KEEPER_INTERNAL_TOKEN`。
-5. 只有 `IsSchedulable()` 通过且具备有效平台 API Key 的账号进入候选，其余不返回、不签发 token，恢复后自动重新进入；账号代理入口在实际执行前再次校验。排除项：停用、`error` 状态、`schedulable=false`、过载、限流、临时不可调度、配额耗尽，以及过期账号（仅在账号级 `auto_pause_on_expired` 开启时排除，该开关默认开）。
-6. 官方客户端单次执行超时默认 2700 秒，该值同时是 Claude 链路的最小值，不能调得更低；`sub2apiplus.timeout_seconds` 仅控制 keeper 调主服务内部接口的超时，默认 180 秒。
-7. keeper 容器内固定 Claude CLI `2.1.231`，与 mimic 出站画像版本（§1.2.2 的 `2.1.220`）是两件独立的事：本地跑的是真实 CLI，出站形态由内部代理按 active 画像改写，两者不需要对齐。
-
-保活配置位于“Plus 增强功能 / 账号保活”；账号级设置保存在 `account.Extra`，全局约束和题库保存在 keeper state：
-| 配置 | 说明 |
-|---|---|
-| 启用保活 | `keeper_keepalive_enabled`，控制是否参与自动保活。 |
-| 保活间隔 | `keeper_keepalive_interval_minutes`，默认 8 分钟，取值范围 1 - 10080 分钟（7 天）。 |
-| 工作时间 | 默认 `04:00` - `24:00`。 |
-| 执行模式 | OpenAI 默认全新会话 `fresh`，Anthropic 默认接续上次会话 `resume_last`。 |
-| 项目 | 从 `SUB2APIPLUS_KEEPER_PROJECTS` 暴露的项目列表选择，keeper 内部映射到 `/workspace/projects/<项目名>`。 |
-| 最大输出 token | `keeper_keepalive_max_output_tokens`，默认 512；主服务按该值钳制请求，硬上限为 1024。 |
-
-保活账号、模型和 prompt 题库在界面上选择，成本复用现有 usage 统计口径。管理界面分概览、配置、会话历史三个视图，其中非显而易见的行为是：概览只展示已启用目标；配置页支持全部/已启用/已禁用筛选，已启用优先、同状态按账号 ID 倒序；会话历史从全部 target 汇总，停用账号的既有记录仍可查看，完整上游/客户端错误保留在错误详情中。
-
-#### 1.4.2 调度与失败处理
-
-1. keeper 按 `scan_interval_seconds` 周期扫描账号；本仓库示例配置为 30 秒，未配置时程序默认 120 秒。
-2. 下次触发时间取“最近真实请求”和“最近成功保活”分别加保活间隔后的较晚值；账号持续使用时会自动顺延，不产生额外保活请求。
-3. 手动“立即执行”忽略空闲判断，但同账号运行中时不会重复启动。
-4. 失败会记录错误和失败次数，并按账号间隔重新排队。连续失败计数只对一类错误豁免：Codex 常驻会话的可重试 WebSocket 类错误。其余情况一律累计，包括 Claude 子进程断开、`SIGTERM` 取消运行上下文产生的 `context.Canceled`；keeper 重启后对重启前处于 `running` 的目标还会额外累计一次，错误记为“重启前会话未完成”。
-5. 收到 `SIGTERM` / `Interrupt` 后，keeper 会取消运行上下文、等待任务收尾并关闭持久连接。
-
-#### 1.4.3 Anthropic keeper 的 mimic 兼容约束
-
-Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。OpenAI keeper 的内部代理不做 mimic，按 header allowlist 透传官方 Codex CLI 形态（见 §1.2.1 入口表），本节约束不适用。该链路必须遵守：
-
-1. mimic 只作用于 `/v1/messages` 这一条路径：账号开启 `anthropic_apikey_mimic_claude_code` 时，keeper 的 `/v1/messages` 必须复用账号测试和正式 Gateway 的 active Claude Code CLI API Key Profile；同时开启 passthrough 时仍由 mimic 优先（见 §1.2.1 规则 2）。keeper Anthropic 代理放行的另两条路径 `POST /v1/messages/count_tokens` 和 `GET /v1/models` 不进入 mimic，即使账号开着 mimic 也带 Claude CLI 自身 header 原样转发；mimic 关闭时三条路径均原样转发。
-2. mimic 前必须执行账号模型映射和 `max_tokens` 钳制；最终 UA、billing 版本、beta、system、metadata、session、cache 和鉴权规则必须由同一 Registry Profile 解析，CWD 等项目上下文移入 messages 保留。
-3. TLS 决策与 Anthropic 账号测试、正式 Gateway 完全一致，规则见 §1.2.5，此处不另行定义。
-4. keeper 的权限限制会使 Claude CLI 只上报 `Read` 等少量工具；mimic 内部代理必须按 active 官方画像基线重排工具：保留同名真实工具定义、删除基线外工具、补齐缺失工具；补齐项必须明确标记为不可用，不能因此放开 keeper 的 Shell、写文件或联网权限。
-5. Claude CLI 必须使用稳定的 `--name keeper-<账号ID>`，并在真实子进程环境设置 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`（两者的作用边界见 §1.4.4）。
-6. 常驻 Claude 子进程必须显式继承 `CLAUDE_CODE_MAX_OUTPUT_TOKENS=<keeper_keepalive_max_output_tokens>`，与主服务请求钳制值保持一致；该值要传给 `exec.Command` 的环境，只写 `runtime.env` 不生效（见 §1.4.4）。
-7. `api_retry` 中的瞬时 429 必须保留在 stdout 供审计，但不能覆盖同一轮后续的成功 `result`；最终有正常回复和非零 usage 时，keeper 应记录 `success` 并将连续失败次数清零。
-
-#### 1.4.4 已知坑与排查方法
-
-以下为排查经验，不是实现契约。涉及 CLI 内部行为和第三方站点响应的部分属于外部观测，仓库内无对应证据文件。
-
-- **环境变量必须传给子进程**：只把 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 写入 `runtime.env` 而未传给 `exec.Command` 的环境，会使 CLI 仍按 64000 token 运行，并把上游的 512 token 截断误判为输出超限。在 Anthropic 保活任务执行期间可这样核对实际子进程：
-
-  ```sh
-  docker exec sub2apiplus-keeper pgrep -af -- '--name keeper-'
-  docker exec sub2apiplus-keeper sh -lc 'pid=$(pgrep -o -f -- "--name keeper-"); tr "\0" "\n" < "/proc/${pid}/environ" | grep -E "^CLAUDE_CODE_(MAX_OUTPUT_TOKENS|DISABLE_NONESSENTIAL_TRAFFIC)="'
-  ```
-- **标题请求不是保活正文**：缺少 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` 时，CLI 仍可能后台发送 `tools=[]`、`thinking=disabled`、带结构化 `output_config` 的标题请求，AnyRouter 会以 HTTP 429 拒绝。`--name` 只负责会话标识，不能单独关闭自动标题。
-- **不要把 429 归因于 CLI 版本**：版本只能用于判断客户端请求形态。应使用同一账号和模型对照新版 CLI；若新旧版本均为 429，继续检查内部代理的 TLS、header、body 和上游状态。
-- **排查期间暂停自动调度**：据观测 Claude CLI 对单次 429 最多自动重试 10 次，排查时应暂停调度或使用受控单次请求，避免把一轮失败误判为多轮保活。
-- **区分持续 429 与瞬时重试**：判定契约见 §1.4.3 第 7 条。2026-07-15 实测中一轮保活的 6 个正文请求全部返回 HTTP 200，首个请求经 2 次瞬时 429 自动重试后恢复，最终仍记为 `success`，完整运行记录见实证归档。
-
-### 1.5 三方客户端兼容
+### 1.3 三方客户端兼容
 
 在“Plus 增强功能 → 三方客户端兼容”中，为指定的 Anthropic API Key 账号打开“普通 API 兼容”，将官方 Claude Code 请求适配为普通 Anthropic API 请求。开关保存在 `account.Extra.anthropic_apikey_standard_api_compat`，默认关闭，不影响 OAuth 或其它平台账号。
 
 1. **适用方向**：官方 Claude Code 客户端 → 普通 Anthropic API。与 §1.2 中“第三方客户端 → 官方客户端请求形态”的 mimic 方向相反，两项互斥；切换前先关闭另一项。页面开关与后端创建、编辑、批量更新、Extra PATCH 均校验此约束。
 2. **处理范围**：出站使用普通 API User-Agent，仅过滤 `anthropic-beta` 中的 `claude-code-20250219`，并清理 `system` 中的 `x-anthropic-billing-header` 键值标识及 Claude Code 官方 CLI、Claude Agent SDK 两种固定身份介绍。真实桌面会话和 `sdk-cli` 可能使用 SDK 身份句，验收时必须覆盖这一形态。支持 system 字符串、文本块数组及同一块内混合业务指令；空身份块移除，其余块的属性保持不变。
-3. **保留能力**：保留其它功能 beta、业务 system 指令、messages、tools、剩余块的缓存配置、metadata 和会话头。消息转发、透传、token 计数、账号连通性测试和 keeper 内部代理共用处理逻辑；在最终请求头覆写后生效，避免重试或账号覆写再次加入身份标识。
+3. **保留能力**：保留其它功能 beta、业务 system 指令、messages、tools、剩余块的缓存配置、metadata 和会话头。消息转发、透传、token 计数和账号连通性测试共用处理逻辑；在最终请求头覆写后生效，避免重试或账号覆写再次加入身份标识。
 4. **配置与验收**：只为需要此适配的账号开启。用实际客户端验证普通对话、流式与工具调用，并核对用量记录中的账号 ID，避免分组切换到其它账号造成误判。开关只改变请求兼容行为，不承诺上游额度资格或计费方式；实际结果以上游规则和账单为准。
 
 `claude-code-20250219` 是通过 `anthropic-beta` 发送的 Claude Code 相关实验特性标识，日期属于标识名称，不是客户端版本。它的完整内部语义未公开；本功能仅移除这一身份标识，其它功能 beta 按原有规则处理。参见 [Anthropic beta 请求头文档](https://platform.claude.com/docs/en/api/beta-headers)与[订阅者 API 赠送额度说明](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)。
 
-### 1.6 隐藏已映射模型
+### 1.4 隐藏已映射模型
 
 账号配置具体模型映射后，模型发现列表只展示供客户端请求的别名，隐藏同一账号中对应的上游原名。例如配置 `deepseek-flash → cline-pass/deepseek-v4.1-flash`，即使保留了原名的自映射，发现列表也只展示 `deepseek-flash`。
 
 1. **仅影响展示**：普通、Composite 和 Codex 模型目录共用展示过滤规则，不删除账号映射，不改变模型准入、调度和请求转发。直接请求 `cline-pass/deepseek-v4.1-flash` 仍按原有配置处理；需要原名直调时，应保留其白名单或自映射。
 2. **按账号过滤**：多个别名指向同一上游模型时保留全部别名；同组其它账号独立提供原名时，合并目录仍可展示原名。目标自身也是另一个模型的别名时保留该名称。
-3. **兼容现有规则**：单纯自映射不隐藏；通配符、OpenAI 透传模式和 Antigravity 官方模型白名单沿用现有语义。本功能不改变独立配置的模型广场与渠道模型目录。
+3. **兼容现有规则**：单纯自映射不隐藏；通配符、OpenAI 透传模式和各平台模型配置沿用现有语义。本功能不改变独立配置的模型广场与渠道模型目录。
 4. **维护方式**：过滤逻辑集中在独立展示辅助函数中，接入现有目录生成入口，不增加数据库字段、配置开关或前端适配，便于长期合并上游更新。
 
-### 1.7 带前缀模型定价回退
+### 1.5 带前缀模型定价回退
 
 带供应商或渠道前缀的模型，在完整名称没有匹配到价格时，使用最后一个 `/` 后的模型名继续查价。例如 `cline-pass/deepseek-v4.1-flash`、`deepseek/deepseek-v4.1-flash` 都可使用 `deepseek-v4.1-flash` 的定价，避免因名称前缀导致费用漏记。
 
@@ -257,7 +168,7 @@ Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。OpenAI ke
 3. **沿用模型计费规则**：实际使用裸名回退时，其默认价格、缓存计费和 DeepSeek 峰谷规则与直接请求裸名一致；分组、渠道自定义价格保留原有语义。完整名和裸名都无法定价时，继续报告缺少价格。
 4. **生效与维护**：规则用于升级后的请求，历史用量记录不自动重算。改动限定在定价解析链路，请求转发、模型映射和用量记录中的模型名称保持原样，无需数据库迁移或新增配置。
 
-### 1.8 其它优化
+### 1.6 其它优化
 
 - Composite 与 Grok 同等豁免，使 Anthropic 协议也能访问 GPT、Grok 模型。
 - Composite 分组的模型列表按请求协议过滤：OpenAI Compatible 与 OpenAI Responses 共用 OpenAI 模型目录；携带 `Anthropic-Version` 或 Claude CLI 特征时仅返回 Anthropic 协议模型。Kimi、智谱、DeepSeek 按账号实际 `api_protocol` 归组；配置为自适应协议（`api_protocol=adaptive`）的账号会根据入站请求选择上游协议，因此其模型同时显示在 OpenAI 与 Anthropic 两类目录中。自定义模型列表仅在过滤结果上取交集；该功能只影响模型展示，不限制实际请求路由。
@@ -265,13 +176,13 @@ Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。OpenAI ke
 
 ## 2. 全新服务器部署
 
-推荐使用 Docker Compose。主服务目录为 `/root/docker/sub2apiplus/app`；keeper 配置、数据和项目位于 `/root/docker/sub2apiplus/keeper/app`，构建源码位于 `/root/docker/sub2apiplus/keeper/repo`，其中 `app/projects/<项目名>` 挂载到 `/workspace/projects/<项目名>`。以下流程统一使用运行目录中的 `docker-compose.yml`。
+推荐使用 Docker Compose。主服务目录为 `/root/docker/sub2apiplus/app`，以下流程统一使用运行目录中的 `docker-compose.yml`。维护既有实例前，应通过容器的 `com.docker.compose.project.working_dir` 标签确认真实目录，注意历史路径的大小写差异。
 
-主服务和 keeper 来自同一仓库，但分别以 GHCR 镜像和本地构建 sidecar 部署。完整可复现部署应选择同一个已发布 Plus 版本，同时使用 `ghcr.io/itv3/sub2apiplus:<Plus版本>` 和 Git tag `v<Plus版本>`；不能把主服务 `latest` 与 keeper `main` 称为可复现组合，`latest` / `main` 只适合持续跟踪最新代码的环境。允许暂缓更新 keeper 的条件见 §3.4。
+可复现部署应选择已发布 Plus 版本，同时使用 `ghcr.io/itv3/sub2apiplus:<Plus版本>` 和 Git tag `v<Plus版本>` 中的部署文件；`latest` 适合持续跟踪最新稳定版的环境。
 
 ### 2.1 准备主服务
 
-宿主机先安装 Docker、Docker Compose plugin、`git`、`curl` 和 `openssl`。快速部署可用一键脚本下载 `main` 模板、生成 `.env`，并自动填入 `JWT_SECRET`、`TOTP_ENCRYPTION_KEY` 和 `POSTGRES_PASSWORD`。该方式跟踪 `latest`，且不安装 keeper；需要 keeper 或可复现部署时应使用下方固定版本流程：
+宿主机先安装 Docker、Docker Compose plugin、`git`、`curl` 和 `openssl`。快速部署可用一键脚本下载 `main` 模板、生成 `.env`，并自动填入 `JWT_SECRET`、`TOTP_ENCRYPTION_KEY` 和 `POSTGRES_PASSWORD`。该方式跟踪 `latest`；需要可复现部署时应使用下方固定版本流程：
 
 ```sh
 mkdir -p /root/docker/sub2apiplus/app
@@ -300,10 +211,6 @@ JWT_SECRET=<openssl rand -hex 32>
 TOTP_ENCRYPTION_KEY=<openssl rand -hex 32>
 ADMIN_EMAIL=<自定义后台登录邮箱，可选>
 ADMIN_PASSWORD=<自定义后台密码，可选>
-SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=<openssl rand -hex 32>
-SUB2APIPLUS_KEEPER_PROJECTS=homeproxy
-# 可选；留空默认 http://sub2apiplus-keeper:38090
-# SUB2APIPLUS_KEEPER_BASE_URL=http://sub2apiplus-keeper:38090
 ```
 
 ```sh
@@ -315,110 +222,7 @@ docker compose logs sub2api | grep "Generated admin"
 
 后台地址为 `http://<服务器IP>:8080`。登录后先添加 API 账号，并确认平台、可用模型和模型成本配置正常。
 
-### 2.2 准备 keeper
-
-keeper 镜像构建时会在容器内安装官方 `codex` / `claude` 客户端；它们不进入 sub2apiplus 主镜像，也不要求宿主机单独安装。Claude CLI 由 `keeper/Dockerfile` 的 `CLAUDE_RELEASE` 固定版本，更新版本时必须同时修改该默认值，不能依赖可被 Docker 缓存的 `latest` 安装层。Codex CLI 的 `CODEX_RELEASE` 当前仍为 `latest`，每次无缓存重建都会安装当时的最新版；需要可复现的 Codex 版本时应同样改为具体版本号。
-
-准备 keeper 源码和配置：
-
-```sh
-: "${VERSION:?请先设置为与主服务相同的 Plus 版本号}"
-mkdir -p /root/docker/sub2apiplus/keeper/app/{data,projects} /root/docker/sub2apiplus/keeper/repo
-rm -rf /tmp/sub2apiplus-src
-git clone --branch "v${VERSION}" --depth 1 https://github.com/itv3/sub2apiplus.git /tmp/sub2apiplus-src
-cp -a /tmp/sub2apiplus-src/keeper/. /root/docker/sub2apiplus/keeper/repo/
-cp /tmp/sub2apiplus-src/keeper/keeper.example.yaml /root/docker/sub2apiplus/keeper/app/keeper.yaml
-rm -rf /tmp/sub2apiplus-src
-```
-
-下载保活项目。`SUB2APIPLUS_KEEPER_PROJECTS` 使用单级项目名，多个项目用英文逗号分隔（如 `homeproxy,sub2apiplus`）；不接受绝对路径、`..` 或多级路径，每个项目名的同名目录必须放在 keeper 的 `projects` 下：
-
-```sh
-cd /root/docker/sub2apiplus/keeper/app/projects
-git clone --depth 1 https://github.com/itv3/homeproxy.git homeproxy
-```
-
-准备 keeper `.env`，其中 `SUB2APIPLUS_KEEPER_INTERNAL_TOKEN` 必须与主服务 `.env` 完全一致：
-
-```env
-SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=<与主服务相同>
-KEEPER_BIND_HOST=127.0.0.1
-KEEPER_HOST_PORT=38091
-# 留空规则见 §3.2
-KEEPER_WEB_USERNAME=
-KEEPER_WEB_PASSWORD=
-```
-
-检查 keeper `keeper.yaml`。完整示例为 `keeper/keeper.example.yaml`；提示词题库可先使用示例值，后台保存后持久化到 `/app/data/state.json`。`sub2apiplus.base_url` 必须是容器内可访问的主服务地址，默认使用 `http://sub2apiplus:8080`：
-
-```yaml
-timezone: Asia/Shanghai
-scan_interval_seconds: 30
-state_path: /app/data/state.json
-projects_root: /workspace/projects
-runtime_root: /app/data/runtime
-
-sub2apiplus:
-  base_url: http://sub2apiplus:8080
-  internal_token: ${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN}
-  timeout_seconds: 180
-
-web:
-  enabled: true
-  listen: 0.0.0.0:38090
-  username: ${KEEPER_WEB_USERNAME}
-  password: ${KEEPER_WEB_PASSWORD}
-```
-
-下载 keeper compose（与主服务同一 tag）：
-
-```sh
-cd /root/docker/sub2apiplus/keeper/app
-curl -fsSL "https://raw.githubusercontent.com/itv3/sub2apiplus/v${VERSION}/deploy/docker-compose.keeper.yml" -o docker-compose.yml
-```
-
-模板中的 `sub2api-network.name` 必须与主服务网络一致；设置 `COMPOSE_PROJECT_NAME=sub2apiplus` 后固定为 `sub2apiplus_sub2api-network`，可用 `docker network ls | grep sub2apiplus` 确认。
-
-构建并启动 keeper。标准更新必须禁用构建缓存，避免复用旧的官方客户端安装层：
-
-```sh
-cd /root/docker/sub2apiplus/keeper/app
-docker compose build --pull --no-cache --build-arg VERSION="${VERSION}" keeper
-docker compose up -d keeper
-docker exec sub2apiplus-keeper /app/sub2apiplus-keeper -version
-docker exec sub2apiplus-keeper codex --version
-docker exec sub2apiplus-keeper claude --version
-```
-
-构建完成后，keeper 版本必须与主服务 Plus 版本一致，`claude --version` 必须与 `keeper/Dockerfile` 的 `CLAUDE_RELEASE` 一致；任一不一致时不得继续保活验证。
-
-keeper 需要 `CAP_SYS_ADMIN`、`seccomp=unconfined`、`apparmor=unconfined` 以运行官方客户端和 `bubblewrap` 沙箱；`data`、`runtime`、`projects` 必须持久化。
-
-### 2.3 后台激活和验证
-
-1. 在后台添加 API 账号，确认模型和成本配置正常。
-2. 进入“Plus 增强功能 / 账号保活 / 配置”，添加 OpenAI / Anthropic API Key 账号；平台自动选择 `codex` / `claude`。
-3. 配置模型、项目、间隔、工作时间、执行模式、全局约束和题库后保存。
-4. 点击“立即执行”，到“会话历史”确认回复、token 和费用。
-5. Anthropic 任务执行期间检查真实 Claude 子进程的命令行与环境变量，核对项见 §1.4.3 第 5、6 条，验证命令见 §1.4.4。
-6. 任务结束后确认最终状态为 `success`、usage 非零、连续失败次数归零；瞬时 429 的判定口径见 §1.4.3 第 7 条。
-
-验证命令：
-
-```sh
-curl -fsS http://127.0.0.1:8080/health
-# 不带凭据访问返回 401 即为正常结果：端口映射通、服务在监听、鉴权生效
-curl -s -o /dev/null -w 'keeper web: %{http_code}\n' http://127.0.0.1:38091/
-# 需要真正读取 keeper 状态时用内部 token；token 从容器环境变量取，不写入命令历史
-docker exec sub2apiplus-keeper sh -lc 'curl -fsS -o /dev/null -H "x-api-key: ${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN}" http://127.0.0.1:38090/api/state && echo "keeper api OK"'
-cd /root/docker/sub2apiplus/keeper/app && docker compose ps
-docker inspect sub2apiplus --format '{{.Config.Image}}'
-docker exec sub2apiplus /app/sub2api -version
-docker exec sub2apiplus-keeper /app/sub2apiplus-keeper -version
-docker exec sub2apiplus-keeper claude --version
-```
-
-### 2.4 Apple 容器部署（macOS）
+### 2.2 Apple 容器部署（macOS）
 
 Apple silicon Mac 可使用 Apple `container` 1.1+ 在本机运行 Sub2API Plus、PostgreSQL 和 Redis，无需 Docker Desktop。该方式面向本地开发和管理员维护的部署，不提供 Compose 等价的自动重启与持续编排能力；生产环境仍推荐 Docker Compose。
 
@@ -448,35 +252,27 @@ docker compose restart sub2api
 
 | 变量 | 用途 |
 |---|---|
-| `COMPOSE_PROJECT_NAME=sub2apiplus` | 固定 Docker 网络名，供 keeper sidecar 接入。 |
+| `COMPOSE_PROJECT_NAME=sub2apiplus` | 固定 Compose 项目名和 Docker 网络名。 |
 | `POSTGRES_PASSWORD` | PostgreSQL 密码，必须固定保存。 |
 | `JWT_SECRET` | 登录会话签名密钥，生产环境必须固定。 |
 | `TOTP_ENCRYPTION_KEY` | TOTP 加密密钥，生产环境必须固定。 |
 | `ADMIN_EMAIL` | 管理员登录邮箱（即登录用户名）；留空时首次启动随机生成，从首次启动日志（`docker compose logs sub2api`）查看。 |
 | `ADMIN_PASSWORD` | 管理员初始密码；留空时从 `docker compose logs sub2api` 查看自动生成值。 |
-| `SUB2APIPLUS_KEEPER_INTERNAL_TOKEN` | 主服务与 keeper 的内部鉴权 token，双方必须一致。 |
-| `SUB2APIPLUS_KEEPER_BASE_URL` | 主服务代理 keeper Web/API 时使用的地址；写入主服务 `.env` 并由 compose 注入。留空时默认 `http://sub2apiplus-keeper:38090`。 |
-| `SUB2APIPLUS_KEEPER_PROJECTS` | 账号保活项目下拉框项目名，多个项目用英文逗号分隔。 |
-| `KEEPER_BIND_HOST` | keeper Web 端口绑定地址，默认建议 `127.0.0.1`，由 sub2apiplus 后台代理访问。 |
-| `KEEPER_HOST_PORT` | keeper Web 映射到宿主机的端口，默认示例为 `38091`。 |
-| `KEEPER_WEB_USERNAME` / `KEEPER_WEB_PASSWORD` | keeper 独立 Web 入口的 Basic Auth；留空或只配置一项时不会放行，只能通过内部 token 或完整 Basic Auth 访问。 |
 
 ### 3.3 数据迁移
 
-迁移时停止主服务和 keeper，并打包整个 `/root/docker/sub2apiplus`：
+迁移时停止主服务，并打包整个 `/root/docker/sub2apiplus`：
 
 ```sh
 docker compose -f /root/docker/sub2apiplus/app/docker-compose.yml down
-docker compose -f /root/docker/sub2apiplus/keeper/app/docker-compose.yml down
 cd /root/docker
 tar czf sub2apiplus.tar.gz sub2apiplus/
 ```
 
-在新服务器解压后分别启动：
+在新服务器解压后启动：
 
 ```sh
 docker compose -f /root/docker/sub2apiplus/app/docker-compose.yml up -d
-docker compose -f /root/docker/sub2apiplus/keeper/app/docker-compose.yml up -d
 ```
 
 ### 3.4 发布和应用更新
@@ -485,7 +281,6 @@ docker compose -f /root/docker/sub2apiplus/keeper/app/docker-compose.yml up -d
 
 ```sh
 (cd /path/to/sub2apiplus/backend && go test ./internal/pkg/apicompat ./internal/pkg/openai ./internal/service)
-(cd /path/to/sub2apiplus/keeper && go test ./...)
 (cd /path/to/sub2apiplus && make test-frontend)
 ```
 
@@ -513,42 +308,25 @@ git push origin "v${VERSION}"
 gh workflow run Release --repo itv3/sub2apiplus --ref main -f tag="v${VERSION}" -f simple_release=false
 ```
 
-默认按同一 tag 更新主服务和 keeper，获得严格可复现的完整部署。若 Release notes 明确确认没有 keeper 或内部代理变更，可以只更新主服务并暂时保留上一版 keeper，但必须记录版本错位；一旦 keeper 或内部代理有改动，两者必须同步更新，不能只更新其中一方。AMD64 / ARM64 均使用以下完整流程，不动 PostgreSQL、Redis、volume、keeper 数据目录和 `.env`：
-
-升级前必须备份数据库。部分迁移会安装数据库触发器且没有自动反向迁移，回退到旧应用时不能只回退镜像，必须同时采用经审核的触发器停用或反向迁移方案，否则相关 outbox 表会继续累积。每个版本引入的具体迁移编号见对应 Release notes。
+发布完成后，AMD64 / ARM64 均使用固定版本更新主服务。升级前备份数据库，并保留当前镜像和 Compose 文件；更新只替换应用容器，保留 PostgreSQL、Redis、volume、配置和 `.env`。部分数据库迁移没有自动反向迁移，回滚方案应参考对应 Release notes。
 
 ```sh
 export VERSION="<新发布的 Plus 版本号，不含 v>"
-
-# 1. 更新主服务到指定版本并确认健康
 cd /root/docker/sub2apiplus/app
+cp -p docker-compose.yml docker-compose.yml.bak
 sed -i -E "s#image: ghcr.io/itv3/sub2apiplus:[^[:space:]]+#image: ghcr.io/itv3/sub2apiplus:${VERSION}#" docker-compose.yml
 docker compose pull sub2api
 docker compose up -d --no-deps sub2api
 docker compose ps
 docker compose logs --tail=100 sub2api
 curl -fsS http://127.0.0.1:8080/health
-
-# 2. 用同一 tag 替换 keeper 构建源码，保留 app 下的配置、数据和项目
-rm -rf /tmp/sub2apiplus-src
-git clone --branch "v${VERSION}" --depth 1 https://github.com/itv3/sub2apiplus.git /tmp/sub2apiplus-src
-find /root/docker/sub2apiplus/keeper/repo -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-cp -a /tmp/sub2apiplus-src/keeper/. /root/docker/sub2apiplus/keeper/repo/
-rm -rf /tmp/sub2apiplus-src
-
-# 3. 无缓存重建 keeper，并核对版本和日志
-cd /root/docker/sub2apiplus/keeper/app
-docker compose build --pull --no-cache --build-arg VERSION="${VERSION}" keeper
-docker compose up -d --no-deps keeper
-docker exec sub2apiplus-keeper /app/sub2apiplus-keeper -version
-docker exec sub2apiplus-keeper claude --version
-docker compose ps
-docker compose logs --tail=100 keeper
 ```
 
-不要执行 `docker compose down -v`，不要删除 volume，不要覆盖 `.env`。维护既有实例前先读取容器的 `com.docker.compose.project.working_dir` 标签确认真实目录，历史实例的路径大小写可能与本文推荐路径不同，不要直接照抄。
+远程更新可能影响当前请求链路时，应以单条命令启动 `systemd-run` 等后台更新事务：预拉镜像、备份、切换、健康检查和失败回滚均由远端进程完成，执行结果写入日志，避免依赖当前会话持续连接。健康检查端口按实例实际映射配置。
 
-Watchtower 只能拉取并替换镜像仓库中的主服务镜像。按本文部署的 keeper 使用本地源码构建镜像 `sub2apiplus-keeper:latest`，没有对应的 GHCR 发布镜像；Watchtower 不会拉取 Git tag、替换 `/root/docker/sub2apiplus/keeper/repo` 或执行 `docker compose build`，因此不会自动更新 keeper。启用 Watchtower 的服务器在主服务自动更新后仍需按上述第 2、3 步手动更新 keeper；否则主服务和 keeper 会处于不同版本。要求严格版本配套时，应固定主服务镜像版本，并在发布后统一执行完整的三步升级流程。
+不要执行 `docker compose down -v`，不要删除 volume，不要覆盖 `.env`。维护既有实例前先读取容器的 `com.docker.compose.project.working_dir` 标签确认真实目录，历史实例的路径大小写可能与本文推荐路径不同。
+
+Watchtower 可拉取并替换镜像仓库中的主服务镜像；要求发布与部署严格对应时，应固定镜像版本并在发布后执行健康检查。
 
 ### 3.5 发布、源码与验证镜像的三层状态
 
@@ -560,7 +338,7 @@ Gemini 支持内置 Gemini CLI OAuth Client 的 Code Assist OAuth、通过 `.env
 
 后台“数据管理”入口当前仅保留兼容诊断；服务端固定返回 `DATA_MANAGEMENT_DEPRECATED`，不建议新部署 `datamanagementd`，也不要按旧流程挂载 `/tmp/sub2api-datamanagement.sock`。数据迁移优先使用第 3.3 节的本地目录迁移流程；数据库备份请在 PostgreSQL / Redis 层独立执行。
 
-二进制 `install.sh` 仍是上游兼容的 systemd 安装路径，不安装 keeper sidecar；需要账号保活时使用 Docker Compose 部署。
+二进制 `install.sh` 仍是上游兼容的 systemd 安装路径。
 
 ChatGPT Live 实时会话由 `/v1/live` 与 Codex `/backend-api/codex/realtime/calls` 转发，受分组开关控制，并使用并发租约和会话数硬上限约束，用量按实时会话单独记录。
 
@@ -568,36 +346,9 @@ OpenAI WS 账号使用 `http_bridge` 模式前，必须先开启 WS v2 模式路
 
 ## 4. 维护参考
 
-### 4.1 keeper 内部接口
+### 4.1 Plus 差异文件清单
 
-sub2apiplus 提供内部接口给 keeper 和 Plus 增强功能页面使用。
-
-| 接口 | 用途 |
-|---|---|
-| `GET /api/v1/internal/keeper/accounts` | 返回已启用保活、可调度（判定见 §1.4.1 第 5 条）且具备有效平台 API Key 凭据的 OpenAI / Anthropic API Key 账号，以及模型、prompt、项目、最大输出 token、最近使用时间、下一次时间和 due 判断。 |
-| `GET /api/v1/internal/keeper/projects` | 返回可在保活配置页选择的项目列表，来源为 `SUB2APIPLUS_KEEPER_PROJECTS`。 |
-| `GET /api/v1/internal/keeper/state` | 代理 keeper 状态，用于概览、会话历史和运行状态展示。 |
-| `GET /api/v1/internal/keeper/settings` | 读取 keeper 版本、全局约束提示词和提示词题库。 |
-| `POST /api/v1/internal/keeper/settings` | 保存全局约束提示词和提示词题库。 |
-| `POST /api/v1/internal/keeper/run?target=<target>` | 立即执行指定保活目标；`target` 可匹配目标 ID、账号 ID 或账号名称。 |
-| `GET /api/v1/internal/keeper/accounts/:id/models` | 返回该账号可用于保活的模型列表。 |
-| `POST /api/v1/internal/keeper/accounts/:id/keepalive` | keeper sidecar 回写状态、token、费用和错误信息；带 `prompt` 的主服务直连执行请求会被拒绝。 |
-| `GET/POST /api/v1/internal/keeper/openai/accounts/:id/*` | Codex 代理；POST 仅允许 `/v1/responses`、`/responses`、`/v1/chat/completions`、`/chat/completions`，GET 仅允许 `/v1/models`、`/models`、`/v1/responses/*`、`/responses/*`。 |
-| `GET/POST /api/v1/internal/keeper/anthropic/accounts/:id/*` | Claude 代理；POST 仅允许 `/v1/messages`、`/v1/messages/count_tokens`，GET 仅允许 `/v1/models`。 |
-
-| 接口类型 | 允许的鉴权 |
-|---|---|
-| 账号列表、项目、state、settings、立即执行和模型列表 | 全局内部 token 或后台 admin auth。 |
-| `keepalive` 回写 | 仅全局内部 token。 |
-| OpenAI / Anthropic 账号代理 | 仅主服务按账号和平台签发的 scoped proxy token，不接受 admin auth。 |
-
-代理路径拒绝 query、fragment、`.`、`..`、`%2e` 等不安全片段；请求和响应 header 使用显式 allowlist，避免 `Cookie`、`Set-Cookie`、账号密钥、上游鉴权信息或未脱敏日志越界。
-
-keeper 通过 `max_output_tokens` 把账号级最大输出 token 传回主服务。主服务内部代理会按该值钳制 OpenAI Responses 的 `max_output_tokens`、OpenAI Chat Completions 的 `max_completion_tokens` / `max_tokens`，以及 Anthropic Messages 的 `max_tokens`；请求未带这些字段时会补默认值，超过上限时会降到账号配置值。
-
-### 4.2 Plus 差异文件清单
-
-发布基线为最近一次合并的上游 tag（查法见 §0）；审核 Plus 实现时优先看该 tag 到 `HEAD` 之间的 OAuth 官方出站、mimic、Antigravity、keeper 和 Plus UI。Composite 分组、ChatGPT Live、Ollama Cloud 用量同步、`batch_image`、提示词安全审计、异步图像任务和注册安全修复属于上游能力；`keeper/` 是新增源码，`.codex-captures/` 和 `.kilo/` 是本地样本或工具配置，不计入源码清单。完整差异用以下命令生成：
+发布基线为最近一次合并的上游 tag（查法见 §0）；审核 Plus 实现时优先看该 tag 到 `HEAD` 之间的 OAuth 官方出站、mimic、三方客户端兼容和 Plus UI。Composite 分组、ChatGPT Live、Ollama Cloud 用量同步、`batch_image`、提示词安全审计、异步图像任务和注册安全修复属于上游能力；`.codex-captures/` 和 `.kilo/` 是本地样本或工具配置，不计入源码清单。完整差异用以下命令生成：
 
 ```sh
 BASE=$(git log --oneline --grep='sync upstream' -1 --format=%H)
@@ -610,12 +361,10 @@ git diff --stat "$BASE..HEAD"
 | 服务层画像投影与 API Key mimic | `backend/internal/service/official_client_profile_registry.go` 和 `official_egress_profile.go` 中保留的 Codex OAuth 运行态投影、API Key mimic 与兼容读取面；这些投影不得成为 OAuth production active／rollback 的第二选择源。 |
 | OAuth 官方客户端出站仿真 | `backend/internal/officialegress/`（Persona Registry、Release Catalog/Bundle、Ingress Adapter、Dialect Compiler、Executor、Guard 和传输适配合同），`backend/internal/service/official_egress_1b_executor.go` 及 gateway／WebSocket 接入点，`backend/internal/service/official_egress_claude_state_redis.go`，以及 `backend/internal/repository/official_egress_guard.go` 等窄资源端口。 |
 | API Key mimic | `backend/internal/service/*apikey_mimic*`、OpenAI gateway/scheduler/WS 相关 service、`backend/internal/pkg/tlsfingerprint/`、`backend/internal/repository/http_upstream.go`、`backend/internal/handler/openai_gateway_handler.go`。`backend/internal/pkg/claude/constants.go` 若仍服务 API Key 产品语义，只能保留为该独立路径的兼容事实，不得取得 Claude OAuth Persona 的画像或版本选择权。 |
-| Antigravity | `backend/internal/pkg/antigravity/`、`backend/internal/service/antigravity_*`、`upstream_models.go`、`model_rate_limit.go`、`backend/resources/model-pricing/model_prices_and_context_window.json`。 |
-| 账号保活 | `keeper/`、`backend/internal/handler/admin/account_handler_keeper.go`、`backend/internal/service/*keeper*`、`backend/internal/server/routes/admin.go`。 |
 | Plus UI | `frontend/src/views/admin/ApiKeyMimicSettingsView.vue`、账号 API、路由、侧边栏、i18n、账号创建/编辑和模型白名单相关组件。 |
 | 发布部署 | `README.md`、`deploy/.env.example`、`deploy/docker-compose.local.yml`、`.github/workflows/release.yml`、`backend/cmd/server/VERSION`。 |
 
-### 4.3 上游合并检查
+### 4.2 上游合并检查
 
 合并上游后先按[共享框架 §5.2](docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#52-合并-sub2api-上游更新)建立独立 upstream changeset，并执行 `U-0～U-6`；README 不重复定义 OAuth 客户端字段级规则。
 
@@ -635,20 +384,22 @@ git diff --stat "$BASE..HEAD"
 - **压缩与 probe 分键**：`DisableCompression` 的驱动规则见 §1.2.5；Responses capability probe 继续按 mimic 状态分键。
 - **Codex base instructions**：`CodexBaseInstructionsForModel()` 保持 §1.2.5 定义的四条分支，不得增删或改变回退顺序。
 
-**Antigravity**（判定标准见 §1.3）
-- 新账号默认写入的 16 条映射（8 条自映射与 8 条显示名映射）与官方 8 模型集合保持一致，不产生重复模型；自定义模型和上游同步结果仍按真实配置保存。
-- 允许集合只由自映射构成；默认表、别名、通配符和 `web_search` 都不能重新放开已移除模型。注意允许集合为空时 `/models` 仍会回落广告官方 8 模型，属 §1.3「模型广告」行记录的已知问题，修复前不能把广告集合与允许集合视为始终一致。
-- 官方 UA（默认值可被环境变量与后台设置覆盖）、固定 `thinkingBudget`、labels、同源 `requestId` 和最终 `UpstreamModel` 计费保持有效，具体取值见 §1.3。
+**三方客户端兼容**（判定标准见 §1.3）
 
-**Keeper 与 UI**
-- 内部接口的账号列表、项目、settings/state、立即执行、token 钳制和会话回写保持对齐（接口与鉴权清单见 §4.1）；候选和实际代理都校验可调度状态，判定条件见 §1.4.1 第 5 条。
-- Plus 路由、侧边栏、i18n、账号 API 和设置页与后端保持一致；mimic 与保活筛选、启用优先排序继续有效。
-- 保活概览、配置页筛选排序和会话历史的行为见 §1.4.1；Antigravity 编辑页保留模型白名单和映射。
+- **范围与配置**：普通 API 兼容默认关闭，仅适用于 Anthropic API Key 账号；关闭时、OAuth 和其它平台保持原有行为。创建、编辑、批量更新和 Extra PATCH 均须维持与 Anthropic API Key mimic 的互斥校验，增量保存时不得覆盖其它 Extra 字段。
+- **入口与顺序**：复核消息转发、消息透传、Token 计数及其透传、账号测试这五个调用点，均共用 `account_anthropic_standard_api_compat.go` 的处理逻辑，并在正文构造、账号请求头覆写及其它身份补全之后生效。上游拆分构造函数或新增出站路径时须同步接入，不能仅以 Git 合并无冲突作为验收依据。
+- **内容与重试**：仅处理 §1.3 规定的 User-Agent、单项 beta 和 system 固定身份标识；保留业务 system、messages、tools、其它功能 beta、metadata、会话头及剩余块的缓存属性。正文修改后 `Body`、`ContentLength`、`GetBody` 保持一致，重试处理幂等，原始入站请求保持完整。
+- **客户端身份演进**：Claude Code CLI、桌面端或 Agent SDK 升级后，核对真实请求中的固定身份句；出现新形态时先用受控请求确认差异，再更新集中规则和回归用例，避免扩大到任意 Claude 文本过滤。
+- **回归与界面**：运行 `AnthropicStandardAPICompat` 专项及 Plus 设置页测试，覆盖开关关闭、互斥、各构造入口和 SDK 身份句；核对“三方客户端兼容”的筛选、状态及保存行为。上线验收使用真实客户端验证普通对话、流式和工具调用，确认用量归属目标账号且账号保持正常可调度。
+
+**Plus 界面与发布**
+
+- Plus 路由、侧边栏、i18n、账号 API 和设置页与后端保持一致，页面保留“API Key 官方客户端兼容”和“三方客户端兼容”两个 Tab。
 - Release / Docker 继续发布 `ghcr.io/itv3/sub2apiplus`，应用更新只替换 app 容器。
 
-重点文件以第 4.2 节清单为准。
+重点文件以第 4.1 节清单为准。
 
-### 4.4 Mimic 对齐原则
+### 4.3 Mimic 对齐原则
 
 继续提升官方客户端一致性时，不直接盲改源码，按下面顺序处理：
 1. 采集真实官方客户端请求。

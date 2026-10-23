@@ -20,10 +20,6 @@ type ClaudeRequest struct {
 	Tools       []ClaudeTool    `json:"tools,omitempty"`
 	Thinking    *ThinkingConfig `json:"thinking,omitempty"`
 	Metadata    *ClaudeMetadata `json:"metadata,omitempty"`
-
-	// suppressOfficialThinking 是内部安全标记：当历史 thinking block 缺少有效
-	// signature 被降级为普通文本时，禁止官方模型重新强制开启 thinking。
-	suppressOfficialThinking bool
 }
 
 // ClaudeMessage Claude 消息
@@ -197,16 +193,12 @@ var geminiModels = []modelDef{
 	{ID: "gemini-2.5-flash-lite", DisplayName: "Gemini 2.5 Flash Lite", CreatedAt: "2025-01-01T00:00:00Z"},
 	{ID: "gemini-2.5-flash-thinking", DisplayName: "Gemini 2.5 Flash Thinking", CreatedAt: "2025-01-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-flash", DisplayName: "Gemini 3 Flash", CreatedAt: "2025-06-01T00:00:00Z"},
-	{ID: "gemini-3-flash-agent", DisplayName: "Gemini 3.5 Flash High", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-low", DisplayName: "Gemini 3 Pro Low", CreatedAt: "2025-06-01T00:00:00Z"},
 	{ID: "gemini-3-pro-high", DisplayName: "Gemini 3 Pro High", CreatedAt: "2025-06-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.1-pro-low", DisplayName: "Gemini 3.1 Pro Low", CreatedAt: "2026-02-19T00:00:00Z"},
 	{ID: "gemini-3.1-pro-high", DisplayName: "Gemini 3.1 Pro High", CreatedAt: "2026-02-19T00:00:00Z", IsReasoning: true},
-	{ID: "gemini-pro-agent", DisplayName: "Gemini 3.1 Pro High", CreatedAt: "2026-02-19T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.1-flash-image", DisplayName: "Gemini 3.1 Flash Image", CreatedAt: "2026-02-19T00:00:00Z"},
 	{ID: "gemini-3.1-flash-image-preview", DisplayName: "Gemini 3.1 Flash Image Preview", CreatedAt: "2026-02-19T00:00:00Z"},
-	{ID: "gemini-3.5-flash-extra-low", DisplayName: "Gemini 3.5 Flash Low", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
-	{ID: "gemini-3.5-flash-low", DisplayName: "Gemini 3.5 Flash Medium", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.6-flash", DisplayName: "Gemini 3.6 Flash", CreatedAt: "2026-07-21T00:00:00Z"},
 	{ID: "gemini-3.6-flash-high", DisplayName: "Gemini 3.6 Flash High", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.6-flash-low", DisplayName: "Gemini 3.6 Flash Low", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
@@ -229,10 +221,6 @@ var geminiModels = []modelDef{
 	{ID: "gemini-3-pro-image", DisplayName: "Gemini 3 Pro Image", CreatedAt: "2025-06-01T00:00:00Z"},
 }
 
-var otherModels = []modelDef{
-	{ID: "gpt-oss-120b-medium", DisplayName: "GPT-OSS 120B Medium", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
-}
-
 // ========== Claude API 格式 (/v1/models) ==========
 
 // ClaudeModel Claude API 模型格式
@@ -245,10 +233,7 @@ type ClaudeModel struct {
 
 // DefaultModels 返回 Claude API 格式的模型列表（Claude + Gemini）
 func DefaultModels() []ClaudeModel {
-	all := make([]modelDef, 0, len(claudeModels)+len(geminiModels)+len(otherModels))
-	all = append(all, claudeModels...)
-	all = append(all, geminiModels...)
-	all = append(all, otherModels...)
+	all := append(claudeModels, geminiModels...)
 	result := make([]ClaudeModel, len(all))
 	for i, m := range all {
 		result[i] = ClaudeModel{ID: m.ID, Type: "model", DisplayName: m.DisplayName, CreatedAt: m.CreatedAt}

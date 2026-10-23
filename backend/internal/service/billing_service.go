@@ -597,13 +597,6 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:         2,
 		LongContextOutputMultiplier:        1.5,
 	}
-	// Antigravity GPT-OSS 120B Medium。
-	s.fallbackPrices["gpt-oss-120b-medium"] = &ModelPricing{
-		InputPricePerToken:     0.05e-6, // $0.05 per MTok
-		OutputPricePerToken:    0.20e-6, // $0.20 per MTok
-		CacheReadPricePerToken: 0.01e-6, // $0.01 per MTok
-		SupportsCacheBreakdown: false,
-	}
 
 	// GPT-6 Sol/Luna official rates, 2026-09-22.
 	s.fallbackPrices["gpt-6.1-sol"] = &ModelPricing{
@@ -1255,9 +1248,6 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 
 	// OpenAI（GPT-5 / Codex 族）：仅匹配已知型号，避免未知 OpenAI 型号误计价。
-	if modelLower == "gpt-oss-120b-medium" {
-		return s.fallbackPrices["gpt-oss-120b-medium"]
-	}
 	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
 		case "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna":

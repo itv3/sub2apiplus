@@ -822,6 +822,11 @@ func runCheck(
 		}
 	}
 	for id, receipt := range removalByID {
+		if receipt.Kind == "scope_excluded_removed" {
+			if err := validateScopeExcludedRemoval(receipt, amendmentByCandidateID); err != nil {
+				changed = append(changed, fmt.Sprintf("%s  范围排除移除证据非法：%v", id, err))
+			}
+		}
 		if _, stillPresent := curByID[id]; stillPresent {
 			changed = append(changed, fmt.Sprintf("%s  移除收据已陈旧：调用点仍存在", id))
 			continue

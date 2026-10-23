@@ -214,27 +214,19 @@ const canSyncUpstream = computed(() => {
   return false
 })
 
-const shouldReplaceOnUpstreamSync = computed(() => (
-  normalizedPlatforms.value.length === 1 &&
-  normalizedPlatforms.value[0].toLowerCase() === 'antigravity'
-))
-const allModelOptionMap = new Map(allModels.map(model => [model.value, model]))
-
 const availableOptions = computed(() => {
   if (normalizedPlatforms.value.length === 0) {
     return allModels
   }
 
-  const allowedModels = new Map<string, { value: string; label: string }>()
+  const allowedModels = new Set<string>()
   for (const platform of normalizedPlatforms.value) {
     for (const model of getModelsByPlatform(platform)) {
-      if (!allowedModels.has(model)) {
-        allowedModels.set(model, allModelOptionMap.get(model) ?? { value: model, label: model })
-      }
+      allowedModels.add(model)
     }
   }
 
-  return Array.from(allowedModels.values())
+  return allModels.filter(model => allowedModels.has(model.value))
 })
 
 const filteredModels = computed(() => {
@@ -315,13 +307,6 @@ const syncUpstreamModels = async () => {
     const upstreamModels = result.models.map(model => model.trim()).filter(Boolean)
     if (upstreamModels.length === 0) {
       appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
-      return
-    }
-
-    if (shouldReplaceOnUpstreamSync.value) {
-      const syncedModels = Array.from(new Set(upstreamModels))
-      emit('update:modelValue', syncedModels)
-      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: syncedModels.length, total: upstreamModels.length }))
       return
     }
 

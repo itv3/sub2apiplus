@@ -58,7 +58,6 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_7d_",
 	"codex_reset_credit_",
 	"passive_usage_",
-	"keeper_last_",
 	"upstream_billing_probe",
 	"upstream_billing_rate_sync",
 	"ollama_cloud_usage",
@@ -70,7 +69,6 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_referral_snapshot":    {},
 	"grok_billing_snapshot":      {},
 	"session_window_utilization": {},
-	"keeper_local_client_error":  {},
 }
 
 const postgresParameterBatchSize = 50000

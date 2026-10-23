@@ -789,7 +789,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	multiplier, imageMultiplier, pricingAt := s.recordUsageMultipliers(ctx, apiKey, user, input.PricingAt)
-	billingModel := s.recordUsageBillingModel(ctx, apiKey, account, result, input.ChannelUsageFields)
+	billingModel := s.recordUsageBillingModel(ctx, apiKey, result, input.ChannelUsageFields)
 	cacheStorageCost := s.cacheStorageCost(result, billingModel)
 
 	// 确定 RequestedModel（渠道映射前的原始模型）
@@ -918,11 +918,16 @@ func (s *GatewayService) recordUsageMultipliers(ctx context.Context, apiKey *API
 	return multiplier, imageMultiplier, pricingAt
 }
 
-// recordUsageBillingModel 按计费模型来源（含 Antigravity 账号按最终上游模型计费的本分支规则）、
-// composite 规则与无价兜底确定计费模型。account 可为空（如缓存存储费报价场景）。
-func (s *GatewayService) recordUsageBillingModel(ctx context.Context, apiKey *APIKey, account *Account, result *ForwardResult, fields ChannelUsageFields) string {
+// recordUsageBillingModel 按计费模型来源、composite 规则与无价兜底确定计费模型。
+func (s *GatewayService) recordUsageBillingModel(ctx context.Context, apiKey *APIKey, result *ForwardResult, fields ChannelUsageFields) string {
 	concreteBillingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
-	billingModel := resolveGatewayRecordUsageBillingModel(result, fields, account)
+	billingModel := concreteBillingModel
+	if fields.BillingModelSource == BillingModelSourceChannelMapped && fields.ChannelMappedModel != "" {
+		billingModel = fields.ChannelMappedModel
+	}
+	if fields.BillingModelSource == BillingModelSourceRequested && fields.OriginalModel != "" {
+		billingModel = fields.OriginalModel
+	}
 	// composite 分组的公开别名（如 all/claude）会经 OriginalModel/ChannelMappedModel
 	// 进入上面的来源覆盖：任意别名查无价会静默落 $0，含家族词的别名则被价格表的
 	// 家族模糊匹配错计（如 Opus 流量按 Sonnet 兜底价）。除非管理员为别名显式配置了
@@ -969,7 +974,7 @@ func isCacheStorageOnlyResult(result *ForwardResult) bool {
 
 // CacheStoragePriced 判断 RecordUsage 对 input.Result 采用的计费模型（含回退候选）是否配置了显式缓存存储单价。
 func (s *GatewayService) CacheStoragePriced(ctx context.Context, input *RecordUsageInput) bool {
-	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Account, input.Result, input.ChannelUsageFields)
+	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Result, input.ChannelUsageFields)
 	return s.cacheStoragePrice(input.Result, billingModel) > 0
 }
 
@@ -980,7 +985,7 @@ func (s *GatewayService) QuoteUsageCost(ctx context.Context, input *RecordUsageI
 		user = input.APIKey.User
 	}
 	multiplier, imageMultiplier, pricingAt := s.recordUsageMultipliers(ctx, input.APIKey, user, input.PricingAt)
-	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Account, input.Result, input.ChannelUsageFields)
+	billingModel := s.recordUsageBillingModel(ctx, input.APIKey, input.Result, input.ChannelUsageFields)
 	cost := s.calculateRecordUsageCost(ctx, input.Result, input.APIKey, billingModel, multiplier, imageMultiplier, pricingAt)
 	if cost == nil {
 		return 0
@@ -1246,27 +1251,6 @@ func (s *GatewayService) calculateTokenCost(
 		return &CostBreakdown{ActualCost: 0}
 	}
 	return cost
-}
-
-// resolveGatewayRecordUsageBillingModel 按渠道计费模型来源选出基础计费模型；
-// Antigravity 账号一律按最终实际发包的上游模型计费（本分支规则，不随渠道来源改变）。
-func resolveGatewayRecordUsageBillingModel(result *ForwardResult, fields ChannelUsageFields, account *Account) string {
-	if result == nil {
-		return ""
-	}
-	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
-	if fields.BillingModelSource == BillingModelSourceChannelMapped && fields.ChannelMappedModel != "" {
-		billingModel = fields.ChannelMappedModel
-	}
-	if fields.BillingModelSource == BillingModelSourceRequested && fields.OriginalModel != "" {
-		billingModel = fields.OriginalModel
-	}
-	if account != nil && account.Platform == PlatformAntigravity {
-		if upstreamModel := strings.TrimSpace(result.UpstreamModel); upstreamModel != "" {
-			return upstreamModel
-		}
-	}
-	return billingModel
 }
 
 // buildRecordUsageLog 构建使用日志并设置计费模式。

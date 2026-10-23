@@ -1,18 +1,37 @@
 package domain
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
-)
-
-func TestDefaultAntigravityModelMapping_ContainsOnlyOfficialModels(t *testing.T) {
+func TestDefaultAntigravityModelMapping_ImageCompatibilityAliases(t *testing.T) {
 	t.Parallel()
 
-	cases := antigravity.OfficialModelMapping()
+	cases := map[string]string{
+		"gemini-2.5-flash-image":         "gemini-2.5-flash-image",
+		"gemini-2.5-flash-image-preview": "gemini-2.5-flash-image",
+		"gemini-3.1-flash-image":         "gemini-3.1-flash-image",
+		"gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
+		"gemini-3-pro-image":             "gemini-3.1-flash-image",
+		"gemini-3-pro-image-preview":     "gemini-3.1-flash-image",
+	}
 
-	if len(DefaultAntigravityModelMapping) != len(cases) {
-		t.Fatalf("default mapping size = %d, want %d", len(DefaultAntigravityModelMapping), len(cases))
+	for from, want := range cases {
+		got, ok := DefaultAntigravityModelMapping[from]
+		if !ok {
+			t.Fatalf("expected mapping for %q to exist", from)
+		}
+		if got != want {
+			t.Fatalf("unexpected mapping for %q: got %q want %q", from, got, want)
+		}
+	}
+}
+
+func TestDefaultAntigravityModelMapping_ContainsNewClaudeModels(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"claude-fable-5-1": "claude-fable-5-1",
+		"claude-fable-5":   "claude-fable-5",
+		"claude-opus-4-8":  "claude-opus-4-8",
 	}
 	for from, want := range cases {
 		got, ok := DefaultAntigravityModelMapping[from]
@@ -25,22 +44,34 @@ func TestDefaultAntigravityModelMapping_ContainsOnlyOfficialModels(t *testing.T)
 	}
 }
 
-func TestAntigravityCompatibilityModelMapping_KeepsHistoricalAliases(t *testing.T) {
+func TestDefaultAntigravityModelMapping_PreservesExplicitSonnet45AndMigratesLegacyAliases(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"claude-fable-5":                 "claude-sonnet-4-6",
-		"claude-opus-4-8":                "claude-opus-4-6-thinking",
-		"gemini-2.5-pro":                 AntigravityGemini31ProAgentModel,
+		"claude-sonnet-4-5":          "claude-sonnet-4-5",
+		"claude-sonnet-4-5-thinking": "claude-sonnet-4-6",
+		"claude-sonnet-4-5-20250929": "claude-sonnet-4-6",
+	}
+	for model, want := range cases {
+		if got := DefaultAntigravityModelMapping[model]; got != want {
+			t.Fatalf("expected model %q to map to %q, got %q", model, want, got)
+		}
+	}
+}
+
+func TestDefaultAntigravityModelMapping_Gemini31ProAliases(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		AntigravityGemini31ProAgentModel: AntigravityGemini31ProAgentModel,
 		"gemini-3.1-pro":                 AntigravityGemini31ProAgentModel,
 		"gemini-3.1-pro-high":            AntigravityGemini31ProAgentModel,
 		"gemini-3.1-pro-preview":         AntigravityGemini31ProAgentModel,
-		"gemini-3.1-flash-image-preview": "gemini-3-flash-agent",
-		"tab_flash_lite_preview":         "gemini-3.5-flash-extra-low",
+		"gemini-3.1-pro-low":             "gemini-3.1-pro-low",
 	}
 
 	for from, want := range cases {
-		got, ok := AntigravityCompatibilityModelMapping[from]
+		got, ok := DefaultAntigravityModelMapping[from]
 		if !ok {
 			t.Fatalf("expected mapping for %q to exist", from)
 		}
@@ -50,46 +81,31 @@ func TestAntigravityCompatibilityModelMapping_KeepsHistoricalAliases(t *testing.
 	}
 }
 
-func TestAntigravityCompatibilityModelMapping_MigratesLegacySonnet45Aliases(t *testing.T) {
-	t.Parallel()
-
-	cases := map[string]string{
-		"claude-sonnet-4-5":          "claude-sonnet-4-6",
-		"claude-sonnet-4-5-thinking": "claude-sonnet-4-6",
-		"claude-sonnet-4-5-20250929": "claude-sonnet-4-6",
-	}
-	for model, want := range cases {
-		if got := AntigravityCompatibilityModelMapping[model]; got != want {
-			t.Fatalf("expected model %q to map to %q, got %q", model, want, got)
-		}
-	}
-}
-
-func TestAntigravityCompatibilityModelMapping_Gemini36FlashModels(t *testing.T) {
+func TestDefaultAntigravityModelMapping_Gemini36FlashModels(t *testing.T) {
 	for _, model := range []string{"gemini-3.6-flash", "gemini-3.6-flash-high", "gemini-3.6-flash-low", "gemini-3.6-flash-medium", "gemini-3.6-flash-tiered"} {
-		if got := AntigravityCompatibilityModelMapping[model]; got != model {
+		if got := DefaultAntigravityModelMapping[model]; got != model {
 			t.Fatalf("expected %s to map to itself, got %q", model, got)
 		}
 	}
 }
 
-func TestAntigravityCompatibilityModelMapping_Gemini37FlashModels(t *testing.T) {
+func TestDefaultAntigravityModelMapping_Gemini37FlashModels(t *testing.T) {
 	for _, model := range []string{"gemini-3.7-flash", "gemini-3.7-flash-high", "gemini-3.7-flash-low", "gemini-3.7-flash-medium", "gemini-3.7-flash-tiered"} {
-		if got := AntigravityCompatibilityModelMapping[model]; got != model {
+		if got := DefaultAntigravityModelMapping[model]; got != model {
 			t.Fatalf("expected %s to map to itself, got %q", model, got)
 		}
 	}
 }
 
-func TestAntigravityCompatibilityModelMapping_Gemini38FlashModels(t *testing.T) {
+func TestDefaultAntigravityModelMapping_Gemini38FlashModels(t *testing.T) {
 	for _, model := range []string{"gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-tiered"} {
-		if got := AntigravityCompatibilityModelMapping[model]; got != model {
+		if got := DefaultAntigravityModelMapping[model]; got != model {
 			t.Fatalf("expected %s to map to itself, got %q", model, got)
 		}
 	}
 }
 
-func TestAntigravityCompatibilityModelMapping_Gemini4ArgonAndClaude55Models(t *testing.T) {
+func TestDefaultAntigravityModelMapping_Gemini4ArgonAndClaude55Models(t *testing.T) {
 	cases := map[string]string{
 		"gemini-4-argon":           "gemini-4-argon-high",
 		"gemini-4-argon-high":      "gemini-4-argon-high",
@@ -105,12 +121,8 @@ func TestAntigravityCompatibilityModelMapping_Gemini4ArgonAndClaude55Models(t *t
 		"claude-sonnet-5-5-medium": "claude-sonnet-5-5-medium",
 	}
 	for from, want := range cases {
-		if got := AntigravityCompatibilityModelMapping[from]; got != want {
+		if got := DefaultAntigravityModelMapping[from]; got != want {
 			t.Fatalf("expected %s to map to %q, got %q", from, want, got)
-		}
-		// 这些档位不属于官方 8 模型，不得进入默认展示/白名单映射。
-		if _, ok := DefaultAntigravityModelMapping[from]; ok {
-			t.Fatalf("%s 不应出现在默认官方模型映射中", from)
 		}
 	}
 }

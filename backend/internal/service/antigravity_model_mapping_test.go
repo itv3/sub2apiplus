@@ -5,7 +5,6 @@ package service
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,35 +21,20 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 		{
 			name:           "账户映射优先",
 			requestedModel: "claude-3-5-sonnet-20241022",
-			accountMapping: map[string]string{
-				"claude-3-5-sonnet-20241022": "custom-model",
-				"custom-model":               "custom-model",
-			},
-			expected: "custom-model",
+			accountMapping: map[string]string{"claude-3-5-sonnet-20241022": "custom-model"},
+			expected:       "custom-model",
 		},
 		{
 			name:           "账户映射 - 可覆盖默认映射的模型",
 			requestedModel: "claude-sonnet-4-5",
-			accountMapping: map[string]string{
-				"claude-sonnet-4-5": "my-custom-sonnet",
-				"my-custom-sonnet":  "my-custom-sonnet",
-			},
-			expected: "my-custom-sonnet",
+			accountMapping: map[string]string{"claude-sonnet-4-5": "my-custom-sonnet"},
+			expected:       "my-custom-sonnet",
 		},
 		{
 			name:           "账户映射 - 可覆盖未知模型",
 			requestedModel: "claude-opus-4",
-			accountMapping: map[string]string{
-				"claude-opus-4": "my-opus",
-				"my-opus":       "my-opus",
-			},
-			expected: "my-opus",
-		},
-		{
-			name:           "账户映射 - 目标未被白名单允许时拒绝",
-			requestedModel: "claude-3-5-sonnet-20241022",
-			accountMapping: map[string]string{"claude-3-5-sonnet-20241022": "custom-model"},
-			expected:       "",
+			accountMapping: map[string]string{"claude-opus-4": "my-opus"},
+			expected:       "my-opus",
 		},
 
 		// 2. 默认映射（DefaultAntigravityModelMapping）
@@ -91,19 +75,18 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-sonnet-4-6",
 		},
 
-		// 3. 尚未完成官方抓包的 Fable 5.1 不进入严格默认发包目录。
+		// 3. 默认映射中的透传（映射到自己）
 		{
-			name:           "严格默认目录拒绝未封存官方枚举 - claude-fable-5-1",
+			name:           "默认映射透传 - claude-fable-5-1",
 			requestedModel: "claude-fable-5-1",
 			accountMapping: nil,
-			expected:       "",
+			expected:       "claude-fable-5-1",
 		},
-		// 3. 官方模型透传 + 历史入口兼容映射
 		{
-			name:           "兼容映射 - claude-fable-5 → claude-sonnet-4-6",
+			name:           "默认映射透传 - claude-fable-5",
 			requestedModel: "claude-fable-5",
 			accountMapping: nil,
-			expected:       "claude-sonnet-4-6",
+			expected:       "claude-fable-5",
 		},
 		{
 			name:           "默认映射透传 - claude-sonnet-4-6",
@@ -112,22 +95,22 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-sonnet-4-6",
 		},
 		{
-			name:           "兼容映射 - claude-sonnet-4-5 → claude-sonnet-4-6",
+			name:           "显式 canonical 选择 - claude-sonnet-4-5 透传",
 			requestedModel: "claude-sonnet-4-5",
 			accountMapping: nil,
-			expected:       "claude-sonnet-4-6",
+			expected:       "claude-sonnet-4-5",
 		},
 		{
-			name:           "兼容映射 - claude-opus-4-8 → claude-opus-4-6-thinking",
+			name:           "默认映射透传 - claude-opus-4-8",
 			requestedModel: "claude-opus-4-8",
 			accountMapping: nil,
-			expected:       "claude-opus-4-6-thinking",
+			expected:       "claude-opus-4-8",
 		},
 		{
-			name:           "兼容映射 - claude-opus-4-7 → claude-opus-4-6-thinking",
+			name:           "默认映射透传 - claude-opus-4-7",
 			requestedModel: "claude-opus-4-7",
 			accountMapping: nil,
-			expected:       "claude-opus-4-6-thinking",
+			expected:       "claude-opus-4-7",
 		},
 		{
 			name:           "默认映射透传 - claude-opus-4-6-thinking",
@@ -136,61 +119,37 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-opus-4-6-thinking",
 		},
 		{
-			name:           "兼容映射 - claude-sonnet-4-5-thinking → claude-sonnet-4-6",
+			name:           "默认映射 - claude-sonnet-4-5-thinking → claude-sonnet-4-6",
 			requestedModel: "claude-sonnet-4-5-thinking",
 			accountMapping: nil,
 			expected:       "claude-sonnet-4-6",
 		},
 		{
-			name:           "账户显式目标未进入自映射白名单 - 多级链拒绝",
+			name:           "账户显式目标只映射一步 - custom-sonnet → claude-sonnet-4-5",
 			requestedModel: "custom-sonnet",
 			accountMapping: map[string]string{
 				"custom-sonnet":     "claude-sonnet-4-5",
 				"claude-sonnet-4-5": "claude-sonnet-4-6",
 			},
-			expected: "",
+			expected: "claude-sonnet-4-5",
 		},
 		{
-			name:           "兼容映射 - gemini-2.5-flash → gemini-3.5-flash-low",
+			name:           "默认映射透传 - gemini-2.5-flash",
 			requestedModel: "gemini-2.5-flash",
 			accountMapping: nil,
-			expected:       "gemini-3.5-flash-low",
+			expected:       "gemini-2.5-flash",
 		},
 		{
-			name:           "兼容映射 - gemini-2.5-pro → gemini-pro-agent",
+			name:           "默认映射透传 - gemini-2.5-pro",
 			requestedModel: "gemini-2.5-pro",
 			accountMapping: nil,
-			expected:       "gemini-pro-agent",
+			expected:       "gemini-2.5-pro",
 		},
 		{
-			name:           "兼容映射 - gemini-3-flash → gemini-3-flash-agent",
+			name:           "默认映射透传 - gemini-3-flash",
 			requestedModel: "gemini-3-flash",
 			accountMapping: nil,
-			expected:       "gemini-3-flash-agent",
-		},
-		{
-			name:           "默认映射透传 - gemini-3.5-flash-extra-low",
-			requestedModel: "gemini-3.5-flash-extra-low",
-			accountMapping: nil,
-			expected:       "gemini-3.5-flash-extra-low",
-		},
-		{
-			name:           "默认映射透传 - gemini-3.5-flash-low",
-			requestedModel: "gemini-3.5-flash-low",
-			accountMapping: nil,
-			expected:       "gemini-3.5-flash-low",
-		},
-		{
-			name:           "默认映射透传 - gemini-3-flash-agent",
-			requestedModel: "gemini-3-flash-agent",
-			accountMapping: nil,
-			expected:       "gemini-3-flash-agent",
-		},
-		{
-			name:           "默认映射透传 - gpt-oss-120b-medium",
-			requestedModel: "gpt-oss-120b-medium",
-			accountMapping: nil,
-			expected:       "gpt-oss-120b-medium",
+			expected:       "gemini-3-flash",
 		},
 
 		// 4. 未在默认映射中的模型返回空字符串（不支持）
@@ -280,20 +239,20 @@ func TestAntigravityGatewayService_IsModelSupported(t *testing.T) {
 		expected bool
 	}{
 		// 直接支持
-		{"严格默认目录拒绝未封存官方枚举 - claude-fable-5-1", "claude-fable-5-1", false},
+		{"直接支持 - claude-fable-5-1", "claude-fable-5-1", true},
 		{"直接支持 - claude-fable-5", "claude-fable-5", true},
 		{"直接支持 - claude-sonnet-4-5", "claude-sonnet-4-5", true},
 		{"直接支持 - gemini-3-flash", "gemini-3-flash", true},
-		{"直接支持 - gemini-3-flash-agent", "gemini-3-flash-agent", true},
-		{"直接支持 - gpt-oss-120b-medium", "gpt-oss-120b-medium", true},
 
 		// 可映射（有明确前缀映射）
 		{"可映射 - claude-opus-4-8", "claude-opus-4-8", true},
 		{"可映射 - claude-opus-4-6", "claude-opus-4-6", true},
 
+		// 前缀透传（claude 和 gemini 前缀）
+		{"Gemini前缀", "gemini-unknown", true},
+		{"Claude前缀", "claude-unknown", true},
+
 		// 不支持
-		{"不支持 - 未知Gemini", "gemini-unknown", false},
-		{"不支持 - 未知Claude", "claude-unknown", false},
 		{"不支持 - gpt-4", "gpt-4", false},
 		{"不支持 - 空字符串", "", false},
 	}
@@ -306,80 +265,9 @@ func TestAntigravityGatewayService_IsModelSupported(t *testing.T) {
 	}
 }
 
-func TestAdvertisedModelMappingForAccount_AntigravityUsesExplicitWhitelistModels(t *testing.T) {
-	account := &Account{
-		Platform: PlatformAntigravity,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{
-				"gemini-future-pro":      "gemini-future-pro",
-				"Gemini Future Pro":      "gemini-future-pro",
-				"gemini-3.1-pro-high":    "gemini-pro-agent",
-				"claude-sonnet-4-6":      "claude-sonnet-4-6",
-				"  gemini-future-lite  ": "  gemini-future-lite  ",
-				"models/gemini-path-pro": "gemini-path-pro",
-				"models/gemini-path-max": "models/gemini-path-max",
-			},
-		},
-	}
-
-	mapping := AdvertisedModelMappingForAccount(account)
-
-	require.Equal(t, "gemini-future-pro", mapping["gemini-future-pro"])
-	require.Equal(t, "gemini-future-lite", mapping["gemini-future-lite"])
-	require.Equal(t, "gemini-path-pro", mapping["gemini-path-pro"])
-	require.Equal(t, "gemini-path-max", mapping["gemini-path-max"])
-	require.NotContains(t, mapping, "models/gemini-path-pro")
-	require.NotContains(t, mapping, "models/gemini-path-max")
-	require.NotContains(t, mapping, "Gemini Future Pro")
-	require.NotContains(t, mapping, "gemini-3.1-pro-high")
-	require.NotContains(t, mapping, "gemini-3.5-flash-low")
-}
-
-func TestAdvertisedModelMappingForAccount_AntigravityDefaultsOnlyForMissingOrEmptyMapping(t *testing.T) {
-	for _, account := range []*Account{
-		{Platform: PlatformAntigravity},
-		{Platform: PlatformAntigravity, Credentials: map[string]any{}},
-		{Platform: PlatformAntigravity, Credentials: map[string]any{"model_mapping": map[string]any{}}},
-	} {
-		mapping := AdvertisedModelMappingForAccount(account)
-		require.Len(t, mapping, len(antigravity.OfficialModelIDs())+1)
-		for _, model := range antigravity.OfficialModelIDs() {
-			require.Equal(t, model, mapping[model])
-		}
-		require.Equal(t, "gemini-3.1-flash-image", mapping["gemini-3.1-flash-image"])
-	}
-
-	malformed := &Account{
-		Platform: PlatformAntigravity,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{"gemini-pro-agent": 123},
-		},
-	}
-	require.Empty(t, AdvertisedModelMappingForAccount(malformed))
-	require.False(t, isAntigravityAllowedModel(malformed, "gemini-pro-agent"))
-}
-
-func TestResolveAntigravityFallbackModelUsesAccountAllowedModels(t *testing.T) {
-	defaultAccount := &Account{Platform: PlatformAntigravity}
-	require.Equal(t, "gemini-3.5-flash-low", resolveAntigravityFallbackModel(defaultAccount, "gemini-3.5-flash-low", "gemini-pro-agent"))
-	require.Empty(t, resolveAntigravityFallbackModel(defaultAccount, "gemini-future-pro", "gemini-pro-agent"))
-	require.Empty(t, resolveAntigravityFallbackModel(defaultAccount, "gemini-3.5-flash-low", "gemini-3.5-flash-low"))
-
-	customAccount := &Account{
-		Platform: PlatformAntigravity,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{
-				"gemini-future-pro": "gemini-future-pro",
-				"Future Pro":        "gemini-future-pro",
-			},
-		},
-	}
-	require.Equal(t, "gemini-future-pro", resolveAntigravityFallbackModel(customAccount, "gemini-future-pro", "gemini-pro-agent"))
-	require.Equal(t, "gemini-future-pro", resolveAntigravityFallbackModel(customAccount, "Future Pro", "gemini-pro-agent"))
-	require.Empty(t, resolveAntigravityFallbackModel(customAccount, "gemini-3.5-flash-low", "gemini-pro-agent"))
-}
-
-func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
+// TestMapAntigravityModel_WildcardTargetEqualsRequest 测试通配符映射目标恰好等于请求模型名的 edge case
+// 例如 {"claude-*": "claude-sonnet-4-5"}，请求 "claude-sonnet-4-5" 时应该通过
+func TestMapAntigravityModel_WildcardTargetEqualsRequest(t *testing.T) {
 	tests := []struct {
 		name           string
 		modelMapping   map[string]any
@@ -387,37 +275,16 @@ func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
 		expected       string
 	}{
 		{
-			name:           "wildcard target official model",
-			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-6"},
-			requestedModel: "claude-opus-4-6",
-			expected:       "",
+			name:           "wildcard target equals request model",
+			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-5"},
+			requestedModel: "claude-sonnet-4-5",
+			expected:       "claude-sonnet-4-5",
 		},
 		{
-			name:           "wildcard target requires self map",
-			modelMapping:   map[string]any{"gemini-*": "gemini-future-pro"},
-			requestedModel: "gemini-future-pro",
-			expected:       "",
-		},
-		{
-			name: "wildcard target allowed by self map",
-			modelMapping: map[string]any{
-				"gemini-*":          "gemini-future-pro",
-				"gemini-future-pro": "gemini-future-pro",
-			},
-			requestedModel: "gemini-future-lite",
-			expected:       "gemini-future-pro",
-		},
-		{
-			name:           "legacy alias self map is not injected into allowed set",
-			modelMapping:   map[string]any{"gemini-future-pro": "gemini-future-pro"},
-			requestedModel: "gemini-3.1-pro-high",
-			expected:       "",
-		},
-		{
-			name:           "wildcard target legacy alias rejected without self map",
+			name:           "wildcard target differs from request model",
 			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-5"},
 			requestedModel: "claude-opus-4-6",
-			expected:       "",
+			expected:       "claude-sonnet-4-5",
 		},
 		{
 			name:           "wildcard no match",
@@ -432,16 +299,16 @@ func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
 			expected:       "claude-sonnet-4-5",
 		},
 		{
-			name:           "multiple wildcards target compatibility alias rejected",
-			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-6", "gemini-*": "gemini-2.5-flash"},
+			name:           "multiple wildcards target equals one request",
+			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-5", "gemini-*": "gemini-2.5-flash"},
 			requestedModel: "gemini-2.5-flash",
-			expected:       "",
+			expected:       "gemini-2.5-flash",
 		},
 		{
-			name:           "customtools alias target official model",
-			modelMapping:   map[string]any{"gemini-3.1-pro-preview": "gemini-pro-agent"},
+			name:           "customtools alias falls back to normalized preview mapping",
+			modelMapping:   map[string]any{"gemini-3.1-pro-preview": "gemini-3.1-pro-high"},
 			requestedModel: "gemini-3.1-pro-preview-customtools",
-			expected:       "",
+			expected:       "gemini-3.1-pro-high",
 		},
 	}
 

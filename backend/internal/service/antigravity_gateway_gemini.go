@@ -96,7 +96,6 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		return nil, s.writeGoogleError(c, http.StatusForbidden, fmt.Sprintf("model %s not in whitelist", originalModel))
 	}
-	billingModel := mappedModel
 	forwardedModel := mappedModel
 
 	// 获取 access_token
@@ -168,7 +167,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		settingService:  s.settingService,
 		accountRepo:     s.accountRepo,
 		handleError:     s.handleUpstreamError,
-		requestedModel:  billingModel,
+		requestedModel:  originalModel,
 		isStickySession: isStickySession, // ForwardGemini 由上层判断粘性会话
 		groupID:         forwardOpts.groupID,
 		sessionHash:     forwardOpts.sessionHash,
@@ -205,11 +204,10 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		if s.settingService != nil && s.settingService.IsModelFallbackEnabled(ctx) &&
 			isModelNotFoundError(resp.StatusCode, respBody) {
 			fallbackModel := s.settingService.GetFallbackModel(ctx, PlatformAntigravity)
-			fallbackMappedModel := resolveAntigravityFallbackModel(account, fallbackModel, mappedModel)
-			if fallbackMappedModel != "" {
-				logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity] Model not found (%s), retrying with fallback model %s -> %s (account: %s)", mappedModel, fallbackModel, fallbackMappedModel, account.Name)
+			if fallbackModel != "" && fallbackModel != mappedModel {
+				logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity] Model not found (%s), retrying with fallback model %s (account: %s)", mappedModel, fallbackModel, account.Name)
 
-				fallbackWrapped, err := s.wrapV1InternalRequest(projectID, fallbackMappedModel, injectedBody)
+				fallbackWrapped, err := s.wrapV1InternalRequest(projectID, fallbackModel, injectedBody)
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
@@ -217,8 +215,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
-							billingModel = fallbackMappedModel
-							forwardedModel = fallbackMappedModel
+							forwardedModel = fallbackModel
 						} else if fallbackResp != nil {
 							_ = fallbackResp.Body.Close()
 						}
@@ -271,7 +268,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 					settingService:  s.settingService,
 					accountRepo:     s.accountRepo,
 					handleError:     s.handleUpstreamError,
-					requestedModel:  billingModel,
+					requestedModel:  originalModel,
 					isStickySession: isStickySession,
 					groupID:         forwardOpts.groupID,
 					sessionHash:     forwardOpts.sessionHash,
@@ -355,7 +352,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		if unwrapErr != nil || len(unwrappedForOps) == 0 {
 			unwrappedForOps = respBody
 		}
-		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, billingModel, forwardOpts.groupID, forwardOpts.sessionHash, isStickySession)
+		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, originalModel, forwardOpts.groupID, forwardOpts.sessionHash, isStickySession)
 		upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(unwrappedForOps))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		upstreamDetail := s.getUpstreamErrorDetail(unwrappedForOps)
@@ -452,7 +449,7 @@ handleSuccess:
 
 	// 判断是否为图片生成模型
 	imageCount := 0
-	if isImageGenerationModel(billingModel) {
+	if isImageGenerationModel(mappedModel) {
 		// Gemini 图片生成 API 每次请求只生成一张图片（API 限制）
 		imageCount = 1
 	}

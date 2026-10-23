@@ -123,7 +123,7 @@ func TestMappedModelsDiscoveryPreservesRouting(t *testing.T) {
 }
 
 func TestMappedModelsDiscoveryAntigravityWhitelist(t *testing.T) {
-	t.Run("反重力平台继续只展示显式自映射白名单", func(t *testing.T) {
+	t.Run("反重力平台恢复上游映射与默认透传目录", func(t *testing.T) {
 		account := Account{ID: 1, Platform: PlatformAntigravity,
 			Credentials: map[string]any{"model_mapping": map[string]any{
 				"custom-upstream": "custom-upstream",
@@ -131,7 +131,10 @@ func TestMappedModelsDiscoveryAntigravityWhitelist(t *testing.T) {
 			}}}
 		groupID := int64(93)
 		service := &GatewayService{accountRepo: &modelsListAccountRepoStub{byGroup: map[int64][]Account{groupID: {account}}}}
-		require.Equal(t, []string{"custom-upstream"}, service.GetAvailableModels(context.Background(), &groupID, PlatformAntigravity))
+		models := service.GetAvailableModels(context.Background(), &groupID, PlatformAntigravity)
+		require.Contains(t, models, "custom-upstream")
+		require.Contains(t, models, "custom-alias")
+		require.Contains(t, models, "gemini-3.8-flash-high")
 	})
 }
 

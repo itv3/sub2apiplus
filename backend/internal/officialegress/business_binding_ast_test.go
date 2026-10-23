@@ -63,7 +63,6 @@ func TestAllBusinessSinkIDsAreBoundAtCallsitesAndDoNotCreateRawClients(t *testin
 func TestAPIKeyOnlyAdminFunctionsDoNotBindCodexSinkID(t *testing.T) {
 	for _, expectation := range []businessBindingExpectation{
 		{"../service/account_test_service.go", "testOpenAIChatCompletionsConnection", "officialEgressSinkAdminTestChatCompletions"},
-		{"../service/account_test_service_keeper.go", "ProxyKeeperOpenAIAccount", "officialEgressSinkAdminTestKeeper"},
 	} {
 		function := parseBusinessFunction(t, expectation.file, expectation.function)
 		ast.Inspect(function.Body, func(node ast.Node) bool {

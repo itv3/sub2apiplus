@@ -109,7 +109,7 @@ func TestGeminiV1BetaListModels_FiltersFallbackByAllowlist(t *testing.T) {
 			Platform: service.PlatformGemini,
 			ModelAllowlist: service.GroupModelAllowlist{
 				Enabled: true,
-				Models:  []string{"gemini-3-*"},
+				Models:  []string{"gemini-3.8-flash-high", "gemini-3-*"},
 			},
 		},
 	})
@@ -128,8 +128,11 @@ func TestGeminiV1BetaListModels_FiltersFallbackByAllowlist(t *testing.T) {
 	for _, model := range got.Models {
 		names = append(names, model.Name)
 	}
-	// Antigravity fallback 只暴露当前官方目录；通配条目应展开命中的 Gemini 3 模型。
-	require.Equal(t, []string{"models/gemini-3-flash-agent"}, names)
+	// models/ 前缀的候选形式也应命中条目。
+	require.Contains(t, names, "models/gemini-3.8-flash-high")
+	require.Contains(t, names, "models/gemini-3-flash")
+	require.NotContains(t, names, "models/gemini-2.5-flash")
+	require.NotContains(t, names, "models/gemini-2.0-flash")
 }
 
 // Antigravity /antigravity/models：白名单开启时按条目过滤静态列表。
@@ -147,7 +150,7 @@ func TestAntigravityModels_FiltersByAllowlist(t *testing.T) {
 			Platform: service.PlatformAntigravity,
 			ModelAllowlist: service.GroupModelAllowlist{
 				Enabled: true,
-				Models:  []string{"gemini-3.5-flash-low"},
+				Models:  []string{"gemini-2.5-flash"},
 			},
 		},
 	})
@@ -164,8 +167,10 @@ func TestAntigravityModels_FiltersByAllowlist(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	require.Equal(t, "list", got.Object)
-	require.Len(t, got.Data, 1)
-	require.Equal(t, "gemini-3.5-flash-low", got.Data[0].ID)
+	// -thinking 后缀的宽容规则：gemini-2.5-flash-thinking 也命中 gemini-2.5-flash 条目。
+	require.Len(t, got.Data, 2)
+	require.Equal(t, "gemini-2.5-flash", got.Data[0].ID)
+	require.Equal(t, "gemini-2.5-flash-thinking", got.Data[1].ID)
 }
 
 func TestFilterUpstreamGeminiModelsBody(t *testing.T) {

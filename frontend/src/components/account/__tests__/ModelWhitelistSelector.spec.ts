@@ -1,6 +1,5 @@
-import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import ModelWhitelistSelector from '../ModelWhitelistSelector.vue'
+import { flushPromises, mount } from '@vue/test-utils'
 import {
   BUILTIN_PLATFORM_CATALOG,
   resetPlatformCatalog,
@@ -57,6 +56,8 @@ vi.mock('@/composables/useClipboard', () => ({
   })
 }))
 
+import ModelWhitelistSelector from '../ModelWhitelistSelector.vue'
+
 function mountSelector(props: Record<string, unknown> = {}) {
   return mount(ModelWhitelistSelector, {
     props: {
@@ -78,7 +79,7 @@ function findModelRow(wrapper: ReturnType<typeof mountSelector>, modelId: string
     .find(candidate => candidate.text().includes(modelId))
 
   if (!row) {
-    throw new Error(`未找到模型行：${modelId}`)
+    throw new Error(`Model row not found: ${modelId}`)
   }
 
   return row
@@ -150,34 +151,7 @@ describe('ModelWhitelistSelector', () => {
     wrapper.unmount()
   })
 
-  it('Antigravity 同步上游模型时替换当前白名单', async () => {
-    syncUpstreamModels.mockResolvedValue({
-      models: ['gemini-pro-agent', 'claude-sonnet-4-6']
-    })
-
-    const wrapper = mount(ModelWhitelistSelector, {
-      props: {
-        modelValue: ['gemini-3.1-pro-high', 'old-model'],
-        platform: 'antigravity',
-        accountId: 11
-      },
-      global: {
-        stubs: {
-          ModelIcon: true,
-          Icon: true
-        }
-      }
-    })
-
-    const syncButton = wrapper.findAll('button').find(button => button.text().includes('syncUpstreamModels'))
-    expect(syncButton).toBeTruthy()
-    await syncButton!.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toEqual(['gemini-pro-agent', 'claude-sonnet-4-6'])
-  })
-
-  it('自定义白名单模型已映射到其他目标时拒绝添加', async () => {
+  it('rejects a custom whitelist model that is already mapped to a different target', async () => {
     const wrapper = mountSelector({ modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }] })
     await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue(' gpt-latest ')
     await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
@@ -186,7 +160,7 @@ describe('ModelWhitelistSelector', () => {
     expect(showInfo).toHaveBeenCalledWith(expect.stringContaining('gpt-latest → deepseek-chat'))
   })
 
-  it('检查映射前仍先给出重复模型提示', async () => {
+  it('keeps the existing duplicate identity warning before checking mappings', async () => {
     const wrapper = mountSelector({ modelValue: ['gpt-latest'], modelMappings: [{ from: 'gpt-latest', to: 'deepseek-chat' }] })
     await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('gpt-latest')
     await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
@@ -194,25 +168,26 @@ describe('ModelWhitelistSelector', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
-  it('映射到自身的模型允许加入白名单', async () => {
+  it('allows matching identity mapping as a whitelist model', async () => {
     const wrapper = mountSelector({ modelMappings: [{ from: 'gpt-latest', to: 'gpt-latest' }] })
     await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('gpt-latest')
     await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
     expect(wrapper.emitted('update:modelValue')).toEqual([[['gpt-latest']]])
   })
 
-  it('未传映射属性时仍允许自定义模型', async () => {
+  it('still allows custom models without a mapping prop', async () => {
     const wrapper = mountSelector()
     await wrapper.get('input[placeholder="admin.accounts.enterCustomModelName"]').setValue('custom-model')
     await wrapper.findAll('button').find(button => button.text() === 'admin.accounts.addModel')!.trigger('click')
     expect(wrapper.emitted('update:modelValue')).toEqual([[['custom-model']]])
   })
 
-  it('复制模型 ID 时不改变选择状态', async () => {
+  it('copies a model ID without selecting the model', async () => {
     const wrapper = mountSelector()
     await wrapper.get('div.cursor-pointer').trigger('click')
 
     const row = findModelRow(wrapper, 'gpt-5.6-sol')
+
     const copyButton = row.get('[data-testid="copy-model-id"]')
     expect(copyButton.attributes('aria-label')).toBe('复制 gpt-5.6-sol')
 
@@ -223,7 +198,7 @@ describe('ModelWhitelistSelector', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
-  it('保留原有模型选择行为', async () => {
+  it('keeps the existing model selection behavior', async () => {
     const wrapper = mountSelector()
     await wrapper.get('div.cursor-pointer').trigger('click')
 

@@ -20,10 +20,11 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -652,16 +653,36 @@ def _read_repository_text(repository_root: Path, after_commit: str | None, relat
         return None
 
 
-def _json_command_references(value: Any, patterns: Sequence[str], *, key: str | None = None) -> bool:
-    """递归查找 JSON 动作命令字段（command／argv 等）中的字面引用。"""
+def _json_command_references(
+    value: Any, reference_check: Callable[[str], bool], *, key: str | None = None
+) -> bool:
+    """递归检查 JSON 动作命令字段（command／argv 等）中的真实路径引用。"""
 
     if isinstance(value, dict):
-        return any(_json_command_references(child, patterns, key=str(name)) for name, child in value.items())
+        return any(_json_command_references(child, reference_check, key=str(name)) for name, child in value.items())
     if isinstance(value, list):
-        return any(_json_command_references(child, patterns, key=key) for child in value)
+        return any(_json_command_references(child, reference_check, key=key) for child in value)
     if isinstance(value, str) and key in REFERENCE_SCAN_JSON_COMMAND_KEYS:
-        return any(pattern in value for pattern in patterns)
+        return reference_check(value)
     return False
+
+
+def _contains_deleted_path_reference(text: str, deleted_path: str, source_path: str) -> bool:
+    """检查仓库路径与引用文件目录内的相对路径，避免通用文件名跨目录误报。
+
+    basename 只用于同目录引用；路径两端必须完整，不能把其他目录路径的后缀、
+    同名前缀文件或备份文件当成被删文件。变量根目录前缀保守视为仓库路径引用。
+    """
+
+    relative = posixpath.relpath(deleted_path, posixpath.dirname(source_path) or ".")
+    paths = {deleted_path, relative}
+    paths.update("./" + path for path in tuple(paths) if not path.startswith("../"))
+    boundary = r"[\w./\\-]"
+    for path in paths:
+        if re.search(rf"(?<!{boundary}){re.escape(path)}(?!{boundary})", text):
+            return True
+    variable_root = r"(?:\$\{[^}\n]+\}|\$[A-Za-z_]\w*|\{[A-Za-z_]\w*\})"
+    return re.search(rf"{variable_root}/{re.escape(deleted_path)}(?!{boundary})", text) is not None
 
 
 def scan_deleted_path_references(
@@ -674,24 +695,45 @@ def scan_deleted_path_references(
     """为一个删除路径生成 ``reference-scan/v1`` 结果：三类引用全部为空才算无引用。"""
 
     root = assert_git_repository(repository_root)
+    deleted_path = safe_relative_path(deleted_path, "deleted path")
     name = deleted_path.rsplit("/", 1)[-1]
     stem, _dot, suffix = name.rpartition(".")
     patterns = [name]
     python_patterns = [name]
-    if suffix == "py" and stem:
+    python_module = suffix == "py" and bool(stem)
+    if python_module:
         # 模块名用于 import x／from pkg import x／pkg.x 属性引用。
         python_patterns.append(stem)
     ignored = set(ignored_paths) | {deleted_path}
     references: list[dict[str, Any]] = []
+    source_texts: dict[str, str | None] = {}
+
+    def source_text(path: str) -> str | None:
+        if path not in source_texts:
+            source_texts[path] = _read_repository_text(root, after_commit, path)
+        return source_texts[path]
+
+    def path_hit(hit: dict[str, Any]) -> bool:
+        # grep 返回的展示正文截断为 200 字符；判定必须读取完整行，避免长命令漏检。
+        text = source_text(hit["path"])
+        if text is None:
+            return True
+        lines = text.splitlines()
+        line = hit["line"]
+        if line < 1 or line > len(lines):
+            return True
+        return _contains_deleted_path_reference(lines[line - 1], deleted_path, hit["path"])
+
     for hit in _git_grep_references(
         root, after_commit, python_patterns, REFERENCE_SCAN_PYTHON_PATHSPECS, word_boundary=True
     ):
-        if hit["path"] not in ignored:
+        # Python 模块的 import／属性名保持全仓严格检查；非模块路径才按目录区分。
+        if hit["path"] not in ignored and (python_module or path_hit(hit)):
             references.append({"kind": "python", **hit})
     for hit in _git_grep_references(
         root, after_commit, patterns, REFERENCE_SCAN_SHELL_PATHSPECS, word_boundary=False
     ):
-        if hit["path"] not in ignored:
+        if hit["path"] not in ignored and path_hit(hit):
             references.append({"kind": "shell", **hit})
     json_candidates = sorted(
         {
@@ -703,17 +745,22 @@ def scan_deleted_path_references(
         }
     )
     for candidate in json_candidates:
-        text = _read_repository_text(root, after_commit, candidate)
+        text = source_text(candidate)
         try:
             document = json.loads(text) if text is not None else None
         except ValueError:
             document = None
-        if document is None or _json_command_references(document, patterns):
+        def reference_check(value: str) -> bool:
+            return _contains_deleted_path_reference(value, deleted_path, candidate)
+
+        if (document is None and (text is None or reference_check(text))) or (
+            document is not None and _json_command_references(document, reference_check)
+        ):
             references.append({"kind": "json", "path": candidate, "line": 0, "content": "command 字段引用"})
     references.sort(key=lambda item: (item["kind"], item["path"], item["line"]))
     return {
         "algorithm": REFERENCE_SCAN_ALGORITHM,
-        "patterns": sorted(set(patterns) | set(python_patterns)),
+        "patterns": sorted({deleted_path, *patterns, *python_patterns}),
         "scopes": ["python:import-and-attribute", "shell:invocation", "json:command-fields"],
         "references": references,
     }

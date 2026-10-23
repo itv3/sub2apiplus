@@ -1,6 +1,0 @@
-ai-keeper
-/keeper
-data/
-*.tmp
-.env
-.DS_Store

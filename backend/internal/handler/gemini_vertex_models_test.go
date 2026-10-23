@@ -2,10 +2,8 @@ package handler
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,19 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
-
-// geminiMixedModelsUpstream 原本定义在上游的 gemini_mixed_models_test.go；本分支已删除该文件
-// （Antigravity 混合调度改为官方 8 模型口径），Vertex 模型测试仍需要这个返回固定响应的上游替身，
-// 因此把它随测试一起保留在这里。
-type geminiMixedModelsUpstream struct {
-	service.HTTPUpstream
-	status int
-	body   string
-}
-
-func (u *geminiMixedModelsUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	return &http.Response{StatusCode: u.status, Header: http.Header{"Content-Type": {"application/json"}, "X-Request-Id": {"native-id"}}, Body: io.NopCloser(strings.NewReader(u.body))}, nil
-}
 
 type geminiVertexModelsTokenCache struct{}
 

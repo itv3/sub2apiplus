@@ -51,128 +51,6 @@ func TestAntigravityUpstreamErrorBodyReadLimit_RespectsDiagnosticLimit(t *testin
 	require.Equal(t, int64(svc.settingService.cfg.Gateway.LogUpstreamErrorBodyMaxBytes), svc.upstreamErrorBodyReadLimit())
 }
 
-func TestWrapV1InternalRequestAppliesOfficialGeminiProfile(t *testing.T) {
-	svc := newAntigravityTestService(&config.Config{})
-	tests := []struct {
-		model          string
-		modelEnum      string
-		thinkingBudget int
-	}{
-		{model: "gemini-pro-agent", modelEnum: "MODEL_PLACEHOLDER_M16", thinkingBudget: 10001},
-		{model: "gemini-3.1-pro-low", modelEnum: "MODEL_PLACEHOLDER_M36", thinkingBudget: 1001},
-		{model: "gemini-3-flash-agent", modelEnum: "MODEL_PLACEHOLDER_M132", thinkingBudget: 10000},
-		{model: "gemini-3.5-flash-extra-low", modelEnum: "MODEL_PLACEHOLDER_M187", thinkingBudget: 1000},
-		{model: "gemini-3.5-flash-low", modelEnum: "MODEL_PLACEHOLDER_M20", thinkingBudget: 4000},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.model, func(t *testing.T) {
-			body := []byte(`{
-				"contents":[{"role":"user","parts":[{"text":"hello"}]}],
-				"generationConfig":{
-					"temperature":0.8,
-					"topP":0.9,
-					"stopSequences":["STOP"]
-				}
-			}`)
-
-			raw, err := svc.wrapV1InternalRequest("proj", tt.model, body)
-			require.NoError(t, err)
-
-			var wrapped map[string]any
-			require.NoError(t, json.Unmarshal(raw, &wrapped))
-			require.Equal(t, "proj", wrapped["project"])
-			require.Equal(t, "agent", wrapped["requestType"])
-			require.Equal(t, tt.model, wrapped["model"])
-			require.Regexp(t, `^agent/.+/\d+/.+/2$`, wrapped["requestId"])
-			require.NotContains(t, wrapped, "labels")
-
-			requestBody, ok := wrapped["request"].(map[string]any)
-			require.True(t, ok)
-			labels, ok := requestBody["labels"].(map[string]any)
-			require.True(t, ok)
-			require.Equal(t, tt.modelEnum, labels["model_enum"])
-			require.Equal(t, "false", labels["used_claude"])
-			require.NotEmpty(t, labels["trajectory_id"])
-
-			generationConfig, ok := requestBody["generationConfig"].(map[string]any)
-			require.True(t, ok)
-			require.NotContains(t, generationConfig, "temperature")
-			require.NotContains(t, generationConfig, "topP")
-			require.NotContains(t, generationConfig, "stopSequences")
-			thinkingConfig, ok := generationConfig["thinkingConfig"].(map[string]any)
-			require.True(t, ok)
-			require.Equal(t, true, thinkingConfig["includeThoughts"])
-			require.EqualValues(t, tt.thinkingBudget, thinkingConfig["thinkingBudget"])
-		})
-	}
-}
-
-func TestAntigravityGatewayService_ForwardClaudeRejectsUnallowedThinkingSuffix(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-
-	svc := &AntigravityGatewayService{}
-	account := &Account{
-		Platform: PlatformAntigravity,
-		Type:     AccountTypeOAuth,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{
-				"claude-sonnet-4-5": "claude-sonnet-4-5",
-			},
-		},
-	}
-	body := []byte(`{
-		"model":"claude-sonnet-4-5",
-		"max_tokens":100,
-		"thinking":{"type":"enabled","budget_tokens":1024},
-		"messages":[{"role":"user","content":"hi"}]
-	}`)
-
-	result, err := svc.Forward(context.Background(), c, account, body, false)
-
-	require.Nil(t, result)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "model claude-sonnet-4-5-thinking not in whitelist")
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Contains(t, rec.Body.String(), "claude-sonnet-4-5-thinking")
-}
-
-func TestAntigravityGatewayService_ForwardClaudeRejectsUnallowedWebSearchFallback(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-
-	svc := &AntigravityGatewayService{}
-	account := &Account{
-		Platform: PlatformAntigravity,
-		Type:     AccountTypeOAuth,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{
-				"claude-sonnet-4-5": "gemini-pro-agent",
-				"gemini-pro-agent":  "gemini-pro-agent",
-			},
-		},
-	}
-	body := []byte(`{
-		"model":"claude-sonnet-4-5",
-		"max_tokens":100,
-		"tools":[{"type":"web_search_20250305","name":"web_search"}],
-		"messages":[{"role":"user","content":"search"}]
-	}`)
-
-	result, err := svc.Forward(context.Background(), c, account, body, false)
-
-	require.Nil(t, result)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "model "+antigravity.OfficialWebSearchFallbackModel+" not in whitelist")
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Contains(t, rec.Body.String(), antigravity.OfficialWebSearchFallbackModel)
-}
-
 func TestStripSignatureSensitiveBlocksFromClaudeRequest(t *testing.T) {
 	req := &antigravity.ClaudeRequest{
 		Model: "claude-sonnet-4-5",
@@ -331,10 +209,8 @@ func (s *antigravitySettingRepoStub) Get(ctx context.Context, key string) (*Sett
 }
 
 func (s *antigravitySettingRepoStub) GetValue(ctx context.Context, key string) (string, error) {
-	if s != nil {
-		if value, ok := s.values[key]; ok {
-			return value, nil
-		}
+	if value, ok := s.values[key]; ok {
+		return value, nil
 	}
 	return "", ErrSettingNotFound
 }
@@ -1029,7 +905,6 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				"claude-sonnet-4-5": mappedModel,
-				mappedModel:         mappedModel,
 			},
 		},
 	}
@@ -1039,122 +914,6 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "claude-sonnet-4-5", result.Model)
 	require.Equal(t, mappedModel, result.UpstreamModel)
-}
-
-func TestAntigravityGatewayService_Forward_WebSearchBillsWithFallbackModel(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	writer := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(writer)
-
-	body, err := json.Marshal(map[string]any{
-		"model": "claude-sonnet-4-5",
-		"messages": []map[string]any{
-			{"role": "user", "content": "search hello"},
-		},
-		"tools": []map[string]any{
-			{"type": "web_search_20250305", "name": "web_search"},
-		},
-		"max_tokens": 16,
-		"stream":     true,
-	})
-	require.NoError(t, err)
-
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
-
-	upstreamBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"X-Request-Id": []string{"req-web-search-1"}},
-		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
-	}
-
-	svc := &AntigravityGatewayService{
-		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
-		tokenProvider:  &AntigravityTokenProvider{},
-		httpUpstream:   &httpUpstreamStub{resp: resp},
-	}
-
-	account := &Account{
-		ID:          6,
-		Name:        "acc-forward-web-search",
-		Platform:    PlatformAntigravity,
-		Type:        AccountTypeOAuth,
-		Status:      StatusActive,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"access_token": "token",
-			"project_id":   "proj",
-			"model_mapping": map[string]any{
-				"claude-sonnet-4-5":                        "gemini-pro-agent",
-				"gemini-pro-agent":                         "gemini-pro-agent",
-				antigravity.OfficialWebSearchFallbackModel: antigravity.OfficialWebSearchFallbackModel,
-			},
-		},
-	}
-
-	result, err := svc.Forward(context.Background(), c, account, body, false)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, "claude-sonnet-4-5", result.Model)
-	require.Equal(t, antigravity.OfficialWebSearchFallbackModel, result.UpstreamModel)
-}
-
-func TestAntigravityGatewayService_Forward_WebSearchRateLimitUsesFallbackModel(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	writer := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(writer)
-
-	body, err := json.Marshal(map[string]any{
-		"model": "claude-sonnet-4-5",
-		"messages": []map[string]any{
-			{"role": "user", "content": "search hello"},
-		},
-		"tools": []map[string]any{
-			{"type": "web_search_20250305", "name": "web_search"},
-		},
-		"max_tokens": 16,
-		"stream":     false,
-	})
-	require.NoError(t, err)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
-
-	svc := &AntigravityGatewayService{
-		tokenProvider: &AntigravityTokenProvider{},
-		httpUpstream:  &httpUpstreamStub{},
-	}
-
-	futureResetAt := time.Now().Add(30 * time.Second).Format(time.RFC3339)
-	account := &Account{
-		ID:          66,
-		Name:        "acc-web-search-rate-limited",
-		Platform:    PlatformAntigravity,
-		Type:        AccountTypeOAuth,
-		Status:      StatusActive,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"access_token": "token",
-			"project_id":   "proj",
-			"model_mapping": map[string]any{
-				"claude-sonnet-4-5":                        "gemini-pro-agent",
-				"gemini-pro-agent":                         "gemini-pro-agent",
-				antigravity.OfficialWebSearchFallbackModel: antigravity.OfficialWebSearchFallbackModel,
-			},
-		},
-		Extra: map[string]any{
-			modelRateLimitsKey: map[string]any{
-				antigravity.OfficialWebSearchFallbackModel: map[string]any{
-					"rate_limit_reset_at": futureResetAt,
-				},
-			},
-		},
-	}
-
-	result, err := svc.Forward(context.Background(), c, account, body, false)
-
-	require.Nil(t, result)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
 }
 
 // TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel
@@ -1200,7 +959,6 @@ func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				"gemini-2.5-flash": mappedModel,
-				mappedModel:        mappedModel,
 			},
 		},
 	}
@@ -1260,8 +1018,6 @@ func TestAntigravityGatewayService_ForwardGemini_FallbackReportsActualUpstreamMo
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				originalModel: mappedModel,
-				mappedModel:   mappedModel,
-				fallbackModel: fallbackModel,
 			},
 		},
 	}
@@ -1342,7 +1098,6 @@ func TestAntigravityGatewayService_ForwardGemini_RetriesCorruptedThoughtSignatur
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				originalModel: mappedModel,
-				mappedModel:   mappedModel,
 			},
 		},
 	}
@@ -1402,7 +1157,6 @@ func TestAntigravityGatewayService_ForwardGemini_SignatureRetryPropagatesFailove
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				originalModel: mappedModel,
-				mappedModel:   mappedModel,
 			},
 		},
 	}

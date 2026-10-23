@@ -4044,9 +4044,7 @@ import {
   getModelsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
-  fetchAntigravityOfficialModels,
-  getOfficialAntigravityDisplayMappings,
-  getOfficialAntigravityModelIDs,
+  fetchAntigravityDefaultMappings,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 import { adminAPI } from '@/api/admin'
@@ -4784,40 +4782,6 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
-async function resetAntigravityOfficialModelDefaults() {
-  await fetchAntigravityOfficialModels()
-  antigravityModelRestrictionMode.value = 'whitelist'
-  antigravityWhitelistModels.value = getOfficialAntigravityModelIDs()
-  antigravityModelMappings.value = getOfficialAntigravityDisplayMappings()
-}
-
-let antigravityOfficialModelDefaultsPromise: Promise<void> | null = null
-
-function loadAntigravityOfficialModelDefaults() {
-  const promise = resetAntigravityOfficialModelDefaults()
-  antigravityOfficialModelDefaultsPromise = promise
-  void promise.finally(() => {
-    if (antigravityOfficialModelDefaultsPromise === promise) {
-      antigravityOfficialModelDefaultsPromise = null
-    }
-  })
-  return promise
-}
-
-async function waitForAntigravityOfficialModelDefaults() {
-  if (antigravityOfficialModelDefaultsPromise) {
-    await antigravityOfficialModelDefaultsPromise
-  }
-}
-
-function buildAntigravityModelRestrictionMapping(): Record<string, string> | null {
-  return buildModelMappingObject(
-    'combined',
-    antigravityWhitelistModels.value,
-    antigravityModelMappings.value
-  )
-}
-
 const buildOpenAICompactModelMapping = () =>
   buildModelMappingObject('mapping', [], openAICompactModelMappings.value)
 
@@ -5040,7 +5004,11 @@ watch(
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
       if (form.platform === 'antigravity') {
-        void loadAntigravityOfficialModelDefaults()
+        antigravityModelRestrictionMode.value = 'mapping'
+        fetchAntigravityDefaultMappings().then(mappings => {
+          antigravityModelMappings.value = [...mappings]
+        })
+        antigravityWhitelistModels.value = []
       } else {
         antigravityWhitelistModels.value = []
         antigravityModelMappings.value = []
@@ -5107,8 +5075,13 @@ watch(
       modelRestrictionMode.value = 'whitelist'
       allowedModels.value = ['jev-latest']
     }
+    // Antigravity: 默认使用映射模式并填充默认映射
     if (newPlatform === 'antigravity') {
-      void loadAntigravityOfficialModelDefaults()
+      antigravityModelRestrictionMode.value = 'mapping'
+      fetchAntigravityDefaultMappings().then(mappings => {
+        antigravityModelMappings.value = [...mappings]
+      })
+      antigravityWhitelistModels.value = []
       accountCategory.value = 'oauth-based'
       antigravityAccountType.value = 'oauth'
     } else {
@@ -5588,7 +5561,11 @@ const resetForm = () => {
   modelRestrictionMode.value = 'whitelist'
   allowedModels.value = [...claudeModels] // Default fill related models
 
-  void loadAntigravityOfficialModelDefaults()
+  antigravityModelRestrictionMode.value = 'mapping'
+  antigravityWhitelistModels.value = []
+  fetchAntigravityDefaultMappings().then(mappings => {
+    antigravityModelMappings.value = [...mappings]
+  })
   poolModeEnabled.value = false
   poolModeRetryCount.value = DEFAULT_POOL_MODE_RETRY_COUNT
   poolModeRetryStatusCodesInput.value = ''
@@ -5995,8 +5972,12 @@ const handleSubmit = async () => {
       api_key: upstreamApiKey.value.trim()
     }
 
-    await waitForAntigravityOfficialModelDefaults()
-    const antigravityModelMapping = buildAntigravityModelRestrictionMapping()
+    // Antigravity 只使用映射模式
+    const antigravityModelMapping = buildModelMappingObject(
+      'mapping',
+      [],
+      antigravityModelMappings.value
+    )
     if (antigravityModelMapping) {
       credentials.model_mapping = antigravityModelMapping
     }
@@ -6984,11 +6965,6 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
 
         const credentials = antigravityOAuth.buildCredentials(tokenInfo, refreshTokens[i])
         applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
-        await waitForAntigravityOfficialModelDefaults()
-        const antigravityModelMapping = buildAntigravityModelRestrictionMapping()
-        if (antigravityModelMapping) {
-          credentials.model_mapping = antigravityModelMapping
-        }
         
         // Generate account name with index for batch
         const accountName = refreshTokens.length > 1 ? `${form.name} #${i + 1}` : form.name
@@ -7102,18 +7078,22 @@ const handleAntigravityExchange = async (authCode: string) => {
       state: stateToUse,
       proxyId: form.proxy_id
     })
-    if (!tokenInfo) return
+		if (!tokenInfo) return
 
-    const credentials = antigravityOAuth.buildCredentials(tokenInfo)
-    applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
-    applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
-    await waitForAntigravityOfficialModelDefaults()
-    const antigravityModelMapping = buildAntigravityModelRestrictionMapping()
-    if (antigravityModelMapping) {
-      credentials.model_mapping = antigravityModelMapping
-    }
-    const extra = buildAntigravityExtra()
-    await createAccountAndFinish('antigravity', 'oauth', credentials, extra)
+		const credentials = antigravityOAuth.buildCredentials(tokenInfo)
+		applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
+		applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+		// Antigravity 只使用映射模式
+		const antigravityModelMapping = buildModelMappingObject(
+			'mapping',
+			[],
+			antigravityModelMappings.value
+		)
+		if (antigravityModelMapping) {
+			credentials.model_mapping = antigravityModelMapping
+		}
+		const extra = buildAntigravityExtra()
+		await createAccountAndFinish('antigravity', 'oauth', credentials, extra)
   } catch (error: any) {
     antigravityOAuth.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
     appStore.showError(antigravityOAuth.error.value)

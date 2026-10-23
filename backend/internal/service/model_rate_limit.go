@@ -5,8 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
 
@@ -78,69 +76,23 @@ func (a *Account) modelRateLimitKeysForRequest(ctx context.Context, requestedMod
 		return nil
 	}
 
-	keys := appendModelRateLimitKey(nil, modelKey)
+	keys := []string{modelKey}
 	switch a.Platform {
 	case PlatformAntigravity:
-		requestedKey := strings.TrimSpace(requestedModel)
-		keys = appendModelRateLimitKey(keys, requestedKey)
-		if enabled, ok := ThinkingEnabledFromContext(ctx); ok {
-			keys = appendModelRateLimitKey(keys, applyThinkingModelSuffix(requestedKey, enabled))
+		if isAntigravityGeminiModel(modelKey) && !isAntigravityGeminiImageModel(modelKey) && modelKey != antigravityGeminiModelRateLimitKey {
+			keys = append(keys, antigravityGeminiModelRateLimitKey)
 		}
-		keys = appendModelRateLimitKey(keys, normalizeAntigravityModelName(requestedKey))
-		keys = appendAntigravityCompatibilityRateLimitKeys(ctx, keys, modelKey)
-		keys = appendAntigravityGeminiFamilyRateLimitKey(keys)
 	case PlatformOpenAI:
 		if openAIImageGenerationRateLimitApplies(ctx, requestedModel, modelKey) && modelKey != openAIImageGenerationRateLimitKey {
-			keys = appendModelRateLimitKey(keys, openAIImageGenerationRateLimitKey)
+			keys = append(keys, openAIImageGenerationRateLimitKey)
 		}
 	case PlatformAnthropic:
 		if isAnthropicFableModel(modelKey) && modelKey != anthropicFableRateLimitKey {
-			keys = appendModelRateLimitKey(keys, anthropicFableRateLimitKey)
+			keys = append(keys, anthropicFableRateLimitKey)
 		}
 	case PlatformCline:
-		// 上游新增：Cline 按钱包（ClinePass／积分）维度追加限流键。
 		if walletKey := clineWalletRateLimitKey(modelKey); walletKey != "" {
-			keys = appendModelRateLimitKey(keys, walletKey)
-		}
-	}
-	return keys
-}
-
-func appendModelRateLimitKey(keys []string, key string) []string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return keys
-	}
-	for _, existing := range keys {
-		if existing == key {
-			return keys
-		}
-	}
-	return append(keys, key)
-}
-
-func appendAntigravityCompatibilityRateLimitKeys(ctx context.Context, keys []string, finalModel string) []string {
-	finalModel = strings.TrimSpace(finalModel)
-	if finalModel == "" {
-		return keys
-	}
-	for alias, mapped := range domain.AntigravityCompatibilityModelMapping {
-		mapped = strings.TrimSpace(mapped)
-		if enabled, ok := ThinkingEnabledFromContext(ctx); ok {
-			mapped = applyThinkingModelSuffix(mapped, enabled)
-		}
-		if mapped == finalModel {
-			keys = appendModelRateLimitKey(keys, alias)
-		}
-	}
-	return keys
-}
-
-func appendAntigravityGeminiFamilyRateLimitKey(keys []string) []string {
-	for _, key := range keys {
-		// 上游修复：图片模型的限流不写入/不读取 Gemini 家族 scope，避免图片限流连带文本模型。
-		if isAntigravityGeminiModel(key) && !isAntigravityGeminiImageModel(key) {
-			return appendModelRateLimitKey(keys, antigravityGeminiModelRateLimitKey)
+			keys = append(keys, walletKey)
 		}
 	}
 	return keys
@@ -192,11 +144,6 @@ func OpenAIImagesEndpointFromContext(ctx context.Context) bool {
 
 func resolveFinalAntigravityModelKey(ctx context.Context, account *Account, requestedModel string) string {
 	modelKey := mapAntigravityModel(account, requestedModel)
-	if modelKey == "" {
-		if officialModel := strings.TrimPrefix(strings.TrimSpace(requestedModel), "models/"); antigravity.IsOfficialModelID(officialModel) {
-			modelKey = officialModel
-		}
-	}
 	if modelKey == "" {
 		return ""
 	}

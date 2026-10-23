@@ -19,6 +19,7 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
@@ -49,19 +50,18 @@ const (
 
 // TestEvent represents a SSE event for account testing
 type TestEvent struct {
-	Type     string                `json:"type"`
-	Text     string                `json:"text,omitempty"`
-	Model    string                `json:"model,omitempty"`
-	Status   string                `json:"status,omitempty"`
-	Code     string                `json:"code,omitempty"`
-	ImageURL string                `json:"image_url,omitempty"`
-	AudioURL string                `json:"audio_url,omitempty"`
-	VideoURL string                `json:"video_url,omitempty"`
-	MimeType string                `json:"mime_type,omitempty"`
-	Data     any                   `json:"data,omitempty"`
-	Success  bool                  `json:"success,omitempty"`
-	Error    string                `json:"error,omitempty"`
-	Usage    *KeeperKeepaliveUsage `json:"usage,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Model    string `json:"model,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Code     string `json:"code,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	AudioURL string `json:"audio_url,omitempty"`
+	VideoURL string `json:"video_url,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	Data     any    `json:"data,omitempty"`
+	Success  bool   `json:"success,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // AccountTestOptions 承载管理员连接测试的可选媒体与输出上限。
@@ -2983,13 +2983,6 @@ func applyAccountTestHeaderOverridesWithProtectedIdentity(account *Account, h ht
 	account.ApplyHeaderOverrides(h)
 }
 
-func applyAccountTestHeaderOverridesForOfficialClientProxy(account *Account, h http.Header) {
-	if account == nil {
-		return
-	}
-	account.ApplyHeaderOverridesForOfficialClientProxy(h)
-}
-
 // createOpenAITestPayload creates a test payload for OpenAI Responses API
 func createOpenAITestPayload(modelID string, prompt string, isOAuth bool, maxOutputTokens int) map[string]any {
 	testPrompt := strings.TrimSpace(prompt)
@@ -3250,9 +3243,6 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
 		case "response.completed", "response.done":
-			if usage := keeperUsageFromResponseEvent(data); usage != nil {
-				s.sendEvent(c, TestEvent{Type: "usage", Usage: usage})
-			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
 		case "response.failed":
@@ -3555,4 +3545,72 @@ func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) er
 	logAccountTestError(c, errorMsg)
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+// RunTestBackground 在内存中执行账号测试，并解析捕获的 SSE 响应供定时测试使用。
+func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
+	startedAt := time.Now()
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+	ginCtx.Request = (&http.Request{}).WithContext(ctx)
+	ginCtx.Set(accountTestBackgroundKey, true)
+
+	testErr := s.TestAccountConnection(ginCtx, accountID, modelID, "", AccountTestModeDefault)
+
+	finishedAt := time.Now()
+	body := w.Body.String()
+	responseText, errMsg := parseTestSSEOutput(body)
+
+	status := "success"
+	if testErr != nil || errMsg != "" {
+		status = "failed"
+		if errMsg == "" && testErr != nil {
+			errMsg = testErr.Error()
+		}
+	}
+
+	return &ScheduledTestResult{
+		Status:       status,
+		ResponseText: responseText,
+		ErrorMessage: errMsg,
+		LatencyMs:    finishedAt.Sub(startedAt).Milliseconds(),
+		StartedAt:    startedAt,
+		FinishedAt:   finishedAt,
+	}, nil
+}
+
+// parseTestSSEOutput 从捕获的 SSE 输出中提取响应正文和错误信息。
+func parseTestSSEOutput(body string) (responseText, errMsg string) {
+	var texts []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		jsonStr := strings.TrimPrefix(line, "data: ")
+		var event TestEvent
+		if err := json.Unmarshal([]byte(jsonStr), &event); err != nil {
+			continue
+		}
+		switch event.Type {
+		case "content":
+			if event.Text != "" {
+				texts = append(texts, event.Text)
+			}
+		case "error":
+			errMsg = event.Error
+		}
+	}
+	responseText = strings.Join(texts, "")
+	return
 }

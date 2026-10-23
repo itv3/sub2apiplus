@@ -16,7 +16,7 @@ import (
 )
 
 func TestBuildUserAgentUsesHubClientFamily(t *testing.T) {
-	if got := BuildUserAgent(" 2.23.0 "); got != "antigravity/hub/2.23.0 darwin/arm64" {
+	if got := BuildUserAgent(" 2.23.0 "); got != "antigravity/hub/2.23.0 windows/amd64" {
 		t.Fatalf("Hub client family must be sent with the configured version: %q", got)
 	}
 }
@@ -29,11 +29,11 @@ func TestBuildUserAgentValidatesCustomVersion(t *testing.T) {
 		version string
 		want    string
 	}{
-		{version: " 3.4.5 ", want: "antigravity/hub/3.4.5 darwin/arm64"},
-		{version: "", want: "antigravity/hub/2.23.0 darwin/arm64"},
-		{version: "hub/3.4.5", want: "antigravity/hub/2.23.0 darwin/arm64"},
-		{version: "3.4", want: "antigravity/hub/2.23.0 darwin/arm64"},
-		{version: "3.4.5\r\nInjected: header", want: "antigravity/hub/2.23.0 darwin/arm64"},
+		{version: " 3.4.5 ", want: "antigravity/hub/3.4.5 windows/amd64"},
+		{version: "", want: "antigravity/hub/2.23.0 windows/amd64"},
+		{version: "hub/3.4.5", want: "antigravity/hub/2.23.0 windows/amd64"},
+		{version: "3.4", want: "antigravity/hub/2.23.0 windows/amd64"},
+		{version: "3.4.5\r\nInjected: header", want: "antigravity/hub/2.23.0 windows/amd64"},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
 			if got := BuildUserAgent(tc.version); got != tc.want {
@@ -66,15 +66,15 @@ func TestGetUserAgentForContextPreservesVersionOverride(t *testing.T) {
 		version string
 		want    string
 	}{
-		{version: " 3.4.5 ", want: "antigravity/hub/3.4.5 darwin/arm64"},
-		{version: "invalid", want: "antigravity/hub/2.23.0 darwin/arm64"},
+		{version: " 3.4.5 ", want: "antigravity/hub/3.4.5 windows/amd64"},
+		{version: "invalid", want: "antigravity/hub/2.23.0 windows/amd64"},
 	} {
 		ctx := context.WithValue(context.Background(), userAgentVersionTestContextKey{}, tc.version)
 		if got := GetUserAgentForContext(ctx); got != tc.want {
 			t.Fatalf("context version override must use Hub family: got %q, want %q", got, tc.want)
 		}
 	}
-	if got := GetUserAgentForContext(nil); got != "antigravity/hub/2.23.0 darwin/arm64" { //nolint:staticcheck // SA1012：此处正是要验证 nil context 的容错
+	if got := GetUserAgentForContext(nil); got != "antigravity/hub/2.23.0 windows/amd64" {
 		t.Fatalf("nil context must keep the default Hub user agent: %q", got)
 	}
 }
@@ -85,7 +85,7 @@ func TestGetUserAgentEnvironmentOverride(t *testing.T) {
 		if got := GetDefaultUserAgentVersion(); got != expected {
 			t.Fatalf("environment version must be loaded during initialization: got %q, want %q", got, expected)
 		}
-		if got := GetUserAgent(); got != "antigravity/hub/"+expected+" darwin/arm64" {
+		if got := GetUserAgent(); got != "antigravity/hub/"+expected+" windows/amd64" {
 			t.Fatalf("environment override must keep Hub family: %q", got)
 		}
 		return
@@ -95,7 +95,7 @@ func TestGetUserAgentEnvironmentOverride(t *testing.T) {
 		want    string
 	}{
 		{version: " 3.4.5 ", want: "3.4.5"},
-		{version: "invalid", want: DefaultUserAgentVersion},
+		{version: "invalid", want: "2.23.0"},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
 			binary, err := os.Executable()
@@ -796,7 +796,10 @@ func TestConstants_值正确(t *testing.T) {
 	if RedirectURI != "http://localhost:8085/callback" {
 		t.Errorf("RedirectURI 不匹配: got %s", RedirectURI)
 	}
-	if GetUserAgent() != "antigravity/hub/2.2.1 darwin/arm64" {
+	if DefaultUserAgentVersion != "2.23.0" {
+		t.Errorf("default Hub version must match the verified upstream release: got %s", DefaultUserAgentVersion)
+	}
+	if GetUserAgent() != "antigravity/hub/2.23.0 windows/amd64" {
 		t.Errorf("UserAgent 不匹配: got %s", GetUserAgent())
 	}
 	if SessionTTL != 30*time.Minute {

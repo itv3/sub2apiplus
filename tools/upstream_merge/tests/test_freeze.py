@@ -22,6 +22,7 @@ from tools.upstream_merge.freeze import (
     load_freeze_registry,
     load_frozen_edges,
     plan_freeze_successor,
+    scan_deleted_path_references,
 )
 from tools.upstream_merge.workflow import generate_source_transition
 
@@ -494,7 +495,7 @@ class FreezeSuccessorTest(unittest.TestCase):
             ("backend/a.go", True, digest(self.sources["backend/a.go"])),
         )
         self.assertEqual(entry["reference_scan"]["algorithm"], "reference-scan/v1")
-        self.assertEqual(entry["reference_scan"]["patterns"], ["a.go"])
+        self.assertEqual(entry["reference_scan"]["patterns"], ["a.go", "backend/a.go"])
         self.assertEqual(entry["reference_scan"]["references"], [])
         self.assertEqual(gate_compatible_identity(document), document["identity_sha256"])
         # 删除不产生摘要边：a.go 的已知摘要集合保持原样，证明结构也不会被抽成边。
@@ -548,8 +549,94 @@ class FreezeSuccessorTest(unittest.TestCase):
         document = json.loads(output.read_text(encoding="utf-8"))
         proof = document["deletion_proof"]
         self.assertEqual(proof["historical_readers"], [{"path": "tools/f.py", "sha256": digest("print('f')\n")}])
-        self.assertEqual(proof["deleted_paths"][0]["reference_scan"]["patterns"], ["e", "e.py"])
+        self.assertEqual(proof["deleted_paths"][0]["reference_scan"]["patterns"], ["e", "e.py", "tools/e.py"])
         self.assertEqual(proof["deleted_paths"][0]["reference_scan"]["references"], [])
+
+    def test_common_deleted_names_do_not_match_other_directories(self) -> None:
+        worker = self.root / "worker"
+        worker.mkdir()
+        names = [".gitignore", "main.go", "Dockerfile", "go.mod"]
+        for name in names:
+            (worker / name).write_text("retired\n", encoding="utf-8")
+        base = self._commit("add retired worker")
+        for name in names:
+            (worker / name).unlink()
+        # 全局通用文件名、其他目录的同名路径、同名前缀及后缀都不指向 worker。
+        (self.root / "tools/check.py").write_text(
+            "files = ['backend/main.go', 'backend/go.mod', 'Dockerfile.goreleaser', '.gitignore']\n",
+            encoding="utf-8",
+        )
+        (self.root / "run.sh").write_text(
+            "go run backend/main.go\ncat backend/go.mod\n"
+            "docker build -f Dockerfile.goreleaser .\ncat .gitignore\n",
+            encoding="utf-8",
+        )
+        write_json(self.root / "config/action.json", {"command": ["cat", "backend/go.mod"]})
+        (worker / "check.py").write_text(
+            "files = ['../backend/main.go', 'other/main.go', 'main.go.backup', "
+            "'../other/worker/main.go']\n",
+            encoding="utf-8",
+        )
+        for after in [None, self._commit("delete worker and retain unrelated callers")]:
+            with self.subTest(after=after):
+                report = generate_freeze_successor(
+                    self.root, base, after, None, tag="paths", dry_run=True,
+                    deletion_reason="退役独立 worker",
+                )
+                entries = report["deletion_proof"]["deleted_paths"]
+                self.assertEqual({item["path"] for item in entries}, {f"worker/{name}" for name in names})
+                self.assertTrue(all(not item["reference_scan"]["references"] for item in entries))
+
+    def test_deleted_path_references_keep_repository_and_local_paths_blocked(self) -> None:
+        worker = self.root / "worker"
+        worker.mkdir()
+        deleted = worker / "main.go"
+        deleted.write_text("package main\n", encoding="utf-8")
+        base = self._commit("add worker entrypoint")
+        deleted.unlink()
+        cases = [
+            ("tools/check.py", "path = 'worker/main.go'\n", "python"),
+            ("tools/check.py", "path = '../worker/main.go'\n", "python"),
+            ("worker/check.py", "path = 'main.go'\n", "python"),
+            ("worker/build.sh", "go run ./main.go\n", "shell"),
+            ("tools/build.sh", "go run ../worker/main.go\n", "shell"),
+            ("run.sh", 'go run "${REPO_ROOT}/worker/main.go"\n', "shell"),
+            ("run.sh", "echo " + "x" * 250 + "; go run worker/main.go\n", "shell"),
+            ("config/action.json", json.dumps({"argv": ["go", "run", "worker/main.go"]}), "json"),
+            ("worker/action.json", json.dumps({"command": ["go", "run", "main.go"]}), "json"),
+            ("config/action.json", '{"command": "worker/main.go"', "json"),
+        ]
+        for relative, content, kind in cases:
+            with self.subTest(path=relative, content=content):
+                caller = self.root / relative
+                caller.parent.mkdir(exist_ok=True)
+                caller.write_text(content, encoding="utf-8")
+                scan = scan_deleted_path_references(self.root, None, "worker/main.go")
+                self.assertTrue(any(hit["kind"] == kind and hit["path"] == relative for hit in scan["references"]))
+                with self.assertRaisesRegex(UpstreamMergeError, "删除路径仍被引用"):
+                    generate_freeze_successor(
+                        self.root, base, None, None, tag="paths", dry_run=True,
+                        deletion_reason="退役独立 worker",
+                    )
+                caller.unlink()
+        # after 模式必须读取提交中的调用者，不能被工作树已清理的状态放行。
+        caller = worker / "build.sh"
+        caller.write_text("go run main.go\n", encoding="utf-8")
+        after = self._commit("delete worker with stale local invocation")
+        caller.unlink()
+        committed = scan_deleted_path_references(self.root, after, "worker/main.go")
+        self.assertEqual([hit["path"] for hit in committed["references"]], ["worker/build.sh"])
+        self.assertEqual(scan_deleted_path_references(self.root, None, "worker/main.go")["references"], [])
+
+    def test_python_module_import_and_attribute_scanning_remains_global(self) -> None:
+        (self.root / "tools/e.py").unlink()
+        caller = self.root / "other/check.py"
+        caller.parent.mkdir()
+        for content in ["import e\n", "from tools import e\n", "import tools.e\n", "tools.e.run()\n"]:
+            with self.subTest(content=content):
+                caller.write_text(content, encoding="utf-8")
+                scan = scan_deleted_path_references(self.root, None, "tools/e.py")
+                self.assertTrue(any(hit["kind"] == "python" and hit["path"] == "other/check.py" for hit in scan["references"]))
 
     def test_commit_mode_deletion_proof_reads_after_tree(self) -> None:
         (self.root / "backend/a.go").unlink()

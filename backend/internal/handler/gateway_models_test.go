@@ -181,7 +181,7 @@ func TestDefaultModelIDsForAnthropicExcludeAntigravityGemini(t *testing.T) {
 	require.NotContains(t, anthropicIDs, "gemini-2.5-flash")
 
 	antigravityIDs := defaultModelIDsForPlatform(service.PlatformAntigravity)
-	require.Contains(t, antigravityIDs, "gemini-3-flash-agent")
+	require.Contains(t, antigravityIDs, "gemini-2.5-flash")
 }
 
 // Scenario: non-OpenAI groups return a Codex manifest instead of a standard model list.
@@ -1609,10 +1609,9 @@ func TestGatewayModels_AntigravityExplicitMappingAppearsInBothCatalogs(t *testin
 					Credentials: map[string]any{"model_mapping": mapping},
 				}}},
 			})
-			// 本分支口径：显式映射只公布自映射条目；仅作请求别名的 gemini-3.8-flash 可路由但不出现在目录中。
-			want := []string{"gemini-3.8-flash-high", "gemini-pro-agent", "claude-opus-4-6-thinking"}
+			want := []string{"gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-pro-agent", "claude-opus-4-6-thinking"}
 			if platform == service.PlatformGemini {
-				want = want[:2]
+				want = want[:3]
 			}
 			for _, codex := range []bool{false, true} {
 				rec := httptest.NewRecorder()
@@ -1644,7 +1643,6 @@ func TestGatewayModels_AntigravityExplicitMappingAppearsInBothCatalogs(t *testin
 				}
 				// 显式条目必须同时出现在两种目录；默认透传补齐的条目不锁定。
 				require.Subset(t, ids, want, "codex=%t", codex)
-				require.NotContains(t, ids, "gemini-3.8-flash", "codex=%t", codex)
 				if platform == service.PlatformGemini {
 					require.NotContains(t, ids, "claude-opus-4-6-thinking", "codex=%t", codex)
 				}
@@ -1715,8 +1713,7 @@ func TestGatewayModels_GeminiGroupIncludesAntigravityGeminiMappings(t *testing.T
 	// 账号显式配置的 gemini-* 映射必须出现（resolveModelMapping 还会补一组 antigravity
 	// 默认透传别名，这里只断言显式条目与排除项，不锁定补齐后的完整集合）。
 	require.Contains(t, ids, "gemini-3.8-flash-high")
-	// 本分支对显式映射只宣称映射到自身的条目，别名不进入公开列表（见 antigravityAllowedModelSet）。
-	require.NotContains(t, ids, "gemini-synced-custom")
+	require.Contains(t, ids, "gemini-synced-custom")
 	require.Contains(t, ids, "gemini-3.8-flash-low")
 	require.Contains(t, ids, "gemini-native-only")
 	require.NotContains(t, ids, "gemini-disabled-only")
@@ -1761,8 +1758,7 @@ func TestGatewayModels_GeminiGroupUsesAntigravityDefaultMappingWhenUnset(t *test
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	ids := modelIDsForTest(got.Data)
-	// 未配置映射时按本分支官方目录宣称官方 Gemini 模型，不使用上游默认映射表。
-	require.Contains(t, ids, "gemini-3.5-flash-low")
+	require.Contains(t, ids, "gemini-3.8-flash-high")
 	for _, id := range ids {
 		require.True(t, strings.HasPrefix(id, "gemini-"), "unexpected non-gemini model on gemini group: %s", id)
 	}
@@ -1810,8 +1806,7 @@ func TestGatewayModels_CodexGeminiGroupListsAntigravityGeminiMappings(t *testing
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 	slugs := codexModelSlugsForTest(got.Models)
 	require.Contains(t, slugs, "gemini-3.8-flash-high")
-	// 本分支对显式映射只宣称映射到自身的条目，别名不进入公开列表（见 antigravityAllowedModelSet）。
-	require.NotContains(t, slugs, "gemini-synced-custom")
+	require.Contains(t, slugs, "gemini-synced-custom")
 	require.NotContains(t, slugs, "claude-sonnet-4-6")
 	require.NotContains(t, slugs, "gemini-2.0-flash")
 	for _, slug := range slugs {

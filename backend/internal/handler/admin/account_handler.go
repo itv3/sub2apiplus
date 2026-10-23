@@ -2973,13 +2973,9 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 		return models
 	}
 
-	// Explicit account mappings expose their request-side names to connectivity tests.
+	// Antigravity 连通性测试仅使用账号已保存的请求侧模型名称。
 	if account.Platform == service.PlatformAntigravity {
-		mapping := service.AdvertisedModelMappingForAccount(account)
-		if len(mapping) == 0 {
-			return antigravity.DefaultModels()
-		}
-		return antigravityModelsForMapping(mapping)
+		return antigravityAccountTestModels(account.Credentials["model_mapping"])
 	}
 
 	// Handle Grok accounts
@@ -3068,28 +3064,34 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 	return models
 }
 
-func antigravityModelsForMapping(mapping map[string]string) []antigravity.ClaudeModel {
-	defaults := antigravity.DefaultModels()
-	defaultByID := make(map[string]antigravity.ClaudeModel, len(defaults))
-	for _, model := range defaults {
-		defaultByID[model.ID] = model
-	}
-
-	ids := make([]string, 0, len(mapping))
-	for id := range mapping {
-		// 通配符键（如 claude-*）不是具体模型，不能作为连通性测试可选项；
-		// 与上游一致：全是通配符时回落默认模型。
-		if trimmed := strings.TrimSpace(id); trimmed != "" && !strings.Contains(trimmed, "*") {
-			ids = append(ids, trimmed)
+// antigravityAccountTestModels 读取账号已保存的映射，避免加入管理员未配置的默认项和兼容别名。
+func antigravityAccountTestModels(rawMapping any) []antigravity.ClaudeModel {
+	var mappedIDs []string
+	switch mapping := rawMapping.(type) {
+	case map[string]any:
+		for id := range mapping {
+			if strings.TrimSpace(id) != "" && !strings.Contains(id, "*") {
+				mappedIDs = append(mappedIDs, id)
+			}
+		}
+	case map[string]string:
+		for id := range mapping {
+			if strings.TrimSpace(id) != "" && !strings.Contains(id, "*") {
+				mappedIDs = append(mappedIDs, id)
+			}
 		}
 	}
-	if len(ids) == 0 {
-		return defaults
+	if len(mappedIDs) == 0 {
+		return antigravity.DefaultModels()
 	}
-	sort.Strings(ids)
 
-	models := make([]antigravity.ClaudeModel, 0, len(ids))
-	for _, id := range ids {
+	sort.Strings(mappedIDs)
+	defaultByID := make(map[string]antigravity.ClaudeModel)
+	for _, model := range antigravity.DefaultModels() {
+		defaultByID[model.ID] = model
+	}
+	models := make([]antigravity.ClaudeModel, 0, len(mappedIDs))
+	for _, id := range mappedIDs {
 		if model, ok := defaultByID[id]; ok {
 			models = append(models, model)
 			continue
@@ -3098,7 +3100,6 @@ func antigravityModelsForMapping(mapping map[string]string) []antigravity.Claude
 			ID:          id,
 			Type:        "model",
 			DisplayName: id,
-			CreatedAt:   "",
 		})
 	}
 	return models
@@ -3418,15 +3419,6 @@ func (h *AccountHandler) GetAntigravityDefaultModelMapping(c *gin.Context) {
 	response.Success(c, domain.DefaultAntigravityModelMapping)
 }
 
-// GetAntigravityOfficialModels 获取 Antigravity 官方模型描述表。
-// GET /api/v1/admin/accounts/antigravity/official-models
-func (h *AccountHandler) GetAntigravityOfficialModels(c *gin.Context) {
-	response.Success(c, gin.H{
-		"models":  antigravity.OfficialModelDescriptors(),
-		"mapping": domain.DefaultAntigravityModelMapping,
-	})
-}
-
 // sanitizeExtraBaseRPM 对 extra map 中的 base_rpm 值进行范围校验和归一化。
 // 负值归零，超过 10000 截断为 10000。extra 为 nil 或不含 base_rpm 时无操作。
 func sanitizeExtraBaseRPM(extra map[string]any) {
@@ -3452,8 +3444,7 @@ func validatePlusExtraPatch(extra map[string]any) error {
 		case "anthropic_apikey_mimic_claude_code",
 			service.AnthropicAPIKeyStandardAPICompatExtraKey,
 			"openai_apikey_mimic_codex_cli",
-			"enable_tls_fingerprint",
-			"keeper_keepalive_enabled":
+			"enable_tls_fingerprint":
 			if value != nil {
 				if _, ok := value.(bool); !ok {
 					return fmt.Errorf("extra.%s must be boolean", key)
@@ -3471,71 +3462,6 @@ func validatePlusExtraPatch(extra map[string]any) error {
 			case "", "desktop_0_142", "cli_rs_0_125":
 			default:
 				return fmt.Errorf("extra.%s is not an allowed Codex profile", key)
-			}
-		case "keeper_keepalive_interval_minutes":
-			if value == nil {
-				continue
-			}
-			interval := service.ParseExtraInt(value)
-			if interval < 1 || interval > 10080 {
-				return fmt.Errorf("extra.%s must be between 1 and 10080", key)
-			}
-		case "keeper_keepalive_max_output_tokens":
-			if value == nil {
-				continue
-			}
-			maxTokens := service.ParseExtraInt(value)
-			if maxTokens < 1 || maxTokens > service.KeeperProxyMaxOutputTokensHardCap {
-				return fmt.Errorf("extra.%s must be between 1 and %d", key, service.KeeperProxyMaxOutputTokensHardCap)
-			}
-		case "keeper_keepalive_mode":
-			if value == nil {
-				continue
-			}
-			mode, ok := value.(string)
-			if !ok {
-				return fmt.Errorf("extra.%s must be string", key)
-			}
-			switch strings.ToLower(strings.TrimSpace(mode)) {
-			case "", "fresh", "resume_last":
-			default:
-				return fmt.Errorf("extra.%s is not an allowed keepalive mode", key)
-			}
-		case "keeper_keepalive_work_start", "keeper_keepalive_work_end":
-			if value == nil {
-				continue
-			}
-			if !isValidKeeperClockString(value) {
-				return fmt.Errorf("extra.%s must use HH:MM format", key)
-			}
-		case "keeper_keepalive_model":
-			if value == nil {
-				continue
-			}
-			if !isBoundedExtraString(value, 200) {
-				return fmt.Errorf("extra.%s must be a string up to 200 characters", key)
-			}
-		case "keeper_keepalive_workspace":
-			if value == nil {
-				continue
-			}
-			if !isBoundedExtraString(value, 128) {
-				return fmt.Errorf("extra.%s must be a string up to 128 characters", key)
-			}
-			workspace, ok := value.(string)
-			if !ok {
-				return fmt.Errorf("extra.%s must be a string up to 128 characters", key)
-			}
-			workspace = strings.TrimSpace(workspace)
-			if strings.Contains(workspace, "/") || strings.Contains(workspace, "\\") || strings.Contains(workspace, "..") {
-				return fmt.Errorf("extra.%s must be a single project name", key)
-			}
-		case "keeper_keepalive_prompt":
-			if value == nil {
-				continue
-			}
-			if !isBoundedExtraString(value, 4000) {
-				return fmt.Errorf("extra.%s must be a string up to 4000 characters", key)
 			}
 		default:
 			return fmt.Errorf("extra.%s is not allowed in this endpoint", key)
@@ -3566,55 +3492,7 @@ func validatePlusExtraPatchForAccount(extra map[string]any, account *service.Acc
 				(account.Platform != service.PlatformOpenAI && account.Platform != service.PlatformAnthropic) {
 				return fmt.Errorf("extra.%s only applies to OpenAI or Anthropic API Key accounts", key)
 			}
-		case "keeper_keepalive_enabled",
-			"keeper_keepalive_interval_minutes",
-			"keeper_keepalive_max_output_tokens",
-			"keeper_keepalive_mode",
-			"keeper_keepalive_work_start",
-			"keeper_keepalive_work_end",
-			"keeper_keepalive_model",
-			"keeper_keepalive_workspace",
-			"keeper_keepalive_prompt":
-			if account.Type != service.AccountTypeAPIKey ||
-				(account.Platform != service.PlatformOpenAI && account.Platform != service.PlatformAnthropic) {
-				return fmt.Errorf("extra.%s only applies to OpenAI or Anthropic API Key accounts", key)
-			}
 		}
 	}
 	return service.ValidateAnthropicAPIKeyCompatExtraPatch(account, extra)
-}
-
-func isBoundedExtraString(value any, maxRunes int) bool {
-	text, ok := value.(string)
-	if !ok {
-		return false
-	}
-	return len([]rune(text)) <= maxRunes
-}
-
-func isValidKeeperClockString(value any) bool {
-	text, ok := value.(string)
-	if !ok {
-		return false
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return true
-	}
-	parts := strings.Split(text, ":")
-	if len(parts) != 2 || len(parts[0]) != 2 || len(parts[1]) != 2 {
-		return false
-	}
-	hour, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return false
-	}
-	minute, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return false
-	}
-	if hour == 24 && minute == 0 {
-		return true
-	}
-	return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59
 }

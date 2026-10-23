@@ -184,33 +184,6 @@ func TestAnthropicStandardAPICompatGatewayBuilders(t *testing.T) {
 	}
 }
 
-func TestAnthropicStandardAPICompatKeeperProxy(t *testing.T) {
-	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/models"} {
-		t.Run(path, func(t *testing.T) {
-			account := standardAPICompatTestAccount()
-			account.Extra["keeper_keepalive_enabled"] = true
-			upstream := &keeperProxyHTTPUpstreamRecorder{}
-			svc := &AccountTestService{accountRepo: &keeperProxyAccountRepoStub{account: account}, httpUpstream: upstream, cfg: &config.Config{}}
-			method := http.MethodPost
-			var body io.Reader = strings.NewReader(standardAPICompatTestBody)
-			if path == "/v1/models" {
-				method, body = http.MethodGet, nil
-			}
-			resp, err := svc.ProxyKeeperAnthropicAccount(context.Background(), account.ID, KeeperOpenAIProxyRequest{
-				Method: method, Path: path, Body: body,
-				Header: http.Header{"User-Agent": {"claude-cli/test"}, "Anthropic-Beta": {claude.BetaClaudeCode + ",fine-grained-tool-streaming-2025-05-14"}},
-			})
-			require.NoError(t, err)
-			_ = resp.Body.Close()
-			if method == http.MethodPost {
-				requireStandardAPICompatRequest(t, upstream.lastRequest, upstream.lastBody)
-			} else {
-				require.Equal(t, anthropicStandardAPIUserAgent, getHeaderRaw(upstream.lastRequest.Header, "User-Agent"))
-			}
-		})
-	}
-}
-
 type standardAPICompatAdminRepo struct {
 	AccountRepository
 	account   *Account

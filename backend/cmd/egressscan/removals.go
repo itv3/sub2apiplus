@@ -85,6 +85,7 @@ type removalReceipt struct {
 	ReplacementSinkID      string     `json:"replacement_sink_id,omitempty"`
 	MigrationReceiptDigest string     `json:"migration_receipt_digest,omitempty"`
 	DelegationCandidateID  string     `json:"delegation_candidate_id,omitempty"`
+	ScopeExclusionSinkID   string     `json:"scope_exclusion_sink_id,omitempty"`
 	SourceBlobSHA256       string     `json:"source_blob_sha256"`
 	ReviewedBy             string     `json:"reviewed_by"`
 	ReviewRef              string     `json:"review_ref"`
@@ -161,6 +162,9 @@ func validateRemovalReceipt(receipt removalReceipt, migrations migrationReceiptI
 		strings.TrimSpace(receipt.Rationale) == "" {
 		return fmt.Errorf("移除收据字段不完整: %s", candidate.ScanCandidateID)
 	}
+	if receipt.Kind != "scope_excluded_removed" && receipt.ScopeExclusionSinkID != "" {
+		return fmt.Errorf("非范围排除移除收据不得声明 scope exclusion: %s", candidate.ScanCandidateID)
+	}
 	switch receipt.Kind {
 	case "dead_code_removed":
 		if candidate.Persona != "dead-code" && candidate.EnforcementState != "pending_removal" {
@@ -201,6 +205,14 @@ func validateRemovalReceipt(receipt removalReceipt, migrations migrationReceiptI
 			receipt.DelegationCandidateID != "" {
 			return fmt.Errorf("legacy facade 退休字段或冻结状态非法: %s", candidate.ScanCandidateID)
 		}
+	case "scope_excluded_removed":
+		// 保留原始基线分类，由已审核的 Catalog amendment 证明该调用早已排除在官方出站范围之外。
+		if candidate.RuntimeSinkID == "" || receipt.ScopeExclusionSinkID != candidate.RuntimeSinkID ||
+			candidate.EnforcementState != "legacy_observe" || candidate.IsFacade ||
+			receipt.ReplacementSinkID != "" || receipt.MigrationReceiptDigest != "" ||
+			receipt.DelegationCandidateID != "" {
+			return fmt.Errorf("范围排除移除收据字段或冻结状态非法: %s", candidate.ScanCandidateID)
+		}
 	case "out_of_scope_refactored":
 		if candidate.Persona != "out-of-scope" ||
 			candidate.EnforcementState != "not_applicable" ||
@@ -212,6 +224,16 @@ func validateRemovalReceipt(receipt removalReceipt, migrations migrationReceiptI
 		return fmt.Errorf("移除收据 kind 非法: %s", receipt.Kind)
 	}
 	return nil
+}
+
+// validateScopeExcludedRemoval 将退役收据绑定到当前加载的历史排除证据，拒绝自行声明范围排除。
+func validateScopeExcludedRemoval(receipt removalReceipt, amendments map[string]scannerCatalogAmendment) error {
+	amendment, exists := amendments[receipt.Candidate.ScanCandidateID]
+	if !exists || amendment.Kind != scannerAmendmentRuntimeScopeExclusion ||
+		amendment.SinkID != receipt.ScopeExclusionSinkID {
+		return errors.New("范围排除移除缺少匹配的 Catalog scope exclusion")
+	}
+	return validateAmendmentFrozenSource(amendment, receipt.Candidate)
 }
 
 func (m removalManifest) delegationByTargetID() map[string][]removalReceipt {

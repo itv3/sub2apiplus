@@ -98,7 +98,7 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 	}
 
 	candidates := defaultModelsListCandidateIDs(platform)
-	if platform == PlatformAntigravity || id <= 0 || s.accountRepo == nil {
+	if id <= 0 || s.accountRepo == nil {
 		return candidates, nil
 	}
 
@@ -288,7 +288,12 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		}
 		return ids
 	case PlatformAntigravity:
-		return antigravity.OfficialModelIDs()
+		models := antigravity.DefaultModels()
+		ids := make([]string, 0, len(models))
+		for _, model := range models {
+			ids = append(ids, model.ID)
+		}
+		return ids
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
 	case PlatformOpenCodeGo:

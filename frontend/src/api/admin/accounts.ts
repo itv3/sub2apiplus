@@ -23,8 +23,6 @@ import type {
   OpenAICodexPATCreateRequest,
   CheckMixedChannelRequest,
   CheckMixedChannelResponse,
-  KeeperSettings,
-  KeeperState,
   UpstreamBillingProbeResult,
   UpstreamBillingProbeSettings,
   UpstreamBillingRatesResponse,
@@ -661,33 +659,6 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   return data
 }
 
-export async function getKeeperProjects(): Promise<string[]> {
-  const { data } = await apiClient.get<{ projects: string[] }>('/internal/keeper/projects')
-  return data.projects || []
-}
-
-export async function getKeeperState(): Promise<KeeperState> {
-  const { data } = await apiClient.get<KeeperState>('/internal/keeper/state')
-  return data || {}
-}
-
-export async function getKeeperSettings(): Promise<KeeperSettings> {
-  const { data } = await apiClient.get<KeeperSettings>('/internal/keeper/settings')
-  return data || {}
-}
-
-export async function saveKeeperSettings(payload: Record<string, unknown>): Promise<KeeperSettings> {
-  const { data } = await apiClient.post<KeeperSettings>('/internal/keeper/settings', payload)
-  return data || {}
-}
-
-export async function runKeeperTarget(target: string): Promise<{ status: string }> {
-  const { data } = await apiClient.post<{ status: string }>('/internal/keeper/run', null, {
-    params: { target }
-  })
-  return data
-}
-
 export interface SyncUpstreamModelsResult {
   models: string[]
   metadata?: Record<string, UpstreamModelMetadata>
@@ -864,30 +835,6 @@ export async function createOpenAICodexPAT(payload: OpenAICodexPATCreateRequest)
 export async function getAntigravityDefaultModelMapping(): Promise<Record<string, string>> {
   const { data } = await apiClient.get<Record<string, string>>(
     '/admin/accounts/antigravity/default-model-mapping'
-  )
-  return data
-}
-
-export interface AntigravityOfficialModelDescriptor {
-  id: string
-  display_name: string
-  model_enum: string
-  thinking_budget: number
-  created_at: string
-  is_reasoning: boolean
-}
-
-export interface AntigravityOfficialModelsResponse {
-  models: AntigravityOfficialModelDescriptor[]
-  mapping: Record<string, string>
-}
-
-/**
- * 获取 Antigravity 官方模型描述表。
- */
-export async function getAntigravityOfficialModels(): Promise<AntigravityOfficialModelsResponse> {
-  const { data } = await apiClient.get<AntigravityOfficialModelsResponse>(
-    '/admin/accounts/antigravity/official-models'
   )
   return data
 }
@@ -1268,11 +1215,6 @@ export const accountsAPI = {
   resetTempUnschedulable,
   setSchedulable,
   getAvailableModels,
-  getKeeperProjects,
-  getKeeperState,
-  getKeeperSettings,
-  saveKeeperSettings,
-  runKeeperTarget,
   syncUpstreamModels,
   syncUpstreamModelsPreview,
   generateAuthUrl,
@@ -1288,7 +1230,6 @@ export const accountsAPI = {
   importCodexSession,
   createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,
-  getAntigravityOfficialModels,
   batchDelete,
   batchClearError,
   batchRefresh,

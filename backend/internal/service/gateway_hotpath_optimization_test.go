@@ -654,36 +654,6 @@ func TestGetAvailableModels_ErrorAndGlobalListBranches(t *testing.T) {
 	require.Equal(t, int64(1), okRepo.listAllCalls.Load())
 }
 
-func TestGetAvailableModels_AntigravityAdvertisesExplicitWhitelistModels(t *testing.T) {
-	resetGatewayHotpathStatsForTest()
-
-	groupID := int64(12)
-	repo := &modelsListAccountRepoStub{
-		byGroup: map[int64][]Account{
-			groupID: {
-				{
-					ID:       1,
-					Platform: PlatformAntigravity,
-					Credentials: map[string]any{
-						"model_mapping": map[string]any{
-							"custom-upstream-a":          "custom-upstream-a",
-							"gemini-3.5-flash-extra-low": "custom-upstream-b",
-						},
-					},
-				},
-			},
-		},
-	}
-	svc := &GatewayService{
-		accountRepo:        repo,
-		modelsListCache:    gocache.New(time.Minute, time.Minute),
-		modelsListCacheTTL: time.Minute,
-	}
-
-	models := svc.GetAvailableModels(context.Background(), &groupID, PlatformAntigravity)
-	require.Equal(t, []string{"custom-upstream-a"}, models)
-}
-
 func TestGetAvailableModels_OpenAIPassthroughUsesDefaultFallback(t *testing.T) {
 	groupID := int64(10)
 
@@ -775,6 +745,7 @@ func TestGetAvailableModels_GlobalListPreservesMappedModelsWithOpenAIPassthrough
 		modelsListCache:    gocache.New(time.Minute, time.Minute),
 		modelsListCacheTTL: time.Minute,
 	}
+
 	require.Equal(t, []string{"claude-mapped"}, svc.GetAvailableModels(context.Background(), &groupID, ""))
 }
 

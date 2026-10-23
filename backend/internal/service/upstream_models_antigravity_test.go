@@ -239,8 +239,7 @@ func TestConfiguredUpstreamModelsForCapabilitySyncSkipsInjectedAntigravityPassth
 	got := configuredUpstreamModelsForCapabilitySync(account)
 	require.ElementsMatch(t, []string{"gemini-3.8-flash-high", "gemini-3.8-flash-tiered", "gemini-3.6-flash-low"}, got)
 
-	// 空映射走默认目录，其中的同名条目不是运行时补齐。本分支默认目录只含官方 8 模型，
-	// 因此用官方模型 gemini-3.5-flash-low 代替上游示例里的 gemini-3.8-flash-low。
+	// 空映射走默认目录，其中的同名条目不是运行时补齐。
 	empty := &Account{Platform: PlatformAntigravity, Credentials: map[string]any{}}
-	require.Contains(t, configuredUpstreamModelsForCapabilitySync(empty), "gemini-3.5-flash-low")
+	require.Contains(t, configuredUpstreamModelsForCapabilitySync(empty), "gemini-3.8-flash-low")
 }

@@ -203,10 +203,10 @@ func TestHandleUpstreamError_429_NonModelRateLimit(t *testing.T) {
 	result := svc.handleUpstreamError(context.Background(), "[test]", account, http.StatusTooManyRequests, http.Header{}, body, "claude-sonnet-4-5", 0, "", false)
 
 	// handleModelRateLimit 不会处理（因为没有 RATE_LIMIT_EXCEEDED），
-	// 但 429 兜底逻辑会使用 requestedModel 映射后的官方模型设置模型级限流
+	// 但 429 兜底逻辑会使用 requestedModel 设置模型级限流
 	require.Nil(t, result)
 	require.Len(t, repo.modelRateLimitCalls, 1)
-	require.Equal(t, "claude-sonnet-4-6", repo.modelRateLimitCalls[0].modelKey)
+	require.Equal(t, "claude-sonnet-4-5", repo.modelRateLimitCalls[0].modelKey)
 }
 
 // TestHandleUpstreamError_429_NonModelRateLimit_UsesMappedModelKey 测试 429 非模型限流场景
@@ -866,7 +866,7 @@ func TestSetAntigravityModelRateLimits_ImageDoesNotWriteFamilyScope(t *testing.T
 	require.Equal(t, "gemini-3.1-flash-image-preview", repo.modelRateLimitCalls[0].modelKey)
 }
 
-func TestSetAntigravityModelRateLimits_RejectsUnwhitelistedCustomChain(t *testing.T) {
+func TestSetAntigravityModelRateLimits_DoesNotDoubleMapCustomChain(t *testing.T) {
 	repo := &stubAntigravityAccountRepo{}
 	svc := &AntigravityGatewayService{}
 	account := &Account{
@@ -881,9 +881,7 @@ func TestSetAntigravityModelRateLimits_RejectsUnwhitelistedCustomChain(t *testin
 	}
 	resetAt := time.Now().Add(30 * time.Second)
 	canonicalModel := resolveFinalAntigravityModelKey(context.Background(), account, "custom-sonnet")
-	// 自定义合同要求最终发包目标出现在自映射白名单中；不能沿第二段映射
-	// 自动追踪，否则会把管理员未明确放行的模型带入发包和限流键。
-	require.Empty(t, canonicalModel)
+	require.Equal(t, "claude-sonnet-4-5", canonicalModel)
 
 	success := svc.setAntigravityModelRateLimits(
 		context.Background(),
@@ -896,8 +894,9 @@ func TestSetAntigravityModelRateLimits_RejectsUnwhitelistedCustomChain(t *testin
 		false,
 	)
 
-	require.False(t, success)
-	require.Empty(t, repo.modelRateLimitCalls)
+	require.True(t, success)
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.Equal(t, "claude-sonnet-4-5", repo.modelRateLimitCalls[0].modelKey)
 }
 
 func TestSetModelRateLimitAndClearSession_UsesUpstreamReportedModelMetadata(t *testing.T) {
@@ -1226,7 +1225,7 @@ func TestUpdateAccountModelRateLimitInCache_PreservesExistingExtra(t *testing.T)
 
 	// 验证已有数据被保留
 	require.Equal(t, "existing_value", account.Extra["existing_key"])
-	limits := requireType[map[string]any](t, account.Extra["model_rate_limits"])
+	limits := account.Extra["model_rate_limits"].(map[string]any)
 	require.NotNil(t, limits["gemini-3-flash"])
 	require.NotNil(t, limits["claude-sonnet-4-5"])
 }

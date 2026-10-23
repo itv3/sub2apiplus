@@ -826,6 +826,12 @@ type redirectRoundTripper struct {
 	transport http.RoundTripper
 }
 
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func (rt *redirectRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	originalURL := req.URL.String()
 	for prefix, target := range rt.redirects {
@@ -1894,7 +1900,7 @@ func TestClient_FetchAvailableModels_404Fallback_RealCall(t *testing.T) {
 func TestClient_HubUserAgentAndIDEVersionUseContextOverride(t *testing.T) {
 	withTestUserAgentVersionResolver(t)
 	ctx := context.WithValue(context.Background(), userAgentVersionTestContextKey{}, "3.4.5")
-	const expectedUserAgent = "antigravity/hub/3.4.5 darwin/arm64"
+	const expectedUserAgent = "antigravity/hub/3.4.5 windows/amd64"
 	for _, action := range []string{"generateContent", "streamGenerateContent"} {
 		req, err := NewAPIRequestWithURL(ctx, "https://upstream.example", action, "test-token", []byte(`{}`))
 		if err != nil {
