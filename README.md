@@ -172,13 +172,17 @@ OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态�
 
 管理员按分组启用第三方模型后，Codex 客户端的模型选择器可以直接选到它，并带上正确的上下文、推理档位与工具配置。「启用」只决定能否在 Codex 中选到并带正确配置；未启用的模型仍可通过显式指定模型名调用，权限、路由与协议均沿用现有规则。
 
-1. **管理入口**：Plus 增强页「Codex 三方模型启用」标签。先选分组，页面列出该分组可发现的候选：账号映射与别名、Composite 精确路由、上游同步得到的完整模型列表、基础目录已有的第三方条目。原生 GPT 只读展示，不受开关控制。新候选默认关闭；开启须先预览，服务端按路由、能力依据和最坏目录体积校验后整批原子保存，并发修改返回 409；关闭不依赖上游。页面读取会在后台刷新缺失或超过 6 小时的源列表，刷新复用现有账号上游同步，因此会同时更新账号的能力快照；官方 OpenAI 账号不可能承接第三方模型，不参与刷新。
-2. **客户端配置**：在现有 provider 下增加 `model_catalog_url = "https://<网关地址>/v1/models"`，并确认没有生效的 `model_catalog_json`。Codex 只有配置该项才会拉取在线目录；之后在启动时、每 4 分 30 秒、切换模型或打开选择器时刷新，缓存 300 秒，无需重启。
-3. **同名透传与能力档案**：第三方模型的目录 slug、显示名、客户端提交名默认与上游模型 ID 一致，例如 `kimi-k3`；显式别名按原规则处理。条目内容取自集中维护的能力档案（首批 `deepseek-flash`、`deepseek-v4-pro`、`kimi-k3`、`glm-5.3`），并按承接账号的能力快照只做收窄，按实际上游型号与协议匹配，不按站点域名区分。没有可靠能力依据的型号（例如尚无档案的 Grok 等平台型号）显示「待补能力」，不能开启。
-4. **原生 GPT 与分派**：原生 GPT 按真实路由判定，不凭名称前缀；只有官方 OpenAI 账号的分组，目录原样返回、逐字节不变。`/v1/models?client_version=...` 与 `/backend-api/codex/models` 对 OpenAI、Composite 分组走实时基础目录加第三方条目，对 Kimi、智谱、DeepSeek 等分组走空基础加第三方条目；Anthropic、Gemini 分组与不带 `client_version` 的普通模型列表不受影响。
-5. **客户端约束与降级**：目录响应必须不超过 1 MiB 并在 5 秒内返回，否则客户端会清空选择器，因此基础目录获取按整次请求限时 3 秒。第三方阶段出错或超限时，网关降级为只发布原生 GPT；纯第三方分组返回空目录，此时客户端须显式配置 `model`。只有基础目录本身不可得，或原生部分自身超限时才返回目录错误。
-6. **已验证状态**：真实客户端验收通过后可在页面「标记已验证」，记录与路由、协议、能力档案和接入站点绑定的指纹；任一项变化后自动回落为「配置可用」。
-7. **维护方式**：逻辑集中在 `codex_third_party_*` 新文件，配置与源快照存于 settings 表的 `plus_codex_model_visibility:<分组 ID>`、`plus_codex_catalog_source:<账号 ID>` 两类键，不新增数据库表或实体字段；既有文件只保留单行接点，清单见 §4.1，合并核对项见 §4.2。
+1. **管理入口与候选**：Plus 增强页「Codex 三方模型启用」标签。先选分组，页面列出该分组的候选：候选名单就是该分组默认启用的模型，即该分组 Key 调用普通 `/v1/models` 得到的名单（只含可调度账号、遵守分组白名单，并遵守 §1.4 的隐藏已映射模型规则：有映射的只显示映射后的对外名，没映射的显示原名，例如 `moonshotai/Kimi-K3`）。名单由通用网关 handler 生成并注入目录服务，管理页与运行时目录共用同一份；固定账号的 OpenAI 分组改取账号映射加默认清单（只查数据库）。原生 GPT 与没有账号承接、也没开启的条目不在列表里显示。新候选默认关闭；开启须先预览，服务端按路由、能力依据和最坏目录体积校验后整批原子保存，并发修改返回 409；关闭不依赖上游。已开启但不再属于分组默认模型名单的模型停发，页面保留一行以便关闭。
+2. **页面读取与体积预算**：页面读取只查数据库，不发任何上游请求，也不触发账号模型清单同步。体积预算只看可调度的官方 ChatGPT 账号（中转账号不参与）：读取时若没有可用的目录缓存，预算显示「开启时检查」，不显示为通过；预览与保存时对官方账号限时 3 秒并发拉取目录，失败的账号跳过，至少一个成功或分组没有官方账号即算完成，全部失败则判未完成并拦住开启。预览与保存使用同一种模式，输入指纹一致。分组没有官方账号时，预算按本地生成的基础目录计算。
+3. **客户端配置**：在现有 provider 下增加 `model_catalog_url = "https://<网关地址>/v1/models"`，并确认没有生效的 `model_catalog_json`。Codex 只有配置该项才会拉取在线目录；之后在启动时、每 4 分 30 秒、切换模型或打开选择器时刷新，缓存 300 秒，无需重启。目录拉取失败时 Codex 会清空整个模型列表，没有内置兜底。
+4. **同名透传与能力档案**：第三方模型的目录 slug、显示名、客户端提交名使用列表里的对外名（上游叫什么，Codex 里就显示什么），例如 `kimi-k3`；显式别名按原规则处理。条目内容取自集中维护的能力档案（`deepseek-flash`、`deepseek-v4-pro`、`kimi-k3`、`glm-5.3`），匹配时取上游型号最后一个 `/` 之后的部分并忽略大小写（与 §1.5 同一规则），不按站点域名区分；多个账号映射到不同原始上游名、规范化后命中同一档案不算冲突。`deepseek-flash` 与 `deepseek-v4-pro` 两个档案直接嵌入 DeepSeek 官方 Codex 教程的 models.json 条目，下发时只有 `slug` 与 `display_name` 取对外名，其余字段（包括官方指令模板、`apply_patch_tool_type=freeform`、`support_verbosity`）与官方逐键一致，官方没有的键不补；Kimi、GLM 仍是自写档案。条目再按承接账号的能力快照只做收窄（例如账号明确不含图片输入时移除图片能力）。没有可靠能力依据的型号（例如尚无档案的 Grok 等平台型号）显示「待补能力」，不能开启。
+5. **原生 GPT 与分派**：原生 GPT 按真实路由判定，不凭名称前缀；只有官方 OpenAI 账号的分组，目录原样返回、逐字节不变。`/v1/models?client_version=...` 与 `/backend-api/codex/models` 对 OpenAI 分组走实时基础目录加第三方条目，对 Kimi、智谱、DeepSeek 等分组走空基础加第三方条目；Anthropic、Gemini 分组与不带 `client_version` 的普通模型列表不受影响。
+6. **Composite 分组的在线目录**：基础目录只从可调度的官方 ChatGPT 账号拉取（沿用整次请求 3 秒的基础目录预算），中转 API Key 账号不拿来拉目录，因为中转站的 `/models` 可能是几千个各家模型的普通列表，客户端 5 秒预算内转换不完。没有可调度的官方账号，或官方账号拉取失败、超时，就按分组内 OpenAI 账号的模型映射在本地生成基础目录（遵守隐藏已映射模型和分组白名单，使用内置官方元数据），再叠加已开启的第三方条目，不再返回 500。
+7. **客户端约束与降级**：目录响应必须不超过 1 MiB 并在 5 秒内返回，否则客户端会清空选择器，因此基础目录获取按整次请求限时 3 秒。第三方阶段出错或超限时，网关降级为只发布原生 GPT；纯第三方分组返回空目录，此时客户端须显式配置 `model`。只有基础目录本身不可得（Composite 分组除外，它会改为本地生成），或原生部分自身超限时才返回目录错误。
+8. **运维注意（自定义工具）**：DeepSeek 官方条目要求 `freeform` 自定义工具（`apply_patch`），而有的中转（实测 HUB 类聚合中转）走 Responses 时不接受自定义工具，会返回 422，网关记为 502。遇到这种情况，把该中转账号的「Responses API 支持」设为「强制 Chat Completions」（网关会把自定义工具转成函数工具），或从该账号映射里去掉 DeepSeek 型号。
+9. **已验证状态**：真实客户端验收通过后可在页面「标记已验证」，记录与路由、协议、能力档案和接入站点绑定的指纹；任一项变化后自动回落为「配置可用」。
+10. **页面**：状态筛选只有「全部」「已开启」「未开启」「不可开启」四项，行内仍显示不能开启的原因。已删除「同步候选」按钮和「账号模型来源同步状态」区块（后端 `POST …/sync` 手动同步接口保留，页面不再调用）。目录体积预算正常时显示为工具栏里的小标签，悬停可看明细；超限、未完成、开启时检查三种状态才显示整块卡片。说明文字收为一行，客户端配置说明默认折叠；页面右上角的刷新同时刷新本标签。
+11. **维护方式**：逻辑集中在 `codex_third_party_*` 新文件，配置与源快照存于 settings 表的 `plus_codex_model_visibility:<分组 ID>`、`plus_codex_catalog_source:<账号 ID>` 两类键（源快照只由手动同步写入，不再决定候选），不新增数据库表或实体字段；既有文件只保留单行接点，清单见 §4.1，合并核对项见 §4.2。
 
 ### 1.7 其它优化
 
@@ -373,7 +377,7 @@ git diff --stat "$BASE..HEAD"
 | 服务层画像投影与 API Key mimic | `backend/internal/service/official_client_profile_registry.go` 和 `official_egress_profile.go` 中保留的 Codex OAuth 运行态投影、API Key mimic 与兼容读取面；这些投影不得成为 OAuth production active／rollback 的第二选择源。 |
 | OAuth 官方客户端出站仿真 | `backend/internal/officialegress/`（Persona Registry、Release Catalog/Bundle、Ingress Adapter、Dialect Compiler、Executor、Guard 和传输适配合同），`backend/internal/service/official_egress_1b_executor.go` 及 gateway／WebSocket 接入点，`backend/internal/service/official_egress_claude_state_redis.go`，以及 `backend/internal/repository/official_egress_guard.go` 等窄资源端口。 |
 | API Key mimic | `backend/internal/service/*apikey_mimic*`、OpenAI gateway/scheduler/WS 相关 service、`backend/internal/pkg/tlsfingerprint/`、`backend/internal/repository/http_upstream.go`、`backend/internal/handler/openai_gateway_handler.go`。`backend/internal/pkg/claude/constants.go` 若仍服务 API Key 产品语义，只能保留为该独立路径的兼容事实，不得取得 Claude OAuth Persona 的画像或版本选择权。 |
-| Codex 三方模型启用 | 新增：`backend/internal/service/codex_third_party_*.go`（契约、目录编排、发现、合并、发布判定、真实路由、能力档案及嵌入的 `codex_third_party_profiles.json`、管理服务）、`backend/internal/repository/codex_model_visibility_repo.go`、`backend/internal/handler/codex_third_party_catalog.go`、`backend/internal/handler/admin/codex_third_party_models_handler.go`、`backend/internal/server/routes/admin_codex_third_party_models.go`、`frontend/src/components/admin/CodexModelVisibilityPanel.vue`、`frontend/src/api/admin/codexThirdPartyModels.ts`、`frontend/src/i18n/locales/{zh,en}/admin/codexThirdPartyModels.ts`。既有接点：`backend/internal/server/routes/gateway.go` 目录分派、`backend/internal/handler/openai_codex_models_handler.go` 写出与基础目录获取、`GatewayHandler.CodexModels`、两个网关 handler 各一个依赖字段、`handler.go` 管理 handler 字段、三个 wire 文件与 `wire_gen.go`、`routes/admin.go` 路由挂载、两个 i18n 汇总文件、Plus 设置页标签。 |
+| Codex 三方模型启用 | 新增：`backend/internal/service/codex_third_party_*.go`（契约、目录编排、候选发现、合并、发布判定、真实路由、能力档案、管理服务，以及 Composite 分组基础目录 `codex_third_party_composite_base.go`）、嵌入数据 `codex_third_party_profiles.json` 与 DeepSeek 官方教程 models.json 原文 `codex_third_party_deepseek_official_models.json`、测试数据 `backend/internal/service/testdata/codex_deepseek_official_models.json`（官方原文的测试副本）、`backend/internal/repository/codex_model_visibility_repo.go`、`backend/internal/handler/codex_third_party_catalog.go`（目录接点、分组默认模型名单、Composite 目录入口）、`backend/internal/handler/admin/codex_third_party_models_handler.go`、`backend/internal/server/routes/admin_codex_third_party_models.go`、`frontend/src/components/admin/CodexModelVisibilityPanel.vue`、`frontend/src/api/admin/codexThirdPartyModels.ts`、`frontend/src/i18n/locales/{zh,en}/admin/codexThirdPartyModels.ts`。专项测试：`backend/internal/service/codex_third_party_*_test.go`（含 `codex_third_party_candidates_fix_test.go`、`codex_third_party_composite_base_test.go`、`codex_third_party_official_profiles_test.go`）、`backend/internal/handler/codex_third_party_*_test.go`（含 `codex_third_party_composite_test.go`、`codex_third_party_group_models_test.go`）、`frontend/src/components/admin/__tests__/CodexModelVisibilityPanel.spec.ts` 与 `frontend/src/views/admin/__tests__/ApiKeyMimicSettingsView.codexTab.spec.ts`。既有接点：`backend/internal/server/routes/gateway.go` 目录分派、`backend/internal/handler/openai_codex_models_handler.go`（调度循环之前 1 处 `writeCodexCompositeCatalog` 接点，加上写出与基础目录获取处的接点）、`GatewayHandler.CodexModels`、两个网关 handler 各一个依赖字段、`handler.go` 管理 handler 字段、三个 wire 文件与 `wire_gen.go`、`routes/admin.go` 路由挂载、两个 i18n 汇总文件、Plus 设置页标签（`ApiKeyMimicSettingsView.vue`）。 |
 | Plus UI | `frontend/src/views/admin/ApiKeyMimicSettingsView.vue`、账号 API、路由、侧边栏、i18n、账号创建/编辑和模型白名单相关组件。 |
 | 发布部署 | `README.md`、`deploy/.env.example`、`deploy/docker-compose.local.yml`、`.github/workflows/release.yml`、`backend/cmd/server/VERSION`。 |
 
@@ -407,12 +411,14 @@ git diff --stat "$BASE..HEAD"
 
 **Codex 三方模型启用**（判定标准见 §1.6）
 
-- **入口与分派**：复核 `routes/gateway.go` 中 `/v1/models?client_version=...` 与 `/backend-api/codex/models` 的平台分派、OpenAI 目录 handler 三条成功路径共用的写出调用与两处基础目录获取，以及 `GatewayHandler.CodexModels` 的接点。上游改动这些入口、拆分写出函数或新增目录成功路径时须同步接入，不能仅以 Git 合并无冲突作为验收依据。
+- **入口与分派**：复核 `routes/gateway.go` 中 `/v1/models?client_version=...` 与 `/backend-api/codex/models` 的平台分派、OpenAI 目录 handler 三条成功路径共用的写出调用与两处基础目录获取，以及 `GatewayHandler.CodexModels` 的接点。`openai_codex_models_handler.go` 在调度循环之前有 1 处 `writeCodexCompositeCatalog` 接点（Composite 分组不进入调度循环），调度失败分支原来的 Composite 空基础接点已撤掉；上游改动这些入口、拆分写出函数或新增目录成功路径时须同步接入，不能仅以 Git 合并无冲突作为验收依据。
 - **原生 GPT 保真**：只有官方 OpenAI 账号的分组目录逐字节不变的回归用例必须通过；上游新增的目录字段默认保留，不得用本地字段白名单丢弃。
 - **路由与协议复用**：原生判定与候选账号复用 Composite resolver、渠道映射、账号映射和协议选择；上游调整这些函数的签名或语义时，复核 `codex_third_party_routes.go` 的判定是否仍与实际调度一致。
+- **候选名单**：候选名单来自 `GatewayHandler.Models`（OpenAI、Composite 分组）与 `codexModelIDsForGroup`（其它兼容平台和固定账号的 OpenAI 分组），上游改动这两处的名单生成或隐藏已映射模型规则时，复核 `codexThirdPartyGroupModelIDs` 仍与普通 `/v1/models` 一致。
+- **Composite 本地生成**：上游若改动 `BuildGroupConfiguredCodexModelsManifest` 用到的辅助函数（`loadCodexGroupCatalogAccounts`、`openAIConfiguredCodexModelIDsForGroup`、`buildCodexModelsManifestForAccounts`、`mergeConfiguredCodexModelsManifest`）或其签名，须同步核对 `codex_third_party_composite_base.go` 的本地生成。
 - **客户端契约**：Codex 升级后用对应版本源码核对 ModelInfo 必填字段、1 MiB 上限、5 秒超时、失败清空与刷新周期，再调整能力档案与测试。
-- **能力档案**：厂商新增型号只改 `codex_third_party_profiles.json`；新协议或新字段语义先适配并补测试再开启，档案中的指令模板摘要随模板变化同步更新。
-- **回归与界面**：运行 `CodexThirdParty`、`CodexModelVisibility` 专项与现有 `Codex` 目录用例、Plus 面板测试；上线验收用真实桌面端核对选择器显示、流式、`apply_patch`、工具续接、推理档位与图片输入。
+- **能力档案**：厂商新增型号只改 `codex_third_party_profiles.json`；新协议或新字段语义先适配并补测试再开启，档案中的指令模板摘要随模板变化同步更新。DeepSeek 官方教程更新时，重新提取 models.json 替换 `codex_third_party_deepseek_official_models.json`（测试副本 `testdata/codex_deepseek_official_models.json` 同步替换），并更新两个档案里固定的指令模板摘要。
+- **回归与界面**：运行 `CodexThirdParty`、`CodexModels`、`CodexComposite` 专项与现有 `Codex` 目录用例、Plus 面板测试；上线验收用真实桌面端核对选择器显示、流式、`apply_patch`、工具续接、推理档位与图片输入。
 
 **Plus 界面与发布**
 
