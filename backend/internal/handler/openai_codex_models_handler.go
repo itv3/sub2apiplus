@@ -37,6 +37,10 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	// 不能把它传入按账号共享的上游缓存，否则同一账号在白名单切换后会
 	// 提前得到 304，导致客户端继续使用旧的未过滤目录。
 	clientETag := c.GetHeader("If-None-Match")
+	// 本功能接点：Composite 分组的基础目录只从官方 ChatGPT 账号拉取，拉不到则按账号映射本地生成，不进入调度循环。
+	if h.writeCodexCompositeCatalog(c, apiKey.Group, clientETag) {
+		return
+	}
 	// 固定账号分支：开启后只用选定账号拉取 manifest，不经过调度器；
 	// 全部不可用/全部失败时按 FallbackToScheduler 决定回退调度器或返回错误。
 	if apiKey.Group.Platform == service.PlatformOpenAI &&
@@ -109,10 +113,6 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			}
 			if lastUpstreamErr != nil {
 				h.errorResponse(c, infraerrors.Code(lastUpstreamErr), "upstream_error", infraerrors.Message(lastUpstreamErr))
-				return
-			}
-			// 本功能接点：Composite 分组没有任何 OpenAI 账号时，改走「空基础＋第三方」目录。
-			if h.writeCodexThirdPartyOnlyCatalog(c, apiKey.Group, clientETag) {
 				return
 			}
 			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "No available OpenAI accounts")

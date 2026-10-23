@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +32,10 @@ type cxtpAccountRepo struct {
 }
 
 func (r cxtpAccountRepo) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]service.Account, error) {
+	return append([]service.Account(nil), r.accounts...), nil
+}
+
+func (r cxtpAccountRepo) ListSchedulableByGroupID(context.Context, int64) ([]service.Account, error) {
 	return append([]service.Account(nil), r.accounts...), nil
 }
 
@@ -108,7 +111,7 @@ func TestCodexThirdPartyHandlerWithoutServiceKeepsOriginalBehavior(t *testing.T)
 	body, ok := (&GatewayHandler{}).applyCodexThirdParty(c, &service.Group{ID: 8}, []byte(cxtpBaseBody))
 	require.True(t, ok)
 	require.Equal(t, cxtpBaseBody, string(body))
-	require.False(t, h.writeCodexThirdPartyOnlyCatalog(c, &service.Group{ID: 8, Platform: service.PlatformComposite}, ""))
+	require.False(t, h.writeCodexCompositeCatalog(c, &service.Group{ID: 8, Platform: service.PlatformComposite}, ""), "服务未注入时 Composite 保持原流程")
 }
 
 func TestCodexThirdPartyHandlerFiltersAndPublishes(t *testing.T) {
@@ -160,19 +163,13 @@ func TestCodexThirdPartyCompositeWithoutOpenAIAccountsServesThirdPartyOnly(t *te
 	h := &OpenAIGatewayHandler{}
 	h.SetCodexThirdPartyCatalog(cxtpService(t, []string{"kimi-k3"}, cxtpKimiAccount()))
 	c, rec := cxtpContext("/v1/models?client_version=1.0.0")
-	require.True(t, h.writeCodexThirdPartyOnlyCatalog(c, group, ""))
+	require.True(t, h.writeCodexCompositeCatalog(c, group, ""))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, []string{"kimi-k3"}, cxtpSlugs(t, rec.Body.Bytes()))
 
-	// 分组里仍有 OpenAI 账号（只是暂不可调度）时不改写，沿用原有的「暂无可用账号」错误。
-	oauth := service.Account{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Credentials: map[string]any{}}
-	h.SetCodexThirdPartyCatalog(cxtpService(t, []string{"kimi-k3"}, oauth, cxtpKimiAccount()))
-	c, rec = cxtpContext("/v1/models?client_version=1.0.0")
-	require.False(t, h.writeCodexThirdPartyOnlyCatalog(c, group, ""))
-	require.Empty(t, strings.TrimSpace(rec.Body.String()))
-
 	// 非 Composite 分组不走该分支。
-	require.False(t, h.writeCodexThirdPartyOnlyCatalog(c, &service.Group{ID: 8, Platform: service.PlatformOpenAI}, ""))
+	c, _ = cxtpContext("/v1/models?client_version=1.0.0")
+	require.False(t, h.writeCodexCompositeCatalog(c, &service.Group{ID: 8, Platform: service.PlatformOpenAI}, ""))
 }
 
 // 基础目录获取时限按整次请求计时：同一请求内多次调用（调度循环换号重试）拿到同一截止时间，

@@ -360,6 +360,8 @@ type codexTPBase struct {
 	err       error
 	// folded 表示固定账号模式下该账号的目录已并入另一个账号的合并基础，自身不再单独计算。
 	folded bool
+	// local 表示这份基础目录是按账号映射本地生成的（Composite 分组没有可用官方账号），不属于任何账号。
+	local bool
 }
 
 // EvaluateCodexThirdPartyCatalog 实现契约里的评估接口：发现候选、判定状态、计算最坏体积预算。
@@ -391,6 +393,15 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 
 	offline := codexThirdPartyOfflineEvaluation(ctx)
 	bases := s.fetchBases(ctx, sess, offline)
+	if len(bases) == 0 && group.Platform == PlatformComposite {
+		// Composite 分组没有可用的官方账号：运行时的基础目录是按账号映射本地生成的，预算取同一份。
+		// 这一步只查数据库，页面读取的离线评估也能算，结果是完整的。
+		localBody, lerr := s.buildCompositeLocalBase(ctx, group)
+		if lerr != nil {
+			return eval, lerr
+		}
+		bases = []codexTPBase{{body: localBody, local: true}}
+	}
 	baseSlugs := map[string]struct{}{}
 	var baseOrder []string
 	parsed := make([]*codexTPParsedBase, 0, len(bases))
@@ -474,7 +485,9 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 	incomplete := false
 	var reasons []string
 	for _, base := range bases {
-		budget.BaseAccountIDs = append(budget.BaseAccountIDs, base.accountID)
+		if !base.local {
+			budget.BaseAccountIDs = append(budget.BaseAccountIDs, base.accountID)
+		}
 	}
 	sort.Slice(budget.BaseAccountIDs, func(i, j int) bool { return budget.BaseAccountIDs[i] < budget.BaseAccountIDs[j] })
 	compileOne := func(env *codexCatalogEnvelope, entries []codexCatalogEntry) error {

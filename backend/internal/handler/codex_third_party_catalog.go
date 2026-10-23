@@ -150,23 +150,50 @@ func (h *OpenAIGatewayHandler) writeCodexModelsResponseWithPolicy(c *gin.Context
 	writeCodexModelsResponseForClient(c, manifest, clientETag)
 }
 
-// writeCodexThirdPartyOnlyCatalog 处理 Composite 分组没有任何 OpenAI 账号的情形：
-// 以空基础加已开启的第三方模型生成目录。分组里仍有 OpenAI 账号（只是暂时不可调度）时返回 false，
-// 保持原有的「暂无可用账号」错误，避免把原生 GPT 从客户端选择器里清空。
-func (h *OpenAIGatewayHandler) writeCodexThirdPartyOnlyCatalog(c *gin.Context, group *service.Group, clientETag string) bool {
+// writeCodexCompositeCatalog 处理 Composite 分组的在线目录，返回 true 表示已写出响应。
+//
+// Composite 分组不进调度循环：调度器可能选中中转 API Key 账号，而中转站的 /models 是几千个各家模型的
+// 普通列表，客户端 5 秒预算内转换不完，只会得到 500。这里基础目录只从可调度的官方 ChatGPT 账号拉取
+// （共用整次请求的基础目录时限），没有官方账号或拉取失败就按账号映射本地生成，
+// 之后与其它分组一样经过第三方策略（writeCodexModelsResponseWithPolicy）写出。
+// 服务未注入或不是 Composite 分组时返回 false，保持原有流程。
+func (h *OpenAIGatewayHandler) writeCodexCompositeCatalog(c *gin.Context, group *service.Group, clientETag string) bool {
 	if h == nil || h.codexThirdParty == nil || group == nil || group.Platform != service.PlatformComposite {
 		return false
 	}
-	hasBase, err := h.codexThirdParty.HasOpenAIBaseSource(c.Request.Context(), group)
-	if err != nil || hasBase {
-		return false
+	clientVersion := c.Query("client_version")
+	fetch := func(ctx context.Context, account *service.Account) (*service.OpenAIModelsResponse, error) {
+		if h.gatewayService == nil {
+			return nil, errors.New("openai gateway service unavailable")
+		}
+		// 与调度分支的成功路径同序：拉取、补全元数据、应用映射、合并分组配置的模型。
+		manifest, err := h.gatewayService.FetchCodexModelsManifest(ctx, account, clientVersion, "", c)
+		if err != nil {
+			return nil, err
+		}
+		if err := h.gatewayService.CompleteAPIKeyCodexModelsManifestForClient(manifest, account); err != nil {
+			return nil, err
+		}
+		if err := service.ApplyPinnedCodexModelsMapping(manifest, account, group); err != nil {
+			return nil, err
+		}
+		if err := h.gatewayService.MergeGroupConfiguredCodexModels(ctx, group, manifest, ""); err != nil {
+			return nil, err
+		}
+		return manifest, nil
 	}
-	body, err := h.codexThirdParty.BuildThirdPartyOnly(c.Request.Context(), group)
+	manifest, account, err := h.codexThirdParty.BuildCompositeBaseManifest(c.Request.Context(), h.codexBaseFetchContext(c), group, fetch)
 	if err != nil {
+		if c.Request.Context().Err() != nil {
+			return true
+		}
 		h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", infraerrors.Message(err))
 		return true
 	}
-	writeCodexModelsResponseForClient(c, &service.OpenAIModelsResponse{Body: body}, clientETag)
+	if account != nil {
+		setOpsSelectedAccount(c, account.ID, account.Platform)
+	}
+	h.writeCodexModelsResponseWithPolicy(c, group, manifest, clientETag)
 	return true
 }
 

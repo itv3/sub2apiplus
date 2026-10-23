@@ -46,6 +46,10 @@ type cxtpRepo struct {
 	AccountRepository
 	accounts []Account
 	err      error
+	// paused 是暂停调度的账号 ID：真实仓库的调度查询和持久可用查询都不会返回它们。
+	paused map[int64]bool
+	// listCalls 记录 ListSchedulableByGroupID 的调用次数。
+	listCalls int
 }
 
 func (r *cxtpRepo) ListModelAvailabilityCandidates(_ context.Context, _ *int64, platforms []string, _ bool) ([]Account, error) {
@@ -58,7 +62,21 @@ func (r *cxtpRepo) ListModelAvailabilityCandidates(_ context.Context, _ *int64, 
 	}
 	var out []Account
 	for _, account := range r.accounts {
-		if _, ok := allowed[account.Platform]; ok {
+		if _, ok := allowed[account.Platform]; ok && !r.paused[account.ID] {
+			out = append(out, account)
+		}
+	}
+	return out, nil
+}
+
+func (r *cxtpRepo) ListSchedulableByGroupID(_ context.Context, _ int64) ([]Account, error) {
+	r.listCalls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	var out []Account
+	for _, account := range r.accounts {
+		if !r.paused[account.ID] {
 			out = append(out, account)
 		}
 	}
