@@ -1005,6 +1005,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOllamaCloudUsageService,
 	ProvideOpenCodeGoUsageService,
 	ProvideSettingService,
+	NewCodexThirdPartyCatalogService, // Codex 三方模型启用：目录编排与评估
 	NewDataManagementService,
 	ProvideBackupService,
 	ProvideOpsSystemLogSink,
