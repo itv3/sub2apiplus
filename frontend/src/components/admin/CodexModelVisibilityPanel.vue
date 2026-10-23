@@ -580,7 +580,15 @@ const anySourceRefreshing = computed(() => !!state.value?.sources.some((source) 
 const searchText = ref('')
 const statusFilter = ref('all')
 
-const rows = computed<CodexThirdPartyCandidate[]>(() => state.value?.evaluation.candidates ?? [])
+// 表格只展示可管理的第三方模型：
+//   - 原生 GPT 不受开关控制，不展示（体积预算里仍计入原生数量）；
+//   - 没有任何账号承接、且未开启过的条目（例如只剩 Composite 路由、承接账号已暂停）不展示；
+//   - 已开启但失去承接的条目仍展示，方便管理员关闭。
+const rows = computed<CodexThirdPartyCandidate[]>(() =>
+  (state.value?.evaluation.candidates ?? []).filter(
+    (row) => !row.native && !(row.status === 'unavailable' && !row.enabled)
+  )
+)
 
 const statusFilterOptions = computed(() => [
   { value: 'all', label: t('admin.codexThirdPartyModels.filters.all') },

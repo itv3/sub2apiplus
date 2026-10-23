@@ -207,9 +207,25 @@ describe('CodexModelVisibilityPanel 分组与表格', () => {
   it('未选分组时不读取配置，选择后读取并展示候选', async () => {
     const wrapper = await mountPanel()
     expect(mocks.getGroupState).toHaveBeenCalledWith(GROUP_ID)
-    for (const slug of ['gpt-5.5', 'kimi-k3', 'deepseek-flash', 'glm-5.3']) {
+    for (const slug of ['kimi-k3', 'deepseek-flash', 'glm-5.3']) {
       expect(wrapper.find(`[data-testid="codex-row-${slug}"]`).exists()).toBe(true)
     }
+  })
+
+  it('不展示原生 GPT，也不展示没有账号承接且未开启的条目；已开启但失去承接的仍展示', async () => {
+    const wrapper = await mountPanel(
+      groupState({
+        candidates: [
+          ...defaultCandidates(),
+          candidate({ slug: 'glm-5.2', can_enable: false, status: 'unavailable', reasons: ['分组内没有账号承接该模型'] }),
+          candidate({ slug: 'old-model', enabled: true, can_enable: false, status: 'unavailable', reasons: ['该模型已不在分组默认启用的模型列表中'] })
+        ]
+      })
+    )
+    expect(wrapper.find('[data-testid="codex-row-gpt-5.5"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-row-glm-5.2"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-row-old-model"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="codex-budget-native"]').text()).toBe('1')
   })
 
   it('展示实际目标、能力摘要和状态徽标', async () => {
@@ -225,16 +241,6 @@ describe('CodexModelVisibilityPanel 分组与表格', () => {
     expect(row).toContain('apply_patch: freeform')
     expect(wrapper.get('[data-testid="codex-status-kimi-k3"]').text()).toBe('admin.codexThirdPartyModels.status.configurable')
     expect(wrapper.get('[data-testid="codex-status-glm-5.3"]').text()).toBe('admin.codexThirdPartyModels.status.needs_capability')
-    expect(wrapper.get('[data-testid="codex-status-gpt-5.5"]').text()).toBe('admin.codexThirdPartyModels.status.native')
-  })
-
-  it('原生 GPT 行只读：开关禁用、没有勾选框', async () => {
-    const wrapper = await mountPanel()
-    expect(sw(wrapper, 'gpt-5.5').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('[data-testid="codex-select-gpt-5.5"]').exists()).toBe(false)
-    await sw(wrapper, 'gpt-5.5').trigger('click')
-    expect(mocks.previewChanges).not.toHaveBeenCalled()
-    expect(mocks.saveChanges).not.toHaveBeenCalled()
   })
 
   it('不能开启的行：开关禁用并显示原因', async () => {
