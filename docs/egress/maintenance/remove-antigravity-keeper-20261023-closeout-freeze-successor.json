@@ -1,0 +1,286 @@
+{
+  "base_commit": "c70684d3a6f3811d77fc87b71ca52106a2f4f62c",
+  "changed_path_count": 24,
+  "current_commit": "f3630a0f99a295335d6dca4f44964396a4351309",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6778,
+  "frozen_path_count": 2279,
+  "identity_sha256": "ff274e42a484279f6d371cbab24123021f7b0d0d0ba6c8f73c220bf27293629f",
+  "issued_at_utc": "2026-10-23T07:13:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-remove-antigravity-keeper-closeout-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/source_transition_digest_acceptance_test.go",
+      "predecessor_sha256s": [
+        "9b055efaaeb4adc6c9436b3320ad93fc80e282a6bc9254e579d931a24ceb6650"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/officialegress/source_transition_digest_acceptance_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-bootstrap-source-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-scanner-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "66665aabf1f2cd17cf51fd5109df75e85ddc0f1eb63adf9c62e2f4315a9d485a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/upstream_v0180_source_transition_test.go",
+      "predecessor_sha256s": [
+        "06269504739368bad831dd1b349a57a66edd63c7e0138d1f82fe648cf8213d99"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/officialegress/upstream_v0180_source_transition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e5742c495234101b30a5ca0be35edf3779c7de6dfe36f6c882df8760db712160"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/upstream_v023_source_transition_test.go",
+      "predecessor_sha256s": [
+        "e4c0526bbc892b57e6a35e6b545e425cdb8d4cf5d9ddf14a12a077c61662148d"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/officialegress/upstream_v023_source_transition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-post-bootstrap-source-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "00baf0e28a4a13f8a437d2ff1399b88e2afb04412f64eae9ffd08c7f8358ae2c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/client_test.go",
+      "predecessor_sha256s": [
+        "a792cdd8de5853120a45e8bc28511119826f23f0e9d60749e192275856d1d893"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/pkg/antigravity/client_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3551969024a323c04c8c72b0a1d559c2fc92aefb74e13b332a1689963c62c66c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/oauth_test.go",
+      "predecessor_sha256s": [
+        "f7d213b8caab92fc512037222165cc433627fa0d75781b16a8e8c21cb54065c5"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/pkg/antigravity/oauth_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1ca1b2651a73eebc85193ef40bbe6b72ccd7a6eff5dcb2c51505e396e60db2f1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256s": [
+        "6b986c12be755d1bba0bccc59deacdb0a0f2f0dfdebdabf07e4fe45619a04a50"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/account_test_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8457076c78f3a838b53abf31d41a85ec9c34028253e8b1e8d17f2163d082521d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_cn_adaptive.go",
+      "predecessor_sha256s": [
+        "490c51bc23dc94a4f0b85577a38f7875bb3f685804af65ff95cc1adcf194c824"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/account_test_service_cn_adaptive.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "aa932b6de4234326bfb37b2d99049f46b91207da990f536a96a1cdf75e2e9f3f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_openai_test.go",
+      "predecessor_sha256s": [
+        "70c75c92b11b380fc39fe0168a75bab15b7d20c023d84dd28613b16c0403bad1"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/account_test_service_openai_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "94be3a4af1e7a1ff7929fe1ddc1f227d137737cd979e993121efcda338820422"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_usage_service.go",
+      "predecessor_sha256s": [
+        "7d8b4819fd2c4d5dfad007c34700f68cfcbeba37121f80fe210f7d33eb723099"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/account_usage_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "86d829e8e8f5a21fe9689ea2bb2093984b598de89d6fb290779b4fa768c668d2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_rate_limit_test.go",
+      "predecessor_sha256s": [
+        "60c2570d714197170e9391bd3ed6ab7fbd8fcea723faab43ed4bb4a772a28dbf"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/antigravity_rate_limit_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-merge-test-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "65a48bcf0e9f93eb80d6f48c1009d3cd56b60a0e6d30cb42783e26ec09e5e3ee"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/source_transition_digest_acceptance_test.go",
+      "predecessor_sha256s": [
+        "168d530a3afd575e35fe23723eeb0beb1855a6a88d0ae413aba9fb4086dff429"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/source_transition_digest_acceptance_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-bootstrap-source-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-scanner-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "50fb33e01b2758d2df5ddaa9da3e140d46a6b44264e12eac9f15af22c167ada3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/upstream_v0180_source_transition_test.go",
+      "predecessor_sha256s": [
+        "6fa935ae902cb80634ad032072a8d404ff6766915b466822e5835148c728f01e"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/upstream_v0180_source_transition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1c3ae8c4b2ad3c099813ce713a9b6e4ff99244575870a85f766a75c7797d40b8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/upstream_v023_source_transition_test.go",
+      "predecessor_sha256s": [
+        "af7d5d5d3f48bb8ab35f1cf16da028c39406a3a06cee22ffc5c5e1e907691857"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=backend/internal/service/upstream_v023_source_transition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-post-bootstrap-source-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "709cf76655a73a0cf252dc6be3bf571dc1e010a63c43b32feb4688f06a2d4343"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/removal-receipts.json",
+      "predecessor_sha256s": [
+        "dd3baf4dfb71386300bf5f2e32d0cb5171a73504a4b179f5a87fe94d5e2ab39f"
+      ],
+      "reason": "精确承接保活预算残留清理、上游测试规范调整和严格源码删除证明校验；补齐终态收据图，保留历史收据与运行时默认逻辑。 path=docs/egress/maintenance/removal-receipts.json",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5bd076a0fa9420f31033826d662b73bbfc78596ef8b80c691c25c538970e2e23"
+    }
+  ],
+  "unregistered_path_count": 10,
+  "unregistered_paths": [
+    "backend/internal/officialegress/upstream_source_transition_generic_test.go",
+    "backend/internal/officialegress/upstream_v023_post_bootstrap_source_successor_test.go",
+    "backend/internal/service/antigravity_credits_overages_test.go",
+    "backend/internal/service/official_egress_codex_direct_body_test.go",
+    "backend/internal/service/upstream_source_transition_generic_test.go",
+    "backend/internal/service/upstream_v023_post_bootstrap_source_successor_test.go",
+    "backend/internal/testsupport/freezeproof/deletion.go",
+    "backend/internal/testsupport/freezeproof/deletion_test.go",
+    "tools/upstream_merge/freeze.py",
+    "tools/upstream_merge/tests/test_freeze.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
