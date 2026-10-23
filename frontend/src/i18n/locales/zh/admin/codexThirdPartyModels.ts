@@ -18,8 +18,6 @@ export default {
     },
     actions: {
       refresh: '刷新',
-      syncSources: '同步候选',
-      syncing: '同步中…',
       enableSelected: '批量开启（{count}）',
       disableSelected: '批量关闭（{count}）',
       markVerified: '标记已验证',
@@ -30,6 +28,8 @@ export default {
       title: '目录体积预算',
       incomplete: '未完成检查',
       incompleteHint: '预算检查尚未完成，不能确认开启后目录不会超限。',
+      deferred: '开启时检查',
+      deferredHint: '页面读取不向官方账号请求目录，目录体积预算在开启（预览与保存）时检查；检查通过前不会开启任何模型。',
       overLimit: '已超限',
       withinLimit: '未超限',
       nativeCount: '原生 GPT 数量',
@@ -38,28 +38,13 @@ export default {
       remaining: '剩余空间',
       limit: '客户端目录上限：{limit}'
     },
-    sources: {
-      title: '账号模型来源同步状态',
-      empty: '该分组下没有可用账号。',
-      modelCount: '{count} 个模型',
-      syncedAt: '同步于 {time}',
-      stale: '已过期，等待刷新',
-      configChanged: '账号配置已变更，需要重新同步',
-      status: {
-        missing: '未同步',
-        complete: '已同步',
-        empty: '上游返回空列表',
-        failed: '同步失败',
-        refreshing: '刷新中',
-        official_skipped: '官方账号，无需同步'
-      }
-    },
     filters: {
       searchPlaceholder: '搜索模型名称、上游型号或平台',
       status: '状态筛选',
-      all: '全部状态',
+      all: '全部',
       enabled: '已开启',
-      disabled: '未开启'
+      disabled: '未开启',
+      blocked: '不可开启'
     },
     columns: {
       selectAll: '选择当前筛选结果中的全部模型',
@@ -71,7 +56,7 @@ export default {
       toggle: '在 Codex 中显示'
     },
     table: {
-      empty: '没有符合条件的模型。可以点击“同步候选”从账号上游读取最新模型清单。',
+      empty: '没有符合条件的模型。',
       enabledNotPublished: '已开启，但当前未发布',
       cannotEnableFallback: '当前不满足开启条件',
       blockedFallback: '已开启，但当前被阻塞，未进入目录'
@@ -116,10 +101,6 @@ export default {
       outdated: '验收记录已过期，需要重新验证',
       success: '已标记为已验证',
       failed: '标记已验证失败'
-    },
-    sync: {
-      started: '已开始后台同步，完成后会自动刷新结果',
-      failed: '同步候选失败'
     },
     reject: {
       title: '所选模型无法全部开启，整批均未保存',

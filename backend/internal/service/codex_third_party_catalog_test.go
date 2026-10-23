@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,6 +72,19 @@ type cxtpFetcher struct {
 	merge func([]byte) []byte
 	// listed 模拟账号能力快照里上游清单已列出的型号。
 	listed map[int64]map[string]bool
+
+	// fetched 记录 FetchBase 被调用的账号 ID（并发安全），用来证明哪些账号发起过上游获取。
+	mu      sync.Mutex
+	fetched []int64
+}
+
+// fetchedIDs 返回已排序的 FetchBase 调用账号。
+func (f *cxtpFetcher) fetchedIDs() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]int64(nil), f.fetched...)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func (f *cxtpFetcher) MergeGroupModels(_ context.Context, _ *Group, body []byte) ([]byte, error) {
@@ -84,6 +99,9 @@ func (f *cxtpFetcher) UpstreamListsModel(account *Account, model string) bool {
 }
 
 func (f *cxtpFetcher) FetchBase(_ context.Context, _ *Group, account *Account, _ string) ([]byte, error) {
+	f.mu.Lock()
+	f.fetched = append(f.fetched, account.ID)
+	f.mu.Unlock()
 	if err := f.errs[account.ID]; err != nil {
 		return nil, err
 	}
@@ -713,7 +731,7 @@ func TestCodexThirdPartyEvaluatorCandidatesAndBudget(t *testing.T) {
 	require.Positive(t, eval.Budget.WorstCaseBytes)
 	require.Equal(t, CodexCatalogMaxBytes-eval.Budget.WorstCaseBytes, eval.Budget.RemainingBytes)
 	require.Equal(t, 1, eval.Budget.EnabledThirdPartyCount)
-	require.Equal(t, []int64{1, 4}, eval.Budget.BaseAccountIDs)
+	require.Equal(t, []int64{1}, eval.Budget.BaseAccountIDs, "只有官方账号参与预算，中转账号不取基础目录")
 	require.NotEmpty(t, eval.InputFingerprint)
 }
 

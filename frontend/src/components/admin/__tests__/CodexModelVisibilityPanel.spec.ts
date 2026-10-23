@@ -17,7 +17,6 @@ const mocks = vi.hoisted(() => ({
   previewChanges: vi.fn(),
   saveChanges: vi.fn(),
   markVerified: vi.fn(),
-  syncSources: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   showWarning: vi.fn()
@@ -28,8 +27,7 @@ vi.mock('@/api/admin/codexThirdPartyModels', () => ({
   getGroupState: mocks.getGroupState,
   previewChanges: mocks.previewChanges,
   saveChanges: mocks.saveChanges,
-  markVerified: mocks.markVerified,
-  syncSources: mocks.syncSources
+  markVerified: mocks.markVerified
 }))
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -324,6 +322,19 @@ describe('CodexModelVisibilityPanel 目录预算', () => {
     expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(false)
   })
 
+  it('页面读取时预算留到开启时检查：显示“开启时检查”，不显示通过，也不显示为未完成检查', async () => {
+    const wrapper = await mountPanel(groupState({
+      budget: { complete: false, deferred: true, worst_case_bytes: 0, remaining_bytes: 0, native_count: 0, reason: '页面读取不请求官方账号目录，目录体积在开启时检查' }
+    }))
+    expect(wrapper.get('[data-testid="codex-budget-deferred"]').text()).toBe('admin.codexThirdPartyModels.budget.deferred')
+    expect(wrapper.get('[data-testid="codex-budget-deferred-hint"]').text()).toBe('admin.codexThirdPartyModels.budget.deferredHint')
+    expect(wrapper.find('[data-testid="codex-budget-incomplete"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-budget-within"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(false)
+    // 没有真实数据时不展示一排 0 字节。
+    expect(wrapper.find('[data-testid="codex-budget-worst"]').exists()).toBe(false)
+  })
+
   it('最坏字节数超过上限时显示超限', async () => {
     const wrapper = await mountPanel(groupState({ budget: { worst_case_bytes: 1048577, remaining_bytes: -1 } }))
     expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(true)
@@ -521,22 +532,47 @@ describe('CodexModelVisibilityPanel 搜索筛选与批量', () => {
     expect(wrapper.find('[data-testid="codex-empty-rows"]').exists()).toBe(true)
   })
 
+  it('状态筛选只有四项：全部、已开启、未开启、不可开启', async () => {
+    const wrapper = await mountPanel()
+    const options = wrapper.get('[data-testid="codex-status-filter"]').findAll('option')
+    expect(options.map((option) => option.attributes('value'))).toEqual(['all', 'enabled', 'disabled', 'blocked'])
+    expect(options.map((option) => option.text())).toEqual([
+      'admin.codexThirdPartyModels.filters.all',
+      'admin.codexThirdPartyModels.filters.enabled',
+      'admin.codexThirdPartyModels.filters.disabled',
+      'admin.codexThirdPartyModels.filters.blocked'
+    ])
+  })
+
   it('按状态筛选', async () => {
     const wrapper = await mountPanel(groupState({
-      candidates: defaultCandidates().map((item) => (item.slug === 'deepseek-flash' ? { ...item, enabled: true } : item))
+      candidates: [
+        ...defaultCandidates().map((item) => (item.slug === 'deepseek-flash' ? { ...item, enabled: true } : item)),
+        candidate({ slug: 'conflict-model', can_enable: false, status: 'conflict', reasons: ['归属冲突'] }),
+        // 已开启但被阻塞：仍属于“已开启”，不属于“不可开启”以外的……can_enable=false 时同时算不可开启。
+        candidate({ slug: 'open-blocked', enabled: true, can_enable: false, status: 'unavailable', reasons: ['失去承接'] }),
+        candidate({ slug: 'over-model', can_enable: false, status: 'over_budget' })
+      ]
     }))
-    await wrapper.get('[data-testid="codex-status-filter"]').setValue('needs_capability')
+    await wrapper.get('[data-testid="codex-status-filter"]').setValue('blocked')
     expect(wrapper.findAll('tbody tr[data-testid^="codex-row-"]').map((row) => row.attributes('data-testid')))
-      .toEqual(['codex-row-glm-5.3'])
+      .toEqual(['codex-row-glm-5.3', 'codex-row-conflict-model', 'codex-row-open-blocked', 'codex-row-over-model'])
+    // 行内仍显示原因。
+    expect(wrapper.get('[data-testid="codex-reason-glm-5.3"]').text()).toContain('缺少上下文窗口依据')
+    expect(wrapper.get('[data-testid="codex-reason-conflict-model"]').text()).toContain('归属冲突')
 
     await wrapper.get('[data-testid="codex-status-filter"]').setValue('enabled')
     expect(wrapper.findAll('tbody tr[data-testid^="codex-row-"]').map((row) => row.attributes('data-testid')))
-      .toEqual(['codex-row-deepseek-flash'])
+      .toEqual(['codex-row-deepseek-flash', 'codex-row-open-blocked'])
 
     await wrapper.get('[data-testid="codex-status-filter"]').setValue('disabled')
     expect(wrapper.find('[data-testid="codex-row-gpt-5.5"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="codex-row-kimi-k3"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="codex-row-deepseek-flash"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="codex-status-filter"]').setValue('all')
+    expect(wrapper.find('[data-testid="codex-row-kimi-k3"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="codex-row-glm-5.3"]').exists()).toBe(true)
   })
 
   it('批量开启：一次预览、一次保存，整批原子', async () => {
@@ -609,112 +645,31 @@ describe('CodexModelVisibilityPanel 搜索筛选与批量', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 源同步
+// 不再展示源同步：没有“同步候选”按钮，没有来源同步状态区块，也不轮询
 // ---------------------------------------------------------------------------
 
-describe('CodexModelVisibilityPanel 源同步', () => {
-  it('展示各账号的源同步状态与最近错误', async () => {
+describe('CodexModelVisibilityPanel 不再有源同步', () => {
+  it('没有“同步候选”按钮，也没有账号模型来源同步状态区块', async () => {
     const wrapper = await mountPanel(groupState({
-      sources: [
-        source({ account_id: 101, account_name: 'kimi-主账号', synced_at: '2026-10-23T01:00:00Z', model_count: 12 }),
-        source({ account_id: 102, account_name: '智谱账号', status: 'failed', stale: true, last_error: 'Upstream model list request failed with HTTP 502', model_count: 5 }),
-        source({ account_id: 103, account_name: '新账号', status: 'missing', stale: true, fingerprint_matches: false, model_count: 0 }),
-        source({ account_id: 104, account_name: '刷新中账号', status: 'missing', stale: true, refreshing: true, model_count: 0 })
-      ]
+      sources: [source({ account_id: 101, account_name: 'kimi-主账号' }), source({ account_id: 104, refreshing: true })]
     }))
-    expect(wrapper.get('[data-testid="codex-source-101"]').text()).toContain('admin.codexThirdPartyModels.sources.status.complete')
-    expect(wrapper.get('[data-testid="codex-source-101"]').text()).toContain('"count":12')
-    expect(wrapper.get('[data-testid="codex-source-102"]').text()).toContain('admin.codexThirdPartyModels.sources.status.failed')
-    expect(wrapper.get('[data-testid="codex-source-error-102"]').text()).toBe('Upstream model list request failed with HTTP 502')
-    expect(wrapper.get('[data-testid="codex-source-103"]').text()).toContain('admin.codexThirdPartyModels.sources.status.missing')
-    expect(wrapper.get('[data-testid="codex-source-104"]').text()).toContain('admin.codexThirdPartyModels.sources.status.refreshing')
+    expect(wrapper.find('[data-testid="codex-sync-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-sources"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-source-101"]').exists()).toBe(false)
   })
 
-  it('官方账号显示“无需同步”，不计为过期、不提示配置变更', async () => {
-    const wrapper = await mountPanel(groupState({
-      sources: [
-        source({
-          account_id: 201,
-          account_name: '官方 OAuth',
-          platform: 'openai',
-          status: 'official_skipped',
-          stale: false,
-          fingerprint_matches: false,
-          model_count: 0
-        }),
-        source({ account_id: 202, account_name: '中转站', status: 'missing', stale: true, model_count: 0 })
-      ]
-    }))
-    const official = wrapper.get('[data-testid="codex-source-201"]').text()
-    expect(official).toContain('admin.codexThirdPartyModels.sources.status.official_skipped')
-    expect(official).not.toContain('admin.codexThirdPartyModels.sources.stale')
-    expect(official).not.toContain('admin.codexThirdPartyModels.sources.configChanged')
-    expect(official).not.toContain('admin.codexThirdPartyModels.sources.status.missing')
-    expect(wrapper.find('[data-testid="codex-source-changed-201"]').exists()).toBe(false)
-    // 其它账号不受影响。
-    expect(wrapper.get('[data-testid="codex-source-202"]').text()).toContain('admin.codexThirdPartyModels.sources.status.missing')
-  })
-
-  it('只有曾经成功同步过、之后账号配置又变了的源才提示“配置已变更”', async () => {
-    const wrapper = await mountPanel(groupState({
-      sources: [
-        source({ account_id: 101, synced_at: '2026-10-23T01:00:00Z', fingerprint_matches: false }),
-        source({ account_id: 102, synced_at: '2026-10-23T01:00:00Z', fingerprint_matches: true }),
-        // 从未成功过的失败快照没有同步时间，也谈不上“配置变更”。
-        source({ account_id: 103, status: 'failed', stale: true, fingerprint_matches: false, model_count: 0, last_error: '同步失败' })
-      ]
-    }))
-    expect(wrapper.find('[data-testid="codex-source-changed-101"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="codex-source-changed-102"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="codex-source-changed-103"]').exists()).toBe(false)
-  })
-
-  it('点击“同步候选”触发后台同步并更新来源状态', async () => {
-    const wrapper = await mountPanel(groupState({ sources: [source({ account_id: 101 })] }))
-    mocks.syncSources.mockResolvedValue({ sources: [source({ account_id: 101, refreshing: true })] })
-
-    await wrapper.get('[data-testid="codex-sync-button"]').trigger('click')
-    await flushPromises()
-
-    expect(mocks.syncSources).toHaveBeenCalledWith(GROUP_ID)
-    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexThirdPartyModels.sync.started')
-    expect(wrapper.get('[data-testid="codex-source-101"]').text()).toContain('admin.codexThirdPartyModels.sources.status.refreshing')
-    expect(wrapper.get('[data-testid="codex-sync-button"]').text()).toContain('admin.codexThirdPartyModels.actions.syncing')
-  })
-
-  it('同步失败时回显原因', async () => {
-    const wrapper = await mountPanel()
-    mocks.syncSources.mockRejectedValue({ status: 500, message: '无法启动同步' })
-    await wrapper.get('[data-testid="codex-sync-button"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.get('[data-testid="codex-error"]').text()).toContain('无法启动同步')
-  })
-
-  it('有账号正在刷新时定时重新读取，直到刷新结束', async () => {
+  it('页面读取只请求一次，不因账号“刷新中”而定时重新读取', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    const refreshingState = groupState({ sources: [source({ account_id: 101, refreshing: true })] })
-    const doneState = groupState({ sources: [source({ account_id: 101, refreshing: false })] })
-    const wrapper = await mountPanel(refreshingState)
+    await mountPanel(groupState({ sources: [source({ account_id: 101, refreshing: true })] }))
     expect(mocks.getGroupState).toHaveBeenCalledTimes(1)
-
-    mocks.getGroupState.mockResolvedValue(doneState)
-    await vi.advanceTimersByTimeAsync(3000)
+    await vi.advanceTimersByTimeAsync(30000)
     await flushPromises()
-    expect(mocks.getGroupState).toHaveBeenCalledTimes(2)
-    expect(wrapper.get('[data-testid="codex-source-101"]').text()).toContain('admin.codexThirdPartyModels.sources.status.complete')
-
-    // 已经没有刷新中的账号，不再继续轮询。
-    await vi.advanceTimersByTimeAsync(10000)
-    await flushPromises()
-    expect(mocks.getGroupState).toHaveBeenCalledTimes(2)
+    expect(mocks.getGroupState).toHaveBeenCalledTimes(1)
   })
 
-  it('卸载组件后不再轮询', async () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    const wrapper = await mountPanel(groupState({ sources: [source({ account_id: 101, refreshing: true })] }))
-    wrapper.unmount()
-    await vi.advanceTimersByTimeAsync(10000)
-    expect(mocks.getGroupState).toHaveBeenCalledTimes(1)
+  it('候选行的账号名称仍取自读取接口返回的账号列表', async () => {
+    const wrapper = await mountPanel(groupState({ sources: [source({ account_id: 101, account_name: 'kimi-主账号' })] }))
+    expect(wrapper.get('[data-testid="codex-row-kimi-k3"]').text()).toContain('kimi-主账号')
   })
 })
 
@@ -847,14 +802,18 @@ describe('Codex 三方模型启用文案', () => {
     expect(en.tabLabel).toBeTruthy()
   })
 
-  it('动态取用的状态、协议和来源状态文案中英文齐全', () => {
+  it('动态取用的状态、协议、筛选和预算文案中英文齐全', () => {
     const statuses = ['native', 'needs_capability', 'configurable', 'verified', 'conflict', 'over_budget', 'unavailable']
     for (const locale of [zh, en]) {
       for (const status of statuses) expect(locale.status[status], status).toBeTruthy()
       for (const protocol of ['responses_native', 'responses_via_chat']) expect(locale.protocol[protocol], protocol).toBeTruthy()
-      for (const key of ['missing', 'complete', 'empty', 'failed', 'refreshing', 'official_skipped']) {
-        expect(locale.sources.status[key], key).toBeTruthy()
-      }
+      for (const key of ['all', 'enabled', 'disabled', 'blocked']) expect(locale.filters[key], key).toBeTruthy()
+      expect(locale.budget.deferred).toBeTruthy()
+      expect(locale.budget.deferredHint).toBeTruthy()
+      // 同步候选与来源同步状态已删除，文案不再保留。
+      expect(locale.sources).toBeUndefined()
+      expect(locale.sync).toBeUndefined()
+      expect(locale.actions.syncSources).toBeUndefined()
     }
   })
 })

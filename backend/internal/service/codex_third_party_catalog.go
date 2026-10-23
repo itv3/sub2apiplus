@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -25,8 +26,16 @@ import (
 	"time"
 )
 
-// codexThirdPartyEvaluationBaseTimeout 是评估时获取单个基础目录的时限（管理接口可以比客户端目录请求宽松）。
-const codexThirdPartyEvaluationBaseTimeout = 8 * time.Second
+// codexThirdPartyEvaluationBaseTimeout 是评估时获取单个官方账号基础目录的时限。
+// 预览与保存时对官方账号并发拉取，慢的账号直接跳过，不能让管理页等上一整个上游超时。
+const codexThirdPartyEvaluationBaseTimeout = 3 * time.Second
+
+// codexThirdPartyBaseMemoTTL 是评估期间留存的官方账号基础目录的有效期：页面读取（离线评估）只用它，
+// 过期视为没有缓存。
+const codexThirdPartyBaseMemoTTL = 10 * time.Minute
+
+// errCodexBaseDeferred 表示离线评估时没有该官方账号的目录缓存，预算留到预览与保存时检查。
+var errCodexBaseDeferred = errors.New("codex third party: base catalog deferred to enable-time check")
 
 // codexThirdPartySettings 是目录编排读取展示配置所需的最小接口（*SettingService 实现）。
 // 候选名称来自分组默认模型名单，不再读取账号源快照。
@@ -125,6 +134,41 @@ type CodexThirdPartyCatalogService struct {
 
 	now         func() time.Time
 	baseTimeout time.Duration
+
+	// baseMemo 留存预览与保存时拉到的官方账号基础目录，供页面读取（离线评估）使用。
+	baseMu   sync.Mutex
+	baseMemo map[string]codexTPBaseMemoEntry
+}
+
+type codexTPBaseMemoEntry struct {
+	body []byte
+	at   time.Time
+}
+
+func codexTPBaseMemoKey(groupID, accountID int64) string {
+	return fmt.Sprintf("%d:%d", groupID, accountID)
+}
+
+func (s *CodexThirdPartyCatalogService) rememberBase(groupID, accountID int64, body []byte) {
+	if len(body) == 0 {
+		return
+	}
+	s.baseMu.Lock()
+	defer s.baseMu.Unlock()
+	if s.baseMemo == nil {
+		s.baseMemo = map[string]codexTPBaseMemoEntry{}
+	}
+	s.baseMemo[codexTPBaseMemoKey(groupID, accountID)] = codexTPBaseMemoEntry{body: body, at: s.now()}
+}
+
+func (s *CodexThirdPartyCatalogService) recallBase(groupID, accountID int64) ([]byte, bool) {
+	s.baseMu.Lock()
+	defer s.baseMu.Unlock()
+	entry, ok := s.baseMemo[codexTPBaseMemoKey(groupID, accountID)]
+	if !ok || s.now().Sub(entry.at) > codexThirdPartyBaseMemoTTL {
+		return nil, false
+	}
+	return entry.body, true
 }
 
 var _ CodexThirdPartyCatalogEvaluator = (*CodexThirdPartyCatalogService)(nil)
@@ -345,7 +389,8 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 		return eval, err
 	}
 
-	bases := s.fetchBases(ctx, sess)
+	offline := codexThirdPartyOfflineEvaluation(ctx)
+	bases := s.fetchBases(ctx, sess, offline)
 	baseSlugs := map[string]struct{}{}
 	var baseOrder []string
 	parsed := make([]*codexTPParsedBase, 0, len(bases))
@@ -447,12 +492,22 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 	}
 	if len(parsed) == 0 {
 		if len(bases) > 0 {
-			// 有 OpenAI 账号但基础目录全部取不到：只能按空基础估算，且标记未完成。
+			// 有官方账号但基础目录全部取不到：只能按空基础估算，且标记未完成。
 			incomplete = true
+			deferred := true
 			for _, base := range bases {
-				if !base.folded {
-					reasons = append(reasons, fmt.Sprintf("账号 %d 的基础目录不可得", base.accountID))
+				if base.folded {
+					continue
 				}
+				if !errors.Is(base.err, errCodexBaseDeferred) {
+					deferred = false
+				}
+				reasons = append(reasons, fmt.Sprintf("账号 %d 的基础目录不可得", base.accountID))
+			}
+			if deferred {
+				// 页面读取不发上游请求，也没有缓存：不是失败，预算留到开启时检查。
+				budget.Deferred = true
+				reasons = []string{"页面读取不请求官方账号目录，目录体积在开启时检查"}
 			}
 		}
 		if cerr := compileOne(emptyCodexCatalogEnvelope(), nil); cerr != nil {
@@ -561,9 +616,13 @@ type codexTPParsedBase struct {
 	body    []byte
 }
 
-// fetchBases 并发获取分组内全部可能提供基础目录的 OpenAI 账号的基础目录。
-// 固定账号模式只取固定账号。没有 OpenAI 账号时返回空列表（纯第三方分组按空基础）。
-func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *codexTPSession) []codexTPBase {
+// fetchBases 并发获取分组内官方 OpenAI 账号（ChatGPT 订阅或官方地址）的基础目录。
+// 中转站点本来就给不出原生 GPT 目录，一律不参与体积预算。固定账号模式只取固定账号里的官方账号。
+// 没有官方账号时返回空列表（按空基础估算）。
+//
+// offline 为 true 时不发任何上游请求：只使用预览与保存时留下的目录缓存，没有缓存的账号标记为
+// 「开启时检查」（errCodexBaseDeferred）。否则对每个官方账号限时并发拉取，失败的账号由调用方跳过。
+func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *codexTPSession, offline bool) []codexTPBase {
 	pinned := map[int64]struct{}{}
 	pinnedOnly := sess.group.Platform == PlatformOpenAI && sess.group.CodexModelsManifestConfig.Enabled
 	if pinnedOnly {
@@ -581,7 +640,7 @@ func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *co
 		seen := map[int64]struct{}{}
 		for _, id := range sess.group.CodexModelsManifestConfig.AccountIDs {
 			account, ok := byID[id]
-			if _, dup := seen[id]; !ok || dup || account.Platform != PlatformOpenAI {
+			if _, dup := seen[id]; !ok || dup || account.Platform != PlatformOpenAI || !isCodexThirdPartyOfficialSourceAccount(account) {
 				continue
 			}
 			seen[id] = struct{}{}
@@ -589,7 +648,7 @@ func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *co
 		}
 	} else {
 		for i := range sess.accounts {
-			if sess.accounts[i].Platform == PlatformOpenAI {
+			if sess.accounts[i].Platform == PlatformOpenAI && isCodexThirdPartyOfficialSourceAccount(&sess.accounts[i]) {
 				targets = append(targets, &sess.accounts[i])
 			}
 		}
@@ -605,12 +664,23 @@ func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *co
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
+			if offline {
+				if body, ok := s.recallBase(sess.group.ID, account.ID); ok {
+					results[i] = codexTPBase{accountID: account.ID, body: body}
+				} else {
+					results[i] = codexTPBase{accountID: account.ID, err: errCodexBaseDeferred}
+				}
+				return
+			}
 			fetchCtx, cancel := context.WithTimeout(ctx, s.baseTimeout)
 			defer cancel()
 			body, err := s.fetcher.FetchBase(fetchCtx, sess.group, account, version)
 			if err == nil && !pinnedOnly {
 				// 调度路径：每个账号的目录在映射之后各自执行分组合并，与运行时同序。
 				body, err = s.fetcher.MergeGroupModels(fetchCtx, sess.group, body)
+			}
+			if err == nil {
+				s.rememberBase(sess.group.ID, account.ID, body)
 			}
 			results[i] = codexTPBase{accountID: account.ID, body: body, err: err}
 		}()

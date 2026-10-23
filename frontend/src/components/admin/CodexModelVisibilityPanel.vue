@@ -37,16 +37,6 @@
           <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
           <span class="hidden sm:inline">{{ t('admin.codexThirdPartyModels.actions.refresh') }}</span>
         </button>
-        <button
-          type="button"
-          class="btn btn-secondary"
-          data-testid="codex-sync-button"
-          :disabled="!state || busy || syncing"
-          @click="syncCandidates()"
-        >
-          <Icon name="sync" size="md" :class="syncing || anySourceRefreshing ? 'animate-spin' : ''" />
-          <span>{{ anySourceRefreshing ? t('admin.codexThirdPartyModels.actions.syncing') : t('admin.codexThirdPartyModels.actions.syncSources') }}</span>
-        </button>
       </div>
     </div>
 
@@ -87,7 +77,14 @@
         <div class="flex flex-wrap items-center justify-between gap-2">
           <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.codexThirdPartyModels.budget.title') }}</h3>
           <span
-            v-if="!budget.complete"
+            v-if="budget.deferred"
+            data-testid="codex-budget-deferred"
+            class="inline-flex rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300"
+          >
+            {{ t('admin.codexThirdPartyModels.budget.deferred') }}
+          </span>
+          <span
+            v-else-if="!budget.complete"
             data-testid="codex-budget-incomplete"
             class="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
           >
@@ -108,10 +105,13 @@
             {{ t('admin.codexThirdPartyModels.budget.withinLimit') }}
           </span>
         </div>
-        <p v-if="!budget.complete" class="mt-2 text-xs text-amber-700 dark:text-amber-300" data-testid="codex-budget-reason">
+        <p v-if="budget.deferred" class="mt-2 text-xs text-gray-500 dark:text-gray-400" data-testid="codex-budget-deferred-hint">
+          {{ t('admin.codexThirdPartyModels.budget.deferredHint') }}
+        </p>
+        <p v-else-if="!budget.complete" class="mt-2 text-xs text-amber-700 dark:text-amber-300" data-testid="codex-budget-reason">
           {{ budget.reason || t('admin.codexThirdPartyModels.budget.incompleteHint') }}
         </p>
-        <dl class="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+        <dl v-if="!budget.deferred" class="mt-3 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
           <div>
             <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.codexThirdPartyModels.budget.nativeCount') }}</dt>
             <dd class="font-medium text-gray-900 dark:text-white" data-testid="codex-budget-native">{{ budget.native_count }}</dd>
@@ -129,51 +129,9 @@
             <dd class="font-medium text-gray-900 dark:text-white" data-testid="codex-budget-remaining">{{ formatBytes(budget.remaining_bytes) }}</dd>
           </div>
         </dl>
-        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400" data-testid="codex-budget-limit">
           {{ t('admin.codexThirdPartyModels.budget.limit', { limit: formatBytes(budget.limit_bytes) }) }}
         </p>
-      </section>
-
-      <!-- 账号模型 ID 源的同步状态 -->
-      <section class="rounded-lg border border-gray-200 p-4 dark:border-dark-700" data-testid="codex-sources">
-        <h3 class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.codexThirdPartyModels.sources.title') }}</h3>
-        <p v-if="state.sources.length === 0" class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          {{ t('admin.codexThirdPartyModels.sources.empty') }}
-        </p>
-        <ul v-else class="mt-2 divide-y divide-gray-100 dark:divide-dark-700">
-          <li
-            v-for="source in state.sources"
-            :key="source.account_id"
-            :data-testid="`codex-source-${source.account_id}`"
-            class="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 text-xs"
-          >
-            <span class="font-medium text-gray-900 dark:text-white">{{ source.account_name }}</span>
-            <span class="text-gray-400">#{{ source.account_id }}</span>
-            <span class="text-gray-500 dark:text-gray-400">{{ platformDisplayName(source.platform) }}</span>
-            <span class="inline-flex rounded-full px-2 py-0.5 font-medium" :class="sourceBadgeClass(source)">
-              {{ sourceStatusText(source) }}
-            </span>
-            <span v-if="source.model_count > 0" class="text-gray-500 dark:text-gray-400">
-              {{ t('admin.codexThirdPartyModels.sources.modelCount', { count: source.model_count }) }}
-            </span>
-            <span v-if="source.synced_at" class="text-gray-500 dark:text-gray-400">
-              {{ t('admin.codexThirdPartyModels.sources.syncedAt', { time: formatTime(source.synced_at) }) }}
-            </span>
-            <span v-if="source.stale && !source.refreshing && source.status !== 'missing'" class="text-amber-600 dark:text-amber-400">
-              {{ t('admin.codexThirdPartyModels.sources.stale') }}
-            </span>
-            <span
-              v-if="source.synced_at && !source.fingerprint_matches"
-              :data-testid="`codex-source-changed-${source.account_id}`"
-              class="text-amber-600 dark:text-amber-400"
-            >
-              {{ t('admin.codexThirdPartyModels.sources.configChanged') }}
-            </span>
-            <span v-if="source.last_error" class="basis-full text-red-600 dark:text-red-400" :data-testid="`codex-source-error-${source.account_id}`">
-              {{ source.last_error }}
-            </span>
-          </li>
-        </ul>
       </section>
 
       <!-- 搜索、筛选、批量操作 -->
@@ -373,30 +331,19 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { getAll as getAllGroups } from '@/api/admin/groups'
-import {
-  getGroupState,
-  markVerified,
-  previewChanges,
-  saveChanges,
-  syncSources
-} from '@/api/admin/codexThirdPartyModels'
+import { getGroupState, markVerified, previewChanges, saveChanges } from '@/api/admin/codexThirdPartyModels'
 import type {
   CodexCatalogBudget,
   CodexThirdPartyCandidate,
   CodexThirdPartyChange,
   CodexThirdPartyCatalogEvaluation,
   CodexThirdPartyGroupState,
-  CodexThirdPartyModelStatus,
-  CodexThirdPartySourceStatus
+  CodexThirdPartyModelStatus
 } from '@/api/admin/codexThirdPartyModels'
 import { platformDisplayName, platformUsesGateway } from '@/constants/platformCatalog'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import type { AdminGroup } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
-
-// 后台同步完成前，每隔多久重新读取一次状态；连续读取次数有上限，避免无限轮询。
-const POLL_INTERVAL_MS = 3000
-const MAX_POLLS = 20
 
 interface RejectionItem {
   key: string
@@ -429,13 +376,6 @@ const STATUS_BADGE_CLASSES: Record<CodexThirdPartyModelStatus, string> = {
 const PROTOCOL_LABEL_KEYS: Record<string, string> = {
   responses_native: 'admin.codexThirdPartyModels.protocol.responses_native',
   responses_via_chat: 'admin.codexThirdPartyModels.protocol.responses_via_chat'
-}
-const SOURCE_STATUS_KEYS: Record<string, string> = {
-  missing: 'admin.codexThirdPartyModels.sources.status.missing',
-  complete: 'admin.codexThirdPartyModels.sources.status.complete',
-  empty: 'admin.codexThirdPartyModels.sources.status.empty',
-  failed: 'admin.codexThirdPartyModels.sources.status.failed',
-  official_skipped: 'admin.codexThirdPartyModels.sources.status.official_skipped'
 }
 
 // ---------------------------------------------------------------------------
@@ -476,30 +416,19 @@ async function loadGroups() {
 const state = ref<CodexThirdPartyGroupState | null>(null)
 const loading = ref(false)
 const busy = ref(false)
-const syncing = ref(false)
 const errorMessage = ref('')
 const rejections = ref<RejectionItem[]>([])
 
 let loadSeq = 0
-let pollTimer: ReturnType<typeof setTimeout> | null = null
-let pollCount = 0
-
-function clearPoll() {
-  if (pollTimer !== null) {
-    clearTimeout(pollTimer)
-    pollTimer = null
-  }
-}
 
 function clearFeedback() {
   errorMessage.value = ''
   rejections.value = []
 }
 
-/** 读取分组状态。silent 为 true 时不显示加载占位，也不清空已有反馈（用于保存后刷新和轮询）。 */
+/** 读取分组状态。silent 为 true 时不显示加载占位，也不清空已有反馈（用于保存后刷新）。 */
 async function loadState(groupId: number, options: { silent?: boolean } = {}) {
   const seq = ++loadSeq
-  clearPoll()
   if (!options.silent) {
     loading.value = true
     clearFeedback()
@@ -509,7 +438,6 @@ async function loadState(groupId: number, options: { silent?: boolean } = {}) {
     if (seq !== loadSeq || selectedGroupId.value !== groupId) return
     state.value = next
     pruneSelection()
-    schedulePollIfRefreshing(groupId)
   } catch (error) {
     if (seq !== loadSeq || selectedGroupId.value !== groupId) return
     errorMessage.value = extractApiErrorMessage(error, t('admin.codexThirdPartyModels.loadFailed'))
@@ -522,39 +450,19 @@ async function loadState(groupId: number, options: { silent?: boolean } = {}) {
   }
 }
 
-function schedulePollIfRefreshing(groupId: number) {
-  clearPoll()
-  if (!state.value?.sources.some((source) => source.refreshing)) {
-    pollCount = 0
-    return
-  }
-  if (pollCount >= MAX_POLLS) return
-  pollCount += 1
-  pollTimer = setTimeout(() => {
-    pollTimer = null
-    if (selectedGroupId.value === groupId) void loadState(groupId, { silent: true })
-  }, POLL_INTERVAL_MS)
-}
-
 function reload() {
-  if (selectedGroupId.value) {
-    pollCount = 0
-    void loadState(selectedGroupId.value)
-  }
+  if (selectedGroupId.value) void loadState(selectedGroupId.value)
 }
 
 /** 供 Plus 页顶部“刷新”按钮调用：重新读取分组列表，并重新加载当前选中的分组。 */
 async function reloadAll() {
   const groupId = selectedGroupId.value
-  pollCount = 0
   await Promise.all([loadGroups(), groupId ? loadState(groupId) : Promise.resolve()])
 }
 
 defineExpose({ reload: reloadAll })
 
 watch(selectedGroupValue, () => {
-  clearPoll()
-  pollCount = 0
   state.value = null
   selected.value = new Set()
   verifyingSlug.value = ''
@@ -568,10 +476,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   loadSeq += 1
-  clearPoll()
 })
-
-const anySourceRefreshing = computed(() => !!state.value?.sources.some((source) => source.refreshing))
 
 // ---------------------------------------------------------------------------
 // 候选行、筛选、搜索
@@ -590,15 +495,19 @@ const rows = computed<CodexThirdPartyCandidate[]>(() =>
   )
 )
 
+// 状态筛选只有四项：全部、已开启、未开启、不可开启。
 const statusFilterOptions = computed(() => [
   { value: 'all', label: t('admin.codexThirdPartyModels.filters.all') },
   { value: 'enabled', label: t('admin.codexThirdPartyModels.filters.enabled') },
   { value: 'disabled', label: t('admin.codexThirdPartyModels.filters.disabled') },
-  ...(Object.keys(STATUS_LABEL_KEYS) as CodexThirdPartyModelStatus[]).map((status) => ({
-    value: status,
-    label: statusLabel(status)
-  }))
+  { value: 'blocked', label: t('admin.codexThirdPartyModels.filters.blocked') }
 ])
+
+// 不可开启：状态为待补能力、配置冲突、目录超限或不可用，且服务端判定不能开启。行内仍显示原因。
+const BLOCKED_STATUSES: CodexThirdPartyModelStatus[] = ['needs_capability', 'conflict', 'over_budget', 'unavailable']
+function isBlockedRow(row: CodexThirdPartyCandidate): boolean {
+  return !row.native && !row.can_enable && BLOCKED_STATUSES.includes(row.status)
+}
 
 const visibleRows = computed(() => {
   const keyword = searchText.value.trim().toLowerCase()
@@ -612,7 +521,7 @@ const visibleRows = computed(() => {
     }
     if (statusFilter.value === 'enabled') return row.enabled && !row.native
     if (statusFilter.value === 'disabled') return !row.enabled && !row.native
-    if (statusFilter.value !== 'all') return row.status === statusFilter.value
+    if (statusFilter.value === 'blocked') return isBlockedRow(row)
     return true
   })
 })
@@ -710,7 +619,8 @@ const emptyBudget: CodexCatalogBudget = {
   enabled_third_party_count: 0,
   worst_case_bytes: 0,
   remaining_bytes: 0,
-  complete: false
+  complete: false,
+  deferred: false
 }
 const budget = computed<CodexCatalogBudget>(() => state.value?.evaluation.budget ?? emptyBudget)
 const budgetOverLimit = computed(() => budget.value.complete && budget.value.worst_case_bytes > budget.value.limit_bytes)
@@ -723,43 +633,6 @@ function formatBytes(bytes: number): string {
 function formatTime(value: string): string {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
-}
-
-// ---------------------------------------------------------------------------
-// 源同步状态
-// ---------------------------------------------------------------------------
-
-function sourceStatusText(source: CodexThirdPartySourceStatus): string {
-  if (source.refreshing) return t('admin.codexThirdPartyModels.sources.status.refreshing')
-  const key = SOURCE_STATUS_KEYS[source.status]
-  return key ? t(key) : source.status
-}
-
-function sourceBadgeClass(source: CodexThirdPartySourceStatus): string {
-  if (source.refreshing) return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
-  if (source.status === 'failed') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-  if (source.status === 'complete') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-  return 'bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-gray-200'
-}
-
-async function syncCandidates() {
-  const groupId = selectedGroupId.value
-  if (!groupId || !state.value || syncing.value) return
-  syncing.value = true
-  clearFeedback()
-  try {
-    const result = await syncSources(groupId)
-    if (selectedGroupId.value !== groupId || !state.value) return
-    state.value = { ...state.value, sources: result.sources }
-    appStore.showSuccess(t('admin.codexThirdPartyModels.sync.started'))
-    pollCount = 0
-    schedulePollIfRefreshing(groupId)
-  } catch (error) {
-    errorMessage.value = extractApiErrorMessage(error, t('admin.codexThirdPartyModels.sync.failed'))
-    appStore.showError(errorMessage.value)
-  } finally {
-    syncing.value = false
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -886,7 +759,6 @@ function handleActionError(error: unknown, groupId: number, fallbackKey: string)
   if (info.status === 409) {
     errorMessage.value = t('admin.codexThirdPartyModels.conflict')
     appStore.showWarning(errorMessage.value)
-    pollCount = 0
     void loadState(groupId, { silent: true })
     return
   }
@@ -922,7 +794,6 @@ async function applyChanges(changes: CodexThirdPartyChange[]) {
     await saveChanges(groupId, revision, changes, fingerprint)
     appStore.showSuccess(t('admin.codexThirdPartyModels.saveSuccess'))
     selected.value = new Set()
-    pollCount = 0
     await loadState(groupId, { silent: true })
   } catch (error) {
     handleActionError(error, groupId, 'admin.codexThirdPartyModels.saveFailed')
@@ -964,7 +835,6 @@ async function submitVerify() {
     await markVerified(groupId, current.config.revision, row.slug, row.fingerprint, verifyNote.value.trim() || undefined)
     appStore.showSuccess(t('admin.codexThirdPartyModels.verify.success'))
     cancelVerify()
-    pollCount = 0
     await loadState(groupId, { silent: true })
   } catch (error) {
     handleActionError(error, groupId, 'admin.codexThirdPartyModels.verify.failed')

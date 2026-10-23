@@ -2,10 +2,11 @@ package service
 
 // codex_third_party_admin.go 实现「Codex 三方模型启用」的管理服务，供 Plus 增强页的管理接口调用：
 //
-//   - 读取：返回分组展示配置、目录评估结果和每个账号的模型 ID 源快照状态，并在后台异步刷新
-//     缺失、过期或指纹不匹配的源（不阻塞本次响应）；
-//   - 预览：在当前配置的副本上叠加变更并调用评估器，返回评估结果与输入指纹；
-//   - 保存：纯关闭不依赖评估器和上游；含开启则重新评估、核对预览指纹、整批校验后原子提交；
+//   - 读取：返回分组展示配置、目录评估结果和每个账号的模型 ID 源快照状态。读取只查数据库，
+//     不发任何上游请求（离线评估），也不触发源刷新；体积预算没有缓存时标记为「开启时检查」；
+//   - 预览：在当前配置的副本上叠加变更并评估（拉取官方账号基础目录，限时并发、失败跳过），
+//     返回评估结果与输入指纹；
+//   - 保存：纯关闭不依赖评估器和上游；含开启则用与预览相同的模式重新评估、核对预览指纹、整批校验后原子提交；
 //   - 标记已验证：把管理员的真实调用验收结果绑定到候选指纹；
 //   - 手动同步：对分组全部账号强制刷新源。
 //
@@ -38,9 +39,6 @@ const (
 	// codexThirdPartySourceSaveTimeout 是写入源快照的独立超时。即使上游同步已经把 60 秒用完，
 	// 失败记录仍然要能落库，所以不和同步共用同一个超时。
 	codexThirdPartySourceSaveTimeout = 10 * time.Second
-	// codexThirdPartyAutoRetryInterval 是自动刷新的最短间隔：最近一次尝试距今不足这个时间，
-	// 页面读取不会再次触发刷新，避免上游持续失败时每次打开页面都去打一次上游。手动同步不受限制。
-	codexThirdPartyAutoRetryInterval = 2 * time.Minute
 	// codexThirdPartyLastErrorMaxRunes 是写入快照的错误说明长度上限。
 	codexThirdPartyLastErrorMaxRunes = 200
 	// codexThirdPartyVerifyNoteMaxRunes 是验收备注长度上限。
@@ -282,9 +280,9 @@ func (s *CodexThirdPartyAdminService) GetGroupState(ctx context.Context, groupID
 	if err != nil {
 		return nil, err
 	}
-	// 先收集状态并起后台刷新，再评估；刷新在后台进行，不阻塞本次响应。
-	sources := s.collectSources(ctx, accounts, false)
-	eval, err := s.evaluate(ctx, group, cfg)
+	// 页面读取只查数据库：源快照状态只读展示，不触发后台刷新；评估使用离线模式，不发上游请求。
+	sources := s.collectSources(ctx, accounts, codexSourceReadOnly)
+	eval, err := s.evaluate(WithCodexThirdPartyOfflineEvaluation(ctx), group, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +413,8 @@ func (s *CodexThirdPartyAdminService) MarkVerified(ctx context.Context, groupID 
 	if !cfg.IsEnabled(slug) {
 		return nil, ErrCodexModelNotEnabled
 	}
-	eval, err := s.evaluate(ctx, group, cfg)
+	// 候选指纹只取决于路由、协议和能力档案，与基础目录无关，离线评估即可。
+	eval, err := s.evaluate(WithCodexThirdPartyOfflineEvaluation(ctx), group, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +451,7 @@ func (s *CodexThirdPartyAdminService) SyncSources(ctx context.Context, groupID i
 	if err != nil {
 		return nil, err
 	}
-	return &CodexThirdPartySyncResult{Sources: s.collectSources(ctx, accounts, true)}, nil
+	return &CodexThirdPartySyncResult{Sources: s.collectSources(ctx, accounts, codexSourceForceRefresh)}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -674,8 +673,18 @@ func (s *CodexThirdPartyAdminService) listGroupAccounts(ctx context.Context, gro
 	return accounts, nil
 }
 
-// collectSources 汇总每个账号的源快照状态，并按需起后台刷新。force 为 true 时无条件刷新（手动同步）。
-func (s *CodexThirdPartyAdminService) collectSources(ctx context.Context, accounts []Account, force bool) []CodexThirdPartySourceStatus {
+// codexSourceMode 决定 collectSources 是否触发源刷新。
+type codexSourceMode int
+
+const (
+	// codexSourceReadOnly 只读取快照状态，不触发任何刷新（页面读取）。
+	codexSourceReadOnly codexSourceMode = iota
+	// codexSourceForceRefresh 对非官方账号无条件刷新（手动同步）。
+	codexSourceForceRefresh
+)
+
+// collectSources 汇总每个账号的源快照状态。只有手动同步（codexSourceForceRefresh）才会起后台刷新。
+func (s *CodexThirdPartyAdminService) collectSources(ctx context.Context, accounts []Account, mode codexSourceMode) []CodexThirdPartySourceStatus {
 	now := s.now()
 	statuses := make([]CodexThirdPartySourceStatus, 0, len(accounts))
 	for i := range accounts {
@@ -690,7 +699,7 @@ func (s *CodexThirdPartyAdminService) collectSources(ctx context.Context, accoun
 			// 快照损坏或读取失败：按「需要刷新」处理，刷新成功会覆盖损坏的内容。
 			snap, found = CodexCatalogSourceSnapshot{}, false
 		}
-		if force || s.sourceNeedsRefresh(&account, snap, found, now) {
+		if mode == codexSourceForceRefresh {
 			s.startBackgroundRefresh(account)
 		}
 		statuses = append(statuses, s.buildSourceStatus(&account, snap, found, loadErr, now))
@@ -714,27 +723,6 @@ func buildOfficialSkippedSourceStatus(account *Account) CodexThirdPartySourceSta
 		AccountStatus: account.Status,
 		Status:        codexThirdPartySourceStatusOfficialSkipped,
 	}
-}
-
-// sourceNeedsRefresh 判断页面读取时是否应触发后台刷新：
-//
-//   - 快照不存在，或已损坏无法读取：刷新；
-//   - 快照与账号当前源配置匹配且未过期：不刷新；
-//   - 其余情况（已过期、指纹不匹配）：刷新；
-//   - 例外：最近一次尝试失败且距今不足自动重试间隔时不再自动重试，避免上游持续出错时
-//     每次打开页面都去打一次上游。手动同步不受这个例外限制。
-func (s *CodexThirdPartyAdminService) sourceNeedsRefresh(account *Account, snap CodexCatalogSourceSnapshot, found bool, now time.Time) bool {
-	if !found {
-		return true
-	}
-	if snap.Matches(account) && !snap.Stale(now) {
-		return false
-	}
-	if snap.Status == CodexCatalogSourceFailed && !snap.AttemptedAt.IsZero() &&
-		now.Sub(snap.AttemptedAt) < codexThirdPartyAutoRetryInterval {
-		return false
-	}
-	return true
 }
 
 func (s *CodexThirdPartyAdminService) buildSourceStatus(account *Account, snap CodexCatalogSourceSnapshot, found bool, loadErr error, now time.Time) CodexThirdPartySourceStatus {

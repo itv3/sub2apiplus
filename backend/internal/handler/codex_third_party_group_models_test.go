@@ -125,6 +125,19 @@ func TestCodexThirdPartyGroupModelListNonOpenAIPlatformUsesCodexList(t *testing.
 	require.Equal(t, []string{"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash"}, got)
 }
 
+func TestCodexThirdPartyGroupModelListPinnedGroupNeverCallsUpstream(t *testing.T) {
+	// 固定账号分组的普通列表要实时请求上游（这里的 handler 没有 OpenAI 网关服务，真去请求会失败）；
+	// 名单必须改走只查数据库的路径，页面读取不发上游请求。
+	const groupID int64 = 8
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{groupID: cxtpProdShapeGroupAccounts()}})
+	group := &service.Group{ID: groupID, Platform: service.PlatformOpenAI}
+	group.CodexModelsManifestConfig.Enabled = true
+	group.CodexModelsManifestConfig.AccountIDs = []int64{90}
+	got, err := h.codexThirdPartyGroupModelIDs(context.Background(), group)
+	require.NoError(t, err)
+	require.Subset(t, got, []string{"Kimi-K3", "GLM-5.3", "deepseek-flash"})
+}
+
 func TestCodexThirdPartyGroupModelListReportsFailure(t *testing.T) {
 	_, err := (&GatewayHandler{}).codexThirdPartyGroupModelIDs(context.Background(), &service.Group{ID: 1, Platform: service.PlatformComposite})
 	require.Error(t, err)

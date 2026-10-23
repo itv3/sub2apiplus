@@ -454,14 +454,18 @@ type CodexThirdPartyCandidate struct {
 
 // CodexCatalogBudget 是目录体积预算。Complete=false 时不得显示为通过。
 type CodexCatalogBudget struct {
-	LimitBytes             int     `json:"limit_bytes"`
-	NativeCount            int     `json:"native_count"`
-	EnabledThirdPartyCount int     `json:"enabled_third_party_count"`
-	WorstCaseBytes         int     `json:"worst_case_bytes"`
-	RemainingBytes         int     `json:"remaining_bytes"`
-	Complete               bool    `json:"complete"`
-	Reason                 string  `json:"reason,omitempty"`
-	BaseAccountIDs         []int64 `json:"base_account_ids,omitempty"`
+	LimitBytes             int  `json:"limit_bytes"`
+	NativeCount            int  `json:"native_count"`
+	EnabledThirdPartyCount int  `json:"enabled_third_party_count"`
+	WorstCaseBytes         int  `json:"worst_case_bytes"`
+	RemainingBytes         int  `json:"remaining_bytes"`
+	Complete               bool `json:"complete"`
+	// Deferred 为 true 表示页面读取时没有发起任何上游请求、也没有可用的官方账号目录缓存，
+	// 预算留到预览与保存（开启）时检查。此时 Complete 为 false，页面显示「开启时检查」，
+	// 不能显示为通过；开启仍必须经过预览，由预览完成真正的检查。
+	Deferred       bool    `json:"deferred,omitempty"`
+	Reason         string  `json:"reason,omitempty"`
+	BaseAccountIDs []int64 `json:"base_account_ids,omitempty"`
 }
 
 // CodexThirdPartyCatalogEvaluation 是一个分组在给定配置下的完整评估结果。
@@ -476,6 +480,21 @@ type CodexThirdPartyCatalogEvaluation struct {
 	Candidates       []CodexThirdPartyCandidate `json:"candidates"`
 	Budget           CodexCatalogBudget         `json:"budget"`
 	EvaluatedAt      time.Time                  `json:"evaluated_at"`
+}
+
+// codexEvalOfflineKey 标记「离线评估」的上下文键。
+type codexEvalOfflineKey struct{}
+
+// WithCodexThirdPartyOfflineEvaluation 返回要求评估器不发任何上游请求的上下文：页面读取使用。
+// 评估只查数据库计算候选、路由与能力；体积预算只用最近一次预览或保存时留下的官方账号目录缓存，
+// 没有缓存就标记为「开启时检查」。预览与保存使用默认模式（拉取官方账号基础目录）。
+func WithCodexThirdPartyOfflineEvaluation(ctx context.Context) context.Context {
+	return context.WithValue(ctx, codexEvalOfflineKey{}, true)
+}
+
+func codexThirdPartyOfflineEvaluation(ctx context.Context) bool {
+	offline, _ := ctx.Value(codexEvalOfflineKey{}).(bool)
+	return offline
 }
 
 // CodexThirdPartyCatalogEvaluator 由目录编排实现，管理接口调用它完成读取、预览和保存前复核。

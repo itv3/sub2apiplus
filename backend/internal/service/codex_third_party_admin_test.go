@@ -280,9 +280,11 @@ func (s *codexAdminFakeSyncer) currentInflight() (current, max int) {
 
 // codexAdminFakeEvaluator 是可编程的目录评估器假实现。
 type codexAdminFakeEvaluator struct {
-	mu               sync.Mutex
-	calls            int
-	seen             []CodexModelVisibilityConfig
+	mu    sync.Mutex
+	calls int
+	seen  []CodexModelVisibilityConfig
+	// offline 按调用顺序记录每次评估是否使用离线模式。
+	offline          []bool
 	err              error
 	inputFingerprint string
 	candidates       []CodexThirdPartyCandidate
@@ -308,10 +310,11 @@ func newCodexAdminFakeEvaluator() *codexAdminFakeEvaluator {
 	}
 }
 
-func (e *codexAdminFakeEvaluator) EvaluateCodexThirdPartyCatalog(_ context.Context, group *Group, cfg CodexModelVisibilityConfig) (CodexThirdPartyCatalogEvaluation, error) {
+func (e *codexAdminFakeEvaluator) EvaluateCodexThirdPartyCatalog(ctx context.Context, group *Group, cfg CodexModelVisibilityConfig) (CodexThirdPartyCatalogEvaluation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls++
+	e.offline = append(e.offline, codexThirdPartyOfflineEvaluation(ctx))
 	e.seen = append(e.seen, cfg.Clone())
 	if e.err != nil {
 		return CodexThirdPartyCatalogEvaluation{}, e.err
@@ -606,13 +609,14 @@ func TestCodexThirdPartyAdminGetAccountListFailureIsReported(t *testing.T) {
 // 源快照：后台刷新的触发条件
 // ---------------------------------------------------------------------------
 
-func TestCodexThirdPartyAdminGetRefreshesMissingStaleAndMismatchedSourcesInBackground(t *testing.T) {
+func TestCodexThirdPartyAdminGetNeverTriggersSourceRefresh(t *testing.T) {
 	h := newCodexAdminHarness(t)
 	missing := codexAdminAccount(1, "缺失", "k1")
 	stale := codexAdminAccount(2, "过期", "k2")
 	mismatched := codexAdminAccount(3, "指纹变了", "k3")
 	fresh := codexAdminAccount(4, "新鲜", "k4")
-	h.setAccounts(missing, stale, mismatched, fresh)
+	failed := codexAdminAccount(5, "失败过", "k5")
+	h.setAccounts(missing, stale, mismatched, fresh, failed)
 
 	h.seedSource(stale, func(s *CodexCatalogSourceSnapshot) {
 		s.SyncedAt = h.now().Add(-7 * time.Hour)
@@ -620,40 +624,7 @@ func TestCodexThirdPartyAdminGetRefreshesMissingStaleAndMismatchedSourcesInBackg
 	})
 	h.seedSource(mismatched, func(s *CodexCatalogSourceSnapshot) { s.SourceFingerprint = "fingerprint-of-old-config" })
 	h.seedSource(fresh, nil)
-
-	// 让同步阻塞，确认读取接口不会等它完成。
-	h.syncer.block = make(chan struct{})
-	state, err := h.svc.GetGroupState(context.Background(), codexAdminTestGroupID)
-	require.NoError(t, err, "读取不得被后台刷新阻塞")
-
-	require.True(t, sourceByAccount(state.Sources, 1).Refreshing)
-	require.Equal(t, "missing", sourceByAccount(state.Sources, 1).Status)
-	require.True(t, sourceByAccount(state.Sources, 2).Stale)
-	require.True(t, sourceByAccount(state.Sources, 2).Refreshing)
-	require.False(t, sourceByAccount(state.Sources, 3).FingerprintMatches)
-	require.True(t, sourceByAccount(state.Sources, 3).Refreshing)
-	require.False(t, sourceByAccount(state.Sources, 4).Refreshing)
-
-	close(h.syncer.block)
-	h.svc.waitForBackground()
-
-	require.Equal(t, 1, h.syncer.callCount(1))
-	require.Equal(t, 1, h.syncer.callCount(2))
-	require.Equal(t, 1, h.syncer.callCount(3))
-	require.Zero(t, h.syncer.callCount(4))
-	for _, id := range []int64{1, 2, 3} {
-		snap := h.loadSource(id)
-		require.Equal(t, CodexCatalogSourceComplete, snap.Status)
-		require.Equal(t, []string{"default-model"}, snap.Models)
-	}
-	require.Equal(t, CodexCatalogSourceFingerprint(&mismatched), h.loadSource(3).SourceFingerprint, "刷新后指纹应更新为账号当前配置")
-}
-
-func TestCodexThirdPartyAdminAutoRetryIsThrottledAfterRecentFailure(t *testing.T) {
-	h := newCodexAdminHarness(t)
-	acct := codexAdminAccount(1, "失败中", "k")
-	h.setAccounts(acct)
-	h.seedSource(acct, func(s *CodexCatalogSourceSnapshot) {
+	h.seedSource(failed, func(s *CodexCatalogSourceSnapshot) {
 		s.Status = CodexCatalogSourceFailed
 		s.LastError = "Upstream model list request failed with HTTP 502"
 		s.AttemptedAt = h.now().Add(-30 * time.Second)
@@ -662,18 +633,43 @@ func TestCodexThirdPartyAdminAutoRetryIsThrottledAfterRecentFailure(t *testing.T
 	state, err := h.svc.GetGroupState(context.Background(), codexAdminTestGroupID)
 	require.NoError(t, err)
 	h.svc.waitForBackground()
-	require.Zero(t, h.syncer.totalCalls(), "刚失败过，页面读取不应再次打上游")
-	source := sourceByAccount(state.Sources, 1)
-	require.Equal(t, "failed", source.Status)
-	require.True(t, source.Stale)
-	require.Equal(t, "Upstream model list request failed with HTTP 502", source.LastError)
-	require.Equal(t, 2, source.ModelCount, "失败后仍保留上一份清单")
+	require.Zero(t, h.syncer.totalCalls(), "页面读取不再触发任何源刷新")
 
-	h.advance(3 * time.Minute)
-	_, err = h.svc.GetGroupState(context.Background(), codexAdminTestGroupID)
+	// 状态仍然只读展示。
+	require.Equal(t, "missing", sourceByAccount(state.Sources, 1).Status)
+	require.True(t, sourceByAccount(state.Sources, 2).Stale)
+	require.False(t, sourceByAccount(state.Sources, 3).FingerprintMatches)
+	require.False(t, sourceByAccount(state.Sources, 4).Stale)
+	failedSource := sourceByAccount(state.Sources, 5)
+	require.Equal(t, "failed", failedSource.Status)
+	require.Equal(t, "Upstream model list request failed with HTTP 502", failedSource.LastError)
+	for _, source := range state.Sources {
+		require.False(t, source.Refreshing, source.AccountName)
+	}
+}
+
+func TestCodexThirdPartyAdminGetEvaluatesOfflineAndPreviewSaveVerifyModes(t *testing.T) {
+	h := newCodexAdminHarness(t)
+	ctx := context.Background()
+
+	_, err := h.svc.GetGroupState(ctx, codexAdminTestGroupID)
 	require.NoError(t, err)
-	h.svc.waitForBackground()
-	require.Equal(t, 1, h.syncer.callCount(1), "超过重试间隔后才再次刷新")
+	preview, err := h.svc.PreviewChanges(ctx, codexAdminTestGroupID, CodexThirdPartyPreviewRequest{
+		ExpectedRevision: 0, Changes: []CodexThirdPartyChange{{Slug: "kimi-k3", Enabled: true}},
+	})
+	require.NoError(t, err)
+	saved, err := h.svc.SaveChanges(ctx, codexAdminTestGroupID, CodexThirdPartySaveRequest{
+		ExpectedRevision: 0, Changes: []CodexThirdPartyChange{{Slug: "kimi-k3", Enabled: true}},
+		InputFingerprint: preview.Evaluation.InputFingerprint,
+	})
+	require.NoError(t, err)
+	_, err = h.svc.MarkVerified(ctx, codexAdminTestGroupID, CodexThirdPartyVerifyRequest{
+		ExpectedRevision: saved.Config.Revision, Slug: "kimi-k3", Fingerprint: "fp-kimi",
+	})
+	require.NoError(t, err)
+
+	// 读取与标记已验证离线；预览与保存使用同一种（拉取）模式，保证输入指纹可比。
+	require.Equal(t, []bool{true, false, false, true}, h.evaluator.offline)
 }
 
 func TestCodexThirdPartyAdminSourceListQueryUsesGroupAndConcretePlatforms(t *testing.T) {
@@ -740,10 +736,21 @@ func TestCodexThirdPartyAdminPageReadSkipsOfficialOpenAIAccounts(t *testing.T) {
 		require.False(t, found, "官方账号不写源快照")
 	}
 	for _, acct := range syncable {
-		require.Equal(t, 1, h.syncer.callCount(acct.ID), "非官方账号 %s 照常同步", acct.Name)
-		require.Equal(t, "complete", string(h.loadSource(acct.ID).Status))
+		require.Zero(t, h.syncer.callCount(acct.ID), "页面读取不再触发同步：%s", acct.Name)
 	}
 	require.Len(t, state.Sources, len(official)+len(syncable), "官方账号仍然出现在源列表里")
+
+	// 手动同步才会刷新非官方账号。
+	_, err = h.svc.SyncSources(context.Background(), codexAdminTestGroupID)
+	require.NoError(t, err)
+	h.svc.waitForBackground()
+	for _, acct := range syncable {
+		require.Equal(t, 1, h.syncer.callCount(acct.ID), "非官方账号 %s 手动同步", acct.Name)
+		require.Equal(t, "complete", string(h.loadSource(acct.ID).Status))
+	}
+	for _, acct := range official {
+		require.Zero(t, h.syncer.callCount(acct.ID))
+	}
 }
 
 func TestCodexThirdPartyAdminManualSyncSkipsOfficialOpenAIAccounts(t *testing.T) {
@@ -941,7 +948,7 @@ func TestCodexThirdPartyAdminRefreshUsesSixtySecondDeadlineNotRequestContext(t *
 	h.syncer.block = make(chan struct{})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := h.svc.GetGroupState(ctx, codexAdminTestGroupID)
+	_, err := h.svc.SyncSources(ctx, codexAdminTestGroupID)
 	require.NoError(t, err)
 	// 请求结束、请求上下文被取消之后，后台任务必须照常完成。
 	cancel()
@@ -995,7 +1002,7 @@ func TestCodexThirdPartyAdminRefreshConcurrencyIsCappedAtTwo(t *testing.T) {
 	h.setAccounts(accounts...)
 	h.syncer.block = make(chan struct{})
 
-	_, err := h.svc.GetGroupState(context.Background(), codexAdminTestGroupID)
+	_, err := h.svc.SyncSources(context.Background(), codexAdminTestGroupID)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {

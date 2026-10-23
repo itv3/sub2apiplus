@@ -44,11 +44,17 @@ func (h *GatewayHandler) SetCodexThirdPartyCatalog(svc *service.CodexThirdPartyC
 //     遵守「隐藏已映射模型」规则；不复制其中任何一段逻辑。
 //   - 其它兼容平台分组（DeepSeek、MiniMax 等）：普通列表在没有账号映射时会回落到面向 Claude 的静态清单，
 //     对 Codex 没有意义，这类分组沿用 Codex 目录自己的名单（codexModelIDsForGroup）。
+//   - 固定账号的 OpenAI 分组同理：它的普通列表要实时请求固定账号的上游，管理页读取不得发上游请求。
+//
+// 因此生成名单只查数据库，不发任何上游请求。
 func (h *GatewayHandler) codexThirdPartyGroupModelIDs(ctx context.Context, group *service.Group) ([]string, error) {
 	if h == nil || h.gatewayService == nil || group == nil {
 		return nil, errors.New("gateway handler is not ready")
 	}
-	if group.Platform != service.PlatformOpenAI && group.Platform != service.PlatformComposite {
+	pinned := group.Platform == service.PlatformOpenAI && group.CodexModelsManifestConfig.Enabled
+	if (group.Platform != service.PlatformOpenAI && group.Platform != service.PlatformComposite) || pinned {
+		// 固定账号的 OpenAI 分组，普通模型列表是实时向固定账号上游拉取的，会产生网络请求，
+		// 页面读取不允许；这类分组与其它兼容平台一样，名单取账号映射与默认清单（只查数据库）。
 		return h.codexModelIDsForGroup(ctx, group, ""), nil
 	}
 	return h.plainModelListIDs(ctx, group)

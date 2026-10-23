@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -176,11 +177,11 @@ func TestCodexThirdPartyDifferentRawUpstreamNamesOfSameProfileAreNotConflict(t *
 }
 
 // ---------------------------------------------------------------------------
-// 体积预算：个别账号失败即换号
+// 体积预算：只看官方账号，失败即跳过
 // ---------------------------------------------------------------------------
 
-func TestCodexThirdPartyBudgetSkipsFailedBaseAccountsAndTakesWorstOfSuccesses(t *testing.T) {
-	small, large := cxtpOAuthAccount(1), cxtpOAuthAccount(2)
+func TestCodexThirdPartyBudgetOnlyOfficialAccountsAndSkipsFailures(t *testing.T) {
+	small, large, down := cxtpOAuthAccount(1), cxtpOAuthAccount(2), cxtpOAuthAccount(3)
 	relayA := cxtpOpenAIKeyAccount(105, "https://hub.example.com/v1", map[string]any{"deepseek-flash": "deepseek-flash"})
 	relayB := cxtpOpenAIKeyAccount(110, "https://cline.example.com/v1", map[string]any{"deepseek-flash": "cline-pass/deepseek-v4.1-flash"})
 	fetcher := &cxtpFetcher{
@@ -188,48 +189,47 @@ func TestCodexThirdPartyBudgetSkipsFailedBaseAccountsAndTakesWorstOfSuccesses(t 
 			1: cxtpBase(cxtpGPTEntry("gpt-6.1-sol", 100)),
 			2: cxtpBase(cxtpGPTEntry("gpt-6.1-sol", 5000)),
 		},
-		errs: map[int64]error{105: errors.New("hub unreachable"), 110: errors.New("cline unreachable")},
+		errs: map[int64]error{3: errors.New("official account down"), 105: errors.New("must not be fetched")},
 	}
-	svc := newCXTPService(t, &cxtpSettings{cfg: cxtpConfig(1, "deepseek-flash")}, []Account{small, large, relayA, relayB}, fetcher)
+	svc := newCXTPService(t, &cxtpSettings{cfg: cxtpConfig(1, "deepseek-flash")}, []Account{small, large, down, relayA, relayB}, fetcher)
 	group := &Group{ID: 8, Platform: PlatformOpenAI}
 	eval, err := svc.EvaluateCodexThirdPartyCatalog(context.Background(), group, cxtpConfig(1, "deepseek-flash")[8])
 	require.NoError(t, err)
-	require.True(t, eval.Budget.Complete, "至少一个账号成功即完成：%s", eval.Budget.Reason)
-	require.Empty(t, eval.Budget.Reason)
-	require.Equal(t, []int64{1, 2, 105, 110}, eval.Budget.BaseAccountIDs)
+	require.True(t, eval.Budget.Complete, "至少一个官方账号成功即完成：%s", eval.Budget.Reason)
+	require.False(t, eval.Budget.Deferred)
+	require.Equal(t, []int64{1, 2, 3}, eval.Budget.BaseAccountIDs, "中转账号不参与预算")
+	require.Equal(t, []int64{1, 2, 3}, fetcher.fetchedIDs(), "中转账号不发起基础目录获取")
 
 	// 最坏体积取成功者的最大值：等于以大目录账号为基础、开启 deepseek-flash 后的实际正文长度。
 	runtime, err := svc.ApplyToBody(context.Background(), group, fetcher.bodies[2])
 	require.NoError(t, err)
 	require.Equal(t, len(runtime), eval.Budget.WorstCaseBytes)
-	for _, c := range eval.Candidates {
-		if c.Slug == "deepseek-flash" {
-			require.True(t, c.CanEnable, "%v", c.Reasons)
-		}
-	}
 }
 
-func TestCodexThirdPartyBudgetIncompleteOnlyWhenEveryBaseAccountFails(t *testing.T) {
-	relayA := cxtpOpenAIKeyAccount(105, "https://hub.example.com/v1", map[string]any{"deepseek-flash": "deepseek-flash"})
-	relayB := cxtpOpenAIKeyAccount(110, "https://cline.example.com/v1", map[string]any{"deepseek-flash": "cline-pass/deepseek-v4.1-flash"})
-	fetcher := &cxtpFetcher{errs: map[int64]error{105: errors.New("down"), 110: errors.New("down")}}
-	svc := newCXTPService(t, &cxtpSettings{}, []Account{relayA, relayB}, fetcher)
+func TestCodexThirdPartyBudgetIncompleteOnlyWhenEveryOfficialAccountFails(t *testing.T) {
+	a, b := cxtpOAuthAccount(1), cxtpOAuthAccount(2)
+	relay := cxtpOpenAIKeyAccount(105, "https://hub.example.com/v1", map[string]any{"deepseek-flash": "deepseek-flash"})
+	fetcher := &cxtpFetcher{errs: map[int64]error{1: errors.New("down"), 2: errors.New("down")}}
+	svc := newCXTPService(t, &cxtpSettings{}, []Account{a, b, relay}, fetcher)
 	eval, err := svc.EvaluateCodexThirdPartyCatalog(context.Background(), &Group{ID: 8, Platform: PlatformOpenAI}, NewCodexModelVisibilityConfig())
 	require.NoError(t, err)
 	require.False(t, eval.Budget.Complete)
-	require.Contains(t, eval.Budget.Reason, "账号 105")
-	require.Contains(t, eval.Budget.Reason, "账号 110")
+	require.False(t, eval.Budget.Deferred, "拉取失败不是延后检查")
+	require.Contains(t, eval.Budget.Reason, "账号 1")
+	require.Contains(t, eval.Budget.Reason, "账号 2")
+	require.NotContains(t, eval.Budget.Reason, "105")
 
-	// 分组里没有 OpenAI 平台账号：按空基础估算，视为完成。
-	zhipu := cxtpCNAccount(5, PlatformZhipu, "https://zhipu.example", "")
-	zhipu.Credentials["model_mapping"] = map[string]any{"glm-5.3": "glm-5.3"}
-	svc = newCXTPService(t, &cxtpSettings{}, []Account{zhipu}, nil)
-	eval, err = svc.EvaluateCodexThirdPartyCatalog(context.Background(), &Group{ID: 8, Platform: PlatformZhipu}, NewCodexModelVisibilityConfig())
+	// 分组里只有中转账号（没有官方账号）：按空基础估算，视为完成，也不会请求中转站。
+	fetcher = &cxtpFetcher{errs: map[int64]error{105: errors.New("must not be fetched")}}
+	svc = newCXTPService(t, &cxtpSettings{}, []Account{relay}, fetcher)
+	eval, err = svc.EvaluateCodexThirdPartyCatalog(context.Background(), &Group{ID: 8, Platform: PlatformOpenAI}, NewCodexModelVisibilityConfig())
 	require.NoError(t, err)
 	require.True(t, eval.Budget.Complete)
+	require.Empty(t, eval.Budget.BaseAccountIDs)
+	require.Empty(t, fetcher.fetchedIDs())
 }
 
-func TestCodexThirdPartyBudgetPinnedGroupSkipsFailedPinnedAccount(t *testing.T) {
+func TestCodexThirdPartyBudgetPinnedGroupSkipsFailedAndRelayPinnedAccounts(t *testing.T) {
 	good, bad := cxtpOAuthAccount(1), cxtpOAuthAccount(2)
 	relay := cxtpOpenAIKeyAccount(4, "https://site.example", map[string]any{"deepseek-flash": "deepseek-flash"})
 	fetcher := &cxtpFetcher{
@@ -239,10 +239,98 @@ func TestCodexThirdPartyBudgetPinnedGroupSkipsFailedPinnedAccount(t *testing.T) 
 	svc := newCXTPService(t, &cxtpSettings{}, []Account{good, bad, relay}, fetcher)
 	group := &Group{ID: 8, Platform: PlatformOpenAI}
 	group.CodexModelsManifestConfig.Enabled = true
-	group.CodexModelsManifestConfig.AccountIDs = []int64{2, 1}
+	group.CodexModelsManifestConfig.AccountIDs = []int64{2, 1, 4}
 	eval, err := svc.EvaluateCodexThirdPartyCatalog(context.Background(), group, cxtpConfig(1, "deepseek-flash")[8])
 	require.NoError(t, err)
 	require.True(t, eval.Budget.Complete, eval.Budget.Reason)
+	require.Equal(t, []int64{1, 2}, fetcher.fetchedIDs(), "固定账号里的中转账号同样不参与")
+}
+
+// ---------------------------------------------------------------------------
+// 页面读取（离线评估）：不发任何上游请求
+// ---------------------------------------------------------------------------
+
+func TestCodexThirdPartyOfflineEvaluationNeverFetchesAndDefersBudget(t *testing.T) {
+	oauth := cxtpOAuthAccount(1)
+	relay := cxtpOpenAIKeyAccount(105, "https://hub.example.com/v1", map[string]any{"deepseek-flash": "deepseek-flash"})
+	fetcher := &cxtpFetcher{bodies: map[int64][]byte{1: cxtpBase(cxtpGPTEntry("gpt-6.1-sol", 100))}}
+	svc := newCXTPService(t, &cxtpSettings{}, []Account{oauth, relay}, fetcher)
+	group := &Group{ID: 8, Platform: PlatformOpenAI}
+	offlineCtx := WithCodexThirdPartyOfflineEvaluation(context.Background())
+
+	eval, err := svc.EvaluateCodexThirdPartyCatalog(offlineCtx, group, cxtpConfig(1, "deepseek-flash")[8])
+	require.NoError(t, err)
+	require.Empty(t, fetcher.fetchedIDs(), "离线评估不得调用基础目录获取器")
+	require.False(t, eval.Budget.Complete, "没有缓存时不能显示为通过")
+	require.True(t, eval.Budget.Deferred)
+	require.Contains(t, eval.Budget.Reason, "开启时检查")
+	// 候选、路由、能力照常算出。
+	var flash *CodexThirdPartyCandidate
+	for i := range eval.Candidates {
+		if eval.Candidates[i].Slug == "deepseek-flash" {
+			flash = &eval.Candidates[i]
+		}
+	}
+	require.NotNil(t, flash)
+	require.True(t, flash.CanEnable, "%v", flash.Reasons)
+
+	// 分组没有官方账号：不需要基础目录，离线也算完成。
+	svc = newCXTPService(t, &cxtpSettings{}, []Account{relay}, &cxtpFetcher{})
+	eval, err = svc.EvaluateCodexThirdPartyCatalog(offlineCtx, group, NewCodexModelVisibilityConfig())
+	require.NoError(t, err)
+	require.True(t, eval.Budget.Complete)
+	require.False(t, eval.Budget.Deferred)
+}
+
+func TestCodexThirdPartyOfflineEvaluationUsesRecentPreviewCache(t *testing.T) {
+	oauth := cxtpOAuthAccount(1)
+	relay := cxtpOpenAIKeyAccount(105, "https://hub.example.com/v1", map[string]any{"deepseek-flash": "deepseek-flash"})
+	fetcher := &cxtpFetcher{bodies: map[int64][]byte{1: cxtpBase(cxtpGPTEntry("gpt-6.1-sol", 100))}}
+	svc := newCXTPService(t, &cxtpSettings{}, []Account{oauth, relay}, fetcher)
+	group := &Group{ID: 8, Platform: PlatformOpenAI}
+	cfg := cxtpConfig(1, "deepseek-flash")[8]
+	offlineCtx := WithCodexThirdPartyOfflineEvaluation(context.Background())
+	now := time.Unix(1_700_000_000, 0).UTC()
+	svc.now = func() time.Time { return now }
+
+	// 预览模式拉取一次并留下缓存；之后的页面读取用缓存算出预算，不再发请求。
+	preview, err := svc.EvaluateCodexThirdPartyCatalog(context.Background(), group, cfg)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, fetcher.fetchedIDs())
+	read, err := svc.EvaluateCodexThirdPartyCatalog(offlineCtx, group, cfg)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, fetcher.fetchedIDs(), "页面读取没有新增上游请求")
+	require.True(t, read.Budget.Complete)
+	require.False(t, read.Budget.Deferred)
+	require.Equal(t, preview.Budget.WorstCaseBytes, read.Budget.WorstCaseBytes)
+
+	// 缓存过期后回到「开启时检查」。
+	now = now.Add(codexThirdPartyBaseMemoTTL + time.Second)
+	expired, err := svc.EvaluateCodexThirdPartyCatalog(offlineCtx, group, cfg)
+	require.NoError(t, err)
+	require.True(t, expired.Budget.Deferred)
+	require.Equal(t, []int64{1}, fetcher.fetchedIDs())
+}
+
+func TestCodexThirdPartyPreviewAndSaveModeFingerprintsAgree(t *testing.T) {
+	oauthA, oauthB := cxtpOAuthAccount(1), cxtpOAuthAccount(2)
+	relay := cxtpOpenAIKeyAccount(105, "https://hub.example.com/v1", map[string]any{"deepseek-flash": "deepseek-flash"})
+	fetcher := &cxtpFetcher{
+		bodies: map[int64][]byte{1: cxtpBase(cxtpGPTEntry("gpt-6.1-sol", 100)), 2: cxtpBase(cxtpGPTEntry("gpt-6.1-sol", 300))},
+	}
+	svc := newCXTPService(t, &cxtpSettings{}, []Account{oauthA, oauthB, relay}, fetcher)
+	group := &Group{ID: 8, Platform: PlatformOpenAI}
+	cfg := cxtpConfig(1, "deepseek-flash")[8]
+
+	// 预览与保存（含开启）使用同一种拉取模式，相同输入得到相同指纹，中间的离线读取不影响指纹。
+	preview, err := svc.EvaluateCodexThirdPartyCatalog(context.Background(), group, cfg)
+	require.NoError(t, err)
+	_, err = svc.EvaluateCodexThirdPartyCatalog(WithCodexThirdPartyOfflineEvaluation(context.Background()), group, cfg)
+	require.NoError(t, err)
+	save, err := svc.EvaluateCodexThirdPartyCatalog(context.Background(), group, cfg)
+	require.NoError(t, err)
+	require.Equal(t, preview.InputFingerprint, save.InputFingerprint)
+	require.Equal(t, preview.Budget, save.Budget)
 }
 
 // ---------------------------------------------------------------------------

@@ -87,6 +87,11 @@ export interface CodexCatalogBudget {
   remaining_bytes: number
   /** 为 false 时预算检查未完成，不得显示为通过。 */
   complete: boolean
+  /**
+   * 为 true 表示页面读取时没有发起任何上游请求、也没有官方账号目录缓存，体积预算留到预览与保存（开启）时检查。
+   * 此时 complete 为 false，页面显示“开启时检查”。
+   */
+  deferred?: boolean
   reason?: string
   base_account_ids?: number[]
 }
@@ -145,13 +150,9 @@ export interface CodexThirdPartyVerifyResult {
   config: CodexModelVisibilityConfig
 }
 
-export interface CodexThirdPartySyncResult {
-  sources: CodexThirdPartySourceStatus[]
-}
-
 const base = (groupId: number) => `/admin/codex-third-party-models/${groupId}`
 
-/** 读取分组的展示配置、候选评估结果和源快照状态；缺失或过期的源会在后台自动刷新。 */
+/** 读取分组的展示配置、候选评估结果和账号名称；只查数据库，不发上游请求，也不触发源刷新。 */
 export async function getGroupState(groupId: number): Promise<CodexThirdPartyGroupState> {
   const { data } = await apiClient.get<CodexThirdPartyGroupState>(base(groupId))
   return data
@@ -205,18 +206,11 @@ export async function markVerified(
   return data
 }
 
-/** 对分组全部账号强制刷新模型 ID 源；后台执行，立即返回各账号状态。 */
-export async function syncSources(groupId: number): Promise<CodexThirdPartySyncResult> {
-  const { data } = await apiClient.post<CodexThirdPartySyncResult>(`${base(groupId)}/sync`)
-  return data
-}
-
 export const codexThirdPartyModelsAPI = {
   getGroupState,
   previewChanges,
   saveChanges,
-  markVerified,
-  syncSources
+  markVerified
 }
 
 export default codexThirdPartyModelsAPI

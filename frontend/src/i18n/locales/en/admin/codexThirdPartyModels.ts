@@ -18,8 +18,6 @@ export default {
     },
     actions: {
       refresh: 'Refresh',
-      syncSources: 'Sync candidates',
-      syncing: 'Syncing…',
       enableSelected: 'Enable selected ({count})',
       disableSelected: 'Disable selected ({count})',
       markVerified: 'Mark verified',
@@ -30,6 +28,8 @@ export default {
       title: 'Catalog size budget',
       incomplete: 'Check incomplete',
       incompleteHint: 'The budget check has not completed, so it cannot be confirmed that enabling will keep the catalog within the limit.',
+      deferred: 'Checked on enable',
+      deferredHint: 'The page does not request the official account catalog when loading; the catalog size budget is checked when you enable a model (preview and save), and nothing is enabled before that check passes.',
       overLimit: 'Over limit',
       withinLimit: 'Within limit',
       nativeCount: 'Native GPT models',
@@ -38,28 +38,13 @@ export default {
       remaining: 'Remaining space',
       limit: 'Client catalog limit: {limit}'
     },
-    sources: {
-      title: 'Account model source sync status',
-      empty: 'This group has no usable accounts.',
-      modelCount: '{count} models',
-      syncedAt: 'Synced at {time}',
-      stale: 'Stale, waiting for refresh',
-      configChanged: 'Account configuration changed, sync again',
-      status: {
-        missing: 'Not synced',
-        complete: 'Synced',
-        empty: 'Upstream returned an empty list',
-        failed: 'Sync failed',
-        refreshing: 'Refreshing',
-        official_skipped: 'Official account, no sync needed'
-      }
-    },
     filters: {
       searchPlaceholder: 'Search model name, upstream model or platform',
       status: 'Status filter',
-      all: 'All statuses',
+      all: 'All',
       enabled: 'Enabled',
-      disabled: 'Not enabled'
+      disabled: 'Not enabled',
+      blocked: 'Cannot enable'
     },
     columns: {
       selectAll: 'Select all models in the current filter',
@@ -71,7 +56,7 @@ export default {
       toggle: 'Show in Codex'
     },
     table: {
-      empty: 'No matching models. Click "Sync candidates" to read the latest model list from the account upstreams.',
+      empty: 'No matching models.',
       enabledNotPublished: 'Enabled, but not published right now',
       cannotEnableFallback: 'Does not meet the conditions to be enabled',
       blockedFallback: 'Enabled, but currently blocked and not in the catalog'
@@ -116,10 +101,6 @@ export default {
       outdated: 'Verification is outdated, verify again',
       success: 'Marked as verified',
       failed: 'Failed to mark as verified'
-    },
-    sync: {
-      started: 'Background sync started; results refresh automatically when it finishes',
-      failed: 'Failed to sync candidates'
     },
     reject: {
       title: 'Not all selected models can be enabled; nothing was saved',
