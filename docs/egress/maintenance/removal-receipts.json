@@ -36,7 +36,7 @@
         "line_hint": 296
       },
       "kind": "out_of_scope_refactored",
-      "source_blob_sha256": "eb43753cad36fdbb2d62d3f193e853fc7879c647e1a9932a57a5e0c2a0bb5625",
+      "source_blob_sha256": "89abdf9099e41f8cbc4c6b2a555587162997680b59cc5906302fb42984b6c1c3",
       "reviewed_by": "账号保活下线审核",
       "review_ref": "README.md#1-plus-增强功能",
       "rationale": "按用户确认完整下线账号保活，删除仅服务 API Key 保活的内部代理和后台代理入口；保留上游定时账号测试与其它 Plus 功能，无运行时替代发送路径。"
@@ -75,7 +75,7 @@
         "line_hint": 222
       },
       "kind": "out_of_scope_refactored",
-      "source_blob_sha256": "82b3dd51545f43f59f2ac70b3b518ec1bc1da8a338f945679794881857b20b08",
+      "source_blob_sha256": "689a1fe132daa14beaad88a7ade54c1c8f4f1852ef1015563993392b9d9b85e0",
       "reviewed_by": "账号保活下线审核",
       "review_ref": "README.md#1-plus-增强功能",
       "rationale": "按用户确认完整下线账号保活，删除仅服务 API Key 保活的内部代理和后台代理入口；保留上游定时账号测试与其它 Plus 功能，无运行时替代发送路径。"
@@ -114,7 +114,7 @@
         "line_hint": 220
       },
       "kind": "out_of_scope_refactored",
-      "source_blob_sha256": "82b3dd51545f43f59f2ac70b3b518ec1bc1da8a338f945679794881857b20b08",
+      "source_blob_sha256": "689a1fe132daa14beaad88a7ade54c1c8f4f1852ef1015563993392b9d9b85e0",
       "reviewed_by": "账号保活下线审核",
       "review_ref": "README.md#1-plus-增强功能",
       "rationale": "按用户确认完整下线账号保活，删除仅服务 API Key 保活的内部代理和后台代理入口；保留上游定时账号测试与其它 Plus 功能，无运行时替代发送路径。"
@@ -155,7 +155,7 @@
       },
       "kind": "scope_excluded_removed",
       "scope_exclusion_sink_id": "codex.admin_test.keeper",
-      "source_blob_sha256": "82b3dd51545f43f59f2ac70b3b518ec1bc1da8a338f945679794881857b20b08",
+      "source_blob_sha256": "689a1fe132daa14beaad88a7ade54c1c8f4f1852ef1015563993392b9d9b85e0",
       "reviewed_by": "账号保活下线审核",
       "review_ref": "README.md#1-plus-增强功能",
       "rationale": "账号保活已经由现有 Catalog scope exclusion 证明仅服务 API Key；本次按用户确认完整删除调用和入口。保留原始 bootstrap 候选和历史排除证据，无运行时替代路径。"

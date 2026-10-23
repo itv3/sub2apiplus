@@ -534,7 +534,8 @@ func TestClearCreditsExhausted(t *testing.T) {
 		svc.clearCreditsExhausted(context.Background(), account)
 		require.Len(t, repo.extraUpdateCalls, 1)
 		// AICredits key 应被删除
-		rawLimits := account.Extra[modelRateLimitsKey].(map[string]any)
+		rawLimits, ok := account.Extra[modelRateLimitsKey].(map[string]any)
+		require.True(t, ok)
 		_, exists := rawLimits[creditsExhaustedKey]
 		require.False(t, exists, "AICredits key 应被删除")
 		// 普通模型限流应保留

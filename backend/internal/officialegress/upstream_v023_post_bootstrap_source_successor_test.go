@@ -142,7 +142,7 @@ func validateUpstreamV023PostBootstrapSourceSuccessor(receipt upstreamV023PostBo
 			return errors.New("上游 v0.2.3 post-bootstrap successor 提交源码摘要不一致：" + transition.Path)
 		}
 		currentWorktree, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
-		if readErr != nil || upstreamMergeFrameworkDigest(currentWorktree) != transition.ToSHA256 {
+		if !auditedSourceCurrentStateAccepted(transition.Path, transition.ToSHA256, currentWorktree, readErr) {
 			return errors.New("上游 v0.2.3 post-bootstrap successor 当前源码摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -252,7 +252,7 @@ func loadAuditedSourceSuccessorEdges() []auditedSourceSuccessorEdge {
 				auditedSourceSuccessorEdge{path: path, from: from, to: to})
 		}
 
-		// 统一读取 maintenance 下所有带 successor/transition/ledger/receipt
+		// 统一读取 maintenance 下所有带 successor/transition/ledger/receipt/terminal-state
 		// schema 的只读收据，提取显式摘要边。这样新增历史 successor 不必再
 		// 修改闭包实现；收据自身仍由专用 validator 做完整 fail-close 校验。
 		var visit func(any)
@@ -268,12 +268,17 @@ func loadAuditedSourceSuccessorEdges() []auditedSourceSuccessorEdge {
 			}
 			path, _ := object["path"].(string)
 			reason, _ := object["reason"].(string)
+			if strings.TrimSpace(reason) == "" {
+				reason, _ = object["consolidated_reason"].(string)
+			}
 			if strings.TrimSpace(path) != "" && strings.TrimSpace(reason) != "" {
 				var predecessors, successors []string
-				if values, ok := object["predecessor_sha256s"].([]any); ok {
-					for _, value := range values {
-						if digest, ok := value.(string); ok {
-							predecessors = append(predecessors, digest)
+				for _, key := range []string{"predecessor_sha256s", "prior_sha256s"} {
+					if values, ok := object[key].([]any); ok {
+						for _, value := range values {
+							if digest, ok := value.(string); ok {
+								predecessors = append(predecessors, digest)
+							}
 						}
 					}
 				}
@@ -329,7 +334,8 @@ func loadAuditedSourceSuccessorEdges() []auditedSourceSuccessorEdge {
 			}
 			schema, _ := topLevel["schema_version"].(string)
 			if !strings.Contains(schema, "successor") && !strings.Contains(schema, "transition") &&
-				!strings.Contains(schema, "ledger") && !strings.Contains(schema, "receipt") {
+				!strings.Contains(schema, "ledger") && !strings.Contains(schema, "receipt") &&
+				!strings.Contains(schema, "terminal-state") {
 				continue
 			}
 			visit(document)

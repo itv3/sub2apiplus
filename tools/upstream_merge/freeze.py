@@ -63,7 +63,7 @@ REFERENCE_SCAN_JSON_COMMAND_KEYS = frozenset(
     {"command", "commands", "action", "argv", "args", "entrypoint", "script", "module", "tool"}
 )
 # 与 Go 侧 loadAuditedSourceSuccessorEdges 相同：只读取 schema_version 含这些标记的收据。
-LEDGER_SCHEMA_MARKERS = ("successor", "transition", "ledger", "receipt")
+LEDGER_SCHEMA_MARKERS = ("successor", "transition", "ledger", "receipt", "terminal-state")
 PREDECESSOR_SCALAR_KEYS = ("predecessor_sha256", "from_sha256")
 SUCCESSOR_SCALAR_KEYS = ("to_sha256", "current_sha256", "head_sha256")
 FREEZE_VERIFICATION = [
@@ -167,13 +167,18 @@ class _EdgeCollector:
         if not isinstance(value, dict):
             return
         path = value.get("path")
+        # 终态收据把合并原因与历史摘要分别记为 consolidated_reason／prior_sha256s，
+        # 同样属于显式冻结边；不能因字段名称不同而遗漏后续修改的承接。
         reason = value.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            reason = value.get("consolidated_reason")
         if isinstance(path, str) and isinstance(reason, str) and path.strip() and reason.strip():
             predecessors: list[str] = []
             successors: list[str] = []
-            listed = value.get("predecessor_sha256s")
-            if isinstance(listed, list):
-                predecessors.extend(item for item in listed if isinstance(item, str))
+            for key in ("predecessor_sha256s", "prior_sha256s"):
+                listed = value.get(key)
+                if isinstance(listed, list):
+                    predecessors.extend(item for item in listed if isinstance(item, str))
             for key in PREDECESSOR_SCALAR_KEYS:
                 digest = value.get(key)
                 if isinstance(digest, str):

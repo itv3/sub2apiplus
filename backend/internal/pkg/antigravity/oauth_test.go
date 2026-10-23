@@ -74,7 +74,7 @@ func TestGetUserAgentForContextPreservesVersionOverride(t *testing.T) {
 			t.Fatalf("context version override must use Hub family: got %q, want %q", got, tc.want)
 		}
 	}
-	if got := GetUserAgentForContext(nil); got != "antigravity/hub/2.23.0 windows/amd64" {
+	if got := GetUserAgentForContext(nil); got != "antigravity/hub/2.23.0 windows/amd64" { //nolint:staticcheck // 明确验证函数约定的 nil Context 使用默认 UA 的回退行为。
 		t.Fatalf("nil context must keep the default Hub user agent: %q", got)
 	}
 }

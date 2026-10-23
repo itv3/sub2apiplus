@@ -138,7 +138,7 @@ func validateUpstreamV023PostBootstrapSourceSuccessorService(receipt upstreamV02
 			return errors.New("service 上游 v0.2.3 post-bootstrap successor 提交源码摘要不一致：" + transition.Path)
 		}
 		currentWorktree, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(currentWorktree) != transition.ToSHA256 {
+		if !auditedSourceCurrentStateAcceptedService(transition.Path, transition.ToSHA256, currentWorktree, readErr) {
 			return errors.New("service 上游 v0.2.3 post-bootstrap successor 当前源码摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -254,12 +254,17 @@ func loadAuditedSourceSuccessorEdgesService() []auditedSourceSuccessorEdgeServic
 			}
 			path, _ := object["path"].(string)
 			reason, _ := object["reason"].(string)
+			if strings.TrimSpace(reason) == "" {
+				reason, _ = object["consolidated_reason"].(string)
+			}
 			if strings.TrimSpace(path) != "" && strings.TrimSpace(reason) != "" {
 				var predecessors, successors []string
-				if values, ok := object["predecessor_sha256s"].([]any); ok {
-					for _, value := range values {
-						if digest, ok := value.(string); ok {
-							predecessors = append(predecessors, digest)
+				for _, key := range []string{"predecessor_sha256s", "prior_sha256s"} {
+					if values, ok := object[key].([]any); ok {
+						for _, value := range values {
+							if digest, ok := value.(string); ok {
+								predecessors = append(predecessors, digest)
+							}
 						}
 					}
 				}
@@ -315,7 +320,8 @@ func loadAuditedSourceSuccessorEdgesService() []auditedSourceSuccessorEdgeServic
 			}
 			schema, _ := topLevel["schema_version"].(string)
 			if !strings.Contains(schema, "successor") && !strings.Contains(schema, "transition") &&
-				!strings.Contains(schema, "ledger") && !strings.Contains(schema, "receipt") {
+				!strings.Contains(schema, "ledger") && !strings.Contains(schema, "receipt") &&
+				!strings.Contains(schema, "terminal-state") {
 				continue
 			}
 			visit(document)

@@ -64,12 +64,11 @@ type TestEvent struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// AccountTestOptions 承载管理员连接测试的可选媒体与输出上限。
+// AccountTestOptions 承载管理员连接测试的可选媒体。
 // ImageDataURL 与 AudioDataURL 必须是完整的 data URL。
 type AccountTestOptions struct {
-	ImageDataURL    string
-	AudioDataURL    string
-	MaxOutputTokens int
+	ImageDataURL string
+	AudioDataURL string
 }
 
 func firstAccountTestOptions(opts []AccountTestOptions) AccountTestOptions {
@@ -446,7 +445,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	}
 
 	if account.IsOpenAI() {
-		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode), testOpts.MaxOutputTokens)
+		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
 	}
 
 	if account.IsGemini() {
@@ -906,7 +905,7 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 }
 
 // testOpenAIAccountConnection tests an OpenAI account's connection
-func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string, maxOutputTokens ...int) error {
+func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 	if mode == AccountTestModeOfficialFilesProbe {
@@ -1008,7 +1007,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if isOAuth {
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
-	payload := createOpenAITestPayload(upstreamTestModelID, prompt, isOAuth, firstPositiveInt(maxOutputTokens...))
+	payload := createOpenAITestPayload(upstreamTestModelID, prompt, isOAuth)
 	payloadBytes, _ := json.Marshal(payload)
 	if accountMimicCodexCLI {
 		payloadBytes = mimicProfile.RewriteBody(payloadBytes)
@@ -2983,8 +2982,8 @@ func applyAccountTestHeaderOverridesWithProtectedIdentity(account *Account, h ht
 	account.ApplyHeaderOverrides(h)
 }
 
-// createOpenAITestPayload creates a test payload for OpenAI Responses API
-func createOpenAITestPayload(modelID string, prompt string, isOAuth bool, maxOutputTokens int) map[string]any {
+// createOpenAITestPayload 为 OpenAI Responses API 构造连接测试请求体。
+func createOpenAITestPayload(modelID string, prompt string, isOAuth bool) map[string]any {
 	testPrompt := strings.TrimSpace(prompt)
 	if testPrompt == "" {
 		testPrompt = "hi"
@@ -3011,10 +3010,6 @@ func createOpenAITestPayload(modelID string, prompt string, isOAuth bool, maxOut
 		"input":  []map[string]any{message},
 		"stream": true,
 	}
-	if maxOutputTokens > 0 && !isOAuth {
-		payload["max_output_tokens"] = maxOutputTokens
-	}
-
 	// OAuth 探针直接进入 Codex Executor，不经过通用 Responses 入站归一化。
 	// 因而必须在 attempt 边界前构造完整的当前正式 Responses Body；否则
 	// Compiler 会正确地对缺失必需字段失败关闭。reasoning 外层对象需要存在，
@@ -3545,15 +3540,6 @@ func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) er
 	logAccountTestError(c, errorMsg)
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)
-}
-
-func firstPositiveInt(values ...int) int {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
 }
 
 // RunTestBackground 在内存中执行账号测试，并解析捕获的 SSE 响应供定时测试使用。

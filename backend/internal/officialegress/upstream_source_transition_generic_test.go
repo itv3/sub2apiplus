@@ -200,6 +200,9 @@ func validateUpstreamSourceTransitionGenericEntry(entry upstreamSourceTransition
 	}
 	raw, err := os.ReadFile(currentPath)
 	if err != nil {
+		if auditedSourceCurrentStateAccepted(entry.Path, *entry.CurrentSHA256, raw, err) {
+			return nil
+		}
 		return errors.New("上游 source-transition 节点路径无法读取：" + entry.Path)
 	}
 	// 合并之后该路径又被改过时，当前摘要必须能沿已登记的后继边从节点摘要走到。

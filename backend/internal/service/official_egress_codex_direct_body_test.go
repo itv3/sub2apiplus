@@ -36,12 +36,12 @@ const directBodyInstructionsPlaceholder = "<DEFAULT_INSTRUCTIONS>"
 // 占位符，使摘要只锁定结构、键集与其余取值，不随默认指令文本的版本演进而漂移。
 // 线上摘要对象是旧画像槽位上经正式 Compiler／Executor 与真实 TLS 终端的 wire 正文，去掉每次随机的
 // client_metadata 与 prompt_cache_key 后同样把 instructions 换成占位符。
+// API-Key 摘要已随账号保活下线移除 max_output_tokens，恢复连接测试的默认输出预算。
 const (
 	directBodyGoldenProbe             = "f331b70719b58beac98313550d337a43a5c3bf5523f24c6d8012cfe4f0b4d755"
 	directBodyGoldenAdminDefault      = "0b9621c633be1bc98aec44e7329b022bb128641c6452a2bd5a169f9e317dacaa"
 	directBodyGoldenAdminPrompt       = "cd1de364c0d400f9223b34f58761071a8bbf384385542ab70b061a1709b9fa4e"
-	directBodyGoldenAdminMaxTokens    = "1f851114e032503b78efa3fc66f334b1d2fae75d02f6b666b1921f377e9e6fe1"
-	directBodyGoldenAdminAPIKey       = "2f443a4f5496c9e6b84ab0de0442c1be279c078e64ea70d6b28916316b3df1cd"
+	directBodyGoldenAdminAPIKey       = "85ffb9c64aaef03d22559a34d34fe877c27d6f2b00cf77545f70c0d60e40670d"
 	directBodyGoldenProbeWire         = "cbc25c482143d4395930492216728dcbbc236cd6ac6a09826a4adff2fe664d86"
 	directBodyGoldenAdminPromptOnWire = "c1a3db17d33281efde884ff909844e57f055e1f012d08bba577f7ef3452a3700"
 )
@@ -114,13 +114,11 @@ func TestDirectResponsesPayloadsKeepTheirLegacyGoldens(t *testing.T) {
 	require.Equal(t, directBodyGoldenProbe,
 		directBodyDigest(t, marshal(buildOpenAICodexProbePayload(openaipkg.CodexUsageProbeModel))), "用量探针正文")
 	require.Equal(t, directBodyGoldenAdminDefault,
-		directBodyDigest(t, marshal(createOpenAITestPayload(openaipkg.DefaultTestModel, "", true, 0))), "管理员测试连接 OAuth 默认")
+		directBodyDigest(t, marshal(createOpenAITestPayload(openaipkg.DefaultTestModel, "", true))), "管理员测试连接 OAuth 默认")
 	require.Equal(t, directBodyGoldenAdminPrompt,
-		directBodyDigest(t, marshal(createOpenAITestPayload("gpt-5.5", "你好 ping", true, 0))), "管理员测试连接 OAuth 自定义提示词")
-	require.Equal(t, directBodyGoldenAdminMaxTokens,
-		directBodyDigest(t, marshal(createOpenAITestPayload("gpt-5.5", "", true, 64))), "管理员测试连接 OAuth 带输出上限（OAuth 忽略）")
+		directBodyDigest(t, marshal(createOpenAITestPayload("gpt-5.5", "你好 ping", true))), "管理员测试连接 OAuth 自定义提示词")
 	require.Equal(t, directBodyGoldenAdminAPIKey,
-		directBodyDigest(t, marshal(createOpenAITestPayload("gpt-5.5", "你好 ping", false, 64))), "管理员测试连接 API Key（不属于 Codex 画像）")
+		directBodyDigest(t, marshal(createOpenAITestPayload("gpt-5.5", "你好 ping", false))), "管理员测试连接 API Key（不属于 Codex 画像）")
 }
 
 // 整理函数只看 Executor runtime 实际冻结的发布槽位：闭集声明 instructions 时恒等，不声明时只删这一个字段。
@@ -173,7 +171,7 @@ func TestShapeOfficialCodexDirectResponsesBodyRunsAfterTheMimicRewrite(t *testin
 	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(shadow, 0, &config.Config{})
 	require.True(t, mimicProfile.Enabled, "前提：影子账号开启了 Codex CLI mimic")
 
-	payload := createOpenAITestPayload("gpt-5.5", "", true, 0)
+	payload := createOpenAITestPayload("gpt-5.5", "", true)
 	delete(payload, "instructions")
 	raw, err := json.Marshal(payload)
 	require.NoError(t, err)

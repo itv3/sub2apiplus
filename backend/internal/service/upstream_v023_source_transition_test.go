@@ -157,8 +157,7 @@ func validateUpstreamV023SourceTransitionEntryService(entry upstreamV023SourceTr
 		return nil
 	}
 	raw, err := os.ReadFile(currentPath)
-	if err != nil || (upstreamMergeFrameworkServiceDigest(raw) != *entry.CurrentSHA256 &&
-		!auditedSourceSuccessorReachesService(entry.Path, *entry.CurrentSHA256, upstreamMergeFrameworkServiceDigest(raw))) {
+	if !auditedSourceCurrentStateAcceptedService(entry.Path, *entry.CurrentSHA256, raw, err) {
 		return errors.New("上游 v0.2.3 源码 transition 当前摘要不一致：" + entry.Path)
 	}
 	return nil

@@ -71,7 +71,7 @@ func readUpstreamV0180SourceTransitionServiceReceipt() (
 			"../../..", filepath.FromSlash(transition.Path),
 		))
 		currentDigest := upstreamMergeFrameworkServiceDigest(current)
-		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+		if !auditedSourceCurrentStateAcceptedService(transition.Path, transition.ToSHA256, current, readErr) && (readErr != nil ||
 			!codex01491TerminalStateSupersedesService(
 				transition.Path, transition.ToSHA256, currentDigest,
 			)) {

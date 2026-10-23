@@ -108,7 +108,7 @@ func validateUpstreamV0180SourceTransition(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
 		currentDigest := upstreamMergeFrameworkDigest(current)
-		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+		if !auditedSourceCurrentStateAccepted(transition.Path, transition.ToSHA256, current, readErr) && (readErr != nil ||
 			!codex01491TerminalStateSupersedes(
 				transition.Path,
 				transition.ToSHA256,

@@ -152,7 +152,7 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
-	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "", 64)
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.requests[0].Context()))

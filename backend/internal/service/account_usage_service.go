@@ -960,7 +960,7 @@ func openAIWHAMMappingFallbackReason(err error) string {
 // 逐字搬移）。这里只准备业务语义；字段线序、画像元数据与压缩由 Executor compiler 统一定型。
 // Usage probe 仍须提供 Responses 端点要求的完整业务闭集。
 func buildOpenAICodexProbePayload(modelID string) map[string]any {
-	payload := createOpenAITestPayload(modelID, "", true, 0)
+	payload := createOpenAITestPayload(modelID, "", true)
 	payload["tool_choice"] = "auto"
 	payload["parallel_tool_calls"] = false
 	payload["reasoning"] = map[string]any{"effort": "low", "summary": "auto"}

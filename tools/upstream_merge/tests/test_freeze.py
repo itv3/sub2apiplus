@@ -258,6 +258,38 @@ class FreezeSuccessorTest(unittest.TestCase):
         self.assertEqual([hit["path"] for hit in plan["frozen_hits"]], ["backend/added.go"])
         self.assertEqual(plan["frozen_hits"][0]["predecessor_sha256s"], [digest("package added\n")])
 
+    def test_terminal_receipt_registers_consolidated_source_digest(self) -> None:
+        # 终态登记没有通用 reason 字段，仍须冻结当前摘要并生成后继边。
+        source = "backend/free.go"
+        original = "package free\n"
+        receipt = f"{MAINTENANCE_ROOT}/terminal-state-receipt.json"
+        write_json(
+            self.root / receipt,
+            {
+                "schema_version": "official-client-codex-0.149.1-terminal-state/v1",
+                "source_transitions": [
+                    {
+                        "path": source,
+                        "state": "present",
+                        "prior_sha256s": ["1" * 64],
+                        "current_sha256": digest(original),
+                        "consolidated_reason": "合并已审计的历史终态",
+                    }
+                ],
+            },
+        )
+        base = self._commit("register terminal source")
+        edges, known, receipts = load_frozen_edges(self.root)
+        self.assertIn(digest(original), known[source])
+        self.assertEqual(receipts[source], {receipt})
+        self.assertTrue(any(edge.path == source and edge.from_sha256 == "1" * 64
+                            and edge.to_sha256 == digest(original) for edge in edges))
+        (self.root / source).write_text("package free // changed\n", encoding="utf-8")
+        plan = plan_freeze_successor(self.root, base)
+        self.assertEqual([hit["path"] for hit in plan["frozen_hits"]], [source])
+        self.assertEqual(plan["frozen_hits"][0]["predecessor_sha256s"], [digest(original)])
+        self.assertEqual(plan["broken_chain"], [])
+
     def test_registry_rejects_missing_or_tampered(self) -> None:
         registry_path = self.root / Path(*FREEZE_REGISTRY_RELATIVE.split("/"))
         document = json.loads(registry_path.read_text(encoding="utf-8"))
