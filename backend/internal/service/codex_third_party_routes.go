@@ -85,8 +85,6 @@ func (s *CodexThirdPartyCatalogService) loadGroupAccounts(ctx context.Context, g
 }
 
 // hasThirdPartySource 判断分组内是否存在可能承接第三方模型的账号。
-// 只有官方 OpenAI 账号（ChatGPT 订阅或官方 API 地址）时目录不可能出现第三方条目，
-// 此时整个策略是空操作，原有目录逐字节保持不变。
 func (sess *codexTPSession) hasThirdPartySource() bool {
 	for i := range sess.accounts {
 		account := &sess.accounts[i]
@@ -99,6 +97,18 @@ func (sess *codexTPSession) hasThirdPartySource() bool {
 		return true
 	}
 	return false
+}
+
+// officialOnlyOpenAIGroup 判断目录策略是否可以作为空操作：分组平台为 OpenAI 或 Composite，
+// 且分组内账号全部是官方 OpenAI 账号（ChatGPT 订阅或官方 API 地址，含账号为空的 OpenAI 分组）。
+// 此时目录不可能出现第三方条目，原有目录逐字节不变。
+// 其它平台的分组（DeepSeek、MiniMax 等）即使没有账号也不能走捷径：通用目录 handler 会用
+// 平台回落清单生成条目，必须经过统一过滤，保证第三方默认关闭。
+func (sess *codexTPSession) officialOnlyOpenAIGroup() bool {
+	if sess.group.Platform != PlatformOpenAI && sess.group.Platform != PlatformComposite {
+		return false
+	}
+	return !sess.hasThirdPartySource()
 }
 
 // route 返回公开名的路由分析，结果在一次编排内缓存。返回 error 表示路由查询失败（不是「没有路由」）。
@@ -181,7 +191,7 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 		// 或管理员显式映射过的名称；对未知别名，空映射账号虽被调度过滤放行，但上游并不能真正服务，
 		// 不能把它算作该别名的承接账号（否则同组第三方站点上的别名会被误判为归属冲突）。
 		if account.IsOpenAIOAuthLike() || isOfficialOpenAICodexAccount(account) {
-			if _, mapped := account.ResolveMappedModel(route.MappedModel); !mapped && !isOfficialOpenAICodexCatalogModel(final) {
+			if _, mapped := account.ResolveMappedModel(route.MappedModel); !mapped && !isOfficialOpenAICodexCatalogModel(final) && !sess.upstreamListsModel(account, final) {
 				continue
 			}
 		}
@@ -253,6 +263,14 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 	}
 	route.EndpointDigest = codexTPEndpointDigest(route.Accounts)
 	return route, nil
+}
+
+// upstreamListsModel 判断官方账号最近一次拉到的上游目录是否列出了该型号（正向证据）。
+// 上游以后出现名称不在官方前缀范围内的原生模型时，靠它保留；快照缺失、过期或未列出时返回 false，
+// 此时仍由名称范围规则兜底。
+func (sess *codexTPSession) upstreamListsModel(account *Account, model string) bool {
+	lister, ok := sess.svc.fetcher.(codexThirdPartyUpstreamLister)
+	return ok && lister.UpstreamListsModel(account, model)
 }
 
 // codexTPAccountProtocol 判定账号对 Responses 请求的实际通路；无法静态确认时返回空串。
