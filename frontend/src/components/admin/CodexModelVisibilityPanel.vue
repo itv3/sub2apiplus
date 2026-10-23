@@ -1,5 +1,6 @@
 <template>
-  <div class="space-y-4" data-testid="codex-model-visibility-panel">
+  <!-- 面板放在表格页布局的固定高度卡片里（该卡片隐藏溢出），必须自己纵向滚动，否则下方模型表格会被截掉 -->
+  <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4" data-testid="codex-model-visibility-panel">
     <!-- 功能说明：启用只决定能否在 Codex 中选到，不改变调用权限 -->
     <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-300">
       <p>{{ t('admin.codexThirdPartyModels.notice') }}</p>
