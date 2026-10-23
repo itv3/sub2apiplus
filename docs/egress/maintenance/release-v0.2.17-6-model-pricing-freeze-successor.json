@@ -1,0 +1,218 @@
+{
+  "base_commit": "43ed48db70cee49adf283c72ef0be064d82925d7",
+  "changed_path_count": 13,
+  "current_commit": "8fadd28e8c8d635483aac2e51219dfaf52c7bdd4",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6515,
+  "frozen_path_count": 2263,
+  "identity_sha256": "8b6eb9b743cf8d58b5abf22d9d524e7ce2f40f5736ad45eeddd1d2d835a6eabb",
+  "issued_at_utc": "2026-10-23T04:55:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-model-prefix-pricing-release-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "de3cdd6dba625eda8fa3dc3bc42e9482a3aceba75f6f105f94b77d7e69544f2d"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "bc2afb7a29469eb93de9a0eef803a321a74800353334ee6c06ea8b82a0f42887"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "fce84a869d918e1460056888b22f6bb8a6d2dd40ada475563db607b0c05fe79b"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/chat-completions-id-20261005-freeze-successor.json",
+        "docs/egress/maintenance/codex-0154-closeout-merge-main-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-7-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "1de1f8d0585e81ec952706d93fc13dbb73fb93cc832ed390c03d06461eb8c537"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler.go",
+      "predecessor_sha256s": [
+        "6299d36638577814e0e8fe1e5139820a9c28eae901138797a87376aa523014a3"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=backend/internal/handler/gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3a0c837677add4cdfefc0059afcb64513b33db33a8da52a1a4c171e9dd8f2284"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_service.go",
+      "predecessor_sha256s": [
+        "09935182aac9c35c6844c11aae816a1a88f7b3109dc96b0ff92a7bfc50ed423a"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=backend/internal/service/billing_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ea560abfcca7aaa5436695c98c5c6f8a91e850d123a9168c6d4f39a3c18e19b1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_pricing_resolver.go",
+      "predecessor_sha256s": [
+        "f30399182a33414db10c7e0439f7fc0f1b6a19da80dd6fbcd87f7f4c3d2ccc12"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=backend/internal/service/model_pricing_resolver.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8103fdac21dd745b4da33a1b3068735a0a76ccd161946670a2df524d75a10f43"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "predecessor_sha256s": [
+        "8a753bc08a1148b8f338800d3ca11c25f4d80c893caaf5c73aa1af9e85822c20"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=backend/internal/service/openai_codex_models_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9b2adaabdac7cc0f8ea8ca67c23b716241fc5ebaa0fef0de43606ea270294ae2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_models_list.go",
+      "predecessor_sha256s": [
+        "428493a09fa1b0c181904371bc2ed8116f6e6fcc01c56d3a55ed92202670053e"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=backend/internal/service/openai_models_list.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1d843ad1dd4934988c2e15d3605742f9c6204396b252daa92daadae22fc377ff"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/pricing_service.go",
+      "predecessor_sha256s": [
+        "8a6e8bbc222f3386bafca88b5bebe4b9bdcde2ca55395f4e2d9d5031231e775c"
+      ],
+      "reason": "发布模型发现别名过滤及模型前缀定价回退，登记源码与版本号的后继摘要；不改变官方出站画像、Persona或生产配置 path=backend/internal/service/pricing_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f7da7fe24e6e2ac79a2dbc0aa1d132c60201e4bb8bc9c91a540f9ab6d6ffd0d2"
+    }
+  ],
+  "unregistered_path_count": 5,
+  "unregistered_paths": [
+    "backend/internal/handler/mapped_models_discovery_test.go",
+    "backend/internal/service/antigravity_models_advertised.go",
+    "backend/internal/service/mapped_models_discovery_test.go",
+    "backend/internal/service/model_mapping_listing.go",
+    "backend/internal/service/prefixed_model_pricing_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
