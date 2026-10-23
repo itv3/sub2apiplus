@@ -22,6 +22,13 @@ import (
 //go:embed codex_third_party_profiles.json
 var codexThirdPartyProfilesJSON []byte
 
+// codexThirdPartyDeepSeekOfficialModelsJSON 是 DeepSeek 官方 Codex 教程里的 models.json 原文（逐字保存）。
+// 档案用 official_entry 指向其中的条目：网关下发的条目就是官方条目本身，只替换 slug 与 display_name
+// （对外名以上游叫法为准），其余逐键逐值保持官方写法，官方没有的键也不会被补出来。
+//
+//go:embed codex_third_party_deepseek_official_models.json
+var codexThirdPartyDeepSeekOfficialModelsJSON []byte
+
 const (
 	// CodexThirdPartyProtocolNative 表示上游原生 Responses 通路。
 	CodexThirdPartyProtocolNative = "responses_native"
@@ -62,14 +69,16 @@ type codexThirdPartyProfileFile struct {
 }
 
 type codexThirdPartyProfileRaw struct {
-	ID                         string                     `json:"id"`
-	UpstreamModels             []string                   `json:"upstream_models"`
-	Protocols                  []string                   `json:"protocols"`
-	Sources                    []string                   `json:"sources"`
-	CheckedAt                  string                     `json:"checked_at"`
-	Notes                      string                     `json:"notes"`
-	InstructionsTemplateSHA256 string                     `json:"instructions_template_sha256"`
-	ModelInfo                  map[string]json.RawMessage `json:"model_info"`
+	ID                         string   `json:"id"`
+	UpstreamModels             []string `json:"upstream_models"`
+	Protocols                  []string `json:"protocols"`
+	Sources                    []string `json:"sources"`
+	CheckedAt                  string   `json:"checked_at"`
+	Notes                      string   `json:"notes"`
+	InstructionsTemplateSHA256 string   `json:"instructions_template_sha256"`
+	// OfficialEntry 非空表示条目取自嵌入的官方 models.json 中该 slug 的条目（整体照搬），此时不得再写 model_info。
+	OfficialEntry string                     `json:"official_entry,omitempty"`
+	ModelInfo     map[string]json.RawMessage `json:"model_info"`
 }
 
 // codexThirdPartyProfile 是加载校验后的能力档案。
@@ -81,6 +90,8 @@ type codexThirdPartyProfile struct {
 	CheckedAt                  string
 	InstructionsTemplateSHA256 string
 	ModelInfo                  map[string]json.RawMessage
+	// Official 为 true 表示 ModelInfo 是官方条目的完整内容（含官方自带的 model_messages 与指令文本）。
+	Official bool
 	// Digest 是整份档案内容的 sha256，参与条目指纹。
 	Digest string
 }
@@ -106,6 +117,10 @@ func loadCodexThirdPartyProfiles(raw []byte) (*codexThirdPartyProfileSet, error)
 	}
 	if strings.TrimSpace(file.ClientContract) == "" {
 		return nil, fmt.Errorf("codex third party profiles: client_contract is required")
+	}
+	officialEntries, err := loadCodexThirdPartyOfficialEntries(codexThirdPartyDeepSeekOfficialModelsJSON)
+	if err != nil {
+		return nil, err
 	}
 	set := &codexThirdPartyProfileSet{ClientContract: file.ClientContract}
 	seenID := map[string]struct{}{}
@@ -145,18 +160,46 @@ func loadCodexThirdPartyProfiles(raw []byte) (*codexThirdPartyProfileSet, error)
 		if len(item.InstructionsTemplateSHA256) != sha256.Size*2 {
 			return nil, fmt.Errorf("codex third party profiles: %s has no pinned instructions template digest", item.ID)
 		}
-		for _, key := range codexThirdPartyForbiddenModelInfoKeys {
-			if _, exists := item.ModelInfo[key]; exists {
-				return nil, fmt.Errorf("codex third party profiles: %s must not contain %q", item.ID, key)
+		modelInfo := item.ModelInfo
+		official := strings.TrimSpace(item.OfficialEntry) != ""
+		var officialRaw []byte
+		if official {
+			// 官方条目整体照搬：官方写了的键（包括客户端不读的旧键）都保持原样，所以不做旧键检查，
+			// 但档案里不得再写 model_info，避免和官方条目混在一起。
+			if len(item.ModelInfo) > 0 {
+				return nil, fmt.Errorf("codex third party profiles: %s uses official_entry and must not write model_info", item.ID)
 			}
-		}
-		for _, key := range []string{"slug", "display_name", "model_messages"} {
-			if _, exists := item.ModelInfo[key]; exists {
-				return nil, fmt.Errorf("codex third party profiles: %s must not fix %q, it is generated at runtime", item.ID, key)
+			entry, ok := officialEntries[item.OfficialEntry]
+			if !ok {
+				return nil, fmt.Errorf("codex third party profiles: %s official entry %q not found", item.ID, item.OfficialEntry)
+			}
+			modelInfo = entry
+			officialRaw, err = json.Marshal(entry)
+			if err != nil {
+				return nil, err
+			}
+			template, templateErr := codexThirdPartyOfficialTemplate(entry)
+			if templateErr != nil {
+				return nil, fmt.Errorf("codex third party profiles: %s: %w", item.ID, templateErr)
+			}
+			sum := sha256.Sum256([]byte(template))
+			if hex.EncodeToString(sum[:]) != item.InstructionsTemplateSHA256 {
+				return nil, fmt.Errorf("codex third party profiles: %s official instructions template does not match the pinned digest", item.ID)
+			}
+		} else {
+			for _, key := range codexThirdPartyForbiddenModelInfoKeys {
+				if _, exists := modelInfo[key]; exists {
+					return nil, fmt.Errorf("codex third party profiles: %s must not contain %q", item.ID, key)
+				}
+			}
+			for _, key := range []string{"slug", "display_name", "model_messages"} {
+				if _, exists := modelInfo[key]; exists {
+					return nil, fmt.Errorf("codex third party profiles: %s must not fix %q, it is generated at runtime", item.ID, key)
+				}
 			}
 		}
 		for _, key := range codexThirdPartyRequiredModelInfoKeys {
-			if _, exists := item.ModelInfo[key]; !exists {
+			if _, exists := modelInfo[key]; !exists {
 				return nil, fmt.Errorf("codex third party profiles: %s misses required field %q", item.ID, key)
 			}
 		}
@@ -164,6 +207,7 @@ func loadCodexThirdPartyProfiles(raw []byte) (*codexThirdPartyProfileSet, error)
 		if err != nil {
 			return nil, err
 		}
+		canonical = append(canonical, officialRaw...)
 		sum := sha256.Sum256(canonical)
 		set.profiles = append(set.profiles, &codexThirdPartyProfile{
 			ID:                         item.ID,
@@ -172,7 +216,8 @@ func loadCodexThirdPartyProfiles(raw []byte) (*codexThirdPartyProfileSet, error)
 			Sources:                    append([]string(nil), item.Sources...),
 			CheckedAt:                  item.CheckedAt,
 			InstructionsTemplateSHA256: item.InstructionsTemplateSHA256,
-			ModelInfo:                  item.ModelInfo,
+			ModelInfo:                  modelInfo,
+			Official:                   official,
 			Digest:                     hex.EncodeToString(sum[:]),
 		})
 	}
@@ -249,7 +294,12 @@ func (p *codexThirdPartyProfile) supportsProtocols(protocols []string) bool {
 
 // codexThirdPartyTemplateDigest 返回档案固定的指令模板在当前运行时的 sha256 与正文。
 func codexThirdPartyRuntimeTemplate(p *codexThirdPartyProfile) (template string, digest string) {
-	template = codexInstructionsTemplateForModel(p.UpstreamModels[0])
+	if p.Official {
+		// 官方条目自带指令文本，直接取条目里的 instructions_template。
+		template, _ = codexThirdPartyOfficialTemplate(p.ModelInfo)
+	} else {
+		template = codexInstructionsTemplateForModel(p.UpstreamModels[0])
+	}
 	sum := sha256.Sum256([]byte(template))
 	return template, hex.EncodeToString(sum[:])
 }
@@ -276,7 +326,10 @@ func (p *codexThirdPartyProfile) buildEntry(slug string, removeImage bool) (entr
 	}
 	set("slug", slug)
 	set("display_name", slug)
-	set("model_messages", map[string]string{"instructions_template": template})
+	if !p.Official {
+		// 官方条目的 model_messages 保持官方原样（含 instructions_variables 和 approvals），不重写。
+		set("model_messages", map[string]string{"instructions_template": template})
+	}
 	if removeImage {
 		var modalities []string
 		if raw, ok := fields["input_modalities"]; ok {
@@ -328,4 +381,37 @@ func summarizeCodexThirdPartyEntry(entry []byte) CodexThirdPartyCapabilitySummar
 		summary.ReasoningLevels = append(summary.ReasoningLevels, level.Effort)
 	}
 	return summary
+}
+
+// loadCodexThirdPartyOfficialEntries 解析嵌入的官方 models.json，返回 slug 到完整条目（逐键原始值）的映射。
+func loadCodexThirdPartyOfficialEntries(raw []byte) (map[string]map[string]json.RawMessage, error) {
+	var file struct {
+		Models []map[string]json.RawMessage `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &file); err != nil {
+		return nil, fmt.Errorf("codex third party official models: decode: %w", err)
+	}
+	entries := make(map[string]map[string]json.RawMessage, len(file.Models))
+	for _, entry := range file.Models {
+		var slug string
+		if err := json.Unmarshal(entry["slug"], &slug); err != nil || strings.TrimSpace(slug) == "" {
+			return nil, fmt.Errorf("codex third party official models: entry without slug")
+		}
+		if _, dup := entries[slug]; dup {
+			return nil, fmt.Errorf("codex third party official models: duplicate slug %q", slug)
+		}
+		entries[slug] = entry
+	}
+	return entries, nil
+}
+
+// codexThirdPartyOfficialTemplate 取官方条目 model_messages 里的 instructions_template。
+func codexThirdPartyOfficialTemplate(entry map[string]json.RawMessage) (string, error) {
+	var messages struct {
+		InstructionsTemplate string `json:"instructions_template"`
+	}
+	if err := json.Unmarshal(entry["model_messages"], &messages); err != nil || messages.InstructionsTemplate == "" {
+		return "", fmt.Errorf("official entry has no instructions_template")
+	}
+	return messages.InstructionsTemplate, nil
 }

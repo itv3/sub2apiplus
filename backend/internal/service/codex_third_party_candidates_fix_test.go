@@ -89,7 +89,7 @@ func TestCodexThirdPartyDeepSeekFlashProfileRecordsAliasEvidence(t *testing.T) {
 	require.Equal(t, "deepseek-flash", flash.UpstreamModels[0], "指令模板按第一个型号取，别名只能追加在后面")
 	require.Subset(t, flash.UpstreamModels, []string{"deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"})
 	require.Contains(t, flash.Sources, "https://api-docs.deepseek.com/quick_start/pricing")
-	require.Equal(t, "2026-10-23", flash.CheckedAt)
+	require.Equal(t, "2026-10-24", flash.CheckedAt)
 	// 别名不改变模板校验：运行时模板仍与档案固定的摘要一致。
 	_, digest := codexThirdPartyRuntimeTemplate(flash)
 	require.Equal(t, flash.InstructionsTemplateSHA256, digest)

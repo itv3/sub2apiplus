@@ -276,9 +276,14 @@ func TestCodexThirdPartyProfilesRejectLegacyKeys(t *testing.T) {
 		require.NoError(t, json.Unmarshal(codexThirdPartyProfilesJSON, &file))
 		profiles, ok := file["profiles"].([]any)
 		require.True(t, ok, "profiles 应为数组")
-		first, ok := profiles[0].(map[string]any)
-		require.True(t, ok, "profiles[0] 应为对象")
-		info, ok := first["model_info"].(map[string]any)
+		var target map[string]any
+		for _, item := range profiles {
+			if candidate, isMap := item.(map[string]any); isMap && candidate["id"] == "kimi-k3" {
+				target = candidate
+			}
+		}
+		require.NotNil(t, target, "找不到 kimi-k3 档案")
+		info, ok := target["model_info"].(map[string]any)
 		require.True(t, ok, "model_info 应为对象")
 		info[key] = true
 		raw, err := json.Marshal(file)
@@ -306,6 +311,10 @@ func TestCodexThirdPartyProfileEntriesCarryAllRequiredFields(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(fields["model_messages"], &messages))
 		require.Equal(t, template, messages.InstructionsTemplate)
+		if profile.Official {
+			// 官方条目逐键照搬官方写法，官方写了的键（即使客户端不读）也保留。
+			continue
+		}
 		for _, key := range codexThirdPartyForbiddenModelInfoKeys {
 			require.NotContains(t, fields, key)
 		}
@@ -321,59 +330,6 @@ func cxtpProfileEntry(t *testing.T, id string) map[string]any {
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(entry, &out))
 	return out
-}
-
-func TestCodexThirdPartyDeepSeekProfilesMatchDesignTable(t *testing.T) {
-	flash := cxtpProfileEntry(t, "deepseek-flash")
-	pro := cxtpProfileEntry(t, "deepseek-v4-pro")
-	// 两者相同的字段（逐键核对方案第 5.3 节）。
-	for _, entry := range []map[string]any{flash, pro} {
-		require.Equal(t, "shell_command", entry["shell_type"])
-		require.Equal(t, "freeform", entry["apply_patch_tool_type"])
-		require.Nil(t, entry["tool_mode"])
-		require.Equal(t, false, entry["use_responses_lite"])
-		require.Equal(t, "high", entry["default_reasoning_level"])
-		require.EqualValues(t, 1048576, entry["context_window"])
-		require.EqualValues(t, 1048576, entry["max_context_window"])
-		require.Equal(t, "text", entry["web_search_tool_type"])
-		require.Equal(t, map[string]any{"mode": "tokens", "limit": float64(10000)}, entry["truncation_policy"])
-		require.Equal(t, "none", entry["default_reasoning_summary"])
-		require.Equal(t, true, entry["supports_reasoning_summary_parameter"])
-		require.Equal(t, "3000", entry["comp_hash"])
-		require.Equal(t, "v2", entry["multi_agent_version"])
-		require.Equal(t, []any{}, entry["service_tiers"])
-		require.Nil(t, entry["default_service_tier"])
-		require.NotContains(t, entry, "multi_agent_reasoning_effort")
-		require.Equal(t, false, entry["support_verbosity"])
-		require.EqualValues(t, 95, entry["effective_context_window_percent"])
-		require.Equal(t, []any{}, entry["experimental_supported_tools"])
-		require.Equal(t, "list", entry["visibility"])
-		require.Equal(t, true, entry["supported_in_api"])
-		require.EqualValues(t, 50, entry["priority"])
-		levels, ok := entry["supported_reasoning_levels"].([]any)
-		require.True(t, ok, "supported_reasoning_levels 应为数组")
-		require.Len(t, levels, 3)
-		want := [][2]string{
-			{"low", "Fast responses with lighter reasoning"},
-			{"high", "Extra high reasoning depth for complex problems"},
-			{"max", "Maximum reasoning depth for the hardest problems"},
-		}
-		for i, level := range levels {
-			lv, ok := level.(map[string]any)
-			require.True(t, ok, "推理档位条目应为对象")
-			require.Equal(t, want[i][0], lv["effort"])
-			require.Equal(t, want[i][1], lv["description"])
-		}
-	}
-	require.Equal(t, "deepseek-flash", flash["slug"])
-	require.Equal(t, "deepseek-flash", flash["display_name"])
-	require.Equal(t, []any{"text", "image"}, flash["input_modalities"])
-	require.Equal(t, true, flash["supports_image_detail_original"])
-	require.Equal(t, true, flash["supports_search_tool"])
-	require.Equal(t, "deepseek-v4-pro", pro["slug"])
-	require.Equal(t, []any{"text"}, pro["input_modalities"])
-	require.Equal(t, false, pro["supports_image_detail_original"])
-	require.Equal(t, false, pro["supports_search_tool"])
 }
 
 func TestCodexThirdPartyKimiAndGLMProfiles(t *testing.T) {
