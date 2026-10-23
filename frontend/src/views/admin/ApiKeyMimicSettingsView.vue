@@ -52,11 +52,20 @@
           >
             {{ t('admin.plusEnhancements.tabs.standard') }}
           </button>
+          <button
+            type="button"
+            class="rounded-md px-3 py-2 text-sm font-medium transition-colors"
+            data-testid="plus-tab-codex-models"
+            :class="activeTab === 'codexModels' ? activeTabClass : inactiveTabClass"
+            @click="activeTab = 'codexModels'"
+          >
+            {{ t('admin.codexThirdPartyModels.tabLabel') }}
+          </button>
         </div>
       </template>
 
       <template #table>
-        <div class="space-y-3">
+        <div v-if="activeTab !== 'codexModels'" class="space-y-3">
           <div v-if="activeTab === 'standard'" class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-300">
             <p>{{ t('admin.standardApiCompat.description') }}</p>
             <p class="mt-1 text-xs">{{ t('admin.standardApiCompat.hint') }}</p>
@@ -135,6 +144,7 @@
             </template>
           </DataTable>
         </div>
+        <CodexModelVisibilityPanel v-else />
 
       </template>
     </TablePageLayout>
@@ -153,13 +163,14 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Icon from '@/components/icons/Icon.vue'
+import CodexModelVisibilityPanel from '@/components/admin/CodexModelVisibilityPanel.vue'
 
 const ANTHROPIC_MIMIC_KEY = 'anthropic_apikey_mimic_claude_code'
 const ANTHROPIC_STANDARD_API_KEY = 'anthropic_apikey_standard_api_compat'
 const OPENAI_MIMIC_KEY = 'openai_apikey_mimic_codex_cli'
 const TLS_FINGERPRINT_KEY = 'enable_tls_fingerprint'
 
-type TabKey = 'mimic' | 'standard'
+type TabKey = 'mimic' | 'standard' | 'codexModels'
 type FeatureStatusFilter = 'all' | 'enabled' | 'disabled'
 
 const { t } = useI18n()
