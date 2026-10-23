@@ -1,0 +1,98 @@
+{
+  "base_commit": "d58599db888cf7d42a2527f38bd6acc293f6d14d",
+  "changed_path_count": 30,
+  "current_commit": "da0becbd075207e0804685d7cff0f7840425444e",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6811,
+  "frozen_path_count": 2279,
+  "identity_sha256": "284d33bfad9a985669663b5b94257305333e3aeadd71071a68927dc9bb13ac85",
+  "issued_at_utc": "2026-10-23T16:52:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-third-party-models-fix-20261024-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "0f4aa4fb9121ba5c438b62b0bb80443b0d74e8c6effa6d5a3f54675ba0a926c5"
+      ],
+      "reason": "按上游合并流程规则在最终 revision 一次性登记冻结台账的精确后继摘要（codex-third-party-models-fix-20261024）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-merge-checklist-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "64f27b76690e5e69dd50cec00b22af0a46ca6dc39489063fad024201663900c2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_codex_models_handler.go",
+      "predecessor_sha256s": [
+        "3c3aa9e5403a6267756d34c5b55fce3ee65bb33c2f5001d86d71a69b3acaac17"
+      ],
+      "reason": "按上游合并流程规则在最终 revision 一次性登记冻结台账的精确后继摘要（codex-third-party-models-fix-20261024）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=backend/internal/handler/openai_codex_models_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-third-party-models-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6efa8166e29e6f7dcd4962cd2f5e34aaf467329f221e23845768bf121068c4f9"
+    }
+  ],
+  "unregistered_path_count": 28,
+  "unregistered_paths": [
+    "backend/internal/handler/codex_third_party_catalog.go",
+    "backend/internal/handler/codex_third_party_catalog_test.go",
+    "backend/internal/handler/codex_third_party_composite_test.go",
+    "backend/internal/handler/codex_third_party_group_models_test.go",
+    "backend/internal/service/codex_third_party_admin.go",
+    "backend/internal/service/codex_third_party_admin_test.go",
+    "backend/internal/service/codex_third_party_candidates_fix_test.go",
+    "backend/internal/service/codex_third_party_catalog.go",
+    "backend/internal/service/codex_third_party_catalog_test.go",
+    "backend/internal/service/codex_third_party_composite_base.go",
+    "backend/internal/service/codex_third_party_composite_base_test.go",
+    "backend/internal/service/codex_third_party_contract.go",
+    "backend/internal/service/codex_third_party_deepseek_official_models.json",
+    "backend/internal/service/codex_third_party_discovery.go",
+    "backend/internal/service/codex_third_party_discovery_test.go",
+    "backend/internal/service/codex_third_party_official_profiles_test.go",
+    "backend/internal/service/codex_third_party_profiles.go",
+    "backend/internal/service/codex_third_party_profiles.json",
+    "backend/internal/service/codex_third_party_publication.go",
+    "backend/internal/service/codex_third_party_routes.go",
+    "backend/internal/service/testdata/codex_deepseek_official_models.json",
+    "frontend/src/api/admin/codexThirdPartyModels.ts",
+    "frontend/src/components/admin/CodexModelVisibilityPanel.vue",
+    "frontend/src/components/admin/__tests__/CodexModelVisibilityPanel.spec.ts",
+    "frontend/src/i18n/locales/en/admin/codexThirdPartyModels.ts",
+    "frontend/src/i18n/locales/zh/admin/codexThirdPartyModels.ts",
+    "frontend/src/views/admin/ApiKeyMimicSettingsView.vue",
+    "frontend/src/views/admin/__tests__/ApiKeyMimicSettingsView.codexTab.spec.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
