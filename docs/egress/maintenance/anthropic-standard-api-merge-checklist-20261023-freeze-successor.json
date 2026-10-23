@@ -1,0 +1,49 @@
+{
+  "base_commit": "43ed48db70cee49adf283c72ef0be064d82925d7",
+  "changed_path_count": 1,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6515,
+  "frozen_path_count": 2263,
+  "identity_sha256": "0bc91e85429a6232eade903ab34b6177a4b282ebb930f3e38fbae897e2b6b02a",
+  "issued_at_utc": "2026-10-23T02:23:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-anthropic-standard-api-merge-checklist-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "de3cdd6dba625eda8fa3dc3bc42e9482a3aceba75f6f105f94b77d7e69544f2d"
+      ],
+      "reason": "仅在 README §4.3 增加普通 API 兼容的上游合并检查项，记录账号范围、六个调用点、处理顺序、内容保留、身份演进及回归验收要求；运行逻辑和生产配置保持不变 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "18e3de7458d1d253c6471a58f87667e1f21332591e5051c743058c2179c4f939"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
