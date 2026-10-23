@@ -624,6 +624,20 @@ describe('CodexModelVisibilityPanel 源同步', () => {
     expect(wrapper.get('[data-testid="codex-source-104"]').text()).toContain('admin.codexThirdPartyModels.sources.status.refreshing')
   })
 
+  it('只有曾经成功同步过、之后账号配置又变了的源才提示“配置已变更”', async () => {
+    const wrapper = await mountPanel(groupState({
+      sources: [
+        source({ account_id: 101, synced_at: '2026-10-23T01:00:00Z', fingerprint_matches: false }),
+        source({ account_id: 102, synced_at: '2026-10-23T01:00:00Z', fingerprint_matches: true }),
+        // 从未成功过的失败快照没有同步时间，也谈不上“配置变更”。
+        source({ account_id: 103, status: 'failed', stale: true, fingerprint_matches: false, model_count: 0, last_error: '同步失败' })
+      ]
+    }))
+    expect(wrapper.find('[data-testid="codex-source-changed-101"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="codex-source-changed-102"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-source-changed-103"]').exists()).toBe(false)
+  })
+
   it('点击“同步候选”触发后台同步并更新来源状态', async () => {
     const wrapper = await mountPanel(groupState({ sources: [source({ account_id: 101 })] }))
     mocks.syncSources.mockResolvedValue({ sources: [source({ account_id: 101, refreshing: true })] })

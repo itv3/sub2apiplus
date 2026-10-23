@@ -29,15 +29,20 @@ func newCodexAdminSettingRepo() *codexAdminSettingRepo {
 	return &codexAdminSettingRepo{values: map[string]string{}}
 }
 
-func (r *codexAdminSettingRepo) Get(_ context.Context, key string) (*Setting, error) {
-	value, err := r.GetValue(context.Background(), key)
+func (r *codexAdminSettingRepo) Get(ctx context.Context, key string) (*Setting, error) {
+	value, err := r.GetValue(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	return &Setting{Key: key, Value: value}, nil
 }
 
-func (r *codexAdminSettingRepo) GetValue(_ context.Context, key string) (string, error) {
+// GetValue 与真实数据库一样遵守上下文：上下文已经结束就直接失败，
+// 这样才能测出「用已经过期的上下文写库」这一类错误。
+func (r *codexAdminSettingRepo) GetValue(ctx context.Context, key string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	value, ok := r.values[key]
@@ -47,7 +52,10 @@ func (r *codexAdminSettingRepo) GetValue(_ context.Context, key string) (string,
 	return value, nil
 }
 
-func (r *codexAdminSettingRepo) Set(_ context.Context, key, value string) error {
+func (r *codexAdminSettingRepo) Set(ctx context.Context, key, value string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.values[key] = value
@@ -188,6 +196,7 @@ type codexAdminFakeSyncer struct {
 	maxInflight int
 	results     map[int64]codexAdminSyncResult
 	block       chan struct{} // 非空时同步会阻塞到该通道关闭或上下文结束
+	delay       time.Duration // 大于 0 时同步会先耗时这么久（受上下文约束）
 	ctxErrAtEnd map[int64]error
 	deadlines   map[int64]time.Duration
 }
@@ -217,10 +226,16 @@ func (s *codexAdminFakeSyncer) SyncUpstreamModelCatalog(ctx context.Context, acc
 	if deadline, ok := ctx.Deadline(); ok {
 		s.deadlines[account.ID] = time.Until(deadline)
 	}
-	block := s.block
+	block, delay := s.block, s.delay
 	result, ok := s.results[account.ID]
 	s.mu.Unlock()
 
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+		}
+	}
 	if block != nil {
 		select {
 		case <-block:
@@ -781,6 +796,34 @@ func TestCodexThirdPartyAdminRefreshTimeoutRecordsFailure(t *testing.T) {
 	snap := h.loadSource(1)
 	require.Equal(t, CodexCatalogSourceFailed, snap.Status)
 	require.Equal(t, "同步超时", snap.LastError)
+}
+
+// 回归：写快照的超时必须在同步结束之后才开始计时。
+// 同步本身可能已经耗掉很长时间（上限 60 秒），成功结果和失败记录都不能因此写不进去。
+func TestCodexThirdPartyAdminSnapshotIsSavedEvenWhenSyncOutlastsTheSaveTimeout(t *testing.T) {
+	t.Run("成功结果", func(t *testing.T) {
+		h := newCodexAdminHarness(t)
+		h.svc.saveTimeout = 40 * time.Millisecond
+		h.syncer.delay = 120 * time.Millisecond
+		acct := codexAdminAccount(1, "a", "k")
+		h.syncer.results[1] = codexAdminSyncResult{models: []string{"kimi-k3"}}
+
+		require.NoError(t, h.svc.refreshSource(&acct))
+		require.Equal(t, []string{"kimi-k3"}, h.loadSource(1).Models)
+	})
+	t.Run("失败记录", func(t *testing.T) {
+		h := newCodexAdminHarness(t)
+		h.svc.saveTimeout = 40 * time.Millisecond
+		h.syncer.delay = 120 * time.Millisecond
+		acct := codexAdminAccount(1, "a", "k")
+		previous := h.seedSource(acct, nil)
+		h.syncer.results[1] = codexAdminSyncResult{err: errors.New("boom")}
+
+		require.Error(t, h.svc.refreshSource(&acct))
+		snap := h.loadSource(1)
+		require.Equal(t, CodexCatalogSourceFailed, snap.Status)
+		require.Equal(t, previous.Models, snap.Models)
+	})
 }
 
 func TestCodexThirdPartyAdminRefreshUsesSixtySecondDeadlineNotRequestContext(t *testing.T) {

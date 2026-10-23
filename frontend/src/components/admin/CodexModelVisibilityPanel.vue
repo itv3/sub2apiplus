@@ -161,7 +161,11 @@
             <span v-if="source.stale && !source.refreshing && source.status !== 'missing'" class="text-amber-600 dark:text-amber-400">
               {{ t('admin.codexThirdPartyModels.sources.stale') }}
             </span>
-            <span v-if="source.status !== 'missing' && !source.fingerprint_matches" class="text-amber-600 dark:text-amber-400">
+            <span
+              v-if="source.synced_at && !source.fingerprint_matches"
+              :data-testid="`codex-source-changed-${source.account_id}`"
+              class="text-amber-600 dark:text-amber-400"
+            >
               {{ t('admin.codexThirdPartyModels.sources.configChanged') }}
             </span>
             <span v-if="source.last_error" class="basis-full text-red-600 dark:text-red-400" :data-testid="`codex-source-error-${source.account_id}`">

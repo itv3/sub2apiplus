@@ -199,6 +199,7 @@ type CodexThirdPartyAdminService struct {
 
 	now            func() time.Time
 	refreshTimeout time.Duration
+	saveTimeout    time.Duration
 
 	// refreshSlots 是全局并发上限信号量。
 	refreshSlots chan struct{}
@@ -251,6 +252,7 @@ func newCodexThirdPartyAdminService(deps codexThirdPartyAdminDeps) *CodexThirdPa
 		evaluator:      deps.Evaluator,
 		now:            time.Now,
 		refreshTimeout: codexThirdPartyRefreshTimeout,
+		saveTimeout:    codexThirdPartySourceSaveTimeout,
 		refreshSlots:   make(chan struct{}, codexThirdPartyRefreshConcurrency),
 		refreshing:     make(map[int64]struct{}),
 	}
@@ -803,24 +805,27 @@ func (s *CodexThirdPartyAdminService) doRefreshSource(account *Account) error {
 	defer func() { <-s.refreshSlots }()
 
 	// 后台任务不使用请求上下文，否则页面关闭或请求结束会把同步打断。
-	syncCtx, cancel := context.WithTimeout(context.Background(), s.refreshTimeout)
-	defer cancel()
-	saveCtx, cancelSave := context.WithTimeout(context.Background(), codexThirdPartySourceSaveTimeout)
-	defer cancelSave()
-
 	fingerprint := CodexCatalogSourceFingerprint(account)
-	previous, hasPrevious, loadErr := s.settings.LoadCodexCatalogSource(saveCtx, account.ID)
-	if loadErr != nil {
-		// 上一份快照损坏或读不出来：当作没有，本次结果会覆盖它。
-		previous, hasPrevious = CodexCatalogSourceSnapshot{}, false
-	}
-
+	syncCtx, cancel := context.WithTimeout(context.Background(), s.refreshTimeout)
 	catalog, syncErr := s.syncer.SyncUpstreamModelCatalog(syncCtx, account)
+	cancel()
 	finished := s.now().UTC()
 	if syncErr == nil && catalog == nil {
 		syncErr = errors.New("upstream sync returned no result")
 	}
+
+	// 写快照用独立的短超时，并且在同步结束之后才创建：同步可能已经把 60 秒用完，
+	// 失败记录仍然必须能落库。
+	saveCtx, cancelSave := context.WithTimeout(context.Background(), s.saveTimeout)
+	defer cancelSave()
+
 	if syncErr != nil {
+		// 失败时以库里最新的快照为准保留旧清单（其它节点可能刚写过）。
+		previous, hasPrevious, loadErr := s.settings.LoadCodexCatalogSource(saveCtx, account.ID)
+		if loadErr != nil {
+			// 上一份快照损坏或读不出来：当作没有，本次结果会覆盖它。
+			previous, hasPrevious = CodexCatalogSourceSnapshot{}, false
+		}
 		reason := safeCodexSourceError(syncErr)
 		failed := CodexCatalogSourceSnapshot{
 			AccountID: account.ID,
