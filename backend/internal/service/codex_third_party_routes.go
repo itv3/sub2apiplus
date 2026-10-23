@@ -45,7 +45,10 @@ type codexTPRoute struct {
 	Reasons     []string
 
 	// 以下字段仅第三方有意义。
-	UpstreamModel  string
+	// UpstreamModel 是展示用的最终上游型号：只有一个时就是它，有多个时按字典序用逗号连接。
+	UpstreamModel string
+	// UpstreamModels 是各承接账号的最终上游型号（去重、按字典序），能力档案按它逐个匹配。
+	UpstreamModels []string
 	Protocols      []string
 	AccountIDs     []int64
 	EndpointDigest string
@@ -57,6 +60,12 @@ type codexTPSession struct {
 	group    *Group
 	accounts []Account
 	memo     map[string]*codexTPRoute
+
+	// 分组默认模型名单的会话内缓存（见 groupModelNames）。
+	listingLoaded bool
+	listingNames  []string
+	listingSet    map[string]struct{}
+	listingErr    error
 }
 
 func (s *CodexThirdPartyCatalogService) newSession(ctx context.Context, group *Group) (*codexTPSession, error) {
@@ -234,19 +243,13 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 		return route, nil
 	}
 
-	// 第三方：收集最终上游型号、协议与端点身份。
+	// 第三方：收集最终上游型号、协议与端点身份。多个账号映射到不同的原始上游名是允许的，
+	// 能否套用单一能力档案由发布判定按「去厂商前缀、忽略大小写」后的结果决定。
 	for final := range finals {
-		route.UpstreamModel = final
+		route.UpstreamModels = append(route.UpstreamModels, final)
 	}
-	if len(finals) > 1 {
-		route.UpstreamModel = ""
-		names := make([]string, 0, len(finals))
-		for final := range finals {
-			names = append(names, final)
-		}
-		sort.Strings(names)
-		route.Reasons = append(route.Reasons, "多个账号把该模型映射到不同上游型号（"+strings.Join(names, "、")+"），无法套用单一能力档案")
-	}
+	sort.Strings(route.UpstreamModels)
+	route.UpstreamModel = strings.Join(route.UpstreamModels, ", ")
 	for protocol := range protocols {
 		route.Protocols = append(route.Protocols, protocol)
 	}

@@ -6,11 +6,14 @@
   "profiles": [
     {
       "id": "deepseek-flash",
-      "upstream_models": ["deepseek-flash"],
+      "upstream_models": ["deepseek-flash", "deepseek-v4.1-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"],
       "protocols": ["responses_native", "responses_via_chat"],
-      "sources": ["https://api-docs.deepseek.com/quick_start/agent_integrations/codex/"],
+      "sources": [
+        "https://api-docs.deepseek.com/quick_start/agent_integrations/codex/",
+        "https://api-docs.deepseek.com/quick_start/pricing"
+      ],
       "checked_at": "2026-10-23",
-      "notes": "依据 DeepSeek 官方 Codex 教程。Flash 声明图片输入与工具发现；网页搜索类型取 text，不以 supports_search_tool 代替网页搜索。",
+      "notes": "依据 DeepSeek 官方 Codex 教程。Flash 声明图片输入与工具发现；网页搜索类型取 text，不以 supports_search_tool 代替网页搜索。上游型号别名依据 DeepSeek 官方价格页（2026-10-23 核对）：deepseek-flash 对应 DeepSeek-V4.1-Flash-1017，旧名 deepseek-v4-flash、deepseek-v4-flash-vision-exp 由同一模型提供；deepseek-v4.1-flash 是第三方站点对同一模型常用的写法，匹配时已去掉厂商前缀并忽略大小写。",
       "instructions_template_sha256": "bcc01173b40aaaff48b30b89e421cd69bd100fbc69190362609592a3a1097651",
       "model_info": {
         "description": "DeepSeek coding and reasoning model routed through Sub2API.",

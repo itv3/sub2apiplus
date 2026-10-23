@@ -51,14 +51,14 @@ func (s *CodexThirdPartyCatalogService) publicationFor(group *Group, route *code
 		pub.Reasons = append(pub.Reasons, "能力档案加载失败，无法发布")
 		return pub
 	}
-	if route.UpstreamModel == "" || len(route.Protocols) == 0 {
+	if len(route.UpstreamModels) == 0 || len(route.Protocols) == 0 {
 		pub.Status = CodexModelStatusNeedsCapability
 		return pub
 	}
-	profile := s.profiles.match(route.UpstreamModel)
+	profile, reason := s.profiles.matchAll(route.UpstreamModels)
 	if profile == nil {
 		pub.Status = CodexModelStatusNeedsCapability
-		pub.Reasons = append(pub.Reasons, fmt.Sprintf("上游型号 %s 暂无能力档案（待补能力）", route.UpstreamModel))
+		pub.Reasons = append(pub.Reasons, reason)
 		return pub
 	}
 	pub.Profile = profile

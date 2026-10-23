@@ -122,7 +122,7 @@ func loadCodexThirdPartyProfiles(raw []byte) (*codexThirdPartyProfileSet, error)
 			return nil, fmt.Errorf("codex third party profiles: %s has no upstream_models", item.ID)
 		}
 		for _, model := range item.UpstreamModels {
-			key := strings.ToLower(strings.TrimSpace(model))
+			key := codexThirdPartyProfileKey(model)
 			if key == "" {
 				return nil, fmt.Errorf("codex third party profiles: %s has empty upstream model", item.ID)
 			}
@@ -187,20 +187,50 @@ func loadCodexThirdPartyProfiles(raw []byte) (*codexThirdPartyProfileSet, error)
 	return set, nil
 }
 
-// match 按最终上游型号查找档案。型号比较忽略大小写与首尾空白。
+// codexThirdPartyProfileKey 是能力档案的匹配键：取最后一个 `/` 之后的部分并转小写，
+// 与仓库「带前缀模型定价回退」同一规则，例如 `moonshotai/Kimi-K3` 与 `kimi-k3` 等价。
+func codexThirdPartyProfileKey(model string) string {
+	return strings.ToLower(codexProviderQualifiedModelID(model))
+}
+
+// match 按最终上游型号查找档案。比较前去掉厂商前缀并忽略大小写与首尾空白。
 func (s *codexThirdPartyProfileSet) match(upstreamModel string) *codexThirdPartyProfile {
 	if s == nil {
 		return nil
 	}
-	key := strings.ToLower(strings.TrimSpace(upstreamModel))
+	key := codexThirdPartyProfileKey(upstreamModel)
+	if key == "" {
+		return nil
+	}
 	for _, p := range s.profiles {
 		for _, model := range p.UpstreamModels {
-			if strings.ToLower(model) == key {
+			if codexThirdPartyProfileKey(model) == key {
 				return p
 			}
 		}
 	}
 	return nil
+}
+
+// matchAll 为一组最终上游型号（来自不同承接账号）找出同一份档案。
+// 每个型号规范化后都必须命中档案，且命中的是同一份；多个账号映射到不同的原始名、
+// 规范化后落在同一档案上不算冲突。找不到时返回 nil 与面向管理员的原因。
+func (s *codexThirdPartyProfileSet) matchAll(upstreamModels []string) (*codexThirdPartyProfile, string) {
+	var found *codexThirdPartyProfile
+	for _, model := range upstreamModels {
+		profile := s.match(model)
+		if profile == nil {
+			return nil, fmt.Sprintf("上游型号 %s 暂无能力档案（待补能力）", model)
+		}
+		if found != nil && found != profile {
+			return nil, "多个账号把该模型映射到不同的上游型号（" + strings.Join(upstreamModels, "、") + "），无法套用单一能力档案"
+		}
+		found = profile
+	}
+	if found == nil {
+		return nil, "没有可用的上游型号"
+	}
+	return found, ""
 }
 
 // supportsProtocols 判断档案是否覆盖全部给定协议。

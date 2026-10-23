@@ -106,6 +106,46 @@ func newCXTPService(t *testing.T, settings *cxtpSettings, accounts []Account, fe
 		now:         func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 		baseTimeout: time.Second,
 	}
+	// 默认的分组模型名单替身：账号映射的公开名（与普通模型列表的来源一致）加上测试夹具里
+	// 基础目录和源快照出现的名称。需要精确控制名单的用例直接覆盖 svc.groupModels。
+	svc.groupModels = func(ctx context.Context, group *Group) ([]string, error) {
+		seen := map[string]struct{}{}
+		var out []string
+		add := func(name string) {
+			if _, dup := seen[name]; !dup && strings.TrimSpace(name) != "" {
+				seen[name] = struct{}{}
+				out = append(out, name)
+			}
+		}
+		for i := range accounts {
+			for public := range AdvertisedModelMappingForAccount(&accounts[i]) {
+				add(public)
+			}
+			if snap, ok := settings.snapshots[accounts[i].ID]; ok && snap.Matches(&accounts[i]) {
+				for _, model := range snap.Models {
+					add(model)
+				}
+			}
+		}
+		for _, body := range fetcher.bodies {
+			if _, entries, err := parseCodexCatalogBody(body); err == nil {
+				for _, entry := range entries {
+					add(entry.slug)
+				}
+			}
+		}
+		if svc.resolver != nil && group != nil {
+			// 普通模型列表也会列出 Composite 精确路由的公开名。
+			routed, err := svc.resolver.ListExactPublicModels(ctx, group.ID, "", false)
+			if err != nil {
+				return nil, err
+			}
+			for _, model := range routed {
+				add(model)
+			}
+		}
+		return out, nil
+	}
 	return svc
 }
 

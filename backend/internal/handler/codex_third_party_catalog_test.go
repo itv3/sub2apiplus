@@ -48,7 +48,18 @@ func cxtpService(t *testing.T, enabled []string, accounts ...service.Account) *s
 	settings := service.NewSettingService(cxtpSettingRepo{values: map[string]string{
 		service.CodexModelVisibilitySettingKey(8): raw,
 	}}, nil)
-	return service.NewCodexThirdPartyCatalogService(settings, cxtpAccountRepo{accounts: accounts}, nil, nil, nil)
+	svc := service.NewCodexThirdPartyCatalogService(settings, cxtpAccountRepo{accounts: accounts}, nil, nil, nil)
+	// 分组默认模型名单的替身：账号映射的公开名。真实名单由网关 handler 注入，其行为另有专门用例。
+	svc.SetGroupModelLister(func(context.Context, *service.Group) ([]string, error) {
+		var names []string
+		for i := range accounts {
+			for public := range service.AdvertisedModelMappingForAccount(&accounts[i]) {
+				names = append(names, public)
+			}
+		}
+		return names, nil
+	})
+	return svc
 }
 
 func cxtpKimiAccount() service.Account {
@@ -132,7 +143,8 @@ func TestCodexThirdPartyHandlerFiltersAndPublishes(t *testing.T) {
 }
 
 func TestCodexThirdPartyGatewayHandlerAppliesPolicy(t *testing.T) {
-	h := &GatewayHandler{}
+	// 使用真实的分组模型名单生成函数：kimi 分组的名单来自账号映射。
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{byGroup: map[int64][]service.Account{8: {cxtpKimiAccount()}}})
 	h.SetCodexThirdPartyCatalog(cxtpService(t, []string{"kimi-k3"}, cxtpKimiAccount()))
 	group := &service.Group{ID: 8, Platform: service.PlatformKimi}
 	generated := `{"models":[{"slug":"kimi-k3","display_name":"generated"},{"slug":"kimi-other","display_name":"x"}]}`

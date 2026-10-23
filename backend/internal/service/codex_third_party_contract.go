@@ -437,7 +437,7 @@ type CodexThirdPartyCandidate struct {
 	Status    CodexThirdPartyModelStatus `json:"status"`
 	// Reasons 是面向管理员的中文原因列表，不含凭据。
 	Reasons []string `json:"reasons,omitempty"`
-	// Sources 记录名称来源：mapping、alias、composite_route、upstream_sync、base_catalog。
+	// Sources 记录名称出处：group_models（分组默认启用的模型名单，一定有）、mapping、alias、base_catalog。
 	Sources        []string `json:"sources,omitempty"`
 	TargetPlatform string   `json:"target_platform,omitempty"`
 	UpstreamModel  string   `json:"upstream_model,omitempty"`

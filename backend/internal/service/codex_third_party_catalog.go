@@ -28,10 +28,10 @@ import (
 // codexThirdPartyEvaluationBaseTimeout 是评估时获取单个基础目录的时限（管理接口可以比客户端目录请求宽松）。
 const codexThirdPartyEvaluationBaseTimeout = 8 * time.Second
 
-// codexThirdPartySettings 是目录编排读取配置与源快照所需的最小接口（*SettingService 实现）。
+// codexThirdPartySettings 是目录编排读取展示配置所需的最小接口（*SettingService 实现）。
+// 候选名称来自分组默认模型名单，不再读取账号源快照。
 type codexThirdPartySettings interface {
 	LoadCodexModelVisibility(ctx context.Context, groupID int64) (CodexModelVisibilityConfig, bool, error)
-	LoadCodexCatalogSource(ctx context.Context, accountID int64) (CodexCatalogSourceSnapshot, bool, error)
 }
 
 // codexThirdPartyBaseFetcher 获取单个 OpenAI 账号的基础目录正文（已完成与请求路径相同的元数据补全与映射）。
@@ -117,6 +117,8 @@ type CodexThirdPartyCatalogService struct {
 	fetcher     codexThirdPartyBaseFetcher
 	channels    *ChannelService
 	resolver    *CompositeRouteResolver
+	// groupModels 由网关 handler 注入，返回分组默认启用的模型名单（与普通模型列表一致）。
+	groupModels CodexThirdPartyGroupModelLister
 
 	profiles    *codexThirdPartyProfileSet
 	profilesErr error
@@ -367,7 +369,7 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 		}
 	}
 
-	sources, sourceNotes, err := sess.discoverNames(ctx, baseSlugs)
+	sources, err := sess.discoverNames(ctx, baseSlugs)
 	if err != nil {
 		return eval, err
 	}
@@ -419,17 +421,15 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 		rows[name] = &rowState{candidate: candidate, pub: pub}
 	}
 
-	// 预算：对每个可能提供基础目录的账号取最终体积，取最坏值；纯第三方分组按空基础。
+	// 预算：对每个能取到基础目录的账号取最终体积，取最坏值；纯第三方分组按空基础。
+	// 与运行时一致：某个账号拉取失败只是换号，不挡住整个分组；至少一个账号成功（或分组没有
+	// OpenAI 平台账号）即视为检查完成，全部失败才标记未完成。
 	worst, nativeCount, overBudget := 0, 0, false
 	budget := &eval.Budget
 	incomplete := false
 	var reasons []string
 	for _, base := range bases {
 		budget.BaseAccountIDs = append(budget.BaseAccountIDs, base.accountID)
-		if !base.folded && (base.err != nil || len(base.body) == 0) {
-			incomplete = true
-			reasons = append(reasons, fmt.Sprintf("账号 %d 的基础目录不可得", base.accountID))
-		}
 	}
 	sort.Slice(budget.BaseAccountIDs, func(i, j int) bool { return budget.BaseAccountIDs[i] < budget.BaseAccountIDs[j] })
 	compileOne := func(env *codexCatalogEnvelope, entries []codexCatalogEntry) error {
@@ -447,8 +447,13 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 	}
 	if len(parsed) == 0 {
 		if len(bases) > 0 {
-			// 有 OpenAI 账号但基础目录都取不到：只能按空基础估算，且标记未完成。
+			// 有 OpenAI 账号但基础目录全部取不到：只能按空基础估算，且标记未完成。
 			incomplete = true
+			for _, base := range bases {
+				if !base.folded {
+					reasons = append(reasons, fmt.Sprintf("账号 %d 的基础目录不可得", base.accountID))
+				}
+			}
 		}
 		if cerr := compileOne(emptyCodexCatalogEnvelope(), nil); cerr != nil {
 			return eval, cerr
@@ -488,6 +493,31 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 			AccountIDs:     route.AccountIDs,
 		})
 	}
+	// 配置里仍记着、但已不在分组默认模型名单里的模型：作为不可开启的行保留展示，
+	// 让管理员能看到并关闭它们（名单里没有就不会发布）。
+	var orphans []string
+	orphanSet := map[string]struct{}{}
+	for slug := range cfg.Models {
+		if _, listed := sources[slug]; !listed && cfg.Models[slug].Enabled {
+			orphans = append(orphans, slug)
+		}
+	}
+	sort.Strings(orphans)
+	for _, slug := range orphans {
+		if _, inBase := baseSlugs[slug]; inBase {
+			continue
+		}
+		rows[slug] = &rowState{candidate: CodexThirdPartyCandidate{
+			Slug:        slug,
+			DisplayName: slug,
+			Enabled:     true,
+			Status:      CodexModelStatusUnavailable,
+			Reasons:     []string{"该模型已不在分组默认启用的模型列表中，不会发布；可关闭该开关"},
+			Sources:     []string{},
+		}}
+		names = append(names, slug)
+		orphanSet[slug] = struct{}{}
+	}
 	enabledCount := 0
 	for _, name := range names {
 		state, ok := rows[name]
@@ -513,7 +543,14 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 	}
 	budget.EnabledThirdPartyCount = enabledCount
 
-	eval.InputFingerprint = s.inputFingerprint(group, sess, bases, eval.Candidates, sourceNotes)
+	// 指纹只取决于开关以外的输入：配置里遗留的「已不在名单中」的行依赖开关，不参与。
+	fingerprintRows := make([]CodexThirdPartyCandidate, 0, len(eval.Candidates))
+	for _, c := range eval.Candidates {
+		if _, orphan := orphanSet[c.Slug]; !orphan || c.Native {
+			fingerprintRows = append(fingerprintRows, c)
+		}
+	}
+	eval.InputFingerprint = s.inputFingerprint(group, sess, bases, fingerprintRows)
 	return eval, nil
 }
 
@@ -666,7 +703,19 @@ func (sess *codexTPSession) compile(ctx context.Context, env *codexCatalogEnvelo
 		}
 	}
 	sort.Strings(enabled)
+	var listed map[string]struct{}
+	if len(enabled) > 0 {
+		// 只有存在已开启的模型才需要名单，没有开启项的分组不付出这次查询的代价。
+		var err error
+		if _, listed, err = sess.groupModelNames(ctx); err != nil {
+			return nil, err
+		}
+	}
 	for _, slug := range enabled {
+		if _, ok := listed[slug]; !ok {
+			// 已不在分组默认启用的模型名单里（例如账号被停用、映射被改掉）：停发，配置保留。
+			continue
+		}
 		route, err := sess.route(ctx, slug)
 		if err != nil {
 			return nil, err
