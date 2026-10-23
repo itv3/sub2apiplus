@@ -1,0 +1,48 @@
+{
+  "base_commit": "4cfbf39b9ed2aa6959d181e4c2c243dad0722b4f",
+  "changed_path_count": 1,
+  "current_commit": "1c95835f11d0c1590086bb3647749ba7fb6716e5",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6796,
+  "frozen_path_count": 2279,
+  "identity_sha256": "f37cb039151eac385abaa9062e25fc5c4fb061f9146f3535961688ace1d4e81d",
+  "issued_at_utc": "2026-10-23T07:54:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-remove-antigravity-keeper-ci-unit-retirement-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_record_usage_test.go",
+      "predecessor_sha256s": [
+        "25f65f9d645429d2dba2840bb0180d99f2029a48db9e595a62684f43426648c1"
+      ],
+      "reason": "移除已下线Antigravity增强的遗留单元测试，生产源码保持上游默认；旧证据只读。 path=backend/internal/service/gateway_record_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/service-peak-rate-test-clock-20260923-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0f8762e0467fca2d0748e1516690e861554067a09626ce45e8d23a6ee3010938"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
