@@ -1,43 +1,95 @@
 <template>
   <!-- 面板放在表格页布局的固定高度卡片里（该卡片隐藏溢出），必须自己纵向滚动，否则下方模型表格会被截掉 -->
   <div class="min-h-0 flex-1 space-y-4 overflow-y-auto p-4" data-testid="codex-model-visibility-panel">
-    <!-- 功能说明：启用只决定能否在 Codex 中选到，不改变调用权限 -->
-    <div class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-300">
-      <p>{{ t('admin.codexThirdPartyModels.notice') }}</p>
-      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.codexThirdPartyModels.clientHint') }}</p>
-    </div>
-
-    <!-- 分组选择与整体操作 -->
-    <div class="flex flex-wrap items-end justify-between gap-3">
-      <div class="min-w-0 flex-1 sm:flex-none">
-        <label for="codex-third-party-group" class="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-200">
-          {{ t('admin.codexThirdPartyModels.group.label') }}
-        </label>
-        <select
-          id="codex-third-party-group"
-          v-model="selectedGroupValue"
-          data-testid="codex-group-select"
-          class="input h-9 w-full sm:w-80"
-          :disabled="groupsLoading || busy"
-        >
-          <option value="" disabled>{{ t('admin.codexThirdPartyModels.group.placeholder') }}</option>
-          <option v-for="group in eligibleGroups" :key="group.id" :value="String(group.id)">
-            {{ group.name }} · {{ platformDisplayName(group.platform) }}
-          </option>
-        </select>
-      </div>
-      <div class="flex flex-wrap items-center gap-2">
+    <!-- 功能说明：一行简短提示；客户端配置说明默认折叠，点开才显示 -->
+    <div class="text-sm text-gray-600 dark:text-gray-300">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p class="flex items-center gap-1.5" data-testid="codex-notice">
+          <Icon name="infoCircle" size="sm" class="flex-shrink-0 text-gray-400" />
+          <span>{{ t('admin.codexThirdPartyModels.notice') }}</span>
+        </p>
         <button
           type="button"
-          class="btn btn-secondary"
-          data-testid="codex-refresh-button"
-          :disabled="!state || loading || busy"
-          @click="reload()"
+          class="inline-flex items-center gap-1 text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+          data-testid="codex-client-hint-toggle"
+          :aria-expanded="showClientHint"
+          @click="showClientHint = !showClientHint"
         >
-          <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
-          <span class="hidden sm:inline">{{ t('admin.codexThirdPartyModels.actions.refresh') }}</span>
+          <Icon :name="showClientHint ? 'chevronUp' : 'chevronDown'" size="sm" />
+          {{ t('admin.codexThirdPartyModels.clientHintToggle') }}
         </button>
       </div>
+      <p
+        v-if="showClientHint"
+        class="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-500 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400"
+        data-testid="codex-client-hint"
+      >
+        {{ t('admin.codexThirdPartyModels.clientHint') }}
+      </p>
+    </div>
+
+    <!-- 工具栏：分组、搜索、状态筛选、目录体积标签、批量操作合并为一行（窄屏换行）。没选分组时只显示分组下拉 -->
+    <div class="flex flex-wrap items-center gap-2" data-testid="codex-toolbar">
+      <select
+        id="codex-third-party-group"
+        v-model="selectedGroupValue"
+        data-testid="codex-group-select"
+        class="input w-full sm:w-72"
+        :aria-label="t('admin.codexThirdPartyModels.group.label')"
+        :disabled="groupsLoading || busy"
+      >
+        <option value="" disabled>{{ t('admin.codexThirdPartyModels.group.placeholder') }}</option>
+        <option v-for="group in eligibleGroups" :key="group.id" :value="String(group.id)">
+          {{ group.name }} · {{ platformDisplayName(group.platform) }}
+        </option>
+      </select>
+      <template v-if="state">
+        <input
+          v-model="searchText"
+          type="search"
+          data-testid="codex-search"
+          class="input w-full sm:w-56"
+          :placeholder="t('admin.codexThirdPartyModels.filters.searchPlaceholder')"
+          :aria-label="t('admin.codexThirdPartyModels.filters.searchPlaceholder')"
+        />
+        <select
+          v-model="statusFilter"
+          data-testid="codex-status-filter"
+          class="input w-full sm:w-36"
+          :aria-label="t('admin.codexThirdPartyModels.filters.status')"
+        >
+          <option v-for="option in statusFilterOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+        </select>
+        <!-- 正常状态只显示一枚小标签，悬停看明细；超限、未完成、开启时检查仍在下方显示整块卡片 -->
+        <span
+          v-if="budgetNormal"
+          data-testid="codex-budget-chip"
+          class="inline-flex items-center whitespace-nowrap rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+          :title="budgetChipTitle"
+        >
+          {{ budgetChipText }}
+        </span>
+        <div class="flex flex-wrap items-center gap-2 sm:ml-auto">
+          <button
+            type="button"
+            class="btn btn-primary"
+            data-testid="codex-bulk-enable"
+            :disabled="busy || bulkEnableSlugs.length === 0"
+            @click="applyBulk(true)"
+          >
+            {{ t('admin.codexThirdPartyModels.actions.enableSelected', { count: bulkEnableSlugs.length }) }}
+          </button>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            data-testid="codex-bulk-disable"
+            :disabled="busy || bulkDisableSlugs.length === 0"
+            @click="applyBulk(false)"
+          >
+            {{ t('admin.codexThirdPartyModels.actions.disableSelected', { count: bulkDisableSlugs.length }) }}
+          </button>
+        </div>
+      </template>
     </div>
 
     <p v-if="!groupsLoading && eligibleGroups.length === 0" data-testid="codex-no-groups" class="text-sm text-gray-500 dark:text-gray-400">
@@ -68,8 +120,9 @@
     </div>
 
     <template v-else-if="state">
-      <!-- 目录预算 -->
+      <!-- 目录预算：超限、未完成、开启时检查三种状态显示整块卡片（正常状态见工具栏里的小标签） -->
       <section
+        v-if="!budgetNormal"
         class="rounded-lg border border-gray-200 p-4 dark:border-dark-700"
         data-testid="codex-budget"
         :aria-label="t('admin.codexThirdPartyModels.budget.title')"
@@ -91,18 +144,11 @@
             {{ t('admin.codexThirdPartyModels.budget.incomplete') }}
           </span>
           <span
-            v-else-if="budgetOverLimit"
+            v-else
             data-testid="codex-budget-over"
             class="inline-flex rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-300"
           >
             {{ t('admin.codexThirdPartyModels.budget.overLimit') }}
-          </span>
-          <span
-            v-else
-            data-testid="codex-budget-within"
-            class="inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-          >
-            {{ t('admin.codexThirdPartyModels.budget.withinLimit') }}
           </span>
         </div>
         <p v-if="budget.deferred" class="mt-2 text-xs text-gray-500 dark:text-gray-400" data-testid="codex-budget-deferred-hint">
@@ -133,48 +179,6 @@
           {{ t('admin.codexThirdPartyModels.budget.limit', { limit: formatBytes(budget.limit_bytes) }) }}
         </p>
       </section>
-
-      <!-- 搜索、筛选、批量操作 -->
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="flex flex-1 flex-wrap items-center gap-2">
-          <input
-            v-model="searchText"
-            type="search"
-            data-testid="codex-search"
-            class="input h-9 w-full sm:w-64"
-            :placeholder="t('admin.codexThirdPartyModels.filters.searchPlaceholder')"
-            :aria-label="t('admin.codexThirdPartyModels.filters.searchPlaceholder')"
-          />
-          <select
-            v-model="statusFilter"
-            data-testid="codex-status-filter"
-            class="input h-9 w-full sm:w-44"
-            :aria-label="t('admin.codexThirdPartyModels.filters.status')"
-          >
-            <option v-for="option in statusFilterOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
-          </select>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            class="btn btn-primary"
-            data-testid="codex-bulk-enable"
-            :disabled="busy || bulkEnableSlugs.length === 0"
-            @click="applyBulk(true)"
-          >
-            {{ t('admin.codexThirdPartyModels.actions.enableSelected', { count: bulkEnableSlugs.length }) }}
-          </button>
-          <button
-            type="button"
-            class="btn btn-secondary"
-            data-testid="codex-bulk-disable"
-            :disabled="busy || bulkDisableSlugs.length === 0"
-            @click="applyBulk(false)"
-          >
-            {{ t('admin.codexThirdPartyModels.actions.disableSelected', { count: bulkDisableSlugs.length }) }}
-          </button>
-        </div>
-      </div>
 
       <!-- 候选模型表 -->
       <div class="overflow-x-auto rounded-lg border border-gray-200 dark:border-dark-700">
@@ -417,6 +421,8 @@ const state = ref<CodexThirdPartyGroupState | null>(null)
 const loading = ref(false)
 const busy = ref(false)
 const errorMessage = ref('')
+// 客户端配置说明默认折叠，点开才显示。
+const showClientHint = ref(false)
 const rejections = ref<RejectionItem[]>([])
 
 let loadSeq = 0
@@ -448,10 +454,6 @@ async function loadState(groupId: number, options: { silent?: boolean } = {}) {
   } finally {
     if (seq === loadSeq) loading.value = false
   }
-}
-
-function reload() {
-  if (selectedGroupId.value) void loadState(selectedGroupId.value)
 }
 
 /** 供 Plus 页顶部“刷新”按钮调用：重新读取分组列表，并重新加载当前选中的分组。 */
@@ -624,6 +626,31 @@ const emptyBudget: CodexCatalogBudget = {
 }
 const budget = computed<CodexCatalogBudget>(() => state.value?.evaluation.budget ?? emptyBudget)
 const budgetOverLimit = computed(() => budget.value.complete && budget.value.worst_case_bytes > budget.value.limit_bytes)
+// 正常：检查完成、未超限、不是“开启时检查”。只有正常状态才折叠成工具栏里的小标签。
+const budgetNormal = computed(() => budget.value.complete && !budget.value.deferred && !budgetOverLimit.value)
+
+/** 小标签里的体积：1 MiB 以上整数倍写 MiB，其余写 KiB（一位小数）。 */
+function formatSizeShort(bytes: number): string {
+  if (bytes >= 1048576 && bytes % 1048576 === 0) return `${bytes / 1048576} MiB`
+  return `${(bytes / 1024).toFixed(1)} KiB`
+}
+const budgetChipText = computed(() =>
+  t('admin.codexThirdPartyModels.budget.chip', {
+    used: formatSizeShort(budget.value.worst_case_bytes),
+    limit: formatSizeShort(budget.value.limit_bytes),
+    status: t('admin.codexThirdPartyModels.budget.withinLimit')
+  })
+)
+// 悬停明细：原生数量、已开启第三方数量、最坏完整目录字节数、剩余空间、客户端上限。
+const budgetChipTitle = computed(() =>
+  [
+    `${t('admin.codexThirdPartyModels.budget.nativeCount')}：${budget.value.native_count}`,
+    `${t('admin.codexThirdPartyModels.budget.enabledCount')}：${budget.value.enabled_third_party_count}`,
+    `${t('admin.codexThirdPartyModels.budget.worstCase')}：${formatBytes(budget.value.worst_case_bytes)}`,
+    `${t('admin.codexThirdPartyModels.budget.remaining')}：${formatBytes(budget.value.remaining_bytes)}`,
+    t('admin.codexThirdPartyModels.budget.limit', { limit: formatBytes(budget.value.limit_bytes) })
+  ].join('\n')
+)
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return '-'

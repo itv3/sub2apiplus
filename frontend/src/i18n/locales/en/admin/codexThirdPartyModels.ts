@@ -2,7 +2,8 @@ export default {
   codexThirdPartyModels: {
     // Tab label on the Plus enhancements page
     tabLabel: 'Codex third-party models',
-    notice: '"Enabled" only decides whether the model is published to the Codex model picker with the right configuration. Disabled does not mean calls are blocked: call permissions are still decided by the key, group allowlist, routing and account rules. Third-party models are off by default.',
+    notice: 'Enabling only decides whether a model can be picked in Codex with the right configuration; it does not change call permissions. Third-party models are all off by default.',
+    clientHintToggle: 'Client configuration notes',
     clientHint: 'The client only fetches the online catalog when model_catalog_url is configured on the provider. The catalog response is limited to 1 MiB and must finish within 5 seconds; the client refreshes about every 4.5 minutes, so a switch change shows up in the picker within about 5 minutes. A third-party-only group with everything off returns an empty catalog, so the client must set model explicitly.',
     loading: 'Loading group configuration…',
     loadFailed: 'Failed to load Codex third-party model configuration',
@@ -17,7 +18,6 @@ export default {
       loadFailed: 'Failed to load groups'
     },
     actions: {
-      refresh: 'Refresh',
       enableSelected: 'Enable selected ({count})',
       disableSelected: 'Disable selected ({count})',
       markVerified: 'Mark verified',
@@ -28,6 +28,7 @@ export default {
       title: 'Catalog size budget',
       incomplete: 'Check incomplete',
       incompleteHint: 'The budget check has not completed, so it cannot be confirmed that enabling will keep the catalog within the limit.',
+      chip: 'Catalog {used} / {limit} · {status}',
       deferred: 'Checked on enable',
       deferredHint: 'The page does not request the official account catalog when loading; the catalog size budget is checked when you enable a model (preview and save), and nothing is enabled before that check passes.',
       overLimit: 'Over limit',

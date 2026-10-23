@@ -2,7 +2,8 @@ export default {
   codexThirdPartyModels: {
     // Plus 增强页里的标签名
     tabLabel: 'Codex 三方模型启用',
-    notice: '“启用”只决定管理员能否让该模型出现在 Codex 的模型选择器里并带上正确配置；未启用不等于禁止调用，调用权限仍由 Key、分组白名单、路由和账号规则决定。第三方模型默认全部关闭。',
+    notice: '启用只决定能否在 Codex 中选到并带正确配置，不改变调用权限；第三方模型默认全部关闭。',
+    clientHintToggle: '客户端配置说明',
     clientHint: '客户端需要在 provider 下配置 model_catalog_url 才会拉取在线目录。目录响应上限 1 MiB、请求须在 5 秒内完成；客户端约每 4 分 30 秒刷新一次，开关变化最迟约 5 分钟在选择器中体现。纯第三方分组全部关闭时目录为空，客户端需要显式配置 model。',
     loading: '正在读取分组配置…',
     loadFailed: '读取 Codex 三方模型配置失败',
@@ -17,7 +18,6 @@ export default {
       loadFailed: '读取分组列表失败'
     },
     actions: {
-      refresh: '刷新',
       enableSelected: '批量开启（{count}）',
       disableSelected: '批量关闭（{count}）',
       markVerified: '标记已验证',
@@ -28,6 +28,7 @@ export default {
       title: '目录体积预算',
       incomplete: '未完成检查',
       incompleteHint: '预算检查尚未完成，不能确认开启后目录不会超限。',
+      chip: '目录 {used} / {limit} · {status}',
       deferred: '开启时检查',
       deferredHint: '页面读取不向官方账号请求目录，目录体积预算在开启（预览与保存）时检查；检查通过前不会开启任何模型。',
       overLimit: '已超限',

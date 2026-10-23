@@ -223,7 +223,8 @@ describe('CodexModelVisibilityPanel 分组与表格', () => {
     expect(wrapper.find('[data-testid="codex-row-gpt-5.5"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="codex-row-glm-5.2"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="codex-row-old-model"]').exists()).toBe(true)
-    expect(wrapper.get('[data-testid="codex-budget-native"]').text()).toBe('1')
+    // 正常状态的预算折叠成小标签，原生数量在悬停提示里。
+    expect(wrapper.get('[data-testid="codex-budget-chip"]').attributes('title')).toContain('1')
   })
 
   it('展示实际目标、能力摘要和状态徽标', async () => {
@@ -302,23 +303,58 @@ describe('CodexModelVisibilityPanel 分组与表格', () => {
 // ---------------------------------------------------------------------------
 
 describe('CodexModelVisibilityPanel 目录预算', () => {
-  it('展示原生数量、已开启第三方数量、最坏字节数和剩余空间', async () => {
+  it('正常状态只出现工具栏里的小标签，不出现整块卡片；悬停提示列出五项明细', async () => {
     const wrapper = await mountPanel(groupState({
-      budget: { native_count: 6, enabled_third_party_count: 2, worst_case_bytes: 642453, remaining_bytes: 406123 }
+      budget: { native_count: 6, enabled_third_party_count: 2, worst_case_bytes: 83661, remaining_bytes: 964915 }
+    }))
+    const chip = wrapper.get('[data-testid="codex-budget-chip"]')
+    // 形如“目录 81.7 KiB / 1 MiB · 未超限”。
+    expect(chip.text()).toBe('admin.codexThirdPartyModels.budget.chip:' + JSON.stringify({
+      used: '81.7 KiB',
+      limit: '1 MiB',
+      status: 'admin.codexThirdPartyModels.budget.withinLimit'
+    }))
+    const title = chip.attributes('title') ?? ''
+    expect(title).toContain('admin.codexThirdPartyModels.budget.nativeCount：6')
+    expect(title).toContain('admin.codexThirdPartyModels.budget.enabledCount：2')
+    expect(title).toContain('83,661')
+    expect(title).toContain('964,915')
+    expect(title).toContain('"limit":"1,048,576 B (1024.0 KiB)"')
+    // 小标签在工具栏里，整块卡片与其中的明细都不出现。
+    expect(wrapper.get('[data-testid="codex-toolbar"]').find('[data-testid="codex-budget-chip"]').exists()).toBe(true)
+    for (const id of ['codex-budget', 'codex-budget-native', 'codex-budget-worst', 'codex-budget-incomplete', 'codex-budget-over', 'codex-budget-deferred']) {
+      expect(wrapper.find(`[data-testid="${id}"]`).exists(), id).toBe(false)
+    }
+  })
+
+  it('异常状态（超限、未完成、开启时检查）显示整块卡片，不显示小标签', async () => {
+    for (const budget of [
+      { worst_case_bytes: 1048577, remaining_bytes: -1 },
+      { complete: false, reason: '基础目录账号不可得' },
+      { complete: false, deferred: true }
+    ]) {
+      const wrapper = await mountPanel(groupState({ budget }))
+      expect(wrapper.find('[data-testid="codex-budget"]').exists(), JSON.stringify(budget)).toBe(true)
+      expect(wrapper.find('[data-testid="codex-budget-chip"]').exists(), JSON.stringify(budget)).toBe(false)
+    }
+  })
+
+  it('超限的整块卡片仍显示原生数量、已开启数量、最坏字节数和剩余空间', async () => {
+    const wrapper = await mountPanel(groupState({
+      budget: { native_count: 6, enabled_third_party_count: 2, worst_case_bytes: 1048999, remaining_bytes: -423 }
     }))
     expect(wrapper.get('[data-testid="codex-budget-native"]').text()).toBe('6')
     expect(wrapper.get('[data-testid="codex-budget-enabled"]').text()).toBe('2')
-    expect(wrapper.get('[data-testid="codex-budget-worst"]').text()).toContain('642,453')
-    expect(wrapper.get('[data-testid="codex-budget-remaining"]').text()).toContain('406,123')
-    expect(wrapper.find('[data-testid="codex-budget-within"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="codex-budget-incomplete"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="codex-budget-worst"]').text()).toContain('1,048,999')
+    expect(wrapper.get('[data-testid="codex-budget-remaining"]').text()).toContain('-423')
+    expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(true)
   })
 
   it('预算未完成时显示“未完成检查”，不得显示通过', async () => {
     const wrapper = await mountPanel(groupState({ budget: { complete: false, reason: '基础目录账号不可得' } }))
     expect(wrapper.get('[data-testid="codex-budget-incomplete"]').text()).toBe('admin.codexThirdPartyModels.budget.incomplete')
     expect(wrapper.get('[data-testid="codex-budget-reason"]').text()).toBe('基础目录账号不可得')
-    expect(wrapper.find('[data-testid="codex-budget-within"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-budget-chip"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(false)
   })
 
@@ -329,7 +365,7 @@ describe('CodexModelVisibilityPanel 目录预算', () => {
     expect(wrapper.get('[data-testid="codex-budget-deferred"]').text()).toBe('admin.codexThirdPartyModels.budget.deferred')
     expect(wrapper.get('[data-testid="codex-budget-deferred-hint"]').text()).toBe('admin.codexThirdPartyModels.budget.deferredHint')
     expect(wrapper.find('[data-testid="codex-budget-incomplete"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="codex-budget-within"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-budget-chip"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(false)
     // 没有真实数据时不展示一排 0 字节。
     expect(wrapper.find('[data-testid="codex-budget-worst"]').exists()).toBe(false)
@@ -338,13 +374,66 @@ describe('CodexModelVisibilityPanel 目录预算', () => {
   it('最坏字节数超过上限时显示超限', async () => {
     const wrapper = await mountPanel(groupState({ budget: { worst_case_bytes: 1048577, remaining_bytes: -1 } }))
     expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="codex-budget-within"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-budget-chip"]').exists()).toBe(false)
   })
 
   it('恰好等于上限不算超限', async () => {
     const wrapper = await mountPanel(groupState({ budget: { worst_case_bytes: 1048576, remaining_bytes: 0 } }))
     expect(wrapper.find('[data-testid="codex-budget-over"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="codex-budget-within"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="codex-budget-chip"]').exists()).toBe(true)
+  })
+})
+
+describe('CodexModelVisibilityPanel 顶部与工具栏', () => {
+  it('说明框是一行简短提示，客户端配置说明默认折叠，点开才显示，再点收起', async () => {
+    const wrapper = await mountPanel()
+    expect(wrapper.get('[data-testid="codex-notice"]').text()).toContain('admin.codexThirdPartyModels.notice')
+    expect(wrapper.find('[data-testid="codex-client-hint"]').exists()).toBe(false)
+    const toggle = wrapper.get('[data-testid="codex-client-hint-toggle"]')
+    expect(toggle.text()).toContain('admin.codexThirdPartyModels.clientHintToggle')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+
+    await toggle.trigger('click')
+    expect(wrapper.get('[data-testid="codex-client-hint"]').text()).toBe('admin.codexThirdPartyModels.clientHint')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-testid="codex-client-hint"]').exists()).toBe(false)
+  })
+
+  it('面板自己没有刷新按钮；reload 仍通过 expose 提供给页面顶部刷新', async () => {
+    const wrapper = await mountPanel()
+    expect(wrapper.find('[data-testid="codex-refresh-button"]').exists()).toBe(false)
+    expect(typeof (wrapper.vm as unknown as { reload: unknown }).reload).toBe('function')
+  })
+
+  it('工具栏把分组、搜索、状态筛选、预算小标签和批量按钮放在同一行容器里', async () => {
+    const wrapper = await mountPanel()
+    const toolbar = wrapper.get('[data-testid="codex-toolbar"]')
+    expect(toolbar.classes()).toContain('flex-wrap')
+    for (const id of ['codex-group-select', 'codex-search', 'codex-status-filter', 'codex-budget-chip', 'codex-bulk-enable', 'codex-bulk-disable']) {
+      expect(toolbar.find(`[data-testid="${id}"]`).exists(), id).toBe(true)
+    }
+  })
+
+  it('分组下拉带 aria-label，输入控件不写死 h-9（自然高度，文字不被裁）', async () => {
+    const wrapper = await mountPanel()
+    const group = wrapper.get('[data-testid="codex-group-select"]')
+    expect(group.attributes('aria-label')).toBe('admin.codexThirdPartyModels.group.label')
+    for (const id of ['codex-group-select', 'codex-search', 'codex-status-filter']) {
+      expect(wrapper.get(`[data-testid="${id}"]`).classes(), id).not.toContain('h-9')
+    }
+  })
+
+  it('没选分组时工具栏只有分组下拉，保留“请选择分组”占位', async () => {
+    mocks.getAllGroups.mockResolvedValue([group(GROUP_ID, '混合分组', 'composite')])
+    const wrapper = mount(CodexModelVisibilityPanel, { global: { stubs: { Icon: true } } })
+    await flushPromises()
+    const toolbar = wrapper.get('[data-testid="codex-toolbar"]')
+    expect(toolbar.find('[data-testid="codex-group-select"]').exists()).toBe(true)
+    for (const id of ['codex-search', 'codex-status-filter', 'codex-budget-chip', 'codex-bulk-enable', 'codex-bulk-disable']) {
+      expect(toolbar.find(`[data-testid="${id}"]`).exists(), id).toBe(false)
+    }
+    expect(wrapper.text()).toContain('admin.codexThirdPartyModels.group.choosePrompt')
   })
 })
 

@@ -77,6 +77,27 @@ describe('ApiKeyMimicSettingsView Codex 三方模型启用标签', () => {
     expect(wrapper.text()).not.toContain('admin.standardApiCompat.description')
   })
 
+  it('“OAuth 官方客户端伪装已内置启用”提示只在另两个标签显示，Codex 标签下不显示', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const notice = () => wrapper.find('[data-testid="oauth-official-egress-built-in"]')
+    expect(notice().exists()).toBe(true)
+
+    await wrapper.get('[data-testid="plus-tab-codex-models"]').trigger('click')
+    expect(notice().exists()).toBe(false)
+
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.plusEnhancements.tabs.standard')!.trigger('click')
+    expect(notice().exists()).toBe(true)
+    await wrapper.findAll('button').find((button) => button.text() === 'admin.plusEnhancements.tabs.mimic')!.trigger('click')
+    expect(notice().exists()).toBe(true)
+  })
+
+  it('状态筛选使用全站统一的自然高度，不写死 h-9', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('[data-testid="mimic-status-filter"]').classes()).not.toContain('h-9')
+  })
+
   it('从新标签切回原标签时恢复账号表', async () => {
     const wrapper = mountView()
     await flushPromises()

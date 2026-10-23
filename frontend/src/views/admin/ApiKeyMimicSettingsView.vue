@@ -24,6 +24,7 @@
         </div>
 
         <div
+          v-if="activeTab !== 'codexModels'"
           data-testid="oauth-official-egress-built-in"
           class="mt-4 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-900/60 dark:bg-primary-950/30"
         >
@@ -74,7 +75,7 @@
             <label :for="`${activeTab}-status-filter`" class="text-sm font-medium text-gray-700 dark:text-gray-200">
               {{ t('admin.apiKeyMimic.filters.status') }}
             </label>
-            <select :id="`${activeTab}-status-filter`" v-model="compatibilityStatusFilter" :data-testid="`${activeTab}-status-filter`" class="input h-9 w-full sm:w-44">
+            <select :id="`${activeTab}-status-filter`" v-model="compatibilityStatusFilter" :data-testid="`${activeTab}-status-filter`" class="input w-full sm:w-44">
               <option value="all">{{ t('admin.apiKeyMimic.filters.all') }}</option>
               <option value="enabled">{{ t('admin.apiKeyMimic.filters.enabled') }}</option>
               <option value="disabled">{{ t('admin.apiKeyMimic.filters.disabled') }}</option>
