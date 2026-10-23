@@ -93,8 +93,8 @@ type codexThirdPartyUpstreamSyncer interface {
 	SyncUpstreamModelCatalog(ctx context.Context, account *Account) (*UpstreamModelCatalog, error)
 }
 
-// codexThirdPartySettings 读取展示配置，并读写账号源快照。*SettingService 满足该接口。
-type codexThirdPartySettings interface {
+// codexThirdPartyAdminSettings 读取展示配置，并读写账号源快照。*SettingService 满足该接口。
+type codexThirdPartyAdminSettings interface {
 	LoadCodexModelVisibility(ctx context.Context, groupID int64) (CodexModelVisibilityConfig, bool, error)
 	LoadCodexCatalogSource(ctx context.Context, accountID int64) (CodexCatalogSourceSnapshot, bool, error)
 	SaveCodexCatalogSource(ctx context.Context, snap CodexCatalogSourceSnapshot) error
@@ -193,7 +193,7 @@ type CodexThirdPartyAdminService struct {
 	groups    codexThirdPartyGroupReader
 	accounts  codexThirdPartyAccountLister
 	syncer    codexThirdPartyUpstreamSyncer
-	settings  codexThirdPartySettings
+	settings  codexThirdPartyAdminSettings
 	store     CodexModelVisibilityStore
 	evaluator CodexThirdPartyCatalogEvaluator
 
@@ -218,7 +218,7 @@ type codexThirdPartyAdminDeps struct {
 	Groups    codexThirdPartyGroupReader
 	Accounts  codexThirdPartyAccountLister
 	Syncer    codexThirdPartyUpstreamSyncer
-	Settings  codexThirdPartySettings
+	Settings  codexThirdPartyAdminSettings
 	Store     CodexModelVisibilityStore
 	Evaluator CodexThirdPartyCatalogEvaluator
 }
