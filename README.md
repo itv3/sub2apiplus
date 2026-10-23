@@ -239,7 +239,16 @@ Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。OpenAI ke
 
 `claude-code-20250219` 是通过 `anthropic-beta` 发送的 Claude Code 相关实验特性标识，日期属于标识名称，不是客户端版本。它的完整内部语义未公开；本功能仅移除这一身份标识，其它功能 beta 按原有规则处理。参见 [Anthropic beta 请求头文档](https://platform.claude.com/docs/en/api/beta-headers)与[订阅者 API 赠送额度说明](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)。
 
-### 1.6 其它优化
+### 1.6 隐藏已映射模型
+
+账号配置具体模型映射后，模型发现列表只展示供客户端请求的别名，隐藏同一账号中对应的上游原名。例如配置 `deepseek-flash → cline-pass/deepseek-v4.1-flash`，即使保留了原名的自映射，发现列表也只展示 `deepseek-flash`。
+
+1. **仅影响展示**：普通、Composite 和 Codex 模型目录共用展示过滤规则，不删除账号映射，不改变模型准入、调度和请求转发。直接请求 `cline-pass/deepseek-v4.1-flash` 仍按原有配置处理；需要原名直调时，应保留其白名单或自映射。
+2. **按账号过滤**：多个别名指向同一上游模型时保留全部别名；同组其它账号独立提供原名时，合并目录仍可展示原名。目标自身也是另一个模型的别名时保留该名称。
+3. **兼容现有规则**：单纯自映射不隐藏；通配符、OpenAI 透传模式和 Antigravity 官方模型白名单沿用现有语义。本功能不改变独立配置的模型广场与渠道模型目录。
+4. **维护方式**：过滤逻辑集中在独立展示辅助函数中，接入现有目录生成入口，不增加数据库字段、配置开关或前端适配，便于长期合并上游更新。
+
+### 1.7 其它优化
 
 - Composite 与 Grok 同等豁免，使 Anthropic 协议也能访问 GPT、Grok 模型。
 - Composite 分组的模型列表按请求协议过滤：OpenAI Compatible 与 OpenAI Responses 共用 OpenAI 模型目录；携带 `Anthropic-Version` 或 Claude CLI 特征时仅返回 Anthropic 协议模型。Kimi、智谱、DeepSeek 按账号实际 `api_protocol` 归组；配置为自适应协议（`api_protocol=adaptive`）的账号会根据入站请求选择上游协议，因此其模型同时显示在 OpenAI 与 Anthropic 两类目录中。自定义模型列表仅在过滤结果上取交集；该功能只影响模型展示，不限制实际请求路由。

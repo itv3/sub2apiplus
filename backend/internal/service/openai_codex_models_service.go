@@ -280,7 +280,7 @@ func openAIConfiguredCodexModelIDs(accounts []Account) []string {
 		if account.Platform != PlatformOpenAI {
 			continue
 		}
-		for modelID := range account.GetModelMapping() {
+		for modelID := range AdvertisedModelMappingForAccount(account) {
 			modelID = strings.TrimSpace(modelID)
 			if modelID == "" || strings.Contains(modelID, "*") {
 				continue
@@ -315,6 +315,12 @@ func openAIConfiguredCodexModelIDsForGroup(accounts []Account, group *Group) []s
 			account := &accounts[i]
 			if account.Platform != PlatformOpenAI {
 				continue
+			}
+			// 分组白名单只能筛选展示模型，不能重新补回账号已隐藏的上游原名。
+			if !account.IsOpenAIPassthroughEnabled() {
+				if _, hidden := mappedModelTargetsForListing(account.GetModelMapping())[selectedModel]; hidden {
+					continue
+				}
 			}
 			mappedModel, matched := account.ResolveMappedModel(selectedModel)
 			if !matched || strings.TrimSpace(mappedModel) == "" {

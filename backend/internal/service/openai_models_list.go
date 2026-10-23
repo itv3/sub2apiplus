@@ -228,9 +228,13 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 	}
 	projected := make([]json.RawMessage, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
+	hiddenTargets := mappedModelTargetsForListing(account.GetModelMapping())
 	for _, id := range candidates {
 		id = strings.TrimSpace(id)
 		if id == "" || strings.Contains(id, "*") {
+			continue
+		}
+		if _, hidden := hiddenTargets[id]; hidden {
 			continue
 		}
 		if _, ok := seen[id]; ok {
@@ -274,7 +278,7 @@ func projectAccountModelAliases(body []byte, account *Account, group *Group, cod
 // including ordinary discovery and pinned scheduler fallback. Locally generated
 // catalogs retain their existing policy and do not pass through this function.
 func ApplyPinnedCodexModelsMapping(response *OpenAIModelsResponse, account *Account, group *Group) error {
-	if group == nil || group.Platform != PlatformOpenAI {
+	if group == nil || (group.Platform != PlatformOpenAI && group.Platform != PlatformComposite) {
 		return nil
 	}
 	body, err := projectAccountModelsBody(response.Body, account, group, true)

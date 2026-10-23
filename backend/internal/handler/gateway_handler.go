@@ -1195,6 +1195,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
 		source := modelListingSource(platform, availableModels, defaultModelIDsForPlatform(platform))
+		source = h.gatewayService.FilterMappedModelTargetsForListing(c.Request.Context(), groupID, platform, source)
 		writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(source))
 		return
 	}
@@ -1310,7 +1311,9 @@ func (h *GatewayHandler) codexModelIDsForGroup(ctx context.Context, group *servi
 	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
 	fallbackModels := defaultCodexModelIDsForPlatform(platform)
 	if group.ModelAllowlistEnabled() {
-		return group.ModelAllowlist.FilterForListing(modelListingSource(platform, availableModels, fallbackModels))
+		source := modelListingSource(platform, availableModels, fallbackModels)
+		source = h.gatewayService.FilterMappedModelTargetsForListing(ctx, groupID, platform, source)
+		return group.ModelAllowlist.FilterForListing(source)
 	}
 	if len(availableModels) > 0 {
 		return availableModels

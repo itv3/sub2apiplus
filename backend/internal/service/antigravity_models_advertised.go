@@ -14,5 +14,10 @@ func AdvertisedModelMappingForAccount(account *Account) map[string]string {
 		}
 		return mapping
 	}
-	return account.GetModelMapping()
+	mapping := account.GetModelMapping()
+	// 平台内置别名用于兼容默认请求名；仅管理员显式配置映射时隐藏原名。
+	if account.IsOpenAIPassthroughEnabled() || len(stringMappingFromRaw(account.Credentials["model_mapping"])) == 0 {
+		return mapping
+	}
+	return modelMappingForListing(mapping)
 }
