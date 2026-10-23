@@ -130,6 +130,9 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+
+		// Codex 三方模型启用
+		registerCodexThirdPartyModelsRoutes(admin, h.Admin.CodexThirdPartyModels)
 	}
 }
 

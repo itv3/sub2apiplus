@@ -87,6 +87,7 @@ var ProviderSet = wire.NewSet(
 	NewUsageCleanupRepository,
 	NewDashboardAggregationRepository,
 	NewSettingRepository,
+	NewCodexModelVisibilityStore, // Codex 三方模型启用：展示配置原子存储
 	NewOpsRepository,
 	NewAuditLogRepository,
 	NewPasskeyRepository,

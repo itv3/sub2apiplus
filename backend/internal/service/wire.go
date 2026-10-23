@@ -1006,6 +1006,8 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenCodeGoUsageService,
 	ProvideSettingService,
 	NewCodexThirdPartyCatalogService, // Codex 三方模型启用：目录编排与评估
+	wire.Bind(new(CodexThirdPartyCatalogEvaluator), new(*CodexThirdPartyCatalogService)),
+	NewCodexThirdPartyAdminService, // Codex 三方模型启用：管理服务
 	NewDataManagementService,
 	ProvideBackupService,
 	ProvideOpsSystemLogSink,

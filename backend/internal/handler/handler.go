@@ -43,6 +43,8 @@ type AdminHandlers struct {
 	Affiliate              *admin.AffiliateHandler
 	Compliance             *admin.ComplianceHandler
 	AuditLog               *admin.AuditLogHandler
+	// CodexThirdPartyModels 是「Codex 三方模型启用」管理接口。
+	CodexThirdPartyModels *admin.CodexThirdPartyModelsHandler
 }
 
 // Handlers contains all HTTP handlers
