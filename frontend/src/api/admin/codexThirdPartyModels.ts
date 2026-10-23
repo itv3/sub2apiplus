@@ -20,8 +20,11 @@ export type CodexThirdPartyModelStatus =
   | 'over_budget'
   | 'unavailable'
 
-/** 账号模型 ID 源快照的状态；missing 表示从未同步。 */
-export type CodexCatalogSourceStatus = 'missing' | 'complete' | 'empty' | 'failed'
+/**
+ * 账号模型 ID 源快照的状态：missing 表示从未同步；official_skipped 表示官方 OpenAI 账号
+ * （OAuth、SetupToken 或官方地址的 API Key），不可能承接第三方模型，不同步也不计为过期。
+ */
+export type CodexCatalogSourceStatus = 'missing' | 'complete' | 'empty' | 'failed' | 'official_skipped'
 
 export interface CodexModelVerification {
   fingerprint: string

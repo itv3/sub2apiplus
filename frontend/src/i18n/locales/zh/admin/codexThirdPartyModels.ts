@@ -50,7 +50,8 @@ export default {
         complete: '已同步',
         empty: '上游返回空列表',
         failed: '同步失败',
-        refreshing: '刷新中'
+        refreshing: '刷新中',
+        official_skipped: '官方账号，无需同步'
       }
     },
     filters: {

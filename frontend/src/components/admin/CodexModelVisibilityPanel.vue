@@ -433,7 +433,8 @@ const SOURCE_STATUS_KEYS: Record<string, string> = {
   missing: 'admin.codexThirdPartyModels.sources.status.missing',
   complete: 'admin.codexThirdPartyModels.sources.status.complete',
   empty: 'admin.codexThirdPartyModels.sources.status.empty',
-  failed: 'admin.codexThirdPartyModels.sources.status.failed'
+  failed: 'admin.codexThirdPartyModels.sources.status.failed',
+  official_skipped: 'admin.codexThirdPartyModels.sources.status.official_skipped'
 }
 
 // ---------------------------------------------------------------------------
@@ -540,6 +541,15 @@ function reload() {
     void loadState(selectedGroupId.value)
   }
 }
+
+/** 供 Plus 页顶部“刷新”按钮调用：重新读取分组列表，并重新加载当前选中的分组。 */
+async function reloadAll() {
+  const groupId = selectedGroupId.value
+  pollCount = 0
+  await Promise.all([loadGroups(), groupId ? loadState(groupId) : Promise.resolve()])
+}
+
+defineExpose({ reload: reloadAll })
 
 watch(selectedGroupValue, () => {
   clearPoll()

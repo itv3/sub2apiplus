@@ -16,7 +16,7 @@
             class="btn btn-secondary"
             :disabled="mimicLoading"
             :title="t('admin.apiKeyMimic.refresh')"
-            @click="loadMimicAccounts()"
+            @click="activeTab === 'codexModels' ? codexPanelRef?.reload() : loadMimicAccounts()"
           >
             <Icon name="refresh" size="md" :class="mimicLoading ? 'animate-spin' : ''" />
             <span class="hidden sm:inline">{{ t('admin.apiKeyMimic.refresh') }}</span>
@@ -144,7 +144,7 @@
             </template>
           </DataTable>
         </div>
-        <CodexModelVisibilityPanel v-else />
+        <CodexModelVisibilityPanel v-else ref="codexPanelRef" />
 
       </template>
     </TablePageLayout>
@@ -177,6 +177,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const activeTab = ref<TabKey>('mimic')
+const codexPanelRef = ref<InstanceType<typeof CodexModelVisibilityPanel> | null>(null)
 const activeTabClass = 'bg-primary-600 text-white shadow-sm'
 const inactiveTabClass = 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'
 

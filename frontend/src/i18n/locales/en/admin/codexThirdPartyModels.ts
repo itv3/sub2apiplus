@@ -50,7 +50,8 @@ export default {
         complete: 'Synced',
         empty: 'Upstream returned an empty list',
         failed: 'Sync failed',
-        refreshing: 'Refreshing'
+        refreshing: 'Refreshing',
+        official_skipped: 'Official account, no sync needed'
       }
     },
     filters: {

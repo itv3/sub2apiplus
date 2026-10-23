@@ -48,6 +48,10 @@ const (
 
 	// 源快照在管理页面上的状态：除了快照自身的 complete、empty、failed，还有从未同步过的 missing。
 	codexThirdPartySourceStatusMissing = "missing"
+	// codexThirdPartySourceStatusOfficialSkipped 表示官方 OpenAI 账号：它不可能承接第三方模型，
+	// 同步只会白白多一次官方出站并改写账号 Extra，所以源刷新（自动与手动）一律跳过，
+	// 页面以该状态展示，不计为过期。
+	codexThirdPartySourceStatusOfficialSkipped = "official_skipped"
 )
 
 var (
@@ -137,7 +141,8 @@ type CodexThirdPartySourceStatus struct {
 	AccountName   string `json:"account_name"`
 	Platform      string `json:"platform"`
 	AccountStatus string `json:"account_status"`
-	// Status 取 missing（从未同步）、complete、empty（上游明确返回空列表）、failed。
+	// Status 取 missing（从未同步）、complete、empty（上游明确返回空列表）、failed，
+	// 以及 official_skipped（官方 OpenAI 账号，不同步也不计为过期）。
 	Status      string     `json:"status"`
 	SyncedAt    *time.Time `json:"synced_at,omitempty"`
 	AttemptedAt *time.Time `json:"attempted_at,omitempty"`
@@ -675,6 +680,11 @@ func (s *CodexThirdPartyAdminService) collectSources(ctx context.Context, accoun
 	statuses := make([]CodexThirdPartySourceStatus, 0, len(accounts))
 	for i := range accounts {
 		account := accounts[i]
+		if isCodexThirdPartyOfficialSourceAccount(&account) {
+			// 官方 OpenAI 账号：不读快照、不刷新，只在列表里标明跳过原因。
+			statuses = append(statuses, buildOfficialSkippedSourceStatus(&account))
+			continue
+		}
 		snap, found, loadErr := s.settings.LoadCodexCatalogSource(ctx, account.ID)
 		if loadErr != nil {
 			// 快照损坏或读取失败：按「需要刷新」处理，刷新成功会覆盖损坏的内容。
@@ -686,6 +696,24 @@ func (s *CodexThirdPartyAdminService) collectSources(ctx context.Context, accoun
 		statuses = append(statuses, s.buildSourceStatus(&account, snap, found, loadErr, now))
 	}
 	return statuses
+}
+
+// isCodexThirdPartyOfficialSourceAccount 判断是否官方 OpenAI 账号（ChatGPT 订阅 OAuth、SetupToken，
+// 或指向官方 API 地址的 API Key）。判定与目录编排保持一致，直接复用现有判定函数，不另写一份。
+func isCodexThirdPartyOfficialSourceAccount(account *Account) bool {
+	return account != nil && (account.IsOpenAIOAuthLike() || isOfficialOpenAICodexAccount(account))
+}
+
+// buildOfficialSkippedSourceStatus 构造官方账号在源列表里的展示项：状态为 official_skipped，
+// 不过期、没有同步记录，也不会出现「配置已变更」之类的提示。
+func buildOfficialSkippedSourceStatus(account *Account) CodexThirdPartySourceStatus {
+	return CodexThirdPartySourceStatus{
+		AccountID:     account.ID,
+		AccountName:   account.Name,
+		Platform:      account.Platform,
+		AccountStatus: account.Status,
+		Status:        codexThirdPartySourceStatusOfficialSkipped,
+	}
 }
 
 // sourceNeedsRefresh 判断页面读取时是否应触发后台刷新：
@@ -753,6 +781,9 @@ func (s *CodexThirdPartyAdminService) isRefreshing(accountID int64) bool {
 // startBackgroundRefresh 在后台刷新一个账号的源，立即返回。后台任务使用独立的上下文，
 // 不受请求取消影响；同一账号已有任务在跑时直接合并。
 func (s *CodexThirdPartyAdminService) startBackgroundRefresh(account Account) {
+	if isCodexThirdPartyOfficialSourceAccount(&account) {
+		return
+	}
 	s.mu.Lock()
 	if _, running := s.refreshing[account.ID]; running {
 		s.mu.Unlock()
@@ -793,6 +824,10 @@ func (s *CodexThirdPartyAdminService) waitForBackground() {
 // refreshSource 同步刷新一个账号的源快照。同一账号的并发调用合并为一次上游同步。
 // 返回的错误已经去除凭据和上游原始正文，可以直接记日志。
 func (s *CodexThirdPartyAdminService) refreshSource(account *Account) error {
+	if isCodexThirdPartyOfficialSourceAccount(account) {
+		// 兜底：无论从哪条路径进来，官方账号都不发起同步。
+		return nil
+	}
 	_, err, _ := s.refreshGroup.Do(strconv.FormatInt(account.ID, 10), func() (any, error) {
 		return nil, s.doRefreshSource(account)
 	})
