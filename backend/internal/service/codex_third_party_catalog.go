@@ -103,11 +103,6 @@ func NewCodexThirdPartyCatalogService(
 	return svc
 }
 
-// BaseFetchContext 为目录请求里获取 OpenAI 基础目录加时限，保证整个响应留在客户端 5 秒总超时之内。
-func (s *CodexThirdPartyCatalogService) BaseFetchContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, CodexCatalogBaseFetchBudget)
-}
-
 // ApplyToManifest 对 OpenAI 基础目录应用第三方策略，结果写回 manifest.Body（ETag 由出口函数按最终正文计算）。
 func (s *CodexThirdPartyCatalogService) ApplyToManifest(ctx context.Context, group *Group, manifest *OpenAIModelsResponse) error {
 	if s == nil || manifest == nil || manifest.NotModified || len(manifest.Body) == 0 {
