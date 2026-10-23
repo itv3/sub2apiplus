@@ -1,0 +1,1671 @@
+{
+  "base_commit": "dd2ac0d64fb63f078d9781a3c61035ded94c4e44",
+  "changed_path_count": 99,
+  "current_commit": "86846b4ef465ecf774965149802cd99757833dfe",
+  "deleted_frozen_paths": [
+    "backend/internal/handler/admin/account_handler_keeper.go",
+    "backend/internal/service/account_test_service_keeper.go",
+    "frontend/src/composables/__tests__/antigravityMappings.retry.spec.ts"
+  ],
+  "deletion_proof": {
+    "algorithm": "deletion-proof/v1",
+    "deleted_paths": [
+      {
+        "frozen": true,
+        "last_sha256": "eb43753cad36fdbb2d62d3f193e853fc7879c647e1a9932a57a5e0c2a0bb5625",
+        "path": "backend/internal/handler/admin/account_handler_keeper.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "account_handler_keeper.go",
+            "backend/internal/handler/admin/account_handler_keeper.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "994dc8e53c3fdbbafc4747926a9568f5e458761fdf45d5c838082c587892ff5d",
+        "path": "backend/internal/handler/admin/account_handler_keeper_test.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "account_handler_keeper_test.go",
+            "backend/internal/handler/admin/account_handler_keeper_test.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "c4a8fd9bdda82b16b181336cb0af8ae2e701e965fa6a3f01477d63bda66411e2",
+        "path": "backend/internal/pkg/antigravity/official_models.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "backend/internal/pkg/antigravity/official_models.go",
+            "official_models.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": true,
+        "last_sha256": "82b3dd51545f43f59f2ac70b3b518ec1bc1da8a338f945679794881857b20b08",
+        "path": "backend/internal/service/account_test_service_keeper.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "account_test_service_keeper.go",
+            "backend/internal/service/account_test_service_keeper.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "7554235c115ca160be97cba87d85fb69d166262bf8d2c75131ebfc6c755d8d9e",
+        "path": "backend/internal/service/account_test_service_keeper_proxy_test.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "account_test_service_keeper_proxy_test.go",
+            "backend/internal/service/account_test_service_keeper_proxy_test.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "c063a8dbdcafd758b814fadedeee5f5186e5a7b06e83396b148539596f53e48b",
+        "path": "backend/internal/service/admin_service_models_list_candidates_test.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "admin_service_models_list_candidates_test.go",
+            "backend/internal/service/admin_service_models_list_candidates_test.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "be2ecfd502268210757bfd5198ccc17a919d3c6d35e1bf65766fc55988ff2f2b",
+        "path": "backend/internal/service/keeper_proxy_token.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "backend/internal/service/keeper_proxy_token.go",
+            "keeper_proxy_token.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "1704b0f18ce9d4c893c29b5de58ee8817c3884627890f2310c6d5119f45e4e52",
+        "path": "backend/internal/service/keeper_proxy_token_test.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "backend/internal/service/keeper_proxy_token_test.go",
+            "keeper_proxy_token_test.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "4c348f8ebe4b5f4a4b33d85e58449f9e59491b6fd4a3059643fccafb7f7e049f",
+        "path": "deploy/docker-compose.keeper.yml",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "deploy/docker-compose.keeper.yml",
+            "docker-compose.keeper.yml"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": true,
+        "last_sha256": "350b1a5e900f22772577f4c440da01093e8f469f0e57355d86e765b226832246",
+        "path": "frontend/src/composables/__tests__/antigravityMappings.retry.spec.ts",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "antigravityMappings.retry.spec.ts",
+            "frontend/src/composables/__tests__/antigravityMappings.retry.spec.ts"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "41f9ccc1a84ba8fad22c823be0b6debec538afea5d9f8287dbb56f4fa47c2b9a",
+        "path": "keeper/.gitignore",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            ".gitignore",
+            "keeper/.gitignore"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "a8658833f1a1f7a25751a5bb2dc1955d60da41a7288f1eed6413b76a113351d4",
+        "path": "keeper/Dockerfile",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "Dockerfile",
+            "keeper/Dockerfile"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "13013c6ad27b5beaa7782110dca41e82833c42d67fad9b3dee0526c66ec9fa93",
+        "path": "keeper/go.mod",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "go.mod",
+            "keeper/go.mod"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "ecedf1d91a167fdeb34a26c3374af6e84a521f217a7b1d661c0b1b09f0e77ef7",
+        "path": "keeper/go.sum",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "go.sum",
+            "keeper/go.sum"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "432d7ebbce008830322421d9dc29b07781ae66729c693b5ff7bd660fabcb48f7",
+        "path": "keeper/keeper.example.yaml",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "keeper.example.yaml",
+            "keeper/keeper.example.yaml"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "3f75033b32dcf7039561848f60d8fda0559d8a104fbafedb895e22648d0e1ede",
+        "path": "keeper/main.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "keeper/main.go",
+            "main.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "3b41e0efa8009ecaabcea67b8f9485e06bc70d56da31c31fa8ba64842a8791ba",
+        "path": "keeper/main_test.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "keeper/main_test.go",
+            "main_test.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      },
+      {
+        "frozen": false,
+        "last_sha256": "41475f313274e61c084e3526fe1f29c9a5c6a409353173e86ad0c7dc4d44dcf2",
+        "path": "keeper/persistent.go",
+        "reference_scan": {
+          "algorithm": "reference-scan/v1",
+          "patterns": [
+            "keeper/persistent.go",
+            "persistent.go"
+          ],
+          "references": [],
+          "scopes": [
+            "python:import-and-attribute",
+            "shell:invocation",
+            "json:command-fields"
+          ]
+        }
+      }
+    ],
+    "historical_readers": [],
+    "reason": "Antigravity 增强和账号保活已按审核方案完整下线，删除专属源码、测试及部署文件；普通定时账号测试已迁回主服务文件。"
+  },
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6777,
+  "frozen_path_count": 2279,
+  "identity_sha256": "d330bc972ec98655a08beb74ed9c98fc6dd1e820982eccf39d51e2fb0babd2ca",
+  "issued_at_utc": "2026-10-23T07:02:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "single_hop_file",
+      "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
+      "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。合并前预先登记上游新增发送点时，预检写出的登记补丁（sink-registration-draft）已含这一跳。",
+      "path": "backend/cmd/egressscan/main.go",
+      "rule_id": "scanner-algorithm-successor",
+      "verification": [
+        "cd backend && go run ./cmd/egressscan -mode self-test",
+        "make check-egress-spec-ci"
+      ]
+    },
+    {
+      "action_kind": "single_hop_file",
+      "file": "docs/egress/maintenance/scanner-algorithm-successor.json",
+      "instruction": "from_sha256 固定为 bootstrap-inventory-lock.json 的 scanner_algorithm_sha256，把 to_sha256 改写为当前非测试 Go 源码的算法摘要，source_transition 指向本次收据，reviewed_by 与 reason 写明审阅来源；同一文件只能表达一跳。合并前预先登记上游新增发送点时，预检写出的登记补丁（sink-registration-draft）已含这一跳。",
+      "path": "backend/cmd/egressscan/removals.go",
+      "rule_id": "scanner-algorithm-successor",
+      "verification": [
+        "cd backend && go run ./cmd/egressscan -mode self-test",
+        "make check-egress-spec-ci"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-remove-antigravity-keeper-terminal-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "bc2afb7a29469eb93de9a0eef803a321a74800353334ee6c06ea8b82a0f42887"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-merge-checklist-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "20b65ec546bb69f52cdbd46804dec11fb8f37118ca465e183e41b6e7abb6b7c4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/egressscan/main.go",
+      "predecessor_sha256s": [
+        "f65ca1b723de5f463c03dee1f5188a65a8c6a2c8a5f0513a1b37bfa217502a0c"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/cmd/egressscan/main.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-egress-snapshot-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-egress-prerequisite-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-bootstrap-source-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "2f078080f704ba71e38ef94ced1bdd8594b1f9de0ffb3ec70f9108766ef2543f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/egressscan/removals.go",
+      "predecessor_sha256s": [
+        "48a172d5cd98c976bd2879cca5b8fcc6ba45d912a1532eff4f04540df830d7ee"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/cmd/egressscan/removals.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b91f983c41ac94c65a1b85d6e28dd36c298f78d9aff133e2b4c445ad43953f1f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "1de1f8d0585e81ec952706d93fc13dbb73fb93cc832ed390c03d06461eb8c537"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/chat-completions-id-20261005-freeze-successor.json",
+        "docs/egress/maintenance/codex-0154-closeout-merge-main-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-7-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0f5c9ce9989f553a208bb99fc00cac06e7246762f4aa5b54db0a5c5362ede46d"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/domain/constants.go",
+      "predecessor_sha256s": [
+        "b6010c50d3c54b80ea6cc15958de9d61e9ac6b7d33c751559a86b382da871f82"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/domain/constants.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "bfd4658e8ff76e2940b2eba26e83286b2e6b973242564c5c73d4ddf5ef80ffe0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/domain/constants_test.go",
+      "predecessor_sha256s": [
+        "d8ebc1e76477c932ec40f2c5b0484910df5d7b9ec21daec2ad87eebaa5dc1334"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/domain/constants_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "55e9939d744c5dc4e7a913e8b7f51b2a600ca2e291b4ce568f090757010f165a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler.go",
+      "predecessor_sha256s": [
+        "d64cb58dff44233026802705e8466e20a8e6d91db07790d31d5074d1eea5ce6b"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/admin/account_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fe16639a6622ef6d4c115beaeb4a642c09ff67892bf5d87e38d9ffbb3ee95558"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler_available_models_test.go",
+      "predecessor_sha256s": [
+        "cb6438efbb4dec13309266fb13f81a1d39afd1383597067a92b6908a572619d5"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/admin/account_handler_available_models_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "96576430b09a66099e9ce060b68560331eeef66f5aafb5f906f20e901da88b25"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler.go",
+      "predecessor_sha256s": [
+        "3a0c837677add4cdfefc0059afcb64513b33db33a8da52a1a4c171e9dd8f2284"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1de1d54c8ec771eee883ac4018d6a996295d5a4f65012f24f657a4518363b064"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_model_allowlist_listing_test.go",
+      "predecessor_sha256s": [
+        "9ad68d7338b290d1a4d4debde4a87d9e68638b6492655b3482d03058025964fb"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/gateway_model_allowlist_listing_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "74a2829f39f8092983f39f136e573d83b535aca5b6fee07d26883f3f5fad8159"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_models_test.go",
+      "predecessor_sha256s": [
+        "2e86034ea9d278844f23675d985a81863e186416c530cf9ecf3036b1b0bf9e2e"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/gateway_models_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f80013aed96514515c6bfae48c52fb26ac5e1703b4bde6d70e1207097cb45a31"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_v1beta_handler.go",
+      "predecessor_sha256s": [
+        "c90cae3d15015ac25887ed7c01d20d5f852c0e25c9d9e29bbf91510678895143"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/gemini_v1beta_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6ca2c4b739b20e6106418b52f236aa6cfc289a5363f3fee335aa9f7f43f20cc1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_v1beta_handler_test.go",
+      "predecessor_sha256s": [
+        "a6d2bd44c744a7bbca337b95550c13d853d021fd974f368770f8f404e64591da"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/gemini_v1beta_handler_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9abb427b866c3f7a893553dff6d84fca4267fe7be1c34dc57a35462177fb7362"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gemini_vertex_models_test.go",
+      "predecessor_sha256s": [
+        "43548a3a2eb246ff00eb06e1c7eb83141f799cfdd2ba14904e240c96a2a30315"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/handler/gemini_vertex_models_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7167db45665909115d2f21b85d14d4682d621de68d0cfa3313b83e905755f9da"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/business_binding_ast_test.go",
+      "predecessor_sha256s": [
+        "d2c96e8adeb9a2e3310a5c05d029b711a963632249dcac8ec04ab2c824f21f4d"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/officialegress/business_binding_ast_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json"
+      ],
+      "status": "M",
+      "to_sha256": "e5d2beb2c6fa5cecda295cbbf2140467a8389c2ffd4b7be398987ee9554752ec"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/claude_types.go",
+      "predecessor_sha256s": [
+        "b52c86f7863c2e12dd0ed3ee49e7ef49e51fd7a3fd5776caeb36598a3297aefb"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/pkg/antigravity/claude_types.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "594808943a7a28300b8b63ff0a9dee1ce45ea43294101cc6a848d80fd277f995"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/claude_types_test.go",
+      "predecessor_sha256s": [
+        "9b26aafb16cea59e72ffc0c9ce35412b761d0593e9944308fd475f9a1f1829e5"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/pkg/antigravity/claude_types_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d4cd179ac60eda0723180218caf2d942f58e540e403430a62dd33dba1509de8c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/client_test.go",
+      "predecessor_sha256s": [
+        "1996de615b0337106314a80d95366c6c3807048337844b04cf78370aabbbd1e0"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/pkg/antigravity/client_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a792cdd8de5853120a45e8bc28511119826f23f0e9d60749e192275856d1d893"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/gemini_types.go",
+      "predecessor_sha256s": [
+        "634989657f6a03cbfb122c0d14167f1c651a32c0a2ca1fb5e08beac25e6fbf55"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/pkg/antigravity/gemini_types.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9cbf27347b517e8b1b205fde4cdb4828c06610a77ba5cbf2139308882dc897c7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/oauth_test.go",
+      "predecessor_sha256s": [
+        "560cdc0e5d788c49bf8d15d0faf2cf873ec85f7fb6cb15df22c6d72a12b4c16c"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/pkg/antigravity/oauth_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f7d213b8caab92fc512037222165cc433627fa0d75781b16a8e8c21cb54065c5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/request_transformer.go",
+      "predecessor_sha256s": [
+        "6d82d0eea92e002ee8665b837477d6db8028c2b66fe11404f6898d36b70a2db5"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/pkg/antigravity/request_transformer.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "226fd917226860d74dc9ef473068099d5110d6bf047780ab75adc495ee20ef16"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/pkg/antigravity/request_transformer_test.go",
+      "predecessor_sha256s": [
+        "84b966d6e48e44ddbe779ecd034e7b037e008a92f64d90a0f7df1d6faada260d"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/pkg/antigravity/request_transformer_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "188db49a17c1051d11a18c456fff3f14c5e21d5a7215a9809e59d01b88ab70a9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo.go",
+      "predecessor_sha256s": [
+        "a2b1fdb66853d60daca9f2c1a2919918facf7cd60bebfc9c6fd676fb2a27dda7"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/repository/account_repo.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8548ce0689ce564e828e4e508e914892b302e649d5656e54b109e973c8730e2c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/middleware/admin_auth.go",
+      "predecessor_sha256s": [
+        "f144c5d1249f7dc8148b1729683d07db8dd0dd5b6c9853667e045eab1bddedab"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/server/middleware/admin_auth.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f878899e7e03bda35ce8774a477800c96ad710482132a4672c8b1bfea4adf123"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/routes/admin.go",
+      "predecessor_sha256s": [
+        "5a5f348aaa5476181240836d8bec34615eb2a494cfa906ba044861cc0fa2bb17"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/server/routes/admin.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8ccf2b3fdae6fdf582a2a920606cc5dd7158a692b2ce9d8d4840c8d7e205ce98"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_header_override.go",
+      "predecessor_sha256s": [
+        "e992f15c8c65f8b3a4a2a18a792ef4b19b758e80bff913bf1ce53803222986ae"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/account_header_override.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "344e28076a6730da8a7b58abce611b3927850e17418bfb9dc4378f5e9f396e54"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256s": [
+        "357c9aa530c0d908d489cdf51daf6c54865c9b51f2c8eb103ed0b82e4179f893"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/account_test_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6b986c12be755d1bba0bccc59deacdb0a0f2f0dfdebdabf07e4fe45619a04a50"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_group.go",
+      "predecessor_sha256s": [
+        "cd3f4728f65978163519441f33c495755db69f83a2e7a8aadac83bd2349a45ef"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/admin_group.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "55c5866b9a12ddc2602312e25f9e2ce0da66bb187a0d36a6ee29a05facea55d5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_claude.go",
+      "predecessor_sha256s": [
+        "2a6102c44ef0e1692dcdfc5a404af5213466a9e53a4605547cc6ae53d4dac13a"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_gateway_claude.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "5964c5feb0120134226562b81b2a3d4faf35b8831440d5aa8bd20faa87db2a34"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_compat_test.go",
+      "predecessor_sha256s": [
+        "391b8b1f9317956afd8cff1f1dfb7d6b664e40f415ab986084eba831bd1853bb"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_gateway_compat_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01592-flaky-keepalive-20261001-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a980ca441ea4104baefefe11d693c22090ee957ace70ece4f0658d7f9051a61b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_gemini.go",
+      "predecessor_sha256s": [
+        "cce55d3f84d4505bb046abc38463769e9d420726001f7a9e8097fe4dc8c128c9"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_gateway_gemini.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fa44068cba0d25d46dbc28685fcb5cc854b30d65fe16bf5186d209953bbbe4d5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_service.go",
+      "predecessor_sha256s": [
+        "5bd5139f1372bbee8b985d690a18b30e498ddb7651fac5866a5f64c5692ed5f1"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_gateway_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e741c61c0c35ffd2913cebe4276015a6238a5099bdbc97c67ffd20c9813485ee"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gateway_service_test.go",
+      "predecessor_sha256s": [
+        "ad3e556835d5a93acf04f56a34bff005dcd453d27ce1a23fb5ecb4856b595df4"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_gateway_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "6abb374000ee596b919cc931e4f38982965bf93ca488251b5ff9c713d867bcbd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_gemini_thinking_variant_test.go",
+      "predecessor_sha256s": [
+        "67e8cce89c4b6a6140966a79a2c4e0c6f71456792eba9497c23f6dd1804e44e0"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_gemini_thinking_variant_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f1882bc2ed69b780c86f1c7a65a718185f4c220be0fde90369a7368d2aaa37b3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_model_mapping_test.go",
+      "predecessor_sha256s": [
+        "a35e8b20d6395796943bd706acf5b3e7a8d2dd12d3f889487a2568b7b02c6946"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_model_mapping_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-merge-test-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8d1498b1606cb4c6dddb7b08f8a5180d35260700421e4d7c8c1d2fe4a462fb50"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_rate_limit_test.go",
+      "predecessor_sha256s": [
+        "0563bd7c59e15187d46908a457b355e5b2993e8f0239bd3f939bef8eb6260083"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/antigravity_rate_limit_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/backend-lint-build-tags-20260923-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-merge-test-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "60c2570d714197170e9391bd3ed6ab7fbd8fcea723faab43ed4bb4a772a28dbf"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_service.go",
+      "predecessor_sha256s": [
+        "ea560abfcca7aaa5436695c98c5c6f8a91e850d123a9168c6d4f39a3c18e19b1"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/billing_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fa3b9670983855dee03c7afd37021bd08018b33953cf19acb6c1ee65a3bed367"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/billing_service_test.go",
+      "predecessor_sha256s": [
+        "fe4c54353989c166d1746b0921ee01cc69a4e0c548cea9d4cec63d01461838aa"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/billing_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4f70692a84eb403f7773be828cce0b15cb023a18abbe0a07b5765bdbbfda1462"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_hotpath_optimization_test.go",
+      "predecessor_sha256s": [
+        "be4f949165b54f6d65a314fcc33e5292c4563cff7f912947f5434d894848f662"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/gateway_hotpath_optimization_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "05b2055c513689f265b98a26563fc1aa288731817d1a0c5a8c65e019df2f2aae"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_scheduling.go",
+      "predecessor_sha256s": [
+        "1266eb9ea5a62fd82adcadeba889a7f8aa30a0a569ae417280c5b059ad7893cf"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/gateway_scheduling.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "96096690f14ad4098be776b1c63cf4f4ea9ded3d814d23768e6c21e1ac43a365"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_usage_billing.go",
+      "predecessor_sha256s": [
+        "ae0c42316ba364ae8cbf1c4e79711ebba6437f63fa37b8b4dc3106fedffa8cd1"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/gateway_usage_billing.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "cbf83923e2a00a6cf143185c31c51dfe69022ae8b7cf6eeb79a14761cb8bd128"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_rate_limit.go",
+      "predecessor_sha256s": [
+        "5592c3bc994e7eefbc28412e1ce55b6ef0fe848fe3afd5e84d96a579404835e1"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/model_rate_limit.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "24a3988a949d15c5d111b168aa7d077d8be382107d0c123f364475dc17271ad2"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_rate_limit_test.go",
+      "predecessor_sha256s": [
+        "ec849236fd558b7de5533467ae335c95afb8c6f0341631f8b739c572a35f4bc8"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/model_rate_limit_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "88c16e90fe5f1b025df787f780b64e983af6bfad8c5dd52445c98e0977dad9b8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/upstream_models.go",
+      "predecessor_sha256s": [
+        "5575c994ac6bf49bbf71cce7e0d2e1f24d3a069a19d33fd17d03076f06224903"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/upstream_models.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "eaa1357f16aaa26b9c22624b1bf53bb82f9410af605dd28d92830c5688f3967c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/upstream_models_antigravity_test.go",
+      "predecessor_sha256s": [
+        "4b60902e3a0349fc90738be979864fc78ffc427ba6ff2a9b84f9f71fcf9aaa7a"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/internal/service/upstream_models_antigravity_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "272c7a768211fcfc4b9c63bc719c0e367acfd3b70865d114058123a9e6855fda"
+    },
+    {
+      "old_path": "",
+      "path": "backend/resources/model-pricing/model_prices_and_context_window.json",
+      "predecessor_sha256s": [
+        "16122366b566472121f06622e73af3ce7056e2cdca2750c8a1a5a3661f845b5a"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=backend/resources/model-pricing/model_prices_and_context_window.json",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b983a64097160513bf7eb4257a48d61037a1f6e8136dabd44e38850e93cbb56f"
+    },
+    {
+      "old_path": "",
+      "path": "deploy/.env.example",
+      "predecessor_sha256s": [
+        "25b059e77cae31161b0d99c95d607b505936a60172b275fe5330434e11cae52c"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=deploy/.env.example",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "664cd36453c50a8ce4bbc831c76f57a8d82ea6ca45337431fc4cdffc1ed166e8"
+    },
+    {
+      "old_path": "",
+      "path": "deploy/docker-compose.dev.yml",
+      "predecessor_sha256s": [
+        "eb1e1dbbbc71b94c73b587a6bf42bbdbdb70ae4262f7115c566aa7bae88ef023"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=deploy/docker-compose.dev.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "239155c39fabc652534f365513c4c4f64a08f78f825a5b73643c4287131bb516"
+    },
+    {
+      "old_path": "",
+      "path": "deploy/docker-compose.local.yml",
+      "predecessor_sha256s": [
+        "427aec4ecfc19daf37370b5a3f597b69610a42c6f08cb6106824cb1d37ea4a77"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=deploy/docker-compose.local.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f02d69a96698b83b8b12ef8745fdc0fcc28f9e9106850a344cca36a16dd9209f"
+    },
+    {
+      "old_path": "",
+      "path": "deploy/docker-compose.standalone.yml",
+      "predecessor_sha256s": [
+        "6b85fad05d78a0112f7fe125e6455d149e6b7371318aae39b391a78cb000aca3"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=deploy/docker-compose.standalone.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fd2e8df923952d0633c77e2e743abff1607a3eb9449c5cacb93bbe2e959c7dac"
+    },
+    {
+      "old_path": "",
+      "path": "deploy/docker-compose.yml",
+      "predecessor_sha256s": [
+        "43292e4f7d58fc552849dce1417d3fbdfa4ff7f4144ed40882059a55434ce6cf"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=deploy/docker-compose.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b14b1e23707b03f43ddbf91cd26ff4749e1c17345b02a54c463b6f55e614631e"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/removal-receipts.json",
+      "predecessor_sha256s": [
+        "9b1a7253f549ef25c1039c54fe4814077b13bab05e036cec3a9ad88764eec12c"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=docs/egress/maintenance/removal-receipts.json",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "dd3baf4dfb71386300bf5f2e32d0cb5171a73504a4b179f5a87fe94d5e2ab39f"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/api/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "17d835df176246e7b8b01421ef12ed55f3bc3f1d4a7c986c0db4e933655e0cb3"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/api/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c1ce08c835b279a66652cfd05078c9d70b378bbe864415d566b27fefca8f7bb7"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/BulkEditAccountModal.vue",
+      "predecessor_sha256s": [
+        "533b5e0c2f01263ea48dbdb15d9a555c993a12d78788022e87e015cc0060b741"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/components/account/BulkEditAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8776ded449270460f237c4d1581549f7d0df2e8efb8d9256241a3c644d841ffb"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/CreateAccountModal.vue",
+      "predecessor_sha256s": [
+        "0c711cb9ea6ae7b79c384d72035f975c278811dccadd7a973f4f99412b0815af"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/components/account/CreateAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "adc75a053bde0d7d0c4d8ecabe95fbc429f7ea9b613e09822d5b11a97c509f44"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/EditAccountModal.vue",
+      "predecessor_sha256s": [
+        "1c022f3e70dd60250a13738a096e8668a11f4d3c2f88bd13e666def976ec0075"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/components/account/EditAccountModal.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a1f857071b325e828b18db0c01219e719d02b79bcaff50e093c1a5aa36005a09"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/ModelWhitelistSelector.vue",
+      "predecessor_sha256s": [
+        "3507d32854b7cd5e3dbe9532520ea1e0d72cbe2fd807ebb04f66ac407474b039"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/components/account/ModelWhitelistSelector.vue",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "104b26969069e00bff8d1429d23c3dffba98efdeba8e1f607f297b4979883405"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/BulkEditAccountModal.spec.ts",
+      "predecessor_sha256s": [
+        "05771a9b3ef72f7608b845d6aff9c25cce00770a9fd5dd5769d5e4afa2fc5f93"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/components/account/__tests__/BulkEditAccountModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "695db494d4cd55b11ab68dd894fdf30d6dae66aadfca72acabb5cc9344d32ec3"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "predecessor_sha256s": [
+        "f6501a10a5360b23b2cf91a44c47714ceab76a64ba92f976142b3ba7aee8e6af"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/components/account/__tests__/EditAccountModal.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8240b42e2dd4ae599b6e3572bfc83ea6e2a2d53fabe1b5f8a4a09ae8ea8da9f3"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/components/account/__tests__/ModelWhitelistSelector.spec.ts",
+      "predecessor_sha256s": [
+        "a98f19d5d7115b1263068a76adb131f5157a7fc746504d5f7099ae6a0555b185"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/components/account/__tests__/ModelWhitelistSelector.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a9d4f145d921ab76671eac7726316cc1d37ab8a6093a54e6de5b9a3cee94dbe3"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "predecessor_sha256s": [
+        "7e618cc606e781fe38a710e5e57815db7dcbb8467d48dceef809368d31c6420f"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/composables/__tests__/useModelWhitelist.spec.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "22fcd4fa8189ac62cf541c06e376d352d191cab6afde4b172431b496cdd6a88c"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/composables/useModelWhitelist.ts",
+      "predecessor_sha256s": [
+        "708b95f20c0c2f09d003be77ea1d4473b0beef9e478e7006809d6c7c9ab48775"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/composables/useModelWhitelist.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9e2e3dc03a72bc29473bce6786545e38a773cfc8d86a7d7ca1c4117c791e0920"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "2bcc86dd238995e75dc546c7be369e643250ee67d1d802c03c0e7717344b74dc"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2bc35cc70c7cd803e7c6da2565d77f899a84d147b2a970230d59d8d08387c19b"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "55435b59b333355ca45467779930a0bb9fb373db9bae583b3075b761044c01da"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "37d0b33cd03c21d07d30a26a889fe886f25771a6faec38f68b981cd2236124d3"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/types/index.ts",
+      "predecessor_sha256s": [
+        "255823a111d31ed73f768fd6c927c7c5c7dba760743e28b926b163a094e2c2ea"
+      ],
+      "reason": "补充终态收据显式登记的摘要边，准确承接本批功能下线；原有历史收据保持只读。 path=frontend/src/types/index.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "aa15a81ca0e5efe514350be709368d840a916533cf330b2e5bcc774b944fe1a3"
+    }
+  ],
+  "unregistered_path_count": 31,
+  "unregistered_paths": [
+    "backend/cmd/egressscan/scope_excluded_removal_test.go",
+    "backend/internal/handler/admin/account_handler_keeper_test.go",
+    "backend/internal/handler/gemini_mixed_models_test.go",
+    "backend/internal/pkg/antigravity/oauth.go",
+    "backend/internal/pkg/antigravity/official_models.go",
+    "backend/internal/server/middleware/admin_auth_test.go",
+    "backend/internal/server/middleware/admin_compliance.go",
+    "backend/internal/server/middleware/admin_compliance_test.go",
+    "backend/internal/service/account_anthropic_standard_api_compat_test.go",
+    "backend/internal/service/account_test_service_keeper_proxy_test.go",
+    "backend/internal/service/admin_service_models_list_candidates_test.go",
+    "backend/internal/service/antigravity_credits_overages_test.go",
+    "backend/internal/service/antigravity_models_advertised.go",
+    "backend/internal/service/gateway_service_antigravity_whitelist_test.go",
+    "backend/internal/service/keeper_proxy_token.go",
+    "backend/internal/service/keeper_proxy_token_test.go",
+    "backend/internal/service/mapped_models_discovery_test.go",
+    "deploy/docker-compose.keeper.yml",
+    "docs/egress/maintenance/scanner-algorithm-successor.json",
+    "frontend/src/views/admin/ApiKeyMimicSettingsView.vue",
+    "frontend/src/views/admin/__tests__/ApiKeyMimicSettingsView.spec.ts",
+    "keeper/.gitignore",
+    "keeper/Dockerfile",
+    "keeper/go.mod",
+    "keeper/go.sum",
+    "keeper/keeper.example.yaml",
+    "keeper/main.go",
+    "keeper/main_test.go",
+    "keeper/persistent.go",
+    "tools/upstream_merge/freeze.py",
+    "tools/upstream_merge/tests/test_freeze.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "cd backend && go run ./cmd/egressscan -mode self-test"
+  ]
+}
