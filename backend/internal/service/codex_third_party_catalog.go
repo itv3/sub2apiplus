@@ -37,6 +37,13 @@ type codexThirdPartySettings interface {
 // codexThirdPartyBaseFetcher 获取单个 OpenAI 账号的基础目录正文（已完成与请求路径相同的元数据补全与映射）。
 type codexThirdPartyBaseFetcher interface {
 	FetchBase(ctx context.Context, group *Group, account *Account, clientVersion string) ([]byte, error)
+	// MergeGroupModels 对基础目录执行运行时在映射之后的分组合并（追加账号别名、白名单过滤、下线模型过滤）。
+	MergeGroupModels(ctx context.Context, group *Group, body []byte) ([]byte, error)
+}
+
+// codexThirdPartyUpstreamLister 是可选能力：判断某个账号最近一次拉到的上游目录是否列出了某型号。
+type codexThirdPartyUpstreamLister interface {
+	UpstreamListsModel(account *Account, model string) bool
 }
 
 // openAICodexBaseFetcher 用现有 OpenAI 网关 service 获取基础目录，沿用账号级缓存，只读不改账号状态。
@@ -59,6 +66,48 @@ func (f openAICodexBaseFetcher) FetchBase(ctx context.Context, group *Group, acc
 		return nil, err
 	}
 	return manifest.Body, nil
+}
+
+// MergeGroupModels 与运行时同序：映射之后执行 MergeGroupConfiguredCodexModels，使评估基础与请求基础一致。
+func (f openAICodexBaseFetcher) MergeGroupModels(ctx context.Context, group *Group, body []byte) ([]byte, error) {
+	if f.svc == nil {
+		return nil, fmt.Errorf("openai gateway service unavailable")
+	}
+	manifest := &OpenAIModelsResponse{Body: body}
+	if err := f.svc.MergeGroupConfiguredCodexModels(ctx, group, manifest, ""); err != nil {
+		return nil, err
+	}
+	return manifest.Body, nil
+}
+
+// UpstreamListsModel 读取账号能力快照（只读）：快照未过期且上游清单列出了该型号。
+// 快照缺失、过期或未列出都返回 false，调用方回退到名称范围规则。
+func (f openAICodexBaseFetcher) UpstreamListsModel(account *Account, model string) bool {
+	if f.svc == nil || account == nil {
+		return false
+	}
+	return f.svc.openaiModelCapabilities.codexTPUpstreamListed(account.ID, model, time.Now())
+}
+
+// codexTPUpstreamListed 判断账号最近一次拉到的上游目录（未过期）是否列出了该型号。
+// 无论清单是否 remoteAuthoritative，快照里的型号都来自上游清单本身；未列出时无法证明上游不服务，
+// 因此只把「已列出」当作正向证据，其余交给名称范围规则。
+func (s *openAIModelCapabilitySnapshot) codexTPUpstreamListed(accountID int64, model string, now time.Time) bool {
+	if s == nil || accountID <= 0 {
+		return false
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snapshot, ok := s.accounts[accountID]
+	if !ok || !now.Before(snapshot.expiresAt) {
+		return false
+	}
+	_, listed := snapshot.models[model]
+	return listed
 }
 
 // CodexThirdPartyCatalogService 实现目录编排与契约里的 CodexThirdPartyCatalogEvaluator。
@@ -164,8 +213,9 @@ func (s *CodexThirdPartyCatalogService) ApplyToBody(ctx context.Context, group *
 	if err != nil {
 		return s.degrade(ctx, group, env, entries, nil, haveBase, "accounts", start, err)
 	}
-	if haveBase && !sess.hasThirdPartySource() {
-		// 只有官方 OpenAI 账号：不可能出现第三方条目，原目录逐字节不变。
+	if haveBase && sess.officialOnlyOpenAIGroup() {
+		// OpenAI 或 Composite 分组且账号全部是官方 OpenAI 账号（含没有账号的 OpenAI 分组）：
+		// 不可能出现第三方条目，原目录逐字节不变。其它平台的分组一律走统一过滤。
 		return base, nil
 	}
 	cfg, _, err := s.settings.LoadCodexModelVisibility(ctx, group.ID)
@@ -262,6 +312,8 @@ type codexTPBase struct {
 	accountID int64
 	body      []byte
 	err       error
+	// folded 表示固定账号模式下该账号的目录已并入另一个账号的合并基础，自身不再单独计算。
+	folded bool
 }
 
 // EvaluateCodexThirdPartyCatalog 实现契约里的评估接口：发现候选、判定状态、计算最坏体积预算。
@@ -296,7 +348,7 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 	var baseOrder []string
 	parsed := make([]*codexTPParsedBase, 0, len(bases))
 	for _, base := range bases {
-		if base.err != nil || len(base.body) == 0 {
+		if base.folded || base.err != nil || len(base.body) == 0 {
 			continue
 		}
 		env, entries, perr := parseCodexCatalogBody(base.body)
@@ -374,7 +426,7 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 	var reasons []string
 	for _, base := range bases {
 		budget.BaseAccountIDs = append(budget.BaseAccountIDs, base.accountID)
-		if base.err != nil || len(base.body) == 0 {
+		if !base.folded && (base.err != nil || len(base.body) == 0) {
 			incomplete = true
 			reasons = append(reasons, fmt.Sprintf("账号 %d 的基础目录不可得", base.accountID))
 		}
@@ -483,19 +535,29 @@ func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *co
 		}
 	}
 	var targets []*Account
-	for i := range sess.accounts {
-		account := &sess.accounts[i]
-		if account.Platform != PlatformOpenAI {
-			continue
+	if pinnedOnly {
+		// 固定账号模式与运行时一致：按配置顺序取固定账号。
+		byID := map[int64]*Account{}
+		for i := range sess.accounts {
+			byID[sess.accounts[i].ID] = &sess.accounts[i]
 		}
-		if pinnedOnly {
-			if _, ok := pinned[account.ID]; !ok {
+		seen := map[int64]struct{}{}
+		for _, id := range sess.group.CodexModelsManifestConfig.AccountIDs {
+			account, ok := byID[id]
+			if _, dup := seen[id]; !ok || dup || account.Platform != PlatformOpenAI {
 				continue
 			}
+			seen[id] = struct{}{}
+			targets = append(targets, account)
 		}
-		targets = append(targets, account)
+	} else {
+		for i := range sess.accounts {
+			if sess.accounts[i].Platform == PlatformOpenAI {
+				targets = append(targets, &sess.accounts[i])
+			}
+		}
+		sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
 	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
 	results := make([]codexTPBase, len(targets))
 	version := resolveVerifiedCodexClientVersion()
 	sem := make(chan struct{}, 4)
@@ -509,10 +571,51 @@ func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *co
 			fetchCtx, cancel := context.WithTimeout(ctx, s.baseTimeout)
 			defer cancel()
 			body, err := s.fetcher.FetchBase(fetchCtx, sess.group, account, version)
+			if err == nil && !pinnedOnly {
+				// 调度路径：每个账号的目录在映射之后各自执行分组合并，与运行时同序。
+				body, err = s.fetcher.MergeGroupModels(fetchCtx, sess.group, body)
+			}
 			results[i] = codexTPBase{accountID: account.ID, body: body, err: err}
 		}()
 	}
 	wg.Wait()
+	if pinnedOnly {
+		results = s.foldPinnedBases(ctx, sess.group, results)
+	}
+	return results
+}
+
+// foldPinnedBases 与运行时的固定账号路径一致：各固定账号按配置顺序按 slug 合并成一份目录，
+// 再整体执行一次分组合并。合并结果放在第一个成功的账号上，其余成功账号标记为已并入。
+func (s *CodexThirdPartyCatalogService) foldPinnedBases(ctx context.Context, group *Group, results []codexTPBase) []codexTPBase {
+	var bodies [][]byte
+	first := -1
+	for i := range results {
+		if results[i].err != nil || len(results[i].body) == 0 {
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		bodies = append(bodies, results[i].body)
+	}
+	if first < 0 {
+		return results
+	}
+	merged, err := mergeCodexModelsManifestBodies(bodies)
+	if err == nil {
+		fetchCtx, cancel := context.WithTimeout(ctx, s.baseTimeout)
+		merged, err = s.fetcher.MergeGroupModels(fetchCtx, group, merged)
+		cancel()
+	}
+	for i := range results {
+		if i != first && results[i].err == nil && len(results[i].body) > 0 {
+			results[i].body = nil
+			results[i].folded = true
+		}
+	}
+	results[first].body = merged
+	results[first].err = err
 	return results
 }
 

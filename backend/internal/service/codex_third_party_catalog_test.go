@@ -67,6 +67,21 @@ func (r *cxtpRepo) ListModelAvailabilityCandidates(_ context.Context, _ *int64, 
 type cxtpFetcher struct {
 	bodies map[int64][]byte
 	errs   map[int64]error
+	// merge 模拟运行时映射之后的分组合并；为空表示不改动。
+	merge func([]byte) []byte
+	// listed 模拟账号能力快照里上游清单已列出的型号。
+	listed map[int64]map[string]bool
+}
+
+func (f *cxtpFetcher) MergeGroupModels(_ context.Context, _ *Group, body []byte) ([]byte, error) {
+	if f.merge == nil {
+		return body, nil
+	}
+	return f.merge(body), nil
+}
+
+func (f *cxtpFetcher) UpstreamListsModel(account *Account, model string) bool {
+	return f.listed[account.ID][model]
 }
 
 func (f *cxtpFetcher) FetchBase(_ context.Context, _ *Group, account *Account, _ string) ([]byte, error) {
