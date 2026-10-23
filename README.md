@@ -233,7 +233,7 @@ Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。OpenAI ke
 在“Plus 增强功能 → 三方客户端兼容”中，为指定的 Anthropic API Key 账号打开“普通 API 兼容”，将官方 Claude Code 请求适配为普通 Anthropic API 请求。开关保存在 `account.Extra.anthropic_apikey_standard_api_compat`，默认关闭，不影响 OAuth 或其它平台账号。
 
 1. **适用方向**：官方 Claude Code 客户端 → 普通 Anthropic API。与 §1.2 中“第三方客户端 → 官方客户端请求形态”的 mimic 方向相反，两项互斥；切换前先关闭另一项。页面开关与后端创建、编辑、批量更新、Extra PATCH 均校验此约束。
-2. **处理范围**：出站使用普通 API User-Agent，仅过滤 `anthropic-beta` 中的 `claude-code-20250219`，并清理 `system` 中的 `x-anthropic-billing-header` 键值标识及 Claude Code 官方 CLI 身份介绍。支持 system 字符串、文本块数组及同一块内混合业务指令；空身份块移除，其余块的属性保持不变。
+2. **处理范围**：出站使用普通 API User-Agent，仅过滤 `anthropic-beta` 中的 `claude-code-20250219`，并清理 `system` 中的 `x-anthropic-billing-header` 键值标识及 Claude Code 官方 CLI、Claude Agent SDK 两种固定身份介绍。真实桌面会话和 `sdk-cli` 可能使用 SDK 身份句，验收时必须覆盖这一形态。支持 system 字符串、文本块数组及同一块内混合业务指令；空身份块移除，其余块的属性保持不变。
 3. **保留能力**：保留其它功能 beta、业务 system 指令、messages、tools、剩余块的缓存配置、metadata 和会话头。消息转发、透传、token 计数、账号连通性测试和 keeper 内部代理共用处理逻辑；在最终请求头覆写后生效，避免重试或账号覆写再次加入身份标识。
 4. **配置与验收**：只为需要此适配的账号开启。用实际客户端验证普通对话、流式与工具调用，并核对用量记录中的账号 ID，避免分组切换到其它账号造成误判。开关只改变请求兼容行为，不承诺上游额度资格或计费方式；实际结果以上游规则和账单为准。
 

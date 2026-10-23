@@ -99,8 +99,10 @@ func ValidateAnthropicAPIKeyCompatExtraPatch(account *Account, updates map[strin
 
 var (
 	// 只移除计费标识中的键值项；同一行后续的业务指令仍然保留。
-	anthropicStandardAPIBillingPattern  = regexp.MustCompile(`(?m)^[\t ]*x-anthropic-billing-header:[\t ]*(?:[A-Za-z_][A-Za-z0-9_-]*=[^;\r\n]*;[\t ]*)+`)
-	anthropicStandardAPIIdentityPattern = regexp.MustCompile(`You are Claude Code, Anthropic's official CLI for Claude(?:, running within the Claude Agent SDK)?\.`)
+	anthropicStandardAPIBillingPattern = regexp.MustCompile(`(?m)^[\t ]*x-anthropic-billing-header:[\t ]*(?:[A-Za-z_][A-Za-z0-9_-]*=[^;\r\n]*;[\t ]*)+`)
+	// 桌面端和 sdk-cli 可能使用独立的 Agent SDK 身份句，不能只覆盖传统 CLI 介绍。
+	// 两项均为精确固定文本；业务指令、工具定义和用户消息不参与身份句过滤。
+	anthropicStandardAPIIdentityPattern = regexp.MustCompile(`(?:You are Claude Code, Anthropic's official CLI for Claude(?:, running within the Claude Agent SDK)?|You are a Claude agent, built on Anthropic's Claude Agent SDK)\.`)
 )
 
 func sanitizeAnthropicStandardAPISystemText(text string) string {

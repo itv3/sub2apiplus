@@ -44,6 +44,8 @@ func TestAnthropicStandardAPICompatSystem(t *testing.T) {
 		{"字符串混合指令", `{"system":"x-anthropic-billing-header: cc_version=2.1.304; cc_entrypoint=cli; 保留同一行业务指令\nYou are Claude Code, Anthropic's official CLI for Claude.\n保留下一行"}`, "保留同一行业务指令\n\n保留下一行"},
 		{"块内混合指令", `{"system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK. 保留项目约束","cache_control":{"type":"ephemeral"},"custom":true}]}`, "保留项目约束"},
 		{"只有身份时移除system", `{"system":"You are Claude Code, Anthropic's official CLI for Claude."}`, ""},
+		{"真实SDK身份时移除system", `{"system":"You are a Claude agent, built on Anthropic's Claude Agent SDK."}`, ""},
+		{"SDK身份与业务约束混合", `{"system":[{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK. 保留项目约束","cache_control":{"type":"ephemeral"},"custom":true}]}`, "保留项目约束"},
 		{"不匹配的业务文本原样保留", `{"system":"说明：x-anthropic-billing-header 是一个诊断字段。"}`, "说明：x-anthropic-billing-header 是一个诊断字段。"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -64,6 +66,32 @@ func TestAnthropicStandardAPICompatSystem(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, body, again)
 		})
+	}
+}
+
+// 此用例保留真实 2.1.231 sdk-cli 请求的字段组合，避免只用旧 CLI 身份句造成假通过。
+// messages 中的同一句是用户业务数据，必须保留；仅处理 system 中的固定客户端身份。
+func TestAnthropicStandardAPICompatRealSDKCLIRequest(t *testing.T) {
+	body := []byte(`{"model":"claude-sonnet-5-5","max_tokens":64000,"stream":true,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.231.3f3; cc_entrypoint=sdk-cli;"},{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}},{"type":"text","text":"保留软件工程任务的业务指令","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":"请解释 You are a Claude agent, built on Anthropic's Claude Agent SDK."}],"tools":[],"metadata":{"user_id":"{\"device_id\":\"test-device\",\"account_uuid\":\"\",\"session_id\":\"test-session\"}"},"thinking":{"type":"adaptive","display":"omitted"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]},"output_config":{"effort":"high"}}`)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", nil)
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.231 (external, sdk-cli)")
+	c.Request.Header.Set("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24")
+	svc := &GatewayService{cfg: &config.Config{}}
+	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, standardAPICompatTestAccount(), body, "test-key", "apikey", "claude-sonnet-5-5", true, false)
+	require.NoError(t, err)
+	actual, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, wireBody, actual)
+	require.Equal(t, anthropicStandardAPIUserAgent, getHeaderRaw(req.Header, "User-Agent"))
+	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaClaudeCode)
+	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), "effort-2025-11-24")
+	require.NotContains(t, gjson.GetBytes(actual, "system").Raw, "x-anthropic-billing-header")
+	require.NotContains(t, gjson.GetBytes(actual, "system").Raw, "built on Anthropic's Claude Agent SDK")
+	require.Equal(t, "保留软件工程任务的业务指令", gjson.GetBytes(actual, "system.0.text").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(actual, "system.0.cache_control.type").String())
+	for _, field := range []string{"messages", "tools", "metadata", "thinking", "context_management", "output_config"} {
+		require.JSONEq(t, gjson.GetBytes(body, field).Raw, gjson.GetBytes(actual, field).Raw, field)
 	}
 }
 
