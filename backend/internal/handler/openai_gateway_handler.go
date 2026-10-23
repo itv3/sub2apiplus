@@ -51,6 +51,8 @@ type OpenAIGatewayHandler struct {
 	requestMemory              *requestMemoryAdmission
 	maxAccountSwitches         int
 	cfg                        *config.Config
+	// codexThirdParty 是「Codex 三方模型启用」目录编排服务（本功能接点，未注入时目录入口保持原行为）。
+	codexThirdParty *service.CodexThirdPartyCatalogService
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {

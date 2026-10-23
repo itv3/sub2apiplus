@@ -68,7 +68,8 @@ func TestDispatchCodexModelsGatewayKeepsOnlyOpenAIOnLiveManifestHandler(t *testi
 		wantOpenAI bool
 	}{
 		{platform: service.PlatformOpenAI, wantOpenAI: true},
-		{platform: service.PlatformComposite},
+		// 「Codex 三方模型启用」后 Composite 也走 OpenAI 目录 handler（见 gateway_codex_third_party_test.go）。
+		{platform: service.PlatformComposite, wantOpenAI: true},
 		{platform: service.PlatformGrok},
 		{platform: service.PlatformDeepseek},
 	}

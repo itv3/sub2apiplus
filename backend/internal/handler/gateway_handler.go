@@ -60,6 +60,8 @@ type GatewayHandler struct {
 	maxAccountSwitchesGemini   int
 	cfg                        *config.Config
 	settingService             *service.SettingService
+	// codexThirdParty 是「Codex 三方模型启用」目录编排服务（本功能接点，未注入时目录入口保持原行为）。
+	codexThirdParty *service.CodexThirdPartyCatalogService
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -1265,6 +1267,11 @@ func (h *GatewayHandler) CodexModels(c *gin.Context) {
 	)
 	if err != nil {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to build Codex models manifest")
+		return
+	}
+	// 本功能接点：在计算 ETag 之前应用「Codex 三方模型启用」策略（统一过滤并替换第三方条目）。
+	body, ok = h.applyCodexThirdParty(c, apiKey.Group, body)
+	if !ok {
 		return
 	}
 	etag := service.CodexModelsManifestETag(body)

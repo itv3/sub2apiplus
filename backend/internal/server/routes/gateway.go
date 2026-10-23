@@ -65,7 +65,9 @@ func RegisterGatewayRoutes(
 	}
 	modelsHandler := func(c *gin.Context) {
 		if isCodexModelsManifestRequest(c) {
-			h.OpenAIGateway.CodexModels(c)
+			// 本功能接点：Codex 目录请求按分组平台分派（OpenAI 与 Composite 走 OpenAI 目录 handler，
+			// 其它兼容平台走通用目录 handler），不再一律交给 OpenAI handler。
+			codexModelsHandler(c)
 			return
 		}
 		h.Gateway.Models(c)
@@ -525,7 +527,9 @@ func RegisterGatewayRoutes(
 }
 
 func dispatchCodexModelsGateway(c *gin.Context, openAIHandler, generatedHandler gin.HandlerFunc) {
-	if getGroupPlatform(c) == service.PlatformOpenAI {
+	// 本功能接点：Composite 分组也走 OpenAI 目录 handler（有 OpenAI 账号时保留实时基础目录，
+	// 没有时由该 handler 改走「空基础＋第三方」目录）。
+	if platform := getGroupPlatform(c); platform == service.PlatformOpenAI || platform == service.PlatformComposite {
 		openAIHandler(c)
 		return
 	}
@@ -549,18 +553,15 @@ func getGroupPlatform(c *gin.Context) string {
 // isCodexModelsManifestRequest 判断当前模型刷新是否来自 Codex 客户端。
 //
 // composite 分组的 GET 请求没有 Body，无法通过普通模型路由中间件解析目标平台；
-// `client_version` 是 Codex 模型清单请求的明确契约，因此在这里把它定向到现有
-// OpenAI manifest Handler。该 Handler 的账号调度仍只允许 OpenAI 平台。
+// `client_version` 是 Codex 模型清单请求的明确契约，带该参数且分组平台提供在线目录
+// （见 service.CodexCatalogPlatformEligible）时进入目录分派，由 dispatchCodexModelsGateway 选择 handler。
 func isCodexModelsManifestRequest(c *gin.Context) bool {
 	if c == nil || strings.TrimSpace(c.Query("client_version")) == "" {
 		return false
 	}
-	switch getGroupPlatform(c) {
-	case service.PlatformOpenAI, service.PlatformComposite:
-		return true
-	default:
-		return false
-	}
+	// 本功能接点：OpenAI 协议族、国产兼容平台与 Composite 都提供在线目录；
+	// Anthropic、Gemini、Antigravity 仍走普通模型列表。
+	return service.CodexCatalogPlatformEligible(getGroupPlatform(c))
 }
 
 func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver) gin.HandlerFunc {

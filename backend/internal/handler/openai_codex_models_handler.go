@@ -42,7 +42,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	if apiKey.Group.Platform == service.PlatformOpenAI &&
 		apiKey.Group.CodexModelsManifestConfig.Enabled {
 		pinnedManifest, pinnedAccount, pinnedErr := h.gatewayService.FetchPinnedCodexModelsManifest(
-			c.Request.Context(),
+			h.codexBaseFetchContext(c), // 本功能接点：基础目录获取限时
 			apiKey.Group,
 			c.Query("client_version"),
 		)
@@ -69,7 +69,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			if c.Request.Context().Err() != nil {
 				return
 			}
-			writeCodexModelsResponseForClient(c, pinnedManifest, clientETag)
+			h.writeCodexModelsResponseWithPolicy(c, apiKey.Group, pinnedManifest, clientETag) // 本功能接点：先应用三方模型策略
 			return
 		}
 	}
@@ -88,7 +88,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			return
 		}
 		if configured {
-			writeCodexModelsResponseForClient(c, configuredManifest, clientETag)
+			h.writeCodexModelsResponseWithPolicy(c, apiKey.Group, configuredManifest, clientETag) // 本功能接点
 			return
 		}
 	}
@@ -111,13 +111,17 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 				h.errorResponse(c, infraerrors.Code(lastUpstreamErr), "upstream_error", infraerrors.Message(lastUpstreamErr))
 				return
 			}
+			// 本功能接点：Composite 分组没有任何 OpenAI 账号时，改走「空基础＋第三方」目录。
+			if h.writeCodexThirdPartyOnlyCatalog(c, apiKey.Group, clientETag) {
+				return
+			}
 			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "No available OpenAI accounts")
 			return
 		}
 		// 让 ops 错误日志携带实际选中的上游账号，便于定位失效账号（#4544）。
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), "", c)
+		manifest, err := h.gatewayService.FetchCodexModelsManifest(h.codexBaseFetchContext(c), account, c.Query("client_version"), "", c) // 本功能接点：基础目录获取限时
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				return
@@ -147,7 +151,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			return
 		}
 
-		writeCodexModelsResponseForClient(c, manifest, clientETag)
+		h.writeCodexModelsResponseWithPolicy(c, apiKey.Group, manifest, clientETag) // 本功能接点
 		return
 	}
 }
