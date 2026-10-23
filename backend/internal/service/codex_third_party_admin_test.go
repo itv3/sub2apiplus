@@ -687,6 +687,114 @@ func TestCodexThirdPartyAdminSourceListQueryUsesGroupAndConcretePlatforms(t *tes
 }
 
 // ---------------------------------------------------------------------------
+// 官方 OpenAI 账号：不同步
+// ---------------------------------------------------------------------------
+
+// codexAdminOpenAIAccount 构造一个 OpenAI 平台账号；baseURL 为空表示不填 base_url（默认官方地址）。
+func codexAdminOpenAIAccount(id int64, name, accountType, baseURL string) Account {
+	credentials := map[string]any{"api_key": "sk-openai-secret"}
+	if baseURL != "" {
+		credentials["base_url"] = baseURL
+	}
+	return Account{
+		ID: id, Name: name, Platform: PlatformOpenAI, Type: accountType,
+		Status: StatusActive, Credentials: credentials,
+	}
+}
+
+// codexAdminOfficialAndRelayAccounts 返回四个官方 OpenAI 账号（OAuth、SetupToken、官方地址的 API Key、
+// 未填地址的 API Key）和两个应当同步的账号（第三方中转的 OpenAI 协议 API Key、Kimi API Key）。
+func codexAdminOfficialAndRelayAccounts() (official []Account, syncable []Account) {
+	official = []Account{
+		codexAdminOpenAIAccount(11, "官方-OAuth", AccountTypeOAuth, ""),
+		codexAdminOpenAIAccount(12, "官方-SetupToken", AccountTypeSetupToken, ""),
+		codexAdminOpenAIAccount(13, "官方-APIKey", AccountTypeAPIKey, "https://api.openai.com/v1"),
+		codexAdminOpenAIAccount(14, "官方-APIKey-默认地址", AccountTypeAPIKey, ""),
+	}
+	syncable = []Account{
+		codexAdminOpenAIAccount(21, "中转-OpenAI协议", AccountTypeAPIKey, "https://relay.example.test/v1"),
+		codexAdminAccount(22, "kimi", "k"),
+	}
+	return official, syncable
+}
+
+func TestCodexThirdPartyAdminPageReadSkipsOfficialOpenAIAccounts(t *testing.T) {
+	h := newCodexAdminHarness(t)
+	official, syncable := codexAdminOfficialAndRelayAccounts()
+	h.setAccounts(append(append([]Account{}, official...), syncable...)...)
+
+	state, err := h.svc.GetGroupState(context.Background(), codexAdminTestGroupID)
+	require.NoError(t, err)
+	h.svc.waitForBackground()
+
+	for _, acct := range official {
+		require.Zero(t, h.syncer.callCount(acct.ID), "官方账号 %s 不得触发上游同步", acct.Name)
+		source := sourceByAccount(state.Sources, acct.ID)
+		require.Equal(t, "official_skipped", source.Status, acct.Name)
+		require.False(t, source.Stale, "官方账号不计为过期")
+		require.False(t, source.Refreshing)
+		require.Nil(t, source.SyncedAt)
+		require.Empty(t, source.LastError)
+		_, found, loadErr := h.settings.LoadCodexCatalogSource(context.Background(), acct.ID)
+		require.NoError(t, loadErr)
+		require.False(t, found, "官方账号不写源快照")
+	}
+	for _, acct := range syncable {
+		require.Equal(t, 1, h.syncer.callCount(acct.ID), "非官方账号 %s 照常同步", acct.Name)
+		require.Equal(t, "complete", string(h.loadSource(acct.ID).Status))
+	}
+	require.Len(t, state.Sources, len(official)+len(syncable), "官方账号仍然出现在源列表里")
+}
+
+func TestCodexThirdPartyAdminManualSyncSkipsOfficialOpenAIAccounts(t *testing.T) {
+	h := newCodexAdminHarness(t)
+	official, syncable := codexAdminOfficialAndRelayAccounts()
+	h.setAccounts(append(append([]Account{}, official...), syncable...)...)
+	h.syncer.block = make(chan struct{})
+
+	result, err := h.svc.SyncSources(context.Background(), codexAdminTestGroupID)
+	require.NoError(t, err)
+	for _, acct := range official {
+		source := sourceByAccount(result.Sources, acct.ID)
+		require.Equal(t, "official_skipped", source.Status, acct.Name)
+		require.False(t, source.Refreshing, "官方账号不会进入刷新中")
+	}
+	for _, acct := range syncable {
+		require.True(t, sourceByAccount(result.Sources, acct.ID).Refreshing, acct.Name)
+	}
+
+	close(h.syncer.block)
+	h.svc.waitForBackground()
+	for _, acct := range official {
+		require.Zero(t, h.syncer.callCount(acct.ID), "手动同步同样跳过官方账号：%s", acct.Name)
+	}
+	require.Equal(t, len(syncable), h.syncer.totalCalls(), "只有非官方账号被同步")
+}
+
+func TestCodexThirdPartyAdminRefreshSourceNeverSyncsOfficialAccount(t *testing.T) {
+	h := newCodexAdminHarness(t)
+	official, _ := codexAdminOfficialAndRelayAccounts()
+	for i := range official {
+		require.NoError(t, h.svc.refreshSource(&official[i]))
+		h.svc.startBackgroundRefresh(official[i])
+	}
+	h.svc.waitForBackground()
+	require.Zero(t, h.syncer.totalCalls(), "兜底：任何入口都不能让官方账号发起同步")
+	require.False(t, h.repo.has(CodexCatalogSourceSettingKey(official[0].ID)))
+}
+
+func TestCodexThirdPartyAdminOfficialSourceJudgementMatchesCatalogOrchestration(t *testing.T) {
+	official, syncable := codexAdminOfficialAndRelayAccounts()
+	for _, acct := range official {
+		require.True(t, isCodexThirdPartyOfficialSourceAccount(&acct), acct.Name)
+	}
+	for _, acct := range syncable {
+		require.False(t, isCodexThirdPartyOfficialSourceAccount(&acct), acct.Name)
+	}
+	require.False(t, isCodexThirdPartyOfficialSourceAccount(nil))
+}
+
+// ---------------------------------------------------------------------------
 // 源刷新本身
 // ---------------------------------------------------------------------------
 

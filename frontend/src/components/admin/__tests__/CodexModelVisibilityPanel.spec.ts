@@ -624,6 +624,31 @@ describe('CodexModelVisibilityPanel 源同步', () => {
     expect(wrapper.get('[data-testid="codex-source-104"]').text()).toContain('admin.codexThirdPartyModels.sources.status.refreshing')
   })
 
+  it('官方账号显示“无需同步”，不计为过期、不提示配置变更', async () => {
+    const wrapper = await mountPanel(groupState({
+      sources: [
+        source({
+          account_id: 201,
+          account_name: '官方 OAuth',
+          platform: 'openai',
+          status: 'official_skipped',
+          stale: false,
+          fingerprint_matches: false,
+          model_count: 0
+        }),
+        source({ account_id: 202, account_name: '中转站', status: 'missing', stale: true, model_count: 0 })
+      ]
+    }))
+    const official = wrapper.get('[data-testid="codex-source-201"]').text()
+    expect(official).toContain('admin.codexThirdPartyModels.sources.status.official_skipped')
+    expect(official).not.toContain('admin.codexThirdPartyModels.sources.stale')
+    expect(official).not.toContain('admin.codexThirdPartyModels.sources.configChanged')
+    expect(official).not.toContain('admin.codexThirdPartyModels.sources.status.missing')
+    expect(wrapper.find('[data-testid="codex-source-changed-201"]').exists()).toBe(false)
+    // 其它账号不受影响。
+    expect(wrapper.get('[data-testid="codex-source-202"]').text()).toContain('admin.codexThirdPartyModels.sources.status.missing')
+  })
+
   it('只有曾经成功同步过、之后账号配置又变了的源才提示“配置已变更”', async () => {
     const wrapper = await mountPanel(groupState({
       sources: [
@@ -743,6 +768,41 @@ describe('CodexModelVisibilityPanel 标记已验证', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 供外部调用的整体刷新（Plus 页顶部“刷新”按钮）
+// ---------------------------------------------------------------------------
+
+describe('CodexModelVisibilityPanel 暴露的 reload', () => {
+  it('重新读取分组列表，并重新加载当前选中的分组', async () => {
+    const wrapper = await mountPanel()
+    expect(mocks.getAllGroups).toHaveBeenCalledTimes(1)
+    expect(mocks.getGroupState).toHaveBeenCalledTimes(1)
+
+    mocks.getGroupState.mockResolvedValue(groupState({ revision: 8 }))
+    await (wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
+    await flushPromises()
+
+    expect(mocks.getAllGroups).toHaveBeenCalledTimes(2)
+    expect(mocks.getGroupState).toHaveBeenCalledTimes(2)
+    expect(mocks.getGroupState).toHaveBeenLastCalledWith(GROUP_ID)
+    // 重新加载之后拿到的是新的 revision。
+    mocks.previewChanges.mockResolvedValue({ revision: 8, evaluation: groupState({ revision: 8 }).evaluation })
+    mocks.saveChanges.mockResolvedValue({ config: { schema_version: 1, revision: 9, models: {} } })
+    await sw(wrapper, 'kimi-k3').trigger('click')
+    await flushPromises()
+    expect(mocks.previewChanges).toHaveBeenLastCalledWith(GROUP_ID, 8, [{ slug: 'kimi-k3', enabled: true }])
+  })
+
+  it('没有选中分组时只刷新分组列表，不读取配置', async () => {
+    mocks.getAllGroups.mockResolvedValue([group(GROUP_ID, '混合分组', 'composite')])
+    const wrapper = mount(CodexModelVisibilityPanel, { global: { stubs: { Icon: true } } })
+    await flushPromises()
+    await (wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
+    expect(mocks.getAllGroups).toHaveBeenCalledTimes(2)
+    expect(mocks.getGroupState).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 切换分组
 // ---------------------------------------------------------------------------
 
@@ -786,7 +846,9 @@ describe('Codex 三方模型启用文案', () => {
     for (const locale of [zh, en]) {
       for (const status of statuses) expect(locale.status[status], status).toBeTruthy()
       for (const protocol of ['responses_native', 'responses_via_chat']) expect(locale.protocol[protocol], protocol).toBeTruthy()
-      for (const key of ['missing', 'complete', 'empty', 'failed', 'refreshing']) expect(locale.sources.status[key], key).toBeTruthy()
+      for (const key of ['missing', 'complete', 'empty', 'failed', 'refreshing', 'official_skipped']) {
+        expect(locale.sources.status[key], key).toBeTruthy()
+      }
     }
   })
 })
