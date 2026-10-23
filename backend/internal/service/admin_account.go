@@ -424,6 +424,9 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := ValidateAnthropicAPIKeyCompatExtra(input.Platform, input.Type, accountExtra); err != nil {
+		return nil, err
+	}
 	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
@@ -737,6 +740,17 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
 			return nil, err
 		}
+	}
+	compatType := account.Type
+	if input.Type != "" {
+		compatType = input.Type
+	}
+	compatExtra := account.Extra
+	if input.Extra != nil {
+		compatExtra = normalizedExtra
+	}
+	if err := ValidateAnthropicAPIKeyCompatExtra(account.Platform, compatType, compatExtra); err != nil {
+		return nil, err
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
 	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
@@ -1097,6 +1111,16 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	if len(updates) == 0 {
 		return nil
 	}
+	if hasAnthropicAPIKeyCompatExtra(updates) {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := ValidateAnthropicAPIKeyCompatExtraPatch(account, updates); err != nil {
+			return err
+		}
+		updates = completeAnthropicAPIKeyCompatPatch(updates)
+	}
 	return s.accountRepo.UpdateExtra(ctx, id, updates)
 }
 
@@ -1152,7 +1176,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || hasAnthropicAPIKeyCompatExtra(input.Extra) {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1164,6 +1188,14 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		if account != nil {
 			targetsByID[account.ID] = account
 		}
+	}
+	if hasAnthropicAPIKeyCompatExtra(input.Extra) {
+		for _, accountID := range input.AccountIDs {
+			if err := ValidateAnthropicAPIKeyCompatExtraPatch(targetsByID[accountID], input.Extra); err != nil {
+				return nil, err
+			}
+		}
+		input.Extra = completeAnthropicAPIKeyCompatPatch(input.Extra)
 	}
 	if openAISettings.any() {
 		inheritedCount, err := validateBulkOpenAISettingsTargets(input, openAISettings, targetsByID)

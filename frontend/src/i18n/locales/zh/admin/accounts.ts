@@ -8,7 +8,8 @@ export default {
       },
       tabs: {
         mimic: 'API Key 官方客户端兼容',
-        keepalive: '账号保活'
+        keepalive: '账号保活',
+        standard: '三方客户端兼容'
       }
     },
 
@@ -44,6 +45,17 @@ export default {
       loadFailed: '加载 API Key 账号失败',
       updateSuccess: '已更新官方客户端兼容设置',
       updateFailed: '更新官方客户端兼容设置失败'
+    },
+
+    standardApiCompat: {
+      description: '将官方 Claude Code 请求适配为普通 Anthropic API 请求。',
+      hint: '仅限 Anthropic API Key 账号，默认关闭。与“API Key 官方客户端兼容”互斥；请先关闭另一项再切换。',
+      toggle: '普通 API 兼容',
+      enabled: '普通 API 兼容已开启',
+      conflict: '两种兼容模式不能同时开启，请先关闭另一项',
+      empty: '暂无 Anthropic API Key 账号',
+      updateSuccess: '已更新普通 API 兼容设置',
+      updateFailed: '更新普通 API 兼容设置失败'
     },
 
     accountKeepalive: {

@@ -5,6 +5,7 @@ func (a *Account) IsAnthropicAPIKeyClaudeCodeMimicEnabled() bool {
 	return a != nil &&
 		a.Platform == PlatformAnthropic &&
 		a.Type == AccountTypeAPIKey &&
+		!a.IsAnthropicAPIKeyStandardAPICompatEnabled() &&
 		a.getExtraBool("anthropic_apikey_mimic_claude_code")
 }
 

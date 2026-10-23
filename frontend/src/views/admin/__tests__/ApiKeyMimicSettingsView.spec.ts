@@ -146,6 +146,64 @@ describe('ApiKeyMimicSettingsView', () => {
     expect(notice.text()).toContain('admin.plusEnhancements.officialEgress.description')
   })
 
+  it('三方客户端兼容仅显示 Anthropic API Key，支持独立筛选及开关', async () => {
+    const disabled = account(112, 'anthropic-standard-disabled', 'anthropic', 'apikey')
+    const enabled = account(111, 'anthropic-standard-enabled', 'anthropic', 'apikey', { anthropic_apikey_standard_api_compat: true })
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => page(filters?.platform === 'anthropic'
+      ? [disabled, enabled, account(113, 'anthropic-oauth', 'anthropic', 'oauth')]
+      : [account(114, 'openai-api', 'openai', 'apikey')]))
+    updateExtraMock.mockResolvedValue({ ...disabled, extra: { anthropic_apikey_standard_api_compat: true } })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'admin.plusEnhancements.tabs.standard')!.trigger('click')
+    expect(wrapper.text()).toContain('admin.standardApiCompat.description')
+    expect(wrapper.text()).not.toContain('anthropic-oauth')
+    expect(wrapper.text()).not.toContain('openai-api')
+    expect(wrapper.text().indexOf(enabled.name)).toBeLessThan(wrapper.text().indexOf(disabled.name))
+    await wrapper.get('[data-testid="standard-status-filter"]').setValue('disabled')
+    expect(wrapper.text()).not.toContain(enabled.name)
+    await wrapper.get(`[aria-label="${disabled.name} admin.standardApiCompat.toggle"]`).trigger('click')
+    await flushPromises()
+    expect(updateExtraMock).toHaveBeenCalledWith(112, { anthropic_apikey_standard_api_compat: true })
+    expect(showSuccessMock).toHaveBeenCalledWith('admin.standardApiCompat.updateSuccess')
+    expect(wrapper.text()).not.toContain(disabled.name)
+  })
+
+  it('两个兼容入口均阻止开启冲突模式', async () => {
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => page(filters?.platform === 'anthropic'
+      ? [account(1, 'standard-enabled', 'anthropic', 'apikey', { anthropic_apikey_standard_api_compat: true }),
+        account(2, 'mimic-enabled', 'anthropic', 'apikey', { anthropic_apikey_mimic_claude_code: true })]
+      : []))
+    const wrapper = mountView()
+    await flushPromises()
+    const mimicSwitch = wrapper.get('[aria-label="standard-enabled admin.apiKeyMimic.columns.compatible"]')
+    expect(mimicSwitch.attributes('disabled')).toBeDefined()
+    await mimicSwitch.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'admin.plusEnhancements.tabs.standard')!.trigger('click')
+    const standardSwitch = wrapper.get('[aria-label="mimic-enabled admin.standardApiCompat.toggle"]')
+    expect(standardSwitch.attributes('disabled')).toBeDefined()
+    await standardSwitch.trigger('click')
+    expect(wrapper.text()).toContain('admin.standardApiCompat.conflict')
+    expect(updateExtraMock).not.toHaveBeenCalled()
+  })
+
+  it('三方客户端兼容保存失败后保留原开关状态', async () => {
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => page(filters?.platform === 'anthropic'
+      ? [account(112, 'anthropic-api', 'anthropic', 'apikey')]
+      : []))
+    updateExtraMock.mockRejectedValue({ response: { data: { detail: '保存冲突' } } })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === 'admin.plusEnhancements.tabs.standard')!.trigger('click')
+    const toggle = wrapper.get('[aria-label="anthropic-api admin.standardApiCompat.toggle"]')
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    expect(toggle.attributes('disabled')).toBeUndefined()
+    expect(showErrorMock).toHaveBeenCalledWith('保存冲突')
+  })
+
   it('保活账号列表只加载并展示 OpenAI/Anthropic API Key 账号', async () => {
     vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
       if (filters?.platform === 'anthropic') {

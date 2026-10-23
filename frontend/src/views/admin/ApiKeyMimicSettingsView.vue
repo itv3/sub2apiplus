@@ -15,11 +15,11 @@
             type="button"
             class="btn btn-secondary"
             :disabled="currentLoading"
-            :title="t(activeTab === 'mimic' ? 'admin.apiKeyMimic.refresh' : 'admin.accountKeepalive.refresh')"
-            @click="activeTab === 'mimic' ? loadMimicAccounts() : loadKeepaliveAccounts()"
+            :title="t(activeTab === 'keepalive' ? 'admin.accountKeepalive.refresh' : 'admin.apiKeyMimic.refresh')"
+            @click="activeTab === 'keepalive' ? loadKeepaliveAccounts() : loadMimicAccounts()"
           >
             <Icon name="refresh" size="md" :class="currentLoading ? 'animate-spin' : ''" />
-            <span class="hidden sm:inline">{{ t(activeTab === 'mimic' ? 'admin.apiKeyMimic.refresh' : 'admin.accountKeepalive.refresh') }}</span>
+            <span class="hidden sm:inline">{{ t(activeTab === 'keepalive' ? 'admin.accountKeepalive.refresh' : 'admin.apiKeyMimic.refresh') }}</span>
           </button>
         </div>
 
@@ -52,16 +52,28 @@
           >
             {{ t('admin.plusEnhancements.tabs.keepalive') }}
           </button>
+          <button
+            type="button"
+            class="rounded-md px-3 py-2 text-sm font-medium transition-colors"
+            :class="activeTab === 'standard' ? activeTabClass : inactiveTabClass"
+            @click="activeTab = 'standard'"
+          >
+            {{ t('admin.plusEnhancements.tabs.standard') }}
+          </button>
         </div>
       </template>
 
       <template #table>
-        <div v-if="activeTab === 'mimic'" class="space-y-3">
+        <div v-if="activeTab !== 'keepalive'" class="space-y-3">
+          <div v-if="activeTab === 'standard'" class="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-300">
+            <p>{{ t('admin.standardApiCompat.description') }}</p>
+            <p class="mt-1 text-xs">{{ t('admin.standardApiCompat.hint') }}</p>
+          </div>
           <div class="flex flex-wrap items-center justify-end gap-2">
-            <label for="mimic-status-filter" class="text-sm font-medium text-gray-700 dark:text-gray-200">
+            <label :for="`${activeTab}-status-filter`" class="text-sm font-medium text-gray-700 dark:text-gray-200">
               {{ t('admin.apiKeyMimic.filters.status') }}
             </label>
-            <select id="mimic-status-filter" v-model="mimicStatusFilter" data-testid="mimic-status-filter" class="input h-9 w-full sm:w-44">
+            <select :id="`${activeTab}-status-filter`" v-model="compatibilityStatusFilter" :data-testid="`${activeTab}-status-filter`" class="input h-9 w-full sm:w-44">
               <option value="all">{{ t('admin.apiKeyMimic.filters.all') }}</option>
               <option value="enabled">{{ t('admin.apiKeyMimic.filters.enabled') }}</option>
               <option value="disabled">{{ t('admin.apiKeyMimic.filters.disabled') }}</option>
@@ -70,7 +82,7 @@
 
           <DataTable
             :columns="mimicColumns"
-            :data="visibleMimicAccounts"
+            :data="activeTab === 'standard' ? visibleStandardAccounts : visibleMimicAccounts"
             :loading="mimicLoading"
           >
             <template #cell-account="{ row }">
@@ -95,15 +107,16 @@
                 type="button"
                 role="switch"
                 class="relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-offset-dark-800"
-                :class="isMimicEnabled(row) ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'"
-                :aria-checked="isMimicEnabled(row)"
-                :aria-label="`${row.name} ${t('admin.apiKeyMimic.columns.compatible')}`"
-                :disabled="mimicUpdatingIds.has(row.id)"
-                @click.stop="toggleMimic(row)"
+                :class="isCompatibilityEnabled(row) ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'"
+                :aria-checked="isCompatibilityEnabled(row)"
+                :aria-label="`${row.name} ${compatibilityLabel}`"
+                :title="isOtherCompatibilityEnabled(row) ? t('admin.standardApiCompat.conflict') : compatibilityLabel"
+                :disabled="mimicUpdatingIds.has(row.id) || (isOtherCompatibilityEnabled(row) && !isCompatibilityEnabled(row))"
+                @click.stop="activeTab === 'standard' ? toggleStandardAPICompat(row) : toggleMimic(row)"
               >
                 <span
                   class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                  :class="isMimicEnabled(row) ? 'translate-x-5' : 'translate-x-0'"
+                  :class="isCompatibilityEnabled(row) ? 'translate-x-5' : 'translate-x-0'"
                 />
               </button>
             </template>
@@ -111,7 +124,7 @@
             <template #cell-status="{ row }">
               <div class="flex flex-wrap gap-2">
                 <span
-                  v-for="item in statusLabels(row)"
+                  v-for="item in compatibilityStatusLabels(row)"
                   :key="item"
                   class="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-gray-200"
                 >
@@ -124,7 +137,7 @@
               <div class="flex flex-col items-center py-6 text-gray-500 dark:text-gray-400">
                 <Icon name="inbox" size="xl" class="mb-4 h-12 w-12 text-gray-400 dark:text-dark-500" />
                 <p class="text-lg font-medium text-gray-900 dark:text-gray-100">
-                  {{ t('admin.apiKeyMimic.empty') }}
+                  {{ t(activeTab === 'standard' ? 'admin.standardApiCompat.empty' : 'admin.apiKeyMimic.empty') }}
                 </p>
               </div>
             </template>
@@ -495,6 +508,7 @@ import DataTable from '@/components/common/DataTable.vue'
 import Icon from '@/components/icons/Icon.vue'
 
 const ANTHROPIC_MIMIC_KEY = 'anthropic_apikey_mimic_claude_code'
+const ANTHROPIC_STANDARD_API_KEY = 'anthropic_apikey_standard_api_compat'
 const OPENAI_MIMIC_KEY = 'openai_apikey_mimic_codex_cli'
 const TLS_FINGERPRINT_KEY = 'enable_tls_fingerprint'
 const HISTORY_TABLE_WIDTH = 2400
@@ -511,7 +525,7 @@ const KEEPER_MAX_OUTPUT_TOKENS_KEY = 'keeper_keepalive_max_output_tokens'
 const DEFAULT_KEEPER_MAX_OUTPUT_TOKENS = 512
 const KEEPER_MAX_OUTPUT_TOKENS_HARD_CAP = 1024
 
-type TabKey = 'mimic' | 'keepalive'
+type TabKey = 'mimic' | 'keepalive' | 'standard'
 type KeepaliveTabKey = 'overview' | 'settings' | 'history'
 type FeatureStatusFilter = 'all' | 'enabled' | 'disabled'
 
@@ -557,6 +571,14 @@ const mimicAccounts = ref<Account[]>([])
 const mimicLoading = ref(false)
 const mimicUpdatingIds = ref<Set<number>>(new Set())
 const mimicStatusFilter = ref<FeatureStatusFilter>('all')
+const standardStatusFilter = ref<FeatureStatusFilter>('all')
+const compatibilityStatusFilter = computed({
+  get: () => activeTab.value === 'standard' ? standardStatusFilter.value : mimicStatusFilter.value,
+  set: (value: FeatureStatusFilter) => {
+    if (activeTab.value === 'standard') standardStatusFilter.value = value
+    else mimicStatusFilter.value = value
+  }
+})
 
 const keepaliveRows = ref<KeepaliveRow[]>([])
 const keepaliveLoading = ref(false)
@@ -581,18 +603,23 @@ const promptModalOpen = ref(false)
 const editingPromptIndex = ref<number | null>(null)
 const promptModal = ref<PromptQuestion>({ scope: 'global', project_path: '', enabled: true, text: '' })
 
-const currentLoading = computed(() => activeTab.value === 'mimic' ? mimicLoading.value : keepaliveLoading.value)
+const currentLoading = computed(() => activeTab.value === 'keepalive' ? keepaliveLoading.value : mimicLoading.value)
+const compatibilityLabel = computed(() => t(activeTab.value === 'standard' ? 'admin.standardApiCompat.toggle' : 'admin.apiKeyMimic.columns.compatible'))
 
 const mimicColumns = computed<Column[]>(() => [
   { key: 'account', label: t('admin.apiKeyMimic.columns.account') },
   { key: 'platform', label: t('admin.apiKeyMimic.columns.platform'), sortable: true },
-  { key: 'compatible', label: t('admin.apiKeyMimic.columns.compatible') },
+  { key: 'compatible', label: compatibilityLabel.value },
   { key: 'status', label: t('admin.apiKeyMimic.columns.status') }
 ])
 
 const visibleMimicAccounts = computed(() => mimicAccounts.value
   .filter(account => matchesFeatureStatus(isMimicEnabled(account), mimicStatusFilter.value))
   .sort((a, b) => compareFeatureStatus(isMimicEnabled(a), isMimicEnabled(b), a.id, b.id)))
+const visibleStandardAccounts = computed(() => mimicAccounts.value
+  .filter(account => account.platform === 'anthropic' && account.type === 'apikey')
+  .filter(account => matchesFeatureStatus(isStandardAPICompatEnabled(account), standardStatusFilter.value))
+  .sort((a, b) => compareFeatureStatus(isStandardAPICompatEnabled(a), isStandardAPICompatEnabled(b), a.id, b.id)))
 const configuredKeepaliveRows = computed(() => keepaliveRows.value
   .filter(row => isKeepaliveConfigured(row.account))
   .filter(row => matchesFeatureStatus(row.form.enabled, keepaliveStatusFilter.value))
@@ -870,6 +897,10 @@ async function toggleMimic(account: Account) {
   if (mimicUpdatingIds.value.has(account.id)) return
 
   const enabled = !isMimicEnabled(account)
+  if (enabled && isStandardAPICompatEnabled(account)) {
+    appStore.showWarning(t('admin.standardApiCompat.conflict'))
+    return
+  }
   mimicUpdatingIds.value = new Set(mimicUpdatingIds.value).add(account.id)
 
   try {
@@ -878,6 +909,48 @@ async function toggleMimic(account: Account) {
     appStore.showSuccess(t('admin.apiKeyMimic.updateSuccess'))
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.apiKeyMimic.updateFailed'))
+  } finally {
+    const next = new Set(mimicUpdatingIds.value)
+    next.delete(account.id)
+    mimicUpdatingIds.value = next
+  }
+}
+
+function isStandardAPICompatEnabled(account: Account): boolean {
+  return account.platform === 'anthropic' && account.type === 'apikey' && account.extra?.[ANTHROPIC_STANDARD_API_KEY] === true
+}
+
+function isCompatibilityEnabled(account: Account): boolean {
+  return activeTab.value === 'standard' ? isStandardAPICompatEnabled(account) : isMimicEnabled(account)
+}
+
+function isOtherCompatibilityEnabled(account: Account): boolean {
+  if (account.platform !== 'anthropic') return false
+  return activeTab.value === 'standard' ? isMimicEnabled(account) : isStandardAPICompatEnabled(account)
+}
+
+function compatibilityStatusLabels(account: Account): string[] {
+  const labels = activeTab.value === 'standard'
+    ? [t(isStandardAPICompatEnabled(account) ? 'admin.standardApiCompat.enabled' : 'admin.apiKeyMimic.statusLabels.disabled')]
+    : statusLabels(account)
+  if (isOtherCompatibilityEnabled(account)) labels.push(t('admin.standardApiCompat.conflict'))
+  return labels
+}
+
+async function toggleStandardAPICompat(account: Account) {
+  if (mimicUpdatingIds.value.has(account.id)) return
+  const enabled = !isStandardAPICompatEnabled(account)
+  if (enabled && isMimicEnabled(account)) {
+    appStore.showWarning(t('admin.standardApiCompat.conflict'))
+    return
+  }
+  mimicUpdatingIds.value = new Set(mimicUpdatingIds.value).add(account.id)
+  try {
+    const updated = await adminAPI.accounts.updateExtra(account.id, { [ANTHROPIC_STANDARD_API_KEY]: enabled })
+    mimicAccounts.value = mimicAccounts.value.map(item => item.id === updated.id ? updated : item)
+    appStore.showSuccess(t('admin.standardApiCompat.updateSuccess'))
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.standardApiCompat.updateFailed'))
   } finally {
     const next = new Set(mimicUpdatingIds.value)
     next.delete(account.id)

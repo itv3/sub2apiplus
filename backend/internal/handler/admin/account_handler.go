@@ -3450,6 +3450,7 @@ func validatePlusExtraPatch(extra map[string]any) error {
 	for key, value := range extra {
 		switch key {
 		case "anthropic_apikey_mimic_claude_code",
+			service.AnthropicAPIKeyStandardAPICompatExtraKey,
 			"openai_apikey_mimic_codex_cli",
 			"enable_tls_fingerprint",
 			"keeper_keepalive_enabled":
@@ -3552,7 +3553,7 @@ func validatePlusExtraPatchForAccount(extra map[string]any, account *service.Acc
 	}
 	for key := range extra {
 		switch key {
-		case "anthropic_apikey_mimic_claude_code":
+		case "anthropic_apikey_mimic_claude_code", service.AnthropicAPIKeyStandardAPICompatExtraKey:
 			if account.Platform != service.PlatformAnthropic || account.Type != service.AccountTypeAPIKey {
 				return fmt.Errorf("extra.%s only applies to Anthropic API Key accounts", key)
 			}
@@ -3580,7 +3581,7 @@ func validatePlusExtraPatchForAccount(extra map[string]any, account *service.Acc
 			}
 		}
 	}
-	return nil
+	return service.ValidateAnthropicAPIKeyCompatExtraPatch(account, extra)
 }
 
 func isBoundedExtraString(value any, maxRunes int) bool {

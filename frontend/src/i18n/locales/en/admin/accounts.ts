@@ -8,7 +8,8 @@ export default {
       },
       tabs: {
         mimic: 'API Key Official Compatibility',
-        keepalive: 'Account Keepalive'
+        keepalive: 'Account Keepalive',
+        standard: 'Third-party Client Compatibility'
       }
     },
 
@@ -44,6 +45,17 @@ export default {
       loadFailed: 'Failed to load API Key accounts',
       updateSuccess: 'Official-client compatibility updated',
       updateFailed: 'Failed to update official-client compatibility'
+    },
+
+    standardApiCompat: {
+      description: 'Adapt official Claude Code requests to standard Anthropic API requests.',
+      hint: 'For Anthropic API Key accounts only; disabled by default. Disable API Key Official Compatibility before switching modes.',
+      toggle: 'Standard API Compatibility',
+      enabled: 'Standard API compatibility enabled',
+      conflict: 'Disable the other compatibility mode before enabling this one',
+      empty: 'No Anthropic API Key accounts',
+      updateSuccess: 'Standard API compatibility updated',
+      updateFailed: 'Failed to update standard API compatibility'
     },
 
     accountKeepalive: {

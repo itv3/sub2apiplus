@@ -17,12 +17,12 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 维护原则：
 
 1. 长期跟随上游主线，发布版本按上游 release/tag 对齐。
-2. Plus 账号级开关优先放入 `account.Extra`；mimic / 保活走 Plus 设置页，Antigravity 走账号编辑页；OAuth 官方客户端伪装为内置能力，不提供账号级开关。
+2. Plus 账号级开关优先放入 `account.Extra`；mimic / 保活 / 三方客户端兼容走 Plus 设置页，Antigravity 走账号编辑页；OAuth 官方客户端伪装为内置能力，不提供账号级开关。
 3. Docker 更新默认只替换应用容器，不动 PostgreSQL、Redis、反向代理配置、`.env` 和数据目录。
 
 ## 1. Plus 增强功能
 
-管理后台侧边栏“Plus 增强功能”进入 `/admin/settings/plus-enhancements`，包含“API Key 官方客户端兼容”和“账号保活”两个 Tab；Antigravity 的模型、映射、官方伪装和计费配置位于账号创建/编辑页。
+管理后台侧边栏“Plus 增强功能”进入 `/admin/settings/plus-enhancements`，包含“API Key 官方客户端兼容”“账号保活”和“三方客户端兼容”三个 Tab；Antigravity 的模型、映射、官方伪装和计费配置位于账号创建/编辑页。
 
 ### 1.1 OAuth 官方客户端伪装
 
@@ -228,7 +228,18 @@ Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。OpenAI ke
 - **排查期间暂停自动调度**：据观测 Claude CLI 对单次 429 最多自动重试 10 次，排查时应暂停调度或使用受控单次请求，避免把一轮失败误判为多轮保活。
 - **区分持续 429 与瞬时重试**：判定契约见 §1.4.3 第 7 条。2026-07-15 实测中一轮保活的 6 个正文请求全部返回 HTTP 200，首个请求经 2 次瞬时 429 自动重试后恢复，最终仍记为 `success`，完整运行记录见实证归档。
 
-### 1.5 其它优化
+### 1.5 三方客户端兼容
+
+在“Plus 增强功能 → 三方客户端兼容”中，为指定的 Anthropic API Key 账号打开“普通 API 兼容”，将官方 Claude Code 请求适配为普通 Anthropic API 请求。开关保存在 `account.Extra.anthropic_apikey_standard_api_compat`，默认关闭，不影响 OAuth 或其它平台账号。
+
+1. **适用方向**：官方 Claude Code 客户端 → 普通 Anthropic API。与 §1.2 中“第三方客户端 → 官方客户端请求形态”的 mimic 方向相反，两项互斥；切换前先关闭另一项。页面开关与后端创建、编辑、批量更新、Extra PATCH 均校验此约束。
+2. **处理范围**：出站使用普通 API User-Agent，仅过滤 `anthropic-beta` 中的 `claude-code-20250219`，并清理 `system` 中的 `x-anthropic-billing-header` 键值标识及 Claude Code 官方 CLI 身份介绍。支持 system 字符串、文本块数组及同一块内混合业务指令；空身份块移除，其余块的属性保持不变。
+3. **保留能力**：保留其它功能 beta、业务 system 指令、messages、tools、剩余块的缓存配置、metadata 和会话头。消息转发、透传、token 计数、账号连通性测试和 keeper 内部代理共用处理逻辑；在最终请求头覆写后生效，避免重试或账号覆写再次加入身份标识。
+4. **配置与验收**：只为需要此适配的账号开启。用实际客户端验证普通对话、流式与工具调用，并核对用量记录中的账号 ID，避免分组切换到其它账号造成误判。开关只改变请求兼容行为，不承诺上游额度资格或计费方式；实际结果以上游规则和账单为准。
+
+`claude-code-20250219` 是通过 `anthropic-beta` 发送的 Claude Code 相关实验特性标识，日期属于标识名称，不是客户端版本。它的完整内部语义未公开；本功能仅移除这一身份标识，其它功能 beta 按原有规则处理。参见 [Anthropic beta 请求头文档](https://platform.claude.com/docs/en/api/beta-headers)与[订阅者 API 赠送额度说明](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)。
+
+### 1.6 其它优化
 
 - Composite 与 Grok 同等豁免，使 Anthropic 协议也能访问 GPT、Grok 模型。
 - Composite 分组的模型列表按请求协议过滤：OpenAI Compatible 与 OpenAI Responses 共用 OpenAI 模型目录；携带 `Anthropic-Version` 或 Claude CLI 特征时仅返回 Anthropic 协议模型。Kimi、智谱、DeepSeek 按账号实际 `api_protocol` 归组；配置为自适应协议（`api_protocol=adaptive`）的账号会根据入站请求选择上游协议，因此其模型同时显示在 OpenAI 与 Anthropic 两类目录中。自定义模型列表仅在过滤结果上取交集；该功能只影响模型展示，不限制实际请求路由。
@@ -654,7 +665,7 @@ README、机器生成证据索引及 JSON 收据只承担操作或审计责任�
 | [`docs/PAYMENT_CN.md`](docs/PAYMENT_CN.md) | 支付能力中文说明。 |
 | [`docs/PAYMENT.md`](docs/PAYMENT.md) | 支付能力英文说明。 |
 | [`docs/ADMIN_PAYMENT_INTEGRATION_API.md`](docs/ADMIN_PAYMENT_INTEGRATION_API.md) | 管理端支付集成 API。 |
-| [`docs/BATCH_IMAGE_MVP.md`](docs/BATCH_IMAGE_MVP.md) | 批量生图 MVP（上游能力，非 Plus 自研四项增强）。 |
+| [`docs/BATCH_IMAGE_MVP.md`](docs/BATCH_IMAGE_MVP.md) | 批量生图 MVP（上游能力，非 Plus 自研增强）。 |
 | [`docs/ASYNC_IMAGE_TASKS.md`](docs/ASYNC_IMAGE_TASKS.md) | 异步图像生成与编辑任务 API（上游能力）。 |
 | [`docs/legal/admin-compliance.zh.md`](docs/legal/admin-compliance.zh.md) | 管理端合规说明（中文）。 |
 | [`docs/legal/admin-compliance.en.md`](docs/legal/admin-compliance.en.md) | 管理端合规说明（英文）。 |

@@ -680,6 +680,9 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 		// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 		applyAccountTestHeaderOverrides(account, req.Header)
+		if _, err := applyAnthropicAPIKeyStandardAPICompat(account, req, payloadBytes); err != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("普通 API 兼容处理失败：%s", err.Error()))
+		}
 	}
 
 	if account.IsOAuth() {

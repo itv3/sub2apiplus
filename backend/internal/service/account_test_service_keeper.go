@@ -210,6 +210,24 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 		}
 		applyAccountTestHeaderOverridesForOfficialClientProxy(account, req.Header)
 	}
+	if account.IsAnthropicAPIKeyStandardAPICompatEnabled() {
+		var bodyBytes []byte
+		if req.Body != nil {
+			bodyBytes, err = io.ReadAll(io.LimitReader(req.Body, keeperProxyBodyLimitBytes+1))
+			_ = req.Body.Close()
+			if err != nil {
+				return nil, err
+			}
+			if len(bodyBytes) > keeperProxyBodyLimitBytes {
+				return nil, fmt.Errorf("keeper 代理请求正文超过 %d 字节", keeperProxyBodyLimitBytes)
+			}
+			// 读取后先复原正文，兼容函数在无需修改时也能继续正常转发。
+			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		}
+		if _, err = applyAnthropicAPIKeyStandardAPICompat(account, req, bodyBytes); err != nil {
+			return nil, err
+		}
+	}
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()

@@ -1,0 +1,278 @@
+{
+  "base_commit": "f1356091efb37ee189a8eb64f0bbf88a9b3b84c3",
+  "changed_path_count": 17,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6500,
+  "frozen_path_count": 2263,
+  "identity_sha256": "61dcd59349fa413bf70fc04ea4ddaa2cd0ab913965bd794d745dc0df503be6fb",
+  "issued_at_utc": "2026-10-23T01:27:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-anthropic-standard-api-compat-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "76ad899a50c3392786eab0274383f42ceef2a31c9aa279506dff0c491de3796a"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "7e073adf3d69f24de45bd1a7ecd7e52dab69c920df616b2d901ab73859527366"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "ffde2876f64b4df15c58cfe6b3e213125c87a16fa66a45a705e8b0bebc0c3ed6"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/chat-completions-id-20261005-freeze-successor.json",
+        "docs/egress/maintenance/codex-0154-closeout-merge-main-20260923-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.10-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-1-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-7-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-8-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/release-v0.2.4-9-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "99344df1d0bad04060304e6374bb64969ec64022e7b109480e0eef877d27b3dc"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/admin/account_handler.go",
+      "predecessor_sha256s": [
+        "24765b6db1af56af89b23c9aa25e68d1f37f5a3d46bf9e69e736760a49ef1e5b"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/internal/handler/admin/account_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d64cb58dff44233026802705e8466e20a8e6d91db07790d31d5074d1eea5ce6b"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256s": [
+        "b2097ad9190240583e3a67e1a38a27764cd3058237e1f595cd951bc9d87f45e9"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/internal/service/account_test_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-01630-candidate-impl-r1-20261021-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "357c9aa530c0d908d489cdf51daf6c54865c9b51f2c8eb103ed0b82e4179f893"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_keeper.go",
+      "predecessor_sha256s": [
+        "fdc35917a6158adfa7b7aff53a4e77878d5bd259cfdf2ea1adefd53e2f630ea5"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/internal/service/account_test_service_keeper.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "82b3dd51545f43f59f2ac70b3b518ec1bc1da8a338f945679794881857b20b08"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_account.go",
+      "predecessor_sha256s": [
+        "7a93ba301dc79cc34b92fda52662b574470cbeab930d4e302ba43bb3d0d60381"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/internal/service/admin_account.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "504f2f1f56c55a61e85af8ec7dcd9494c7c3d62779630d073e821268aca65053"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_anthropic_passthrough.go",
+      "predecessor_sha256s": [
+        "cb1b18a6cb10d17dfd698c562b275fa91de4384c29d9cbb63e1277b84688975b"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/internal/service/gateway_anthropic_passthrough.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "35f9b65054502b6033c05e2d093e54cfc87e610e0b750845dc9a05a2693e5b46"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_count_tokens.go",
+      "predecessor_sha256s": [
+        "34eb17e0320400704cecd0523c9640804cb06593dfff45513e4da896eb731754"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/internal/service/gateway_count_tokens.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1a2e6b2548623619f8a3f0b86277d8159cea2d6eda00e2983fb991416d98fae6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_upstream_request.go",
+      "predecessor_sha256s": [
+        "a33d225c1efdead70d13817465fe7b6a3766efc3394fb794014ffe739227b315"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=backend/internal/service/gateway_upstream_request.go",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+        "docs/egress/maintenance/fw-e-observation-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fbe14ab1f1c5dab27ad20a67066b8cdc42a630cb953851b938f9e1600874a854"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/en/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "819486198d6bb918c793e35b36403febf07d6f30f2d52d14298c2865822fe0eb"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=frontend/src/i18n/locales/en/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2bcc86dd238995e75dc546c7be369e643250ee67d1d802c03c0e7717344b74dc"
+    },
+    {
+      "old_path": "",
+      "path": "frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "predecessor_sha256s": [
+        "32209f38cae8a269aafd408446ffbd17350da9748e832848e41cd4a1fdca442b"
+      ],
+      "reason": "新增默认关闭的 Anthropic API Key 普通 API 兼容开关、增强页第三个 Tab、账号保存互斥校验和 README 说明；登记本次改动的精确源码后继摘要，仅显式开启的 API Key 账号改变普通 API 出站，OAuth 官方画像、Persona 选择与关闭模式保持原行为 path=frontend/src/i18n/locales/zh/admin/accounts.ts",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "55435b59b333355ca45467779930a0bb9fb373db9bae583b3075b761044c01da"
+    }
+  ],
+  "unregistered_path_count": 6,
+  "unregistered_paths": [
+    "backend/internal/handler/admin/account_standard_api_compat_test.go",
+    "backend/internal/service/account_anthropic_standard_api_compat.go",
+    "backend/internal/service/account_anthropic_standard_api_compat_test.go",
+    "backend/internal/service/account_apikey_mimicry.go",
+    "frontend/src/views/admin/ApiKeyMimicSettingsView.vue",
+    "frontend/src/views/admin/__tests__/ApiKeyMimicSettingsView.spec.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
