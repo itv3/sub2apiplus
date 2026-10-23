@@ -1,0 +1,315 @@
+{
+  "base_commit": "f9d45bfad88f3eedab20273970cbc84d8bce7db8",
+  "changed_path_count": 45,
+  "current_commit": "0bca1605c7070603faeb67e48d0ae494bdde6927",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 6797,
+  "frozen_path_count": 2279,
+  "identity_sha256": "6cf333d3612c97a413317dc4d96421310a81dc175988737f13e2d57d45ee4656",
+  "issued_at_utc": "2026-10-23T11:07:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-third-party-models-20261023-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "README.md",
+      "predecessor_sha256s": [
+        "20b65ec546bb69f52cdbd46804dec11fb8f37118ca465e183e41b6e7abb6b7c4"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=README.md",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/anthropic-standard-api-compat-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-merge-checklist-20261023-freeze-successor.json",
+        "docs/egress/maintenance/anthropic-standard-api-sdk-identity-20261023-freeze-successor.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-followups-20261020-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0f4aa4fb9121ba5c438b62b0bb80443b0d74e8c6effa6d5a3f54675ba0a926c5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/wire_gen.go",
+      "predecessor_sha256s": [
+        "c1941b43315a86b04334a80a7d1143611199967bbb96a7675c0b065d6883f4d2"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/cmd/server/wire_gen.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a9ef9cfa5793c80726662cefe20e6dc6bbada3c48f68716eec13b0219854efa8"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/gateway_handler.go",
+      "predecessor_sha256s": [
+        "1de1d54c8ec771eee883ac4018d6a996295d5a4f65012f24f657a4518363b064"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/handler/gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+        "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.17-6-model-pricing-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ec8a50b7dc6bbb6e32015e9b62844bb492c0207506db90fa85b10188ad612feb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_codex_models_handler.go",
+      "predecessor_sha256s": [
+        "a95d3741c9f77d6ed4702c5336e5fb93edbe7fbb3a3ec33edb3cd71c4c415022"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/handler/openai_codex_models_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3c3aa9e5403a6267756d34c5b55fce3ee65bb33c2f5001d86d71a69b3acaac17"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "20123ef1aac67f79c21d1104e1323ffffb936a5904ad8b017d8c16af28f8774e"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/handler/openai_gateway_handler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/release-v0.2.13-3-lint-cleanup-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-request-memory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-native-ws-inventory-order-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-owned-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-request-memory-speed-boundary-20261006-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0356bc96b1514514b9761fa0558fbb1d6c501616a1422baaa864d75ffc7e8385"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/wire.go",
+      "predecessor_sha256s": [
+        "fc1c4d1e6c1fdc86d1b315883589b073ca66a22dcf1921319fbfc1885e5a56ca"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/handler/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2cfbad198504b302528a0b776a9b7a770f4c8eb3c53fc8c6d4b6eba041b66324"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/wire.go",
+      "predecessor_sha256s": [
+        "eff9f7072d0b36e923e3c93b22da54964d461342f36f58e4f65bd8d86efa20a2"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/repository/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "18b1dc8a2e466273f7f21d43686743002a4654912662052cd5bdb51b44a5dc35"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/routes/admin.go",
+      "predecessor_sha256s": [
+        "8ccf2b3fdae6fdf582a2a920606cc5dd7158a692b2ce9d8d4840c8d7e205ce98"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/server/routes/admin.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-freeze-successor.json",
+        "docs/egress/maintenance/remove-antigravity-keeper-20261023-terminal-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2e5b0aa4ef4b684757265cf6296ad4c03ed28c2013659ad63f5eed5c19d9c28f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/routes/gateway.go",
+      "predecessor_sha256s": [
+        "7b088d80b4ada3083ecb1c41df4b6be2f21216d7af0d4370d9cbe777d9af25be"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/server/routes/gateway.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "ed7d1bc2f37fc20227acaa6154af095ba82b7e7abb7476675fdd02b9d05f9e61"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/server/routes/gateway_codex_models_test.go",
+      "predecessor_sha256s": [
+        "d032b1242b899e55785d8b383f16492dfcd467b304dbd6af23cfd62df789847f"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/server/routes/gateway_codex_models_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "75026ef12ef42dc091620eaee5b8217f3d89f43f9a10e105932e956568142b58"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/wire.go",
+      "predecessor_sha256s": [
+        "fc31eeaea005779a8b93db6c4d477fd6cc57f3810acad24183fd71051f42439d"
+      ],
+      "reason": "新增「Codex 三方模型启用」：按分组控制第三方模型在 Codex 在线目录中的显示，目录编排、能力档案、配置存储与管理接口均为新文件，既有文件只加目录分派、写出接点、依赖字段、装配与路由挂载，并在 README 登记功能说明与合并核对项。 path=backend/internal/service/wire.go",
+      "source_receipts": [
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+        "docs/egress/maintenance/claude-fw-h-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.10-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.10-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.13-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.13-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.17-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.17-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "cbf8523d7e0790ba1ffba6e74f947e9514143f25c80081ff750f8239f8941a66"
+    }
+  ],
+  "unregistered_path_count": 34,
+  "unregistered_paths": [
+    "backend/internal/handler/admin/codex_third_party_models_handler.go",
+    "backend/internal/handler/admin/codex_third_party_models_handler_test.go",
+    "backend/internal/handler/codex_third_party_catalog.go",
+    "backend/internal/handler/codex_third_party_catalog_test.go",
+    "backend/internal/handler/handler.go",
+    "backend/internal/repository/codex_model_visibility_repo.go",
+    "backend/internal/repository/codex_model_visibility_repo_integration_test.go",
+    "backend/internal/repository/codex_model_visibility_repo_unit_test.go",
+    "backend/internal/server/routes/admin_codex_third_party_models.go",
+    "backend/internal/server/routes/admin_codex_third_party_models_test.go",
+    "backend/internal/server/routes/gateway_codex_third_party_test.go",
+    "backend/internal/service/codex_third_party_admin.go",
+    "backend/internal/service/codex_third_party_admin_test.go",
+    "backend/internal/service/codex_third_party_catalog.go",
+    "backend/internal/service/codex_third_party_catalog_test.go",
+    "backend/internal/service/codex_third_party_contract.go",
+    "backend/internal/service/codex_third_party_contract_test.go",
+    "backend/internal/service/codex_third_party_discovery.go",
+    "backend/internal/service/codex_third_party_discovery_test.go",
+    "backend/internal/service/codex_third_party_merge.go",
+    "backend/internal/service/codex_third_party_profiles.go",
+    "backend/internal/service/codex_third_party_profiles.json",
+    "backend/internal/service/codex_third_party_publication.go",
+    "backend/internal/service/codex_third_party_review_fixes_test.go",
+    "backend/internal/service/codex_third_party_routes.go",
+    "frontend/src/api/admin/codexThirdPartyModels.ts",
+    "frontend/src/components/admin/CodexModelVisibilityPanel.vue",
+    "frontend/src/components/admin/__tests__/CodexModelVisibilityPanel.spec.ts",
+    "frontend/src/i18n/locales/en/admin/codexThirdPartyModels.ts",
+    "frontend/src/i18n/locales/en/admin/index.ts",
+    "frontend/src/i18n/locales/zh/admin/codexThirdPartyModels.ts",
+    "frontend/src/i18n/locales/zh/admin/index.ts",
+    "frontend/src/views/admin/ApiKeyMimicSettingsView.vue",
+    "frontend/src/views/admin/__tests__/ApiKeyMimicSettingsView.codexTab.spec.ts"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
