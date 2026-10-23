@@ -19,10 +19,9 @@ import (
 // ---------------------------------------------------------------------------
 
 type cxtpSettings struct {
-	cfg        map[int64]CodexModelVisibilityConfig
-	cfgErr     error
-	snapshots  map[int64]CodexCatalogSourceSnapshot
-	snapshotOK bool
+	cfg       map[int64]CodexModelVisibilityConfig
+	cfgErr    error
+	snapshots map[int64]CodexCatalogSourceSnapshot
 }
 
 func (s *cxtpSettings) LoadCodexModelVisibility(_ context.Context, groupID int64) (CodexModelVisibilityConfig, bool, error) {
@@ -199,8 +198,12 @@ func TestCodexThirdPartyProfilesRejectLegacyKeys(t *testing.T) {
 	for _, key := range codexThirdPartyForbiddenModelInfoKeys {
 		var file map[string]any
 		require.NoError(t, json.Unmarshal(codexThirdPartyProfilesJSON, &file))
-		profiles := file["profiles"].([]any)
-		info := profiles[0].(map[string]any)["model_info"].(map[string]any)
+		profiles, ok := file["profiles"].([]any)
+		require.True(t, ok, "profiles 应为数组")
+		first, ok := profiles[0].(map[string]any)
+		require.True(t, ok, "profiles[0] 应为对象")
+		info, ok := first["model_info"].(map[string]any)
+		require.True(t, ok, "model_info 应为对象")
 		info[key] = true
 		raw, err := json.Marshal(file)
 		require.NoError(t, err)
@@ -271,7 +274,8 @@ func TestCodexThirdPartyDeepSeekProfilesMatchDesignTable(t *testing.T) {
 		require.Equal(t, "list", entry["visibility"])
 		require.Equal(t, true, entry["supported_in_api"])
 		require.EqualValues(t, 50, entry["priority"])
-		levels := entry["supported_reasoning_levels"].([]any)
+		levels, ok := entry["supported_reasoning_levels"].([]any)
+		require.True(t, ok, "supported_reasoning_levels 应为数组")
 		require.Len(t, levels, 3)
 		want := [][2]string{
 			{"low", "Fast responses with lighter reasoning"},
@@ -279,8 +283,10 @@ func TestCodexThirdPartyDeepSeekProfilesMatchDesignTable(t *testing.T) {
 			{"max", "Maximum reasoning depth for the hardest problems"},
 		}
 		for i, level := range levels {
-			require.Equal(t, want[i][0], level.(map[string]any)["effort"])
-			require.Equal(t, want[i][1], level.(map[string]any)["description"])
+			lv, ok := level.(map[string]any)
+			require.True(t, ok, "推理档位条目应为对象")
+			require.Equal(t, want[i][0], lv["effort"])
+			require.Equal(t, want[i][1], lv["description"])
 		}
 	}
 	require.Equal(t, "deepseek-flash", flash["slug"])
@@ -299,8 +305,14 @@ func TestCodexThirdPartyKimiAndGLMProfiles(t *testing.T) {
 	require.Equal(t, []any{"text", "image"}, kimi["input_modalities"])
 	require.Equal(t, "max", kimi["default_reasoning_level"])
 	var efforts []string
-	for _, level := range kimi["supported_reasoning_levels"].([]any) {
-		efforts = append(efforts, level.(map[string]any)["effort"].(string))
+	kimiLevels, ok := kimi["supported_reasoning_levels"].([]any)
+	require.True(t, ok, "supported_reasoning_levels 应为数组")
+	for _, level := range kimiLevels {
+		lv, ok := level.(map[string]any)
+		require.True(t, ok, "推理档位条目应为对象")
+		effort, ok := lv["effort"].(string)
+		require.True(t, ok, "effort 应为字符串")
+		efforts = append(efforts, effort)
 	}
 	require.Equal(t, []string{"low", "high", "max"}, efforts)
 	require.EqualValues(t, 1048576, kimi["context_window"])

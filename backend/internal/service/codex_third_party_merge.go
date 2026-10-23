@@ -84,31 +84,31 @@ func emptyCodexCatalogEnvelope() *codexCatalogEnvelope {
 // render 用给定条目重新拼出正文：顶层其它字段保持原始字节与顺序。
 func (e *codexCatalogEnvelope) render(entries []json.RawMessage) ([]byte, error) {
 	var buf bytes.Buffer
-	buf.WriteByte('{')
+	_ = buf.WriteByte('{')
 	for i, key := range e.keys {
 		if i > 0 {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
 		encodedKey, err := json.Marshal(key)
 		if err != nil {
 			return nil, err
 		}
-		buf.Write(encodedKey)
-		buf.WriteByte(':')
+		_, _ = buf.Write(encodedKey)
+		_ = buf.WriteByte(':')
 		if key == "models" {
-			buf.WriteByte('[')
+			_ = buf.WriteByte('[')
 			for j, entry := range entries {
 				if j > 0 {
-					buf.WriteByte(',')
+					_ = buf.WriteByte(',')
 				}
-				buf.Write(entry)
+				_, _ = buf.Write(entry)
 			}
-			buf.WriteByte(']')
+			_ = buf.WriteByte(']')
 			continue
 		}
-		buf.Write(e.values[key])
+		_, _ = buf.Write(e.values[key])
 	}
-	buf.WriteByte('}')
+	_ = buf.WriteByte('}')
 	return buf.Bytes(), nil
 }
 
