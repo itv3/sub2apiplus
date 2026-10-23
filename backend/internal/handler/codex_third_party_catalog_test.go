@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -160,4 +161,38 @@ func TestCodexThirdPartyCompositeWithoutOpenAIAccountsServesThirdPartyOnly(t *te
 
 	// 非 Composite 分组不走该分支。
 	require.False(t, h.writeCodexThirdPartyOnlyCatalog(c, &service.Group{ID: 8, Platform: service.PlatformOpenAI}, ""))
+}
+
+// 基础目录获取时限按整次请求计时：同一请求内多次调用（调度循环换号重试）拿到同一截止时间，
+// 截止时间已过后得到已到期的上下文。
+func TestCodexBaseFetchContextSharesDeadlineWithinRequest(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	c, _ := cxtpContext("/v1/models?client_version=1.0.0")
+
+	// 未注入服务：原样返回请求上下文，不加时限。
+	_, hasDeadline := h.codexBaseFetchContext(c).Deadline()
+	require.False(t, hasDeadline)
+
+	h.SetCodexThirdPartyCatalog(cxtpService(t, nil))
+	first := h.codexBaseFetchContext(c)
+	firstDeadline, ok := first.Deadline()
+	require.True(t, ok)
+	time.Sleep(20 * time.Millisecond)
+	second := h.codexBaseFetchContext(c)
+	secondDeadline, ok := second.Deadline()
+	require.True(t, ok)
+	require.True(t, firstDeadline.Equal(secondDeadline), "同一请求内两次调用必须复用同一截止时间")
+	require.Less(t, time.Until(firstDeadline), service.CodexCatalogBaseFetchBudget)
+
+	// 截止时间已过：直接返回已到期的上下文，不会再得到新的时限。
+	c.Set(codexBaseFetchDeadlineKey, time.Now().Add(-time.Second))
+	expired := h.codexBaseFetchContext(c)
+	require.Error(t, expired.Err())
+	require.ErrorIs(t, expired.Err(), context.DeadlineExceeded)
+
+	// 不同请求互不影响。
+	other, _ := cxtpContext("/v1/models?client_version=1.0.0")
+	otherDeadline, ok := h.codexBaseFetchContext(other).Deadline()
+	require.True(t, ok)
+	require.True(t, otherDeadline.After(secondDeadline))
 }

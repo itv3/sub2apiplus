@@ -7,6 +7,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -28,15 +29,28 @@ func (h *GatewayHandler) SetCodexThirdPartyCatalog(svc *service.CodexThirdPartyC
 	}
 }
 
+// codexBaseFetchDeadlineKey 是 gin 上下文里保存「本次请求基础目录获取截止时间」的键。
+const codexBaseFetchDeadlineKey = "codex_third_party_base_fetch_deadline"
+
 // codexBaseFetchContext 给 OpenAI 基础目录获取加时限：客户端对整次目录请求有 5 秒总超时，
-// 超时即清空目录，所以基础目录获取最多占用其中一部分。未注入服务时原样返回请求上下文。
-// 计时器在请求结束或到期时释放。
+// 超时即清空目录，所以基础目录获取最多占用其中一部分。
+// 时限按整次请求计时：同一请求第一次调用确定截止时间并存入 gin 上下文，之后的调用（例如调度循环
+// 换号重试）复用同一截止时间；截止时间已过时返回已到期的上下文，不再发起新的拉取。
+// 未注入服务时原样返回请求上下文。计时器在请求结束或到期时释放。
 func (h *OpenAIGatewayHandler) codexBaseFetchContext(c *gin.Context) context.Context {
 	parent := c.Request.Context()
 	if h == nil || h.codexThirdParty == nil {
 		return parent
 	}
-	ctx, cancel := h.codexThirdParty.BaseFetchContext(parent)
+	var deadline time.Time
+	if stored, ok := c.Get(codexBaseFetchDeadlineKey); ok {
+		deadline, _ = stored.(time.Time)
+	}
+	if deadline.IsZero() {
+		deadline = time.Now().Add(service.CodexCatalogBaseFetchBudget)
+		c.Set(codexBaseFetchDeadlineKey, deadline)
+	}
+	ctx, cancel := context.WithDeadline(parent, deadline)
 	context.AfterFunc(parent, cancel)
 	return ctx
 }
