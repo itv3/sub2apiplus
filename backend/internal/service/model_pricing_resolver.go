@@ -148,23 +148,34 @@ func matchGroupModelPricing(group *Group, model string) *ChannelModelPricing {
 	if group == nil {
 		return nil
 	}
-	model = normalizeChannelPricingModelName(model)
-	var wildcard *ChannelModelPricing
-	for i := range group.ModelPricing {
-		entry := &group.ModelPricing[i]
-		for _, pattern := range entry.Models {
-			normalized := normalizeChannelPricingModelName(pattern)
-			if normalized == model {
-				cp := entry.Clone()
-				return &cp
-			}
-			if strings.HasSuffix(normalized, "*") && strings.HasPrefix(model, strings.TrimSuffix(normalized, "*")) && wildcard == nil {
-				cp := entry.Clone()
-				wildcard = &cp
+	model = strings.TrimSpace(model)
+	candidates := []string{model}
+	if nativeModel := lastSegment(model); nativeModel != "" && nativeModel != model {
+		candidates = append(candidates, nativeModel)
+	}
+	for _, candidate := range candidates {
+		candidate = normalizeChannelPricingModelName(candidate)
+		var wildcard *ChannelModelPricing
+		for i := range group.ModelPricing {
+			entry := &group.ModelPricing[i]
+			for _, pattern := range entry.Models {
+				normalized := normalizeChannelPricingModelName(pattern)
+				if normalized == candidate {
+					cp := entry.Clone()
+					return &cp
+				}
+				if strings.HasSuffix(normalized, "*") && strings.HasPrefix(candidate, strings.TrimSuffix(normalized, "*")) && wildcard == nil {
+					cp := entry.Clone()
+					wildcard = &cp
+				}
 			}
 		}
+		// 完整名称已有通配符定价时继续使用；未命中才尝试去前缀的原生名称。
+		if wildcard != nil {
+			return wildcard
+		}
 	}
-	return wildcard
+	return nil
 }
 
 // resolveBasePricing 从 LiteLLM 或 Fallback 获取基础定价
@@ -179,7 +190,7 @@ func (r *ModelPricingResolver) resolveBasePricing(model string) (*ModelPricing, 
 }
 
 // lookupChannelPricingNormalized 查找渠道定价：先用字面模型名做精确/通配匹配，
-// 未命中时用与官方兜底价一致的归一化模型名再查一次。
+// 未命中时先去掉供应商前缀，再用与官方兜底价一致的归一化模型名查找。
 //
 // 官方兜底价对 OpenAI/Codex 族会把 gpt-5.6-luna-high 这类变体名归一化到基名
 // （billing_service.go 的 normalizeKnownOpenAICodexModel 分支），而渠道定价此前
@@ -194,6 +205,11 @@ func (r *ModelPricingResolver) lookupChannelPricingNormalized(ctx context.Contex
 	}
 	if pricing := r.channelService.GetChannelModelPricing(ctx, groupID, model); pricing != nil {
 		return pricing
+	}
+	if nativeModel := lastSegment(strings.TrimSpace(model)); nativeModel != "" && nativeModel != strings.TrimSpace(model) {
+		if pricing := r.channelService.GetChannelModelPricing(ctx, groupID, nativeModel); pricing != nil {
+			return pricing
+		}
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
 	if normalized == "" || strings.EqualFold(normalized, strings.TrimSpace(model)) {

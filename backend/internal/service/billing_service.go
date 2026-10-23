@@ -121,6 +121,14 @@ type ModelPricing struct {
 	LongContextOutputMultiplier        float64            // 长上下文整次会话输出倍率
 	ImageOutputPricePerToken           float64            // 图片输出 token 价格 (USD)
 	ImageOutputPriceExplicit           bool               // 是否由渠道定价显式设定（为 true 时即使 == 0 也不回退）
+	pricingPolicyModel                 string             // 本次查价实际使用的模型名，仅用于定价策略，不改变请求与用量记录中的模型名
+}
+
+func (p *ModelPricing) modelForPricingPolicy(model string) string {
+	if p != nil && p.pricingPolicyModel != "" {
+		return p.pricingPolicyModel
+	}
+	return model
 }
 
 func normalizeBillingServiceTier(serviceTier string) string {
@@ -1371,8 +1379,15 @@ func (s *BillingService) HasIdentifiedTokenPricing(model string) bool {
 			return true
 		}
 	}
-	pricing, ok := s.fallbackPrices[model]
-	return ok && pricing != nil
+	if pricing := s.fallbackPrices[model]; pricing != nil {
+		return true
+	}
+	if strings.Contains(model, "/") && s.pricingService.getExactModelPricing(model) != nil {
+		// 完整名只有图片价时，不能越过该条目将裸名内置价宣称为可用的 token 价格。
+		return false
+	}
+	// 这里只允许末段精确命中内置价卡，不能将系列兜底视为确定性识别。
+	return s.fallbackPrices[lastSegment(model)] != nil
 }
 
 // GetModelPricing 获取模型价格配置
@@ -1398,7 +1413,19 @@ func (s *BillingService) CacheStoragePricePerTokenHour(model string) float64 {
 // 展示/估算路径可与历史补账同刻复算，测试也能用固定时点钉住断言。
 func (s *BillingService) getModelPricingAt(model string, pricingAt time.Time) (*ModelPricing, error) {
 	// 标准化模型名称（转小写）
-	model = strings.ToLower(model)
+	model = strings.ToLower(strings.TrimSpace(model))
+	requestedModel := model
+	// 完整名有显式价格时保留独立价卡（包括零价）；否则按末段查价，
+	// 使目录、内置兜底与模型专属策略都采用同一个身份。
+	if baseModel := lastSegment(model); baseModel != "" && baseModel != model {
+		if (s.pricingService == nil || s.pricingService.getExactModelPricing(model) == nil) && s.fallbackPrices[model] == nil {
+			model = baseModel
+		}
+	}
+	policyModel := ""
+	if model != requestedModel {
+		policyModel = model
+	}
 
 	// 1. 优先从动态价格服务获取
 	if s.pricingService != nil {
@@ -1419,6 +1446,7 @@ func (s *BillingService) getModelPricingAt(model string, pricingAt time.Time) (*
 			price1h := litellmPricing.CacheCreationInputTokenCostAbove1hr
 			enableBreakdown := price1h > 0 && price1h > price5m
 			return s.applyModelSpecificPricingPolicyEx(model, &ModelPricing{
+				pricingPolicyModel:                 policyModel,
 				InputPricePerToken:                 litellmPricing.InputCostPerToken,
 				InputPricePerTokenPriority:         litellmPricing.InputCostPerTokenPriority,
 				OutputPricePerToken:                litellmPricing.OutputCostPerToken,
@@ -1444,17 +1472,35 @@ func (s *BillingService) getModelPricingAt(model string, pricingAt time.Time) (*
 	}
 
 	// 2. 使用硬编码回退价格
-	fallback := s.getFallbackPricing(model)
+	var fallback *ModelPricing
+	if strings.Contains(model, "/") {
+		fallback = s.fallbackPrices[model]
+	}
+	if fallback == nil {
+		fallback = s.getFallbackPricing(model)
+	}
+	if fallback == nil && model != requestedModel {
+		// 末段无价时保留原有路径型别名（如 kimi/k2）的内置兜底，不新增别名规则。
+		fallback = s.getFallbackPricing(requestedModel)
+		policyModel = ""
+		model = requestedModel
+	}
 	if fallback != nil {
 		// 按模型名去重:每个模型每进程最多打一条 warn,避免热路径每请求刷屏（issue #3394）。
 		// model 在函数入口已 ToLower,故 GLM-5.2 / glm-5.2 视为同一条目。
-		if _, seen := s.fallbackWarnSeen.LoadOrStore(model, struct{}{}); !seen {
-			log.Printf("[Billing] Using fallback pricing for model: %s", model)
+		if _, seen := s.fallbackWarnSeen.LoadOrStore(requestedModel, struct{}{}); !seen {
+			log.Printf("[Billing] Using fallback pricing for model: %s", requestedModel)
+		}
+		// 内置价卡由多请求共享，仅在需要保存回退身份时先复制。
+		if policyModel != "" {
+			cloned := *fallback
+			cloned.pricingPolicyModel = policyModel
+			fallback = &cloned
 		}
 		return s.applyModelSpecificPricingPolicyEx(model, fallback, true, pricingAt), nil
 	}
 
-	return nil, fmt.Errorf("%w for model: %s", ErrModelPricingUnavailable, model)
+	return nil, fmt.Errorf("%w for model: %s", ErrModelPricingUnavailable, requestedModel)
 }
 
 // GetModelPricingWithChannel 获取模型定价，渠道配置的价格覆盖默认值。
@@ -1637,7 +1683,8 @@ func (s *BillingService) calculateTokenCost(resolved *ResolvedPricing, input Cos
 	// 06:00–10:00 UTC，仅工作日；北京时间周末全天低谷）按 2× 低谷价计费。
 	// 仅作用于默认价卡（Source=LiteLLM，无分组/渠道自定义定价）——分组/渠道
 	// 自定义定价保持运营者语义，不叠加。先克隆再乘，避免污染共享 fallbackPrices 指针。
-	if resolved.Source == PricingSourceLiteLLM && isDeepSeekModel(input.Model) {
+	policyModel := pricing.modelForPricingPolicy(input.Model)
+	if resolved.Source == PricingSourceLiteLLM && !strings.Contains(policyModel, "/") && isDeepSeekModel(policyModel) {
 		if mult := deepseekPeakMultiplierAt(pricingAt); mult > 1 {
 			cloned := *pricing
 			cloned.InputPricePerToken *= mult
@@ -1916,6 +1963,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	if pricing == nil {
 		return nil
 	}
+	model = pricing.modelForPricingPolicy(model)
 	// DeepSeek 模型：无论 JSON/远端价格表给什么价，一律强制官方低谷价
 	// （Flash 三档为 2026-09-10 官方降价后口径）。这是覆盖远端旧价的关键——远端
 	// 仓库不可改，生产会先拉到旧价，必须在此兜底修正；克隆后再覆盖，避免污染
@@ -1926,7 +1974,7 @@ func (s *BillingService) applyModelSpecificPricingPolicyEx(model string, pricing
 	// Flash 三档价计费；历史时点（早于切换时刻）仍按 Pro 价。
 	// 高峰时段倍率不在本函数处理，由 calculateTokenCost 按 deepseekPeakMultiplierAt
 	// 对默认价卡另行叠加（分组/渠道自定义定价不叠加）。
-	if forceDeepSeekRates && isDeepSeekModel(model) {
+	if forceDeepSeekRates && !strings.Contains(model, "/") && isDeepSeekModel(model) {
 		cloned := *pricing
 		if isDeepSeekProModel(model) && !deepseekProBilledAsFlash(pricingAt) {
 			cloned.InputPricePerToken = deepseekProOffPeakInputPrice

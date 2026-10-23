@@ -1225,14 +1225,19 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 		return pricing
 	}
 
+	// 首候选可能是完整名称，系列兜底使用原生模型名，避免供应商前缀影响匹配。
+	fallbackModel := lookupCandidates[0]
+	if strings.Contains(fallbackModel, "/") {
+		fallbackModel = normalizeModelNameForPricing(lastSegment(fallbackModel))
+	}
 	// 4. 基于模型系列匹配（Claude）
-	if pricing := s.matchByModelFamily(lookupCandidates[0]); pricing != nil {
+	if pricing := s.matchByModelFamily(fallbackModel); pricing != nil {
 		return pricing
 	}
 
 	// 5. OpenAI 模型回退策略
-	if strings.HasPrefix(lookupCandidates[0], "gpt-") {
-		return s.matchOpenAIModel(lookupCandidates[0])
+	if strings.HasPrefix(fallbackModel, "gpt-") {
+		return s.matchOpenAIModel(fallbackModel)
 	}
 
 	return nil
@@ -1268,7 +1273,11 @@ func (s *PricingService) lookupIdentifiedModelPricingLocked(lookupCandidates []s
 
 	// 3. 尝试模糊匹配（去掉版本号后缀）
 	// claude-opus-4-5-20251101 -> claude-opus-4.5
-	baseName := s.extractBaseName(lookupCandidates[0])
+	baseModel := lookupCandidates[0]
+	if strings.Contains(baseModel, "/") {
+		baseModel = normalizeModelNameForPricing(lastSegment(baseModel))
+	}
+	baseName := s.extractBaseName(baseModel)
 	for key, pricing := range s.pricingData {
 		keyBase := s.extractBaseName(strings.ToLower(key))
 		if keyBase == baseName {
@@ -1296,6 +1305,21 @@ func (s *PricingService) GetIdentifiedModelPricing(modelName string) *LiteLLMMod
 	return s.lookupIdentifiedModelPricingLocked(s.buildModelLookupCandidates(modelLower))
 }
 
+// getExactModelPricing 只按完整名称读取显式价卡，不执行去前缀或模型归一化。
+// 返回共享只读条目，零价与图片专用条目均视为命中，调用方不得修改返回值。
+func (s *PricingService) getExactModelPricing(modelName string) *LiteLLMModelPricing {
+	if s == nil {
+		return nil
+	}
+	modelLower := strings.ToLower(strings.TrimSpace(modelName))
+	if modelLower == "" {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pricingData[modelLower]
+}
+
 func (s *PricingService) buildModelLookupCandidates(modelLower string) []string {
 	rawCandidates := []string{
 		modelLower,
@@ -1303,17 +1327,19 @@ func (s *PricingService) buildModelLookupCandidates(modelLower string) []string 
 		lastSegment(modelLower),
 		lastSegment(strings.TrimPrefix(modelLower, "models/")),
 	}
-	normalized := normalizeModelNameForPricing(modelLower)
+	normalized := normalizeModelNameForPricing(lastSegment(modelLower))
 
-	// A tier-specific entry should take precedence when the pricing catalog gains
-	// one later. Antigravity's Gemini thinking tiers share the base rate,
-	// so the normalized base remains the fallback after the exact aliases.
+	// 思考档位的显式条目优先，未命中时再回退到归一化后的基础价卡。
 	candidates := rawCandidates
 	if isAntigravityThinkingTierAlias(lastSegment(modelLower)) {
 		candidates = append(candidates, normalized)
 	} else {
-		// Prefer canonical model names for all other aliases (including models/xxx).
+		// 其他别名先查规范名称，再尝试原有别名。
 		candidates = append([]string{normalized}, candidates...)
+	}
+	if strings.Contains(modelLower, "/") {
+		// 完整名称的显式价卡优先，包括零价与图片专用条目；未命中才按原生名称查找。
+		candidates = append([]string{modelLower}, candidates...)
 	}
 
 	seen := make(map[string]struct{}, len(candidates))
