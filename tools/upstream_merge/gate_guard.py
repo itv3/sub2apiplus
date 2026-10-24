@@ -6,6 +6,9 @@ v0.2.17 合并时，U-4 第一轮收据里 ``10-secret-scan`` 已失败，监视
 * ``run_gates_with_prechecks``：``gates-run`` 在创建 attempt 目录、启动任何执行组之前，先做三项检查并一次性列出
   全部阻断原因——上一 attempt 的失败项必须已有处置记录、候选工作树的工具链版本必须与它自己的声明一致、
   候选密钥扫描（与 U-4 同一份门禁）必须通过。任何一项不过都不建 attempt。
+* 本次将执行 full-regression 组时还有第四项——**U-4 前定向冻结检查**：先读冻结台账精确复算“有没有冻结路径的当前摘要
+  不在任何登记收据里”（秒级），再对候选 worktree 执行冻结类 Go 测试（officialegress 与 service 两个包）。目的是不把
+  已知的台账待办留到约 47 分钟的全量里才暴露；不通过即阻断、不建 attempt，阻断信息写清分类处理规则。
 * ``record_failure_disposition``：逐项记录上一 attempt 每个失败项的原因、修复动作、处置类别和定向复验。定向复验
   由工具在当前候选 worktree 里真实执行并记录退出码、耗时、日志绑定，非 0 即处置不成立；不接受手填的“已通过”。
 * ``attempt_status``／``u4_result_line``：监视逻辑读收据结论，不看进度行；``gates-run`` 结束与 ``gates-status``
@@ -44,16 +47,22 @@ from .canonical import (
     write_json_once,
 )
 from .contracts import LoadedPlan, artifact_document, stage_binding
+from .fast_attribution import CLASS_FROZEN_PENDING, classify_go_test_output
+from .freeze import _worktree_digest, load_frozen_edges
 from .errors import UpstreamMergeError
 from .gitops import assert_clean, rev_parse, run_git
 from .toolchain import Probe, check_toolchain, describe_mismatches, run_probe
 from .workflow import (
     ATTEMPT_RUN_MARKER,
     VERIFICATION_RECEIPT_SCHEMA,
+    GATE_GROUP_LATE,
     _gate_cwd,
+    _gate_group,
     _gate_groups,
+    _gate_ids_from_selector,
     _load_runner_status,
     _load_source_candidate,
+    _resolve_attempt_receipt,
     _stage_document,
     _validated_linked_worktree,
     load_verification_receipt,
@@ -75,6 +84,19 @@ MAINTENANCE_DIRECTORY = "docs/egress/maintenance"
 FROZEN_RUN_MARKER = "Frozen"
 FROZEN_MAKE_TARGETS = ("check-egress-spec", "check-egress-spec-ci")
 WORKTREE_FAILURE_ID = "worktree-status"
+# U-4 前定向冻结检查：冻结类 Go 测试的 -run 选择器与包（相对 backend）。选择器与框架／记忆里一直使用的那一条相同；
+# 实测约 30 秒（编译缓存预热后），明显小于约 47 分钟的全量。
+FROZEN_PRECHECK_RUN = "Frozen|Transition|Successor|Drift|Retirement"
+FROZEN_PRECHECK_PACKAGES = ("./internal/officialegress", "./internal/service")
+FROZEN_PRECHECK_TIMEOUT_SECONDS = 900
+FROZEN_PRECHECK_TAIL_LINES = 40
+# 候选树里这两样都在才适用（合成仓库与非 Sub2API 树没有冻结台账，检查不适用）。
+FROZEN_PRECHECK_MARKERS = ("backend/internal/officialegress", MAINTENANCE_DIRECTORY)
+FROZEN_RULES_TEXT = (
+    "处理规则（框架 §5.2.3 U-4 出口）：先分类再处理——功能失败（编译、业务测试、lint、前端）在同一 Plan 追加源码 revision 修复；"
+    "冻结摘要类且尚未生成台账 revision 的，用 freeze-successor-generate 一次性生成台账 revision 并单独提交，再重新启动；"
+    "台账 revision 之后仍不闭合，或同一根因连续第二次失败，停线复盘并把缺项回流到注册表与框架，不要默认循环补台账"
+)
 U4_RESULT_PREFIX = "U4-RESULT"
 # gates-status 与 gates-run 结论一致的状态集合；running／incomplete 只出现在没有收据时。
 UNFINISHED_RESULTS = ("running", "incomplete")
@@ -731,12 +753,168 @@ def record_failure_disposition(
 
 
 # ---------------------------------------------------------------------------
+# U-4 前定向冻结检查
+# ---------------------------------------------------------------------------
+
+
+def uncovered_frozen_paths(worktree: Path) -> list[str]:
+    """已登记的冻结路径里，当前摘要不在任何登记收据里的路径（与 ``freeze-successor-generate`` 同一套边数据）。
+
+    这是“还有未承接的冻结摘要”的精确、只读、秒级判据：路径当前内容的 sha256 不属于它登记过的任何摘要，冻结测试
+    必然报“当前摘要不一致”。文件已不存在（退休删除）的路径不在此判断，交给冻结测试里的退休收据检查。
+    """
+
+    _edges, known, _receipts = load_frozen_edges(worktree)
+    uncovered: list[str] = []
+    for path, digests in sorted(known.items()):
+        current = _worktree_digest(worktree, path)
+        if current is not None and current not in digests:
+            uncovered.append(path)
+    return uncovered
+
+
+def _run_frozen_go_tests(worktree: Path, environ: Mapping[str, str] | None) -> dict[str, Any]:
+    """在候选 worktree 的 backend 下执行冻结类 Go 测试；返回退出码、耗时与输出尾部（超时按失败）。"""
+
+    argv = ["go", "test", "-count=1", "-p", "3", *FROZEN_PRECHECK_PACKAGES, "-run", FROZEN_PRECHECK_RUN]
+    env = {**(os.environ if environ is None else environ), "PYTHONDONTWRITEBYTECODE": "1"}
+    started = time.monotonic()
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=worktree / "backend",
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=FROZEN_PRECHECK_TIMEOUT_SECONDS,
+            check=False,
+        )
+        exit_code, output = completed.returncode, completed.stdout + completed.stderr
+    except subprocess.TimeoutExpired:
+        exit_code, output = None, f"冻结类 Go 测试超过 {FROZEN_PRECHECK_TIMEOUT_SECONDS} 秒被终止"
+    except OSError as error:
+        exit_code, output = None, f"无法启动 go test：{error}"
+    return {
+        "argv": argv,
+        "exit_code": exit_code,
+        "duration_seconds": round(time.monotonic() - started, 1),
+        "output": output,
+    }
+
+
+def run_frozen_precheck(
+    worktree: Path,
+    plan: LoadedPlan | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+    go_tests: Callable[[Path, Mapping[str, str] | None], dict[str, Any]] = _run_frozen_go_tests,
+) -> dict[str, Any]:
+    """U-4 前定向冻结检查：确认台账已闭合，才允许启动约 47 分钟的全量。
+
+    先做秒级的未承接摘要复算（``uncovered_frozen_paths``）；有未承接路径就不必再跑 Go 测试（它们必然红），直接阻断并
+    列出路径。复算通过再执行冻结类 Go 测试，非 0 即阻断，并按 ``fast_attribution`` 的保守规则判断失败是否全是冻结摘要
+    比对。返回 ``status``（passed／blocked／not_applicable）、分类、台账 revision 是否已生成、耗时与 ``blockers``。
+    """
+
+    started = time.monotonic()
+    report: dict[str, Any] = {
+        "status": "passed",
+        "classification": None,
+        "ledger_revision_present": None,
+        "uncovered_paths": [],
+        "go_test": None,
+        "duration_seconds": 0.0,
+        "blockers": [],
+    }
+    missing = [item for item in FROZEN_PRECHECK_MARKERS if not (worktree / item).is_dir()]
+    if missing:
+        report["status"] = "not_applicable"
+        report["reason"] = f"候选树没有冻结台账目录 {missing}，定向冻结检查不适用"
+        return report
+
+    candidate = rev_parse(worktree, "HEAD^{commit}")
+    ledger_present: bool | None = None
+    if plan is not None:
+        ledger_present = bool(_maintenance_successors(worktree, plan.fork_head, candidate))
+    report["ledger_revision_present"] = ledger_present
+    stage = (
+        "候选相对 fork 主干还没有新增或改动 successor 台账收据（尚未生成台账 revision）"
+        if ledger_present is False
+        else "候选相对 fork 主干已含 successor 台账收据（台账 revision 已生成过，仍不闭合应停线复盘）"
+        if ledger_present
+        else "台账 revision 阶段未知"
+    )
+
+    uncovered = uncovered_frozen_paths(worktree)
+    report["uncovered_paths"] = uncovered
+    if uncovered:
+        listed = "、".join(uncovered[:10]) + (f" 等共 {len(uncovered)} 个" if len(uncovered) > 10 else "")
+        report.update(status="blocked", classification="frozen_digest")
+        report["blockers"].append(
+            f"U-4 前定向冻结检查未通过：{len(uncovered)} 个冻结路径的当前摘要没有任何登记收据承接（{listed}），归类为冻结摘要类；"
+            f"{stage}。{FROZEN_RULES_TEXT}"
+        )
+        report["duration_seconds"] = round(time.monotonic() - started, 1)
+        return report
+
+    outcome = go_tests(worktree, environ)
+    report["go_test"] = {key: outcome[key] for key in ("argv", "exit_code", "duration_seconds")}
+    if outcome["exit_code"] != 0:
+        attribution = classify_go_test_output(outcome["output"]) if outcome["exit_code"] is not None else None
+        frozen = attribution is not None and attribution.classification == CLASS_FROZEN_PENDING
+        report.update(status="blocked", classification="frozen_digest" if frozen else "functional")
+        tail = "\n".join(outcome["output"].strip().splitlines()[-FROZEN_PRECHECK_TAIL_LINES:])
+        report["go_test"]["output_tail"] = tail
+        failed = f"（失败用例 {', '.join(attribution.failed_tests[:8])}）" if frozen and attribution else ""
+        report["blockers"].append(
+            f"U-4 前定向冻结检查未通过：冻结类 Go 测试 {' '.join(report['go_test']['argv'])} 退出码 {outcome['exit_code']}，"
+            f"归类为{'冻结摘要类' if frozen else '功能失败（归因不清的按功能失败处理）'}{failed}；{stage}。{FROZEN_RULES_TEXT}。"
+            f"输出尾部：\n{tail}"
+        )
+    report["duration_seconds"] = round(time.monotonic() - started, 1)
+    return report
+
+
+def _selected_group_names(
+    plan: LoadedPlan,
+    only: str | Sequence[str] | None,
+    from_attempt: str | Path | None,
+) -> set[str] | None:
+    """本次 gates-run 会执行的执行组；算不出来（参数不合法等，交给执行引擎报错）返回 None。"""
+
+    try:
+        groups = _gate_groups(plan)
+        selected = _gate_ids_from_selector(plan, only)
+        if from_attempt is not None:
+            previous = read_attempt_receipt(plan, _resolve_attempt_receipt(plan, from_attempt))
+            failed_previous = {item["id"] for item in previous["gates"] if item["status"] != "passed"}
+            if selected is None:
+                selected = failed_previous
+        elif selected is None:
+            return set(groups)
+        by_id = {gate["id"]: gate for gate in plan.document["gates"]}
+        return {_gate_group(by_id[gate_id]) for gate_id in selected}
+    except (UpstreamMergeError, KeyError, TypeError):
+        return None
+
+
+# ---------------------------------------------------------------------------
 # 启动前检查与 gates-run
 # ---------------------------------------------------------------------------
 
 
 def _stderr_notice(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+def _frozen_summary(frozen: dict[str, Any] | None) -> str:
+    """启动前检查摘要行里关于定向冻结检查的一段。"""
+
+    if frozen is None:
+        return "；本次不执行 full-regression 组，跳过定向冻结检查"
+    if frozen["status"] == "not_applicable":
+        return f"；定向冻结检查不适用（{frozen.get('reason')}）"
+    return f"；定向冻结检查通过（冻结台账已闭合，耗时 {frozen['duration_seconds']} 秒）"
 
 
 def run_gates_with_prechecks(
@@ -748,14 +926,17 @@ def run_gates_with_prechecks(
     probe: Probe = run_probe,
     environ: Mapping[str, str] | None = None,
     notify: Callable[[str], None] = _stderr_notice,
+    frozen_check: Callable[..., dict[str, Any]] = run_frozen_precheck,
 ) -> dict[str, Any]:
     """``gates-run`` 的入口：先做启动前检查，全部通过才创建 attempt 并执行门禁。
 
-    三项检查都在创建 attempt 目录、启动任何执行组之前完成，并把全部阻断原因一次列出（一次重跑发现全部问题）：
+    检查都在创建 attempt 目录、启动任何执行组之前完成，并把全部阻断原因一次列出（一次重跑发现全部问题）：
 
     1. 上一轮权威收据的失败项必须已有处置（含 ``--from-attempt`` 部分重跑）；
     2. 候选工作树的 Go 与 lint 版本必须与它自己的声明一致（``toolchain-check`` 的 candidate 角色）；
-    3. 候选密钥扫描：与 U-4 同一份 ``secret_scan`` 门禁，对候选工作树先跑一遍。
+    3. 候选密钥扫描：与 U-4 同一份 ``secret_scan`` 门禁，对候选工作树先跑一遍；
+    4. 本次将执行 full-regression 组时，定向冻结检查（``run_frozen_precheck``）：冻结台账必须已闭合，
+       不把已知的台账待办留到全量里才暴露。``frozen_check`` 供测试注入。
     """
 
     attempt = expect_safe_id(attempt_id, "attempt_id")
@@ -778,6 +959,12 @@ def run_gates_with_prechecks(
     scan = scan_candidate_secrets(worktree, plan.document["gates"])
     blockers.extend(scan["blockers"])
 
+    selected_groups = _selected_group_names(plan, only, from_attempt)
+    frozen: dict[str, Any] | None = None
+    if selected_groups is None or any(group in selected_groups for group in GATE_GROUP_LATE):
+        frozen = frozen_check(worktree, plan, environ=environ)
+        blockers.extend(frozen["blockers"])
+
     if blockers:
         listed = "\n".join(f"  {index}. {text}" for index, text in enumerate(blockers, start=1))
         raise UpstreamMergeError(
@@ -791,6 +978,7 @@ def run_gates_with_prechecks(
         f"启动前检查通过（候选提交 {source['source_commit'][:12]}）：{previous}；"
         f"工具链 Go {toolchain['actual']['go']['version']}、lint {toolchain['actual']['golangci_lint']['version']} "
         f"与候选声明一致；候选密钥扫描通过（{scan['scan']['gate_id']}）"
+        + _frozen_summary(frozen)
     )
     return run_verification_gates(plan, attempt, only=only, from_attempt=from_attempt)
 
