@@ -801,7 +801,7 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 // 回退画像，因此走标准 Transport，与正式 Gateway 的决策一致。
 //
 // 修复前只有 active 用例，账号测试会在 previous 下发出 Desktop header 却套上 active
-// 的 Codex CLI TLS 指纹，正是 README §1.2.4 禁止的按字段混用。
+// 的 Codex CLI TLS 指纹，正是 README §1.3.4 禁止的按字段混用。
 func TestAccountTestService_OpenAIAPIKeyCodexMimicPreviousModeSkipsMimicTLS(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := newTestContext()

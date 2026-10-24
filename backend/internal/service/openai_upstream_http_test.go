@@ -118,7 +118,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileIgnoresDormantAccountProfile(t *testi
 // TestResolveOpenAIAPIKeyCodexTLSProfilePreviousModeFallsBackToStandardTransport 固定
 // previous 回退画像的 TLS 语义：Desktop 画像不套 mimic 指纹，走标准 Transport。
 // 漏传 cfg 时曾静默回落到 active，使 previous 的 Desktop header 与 active 的 CLI
-// TLS 画像混用，这正是 README §1.2.4 禁止的按字段混用。
+// TLS 画像混用，这正是 README §1.3.4 禁止的按字段混用。
 func TestResolveOpenAIAPIKeyCodexTLSProfilePreviousModeFallsBackToStandardTransport(t *testing.T) {
 	account := &Account{
 		Platform: PlatformOpenAI,
