@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // codexThirdPartyEvaluationBaseTimeout 是评估时获取单个官方账号基础目录的时限。
@@ -54,6 +56,15 @@ type codexThirdPartyBaseFetcher interface {
 // 某型号支持的协议（不发请求、不触发刷新），供跨平台承接分组的零转换判定使用。
 type codexThirdPartyProtocolCataloger interface {
 	CachedModelProtocols(account *Account, model string) []string
+}
+
+// codexThirdPartyProtocolCatalogRefresher 是可选能力：查询并同步刷新按模型分流账号的上游模型目录。
+// 页面「刷新」按钮、开启（预览与保存）补拉、启动预热共用它，请求形态与运行时后台刷新一致。
+type codexThirdPartyProtocolCatalogRefresher interface {
+	// ModelCatalogState 只读地返回账号的目录缓存状态（不发请求）。
+	ModelCatalogState(account *Account) modelCatalogCacheState
+	// RefreshModelCatalog 同步拉取账号的目录并写入缓存，返回目录里的模型数。
+	RefreshModelCatalog(ctx context.Context, account *Account) (int, error)
 }
 
 // codexThirdPartyUpstreamLister 是可选能力：判断某个账号最近一次拉到的上游目录是否列出了某型号。
@@ -102,6 +113,22 @@ func (f openAICodexBaseFetcher) CachedModelProtocols(account *Account, model str
 		return nil
 	}
 	return f.svc.modelCatalogProtocolsCached(account, model)
+}
+
+// ModelCatalogState 只读地返回账号的上游模型目录缓存状态。
+func (f openAICodexBaseFetcher) ModelCatalogState(account *Account) modelCatalogCacheState {
+	if f.svc == nil || account == nil {
+		return modelCatalogCacheState{}
+	}
+	return f.svc.modelCatalogCacheStateOf(account)
+}
+
+// RefreshModelCatalog 同步拉取账号的上游模型目录并写入缓存。
+func (f openAICodexBaseFetcher) RefreshModelCatalog(ctx context.Context, account *Account) (int, error) {
+	if f.svc == nil || account == nil {
+		return 0, fmt.Errorf("openai gateway service unavailable")
+	}
+	return f.svc.refreshModelProtocolCatalog(ctx, account)
 }
 
 // UpstreamListsModel 读取账号能力快照（只读）：快照未过期且上游清单列出了该型号。
@@ -153,6 +180,12 @@ type CodexThirdPartyCatalogService struct {
 	// baseMemo 留存预览与保存时拉到的官方账号基础目录，供页面读取（离线评估）使用。
 	baseMu   sync.Mutex
 	baseMemo map[string]codexTPBaseMemoEntry
+
+	// 页面依赖目录刷新（见 codex_third_party_refresh.go）：数值为零时取默认值，便于测试覆盖。
+	refreshTuning codexTPRefreshTuning
+	refreshMu     sync.Mutex
+	refreshMemo   map[int64]codexTPRefreshMemo
+	refreshFlight singleflight.Group
 }
 
 type codexTPBaseMemoEntry struct {
@@ -377,6 +410,8 @@ type codexTPBase struct {
 	folded bool
 	// local 表示这份基础目录是按账号映射本地生成的（Composite 分组没有可用官方账号），不属于任何账号。
 	local bool
+	// elapsed 是联网拉取这个账号目录的耗时（离线评估与并入合并基础的账号为零），供页面刷新结果展示。
+	elapsed time.Duration
 }
 
 // EvaluateCodexThirdPartyCatalog 实现契约里的评估接口：发现候选、判定状态、计算最坏体积预算。
@@ -407,6 +442,11 @@ func (s *CodexThirdPartyCatalogService) EvaluateCodexThirdPartyCatalog(ctx conte
 	}
 
 	offline := codexThirdPartyOfflineEvaluation(ctx)
+	if !offline {
+		// 预览与保存：按模型分流账号的上游模型目录缺缓存（例如网关刚重启）时先补拉，再判定协议；
+		// 拉取失败只记日志，判定维持「无法确认」。页面读取（离线）不发请求。
+		s.refreshMissingModelCatalogs(ctx, sess)
+	}
 	bases := s.fetchBases(ctx, sess, offline)
 	if len(bases) == 0 && group.Platform == PlatformComposite {
 		// Composite 分组没有可用的官方账号：运行时的基础目录是按账号映射本地生成的，预算取同一份。
@@ -703,6 +743,7 @@ func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *co
 				}
 				return
 			}
+			started := time.Now()
 			fetchCtx, cancel := context.WithTimeout(ctx, s.baseTimeout)
 			defer cancel()
 			body, err := s.fetcher.FetchBase(fetchCtx, sess.group, account, version)
@@ -713,7 +754,7 @@ func (s *CodexThirdPartyCatalogService) fetchBases(ctx context.Context, sess *co
 			if err == nil {
 				s.rememberBase(sess.group.ID, account.ID, body)
 			}
-			results[i] = codexTPBase{accountID: account.ID, body: body, err: err}
+			results[i] = codexTPBase{accountID: account.ID, body: body, err: err, elapsed: time.Since(started)}
 		}()
 	}
 	wg.Wait()

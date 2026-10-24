@@ -396,9 +396,11 @@ func TestCodexTPCompositePoolModelRoutedProtocolFollowsCachedCatalog(t *testing.
 	require.Equal(t, codexTPAccountProtocol(&deepseek), svc.accountProtocol(&deepseek, compositePoolModel))
 }
 
-func TestCodexTPCompositePoolModelRoutedCacheMissingKeepsOriginalReason(t *testing.T) {
+func TestCodexTPCompositePoolModelRoutedCacheMissingShowsRefreshHint(t *testing.T) {
 	// 缓存缺失：CommandCode 按内置规则走 Chat Completions，需转换，不在零转换组，整组仍可发布。
-	// 只有当它被迫进入承接集合（零转换组为空）且目录没有缓存时，才停在"无法静态确认 Responses 通路"。
+	// 只有当它被迫进入承接集合（零转换组为空）且目录没有缓存时，才停在"无法确认"，
+	// 原因给出可照做的提示：点右上角「刷新」拉取上游模型目录；目录拉过但无结论时仍保留原有说法
+	// （见 TestCodexTPReasonKeepsOriginalWordingWhenCatalogLoadedButNoVerdict）。
 	baseURL := fmt.Sprintf("http://cc-pool-cold2-%d.example/provider/v1", time.Now().UnixNano())
 	commandCode := compositePoolWithMapping(cxtpPoolCommandCode(11, 2, baseURL), map[string]any{compositePoolModel: "deepseek/deepseek-v4.1-flash"})
 	cline := cxtpPoolChatOnly(14, PlatformCline, 5, compositePoolMapping(compositePoolModel))
@@ -407,7 +409,8 @@ func TestCodexTPCompositePoolModelRoutedCacheMissingKeepsOriginalReason(t *testi
 	candidate := cxtpPoolEvaluate(t, svc)
 	require.Equal(t, []int64{11, 14}, candidate.AccountIDs, "两个账号都需转换，退到需转换组")
 	require.Equal(t, CodexModelStatusNeedsCapability, candidate.Status)
-	require.Contains(t, candidate.Reasons, "部分承接账号按模型分流上游协议，无法静态确认 Responses 通路")
+	require.Contains(t, candidate.Reasons, "上游模型目录尚未就绪，点右上角「刷新」拉取后再试")
+	require.NotContains(t, candidate.Reasons, "部分承接账号按模型分流上游协议，无法静态确认 Responses 通路")
 }
 
 func TestCodexTPCompositePoolConvertGroupWithCachedChatCatalogIsViaChat(t *testing.T) {

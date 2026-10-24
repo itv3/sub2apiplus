@@ -1008,6 +1008,8 @@ var ProviderSet = wire.NewSet(
 	NewCodexThirdPartyCatalogService, // Codex 三方模型启用：目录编排与评估
 	wire.Bind(new(CodexThirdPartyCatalogEvaluator), new(*CodexThirdPartyCatalogService)),
 	NewCodexThirdPartyAdminService, // Codex 三方模型启用：管理服务
+	// 启动后预热按模型分流账号的上游模型目录
+	ProvideModelProtocolCatalogWarmupService,
 	NewDataManagementService,
 	ProvideBackupService,
 	ProvideOpsSystemLogSink,

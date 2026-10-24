@@ -331,15 +331,23 @@ func (sess *codexTPSession) analyze(ctx context.Context, slug string) (*codexTPR
 		route.Protocols = append(route.Protocols, protocol)
 	}
 	sort.Strings(route.Protocols)
-	missingProtocol := false
+	missingProtocol, catalogNotReady := false, false
 	for _, item := range route.Accounts {
 		if item.Protocol == "" {
 			missingProtocol = true
+			if sess.svc.modelCatalogNotReady(item.Account) {
+				catalogNotReady = true
+			}
 		}
 	}
 	if missingProtocol {
 		route.Protocols = nil
-		route.Reasons = append(route.Reasons, "部分承接账号按模型分流上游协议，无法静态确认 Responses 通路")
+		if catalogNotReady {
+			// 上游模型目录从没拉过（例如网关刚重启）：给可照做的提示，刷新后即可确认。
+			route.Reasons = append(route.Reasons, codexTPCatalogNotReadyReason)
+		} else {
+			route.Reasons = append(route.Reasons, "部分承接账号按模型分流上游协议，无法静态确认 Responses 通路")
+		}
 	}
 	route.EndpointDigest = codexTPEndpointDigest(route.Accounts)
 	return route, nil

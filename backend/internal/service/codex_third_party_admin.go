@@ -74,6 +74,10 @@ var (
 	// ErrCodexCatalogEvaluationFailed 表示目录评估失败（500）。
 	ErrCodexCatalogEvaluationFailed = infraerrors.InternalServer(
 		"CODEX_CATALOG_EVALUATION_FAILED", "Codex 目录评估失败")
+	// ErrCodexCatalogRefreshFailed 表示刷新页面依赖的上游目录时出现整体性失败（500）。
+	// 单个账号拉取失败不属于它，逐账号结果在返回内容里。
+	ErrCodexCatalogRefreshFailed = infraerrors.InternalServer(
+		"CODEX_CATALOG_REFRESH_FAILED", "Codex 上游目录刷新失败")
 )
 
 // ---------------------------------------------------------------------------
@@ -180,6 +184,13 @@ type CodexThirdPartySaveResult struct {
 // CodexThirdPartyVerifyResult 是标记已验证接口的返回内容。
 type CodexThirdPartyVerifyResult struct {
 	Config CodexModelVisibilityConfig `json:"config"`
+}
+
+// CodexThirdPartyRefreshResult 是页面「刷新」接口的返回内容：逐账号的刷新结果，
+// 加刷新之后重新读取的分组状态（与读取接口同结构，前端可直接替换）。
+type CodexThirdPartyRefreshResult struct {
+	Refresh CodexCatalogRefreshReport  `json:"refresh"`
+	State   *CodexThirdPartyGroupState `json:"state"`
 }
 
 // CodexThirdPartySyncResult 是手动同步接口的返回内容。同步在后台进行，立即返回各账号状态。
@@ -294,6 +305,38 @@ func (s *CodexThirdPartyAdminService) GetGroupState(ctx context.Context, groupID
 		Evaluation:    eval,
 		Sources:       sources,
 	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// 刷新页面依赖的上游目录
+// ---------------------------------------------------------------------------
+
+// RefreshCatalogs 同步刷新分组页面判定依赖的全部上游目录（按模型分流账号的协议目录、官方账号基础目录），
+// 再按刷新后的缓存重新读取分组状态一并返回。同一分组短时间内重复刷新由评估器合并或节流。
+// 单个账号拉取失败不算整体失败，逐账号结果在 Refresh 里。
+func (s *CodexThirdPartyAdminService) RefreshCatalogs(ctx context.Context, groupID int64) (*CodexThirdPartyRefreshResult, error) {
+	group, err := s.loadEligibleGroup(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	refresher, ok := s.evaluator.(CodexThirdPartyCatalogRefresher)
+	if !ok {
+		return nil, ErrCodexCatalogRefreshFailed.WithCause(errors.New("evaluator does not support catalog refresh"))
+	}
+	report, err := refresher.RefreshCodexThirdPartyCatalogs(ctx, group)
+	if err != nil {
+		var appErr *infraerrors.ApplicationError
+		if errors.As(err, &appErr) {
+			return nil, err
+		}
+		slog.Warn("codex_third_party_catalog_refresh_failed", "group_id", groupID, "error", err)
+		return nil, ErrCodexCatalogRefreshFailed.WithCause(err)
+	}
+	state, err := s.GetGroupState(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	return &CodexThirdPartyRefreshResult{Refresh: report, State: state}, nil
 }
 
 // ---------------------------------------------------------------------------

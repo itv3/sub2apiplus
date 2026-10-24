@@ -23,6 +23,7 @@ type codexThirdPartyModelsService interface {
 	SaveChanges(ctx context.Context, groupID int64, req service.CodexThirdPartySaveRequest) (*service.CodexThirdPartySaveResult, error)
 	MarkVerified(ctx context.Context, groupID int64, req service.CodexThirdPartyVerifyRequest) (*service.CodexThirdPartyVerifyResult, error)
 	SyncSources(ctx context.Context, groupID int64) (*service.CodexThirdPartySyncResult, error)
+	RefreshCatalogs(ctx context.Context, groupID int64) (*service.CodexThirdPartyRefreshResult, error)
 }
 
 // CodexThirdPartyModelsHandler 处理 Codex 三方模型启用相关的管理接口。
@@ -216,4 +217,22 @@ func (h *CodexThirdPartyModelsHandler) Sync(c *gin.Context) {
 		return
 	}
 	response.Accepted(c, result)
+}
+
+// Refresh 同步刷新分组页面判定依赖的上游目录（按模型分流账号的协议目录、官方账号基础目录），
+// 返回逐账号刷新结果和刷新后的分组状态（与读取接口同结构）。同一分组短时间内重复调用会复用上次结果。
+// POST /api/v1/admin/codex-third-party-models/:group_id/refresh
+func (h *CodexThirdPartyModelsHandler) Refresh(c *gin.Context) {
+	if !h.serviceReady(c) {
+		return
+	}
+	groupID, ok := parseCodexThirdPartyGroupID(c)
+	if !ok {
+		return
+	}
+	result, err := h.svc.RefreshCatalogs(c.Request.Context(), groupID)
+	if response.ErrorFrom(c, err) {
+		return
+	}
+	response.Success(c, result)
 }

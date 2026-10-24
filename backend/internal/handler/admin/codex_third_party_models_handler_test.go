@@ -92,6 +92,24 @@ func (f *codexThirdPartyFakeService) SyncSources(_ context.Context, groupID int6
 	return &service.CodexThirdPartySyncResult{Sources: []service.CodexThirdPartySourceStatus{{AccountID: 1, Status: "missing", Refreshing: true}}}, nil
 }
 
+func (f *codexThirdPartyFakeService) RefreshCatalogs(_ context.Context, groupID int64) (*service.CodexThirdPartyRefreshResult, error) {
+	f.record("refresh", groupID)
+	if f.err != nil {
+		return nil, f.err
+	}
+	state, _ := f.GetGroupState(context.Background(), groupID)
+	return &service.CodexThirdPartyRefreshResult{
+		Refresh: service.CodexCatalogRefreshReport{
+			GroupID: groupID, Total: 2, Failed: 1,
+			Items: []service.CodexCatalogRefreshItem{
+				{AccountID: 11, AccountName: "CommandCode", Platform: "commandcode", Kind: service.CodexCatalogRefreshKindModelProtocol, OK: true, ModelCount: 40, ElapsedMS: 120},
+				{AccountID: 12, AccountName: "官方", Platform: "openai", Kind: service.CodexCatalogRefreshKindOfficialBase, Reason: "拉取超时", ElapsedMS: 3000},
+			},
+		},
+		State: state,
+	}, nil
+}
+
 func newCodexThirdPartyTestRouter(h *CodexThirdPartyModelsHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -101,6 +119,7 @@ func newCodexThirdPartyTestRouter(h *CodexThirdPartyModelsHandler) *gin.Engine {
 	group.PUT("/:group_id", h.Save)
 	group.POST("/:group_id/verify", h.Verify)
 	group.POST("/:group_id/sync", h.Sync)
+	group.POST("/:group_id/refresh", h.Refresh)
 	return router
 }
 
@@ -257,6 +276,53 @@ func TestCodexThirdPartyModelsHandlerSyncReturnsAccepted(t *testing.T) {
 	require.True(t, data.Sources[0].Refreshing)
 }
 
+func TestCodexThirdPartyModelsHandlerRefreshReturnsReportAndState(t *testing.T) {
+	svc := &codexThirdPartyFakeService{}
+	router := newCodexThirdPartyTestRouter(&CodexThirdPartyModelsHandler{svc: svc})
+	rec := codexThirdPartyRequest(router, http.MethodPost, "/api/v1/admin/codex-third-party-models/7/refresh", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, int64(7), svc.lastGroupID)
+	var data struct {
+		Refresh struct {
+			GroupID int64 `json:"group_id"`
+			Reused  bool  `json:"reused"`
+			Total   int   `json:"total"`
+			Failed  int   `json:"failed"`
+			Items   []struct {
+				AccountID   int64  `json:"account_id"`
+				AccountName string `json:"account_name"`
+				Kind        string `json:"kind"`
+				OK          bool   `json:"ok"`
+				Reason      string `json:"reason"`
+				ElapsedMS   int64  `json:"elapsed_ms"`
+				ModelCount  int    `json:"model_count"`
+			} `json:"items"`
+		} `json:"refresh"`
+		State struct {
+			GroupID    int64 `json:"group_id"`
+			Evaluation struct {
+				InputFingerprint string `json:"input_fingerprint"`
+			} `json:"evaluation"`
+		} `json:"state"`
+	}
+	require.NoError(t, json.Unmarshal(decodeCodexThirdPartyEnvelope(t, rec).Data, &data))
+	require.Equal(t, 2, data.Refresh.Total)
+	require.Equal(t, 1, data.Refresh.Failed)
+	require.False(t, data.Refresh.Reused)
+	require.Len(t, data.Refresh.Items, 2)
+	require.Equal(t, "model_protocol", data.Refresh.Items[0].Kind)
+	require.True(t, data.Refresh.Items[0].OK)
+	require.Equal(t, 40, data.Refresh.Items[0].ModelCount)
+	require.Equal(t, "official_base", data.Refresh.Items[1].Kind)
+	require.False(t, data.Refresh.Items[1].OK)
+	require.Equal(t, "拉取超时", data.Refresh.Items[1].Reason)
+	require.Equal(t, int64(7), data.State.GroupID, "刷新结果附带与读取接口同结构的分组状态")
+	require.Equal(t, "fp", data.State.Evaluation.InputFingerprint)
+
+	rec = codexThirdPartyRequest(router, http.MethodPost, "/api/v1/admin/codex-third-party-models/abc/refresh", "")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestCodexThirdPartyModelsHandlerRejectsMalformedBodies(t *testing.T) {
 	svc := &codexThirdPartyFakeService{}
 	router := newCodexThirdPartyTestRouter(&CodexThirdPartyModelsHandler{svc: svc})
@@ -303,6 +369,7 @@ func TestCodexThirdPartyModelsHandlerMapsServiceErrors(t *testing.T) {
 		{"未开启", service.ErrCodexModelNotEnabled, http.StatusConflict, "CODEX_MODEL_NOT_ENABLED"},
 		{"变更不合法", service.ErrCodexThirdPartyChangesInvalid, http.StatusBadRequest, "CODEX_THIRD_PARTY_CHANGES_INVALID"},
 		{"配置损坏", service.ErrCodexModelVisibilityCorrupt, http.StatusInternalServerError, "CODEX_MODEL_VISIBILITY_CORRUPT"},
+		{"刷新失败", service.ErrCodexCatalogRefreshFailed, http.StatusInternalServerError, "CODEX_CATALOG_REFRESH_FAILED"},
 		{"被包装的冲突", errors.Join(errors.New("save"), service.ErrCodexModelVisibilityConflict), http.StatusConflict, "CODEX_MODEL_VISIBILITY_CONFLICT"},
 	}
 	for _, tc := range tests {
@@ -315,6 +382,7 @@ func TestCodexThirdPartyModelsHandlerMapsServiceErrors(t *testing.T) {
 				{http.MethodPut, "/api/v1/admin/codex-third-party-models/7", `{"expected_revision":0,"changes":[{"slug":"a","enabled":true}]}`},
 				{http.MethodPost, "/api/v1/admin/codex-third-party-models/7/verify", `{"expected_revision":0,"slug":"a","fingerprint":"f"}`},
 				{http.MethodPost, "/api/v1/admin/codex-third-party-models/7/sync", ""},
+				{http.MethodPost, "/api/v1/admin/codex-third-party-models/7/refresh", ""},
 			}
 			for _, call := range calls {
 				rec := codexThirdPartyRequest(router, call.method, call.path, call.body)
@@ -357,6 +425,8 @@ func TestCodexThirdPartyModelsHandlerWithoutServiceReturns500(t *testing.T) {
 	rec := codexThirdPartyRequest(router, http.MethodGet, "/api/v1/admin/codex-third-party-models/7", "")
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	rec = codexThirdPartyRequest(router, http.MethodPost, "/api/v1/admin/codex-third-party-models/7/sync", "")
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	rec = codexThirdPartyRequest(router, http.MethodPost, "/api/v1/admin/codex-third-party-models/7/refresh", "")
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 

@@ -16,6 +16,7 @@ import (
 //	PUT  /codex-third-party-models/:group_id          保存变更（整批原子提交）
 //	POST /codex-third-party-models/:group_id/verify   标记已验证
 //	POST /codex-third-party-models/:group_id/sync     手动同步账号模型 ID 源（后台执行）
+//	POST /codex-third-party-models/:group_id/refresh  刷新页面依赖的上游目录（同步执行，返回逐账号结果与最新状态）
 func registerCodexThirdPartyModelsRoutes(admin *gin.RouterGroup, h *adminhandler.CodexThirdPartyModelsHandler) {
 	models := admin.Group("/codex-third-party-models")
 	{
@@ -24,5 +25,6 @@ func registerCodexThirdPartyModelsRoutes(admin *gin.RouterGroup, h *adminhandler
 		models.PUT("/:group_id", h.Save)
 		models.POST("/:group_id/verify", h.Verify)
 		models.POST("/:group_id/sync", h.Sync)
+		models.POST("/:group_id/refresh", h.Refresh)
 	}
 }
