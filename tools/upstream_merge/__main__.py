@@ -30,6 +30,11 @@ from .request_render import PLAN_ROOT_NAME, render_request
 from .sink_registration import write_sink_registration
 from .start_check import start_check
 from .surface_suggestions import write_surface_suggestions
+from .targeted_regression import (
+    MAX_TARGETED_GO_PACKAGES,
+    TARGETED_GO_BUDGET_SECONDS,
+    write_targeted_regression,
+)
 from .revision_advance import advance_revision
 from .toolchain import check_toolchain
 from .version_sync import DEFAULT_MAX_ATTEMPTS, sync_released_version
@@ -380,6 +385,27 @@ def build_parser() -> argparse.ArgumentParser:
     _add_repository(secret_scan)
     secret_scan.add_argument("--request", required=True, type=_absolute, help="request.json；门禁取自其中的 gates")
 
+    targeted = commands.add_parser(
+        "targeted-regression-plan",
+        help="试验区快线的定向回归清单：按冲突文件、实际修改与调用依赖列出要跑的回归及理由（离线，在 Plan 之外运行）",
+    )
+    _add_repository(targeted)
+    targeted.add_argument("--fork", required=True, help="fork 主干提交或引用（合并前的受维护分支 HEAD）")
+    targeted.add_argument("--upstream", required=True, help="上游 tag 或提交")
+    targeted.add_argument("--output", required=True, type=_absolute, help="清单 JSON 输出路径（仓库外或 Git 忽略的私有目录；不覆盖既有文件）")
+    targeted.add_argument(
+        "--go-budget-seconds",
+        type=int,
+        default=TARGETED_GO_BUDGET_SECONDS,
+        help=f"定向 go test 的估算预算（两组标签合计），超过则退回全量；默认 {TARGETED_GO_BUDGET_SECONDS}",
+    )
+    targeted.add_argument(
+        "--max-go-packages",
+        type=int,
+        default=MAX_TARGETED_GO_PACKAGES,
+        help=f"定向 go test 的包数上限，超过则退回全量；默认 {MAX_TARGETED_GO_PACKAGES}",
+    )
+
     gates = commands.add_parser("gates-run", help="U-4 执行全部固定门禁并生成 attempt 收据")
     _add_plan(gates)
     gates.add_argument("--attempt-id", required=True)
@@ -716,6 +742,15 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         return check_toolchain(arguments.repository, arguments.role)
     if command == "candidate-secret-scan":
         return candidate_secret_scan_from_request(arguments.request, arguments.repository)
+    if command == "targeted-regression-plan":
+        return write_targeted_regression(
+            arguments.repository,
+            arguments.fork,
+            arguments.upstream,
+            arguments.output,
+            budget_seconds=arguments.go_budget_seconds,
+            max_packages=arguments.max_go_packages,
+        )
     if command == "identity-seal":
         draft = expect_object(load_json(arguments.input, "identity draft"), "identity draft")
         if "identity_sha256" in draft:

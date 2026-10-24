@@ -1,0 +1,117 @@
+--- FAIL: TestClaudeFWGAliasRouteTransitionsAreFrozen (174.62s)
+    claude_fw_g_alias_route_transition_test.go:139: Claude FW-G 裸路径别名 transition 漂移：path=backend/internal/web/frontend_route_bypass.go got=f1e35a1ee1861b874d3819eed947fd5d84258574492d5b9f522fd53f47c88f15 want=bcf72161da6fbe078cfd53062c8853fa3117cc6c2e6a904486d815db7ba54336
+--- FAIL: TestClaudeFWGCountTokensTransitionsAreFrozen (215.00s)
+    claude_fw_g_count_tokens_transition_test.go:144: Claude FW-G count_tokens transition 漂移：path=backend/internal/handler/gateway_handler.go got=6299d36638577814e0e8fe1e5139820a9c28eae901138797a87376aa523014a3 want=672c3fe54d16645053ca9553724c7a35af0255dff75bc003fb20a08b21ac0092
+--- FAIL: TestClaudeFWHLegacyRetirementTransitionsAreFrozen (0.31s)
+    claude_fw_h_legacy_retirement_transition_test.go:253: Claude FW-H 遗留退休摘要漂移：backend/internal/service/account_test_service.go
+2026/10/19 21:18:16 WARN official_egress_guard reason_code=unclassified_persona scope=managed sink_id=managed.claude.setup_token.messages_inference method=POST host_template=api.anthropic.com path_template=/v1/messages declared_persona=unclassified resolved_persona=unclassified backend=http_upstream protocol=http profile_digest="" enforcement_state=enforced
+2026/10/19 21:18:16 WARN official_egress_guard reason_code=unclassified_persona scope=managed sink_id=managed.claude.setup_token.token_count method=POST host_template=api.anthropic.com path_template=/v1/messages/count_tokens declared_persona=unclassified resolved_persona=unclassified backend=http_upstream protocol=http profile_digest="" enforcement_state=enforced
+--- FAIL: TestClaudeFWHSourceTransitionIsFrozen (2.61s)
+    claude_fw_h_source_transition_test.go:235: Claude FW-H source transition 漂移：path=backend/internal/config/config.go got=f19a285db071974001e778eb096e2e1a24efcf8d5d791344c38e3eac1ba824c5 want=f76b526f55f00db9c7509d8f3ee517223086f3a852a544d4dbeeddab71a9008c
+--- FAIL: TestClaudeFWHStateDurabilityTransitionsAreFrozen (0.06s)
+    claude_fw_h_state_durability_transition_test.go:213: docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json：Claude 状态耐久性 transition 当前摘要不一致：backend/cmd/server/wire_gen.go
+--- FAIL: TestClaudeFWHThirdPartyStrictTransitionsAreFrozen (0.70s)
+    claude_fw_h_third_party_strict_transition_test.go:262: Claude FW-H 第三方 strict transition 当前摘要不一致
+--- FAIL: TestClaudeOfficialClientOnlyTransitionIsFrozen (0.03s)
+    claude_official_client_only_transition_test.go:265: Claude official-client-only transition 条目非法
+--- FAIL: TestClaudeOfflineCIStabilizationTransitionIsFrozen (0.01s)
+    claude_offline_ci_stabilization_transition_test.go:258: Claude 离线 CI 稳定化 transition 条目非法
+--- FAIL: TestClaudeOfflineReleaseRepairTransitionIsFrozen (0.01s)
+    claude_offline_release_repair_transition_test.go:174: Claude 离线发版修复 transition 条目非法
+2026/10/19 21:18:20 WARN official_egress_guard reason_code=unclassified_persona scope=managed sink_id=unclassified.claude.usage method=GET host_template=api.anthropic.com path_template=/api/oauth/usage declared_persona=unclassified resolved_persona=unclassified backend=http_upstream protocol=http profile_digest="" enforcement_state=enforced
+2026/10/19 21:18:20 WARN official_egress_guard reason_code=missing_sink_id scope=managed sink_id="" method=GET host_template=api.anthropic.com path_template=/api/oauth/usage declared_persona="" resolved_persona="" backend=http_upstream protocol=http profile_digest="" enforcement_state=""
+2026/10/19 21:18:20 WARN official_egress_guard reason_code=unknown_route scope=managed sink_id=unclassified.claude.usage method=GET host_template=api.anthropic.com path_template=/api/{path} declared_persona=unclassified resolved_persona="" backend=http_upstream protocol=http profile_digest="" enforcement_state=""
+--- FAIL: TestCodex01491TerminalStateIsFrozen (0.00s)
+    codex_01491_terminal_state_test.go:276: 0.149.1 终态当前摘要不一致：.github/workflows/backend-ci.yml
+--- FAIL: TestOpenAIReplayOOMRepairSourceTransitionIsFrozen (0.00s)
+    codex_01491_terminal_state_test.go:489: OpenAI replay OOM 修复 transition 当前摘要不一致：backend/internal/service/openai_gateway_forward.go
+--- FAIL: TestCodex0151FormalRecoverySourceTransitionIsFrozen (0.00s)
+    codex_0151_formal_recovery_source_transition_test.go:339: Codex CLI 0.151 Formal 恢复 transition 当前摘要不一致：tools/official_client_capture/candidate_test_trace.py
+--- FAIL: TestCodex0151FormalRecoverySourceTransitionRejectsMutation (0.00s)
+    codex_0151_formal_recovery_source_transition_test.go:346: Codex CLI 0.151 Formal 恢复 transition 当前摘要不一致：tools/official_client_capture/candidate_test_trace.py
+--- FAIL: TestCodex0151TestTracePreflightToolSuccessorSourceTransitionIsFrozen (0.00s)
+    codex_0151_test_trace_preflight_tool_successor_test.go:169: Codex CLI 0.151 test trace P0 后继 transition 当前摘要不一致：tools/official_client_capture/candidate_test_trace.py
+--- FAIL: TestCodex0151TestTracePreflightToolSuccessorSourceTransitionRejectsMutation (0.00s)
+    codex_0151_test_trace_preflight_tool_successor_test.go:176: Codex CLI 0.151 test trace P0 后继 transition 当前摘要不一致：tools/official_client_capture/candidate_test_trace.py
+2026/10/19 21:18:21 WARN official_egress_guard reason_code=request_modified_after_finalize scope=managed sink_id=codex.responses.ws method=GET host_template=chatgpt.com path_template=/backend-api/codex/responses declared_persona=codex-cli resolved_persona=codex-cli backend=websocket protocol=websocket profile_digest=d33a4f097f86d57929995760b7e51c4ddf672e5f2db5cb36c0d0815afc3ad12c enforcement_state=enforced
+--- FAIL: TestCompositeModelProtocolSourceTransitionIsFrozen (0.00s)
+    composite_model_protocol_source_transition_test.go:186: Composite 模型协议 transition 当前摘要不一致：backend/internal/handler/gateway_handler.go
+--- FAIL: TestFWEObservationSourceTransitionIsFrozen (1.61s)
+    fw_e_observation_source_transition_test.go:145: FW-E observation source transition 漂移：path=backend/internal/service/account_test_service.go got=9bccaac8ec9a1747aa17a4238bb62e978fe825bf92989c76609e5cae84211a6f want=be884895e4a230e9e101ce1149dfe4a4f1973af48bb097628dff3e2ff40ea08d
+2026/10/19 21:18:25 WARN official_egress_guard reason_code=missing_finalization_token scope=managed sink_id=codex.responses.forward method=POST host_template=chatgpt.com path_template=/backend-api/codex/responses declared_persona=codex-cli resolved_persona=codex-cli backend=http_upstream protocol=http profile_digest="" enforcement_state=enforced
+2026/10/19 21:18:25 WARN official_egress_guard reason_code=wrong_executor scope=managed sink_id=codex.responses.forward method=POST host_template=chatgpt.com path_template=/backend-api/codex/responses declared_persona=codex-cli resolved_persona=codex-cli backend=http_upstream protocol=http profile_digest="" enforcement_state=enforced
+2026/10/19 21:18:25 WARN official_egress_guard reason_code=missing_finalization_token scope=managed sink_id=codex.responses.forward method=POST host_template=chatgpt.com path_template=/backend-api/codex/responses declared_persona=codex-cli resolved_persona=codex-cli backend=http_upstream protocol=http profile_digest="" enforcement_state=canary_enforce
+2026/10/19 21:18:25 WARN official_egress_guard reason_code=wrong_executor scope=managed sink_id=codex.responses.forward method=POST host_template=chatgpt.com path_template=/backend-api/codex/responses declared_persona=codex-cli resolved_persona=codex-cli backend=http_upstream protocol=http profile_digest="" enforcement_state=canary_enforce
+2026/10/19 21:18:25 INFO official_egress_guard reason_code=canary_observe_passthrough scope=managed sink_id=codex.responses.forward method=POST host_template=chatgpt.com path_template=/backend-api/codex/responses declared_persona=codex-cli resolved_persona=codex-cli backend=http_upstream protocol=http profile_digest="" enforcement_state=canary_enforce
+--- FAIL: TestUpstreamMergeFrameworkTransitionIsFrozen (0.00s)
+    upstream_merge_framework_transition_test.go:207: 上游合并框架 transition 当前摘要不一致：backend/internal/handler/openai_gateway_handler.go
+--- FAIL: TestUpstreamMergeFrameworkV3SuccessorIsFrozen (0.00s)
+    upstream_merge_framework_v3_successor_test.go:225: 上游合并框架 v3 successor 当前摘要不一致：backend/internal/handler/openai_gateway_handler.go
+--- FAIL: TestUpstreamMergeFrameworkV3SuccessorRejectsMutation (0.00s)
+    upstream_merge_framework_v3_successor_test.go:232: 上游合并框架 v3 successor 当前摘要不一致：backend/internal/handler/openai_gateway_handler.go
+--- FAIL: TestUpstreamMergeFrameworkV4SuccessorIsFrozen (0.00s)
+    upstream_merge_framework_v4_successor_test.go:211: 上游合并框架 v0.2.3 successor 通用 transition 提交绑定不一致
+--- FAIL: TestUpstreamMergeFrameworkV4SuccessorRejectsMutation (0.00s)
+    upstream_merge_framework_v4_successor_test.go:218: 上游合并框架 v0.2.3 successor 通用 transition 提交绑定不一致
+--- FAIL: TestUpstreamSourceTransitionNodesAreFrozen (0.06s)
+    upstream_source_transition_generic_test.go:267: upstream-v0.2.10-source-transition.json：上游 source-transition 节点当前摘要不一致：.github/workflows/backend-ci.yml
+--- FAIL: TestUpstreamV0177SourceTransitionIsFrozen (2.45s)
+    upstream_v0177_source_transition_test.go:86: v0.1.177 上游源码摘要漂移：path=backend/internal/service/openai_ws_v2_passthrough_adapter.go got=69aa782c1d8b1bcc4e2cff5c15443b488b7bfba6484c1d2a09a4442c05d93bd2 want=f7226d7f58b2c912c735d8a157c62a90f775e740bf7ecc9e768786388bc6a791
+--- FAIL: TestUpstreamV0179ReleaseCIRepairTransitionIsFrozen (0.00s)
+    upstream_v0179_release_ci_repair_transition_test.go:170: 上游 v0.1.179 发版 CI 修复 transition 当前摘要不一致：.github/workflows/backend-ci.yml
+--- FAIL: TestUpstreamV0179SourceTransitionIsFrozen (0.00s)
+    upstream_v0179_source_transition_test.go:170: 上游 v0.1.179 source transition 当前摘要不一致：backend/cmd/server/wire.go
+--- FAIL: TestUpstreamV0180SourceTransitionIsFrozen (0.00s)
+    upstream_v0180_source_transition_test.go:163: 上游 v0.1.180 source transition 当前摘要不一致：.github/workflows/backend-ci.yml
+--- FAIL: TestUpstreamV023SourceTransitionIsFrozen (0.00s)
+    upstream_v023_source_transition_test.go:263: 上游 v0.2.3 源码 transition 当前摘要不一致：README_CN.md
+--- FAIL: TestUpstreamV023SourceTransitionRejectsMutation (0.00s)
+    upstream_v023_source_transition_test.go:270: 上游 v0.2.3 源码 transition 当前摘要不一致：README_CN.md
+FAIL
+FAIL	github.com/Wei-Shaw/sub2api/internal/officialegress	409.345s
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/bindingcontract	0.303s
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/compositioncontract	0.475s
+?   	github.com/Wei-Shaw/sub2api/internal/officialegress/finalwirecapture	[no test files]
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/finalwirecontract	0.293s
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract	4.456s
+--- FAIL: TestCodex01491TerminalServiceStateIsFrozen (3.44s)
+    codex_01491_terminal_state_test.go:159: 0.149.1 终态当前摘要不一致：.github/workflows/backend-ci.yml
+--- FAIL: TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen (0.00s)
+    codex_01491_terminal_state_test.go:405: OpenAI replay OOM 修复 transition 当前摘要不一致：backend/internal/service/openai_gateway_forward.go
+--- FAIL: TestCodex0151FormalRecoverySourceTransitionServiceIsFrozen (0.00s)
+    codex_0151_formal_recovery_source_transition_test.go:341: Codex CLI 0.151 Formal 恢复 transition 当前摘要不一致：tools/official_client_capture/candidate_test_trace.py
+--- FAIL: TestCodex0151FormalRecoverySourceTransitionServiceRejectsMutation (0.00s)
+    codex_0151_formal_recovery_source_transition_test.go:348: Codex CLI 0.151 Formal 恢复 transition 当前摘要不一致：tools/official_client_capture/candidate_test_trace.py
+--- FAIL: TestCodexModelsUnwiredTransportRetirementReceiptAndSourceExtinction (0.06s)
+    codex_models_unwired_transport_retirement_test.go:134: Codex Models unwired transport 源码摘要没有形成追加式 transition：path=backend/internal/service/openai_codex_models_service.go got=8a753bc08a1148b8f338800d3ca11c25f4d80c893caaf5c73aa1af9e85822c20 prior=4ed62e7afacf6341d0942f317372c8f7d2b23e426ab1594bded68189ef4b312d later={Path: FromSHA256: ToSHA256: Reason:}
+--- FAIL: TestCompatibilityCodeRetirementClosureIsComplete (0.19s)
+    compatibility_code_retirement_closure_test.go:143: 兼容代码闭集文件摘要漂移：path=backend/internal/service/openai_ws_v2_passthrough_adapter.go got=69aa782c1d8b1bcc4e2cff5c15443b488b7bfba6484c1d2a09a4442c05d93bd2 want=e3cf01b231076fa057efb2fb13c0810f10dd92a939a091f3ade0a54dec83af9b
+--- FAIL: TestCompositeModelProtocolSourceTransitionIsFrozen (0.00s)
+    composite_model_protocol_source_transition_test.go:182: Composite 模型协议 transition 当前摘要不一致：backend/internal/handler/gateway_handler.go
+--- FAIL: TestUpstreamMergeFrameworkV3SuccessorServiceIsFrozen (0.00s)
+    upstream_merge_framework_v3_successor_test.go:225: 上游合并框架 v3 successor 当前摘要不一致：backend/internal/handler/openai_gateway_handler.go
+--- FAIL: TestUpstreamMergeFrameworkV3SuccessorServiceRejectsMutation (0.00s)
+    upstream_merge_framework_v3_successor_test.go:232: 上游合并框架 v3 successor 当前摘要不一致：backend/internal/handler/openai_gateway_handler.go
+--- FAIL: TestUpstreamMergeFrameworkV4SuccessorServiceIsFrozen (0.00s)
+    upstream_merge_framework_v4_successor_test.go:212: 上游合并框架 v0.2.3 successor 通用 transition 提交绑定不一致
+--- FAIL: TestUpstreamMergeFrameworkV4SuccessorServiceRejectsMutation (0.00s)
+    upstream_merge_framework_v4_successor_test.go:219: 上游合并框架 v0.2.3 successor 通用 transition 提交绑定不一致
+{"level":"INFO","time":"2026-10-19T13:15:50.721Z","logger":"slog","caller":"logger/slog_handler.go:59","msg":"upstream model list endpoint unavailable; using configured models for capability sync","service":"sub2api","env":"production","account_id":97,"platform":"openai","status_code":404,"model_count":1}
+{"level":"WARN","time":"2026-10-19T13:15:50.721Z","logger":"slog","caller":"logger/slog_handler.go:55","msg":"upstream model capability metadata enrichment failed","service":"sub2api","env":"production","account_id":93,"platform":"openai","error":"model metadata registry returned HTTP 502"}
+{"level":"WARN","time":"2026-10-19T13:15:50.721Z","logger":"slog","caller":"logger/slog_handler.go:55","msg":"upstream model capability metadata enrichment failed","service":"sub2api","env":"production","account_id":96,"platform":"openai","error":"model metadata registry returned HTTP 502"}
+--- FAIL: TestUpstreamSourceTransitionNodesAreFrozenService (0.11s)
+    upstream_source_transition_generic_test.go:267: upstream-v0.2.10-source-transition.json：上游 source-transition 节点当前摘要不一致：.github/workflows/backend-ci.yml
+--- FAIL: TestUpstreamV0179ReleaseCIRepairTransitionServiceIsFrozen (0.00s)
+    upstream_v0179_release_ci_repair_transition_test.go:184: 上游 v0.1.179 发版 CI 修复 transition 当前摘要不一致：.github/workflows/backend-ci.yml
+--- FAIL: TestUpstreamV0179SourceTransitionIsFrozen (0.00s)
+    upstream_v0179_source_transition_test.go:304: 上游 source transition 当前摘要不一致：backend/cmd/server/wire.go
+--- FAIL: TestUpstreamV0180SourceTransitionIsFrozen (0.00s)
+    upstream_v0180_source_transition_test.go:120: invalid argument
+--- FAIL: TestUpstreamV023SourceTransitionServiceIsFrozen (0.00s)
+    upstream_v023_source_transition_test.go:264: 上游 v0.2.3 源码 transition 当前摘要不一致：README_CN.md
+--- FAIL: TestUpstreamV023SourceTransitionServiceRejectsMutation (0.00s)
+    upstream_v023_source_transition_test.go:271: 上游 v0.2.3 源码 transition 当前摘要不一致：README_CN.md
+FAIL
+FAIL	github.com/Wei-Shaw/sub2api/internal/service	217.897s
+ok  	github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2	3.316s
+ok  	github.com/Wei-Shaw/sub2api/internal/setup	0.567s
