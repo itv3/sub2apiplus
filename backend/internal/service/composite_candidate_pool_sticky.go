@@ -112,7 +112,7 @@ func (r *compositeCandidateRun) continuationOwner(groupCfg *compositeCandidateGr
 		return nil
 	}
 	account := r.freshAccount(cfg)
-	if !r.evaluate(account, false).eligible {
+	if _, dropped := r.dropped[account.ID]; dropped || !r.evaluate(account, false).eligible {
 		return nil
 	}
 	return account

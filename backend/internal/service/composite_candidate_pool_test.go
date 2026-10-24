@@ -334,12 +334,13 @@ func TestCompositeCandidatePoolEligibilityDisabledAndCooldownAccounts(t *testing
 }
 
 func TestCompositeCandidatePoolNoEligibleAccountStillWritesBack(t *testing.T) {
-	// 声明账号全部没过资格过滤：不退回原流程，也不在候选池里新造错误；
+	// 声明账号都处于瞬态不可用（冷却中）：不退回原流程，也不在候选池里新造错误；
 	// 按声明账号排序后写回，由下游调度器的终检返回它本来就有的错误。
+	cooling := time.Now().Add(30 * time.Minute)
 	a := compositePoolAdaptive(1, PlatformKimi, 10)
-	a.Schedulable = false
+	a.RateLimitResetAt = &cooling
 	b := compositePoolAdaptive(2, PlatformZhipu, 5)
-	b.Schedulable = false
+	b.OverloadUntil = &cooling
 	f := newCompositePoolFixture(t, a, b)
 	ctx := f.ctxFor(CompositeRouteEndpointResponses, compositePoolResponsesBody(""), nil)
 
@@ -354,6 +355,28 @@ func TestCompositeCandidatePoolNoEligibleAccountStillWritesBack(t *testing.T) {
 	outcome := f.resolve(ctx, CompositeRouteEndpointResponses)
 	require.Equal(t, compositeCandidatePathNoEligible, outcome.Path)
 	require.Len(t, outcome.Rejected, 2)
+}
+
+// 持久停用（状态不是 active，或可调度开关被关）的账号不声明任何模型，与账号归属解析一致：
+// 全部停用时交回原流程；停用的强声明账号也不会压制其它账号。瞬态的冷却则不同，见上一个用例。
+func TestCompositeCandidatePoolPersistentlyDisabledAccountsDoNotClaim(t *testing.T) {
+	off := compositePoolAdaptive(1, PlatformKimi, 10)
+	off.Schedulable = false
+	errored := compositePoolAdaptive(2, PlatformZhipu, 5)
+	errored.Status = StatusError
+	f := newCompositePoolFixture(t, off, errored)
+	ctx := f.ctxFor(CompositeRouteEndpointResponses, compositePoolResponsesBody(""), nil)
+	_, handled, err := f.pool.ResolveCandidatePool(ctx, compositePoolGroupID, compositePoolModel, CompositeRouteEndpointResponses)
+	require.NoError(t, err)
+	require.False(t, handled, "没有任何启用的账号声明该模型：交回原流程")
+
+	// 停用的强声明账号不压制弱声明账号。
+	weak := compositePoolWithMapping(compositePoolAdaptive(3, PlatformDeepseek, 50), map[string]any{"deepseek-*": "x"})
+	f = newCompositePoolFixture(t, off, weak)
+	outcome := f.resolveHandled(f.ctxFor(CompositeRouteEndpointChatCompletions, compositePoolChatBody(), nil), CompositeRouteEndpointChatCompletions)
+	require.Equal(t, CompositeClaimWildcard, outcome.Tier)
+	require.Equal(t, []int64{3}, outcome.Decision.CandidateAccountIDs)
+	require.Equal(t, "not_schedulable", outcome.Rejected[1])
 }
 
 // ---- 用户 × 平台配额预检（场景 11） ----

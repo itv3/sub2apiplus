@@ -137,12 +137,12 @@ func CompositeAccountClaimAllowed(ctx context.Context, account *Account, publicM
 	return explicitModelMappingClaims(*account, publicModel)
 }
 
-// CompositeCandidateAccountLister 列出分组内按持久化配置启用的账号（不过滤限流等瞬态状态）。
+// CompositeCandidateAccountLister 列出分组内的全部账号（不按状态、可调度开关过滤）。
 // AccountRepository 天然满足该接口；单独抽成接口是为了让候选池可以在测试里用桩替换。
 // 候选池只把它的结果当作「配置态」按分组缓存（见 composite_candidate_pool_config.go），
-// 账号的运行态一律另行实时读取，所以这里不过滤瞬态状态也不影响冷却的及时生效。
+// 账号的状态与最新配置一律另行实时读取，所以缓存不会让停用、冷却、重新启用延迟生效。
 type CompositeCandidateAccountLister interface {
-	ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error)
+	ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error)
 }
 
 // CompositeCandidatePoolResolver 是 CompositeRouteResolver 持有的候选池接口。
@@ -242,20 +242,47 @@ func (p *CompositeCandidatePool) resolve(ctx context.Context, groupID int64, mod
 	if err != nil {
 		return unhandled, fmt.Errorf("list composite candidate accounts: %w", err)
 	}
-	tier, claimed := groupCfg.claimTier(model)
-	if len(claimed) == 0 {
-		// 零声明：交回原流程，由归属判定与前缀猜测处理。只用了缓存里的配置态，没有任何账号读取。
+	// 缓存只划定"可能声明了该模型"的候选范围；范围为空就是零声明，没有任何账号读取。
+	scope := groupCfg.claimRange(model)
+	if len(scope) == 0 {
+		// 零声明：交回原流程，由归属判定与前缀猜测处理。
 		return unhandled, nil
 	}
 
 	run := p.newRun(ctx, entry, groupID, model, endpoint, inbound)
-	outcome := compositeCandidatePoolOutcome{Tier: tier, Rejected: map[int64]string{}}
+	outcome := compositeCandidatePoolOutcome{Rejected: map[int64]string{}}
 
-	// 声明命中的候选账号逐个实时读取，再评估资格；被剔除的原因留作诊断。
+	// 范围内的账号逐个实时读取，声明强度分层基于最新映射重新计算：
+	// 已不再是候选的账号（停用、删除、解绑、声明被撤）先剔除；读不到的账号沿用缓存里的强度。
+	type latestClaim struct {
+		account  *Account
+		strength CompositeClaimStrength
+	}
+	latest := make([]latestClaim, 0, len(scope))
+	for _, cfg := range scope {
+		account := run.freshAccount(cfg)
+		if reason, dropped := run.dropped[account.ID]; dropped {
+			outcome.Rejected[account.ID] = reason
+			continue
+		}
+		strength := cfg.strength(model)
+		if _, failed := run.refreshFailed[account.ID]; !failed {
+			strength = CompositeAccountClaimStrength(account, model)
+		}
+		latest = append(latest, latestClaim{account: account, strength: strength})
+	}
+	tier, claimed := compositeClaimTier(latest, func(c latestClaim) CompositeClaimStrength { return c.strength })
+	outcome.Tier = tier
+	if len(claimed) == 0 {
+		// 范围内的账号都已不再声明该模型：同样交回原流程。
+		return unhandled, nil
+	}
+
+	// 评估声明账号的资格，被剔除的原因留作诊断。
 	eligible := make([]*compositeCandidate, 0, len(claimed))
 	all := make([]*compositeCandidate, 0, len(claimed))
-	for _, cfg := range claimed {
-		account := run.freshAccount(cfg)
+	for _, item := range claimed {
+		account := item.account
 		candidate := &compositeCandidate{account: account}
 		all = append(all, candidate)
 		if verdict := run.evaluate(account, false); !verdict.eligible {
@@ -391,9 +418,11 @@ type compositeCandidateRun struct {
 	quota    map[string]error
 	zeroConv map[int64]bool
 	bound    map[string]int64
-	// fresh 是本次解析里已实时读取的账号；refreshFailed 记录读取或复核失败的账号及原因。
+	// fresh 是本次解析里已实时读取的账号；refreshFailed 记录仍是候选但这次读不到的账号及原因；
+	// dropped 记录已不再是候选的账号（停用、删除、解绑分组、平台变了、声明被撤）及原因。
 	fresh         map[int64]*Account
 	refreshFailed map[int64]string
+	dropped       map[int64]string
 	parsedReq     *ParsedRequest
 	parsedErr     bool
 }
@@ -414,6 +443,7 @@ func (p *CompositeCandidatePool) newRun(ctx context.Context, entry CompositeCand
 
 		fresh:         make(map[int64]*Account),
 		refreshFailed: make(map[int64]string),
+		dropped:       make(map[int64]string),
 	}
 }
 

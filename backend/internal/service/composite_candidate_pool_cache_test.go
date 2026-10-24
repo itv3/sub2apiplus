@@ -288,3 +288,151 @@ func TestCompositeCandidatePoolQuotaReasonLabels(t *testing.T) {
 		})
 	}
 }
+
+// ---- 声明强弱分层基于最新映射重算 ----
+
+// compositePoolSetMapping 用新的 model_mapping 替换账号凭据里的映射（其余凭据不动）。
+func compositePoolSetMapping(mapping map[string]any) func(*Account) {
+	return func(a *Account) {
+		creds := make(map[string]any, len(a.Credentials)+1)
+		for key, value := range a.Credentials {
+			creds[key] = value
+		}
+		creds["model_mapping"] = mapping
+		a.Credentials = creds
+	}
+}
+
+func compositePoolWildcardMapping() map[string]any {
+	return map[string]any{"deepseek-*": "wildcard-target"}
+}
+
+// 缓存只划定"可能声明了该模型"的候选范围，强弱分层按实时读取到的最新映射重算：
+// 缓存里是强、最新变成弱的账号，只要还有最新为强的账号就被压制。
+func TestCompositeCandidatePoolClaimTierFollowsLatestMapping(t *testing.T) {
+	newCached := func(t *testing.T, accounts ...Account) *compositePoolFixture {
+		t.Helper()
+		f := newCompositePoolFixture(t, accounts...)
+		f.enableConfigCache(time.Minute)
+		f.resolveChat() // 预热缓存：此后缓存里的映射保持旧值
+		require.Equal(t, 1, f.lister.loadCalls())
+		return f
+	}
+	w1 := compositePoolAdaptive(1, PlatformKimi, 10)
+	w2 := compositePoolAdaptive(2, PlatformDeepseek, 30)
+
+	t.Run("精确改通配：w1 立即被另一个精确账号 w2 压制", func(t *testing.T) {
+		f := newCached(t, w1, w2)
+		require.Equal(t, []int64{1}, f.resolveChat().Decision.CandidateAccountIDs, "前提：w1 优先级更高，原本选 w1")
+		f.lister.update(1, compositePoolSetMapping(compositePoolWildcardMapping()))
+		outcome := f.resolveChat()
+		require.Equal(t, CompositeClaimExplicit, outcome.Tier)
+		require.Equal(t, []int64{2}, outcome.Decision.CandidateAccountIDs, "w1 最新是弱声明，被 w2 的强声明压制")
+		require.Equal(t, PlatformDeepseek, outcome.Decision.TargetPlatform)
+		require.Equal(t, 1, f.lister.loadCalls(), "没有靠重新加载缓存")
+	})
+
+	t.Run("通配改精确：缓存里被压制的 w1 立即进池", func(t *testing.T) {
+		weak := w1
+		weak.Credentials = map[string]any{"api_key": "sk", "api_protocol": APIProtocolAdaptive, "model_mapping": compositePoolWildcardMapping()}
+		f := newCached(t, weak, w2)
+		require.Equal(t, []int64{2}, f.resolveChat().Decision.CandidateAccountIDs, "前提：缓存期 w1 是弱声明被压制")
+		f.lister.update(1, compositePoolSetMapping(compositePoolMapping(compositePoolModel)))
+		outcome := f.resolveChat()
+		require.Equal(t, CompositeClaimExplicit, outcome.Tier)
+		require.Equal(t, []int64{1}, outcome.Decision.CandidateAccountIDs, "w1 最新是强声明，Priority 更高")
+		require.Equal(t, 1, f.lister.loadCalls())
+	})
+
+	t.Run("两个账号互换强弱", func(t *testing.T) {
+		weak := w1
+		weak.Credentials = map[string]any{"api_key": "sk", "api_protocol": APIProtocolAdaptive, "model_mapping": compositePoolWildcardMapping()}
+		f := newCached(t, weak, w2)
+		require.Equal(t, []int64{2}, f.resolveChat().Decision.CandidateAccountIDs, "前提：w1 弱 w2 强，只有 w2 入池")
+		f.lister.update(1, compositePoolSetMapping(compositePoolMapping(compositePoolModel)))
+		f.lister.update(2, compositePoolSetMapping(compositePoolWildcardMapping()))
+		outcome := f.resolveChat()
+		require.Equal(t, CompositeClaimExplicit, outcome.Tier)
+		require.Equal(t, []int64{1}, outcome.Decision.CandidateAccountIDs, "互换后 w1 强 w2 弱，只有 w1 入池")
+		f.lister.update(1, compositePoolSetMapping(compositePoolWildcardMapping()))
+		f.lister.update(2, compositePoolSetMapping(compositePoolMapping(compositePoolModel)))
+		require.Equal(t, []int64{2}, f.resolveChat().Decision.CandidateAccountIDs, "再换回去，同样立即生效")
+		require.Equal(t, 1, f.lister.loadCalls())
+	})
+
+	t.Run("缓存里都是强、最新都变成弱：按弱声明层入池", func(t *testing.T) {
+		f := newCached(t, w1, w2)
+		f.lister.update(1, compositePoolSetMapping(compositePoolWildcardMapping()))
+		f.lister.update(2, compositePoolSetMapping(compositePoolWildcardMapping()))
+		outcome := f.resolveChat()
+		require.Equal(t, CompositeClaimWildcard, outcome.Tier)
+		require.Equal(t, []int64{1}, outcome.Decision.CandidateAccountIDs, "两个都是零转换，Priority 小的 w1 先")
+		decisionCtx := WithCompositeRouteDecision(context.Background(), outcome.Decision)
+		require.True(t, CompositeAccountClaimAllowed(decisionCtx, &w1, compositePoolModel))
+	})
+
+	t.Run("缓存里是强、最新是弱，另一个账号最新仍是强：只有它入池", func(t *testing.T) {
+		w3 := compositePoolAdaptive(3, PlatformZhipu, 5)
+		f := newCached(t, w1, w2, w3)
+		f.lister.update(3, compositePoolSetMapping(compositePoolWildcardMapping()))
+		f.lister.update(2, compositePoolSetMapping(compositePoolWildcardMapping()))
+		outcome := f.resolveChat()
+		require.Equal(t, CompositeClaimExplicit, outcome.Tier)
+		require.Equal(t, []int64{1}, outcome.Decision.CandidateAccountIDs)
+	})
+
+	t.Run("读取失败的账号沿用缓存里的强度参与分层", func(t *testing.T) {
+		f := newCached(t, w1, w2)
+		f.lister.update(2, compositePoolSetMapping(compositePoolWildcardMapping()))
+		f.lister.mu.Lock()
+		f.lister.byIDErr = map[int64]error{1: errors.New("redis timeout")}
+		f.lister.mu.Unlock()
+		outcome := f.resolveChat()
+		// w1 读不到，按缓存里的强声明继续压制 w2；w1 不合格，全员不合格走排序写回。
+		require.Equal(t, CompositeClaimExplicit, outcome.Tier)
+		require.Equal(t, compositeCandidatePathNoEligible, outcome.Path)
+		require.Equal(t, []int64{1}, outcome.Decision.CandidateAccountIDs)
+		require.Equal(t, "account_refresh_failed", outcome.Rejected[1])
+	})
+
+	t.Run("缓存范围外的账号新加了声明：要等缓存失效", func(t *testing.T) {
+		other := compositePoolAdaptive(3, PlatformZhipu, 1)
+		other.Credentials = map[string]any{"api_key": "sk", "api_protocol": APIProtocolAdaptive, "model_mapping": map[string]any{"other-model": "x"}}
+		f := newCached(t, w1, w2, other)
+		f.lister.update(3, compositePoolSetMapping(compositePoolMapping(compositePoolModel)))
+		require.Equal(t, []int64{1}, f.resolveChat().Decision.CandidateAccountIDs, "缓存期它没有声明，不在候选范围")
+		groupID := compositePoolGroupID
+		f.gateway.InvalidateAvailableModelsCache(&groupID, "")
+		require.Equal(t, []int64{3}, f.resolveChat().Decision.CandidateAccountIDs, "失效后立即进入候选范围")
+	})
+}
+
+// 停用期间缓存被刷新过：缓存必须包含已停用、不可调度的账号，重新启用后下一次请求即可选中，
+// 不用等缓存过期。
+func TestCompositeCandidatePoolReenabledAccountIsChosenWithoutWaitingForCache(t *testing.T) {
+	for name, disable := range map[string]func(*Account){
+		"关闭可调度开关": func(a *Account) { a.Schedulable = false },
+		"状态置为停用":  func(a *Account) { a.Status = StatusDisabled },
+		"状态置为错误":  func(a *Account) { a.Status = StatusError },
+	} {
+		t.Run(name, func(t *testing.T) {
+			off := compositePoolAdaptive(1, PlatformKimi, 10)
+			disable(&off)
+			f := newCompositePoolFixture(t, off, compositePoolAdaptive(2, PlatformDeepseek, 30))
+			f.enableConfigCache(time.Minute)
+
+			// 停用期间的请求刷新了缓存（缓存里带着已停用的账号）。
+			during := f.resolveChat()
+			require.Equal(t, []int64{2}, during.Decision.CandidateAccountIDs)
+			require.Equal(t, "not_schedulable", during.Rejected[1])
+			require.Equal(t, 1, f.lister.loadCalls())
+
+			// 重新启用后，下一次请求立即选中它，没有重新加载缓存。
+			f.lister.update(1, func(a *Account) { a.Status, a.Schedulable = StatusActive, true })
+			after := f.resolveChat()
+			require.Equal(t, []int64{1}, after.Decision.CandidateAccountIDs)
+			require.Equal(t, PlatformKimi, after.Decision.TargetPlatform)
+			require.Equal(t, 1, f.lister.loadCalls())
+		})
+	}
+}

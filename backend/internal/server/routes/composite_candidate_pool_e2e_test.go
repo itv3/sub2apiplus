@@ -70,7 +70,7 @@ func (r poolE2EAccounts) ListSchedulableByGroupID(context.Context, int64) ([]ser
 	return r.accounts, nil
 }
 
-func (r poolE2EAccounts) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]service.Account, error) {
+func (r poolE2EAccounts) ListAllWithFilters(context.Context, string, string, string, string, int64, string) ([]service.Account, error) {
 	return r.accounts, nil
 }
 

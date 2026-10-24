@@ -23,7 +23,7 @@ const (
 	compositePoolModel   = "deepseek-flash"
 )
 
-// compositePoolLister 同时扮演候选池的账号目录（配置态加载）和两套网关服务的账号仓储
+// compositePoolLister 同时扮演候选池的账号目录（配置态加载，含停用账号）和两套网关服务的账号仓储
 // （按 ID 实时读取，对应调度器终检读的来源），分别记录调用次数。
 // 测试可以随时改 accounts / byIDErr / byIDMissing，模拟账号状态在两次请求之间变化。
 type compositePoolLister struct {
@@ -38,7 +38,8 @@ type compositePoolLister struct {
 	listDelay   time.Duration
 }
 
-func (l *compositePoolLister) ListModelAvailabilityCandidates(_ context.Context, _ *int64, _ []string, _ bool) ([]Account, error) {
+// ListAllWithFilters 返回分组内的全部账号：与线上一致，不按状态、可调度开关过滤。
+func (l *compositePoolLister) ListAllWithFilters(_ context.Context, _, _, _, _ string, _ int64, _ string) ([]Account, error) {
 	l.mu.Lock()
 	l.calls++
 	delay, err := l.listDelay, l.err
