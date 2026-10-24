@@ -547,33 +547,45 @@ func TestOfficialUUIDV7LRUCacheSweepsExpiredEntriesInBoundedSteps(t *testing.T) 
 func TestOfficialUUIDV7CacheMemoryDoesNotScaleWithContent(t *testing.T) {
 	const requests = 2000
 	const textBytes = 32 * 1024
-	cache := newOfficialUUIDV7LRUCache(officialUUIDV7CacheTTL, officialUUIDV7CacheMaxEntries, time.Now)
+	// HeapAlloc 是整个进程的存活堆：同包前面用例遗留的后台协程若在窗口里留下存活对象，也会计入增长。
+	// CI 上曾读到 1609704 对上限 1536000（v0.2.17-11 发版前 main 的 CI），而真回归会增长约 65 MB。
+	// 与 testMeasureAllocatedBytes 同法：测量期间 P 数降到 1、每次用新缓存、取三次中的最小增长；
+	// 缓存条目数与估算字节数是确定性质，每次都严格断言。
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
+	growth := ^uint64(0)
+	for attempt := 0; attempt < 3; attempt++ {
+		cache := newOfficialUUIDV7LRUCache(officialUUIDV7CacheTTL, officialUUIDV7CacheMaxEntries, time.Now)
 
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	for index := 0; index < requests; index++ {
-		text := strings.Repeat("x", textBytes) + strconv.Itoa(index)
-		digest, found := digestOfficialOpenAIMessageContent(text)
-		require.True(t, found)
-		cache.resolve(
-			newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
-				WriteString("session").
-				WriteUserAnchor(officialOpenAIUserAnchor{index: index, digest: digest}, true).
-				Key(),
-		)
-	}
-	runtime.GC()
-	runtime.ReadMemStats(&after)
-	runtime.KeepAlive(cache)
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		for index := 0; index < requests; index++ {
+			text := strings.Repeat("x", textBytes) + strconv.Itoa(index)
+			digest, found := digestOfficialOpenAIMessageContent(text)
+			require.True(t, found)
+			cache.resolve(
+				newOfficialUUIDV7Seed(officialUUIDV7DomainTurn).
+					WriteString("session").
+					WriteUserAnchor(officialOpenAIUserAnchor{index: index, digest: digest}, true).
+					Key(),
+			)
+		}
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		runtime.KeepAlive(cache)
 
-	stats := cache.stats()
-	require.Equal(t, requests, stats.Entries)
-	require.Equal(t, requests*officialUUIDV7CacheEntryBytes, stats.EstimatedBytes)
+		stats := cache.stats()
+		require.Equal(t, requests, stats.Entries)
+		require.Equal(t, requests*officialUUIDV7CacheEntryBytes, stats.EstimatedBytes)
 
-	var growth uint64
-	if after.HeapAlloc > before.HeapAlloc {
-		growth = after.HeapAlloc - before.HeapAlloc
+		var attemptGrowth uint64
+		if after.HeapAlloc > before.HeapAlloc {
+			attemptGrowth = after.HeapAlloc - before.HeapAlloc
+		}
+		if attemptGrowth < growth {
+			growth = attemptGrowth
+		}
 	}
 	require.Less(
 		t,
