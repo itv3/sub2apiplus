@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -10,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -65,6 +66,7 @@ from .disposition_receipts import (
     validate_shared_contract_receipt,
 )
 from .errors import UpstreamMergeError
+from .toolchain import CI_WORKFLOW_PATH
 from .preflight_report import (
     candidate_sink_diff,
     conflict_closure,
@@ -1017,36 +1019,56 @@ SECRET_SCAN_OUTPUT_TAIL = 4000
 GATE_PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
 
 
-def _preflight_secret_scan(
-    root: Path,
-    fork_head: str,
+def _parse_secret_scan_hits(output: str) -> list[dict[str, str]]:
+    """从门禁输出里取命中清单：模板里的扫描脚本以 ``assert not hits, hits`` 失败，回溯末行是命中清单的 repr。
+
+    只含文件路径与规则，不含命中的凭据内容；解析不出（输出被截断、门禁被改写）返回空清单，调用方仍可看原始输出。
+    """
+
+    match = re.search(r"AssertionError: (\[.*\])", output, re.S)
+    if match is None:
+        return []
+    try:
+        parsed = ast.literal_eval(match.group(1))
+    except (ValueError, SyntaxError):
+        return []
+    hits: list[dict[str, str]] = []
+    for item in parsed if isinstance(parsed, list) else []:
+        if isinstance(item, tuple) and len(item) == 2 and all(isinstance(part, str) for part in item):
+            hits.append({"path": item[0], "pattern": item[1]})
+    return hits[:200]
+
+
+def _run_secret_scan_gate(
+    tree: Path,
     gates: Sequence[Any],
-    temporary_root: Path,
     env: dict[str, str],
+    *,
+    method: str,
+    source_commit: str,
+    label: str,
+    materialize: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """主干密钥扫描：执行 request 里与 U-4 同一份 ``secret_scan`` 门禁，对象是受维护分支 HEAD 的只读检出。
+    """在 ``tree`` 上执行 request／plan 里唯一的 ``secret_scan`` 门禁：预检与候选扫描共用这一份实现。
 
     * 门禁取自 ``gates`` 中 ``category == "secret_scan"`` 的条目，必须恰好一个，且 ``mode`` 为 command。
-    * 在 ``temporary_root`` 下另建 detached worktree 检出 ``fork_head`` 来扫，不扫主仓库工作树本身——
-      否则会扫到未提交的改动；``{repository}``、``{source_repository}`` 都渲染成该检出路径，渲染后仍有
-      其他占位符就不执行；``cwd`` 沿用 gates-run 的安全规则（``_gate_cwd``）。
-    * 用传入的离线环境执行，结束后在 ``finally`` 里移除该 worktree。
-    * 任何异常都转成 failed 项返回，不向外抛出：预检要把问题写进报告并阻断，而不是中途崩溃。
+    * ``{repository}``、``{source_repository}`` 都渲染成 ``tree``，渲染后仍有其他占位符就不执行；
+      ``cwd`` 沿用 gates-run 的安全规则（``_gate_cwd``）。
+    * ``materialize`` 在静态校验通过之后、解析 cwd 之前调用，供预检在此时才建只读检出（``tree`` 此前可以不存在）。
+    * 任何异常都转成 failed 项返回，不向外抛出：调用方要把问题写进报告并阻断，而不是中途崩溃。
 
     返回 ``status``（passed／failed）、``method``、``gate_id``、``source_commit``、``exit_code``（没跑出
-    结论记 None）；门禁非零退出时另有 ``output``（stdout 加 stderr 的末尾 4000 字符），没跑出结论
-    （缺门禁、占位符未解析、执行异常等）时另有 ``reason``。
+    结论记 None）；门禁非零退出时另有 ``output``（stdout 加 stderr 的末尾 4000 字符）与解析出的 ``hits``，
+    没跑出结论（缺门禁、占位符未解析、执行异常等）时另有 ``reason``。
     """
 
     report: dict[str, Any] = {
         "status": "failed",
-        "method": SECRET_SCAN_METHOD,
+        "method": method,
         "gate_id": None,
-        "source_commit": fork_head,
+        "source_commit": source_commit,
         "exit_code": None,
     }
-    checkout = temporary_root / "secret-scan-checkout"
-    checkout_requested = False
     try:
         matched = [gate for gate in gates if isinstance(gate, dict) and gate.get("category") == SECRET_SCAN_CATEGORY]
         if len(matched) != 1:
@@ -1071,32 +1093,70 @@ def _preflight_secret_scan(
             return report
 
         def render(value: str) -> str:
-            return value.replace("{repository}", str(checkout)).replace("{source_repository}", str(checkout))
+            return value.replace("{repository}", str(tree)).replace("{source_repository}", str(tree))
 
         argv = [render(item) for item in raw_argv]
         cwd_text = render(raw_cwd)
         leftover = sorted({match for text in (*argv, cwd_text) for match in GATE_PLACEHOLDER_RE.findall(text)})
         if leftover:
-            report["reason"] = f"{SECRET_SCAN_CATEGORY} 门禁渲染后仍有未解析的占位符 {leftover}，预检不执行"
+            report["reason"] = f"{SECRET_SCAN_CATEGORY} 门禁渲染后仍有未解析的占位符 {leftover}，不执行"
             return report
         if cwd_text != ".":
             # 先校验 cwd 的写法（只能是根内相对路径），不合格就不必另建检出。
             safe_relative_path(cwd_text, f"{SECRET_SCAN_CATEGORY} 门禁 cwd")
 
-        # 先标记再建检出：worktree add 中途失败也要在 finally 里清理可能的残留（没有残留时 remove 失败被忽略）。
-        checkout_requested = True
-        run_git(root, "worktree", "add", "--detach", str(checkout), fork_head)
-        completed = run_process(argv, cwd=_gate_cwd(checkout, cwd_text), check=False, env=env)
+        if materialize is not None:
+            materialize()
+        completed = run_process(argv, cwd=_gate_cwd(tree, cwd_text), check=False, env=env)
         report["exit_code"] = completed.returncode
         if completed.returncode == 0:
             report["status"] = "passed"
         else:
-            report["output"] = (completed.stdout + completed.stderr)[-SECRET_SCAN_OUTPUT_TAIL:]
+            combined = completed.stdout + completed.stderr
+            report["output"] = combined[-SECRET_SCAN_OUTPUT_TAIL:]
+            hits = _parse_secret_scan_hits(combined)
+            if hits:
+                report["hits"] = hits
         return report
-    except Exception as error:  # noqa: BLE001 - 预检必须成项：任何异常都写进报告并阻断，不向外抛出
+    except Exception as error:  # noqa: BLE001 - 必须成项：任何异常都写进报告并阻断，不向外抛出
         report["status"] = "failed"
-        report["reason"] = f"主干密钥扫描没有跑出结论：{type(error).__name__}：{error}"
+        report["reason"] = f"{label}没有跑出结论：{type(error).__name__}：{error}"
         return report
+
+
+def _preflight_secret_scan(
+    root: Path,
+    fork_head: str,
+    gates: Sequence[Any],
+    temporary_root: Path,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    """主干密钥扫描：执行 request 里与 U-4 同一份 ``secret_scan`` 门禁，对象是受维护分支 HEAD 的只读检出。
+
+    在 ``temporary_root`` 下另建 detached worktree 检出 ``fork_head`` 来扫，不扫主仓库工作树本身——
+    否则会扫到未提交的改动；门禁的选取、渲染与执行见 ``_run_secret_scan_gate``。结束后在 ``finally`` 里
+    移除该 worktree。返回值结构见 ``_run_secret_scan_gate``。
+    """
+
+    checkout = temporary_root / "secret-scan-checkout"
+    checkout_requested = False
+
+    def materialize() -> None:
+        # 先标记再建检出：worktree add 中途失败也要在 finally 里清理可能的残留（没有残留时 remove 失败被忽略）。
+        nonlocal checkout_requested
+        checkout_requested = True
+        run_git(root, "worktree", "add", "--detach", str(checkout), fork_head)
+
+    try:
+        return _run_secret_scan_gate(
+            checkout,
+            gates,
+            env,
+            method=SECRET_SCAN_METHOD,
+            source_commit=fork_head,
+            label="主干密钥扫描",
+            materialize=materialize,
+        )
     finally:
         if checkout_requested:
             try:
@@ -1104,6 +1164,59 @@ def _preflight_secret_scan(
             except OSError:
                 # 清理失败不改变扫描结论：run_preflight 收尾时还会 worktree prune，并整个删除临时目录。
                 pass
+
+
+CANDIDATE_SECRET_SCAN_SCHEMA = "official-egress-upstream-candidate-secret-scan/v1"
+CANDIDATE_SECRET_SCAN_METHOD = (
+    "与 U-4 同一份 secret_scan 门禁定义（含精确摘要白名单），直接对候选工作树执行；"
+    "在 make upstream-gate-full 与 gates-run 之前跑，命中即阻断，不等约 47 分钟的全量之后才暴露"
+)
+
+
+def scan_candidate_secrets(
+    tree: Path,
+    gates: Sequence[Any],
+    *,
+    env: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """候选密钥扫描：规则与摘要白名单同 U-4，对象是候选工作树本身（试验 worktree 或 Plan 的执行树）。
+
+    ``gates`` 取自 request 或 plan 的 ``gates``。返回 ``result``（passed／blocked）与命中清单；没跑出结论
+    同样记 blocked（不把“没扫成”当作通过）。不要求工作树干净——扫描对象是工作树里已跟踪文件的当前内容，
+    未提交的内容只记入 ``worktree_status_paths`` 供参考。
+    """
+
+    root = assert_git_repository(tree)
+    source_commit = rev_parse(root, "HEAD^{commit}")
+    scan_env = env if env is not None else {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    scan = _run_secret_scan_gate(
+        root,
+        gates,
+        scan_env,
+        method=CANDIDATE_SECRET_SCAN_METHOD,
+        source_commit=source_commit,
+        label="候选密钥扫描",
+    )
+    blockers: list[str] = []
+    if scan["status"] != "passed":
+        label = scan.get("gate_id") or SECRET_SCAN_CATEGORY
+        if scan.get("reason"):
+            blockers.append(f"候选密钥扫描没有跑出结论（与 U-4 {label} 同一门禁）：{scan['reason']}")
+        else:
+            listed = "；".join(f"{item['path']}（{item['pattern']}）" for item in scan.get("hits", [])[:20])
+            blockers.append(
+                f"候选密钥扫描命中（与 U-4 {label} 同一门禁，退出码 {scan['exit_code']}）："
+                + (listed or "命中清单见 output")
+            )
+    return {
+        "schema_version": CANDIDATE_SECRET_SCAN_SCHEMA,
+        "repository": str(root),
+        "source_commit": source_commit,
+        "worktree_status_paths": status_paths(root),
+        "scan": scan,
+        "blockers": blockers,
+        "result": "passed" if scan["status"] == "passed" else "blocked",
+    }
 
 
 def run_preflight(
@@ -3943,7 +4056,8 @@ RUNNER_STEP_FIELDS = {"lane", "step", "status", "exit_code", "duration_seconds",
 RUNNER_STEP_STATUSES = {"passed", "failed", "not_executed"}
 # 本机未执行、可由同一候选提交的 CI 证据补齐的检查闭集；其余未执行一律拒绝。
 CI_COVERABLE_CHECKS = frozenset({"go-tests/go-test-integration"})
-CI_WORKFLOW_PATH = ".github/workflows/backend-ci.yml"
+# attempt 目录里的运行标记文件名（不进入收据绑定）。
+ATTEMPT_RUN_MARKER = "gates-run.pid.json"
 CI_REQUIRED_JOBS = (
     "capture-tools (1)",
     "capture-tools (2)",
@@ -4163,6 +4277,21 @@ def _gate_groups(plan: LoadedPlan) -> dict[str, list[dict[str, Any]]]:
                 + ",".join(item["id"] for item in values)
             )
     return groups
+
+
+# 执行组的执行顺序：便宜的组在前、约 47 分钟的全量压轴。v0.2.17 合并时密钥扫描排在全量之后（按组名字母序），
+# 全量跑完才发现扫描失败，白跑一轮。仍然完整执行全部组（skipped_gate_count 恒为 0），只调整先后。
+GATE_GROUP_EARLY = ("secret-scan", "inventory-closure")
+GATE_GROUP_LATE = ("full-regression",)
+
+
+def _ordered_group_names(groups: dict[str, list[dict[str, Any]]]) -> list[str]:
+    """先跑已知便宜的组，其余按组名排序，全量回归最后。"""
+
+    early = [name for name in GATE_GROUP_EARLY if name in groups]
+    late = [name for name in GATE_GROUP_LATE if name in groups]
+    middle = sorted(set(groups) - set(early) - set(late))
+    return [*early, *middle, *late]
 
 
 def _gate_ids_from_selector(
@@ -4428,11 +4557,17 @@ def _run_verification_gates_in_worktree(
     # 所有输入和复用关系都通过校验后才创建目录；参数错误不会留下伪 attempt。
     attempt_root.mkdir(parents=True, mode=0o700)
     attempt_root.chmod(0o700)
+    # 运行标记：进程号与开始时间。attempt 目录里没有 receipt.json 时，gates-status 据此区分“仍在运行”和
+    # “被杀／崩溃留下的半截目录”；收据成文后以收据为准。
+    write_json_once(
+        attempt_root / ATTEMPT_RUN_MARKER,
+        {"pid": os.getpid(), "started_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")},
+    )
 
     results_by_id: dict[str, dict[str, Any]] = {}
     executed_groups = 0
     reused_gate_count = 0
-    for group_name in sorted(groups):
+    for group_name in _ordered_group_names(groups):
         group = groups[group_name]
         leader = group[0]
         if group_name not in selected_groups:

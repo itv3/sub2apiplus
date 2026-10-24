@@ -211,6 +211,10 @@ jobs:
 
   golangci-lint:
     runs-on: ubuntu-latest
+    env:
+      # golangci-lint 版本的唯一定义点：下面默认、unit、integration 三个步骤都引用它，不得再写字面版本。
+      # 上游改 lint 版本时，合并解决冲突改的是这一行（tools/upstream_merge/toolchain.py 的用例会校验）。
+      GOLANGCI_LINT_VERSION: v2.14.0
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -225,7 +229,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.14.0
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=30m
           working-directory: backend
       # test job 用 -tags=unit、-tags=integration 编译测试，不带标签的 lint 看不到这两类
@@ -233,14 +237,14 @@ jobs:
       - name: golangci-lint (unit)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.14.0
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=30m --build-tags=unit
           working-directory: backend
           skip-save-cache: true
       - name: golangci-lint (integration)
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.14.0
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=30m --build-tags=integration
           working-directory: backend
           skip-save-cache: true

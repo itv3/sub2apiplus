@@ -14,7 +14,8 @@
 
 - ``egress-spec``：``make -k check-egress-spec``，已含 test-official-client-control 与
   test-upstream-merge-tools；``-k`` 让互不依赖的子目标在前一个失败后继续执行。约 1.5 分钟。
-- ``lint``：golangci-lint 默认、unit、integration 三种标签依次执行，与 CI 的覆盖一致。
+- ``lint``：golangci-lint 默认、unit、integration 三种标签依次执行，与 CI 的覆盖一致；设置了
+  ``UPSTREAM_GATE_GOLANGCI_LINT``（绝对路径）就用该二进制，与开工检查核对的是同一份。
 - ``frontend``：lint:check、typecheck、关键 vitest 依次执行。
 - ``capture-tools``：先跑分片闭合自检（``make test-capture-tools-shard-check``，与 CI 的 4 片作业
   同一份权重表，陈旧条目在本机就暴露），再跑全量（``make test-capture-tools``）：统一调度执行器
@@ -61,6 +62,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+
+from .toolchain import LINT_BINARY_ENV
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CODEX_SOURCE_ROOT = REPOSITORY_ROOT / "local-analysis" / "sources" / "codex-cli-0.149.1"
@@ -140,7 +143,10 @@ def _go_test_step(tag: str) -> Step:
 
 
 def _lint_step(tag: str) -> Step:
-    argv = ["golangci-lint", "run"]
+    # 与开工检查（toolchain-check／gates-run 启动前核对）用同一个二进制：设置了 UPSTREAM_GATE_GOLANGCI_LINT
+    # 就用它，否则取 PATH 里的 golangci-lint，避免“核对的是一份、实际跑的是另一份”。
+    binary = os.environ.get(LINT_BINARY_ENV, "").strip() or "golangci-lint"
+    argv = [binary, "run"]
     if tag:
         argv.append(f"--build-tags={tag}")
     argv.append("./...")

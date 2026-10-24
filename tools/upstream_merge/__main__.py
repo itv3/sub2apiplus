@@ -16,6 +16,12 @@ from .contracts import create_plan, load_plan
 from .disposition_draft import DISPOSITION_PURPOSES, draft_candidate_disposition, parse_campaigns
 from .errors import UpstreamMergeError
 from .freeze import generate_freeze_successor
+from .gate_guard import (
+    attempt_status,
+    candidate_secret_scan_from_request,
+    record_failure_disposition,
+    run_gates_with_prechecks,
+)
 from .gitops import assert_private_path, git_output
 from .plan_inputs import AWAITING_MANUAL_INPUT
 from .conflict_rationale import conflict_input_from_rationale, draft_conflict_rationale
@@ -37,7 +43,6 @@ from .workflow import (
     push_candidate_for_ci,
     replay_upstream_merge,
     preflight_revisions,
-    run_verification_gates,
     run_preflight,
     scan_surfaces,
     seal_candidate_disposition,
@@ -50,6 +55,21 @@ from .workflow import (
     start_merge,
 )
 
+
+# 退出码：0 成功；2 工具拒绝；3 系统错误；4 停在人工输入；5 检查／门禁结论为 blocked（结果照常输出）；
+# 6 gates-status 读到的 attempt 尚未结束（running／incomplete，结果照常输出）。
+BLOCKED_EXIT_CODE = 5
+UNFINISHED_EXIT_CODE = 6
+# 命令 → {结论: 退出码}：结论与退出码一致，监视脚本与 CI 不必解析输出也能判断。
+RESULT_EXIT_CODES: dict[str, dict[str, int]] = {
+    "candidate-secret-scan": {"blocked": BLOCKED_EXIT_CODE},
+    "gates-run": {"blocked": BLOCKED_EXIT_CODE},
+    "gates-status": {
+        "blocked": BLOCKED_EXIT_CODE,
+        "running": UNFINISHED_EXIT_CODE,
+        "incomplete": UNFINISHED_EXIT_CODE,
+    },
+}
 
 TIMING_LEDGER_SCHEMA = "official-egress-upstream-timing-ledger/v1"
 TIMING_LEDGER_NAME = "timing-ledger.jsonl"
@@ -328,6 +348,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="要复核的 source-transition 链尾；可重复指定",
     )
 
+    secret_scan = commands.add_parser(
+        "candidate-secret-scan",
+        help="候选密钥扫描：与 U-4 同一份 secret_scan 门禁，对候选工作树先跑一遍（在 make upstream-gate-full 之前）",
+    )
+    _add_repository(secret_scan)
+    secret_scan.add_argument("--request", required=True, type=_absolute, help="request.json；门禁取自其中的 gates")
+
     gates = commands.add_parser("gates-run", help="U-4 执行全部固定门禁并生成 attempt 收据")
     _add_plan(gates)
     gates.add_argument("--attempt-id", required=True)
@@ -339,6 +366,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--from-attempt",
         help="上一 attempt 的安全标识、目录或 evidence root 内的 receipt.json",
     )
+
+    gates_status = commands.add_parser(
+        "gates-status",
+        help="只读读取 attempt 收据结论并输出 U4-RESULT 一行；没有收据时报 running 或 incomplete（监视脚本据此判断）",
+    )
+    _add_plan(gates_status)
+    gates_status.add_argument("--attempt-id", help="要读取的 attempt；省略时取最新的一个")
+
+    disposition_failure = commands.add_parser(
+        "failure-disposition",
+        help="U-4 重跑前逐项处置失败 attempt 的失败项：记录原因、修复动作、类别，并由工具真实执行定向复验",
+    )
+    _add_plan(disposition_failure)
+    disposition_failure.add_argument("--attempt-id", required=True, help="失败（blocked）的 attempt")
+    disposition_failure.add_argument("--input", required=True, type=_absolute, help="处置输入 JSON：每个失败项的原因、动作、类别与复验命令")
 
     ci_push = commands.add_parser(
         "ci-push",
@@ -637,6 +679,8 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             max_attempts=arguments.max_attempts,
             push=not arguments.no_push,
         )
+    if command == "candidate-secret-scan":
+        return candidate_secret_scan_from_request(arguments.request, arguments.repository)
     if command == "identity-seal":
         draft = expect_object(load_json(arguments.input, "identity draft"), "identity draft")
         if "identity_sha256" in draft:
@@ -720,12 +764,22 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
         # 门禁输出边跑边写进 attempt 目录（UM-19）；全量门禁约 16 分钟，运行中据此查看进度。
         attempt_root = plan.evidence_root / plan.output_relative("gate_attempts_root") / arguments.attempt_id
         print(f"门禁输出实时写入 {attempt_root}/<执行组>.stdout.txt，运行中可用 tail -f 查看", file=sys.stderr, flush=True)
-        return run_verification_gates(
+        document = run_gates_with_prechecks(
             plan,
             arguments.attempt_id,
             only=arguments.only,
             from_attempt=arguments.from_attempt,
         )
+        # 固定格式的结论行：监视脚本读它（或 gates-status），不再只看进度行；退出码与它一致（blocked 非 0）。
+        status = attempt_status(plan, arguments.attempt_id)
+        print(status["line"], file=sys.stderr, flush=True)
+        return document
+    if command == "gates-status":
+        status = attempt_status(plan, arguments.attempt_id)
+        print(status["line"], file=sys.stderr, flush=True)
+        return status
+    if command == "failure-disposition":
+        return record_failure_disposition(plan, arguments.attempt_id, arguments.input)
     if command == "ci-push":
         return push_candidate_for_ci(plan, remote=arguments.remote)
     if command == "gates-import-ci":
@@ -782,6 +836,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if isinstance(result, dict) and result.get("result") == AWAITING_MANUAL_INPUT:
             # 停在人工输入：已完成的步骤保留，结果照常输出，退出码 4 让脚本不会误以为已完成。
             status, exit_code = "awaiting_input", 4
+        elif isinstance(result, dict) and result.get("result") in RESULT_EXIT_CODES.get(arguments.command, {}):
+            # 检查或门禁的结论是 blocked／未结束：结果照常输出，退出码与结论一致。
+            exit_code = RESULT_EXIT_CODES[arguments.command][result["result"]]
+            status = str(result["result"])
     except UpstreamMergeError as error:
         status, error_text, exit_code = "rejected", str(error), 2
         print(f"上游合并工具拒绝：{error}", file=sys.stderr)
@@ -804,7 +862,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"时间账本写入失败：{error}", file=sys.stderr)
             if exit_code == 0:
                 exit_code = 3
-    if exit_code in (0, 4) and result is not None:
+    if exit_code in (0, 4, BLOCKED_EXIT_CODE, UNFINISHED_EXIT_CODE) and result is not None:
         sys.stdout.buffer.write(canonical_bytes(result))
     return exit_code
 

@@ -14,6 +14,7 @@
     {"$ref": "#/$defs/changeDecisionReceipt"},
     {"$ref": "#/$defs/changeDecisionInput"},
     {"$ref": "#/$defs/verificationReceipt"},
+    {"$ref": "#/$defs/failureDisposition"},
     {"$ref": "#/$defs/clientGateReceipt"},
     {"$ref": "#/$defs/preflight"},
     {"$ref": "#/$defs/sourceTransition"},
@@ -650,6 +651,82 @@
         "jobs_document": {"$ref": "#/$defs/binding"},
         "test_job_log": {"$ref": "#/$defs/binding"},
         "covers": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "failureDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "U-4 重跑前对上一 blocked attempt 全部失败项的处置记录：每项的原因、修复动作、类别，以及由工具在候选 worktree 真实执行的定向复验（退出码、耗时、日志绑定）。只写一次，绑定处置时的 SourceCandidate 提交",
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "disposition_id", "failed_attempt", "source_candidate", "source_commit", "input", "items", "covered_failure_ids", "toolchain", "issued_at_utc", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-failure-disposition/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "disposition_id": {"type": "string", "pattern": "^disposition-[0-9]{3}$"},
+        "failed_attempt": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attempt_id", "receipt", "result", "failed_gate_ids", "source_commit"],
+          "properties": {
+            "attempt_id": {"type": "string", "minLength": 1},
+            "receipt": {"$ref": "#/$defs/binding"},
+            "result": {"const": "blocked"},
+            "failed_gate_ids": {"type": "array", "items": {"type": "string"}},
+            "source_commit": {"$ref": "#/$defs/gitObject", "description": "失败 attempt 绑定的 SourceCandidate 提交"}
+          }
+        },
+        "source_candidate": {"$ref": "#/$defs/binding", "description": "处置时的当前 SourceCandidate"},
+        "source_commit": {"$ref": "#/$defs/gitObject", "description": "处置时的当前 SourceCandidate 提交；候选再推进后本记录不再有效"},
+        "input": {"$ref": "#/$defs/binding"},
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["failure_id", "kind", "gate_group", "gate_ids", "runner_step", "category", "cause", "fix", "category_checks", "retests", "status"],
+            "properties": {
+              "failure_id": {"type": "string", "minLength": 1, "description": "<执行组>/<检查线>/<步骤>，无步骤信息时为执行组名，污染候选树为 worktree-status"},
+              "kind": {"enum": ["group_step", "group", "worktree"]},
+              "gate_group": {"type": ["string", "null"]},
+              "gate_ids": {"type": "array", "items": {"type": "string"}},
+              "runner_step": {"type": ["string", "null"]},
+              "category": {"enum": ["environment", "frozen_digest", "functional"]},
+              "cause": {"type": "string", "minLength": 1},
+              "fix": {"type": "string", "minLength": 1},
+              "category_checks": {"type": "object"},
+              "retests": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["argv", "cwd", "timeout_seconds", "exit_code", "timed_out", "duration_ms", "started_at_utc", "status", "stdout", "stderr", "stdout_tail", "stderr_tail"],
+                  "properties": {
+                    "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+                    "cwd": {"type": "string"},
+                    "timeout_seconds": {"type": "integer", "minimum": 1},
+                    "exit_code": {"const": 0},
+                    "timed_out": {"const": false},
+                    "duration_ms": {"type": "integer", "minimum": 0},
+                    "started_at_utc": {"type": "string"},
+                    "status": {"const": "passed"},
+                    "stdout": {"$ref": "#/$defs/binding"},
+                    "stderr": {"$ref": "#/$defs/binding"},
+                    "stdout_tail": {"type": "string"},
+                    "stderr_tail": {"type": "string"}
+                  }
+                }
+              },
+              "status": {"const": "closed"}
+            }
+          }
+        },
+        "covered_failure_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "toolchain": {"type": ["object", "null"], "description": "存在环境／工具类失败项时记录处置时的版本核对结果"},
+        "issued_at_utc": {"type": "string"},
+        "result": {"const": "closed"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "componentMapping": {

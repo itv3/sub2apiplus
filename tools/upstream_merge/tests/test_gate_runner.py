@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.upstream_merge import gate_runner
 from tools.upstream_merge.gate_runner import Lane, Step, build_lanes, run_lanes
@@ -22,6 +23,18 @@ def python_step(name: str, code: str) -> Step:
 class BuildLanesTest(unittest.TestCase):
     """检查线必须覆盖旧 full-regression 命令的全部检查，且不丢任何一组标签。"""
 
+    def test_lint_steps_follow_explicit_binary_from_environment(self) -> None:
+        # 开工检查核对的是 UPSTREAM_GATE_GOLANGCI_LINT 指向的那份 lint，门禁实际跑的必须是同一份。
+        with mock.patch.dict(os.environ, {"UPSTREAM_GATE_GOLANGCI_LINT": "/opt/pinned/golangci-lint"}):
+            lanes = build_lanes("backend", Path("/src/codex"))
+        lint = next(lane for lane in lanes if lane.name == "lint")
+        self.assertEqual({step.argv[0] for step in lint.steps}, {"/opt/pinned/golangci-lint"})
+        self.assertEqual(
+            [step.argv[1:] for step in lint.steps],
+            [("run", "./..."), ("run", "--build-tags=unit", "./..."), ("run", "--build-tags=integration", "./...")],
+        )
+
+    @mock.patch.dict(os.environ, {"UPSTREAM_GATE_GOLANGCI_LINT": ""})
     def test_full_mode_covers_old_full_regression(self) -> None:
         lanes = build_lanes("full", Path("/src/codex"))
         # 按预计耗时从短到长（UM-19）：出站规格最常报红放最前，go test 最慢放最后。
