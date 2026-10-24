@@ -3388,6 +3388,16 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if result == nil {
 					return
 				}
+				if result.LocallyAnswered {
+					// 网关本地合成的应答（无状态桥接平台的 generate=false 预热帧）没有访问上游：
+					// 不结算用量、不计费，也不能给账号记一次调度成功样本。槽位与正文引用已在上面释放。
+					reqLog.Debug("openai.websocket_turn_locally_answered",
+						zap.Int("turn", turn),
+						zap.Int64("account_id", account.ID),
+						zap.String("request_id", result.RequestID),
+					)
+					return
+				}
 				result.BillingModel = openAIWSTurnBillingModel(result, turnMapping, turnRequestedModel, turnUpstreamModel)
 				reqLog.Debug("openai.websocket_turn_billing",
 					zap.Int("turn", turn),

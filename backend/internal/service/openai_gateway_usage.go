@@ -356,6 +356,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			requestID = stable
 		}
 	}
+	// WS 轮次的 request_id 取上游响应 ID，第三方上游的 ID 可能超过 usage_logs.request_id 的列宽，
+	// 原样写入会让整条用量记录丢失；这里统一收敛到列宽以内（见 capUsageLogRequestID）。
+	uncappedRequestID := requestID
+	requestID = capUsageLogRequestID(uncappedRequestID)
 
 	// 确定 RequestedModel（渠道映射前的原始模型）
 	requestedModel := result.Model
@@ -443,6 +447,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		usageLog.RequestType = RequestTypeCyberBlocked
 	}
 	usageLog.OpenAIWSMode = result.OpenAIWSMode
+	if usageLog.UpstreamRequestID == nil {
+		// request_id 因超长被收敛时，完整的原始 ID 另存 upstream_request_id，保证可按原 ID 追溯。
+		usageLog.UpstreamRequestID = usageUpstreamRequestIDForCappedRequestID(uncappedRequestID, requestID)
+	}
 	usageLog.DurationMs = &durationMs
 	usageLog.FirstTokenMs = result.FirstTokenMs
 	usageLog.CreatedAt = time.Now()

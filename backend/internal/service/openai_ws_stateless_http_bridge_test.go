@@ -418,7 +418,8 @@ func TestStatelessBridgeKeepsFullContextAcrossIncrementalTurns(t *testing.T) {
 			require.True(t, strings.HasSuffix(session.upstream.lastReq.URL.Path, "/responses"), session.upstream.lastReq.URL.String())
 			require.Equal(t, "Bearer upstream-api-key", session.upstream.lastReq.Header.Get("Authorization"))
 
-			// 用量回调：预热轮次也产生一次零用量回调；真实轮次带上游响应 ID 与用量。
+			// AfterTurn 回调：预热轮次仍回调一次（释放并发槽位与正文引用），但结果带 LocallyAnswered 标记，
+			// 处理器据此不结算用量、不计费、不上报调度结果；真实轮次不带标记，带上游响应 ID 与用量。
 			turns := session.turns()
 			require.Len(t, turns, 4)
 			for i, turn := range turns {
@@ -426,6 +427,7 @@ func TestStatelessBridgeKeepsFullContextAcrossIncrementalTurns(t *testing.T) {
 				require.NoError(t, turn.err)
 				require.NotNil(t, turn.result)
 				require.True(t, turn.result.OpenAIWSMode)
+				require.Equal(t, i == 0, turn.result.LocallyAnswered, "turn %d：只有本地合成的预热轮次带标记", turn.turn)
 			}
 			require.True(t, strings.HasPrefix(turns[0].result.RequestID, "resp_bridge_warmup_"))
 			require.Zero(t, turns[0].result.Usage.InputTokens+turns[0].result.Usage.OutputTokens)
@@ -632,6 +634,14 @@ func TestGrokBridgeKeepsLegacyReplayAndSkipsStatelessBranches(t *testing.T) {
 	require.Equal(t, "response.completed", gjson.GetBytes(next[len(next)-1], "type").String())
 	require.NoError(t, session.finish())
 	require.Len(t, session.upstream.bodies, 2)
+
+	// Grok 的 generate=false 帧真的发给了上游：结果不带本地应答标记，用量照常结算。
+	turns := session.turns()
+	require.Len(t, turns, 2)
+	for _, turn := range turns {
+		require.NotNil(t, turn.result)
+		require.False(t, turn.result.LocallyAnswered, "turn %d", turn.turn)
+	}
 
 	// 历史只收工具调用项：助手文本、推理项不并入（既有行为，不属于本次范围）。
 	input := gjson.GetBytes(session.upstream.bodies[1], "input").Array()

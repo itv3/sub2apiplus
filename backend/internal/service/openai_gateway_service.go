@@ -275,6 +275,11 @@ type OpenAIForwardResult struct {
 	RequestedReasoningEffort *string
 	Stream                   bool
 	OpenAIWSMode             bool
+	// LocallyAnswered 标记「网关本地合成应答、没有访问上游」的轮次（目前只有无状态桥接平台的
+	// generate=false 预热帧）。这类轮次没有任何上游消耗，也不是上游的一次成功样本：AfterTurn 的
+	// 处理器据此跳过用量结算、计费与调度结果上报，使用记录里不会出现无意义的零用量记录。
+	// 真的发给了上游的预热（原生 openai WS、Grok 桥接）不带此标记，结算照旧。
+	LocallyAnswered bool
 	// UpstreamTerminalEvent is the normalized terminal event observed on an
 	// upstream Responses WebSocket turn. Empty preserves legacy/non-WS success.
 	UpstreamTerminalEvent string

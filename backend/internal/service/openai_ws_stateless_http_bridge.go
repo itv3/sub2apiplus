@@ -199,7 +199,8 @@ func buildOpenAIWSBridgeWarmupEvents(responseID, model string, createdAt int64) 
 }
 
 // answerOpenAIWSBridgeWarmupTurn 在本地应答一个预热帧，不访问上游。
-// 返回的结果用量为零，交给调用方走与普通轮次相同的收尾（用量记录、重放历史、读取下一帧）。
+// 返回的结果带 LocallyAnswered 标记，调用方仍走与普通轮次相同的收尾（重放历史、读取下一帧、
+// AfterTurn 释放并发槽位与正文引用），但处理器据标记不结算用量、不计费、不上报调度结果。
 func answerOpenAIWSBridgeWarmupTurn(
 	originalModel string,
 	upstreamModel string,
@@ -222,6 +223,7 @@ func answerOpenAIWSBridgeWarmupTurn(
 		UpstreamModel:         upstreamModel,
 		Stream:                true,
 		OpenAIWSMode:          true,
+		LocallyAnswered:       true,
 		UpstreamTerminalEvent: "response.completed",
 		Duration:              time.Since(turnStart),
 	}, nil

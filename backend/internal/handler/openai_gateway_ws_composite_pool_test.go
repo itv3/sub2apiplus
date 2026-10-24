@@ -78,6 +78,16 @@ type compositePoolUpstream struct {
 	calls  []compositePoolUpstreamCall
 	frames [][]byte
 	count  int
+	// longResponseIDs 为真时，HTTP 应答的响应 ID 超过 64 个字符（Command Code 的真实形态）。
+	longResponseIDs bool
+}
+
+func (u *compositePoolUpstream) responseID(n int) string {
+	id := fmt.Sprintf("resp_pool_%d", n)
+	if u.longResponseIDs {
+		id += "_" + strings.Repeat("L", 90)
+	}
+	return id
 }
 
 func newCompositePoolUpstream(t *testing.T) *compositePoolUpstream {
@@ -106,12 +116,13 @@ func (u *compositePoolUpstream) serve(w http.ResponseWriter, r *http.Request) {
 	u.mu.Unlock()
 
 	n := u.nextResponseNumber()
+	responseID := u.responseID(n)
 	message := fmt.Sprintf(`{"type":"message","id":"msg_pool_%d","role":"assistant","status":"completed","content":[{"type":"output_text","text":"answer-%d"}]}`, n, n)
 	w.Header().Set("Content-Type", "text/event-stream")
 	events := []string{
-		fmt.Sprintf(`{"type":"response.created","response":{"id":"resp_pool_%d","model":"deepseek-v4-flash"}}`, n),
+		fmt.Sprintf(`{"type":"response.created","response":{"id":%q,"model":"deepseek-v4-flash"}}`, responseID),
 		`{"type":"response.output_item.done","item":` + message + `}`,
-		fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_pool_%d","model":"deepseek-v4-flash","output":[%s],"usage":{"input_tokens":4,"output_tokens":2}}}`, n, message),
+		fmt.Sprintf(`{"type":"response.completed","response":{"id":%q,"model":"deepseek-v4-flash","output":[%s],"usage":{"input_tokens":4,"output_tokens":2}}}`, responseID, message),
 	}
 	for _, event := range events {
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", event)
@@ -201,6 +212,21 @@ func compositePoolOpenAI(id int64, priority int, base string) service.Account {
 	}
 }
 
+// compositePoolUsageRepo 模拟 usage_logs.request_id 的 varchar(64) 列宽：超长就像真实数据库那样报错，
+// 整条用量记录写不进去；写入成功的记录送入 created 通道。
+type compositePoolUsageRepo struct {
+	service.UsageLogRepository
+	created chan *service.UsageLog
+}
+
+func (r *compositePoolUsageRepo) Create(_ context.Context, log *service.UsageLog) (bool, error) {
+	if len(log.RequestID) > 64 {
+		return false, fmt.Errorf("pq: value too long for type character varying(64): request_id=%s", log.RequestID)
+	}
+	r.created <- log
+	return true, nil
+}
+
 // compositePoolWSEnv 是一套完整的处理器环境，调用方只需要写帧、读事件。
 type compositePoolWSEnv struct {
 	t        *testing.T
@@ -211,11 +237,14 @@ type compositePoolWSEnv struct {
 
 // startCompositePoolWS 启动处理器并建立客户端连接。withPool=false 时解析器不带候选池，
 // 用于复现改动前「跨平台同名模型判歧义」的旧流程。
-func startCompositePoolWS(t *testing.T, group *service.Group, withPool bool, accounts func(base string) []service.Account) *compositePoolWSEnv {
+func startCompositePoolWS(t *testing.T, group *service.Group, withPool bool, accounts func(base string) []service.Account, upstreamOpts ...func(*compositePoolUpstream)) *compositePoolWSEnv {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	upstream := newCompositePoolUpstream(t)
+	for _, opt := range upstreamOpts {
+		opt(upstream)
+	}
 	repo := &compositePoolWSAccountRepo{accounts: accounts(upstream.server.URL)}
 
 	cfg := &config.Config{}
@@ -231,7 +260,7 @@ func startCompositePoolWS(t *testing.T, group *service.Group, withPool bool, acc
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 
-	usageRepo := &openAIWSUsageHandlerUsageLogRepoStub{created: make(chan *service.UsageLog, 16)}
+	usageRepo := &compositePoolUsageRepo{created: make(chan *service.UsageLog, 16)}
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingCacheSvc.Stop)
 	gatewaySvc := service.NewOpenAIGatewayService(
@@ -340,6 +369,17 @@ func (e *compositePoolWSEnv) usageLogs(n int) []*service.UsageLog {
 		}
 	}
 	return logs
+}
+
+// expectNoMoreUsageLogs 断言在一小段时间内不再出现新的用量记录。用量记录由 worker 异步写入，
+// 调用方应先收齐预期的记录，再调用本函数，这样任何多余的记录（排在已收到的记录之前提交的除外）都会被抓到。
+func (e *compositePoolWSEnv) expectNoMoreUsageLogs() {
+	e.t.Helper()
+	select {
+	case log := <-e.usage:
+		e.t.Fatalf("出现了多余的用量记录：request_id=%s tokens=%d", log.RequestID, log.InputTokens+log.OutputTokens)
+	case <-time.After(400 * time.Millisecond):
+	}
 }
 
 func compositePoolWSGroup() *service.Group {
@@ -501,7 +541,48 @@ func TestOpenAIResponsesWebSocket_CompositePoolWarmupFrameAnsweredLocally(t *tes
 	require.Equal(t, "real question", input[0].Get("content.0.text").String())
 	require.Equal(t, "be brief", gjson.GetBytes(calls[0].body, "instructions").String())
 	require.False(t, gjson.GetBytes(calls[0].body, "previous_response_id").Exists())
-	require.Len(t, env.usageLogs(2), 2)
+
+	// 用量只有真实轮次的一条：本地合成的预热应答没有访问上游，不产生用量记录。
+	logs := env.usageLogs(1)
+	require.False(t, strings.HasPrefix(logs[0].RequestID, "resp_bridge_warmup_"), logs[0].RequestID)
+	require.Equal(t, "resp_pool_1", logs[0].RequestID)
+	env.expectNoMoreUsageLogs()
+}
+
+// 只有预热帧的会话：没有任何用量记录（也就没有计费）。调度结果上报与用量结算在处理器 AfterTurn 的
+// 同一处早返回之后，此处无法单独观测调度上报（测试环境默认关闭高级调度器，运行时统计为空）。
+func TestOpenAIResponsesWebSocket_CompositePoolWarmupOnlySessionRecordsNothing(t *testing.T) {
+	env := startCompositePoolWS(t, compositePoolWSGroup(), true, func(base string) []service.Account {
+		return []service.Account{compositePoolCommandCode(9301, 1, base)}
+	})
+	env.send(`{"type":"response.create","model":"` + compositePoolWSModel + `","store":false,"stream":true,"generate":false,"input":[]}`)
+	warmup := env.readTurn()
+	require.Equal(t, "response.completed", gjson.GetBytes(warmup[len(warmup)-1], "type").String())
+	_ = env.client.Close(coderws.StatusNormalClosure, "done")
+
+	env.expectNoMoreUsageLogs()
+	require.Empty(t, env.upstream.httpCalls())
+}
+
+// 回归：原生 openai 平台的预热帧是真的发给了上游 WebSocket 的，用量照旧结算。
+func TestOpenAIResponsesWebSocket_CompositePoolNativeOpenAIWarmupStillSettled(t *testing.T) {
+	env := startCompositePoolWS(t, compositePoolWSGroup(), true, func(base string) []service.Account {
+		return []service.Account{compositePoolOpenAI(9301, 1, base)}
+	})
+	env.send(`{"type":"response.create","model":"` + compositePoolWSModel + `","generate":false,"input":[]}`)
+	warmup := env.readTurn()
+	require.Equal(t, "response.completed", gjson.GetBytes(warmup[len(warmup)-1], "type").String())
+	_ = env.client.Close(coderws.StatusNormalClosure, "done")
+
+	frames := env.upstream.wsFrames()
+	require.Len(t, frames, 1, "原生预热帧原样发给了上游")
+	require.False(t, gjson.GetBytes(frames[0], "generate").Bool())
+	require.True(t, gjson.GetBytes(frames[0], "generate").Exists())
+
+	logs := env.usageLogs(1)
+	require.Equal(t, "resp_native_1", logs[0].RequestID)
+	require.Equal(t, int64(9301), logs[0].AccountID)
+	env.expectNoMoreUsageLogs()
 }
 
 // 首帧就带 previous_response_id（比如客户端沿用了旧连接的链）：对无状态桥接平台，处理器不再像对 OpenAI
@@ -601,4 +682,41 @@ func TestCompositeCandidatePoolContextForResponsesWSBuildsEntryFromHandshakeAndF
 		_, ok := service.CompositeCandidatePoolEntryFromContext(ctx)
 		require.False(t, ok)
 	})
+}
+
+// 回归 ARM64 现场：Command Code 的响应 ID 超过 64 个字符。桥接轮次以响应 ID 作用量记录的 request_id，
+// 原样写入会撞 varchar(64) 让整条用量记录丢失（扣费却无记录）。收敛后每一轮都写入成功，
+// request_id 不超列宽、可由响应 ID 复算，完整响应 ID 另存 upstream_request_id；
+// 续链仍然用完整的响应 ID 匹配，上下文不受影响。
+func TestOpenAIResponsesWebSocket_CompositePoolBridgeTurnsWithOversizedResponseIDAreRecorded(t *testing.T) {
+	env := startCompositePoolWS(t, compositePoolWSGroup(), true, func(base string) []service.Account {
+		return []service.Account{compositePoolCommandCode(9301, 1, base)}
+	}, func(u *compositePoolUpstream) { u.longResponseIDs = true })
+
+	env.send(`{"type":"response.create","model":"` + compositePoolWSModel + `","store":false,"stream":true,"input":[` + compositePoolUserItem("hello") + `]}`)
+	first := env.readTurn()
+	firstID := gjson.GetBytes(first[len(first)-1], "response.id").String()
+	require.Greater(t, len(firstID), 64, "上游响应 ID 确实超过列宽，客户端看到的仍是完整 ID")
+
+	env.send(`{"type":"response.create","model":"` + compositePoolWSModel + `","store":false,"stream":true,"previous_response_id":"` + firstID + `","input":[` + compositePoolUserItem("again") + `]}`)
+	second := env.readTurn()
+	secondID := gjson.GetBytes(second[len(second)-1], "response.id").String()
+	require.Greater(t, len(secondID), 64)
+	_ = env.client.Close(coderws.StatusNormalClosure, "done")
+
+	calls := env.upstream.httpCalls()
+	require.Len(t, calls, 2)
+	require.Len(t, gjson.GetBytes(calls[1].body, "input").Array(), 3, "按完整响应 ID 续链，上游拿到完整上下文")
+
+	logs := env.usageLogs(2)
+	env.expectNoMoreUsageLogs()
+	seen := map[string]struct{}{}
+	for i, log := range logs {
+		require.LessOrEqual(t, len(log.RequestID), 64, "request_id 不超列宽")
+		require.Contains(t, log.RequestID, "~", "超长 ID 收敛为前缀加摘要")
+		require.NotNil(t, log.UpstreamRequestID)
+		require.Equal(t, []string{firstID, secondID}[i], *log.UpstreamRequestID, "完整响应 ID 另存，可按原 ID 追溯")
+		seen[log.RequestID] = struct{}{}
+	}
+	require.Len(t, seen, 2, "两轮的 request_id 互不相同")
 }
