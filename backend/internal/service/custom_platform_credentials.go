@@ -124,7 +124,7 @@ func splitBulkAccountIDsByCustomBaseURL(accountIDs []int64, plan customBulkPlan)
 			others = append(others, id)
 			continue
 		}
-		key := groupKey{baseURL: accountPlan.baseURL, identityChanged: accountPlan.identityChanged}
+		key := groupKey(accountPlan)
 		byKey[key] = append(byKey[key], id)
 	}
 	keys := make([]groupKey, 0, len(byKey))
