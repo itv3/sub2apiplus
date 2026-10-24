@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { defineComponent } from 'vue'
+import { defineComponent, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import ApiKeyMimicSettingsView from '../ApiKeyMimicSettingsView.vue'
 import { adminAPI } from '@/api/admin'
 
 const panelReload = vi.hoisted(() => vi.fn())
+const panelRefresh = vi.hoisted(() => vi.fn())
+const panelRefreshing = vi.hoisted(() => ({ ref: null as null | { value: boolean } }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({ showError: vi.fn(), showSuccess: vi.fn(), showWarning: vi.fn() })
@@ -24,8 +26,16 @@ vi.mock('@/api/admin', () => ({
 const PanelStub = defineComponent({
   name: 'CodexModelVisibilityPanel',
   setup(_, { expose }) {
-    // 与真实面板一样通过 expose 提供 reload，供页面顶部“刷新”按钮调用。
-    expose({ reload: panelReload })
+    // 与真实面板一样通过 expose 提供刷新入口与进行中状态，供页面顶部“刷新”按钮调用。
+    const refreshing = ref(false)
+    panelRefreshing.ref = refreshing
+    expose({
+      reload: panelReload,
+      refreshCatalogs: panelRefresh,
+      get refreshing() {
+        return refreshing.value
+      }
+    })
     return {}
   },
   template: '<div data-testid="codex-panel-stub" />'
@@ -53,6 +63,8 @@ function mountView() {
 describe('ApiKeyMimicSettingsView Codex 三方模型启用标签', () => {
   beforeEach(() => {
     panelReload.mockReset()
+    panelRefresh.mockReset()
+    panelRefreshing.ref = null
     vi.mocked(adminAPI.accounts.list).mockReset()
     vi.mocked(adminAPI.accounts.list).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100, pages: 1 })
   })
@@ -107,6 +119,20 @@ describe('ApiKeyMimicSettingsView Codex 三方模型启用标签', () => {
     expect(wrapper.find('[data-testid="account-table-stub"]').exists()).toBe(true)
   })
 
+  it('顶部“刷新”在 Codex 标签下进行中时禁用，防止重复点击', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="plus-tab-codex-models"]').trigger('click')
+    const button = () => wrapper.get('[data-testid="plus-refresh-button"]')
+    expect(button().attributes('disabled')).toBeUndefined()
+    panelRefreshing.ref!.value = true
+    await flushPromises()
+    expect(button().attributes('disabled')).toBeDefined()
+    panelRefreshing.ref!.value = false
+    await flushPromises()
+    expect(button().attributes('disabled')).toBeUndefined()
+  })
+
   it('顶部“刷新”在新标签下刷新面板，在原标签下仍刷新账号数据', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -125,7 +151,8 @@ describe('ApiKeyMimicSettingsView Codex 三方模型启用标签', () => {
     const callsBeforeCodexRefresh = accountListCalls()
     await refreshButton().trigger('click')
     await flushPromises()
-    expect(panelReload).toHaveBeenCalledTimes(1)
+    expect(panelRefresh).toHaveBeenCalledTimes(1)
+    expect(panelReload).not.toHaveBeenCalled()
     expect(accountListCalls()).toBe(callsBeforeCodexRefresh)
   })
 })

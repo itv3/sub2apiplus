@@ -163,6 +163,37 @@ export interface CodexThirdPartyVerifyResult {
   config: CodexModelVisibilityConfig
 }
 
+/** 刷新的目录类别：model_protocol 是按模型分流账号的上游模型目录，official_base 是官方 ChatGPT 账号的基础目录。 */
+export type CodexCatalogRefreshKind = 'model_protocol' | 'official_base'
+
+/** 一个账号一类目录的刷新结果；失败原因是分类后的简短说明，不含地址与凭据。 */
+export interface CodexCatalogRefreshItem {
+  account_id: number
+  account_name: string
+  platform: string
+  kind: CodexCatalogRefreshKind
+  ok: boolean
+  reason?: string
+  elapsed_ms: number
+  model_count?: number
+}
+
+export interface CodexCatalogRefreshReport {
+  group_id: number
+  refreshed_at: string
+  /** 为 true 表示短时间内重复刷新，直接复用了上一次的结果，没有再请求上游。 */
+  reused: boolean
+  total: number
+  failed: number
+  items: CodexCatalogRefreshItem[]
+}
+
+/** 刷新接口的返回：逐账号结果，加刷新后重新读取的分组状态（与读取接口同结构，可直接替换）。 */
+export interface CodexThirdPartyRefreshResult {
+  refresh: CodexCatalogRefreshReport
+  state: CodexThirdPartyGroupState
+}
+
 const base = (groupId: number) => `/admin/codex-third-party-models/${groupId}`
 
 /** 读取分组的展示配置、候选评估结果和账号名称；只查数据库，不发上游请求，也不触发源刷新。 */
@@ -219,11 +250,23 @@ export async function markVerified(
   return data
 }
 
+/**
+ * 同步刷新分组页面判定依赖的上游目录（按模型分流账号的上游模型目录、官方账号基础目录），
+ * 返回逐账号结果和刷新后的分组状态。服务端单次最长约 20 秒，同一分组 10 秒内重复调用复用上次结果。
+ */
+export async function refreshCatalogs(groupId: number): Promise<CodexThirdPartyRefreshResult> {
+  const { data } = await apiClient.post<CodexThirdPartyRefreshResult>(`${base(groupId)}/refresh`, undefined, {
+    timeout: 45000
+  })
+  return data
+}
+
 export const codexThirdPartyModelsAPI = {
   getGroupState,
   previewChanges,
   saveChanges,
-  markVerified
+  markVerified,
+  refreshCatalogs
 }
 
 export default codexThirdPartyModelsAPI

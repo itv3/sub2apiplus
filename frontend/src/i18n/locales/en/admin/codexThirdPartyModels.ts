@@ -105,6 +105,17 @@ export default {
       success: 'Marked as verified',
       failed: 'Failed to mark as verified'
     },
+    refresh: {
+      success: 'Upstream catalogs refreshed ({count} items)',
+      reused: 'Refreshed moments ago; reusing the previous result ({count} items)',
+      failed: 'Failed to refresh upstream catalogs',
+      warningTitle: 'These upstream catalogs failed to refresh, so related checks may still be unconfirmed:',
+      kind: {
+        model_protocol: 'Upstream model catalog',
+        official_base: 'Official account catalog'
+      },
+      unknownReason: 'Unknown reason'
+    },
     reject: {
       title: 'Not all selected models can be enabled; nothing was saved',
       notCandidate: 'Not in this group candidate list',

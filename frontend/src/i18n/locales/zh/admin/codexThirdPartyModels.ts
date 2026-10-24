@@ -105,6 +105,17 @@ export default {
       success: '已标记为已验证',
       failed: '标记已验证失败'
     },
+    refresh: {
+      success: '已刷新上游目录（{count} 项）',
+      reused: '刚刚已刷新过，沿用上次结果（{count} 项）',
+      failed: '刷新上游目录失败',
+      warningTitle: '以下上游目录刷新失败，相关判定可能仍无法确认：',
+      kind: {
+        model_protocol: '上游模型目录',
+        official_base: '官方账号目录'
+      },
+      unknownReason: '未知原因'
+    },
     reject: {
       title: '所选模型无法全部开启，整批均未保存',
       notCandidate: '不在当前分组的候选列表中',

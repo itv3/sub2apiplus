@@ -111,6 +111,22 @@
       </ul>
     </div>
 
+    <!-- 刷新上游目录后仍有失败的账号：列出账号名与原因 -->
+    <div
+      v-if="refreshFailures.length > 0"
+      role="alert"
+      data-testid="codex-refresh-warning"
+      class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300"
+    >
+      <p>{{ t('admin.codexThirdPartyModels.refresh.warningTitle') }}</p>
+      <ul class="mt-2 list-disc space-y-1 pl-5 text-xs" data-testid="codex-refresh-failures">
+        <li v-for="item in refreshFailures" :key="`${item.kind}:${item.account_id}`">
+          <span class="font-medium">{{ item.account_name || `#${item.account_id}` }}</span>
+          （{{ t(`admin.codexThirdPartyModels.refresh.kind.${item.kind}`) }}）：{{ item.reason || t('admin.codexThirdPartyModels.refresh.unknownReason') }}
+        </li>
+      </ul>
+    </div>
+
     <div v-if="!selectedGroupId" class="rounded-lg border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">
       {{ t('admin.codexThirdPartyModels.group.choosePrompt') }}
     </div>
@@ -345,9 +361,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { getAll as getAllGroups } from '@/api/admin/groups'
-import { getGroupState, markVerified, previewChanges, saveChanges } from '@/api/admin/codexThirdPartyModels'
+import { getGroupState, markVerified, previewChanges, refreshCatalogs, saveChanges } from '@/api/admin/codexThirdPartyModels'
 import type {
   CodexCatalogBudget,
+  CodexCatalogRefreshItem,
   CodexThirdPartyCandidate,
   CodexThirdPartyChange,
   CodexThirdPartyCatalogEvaluation,
@@ -435,12 +452,16 @@ const errorMessage = ref('')
 // 客户端配置说明默认折叠，点开才显示。
 const showClientHint = ref(false)
 const rejections = ref<RejectionItem[]>([])
+// 页顶“刷新”进行中；刷新后仍失败的账号（显示在警告条里）。
+const refreshing = ref(false)
+const refreshFailures = ref<CodexCatalogRefreshItem[]>([])
 
 let loadSeq = 0
 
 function clearFeedback() {
   errorMessage.value = ''
   rejections.value = []
+  refreshFailures.value = []
 }
 
 /** 读取分组状态。silent 为 true 时不显示加载占位，也不清空已有反馈（用于保存后刷新）。 */
@@ -473,7 +494,48 @@ async function reloadAll() {
   await Promise.all([loadGroups(), groupId ? loadState(groupId) : Promise.resolve()])
 }
 
-defineExpose({ reload: reloadAll })
+/**
+ * 供 Plus 页顶部“刷新”按钮调用：真正刷新页面判定依赖的上游目录（按模型分流账号的模型目录、官方账号目录），
+ * 再用接口返回的最新分组状态替换列表。没有选中分组时只刷新分组列表。
+ * 进行中重复调用直接忽略；有账号刷新失败时在页面上用警告条列出，全部成功给一条简短提示。
+ */
+async function refreshUpstreamCatalogs() {
+  if (refreshing.value) return
+  const groupId = selectedGroupId.value
+  if (!groupId) {
+    await loadGroups()
+    return
+  }
+  refreshing.value = true
+  clearFeedback()
+  try {
+    const [, result] = await Promise.all([loadGroups(), refreshCatalogs(groupId)])
+    // 刷新期间切换了分组：丢弃这份结果。
+    if (selectedGroupId.value !== groupId) return
+    // 让更早发出的读取失效，避免旧状态覆盖刷新后的最新状态。
+    loadSeq += 1
+    state.value = result.state
+    pruneSelection()
+    refreshFailures.value = result.refresh.items.filter((item) => !item.ok)
+    if (refreshFailures.value.length === 0) {
+      appStore.showSuccess(
+        t(result.refresh.reused ? 'admin.codexThirdPartyModels.refresh.reused' : 'admin.codexThirdPartyModels.refresh.success', {
+          count: result.refresh.total
+        })
+      )
+    } else {
+      appStore.showWarning(t('admin.codexThirdPartyModels.refresh.warningTitle'))
+    }
+  } catch (error) {
+    if (selectedGroupId.value !== groupId) return
+    errorMessage.value = extractApiErrorMessage(error, t('admin.codexThirdPartyModels.refresh.failed'))
+    appStore.showError(errorMessage.value)
+  } finally {
+    refreshing.value = false
+  }
+}
+
+defineExpose({ reload: reloadAll, refreshCatalogs: refreshUpstreamCatalogs, refreshing })
 
 watch(selectedGroupValue, () => {
   state.value = null

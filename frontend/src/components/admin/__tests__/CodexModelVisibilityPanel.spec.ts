@@ -6,6 +6,7 @@ import zhLocale from '@/i18n/locales/zh'
 import enLocale from '@/i18n/locales/en'
 import type {
   CodexCatalogBudget,
+  CodexCatalogRefreshItem,
   CodexThirdPartyCandidate,
   CodexThirdPartyGroupState,
   CodexThirdPartySourceStatus
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   previewChanges: vi.fn(),
   saveChanges: vi.fn(),
   markVerified: vi.fn(),
+  refreshCatalogs: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   showWarning: vi.fn()
@@ -27,7 +29,8 @@ vi.mock('@/api/admin/codexThirdPartyModels', () => ({
   getGroupState: mocks.getGroupState,
   previewChanges: mocks.previewChanges,
   saveChanges: mocks.saveChanges,
-  markVerified: mocks.markVerified
+  markVerified: mocks.markVerified,
+  refreshCatalogs: mocks.refreshCatalogs
 }))
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -888,6 +891,151 @@ describe('CodexModelVisibilityPanel 暴露的 reload', () => {
     await (wrapper.vm as unknown as { reload: () => Promise<void> }).reload()
     expect(mocks.getAllGroups).toHaveBeenCalledTimes(2)
     expect(mocks.getGroupState).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 页顶“刷新”：真正刷新上游目录
+// ---------------------------------------------------------------------------
+
+type PanelVm = { refreshCatalogs: () => Promise<void>; refreshing: boolean }
+
+function refreshResult(items: Array<Partial<CodexCatalogRefreshItem> & { account_id: number }>, state = groupState({ revision: 8 }), reused = false) {
+  const full: CodexCatalogRefreshItem[] = items.map((item) => ({
+    account_name: `账号-${item.account_id}`,
+    platform: 'commandcode',
+    kind: 'model_protocol',
+    ok: true,
+    elapsed_ms: 120,
+    ...item
+  }))
+  return {
+    refresh: { group_id: GROUP_ID, refreshed_at: '2026-10-24T00:00:00Z', reused, total: full.length, failed: full.filter((i) => !i.ok).length, items: full },
+    state
+  }
+}
+
+describe('CodexModelVisibilityPanel 暴露的 refreshCatalogs', () => {
+  it('调用刷新接口，用返回的最新状态替换列表，全部成功给一条简短提示', async () => {
+    const wrapper = await mountPanel()
+    const fresh = groupState({
+      revision: 8,
+      candidates: [candidate({ slug: 'deepseek-flash', target_platform: 'commandcode', protocol: 'responses_native', fingerprint: 'fp-new' })]
+    })
+    mocks.refreshCatalogs.mockResolvedValue(refreshResult([{ account_id: 11 }], fresh))
+
+    await (wrapper.vm as unknown as PanelVm).refreshCatalogs()
+    await flushPromises()
+
+    expect(mocks.refreshCatalogs).toHaveBeenCalledWith(GROUP_ID)
+    expect(mocks.getAllGroups).toHaveBeenCalledTimes(2)
+    // 列表被替换：只剩返回里的那一行，且不需要再调读取接口。
+    expect(wrapper.find('[data-testid="codex-switch-deepseek-flash"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="codex-switch-kimi-k3"]').exists()).toBe(false)
+    expect(mocks.getGroupState).toHaveBeenCalledTimes(1)
+    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexThirdPartyModels.refresh.success:{"count":1}')
+    expect(wrapper.find('[data-testid="codex-refresh-warning"]').exists()).toBe(false)
+    // 之后的预览使用刷新后的 revision。
+    mocks.previewChanges.mockResolvedValue({ revision: 8, evaluation: fresh.evaluation })
+    mocks.saveChanges.mockResolvedValue({ config: { schema_version: 1, revision: 9, models: {} } })
+    await sw(wrapper, 'deepseek-flash').trigger('click')
+    await flushPromises()
+    expect(mocks.previewChanges).toHaveBeenLastCalledWith(GROUP_ID, 8, [{ slug: 'deepseek-flash', enabled: true }])
+  })
+
+  it('进行中 refreshing 为 true，重复调用被忽略', async () => {
+    const wrapper = await mountPanel()
+    let release: (value: ReturnType<typeof refreshResult>) => void = () => {}
+    mocks.refreshCatalogs.mockReturnValue(new Promise((resolve) => (release = resolve)))
+    const vm = wrapper.vm as unknown as PanelVm
+
+    const first = vm.refreshCatalogs()
+    await flushPromises()
+    expect(vm.refreshing).toBe(true)
+    await vm.refreshCatalogs()
+    expect(mocks.refreshCatalogs).toHaveBeenCalledTimes(1)
+
+    release(refreshResult([{ account_id: 11 }]))
+    await first
+    await flushPromises()
+    expect(vm.refreshing).toBe(false)
+  })
+
+  it('有账号刷新失败时用警告条列出账号名与原因', async () => {
+    const wrapper = await mountPanel()
+    mocks.refreshCatalogs.mockResolvedValue(
+      refreshResult([
+        { account_id: 11, account_name: 'CommandCode', ok: true },
+        { account_id: 12, account_name: 'CommandCode-备用', ok: false, reason: '拉取超时' },
+        { account_id: 20, account_name: '官方 ChatGPT', kind: 'official_base', ok: false, reason: '上游返回 HTTP 401' }
+      ])
+    )
+    await (wrapper.vm as unknown as PanelVm).refreshCatalogs()
+    await flushPromises()
+
+    const warning = wrapper.get('[data-testid="codex-refresh-warning"]')
+    const items = warning.findAll('li').map((li) => li.text())
+    expect(items).toHaveLength(2)
+    expect(items[0]).toContain('CommandCode-备用')
+    expect(items[0]).toContain('拉取超时')
+    expect(items[1]).toContain('官方 ChatGPT')
+    expect(items[1]).toContain('上游返回 HTTP 401')
+    expect(mocks.showWarning).toHaveBeenCalled()
+    expect(mocks.showSuccess).not.toHaveBeenCalled()
+  })
+
+  it('短时间重复刷新复用上次结果时给出对应提示', async () => {
+    const wrapper = await mountPanel()
+    mocks.refreshCatalogs.mockResolvedValue(refreshResult([{ account_id: 11 }], groupState({ revision: 8 }), true))
+    await (wrapper.vm as unknown as PanelVm).refreshCatalogs()
+    await flushPromises()
+    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexThirdPartyModels.refresh.reused:{"count":1}')
+  })
+
+  it('刷新接口失败时回显原因，保留原有列表，并结束进行中状态', async () => {
+    const wrapper = await mountPanel()
+    mocks.refreshCatalogs.mockRejectedValue({ message: '网络错误' })
+    const vm = wrapper.vm as unknown as PanelVm
+    await vm.refreshCatalogs()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="codex-error"]').exists()).toBe(true)
+    expect(mocks.showError).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="codex-switch-kimi-k3"]').exists()).toBe(true)
+    expect(vm.refreshing).toBe(false)
+  })
+
+  it('刷新期间切换了分组：丢弃这份结果', async () => {
+    const wrapper = await mountPanel()
+    let release: (value: ReturnType<typeof refreshResult>) => void = () => {}
+    mocks.refreshCatalogs.mockReturnValue(new Promise((resolve) => (release = resolve)))
+    const pending = (wrapper.vm as unknown as PanelVm).refreshCatalogs()
+    await flushPromises()
+    mocks.getGroupState.mockResolvedValue(groupState({ revision: 1, candidates: [candidate({ slug: 'only-in-group-2' })] }))
+    await wrapper.get('[data-testid="codex-group-select"]').setValue('2')
+    await flushPromises()
+    release(refreshResult([{ account_id: 11, ok: false, reason: '拉取超时' }]))
+    await pending
+    await flushPromises()
+    expect(wrapper.find('[data-testid="codex-refresh-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-switch-only-in-group-2"]').exists()).toBe(true)
+  })
+
+  it('没有选中分组时只刷新分组列表，不调用刷新接口', async () => {
+    mocks.getAllGroups.mockResolvedValue([group(GROUP_ID, '混合分组', 'composite')])
+    const wrapper = mount(CodexModelVisibilityPanel, { global: { stubs: { Icon: true } } })
+    await flushPromises()
+    await (wrapper.vm as unknown as PanelVm).refreshCatalogs()
+    expect(mocks.getAllGroups).toHaveBeenCalledTimes(2)
+    expect(mocks.refreshCatalogs).not.toHaveBeenCalled()
+  })
+
+  it('刷新相关文案中英文都存在', () => {
+    for (const locale of [zhLocale, enLocale]) {
+      const refresh = (locale as any).admin.codexThirdPartyModels.refresh
+      for (const key of ['success', 'reused', 'failed', 'warningTitle', 'unknownReason']) expect(typeof refresh[key]).toBe('string')
+      expect(typeof refresh.kind.model_protocol).toBe('string')
+      expect(typeof refresh.kind.official_base).toBe('string')
+    }
   })
 })
 

@@ -14,11 +14,12 @@
           <button
             type="button"
             class="btn btn-secondary"
-            :disabled="mimicLoading"
+            data-testid="plus-refresh-button"
+            :disabled="refreshBusy"
             :title="t('admin.apiKeyMimic.refresh')"
-            @click="activeTab === 'codexModels' ? codexPanelRef?.reload() : loadMimicAccounts()"
+            @click="activeTab === 'codexModels' ? codexPanelRef?.refreshCatalogs() : loadMimicAccounts()"
           >
-            <Icon name="refresh" size="md" :class="mimicLoading ? 'animate-spin' : ''" />
+            <Icon name="refresh" size="md" :class="refreshBusy ? 'animate-spin' : ''" />
             <span class="hidden sm:inline">{{ t('admin.apiKeyMimic.refresh') }}</span>
           </button>
         </div>
@@ -194,6 +195,9 @@ const compatibilityStatusFilter = computed({
     else mimicStatusFilter.value = value
   }
 })
+
+// 顶部“刷新”进行中：Codex 标签下是面板正在刷新上游目录，其余标签是账号列表加载。
+const refreshBusy = computed(() => (activeTab.value === 'codexModels' ? !!codexPanelRef.value?.refreshing : mimicLoading.value))
 
 const compatibilityLabel = computed(() => t(activeTab.value === 'standard' ? 'admin.standardApiCompat.toggle' : 'admin.apiKeyMimic.columns.compatible'))
 
