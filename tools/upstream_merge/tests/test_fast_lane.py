@@ -50,10 +50,10 @@ from tools.upstream_merge.workflow import _load_runner_status
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
 MODULE = "github.com/Wei-Shaw/sub2api"
 
-# 冻结摘要类的 go test 输出（officialegress 包，失败信息是摘要比对）与一个功能失败（handler 包）。
+# 冻结摘要类的 go test 输出（officialegress 包，白名单登记的 v0.2.3 台账测试文件与摘要比对信息）与一个功能失败（handler 包）。
 FROZEN_GO_OUTPUT = (
-    "--- FAIL: TestFooSourceTransitionIsFrozen (0.00s)\n"
-    "    foo_transition_test.go:12: foo transition 当前摘要不一致：a.go\n"
+    "--- FAIL: TestUpstreamV023SourceTransitionIsFrozen (0.00s)\n"
+    "    upstream_v023_source_transition_test.go:263: 上游 v0.2.3 源码 transition 当前摘要不一致：README_CN.md\n"
     "FAIL\n"
     f"FAIL\t{MODULE}/internal/officialegress\t0.5s\n"
 )
@@ -220,7 +220,7 @@ class RunFastTest(FastFixture):
         self.assertEqual(document["result"], RESULT_PENDING)
         step = document["steps"][0]
         self.assertEqual((step["status"], step["classification"]), ("failed", CLASS_FROZEN_PENDING))
-        self.assertEqual(step["detail"]["failed_tests"], ["TestFooSourceTransitionIsFrozen"])
+        self.assertEqual(step["detail"]["failed_tests"], ["TestUpstreamV023SourceTransitionIsFrozen"])
         self.assertEqual(document["pending_ledger"], ["egress/go-test"])
         self.assertEqual(document["failed_functional"], [])
         self.assertIn("待台账闭合", output)

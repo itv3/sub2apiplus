@@ -425,14 +425,12 @@ class _Runner:
             if step.attribution == ATTRIBUTION_EGRESS_SPEC:
                 if unit_out_dir is None:
                     raise ValueError("出站规格归因需要统一调度执行器记录目录")
-                attribution = classify_egress_spec_summary(
-                    unit_out_dir / step.unit_summary_subdir / "summary.json", source_root=self.repository_root / "backend"
-                )
+                attribution = classify_egress_spec_summary(unit_out_dir / step.unit_summary_subdir / "summary.json")
             elif step.attribution == ATTRIBUTION_GO_TEST:
                 with open(self.log_path_of(log), "rb") as handle:
                     handle.seek(log_start)
                     text = handle.read(log_end - log_start).decode("utf-8", errors="replace")
-                attribution = classify_go_test_output(text, source_root=self.repository_root / "backend")
+                attribution = classify_go_test_output(text)
             else:
                 raise ValueError(f"未知的归因种类：{step.attribution}")
         except Exception as error:  # noqa: BLE001 - 归因失败时保守处理为功能失败

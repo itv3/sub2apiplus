@@ -10,12 +10,13 @@
 * 出站规格线（``make -k check-egress-spec``）只认 ``egress-spec-go-test`` 一个单元。仓库里其余子检查有的也是
   摘要比对（transition／maintenance 系列 Python 检查），但试验区真实日志里它们从未成为失败来源，没有证据
   就不放进白名单（宁可按功能失败阻断，也不放过）。需要加入时，必须在 ``EGRESS_SPEC_FROZEN_UNITS`` 里逐个写明依据。
-* go test 的失败判定同时要求三件事：失败包在冻结测试所在的包里、每个顶层失败用例的名字带冻结类字样、
-  有“这是冻结台账比对”的证据——失败信息带摘要比对类字样，或失败信息指出的测试源文件读取 ``docs/egress`` 台账。
-  仓库里 ``internal/service`` 等包还有名字里带 Transition／Retirement 的功能测试（例如 ``TestGPT55Retirement*``、
-  ``TestCanTransitionBatchImageJob``，它们的测试文件不读台账），只靠名字会把功能失败放过；只靠失败信息又会漏掉
-  v0.2.17 试验区里真实出现的 ``TestUpstreamV0180SourceTransitionIsFrozen``（失败信息只有 ``invalid argument``，但它的
-  测试文件读 ``docs/egress``）。
+* go test 的失败只认**显式白名单**（``frozen_test_sources.py``）：失败信息里每一条 ``<测试文件>:<行>: …``
+  都必须来自白名单登记的测试源文件，且信息含该文件登记的失败信息标记。白名单只收“其失败点只是把台账登记摘要与仓库文件
+  当前摘要比对”的测试（逐个读过源码，守卫用例会重新核对）。用例名、失败信息里的“漂移”“摘要”字样都不构成证据——
+  ``TestClaudeProductionRejectsSharedSelectorCoordinateDrift``（selector fail-close）、``TestCodexIdentityFactsRejectConditionDrift``
+  （身份条件）、``TestChangeset5CurrentFinalWireComparatorRejectsWireDrift``（真实 wire 比较）名字和信息里都带
+  Drift／漂移，却是功能测试，早先的宽松规则把它们误判成了“待台账闭合”。原则：误判为冻结类必须不可能，
+  冻结类被误判为功能失败可以接受（按功能阻断，人工看一眼就能放行）。
 
 本模块只依赖标准库，由 ``gate_runner`` 在步骤结束后调用；归因只是记录，不改变步骤的通过／失败状态。
 """
@@ -28,27 +29,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .frozen_test_sources import registered_markers
+
 CLASS_FUNCTIONAL = "functional"
 CLASS_FROZEN_PENDING = "frozen_digest_pending_ledger"
 CLASSIFICATIONS = (CLASS_FUNCTIONAL, CLASS_FROZEN_PENDING)
 
-# 仓库里冻结测试的命名（v0.2.17 试验区 47 条失败全部匹配，见 test_fast_attribution 的真实日志夹具）：
-# TestXxxTransitionIsFrozen／XxxSuccessorRejectsMutation／XxxRetirementClosure／XxxSourceDrift 等。
-FROZEN_TEST_NAME_RE = re.compile(r"Frozen|Transition|Successor|Drift|Retirement|RejectsMutation")
-# 冻结测试的失败信息一律是摘要比对：「当前摘要不一致」「…漂移：path=… got=… want=…」「transition 条目非法」
-# 「提交绑定不一致」「没有形成追加式 transition」。功能测试的失败信息不会带这些字样。
-FROZEN_MESSAGE_RE = re.compile(r"摘要|漂移|绑定不一致|追加式|条目非法")
-# 冻结测试所在的包（相对模块根）。仓库里 handler／repository 等包里同样有名字带 Transition 的功能测试，
-# 不在此列的包失败一律按功能失败处理。
+# 冻结测试所在的包（相对模块根）。白名单里的文件只在这两个包里；其余包失败一律按功能失败处理。
 MODULE_PREFIX = "github.com/Wei-Shaw/sub2api/"
 FROZEN_TEST_PACKAGES = ("internal/officialegress", "internal/service")
 # 出站规格线里允许记为冻结摘要类的单元（去掉 egress-spec: 前缀后的目标名）。
 EGRESS_SPEC_UNIT_PREFIX = "egress-spec:"
 EGRESS_SPEC_FROZEN_UNITS = ("egress-spec-go-test",)
 
-# 失败信息首行形如 ``upstream_v0180_source_transition_test.go:120: …``，取出测试源文件名。
-_FAIL_SOURCE_RE = re.compile(r"^(?P<file>[\w.-]+_test\.go):\d+:")
-FROZEN_SOURCE_MARKER = "docs/egress"
+# 失败信息的每一条形如 ``upstream_v0180_source_transition_test.go:120: …``：取出测试源文件名与文字。
+_FAIL_ENTRY_RE = re.compile(r"^(?P<file>[\w.-]+_test\.go):\d+:\s?(?P<text>.*)$")
 _PACKAGE_RESULT_RE = re.compile(r"^(?P<verdict>ok|FAIL|\?)\s+(?P<package>\S+)(?P<rest>.*)$")
 _TOP_LEVEL_FAIL_RE = re.compile(r"^--- FAIL: (?P<name>\S+) \(")
 # 任何一条都说明失败不是“断言不相等”这类可归因的用例失败，按功能失败处理。
@@ -135,28 +130,38 @@ def _relative_package(package: str) -> str | None:
     return None
 
 
-def _frozen_evidence(message: list[str], package: str, source_root: Path | None) -> bool:
-    """失败用例是冻结台账比对的证据：失败信息带摘要字样，或其测试源文件读取 docs/egress 台账。"""
+def _message_entries(message: list[str]) -> list[tuple[str, str]]:
+    """把一个失败用例的信息行拆成 (测试文件名, 文字) 条目；没有 ``文件:行:`` 前缀的行并入上一条。"""
 
-    if FROZEN_MESSAGE_RE.search(" ".join(message)):
-        return True
-    if source_root is None or not message:
-        return False
-    match = _FAIL_SOURCE_RE.match(message[0])
-    if match is None:
-        return False
-    try:
-        text = (source_root / package / match.group("file")).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-    return FROZEN_SOURCE_MARKER in text
+    entries: list[tuple[str, str]] = []
+    for line in message:
+        match = _FAIL_ENTRY_RE.match(line)
+        if match is not None:
+            entries.append((match.group("file"), match.group("text")))
+        elif entries:
+            file, text = entries[-1]
+            entries[-1] = (file, f"{text} {line}")
+    return entries
 
 
-def classify_go_test_output(text: str, *, source_root: Path | None = None) -> Attribution:
-    """对一段 go test 输出做保守归因：能证明全部失败都是冻结摘要比对才记 frozen_digest_pending_ledger。
+def _whitelisted_failure(message: list[str], package: str) -> str | None:
+    """失败用例的全部信息条目都命中白名单时返回 None；否则返回未命中的说明（用于归因理由）。"""
 
-    ``source_root`` 是 ``backend`` 目录；给出时，失败信息里没有摘要字样的用例可以凭“测试源文件读取 docs/egress”取得证据。
-    """
+    entries = _message_entries(message)
+    if not entries:
+        return "失败信息里没有 ``<测试文件>:<行>:`` 条目，看不出失败点在哪个测试文件"
+    for file, text in entries:
+        source = f"{package}/{file}"
+        markers = registered_markers(source)
+        if not markers:
+            return f"失败点所在的测试文件 {source} 不在冻结摘要类白名单里：{text[:100] or '（无信息）'}"
+        if not any(marker in text for marker in markers):
+            return f"{source} 的失败信息不是它登记的摘要比对信息：{text[:100] or '（无信息）'}"
+    return None
+
+
+def classify_go_test_output(text: str) -> Attribution:
+    """对一段 go test 输出做保守归因：全部失败都命中冻结摘要类白名单才记 frozen_digest_pending_ledger。"""
 
     if not text.strip():
         return _functional("go test 输出为空，无法归因")
@@ -182,24 +187,19 @@ def classify_go_test_output(text: str, *, source_root: Path | None = None) -> At
         if not segment.failures:
             return _functional(f"包 {segment.package} 失败，但没有解析出顶层失败用例", packages=packages)
         for name, message in segment.failures:
-            if not FROZEN_TEST_NAME_RE.search(name):
-                return _functional(f"失败用例 {name} 的名字不像冻结测试", failed_tests=failed_tests + [name], packages=packages)
-            if not _frozen_evidence(message, relative, source_root):
-                return _functional(
-                    f"失败用例 {name} 既没有摘要比对的失败信息、测试源文件也不读取 docs/egress 台账：{' '.join(message)[:120] or '（无信息）'}",
-                    failed_tests=failed_tests + [name],
-                    packages=packages,
-                )
+            problem = _whitelisted_failure(message, relative)
+            if problem is not None:
+                return _functional(f"失败用例 {name}：{problem}", failed_tests=failed_tests + [name], packages=packages)
             failed_tests.append(name)
     return Attribution(
         CLASS_FROZEN_PENDING,
-        f"{len(failed_tests)} 个失败用例全部是冻结摘要比对（待台账闭合）：包 {', '.join(packages)}",
+        f"{len(failed_tests)} 个失败用例全部命中冻结摘要类白名单（待台账闭合）：包 {', '.join(packages)}",
         failed_tests=failed_tests,
         packages=packages,
     )
 
 
-def classify_egress_spec_summary(summary_path: Path, *, source_root: Path | None = None) -> Attribution:
+def classify_egress_spec_summary(summary_path: Path) -> Attribution:
     """出站规格线（统一调度执行器汇总 ``summary.json``）的归因：只认 ``egress-spec-go-test`` 一个单元。"""
 
     try:
@@ -228,6 +228,6 @@ def classify_egress_spec_summary(summary_path: Path, *, source_root: Path | None
             combined.append(Path(unit["log"]).read_text(encoding="utf-8", errors="replace"))
         except (OSError, KeyError, TypeError) as error:
             return _functional(f"单元 {unit.get('unit_id')} 的日志不可读（{error}）", packages=names)
-    result = classify_go_test_output("\n".join(combined), source_root=source_root)
+    result = classify_go_test_output("\n".join(combined))
     result.packages = result.packages or names
     return result

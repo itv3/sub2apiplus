@@ -27,8 +27,8 @@ from tools.upstream_merge.workflow import run_verification_gates
 from tools.upstream_merge.tests.test_targeted_regression import sh
 
 FROZEN_FAIL_OUTPUT = (
-    "--- FAIL: TestFooSourceTransitionIsFrozen (0.00s)\n"
-    "    foo_transition_test.go:12: foo transition 当前摘要不一致：backend/a.go\n"
+    "--- FAIL: TestUpstreamV023SourceTransitionIsFrozen (0.00s)\n"
+    "    upstream_v023_source_transition_test.go:263: 上游 v0.2.3 源码 transition 当前摘要不一致：README_CN.md\n"
     "FAIL\n"
     "FAIL\tgithub.com/Wei-Shaw/sub2api/internal/officialegress\t0.5s\n"
 )
@@ -195,7 +195,7 @@ class RunFrozenPrecheckTest(unittest.TestCase):
         report = run_frozen_precheck(self.repo.root, self.plan(), go_tests=fake)
         self.assertEqual(report["status"], "blocked")
         self.assertEqual(report["classification"], "frozen_digest")
-        self.assertIn("TestFooSourceTransitionIsFrozen", report["blockers"][0])
+        self.assertIn("TestUpstreamV023SourceTransitionIsFrozen", report["blockers"][0])
         self.assertIn("冻结摘要类", report["blockers"][0])
         self.assertIn("当前摘要不一致", report["go_test"]["output_tail"])
 
