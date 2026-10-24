@@ -537,6 +537,14 @@ FRONTEND_CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue")
 FRONTEND_RESOLVE_SUFFIXES = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".json")
 FRONTEND_INDEX_NAMES = ("index.ts", "index.tsx", "index.js", "index.jsx", "index.vue")
 FRONTEND_SPEC_RE = re.compile(r"^src/.*\.(?:test|spec)\.(?:js|ts|jsx|tsx)$")
+# 主干基线上就失败的前端用例（与合并无关，U-4 和 CI 也不运行它们）：选进快线只会制造假的功能失败。逐个写明依据，
+# 主干修好后从此表删除。清单里的 excluded_specs 会记录每次被排除的用例，不是静默跳过。
+FRONTEND_KNOWN_BASELINE_FAILURES = {
+    "src/views/admin/ops/components/__tests__/OpsDashboardHeader.timezone.spec.ts": (
+        "主干基线即失败：3 个用例在自定义时间范围弹窗里找不到 datetime-local 输入框（本机在主干基线上实测，不依赖本次合并）；"
+        "U-4 前端线与 CI 只跑 lint、typecheck、关键用例，不含它"
+    ),
+}
 # 全部用例都会加载的测试公共文件（vitest.config.ts 的 setupFiles）：它变化等于所有用例相关。
 FRONTEND_GLOBAL_SETUP = ("src/__tests__/setup.ts",)
 _FRONTEND_IMPORT_RE = re.compile(
@@ -962,9 +970,14 @@ def plan_targeted_regression(
     # ---- 其余类别 ----
     frontend_files = sorted(frontend_related)
     frontend_specs: dict[str, list[str]] = {}
+    frontend_excluded: dict[str, str] = {}
     frontend_without_spec: list[str] = []
     if frontend_files:
         frontend_specs = related_frontend_specs(load_frontend_sources(root / "frontend"), frontend_files)
+        for excluded in FRONTEND_KNOWN_BASELINE_FAILURES:
+            if excluded in frontend_specs:
+                frontend_excluded[excluded] = FRONTEND_KNOWN_BASELINE_FAILURES[excluded]
+                del frontend_specs[excluded]
         reached = {file for files in frontend_specs.values() for file in files}
         frontend_without_spec = [path for path in frontend_files if path not in reached]
         for path in frontend_without_spec:
@@ -1049,6 +1062,7 @@ def plan_targeted_regression(
                 for spec, files in frontend_specs.items()
             },
             "without_spec": frontend_without_spec,
+            "excluded_specs": frontend_excluded,
             "command": frontend_vitest_argv(["<spec_files>"]) if frontend_specs else None,
             "note": "vitest related 在本仓库崩溃（见 related_frontend_specs），改用 import 依赖图选用例",
         },

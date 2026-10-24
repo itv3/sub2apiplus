@@ -268,6 +268,8 @@ def render_checklist(manifest: dict[str, Any]) -> str:
     if frontend["spec_files"]:
         lines.append(f"前端：{len(frontend['changed_files'])} 个改动文件，按 import 依赖图选出 {len(frontend['spec_files'])} 个用例：")
         lines.extend(f"  - {spec}（{frontend['specs'][spec]['reason']}）" for spec in frontend["spec_files"])
+    for spec, reason in frontend.get("excluded_specs", {}).items():
+        lines.append(f"前端用例 {spec} 不跑：{reason}")
     for suite in manifest["python"]:
         lines.append(f"Python：{' '.join(suite['argv'])}（{suite['reason']}；涉及 {len(suite['files'])} 个文件）")
     for command in manifest["shell"]["commands"]:

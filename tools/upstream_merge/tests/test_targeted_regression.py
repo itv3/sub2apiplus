@@ -487,6 +487,18 @@ class FrontendScenarioTest(TargetedRegressionTestCase):
         self.assertIn("src/x.ts", document["frontend"]["specs"]["src/x.spec.ts"]["reason"])
         self.assertEqual(document["frontend"]["without_spec"], [])
 
+    def test_spec_that_already_fails_on_the_trunk_baseline_is_excluded_and_recorded(self) -> None:
+        broken = "frontend/src/views/admin/ops/components/__tests__/OpsDashboardHeader.timezone.spec.ts"
+        fork, upstream = self.scenario.build(
+            {"frontend/src/y.ts": "export const y = 2\n"},
+            {"frontend/src/x.ts": "export const x = 5\n", broken: "import { x } from '@/x'\n", "frontend/src/x.spec.ts": "import { x } from './x'\n"},
+            {"frontend/src/x.ts": "export const x = 6\n"},
+        )
+        document = self.scenario.plan(fork, upstream, STANDARD_PACKAGES)
+        self.assertEqual(document["frontend"]["spec_files"], ["src/x.spec.ts"])
+        self.assertEqual(list(document["frontend"]["excluded_specs"]), [broken[len("frontend/") :]])
+        self.assertIn("主干基线即失败", next(iter(document["frontend"]["excluded_specs"].values())))
+
     def test_setup_file_change_is_unresolved(self) -> None:
         fork, upstream = self.scenario.build(
             {"frontend/src/__tests__/setup.ts": "export {}\n"},
