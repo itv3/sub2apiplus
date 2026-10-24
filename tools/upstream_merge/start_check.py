@@ -4,8 +4,9 @@ v0.2.17 合并时，主干原有的 CI 红与工具链不一致在合并过程�
 上。开工检查在 ``plan-create`` 之前、基线封存之前做，回答三件事：
 
 1. 主仓库是干净的、在受维护分支上、HEAD 已经在 origin 上（HEAD 没推上去，CI 结果就无从谈起）；
-2. 该提交上 ``backend-ci.yml`` 的最新一次运行（push 或 workflow_dispatch 事件）已完成且成功，逐个作业也成功；
-   状态缺失或仍在运行一律算未通过，不是“暂时没问题”；Security Scan 只作信息记录，不作硬前置；
+2. 该提交上 ``backend-ci.yml`` 的最新一次运行（push 或 workflow_dispatch 事件）已完成且成功，必需作业齐全且逐个
+   成功（非必需作业 success／skipped／neutral 可接受，failure／cancelled／timed_out 阻断）；状态缺失或仍在运行一律
+   算未通过，不是“暂时没问题”；Security Scan 只作信息记录，不作硬前置；
 3. 主干声明的 Go 与 lint 版本与本机真正会用到的版本一致（基线取主干声明的版本，不得误用候选的版本）。
 
 联网查询（GitHub Actions、远端分支）只放在本检查里；现有预检保持离线。查询全部只读，不 fetch、不 push。
@@ -30,6 +31,9 @@ START_CHECK_SCHEMA = "official-egress-upstream-start-check/v1"
 # 绑定的是 PR 头提交而非合并结果，不算。
 ACCEPTED_CI_EVENTS = ("push", "workflow_dispatch")
 SECURITY_SCAN_WORKFLOW_SUFFIX = "security-scan.yml"
+# 必需作业（workflow.CI_REQUIRED_JOBS）必须逐个 success；其余作业 success／skipped／neutral 可以接受
+# （例如按条件跳过的可选作业），failure／cancelled／timed_out 等一律阻断。报告里照常列出全部作业的结论。
+ACCEPTABLE_OPTIONAL_CONCLUSIONS = ("success", "skipped", "neutral")
 
 
 def _run_summary(run: dict[str, Any]) -> dict[str, Any]:
@@ -140,6 +144,9 @@ def start_check(
         "run": None,
         "jobs": [],
         "required_jobs_missing": [],
+        "required_jobs_failed": [],
+        "optional_jobs_blocking": [],
+        "required_jobs_success": False,
         "all_jobs_success": False,
         "bound_to_head": False,
     }
@@ -194,15 +201,31 @@ def start_check(
                         }
                         for job in sorted(jobs, key=lambda item: str(item.get("name")))
                     ]
+                    required = set(CI_REQUIRED_JOBS)
                     names = {job.get("name") for job in jobs}
-                    ci["required_jobs_missing"] = sorted(set(CI_REQUIRED_JOBS) - names)
-                    unsuccessful = sorted(str(job.get("name")) for job in jobs if job.get("conclusion") != "success")
-                    ci["all_jobs_success"] = not unsuccessful and not ci["required_jobs_missing"]
-                    ci["status"] = "passed" if ci["all_jobs_success"] else "blocked"
+                    ci["required_jobs_missing"] = sorted(required - names)
+                    required_failed = sorted(
+                        str(job.get("name")) for job in jobs if job.get("name") in required and job.get("conclusion") != "success"
+                    )
+                    optional_blocking = sorted(
+                        str(job.get("name"))
+                        for job in jobs
+                        if job.get("name") not in required and job.get("conclusion") not in ACCEPTABLE_OPTIONAL_CONCLUSIONS
+                    )
+                    ci["required_jobs_failed"] = required_failed
+                    ci["optional_jobs_blocking"] = optional_blocking
+                    # all_jobs_success 仅作信息：每个作业（含非必需）都是 success；是否阻断看必需作业与非必需作业的阻断项
+                    ci["all_jobs_success"] = all(job.get("conclusion") == "success" for job in jobs)
+                    ci["required_jobs_success"] = not ci["required_jobs_missing"] and not required_failed
+                    ci["status"] = "passed" if ci["required_jobs_success"] and not optional_blocking else "blocked"
                     if ci["required_jobs_missing"]:
                         blockers.append(f"HEAD 的 CI 运行缺少必需作业：{ci['required_jobs_missing']}")
-                    if unsuccessful:
-                        blockers.append(f"HEAD 的 CI 运行存在未成功的作业：{unsuccessful}")
+                    if required_failed:
+                        blockers.append(f"HEAD 的 CI 运行有必需作业未成功：{required_failed}")
+                    if optional_blocking:
+                        blockers.append(
+                            f"HEAD 的 CI 运行有非必需作业失败或被取消（只有 {'／'.join(ACCEPTABLE_OPTIONAL_CONCLUSIONS)} 可接受）：{optional_blocking}"
+                        )
         except UpstreamMergeError as error:
             ci["status"] = "blocked"
             blockers.append(f"查询 HEAD 的 CI 结果失败：{error}")

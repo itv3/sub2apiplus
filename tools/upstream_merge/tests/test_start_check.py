@@ -206,12 +206,52 @@ class StartCheckTest(unittest.TestCase):
     def test_green_run_with_a_failed_or_missing_job_is_blocked(self) -> None:
         failed = self.check(FakeActionsApi([run_document(self.head)], jobs=all_green_jobs(failed="frontend")))
         self.assertEqual(failed["result"], "blocked")
-        self.assertTrue(any("未成功的作业：['frontend']" in item for item in failed["blockers"]), failed["blockers"])
+        self.assertTrue(any("必需作业未成功：['frontend']" in item for item in failed["blockers"]), failed["blockers"])
         self.assertFalse(failed["ci"]["all_jobs_success"])
+        self.assertFalse(failed["ci"]["required_jobs_success"])
+        self.assertEqual(failed["ci"]["required_jobs_failed"], ["frontend"])
         missing = self.check(FakeActionsApi([run_document(self.head)], jobs=all_green_jobs(dropped="golangci-lint")))
         self.assertEqual(missing["result"], "blocked")
         self.assertEqual(missing["ci"]["required_jobs_missing"], ["golangci-lint"])
         self.assertTrue(any("缺少必需作业" in item for item in missing["blockers"]))
+
+    def test_required_jobs_must_be_success_even_if_skipped_or_neutral(self) -> None:
+        # 必需作业被跳过不算成功：只认 success。
+        for conclusion in ("skipped", "neutral", "cancelled", "failure", "timed_out", None):
+            with self.subTest(conclusion=conclusion):
+                jobs = all_green_jobs()
+                next(job for job in jobs if job["name"] == "golangci-lint")["conclusion"] = conclusion
+                report = self.check(FakeActionsApi([run_document(self.head)], jobs=jobs))
+                self.assertEqual(report["result"], "blocked")
+                self.assertEqual(report["ci"]["required_jobs_failed"], ["golangci-lint"])
+                self.assertFalse(report["ci"]["required_jobs_success"])
+
+    def test_optional_jobs_may_be_skipped_or_neutral_but_not_failed(self) -> None:
+        for conclusion in ("success", "skipped", "neutral"):
+            with self.subTest(conclusion=conclusion):
+                jobs = all_green_jobs() + [
+                    {"name": "optional-extra", "id": 5000, "status": "completed", "conclusion": conclusion,
+                     "started_at": "2026-10-25T01:00:00Z", "completed_at": "2026-10-25T01:01:00Z"}
+                ]
+                report = self.check(FakeActionsApi([run_document(self.head)], jobs=jobs))
+                self.assertEqual(report["result"], "ready", report["blockers"])
+                self.assertTrue(report["ci"]["required_jobs_success"])
+                self.assertEqual(report["ci"]["optional_jobs_blocking"], [])
+                # 报告照常列出全部作业的结论，包含被跳过的非必需作业
+                self.assertIn(("optional-extra", conclusion), [(job["name"], job["conclusion"]) for job in report["ci"]["jobs"]])
+                self.assertEqual(report["ci"]["all_jobs_success"], conclusion == "success")
+        for conclusion in ("failure", "cancelled", "timed_out", "action_required", "startup_failure", None):
+            with self.subTest(conclusion=conclusion):
+                jobs = all_green_jobs() + [
+                    {"name": "optional-extra", "id": 5000, "status": "completed", "conclusion": conclusion,
+                     "started_at": None, "completed_at": None}
+                ]
+                report = self.check(FakeActionsApi([run_document(self.head)], jobs=jobs))
+                self.assertEqual(report["result"], "blocked")
+                self.assertTrue(report["ci"]["required_jobs_success"])
+                self.assertEqual(report["ci"]["optional_jobs_blocking"], ["optional-extra"])
+                self.assertTrue(any("非必需作业失败或被取消" in item and "optional-extra" in item for item in report["blockers"]))
+                self.assertIn(("optional-extra", conclusion), [(job["name"], job["conclusion"]) for job in report["ci"]["jobs"]])
 
     def test_api_failure_is_blocked_with_the_reason(self) -> None:
         report = self.check(FakeActionsApi([], error="gh api 失败：HTTP 502"))
