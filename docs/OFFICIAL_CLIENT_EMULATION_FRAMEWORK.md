@@ -451,7 +451,25 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 
 ### 5.2.2 计划外预检（非权威）
 
-正式 `plan-create` 前先运行一次离线预检，顺序是“基线封存 → 输入准备 → 预检 → U-0”。输入准备：
+正式 `plan-create` 前先做开工检查，再运行一次离线预检，顺序是“开工检查 → 基线封存 → 输入准备 → 预检 → U-0”。
+
+开工检查由 `start-check` 执行，联网查询只放在这里，预检保持离线，所有查询只读（不 fetch、不 push）：
+
+- 主仓库工作树干净、在受维护分支上，且 HEAD 就是 origin 上该分支的当前提交（HEAD 没推上去，CI 结果就无从谈起）。
+- `backend-ci.yml` 在 HEAD 上最新一次运行（push 或 `workflow_dispatch` 事件；发版回写提交由令牌推送、不触发 push，
+  只有后者）已完成且成功，必需作业齐全且逐个成功。报告记录 HEAD 提交与 tree、run id 与 attempt、各作业结论与
+  完成时间；状态缺失或仍在运行都不算通过。Security Scan 只作信息记录，不作硬前置。
+- 基线工具链核对（`toolchain-check --role baseline`，也可单独运行）：期望值取主干自己的声明——`backend/go.mod`
+  的 `go`／`toolchain` 指令、CI 的 Go 校验版本、`GOLANGCI_LINT_VERSION`；实际值取 `backend/` 下的 `go env
+  GOVERSION`（遵循当前 `GOTOOLCHAIN`）与 lint 二进制（PATH 里的 `golangci-lint`，或 `UPSTREAM_GATE_GOLANGCI_LINT`
+  指定的绝对路径，门禁的 lint 步骤用同一份）。Go 或 lint 版本不等、lint 的编译 Go 主次版本低于期望 Go 都阻断，
+  输出期望值、实际值、不匹配项与修正提示。基线用主干声明的版本，不得沿用升级后的全局工具；候选在 `gates-run`
+  启动前按候选树自己的声明再核对一次。
+- CI 的 lint 版本只有一个来源：`GOLANGCI_LINT_VERSION` 在 golangci-lint 作业的 env 里恰好定义一次，默认、unit、
+  integration 三个 lint 步骤都引用它，标签恰为这三种，CI 的 Go 校验版本与 `backend/go.mod` 一致，由
+  `test-upstream-merge-tools` 的用例守护。上游改 lint 版本时，合并解决冲突改的是 `GOLANGCI_LINT_VERSION` 这一行。
+
+输入准备：
 
 - request 一律由 `request-render` 从标准模板生成：Active/Rollback 路径与版本取自当前 release catalog（Codex
   以发布图的 active／previous 节点为准），covered_tags 由 Git 复算，只读源码根渲染为主仓库路径，并写出绑定
@@ -461,7 +479,9 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
   --rerun-gates` 的临时执行树由工具离线安装，装不上即停。
 - 冲突解决与源码适配先在试验 worktree 完成、再由正式 Plan 机械重放时，试验 worktree 定型后、`plan-create`
   前先在其中执行一次与 U-4 相同的 `make upstream-gate-full`，全绿才建正式 Plan；台账类待办先用
-  `freeze-successor-generate --dry-run` 查看。
+  `freeze-successor-generate --dry-run` 查看。`upstream-gate-full` 之前先在试验 worktree 运行
+  `candidate-secret-scan`：规则与精确摘要白名单就是 request 里 U-4 的那份 `secret_scan` 门禁，命中不必等约 47
+  分钟的全量之后才暴露。
 
 预检报告写到仓库外或上述 Git 忽略的私有目录。预检在临时隔离 worktree 中试合并，试合并无冲突时再执行 egressscan 快照、
 `go build`、`go vet` 与官方 egress 目标包测试；另建一棵 `-X ours` 试扫描树（冲突块取 fork 侧，只供扫描），
@@ -494,7 +514,9 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
 | U-5 | 封存 candidate、Campaign 和回退处置 | `disposition-draft` 由验收收据派生输入，`disposition-seal` 校验并绑定验证收据、原业务回归和受影响 Persona 的后继动作。 |
 | U-6 | 快进受维护分支并能独立重放 | U-4 通过后仅由 `apply` 执行 ff-only 快进，随后 `finalize`／`replay`；人工不得合并、推送或部署。 |
 
-补充约束（各命令参数以 `--help` 为准；停在人工输入的命令照常输出结果，并以退出码 4 返回）：
+补充约束（各命令参数以 `--help` 为准；停在人工输入的命令照常输出结果，并以退出码 4 返回；`start-check`、
+`toolchain-check`、`candidate-secret-scan`、`gates-run`、`gates-status` 的结论为 blocked 时以退出码 5 返回，
+`gates-status` 读到未结束的 attempt 以 6 返回，结果同样照常输出）：
 
 - U-1：上游对闭集外文件的改动按普通冲突处置；对闭集内文件的改动按预检既定决定恢复受保护版本并在冲突
   台账登记。冲突决策可在后继 Plan 机械重放（`plan-replay`、`merge-seal --replay-from`）：试验区基点须与本 Plan
@@ -509,6 +531,10 @@ P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污�
   差异），人工改判优先；本轮新增或 diff 变化的条目停下写草稿，补完后续跑，已完成的步骤不重做。工具按 Git
   事实把“上游单侧改动”“两侧自动合并未改”（候选分别与上游、与 Git 自动合并结果逐字节相同）写成机械决定、
   人可改判，`impact-seal` 现算复核；冲突、合并后又改、只有我方改动的文件交人工。
+- U-4 启动：`gates-run` 在创建 attempt 目录、启动任何执行组之前先做三项检查，全部阻断原因一次列出，任一项不过
+  都不建 attempt——上一轮权威收据的失败项已逐项处置（下文“U-4 出口”）、候选工作树的 Go 与 lint 版本与它自己的
+  声明一致、候选密钥扫描通过（同一份 `secret_scan` 门禁）。执行组便宜的在前（secret-scan、inventory-closure，最后
+  full-regression），仍完整执行 12 类门禁，`skipped_gate_count` 为 0。
 - U-4：同一 `execution_group` 的相同命令只执行一次，六类客户端门禁收据由工具生成。`upstream-gate-full` 的
   各检查线遇错不停、快线在前、逐线输出，采集工具全量须通过分片闭合自检与全集核对；go test（`./...`、
   `-count=1`）与 golangci-lint 覆盖默认、unit、integration 三种标签，默认组是唯一按生产编译形态运行的一组，
@@ -533,6 +559,28 @@ U-4 的结果只有三种出口：
 
 冻结摘要类指 transition／successor 冻结测试、受管工具树摘要和 `check-egress-spec-ci` 中的摘要门禁，按
 §5.2.4 第 2 条处理。Plan 作废超过一次同样要停线复盘。
+
+重跑之前先读上一轮权威收据（`receipt.json` 的 result 与失败项，不看进度行），已知失败没处置不得启动下一轮全量。
+result 为 `blocked` 时，每个失败项——失败的执行组；runner-status 记录了失败步骤的细化到步骤，如
+`full-regression/egress-spec/check-egress-spec`；执行后污染候选树另算一项——都由 `failure-disposition` 写一份
+处置记录（Plan evidence 的 `u4/dispositions/`，只写一次、不可覆盖）：失败原因、修复动作、处置类别和定向复验。
+类别与要求：
+
+| 类别 | 要求 |
+|---|---|
+| 功能失败（归因不清的按它处理） | 当前 SourceCandidate 提交已在失败 attempt 之后推进 |
+| 冻结摘要类失败 | 按上文 successor 流程闭合：当前候选已含台账 revision（两提交之间新增 successor 收据），且复验含冻结测试或出站规格检查 |
+| 环境／工具类失败 | 当前版本检查通过 |
+
+定向复验只写命令（argv、cwd），由工具在当前候选 worktree 里真实执行，记录退出码、耗时、stdout／stderr 摘要与日志
+绑定，非 0 或超时即处置不成立，不接受手填的“已通过”。处置记录绑定写下它时的 SourceCandidate 提交，候选再推进
+即失效。`gates-run`（含 `--from-attempt` 部分重跑）发现最近一份有收据的 attempt 为 blocked 且存在未处置的失败项
+即拒绝启动并逐项列出。`awaiting_ci` 的未执行项不是失败，不需要处置，继续 `ci-push` 与 `gates-import-ci`；只有
+目录、没有收据的 attempt（被杀或崩溃）不算已知失败，只在输出里提示。
+
+监视以收据结论为准：`gates-run` 结束时向 stderr 输出固定一行 `U4-RESULT attempt=<id>
+result=<passed|blocked|awaiting_ci> failed=<失败项逗号分隔，无则 -> receipt=<收据路径>`；只读的 `gates-status`
+输出同一行，没有收据时报 `running`（运行标记显示进程仍在）或 `incomplete`。收据、日志与退出状态三者一致。
 
 #### 受维护分支在合并期间被第三方推进
 
