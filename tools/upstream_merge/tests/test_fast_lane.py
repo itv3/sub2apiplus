@@ -158,6 +158,9 @@ class PreconditionTest(FastFixture):
         with self.assertRaisesRegex(UpstreamMergeError, "状态文件已存在"):
             self.prepare(log_dir=self.out / "fresh", status_file=self.manifest_path)
         self.assertFalse((self.out / "fresh").exists())
+        with self.assertRaisesRegex(UpstreamMergeError, "状态文件所在目录不存在"):
+            self.prepare(log_dir=self.out / "fresh", status_file=self.out / "no-such-dir" / "status.json")
+        self.assertFalse((self.out / "fresh").exists())
         with self.assertRaisesRegex(UpstreamMergeError, "request"):
             self.prepare(log_dir=self.out / "fresh", request=self.out / "absent.json")
         with self.assertRaisesRegex(UpstreamMergeError, "对比用的全量状态文件"):
@@ -369,22 +372,18 @@ class LaneBuildingTest(FastFixture):
     def test_frontend_python_and_shell_entries_become_steps(self) -> None:
         context = self.prepare()
         manifest = context.manifest
-        manifest["frontend"]["related_files"] = ["src/x.ts", "src/y.ts"]
+        manifest["frontend"]["spec_files"] = ["src/__tests__/x.spec.ts", "src/__tests__/y.spec.ts"]
         manifest["python"] = [
             {"tests": "tools/upstream_merge/tests", "argv": ["python3", "-m", "unittest", "discover"], "cwd": ".", "files": [], "reason": "r"}
         ]
         manifest["shell"]["commands"] = [["/bin/sh", "deploy/tests/a.sh"], ["/bin/bash", "-n", "deploy/b.sh"]]
         steps = {step.name: step for step in build_fast_lanes(context)[5].steps}
         self.assertEqual(
-            steps["frontend-vitest-related"].argv,
-            ("pnpm", "--dir", "frontend", "exec", "vitest", "related", "--run", "--passWithNoTests", "src/x.ts", "src/y.ts"),
+            steps["frontend-vitest-specs"].argv,
+            ("pnpm", "--dir", "frontend", "exec", "vitest", "run", "src/__tests__/x.spec.ts", "src/__tests__/y.spec.ts"),
         )
         self.assertEqual(steps["python-tests-1"].argv, ("python3", "-m", "unittest", "discover"))
         self.assertEqual(steps["deploy-script-2"].argv, ("/bin/bash", "-n", "deploy/b.sh"))
-        manifest["frontend"]["run_all"] = True
-        steps = {step.name: step for step in build_fast_lanes(context)[5].steps}
-        self.assertEqual(steps["frontend-vitest-all"].argv, ("pnpm", "--dir", "frontend", "exec", "vitest", "run"))
-        self.assertNotIn("frontend-vitest-related", steps)
 
     def test_checklist_shows_the_correspondence_between_conflicts_and_targeted_regression(self) -> None:
         text = render_checklist(self.document)

@@ -23,8 +23,8 @@
   ``backend/go.mod`` 的依赖版本变化按“依赖该模块的包”并入；``go``／``toolchain``／``replace``／``exclude``
   指令变化、go.sum 单独变化、Go 文件找不到所属包，一律退回全量（``fallback_full_go``）。
   估算耗时超过预算（见 ``TARGETED_GO_BUDGET_SECONDS``）也退回全量，因为定向已不比全量省。
-* 前端：涉及 ``frontend/src`` 下的文件，用 ``vitest related`` 只跑与这些文件相关的用例；前端检查线本身已含
-  lint、typecheck 与关键用例。
+* 前端：涉及 ``frontend/src`` 下的文件，按 import 依赖图选出（传递）引用它们的用例，只跑这些用例（``vitest related``
+  在本仓库崩溃，不可用）；前端检查线本身已含 lint、typecheck 与关键用例。
 * 部署脚本：``deploy/`` 下的改动执行 CI ``shell`` 作业里的那批命令（从 ``backend-ci.yml`` 现取）。
 * ``tools/`` 下 Python：有测试目录的工具包（``upstream_merge``、``official_client_control``）跑它们的 unittest；
   被 Makefile 直接调用的脚本由出站规格线覆盖；采集工具树要整条采集线（约 33 分钟）才测得全，快线不含，列入 ``unresolved``。
@@ -70,22 +70,26 @@ GO_LIST_FIELDS = (
     "EmbedFiles,TestEmbedFiles,XTestEmbedFiles"
 )
 
-# 估算耗时：单位秒，按标签组各算一次再相加（两组串行执行）。依据是 v0.2.17 试验区默认标签 go test 的逐包耗时
-# （internal/officialegress 409、internal/service 218、internal/handler 40、cmd/egressscan 15、其余合计不到 90；
-# unit 标签组各包同量级，officialegress 417、service 278），再按本机单独跑定向包的实测校准（见第 3 步报告）。
-# 表里没有的包按 GO_DEFAULT_PACKAGE_SECONDS 估。
-GO_PACKAGE_SECONDS: dict[str, int] = {
-    "internal/officialegress": 410,
-    "internal/service": 250,
-    "internal/handler": 45,
-    "cmd/egressscan": 20,
-    "internal/server/routes": 12,
-    "internal/middleware": 12,
-    "internal/repository": 10,
+# 估算耗时（秒）：go test 的各个包在同一次 go test 里并行执行，墙钟约等于最重的包加上其余包的一小部分，两组标签串行相加。
+# 表是 (默认标签, unit 标签) 的实测值：officialegress、cmd/egressscan 取自 v0.2.17 试验区全量日志（默认 409／15、unit 417），
+# 其余取自 v0.2.18 演示清单在本机的定向实测（15 个包：默认组墙钟 272 秒、unit 组 348 秒，service 257／317、handler 41／42、
+# repository 8／10、routes 12／11）。表里没有的包按 GO_DEFAULT_PACKAGE_SECONDS 估。
+GO_PACKAGE_SECONDS: dict[str, tuple[int, int]] = {
+    "internal/officialegress": (410, 420),
+    "internal/service": (260, 320),
+    "internal/handler": (42, 43),
+    "cmd/egressscan": (20, 20),
+    "internal/server/routes": (12, 12),
+    "internal/middleware": (11, 11),
+    "internal/repository": (9, 10),
 }
 GO_DEFAULT_PACKAGE_SECONDS = 3
-# 定向 go test（两组标签合计）的预算：约 5～10 分钟。超过则不如直接跑全量。
-TARGETED_GO_BUDGET_SECONDS = 600
+# 其余包在最重的包运行期间并行执行，只按这个比例计入墙钟（用 v0.2.18 实测核对：默认组估 279 对实测 272，unit 组估 340 对实测 348）。
+GO_PARALLEL_SHARE = 0.25
+# 定向 go test（两组标签合计）的预算。含 service 包的定向组实测约 10 分钟，所以预算放到 12 分钟：
+# 预算再低，只要冲突涉及 service（几乎每次合并都是）就永远退回全量，定向就成了摆设；
+# 超过 12 分钟说明受影响面已接近全量（v0.2.17 试验区默认＋unit 全量 14.5 分钟），定向不再比全量省。
+TARGETED_GO_BUDGET_SECONDS = 720
 # 另设一个包数上限，防止估算表陈旧时静默放大范围。
 MAX_TARGETED_GO_PACKAGES = 60
 
@@ -456,13 +460,18 @@ def classify_non_go_path(
             if relative.endswith(STATIC_ASSET_SUFFIXES):
                 return Classified("no_test_needed", "图片与字体等静态资源，没有对应的用例")
             if relative.endswith(FRONTEND_TEST_RUNNER_EXTENSIONS):
-                return Classified("frontend_related", "frontend/src 下的源码或用例：vitest related 只跑与它相关的用例", relative)
+                if relative in FRONTEND_GLOBAL_SETUP:
+                    return Classified(
+                        "unresolved",
+                        "vitest 的 setupFiles：所有用例都会加载它，相关用例即全部用例；全部 vitest 用例不是 U-4／CI 的检查项，须人工确认影响",
+                    )
+                return Classified("frontend_related", "frontend/src 下的源码或用例：只跑 import 依赖图里引用它的用例", relative)
             return Classified("unresolved", "frontend/src 下无法判断是否被用例引用的文件类型")
         if relative in FRONTEND_CONFIG_NAMES:
             return Classified(
-                "frontend_config",
-                "前端依赖或工具链配置：前端检查线（lint、typecheck、关键用例）已按候选树重跑，快线再补跑全部 vitest 用例",
-                relative,
+                "no_test_needed",
+                "前端依赖或工具链配置：前端检查线（lint、typecheck、关键用例）按候选树重跑，与 U-4 和 CI 的前端线完全一致；"
+                "全部 vitest 用例不是 U-4／CI 的检查项（本机基线上就有依赖时区的用例失败），快线不另跑",
             )
         if relative.startswith("public/") or relative.endswith(NO_TEST_DOC_SUFFIXES):
             return Classified("no_test_needed", "静态资源或文档，没有对应的用例")
@@ -475,8 +484,10 @@ def classify_non_go_path(
                 "unresolved",
                 "采集工具树要整条采集线（全量约 33 分钟）才测得全，快线不含；合并期间本不应改动这棵受管工具树，须人工确认",
             )
+        # tools/upstream_merge_*.schema.json 是合并工具的 schema，由 tools/upstream_merge 的 unittest 校验，按该包处理。
+        owner_path = f"tools/upstream_merge/{name}" if name.startswith("upstream_merge_") and name.endswith(".schema.json") else path
         for package, (tests, target) in PYTHON_TEST_PACKAGES.items():
-            if path == package or path.startswith(package + "/"):
+            if owner_path == package or owner_path.startswith(package + "/"):
                 if target in egress_spec_checks:
                     return Classified(
                         "no_test_needed",
@@ -514,6 +525,93 @@ def classify_non_go_path(
     if name == "go.mod" or name == "go.sum":
         return Classified("unresolved", "backend 之外的 Go 模块，快线不含")
     return Classified("unresolved", "无法归入任何已知的回归类别")
+
+
+# ---------------------------------------------------------------------------
+# 前端：按 import 依赖图找出引用改动文件的用例
+# ---------------------------------------------------------------------------
+
+# vitest 自带的 ``related`` 在本仓库（vitest 2.1.9）遍历依赖时对 .vue 文件解析报错（RollupError）而崩溃，实测不可用，
+# 所以这里自己扫 import 依赖图：改动文件被哪些用例（传递）引用，就跑哪些用例，并且把对应关系写进清单。
+FRONTEND_CODE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue")
+FRONTEND_RESOLVE_SUFFIXES = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".json")
+FRONTEND_INDEX_NAMES = ("index.ts", "index.tsx", "index.js", "index.jsx", "index.vue")
+FRONTEND_SPEC_RE = re.compile(r"^src/.*\.(?:test|spec)\.(?:js|ts|jsx|tsx)$")
+# 全部用例都会加载的测试公共文件（vitest.config.ts 的 setupFiles）：它变化等于所有用例相关。
+FRONTEND_GLOBAL_SETUP = ("src/__tests__/setup.ts",)
+_FRONTEND_IMPORT_RE = re.compile(
+    r"(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*|\bvi\.(?:mock|doMock|importActual|importMock)\s*\(\s*)"
+    r"(['\"])(?P<spec>[^'\"\n]+)\1"
+)
+
+
+def load_frontend_sources(frontend_dir: Path) -> dict[str, str | None]:
+    """frontend/src 下全部文件：代码文件读文本，其余（样式、json、图片）只记录存在，文本为 None。键是相对 frontend 的路径。"""
+
+    sources: dict[str, str | None] = {}
+    source_root = frontend_dir / "src"
+    if not source_root.is_dir():
+        return sources
+    for current, _directories, names in os.walk(source_root):
+        for name in names:
+            path = Path(current) / name
+            relative = path.relative_to(frontend_dir).as_posix()
+            if name.endswith(FRONTEND_CODE_SUFFIXES) and not path.is_symlink():
+                sources[relative] = path.read_text(encoding="utf-8", errors="replace")
+            else:
+                sources[relative] = None
+    return sources
+
+
+def _resolve_frontend_import(specifier: str, importer: str, known: set[str]) -> str | None:
+    if specifier.startswith("@/"):
+        base = "src/" + specifier[2:]
+    elif specifier.startswith("."):
+        base = posixpath.normpath(posixpath.join(posixpath.dirname(importer), specifier))
+    else:
+        return None
+    base = base.split("?", 1)[0]
+    for suffix in FRONTEND_RESOLVE_SUFFIXES:
+        if base + suffix in known:
+            return base + suffix
+    for index in FRONTEND_INDEX_NAMES:
+        candidate = posixpath.join(base, index)
+        if candidate in known:
+            return candidate
+    return None
+
+
+def related_frontend_specs(sources: Mapping[str, str | None], changed: Sequence[str]) -> dict[str, list[str]]:
+    """{用例: [经 import 依赖引用到的改动文件]}。改动文件本身若是用例也算（引用自己）。
+
+    依赖边来自 ``import … from``、副作用 import、动态 ``import()``、``require`` 与 ``vi.mock`` 等写法，
+    解析 ``@/`` 别名与相对路径；``import.meta.glob`` 这类运行期拼出的依赖解析不了，由前端检查线和关键用例兜底。
+    """
+
+    known = set(sources)
+    importers: dict[str, set[str]] = defaultdict(set)
+    for importer, text in sources.items():
+        if text is None:
+            continue
+        for match in _FRONTEND_IMPORT_RE.finditer(text):
+            target = _resolve_frontend_import(match.group("spec"), importer, known)
+            if target is not None and target != importer:
+                importers[target].add(importer)
+    result: dict[str, list[str]] = defaultdict(list)
+    for start in changed:
+        if start not in known:
+            continue
+        seen = {start}
+        queue = [start]
+        while queue:
+            current = queue.pop()
+            if FRONTEND_SPEC_RE.match(current):
+                result[current].append(start)
+            for parent in importers.get(current, ()):
+                if parent not in seen:
+                    seen.add(parent)
+                    queue.append(parent)
+    return {spec: sorted(set(files)) for spec, files in sorted(result.items())}
 
 
 # ---------------------------------------------------------------------------
@@ -616,8 +714,15 @@ def _file_origin_text(files: Sequence[tuple[str, list[str]]], limit: int = 3) ->
     return f"{'、'.join(parts)}（{examples}{more}）"
 
 
-def estimate_seconds(rel_dirs: Sequence[str]) -> int:
-    return sum(GO_PACKAGE_SECONDS.get(rel_dir, GO_DEFAULT_PACKAGE_SECONDS) for rel_dir in rel_dirs)
+def estimate_seconds(rel_dirs: Sequence[str], label: str = "default") -> int:
+    """一个标签组里这批包的 go test 估算墙钟：最重的包加其余包的 ``GO_PARALLEL_SHARE``。"""
+
+    column = 1 if label == "unit" else 0
+    seconds = [GO_PACKAGE_SECONDS[rel_dir][column] if rel_dir in GO_PACKAGE_SECONDS else GO_DEFAULT_PACKAGE_SECONDS for rel_dir in rel_dirs]
+    if not seconds:
+        return 0
+    heaviest = max(seconds)
+    return round(heaviest + GO_PARALLEL_SHARE * (sum(seconds) - heaviest))
 
 
 def plan_targeted_regression(
@@ -654,7 +759,6 @@ def plan_targeted_regression(
     no_test: list[dict[str, str]] = []
     unresolved: list[dict[str, Any]] = []
     frontend_related: dict[str, list[str]] = {}
-    frontend_config: dict[str, list[str]] = {}
     python_suites: dict[str, dict[str, Any]] = {}
     deploy_files: list[str] = []
     go_mod_paths: list[str] = []
@@ -738,8 +842,6 @@ def plan_targeted_regression(
             no_test.append({"path": path, "origin": ",".join(origins), "reason": classified.reason})
         elif classified.kind == "frontend_related":
             frontend_related[str(classified.target)] = origins
-        elif classified.kind == "frontend_config":
-            frontend_config[str(classified.target)] = origins
         elif classified.kind == "python_tests":
             suite = python_suites.setdefault(str(classified.target), {"tests": str(classified.target), "files": [], "reason": classified.reason})
             suite["files"].append(path)
@@ -844,7 +946,7 @@ def plan_targeted_regression(
             "packages": selected,
             "covered_by_egress_spec_lane": covered,
             "no_test_files": no_tests,
-            "estimated_seconds": estimate_seconds(selected),
+            "estimated_seconds": estimate_seconds(selected, label),
         }
     total_packages = len({rel for data in tag_sets.values() for rel in data["packages"]})
     estimated = sum(data["estimated_seconds"] for data in tag_sets.values())
@@ -859,6 +961,20 @@ def plan_targeted_regression(
 
     # ---- 其余类别 ----
     frontend_files = sorted(frontend_related)
+    frontend_specs: dict[str, list[str]] = {}
+    frontend_without_spec: list[str] = []
+    if frontend_files:
+        frontend_specs = related_frontend_specs(load_frontend_sources(root / "frontend"), frontend_files)
+        reached = {file for files in frontend_specs.values() for file in files}
+        frontend_without_spec = [path for path in frontend_files if path not in reached]
+        for path in frontend_without_spec:
+            no_test.append(
+                {
+                    "path": f"frontend/{path}",
+                    "origin": ",".join(frontend_related[path]),
+                    "reason": "没有任何用例（传递）import 它；类型检查与 lint 检查线、关键用例覆盖。运行期拼出的依赖（import.meta.glob）解析不了",
+                }
+            )
     deploy_commands: list[list[str]] = []
     if deploy_files:
         workflow_text = (root / CI_WORKFLOW_PATH).read_text(encoding="utf-8") if (root / CI_WORKFLOW_PATH).is_file() else ""
@@ -925,15 +1041,16 @@ def plan_targeted_regression(
             "integration": {"executed_in_fast": False, "reason": INTEGRATION_NOTE},
         },
         "frontend": {
-            "related_files": frontend_files,
-            "run_all": bool(frontend_config),
-            "run_all_reason": (
-                "前端配置文件变化：" + "、".join(sorted(frontend_config)) if frontend_config else ""
-            ),
-            "command": ["pnpm", "--dir", "frontend", "exec", "vitest", "related", "--run", "--passWithNoTests", "<related_files>"]
-            if frontend_files
-            else None,
-            "reasons": {path: "冲突文件或实际修改的前端文件：" + ",".join(frontend_related[path]) for path in frontend_files},
+            "changed_files": frontend_files,
+            "origins": {path: frontend_related[path] for path in frontend_files},
+            "spec_files": sorted(frontend_specs),
+            "specs": {
+                spec: {"changed_files": files, "reason": "经 import 依赖引用了改动文件 " + "、".join(files[:3]) + ("等" if len(files) > 3 else "")}
+                for spec, files in frontend_specs.items()
+            },
+            "without_spec": frontend_without_spec,
+            "command": frontend_vitest_argv(["<spec_files>"]) if frontend_specs else None,
+            "note": "vitest related 在本仓库崩溃（见 related_frontend_specs），改用 import 依赖图选用例",
         },
         "python": python_list,
         "shell": {
@@ -951,7 +1068,8 @@ def plan_targeted_regression(
             "affected_go_package_count": len(packages),
             "targeted_go_package_count": total_packages,
             "fallback_full_go": fallback,
-            "frontend_related_file_count": len(frontend_files),
+            "frontend_changed_file_count": len(frontend_files),
+            "frontend_spec_count": len(frontend_specs),
             "python_suite_count": len(python_list),
             "shell_command_count": len(deploy_commands),
             "no_test_needed_count": len(no_test),
@@ -1033,9 +1151,11 @@ def load_targeted_regression(path: Path) -> dict[str, Any]:
             raise UpstreamMergeError(f"定向回归清单.go.tag_sets.{label}.packages 必须是 backend 相对目录数组")
         if any(item.startswith("/") or ".." in item.split("/") for item in packages):
             raise UpstreamMergeError(f"定向回归清单.go.tag_sets.{label}.packages 含不安全的目录")
-    related = expect_object(document.get("frontend"), "定向回归清单.frontend").get("related_files")
-    if not isinstance(related, list) or not all(isinstance(item, str) and not item.startswith("/") and ".." not in item.split("/") for item in related):
-        raise UpstreamMergeError("定向回归清单.frontend.related_files 必须是 frontend 相对路径数组")
+    specs = expect_object(document.get("frontend"), "定向回归清单.frontend").get("spec_files")
+    if not isinstance(specs, list) or not all(
+        isinstance(item, str) and FRONTEND_SPEC_RE.match(item) and ".." not in item.split("/") for item in specs
+    ):
+        raise UpstreamMergeError("定向回归清单.frontend.spec_files 必须是 frontend/src 下的用例相对路径数组")
     for suite in document.get("python") or []:
         suite = expect_object(suite, "定向回归清单.python")
         if suite.get("tests") not in {tests for tests, _target in PYTHON_TEST_PACKAGES.values()}:
@@ -1063,5 +1183,7 @@ def go_test_argv(tags: str, packages: Sequence[str]) -> list[str]:
     return argv
 
 
-def frontend_related_argv(files: Sequence[str]) -> list[str]:
-    return ["pnpm", "--dir", "frontend", "exec", "vitest", "related", "--run", "--passWithNoTests", *files]
+def frontend_vitest_argv(specs: Sequence[str]) -> list[str]:
+    """只跑清单里选出的前端用例（与 ``make test-frontend-critical`` 同样的 vitest run 写法）。"""
+
+    return ["pnpm", "--dir", "frontend", "exec", "vitest", "run", *specs]

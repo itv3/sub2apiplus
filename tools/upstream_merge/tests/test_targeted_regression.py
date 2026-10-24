@@ -341,8 +341,22 @@ class FallbackTest(TargetedRegressionTestCase):
         self.assertTrue(capped["go"]["fallback_full_go"])
         self.assertTrue(any("超过上限" in reason for reason in capped["go"]["fallback_reasons"]))
 
-    def test_estimate_uses_the_measured_heavy_package_table(self) -> None:
-        self.assertEqual(tr.estimate_seconds(["internal/service", "internal/pkg/x"]), 250 + tr.GO_DEFAULT_PACKAGE_SECONDS)
+    def test_estimate_models_parallel_packages_as_heaviest_plus_a_share_of_the_rest(self) -> None:
+        # 包在同一次 go test 里并行：墙钟≈最重的包＋其余包的一小部分；unit 标签组的 service 比默认组重。
+        self.assertEqual(tr.estimate_seconds([]), 0)
+        self.assertEqual(tr.estimate_seconds(["internal/service"]), 260)
+        self.assertEqual(tr.estimate_seconds(["internal/service"], "unit"), 320)
+        self.assertEqual(
+            tr.estimate_seconds(["internal/service", "internal/handler", "internal/pkg/x"]),
+            round(260 + tr.GO_PARALLEL_SHARE * (42 + tr.GO_DEFAULT_PACKAGE_SECONDS)),
+        )
+
+    def test_default_budget_admits_a_service_sized_selection_but_not_the_full_trial_selection(self) -> None:
+        typical = ["internal/service", "internal/handler", "internal/repository", "internal/server/routes"]
+        total = tr.estimate_seconds(typical) + tr.estimate_seconds(typical, "unit")
+        self.assertLessEqual(total, tr.TARGETED_GO_BUDGET_SECONDS)
+        with_egress = [*typical, "internal/officialegress"]
+        self.assertGreater(tr.estimate_seconds(with_egress) + tr.estimate_seconds(with_egress, "unit"), tr.TARGETED_GO_BUDGET_SECONDS)
 
 
 class NonGoClassificationTest(TargetedRegressionTestCase):
@@ -358,13 +372,18 @@ class NonGoClassificationTest(TargetedRegressionTestCase):
             path: f"{content}// merged\n" for path, content in files.items()
         })
 
-    def test_frontend_files_go_to_vitest_related_and_config_changes_run_everything(self) -> None:
+    def test_frontend_sources_select_the_specs_that_import_them_and_config_changes_are_left_to_the_frontend_lane(self) -> None:
+        # 注意 adjusted 会把 x.ts 改成带注释的内容；base 里没有任何用例引用 x.ts，所以它落在 without_spec
         document = self.adjusted({"frontend/src/x.ts": "export const x = 1\n"})
-        self.assertEqual(document["frontend"]["related_files"], ["src/x.ts"])
-        self.assertFalse(document["frontend"]["run_all"])
+        self.assertEqual(document["frontend"]["changed_files"], ["src/x.ts"])
+        self.assertEqual(document["frontend"]["spec_files"], [])
+        self.assertEqual(document["frontend"]["without_spec"], ["src/x.ts"])
+        self.assertTrue(any(item["path"] == "frontend/src/x.ts" for item in document["no_test_needed"]))
         document = self.adjusted({"frontend/src/x.ts": "export const x = 1\n", "frontend/package.json": "{}\n"})
-        self.assertTrue(document["frontend"]["run_all"])
-        self.assertIn("package.json", document["frontend"]["run_all_reason"])
+        self.assertEqual(document["frontend"]["changed_files"], ["src/x.ts"])
+        item = next(entry for entry in document["no_test_needed"] if entry["path"] == "frontend/package.json")
+        self.assertIn("前端检查线", item["reason"])
+        self.assertEqual(document["unresolved"], [])
 
     def test_deploy_changes_execute_the_ci_shell_job_commands(self) -> None:
         document = self.adjusted({"deploy/run.sh": "echo 1\n"})
@@ -390,6 +409,11 @@ class NonGoClassificationTest(TargetedRegressionTestCase):
         self.assertEqual(document["python"], [])
         self.assertIn("test-upstream-merge-tools", document["no_test_needed"][0]["reason"])
 
+    def test_merge_tool_schema_files_follow_the_merge_tool_tests(self) -> None:
+        document = self.adjusted({"tools/upstream_merge_artifacts.schema.json": "{}\n"})
+        self.assertEqual(document["unresolved"], [])
+        self.assertIn("test-upstream-merge-tools", document["no_test_needed"][0]["reason"])
+
     def test_capture_tools_are_unresolved_without_forcing_full_go(self) -> None:
         document = self.adjusted({"tools/official_client_capture/cap.py": "x = 1\n"})
         self.assertEqual([item["path"] for item in document["unresolved"]], ["tools/official_client_capture/cap.py"])
@@ -400,6 +424,78 @@ class NonGoClassificationTest(TargetedRegressionTestCase):
     def test_unknown_top_level_files_are_unresolved(self) -> None:
         document = self.adjusted({"scripts/mystery.sh": "echo\n"})
         self.assertEqual(document["unresolved"][0]["path"], "scripts/mystery.sh")
+
+
+class FrontendDependencyGraphTest(unittest.TestCase):
+    """用例选择来自 import 依赖图，不依赖 vitest related（它在本仓库遇 .vue 文件崩溃）。"""
+
+    SOURCES = {
+        "src/utils/format.ts": "export const format = () => 1\n",
+        "src/api/client.ts": "import { format } from '@/utils/format'\nexport const get = format\n",
+        "src/api/index.ts": "export * from './client'\n",
+        "src/components/Card.vue": "<script setup lang=\"ts\">\nimport { get } from '@/api'\n</script>\n<template><div/></template>\n",
+        "src/views/HomeView.vue": "<script setup>\nimport Card from '../components/Card.vue'\n</script>\n",
+        "src/views/__tests__/HomeView.spec.ts": "import Home from '../HomeView.vue'\n",
+        "src/api/__tests__/client.spec.ts": "import { get } from '../client'\n",
+        "src/utils/__tests__/format.spec.ts": "import { format } from '../format'\n",
+        "src/other/__tests__/mocked.spec.ts": "vi.mock('@/utils/format', () => ({}))\n",
+        "src/other/__tests__/dynamic.spec.ts": "const m = await import('@/api/client')\n",
+        "src/other/unrelated.ts": "export const z = 1\n",
+        "src/other/__tests__/unrelated.spec.ts": "import { z } from '../unrelated'\n",
+        "src/styles/app.css": None,
+    }
+
+    def test_transitive_importers_including_aliases_index_files_mocks_and_dynamic_imports_are_found(self) -> None:
+        related = tr.related_frontend_specs(self.SOURCES, ["src/utils/format.ts"])
+        self.assertEqual(
+            sorted(related),
+            [
+                "src/api/__tests__/client.spec.ts",
+                "src/other/__tests__/dynamic.spec.ts",
+                "src/other/__tests__/mocked.spec.ts",
+                "src/utils/__tests__/format.spec.ts",
+                "src/views/__tests__/HomeView.spec.ts",
+            ],
+        )
+        self.assertTrue(all(files == ["src/utils/format.ts"] for files in related.values()))
+
+    def test_vue_components_and_a_changed_spec_itself_are_handled(self) -> None:
+        related = tr.related_frontend_specs(self.SOURCES, ["src/components/Card.vue", "src/other/__tests__/unrelated.spec.ts"])
+        self.assertEqual(sorted(related), ["src/other/__tests__/unrelated.spec.ts", "src/views/__tests__/HomeView.spec.ts"])
+        self.assertEqual(related["src/views/__tests__/HomeView.spec.ts"], ["src/components/Card.vue"])
+
+    def test_file_nobody_imports_selects_nothing_and_unknown_files_are_ignored(self) -> None:
+        self.assertEqual(tr.related_frontend_specs(self.SOURCES, ["src/styles/app.css"]), {})
+        self.assertEqual(tr.related_frontend_specs(self.SOURCES, ["src/gone.ts"]), {})
+
+    def test_external_packages_never_create_edges(self) -> None:
+        sources = {"src/a.ts": "import { ref } from 'vue'\n", "src/__tests__/a.spec.ts": "import 'vue'\nimport { a } from '../a'\n"}
+        self.assertEqual(sorted(tr.related_frontend_specs(sources, ["src/a.ts"])), ["src/__tests__/a.spec.ts"])
+
+
+class FrontendScenarioTest(TargetedRegressionTestCase):
+    def test_plan_selects_only_specs_reaching_the_changed_frontend_files(self) -> None:
+        fork, upstream = self.scenario.build(
+            {"frontend/src/y.ts": "export const y = 2\n", "frontend/src/y.spec.ts": "import { y } from './y'\n"},
+            {"frontend/src/x.ts": "export const x = 5\n", "frontend/src/x.spec.ts": "import { x } from './x'\n"},
+            {"frontend/src/x.ts": "export const x = 6\n", "frontend/src/y.ts": "export const y = 3\n"},
+        )
+        document = self.scenario.plan(fork, upstream, STANDARD_PACKAGES)
+        # x.ts：两侧无冲突，上游改动后候选又改 → 实际修改；y.ts：fork 改动后候选又改 → 实际修改。
+        self.assertEqual(document["frontend"]["changed_files"], ["src/x.ts", "src/y.ts"])
+        self.assertEqual(document["frontend"]["spec_files"], ["src/x.spec.ts", "src/y.spec.ts"])
+        self.assertIn("src/x.ts", document["frontend"]["specs"]["src/x.spec.ts"]["reason"])
+        self.assertEqual(document["frontend"]["without_spec"], [])
+
+    def test_setup_file_change_is_unresolved(self) -> None:
+        fork, upstream = self.scenario.build(
+            {"frontend/src/__tests__/setup.ts": "export {}\n"},
+            {"frontend/src/__tests__/setup.ts": "export {} // up\n"},
+            {"frontend/src/__tests__/setup.ts": "export {} // merged\n"},
+        )
+        document = self.scenario.plan(fork, upstream, STANDARD_PACKAGES)
+        self.assertEqual([item["path"] for item in document["unresolved"]], ["frontend/src/__tests__/setup.ts"])
+        self.assertFalse(document["unresolved"][0]["go_related"])
 
 
 class MakefileAndWorkflowParsingTest(unittest.TestCase):
@@ -472,7 +568,8 @@ class WriteAndLoadTest(TargetedRegressionTestCase):
             lambda d: d["go"]["tag_sets"]["unit"].update(packages=["internal/a; rm -rf x"]),
             lambda d: d["shell"].update(commands=[["/usr/bin/curl", "http://x"]]),
             lambda d: d["shell"].update(commands=[["/bin/sh", "/etc/passwd"]]),
-            lambda d: d["frontend"].update(related_files=["../../etc/passwd"]),
+            lambda d: d["frontend"].update(spec_files=["../../etc/passwd.spec.ts"]),
+            lambda d: d["frontend"].update(spec_files=["src/not-a-spec.ts"]),
         ):
             tampered = json.loads(json.dumps(document))
             mutate(tampered)
@@ -514,6 +611,7 @@ class CommandLineTest(unittest.TestCase):
             sh(root, "git", "init", "-b", "main")
             (root / "frontend/src").mkdir(parents=True)
             (root / "frontend/src/x.ts").write_text("export const x = 1\n", encoding="utf-8")
+            (root / "frontend/src/x.spec.ts").write_text("import { x } from './x'\n", encoding="utf-8")
             (root / "README.md").write_text("说明\n", encoding="utf-8")
             sh(root, "git", "add", "--all")
             sh(root, "git", "commit", "-q", "-m", "base")
@@ -539,9 +637,11 @@ class CommandLineTest(unittest.TestCase):
             self.assertEqual(code, 0)
             result = json.loads(captured.buffer.getvalue().decode("utf-8"))
             self.assertEqual(result["result"], "planned")
-            self.assertEqual(result["summary"]["frontend_related_file_count"], 1)
+            self.assertEqual(result["summary"]["frontend_changed_file_count"], 1)
+            self.assertEqual(result["summary"]["frontend_spec_count"], 1)
             document = tr.load_targeted_regression(output)
-            self.assertEqual(document["frontend"]["related_files"], ["src/x.ts"])
+            self.assertEqual(document["frontend"]["changed_files"], ["src/x.ts"])
+            self.assertEqual(document["frontend"]["spec_files"], ["src/x.spec.ts"])
             with mock.patch("sys.stdout", new=SimpleBuffer()), mock.patch("sys.stderr", new=io.StringIO()):
                 self.assertEqual(cli.main(argv), 2)
 

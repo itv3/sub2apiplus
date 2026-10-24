@@ -59,7 +59,7 @@ from .gate_runner import (
 from .gitops import assert_git_repository, commit_tree, rev_parse, status_paths
 from .targeted_regression import (
     GO_TAG_SETS,
-    frontend_related_argv,
+    frontend_vitest_argv,
     go_test_argv,
     load_targeted_regression,
 )
@@ -166,6 +166,9 @@ def prepare_fast_run(
             resolved_status = Path.cwd() / resolved_status
         if resolved_status.exists() or resolved_status.is_symlink():
             raise UpstreamMergeError(f"快线状态文件已存在，禁止覆盖上一轮证据：{resolved_status}")
+        if not resolved_status.parent.is_dir():
+            # 状态文件在整轮结束后才写；目录不存在要在开跑前就拒绝，不能跑完才发现写不出结果。
+            raise UpstreamMergeError(f"快线状态文件所在目录不存在：{resolved_status.parent}")
     if compare_with is not None and not compare_with.is_file():
         raise UpstreamMergeError(f"对比用的全量状态文件不存在：{compare_with}")
     # 全部校验通过之后才创建日志目录，拒绝启动不留垃圾。
@@ -262,11 +265,9 @@ def render_checklist(manifest: dict[str, Any]) -> str:
         for entry in go["affected_packages"]:
             lines.append(f"  包 {entry['dir'] or '.'}：{'；'.join(entry['reasons'])}")
     frontend = manifest["frontend"]
-    if frontend["run_all"]:
-        lines.append(f"前端：{frontend['run_all_reason']}，跑全部 vitest 用例")
-    elif frontend["related_files"]:
-        lines.append(f"前端：vitest related，{len(frontend['related_files'])} 个文件：")
-        lines.extend(f"  - {path}（{frontend['reasons'][path]}）" for path in frontend["related_files"])
+    if frontend["spec_files"]:
+        lines.append(f"前端：{len(frontend['changed_files'])} 个改动文件，按 import 依赖图选出 {len(frontend['spec_files'])} 个用例：")
+        lines.extend(f"  - {spec}（{frontend['specs'][spec]['reason']}）" for spec in frontend["spec_files"])
     for suite in manifest["python"]:
         lines.append(f"Python：{' '.join(suite['argv'])}（{suite['reason']}；涉及 {len(suite['files'])} 个文件）")
     for command in manifest["shell"]["commands"]:
@@ -324,10 +325,8 @@ def _targeted_steps(context: FastContext) -> list[Step]:
                     )
                 )
     frontend = manifest["frontend"]
-    if frontend["run_all"]:
-        steps.append(Step("frontend-vitest-all", ("pnpm", "--dir", "frontend", "exec", "vitest", "run")))
-    elif frontend["related_files"]:
-        steps.append(Step("frontend-vitest-related", tuple(frontend_related_argv(frontend["related_files"]))))
+    if frontend["spec_files"]:
+        steps.append(Step("frontend-vitest-specs", tuple(frontend_vitest_argv(frontend["spec_files"]))))
     for index, suite in enumerate(manifest["python"], start=1):
         steps.append(Step(f"python-tests-{index}", tuple(suite["argv"]), cwd=suite["cwd"]))
     for index, command in enumerate(manifest["shell"]["commands"], start=1):
