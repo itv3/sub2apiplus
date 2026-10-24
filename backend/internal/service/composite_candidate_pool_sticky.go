@@ -89,7 +89,7 @@ func (r *compositeCandidateRun) stickyCandidate(candidates []*compositeCandidate
 // continuationOwner 返回 Responses 续链归属的账号。成立条件：
 //  1. 入站是 Responses 且请求带 previous_response_id；
 //  2. 响应归属表里查得到该响应 ID 的账号；
-//  3. 该账号是 OpenAI 平台账号（国产与自定义平台的 Responses 一律无状态，不存在可续的链），
+//  3. 该账号是 OpenAI 平台账号（国产与自定义多协议平台的 Responses 一律无状态，不存在可续的链），
 //     仍属于本分组且对该模型有声明（任意强度：续链已落在它身上，不能因声明强度层级变化而断链）；
 //  4. 该账号当前通过资格过滤（基于实时读取的账号）。
 //

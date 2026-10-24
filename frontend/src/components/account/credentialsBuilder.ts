@@ -545,7 +545,7 @@ export function isCustomPlatform(platform: string | null | undefined): boolean {
   return platform === CUSTOM_PLATFORM_ID
 }
 
-/** 自定义平台表单的三个地址框（创建与编辑弹窗共用）；labelKey / hintKey 是 admin.accounts.customPlatform.* 子键。 */
+/** 自定义多协议平台表单的三个地址框（创建与编辑弹窗共用）；labelKey / hintKey 是 admin.accounts.customPlatform.* 子键。 */
 export const CUSTOM_ENDPOINT_FIELDS: ReadonlyArray<{
   protocol: CnNativeApiProtocol
   labelKey: string

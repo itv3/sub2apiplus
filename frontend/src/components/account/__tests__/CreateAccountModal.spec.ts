@@ -679,7 +679,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const labels = (testid: string) =>
       wrapper.get(`[data-testid="${testid}"]`).findAll('button').map(button => button.text().trim())
     expect(labels('platform-row-cn')).toEqual(['Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax'])
-    expect(labels('platform-row-aggregators')).toEqual(['OpenCode', 'Command Code', 'Cline', '自定义'])
+    expect(labels('platform-row-aggregators')).toEqual(['OpenCode', 'Command Code', 'Cline', '自定义多协议'])
   })
 
   it('creates a Cline account without an account type and with only the Chat Completions endpoint', async () => {
@@ -730,7 +730,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       // API 协议固定为自适应：不显示协议选择卡片（标题与各协议说明都不出现）。
       expect(text).not.toContain('admin.accounts.cnProviders.apiProtocol.title')
       expect(text).not.toContain('admin.accounts.cnProviders.apiProtocol.adaptiveDesc')
-      // 只有自定义平台自己的三个地址框，不再出现单一 Base URL 输入框。
+      // 只有自定义多协议平台自己的三个地址框，不再出现单一 Base URL 输入框。
       expect(text).not.toContain('admin.accounts.baseUrl')
       expect(wrapper.find('[data-testid="custom-endpoints"]').exists()).toBe(true)
 

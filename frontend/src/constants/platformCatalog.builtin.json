@@ -281,7 +281,7 @@
     },
     {
       "id": "custom",
-      "display_name": "自定义",
+      "display_name": "自定义多协议",
       "gateway": "openai",
       "cn_provider": false,
       "multi_protocol": {

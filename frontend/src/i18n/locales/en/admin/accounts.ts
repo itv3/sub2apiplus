@@ -187,7 +187,7 @@ export default {
         anthropicHint: 'Enter the address up to the domain; /v1/messages is appended automatically',
         anthropicAuthSchemeDesc: 'Only applies to the Anthropic endpoint. Chat Completions and Responses endpoints always use Authorization: Bearer.',
         chatCompletionsRequired: 'Please enter the Chat Completions address',
-        compositeModelHint: 'To join a Composite group, a model whitelist or model mapping is required. The Custom platform has no prefix rules, so an account that declares no models is never selected.',
+        compositeModelHint: 'To join a Composite group, a model whitelist or model mapping is required. The Custom Multi-Protocol platform has no prefix rules, so an account that declares no models is never selected.',
       },
       cnProviders: {
         accountMode: {

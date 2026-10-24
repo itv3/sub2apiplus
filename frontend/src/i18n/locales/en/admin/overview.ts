@@ -1052,7 +1052,7 @@ export default {
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
         typesafe: 'TypeSafe / Jev',
-        custom: 'Custom',
+        custom: 'Custom Multi-Protocol',
         composite: 'Composite',
       },
       deleteConfirm:

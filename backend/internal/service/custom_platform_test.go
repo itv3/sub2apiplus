@@ -49,7 +49,7 @@ func TestCustomPlatformRegistration(t *testing.T) {
 	spec, ok := domain.LookupPlatform(PlatformCustom)
 	require.True(t, ok)
 	require.Equal(t, "custom", spec.ID)
-	require.Equal(t, "自定义", spec.DisplayName)
+	require.Equal(t, "自定义多协议", spec.DisplayName)
 	require.Equal(t, domain.PlatformGatewayOpenAI, spec.Gateway)
 	require.True(t, domain.UsesOpenAIGateway(PlatformCustom))
 	require.True(t, domain.IsGroupPlatform(PlatformCustom))
@@ -325,7 +325,7 @@ func TestStatelessResponsesNormalizationForCustomAndDomestic(t *testing.T) {
 		account *Account
 		wantURL string
 	}{
-		{"自定义平台", customTestAccount(customFullURLs()), "http://responses.example/v1/responses"},
+		{"自定义多协议平台", customTestAccount(customFullURLs()), "http://responses.example/v1/responses"},
 		{"国产平台 DeepSeek", adaptiveProtocolTestAccount(PlatformDeepseek, map[string]any{
 			APIProtocolChatCompletions: "http://chat.example",
 			APIProtocolResponses:       "http://responses.example",

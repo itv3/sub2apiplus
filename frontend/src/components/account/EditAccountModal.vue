@@ -202,7 +202,7 @@
           </div>
           <p class="input-hint">{{ t(`admin.accounts.cnProviders.accountMode.${editAccountMode}Desc`) }}</p>
         </div>
-        <!-- API Protocol Selection (CN providers / OpenCode)；自定义平台固定为自适应，不显示协议选择 -->
+        <!-- API Protocol Selection (CN providers / OpenCode)；自定义多协议平台固定为自适应，不显示协议选择 -->
         <div v-if="isCNApiKeyAccount && !isCustomAccount">
           <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
           <div class="mt-2 flex flex-wrap gap-2">
@@ -286,7 +286,7 @@
         <!-- Model Restriction Section (不适用于 Antigravity) -->
         <div v-if="account.platform !== 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
-          <!-- 自定义平台没有前缀规则：进 Composite 分组必须声明可服务的模型 -->
+          <!-- 自定义多协议平台没有前缀规则：进 Composite 分组必须声明可服务的模型 -->
           <p v-if="isCustomAccount" class="input-hint mb-2" data-testid="edit-custom-composite-model-hint">
             {{ t('admin.accounts.customPlatform.compositeModelHint') }}
           </p>
@@ -4586,7 +4586,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         nextAdaptiveBaseUrls[legacyProtocol] = legacyBaseUrl
       }
       editAdaptiveBaseUrls.value = nextAdaptiveBaseUrls
-      // 自定义平台：协议固定自适应，三个地址框直接回填凭据里的存储值（不补任何默认值）。
+      // 自定义多协议平台：协议固定自适应，三个地址框直接回填凭据里的存储值（不补任何默认值）。
       if (isCustomPlatform(newAccount.platform)) {
         editApiProtocol.value = 'adaptive'
         editAdaptiveBaseUrls.value = readCustomEndpointUrls(credentials)
@@ -5350,7 +5350,7 @@ const handleSubmit = async () => {
         newCredentials.account_mode = currentOpenCodeOrCNMode()
         newCredentials.api_protocol = editApiProtocol.value
         if (isCustomAccount.value) {
-          // 自定义平台：协议固定 adaptive，三个地址框原样写入（空框不写键，不补默认值）
+          // 自定义多协议平台：协议固定 adaptive，三个地址框原样写入（空框不写键，不补默认值）
           applyCustomEndpointCredentials(newCredentials, editAdaptiveBaseUrls.value)
         } else if (editApiProtocol.value === 'adaptive') {
           const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())

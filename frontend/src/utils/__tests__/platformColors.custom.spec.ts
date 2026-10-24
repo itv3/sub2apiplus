@@ -62,7 +62,7 @@ describe('custom platform registration', () => {
 
   it('is listed in the catalog with its display name', () => {
     expect(listPlatformIds()).toContain('custom')
-    expect(platformLabel('custom')).toBe('自定义')
+    expect(platformLabel('custom')).toBe('自定义多协议')
   })
 
   it('belongs to the generic provider bucket for key groups', () => {

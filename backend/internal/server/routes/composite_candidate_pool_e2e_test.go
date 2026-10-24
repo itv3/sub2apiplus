@@ -252,7 +252,7 @@ func poolE2EBody(kind, model string) string {
 	}
 }
 
-// 第 1 节主表：三种入站格式都选中零转换的自定义账号，并命中该协议的原生端点。
+// 第 1 节主表：三种入站格式都选中零转换的自定义多协议账号，并命中该协议的原生端点。
 func TestCompositeCandidatePoolEndToEndZeroConversionByInbound(t *testing.T) {
 	custom := poolE2ECustom(1, 10, poolE2EFullURLs(), map[string]any{poolE2EModel: poolE2EModel})
 	deepseek := poolE2EDeepseek(2, 30)
@@ -275,7 +275,7 @@ func TestCompositeCandidatePoolEndToEndZeroConversionByInbound(t *testing.T) {
 			env.spy.reset()
 			rec := env.post(tc.path, poolE2EBody(tc.kind, poolE2EModel), "X-Probe", "pool-e2e")
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-			require.Equal(t, []int64{1}, env.upstream.accounts, "优先级更高且零转换的自定义账号")
+			require.Equal(t, []int64{1}, env.upstream.accounts, "优先级更高且零转换的自定义多协议账号")
 			require.Equal(t, []string{tc.wantURL}, env.upstream.urls)
 
 			// 入口标记装配：端点、请求体、请求头、用户、API Key、分组与订阅。
@@ -293,7 +293,7 @@ func TestCompositeCandidatePoolEndToEndZeroConversionByInbound(t *testing.T) {
 	}
 }
 
-// 场景 1：清空自定义账号的 Responses 地址后，Responses 入站退到需转换组，改选零转换的 DeepSeek。
+// 场景 1：清空自定义多协议账号的 Responses 地址后，Responses 入站退到需转换组，改选零转换的 DeepSeek。
 func TestCompositeCandidatePoolEndToEndResponsesAddressCleared(t *testing.T) {
 	urls := poolE2EFullURLs()
 	delete(urls, service.APIProtocolResponses)
@@ -309,7 +309,7 @@ func TestCompositeCandidatePoolEndToEndResponsesAddressCleared(t *testing.T) {
 	env.upstream.reset()
 	rec = env.post("/v1/chat/completions", poolE2EBody("chat", poolE2EModel))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, []int64{1}, env.upstream.accounts, "Chat Completions 入站仍选自定义账号")
+	require.Equal(t, []int64{1}, env.upstream.accounts, "Chat Completions 入站仍选自定义多协议账号")
 }
 
 // 场景 13：分组里只有一个通配声明账号，请求 foo-x 能归属到它并被调度器的声明闸门放行，转发成功。
@@ -342,7 +342,7 @@ func TestCompositeCandidatePoolEndToEndNonTextEntriesStayOutOfPool(t *testing.T)
 			require.Empty(t, env.spy.entries, "这些入口没有入口标记，候选池不处理")
 			env.probeMu.Lock()
 			defer env.probeMu.Unlock()
-			// 候选池没有写回集合，目标平台只可能来自旧流程（前缀识别为 DeepSeek），不会是自定义账号所在平台。
+			// 候选池没有写回集合，目标平台只可能来自旧流程（前缀识别为 DeepSeek），不会是自定义多协议账号所在平台。
 			require.NotEqual(t, service.PlatformCustom, env.probes[path])
 		})
 	}

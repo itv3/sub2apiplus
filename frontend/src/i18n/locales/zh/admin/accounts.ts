@@ -389,7 +389,7 @@ export default {
         anthropicHint: '填到域名为止，自动追加 /v1/messages',
         anthropicAuthSchemeDesc: '仅作用于 Anthropic 端点；Chat Completions 与 Responses 端点一律使用 Authorization: Bearer。',
         chatCompletionsRequired: '请填写 Chat Completions 地址',
-        compositeModelHint: '进 Composite 分组必须配模型白名单或映射，自定义平台没有前缀规则，不声明模型的账号永远不会被选中。',
+        compositeModelHint: '进 Composite 分组必须配模型白名单或映射，自定义多协议平台没有前缀规则，不声明模型的账号永远不会被选中。',
       },
       cnProviders: {
         accountMode: {

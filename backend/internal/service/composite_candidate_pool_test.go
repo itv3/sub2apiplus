@@ -5,9 +5,9 @@ package service
 // 账号级候选池：声明收集、资格过滤、配额预检与排序写回的单测。
 // 粘性、续链与集合谓词的用例见 composite_candidate_pool_sticky_test.go。
 //
-// 用例编号"场景 N"指方案验收标准中能在单测层验证的场景。多协议自定义平台由另一路实现，
+// 用例编号"场景 N"指方案验收标准中能在单测层验证的场景。自定义多协议平台由另一路实现，
 // 这里用现有的 adaptive 国产平台账号模拟：Kimi、DeepSeek 三种协议齐全，
-// Zhipu 没有原生 Responses 端点（等价于"清空了 Responses 地址"的自定义账号）。
+// Zhipu 没有原生 Responses 端点（等价于"清空了 Responses 地址"的自定义多协议账号）。
 
 import (
 	"context"

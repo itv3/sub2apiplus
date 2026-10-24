@@ -979,7 +979,7 @@ export default {
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
         typesafe: 'TypeSafe / Jev',
-        custom: '自定义',
+        custom: '自定义多协议',
         composite: 'Composite',
       },
       saving: '保存中...',

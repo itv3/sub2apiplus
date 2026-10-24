@@ -656,7 +656,7 @@
         </div>
       </div>
 
-      <!-- API Protocol Selection (Kimi / Zhipu / DeepSeek / OpenCode)；自定义平台固定为自适应，不显示协议卡片 -->
+      <!-- API Protocol Selection (Kimi / Zhipu / DeepSeek / OpenCode)；自定义多协议平台固定为自适应，不显示协议卡片 -->
       <div v-if="isMultiProtocolPlatform && !isCustomSelected" class="mt-4">
         <label class="input-label">{{ t('admin.accounts.cnProviders.apiProtocol.title') }}</label>
         <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1625,7 +1625,7 @@
         <!-- Model Restriction Section (Antigravity 已在上层条件排除) -->
         <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
           <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
-          <!-- 自定义平台没有前缀规则：进 Composite 分组必须声明可服务的模型 -->
+          <!-- 自定义多协议平台没有前缀规则：进 Composite 分组必须声明可服务的模型 -->
           <p v-if="isCustomSelected" class="input-hint mb-2" data-testid="custom-composite-model-hint">
             {{ t('admin.accounts.customPlatform.compositeModelHint') }}
           </p>
@@ -4504,7 +4504,7 @@ function selectGenericMultiProtocolPlatform(platform: string) {
   apiKeyBaseUrl.value = defaultCNBaseUrl(platform, accountMode.value, apiProtocol.value)
   resetAdaptiveBaseUrls(platform, accountMode.value)
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultProviderProtocolRules(platform, accountMode.value))
-  // 自定义平台：三个地址框从空白开始（profile 没有默认地址，defaultCNAdaptiveBaseUrls 即全空），
+  // 自定义多协议平台：三个地址框从空白开始（profile 没有默认地址，defaultCNAdaptiveBaseUrls 即全空），
   // Anthropic 认证头回到默认的 x-api-key。
   if (isCustomPlatform(platform)) {
     adaptiveBaseUrls.value = emptyCustomEndpointUrls()
@@ -6138,7 +6138,7 @@ const handleSubmit = async () => {
     credentials.account_mode = form.platform === 'opencode_go' ? openCodeAccountMode.value : accountMode.value
     credentials.api_protocol = apiProtocol.value
     if (isCustomSelected.value) {
-      // 自定义平台：协议固定 adaptive，三个地址框原样写入（空框不写键，不补默认值）
+      // 自定义多协议平台：协议固定 adaptive，三个地址框原样写入（空框不写键，不补默认值）
       applyCustomEndpointCredentials(credentials, adaptiveBaseUrls.value)
     } else if (apiProtocol.value === 'adaptive') {
       const defaults = defaultCNAdaptiveBaseUrls(

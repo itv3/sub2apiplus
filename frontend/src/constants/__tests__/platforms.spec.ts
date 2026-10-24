@@ -65,11 +65,11 @@ describe('platform catalog with a newly registered platform', () => {
     ])
     expect(CONCRETE_PLATFORM_OPTIONS.map((option) => option.label)).toEqual([
       'Anthropic', 'OpenAI', 'Gemini', 'Antigravity', 'Grok',
-      'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax', 'OpenCode', 'TypeSafe / Jev', 'Command Code', 'Cline', '自定义'
+      'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax', 'OpenCode', 'TypeSafe / Jev', 'Command Code', 'Cline', '自定义多协议'
     ])
     expect(platformLabel('zhipu')).toBe('Zhipu GLM')
     // 自定义多协议平台的展示名来自后端平台清单（domain/platforms.go），不随界面语言变化。
-    expect(platformLabel('custom')).toBe('自定义')
+    expect(platformLabel('custom')).toBe('自定义多协议')
     expect(platformLabel('composite')).toBe('Composite')
     expect(platformLabel('')).toBe('API')
   })

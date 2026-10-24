@@ -206,7 +206,7 @@ describe('AccountUsageCell', () => {
     }
   )
 
-  it('自定义平台 apikey 账号 Ollama Cloud eligible 时复用 Ollama 用量单元格（按上游地址识别，显示条件不写死平台）', async () => {
+  it('自定义多协议平台 apikey 账号 Ollama Cloud eligible 时复用 Ollama 用量单元格（按上游地址识别，显示条件不写死平台）', async () => {
     const wrapper = mount(AccountUsageCell, {
       props: {
         account: makeAccount({
@@ -234,7 +234,7 @@ describe('AccountUsageCell', () => {
     expect(wrapper.find('div[title="admin.accounts.cnProviders.noBalanceEndpoint"]').exists()).toBe(false)
   })
 
-  it('自定义平台指向非 Ollama 地址的账号不渲染 Ollama 单元格，额度与余额单元格都不可见（回落 `-` 占位符）', async () => {
+  it('自定义多协议平台指向非 Ollama 地址的账号不渲染 Ollama 单元格，额度与余额单元格都不可见（回落 `-` 占位符）', async () => {
     const wrapper = mount(AccountUsageCell, {
       props: {
         account: makeAccount({
