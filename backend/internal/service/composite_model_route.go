@@ -78,6 +78,9 @@ type CompositeRouteDecision struct {
 	Endpoint       string               `json:"endpoint"`
 	Route          *CompositeModelRoute `json:"route,omitempty"`
 	Reason         string               `json:"reason,omitempty"`
+	// CandidateAccountIDs 是账号级候选池写回的候选账号 ID 集合（升序）。
+	// 非空时下游调度器只在集合内选号，声明闸门按"账号 ID 属于集合"放行。
+	CandidateAccountIDs []int64 `json:"candidate_account_ids,omitempty"`
 }
 
 type CompositeRouteInput struct {
