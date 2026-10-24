@@ -66,6 +66,11 @@ API Key 官方客户端兼容不属于本节范围，见 §1.3。
 4. **后端统一校验**：创建（含复制）、单个更新、批量更新和导入四条管理路径都按「账号合并后的完整凭据」校验，不只看本次提交的增量：类型必须是 API Key，`api_protocol` 必须是 `adaptive`，缺 Chat Completions 地址返回 400（业务码 `CUSTOM_PLATFORM_CHAT_COMPLETIONS_URL_REQUIRED`）。校验通过后把 `base_url` 归一为 Chat Completions 地址，两个字段始终一致，避免缺地址时回退到 OpenAI 官方地址把请求发错上游。批量更新混合平台时，只有 `custom` 账号被校验和归一，其它平台账号不受影响；批量更新里 `base_url` 归一后确实变化的账号，旧的上游计费探测快照随之清空。
 5. **Ollama Cloud 能力继承**：Ollama 的能力按实际出站地址识别，与账号所在平台无关，`custom` 账号自动继承。用量窗口的平台白名单已加入 `custom`（后端 `isOllamaCloudUsagePlatform` 与仓储 SQL 白名单两处同步）；Chat Completions 推理字段归一化与输出 token 上限夹紧按实际出站地址判定。
 6. **Responses 一律无状态**：`custom` 的原生 Responses 出站强制 `store=false`，并删除 `previous_response_id` 与 `conversation`，客户端必须自带完整上下文（原因见 §1.2.5）。
+7. **Ollama Cloud 用量页适配新版设置页**：用量同步（管理员在账号里填写浏览器 Cookie，网关仍只读取固定的 Ollama 官方设置页，不访问其它地址）已适配 Ollama 新版设置页，旧版 5 小时、7 天窗口的页面仍然兼容。新版页面解析并显示：
+   - 套餐徽章（Free、Pro、Max 等，原文显示）；账号邮箱显示在账号名称下方（Ollama 账号没有 OAuth 邮箱，取设置页里的登录邮箱）。
+   - 余额（合计）与追加额度；月度额度进度条与额度重置日期（页面只给相对时间时标注为约数）；免费计划显示免费额度与免费可用模型。
+   - 账号列表「平台／类型」列显示套餐徽章与额度重置日（付费计划）；账号编辑页显示最近请求。
+   - Cookie 到期时间可选填写（从浏览器 Cookie 列表的 Expires 列抄来，网关自己无法得知）：只改到期时间时 Cookie 留空即可；用量列显示「Cookie：YYYY-MM-DD 过期」，到期前 3 天变为提醒色，已到期标红；会话失效（设置页返回未登录）时显示「Cookie 已过期」。
 
 #### 1.2.2 模型声明
 
@@ -77,10 +82,15 @@ API Key 官方客户端兼容不属于本节范围，见 §1.3。
 
 #### 1.2.3 账号级跨平台候选池
 
-1. **生效入口**：Composite 分组的四种 POST 文本入口，以及不带 `/v1` 前缀的根路径别名：`/v1/messages`、`/v1/messages/count_tokens`、`/v1/responses`、`/v1/chat/completions`。
+1. **生效入口**：Composite 分组的四种 POST 文本入口，以及不带 `/v1` 前缀的根路径别名：`/v1/messages`、`/v1/messages/count_tokens`、`/v1/responses`、`/v1/chat/completions`；另有 Responses WebSocket 的第一条 `response.create`（见下文第 5 条）。
 2. **解析顺序**：显式路由表（管理员配的「公开模型名 → 目标平台 + 上游模型名」）优先；其次候选池；候选池扫描到零个声明账号时，交回原有的账号归属判定与前缀猜测，行为与引入候选池之前一致。单账号同样生成候选集合，所以单账号的通配声明也能生效。
-3. **不进池的入口**：Responses WebSocket、`/v1/responses` 的子路径（如 compact）、Gemini 原生路径、生图、embeddings、Live、`alpha/search`、realtime、`/backend-api/codex/responses` 直连路径、管理端预览路由。这些入口按设计保持原有行为。Codex 三方模型启用页（§1.7）读取的目录不是请求入口，不带入口标记、不会进池，但它对「被多个平台账号声明的模型」的归属判定复用候选池的同一套规则，见 §1.2.11。
+3. **不进池的入口**：`/v1/responses` 的子路径（如 compact）、Gemini 原生路径、生图、embeddings、Live、`alpha/search`、realtime、`/backend-api/codex/responses` 直连路径、管理端预览路由。这些入口按设计保持原有行为。Codex 三方模型启用页（§1.7）读取的目录不是请求入口，不带入口标记、不会进池，但它对「被多个平台账号声明的模型」的归属判定复用候选池的同一套规则，见 §1.2.11。
 4. **候选集合**：候选池把目标平台、公开模型名、来源标记 `account_model` 和一个「候选账号 ID 集合」写回路由决策；下游调度器仍是单平台的，只在集合内按原策略选号，三处调度声明闸门改为按「账号 ID 属于集合」放行，没有集合时沿用原来的精确判定。
+5. **Responses WebSocket**：Composite 分组上，WebSocket 连接的第一条 `response.create` 经候选池按与 HTTP 完全相同的规则选平台（同一个公开模型被多个平台声明时不再判歧义）。此前它不进池，同名跨平台模型会在握手后被关闭，Codex 把这种失败当作网络错误反复重连。选中结果分三类：
+   - 选中 `openai` 平台或 Grok：沿用原有路径（`openai` 走上游 WebSocket，Grok 走既有的 WebSocket 转 HTTP 桥接），行为不变。
+   - 选中 `openai` 以外的 OpenAI 网关族平台（`command_code`、`custom`、`deepseek`、`kimi`、`zhipu`、`minimax`、`opencode_go`、`cline` 等）：这些上游没有 Responses WebSocket。客户端与网关之间保持 WebSocket 不断开，网关内部经 HTTP 把每一轮发给上游。上游无状态，所以网关在本连接内保存整段对话（含助手文本、推理项与工具调用），每轮用「历史加本轮增量」还原完整输入发给上游，上游每轮收到的都是完整上下文。
+   - `previous_response_id` 不是本连接上一轮产生的（例如新连接的第一帧，或重放历史已超限）：网关回复「找不到」（`previous_response_not_found`），Codex 把它当作可重试错误并改发完整输入，网关不会把只有增量的请求发给无状态上游。Codex 会话开始时发送的 `generate=false` 预热帧由网关本地应答，不访问上游，也不计费。
+   - Anthropic 网关族（`anthropic`、`gemini`、`antigravity`、`typesafe`）不走 OpenAI 网关，仍然拒绝 WebSocket。
 
 #### 1.2.4 协议优先规则
 
@@ -117,6 +127,7 @@ API Key 官方客户端兼容不属于本节范围，见 §1.3。
 
 - **Responses 输出上限**：非 Codex 客户端请求 `custom` 原生 Responses 时，`max_output_tokens` 被删除，上游按默认上限输出，Ollama 的夹紧逻辑也无法恢复被删除的客户端上限。变通方法：改用 Chat Completions 的 `max_tokens`，或把账号的 Responses 地址留空，让 Responses 入站回落 Chat Completions（多一次协议转换）。该转发器属于 Codex 事实映射源码快照，修复要随下一次 Codex 目标版本登记一并重封身份基线，本次不改。
 - **不做请求内跨平台换号**：请求中途失败只在同平台内换号，见 §1.2.7。
+- **WebSocket 不支持需要协议转换的账号**：Responses WebSocket 经 HTTP 桥接时，只能服务上游原生支持 Responses 的账号。WebSocket 上只能选到需要协议转换的账号（该模型只有 Chat Completions 或 Anthropic 端点）时，网关仍拒绝 WebSocket 并说明原因，这属于请求级的能力拒绝，不计为账号故障；Codex 重试后回落到 HTTPS（HTTP Responses）继续使用，会话不中断。
 
 #### 1.2.10 ARM64 实测结论
 
@@ -127,6 +138,11 @@ API Key 官方客户端兼容不属于本节范围，见 §1.3。
 - commandcode.ai 对 deepseek 模型的 Anthropic 入站需转换为 Chat Completions，因此停用 Ollama 后，Anthropic 入站选中的是零转换的 DeepSeek 账号，而不是 commandcode.ai。
 - Ollama 免费计划不含 `deepseek-v4.1-flash`，三协议原生直通的主表改用免费模型验证。
 
+2026-10-24 夜间在同一台 ARM64 测试机上，又用真实 Codex CLI 0.163.0 做了 Composite 分组的 WebSocket 与目录实测：
+
+- 经 Composite 分组使用 `deepseek-flash`（同名模型被多个平台账号声明）时，WebSocket 一次连上、不再反复重连，多轮对话的上下文完整，后续轮次能引用前几轮的内容。
+- 网关重启后，Codex 三方模型启用页的目录刷新与启动后台预热按预期工作：预热完成后按模型分流账号的协议不再停留在「无法确认」，点右上角「刷新」能拉取并更新目录。
+
 #### 1.2.11 Codex 三方模型启用与候选池
 
 Codex 三方模型启用页（§1.7）在 Composite 分组上对候选池的使用方式如下。
@@ -134,9 +150,17 @@ Codex 三方模型启用页（§1.7）在 Composite 分组上对候选池的使�
 1. **何时启用**：同一个公开模型名被多个平台的账号同时声明，旧的归属判定只会判「歧义」，页面显示配置冲突、开关打不开。现在这种情形改按候选池的同一套规则确定承接账号集合；显式 Composite 路由命中、模型只被单个平台声明、非 Composite 分组，这三种情形的行为不变。
 2. **承接账号集合**：集合就是「Responses 请求可能落到的全部账号」，规则与候选池共用同一份实现：强声明优先、全无强声明才取通配弱声明，空映射不入池；持久停用（状态非启用或关闭了可调度开关）的账号视同没有声明；Responses 入站零转换优先，零转换组为空才用需转换组；组内按账号优先级升序、并列按账号 ID 升序，第一个就是首选账号。与候选池不同的是，页面的集合可以跨平台（候选池只把与首选同平台的账号交给下游调度器），因为能力档案必须对所有可能承接的账号都成立。
 3. **页面显示**：「实际目标」列显示首选账号（账号名与平台），其下一行列出备选账号（同一承接分组里的其余账号，最多列 3 个）；目标平台取首选账号所在平台。
-4. **开启条件**：集合内全部账号必须能套用同一个能力档案（各账号的最终上游型号去厂商前缀、忽略大小写后命中同一档案），且协议被档案全覆盖才可开启；不能统一时沿用原有的「能力依据不足」原因文案。集合内同时有原生 GPT 与第三方账号仍判冲突；集合里有不经 Responses 网关的平台账号则标不可用。发布判定规则与能力档案本身不变。
-5. **按模型分流的账号**：这类账号（如 Command Code）的 Responses 通路由上游模型目录决定。页面只读取运行时请求已经缓存的目录，不发上游请求、不触发刷新：目录里该模型支持 Responses 记为原生通路，只支持 Chat Completions 记为转换通路，同时这份缓存也用于零转换判定；目录尚未缓存、该模型不在目录里时，页面显示「无法静态确认 Responses 通路」，不能开启，待运行时有过一次请求预热目录后再看。
+4. **开启条件**：集合内全部账号必须能套用同一个能力档案（各账号的最终上游型号去厂商前缀、忽略大小写并按第 8、9 条逐级放宽或经别名关联后命中同一档案），且协议被档案全覆盖才可开启；不能统一时沿用原有的「能力依据不足」原因文案。集合内同时有原生 GPT 与第三方账号仍判冲突；集合里有不经 Responses 网关的平台账号则标不可用。发布判定规则与能力档案本身不变。
+5. **按模型分流的账号**：这类账号（如 Command Code）的 Responses 通路由上游模型目录决定。页面判定读取进程内已缓存的目录：目录里该模型支持 Responses 记为原生通路，只支持 Chat Completions 记为转换通路，同时这份缓存也用于零转换判定；目录尚未缓存、该模型不在目录里时，页面显示「无法静态确认 Responses 通路」，不能开启。页面平时只读缓存、不发上游请求；缓存的补齐方式见第 7 条。
 6. **只看配置态**：页面只依据账号的持久配置（启用状态、可调度开关、`model_mapping`、优先级、协议地址），不看冷却、限流、过载、配额等瞬态，静态发布的结论不会随冷却抖动。
+7. **上游目录刷新与预热**：页面判定依赖两类上游目录：按模型分流账号的协议目录，以及官方 ChatGPT 账号的基础目录（体积预算要用）。网关重启后进程内缓存为空，旧版会因此误判「能力依据不足」，现在有三种补齐方式：
+   - **页面右上角「刷新」**：同步拉取上述两类目录，并返回逐账号结果；拉取失败的账号以警告条列出（只写分类后的原因，不含地址与凭据）。单账号拉取、整次刷新都有时限（单账号 8 秒、整次 20 秒），同时最多拉 4 个账号，单个账号失败或异常不影响其它账号；同一分组 10 秒内再次点击直接复用上次结果，不重复请求上游。
+   - **开启时补拉**：预览与保存（含批量开启）时，缺目录缓存的账号先限时补拉（总时限 10 秒，只补缺失的协议目录）再判定。
+   - **启动预热**：服务启动后约 5 秒，后台对所有持久启用的按模型分流账号各拉一次协议目录，不阻塞启动、并发不超过 2、失败只记日志；不触碰官方 ChatGPT 账号。
+   目录仍未就绪时，页面的原因提示为「上游模型目录尚未就绪，点右上角「刷新」拉取后再试」。
+8. **能力档案匹配逐级放宽**：先去厂商前缀、转小写，再按下列顺序逐级放宽，命中即止，同一级落在多份不同档案上时宁可不匹配：精确；去 Ollama 末尾 `:标签`（如 `deepseek-v4.1-flash:1017`）；下划线视同连字符；去末尾日期后缀（`-MMDD`、`-YYMMDD`、`-YYYYMMDD`、`-YYYY-MM-DD`、`@` 加日期的写法）与 `-latest`。会改变模型能力的写法不剥离：参数规模标签（`:31b`、`-70b`）、版本号（`-v4`、`-4o`）以及 `-preview`、`-instruct`、`-mini`。
+9. **关联到已有档案（型号别名）**：上游型号确实是内置档案里某个模型、只是写法对不上时，管理员可在页面上对「暂无能力档案」的条目点「关联到已有档案」，或通过工具栏「档案别名」查看与解除已有关联。别名存在系统设置里（键 `codex_third_party_profile_aliases`），不新增数据库表；保存与解除后立即生效（本进程立刻重新读取，页面随即重新评估），别名比较同样先经上一条的逐级规范化。关联后按所选档案的能力发布，不会再向上游核对，所以关联前要确认两者确实是同一个模型。限制：只能关联到当前存在的档案；已经被内置档案认出的型号不允许再关联；档案被删除或改名后，对应别名在页面上标为失效，不参与匹配。
+10. **Composite 模型列表**：Composite 分组的 `/v1/models` 对所有多协议平台（`custom`、Command Code、Cline、OpenCode Go 等）统一按账号的协议配置与凭据判定该账号能否出现在 OpenAI 或 Anthropic 模型列表里，不依赖运行时才有的上游目录缓存。
 
 ### 1.3 API Key 官方客户端兼容
 
@@ -274,7 +298,7 @@ OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态�
 7. **客户端约束与降级**：目录响应必须不超过 1 MiB 并在 5 秒内返回，否则客户端会清空选择器，因此基础目录获取按整次请求限时 3 秒。第三方阶段出错或超限时，网关降级为只发布原生 GPT；纯第三方分组返回空目录，此时客户端须显式配置 `model`。只有基础目录本身不可得（Composite 分组除外，它会改为本地生成），或原生部分自身超限时才返回目录错误。
 8. **运维注意（自定义工具）**：DeepSeek 官方条目要求 `freeform` 自定义工具（`apply_patch`），而有的中转（实测 HUB 类聚合中转）走 Responses 时不接受自定义工具，会返回 422，网关记为 502。遇到这种情况，把该中转账号的「Responses API 支持」设为「强制 Chat Completions」（网关会把自定义工具转成函数工具），或从该账号映射里去掉 DeepSeek 型号。
 9. **已验证状态**：真实客户端验收通过后可在页面「标记已验证」，记录与路由、协议、能力档案和接入站点绑定的指纹；任一项变化后自动回落为「配置可用」。
-10. **页面**：状态筛选只有「全部」「已开启」「未开启」「不可开启」四项，行内仍显示不能开启的原因。已删除「同步候选」按钮和「账号模型来源同步状态」区块（后端 `POST …/sync` 手动同步接口保留，页面不再调用）。目录体积预算正常时显示为工具栏里的小标签，悬停可看明细；超限、未完成、开启时检查三种状态才显示整块卡片。说明文字收为一行，客户端配置说明默认折叠；页面右上角的刷新同时刷新本标签。
+10. **页面**：状态筛选只有「全部」「已开启」「未开启」「不可开启」四项，行内仍显示不能开启的原因。已删除「同步候选」按钮和「账号模型来源同步状态」区块（后端 `POST …/sync` 手动同步接口保留，页面不再调用）。目录体积预算正常时显示为工具栏里的小标签，悬停可看明细；超限、未完成、开启时检查三种状态才显示整块卡片。说明文字收为一行，客户端配置说明默认折叠；页面右上角的刷新同时刷新本标签，并同步拉取上游目录（见 §1.2.11）。
 11. **维护方式**：逻辑集中在 `codex_third_party_*` 新文件，配置与源快照存于 settings 表的 `plus_codex_model_visibility:<分组 ID>`、`plus_codex_catalog_source:<账号 ID>` 两类键（源快照只由手动同步写入，不再决定候选），不新增数据库表或实体字段；既有文件只保留单行接点，清单见 §4.1，合并核对项见 §4.2。
 
 ### 1.8 其它优化
@@ -472,6 +496,7 @@ git diff --stat "$BASE..HEAD"
 | API Key mimic | `backend/internal/service/*apikey_mimic*`、OpenAI gateway/scheduler/WS 相关 service、`backend/internal/pkg/tlsfingerprint/`、`backend/internal/repository/http_upstream.go`、`backend/internal/handler/openai_gateway_handler.go`。`backend/internal/pkg/claude/constants.go` 若仍服务 API Key 产品语义，只能保留为该独立路径的兼容事实，不得取得 Claude OAuth Persona 的画像或版本选择权。 |
 | Codex 三方模型启用 | 新增：`backend/internal/service/codex_third_party_*.go`（契约、目录编排、候选发现、合并、发布判定、真实路由、能力档案、管理服务，以及 Composite 分组基础目录 `codex_third_party_composite_base.go`）、嵌入数据 `codex_third_party_profiles.json` 与 DeepSeek 官方教程 models.json 原文 `codex_third_party_deepseek_official_models.json`、测试数据 `backend/internal/service/testdata/codex_deepseek_official_models.json`（官方原文的测试副本）、`backend/internal/repository/codex_model_visibility_repo.go`、`backend/internal/handler/codex_third_party_catalog.go`（目录接点、分组默认模型名单、Composite 目录入口）、`backend/internal/handler/admin/codex_third_party_models_handler.go`、`backend/internal/server/routes/admin_codex_third_party_models.go`、`frontend/src/components/admin/CodexModelVisibilityPanel.vue`、`frontend/src/api/admin/codexThirdPartyModels.ts`、`frontend/src/i18n/locales/{zh,en}/admin/codexThirdPartyModels.ts`。专项测试：`backend/internal/service/codex_third_party_*_test.go`（含 `codex_third_party_candidates_fix_test.go`、`codex_third_party_composite_base_test.go`、`codex_third_party_official_profiles_test.go`）、`backend/internal/handler/codex_third_party_*_test.go`（含 `codex_third_party_composite_test.go`、`codex_third_party_group_models_test.go`）、`frontend/src/components/admin/__tests__/CodexModelVisibilityPanel.spec.ts` 与 `frontend/src/views/admin/__tests__/ApiKeyMimicSettingsView.codexTab.spec.ts`。既有接点：`backend/internal/server/routes/gateway.go` 目录分派、`backend/internal/handler/openai_codex_models_handler.go`（调度循环之前 1 处 `writeCodexCompositeCatalog` 接点，加上写出与基础目录获取处的接点）、`GatewayHandler.CodexModels`、两个网关 handler 各一个依赖字段、`handler.go` 管理 handler 字段、三个 wire 文件与 `wire_gen.go`、`routes/admin.go` 路由挂载、两个 i18n 汇总文件、Plus 设置页标签（`ApiKeyMimicSettingsView.vue`）。 |
 | 多协议平台与账号级候选池 | 新增后端（均在 `backend/internal/service/`，另有同名 `_test.go`）：`custom_platform.go`、`custom_platform_credentials.go`、`composite_account_claims.go`（改编自上游 PR #7114）、`composite_candidate_pool.go`、`composite_candidate_pool_config.go`、`composite_candidate_pool_eligibility.go`、`composite_candidate_pool_sticky.go`；`backend/internal/server/routes/composite_candidate_pool_entry.go` 及端到端测试 `composite_candidate_pool_e2e_test.go`。改动的既有后端：平台登记 `backend/internal/domain/platforms.go`、`backend/internal/domain/constants.go`、`service/domain_constants.go`；协议支持判定 `service/provider_profile.go`；模型列表聚合 `service/composite_model_protocol.go`；路由决策与上下文 `service/composite_model_route.go`、`service/composite_platform.go`；候选池挂钩 `service/composite_route_resolver.go`、`backend/internal/server/routes/gateway.go`、`backend/internal/handler/wire.go`；三处声明闸门 `service/openai_gateway_scheduling.go`、`service/openai_account_scheduler.go`、`service/gateway_scheduling.go`；管理路径校验 `service/admin_account.go`；Ollama 能力继承 `service/ollama_cloud_usage.go`、`backend/internal/repository/account_repo_ollama_cloud_usage.go`、`service/openai_gateway_ollama_cloud_cc_reasoning.go`；无状态归一化 `service/openai_gateway_request_body.go`。前端：`frontend/src/constants/platformCatalog.builtin.json`、`frontend/src/components/account/{CreateAccountModal.vue,EditAccountModal.vue,credentialsBuilder.ts}`、`frontend/src/components/common/PlatformIcon.vue`、`frontend/src/components/keys/UseKeyModal.vue`、`frontend/src/utils/{platformColors.ts,keyGroupProviders.ts}`、`frontend/src/types/index.ts`、`frontend/src/i18n/locales/{zh,en}/admin/{accounts,overview}.ts`。专项测试：`CompositeCandidatePool`、`CompositeAccountClaim`、`CustomPlatform`、`NormalizeCustomPlatformCredentials`、`AdminBulkUpdateCustomAccounts` 等 `_test.go`，以及上述前端文件的 `__tests__` 用例。 |
+| Codex WebSocket 候选池、三方目录刷新与 Ollama 新版用量页 | 新增后端：`backend/internal/handler/openai_gateway_ws_composite_pool.go`（WebSocket 首帧候选池入口标记）；`backend/internal/service/` 下 `openai_ws_stateless_http_bridge.go`（无状态桥接谓词、续链判定、预热帧本地应答与对话重放）、`codex_third_party_refresh.go`（页面「刷新」、开启时补拉的上游目录刷新）、`model_protocol_catalog_warmup.go`（启动预热）、`codex_third_party_profile_alias.go`（档案逐级规范化与型号别名）、`usage_log_request_id.go`（用量请求 ID 收敛到列宽），均另有同名 `_test.go`；Ollama 解析样本 `testdata/ollama_settings_usage_{free_2026,pro_2026,pro_synthetic}.html`。改动的既有后端：`handler/openai_gateway_handler.go`（Composite WebSocket 平台白名单、首帧候选池解析、续链保留）、`service/openai_ws_forwarder_ingress.go` 与 `openai_ws_http_bridge.go`（桥接分支）、`service/model_protocol_catalog.go`、`service/codex_third_party_{admin,catalog,contract,profiles,publication,routes}.go`、`service/composite_model_protocol.go`、`handler/admin/codex_third_party_models_handler.go` 与 `routes/admin_codex_third_party_models.go`（`/refresh` 与 `/codex-third-party-profile-aliases`）、Ollama 用量 `service/ollama_cloud_usage.go`、`ollama_cloud_usage_parser.go`、`handler/admin/account_ollama_cloud_usage.go`、`repository/account_repo_ollama_cloud_usage.go` 与 `repository/account_repo.go`、`handler/dto/mappers.go`；装配 `service/wire.go`、`backend/cmd/server/wire.go` 与 `wire_gen.go`。前端：`frontend/src/components/admin/{CodexModelVisibilityPanel.vue,CodexProfileAliasDialog.vue}`、`frontend/src/api/admin/codexThirdPartyModels.ts`、`frontend/src/components/account/{OllamaCloudUsageCell.vue,OllamaCloudUsageSettings.vue}`、`frontend/src/components/common/PlatformTypeBadge.vue`、`frontend/src/utils/ollamaCloudUsage.ts`、`frontend/src/views/admin/AccountsView.vue`、`frontend/src/api/admin/accounts.ts`、`frontend/src/types/index.ts`、`frontend/src/i18n/locales/{zh,en}/admin/{accounts,codexThirdPartyModels}.ts`。专项测试：`CodexTPRefresh`、`CodexProfileAlias`、`OpenAIWSBridge`、`OpenAIResponsesWebSocket_Composite`、`ModelProtocolCatalog`、`OllamaCloudUsage` 等 `_test.go`，以及对应前端 `__tests__` 用例。 |
 | Plus UI | `frontend/src/views/admin/ApiKeyMimicSettingsView.vue`、账号 API、路由、侧边栏、i18n、账号创建/编辑和模型白名单相关组件。 |
 | 发布部署 | `README.md`、`deploy/.env.example`、`deploy/docker-compose.local.yml`、`.github/workflows/release.yml`、`backend/cmd/server/VERSION`。 |
 
@@ -526,6 +551,17 @@ git diff --stat "$BASE..HEAD"
 - **复刻与薄适配**：候选池的 Messages 入口粘性哈希复刻了处理器 `resolveOpenAIMessagesMetadataSession` 的规则，处理器调整时同步 `openAIFamilySessionHash`；资格过滤薄适配直接调用 `openAICompatibleAccountEligibilityFailureReason`、`isAccountSchedulableForSelection` 等现有函数，上游改签名或新增资格项时核对 `composite_candidate_pool_eligibility.go`。
 - **上游迁移评估**：上游合入 PR #7114 时，先核对声明强度、候选集合、粘性与续链、失败和配额边界，通过 §1.2 所述行为的回归测试后，再逐步替换本地候选池与挂钩；`custom` 平台、零转换策略及仍需适配的本地规则独立保留。上游合入 issue #8043 一类的平台级方案时，保留本地账号级候选池，评估组合方式与兼容性。上游尚未合入时，每次合并复核以上各项并运行相关语义测试。`composite_account_claims.go` 头部注释记录了来源提交与本地差异，需保留版权与 LGPL-3.0 许可信息。
 - **回归**：运行 `CompositeCandidatePool`、`CompositeAccountClaim`、`CustomPlatform`、`NormalizeCustomPlatformCredentials`、`AdminBulkUpdateCustomAccounts` 专项，以及上游既有的 Composite 闸门与调度测试（不得为迁就候选池而修改）。
+
+**Codex WebSocket 候选池与无状态桥接、三方目录刷新、Ollama 新版用量页**（判定标准见 §1.2.3 第 5 条、§1.2.11、§1.2.1 第 7 条）
+
+- **WebSocket 首帧入口**：`openai_gateway_handler.go` 的 `ResponsesWebSocket` 里，Composite 解析必须带 `compositeCandidatePoolContextForResponsesWS` 构造的候选池入口标记（HTTP 路由中间件对 GET 直接放行，不会替 WebSocket 打标）；`isResponsesWebSocketCompositePlatform` 现为 `UsesOpenAIGateway`，上游改动白名单或新增平台时，核对 Anthropic 网关族仍被拒绝、OpenAI 网关族非 `openai` 平台走 HTTP 传输选号。
+- **无状态桥接谓词**：`OpenAIPlatformUsesWSHTTPBridge` 是「必须走桥接」的唯一判据，`OpenAIPlatformIsStatelessWSHTTPBridge` 在其上排除 Grok；Grok 的桥接行为保持原样。新增 OpenAI 网关族平台时，核对它是否应走桥接、上游是否原生支持 Responses。
+- **桥接续链与预热**：无状态桥接平台保留首帧的 `previous_response_id`（不再剥离），由转发器判定是否为本连接上一轮产生的响应，否则回复 `previous_response_not_found`；重放历史收全部输出项（助手文本、推理项、工具调用）；`generate=false` 预热帧本地应答、不结算用量（处理器按 `LocallyAnswered` 跳过结算）。上游改动 WebSocket 转发循环、重放历史或用量结算时须同步复核。
+- **请求级拒绝不计账号故障**：需要协议转换而桥接无法服务时返回 `ErrOpenAIWSBridgeUnsupportedUpstream`，`shouldReportOpenAIWSProxyAccountFailure` 必须排除它，否则每次 Codex 尝试 WebSocket 都会拉低健康账号的调度评分。
+- **目录刷新与预热**：`codex_third_party_refresh.go` 只复用既有拉取函数（`fetchModelProtocolCatalog`、`FetchBase`），不新增上游请求形态；时限与并发常量集中在文件头部。启动预热 `ModelProtocolCatalogWarmupService` 由 `service/wire.go` 的 `ProvideModelProtocolCatalogWarmupService` 装配、在 `cmd/server/wire.go` 的清理链里 `Stop`；改依赖图后须用 wire 重新生成 `wire_gen.go`。预热只拉第三方 API Key 账号的 `/models`，不触碰官方 ChatGPT 账号。
+- **档案匹配与别名**：`codexThirdPartyNormalizeKey` 的四个级别（精确、去 Ollama 标签、下划线、日期后缀与 `-latest`）与「同一级别命中多份档案则不匹配」的规则要保持；参数规模、版本号、`-preview`／`-instruct`／`-mini` 不得纳入剥离。别名存 settings 表键 `codex_third_party_profile_aliases`，写入后须调用 `InvalidateCodexProfileAliases`；已被内置档案认出的型号不允许关联。厂商新增型号仍只改 `codex_third_party_profiles.json`。
+- **Ollama 用量解析**：`ollama_cloud_usage_parser.go` 兼容新旧两版设置页，样本在 `testdata/ollama_settings_usage_*.html`；Ollama 改版时先用真实页面更新样本与解析测试。网关只请求固定的 `https://ollama.com/settings`（`isExactOllamaCloudSettingsURL` 校验，含重定向后的地址），上游合并时不得放宽。Cookie 到期时间（`ollama_cloud_usage_session_expires_at`）是管理员手填的非机密 Extra 字段，只用于提醒。
+- **回归**：运行 `CodexThirdParty`、`CodexTPRefresh`、`CodexProfileAlias`、`OpenAIResponsesWebSocket_Composite`、`OpenAIWSBridge`、`ModelProtocolCatalog`、`OllamaCloudUsage` 专项与对应前端用例（`CodexModelVisibilityPanel`、`OllamaCloudUsage*`、`PlatformTypeBadge.ollama`、`AccountsView.ollamaBadge`）。
 
 **Plus 界面与发布**
 
