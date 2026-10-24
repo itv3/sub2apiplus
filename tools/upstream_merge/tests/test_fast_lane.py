@@ -377,6 +377,7 @@ class LaneBuildingTest(FastFixture):
             {"tests": "tools/upstream_merge/tests", "argv": ["python3", "-m", "unittest", "discover"], "cwd": ".", "files": [], "reason": "r"}
         ]
         manifest["shell"]["commands"] = [["/bin/sh", "deploy/tests/a.sh"], ["/bin/bash", "-n", "deploy/b.sh"]]
+        manifest["shell"]["requires_docker"] = [True, False]
         steps = {step.name: step for step in build_fast_lanes(context)[4].steps}
         self.assertEqual(
             steps["frontend-vitest-specs"].argv,
@@ -384,6 +385,7 @@ class LaneBuildingTest(FastFixture):
         )
         self.assertEqual(steps["python-tests-1"].argv, ("python3", "-m", "unittest", "discover"))
         self.assertEqual(steps["deploy-script-2"].argv, ("/bin/bash", "-n", "deploy/b.sh"))
+        self.assertEqual([steps["deploy-script-1"].requires_docker, steps["deploy-script-2"].requires_docker], [True, False])
 
     def test_checklist_shows_the_correspondence_between_conflicts_and_targeted_regression(self) -> None:
         text = render_checklist(self.document)

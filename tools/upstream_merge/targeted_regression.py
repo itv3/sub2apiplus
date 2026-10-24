@@ -626,6 +626,8 @@ def related_frontend_specs(sources: Mapping[str, str | None], changed: Sequence[
 # CI 命令与 Makefile 现取
 # ---------------------------------------------------------------------------
 
+# 部署脚本里真正调用 docker 命令（而不是在 printf 文案里提到它）：JSON 形式的 argv 或 docker 后跟子命令。
+_DOCKER_CALL_RE = re.compile(r'\["docker"|\bdocker\s+(?:compose\s+)?(?:config|up|down|run|build|ps|exec|pull|version|info)\b')
 _MAKE_PACKAGE_RE = re.compile(r"^\./[\w./-]+$")
 _SAFE_PACKAGE_DIR_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]*$|^$")
 
@@ -690,6 +692,16 @@ def deploy_commands_from_workflow(workflow_text: str) -> list[list[str]]:
                 if parts not in commands:
                     commands.append(parts)
     return commands
+
+
+def deploy_command_needs_docker(root: Path, command: Sequence[str]) -> bool:
+    """部署脚本检查命令引用的 ``deploy/…`` 脚本是否真的调用 docker（本机没有 Docker 时该命令记为未执行，不是失败）。"""
+
+    for part in command:
+        if part.startswith("deploy/") and (root / part).is_file():
+            if _DOCKER_CALL_RE.search((root / part).read_text(encoding="utf-8", errors="replace")):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1070,6 +1082,7 @@ def plan_targeted_regression(
         "shell": {
             "files": sorted(deploy_files),
             "commands": deploy_commands,
+            "requires_docker": [deploy_command_needs_docker(root, command) for command in deploy_commands],
             "reason": "deploy 下的文件变化：执行 CI shell 作业与 simple-mode 步骤里的部署脚本检查（从 backend-ci.yml 现取）" if deploy_files else "",
         },
         "no_test_needed": sorted(no_test, key=lambda item: item["path"]),
@@ -1175,6 +1188,9 @@ def load_targeted_regression(path: Path) -> dict[str, Any]:
         if suite.get("tests") not in {tests for tests, _target in PYTHON_TEST_PACKAGES.values()}:
             raise UpstreamMergeError(f"定向回归清单.python.tests 不在受管测试目录内：{suite.get('tests')}")
     shell = expect_object(document.get("shell"), "定向回归清单.shell")
+    flags = shell.get("requires_docker")
+    if not isinstance(flags, list) or len(flags) != len(shell.get("commands") or []) or not all(isinstance(flag, bool) for flag in flags):
+        raise UpstreamMergeError("定向回归清单.shell.requires_docker 必须是与 commands 等长的布尔数组")
     for command in shell.get("commands") or []:
         if (
             not isinstance(command, list)

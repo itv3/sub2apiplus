@@ -397,6 +397,19 @@ class NonGoClassificationTest(TargetedRegressionTestCase):
         )
         self.assertEqual(document["shell"]["files"], ["deploy/run.sh"])
 
+    def test_deploy_scripts_that_really_call_docker_are_marked_so_missing_docker_is_not_a_failure(self) -> None:
+        document = self.adjusted(
+            {
+                "deploy/run.sh": "echo 1\n",
+                "deploy/tests/docker-compose-simple-mode-env-test.sh": 'subprocess.run(["docker", "compose", "config"])\n',
+                "deploy/tests/docker-compose-security-test.sh": "printf 'docker compose security test passed\\n'\n",
+            }
+        )
+        by_script = {command[-1]: flag for command, flag in zip(document["shell"]["commands"], document["shell"]["requires_docker"])}
+        self.assertTrue(by_script["deploy/tests/docker-compose-simple-mode-env-test.sh"])
+        self.assertFalse(by_script["deploy/tests/docker-compose-security-test.sh"])
+        self.assertFalse(by_script["deploy/apple-container.sh"])
+
     def test_docs_need_no_test_with_a_reason(self) -> None:
         document = self.adjusted({"docs/readme.md": "说明\n"})
         item = document["no_test_needed"][0]
@@ -578,8 +591,9 @@ class WriteAndLoadTest(TargetedRegressionTestCase):
         for mutate in (
             lambda d: d["go"]["tag_sets"]["default"].update(packages=["../escape"]),
             lambda d: d["go"]["tag_sets"]["unit"].update(packages=["internal/a; rm -rf x"]),
-            lambda d: d["shell"].update(commands=[["/usr/bin/curl", "http://x"]]),
-            lambda d: d["shell"].update(commands=[["/bin/sh", "/etc/passwd"]]),
+            lambda d: d["shell"].update(commands=[["/usr/bin/curl", "http://x"]], requires_docker=[False]),
+            lambda d: d["shell"].update(requires_docker=[True, True, True, True, True]),
+            lambda d: d["shell"].update(commands=[["/bin/sh", "/etc/passwd"]], requires_docker=[False]),
             lambda d: d["frontend"].update(spec_files=["../../etc/passwd.spec.ts"]),
             lambda d: d["frontend"].update(spec_files=["src/not-a-spec.ts"]),
         ):

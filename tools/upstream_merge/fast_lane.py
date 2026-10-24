@@ -275,6 +275,8 @@ def render_checklist(manifest: dict[str, Any]) -> str:
         lines.append(f"Python：{' '.join(suite['argv'])}（{suite['reason']}；涉及 {len(suite['files'])} 个文件）")
     for command in manifest["shell"]["commands"]:
         lines.append(f"部署脚本：{' '.join(command)}（{manifest['shell']['reason']}）")
+    if any(manifest["shell"]["requires_docker"]):
+        lines.append("  其中调用 docker 的命令在本机没有 Docker 时记为未执行，由 U-4／CI 补齐")
     if manifest["no_test_needed"]:
         lines.append(f"不需要测试的文件 {len(manifest['no_test_needed'])} 个：")
         lines.extend(f"  - {item['path']}：{item['reason']}" for item in manifest["no_test_needed"])
@@ -332,8 +334,9 @@ def _targeted_steps(context: FastContext) -> list[Step]:
         steps.append(Step("frontend-vitest-specs", tuple(frontend_vitest_argv(frontend["spec_files"]))))
     for index, suite in enumerate(manifest["python"], start=1):
         steps.append(Step(f"python-tests-{index}", tuple(suite["argv"]), cwd=suite["cwd"]))
-    for index, command in enumerate(manifest["shell"]["commands"], start=1):
-        steps.append(Step(f"deploy-script-{index}", tuple(command)))
+    for index, (command, needs_docker) in enumerate(zip(manifest["shell"]["commands"], manifest["shell"]["requires_docker"]), start=1):
+        # 脚本真的调用 docker 的（simple-mode 环境检查）本机没有 Docker 时记为未执行，由 U-4／CI 补齐，与 integration 同一规则。
+        steps.append(Step(f"deploy-script-{index}", tuple(command), requires_docker=needs_docker))
     return steps
 
 
