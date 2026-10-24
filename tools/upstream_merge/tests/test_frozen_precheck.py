@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from tools.upstream_merge import gate_guard
-from tools.upstream_merge.canonical import sha256_bytes
+from tools.upstream_merge.canonical import bind_identity, sha256_bytes
 from tools.upstream_merge.errors import UpstreamMergeError
 from tools.upstream_merge.gate_guard import (
     FROZEN_PRECHECK_PACKAGES,
@@ -57,16 +57,22 @@ class FrozenLedgerRepository:
         self.maintenance.mkdir(parents=True)
         self.source = self.root / "backend/a.go"
         self.source.write_text("package a\n", encoding="utf-8")
+        self.second = self.root / "backend/b.go"
+        self.second.write_text("package b\n", encoding="utf-8")
         self.register("package a\n", "base-successor.json", previous="0" * 64)
+        self.register("package b\n", "base-b-successor.json", previous="0" * 64, path="backend/b.go")
         self.base = self.commit("base")
 
-    def register(self, content: str, name: str, *, previous: str) -> None:
-        document = {
-            "schema_version": "official-egress-example-successor/v1",
-            "transitions": [
-                {"path": "backend/a.go", "predecessor_sha256s": [previous], "to_sha256": digest(content), "reason": "测试登记"}
-            ],
-        }
+    def register(self, content: str, name: str, *, previous: str, path: str = "backend/a.go") -> None:
+        # 带自摘要的真实承接收据形态：U-4 前检查只认自摘要可信、transitions 非空、后继摘要等于当前内容的收据。
+        document = bind_identity(
+            {
+                "schema_version": "official-egress-example-successor/v1",
+                "transitions": [
+                    {"path": path, "predecessor_sha256s": [previous], "to_sha256": digest(content), "reason": "测试登记"}
+                ],
+            }
+        )
         (self.maintenance / name).write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     def commit(self, message: str) -> str:
@@ -161,13 +167,28 @@ class RunFrozenPrecheckTest(unittest.TestCase):
             self.assertIn(expected, message)
 
     def test_unclosed_ledger_after_a_ledger_revision_says_to_stop_and_review(self) -> None:
+        # 两个冻结文件都被改了，台账 revision 只承接了 b.go：a.go 仍不闭合，而台账 revision 已经生成过。
         self.repo.drift()
-        self.repo.register("package a // 另一个摘要\n", "wrong-successor.json", previous=digest("package a\n"))
-        self.repo.commit("台账 revision 登记了别的摘要")
+        self.repo.second.write_text("package b // 合并后又改\n", encoding="utf-8")
+        self.repo.register("package b // 合并后又改\n", "later-b-successor.json", previous=digest("package b\n"), path="backend/b.go")
+        self.repo.commit("台账 revision 只承接了 b.go")
         report = run_frozen_precheck(self.repo.root, self.plan(), go_tests=FakeGoTests())
         self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["uncovered_paths"], ["backend/a.go"])
         self.assertTrue(report["ledger_revision_present"])
         self.assertIn("台账 revision 已生成过，仍不闭合应停线复盘", report["blockers"][0])
+
+    def test_a_receipt_that_does_not_describe_the_current_content_is_not_a_ledger_revision(self) -> None:
+        # 登记的后继摘要与当前候选内容不一致（被后来的改动取代）、或没有自摘要的文件，都不算台账 revision。
+        self.repo.drift()
+        self.repo.register("package a // 另一个摘要\n", "stale-successor.json", previous=digest("package a\n"))
+        (self.repo.maintenance / "no-identity-successor.json").write_text(
+            json.dumps({"schema_version": "x-successor/v1", "transitions": [{"path": "backend/a.go"}]}), encoding="utf-8"
+        )
+        self.repo.commit("看起来像台账 revision 但不是")
+        report = run_frozen_precheck(self.repo.root, self.plan(), go_tests=FakeGoTests())
+        self.assertEqual(report["status"], "blocked")
+        self.assertFalse(report["ledger_revision_present"])
 
     def test_go_frozen_test_failure_with_digest_mismatches_is_classified_frozen(self) -> None:
         fake = FakeGoTests(1, FROZEN_FAIL_OUTPUT)

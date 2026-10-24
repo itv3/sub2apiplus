@@ -19,6 +19,8 @@ v0.2.17 合并时，U-4 第一轮收据里 ``10-secret-scan`` 已失败，监视
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import signal
@@ -31,12 +33,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .canonical import (
+    SHA256_RE,
     artifact_binding,
     expect_exact_fields,
     expect_object,
     expect_safe_id,
     expect_string,
     file_binding,
+    identity_sha256,
     load_json,
     open_once,
     resolve_within,
@@ -48,14 +52,22 @@ from .canonical import (
 )
 from .contracts import LoadedPlan, artifact_document, stage_binding
 from .fast_attribution import CLASS_FROZEN_PENDING, classify_go_test_output
-from .freeze import _worktree_digest, load_frozen_edges
 from .errors import UpstreamMergeError
+from .freeze import _worktree_digest, gate_compatible_identity, load_frozen_edges
 from .gitops import assert_clean, rev_parse, run_git
+from .retest_family import (
+    WORKTREE_CLEAN_ARGV,
+    WORKTREE_FAILURE_ID,
+    Family,
+    family_for_item,
+    frozen_retests_satisfied,
+)
 from .toolchain import Probe, check_toolchain, describe_mismatches, run_probe
 from .workflow import (
     ATTEMPT_RUN_MARKER,
-    VERIFICATION_RECEIPT_SCHEMA,
     GATE_GROUP_LATE,
+    VERIFICATION_RECEIPT_SCHEMA,
+    _expand_gate_value,
     _gate_cwd,
     _gate_group,
     _gate_groups,
@@ -80,10 +92,6 @@ RETEST_TAIL_BYTES = 2000
 DEFAULT_RETEST_TIMEOUT_SECONDS = 3600
 MAX_RETEST_TIMEOUT_SECONDS = 4 * 3600
 MAINTENANCE_DIRECTORY = "docs/egress/maintenance"
-# 冻结复验的判据：Go 冻结测试的 -run 选择器里含 Frozen，或跑 make 的出站规格检查目标。
-FROZEN_RUN_MARKER = "Frozen"
-FROZEN_MAKE_TARGETS = ("check-egress-spec", "check-egress-spec-ci")
-WORKTREE_FAILURE_ID = "worktree-status"
 # U-4 前定向冻结检查：冻结类 Go 测试的 -run 选择器与包（相对 backend）。选择器与框架／记忆里一直使用的那一条相同；
 # 实测约 30 秒（编译缓存预热后），明显小于约 47 分钟的全量。
 FROZEN_PRECHECK_RUN = "Frozen|Transition|Successor|Drift|Retirement"
@@ -97,6 +105,11 @@ FROZEN_RULES_TEXT = (
     "冻结摘要类且尚未生成台账 revision 的，用 freeze-successor-generate 一次性生成台账 revision 并单独提交，再重新启动；"
     "台账 revision 之后仍不闭合，或同一根因连续第二次失败，停线复盘并把缺项回流到注册表与框架，不要默认循环补台账"
 )
+# 承接收据的 schema_version 里必须含这两个词之一；前序摘要、后继摘要的字段名沿用现有收据的几种写法。
+SUCCESSOR_SCHEMA_WORDS = ("successor", "transition")
+PREDECESSOR_DIGEST_KEYS = ("predecessor_sha256s", "predecessor_sha256", "from_sha256")
+SUCCESSOR_DIGEST_KEYS = ("to_sha256", "current_sha256", "head_sha256")
+WORKTREE_RETEST_TIMEOUT_SECONDS = 120
 U4_RESULT_PREFIX = "U4-RESULT"
 # gates-status 与 gates-run 结论一致的状态集合；running／incomplete 只出现在没有收据时。
 UNFINISHED_RESULTS = ("running", "incomplete")
@@ -244,19 +257,77 @@ def _read_marker(attempt_directory: Path) -> dict[str, Any] | None:
     return document if isinstance(document, dict) else None
 
 
-def latest_receipt_attempt(plan: LoadedPlan) -> tuple[Path | None, list[Path]]:
-    """最近一个有 receipt.json 的 attempt 目录（按收据文件的修改时间），以及没有收据的 attempt 目录清单。"""
+_ISO_UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
-    with_receipt: list[tuple[int, str, Path]] = []
+
+def _receipt_parent(document: dict[str, Any]) -> str | None:
+    """收据里 ``from_attempt`` 绑定指向的上一 attempt 标识（路径形如 ``u4/attempts/<id>/receipt.json``）。"""
+
+    binding = document.get("from_attempt")
+    path = binding.get("path") if isinstance(binding, dict) else None
+    parts = PurePosixPath(path).parts if isinstance(path, str) else ()
+    return parts[-2] if len(parts) >= 2 and parts[-1] == "receipt.json" else None
+
+
+def _marker_started_at(directory: Path) -> str | None:
+    marker = _read_marker(directory)
+    value = marker.get("started_at_utc") if marker else None
+    return value if isinstance(value, str) and _ISO_UTC_RE.fullmatch(value) else None
+
+
+def latest_receipt_attempt(plan: LoadedPlan) -> tuple[Path | None, list[Path]]:
+    """最近一个有 receipt.json 的 attempt 目录，以及没有收据的 attempt 目录清单。
+
+    “最近”只看内容，不看文件修改时间（复制或 touch 一份旧收据会让修改时间错位）：
+
+    * 收据的 ``from_attempt`` 链：被后来的 attempt 引用过的就不是最近的（重跑、导入 CI 证据都带这条链）；
+    * 链上互不引用的候选之间，比较 attempt 目录里运行标记记录的开始时间（``gates-run.pid.json`` 的
+      ``started_at_utc``，由 ``gates-run`` 在创建 attempt 时写下）；没有运行标记的导入 attempt 沿用它所引用的上一
+      attempt 的时间。
+
+    收据本身没有签发时间字段；需要比较却取不到时间，或最新时间并列，都失败关闭：直接报错，要求人工确认，
+    不猜。
+    """
+
+    receipts: dict[str, tuple[Path, dict[str, Any]]] = {}
     without: list[Path] = []
     for directory in _attempt_directories(plan):
         receipt = directory / "receipt.json"
         if receipt.is_file() and not receipt.is_symlink():
-            with_receipt.append((receipt.stat().st_mtime_ns, directory.name, directory))
+            receipts[directory.name] = (directory, read_attempt_receipt(plan, receipt))
         else:
             without.append(directory)
-    latest = max(with_receipt)[2] if with_receipt else None
-    return latest, without
+    if not receipts:
+        return None, without
+    parents = {name: _receipt_parent(document) for name, (_directory, document) in receipts.items()}
+    superseded = {parent for parent in parents.values() if parent}
+    heads = sorted(name for name in receipts if name not in superseded)
+    if not heads:
+        raise UpstreamMergeError(f"attempt 收据的 from_attempt 链成环，无法确定上一轮：{sorted(receipts)}")
+    if len(heads) == 1:
+        return receipts[heads[0]][0], without
+
+    def effective_time(name: str, seen: frozenset[str] = frozenset()) -> str | None:
+        if name in seen or name not in receipts:
+            return None
+        own = _marker_started_at(receipts[name][0])
+        if own is not None:
+            return own
+        parent = parents.get(name)
+        return effective_time(parent, seen | {name}) if parent else None
+
+    times = {name: effective_time(name) for name in heads}
+    unknown = sorted(name for name, value in times.items() if value is None)
+    if unknown:
+        raise UpstreamMergeError(
+            f"无法确定上一轮 attempt：{heads} 互不引用，却有 {unknown} 取不到开始时间"
+            "（收据没有签发时间字段，运行标记 gates-run.pid.json 也读不到）；不按文件修改时间猜，请人工确认后处置"
+        )
+    newest = max(times.values())
+    winners = [name for name in heads if times[name] == newest]
+    if len(winners) > 1:
+        raise UpstreamMergeError(f"无法确定上一轮 attempt：{winners} 的开始时间并列（{newest}）；请人工确认后处置")
+    return receipts[winners[0]][0], without
 
 
 # ---------------------------------------------------------------------------
@@ -313,8 +384,50 @@ def _disposition_files(plan: LoadedPlan, attempt_id: str) -> list[Path]:
     )
 
 
+def _group_commands(plan: LoadedPlan) -> dict[str, tuple[list[str], str]]:
+    """每个执行组自己的展开命令与 cwd（与 gates-run 实际执行的一致），供“必须是该门禁本身”的复验族比对。
+
+    展开失败的组（占位符无法解析等）不列入，对应的复验族退化为“无法复验”，失败关闭。
+    """
+
+    source = _load_source_candidate(plan)
+    worktree = plan.worktree.resolve(strict=False)
+    commands: dict[str, tuple[list[str], str]] = {}
+    for group_name, members in _gate_groups(plan).items():
+        leader = members[0]
+        try:
+            receipt_path = (
+                resolve_within(plan.evidence_root, leader["receipt"], f"gate {leader['id']} receipt")
+                if leader["mode"] == "receipt_replay"
+                else None
+            )
+            argv = [
+                _expand_gate_value(item, plan=plan, source=source, receipt=receipt_path, repository=worktree)
+                for item in leader["argv"]
+            ]
+        except UpstreamMergeError:
+            continue
+        commands[group_name] = (argv, leader["cwd"])
+    return commands
+
+
+def _assert_family(failure_id: str, family: Family, retests: Sequence[tuple[Sequence[str], str]]) -> None:
+    """失败项的复验里必须有属于它自己复验族的命令；由工具自查的族（候选树干净）要求工具那条核对在。"""
+
+    if family.tool_checked:
+        if not any(list(argv) == list(WORKTREE_CLEAN_ARGV) for argv, _cwd in retests):
+            raise UpstreamMergeError(f"失败项 {failure_id} 缺少工具自己执行的候选树干净核对")
+        return
+    if not family.satisfied(retests):
+        raise UpstreamMergeError(
+            f"失败项 {failure_id} 的复验里没有属于它的复验族的命令（复验族由工具按失败项推导，不接受自报）；"
+            f"应当是：{family.description}"
+        )
+
+
 def validate_disposition(plan: LoadedPlan, path: Path, *, expected_items: Sequence[dict[str, Any]], current_commit: str) -> dict[str, Any]:
-    """复核一份处置记录：自摘要、计划与失败 attempt 的绑定、复验日志的绑定、覆盖范围、当前候选提交。
+    """复核一份处置记录：自摘要、计划与失败 attempt 的绑定、复验日志的绑定、覆盖范围、当前候选提交，
+    以及每个失败项的复验是否属于它自己的复验族（按收据里的失败项现算，不采信记录里自报的 kind／runner_step）。
 
     任何不一致都抛 ``UpstreamMergeError``；通过时返回文档。
     """
@@ -365,6 +478,17 @@ def validate_disposition(plan: LoadedPlan, path: Path, *, expected_items: Sequen
     missing = sorted({item["id"] for item in expected_items} - set(covered))
     if missing:
         raise UpstreamMergeError(f"处置记录没有覆盖失败项：{missing}")
+    planned_by_id = {item["id"]: item for item in expected_items if "kind" in item}
+    if planned_by_id:
+        commands = _group_commands(plan)
+        for item in items:
+            planned = planned_by_id.get(item["failure_id"])
+            if planned is None:
+                continue
+            pairs = [(retest["argv"], retest["cwd"]) for retest in item["retests"]]
+            _assert_family(item["failure_id"], family_for_item(planned, commands), pairs)
+            if item["category"] == "frozen_digest" and not frozen_retests_satisfied(pairs):
+                raise UpstreamMergeError(f"冻结摘要类失败项 {item['failure_id']} 的复验没有覆盖冻结包")
     return document
 
 
@@ -409,7 +533,7 @@ def check_failure_disposition(plan: LoadedPlan) -> dict[str, Any]:
     invalid: list[str] = []
     for path in _disposition_files(plan, latest.name):
         try:
-            valid = validate_disposition(plan, path, expected_items=[], current_commit=current)
+            valid = validate_disposition(plan, path, expected_items=items, current_commit=current)
         except UpstreamMergeError as error:
             invalid.append(f"{path.name}：{error}")
             continue
@@ -434,8 +558,10 @@ def check_failure_disposition(plan: LoadedPlan) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _parse_retests(raw: Any, label: str) -> list[dict[str, Any]]:
-    if not isinstance(raw, list) or not raw:
+def _parse_retests(raw: Any, label: str, *, optional: bool = False) -> list[dict[str, Any]]:
+    if optional and raw is None:
+        return []
+    if not isinstance(raw, list) or (not raw and not optional):
         raise UpstreamMergeError(f"{label} 必须是非空数组：每个失败项至少一条定向复验命令")
     retests: list[dict[str, Any]] = []
     for index, entry in enumerate(raw):
@@ -456,7 +582,9 @@ def _parse_retests(raw: Any, label: str) -> list[dict[str, Any]]:
     return retests
 
 
-def _load_disposition_input(path: Path, expected_ids: Sequence[str]) -> list[dict[str, Any]]:
+def _load_disposition_input(
+    path: Path, expected_ids: Sequence[str], tool_checked_ids: Sequence[str] = ()
+) -> list[dict[str, Any]]:
     document = expect_object(load_json(path, "处置输入"), "处置输入")
     expect_exact_fields(document, {"schema_version", "items"}, "处置输入")
     if document.get("schema_version") != FAILURE_DISPOSITION_INPUT_SCHEMA:
@@ -468,8 +596,10 @@ def _load_disposition_input(path: Path, expected_ids: Sequence[str]) -> list[dic
     for index, raw in enumerate(raw_items):
         label = f"处置输入.items[{index}]"
         entry = expect_object(raw, label)
+        # 工具自己核对的失败项（worktree-status）可以省略 retests；其余失败项必须给出至少一条复验命令。
+        tool_checked = entry.get("failure_id") in tool_checked_ids
         extra = set(entry) - {"failure_id", "category", "cause", "fix", "retests"}
-        required = {"failure_id", "cause", "fix", "retests"}
+        required = {"failure_id", "cause", "fix"} | (set() if tool_checked else {"retests"})
         if extra or required - set(entry):
             raise UpstreamMergeError(f"{label} 字段不闭合：缺失={sorted(required - set(entry))}，多余={sorted(extra)}")
         items.append(
@@ -479,7 +609,7 @@ def _load_disposition_input(path: Path, expected_ids: Sequence[str]) -> list[dic
                 "category": validate_string_enum(entry.get("category", DEFAULT_CATEGORY), DISPOSITION_CATEGORIES, f"{label}.category"),
                 "cause": expect_string(entry.get("cause"), f"{label}.cause"),
                 "fix": expect_string(entry.get("fix"), f"{label}.fix"),
-                "retests": _parse_retests(entry.get("retests"), f"{label}.retests"),
+                "retests": _parse_retests(entry.get("retests"), f"{label}.retests", optional=tool_checked),
             }
         )
     ids = [item["failure_id"] for item in items]
@@ -494,22 +624,60 @@ def _load_disposition_input(path: Path, expected_ids: Sequence[str]) -> list[dic
     return sorted(items, key=lambda item: item["failure_id"])
 
 
-def _is_frozen_retest(argv: Sequence[str]) -> bool:
-    """冻结摘要类失败的定向复验：Go 冻结测试（-run 选择器含 Frozen），或 make 的出站规格检查目标。"""
+def successor_receipt_problems(document: Any, blob_digest: Callable[[str], str | None]) -> list[str]:
+    """判断一份 JSON 是不是真正的冻结承接收据；返回问题清单，空表示是。
 
-    if argv and Path(argv[0]).name == "go" and "test" in argv:
-        for index, part in enumerate(argv):
-            if part in ("-run", "--run") and index + 1 < len(argv) and FROZEN_RUN_MARKER in argv[index + 1]:
-                return True
-            if part.startswith(("-run=", "--run=")) and FROZEN_RUN_MARKER in part:
-                return True
-    if argv and Path(argv[0]).name == "make":
-        return any(part in FROZEN_MAKE_TARGETS for part in argv[1:])
-    return False
+    要求：schema_version 含 successor／transition；``identity_sha256`` 自摘要复算一致（接受冻结承接收据用的
+    门禁形态与工具通用形态两种算法）；``transitions`` 非空，每条有 ``path``、前序摘要与后继摘要（sha256）；并且
+    每条登记的后继摘要与该路径在当前候选提交里的内容一致（已不存在的路径跳过）——被后来的改动取代、
+    已经不描述当前内容的收据不算“台账已闭合”。
+    """
+
+    if not isinstance(document, dict):
+        return ["不是 JSON 对象"]
+    problems: list[str] = []
+    schema = document.get("schema_version")
+    if not isinstance(schema, str) or not any(word in schema for word in SUCCESSOR_SCHEMA_WORDS):
+        problems.append("schema_version 不含 successor／transition")
+    digest = document.get("identity_sha256")
+    if not isinstance(digest, str) or digest not in {gate_compatible_identity(document), identity_sha256(document)}:
+        problems.append("identity_sha256 缺失或自摘要复算不一致")
+    transitions = document.get("transitions")
+    if not isinstance(transitions, list) or not transitions:
+        problems.append("transitions 为空")
+        return problems
+    for index, transition in enumerate(transitions):
+        if not isinstance(transition, dict) or not isinstance(transition.get("path"), str) or not transition["path"]:
+            problems.append(f"transitions[{index}] 缺少 path")
+            continue
+        label = f"transitions[{index}]（{transition['path']}）"
+        predecessor = next((transition[key] for key in PREDECESSOR_DIGEST_KEYS if key in transition), None)
+        predecessors = predecessor if isinstance(predecessor, list) else [predecessor]
+        if not predecessors or not all(isinstance(value, str) and SHA256_RE.fullmatch(value) for value in predecessors):
+            problems.append(f"{label} 缺少前序摘要")
+        successor = next((transition[key] for key in SUCCESSOR_DIGEST_KEYS if key in transition), None)
+        if not isinstance(successor, str) or not SHA256_RE.fullmatch(successor):
+            problems.append(f"{label} 缺少后继摘要")
+            continue
+        actual = blob_digest(transition["path"])
+        if actual is not None and actual != successor:
+            problems.append(f"{label} 的后继摘要与当前候选提交里的内容不一致（已被后来的改动取代）")
+    return problems
+
+
+def _blob_sha256(worktree: Path, commit: str, relative: str) -> str | None:
+    """提交里某路径的内容摘要；路径在该提交里不存在返回 None。"""
+
+    completed = subprocess.run(
+        ["git", "show", f"{commit}:{relative}"], cwd=worktree, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False
+    )
+    if completed.returncode != 0:
+        return None
+    return hashlib.sha256(completed.stdout).hexdigest()
 
 
 def _maintenance_successors(worktree: Path, failed_commit: str, current_commit: str) -> list[str]:
-    """失败 attempt 的候选提交到当前候选提交之间，新增或改动的 successor 台账收据（docs/egress/maintenance 下的 json）。"""
+    """失败 attempt 的候选提交到当前候选提交之间，新增或改动、且通过 ``successor_receipt_problems`` 的承接收据。"""
 
     listed = run_git(
         worktree, "diff", "--name-only", "--no-renames", f"{failed_commit}..{current_commit}", "--", MAINTENANCE_DIRECTORY
@@ -521,7 +689,11 @@ def _maintenance_successors(worktree: Path, failed_commit: str, current_commit: 
         shown = run_git(worktree, "show", f"{current_commit}:{relative}", check=False)
         if shown.returncode != 0:
             continue
-        if re.search(r'"schema_version"\s*:\s*"[^"]*successor', shown.stdout):
+        try:
+            document = json.loads(shown.stdout)
+        except ValueError:
+            continue
+        if not successor_receipt_problems(document, lambda path: _blob_sha256(worktree, current_commit, path)):
             found.append(relative)
     return sorted(found)
 
@@ -592,9 +764,11 @@ def record_failure_disposition(
     即抛错、不写记录，复验日志保留在同名目录供排查。处置类别的要求：
 
     * ``functional``（省略类别、归因不清的都按它处理）：当前 SourceCandidate 提交必须不同于失败 attempt 绑定的提交；
-    * ``frozen_digest``：同上，且两提交之间新增或改动了 ``docs/egress/maintenance`` 下的 successor 台账收据，
-      复验里至少一条是冻结测试（Go ``-run`` 含 Frozen）或 make 的出站规格检查；
+    * ``frozen_digest``：同上，且两提交之间新增或改动了 ``docs/egress/maintenance`` 下真正的承接收据（见
+      ``successor_receipt_problems``），复验必须覆盖冻结包（见 ``frozen_retests_satisfied``）；
     * ``environment``：当前候选 worktree 的工具链核对必须通过。
+
+    无论哪类，每个失败项的复验里都必须有属于它自己复验族的命令（见 ``retest_family``），否则不成立。
     """
 
     attempt = expect_safe_id(attempt_id, "attempt_id")
@@ -608,7 +782,11 @@ def record_failure_disposition(
     expected = failure_items(plan, document)
     if not expected:
         raise UpstreamMergeError(f"attempt {attempt} 是 blocked 却没有可识别的失败项，收据不一致")
-    entries = _load_disposition_input(input_path, [item["id"] for item in expected])
+    entries = _load_disposition_input(
+        input_path,
+        [item["id"] for item in expected],
+        [item["id"] for item in expected if item["kind"] == "worktree"],
+    )
     expected_by_id = {item["id"]: item for item in expected}
 
     source = _load_source_candidate(plan)
@@ -622,8 +800,16 @@ def record_failure_disposition(
     # 类别要求（复验之前先判，不满足就不浪费时间执行）
     toolchain_report: dict[str, Any] | None = None
     successors: list[str] | None = None
+    commands = _group_commands(plan)
     for entry in entries:
         category, failure_id = entry["category"], entry["failure_id"]
+        # 复验必须属于该失败项自己的复验族（由工具按失败项推导，不接受自报）；候选树干净由工具自己核对。
+        family = family_for_item(expected_by_id[failure_id], commands)
+        if family.tool_checked:
+            entry["retests"].append(
+                {"argv": list(WORKTREE_CLEAN_ARGV), "cwd": ".", "timeout_seconds": WORKTREE_RETEST_TIMEOUT_SECONDS, "tool_check": True}
+            )
+        _assert_family(failure_id, family, [(retest["argv"], retest["cwd"]) for retest in entry["retests"]])
         checks: dict[str, Any] = {"failed_source_commit": failed_commit, "current_source_commit": current_commit}
         if category in ("functional", "frozen_digest") and failed_commit == current_commit:
             raise UpstreamMergeError(
@@ -639,10 +825,11 @@ def record_failure_disposition(
                     f"失败项 {failure_id} 按冻结摘要类失败处置，要求当前候选已含台账 revision：{failed_commit[:12]}..{current_commit[:12]} "
                     f"之间没有新增或改动 {MAINTENANCE_DIRECTORY} 下的 successor 收据（先按现行流程生成并提交）"
                 )
-            if not any(_is_frozen_retest(retest["argv"]) for retest in entry["retests"]):
+            if not frozen_retests_satisfied([(retest["argv"], retest["cwd"]) for retest in entry["retests"]]):
                 raise UpstreamMergeError(
-                    f"失败项 {failure_id} 按冻结摘要类失败处置，定向复验里必须有冻结测试"
-                    "（go test -run 含 Frozen）或 make check-egress-spec／check-egress-spec-ci"
+                    f"失败项 {failure_id} 按冻结摘要类失败处置，定向复验必须覆盖冻结包：在仓库根跑 make "
+                    "check-egress-spec／check-egress-spec-ci／egress-spec-go-test，或在 backend 下对 ./internal/officialegress "
+                    "与 ./internal/service 两个包（或 ./...）跑 -run 含 Frozen 的 go test"
                 )
             checks["successor_receipts"] = successors
         if category == "environment":
@@ -682,6 +869,9 @@ def record_failure_disposition(
             outcome = _run_retest(worktree, retest, log_directory / f"{stem}.stdout.txt", log_directory / f"{stem}.stderr.txt", env)
             outcome["stdout"] = artifact_binding(plan.evidence_root, log_directory / f"{stem}.stdout.txt")
             outcome["stderr"] = artifact_binding(plan.evidence_root, log_directory / f"{stem}.stderr.txt")
+            if retest.get("tool_check") and (log_directory / f"{stem}.stdout.txt").stat().st_size > 0:
+                # 候选树干净核对：git status 有任何输出就是不干净
+                outcome["status"] = "failed"
             executed.append(outcome)
             if outcome["status"] != "passed":
                 failures.append(

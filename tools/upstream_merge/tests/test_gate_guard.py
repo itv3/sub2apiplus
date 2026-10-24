@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -20,14 +21,16 @@ from unittest import mock
 
 from tools.upstream_merge import __main__ as cli
 from tools.upstream_merge import gate_guard
-from tools.upstream_merge.canonical import artifact_binding, bind_identity, write_json_once
+from tools.upstream_merge.canonical import artifact_binding, bind_identity, canonical_bytes, write_json_once
 from tools.upstream_merge.contracts import LoadedPlan, latest_stage_path, next_stage_path
 from tools.upstream_merge.errors import UpstreamMergeError
+from tools.upstream_merge.freeze import bind_gate_compatible_identity
 from tools.upstream_merge.gate_guard import (
     FAILURE_DISPOSITION_INPUT_SCHEMA,
     attempt_status,
     check_failure_disposition,
     failure_items,
+    latest_receipt_attempt,
     read_attempt_receipt,
     record_failure_disposition,
     run_gates_with_prechecks,
@@ -201,8 +204,49 @@ class GuardFixture(unittest.TestCase):
         write_json_once(path, {"schema_version": FAILURE_DISPOSITION_INPUT_SCHEMA, "items": entries})
         return path
 
-    def passing_retest(self) -> dict:
-        return {"argv": ["python3", "-c", "print('复验通过')"], "cwd": "."}
+    def fake_tool(self, name: str, body: str = "") -> str:
+        """在独立目录里造一个叫 name 的假可执行文件（复验族按基名识别 make／go／golangci-lint）；body 是脚本体。"""
+
+        self._tool_count = getattr(self, "_tool_count", 0) + 1
+        directory = self.temp_root / f"fake-bin-{self._tool_count:03d}"
+        directory.mkdir()
+        path = directory / name
+        path.write_text(f"#!/bin/sh\n{body}\nexit 0\n", encoding="utf-8")
+        path.chmod(0o755)
+        return str(path)
+
+    def successor_receipt_text(self, tracked: str) -> str:
+        """一份真正的冻结承接收据：自摘要用冻结承接收据的算法，后继摘要是 tracked 在当前候选里的内容摘要。"""
+
+        digest = hashlib.sha256((self.fixture.root / tracked).read_bytes()).hexdigest()
+        document = bind_gate_compatible_identity(
+            {
+                "schema_version": "official-egress-upstream-freeze-successor/v1",
+                "scope": "upstream-test-freeze-successor",
+                "transitions": [
+                    {
+                        "old_path": "",
+                        "path": tracked,
+                        "predecessor_sha256s": ["a" * 64],
+                        "reason": "测试用承接",
+                        "source_receipts": [],
+                        "status": "modified",
+                        "to_sha256": digest,
+                    }
+                ],
+            }
+        )
+        return json.dumps(document, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+    def egress_retest(self, body: str = "", *, cwd: str = ".") -> dict:
+        """属于 egress-spec 复验族的复验：仓库根下的 make check-egress-spec（假 make，可带副作用脚本体）。"""
+
+        return {"argv": [self.fake_tool("make", body), "-k", "check-egress-spec"], "cwd": cwd}
+
+    def lint_unit_retest(self, body: str = "") -> dict:
+        """属于 lint-unit 复验族的复验：backend 下的 golangci-lint run --build-tags=unit（假二进制）。"""
+
+        return {"argv": [self.fake_tool("golangci-lint", body), "run", "--build-tags=unit", "./..."], "cwd": "backend"}
 
 
 class OrderingAndPrecheckTest(GuardFixture):
@@ -388,6 +432,9 @@ class OrderingAndPrecheckTest(GuardFixture):
 
 
 class FailureDispositionTest(GuardFixture):
+    EGRESS = "full-regression/egress-spec/check-egress-spec"
+    LINT_UNIT = "full-regression/lint/golangci-lint-unit"
+
     def fail_first_attempt(self) -> dict:
         self.make_fixture()
         self.scenario("failed_steps")
@@ -396,18 +443,18 @@ class FailureDispositionTest(GuardFixture):
     def entries(self, **overrides) -> list[dict]:
         base = {
             "egress": {
-                "failure_id": "full-regression/egress-spec/check-egress-spec",
+                "failure_id": self.EGRESS,
                 "category": "environment",
                 "cause": "本机 Go 补丁版本与主干声明不一致，冻结自检报错",
                 "fix": "改用 GOTOOLCHAIN=go1.27.3 重跑",
-                "retests": [self.passing_retest()],
+                "retests": [self.egress_retest()],
             },
             "lint": {
-                "failure_id": "full-regression/lint/golangci-lint-unit",
+                "failure_id": self.LINT_UNIT,
                 "category": "environment",
                 "cause": "lint 二进制版本过旧",
                 "fix": "改用 v2.14.0",
-                "retests": [self.passing_retest()],
+                "retests": [self.lint_unit_retest()],
             },
         }
         for key, patch in overrides.items():
@@ -424,10 +471,7 @@ class FailureDispositionTest(GuardFixture):
         self.fail_first_attempt()
         document = read_attempt_receipt(self.plan, self.attempt_dir("attempt-001") / "receipt.json")
         items = failure_items(self.plan, document)
-        self.assertEqual(
-            [item["id"] for item in items],
-            ["full-regression/egress-spec/check-egress-spec", "full-regression/lint/golangci-lint-unit"],
-        )
+        self.assertEqual([item["id"] for item in items], [self.EGRESS, self.LINT_UNIT])
         self.assertEqual(len(items[0]["gate_ids"]), 10)  # full-regression 组内的 10 个逻辑门禁共享这次失败
         self.assertEqual({item["kind"] for item in items}, {"group_step"})
 
@@ -452,14 +496,14 @@ class FailureDispositionTest(GuardFixture):
         with self.assertRaisesRegex(UpstreamMergeError, "缺失=\\['full-regression/lint/golangci-lint-unit'\\]"):
             self.record(self.entries()[:1])
         extra = self.entries() + [
-            {"failure_id": "secret-scan", "cause": "x", "fix": "y", "retests": [self.passing_retest()]}
+            {"failure_id": "secret-scan", "cause": "x", "fix": "y", "retests": [self.egress_retest()]}
         ]
         with self.assertRaisesRegex(UpstreamMergeError, "不属于该 attempt=\\['secret-scan'\\]"):
             self.record(extra)
         duplicated = self.entries() + [self.entries()[0]]
         with self.assertRaisesRegex(UpstreamMergeError, "failure_id 重复"):
             self.record(duplicated)
-        self.assertFalse((self.fixture.evidence / "u4/dispositions").exists() and list((self.fixture.evidence / "u4/dispositions").rglob("*.json")))
+        self.assertEqual(list((self.fixture.evidence / "u4").rglob("disposition-*.json")), [])
 
     def test_hand_filled_results_and_missing_retests_are_rejected(self) -> None:
         self.fail_first_attempt()
@@ -480,14 +524,108 @@ class FailureDispositionTest(GuardFixture):
         with self.assertRaisesRegex(UpstreamMergeError, "只有 blocked 的失败需要处置"):
             record_failure_disposition(self.plan, "attempt-001", self.write_input(self.entries()))
 
+    # ---- 复验族：复验必须属于失败项自己，不能是任意一条通过的命令 ----
+    def test_unrelated_passing_command_cannot_close_a_failure_item(self) -> None:
+        """验收者的复现：functional＋推进一个无关提交＋复验 python3 -c "print('ok')" 曾经能把失败项关掉。"""
+
+        self.fail_first_attempt()
+        self.advance_candidate()  # 无关的候选推进
+        unrelated = {"argv": ["python3", "-c", "print('ok')"], "cwd": "."}
+        entries = self.entries(
+            egress={"category": "functional", "retests": [unrelated]},
+            lint={"category": "functional", "retests": [unrelated]},
+        )
+        with self.assertRaises(UpstreamMergeError) as caught:
+            self.record(entries)
+        message = str(caught.exception)
+        self.assertIn(f"失败项 {self.EGRESS} 的复验里没有属于它的复验族的命令", message)
+        self.assertIn("check-egress-spec", message)
+        self.assertEqual(list((self.fixture.evidence / "u4").rglob("disposition-*.json")), [])
+        # 工具没有执行这些无关命令，也没有留下复验日志目录
+        self.assertEqual(list((self.fixture.evidence / "u4/dispositions").rglob("*.stdout.txt")), [])
+
+    def test_a_retest_from_another_failure_items_family_does_not_count(self) -> None:
+        self.fail_first_attempt()
+        swapped = self.entries(egress={"retests": [self.lint_unit_retest()]}, lint={"retests": [self.egress_retest()]})
+        with self.assertRaisesRegex(UpstreamMergeError, "复验里没有属于它的复验族的命令"):
+            self.record(swapped)
+        # 每个失败项至少有一条属于自己的即可，另附的辅助命令不碍事
+        mixed = self.entries(egress={"retests": [self.egress_retest(), {"argv": ["python3", "-c", "pass"], "cwd": "."}]})
+        self.assertEqual(self.record(mixed)["result"], "closed")
+
+    def test_environment_category_still_needs_the_family(self) -> None:
+        self.fail_first_attempt()
+        unrelated = {"argv": ["python3", "-c", "print('ok')"], "cwd": "."}
+        with self.assertRaisesRegex(UpstreamMergeError, "复验里没有属于它的复验族的命令"):
+            self.record(self.entries(lint={"category": "environment", "retests": [unrelated]}))
+
+    def test_forged_and_resealed_disposition_is_rejected_when_gates_run_starts(self) -> None:
+        """改写已封存记录里的复验 argv 并重新封存，日志绑定仍然有效，但复验族不对，启动前检查必须判无效。"""
+
+        self.fail_first_attempt()
+        result = self.record(self.entries())
+        path = Path(result["disposition"])
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["items"][0]["retests"][0]["argv"] = ["true"]
+        document.pop("identity_sha256")
+        path.write_bytes(canonical_bytes(bind_identity(document)))
+        report = check_failure_disposition(self.plan)
+        self.assertEqual(len(report["blockers"]), 4, report["blockers"])
+        self.assertTrue(any("已有处置记录无效" in text and "复验族" in text for text in report["blockers"]), report["blockers"])
+        with self.assertRaisesRegex(UpstreamMergeError, "尚未处置"):
+            self.prechecked_run("attempt-002", from_attempt="attempt-001")
+
+    def test_plain_group_failures_need_the_gates_own_expanded_command(self) -> None:
+        self.make_fixture()
+        self.plan = self.build_plan(inventory_exit=1)
+        self.scenario("passed")
+        receipt = run_verification_gates(self.plan, "attempt-001")
+        self.assertEqual([item["id"] for item in failure_items(self.plan, receipt)], ["inventory-closure"])
+        expected_argv = ["python3", str(self.order_script), "inventory-closure", "1"]
+        entry = {"failure_id": "inventory-closure", "category": "environment", "cause": "c", "fix": "f"}
+        # 别的命令不行
+        with self.assertRaisesRegex(UpstreamMergeError, "门禁 inventory-closure 的展开命令"):
+            self.record([{**entry, "retests": [{"argv": ["python3", "-c", "pass"], "cwd": "."}]}])
+        # 门禁自己的展开命令（这里恰好会再次失败：退出码 1，处置不成立）
+        with self.assertRaisesRegex(UpstreamMergeError, "定向复验未通过"):
+            self.record([{**entry, "retests": [{"argv": expected_argv, "cwd": "."}]}])
+        # 修好之后（门禁自己的命令这次通过）才成立：改成退出码 0 的同名脚本不行，必须逐字相同
+        self.plan = self.build_plan(inventory_exit=0)
+        passing = ["python3", str(self.order_script), "inventory-closure", "0"]
+        result = self.record([{**entry, "retests": [{"argv": passing, "cwd": "."}]}])
+        self.assertEqual(result["result"], "closed")
+
+    def test_worktree_status_is_checked_by_the_tool_itself(self) -> None:
+        self.make_fixture()
+        # 造一个“执行后污染候选树”的 blocked attempt：门禁在候选树里留下未跟踪文件
+        for gate in self.plan.document["gates"]:
+            if gate["category"] == "inventory_closure":
+                gate["argv"] = ["python3", "-c", "open('stray-from-gate.txt', 'w').write('x')"]
+            if gate["category"] == "secret_scan":
+                gate["argv"] = ["python3", "-c", "pass"]
+        receipt = run_verification_gates(self.plan, "attempt-001")
+        self.assertEqual(receipt["result"], "blocked")
+        self.assertEqual(receipt["worktree_status_paths"], ["stray-from-gate.txt"])
+        self.assertEqual([item["id"] for item in failure_items(self.plan, receipt)], ["worktree-status"])
+        entry = {"failure_id": "worktree-status", "category": "environment", "cause": "门禁写了临时文件", "fix": "清理并改门禁"}
+        # 候选树仍不干净：assert_clean 先拒绝
+        with self.assertRaisesRegex(UpstreamMergeError, "干净工作树"):
+            self.record([entry])
+        (self.fixture.root / "stray-from-gate.txt").unlink()
+        # 填写者不必（也不能靠自报）提供复验命令；工具自己执行 git status 并记录
+        result = self.record([entry])
+        document = json.loads(Path(result["disposition"]).read_text(encoding="utf-8"))
+        (retest,) = document["items"][0]["retests"]
+        self.assertEqual(retest["argv"], ["git", "status", "--porcelain=v1", "--untracked-files=all"])
+        self.assertEqual((retest["exit_code"], retest["status"]), (0, "passed"))
+        self.assertEqual(self.fixture.evidence.joinpath(retest["stdout"]["path"]).read_text(encoding="utf-8"), "")
+
     # ---- 定向复验由工具真实执行 ----
     def test_retests_are_really_executed_and_recorded_with_log_bindings(self) -> None:
         self.fail_first_attempt()
         proof = self.temp_root / "retest-proof.txt"
         entries = self.entries()
-        entries[0]["retests"] = [
-            {"argv": ["python3", "-c", f"import sys; open({str(proof)!r},'w').write('ran'); print('out-line'); print('err-line', file=sys.stderr)"], "cwd": "."}
-        ]
+        entries[0]["retests"] = [self.egress_retest(f"echo out-line\necho err-line >&2\nprintf ran > '{proof}'")]
         result = self.record(entries)
         self.assertEqual(proof.read_text(encoding="utf-8"), "ran")
         self.assertEqual(result["result"], "closed")
@@ -509,12 +647,12 @@ class FailureDispositionTest(GuardFixture):
     def test_failing_retest_makes_the_disposition_invalid_and_writes_nothing(self) -> None:
         self.fail_first_attempt()
         entries = self.entries()
-        entries[1]["retests"] = [{"argv": ["python3", "-c", "import sys; print('仍然失败', file=sys.stderr); sys.exit(7)"], "cwd": "."}]
+        entries[1]["retests"] = [self.lint_unit_retest("echo 仍然失败 >&2\nexit 7")]
         with self.assertRaises(UpstreamMergeError) as caught:
             self.record(entries)
         message = str(caught.exception)
         self.assertIn("处置不成立", message)
-        self.assertIn("full-regression/lint/golangci-lint-unit", message)
+        self.assertIn(self.LINT_UNIT, message)
         self.assertIn("退出码 7", message)
         directory = self.fixture.evidence / "u4/dispositions/attempt-001"
         self.assertEqual(list(directory.glob("*.json")), [])
@@ -525,11 +663,11 @@ class FailureDispositionTest(GuardFixture):
     def test_timed_out_and_unstartable_retests_fail(self) -> None:
         self.fail_first_attempt()
         slow = self.entries()
-        slow[0]["retests"] = [{"argv": ["python3", "-c", "import time; time.sleep(30)"], "cwd": ".", "timeout_seconds": 1}]
+        slow[0]["retests"] = [{**self.egress_retest("/bin/sleep 30"), "timeout_seconds": 1}]
         with self.assertRaisesRegex(UpstreamMergeError, "超时"):
             self.record(slow)
         missing = self.entries()
-        missing[0]["retests"] = [{"argv": ["/nonexistent/retest-binary"], "cwd": "."}]
+        missing[0]["retests"] = [{"argv": ["/nonexistent/make", "check-egress-spec"], "cwd": "."}]
         with self.assertRaisesRegex(UpstreamMergeError, "退出码 None"):
             self.record(missing)
         self.assertEqual(list((self.fixture.evidence / "u4/dispositions/attempt-001").glob("*.json")), [])
@@ -537,7 +675,7 @@ class FailureDispositionTest(GuardFixture):
     def test_retest_that_dirties_the_candidate_tree_is_rejected(self) -> None:
         self.fail_first_attempt()
         entries = self.entries()
-        entries[0]["retests"] = [{"argv": ["python3", "-c", "open('leftover.txt','w').write('x')"], "cwd": "."}]
+        entries[0]["retests"] = [self.egress_retest("touch leftover.txt")]
         with self.assertRaisesRegex(UpstreamMergeError, "干净工作树"):
             self.record(entries)
         (self.fixture.root / "leftover.txt").unlink()
@@ -548,7 +686,7 @@ class FailureDispositionTest(GuardFixture):
         for bad in ("../outside", "/etc", "missing-dir"):
             with self.subTest(cwd=bad):
                 entries = self.entries()
-                entries[0]["retests"] = [{"argv": ["python3", "-c", "pass"], "cwd": bad}]
+                entries[0]["retests"] = [self.egress_retest(cwd=bad)]
                 with self.assertRaises(UpstreamMergeError):
                     self.record(entries)
 
@@ -599,18 +737,13 @@ class FailureDispositionTest(GuardFixture):
         self.scenario("passed")
         self.assertEqual(self.prechecked_run("attempt-002", from_attempt="attempt-001")["result"], "passed")
 
-    def test_frozen_digest_failure_requires_a_successor_revision_and_a_frozen_retest(self) -> None:
+    def frozen_go_retest(self, *packages: str, run: str = "Frozen|Transition|Successor", cwd: str = "backend") -> dict:
+        return {"argv": [self.fake_tool("go"), "test", *packages, "-run", run, "-count=1"], "cwd": cwd}
+
+    def test_frozen_digest_failure_requires_a_real_successor_receipt_and_frozen_package_coverage(self) -> None:
         self.fail_first_attempt()
-        fake_bin = self.temp_root / "bin"
-        fake_bin.mkdir()
-        fake_go = fake_bin / "go"
-        fake_go.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        fake_go.chmod(0o755)
-        frozen = {"argv": [str(fake_go), "test", "./internal/officialegress", "-run", "Frozen|Transition|Successor", "-count=1"], "cwd": "."}
-        entries = self.entries(
-            egress={"category": "frozen_digest", "retests": [frozen]},
-            lint={"category": "environment"},
-        )
+        both = self.frozen_go_retest("./internal/officialegress", "./internal/service")
+        entries = self.entries(egress={"category": "frozen_digest", "retests": [both]}, lint={"category": "environment"})
         # 候选未推进
         with self.assertRaisesRegex(UpstreamMergeError, "已在 attempt attempt-001 之后推进"):
             self.record(entries)
@@ -618,45 +751,61 @@ class FailureDispositionTest(GuardFixture):
         self.advance_candidate()
         with self.assertRaisesRegex(UpstreamMergeError, "已含台账 revision"):
             self.record(entries)
-        # 台账 revision 已含，但复验不是冻结测试
-        receipt = (
-            '{\n  "schema_version": "official-egress-upstream-freeze-successor/v1",\n  "scope": "x"\n}\n'
+        # 两提交之间新增的 JSON 只是名字像、没有自摘要与 transitions：不算承接收据
+        self.advance_candidate({"docs/egress/maintenance/upstream-x-freeze-successor.json": '{"schema_version": "x-freeze-successor/v1"}\n'})
+        with self.assertRaisesRegex(UpstreamMergeError, "已含台账 revision"):
+            self.record(entries)
+        # 真正的承接收据：自摘要正确、transitions 非空、前序与后继摘要齐全、后继摘要等于当前内容
+        self.advance_candidate({"docs/egress/maintenance/upstream-y-freeze-successor.json": self.successor_receipt_text("fix.txt")})
+        # 复验只覆盖一个包、或 -run 不含冻结类模式：连 egress-spec 的复验族都不满足
+        only_one = self.entries(
+            egress={"category": "frozen_digest", "retests": [self.frozen_go_retest("./internal/officialegress")]},
+            lint={"category": "environment"},
         )
-        self.advance_candidate({"docs/egress/maintenance/upstream-x-freeze-successor.json": receipt})
-        not_frozen = self.entries(egress={"category": "frozen_digest"}, lint={"category": "environment"})
-        with self.assertRaisesRegex(UpstreamMergeError, "必须有冻结测试"):
+        with self.assertRaisesRegex(UpstreamMergeError, "复验里没有属于它的复验族的命令"):
+            self.record(only_one)
+        wrong_run = self.entries(
+            egress={"category": "frozen_digest", "retests": [self.frozen_go_retest("./...", run="TestSomethingElse")]},
+            lint={"category": "environment"},
+        )
+        with self.assertRaisesRegex(UpstreamMergeError, "复验里没有属于它的复验族的命令"):
+            self.record(wrong_run)
+        # 属于 egress-spec 复验族、却不是冻结复验（某个 egress-spec-* 子目标）：冻结摘要类另要求覆盖冻结包
+        sub_target = {"argv": [self.fake_tool("make"), "egress-spec-version-leak"], "cwd": "."}
+        not_frozen = self.entries(egress={"category": "frozen_digest", "retests": [sub_target]}, lint={"category": "environment"})
+        with self.assertRaisesRegex(UpstreamMergeError, "必须覆盖冻结包"):
             self.record(not_frozen)
-        # 台账 revision + 冻结复验都满足
+        # 台账 revision + 两个包都覆盖的冻结复验
         result = self.record(entries)
         document = json.loads(Path(result["disposition"]).read_text(encoding="utf-8"))
         checks = document["items"][0]["category_checks"]
-        self.assertEqual(checks["successor_receipts"], ["docs/egress/maintenance/upstream-x-freeze-successor.json"])
+        self.assertEqual(checks["successor_receipts"], ["docs/egress/maintenance/upstream-y-freeze-successor.json"])
         self.assertEqual(document["items"][0]["category"], "frozen_digest")
+        # 用 ./... 一条命令覆盖两个包同样成立
+        everything = self.entries(
+            egress={"category": "frozen_digest", "retests": [self.frozen_go_retest("./...")]}, lint={"category": "environment"}
+        )
+        self.assertEqual(self.record(everything)["result"], "closed")
+
+    def test_stale_successor_receipt_that_no_longer_describes_the_candidate_does_not_count(self) -> None:
+        self.fail_first_attempt()
+        self.advance_candidate()
+        receipt = self.successor_receipt_text("fix.txt")
+        self.advance_candidate({"docs/egress/maintenance/upstream-z-freeze-successor.json": receipt})
+        # 收据之后 fix.txt 又变了，收据登记的后继摘要已不是当前内容
+        self.advance_candidate({"fix.txt": "收据之后又改了\n"})
+        entries = self.entries(
+            egress={"category": "frozen_digest", "retests": [self.frozen_go_retest("./...")]}, lint={"category": "environment"}
+        )
+        with self.assertRaisesRegex(UpstreamMergeError, "已含台账 revision"):
+            self.record(entries)
 
     def test_non_successor_maintenance_files_do_not_count_as_a_ledger_revision(self) -> None:
         self.fail_first_attempt()
         self.advance_candidate({"docs/egress/maintenance/some-notes.json": '{"schema_version": "notes/v1"}\n'})
-        entries = self.entries(egress={"category": "frozen_digest"})
+        entries = self.entries(egress={"category": "frozen_digest", "retests": [self.frozen_go_retest("./...")]})
         with self.assertRaisesRegex(UpstreamMergeError, "已含台账 revision"):
             self.record(entries)
-
-    def test_frozen_retest_recognition(self) -> None:
-        recognized = [
-            ["go", "test", "./internal/officialegress", "-run", "Frozen|Transition", "-count=1"],
-            ["/usr/local/go/bin/go", "test", "-run=FrozenDigest", "./..."],
-            ["make", "check-egress-spec"],
-            ["make", "-k", "check-egress-spec-ci"],
-        ]
-        rejected = [
-            ["go", "test", "./..."],
-            ["go", "test", "-run", "Transition", "./..."],
-            ["python3", "-c", "pass"],
-            ["make", "test-unit"],
-        ]
-        for argv in recognized:
-            self.assertTrue(gate_guard._is_frozen_retest(argv), argv)
-        for argv in rejected:
-            self.assertFalse(gate_guard._is_frozen_retest(argv), argv)
 
     # ---- 校验与篡改 ----
     def test_tampered_retest_log_invalidates_the_disposition(self) -> None:
@@ -702,6 +851,99 @@ class FailureDispositionTest(GuardFixture):
         self.assertNotEqual(first["disposition"], second["disposition"])
         self.assertTrue(Path(first["disposition"]).is_file() and Path(second["disposition"]).is_file())
         self.assertEqual(stat.S_IMODE(Path(first["disposition"]).stat().st_mode), 0o600)
+
+
+class LatestAttemptOrderingTest(GuardFixture):
+    """“上一轮”看收据内容（from_attempt 链、运行标记里的开始时间），不看文件修改时间。"""
+
+    def set_started(self, attempt: str, value: str | None) -> None:
+        marker = self.attempt_dir(attempt) / "gates-run.pid.json"
+        marker.chmod(0o600)
+        if value is None:
+            marker.unlink()
+        else:
+            marker.write_text(json.dumps({"pid": os.getpid(), "started_at_utc": value}), encoding="utf-8")
+
+    def two_independent_attempts(self) -> None:
+        """attempt-001 blocked，随后一次全新的 attempt-002（不引用 001）passed；两者互不引用。"""
+
+        self.make_fixture()
+        self.scenario("failed_steps")
+        run_verification_gates(self.plan, "attempt-001")
+        self.scenario("passed")
+        run_verification_gates(self.plan, "attempt-002")
+        self.set_started("attempt-001", "2026-10-25T00:00:01Z")
+        self.set_started("attempt-002", "2026-10-25T00:00:09Z")
+
+    def test_touching_an_old_receipt_does_not_make_it_the_latest(self) -> None:
+        self.two_independent_attempts()
+        old = self.attempt_dir("attempt-001") / "receipt.json"
+        future = old.stat().st_mtime + 86400
+        os.utime(old, (future, future))  # 旧收据的修改时间比新的还晚
+        latest, _without = latest_receipt_attempt(self.plan)
+        self.assertEqual(latest.name, "attempt-002")
+        report = check_failure_disposition(self.plan)
+        self.assertEqual((report["latest_attempt"], report["latest_result"], report["blockers"]), ("attempt-002", "passed", []))
+
+    def test_copying_an_old_receipt_does_not_change_the_order(self) -> None:
+        self.two_independent_attempts()
+        copied = self.attempt_dir("attempt-001")
+        for path in copied.rglob("*"):
+            os.utime(path, None)  # 全部文件的修改时间刷新成“现在”
+        self.assertEqual(latest_receipt_attempt(self.plan)[0].name, "attempt-002")
+        # 反过来：新收据被早期时间戳取代也不影响（顺序看开始时间，不看修改时间）
+        self.set_started("attempt-001", "2026-10-25T00:00:20Z")
+        self.assertEqual(latest_receipt_attempt(self.plan)[0].name, "attempt-001")
+
+    def test_from_attempt_chain_decides_between_a_parent_and_its_rerun(self) -> None:
+        self.make_fixture()
+        self.scenario("failed_steps")
+        run_verification_gates(self.plan, "attempt-001")
+        self.scenario("passed")
+        run_verification_gates(self.plan, "attempt-002", from_attempt="attempt-001")
+        # 即使两个运行标记的时间被写成相反的顺序，重跑引用了上一轮，上一轮就不是最近的
+        self.set_started("attempt-001", "2026-10-25T00:00:30Z")
+        self.set_started("attempt-002", "2026-10-25T00:00:01Z")
+        self.assertEqual(latest_receipt_attempt(self.plan)[0].name, "attempt-002")
+
+    def test_missing_start_time_between_independent_attempts_fails_closed(self) -> None:
+        self.two_independent_attempts()
+        self.set_started("attempt-002", None)
+        with self.assertRaisesRegex(UpstreamMergeError, "无法确定上一轮 attempt.*取不到开始时间"):
+            latest_receipt_attempt(self.plan)
+        with self.assertRaisesRegex(UpstreamMergeError, "无法确定上一轮"):
+            check_failure_disposition(self.plan)
+        with self.assertRaisesRegex(UpstreamMergeError, "无法确定上一轮"):
+            self.prechecked_run("attempt-003")
+        self.assertFalse(self.attempt_dir("attempt-003").exists())
+
+    def test_tied_start_times_between_independent_attempts_fail_closed(self) -> None:
+        self.two_independent_attempts()
+        self.set_started("attempt-001", "2026-10-25T00:00:09Z")
+        with self.assertRaisesRegex(UpstreamMergeError, "开始时间并列"):
+            latest_receipt_attempt(self.plan)
+
+    def test_attempts_without_a_marker_inherit_the_time_of_the_attempt_they_continue(self) -> None:
+        self.make_fixture()
+        self.scenario("awaiting")
+        run_verification_gates(self.plan, "attempt-001")
+        # 导入 CI 证据产生的 attempt 没有运行标记，靠 from_attempt 链排在被引用的 attempt 之后
+        from tools.upstream_merge.tests.test_ci_evidence import FakeActionsApi
+        from tools.upstream_merge.workflow import import_ci_evidence
+
+        api = FakeActionsApi(self.fixture.fork)
+        import_ci_evidence(self.plan, "attempt-002", "attempt-001", repository_slug="itv3/sub2apiplus", api=api)
+        self.assertFalse((self.attempt_dir("attempt-002") / "gates-run.pid.json").exists())
+        self.assertEqual(latest_receipt_attempt(self.plan)[0].name, "attempt-002")
+        report = check_failure_disposition(self.plan)
+        self.assertEqual((report["latest_attempt"], report["latest_result"]), ("attempt-002", "passed"))
+        # 再来一次互不引用的全新 attempt-003：导入的 attempt-002 没有标记，沿用它所继续的 attempt-001 的开始时间
+        run_verification_gates(self.plan, "attempt-003")
+        self.set_started("attempt-001", "2026-10-25T00:00:05Z")
+        self.set_started("attempt-003", "2026-10-25T00:00:09Z")
+        self.assertEqual(latest_receipt_attempt(self.plan)[0].name, "attempt-003")
+        self.set_started("attempt-003", "2026-10-25T00:00:02Z")
+        self.assertEqual(latest_receipt_attempt(self.plan)[0].name, "attempt-002")
 
 
 def _current_commit(plan: LoadedPlan) -> str:
@@ -878,15 +1120,13 @@ class CommandLineExitStatusTest(GuardFixture):
         self.make_fixture()
         self.scenario("failed_steps")
         self.invoke(self.plan_args("gates-run", "--attempt-id", "attempt-001"), patches=self.guarded())
+        retests = {
+            "full-regression/egress-spec/check-egress-spec": [self.egress_retest()],
+            "full-regression/lint/golangci-lint-unit": [self.lint_unit_retest()],
+        }
         entries = [
-            {
-                "failure_id": failure_id,
-                "category": "environment",
-                "cause": "环境",
-                "fix": "改环境",
-                "retests": [self.passing_retest()],
-            }
-            for failure_id in ("full-regression/egress-spec/check-egress-spec", "full-regression/lint/golangci-lint-unit")
+            {"failure_id": failure_id, "category": "environment", "cause": "环境", "fix": "改环境", "retests": retest}
+            for failure_id, retest in retests.items()
         ]
         input_path = self.write_input(entries)
         with mock.patch("tools.upstream_merge.gate_guard.check_toolchain", return_value=_passing_toolchain()):
