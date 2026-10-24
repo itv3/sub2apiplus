@@ -4764,6 +4764,18 @@ class GitHubActionsApi:
     def job_log(self, repository: str, job_id: int) -> str:
         return self._get(f"repos/{repository}/actions/jobs/{job_id}/logs").decode("utf-8", errors="replace")
 
+    def runs_for_commit(self, repository: str, head_sha: str) -> list[dict[str, Any]]:
+        """某个提交上的全部工作流运行（所有事件、所有工作流）；只保留 head_sha 精确等于该提交的条目。"""
+
+        document = expect_object(
+            json.loads(self._get(f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=100")),
+            "CI runs",
+        )
+        runs = document.get("workflow_runs")
+        if not isinstance(runs, list):
+            raise UpstreamMergeError("CI runs 响应缺少 workflow_runs 数组")
+        return [item for item in runs if isinstance(item, dict) and item.get("head_sha") == head_sha]
+
     def find_run(self, repository: str, head_sha: str) -> int | None:
         document = expect_object(
             json.loads(self._get(f"repos/{repository}/actions/runs?head_sha={head_sha}&per_page=50")),

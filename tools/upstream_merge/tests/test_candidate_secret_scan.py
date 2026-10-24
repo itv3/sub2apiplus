@@ -19,10 +19,13 @@ from unittest import mock
 
 from tools.upstream_merge import __main__ as cli
 from tools.upstream_merge import workflow
+from tools.upstream_merge.errors import UpstreamMergeError
 from tools.upstream_merge.gate_guard import candidate_secret_scan_from_request
 from tools.upstream_merge.tests.test_covered_tags import git
 from tools.upstream_merge.tests.test_preflight_secret_scan import HIT, secret_gate, template_gates
-from tools.upstream_merge.workflow import (
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
+
+from tools.upstream_merge.workflow import (  # noqa: E402
     CANDIDATE_SECRET_SCAN_SCHEMA,
     _parse_secret_scan_hits,
     scan_candidate_secrets,
@@ -152,15 +155,31 @@ class CandidateSecretScanTest(unittest.TestCase):
         self.assertEqual(_parse_secret_scan_hits("没有断言信息"), [])
         self.assertEqual(_parse_secret_scan_hits("AssertionError: [1, 2]"), [])
 
-    def test_request_entry_point_reads_gates_from_the_request(self) -> None:
+    def test_request_entry_point_reads_gates_from_the_request_or_the_standard_template(self) -> None:
         self.write("src/leak.txt", f"token={HIT}\n")
         self.commit("命中")
         request_path = self.root.parent / "request.json"
-        request_path.write_text("{}\n", encoding="utf-8")
-        with mock.patch("tools.upstream_merge.gate_guard.load_request", return_value={"gates": self.gates}) as loader:
-            report = candidate_secret_scan_from_request(request_path, self.root)
-        loader.assert_called_once_with(request_path)
+        request_path.write_text(json.dumps({"gates": self.gates}) + "\n", encoding="utf-8")
+        self.assertEqual(candidate_secret_scan_from_request(request_path, self.root)["result"], "blocked")
+        # 标准模板（门禁在 request 字段里）同样可用：试验 worktree 在建正式 Plan 之前就要扫。
+        template = SOURCE_ROOT / "tools/upstream_merge/request_template_v2.json"
+        report = candidate_secret_scan_from_request(template, self.root)
         self.assertEqual(report["result"], "blocked")
+        self.assertEqual(report["scan"]["gate_id"], "10-secret-scan")
+
+    def test_malformed_gate_definitions_never_pass(self) -> None:
+        request_path = self.root.parent / "request.json"
+        # 没有可用的 gates：直接拒绝
+        for document in ({}, {"gates": []}, {"request": {"gates": "不是数组"}}, {"gates": ["x"]}):
+            with self.subTest(document=document):
+                request_path.write_text(json.dumps(document) + "\n", encoding="utf-8")
+                with self.assertRaises(UpstreamMergeError):
+                    candidate_secret_scan_from_request(request_path, self.root)
+        # 有 gates 但没有 secret_scan 门禁：扫描阻断，不是通过
+        request_path.write_text(json.dumps({"gates": [{"id": "x", "category": "shared_static"}]}) + "\n", encoding="utf-8")
+        report = candidate_secret_scan_from_request(request_path, self.root)
+        self.assertEqual(report["result"], "blocked")
+        self.assertIn("必须恰好有一个", report["blockers"][0])
 
 
 class CandidateSecretScanCommandTest(unittest.TestCase):
@@ -177,7 +196,7 @@ class CandidateSecretScanCommandTest(unittest.TestCase):
         git(self.root, "add", "--all")
         git(self.root, "commit", "-q", "-m", "base")
         self.request = Path(temporary.name) / "request.json"
-        self.request.write_text("{}\n", encoding="utf-8")
+        self.request.write_text(json.dumps({"gates": template_gates()}) + "\n", encoding="utf-8")
 
     def invoke(self) -> tuple[int, str]:
         stdout = io.BytesIO()
@@ -186,7 +205,6 @@ class CandidateSecretScanCommandTest(unittest.TestCase):
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(sys, "stdout", wrapper))
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
-            stack.enter_context(mock.patch("tools.upstream_merge.gate_guard.load_request", return_value={"gates": template_gates()}))
             stack.enter_context(mock.patch.object(cli, "timing_ledger_path", return_value=(None, None)))
             code = cli.main(argv)
         return code, stdout.getvalue().decode("utf-8")

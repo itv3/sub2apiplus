@@ -43,7 +43,7 @@ from .canonical import (
     validate_string_enum,
     write_json_once,
 )
-from .contracts import LoadedPlan, artifact_document, load_request, stage_binding
+from .contracts import LoadedPlan, artifact_document, stage_binding
 from .errors import UpstreamMergeError
 from .gitops import assert_clean, rev_parse, run_git
 from .toolchain import Probe, check_toolchain, describe_mismatches, run_probe
@@ -858,8 +858,25 @@ def attempt_status(
     return status
 
 
+def load_scan_gates(request_path: Path) -> list[dict[str, Any]]:
+    """取出 request 里的门禁定义，不要求整份 request 已渲染完毕。
+
+    ``request_path`` 可以是 ``request-render`` 生成的正式 request，也可以是标准模板
+    ``request_template_v2.json``（门禁在其 ``request`` 字段里，仍含未渲染的 ``{source_repository}``）——试验
+    worktree 在建正式 Plan 之前就要扫。这里只确认 gates 是对象数组；唯一的 ``secret_scan`` 门禁的形状、占位符与
+    cwd 由扫描本身逐项校验，不合格即阻断。
+    """
+
+    document = expect_object(load_json(request_path, "request"), "request")
+    gates = document.get("gates")
+    if gates is None and isinstance(document.get("request"), dict):
+        gates = document["request"].get("gates")
+    if not isinstance(gates, list) or not gates or not all(isinstance(item, dict) for item in gates):
+        raise UpstreamMergeError("request 缺少 gates 数组（或标准模板的 request.gates）")
+    return gates
+
+
 def candidate_secret_scan_from_request(request_path: Path, repository: Path) -> dict[str, Any]:
     """``candidate-secret-scan`` 的入口：门禁取自 request，对象是候选工作树。"""
 
-    request = load_request(request_path)
-    return scan_candidate_secrets(repository, request["gates"])
+    return scan_candidate_secrets(repository, load_scan_gates(request_path))

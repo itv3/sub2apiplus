@@ -28,8 +28,10 @@ from .conflict_rationale import conflict_input_from_rationale, draft_conflict_ra
 from .plan_replay import conflict_replay, replay_trial_tree, seal_merge_with_replay
 from .request_render import PLAN_ROOT_NAME, render_request
 from .sink_registration import write_sink_registration
+from .start_check import start_check
 from .surface_suggestions import write_surface_suggestions
 from .revision_advance import advance_revision
+from .toolchain import check_toolchain
 from .version_sync import DEFAULT_MAX_ATTEMPTS, sync_released_version
 from .workflow import (
     _load_merge_start,
@@ -62,6 +64,8 @@ BLOCKED_EXIT_CODE = 5
 UNFINISHED_EXIT_CODE = 6
 # 命令 → {结论: 退出码}：结论与退出码一致，监视脚本与 CI 不必解析输出也能判断。
 RESULT_EXIT_CODES: dict[str, dict[str, int]] = {
+    "start-check": {"blocked": BLOCKED_EXIT_CODE},
+    "toolchain-check": {"blocked": BLOCKED_EXIT_CODE},
     "candidate-secret-scan": {"blocked": BLOCKED_EXIT_CODE},
     "gates-run": {"blocked": BLOCKED_EXIT_CODE},
     "gates-status": {
@@ -346,6 +350,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         type=_absolute,
         help="要复核的 source-transition 链尾；可重复指定",
+    )
+
+    start = commands.add_parser(
+        "start-check",
+        help="开工检查：主干干净、HEAD 已在 origin、HEAD 的功能 CI 全绿并绑定该提交、基线工具链与主干声明一致（联网只读）",
+    )
+    _add_repository(start)
+    start.add_argument("--output", type=_absolute, help="可选的非权威报告路径（仓库外或 Git 忽略的私有目录）；不覆盖既有文件")
+    start.add_argument("--managed-ref", default="refs/heads/main", help="受维护分支完整引用；默认 refs/heads/main")
+    start.add_argument("--remote", default="origin", help="远端；默认 origin")
+    start.add_argument("--repository-slug", help="GitHub owner/repo；默认从远端地址解析")
+
+    toolchain = commands.add_parser(
+        "toolchain-check",
+        help="核对一棵树声明的 Go／lint 版本与本机实际版本，输出期望值、实际值与不匹配项（不联网）",
+    )
+    _add_repository(toolchain)
+    toolchain.add_argument(
+        "--role",
+        choices=("baseline", "candidate"),
+        help="baseline＝主干（取主干声明的版本）；candidate＝合并后的候选树（取候选声明的版本）",
     )
 
     secret_scan = commands.add_parser(
@@ -679,6 +704,16 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             max_attempts=arguments.max_attempts,
             push=not arguments.no_push,
         )
+    if command == "start-check":
+        return start_check(
+            arguments.repository,
+            output=arguments.output,
+            managed_ref=arguments.managed_ref,
+            remote=arguments.remote,
+            repository_slug=arguments.repository_slug,
+        )
+    if command == "toolchain-check":
+        return check_toolchain(arguments.repository, arguments.role)
     if command == "candidate-secret-scan":
         return candidate_secret_scan_from_request(arguments.request, arguments.repository)
     if command == "identity-seal":
