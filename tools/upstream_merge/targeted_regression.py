@@ -215,7 +215,7 @@ def _go_env() -> dict[str, str]:
     """go list 只读取本机缓存，不联网、不改 go.mod／go.sum。"""
 
     env = dict(os.environ)
-    env.update({"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOSUMDB": "off", "GOWORK": "off", "GONOSUMCHECK": "1"})
+    env.update({"GOFLAGS": "-mod=readonly", "GOPROXY": "off", "GOWORK": "off"})
     return env
 
 
