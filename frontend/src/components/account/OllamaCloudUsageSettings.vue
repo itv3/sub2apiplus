@@ -77,7 +77,12 @@
             <span class="break-words text-gray-900 dark:text-white">{{ windowSummary(snapshot.data?.seven_day) }}</span>
           </template>
           <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.ollamaCloud.balance') }}</span>
-          <span class="break-words text-gray-900 dark:text-white">{{ formatOllamaBalance(snapshot.data?.balance) || '-' }}</span>
+          <span class="break-words text-gray-900 dark:text-white" data-testid="ollama-cloud-detail-balance">{{ formatOllamaBalance(snapshot.data?.balance) || '-' }}</span>
+          <!-- 追加额度（Added credits）单列：余额是合计，包含月度额度与追加额度 -->
+          <template v-if="snapshot.data?.added_credits">
+            <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.ollamaCloud.addedCredits') }}</span>
+            <span class="break-words text-gray-900 dark:text-white" data-testid="ollama-cloud-detail-added-credits">{{ formatOllamaBalance(snapshot.data.added_credits) }}</span>
+          </template>
           <template v-if="snapshot.data?.free_models?.length">
             <span class="text-gray-500 dark:text-gray-400">{{ t('admin.accounts.ollamaCloud.freeModels') }}</span>
             <span class="break-words text-gray-900 dark:text-white">{{ snapshot.data.free_models.join(', ') }}</span>
@@ -310,16 +315,25 @@ const formatDate = (value?: string) => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
+const formatDay = (value?: string) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString()
+}
 const windowSummary = (window?: OllamaCloudUsageWindow) => {
   if (!window) return '-'
-  let reset = window.reset_at ? formatDate(window.reset_at) : window.reset_text
+  // 月度额度的重置只有日期（页面句子「Refills to $60 on November 24, 2026」），只显示日期；其余窗口显示日期时间。
+  let reset = window.reset_at ? (window.used_text ? formatDay(window.reset_at) : formatDate(window.reset_at)) : window.reset_text
   // 页面只给相对时间时，重置时间是推算的约数，显示时标注「约」。
   if (reset && window.reset_at && window.reset_approx) {
     reset = t('admin.accounts.ollamaCloud.resetApprox', { reset })
   }
-  const percent = window.used_text
-    ? t('admin.accounts.ollamaCloud.monthlyUsed', { used: window.used_text, percent: formatPercent(window.used_percent) })
-    : formatPercent(window.used_percent)
+  const percentText = formatPercent(window.used_percent)
+  const percent = window.used_text && window.limit_text
+    ? t('admin.accounts.ollamaCloud.monthlyUsedOf', { used: window.used_text, limit: window.limit_text, percent: percentText })
+    : window.used_text
+      ? t('admin.accounts.ollamaCloud.monthlyUsed', { used: window.used_text, percent: percentText })
+      : percentText
   return reset ? t('admin.accounts.ollamaCloud.windowWithReset', { percent, reset }) : percent
 }
 
@@ -327,8 +341,9 @@ const windowSummary = (window?: OllamaCloudUsageWindow) => {
 const windowTitle = (name: string, window: OllamaCloudUsageWindow) => {
   const parts = [name]
   if (window.used_text) parts.push(t('admin.accounts.ollamaCloud.windowTooltipUsed', { used: window.used_text }))
+  if (window.limit_text) parts.push(t('admin.accounts.ollamaCloud.windowTooltipLimit', { limit: window.limit_text }))
   if (window.reset_at) {
-    const reset = formatDate(window.reset_at)
+    const reset = window.used_text ? formatDay(window.reset_at) : formatDate(window.reset_at)
     parts.push(t('admin.accounts.ollamaCloud.windowTooltipReset', {
       reset: window.reset_approx ? t('admin.accounts.ollamaCloud.resetApprox', { reset }) : reset
     }))

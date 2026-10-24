@@ -1144,6 +1144,8 @@ export interface OllamaCloudUsageWindow {
   reset_text?: string
   /** 新版月度额度窗口的已用金额原文（如 $12） */
   used_text?: string
+  /** 月度额度总额原文（提示框「Monthly credits」，如 $60） */
+  limit_text?: string
   /** reset_at 是按相对文案推算的约数（页面没有给精确时间） */
   reset_approx?: boolean
 }
@@ -1168,7 +1170,10 @@ export interface OllamaCloudUsageData {
   email?: string
   five_hour?: OllamaCloudUsageWindow
   seven_day?: OllamaCloudUsageWindow
+  /** 余额合计（页面标题行右侧主金额） */
   balance?: string
+  /** 追加额度（Added credits），不含月度额度 */
+  added_credits?: string
   models?: OllamaCloudUsageModel[]
   /** 免费计划的免费额度窗口 */
   free_usage?: OllamaCloudUsageWindow

@@ -111,6 +111,8 @@ type OllamaCloudUsageWindow struct {
 	ResetApprox bool `json:"reset_approx,omitempty"`
 	// UsedText 是页面上的已用金额原文（新版月度额度窗口的「$0」），旧版窗口为空。
 	UsedText string `json:"used_text,omitempty"`
+	// LimitText 是月度额度总额原文（提示框「Monthly credits $60」），旧版窗口为空。
+	LimitText string `json:"limit_text,omitempty"`
 }
 
 // OllamaCloudUsageRecentRequest 是新版设置页「Recent requests」列表的一行：
@@ -147,8 +149,11 @@ type OllamaCloudUsageData struct {
 	Email    string                  `json:"email,omitempty"`
 	FiveHour *OllamaCloudUsageWindow `json:"five_hour,omitempty"`
 	SevenDay *OllamaCloudUsageWindow `json:"seven_day,omitempty"`
-	Balance  string                  `json:"balance,omitempty"`
-	Models   []OllamaCloudUsageModel `json:"models,omitempty"`
+	// Balance 是余额合计（新版页面标题行右侧的主金额）；AddedCredits 是其中追加充值的部分
+	// （页面里 id 为 extra-usage-balance 的元素），两者不是同一个数。
+	Balance      string                  `json:"balance,omitempty"`
+	AddedCredits string                  `json:"added_credits,omitempty"`
+	Models       []OllamaCloudUsageModel `json:"models,omitempty"`
 
 	// FreeUsage 是免费计划页面的「Free usage」额度窗口（x% used，可能带重置时间）；
 	// 付费计划没有该窗口，保持为空。FreeModels 是免费额度可用的云端模型清单，

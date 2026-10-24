@@ -115,6 +115,19 @@ describe('OllamaCloudUsageCell plans', () => {
     expect(freeBar.attributes('title')).not.toContain('resetApprox')
   })
 
+  it('the list shows the total balance, not the added credits', () => {
+    const wrapper = mountCell(stateWith({
+      plan: 'Pro',
+      balance: '$60',
+      added_credits: '$0',
+      monthly: { used_percent: 0, used_text: '$0', limit_text: '$60', reset_at: '2026-11-24T12:00:00Z' }
+    }))
+    expect(wrapper.get('[data-testid="ollama-cloud-balance"]').text()).toBe('$60')
+    expect(wrapper.text()).not.toContain('$0 ')
+    const bar = wrapper.getComponent('[data-testid="ollama-cloud-monthly"]')
+    expect(bar.attributes('title')).toContain('admin.accounts.ollamaCloud.windowTooltipLimit|{"limit":"$60"}')
+  })
+
   it('legacy page keeps the 5h/7d bars and never shows monthly or free usage', () => {
     const wrapper = mountCell(stateWith({
       plan: 'max',

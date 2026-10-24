@@ -117,10 +117,11 @@ const snapshot = computed(() => state.value?.snapshot)
 const windowTitle = (name: string, window: OllamaCloudUsageWindow) => {
   const parts = [name]
   if (window.used_text) parts.push(t('admin.accounts.ollamaCloud.windowTooltipUsed', { used: window.used_text }))
+  if (window.limit_text) parts.push(t('admin.accounts.ollamaCloud.windowTooltipLimit', { limit: window.limit_text }))
   if (window.reset_at) {
     const date = new Date(window.reset_at)
     if (!Number.isNaN(date.getTime())) {
-      const reset = date.toLocaleString()
+      const reset = window.used_text ? date.toLocaleDateString() : date.toLocaleString()
       parts.push(t('admin.accounts.ollamaCloud.windowTooltipReset', {
         reset: window.reset_approx ? t('admin.accounts.ollamaCloud.resetApprox', { reset }) : reset
       }))

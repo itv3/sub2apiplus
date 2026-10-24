@@ -105,6 +105,30 @@ describe('OllamaCloudUsageSettings plans and Cookie expiry', () => {
     expect(wrapper.get('[data-testid="ollama-cloud-usage-details"]').text()).not.toContain('admin.accounts.ollamaCloud.fiveHour')
   })
 
+  it('edit page shows the total balance and lists added credits separately, with the monthly limit', async () => {
+    const wrapper = mountSettings(stateWith({
+      plan: 'Pro',
+      balance: '$60',
+      added_credits: '$0',
+      monthly: { used_percent: 0, used_text: '$0', limit_text: '$60', reset_at: '2026-11-24T12:00:00Z', reset_text: 'in 4 weeks' }
+    }))
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="ollama-cloud-detail-balance"]').text()).toBe('$60')
+    expect(wrapper.get('[data-testid="ollama-cloud-detail-added-credits"]').text()).toBe('$0')
+    const monthly = wrapper.get('[data-testid="ollama-cloud-detail-monthly"]').text()
+    expect(monthly).toContain('admin.accounts.ollamaCloud.monthlyUsedOf')
+    expect(monthly).toContain('\\"limit\\":\\"$60\\"')
+    const bar = wrapper.getComponent('[data-testid="ollama-cloud-detail-monthly-bar"]')
+    expect(bar.attributes('title')).toContain('admin.accounts.ollamaCloud.windowTooltipLimit|{"limit":"$60"}')
+  })
+
+  it('hides the added-credits row when the page has none', async () => {
+    const wrapper = mountSettings(stateWith({ plan: 'max', balance: '$0' }))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="ollama-cloud-detail-added-credits"]').exists()).toBe(false)
+  })
+
   it('edit page also draws the free and monthly windows as progress bars with tooltips', async () => {
     const monthly = mountSettings(stateWith({
       plan: 'Pro',
