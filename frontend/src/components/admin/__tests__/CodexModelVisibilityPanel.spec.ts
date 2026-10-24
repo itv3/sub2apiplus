@@ -19,6 +19,9 @@ const mocks = vi.hoisted(() => ({
   saveChanges: vi.fn(),
   markVerified: vi.fn(),
   refreshCatalogs: vi.fn(),
+  listProfileAliases: vi.fn(),
+  setProfileAlias: vi.fn(),
+  deleteProfileAlias: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   showWarning: vi.fn()
@@ -30,7 +33,10 @@ vi.mock('@/api/admin/codexThirdPartyModels', () => ({
   previewChanges: mocks.previewChanges,
   saveChanges: mocks.saveChanges,
   markVerified: mocks.markVerified,
-  refreshCatalogs: mocks.refreshCatalogs
+  refreshCatalogs: mocks.refreshCatalogs,
+  listProfileAliases: mocks.listProfileAliases,
+  setProfileAlias: mocks.setProfileAlias,
+  deleteProfileAlias: mocks.deleteProfileAlias
 }))
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -1035,6 +1041,165 @@ describe('CodexModelVisibilityPanel 暴露的 refreshCatalogs', () => {
       for (const key of ['success', 'reused', 'failed', 'warningTitle', 'unknownReason']) expect(typeof refresh[key]).toBe('string')
       expect(typeof refresh.kind.model_protocol).toBe('string')
       expect(typeof refresh.kind.official_base).toBe('string')
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 关联到已有档案（型号别名）
+// ---------------------------------------------------------------------------
+
+// BaseDialog 经 Teleport 渲染到 body，这里换成就地渲染的桩，便于在面板里直接查询。
+const BaseDialogStub = {
+  props: ['show', 'title'],
+  template: '<div v-if="show" data-testid="base-dialog-stub"><h3>{{ title }}</h3><slot /><slot name="footer" /></div>'
+}
+
+const ALIAS_PROFILES = [
+  { id: 'deepseek-flash', upstream_models: ['deepseek-v4.1-flash', 'deepseek-flash'], protocols: ['responses_native'] },
+  { id: 'kimi-k3', upstream_models: ['kimi-k3'], protocols: ['responses_native'] }
+]
+
+function aliasList(aliases: Array<Record<string, unknown>> = []) {
+  return { revision: 1, aliases, profiles: ALIAS_PROFILES }
+}
+
+function missingProfileState(revision = 3) {
+  return groupState({
+    revision,
+    candidates: [
+      candidate({
+        slug: 'deepseek-flash',
+        can_enable: false,
+        status: 'needs_capability',
+        target_platform: 'custom',
+        upstream_model: 'acme-ds:prod',
+        profile_missing_model: 'acme-ds:prod',
+        reasons: ['上游型号 acme-ds:prod 暂无能力档案（待补能力）']
+      }),
+      candidate({ slug: 'glm-5.3', can_enable: false, status: 'needs_capability', reasons: ['缺少上下文窗口依据'] })
+    ]
+  })
+}
+
+async function mountAliasPanel(state = missingProfileState()) {
+  mocks.getAllGroups.mockResolvedValue([group(GROUP_ID, '混合分组', 'composite')])
+  mocks.getGroupState.mockResolvedValue(state)
+  const wrapper = mount(CodexModelVisibilityPanel, { global: { stubs: { Icon: true, BaseDialog: BaseDialogStub } } })
+  await flushPromises()
+  await wrapper.get('[data-testid="codex-group-select"]').setValue(String(GROUP_ID))
+  await flushPromises()
+  return wrapper
+}
+
+describe('CodexModelVisibilityPanel 关联到已有档案', () => {
+  it('只有因上游型号缺能力档案而无法发布的条目，在原因下方显示“关联到已有档案”', async () => {
+    const wrapper = await mountAliasPanel()
+    const link = wrapper.get('[data-testid="codex-link-profile-deepseek-flash"]')
+    expect(link.text()).toBe('admin.codexThirdPartyModels.profileAlias.linkAction')
+    // 其它原因的待补能力条目没有这个入口。
+    expect(wrapper.find('[data-testid="codex-link-profile-glm-5.3"]').exists()).toBe(false)
+    // 入口紧跟在原因后面。
+    const reason = wrapper.get('[data-testid="codex-reason-deepseek-flash"]')
+    expect(reason.element.nextElementSibling).toBe(link.element)
+  })
+
+  it('点开弹窗：上游型号只读、档案下拉列出各档案及其已认得的型号、带确认提示', async () => {
+    mocks.listProfileAliases.mockResolvedValue(aliasList())
+    const wrapper = await mountAliasPanel()
+    await wrapper.get('[data-testid="codex-link-profile-deepseek-flash"]').trigger('click')
+    await flushPromises()
+
+    const model = wrapper.get('[data-testid="codex-alias-model"]')
+    expect((model.element as HTMLInputElement).value).toBe('acme-ds:prod')
+    expect(model.attributes('readonly')).toBeDefined()
+    const options = wrapper.findAll('[data-testid="codex-alias-profile"] option').map((option) => option.text())
+    expect(options).toContain('deepseek-flash')
+    expect(options).toContain('kimi-k3')
+    await wrapper.get('[data-testid="codex-alias-profile"]').setValue('deepseek-flash')
+    expect(wrapper.get('[data-testid="codex-alias-profile-models"]').text()).toContain('deepseek-v4.1-flash')
+    expect(wrapper.get('[data-testid="codex-alias-hint"]').text()).toBe('admin.codexThirdPartyModels.profileAlias.confirmHint')
+    expect(wrapper.get('[data-testid="codex-alias-confirm"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('没选档案时不能确认；确认后保存并自动重新读取该分组目录，条目变为可配置', async () => {
+    mocks.listProfileAliases.mockResolvedValue(aliasList())
+    mocks.setProfileAlias.mockResolvedValue(aliasList([{ upstream_model: 'acme-ds:prod', key: 'acme-ds', profile_id: 'deepseek-flash', valid: true, updated_by: 'user:1', updated_at: '2026-10-24T00:00:00Z' }]))
+    const wrapper = await mountAliasPanel()
+    await wrapper.get('[data-testid="codex-link-profile-deepseek-flash"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="codex-alias-confirm"]').attributes('disabled')).toBeDefined()
+
+    mocks.getGroupState.mockResolvedValue(
+      groupState({ revision: 3, candidates: [candidate({ slug: 'deepseek-flash', target_platform: 'custom', upstream_model: 'acme-ds:prod', protocol: 'responses_native', fingerprint: 'fp-linked' })] })
+    )
+    const readsBefore = mocks.getGroupState.mock.calls.length
+    await wrapper.get('[data-testid="codex-alias-profile"]').setValue('deepseek-flash')
+    await wrapper.get('[data-testid="codex-alias-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.setProfileAlias).toHaveBeenCalledWith('acme-ds:prod', 'deepseek-flash')
+    expect(mocks.getGroupState.mock.calls.length).toBe(readsBefore + 1)
+    expect(wrapper.find('[data-testid="base-dialog-stub"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-link-profile-deepseek-flash"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="codex-status-deepseek-flash"]').text()).toBe('admin.codexThirdPartyModels.status.configurable')
+    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexThirdPartyModels.profileAlias.saveSuccess')
+  })
+
+  it('关联失败时在弹窗里回显原因，不关闭、不重新读取', async () => {
+    mocks.listProfileAliases.mockResolvedValue(aliasList())
+    mocks.setProfileAlias.mockRejectedValue({ message: '该上游型号已被内置能力档案直接认出，无需关联' })
+    const wrapper = await mountAliasPanel()
+    await wrapper.get('[data-testid="codex-link-profile-deepseek-flash"]').trigger('click')
+    await flushPromises()
+    const readsBefore = mocks.getGroupState.mock.calls.length
+    await wrapper.get('[data-testid="codex-alias-profile"]').setValue('kimi-k3')
+    await wrapper.get('[data-testid="codex-alias-confirm"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="codex-alias-error"]').text()).toContain('内置能力档案')
+    expect(wrapper.find('[data-testid="base-dialog-stub"]').exists()).toBe(true)
+    expect(mocks.getGroupState.mock.calls.length).toBe(readsBefore)
+  })
+
+  it('工具栏“档案别名”按钮打开列表，可解除关联并重新读取目录；失效别名标出', async () => {
+    const linked = { upstream_model: 'acme-ds:prod', key: 'acme-ds', profile_id: 'deepseek-flash', valid: true, updated_by: 'user:1', updated_at: '2026-10-24T00:00:00Z' }
+    const stale = { upstream_model: 'old-model', key: 'old-model', profile_id: 'gone-profile', valid: false, updated_by: 'user:2', updated_at: '2026-10-20T00:00:00Z' }
+    mocks.listProfileAliases.mockResolvedValue(aliasList([linked, stale]))
+    mocks.deleteProfileAlias.mockResolvedValue(aliasList([stale]))
+    const wrapper = await mountAliasPanel()
+    await wrapper.get('[data-testid="codex-alias-list-button"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="codex-alias-row-acme-ds"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="codex-alias-invalid-acme-ds"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="codex-alias-invalid-old-model"]').text()).toBe('admin.codexThirdPartyModels.profileAlias.invalid')
+
+    const readsBefore = mocks.getGroupState.mock.calls.length
+    await wrapper.get('[data-testid="codex-alias-unlink-acme-ds"]').trigger('click')
+    await flushPromises()
+    expect(mocks.deleteProfileAlias).toHaveBeenCalledWith('acme-ds:prod')
+    expect(wrapper.find('[data-testid="codex-alias-row-acme-ds"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="codex-alias-row-old-model"]').exists()).toBe(true)
+    expect(mocks.getGroupState.mock.calls.length).toBe(readsBefore + 1)
+
+    await wrapper.get('[data-testid="codex-alias-close"]').trigger('click')
+    expect(wrapper.find('[data-testid="base-dialog-stub"]').exists()).toBe(false)
+  })
+
+  it('没有任何别名时列表给出空提示', async () => {
+    mocks.listProfileAliases.mockResolvedValue(aliasList())
+    const wrapper = await mountAliasPanel()
+    await wrapper.get('[data-testid="codex-alias-list-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="codex-alias-empty"]').text()).toBe('admin.codexThirdPartyModels.profileAlias.empty')
+  })
+
+  it('型号别名文案中英文都存在', () => {
+    for (const locale of [zhLocale, enLocale]) {
+      const alias = (locale as any).admin.codexThirdPartyModels.profileAlias
+      for (const key of ['toolbarButton', 'linkAction', 'linkTitle', 'listTitle', 'upstreamModel', 'profile', 'profilePlaceholder', 'profileKnows', 'confirmHint', 'confirm', 'unlink', 'invalid', 'empty', 'updatedBy', 'updatedAt', 'close', 'loadFailed', 'saveFailed', 'saveSuccess', 'deleteFailed', 'deleteSuccess']) {
+        expect(typeof alias[key]).toBe('string')
+      }
     }
   })
 })

@@ -88,6 +88,8 @@ export interface CodexThirdPartyCandidate {
   protocol?: string
   profile_id?: string
   fingerprint?: string
+  /** 非空表示该候选因这个上游型号没有能力档案而无法发布（待补能力），页面可提供“关联到已有档案”。 */
+  profile_missing_model?: string
   capabilities: CodexCapabilitySummary
   entry_bytes?: number
 }
@@ -194,6 +196,30 @@ export interface CodexThirdPartyRefreshResult {
   state: CodexThirdPartyGroupState
 }
 
+/** 一份内置能力档案的摘要：下拉里列出各档案 ID 及其已认得的型号。 */
+export interface CodexProfileSummary {
+  id: string
+  upstream_models: string[]
+  protocols: string[]
+}
+
+/** 一条型号别名：把上游型号关联到已有档案。valid 为 false 表示档案已被删除或改名，不参与匹配。 */
+export interface CodexProfileAlias {
+  upstream_model: string
+  /** 规范化后的键（别名表主键）。 */
+  key: string
+  profile_id: string
+  valid: boolean
+  updated_by: string
+  updated_at: string
+}
+
+export interface CodexProfileAliasList {
+  revision: number
+  aliases: CodexProfileAlias[]
+  profiles: CodexProfileSummary[]
+}
+
 const base = (groupId: number) => `/admin/codex-third-party-models/${groupId}`
 
 /** 读取分组的展示配置、候选评估结果和账号名称；只查数据库，不发上游请求，也不触发源刷新。 */
@@ -261,12 +287,38 @@ export async function refreshCatalogs(groupId: number): Promise<CodexThirdPartyR
   return data
 }
 
+const aliasPath = '/admin/codex-third-party-profile-aliases'
+
+/** 列出全部型号别名（含失效项）与可供关联的内置能力档案。 */
+export async function listProfileAliases(): Promise<CodexProfileAliasList> {
+  const { data } = await apiClient.get<CodexProfileAliasList>(aliasPath)
+  return data
+}
+
+/** 新增或更新一条关联（幂等）：上游型号必须非空、档案必须存在，已被内置档案直接认出的型号会被拒绝。 */
+export async function setProfileAlias(upstreamModel: string, profileId: string): Promise<CodexProfileAliasList> {
+  const { data } = await apiClient.put<CodexProfileAliasList>(aliasPath, {
+    upstream_model: upstreamModel,
+    profile_id: profileId
+  })
+  return data
+}
+
+/** 解除关联（幂等）。 */
+export async function deleteProfileAlias(upstreamModel: string): Promise<CodexProfileAliasList> {
+  const { data } = await apiClient.delete<CodexProfileAliasList>(aliasPath, { params: { upstream_model: upstreamModel } })
+  return data
+}
+
 export const codexThirdPartyModelsAPI = {
   getGroupState,
   previewChanges,
   saveChanges,
   markVerified,
-  refreshCatalogs
+  refreshCatalogs,
+  listProfileAliases,
+  setProfileAlias,
+  deleteProfileAlias
 }
 
 export default codexThirdPartyModelsAPI

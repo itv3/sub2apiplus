@@ -72,6 +72,15 @@
         <div class="flex flex-wrap items-center gap-2 sm:ml-auto">
           <button
             type="button"
+            class="btn btn-secondary"
+            data-testid="codex-alias-list-button"
+            :disabled="busy"
+            @click="openAliasList"
+          >
+            {{ t('admin.codexThirdPartyModels.profileAlias.toolbarButton') }}
+          </button>
+          <button
+            type="button"
             class="btn btn-primary"
             data-testid="codex-bulk-enable"
             :disabled="busy || bulkEnableSlugs.length === 0"
@@ -242,6 +251,17 @@
                 <p v-if="rowNote(row)" :data-testid="`codex-reason-${row.slug}`" class="mt-1 max-w-xs text-xs" :class="rowNoteClass(row)">
                   {{ rowNote(row) }}
                 </p>
+                <!-- 因上游型号没有能力档案而无法发布：提供“关联到已有档案” -->
+                <button
+                  v-if="canLinkProfile(row)"
+                  type="button"
+                  :data-testid="`codex-link-profile-${row.slug}`"
+                  class="mt-1 text-xs font-medium text-primary-600 hover:underline disabled:opacity-60 dark:text-primary-400"
+                  :disabled="busy"
+                  @click="openLinkDialog(row)"
+                >
+                  {{ t('admin.codexThirdPartyModels.profileAlias.linkAction') }}
+                </button>
               </td>
               <td class="px-3 py-3 text-xs text-gray-600 dark:text-gray-300">
                 <template v-if="row.native">
@@ -353,6 +373,15 @@
         </div>
       </section>
     </template>
+
+    <CodexProfileAliasDialog
+      v-if="aliasDialogMode"
+      show
+      :mode="aliasDialogMode"
+      :upstream-model="aliasDialogModel"
+      @close="closeAliasDialog"
+      @changed="onAliasChanged"
+    />
   </div>
 </template>
 
@@ -376,6 +405,7 @@ import { platformDisplayName, platformUsesGateway } from '@/constants/platformCa
 import { extractApiErrorMessage } from '@/utils/apiError'
 import type { AdminGroup } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
+import CodexProfileAliasDialog from '@/components/admin/CodexProfileAliasDialog.vue'
 
 interface RejectionItem {
   key: string
@@ -913,6 +943,38 @@ async function applyChanges(changes: CodexThirdPartyChange[]) {
   } finally {
     busy.value = false
   }
+}
+
+// ---------------------------------------------------------------------------
+// 关联到已有档案（型号别名）
+// ---------------------------------------------------------------------------
+
+const aliasDialogMode = ref<'' | 'link' | 'list'>('')
+const aliasDialogModel = ref('')
+
+/** 条目因上游型号没有能力档案而无法发布时，才提供“关联到已有档案”。 */
+function canLinkProfile(row: CodexThirdPartyCandidate): boolean {
+  return !row.native && !!row.profile_missing_model && !row.can_enable
+}
+
+function openLinkDialog(row: CodexThirdPartyCandidate) {
+  aliasDialogModel.value = row.profile_missing_model ?? ''
+  aliasDialogMode.value = 'link'
+}
+
+function openAliasList() {
+  aliasDialogModel.value = ''
+  aliasDialogMode.value = 'list'
+}
+
+function closeAliasDialog() {
+  aliasDialogMode.value = ''
+}
+
+/** 关联或解除后自动重新读取当前分组目录，条目随即变为可配置或已发布。 */
+function onAliasChanged() {
+  const groupId = selectedGroupId.value
+  if (groupId) void loadState(groupId, { silent: true })
 }
 
 // ---------------------------------------------------------------------------
